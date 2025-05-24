@@ -1,0 +1,3 @@
+// CLASSIFICATION: COMMUNITY
+// Filename: INSTRUCTION_BLOCK.md v3.5
+// Date Modified: 2025-05-24
