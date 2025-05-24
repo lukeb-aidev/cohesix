@@ -1,0 +1,18 @@
+# Logs and artifacts
+*.log
+codex_logs/
+
+# Rust
+/target/
+**/*.rs.bk
+
+# Python
+__pycache__/
+*.py[cod]
+.env
+
+# VS Code
+.vscode/
+
+# Ignored scripts
+scripts/*.bak
