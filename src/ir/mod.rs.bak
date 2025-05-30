@@ -13,6 +13,7 @@ pub use instruction::{Instruction, Opcode};
 pub use module::Module;
 
 // --- AUTO-REEXPORT-COHESIX (quick-patch v2) ---
+pub use crate::pass_framework::ir_pass_framework::ir::{Function, IRContext};
 // ----------------------------------------------
 
 pub mod function;

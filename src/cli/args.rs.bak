@@ -6,7 +6,7 @@
 use clap::{Arg, Command};
 
 /// Builds and returns the CLI argument parser for the Coh_CC compiler.
-pub fn build_cli() -> Command<'static> {
+pub fn build_cli() -> Command {
     Command::new("cohcc")
         .version("0.1")
         .about("Cohesix Compiler CLI")

@@ -16,3 +16,8 @@ __pycache__/
 
 # Ignored scripts
 scripts/*.bak
+.DS_Store
+__MACOSX/
+*.orig.*.bak
+*.tar.gz
+cohesix_backup_*.tar.gz
