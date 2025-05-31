@@ -2,7 +2,7 @@
 
 // CLASSIFICATION: COMMUNITY
 // Filename: traits.rs v1.0
-// Date Modified: 2025-05-26
+// Date Modified: 2025-05-31
 // Author: Lukas Bower
 
 //! Defines the core traits for IR passes in the Cohesix compiler.
@@ -16,4 +16,9 @@ pub trait IRPass {
 
     /// Executes the pass against the provided IR context, mutating it in place.
     fn run(&self, context: &mut IRContext);
+
+    /// Returns a short description of what the pass does.
+    fn description(&self) -> &'static str {
+        "(undocumented IR pass)"
+    }
 }

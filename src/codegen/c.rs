@@ -5,7 +5,7 @@
 
 //! C backend for the Coh_CC compiler. Translates IR into C code.
 
-use crate::ir::{Module, Instruction, Opcode};
+use crate::ir::{Instruction, Module, Opcode};
 
 /// Generates a C source file from an IR `Module`.
 pub fn generate_c(module: &Module) -> String {
@@ -24,10 +24,22 @@ pub fn generate_c(module: &Module) -> String {
         output.push_str(&format!("void {}() {{\n", func.name));
         for instr in &func.body {
             match &instr.opcode {
-                Opcode::Add => output.push_str(&format!("    // TODO: handle ADD with operands {:?}\n", instr.operands)),
-                Opcode::Sub => output.push_str(&format!("    // TODO: handle SUB with operands {:?}\n", instr.operands)),
-                Opcode::Mul => output.push_str(&format!("    // TODO: handle MUL with operands {:?}\n", instr.operands)),
-                Opcode::Div => output.push_str(&format!("    // TODO: handle DIV with operands {:?}\n", instr.operands)),
+                Opcode::Add => output.push_str(&format!(
+                    "    // TODO: handle ADD with operands {:?}\n",
+                    instr.operands
+                )),
+                Opcode::Sub => output.push_str(&format!(
+                    "    // TODO: handle SUB with operands {:?}\n",
+                    instr.operands
+                )),
+                Opcode::Mul => output.push_str(&format!(
+                    "    // TODO: handle MUL with operands {:?}\n",
+                    instr.operands
+                )),
+                Opcode::Div => output.push_str(&format!(
+                    "    // TODO: handle DIV with operands {:?}\n",
+                    instr.operands
+                )),
                 Opcode::Call { function } => output.push_str(&format!("    {}();\n", function)),
                 Opcode::Ret => output.push_str("    return;\n"),
                 _ => output.push_str(&format!("    // Unhandled opcode: {:?}\n", instr.opcode)),

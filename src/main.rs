@@ -6,10 +6,9 @@
 
 //! Entry point for the Coh_CC compiler binary.
 
-
 extern crate cohesix;
-use env_logger;
 use cohesix::cli;
+use env_logger;
 
 fn main() {
     env_logger::init();

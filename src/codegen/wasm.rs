@@ -1,5 +1,3 @@
-
-
 // CLASSIFICATION: COMMUNITY
 // Filename: wasm.rs v1.0
 // Date Modified: 2025-05-27
@@ -19,7 +17,10 @@ pub fn generate_wasm(module: &Module) -> String {
 
     // Function definitions
     for func in &module.functions {
-        output.push_str(&format!("  (func ${} (export \"{}\")\n", func.name, func.name));
+        output.push_str(&format!(
+            "  (func ${} (export \"{}\")\n",
+            func.name, func.name
+        ));
         // Placeholder for instructions
         output.push_str("    ;; TODO: emit WASM instructions based on IR opcodes\n");
         output.push_str("  )\n");

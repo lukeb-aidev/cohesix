@@ -1,5 +1,3 @@
-
-
 // CLASSIFICATION: COMMUNITY
 // Filename: ssa.rs v1.0
 // Date Modified: 2025-05-26
@@ -7,9 +5,9 @@
 
 //! A pass that converts IR into Static Single Assignment (SSA) form by renaming variables.
 
+use crate::ir::IRContext;
 use crate::ir::{Instruction, Opcode};
 use crate::pass_framework::traits::IRPass;
-use crate::ir::IRContext;
 use std::collections::HashMap;
 
 /// SSA renaming pass implementation.
@@ -36,11 +34,15 @@ impl IRPass for SsaPass {
                 for instr in &func.body {
                     // Clone instruction and rename operands
                     let mut renamed = instr.clone();
-                    renamed.operands = renamed.operands.iter().map(|op| {
-                        let count = counter.entry(op.clone()).or_insert(0);
-                        *count += 1;
-                        format!("{}_{}", op, count)
-                    }).collect();
+                    renamed.operands = renamed
+                        .operands
+                        .iter()
+                        .map(|op| {
+                            let count = counter.entry(op.clone()).or_insert(0);
+                            *count += 1;
+                            format!("{}_{}", op, count)
+                        })
+                        .collect();
                     new_body.push(renamed);
                 }
                 func.body = new_body;

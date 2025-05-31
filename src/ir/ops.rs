@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: ops.rs v1.0
-// Date Modified: 2025-05-26
+// Date Modified: 2025-05-31
 // Author: Lukas Bower
 
 //! Utility functions and constants for IR opcodes in the Cohesix compiler.
@@ -43,4 +43,27 @@ pub fn parse_opcode(name: &str) -> Option<Opcode> {
 /// Returns a display‐friendly string for an Opcode.
 pub fn opcode_to_string(op: &Opcode) -> String {
     format!("{:?}", op)
+}
+
+/// Represents a high-level category for grouping opcodes.
+pub enum OpcodeCategory {
+    Arithmetic,
+    Memory,
+    ControlFlow,
+    Meta,
+}
+
+/// Returns the category of a given opcode.
+pub fn categorize(op: &Opcode) -> OpcodeCategory {
+    match op {
+        Opcode::Add | Opcode::Sub | Opcode::Mul | Opcode::Div => OpcodeCategory::Arithmetic,
+        Opcode::Load | Opcode::Store => OpcodeCategory::Memory,
+        Opcode::Jump | Opcode::Branch { .. } | Opcode::Ret => OpcodeCategory::ControlFlow,
+        Opcode::Nop | Opcode::Call { .. } => OpcodeCategory::Meta,
+    }
+}
+
+/// TODO: Add opcode validation rules (e.g., operand arity, SSA form compatibility)
+pub fn validate_opcode(_op: &Opcode) -> bool {
+    true
 }

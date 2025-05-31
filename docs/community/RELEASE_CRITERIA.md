@@ -1,12 +1,4 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: RELEASE_CRITERIA.md v1.0
-// Date Modified: 2025-05-24
-
-# RELEASE CRITERIA
-
-TODO: Draft content for RELEASE_CRITERIA.md.
-
-// CLASSIFICATION: COMMUNITY
 // Filename: RELEASE_CRITERIA.md v1.1
 // Date Modified: 2025-05-25
 // Author: Lukas Bower

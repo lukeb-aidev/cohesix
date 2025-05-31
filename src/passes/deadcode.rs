@@ -1,5 +1,3 @@
-
-
 // CLASSIFICATION: COMMUNITY
 // Filename: deadcode.rs v1.0
 // Date Modified: 2025-05-26
@@ -7,9 +5,9 @@
 
 //! A pass that removes dead (unreachable or unused) instructions from the IR.
 
+use crate::ir::IRContext;
 use crate::ir::{Instruction, Opcode};
 use crate::pass_framework::traits::IRPass;
-use crate::ir::IRContext;
 
 /// Dead Code Elimination pass implementation.
 pub struct DeadCode;

@@ -21,3 +21,4 @@ __MACOSX/
 *.orig.*.bak
 *.tar.gz
 cohesix_backup_*.tar.gz
+/private/

@@ -10,7 +10,7 @@ pub mod debug;
 pub mod dispatch;
 pub mod wasm;
 
-pub use dispatch::{Backend, dispatch, infer_backend_from_path};
 pub use c::generate_c;
 pub use debug::generate_debug;
+pub use dispatch::{dispatch, infer_backend_from_path, Backend};
 pub use wasm::generate_wasm;

@@ -1,5 +1,3 @@
-
-
 // CLASSIFICATION: COMMUNITY
 // Filename: nop.rs v1.0
 // Date Modified: 2025-05-26
@@ -7,9 +5,9 @@
 
 //! A pass that removes all NOP instructions from the IR.
 
+use crate::ir::IRContext;
 use crate::ir::Instruction;
 use crate::pass_framework::traits::IRPass;
-use crate::ir::IRContext;
 
 /// NOP elimination pass implementation.
 pub struct NopPass;

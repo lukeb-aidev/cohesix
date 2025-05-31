@@ -1,5 +1,3 @@
-
-
 // CLASSIFICATION: COMMUNITY
 // Filename: manager.rs v1.0
 // Date Modified: 2025-05-26

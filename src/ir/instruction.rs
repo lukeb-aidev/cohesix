@@ -32,6 +32,15 @@ pub struct Instruction {
     pub operands: Vec<String>,
 }
 
+impl Default for Instruction {
+    fn default() -> Self {
+        Instruction {
+            opcode: Opcode::Nop,
+            operands: Vec::new(),
+        }
+    }
+}
+
 impl Instruction {
     /// Constructs a new instruction with the given opcode and operands.
     pub fn new(opcode: Opcode, operands: Vec<String>) -> Self {
@@ -47,4 +56,6 @@ impl Instruction {
             other => format!("{:?} {}", other, ops),
         }
     }
+
+    /// TODO: Add semantic validation, SSA checks, or side-effect tagging
 }

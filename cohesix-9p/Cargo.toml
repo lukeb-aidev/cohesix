@@ -1,0 +1,6 @@
+[package]
+name = "cohesix-9p"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]

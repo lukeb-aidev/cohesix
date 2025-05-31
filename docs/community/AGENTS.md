@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: AGENTS.md v1.3
+// Filename: AGENTS.md v1.4
 // Date Modified: 2025-05-24
 // Author: Lukas Bower
 
@@ -17,6 +17,7 @@ Each entry must adhere to this YAML schema:
 - id: <string>                   # unique agent identifier
   role: <string>                 # permission context (e.g. 'codegen', 'testing')
   description: <string>          # clear summary of agent’s purpose
+  language: <string>             # optional language context for Codex optimization
   prompt_template:              # template with placeholders
     system: <string>            # system-level instruction
     user: <string>              # user-level task prompt
@@ -26,6 +27,9 @@ Each entry must adhere to this YAML schema:
     - name: <string>
       input: <JSON object>
       expected_output: <JSON object>
+# retries:
+#   max_attempts: 3
+#   backoff_ms: 500
 ```
 
 ---
@@ -36,6 +40,7 @@ Each entry must adhere to this YAML schema:
 ```yaml
 id: scaffold_service
 role: codegen
+language: rust
 description: Generates a new service module stub with boilerplate (imports, struct, trait impl).
 prompt_template:
   system: |-
@@ -56,6 +61,10 @@ output_schema:
       type: string
     code:
       type: string
+    code_contains:
+      type: array
+      items:
+        type: string
   required: [file_path, code]
 test_cases:
   - name: simple_service
@@ -72,6 +81,7 @@ test_cases:
 ```yaml
 id: add_cli_option
 role: codegen
+language: rust
 description: Appends a new CLI argument to the `clap` parser in `src/cli/args.rs`.
 prompt_template:
   system: |-
@@ -100,6 +110,10 @@ output_schema:
       type: string
     patch:
       type: string
+    patch_contains:
+      type: array
+      items:
+        type: string
   required: [file_path, patch]
 test_cases:
   - name: timeout_arg
@@ -118,6 +132,7 @@ test_cases:
 ### 3. `add_pass`
 id: add_pass
 role: codegen
+language: rust
 description: Adds a new IR pass registration to the `PassManager` pipeline in `src/pass_framework/mod.rs`.
 prompt_template:
   system: |-
@@ -139,6 +154,10 @@ output_schema:
       type: string
     patch:
       type: string
+    patch_contains:
+      type: array
+      items:
+        type: string
   required: [file_path, patch]
 test_cases:
   - name: register_optim_pass
@@ -154,6 +173,7 @@ test_cases:
 ### 4. `run_pass`
 id: run_pass
 role: testing
+language: rust
 description: Generates a test harness for running a specified IR pass against example IR data.
 prompt_template:
   system: |-
@@ -173,6 +193,10 @@ output_schema:
       type: string
     code:
       type: string
+    code_contains:
+      type: array
+      items:
+        type: string
   required: [file_path, code]
 test_cases:
   - name: run_nop_pass
@@ -188,6 +212,7 @@ test_cases:
 ### 5. `validate_metadata`
 id: validate_metadata
 role: testing
+language: shell
 description: Executes the metadata synchronization check and reports discrepancies.
 prompt_template:
   system: |-
@@ -213,6 +238,7 @@ test_cases:
 ### 6. `hydrate_docs`
 id: hydrate_docs
 role: codegen
+language: rust
 description: Generates missing canonical docs stubs under `docs/community` or `docs/private`.
 prompt_template:
   system: |-
@@ -250,6 +276,7 @@ test_cases:
 7. **Timeouts & Retries:** Enforce per-agent execution time limits and retry logic for transient API failures.  
 8. **Logging & Audit Trails:** Agents must emit logs in `codex_logs/` for each step, including request and response.  
 9. **Version Control:** Update agent `vX.Y` and `Date Modified` on every change; maintain CHANGELOG.md entries.  
+10. Language Context: Include a `language` field for Codex routing optimizations (e.g., Rust, Shell).
 
 ---
 

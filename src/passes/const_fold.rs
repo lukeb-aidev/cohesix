@@ -1,5 +1,3 @@
-
-
 // CLASSIFICATION: COMMUNITY
 // Filename: const_fold.rs v1.0
 // Date Modified: 2025-05-26
@@ -7,9 +5,9 @@
 
 //! A pass that performs constant folding on the IR.
 
+use crate::ir::IRContext;
 use crate::ir::{Instruction, Opcode};
 use crate::pass_framework::traits::IRPass;
-use crate::ir::IRContext;
 
 /// Constant Folding pass implementation.
 pub struct ConstFold;

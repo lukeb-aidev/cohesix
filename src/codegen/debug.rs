@@ -1,5 +1,3 @@
-
-
 // CLASSIFICATION: COMMUNITY
 // Filename: debug.rs v1.0
 // Date Modified: 2025-05-26
@@ -7,7 +5,7 @@
 
 //! Debug backend for the Coh_CC compiler. Emits human-readable IR dumps.
 
-use crate::ir::{Module, Instruction, Opcode};
+use crate::ir::{Instruction, Module, Opcode};
 
 /// Generates a debug string representation of the entire IR `Module`.
 pub fn generate_debug(module: &Module) -> String {

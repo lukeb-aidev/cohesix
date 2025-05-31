@@ -1,2 +1,40 @@
-# Codex Workflow for Cohesix (to be implemented)
-# TODO: Populate codex.yml.
+# CLASSIFICATION: COMMUNITY
+# Filename: codex.yml v1.0
+# Author: Lukas Bower
+# Date Modified: 2025-05-31
+
+name: Codex Integration Tests
+
+on:
+  push:
+    paths:
+      - 'src/**'
+      - '.github/workflows/codex.yml'
+  pull_request:
+
+jobs:
+  codex-check:
+    runs-on: ubuntu-latest
+    name: Run Codex Lint and Type Checks
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+
+      - name: Install Codex Validator (stub)
+        run: |
+          echo "TODO: Install validator or Codex CLI"
+
+      - name: Run Codex validation (stub)
+        run: |
+          echo "TODO: Validate agents and Codex entrypoints"
+
+      - name: Post results
+        run: |
+          echo "TODO: Upload logs or summary output"

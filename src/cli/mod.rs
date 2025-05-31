@@ -1,5 +1,3 @@
-
-
 // CLASSIFICATION: COMMUNITY
 // Filename: mod.rs v1.0
 // Date Modified: 2025-05-27
@@ -19,11 +17,7 @@ pub fn run() -> anyhow::Result<()> {
     let matches = build_cli().get_matches();
     let input_path = matches.value_of("input").unwrap();
     let output_path = matches.value_of("output").unwrap();
-    let timeout: u64 = matches
-        .value_of("timeout")
-        .unwrap()
-        .parse()
-        .unwrap_or(5000);
+    let timeout: u64 = matches.value_of("timeout").unwrap().parse().unwrap_or(5000);
 
     // Load IR from file (TODO: parse actual IR format)
     let ir_text = fs::read_to_string(input_path)?;

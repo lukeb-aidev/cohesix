@@ -5,9 +5,13 @@ edition = "2021"
 authors = ["Lukas Bower <you@domain.com>"]
 
 [dependencies]
+sha2 = "0.10"
 anyhow     = "1.0"
 # patched by quick-patch v2 clap       = { version = "4.0", features = ["derive"] }
 env_logger = "0.11.7"
 log        = "0.4"
 # patched by quick-patch v4 clap = { version = "4.5.38", features = ["derive","deprecated"] }
 clap = { version = "3.2.25", features = ["derive"] }
+
+[workspace]
+members = ["cohesix-9p"]
