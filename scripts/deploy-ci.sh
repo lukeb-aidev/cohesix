@@ -57,7 +57,7 @@ rm -rf "$OUT_DIR"
 mkdir -p "$BIN_DIR" "$DOC_DIR"
 
 # Copy all release binaries
-find target/release -maxdepth 1 -type f -perm -111 -exec cp {} "$BIN_DIR" \;
+find target/release -maxdepth 1 -type f -perm -111 -name "coh*" -exec cp {} "$BIN_DIR" \;
 
 # Copy COMMUNITY docs
 find docs/community -name '*.md' -exec cp {} "$DOC_DIR" \;

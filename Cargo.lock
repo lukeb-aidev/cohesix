@@ -158,6 +158,10 @@ dependencies = [
 [[package]]
 name = "cohesix-9p"
 version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "log",
+]
 
 [[package]]
 name = "colorchoice"

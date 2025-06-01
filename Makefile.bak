@@ -22,7 +22,7 @@ go-build:
 
 c-shims:
 	@echo "🔧 Building C shims …"
-	@$(CC:-clang?=cc) -I c/sel4/include -c $(wildcard c/sel4/shim/*.c) -o c/sel4/shim/boot_trampoline.o
+	@$(CC:-clang?=cc) -c c/sel4/shim/boot_trampoline.c -o c/sel4/shim/boot_trampoline.o
 
 help:
 	@echo "Cohesix top‑level build targets:"

@@ -35,3 +35,22 @@ pub mod arm64;
 /// x86‑64 implementation – selected when compiling for `x86_64`.
 #[cfg(target_arch = "x86_64")]
 pub mod x86_64;
+//__panel_test__
+#[cfg(test)]
+mod __panel_test_compile {
+    // Touch init_* so the stubs link during `cargo test`
+    #[test]
+    fn link_arch_init() {
+        #[cfg(target_arch = "aarch64")]
+        {
+            super::arm64::init_paging().unwrap();
+            super::arm64::init_interrupts().unwrap();
+        }
+        #[cfg(target_arch = "x86_64")]
+        {
+            super::x86_64::init_paging().unwrap();
+            super::x86_64::init_interrupts().unwrap();
+        }
+    }
+}
+//__panel_test__
