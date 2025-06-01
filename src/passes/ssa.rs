@@ -6,7 +6,6 @@
 //! A pass that converts IR into Static Single Assignment (SSA) form by renaming variables.
 
 use crate::ir::IRContext;
-use crate::ir::{Instruction, Opcode};
 use crate::pass_framework::traits::IRPass;
 use std::collections::HashMap;
 

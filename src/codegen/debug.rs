@@ -5,7 +5,7 @@
 
 //! Debug backend for the Coh_CC compiler. Emits human-readable IR dumps.
 
-use crate::ir::{Instruction, Module, Opcode};
+use crate::ir::Module;
 
 /// Generates a debug string representation of the entire IR `Module`.
 pub fn generate_debug(module: &Module) -> String {

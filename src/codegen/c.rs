@@ -5,7 +5,7 @@
 
 //! C backend for the Coh_CC compiler. Translates IR into C code.
 
-use crate::ir::{Instruction, Module, Opcode};
+use crate::ir::{Module, Opcode};
 
 /// Generates a C source file from an IR `Module`.
 pub fn generate_c(module: &Module) -> String {

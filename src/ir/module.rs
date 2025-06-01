@@ -5,7 +5,7 @@
 
 //! Defines the IR Module and associated utilities for the Cohesix compiler.
 
-use crate::ir::{Function, Instruction};
+use crate::ir::Function;
 
 /// A compilation unit containing multiple functions.
 #[derive(Clone, Debug)]

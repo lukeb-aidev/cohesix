@@ -58,7 +58,7 @@ impl DependencyRegistry {
 
 /// Stub function to populate common system dependencies.
 pub fn preload_dependencies() -> DependencyRegistry {
-    let mut registry = DependencyRegistry::new();
+    let registry = DependencyRegistry::new();
     // TODO(cohesix): Load from SBOM or manifest
     registry
 }
