@@ -1,4 +1,3 @@
-//! Trait definition for IR passes in Coh_CC
 // CLASSIFICATION: COMMUNITY
 // Filename: ir_pass_trait.rs v1.0
 // Author: Lukas Bower

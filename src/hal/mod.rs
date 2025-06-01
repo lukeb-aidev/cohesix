@@ -1,9 +1,37 @@
-//! Portable hardware-abstraction layer façade.
+// CLASSIFICATION: PRIVATE
+// Filename: mod.rs · HAL facade v0.2
+// Date Modified: 2025-06-01
+// Author: Lukas Bower
 //
-// The actual implementation lives in `arm64` or `x86_64` sub-modules,
-// selected via `cfg(target_arch = …)`.
+// ─────────────────────────────────────────────────────────────
+// Cohesix · Hardware‑Abstraction Layer (facade)
+//
+// This `mod.rs` file exports the architecture‑specific HAL
+// implementations selected at **compile‑time** via `cfg`:
+//
+//   • `hal::arm64`   – Jetson / Raspberry Pi 5 targets
+//   • `hal::x86_64`  – PC‑class development hosts
+//
+// Additional architectures can be added by creating a sibling
+// sub‑module (e.g. `riscv64`) and extending the `cfg` list.
+//
+// The facade itself contains **no code**; it merely re‑exports
+// the correct back‑end so higher layers can call
+//
+// ```rust
+// use cohesix::hal::{arm64, x86_64}; // functions re‑exported from arch modules
+// ```
+//
+// without caring about the underlying CPU family.
+// ─────────────────────────────────────────────────────────────
 
+#![forbid(unsafe_code)]
+#![warn(missing_docs)]
+
+/// ARM64 implementation – selected when compiling for `aarch64`.
 #[cfg(target_arch = "aarch64")]
 pub mod arm64;
+
+/// x86‑64 implementation – selected when compiling for `x86_64`.
 #[cfg(target_arch = "x86_64")]
 pub mod x86_64;

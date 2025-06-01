@@ -1,4 +1,3 @@
-//! IR pass registry for Coh_CC
 // CLASSIFICATION: COMMUNITY
 // Filename: pass_registry.rs v1.0
 // Author: Lukas Bower

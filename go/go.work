@@ -1,0 +1,6 @@
+// CLASSIFICATION: COMMUNITY
+// Filename: go.work v0.2
+// Date Modified: 2025-06-01
+// Author: Lukas Bower
+go 1.22
+use .

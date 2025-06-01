@@ -1,5 +1,3 @@
-// AUTO-GENERATED STUB FILE\n// Path: src/hw/drivers/i2c.rs\n\n// TODO: Implement module logic
-
 // CLASSIFICATION: COMMUNITY
 // Filename: i2c.rs v1.0
 // Author: Lukas Bower

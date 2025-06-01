@@ -1,11 +1,4 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: THREAT_MODEL.md v0.1
-// Date Modified: 2025-05-24
-// Author: Lukas Bower
-
-# TODO: Draft content for THREAT_MODEL.md.
-
-// CLASSIFICATION: COMMUNITY
 // Filename: THREAT_MODEL.md v1.0
 // Date Modified: 2025-05-27
 // Author: Lukas Bower

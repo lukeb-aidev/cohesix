@@ -1,51 +1,69 @@
-# Cohesix
-
-Cohesix is a self-contained, formally verified OS and compiler suite optimized for edge and wearable devices.
-
-Explore documentation under the  directory to get started:
--  for canonical project docs
--  for confidential business plans
-
-Run  to regenerate missing stubs.
+// CLASSIFICATION: COMMUNITY
+// Filename: README.md v0.2
+// Author: Lukas Bower
+// Date Modified: 2025-06-01
 
 # Cohesix
 
-Cohesix is a self-contained, formally verified operating system and compiler suite designed for secure, scalable, and efficient execution on edge and wearable devices.
+Cohesix is a self‑contained, formally verified operating‑system and compiler suite designed for secure, scalable execution on edge and wearable devices.
+
+---
 
 ## 🔍 Overview
 
-Cohesix combines a microkernel-based OS architecture (inspired by seL4 and Plan 9) with a secure, distributed compiler (Coh_CC) and a unified cloud-edge orchestration model. It supports real-time execution, fault isolation, and robust telemetry — making it ideal for mission-critical and privacy-sensitive deployments.
+Cohesix combines a micro‑kernel architecture (seL4‑derived) with Plan 9‑style namespaces, a distributed compiler tool‑chain, and a cloud‑edge orchestration model. Built‑in telemetry, simulation via Rapier, and a role‑based trust model make it ideal for mission‑critical, privacy‑sensitive deployments.
 
-## 📌 Key Features
+### Key Features
+- **Formally verified kernel** with provable isolation
+- **9P namespace** for uniform resource access
+- **Physics‑aware simulation** (Rapier) for Worker nodes
+- **Queen–Worker protocol** for secure lifecycle modules (SLMs)
+- **Multi‑language tool‑chain** (Rust, Go, Codex shell)
+- **Modular boot & sandboxing** with trace validation
 
-- 🔐 Formally verified kernel and role-based trust model
-- 🧠 Physics-aware simulation via Rapier integration
-- 🔁 9P-based filesystem and distributed namespace model
-- 💡 Secure Lifecycle Modules (SLMs) deployed via Queen–Worker protocol
-- ⚙️ Multi-language support (Rust, Go, and Codex-enabled shell)
-- 🔧 Modular boot, sandboxing, telemetry, and trace verification
+---
 
 ## 📚 Documentation
 
-Explore the `canvas/` directory for design blueprints and operational guidance:
+Community documents live in `docs/community/`, while private strategy files are under `docs/private/`.
 
-- `MISSION.md` – Purpose, philosophy, and north star goals
-- `PROJECT_OVERVIEW.md` – Architecture, modules, and technical roadmap
-- `INSTRUCTION_BLOCK.md` – Canonical build and workflow policy
-- `COMMERCIAL_PLAN.md` (private) – Revenue model, market strategy, and investor messaging
+| Path | Purpose |
+|------|---------|
+| `docs/community/MISSION.md` | Project philosophy and goals |
+| `docs/community/PROJECT_OVERVIEW.md` | Architecture & roadmap |
+| `docs/community/INSTRUCTION_BLOCK.md` | Canonical workflow rules |
+| `docs/private/COMMERCIAL_PLAN.md` | Market & investor messaging (restricted) |
+
+---
 
 ## 🚀 Getting Started
 
-To initialize missing compiler and OS stubs, run:
+Clone, then hydrate missing artifacts:
+
+```bash
+git clone https://github.com/<user>/cohesix.git
+cd cohesix
+./scripts/run-smoke-tests.sh   # quick health check
+make all                       # Go vet + C shims
+cargo check --workspace        # Rust build
+```
+
+To regenerate compiler/OS stubs:
 
 ```bash
 ./hydrate_cohcc_batch5.sh
 ```
 
-Or use the Codex-driven CLI tools (`cohbuild`, `cohrun`, `cohtrace`, `cohcap`) to explore runtime scenarios, simulation traces, and testbed orchestration.
+Or explore runtime scenarios with the Codex CLI tools:
+
+```
+cohbuild, cohrun, cohtrace, cohcap
+```
+
+---
 
 ## 🧠 Learn More
 
-- [Cohesix Project Philosophy](./canvas/MISSION.md)
-- [Technical Deep Dive](./canvas/PROJECT_OVERVIEW.md)
-- [Canonical Workflows](./canvas/INSTRUCTION_BLOCK.md)
+* [Cohesix Project Philosophy](docs/community/MISSION.md)
+* [Technical Deep‑Dive](docs/community/PROJECT_OVERVIEW.md)
+* [Canonical Workflows](docs/community/INSTRUCTION_BLOCK.md)

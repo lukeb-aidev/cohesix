@@ -1,5 +1,3 @@
-
-
 // CLASSIFICATION: COMMUNITY
 // Filename: const_eval.rs v1.0
 // Author: Lukas Bower

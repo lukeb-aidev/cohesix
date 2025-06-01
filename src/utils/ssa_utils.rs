@@ -1,5 +1,3 @@
-
-
 // CLASSIFICATION: COMMUNITY
 // Filename: ssa_utils.rs v1.0
 // Author: Lukas Bower

@@ -1,6 +1,79 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: init.rs v0.1
-// Date Modified: 2025-05-24
+// Filename: init.rs v0.2
+// Date Modified: 2025-06-01
 // Author: Lukas Bower
+//
+// ─────────────────────────────────────────────────────────────
+// Cohesix · Bootloader Early‑Init
+//
+// Responsible for *very* early setup inside the second‑stage
+// bootloader (still running in firmware context):
+//
+//  1. Parse the raw boot‑loader cmdline string.
+//  2. Perform minimal HAL bring‑up (paging + IRQ stubs).
+//  3. Hand a [`BootContext`] record to the Rust kernel entry.
+//
+// Heavy‑duty tasks (verified boot, scheduler start‑up, etc.) are
+// deferred to later stages.
+// ─────────────────────────────────────────────────────────────
 
-//! TODO: Implement init.rs.
+#![forbid(unsafe_code)]
+#![warn(missing_docs)]
+
+use anyhow::Result;
+use log::info;
+
+use crate::{
+    bootloader::args::{parse_cmdline, BootArgs},
+    hal,
+};
+
+/// Collected state handed to the Rust kernel entry‐point.
+#[derive(Debug)]
+pub struct BootContext {
+    /// Parsed boot arguments.
+    pub args: BootArgs,
+}
+
+/// Perform early initialisation.
+///
+/// This function should be invoked by the second‑stage bootloader
+/// (e.g. a Rust `#[no_std]` stub or loader.bin).  It purposefully
+/// does **not** allocate on the heap and avoids complex features
+/// so it can run with a limited runtime.
+///
+/// * `cmdline` – raw ASCII cmdline string passed by firmware.
+pub fn early_init(cmdline: &str) -> Result<BootContext> {
+    // 1. Parse cmd‑line
+    let args = parse_cmdline(cmdline)?;
+
+    // 2. Basic HAL bring‑up
+    //    — Page‑tables + IRQ controller stubs (real impl later)
+    #[cfg(target_arch = "aarch64")]
+    {
+        hal::arm64::init_paging()?;
+        hal::arm64::init_interrupts()?;
+    }
+    #[cfg(target_arch = "x86_64")]
+    {
+        hal::x86_64::init_paging()?;
+        hal::x86_64::init_interrupts()?;
+    }
+
+    info!("Bootloader early‑init complete");
+
+    Ok(BootContext { args })
+}
+
+// ───────────────────────────── tests ─────────────────────────────────────────
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_simple_cmdline() {
+        let ctx = early_init("root=/dev/sda quiet").unwrap();
+        assert_eq!(ctx.args.get("root"), Some("/dev/sda"));
+        assert!(ctx.args.has_flag("quiet"));
+    }
+}
