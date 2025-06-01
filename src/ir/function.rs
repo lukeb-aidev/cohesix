@@ -29,5 +29,5 @@ impl Function {
         }
     }
 
-    /// TODO: Implement control flow analysis or instruction validation
+    // TODO: Implement control flow analysis or instruction validation
 }

@@ -55,5 +55,11 @@ impl Instruction {
         }
     }
 
-    /// TODO: Add semantic validation, SSA checks, or side-effect tagging
+    // Performs lightweight semantic validation of the instruction.
+    //
+    // The current stub always returns `true`; future work will add
+    // SSA checks, side‑effect tagging, and opcode‑specific rules.
+    pub fn validate(&self) -> bool {
+        true
+    }
 }
