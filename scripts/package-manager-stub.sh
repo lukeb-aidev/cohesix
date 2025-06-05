@@ -1,16 +1,11 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: package-manager-stub.sh v0.2
-// Date Modified: 2025-06-08
-// Author: Lukas Bower
-
-// CLASSIFICATION: COMMUNITY
-// Filename: package-manager.sh v0.2
-// Date Modified: 2025-06-01
+// Filename: package-manager-stub.sh v0.3
+// Date Modified: 2025-06-17
 // Author: Lukas Bower
 
 #!/usr/bin/env bash
 ###############################################################################
-# package-manager.sh – Cohesix prototype package tool
+# package-manager-stub.sh – Cohesix prototype package tool
 #
 # Extremely minimal wrapper to install or remove pre‑built Cohesix packages
 # from the local artefact store (`out/pkgs`).  Intended only as a placeholder
@@ -22,9 +17,9 @@
 #   list                   – Shows installed packages
 #
 # Example:
-#   ./scripts/package-manager.sh install out/pkgs/coh_hello-1.0.0-aarch64.tar.gz
+#   ./scripts/package-manager-stub.sh install out/pkgs/coh_hello-1.0.0-aarch64.tar.gz
 #
-#   ./scripts/package-manager.sh list
+#   ./scripts/package-manager-stub.sh list
 #
 # Exit codes:
 #   0  Success
