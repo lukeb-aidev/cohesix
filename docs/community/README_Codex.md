@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: README_Codex.md v1.2
-// Date Modified: 2025-05-24
+// Filename: README_Codex.md v1.3
+// Date Modified: 2025-06-09
 // Author: Lukas Bower
 
 # README Codex
@@ -80,6 +80,7 @@ Follow the steps below to configure your environment and start using Codex withi
    cohcli codex run <agent_id> --file path --log-dir codex_logs/
    ```
 5. **Human Review Gate**: Require at least one code review approval for any PR with Codex-generated changes. Enforce via branch protection rules.
+6. **Metadata Sync**: Run `python scripts/validate_metadata_sync.py` before pushing changes to ensure document headers match `METADATA.md`.
 
 ## Getting Started Quickly
 
