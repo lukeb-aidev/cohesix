@@ -5,6 +5,7 @@ codex_logs/
 # Rust
 /target/
 **/*.rs.bk
+*.bak
 
 # Python
 __pycache__/
