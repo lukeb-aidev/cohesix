@@ -8,9 +8,6 @@
 pub mod args;
 
 use crate::cli::args::build_cli;
-use crate::codegen::dispatch::{dispatch, Backend};
-use crate::ir::Module;
-use std::fs;
 
 /// Entry point for the CLI. Parses arguments, reads IR, dispatches codegen, and writes output.
 pub fn run() -> anyhow::Result<()> {
