@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: AGENTS.md v1.4
-// Date Modified: 2025-05-24
+// Filename: AGENTS.md v1.5
+// Date Modified: 2025-06-04
 // Author: Lukas Bower
 
 # Codex Agent Definitions
@@ -18,6 +18,7 @@ Each entry must adhere to this YAML schema:
   role: <string>                 # permission context (e.g. 'codegen', 'testing')
   description: <string>          # clear summary of agent’s purpose
   language: <string>             # optional language context for Codex optimization
+  batch: <string, array>        # relevant work batches from BATCH_PLAN
   prompt_template:              # template with placeholders
     system: <string>            # system-level instruction
     user: <string>              # user-level task prompt
@@ -32,6 +33,16 @@ Each entry must adhere to this YAML schema:
 #   backoff_ms: 500
 ```
 
+Example:
+
+```yaml
+id: example_agent
+batch: C3
+role: codegen
+language: rust
+... # remaining fields
+```
+
 ---
 
 ## Agents
@@ -41,6 +52,7 @@ Each entry must adhere to this YAML schema:
 id: scaffold_service
 role: codegen
 language: rust
+batch: C4
 description: Generates a new service module stub with boilerplate (imports, struct, trait impl).
 prompt_template:
   system: |-
@@ -75,6 +87,10 @@ test_cases:
       code_contains:
         - "struct LoggingService"
         - "impl Service for LoggingService"
+  - name: invalid_name
+    input:
+      name: "1Bad"
+    expected_error: "name"
 ```
 
 ### 2. `add_cli_option`
@@ -82,6 +98,7 @@ test_cases:
 id: add_cli_option
 role: codegen
 language: rust
+batch: C3
 description: Appends a new CLI argument to the `clap` parser in `src/cli/args.rs`.
 prompt_template:
   system: |-
@@ -127,12 +144,20 @@ test_cases:
       patch_contains:
         - ".long(\"timeout\")"
         - ".default_value(\"5000\")"
+  - name: invalid_type
+    input:
+      name: "timeout"
+      type: "float"
+      default: 5000
+      help: "bad"
+    expected_error: "type"
 ```
 
 ### 3. `add_pass`
 id: add_pass
 role: codegen
 language: rust
+batch: C4
 description: Adds a new IR pass registration to the `PassManager` pipeline in `src/pass_framework/mod.rs`.
 prompt_template:
   system: |-
@@ -168,12 +193,17 @@ test_cases:
       file_path: "src/pass_framework/mod.rs"
       patch_contains:
         - "add_pass(OptimizationPass::new())"
+  - name: missing_field
+    input:
+      pass_struct: "FooPass::new()"
+    expected_error: "pass_name"
 ```
 
 ### 4. `run_pass`
 id: run_pass
 role: testing
 language: rust
+batch: C4
 description: Generates a test harness for running a specified IR pass against example IR data.
 prompt_template:
   system: |-
@@ -207,12 +237,16 @@ test_cases:
       code_contains:
         - "let mut module = example_ir_module();"
         - "NopPass.run(&mut module)"
+  - name: missing_pass_name
+    input: {}
+    expected_error: "pass_name"
 ```
 
 ### 5. `validate_metadata`
 id: validate_metadata
 role: testing
 language: shell
+batch: C5
 description: Executes the metadata synchronization check and reports discrepancies.
 prompt_template:
   system: |-
@@ -233,12 +267,16 @@ test_cases:
     expected_output:
       snippet_contains:
         - "validate_metadata_sync.py"
+  - name: not_object
+    input: "bad"
+    expected_error: "object"
 ```
 
 ### 6. `hydrate_docs`
 id: hydrate_docs
 role: codegen
 language: rust
+batch: D4
 description: Generates missing canonical docs stubs under `docs/community` or `docs/private`.
 prompt_template:
   system: |-
@@ -261,6 +299,9 @@ test_cases:
     expected_output:
       created_files:
         - "docs/community/NEW_DOC.md"
+  - name: not_object
+    input: "bad"
+    expected_error: "object"
 ```
 
 ---
