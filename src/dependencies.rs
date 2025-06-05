@@ -58,7 +58,23 @@ impl DependencyRegistry {
 
 /// Stub function to populate common system dependencies.
 pub fn preload_dependencies() -> DependencyRegistry {
-    let registry = DependencyRegistry::new();
-    // TODO(cohesix): Load from SBOM or manifest
+    let mut registry = DependencyRegistry::new();
+
+    // Populate with a few core runtime dependencies. In a future
+    // iteration this will be loaded from an SBOM manifest.
+    registry.register(Dependency {
+        name: "serde".into(),
+        version: "1.0".into(),
+        source: Some("crates.io".into()),
+        license: Some("MIT OR Apache-2.0".into()),
+    });
+
+    registry.register(Dependency {
+        name: "clap".into(),
+        version: "4.0".into(),
+        source: Some("crates.io".into()),
+        license: Some("MIT OR Apache-2.0".into()),
+    });
+
     registry
 }

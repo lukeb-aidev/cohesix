@@ -30,7 +30,6 @@ pub mod runtime;
 /// Runtime services (telemetry, sandbox, health, ipc)
 pub mod services;
 
-
 /// Compile from an input IR file to the specified output path.
 ///
 /// This helper loads the IR text, constructs a minimal [`ir::Module`],
@@ -38,6 +37,7 @@ pub mod services;
 /// code to disk.
 pub fn compile_from_file(input: &str, output: &str) -> anyhow::Result<()> {
     use std::fs;
+
     // Read the IR text from disk. Return an error if the file is missing.
     let _ir_text = fs::read_to_string(input)?;
 
