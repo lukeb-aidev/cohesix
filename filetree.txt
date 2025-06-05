@@ -169,3 +169,4 @@ tests/integration/const_eval_test.rs
 tests/integration/dummy_test.rs
 tests/integration/kernel_drivers_test.rs
 tests/passes/dummy_test.rs
+benches/pass_manager.rs

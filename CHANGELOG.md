@@ -1,10 +1,11 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v0.10
-// Date Modified: 2025-06-18
+// Date Modified: 2025-06-05
 // Author: Lukas Bower
-## [v0.11] - 2025-06-18
+## [v0.11] - 2025-06-05
 ### Changed
 - **ci.yml**: updated rust toolchain step to v1.0.7 using environment files and installed rustfmt/clippy.
+
 ## [v0.10] - 2025-06-05
 ### Removed
 - Removed obsolete entries like `.DS_Store` from `filetree.txt`.
