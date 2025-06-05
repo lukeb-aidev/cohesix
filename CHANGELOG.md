@@ -1,7 +1,11 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.10
+// Filename: CHANGELOG.md v0.11
 // Date Modified: 2025-06-05
 // Author: Lukas Bower
+## [v0.12] - 2025-06-05
+### Changed
+- **BUILD_PLAN.md** and **README.md**: updated minimum Rust version to 1.76 for the 2024 edition.
+
 ## [v0.11] - 2025-06-05
 ### Changed
 - **ci.yml**: updated rust toolchain step to v1.0.7 using environment files and installed rustfmt/clippy.
