@@ -1,9 +1,13 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.4
+// Filename: CHANGELOG.md v0.5
 // Date Modified: 2025-06-05
 // Author: Lukas Bower
 
 # Changelog for Cohesix
+
+## [v0.5] - 2025-06-05
+### Fixed
+- `METADATA.md` entry for `BATCH_PLAN.md` now reflects version `v0.3`.
 
 ## [v0.4] - 2025-06-02
 ### Added
