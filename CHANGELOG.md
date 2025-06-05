@@ -1,11 +1,15 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.8
-// Date Modified: 2025-06-11
+// Filename: CHANGELOG.md v0.9
+// Date Modified: 2025-06-16
 // Author: Lukas Bower
 
 ## [v0.9] - 2025-06-16
 ### Added
 - **README**: document running Go tests via `make go-test` (workspace in `go/`).
+
+## [v0.10] - 2025-06-16
+### Fixed
+- **scripts/run-smoke-tests.sh**: removed stray prompt text and ensured newline at EOF; passes `shellcheck`.
 
 ## [v0.8] - 2025-06-15
 ### Added
