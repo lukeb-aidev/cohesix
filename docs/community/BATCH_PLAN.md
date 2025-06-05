@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: BATCH_PLAN.md v0.3
-// Date Modified: 2025-06-05
+// Filename: BATCH_PLAN.md v0.4
+// Date Modified: 2025-06-10
 // Author: Lukas Bower
 
 ## Cohesix Batch Plan
@@ -93,6 +93,18 @@ Ensure project documentation and support files are complete and maintained.
 | D4    | README.md, CONTRIBUTING.md, CODE_OF_CONDUCT.md                         | 🟢 Hydrated |
 
 *Agents*: `hydrate_docs`, `validate_metadata`
+
+### 7 · Demo Integration Batches
+End-user demo pipelines and helper services for showcasing Cohesix features.
+
+| Batch | Deliverables                                             | Status    |
+|-------|----------------------------------------------------------|-----------|
+| D1    | Webcam capture + gesture service for Workers (demos 1–3) | ⏳ Queued |
+| D2    | QR-based SLM loader and app swap (demo 6)                | ⏳ Queued |
+| D3    | NAT rendezvous service for auto-attach (demo 10)         | ⏳ Queued |
+| D4    | Trace replay and fairness harness (demos 4 & 8)          | ⏳ Queued |
+| D5    | KioskInteractive UI provisioning pipeline (demo 5)       | ⏳ Queued |
+| D6    | CLI scenario orchestration & Codex trigger helpers (demo 9) | ⏳ Queued |
 
 ---
 

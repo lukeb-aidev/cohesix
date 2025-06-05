@@ -1,9 +1,14 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.6
-// Date Modified: 2025-06-05
+// Filename: CHANGELOG.md v0.7
+// Date Modified: 2025-06-10
 // Author: Lukas Bower
 
 # Changelog for Cohesix
+
+## [v0.7] - 2025-06-10
+### Added
+- **BATCH_PLAN.md**: new section for Demo Integration Batches; version bumped to v0.4.
+- **METADATA.md**: updated to v2.0 with revised BATCH_PLAN entry.
 
 ## [v0.6] - 2025-06-05
 ### Added
