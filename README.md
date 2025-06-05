@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: README.md v0.2
+// Filename: README.md v0.3
 // Author: Lukas Bower
-// Date Modified: 2025-06-01
+// Date Modified: 2025-06-16
 
 # Cohesix
 
@@ -46,6 +46,7 @@ cd cohesix
 ./scripts/run-smoke-tests.sh   # quick health check
 make all                       # Go vet + C shims
 cargo check --workspace        # Rust build
+make go-test                  # Go unit tests (cd go && go test ./...)
 ```
 
 To regenerate compiler/OS stubs:
