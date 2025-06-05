@@ -14,3 +14,6 @@ sysinfo = "0.30"
 
 [workspace]
 members = ["cohesix-9p"]
+
+[dev-dependencies]
+criterion = "0.5"
