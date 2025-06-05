@@ -84,6 +84,6 @@ pub fn preload_dependencies() -> DependencyRegistry {
         license: Some("MIT OR Apache-2.0".into()),
     });
 
-    registry
+
 }
 
