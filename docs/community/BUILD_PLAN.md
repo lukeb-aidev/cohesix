@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: BUILD_PLAN.md v0.1
-// Date Modified: 2025-05-27
+// Filename: BUILD_PLAN.md v0.2
+// Date Modified: 2025-06-05
 // Author: Lukas Bower
 
 # Build Plan
@@ -8,7 +8,7 @@
 This document outlines the step-by-step build strategy for Cohesix, covering native builds, cross-compilation, container images, and reproducible artifacts.
 
 ## 1. Prerequisites
-- **Rust Toolchain**: Install via `rustup` (stable channel, version ≥ 1.67) with targets:
+- **Rust Toolchain**: Install via `rustup` (stable channel, version ≥ 1.76 for the 2024 edition) with targets:
   - `x86_64-unknown-linux-gnu`
   - `aarch64-unknown-linux-gnu`
 - **Go**: Version ≥ 1.21 for Plan 9 services
@@ -56,7 +56,7 @@ We use Docker Buildx to create reproducible, multi-arch images.
    ```
 3. **Dockerfile Outline**:
    ```dockerfile
-   FROM rust:1.67-buster AS builder
+   FROM rust:1.76-buster AS builder
    WORKDIR /workspace
    COPY . .
    RUN rustup target add aarch64-unknown-linux-gnu && \

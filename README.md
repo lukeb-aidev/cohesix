@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: README.md v0.3
+// Filename: README.md v0.4
 // Author: Lukas Bower
-// Date Modified: 2025-06-16
+// Date Modified: 2025-06-05
 
 # Cohesix
 
@@ -38,7 +38,9 @@ Community documents live in `docs/community/`, while private strategy files are 
 
 ## 🚀 Getting Started
 
-Clone, then hydrate missing artifacts:
+Clone, then hydrate missing artifacts.
+
+Requires Rust **1.76** or newer (2024 edition).
 
 ```bash
 git clone https://github.com/<user>/cohesix.git
