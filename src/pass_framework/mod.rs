@@ -1,13 +1,8 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: mod.rs v1.0
-// Date Modified: 2025-05-26
 // Author: Lukas Bower
+// Date Modified: 2025-05-31
 
-//! Central module for the IR pass framework in the Cohesix compiler.
+//! Entry point for IR pass framework.
 
 pub mod ir_pass_framework;
-pub mod manager;
-pub mod traits;
-
-pub use manager::PassManager;
-pub use traits::IRPass;

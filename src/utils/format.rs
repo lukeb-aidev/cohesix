@@ -51,7 +51,14 @@ pub fn truncate_middle(s: &str, max_len: usize) -> String {
     }
     let keep = (max_len - 1) / 2;
     let start: String = s.chars().take(keep).collect();
-    let end: String = s.chars().rev().take(keep).collect::<String>().chars().rev().collect();
+    let end: String = s
+        .chars()
+        .rev()
+        .take(keep)
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect();
     format!("{}…{}", start, end)
 }
 
