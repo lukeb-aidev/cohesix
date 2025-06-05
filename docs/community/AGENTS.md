@@ -1,11 +1,17 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: AGENTS.md v1.5
-// Date Modified: 2025-06-04
+// Date Modified: 2025-06-05
 // Author: Lukas Bower
 
 # Codex Agent Definitions
 
 This file defines all AI-driven agents (via `cohcli codex`) used by the Cohesix project. Each agent is designed for a small, testable batch of work that composes reliably into the overall system.
+
+The [README](../../README.md) outlines an incremental philosophy: Cohesix evolves
+through clearly versioned batches. Agents must reflect this by focusing on a
+single batch or sub-batch and committing small, reviewable changes. See
+[`STATUS_UPDATE_GUIDE.md`](STATUS_UPDATE_GUIDE.md) for the 3‑hour update cadence
+that governs when such commits are surfaced.
 
 ---
 
