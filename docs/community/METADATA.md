@@ -10,7 +10,7 @@
 | AGENTS.md                  | v1.5    | 2025-05-20    | COMMUNITY      |
 | ARCHITECTURE.md            | v0.3    | 2025-05-31    | PRIVATE        |
 | BATCH_PLAN.md              | v0.5    | 2025-06-05    | COMMUNITY      |
-| BUILD_PLAN.md              | v0.1    | 2025-05-27    | COMMUNITY      |
+| BUILD_PLAN.md              | v0.2    | 2025-06-05    | COMMUNITY      |
 | COMMERCIAL_PLAN.md         | v1.3    | 2025-05-24    | PRIVATE        |
 | DEPENDENCIES.md            | v0.3    | 2025-06-01    | COMMUNITY      |
 | END_USER_DEMOS.md          | v0.1    | 2025-06-05    | COMMUNITY      |
