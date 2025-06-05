@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: METADATA.md v1.7
-// Date Modified: 2025-06-01
+// Filename: METADATA.md v1.8
+// Date Modified: 2025-06-05
 
 ## Canonical Documents
 
@@ -8,7 +8,7 @@
 |----------------------------|---------|---------------|----------------|
 | AGENTS.md                  | v0.1    | 2025-05-20    | COMMUNITY      |
 | ARCHITECTURE.md            | v1.0    | 2025-05-31    | PRIVATE        |
-| BATCH_PLAN.md              | v1.4    | 2025-05-24    | COMMUNITY      |
+| BATCH_PLAN.md              | v0.3    | 2025-06-05    | COMMUNITY      |
 | COMMERCIAL_PLAN.md         | v1.3    | 2025-05-24    | PRIVATE        |
 | IMPLEMENTATION_GUIDE.md    | v1.0    | 2025-05-24    | COMMUNITY      |
 | INSTRUCTION_BLOCK.md       | v3.4    | 2025-05-24    | COMMUNITY      |
