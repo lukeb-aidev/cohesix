@@ -15,9 +15,13 @@ use std::fs;
 /// Entry point for the CLI. Parses arguments, reads IR, dispatches codegen, and writes output.
 pub fn run() -> anyhow::Result<()> {
     let matches = build_cli().get_matches();
-    let input_path = matches.value_of("input").unwrap();
-    let output_path = matches.value_of("output").unwrap();
-    let timeout: u64 = matches.value_of("timeout").unwrap().parse().unwrap_or(5000);
+    let input_path = matches.get_one::<String>("input").expect("required");
+    let output_path = matches.get_one::<String>("output").expect("defaulted");
+    let timeout: u64 = matches
+        .get_one::<String>("timeout")
+        .expect("defaulted")
+        .parse()
+        .unwrap_or(5000);
 
     // Load IR from file (TODO: parse actual IR format)
     let ir_text = fs::read_to_string(input_path)?;

@@ -6,3 +6,8 @@
 //! Entry point for IR pass framework.
 
 pub mod ir_pass_framework;
+pub mod manager;
+pub mod traits;
+
+pub use manager::PassManager;
+pub use traits::IRPass;

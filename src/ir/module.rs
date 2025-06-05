@@ -39,7 +39,7 @@ impl Module {
     }
 
     /// Returns an iterator over function references.
-    pub fn functions(&self) -> impl Iterator<Item=&Function> {
+    pub fn functions(&self) -> impl Iterator<Item = &Function> {
         self.functions.iter()
     }
 
