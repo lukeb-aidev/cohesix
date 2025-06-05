@@ -24,6 +24,22 @@ pub mod dependencies;
 /// Utilities and common helpers used across modules
 pub mod utils;
 
+/// Runtime subsystem modules
+pub mod runtime;
+
+/// Runtime services (telemetry, sandbox, health, ipc)
+pub mod services;
+
+/// Compile from input file to output path using the CLI entry point
+pub fn compile_from_file(input: &str, output: &str) -> anyhow::Result<()> {
+    use std::fs;
+    use crate::ir::Module;
+    use crate::codegen::{dispatch, Backend};
+
+    let module = Module::new(input);
+    let code = dispatch(&module, Backend::C);
+    fs::write(output, code)?;
+  
 use std::fs;
 
 /// Compile from an input IR file to the specified output path.

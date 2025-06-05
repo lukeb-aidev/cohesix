@@ -1,27 +1,39 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: mod.rs v0.1
-// Date Modified: 2025-05-24
-// Author: Lukas Bower
-
-//! TODO: Implement mod.rs.
-
-// CLASSIFICATION: COMMUNITY
-// Filename: mod.rs v1.0
-// Date Modified: 2025-05-31
+// Filename: mod.rs v1.1
+// Date Modified: 2025-06-02
 // Author: Lukas Bower
 
 //! Services Module
 //!
-//! This module defines the core services exposed by the Cohesix runtime, including health checks,
-//! telemetry reporting, sandbox enforcement, and inter-process 9P services.
+//! Defines basic runtime services for Cohesix including telemetry reporting,
+//! sandbox enforcement, health monitoring and IPC via the 9P protocol.
 
 pub mod telemetry;
 pub mod sandbox;
 pub mod health;
 pub mod ipc;
 
+/// Generic interface implemented by all runtime services.
+pub trait Service {
+    /// Return the service name used for logging.
+    fn name(&self) -> &'static str;
+    /// Initialize the service. Called during system startup.
+    fn init(&mut self);
+    /// Shut down the service gracefully.
+    fn shutdown(&mut self);
+}
+
 /// Initialize all registered services under the `/srv/` namespace.
 pub fn initialize_services() {
-    println!("[services] initializing telemetry, sandbox, health, and IPC services...");
-    // TODO(cohesix): Register each service with namespace and launch hooks.
+    println!("[services] initializing telemetry, sandbox, health and IPC ...");
+    let mut services: Vec<Box<dyn Service>> = vec![
+        Box::new(telemetry::TelemetryService::default()),
+        Box::new(sandbox::SandboxService::default()),
+        Box::new(health::HealthService::default()),
+        Box::new(ipc::IpcService::default()),
+    ];
+    for svc in services.iter_mut() {
+        println!("[services] starting {}", svc.name());
+        svc.init();
+    }
 }
