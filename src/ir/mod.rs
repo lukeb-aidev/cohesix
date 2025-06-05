@@ -3,16 +3,12 @@
 // Author: Lukas Bower
 // Date Modified: 2025-05-31
 
-//! Intermediate Representation (IR) root module for the Cohesix compiler.
-//! Re-exports all IR-related components including instructions, functions, and context management.
+//! IR root module. Declares and organizes all IR submodules.
 
-pub mod instruction;
-pub mod ops;
-pub mod module;
-pub mod function;
+pub mod block;
 pub mod context;
-
-pub use instruction::{Instruction, Opcode};
-pub use module::Module;
-pub use function::Function;
-pub use context::IRContext;
+pub mod function;
+pub mod instruction;
+pub mod operand;
+pub mod ty;
+pub mod value;
