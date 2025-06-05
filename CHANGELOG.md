@@ -1,7 +1,13 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.8
-// Date Modified: 2025-06-11
+// Filename: CHANGELOG.md v0.9
+// Date Modified: 2025-06-17
 // Author: Lukas Bower
+
+## [v0.10] - 2025-06-17
+### Removed
+- Removed obsolete entries like `.DS_Store` from `filetree.txt`.
+### Changed
+- Regenerated `filetree.txt` based on tracked files only.
 
 ## [v0.9] - 2025-06-16
 ### Added
