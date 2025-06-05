@@ -19,8 +19,18 @@ pub struct DefaultWorker;
 impl WorkerRole for DefaultWorker {
     fn execute_task(&mut self, task: &str) -> Result<(), String> {
         println!("[worker] executing task '{}'", task);
-        // TODO(cohesix): Implement execution handler for assigned task
-        Ok(())
+        if let Some(expr) = task.strip_prefix("compute ") {
+            match crate::utils::const_eval::eval(expr) {
+                Ok(v) => {
+                    println!("[worker] result: {}", v);
+                    Ok(())
+                }
+                Err(e) => Err(e),
+            }
+        } else {
+            println!("[worker] no-op task");
+            Ok(())
+        }
     }
 
     fn report_telemetry(&self) -> String {
@@ -31,7 +41,14 @@ impl WorkerRole for DefaultWorker {
 
     fn receive_command(&mut self, cmd: &str) -> Result<(), String> {
         println!("[worker] received command '{}'", cmd);
-        // TODO(cohesix): Parse and act on received command
-        Ok(())
+        if let Some(task) = cmd.strip_prefix("task:") {
+            self.execute_task(task.trim())
+        } else if cmd == "report" {
+            let t = self.report_telemetry();
+            println!("[worker] telemetry: {}", t);
+            Ok(())
+        } else {
+            Err(format!("unknown command '{}'", cmd))
+        }
     }
 }

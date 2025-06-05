@@ -19,30 +19,50 @@ pub enum NetInterfaceType {
 pub struct NetDriver {
     pub interface: NetInterfaceType,
     pub initialized: bool,
+    queue: std::collections::VecDeque<Vec<u8>>, // simple loopback buffer
 }
 
 impl NetDriver {
     /// Initialize the network interface and driver state.
     pub fn initialize() -> Self {
-        // TODO(cohesix): Detect interface and set up low-level transport
+        use std::env;
         println!("[Net] Initializing network driver...");
+        let interface = match env::var("COHESIX_NET_IFACE").as_deref() {
+            Ok("virtio") => NetInterfaceType::VirtIO,
+            Ok("loopback") | _ => NetInterfaceType::Loopback,
+        };
         NetDriver {
-            interface: NetInterfaceType::Loopback,
-            initialized: false,
+            interface,
+            initialized: true,
+            queue: std::collections::VecDeque::new(),
         }
     }
 
     /// Transmit a packet (stub).
-    pub fn transmit(&self, _packet: &[u8]) {
-        // TODO(cohesix): Send packet to hardware or virtual bus
-        println!("[Net] Transmitting packet (stub)...");
+    pub fn transmit(&mut self, packet: &[u8]) {
+        if !self.initialized {
+            println!("[Net] driver not initialized");
+            return;
+        }
+        println!("[Net] Transmitting {} bytes", packet.len());
+        if matches!(self.interface, NetInterfaceType::Loopback) {
+            self.queue.push_back(packet.to_vec());
+        }
     }
 
     /// Receive a packet (stub).
-    pub fn receive(&self) -> Option<Vec<u8>> {
-        // TODO(cohesix): Poll NIC or buffer for incoming packet
-        println!("[Net] Receiving packet (stub)...");
-        None
+    pub fn receive(&mut self) -> Option<Vec<u8>> {
+        if !self.initialized {
+            println!("[Net] driver not initialized");
+            return None;
+        }
+        if let Some(pkt) = self.queue.pop_front() {
+            println!("[Net] Received {} bytes", pkt.len());
+            Some(pkt)
+        } else {
+            println!("[Net] no packet available");
+            None
+        }
     }
 }
 

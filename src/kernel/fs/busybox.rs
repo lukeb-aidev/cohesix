@@ -31,15 +31,23 @@ pub fn run_command(cmd: &str, args: &[&str]) {
             println!("{}", args.join(" "));
         }
         BusyBoxCommand::Ls => {
-            // TODO(cohesix): List mock directory contents
-            println!("[busybox] ls: not implemented");
+            use super::initfs;
+            let files: Vec<_> = initfs::list_files().collect();
+            if files.is_empty() {
+                println!("[busybox] (empty)");
+            } else {
+                for f in files {
+                    println!("{}", f);
+                }
+            }
         }
         BusyBoxCommand::Uname => {
             println!("Cohesix Kernel v0.1");
         }
         BusyBoxCommand::Reboot => {
-            // TODO(cohesix): Trigger reboot sequence
-            println!("[busybox] rebooting... (stub)");
+            println!("[busybox] rebooting...");
+            // In simulation just print a message; real implementation would
+            // jump to the watchdog or hardware reset vector.
         }
         BusyBoxCommand::Unknown => {
             println!("Unknown command: {}", cmd);

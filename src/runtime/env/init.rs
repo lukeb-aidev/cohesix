@@ -9,22 +9,25 @@
 /// Initialize the runtime environment at startup.
 pub fn initialize_runtime_env() {
     println!("[env] Initializing runtime environment...");
-    // TODO(cohesix): Set up global config
-    // TODO(cohesix): Load role from /srv/cohrole
-    // TODO(cohesix): Seed entropy pool
-    // TODO(cohesix): Launch telemetry thread if configured
+    load_config();
+    let role = detect_cohrole();
+    println!("[env] running as role: {}", role);
+    // In the future this will also seed entropy and launch telemetry threads.
 }
 
 /// Load configuration file or fallback defaults.
 pub fn load_config() {
     println!("[env] Loading configuration...");
-    // TODO(cohesix): Attempt to load from /etc/cohesix.cfg or fallback
+    let path = "/etc/cohesix.cfg";
+    match std::fs::read_to_string(path) {
+        Ok(cfg) => println!("[env] loaded {} bytes of config", cfg.len()),
+        Err(_) => println!("[env] using default configuration"),
+    }
 }
 
 /// Detect and expose the Cohesix role (e.g., QueenPrimary, DroneWorker).
 pub fn detect_cohrole() -> String {
     println!("[env] Detecting Cohesix role...");
-    // TODO(cohesix): Read from /srv/cohrole or boot arg
-    "Unknown".to_string()
+    std::env::var("COH_ROLE").unwrap_or_else(|_| "Unknown".into())
 }
 

@@ -1,4 +1,4 @@
-// AUTO-GENERATED STUB FILE\n// Path: src/lib/9p/transport.rs\n\n// TODO: Implement module logic
+// Minimal in-memory transport implementation for tests and examples.
 
 // CLASSIFICATION: COMMUNITY
 // Filename: transport.rs v1.0
@@ -18,25 +18,30 @@ pub trait Transport {
 
 /// Stub transport using in-memory buffers (placeholder for testing).
 pub struct InMemoryTransport {
-    pub buffer: Vec<u8>,
+    pub queue: Vec<Vec<u8>>, // simple FIFO of raw messages
 }
 
 impl InMemoryTransport {
     pub fn new() -> Self {
-        InMemoryTransport { buffer: Vec::new() }
+        InMemoryTransport { queue: Vec::new() }
     }
 }
 
 impl Transport for InMemoryTransport {
     fn send(&mut self, message: &P9Message) -> Result<(), String> {
-        self.buffer = serialize_message(message);
+        let bytes = serialize_message(message);
+        self.queue.push(bytes);
         println!("[9P] Sent: {:?}", message);
         Ok(())
     }
 
     fn receive(&mut self) -> Result<P9Message, String> {
-        let msg = parse_message(&self.buffer);
-        println!("[9P] Received: {:?}", msg);
-        Ok(msg)
+        if let Some(bytes) = self.queue.pop() {
+            let msg = parse_message(&bytes);
+            println!("[9P] Received: {:?}", msg);
+            Ok(msg)
+        } else {
+            Err("no message".into())
+        }
     }
 }
