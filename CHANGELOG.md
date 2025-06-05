@@ -1,10 +1,13 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.11
-// Date Modified: 2025-06-05
+// Filename: CHANGELOG.md v0.10
+// Date Modified: 2025-06-16
 // Author: Lukas Bower
+
 ## [v0.12] - 2025-06-05
-### Changed
-- **BUILD_PLAN.md** and **README.md**: updated minimum Rust version to 1.76 for the 2024 edition.
+### Added
+- **verify-macos-setup.sh**: helper script validating Homebrew, Xcode tools,
+  Python 3.10+, git and running `validate_metadata_sync.py`.
+- **README_Codex.md**: macOS verification instructions; version bumped to v1.4.
 
 ## [v0.11] - 2025-06-05
 ### Changed
