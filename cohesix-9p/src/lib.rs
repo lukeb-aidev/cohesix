@@ -1,14 +1,9 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: fs.rs v0.2
+// Filename: lib.rs v0.2
 // Date Modified: 2025-06-08
 // Author: Lukas Bower
 
 //! Minimal filesystem layer for Cohesix-9P.
-
-// CLASSIFICATION: COMMUNITY
-// Filename: lib.rs · cohesix-9p v0.2
-// Date Modified: 2025-06-08
-// Author: Lukas Bower
 //
 // ─────────────────────────────────────────────────────────────────────────────
 // Cohesix‑9P – Plan‑9 style file‑system service crate

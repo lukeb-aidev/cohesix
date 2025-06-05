@@ -1,17 +1,21 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v0.9
-// Date Modified: 2025-06-17
+// Date Modified: 2025-06-05
 // Author: Lukas Bower
 
-## [v0.10] - 2025-06-17
+## [v0.10] - 2025-06-05
 ### Removed
 - Removed obsolete entries like `.DS_Store` from `filetree.txt`.
 ### Changed
 - Regenerated `filetree.txt` based on tracked files only.
 
-## [v0.9] - 2025-06-16
+## [v0.9] - 2025-06-05
 ### Added
 - **README**: document running Go tests via `make go-test` (workspace in `go/`).
+
+## [v0.10] - 2025-06-16
+### Fixed
+- **scripts/run-smoke-tests.sh**: removed stray prompt text and ensured newline at EOF; passes `shellcheck`.
 
 ## [v0.8] - 2025-06-15
 ### Added
