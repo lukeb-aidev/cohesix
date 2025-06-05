@@ -1,7 +1,11 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.9
-// Date Modified: 2025-06-05
+// Filename: CHANGELOG.md v0.10
+// Date Modified: 2025-06-17
 // Author: Lukas Bower
+
+## [v0.11] - 2025-06-17
+### Added
+- **bench**: Added Criterion benchmark harness for IR pass manager under `benches/pass_manager.rs`.
 
 ## [v0.10] - 2025-06-05
 ### Removed
