@@ -1,8 +1,10 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.9
-// Date Modified: 2025-06-05
+// Filename: CHANGELOG.md v0.10
+// Date Modified: 2025-06-18
 // Author: Lukas Bower
-
+## [v0.11] - 2025-06-18
+### Changed
+- **ci.yml**: updated rust toolchain step to v1.0.7 using environment files and installed rustfmt/clippy.
 ## [v0.10] - 2025-06-05
 ### Removed
 - Removed obsolete entries like `.DS_Store` from `filetree.txt`.
@@ -52,15 +54,6 @@
 ## [v0.4] - 2025-06-05
 ### Changed
 - **BATCH_PLAN.md**: added agent references and watchdog note; version bumped to v0.3.
-
-// CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.2
-// Date Modified: 2025-05-27
-// Author: Lukas Bower
-
-
-All notable changes to this project are documented in this file.
-Version bumps correspond to updates of canonical documents and major subsystem scaffolding.
 
 ## [v0.2] - 2025-05-27
 ### Changed
