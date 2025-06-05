@@ -27,6 +27,8 @@ def parse_metadata(path: Path):
             cols = [c.strip() for c in line.strip('|').split('|')]
             if len(cols) < 4:
                 continue
+            if cols[0] == "Filename" and cols[1] == "Version":
+                continue
             filename, version, _date, classification = cols[:4]
             entries.append((filename, version, classification))
     return entries
