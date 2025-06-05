@@ -1,7 +1,11 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.10
-// Date Modified: 2025-06-16
+// Filename: CHANGELOG.md v0.11
+// Date Modified: 2025-06-17
 // Author: Lukas Bower
+
+## [v0.13] - 2025-06-17
+### Fixed
+- **send-heartbeat.sh**: log function now outputs provided message; header bumped to v0.2.
 
 ## [v0.12] - 2025-06-05
 ### Added

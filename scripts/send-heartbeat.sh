@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: send-heartbeat.sh v0.1
-// Date Modified: 2025-06-05
+// Filename: send-heartbeat.sh v0.2
+// Date Modified: 2025-06-17
 // Author: Lukas Bower
 
 #!/usr/bin/env bash
@@ -33,7 +33,7 @@ INTERVAL="${2:-${HEARTBEAT_INTERVAL:-300}}"
 log() {
   local ts
   ts="$(date '+%Y-%m-%d %H:%M:%S')"
-  echo "[$ts] heartbeat" >> "${LOG_FILE:-/dev/stdout}"
+  echo "[$ts] $1" >> "${LOG_FILE:-/dev/stdout}"
 }
 
 log "Starting heartbeat to $HB_FILE every ${INTERVAL}s"
