@@ -5,6 +5,9 @@
 
 //! IRContext provides stateful context for IR construction and analysis.
 
+use crate::ir::module::Module;
+
+#[derive(Default)]
 pub struct IRContext {
-    // TODO: Add fields for type arena, function registry, etc.
+    pub modules: Vec<Module>,
 }
