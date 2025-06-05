@@ -90,7 +90,7 @@ Ensure project documentation and support files are complete and maintained.
 | D1    | Security docs (`docs/security/SECURITY_POLICY.md`, `THREAT_MODEL.md`)                          | 🟢 Hydrated |
 | D2    | Build plan doc (`BUILD_PLAN.md`)                                                               | 🟢 Hydrated |
 | D3    | CHANGELOG.md entry maintenance and consistency check                                          | 🟢 Hydrated |
-| D4    | README.md, CONTRIBUTING.md, CODE_OF_CONDUCT.md                         | ⏳ Queued  |
+| D4    | README.md, CONTRIBUTING.md, CODE_OF_CONDUCT.md                         | 🟢 Hydrated |
 
 *Agents*: `hydrate_docs`, `validate_metadata`
 
