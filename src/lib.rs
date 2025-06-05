@@ -39,5 +39,27 @@ pub fn compile_from_file(input: &str, output: &str) -> anyhow::Result<()> {
     let module = Module::new(input);
     let code = dispatch(&module, Backend::C);
     fs::write(output, code)?;
+  
+use std::fs;
+
+/// Compile from an input IR file to the specified output path.
+///
+/// This helper loads the IR text, constructs a minimal [`ir::Module`],
+/// selects a backend based on the `output` extension and writes the generated
+/// code to disk.
+pub fn compile_from_file(input: &str, output: &str) -> anyhow::Result<()> {
+    // Read the IR text from disk. Return an error if the file is missing.
+    let _ir_text = fs::read_to_string(input)?;
+
+    // TODO: parse IR once a format is available. For now create a stub Module.
+    let module = ir::Module::new(input);
+
+    // Choose backend based on output path.
+    let backend = codegen::infer_backend_from_path(output).unwrap_or(codegen::Backend::C);
+
+    // Dispatch code generation and write to file.
+    let code = codegen::dispatch(&module, backend);
+    fs::write(output, code)?;
+
     Ok(())
 }

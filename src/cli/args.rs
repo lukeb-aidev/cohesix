@@ -6,7 +6,7 @@
 use clap::{Arg, Command};
 
 /// Builds and returns the CLI argument parser for the Coh_CC compiler.
-pub fn build_cli() -> Command<'static> {
+pub fn build_cli() -> Command {
     Command::new("cohcc")
         .version("0.1")
         .about("Cohesix Compiler CLI")
@@ -16,8 +16,7 @@ pub fn build_cli() -> Command<'static> {
                 .long("input")
                 .value_name("FILE")
                 .help("Input IR file to compile")
-                .required(true)
-                .takes_value(true),
+                .required(true),
         )
         .arg(
             Arg::new("output")
@@ -26,7 +25,6 @@ pub fn build_cli() -> Command<'static> {
                 .value_name("FILE")
                 .help("Output file path")
                 .required(false)
-                .takes_value(true)
                 .default_value("a.out"),
         )
         .arg(
@@ -35,7 +33,6 @@ pub fn build_cli() -> Command<'static> {
                 .value_name("MS")
                 .help("Request timeout in milliseconds")
                 .required(false)
-                .takes_value(true)
                 .default_value("5000"),
         )
 }

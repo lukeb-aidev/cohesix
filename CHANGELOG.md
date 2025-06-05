@@ -1,18 +1,27 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.3
-// Date Modified: 2025-06-01
+// Filename: CHANGELOG.md v0.4
+// Date Modified: 2025-06-05
 // Author: Lukas Bower
 
-# TODO: Draft content for CHANGELOG.md.
+# Changelog for Cohesix
+
+## [v0.4] - 2025-06-02
+### Added
+- **cohesix-9p**: Integrated `p9` crate and added `parse_version_message` helper.
+- **Dependencies**: Documented `p9` crate in `DEPENDENCIES.md` and `OSS_REUSE.md`.
+- **Tests**: Added unit test for version message parsing.
+
+## [v0.4] - 2025-06-05
+### Changed
+- **BATCH_PLAN.md**: added agent references and watchdog note; version bumped to v0.3.
 
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v0.2
 // Date Modified: 2025-05-27
 // Author: Lukas Bower
 
-# Changelog for Cohesix
 
-All notable changes to this project are documented in this file.  
+All notable changes to this project are documented in this file.
 Version bumps correspond to updates of canonical documents and major subsystem scaffolding.
 
 ## [v0.2] - 2025-05-27
@@ -29,7 +38,13 @@ Version bumps correspond to updates of canonical documents and major subsystem s
 - **CHANGELOG.md** initial content and versioning.  
 - **.github/workflows**: CI and Codex workflow stubs.  
 - **scripts/**: stubbed build and helper scripts (`build-busybox.sh`, `deploy-ci.sh`, `heartbeat-check.sh`, `package-manager-stub.sh`, `run-smoke-tests.sh`).  
-- **cli/cohcli.py**: placeholder for Python CLI orchestrator.  
+- **cli/cohcli.py**: placeholder for Python CLI orchestrator.
+
+## [v0.4] - 2025-06-04
+### Added
+- **AGENTS.md**: introduced `batch` field and negative test cases for each agent.
+### Changed
+- Bumped AGENTS schema example and documentation version numbers.
 
 ## [v0.3] - 2025-06-01
 ### Added
