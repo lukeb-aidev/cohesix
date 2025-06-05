@@ -1,5 +1,6 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: INSTRUCTION_BLOCK.md v3.5
+// Author: Lukas Bower
 // Date Modified: 2025-05-24
 
 ## 0 · Classification Header Requirement

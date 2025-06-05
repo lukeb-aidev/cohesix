@@ -1,5 +1,6 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: DEPENDENCIES.md v0.3
+// Author: Lukas Bower
 // Date Modified: 2025-06-01
 
 # System Dependencies
