@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: README_Codex.md v1.3
-// Date Modified: 2025-06-05
+// Filename: README_Codex.md v1.4
+// Date Modified: 2025-06-16
 // Author: Lukas Bower
 
 # README Codex
@@ -32,9 +32,20 @@ Follow the steps below to configure your environment and start using Codex withi
      ```bash
      pip install cohcli
      ```
-4. **VS Code & ChatGPT Extension**  
-   - Install the ChatGPT or CodeGPT extension in VS Code.  
+4. **VS Code & ChatGPT Extension**
+   - Install the ChatGPT or CodeGPT extension in VS Code.
    - Configure the extension to use `OPENAI_API_KEY` from your environment.
+5. **Verify macOS Setup**
+   - Run the helper script:
+     ```bash
+     scripts/verify-macos-setup.sh
+     ```
+
+## macOS Setup Verification
+
+Run the verification script whenever you clone the repository or upgrade
+tooling. It checks for Homebrew, Xcode command line tools, Python 3.10+, git,
+and runs `validate_metadata_sync.py`.
 
 ## Git Workflow Setup
 
