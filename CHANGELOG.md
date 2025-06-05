@@ -1,7 +1,13 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v0.10
-// Date Modified: 2025-06-05
+// Date Modified: 2025-06-16
 // Author: Lukas Bower
+
+## [v0.12] - 2025-06-16
+### Added
+- **verify-macos-setup.sh**: helper script validating Homebrew, Xcode tools,
+  Python 3.10+, git and running `validate_metadata_sync.py`.
+- **README_Codex.md**: macOS verification instructions; version bumped to v1.4.
 ## [v0.11] - 2025-06-05
 ### Changed
 - **ci.yml**: updated rust toolchain step to v1.0.7 using environment files and installed rustfmt/clippy.
