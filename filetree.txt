@@ -61,6 +61,7 @@ scripts/run-smoke-tests.sh
 scripts/send-heartbeat.sh
 scripts/setup-toolchain.sh
 scripts/validate_metadata_sync.py
+scripts/verify-macos-setup.sh
 src/boot/measure.rs
 src/boot/mod.rs
 src/bootloader/args.rs
