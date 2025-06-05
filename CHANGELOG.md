@@ -3,6 +3,11 @@
 // Date Modified: 2025-06-11
 // Author: Lukas Bower
 
+## [v0.8] - 2025-06-15
+### Added
+- **BATCH_PLAN.md**: added cloud-native hooks deliverable for Queen roles; version bumped to v0.5.
+- **METADATA.md**: updated entry for BATCH_PLAN.md to v0.5.
+
 # Changelog for Cohesix
 
 ## [v0.8] - 2025-06-11
