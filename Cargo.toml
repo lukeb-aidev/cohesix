@@ -10,6 +10,7 @@ anyhow = "1.0"
 env_logger = "0.11.7"
 log = "0.4"
 clap = { version = "4.5.4", features = ["derive"] }
+sysinfo = "0.30"
 
 [workspace]
 members = ["cohesix-9p"]

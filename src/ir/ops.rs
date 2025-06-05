@@ -17,8 +17,12 @@ pub const ALL_OPCODES: &[Opcode] = &[
     Opcode::Load,
     Opcode::Store,
     Opcode::Jump,
-    Opcode::Branch { condition: String::new() },
-    Opcode::Call { function: String::new() },
+    Opcode::Branch {
+        condition: String::new(),
+    },
+    Opcode::Call {
+        function: String::new(),
+    },
     Opcode::Ret,
 ];
 
