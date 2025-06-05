@@ -21,7 +21,23 @@ impl Plan9Shim for DefaultShim {
         if let Some(d) = data {
             println!("[shim] with data: {:?}", d);
         }
-        // TODO(cohesix): implement real shim routing to 9P server
-        Ok(vec![])
+        // A very small routing table for demo purposes. Paths under `/busybox`
+        // are executed via the in-kernel BusyBox helpers. The `/9p` path is
+        // treated as a raw 9P message that is forwarded to the mini 9P server
+        // implementation.
+        match path {
+            "/busybox" => {
+                let args: Vec<&str> = data
+                    .map(|d| std::str::from_utf8(d).unwrap_or("").split_whitespace().collect())
+                    .unwrap_or_else(Vec::new);
+                crate::kernel::fs::busybox::run_command(op, &args);
+                Ok(Vec::new())
+            }
+            "/9p" => {
+                let bytes = data.ok_or_else(|| "missing request".to_string())?;
+                Ok(crate::lib::9p::server::handle_9p_session(bytes))
+            }
+            _ => Err("unknown path".into()),
+        }
     }
 }

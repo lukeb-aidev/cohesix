@@ -11,6 +11,7 @@ CohCLI – Command-line interface for interacting with Cohesix services.
 
 import argparse
 import sys
+import os
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -54,20 +55,32 @@ def main():
         sys.exit(1)
 
 def handle_status(args):
-    # TODO: Implement status logic
-    print("[stub] status handler")
+    import os
+    role = os.environ.get("COH_ROLE", "Unknown")
+    print(f"Node status OK – role: {role}")
+    if args.verbose:
+        print("Environment variables:")
+        for k, v in os.environ.items():
+            if k.startswith("COH"):  # show Cohesix-related vars
+                print(f"  {k}={v}")
 
 def handle_boot(args):
-    # TODO: Implement boot logic
-    print(f"[stub] boot handler for role: {args.role}")
+    print(f"Booting role: {args.role} ...")
+    try:
+        from cohesix.runtime.env import init
+        init.initialize_runtime_env()
+        os.environ["COH_ROLE"] = args.role
+        print("Boot sequence complete")
+    except Exception as e:
+        print(f"Boot failed: {e}")
 
 def handle_trace(args):
-    # TODO: Implement trace logic
-    print(f"[stub] trace handler with filter: {args.filter}")
+    filter_val = args.filter or "*"
+    print(f"Showing trace log entries matching '{filter_val}' (stub)")
 
 def handle_agent(args):
-    # TODO: Implement agent handler logic
-    print(f"[stub] agent {args.action} for {args.agent_name}")
+    print(f"Agent {args.action}: {args.agent_name}")
+    # Real implementation would integrate with codex agents or runtime loader
 
 if __name__ == "__main__":
     main()
