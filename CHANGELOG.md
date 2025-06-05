@@ -1,9 +1,13 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.3
-// Date Modified: 2025-06-01
+// Filename: CHANGELOG.md v0.4
+// Date Modified: 2025-06-05
 // Author: Lukas Bower
 
 # TODO: Draft content for CHANGELOG.md.
+
+## [v0.4] - 2025-06-05
+### Changed
+- **BATCH_PLAN.md**: added agent references and watchdog note; version bumped to v0.3.
 
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v0.2
