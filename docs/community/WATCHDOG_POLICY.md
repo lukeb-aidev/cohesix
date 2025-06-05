@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: WATCHDOG_POLICY.md v1.2
-// Date Modified: 2025-05-26
+// Filename: WATCHDOG_POLICY.md v1.3
+// Date Modified: 2025-06-05
 // Author: Lukas Bower
 
 # Watchdog Policy
@@ -56,7 +56,8 @@ Upon heartbeat timeout (15 minutes without a valid ping):
 - **Environment Variables:**  
   - `WATCHDOG_INTERVAL=900` (seconds)  
   - `HEARTBEAT_INTERVAL=300` (seconds)  
-- **Docker Healthcheck:** Configure the hydration container’s `HEALTHCHECK` to call `/usr/local/bin/heartbeat-check.sh`.  
+- **Docker Healthcheck:** Configure the hydration container’s `HEALTHCHECK` to call `/usr/local/bin/heartbeat-check.sh`.
+- **Heartbeat Helper:** Use `scripts/send-heartbeat.sh` to emit periodic pulses from long-running tasks.
 - **CI Integration:** Incorporate watchdog checks into GitHub Actions using a periodic workflow (`schedule: cron('*/15 * * * *')`).
 
 ---
