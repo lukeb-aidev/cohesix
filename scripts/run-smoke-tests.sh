@@ -1,9 +1,8 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: run-smoke-tests.sh v0.1
-// Date Modified: 2025-05-24
+// Filename: run-smoke-tests.sh v0.2
+// Date Modified: 2025-06-08
 // Author: Lukas Bower
 
-//! TODO: Implement run-smoke-tests.sh.
 
 #!/usr/bin/env bash
 ###############################################################################

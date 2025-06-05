@@ -1,8 +1,7 @@
-
 // CLASSIFICATION: COMMUNITY
-// Filename: router.rs v1.0
+// Filename: router.rs v1.1
 // Author: Lukas Bower
-// Date Modified: 2025-05-31
+// Date Modified: 2025-06-08
 
 //! Role module for the Cohesix `Router`.
 //! The router handles message routing, inter-process dispatch, and namespace resolution for worker services.
@@ -14,8 +13,20 @@ pub trait RouterRole {
     fn register_service(&mut self, name: &str, endpoint: &str);
 }
 
-/// Stub implementation of the router role.
-pub struct DefaultRouter;
+use std::collections::HashMap;
+
+/// Simple router implementation holding an in-memory service table.
+pub struct DefaultRouter {
+    routes: HashMap<String, String>,
+}
+
+impl Default for DefaultRouter {
+    fn default() -> Self {
+        Self {
+            routes: HashMap::new(),
+        }
+    }
+}
 
 impl RouterRole for DefaultRouter {
     fn route_message(&self, src: &str, dest: &str, payload: &[u8]) -> Result<(), String> {
@@ -25,19 +36,30 @@ impl RouterRole for DefaultRouter {
             dest,
             payload.len()
         );
-        // TODO(cohesix): Forward payload to target process or endpoint
+        if let Some(endpoint) = self.routes.get(dest) {
+            println!(
+                "[router] delivered {} bytes from '{}' to endpoint '{}'",
+                payload.len(),
+                src,
+                endpoint
+            );
+        } else {
+            println!("[router] no route for '{}'; dropping payload", dest);
+        }
         Ok(())
     }
 
     fn resolve_namespace(&self, path: &str) -> Option<String> {
         println!("[router] resolving namespace for '{}'", path);
-        // TODO(cohesix): Map 9P path or local namespace entry
-        Some(format!("/srv/{}", path))
+        if let Some(endpoint) = self.routes.get(path) {
+            Some(endpoint.clone())
+        } else {
+            Some(format!("/srv/{}", path))
+        }
     }
 
     fn register_service(&mut self, name: &str, endpoint: &str) {
         println!("[router] registering service '{}' at '{}'", name, endpoint);
-        // TODO(cohesix): Add to routing table
+        self.routes.insert(name.to_string(), endpoint.to_string());
     }
 }
-

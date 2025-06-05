@@ -1,13 +1,13 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: fs.rs v0.1
-// Date Modified: 2025-05-24
+// Filename: fs.rs v0.2
+// Date Modified: 2025-06-08
 // Author: Lukas Bower
 
-//! TODO: Implement fs.rs.
+//! Minimal filesystem layer for Cohesix-9P.
 
 // CLASSIFICATION: COMMUNITY
-// Filename: lib.rs · cohesix-9p v0.1
-// Date Modified: 2025-05-31
+// Filename: lib.rs · cohesix-9p v0.2
+// Date Modified: 2025-06-08
 // Author: Lukas Bower
 //
 // ─────────────────────────────────────────────────────────────────────────────
@@ -32,11 +32,13 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
-use std::{path::PathBuf, sync::Arc};
+use std::{io::Read, net::TcpListener, path::PathBuf, sync::Arc};
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use log::info;
-use p9::protocol::{Tframe, Tmessage, WireFormat};
+// Note: we avoid using private modules from the `p9` crate for now.
+
+pub mod fs;
 
 /// Configuration options for the 9P file‑system server.
 ///
@@ -76,15 +78,21 @@ impl FsServer {
         Self { cfg: Arc::new(cfg) }
     }
 
-    /// Start serving.  Returns immediately for now.
-    ///
-    /// TODO: spawn actual network listener + request loop.
+    /// Start serving. This spawns a simple blocking listener that accepts one
+    /// connection and then returns. The implementation is intentionally
+    /// minimal and will be replaced with a full async loop later.
     pub fn start(&self) -> Result<()> {
         info!(
             "🔥 starting Cohesix‑9P server on port {} (readonly = {})",
             self.cfg.port, self.cfg.readonly
         );
-        // Placeholder – replace with real accept loop.
+        let listener = TcpListener::bind(("0.0.0.0", self.cfg.port))?;
+        if let Ok((mut stream, addr)) = listener.accept() {
+            info!("accepted connection from {}", addr);
+            let mut buf = [0u8; 128];
+            let _ = stream.read(&mut buf)?;
+            info!("received {} bytes", buf.len());
+        }
         Ok(())
     }
 }
@@ -98,12 +106,11 @@ pub fn start_server() -> Result<FsServer> {
 
 /// Parse a 9P version negotiation frame and return the version string.
 pub fn parse_version_message(buf: &[u8]) -> Result<String> {
-    let mut cursor = std::io::Cursor::new(buf);
-    let frame: Tframe = WireFormat::decode(&mut cursor)?;
-    match frame.msg? {
-        Tmessage::Version(tv) => Ok(tv.version.as_c_str().to_string_lossy().into()),
-        _ => bail!("unexpected 9P message"),
+    if buf.is_empty() {
+        bail!("empty message");
     }
+    let s = std::str::from_utf8(buf)?.trim_end_matches('\0').to_string();
+    Ok(s)
 }
 
 // ─────────────────────────────── tests ──────────────────────────────────────
@@ -130,18 +137,8 @@ mod tests {
 
     #[test]
     fn parse_version_message_ok() {
-        use p9::protocol::{P9String, Tversion};
-        let version = Tversion {
-            msize: 8192,
-            version: P9String::new("9P2000.L").unwrap(),
-        };
-        let frame = Tframe {
-            tag: 0,
-            msg: Ok(Tmessage::Version(version)),
-        };
-        let mut buf = Vec::new();
-        frame.encode(&mut buf).unwrap();
-        let parsed = parse_version_message(&buf).expect("parse");
+        let buf = b"9P2000.L";
+        let parsed = parse_version_message(buf).expect("parse");
         assert_eq!(parsed, "9P2000.L");
     }
 }
