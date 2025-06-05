@@ -630,6 +630,7 @@ THREAT_MODEL.md
 build-busybox.sh
 deploy-ci.sh
 heartbeat-check.sh
+send-heartbeat.sh
 package-manager-stub.sh
 run-smoke-tests.sh
 
