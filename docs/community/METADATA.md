@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: METADATA.md v1.7
-// Date Modified: 2025-06-01
+// Filename: METADATA.md v1.8
+// Date Modified: 2025-06-05
 
 ## Canonical Documents
 
