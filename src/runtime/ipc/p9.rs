@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: 9p.rs v1.0
+// Filename: p9.rs v1.1
 // Author: Lukas Bower
-// Date Modified: 2025-05-31
+// Date Modified: 2025-06-02
 
 //! 9P protocol handler for Cohesix runtime.
 //! This module provides the IPC interface for file operations over the 9P protocol, enabling communication between kernel and userland services.
@@ -31,6 +31,7 @@ pub trait P9Server {
 }
 
 /// Stub server implementation that logs but does not respond meaningfully.
+#[derive(Default)]
 pub struct StubP9Server;
 
 impl P9Server for StubP9Server {
