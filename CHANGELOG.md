@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.3
-// Date Modified: 2025-06-01
+// Filename: CHANGELOG.md v0.4
+// Date Modified: 2025-06-04
 // Author: Lukas Bower
 
 # TODO: Draft content for CHANGELOG.md.
@@ -29,7 +29,13 @@ Version bumps correspond to updates of canonical documents and major subsystem s
 - **CHANGELOG.md** initial content and versioning.  
 - **.github/workflows**: CI and Codex workflow stubs.  
 - **scripts/**: stubbed build and helper scripts (`build-busybox.sh`, `deploy-ci.sh`, `heartbeat-check.sh`, `package-manager-stub.sh`, `run-smoke-tests.sh`).  
-- **cli/cohcli.py**: placeholder for Python CLI orchestrator.  
+- **cli/cohcli.py**: placeholder for Python CLI orchestrator.
+
+## [v0.4] - 2025-06-04
+### Added
+- **AGENTS.md**: introduced `batch` field and negative test cases for each agent.
+### Changed
+- Bumped AGENTS schema example and documentation version numbers.
 
 ## [v0.3] - 2025-06-01
 ### Added
