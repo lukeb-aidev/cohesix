@@ -1,11 +1,13 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: BATCH_PLAN.md v0.2
-// Date Modified: 2025-05-26
+// Filename: BATCH_PLAN.md v0.3
+// Date Modified: 2025-06-05
 // Author: Lukas Bower
 
 ## Cohesix Batch Plan
 
 This document tracks all high-level work phases and discrete batches for the Cohesix project. Each batch is a self-contained unit with clear deliverables, status, and dependencies.
+
+Batches are executed through ChatGPT agents defined in `AGENTS.md`. A 15‑minute watchdog described in `WATCHDOG_POLICY.md` ensures tasks do not stall and provides automated oversight.
 
 ### 1 · Coh_CC Compiler Batches
 All compiler-related work for building and scaffolding the Coh_CC toolchain.
@@ -19,7 +21,10 @@ All compiler-related work for building and scaffolding the Coh_CC toolchain.
 | 19–24            | Codegen dispatcher, CLI args & integration, example IR input                                   | 🟢 Hydrated |
 | 25               | Example IR module stub                                                                         | 🟢 Hydrated |
 | 26               | Regression & performance harness (benchmarks, code-size, timing)                               | ⏳ Queued  |
-| 27               | API documentation generator (Rustdoc, markdown)                                                | ⏳ Queued  |
+| 27               | API documentation generator (Rustdoc, markdown)                                    | ⏳ Queued  |
+
+*Agents*: `scaffold_service`, `add_pass`, `run_pass`
+
 
 ### 2 · Cohesix OS Batches
 Operating system and runtime environment scaffolding.
@@ -35,6 +40,8 @@ Operating system and runtime environment scaffolding.
 | O7     | Full OS image assembly, reproducible build, CI smoke tests                                     | ⏳ Queued  |
 | O8     | Service health & recovery: watchdog scripts, container healthchecks, auto-restart logic        | ⏳ Queued  |
 
+*Agents*: `scaffold_service`
+
 ### 3 · Tooling Batches
 Common CLI and system utilities adaptation for a Linux-like UX.
 
@@ -49,6 +56,8 @@ Common CLI and system utilities adaptation for a Linux-like UX.
 | T7    | Distributed build tooling (SSH-driven CI, remote artifact staging)                             | ⏳ Queued  |
 | T8    | CI helper scripts (`build-busybox.sh`, `deploy-ci.sh`, smoke-test runners)                      | ⏳ Queued  |
 
+*Agents*: `add_cli_option`
+
 ### 4 · Codex Enablement Batches
 Preparation and validation for AI-driven code generation and automation.
 
@@ -61,6 +70,8 @@ Preparation and validation for AI-driven code generation and automation.
 | C5    | Logging & audit trails for Codex outputs (`codex_logs/`)                                        | ⏳ Queued  |
 | C6    | Agent self-test harness: validate `AGENTS.md` schema and sample runs                            | ⏳ Queued  |
 
+*Agents*: `hydrate_docs`, `validate_metadata`
+
 ### 5 · Testing & QA Batches
 End-to-end testing infrastructure to ensure platform quality.
 
@@ -68,6 +79,8 @@ End-to-end testing infrastructure to ensure platform quality.
 |-------|-----------------------------------------------------------------------------------------------|-----------|
 | X1    | Root `tests/` directory with subfolders and dummy tests for compiler, passes, OS, Codex         | 🟢 Hydrated |
 | X2    | Security & OWASP compliance tests: threat model, dependency scanning, container scanning        | ⏳ Queued  |
+
+*Agents*: `run_pass`
 
 ### 6 · Documentation & Auxiliary Batches
 Ensure project documentation and support files are complete and maintained.
@@ -77,7 +90,9 @@ Ensure project documentation and support files are complete and maintained.
 | D1    | Security docs (`docs/security/SECURITY_POLICY.md`, `THREAT_MODEL.md`)                          | 🟢 Hydrated |
 | D2    | Build plan doc (`BUILD_PLAN.md`)                                                               | 🟢 Hydrated |
 | D3    | CHANGELOG.md entry maintenance and consistency check                                          | 🟢 Hydrated |
-| D4    | README.md, CONTRIBUTING.md, CODE_OF_CONDUCT.md                                                 | ⏳ Queued  |
+| D4    | README.md, CONTRIBUTING.md, CODE_OF_CONDUCT.md                         | ⏳ Queued  |
+
+*Agents*: `hydrate_docs`, `validate_metadata`
 
 ---
 

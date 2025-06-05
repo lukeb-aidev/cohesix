@@ -38,6 +38,10 @@ crate: rapier3d v0.17.2 — Apache-2.0
 https://github.com/dimforge/rapier
 Used in: Physics module (/sim/) on DroneWorker
 ```
+crate: p9 v0.3.2 — BSD-3-Clause
+https://github.com/google/rust-p9
+Used in: 9P file system server (`cohesix-9p` crate)
+```
 
 ## 4 · Audit Tools
 
