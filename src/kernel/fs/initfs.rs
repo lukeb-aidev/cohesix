@@ -13,8 +13,21 @@ pub struct InitFile {
 }
 
 /// Static list of embedded files (to be populated at link time).
+// Example embedded files for early boot. In a real build these would be
+// populated via a linker script or generated constants.
 static INIT_FILES: &[InitFile] = &[
-    // TODO(cohesix): Populate from linker script or const data
+    InitFile {
+        name: "init.rc",
+        contents: b"echo booting Cohesix\n",
+    },
+    InitFile {
+        name: "config.txt",
+        contents: b"BOOT_VERBOSE=1\n",
+    },
+    InitFile {
+        name: "README",
+        contents: b"Cohesix InitFS\n",
+    },
 ];
 
 /// Attempt to retrieve a file by name.

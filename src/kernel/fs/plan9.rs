@@ -7,6 +7,7 @@
 //! Provides abstraction and mount logic for exposing namespaces via 9P.
 
 /// Placeholder for a 9P mount entry.
+#[derive(Copy, Clone)]
 pub struct Plan9Mount {
     pub path: &'static str,
     pub target: &'static str,
