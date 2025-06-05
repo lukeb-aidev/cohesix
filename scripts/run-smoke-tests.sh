@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: run-smoke-tests.sh v0.2
-// Date Modified: 2025-06-08
+// Filename: run-smoke-tests.sh v0.3
+// Date Modified: 2025-06-16
 // Author: Lukas Bower
 
 
