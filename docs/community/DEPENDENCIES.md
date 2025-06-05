@@ -28,6 +28,7 @@
 | rapier3d         | 0.14      | crates.io (MIT)   | Physics simulation engine                 |
 | regex-automata   | 0.4       | crates.io (MIT)   | Deterministic regex engine (utils)        |
 | bytes            | 1.5       | crates.io (MIT)   | Zero‑copy byte buffers (async 9P helper) |
+| p9               | 0.3.2     | crates.io (BSD-3-Clause) | 9P protocol server implementation |
 
 # Tooling Dependencies
 
