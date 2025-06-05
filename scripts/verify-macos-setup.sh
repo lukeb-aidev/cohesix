@@ -1,8 +1,3 @@
-// CLASSIFICATION: COMMUNITY
-// Filename: verify-macos-setup.sh v0.1
-// Date Modified: 2025-06-16
-// Author: Lukas Bower
-
 #!/usr/bin/env bash
 ###############################################################################
 # verify-macos-setup.sh – Cohesix helper
@@ -17,6 +12,7 @@
 #   4. Git
 #   5. Metadata sync via scripts/validate_metadata_sync.py
 ###############################################################################
+
 set -euo pipefail
 
 msg()  { printf "\e[32m[macos]\e[0m %s\n" "$*"; }
@@ -34,19 +30,37 @@ if ! xcode-select -p >/dev/null 2>&1; then
 fi
 
 msg "Checking Python version …"
-if ! command -v python3 >/dev/null 2>&1; then
-  fail "python3 not found"
+
+PYTHON_BIN=""
+for CANDIDATE in python3.12 python3.11 python3.10 python3; do
+  if command -v "$CANDIDATE" >/dev/null 2>&1; then
+    BIN_PATH="$(command -v "$CANDIDATE")"
+    if [[ "$BIN_PATH" == "/usr/bin/python3" ]]; then
+      continue
+    fi
+    PYTHON_BIN="$BIN_PATH"
+    break
+  fi
+done
+
+if [[ -z "$PYTHON_BIN" ]]; then
+  fail "No usable python3 interpreter found"
 fi
-PY_VER="$(python3 -V | awk '{print $2}')"
-IFS='.' read -r PY_MAJOR PY_MINOR _ <<< "$PY_VER"
-if (( PY_MAJOR < 3 || (PY_MAJOR == 3 && PY_MINOR < 10) )); then
+
+PY_VER="$($PYTHON_BIN -c 'import sys; print(".".join(map(str, sys.version_info[:3])))')"
+PY_OK=$($PYTHON_BIN -c 'import sys; print(sys.version_info >= (3,10))')
+if [[ "$PY_OK" != "True" ]]; then
   fail "Python 3.10+ required, found $PY_VER"
 fi
+
+msg "Using $PYTHON_BIN ($PY_VER)"
+export PYTHON_BIN
 
 msg "Checking git …"
 command -v git >/dev/null 2>&1 || fail "git not found"
 
 msg "Running metadata sync validation …"
-python3 scripts/validate_metadata_sync.py
+"$PYTHON_BIN" scripts/validate_metadata_sync.py
+# Future scripts can now access $PYTHON_BIN to ensure consistent interpreter usage
 
 msg "✅ macOS setup verified."
