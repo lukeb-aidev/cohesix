@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: WATCHDOG_POLICY.md v1.3
-// Date Modified: 2025-06-05
+// Filename: WATCHDOG_POLICY.md v1.4
+// Date Modified: 2025-06-09
 // Author: Lukas Bower
 
 # Watchdog Policy
@@ -26,7 +26,7 @@ This document defines the 15‑minute watchdog policy for the Cohesix ChatGPT hy
 Upon heartbeat timeout (15 minutes without a valid ping):
 
 1. **Container Restart:** Automatically restart the hydration container or ChatGPT agent process to clear any hung state.  
-2. **State Integrity Check:** On startup, re-run `validate_metadata_sync.py` and confirm that all expected files from the last checkpoint are present and valid.  
+2. **State Integrity Check:** On startup, re-run `validate_metadata_sync.py` (see `README_Codex.md`) and confirm that all expected files from the last checkpoint are present and valid.
 3. **Resume Batches:** Continue from the last known successful step rather than restarting the entire pipeline.  
 4. **Retry Limits:** If recovery has been attempted **3 times** without progress, escalate to manual intervention.
 
