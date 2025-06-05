@@ -1,9 +1,14 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.5
+// Filename: CHANGELOG.md v0.6
 // Date Modified: 2025-06-05
 // Author: Lukas Bower
 
 # Changelog for Cohesix
+
+## [v0.6] - 2025-06-05
+### Added
+- **END_USER_DEMOS.md**: documented showcase scenarios for Queen–Worker demos.
+- **METADATA.md**: version bumped to v1.9 with new entry for END_USER_DEMOS.md.
 
 ## [v0.5] - 2025-06-05
 ### Fixed
