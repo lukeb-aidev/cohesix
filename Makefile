@@ -1,6 +1,6 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Makefile v0.3
-# Date Modified: 2025-06-01
+	# Filename: Makefile v0.4
+# Date Modified: 2025-06-05
 # Author: Lukas Bower
 #
 # ─────────────────────────────────────────────────────────────
@@ -25,10 +25,11 @@ go-test:
 	@echo "🔧 Go unit tests …"
 	@cd go && go test ./...
 
-c-shims:
+c/sel4/shim/boot_trampoline.o: c/sel4/shim/boot_trampoline.c
+	$(CC:-clang?=cc) -I c/sel4/include -c $< -o $@
+
+c-shims: c/sel4/shim/boot_trampoline.o
 	@echo "🔧 Building C shims …"
-	@$(CC:-clang?=cc) -I c/sel4/include \
-		-c $(wildcard c/sel4/shim/*.c) -o c/sel4/shim/boot_trampoline.o
 
 help:
 	@echo "Cohesix top‑level build targets:"
