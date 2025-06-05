@@ -1,9 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: package-manager-stub.sh v0.1
-// Date Modified: 2025-05-24
+// Filename: package-manager-stub.sh v0.2
+// Date Modified: 2025-06-08
 // Author: Lukas Bower
-
-//! TODO: Implement package-manager-stub.sh.
 
 // CLASSIFICATION: COMMUNITY
 // Filename: package-manager.sh v0.2

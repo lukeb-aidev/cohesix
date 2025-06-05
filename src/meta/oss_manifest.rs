@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: oss_manifest.rs v1.0
+// Filename: oss_manifest.rs v1.1
 // Author: Lukas Bower
-// Date Modified: 2025-05-31
+// Date Modified: 2025-06-08
 
 //! OSS manifest module for Cohesix.
 //! Tracks open-source components and license metadata included in the kernel and userland builds.
@@ -16,12 +16,23 @@ pub struct Dependency {
 
 /// Static list of known OSS dependencies.
 pub static OSS_DEPENDENCIES: &[Dependency] = &[
-    // TODO(cohesix): Populate with real components from build system
     Dependency {
         name: "rapier3d",
         version: "0.17.2",
         license: "Apache-2.0",
         source_url: "https://github.com/dimforge/rapier",
+    },
+    Dependency {
+        name: "clap",
+        version: "4.5.4",
+        license: "MIT",
+        source_url: "https://github.com/clap-rs/clap",
+    },
+    Dependency {
+        name: "p9",
+        version: "0.3.2",
+        license: "Apache-2.0",
+        source_url: "https://github.com/wahern/p9",
     },
 ];
 
