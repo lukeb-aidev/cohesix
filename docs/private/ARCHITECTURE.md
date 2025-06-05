@@ -1,5 +1,3 @@
-
-
 // CLASSIFICATION: PRIVATE
 // Filename: ARCHITECTURE.md v0.3
 // Author: Lukas Bower
