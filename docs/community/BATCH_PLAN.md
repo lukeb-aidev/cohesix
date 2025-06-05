@@ -84,6 +84,7 @@ Operating system and runtime environment scaffolding.
 | O6     | Driver model & hardware abstraction layer                                                      | ⏳ Queued  |
 | O7     | Full OS image assembly, reproducible build, CI smoke tests                                     | ⏳ Queued  |
 | O8     | Service health & recovery: watchdog scripts, container healthchecks, auto-restart logic        | ⏳ Queued  |
+| O9     | Cloud-native hooks for Queen roles: bootstrapping, auto-scaling triggers, and metrics export  | ⏳ Queued  |
 
 *Agents*: `scaffold_service`
 
