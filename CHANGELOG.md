@@ -3,6 +3,10 @@
 // Date Modified: 2025-06-11
 // Author: Lukas Bower
 
+## [v0.9] - 2025-06-16
+### Added
+- **README**: document running Go tests via `make go-test` (workspace in `go/`).
+
 ## [v0.8] - 2025-06-15
 ### Added
 - **BATCH_PLAN.md**: added cloud-native hooks deliverable for Queen roles; version bumped to v0.5.
