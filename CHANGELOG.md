@@ -1,11 +1,10 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v0.10
-// Date Modified: 2025-06-17
+// Date Modified: 2025-06-05
 // Author: Lukas Bower
-
-## [v0.11] - 2025-06-17
-### Added
-- **bench**: Added Criterion benchmark harness for IR pass manager under `benches/pass_manager.rs`.
+## [v0.11] - 2025-06-05
+### Changed
+- **ci.yml**: updated rust toolchain step to v1.0.7 using environment files and installed rustfmt/clippy.
 
 ## [v0.10] - 2025-06-05
 ### Removed
@@ -56,15 +55,6 @@
 ## [v0.4] - 2025-06-05
 ### Changed
 - **BATCH_PLAN.md**: added agent references and watchdog note; version bumped to v0.3.
-
-// CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.2
-// Date Modified: 2025-05-27
-// Author: Lukas Bower
-
-
-All notable changes to this project are documented in this file.
-Version bumps correspond to updates of canonical documents and major subsystem scaffolding.
 
 ## [v0.2] - 2025-05-27
 ### Changed
