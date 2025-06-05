@@ -23,7 +23,7 @@
 | Q_DAY.md                   | v1.0    | 2025-05-31    | PRIVATE        |
 | QUEEN_POLICY.md            | v1.0    | 2025-05-19    | PRIVATE        |
 | README.md                  | v0.1    | 2025-05-24    | PRIVATE        |
-| README_Codex.md            | v1.3    | 2025-06-05    | COMMUNITY      |
+| README_Codex.md            | v1.4    | 2025-06-16    | COMMUNITY      |
 | RELEASE_CRITERIA.md        | v1.1    | 2025-05-24    | COMMUNITY      |
 | REMOTE_ACCESS.md           | v1.0    | 2025-05-24    | COMMUNITY      |
 | ROLE_MANIFEST.md           | v1.2    | 2025-05-24    | COMMUNITY      |
