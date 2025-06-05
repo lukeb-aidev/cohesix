@@ -36,6 +36,7 @@ use std::{path::PathBuf, sync::Arc};
 
 use anyhow::{bail, Result};
 use log::info;
+use p9::protocol::{Tframe, Tmessage, WireFormat};
 
 /// Configuration options for the 9P file‑system server.
 ///
@@ -95,6 +96,16 @@ pub fn start_server() -> Result<FsServer> {
     Ok(srv)
 }
 
+/// Parse a 9P version negotiation frame and return the version string.
+pub fn parse_version_message(buf: &[u8]) -> Result<String> {
+    let mut cursor = std::io::Cursor::new(buf);
+    let frame: Tframe = WireFormat::decode(&mut cursor)?;
+    match frame.msg? {
+        Tmessage::Version(tv) => Ok(tv.version.as_c_str().to_string_lossy().into()),
+        _ => bail!("unexpected 9P message"),
+    }
+}
+
 // ─────────────────────────────── tests ──────────────────────────────────────
 #[cfg(test)]
 mod tests {
@@ -115,5 +126,22 @@ mod tests {
         };
         let srv = FsServer::new(cfg.clone());
         assert_eq!(srv.cfg.port, cfg.port);
+    }
+
+    #[test]
+    fn parse_version_message_ok() {
+        use p9::protocol::{P9String, Tversion};
+        let version = Tversion {
+            msize: 8192,
+            version: P9String::new("9P2000.L").unwrap(),
+        };
+        let frame = Tframe {
+            tag: 0,
+            msg: Ok(Tmessage::Version(version)),
+        };
+        let mut buf = Vec::new();
+        frame.encode(&mut buf).unwrap();
+        let parsed = parse_version_message(&buf).expect("parse");
+        assert_eq!(parsed, "9P2000.L");
     }
 }

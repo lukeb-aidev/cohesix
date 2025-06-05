@@ -12,9 +12,13 @@ use crate::cli::args::build_cli;
 /// Entry point for the CLI. Parses arguments, reads IR, dispatches codegen, and writes output.
 pub fn run() -> anyhow::Result<()> {
     let matches = build_cli().get_matches();
-    let input_path = matches.value_of("input").unwrap();
-    let output_path = matches.value_of("output").unwrap();
-    let timeout: u64 = matches.value_of("timeout").unwrap().parse().unwrap_or(5000);
+    let input_path = matches.get_one::<String>("input").unwrap();
+    let output_path = matches.get_one::<String>("output").unwrap();
+    let timeout: u64 = matches
+        .get_one::<String>("timeout")
+        .unwrap()
+        .parse()
+        .unwrap_or(5000);
 
     // Reuse the library helper to perform the compilation.
     crate::compile_from_file(input_path, output_path)?;
