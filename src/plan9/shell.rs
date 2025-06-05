@@ -47,7 +47,28 @@ impl Shell {
         match self.parse_input(input) {
             Some(cmd) => {
                 println!("[shell] executing: {} {:?}", cmd.name, cmd.args);
-                // TODO(cohesix): dispatch command to system or BusyBox
+                // A very small dispatcher that routes unknown commands to
+                // BusyBox. This keeps the shell functional during early boot
+                // without needing a full command parser.
+                match cmd.name.as_str() {
+                    // Explicit busybox invocation: `busybox <cmd> [args...]`
+                    "busybox" => {
+                        if let Some(sub) = cmd.args.first() {
+                            let rest: Vec<&str> = cmd.args[1..]
+                                .iter()
+                                .map(|s| s.as_str())
+                                .collect();
+                            crate::kernel::fs::busybox::run_command(sub, &rest);
+                        } else {
+                            println!("[shell] usage: busybox <command>");
+                        }
+                    }
+                    // Direct command names map to BusyBox as well
+                    other => {
+                        let args: Vec<&str> = cmd.args.iter().map(|s| s.as_str()).collect();
+                        crate::kernel::fs::busybox::run_command(other, &args);
+                    }
+                }
             }
             None => {
                 println!("[shell] empty input");

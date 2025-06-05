@@ -23,11 +23,16 @@ pub struct GpuDriver {
 impl GpuDriver {
     /// Attempt to initialize the GPU driver.
     pub fn initialize() -> Self {
-        // TODO(cohesix): Detect CUDA support and initialize device context
+        use std::env;
         println!("[GPU] Initializing GPU driver...");
+        let backend = match env::var("COHESIX_GPU").as_deref() {
+            Ok("cuda") => GpuBackend::NvidiaCuda,
+            Ok("none") => GpuBackend::None,
+            _ => GpuBackend::SoftwareFallback,
+        };
         GpuDriver {
-            backend: GpuBackend::SoftwareFallback,
-            initialized: false,
+            backend,
+            initialized: true,
         }
     }
 
@@ -38,8 +43,11 @@ impl GpuDriver {
 
     /// TODO: Launch a GPU task (stub)
     pub fn launch_task(&self) {
-        // TODO(cohesix): Dispatch kernel to device or fallback
-        println!("[GPU] Launching task (stub)...");
+        match self.backend {
+            GpuBackend::NvidiaCuda => println!("[GPU] Dispatching CUDA kernel..."),
+            GpuBackend::SoftwareFallback => println!("[GPU] Running software fallback"),
+            GpuBackend::None => println!("[GPU] No GPU backend available"),
+        }
     }
 }
 

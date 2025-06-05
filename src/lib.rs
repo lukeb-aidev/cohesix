@@ -30,6 +30,9 @@ pub mod runtime;
 /// Runtime services (telemetry, sandbox, health, ipc)
 pub mod services;
 
+/// Kernel modules and drivers
+pub mod kernel;
+
 /// Compile from an input IR file to the specified output path.
 ///
 /// This helper loads the IR text, constructs a minimal [`ir::Module`],

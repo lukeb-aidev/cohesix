@@ -76,5 +76,14 @@ pub fn preload_dependencies() -> DependencyRegistry {
         license: Some("MIT OR Apache-2.0".into()),
     });
 
-    registry
+    // Example of a dependency provided by the workspace itself
+    registry.register(Dependency {
+        name: "anyhow".into(),
+        version: "1.0".into(),
+        source: Some("crates.io".into()),
+        license: Some("MIT OR Apache-2.0".into()),
+    });
+
+
 }
+
