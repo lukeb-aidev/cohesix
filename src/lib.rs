@@ -30,6 +30,12 @@ pub mod runtime;
 /// Runtime services (telemetry, sandbox, health, ipc)
 pub mod services;
 
+/// Common cross-module types.
+pub mod cohesix_types;
+
+/// Sandbox helpers (profiles, syscall queueing).
+pub mod sandbox;
+
 /// Kernel modules and drivers
 pub mod kernel;
 
