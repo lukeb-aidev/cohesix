@@ -7,6 +7,13 @@
 ### Fixed
 - **send-heartbeat.sh**: log function now outputs provided message; header bumped to v0.2.
 
+## [v0.14] - 2025-06-17
+### Added
+- **telemetry/router.rs**: implemented `TelemetryRouter` trait with CPU and thermal metrics routing via 9P.
+- **sandbox/queue.rs** and **sandbox/dispatcher.rs**: syscall queueing and dispatch logic with role checks.
+- **cohesix_types.rs**: shared `Syscall` and `RoleManifest` definitions.
+- **tests/test_syscall_queue.rs**: validates queue ordering and policy enforcement.
+
 ## [v0.12] - 2025-06-05
 ### Added
 - **verify-macos-setup.sh**: helper script validating Homebrew, Xcode tools,
