@@ -14,6 +14,8 @@ sysinfo = "0.30"
 libloading = "0.7"
 rapier3d = "0.17.2"
 tokio = { version = "1", features = ["sync", "rt"] }
+once_cell = "1"
+cohesix-9p = { path = "cohesix-9p" }
 
 [workspace]
 members = ["cohesix-9p"]
