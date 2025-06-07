@@ -5,7 +5,7 @@
 
 //! Sandbox helper modules.
 
+pub mod chain;
+pub mod dispatcher;
 pub mod profile;
 pub mod queue;
-pub mod dispatcher;
-
