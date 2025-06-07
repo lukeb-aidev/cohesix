@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v0.18
-// Date Modified: 2025-07-01
+// Date Modified: 2025-07-03
 // Author: Lukas Bower
 
 ## [v0.23] - 2025-07-01
@@ -15,6 +15,16 @@
 - Node health tracking and election improvements
 - Fuzz regression runner and CI role harness
 - Additional safety and contract tests
+
+## [v0.25] - 2025-07-03
+### Added
+- Multi-Queen coordination logs and rotation
+- Worker hotplug mounting and service sync
+- Agent migration shutdown callback
+- Distributed trace hash comparison
+- CI role runner multi-role support and fuzz regression tracking updates
+### Fixed
+- Absolute `/srv` paths in tests to resolve lifecycle failures
 
 ## [v0.22] - 2025-06-30
 ### Added

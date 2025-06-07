@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: test_scenario_engine.rs v0.1
-// Date Modified: 2025-06-22
+// Filename: test_scenario_engine.rs v0.2
+// Date Modified: 2025-07-03
 // Author: Cohesix Codex
 
 use cohesix::sim::agent_scenario::ScenarioEngine;
@@ -20,5 +20,5 @@ fn run_scenario() {
     }"#;
     fs::write("boot/scenario.json", scenario).unwrap();
     ScenarioEngine::run(std::path::Path::new("boot/scenario.json")).unwrap();
-    assert!(std::path::Path::new("srv/scenario_result/scn1").exists());
+    assert!(std::path::Path::new("/srv/scenario_result/scn1").exists());
 }

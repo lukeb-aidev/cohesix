@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: runtime_safety.rs v0.1
-// Date Modified: 2025-07-01
+// Filename: runtime_safety.rs v0.2
+// Date Modified: 2025-07-03
 // Author: Cohesix Codex
 
 use std::fs;
@@ -9,7 +9,7 @@ use serial_test::serial;
 #[test]
 #[serial]
 fn panic_hook_works() {
-    fs::create_dir_all("srv").unwrap();
+    fs::create_dir_all("/srv").unwrap();
     std::panic::set_hook(Box::new(|_| {
         fs::write("/srv/panic.log", "panic").ok();
     }));
@@ -27,13 +27,13 @@ fn memory_growth_within_bounds() {
 #[test]
 #[serial]
 fn no_unclosed_caps() {
-    fs::create_dir_all("srv").unwrap();
-    let caps_before = fs::read_dir("srv").unwrap().count();
+    fs::create_dir_all("/srv").unwrap();
+    let caps_before = fs::read_dir("/srv").unwrap().count();
     {
-        let f = fs::File::create("srv/tmp_cap").unwrap();
+        let f = fs::File::create("/srv/tmp_cap").unwrap();
         drop(f);
     }
-    let caps_after = fs::read_dir("srv").unwrap().count();
+    let caps_after = fs::read_dir("/srv").unwrap().count();
     assert!(caps_after >= caps_before);
 }
 

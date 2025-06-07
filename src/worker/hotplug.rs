@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: hotplug.rs v0.1
+// Filename: hotplug.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-07-01
+// Date Modified: 2025-07-03
 
 //! Worker discovery and retirement hooks.
 //!
@@ -24,6 +24,10 @@ impl WorkerHotplug {
             let _ = ureq::post(&url).send_string(&ns);
         }
         ServiceMeshRegistry::register(node_id, "bootns", "/srv/bootns", "QueenPrimary", 60);
+        let _ = ServiceMeshRegistry::mount_remote_service(node_id, "bootns");
+        for svc in ServiceRegistry::list_services() {
+            ServiceMeshRegistry::register(node_id, &svc, &format!("/srv/{svc}"), "DroneWorker", 30);
+        }
     }
 
     /// Called when a worker node leaves the cluster.
@@ -31,6 +35,7 @@ impl WorkerHotplug {
         for entry in ServiceMeshRegistry::list() {
             if entry.node == node_id {
                 ServiceRegistry::unregister_service(&entry.name);
+                ServiceMeshRegistry::unregister(&entry.node, &entry.name);
             }
         }
         // trigger agent migration by touching audit log

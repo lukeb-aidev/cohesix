@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: service_registry.rs v0.2
+// Filename: service_registry.rs v0.3
 // Author: Lukas Bower
-// Date Modified: 2025-07-01
+// Date Modified: 2025-07-03
 
 //! Runtime service registry for Cohesix.
 //!
@@ -61,5 +61,15 @@ impl ServiceRegistry {
     /// Clear all registered services. Only used in tests.
     pub fn reset() {
         REGISTRY.lock().unwrap().clear();
+    }
+
+    /// Return the names of all registered services.
+    pub fn list_services() -> Vec<String> {
+        REGISTRY
+            .lock()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect()
     }
 }

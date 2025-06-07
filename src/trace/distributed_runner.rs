@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: distributed_runner.rs v0.1
+// Filename: distributed_runner.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-07-01
+// Date Modified: 2025-07-03
 
 //! Execute trace scenarios across multiple worker nodes and verify consistency.
 
@@ -10,6 +10,7 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
+use hex;
 
 /// Run a scenario distributed across the supplied workers.
 #[derive(Deserialize)]
@@ -20,15 +21,23 @@ pub struct NodeCfg {
 
 pub fn run(trace_file: &str, cfg: &[NodeCfg]) -> anyhow::Result<()> {
     let trace = fs::read_to_string(trace_file)?;
-    let mut hashes = HashMap::new();
+    let mut hashes: HashMap<String, Vec<u8>> = HashMap::new();
     for node in cfg {
         let _ = ureq::post(&format!("{}/run_trace", node.url)).send_string(&trace);
+        if let Ok(resp) = ureq::get(&format!("{}/trace_hash", node.url)).call() {
+            if let Ok(txt) = resp.into_string() {
+                if let Ok(bytes) = hex::decode(txt.trim()) {
+                    hashes.insert(node.id.clone(), bytes);
+                    continue;
+                }
+            }
+        }
         let mut hasher = Sha256::new();
         hasher.update(&trace);
-        hashes.insert(node.id.clone(), hasher.finalize());
+        hashes.insert(node.id.clone(), hasher.finalize().to_vec());
     }
     let first = hashes.values().next().cloned();
-    let divergence = hashes.iter().any(|(_, h)| Some(h) != first.as_ref());
+    let divergence = hashes.values().any(|h| Some(h) != first.as_ref());
     if divergence {
         log_audit("divergence detected");
     }
