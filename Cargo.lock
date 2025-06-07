@@ -317,6 +317,7 @@ name = "cohfuzz"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "clap",
  "cohesix",
  "rand",
  "serde",
@@ -1580,6 +1581,7 @@ name = "scenario_compiler"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "clap",
  "cohesix",
  "serde",
  "serde_json",

@@ -6,6 +6,7 @@
 //! CLI module for Coh_CC compiler. Exports argument parser and main entry.
 
 pub mod args;
+pub mod federation;
 
 use crate::cli::args::build_cli;
 use crate::codegen::dispatch::{dispatch, Backend};
