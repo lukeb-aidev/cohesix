@@ -1,8 +1,8 @@
 
 #!/usr/bin/env python3
 # CLASSIFICATION: COMMUNITY
-# Filename: cohcli.py v0.3
-# Date Modified: 2025-07-04
+# Filename: cohcli.py v0.4
+# Date Modified: 2025-07-05
 # Author: Lukas Bower
 
 """
@@ -47,6 +47,12 @@ def parse_args():
     mig_cmd.add_argument("agent_id")
     mig_cmd.add_argument("--to", required=True)
 
+    # Subcommand: sim
+    parser_sim = subparsers.add_parser("sim", help="Simulation utilities")
+    sim_sub = parser_sim.add_subparsers(dest="sim_cmd")
+    run_cmd = sim_sub.add_parser("run", help="Run a simulation")
+    run_cmd.add_argument("scenario")
+
     return parser.parse_args()
 
 def main():
@@ -60,6 +66,8 @@ def main():
         handle_trace(args)
     elif args.command == "agent":
         handle_agent(args)
+    elif args.command == "sim":
+        handle_sim(args)
     else:
         print("No command provided. Use -h for help.")
         sys.exit(1)
@@ -95,8 +103,21 @@ def handle_agent(args):
         print(f"Pausing agent {args.agent_id}")
     elif args.agent_cmd == "migrate":
         print(f"Migrating agent {args.agent_id} to {args.to}")
+        # actual migration logic would interface with orchestrator
     else:
         print("Unknown agent command")
+
+def handle_sim(args):
+    if args.sim_cmd == "run" and args.scenario == "BalanceBot":
+        try:
+            from cohesix.sim.physics_adapter import PhysicsAdapter
+            adapter = PhysicsAdapter.new()
+            adapter.run_balance_bot(100)
+            print("BalanceBot simulation complete")
+        except Exception as e:
+            print(f"Simulation failed: {e}")
+    else:
+        print("Unknown simulation scenario")
 
 if __name__ == "__main__":
     main()

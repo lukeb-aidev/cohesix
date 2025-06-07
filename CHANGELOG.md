@@ -1,7 +1,14 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v0.19
-// Date Modified: 2025-07-04
+// Date Modified: 2025-07-05
 // Author: Lukas Bower
+
+## [v0.28] - 2025-07-05
+### Added
+- Failover manager with automatic Queen promotion
+- Live patch infrastructure and `cohup patch` CLI
+- Trace consensus module and physics adapter
+- Adaptive agent policies with SelfTuningStabilizer
 
 ## [v0.27] - 2025-07-04
 ### Added
