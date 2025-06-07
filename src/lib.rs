@@ -27,6 +27,9 @@ pub mod utils;
 /// Runtime subsystem modules
 pub mod runtime;
 
+/// Boot helper modules
+pub mod boot;
+
 /// Runtime services (telemetry, sandbox, health, ipc)
 pub mod services;
 
@@ -50,6 +53,13 @@ pub mod p9;
 
 /// Shell helpers
 pub mod shell;
+
+/// seL4 integration modules
+pub mod seL4;
+
+/// Role-specific initialization hooks
+pub mod init;
+
 
 /// Compile from an input IR file to the specified output path.
 ///

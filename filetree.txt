@@ -65,6 +65,7 @@ scripts/validate_metadata_sync.py
 scripts/verify-macos-setup.sh
 src/boot/measure.rs
 src/boot/mod.rs
+src/boot/plan9_ns.rs
 src/bootloader/args.rs
 src/bootloader/init.rs
 src/bootloader/mod.rs
@@ -96,6 +97,7 @@ src/ir/operand.rs
 src/ir/ops.rs
 src/ir/ty.rs
 src/ir/value.rs
+src/init/queen.rs
 src/kernel/boot/bootloader.rs
 src/kernel/boot/secure_boot.rs
 src/kernel/drivers/gpu.rs
@@ -131,6 +133,7 @@ src/passes/nop.rs
 src/passes/pass_registry.rs
 src/passes/passes_test.rs
 src/passes/ssa.rs
+src/seL4/syscall.rs
 src/plan9/fs.rs
 src/plan9/shell.rs
 src/plan9/shim.rs
@@ -186,3 +189,5 @@ tests/integration/kernel_drivers_test.rs
 tests/passes/dummy_test.rs
 tests/test_gpu_and_sim.rs
 tests/test_syscall_queue.rs
+tests/test_nsbuilder.rs
+benches/pass_manager.rs
