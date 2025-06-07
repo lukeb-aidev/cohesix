@@ -12,6 +12,13 @@
 - `test_all_arch.sh` script for running Rust, Go, and Python tests across architectures.
 - Documented usage in README and BUILD_PLAN.
 
+## [v1.0] - 2025-06-07
+### Added
+- Federation keyring, handshake, and migration modules
+- TPM secure boot attestation with hash verification
+- GUI orchestrator stub and federation CLI
+- Physics CUDA test harness
+
 ## [v0.28] - 2025-07-05
 ### Added
 - Failover manager with automatic Queen promotion

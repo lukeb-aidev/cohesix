@@ -31,3 +31,7 @@ pub mod plan9_ns;
 
 /// Live patching support for runtime updates.
 pub mod live_patch;
+/// TPM attestation helpers
+pub mod tpm;
+/// Boot hash verification helpers
+pub mod verify;
