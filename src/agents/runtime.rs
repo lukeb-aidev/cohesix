@@ -18,6 +18,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::runtime::ServiceRegistry;
 use crate::cohesix_types::Role;
+use crate::trace::recorder;
 
 /// Runtime responsible for managing spawned agents.
 pub struct AgentRuntime {
@@ -47,6 +48,8 @@ impl AgentRuntime {
             .append(true)
             .open(format!("/srv/agent_trace/{agent_id}"))?;
         writeln!(trace, "spawn {} {:?}", timestamp(), args)?;
+        let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+        let _ = recorder::spawn(agent_id, &args[0], &arg_refs);
 
         let mut cmd = Command::new(&args[0]);
         if args.len() > 1 {
@@ -67,6 +70,7 @@ impl AgentRuntime {
                 .append(true)
                 .open(format!("/srv/agent_trace/{agent_id}"))?;
             writeln!(trace, "terminate {}", timestamp())?;
+            recorder::event(agent_id, "terminate", "");
         }
         Ok(())
     }
