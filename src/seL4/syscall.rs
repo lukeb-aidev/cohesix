@@ -1,14 +1,17 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: syscall.rs v0.2
+// Filename: syscall.rs v0.3
 // Author: Lukas Bower
-// Date Modified: 2025-06-25
+// Date Modified: 2025-06-30
 
 //! seL4 syscall glue translating Plan 9 style calls into Cohesix runtime actions.
 //! Provides minimal capability enforcement based on `ROLE_MANIFEST.md`.
 
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::process::Command;
+
+use once_cell::sync::Lazy;
 
 use crate::runtime::env::init::detect_cohrole;
 
@@ -16,10 +19,32 @@ fn role_allows_exec(role: &str) -> bool {
     matches!(role, "QueenPrimary" | "SimulatorTest")
 }
 
+static CAP_MAP: Lazy<HashMap<&'static str, Vec<&'static str>>> = Lazy::new(|| {
+    let mut m = HashMap::new();
+    m.insert("QueenPrimary", vec!["/"]);
+    m.insert("DroneWorker", vec!["/sim", "/srv/cuda"]);
+    m.insert("KioskInteractive", vec!["/dev/console"]);
+    m
+});
+
+fn allowed_path(role: &str, path: &str) -> bool {
+    if let Some(prefixes) = CAP_MAP.get(role) {
+        prefixes.iter().any(|p| path.starts_with(p))
+    } else {
+        false
+    }
+}
+
 /// Open a file and return the handle.
 pub fn open(path: &str, flags: u32) -> Result<File, std::io::Error> {
     let role = detect_cohrole();
     println!("[sel4:{role}] open {path} flags={flags}");
+    if !allowed_path(&role, path) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "capability denied",
+        ));
+    }
     File::options().read(true).write(flags & 1 != 0).open(path)
 }
 
@@ -36,7 +61,7 @@ pub fn write(file: &mut File, buf: &[u8]) -> Result<usize, std::io::Error> {
 /// Execute a command with arguments using the host OS when allowed.
 pub fn exec(cmd: &str, args: &[&str]) -> Result<(), std::io::Error> {
     let role = detect_cohrole();
-    if !role_allows_exec(&role) {
+    if !role_allows_exec(&role) || !allowed_path(&role, cmd) {
         println!("[sel4:{role}] exec denied: {cmd}");
         return Ok(());
     }

@@ -1,7 +1,12 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v0.17
-// Date Modified: 2025-06-25
+// Date Modified: 2025-06-30
 // Author: Lukas Bower
+## [v0.22] - 2025-06-30
+### Added
+- Basic capability check map in `src/seL4/syscall.rs` enforcing
+  path-based permissions for open and exec operations.
+
 ## [v0.21] - 2025-06-25
 ### Added
 - Trace fuzzer and scenario compiler tools under `tools/`
