@@ -30,3 +30,14 @@ fn role_visibility() {
     fs::write("/srv/cohrole", "QueenPrimary").unwrap();
     assert!(ServiceRegistry::lookup("worker_only").is_some());
 }
+
+#[test]
+#[serial]
+fn unregister() {
+    fs::create_dir_all("srv").unwrap();
+    fs::write("/srv/cohrole", "DroneWorker").unwrap();
+    ServiceRegistry::reset();
+    ServiceRegistry::register_service("tmp", "/srv/tmp");
+    ServiceRegistry::unregister_service("tmp");
+    assert!(ServiceRegistry::lookup("tmp").is_none());
+}

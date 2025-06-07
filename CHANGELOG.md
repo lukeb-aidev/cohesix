@@ -1,7 +1,14 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.17
-// Date Modified: 2025-06-30
+// Filename: CHANGELOG.md v0.18
+// Date Modified: 2025-07-01
 // Author: Lukas Bower
+
+## [v0.23] - 2025-07-01
+### Added
+- Distributed swarm registry and agent migration helpers.
+- Worker hotplug detection and cluster election.
+- Test contracts for runtime safety and failure audits.
+
 ## [v0.22] - 2025-06-30
 ### Added
 - Basic capability check map in `src/seL4/syscall.rs` enforcing
