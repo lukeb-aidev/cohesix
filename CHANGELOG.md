@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.18
-// Date Modified: 2025-07-03
+// Filename: CHANGELOG.md v0.19
+// Date Modified: 2025-07-04
 // Author: Lukas Bower
 
 ## [v0.23] - 2025-07-01
@@ -25,6 +25,14 @@
 - CI role runner multi-role support and fuzz regression tracking updates
 ### Fixed
 - Absolute `/srv` paths in tests to resolve lifecycle failures
+
+## [v0.26] - 2025-07-04
+### Added
+- Distributed orchestration layer with worker join protocol
+- Agent snapshot writer and migration CLI
+- Queen federation beacons and secure links
+### Changed
+- Agent runtime records agent_table.json
 
 ## [v0.22] - 2025-06-30
 ### Added

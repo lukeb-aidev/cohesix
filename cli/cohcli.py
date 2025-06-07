@@ -1,8 +1,8 @@
 
 #!/usr/bin/env python3
 # CLASSIFICATION: COMMUNITY
-# Filename: cohcli.py v0.2
-# Date Modified: 2025-05-31
+# Filename: cohcli.py v0.3
+# Date Modified: 2025-07-04
 # Author: Lukas Bower
 
 """
@@ -32,10 +32,20 @@ def parse_args():
     parser_trace = subparsers.add_parser("trace", help="View recent trace logs")
     parser_trace.add_argument("--filter", help="Filter by subsystem or agent name")
 
-    # Subcommand: agent
-    parser_agent = subparsers.add_parser("agent", help="Load or run an agent")
-    parser_agent.add_argument("action", choices=["load", "run"], help="Agent operation")
-    parser_agent.add_argument("agent_name", help="Name of the agent")
+    # Subcommand: agent lifecycle
+    parser_agent = subparsers.add_parser("agent", help="Agent lifecycle commands")
+    agent_sub = parser_agent.add_subparsers(dest="agent_cmd")
+
+    start_cmd = agent_sub.add_parser("start", help="Start an agent")
+    start_cmd.add_argument("agent_id")
+    start_cmd.add_argument("--role", required=True)
+
+    pause_cmd = agent_sub.add_parser("pause", help="Pause an agent")
+    pause_cmd.add_argument("agent_id")
+
+    mig_cmd = agent_sub.add_parser("migrate", help="Migrate an agent")
+    mig_cmd.add_argument("agent_id")
+    mig_cmd.add_argument("--to", required=True)
 
     return parser.parse_args()
 
@@ -79,8 +89,14 @@ def handle_trace(args):
     print(f"Showing trace log entries matching '{filter_val}' (stub)")
 
 def handle_agent(args):
-    print(f"Agent {args.action}: {args.agent_name}")
-    # Real implementation would integrate with codex agents or runtime loader
+    if args.agent_cmd == "start":
+        print(f"Starting agent {args.agent_id} with role {args.role}")
+    elif args.agent_cmd == "pause":
+        print(f"Pausing agent {args.agent_id}")
+    elif args.agent_cmd == "migrate":
+        print(f"Migrating agent {args.agent_id} to {args.to}")
+    else:
+        print("Unknown agent command")
 
 if __name__ == "__main__":
     main()
