@@ -34,6 +34,8 @@ pub mod agents;
 pub mod queen;
 /// Trace recording modules
 pub mod trace;
+/// Swarm runtime modules for distributed deployments
+pub mod swarm;
 /// Physical sensor modules
 pub mod physical;
 

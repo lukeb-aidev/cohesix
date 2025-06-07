@@ -6,3 +6,4 @@
 //! Agent-related runtime modules.
 
 pub mod runtime;
+pub mod migration;

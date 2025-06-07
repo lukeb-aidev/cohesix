@@ -7,3 +7,4 @@
 
 pub mod policy_enforcer;
 pub mod orchestrator;
+pub mod cluster;
