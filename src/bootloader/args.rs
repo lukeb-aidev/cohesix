@@ -81,6 +81,12 @@ pub fn parse_cmdline(cmdline: &str) -> Result<BootArgs, &'static str> {
     Ok(BootArgs { map })
 }
 
+impl Default for BootArgs {
+    fn default() -> Self {
+        Self { map: HashMap::new() }
+    }
+}
+
 // ───────────────────────────── tests ─────────────────────────────────────────
 #[cfg(test)]
 mod tests {

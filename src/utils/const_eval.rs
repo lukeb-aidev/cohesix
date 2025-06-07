@@ -15,7 +15,7 @@ pub fn eval(expr: &str) -> Result<i64, String> {
     let mut values: Vec<i64> = Vec::new();
     let mut ops: Vec<char> = Vec::new();
     let mut num = String::new();
-    let mut push_num = |num: &mut String, values: &mut Vec<i64>| -> Result<(), String> {
+    let push_num = |num: &mut String, values: &mut Vec<i64>| -> Result<(), String> {
         if !num.is_empty() {
             let v = num.parse::<i64>().map_err(|_| "invalid number")?;
             values.push(v);

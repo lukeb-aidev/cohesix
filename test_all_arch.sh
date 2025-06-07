@@ -1,7 +1,7 @@
-// CLASSIFICATION: COMMUNITY
-// Filename: test_all_arch.sh v0.1
-// Author: Lukas Bower
-// Date Modified: 2025-06-07
+# CLASSIFICATION: COMMUNITY
+# Filename: test_all_arch.sh v1.0
+# Author: Lukas Bower
+# Date Modified: 2025-07-07
 
 #!/usr/bin/env bash
 ###############################################################################

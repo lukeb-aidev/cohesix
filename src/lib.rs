@@ -78,12 +78,19 @@ pub mod orchestrator;
 /// Federation utilities
 pub mod federation;
 
+/// Bootloader subcrate utilities
+pub mod bootloader;
+
+/// Hardware abstraction layer
+pub mod hal;
+
 /// rc style init parser
 pub mod rc {
     pub mod init;
 }
 
 /// seL4 integration modules
+#[allow(non_snake_case)]
 pub mod seL4;
 
 /// Role-specific initialization hooks

@@ -9,6 +9,7 @@ use sha2::{Digest, Sha256};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 
+/// Runtime patching helper.
 pub struct LivePatcher;
 
 impl LivePatcher {
