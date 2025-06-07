@@ -47,20 +47,20 @@ pub struct BootContext {
 /// * `cmdline` – raw ASCII cmdline string passed by firmware.
 pub fn early_init(cmdline: &str) -> Result<BootContext> {
     // 1. Parse cmd‑line
-    let args = parse_cmdline(cmdline)?;
+    let args = parse_cmdline(cmdline).map_err(|e| anyhow::anyhow!(e))?;
     let role = args.get("cohrole").unwrap_or("Unknown").to_string();
 
     // 2. Basic HAL bring‑up
     //    — Page‑tables + IRQ controller stubs (real impl later)
     #[cfg(target_arch = "aarch64")]
     {
-        hal::arm64::init_paging()?;
-        hal::arm64::init_interrupts()?;
+        hal::arm64::init_paging().map_err(|e| anyhow::anyhow!(e))?;
+        hal::arm64::init_interrupts().map_err(|e| anyhow::anyhow!(e))?;
     }
     #[cfg(target_arch = "x86_64")]
     {
-        hal::x86_64::init_paging()?;
-        hal::x86_64::init_interrupts()?;
+        hal::x86_64::init_paging().map_err(|e| anyhow::anyhow!(e))?;
+        hal::x86_64::init_interrupts().map_err(|e| anyhow::anyhow!(e))?;
     }
 
     std::fs::create_dir_all("/srv").ok();

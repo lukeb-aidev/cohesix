@@ -31,7 +31,7 @@ pub fn start() {
     let mut ns = NamespaceLoader::load().unwrap_or_default();
     let _ = NamespaceLoader::apply(&mut ns);
 
-    let mut fs = InMemoryFs::new();
+    let fs = InMemoryFs::new();
     fs.mount("/srv/cuda");
     fs.mount("/srv/shell");
     fs.mount("/srv/diag");

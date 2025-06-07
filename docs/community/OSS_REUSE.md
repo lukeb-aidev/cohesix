@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: OSS_REUSE.md v1.4
+// Filename: OSS_REUSE.md v1.5
 // Author: Lukas Bower
-// Date Modified: 2025-07-06
+// Date Modified: 2025-07-07
 
 # OSS REUSE POLICY
 
@@ -101,3 +101,8 @@ For questions or reviews, contact the Cohesix compliance lead.
 | 9P Mux   | Cohesix custom + 9fans Go port | MIT | FS routing |
 | BusyBox  | <https://busybox.net> | GPL-2.0 | Shell commands |
 | seL4     | <https://github.com/seL4/seL4> | GPL-2.0 | Microkernel |
+
+BusyBox is compiled as a standalone static binary executed in its own sandboxed
+process. No BusyBox object code is linked into Cohesix user applications.
+The seL4 microkernel is loaded as a separate image and interacts with user
+space solely via IPC, keeping GPL code isolated from MIT/BSD components.

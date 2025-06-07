@@ -8,12 +8,14 @@
 //! This module serves as a namespace for reusable utility functions and helpers
 //! used across the Cohesix platform. Submodules include constants, evaluators, formatters, and common traits.
 
+/// Constant expression evaluation helpers.
 pub mod const_eval;
+/// Formatting helpers.
 pub mod format;
+/// Miscellaneous helper utilities.
 pub mod helpers;
 
 /// Initializes any global utilities that require boot-time setup.
 pub fn init_utils() {
     println!("[utils] initializing utility submodules...");
-    // TODO(cohesix): Add any required initialization hooks here
 }
