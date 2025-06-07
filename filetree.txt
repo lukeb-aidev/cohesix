@@ -150,6 +150,7 @@ src/runtime/env/init.rs
 src/runtime/env/mod.rs
 src/runtime/ipc/mod.rs
 src/runtime/ipc/p9.rs
+src/runtime/service_registry.rs
 src/runtime/mod.rs
 src/runtime/roles/custodian.rs
 src/runtime/roles/debugger.rs
@@ -161,6 +162,7 @@ src/runtime/roles/router.rs
 src/runtime/roles/worker.rs
 src/runtime/tools/busybox_shim.rs
 src/sandbox/dispatcher.rs
+src/sandbox/chain.rs
 src/sandbox/mod.rs
 src/sandbox/profile.rs
 src/sandbox/queue.rs
@@ -175,7 +177,9 @@ src/shell/mod.rs
 src/sim/mod.rs
 src/sim/rapier_bridge.rs
 src/telemetry/diagnostics.rs
+src/telemetry/mod.rs
 src/telemetry/router.rs
+src/telemetry/loop.rs
 src/telemetry/telemetry.rs
 src/telemetry/trace.rs
 src/utils/const_eval.rs
@@ -198,4 +202,6 @@ tests/test_gpu_and_sim.rs
 tests/test_syscall_queue.rs
 tests/test_nsbuilder.rs
 tests/test_bootflow.py
+benches/pass_manager.rs
+tests/test_service_registry.rs
 benches/pass_manager.rs
