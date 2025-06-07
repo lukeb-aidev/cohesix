@@ -9,3 +9,5 @@ pub mod fs;
 pub mod namespace;
 pub mod shell;
 pub mod shim;
+pub mod syscalls;
+pub mod srv_registry;
