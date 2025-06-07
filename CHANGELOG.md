@@ -3,6 +3,14 @@
 // Date Modified: 2025-06-17
 // Author: Lukas Bower
 
+## [v0.14] - 2025-06-17
+### Added
+- **plan9_ns.rs**: namespace builder parsing boot args and exposing `/srv/bootns`.
+- **seL4/syscall.rs**: stub Plan 9 syscall glue layer.
+- **init/queen.rs**: queen root task loads boot namespace and logs to `/dev/log`.
+- **cohesix-9p**: in-memory FS supports `/srv/cohrole` and dynamic service registration.
+- **test_nsbuilder.rs**: unit tests for namespace builder.
+
 ## [v0.13] - 2025-06-17
 ### Fixed
 - **send-heartbeat.sh**: log function now outputs provided message; header bumped to v0.2.
