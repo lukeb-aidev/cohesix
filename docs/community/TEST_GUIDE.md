@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: TEST_GUIDE.md v1.2
-// Date Modified: 2025-05-26
+// Filename: TEST_GUIDE.md v1.3
+// Date Modified: 2025-07-06
 // Author: Lukas Bower
 
 # Testing Guide
@@ -96,8 +96,14 @@ A rigorous, multi‐tiered testing strategy ensures each component of Cohesix is
 - Validate log output in `codex_logs/` and correct filename conventions.
 
 ### 6.3 Distributed & Remote Build
-- Simulate remote build via SSH; verify artifact transfer and exit status.  
+- Simulate remote build via SSH; verify artifact transfer and exit status.
 - Healthcheck service endpoint returns OK within 100 ms.
+
+### 6.4 Go Unit Tests
+- Run Go tests from the workspace:
+  `cd go && go test ./...`
+- Or test from the repository root:
+  `GOWORK=$(pwd)/go/go.work go test ./go/...`
 
 ---
 

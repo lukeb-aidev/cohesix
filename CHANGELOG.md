@@ -1,7 +1,12 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v0.19
-// Date Modified: 2025-07-05
+// Date Modified: 2025-07-06
 // Author: Lukas Bower
+
+## [v0.29] - 2025-07-06
+### Changed
+- Updated README and TEST_GUIDE to clarify Go test commands.
+- Bumped headers and docs for consistency.
 
 ## [v0.28] - 2025-07-05
 ### Added

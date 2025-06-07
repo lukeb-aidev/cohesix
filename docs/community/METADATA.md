@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: METADATA.md v2.2
-// Date Modified: 2025-07-05
+// Date Modified: 2025-07-06
 // Author: Lukas Bower
 
 ## Canonical Documents
@@ -29,7 +29,7 @@
 | ROLE_MANIFEST.md           | v1.2    | 2025-05-24    | COMMUNITY      |
 | SHOPPING_LIST.md           | v1.3    | 2025-05-24    | COMMUNITY      |
 | STATUS_UPDATE_GUIDE.md     | v1.3    | 2025-05-24    | COMMUNITY      |
-| TEST_GUIDE.md              | v1.2    | 2025-05-24    | COMMUNITY      |
+| TEST_GUIDE.md              | v1.3    | 2025-07-06    | COMMUNITY      |
 | THREAT_MODEL.md            | v1.0    | 2025-05-31    | PRIVATE        |
 | WATCHDOG_POLICY.md         | v1.4    | 2025-06-05    | COMMUNITY      |
 | cli.md                     | v0.1    | 2025-07-05    | COMMUNITY      |
