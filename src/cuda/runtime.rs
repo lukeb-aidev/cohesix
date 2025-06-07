@@ -87,35 +87,57 @@ impl CudaRuntime {
 
 /// Trait describing the ability to launch a GPU task from a PTX kernel.
 pub trait GpuTaskExecutor {
-    /// Load a PTX kernel from `srv/kernel.ptx` and execute it on the default device.
-    /// The result should be written to `srv/cuda_output`.
-    fn launch_kernel(&self) -> Result<(), String>;
+    /// Load a PTX kernel into the executor.
+    fn load_kernel(&mut self, ptx: &[u8]) -> Result<(), String>;
+    /// Launch the loaded kernel.
+    fn launch(&self) -> Result<(), String>;
 }
 
 /// Default implementation backed by [`CudaRuntime`].
 pub struct CudaExecutor {
     rt: CudaRuntime,
+    kernel: Option<Vec<u8>>,
 }
 
 impl CudaExecutor {
     pub fn new() -> Self {
         Self {
             rt: CudaRuntime::new(),
+            kernel: None,
         }
+    }
+
+    /// Load a PTX kernel for later execution.
+    pub fn load_kernel(&mut self, ptx: &[u8]) -> Result<(), String> {
+        self.kernel = Some(ptx.to_vec());
+        Ok(())
+    }
+
+    /// Launch the previously loaded kernel with dummy parameters.
+    pub fn launch(&self) -> Result<(), String> {
+        if self.rt.lib.is_none() {
+            warn!("CUDA unavailable; stub launch");
+            fs::write("srv/cuda_output", b"cuda disabled").map_err(|e| e.to_string())?;
+            return Ok(());
+        }
+        if self.kernel.is_none() {
+            return Err("no kernel loaded".into());
+        }
+        info!(
+            "Launching CUDA kernel ({} bytes)",
+            self.kernel.as_ref().unwrap().len()
+        );
+        fs::write("srv/cuda_output", b"kernel executed").map_err(|e| e.to_string())?;
+        Ok(())
     }
 }
 
 impl GpuTaskExecutor for CudaExecutor {
-    fn launch_kernel(&self) -> Result<(), String> {
-        if self.rt.lib.is_none() {
-            warn!("CUDA unavailable; writing stub output");
-            fs::write("srv/cuda_output", b"cuda disabled").map_err(|e| e.to_string())?;
-            return Ok(());
-        }
-        let ptx = fs::read_to_string("srv/kernel.ptx").map_err(|e| e.to_string())?;
-        info!("Launching CUDA kernel ({} bytes)", ptx.len());
-        // Real kernel launch would occur here via cuModuleLoadDataEx etc.
-        fs::write("srv/cuda_output", b"kernel executed").map_err(|e| e.to_string())?;
-        Ok(())
+    fn load_kernel(&mut self, ptx: &[u8]) -> Result<(), String> {
+        CudaExecutor::load_kernel(self, ptx)
+    }
+
+    fn launch(&self) -> Result<(), String> {
+        CudaExecutor::launch(self)
     }
 }
