@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: queen.rs v0.1
+// Filename: queen.rs v0.2
 // Author: Lukas Bower
 // Date Modified: 2025-07-04
 
@@ -13,8 +13,9 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use crate::orchestrator::protocol::{HealthPing, JoinRequest};
+use crate::orchestrator::protocol::{HealthPing, JoinAck, JoinRequest};
 use rmp_serde::decode::from_read;
+use rmp_serde::encode::to_vec;
 
 /// State for each registered worker.
 #[derive(Debug, Clone)]
@@ -35,6 +36,7 @@ impl Queen {
         fs::create_dir_all("/srv/registry")?;
         fs::create_dir_all("/srv/registry/join")?;
         fs::create_dir_all("/srv/registry/ping")?;
+        fs::create_dir_all("/srv/registry/ack")?;
         Ok(Self { workers: HashMap::new(), timeout: Duration::from_secs(timeout_secs) })
     }
 
@@ -48,6 +50,14 @@ impl Queen {
                             req.worker_id.clone(),
                             WorkerInfo { last_seen: timestamp(), quarantined: false },
                         );
+                        // create worker dir and ack
+                        fs::create_dir_all(format!("/srv/worker/{}", req.worker_id)).ok();
+                        let ack = JoinAck { worker_id: req.worker_id.clone(), queen_id: hostname() };
+                        if let Ok(data) = to_vec(&ack) {
+                            fs::create_dir_all("/srv/registry/ack").ok();
+                            let path = format!("/srv/registry/ack/{}.msg", req.worker_id);
+                            let _ = fs::write(path, data);
+                        }
                     }
                 }
                 let _ = fs::remove_file(e.path());
@@ -91,6 +101,13 @@ fn timestamp() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+fn hostname() -> String {
+    hostname::get()
+        .ok()
+        .and_then(|h| h.into_string().ok())
+        .unwrap_or_else(|| "queen".into())
 }
 
 fn log_fault(id: &str) {

@@ -3,6 +3,12 @@
 // Date Modified: 2025-07-04
 // Author: Lukas Bower
 
+## [v0.27] - 2025-07-04
+### Added
+- Join acknowledgement with worker directories under `/srv/worker/<id>`
+- `cohagent` CLI for start/pause/migrate commands
+- Runtime syscall validator writing `/srv/violations/<agent>.json`
+
 ## [v0.23] - 2025-06-07
 ### Added
 - Distributed swarm registry and agent migration helpers.
