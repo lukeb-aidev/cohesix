@@ -39,6 +39,18 @@ pub mod sandbox;
 /// Kernel modules and drivers
 pub mod kernel;
 
+/// CUDA runtime helpers
+pub mod cuda;
+
+/// Physics simulation bridge
+pub mod sim;
+
+/// 9P multiplexer utilities
+pub mod p9;
+
+/// Shell helpers
+pub mod shell;
+
 /// Compile from an input IR file to the specified output path.
 ///
 /// This helper loads the IR text, constructs a minimal [`ir::Module`],
