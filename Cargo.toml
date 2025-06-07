@@ -22,6 +22,8 @@ serde_json = "1"
 hex = "0.4"
 rmp-serde = "1"
 ring = "0.17.8"
+hostname = "0.3"
+nix = { version = "0.28", default-features = false, features = ["signal"] }
 
 [workspace]
 members = [
