@@ -6,3 +6,4 @@
 //! Simulation subsystem modules.
 
 pub mod rapier_bridge;
+pub mod agent_scenario;

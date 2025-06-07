@@ -1,7 +1,15 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.13
-// Date Modified: 2025-06-20
+// Filename: CHANGELOG.md v0.14
+// Date Modified: 2025-06-21
 // Author: Lukas Bower
+
+## [v0.18] - 2025-06-21
+### Added
+- Agent runtime with tracing and service registration.
+- Queen orchestrator managing worker nodes.
+- Trace recorder with replay support.
+- Physical sensor mock model and scenario engine.
+- `test_agent_lifecycle.rs` covering agent lifecycle.
 
 ## [v0.17] - 2025-06-20
 ### Changed

@@ -39,10 +39,8 @@ impl SimBridge {
         let (ttx, _) = mpsc::channel();
         let ttx_thread = ttx.clone();
         thread::spawn(move || simulation_loop(rx, ttx_thread));
-        Self { tx, telemetry: ttx }
-        thread::spawn(move || simulation_loop(rx));
         ServiceRegistry::register_service("sim", "/sim");
-        Self { tx }
+        Self { tx, telemetry: ttx }
     }
 
     /// Send a command to the simulation thread.
@@ -123,7 +121,6 @@ fn write_state(bodies: &RigidBodySet, step: u64) -> String {
         ));
     }
     let _ = fs::write("sim/state", &out);
-    let _ = fs::write("sim/state", out);
     let _ = fs::write("/srv/telemetry", format!("step {}\n", step));
     append_trace(format!("step {}\n", step));
     out
