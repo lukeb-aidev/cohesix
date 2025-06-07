@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: README.md v0.4
+// Filename: README.md v0.5
 // Author: Lukas Bower
-// Date Modified: 2025-06-05
+// Date Modified: 2025-06-07
 
 # Cohesix
 
@@ -49,6 +49,7 @@ cd cohesix
 make all                       # Go vet + C shims
 cargo check --workspace        # Rust build
 make go-test                  # Go unit tests (cd go && go test ./...)
+./test_all_arch.sh             # run Rust, Go, and Python tests
 ```
 
 To regenerate compiler/OS stubs:
