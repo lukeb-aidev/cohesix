@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: cli.md v0.1
+// Filename: cli.md v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-07-05
+// Date Modified: 2025-06-07
 
 # Cohesix CLI Guide
 
@@ -19,8 +19,14 @@ Move an agent to another node.
 cohcli agent migrate <agent_id> --to <node>
 ```
 
-## sim run BalanceBot
-Run the BalanceBot physics simulation.
+## cohup join
+Join a queen federation.
 ```
-cohcli sim run BalanceBot
+cohup join --peer queenB
+```
+
+## cohup list-peers
+Display known queen peers.
+```
+cohup list-peers
 ```
