@@ -6,8 +6,9 @@
 //! seL4 root task hook for the Queen role.
 //! Loads the boot namespace and registers core services.
 
-use std::fs::OpenOptions;
+use std::fs::{self, OpenOptions};
 use std::io::Write;
+use ureq::Agent;
 
 use crate::plan9::namespace::NamespaceLoader;
 use cohesix_9p::fs::InMemoryFs;
@@ -44,6 +45,18 @@ pub fn start() {
         )),
         Err(e) => log(&format!("[queen] failed to load namespace: {e}")),
     }
+
+    if let Ok(url) = fs::read_to_string("/srv/cloudinit") {
+        if let Ok(resp) = Agent::new().get(url.trim()).call() {
+            if let Ok(body) = resp.into_string() {
+                fs::create_dir_all("/srv/agents").ok();
+                let _ = fs::write("/srv/agents/config.json", body);
+            }
+        }
+    }
+
+    fs::create_dir_all("/srv/bootstatus").ok();
+    let _ = fs::write("/srv/bootstatus/queen", "ok");
     ServiceRegistry::register_service("telemetry", "/srv/telemetry");
     ServiceRegistry::register_service("sim", "/sim");
     ServiceRegistry::register_service("p9mux", "/srv/p9mux");

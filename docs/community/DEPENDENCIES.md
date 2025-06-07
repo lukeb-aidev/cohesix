@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: DEPENDENCIES.md v0.3
+// Filename: DEPENDENCIES.md v0.4
 // Author: Lukas Bower
-// Date Modified: 2025-06-01
+// Date Modified: 2025-06-17
 
 # System Dependencies
 
@@ -27,6 +27,7 @@
 | serde_json       | 1.0       | crates.io (MIT)   | JSON support                              |
 | tokio            | 1.28      | crates.io (MIT)   | Async runtime                             |
 | rapier3d         | 0.14      | crates.io (MIT)   | Physics simulation engine                 |
+| ureq             | 2.9       | crates.io (MIT)   | HTTP client for cloud init                |
 | regex-automata   | 0.4       | crates.io (MIT)   | Deterministic regex engine (utils)        |
 | bytes            | 1.5       | crates.io (MIT)   | Zero‑copy byte buffers (async 9P helper) |
 | p9               | 0.3.2     | crates.io (BSD-3-Clause) | 9P protocol server implementation |

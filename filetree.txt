@@ -13,6 +13,7 @@ README.md
 benches/pass_manager.rs
 c/sel4/include/boot_trampoline.h
 c/sel4/shim/boot_trampoline.c
+c/sel4/bootloader.c
 cli/cohcli.py
 cohesix-9p/Cargo.toml
 cohesix-9p/src/fs.rs
@@ -61,6 +62,7 @@ scripts/package-manager-stub.sh
 scripts/run-smoke-tests.sh
 scripts/send-heartbeat.sh
 scripts/setup-toolchain.sh
+scripts/boottrace.py
 scripts/validate_metadata_sync.py
 scripts/verify-macos-setup.sh
 src/boot/measure.rs
@@ -71,6 +73,8 @@ src/bootloader/init.rs
 src/bootloader/mod.rs
 src/cli/args.rs
 src/cli/mod.rs
+src/cloud/hooks.rs
+src/cloud/mod.rs
 src/codegen/c.rs
 src/codegen/debug.rs
 src/codegen/dispatch.rs
@@ -98,6 +102,9 @@ src/ir/ops.rs
 src/ir/ty.rs
 src/ir/value.rs
 src/init/queen.rs
+src/init/worker.rs
+src/init/kiosk.rs
+src/init/sensor.rs
 src/kernel/boot/bootloader.rs
 src/kernel/boot/secure_boot.rs
 src/kernel/drivers/gpu.rs
@@ -194,5 +201,7 @@ tests/passes/dummy_test.rs
 tests/test_gpu_and_sim.rs
 tests/test_syscall_queue.rs
 tests/test_nsbuilder.rs
+tests/test_bootflow.py
+benches/pass_manager.rs
 tests/test_service_registry.rs
 benches/pass_manager.rs
