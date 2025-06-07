@@ -50,6 +50,9 @@ pub mod services;
 /// Common cross-module types.
 pub mod cohesix_types;
 
+/// Worker role modules
+pub mod worker;
+
 /// Sandbox helpers (profiles, syscall queueing).
 pub mod sandbox;
 
@@ -73,6 +76,9 @@ pub mod plan9;
 
 /// Filesystem overlay helpers
 pub mod fs;
+
+/// Shared world model structures
+pub mod world_model;
 
 /// Distributed orchestration modules
 pub mod orchestrator;
