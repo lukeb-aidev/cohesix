@@ -10,6 +10,7 @@
 //! This supports validation agents, debugging, and runtime observability.
 
 /// Enum representing the level of a trace event.
+#[derive(Debug)]
 pub enum TraceLevel {
     Debug,
     Info,
