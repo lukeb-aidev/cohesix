@@ -20,7 +20,9 @@ def main():
     with open("/srv/cohrole", "w") as f:
         f.write(args.role)
 
-    subprocess.run(["cargo", "test"], check=False)
+    env = os.environ.copy()
+    env["COHROLE"] = args.role
+    subprocess.run(["cargo", "test"], check=False, env=env)
 
 
 if __name__ == "__main__":

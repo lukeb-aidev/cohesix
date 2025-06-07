@@ -35,7 +35,8 @@ impl Plan9Shim for DefaultShim {
             }
             "/9p" => {
                 let bytes = data.ok_or_else(|| "missing request".to_string())?;
-                Ok(crate::lib::9p::server::handle_9p_session(bytes))
+                // For now just echo the request back as a stub.
+                Ok(bytes.to_vec())
             }
             _ => Err("unknown path".into()),
         }

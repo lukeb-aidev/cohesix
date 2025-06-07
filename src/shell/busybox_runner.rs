@@ -40,7 +40,6 @@ pub fn spawn_shell() {
     let mut line = String::new();
     while reader.read_line(&mut line).ok().filter(|n| *n > 0).is_some() {
         let tokens: Vec<&str> = line.split_whitespace().collect();
-        line.clear();
         if tokens.is_empty() { continue; }
         let cmd = tokens[0];
         if allowed_cmd(&role, cmd) {
@@ -53,6 +52,7 @@ pub fn spawn_shell() {
             let msg = format!("command {cmd} not allowed for role {role}\n");
             let _ = console.write_all(msg.as_bytes());
         }
+        line.clear();
     }
     let _ = child.wait();
 }

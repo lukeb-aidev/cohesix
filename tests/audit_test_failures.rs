@@ -3,13 +3,20 @@
 // Date Modified: 2025-07-01
 // Author: Cohesix Codex
 
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 
 #[test]
 fn audit_test_failures() {
     if let Ok(data) = fs::read_to_string("tests/test_failures.log") {
+        fs::create_dir_all("/srv").ok();
+        let mut out = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("/srv/testfailures.log")
+            .unwrap();
         for line in data.lines() {
-            println!("known failing test: {}", line);
+            let _ = writeln!(out, "{}", line);
         }
     }
 }
