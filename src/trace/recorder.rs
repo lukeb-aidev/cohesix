@@ -76,6 +76,11 @@ pub fn write(agent: &str, path: &str, data: &str) -> std::io::Result<()> {
     res
 }
 
+/// Record a generic event without side effects.
+pub fn event(agent: &str, event: &str, detail: &str) {
+    record(agent, event, detail, true);
+}
+
 /// Replay events from a trace file.
 pub fn replay(file: &str) -> anyhow::Result<()> {
     let data = fs::read_to_string(file)?;
