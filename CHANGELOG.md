@@ -1,7 +1,12 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.16
+// Filename: CHANGELOG.md v0.17
 // Date Modified: 2025-06-25
 // Author: Lukas Bower
+## [v0.21] - 2025-06-25
+### Added
+- Trace fuzzer and scenario compiler tools under `tools/`
+- Scenario runner executing compiled scenarios
+
 ## [v0.20] - 2025-06-25
 ### Added
 - Integrated Rapier physics and CUDA runtime with service traces
