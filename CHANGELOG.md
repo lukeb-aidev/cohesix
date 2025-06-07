@@ -2,6 +2,12 @@
 // Filename: CHANGELOG.md v0.22
 // Date Modified: 2025-07-08
 // Author: Lukas Bower
+## [v0.35] - 2025-07-08
+### Added
+- World model snapshot structs and sync daemon
+- Policy memory persistence utilities
+- Vision overlay CLI hooks
+
 ## [v0.34] - 2025-07-08
 ### Added
 - SLM registry and dispatch CLI
