@@ -1,0 +1,33 @@
+{
+  "project": "Cohesix",
+  "version": "0.8-alpha",
+  "description": "A distributed, role-aware OS built on seL4 with Plan9 userland and CUDA/Rapier acceleration",
+  "roles": [
+    "QueenPrimary",
+    "Worker",
+    "DroneWorker",
+    "KioskInteractive",
+    "GlassesAgent",
+    "SensorRelay",
+    "SimulatorTest"
+  ],
+  "hardware_targets": [
+    "Jetson Orin Nano 8GB",
+    "Raspberry Pi 5 8GB",
+    "AWS EC2 (Graviton/x86)",
+    "Intel NUC-13 Pro"
+  ],
+  "boot": {
+    "default_role": "Worker",
+    "override_env": "COHROLE",
+    "cold_start_goal_ms": 200
+  },
+  "features": {
+    "rapier_physics": true,
+    "cuda_runtime": true,
+    "plan9_9p": true,
+    "sel4_kernel": true,
+    "webcam_support": true,
+    "busybox_fallback": true
+  }
+}
