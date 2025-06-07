@@ -13,6 +13,7 @@ clap = { version = "4.5.4", features = ["derive"] }
 sysinfo = "0.30"
 libloading = "0.7"
 rapier3d = "0.17.2"
+ureq = "2.9"
 
 [workspace]
 members = ["cohesix-9p"]

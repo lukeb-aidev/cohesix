@@ -3,6 +3,13 @@
 // Date Modified: 2025-06-17
 // Author: Lukas Bower
 
+## [v0.16] - 2025-06-17
+### Added
+- **bootloader.c**: seL4 root task detecting CohRole and launching role init.
+- **cloud hooks**: dynamic agent fetch via `/srv/cloudinit`.
+- **init modules**: worker, kiosk and sensor roles with service registration.
+- **boottrace.py** script and Python bootflow test.
+
 ## [v0.14] - 2025-06-17
 ### Added
 - **plan9_ns.rs**: namespace builder parsing boot args and exposing `/srv/bootns`.

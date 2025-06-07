@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: OSS_REUSE.md v1.2
+// Filename: OSS_REUSE.md v1.3
 // Author: Lukas Bower
-// Date Modified: 2025-05-31
+// Date Modified: 2025-06-17
 
 # OSS REUSE POLICY
 
@@ -42,6 +42,12 @@ crate: p9 v0.3.2 — BSD-3-Clause
 https://github.com/google/rust-p9
 Used in: 9P file system server (`cohesix-9p` crate)
 ```
+```
+crate: ureq v2.9 — MIT
+https://github.com/algesten/ureq
+Used in: Cloud init HTTP client
+```
+
 
 ## 4 · Audit Tools
 

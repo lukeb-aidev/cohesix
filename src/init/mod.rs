@@ -5,4 +5,7 @@
 
 //! Initialization routines for Cohesix roles.
 
+pub mod kiosk;
 pub mod queen;
+pub mod sensor;
+pub mod worker;
