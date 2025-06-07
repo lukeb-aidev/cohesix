@@ -54,12 +54,14 @@ pub mod p9;
 /// Shell helpers
 pub mod shell;
 
+/// Plan 9 userland helpers
+pub mod plan9;
+
 /// seL4 integration modules
 pub mod seL4;
 
 /// Role-specific initialization hooks
 pub mod init;
-
 
 /// Compile from an input IR file to the specified output path.
 ///

@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.11
-// Date Modified: 2025-06-17
+// Filename: CHANGELOG.md v0.12
+// Date Modified: 2025-06-18
 // Author: Lukas Bower
 
 ## [v0.14] - 2025-06-17
@@ -29,6 +29,15 @@
 - **p9/multiplexer.rs**: basic service registration and routing logic.
 - **shell/busybox_runner.rs**: spawn BusyBox shell with kernel fallback.
 - **tests/test_gpu_and_sim.rs**: validates GPU kernel launch and sim state.
+
+## [v0.16] - 2025-06-18
+### Added
+- **plan9/namespace.rs**: dynamic namespace loader and applier.
+- **p9/multiplexer.rs**: async request handling with `handle_async`.
+- **init/worker.rs**: worker root task service mounts.
+- **cuda/runtime.rs**: kernel loading and launch API.
+- **tests/test_cuda_exec.rs** and **tests/test_integration_boot.py**.
+- **scripts/cohtrace.py**: syscall trace stub.
 
 ## [v0.12] - 2025-06-05
 ### Added
