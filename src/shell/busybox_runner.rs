@@ -35,6 +35,8 @@ pub fn spawn_shell() {
             println!("[busybox_runner] busybox not found, using kernel stub");
             busybox::run_command("uname", &[]);
             return;
+        }
+    };
     let executor = DefaultChainExecutor;
     let console = OpenOptions::new()
         .read(true)
