@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: mesh.rs v0.1
+// Filename: mesh.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-07-01
+// Date Modified: 2025-07-03
 
 //! Distributed service mesh registry tracking services across nodes.
 //!
@@ -55,6 +55,11 @@ impl ServiceMeshRegistry {
         MESH.lock().unwrap().insert(format!("{node}:{name}"), entry);
     }
 
+    /// Unregister a service.
+    pub fn unregister(node: &str, name: &str) {
+        MESH.lock().unwrap().remove(&format!("{node}:{name}"));
+    }
+
     /// Update health information for a service.
     pub fn update_health(node: &str, name: &str, healthy: bool) {
         if let Some(entry) = MESH.lock().unwrap().get_mut(&format!("{node}:{name}")) {
@@ -75,11 +80,38 @@ impl ServiceMeshRegistry {
         MESH.lock().unwrap().values().cloned().collect()
     }
 
+    /// List entries visible to a given role.
+    pub fn list_for_role(role: &str) -> Vec<ServiceEntry> {
+        Self::cleanup();
+        MESH
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|e| e.role == role || role == "QueenPrimary")
+            .cloned()
+            .collect()
+    }
+
     fn cleanup() {
         let now = Instant::now();
         MESH.lock()
             .unwrap()
             .retain(|_, e| now.duration_since(e.last_update) <= e.ttl);
+    }
+
+    /// Ping services and drop entries that fail liveness checks.
+    pub fn check_liveness() {
+        let entries: Vec<_> = {
+            MESH.lock().unwrap().values().cloned().collect()
+        };
+        for entry in entries {
+            if let Ok(resp) = ureq::get(&format!("http://{}/health", entry.node)).call() {
+                Self::update_health(&entry.node, &entry.name, resp.status() == 200);
+            } else {
+                Self::update_health(&entry.node, &entry.name, false);
+            }
+        }
+        Self::cleanup();
     }
 
     /// Mount a remote service locally under `/srv/remote/<name>` if available.
