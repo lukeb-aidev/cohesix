@@ -75,6 +75,8 @@ pub mod fs;
 
 /// Distributed orchestration modules
 pub mod orchestrator;
+/// Federation utilities
+pub mod federation;
 
 /// rc style init parser
 pub mod rc {
