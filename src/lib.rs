@@ -56,6 +56,9 @@ pub mod p9;
 /// Shell helpers
 pub mod shell;
 
+/// Plan 9 userland helpers
+pub mod plan9;
+
 /// seL4 integration modules
 pub mod seL4;
 

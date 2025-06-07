@@ -112,6 +112,7 @@ fn write_state(bodies: &RigidBodySet, step: u64) {
         ));
     }
     let _ = fs::write("sim/state", out);
+    let _ = fs::write("/srv/telemetry", format!("step {}\n", step));
     append_trace(format!("step {}\n", step));
 }
 
