@@ -1,8 +1,8 @@
 
 #!/usr/bin/env python3
 # CLASSIFICATION: COMMUNITY
-# Filename: cohcli.py v0.5
-# Date Modified: 2025-07-07
+# Filename: cohcli.py v0.6
+# Date Modified: 2025-07-08
 # Author: Lukas Bower
 
 """
@@ -63,6 +63,11 @@ def parse_args():
     fed_sub.add_parser("list", help="List peers")
     fed_sub.add_parser("monitor", help="Show federation log")
 
+    # Subcommand: run-inference
+    inf = subparsers.add_parser("run-inference", help="Run webcam inference task")
+    inf.add_argument("worker")
+    inf.add_argument("task")
+
     return parser.parse_args()
 
 def main():
@@ -78,6 +83,8 @@ def main():
         handle_agent(args)
     elif args.command == "sim":
         handle_sim(args)
+    elif args.command == "run-inference":
+        handle_inference(args)
     elif args.command == "federation":
         handle_federation(args)
     else:
@@ -122,6 +129,13 @@ def handle_agent(args):
             print(f"Migration failed: {e}")
     else:
         print("Unknown agent command")
+
+def handle_inference(args):
+    import subprocess
+    env = os.environ.copy()
+    env["INFER_CONF"] = args.task
+    script = os.path.join(os.path.dirname(__file__), "../scripts/worker_inference.py")
+    subprocess.run(["python3", script], env=env, check=False)
 
 def handle_federation(args):
     if args.fed_cmd == "connect":
