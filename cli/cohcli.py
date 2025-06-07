@@ -1,8 +1,8 @@
 
 #!/usr/bin/env python3
 # CLASSIFICATION: COMMUNITY
-# Filename: cohcli.py v0.4
-# Date Modified: 2025-07-05
+# Filename: cohcli.py v0.5
+# Date Modified: 2025-07-07
 # Author: Lukas Bower
 
 """
@@ -53,6 +53,16 @@ def parse_args():
     run_cmd = sim_sub.add_parser("run", help="Run a simulation")
     run_cmd.add_argument("scenario")
 
+    # Subcommand: federation
+    parser_fed = subparsers.add_parser("federation", help="Manage queen federation")
+    fed_sub = parser_fed.add_subparsers(dest="fed_cmd")
+    conn_cmd = fed_sub.add_parser("connect", help="Connect to a peer queen")
+    conn_cmd.add_argument("peer")
+    dis_cmd = fed_sub.add_parser("disconnect", help="Disconnect from a peer")
+    dis_cmd.add_argument("peer")
+    fed_sub.add_parser("list", help="List peers")
+    fed_sub.add_parser("monitor", help="Show federation log")
+
     return parser.parse_args()
 
 def main():
@@ -68,6 +78,8 @@ def main():
         handle_agent(args)
     elif args.command == "sim":
         handle_sim(args)
+    elif args.command == "federation":
+        handle_federation(args)
     else:
         print("No command provided. Use -h for help.")
         sys.exit(1)
@@ -103,9 +115,34 @@ def handle_agent(args):
         print(f"Pausing agent {args.agent_id}")
     elif args.agent_cmd == "migrate":
         print(f"Migrating agent {args.agent_id} to {args.to}")
-        # actual migration logic would interface with orchestrator
+        try:
+            from cohesix import agent_migration
+            agent_migration.migrate(args.agent_id, args.to)
+        except Exception as e:
+            print(f"Migration failed: {e}")
     else:
         print("Unknown agent command")
+
+def handle_federation(args):
+    if args.fed_cmd == "connect":
+        path = f"/srv/federation/requests/{args.peer}.connect"
+        os.makedirs("/srv/federation/requests", exist_ok=True)
+        open(path, "w").write("1")
+        print(f"Connect request sent to {args.peer}")
+    elif args.fed_cmd == "disconnect":
+        path = f"/srv/federation/requests/{args.peer}.disconnect"
+        os.makedirs("/srv/federation/requests", exist_ok=True)
+        open(path, "w").write("1")
+        print(f"Disconnect request sent to {args.peer}")
+    elif args.fed_cmd == "list":
+        for f in os.listdir("/srv/federation/known_hosts"):
+            print(f)
+    elif args.fed_cmd == "monitor":
+        log = "/srv/federation/events.log"
+        if os.path.exists(log):
+            print(open(log).read())
+    else:
+        print("Unknown federation command")
 
 def handle_sim(args):
     if args.sim_cmd == "run" and args.scenario == "BalanceBot":

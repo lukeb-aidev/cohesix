@@ -31,6 +31,7 @@ pub mod telemetry;
 /// Agent runtime modules
 pub mod agents;
 pub mod agent;
+pub mod agent_migration;
 /// Queen orchestrator modules
 pub mod queen;
 /// Trace recording modules

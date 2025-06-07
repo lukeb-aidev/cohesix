@@ -11,11 +11,12 @@
 
 use std::collections::HashMap;
 use std::fs;
+use serde::{Serialize, Deserialize};
 
 use crate::runtime::ServiceRegistry;
 
 /// Serialized representation of an agent.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AgentState {
     pub env: HashMap<String, String>,
     pub trace: String,
