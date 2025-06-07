@@ -7,7 +7,7 @@
 
 use std::fs;
 use std::io::{self, BufRead};
-use crate::plan9::namespace::{NamespaceLoader, Namespace};
+use crate::plan9::namespace::NamespaceLoader;
 
 pub fn run() -> io::Result<()> {
     let mut ns = NamespaceLoader::load()?;

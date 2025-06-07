@@ -14,11 +14,26 @@ use std::io;
 #[derive(Debug, Clone, PartialEq)]
 pub enum NsAction {
     /// `bind [ -a ] src dst`
-    Bind { src: String, dst: String, after: bool },
+    Bind {
+        /// Source path
+        src: String,
+        /// Destination path
+        dst: String,
+        /// Bind after existing mounts
+        after: bool,
+    },
     /// `mount srv dst`
-    Mount { srv: String, dst: String },
+    Mount {
+        /// Service name
+        srv: String,
+        /// Destination path
+        dst: String,
+    },
     /// `srv path`
-    Srv { path: String },
+    Srv {
+        /// Service path
+        path: String,
+    },
 }
 
 /// Collection of namespace actions.
@@ -92,8 +107,11 @@ impl Namespace {
 /// Boot parameters extracted from kernel command line.
 #[derive(Debug, Default)]
 pub struct BootArgs {
+    /// Root filesystem to mount as `/`.
     pub rootfs: String,
+    /// Runtime role name.
     pub role: String,
+    /// List of services to mount under `/srv`.
     pub srv: Vec<String>,
 }
 

@@ -5,15 +5,17 @@
 
 use serde::Deserialize;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 #[derive(Deserialize)]
+#[allow(dead_code)]
 struct Scenario {
     agents: Vec<Agent>,
     physics: Option<Physics>,
 }
 
 #[derive(Deserialize)]
+#[allow(dead_code)]
 struct Agent {
     id: String,
     role: String,
@@ -22,6 +24,7 @@ struct Agent {
 }
 
 #[derive(Deserialize)]
+#[allow(dead_code)]
 struct Action {
     tick: u64,
     cmd: String,
@@ -30,11 +33,13 @@ struct Action {
 }
 
 #[derive(Deserialize)]
+#[allow(dead_code)]
 struct Physics {
     objects: Vec<PhysObj>,
 }
 
 #[derive(Deserialize)]
+#[allow(dead_code)]
 struct PhysObj {
     id: String,
     mass: f32,

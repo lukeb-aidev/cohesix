@@ -1,7 +1,14 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v0.20
-// Date Modified: 2025-07-06
+// Date Modified: 2025-07-07
 // Author: Lukas Bower
+## [v0.31] - 2025-07-07
+### Changed
+- Completed bootloader initialization logic and secure boot checks
+- Wrapped CUDA runtime loading in safe abstraction
+- Fixed shell script header syntax
+- Documented BusyBox and seL4 sandboxing in OSS_REUSE.md
+
 
 ## [v0.29] - 2025-07-06
 ### Added

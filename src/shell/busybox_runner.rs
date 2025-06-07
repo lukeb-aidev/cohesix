@@ -10,7 +10,6 @@ use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
 
 use crate::runtime::env::init::detect_cohrole;
-use crate::kernel::fs::busybox;
 
 fn allowed_cmd(role: &str, cmd: &str) -> bool {
     match role {
