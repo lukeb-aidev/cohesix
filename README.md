@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2025-06-07
 
+
 # Cohesix
 
 Cohesix is a self‑contained, formally verified operating‑system and compiler suite designed for secure, scalable execution on edge and wearable devices.
@@ -50,6 +51,7 @@ make all                       # Go vet + C shims
 cargo check --workspace        # Rust build
 make go-test                  # Go unit tests (cd go && go test ./...)
 ./test_all_arch.sh             # run Rust, Go, and Python tests
+
 ```
 
 To regenerate compiler/OS stubs:
@@ -62,6 +64,17 @@ Or explore runtime scenarios with the Codex CLI tools:
 
 ```
 cohbuild, cohrun, cohtrace, cohcap
+```
+
+## 🧪 Testing
+
+Run unit tests before submitting pull requests:
+
+```bash
+cargo test --workspace
+cd go && go test ./...
+# or
+GOWORK=$(pwd)/go/go.work go test ./go/...
 ```
 
 ---
