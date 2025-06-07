@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: runtime.rs v0.3
+// Filename: runtime.rs v0.4
 // Author: Lukas Bower
-// Date Modified: 2025-06-25
+// Date Modified: 2025-07-07
 
 //! Runtime CUDA integration using dynamic loading of `libcuda.so`.
 //! Falls back gracefully if no CUDA driver is present.
@@ -9,9 +9,8 @@
 use crate::runtime::ServiceRegistry;
 use libloading::Library;
 use log::{info, warn};
-use std::ffi::CStr;
 use std::fs::{self, OpenOptions};
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
 
 /// Wrapper around the CUDA driver library.
 pub struct CudaRuntime {
@@ -19,14 +18,25 @@ pub struct CudaRuntime {
 }
 
 impl CudaRuntime {
-    /// Attempt to load `libcuda.so`.
-    pub fn new() -> Self {
-        let lib = unsafe { Library::new("libcuda.so") }.ok();
-        if lib.is_none() {
-            warn!("CUDA library not found; GPU features disabled");
-        }
+    /// Attempt to load `libcuda.so` if the `cuda` feature is enabled.
+    pub fn try_new() -> io::Result<Self> {
+        #[cfg(feature = "cuda")]
+        let lib = match unsafe { Library::new("libcuda.so") } {
+            Ok(l) => Some(l),
+            Err(e) => {
+                warn!("CUDA library not found: {}", e);
+                None
+            }
+        };
+
+        #[cfg(not(feature = "cuda"))]
+        let lib = {
+            warn!("CUDA feature disabled");
+            None
+        };
+
         ServiceRegistry::register_service("cuda", "/srv/cuda");
-        Self { lib }
+        Ok(Self { lib })
     }
 }
 
@@ -38,16 +48,20 @@ pub struct CudaExecutor {
 
 impl CudaExecutor {
     pub fn new() -> Self {
-        Self { rt: CudaRuntime::new(), kernel: None }
+        let rt = CudaRuntime::try_new().unwrap_or_else(|_| CudaRuntime { lib: None });
+        Self { rt, kernel: None }
     }
 
     /// Load a PTX kernel from `/srv/kernel.ptx` if no bytes are provided.
     pub fn load_kernel(&mut self, ptx: Option<&[u8]>) -> Result<(), String> {
-        if let Some(buf) = ptx {
-            self.kernel = Some(buf.to_vec());
-            return Ok(());
+        let data = if let Some(buf) = ptx {
+            buf.to_vec()
+        } else {
+            fs::read("/srv/kernel.ptx").map_err(|e| e.to_string())?
+        };
+        if data.len() > 64 * 1024 {
+            return Err("kernel too large".into());
         }
-        let data = fs::read("/srv/kernel.ptx").map_err(|e| e.to_string())?;
         self.kernel = Some(data);
         Ok(())
     }

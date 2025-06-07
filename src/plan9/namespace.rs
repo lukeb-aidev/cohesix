@@ -12,7 +12,7 @@
 
 use std::collections::HashMap;
 use std::fs::{self, File};
-use std::io::{self, BufRead, BufReader, Write};
+use std::io::{self, Write};
 
 /// Namespace operation extracted from configuration.
 #[derive(Debug, Clone, PartialEq)]

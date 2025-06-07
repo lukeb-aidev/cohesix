@@ -27,7 +27,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
-use std::{io::Read, net::TcpListener, path::PathBuf, sync::Arc};
+use std::{net::TcpListener, path::PathBuf, sync::Arc};
 
 use anyhow::{Result, bail};
 use log::info;

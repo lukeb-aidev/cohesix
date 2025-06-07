@@ -25,7 +25,7 @@ pub fn run() -> anyhow::Result<()> {
         .unwrap_or(5000);
 
     // Load IR from file (TODO: parse actual IR format)
-    let ir_text = fs::read_to_string(input_path)?;
+    let _ir_text = fs::read_to_string(input_path)?;
     // For now, stub: create empty module with name
     let module = Module::new(input_path);
 
