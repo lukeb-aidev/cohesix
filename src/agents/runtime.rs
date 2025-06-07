@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: runtime.rs v0.2
+// Filename: runtime.rs v0.3
 // Author: Lukas Bower
-// Date Modified: 2025-07-03
+// Date Modified: 2025-07-04
 
 //! Agent runtime management.
 //!
@@ -19,6 +19,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::runtime::ServiceRegistry;
 use crate::cohesix_types::Role;
 use crate::trace::recorder;
+use crate::agent::directory::{AgentDirectory, AgentRecord};
 
 /// Runtime responsible for managing spawned agents.
 pub struct AgentRuntime {
@@ -57,6 +58,13 @@ impl AgentRuntime {
         }
         let child = cmd.spawn()?;
         self.procs.insert(agent_id.to_string(), child);
+        AgentDirectory::update(AgentRecord {
+            id: agent_id.into(),
+            location: path,
+            role: format!("{:?}", role),
+            status: "running".into(),
+            last_heartbeat: timestamp(),
+        });
         Ok(())
     }
 
@@ -73,6 +81,7 @@ impl AgentRuntime {
             recorder::event(agent_id, "terminate", "");
         }
         std::fs::remove_dir_all(format!("/srv/agents/{agent_id}")).ok();
+        AgentDirectory::remove(agent_id);
         Ok(())
     }
 

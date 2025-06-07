@@ -30,6 +30,7 @@ pub mod runtime;
 pub mod telemetry;
 /// Agent runtime modules
 pub mod agents;
+pub mod agent;
 /// Queen orchestrator modules
 pub mod queen;
 /// Trace recording modules
@@ -68,6 +69,12 @@ pub mod shell;
 
 /// Plan 9 userland helpers
 pub mod plan9;
+
+/// Filesystem overlay helpers
+pub mod fs;
+
+/// Distributed orchestration modules
+pub mod orchestrator;
 
 /// rc style init parser
 pub mod rc {
