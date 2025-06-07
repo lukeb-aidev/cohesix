@@ -1,7 +1,13 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.22
-// Date Modified: 2025-07-08
+// Filename: CHANGELOG.md v0.23
+// Date Modified: 2025-07-09
 // Author: Lukas Bower
+## [v0.36] - 2025-07-09
+### Added
+- Agent introspection API and CLI command `agent-introspect`
+- 9P validator bridge logging violations
+- QueenWatchdog for mesh reconfiguration with CLI `elect-queen` and `assume-role`
+
 ## [v0.35] - 2025-07-08
 ### Added
 - World model snapshot structs and sync daemon

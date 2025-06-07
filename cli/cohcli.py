@@ -1,8 +1,8 @@
 
 #!/usr/bin/env python3
 # CLASSIFICATION: COMMUNITY
-# Filename: cohcli.py v0.6
-# Date Modified: 2025-07-08
+# Filename: cohcli.py v0.7
+# Date Modified: 2025-07-09
 # Author: Lukas Bower
 
 """
@@ -100,6 +100,15 @@ def parse_args():
     stream = subparsers.add_parser("stream-overlay", help="Stream overlay")
     stream.add_argument("--port", required=True)
 
+    intros = subparsers.add_parser("agent-introspect", help="Show agent introspection log")
+    intros.add_argument("agent_id")
+
+    elect = subparsers.add_parser("elect-queen", help="Elect new queen from peers")
+    elect.add_argument("--mesh", required=True)
+
+    assume = subparsers.add_parser("assume-role", help="Assume cluster role")
+    assume.add_argument("role")
+
     return parser.parse_args()
 
 def main():
@@ -137,6 +146,12 @@ def main():
         handle_vision_overlay(args)
     elif args.command == "stream-overlay":
         handle_stream_overlay(args)
+    elif args.command == "agent-introspect":
+        handle_agent_introspect(args)
+    elif args.command == "elect-queen":
+        handle_elect_queen(args)
+    elif args.command == "assume-role":
+        handle_assume_role(args)
     else:
         print("No command provided. Use -h for help.")
         sys.exit(1)
@@ -277,6 +292,19 @@ def handle_vision_overlay(args):
 
 def handle_stream_overlay(args):
     print(f"Streaming overlay on port {args.port}")
+
+def handle_agent_introspect(args):
+    path = f"/trace/introspect_{args.agent_id}.log"
+    if os.path.exists(path):
+        print(open(path).read())
+    else:
+        print("No introspection data")
+
+def handle_elect_queen(args):
+    print(f"Electing queen using {args.mesh}")
+
+def handle_assume_role(args):
+    open("/srv/queen/role", "w").write(args.role)
 
 if __name__ == "__main__":
     main()

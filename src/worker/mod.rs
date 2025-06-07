@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: mod.rs v0.3
-// Date Modified: 2025-06-19
+// Filename: mod.rs v0.4
+// Date Modified: 2025-07-09
 // Author: Lukas Bower
 //
 // ─────────────────────────────────────────────────────────────
@@ -28,6 +28,7 @@ pub mod args;
 pub mod hotplug;
 pub mod world_sync;
 pub mod vision_overlay;
+pub mod queen_watchdog;
 
 use crate::runtime::ServiceRegistry;
 
