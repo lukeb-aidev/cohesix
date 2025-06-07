@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: fs.rs v0.1
-// Date Modified: 2025-06-08
+// Filename: fs.rs v0.2
+// Date Modified: 2025-07-09
 // Author: Lukas Bower
 
 //! Minimal in-memory filesystem for Cohesix-9P.
@@ -14,6 +14,7 @@ use std::collections::HashMap;
 #[derive(Default)]
 pub struct InMemoryFs {
     nodes: HashMap<String, Vec<u8>>, // path -> contents
+    validator_hook: Option<Box<dyn Fn(&'static str, String, String, u64) + Send + Sync>>,
 }
 
 impl InMemoryFs {
@@ -22,6 +23,7 @@ impl InMemoryFs {
         let mut fs = Self::default();
         fs.nodes.insert("/srv/cohrole".into(), b"Unknown".to_vec());
         fs.nodes.insert("/srv/telemetry".into(), Vec::new());
+        fs.validator_hook = None;
         fs
     }
 
@@ -36,8 +38,35 @@ impl InMemoryFs {
         self.nodes.insert(path, info.to_vec());
     }
 
+    /// Install a validator hook for access violations.
+    pub fn set_validator_hook<F>(&mut self, hook: F)
+    where
+        F: Fn(&'static str, String, String, u64) + Send + Sync + 'static,
+    {
+        self.validator_hook = Some(Box::new(hook));
+    }
+
     /// Retrieve contents of a file if present.
     pub fn read(&self, path: &str) -> Option<&[u8]> {
         self.nodes.get(path).map(|v| v.as_slice())
     }
+
+    /// Write contents to a file, emitting violations if path is restricted.
+    pub fn write(&mut self, path: &str, data: &[u8], agent: &str) {
+        if path.starts_with("/persist") || path.starts_with("/srv/secure") {
+            if let Some(hook) = &self.validator_hook {
+                hook("9p_access", path.to_string(), agent.to_string(), current_ts());
+            }
+            return;
+        }
+        self.nodes.insert(path.into(), data.to_vec());
+    }
+}
+
+fn current_ts() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
