@@ -13,9 +13,16 @@ use std::fs::{OpenOptions, create_dir_all};
 use std::io::Write;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[derive(Clone, Debug, Default)]
+pub struct NodeRecord {
+    pub id: String,
+    pub boot_ts: u64,
+    pub healthy: bool,
+}
+
 #[derive(Default, Clone)]
 pub struct QueenCluster {
-    nodes: Vec<String>,
+    nodes: Vec<NodeRecord>,
     primary: Option<String>,
 }
 
@@ -26,9 +33,16 @@ impl QueenCluster {
     }
 
     /// Register a Queen node by id.
-    pub fn register(&mut self, id: &str) {
-        if !self.nodes.contains(&id.to_string()) {
-            self.nodes.push(id.into());
+    pub fn register(&mut self, id: &str, boot_ts: u64) {
+        if !self.nodes.iter().any(|n| n.id == id) {
+            self.nodes.push(NodeRecord { id: id.into(), boot_ts, healthy: true });
+        }
+    }
+
+    /// Update health status for a node.
+    pub fn update_health(&mut self, id: &str, healthy: bool) {
+        if let Some(n) = self.nodes.iter_mut().find(|n| n.id == id) {
+            n.healthy = healthy;
         }
     }
 
@@ -37,11 +51,12 @@ impl QueenCluster {
         if self.nodes.is_empty() {
             return None;
         }
-        self.nodes.sort();
-        let candidate = self.nodes[0].clone();
-        if self.primary.as_ref() != Some(&candidate) {
-            self.primary = Some(candidate.clone());
-            Self::log(&format!("primary_elected {candidate}"));
+        self.nodes.sort_by_key(|n| n.boot_ts);
+        if let Some(node) = self.nodes.iter().filter(|n| n.healthy).min_by_key(|n| n.boot_ts).cloned() {
+            if self.primary.as_ref() != Some(&node.id) {
+                self.primary = Some(node.id.clone());
+                Self::log(&format!("primary_elected {}", node.id));
+            }
         }
         self.primary.clone()
     }

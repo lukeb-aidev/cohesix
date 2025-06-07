@@ -22,6 +22,16 @@ def track(trace_path: str):
     subprocess.run(["cargo", "test"], check=False)
 
 
+def rerun_confirmed() -> bool:
+    if not CONFIRMED.exists():
+        return True
+    success = True
+    for trace in CONFIRMED.iterdir():
+        res = subprocess.run(["cargo", "test", "--", trace.name], check=False)
+        success &= res.returncode == 0
+    return success
+
+
 if __name__ == "__main__":
     import sys
     if len(sys.argv) > 1:
