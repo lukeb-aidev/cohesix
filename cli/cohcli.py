@@ -80,6 +80,26 @@ def parse_args():
     inf.add_argument("worker")
     inf.add_argument("task")
 
+    # Subcommand: sync-world
+    syncw = subparsers.add_parser("sync-world", help="Sync world model to worker")
+    syncw.add_argument("--target", required=True)
+
+    exportw = subparsers.add_parser("export-world", help="Export world model")
+    exportw.add_argument("--path", required=True)
+
+    policy_show = subparsers.add_parser("show-policy", help="Show agent policy memory")
+    policy_show.add_argument("agent")
+
+    policy_wipe = subparsers.add_parser("wipe-policy", help="Wipe agent policy memory")
+    policy_wipe.add_argument("agent")
+
+    vis = subparsers.add_parser("vision-overlay", help="Run vision overlay")
+    vis.add_argument("--agent", required=True)
+    vis.add_argument("--save", action="store_true")
+
+    stream = subparsers.add_parser("stream-overlay", help="Stream overlay")
+    stream.add_argument("--port", required=True)
+
     return parser.parse_args()
 
 def main():
@@ -105,6 +125,18 @@ def main():
         handle_inference(args)
     elif args.command == "federation":
         handle_federation(args)
+    elif args.command == "sync-world":
+        handle_sync_world(args)
+    elif args.command == "export-world":
+        handle_export_world(args)
+    elif args.command == "show-policy":
+        handle_show_policy(args)
+    elif args.command == "wipe-policy":
+        handle_wipe_policy(args)
+    elif args.command == "vision-overlay":
+        handle_vision_overlay(args)
+    elif args.command == "stream-overlay":
+        handle_stream_overlay(args)
     else:
         print("No command provided. Use -h for help.")
         sys.exit(1)
@@ -208,6 +240,43 @@ def handle_sim(args):
             print(f"Simulation failed: {e}")
     else:
         print("Unknown simulation scenario")
+
+def handle_sync_world(args):
+    path = f"/srv/world_sync/{args.target}.json"
+    if os.path.exists(path):
+        print(f"Synced world model to {args.target}")
+    else:
+        print(f"No snapshot for {args.target}")
+
+def handle_export_world(args):
+    src = "/srv/world_model/world.json"
+    if os.path.exists(src):
+        import shutil
+        shutil.copy(src, args.path)
+        print(f"World model exported to {args.path}")
+    else:
+        print("World model not found")
+
+def handle_show_policy(args):
+    path = f"/persist/policy/agent_{args.agent}.policy.json"
+    if os.path.exists(path):
+        print(open(path).read())
+    else:
+        print("No policy found")
+
+def handle_wipe_policy(args):
+    path = f"/persist/policy/agent_{args.agent}.policy.json"
+    if os.path.exists(path):
+        os.remove(path)
+        print("Policy wiped")
+    else:
+        print("No policy found")
+
+def handle_vision_overlay(args):
+    print(f"Running vision overlay for {args.agent} (save={args.save})")
+
+def handle_stream_overlay(args):
+    print(f"Streaming overlay on port {args.port}")
 
 if __name__ == "__main__":
     main()

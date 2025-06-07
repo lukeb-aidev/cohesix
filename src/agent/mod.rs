@@ -8,3 +8,4 @@
 pub mod snapshot;
 pub mod directory;
 pub mod policy;
+pub mod policy_memory;

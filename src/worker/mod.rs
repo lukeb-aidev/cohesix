@@ -25,9 +25,9 @@
 /// Legacy argument parser wrapper. Prefer `cli::WorkerOpts`.
 pub mod args;
 
-/// Rich CLI based on `clap::Parser`.
-pub mod cli;
 pub mod hotplug;
+pub mod world_sync;
+pub mod vision_overlay;
 
 use crate::runtime::ServiceRegistry;
 
