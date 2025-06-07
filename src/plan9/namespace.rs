@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: namespace.rs v0.2
+// Filename: namespace.rs v0.3
 // Author: Lukas Bower
-// Date Modified: 2025-06-20
+// Date Modified: 2025-06-22
 
 //! Dynamic Plan 9 namespace loader for Cohesix.
 //!
@@ -10,22 +10,53 @@
 //! `unmount`. During tests, namespace actions are emulated by creating files
 //! under `/srv`.
 
+use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Write};
 
 /// Namespace operation extracted from configuration.
 #[derive(Debug, Clone, PartialEq)]
+pub struct BindFlags {
+    pub after: bool,
+    pub before: bool,
+    pub create: bool,
+}
+
+impl Default for BindFlags {
+    fn default() -> Self {
+        Self { after: false, before: false, create: false }
+    }
+}
+
 pub enum NsOp {
-    Bind { src: String, dst: String, after: bool },
+    Bind { src: String, dst: String, flags: BindFlags },
     Mount { srv: String, dst: String },
     Srv { path: String },
     Unmount { dst: String },
+}
+
+#[derive(Default, Clone)]
+pub struct NamespaceNode {
+    pub mounts: Vec<String>,
+    pub children: HashMap<String, NamespaceNode>,
+}
+
+impl NamespaceNode {
+    pub fn get_or_create(&mut self, path: &str) -> &mut Self {
+        let mut node = self;
+        for part in path.trim_matches('/').split('/') {
+            node = node.children.entry(part.to_string()).or_default();
+        }
+        node
+    }
 }
 
 /// Loaded namespace description with ordered operations.
 #[derive(Debug, Default, Clone)]
 pub struct Namespace {
     pub ops: Vec<NsOp>,
+    pub private: bool,
+    pub root: NamespaceNode,
 }
 
 impl Namespace {
@@ -52,14 +83,25 @@ impl NamespaceLoader {
     /// Parse textual namespace description.
     pub fn parse(text: &str) -> Namespace {
         let mut ns = Namespace::default();
+        if std::env::var("NS_PRIVATE").as_deref() == Ok("1") {
+            ns.private = true;
+        }
         for line in text.lines() {
             let tokens: Vec<&str> = line.split_whitespace().collect();
             if tokens.is_empty() || tokens[0].starts_with('#') {
                 continue;
             }
             match tokens.as_slice() {
-                ["bind", "-a", src, dst] => ns.add_op(NsOp::Bind { src: src.to_string(), dst: dst.to_string(), after: true }),
-                ["bind", src, dst] => ns.add_op(NsOp::Bind { src: src.to_string(), dst: dst.to_string(), after: false }),
+                ["bind", flag, src, dst] if flag.starts_with('-') => {
+                    let mut f = BindFlags::default();
+                    if flag.contains('a') { f.after = true; }
+                    if flag.contains('b') { f.before = true; }
+                    if flag.contains('c') { f.create = true; }
+                    ns.add_op(NsOp::Bind { src: src.to_string(), dst: dst.to_string(), flags: f });
+                }
+                ["bind", src, dst] => {
+                    ns.add_op(NsOp::Bind { src: src.to_string(), dst: dst.to_string(), flags: BindFlags::default() });
+                }
                 ["mount", srv, dst] => ns.add_op(NsOp::Mount { srv: srv.to_string(), dst: dst.to_string() }),
                 ["srv", path] => ns.add_op(NsOp::Srv { path: path.to_string() }),
                 ["unmount", dst] => ns.add_op(NsOp::Unmount { dst: dst.to_string() }),
@@ -69,8 +111,8 @@ impl NamespaceLoader {
         ns
     }
 
-    /// Apply namespace operations. Creates placeholder files under `/srv`.
-    pub fn apply(ns: &Namespace) -> io::Result<()> {
+    /// Apply namespace operations building the in-memory tree and `/srv` files.
+    pub fn apply(ns: &mut Namespace) -> io::Result<()> {
         fs::create_dir_all("/srv")?;
         for op in &ns.ops {
             match op {
@@ -78,12 +120,26 @@ impl NamespaceLoader {
                     fs::write(path, b"srv")?;
                 }
                 NsOp::Mount { srv, dst } => {
+                    let node = ns.root.get_or_create(dst);
+                    node.mounts.push(srv.clone());
                     let name = dst.trim_start_matches('/');
                     let file = format!("/srv/{}", name.replace('/', "_"));
                     fs::write(file, srv.as_bytes())?;
                 }
-                NsOp::Bind { .. } | NsOp::Unmount { .. } => {
-                    println!("[namespace] {:?}", op);
+                NsOp::Bind { src, dst, flags } => {
+                    let dst_node = ns.root.get_or_create(dst);
+                    if flags.before {
+                        dst_node.mounts.insert(0, src.clone());
+                    } else {
+                        dst_node.mounts.push(src.clone());
+                    }
+                    if flags.create {
+                        ns.root.get_or_create(src);
+                    }
+                }
+                NsOp::Unmount { dst } => {
+                    let node = ns.root.get_or_create(dst);
+                    node.mounts.clear();
                 }
             }
         }
@@ -93,8 +149,10 @@ impl NamespaceLoader {
 
 /// Convenience helper to parse the default config and expose it.
 pub fn init_boot_namespace() -> io::Result<Namespace> {
-    let ns = NamespaceLoader::load()?;
-    ns.expose()?;
+    let mut ns = NamespaceLoader::load()?;
+    NamespaceLoader::apply(&mut ns)?;
+    let agent = std::env::var("AGENT_ID").unwrap_or_else(|_| "default".into());
+    ns.persist(&agent)?;
     Ok(ns)
 }
 
@@ -105,11 +163,15 @@ impl Namespace {
         let mut f = File::create("/srv/bootns")?;
         for op in &self.ops {
             match op {
-                NsOp::Bind { src, dst, after } => {
-                    if *after {
-                        writeln!(f, "bind -a {} {}", src, dst)?;
-                    } else {
+                NsOp::Bind { src, dst, flags } => {
+                    let mut flag = String::new();
+                    if flags.before { flag.push('b'); }
+                    if flags.after { flag.push('a'); }
+                    if flags.create { flag.push('c'); }
+                    if flag.is_empty() {
                         writeln!(f, "bind {} {}", src, dst)?;
+                    } else {
+                        writeln!(f, "bind -{} {} {}", flag, src, dst)?;
                     }
                 }
                 NsOp::Mount { srv, dst } => writeln!(f, "mount {} {}", srv, dst)?,
@@ -118,6 +180,50 @@ impl Namespace {
             }
         }
         Ok(())
+    }
+
+    /// Persist namespace for an agent under `/srv/bootns/<id>`.
+    pub fn persist(&self, agent_id: &str) -> io::Result<()> {
+        let dir = "/srv/bootns";
+        fs::create_dir_all(dir)?;
+        let path = format!("{}/{}", dir, agent_id);
+        fs::write(&path, self.to_string())
+    }
+
+    /// Serialize namespace operations to a string.
+    pub fn to_string(&self) -> String {
+        let mut out = Vec::new();
+        for op in &self.ops {
+            match op {
+                NsOp::Bind { src, dst, flags } => {
+                    let mut f = String::new();
+                    if flags.before { f.push('b'); }
+                    if flags.after { f.push('a'); }
+                    if flags.create { f.push('c'); }
+                    if f.is_empty() {
+                        out.push(format!("bind {} {}", src, dst));
+                    } else {
+                        out.push(format!("bind -{} {} {}", f, src, dst));
+                    }
+                }
+                NsOp::Mount { srv, dst } => out.push(format!("mount {} {}", srv, dst)),
+                NsOp::Srv { path } => out.push(format!("srv {}", path)),
+                NsOp::Unmount { dst } => out.push(format!("unmount {}", dst)),
+            }
+        }
+        out.join("\n")
+    }
+
+    /// Resolve a path through the namespace and return the first mount target.
+    pub fn resolve(&self, path: &str) -> Option<String> {
+        let mut node = &self.root;
+        for part in path.trim_matches('/').split('/') {
+            match node.children.get(part) {
+                Some(n) => node = n,
+                None => return None,
+            }
+        }
+        node.mounts.first().cloned()
     }
 }
 

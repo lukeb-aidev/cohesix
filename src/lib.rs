@@ -67,6 +67,11 @@ pub mod shell;
 /// Plan 9 userland helpers
 pub mod plan9;
 
+/// rc style init parser
+pub mod rc {
+    pub mod init;
+}
+
 /// seL4 integration modules
 pub mod seL4;
 
