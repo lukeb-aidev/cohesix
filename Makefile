@@ -1,6 +1,6 @@
 # CLASSIFICATION: COMMUNITY
-	# Filename: Makefile v0.4
-# Date Modified: 2025-06-05
+        # Filename: Makefile v0.5
+# Date Modified: 2025-07-05
 # Author: Lukas Bower
 #
 # ─────────────────────────────────────────────────────────────
@@ -22,8 +22,8 @@ go-build:
 	@cd go && go vet ./...
 
 go-test:
-	@echo "🔧 Go unit tests …"
-	@cd go && go test ./...
+        @echo "🔧 Go unit tests …"
+        @GOWORK=$(CURDIR)/go/go.work go test ./go/...
 
 c/sel4/shim/boot_trampoline.o: c/sel4/shim/boot_trampoline.c
        $(CC:-clang?=cc) -I c/sel4/include -c $< -o $@
