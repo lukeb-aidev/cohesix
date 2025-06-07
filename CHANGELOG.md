@@ -1,16 +1,16 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.11
-// Date Modified: 2025-06-17
+// Filename: CHANGELOG.md v0.12
+// Date Modified: 2025-06-18
 // Author: Lukas Bower
 
-## [v0.16] - 2025-06-17
+## [v0.16] - 2025-06-07
 ### Added
 - **bootloader.c**: seL4 root task detecting CohRole and launching role init.
 - **cloud hooks**: dynamic agent fetch via `/srv/cloudinit`.
 - **init modules**: worker, kiosk and sensor roles with service registration.
 - **boottrace.py** script and Python bootflow test.
 
-## [v0.14] - 2025-06-17
+## [v0.14] - 2025-06-06
 ### Added
 - **plan9_ns.rs**: namespace builder parsing boot args and exposing `/srv/bootns`.
 - **seL4/syscall.rs**: stub Plan 9 syscall glue layer.
@@ -18,24 +18,40 @@
 - **cohesix-9p**: in-memory FS supports `/srv/cohrole` and dynamic service registration.
 - **test_nsbuilder.rs**: unit tests for namespace builder.
 
-## [v0.13] - 2025-06-17
+## [v0.13] - 2025-06-06
 ### Fixed
 - **send-heartbeat.sh**: log function now outputs provided message; header bumped to v0.2.
 
-## [v0.14] - 2025-06-17
+## [v0.14] - 2025-06-06
 ### Added
 - **telemetry/router.rs**: implemented `TelemetryRouter` trait with CPU and thermal metrics routing via 9P.
 - **sandbox/queue.rs** and **sandbox/dispatcher.rs**: syscall queueing and dispatch logic with role checks.
 - **cohesix_types.rs**: shared `Syscall` and `RoleManifest` definitions.
 - **tests/test_syscall_queue.rs**: validates queue ordering and policy enforcement.
 
-## [v0.15] - 2025-06-18
+## [v0.15] - 2025-06-07
 ### Added
 - **cuda/runtime.rs**: dynamic CUDA initialization and `GpuTaskExecutor` trait.
 - **sim/rapier_bridge.rs**: multithreaded Rapier wrapper exposing `/sim` files.
 - **p9/multiplexer.rs**: basic service registration and routing logic.
 - **shell/busybox_runner.rs**: spawn BusyBox shell with kernel fallback.
 - **tests/test_gpu_and_sim.rs**: validates GPU kernel launch and sim state.
+
+## [v0.16] - 2025-06-07
+### Added
+- **plan9/namespace.rs**: dynamic namespace loader and applier.
+- **p9/multiplexer.rs**: async request handling with `handle_async`.
+- **init/worker.rs**: worker root task service mounts.
+- **cuda/runtime.rs**: kernel loading and launch API.
+- **tests/test_cuda_exec.rs** and **tests/test_integration_boot.py**.
+- **scripts/cohtrace.py**: syscall trace stub.
+- **runtime/service_registry.rs**: global service registration with role filtering.
+- **sandbox/chain.rs**: executes sandboxed syscall chains.
+- **telemetry/loop.rs** and **telemetry/mod.rs**: telemetry sync loop and module.
+- **shell/busybox_runner.rs**: interactive sandbox shell runner.
+- **tests/test_service_registry.rs**: validates service registry logic.
+### Changed
+- **cuda/runtime.rs**, **sim/rapier_bridge.rs**, **init/queen.rs**, **worker/mod.rs**: register services on startup.
 
 ## [v0.12] - 2025-06-05
 ### Added

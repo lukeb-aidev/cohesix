@@ -26,6 +26,8 @@ pub mod utils;
 
 /// Runtime subsystem modules
 pub mod runtime;
+/// Telemetry subsystem utilities
+pub mod telemetry;
 
 /// Boot helper modules
 pub mod boot;
@@ -54,12 +56,14 @@ pub mod p9;
 /// Shell helpers
 pub mod shell;
 
+/// Plan 9 userland helpers
+pub mod plan9;
+
 /// seL4 integration modules
 pub mod seL4;
 
 /// Role-specific initialization hooks
 pub mod init;
-
 
 /// Compile from an input IR file to the specified output path.
 ///
