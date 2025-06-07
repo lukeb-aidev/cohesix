@@ -20,6 +20,8 @@ cohesix-9p = { path = "cohesix-9p" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 hex = "0.4"
+rmp-serde = "1"
+ring = "0.17.8"
 
 [workspace]
 members = [
