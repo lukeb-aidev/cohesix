@@ -20,7 +20,11 @@ cohesix-9p = { path = "cohesix-9p" }
 serde = { version = "1", features = ["derive"] }
 
 [workspace]
-members = ["cohesix-9p"]
+members = [
+    "cohesix-9p",
+    "tools/cohfuzz",
+    "tools/scenario_compiler",
+]
 
 [dev-dependencies]
 criterion = "0.5"
