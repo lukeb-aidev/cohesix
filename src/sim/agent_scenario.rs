@@ -17,6 +17,7 @@ use serde::Deserialize;
 use crate::agents::runtime::AgentRuntime;
 use crate::cohesix_types::Role;
 use crate::physical::sensors;
+use crate::trace::recorder;
 
 #[derive(Deserialize)]
 struct ScenarioConfig {
@@ -37,6 +38,7 @@ impl ScenarioEngine {
     pub fn run(path: &Path) -> anyhow::Result<()> {
         let data = fs::read_to_string(path)?;
         let cfg: ScenarioConfig = serde_json::from_str(&data)?;
+        recorder::event("scenario", "start", &cfg.id);
         fs::create_dir_all("/srv/scenario_result").ok();
         let mut runtime = AgentRuntime::new();
         for agent in &cfg.agents {
@@ -57,6 +59,7 @@ impl ScenarioEngine {
             format!("/srv/scenario_result/{}", cfg.id),
             "ok",
         )?;
+        recorder::event("scenario", "end", &cfg.id);
         Ok(())
     }
 }
