@@ -3,6 +3,13 @@
 // Date Modified: 2025-06-18
 // Author: Lukas Bower
 
+## [v0.16] - 2025-06-07
+### Added
+- **bootloader.c**: seL4 root task detecting CohRole and launching role init.
+- **cloud hooks**: dynamic agent fetch via `/srv/cloudinit`.
+- **init modules**: worker, kiosk and sensor roles with service registration.
+- **boottrace.py** script and Python bootflow test.
+
 ## [v0.14] - 2025-06-06
 ### Added
 - **plan9_ns.rs**: namespace builder parsing boot args and exposing `/srv/bootns`.
@@ -45,7 +52,6 @@
 - **tests/test_service_registry.rs**: validates service registry logic.
 ### Changed
 - **cuda/runtime.rs**, **sim/rapier_bridge.rs**, **init/queen.rs**, **worker/mod.rs**: register services on startup.
-
 
 ## [v0.12] - 2025-06-05
 ### Added
