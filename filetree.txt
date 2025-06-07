@@ -10,6 +10,7 @@ Cargo.toml
 LICENSE
 Makefile
 README.md
+benches/pass_manager.rs
 c/sel4/include/boot_trampoline.h
 c/sel4/shim/boot_trampoline.c
 cli/cohcli.py
@@ -77,6 +78,9 @@ src/codegen/mod.rs
 src/codegen/wasm.rs
 src/cohcc/ir/mod.rs
 src/cohcc/pass/mod.rs
+src/cohesix_types.rs
+src/cuda/mod.rs
+src/cuda/runtime.rs
 src/dependencies.rs
 src/hal/arm64/mod.rs
 src/hal/mod.rs
@@ -113,6 +117,8 @@ src/lib/9p/server.rs
 src/lib/9p/transport.rs
 src/main.rs
 src/meta/oss_manifest.rs
+src/p9/mod.rs
+src/p9/multiplexer.rs
 src/parser/parser_tests.rs
 src/pass_framework/ir_pass_framework.rs
 src/pass_framework/ir_pass_framework/ir.rs
@@ -147,14 +153,22 @@ src/runtime/roles/queen.rs
 src/runtime/roles/router.rs
 src/runtime/roles/worker.rs
 src/runtime/tools/busybox_shim.rs
+src/sandbox/dispatcher.rs
+src/sandbox/mod.rs
 src/sandbox/profile.rs
+src/sandbox/queue.rs
 src/security/sbom.rs
 src/services/health.rs
 src/services/ipc.rs
 src/services/mod.rs
 src/services/sandbox.rs
 src/services/telemetry.rs
+src/shell/busybox_runner.rs
+src/shell/mod.rs
+src/sim/mod.rs
+src/sim/rapier_bridge.rs
 src/telemetry/diagnostics.rs
+src/telemetry/router.rs
 src/telemetry/telemetry.rs
 src/telemetry/trace.rs
 src/utils/const_eval.rs
@@ -173,5 +187,7 @@ tests/integration/const_eval_test.rs
 tests/integration/dummy_test.rs
 tests/integration/kernel_drivers_test.rs
 tests/passes/dummy_test.rs
+tests/test_gpu_and_sim.rs
+tests/test_syscall_queue.rs
 tests/test_nsbuilder.rs
 benches/pass_manager.rs
