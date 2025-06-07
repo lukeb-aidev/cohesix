@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: cluster.rs v0.1
+// Filename: cluster.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-07-01
+// Date Modified: 2025-07-03
 
 //! Simple cluster coordination for multiple Queen nodes.
 //!
@@ -36,6 +36,7 @@ impl QueenCluster {
     pub fn register(&mut self, id: &str, boot_ts: u64) {
         if !self.nodes.iter().any(|n| n.id == id) {
             self.nodes.push(NodeRecord { id: id.into(), boot_ts, healthy: true });
+            Self::log(&format!("register {id}"));
         }
     }
 
@@ -43,7 +44,25 @@ impl QueenCluster {
     pub fn update_health(&mut self, id: &str, healthy: bool) {
         if let Some(n) = self.nodes.iter_mut().find(|n| n.id == id) {
             n.healthy = healthy;
+            Self::log(&format!("health {id} {healthy}"));
         }
+    }
+
+    /// Rotate to the next healthy node if the current primary failed.
+    pub fn rotate_primary(&mut self) -> Option<String> {
+        if let Some(ref cur) = self.primary {
+            if let Some(node) = self.nodes.iter().find(|n| n.id == *cur) {
+                if node.healthy {
+                    return Some(cur.clone());
+                }
+            }
+        }
+        self.primary = None;
+        let p = self.elect_primary();
+        if let Some(ref id) = p {
+            Self::log(&format!("primary_rotated {}", id));
+        }
+        p
     }
 
     /// Elect the primary orchestrator from the known nodes.
@@ -52,6 +71,7 @@ impl QueenCluster {
             return None;
         }
         self.nodes.sort_by_key(|n| n.boot_ts);
+        Self::log(&format!("quorum {:?}", self.nodes));
         if let Some(node) = self.nodes.iter().filter(|n| n.healthy).min_by_key(|n| n.boot_ts).cloned() {
             if self.primary.as_ref() != Some(&node.id) {
                 self.primary = Some(node.id.clone());

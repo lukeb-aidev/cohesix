@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: runtime.rs v0.1
+// Filename: runtime.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-06-21
+// Date Modified: 2025-07-03
 
 //! Agent runtime management.
 //!
@@ -72,6 +72,7 @@ impl AgentRuntime {
             writeln!(trace, "terminate {}", timestamp())?;
             recorder::event(agent_id, "terminate", "");
         }
+        std::fs::remove_dir_all(format!("/srv/agents/{agent_id}")).ok();
         Ok(())
     }
 

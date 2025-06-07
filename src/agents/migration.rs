@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: migration.rs v0.1
+// Filename: migration.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-07-01
+// Date Modified: 2025-07-03
 
 //! Agent state serialization and migration support.
 //!
@@ -52,9 +52,15 @@ pub fn restore(agent_id: &str, state: &AgentState) -> anyhow::Result<()> {
 }
 
 /// Migrate an agent between workers using the provided copy functions.
-pub fn migrate(agent_id: &str, fetch: impl Fn(&str) -> anyhow::Result<AgentState>, push: impl Fn(&str, &AgentState) -> anyhow::Result<()>) -> anyhow::Result<()> {
+pub fn migrate(
+    agent_id: &str,
+    fetch: impl Fn(&str) -> anyhow::Result<AgentState>,
+    push: impl Fn(&str, &AgentState) -> anyhow::Result<()>,
+    stop: impl Fn(&str) -> anyhow::Result<()>,
+) -> anyhow::Result<()> {
     let state = fetch(agent_id)?;
     push(agent_id, &state)?;
+    stop(agent_id)?;
     fs::remove_dir_all(format!("/srv/agents/{agent_id}")).ok();
     ServiceRegistry::unregister_service(agent_id);
     Ok(())
