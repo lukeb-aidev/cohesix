@@ -1,7 +1,13 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.12
-// Date Modified: 2025-06-18
+// Filename: CHANGELOG.md v0.13
+// Date Modified: 2025-06-20
 // Author: Lukas Bower
+
+## [v0.17] - 2025-06-20
+### Changed
+- Fixed duplicate sections in `init/worker.rs` and cleaned namespace loader.
+- Replaced unsafe mount table in `kernel/fs/plan9.rs` with `Mutex`.
+- Added `test_plan9_mount.rs` to validate mount capacity.
 
 ## [v0.16] - 2025-06-07
 ### Added
