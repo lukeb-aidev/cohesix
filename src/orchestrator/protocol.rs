@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: protocol.rs v0.1
+// Filename: protocol.rs v0.2
 // Author: Lukas Bower
 // Date Modified: 2025-07-04
 
@@ -16,6 +16,15 @@ pub struct JoinRequest {
     pub worker_id: String,
     /// Advertised IP address.
     pub ip: String,
+}
+
+/// Acknowledgement from Queen to Worker confirming join.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct JoinAck {
+    /// Accepted worker identifier.
+    pub worker_id: String,
+    /// Queen hostname or ID.
+    pub queen_id: String,
 }
 
 /// Worker role report after joining.

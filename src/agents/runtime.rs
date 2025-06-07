@@ -23,7 +23,7 @@ use crate::agent::directory::{AgentDirectory, AgentRecord};
 
 /// Runtime responsible for managing spawned agents.
 pub struct AgentRuntime {
-    procs: HashMap<String, Child>,
+    pub procs: HashMap<String, Child>,
 }
 
 impl AgentRuntime {
@@ -65,6 +65,19 @@ impl AgentRuntime {
             status: "running".into(),
             last_heartbeat: timestamp(),
         });
+        Ok(())
+    }
+
+    /// Pause a running agent process.
+    pub fn pause(&mut self, agent_id: &str) -> anyhow::Result<()> {
+        if let Some(child) = self.procs.get_mut(agent_id) {
+            #[cfg(unix)]
+            {
+                use nix::sys::signal::{kill, Signal};
+                use nix::unistd::Pid;
+                kill(Pid::from_raw(child.id() as i32), Signal::SIGSTOP).ok();
+            }
+        }
         Ok(())
     }
 
