@@ -1,15 +1,16 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: queen.rs v0.1
 // Author: Lukas Bower
-// Date Modified: 2025-06-17
+// Date Modified: 2025-06-18
 
 //! seL4 root task hook for the Queen role.
-//! Loads the boot namespace and emits early log messages.
+//! Loads the boot namespace and registers core services.
 
 use std::fs::OpenOptions;
 use std::io::Write;
 
-use crate::boot::plan9_ns::load_namespace;
+use crate::plan9::namespace::NamespaceLoader;
+use cohesix_9p::fs::InMemoryFs;
 
 fn log(msg: &str) {
     match OpenOptions::new().append(true).open("/dev/log") {
@@ -22,10 +23,16 @@ fn log(msg: &str) {
 
 /// Entry point for the Queen root task.
 pub fn start() {
-    match load_namespace("/srv/bootns") {
-        Ok(ns) => log(&format!("[queen] loaded {} namespace entries", ns.actions().len())),
+    match NamespaceLoader::load() {
+        Ok(ns) => {
+            let _ = NamespaceLoader::apply(&ns);
+            log(&format!("[queen] loaded {} namespace ops", ns.ops.len()));
+        }
         Err(e) => log(&format!("[queen] failed to load namespace: {e}")),
     }
-    // TODO(cohesix): spawn initial processes under this namespace
-}
 
+    let fs = InMemoryFs::new();
+    fs.mount("/srv/telemetry");
+    fs.mount("/srv/sim");
+    fs.mount("/srv/p9mux");
+}

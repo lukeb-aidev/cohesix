@@ -14,8 +14,14 @@ use std::time::Duration;
 
 /// Commands that can be sent to the simulation loop.
 pub enum SimCommand {
-    AddSphere { radius: f32, position: Vector<Real> },
-    ApplyForce { id: RigidBodyHandle, force: Vector<Real> },
+    AddSphere {
+        radius: f32,
+        position: Vector<Real>,
+    },
+    ApplyForce {
+        id: RigidBodyHandle,
+        force: Vector<Real>,
+    },
 }
 
 /// Bridge structure holding the command channel sender.
@@ -98,14 +104,22 @@ fn write_state(bodies: &RigidBodySet, step: u64) {
     let mut out = String::new();
     for (handle, body) in bodies.iter() {
         let pos = body.translation();
-        out.push_str(&format!("{:?}: [{}, {}, {}]\n", handle, pos.x, pos.y, pos.z));
+        out.push_str(&format!(
+            "{:?}: [{}, {}, {}]\n",
+            handle, pos.x, pos.y, pos.z
+        ));
     }
     let _ = fs::write("sim/state", out);
+    let _ = fs::write("/srv/telemetry", format!("step {}\n", step));
     append_trace(format!("step {}\n", step));
 }
 
 fn append_trace(line: String) {
-    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open("sim/trace") {
+    if let Ok(mut f) = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("sim/trace")
+    {
         let _ = f.write_all(line.as_bytes());
     }
 }
