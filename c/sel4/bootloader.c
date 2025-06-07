@@ -1,12 +1,11 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: bootloader.c v0.1
+// Filename: bootloader.c v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-06-17
+// Date Modified: 2025-06-25
 // SPDX-License-Identifier: MIT
 //
 // Cohesix OS bootloader (seL4 root task)
-// Detects role from boot params or /boot/cohrole.txt and
-// launches role-specific init script. Writes role to /srv/cohrole.
+// Assigns capability slots per role and launches role-specific init script.
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -34,6 +33,12 @@ static const char *detect_role(void) {
     return "QueenPrimary"; // default
 }
 
+static void assign_caps(const char *role) {
+    (void)role;
+    // Stub: in real build this would configure seL4 cspace slots.
+    printf("[bootloader] assign caps for %s\n", role);
+}
+
 static const char *script_for_role(const char *role) {
     if (strcmp(role, "DroneWorker") == 0)
         return "/init/worker.rc";
@@ -54,9 +59,9 @@ int main(void) {
     if (f) {
         fprintf(f, "%s", role);
         fclose(f);
-    } else {
-        perror("open /srv/cohrole");
     }
+
+    assign_caps(role);
 
     const char *script = script_for_role(role);
     const char *argv[] = {"/bin/rc", script, NULL};

@@ -86,3 +86,13 @@ Temporary exceptions may be granted by the project lead and must be documented i
 
 ---
 For questions or reviews, contact the Cohesix compliance lead.
+
+## 9 · Cohesix Dependency Table
+
+| Component | Source | License | Usage |
+|----------|--------|---------|-------|
+| Rapier   | <https://github.com/dimforge/rapier> | MIT | Physics backend |
+| CUDA     | <https://github.com/rust-cuda/cuda-sys> / libcuda.so | BSD | GPU compute |
+| 9P Mux   | Cohesix custom + 9fans Go port | MIT | FS routing |
+| BusyBox  | <https://busybox.net> | GPL-2.0 | Shell commands |
+| seL4     | <https://github.com/seL4/seL4> | GPL-2.0 | Microkernel |
