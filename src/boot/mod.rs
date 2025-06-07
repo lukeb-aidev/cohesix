@@ -1,6 +1,6 @@
 // CLASSIFICATION: PRIVATE
 // Filename: mod.rs · Cohesix boot subsystem
-// Date Modified: 2025-05-31
+// Date Modified: 2025-07-05
 // Author: Lukas Bower
 //
 // ─────────────────────────────────────────────────────────────
@@ -28,3 +28,6 @@ pub use measure::extend_pcr;
 
 /// Plan 9 namespace builder for early boot.
 pub mod plan9_ns;
+
+/// Live patching support for runtime updates.
+pub mod live_patch;

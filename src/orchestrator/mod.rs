@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: mod.rs v0.1
+// Filename: mod.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-07-04
+// Date Modified: 2025-07-05
 
 //! Distributed orchestration layer.
 //!
@@ -12,3 +12,4 @@ pub mod protocol;
 pub mod queen;
 pub mod worker;
 pub mod federation;
+pub mod failover;
