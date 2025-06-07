@@ -10,3 +10,4 @@ pub mod orchestrator;
 pub mod cluster;
 pub mod federation;
 pub mod slm_registry;
+pub mod sync_daemon;
