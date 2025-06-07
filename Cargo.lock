@@ -224,10 +224,12 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "cohesix-9p",
  "criterion",
  "env_logger",
  "libloading",
  "log",
+ "once_cell",
  "rapier3d",
  "serial_test",
  "sha2",

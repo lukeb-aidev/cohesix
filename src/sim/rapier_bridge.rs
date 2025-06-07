@@ -1,10 +1,11 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: rapier_bridge.rs v0.1
+// Filename: rapier_bridge.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-06-18
+// Date Modified: 2025-06-19
 
 //! Wrapper around the Rapier physics engine exposing a simple Plan9-style interface.
 
+use crate::runtime::ServiceRegistry;
 use rapier3d::prelude::*;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -34,6 +35,7 @@ impl SimBridge {
     pub fn start() -> Self {
         let (tx, rx) = mpsc::channel();
         thread::spawn(move || simulation_loop(rx));
+        ServiceRegistry::register_service("sim", "/sim");
         Self { tx }
     }
 

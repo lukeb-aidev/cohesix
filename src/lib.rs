@@ -26,6 +26,8 @@ pub mod utils;
 
 /// Runtime subsystem modules
 pub mod runtime;
+/// Telemetry subsystem utilities
+pub mod telemetry;
 
 /// Boot helper modules
 pub mod boot;
