@@ -1,9 +1,10 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: mod.rs v0.1
+// Filename: mod.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-06-21
+// Date Modified: 2025-07-05
 
 //! Trace subsystem modules.
 
 pub mod recorder;
 pub mod distributed_runner;
+pub mod trace_consensus;
