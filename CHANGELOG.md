@@ -13,6 +13,7 @@
 - Live patch infrastructure and `cohup patch` CLI
 - Trace consensus module and physics adapter
 - Adaptive agent policies with SelfTuningStabilizer
+- README and TEST_GUIDE updated with Go testing instructions; Makefile v0.5
 
 ## [v0.27] - 2025-07-04
 ### Added
