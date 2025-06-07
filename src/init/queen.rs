@@ -27,8 +27,8 @@ fn log(msg: &str) {
 /// Entry point for the Queen root task.
 pub fn start() {
     match NamespaceLoader::load() {
-        Ok(ns) => {
-            let _ = NamespaceLoader::apply(&ns);
+        Ok(mut ns) => {
+            let _ = NamespaceLoader::apply(&mut ns);
             log(&format!("[queen] loaded {} namespace ops", ns.ops.len()));
         }
         Err(e) => log(&format!("[queen] failed to load namespace: {e}")),

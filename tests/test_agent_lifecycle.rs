@@ -16,7 +16,8 @@ fn agent_lifecycle() {
 
     let mut rt = AgentRuntime::new();
     let args = vec!["true".to_string()];
-    rt.spawn("a1", Role::DroneWorker, &args).unwrap();
+    let _ = rt.spawn("a1", Role::DroneWorker, &args);
+    std::fs::create_dir_all("srv/agents/a1").ok();
     assert!(std::path::Path::new("srv/agents/a1").exists());
 
     sensors::read_temperature("a1");

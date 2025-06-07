@@ -28,8 +28,8 @@ fn init_physics() {
 pub fn start() {
     init_physics();
 
-    let ns = NamespaceLoader::load().unwrap_or_default();
-    let _ = NamespaceLoader::apply(&ns);
+    let mut ns = NamespaceLoader::load().unwrap_or_default();
+    let _ = NamespaceLoader::apply(&mut ns);
 
     let mut fs = InMemoryFs::new();
     fs.mount("/srv/cuda");

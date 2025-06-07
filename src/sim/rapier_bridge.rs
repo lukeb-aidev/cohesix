@@ -11,6 +11,8 @@
 
 use crate::runtime::ServiceRegistry;
 use rapier3d::prelude::*;
+use rapier3d::pipeline::QueryPipeline;
+use rapier3d::na::UnitQuaternion;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -66,6 +68,7 @@ fn simulation_loop(rx: Receiver<SimCommand>) {
     let mut impulse_joints = ImpulseJointSet::new();
     let mut multibody_joints = MultibodyJointSet::new();
     let mut ccd_solver = CCDSolver::new();
+    let mut query_pipeline = QueryPipeline::new();
     let mut step = 0u64;
 
     loop {
@@ -98,6 +101,7 @@ fn simulation_loop(rx: Receiver<SimCommand>) {
             &mut impulse_joints,
             &mut multibody_joints,
             &mut ccd_solver,
+            Some(&mut query_pipeline),
             &(),
             &(),
         );

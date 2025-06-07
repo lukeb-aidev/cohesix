@@ -11,7 +11,6 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
 
 use crate::runtime::ServiceRegistry;
 
@@ -44,6 +43,7 @@ pub fn serialize(agent_id: &str) -> anyhow::Result<AgentState> {
 pub fn restore(agent_id: &str, state: &AgentState) -> anyhow::Result<()> {
     fs::create_dir_all(format!("/srv/agents/{agent_id}")).ok();
     fs::write(format!("/srv/agent_trace/{agent_id}"), &state.trace).ok();
+    ServiceRegistry::unregister_service(agent_id);
     ServiceRegistry::register_service(agent_id, &format!("/srv/agents/{agent_id}"));
     for (k, v) in &state.env {
         std::env::set_var(k, v);
@@ -56,6 +56,7 @@ pub fn migrate(agent_id: &str, fetch: impl Fn(&str) -> anyhow::Result<AgentState
     let state = fetch(agent_id)?;
     push(agent_id, &state)?;
     fs::remove_dir_all(format!("/srv/agents/{agent_id}")).ok();
+    ServiceRegistry::unregister_service(agent_id);
     Ok(())
 }
 

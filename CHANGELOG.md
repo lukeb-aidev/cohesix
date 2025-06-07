@@ -9,6 +9,13 @@
 - Worker hotplug detection and cluster election.
 - Test contracts for runtime safety and failure audits.
 
+## [v0.24] - 2025-07-02
+### Added
+- Service mesh TTL and remote mounting
+- Node health tracking and election improvements
+- Fuzz regression runner and CI role harness
+- Additional safety and contract tests
+
 ## [v0.22] - 2025-06-30
 ### Added
 - Basic capability check map in `src/seL4/syscall.rs` enforcing

@@ -13,7 +13,7 @@ fn cuda_executor_launches() {
     std::fs::create_dir_all("srv").unwrap();
 
     let mut exec = CudaExecutor::new();
-    exec.load_kernel(b"fake").unwrap();
+    exec.load_kernel(Some(b"fake")).unwrap();
     exec.launch().unwrap();
 
     let out = std::fs::read_to_string("srv/cuda_output").unwrap();

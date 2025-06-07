@@ -8,18 +8,24 @@
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
+use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
 /// Run a scenario distributed across the supplied workers.
-pub fn run(trace_file: &str, workers: &[String]) -> anyhow::Result<()> {
+#[derive(Deserialize)]
+pub struct NodeCfg {
+    pub id: String,
+    pub url: String,
+}
+
+pub fn run(trace_file: &str, cfg: &[NodeCfg]) -> anyhow::Result<()> {
     let trace = fs::read_to_string(trace_file)?;
     let mut hashes = HashMap::new();
-    for w in workers {
-        let url = format!("http://{w}/run_trace");
-        let _ = ureq::post(&url).send_string(&trace);
+    for node in cfg {
+        let _ = ureq::post(&format!("{}/run_trace", node.url)).send_string(&trace);
         let mut hasher = Sha256::new();
         hasher.update(&trace);
-        hashes.insert(w.clone(), hasher.finalize());
+        hashes.insert(node.id.clone(), hasher.finalize());
     }
     let first = hashes.values().next().cloned();
     let divergence = hashes.iter().any(|(_, h)| Some(h) != first.as_ref());
