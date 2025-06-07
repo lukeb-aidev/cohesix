@@ -9,6 +9,12 @@
 - Fixed shell script header syntax
 - Documented BusyBox and seL4 sandboxing in OSS_REUSE.md
 
+## [v0.32] - 2025-07-07
+### Added
+- Queen federation manager and CLI commands for connect/disconnect
+- Basic distributed orchestrator policies and status export
+- Agent migration helper module and demo federation script
+
 
 ## [v0.29] - 2025-07-06
 ### Added

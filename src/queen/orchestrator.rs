@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: orchestrator.rs v0.1
+// Filename: orchestrator.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-06-21
+// Date Modified: 2025-07-07
 
 //! Queen orchestrator for managing worker nodes.
 //!
@@ -24,18 +24,35 @@ pub struct WorkerRecord {
     pub status: String,
     pub boot_ts: u64,
     pub last_seen: u64,
+    pub role: String,
+    pub trust: String,
+    pub capabilities: Vec<String>,
 }
 
 /// Queen orchestrator state.
 pub struct QueenOrchestrator {
     workers: HashMap<String, WorkerRecord>,
     timeout: Duration,
+    policy: SchedulePolicy,
+    next_idx: usize,
+}
+
+#[derive(Clone, Copy)]
+pub enum SchedulePolicy {
+    RoundRobin,
+    GpuPriority,
+    LatencyAware,
 }
 
 impl QueenOrchestrator {
     /// Initialize the orchestrator with a heartbeat timeout.
-    pub fn new(timeout_secs: u64) -> Self {
-        Self { workers: HashMap::new(), timeout: Duration::from_secs(timeout_secs) }
+    pub fn new(timeout_secs: u64, policy: SchedulePolicy) -> Self {
+        Self {
+            workers: HashMap::new(),
+            timeout: Duration::from_secs(timeout_secs),
+            policy,
+            next_idx: 0,
+        }
     }
 
     /// Synchronize worker state from `/srv/netinit/` directories.
@@ -51,6 +68,9 @@ impl QueenOrchestrator {
                             status: "booting".into(),
                             boot_ts: timestamp(),
                             last_seen: timestamp(),
+                            role: fs::read_to_string(ent.path().join("role")).unwrap_or_else(|_| "unknown".into()).trim().into(),
+                            trust: fs::read_to_string(ent.path().join("trust")).unwrap_or_else(|_| "normal".into()).trim().into(),
+                            capabilities: fs::read_to_string(ent.path().join("caps")).map(|c| c.lines().map(|s| s.to_string()).collect()).unwrap_or_else(|_| Vec::new()),
                         });
                         rec.last_seen = timestamp();
                         rec.ip = ip.trim().into();
@@ -79,6 +99,37 @@ impl QueenOrchestrator {
                 rec.last_seen = now;
             }
         }
+    }
+
+    /// Export orchestrator status to `/srv/orch/status`.
+    pub fn export_status(&self) {
+        if let Ok(mut f) = fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open("/srv/orch/status")
+        {
+            for w in self.workers.values() {
+                let _ = writeln!(f, "{} {} {} {}", w.id, w.role, w.status, w.ip);
+            }
+        }
+    }
+
+    /// Schedule a task based on the configured policy.
+    pub fn schedule(&mut self, _agent_id: &str) -> Option<String> {
+        let ids: Vec<_> = self.workers.keys().cloned().collect();
+        if ids.is_empty() {
+            return None;
+        }
+        let idx = match self.policy {
+            SchedulePolicy::RoundRobin => {
+                let i = self.next_idx % ids.len();
+                self.next_idx += 1;
+                i
+            }
+            _ => 0,
+        };
+        ids.get(idx).cloned()
     }
 }
 
