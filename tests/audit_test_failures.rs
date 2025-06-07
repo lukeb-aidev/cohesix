@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: audit_test_failures.rs v0.1
-// Date Modified: 2025-07-01
+// Filename: audit_test_failures.rs v0.2
+// Date Modified: 2025-07-03
 // Author: Cohesix Codex
 
 use std::fs::{self, OpenOptions};
@@ -16,7 +16,12 @@ fn audit_test_failures() {
             .open("/srv/testfailures.log")
             .unwrap();
         for line in data.lines() {
-            let _ = writeln!(out, "{}", line);
+            let msg = if let Some((name, reason)) = line.split_once(':') {
+                format!("{name} -- {reason}")
+            } else {
+                line.to_string()
+            };
+            let _ = writeln!(out, "{}", msg);
         }
     }
 }

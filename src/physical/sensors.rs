@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: sensors.rs v0.1
+// Filename: sensors.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-06-21
+// Date Modified: 2025-07-03
 
 //! Mock physical sensor model.
 //!
@@ -29,7 +29,7 @@ fn ts() -> u64 {
 
 pub fn read_temperature(agent: &str) -> f32 {
     let value = 42.0; // mock value
-    fs::create_dir_all("/srv/telemetry").ok();
+    fs::create_dir_all("/srv").ok();
     log("/srv/telemetry", &format!("{} temp {}", ts(), value));
     log(&format!("/srv/agent_trace/{agent}"), &format!("temp {}", value));
     recorder::event(agent, "sensor_temp", &format!("{}", value));

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # CLASSIFICATION: COMMUNITY
-# Filename: fuzz_regression_tracker.py v0.1
-# Date Modified: 2025-07-01
+# Filename: fuzz_regression_tracker.py v0.2
+# Date Modified: 2025-07-03
 # Author: Lukas Bower
 
 """Track fuzz traces that cause regressions and rerun them before merge."""
@@ -16,10 +16,11 @@ CONFIRMED = Path("/srv/fuzz/confirmed")
 def track(trace_path: str):
     CONFIRMED.mkdir(parents=True, exist_ok=True)
     p = Path(trace_path)
-    target = CONFIRMED / p.name
-    if not target.exists():
-        target.write_text(p.read_text())
-    subprocess.run(["cargo", "test"], check=False)
+    res = subprocess.run(["cargo", "test", "--", p.name], capture_output=True)
+    if res.returncode != 0 or b"panic" in res.stdout or b"panic" in res.stderr:
+        target = CONFIRMED / p.name
+        if not target.exists():
+            target.write_text(p.read_text())
 
 
 def rerun_confirmed() -> bool:
