@@ -42,11 +42,24 @@ pub mod sandbox;
 /// Kernel modules and drivers
 pub mod kernel;
 
+/// CUDA runtime helpers
+pub mod cuda;
+
+/// Physics simulation bridge
+pub mod sim;
+
+/// 9P multiplexer utilities
+pub mod p9;
+
+/// Shell helpers
+pub mod shell;
+
 /// seL4 integration modules
 pub mod seL4;
 
 /// Role-specific initialization hooks
 pub mod init;
+
 
 /// Compile from an input IR file to the specified output path.
 ///
