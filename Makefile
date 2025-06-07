@@ -26,10 +26,13 @@ go-test:
 	@cd go && go test ./...
 
 c/sel4/shim/boot_trampoline.o: c/sel4/shim/boot_trampoline.c
-	$(CC:-clang?=cc) -I c/sel4/include -c $< -o $@
+       $(CC:-clang?=cc) -I c/sel4/include -c $< -o $@
 
-c-shims: c/sel4/shim/boot_trampoline.o
-	@echo "🔧 Building C shims …"
+c/sel4/bootloader.o: c/sel4/bootloader.c
+       $(CC:-clang?=cc) -I c/sel4/include -c $< -o $@
+
+c-shims: c/sel4/shim/boot_trampoline.o c/sel4/bootloader.o
+       @echo "🔧 Building C shims …"
 
 help:
 	@echo "Cohesix top‑level build targets:"
