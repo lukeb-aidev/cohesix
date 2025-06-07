@@ -32,6 +32,18 @@ def parse_args():
     parser_trace = subparsers.add_parser("trace", help="View recent trace logs")
     parser_trace.add_argument("--filter", help="Filter by subsystem or agent name")
 
+    # Subcommand: trace-violations
+    subparsers.add_parser("trace-violations", help="Show runtime violation log")
+
+    # Subcommand: replay-trace
+    replay = subparsers.add_parser("replay-trace", help="Replay a trace file")
+    replay.add_argument("path")
+
+    # Subcommand: dispatch-slm
+    disp = subparsers.add_parser("dispatch-slm", help="Dispatch SLM to worker")
+    disp.add_argument("--target", required=True)
+    disp.add_argument("--model", required=True)
+
     # Subcommand: agent lifecycle
     parser_agent = subparsers.add_parser("agent", help="Agent lifecycle commands")
     agent_sub = parser_agent.add_subparsers(dest="agent_cmd")
@@ -79,6 +91,12 @@ def main():
         handle_boot(args)
     elif args.command == "trace":
         handle_trace(args)
+    elif args.command == "trace-violations":
+        handle_trace_violations()
+    elif args.command == "replay-trace":
+        handle_replay(args)
+    elif args.command == "dispatch-slm":
+        handle_dispatch_slm(args)
     elif args.command == "agent":
         handle_agent(args)
     elif args.command == "sim":
@@ -114,6 +132,27 @@ def handle_boot(args):
 def handle_trace(args):
     filter_val = args.filter or "*"
     print(f"Showing trace log entries matching '{filter_val}' (stub)")
+
+def handle_trace_violations():
+    path = "/srv/violations/runtime.json"
+    if os.path.exists(path):
+        print(open(path).read())
+    else:
+        print("No violations logged")
+
+def handle_replay(args):
+    from pathlib import Path
+    from scripts import cohtrace
+    trace = cohtrace.read_trace(Path(args.path))
+    for ev in trace:
+        print(f"replay {ev['event']} {ev['detail']}")
+
+def handle_dispatch_slm(args):
+    req_dir = f"/srv/slm/dispatch/{args.target}"
+    os.makedirs(req_dir, exist_ok=True)
+    req_path = os.path.join(req_dir, f"{args.model}.req")
+    open(req_path, "w").write("1")
+    print(f"Dispatch request for {args.model} sent to {args.target}")
 
 def handle_agent(args):
     if args.agent_cmd == "start":

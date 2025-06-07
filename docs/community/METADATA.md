@@ -18,7 +18,7 @@
 | INSTRUCTION_BLOCK.md       | v3.5    | 2025-05-24    | COMMUNITY      |
 | MISSION.md                 | v1.9    | 2025-05-24    | COMMUNITY      |
 | METADATA.md                | v2.4    | 2025-06-07    | COMMUNITY      |
-| OSS_REUSE.md               | v1.4    | 2025-07-06    | COMMUNITY      |
+| OSS_REUSE.md               | v1.5    | 2025-07-06    | COMMUNITY      |
 | PROJECT_OVERVIEW.md        | v1.6    | 2025-05-24    | COMMUNITY      |
 | Q_DAY.md                   | v1.0    | 2025-05-31    | PRIVATE        |
 | QUEEN_POLICY.md            | v1.0    | 2025-05-19    | PRIVATE        |
