@@ -1,11 +1,12 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: runtime.rs v0.1
+// Filename: runtime.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-06-18
+// Date Modified: 2025-06-19
 
 //! Runtime CUDA integration using dynamic loading of `libcuda.so`.
 //! Falls back gracefully if no CUDA driver is present.
 
+use crate::runtime::ServiceRegistry;
 use libloading::Library;
 use log::{info, warn};
 use std::ffi::CStr;
@@ -24,6 +25,7 @@ impl CudaRuntime {
         if lib.is_none() {
             warn!("CUDA library not found; GPU features disabled");
         }
+        ServiceRegistry::register_service("cuda", "/srv/cuda");
         Self { lib }
     }
 
@@ -97,7 +99,9 @@ pub struct CudaExecutor {
 
 impl CudaExecutor {
     pub fn new() -> Self {
-        Self { rt: CudaRuntime::new() }
+        Self {
+            rt: CudaRuntime::new(),
+        }
     }
 }
 

@@ -30,6 +30,16 @@
 - **shell/busybox_runner.rs**: spawn BusyBox shell with kernel fallback.
 - **tests/test_gpu_and_sim.rs**: validates GPU kernel launch and sim state.
 
+## [v0.16] - 2025-06-19
+### Added
+- **runtime/service_registry.rs**: global service registration with role filtering.
+- **sandbox/chain.rs**: executes sandboxed syscall chains.
+- **telemetry/loop.rs** and **telemetry/mod.rs**: telemetry sync loop and module.
+- **shell/busybox_runner.rs**: interactive sandbox shell runner.
+- **tests/test_service_registry.rs**: validates service registry logic.
+### Changed
+- **cuda/runtime.rs**, **sim/rapier_bridge.rs**, **init/queen.rs**, **worker/mod.rs**: register services on startup.
+
 ## [v0.12] - 2025-06-05
 ### Added
 - **verify-macos-setup.sh**: helper script validating Homebrew, Xcode tools,
