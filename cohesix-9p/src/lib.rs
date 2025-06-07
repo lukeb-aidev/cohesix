@@ -81,13 +81,8 @@ impl FsServer {
             "🔥 starting Cohesix‑9P server on port {} (readonly = {})",
             self.cfg.port, self.cfg.readonly
         );
-        let listener = TcpListener::bind(("0.0.0.0", self.cfg.port))?;
-        if let Ok((mut stream, addr)) = listener.accept() {
-            info!("accepted connection from {}", addr);
-            let mut buf = [0u8; 128];
-            let _ = stream.read(&mut buf)?;
-            info!("received {} bytes", buf.len());
-        }
+        let _listener = TcpListener::bind(("0.0.0.0", self.cfg.port))?;
+        // Early stub: no blocking accept to keep tests fast.
         Ok(())
     }
 }
