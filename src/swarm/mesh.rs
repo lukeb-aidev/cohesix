@@ -24,6 +24,8 @@ pub struct ServiceEntry {
     pub name: String,
     /// Filesystem path relative to the node.
     pub path: String,
+    /// Role that owns the service.
+    pub role: String,
     /// Time-to-live for the registration.
     pub ttl: Duration,
     /// Last successful health update.
@@ -40,11 +42,12 @@ pub struct ServiceMeshRegistry;
 
 impl ServiceMeshRegistry {
     /// Register a service hosted on the given node.
-    pub fn register(node: &str, name: &str, path: &str, ttl_secs: u64) {
+    pub fn register(node: &str, name: &str, path: &str, role: &str, ttl_secs: u64) {
         let entry = ServiceEntry {
             node: node.into(),
             name: name.into(),
             path: path.into(),
+            role: role.into(),
             ttl: Duration::from_secs(ttl_secs),
             last_update: Instant::now(),
             healthy: true,
@@ -79,6 +82,17 @@ impl ServiceMeshRegistry {
             .retain(|_, e| now.duration_since(e.last_update) <= e.ttl);
     }
 
+    /// Mount a remote service locally under `/srv/remote/<name>` if available.
+    pub fn mount_remote_service(node: &str, name: &str) -> Option<ServiceEntry> {
+        if let Some(entry) = Self::federated_lookup(node, name) {
+            let local = format!("/srv/remote/{}_{}", node, name);
+            std::fs::create_dir_all("/srv/remote").ok();
+            std::fs::write(&local, &entry.path).ok();
+            return Some(entry);
+        }
+        None
+    }
+
     /// Attempt to query a remote node for a service path. If successful the
     /// result is cached and returned.
     pub fn federated_lookup(node: &str, name: &str) -> Option<ServiceEntry> {
@@ -92,6 +106,7 @@ impl ServiceMeshRegistry {
                     node: node.into(),
                     name: name.into(),
                     path: path.trim().into(),
+                    role: "unknown".into(),
                     ttl: Duration::from_secs(30),
                     last_update: Instant::now(),
                     healthy: true,

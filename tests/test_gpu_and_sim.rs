@@ -19,7 +19,7 @@ fn gpu_and_sim_integration() {
 
     // GPU execution should succeed even without real CUDA
     let mut exec = CudaExecutor::new();
-    exec.load_kernel(b"fake").unwrap();
+    exec.load_kernel(Some(b"fake")).unwrap();
     exec.launch().unwrap();
     let out = std::fs::read_to_string("srv/cuda_output").unwrap();
     assert!(out.contains("kernel executed") || out.contains("cuda disabled"));

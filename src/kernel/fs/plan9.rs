@@ -46,7 +46,6 @@ pub fn mount_count() -> usize {
 }
 
 /// Reset mount table (tests only).
-#[cfg(test)]
 pub fn reset_mounts() {
     MOUNT_TABLE.lock().unwrap().clear();
 }

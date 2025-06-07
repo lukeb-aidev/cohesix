@@ -28,6 +28,7 @@ impl Default for BindFlags {
     }
 }
 
+#[derive(Debug, Clone)]
 pub enum NsOp {
     Bind { src: String, dst: String, flags: BindFlags },
     Mount { srv: String, dst: String },
@@ -35,7 +36,7 @@ pub enum NsOp {
     Unmount { dst: String },
 }
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Debug)]
 pub struct NamespaceNode {
     pub mounts: Vec<String>,
     pub children: HashMap<String, NamespaceNode>,

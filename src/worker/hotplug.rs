@@ -11,7 +11,8 @@
 
 use crate::swarm::mesh::ServiceMeshRegistry;
 use crate::runtime::ServiceRegistry;
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 
 pub struct WorkerHotplug;
 
@@ -22,7 +23,7 @@ impl WorkerHotplug {
             let url = format!("http://{node_id}/sync_bootns");
             let _ = ureq::post(&url).send_string(&ns);
         }
-        ServiceMeshRegistry::register(node_id, "bootns", "/srv/bootns", 60);
+        ServiceMeshRegistry::register(node_id, "bootns", "/srv/bootns", "QueenPrimary", 60);
     }
 
     /// Called when a worker node leaves the cluster.
@@ -32,6 +33,12 @@ impl WorkerHotplug {
                 ServiceRegistry::unregister_service(&entry.name);
             }
         }
+        // trigger agent migration by touching audit log
+        let _ = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("/srv/orchestration.log")
+            .and_then(|mut f| writeln!(f, "worker_retired {node_id}"));
     }
 }
 
