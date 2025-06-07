@@ -25,7 +25,7 @@ use sha2::{Digest, Sha256};
 /// Pseudocode: `PCR := SHA256(PCR || data)`
 pub fn extend_pcr(pcr: &mut [u8; 32], data: &[u8]) {
     let mut hasher = Sha256::new();
-    hasher.update(pcr);
+    hasher.update(&*pcr);
     hasher.update(data);
     *pcr = hasher.finalize().into();
 }

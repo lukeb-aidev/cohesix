@@ -25,3 +25,6 @@
 /// Re‑export [`measure::extend_pcr`] for convenience.
 pub mod measure;
 pub use measure::extend_pcr;
+
+/// Plan 9 namespace builder for early boot.
+pub mod plan9_ns;
