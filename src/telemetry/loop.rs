@@ -1,36 +1,28 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: loop.rs v0.1
+// Filename: loop.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-06-18
+// Date Modified: 2025-07-01
 
-//! Periodic telemetry feedback loop combining physics and GPU state.
-
-use std::thread;
-use std::time::Duration;
-
-use super::router::{BasicTelemetryRouter, TelemetryRouter};
-
-/// Run the telemetry feedback loop.  Metrics are gathered every 100ms
-/// and written to `/srv/telemetry` via the router's in-memory FS.
-pub fn run() {
-    let mut router = BasicTelemetryRouter::default();
-    loop {
-        let metrics = router.gather_metrics();
-        router.expose_metrics(&metrics);
-        thread::sleep(Duration::from_millis(100));
-
-// Date Modified: 2025-06-19
-
-//! Telemetry synchronization loop.
-//!
-//! Periodically reads `/sim/state` and mirrors the data to `/srv/telemetry`.
-//! When updates occur a log entry is appended to `/dev/log`.
+//! Telemetry loops coordinating metric exposure and simulation state.
 
 use log::trace;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::thread;
 use std::time::Duration;
+
+use super::router::{BasicTelemetryRouter, TelemetryRouter};
+
+/// Run the main telemetry feedback loop and spawn the sync helper.
+pub fn run() {
+    TelemetrySyncLoop::spawn();
+    let mut router = BasicTelemetryRouter::default();
+    loop {
+        let metrics = router.gather_metrics();
+        router.expose_metrics(&metrics);
+        thread::sleep(Duration::from_millis(100));
+    }
+}
 
 /// Loop that syncs simulation state to the telemetry service.
 pub struct TelemetrySyncLoop;
@@ -58,3 +50,4 @@ impl TelemetrySyncLoop {
         }
     }
 }
+

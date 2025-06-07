@@ -27,6 +27,7 @@ pub mod args;
 
 /// Rich CLI based on `clap::Parser`.
 pub mod cli;
+pub mod hotplug;
 
 use crate::runtime::ServiceRegistry;
 
