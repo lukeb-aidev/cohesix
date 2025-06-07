@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: init.rs v0.2
-// Date Modified: 2025-06-01
+// Filename: init.rs v0.3
+// Date Modified: 2025-07-04
 // Author: Lukas Bower
 //
 // ─────────────────────────────────────────────────────────────
@@ -33,6 +33,8 @@ use crate::{
 pub struct BootContext {
     /// Parsed boot arguments.
     pub args: BootArgs,
+    /// Selected boot role.
+    pub role: String,
 }
 
 /// Perform early initialisation.
@@ -46,6 +48,7 @@ pub struct BootContext {
 pub fn early_init(cmdline: &str) -> Result<BootContext> {
     // 1. Parse cmd‑line
     let args = parse_cmdline(cmdline)?;
+    let role = args.get("cohrole").unwrap_or("Unknown").to_string();
 
     // 2. Basic HAL bring‑up
     //    — Page‑tables + IRQ controller stubs (real impl later)
@@ -60,9 +63,20 @@ pub fn early_init(cmdline: &str) -> Result<BootContext> {
         hal::x86_64::init_interrupts()?;
     }
 
+    std::fs::create_dir_all("/srv").ok();
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/srv/boot.log")
+    {
+        use std::io::Write;
+        let _ = writeln!(f, "role={role} cmdline={cmdline}");
+    }
+    std::fs::write("/srv/cohrole", &role).ok();
+
     info!("Bootloader early‑init complete");
 
-    Ok(BootContext { args })
+    Ok(BootContext { args, role })
 }
 
 // ───────────────────────────── tests ─────────────────────────────────────────
@@ -75,5 +89,6 @@ mod tests {
         let ctx = early_init("root=/dev/sda quiet").unwrap();
         assert_eq!(ctx.args.get("root"), Some("/dev/sda"));
         assert!(ctx.args.has_flag("quiet"));
+        assert_eq!(ctx.role, "Unknown");
     }
 }

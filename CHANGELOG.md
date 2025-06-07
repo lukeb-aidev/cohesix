@@ -3,13 +3,13 @@
 // Date Modified: 2025-07-04
 // Author: Lukas Bower
 
-## [v0.23] - 2025-07-01
+## [v0.23] - 2025-06-07
 ### Added
 - Distributed swarm registry and agent migration helpers.
 - Worker hotplug detection and cluster election.
 - Test contracts for runtime safety and failure audits.
 
-## [v0.24] - 2025-07-02
+## [v0.24] - 2025-06-07
 ### Added
 - Service mesh TTL and remote mounting
 - Node health tracking and election improvements
@@ -26,38 +26,39 @@
 ### Fixed
 - Absolute `/srv` paths in tests to resolve lifecycle failures
 
-## [v0.26] - 2025-07-04
+## [v0.26] - 2025-06-07
 ### Added
 - Distributed orchestration layer with worker join protocol
 - Agent snapshot writer and migration CLI
 - Queen federation beacons and secure links
-### Changed
 - Agent runtime records agent_table.json
+- `cohrole` CLI utility shows current runtime role.
+- Bootloader logs role and cmdline to `/srv/boot.log` and exposes `/srv/cohrole`.
 
-## [v0.22] - 2025-06-30
+## [v0.22] - 2025-06-07
 ### Added
 - Basic capability check map in `src/seL4/syscall.rs` enforcing
   path-based permissions for open and exec operations.
 
-## [v0.21] - 2025-06-25
+## [v0.21] - 2025-06-07
 ### Added
 - Trace fuzzer and scenario compiler tools under `tools/`
 - Scenario runner executing compiled scenarios
 
-## [v0.20] - 2025-06-25
+## [v0.20] - 2025-06-07
 ### Added
 - Integrated Rapier physics and CUDA runtime with service traces
 - Expanded 9P multiplexer, seL4 syscall guard and BusyBox shell
 - Added OSS dependency table and integration tests
 
 
-## [v0.19] - 2025-06-22
+## [v0.19] - 2025-06-07
 ### Added
 - Plan 9 namespace tree with bind flags and persistence
 - Syscall wrapper module and service registry
 - rc init parser and new tests
 
-## [v0.18] - 2025-06-21
+## [v0.18] - 2025-06-07
 ### Added
 - Agent runtime with tracing and service registration.
 - Queen orchestrator managing worker nodes.
@@ -65,7 +66,7 @@
 - Physical sensor mock model and scenario engine.
 - `test_agent_lifecycle.rs` covering agent lifecycle.
 
-## [v0.17] - 2025-06-20
+## [v0.17] - 2025-06-07
 ### Changed
 - Fixed duplicate sections in `init/worker.rs` and cleaned namespace loader.
 - Replaced unsafe mount table in `kernel/fs/plan9.rs` with `Mutex`.
