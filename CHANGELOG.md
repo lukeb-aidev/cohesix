@@ -1,7 +1,11 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.19
-// Date Modified: 2025-07-05
+// Filename: CHANGELOG.md v0.20
+// Date Modified: 2025-07-06
 // Author: Lukas Bower
+
+## [v0.29] - 2025-07-06
+### Added
+- Documented cobra Go dependency under Apache-2.0
 
 ## [v0.28] - 2025-07-05
 ### Added
