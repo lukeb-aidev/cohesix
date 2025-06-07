@@ -1,7 +1,13 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.21
+// Filename: CHANGELOG.md v0.22
 // Date Modified: 2025-07-08
 // Author: Lukas Bower
+## [v0.34] - 2025-07-08
+### Added
+- SLM registry and dispatch CLI
+- Trace validation stream to validator socket
+- Queen failover test scripts
+
 ## [v0.31] - 2025-07-07
 ### Changed
 - Completed bootloader initialization logic and secure boot checks
