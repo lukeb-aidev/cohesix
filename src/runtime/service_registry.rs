@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: service_registry.rs v0.1
+// Filename: service_registry.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-06-19
+// Date Modified: 2025-07-01
 
 //! Runtime service registry for Cohesix.
 //!
@@ -40,6 +40,11 @@ impl ServiceRegistry {
             role,
         };
         REGISTRY.lock().unwrap().insert(name.into(), handle);
+    }
+
+    /// Remove a previously registered service.
+    pub fn unregister_service(name: &str) {
+        REGISTRY.lock().unwrap().remove(name);
     }
 
     /// Lookup a service handle if visible to the current role.

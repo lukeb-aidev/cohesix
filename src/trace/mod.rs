@@ -6,3 +6,4 @@
 //! Trace subsystem modules.
 
 pub mod recorder;
+pub mod distributed_runner;
