@@ -1,7 +1,13 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.14
-// Date Modified: 2025-06-21
+// Filename: CHANGELOG.md v0.15
+// Date Modified: 2025-06-22
 // Author: Lukas Bower
+
+## [v0.19] - 2025-06-22
+### Added
+- Plan 9 namespace tree with bind flags and persistence
+- Syscall wrapper module and service registry
+- rc init parser and new tests
 
 ## [v0.18] - 2025-06-21
 ### Added
