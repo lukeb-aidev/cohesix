@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: METADATA.md v2.2
-// Date Modified: 2025-07-05
+// Filename: METADATA.md v2.3
+// Date Modified: 2025-07-06
 // Author: Lukas Bower
 
 ## Canonical Documents
@@ -12,13 +12,13 @@
 | BATCH_PLAN.md              | v0.5    | 2025-06-05    | COMMUNITY      |
 | BUILD_PLAN.md              | v0.2    | 2025-06-05    | COMMUNITY      |
 | COMMERCIAL_PLAN.md         | v1.3    | 2025-05-24    | PRIVATE        |
-| DEPENDENCIES.md            | v0.4    | 2025-06-17    | COMMUNITY      |
+| DEPENDENCIES.md            | v0.5    | 2025-07-06    | COMMUNITY      |
 | END_USER_DEMOS.md          | v0.1    | 2025-06-05    | COMMUNITY      |
 | IMPLEMENTATION_GUIDE.md    | v1.1    | 2025-05-24    | COMMUNITY      |
 | INSTRUCTION_BLOCK.md       | v3.5    | 2025-05-24    | COMMUNITY      |
 | MISSION.md                 | v1.9    | 2025-05-24    | COMMUNITY      |
-| METADATA.md                | v2.2    | 2025-07-05    | COMMUNITY      |
-| OSS_REUSE.md               | v1.3    | 2025-06-17    | COMMUNITY      |
+| METADATA.md                | v2.3    | 2025-07-06    | COMMUNITY      |
+| OSS_REUSE.md               | v1.4    | 2025-07-06    | COMMUNITY      |
 | PROJECT_OVERVIEW.md        | v1.6    | 2025-05-24    | COMMUNITY      |
 | Q_DAY.md                   | v1.0    | 2025-05-31    | PRIVATE        |
 | QUEEN_POLICY.md            | v1.0    | 2025-05-19    | PRIVATE        |

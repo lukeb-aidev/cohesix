@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: DEPENDENCIES.md v0.4
+// Filename: DEPENDENCIES.md v0.5
 // Author: Lukas Bower
-// Date Modified: 2025-06-17
+// Date Modified: 2025-07-06
 
 # System Dependencies
 
@@ -31,6 +31,11 @@
 | regex-automata   | 0.4       | crates.io (MIT)   | Deterministic regex engine (utils)        |
 | bytes            | 1.5       | crates.io (MIT)   | Zero‑copy byte buffers (async 9P helper) |
 | p9               | 0.3.2     | crates.io (BSD-3-Clause) | 9P protocol server implementation |
+# Go Dependencies
+
+| Module | Version | Source / License | Purpose |
+|--------|---------|------------------|---------|
+| github.com/spf13/cobra | v1.8.0 | <https://github.com/spf13/cobra> (Apache-2.0) | CLI framework for `cohcli` |
 
 # Tooling Dependencies
 

@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: OSS_REUSE.md v1.3
+// Filename: OSS_REUSE.md v1.4
 // Author: Lukas Bower
-// Date Modified: 2025-06-17
+// Date Modified: 2025-07-06
 
 # OSS REUSE POLICY
 
@@ -46,6 +46,11 @@ Used in: 9P file system server (`cohesix-9p` crate)
 crate: ureq v2.9 — MIT
 https://github.com/algesten/ureq
 Used in: Cloud init HTTP client
+```
+```
+module: github.com/spf13/cobra v1.8.0 — Apache-2.0
+https://github.com/spf13/cobra
+Used in: cohcli command-line interface
 ```
 
 
