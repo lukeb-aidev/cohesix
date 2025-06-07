@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: BUILD_PLAN.md v0.2
-// Date Modified: 2025-06-05
+// Filename: BUILD_PLAN.md v0.3
+// Date Modified: 2025-06-07
 // Author: Lukas Bower
 
 # Build Plan
@@ -30,7 +30,7 @@ This document outlines the step-by-step build strategy for Cohesix, covering nat
    ```
 3. Run tests:
    ```bash
-   cargo test
+   ./test_all_arch.sh
    ```
 4. Generate cross-arch artifacts:
    ```bash
