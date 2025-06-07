@@ -1,7 +1,13 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.15
-// Date Modified: 2025-06-22
+// Filename: CHANGELOG.md v0.16
+// Date Modified: 2025-06-25
 // Author: Lukas Bower
+## [v0.20] - 2025-06-25
+### Added
+- Integrated Rapier physics and CUDA runtime with service traces
+- Expanded 9P multiplexer, seL4 syscall guard and BusyBox shell
+- Added OSS dependency table and integration tests
+
 
 ## [v0.19] - 2025-06-22
 ### Added

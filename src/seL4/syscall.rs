@@ -1,12 +1,10 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: syscall.rs v0.1
+// Filename: syscall.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-06-17
+// Date Modified: 2025-06-25
 
 //! seL4 syscall glue translating Plan 9 style calls into Cohesix runtime actions.
-//! This stub routes basic file operations to the standard library while logging
-//! the current Cohesix role. It is a placeholder for the real microkernel
-//! integration.
+//! Provides minimal capability enforcement based on `ROLE_MANIFEST.md`.
 
 use std::fs::File;
 use std::io::{Read, Write};
@@ -14,10 +12,14 @@ use std::process::Command;
 
 use crate::runtime::env::init::detect_cohrole;
 
+fn role_allows_exec(role: &str) -> bool {
+    matches!(role, "QueenPrimary" | "SimulatorTest")
+}
+
 /// Open a file and return the handle.
 pub fn open(path: &str, flags: u32) -> Result<File, std::io::Error> {
     let role = detect_cohrole();
-    println!("[sel4:{role}] open {} flags={}", path, flags);
+    println!("[sel4:{role}] open {path} flags={flags}");
     File::options().read(true).write(flags & 1 != 0).open(path)
 }
 
@@ -31,17 +33,14 @@ pub fn write(file: &mut File, buf: &[u8]) -> Result<usize, std::io::Error> {
     file.write(buf)
 }
 
-/// Stub implementation of `fork` that simply logs and returns a fake pid.
-pub fn fork() -> Result<u32, String> {
-    let role = detect_cohrole();
-    println!("[sel4:{role}] fork() -> pid 0 (stub)");
-    Ok(0)
-}
-
-/// Execute a command with arguments using the host OS.
+/// Execute a command with arguments using the host OS when allowed.
 pub fn exec(cmd: &str, args: &[&str]) -> Result<(), std::io::Error> {
-    println!("[sel4] exec {} {:?}", cmd, args);
+    let role = detect_cohrole();
+    if !role_allows_exec(&role) {
+        println!("[sel4:{role}] exec denied: {cmd}");
+        return Ok(());
+    }
+    println!("[sel4:{role}] exec {cmd} {:?}", args);
     Command::new(cmd).args(args).spawn()?.wait()?;
     Ok(())
 }
-
