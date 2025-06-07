@@ -1,6 +1,6 @@
 {
   "project": "Cohesix",
-  "version": "0.8-alpha",
+  "version": "0.8-beta",
   "description": "A distributed, role-aware OS built on seL4 with Plan9 userland and CUDA/Rapier acceleration",
   "roles": [
     "QueenPrimary",

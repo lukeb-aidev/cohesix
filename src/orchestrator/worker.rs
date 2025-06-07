@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: worker.rs v0.1
+// Filename: worker.rs v0.2
 // Author: Lukas Bower
 // Date Modified: 2025-07-04
 
@@ -11,8 +11,9 @@
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::orchestrator::protocol::{HealthPing, JoinRequest};
+use crate::orchestrator::protocol::{HealthPing, JoinAck, JoinRequest};
 use rmp_serde::encode::to_vec;
+use rmp_serde::decode::from_read;
 
 /// Basic worker orchestrator helper.
 pub struct Worker {
@@ -46,6 +47,18 @@ impl Worker {
                 let _ = fs::write(format!("{}/ping/{}.res", self.queen_path, self.id), data);
             }
         }
+    }
+
+    /// Check for a join acknowledgement from the Queen.
+    pub fn check_ack(&self) -> Option<JoinAck> {
+        let path = format!("{}/ack/{}.msg", self.queen_path, self.id);
+        if let Ok(mut f) = fs::File::open(&path) {
+            if let Ok(ack) = from_read::<_, JoinAck>(&mut f) {
+                let _ = fs::remove_file(path);
+                return Some(ack);
+            }
+        }
+        None
     }
 }
 

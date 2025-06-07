@@ -7,7 +7,8 @@
 
 use log::debug;
 
-use crate::cohesix_types::Syscall;
+use crate::cohesix_types::{RoleManifest, Syscall};
+use super::validator;
 use super::queue::SyscallQueue;
 
 // === SyscallDispatcher ===
@@ -17,6 +18,10 @@ pub struct SyscallDispatcher;
 impl SyscallDispatcher {
     /// Process a single syscall.
     pub fn dispatch(syscall: Syscall) {
+        let role = RoleManifest::current_role();
+        if !validator::validate("runtime", role.clone(), &syscall) {
+            return;
+        }
         match syscall {
             Syscall::Spawn { program, args } => {
                 debug!("dispatch spawn: {} {:?}", program, args);
