@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.20
-// Date Modified: 2025-07-07
+// Filename: CHANGELOG.md v0.21
+// Date Modified: 2025-07-08
 // Author: Lukas Bower
 ## [v0.31] - 2025-07-07
 ### Changed
@@ -14,6 +14,12 @@
 - Queen federation manager and CLI commands for connect/disconnect
 - Basic distributed orchestrator policies and status export
 - Agent migration helper module and demo federation script
+
+## [v0.33] - 2025-07-08
+### Added
+- GPU swarm scheduler with perf/watt weighting
+- Webcam inference module and CLI `run-inference`
+- Kiosk federation demo scripts
 
 
 ## [v0.29] - 2025-07-06

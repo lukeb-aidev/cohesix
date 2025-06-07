@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: runtime.rs v0.4
+// Filename: runtime.rs v0.5
 // Author: Lukas Bower
-// Date Modified: 2025-07-07
+// Date Modified: 2025-07-08
 
 //! Runtime CUDA integration using dynamic loading of `libcuda.so`.
 //! Falls back gracefully if no CUDA driver is present.
@@ -15,6 +15,7 @@ use std::io::{self, Write};
 /// Wrapper around the CUDA driver library.
 pub struct CudaRuntime {
     lib: Option<Library>,
+    present: bool,
 }
 
 impl CudaRuntime {
@@ -35,8 +36,9 @@ impl CudaRuntime {
             None
         };
 
+        let present = lib.is_some();
         ServiceRegistry::register_service("cuda", "/srv/cuda");
-        Ok(Self { lib })
+        Ok(Self { lib, present })
     }
 }
 
@@ -48,7 +50,7 @@ pub struct CudaExecutor {
 
 impl CudaExecutor {
     pub fn new() -> Self {
-        let rt = CudaRuntime::try_new().unwrap_or_else(|_| CudaRuntime { lib: None });
+        let rt = CudaRuntime::try_new().unwrap_or_else(|_| CudaRuntime { lib: None, present: false });
         Self { rt, kernel: None }
     }
 
@@ -90,5 +92,19 @@ impl CudaExecutor {
             .ok();
         fs::write("/srv/cuda_result", b"ok").map_err(|e| e.to_string())?;
         Ok(())
+    }
+
+    /// Gather telemetry about the CUDA environment.
+    pub fn telemetry(&self) -> crate::telemetry::telemetry::GpuTelemetry {
+        use crate::telemetry::telemetry::GpuTelemetry;
+        if !self.rt.present {
+            return GpuTelemetry { cuda_present: false, ..Default::default() };
+        }
+        GpuTelemetry {
+            cuda_present: true,
+            driver_version: "stub".into(),
+            mem_total: 0,
+            mem_free: 0,
+        }
     }
 }

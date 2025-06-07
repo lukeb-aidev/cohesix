@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: telemetry.rs v1.0
+// Filename: telemetry.rs v1.1
 // Author: Lukas Bower
-// Date Modified: 2025-05-31
+// Date Modified: 2025-07-08
 
 //! Telemetry Core Module
 //!
@@ -46,4 +46,13 @@ pub fn emit_kv(source: &str, kv: &[(&str, &str)]) {
         data,
     };
     emit(record);
+}
+
+/// Snapshot of GPU telemetry metrics.
+#[derive(Debug, Default, Clone)]
+pub struct GpuTelemetry {
+    pub cuda_present: bool,
+    pub driver_version: String,
+    pub mem_total: u64,
+    pub mem_free: u64,
 }
