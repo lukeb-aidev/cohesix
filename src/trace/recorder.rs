@@ -11,6 +11,7 @@
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
+use std::os::unix::net::UnixDatagram;
 use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -40,7 +41,13 @@ fn record(agent: &str, event: &str, detail: &str, ok: bool) {
         detail: detail.into(),
         ok,
     };
-    let _ = writeln!(f, "{}", serde_json::to_string(&ev).unwrap());
+    let line = serde_json::to_string(&ev).unwrap();
+    let _ = writeln!(f, "{}", line);
+    if let Ok(sock) = UnixDatagram::unbound() {
+        if sock.connect("/srv/validator/live.sock").is_ok() {
+            let _ = sock.send(line.as_bytes());
+        }
+    }
 }
 
 /// Spawn a process while recording the event.
