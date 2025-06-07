@@ -1,11 +1,13 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: telemetry.rs v1.0
-// Date Modified: 2025-06-02
+// Filename: telemetry.rs v1.1
+// Date Modified: 2025-06-19
 // Author: Lukas Bower
 
 //! Telemetry service
 
 use super::Service;
+use crate::runtime::ServiceRegistry;
+use crate::telemetry::r#loop::TelemetrySyncLoop;
 
 /// Basic telemetry service that logs events to stdout.
 #[derive(Default)]
@@ -21,6 +23,8 @@ impl Service for TelemetryService {
     fn init(&mut self) {
         self.initialized = true;
         println!("[telemetry] initialized");
+        ServiceRegistry::register_service("telemetry", "/srv/telemetry");
+        TelemetrySyncLoop::spawn();
     }
 
     fn shutdown(&mut self) {

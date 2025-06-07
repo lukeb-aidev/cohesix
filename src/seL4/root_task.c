@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: root_task.c v0.1
 // Author: Lukas Bower
-// Date Modified: 2025-06-18
+// Date Modified: 2025-06-07
 
 /*
  * Simplified seL4 root task stub for Cohesix.
@@ -29,5 +29,18 @@ int main(int argc, char **argv) {
     (void)argc; (void)argv;
     write_role();
     return 0;
+
+
+#include <stddef.h>
+
+extern void coh_load_namespace(void);
+extern void coh_expose_role(const char *role);
+extern const char *coh_boot_role(void);
+
+void root_task_start(void) {
+    const char *role = coh_boot_role();
+    coh_expose_role(role);
+    coh_load_namespace();
+    // kernel continues in Rust
 }
 
