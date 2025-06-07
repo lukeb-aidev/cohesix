@@ -28,6 +28,14 @@ pub mod utils;
 pub mod runtime;
 /// Telemetry subsystem utilities
 pub mod telemetry;
+/// Agent runtime modules
+pub mod agents;
+/// Queen orchestrator modules
+pub mod queen;
+/// Trace recording modules
+pub mod trace;
+/// Physical sensor modules
+pub mod physical;
 
 /// Boot helper modules
 pub mod boot;
