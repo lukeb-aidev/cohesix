@@ -14,6 +14,14 @@
 - **cohesix_types.rs**: shared `Syscall` and `RoleManifest` definitions.
 - **tests/test_syscall_queue.rs**: validates queue ordering and policy enforcement.
 
+## [v0.15] - 2025-06-18
+### Added
+- **cuda/runtime.rs**: dynamic CUDA initialization and `GpuTaskExecutor` trait.
+- **sim/rapier_bridge.rs**: multithreaded Rapier wrapper exposing `/sim` files.
+- **p9/multiplexer.rs**: basic service registration and routing logic.
+- **shell/busybox_runner.rs**: spawn BusyBox shell with kernel fallback.
+- **tests/test_gpu_and_sim.rs**: validates GPU kernel launch and sim state.
+
 ## [v0.12] - 2025-06-05
 ### Added
 - **verify-macos-setup.sh**: helper script validating Homebrew, Xcode tools,
