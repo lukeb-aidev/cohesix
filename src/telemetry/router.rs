@@ -5,12 +5,12 @@
 
 //! Telemetry routing and collection utilities.
 
+use log::debug;
 use std::thread::sleep;
 use std::time::Duration;
-use log::debug;
-use sysinfo::{System, SystemExt, CpuExt};
+use sysinfo::{CpuRefreshKind, RefreshKind, System};
 
-use crate::cohesix_types::{RoleManifest, Role};
+use crate::cohesix_types::{Role, RoleManifest};
 use cohesix_9p::fs::InMemoryFs;
 
 /// Runtime telemetry metrics.
@@ -39,8 +39,9 @@ pub struct BasicTelemetryRouter {
 
 impl Default for BasicTelemetryRouter {
     fn default() -> Self {
+        let rk = RefreshKind::new().with_cpu(CpuRefreshKind::everything());
         Self {
-            sys: System::new(),
+            sys: System::new_with_specifics(rk),
             fs: InMemoryFs::default(),
             role: RoleManifest::current_role(),
         }
@@ -49,10 +50,7 @@ impl Default for BasicTelemetryRouter {
 
 impl BasicTelemetryRouter {
     fn read_temperature() -> Option<f32> {
-        let candidates = [
-            "/tmp/ina226_mock",
-            "/sys/class/hwmon/hwmon0/temp1_input",
-        ];
+        let candidates = ["/tmp/ina226_mock", "/sys/class/hwmon/hwmon0/temp1_input"];
         for path in candidates.iter() {
             if let Ok(contents) = std::fs::read_to_string(path) {
                 if let Ok(milli) = contents.trim().parse::<f32>() {
@@ -66,12 +64,15 @@ impl BasicTelemetryRouter {
 
 impl TelemetryRouter for BasicTelemetryRouter {
     fn gather_metrics(&mut self) -> TelemetryMetrics {
-        self.sys.refresh_cpu();
+        self.sys.refresh_cpu_usage();
         sleep(Duration::from_millis(100));
-        self.sys.refresh_cpu();
+        self.sys.refresh_cpu_usage();
         let cpu_usage = self.sys.global_cpu_info().cpu_usage();
         let temperature = Self::read_temperature();
-        TelemetryMetrics { cpu_usage, temperature }
+        TelemetryMetrics {
+            cpu_usage,
+            temperature,
+        }
     }
 
     fn expose_metrics(&self, metrics: &TelemetryMetrics) {
@@ -79,4 +80,3 @@ impl TelemetryRouter for BasicTelemetryRouter {
         debug!("role {:?} metrics: {:?}", self.role, metrics);
     }
 }
-

@@ -17,6 +17,7 @@ pub struct DiagnosticEntry {
 }
 
 /// Enum representing the severity of a diagnostic event.
+#[derive(Debug)]
 pub enum DiagnosticLevel {
     Info,
     Warning,

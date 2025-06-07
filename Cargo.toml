@@ -13,6 +13,8 @@ clap = { version = "4.5.4", features = ["derive"] }
 sysinfo = "0.30"
 libloading = "0.7"
 rapier3d = "0.17.2"
+once_cell = "1"
+cohesix-9p = { path = "cohesix-9p" }
 
 [workspace]
 members = ["cohesix-9p"]
