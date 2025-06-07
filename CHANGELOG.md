@@ -7,6 +7,11 @@
 ### Added
 - Documented cobra Go dependency under Apache-2.0
 
+## [v0.30] - 2025-06-07
+### Added
+- `test_all_arch.sh` script for running Rust, Go, and Python tests across architectures.
+- Documented usage in README and BUILD_PLAN.
+
 ## [v0.28] - 2025-07-05
 ### Added
 - Failover manager with automatic Queen promotion
