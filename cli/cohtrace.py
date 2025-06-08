@@ -56,13 +56,14 @@ def main():
         push_trace(args.worker_id, Path(args.path))
     elif args.cmd == "kiosk_ping":
         path = Path("/srv/kiosk_federation.json")
-        data = {"pings": []}
+        events = []
         if path.exists():
-            import json
-            data = json.loads(path.read_text())
-        import time, json
-        data.setdefault("pings", []).append(int(time.time()))
-        path.write_text(json.dumps(data))
+            try:
+                events = json.loads(path.read_text())
+            except Exception:
+                events = []
+        events.append({"timestamp": int(time.time()), "event": "ping"})
+        path.write_text(json.dumps(events))
         print("kiosk ping logged")
     elif args.cmd == "trust_check":
         base = Path("/srv/trust_zones")

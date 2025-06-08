@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: cli.md v0.2
+// Filename: cli.md v0.3
 // Author: Lukas Bower
-// Date Modified: 2025-06-07
+// Date Modified: 2025-07-12
 
 # Cohesix CLI Guide
 
@@ -29,4 +29,22 @@ cohup join --peer queenB
 Display known queen peers.
 ```
 cohup list-peers
+```
+
+## cohrun kiosk_start
+Deploy the latest kiosk UI bundle locally.
+```
+cohrun kiosk_start
+```
+
+## cohrun kiosk_event
+Log a kiosk interaction event.
+```
+cohrun kiosk_event --event card_insert --user X123
+```
+
+## cohtrace kiosk_ping
+Emit a ping event for federation testing.
+```
+cohtrace kiosk_ping
 ```
