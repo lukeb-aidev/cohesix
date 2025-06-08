@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: METADATA.md v3.0
+// Filename: METADATA.md v3.1
 // Author: Lukas Bower
 // Date Modified: 2025-07-13
 
@@ -89,3 +89,4 @@
 | ifconfig.8                | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
 | ip.8                      | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
 | preview_man.sh            | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
+| ALPHA_VALIDATION_ISSUES.md | v0.1    | 2025-07-13    | COMMUNITY      |     |              |
