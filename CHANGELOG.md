@@ -474,3 +474,7 @@
 - Webcam capture telemetry logging and dummy fallback.
 - Real sensor input with optional mock injection.
 - Tests for device attach/detach, validator logging, and webcam fallback.
+
+## [v0.56] - 2025-07-14
+### Added
+- `autorun_tests.py` script for automatic test execution on file changes.
