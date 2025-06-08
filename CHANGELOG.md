@@ -1,7 +1,11 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.31
+// Filename: CHANGELOG.md v0.32
 // Date Modified: 2025-07-12
 // Author: Lukas Bower
+## [v0.51] - 2025-07-12
+### Changed
+- Removed prebuilt mandoc binaries and added build script.
+
 ## [v0.50] - 2025-07-12
 ### Added
 - CLI help docs for cohcli, cohrun, cohtrace, cohcc, and cohcap.

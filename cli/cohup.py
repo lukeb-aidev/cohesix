@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # CLASSIFICATION: COMMUNITY
-# Filename: cohup.py v0.1
+# Filename: cohup.py v0.2
 # Author: Lukas Bower
-# Date Modified: 2025-07-05
+# Date Modified: 2025-07-12
 
 """cohup – live patching utility."""
 
@@ -13,6 +13,7 @@ from pathlib import Path
 
 def parse_args():
     parser = argparse.ArgumentParser(description="cohup patch tool")
+    parser.add_argument("--man", action="store_true", help="Show man page")
     sub = parser.add_subparsers(dest="command")
     patch_cmd = sub.add_parser("patch", help="Apply a live patch")
     patch_cmd.add_argument("target")
@@ -22,6 +23,10 @@ def parse_args():
 
 def main():
     args = parse_args()
+    if getattr(args, "man", False):
+        man = os.path.join(os.path.dirname(__file__), "../bin/man")
+        page = os.path.join(os.path.dirname(__file__), "../docs/man/cohup.1")
+        os.execv(man, [man, page])
     if args.command == "patch":
         apply_patch(args.target, args.binary)
     else:

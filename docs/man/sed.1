@@ -1,0 +1,26 @@
+.TH "sed" 1
+.SH NAME
+sed
+.SH SYNOPSIS
+sed [OPTIONS]
+.SH DESCRIPTION
+Usage: sed [OPTION]\.\.\. {script-only-if-no-other-script} [input-file]\.\.\.
+
+  -n, --quiet, --silent
+                 suppress automatic printing of pattern space
+      --debug
+                 annotate program execution
+  -e script, --expression=script
+                 add the script to the commands to be executed
+  -f script-file, --file=script-file
+                 add the contents of script-file to the commands to be executed
+  --follow-symlinks
+                 follow symlinks when processing in place
+  -i[SUFFIX], --in-place[=SUFFIX]
+                 edit files in place (makes backup if SUFFIX supplied)
+  -l N, --line-length=N
+                 specify the desired line-wrap length for the `l' command
+  --posix
+                 disable all GNU extensions\.
+  -E, -r, --regexp-extended
+                 use extended regular expressions in the script
