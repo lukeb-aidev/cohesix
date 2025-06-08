@@ -2,6 +2,12 @@
 // Filename: CHANGELOG.md v0.30
 // Date Modified: 2025-07-12
 // Author: Lukas Bower
+## [v0.48] - 2025-07-12
+### Added
+- Real-time sensor feedback via `sensor_proxy.py` and `normalizer.py`.
+- Live rule injection CLI `cohrun inject_rule` and validator `--live` mode.
+- Demo script `demo_sensor_feedback.sh` and validator test.
+
 ## [v0.47] - 2025-07-12
 ### Added
 - `watchdogd` background daemon monitoring heartbeat, tasks, and trace loop.
