@@ -1,53 +1,63 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: AGENTS.md v1.5
-// Date Modified: 2025-06-05
+// Filename: AGENTS.md v2.0
 // Author: Lukas Bower
+// Date Modified: 2025-07-11
 
-# Codex Agent Definitions
+# Codex Agent Definitions (Batch Enabled)
 
-This file defines all AI-driven agents (via `cohcli codex`) used by the Cohesix project. Each agent is designed for a small, testable batch of work that composes reliably into the overall system.
-
-The [README](../../README.md) outlines an incremental philosophy: Cohesix evolves
-through clearly versioned batches. Agents must reflect this by focusing on a
-single batch or sub-batch and committing small, reviewable changes. See
-[`STATUS_UPDATE_GUIDE.md`](STATUS_UPDATE_GUIDE.md) for the 3‑hour update cadence
-that governs when such commits are surfaced.
+This document defines all AI-driven agents for the Cohesix project.  Version 2.0 expands agent abilities to run large, autonomous batches spanning multiple modules and architectures.  Agents may now generate up to an entire milestone of work in one run if validation hooks succeed.
 
 ---
 
 ## Schema
 
-Each entry must adhere to this YAML schema:
+Each entry adheres to this YAML schema.
 
 ```yaml
-- id: <string>                   # unique agent identifier
-  role: <string>                 # permission context (e.g. 'codegen', 'testing')
-  description: <string>          # clear summary of agent’s purpose
-  language: <string>             # optional language context for Codex optimization
-  batch: <string, array>        # relevant work batches from BATCH_PLAN
-  prompt_template:              # template with placeholders
-    system: <string>            # system-level instruction
-    user: <string>              # user-level task prompt
-  input_schema: <JSON-schema>    # JSON Schema for agent inputs
-  output_schema: <JSON-schema>   # JSON Schema for expected outputs
-  test_cases:                    # list of validation cases
+- id: <string>
+  role: <string>                 # permission context
+  description: <string>
+  language: <string>
+  batch: <string, array>
+  batch_class: <string>          # minor, major, multi-arch, or demo-critical
+  prompt_template:
+    system: <string>
+    user: <string>
+  input_schema: <JSON-schema>
+  output_schema: <JSON-schema>
+  test_cases:
     - name: <string>
       input: <JSON object>
       expected_output: <JSON object>
-# retries:
-#   max_attempts: 3
-#   backoff_ms: 500
+  metadata:
+    CODEX_BATCH: YES             # indicates Codex-generated batch
+    BATCH_ORIGIN: <string>       # optional URI for upstream trace
+    BATCH_SIZE: <integer>        # number of files in batch
 ```
 
-Example:
+Expanded trust boundaries allow an agent to write all files for a milestone once `validate_metadata_sync.py` and other CI hooks pass.  Agents must log to `codex_logs/` and embed `CODEX_BATCH: YES` in metadata for traceability.
 
-```yaml
-id: example_agent
-batch: C3
-role: codegen
-language: rust
-... # remaining fields
-```
+---
+
+## Batch Classifications
+
+| Class          | Expectation                                                             |
+|----------------|-------------------------------------------------------------------------|
+| minor          | Few files, low risk. Basic CI must pass.                                |
+| major          | Significant module work. Requires full test suite and CHANGELOG entry.   |
+| multi-arch     | Affects code built on multiple architectures. Run `test_all_arch.sh`.    |
+| demo-critical  | Impacts demo or release branches. Requires human approval after CI.      |
+
+---
+
+## Checkpointing & Recovery
+
+Codex checkpoints after every 10 files generated.  At each checkpoint the agent:
+1. Validates file structure and metadata.
+2. Records a trace entry with GPT model version.
+3. Pushes the partial batch if CI passes.
+
+If a crash occurs mid-batch, the hydration log under `codex_logs/batch_<timestamp>.log` allows replay with `tools/replay_batch.sh`.
 
 ---
 
@@ -59,7 +69,11 @@ id: scaffold_service
 role: codegen
 language: rust
 batch: C4
-description: Generates a new service module stub with boilerplate (imports, struct, trait impl).
+batch_class: minor
+metadata:
+  CODEX_BATCH: YES
+  BATCH_SIZE: 1
+  BATCH_ORIGIN: "https://cohesix.io/batches/C4"
 prompt_template:
   system: |-
     You are a code generator for the Cohesix project. Generate Rust code stub for a new service module.
@@ -105,7 +119,11 @@ id: add_cli_option
 role: codegen
 language: rust
 batch: C3
-description: Appends a new CLI argument to the `clap` parser in `src/cli/args.rs`.
+batch_class: minor
+metadata:
+  CODEX_BATCH: YES
+  BATCH_SIZE: 1
+  BATCH_ORIGIN: "https://cohesix.io/batches/C3"
 prompt_template:
   system: |-
     You are maintaining the Cohesix CLI. Add a new argument to the existing `clap` setup.
@@ -160,11 +178,16 @@ test_cases:
 ```
 
 ### 3. `add_pass`
+```yaml
 id: add_pass
 role: codegen
 language: rust
 batch: C4
-description: Adds a new IR pass registration to the `PassManager` pipeline in `src/pass_framework/mod.rs`.
+batch_class: major
+metadata:
+  CODEX_BATCH: YES
+  BATCH_SIZE: 1
+  BATCH_ORIGIN: "https://cohesix.io/batches/C4"
 prompt_template:
   system: |-
     You are maintaining the Cohesix IR pass framework. Insert code to register a new pass.
@@ -206,11 +229,16 @@ test_cases:
 ```
 
 ### 4. `run_pass`
+```yaml
 id: run_pass
 role: testing
 language: rust
 batch: C4
-description: Generates a test harness for running a specified IR pass against example IR data.
+batch_class: minor
+metadata:
+  CODEX_BATCH: YES
+  BATCH_SIZE: 1
+  BATCH_ORIGIN: "https://cohesix.io/batches/C4"
 prompt_template:
   system: |-
     You are writing tests for the Cohesix IR pass framework.
@@ -249,11 +277,16 @@ test_cases:
 ```
 
 ### 5. `validate_metadata`
+```yaml
 id: validate_metadata
 role: testing
 language: shell
 batch: C5
-description: Executes the metadata synchronization check and reports discrepancies.
+batch_class: minor
+metadata:
+  CODEX_BATCH: YES
+  BATCH_SIZE: 1
+  BATCH_ORIGIN: "https://cohesix.io/batches/C5"
 prompt_template:
   system: |-
     You are responsible for ensuring METADATA.md matches all canonical documents.
@@ -279,11 +312,16 @@ test_cases:
 ```
 
 ### 6. `hydrate_docs`
+```yaml
 id: hydrate_docs
 role: codegen
 language: rust
 batch: D4
-description: Generates missing canonical docs stubs under `docs/community` or `docs/private`.
+batch_class: major
+metadata:
+  CODEX_BATCH: YES
+  BATCH_SIZE: 1
+  BATCH_ORIGIN: "https://cohesix.io/batches/D4"
 prompt_template:
   system: |-
     You are auto-generating canonical document stubs for Cohesix.
@@ -314,17 +352,11 @@ test_cases:
 
 ## Expert Panel Review Notes
 
-1. **Error Handling:** Agents must validate inputs against `input_schema` before prompting to avoid ambiguous outputs.  
-2. **Prompt Clarity:** Split prompts into `system` and `user` contexts to leverage OpenAI’s role separation.  
-3. **Test Isolation:** Each `test_case` must run independently; mock file system where necessary.  
-4. **Edge Cases:** Include tests for invalid inputs to ensure agents fail gracefully.  
-5. **Versioning:** Bump `vX.Y` on any change and update `Date Modified`.  
-6. **Orchestration Sequencing:** Ensure multi-agent workflows chain reliably; define clear hand-off inputs and outputs.  
-7. **Timeouts & Retries:** Enforce per-agent execution time limits and retry logic for transient API failures.  
-8. **Logging & Audit Trails:** Agents must emit logs in `codex_logs/` for each step, including request and response.  
-9. **Version Control:** Update agent `vX.Y` and `Date Modified` on every change; maintain CHANGELOG.md entries.  
-10. Language Context: Include a `language` field for Codex routing optimizations (e.g., Rust, Shell).
+1. Agents must validate inputs before prompting and respect the new batch classifications.
+2. Prompt context is split into `system` and `user` fields.
+3. Checkpoints are mandatory every 10 files; batches may span multiple architectures as specified by `batch_class`.
+4. The hydration log is replayable to recover mid-batch failures.
+5. Bump `vX.Y` and update `Date Modified` on every change; log GPT model version per batch.
+6. All agents emit logs in `codex_logs/` including request and response for audit.
 
----
-
-End of `AGENTS.md` — ensures bulletproof, small‐batch, testable agents for the Cohesix AI pipeline.
+End of `AGENTS.md` — large-batch capable agents for the Cohesix AI pipeline.
