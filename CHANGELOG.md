@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.34
+// Filename: CHANGELOG.md v0.35
 // Date Modified: 2025-07-13
 
 ## [v0.53] - 2025-07-13
@@ -446,3 +446,11 @@
 ## [v0.54] - 2025-07-13
 ### Added
 - ALPHA_VALIDATION_ISSUES.md documenting release blockers.
+
+## [v0.55] - 2025-07-13
+### Added
+- `cohesix_netd` network daemon with TCP 9P, discovery and HTTP fallback.
+- Documentation `NETWORKING.md`.
+### Changed
+- Updated METADATA to include `NETWORKING.md`.
+- Document clarified broadcast fallback behavior.
