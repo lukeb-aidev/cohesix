@@ -8,6 +8,8 @@
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
+use chrono::Utc;
+use std::process;
 
 use crate::runtime::env::init::detect_cohrole;
 
@@ -18,6 +20,12 @@ fn allowed_cmd(role: &str, cmd: &str) -> bool {
         "KioskInteractive" => matches!(cmd, "echo" | "ls" | "mount" | "cat"),
         _ => false,
     }
+}
+
+fn log_event(log: &mut std::fs::File, event: &str) {
+    let ts = Utc::now().to_rfc3339();
+    let pid = process::id();
+    let _ = writeln!(log, "[{} pid={}] {}", ts, pid, event);
 }
 
 /// Launch BusyBox shell reading from `/dev/console` and writing to `/srv/shell_out`.
@@ -43,8 +51,15 @@ pub fn spawn_shell() {
         .create(true)
         .append(true)
         .open("/log/session.log")
+        .or_else(|_| {
+            fs::create_dir_all("/srv/trace").ok();
+            OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("/srv/trace/session.log")
+        })
         .unwrap();
-    let _ = writeln!(log, "SESSION START {}", role);
+    log_event(&mut log, &format!("SESSION START {}", role));
 
 
     let mut line = String::new();
@@ -55,7 +70,7 @@ pub fn spawn_shell() {
             continue;
         }
         let cmd = tokens[0];
-        let _ = writeln!(log, "CMD {}", line.trim_end());
+        log_event(&mut log, &format!("CMD {}", line.trim_end()));
         if allowed_cmd(&role, cmd) {
             let output = Command::new("/bin/busybox").args(&tokens).output();
             if let Ok(out) = output {
@@ -68,6 +83,6 @@ pub fn spawn_shell() {
         }
         line.clear();
     }
-    let _ = writeln!(log, "SESSION STOP {}", role);
+    log_event(&mut log, &format!("SESSION STOP {}", role));
     let _ = child.wait();
 }
