@@ -6,6 +6,10 @@
 //! Sandbox enforcement service
 
 use super::Service;
+use crate::security::capabilities;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::process;
 
 #[derive(Default)]
 pub struct SandboxService {
@@ -31,10 +35,27 @@ impl Service for SandboxService {
 }
 
 impl SandboxService {
-    /// Simple check that prints the command to be executed.
-    pub fn check_command(&self, cmd: &str) {
-        if self.active {
-            println!("[sandbox] checking command: {}", cmd);
+    fn log_violation(&self, verb: &str, path: &str, role: &str) {
+        fs::create_dir_all("/log").ok();
+        if let Ok(mut f) = OpenOptions::new().create(true).append(true).open("/log/sandbox.log") {
+            let _ = writeln!(
+                f,
+                "blocked action={verb} path={path} pid={} role={role}",
+                process::id()
+            );
         }
     }
+
+    /// Enforce a syscall verb/path for the given role.
+    pub fn enforce(&self, verb: &str, path: &str, role: &str) -> bool {
+        if !self.active {
+            return true;
+        }
+        let allowed = capabilities::role_allows(role, verb, path);
+        if !allowed {
+            self.log_violation(verb, path, role);
+        }
+        allowed
+    }
 }
+

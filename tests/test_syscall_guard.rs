@@ -11,5 +11,5 @@ fn exec_denied_for_worker() {
     fs::create_dir_all("srv").unwrap();
     fs::write("/srv/cohrole", "DroneWorker").unwrap();
     let res = exec("echo", &["hi"]);
-    assert!(res.is_ok());
+    assert!(res.is_err());
 }

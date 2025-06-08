@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: SECURITY_REVIEW.md v0.1
+// Filename: SECURITY_REVIEW.md v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-07-11
+// Date Modified: 2025-07-13
 
 # Cohesix Security Review Summary
 
@@ -36,4 +36,12 @@ alignment with seL4 principles and adherence to OWASP development guidelines.
 1. Schedule quarterly seL4 proof refreshes after major patch sets.
 2. Expand fuzz testing for 9P protocol handlers.
 3. Document incident response playbooks in `SECURITY_POLICY.md`.
+
+## July 2025 Updates
+
+- Sandbox service now enforces syscalls using `/etc/cohcap.json` and logs
+  blocked actions to `/log/sandbox.log` with PID and `cohrole`.
+- FFI entry points loaded via `libloading` are wrapped by the validator and
+  unknown symbols are rejected.
+
 

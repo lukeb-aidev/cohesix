@@ -6,3 +6,4 @@
 //! Physical environment modules.
 
 pub mod sensors;
+pub mod joystick;

@@ -24,7 +24,10 @@ fn allowed_cmd(role: &str, cmd: &str) -> bool {
 pub fn spawn_shell() {
     let role = detect_cohrole();
     let console = OpenOptions::new().read(true).write(true).open("/dev/console");
-    let stdin = console.as_ref().map(|f| Stdio::from(f.try_clone().unwrap())).unwrap_or(Stdio::null());
+    let stdin = console
+        .as_ref()
+        .map(|f| Stdio::from(f.try_clone().unwrap()))
+        .unwrap_or(Stdio::null());
     let mut child = Command::new("/bin/busybox")
         .arg("sh")
         .stdin(stdin)
@@ -35,12 +38,24 @@ pub fn spawn_shell() {
     let mut console = console.unwrap();
     let mut reader = BufReader::new(console.try_clone().unwrap());
     fs::create_dir_all("/srv").ok();
+    fs::create_dir_all("/log").ok();
+    let mut log = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/log/session.log")
+        .unwrap();
+    let _ = writeln!(log, "SESSION START {}", role);
+
 
     let mut line = String::new();
     while reader.read_line(&mut line).ok().filter(|n| *n > 0).is_some() {
         let tokens: Vec<&str> = line.split_whitespace().collect();
-        if tokens.is_empty() { continue; }
+        if tokens.is_empty() {
+            line.clear();
+            continue;
+        }
         let cmd = tokens[0];
+        let _ = writeln!(log, "CMD {}", line.trim_end());
         if allowed_cmd(&role, cmd) {
             let output = Command::new("/bin/busybox").args(&tokens).output();
             if let Ok(out) = output {
@@ -53,5 +68,6 @@ pub fn spawn_shell() {
         }
         line.clear();
     }
+    let _ = writeln!(log, "SESSION STOP {}", role);
     let _ = child.wait();
 }

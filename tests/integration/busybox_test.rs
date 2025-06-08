@@ -15,3 +15,17 @@ fn busybox_ls_prints_files() {
     // run command
     busybox::run_command("ls", &[]);
 }
+
+#[test]
+fn busybox_cat_works() {
+    use std::fs;
+    let path = "/tmp/bb_test.txt";
+    fs::write(path, "hi").unwrap();
+    busybox::run_command("cat", &[path]);
+    let _ = fs::remove_file(path);
+}
+
+#[test]
+fn busybox_uptime_works() {
+    busybox::run_command("uptime", &[]);
+}

@@ -98,6 +98,14 @@ for ARCH in "${ARCHES[@]}"; do
                  --disable FEATURE_MOUNT_LABEL \
                  --enable CONFIG_STATIC  > /dev/null || true
 
+  # Include additional utilities
+  scripts/config    -e FINGER \
+                    -e LAST \
+                    -e FREE \
+                    -e TOP \
+                    -e DF \
+                    -e WHO >/dev/null || true
+
   # Ensure static & tiny
   sed -i 's/# CONFIG_STATIC is not set/CONFIG_STATIC=y/' .config
   make olddefconfig >/dev/null
