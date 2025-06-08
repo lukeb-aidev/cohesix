@@ -1,0 +1,9 @@
+#!/bin/sh
+ARCH=$(uname -m)
+DIR="$(dirname "$0")/../prebuilt/mandoc"
+BIN="$DIR/mandoc.$ARCH"
+if [ ! -x "$BIN" ]; then
+    echo "mandoc binary missing for $ARCH. Run scripts/build_mandoc.sh" >&2
+    exit 1
+fi
+exec "$BIN" "$@"
