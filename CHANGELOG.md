@@ -1,4 +1,14 @@
 // CLASSIFICATION: COMMUNITY
+// Filename: CHANGELOG.md v0.28
+// Date Modified: 2025-07-11
+// Author: Lukas Bower
+## [v0.43] - 2025-07-11
+### Changed
+- Verified batch statuses against repository; all modules compile and tests pass.
+## [v0.42] - 2025-07-11
+### Changed
+- Updated BATCH_PLAN.md to v0.6 with current batch statuses.
+
 // Filename: CHANGELOG.md v0.27
 // Date Modified: 2025-07-11
 // Author: Lukas Bower
