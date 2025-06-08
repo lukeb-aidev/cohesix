@@ -56,4 +56,9 @@ impl Module {
     pub fn validate(&self) -> bool {
         true // stub: always valid for now
     }
+
+    /// Return a textual representation of the module using the IR printer.
+    pub fn print_ir(&self) -> String {
+        crate::ir::printer::print_module(self)
+    }
 }
