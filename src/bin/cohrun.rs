@@ -35,6 +35,7 @@ enum Commands {
     },
     TrustEscalate { worker_id: String },
     TrustReport,
+    FederateWith { queen_url: String },
 }
 
 #[derive(Subcommand)]
@@ -147,6 +148,17 @@ fn main() {
         Commands::TrustReport => {
             for (w, lvl) in cohesix::queen::trust::list_trust() {
                 println!("{}: {}", w, lvl);
+            }
+        }
+        Commands::FederateWith { queen_url } => {
+            if let Ok(mut fm) = cohesix::queen::federation::FederationManager::new(
+                &hostname::get().unwrap_or_default().to_string_lossy(),
+            ) {
+                if let Err(e) = fm.connect(&queen_url) {
+                    println!("federation failed: {e}");
+                } else {
+                    println!("handshake sent to {queen_url}");
+                }
             }
         }
     }

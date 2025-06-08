@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: federation.rs v0.1
+// Filename: federation.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-07-07
+// Date Modified: 2025-07-12
 
 //! Queen-to-Queen federation manager.
 //!
@@ -41,6 +41,8 @@ impl FederationManager {
     /// Create a new federation manager for the given queen id.
     pub fn new(id: &str) -> anyhow::Result<Self> {
         let kr = Keyring::load_or_generate(id)?;
+        let dir = format!("/srv/{id}");
+        fs::create_dir_all(&dir).ok();
         Ok(Self { id: id.into(), kr, registry: FederationRegistry::default() })
     }
 
