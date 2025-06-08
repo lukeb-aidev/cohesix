@@ -10,7 +10,7 @@
 | AGENTS.md                  | v2.0    | 2025-07-11    | COMMUNITY      |            |              |
 | ARCHITECTURE.md            | v0.3    | 2025-05-31    | PRIVATE        |            |              |
 | BATCH_PLAN.md              | v0.5    | 2025-06-05    | COMMUNITY      |            |              |
-| BUILD_PLAN.md              | v0.3    | 2025-06-07    | COMMUNITY      |            |              |
+| BUILD_PLAN.md              | v0.4    | 2025-07-11    | COMMUNITY      |            |              |
 | COMMERCIAL_PLAN.md         | v1.3    | 2025-05-24    | PRIVATE        |            |              |
 | DEPENDENCIES.md            | v0.5    | 2025-07-06    | COMMUNITY      |            |              |
 | END_USER_DEMOS.md          | v0.1    | 2025-06-05    | COMMUNITY      |            |              |
@@ -41,4 +41,7 @@
 | PHYSICAL_AGENT_POLICY.md   | v0.1    | 2025-07-05    | PRIVATE        |            |              |
 | TRACE_CONSENSUS.md         | v0.1    | 2025-07-05    | COMMUNITY      |            |              |
 | SECURITY_REVIEW.md         | v0.1    | 2025-07-11    | COMMUNITY      |     |              |
+| COMPILER_REVIEW.md         | v0.1    | 2025-07-11    | COMMUNITY      |          |              
 | WEBCAM_TILT.md | v0.1 | 2025-07-11 | COMMUNITY | | |
+| GPU_SWARM.md              | v0.1    | 2025-07-11    | COMMUNITY      |            |              |
+| KIOSK_FEDERATION.md       | v0.1    | 2025-07-11    | COMMUNITY      |            |             
