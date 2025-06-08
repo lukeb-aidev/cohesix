@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: END_USER_DEMOS.md v0.2
+// Filename: END_USER_DEMOS.md v0.3
 // Author: Lukas Bower
 // Date Modified: 2025-07-12
 
@@ -79,7 +79,17 @@
 
 ---
 
-## \ud83c\udf81 8. Multi-Agent Physics Duel
+## \ud83d\udccd 8. Sensor-Driven World Adaptation Demo
+
+**Scenario:** Live sensors affect an agent's goal-seeking behavior in real time.**
+
+**Demo:** A Worker streams accelerometer and temperature data. Sudden movement triggers rule injection to ban sharp turns. The validator enforces the new rule and records the event.
+
+**Wow Factor:** Physical interaction instantly changes agent decisions and validator rules.
+
+---
+
+## \ud83c\udf81 9. Multi-Agent Physics Duel
 
 **Scenario:** Two Workers simulate competing agents (e.g. Tilt Duel). Queen governs the scenario.
 
@@ -89,7 +99,7 @@
 
 ---
 
-## \ud83c\udfae 9. Codex-Triggered Demo via CLI
+## \ud83c\udfae 10. Codex-Triggered Demo via CLI
 
 **Scenario:** Codex CLI sends commands to Queen to start a scenario on the Worker.
 
@@ -99,7 +109,7 @@
 
 ---
 
-## \ud83c\udf10 10. Home Worker on NAT, Auto-Attach
+## \ud83c\udf10 11. Home Worker on NAT, Auto-Attach
 
 **Scenario:** A user runs a Worker on home Wi-Fi. No static IP or config needed.
 
@@ -109,7 +119,7 @@
 
 ---
 
-## \ud83d\udfe1 11. Offline Edge Resilience
+## \ud83d\udfe1 12. Offline Edge Resilience
 
 **Scenario:** The Queen becomes unreachable mid-session.
 
