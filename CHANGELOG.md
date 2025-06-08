@@ -1,7 +1,14 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.29
+// Filename: CHANGELOG.md v0.30
 // Date Modified: 2025-07-12
 // Author: Lukas Bower
+## [v0.47] - 2025-07-12
+### Added
+- `watchdogd` background daemon monitoring heartbeat, tasks, and trace loop.
+- Edge-only fallback coordinator promoting a Worker when the Queen disappears.
+- Role memory persistence with CLI `cohrun trace_replay`.
+- Demo script `demo_edge_failover.sh` and regression test for failover traces.
+
 ## [v0.46] - 2025-07-12
 ### Added
 - OSS audit toolchain and demo SBOM artefacts.

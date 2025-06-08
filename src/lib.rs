@@ -91,6 +91,8 @@ pub mod orchestrator;
 /// Federation utilities
 pub mod federation;
 pub mod validator;
+/// Watchdog daemon module
+pub mod watchdogd;
 
 /// Bootloader subcrate utilities
 pub mod bootloader;

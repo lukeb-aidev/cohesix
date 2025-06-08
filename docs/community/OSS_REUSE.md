@@ -116,3 +116,8 @@ crate: image v0.25.6 — MIT OR Apache-2.0
 https://github.com/image-rs/image
 Used in: Webcam capture JPEG encoding
 ```
+```
+crate: chrono v0.4 — MIT OR Apache-2.0
+https://github.com/chronotope/chrono
+Used in: Watchdog timestamping
+```

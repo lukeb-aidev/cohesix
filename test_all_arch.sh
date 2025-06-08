@@ -21,3 +21,4 @@ cd "$ROOT_DIR"
 cargo test --workspace
 GOWORK="$(pwd)/go/go.work" go test ./go/...
 pytest -q
+bash tests/demo_edge_failover.sh

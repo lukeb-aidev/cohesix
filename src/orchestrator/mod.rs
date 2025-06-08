@@ -13,3 +13,4 @@ pub mod queen;
 pub mod worker;
 pub mod federation;
 pub mod failover;
+pub mod edge_fallback;

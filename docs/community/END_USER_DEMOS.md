@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: END_USER_DEMOS.md v0.1
+// Filename: END_USER_DEMOS.md v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-06-05
+// Date Modified: 2025-07-12
 
 # Cohesix End User Demos
 
@@ -106,6 +106,16 @@
 **Demo:** Worker discovers Queen in cloud and joins securely via rendezvous service. Namespace appears in Queen within 3 seconds.
 
 **Wow Factor:** Zero-config edge-to-cloud bootstrapping. "It just works."
+
+---
+
+## \ud83d\udfe1 11. Offline Edge Resilience
+
+**Scenario:** The Queen becomes unreachable mid-session.
+
+**Demo:** A Worker automatically promotes itself to `EdgeFallbackCoordinator` and serves cached SLMs locally. Once the Queen returns, the worker hands control back.
+
+**Wow Factor:** Seamless continuity even when cloud connectivity drops.
 
 ---
 
