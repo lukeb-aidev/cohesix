@@ -8,6 +8,7 @@
 use crate::cohesix_types::{Role, RoleManifest};
 use crate::runtime::ServiceRegistry;
 use v4l::prelude::*;
+use crate::webcam::capture;
 use super::Service;
 
 /// Webcam frame streaming service.
@@ -32,6 +33,10 @@ impl Service for WebcamService {
                 }
             }
             std::fs::create_dir_all("/srv/webcam").ok();
+            let frame_path = "/srv/webcam/frame.jpg";
+            if capture::capture_jpeg(frame_path).is_ok() {
+                println!("[webcam] captured initial frame");
+            }
             ServiceRegistry::register_service("webcam", "/srv/webcam");
         } else {
             println!("[webcam] service disabled for role {role:?}");

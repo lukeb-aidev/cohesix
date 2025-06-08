@@ -110,3 +110,9 @@ BusyBox is compiled as a standalone static binary executed in its own sandboxed
 process. No BusyBox object code is linked into Cohesix user applications.
 The seL4 microkernel is loaded as a separate image and interacts with user
 space solely via IPC, keeping GPL code isolated from MIT/BSD components.
+
+```
+crate: image v0.25.6 — MIT OR Apache-2.0
+https://github.com/image-rs/image
+Used in: Webcam capture JPEG encoding
+```
