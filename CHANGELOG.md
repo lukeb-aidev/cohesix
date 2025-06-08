@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.33
+// Filename: CHANGELOG.md v0.34
 // Date Modified: 2025-07-13
 
 ## [v0.53] - 2025-07-13
@@ -442,3 +442,7 @@
 ---
 
 > _For full history prior to v0.1 refer to archived batches in `/canvas/archive/`._
+
+## [v0.54] - 2025-07-13
+### Added
+- ALPHA_VALIDATION_ISSUES.md documenting release blockers.
