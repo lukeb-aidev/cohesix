@@ -1,0 +1,6 @@
+{
+  "id": "agent_ping",
+  "role": "DroneWorker",
+  "description": "Example agent sending a ping event",
+  "entry": "python3 -m agent_ping"
+}

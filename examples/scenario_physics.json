@@ -1,0 +1,5 @@
+{
+  "scenario": "physics_demo",
+  "steps": 100,
+  "record_trace": true
+}
