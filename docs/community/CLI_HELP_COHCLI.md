@@ -32,7 +32,6 @@ cohcli dispatch-slm --target worker04 --model kiosk_v1
 
 # Run BalanceBot demo simulation
 cohcli sim run BalanceBot
-```
 
 ## Codex Suggestions
 `cohcli codex suggest` analyzes your history and proposes full commands. This can
