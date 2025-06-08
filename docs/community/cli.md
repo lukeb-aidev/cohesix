@@ -48,3 +48,5 @@ Emit a ping event for federation testing.
 ```
 cohtrace kiosk_ping
 ```
+
+See also: [Detailed CLI help](CLI_HELP_COHCLI.md).
