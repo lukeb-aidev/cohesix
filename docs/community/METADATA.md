@@ -1,6 +1,5 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: METADATA.md v3.2
-// Filename: METADATA.md v3.0
 // Author: Lukas Bower
 // Date Modified: 2025-07-13
 
@@ -15,6 +14,7 @@
 | BUILD_PLAN.md              | v0.4    | 2025-07-11    | COMMUNITY      |            |              |
 | COMMERCIAL_PLAN.md         | v1.5    | 2025-06-08    | PRIVATE        |            |              |
 | DEPENDENCIES.md            | v0.5    | 2025-07-06    | COMMUNITY      |            |              |
+| MISSION.md                 | v1.9    | 2025-05-24    | COMMUNITY      |            |              |
 | MISSION.md                 | v1.9    | 2025-05-24    | COMMUNITY      |            |              
 | METADATA.md                | v3.1    | 2025-07-13    | COMMUNITY      |            |              |
 | OSS_REUSE.md               | v1.6    | 2025-07-13    | COMMUNITY      |            |              |
@@ -27,6 +27,7 @@
 | README_Codex.md            | v1.4    | 2025-06-16    | COMMUNITY      |            |              |
 | REMOTE_ACCESS.md           | v1.0    | 2025-05-24    | COMMUNITY      |            |              |
 | ROLE_MANIFEST.md           | v1.3    | 2025-07-12    | COMMUNITY      |            |              |
+| NETWORKING.md              | v0.2    | 2025-07-13    | COMMUNITY      |     |              |
 | SHOPPING_LIST.md           | v1.3    | 2025-05-24    | COMMUNITY      |            |              |
 | STATUS_UPDATE_GUIDE.md     | v1.3    | 2025-05-24    | COMMUNITY      |            |              |
 | TEST_GUIDE.md              | v1.4    | 2025-07-12    | COMMUNITY      |            |              |
