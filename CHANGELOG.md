@@ -1,7 +1,24 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.30
-// Date Modified: 2025-07-12
-// Author: Lukas Bower
+// Filename: CHANGELOG.md v0.32
+// Date Modified: 2025-07-13
+## [v0.52] - 2025-07-13
+### Changed
+- Removed outdated community docs and refreshed metadata list.
+
+## [v0.51] - 2025-07-13
+### Changed
+- Cleaned duplicate headers in CHANGELOG.
+
+## [v0.50] - 2025-07-12
+### Added
+- Filled out example README with metadata headers and removed remaining TODO.
+
+## [v0.49] - 2025-07-12
+### Changed
+- Consolidated community documentation into six files.
+- Updated METADATA.md to v3.0 and removed deprecated docs.
+
+
 ## [v0.48] - 2025-07-12
 ### Added
 - Real-time sensor feedback via `sensor_proxy.py` and `normalizer.py`.
@@ -34,9 +51,6 @@
 ### Changed
 - Updated BATCH_PLAN.md to v0.6 with current batch statuses.
 
-// Filename: CHANGELOG.md v0.27
-// Date Modified: 2025-07-11
-// Author: Lukas Bower
 ## [v0.43] - 2025-07-11
 ### Added
 - Agent introspection namespace `/srv/agent_meta` with runtime files.
@@ -44,9 +58,6 @@
 - Python and Go `agent_sdk` for runtime context.
 - CLI `cohrun goal_*` and trust zone commands.
 - `cohtrace trust_check` lists current trust zones.
-// Filename: CHANGELOG.md v0.28
-// Date Modified: 2025-06-08
-// Author: Lukas Bower
 ## [v0.44] - 2025-06-08
 ### Added
 - COMMERCIAL_PLAN.md updated to v1.5 referencing EY network.
