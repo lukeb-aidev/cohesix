@@ -36,4 +36,4 @@ Welcome to **Cohesix**, a self-contained, formally verified operating system and
 
 ---
 
-For detailed tasks and schedules, see [`BATCH_PLAN.md`](../BATCH_PLAN.md). To onboard AI automation, consult [`README_Codex.md`](README_Codex.md) and [`AGENTS.md`](AGENTS.md).
+For detailed tasks and schedules, see [`RELEASE_AND_BATCH_PLAN.md`](RELEASE_AND_BATCH_PLAN.md). To onboard AI automation, consult [`README_Codex.md`](README_Codex.md) and [`AGENTS_AND_CLI.md`](AGENTS_AND_CLI.md).

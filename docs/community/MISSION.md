@@ -32,7 +32,7 @@ Welcome to **Cohesix**, the next‑generation operating system and compiler suit
 
 ## Get Involved
 
-1. **Explore the Docs:** Begin with [Project Overview](PROJECT_OVERVIEW.md) and [Batch Plan](BATCH_PLAN.md).
+1. **Explore the Docs:** Begin with [Project Overview](PROJECT_OVERVIEW.md) and [Release and Batch Plan](RELEASE_AND_BATCH_PLAN.md).
 2. **Run the Samples:** Use our example IR modules to generate WASM/C output in seconds.
 3. **Join the Community:** Contribute via GitHub, participate in design discussions, or propose new features.
 
