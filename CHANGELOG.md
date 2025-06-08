@@ -446,3 +446,13 @@
 ## [v0.54] - 2025-07-13
 ### Added
 - ALPHA_VALIDATION_ISSUES.md documenting release blockers.
+## [v0.55] - 2025-07-13
+### Added
+- CUDA runtime now executes real kernel and logs to /log/gpu_runtime.log
+- Telemetry schema expanded with exec_time_ns and fallback_reason
+- Added cust crate dependency
+
+## [v0.56] - 2025-07-13
+### Changed
+- CUDA executor tracks last execution time and fallback reason
+- Validator logs on unsafe kernel launch

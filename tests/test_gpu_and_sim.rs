@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: test_gpu_and_sim.rs v0.2
-// Date Modified: 2025-07-03
+// Filename: test_gpu_and_sim.rs v0.4
+// Date Modified: 2025-07-13
 // Author: Cohesix Codex
 
 use cohesix::cuda::runtime::CudaExecutor;
@@ -12,9 +12,9 @@ use tempfile::tempdir;
 fn gpu_and_sim_integration() {
     let dir = tempdir().unwrap();
     std::env::set_current_dir(&dir).unwrap();
-
     // Prepare fake kernel file
     std::fs::create_dir_all("/srv").unwrap();
+    std::fs::create_dir_all("/log").unwrap();
     std::fs::write("/srv/kernel.ptx", "fake").unwrap();
 
     // GPU execution should succeed even without real CUDA
@@ -23,6 +23,10 @@ fn gpu_and_sim_integration() {
     exec.launch().unwrap();
     let out = std::fs::read_to_string("/srv/cuda_result").unwrap();
     assert!(out.contains("kernel executed") || out.contains("cuda disabled"));
+    let log = std::fs::read_to_string("/log/gpu_runtime.log").unwrap();
+    assert!(log.contains("kernel executed") || log.contains("cuda disabled"));
+    let telem = exec.telemetry();
+    assert!(telem.exec_time_ns > 0 || !telem.fallback_reason.is_empty());
 
     // Simulation
     std::fs::create_dir_all("sim").unwrap();
@@ -33,7 +37,9 @@ fn gpu_and_sim_integration() {
     });
     for _ in 0..10 {
         if let Ok(state) = std::fs::read_to_string("sim/state") {
-            if state.contains(": [") { return; }
+            if state.contains(": [") {
+                return;
+            }
         }
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
