@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: rapier_bridge.rs v0.3
+// Filename: rapier_bridge.rs v0.4
 // Author: Lukas Bower
-// Date Modified: 2025-06-25
+// Date Modified: 2025-07-13
 
 //! Rapier physics engine bridge exposing a simple command interface.
 //!
@@ -12,7 +12,9 @@
 use crate::runtime::ServiceRegistry;
 use rapier3d::prelude::*;
 use rapier3d::pipeline::QueryPipeline;
-use rapier3d::na::UnitQuaternion;
+use rapier3d::na::{Quaternion, UnitQuaternion};
+use rand::{rngs::StdRng, Rng, SeedableRng};
+use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -26,6 +28,23 @@ pub struct SimObject {
     pub pos: Vector<Real>,
     pub vel: Vector<Real>,
     pub rot: UnitQuaternion<Real>,
+}
+
+/// Serialized body state for snapshots.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct BodyState {
+    pub index: u32,
+    pub generation: u32,
+    pub position: [f32; 3],
+    pub velocity: [f32; 3],
+    pub rotation: [f32; 4],
+}
+
+/// Serialized snapshot of the entire simulation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SimSnapshot {
+    pub step: u64,
+    pub bodies: Vec<BodyState>,
 }
 
 /// Commands sent to the simulation loop.
@@ -70,6 +89,20 @@ fn simulation_loop(rx: Receiver<SimCommand>) {
     let mut ccd_solver = CCDSolver::new();
     let mut query_pipeline = QueryPipeline::new();
     let mut step = 0u64;
+    if let Ok(data) = fs::read("/sim/world.json") {
+        if let Ok(snap) = serde_json::from_slice::<SimSnapshot>(&data) {
+            for b in snap.bodies {
+                let body = RigidBodyBuilder::dynamic()
+                    .translation(vector![b.position[0], b.position[1], b.position[2]])
+                    .linvel(vector![b.velocity[0], b.velocity[1], b.velocity[2]])
+                    .build();
+                let handle = bodies.insert(body);
+                let collider = ColliderBuilder::ball(1.0).build();
+                colliders.insert_with_parent(collider, handle, &mut bodies);
+            }
+            step = snap.step;
+        }
+    }
 
     loop {
         while let Ok(cmd) = rx.try_recv() {
@@ -107,6 +140,7 @@ fn simulation_loop(rx: Receiver<SimCommand>) {
         );
 
         write_state(&bodies, step);
+        save_snapshot(&bodies, step);
         step += 1;
         thread::sleep(Duration::from_millis(16));
     }
@@ -144,6 +178,13 @@ fn write_state(bodies: &RigidBodySet, step: u64) {
         .append(true)
         .open("/srv/trace/sim.log")
         .and_then(|mut f| writeln!(f, "step {}", step));
+}
+
+fn save_snapshot(bodies: &RigidBodySet, step: u64) {
+    let snap = collect_snapshot(bodies, step);
+    if let Ok(data) = serde_json::to_vec_pretty(&snap) {
+        let _ = fs::write("/sim/world.json", data);
+    }
 }
 
 fn log_transition(line: String) {
@@ -186,4 +227,86 @@ pub fn example_lateral_push() {
         id: RigidBodyHandle::from_raw_parts(0, 0),
         force: vector![10.0, 0.0, 0.0],
     });
+}
+
+/// Deterministic simulation harness used by tests.
+pub fn deterministic_harness(seed: u64, steps: u32) -> Vec<SimSnapshot> {
+    fs::create_dir_all("/srv/trace").ok();
+    fs::create_dir_all("sim").ok();
+
+    let mut rng = StdRng::seed_from_u64(seed);
+    let mut pipeline = PhysicsPipeline::new();
+    let gravity = vector![0.0, -9.81, 0.0];
+    let params = IntegrationParameters::default();
+    let mut broad = BroadPhase::new();
+    let mut narrow = NarrowPhase::new();
+    let mut bodies = RigidBodySet::new();
+    let mut colliders = ColliderSet::new();
+    let mut islands = IslandManager::new();
+    let mut joints = ImpulseJointSet::new();
+    let mut mb = MultibodyJointSet::new();
+    let mut ccd = CCDSolver::new();
+    let mut query = QueryPipeline::new();
+
+    let body = RigidBodyBuilder::dynamic()
+        .translation(vector![0.0, 1.0, 0.0])
+        .build();
+    let handle = bodies.insert(body);
+    let collider = ColliderBuilder::ball(1.0).build();
+    colliders.insert_with_parent(collider, handle, &mut bodies);
+
+    let mut out = Vec::new();
+
+    for step in 0..steps {
+        if let Some(b) = bodies.get_mut(handle) {
+            let force = vector![
+                rng.gen_range(-1.0..1.0),
+                rng.gen_range(-1.0..1.0),
+                rng.gen_range(-1.0..1.0),
+            ];
+            b.add_force(force, true);
+            log_transition(format!("force {:?} -> {:?}\n", force, handle));
+        }
+
+        pipeline.step(
+            &gravity,
+            &params,
+            &mut islands,
+            &mut broad,
+            &mut narrow,
+            &mut bodies,
+            &mut colliders,
+            &mut joints,
+            &mut mb,
+            &mut ccd,
+            Some(&mut query),
+            &(),
+            &(),
+        );
+        write_state(&bodies, step as u64);
+        save_snapshot(&bodies, step as u64);
+        out.push(collect_snapshot(&bodies, step as u64));
+    }
+
+    out
+}
+
+fn collect_snapshot(bodies: &RigidBodySet, step: u64) -> SimSnapshot {
+    let mut bodies_out = Vec::new();
+    for (handle, body) in bodies.iter() {
+        let (id, gen) = handle.into_raw_parts();
+        bodies_out.push(BodyState {
+            index: id,
+            generation: gen,
+            position: [body.translation().x, body.translation().y, body.translation().z],
+            velocity: [body.linvel().x, body.linvel().y, body.linvel().z],
+            rotation: [
+                body.rotation().i,
+                body.rotation().j,
+                body.rotation().k,
+                body.rotation().w,
+            ],
+        });
+    }
+    SimSnapshot { step, bodies: bodies_out }
 }
