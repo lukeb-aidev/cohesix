@@ -1,7 +1,13 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.31
+// Filename: CHANGELOG.md v0.32
 // Date Modified: 2025-07-12
 // Author: Lukas Bower
+## [v0.51] - 2025-07-12
+### Added
+- CI hardware validation collects Jetson and Pi boot logs.
+- Example trace replay executed in CI.
+- VALIDATION_AND_TESTING.md updated to v0.2.
+
 ## [v0.50] - 2025-07-12
 ### Added
 - CLI help docs for cohcli, cohrun, cohtrace, cohcc, and cohcap.
