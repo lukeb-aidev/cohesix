@@ -23,3 +23,25 @@ def test_cohcap_grant_list(tmp_path):
     subprocess.run(['python3', str(cli), 'grant', 'camera', '--to', 'w1'], env=env, check=True)
     out = subprocess.run(['python3', str(cli), 'list', '--worker', 'w1'], env=env, capture_output=True, text=True)
     assert 'camera' in out.stdout
+
+
+def run_cli(args):
+    return subprocess.run(['python3'] + args, capture_output=True, text=True)
+
+
+def test_cohcli_invalid_flag():
+    res = run_cli(['cli/cohcli.py', '--badflag'])
+    assert res.returncode != 0
+    assert 'usage' in res.stderr.lower() or 'unrecognized' in res.stderr.lower()
+
+
+def test_cohcli_unknown_subcommand():
+    res = run_cli(['cli/cohcli.py', 'nope'])
+    assert res.returncode != 0
+    assert 'No command provided' in res.stdout or 'usage' in res.stderr.lower()
+
+
+def test_cohrun_malformed():
+    res = run_cli(['cli/cohrun.py'])
+    assert res.returncode != 0
+    assert 'usage' in res.stdout.lower() or 'usage' in res.stderr.lower()
