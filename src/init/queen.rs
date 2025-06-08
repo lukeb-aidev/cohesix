@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: queen.rs v0.2
+// Filename: queen.rs v0.3
 // Author: Lukas Bower
-// Date Modified: 2025-06-07
+// Date Modified: 2025-07-11
 
 //! seL4 root task hook for the Queen role.
 //! Loads the boot namespace and registers core services.
@@ -14,6 +14,7 @@ use crate::plan9::namespace::NamespaceLoader;
 use cohesix_9p::fs::InMemoryFs;
 use crate::boot::plan9_ns::load_namespace;
 use crate::runtime::ServiceRegistry;
+use serde_json;
 
 fn log(msg: &str) {
     match OpenOptions::new().append(true).open("/dev/log") {
@@ -57,6 +58,10 @@ pub fn start() {
 
     fs::create_dir_all("/srv/bootstatus").ok();
     let _ = fs::write("/srv/bootstatus/queen", "ok");
+    // initialize world state summary
+    fs::create_dir_all("/srv/world_state").ok();
+    let world = serde_json::json!({"workers": [], "active_traces": [], "telemetry": {}});
+    let _ = fs::write("/srv/world_state/world.json", serde_json::to_string(&world).unwrap());
     ServiceRegistry::register_service("telemetry", "/srv/telemetry");
     ServiceRegistry::register_service("sim", "/sim");
     ServiceRegistry::register_service("p9mux", "/srv/p9mux");

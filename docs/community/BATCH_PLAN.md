@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: BATCH_PLAN.md v0.6
-// Date Modified: 2025-07-11
+// Date Modified: 2025-06-08
 // Author: Lukas Bower
 
 ## Cohesix Batch Plan
@@ -339,3 +339,10 @@ End-user demo pipelines and helper services for showcasing Cohesix features.
   - Reference demo: End User Demo #9
 
 *Statuses*: ✅ = Complete, ⏳ = Queued, ⏸️ = Deferred, 🚧 = Blocked, 🗑️ = Deprecated, 🟢 = Hydrated
+
+## Next Steps (BATCH_PLAN)
+1. [1] Incorporate COMMERCIAL_PLAN v1.4 updates across marketing materials.
+2. [2] Publish TECHNICAL_RISK.md and link from THREAT_MODEL.md.
+3. [3] Align METADATA.md versions and rerun validate_metadata_sync.py.
+4. [4] Update CHANGELOG.md with new document versions.
+5. [5] Schedule matrix CI run to confirm cross‑arch builds after doc updates.

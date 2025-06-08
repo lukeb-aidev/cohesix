@@ -14,6 +14,7 @@ use serial_test::serial;
 #[serial]
 fn webcam_permission_check() {
     fs::create_dir_all("srv").unwrap();
+    let _ = fs::remove_dir_all("/srv/webcam");
     fs::write("/srv/cohrole", "QueenPrimary").unwrap();
     ServiceRegistry::reset();
     let mut svc = WebcamService::default();
