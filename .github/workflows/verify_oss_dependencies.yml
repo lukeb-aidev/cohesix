@@ -1,0 +1,32 @@
+# CLASSIFICATION: COMMUNITY
+# Filename: verify_oss_dependencies.yml v0.1
+# Author: Lukas Bower
+# Date Modified: 2025-07-12
+
+name: OSS Dependency Audit
+
+on:
+  push:
+    paths: [ 'tools/oss_audit/**', 'scripts/run_oss_audit.sh', '.github/workflows/verify_oss_dependencies.yml' ]
+  pull_request:
+
+jobs:
+  audit:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest]
+        arch: [x86_64, aarch64]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Run audit
+        run: |
+          scripts/run_oss_audit.sh --demo --output oss_audit_out
+      - name: Check results
+        run: |
+          test -f oss_audit_out/OPEN_SOURCE_DEPENDENCIES.md
+          test -f oss_audit_out/LICENSE_MATRIX.md

@@ -2,6 +2,10 @@
 // Filename: CHANGELOG.md v0.29
 // Date Modified: 2025-07-12
 // Author: Lukas Bower
+## [v0.46] - 2025-07-12
+### Added
+- OSS audit toolchain and demo SBOM artefacts.
+
 ## [v0.45] - 2025-06-08
 ### Added
 - Federation handshake supports role inheritance and trust zone mapping.
