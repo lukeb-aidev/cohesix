@@ -2,6 +2,11 @@
 // Filename: CHANGELOG.md v0.32
 // Date Modified: 2025-07-12
 // Author: Lukas Bower
+## [v0.52] - 2025-06-20
+### Added
+- Consolidated mission, tooling, demo, and release docs.
+- New versions: MISSION_AND_ARCHITECTURE.md, AGENTS_AND_CLI.md, DEMO_SCENARIOS.md, RELEASE_AND_BATCH_PLAN.md, IMPLEMENTATION_AND_TOOLING.md, VALIDATION_AND_TESTING.md.
+
 ## [v0.51] - 2025-07-12
 ### Added
 - Initial manpages for Cohesix CLI tools and BusyBox utilities.
