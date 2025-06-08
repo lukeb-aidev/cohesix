@@ -1,24 +1,26 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: VALIDATION_AND_TESTING.md v0.2
+// Filename: VALIDATION_AND_TESTING.md v1.0
 // Author: Lukas Bower
-// Date Modified: 2025-07-12
+// Date Modified: 2025-06-20
 
 # Validation and Testing
 
-The trace validator ensures simulations and SLM deployments behave predictably.
-Example traces live in [`examples/trace_example_physics.json`](../../examples/trace_example_physics.json).
+Cohesix uses layered tests and continuous validation to guarantee reliability across all roles and architectures.
 
-## Running the Validator
-```bash
-cohtrace push_trace worker01 examples/trace_example_physics.json
-```
+## Test Strategy
+- **Unit Tests:** `cargo test`, `go test`, and `pytest`
+- **Property Tests:** QuickCheck/proptest on kernel and syscall handlers
+- **Integration:** boot the OS, mount services, and replay traces
+- **Fuzzing:** 9P protocol and syscall mediation with libFuzzer
+- **Multi-Arch CI:** run `./test_all_arch.sh` for aarch64 and x86_64
+- **Replay Harness:** re-run traces from `/history/` and verify outcomes
 
-Run `python scripts/validate_metadata_sync.py` before committing docs.
+## CI Hooks
+- `scripts/validate_metadata_sync.py` ensures document headers match `METADATA.md`
+- `tools/validate_batch.sh` checks file structure after each checkpoint
+- `scripts/collect_boot_logs.sh` uploads logs from Jetson Orin Nano and Raspberry Pi 5
 
-## CI Hardware Validation
+## Batch Testing
+`tools/simulate_batch.sh` can create a mock batch. Replay with `tools/replay_batch.sh` to verify recovery. Confirm `CODEX_BATCH: YES` appears in generated metadata.
 
-The GitHub Actions workflow now boots the Jetson Orin Nano and Raspberry Pi 5
-test units. `scripts/collect_boot_logs.sh` gathers `/srv/boot.log` and
-`/trace/boot.log` from each device, uploading them as artifacts. The workflow
-replays `examples/trace_example_physics.json` via `cohtrace.py` and runs
-`./test_all_arch.sh` to ensure all architectures pass.
+Adhering to these practices keeps Cohesix robust and ready for demo-critical deployments.
