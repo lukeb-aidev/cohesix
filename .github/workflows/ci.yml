@@ -44,3 +44,30 @@ jobs:
 
       - name: Build (release)
         run: cargo build --all-targets --release --verbose
+
+      - name: Cross-arch test suite
+        run: ./test_all_arch.sh
+
+      - name: Replay physics trace
+        run: |
+          python3 scripts/cohtrace.py replay examples/trace_example_physics.json > trace_replay.log
+          grep -q "replay spawn" trace_replay.log
+
+  hardware_boot:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Collect boot logs
+        env:
+          JETSON_HOST: ${{ secrets.JETSON_HOST }}
+          PI_HOST: ${{ secrets.PI_HOST }}
+        run: scripts/collect_boot_logs.sh
+
+      - name: Upload boot logs
+        uses: actions/upload-artifact@v3
+        with:
+          name: boot-logs
+          path: logs/*.log
