@@ -1,0 +1,15 @@
+// CLASSIFICATION: COMMUNITY
+// Filename: physics_demo_test.rs v0.1
+// Author: Cohesix Codex
+// Date Modified: 2025-07-11
+
+use cohesix::sim::physics_demo::run_demo;
+use std::fs;
+use std::path::Path;
+
+#[test]
+fn physics_demo_creates_trace() {
+    fs::create_dir_all("trace").unwrap();
+    run_demo();
+    assert!(Path::new("/trace/last_sim.json").exists());
+}

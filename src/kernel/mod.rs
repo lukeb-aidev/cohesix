@@ -1,6 +1,7 @@
 pub mod boot {
     pub mod bootloader;
     pub mod secure_boot;
+    pub mod role_hooks;
 }
 
 pub mod drivers {

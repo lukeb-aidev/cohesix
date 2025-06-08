@@ -47,6 +47,10 @@ crate: ureq v2.9 — MIT
 https://github.com/algesten/ureq
 Used in: Cloud init HTTP client
 ```
+crate: v4l v0.14 — MIT
+https://github.com/raymanfx/libv4l-rs
+Used in: Webcam service (/srv/webcam)
+```
 ```
 module: github.com/spf13/cobra v1.8.0 — Apache-2.0
 https://github.com/spf13/cobra

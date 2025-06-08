@@ -2,6 +2,13 @@
 // Filename: CHANGELOG.md v0.24
 // Date Modified: 2025-07-11
 // Author: Lukas Bower
+## [v0.40] - 2025-07-11
+### Added
+- Webcam and GPU info services registered under `/srv`.
+- `cohrun physics_demo` CLI and Rapier demo logging to `/trace/last_sim.json`.
+- `cohtrace list` demo CLI for viewing joined workers.
+- Boot hooks create role services and write to `/trace/boot.log`.
+
 ## [v0.39] - 2025-06-08
 ### Changed
 - Fixed Makefile tab indentation to enable successful builds
