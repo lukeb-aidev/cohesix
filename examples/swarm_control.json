@@ -1,0 +1,6 @@
+{
+  "swarm": [
+    {"worker": "worker1", "cmd": "start"},
+    {"worker": "worker2", "cmd": "stop"}
+  ]
+}

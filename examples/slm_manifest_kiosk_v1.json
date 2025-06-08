@@ -1,0 +1,8 @@
+{
+  "name": "kiosk_ui",
+  "version": "1.0",
+  "artifacts": [
+    {"path": "ui/index.html"},
+    {"path": "assets/logo.png"}
+  ]
+}
