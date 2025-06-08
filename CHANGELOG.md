@@ -2,11 +2,23 @@
 // Filename: CHANGELOG.md v0.35
 // Date Modified: 2025-07-13
 
+## [v0.54] - 2025-07-13
+### Added
+- BusyBox build now includes `finger`, `last`, `free`, `top`, `df`, and `who` utilities.
+- Session logging to `/log/session.log` tracks logins and commands.
+- Prototype `cohpkg` package manager with manifest-driven installs.
+- `UTILS_README.md` and new man page `cohpkg.1` document available tools.
+
+## [v0.55] - 2025-07-13
+### Fixed
+- Restored `AGENTS.md` and updated METADATA for test compatibility.
+
 ## [v0.55] - 2025-07-13
 ### Added
 - Runtime sandbox now enforces capabilities from `/etc/cohcap.json` and logs
   blocked syscalls with role and PID.
 - CUDA FFI loader wraps symbols with runtime validator checks.
+
 
 ## [v0.53] - 2025-07-13
 ### Removed
