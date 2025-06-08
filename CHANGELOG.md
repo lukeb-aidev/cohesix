@@ -8,12 +8,16 @@
 - Example JSON templates in examples/ directory.
 - New guides: AGENTS_AND_CLI, DEMO_SCENARIOS, VALIDATION_AND_TESTING.
 
+## [v0.49] - 2025-06-08
+### Changed
+- `cohcc` CLI now infers backend from output path.
 
 ## [v0.49] - 2025-07-12
 ### Added
 - Kiosk federation via `cohrun kiosk_start` and `cohrun kiosk_event`.
 - `cohtrace kiosk_ping` appends trace events.
 - `python/kiosk_loop.py` simulates kiosk inputs.
+
 ## [v0.48] - 2025-07-12
 ### Added
 - Real-time sensor feedback via `sensor_proxy.py` and `normalizer.py`.
