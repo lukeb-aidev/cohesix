@@ -2,9 +2,14 @@
 // Filename: CHANGELOG.md v0.32
 // Date Modified: 2025-07-12
 // Author: Lukas Bower
-## [v0.51] - 2025-07-12
+## [v0.51] - 2025-06-08
 ### Changed
 - Removed prebuilt mandoc binaries and added build script.
+### Added
+- Initial manpages for Cohesix CLI tools and BusyBox utilities.
+- CI hardware validation collects Jetson and Pi boot logs.
+- Example trace replay executed in CI.
+- VALIDATION_AND_TESTING.md updated to v0
 
 ## [v0.50] - 2025-07-12
 ### Added
