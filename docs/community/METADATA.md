@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: METADATA.md v3.1
+// Filename: METADATA.md v3.0
 // Author: Lukas Bower
 // Date Modified: 2025-07-13
 
