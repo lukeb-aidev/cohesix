@@ -1,0 +1,3 @@
+#!/bin/sh
+# Minimal man command for Cohesix using mandoc
+exec /bin/mandoc -a "$@" | less
