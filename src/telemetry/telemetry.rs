@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: telemetry.rs v1.1
+// Filename: telemetry.rs v1.2
 // Author: Lukas Bower
-// Date Modified: 2025-07-08
+// Date Modified: 2025-07-13
 
 //! Telemetry Core Module
 //!
@@ -39,7 +39,10 @@ fn get_current_timestamp() -> u64 {
 
 /// Convenience method for emitting a basic telemetry record.
 pub fn emit_kv(source: &str, kv: &[(&str, &str)]) {
-    let data = kv.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+    let data = kv
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
     let record = TelemetryRecord {
         source: source.to_string(),
         timestamp: get_current_timestamp(),
@@ -55,4 +58,6 @@ pub struct GpuTelemetry {
     pub driver_version: String,
     pub mem_total: u64,
     pub mem_free: u64,
+    pub exec_time_ns: u64,
+    pub fallback_reason: String,
 }

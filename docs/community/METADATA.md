@@ -15,7 +15,9 @@
 | BUILD_PLAN.md              | v0.4    | 2025-07-11    | COMMUNITY      |            |              |
 | COMMERCIAL_PLAN.md         | v1.5    | 2025-06-08    | PRIVATE        |            |              |
 | DEPENDENCIES.md            | v0.5    | 2025-07-06    | COMMUNITY      |            |              |
-| MISSION.md                 | v1.9    | 2025-05-24    | COMMUNITY      |            |              |
+| MISSION.md                 | v1.9    | 2025-05-24    | COMMUNITY      |            |              
+| METADATA.md                | v3.1    | 2025-07-13    | COMMUNITY      |            |              |
+| OSS_REUSE.md               | v1.6    | 2025-07-13    | COMMUNITY      |            |              |
 | METADATA.md                | v3.2    | 2025-07-13    | COMMUNITY      |            |              |
 | OSS_REUSE.md               | v1.5    | 2025-07-06    | COMMUNITY      |            |              |
 | PROJECT_OVERVIEW.md        | v1.6    | 2025-05-24    | COMMUNITY      |            |              |
