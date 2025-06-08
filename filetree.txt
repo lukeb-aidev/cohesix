@@ -15,6 +15,7 @@ c/sel4/bootloader.c
 c/sel4/include/boot_trampoline.h
 c/sel4/shim/boot_trampoline.c
 cli/cohcli.py
+cli/cohpkg.py
 cohesix-9p/Cargo.toml
 cohesix-9p/src/fs.rs
 cohesix-9p/src/lib.rs

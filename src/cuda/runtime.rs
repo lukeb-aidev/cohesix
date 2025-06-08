@@ -11,6 +11,9 @@ use libloading::Library;
 use log::warn;
 #[cfg(feature = "cuda")]
 use log::info;
+use libloading::{Library, Symbol};
+use crate::validator::{self, RuleViolation};
+use log::{info, warn};
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 #[cfg(feature = "cuda")]
@@ -28,6 +31,12 @@ pub struct CudaRuntime {
     ctx: Option<Context>,
     present: bool,
 }
+
+static VALID_SYMBOLS: &[&str] = &[
+    "cuInit",
+    "cuDeviceGetCount",
+    "cuDeviceGet",
+];
 
 impl CudaRuntime {
     /// Attempt to load `libcuda.so` if the `cuda` feature is enabled.
@@ -64,6 +73,49 @@ impl CudaRuntime {
             ctx,
             present,
         })
+    }
+
+    /// Load a verified symbol from the CUDA library.
+    pub fn get_symbol<T>(&self, name: &[u8]) -> anyhow::Result<Symbol<T>> {
+        let lib = self
+            .lib
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("cuda library not loaded"))?;
+        let name_str = std::str::from_utf8(name).unwrap_or("");
+        if !VALID_SYMBOLS.contains(&name_str) {
+            validator::log_violation(RuleViolation {
+                type_: "ffi_symbol",
+                file: name_str.into(),
+                agent: "cuda".into(),
+                time: validator::timestamp(),
+            });
+            return Err(anyhow::anyhow!("symbol not allowed"));
+        }
+        unsafe { lib.get::<T>(name).map_err(|e| anyhow::anyhow!(e.to_string())) }
+    }
+
+    /// Initialize the CUDA driver via verified FFI entry.
+    pub fn init_driver(&self) -> Result<(), String> {
+        let sym: Symbol<unsafe extern "C" fn(u32) -> i32> =
+            self.get_symbol(b"cuInit").map_err(|e| e.to_string())?;
+        validator::log_violation(RuleViolation {
+            type_: "ffi_enter",
+            file: "cuInit".into(),
+            agent: "cuda".into(),
+            time: validator::timestamp(),
+        });
+        let res = unsafe { sym(0) };
+        validator::log_violation(RuleViolation {
+            type_: "ffi_exit",
+            file: "cuInit".into(),
+            agent: "cuda".into(),
+            time: validator::timestamp(),
+        });
+        if res == 0 {
+            Ok(())
+        } else {
+            Err(format!("cuInit failed: {}", res))
+        }
     }
 }
 
@@ -204,3 +256,4 @@ impl CudaExecutor {
         }
     }
 }
+

@@ -1,6 +1,24 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.34
+// Filename: CHANGELOG.md v0.35
 // Date Modified: 2025-07-13
+
+## [v0.54] - 2025-07-13
+### Added
+- BusyBox build now includes `finger`, `last`, `free`, `top`, `df`, and `who` utilities.
+- Session logging to `/log/session.log` tracks logins and commands.
+- Prototype `cohpkg` package manager with manifest-driven installs.
+- `UTILS_README.md` and new man page `cohpkg.1` document available tools.
+
+## [v0.55] - 2025-07-13
+### Fixed
+- Restored `AGENTS.md` and updated METADATA for test compatibility.
+
+## [v0.55] - 2025-07-13
+### Added
+- Runtime sandbox now enforces capabilities from `/etc/cohcap.json` and logs
+  blocked syscalls with role and PID.
+- CUDA FFI loader wraps symbols with runtime validator checks.
+
 
 ## [v0.53] - 2025-07-13
 ### Removed
@@ -12,6 +30,9 @@
 - examples/README.md -> archive/examples_README.md
 ### Changed
 - Updated METADATA.md to v3.0 after cleanup.
+### Added
+- Expanded BusyBox command set and Python CLI wrappers.
+- New manpage generation script and CLI regression tests.
 // Author: Lukas Bower
 ## [v0.52] - 2025-06-08
 ### Added
@@ -456,3 +477,11 @@
 ### Changed
 - CUDA executor tracks last execution time and fallback reason
 - Validator logs on unsafe kernel launch
+
+## [v0.55] - 2025-07-13
+### Added
+- cohdevd service with inotify hotplug and sandbox validation.
+- Webcam capture telemetry logging and dummy fallback.
+- Real sensor input with optional mock injection.
+- Tests for device attach/detach, validator logging, and webcam fallback.
+
