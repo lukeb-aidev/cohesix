@@ -2,6 +2,15 @@
 // Filename: CHANGELOG.md v0.36
 // Date Modified: 2025-06-08
 
+## [v0.57] - 2025-07-14
+### Added
+- 9P server permissions and tests
+- Device hotplug documentation and sync checks
+- CLI input validation tests
+- Session logging with timestamps
+### Fixed
+- Cargo.lock duplication issues
+
 ## [v0.56] - 2025-06-08
 ### Added
 - Deterministic simbridge harness with snapshot resume.
