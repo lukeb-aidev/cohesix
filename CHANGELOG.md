@@ -2,11 +2,14 @@
 // Filename: CHANGELOG.md v0.29
 // Date Modified: 2025-07-12
 // Author: Lukas Bower
-## [v0.45] - 2025-07-12
+## [v0.45] - 2025-06-08
 ### Added
 - Federation handshake supports role inheritance and trust zone mapping.
 - Snapshot writer serializes worker state under `/history/snapshots/`.
 - `cohrun federate_with` and `cohtrace view_snapshot` CLI commands.
+### Fixed
+- Resolved merge marker in `METADATA.md` and updated headers.
+
 ## [v0.43] - 2025-07-11
 ### Changed
 - Verified batch statuses against repository; all modules compile and tests pass.
