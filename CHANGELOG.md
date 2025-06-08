@@ -1,7 +1,14 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v0.23
-// Date Modified: 2025-07-09
+// Date Modified: 2025-07-10
 // Author: Lukas Bower
+## [v0.37] - 2025-07-10
+### Added
+- UpgradeManager module for atomic upgrades
+- AES-GCM SLM decryptor with CLI hooks
+- EnsembleAgent trait and shared memory
+- CLI commands: upgrade, rollback, list-models, decrypt-model, verify-model, agent-ensemble-status
+
 ## [v0.36] - 2025-07-09
 ### Added
 - Agent introspection API and CLI command `agent-introspect`
