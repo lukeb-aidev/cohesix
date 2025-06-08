@@ -24,6 +24,10 @@ rmp-serde = "1"
 ring = "0.17.8"
 hostname = "0.3"
 nix = { version = "0.28", default-features = false, features = ["signal"] }
+aes-gcm = { version = "0.10", features = ["aes"] }
+aead = "0.5"
+aes = "0.8"
+rand = "0.8"
 
 [workspace]
 members = [

@@ -26,3 +26,4 @@ pub mod syscalls {
     pub mod syscall;
     pub mod syscall_table;
 }
+pub mod upgrade;

@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: lib.rs v1.1
-// Date Modified: 2025-07-09
+// Filename: lib.rs v1.2
+// Date Modified: 2025-07-10
 // Author: Lukas Bower
 
 //! Root library for the Coh_CC compiler and platform integrations.
@@ -61,6 +61,7 @@ pub mod kernel;
 
 /// CUDA runtime helpers
 pub mod cuda;
+pub mod slm;
 
 /// Physics simulation bridge
 pub mod sim;
