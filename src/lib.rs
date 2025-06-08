@@ -73,6 +73,8 @@ pub mod sim;
 
 /// 9P multiplexer utilities
 pub mod p9;
+/// Networking daemons
+pub mod net;
 
 /// Shell helpers
 pub mod shell;
