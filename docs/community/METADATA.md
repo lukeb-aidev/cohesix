@@ -1,5 +1,6 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: METADATA.md v3.2
+// Filename: METADATA.md v3.0
 // Author: Lukas Bower
 // Date Modified: 2025-07-13
 
@@ -37,7 +38,7 @@
 | SECURE_BOOT.md             | v1.0    | 2025-06-07    | PRIVATE        |            |              |
 | PHYSICAL_AGENT_POLICY.md   | v0.1    | 2025-07-05    | PRIVATE        |            |              |
 | TRACE_CONSENSUS.md         | v0.1    | 2025-07-05    | COMMUNITY      |            |              |
-| SECURITY_REVIEW.md         | v0.1    | 2025-07-11    | COMMUNITY      |     |              |
+| SECURITY_REVIEW.md         | v0.2    | 2025-07-13    | COMMUNITY      |     |              |
 | COMPILER_REVIEW.md         | v0.1    | 2025-07-11    | COMMUNITY      |          |              
 | OPEN_SOURCE_DEPENDENCIES.md | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
 | LICENSE_MATRIX.md           | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
