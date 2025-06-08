@@ -1,21 +1,34 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: runtime.rs v0.5
+// Filename: runtime.rs v0.7
 // Author: Lukas Bower
-// Date Modified: 2025-07-08
+// Date Modified: 2025-07-13
 
 //! Runtime CUDA integration using dynamic loading of `libcuda.so`.
 //! Falls back gracefully if no CUDA driver is present.
 
 use crate::runtime::ServiceRegistry;
+use libloading::Library;
+use log::warn;
+#[cfg(feature = "cuda")]
+use log::info;
 use libloading::{Library, Symbol};
 use crate::validator::{self, RuleViolation};
 use log::{info, warn};
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
+#[cfg(feature = "cuda")]
+use std::time::Instant;
+
+#[cfg(feature = "cuda")]
+use cust::prelude::*;
+#[cfg(feature = "cuda")]
+use cust::CudaApiVersion;
 
 /// Wrapper around the CUDA driver library.
 pub struct CudaRuntime {
     lib: Option<Library>,
+    #[cfg(feature = "cuda")]
+    ctx: Option<Context>,
     present: bool,
 }
 
@@ -29,11 +42,17 @@ impl CudaRuntime {
     /// Attempt to load `libcuda.so` if the `cuda` feature is enabled.
     pub fn try_new() -> io::Result<Self> {
         #[cfg(feature = "cuda")]
-        let lib = match unsafe { Library::new("libcuda.so") } {
-            Ok(l) => Some(l),
+        let (lib, ctx) = match unsafe { Library::new("libcuda.so") } {
+            Ok(l) => match cust::quick_init() {
+                Ok(c) => (Some(l), Some(c)),
+                Err(e) => {
+                    warn!("CUDA init failed: {}", e);
+                    (Some(l), None)
+                }
+            },
             Err(e) => {
                 warn!("CUDA library not found: {}", e);
-                None
+                (None, None)
             }
         };
 
@@ -43,9 +62,17 @@ impl CudaRuntime {
             None
         };
 
+        #[cfg(feature = "cuda")]
+        let present = lib.is_some() && ctx.is_some();
+        #[cfg(not(feature = "cuda"))]
         let present = lib.is_some();
         ServiceRegistry::register_service("cuda", "/srv/cuda");
-        Ok(Self { lib, present })
+        Ok(Self {
+            lib,
+            #[cfg(feature = "cuda")]
+            ctx,
+            present,
+        })
     }
 
     /// Load a verified symbol from the CUDA library.
@@ -96,12 +123,24 @@ impl CudaRuntime {
 pub struct CudaExecutor {
     rt: CudaRuntime,
     kernel: Option<Vec<u8>>,
+    last_exec_ns: u64,
+    fallback_reason: String,
 }
 
 impl CudaExecutor {
     pub fn new() -> Self {
-        let rt = CudaRuntime::try_new().unwrap_or_else(|_| CudaRuntime { lib: None, present: false });
-        Self { rt, kernel: None }
+        let rt = CudaRuntime::try_new().unwrap_or_else(|_| CudaRuntime {
+            lib: None,
+            #[cfg(feature = "cuda")]
+            ctx: None,
+            present: false,
+        });
+        Self {
+            rt,
+            kernel: None,
+            last_exec_ns: 0,
+            fallback_reason: String::new(),
+        }
     }
 
     /// Load a PTX kernel from `/srv/kernel.ptx` if no bytes are provided.
@@ -119,28 +158,64 @@ impl CudaExecutor {
     }
 
     /// Launch the loaded kernel; stubbed if CUDA unavailable.
-    pub fn launch(&self) -> Result<(), String> {
+    pub fn launch(&mut self) -> Result<(), String> {
+        fs::create_dir_all("/log").ok();
         fs::create_dir_all("/srv/trace").ok();
-        if self.rt.lib.is_none() {
+        if self.rt.lib.is_none() || !self.rt.present {
             warn!("CUDA unavailable; stub launch");
             OpenOptions::new()
                 .create(true)
                 .append(true)
-                .open("/srv/trace/cuda.log")
-                .and_then(|mut f| writeln!(f, "stub launch"))
+                .open("/log/gpu_runtime.log")
+                .and_then(|mut f| writeln!(f, "cuda disabled"))
                 .ok();
+            self.fallback_reason = "cuda disabled".into();
+            self.last_exec_ns = 0;
             fs::write("/srv/cuda_result", b"cuda disabled").map_err(|e| e.to_string())?;
             return Ok(());
         }
-        let len = self.kernel.as_ref().map(|k| k.len()).unwrap_or(0);
-        info!("launching CUDA kernel size {}", len);
-        OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open("/srv/trace/cuda.log")
-            .and_then(|mut f| writeln!(f, "executed {} bytes", len))
-            .ok();
-        fs::write("/srv/cuda_result", b"ok").map_err(|e| e.to_string())?;
+
+        #[cfg(feature = "cuda")]
+        {
+            let len = self.kernel.as_ref().map(|k| k.len()).unwrap_or(0);
+            info!("launching CUDA kernel size {}", len);
+            let start = Instant::now();
+
+            crate::validator::log_violation(crate::validator::RuleViolation {
+                type_: "unsafe_cuda_launch",
+                file: "runtime.rs".into(),
+                agent: "cuda_exec".into(),
+                time: crate::validator::timestamp(),
+            });
+
+            // simple vector addition using embedded PTX
+            const PTX: &str = include_str!("../../resources/add.ptx");
+            let module = Module::from_ptx(PTX, &[]).map_err(|e| e.to_string())?;
+            let stream = Stream::new(StreamFlags::NON_BLOCKING, None).map_err(|e| e.to_string())?;
+            let a = DeviceBuffer::from_slice(&[1.0f32, 2.0, 3.0]).map_err(|e| e.to_string())?;
+            let b = DeviceBuffer::from_slice(&[4.0f32, 5.0, 6.0]).map_err(|e| e.to_string())?;
+            let mut out = DeviceBuffer::from_slice(&[0.0f32; 3]).map_err(|e| e.to_string())?;
+            unsafe {
+                launch!(module.sum<<<1, 3, 0, stream>>>(a.as_device_ptr(), b.as_device_ptr(), out.as_device_ptr(), 3))
+                    .map_err(|e| e.to_string())?;
+            }
+            stream.synchronize().map_err(|e| e.to_string())?;
+            let mut host = [0.0f32; 3];
+            out.copy_to(&mut host).map_err(|e| e.to_string())?;
+            let runtime = start.elapsed().as_nanos() as u64;
+
+            self.last_exec_ns = runtime;
+            self.fallback_reason.clear();
+
+            OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("/log/gpu_runtime.log")
+                .and_then(|mut f| writeln!(f, "kernel executed in {runtime}ns"))
+                .ok();
+            fs::write("/srv/cuda_result", b"kernel executed").map_err(|e| e.to_string())?;
+        }
+
         Ok(())
     }
 
@@ -148,13 +223,36 @@ impl CudaExecutor {
     pub fn telemetry(&self) -> crate::telemetry::telemetry::GpuTelemetry {
         use crate::telemetry::telemetry::GpuTelemetry;
         if !self.rt.present {
-            return GpuTelemetry { cuda_present: false, ..Default::default() };
+            return GpuTelemetry {
+                cuda_present: false,
+                fallback_reason: "not present".into(),
+                exec_time_ns: self.last_exec_ns,
+                ..Default::default()
+            };
         }
-        GpuTelemetry {
-            cuda_present: true,
-            driver_version: "stub".into(),
-            mem_total: 0,
-            mem_free: 0,
+        #[cfg(feature = "cuda")]
+        {
+            let version = CudaApiVersion::get()
+                .map(|v| format!("{}.{}", v.major(), v.minor()))
+                .unwrap_or_default();
+            let (free, total) = cust::memory::mem_get_info().unwrap_or((0, 0));
+            GpuTelemetry {
+                cuda_present: true,
+                driver_version: version,
+                mem_total: total as u64,
+                mem_free: free as u64,
+                fallback_reason: self.fallback_reason.clone(),
+                exec_time_ns: self.last_exec_ns,
+            }
+        }
+        #[cfg(not(feature = "cuda"))]
+        {
+            GpuTelemetry {
+                cuda_present: false,
+                fallback_reason: "feature disabled".into(),
+                exec_time_ns: self.last_exec_ns,
+                ..Default::default()
+            }
         }
     }
 }

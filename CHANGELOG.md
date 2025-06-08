@@ -1,6 +1,11 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.35
+// Filename: CHANGELOG.md v0.36
 // Date Modified: 2025-07-13
+
+## [v0.56] - 2025-07-13
+### Added
+- Deterministic simbridge harness with snapshot resume.
+- Nightly CI job for cross-platform determinism.
 
 ## [v0.54] - 2025-07-13
 ### Added
@@ -467,14 +472,25 @@
 ## [v0.54] - 2025-07-13
 ### Added
 - ALPHA_VALIDATION_ISSUES.md documenting release blockers.
-
 ## [v0.55] - 2025-07-13
+### Added
+- CUDA runtime now executes real kernel and logs to /log/gpu_runtime.log
+- Telemetry schema expanded with exec_time_ns and fallback_reason
+- Added cust crate dependency
+
+## [v0.56] - 2025-07-13
+### Changed
+- CUDA executor tracks last execution time and fallback reason
+- Validator logs on unsafe kernel launch
+
+## [v0.55] - 2025-06-08
 ### Added
 - cohdevd service with inotify hotplug and sandbox validation.
 - Webcam capture telemetry logging and dummy fallback.
 - Real sensor input with optional mock injection.
 - Tests for device attach/detach, validator logging, and webcam fallback.
 
-## [v0.56] - 2025-07-14
+## [v0.56] - 2025-06-08
 ### Added
 - `autorun_tests.py` script for automatic test execution on file changes.
+
