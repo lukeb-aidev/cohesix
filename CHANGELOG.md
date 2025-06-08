@@ -24,6 +24,7 @@
 
 ## [v0.42] - 2025-07-11
 ### Added
+- Security review summary under `SECURITY_REVIEW.md`.
 - Cross-worker orchestrator registry written to `/srv/agents/active.json`.
 - CLI commands `cohrun orchestrator status|assign` and `cohrun kiosk_start`.
 - GPU swarm registry `/srv/gpu_registry.json` with `gpu_status` and `gpu_dispatch`.
