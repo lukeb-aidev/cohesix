@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: init.rs v0.3
-// Date Modified: 2025-07-04
+// Filename: init.rs v0.4
+// Date Modified: 2025-07-10
 // Author: Lukas Bower
 //
 // ─────────────────────────────────────────────────────────────
@@ -73,6 +73,7 @@ pub fn early_init(cmdline: &str) -> Result<BootContext> {
         let _ = writeln!(f, "role={role} cmdline={cmdline}");
     }
     std::fs::write("/srv/cohrole", &role).ok();
+    let _ = crate::slm::decryptor::SLMDecryptor::preload_from_dir("/persist/models", b"testkey");
 
     info!("Bootloader early‑init complete");
 

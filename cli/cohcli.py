@@ -1,8 +1,8 @@
 
 #!/usr/bin/env python3
 # CLASSIFICATION: COMMUNITY
-# Filename: cohcli.py v0.7
-# Date Modified: 2025-07-09
+# Filename: cohcli.py v0.8
+# Date Modified: 2025-07-10
 # Author: Lukas Bower
 
 """
@@ -38,6 +38,16 @@ def parse_args():
     # Subcommand: replay-trace
     replay = subparsers.add_parser("replay-trace", help="Replay a trace file")
     replay.add_argument("path")
+    upg = subparsers.add_parser("upgrade", help="Upgrade system")
+    upg.add_argument("--from", dest="src", required=True)
+    subparsers.add_parser("rollback", help="Rollback last upgrade")
+    subparsers.add_parser("list-models", help="List available models")
+    dec = subparsers.add_parser("decrypt-model", help="Decrypt model")
+    dec.add_argument("model")
+    ver = subparsers.add_parser("verify-model", help="Verify model signature")
+    ver.add_argument("model")
+    ens = subparsers.add_parser("agent-ensemble-status", help="Show ensemble status")
+    ens.add_argument("ensemble")
 
     # Subcommand: dispatch-slm
     disp = subparsers.add_parser("dispatch-slm", help="Dispatch SLM to worker")
@@ -306,5 +316,59 @@ def handle_elect_queen(args):
 def handle_assume_role(args):
     open("/srv/queen/role", "w").write(args.role)
 
+def handle_upgrade(args):
+    os.makedirs("/srv/upgrade", exist_ok=True)
+    open("/srv/upgrade/url", "w").write(args.src)
+    print(f"Upgrade request for {args.src}")
+
+def handle_rollback(args):
+    os.makedirs("/srv/upgrade", exist_ok=True)
+    open("/srv/upgrade/rollback", "w").write("1")
+    print("Rollback requested")
+
+def handle_list_models(args):
+    base = "/persist/models"
+    if os.path.isdir(base):
+        for f in os.listdir(base):
+            if f.endswith(".slmcoh"):
+                print(f)
+    else:
+        print("No models")
+
+def handle_decrypt_model(args):
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    path = os.path.join("/persist/models", args.model)
+    data = open(path, "rb").read()
+    nonce, ct = data[:12], data[12:]
+    key = b"0" * 32
+    plain = AESGCM(key).decrypt(nonce, ct, None)
+    os.makedirs("/srv/models", exist_ok=True)
+    out = os.path.join("/srv/models", args.model + ".bin")
+    open(out, "wb").write(plain)
+    print(f"Decrypted to {out}")
+
+def handle_verify_model(args):
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+    path = os.path.join("/persist/models", args.model)
+    sig_path = path + ".sig"
+    key_path = "/keys/slm_signing.pub"
+    if not os.path.exists(sig_path) or not os.path.exists(key_path):
+        print("Missing signature or key")
+        return
+    pub = Ed25519PublicKey.from_public_bytes(open(key_path, "rb").read())
+    data = open(path, "rb").read()
+    sig = open(sig_path, "rb").read()
+    try:
+        pub.verify(sig, data)
+        print("Signature OK")
+    except Exception:
+        print("Invalid signature")
+
+def handle_agent_ensemble_status(args):
+    path = f"/ensemble/{args.ensemble}/goals.json"
+    if os.path.exists(path):
+        print(open(path).read())
+    else:
+        print("No ensemble data")
 if __name__ == "__main__":
     main()
