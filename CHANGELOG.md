@@ -1,6 +1,11 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.36
+// Filename: CHANGELOG.md v0.37
 // Date Modified: 2025-07-14
+
+## [v0.59] - 2025-07-14
+### Added
+- Restored `INSTRUCTION_BLOCK.md` with v3.6 workflow rules.
+- Updated `METADATA.md` to v3.3.
 
 ## [v0.58] - 2025-07-14
 ### Added
