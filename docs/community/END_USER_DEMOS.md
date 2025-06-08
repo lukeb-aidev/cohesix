@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: END_USER_DEMOS.md v0.3
+// Filename: END_USER_DEMOS.md v0.4
 // Author: Lukas Bower
 // Date Modified: 2025-07-12
 
@@ -56,6 +56,16 @@
 **Demo:** UI is remotely deployed. A user inserts a card; the kiosk infers data locally, submits to Queen for further processing.
 
 **Wow Factor:** Remote provisioning + real-time data streaming to Queen. Swap interface components live.
+
+---
+
+## \ud83d\udcf1\ufe0f Smart Kiosk UI Federation
+
+**Scenario:** A kiosk fetches the latest UI bundle from the Queen and streams interaction events.
+
+**Demo:** `cohrun kiosk_start` pulls `/srv/ui_bundle/kiosk_v1/` and runs `kiosk_loop.py`. Interactions are logged to `/srv/kiosk_federation.json` and pings can be triggered via `cohtrace kiosk_ping`.
+
+**Wow Factor:** Zero-touch UI updates with real-time federation tracing.
 
 ---
 
