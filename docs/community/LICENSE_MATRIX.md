@@ -1,7 +1,7 @@
-// Filename: LICENSE_MATRIX.md v0.1
-// Author: Lukas Bower
-// Date Modified: 2025-07-12
 // CLASSIFICATION: COMMUNITY
+// Filename: LICENSE_MATRIX.md v0.2
+// Author: Lukas Bower
+// Date Modified: 2025-07-15
 # License Matrix
 
 | Name | Version | SPDX | License File | CVEs |

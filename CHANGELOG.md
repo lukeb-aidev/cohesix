@@ -1,6 +1,11 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.37
-// Date Modified: 2025-07-14
+// Filename: CHANGELOG.md v0.38
+// Date Modified: 2025-07-15
+
+## [v0.60] - 2025-07-15
+### Changed
+- Cleaned METADATA duplicate entries and normalized license files.
+- Bumped versions for `OPEN_SOURCE_DEPENDENCIES.md` and `LICENSE_MATRIX.md`.
 
 ## [v0.59] - 2025-07-14
 ### Added
