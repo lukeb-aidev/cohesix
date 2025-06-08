@@ -1,8 +1,14 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v0.26
-// Date Modified: 2025-07-11
+// Date Modified: 2025-06-08
 // Author: Lukas Bower
-## [v0.40] - 2025-07-11
+## [v0.41] - 2025-06-08
+### Added
+- Cross-target `--target` option for `cohcc` CLI.
+- POSIX translation helpers and tests.
+- Build plan updated for architecture flag.
+
+## [v0.40] - 2025-06-06
 ### Added
 - Webcam and GPU info services registered under `/srv`.
 - `cohrun physics_demo` CLI and Rapier demo logging to `/trace/last_sim.json`.
