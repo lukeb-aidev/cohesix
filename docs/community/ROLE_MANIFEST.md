@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: ROLE_MANIFEST.md v1.2
-// Date Modified: 2025-05-25
+// Filename: ROLE_MANIFEST.md v1.3
+// Date Modified: 2025-07-12
 // Author: Lukas Bower
 
 # Role Manifest
@@ -20,3 +20,5 @@ At boot, Cohesix reads the declared runtime role from `/srv/cohrole` to determin
 ```
 
 This manifest guides both the OS initialization sequence and the Codex automation, ensuring every component is aware of its context and dependencies within the Cohesix platform.
+
+Federated deployments may declare hierarchical roles. A Queen inheriting from another uses `inherit:<parent_id>` in `/srv/queen_id/role` which is exchanged during federation handshakes. All child queens inherit base policies while applying their own overlays.
