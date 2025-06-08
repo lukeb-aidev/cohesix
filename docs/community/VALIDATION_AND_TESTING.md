@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: VALIDATION_AND_TESTING.md v1.0
+// Filename: VALIDATION_AND_TESTING.md v1.1
 // Author: Lukas Bower
-// Date Modified: 2025-06-20
+// Date Modified: 2025-07-14
 
 # Validation and Testing
 
@@ -13,6 +13,7 @@ Cohesix uses layered tests and continuous validation to guarantee reliability ac
 - **Integration:** boot the OS, mount services, and replay traces
 - **Fuzzing:** 9P protocol and syscall mediation with libFuzzer
 - **Multi-Arch CI:** run `./test_all_arch.sh` for aarch64 and x86_64
+- **Auto-run script:** `scripts/autorun_tests.py` watches for changes and executes tests automatically.
 - **Replay Harness:** re-run traces from `/history/` and verify outcomes
 
 ## CI Hooks

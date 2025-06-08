@@ -483,10 +483,14 @@
 - CUDA executor tracks last execution time and fallback reason
 - Validator logs on unsafe kernel launch
 
-## [v0.55] - 2025-07-13
+## [v0.55] - 2025-06-08
 ### Added
 - cohdevd service with inotify hotplug and sandbox validation.
 - Webcam capture telemetry logging and dummy fallback.
 - Real sensor input with optional mock injection.
 - Tests for device attach/detach, validator logging, and webcam fallback.
+
+## [v0.56] - 2025-06-08
+### Added
+- `autorun_tests.py` script for automatic test execution on file changes.
 
