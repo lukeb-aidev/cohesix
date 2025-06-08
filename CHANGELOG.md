@@ -2,6 +2,10 @@
 // Filename: CHANGELOG.md v0.24
 // Date Modified: 2025-07-11
 // Author: Lukas Bower
+## [v0.39] - 2025-06-08
+### Changed
+- Fixed Makefile tab indentation to enable successful builds
+
 ## [v0.38] - 2025-07-11
 ### Added
 - Codex-Driven Mega Batches with autonomous multi-arch hydration
