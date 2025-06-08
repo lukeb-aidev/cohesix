@@ -12,6 +12,9 @@ pub mod instruction;
 pub mod module;
 pub mod operand;
 pub mod ops;
+pub mod pass;
+pub mod builder;
+pub mod printer;
 pub mod ty;
 pub mod value;
 
@@ -19,3 +22,6 @@ pub use context::IRContext;
 pub use function::Function;
 pub use instruction::{Instruction, Opcode};
 pub use module::Module;
+pub use pass::{Pass, PassManager, DeadCodeEliminationPass};
+pub use builder::IRBuilder;
+pub use printer::{print_function, print_module};
