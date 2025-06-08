@@ -12,6 +12,9 @@
 - examples/README.md -> archive/examples_README.md
 ### Changed
 - Updated METADATA.md to v3.0 after cleanup.
+### Added
+- Expanded BusyBox command set and Python CLI wrappers.
+- New manpage generation script and CLI regression tests.
 // Author: Lukas Bower
 ## [v0.52] - 2025-06-08
 ### Added
