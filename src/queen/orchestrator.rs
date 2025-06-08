@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: orchestrator.rs v0.3
+// Filename: orchestrator.rs v0.4
 // Author: Lukas Bower
-// Date Modified: 2025-07-08
+// Date Modified: 2025-07-11
 
 //! Queen orchestrator for managing worker nodes.
 //!
@@ -14,8 +14,9 @@ use std::fs;
 use std::io::Write;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use ureq::Agent as HttpAgent;
+use crate::trace::recorder;
 use serde_json;
+use ureq::Agent as HttpAgent;
 
 /// Record of a worker node registered with the queen.
 #[derive(Clone, Debug)]
@@ -40,6 +41,9 @@ pub struct GpuNode {
     pub mem_free: u64,
     pub last_temp: u32,
     pub jobs: Vec<String>,
+    pub gpu_capacity: u32,
+    pub current_load: u32,
+    pub latency_score: u32,
 }
 
 /// Queen orchestrator state.
@@ -77,22 +81,34 @@ impl QueenOrchestrator {
                 if let Ok(wid) = ent.file_name().into_string() {
                     let path = ent.path().join("ip");
                     if let Ok(ip) = fs::read_to_string(&path) {
-                        let rec = self.workers.entry(wid.clone()).or_insert_with(|| WorkerRecord {
-                            id: wid.clone(),
-                            ip: ip.trim().to_string(),
-                            status: "booting".into(),
-                            boot_ts: timestamp(),
-                            last_seen: timestamp(),
-                            role: fs::read_to_string(ent.path().join("role")).unwrap_or_else(|_| "unknown".into()).trim().into(),
-                            trust: fs::read_to_string(ent.path().join("trust")).unwrap_or_else(|_| "normal".into()).trim().into(),
-                            capabilities: fs::read_to_string(ent.path().join("caps")).map(|c| c.lines().map(|s| s.to_string()).collect()).unwrap_or_else(|_| Vec::new()),
-                        });
+                        let rec = self
+                            .workers
+                            .entry(wid.clone())
+                            .or_insert_with(|| WorkerRecord {
+                                id: wid.clone(),
+                                ip: ip.trim().to_string(),
+                                status: "booting".into(),
+                                boot_ts: timestamp(),
+                                last_seen: timestamp(),
+                                role: fs::read_to_string(ent.path().join("role"))
+                                    .unwrap_or_else(|_| "unknown".into())
+                                    .trim()
+                                    .into(),
+                                trust: fs::read_to_string(ent.path().join("trust"))
+                                    .unwrap_or_else(|_| "normal".into())
+                                    .trim()
+                                    .into(),
+                                capabilities: fs::read_to_string(ent.path().join("caps"))
+                                    .map(|c| c.lines().map(|s| s.to_string()).collect())
+                                    .unwrap_or_else(|_| Vec::new()),
+                            });
                         rec.last_seen = timestamp();
                         rec.ip = ip.trim().into();
                     }
                 }
             }
         }
+        self.export_active_registry();
     }
 
     /// Collect GPU telemetry for workers exposing CUDA.
@@ -116,14 +132,30 @@ impl QueenOrchestrator {
                         mem_free,
                         last_temp,
                         jobs: Vec::new(),
+                        gpu_capacity: val["gpu_capacity"].as_u64().unwrap_or(0) as u32,
+                        current_load: val["current_load"].as_u64().unwrap_or(0) as u32,
+                        latency_score: val["latency_score"].as_u64().unwrap_or(0) as u32,
                     });
                     node.perf_watt = perf_watt;
                     node.mem_total = mem_total;
                     node.mem_free = mem_free;
                     node.last_temp = last_temp;
+                    node.gpu_capacity = val["gpu_capacity"]
+                        .as_u64()
+                        .unwrap_or(node.gpu_capacity as u64)
+                        as u32;
+                    node.current_load = val["current_load"]
+                        .as_u64()
+                        .unwrap_or(node.current_load as u64)
+                        as u32;
+                    node.latency_score = val["latency_score"]
+                        .as_u64()
+                        .unwrap_or(node.latency_score as u64)
+                        as u32;
                 }
             }
         }
+        self.export_gpu_registry();
     }
 
     /// Send a spawn command to a worker.
@@ -147,6 +179,56 @@ impl QueenOrchestrator {
         }
     }
 
+    /// Write current worker registry to `/srv/agents/active.json`.
+    pub fn export_active_registry(&self) {
+        let mut entries = Vec::new();
+        for w in self.workers.values() {
+            entries.push(serde_json::json!({
+                "worker_id": w.id,
+                "role": w.role,
+                "status": w.status,
+                "ip": w.ip,
+            }));
+        }
+        if let Ok(json) = serde_json::to_string_pretty(&entries) {
+            fs::create_dir_all("/srv/agents").ok();
+            fs::write("/srv/agents/active.json", json).ok();
+        }
+    }
+
+    /// Update GPU registry file with latest telemetry.
+    pub fn export_gpu_registry(&self) {
+        let mut entries = Vec::new();
+        for n in self.gpu_nodes.values() {
+            entries.push(serde_json::json!({
+                "worker_id": n.worker_id,
+                "cuda_ok": n.status == "online",
+                "gpu_capacity": n.gpu_capacity,
+                "current_load": n.current_load,
+                "latency_score": n.latency_score,
+            }));
+        }
+        if let Ok(json) = serde_json::to_string_pretty(&entries) {
+            fs::write("/srv/gpu_registry.json", json).ok();
+        }
+    }
+
+    /// Force-assign a role to a worker and record the action.
+    pub fn assign_role(&mut self, worker_id: &str, role: &str) {
+        if let Some(w) = self.workers.get_mut(worker_id) {
+            w.role = role.into();
+            let dir = format!("/srv/agents/{worker_id}");
+            fs::create_dir_all(&dir).ok();
+            fs::write(format!("{}/role", dir), role).ok();
+            recorder::event(
+                "orchestrator",
+                "assign",
+                &format!("{} -> {}", worker_id, role),
+            );
+            self.export_active_registry();
+        }
+    }
+
     /// Export orchestrator status to `/srv/orch/status`.
     pub fn export_status(&self) {
         if let Ok(mut f) = fs::OpenOptions::new()
@@ -167,7 +249,7 @@ impl QueenOrchestrator {
         if ids.is_empty() {
             return None;
         }
-        match self.policy {
+        let target = match self.policy {
             SchedulePolicy::RoundRobin => {
                 let i = self.next_idx % ids.len();
                 self.next_idx += 1;
@@ -175,10 +257,18 @@ impl QueenOrchestrator {
             }
             SchedulePolicy::GpuPriority => self.schedule_gpu(agent_id),
             _ => ids.get(0).cloned(),
+        };
+        if let Some(ref id) = target {
+            recorder::event(
+                "orchestrator",
+                "schedule",
+                &format!("{} -> {}", agent_id, id),
+            );
         }
+        target
     }
 
-    fn schedule_gpu(&mut self, job: &str) -> Option<String> {
+    pub fn schedule_gpu(&mut self, job: &str) -> Option<String> {
         self.sync_gpu_telemetry();
         let mut best_id: Option<String> = None;
         let mut best_weight = 0f32;
