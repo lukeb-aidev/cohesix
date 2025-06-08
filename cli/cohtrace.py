@@ -46,6 +46,7 @@ def main():
     push.add_argument("worker_id")
     push.add_argument("path")
     sub.add_parser("kiosk_ping", help="Simulate kiosk card insertion")
+    sub.add_parser("trust_check", help="Show worker trust levels")
     args = parser.parse_args()
     if args.cmd == "list":
         list_workers(Path("/srv/workers"))
@@ -61,6 +62,14 @@ def main():
         data.setdefault("pings", []).append(int(time.time()))
         path.write_text(json.dumps(data))
         print("kiosk ping logged")
+    elif args.cmd == "trust_check":
+        base = Path("/srv/trust_zones")
+        if not base.exists():
+            print("no trust zone data")
+        else:
+            for ent in base.iterdir():
+                level = ent.read_text().strip()
+                print(f"{ent.name}: {level}")
     else:
         parser.print_help()
 
