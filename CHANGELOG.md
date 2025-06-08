@@ -446,3 +446,10 @@
 ## [v0.54] - 2025-07-13
 ### Added
 - ALPHA_VALIDATION_ISSUES.md documenting release blockers.
+
+## [v0.55] - 2025-07-13
+### Added
+- cohdevd service with inotify hotplug and sandbox validation.
+- Webcam capture telemetry logging and dummy fallback.
+- Real sensor input with optional mock injection.
+- Tests for device attach/detach, validator logging, and webcam fallback.
