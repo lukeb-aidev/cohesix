@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # CLASSIFICATION: COMMUNITY
-# Filename: cohtrace.py v0.3
+# Filename: cohtrace.py v0.4
 # Author: Lukas Bower
-# Date Modified: 2025-07-11
+# Date Modified: 2025-07-12
 
 """cohtrace – inspect connected workers."""
 
@@ -20,7 +20,7 @@ def list_workers(base: Path):
         services = []
         srv_dir = worker / "services"
         if srv_dir.exists():
-        services = [p.name for p in srv_dir.iterdir()]
+            services = [p.name for p in srv_dir.iterdir()]
         print(f"{worker.name}: role={role} services={','.join(services)}")
 
 
@@ -47,6 +47,8 @@ def main():
     push.add_argument("path")
     sub.add_parser("kiosk_ping", help="Simulate kiosk card insertion")
     sub.add_parser("trust_check", help="Show worker trust levels")
+    view = sub.add_parser("view_snapshot", help="View world snapshot for worker")
+    view.add_argument("worker_id")
     args = parser.parse_args()
     if args.cmd == "list":
         list_workers(Path("/srv/workers"))
@@ -70,6 +72,13 @@ def main():
             for ent in base.iterdir():
                 level = ent.read_text().strip()
                 print(f"{ent.name}: {level}")
+    elif args.cmd == "view_snapshot":
+        base = Path(os.environ.get("SNAPSHOT_BASE", "/history/snapshots"))
+        path = base / f"{args.worker_id}.json"
+        if path.exists():
+            print(path.read_text())
+        else:
+            print("snapshot not found")
     else:
         parser.print_help()
 
