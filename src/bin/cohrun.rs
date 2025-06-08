@@ -21,6 +21,12 @@ enum Commands {
     TestWebcam,
     WebcamTilt,
     KioskStart,
+    KioskEvent {
+        #[arg(long)]
+        event: String,
+        #[arg(long)]
+        user: Option<String>,
+    },
     Orchestrator {
         #[command(subcommand)]
         command: OrchestratorCmd,
@@ -74,6 +80,10 @@ fn main() {
         Commands::KioskStart => {
             cohesix::init::kiosk::start();
             println!("kiosk started");
+        }
+        Commands::KioskEvent { event, user } => {
+            cohesix::init::kiosk::emit_event(&event, user.as_deref());
+            println!("event logged");
         }
         Commands::Orchestrator { command: cmd } => match cmd {
             OrchestratorCmd::Status => {
