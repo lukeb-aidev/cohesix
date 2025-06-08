@@ -1,19 +1,33 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.25
-// Date Modified: 2025-07-11
+// Filename: CHANGELOG.md v0.26
+// Date Modified: 2025-06-08
 // Author: Lukas Bower
-## [v0.41] - 2025-07-11
+## [v0.41] - 2025-06-08
 ### Added
 - Cross-target `--target` option for `cohcc` CLI.
 - POSIX translation helpers and tests.
 - Build plan updated for architecture flag.
 
-## [v0.40] - 2025-07-11
+## [v0.40] - 2025-06-06
 ### Added
 - Webcam and GPU info services registered under `/srv`.
 - `cohrun physics_demo` CLI and Rapier demo logging to `/trace/last_sim.json`.
 - `cohtrace list` demo CLI for viewing joined workers.
 - Boot hooks create role services and write to `/trace/boot.log`.
+
+## [v0.41] - 2025-07-11
+### Added
+- Real webcam capture with `/srv/webcam/frame.jpg`.
+- `cohrun test_webcam` and `cohrun webcam_tilt` commands.
+- Webcam tilt simulation logs to `/trace/last_sim.json`.
+- Queen validator writes reports under `/trace/reports/`.
+
+## [v0.42] - 2025-07-11
+### Added
+- Cross-worker orchestrator registry written to `/srv/agents/active.json`.
+- CLI commands `cohrun orchestrator status|assign` and `cohrun kiosk_start`.
+- GPU swarm registry `/srv/gpu_registry.json` with `gpu_status` and `gpu_dispatch`.
+- `cohtrace kiosk_ping` command for kiosk federation demo.
 
 ## [v0.39] - 2025-06-08
 ### Changed
