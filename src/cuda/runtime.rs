@@ -7,10 +7,6 @@
 //! Falls back gracefully if no CUDA driver is present.
 
 use crate::runtime::ServiceRegistry;
-use libloading::Library;
-use log::warn;
-#[cfg(feature = "cuda")]
-use log::info;
 use libloading::{Library, Symbol};
 use crate::validator::{self, RuleViolation};
 use log::{info, warn};
