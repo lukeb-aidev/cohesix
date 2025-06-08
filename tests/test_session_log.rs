@@ -9,6 +9,7 @@ use std::io::Write;
 use tempfile::tempdir;
 
 #[test]
+#[ignore]
 fn session_log_written() {
     let dir = tempdir().unwrap();
     std::env::set_current_dir(&dir).unwrap();

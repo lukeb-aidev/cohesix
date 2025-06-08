@@ -9,6 +9,7 @@ mod server;
 mod protocol;
 use server::handle_9p_session;
 use protocol::{parse_message, P9Message};
+use serial_test::serial;
 
 fn msg(op: u8, path: &str) -> Vec<u8> {
     let mut v = vec![op];
@@ -17,6 +18,7 @@ fn msg(op: u8, path: &str) -> Vec<u8> {
 }
 
 #[test]
+#[serial]
 fn walk_srv() {
     std::fs::create_dir_all("/srv").unwrap();
     std::fs::write("/srv/cohrole", "QueenPrimary").unwrap();
@@ -25,6 +27,7 @@ fn walk_srv() {
 }
 
 #[test]
+#[serial]
 fn worker_write_denied() {
     std::fs::write("/srv/cohrole", "DroneWorker").unwrap();
     let resp = handle_9p_session(&msg(0x09, "/proc/x"));
