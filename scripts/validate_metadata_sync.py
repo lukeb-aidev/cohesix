@@ -35,7 +35,12 @@ def parse_metadata(path: Path):
 
 
 def check_file(filename: str, version: str, classification: str):
-    possible_paths = [Path('docs/community') / filename, Path('docs/private') / filename]
+    possible_paths = [
+        Path('docs/community') / filename,
+        Path('docs/private') / filename,
+        Path('docs/man') / filename,
+        Path('scripts') / filename,
+    ]
     for p in possible_paths:
         if p.exists():
             with p.open() as f:
