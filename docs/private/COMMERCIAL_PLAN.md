@@ -1,6 +1,6 @@
 // CLASSIFICATION: PRIVATE
-// Filename: COMMERCIAL_PLAN.md v1.4
-// Date Modified: 2025-07-12
+// Filename: COMMERCIAL_PLAN.md v1.5
+// Date Modified: 2025-06-08
 // Author: Lukas Bower
 
 # Cohesix Commercial Plan
@@ -63,6 +63,12 @@ Cohesix delivers a formally verified, micro‑kernel–based edge compute platfo
 - Ongoing discussions with Telstra Ventures
 - NVIDIA Inception partner status
 - University collaboration via UNSW and Monash
+
+### Leveraging the EY Network
+As an EY Technology Partner, we can tap the global EY ecosystem for warm
+introductions and credibility with enterprise clients. Engagements remain
+non‑exclusive and focus on high‑level advisory so that Cohesix retains full
+commercial independence and IP control.
 
 ## 8. Open‑Source Benchmarking
 Cohesix regularly publishes upstream performance comparisons against Linux and FreeRTOS on reference hardware. Benchmarks include boot time, IPC latency, and deterministic scheduling metrics.
