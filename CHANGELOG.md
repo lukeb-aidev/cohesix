@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.25
+// Filename: CHANGELOG.md v0.26
 // Date Modified: 2025-07-11
 // Author: Lukas Bower
 ## [v0.40] - 2025-07-11
@@ -15,6 +15,10 @@
 - `cohrun test_webcam` and `cohrun webcam_tilt` commands.
 - Webcam tilt simulation logs to `/trace/last_sim.json`.
 - Queen validator writes reports under `/trace/reports/`.
+
+## [v0.42] - 2025-07-11
+### Added
+- Security review summary under `SECURITY_REVIEW.md`.
 
 ## [v0.39] - 2025-06-08
 ### Changed
