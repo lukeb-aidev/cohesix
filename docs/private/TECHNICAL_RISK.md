@@ -1,6 +1,6 @@
 // CLASSIFICATION: PRIVATE
-// Filename: TECHNICAL_RISK.md v1.0
-// Date Modified: 2025-07-12
+// Filename: TECHNICAL_RISK.md v1.1
+// Date Modified: 2025-06-08
 // Author: Lukas Bower
 
 # Cohesix Technical Risk Assessment
@@ -15,4 +15,5 @@ This document outlines critical technical risks for the Cohesix platform and how
 | Cross-arch build failures | Matrix CI across aarch64 and x86_64 | "Both architectures compile nightly via CI" |
 | Data corruption during updates | Atomic write protocol and checksum verification | "OTA tests show zero corruption across 500 cycles" |
 | OSS license contamination | SPDX headers and automated reuse registry | "All imported crates verified Apache/MIT/BSD" |
+| EY network overreach | Limit EY involvement to non-binding introductions under NDA | "Partnership guidelines prevent IP or rights transfer" |
 
