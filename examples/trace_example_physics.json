@@ -1,0 +1,4 @@
+[
+  {"timestamp": 0, "event": "spawn", "detail": "rigid_body"},
+  {"timestamp": 1, "event": "step", "detail": "dt=0.016"}
+]
