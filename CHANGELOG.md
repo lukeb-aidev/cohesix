@@ -1,7 +1,13 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.24
+// Filename: CHANGELOG.md v0.25
 // Date Modified: 2025-07-11
 // Author: Lukas Bower
+## [v0.41] - 2025-07-11
+### Added
+- Cross-target `--target` option for `cohcc` CLI.
+- POSIX translation helpers and tests.
+- Build plan updated for architecture flag.
+
 ## [v0.40] - 2025-07-11
 ### Added
 - Webcam and GPU info services registered under `/srv`.

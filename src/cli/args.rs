@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: args.rs v1.0
-// Date Modified: 2025-05-27
+// Filename: args.rs v1.1
+// Date Modified: 2025-07-11
 // Author: Lukas Bower
 
 use clap::{Arg, Command};
@@ -34,5 +34,14 @@ pub fn build_cli() -> Command {
                 .help("Request timeout in milliseconds")
                 .required(false)
                 .default_value("5000"),
+        )
+        .arg(
+            Arg::new("target")
+                .long("target")
+                .value_name("TRIPLE")
+                .help("Target architecture (x86_64 or aarch64)")
+                .required(false)
+                .value_parser(["x86_64", "aarch64"])
+                .default_value(std::env::consts::ARCH),
         )
 }
