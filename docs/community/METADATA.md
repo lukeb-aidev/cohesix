@@ -48,3 +48,11 @@
 | KIOSK_FEDERATION.md       | v0.1    | 2025-07-11    | COMMUNITY      |            |             
 | OPEN_SOURCE_DEPENDENCIES.md | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
 | LICENSE_MATRIX.md           | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
+| AGENTS_AND_CLI.md          | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
+| DEMO_SCENARIOS.md          | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
+| VALIDATION_AND_TESTING.md  | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
+| CLI_HELP_COHCLI.md         | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
+| CLI_HELP_COHRUN.md         | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
+| CLI_HELP_COHTRACE.md       | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
+| CLI_HELP_COHCC.md          | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
+| CLI_HELP_COHCAP.md         | v0.1    | 2025-07-12    | COMMUNITY      |     |              |

@@ -2,6 +2,12 @@
 // Filename: CHANGELOG.md v0.31
 // Date Modified: 2025-07-12
 // Author: Lukas Bower
+## [v0.50] - 2025-07-12
+### Added
+- CLI help docs for cohcli, cohrun, cohtrace, cohcc, and cohcap.
+- Example JSON templates in examples/ directory.
+- New guides: AGENTS_AND_CLI, DEMO_SCENARIOS, VALIDATION_AND_TESTING.
+
 
 ## [v0.49] - 2025-07-12
 ### Added
