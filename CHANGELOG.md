@@ -1,4 +1,13 @@
 // CLASSIFICATION: COMMUNITY
+// Filename: CHANGELOG.md v0.31
+// Author: Lukas Bower
+// Date Modified: 2025-07-12
+## [v0.49] - 2025-07-12
+### Changed
+- Consolidated community documentation into six files.
+- Updated METADATA.md to v3.0 and removed deprecated docs.
+
+
 // Filename: CHANGELOG.md v0.30
 // Date Modified: 2025-07-12
 // Author: Lukas Bower
