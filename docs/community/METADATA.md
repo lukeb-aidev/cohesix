@@ -96,3 +96,4 @@
 | issues/ALPHA_VALIDATION_ISSUES.md | v0.1    | 2025-07-13    | COMMUNITY      |     |              |
 | UTILS_README.md            | v0.1    | 2025-07-13    | COMMUNITY      |     |              |
 | cohpkg.1                   | v0.1    | 2025-07-13    | COMMUNITY      |     |              |
+| SIM_TESTS.md               | v0.1    | 2025-07-13    | COMMUNITY      |     |             |
