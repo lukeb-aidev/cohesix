@@ -1,6 +1,11 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.35
+// Filename: CHANGELOG.md v0.36
 // Date Modified: 2025-07-13
+
+## [v0.56] - 2025-07-13
+### Added
+- Deterministic simbridge harness with snapshot resume.
+- Nightly CI job for cross-platform determinism.
 
 ## [v0.54] - 2025-07-13
 ### Added
