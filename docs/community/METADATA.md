@@ -10,6 +10,9 @@
 | AGENTS.md                  | v2.0    | 2025-07-11    | COMMUNITY      |            |              |
 | ARCHITECTURE.md            | v0.3    | 2025-05-31    | PRIVATE        |            |              |
 | BATCH_PLAN.md              | v0.6    | 2025-07-12    | COMMUNITY      |            |              |
+| IMPLEMENTATION_AND_TOOLING.md | v1.0    | 2025-06-20    | COMMUNITY      |     |              |
+| MISSION_AND_ARCHITECTURE.md | v1.0    | 2025-06-20    | COMMUNITY      |     |              |
+| RELEASE_AND_BATCH_PLAN.md  | v1.0    | 2025-06-20    | COMMUNITY      |     |              |
 | BUILD_PLAN.md              | v0.4    | 2025-07-11    | COMMUNITY      |            |              |
 | COMMERCIAL_PLAN.md         | v1.5    | 2025-06-08    | PRIVATE        |            |              |
 | DEPENDENCIES.md            | v0.5    | 2025-07-06    | COMMUNITY      |            |              |
@@ -48,9 +51,9 @@
 | KIOSK_FEDERATION.md       | v0.1    | 2025-07-11    | COMMUNITY      |            |             
 | OPEN_SOURCE_DEPENDENCIES.md | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
 | LICENSE_MATRIX.md           | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
-| AGENTS_AND_CLI.md          | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
-| DEMO_SCENARIOS.md          | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
-| VALIDATION_AND_TESTING.md  | v0.2    | 2025-07-12    | COMMUNITY      |     |              |
+| AGENTS_AND_CLI.md          | v1.0    | 2025-06-20    | COMMUNITY      |     |              |
+| DEMO_SCENARIOS.md          | v1.0    | 2025-06-20    | COMMUNITY      |     |              |
+| VALIDATION_AND_TESTING.md  | v1.0    | 2025-06-20    | COMMUNITY      |     |              |
 | CLI_HELP_COHCLI.md         | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
 | CLI_HELP_COHRUN.md         | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
 | CLI_HELP_COHTRACE.md       | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
