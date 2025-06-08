@@ -1,7 +1,7 @@
-// Filename: OPEN_SOURCE_DEPENDENCIES.md v0.2
-// Author: Lukas Bower
-// Date Modified: 2025-07-14
 // CLASSIFICATION: COMMUNITY
+// Filename: OPEN_SOURCE_DEPENDENCIES.md v0.3
+// Author: Lukas Bower
+// Date Modified: 2025-07-15
 # Open Source Dependencies
 
 | Name | Version | SPDX License | Purpose | Upstream |
