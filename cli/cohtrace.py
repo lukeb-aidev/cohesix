@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # CLASSIFICATION: COMMUNITY
-# Filename: cohtrace.py v0.2
+# Filename: cohtrace.py v0.3
 # Author: Lukas Bower
 # Date Modified: 2025-07-11
 
@@ -45,11 +45,22 @@ def main():
     push = sub.add_parser("push_trace", help="Push a simulation trace to the Queen")
     push.add_argument("worker_id")
     push.add_argument("path")
+    sub.add_parser("kiosk_ping", help="Simulate kiosk card insertion")
     args = parser.parse_args()
     if args.cmd == "list":
         list_workers(Path("/srv/workers"))
     elif args.cmd == "push_trace":
         push_trace(args.worker_id, Path(args.path))
+    elif args.cmd == "kiosk_ping":
+        path = Path("/srv/kiosk_federation.json")
+        data = {"pings": []}
+        if path.exists():
+            import json
+            data = json.loads(path.read_text())
+        import time, json
+        data.setdefault("pings", []).append(int(time.time()))
+        path.write_text(json.dumps(data))
+        print("kiosk ping logged")
     else:
         parser.print_help()
 
