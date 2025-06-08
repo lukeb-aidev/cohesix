@@ -1,12 +1,16 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: diagnostics.rs v1.0
+// Filename: diagnostics.rs v1.1
 // Author: Lukas Bower
-// Date Modified: 2025-05-31
+// Date Modified: 2025-07-14
 
 //! Telemetry Diagnostics Module
 //!
 //! Provides diagnostic utilities for internal health, trace tagging, and fault event emission within Cohesix.
 //! Integrates with service-level telemetry and runtime validators.
+
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Struct representing a basic diagnostic entry.
 pub struct DiagnosticEntry {
@@ -31,7 +35,14 @@ pub fn emit(entry: DiagnosticEntry) {
         "[diagnostic][{:?}] {}: {}",
         entry.severity, entry.category, entry.message
     );
-    // TODO(cohesix): Route to trace log, alert buffer, or runtime validator
+    fs::create_dir_all("/srv/telemetry").ok();
+    if let Ok(mut f) = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/srv/telemetry/diagnostics.log")
+    {
+        let _ = writeln!(f, "[{:?}] {}: {}", entry.severity, entry.category, entry.message);
+    }
 }
 
 /// Captures a diagnostic event with current timestamp and metadata.
@@ -47,6 +58,8 @@ pub fn capture(category: &str, message: &str, severity: DiagnosticLevel) {
 
 /// Returns a placeholder timestamp.
 fn get_current_timestamp() -> u64 {
-    // TODO(cohesix): Integrate with system time or monotonic clock
-    0
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }

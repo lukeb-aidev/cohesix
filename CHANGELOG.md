@@ -1,6 +1,11 @@
-// CLASSIFICATION: COMMUNIT
+// CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v0.36
-// Date Modified: 2025-06-08
+// Date Modified: 2025-07-14
+
+## [v0.58] - 2025-07-14
+### Added
+- Persistent telemetry logs and timestamp helpers
+- `cohcli --version` option and updated man page
 
 ## [v0.57] - 2025-07-14
 ### Added

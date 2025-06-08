@@ -2,7 +2,7 @@
 #!/usr/bin/env python3
 # CLASSIFICATION: COMMUNITY
 # Filename: cohcli.py v0.9
-# Date Modified: 2025-07-12
+# Date Modified: 2025-07-14
 # Author: Lukas Bower
 
 """
@@ -18,6 +18,7 @@ def parse_args():
         description="CohCLI – Manage and interact with Cohesix nodes and services."
     )
     parser.add_argument("--man", action="store_true", help="Show man page")
+    parser.add_argument("--version", action="store_true", help="Show version info")
 
     subparsers = parser.add_subparsers(dest="command", help="CohCLI subcommands")
 
@@ -124,6 +125,9 @@ def parse_args():
 
 def main():
     args = parse_args()
+    if getattr(args, "version", False):
+        print("CohCLI version 1.0")
+        return
     if getattr(args, "man", False):
         man = os.path.join(os.path.dirname(__file__), "../bin/man")
         page = os.path.join(os.path.dirname(__file__), "../docs/man/cohcli.1")

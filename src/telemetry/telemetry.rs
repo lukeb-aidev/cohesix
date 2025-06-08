@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: telemetry.rs v1.2
+// Filename: telemetry.rs v1.3
 // Author: Lukas Bower
-// Date Modified: 2025-07-13
+// Date Modified: 2025-07-14
 
 //! Telemetry Core Module
 //!
@@ -9,6 +9,9 @@
 //! and trace information. This module provides APIs for components to report and retrieve telemetry records.
 
 use std::collections::HashMap;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Struct representing a telemetry record with key-value pairs.
 pub struct TelemetryRecord {
@@ -28,13 +31,22 @@ pub fn emit(record: TelemetryRecord) {
         "[telemetry] from {} @ {} → {:?}",
         record.source, record.timestamp, record.data
     );
-    // TODO(cohesix): Route to telemetry service, trace buffer, or external collector
+    fs::create_dir_all("/srv/telemetry").ok();
+    if let Ok(mut f) = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/srv/telemetry/telemetry.log")
+    {
+        let _ = writeln!(f, "[{}] {:?}", record.source, record.data);
+    }
 }
 
 /// Returns a placeholder timestamp.
 fn get_current_timestamp() -> u64 {
-    // TODO(cohesix): Replace with system uptime or monotonic clock
-    0
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
 
 /// Convenience method for emitting a basic telemetry record.
