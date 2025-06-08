@@ -9,7 +9,7 @@
 |----------------------------|---------|---------------|----------------|------------|--------------|
 | AGENTS.md                  | v2.0    | 2025-07-11    | COMMUNITY      |            |              |
 | ARCHITECTURE.md            | v0.3    | 2025-05-31    | PRIVATE        |            |              |
-| BATCH_PLAN.md              | v0.5    | 2025-06-05    | COMMUNITY      |            |              |
+| BATCH_PLAN.md              | v0.6    | 2025-07-11    | COMMUNITY      |            |              |
 | BUILD_PLAN.md              | v0.4    | 2025-07-11    | COMMUNITY      |            |              |
 | COMMERCIAL_PLAN.md         | v1.3    | 2025-05-24    | PRIVATE        |            |              |
 | DEPENDENCIES.md            | v0.5    | 2025-07-06    | COMMUNITY      |            |              |

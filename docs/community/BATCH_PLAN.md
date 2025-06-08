@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: BATCH_PLAN.md v0.5
-// Date Modified: 2025-06-05
+// Filename: BATCH_PLAN.md v0.6
+// Date Modified: 2025-07-11
 // Author: Lukas Bower
 
 ## Cohesix Batch Plan
@@ -76,15 +76,15 @@ Operating system and runtime environment scaffolding.
 
 | Batch  | Deliverables                                                                                   | Status    |
 |--------|-----------------------------------------------------------------------------------------------|-----------|
-| O1     | seL4 boot hydration & CohRole init; Plan 9 mount logic                                         | ⏳ Queued  |
-| O2     | Plan 9 namespace server, `rc` shell adjustments, POSIX shims                                   | ⏳ Queued  |
-| O3     | Sandbox caps, security proof integration, validation scripts                                   | ⏳ Queued  |
-| O4     | Physics core service (`/sim/`) integration with Rapier                                         | ⏳ Queued  |
-| O5     | GPU offload service (`/srv/cuda`) with Torch/TensorRT integration                              | ⏳ Queued  |
-| O6     | Driver model & hardware abstraction layer                                                      | ⏳ Queued  |
+| O1     | seL4 boot hydration & CohRole init; Plan 9 mount logic                                         | 🟢 Hydrated  |
+| O2     | Plan 9 namespace server, `rc` shell adjustments, POSIX shims                                   | 🟢 Hydrated  |
+| O3     | Sandbox caps, security proof integration, validation scripts                                   | 🟢 Hydrated  |
+| O4     | Physics core service (`/sim/`) integration with Rapier                                         | 🟢 Hydrated  |
+| O5     | GPU offload service (`/srv/cuda`) with Torch/TensorRT integration                              | 🟢 Hydrated  |
+| O6     | Driver model & hardware abstraction layer                                                      | 🟢 Hydrated  |
 | O7     | Full OS image assembly, reproducible build, CI smoke tests                                     | ⏳ Queued  |
-| O8     | Service health & recovery: watchdog scripts, container healthchecks, auto-restart logic        | ⏳ Queued  |
-| O9     | Cloud-native hooks for Queen roles: bootstrapping, auto-scaling triggers, and metrics export  | ⏳ Queued  |
+| O8     | Service health & recovery: watchdog scripts, container healthchecks, auto-restart logic        | 🟢 Hydrated  |
+| O9     | Cloud-native hooks for Queen roles: bootstrapping, auto-scaling triggers, and metrics export  | 🟢 Hydrated  |
 
 *Agents*: `scaffold_service`
 
@@ -137,14 +137,14 @@ Common CLI and system utilities adaptation for a Linux-like UX.
 
 | Batch | Deliverables                                                                                   | Status    |
 |-------|-----------------------------------------------------------------------------------------------|-----------|
-| T1    | BusyBox coreutils integration                                                                  | ⏳ Queued  |
-| T2    | SSH & networking tools                                                                         | ⏳ Queued  |
-| T3    | Manual pages & help system (`man`, `help`, `mandoc`)                                           | ⏳ Queued  |
-| T4    | Logging utilities (`last`, `finger`, rotation)                                                 | ⏳ Queued  |
-| T5    | Package manager stub & installation scripts                                                    | ⏳ Queued  |
-| T6    | Monitoring & healthcheck services                                                               | ⏳ Queued  |
-| T7    | Distributed build tooling (SSH-driven CI, remote artifact staging)                             | ⏳ Queued  |
-| T8    | CI helper scripts (`build-busybox.sh`, `deploy-ci.sh`, smoke-test runners)                      | ⏳ Queued  |
+| T1    | BusyBox coreutils integration                                                                  | 🟢 Hydrated  |
+| T2    | SSH & networking tools                                                                         | 🟢 Hydrated  |
+| T3    | Manual pages & help system (`man`, `help`, `mandoc`)                                           | 🟢 Hydrated  |
+| T4    | Logging utilities (`last`, `finger`, rotation)                                                 | 🟢 Hydrated  |
+| T5    | Package manager stub & installation scripts                                                    | 🟢 Hydrated  |
+| T6    | Monitoring & healthcheck services                                                               | 🟢 Hydrated  |
+| T7    | Distributed build tooling (SSH-driven CI, remote artifact staging)                             | 🟢 Hydrated  |
+| T8    | CI helper scripts (`build-busybox.sh`, `deploy-ci.sh`, smoke-test runners)                      | 🟢 Hydrated  |
 
 *Agents*: `add_cli_option`
 
@@ -195,10 +195,10 @@ Preparation and validation for AI-driven code generation and automation.
 
 | Batch | Deliverables                                                                                   | Status    |
 |-------|-----------------------------------------------------------------------------------------------|-----------|
-| C1    | Stub specifications & version pinning in `DEPENDENCIES.md`                                     | ⏳ Queued  |
-| C2    | CI smoke tests & `README_Codex.md`                                                              | ⏳ Queued  |
-| C3    | API adapter & driver integration for Codex agents                                               | ⏳ Queued  |
-| C4    | Agent instructions, example tasks, initial tests (`tests/codex/`)                               | ⏳ Queued  |
+| C1    | Stub specifications & version pinning in `DEPENDENCIES.md`                                     | 🟢 Hydrated  |
+| C2    | CI smoke tests & `README_Codex.md`                                                              | 🟢 Hydrated  |
+| C3    | API adapter & driver integration for Codex agents                                               | 🟢 Hydrated  |
+| C4    | Agent instructions, example tasks, initial tests (`tests/codex/`)                               | 🟢 Hydrated  |
 | C5    | Logging & audit trails for Codex outputs (`codex_logs/`)                                        | ⏳ Queued  |
 | C6    | Agent self-test harness: validate `AGENTS.md` schema and sample runs                            | ⏳ Queued  |
 
@@ -297,7 +297,7 @@ End-user demo pipelines and helper services for showcasing Cohesix features.
 
 | Batch | Deliverables                                             | Status    |
 |-------|----------------------------------------------------------|-----------|
-| D1    | Webcam capture + gesture service for Workers (demos 1–3) | ⏳ Queued |
+| D1    | Webcam capture + gesture service for Workers (demos 1–3) | 🟢 Hydrated |
 | D2    | QR-based SLM loader and app swap (demo 6)                | ⏳ Queued |
 | D3    | NAT rendezvous service for auto-attach (demo 10)         | ⏳ Queued |
 | D4    | Trace replay and fairness harness (demos 4 & 8)          | ⏳ Queued |
