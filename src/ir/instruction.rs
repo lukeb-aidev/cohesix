@@ -8,7 +8,7 @@
 use std::fmt;
 
 /// Low-level operation codes supported by the IR.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Opcode {
     Nop,
     Add,
