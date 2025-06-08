@@ -40,3 +40,4 @@
 | SECURE_BOOT.md             | v1.0    | 2025-06-07    | PRIVATE        |            |              |
 | PHYSICAL_AGENT_POLICY.md   | v0.1    | 2025-07-05    | PRIVATE        |            |              |
 | TRACE_CONSENSUS.md         | v0.1    | 2025-07-05    | COMMUNITY      |            |              |
+| WEBCAM_TILT.md | v0.1 | 2025-07-11 | COMMUNITY | | |

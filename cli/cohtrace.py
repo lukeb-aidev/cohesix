@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # CLASSIFICATION: COMMUNITY
-# Filename: cohtrace.py v0.1
+# Filename: cohtrace.py v0.2
 # Author: Lukas Bower
 # Date Modified: 2025-07-11
 
@@ -20,17 +20,36 @@ def list_workers(base: Path):
         services = []
         srv_dir = worker / "services"
         if srv_dir.exists():
-            services = [p.name for p in srv_dir.iterdir()]
+        services = [p.name for p in srv_dir.iterdir()]
         print(f"{worker.name}: role={role} services={','.join(services)}")
+
+
+def push_trace(worker_id: str, path: Path):
+    dest_dir = Path("/trace") / worker_id
+    os.makedirs(dest_dir, exist_ok=True)
+    dest = dest_dir / "sim.json"
+    import shutil
+    shutil.copy(path, dest)
+    print(f"Trace pushed to {dest}")
+    try:
+        from cohesix.trace.validator import validate_trace
+        validate_trace(str(dest), worker_id)
+    except Exception as e:
+        print(f"Validation failed: {e}")
 
 
 def main():
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="cmd")
     sub.add_parser("list", help="List connected workers")
+    push = sub.add_parser("push_trace", help="Push a simulation trace to the Queen")
+    push.add_argument("worker_id")
+    push.add_argument("path")
     args = parser.parse_args()
     if args.cmd == "list":
         list_workers(Path("/srv/workers"))
+    elif args.cmd == "push_trace":
+        push_trace(args.worker_id, Path(args.path))
     else:
         parser.print_help()
 

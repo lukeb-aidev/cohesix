@@ -8,3 +8,4 @@
 pub mod recorder;
 pub mod distributed_runner;
 pub mod trace_consensus;
+pub mod validator;
