@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.25
+// Filename: CHANGELOG.md v0.26
 // Date Modified: 2025-07-11
 // Author: Lukas Bower
 ## [v0.40] - 2025-07-11
@@ -15,6 +15,13 @@
 - `cohrun test_webcam` and `cohrun webcam_tilt` commands.
 - Webcam tilt simulation logs to `/trace/last_sim.json`.
 - Queen validator writes reports under `/trace/reports/`.
+
+## [v0.42] - 2025-07-11
+### Added
+- Cross-worker orchestrator registry written to `/srv/agents/active.json`.
+- CLI commands `cohrun orchestrator status|assign` and `cohrun kiosk_start`.
+- GPU swarm registry `/srv/gpu_registry.json` with `gpu_status` and `gpu_dispatch`.
+- `cohtrace kiosk_ping` command for kiosk federation demo.
 
 ## [v0.39] - 2025-06-08
 ### Changed
