@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: mod.rs v1.0
-// Date Modified: 2025-05-27
+// Date Modified: 2025-07-12
 // Author: Lukas Bower
 
 //! CLI module for Coh_CC compiler. Exports argument parser and main entry.
@@ -9,7 +9,7 @@ pub mod args;
 pub mod federation;
 
 use crate::cli::args::build_cli;
-use crate::codegen::dispatch::{dispatch, Backend};
+use crate::codegen::dispatch::{dispatch, infer_backend_from_path, Backend};
 use crate::pass_framework::ir_pass_framework::Module;
 use std::fs;
 
@@ -30,7 +30,7 @@ pub fn run() -> anyhow::Result<()> {
     let module = Module::new(input_path);
 
     // Infer backend based on output extension
-    let backend = Backend::C; // TODO: infer from output_path using infer_backend_from_path
+    let backend = infer_backend_from_path(output_path).unwrap_or(Backend::C);
 
     let code = dispatch(&module, backend);
     fs::write(output_path, code)?;

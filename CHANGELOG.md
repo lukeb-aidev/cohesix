@@ -2,6 +2,10 @@
 // Filename: CHANGELOG.md v0.30
 // Date Modified: 2025-07-12
 // Author: Lukas Bower
+## [v0.49] - 2025-07-12
+### Changed
+- `cohcc` CLI now infers backend from output path.
+
 ## [v0.48] - 2025-07-12
 ### Added
 - Real-time sensor feedback via `sensor_proxy.py` and `normalizer.py`.
