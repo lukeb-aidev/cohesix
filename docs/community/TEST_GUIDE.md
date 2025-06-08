@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: TEST_GUIDE.md v1.3
-// Date Modified: 2025-07-05
+// Filename: TEST_GUIDE.md v1.4
+// Date Modified: 2025-07-12
 // Author: Lukas Bower
 
 # Testing Guide
@@ -88,8 +88,10 @@ A rigorous, multi‐tiered testing strategy ensures each component of Cohesix is
 ## 6. Tooling Tests
 
 ### 6.1 CLI & Argument Parsing
-- Test `--help`, required/optional flags, error messages for invalid inputs.  
+- Test `--help`, required/optional flags, error messages for invalid inputs.
 - Validate integration with `clap` and exit codes.
+- `cohrun federate_with <url>` triggers federation handshake.
+- `cohtrace view_snapshot <worker>` dumps the latest snapshot JSON.
 
 ### 6.2 CI & Automation
 - Smoke tests for `cohcli` commands (`codex run`, `hydrate_docs`).  
