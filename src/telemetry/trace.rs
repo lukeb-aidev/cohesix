@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: trace.rs v1.0
+// Filename: trace.rs v1.1
 // Author: Lukas Bower
-// Date Modified: 2025-05-31
+// Date Modified: 2025-07-14
 
 //! Trace Logging for Cohesix
 //!
@@ -32,7 +32,16 @@ pub fn emit(entry: TraceEntry) {
         "[trace][{:?}] [{}] {}",
         entry.level, entry.source, entry.message
     );
-    // TODO(cohesix): Write to circular buffer, persistent log, or validator tap
+    use std::fs::{self, OpenOptions};
+    use std::io::Write;
+    fs::create_dir_all("/srv/telemetry").ok();
+    if let Ok(mut f) = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/srv/telemetry/trace.log")
+    {
+        let _ = writeln!(f, "[{}][{:?}] {}", entry.source, entry.level, entry.message);
+    }
 }
 
 /// Helper function to emit a quick trace from inline values.
@@ -46,8 +55,11 @@ pub fn trace(level: TraceLevel, source: &str, message: &str) {
     emit(entry);
 }
 
-/// Returns a placeholder timestamp.
+use std::time::{SystemTime, UNIX_EPOCH};
+/// Returns a simple UNIX timestamp.
 fn get_timestamp() -> u64 {
-    // TODO(cohesix): Use system uptime or synchronized monotonic counter
-    0
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
