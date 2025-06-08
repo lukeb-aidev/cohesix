@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: cohrun.rs v0.3
+// Filename: cohrun.rs v0.4
 // Author: Lukas Bower
-// Date Modified: 2025-07-11
+// Date Modified: 2025-07-12
 
 use clap::{Parser, Subcommand};
 use cohesix::queen::orchestrator::{QueenOrchestrator, SchedulePolicy};
@@ -43,6 +43,7 @@ enum Commands {
         #[arg(long, default_value_t = 5)]
         limit: u32,
     },
+    InjectRule { from: String },
 }
 
 #[derive(Subcommand)]
@@ -180,6 +181,15 @@ fn main() {
                 cohesix::worker::role_memory::RoleMemory::replay_last(limit as usize);
             } else {
                 println!("unknown context");
+            }
+        }
+        Commands::InjectRule { from } => {
+            if let Ok(data) = std::fs::read_to_string(&from) {
+                std::fs::create_dir_all("/srv/validator").ok();
+                std::fs::write("/srv/validator/inject_rule", data).ok();
+                println!("rule injected from {from}");
+            } else {
+                println!("failed to read rule file");
             }
         }
     }
