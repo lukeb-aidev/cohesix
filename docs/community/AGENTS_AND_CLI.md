@@ -17,3 +17,16 @@ This guide links the main Cohesix agents to the community CLI tools. Refer to
 - [cohcap](CLI_HELP_COHCAP.md)
 
 Each CLI page shows usage and example commands.
+
+## Quick Usage
+
+```bash
+# check worker status
+cohcli status --verbose
+
+# launch the physics demo
+cohrun physics_demo
+
+# view connected workers
+cohtrace list
+```
