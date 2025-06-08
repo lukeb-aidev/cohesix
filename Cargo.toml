@@ -12,6 +12,7 @@ log = "0.4"
 clap = { version = "4.5.4", features = ["derive"] }
 sysinfo = "0.30"
 libloading = "0.7"
+inotify = "0.10"
 rapier3d = "0.17.2"
 ureq = "2.9"
 tokio = { version = "1", features = ["sync", "rt"] }
