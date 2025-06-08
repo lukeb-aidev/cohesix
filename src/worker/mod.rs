@@ -29,6 +29,7 @@ pub mod hotplug;
 pub mod world_sync;
 pub mod vision_overlay;
 pub mod queen_watchdog;
+pub mod role_memory;
 
 use crate::runtime::ServiceRegistry;
 

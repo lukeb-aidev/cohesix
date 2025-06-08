@@ -13,11 +13,11 @@
 | BUILD_PLAN.md              | v0.4    | 2025-07-11    | COMMUNITY      |            |              |
 | COMMERCIAL_PLAN.md         | v1.5    | 2025-06-08    | PRIVATE        |            |              |
 | DEPENDENCIES.md            | v0.5    | 2025-07-06    | COMMUNITY      |            |              |
-| END_USER_DEMOS.md          | v0.1    | 2025-06-05    | COMMUNITY      |            |              |
+| END_USER_DEMOS.md          | v0.2    | 2025-07-12    | COMMUNITY      |            |              |
 | IMPLEMENTATION_GUIDE.md    | v1.1    | 2025-05-24    | COMMUNITY      |            |              |
 | INSTRUCTION_BLOCK.md       | v4.0    | 2025-07-11    | COMMUNITY      |            |              |
 | MISSION.md                 | v1.9    | 2025-05-24    | COMMUNITY      |            |              |
-| METADATA.md                | v2.8    | 2025-06-08    | COMMUNITY      |            |              |
+| METADATA.md                | v2.9    | 2025-06-08    | COMMUNITY      |            |              |
 | OSS_REUSE.md               | v1.5    | 2025-07-06    | COMMUNITY      |            |              |
 | PROJECT_OVERVIEW.md        | v1.6    | 2025-05-24    | COMMUNITY      |            |              |
 | Q_DAY.md                   | v1.0    | 2025-05-31    | PRIVATE        |            |              |
