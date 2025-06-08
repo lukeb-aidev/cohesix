@@ -1,7 +1,20 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.26
+// Filename: CHANGELOG.md v0.28
 // Date Modified: 2025-06-08
 // Author: Lukas Bower
+## [v0.44] - 2025-06-08
+### Added
+- COMMERCIAL_PLAN.md updated to v1.5 referencing EY network.
+- TECHNICAL_RISK.md v1.1 with EY partner mitigation.
+- METADATA.md and CHANGELOG updated.
+
+
+## [v0.43] - 2025-07-12
+### Added
+- COMMERCIAL_PLAN.md updated to v1.4 with expert panel and benchmarking sections.
+- New TECHNICAL_RISK.md documenting six mitigations.
+- BATCH_PLAN.md bumped to v0.6 with next-step tasks.
+- METADATA.md synchronized for new versions.
 ## [v0.41] - 2025-06-08
 ### Added
 - Cross-target `--target` option for `cohcc` CLI.
