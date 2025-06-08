@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: BUILD_PLAN.md v0.3
-// Date Modified: 2025-06-07
+// Filename: BUILD_PLAN.md v0.4
+// Date Modified: 2025-07-11
 // Author: Lukas Bower
 
 # Build Plan
@@ -35,6 +35,7 @@ This document outlines the step-by-step build strategy for Cohesix, covering nat
 4. Generate cross-arch artifacts:
    ```bash
    cargo build --release --target aarch64-unknown-linux-gnu
+   cohcc --input demo.ir --output demo.c --target aarch64
    ```
 
 ## 3. Dockerized Multi-Arch Builds

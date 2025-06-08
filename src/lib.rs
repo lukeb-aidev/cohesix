@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: lib.rs v1.2
-// Date Modified: 2025-07-10
+// Filename: lib.rs v1.3
+// Date Modified: 2025-07-11
 // Author: Lukas Bower
 
 //! Root library for the Coh_CC compiler and platform integrations.
@@ -75,6 +75,9 @@ pub mod shell;
 /// Plan 9 userland helpers
 pub mod plan9;
 
+/// POSIX compatibility helpers
+pub mod posix;
+
 /// Filesystem overlay helpers
 pub mod fs;
 
@@ -126,5 +129,32 @@ pub fn compile_from_file(input: &str, output: &str) -> anyhow::Result<()> {
     let code = codegen::dispatch(&module, backend);
     fs::write(output, code)?;
 
+    Ok(())
+}
+
+/// Compile an IR file targeting the specified architecture.
+pub fn compile_from_file_with_target(
+    input: &str,
+    output: &str,
+    target: &str,
+) -> anyhow::Result<()> {
+    use std::process::Command;
+
+    compile_from_file(input, output)?;
+
+    if output.ends_with(".c") {
+        let compiler = std::env::var("CC").unwrap_or_else(|_| "clang".into());
+        let status = Command::new(compiler)
+            .arg("--target")
+            .arg(format!("{}-unknown-linux-gnu", target))
+            .arg(output)
+            .arg("-c")
+            .arg("-o")
+            .arg("a.out")
+            .status()?;
+        if !status.success() {
+            eprintln!("Warning: cross compile step failed");
+        }
+    }
     Ok(())
 }
