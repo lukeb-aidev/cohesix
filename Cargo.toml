@@ -29,6 +29,7 @@ aead = "0.5"
 aes = "0.8"
 rand = "0.8"
 v4l = "0.14"
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
 
 [workspace]
 members = [

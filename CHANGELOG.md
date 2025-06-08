@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.24
+// Filename: CHANGELOG.md v0.25
 // Date Modified: 2025-07-11
 // Author: Lukas Bower
 ## [v0.40] - 2025-07-11
@@ -8,6 +8,13 @@
 - `cohrun physics_demo` CLI and Rapier demo logging to `/trace/last_sim.json`.
 - `cohtrace list` demo CLI for viewing joined workers.
 - Boot hooks create role services and write to `/trace/boot.log`.
+
+## [v0.41] - 2025-07-11
+### Added
+- Real webcam capture with `/srv/webcam/frame.jpg`.
+- `cohrun test_webcam` and `cohrun webcam_tilt` commands.
+- Webcam tilt simulation logs to `/trace/last_sim.json`.
+- Queen validator writes reports under `/trace/reports/`.
 
 ## [v0.39] - 2025-06-08
 ### Changed
