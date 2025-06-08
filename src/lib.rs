@@ -44,6 +44,9 @@ pub mod physical;
 /// Boot helper modules
 pub mod boot;
 
+/// Security modules (capabilities, sandbox enforcement)
+pub mod security;
+
 /// Runtime services (telemetry, sandbox, health, ipc)
 pub mod services;
 /// Webcam helpers

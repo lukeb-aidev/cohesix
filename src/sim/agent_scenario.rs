@@ -16,7 +16,7 @@ use serde::Deserialize;
 
 use crate::agents::runtime::AgentRuntime;
 use crate::cohesix_types::Role;
-use crate::physical::sensors;
+use crate::physical::{sensors, joystick};
 use crate::trace::recorder;
 
 #[derive(Deserialize)]
@@ -54,6 +54,7 @@ impl ScenarioEngine {
             };
             runtime.spawn(&agent.id, role, &args)?;
             let _ = sensors::read_temperature(&agent.id);
+            let _ = joystick::read_state(&agent.id);
         }
         fs::write(
             format!("/srv/scenario_result/{}", cfg.id),

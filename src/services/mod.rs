@@ -14,6 +14,7 @@ pub mod health;
 pub mod ipc;
 pub mod webcam;
 pub mod gpuinfo;
+pub mod devd;
 
 /// Generic interface implemented by all runtime services.
 pub trait Service {
@@ -27,7 +28,7 @@ pub trait Service {
 
 /// Initialize all registered services under the `/srv/` namespace.
 pub fn initialize_services() {
-    println!("[services] initializing telemetry, sandbox, health, IPC, webcam and GPU info ...");
+    println!("[services] initializing telemetry, sandbox, health, IPC, webcam, GPU info and devd ...");
     let mut services: Vec<Box<dyn Service>> = vec![
         Box::new(telemetry::TelemetryService::default()),
         Box::new(sandbox::SandboxService::default()),
@@ -35,6 +36,7 @@ pub fn initialize_services() {
         Box::new(ipc::IpcService::default()),
         Box::new(webcam::WebcamService::default()),
         Box::new(gpuinfo::GpuInfoService::default()),
+        Box::new(devd::DevdService::default()),
     ];
     for svc in services.iter_mut() {
         println!("[services] starting {}", svc.name());
