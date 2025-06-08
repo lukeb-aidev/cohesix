@@ -1,8 +1,14 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v0.26
-// Date Modified: 2025-07-11
+// Date Modified: 2025-06-08
 // Author: Lukas Bower
-## [v0.40] - 2025-07-11
+## [v0.41] - 2025-06-08
+### Added
+- Cross-target `--target` option for `cohcc` CLI.
+- POSIX translation helpers and tests.
+- Build plan updated for architecture flag.
+
+## [v0.40] - 2025-06-06
 ### Added
 - Webcam and GPU info services registered under `/srv`.
 - `cohrun physics_demo` CLI and Rapier demo logging to `/trace/last_sim.json`.
@@ -19,6 +25,10 @@
 ## [v0.42] - 2025-07-11
 ### Added
 - Security review summary under `SECURITY_REVIEW.md`.
+- Cross-worker orchestrator registry written to `/srv/agents/active.json`.
+- CLI commands `cohrun orchestrator status|assign` and `cohrun kiosk_start`.
+- GPU swarm registry `/srv/gpu_registry.json` with `gpu_status` and `gpu_dispatch`.
+- `cohtrace kiosk_ping` command for kiosk federation demo.
 
 ## [v0.39] - 2025-06-08
 ### Changed
