@@ -15,14 +15,14 @@
 - `cohtrace list` demo CLI for viewing joined workers.
 - Boot hooks create role services and write to `/trace/boot.log`.
 
-## [v0.41] - 2025-07-11
+## [v0.41] - 2025-06-08
 ### Added
 - Real webcam capture with `/srv/webcam/frame.jpg`.
 - `cohrun test_webcam` and `cohrun webcam_tilt` commands.
 - Webcam tilt simulation logs to `/trace/last_sim.json`.
 - Queen validator writes reports under `/trace/reports/`.
 
-## [v0.42] - 2025-07-11
+## [v0.42] - 2025-06-08
 ### Added
 - Security review summary under `SECURITY_REVIEW.md`.
 - Cross-worker orchestrator registry written to `/srv/agents/active.json`.
@@ -34,57 +34,57 @@
 ### Changed
 - Fixed Makefile tab indentation to enable successful builds
 
-## [v0.38] - 2025-07-11
+## [v0.38] - 2025-06-08
 ### Added
 - Codex-Driven Mega Batches with autonomous multi-arch hydration
 - GPT model version stamped via `CODEX_BATCH: YES`
 
-## [v0.37] - 2025-07-10
+## [v0.37] - 2025-06-08
 ### Added
 - UpgradeManager module for atomic upgrades
 - AES-GCM SLM decryptor with CLI hooks
 - EnsembleAgent trait and shared memory
 - CLI commands: upgrade, rollback, list-models, decrypt-model, verify-model, agent-ensemble-status
 
-## [v0.36] - 2025-07-09
+## [v0.36] - 2025-06-08
 ### Added
 - Agent introspection API and CLI command `agent-introspect`
 - 9P validator bridge logging violations
 - QueenWatchdog for mesh reconfiguration with CLI `elect-queen` and `assume-role`
 
-## [v0.35] - 2025-07-08
+## [v0.35] - 2025-06-08
 ### Added
 - World model snapshot structs and sync daemon
 - Policy memory persistence utilities
 - Vision overlay CLI hooks
 
-## [v0.34] - 2025-07-08
+## [v0.34] - 2025-06-08
 ### Added
 - SLM registry and dispatch CLI
 - Trace validation stream to validator socket
 - Queen failover test scripts
 
-## [v0.31] - 2025-07-07
+## [v0.31] - 2025-06-08
 ### Changed
 - Completed bootloader initialization logic and secure boot checks
 - Wrapped CUDA runtime loading in safe abstraction
 - Fixed shell script header syntax
 - Documented BusyBox and seL4 sandboxing in OSS_REUSE.md
 
-## [v0.32] - 2025-07-07
+## [v0.32] - 2025-06-08
 ### Added
 - Queen federation manager and CLI commands for connect/disconnect
 - Basic distributed orchestrator policies and status export
 - Agent migration helper module and demo federation script
 
-## [v0.33] - 2025-07-08
+## [v0.33] - 2025-06-08
 ### Added
 - GPU swarm scheduler with perf/watt weighting
 - Webcam inference module and CLI `run-inference`
 - Kiosk federation demo scripts
 
 
-## [v0.29] - 2025-07-06
+## [v0.29] - 2025-06-08
 ### Added
 - Documented cobra Go dependency under Apache-2.0
 
@@ -100,7 +100,7 @@
 - GUI orchestrator stub and federation CLI
 - Physics CUDA test harness
 
-## [v0.28] - 2025-07-05
+## [v0.28] - 2025-06-08
 ### Added
 - Failover manager with automatic Queen promotion
 - Live patch infrastructure and `cohup patch` CLI
@@ -108,7 +108,7 @@
 - Adaptive agent policies with SelfTuningStabilizer
 - README and TEST_GUIDE updated with Go testing instructions; Makefile v0.5
 
-## [v0.27] - 2025-07-04
+## [v0.27] - 2025-06-08
 ### Added
 - Join acknowledgement with worker directories under `/srv/worker/<id>`
 - `cohagent` CLI for start/pause/migrate commands
@@ -127,7 +127,7 @@
 - Fuzz regression runner and CI role harness
 - Additional safety and contract tests
 
-## [v0.25] - 2025-07-03
+## [v0.25] - 2025-06-08
 ### Added
 - Multi-Queen coordination logs and rotation
 - Worker hotplug mounting and service sync
@@ -253,23 +253,23 @@
 ### Added
 - **README**: document running Go tests via `make go-test` (workspace in `go/`).
 
-## [v0.10] - 2025-06-16
+## [v0.10] - 2025-06-08
 ### Fixed
 - **scripts/run-smoke-tests.sh**: removed stray prompt text and ensured newline at EOF; passes `shellcheck`.
 
-## [v0.8] - 2025-06-15
+## [v0.8] - 2025-06-08
 ### Added
 - **BATCH_PLAN.md**: added cloud-native hooks deliverable for Queen roles; version bumped to v0.5.
 - **METADATA.md**: updated entry for BATCH_PLAN.md to v0.5.
 
 # Changelog for Cohesix
 
-## [v0.8] - 2025-06-11
+## [v0.8] - 2025-06-08
 ### Changed
 - **BATCH_PLAN.md**: expanded batch entries with bullet-level deliverables and demo heading; version bumped to v0.5.
 - **METADATA.md**: version bumped to v2.1 with updated BATCH_PLAN entry.
 
-## [v0.7] - 2025-06-10
+## [v0.7] - 2025-06-08
 ### Added
 - **BATCH_PLAN.md**: new section for Demo Integration Batches; version bumped to v0.4.
 - **METADATA.md**: updated to v2.0 with revised BATCH_PLAN entry.
