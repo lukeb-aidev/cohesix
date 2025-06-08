@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: validator.rs v0.1
+// Filename: validator.rs v0.2
 // Author: Lukas Bower
 // Date Modified: 2025-07-11
 
@@ -7,6 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::fs;
+use crate::queen::trust;
 
 #[derive(Deserialize)]
 struct TiltTrace {
@@ -25,6 +26,9 @@ pub fn validate_trace(path: &str, worker: &str) -> anyhow::Result<()> {
     let data = fs::read_to_string(path)?;
     let trace: TiltTrace = serde_json::from_str(&data)?;
     let angle_ok = trace.angle.abs() < 1.0;
+    if !angle_ok {
+        trust::record_failure(worker);
+    }
     let report = ValidationReport {
         angle_ok,
         drift: trace.angle,
