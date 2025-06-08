@@ -1,0 +1,33 @@
+{
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "spdxVersion": "SPDX-2.3",
+  "name": "Cohesix OSS SBOM",
+  "packages": [
+    {
+      "name": "sha2",
+      "SPDXID": "SPDXRef-sha2",
+      "versionInfo": "0.10",
+      "downloadLocation": "https://crates.io/crates/sha2",
+      "licenseConcluded": "MIT OR Apache-2.0",
+      "checksums": [
+        {
+          "alg": "SHA256",
+          "checksumValue": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+        }
+      ]
+    },
+    {
+      "name": "anyhow",
+      "SPDXID": "SPDXRef-anyhow",
+      "versionInfo": "1.0",
+      "downloadLocation": "https://crates.io/crates/anyhow",
+      "licenseConcluded": "MIT OR Apache-2.0",
+      "checksums": [
+        {
+          "alg": "SHA256",
+          "checksumValue": "23759997b3c59884dc4c0ff5320d6301b0e7f63bf0f6483a7b54d7d43bc5ccd1"
+        }
+      ]
+    }
+  ]
+}
