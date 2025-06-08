@@ -1,7 +1,12 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.23
-// Date Modified: 2025-07-10
+// Filename: CHANGELOG.md v0.24
+// Date Modified: 2025-07-11
 // Author: Lukas Bower
+## [v0.38] - 2025-07-11
+### Added
+- Codex-Driven Mega Batches with autonomous multi-arch hydration
+- GPT model version stamped via `CODEX_BATCH: YES`
+
 ## [v0.37] - 2025-07-10
 ### Added
 - UpgradeManager module for atomic upgrades
