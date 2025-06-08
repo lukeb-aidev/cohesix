@@ -1,6 +1,12 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.34
+// Filename: CHANGELOG.md v0.35
 // Date Modified: 2025-07-13
+
+## [v0.55] - 2025-07-13
+### Added
+- Runtime sandbox now enforces capabilities from `/etc/cohcap.json` and logs
+  blocked syscalls with role and PID.
+- CUDA FFI loader wraps symbols with runtime validator checks.
 
 ## [v0.53] - 2025-07-13
 ### Removed
