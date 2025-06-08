@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # CLASSIFICATION: COMMUNITY
-# Filename: cohtrace.py v0.4
+# Filename: cohtrace.py v0.5
 # Author: Lukas Bower
 # Date Modified: 2025-07-12
 
@@ -40,6 +40,7 @@ def push_trace(worker_id: str, path: Path):
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--man", action="store_true", help="Show man page")
     sub = parser.add_subparsers(dest="cmd")
     sub.add_parser("list", help="List connected workers")
     push = sub.add_parser("push_trace", help="Push a simulation trace to the Queen")
@@ -50,6 +51,10 @@ def main():
     view = sub.add_parser("view_snapshot", help="View world snapshot for worker")
     view.add_argument("worker_id")
     args = parser.parse_args()
+    if args.man:
+        man = os.path.join(os.path.dirname(__file__), "../bin/man")
+        page = os.path.join(os.path.dirname(__file__), "../docs/man/cohtrace.1")
+        os.execv(man, [man, page])
     if args.cmd == "list":
         list_workers(Path("/srv/workers"))
     elif args.cmd == "push_trace":

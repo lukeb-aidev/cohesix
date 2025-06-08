@@ -1,0 +1,26 @@
+.TH "ping" 1
+.SH NAME
+ping
+.SH SYNOPSIS
+ping [OPTIONS]
+.SH DESCRIPTION
+ping: invalid option -- '-'
+
+Usage
+  ping [options] <destination>
+
+Options:
+  <destination>      DNS name or IP address
+  -a                 use audible ping
+  -A                 use adaptive ping
+  -B                 sticky source address
+  -c <count>         stop after <count> replies
+  -C                 call connect() syscall on socket creation
+  -D                 print timestamps
+  -d                 use SO_DEBUG socket option
+  -e <identifier>    define identifier for ping session, default is random for
+                     SOCK_RAW and kernel defined for SOCK_DGRAM
+                     Imply using SOCK_RAW (for IPv4 only for identifier 0)
+  -f                 flood ping
+  -h                 print help and exit
+  -H                 force reverse DNS name resolution (useful for numeric

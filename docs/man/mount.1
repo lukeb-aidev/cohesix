@@ -1,0 +1,26 @@
+.TH "mount" 1
+.SH NAME
+mount
+.SH SYNOPSIS
+mount [OPTIONS]
+.SH DESCRIPTION
+
+Usage:
+ mount [-lhV]
+ mount -a [options]
+ mount [options] [--source] <source> | [--target] <directory>
+ mount [options] <source> <directory>
+ mount <operation> <mountpoint> [<target>]
+
+Mount a filesystem\.
+
+Options:
+ -a, --all               mount all filesystems mentioned in fstab
+ -c, --no-canonicalize   don't canonicalize paths
+ -f, --fake              dry run; skip the mount(2) syscall
+ -F, --fork              fork off for each device (use with -a)
+ -T, --fstab <path>      alternative file to /etc/fstab
+ -i, --internal-only     don't call the mount\.<type> helpers
+ -l, --show-labels       show also filesystem labels
+ -m, --mkdir[=<mode>]    alias to '-o X-mount\.mkdir[=<mode>]'
+ -n, --no-mtab           don't write to /etc/mtab
