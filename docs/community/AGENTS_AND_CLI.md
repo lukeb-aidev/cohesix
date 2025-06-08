@@ -5,7 +5,7 @@
 
 # Agents and CLI
 
-Cohesix relies on Codex-driven agents and a small set of CLI tools for automation and orchestration. Agents follow the YAML schema in `AGENTS.md` and are executed through `cohcli` commands.
+Cohesix relies on Codex-driven agents and a small set of CLI tools for automation and orchestration. Agents follow the YAML schema below and are executed through `cohcli` commands.
 
 ## Agent Schema
 ```

@@ -1,6 +1,17 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.32
-// Date Modified: 2025-06-08
+// Filename: CHANGELOG.md v0.33
+// Date Modified: 2025-07-13
+
+## [v0.53] - 2025-07-13
+### Removed
+- AGENTS.md, END_USER_DEMOS.md, IMPLEMENTATION_GUIDE.md, TOOLING_PLAN.md,
+  RELEASE_CRITERIA.md, BATCH_PLAN.md, GPU_SWARM.md, WEBCAM_TILT.md,
+  KIOSK_FEDERATION.md
+### Moved
+- INSTRUCTION_BLOCK.md -> archive/INSTRUCTION_BLOCK.md
+- examples/README.md -> archive/examples_README.md
+### Changed
+- Updated METADATA.md to v3.0 after cleanup.
 // Author: Lukas Bower
 ## [v0.52] - 2025-06-08
 ### Added
