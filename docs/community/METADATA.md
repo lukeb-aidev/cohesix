@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: METADATA.md v2.6
+// Filename: METADATA.md v2.7
 // Author: Lukas Bower
 // Date Modified: 2025-07-11
 
@@ -41,3 +41,5 @@
 | PHYSICAL_AGENT_POLICY.md   | v0.1    | 2025-07-05    | PRIVATE        |            |              |
 | TRACE_CONSENSUS.md         | v0.1    | 2025-07-05    | COMMUNITY      |            |              |
 | WEBCAM_TILT.md | v0.1 | 2025-07-11 | COMMUNITY | | |
+| GPU_SWARM.md              | v0.1    | 2025-07-11    | COMMUNITY      |            |              |
+| KIOSK_FEDERATION.md       | v0.1    | 2025-07-11    | COMMUNITY      |            |              |
