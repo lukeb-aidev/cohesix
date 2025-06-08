@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: METADATA.md v3.2
+// Filename: METADATA.md v3.3
 // Author: Lukas Bower
-// Date Modified: 2025-07-13
+// Date Modified: 2025-07-14
 
 ## Canonical Documents
 
@@ -16,10 +16,10 @@
 | DEPENDENCIES.md            | v0.5    | 2025-07-06    | COMMUNITY      |            |              |
 | MISSION.md                 | v1.9    | 2025-05-24    | COMMUNITY      |            |              |
 | MISSION.md                 | v1.9    | 2025-05-24    | COMMUNITY      |            |              
-| METADATA.md                | v3.1    | 2025-07-13    | COMMUNITY      |            |              |
+| METADATA.md                | v3.3    | 2025-07-14    | COMMUNITY      |            |              |
 | OSS_REUSE.md               | v1.6    | 2025-07-13    | COMMUNITY      |            |              |
-| METADATA.md                | v3.2    | 2025-07-13    | COMMUNITY      |            |              |
-| OSS_REUSE.md               | v1.5    | 2025-07-06    | COMMUNITY      |            |              |
+| METADATA.md                | v3.3    | 2025-07-14    | COMMUNITY      |            |              |
+| OSS_REUSE.md               | v1.6    | 2025-07-13    | COMMUNITY      |            |              |
 | PROJECT_OVERVIEW.md        | v1.6    | 2025-05-24    | COMMUNITY      |            |              |
 | Q_DAY.md                   | v1.0    | 2025-05-31    | PRIVATE        |            |              |
 | QUEEN_POLICY.md            | v1.1    | 2025-07-12    | PRIVATE        |            |              |
@@ -43,7 +43,7 @@
 | TRACE_CONSENSUS.md         | v0.1    | 2025-07-05    | COMMUNITY      |            |              |
 | SECURITY_REVIEW.md         | v0.2    | 2025-07-13    | COMMUNITY      |     |              |
 | COMPILER_REVIEW.md         | v0.1    | 2025-07-11    | COMMUNITY      |          |              
-| OPEN_SOURCE_DEPENDENCIES.md | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
+| OPEN_SOURCE_DEPENDENCIES.md | v0.2    | 2025-07-12    | COMMUNITY      |     |              |
 | LICENSE_MATRIX.md           | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
 | AGENTS_AND_CLI.md          | v1.0    | 2025-06-20    | COMMUNITY      |     |              |
 | AGENTS.md                 | v2.1    | 2025-07-13    | COMMUNITY      |     |              |
@@ -99,3 +99,4 @@
 | cohpkg.1                   | v0.1    | 2025-07-13    | COMMUNITY      |     |              |
 | SIM_TESTS.md               | v0.1    | 2025-07-13    | COMMUNITY      |     |             |
 | devices/HOTPLUG.md | v0.1 | 2025-07-14 | COMMUNITY | | |
+| INSTRUCTION_BLOCK.md | v3.6 | 2025-06-07 | COMMUNITY | | |
