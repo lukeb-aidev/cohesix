@@ -9,9 +9,9 @@
 |----------------------------|---------|---------------|----------------|------------|--------------|
 | AGENTS.md                  | v2.0    | 2025-07-11    | COMMUNITY      |            |              |
 | ARCHITECTURE.md            | v0.3    | 2025-05-31    | PRIVATE        |            |              |
-| BATCH_PLAN.md              | v0.5    | 2025-06-05    | COMMUNITY      |            |              |
+| BATCH_PLAN.md              | v0.6    | 2025-07-12    | COMMUNITY      |            |              |
 | BUILD_PLAN.md              | v0.4    | 2025-07-11    | COMMUNITY      |            |              |
-| COMMERCIAL_PLAN.md         | v1.3    | 2025-05-24    | PRIVATE        |            |              |
+| COMMERCIAL_PLAN.md         | v1.4    | 2025-07-12    | PRIVATE        |            |              |
 | DEPENDENCIES.md            | v0.5    | 2025-07-06    | COMMUNITY      |            |              |
 | END_USER_DEMOS.md          | v0.1    | 2025-06-05    | COMMUNITY      |            |              |
 | IMPLEMENTATION_GUIDE.md    | v1.1    | 2025-05-24    | COMMUNITY      |            |              |
@@ -33,6 +33,7 @@
 | TEST_PLAN.md               | v0.1    | 2025-07-11    | COMMUNITY      |            |              |
 | TOOLING_PLAN.md            | v0.1    | 2025-07-11    | COMMUNITY      |            |              |
 | THREAT_MODEL.md            | v1.0    | 2025-05-31    | PRIVATE        |            |              |
+| TECHNICAL_RISK.md         | v1.0    | 2025-07-12    | PRIVATE        |     |              |
 | WATCHDOG_POLICY.md         | v1.4    | 2025-06-05    | COMMUNITY      |            |              |
 | cli.md                     | v0.2    | 2025-06-07    | COMMUNITY      |            |              |
 | gui_orchestrator.md        | v1.0    | 2025-06-07    | COMMUNITY      |            |              |
