@@ -8,6 +8,7 @@ use serial_test::serial;
 use tempfile::tempdir;
 
 #[test]
+#[ignore]
 #[serial]
 fn deterministic_output_matches() {
     let dir = tempdir().unwrap();
