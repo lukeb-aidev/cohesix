@@ -15,6 +15,8 @@
 /// Responsible for early-stage bootloader tasks in Cohesix.
 pub struct BootAgent;
 
+use super::role_hooks;
+
 impl BootAgent {
     /// Initialize the bootloader and perform pre-seL4 setup.
     pub fn init() {
@@ -31,6 +33,7 @@ impl BootAgent {
         Self::setup_memory_zones();
         Self::discover_devices();
         Self::prepare_kernel(&ctx);
+        role_hooks::setup(&ctx.role);
     }
 
     /// Perform essential checks before kernel handoff.

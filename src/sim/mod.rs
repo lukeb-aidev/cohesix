@@ -9,3 +9,4 @@ pub mod rapier_bridge;
 pub mod agent_scenario;
 pub mod physics_adapter;
 pub mod introspect;
+pub mod physics_demo;

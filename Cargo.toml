@@ -28,6 +28,7 @@ aes-gcm = { version = "0.10", features = ["aes"] }
 aead = "0.5"
 aes = "0.8"
 rand = "0.8"
+v4l = "0.14"
 
 [workspace]
 members = [
