@@ -1,4 +1,14 @@
 // CLASSIFICATION: COMMUNITY
+// Filename: CHANGELOG.md v0.27
+// Date Modified: 2025-07-11
+// Author: Lukas Bower
+## [v0.43] - 2025-07-11
+### Added
+- Agent introspection namespace `/srv/agent_meta` with runtime files.
+- World state summary `/srv/world_state/world.json`.
+- Python and Go `agent_sdk` for runtime context.
+- CLI `cohrun goal_*` and trust zone commands.
+- `cohtrace trust_check` lists current trust zones.
 // Filename: CHANGELOG.md v0.28
 // Date Modified: 2025-06-08
 // Author: Lukas Bower
@@ -7,10 +17,6 @@
 - COMMERCIAL_PLAN.md updated to v1.5 referencing EY network.
 - TECHNICAL_RISK.md v1.1 with EY partner mitigation.
 - METADATA.md and CHANGELOG updated.
-
-// Filename: CHANGELOG.md v0.27
-// Date Modified: 2025-06-08
-// Author: Lukas Bower
 
 ## [v0.43] - 2025-07-12
 ### Added
