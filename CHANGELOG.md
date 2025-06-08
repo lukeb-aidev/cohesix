@@ -8,6 +8,9 @@
 - TECHNICAL_RISK.md v1.1 with EY partner mitigation.
 - METADATA.md and CHANGELOG updated.
 
+// Filename: CHANGELOG.md v0.27
+// Date Modified: 2025-06-08
+// Author: Lukas Bower
 
 ## [v0.43] - 2025-07-12
 ### Added

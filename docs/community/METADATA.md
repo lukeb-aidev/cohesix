@@ -10,7 +10,7 @@
 | AGENTS.md                  | v2.0    | 2025-07-11    | COMMUNITY      |            |              |
 | ARCHITECTURE.md            | v0.3    | 2025-05-31    | PRIVATE        |            |              |
 | BATCH_PLAN.md              | v0.6    | 2025-07-12    | COMMUNITY      |            |              |
-| BUILD_PLAN.md              | v0.4    | 2025-07-11    | COMMUNITY      |            |              |
+| BUILD_PLAN.md              | v0.4    | 2025-07-11    | COMMUNITY      |            |              |<<<<<<< codex/recreate-private-documentation-and-verify-content
 | COMMERCIAL_PLAN.md         | v1.5    | 2025-06-08    | PRIVATE        |            |              |
 | DEPENDENCIES.md            | v0.5    | 2025-07-06    | COMMUNITY      |            |              |
 | END_USER_DEMOS.md          | v0.1    | 2025-06-05    | COMMUNITY      |            |              |
