@@ -36,6 +36,13 @@ enum Commands {
     TrustEscalate { worker_id: String },
     TrustReport,
     FederateWith { queen_url: String },
+    WatchdogStatus,
+    TraceReplay {
+        #[arg(long, default_value="failover")]
+        context: String,
+        #[arg(long, default_value_t = 5)]
+        limit: u32,
+    },
 }
 
 #[derive(Subcommand)]
@@ -159,6 +166,20 @@ fn main() {
                 } else {
                     println!("handshake sent to {queen_url}");
                 }
+            }
+        }
+        Commands::WatchdogStatus => {
+            if let Ok(log) = std::fs::read_to_string("/srv/logs/watchdog.log") {
+                println!("{log}");
+            } else {
+                println!("no watchdog log");
+            }
+        }
+        Commands::TraceReplay { context, limit } => {
+            if context == "failover" {
+                cohesix::worker::role_memory::RoleMemory::replay_last(limit as usize);
+            } else {
+                println!("unknown context");
             }
         }
     }
