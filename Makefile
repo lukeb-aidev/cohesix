@@ -1,5 +1,5 @@
 # CLASSIFICATION: COMMUNITY
-        # Filename: Makefile v0.5
+# Filename: Makefile v0.6
 # Date Modified: 2025-07-05
 # Author: Lukas Bower
 #
@@ -22,17 +22,17 @@ go-build:
 	@cd go && go vet ./...
 
 go-test:
-        @echo "🔧 Go unit tests …"
-        @GOWORK=$(CURDIR)/go/go.work go test ./go/...
+	@echo "🔧 Go unit tests …"
+	@GOWORK=$(CURDIR)/go/go.work go test ./go/...
 
 c/sel4/shim/boot_trampoline.o: c/sel4/shim/boot_trampoline.c
-       $(CC:-clang?=cc) -I c/sel4/include -c $< -o $@
+	$(CC:-clang?=cc) -I c/sel4/include -c $< -o $@
 
 c/sel4/bootloader.o: c/sel4/bootloader.c
-       $(CC:-clang?=cc) -I c/sel4/include -c $< -o $@
+	$(CC:-clang?=cc) -I c/sel4/include -c $< -o $@
 
 c-shims: c/sel4/shim/boot_trampoline.o c/sel4/bootloader.o
-       @echo "🔧 Building C shims …"
+	@echo "🔧 Building C shims …"
 
 help:
 	@echo "Cohesix top‑level build targets:"
