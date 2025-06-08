@@ -1,24 +1,19 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: METADATA.md v2.9
+// Filename: METADATA.md v3.0
 // Author: Lukas Bower
-// Date Modified: 2025-07-12
+// Date Modified: 2025-07-13
 
 ## Canonical Documents
 
 | Filename                   | Version | Last Modified | Classification | BATCH_SIZE | BATCH_ORIGIN |
 |----------------------------|---------|---------------|----------------|------------|--------------|
-| AGENTS.md                  | v2.0    | 2025-07-11    | COMMUNITY      |            |              |
 | ARCHITECTURE.md            | v0.3    | 2025-05-31    | PRIVATE        |            |              |
-| BATCH_PLAN.md              | v0.6    | 2025-07-12    | COMMUNITY      |            |              |
 | IMPLEMENTATION_AND_TOOLING.md | v1.0    | 2025-06-20    | COMMUNITY      |     |              |
 | MISSION_AND_ARCHITECTURE.md | v1.0    | 2025-06-20    | COMMUNITY      |     |              |
 | RELEASE_AND_BATCH_PLAN.md  | v1.0    | 2025-06-20    | COMMUNITY      |     |              |
 | BUILD_PLAN.md              | v0.4    | 2025-07-11    | COMMUNITY      |            |              |
 | COMMERCIAL_PLAN.md         | v1.5    | 2025-06-08    | PRIVATE        |            |              |
 | DEPENDENCIES.md            | v0.5    | 2025-07-06    | COMMUNITY      |            |              |
-| END_USER_DEMOS.md          | v0.4    | 2025-07-12    | COMMUNITY      |            |              |
-| IMPLEMENTATION_GUIDE.md    | v1.1    | 2025-05-24    | COMMUNITY      |            |              |
-| INSTRUCTION_BLOCK.md       | v4.0    | 2025-07-11    | COMMUNITY      |            |              |
 | MISSION.md                 | v1.9    | 2025-05-24    | COMMUNITY      |            |              |
 | METADATA.md                | v2.9    | 2025-06-08    | COMMUNITY      |            |              |
 | OSS_REUSE.md               | v1.5    | 2025-07-06    | COMMUNITY      |            |              |
@@ -27,14 +22,12 @@
 | QUEEN_POLICY.md            | v1.1    | 2025-07-12    | PRIVATE        |            |              |
 | README.md                  | v0.1    | 2025-05-24    | PRIVATE        |            |              |
 | README_Codex.md            | v1.4    | 2025-06-16    | COMMUNITY      |            |              |
-| RELEASE_CRITERIA.md        | v1.1    | 2025-05-24    | COMMUNITY      |            |              |
 | REMOTE_ACCESS.md           | v1.0    | 2025-05-24    | COMMUNITY      |            |              |
 | ROLE_MANIFEST.md           | v1.3    | 2025-07-12    | COMMUNITY      |            |              |
 | SHOPPING_LIST.md           | v1.3    | 2025-05-24    | COMMUNITY      |            |              |
 | STATUS_UPDATE_GUIDE.md     | v1.3    | 2025-05-24    | COMMUNITY      |            |              |
 | TEST_GUIDE.md              | v1.4    | 2025-07-12    | COMMUNITY      |            |              |
 | TEST_PLAN.md               | v0.1    | 2025-07-11    | COMMUNITY      |            |              |
-| TOOLING_PLAN.md            | v0.1    | 2025-07-11    | COMMUNITY      |            |              |
 | THREAT_MODEL.md            | v1.0    | 2025-05-31    | PRIVATE        |            |              |
 | TECHNICAL_RISK.md         | v1.1    | 2025-06-08    | PRIVATE        |     |              |
 | WATCHDOG_POLICY.md         | v1.4    | 2025-06-05    | COMMUNITY      |            |              |
@@ -46,9 +39,6 @@
 | TRACE_CONSENSUS.md         | v0.1    | 2025-07-05    | COMMUNITY      |            |              |
 | SECURITY_REVIEW.md         | v0.1    | 2025-07-11    | COMMUNITY      |     |              |
 | COMPILER_REVIEW.md         | v0.1    | 2025-07-11    | COMMUNITY      |          |              
-| WEBCAM_TILT.md | v0.1 | 2025-07-11 | COMMUNITY | | |
-| GPU_SWARM.md              | v0.1    | 2025-07-11    | COMMUNITY      |            |              |
-| KIOSK_FEDERATION.md       | v0.1    | 2025-07-11    | COMMUNITY      |            |             
 | OPEN_SOURCE_DEPENDENCIES.md | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
 | LICENSE_MATRIX.md           | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
 | AGENTS_AND_CLI.md          | v1.0    | 2025-06-20    | COMMUNITY      |     |              |
