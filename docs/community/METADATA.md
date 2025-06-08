@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: METADATA.md v3.1
+// Filename: METADATA.md v3.2
 // Author: Lukas Bower
 // Date Modified: 2025-07-13
 
@@ -15,7 +15,7 @@
 | COMMERCIAL_PLAN.md         | v1.5    | 2025-06-08    | PRIVATE        |            |              |
 | DEPENDENCIES.md            | v0.5    | 2025-07-06    | COMMUNITY      |            |              |
 | MISSION.md                 | v1.9    | 2025-05-24    | COMMUNITY      |            |              |
-| METADATA.md                | v3.0    | 2025-07-13    | COMMUNITY      |            |              |
+| METADATA.md                | v3.2    | 2025-07-13    | COMMUNITY      |            |              |
 | OSS_REUSE.md               | v1.5    | 2025-07-06    | COMMUNITY      |            |              |
 | PROJECT_OVERVIEW.md        | v1.6    | 2025-05-24    | COMMUNITY      |            |              |
 | Q_DAY.md                   | v1.0    | 2025-05-31    | PRIVATE        |            |              |
@@ -89,4 +89,6 @@
 | ifconfig.8                | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
 | ip.8                      | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
 | preview_man.sh            | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
-| ALPHA_VALIDATION_ISSUES.md | v0.1    | 2025-07-13    | COMMUNITY      |     |              |
+| issues/ALPHA_VALIDATION_ISSUES.md | v0.1    | 2025-07-13    | COMMUNITY      |     |              |
+| UTILS_README.md            | v0.1    | 2025-07-13    | COMMUNITY      |     |              |
+| cohpkg.1                   | v0.1    | 2025-07-13    | COMMUNITY      |     |              |
