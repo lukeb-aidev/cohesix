@@ -1,12 +1,13 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: worker.rs v0.2
+// Filename: worker.rs v0.3
 // Author: Lukas Bower
-// Date Modified: 2025-06-20
+// Date Modified: 2025-07-11
 
 //! DroneWorker role initialisation.
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
+use rand::random;
 use crate::plan9::namespace::NamespaceLoader;
 use cohesix_9p::fs::InMemoryFs;
 
@@ -40,6 +41,15 @@ pub fn start() {
     for p in ["/srv/cuda", "/srv/sim", "/srv/shell", "/srv/telemetry"] {
         let _ = fs::write(p, "ready");
     }
+
+    // expose runtime metadata to other agents
+    let role = std::env::var("COH_ROLE").unwrap_or_else(|_| "unknown".into());
+    fs::create_dir_all("/srv/agent_meta").ok();
+    fs::write("/srv/agent_meta/role.txt", &role).ok();
+    fs::write("/srv/agent_meta/uptime.txt", "0").ok();
+    fs::write("/srv/agent_meta/last_goal.json", "null").ok();
+    let trace_id = format!("{:08x}", rand::random::<u32>());
+    fs::write("/srv/agent_meta/trace_id.txt", trace_id).ok();
 
     log("[worker] services ready");
 }

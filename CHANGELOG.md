@@ -1,7 +1,14 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.26
-// Date Modified: 2025-06-08
+// Filename: CHANGELOG.md v0.27
+// Date Modified: 2025-07-11
 // Author: Lukas Bower
+## [v0.43] - 2025-07-11
+### Added
+- Agent introspection namespace `/srv/agent_meta` with runtime files.
+- World state summary `/srv/world_state/world.json`.
+- Python and Go `agent_sdk` for runtime context.
+- CLI `cohrun goal_*` and trust zone commands.
+- `cohtrace trust_check` lists current trust zones.
 ## [v0.41] - 2025-06-08
 ### Added
 - Cross-target `--target` option for `cohcc` CLI.
