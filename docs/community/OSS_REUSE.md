@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: OSS_REUSE.md v1.5
+// Filename: OSS_REUSE.md v1.6
 // Author: Lukas Bower
-// Date Modified: 2025-07-07
+// Date Modified: 2025-07-13
 
 # OSS REUSE POLICY
 
@@ -102,6 +102,7 @@ For questions or reviews, contact the Cohesix compliance lead.
 |----------|--------|---------|-------|
 | Rapier   | <https://github.com/dimforge/rapier> | MIT | Physics backend |
 | CUDA     | <https://github.com/rust-cuda/cuda-sys> / libcuda.so | BSD | GPU compute |
+| cust     | <https://github.com/Rust-GPU/Rust-CUDA> | MIT OR Apache-2.0 | CUDA driver API |
 | 9P Mux   | Cohesix custom + 9fans Go port | MIT | FS routing |
 | BusyBox  | <https://busybox.net> | GPL-2.0 | Shell commands |
 | seL4     | <https://github.com/seL4/seL4> | GPL-2.0 | Microkernel |
