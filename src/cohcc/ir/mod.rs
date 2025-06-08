@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: mod.rs v1.0
 // Author: Lukas Bower
-// Date Modified: 2025-05-31
+// Date Modified: 2025-07-14
 
 // === Coh_CC IR Framework (Batch 5) ===
 
@@ -10,7 +10,7 @@ pub enum IRNode {
     Let { var: String, value: Box<IRNode> },
     Call { callee: String, args: Vec<IRNode> },
     Literal(String),
-    // TODO: Expand with more variants
+    Return { value: Box<IRNode> },
 }
 
 pub struct IRModule {
