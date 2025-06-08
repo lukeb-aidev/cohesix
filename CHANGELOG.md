@@ -1,7 +1,11 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.28
-// Date Modified: 2025-07-11
+// Filename: CHANGELOG.md v0.29
+// Date Modified: 2025-07-12
 // Author: Lukas Bower
+## [v0.45] - 2025-07-12
+### Fixed
+- Resolved merge marker in `METADATA.md` and updated headers.
+
 ## [v0.43] - 2025-07-11
 ### Changed
 - Verified batch statuses against repository; all modules compile and tests pass.
