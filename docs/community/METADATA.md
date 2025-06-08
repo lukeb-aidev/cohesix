@@ -1,4 +1,5 @@
 // CLASSIFICATION: COMMUNITY
+// Filename: METADATA.md v3.2
 // Filename: METADATA.md v3.0
 // Author: Lukas Bower
 // Date Modified: 2025-07-13
@@ -15,7 +16,7 @@
 | COMMERCIAL_PLAN.md         | v1.5    | 2025-06-08    | PRIVATE        |            |              |
 | DEPENDENCIES.md            | v0.5    | 2025-07-06    | COMMUNITY      |            |              |
 | MISSION.md                 | v1.9    | 2025-05-24    | COMMUNITY      |            |              |
-| METADATA.md                | v3.0    | 2025-07-13    | COMMUNITY      |            |              |
+| METADATA.md                | v3.2    | 2025-07-13    | COMMUNITY      |            |              |
 | OSS_REUSE.md               | v1.5    | 2025-07-06    | COMMUNITY      |            |              |
 | PROJECT_OVERVIEW.md        | v1.6    | 2025-05-24    | COMMUNITY      |            |              |
 | Q_DAY.md                   | v1.0    | 2025-05-31    | PRIVATE        |            |              |
@@ -42,6 +43,7 @@
 | OPEN_SOURCE_DEPENDENCIES.md | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
 | LICENSE_MATRIX.md           | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
 | AGENTS_AND_CLI.md          | v1.0    | 2025-06-20    | COMMUNITY      |     |              |
+| AGENTS.md                 | v2.1    | 2025-07-13    | COMMUNITY      |     |              |
 | DEMO_SCENARIOS.md          | v1.0    | 2025-06-20    | COMMUNITY      |     |              |
 | VALIDATION_AND_TESTING.md  | v1.0    | 2025-06-20    | COMMUNITY      |     |              |
 | CLI_HELP_COHCLI.md         | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
@@ -89,4 +91,6 @@
 | ifconfig.8                | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
 | ip.8                      | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
 | preview_man.sh            | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
-| ALPHA_VALIDATION_ISSUES.md | v0.1    | 2025-07-13    | COMMUNITY      |     |              |
+| issues/ALPHA_VALIDATION_ISSUES.md | v0.1    | 2025-07-13    | COMMUNITY      |     |              |
+| UTILS_README.md            | v0.1    | 2025-07-13    | COMMUNITY      |     |              |
+| cohpkg.1                   | v0.1    | 2025-07-13    | COMMUNITY      |     |              |
