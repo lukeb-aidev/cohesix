@@ -1,32 +1,49 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: AGENTS_AND_CLI.md v0.1
+// Filename: AGENTS_AND_CLI.md v1.0
 // Author: Lukas Bower
-// Date Modified: 2025-07-12
+// Date Modified: 2025-06-20
 
-# Agents and CLI Overview
+# Agents and CLI
 
-This guide links the main Cohesix agents to the community CLI tools. Refer to
-`AGENTS.md` for agent schemas. Example definitions can be found in
-[`examples/agent_ping.json`](../../examples/agent_ping.json).
+Cohesix relies on Codex-driven agents and a small set of CLI tools for automation and orchestration. Agents follow the YAML schema in `AGENTS.md` and are executed through `cohcli` commands.
 
-## CLI Documents
-- [cohcli](CLI_HELP_COHCLI.md)
-- [cohrun](CLI_HELP_COHRUN.md)
-- [cohtrace](CLI_HELP_COHTRACE.md)
-- [cohcc](CLI_HELP_COHCC.md)
-- [cohcap](CLI_HELP_COHCAP.md)
+## Agent Schema
+```
+- id: <string>
+  role: <string>
+  description: <string>
+  language: <string>
+  batch: <string|array>
+  batch_class: <minor|major|multi-arch|demo-critical>
+  prompt_template:
+    system: <string>
+    user: <string>
+  input_schema: <JSON-schema>
+  output_schema: <JSON-schema>
+  metadata:
+    CODEX_BATCH: YES
+    BATCH_ORIGIN: <uri>
+    BATCH_SIZE: <int>
+```
+Agents checkpoint every 10 files and log to `codex_logs/`. Recovery uses `tools/replay_batch.sh`.
 
-Each CLI page shows usage and example commands.
+## CLI Summary
+- **cohcli** – main interface for status, dispatching SLMs, and running agents
+- **cohrun** – demo launcher and orchestrator helper
+- **cohtrace** – trace inspection and federation utilities
+- **cohcc** – compiler front-end for Cohesix IR
+- **cohcap** – capability management for demo scenarios
 
-## Quick Usage
-
+Example usage:
 ```bash
-# check worker status
-cohcli status --verbose
+# run an agent
+cohcli codex run scaffold_service --file new.rs
 
-# launch the physics demo
+# launch physics demo
 cohrun physics_demo
 
-# view connected workers
+# view worker list
 cohtrace list
 ```
+
+Validators run automatically via `validate_metadata_sync.py` and CI hooks to ensure all generated files match `METADATA.md`.
