@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: METADATA.md v2.5
+// Filename: METADATA.md v2.6
 // Author: Lukas Bower
 // Date Modified: 2025-07-11
 
@@ -17,7 +17,7 @@
 | IMPLEMENTATION_GUIDE.md    | v1.1    | 2025-05-24    | COMMUNITY      |            |              |
 | INSTRUCTION_BLOCK.md       | v4.0    | 2025-07-11    | COMMUNITY      |            |              |
 | MISSION.md                 | v1.9    | 2025-05-24    | COMMUNITY      |            |              |
-| METADATA.md                | v2.5    | 2025-07-11    | COMMUNITY      |            |              |
+| METADATA.md                | v2.6    | 2025-07-11    | COMMUNITY      |            |              |
 | OSS_REUSE.md               | v1.5    | 2025-07-06    | COMMUNITY      |            |              |
 | PROJECT_OVERVIEW.md        | v1.6    | 2025-05-24    | COMMUNITY      |            |              |
 | Q_DAY.md                   | v1.0    | 2025-05-31    | PRIVATE        |            |              |

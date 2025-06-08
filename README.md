@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: README.md v0.5
+// Filename: README.md v0.6
 // Author: Lukas Bower
-// Date Modified: 2025-06-07
+// Date Modified: 2025-07-11
 
 
 # Cohesix
@@ -62,9 +62,17 @@ To regenerate compiler/OS stubs:
 
 Or explore runtime scenarios with the Codex CLI tools:
 
-```
+``` 
 cohbuild, cohrun, cohtrace, cohcap
 ```
+
+### Demo Scaffolds
+
+Initial demo services are enabled:
+
+* `/srv/webcam` and `/srv/gpuinfo` for workers
+* `cohrun physics_demo` to run a Rapier simulation
+* `cohtrace list` to view joined workers
 
 ## 🧪 Testing
 
