@@ -5,7 +5,6 @@
 
 use std::path::{Path, PathBuf};
 use clap::{Parser, Subcommand};
-use crate::coh_cc::backend::Backend;
 
 #[derive(Parser)]
 #[command(author, version, about)]
@@ -28,14 +27,13 @@ pub enum Command {
 /// Resolved configuration after CLI parsing.
 #[derive(Debug, Clone)]
 pub struct Config {
-    pub backend: Backend,
+    pub backend: String,
     pub trace: bool,
 }
 
 impl Config {
     pub fn from_cli(cli: &Cli) -> anyhow::Result<Self> {
-        let backend = cli.backend.parse()?;
-        Ok(Config { backend, trace: cli.trace })
+        Ok(Config { backend: cli.backend.clone(), trace: cli.trace })
     }
 
     pub fn valid_output(&self, path: &str) -> bool {

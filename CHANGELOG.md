@@ -14,6 +14,12 @@
 ### Changed
 - Man page updated with backend options and logging paths.
 
+## [v0.64] - 2025-07-17
+### Added
+- Backend registry with trait-based dispatch and input type detection.
+- Static flag enforcement and build hashing for `cohcc`.
+- Structured logging macros and CI reproducibility test.
+
 ## [v0.61] - 2025-06-08
 ### Added
 
