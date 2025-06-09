@@ -1,6 +1,6 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Makefile v0.7
-# Date Modified: 2025-07-15
+# Filename: Makefile v0.8
+# Date Modified: 2025-07-21
 # Author: Lukas Bower
 #
 # ─────────────────────────────────────────────────────────────
@@ -13,7 +13,7 @@
 #  • `make help`     – list targets
 # ─────────────────────────────────────────────────────────────
 
-.PHONY: all go-build go-test c-shims help
+.PHONY: all go-build go-test c-shims help cohrun cohbuild cohtrace cohcap
 
 all: go-build go-test c-shims
 
@@ -41,7 +41,19 @@ help:
 	@echo "  go-test   – run Go unit tests"
 	@echo "  c-shims   – compile seL4 boot trampoline"
 man: third_party/mandoc/mandoc
-	cp third_party/mandoc/mandoc bin/cohman
+        cp third_party/mandoc/mandoc bin/cohman
+
+cohrun:
+       cargo run -p cohcli_tools --bin cohrun -- $(ARGS)
+
+cohbuild:
+       cargo run -p cohcli_tools --bin cohbuild -- $(ARGS)
+
+cohtrace:
+       cargo run -p cohcli_tools --bin cohtrace -- $(ARGS)
+
+cohcap:
+       cargo run -p cohcli_tools --bin cohcap -- $(ARGS)
 
 
 

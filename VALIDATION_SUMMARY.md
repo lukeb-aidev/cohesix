@@ -10,3 +10,7 @@ documented. Cargo.lock cleanup resolves previous duplication errors.
 
 | Timestamp (UTC) | Trace | Summary | Result |
 |-----------------|-------|---------|-------|
+### cohtrace validation runs
+- 2025-07-21 list: validated worker enumeration
+- 2025-07-21 push_trace worker01 examples/trace_example_physics.json – policy ok
+
