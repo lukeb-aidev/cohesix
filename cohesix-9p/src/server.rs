@@ -6,16 +6,15 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
-use anyhow::{Result, anyhow};
-use log::{error, info, warn};
+use anyhow::{anyhow, Result as AnyResult};
+use log::{info, warn};
+use crate::ninep_adapter::{read_slice, verify_open};
 use ninep::{
+    client::TcpClient,
     fs::{FileMeta, IoUnit, Mode, Perm, QID_ROOT, Stat},
-    sync::{
-        client::TcpClient,
-        server::{ClientId, ReadOutcome, Serve9p, Server},
-    },
+    server::{ClientId, ReadOutcome, Serve9p, Server},
 };
 
 /// Permission categories for the Cohesix file tree.
@@ -25,7 +24,7 @@ enum Access {
     Write,
 }
 
-fn check_perm(path: &str, access: Access) -> Result<()> {
+fn check_perm(path: &str, access: Access) -> AnyResult<()> {
     if path.starts_with("/proc") || path.starts_with("/history") {
         if access == Access::Write {
             warn!("deny write to restricted path: {}", path);
@@ -69,32 +68,49 @@ impl CohesixFs {
     }
 
     fn path_for(&self, qid: u64) -> String {
-        self.qmap
-            .lock()
-            .unwrap()
-            .get(&qid)
-            .cloned()
-            .unwrap_or_else(|| "/".into())
+        match self.qmap.lock() {
+            Ok(map) => map.get(&qid).cloned().unwrap_or_else(|| "/".into()),
+            Err(poisoned) => poisoned
+                .into_inner()
+                .get(&qid)
+                .cloned()
+                .unwrap_or_else(|| "/".into()),
+        }
     }
 
     fn alloc_qid(&self, path: &str) -> u64 {
         let qid = self.next_qid.fetch_add(1, Ordering::SeqCst);
-        self.qmap.lock().unwrap().insert(qid, path.to_string());
+        match self.qmap.lock() {
+            Ok(mut map) => {
+                map.insert(qid, path.to_string());
+            }
+            Err(poisoned) => {
+                poisoned.into_inner().insert(qid, path.to_string());
+            }
+        }
         qid
     }
 
     /// Mount a remote 9P server under the provided mountpoint.
-    pub fn mount_remote(&self, mountpoint: &str, addr: &str) -> Result<()> {
-        let client = TcpClient::new_tcp("cohesix", addr, "/")?;
-        self.remotes
-            .lock()
-            .unwrap()
-            .insert(mountpoint.to_string(), client);
+    pub fn mount_remote(&self, mountpoint: &str, addr: &str) -> AnyResult<()> {
+        let client = TcpClient::new_tcp("cohesix".to_string(), addr, "/")?;
+        match self.remotes.lock() {
+            Ok(mut map) => {
+                map.insert(mountpoint.to_string(), client);
+            }
+            Err(poisoned) => {
+                poisoned.into_inner().insert(mountpoint.to_string(), client);
+            }
+        }
         Ok(())
     }
 
     fn remote_client(&self, path: &str) -> Option<(String, TcpClient)> {
-        for (mnt, client) in self.remotes.lock().unwrap().iter() {
+        let map = match self.remotes.lock() {
+            Ok(map) => map,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        for (mnt, client) in map.iter() {
             if path.starts_with(mnt) {
                 let sub = path[mnt.len()..].trim_start_matches('/').to_string();
                 return Some((sub, client.clone()));
@@ -105,7 +121,7 @@ impl CohesixFs {
 }
 
 impl Serve9p for CohesixFs {
-    fn walk(&self, _cid: ClientId, parent_qid: u64, child: &str, _uname: &str) -> Result<FileMeta> {
+    fn walk(&mut self, _cid: ClientId, parent_qid: u64, child: &str, _uname: &str) -> ninep::Result<FileMeta> {
         let base = self.path_for(parent_qid);
         let new_path = if base == "/" {
             format!("/{}", child)
@@ -113,15 +129,19 @@ impl Serve9p for CohesixFs {
             format!("{}/{}", base, child)
         };
         if let Some((sub, mut cli)) = self.remote_client(&new_path) {
-            cli.walk(sub)?;
+            let _ = cli.walk(sub).map_err(|e| e.to_string())?;
         }
-        let is_dir = self
-            .nodes
-            .lock()
-            .unwrap()
-            .get(&new_path)
-            .map(|n| n.is_dir)
-            .unwrap_or(true);
+        let is_dir = match self.nodes.lock() {
+            Ok(map) => map
+                .get(&new_path)
+                .map(|n| n.is_dir)
+                .unwrap_or(true),
+            Err(poisoned) => poisoned
+                .into_inner()
+                .get(&new_path)
+                .map(|n| n.is_dir)
+                .unwrap_or(true),
+        };
         let qid = self.alloc_qid(&new_path);
         Ok(if is_dir {
             FileMeta::dir(child, qid)
@@ -130,82 +150,109 @@ impl Serve9p for CohesixFs {
         })
     }
 
-    fn open(&self, _cid: ClientId, qid: u64, mode: Mode, _uname: &str) -> Result<IoUnit> {
+    fn open(&mut self, _cid: ClientId, qid: u64, mode: Mode, _uname: &str) -> ninep::Result<IoUnit> {
         let path = self.path_for(qid);
-        check_perm(
-            &path,
-            if mode == Mode::READ {
-                Access::Read
-            } else {
-                Access::Write
-            },
-        )?;
+        // Opening a file always requires read permissions for now.
+        check_perm(&path, Access::Read).map_err(|e| e.to_string())?;
         if let Some((sub, mut cli)) = self.remote_client(&path) {
-            let _ = cli.open(sub, mode)?;
+            verify_open(&mut cli, &sub, mode).map_err(|e| e.to_string())?;
             return Ok(8192);
         }
-        let mut nodes = self.nodes.lock().unwrap();
-        nodes.entry(path).or_default();
+        match self.nodes.lock() {
+            Ok(mut nodes) => {
+                nodes.entry(path).or_default();
+            }
+            Err(poisoned) => {
+                poisoned.into_inner().entry(path).or_default();
+            }
+        }
         Ok(8192)
     }
 
-    fn clunk(&self, _cid: ClientId, qid: u64) {
-        self.qmap.lock().unwrap().remove(&qid);
+    fn clunk(&mut self, _cid: ClientId, qid: u64) {
+        match self.qmap.lock() {
+            Ok(mut map) => {
+                map.remove(&qid);
+            }
+            Err(poisoned) => {
+                poisoned.into_inner().remove(&qid);
+            }
+        }
     }
 
     fn create(
-        &self,
+        &mut self,
         _cid: ClientId,
         parent: u64,
         name: &str,
         _perm: Perm,
         _mode: Mode,
         _uname: &str,
-    ) -> Result<(FileMeta, IoUnit)> {
+    ) -> ninep::Result<(FileMeta, IoUnit)> {
         let base = self.path_for(parent);
         let path = if base == "/" {
             format!("/{}", name)
         } else {
             format!("{}/{}", base, name)
         };
-        check_perm(&path, Access::Write)?;
+        check_perm(&path, Access::Write).map_err(|e| e.to_string())?;
         let qid = self.alloc_qid(&path);
-        self.nodes.lock().unwrap().insert(
-            path.clone(),
-            Node {
-                data: Vec::new(),
-                is_dir: false,
-            },
-        );
+        match self.nodes.lock() {
+            Ok(mut nodes) => {
+                nodes.insert(
+                    path.clone(),
+                    Node {
+                        data: Vec::new(),
+                        is_dir: false,
+                    },
+                );
+            }
+            Err(poisoned) => {
+                poisoned.into_inner().insert(
+                    path.clone(),
+                    Node {
+                        data: Vec::new(),
+                        is_dir: false,
+                    },
+                );
+            }
+        }
         Ok((FileMeta::file(name, qid), 8192))
     }
 
     fn read(
-        &self,
+        &mut self,
         _cid: ClientId,
         qid: u64,
         offset: usize,
         count: usize,
         _uname: &str,
-    ) -> Result<ReadOutcome> {
+    ) -> ninep::Result<ReadOutcome> {
         let path = self.path_for(qid);
         if let Some((sub, mut cli)) = self.remote_client(&path) {
-            let data = cli.read(sub)?;
-            let slice = data.into_iter().skip(offset).take(count).collect();
+            let slice = read_slice(&mut cli, &sub, offset, count)
+                .map_err(|e| e.to_string())?;
             return Ok(ReadOutcome::Immediate(slice));
         }
-        let nodes = self.nodes.lock().unwrap();
+        let nodes = match self.nodes.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
         if let Some(node) = nodes.get(&path) {
             let slice = node.data.iter().skip(offset).take(count).copied().collect();
             return Ok(ReadOutcome::Immediate(slice));
         }
-        Err(anyhow!("not found"))
+        Err("not found".to_string())
     }
 
-    fn read_dir(&self, _cid: ClientId, qid: u64, _uname: &str) -> Result<Vec<Stat>> {
+    fn read_dir(&mut self, _cid: ClientId, qid: u64, _uname: &str) -> ninep::Result<Vec<Stat>> {
         let path = self.path_for(qid);
         let mut stats = Vec::new();
-        for (p, node) in self.nodes.lock().unwrap().iter() {
+        let map = match self.nodes.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        for (p, node) in map.iter() {
             if let Some(rel) = p.strip_prefix(&path) {
                 if rel.starts_with('/') && rel.split('/').count() == 2 {
                     let name = rel.trim_start_matches('/');
@@ -232,20 +279,23 @@ impl Serve9p for CohesixFs {
     }
 
     fn write(
-        &self,
+        &mut self,
         _cid: ClientId,
         qid: u64,
         offset: usize,
         data: Vec<u8>,
         _uname: &str,
-    ) -> Result<usize> {
+    ) -> ninep::Result<usize> {
         let path = self.path_for(qid);
-        check_perm(&path, Access::Write)?;
+        check_perm(&path, Access::Write).map_err(|e| e.to_string())?;
         if let Some((sub, mut cli)) = self.remote_client(&path) {
-            let written = cli.write(sub, offset as u64, &data)?;
+            let written = cli.write(sub, offset as u64, &data).map_err(|e| e.to_string())?;
             return Ok(written);
         }
-        let mut nodes = self.nodes.lock().unwrap();
+        let mut nodes = match self.nodes.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
         let node = nodes.entry(path).or_default();
         if node.data.len() < offset + data.len() {
             node.data.resize(offset + data.len(), 0);
@@ -254,20 +304,30 @@ impl Serve9p for CohesixFs {
         Ok(data.len())
     }
 
-    fn remove(&self, _cid: ClientId, qid: u64, _uname: &str) -> Result<()> {
+    fn remove(&mut self, _cid: ClientId, qid: u64, _uname: &str) -> ninep::Result<()> {
         let path = self.path_for(qid);
-        check_perm(&path, Access::Write)?;
-        self.nodes.lock().unwrap().remove(&path);
+        check_perm(&path, Access::Write).map_err(|e| e.to_string())?;
+        match self.nodes.lock() {
+            Ok(mut nodes) => {
+                nodes.remove(&path);
+            }
+            Err(poisoned) => {
+                poisoned.into_inner().remove(&path);
+            }
+        }
         Ok(())
     }
 
-    fn stat(&self, _cid: ClientId, qid: u64, _uname: &str) -> Result<Stat> {
+    fn stat(&mut self, _cid: ClientId, qid: u64, _uname: &str) -> ninep::Result<Stat> {
         let path = self.path_for(qid);
         if let Some((sub, mut cli)) = self.remote_client(&path) {
-            return cli.stat(sub);
+            return cli.stat(sub).map_err(|e| e.to_string());
         }
-        let nodes = self.nodes.lock().unwrap();
-        let node = nodes.get(&path).ok_or_else(|| anyhow!("not found"))?;
+        let nodes = match self.nodes.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let node = nodes.get(&path).ok_or_else(|| "not found".to_string())?;
         let fm = if node.is_dir {
             FileMeta::dir("", qid)
         } else {
@@ -285,21 +345,37 @@ impl Serve9p for CohesixFs {
         })
     }
 
-    fn write_stat(&self, _cid: ClientId, _qid: u64, _stat: Stat, _uname: &str) -> Result<()> {
-        Err("write_stat not supported".into())
+    fn write_stat(&mut self, _cid: ClientId, _qid: u64, _stat: Stat, _uname: &str) -> ninep::Result<()> {
+        Err("write_stat not supported".to_string())
     }
 }
 
 pub struct FsServer {
-    _handle: std::thread::JoinHandle<()>,
+    cfg: super::FsConfig,
+    handle: Option<std::thread::JoinHandle<()>>,
 }
 
 impl FsServer {
-    pub fn start(cfg: super::FsConfig) -> Result<Self> {
-        let fs = CohesixFs::new(cfg.root);
+    pub fn new(cfg: super::FsConfig) -> Self {
+        Self { cfg, handle: None }
+    }
+
+    pub fn start(&mut self) -> AnyResult<()> {
+        let fs = CohesixFs::new(self.cfg.root.clone());
         let server = Server::new(fs);
-        info!("Starting 9P server on {}", cfg.port);
-        let handle = server.serve_tcp(cfg.port);
-        Ok(FsServer { _handle: handle })
+        info!("Starting 9P server on {}", self.cfg.port);
+        let handle = server.serve_tcp(self.cfg.port);
+        self.handle = Some(handle);
+        Ok(())
+    }
+
+    pub fn start_socket(&mut self, socket: impl Into<String>) -> AnyResult<()> {
+        let path = socket.into();
+        let fs = CohesixFs::new(self.cfg.root.clone());
+        let server = Server::new(fs);
+        info!("Starting 9P server on {}", &path);
+        let handle = server.serve_socket(path);
+        self.handle = Some(handle);
+        Ok(())
     }
 }
