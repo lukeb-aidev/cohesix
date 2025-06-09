@@ -30,6 +30,11 @@
 ### Added
 - `cohshell.sh` wrapper for Cohesix BusyBox. Users may symlink it to `/bin/sh` for minimal rootfs setups.
 
+## [v0.67] - 2025-07-18
+### Added
+- BusyBox test script `test_cohbox.sh` verifying static build and approved applets.
+- CI step builds Cohox via `make -f third_party/busybox/Makefile.coh` and runs the new test.
+
 ## [v0.61] - 2025-06-08
 ### Added
 

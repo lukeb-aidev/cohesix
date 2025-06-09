@@ -81,6 +81,24 @@ jobs:
       - name: Build (release)
         run: cargo build --all-targets --release --verbose
 
+      - name: Build Cohbox
+        run: make -f third_party/busybox/Makefile.coh
+
+      - name: Test Cohbox (sandboxed)
+        run: |
+          bwrap \
+            --ro-bind /usr /usr \
+            --ro-bind /bin /bin \
+            --ro-bind /lib /lib \
+            --ro-bind /lib64 /lib64 \
+            --dev /dev \
+            --proc /proc \
+            --bind $(pwd) /workspace \
+            --tmpfs /tmp \
+            --bind /mnt/data /mnt/data \
+            --chdir /workspace \
+            bash -c "./scripts/test_cohbox.sh"
+
       - name: Cross-arch test suite (sandboxed)
         run: |
           bwrap \
