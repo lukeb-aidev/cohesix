@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: tcc.rs v0.3
+// Filename: tcc.rs v0.4
 // Author: Lukas Bower
 // Date Modified: 2025-07-18
 
@@ -9,7 +9,7 @@ use std::path::Path;
 
 use crate::coh_cc::backend::registry::CompilerBackend;
 use crate::coh_cc::parser::input_type::CohInput;
-use crate::coh_cc::guard;
+use crate::coh_cc::{guard, toolchain::Toolchain};
 
 pub struct TccBackend;
 
@@ -20,8 +20,10 @@ impl CompilerBackend for TccBackend {
         out_path: &Path,
         target: &str,
         sysroot: &Path,
+        toolchain: &Toolchain,
     ) -> anyhow::Result<()> {
         guard::check_static_flags(&input.flags)?;
+        let _ = toolchain.get_tool_path("tcc")?;
         if !["x86_64-linux-musl", "aarch64-linux-musl"].contains(&target) {
             anyhow::bail!("unsupported target {target}");
         }

@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: main.rs v0.3
+// Filename: main.rs v0.4
 // Author: Lukas Bower
 // Date Modified: 2025-07-18
 
@@ -9,6 +9,7 @@ use cohesix::coh_cc::{
     config::{Cli, Command, Config},
     guard,
     parser::input_type::CohInput,
+    toolchain::Toolchain,
 };
 use cohesix::{cohcc_error, cohcc_info};
 use std::path::Path;
@@ -32,10 +33,9 @@ pub fn main_entry() -> anyhow::Result<()> {
     let backend = get_backend(backend_name)?;
     match cli.command {
         Command::Build { source, out, flags, .. } => {
-            if !cfg.valid_output(&out) {
-                anyhow::bail!("output path must be within project dir or /mnt/data");
-            }
+            guard::validate_output_path(Path::new(&out))?;
             let input = CohInput::new(Path::new(&source).to_path_buf(), flags);
+            let tc = Toolchain::new(cfg.toolchain_dir.clone())?;
             cohcc_info!(
                 backend_name,
                 Path::new(&source),
@@ -43,7 +43,8 @@ pub fn main_entry() -> anyhow::Result<()> {
                 &input.flags,
                 &format!("detected {:?}", input.ty)
             );
-            backend.compile(&input, Path::new(&out), &cfg.target, &cfg.sysroot)?;
+            backend.compile(&input, Path::new(&out), &cfg.target, &cfg.sysroot, &tc)?;
+            guard::verify_static_binary(Path::new(&out))?;
             let hash = guard::hash_output(Path::new(&out))?;
             guard::log_build(
                 &hash,

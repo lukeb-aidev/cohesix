@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: guard.rs v0.1
+// Filename: guard.rs v0.2
 // Author: Lukas Bower
 // Date Modified: 2025-07-17
 
@@ -12,6 +12,14 @@ use chrono::Utc;
 fn append_log(line: &str) -> std::io::Result<()> {
     fs::create_dir_all("/log")?;
     let mut f = OpenOptions::new().create(true).append(true).open("/log/cohcc_builds.log")?;
+    writeln!(f, "{} {}", Utc::now().to_rfc3339(), line)?;
+    f.flush()?;
+    Ok(())
+}
+
+fn append_fail_log(line: &str) -> std::io::Result<()> {
+    fs::create_dir_all("/log")?;
+    let mut f = OpenOptions::new().create(true).append(true).open("/log/cohcc_fail.log")?;
     writeln!(f, "{} {}", Utc::now().to_rfc3339(), line)?;
     f.flush()?;
     Ok(())
@@ -35,6 +43,37 @@ pub fn hash_output(path: &Path) -> anyhow::Result<String> {
         hasher.update(&buf[..n]);
     }
     Ok(hex::encode(hasher.finalize()))
+}
+
+pub fn validate_output_path(path: &Path) -> anyhow::Result<()> {
+    let canon = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let forbidden = ["/tmp", "/srv", "/home"];
+    for f in &forbidden {
+        if canon.starts_with(f) {
+            append_fail_log(&format!("forbidden output path {}", canon.display()))?;
+            anyhow::bail!("output path not allowed");
+        }
+    }
+    if !canon.starts_with("/mnt/data") {
+        append_fail_log(&format!("output outside /mnt/data {}", canon.display()))?;
+        anyhow::bail!("output path must be under /mnt/data");
+    }
+    Ok(())
+}
+
+pub fn verify_static_binary(output: &Path) -> anyhow::Result<()> {
+    use std::process::Command;
+    let out = Command::new("readelf").arg("-d").arg(output).output()?;
+    if !out.status.success() {
+        append_fail_log(&format!("readelf failed for {}", output.display()))?;
+        anyhow::bail!("readelf failed");
+    }
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    if stdout.contains("(NEEDED)") {
+        append_fail_log(&format!("dynamic binary {}", output.display()))?;
+        anyhow::bail!("binary is dynamically linked");
+    }
+    Ok(())
 }
 
 pub fn log_build(hash: &str, backend: &str, input: &Path, output: &Path, flags: &[String]) -> std::io::Result<()> {
