@@ -1,21 +1,14 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: zig.rs v0.1
+// Filename: zig.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-07-17
+// Date Modified: 2025-07-18
 
 use std::path::Path;
 use std::process::Command;
-use crate::coh_cc::{logging, guard};
+use crate::coh_cc::{logging, guard, toolchain::Toolchain};
 
-pub fn zig_path() -> Option<String> {
-    std::env::var("ZIG_PATH").ok().or_else(|| {
-        let default = "/mnt/data/toolchains/zig-linux-x86_64-0.11.0/zig";
-        if Path::new(default).exists() { Some(default.to_string()) } else { None }
-    })
-}
-
-pub fn compile_and_link(source: &str, out: &str, flags: &[String]) -> anyhow::Result<()> {
-    let zig = zig_path().ok_or_else(|| anyhow::anyhow!("zig compiler not found"))?;
+pub fn compile_and_link(source: &str, out: &str, flags: &[String], tc: &Toolchain) -> anyhow::Result<()> {
+    let zig = tc.get_tool_path("zig")?;
     guard::check_static_flags(flags)?;
     let mut cmd = Command::new(zig);
     cmd.arg("cc");
