@@ -51,9 +51,14 @@ filetree.txt
 go/9p/mux.go
 go/cmd/coh-9p-helper/main.go
 go/cmd/coh-9p-helper/main_test.go
+go/cmd/gui-orchestrator/main.go
 go/go.mod
 go/go.work
 go/go.work.sum
+go/orchestrator/api/handlers.go
+go/orchestrator/http/server.go
+go/orchestrator/http/server_test.go
+go/orchestrator/static/serve.go
 go/internal/tooling/cli.go
 justfile
 scripts/boottrace.py
@@ -68,6 +73,8 @@ scripts/send-heartbeat.sh
 scripts/setup-toolchain.sh
 scripts/validate_metadata_sync.py
 scripts/verify-macos-setup.sh
+static/index.html
+static/main.js
 src/agents/mod.rs
 src/agents/runtime.rs
 src/boot/measure.rs
