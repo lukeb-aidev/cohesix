@@ -1,22 +1,24 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.38
-// Date Modified: 2025-07-16
+// Filename: CHANGELOG.md v0.39
+// Date Modified: 2025-06-08
 
-## [v0.61] - 2025-07-16
+## [v0.61] - 2025-06-08
 ### Added
+
+- CI matrix expanded to x86_64/aarch64 with CUDA and DroneWorker role.
+- Test steps sandboxed via bubblewrap to restrict writes.
+- Grype vulnerability scanning and SHA256 artifact logging.
+- OSS dependency workflow now generates an SBOM via syft.
 - Validator error tests for corrupted SLM manifests and trace files.
 - Boot integration checks for session log and CLI role output.
 - 9P validator hook tests for capability, timeout, and replay errors.
 
-// Filename: CHANGELOG.md v0.39
-// Date Modified: 2025-07-15
-
-## [v0.61] - 2025-07-15
+## [v0.61] - 2025-06-08
 ### Changed
 - Boot trampoline validates SHA256 CRC before jumping.
 - bootloader defaults to DroneWorker role and logs init.
 
-## [v0.61] - 2025-07-15
+## [v0.61] - 2025-06-08
 ### Added
 - Python validator rules engine with structured dispatch and timeouts.
 - Kiosk loop watchdog with clean shutdown.
