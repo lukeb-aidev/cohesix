@@ -17,6 +17,7 @@ import (
 	"time"
 
 	orch "cohesix/internal/orchestrator/http"
+	"github.com/go-chi/chi/v5"
 )
 
 func newRouter(logPath string) http.Handler {
@@ -106,7 +107,7 @@ func TestStaticFileServed(t *testing.T) {
 }
 
 func TestMetricsEndpoint(t *testing.T) {
-	ts := httptest.NewServer(newRouter())
+	ts := httptest.NewServer(newRouter(""))
 	defer ts.Close()
 	resp, err := http.Get(ts.URL + "/api/metrics")
 	if err != nil {
@@ -114,6 +115,13 @@ func TestMetricsEndpoint(t *testing.T) {
 	}
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status code: %d", resp.StatusCode)
+	}
+	var m map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&m); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if m["requests_total"] == nil || m["start_time_seconds"] == nil || m["active_sessions"] == nil {
+		t.Fatalf("missing fields: %v", m)
 	}
 }
 
@@ -144,5 +152,35 @@ func TestAccessLogging(t *testing.T) {
 	}
 	if !bytes.Contains(data, []byte("/api/status")) {
 		t.Fatalf("log missing entry")
+	}
+}
+
+func TestDevModeDisablesAuth(t *testing.T) {
+	cfg := orch.Config{StaticDir: "../../../static", Dev: true, AuthUser: "a", AuthPass: "b"}
+	srv := orch.New(cfg)
+	ts := httptest.NewServer(srv.Router())
+	defer ts.Close()
+	buf := bytes.NewBufferString(`{"command":"noop"}`)
+	resp, err := http.Post(ts.URL+"/api/control", "application/json", buf)
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status code: %d", resp.StatusCode)
+	}
+}
+
+func TestRecoverMiddleware(t *testing.T) {
+	cfg := orch.Config{StaticDir: "../../../static"}
+	srv := orch.New(cfg)
+	srv.Router().(*chi.Mux).Get("/panic", func(w http.ResponseWriter, r *http.Request) { panic("boom") })
+	ts := httptest.NewServer(srv.Router())
+	defer ts.Close()
+	resp, err := http.Get(ts.URL + "/panic")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("status code: %d", resp.StatusCode)
 	}
 }
