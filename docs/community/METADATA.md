@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: METADATA.md v3.4
+// Filename: METADATA.md v3.5
 // Author: Lukas Bower
-// Date Modified: 2025-07-15
+// Date Modified: 2025-07-16
 
 ## Canonical Documents
 
@@ -15,7 +15,7 @@
 | COMMERCIAL_PLAN.md         | v1.5    | 2025-06-08    | PRIVATE        |            |              |
 | DEPENDENCIES.md            | v0.5    | 2025-07-06    | COMMUNITY      |            |              |
 | MISSION.md                 | v1.9    | 2025-05-24    | COMMUNITY      |            |              |
-| METADATA.md                | v3.4    | 2025-07-15    | COMMUNITY      |            |              |
+| METADATA.md                | v3.5    | 2025-07-16    | COMMUNITY      |            |              |
 | OSS_REUSE.md               | v1.6    | 2025-07-13    | COMMUNITY      |            |              |
 | PROJECT_OVERVIEW.md        | v1.6    | 2025-05-24    | COMMUNITY      |            |              |
 | Q_DAY.md                   | v1.0    | 2025-05-31    | PRIVATE        |            |              |
@@ -58,7 +58,7 @@
 | chown.1                   | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
 | cohagent.1                | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
 | cohcap.1                  | v0.2    | 2025-07-15    | COMMUNITY      |     |              |
-| cohcc.1                   | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
+| cohcc.1                   | v0.2    | 2025-07-16    | COMMUNITY      |     |              |
 | cohcli.1                  | v0.2    | 2025-07-14    | COMMUNITY      |     |              |
 | cohrole.1                 | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
 | cohrun.1                  | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
@@ -91,7 +91,7 @@
 | ifconfig.8                | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
 | ip.8                      | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
 | preview_man.sh            | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
-| issues/ALPHA_VALIDATION_ISSUES.md | v0.1    | 2025-07-13    | COMMUNITY      |     |              |
+| ALPHA_VALIDATION_ISSUES.md | v0.1    | 2025-07-13    | COMMUNITY      |     |              |
 | UTILS_README.md            | v0.1    | 2025-07-13    | COMMUNITY      |     |              |
 | cohpkg.1                   | v0.1    | 2025-07-13    | COMMUNITY      |     |              |
 | SIM_TESTS.md               | v0.1    | 2025-07-13    | COMMUNITY      |     |             |
