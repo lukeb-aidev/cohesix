@@ -1,46 +1,40 @@
 .\" CLASSIFICATION: COMMUNITY
-.\" Filename: cohcc.1 v0.2
+.\" Filename: cohcc.1 v0.3
 .\" Author: Lukas Bower
-.\" Date Modified: 2025-07-16
-.TH COHCC 1 "2025-07-16" "Cohesix v1.0" "Cohesix Project"
+.\" Date Modified: 2025-07-17
+.TH COHCC 1 "2025-07-17" "Cohesix v1.0" "Cohesix Project"
 .SH NAME
-cohcc \- Cohesix static compiler wrapper
+cohcc \- Cohesix compiler frontend
 .SH SYNOPSIS
-.B cohcc
+.B cohcc build source.c -o out [--backend=tcc|zig]
 .RI [ --trace ]
-.RI [ --dry-run ]
-.IR options ...
+.RI [ --sandbox-info ]
 .SH DESCRIPTION
 .B cohcc
-is a thin wrapper around \fBclang\fR and \fBrustc\fR used within the Cohesix
-sandbox. It enforces static linking and restricts output paths to
-\fI/mnt/data\fR. Unsupported options such as \fB-shared\fR or \fB-fPIC\fR are
-stripped before invocation. Every run is logged to
+invokes an auditable C compiler in a reproducible manner. Output paths are
+restricted to the project directory or \fI/mnt/data\fR and the binary is always
+statically linked. The selected backend is logged to
 \fI/log/cohcc_invocations.log\fR.
 .SH OPTIONS
 .TP
 .B --trace
-print the final compiler command before execution.
+write the full compiler command to the log.
 .TP
-.B --dry-run
-skip execution and only display the command.
+.B --sandbox-info
+print filesystem and role sandbox details then exit.
 .TP
-All other arguments are forwarded to the backend compiler after filtering.
+.B --backend
+select the compiler backend (default \fBtcc\fR).
 .SH FILES
 .TP
 .I /log/cohcc_invocations.log
 command history and diagnostics.
 .TP
-.I /log/cohcc_test_pass.log
-automated test result marker.
+.I /log/cohcc_fail.log
+error details on failed builds.
 .SH EXAMPLES
-Compile a C program:
+Compile a C program using zig:
 .P
-.B cohcc hello.c -o /mnt/data/hello
-.P
-Compile a Rust program:
-.P
-.B cohcc main.rs -o /mnt/data/hello
+.B cohcc build hello.c -o /mnt/data/hello --backend=zig
 .SH SEE ALSO
-.BR clang (1),
-.BR rustc (1)
+.BR zig (1)
