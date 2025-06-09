@@ -1,14 +1,37 @@
 #!/usr/bin/env python3
 # CLASSIFICATION: COMMUNITY
-# Filename: cohup.py v0.2
+# Filename: cohup.py v0.3
 # Author: Lukas Bower
-# Date Modified: 2025-07-12
+# Date Modified: 2025-07-15
 
 """cohup – live patching utility."""
 
 import argparse
 import hashlib
 from pathlib import Path
+import shlex
+import subprocess
+from datetime import datetime
+from typing import List
+import traceback
+
+
+LOG_DIR = Path("/log")
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def cohlog(msg: str) -> None:
+    with (LOG_DIR / "cli_tool.log").open("a") as f:
+        f.write(f"{datetime.utcnow().isoformat()} {msg}\n")
+    print(msg)
+
+
+def safe_run(cmd: List[str]) -> int:
+    quoted = [shlex.quote(c) for c in cmd]
+    with (LOG_DIR / "cli_exec.log").open("a") as f:
+        f.write(f"{datetime.utcnow().isoformat()} {' '.join(quoted)}\n")
+    result = subprocess.run(cmd)
+    return result.returncode
 
 
 def parse_args():
@@ -42,8 +65,14 @@ def apply_patch(target: str, binary_path: str):
     with log.open("a") as f:
         f.write(f"patch {target} {digest}\n")
     Path(target).write_bytes(data)
-    print(f"Patched {target} with hash {digest}")
+    cohlog(f"Patched {target} with hash {digest}")
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        with (LOG_DIR / "cli_error.log").open("a") as f:
+            f.write(f"{datetime.utcnow().isoformat()} {traceback.format_exc()}\n")
+        cohlog("Unhandled error, see cli_error.log")
+        sys.exit(1)

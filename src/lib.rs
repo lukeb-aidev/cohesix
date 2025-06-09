@@ -8,8 +8,9 @@
 /// Intermediate Representation (IR) core types and utilities
 pub mod ir;
 
-/// IR pass framework and passes
+/// IR pass framework
 pub mod pass_framework;
+/// Individual optimization passes
 pub mod passes;
 
 /// Code generation backends (C, WASM) and dispatch logic
@@ -30,8 +31,12 @@ pub mod runtime;
 pub mod telemetry;
 /// Agent runtime modules
 pub mod agents;
+/// Standalone agent helpers
 pub mod agent;
+/// Migration control-plane helpers
 pub mod agent_migration;
+/// Transport implementation for migrations
+pub mod agent_transport;
 /// Queen orchestrator modules
 pub mod queen;
 /// Trace recording modules
@@ -66,6 +71,7 @@ pub mod kernel;
 
 /// CUDA runtime helpers
 pub mod cuda;
+/// Secure launch module helpers
 pub mod slm;
 
 /// Physics simulation bridge
@@ -95,6 +101,7 @@ pub mod world_model;
 pub mod orchestrator;
 /// Federation utilities
 pub mod federation;
+/// Runtime rule validator
 pub mod validator;
 /// Watchdog daemon module
 pub mod watchdogd;
@@ -107,11 +114,12 @@ pub mod hal;
 
 /// rc style init parser
 pub mod rc {
+/// Parser for rc-style init scripts
     pub mod init;
 }
 
-/// seL4 integration modules
 #[allow(non_snake_case)]
+/// seL4 kernel bindings
 pub mod seL4;
 
 /// Role-specific initialization hooks
@@ -166,4 +174,13 @@ pub fn compile_from_file_with_target(
         }
     }
     Ok(())
+}
+
+/// Cohesix runtime error type.
+pub type CohError = Box<dyn std::error::Error + Send + Sync>;
+
+/// Trait implemented by runtime components that can boot themselves.
+pub trait BootableRuntime {
+    /// Boot the runtime component.
+    fn boot() -> Result<(), CohError>;
 }

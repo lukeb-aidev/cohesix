@@ -1,19 +1,44 @@
 #!/usr/bin/env python3
 # CLASSIFICATION: COMMUNITY
-# Filename: cohtrace.py v0.5
+# Filename: cohtrace.py v0.6
 # Author: Lukas Bower
-# Date Modified: 2025-07-12
+# Date Modified: 2025-07-15
 
 """cohtrace – inspect connected workers."""
 
 import os
 import argparse
 from pathlib import Path
+import subprocess
+import shlex
+import json
+import time
+from typing import List
+from datetime import datetime
+import traceback
+
+
+LOG_DIR = Path("/log")
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def cohlog(msg: str) -> None:
+    with (LOG_DIR / "cli_tool.log").open("a") as f:
+        f.write(f"{datetime.utcnow().isoformat()} {msg}\n")
+    print(msg)
+
+
+def safe_run(cmd: List[str]) -> int:
+    quoted = [shlex.quote(c) for c in cmd]
+    with (LOG_DIR / "cli_exec.log").open("a") as f:
+        f.write(f"{datetime.utcnow().isoformat()} {' '.join(quoted)}\n")
+    result = subprocess.run(cmd)
+    return result.returncode
 
 
 def list_workers(base: Path):
     if not base.exists():
-        print("No workers connected")
+        cohlog("No workers connected")
         return
     for worker in base.iterdir():
         role = (worker / "role").read_text().strip() if (worker / "role").exists() else "Unknown"
@@ -21,7 +46,7 @@ def list_workers(base: Path):
         srv_dir = worker / "services"
         if srv_dir.exists():
             services = [p.name for p in srv_dir.iterdir()]
-        print(f"{worker.name}: role={role} services={','.join(services)}")
+        cohlog(f"{worker.name}: role={role} services={','.join(services)}")
 
 
 def push_trace(worker_id: str, path: Path):
@@ -30,12 +55,12 @@ def push_trace(worker_id: str, path: Path):
     dest = dest_dir / "sim.json"
     import shutil
     shutil.copy(path, dest)
-    print(f"Trace pushed to {dest}")
+    cohlog(f"Trace pushed to {dest}")
     try:
         from cohesix.trace.validator import validate_trace
         validate_trace(str(dest), worker_id)
     except Exception as e:
-        print(f"Validation failed: {e}")
+        cohlog(f"Validation failed: {e}")
 
 
 def main():
@@ -69,25 +94,31 @@ def main():
                 events = []
         events.append({"timestamp": int(time.time()), "event": "ping"})
         path.write_text(json.dumps(events))
-        print("kiosk ping logged")
+        cohlog("kiosk ping logged")
     elif args.cmd == "trust_check":
         base = Path("/srv/trust_zones")
         if not base.exists():
-            print("no trust zone data")
+            cohlog("no trust zone data")
         else:
             for ent in base.iterdir():
                 level = ent.read_text().strip()
-                print(f"{ent.name}: {level}")
+                cohlog(f"{ent.name}: {level}")
     elif args.cmd == "view_snapshot":
         base = Path(os.environ.get("SNAPSHOT_BASE", "/history/snapshots"))
         path = base / f"{args.worker_id}.json"
         if path.exists():
-            print(path.read_text())
+            cohlog(path.read_text())
         else:
-            print("snapshot not found")
+            cohlog("snapshot not found")
     else:
         parser.print_help()
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        with (LOG_DIR / "cli_error.log").open("a") as f:
+            f.write(f"{datetime.utcnow().isoformat()} {traceback.format_exc()}\n")
+        cohlog("Unhandled error, see cli_error.log")
+        sys.exit(1)

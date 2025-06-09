@@ -26,6 +26,18 @@ pub struct AgentRuntime {
     pub procs: HashMap<String, Child>,
 }
 
+use crate::agent_transport::AgentTransport;
+use crate::agent_migration::{Migrateable, MigrationStatus};
+
+impl Migrateable for AgentRuntime {
+    fn migrate<T: AgentTransport>(&self, peer: &str, transport: &T) -> anyhow::Result<MigrationStatus> {
+        let path = "/tmp/runtime_state.json";
+        std::fs::write(path, "runtime")?;
+        transport.send_state("runtime", peer, path)?;
+        Ok(MigrationStatus::Completed)
+    }
+}
+
 impl AgentRuntime {
     /// Create a new agent runtime manager.
     pub fn new() -> Self {

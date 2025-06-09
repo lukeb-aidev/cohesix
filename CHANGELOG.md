@@ -8,10 +8,28 @@
 - Boot integration checks for session log and CLI role output.
 - 9P validator hook tests for capability, timeout, and replay errors.
 
+// Filename: CHANGELOG.md v0.39
+// Date Modified: 2025-07-15
+
+
+## [v0.61] - 2025-07-15
+### Added
+- Python validator rules engine with structured dispatch and timeouts.
+- Kiosk loop watchdog with clean shutdown.
+- Agent SDK version tag and migration tests.
+
 ## [v0.60] - 2025-07-15
 ### Changed
 - Cleaned METADATA duplicate entries and normalized license files.
 - Bumped versions for `OPEN_SOURCE_DEPENDENCIES.md` and `LICENSE_MATRIX.md`.
+
+## [v0.61] - 2025-07-15
+### Added
+- Mutex-protected state and structured logging for Go agent SDK.
+- Graceful shutdown and fault-injection tests covering cancellations and timeouts.
+### Changed
+- Unified logging for CLI tools with `cohlog` and safe shell execution.
+- Added argparse subparsers and new flags to `cohcli`.
 
 ## [v0.59] - 2025-07-14
 ### Added
