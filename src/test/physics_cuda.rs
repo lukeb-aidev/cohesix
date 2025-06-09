@@ -1,7 +1,9 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: physics_cuda.rs v1.0
 // Author: Codex
-// Date Modified: 2025-06-07
+// Date Modified: 2025-07-22
+
+#![cfg(all(feature = "cuda", feature = "rapier"))]
 
 use crate::cuda::runtime::CudaExecutor;
 use crate::sim::rapier_bridge::{SimBridge, SimCommand};

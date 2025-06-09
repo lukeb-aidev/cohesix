@@ -1,7 +1,9 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: physics_demo.rs v0.1
 // Author: Lukas Bower
-// Date Modified: 2025-07-11
+// Date Modified: 2025-07-22
+
+#![cfg(feature = "rapier")]
 
 //! Simple Rapier physics demo used by `cohrun physics_demo`.
 

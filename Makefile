@@ -1,6 +1,6 @@
 # CLASSIFICATION: COMMUNITY
 # Filename: Makefile v0.8
-# Date Modified: 2025-07-21
+# Date Modified: 2025-06-08
 # Author: Lukas Bower
 #
 # ─────────────────────────────────────────────────────────────
@@ -13,6 +13,9 @@
 #  • `make help`     – list targets
 # ─────────────────────────────────────────────────────────────
 
+.PHONY: all go-build go-test c-shims help boot boot-x86_64 boot-aarch64
+
+PLATFORM ?= $(shell uname -m)
 .PHONY: all go-build go-test c-shims help cohrun cohbuild cohtrace cohcap
 
 all: go-build go-test c-shims
@@ -32,7 +35,18 @@ c/sel4/bootloader.o: c/sel4/bootloader.c
 	$(CC:-clang?=cc) -I c/sel4/include -c $< -o $@
 
 c-shims: c/sel4/shim/boot_trampoline.o c/sel4/bootloader.o
-	@echo "🔧 Building C shims …"
+        @echo "🔧 Building C shims …"
+
+boot-x86_64:
+@echo "🏁 Building boot image for x86_64"
+cargo build --release --target x86_64-unknown-linux-gnu
+
+boot-aarch64:
+@echo "🏁 Building boot image for aarch64"
+cargo build --release --target aarch64-unknown-linux-gnu
+
+boot:
+$(MAKE) boot-$(PLATFORM)
 
 help:
 	@echo "Cohesix top‑level build targets:"
