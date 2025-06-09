@@ -31,8 +31,7 @@ Community documents live in `docs/community/`, while private strategy files are 
 
 | Path | Purpose |
 |------|---------|
-| `docs/community/MISSION.md` | Project philosophy and goals |
-| `docs/community/PROJECT_OVERVIEW.md` | Architecture & roadmap |
+| `docs/community/MISSION_AND_ARCHITECTURE.md` | Philosophy and architecture overview |
 | `docs/community/INSTRUCTION_BLOCK.md` | Canonical workflow rules |
 | `docs/private/COMMERCIAL_PLAN.md` | Market & investor messaging (restricted) |
 
@@ -90,6 +89,6 @@ GOWORK=$(pwd)/go/go.work go test ./go/...
 
 ## 🧠 Learn More
 
-* [Cohesix Project Philosophy](docs/community/MISSION.md)
-* [Technical Deep‑Dive](docs/community/PROJECT_OVERVIEW.md)
+* [Cohesix Project Philosophy](docs/community/MISSION_AND_ARCHITECTURE.md)
+* [Technical Deep‑Dive](docs/community/MISSION_AND_ARCHITECTURE.md)
 * [Canonical Workflows](docs/community/INSTRUCTION_BLOCK.md)

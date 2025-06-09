@@ -27,9 +27,8 @@ docs/community/END_USER_DEMOS.md
 docs/community/IMPLEMENTATION_GUIDE.md
 docs/community/INSTRUCTION_BLOCK.md
 docs/community/METADATA.md
-docs/community/MISSION.md
+docs/community/MISSION_AND_ARCHITECTURE.md
 docs/community/OSS_REUSE.md
-docs/community/PROJECT_OVERVIEW.md
 docs/community/README_Codex.md
 docs/community/RELEASE_CRITERIA.md
 docs/community/REMOTE_ACCESS.md
