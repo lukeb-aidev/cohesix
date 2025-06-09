@@ -1,76 +1,49 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v0.40
-// Date Modified: 2025-07-18
+// Date Modified: 2025-06-09
 
-## [v0.62] - 2025-07-16
-### Added
-- Initial `coh_cc` compiler stub replacing placeholder script.
-- Man page updated and basic integration test added.
-
-## [v0.63] - 2025-07-17
-### Added
-- Zig backend integration for `cohcc` with static build enforcement.
-- `test_cohcc_build_c.sh` verifies static output.
+## [v0.68] - 2025-06-09
 ### Changed
-- Man page updated with backend options and logging paths.
+- Hardened kernel capability checks and syscall validation.
+- Added CUDA build script and GPU detection logic.
 
-## [v0.64] - 2025-07-17
+## [v0.67] - 2025-06-09
 ### Added
-- Backend registry with trait-based dispatch and input type detection.
-- Static flag enforcement and build hashing for `cohcc`.
+- BusyBox test script `test_cohbox.sh` verifying static build and approved applets.
+- CI step builds Cohox via `make -f third_party/busybox/Makefile.coh` and runs the new test.
 
-## [v0.65] - 2025-07-18
+## [v0.66] - 2025-06-09
+### Added
+- `cohshell.sh` wrapper for Cohesix BusyBox. Users may symlink it to `/bin/sh` for minimal rootfs setups.
+
+## [v0.65] - 2025-06-09
 ### Added
 - Cross-compilation flags `--target` and `--sysroot` for `cohcc`.
 - Rust build wrapper with static linking enforcement and logging.
 - JSON IR schema loader with versioning and log output.
 - Structured logging macros and CI reproducibility test.
 
-## [v0.66] - 2025-07-18
+## [v0.64] - 2025-06-09
 ### Added
-- `cohshell.sh` wrapper for Cohesix BusyBox. Users may symlink it to `/bin/sh` for minimal rootfs setups.
+- Backend registry with trait-based dispatch and input type detection.
+- Static flag enforcement and build hashing for `cohcc`.
 
-## [v0.68] - 2025-07-20
+## [v0.63] - 2025-06-09
+### Added
+- Zig backend integration for `cohcc` with static build enforcement.
+- `test_cohcc_build_c.sh` verifies static output.
+- Offline mandoc build via coh_cc and new cohman wrapper.
 ### Changed
-- Hardened kernel capability checks and syscall validation.
-- Added CUDA build script and GPU detection logic.
+- Man page updated with backend options and logging paths.
 
-## [v0.67] - 2025-07-18
+## [v0.62] - 2025-06-09
 ### Added
-- BusyBox test script `test_cohbox.sh` verifying static build and approved applets.
-- CI step builds Cohox via `make -f third_party/busybox/Makefile.coh` and runs the new test.
-
-## [v0.61] - 2025-06-08
-### Added
-
-- CI matrix expanded to x86_64/aarch64 with CUDA and DroneWorker role.
-- Test steps sandboxed via bubblewrap to restrict writes.
-- Grype vulnerability scanning and SHA256 artifact logging.
-- OSS dependency workflow now generates an SBOM via syft.
-- Validator error tests for corrupted SLM manifests and trace files.
-- Boot integration checks for session log and CLI role output.
-- 9P validator hook tests for capability, timeout, and replay errors.
-
-## [v0.61] - 2025-06-08
-### Changed
-- Boot trampoline validates SHA256 CRC before jumping.
-- bootloader defaults to DroneWorker role and logs init.
-
-## [v0.61] - 2025-06-08
-### Added
-- Python validator rules engine with structured dispatch and timeouts.
-- Kiosk loop watchdog with clean shutdown.
-- Agent SDK version tag and migration tests.
-
-## [v0.62] - 2025-07-15
-### Added
+- Initial `coh_cc` compiler stub replacing placeholder script.
+- Man page updated and basic integration test added.
 - Documented danger flags and exit codes in `cohcap(1)` and `cohtrace(1)`.
 - Added failure-case JSON examples.
-
-## [v0.60] - 2025-07-15
-### Changed
-- Cleaned METADATA duplicate entries and normalized license files.
-- Bumped versions for `OPEN_SOURCE_DEPENDENCIES.md` and `LICENSE_MATRIX.md`.
+- Integrated `cohesix-9p` server with upstream `ninep` crate.
+- Added adapter helpers and basic 9P integration tests.
 
 ## [v0.61] - 2025-07-15
 ### Added
@@ -80,13 +53,26 @@
 - Unified logging for CLI tools with `cohlog` and safe shell execution.
 - Added argparse subparsers and new flags to `cohcli`.
 
-## [v0.62] - 2025-07-16
+## [v0.61] - 2025-06-08
 ### Added
-- Integrated `cohesix-9p` server with upstream `ninep` crate.
-- Added adapter helpers and basic 9P integration tests.
-## [v0.63] - 2025-07-16
-### Added
-- Offline mandoc build via coh_cc and new cohman wrapper.
+- CI matrix expanded to x86_64/aarch64 with CUDA and DroneWorker role.
+- Test steps sandboxed via bubblewrap to restrict writes.
+- Grype vulnerability scanning and SHA256 artifact logging.
+- OSS dependency workflow now generates an SBOM via syft.
+- Validator error tests for corrupted SLM manifests and trace files.
+- Boot integration checks for session log and CLI role output.
+- 9P validator hook tests for capability, timeout, and replay errors.
+- Python validator rules engine with structured dispatch and timeouts.
+- Kiosk loop watchdog with clean shutdown.
+- Agent SDK version tag and migration tests.
+### Changed
+- Boot trampoline validates SHA256 CRC before jumping.
+- bootloader defaults to DroneWorker role and logs init.
+
+## [v0.60] - 2025-07-15
+### Changed
+- Cleaned METADATA duplicate entries and normalized license files.
+- Bumped versions for `OPEN_SOURCE_DEPENDENCIES.md` and `LICENSE_MATRIX.md`.
 
 ## [v0.59] - 2025-07-14
 ### Added
@@ -122,12 +108,13 @@
 ## [v0.55] - 2025-07-13
 ### Fixed
 - Restored `AGENTS.md` and updated METADATA for test compatibility.
-
-## [v0.55] - 2025-07-13
 ### Added
 - Runtime sandbox now enforces capabilities from `/etc/cohcap.json` and logs
   blocked syscalls with role and PID.
 - CUDA FFI loader wraps symbols with runtime validator checks.
+- CUDA runtime now executes real kernel and logs to /log/gpu_runtime.log
+- Telemetry schema expanded with exec_time_ns and fallback_reason
+- Added cust crate dependency
 
 
 ## [v0.53] - 2025-07-13
