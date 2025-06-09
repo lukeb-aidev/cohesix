@@ -19,6 +19,11 @@ rapier3d = { version = "0.17.2", optional = true }
 ureq = "2.9"
 tokio = { version = "1", features = ["sync", "rt"] }
 once_cell = "1"
+cohesix-9p = { path = "cohesix-9p" }
+
+[build-dependencies]
+which = "5.0"
+cohesix-9p = { path = "cohesix-9p" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 hex = "0.4"
@@ -57,6 +62,7 @@ ninep = "0.3"
 [features]
 default = ["physics", "busybox"]
 cuda = ["cust"]
+rapier = ["rapier3d"]
 physics = ["rapier3d"]
 busybox = []
 [[bin]]

@@ -1,7 +1,9 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: sim_deterministic.rs v0.1
 // Author: Cohesix Codex
-// Date Modified: 2025-07-13
+// Date Modified: 2025-07-22
+
+#![cfg(feature = "rapier")]
 
 use cohesix::sim::rapier_bridge::deterministic_harness;
 use serial_test::serial;
