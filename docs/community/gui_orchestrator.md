@@ -1,18 +1,21 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: gui_orchestrator.md v1.0
-// Author: Codex
-// Date Modified: 2025-06-07
+// Filename: gui_orchestrator.md v1.1
+// Author: Lukas Bower
+// Date Modified: 2025-07-20
 
 # Web GUI Orchestrator
 
 This document outlines the architecture for a community-facing dashboard that
-exposes live cluster state over a browser connection.
+exposes live cluster state over a browser connection. The GUI is now provided
+by a Go service using the chi router with JSON APIs.
 
 ## Overview
 
-The orchestrator queries the `/srv` namespace to display agent status, role
-assignments, federation peers, and boot logs. A lightweight WebSocket gateway
-bridges requests to internal services.
+The orchestrator queries the `/srv` namespace and the worker registry at
+`/srv/agents/active.json` to display agent status, role assignments,
+federation peers, and boot logs. Static content under `gui/` or `static/` is
+served directly over HTTP. WebSocket support remains available for live
+updates.
 
 ## Features
 
@@ -20,7 +23,11 @@ bridges requests to internal services.
 - Federation status showing connected Queens
 - Boot attestation logs with TPM results
 - Role manifest viewer and editing helpers
+- REST-style endpoints `/api/status` and `/api/control`
+- Access logging via `--log-file`
+- CLI helpers through `cohrun orchestrator`
 
-The frontend speaks JSON over WebSocket to a small Go service that proxies 9P
-filesystem calls. Static assets reside under `gui/` and can be served directly by
-Plan 9's webfs or an embedded HTTP server.
+Run the service with `go run ./go/cmd/gui-orchestrator --port 8888 --bind
+127.0.0.1`. The frontend communicates using JSON over WebSocket or plain HTTP,
+bridging to 9P filesystem calls. Static assets reside under `gui/` and can be
+served directly by Plan 9's webfs or the embedded server.
