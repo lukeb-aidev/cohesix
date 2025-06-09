@@ -2,6 +2,11 @@
 // Filename: CHANGELOG.md v0.38
 // Date Modified: 2025-07-15
 
+## [v0.62] - 2025-07-15
+### Added
+- Documented danger flags and exit codes in `cohcap(1)` and `cohtrace(1)`.
+- Added failure-case JSON examples.
+
 ## [v0.60] - 2025-07-15
 ### Changed
 - Cleaned METADATA duplicate entries and normalized license files.
