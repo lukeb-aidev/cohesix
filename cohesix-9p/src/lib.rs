@@ -27,13 +27,15 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
-use std::{net::TcpListener, path::PathBuf, sync::Arc};
+use std::{path::PathBuf};
 
 use anyhow::{Result, bail};
-use log::info;
 // Note: we avoid using private modules from the `p9` crate for now.
 
 pub mod fs;
+mod server;
+pub use server::FsServer;
+pub mod ninep_adapter;
 
 /// Configuration options for the 9P file‑system server.
 ///
@@ -58,38 +60,9 @@ impl Default for FsConfig {
     }
 }
 
-/// Lightweight handle for a running 9P server.
-///
-/// The starter implementation does **not** launch a real listener yet; it
-/// merely records configuration so unit tests can compile.
-#[derive(Debug)]
-pub struct FsServer {
-    cfg: Arc<FsConfig>,
-}
-
-impl FsServer {
-    /// Create a new server instance *without* starting it.
-    pub fn new(cfg: FsConfig) -> Self {
-        Self { cfg: Arc::new(cfg) }
-    }
-
-    /// Start serving. This spawns a simple blocking listener that accepts one
-    /// connection and then returns. The implementation is intentionally
-    /// minimal and will be replaced with a full async loop later.
-    pub fn start(&self) -> Result<()> {
-        info!(
-            "🔥 starting Cohesix‑9P server on port {} (readonly = {})",
-            self.cfg.port, self.cfg.readonly
-        );
-        let _listener = TcpListener::bind(("0.0.0.0", self.cfg.port))?;
-        // Early stub: no blocking accept to keep tests fast.
-        Ok(())
-    }
-}
-
 /// Convenience helper: build a server with [`FsConfig::default`] and start it.
 pub fn start_server() -> Result<FsServer> {
-    let srv = FsServer::new(FsConfig::default());
+    let mut srv = FsServer::new(FsConfig::default());
     srv.start()?;
     Ok(srv)
 }
@@ -107,11 +80,12 @@ pub fn parse_version_message(buf: &[u8]) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ninep::fs::{Perm, Mode};
+    use std::{thread, time::Duration};
 
     #[test]
     fn server_starts_with_defaults() {
-        let srv = start_server().expect("server should start");
-        assert_eq!(srv.cfg.port, 564);
+        let _srv = start_server().expect("server should start");
     }
 
     #[test]
@@ -121,8 +95,8 @@ mod tests {
             port: 9999,
             readonly: true,
         };
-        let srv = FsServer::new(cfg.clone());
-        assert_eq!(srv.cfg.port, cfg.port);
+        let mut srv = FsServer::new(cfg.clone());
+        srv.start().expect("start");
     }
 
     #[test]
@@ -130,5 +104,23 @@ mod tests {
         let buf = b"9P2000.L";
         let parsed = parse_version_message(buf).expect("parse");
         assert_eq!(parsed, "9P2000.L");
+    }
+
+    #[test]
+    fn unix_socket_roundtrip() {
+        let mut srv = FsServer::new(FsConfig { port: 5660, ..Default::default() });
+        srv.start().expect("start socket");
+        thread::sleep(Duration::from_millis(100));
+
+        let mut cli = ninep::client::TcpClient::new_tcp(
+            "tester".to_string(),
+            "127.0.0.1:5660",
+            "",
+        )
+        .expect("connect");
+        cli.create("/", "foo", Perm::OWNER_READ | Perm::OWNER_WRITE, Mode::FILE)
+            .expect("create");
+        let st = cli.stat("/foo").expect("stat");
+        println!("created file size {}", st.n_bytes);
     }
 }

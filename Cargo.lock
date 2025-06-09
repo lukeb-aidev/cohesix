@@ -433,6 +433,7 @@ dependencies = [
  "inotify",
  "libloading 0.7.4",
  "log",
+ "ninep",
  "nix",
  "once_cell",
  "proptest",
@@ -458,7 +459,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "log",
- "p9",
+ "ninep",
+ "serial_test",
 ]
 
 [[package]]
@@ -1415,6 +1417,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ninep"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c9d2cbf39c99718aa533c924295a796847b5f30befc6f3c015fa4965cce4c8a0"
+dependencies = [
+ "bitflags 2.9.1",
+]
+
+[[package]]
 name = "nix"
 version = "0.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1537,28 +1548,6 @@ name = "opaque-debug"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
-
-[[package]]
-name = "p9"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0dc5b2b13cb6a9a5fcf7c668ebf2aef67e0d83d4451c1db95feb9fb0775874f0"
-dependencies = [
- "libc",
- "p9_wire_format_derive",
- "serde",
-]
-
-[[package]]
-name = "p9_wire_format_derive"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9317f09e751274d3cb2a2678a785c456133a3d1f956f9f79bd460aec84acb600"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.101",
-]
 
 [[package]]
 name = "parking_lot"
