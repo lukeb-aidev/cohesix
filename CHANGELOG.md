@@ -5,6 +5,14 @@
 ### Added
 - Canonical kiosk loop integrates sensor proxy and validator with trace logging.
 
+// Date Modified: 2025-07-21
+
+## [v0.72] - 2025-07-21
+### Added
+- Rust CLI implementations for `cohrun`, `cohbuild`, `cohtrace`, and `cohcap`.
+- Makefile aliases for the new CLI tools.
+- `cohtrace` now appends run summaries to `VALIDATION_SUMMARY.md`.
+
 ## [v0.71] - 2025-07-21
 ### Added
 - HTTP route and CLI docs for GUI orchestrator.
