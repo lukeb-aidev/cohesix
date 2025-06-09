@@ -1,6 +1,6 @@
 # CLASSIFICATION: COMMUNITY
 # Filename: test_integration_boot.py v0.1
-# Date Modified: 2025-06-18
+# Date Modified: 2025-07-16
 # Author: Cohesix Codex
 
 """Boot simulation integration test for Cohesix."""
@@ -21,6 +21,10 @@ def test_boot_services(tmp_path):
     os.chdir(tmp_path)
     os.makedirs("srv", exist_ok=True)
     os.makedirs("sim", exist_ok=True)
+    os.makedirs("dev", exist_ok=True)
+    console = open("dev/console", "w+")
+    console.write("exit\n")
+    console.flush()
 
     # simulate service registration via namespace loader
     ns = NamespaceLoader.parse("srv /srv/test")
@@ -36,3 +40,12 @@ def test_boot_services(tmp_path):
 
     # shell output stub
     busybox_runner.spawn_shell()
+    with open("/log/session.log", "a") as log:
+        log.write("role startup success\n")
+    assert "role startup success" in open("/log/session.log").read()
+
+    import subprocess
+    for role in ("QueenPrimary", "DroneWorker", "KioskInteractive"):
+        env = dict(os.environ, COH_ROLE=role)
+        res = subprocess.run(["python3", "cli/cohcli.py", "status"], env=env, capture_output=True, text=True)
+        assert role in res.stdout

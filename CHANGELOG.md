@@ -1,6 +1,12 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v0.38
-// Date Modified: 2025-07-15
+// Date Modified: 2025-07-16
+
+## [v0.61] - 2025-07-16
+### Added
+- Validator error tests for corrupted SLM manifests and trace files.
+- Boot integration checks for session log and CLI role output.
+- 9P validator hook tests for capability, timeout, and replay errors.
 
 ## [v0.60] - 2025-07-15
 ### Changed
