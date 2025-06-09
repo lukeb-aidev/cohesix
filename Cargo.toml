@@ -39,12 +39,17 @@ rand = "0.8"
 v4l = "0.14"
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
 sdl2 = "0.37"
+cohesix-9p = { path = "cohesix-9p" }
+
+[build-dependencies]
+which = "5.0"
 
 [workspace]
 members = [
     "cohesix-9p",
     "tools/cohfuzz",
     "tools/scenario_compiler",
+    "tools/cli",
 ]
 
 [dev-dependencies]
@@ -55,9 +60,10 @@ proptest = "1"
 ninep = "0.3"
 
 [features]
-default = []
+default = ["physics", "busybox"]
 cuda = ["cust"]
 rapier = ["rapier3d"]
+physics = ["rapier3d"]
 busybox = []
 [[bin]]
 name = "cohcc"
