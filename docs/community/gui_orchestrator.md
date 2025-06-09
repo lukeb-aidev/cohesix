@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: gui_orchestrator.md v1.2
 // Author: Lukas Bower
-// Date Modified: 2025-07-20
+// Date Modified: 2025-07-21
 
 # Web GUI Orchestrator
 
@@ -33,3 +33,34 @@ Run the service with `go run ./go/cmd/gui-orchestrator --port 8888 --bind
 127.0.0.1`. The frontend communicates using JSON over WebSocket or plain HTTP,
 bridging to 9P filesystem calls. Static assets reside under `gui/` and can be
 served directly by Plan 9's webfs or the embedded server.
+
+---
+
+### HTTP Routes
+
+| Method | Path | Request | Response |
+|-------|------|---------|----------|
+| GET | `/api/status` | none | `{"uptime":string,"status":"ok","role":string,"workers":int}` |
+| POST | `/api/control` | `{ "command": string }` | `{ "status": "ack" }` |
+| GET | `/static/*` | none | static file contents |
+
+### CLI Options
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--port` | Listen port | `8888` |
+| `--bind` | Bind address | `127.0.0.1` |
+| `--static-dir` | Directory for static files | `static` |
+| `--dev` | Development mode (disables auth) | `false` |
+| `--log-file` | Access log path | `/log/gui_access.log` |
+
+Run with example:
+
+```bash
+go run ./go/cmd/gui-orchestrator --port 8080 --bind 0.0.0.0 --static-dir gui/static --dev
+```
+
+### Authentication and Rate Limiting
+
+Basic HTTP auth is enabled unless `--dev` is supplied. Credentials are loaded from `/srv/orch_user.json` containing `{"user":"admin","pass":"secret"}`. Each client is limited to 60 requests per minute via an in-memory token bucket. Excess requests return HTTP `429 Too Many Requests`.
+

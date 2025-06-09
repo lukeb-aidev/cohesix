@@ -1,18 +1,15 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: main.go v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-07-20
+// Date Modified: 2025-07-21
 // License: SPDX-License-Identifier: MIT OR Apache-2.0
 
 package main
 
 import (
-	"context"
 	"flag"
 	"log"
 	"net/http"
-	"os/signal"
-	"syscall"
 
 	orchestrator "cohesix/internal/orchestrator/http"
 )
@@ -38,7 +35,7 @@ func main() {
 	}
 
 	srv := orchestrator.New(cfg)
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	ctx, stop := newSignalContext()
 	defer stop()
 	if err := srv.Start(ctx); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("server error: %v", err)
