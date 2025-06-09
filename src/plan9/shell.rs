@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: shell.rs v1.0
 // Author: Lukas Bower
-// Date Modified: 2025-05-31
+// Date Modified: 2025-07-22
 
 //! Plan 9–style shell interface for Cohesix.
 //! Provides command execution, input dispatch, and basic parsing.
@@ -51,7 +51,7 @@ impl Shell {
                 // BusyBox. This keeps the shell functional during early boot
                 // without needing a full command parser.
                 match cmd.name.as_str() {
-                    // Explicit busybox invocation: `busybox <cmd> [args...]`
+                    #[cfg(feature = "busybox")]
                     "busybox" => {
                         if let Some(sub) = cmd.args.first() {
                             let rest: Vec<&str> = cmd.args[1..]
@@ -63,11 +63,13 @@ impl Shell {
                             println!("[shell] usage: busybox <command>");
                         }
                     }
-                    // Direct command names map to BusyBox as well
+                    #[cfg(feature = "busybox")]
                     other => {
                         let args: Vec<&str> = cmd.args.iter().map(|s| s.as_str()).collect();
                         crate::kernel::fs::busybox::run_command(other, &args);
                     }
+                    #[allow(unreachable_patterns)]
+                    _ => {}
                 }
             }
             None => {

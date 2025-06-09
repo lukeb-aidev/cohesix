@@ -1,15 +1,17 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: init.rs v0.1
 // Author: Lukas Bower
-// Date Modified: 2025-06-22
+// Date Modified: 2025-07-22
 
 //! Minimal Plan 9 style init parser for Cohesix.
 
 use std::fs;
-use std::io::{self, BufRead};
+use std::io::{self, BufRead, Write};
+use std::time::Instant;
 use crate::plan9::namespace::NamespaceLoader;
 
 pub fn run() -> io::Result<()> {
+    let start = Instant::now();
     let mut ns = NamespaceLoader::load()?;
     NamespaceLoader::apply(&mut ns)?;
     if let Ok(file) = fs::File::open("/boot/rc.local") {
@@ -29,5 +31,13 @@ pub fn run() -> io::Result<()> {
         println!("/dev/console: _");
     }
     ns.persist("boot")?;
+    let elapsed = start.elapsed().as_millis();
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/log/boot_time.log")
+    {
+        let _ = writeln!(f, "init {}ms", elapsed);
+    }
     Ok(())
 }

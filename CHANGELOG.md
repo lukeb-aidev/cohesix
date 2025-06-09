@@ -1,11 +1,18 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v0.41
-// Date Modified: 2025-07-21
+// Date Modified: 2025-07-22
 ## [v0.71] - 2025-07-21
 ### Added
 - HTTP route and CLI docs for GUI orchestrator.
 ### Changed
 - README clarified usage and example output.
+
+## [v0.72] - 2025-07-22
+### Added
+- Optional CUDA, Rapier and BusyBox features.
+- Platform-specific boot targets in Makefile.
+- Boot timing logs written to `/log/boot_time.log`.
+- Capability enforcement via `/srv/cohrole` and kernel trace module.
 
 ## [v0.69] - 2025-07-20
 ### Added
