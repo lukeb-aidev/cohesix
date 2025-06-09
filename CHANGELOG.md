@@ -1,11 +1,13 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v0.42
-// Date Modified: 2025-06-09
+// Date Modified: 2025-06-08
+## [v0.72] - 2025-06-08
+### Added
+- Consolidated CHANGELOG, metadata.json, and OPEN_SOURCE_DEPENDENCIES.md into PROJECT_MANIFEST.md.
+
 ## [v0.72] - 2025-06-09
 ### Added
 - Canonical kiosk loop integrates sensor proxy and validator with trace logging.
-
-// Date Modified: 2025-07-21
 
 ## [v0.72] - 2025-07-21
 ### Added
