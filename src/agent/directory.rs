@@ -6,6 +6,7 @@
 //! Agent directory table maintained under `/srv/agents/agent_table.json`.
 
 use serde::{Deserialize, Serialize};
+use serde_json;
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -17,6 +18,19 @@ pub struct AgentRecord {
     pub role: String,
     pub status: String,
     pub last_heartbeat: u64,
+}
+
+use crate::agent_transport::AgentTransport;
+use crate::agent_migration::{Migrateable, MigrationStatus};
+
+impl Migrateable for AgentRecord {
+    fn migrate<T: AgentTransport>(&self, peer: &str, transport: &T) -> anyhow::Result<MigrationStatus> {
+        let tmp = format!("/tmp/record_{}.json", self.id);
+        let data = serde_json::to_vec(self)?;
+        std::fs::write(&tmp, data)?;
+        transport.send_state(&self.id, peer, &tmp)?;
+        Ok(MigrationStatus::Completed)
+    }
 }
 
 /// Directory management utilities.
