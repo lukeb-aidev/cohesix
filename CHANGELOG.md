@@ -6,6 +6,10 @@
 ### Added
 - Go GUI orchestrator with chi router and API endpoints.
 
+## [v0.71] - 2025-07-20
+### Added
+- Expanded GUI orchestrator HTTP tests with failure cases and logging checks.
+
 ## [v0.70] - 2025-07-20
 ### Changed
 - Updated `gui_orchestrator.md` with chi router and API usage notes.
