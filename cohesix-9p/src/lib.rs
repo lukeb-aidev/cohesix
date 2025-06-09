@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: lib.rs v0.2
-// Date Modified: 2025-06-08
+// Date Modified: 2025-07-22
 // Author: Lukas Bower
 
 //! Minimal filesystem layer for Cohesix-9P.
@@ -36,6 +36,19 @@ pub mod fs;
 mod server;
 pub use server::FsServer;
 pub mod ninep_adapter;
+
+/// Enforce capability checks based on the active Cohesix role.
+pub fn enforce_capability(action: &str) -> Result<()> {
+    let role = std::fs::read_to_string("/srv/cohrole").unwrap_or_default();
+    let role = role.trim();
+    if role == "QueenPrimary" {
+        return Ok(());
+    }
+    if role == "DroneWorker" && action.contains("remote") {
+        bail!("capability denied");
+    }
+    Ok(())
+}
 
 /// Configuration options for the 9P file‑system server.
 ///

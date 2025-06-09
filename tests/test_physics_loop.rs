@@ -1,6 +1,8 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: test_physics_loop.rs v0.1
-// Date Modified: 2025-07-12
+// Date Modified: 2025-07-22
+
+#![cfg(feature = "rapier")]
 // Author: Cohesix Codex
 
 use cohesix::sim::rapier_bridge::{SimBridge, SimCommand};

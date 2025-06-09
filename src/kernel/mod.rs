@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: mod.rs v0.1
 // Author: Lukas Bower
-// Date Modified: 2025-07-20
+// Date Modified: 2025-07-22
 
 pub mod boot {
     pub mod bootloader;
@@ -15,6 +15,7 @@ pub mod drivers {
 }
 
 pub mod fs {
+    #[cfg(feature = "busybox")]
     pub mod busybox;
     pub mod initfs;
     pub mod plan9;
@@ -27,6 +28,8 @@ pub mod physics {
 pub mod security {
     pub mod l4_verified;
 }
+
+pub mod kernel_trace;
 
 pub mod syscalls {
     pub mod syscall;

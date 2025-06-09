@@ -21,6 +21,7 @@ impl BootAgent {
     /// Initialize the bootloader and perform pre-seL4 setup.
     pub fn init() {
         println!("[BootAgent] Starting bootloader initialization...");
+        crate::kernel::kernel_trace::log_init_call("bootloader_init");
         Self::preflight_checks();
 
         let cmdline = std::fs::read_to_string("/proc/cmdline").unwrap_or_default();
@@ -39,6 +40,7 @@ impl BootAgent {
     /// Perform essential checks before kernel handoff.
     pub fn preflight_checks() {
         println!("[BootAgent] Running preflight checks...");
+        crate::kernel::kernel_trace::log_init_call("preflight_checks");
         if !super::secure_boot::validate_secure_boot() {
             println!("[BootAgent] secure boot validation failed");
         }

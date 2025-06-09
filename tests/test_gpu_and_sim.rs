@@ -1,6 +1,8 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: test_gpu_and_sim.rs v0.4
-// Date Modified: 2025-07-13
+// Date Modified: 2025-07-22
+
+#![cfg(all(feature = "cuda", feature = "rapier"))]
 // Author: Cohesix Codex
 
 use cohesix::cuda::runtime::CudaExecutor;

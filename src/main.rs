@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: main.rs v1.1
-// Date Modified: 2025-07-15
+// Date Modified: 2025-07-22
 // Author: Lukas Bower
 // Status: 🟢 Hydrated
 
@@ -12,6 +12,7 @@ use env_logger;
 
 fn main() {
     env_logger::init();
+    let boot_start = std::time::Instant::now();
     let result = std::panic::catch_unwind(|| {
         if let Err(err) = cli::run() {
             eprintln!("Error: {}", err);
@@ -61,5 +62,13 @@ fn main() {
             let _ = writeln!(log, "recovered successfully");
             cohesix::sandbox::validate();
         }
+    }
+    let boot_time = boot_start.elapsed().as_millis();
+    if let Ok(mut f) = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/log/boot_time.log")
+    {
+        let _ = writeln!(f, "main {}ms", boot_time);
     }
 }

@@ -1,6 +1,8 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: test_shell_lifecycle.rs v0.2
-// Date Modified: 2025-07-03
+// Date Modified: 2025-07-22
+
+#![cfg(feature = "busybox")]
 // Author: Cohesix Codex
 
 use cohesix::shell::busybox_runner::spawn_shell;

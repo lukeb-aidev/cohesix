@@ -1,7 +1,9 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: test_session_log.rs v0.1
 // Author: Cohesix Codex
-// Date Modified: 2025-07-14
+// Date Modified: 2025-07-22
+
+#![cfg(feature = "busybox")]
 
 use cohesix::shell::busybox_runner::spawn_shell;
 use std::fs::{self, File};
