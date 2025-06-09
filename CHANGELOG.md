@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.41
+// Filename: CHANGELOG.md v0.42
 // Date Modified: 2025-06-09
 ## [v0.72] - 2025-06-09
 ### Added
@@ -20,6 +20,9 @@
 - README clarified usage and example output.
 
 ## [v0.72] - 2025-07-22
+### Changed
+- CUDA artifacts isolated under `tests/gpu_demos`.
+- Canonical naming enforced for Shared Learning Module files.
 ### Added
 - Optional CUDA, Rapier and BusyBox features.
 - Platform-specific boot targets in Makefile.
