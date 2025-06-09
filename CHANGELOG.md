@@ -26,6 +26,10 @@
 - JSON IR schema loader with versioning and log output.
 - Structured logging macros and CI reproducibility test.
 
+## [v0.66] - 2025-07-18
+### Added
+- `cohshell.sh` wrapper for Cohesix BusyBox. Users may symlink it to `/bin/sh` for minimal rootfs setups.
+
 ## [v0.61] - 2025-06-08
 ### Added
 
