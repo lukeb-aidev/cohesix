@@ -18,9 +18,18 @@ import (
 	orch "cohesix/internal/orchestrator/http"
 )
 
+type nopController struct{}
+
+func (nopController) Restart() error  { return nil }
+func (nopController) Shutdown() error { return nil }
+
+type discardLogger struct{}
+
+func (discardLogger) Printf(string, ...any) {}
+
 func newRouter() http.Handler {
 	cfg := orch.Config{StaticDir: "../../../static"}
-	srv := orch.New(cfg)
+	srv := orch.New(cfg, nopController{}, discardLogger{})
 	return srv.Router()
 }
 
@@ -67,7 +76,7 @@ func TestStaticFileServed(t *testing.T) {
 
 func TestServerStart(t *testing.T) {
 	cfg := orch.Config{Port: 0, StaticDir: "../../../static"}
-	srv := orch.New(cfg)
+	srv := orch.New(cfg, nopController{}, discardLogger{})
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
 		time.Sleep(100 * time.Millisecond)

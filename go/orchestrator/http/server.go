@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: server.go v0.1
+// Filename: server.go v0.2
 // Author: Lukas Bower
 // Date Modified: 2025-07-20
 // License: SPDX-License-Identifier: MIT OR Apache-2.0
@@ -9,14 +9,12 @@ package http
 import (
 	"context"
 	"fmt"
-	"log"
 	"net"
 	"net/http"
 	"os"
 	"time"
 
 	"cohesix/internal/orchestrator/api"
-	"cohesix/internal/orchestrator/static"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -33,24 +31,15 @@ type Config struct {
 // Server wraps the HTTP server and router.
 type Server struct {
 	cfg    Config
+	ctrl   api.Controller
+	log    api.Logger
 	router *chi.Mux
 }
 
 // New returns an initialized server.
-func New(cfg Config) *Server {
-	r := chi.NewRouter()
-	if cfg.LogFile != "" {
-		r.Use(accessLogger(cfg.LogFile))
-	}
-
-	r.Get("/api/status", api.Status)
-	r.Post("/api/control", api.Control)
-	r.Handle("/static/*", static.FileHandler(cfg.StaticDir))
-	r.NotFound(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.ServeFile(w, r, cfg.StaticDir+"/index.html")
-	}))
-
-	return &Server{cfg: cfg, router: r}
+func New(cfg Config, ctrl api.Controller, log api.Logger) *Server {
+	r := routes(cfg, ctrl, log)
+	return &Server{cfg: cfg, ctrl: ctrl, log: log, router: r}
 }
 
 // Router returns the underlying router, useful for tests.
@@ -58,11 +47,13 @@ func (s *Server) Router() http.Handler {
 	return s.router
 }
 
-func accessLogger(path string) func(http.Handler) http.Handler {
+func accessLogger(path string, log api.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 		if err != nil {
-			log.Printf("open log: %v", err)
+			if log != nil {
+				log.Printf("open log: %v", err)
+			}
 			return next
 		}
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -87,6 +78,8 @@ func (s *Server) Start(ctx context.Context) error {
 		defer cancel()
 		srv.Shutdown(ctxTo)
 	}()
-	log.Printf("GUI orchestrator listening on %s", s.Addr())
+	if s.log != nil {
+		s.log.Printf("GUI orchestrator listening on %s", s.Addr())
+	}
 	return srv.ListenAndServe()
 }

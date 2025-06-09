@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: main.go v0.1
+// Filename: gui_orchestrator.go v0.1
 // Author: Lukas Bower
 // Date Modified: 2025-07-20
 // License: SPDX-License-Identifier: MIT OR Apache-2.0
@@ -14,8 +14,17 @@ import (
 	"os/signal"
 	"syscall"
 
-	orchestrator "cohesix/internal/orchestrator/http"
+	orch "cohesix/internal/orchestrator/http"
 )
+
+type sysController struct{}
+
+func (sysController) Restart() error  { return nil }
+func (sysController) Shutdown() error { return nil }
+
+type stdLogger struct{}
+
+func (stdLogger) Printf(format string, v ...any) { log.Printf(format, v...) }
 
 func main() {
 	bind := flag.String("bind", "127.0.0.1", "bind address")
@@ -24,14 +33,14 @@ func main() {
 	logFile := flag.String("log-file", "/log/gui_access.log", "access log file")
 	flag.Parse()
 
-	cfg := orchestrator.Config{
+	cfg := orch.Config{
 		Bind:      *bind,
 		Port:      *port,
 		StaticDir: *staticDir,
 		LogFile:   *logFile,
 	}
 
-	srv := orchestrator.New(cfg)
+	srv := orch.New(cfg, sysController{}, stdLogger{})
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	if err := srv.Start(ctx); err != nil && err != http.ErrServerClosed {

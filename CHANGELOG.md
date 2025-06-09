@@ -10,6 +10,10 @@
 ### Changed
 - Updated `gui_orchestrator.md` with chi router and API usage notes.
 
+## [v0.71] - 2025-07-20
+### Changed
+- Refactored GUI orchestrator into modular packages with interfaces.
+
 ## [v0.68] - 2025-06-09
 ### Changed
 - Hardened kernel capability checks and syscall validation.
