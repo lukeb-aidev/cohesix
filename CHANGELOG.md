@@ -1,6 +1,13 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.38
-// Date Modified: 2025-07-15
+// Filename: CHANGELOG.md v0.39
+// Date Modified: 2025-07-16
+
+## [v0.61] - 2025-07-16
+### Added
+- CI matrix expanded to x86_64/aarch64 with CUDA and DroneWorker role.
+- Test steps sandboxed via bubblewrap to restrict writes.
+- Grype vulnerability scanning and SHA256 artifact logging.
+- OSS dependency workflow now generates an SBOM via syft.
 
 ## [v0.60] - 2025-07-15
 ### Changed
