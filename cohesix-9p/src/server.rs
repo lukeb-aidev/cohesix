@@ -25,6 +25,7 @@ enum Access {
 }
 
 fn check_perm(path: &str, access: Access) -> AnyResult<()> {
+    crate::enforce_capability(path)?;
     if path.starts_with("/proc") || path.starts_with("/history") {
         if access == Access::Write {
             warn!("deny write to restricted path: {}", path);

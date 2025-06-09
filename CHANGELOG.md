@@ -1,14 +1,35 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v0.42
-// Date Modified: 2025-07-22
-## [v0.72] - 2025-07-22
+// Date Modified: 2025-06-08
+## [v0.72] - 2025-06-08
 ### Added
 - Consolidated CHANGELOG, metadata.json, and OPEN_SOURCE_DEPENDENCIES.md into PROJECT_MANIFEST.md.
+
+## [v0.72] - 2025-06-09
+### Added
+- Canonical kiosk loop integrates sensor proxy and validator with trace logging.
+
+## [v0.72] - 2025-07-21
+### Added
+- Rust CLI implementations for `cohrun`, `cohbuild`, `cohtrace`, and `cohcap`.
+- Makefile aliases for the new CLI tools.
+- `cohtrace` now appends run summaries to `VALIDATION_SUMMARY.md`.
+
 ## [v0.71] - 2025-07-21
 ### Added
 - HTTP route and CLI docs for GUI orchestrator.
 ### Changed
 - README clarified usage and example output.
+
+## [v0.72] - 2025-07-22
+### Changed
+- CUDA artifacts isolated under `tests/gpu_demos`.
+- Canonical naming enforced for Shared Learning Module files.
+### Added
+- Optional CUDA, Rapier and BusyBox features.
+- Platform-specific boot targets in Makefile.
+- Boot timing logs written to `/log/boot_time.log`.
+- Capability enforcement via `/srv/cohrole` and kernel trace module.
 
 ## [v0.69] - 2025-07-20
 ### Added

@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: main.rs v0.5
+// Filename: main.rs v0.6
 // Author: Lukas Bower
-// Date Modified: 2025-07-18
+// Date Modified: 2025-07-21
 
 use clap::Parser;
 use cohesix::coh_cc::{
@@ -12,6 +12,7 @@ use cohesix::coh_cc::{
     toolchain::Toolchain,
 };
 use cohesix::{cohcc_error, cohcc_info};
+use cohesix::telemetry::trace::init_panic_hook;
 use std::path::Path;
 
 /// Entry point for the cohcc binary.
@@ -69,6 +70,7 @@ pub fn main_entry() -> anyhow::Result<()> {
 }
 
 fn main() {
+    init_panic_hook();
     if let Err(e) = main_entry() {
         cohcc_error!("tcc", Path::new(""), Path::new(""), &[], &format!("{e}"));
         eprintln!("cohcc: {e}");
