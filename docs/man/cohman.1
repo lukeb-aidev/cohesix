@@ -1,0 +1,25 @@
+.\" CLASSIFICATION: COMMUNITY
+.\" Filename: cohman.1 v0.1
+.\" Author: Lukas Bower
+.\" Date Modified: 2025-07-15
+.TH COHMAN 1 "2025-07-15" "Cohesix v1.0" "Cohesix Project"
+.SH NAME
+cohman \- render Cohesix manual pages
+.SH SYNOPSIS
+.B cohman
+.RI [page]
+.SH DESCRIPTION
+cohman is a thin wrapper around the mandoc utility compiled with
+coh_cc. It renders manual pages in ASCII format without requiring
+system packages like groff or man.
+.SH OPTIONS
+Standard mandoc options such as \fB-W\fR or \fB-Tascii\fR may be used.
+.SH FILES
+Manual pages are located under \fBdocs/man/\fR.
+.SH EXAMPLES
+.B cohman cohrole.1
+.br
+Render the man page for cohrole.
+.SH SEE ALSO
+.BR mandoc (1),
+.BR man (1)

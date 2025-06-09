@@ -51,6 +51,9 @@
 ### Added
 - Integrated `cohesix-9p` server with upstream `ninep` crate.
 - Added adapter helpers and basic 9P integration tests.
+## [v0.63] - 2025-07-16
+### Added
+- Offline mandoc build via coh_cc and new cohman wrapper.
 
 ## [v0.59] - 2025-07-14
 ### Added

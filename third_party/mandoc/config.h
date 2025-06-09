@@ -1,0 +1,7 @@
+#define HAVE_ERR 0
+#define HAVE_SANDBOX_INIT 0
+#define HAVE_PROGNAME 0
+#define HAVE_PLEDGE 0
+#define HAVE_LESS_T 0
+#define HAVE_WCHAR 0
+#define HAVE_STRPTIME 1
