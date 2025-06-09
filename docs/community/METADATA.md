@@ -57,12 +57,12 @@
 | chmod.1                   | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
 | chown.1                   | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
 | cohagent.1                | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
-| cohcap.1                  | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
+| cohcap.1                  | v0.2    | 2025-07-15    | COMMUNITY      |     |              |
 | cohcc.1                   | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
 | cohcli.1                  | v0.2    | 2025-07-14    | COMMUNITY      |     |              |
 | cohrole.1                 | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
 | cohrun.1                  | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
-| cohtrace.1                | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
+| cohtrace.1                | v0.2    | 2025-07-15    | COMMUNITY      |     |              |
 | cohup.1                   | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
 | cp.1                      | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
 | cut.1                     | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
