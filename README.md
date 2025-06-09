@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: README.md v0.7
+// Filename: README.md v0.8
 // Author: Lukas Bower
-// Date Modified: 2025-07-20
+// Date Modified: 2025-07-21
 
 
 # Cohesix
@@ -81,6 +81,13 @@ Start the lightweight web UI to inspect orchestration state:
 ```bash
 go run ./go/cmd/gui-orchestrator --port 8888 --bind 127.0.0.1
 ```
+Example output:
+
+```
+GUI orchestrator listening on 127.0.0.1:8888
+{"uptime":"1h","status":"ok","role":"Queen","workers":3}
+```
+
 
 ## 🧪 Testing
 
