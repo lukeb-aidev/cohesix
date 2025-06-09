@@ -14,3 +14,4 @@ documented. Cargo.lock cleanup resolves previous duplication errors.
 - 2025-07-21 list: validated worker enumeration
 - 2025-07-21 push_trace worker01 examples/trace_example_physics.json – policy ok
 
+- 2025-06-09T09:22:55Z codex validation script – build failures for Rust and Py; Go tests pass
