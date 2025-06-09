@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: VALIDATION_AND_TESTING.md v1.1
+// Filename: VALIDATION_AND_TESTING.md v1.2
 // Author: Lukas Bower
-// Date Modified: 2025-07-14
+// Date Modified: 2025-07-20
 
 # Validation and Testing
 
@@ -25,3 +25,18 @@ Cohesix uses layered tests and continuous validation to guarantee reliability ac
 `tools/simulate_batch.sh` can create a mock batch. Replay with `tools/replay_batch.sh` to verify recovery. Confirm `CODEX_BATCH: YES` appears in generated metadata.
 
 Adhering to these practices keeps Cohesix robust and ready for demo-critical deployments.
+
+## Alpha Validation Issues
+- `cohcc` binary missing from build artifacts; CLI docs reference a non-existent executable.
+- `cohcli` utility not present or installed—`cohcli --version` fails.
+- Agent lifecycle tests run, but CLI coverage and hardware boot traces are unavailable.
+- Documentation mismatches: man pages mention commands not implemented.
+- TODO markers remain in `src/cohcc/ir/mod.rs`, violating the no-stub policy.
+- Boot and hardware validation logs missing for Jetson and Pi targets.
+
+## Batch Hydration Test Plan
+1. Run `tools/simulate_batch.sh` to create a 15-file batch and force a crash after file 7.
+2. Replay the hydration log with `tools/replay_batch.sh` and verify all files hydrate correctly.
+3. Execute `validate_metadata_sync.py` after replay.
+4. Run `test_all_arch.sh` to ensure cross-arch success.
+5. Confirm `CODEX_BATCH: YES` appears in logs and prior batches replay identically from `/history/`.
