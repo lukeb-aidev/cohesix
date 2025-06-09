@@ -1,6 +1,12 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v0.41
-// Date Modified: 2025-07-20
+// Date Modified: 2025-07-21
+## [v0.71] - 2025-07-21
+### Added
+- HTTP route and CLI docs for GUI orchestrator.
+### Changed
+- README clarified usage and example output.
+
 
 ## [v0.69] - 2025-07-20
 ### Added
