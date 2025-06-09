@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: server.go v0.2
+// Filename: server.go v0.3
 // Author: Lukas Bower
 // Date Modified: 2025-07-21
 // License: SPDX-License-Identifier: MIT OR Apache-2.0
@@ -8,6 +8,7 @@ package http
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net"
@@ -18,11 +19,12 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 	"golang.org/x/time/rate"
-
-	"cohesix/internal/orchestrator/api"
-	"cohesix/internal/orchestrator/static"
-	"github.com/go-chi/chi/v5"
 )
+
+// Logger is used for logging within the server.
+type Logger interface {
+	Printf(string, ...any)
+}
 
 // Config holds server configuration.
 type Config struct {
@@ -37,84 +39,27 @@ type Config struct {
 
 // Server wraps the HTTP server and router.
 type Server struct {
-	cfg      Config
-	router   *chi.Mux
-	start    time.Time
-	reqCnt   uint64
-	sessions int64
 	cfg            Config
-	router         *chi.Mux
+	log            Logger
+	router         http.Handler
+	start          time.Time
+	reqCnt         uint64
+	sessions       int64
 	controlLimiter *rate.Limiter
 }
 
-// New returns an initialized server.
-func New(cfg Config) *Server {
-	s := &Server{cfg: cfg, router: chi.NewRouter(), start: time.Now()}
-	if cfg.LogFile != "" {
-		s.router.Use(accessLogger(cfg.LogFile))
-	}
-	s.router.Use(s.requestCounter)
-
-	s.router.Get("/api/status", api.Status)
-	s.router.Post("/api/control", api.Control)
-	s.router.Get("/api/metrics", s.metricsHandler)
-	s.router.Handle("/static/*", static.FileHandler(cfg.StaticDir))
-	s.router.NotFound(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.ServeFile(w, r, cfg.StaticDir+"/index.html")
-	}))
-
+// New constructs a Server using cfg and logger.
+func New(cfg Config, lg Logger) *Server {
+	s := &Server{cfg: cfg, log: lg, start: time.Now()}
+	s.router = newRouter(s)
 	return s
-	r.Use(recoverMiddleware())
-
-	srv := &Server{
-		cfg:            cfg,
-		router:         r,
-		controlLimiter: rate.NewLimiter(rate.Every(time.Minute/10), 10),
-	}
-
-	r.Get("/api/status", api.Status)
-	ctrl := http.HandlerFunc(api.Control)
-	handler := rateLimitMiddleware(srv.controlLimiter)(ctrl)
-	if cfg.AuthUser != "" {
-		handler = basicAuthMiddleware(cfg.AuthUser, cfg.AuthPass)(handler)
-	}
-	r.Post("/api/control", func(w http.ResponseWriter, r *http.Request) {
-		handler.ServeHTTP(w, r)
-	})
-	r.Handle("/static/*", static.FileHandler(cfg.StaticDir))
-	r.NotFound(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.ServeFile(w, r, cfg.StaticDir+"/index.html")
-	}))
-
-	return srv
 }
 
-// Router returns the underlying router, useful for tests.
-func (s *Server) Router() http.Handler {
-	return s.router
-}
-
-func accessLogger(path string) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-		if err != nil {
-			log.Printf("open log: %v", err)
-			return next
-		}
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			next.ServeHTTP(w, r)
-			rec := r.RemoteAddr + " " + r.Method + " " + r.URL.Path + "\n"
-			if _, err := f.Write([]byte(rec)); err != nil {
-				log.Printf("access log write: %v", err)
-			}
-		})
-	}
-}
+// Router returns the underlying router.
+func (s *Server) Router() http.Handler { return s.router }
 
 // Addr returns the listening address.
-func (s *Server) Addr() string {
-	return net.JoinHostPort(s.cfg.Bind, fmt.Sprint(s.cfg.Port))
-}
+func (s *Server) Addr() string { return net.JoinHostPort(s.cfg.Bind, fmt.Sprint(s.cfg.Port)) }
 
 // Start begins serving until ctx is done.
 func (s *Server) Start(ctx context.Context) error {
@@ -136,7 +81,11 @@ func (s *Server) Start(ctx context.Context) error {
 		defer cancel()
 		srv.Shutdown(ctxTo)
 	}()
-	log.Printf("GUI orchestrator listening on %s", s.Addr())
+	if s.log != nil {
+		s.log.Printf("GUI orchestrator listening on %s", s.Addr())
+	} else {
+		log.Printf("GUI orchestrator listening on %s", s.Addr())
+	}
 	return srv.ListenAndServe()
 }
 
@@ -148,18 +97,17 @@ func (s *Server) requestCounter(next http.Handler) http.Handler {
 }
 
 func (s *Server) metricsHandler(w http.ResponseWriter, r *http.Request) {
-	metrics := fmt.Sprintf(`# HELP requests_total total requests
-# TYPE requests_total counter
-requests_total %d
-# HELP start_time_seconds last restart time
-# TYPE start_time_seconds gauge
-start_time_seconds %d
-# HELP active_sessions current sessions
-# TYPE active_sessions gauge
-active_sessions %d
-`, atomic.LoadUint64(&s.reqCnt), s.start.Unix(), atomic.LoadInt64(&s.sessions))
-	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
-	w.Write([]byte(metrics))
+	resp := struct {
+		Requests uint64 `json:"requests_total"`
+		Start    int64  `json:"start_time_seconds"`
+		Sessions int64  `json:"active_sessions"`
+	}{
+		Requests: atomic.LoadUint64(&s.reqCnt),
+		Start:    s.start.Unix(),
+		Sessions: atomic.LoadInt64(&s.sessions),
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 func watchStatic(dir string) {
@@ -168,6 +116,7 @@ func watchStatic(dir string) {
 		log.Printf("watch error: %v", err)
 		return
 	}
+	defer w.Close()
 	if err := w.Add(dir); err != nil {
 		log.Printf("watch add: %v", err)
 		return
@@ -188,6 +137,8 @@ func watchStatic(dir string) {
 			}
 		}
 	}()
+}
+
 func recoverMiddleware() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -198,6 +149,23 @@ func recoverMiddleware() func(http.Handler) http.Handler {
 				}
 			}()
 			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+func accessLogger(path string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+		if err != nil {
+			log.Printf("open log: %v", err)
+			return next
+		}
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			next.ServeHTTP(w, r)
+			rec := r.RemoteAddr + " " + r.Method + " " + r.URL.Path + "\n"
+			if _, err := f.Write([]byte(rec)); err != nil {
+				log.Printf("access log write: %v", err)
+			}
 		})
 	}
 }

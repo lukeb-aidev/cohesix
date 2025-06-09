@@ -11,7 +11,8 @@ import (
 	"log"
 	"net/http"
 
-	orchestrator "cohesix/internal/orchestrator/http"
+	orchestrator "cohesix/internal/orchestrator"
+	orchhttp "cohesix/internal/orchestrator/http"
 )
 
 func main() {
@@ -22,7 +23,7 @@ func main() {
 	dev := flag.Bool("dev", false, "enable developer mode")
 	flag.Parse()
 
-	cfg := orchestrator.Config{
+	cfg := orchhttp.Config{
 		Bind:      *bind,
 		Port:      *port,
 		StaticDir: *staticDir,
@@ -34,7 +35,7 @@ func main() {
 		log.SetFlags(log.LstdFlags | log.Lshortfile)
 	}
 
-	srv := orchestrator.New(cfg)
+	srv := orchestrator.New(cfg, log.Default())
 	ctx, stop := newSignalContext()
 	defer stop()
 	if err := srv.Start(ctx); err != nil && err != http.ErrServerClosed {

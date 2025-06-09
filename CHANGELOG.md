@@ -7,6 +7,10 @@
 ### Changed
 - README clarified usage and example output.
 
+## [v0.72] - 2025-07-21
+### Changed
+- Refactored GUI orchestrator modules and added dev-mode logic.
+
 ## [v0.69] - 2025-07-20
 ### Added
 - Go GUI orchestrator with chi router and API endpoints.

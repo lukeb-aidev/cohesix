@@ -4,7 +4,7 @@
 // Date Modified: 2025-07-20
 // License: SPDX-License-Identifier: MIT OR Apache-2.0
 
-package http_test
+package http
 
 import (
 	"bytes"
@@ -15,18 +15,16 @@ import (
 	"os"
 	"testing"
 	"time"
-
-	orch "cohesix/internal/orchestrator/http"
 )
 
-func newRouter(logPath string) http.Handler {
-	cfg := orch.Config{StaticDir: "../../../static", LogFile: logPath}
-	srv := orch.New(cfg)
+func newTestRouter(logPath string) http.Handler {
+	cfg := Config{StaticDir: "../../../static", LogFile: logPath}
+	srv := New(cfg, nil)
 	return srv.Router()
 }
 
 func TestBootServesRoot(t *testing.T) {
-	ts := httptest.NewServer(newRouter(""))
+	ts := httptest.NewServer(newTestRouter(""))
 	defer ts.Close()
 	resp, err := http.Get(ts.URL + "/")
 	if err != nil {
@@ -38,7 +36,7 @@ func TestBootServesRoot(t *testing.T) {
 }
 
 func TestStatusEndpoint(t *testing.T) {
-	ts := httptest.NewServer(newRouter(""))
+	ts := httptest.NewServer(newTestRouter(""))
 	defer ts.Close()
 	resp, err := http.Get(ts.URL + "/api/status")
 	if err != nil {
@@ -54,7 +52,7 @@ func TestStatusEndpoint(t *testing.T) {
 }
 
 func TestControlEndpoint(t *testing.T) {
-	ts := httptest.NewServer(newRouter(""))
+	ts := httptest.NewServer(newTestRouter(""))
 	defer ts.Close()
 	buf := bytes.NewBufferString(`{"command":"restart"}`)
 	resp, err := http.Post(ts.URL+"/api/control", "application/json", buf)
@@ -74,7 +72,7 @@ func TestControlEndpoint(t *testing.T) {
 }
 
 func TestControlEndpoint_BadJSON(t *testing.T) {
-	ts := httptest.NewServer(newRouter(""))
+	ts := httptest.NewServer(newTestRouter(""))
 	defer ts.Close()
 	buf := bytes.NewBufferString(`{"command":}`)
 	resp, err := http.Post(ts.URL+"/api/control", "application/json", buf)
@@ -87,7 +85,7 @@ func TestControlEndpoint_BadJSON(t *testing.T) {
 }
 
 func TestStaticFileServed(t *testing.T) {
-	ts := httptest.NewServer(newRouter(""))
+	ts := httptest.NewServer(newTestRouter(""))
 	defer ts.Close()
 	resp, err := http.Get(ts.URL + "/static/index.html")
 	if err != nil {
@@ -106,7 +104,7 @@ func TestStaticFileServed(t *testing.T) {
 }
 
 func TestMetricsEndpoint(t *testing.T) {
-	ts := httptest.NewServer(newRouter())
+	ts := httptest.NewServer(newTestRouter(""))
 	defer ts.Close()
 	resp, err := http.Get(ts.URL + "/api/metrics")
 	if err != nil {
@@ -118,8 +116,8 @@ func TestMetricsEndpoint(t *testing.T) {
 }
 
 func TestServerStart(t *testing.T) {
-	cfg := orch.Config{Port: 0, StaticDir: "../../../static"}
-	srv := orch.New(cfg)
+	cfg := Config{Port: 0, StaticDir: "../../../static"}
+	srv := New(cfg, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
 		time.Sleep(100 * time.Millisecond)
@@ -133,7 +131,7 @@ func TestServerStart(t *testing.T) {
 func TestAccessLogging(t *testing.T) {
 	dir := t.TempDir()
 	logPath := dir + "/access.log"
-	ts := httptest.NewServer(newRouter(logPath))
+	ts := httptest.NewServer(newTestRouter(logPath))
 	defer ts.Close()
 	if _, err := http.Get(ts.URL + "/api/status"); err != nil {
 		t.Fatalf("get status: %v", err)
@@ -144,5 +142,48 @@ func TestAccessLogging(t *testing.T) {
 	}
 	if !bytes.Contains(data, []byte("/api/status")) {
 		t.Fatalf("log missing entry")
+	}
+}
+
+func TestAuthDisabledInDev(t *testing.T) {
+	cfg := Config{StaticDir: "../../../static", AuthUser: "u", AuthPass: "p", Dev: true}
+	srv := New(cfg, nil)
+	ts := httptest.NewServer(srv.Router())
+	defer ts.Close()
+	for i := 0; i < 20; i++ {
+		resp, err := http.Post(ts.URL+"/api/control", "application/json", bytes.NewBufferString(`{"command":"x"}`))
+		if err != nil {
+			t.Fatalf("post: %v", err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status %d", resp.StatusCode)
+		}
+	}
+}
+
+func TestMetricsJSON(t *testing.T) {
+	ts := httptest.NewServer(newTestRouter(""))
+	defer ts.Close()
+	resp, err := http.Get(ts.URL + "/api/metrics")
+	if err != nil {
+		t.Fatalf("get metrics: %v", err)
+	}
+	var m map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&m); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if m["requests_total"] == nil || m["start_time_seconds"] == nil || m["active_sessions"] == nil {
+		t.Fatalf("missing fields: %v", m)
+	}
+}
+
+func TestRecoverMiddleware(t *testing.T) {
+	h := recoverMiddleware()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		panic("boom")
+	}))
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest("GET", "/", nil))
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("status %d", rr.Code)
 	}
 }

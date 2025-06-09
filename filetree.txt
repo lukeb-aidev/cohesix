@@ -55,9 +55,12 @@ go/cmd/gui-orchestrator/main.go
 go/go.mod
 go/go.work
 go/go.work.sum
-go/orchestrator/api/handlers.go
+go/orchestrator/api/control.go
+go/orchestrator/api/status.go
+go/orchestrator/http/routes.go
 go/orchestrator/http/server.go
 go/orchestrator/http/server_test.go
+go/orchestrator/gui_orchestrator.go
 go/orchestrator/static/serve.go
 go/internal/tooling/cli.go
 justfile
