@@ -1,27 +1,33 @@
 .\" CLASSIFICATION: COMMUNITY
-.\" Filename: cohtrace.1 v0.1
+.\" Filename: cohtrace.1 v0.2
 .\" Author: Lukas Bower
-.\" Date Modified: 2025-07-12
-.TH COHTRACE 1
-.SH NAME
-cohtrace \- inspect connected workers
-.SH SYNOPSIS
-cohtrace <command> [options]
-.SH DESCRIPTION
-Utility for trace management and worker introspection.
-
-.TH COHTRACE 1 "2025-07-12" "Cohesix v1.0" "Cohesix Project"
+.\" Date Modified: 2025-07-15
+.TH COHTRACE 1 "2025-07-15" "Cohesix v1.0" "Cohesix Project"
 .SH NAME
 cohtrace \- trace inspection utilities
 .SH SYNOPSIS
 .B cohtrace
+.RI [command] " [options]"
 .SH DESCRIPTION
-Trace inspection and federation utilities.
+Inspect and manipulate worker traces for debugging and federation.
 .SH OPTIONS
-See \fB--help\fR for available options.
+.TP
+.B --force
+Overwrite existing trace data. \fBUse with care.\fR
+.SH EXIT STATUS
+.TP
+.B 0
+Success.
+.TP
+.B 1
+Invalid trace file.
+.TP
+.B 2
+Connection failure.
 .SH FILES
 
 .SH EXAMPLES
-
+.P
+cohtrace pull worker01 > log.json
 .SH SEE ALSO
 
