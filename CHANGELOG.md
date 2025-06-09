@@ -1,6 +1,9 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.41
-// Date Modified: 2025-07-20
+// Filename: CHANGELOG.md v0.40
+// Date Modified: 2025-06-09
+## [v0.70] - 2025-07-20
+### Added
+- Created architecture, governance, guides, cli, and planning subfolders in docs/community without moving existing docs
 
 ## [v0.69] - 2025-07-20
 ### Added
