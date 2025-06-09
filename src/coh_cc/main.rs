@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: main.rs v0.4
+// Filename: main.rs v0.5
 // Author: Lukas Bower
 // Date Modified: 2025-07-18
 
@@ -53,6 +53,16 @@ pub fn main_entry() -> anyhow::Result<()> {
                 Path::new(&out),
                 &input.flags,
             )?;
+            if cfg.trace {
+                use std::fs::{self, OpenOptions};
+                use std::io::Write;
+                fs::create_dir_all("/log")?;
+                let mut f = OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open("/log/cohcc_ci_trace.log")?;
+                writeln!(f, "{}", hash)?;
+            }
             Ok(())
         }
     }

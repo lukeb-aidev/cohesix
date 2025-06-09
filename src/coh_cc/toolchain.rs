@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: toolchain.rs v0.1
+// Filename: toolchain.rs v0.2
 // Author: Lukas Bower
 // Date Modified: 2025-07-18
 
@@ -41,6 +41,15 @@ impl Toolchain {
             &[],
             "resolve",
         );
+        Ok(path)
+    }
+
+    /// Return the path to `cargo` ensuring it exists and resides in the toolchain.
+    pub fn get_cargo(&self) -> anyhow::Result<PathBuf> {
+        let path = self.get_tool_path("cargo")?;
+        if !path.exists() {
+            anyhow::bail!("cargo not found in toolchain");
+        }
         Ok(path)
     }
 
