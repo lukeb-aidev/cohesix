@@ -1,12 +1,13 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: cohrun.rs v0.4
+// Filename: cohrun.rs v0.5
 // Author: Lukas Bower
-// Date Modified: 2025-07-12
+// Date Modified: 2025-07-21
 
 use clap::{Parser, Subcommand};
 use cohesix::queen::orchestrator::{QueenOrchestrator, SchedulePolicy};
 use cohesix::sim::{physics_demo, webcam_tilt};
 use cohesix::webcam::capture;
+use cohesix::telemetry::trace::init_panic_hook;
 
 #[derive(Parser)]
 #[command(name = "cohrun", about = "Run Cohesix demo scenarios", version = "0.2")]
@@ -66,6 +67,7 @@ enum GoalCmd {
 }
 
 fn main() {
+    init_panic_hook();
     let cli = Cli::parse();
     match cli.command {
         Commands::PhysicsDemo => physics_demo::run_demo(),
