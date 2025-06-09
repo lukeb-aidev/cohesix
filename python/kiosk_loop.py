@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: kiosk_loop.py v0.2
+# Filename: kiosk_loop.py v0.3
 # Author: Lukas Bower
-# Date Modified: 2025-07-15
+# Date Modified: 2025-06-09
 
 """Simulated kiosk UI event loop for KioskInteractive role."""
 
@@ -13,9 +13,15 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
+from sensors.sensor_proxy import run_once as capture_sensors, SENSOR_DIR
+from validator import Validator
+
 BASE = os.environ.get("COH_BASE", "")
 FED_PATH = Path(BASE) / "srv" / "kiosk_federation.json"
 LOG_PATH = Path(BASE) / "log" / "kiosk_watchdog.log"
+TRACE_PATH = Path(BASE) / "log" / "validation" / "trace_run.json"
+SUMMARY_FILE = Path(BASE) / "VALIDATION_SUMMARY.md"
+validator = Validator()
 _SHUTDOWN = False
 
 
@@ -55,10 +61,33 @@ def append_event(event: dict) -> None:
     FED_PATH.write_text(json.dumps(events))
 
 
+def append_summary(trace_name: str, allowed: bool) -> None:
+    """Append a validation summary row."""
+    row = (
+        f"| {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} | "
+        f"{trace_name} | {'allow' if allowed else 'block'} | "
+        f"{'PASS' if allowed else 'FAIL'} |\n"
+    )
+    SUMMARY_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with SUMMARY_FILE.open("a") as f:
+        f.write(row)
+
+
 def main() -> None:
     while not _SHUTDOWN:
         try:
             with watchdog(5):
+                capture_sensors()
+                sensors = {}
+                for f in SENSOR_DIR.glob("*.json"):
+                    try:
+                        data = json.loads(f.read_text())
+                        sensors[f.stem] = float(data.get("value", 0))
+                    except Exception:
+                        continue
+                allowed = validator.evaluate_all(sensors)
+                validator.emit_trace(sensors, allowed, TRACE_PATH)
+                append_summary(TRACE_PATH.name, allowed)
                 evt = {"timestamp": int(time.time()), "event": "heartbeat"}
                 append_event(evt)
                 time.sleep(5)
