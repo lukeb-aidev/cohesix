@@ -30,6 +30,7 @@
 | TECHNICAL_RISK.md         | v1.1    | 2025-06-08    | PRIVATE        |     |              |
 | WATCHDOG_POLICY.md         | v1.4    | 2025-06-05    | COMMUNITY      |            |              |
 | cli.md                     | v0.3    | 2025-07-12    | COMMUNITY      |     |              |
+| gui_orchestrator.md        | v1.2    | 2025-07-20    | COMMUNITY      |            |              |
 | gui_orchestrator.md        | v1.2    | 2025-07-21    | COMMUNITY      |            |              |
 | FEDERATION.md              | v1.0    | 2025-06-07    | PRIVATE        |            |              |
 | SECURE_BOOT.md             | v1.0    | 2025-06-07    | PRIVATE        |            |              |
