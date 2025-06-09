@@ -19,6 +19,9 @@ pub mod codegen;
 /// CLI interface for compiler invocation
 pub mod cli;
 
+/// Minimal sandbox-safe compiler wrapper
+pub mod coh_cc;
+
 /// Core dependencies validation and management
 pub mod dependencies;
 

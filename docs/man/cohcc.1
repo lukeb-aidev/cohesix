@@ -1,19 +1,46 @@
 .\" CLASSIFICATION: COMMUNITY
-.\" Filename: cohcc.1 v0.1
+.\" Filename: cohcc.1 v0.2
 .\" Author: Lukas Bower
-.\" Date Modified: 2025-07-12
-.TH COHCC 1 "2025-07-12" "Cohesix v1.0" "Cohesix Project"
+.\" Date Modified: 2025-07-16
+.TH COHCC 1 "2025-07-16" "Cohesix v1.0" "Cohesix Project"
 .SH NAME
-cohcc \- compile Cohesix IR modules
+cohcc \- Cohesix static compiler wrapper
 .SH SYNOPSIS
 .B cohcc
+.RI [ --trace ]
+.RI [ --dry-run ]
+.IR options ...
 .SH DESCRIPTION
-Cohesix compiler front-end for Cohesix IR modules.
+.B cohcc
+is a thin wrapper around \fBclang\fR and \fBrustc\fR used within the Cohesix
+sandbox. It enforces static linking and restricts output paths to
+\fI/mnt/data\fR. Unsupported options such as \fB-shared\fR or \fB-fPIC\fR are
+stripped before invocation. Every run is logged to
+\fI/log/cohcc_invocations.log\fR.
 .SH OPTIONS
-See \fB--help\fR for available options.
+.TP
+.B --trace
+print the final compiler command before execution.
+.TP
+.B --dry-run
+skip execution and only display the command.
+.TP
+All other arguments are forwarded to the backend compiler after filtering.
 .SH FILES
-
+.TP
+.I /log/cohcc_invocations.log
+command history and diagnostics.
+.TP
+.I /log/cohcc_test_pass.log
+automated test result marker.
 .SH EXAMPLES
-
+Compile a C program:
+.P
+.B cohcc hello.c -o /mnt/data/hello
+.P
+Compile a Rust program:
+.P
+.B cohcc main.rs -o /mnt/data/hello
 .SH SEE ALSO
-
+.BR clang (1),
+.BR rustc (1)

@@ -1,6 +1,11 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.39
-// Date Modified: 2025-06-08
+// Filename: CHANGELOG.md v0.40
+// Date Modified: 2025-07-16
+
+## [v0.62] - 2025-07-16
+### Added
+- Initial `coh_cc` compiler stub replacing placeholder script.
+- Man page updated and basic integration test added.
 
 ## [v0.61] - 2025-06-08
 ### Added
