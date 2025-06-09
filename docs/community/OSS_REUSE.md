@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: OSS_REUSE.md v1.6
+// Filename: OSS_REUSE.md v1.7
 // Author: Lukas Bower
-// Date Modified: 2025-07-13
+// Date Modified: 2025-07-15
 
 # OSS REUSE POLICY
 
@@ -121,4 +121,9 @@ Used in: Webcam capture JPEG encoding
 crate: chrono v0.4 — MIT OR Apache-2.0
 https://github.com/chronotope/chrono
 Used in: Watchdog timestamping
+```
+```
+tool: mandoc 1.14.6 — BSD-2-Clause
+https://mandoc.bsd.lv
+Used in: Offline manpage rendering (bin/cohman)
 ```

@@ -29,6 +29,7 @@
 | less | 1 | view files interactively | docs/man/less.1 |
 | ls | 1 | list directory contents | docs/man/ls.1 |
 | man | 1 | format and display manual pages | docs/man/man.1 |
+| cohman | 1 | offline mandoc wrapper | docs/man/cohman.1 |
 | mkdir | 1 | create directories | docs/man/mkdir.1 |
 | mv | 1 | move or rename files | docs/man/mv.1 |
 | ping | 1 | send ICMP ECHO_REQUEST to network hosts | docs/man/ping.1 |
