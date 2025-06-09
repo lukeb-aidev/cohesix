@@ -1,11 +1,12 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: main.rs v0.1
+// Filename: main.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-06-25
+// Date Modified: 2025-07-21
 
 use cohfuzz::fuzzer::TraceFuzzer;
 use std::path::PathBuf;
 use clap::Parser;
+use cohesix::telemetry::trace::init_panic_hook;
 
 #[derive(Parser)]
 struct Args {
@@ -18,6 +19,7 @@ struct Args {
 }
 
 fn main() -> anyhow::Result<()> {
+    init_panic_hook();
     let args = Args::parse();
     let fuzzer = TraceFuzzer::new(args.role);
     fuzzer.run(&args.input, args.iterations)?;
