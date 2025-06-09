@@ -1,12 +1,13 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: cohagent.rs v0.1
-// Date Modified: 2025-07-04
+// Filename: cohagent.rs v0.2
+// Date Modified: 2025-07-21
 // Author: Lukas Bower
 
 use clap::{Parser, Subcommand};
 use cohesix::agents::runtime::AgentRuntime;
 use cohesix::agents::migration;
 use cohesix::cohesix_types::Role;
+use cohesix::telemetry::trace::init_panic_hook;
 use anyhow::Result;
 
 #[derive(Parser)]
@@ -25,6 +26,7 @@ enum Command {
 }
 
 fn main() -> Result<()> {
+    init_panic_hook();
     let cli = Cli::parse();
     let mut rt = AgentRuntime::new();
     match cli.cmd {

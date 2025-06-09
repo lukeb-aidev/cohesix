@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: trace.rs v1.1
+// Filename: trace.rs v1.2
 // Author: Lukas Bower
-// Date Modified: 2025-07-14
+// Date Modified: 2025-07-21
 
 //! Trace Logging for Cohesix
 //!
@@ -42,6 +42,10 @@ pub fn emit(entry: TraceEntry) {
     {
         let _ = writeln!(f, "[{}][{:?}] {}", entry.source, entry.level, entry.message);
     }
+    fs::create_dir_all("/log").ok();
+    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open("/log/trace.log") {
+        let _ = writeln!(f, "[{}][{:?}] {}", entry.source, entry.level, entry.message);
+    }
 }
 
 /// Helper function to emit a quick trace from inline values.
@@ -62,4 +66,11 @@ fn get_timestamp() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
+}
+
+/// Install a panic hook that logs to `/log/trace.log`.
+pub fn init_panic_hook() {
+    std::panic::set_hook(Box::new(|info| {
+        trace(TraceLevel::Error, "panic", &format!("{}", info));
+    }));
 }
