@@ -1,7 +1,9 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: rapier_bridge.rs v0.4
 // Author: Lukas Bower
-// Date Modified: 2025-07-13
+// Date Modified: 2025-07-22
+
+#![cfg(feature = "rapier")]
 
 //! Rapier physics engine bridge exposing a simple command interface.
 //!

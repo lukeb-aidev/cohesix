@@ -1,7 +1,10 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: slm_registry.rs v0.1
-// Date Modified: 2025-07-08
+// Filename: slm_manage_registry.rs v0.2
 // Author: Lukas Bower
+// Date Modified: 2025-07-22
+// SPDX-License-Identifier: Apache-2.0
+// SLM Action: manage
+// Target: registry
 
 //! Registry for Small Language Models (SLMs) available to the Queen.
 //! Models are discovered under `/srv/slm/available` and can be

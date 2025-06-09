@@ -1,7 +1,9 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: busybox.rs v1.0
 // Author: Lukas Bower
-// Date Modified: 2025-05-31
+// Date Modified: 2025-07-22
+
+#![cfg(feature = "busybox")]
 
 //! Cohesix in-kernel BusyBox implementation.
 //! Provides minimal command handlers for embedded shell and diagnostics.

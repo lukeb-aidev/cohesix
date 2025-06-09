@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: METADATA.md v3.8
+// Filename: METADATA.md v3.9
 // Author: Lukas Bower
-// Date Modified: 2025-07-21
+// Date Modified: 2025-07-22
 
 ## Canonical Documents
 
@@ -98,3 +98,4 @@
 | INSTRUCTION_BLOCK.md | v3.6 | 2025-06-07 | COMMUNITY | | |
 | resources/add.cu           | v0.1    | 2025-07-20    | COMMUNITY      |     |              |
 | PROJECT_MANIFEST.md | v0.1 | 2025-07-22 | COMMUNITY | | |
+| tests/gpu_demos/add.cu           | v0.2    | 2025-07-22    | COMMUNITY      |     |              |

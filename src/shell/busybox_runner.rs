@@ -1,7 +1,9 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: busybox_runner.rs v0.4
 // Author: Lukas Bower
-// Date Modified: 2025-07-18
+// Date Modified: 2025-07-22
+
+#![cfg(feature = "busybox")]
 
 //! Execute BusyBox as the interactive shell with role-based command filtering.
 
