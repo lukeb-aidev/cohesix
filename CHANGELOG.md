@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.41
-// Date Modified: 2025-07-20
+// Filename: CHANGELOG.md v0.42
+// Date Modified: 2025-07-21
 
 ## [v0.69] - 2025-07-20
 ### Added
@@ -9,6 +9,10 @@
 ## [v0.70] - 2025-07-20
 ### Changed
 - Updated `gui_orchestrator.md` with chi router and API usage notes.
+
+## [v0.71] - 2025-07-21
+### Changed
+- Hardened GUI orchestrator with panic recovery, optional basic auth, rate limiting, and safer logging.
 
 ## [v0.68] - 2025-06-09
 ### Changed
