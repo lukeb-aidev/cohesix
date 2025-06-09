@@ -58,7 +58,7 @@
 | chown.1                   | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
 | cohagent.1                | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
 | cohcap.1                  | v0.2    | 2025-07-15    | COMMUNITY      |     |              |
-| cohcc.1                   | v0.2    | 2025-07-16    | COMMUNITY      |     |              |
+| cohcc.1                   | v0.3    | 2025-07-17    | COMMUNITY      |     |              |
 | cohcli.1                  | v0.2    | 2025-07-14    | COMMUNITY      |     |              |
 | cohman.1                 | v0.1    | 2025-07-15    | COMMUNITY      |     |
             |

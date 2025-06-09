@@ -52,3 +52,6 @@ ninep = "0.3"
 [features]
 default = []
 cuda = ["cust"]
+[[bin]]
+name = "cohcc"
+path = "src/coh_cc/main.rs"
