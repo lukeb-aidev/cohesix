@@ -1,0 +1,7 @@
+{
+  "__comment": "Boot scenario with queen only and no workers to test edge handling",
+  "roles": {
+    "QueenPrimary": {},
+    "DroneWorker": []
+  }
+}

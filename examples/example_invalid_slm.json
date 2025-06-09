@@ -1,0 +1,5 @@
+{
+  "__comment": "Malformed SLM manifest missing worker list",
+  "manifest_version": 1,
+  "queen": {"id": "queen01"}
+}
