@@ -1,11 +1,16 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.41
-// Date Modified: 2025-07-21
+// Filename: CHANGELOG.md v0.42
+// Date Modified: 2025-07-22
 ## [v0.71] - 2025-07-21
 ### Added
 - HTTP route and CLI docs for GUI orchestrator.
 ### Changed
 - README clarified usage and example output.
+
+## [v0.72] - 2025-07-22
+### Changed
+- CUDA artifacts isolated under `tests/gpu_demos`.
+- Canonical naming enforced for Shared Learning Module files.
 
 ## [v0.69] - 2025-07-20
 ### Added

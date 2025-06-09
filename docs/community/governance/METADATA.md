@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: METADATA.md v3.8
+// Filename: METADATA.md v3.9
 // Author: Lukas Bower
-// Date Modified: 2025-07-21
+// Date Modified: 2025-07-22
 
 ## Canonical Documents
 
@@ -96,4 +96,4 @@
 | SIM_TESTS.md               | v0.1    | 2025-07-13    | COMMUNITY      |     |             |
 | devices/HOTPLUG.md | v0.1 | 2025-07-14 | COMMUNITY | | |
 | INSTRUCTION_BLOCK.md | v3.6 | 2025-06-07 | COMMUNITY | | |
-| resources/add.cu           | v0.1    | 2025-07-20    | COMMUNITY      |     |              |
+| tests/gpu_demos/add.cu           | v0.2    | 2025-07-22    | COMMUNITY      |     |              |

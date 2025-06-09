@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: runtime.rs v0.7
+// Filename: runtime.rs v0.8
 // Author: Lukas Bower
-// Date Modified: 2025-07-13
+// Date Modified: 2025-07-22
 
 //! Runtime CUDA integration using dynamic loading of `libcuda.so`.
 //! Falls back gracefully if no CUDA driver is present.
@@ -185,7 +185,7 @@ impl CudaExecutor {
             });
 
             // simple vector addition using embedded PTX
-            const PTX: &str = include_str!("../../resources/add.ptx");
+            const PTX: &str = include_str!("../../tests/gpu_demos/add.ptx");
             let module = Module::from_ptx(PTX, &[]).map_err(|e| e.to_string())?;
             let stream = Stream::new(StreamFlags::NON_BLOCKING, None).map_err(|e| e.to_string())?;
             let a = DeviceBuffer::from_slice(&[1.0f32, 2.0, 3.0]).map_err(|e| e.to_string())?;
