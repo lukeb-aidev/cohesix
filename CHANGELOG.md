@@ -10,6 +10,11 @@
 ### Changed
 - Updated `gui_orchestrator.md` with chi router and API usage notes.
 
+## [v0.71] - 2025-07-20
+### Added
+- `/api/metrics` endpoint with request and session counters.
+- `--dev` flag enabling verbose logs and static live reload.
+
 ## [v0.68] - 2025-06-09
 ### Changed
 - Hardened kernel capability checks and syscall validation.

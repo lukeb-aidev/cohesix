@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: gui_orchestrator.md v1.1
+// Filename: gui_orchestrator.md v1.2
 // Author: Lukas Bower
 // Date Modified: 2025-07-20
 
@@ -24,6 +24,8 @@ updates.
 - Boot attestation logs with TPM results
 - Role manifest viewer and editing helpers
 - REST-style endpoints `/api/status` and `/api/control`
+- `/api/metrics` exposes Prometheus counters
+- Developer mode via `--dev` with live reload and verbose logs
 - Access logging via `--log-file`
 - CLI helpers through `cohrun orchestrator`
 
