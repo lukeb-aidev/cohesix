@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: README.md v0.6
+// Filename: README.md v0.7
 // Author: Lukas Bower
-// Date Modified: 2025-07-11
+// Date Modified: 2025-07-20
 
 
 # Cohesix
@@ -73,6 +73,14 @@ Initial demo services are enabled:
 * `/srv/webcam` and `/srv/gpuinfo` for workers
 * `cohrun physics_demo` to run a Rapier simulation
 * `cohtrace list` to view joined workers
+
+### Running the GUI Orchestrator
+
+Start the lightweight web UI to inspect orchestration state:
+
+```bash
+go run ./go/cmd/gui-orchestrator --port 8888 --bind 127.0.0.1
+```
 
 ## 🧪 Testing
 
