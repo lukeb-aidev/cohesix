@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: main.go v0.1
+// Filename: main.go v0.2
 // Author: Lukas Bower
 // Date Modified: 2025-07-20
 // License: SPDX-License-Identifier: MIT OR Apache-2.0
@@ -22,6 +22,7 @@ func main() {
 	port := flag.Int("port", 8888, "listen port")
 	staticDir := flag.String("static-dir", "static", "directory for static files")
 	logFile := flag.String("log-file", "/log/gui_access.log", "access log file")
+	dev := flag.Bool("dev", false, "enable developer mode")
 	flag.Parse()
 
 	cfg := orchestrator.Config{
@@ -29,6 +30,11 @@ func main() {
 		Port:      *port,
 		StaticDir: *staticDir,
 		LogFile:   *logFile,
+		Dev:       *dev,
+	}
+
+	if *dev {
+		log.SetFlags(log.LstdFlags | log.Lshortfile)
 	}
 
 	srv := orchestrator.New(cfg)
