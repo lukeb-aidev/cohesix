@@ -24,6 +24,8 @@ updates.
 - Boot attestation logs with TPM results
 - Role manifest viewer and editing helpers
 - REST-style endpoints `/api/status` and `/api/control`
+- `/api/metrics` exposes Prometheus counters
+- Developer mode via `--dev` with live reload and verbose logs
 - Access logging via `--log-file`
 - CLI helpers through `cohrun orchestrator`
 

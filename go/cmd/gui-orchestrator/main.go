@@ -19,6 +19,7 @@ func main() {
 	port := flag.Int("port", 8888, "listen port")
 	staticDir := flag.String("static-dir", "static", "directory for static files")
 	logFile := flag.String("log-file", "/log/gui_access.log", "access log file")
+	dev := flag.Bool("dev", false, "enable developer mode")
 	flag.Parse()
 
 	cfg := orchestrator.Config{
@@ -26,6 +27,11 @@ func main() {
 		Port:      *port,
 		StaticDir: *staticDir,
 		LogFile:   *logFile,
+		Dev:       *dev,
+	}
+
+	if *dev {
+		log.SetFlags(log.LstdFlags | log.Lshortfile)
 	}
 
 	srv := orchestrator.New(cfg)

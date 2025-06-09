@@ -15,6 +15,11 @@
 ### Changed
 - Updated `gui_orchestrator.md` with chi router and API usage notes.
 
+## [v0.71] - 2025-07-20
+### Added
+- `/api/metrics` endpoint with request and session counters.
+- `--dev` flag enabling verbose logs and static live reload.
+
 ## [v0.71] - 2025-07-21
 ### Changed
 - Hardened GUI orchestrator with panic recovery, optional basic auth, rate limiting, and safer logging.

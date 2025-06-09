@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: server_test.go v0.1
+// Filename: server_test.go v0.2
 // Author: Lukas Bower
 // Date Modified: 2025-07-20
 // License: SPDX-License-Identifier: MIT OR Apache-2.0
@@ -59,6 +59,18 @@ func TestStaticFileServed(t *testing.T) {
 	resp, err := http.Get(ts.URL + "/static/index.html")
 	if err != nil {
 		t.Fatalf("get static: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status code: %d", resp.StatusCode)
+	}
+}
+
+func TestMetricsEndpoint(t *testing.T) {
+	ts := httptest.NewServer(newRouter())
+	defer ts.Close()
+	resp, err := http.Get(ts.URL + "/api/metrics")
+	if err != nil {
+		t.Fatalf("get metrics: %v", err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status code: %d", resp.StatusCode)
