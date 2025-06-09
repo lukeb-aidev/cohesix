@@ -1,6 +1,6 @@
 // CLASSIFICATION: PRIVATE
-// Filename: boot_trampoline.h v0.2
-// Date Modified: 2025-06-01
+// Filename: boot_trampoline.h v0.3
+// Date Modified: 2025-07-15
 // Author: Lukas Bower
 //
 // ─────────────────────────────────────────────────────────────
@@ -19,6 +19,8 @@
 extern "C" {
 #endif
 
+#include <stdint.h>
+
 /**
  * @brief Entry invoked by verified seL4 assembly.
  *
@@ -27,6 +29,14 @@ extern "C" {
  * `rust_early_init()` symbol.
  */
 void boot_trampoline(void);
+
+typedef struct {
+    uint32_t crc;
+    uint32_t length;
+    char role_hint[16];
+} trampoline_hdr_t;
+
+extern int boot_trampoline_crc_ok;
 
 #ifdef __cplusplus
 }

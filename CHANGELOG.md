@@ -2,6 +2,11 @@
 // Filename: CHANGELOG.md v0.38
 // Date Modified: 2025-07-15
 
+## [v0.61] - 2025-07-15
+### Changed
+- Boot trampoline validates SHA256 CRC before jumping.
+- bootloader defaults to DroneWorker role and logs init.
+
 ## [v0.60] - 2025-07-15
 ### Changed
 - Cleaned METADATA duplicate entries and normalized license files.
