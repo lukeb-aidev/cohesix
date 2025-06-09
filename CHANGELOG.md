@@ -1,9 +1,11 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.42
+// Filename: CHANGELOG.md v0.41
 // Date Modified: 2025-07-21
-## [v0.70] - 2025-07-20
+## [v0.71] - 2025-07-21
 ### Added
-- Created architecture, governance, guides, cli, and planning subfolders in docs/community without moving existing d
+- HTTP route and CLI docs for GUI orchestrator.
+### Changed
+- README clarified usage and example output.
 
 ## [v0.69] - 2025-07-20
 ### Added
