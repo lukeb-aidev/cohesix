@@ -6,10 +6,25 @@
 //! Minimal base agent with introspection logging and self-diagnosis.
 
 use crate::sim::introspect::{self, IntrospectionData};
+use serde_json;
+use std::fs;
 
 pub struct BaseAgent {
     id: String,
     error_history: Vec<f32>,
+}
+
+use crate::agent_transport::AgentTransport;
+use crate::agent_migration::{Migrateable, MigrationStatus};
+
+impl Migrateable for BaseAgent {
+    fn migrate<T: AgentTransport>(&self, peer: &str, transport: &T) -> anyhow::Result<MigrationStatus> {
+        let tmp = format!("/tmp/{}_base.json", self.id);
+        let data = serde_json::json!({"id": self.id});
+        std::fs::write(&tmp, data.to_string())?;
+        transport.send_state(&self.id, peer, &tmp)?;
+        Ok(MigrationStatus::Completed)
+    }
 }
 
 impl BaseAgent {

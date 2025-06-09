@@ -36,6 +36,20 @@ pub struct EnsembleAgent {
     pub strategy: Arbitration,
 }
 
+use crate::agent_transport::AgentTransport;
+use crate::agent_migration::{Migrateable, MigrationStatus};
+use serde_json;
+
+impl Migrateable for EnsembleAgent {
+    fn migrate<T: AgentTransport>(&self, peer: &str, transport: &T) -> anyhow::Result<MigrationStatus> {
+        let tmp = format!("/tmp/{}_ensemble.json", self.id);
+        let data = serde_json::to_string(&self.members.len()).unwrap_or_default();
+        fs::write(&tmp, data)?;
+        transport.send_state(&self.id, peer, &tmp)?;
+        Ok(MigrationStatus::Completed)
+    }
+}
+
 impl EnsembleAgent {
     pub fn new(id: &str, strategy: Arbitration) -> Self {
         Self { id: id.into(), members: Vec::new(), memory: SharedMemory::new(id), strategy }
