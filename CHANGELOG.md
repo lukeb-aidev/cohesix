@@ -1,11 +1,18 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v0.40
-// Date Modified: 2025-07-16
+// Date Modified: 2025-07-17
 
 ## [v0.62] - 2025-07-16
 ### Added
 - Initial `coh_cc` compiler stub replacing placeholder script.
 - Man page updated and basic integration test added.
+
+## [v0.63] - 2025-07-17
+### Added
+- Zig backend integration for `cohcc` with static build enforcement.
+- `test_cohcc_build_c.sh` verifies static output.
+### Changed
+- Man page updated with backend options and logging paths.
 
 ## [v0.61] - 2025-06-08
 ### Added
