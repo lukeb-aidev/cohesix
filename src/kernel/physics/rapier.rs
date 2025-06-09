@@ -1,7 +1,10 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: rapier.rs v1.0
 // Author: Lukas Bower
-// Date Modified: 2025-05-31
+// Date Modified: 2025-07-22
+
+
+#![cfg(feature = "rapier")]
 
 //! Rapier physics integration module for Cohesix.
 //! Provides hooks into the Rapier engine for simulating rigid body dynamics, collisions, and world stepping.

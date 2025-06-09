@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: validator.py v0.3
+# Filename: validator.py v0.4
 # Author: Lukas Bower
-# Date Modified: 2025-07-15
+# Date Modified: 2025-06-09
 """Python-side validation helpers with live rule updates."""
 
 import json
@@ -86,6 +86,13 @@ class Validator:
             else:
                 rule["_counter"] = 0
         return allow
+
+    def emit_trace(self, sensors: dict[str, float], allow: bool, path: Path) -> None:
+        """Append a cohtrace-compatible event."""
+        evt = {"ts": time.time(), "sensors": sensors, "allow": allow}
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a") as f:
+            f.write(json.dumps(evt) + "\n")
 
 
 __all__ = ["trace_integrity", "Validator"]
