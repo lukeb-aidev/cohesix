@@ -1,14 +1,20 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: registry.rs v0.1
+// Filename: registry.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-07-17
+// Date Modified: 2025-07-18
 
 use std::path::Path;
 
 use crate::coh_cc::parser::input_type::CohInput;
 
 pub trait CompilerBackend {
-    fn compile(&self, input: &CohInput, out_path: &Path) -> anyhow::Result<()>;
+    fn compile(
+        &self,
+        input: &CohInput,
+        out_path: &Path,
+        target: &str,
+        sysroot: &Path,
+    ) -> anyhow::Result<()>;
 }
 
 #[derive(Debug, Clone, Copy)]

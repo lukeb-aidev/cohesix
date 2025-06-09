@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v0.40
-// Date Modified: 2025-07-17
+// Date Modified: 2025-07-18
 
 ## [v0.62] - 2025-07-16
 ### Added
@@ -18,6 +18,12 @@
 ### Added
 - Backend registry with trait-based dispatch and input type detection.
 - Static flag enforcement and build hashing for `cohcc`.
+
+## [v0.65] - 2025-07-18
+### Added
+- Cross-compilation flags `--target` and `--sysroot` for `cohcc`.
+- Rust build wrapper with static linking enforcement and logging.
+- JSON IR schema loader with versioning and log output.
 - Structured logging macros and CI reproducibility test.
 
 ## [v0.61] - 2025-06-08

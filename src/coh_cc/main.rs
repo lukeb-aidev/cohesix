@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: main.rs v0.2
+// Filename: main.rs v0.3
 // Author: Lukas Bower
-// Date Modified: 2025-07-17
+// Date Modified: 2025-07-18
 
 use clap::Parser;
 use cohesix::coh_cc::{
@@ -31,7 +31,7 @@ pub fn main_entry() -> anyhow::Result<()> {
     };
     let backend = get_backend(backend_name)?;
     match cli.command {
-        Command::Build { source, out, flags } => {
+        Command::Build { source, out, flags, .. } => {
             if !cfg.valid_output(&out) {
                 anyhow::bail!("output path must be within project dir or /mnt/data");
             }
@@ -43,7 +43,7 @@ pub fn main_entry() -> anyhow::Result<()> {
                 &input.flags,
                 &format!("detected {:?}", input.ty)
             );
-            backend.compile(&input, Path::new(&out))?;
+            backend.compile(&input, Path::new(&out), &cfg.target, &cfg.sysroot)?;
             let hash = guard::hash_output(Path::new(&out))?;
             guard::log_build(
                 &hash,
