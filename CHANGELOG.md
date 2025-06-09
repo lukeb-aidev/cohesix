@@ -12,6 +12,11 @@
 - Unified logging for CLI tools with `cohlog` and safe shell execution.
 - Added argparse subparsers and new flags to `cohcli`.
 
+## [v0.62] - 2025-07-16
+### Added
+- Integrated `cohesix-9p` server with upstream `ninep` crate.
+- Added adapter helpers and basic 9P integration tests.
+
 ## [v0.59] - 2025-07-14
 ### Added
 - Restored `INSTRUCTION_BLOCK.md` with v3.6 workflow rules.
