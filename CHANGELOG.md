@@ -1,6 +1,12 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v0.42
 // Date Modified: 2025-06-08
+## [v0.73] - 2025-07-22
+### Added
+- GitHub Actions workflow `codex.yml` to run Codex tasks.
+- Simplified `AGENTS.md` task definitions for Codex automation.
+- Added placeholder `log/codex_output.md` for agent output.
+
 ## [v0.72] - 2025-06-08
 ### Added
 - Consolidated CHANGELOG, metadata.json, and OPEN_SOURCE_DEPENDENCIES.md into PROJECT_MANIFEST.md.

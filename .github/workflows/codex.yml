@@ -1,40 +1,23 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: codex.yml v1.0
+# Filename: codex.yml v1.1
 # Author: Lukas Bower
-# Date Modified: 2025-05-31
+# Date Modified: 2025-07-22
 
-name: Codex Integration Tests
-
+name: Codex Agent Check
 on:
   push:
-    paths:
-      - 'src/**'
-      - '.github/workflows/codex.yml'
+    branches: ["main"]
   pull_request:
-
+    branches: ["main"]
 jobs:
-  codex-check:
+  codex:
     runs-on: ubuntu-latest
-    name: Run Codex Lint and Type Checks
-
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v3
 
-      - name: Set up Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
+      - name: Install Codex CLI
+        run: curl -sSL https://raw.githubusercontent.com/openai/codex-cli/main/install.sh | bash && echo $HOME/.codex/bin >> $GITHUB_PATH
 
-      - name: Install Codex Validator (stub)
-        run: |
-          echo "TODO: Install validator or Codex CLI"
-
-      - name: Run Codex validation (stub)
-        run: |
-          echo "TODO: Validate agents and Codex entrypoints"
-
-      - name: Post results
-        run: |
-          echo "TODO: Upload logs or summary output"
+      - name: Run Codex Tasks
+        run: codex run AGENTS.md --output log/codex_output.md --fail-on-warnings
