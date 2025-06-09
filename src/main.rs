@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: main.rs v1.1
-// Date Modified: 2025-07-15
+// Filename: main.rs v1.2
+// Date Modified: 2025-07-21
 // Author: Lukas Bower
 // Status: 🟢 Hydrated
 
@@ -8,10 +8,12 @@
 
 extern crate cohesix;
 use cohesix::cli;
+use cohesix::telemetry::trace::init_panic_hook;
 use env_logger;
 
 fn main() {
     env_logger::init();
+    init_panic_hook();
     let result = std::panic::catch_unwind(|| {
         if let Err(err) = cli::run() {
             eprintln!("Error: {}", err);

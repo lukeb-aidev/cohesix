@@ -43,9 +43,10 @@ mod tests {
 
     fn start() -> (FsServer, TcpClient) {
         let mut srv = FsServer::new(FsConfig { root: "/".into(), port: 5655, readonly: false });
-        srv.start().unwrap();
+        srv.start().unwrap_or_else(|e| panic!("server start failed: {e}"));
         std::thread::sleep(std::time::Duration::from_millis(100));
-        let client = TcpClient::new_tcp("tester".to_string(), "127.0.0.1:5655", "").unwrap();
+        let client = TcpClient::new_tcp("tester".to_string(), "127.0.0.1:5655", "")
+            .unwrap_or_else(|e| panic!("client connect failed: {e}"));
         (srv, client)
     }
 
@@ -53,9 +54,12 @@ mod tests {
     #[serial]
     fn slice_read() {
         let (mut srv, mut cli) = start();
-        cli.create("/", "file", Perm::OWNER_READ | Perm::OWNER_WRITE, Mode::FILE).unwrap();
-        cli.write("/file", 0, b"abcdef").unwrap();
-        let slice = read_slice(&mut cli, "/file", 2, 3).unwrap();
+        cli.create("/", "file", Perm::OWNER_READ | Perm::OWNER_WRITE, Mode::FILE)
+            .unwrap_or_else(|e| panic!("create failed: {e}"));
+        cli.write("/file", 0, b"abcdef")
+            .unwrap_or_else(|e| panic!("write failed: {e}"));
+        let slice = read_slice(&mut cli, "/file", 2, 3)
+            .unwrap_or_else(|e| panic!("read slice failed: {e}"));
         assert_eq!(slice, b"cde");
         let _ = srv; // drop after test
     }

@@ -85,7 +85,7 @@ mod tests {
 
     #[test]
     fn server_starts_with_defaults() {
-        let _srv = start_server().expect("server should start");
+        let _srv = start_server().unwrap_or_else(|e| panic!("server should start: {e}"));
     }
 
     #[test]
@@ -96,20 +96,20 @@ mod tests {
             readonly: true,
         };
         let mut srv = FsServer::new(cfg.clone());
-        srv.start().expect("start");
+        srv.start().unwrap_or_else(|e| panic!("start failed: {e}"));
     }
 
     #[test]
     fn parse_version_message_ok() {
         let buf = b"9P2000.L";
-        let parsed = parse_version_message(buf).expect("parse");
+        let parsed = parse_version_message(buf).unwrap_or_else(|e| panic!("parse error: {e}"));
         assert_eq!(parsed, "9P2000.L");
     }
 
     #[test]
     fn unix_socket_roundtrip() {
         let mut srv = FsServer::new(FsConfig { port: 5660, ..Default::default() });
-        srv.start().expect("start socket");
+        srv.start().unwrap_or_else(|e| panic!("start socket failed: {e}"));
         thread::sleep(Duration::from_millis(100));
 
         let mut cli = ninep::client::TcpClient::new_tcp(
@@ -117,10 +117,10 @@ mod tests {
             "127.0.0.1:5660",
             "",
         )
-        .expect("connect");
+        .unwrap_or_else(|e| panic!("connect failed: {e}"));
         cli.create("/", "foo", Perm::OWNER_READ | Perm::OWNER_WRITE, Mode::FILE)
-            .expect("create");
-        let st = cli.stat("/foo").expect("stat");
+            .unwrap_or_else(|e| panic!("create failed: {e}"));
+        let st = cli.stat("/foo").unwrap_or_else(|e| panic!("stat failed: {e}"));
         println!("created file size {}", st.n_bytes);
     }
 }
