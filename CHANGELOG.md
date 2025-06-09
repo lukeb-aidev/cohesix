@@ -1,6 +1,10 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v0.41
-// Date Modified: 2025-07-21
+// Date Modified: 2025-06-09
+## [v0.72] - 2025-06-09
+### Added
+- Canonical kiosk loop integrates sensor proxy and validator with trace logging.
+
 ## [v0.71] - 2025-07-21
 ### Added
 - HTTP route and CLI docs for GUI orchestrator.
