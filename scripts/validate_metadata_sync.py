@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # CLASSIFICATION: COMMUNITY
-# Filename: validate_metadata_sync.py v0.1
+# Filename: validate_metadata_sync.py v0.2
 # Date Modified: 2025-06-09
 # Author: Lukas Bower
 """Metadata synchronization validator for Cohesix documentation."""
@@ -10,7 +10,7 @@ import re
 import sys
 from pathlib import Path
 
-METADATA_PATH = Path('docs/community/METADATA.md')
+METADATA_PATH = Path('docs/community/governance/METADATA.md')
 
 # Regex patterns for headers
 CLASS_RE = re.compile(r"CLASSIFICATION:\s*(\w+)")
@@ -35,14 +35,19 @@ def parse_metadata(path: Path):
 
 
 def check_file(filename: str, version: str, classification: str):
-    possible_paths = [
-        Path('docs/community') / filename,
-        Path('docs/private') / filename,
-        Path('docs/man') / filename,
-        Path('scripts') / filename,
+    search_roots = [
+        Path('docs/community'),
+        Path('docs/private'),
+        Path('docs/man'),
+        Path('docs'),
+        Path('resources'),
+        Path('scripts'),
+        Path('.'),
     ]
-    for p in possible_paths:
-        if p.exists():
+    for root in search_roots:
+        for p in root.rglob(filename):
+            if not p.exists():
+                continue
             with p.open() as f:
                 lines = [next(f, '') for _ in range(5)]
             found_class = None

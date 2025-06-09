@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # CLASSIFICATION: COMMUNITY
-# Filename: gen_manpages.py v0.1
+# Filename: gen_manpages.py v0.2
 # Author: Lukas Bower
-# Date Modified: 2025-07-13
+# Date Modified: 2025-06-09
 """Generate manpages from CLI help Markdown files using pandoc."""
 
 import subprocess
@@ -13,11 +13,11 @@ DOCS = ROOT / "docs" / "community"
 MAN = ROOT / "docs" / "man"
 
 mapping = {
-    "CLI_HELP_COHCLI.md": "cohcli.1",
-    "CLI_HELP_COHRUN.md": "cohrun.1",
-    "CLI_HELP_COHCC.md": "cohcc.1",
-    "CLI_HELP_COHCAP.md": "cohcap.1",
-    "CLI_HELP_COHTRACE.md": "cohtrace.1",
+    "cli/CLI_HELP_COHCLI.md": "cohcli.1",
+    "cli/CLI_HELP_COHRUN.md": "cohrun.1",
+    "cli/CLI_HELP_COHCC.md": "cohcc.1",
+    "cli/CLI_HELP_COHCAP.md": "cohcap.1",
+    "cli/CLI_HELP_COHTRACE.md": "cohtrace.1",
 }
 
 

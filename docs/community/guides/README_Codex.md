@@ -55,11 +55,11 @@ and runs `validate_metadata_sync.py`.
   pip install pre-commit
   pre-commit install
   ```
-- **Agent Definitions**: `docs/community/AGENTS_AND_CLI.md` contains JSON schema for agent roles and prompts. Review and extend to add new Codex agents or tasks.
+ - **Agent Definitions**: `docs/community/architecture/AGENTS_AND_CLI.md` contains JSON schema for agent roles and prompts. Review and extend to add new Codex agents or tasks.
 
 ## Agents & Task Schema
 
-- **Agents.md**: Defines each automated agent (e.g., `docs/community/AGENTS_AND_CLI.md`). Contains fields:
+ - **Agents.md**: Defines each automated agent (e.g., `docs/community/architecture/AGENTS_AND_CLI.md`). Contains fields:
   - **`id`**: Unique agent name.  
   - **`role`**: Defines permissions and context (e.g., `codegen`, `testing`).  
   - **`prompt_template`**: Reusable prompt variables for tasks.  
