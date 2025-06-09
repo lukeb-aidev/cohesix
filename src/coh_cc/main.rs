@@ -1,31 +1,66 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: main.rs v0.1
+// Filename: main.rs v0.2
 // Author: Lukas Bower
 // Date Modified: 2025-07-17
 
 use clap::Parser;
-use cohesix::coh_cc::{config::{Cli, Command, Config}, compile, logging};
+use cohesix::coh_cc::{
+    backend::registry::get_backend,
+    config::{Cli, Command, Config},
+    guard,
+    parser::input_type::CohInput,
+};
+use cohesix::{cohcc_error, cohcc_info};
+use std::path::Path;
 
 /// Entry point for the cohcc binary.
 pub fn main_entry() -> anyhow::Result<()> {
     let cli = Cli::parse();
     if cli.sandbox_info {
-        println!("sandbox role: {}", std::env::var("COHROLE").unwrap_or_default());
+        println!(
+            "sandbox role: {}",
+            std::env::var("COHROLE").unwrap_or_default()
+        );
         return Ok(());
     }
     let cfg = Config::from_cli(&cli)?;
+    let backend_name = if cli.backend.is_empty() {
+        "tcc"
+    } else {
+        &cli.backend
+    };
+    let backend = get_backend(backend_name)?;
     match cli.command {
         Command::Build { source, out, flags } => {
-            compile(&source, &out, &flags, &cfg)
+            if !cfg.valid_output(&out) {
+                anyhow::bail!("output path must be within project dir or /mnt/data");
+            }
+            let input = CohInput::new(Path::new(&source).to_path_buf(), flags);
+            cohcc_info!(
+                backend_name,
+                Path::new(&source),
+                Path::new(&out),
+                &input.flags,
+                &format!("detected {:?}", input.ty)
+            );
+            backend.compile(&input, Path::new(&out))?;
+            let hash = guard::hash_output(Path::new(&out))?;
+            guard::log_build(
+                &hash,
+                backend_name,
+                Path::new(&source),
+                Path::new(&out),
+                &input.flags,
+            )?;
+            Ok(())
         }
     }
 }
 
 fn main() {
     if let Err(e) = main_entry() {
-        logging::log_failure(&format!("{e}"));
+        cohcc_error!("tcc", Path::new(""), Path::new(""), &[], &format!("{e}"));
         eprintln!("cohcc: {e}");
         std::process::exit(1);
     }
 }
-

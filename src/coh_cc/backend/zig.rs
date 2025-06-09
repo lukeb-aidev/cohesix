@@ -5,7 +5,7 @@
 
 use std::path::Path;
 use std::process::Command;
-use crate::coh_cc::logging::{log_invocation, log_failure};
+use crate::coh_cc::{logging, guard};
 
 pub fn zig_path() -> Option<String> {
     std::env::var("ZIG_PATH").ok().or_else(|| {
@@ -16,12 +16,7 @@ pub fn zig_path() -> Option<String> {
 
 pub fn compile_and_link(source: &str, out: &str, flags: &[String]) -> anyhow::Result<()> {
     let zig = zig_path().ok_or_else(|| anyhow::anyhow!("zig compiler not found"))?;
-    let disallowed = ["-shared", "-dynamic", "-fPIC", "-fpic", "--dynamic"];
-    if flags.iter().any(|f| disallowed.contains(&f.as_str())) {
-        let msg = "dynamic linking flags are disallowed";
-        log_failure(msg);
-        anyhow::bail!(msg);
-    }
+    guard::check_static_flags(flags)?;
     let mut cmd = Command::new(zig);
     cmd.arg("cc");
     cmd.arg("-static");
@@ -31,10 +26,10 @@ pub fn compile_and_link(source: &str, out: &str, flags: &[String]) -> anyhow::Re
     if !flags.iter().any(|f| f == "--no-strip") {
         cmd.arg("-s");
     }
-    log_invocation(&format!("zig cc {:?}", cmd.get_args().collect::<Vec<_>>()));
+    logging::log("INFO", "zig", Path::new(source), Path::new(out), flags, "compile");
     let status = cmd.status()?;
     if !status.success() {
-        log_failure("zig failed");
+        logging::log("ERROR", "zig", Path::new(source), Path::new(out), flags, "zig failed");
         anyhow::bail!("zig cc failed");
     }
     Ok(())
