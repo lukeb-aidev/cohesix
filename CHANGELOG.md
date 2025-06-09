@@ -1,10 +1,14 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.40
-// Date Modified: 2025-06-09
+// Filename: CHANGELOG.md v0.41
+// Date Modified: 2025-07-20
 
 ## [v0.69] - 2025-07-20
 ### Added
 - Go GUI orchestrator with chi router and API endpoints.
+
+## [v0.70] - 2025-07-20
+### Changed
+- Updated `gui_orchestrator.md` with chi router and API usage notes.
 
 ## [v0.68] - 2025-06-09
 ### Changed
