@@ -1,0 +1,11 @@
+CC = coh_cc
+CFLAGS = -Wall -Os -nostdlib
+OBJS = mandoc.o main.o man.o term_ascii.o
+
+all: mandoc
+
+mandoc: $(OBJS)
+$(CC) $(CFLAGS) -o mandoc $(OBJS)
+
+clean:
+rm -f *.o mandoc
