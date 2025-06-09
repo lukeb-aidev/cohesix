@@ -14,6 +14,9 @@
 - Bumped versions for `OPEN_SOURCE_DEPENDENCIES.md` and `LICENSE_MATRIX.md`.
 
 ## [v0.61] - 2025-07-15
+### Added
+- Mutex-protected state and structured logging for Go agent SDK.
+- Graceful shutdown and fault-injection tests covering cancellations and timeouts.
 ### Changed
 - Unified logging for CLI tools with `cohlog` and safe shell execution.
 - Added argparse subparsers and new flags to `cohcli`.
