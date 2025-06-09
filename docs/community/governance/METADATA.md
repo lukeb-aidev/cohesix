@@ -97,3 +97,4 @@
 | devices/HOTPLUG.md | v0.1 | 2025-07-14 | COMMUNITY | | |
 | INSTRUCTION_BLOCK.md | v3.6 | 2025-06-07 | COMMUNITY | | |
 | resources/add.cu           | v0.1    | 2025-07-20    | COMMUNITY      |     |              |
+| PROJECT_MANIFEST.md | v0.1 | 2025-07-22 | COMMUNITY | | |

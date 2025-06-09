@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: README.md v0.8
+// Filename: README.md v0.9
 // Author: Lukas Bower
-// Date Modified: 2025-07-21
+// Date Modified: 2025-07-22
 
 
 # Cohesix
@@ -33,6 +33,7 @@ Community documents live in `docs/community/`, while private strategy files are 
 |------|---------|
 | `docs/community/MISSION_AND_ARCHITECTURE.md` | Philosophy and architecture overview |
 | `docs/community/INSTRUCTION_BLOCK.md` | Canonical workflow rules |
+| `PROJECT_MANIFEST.md` | Consolidated changelog, metadata, and OSS dependencies |
 | `docs/private/COMMERCIAL_PLAN.md` | Market & investor messaging (restricted) |
 
 ---

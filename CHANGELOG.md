@@ -1,6 +1,9 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.41
-// Date Modified: 2025-07-21
+// Filename: CHANGELOG.md v0.42
+// Date Modified: 2025-07-22
+## [v0.72] - 2025-07-22
+### Added
+- Consolidated CHANGELOG, metadata.json, and OPEN_SOURCE_DEPENDENCIES.md into PROJECT_MANIFEST.md.
 ## [v0.71] - 2025-07-21
 ### Added
 - HTTP route and CLI docs for GUI orchestrator.
