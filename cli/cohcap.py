@@ -1,14 +1,37 @@
 #!/usr/bin/env python3
 # CLASSIFICATION: COMMUNITY
-# Filename: cohcap.py v0.1
+# Filename: cohcap.py v0.2
 # Author: Lukas Bower
-# Date Modified: 2025-07-13
+# Date Modified: 2025-07-15
 """cohcap – manage demo capabilities."""
 
 import argparse
 import os
 from pathlib import Path
 import sys
+import shlex
+import subprocess
+from datetime import datetime
+from typing import List
+import traceback
+
+
+LOG_DIR = Path("/log")
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def cohlog(msg: str) -> None:
+    with (LOG_DIR / "cli_tool.log").open("a") as f:
+        f.write(f"{datetime.utcnow().isoformat()} {msg}\n")
+    print(msg)
+
+
+def safe_run(cmd: List[str]) -> int:
+    quoted = [shlex.quote(c) for c in cmd]
+    with (LOG_DIR / "cli_exec.log").open("a") as f:
+        f.write(f"{datetime.utcnow().isoformat()} {' '.join(quoted)}\n")
+    result = subprocess.run(cmd)
+    return result.returncode
 
 
 BASE_ENV = "CAP_BASE"
@@ -23,10 +46,10 @@ def cap_dir() -> Path:
 def list_caps(worker: str):
     path = cap_dir() / f"{worker}.caps"
     if not path.exists():
-        print("no capabilities")
+        cohlog("no capabilities")
         return
     for line in path.read_text().splitlines():
-        print(line)
+        cohlog(line)
 
 
 def grant_cap(worker: str, cap: str):
@@ -36,17 +59,17 @@ def grant_cap(worker: str, cap: str):
         caps.update(path.read_text().splitlines())
     caps.add(cap)
     path.write_text("\n".join(sorted(caps)))
-    print(f"granted {cap} to {worker}")
+    cohlog(f"granted {cap} to {worker}")
 
 
 def revoke_cap(worker: str, cap: str):
     path = cap_dir() / f"{worker}.caps"
     if not path.exists():
-        print("no capabilities")
+        cohlog("no capabilities")
         return
     caps = [c for c in path.read_text().splitlines() if c != cap]
     path.write_text("\n".join(caps))
-    print(f"revoked {cap} from {worker}")
+    cohlog(f"revoked {cap} from {worker}")
 
 
 def main():
@@ -84,4 +107,10 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        with (LOG_DIR / "cli_error.log").open("a") as f:
+            f.write(f"{datetime.utcnow().isoformat()} {traceback.format_exc()}\n")
+        cohlog("Unhandled error, see cli_error.log")
+        sys.exit(1)
