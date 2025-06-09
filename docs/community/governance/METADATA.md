@@ -99,3 +99,4 @@
 | resources/add.cu           | v0.1    | 2025-07-20    | COMMUNITY      |     |              |
 | PROJECT_MANIFEST.md | v0.1 | 2025-07-22 | COMMUNITY | | |
 | tests/gpu_demos/add.cu           | v0.2    | 2025-07-22    | COMMUNITY      |     |              |
+| CodexCheck.md | v0.1 | 2025-07-22 | COMMUNITY | | |
