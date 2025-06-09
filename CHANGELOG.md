@@ -2,6 +2,10 @@
 // Filename: CHANGELOG.md v0.40
 // Date Modified: 2025-06-09
 
+## [v0.69] - 2025-07-20
+### Added
+- Go GUI orchestrator with chi router and API endpoints.
+
 ## [v0.68] - 2025-06-09
 ### Changed
 - Hardened kernel capability checks and syscall validation.

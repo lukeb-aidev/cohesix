@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: OPEN_SOURCE_DEPENDENCIES.md v0.3
+// Filename: OPEN_SOURCE_DEPENDENCIES.md v0.4
 // Author: Lukas Bower
-// Date Modified: 2025-07-15
+// Date Modified: 2025-07-20
 # Open Source Dependencies
 
 | Name | Version | SPDX License | Purpose | Upstream |
@@ -21,3 +21,4 @@
 | serde_json | 1 | MIT OR Apache-2.0 | JSON serialization | https://crates.io/crates/serde_json |
 | sdl2 | 0.37 | MIT | Windowing & input | https://crates.io/crates/sdl2 |
 | cobra | 1.8.0 | Apache-2.0 | Go CLI framework | https://github.com/spf13/cobra |
+| chi | v5 | MIT | HTTP router for GUI orchestrator | https://github.com/go-chi/chi |
