@@ -1,11 +1,12 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: registry.rs v0.2
+// Filename: registry.rs v0.3
 // Author: Lukas Bower
 // Date Modified: 2025-07-18
 
 use std::path::Path;
 
 use crate::coh_cc::parser::input_type::CohInput;
+use crate::coh_cc::toolchain::Toolchain;
 
 pub trait CompilerBackend {
     fn compile(
@@ -14,6 +15,7 @@ pub trait CompilerBackend {
         out_path: &Path,
         target: &str,
         sysroot: &Path,
+        toolchain: &Toolchain,
     ) -> anyhow::Result<()>;
 }
 

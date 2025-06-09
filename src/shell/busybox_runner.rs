@@ -1,13 +1,14 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: busybox_runner.rs v0.3
+// Filename: busybox_runner.rs v0.4
 // Author: Lukas Bower
-// Date Modified: 2025-06-25
+// Date Modified: 2025-07-18
 
 //! Execute BusyBox as the interactive shell with role-based command filtering.
 
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
+use std::path::Path;
 use chrono::Utc;
 use std::process;
 
@@ -36,12 +37,25 @@ pub fn spawn_shell() {
         .as_ref()
         .map(|f| Stdio::from(f.try_clone().unwrap()))
         .unwrap_or(Stdio::null());
-    let mut child = Command::new("/bin/busybox")
+    let mut child = match Command::new("/bin/busybox")
         .arg("sh")
         .stdin(stdin)
         .stdout(Stdio::piped())
         .spawn()
-        .unwrap_or_else(|_| panic!("busybox not found"));
+    {
+        Ok(c) => c,
+        Err(e) => {
+            crate::coh_cc::logging::log(
+                "ERROR",
+                "shell",
+                Path::new("/bin/busybox"),
+                Path::new("/dev/console"),
+                &[],
+                &format!("spawn failed: {e}"),
+            );
+            return;
+        }
+    };
 
     let mut console = console.unwrap();
     let mut reader = BufReader::new(console.try_clone().unwrap());

@@ -13,7 +13,7 @@ fn start_test_server(port: u16) -> FsServer {
         port,
         readonly: false,
     };
-    let srv = FsServer::new(cfg);
+    let mut srv = FsServer::new(cfg);
     srv.start().expect("start server");
     srv
 }
