@@ -1,6 +1,6 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Makefile v0.6
-# Date Modified: 2025-07-05
+# Filename: Makefile v0.7
+# Date Modified: 2025-07-15
 # Author: Lukas Bower
 #
 # ─────────────────────────────────────────────────────────────
@@ -40,3 +40,8 @@ help:
 	@echo "  go-build  – vet Go workspace"
 	@echo "  go-test   – run Go unit tests"
 	@echo "  c-shims   – compile seL4 boot trampoline"
+man: third_party/mandoc/mandoc
+	cp third_party/mandoc/mandoc bin/cohman
+
+
+

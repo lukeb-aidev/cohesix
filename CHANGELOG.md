@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.39
-// Date Modified: 2025-06-08
+// Filename: CHANGELOG.md v0.40
+// Date Modified: 2025-07-15
 
 ## [v0.61] - 2025-06-08
 ### Added
@@ -46,6 +46,9 @@
 ### Added
 - Integrated `cohesix-9p` server with upstream `ninep` crate.
 - Added adapter helpers and basic 9P integration tests.
+## [v0.63] - 2025-07-16
+### Added
+- Offline mandoc build via coh_cc and new cohman wrapper.
 
 ## [v0.59] - 2025-07-14
 ### Added

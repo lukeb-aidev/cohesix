@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: METADATA.md v3.4
+// Filename: METADATA.md v3.5
 // Author: Lukas Bower
 // Date Modified: 2025-07-15
 
@@ -60,6 +60,8 @@
 | cohcap.1                  | v0.2    | 2025-07-15    | COMMUNITY      |     |              |
 | cohcc.1                   | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
 | cohcli.1                  | v0.2    | 2025-07-14    | COMMUNITY      |     |              |
+| cohman.1                 | v0.1    | 2025-07-15    | COMMUNITY      |     |
+            |
 | cohrole.1                 | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
 | cohrun.1                  | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
 | cohtrace.1                | v0.2    | 2025-07-15    | COMMUNITY      |     |              |
