@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: METADATA.md v3.5
+// Filename: METADATA.md v3.6
 // Author: Lukas Bower
-// Date Modified: 2025-07-16
+// Date Modified: 2025-07-20
 
 ## Canonical Documents
 
@@ -15,7 +15,7 @@
 | COMMERCIAL_PLAN.md         | v1.5    | 2025-06-08    | PRIVATE        |            |              |
 | DEPENDENCIES.md            | v0.5    | 2025-07-06    | COMMUNITY      |            |              |
 | MISSION.md                 | v1.9    | 2025-05-24    | COMMUNITY      |            |              |
-| METADATA.md                | v3.5    | 2025-07-16    | COMMUNITY      |            |              |
+| METADATA.md                | v3.6    | 2025-07-20    | COMMUNITY      |            |              |
 | OSS_REUSE.md               | v1.6    | 2025-07-13    | COMMUNITY      |            |              |
 | PROJECT_OVERVIEW.md        | v1.6    | 2025-05-24    | COMMUNITY      |            |              |
 | Q_DAY.md                   | v1.0    | 2025-05-31    | PRIVATE        |            |              |
@@ -99,3 +99,4 @@
 | SIM_TESTS.md               | v0.1    | 2025-07-13    | COMMUNITY      |     |             |
 | devices/HOTPLUG.md | v0.1 | 2025-07-14 | COMMUNITY | | |
 | INSTRUCTION_BLOCK.md | v3.6 | 2025-06-07 | COMMUNITY | | |
+| resources/add.cu           | v0.1    | 2025-07-20    | COMMUNITY      |     |              |
