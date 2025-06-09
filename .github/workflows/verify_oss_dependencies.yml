@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: verify_oss_dependencies.yml v0.1
+# Filename: verify_oss_dependencies.yml v0.2
 # Author: Lukas Bower
-# Date Modified: 2025-07-12
+# Date Modified: 2025-07-16
 
 name: OSS Dependency Audit
 
@@ -23,10 +23,20 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.x'
-      - name: Run audit
-        run: |
-          scripts/run_oss_audit.sh --demo --output oss_audit_out
-      - name: Check results
-        run: |
-          test -f oss_audit_out/OPEN_SOURCE_DEPENDENCIES.md
-          test -f oss_audit_out/LICENSE_MATRIX.md
+        - name: Run audit
+          run: |
+            scripts/run_oss_audit.sh --demo --output oss_audit_out
+        - name: Install syft
+          run: |
+            curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sudo sh -s -- -b /usr/local/bin
+        - name: Generate SBOM
+          run: syft packages dir:. > sbom.spdx
+        - name: Upload SBOM
+          uses: actions/upload-artifact@v3
+          with:
+            name: sbom
+            path: sbom.spdx
+        - name: Check results
+          run: |
+            test -f oss_audit_out/OPEN_SOURCE_DEPENDENCIES.md
+            test -f oss_audit_out/LICENSE_MATRIX.md
