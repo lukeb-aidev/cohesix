@@ -1,16 +1,19 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: go.mod v0.2
-// Date Modified: 2025-06-01
+// Filename: go.mod v0.3
+// Date Modified: 2025-07-21
 // Author: Lukas Bower
 
 module cohesix/internal
 
-go 1.22
+go 1.23.0
+
+toolchain go1.23.8
 
 require (
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/go-chi/chi/v5 v5.0.10
 	github.com/spf13/cobra v1.8.0
+	golang.org/x/time v0.12.0
 )
 
 require (
