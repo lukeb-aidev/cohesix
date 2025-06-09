@@ -7,6 +7,11 @@
 - Cleaned METADATA duplicate entries and normalized license files.
 - Bumped versions for `OPEN_SOURCE_DEPENDENCIES.md` and `LICENSE_MATRIX.md`.
 
+## [v0.61] - 2025-07-15
+### Added
+- Mutex-protected state and structured logging for Go agent SDK.
+- Graceful shutdown and fault-injection tests covering cancellations and timeouts.
+
 ## [v0.59] - 2025-07-14
 ### Added
 - Restored `INSTRUCTION_BLOCK.md` with v3.6 workflow rules.
