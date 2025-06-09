@@ -1,7 +1,10 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: slm_decryptor.rs v0.1
-// Date Modified: 2025-07-10
-// Author: Cohesix Codex
+// Filename: slm_validate_decryptor.rs v0.2
+// Author: Lukas Bower
+// Date Modified: 2025-07-22
+// SPDX-License-Identifier: Apache-2.0
+// SLM Action: validate
+// Target: decryptor
 
 use cohesix::slm::decryptor::{SLMDecryptor};
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
