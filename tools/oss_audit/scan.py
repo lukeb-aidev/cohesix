@@ -120,7 +120,7 @@ def run_audit(paths: list[str], outdir: str) -> None:
 def main():
     parser = argparse.ArgumentParser(description='Cohesix OSS dependency audit')
     parser.add_argument('paths', nargs='*', default=['.'])
-    parser.add_argument('--output', default='docs/community')
+    parser.add_argument('--output', default='docs/community/governance')
     parser.add_argument('--demo', action='store_true', help='generate small demo output')
     args = parser.parse_args()
     if args.demo:

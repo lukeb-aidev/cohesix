@@ -13,11 +13,11 @@ DOCS = ROOT / "docs" / "community"
 MAN = ROOT / "docs" / "man"
 
 mapping = {
-    "CLI_HELP_COHCLI.md": "cohcli.1",
-    "CLI_HELP_COHRUN.md": "cohrun.1",
-    "CLI_HELP_COHCC.md": "cohcc.1",
-    "CLI_HELP_COHCAP.md": "cohcap.1",
-    "CLI_HELP_COHTRACE.md": "cohtrace.1",
+    "cli/CLI_HELP_COHCLI.md": "cohcli.1",
+    "cli/CLI_HELP_COHRUN.md": "cohrun.1",
+    "cli/CLI_HELP_COHCC.md": "cohcc.1",
+    "cli/CLI_HELP_COHCAP.md": "cohcap.1",
+    "cli/CLI_HELP_COHTRACE.md": "cohtrace.1",
 }
 
 

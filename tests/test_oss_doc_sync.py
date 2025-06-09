@@ -8,7 +8,7 @@
 import tomli
 from pathlib import Path
 
-DOC = Path('docs/community/OPEN_SOURCE_DEPENDENCIES.md').read_text()
+DOC = Path('docs/community/governance/OPEN_SOURCE_DEPENDENCIES.md').read_text()
 
 CARGO = Path('Cargo.toml')
 
