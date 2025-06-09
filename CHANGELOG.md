@@ -1,6 +1,12 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.38
+// Filename: CHANGELOG.md v0.39
 // Date Modified: 2025-07-15
+
+## [v0.61] - 2025-07-15
+### Added
+- Python validator rules engine with structured dispatch and timeouts.
+- Kiosk loop watchdog with clean shutdown.
+- Agent SDK version tag and migration tests.
 
 ## [v0.60] - 2025-07-15
 ### Changed
