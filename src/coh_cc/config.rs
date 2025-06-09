@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: config.rs v0.2
+// Filename: config.rs v0.3
 // Author: Lukas Bower
 // Date Modified: 2025-07-18
 
@@ -13,6 +13,8 @@ pub struct Cli {
     pub command: Command,
     #[arg(long, default_value = "tcc")]
     pub backend: String,
+    #[arg(long, default_value = "/mnt/data/toolchain")]
+    pub toolchain_dir: String,
     #[arg(long)]
     pub trace: bool,
     #[arg(long = "sandbox-info")]
@@ -41,6 +43,7 @@ pub struct Config {
     pub trace: bool,
     pub target: String,
     pub sysroot: PathBuf,
+    pub toolchain_dir: PathBuf,
 }
 
 impl Config {
@@ -48,14 +51,18 @@ impl Config {
         let (target, sysroot) = match &cli.command {
             Command::Build { target, sysroot, .. } => (target.clone(), PathBuf::from(sysroot)),
         };
-        let sysroot_canon = sysroot.canonicalize()?;
+        let sysroot_canon = sysroot.canonicalize().unwrap_or(sysroot);
         if !sysroot_canon.starts_with("/mnt/data") {
             anyhow::bail!("sysroot must be under /mnt/data");
+        }
+        let tc_canon = PathBuf::from(&cli.toolchain_dir).canonicalize().unwrap_or(PathBuf::from(&cli.toolchain_dir));
+        if !tc_canon.starts_with("/mnt/data") {
+            anyhow::bail!("toolchain-dir must be under /mnt/data");
         }
         if target.is_empty() {
             anyhow::bail!("target must not be empty");
         }
-        Ok(Config { backend: cli.backend.clone(), trace: cli.trace, target, sysroot: sysroot_canon })
+        Ok(Config { backend: cli.backend.clone(), trace: cli.trace, target, sysroot: sysroot_canon, toolchain_dir: tc_canon })
     }
 
     pub fn valid_output(&self, path: &str) -> bool {
