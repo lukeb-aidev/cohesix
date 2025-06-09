@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: AGENTS_AND_CLI.md v1.0
+// Filename: AGENTS_AND_CLI.md v1.1
 // Author: Lukas Bower
-// Date Modified: 2025-06-20
+// Date Modified: 2025-07-18
 
 # Agents and CLI
 
@@ -33,6 +33,7 @@ Agents checkpoint every 10 files and log to `codex_logs/`. Recovery uses `tools/
 - **cohtrace** – trace inspection and federation utilities
 - **cohcc** – compiler front-end for Cohesix IR
 - **cohcap** – capability management for demo scenarios
+- **cohshell** – wrapper for Cohesix BusyBox; symlink to `/bin/sh` for minimal rootfs
 
 Example usage:
 ```bash

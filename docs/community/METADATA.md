@@ -42,7 +42,7 @@
 | COMPILER_REVIEW.md         | v0.1    | 2025-07-11    | COMMUNITY      |          |              
 | OPEN_SOURCE_DEPENDENCIES.md | v0.3    | 2025-07-15    | COMMUNITY      |     |              |
 | LICENSE_MATRIX.md           | v0.2    | 2025-07-15    | COMMUNITY      |     |              |
-| AGENTS_AND_CLI.md          | v1.0    | 2025-06-20    | COMMUNITY      |     |              |
+| AGENTS_AND_CLI.md          | v1.1    | 2025-07-18    | COMMUNITY      |     |              |
 | AGENTS.md                 | v2.1    | 2025-07-13    | COMMUNITY      |     |              |
 | DEMO_SCENARIOS.md          | v1.0    | 2025-06-20    | COMMUNITY      |     |              |
 | VALIDATION_AND_TESTING.md  | v1.1    | 2025-07-14    | COMMUNITY      |     |              |
