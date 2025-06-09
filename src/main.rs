@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: main.rs v1.0
-// Date Modified: 2025-05-27
+// Filename: main.rs v1.1
+// Date Modified: 2025-07-15
 // Author: Lukas Bower
 // Status: 🟢 Hydrated
 
@@ -12,8 +12,54 @@ use env_logger;
 
 fn main() {
     env_logger::init();
-    if let Err(err) = cli::run() {
-        eprintln!("Error: {}", err);
-        std::process::exit(1);
+    let result = std::panic::catch_unwind(|| {
+        if let Err(err) = cli::run() {
+            eprintln!("Error: {}", err);
+            std::process::exit(1);
+        }
+    });
+
+    use std::fs::{self, OpenOptions};
+    use std::io::Write;
+
+    match result {
+        Ok(_) => {
+            let mut log = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("/log/sandbox_boot.log")
+                .or_else(|_| {
+                    fs::create_dir_all("/log").ok();
+                    OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open("/log/sandbox_boot.log")
+                })
+                .expect("log file");
+            let _ = writeln!(log, "startup complete");
+            cohesix::sandbox::validate();
+        }
+        Err(e) => {
+            let mut log = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("/log/sandbox_boot.log")
+                .or_else(|_| {
+                    fs::create_dir_all("/log").ok();
+                    OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open("/log/sandbox_boot.log")
+                })
+                .expect("log file");
+            let _ = writeln!(log, "panic captured: {:?}", e);
+            if let Err(err) = cli::run() {
+                let _ = writeln!(log, "recovery failed: {}", err);
+                eprintln!("Error: {}", err);
+                std::process::exit(1);
+            }
+            let _ = writeln!(log, "recovered successfully");
+            cohesix::sandbox::validate();
+        }
     }
 }

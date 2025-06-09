@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: bootloader.c v0.2
+// Filename: bootloader.c v0.3
 // Author: Lukas Bower
-// Date Modified: 2025-06-25
+// Date Modified: 2025-07-15
 // SPDX-License-Identifier: MIT
 //
 // Cohesix OS bootloader (seL4 root task)
@@ -11,26 +11,36 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <time.h>
+
+extern int boot_trampoline_crc_ok;
 
 static const char *detect_role(void) {
     const char *role = getenv("cohrole");
     static char buf[32];
-    FILE *f;
+    FILE *f = NULL;
 
     if (role && *role)
         return role;
 
-    f = fopen("/boot/cohrole.txt", "r");
+    f = fopen("/srv/cohrole", "r");
     if (f) {
         if (fgets(buf, sizeof(buf), f)) {
             buf[strcspn(buf, "\r\n")] = '\0';
             fclose(f);
-            return buf;
+            if (strcmp(buf, "QueenPrimary") == 0 ||
+                strcmp(buf, "KioskInteractive") == 0 ||
+                strcmp(buf, "DroneWorker") == 0 ||
+                strcmp(buf, "GlassesAgent") == 0 ||
+                strcmp(buf, "SensorRelay") == 0 ||
+                strcmp(buf, "SimulatorTest") == 0)
+                return buf;
+        } else {
+            fclose(f);
         }
-        fclose(f);
     }
 
-    return "QueenPrimary"; // default
+    return "DroneWorker";
 }
 
 static void assign_caps(const char *role) {
@@ -58,6 +68,13 @@ int main(void) {
     f = fopen(srv_path, "w");
     if (f) {
         fprintf(f, "%s", role);
+        fclose(f);
+    }
+
+    f = fopen("/log/bootloader_init.log", "a");
+    if (f) {
+        fprintf(f, "%ld, %s, %d\n", (long)time(NULL), role,
+                boot_trampoline_crc_ok);
         fclose(f);
     }
 

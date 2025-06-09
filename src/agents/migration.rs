@@ -23,6 +23,19 @@ pub struct AgentState {
     pub mounts: Vec<(String, String)>,
 }
 
+use crate::agent_transport::AgentTransport;
+use crate::agent_migration::{Migrateable, MigrationStatus};
+use serde_json;
+
+impl Migrateable for AgentState {
+    fn migrate<T: AgentTransport>(&self, peer: &str, transport: &T) -> anyhow::Result<MigrationStatus> {
+        let path = "/tmp/agent_state.json";
+        std::fs::write(path, serde_json::to_vec(self)?)?;
+        transport.send_state("state", peer, path)?;
+        Ok(MigrationStatus::Completed)
+    }
+}
+
 /// Serialize agent state from the local worker.
 pub fn serialize(agent_id: &str) -> anyhow::Result<AgentState> {
     let mut env = HashMap::new();
