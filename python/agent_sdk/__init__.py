@@ -1,9 +1,11 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: __init__.py v0.1
+# Filename: __init__.py v0.2
 # Author: Lukas Bower
-# Date Modified: 2025-07-11
+# Date Modified: 2025-07-15
 
 """Agent SDK providing runtime context helpers."""
+
+__version__ = "0.1.0"
 
 import json
 import os
@@ -20,12 +22,14 @@ class AgentContext:
         self.world_snapshot = self._read_json(f"{BASE}/srv/world_state/world.json")
 
     def _read_text(self, path: str):
+        """Return the text at *path* or ``None`` if unreadable."""
         try:
             return open(path).read().strip()
         except OSError:
             return None
 
     def _read_json(self, path: str):
+        """Return parsed JSON from *path* or an empty dict on failure."""
         try:
             return json.loads(open(path).read())
         except OSError:
