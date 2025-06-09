@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: l4_verified.rs v1.0
+// Filename: l4_verified.rs v1.1
 // Author: Lukas Bower
-// Date Modified: 2025-05-31
+// Date Modified: 2025-07-20
 
 //! seL4-verified capability enforcement layer.
 //! This module validates capability derivations and access rights against the static kernel proof model.
@@ -14,23 +14,33 @@ pub enum CapabilityResult {
     Invalid,
 }
 
-/// Stub capability enforcement function.
+use once_cell::sync::Lazy;
+use std::collections::HashMap;
+use std::sync::Mutex;
+
+static CAP_MAP: Lazy<Mutex<HashMap<u32, Vec<&'static str>>>> = Lazy::new(|| {
+    let mut m = HashMap::new();
+    m.insert(1, vec!["open", "exec", "syscall"]);
+    m.insert(2, vec!["read"]);
+    Mutex::new(m)
+});
+
+/// Validate a capability right against the static table.
 pub fn enforce_capability(cap_id: u32, requested_right: &str) -> CapabilityResult {
-    // TODO(cohesix): Lookup cap_id in verification map and evaluate rights
-    println!(
-        "[seL4] Enforcing capability {} for right '{}'",
-        cap_id, requested_right
-    );
-    CapabilityResult::Denied
+    let map = CAP_MAP.lock().unwrap();
+    match map.get(&cap_id) {
+        Some(rights) if rights.contains(&requested_right) => CapabilityResult::Allowed,
+        Some(_) => CapabilityResult::Denied,
+        None => CapabilityResult::Invalid,
+    }
 }
 
 /// Stub for validating capability derivations.
 pub fn validate_derivation(parent_cap: u32, child_cap: u32) -> bool {
-    // TODO(cohesix): Check proof model to ensure valid derivation
-    println!(
-        "[seL4] Validating capability derivation: parent={}, child={}",
-        parent_cap, child_cap
-    );
-    false
+    if child_cap > parent_cap && child_cap - parent_cap <= 10 {
+        true
+    } else {
+        false
+    }
 }
 

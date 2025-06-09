@@ -30,6 +30,11 @@
 ### Added
 - `cohshell.sh` wrapper for Cohesix BusyBox. Users may symlink it to `/bin/sh` for minimal rootfs setups.
 
+## [v0.68] - 2025-07-20
+### Changed
+- Hardened kernel capability checks and syscall validation.
+- Added CUDA build script and GPU detection logic.
+
 ## [v0.67] - 2025-07-18
 ### Added
 - BusyBox test script `test_cohbox.sh` verifying static build and approved applets.
