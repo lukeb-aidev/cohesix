@@ -11,6 +11,7 @@ use tempfile::Builder;
 
 #[test]
 fn compile_reproducible() {
+    fs::create_dir_all("/mnt/data").unwrap();
     let dir = Builder::new().prefix("cohcc").tempdir_in("/mnt/data").unwrap();
     std::env::set_current_dir(&dir).unwrap();
     fs::create_dir_all("/log").unwrap();

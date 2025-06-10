@@ -4,6 +4,7 @@
 // Date Modified: 2025-07-13
 
 //! Joystick input via SDL2.
+#![cfg(feature = "joystick")]
 //!
 //! Reads joystick axes and button states and logs them to `/srv/telemetry`
 //! and `/srv/agent_trace/<id>`. Uses SDL2's joystick subsystem and falls back
