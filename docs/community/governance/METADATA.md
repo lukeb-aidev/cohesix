@@ -23,14 +23,13 @@
 | REMOTE_ACCESS.md           | v1.0    | 2025-05-24    | COMMUNITY      |            |              |
 | ROLE_MANIFEST.md           | v1.3    | 2025-07-12    | COMMUNITY      |            |              |
 | NETWORKING.md              | v0.2    | 2025-07-13    | COMMUNITY      |     |              |
-| SHOPPING_LIST.md           | v1.3    | 2025-05-24    | COMMUNITY      |            |              |
-| STATUS_UPDATE_GUIDE.md     | v1.3    | 2025-05-24    | COMMUNITY      |            |              |
+| SHOPPING_LIST.md           | v1.3    | 2025-05-25    | COMMUNITY      |            |              |
+| STATUS_UPDATE_GUIDE.md     | v1.3    | 2025-05-25    | COMMUNITY      |            |              |
 | TEST_GUIDE.md              | v1.4    | 2025-07-12    | COMMUNITY      |            |              |
-| THREAT_MODEL.md            | v1.0    | 2025-05-31    | PRIVATE        |            |              |
+| THREAT_MODEL.md            | v1.0    | 2025-05-27    | PRIVATE        |            |              |
 | TECHNICAL_RISK.md         | v1.1    | 2025-06-08    | PRIVATE        |     |              |
 | WATCHDOG_POLICY.md         | v1.4    | 2025-06-05    | COMMUNITY      |            |              |
 | cli.md                     | v0.3    | 2025-07-12    | COMMUNITY      |     |              |
-| gui_orchestrator.md        | v1.2    | 2025-07-20    | COMMUNITY      |            |              |
 | gui_orchestrator.md        | v1.2    | 2025-07-21    | COMMUNITY      |            |              |
 | FEDERATION.md              | v1.0    | 2025-06-07    | PRIVATE        |            |              |
 | SECURE_BOOT.md             | v1.0    | 2025-06-07    | PRIVATE        |            |              |
