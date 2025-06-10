@@ -3,6 +3,7 @@
 // Author: Cohesix Codex
 // Date Modified: 2025-07-11
 
+#![cfg(feature = "rapier")]
 use cohesix::sim::physics_demo::run_demo;
 use std::fs;
 use std::path::Path;
