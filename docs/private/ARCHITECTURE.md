@@ -1,7 +1,7 @@
 // CLASSIFICATION: PRIVATE
 // Filename: ARCHITECTURE.md v0.3
 // Author: Lukas Bower
-// Date Modified: 2025-05-30
+// Date Modified: 2025-05-31
 
 # Cohesix System Architecture · v0.3 (Private)
 
