@@ -102,6 +102,8 @@ pub fn replay(file: &str) -> anyhow::Result<()> {
             }
             _ => {}
         }
+        // record replayed event for validator hooks
+        event(&ev.agent, "replay", &format!("{} {}", ev.event, ev.detail));
     }
     Ok(())
 }
