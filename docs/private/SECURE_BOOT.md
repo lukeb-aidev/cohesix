@@ -1,6 +1,6 @@
 // CLASSIFICATION: PRIVATE
 // Filename: SECURE_BOOT.md v1.0
-// Author: Codex
+// Author: Lukas Bower
 // Date Modified: 2025-06-07
 
 # Secure Boot and TPM Integration
