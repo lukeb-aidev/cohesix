@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: bootloader.rs v1.1
+// Filename: bootloader.rs v1.2
 // Author: Lukas Bower
-// Date Modified: 2025-07-07
+// Date Modified: 2025-07-22
 //==============================================================================
 // COHESIX · BOOTLOADER MODULE
 //------------------------------------------------------------------------------
@@ -22,6 +22,7 @@ impl BootAgent {
     pub fn init() {
         println!("[BootAgent] Starting bootloader initialization...");
         crate::kernel::kernel_trace::log_init_call("bootloader_init");
+        crate::trace::recorder::event("boot", "init", "start");
         Self::preflight_checks();
 
         let cmdline = std::fs::read_to_string("/proc/cmdline").unwrap_or_default();
@@ -34,6 +35,7 @@ impl BootAgent {
         Self::setup_memory_zones();
         Self::discover_devices();
         Self::prepare_kernel(&ctx);
+        crate::trace::recorder::event("boot", "init", "finish");
         role_hooks::setup(&ctx.role);
     }
 
@@ -43,6 +45,12 @@ impl BootAgent {
         crate::kernel::kernel_trace::log_init_call("preflight_checks");
         if !super::secure_boot::validate_secure_boot() {
             println!("[BootAgent] secure boot validation failed");
+            crate::validator::log_violation(crate::validator::RuleViolation {
+                type_: "boot_secure",
+                file: "bootloader".into(),
+                agent: "BootAgent".into(),
+                time: crate::validator::timestamp(),
+            });
         }
         println!("[BootAgent] platform state OK");
         println!("[BootAgent] I/O ready");
