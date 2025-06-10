@@ -26,12 +26,13 @@ static CAP_MAP: Lazy<Mutex<HashMap<u32, Vec<&'static str>>>> = Lazy::new(|| {
 });
 
 /// Validate a capability right against the static table.
+/// Unknown capability IDs default to `Denied`.
 pub fn enforce_capability(cap_id: u32, requested_right: &str) -> CapabilityResult {
     let map = CAP_MAP.lock().unwrap();
     match map.get(&cap_id) {
         Some(rights) if rights.contains(&requested_right) => CapabilityResult::Allowed,
         Some(_) => CapabilityResult::Denied,
-        None => CapabilityResult::Invalid,
+        None => CapabilityResult::Denied,
     }
 }
 
