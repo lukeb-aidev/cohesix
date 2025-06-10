@@ -1,10 +1,12 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: debugger.rs v1.0
+// Filename: debugger.rs v1.1
 // Author: Lukas Bower
-// Date Modified: 2025-05-31
+// Date Modified: 2025-06-10
 
 //! Role module for the Cohesix `Debugger`.
 //! Provides diagnostic capabilities to inspect runtime state, trace execution, and emit system-level debug information.
+
+use chrono;
 
 /// Trait representing debugger behavior.
 pub trait DebuggerRole {
@@ -30,7 +32,19 @@ impl DebuggerRole for DefaultDebugger {
     fn dump_trace(&self) -> Result<(), String> {
         if self.debug_enabled {
             println!("[debugger] dumping trace...");
-            // TODO(cohesix): Export execution trace
+            use std::fs;
+            use std::path::Path;
+            let src = Path::new("/srv/trace.log");
+            let dst = Path::new("/history").join(format!(
+                "trace_dump_{}.log",
+                chrono::Utc::now().timestamp()
+            ));
+            if let Some(parent) = dst.parent() {
+                fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            }
+            if src.exists() {
+                fs::copy(src, &dst).map_err(|e| e.to_string())?;
+            }
             Ok(())
         } else {
             Err("Debug mode not enabled".into())
@@ -39,8 +53,7 @@ impl DebuggerRole for DefaultDebugger {
 
     fn inspect_state(&self) -> String {
         println!("[debugger] inspecting system state...");
-        // TODO(cohesix): Serialize runtime state snapshot
-        "state_snapshot".to_string()
+        std::fs::read_to_string("/srv/state.json").unwrap_or_else(|_| "unknown".to_string())
     }
 
     fn enable_debug_mode(&mut self, enabled: bool) {

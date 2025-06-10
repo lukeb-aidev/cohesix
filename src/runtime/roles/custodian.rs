@@ -1,10 +1,14 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: custodian.rs v1.0
+// Filename: custodian.rs v1.1
 // Author: Lukas Bower
-// Date Modified: 2025-05-31
+// Date Modified: 2025-06-10
 
 //! Role module for the Cohesix `Custodian`.
 //! The custodian is responsible for overseeing local node integrity, data sanitation, and enforcing local policies on worker nodes.
+
+use std::fs;
+use std::path::Path;
+use serde_json;
 
 /// Trait representing custodian behavior on a worker.
 pub trait CustodianRole {
@@ -19,19 +23,25 @@ pub struct DefaultCustodian;
 impl CustodianRole for DefaultCustodian {
     fn validate_state(&self) -> bool {
         println!("[custodian] validating system state...");
-        // TODO(cohesix): Implement full integrity checks
-        true
+        std::path::Path::new("/srv/sanity.ok").exists()
     }
 
     fn sanitize_node(&mut self) -> Result<(), String> {
         println!("[custodian] sanitizing node...");
-        // TODO(cohesix): Clear temp data, reset caches, etc.
+        let tmp = std::path::Path::new("/tmp/cohesix");
+        if tmp.exists() {
+            std::fs::remove_dir_all(tmp).map_err(|e| e.to_string())?;
+        }
         Ok(())
     }
 
     fn enforce_local_policies(&self) -> Result<(), String> {
         println!("[custodian] enforcing policies...");
-        // TODO(cohesix): Apply configuration rules locally
+        let path = std::path::Path::new("/etc/cohesix/local_policy.json");
+        if path.exists() {
+            let txt = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+            let _v: serde_json::Value = serde_json::from_str(&txt).map_err(|e| e.to_string())?;
+        }
         Ok(())
     }
 }
