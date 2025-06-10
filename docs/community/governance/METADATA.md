@@ -14,8 +14,8 @@
 | BUILD_PLAN.md              | v0.4    | 2025-07-11    | COMMUNITY      |            |              |
 | COMMERCIAL_PLAN.md         | v1.5    | 2025-06-08    | PRIVATE        |            |              |
 | DEPENDENCIES.md            | v0.5    | 2025-07-06    | COMMUNITY      |            |              |
-| METADATA.md                | v3.7    | 2025-07-20    | COMMUNITY      |            |              |
-| OSS_REUSE.md               | v1.6    | 2025-07-13    | COMMUNITY      |            |              |
+| METADATA.md                | v3.9    | 2025-07-22    | COMMUNITY      |            |              |
+| OSS_REUSE.md               | v1.7    | 2025-07-15    | COMMUNITY      |            |              |
 | Q_DAY.md                   | v1.0    | 2025-05-31    | PRIVATE        |            |              |
 | QUEEN_POLICY.md            | v1.1    | 2025-07-12    | PRIVATE        |            |              |
 | README.md                  | v0.1    | 2025-05-24    | PRIVATE        |            |              |
@@ -43,7 +43,7 @@
 | AGENTS_AND_CLI.md          | v1.1    | 2025-07-18    | COMMUNITY      |     |              |
 | AGENTS.md                 | v2.2    | 2025-07-22    | COMMUNITY      |     |              |
 | DEMO_SCENARIOS.md          | v1.0    | 2025-06-20    | COMMUNITY      |     |              |
-| VALIDATION_AND_TESTING.md  | v1.1    | 2025-07-14    | COMMUNITY      |     |              |
+| VALIDATION_AND_TESTING.md  | v1.2    | 2025-07-20    | COMMUNITY      |     |              |
 | CLI_HELP_COHCLI.md         | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
 | CLI_HELP_COHRUN.md         | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
 | CLI_HELP_COHTRACE.md       | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
@@ -95,8 +95,7 @@
 | cohpkg.1                   | v0.1    | 2025-07-13    | COMMUNITY      |     |              |
 | SIM_TESTS.md               | v0.1    | 2025-07-13    | COMMUNITY      |     |             |
 | devices/HOTPLUG.md | v0.1 | 2025-07-14 | COMMUNITY | | |
-| INSTRUCTION_BLOCK.md | v3.6 | 2025-06-07 | COMMUNITY | | |
-| resources/add.cu           | v0.1    | 2025-07-20    | COMMUNITY      |     |              |
+| INSTRUCTION_BLOCK.md | v4.0 | 2025-07-11 | COMMUNITY | | |
 | PROJECT_MANIFEST.md | v0.1 | 2025-07-22 | COMMUNITY | | |
 | tests/gpu_demos/add.cu           | v0.2    | 2025-07-22    | COMMUNITY      |     |              |
 | CodexCheck.md | v0.1 | 2025-07-22 | COMMUNITY | | |
