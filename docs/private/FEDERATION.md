@@ -1,6 +1,6 @@
 // CLASSIFICATION: PRIVATE
 // Filename: FEDERATION.md v1.0
-// Author: Codex
+// Author: Lukas Bower
 // Date Modified: 2025-06-07
 
 # Federation Lifecycle

@@ -1,11 +1,16 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v0.42
-// Date Modified: 2025-06-08
+// Date Modified: 2025-07-22
+## [v0.74] - 2025-07-22
+### Changed
+- Updated METADATA table and canonical doc headers for accuracy.
+
 ## [v0.73] - 2025-07-22
 ### Added
 - GitHub Actions workflow `codex.yml` to run Codex tasks.
 - Simplified `AGENTS.md` task definitions for Codex automation.
 - Added placeholder `log/codex_output.md` for agent output.
+- Bootloader trace hooks emit validator events during initialization.
 
 ## [v0.72] - 2025-06-08
 ### Added

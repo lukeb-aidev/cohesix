@@ -34,7 +34,7 @@ aes = "0.8"
 rand = "0.8"
 v4l = "0.14"
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
-sdl2 = "0.37"
+sdl2 = { version = "0.37", optional = true }
 
 [build-dependencies]
 which = "5.0"
@@ -60,6 +60,7 @@ cuda = ["cust"]
 rapier = ["rapier3d"]
 physics = ["rapier3d"]
 busybox = []
+joystick = ["sdl2"]
 [[bin]]
 name = "cohcc"
 path = "src/coh_cc/main.rs"

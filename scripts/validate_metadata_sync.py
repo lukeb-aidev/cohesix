@@ -10,7 +10,8 @@ import re
 import sys
 from pathlib import Path
 
-METADATA_PATH = Path('docs/community/METADATA.md')
+# Align with repository layout
+METADATA_PATH = Path('docs/community/governance/METADATA.md')
 
 # Regex patterns for headers
 CLASS_RE = re.compile(r"CLASSIFICATION:\s*(\w+)")
@@ -35,38 +36,58 @@ def parse_metadata(path: Path):
 
 
 def check_file(filename: str, version: str, classification: str):
-    possible_paths = [
-        Path('docs/community') / filename,
-        Path('docs/private') / filename,
-        Path('docs/man') / filename,
-        Path('scripts') / filename,
+    search_roots = [
+        Path('.'),
+        Path('docs/community'),
+        Path('docs/private'),
+        Path('docs/man'),
+        Path('docs/devices'),
+        Path('scripts'),
+        Path('resources'),
+        Path('tests'),
     ]
-    for p in possible_paths:
-        if p.exists():
-            with p.open() as f:
-                lines = [next(f, '') for _ in range(5)]
-            found_class = None
-            found_version = None
-            for ln in lines:
-                if found_class is None:
-                    m = CLASS_RE.search(ln)
-                    if m:
-                        found_class = m.group(1)
-                if found_version is None:
-                    m = FILE_RE.search(ln)
-                    if m:
-                        found_version = m.group(1)
-            errors = []
-            if found_class != classification:
-                errors.append(
-                    f"{p}: classification '{found_class}' does not match expected '{classification}'"
-                )
-            if found_version != version:
-                errors.append(
-                    f"{p}: version '{found_version}' does not match expected '{version}'"
-                )
-            return p, errors
-    return None, [f"Missing file: {filename}"]
+    candidates = [p for root in search_roots for p in root.rglob(filename) if p.is_file()]
+    if not candidates:
+        return None, [f"Missing file: {filename}"]
+
+    for p in candidates:
+        with p.open() as f:
+            lines = [next(f, '') for _ in range(5)]
+        found_class = None
+        found_version = None
+        for ln in lines:
+            if found_class is None:
+                m = CLASS_RE.search(ln)
+                if m:
+                    found_class = m.group(1)
+            if found_version is None:
+                m = FILE_RE.search(ln)
+                if m:
+                    found_version = m.group(1)
+        if found_class == classification and found_version == version:
+            return p, []
+
+    # Report mismatches for first candidate if none matched exactly
+    p = candidates[0]
+    errors = []
+    with p.open() as f:
+        lines = [next(f, '') for _ in range(5)]
+    found_class = None
+    found_version = None
+    for ln in lines:
+        if found_class is None:
+            m = CLASS_RE.search(ln)
+            if m:
+                found_class = m.group(1)
+        if found_version is None:
+            m = FILE_RE.search(ln)
+            if m:
+                found_version = m.group(1)
+    if found_class != classification:
+        errors.append(f"{p}: classification '{found_class}' does not match expected '{classification}'")
+    if found_version != version:
+        errors.append(f"{p}: version '{found_version}' does not match expected '{version}'")
+    return p, errors
 
 
 def main():
