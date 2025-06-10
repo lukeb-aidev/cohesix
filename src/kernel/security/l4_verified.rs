@@ -31,7 +31,7 @@ pub fn enforce_capability(cap_id: u32, requested_right: &str) -> CapabilityResul
     match map.get(&cap_id) {
         Some(rights) if rights.contains(&requested_right) => CapabilityResult::Allowed,
         Some(_) => CapabilityResult::Denied,
-        None => CapabilityResult::Invalid,
+        None => CapabilityResult::Denied,
     }
 }
 

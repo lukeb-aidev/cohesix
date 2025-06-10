@@ -5,7 +5,9 @@
 
 use clap::{Parser, Subcommand};
 use cohesix::queen::orchestrator::{QueenOrchestrator, SchedulePolicy};
-use cohesix::sim::{physics_demo, webcam_tilt};
+#[cfg(feature = "rapier")]
+use cohesix::sim::physics_demo;
+use cohesix::sim::webcam_tilt;
 use cohesix::webcam::capture;
 use cohesix::telemetry::trace::init_panic_hook;
 
@@ -18,6 +20,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    #[cfg(feature = "rapier")]
     PhysicsDemo,
     TestWebcam,
     WebcamTilt,
@@ -70,6 +73,7 @@ fn main() {
     init_panic_hook();
     let cli = Cli::parse();
     match cli.command {
+        #[cfg(feature = "rapier")]
         Commands::PhysicsDemo => physics_demo::run_demo(),
         Commands::TestWebcam => {
             if capture::capture_jpeg("/srv/webcam/frame.jpg").is_ok() {
