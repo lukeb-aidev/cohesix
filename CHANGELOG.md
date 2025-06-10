@@ -10,6 +10,7 @@
 - GitHub Actions workflow `codex.yml` to run Codex tasks.
 - Simplified `AGENTS.md` task definitions for Codex automation.
 - Added placeholder `log/codex_output.md` for agent output.
+- Bootloader trace hooks emit validator events during initialization.
 
 ## [v0.72] - 2025-06-08
 ### Added
