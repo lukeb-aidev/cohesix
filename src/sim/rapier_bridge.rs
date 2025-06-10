@@ -77,7 +77,7 @@ impl SimBridge {
 
 fn simulation_loop(rx: Receiver<SimCommand>) {
     fs::create_dir_all("/srv/trace").ok();
-    fs::create_dir_all("sim").ok();
+    fs::create_dir_all("/sim").ok();
     let mut pipeline = PhysicsPipeline::new();
     let gravity = vector![0.0, -9.81, 0.0];
     let integration_parameters = IntegrationParameters::default();
@@ -169,7 +169,7 @@ fn write_state(bodies: &RigidBodySet, step: u64) {
             rot.w
         ));
     }
-    let _ = fs::write("sim/state", &out);
+    let _ = fs::write("/sim/state", &out);
     let _ = OpenOptions::new()
         .create(true)
         .append(true)
@@ -205,7 +205,7 @@ pub fn example_gravity_drop() -> SimObject {
         position: vector![0.0, 5.0, 0.0],
     });
     thread::sleep(Duration::from_millis(50));
-    let state = fs::read_to_string("sim/state").unwrap_or_default();
+    let state = fs::read_to_string("/sim/state").unwrap_or_default();
     let line = state.lines().next().unwrap_or("");
     let parts: Vec<&str> = line.split_whitespace().collect();
     let id = parts.get(0).cloned().unwrap_or("");
@@ -234,7 +234,7 @@ pub fn example_lateral_push() {
 /// Deterministic simulation harness used by tests.
 pub fn deterministic_harness(seed: u64, steps: u32) -> Vec<SimSnapshot> {
     fs::create_dir_all("/srv/trace").ok();
-    fs::create_dir_all("sim").ok();
+    fs::create_dir_all("/sim").ok();
 
     let mut rng = StdRng::seed_from_u64(seed);
     let mut pipeline = PhysicsPipeline::new();
