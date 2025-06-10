@@ -34,13 +34,13 @@ impl TelemetrySyncLoop {
     }
 
     fn run() {
-        fs::create_dir_all("srv").ok();
+        fs::create_dir_all("/srv").ok();
         let mut last = String::new();
         loop {
-            let state = fs::read_to_string("sim/state").unwrap_or_default();
+            let state = fs::read_to_string("/sim/state").unwrap_or_default();
             if state != last {
                 last = state.clone();
-                let _ = fs::write("srv/telemetry", &state);
+                let _ = fs::write("/srv/telemetry", &state);
                 if let Ok(mut f) = OpenOptions::new().append(true).open("/dev/log") {
                     let _ = writeln!(f, "[telemetry_loop] updated state");
                 }
