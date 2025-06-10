@@ -4,7 +4,6 @@
 # Author: Cohesix Codex
 # Date Modified: 2025-07-14
 """Ensure OPEN_SOURCE_DEPENDENCIES.md lists Cargo dependencies."""
-
 try:
     import tomllib as tomli
 except ModuleNotFoundError:
