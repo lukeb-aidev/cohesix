@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: main.go v0.2
-// Date Modified: 2025-06-01
+// Filename: main.go v0.3
+// Date Modified: 2025-06-10
 // Author: Lukas Bower
 //
 // ─────────────────────────────────────────────────────────────
@@ -13,7 +13,8 @@
 //
 // Usage:
 //
-//   go run ./go/cmd/coh-9p-helper --listen :5640
+//	go run ./go/cmd/coh-9p-helper --listen :5640
+//
 // ─────────────────────────────────────────────────────────────
 package main
 
@@ -28,20 +29,15 @@ var listenAddr = flag.String("listen", ":5640", "TCP address to listen on")
 
 func handleConn(c net.Conn) {
 	defer c.Close()
-	buf := make([]byte, 4096)
-
-	for {
-		n, err := c.Read(buf)
-		if err != nil {
-			if err != io.EOF {
-				log.Printf("read error: %v", err)
-			}
-			return
-		}
-		log.Printf("received %d‑byte 9P message (stub)", n)
-
-		// TODO: forward to Unix socket / parse 9P
+	u, err := net.Dial("unix", "/tmp/coh9p.sock")
+	if err != nil {
+		log.Printf("unix dial error: %v", err)
+		return
 	}
+	defer u.Close()
+
+	go io.Copy(u, c)
+	io.Copy(c, u)
 }
 
 func main() {
