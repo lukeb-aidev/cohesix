@@ -1,17 +1,8 @@
-// CLASSIFICATION: COMMUNITY
-// Filename: VALIDATION_SUMMARY.md v0.2
-// Author: Cohesix Codex
-// Date Modified: 2025-06-09
+# ✅ Cohesix Mac Environment Summary
 
-The outstanding capability issues from the 2025-07-13 report have been addressed.
-Unit and integration tests were added for the 9P server, session logging,
-CLI input validation, and documentation consistency. Device hotplug behavior is
-documented. Cargo.lock cleanup resolves previous duplication errors.
+- Role: QueenPrimary
+- CLI Path: ./tools
+- Trace Path: ./traces
+- Python: Python 3.9.6
+- Pip: pip 21.2.4 from /Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/site-packages/pip (python 3.9)
 
-| Timestamp (UTC) | Trace | Summary | Result |
-|-----------------|-------|---------|-------|
-### cohtrace validation runs
-- 2025-07-21 list: validated worker enumeration
-- 2025-07-21 push_trace worker01 examples/trace_example_physics.json – policy ok
-
-- 2025-06-09T09:22:55Z codex validation script – build failures for Rust and Py; Go tests pass
