@@ -1,6 +1,10 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.42
+// Filename: CHANGELOG.md v0.43
 // Date Modified: 2025-07-22
+## [v0.75] - 2025-07-22
+### Added
+- Basic CMake build with native hello library and unit tests for scripts.
+
 ## [v0.74] - 2025-07-22
 ### Changed
 - Updated METADATA table and canonical doc headers for accuracy.
