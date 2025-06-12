@@ -1,0 +1,76 @@
+#cloud-config
+package_update: true
+package_upgrade: true
+
+packages:
+  - build-essential
+  - git
+  - curl
+  - wget
+  - gnupg
+  - ca-certificates
+  - gcc-aarch64-linux-gnu
+  - u-boot-tools
+  - device-tree-compiler
+  - python3
+  - python3-pip
+  - python3-dev
+  - ninja-build
+  - cmake
+  - libxml2-utils
+  - ccache
+  - libncurses-dev
+  - flex
+  - bison
+  - libssl-dev
+  - libffi-dev
+  - libclang-dev
+
+write_files:
+  - path: /home/ubuntu/setup.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      set -e
+
+      echo "Setting up development environment..."
+      
+      # Install Rust with aarch64 target
+      echo "Installing Rust..."
+      curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+      source $HOME/.cargo/env
+      rustup target add aarch64-unknown-linux-gnu
+      
+      # Install Go via Snap
+      echo "Installing Go..."
+      snap install go --classic
+      
+      # Install Docker
+      echo "Installing Docker..."
+      curl -fsSL https://get.docker.com -o get-docker.sh
+      sh get-docker.sh
+      sudo usermod -aG docker ubuntu
+      
+      # Build and install Busybox from source
+      echo "Building Busybox..."
+      cd $HOME
+      git clone https://git.busybox.net/busybox
+      cd busybox
+      make defconfig
+      make -j$(nproc)
+      sudo make install
+      
+      # Clone seL4 repo
+      echo "Cloning seL4 repository..."
+      cd $HOME
+      git clone https://github.com/seL4/seL4.git
+      
+      # Pull NVIDIA L4T Docker image
+      echo "Pulling NVIDIA L4T Docker image..."
+      docker pull nvcr.io/nvidia/l4t-base:r35.2.1
+      
+      echo "Setup complete!"
+
+runcmd:
+  - su - ubuntu -c "/home/ubuntu/setup.sh"
+  - echo "Instance setup completed at $(date)" >> /var/log/instance-setup.log
