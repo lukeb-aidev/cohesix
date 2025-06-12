@@ -11,7 +11,8 @@ use crate::queen::trust;
 
 #[derive(Deserialize)]
 struct TiltTrace {
-    offset: f32,
+    #[serde(rename = "offset")]
+    _offset: f32,
     angle: f32,
 }
 

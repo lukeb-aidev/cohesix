@@ -11,6 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::trace::recorder;
 
+/// Persist and restore worker role metadata.
 pub struct RoleMemory;
 
 impl RoleMemory {
