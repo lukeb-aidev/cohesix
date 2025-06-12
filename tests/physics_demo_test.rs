@@ -5,7 +5,9 @@
 
 #[cfg(feature = "rapier")]
 use cohesix::sim::physics_demo::run_demo;
+#[cfg(feature = "rapier")]
 use std::fs;
+#[cfg(feature = "rapier")]
 use std::path::Path;
 
 #[cfg(feature = "rapier")]
