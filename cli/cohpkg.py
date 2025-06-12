@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-// CLASSIFICATION: COMMUNITY
-// Filename: cohpkg.py v0.2
-// Author: Lukas Bower
-// Date Modified: 2025-07-15
+# CLASSIFICATION: COMMUNITY
+# Filename: cohpkg.py v0.2
+# Author: Lukas Bower
+# Date Modified: 2025-07-15
 """cohpkg – minimal package manager for Cohesix."""
 
 import argparse
