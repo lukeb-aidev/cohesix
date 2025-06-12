@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: 9p_server.rs v0.1
-// Date Modified: 2025-07-14
+// Filename: 9p_server.rs v0.2
+// Date Modified: 2025-07-22
 // Author: Cohesix Codex
 
 #[path = "../src/lib/9p/server.rs"]
@@ -10,6 +10,21 @@ mod protocol;
 use server::handle_9p_session;
 use protocol::{parse_message, P9Message};
 use serial_test::serial;
+use tempfile::tempdir;
+use std::io;
+use std::path::PathBuf;
+
+struct TestEnv {
+    _dir: tempfile::TempDir,
+    cohrole: PathBuf,
+}
+
+fn setup(role: &str) -> io::Result<TestEnv> {
+    let dir = tempdir()?;
+    let cohrole = dir.path().join("cohrole");
+    std::fs::write(&cohrole, role)?;
+    Ok(TestEnv { _dir: dir, cohrole })
+}
 
 fn msg(op: u8, path: &str) -> Vec<u8> {
     let mut v = vec![op];
@@ -19,17 +34,22 @@ fn msg(op: u8, path: &str) -> Vec<u8> {
 
 #[test]
 #[serial]
-fn walk_srv() {
-    std::fs::create_dir_all("/srv").unwrap();
-    std::fs::write("/srv/cohrole", "QueenPrimary").unwrap();
+fn walk_srv() -> io::Result<()> {
+    let env = setup("QueenPrimary")?;
+    std::env::set_var("COHROLE_PATH", &env.cohrole);
     let resp = handle_9p_session(&msg(0x03, "/srv"));
+    std::env::remove_var("COHROLE_PATH");
     assert!(matches!(parse_message(&resp), P9Message::Rwalk));
+    Ok(())
 }
 
 #[test]
 #[serial]
-fn worker_write_denied() {
-    std::fs::write("/srv/cohrole", "DroneWorker").unwrap();
+fn worker_write_denied() -> io::Result<()> {
+    let env = setup("DroneWorker")?;
+    std::env::set_var("COHROLE_PATH", &env.cohrole);
     let resp = handle_9p_session(&msg(0x09, "/proc/x"));
+    std::env::remove_var("COHROLE_PATH");
     assert!(matches!(parse_message(&resp), P9Message::Unknown(0xfd)));
+    Ok(())
 }
