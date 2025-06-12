@@ -36,8 +36,15 @@ fi
 echo "🦀 Building Rust components..."
 cargo build --release
 
-echo "🧪 Running Rust tests..."
-cargo test --release || true
+echo "🔍 Running Rust tests with detailed output..."
+cargo test --release -- --nocapture 2>&1 | tee rust_test_output.log
+TEST_EXIT_CODE=${PIPESTATUS[0]}
+if [ $TEST_EXIT_CODE -ne 0 ]; then
+  echo "❌ Rust tests failed. See rust_test_output.log for details."
+  exit $TEST_EXIT_CODE
+else
+  echo "✅ Rust tests passed."
+fi
 
 echo "🐹 Building Go components..."
 if [ -f go.mod ]; then
