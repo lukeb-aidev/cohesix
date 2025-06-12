@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: METADATA.md v3.9
+// Filename: METADATA.md v3.10
 // Author: Lukas Bower
 // Date Modified: 2025-07-22
 
@@ -98,3 +98,7 @@
 | PROJECT_MANIFEST.md | v0.1 | 2025-07-22 | COMMUNITY | | |
 | tests/gpu_demos/add.cu           | v0.2    | 2025-07-22    | COMMUNITY      |     |              |
 | CodexCheck.md | v0.1 | 2025-07-22 | COMMUNITY | | |
+| CMakeLists.txt | v0.1 | 2025-07-22 | COMMUNITY | | |
+| native/hello.cpp | v0.1 | 2025-07-22 | COMMUNITY | | |
+| native/hello.h | v0.1 | 2025-07-22 | COMMUNITY | | |
+| README_NATIVE.md | v0.1 | 2025-07-22 | COMMUNITY | | |
