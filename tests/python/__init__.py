@@ -1,7 +1,4 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: pytest.ini v0.2
+# Filename: __init__.py v0.1
 # Author: Lukas Bower
 # Date Modified: 2025-07-22
-
-[pytest]
-testpaths = tests tests/python
