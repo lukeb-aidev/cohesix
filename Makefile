@@ -1,6 +1,6 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Makefile v0.8
-# Date Modified: 2025-06-08
+# Filename: Makefile v0.9
+# Date Modified: 2025-07-22
 # Author: Lukas Bower
 #
 # ─────────────────────────────────────────────────────────────
@@ -19,6 +19,17 @@ PLATFORM ?= $(shell uname -m)
 .PHONY: all go-build go-test c-shims help cohrun cohbuild cohtrace cohcap
 
 all: go-build go-test c-shims
+
+.PHONY: test
+test:
+@echo "🦀 Rust tests …"
+@RUST_BACKTRACE=1 cargo test --release
+@echo "🐍 Python tests …"
+@pytest -v
+@echo "🐹 Go tests …"
+@go test ./...
+@echo "🧱 C tests …"
+@cd build && ctest --output-on-failure || true
 
 go-build:
 	@echo "🔧 Go vet …"
