@@ -37,7 +37,7 @@ echo "🦀 Building Rust components..."
 cargo build --release
 
 echo "🔍 Running Rust tests with detailed output..."
-cargo test --release -- --nocapture 2>&1 | tee rust_test_output.log
+RUST_BACKTRACE=1 cargo test --release -- --nocapture 2>&1 | tee rust_test_output.log
 TEST_EXIT_CODE=${PIPESTATUS[0]}
 if [ $TEST_EXIT_CODE -ne 0 ]; then
   echo "❌ Rust tests failed. See rust_test_output.log for details."
@@ -49,11 +49,12 @@ fi
 echo "🐹 Building Go components..."
 if [ -f go.mod ]; then
   go build ./...
+  go test ./...
 fi
 
 echo "🐍 Running Python tests (pytest)..."
-if command -v pytest &> /dev/null && [ -d "tests_py" ]; then
-  pytest tests_py || true
+if command -v pytest &> /dev/null; then
+  pytest -v || true
 fi
 
 echo "🧱 CMake config (if present)..."
@@ -61,6 +62,7 @@ if [ -f CMakeLists.txt ]; then
   mkdir -p build && cd build
   cmake ..
   make -j$(nproc)
+  ctest --output-on-failure || true
   cd ..
 fi
 
