@@ -9,7 +9,9 @@
 use crate::runtime::ServiceRegistry;
 use libloading::{Library, Symbol};
 use crate::validator::{self, RuleViolation};
-use log::{info, warn};
+#[cfg(feature = "cuda")]
+use log::info;
+use log::warn;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 #[cfg(feature = "cuda")]

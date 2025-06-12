@@ -8,7 +8,6 @@
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
 use aead::Aead;
 use ring::signature::{UnparsedPublicKey, ED25519};
-use rand::random;
 use std::fs;
 
 /// Memory token representing access to a decrypted SLM payload.

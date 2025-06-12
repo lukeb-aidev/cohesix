@@ -9,6 +9,7 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+/// Monitor the queen heartbeat and self-promote on failure.
 pub struct QueenWatchdog {
     miss_count: u32,
     threshold: u32,

@@ -8,6 +8,7 @@
 use crate::world_model::WorldModelSnapshot;
 use std::fs;
 
+/// Synchronise world model state from the Queen.
 pub struct WorkerWorldSync;
 
 impl WorkerWorldSync {
