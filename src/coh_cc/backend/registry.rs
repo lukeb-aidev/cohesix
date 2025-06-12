@@ -7,7 +7,6 @@ use std::path::Path;
 
 use crate::coh_cc::parser::input_type::CohInput;
 use crate::coh_cc::toolchain::Toolchain;
-use crate::coh_cc::backend::zig::ZigBackend;
 
 pub trait CompilerBackend {
     fn compile(

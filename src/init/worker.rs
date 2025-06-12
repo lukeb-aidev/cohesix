@@ -7,7 +7,6 @@
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use rand::random;
 use crate::plan9::namespace::NamespaceLoader;
 use cohesix_9p::fs::InMemoryFs;
 
