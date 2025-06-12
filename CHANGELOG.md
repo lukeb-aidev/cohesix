@@ -5,6 +5,11 @@
 ### Changed
 - Updated METADATA table and canonical doc headers for accuracy.
 
+## [v0.75] - 2025-07-22
+### Fixed
+- Tests use temporary directories for 9P server permission isolation.
+- 9P server reads `COHROLE_PATH` env var when provided.
+
 ## [v0.73] - 2025-07-22
 ### Added
 - GitHub Actions workflow `codex.yml` to run Codex tasks.
