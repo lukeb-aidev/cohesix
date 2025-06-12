@@ -8,6 +8,7 @@
 
 /// 9P message types.
 #[derive(Debug)]
+#[allow(dead_code)]
 pub enum P9Message {
     Tversion,
     Rversion,
@@ -37,6 +38,7 @@ pub enum P9Message {
 }
 
 /// 9P tag used to match request/response pairs.
+#[allow(dead_code)]
 pub type Tag = u16;
 
 /// Very small parser for demo purposes. Expects the first byte to encode the

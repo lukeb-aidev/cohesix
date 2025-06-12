@@ -6,7 +6,6 @@
 use cohfuzz::fuzzer::TraceFuzzer;
 use std::path::PathBuf;
 use clap::Parser;
-use cohesix::telemetry::trace::init_panic_hook;
 
 #[derive(Parser)]
 struct Args {
@@ -19,7 +18,6 @@ struct Args {
 }
 
 fn main() -> anyhow::Result<()> {
-    init_panic_hook();
     let args = Args::parse();
     let fuzzer = TraceFuzzer::new(args.role);
     fuzzer.run(&args.input, args.iterations)?;
