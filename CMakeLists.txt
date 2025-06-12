@@ -1,11 +1,13 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: CMakeLists.txt v0.1
+# Filename: CMakeLists.txt v0.2
 # Author: Lukas Bower
 # Date Modified: 2025-07-22
 
 cmake_minimum_required(VERSION 3.14)
-project(CohesixNative LANGUAGES CXX)
+project(CohesixNative LANGUAGES C CXX)
 
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -15,7 +17,10 @@ if(CUDA_FOUND)
     enable_language(CUDA)
 endif()
 
-# Future Rust integration via cxx crate
+file(GLOB SRC_C src/c/*.c)
+if(NOT SRC_C)
+    set(SRC_C src/c/placeholder.c)
+endif()
 
-add_library(hello STATIC native/hello.cpp)
-target_include_directories(hello PUBLIC native)
+add_library(cohesix_c STATIC ${SRC_C})
+target_include_directories(cohesix_c PUBLIC src/c)

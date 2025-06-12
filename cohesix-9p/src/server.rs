@@ -5,12 +5,12 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 
-use anyhow::{anyhow, Result as AnyResult};
-use log::{info, warn};
 use crate::ninep_adapter::{read_slice, verify_open};
+use anyhow::{Result as AnyResult, anyhow};
+use log::{info, warn};
 use ninep::{
     client::TcpClient,
     fs::{FileMeta, IoUnit, Mode, Perm, QID_ROOT, Stat},
@@ -96,6 +96,8 @@ impl CohesixFs {
     }
 
     /// Mount a remote 9P server under the provided mountpoint.
+    #[allow(dead_code)]
+    // TODO: expose once remote mount functionality is used by runtime
     pub fn _mount_remote(&self, mountpoint: &str, addr: &str) -> AnyResult<()> {
         let client = TcpClient::new_tcp("cohesix".to_string(), addr, "/")?;
         match self.remotes.lock() {
@@ -125,7 +127,13 @@ impl CohesixFs {
 }
 
 impl Serve9p for CohesixFs {
-    fn walk(&mut self, _cid: ClientId, parent_qid: u64, child: &str, _uname: &str) -> ninep::Result<FileMeta> {
+    fn walk(
+        &mut self,
+        _cid: ClientId,
+        parent_qid: u64,
+        child: &str,
+        _uname: &str,
+    ) -> ninep::Result<FileMeta> {
         let base = self.path_for(parent_qid);
         let new_path = if base == "/" {
             format!("/{}", child)
@@ -136,10 +144,7 @@ impl Serve9p for CohesixFs {
             let _ = cli.walk(sub).map_err(|e| e.to_string())?;
         }
         let is_dir = match self.nodes.lock() {
-            Ok(map) => map
-                .get(&new_path)
-                .map(|n| n.is_dir)
-                .unwrap_or(true),
+            Ok(map) => map.get(&new_path).map(|n| n.is_dir).unwrap_or(true),
             Err(poisoned) => poisoned
                 .into_inner()
                 .get(&new_path)
@@ -154,7 +159,13 @@ impl Serve9p for CohesixFs {
         })
     }
 
-    fn open(&mut self, _cid: ClientId, qid: u64, mode: Mode, _uname: &str) -> ninep::Result<IoUnit> {
+    fn open(
+        &mut self,
+        _cid: ClientId,
+        qid: u64,
+        mode: Mode,
+        _uname: &str,
+    ) -> ninep::Result<IoUnit> {
         let path = self.path_for(qid);
         // Opening a file always requires read permissions for now.
         check_perm(&path, Access::Read).map_err(|e| e.to_string())?;
@@ -234,8 +245,7 @@ impl Serve9p for CohesixFs {
     ) -> ninep::Result<ReadOutcome> {
         let path = self.path_for(qid);
         if let Some((sub, mut cli)) = self.remote_client(&path) {
-            let slice = read_slice(&mut cli, &sub, offset, count)
-                .map_err(|e| e.to_string())?;
+            let slice = read_slice(&mut cli, &sub, offset, count).map_err(|e| e.to_string())?;
             return Ok(ReadOutcome::Immediate(slice));
         }
         let nodes = match self.nodes.lock() {
@@ -293,7 +303,9 @@ impl Serve9p for CohesixFs {
         let path = self.path_for(qid);
         check_perm(&path, Access::Write).map_err(|e| e.to_string())?;
         if let Some((sub, mut cli)) = self.remote_client(&path) {
-            let written = cli.write(sub, offset as u64, &data).map_err(|e| e.to_string())?;
+            let written = cli
+                .write(sub, offset as u64, &data)
+                .map_err(|e| e.to_string())?;
             return Ok(written);
         }
         let mut nodes = match self.nodes.lock() {
@@ -349,7 +361,13 @@ impl Serve9p for CohesixFs {
         })
     }
 
-    fn write_stat(&mut self, _cid: ClientId, _qid: u64, _stat: Stat, _uname: &str) -> ninep::Result<()> {
+    fn write_stat(
+        &mut self,
+        _cid: ClientId,
+        _qid: u64,
+        _stat: Stat,
+        _uname: &str,
+    ) -> ninep::Result<()> {
         Err("write_stat not supported".to_string())
     }
 }
