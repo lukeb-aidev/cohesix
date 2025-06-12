@@ -1,11 +1,13 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: CMakeLists.txt v0.2
+# Filename: CMakeLists.txt v0.3
 # Author: Lukas Bower
 # Date Modified: 2025-07-22
 
 cmake_minimum_required(VERSION 3.14)
 cmake_policy(SET CMP0146 NEW)
 project(CohesixNative LANGUAGES C CXX)
+
+option(ENABLE_TESTS "Build C tests" ON)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -25,3 +27,10 @@ endif()
 
 add_library(cohesix_c STATIC ${SRC_C})
 target_include_directories(cohesix_c PUBLIC src/c)
+
+if(ENABLE_TESTS)
+    enable_testing()
+    add_executable(c_tests test/test_c_main.c)
+    target_link_libraries(c_tests PRIVATE cohesix_c)
+    add_test(NAME c-tests COMMAND c_tests)
+endif()
