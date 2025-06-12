@@ -7,6 +7,7 @@
 
 use std::time::{Duration, Instant};
 
+/// Simple frame counter and overlay tool.
 pub struct VisionOverlay {
     frames: u32,
 }

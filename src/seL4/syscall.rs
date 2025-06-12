@@ -11,7 +11,6 @@ use std::io::{Read, Write};
 use std::process;
 use std::process::Command;
 
-use once_cell::sync::Lazy;
 use crate::security::capabilities;
 
 use crate::runtime::env::init::detect_cohrole;

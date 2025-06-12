@@ -46,9 +46,11 @@ struct Node {
     is_dir: bool,
 }
 
+/// In-memory 9P filesystem backing the Cohesix server.
 #[derive(Default)]
 pub struct CohesixFs {
-    root: PathBuf,
+    /// Base path for future persistent storage.
+    _root: PathBuf,
     nodes: Mutex<HashMap<String, Node>>, // path -> node
     qmap: Mutex<HashMap<u64, String>>,   // qid -> path
     next_qid: AtomicU64,
@@ -56,11 +58,12 @@ pub struct CohesixFs {
 }
 
 impl CohesixFs {
+    /// Create a new in-memory filesystem rooted at the given path.
     pub fn new(root: PathBuf) -> Self {
         let mut qmap = HashMap::new();
         qmap.insert(QID_ROOT, String::from("/"));
         Self {
-            root,
+            _root: root,
             nodes: Mutex::new(HashMap::new()),
             qmap: Mutex::new(qmap),
             next_qid: AtomicU64::new(QID_ROOT + 1),
@@ -93,7 +96,7 @@ impl CohesixFs {
     }
 
     /// Mount a remote 9P server under the provided mountpoint.
-    pub fn mount_remote(&self, mountpoint: &str, addr: &str) -> AnyResult<()> {
+    pub fn _mount_remote(&self, mountpoint: &str, addr: &str) -> AnyResult<()> {
         let client = TcpClient::new_tcp("cohesix".to_string(), addr, "/")?;
         match self.remotes.lock() {
             Ok(mut map) => {
@@ -351,16 +354,19 @@ impl Serve9p for CohesixFs {
     }
 }
 
+/// Top-level 9P server wrapper.
 pub struct FsServer {
     cfg: super::FsConfig,
     handle: Option<std::thread::JoinHandle<()>>,
 }
 
 impl FsServer {
+    /// Create a server with the provided configuration.
     pub fn new(cfg: super::FsConfig) -> Self {
         Self { cfg, handle: None }
     }
 
+    /// Start serving over TCP.
     pub fn start(&mut self) -> AnyResult<()> {
         let fs = CohesixFs::new(self.cfg.root.clone());
         let server = Server::new(fs);
@@ -370,6 +376,7 @@ impl FsServer {
         Ok(())
     }
 
+    /// Start serving over a Unix domain socket path.
     pub fn start_socket(&mut self, socket: impl Into<String>) -> AnyResult<()> {
         let path = socket.into();
         let fs = CohesixFs::new(self.cfg.root.clone());

@@ -7,7 +7,6 @@
 
 use crate::sim::introspect::{self, IntrospectionData};
 use serde_json;
-use std::fs;
 
 pub struct BaseAgent {
     id: String,

@@ -11,9 +11,10 @@
 
 use crate::swarm::mesh::ServiceMeshRegistry;
 use crate::runtime::ServiceRegistry;
-use std::fs::{self, OpenOptions};
+use std::fs;
 use std::io::Write;
 
+/// Cluster join/leave helpers for worker nodes.
 pub struct WorkerHotplug;
 
 impl WorkerHotplug {
