@@ -4,6 +4,7 @@
 # Date Modified: 2025-07-22
 
 cmake_minimum_required(VERSION 3.14)
+cmake_policy(SET CMP0146 NEW)
 project(CohesixNative LANGUAGES C CXX)
 
 set(CMAKE_C_STANDARD 11)
@@ -12,8 +13,8 @@ set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Optional CUDA support
-find_package(CUDA)
-if(CUDA_FOUND)
+find_package(CUDAToolkit)
+if(CUDAToolkit_FOUND)
     enable_language(CUDA)
 endif()
 
