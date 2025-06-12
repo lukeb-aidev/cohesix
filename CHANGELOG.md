@@ -1,6 +1,12 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v0.43
 // Date Modified: 2025-07-22
+## [v0.76] - 2025-07-22
+### Added
+- Moved binary logic into library modules with unit tests.
+- Python sanity test scaffold.
+- Updated CMake to build src/c placeholder and detect CUDA.
+
 ## [v0.75] - 2025-07-22
 ### Added
 - Basic CMake build with native hello library and unit tests for scripts.
