@@ -15,14 +15,13 @@ use std::fs;
 #[derive(Default)]
 struct Node {
     data: Vec<u8>,
-    is_dir: bool,
 }
 
 static FS: Lazy<Mutex<HashMap<String, Node>>> = Lazy::new(|| {
     let mut map = HashMap::new();
-    map.insert("/".into(), Node { data: Vec::new(), is_dir: true });
+    map.insert("/".into(), Node { data: Vec::new() });
     for d in ["/srv", "/proc", "/mnt", "/history"].iter() {
-        map.insert((*d).into(), Node { data: Vec::new(), is_dir: true });
+        map.insert((*d).into(), Node { data: Vec::new() });
     }
     Mutex::new(map)
 });

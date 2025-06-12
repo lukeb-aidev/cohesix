@@ -3,7 +3,7 @@
 // Date Modified: 2025-06-22
 // Author: Cohesix Codex
 
-use cohesix::plan9::namespace::{Namespace, NsOp, BindFlags, NamespaceLoader};
+use cohesix::plan9::namespace::{Namespace, NsOp, NamespaceLoader};
 use cohesix::plan9::syscalls;
 use tempfile::tempdir;
 use serial_test::serial;
