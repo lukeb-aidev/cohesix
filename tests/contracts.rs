@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: contracts.rs v0.2
-// Date Modified: 2025-07-03
+// Filename: contracts.rs v0.3
+// Date Modified: 2025-07-22
 // Author: Cohesix Codex
 
 use cohesix::runtime::ServiceRegistry;
@@ -8,6 +8,22 @@ use serial_test::serial;
 use std::fs;
 use cohesix::agents::runtime::AgentRuntime;
 use cohesix::cohesix_types::Role;
+use std::io::ErrorKind;
+use std::net::TcpListener;
+use libc;
+
+fn can_run_privileged_tests() -> bool {
+    if unsafe { libc::geteuid() } == 0 {
+        return true;
+    }
+    match TcpListener::bind("127.0.0.1:1") {
+        Ok(listener) => {
+            drop(listener);
+            true
+        }
+        Err(e) => e.kind() != ErrorKind::PermissionDenied,
+    }
+}
 
 #[test]
 #[serial]
@@ -19,6 +35,10 @@ fn mountpoint_available() {
 #[test]
 #[serial]
 fn service_registration_contract() {
+    if !can_run_privileged_tests() {
+        eprintln!("Skipping privileged test due to insufficient permissions.");
+        return;
+    }
     fs::create_dir_all("/srv").unwrap();
     fs::write("/srv/cohrole", "DroneWorker").unwrap();
     ServiceRegistry::reset();
@@ -29,6 +49,10 @@ fn service_registration_contract() {
 #[test]
 #[serial]
 fn trace_format_contract() {
+    if !can_run_privileged_tests() {
+        eprintln!("Skipping privileged test due to insufficient permissions.");
+        return;
+    }
     fs::create_dir_all("/srv/trace").unwrap();
     let data = "{\"ts\":0,\"agent\":\"a\",\"event\":\"spawn\",\"detail\":\"/bin/true\",\"ok\":true}";
     fs::write("/srv/trace/live.log", data).unwrap();
@@ -39,6 +63,10 @@ fn trace_format_contract() {
 #[test]
 #[serial]
 fn agent_termination_contract() {
+    if !can_run_privileged_tests() {
+        eprintln!("Skipping privileged test due to insufficient permissions.");
+        return;
+    }
     fs::create_dir_all("/srv").unwrap();
     let mut rt = AgentRuntime::new();
     let args = vec!["true".to_string()];
