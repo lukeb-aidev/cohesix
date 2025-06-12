@@ -187,3 +187,7 @@ pub trait BootableRuntime {
     /// Boot the runtime component.
     fn boot() -> Result<(), CohError>;
 }
+
+/// Binary helper modules
+pub mod binlib;
+
