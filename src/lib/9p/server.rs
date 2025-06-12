@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: server.rs v1.0
+// Filename: server.rs v1.1
 // Author: Lukas Bower
-// Date Modified: 2025-05-31
+// Date Modified: 2025-07-22
 
 //! 9P file server implementation for Cohesix.
 //! Handles incoming 9P requests and routes them to appropriate virtual filesystem backends.
@@ -28,7 +28,11 @@ static FS: Lazy<Mutex<HashMap<String, Node>>> = Lazy::new(|| {
 });
 
 fn cohrole() -> String {
-    fs::read_to_string("/srv/cohrole").unwrap_or_else(|_| "Unknown".into())
+    let path = std::env::var("COHROLE_PATH").unwrap_or_else(|_| "/srv/cohrole".into());
+    fs::read_to_string(&path).unwrap_or_else(|e| {
+        eprintln!("[9P] failed to read cohrole {}: {}", path, e);
+        "Unknown".into()
+    })
 }
 
 fn can_write(role: &str, path: &str) -> bool {
