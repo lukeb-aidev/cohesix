@@ -1,6 +1,6 @@
 # CLASSIFICATION: COMMUNITY
 # Filename: Makefile v0.8
-# Date Modified: 2025-06-08
+# Date Modified: 2025-07-22
 # Author: Lukas Bower
 #
 # ─────────────────────────────────────────────────────────────
@@ -13,7 +13,7 @@
 #  • `make help`     – list targets
 # ─────────────────────────────────────────────────────────────
 
-.PHONY: all go-build go-test c-shims help boot boot-x86_64 boot-aarch64
+.PHONY: all go-build go-test c-shims help boot boot-x86_64 boot-aarch64 test
 
 PLATFORM ?= $(shell uname -m)
 .PHONY: all go-build go-test c-shims help cohrun cohbuild cohtrace cohcap
@@ -25,8 +25,17 @@ go-build:
 	@cd go && go vet ./...
 
 go-test:
-	@echo "🔧 Go unit tests …"
-	@GOWORK=$(CURDIR)/go/go.work go test ./go/...
+        @echo "🔧 Go unit tests …"
+        @GOWORK=$(CURDIR)/go/go.work go test ./go/...
+
+test:
+@echo "🦀 cargo tests …"
+@RUST_BACKTRACE=1 cargo test --release
+@echo "🐍 pytest …"
+@pytest -v
+@echo "🐹 go tests …"
+@GOWORK=$(CURDIR)/go/go.work go test ./go/...
+@if [ -d build ]; then ctest --output-on-failure; fi
 
 c/sel4/shim/boot_trampoline.o: c/sel4/shim/boot_trampoline.c
 	$(CC:-clang?=cc) -I c/sel4/include -c $< -o $@

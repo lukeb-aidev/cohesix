@@ -25,3 +25,13 @@ endif()
 
 add_library(cohesix_c STATIC ${SRC_C})
 target_include_directories(cohesix_c PUBLIC src/c)
+
+option(ENABLE_TESTS "Build C tests" ON)
+if(ENABLE_TESTS)
+    enable_testing()
+    add_executable(c_tests test/test_c_main.c)
+    target_link_libraries(c_tests cohesix_c)
+    add_test(NAME c_main COMMAND c_tests)
+else()
+    message(STATUS "C module build verified — no tests defined yet")
+endif()

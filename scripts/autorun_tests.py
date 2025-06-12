@@ -11,6 +11,7 @@ executes `cargo test`, `go test`, and `pytest`.
 """
 
 import argparse
+import os
 import subprocess
 import time
 from pathlib import Path
@@ -18,9 +19,10 @@ from pathlib import Path
 
 def run_tests() -> None:
     """Execute the standard test suite without halting on failure."""
-    subprocess.run(["cargo", "test", "--workspace"], check=False)
+    env = dict(**os.environ, RUST_BACKTRACE="1")
+    subprocess.run(["cargo", "test", "--workspace"], check=False, env=env)
     subprocess.run(["go", "test", "./go/..."], check=False)
-    subprocess.run(["pytest", "-q"], check=False)
+    subprocess.run(["pytest", "-v"], check=False)
 
 
 def snapshot() -> dict[str, float]:

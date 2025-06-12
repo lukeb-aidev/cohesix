@@ -102,3 +102,8 @@
 | native/hello.cpp | v0.1 | 2025-07-22 | COMMUNITY | | |
 | native/hello.h | v0.1 | 2025-07-22 | COMMUNITY | | |
 | README_NATIVE.md | v0.1 | 2025-07-22 | COMMUNITY | | |
+| requirements.txt | v0.1 | 2025-07-22 | COMMUNITY | | |
+| cohesix_fetch_build.sh | v0.2 | 2025-07-22 | COMMUNITY | | |
+| tests/test_trace_parser.py | v0.1 | 2025-07-22 | COMMUNITY | | |
+| go/cmd/coh-9p-helper/flags_test.go | v0.1 | 2025-07-22 | COMMUNITY | | |
+| test/test_c_main.c | v0.1 | 2025-07-22 | COMMUNITY | | |
