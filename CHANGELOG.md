@@ -1,6 +1,10 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v0.43
 // Date Modified: 2025-07-22
+## [v0.77] - 2025-07-22
+### Fixed
+- Added path existence checks in `validator_violation` test to skip when `/log` is missing.
+
 ## [v0.76] - 2025-07-22
 ### Added
 - Moved binary logic into library modules with unit tests.
