@@ -1,6 +1,12 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v0.43
 // Date Modified: 2025-07-22
+## [v0.82] - 2025-07-22
+### Added
+- Kernel UEFI stub built via new `make kernel` target.
+- `test_boot_efi.sh` now builds the stub and uses system OVMF firmware.
+### Fixed
+- Corrected QEMU BIOS path in boot test.
 ## [v0.79] - 2025-07-22
 ### Added
 - UEFI bootloader prototype and link script.
