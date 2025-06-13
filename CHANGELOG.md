@@ -1,6 +1,10 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v0.43
 // Date Modified: 2025-07-22
+## [v0.79] - 2025-07-22
+### Added
+- UEFI bootloader prototype and link script.
+
 ## [v0.78] - 2025-07-22
 ### Fixed
 - Ensemble agent test handles missing config file gracefully.
