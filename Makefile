@@ -59,8 +59,15 @@ boot-aarch64:
 bootloader:
 	@echo "🏁 Building UEFI bootloader"
 	@mkdir -p out/EFI/BOOT
-	clang -ffreestanding -fPIC -mno-red-zone -target x86_64-efi -c bootloader.c -o bootloader.o
-	ld.lld bootloader.o -o BOOTX64.EFI -T linker.ld -nostdlib -Wl,--subsystem,10
+	clang -ffreestanding -fPIC -fno-stack-protector -fshort-wchar \
+	-DEFI_FUNCTION_WRAPPER -DGNU_EFI -mno-red-zone \
+	-I/usr/include/efi -I/usr/include/efi/x86_64 \
+	-c src/bootloader/main.c -o bootloader.o
+	ld.lld /usr/lib/crt0-efi-x86_64.o bootloader.o \
+	-o bootloader.so -T /usr/lib/elf_x86_64_efi.lds \
+	-shared -Bsymbolic -nostdlib -znocombreloc \
+	-L/usr/lib -lgnuefi -lefi
+	objcopy --target=efi-app-x86_64 bootloader.so BOOTX64.EFI
 	cp BOOTX64.EFI out/EFI/BOOT/BOOTX64.EFI
 
 boot:
