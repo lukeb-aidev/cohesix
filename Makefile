@@ -13,7 +13,7 @@
 #  • `make help`     – list targets
 # ─────────────────────────────────────────────────────────────
 
-.PHONY: all go-build go-test c-shims help boot boot-x86_64 boot-aarch64
+.PHONY: all go-build go-test c-shims help boot boot-x86_64 boot-aarch64 bootloader
 
 PLATFORM ?= $(shell uname -m)
 .PHONY: all go-build go-test c-shims help cohrun cohbuild cohtrace cohcap
@@ -22,14 +22,14 @@ all: go-build go-test c-shims
 
 .PHONY: test
 test:
-@echo "🦀 Rust tests …"
-@RUST_BACKTRACE=1 cargo test --release
-@echo "🐍 Python tests …"
-@pytest -v
-@echo "🐹 Go tests …"
-@go test ./...
-@echo "🧱 C tests …"
-@cd build && ctest --output-on-failure || true
+	@echo "🦀 Rust tests …"
+	@RUST_BACKTRACE=1 cargo test --release
+	@echo "🐍 Python tests …"
+	@pytest -v
+	@echo "🐹 Go tests …"
+	@go test ./...
+	@echo "🧱 C tests …"
+	@cd build && ctest --output-on-failure || true
 
 go-build:
 	@echo "🔧 Go vet …"
@@ -46,18 +46,25 @@ c/sel4/bootloader.o: c/sel4/bootloader.c
 	$(CC:-clang?=cc) -I c/sel4/include -c $< -o $@
 
 c-shims: c/sel4/shim/boot_trampoline.o c/sel4/bootloader.o
-        @echo "🔧 Building C shims …"
+	@echo "🔧 Building C shims …"
 
 boot-x86_64:
-@echo "🏁 Building boot image for x86_64"
-cargo build --release --target x86_64-unknown-linux-gnu
+	@echo "🏁 Building boot image for x86_64"
+	cargo build --release --target x86_64-unknown-linux-gnu
 
 boot-aarch64:
-@echo "🏁 Building boot image for aarch64"
-cargo build --release --target aarch64-unknown-linux-gnu
+	@echo "🏁 Building boot image for aarch64"
+	cargo build --release --target aarch64-unknown-linux-gnu
+
+bootloader:
+	@echo "🏁 Building UEFI bootloader"
+	@mkdir -p out/EFI/BOOT
+	clang -ffreestanding -fPIC -mno-red-zone -target x86_64-efi -c bootloader.c -o bootloader.o
+	ld.lld bootloader.o -o BOOTX64.EFI -T linker.ld -nostdlib -Wl,--subsystem,10
+	cp BOOTX64.EFI out/EFI/BOOT/BOOTX64.EFI
 
 boot:
-$(MAKE) boot-$(PLATFORM)
+	$(MAKE) boot-$(PLATFORM)
 
 help:
 	@echo "Cohesix top‑level build targets:"
@@ -66,19 +73,19 @@ help:
 	@echo "  go-test   – run Go unit tests"
 	@echo "  c-shims   – compile seL4 boot trampoline"
 man: third_party/mandoc/mandoc
-        cp third_party/mandoc/mandoc bin/cohman
+	cp third_party/mandoc/mandoc bin/cohman
 
 cohrun:
-       cargo run -p cohcli_tools --bin cohrun -- $(ARGS)
+	cargo run -p cohcli_tools --bin cohrun -- $(ARGS)
 
 cohbuild:
-       cargo run -p cohcli_tools --bin cohbuild -- $(ARGS)
+	cargo run -p cohcli_tools --bin cohbuild -- $(ARGS)
 
 cohtrace:
-       cargo run -p cohcli_tools --bin cohtrace -- $(ARGS)
+	cargo run -p cohcli_tools --bin cohtrace -- $(ARGS)
 
 cohcap:
-       cargo run -p cohcli_tools --bin cohcap -- $(ARGS)
+	cargo run -p cohcli_tools --bin cohcap -- $(ARGS)
 
 
 
