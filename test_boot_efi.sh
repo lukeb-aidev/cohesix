@@ -6,9 +6,9 @@
 set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
-make bootloader
+make bootloader kernel
 objdump -h out/EFI/BOOT/BOOTX64.EFI > out/BOOTX64_sections.txt
-qemu-system-x86_64 -bios /usr/share/OVMF/OVMF_CODE_4M.fd \
+qemu-system-x86_64 -bios /usr/share/qemu/OVMF.fd \
     -drive format=raw,file=fat:rw:out/ -serial file:out/boot.log \
     -nographic -net none -M q35 -m 256M -no-reboot || true
 grep -q "Booting Cohesix from UEFI" out/boot.log
