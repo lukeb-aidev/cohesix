@@ -11,6 +11,11 @@
 - `linker.ld` script and `.cargo/config.toml` for UEFI
 - `test_boot_efi.sh` for QEMU boot validation
 
+## [v0.81] - 2025-07-22
+### Fixed
+- Bootloader now links against GNU-EFI libraries and prints kernel load status.
+- QEMU test updated to expect new log messages and use OVMF_CODE_4M.fd.
+
 ## [v0.78] - 2025-07-22
 ### Fixed
 - Ensemble agent test handles missing config file gracefully.
