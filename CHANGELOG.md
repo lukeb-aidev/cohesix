@@ -5,6 +5,12 @@
 ### Added
 - UEFI bootloader prototype and link script.
 
+## [v0.80] - 2025-07-22
+### Added
+- Makefile target to build BOOTX64.EFI
+- `linker.ld` script and `.cargo/config.toml` for UEFI
+- `test_boot_efi.sh` for QEMU boot validation
+
 ## [v0.78] - 2025-07-22
 ### Fixed
 - Ensemble agent test handles missing config file gracefully.
