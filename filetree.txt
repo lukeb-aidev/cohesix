@@ -11,6 +11,9 @@ LICENSE
 Makefile
 README.md
 benches/pass_manager.rs
+bootloader.c
+bootloader.lds
+CohesixBoot.inf
 c/sel4/bootloader.c
 c/sel4/include/boot_trampoline.h
 c/sel4/shim/boot_trampoline.c
