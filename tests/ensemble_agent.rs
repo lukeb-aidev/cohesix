@@ -3,8 +3,10 @@
 // Date Modified: 2025-07-22
 // Author: Cohesix Codex
 
-use cohesix::agents::ensemble::{EnsembleAgent, Arbitration, DecisionAgent, SharedMemory};
+use cohesix::agents::ensemble::{Arbitration, DecisionAgent, EnsembleAgent, SharedMemory};
 use serde_json::Value;
+use std::fs;
+use std::io::Write;
 
 struct FixedAgent { action: &'static str, score: f32 }
 impl DecisionAgent for FixedAgent {
@@ -19,6 +21,13 @@ fn ensemble_weighted_selects_best() {
     let cfg: Value = serde_json::from_str(&cfg_data).expect("invalid json");
     println!("{:?}", cfg);
 
+    // Pre-create goals log expected by the agent
+    fs::create_dir_all("/ensemble/e1").expect("failed to create ensemble dir");
+    let mut f = fs::File::create("/ensemble/e1/goals.json")
+        .expect("failed to create goals log");
+    writeln!(f, "{{\"goal\": \"balance\", \"score\": 1.0}}")
+        .expect("failed to write mock goals");
+
     let mut ens = EnsembleAgent::new("e1", Arbitration::Weighted);
     ens.add_agent(Box::new(FixedAgent { action: "A", score: 0.2 }));
     ens.add_agent(Box::new(FixedAgent { action: "B", score: 0.8 }));
@@ -27,4 +36,8 @@ fn ensemble_weighted_selects_best() {
     let data = std::fs::read_to_string("/ensemble/e1/goals.json")
         .expect("missing goals log");
     assert!(data.contains("B"));
+
+    // Clean up mock files
+    let _ = fs::remove_file("/ensemble/e1/goals.json");
+    let _ = fs::remove_dir_all("/ensemble/e1");
 }
