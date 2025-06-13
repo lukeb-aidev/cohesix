@@ -102,3 +102,7 @@
 | native/hello.cpp | v0.1 | 2025-07-22 | COMMUNITY | | |
 | native/hello.h | v0.1 | 2025-07-22 | COMMUNITY | | |
 | README_NATIVE.md | v0.1 | 2025-07-22 | COMMUNITY | | |
+
+| bootloader.c | v0.1 | 2025-07-22 | COMMUNITY | | |
+| bootloader.lds | v0.1 | 2025-07-22 | COMMUNITY | | |
+| CohesixBoot.inf | v0.1 | 2025-07-22 | COMMUNITY | | |

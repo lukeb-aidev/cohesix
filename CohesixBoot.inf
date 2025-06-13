@@ -1,0 +1,22 @@
+// CLASSIFICATION: COMMUNITY
+// Filename: CohesixBoot.inf v0.1
+// Author: Lukas Bower
+// Date Modified: 2025-07-22
+// SPDX-License-Identifier: BSD-2-Clause
+
+[Defines]
+  INF_VERSION                    = 0x00010005
+  BASE_NAME                      = CohesixBoot
+  FILE_GUID                      = 4E1B2461-72E3-4D16-9C17-000000000001
+  MODULE_TYPE                    = UEFI_APPLICATION
+  VERSION_STRING                 = 0.1
+  ENTRY_POINT                    = efi_main
+
+[Sources]
+  bootloader.c
+
+[Packages]
+  MdePkg/MdePkg.dec
+
+[LibraryClasses]
+  UefiLib
