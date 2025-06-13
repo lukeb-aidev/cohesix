@@ -13,10 +13,10 @@
 #  • `make help`     – list targets
 # ─────────────────────────────────────────────────────────────
 
-.PHONY: all go-build go-test c-shims help boot boot-x86_64 boot-aarch64 bootloader
+.PHONY: all go-build go-test c-shims help boot boot-x86_64 boot-aarch64 bootloader kernel
 
 PLATFORM ?= $(shell uname -m)
-.PHONY: all go-build go-test c-shims help cohrun cohbuild cohtrace cohcap
+.PHONY: all go-build go-test c-shims help cohrun cohbuild cohtrace cohcap kernel
 
 all: go-build go-test c-shims
 
@@ -67,8 +67,23 @@ bootloader:
 	-o bootloader.so -T /usr/lib/elf_x86_64_efi.lds \
 	-shared -Bsymbolic -nostdlib -znocombreloc \
 	-L/usr/lib -lgnuefi -lefi
-	objcopy --target=efi-app-x86_64 bootloader.so BOOTX64.EFI
-	cp BOOTX64.EFI out/EFI/BOOT/BOOTX64.EFI
+	       objcopy --target=efi-app-x86_64 bootloader.so BOOTX64.EFI
+	       cp BOOTX64.EFI out/EFI/BOOT/BOOTX64.EFI
+
+
+kernel:
+	@echo "🏁 Building kernel stub"
+	@mkdir -p out
+	clang -ffreestanding -fPIC -fno-stack-protector -fshort-wchar \
+	-DEFI_FUNCTION_WRAPPER -DGNU_EFI -mno-red-zone \
+	-I/usr/include/efi -I/usr/include/efi/x86_64 \
+	-c src/kernel/stub.c -o kernel.o
+	ld.lld /usr/lib/crt0-efi-x86_64.o kernel.o \
+	-o kernel.so -T /usr/lib/elf_x86_64_efi.lds \
+	-shared -Bsymbolic -nostdlib -znocombreloc \
+	-L/usr/lib -lgnuefi -lefi
+	objcopy --target=efi-app-x86_64 kernel.so kernel.elf
+	cp kernel.elf out/kernel.elf
 
 boot:
 	$(MAKE) boot-$(PLATFORM)
