@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: VALIDATION_AND_TESTING.md v1.3
+// Filename: VALIDATION_AND_TESTING.md v1.4
 // Author: Lukas Bower
-// Date Modified: 2025-06-14
+// Date Modified: 2025-07-24
 
 # Validation and Testing
 
@@ -34,7 +34,7 @@ Adhering to these practices keeps Cohesix robust and ready for demo-critical dep
 - `cohcli` utility not present or installed—`cohcli --version` fails.
 - Agent lifecycle tests run, but CLI coverage and hardware boot traces are unavailable.
 - Documentation mismatches: man pages mention commands not implemented.
-- TODO markers remain in `src/cohcc/ir/mod.rs`, violating the no-stub policy.
+- FIXME markers remain in `src/cohcc/ir/mod.rs`, violating the no-stub policy.
 - Boot and hardware validation logs missing for Jetson and Pi targets.
   - Ensemble agent tests previously failed due to hardcoded temp paths; now fixed via env-based temp directory configuration.
   - Boot script `test_boot_efi` failed without QEMU installed—validation updated to check for `qemu-system-x86_64`.
