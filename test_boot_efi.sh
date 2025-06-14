@@ -10,8 +10,11 @@ cd "$ROOT"
 # Ensure writable directories for QEMU and temporary files
 command -v qemu-system-x86_64 >/dev/null || { echo "❌ QEMU not installed"; exit 1; }
 
-export TMPDIR="${TMPDIR:-$HOME/tmp}"
-mkdir -p "$TMPDIR"
+TMPDIR=$(mktemp -d)
+if [ ! -f "$TMPDIR/OVMF_VARS.fd" ]; then
+    cp /usr/share/OVMF/OVMF_VARS.fd "$TMPDIR/" || echo "Missing OVMF_VARS.fd — please install OVMF"
+fi
+export TMPDIR
 mkdir -p "$HOME/cohesix/out"
 touch "$HOME/cohesix/out/boot-ready.txt"
 
@@ -45,6 +48,7 @@ objdump -h out/EFI/BOOT/BOOTX64.EFI > out/BOOTX64_sections.txt
 
 LOGFILE="out/qemu_debug.log"
 QEMU_ARGS=(-bios /usr/share/qemu/OVMF.fd \
+    -drive if=pflash,format=raw,file="$TMPDIR/OVMF_VARS.fd" \
     -drive format=raw,file=fat:rw:out/ -net none -M q35 -m 256M \
     -no-reboot -monitor none)
 

@@ -9,7 +9,7 @@ use std::fs;
 
 #[test]
 fn detects_policy_failure() {
-    fs::create_dir_all("/trace").unwrap();
+    fs::create_dir_all("/trace").expect("Permission denied: cannot access required file or socket");
     let mut agent = BaseAgent::new("test");
     let data = IntrospectionData::default();
     let mut triggered = false;
@@ -17,6 +17,6 @@ fn detects_policy_failure() {
         if agent.tick(1.2, &data) { triggered = true; }
     }
     assert!(triggered);
-    let log = fs::read_to_string("/trace/introspect_test.log").unwrap();
+    let log = fs::read_to_string("/trace/introspect_test.log").expect("Permission denied: cannot access required file or socket");
     assert!(!log.is_empty());
 }
