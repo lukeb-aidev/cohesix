@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
 # CLASSIFICATION: COMMUNITY
-# Filename: test_boot_efi.sh v0.8
+# Filename: test_boot_efi.sh v0.9
 # Author: Lukas Bower
-# Date Modified: 2025-06-14
+# Date Modified: 2025-07-22
 set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
 
 # Ensure writable directories for QEMU and temporary files
+command -v qemu-system-x86_64 >/dev/null || { echo "❌ QEMU not installed"; exit 1; }
+
+export TMPDIR="${TMPDIR:-$HOME/tmp}"
+mkdir -p "$TMPDIR"
 mkdir -p "$HOME/cohesix/out"
 touch "$HOME/cohesix/out/boot-ready.txt"
-mkdir -p "$HOME/tmp"
-export TMPDIR="$HOME/tmp"
-
-which qemu-system-x86_64 > /dev/null || { echo "ERROR: qemu-system-x86_64 not installed"; exit 1; }
 
 TOOLCHAIN="${CC:-}"
 if [[ -z "$TOOLCHAIN" ]]; then
