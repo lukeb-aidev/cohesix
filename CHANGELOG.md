@@ -7,6 +7,12 @@
 - Linker selection now follows compiler choice.
 - `test_boot_efi.sh` prints the toolchain used.
 
+## [v0.86] - 2025-07-22
+### Changed
+- Bootloader and kernel targets now place all intermediate files in `out/`.
+- `make print-env` shows selected toolchain and compiler version.
+- Clang builds use `ld.lld` with Windows COFF target.
+
 ## [v0.84] - 2025-07-22
 ### Fixed
 - Bootloader logs kernel launch progress and errors.
