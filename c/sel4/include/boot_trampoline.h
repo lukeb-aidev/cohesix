@@ -1,5 +1,5 @@
 // CLASSIFICATION: PRIVATE
-// Filename: boot_trampoline.h v0.4
+// Filename: boot_trampoline.h v0.5
 // Date Modified: 2025-07-22
 // Author: Lukas Bower
 //
@@ -25,7 +25,7 @@ extern "C" {
 #define BOOT_TRAMPOLINE_UART_BASE      0x09000000u
 #define BOOT_TRAMPOLINE_CRC_POLYNOMIAL 0xEDB88320u
 #define BOOT_TRAMPOLINE_LOG_SIZE       128
-#define BOOT_SUCCESS_PATH              "/state/boot_success"
+#include "boot_success.h"
 
 /**
  * @brief Entry invoked by verified seL4 assembly.
