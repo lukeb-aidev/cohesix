@@ -1,8 +1,8 @@
+# CLASSIFICATION: COMMUNITY
 #!/usr/bin/env bash
-// CLASSIFICATION: COMMUNITY
-// Filename: collect_boot_logs.sh v0.1
-// Author: Lukas Bower
-// Date Modified: 2025-07-12
+# Filename: collect_boot_logs.sh v0.1
+# Author: Lukas Bower
+# Date Modified: 2025-07-12
 
 ###############################################################################
 # collect_boot_logs.sh – gather hardware boot logs
