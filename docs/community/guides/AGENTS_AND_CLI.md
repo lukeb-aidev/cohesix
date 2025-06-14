@@ -30,6 +30,7 @@ Agents checkpoint every 10 files and log to `codex_logs/`. Recovery uses `tools/
 Agents now respect environment variables such as COHESIX_ENS_TMP and COHESIX_TRACE_TMP to ensure all generated output is written to writable temp directories, especially when executing in restricted or sandboxed environments.
 
 ## CLI Summary
+All CLI commands are invoked via small wrapper scripts that call the Python sources using `/usr/bin/env`. This keeps the canonical `.py` files compliant with the classification header rule.
 - **cohcli** – main interface for status, dispatching SLMs, and running agents
 - **cohrun** – demo launcher and orchestrator helper – supports TMPDIR override for isolated boot environments
 - **cohtrace** – trace inspection and federation utilities

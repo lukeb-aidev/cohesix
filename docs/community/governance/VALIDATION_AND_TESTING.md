@@ -25,7 +25,7 @@ Cohesix uses layered tests and continuous validation to guarantee reliability ac
 ## Batch Testing
 `tools/simulate_batch.sh` can create a mock batch. Replay with `tools/replay_batch.sh` to verify recovery. Confirm `CODEX_BATCH: YES` appears in generated metadata.
 
-  - `test_boot_efi.sh` now includes a check for QEMU presence and creates `out/` and `tmp/` directories dynamically to avoid runtime errors.
+  - `test_boot_efi` now includes a check for QEMU presence and creates `out/` and `tmp/` directories dynamically to avoid runtime errors.
 
 Adhering to these practices keeps Cohesix robust and ready for demo-critical deployments.
 
@@ -37,7 +37,7 @@ Adhering to these practices keeps Cohesix robust and ready for demo-critical dep
 - TODO markers remain in `src/cohcc/ir/mod.rs`, violating the no-stub policy.
 - Boot and hardware validation logs missing for Jetson and Pi targets.
   - Ensemble agent tests previously failed due to hardcoded temp paths; now fixed via env-based temp directory configuration.
-  - Boot script `test_boot_efi.sh` failed without QEMU installed—validation updated to check for `qemu-system-x86_64`.
+  - Boot script `test_boot_efi` failed without QEMU installed—validation updated to check for `qemu-system-x86_64`.
 
 ## Batch Hydration Test Plan
 1. Run `tools/simulate_batch.sh` to create a 15-file batch and force a crash after file 7.

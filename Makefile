@@ -175,7 +175,7 @@ boot: ## Build boot image for current PLATFORM
 
 
 testboot: ## Run UEFI boot test via QEMU
-./test_boot_efi.sh
+./test_boot_efi
 
 # Boot the built image in QEMU and capture serial output to qemu_serial.log
 qemu: bootloader kernel ## Run qemu-system-x86_64

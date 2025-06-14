@@ -151,7 +151,7 @@ Codex must auto-detect supported hardware and pass tests accordingly.
 - Role Override: Simulate using `COHROLE=` env/bootarg
 
 - Ensemble agents must test under `$COHESIX_ENS_TMP`, and validate safe cleanup afterward.  
-- QEMU test scripts (e.g., `test_boot_efi.sh`) must gracefully skip if `qemu-system-x86_64` is missing or not installed.
+- QEMU test scripts (e.g., `test_boot_efi`) must gracefully skip if `qemu-system-x86_64` is missing or not installed.
 
 ---
 
