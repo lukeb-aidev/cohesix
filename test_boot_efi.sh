@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # CLASSIFICATION: COMMUNITY
-# Filename: test_boot_efi.sh v0.4
+# Filename: test_boot_efi.sh v0.5
 # Author: Lukas Bower
 # Date Modified: 2025-07-22
 set -euo pipefail
@@ -21,6 +21,7 @@ if [[ -z "$TOOLCHAIN" ]]; then
     fi
 fi
 echo "Using $TOOLCHAIN toolchain for UEFI build..."
+make print-env CC="$TOOLCHAIN"
 make bootloader kernel CC="$TOOLCHAIN"
 objdump -h out/EFI/BOOT/BOOTX64.EFI > out/BOOTX64_sections.txt
 
