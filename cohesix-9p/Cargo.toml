@@ -1,3 +1,7 @@
+# CLASSIFICATION: COMMUNITY
+# Filename: cohesix-9p/Cargo.toml v0.1
+# Author: Lukas Bower
+# Date Modified: 2025-07-24
 [package]
 name = "cohesix-9p"
 version = "0.1.0"

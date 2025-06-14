@@ -5,6 +5,8 @@
 
 # Code of Conduct
 
+FIXME: Provide a concise summary of reporting guidelines and enforcement procedures.
+
 Cohesix is an open source project dedicated to building secure, high-performance, and community-driven software. We expect all contributors to uphold the highest standards of respectful, inclusive, and constructive behavior.
 
 ## Expected Behavior

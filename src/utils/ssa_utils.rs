@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: ssa_utils.rs v1.0
+// Filename: ssa_utils.rs v1.1
 // Author: Lukas Bower
-// Date Modified: 2025-05-31
+// Date Modified: 2025-07-24
 
 //! SSA Utilities
 //!
@@ -51,4 +51,7 @@ pub fn parse_ssa(input: &str) -> Option<SsaVar> {
         name: name.to_string(),
         version,
     })
+    // FIXME(cohesix): Implement parser logic
+    println!("[ssa] parse_ssa called with input: {}", input);
+    None
 }

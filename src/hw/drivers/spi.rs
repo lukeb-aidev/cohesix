@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: spi.rs v1.0
+// Filename: spi.rs v1.1
 // Author: Lukas Bower
-// Date Modified: 2025-05-31
+// Date Modified: 2025-07-24
 
 //! SPI driver module for Cohesix hardware abstraction layer.
 //! Provides traits and structures to support SPI communication with peripheral devices.
@@ -42,6 +42,7 @@ impl SPIBus {
     /// Create and initialize a new SPI bus. Currently a stub that returns
     /// a default `SPIBus` instance without hardware configuration.
     pub fn new() -> Self {
+        // FIXME: Implement SPI initialization logic
         SPIBus
     }
 }
@@ -49,16 +50,19 @@ impl SPIBus {
 impl SPIDevice for SPIBus {
     fn transfer(&mut self, _write_data: &[u8], _read_buffer: &mut [u8]) -> Result<(), SPIError> {
         // Hardware interaction not yet implemented
+        // FIXME: Implement SPI full-duplex transfer
         Err(SPIError::Unknown)
     }
 
     fn write(&mut self, _data: &[u8]) -> Result<(), SPIError> {
         // Hardware interaction not yet implemented
+        // FIXME: Implement SPI write-only transfer
         Err(SPIError::Unknown)
     }
 
     fn read(&mut self, _buffer: &mut [u8]) -> Result<(), SPIError> {
         // Hardware interaction not yet implemented
+        // FIXME: Implement SPI read-only operation
         Err(SPIError::Unknown)
     }
 }
