@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v0.50
-// Date Modified: 2025-07-23
+// Date Modified: 2025-07-24
 ## [vNext] - 2025-07-23
 ### Temp path fixes and QEMU script guard
 - Ensemble tests use writable temp directory via COHESIX_ENS_TMP
@@ -28,7 +28,11 @@
 - Makefile adds `qemu` and `qemu-check` targets for serial-log boot testing
 - Boot trampoline writes `BOOT_OK` to `/dev/console` and `/state/boot_success`; failures log `BOOT_FAIL:<reason>`
 ## [v0.88] - 2025-07-22
+- `qemu-check` now fails if `BOOT_FAIL` appears in `qemu_serial.log`
 ### Fixed
+- `make qemu` and `make qemu-check` run QEMU with serial logging and grep for BOOT_OK
+- Bootloader writes BOOT_OK or BOOT_FAIL to /dev/console and /state/boot_success
+- Makefile adds `qemu` and `qemu-check` targets for serial-log boot testing
 - Rust ensemble agent tests write to a safe temporary directory.
 - QEMU launch scripts ensure `$HOME/cohesix/out` and `TMPDIR` exist.
 
