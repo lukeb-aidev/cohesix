@@ -18,6 +18,8 @@
 - Added ns_hotplug.rs integration test
 - Makefile bootloader target links with lld-link
 - Makefile now includes fmt/lint/check targets and platform flags
+- Added end-to-end traceflow test and CLI argument validation
+- Added 9P read/write, CUDA presence, and namespace rule tests
 ## [v0.88] - 2025-07-22
 ### Fixed
 - Rust ensemble agent tests write to a safe temporary directory.
