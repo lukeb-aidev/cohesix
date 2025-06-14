@@ -1,10 +1,9 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: mod.rs v0.2
+// Filename: mod.rs v0.3
 // Author: Lukas Bower
-// Date Modified: 2025-07-23
+// Date Modified: 2025-07-25
 
 //! 9P utilities.
 
 pub mod multiplexer;
-#[cfg(feature = "secure9p")]
-pub mod secure;
+
