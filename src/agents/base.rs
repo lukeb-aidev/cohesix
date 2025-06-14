@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: base.rs v0.1
+// Filename: base.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-07-09
+// Date Modified: 2025-07-22
 
 //! Minimal base agent with introspection logging and self-diagnosis.
 
@@ -18,8 +18,8 @@ use crate::agent_migration::{Migrateable, MigrationStatus};
 
 impl Migrateable for BaseAgent {
     fn migrate<T: AgentTransport>(&self, peer: &str, transport: &T) -> anyhow::Result<MigrationStatus> {
-        let tmpdir = std::env::var("TMPDIR").unwrap_or("/tmp".to_string());
-        let tmp = format!("{}/{}_base.json", tmpdir, self.id);
+        let base_tmp = std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".to_string());
+        let tmp = format!("{}/{}_base.json", base_tmp, self.id);
         let data = serde_json::json!({"id": self.id});
         std::fs::write(&tmp, data.to_string())?;
         transport.send_state(&self.id, peer, &tmp)?;

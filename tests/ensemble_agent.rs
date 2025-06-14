@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: ensemble_agent.rs v0.3
+// Filename: ensemble_agent.rs v0.4
 // Date Modified: 2025-07-22
 // Author: Cohesix Codex
 
@@ -22,13 +22,14 @@ fn ensemble_weighted_selects_best() {
     println!("{:?}", cfg);
 
     // Use writable temp directory for ensemble log
-    let path = std::env::var("COHESIX_ENS_TMP").unwrap_or_else(|_| {
-        let tmp = std::env::temp_dir().join("ensemble_test_dir");
-        std::fs::create_dir_all(&tmp).unwrap();
-        tmp.to_str().unwrap().to_string()
+    let dir_root = std::env::var("COHESIX_ENS_TMP").unwrap_or_else(|_| {
+        let path = std::env::temp_dir().join("cohesix_ensemble_test");
+        std::fs::create_dir_all(&path).unwrap();
+        path.to_str().unwrap().to_string()
     });
-    std::env::set_var("COHESIX_ENS_TMP", &path);
-    let dir = std::path::Path::new(&path).join("e1");
+    let dir_root = std::path::PathBuf::from(dir_root);
+    std::env::set_var("COHESIX_ENS_TMP", &dir_root);
+    let dir = dir_root.join("e1");
     std::fs::create_dir_all(&dir).unwrap();
 
     // Pre-create goals log expected by the agent
@@ -48,5 +49,5 @@ fn ensemble_weighted_selects_best() {
 
     // Clean up mock files
     let _ = fs::remove_file(dir.join("goals.json"));
-    let _ = fs::remove_dir_all(&path);
+    let _ = fs::remove_dir_all(&dir_root);
 }
