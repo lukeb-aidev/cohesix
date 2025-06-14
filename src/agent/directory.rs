@@ -25,7 +25,8 @@ use crate::agent_migration::{Migrateable, MigrationStatus};
 
 impl Migrateable for AgentRecord {
     fn migrate<T: AgentTransport>(&self, peer: &str, transport: &T) -> anyhow::Result<MigrationStatus> {
-        let tmp = format!("/tmp/record_{}.json", self.id);
+        let tmpdir = std::env::var("TMPDIR").unwrap_or("/tmp".to_string());
+        let tmp = format!("{}/record_{}.json", tmpdir, self.id);
         let data = serde_json::to_vec(self)?;
         std::fs::write(&tmp, data)?;
         transport.send_state(&self.id, peer, &tmp)?;
