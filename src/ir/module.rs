@@ -14,8 +14,9 @@ pub struct Module {
     pub name: String,
     /// Ordered list of functions within this module.
     pub functions: Vec<Function>,
-    /// Optional metadata associated with this module.
-    pub metadata: Option<String>, // TODO: replace with structured metadata when ready
+    /// Optional metadata associated with this module. Structured metadata
+    /// will replace this field in a future revision.
+    pub metadata: Option<String>,
 }
 
 impl Module {
@@ -52,9 +53,9 @@ impl Module {
         out
     }
 
-    /// TODO: Validate structural integrity, uniqueness of function names, etc.
+    /// Validate structural integrity. Currently a stub that always returns `true`.
     pub fn validate(&self) -> bool {
-        true // stub: always valid for now
+        true
     }
 
     /// Return a textual representation of the module using the IR printer.
