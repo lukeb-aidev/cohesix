@@ -10,12 +10,15 @@ use cohesix::slm::decryptor::{SLMDecryptor};
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
 use aead::Aead;
 use std::fs;
+use tempfile::TempDir;
 
 #[test]
 fn tampered_file_rejected() {
     let key = [0u8;32];
-    fs::write("/tmp/test.slmcoh", b"invalid").unwrap();
-    let res = SLMDecryptor::decrypt_model("/tmp/test.slmcoh", &key);
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("test.slmcoh");
+    fs::write(&path, b"invalid").unwrap();
+    let res = SLMDecryptor::decrypt_model(path.to_str().unwrap(), &key);
     assert!(res.is_err());
 }
 
@@ -27,7 +30,9 @@ fn decrypts_valid_container() {
     let ct = aead.encrypt(nonce, b"hello".as_ref()).unwrap();
     let mut data = Vec::from(b"unique_nonce" as &[u8]);
     data.extend_from_slice(&ct);
-    fs::write("/tmp/ok.slmcoh", &data).unwrap();
-    let (plain, _tok) = SLMDecryptor::decrypt_model("/tmp/ok.slmcoh", &key).unwrap();
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("ok.slmcoh");
+    fs::write(&path, &data).unwrap();
+    let (plain, _tok) = SLMDecryptor::decrypt_model(path.to_str().unwrap(), &key).unwrap();
     assert_eq!(plain, b"hello");
 }

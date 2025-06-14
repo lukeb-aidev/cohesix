@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: mod.rs v1.0
+// Filename: mod.rs v1.1
 // Author: Lukas Bower
-// Date Modified: 2025-06-17
+// Date Modified: 2025-07-23
 
 //! Sandbox helper modules.
 
@@ -15,13 +15,17 @@ use std::fs::OpenOptions;
 use std::io::Write;
 
 /// Validate sandbox environment after startup.
-pub fn validate() {
+pub fn validate() -> bool {
+    let ok = validator::boot_must_succeed();
     std::fs::create_dir_all("/log").ok();
-    if let Ok(mut f) = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("/log/sandbox_boot.log")
-    {
-        let _ = writeln!(f, "sandbox validated");
+    if ok {
+        if let Ok(mut f) = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("/log/sandbox_boot.log")
+        {
+            let _ = writeln!(f, "sandbox validated");
+        }
     }
+    ok
 }

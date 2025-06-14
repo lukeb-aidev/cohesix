@@ -1,5 +1,5 @@
 // CLASSIFICATION: PRIVATE
-// Filename: boot_trampoline.c v0.5
+// Filename: boot_trampoline.c v0.6
 // Date Modified: 2025-07-23
 // Author: Lukas Bower
 //
@@ -20,6 +20,7 @@
 // ─────────────────────────────────────────────────────────────
 
 #include "boot_trampoline.h"
+#include "boot_success.h"
 #include <stdint.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -41,24 +42,31 @@ static size_t log_pos;
 int boot_trampoline_crc_ok = 0;
 
 /* Write a success marker for Fabric OS/validator */
+static void emit_fail_console(const char *reason)
+{
+    int cfd = open("/dev/console", O_WRONLY);
+    if (cfd >= 0) {
+        char buf[64];
+        int len = snprintf(buf, sizeof(buf), "BOOT_FAIL:%s\n", reason);
+        write(cfd, buf, len);
+        close(cfd);
+    }
+}
+
 static void emit_success_telemetry(void)
 {
+    int cfd = open("/dev/console", O_WRONLY);
+    if (cfd >= 0) {
+        write(cfd, "BOOT_OK\n", 8);
+        close(cfd);
+    }
+
     int fd = open(BOOT_SUCCESS_PATH, O_WRONLY | O_CREAT, 0644);
     if (fd >= 0) {
         write(fd, "BOOT_OK\n", 8);
         close(fd);
     } else {
-        int cfd = open("/dev/console", O_WRONLY);
-        if (cfd >= 0) {
-            write(cfd, "BOOT_FAIL:boot_success_write\n", 28);
-            close(cfd);
-        }
-        return;
-    }
-    int cfd = open("/dev/console", O_WRONLY);
-    if (cfd >= 0) {
-        write(cfd, "BOOT_OK\n", 8);
-        close(cfd);
+        emit_fail_console("boot_success_write");
     }
 }
 
@@ -117,8 +125,10 @@ void boot_trampoline(void)
                                __trampoline_hdr.length);
     boot_trampoline_crc_ok = (calc == __trampoline_hdr.crc);
     _trampoline_log((uintptr_t)&rust_early_init, boot_trampoline_crc_ok);
-    if (!boot_trampoline_crc_ok)
+    if (!boot_trampoline_crc_ok) {
+        emit_fail_console("crc_mismatch");
         panic_uart("panic: trampoline CRC mismatch\n");
+    }
 
     /* Phase 2: emit boot success before hand-off */
     emit_success_telemetry();
