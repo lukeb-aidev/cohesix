@@ -11,6 +11,7 @@ use cohesix::cohesix_types::Syscall;
 #[test]
 fn validator_logs_mount_violation() {
     fs::create_dir_all("/srv/violations").unwrap();
+    std::env::set_var("COHESIX_VIOLATIONS_DIR", "/srv/violations");
     fs::write("/srv/cohrole", "KioskInteractive").unwrap();
     SyscallDispatcher::dispatch(Syscall::Mount { src: "foo".into(), dest: "bar".into() });
     let log = fs::read_to_string("/srv/violations/runtime.json").unwrap();

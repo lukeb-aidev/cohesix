@@ -9,7 +9,7 @@ use std::fs;
 #[test]
 fn open_denied_logs_violation() {
     fs::create_dir_all("/etc").unwrap();
-    let log_dir = std::env::var("COHESIX_LOG_DIR").map(std::path::PathBuf::from).unwrap_or_else(|_| std::env::temp_dir());
+    let log_dir = std::path::PathBuf::from("/log");
     fs::create_dir_all(&log_dir).unwrap();
     fs::write(
         "/etc/cohcap.json",
