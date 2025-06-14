@@ -3,7 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-25
 
-use cohesix::p9::secure::namespace_resolver::resolve_namespace;
+use cohesix::secure9p::namespace_resolver::resolve_namespace;
 use serial_test::serial;
 use tempfile::tempdir;
 use std::fs;

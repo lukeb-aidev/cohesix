@@ -1,9 +1,9 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: tls_handshake.rs v0.2
+// Filename: tls_handshake.rs v0.3
 // Author: Lukas Bower
-// Date Modified: 2025-07-25
+// Date Modified: 2025-07-26
 
-use cohesix::p9::secure::secure_9p_server::start_secure_9p_server;
+use cohesix::secure9p::secure_9p_server::start_secure_9p_server;
 use jsonwebtoken::{encode, EncodingKey, Header};
 use rcgen::generate_simple_self_signed;
 use rustls::{Certificate, ClientConfig, RootCertStore, ClientConnection, StreamOwned};
@@ -13,7 +13,7 @@ use std::thread;
 use std::time::Duration;
 use std::fs;
 use std::io::Write;
-use cohesix::p9::secure::validator_hook::ValidatorHook;
+use cohesix::secure9p::validator_hook::ValidatorHook;
 
 #[test]
 fn tls_handshake() {
@@ -64,7 +64,7 @@ fn tls_handshake() {
         std::fs::write(&cert_path, cert.serialize_pem().unwrap()).unwrap();
         std::fs::write(&key_path, cert.serialize_private_key_pem()).unwrap();
         let mut policy = PolicyEngine::new();
-        policy.allow("anonymous".into(), Capability::Read);
+        policy.allow("anonymous".into(), "read:/tmp".into());
         let server = Secure9pServer {
             port: 5690,
             cert_path: cert_path.to_string_lossy().into(),
