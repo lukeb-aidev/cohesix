@@ -3,7 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-23
 
-use cohesix::services::sandbox::SandboxService;
+use cohesix::services::{sandbox::SandboxService, Service};
 use cohesix::validator::{self, config::ValidatorConfig, RuleViolation};
 use tempfile::tempdir;
 
@@ -13,7 +13,10 @@ fn validator_denies_forbidden_path() {
     std::env::set_current_dir(&dir).unwrap();
     let log_dir = dir.path().join("log");
     let viol_dir = dir.path().join("viol");
-    validator::config::set_config(ValidatorConfig { log_dir: log_dir.clone(), violations_dir: viol_dir });
+    validator::config::set_config(ValidatorConfig {
+        log_dir: log_dir.clone(),
+        violations_dir: viol_dir,
+    });
     std::fs::create_dir_all(&log_dir).unwrap();
 
     let mut svc = SandboxService::default();
