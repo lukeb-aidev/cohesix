@@ -28,6 +28,11 @@
 - Added ns_hotplug.rs integration test
 - Makefile bootloader target links with lld-link
 - CLI scripts now use wrapper binaries in `bin/` so classification headers remain the first line
+
+## [v0.89] - 2025-07-25
+### Changed
+- Secure9P tests start consolidated server with `start_secure_9p_server` using temporary TLS and policy files.
+- Validator hook and namespace resolution validated.
 - Header cleanup for `cli/cohcli.py` and boot logging scripts
 - `test_boot_efi` wrapper added; Makefile updated accordingly
 - BootMustSucceed rule verifies /trace/boot_trace.json at startup
