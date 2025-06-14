@@ -16,13 +16,14 @@ pub struct ValidatorConfig {
 
 impl Default for ValidatorConfig {
     fn default() -> Self {
+        let tmp = std::env::temp_dir();
         Self {
             log_dir: std::env::var("COHESIX_LOG_DIR")
                 .map(PathBuf::from)
-                .unwrap_or_else(|_| PathBuf::from("/log")),
+                .unwrap_or_else(|_| tmp.clone()),
             violations_dir: std::env::var("COHESIX_VIOLATIONS_DIR")
                 .map(PathBuf::from)
-                .unwrap_or_else(|_| PathBuf::from("/srv/violations")),
+                .unwrap_or_else(|_| tmp),
         }
     }
 }

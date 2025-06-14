@@ -9,7 +9,8 @@ use std::fs;
 
 #[test]
 fn triggers_violations() {
-    if let Err(e) = fs::create_dir_all("/log") {
+    let log_dir = std::env::var("COHESIX_LOG_DIR").map(std::path::PathBuf::from).unwrap_or_else(|_| std::env::temp_dir());
+    if let Err(e) = fs::create_dir_all(&log_dir) {
         eprintln!("skipping triggers_violations: {e}");
         return;
     }
@@ -19,11 +20,11 @@ fn triggers_violations() {
     }
     fs.set_validator_hook(hook);
     fs.write("/persist/secret", b"bad", "agent1");
-    if fs::metadata("/log/validator_runtime.log").is_err() {
+    if fs::metadata(log_dir.join("validator_runtime.log")).is_err() {
         eprintln!("validator log not created");
         return;
     }
-    let log = match fs::read_to_string("/log/validator_runtime.log") {
+    let log = match fs::read_to_string(log_dir.join("validator_runtime.log")) {
         Ok(l) => l,
         Err(e) => {
             eprintln!("failed reading log: {e}");
@@ -42,7 +43,8 @@ fn unauthorized_capability_error() {
 #[test]
 fn validator_hook_timeout() {
     use std::time::{Duration, Instant};
-    if let Err(e) = fs::create_dir_all("/log") {
+    let log_dir = std::env::var("COHESIX_LOG_DIR").map(std::path::PathBuf::from).unwrap_or_else(|_| std::env::temp_dir());
+    if let Err(e) = fs::create_dir_all(&log_dir) {
         eprintln!("skipping validator_hook_timeout: {e}");
         return;
     }
@@ -60,7 +62,8 @@ fn validator_hook_timeout() {
 #[test]
 fn replay_violation_detected() {
     use std::sync::{Arc, Mutex};
-    if let Err(e) = fs::create_dir_all("/log") {
+    let log_dir = std::env::var("COHESIX_LOG_DIR").map(std::path::PathBuf::from).unwrap_or_else(|_| std::env::temp_dir());
+    if let Err(e) = fs::create_dir_all(&log_dir) {
         eprintln!("skipping replay_violation_detected: {e}");
         return;
     }
@@ -79,11 +82,11 @@ fn replay_violation_detected() {
     });
     fs.write("/persist/a", b"x", "agent1");
     fs.write("/persist/b", b"y", "agent1");
-    if fs::metadata("/log/validator_runtime.log").is_err() {
+    if fs::metadata(log_dir.join("validator_runtime.log")).is_err() {
         eprintln!("validator log not created");
         return;
     }
-    let log = match fs::read_to_string("/log/validator_runtime.log") {
+    let log = match fs::read_to_string(log_dir.join("validator_runtime.log")) {
         Ok(l) => l,
         Err(e) => {
             eprintln!("failed reading log: {e}");
