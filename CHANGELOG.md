@@ -18,6 +18,7 @@
 - SandboxService logs namespace violations via validator
 - Added ns_hotplug.rs integration test
 - Makefile bootloader target links with lld-link
+- BootMustSucceed rule verifies /trace/boot_trace.json at startup
 - Makefile now includes fmt/lint/check targets and platform flags
 - Added end-to-end traceflow test and CLI argument validation
 - Added 9P read/write, CUDA presence, and namespace rule tests
