@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.47
+// Filename: CHANGELOG.md v0.48
 // Date Modified: 2025-07-23
 ## [vNext] - 2025-07-23
 ### Temp path fixes and QEMU script guard
@@ -16,6 +16,7 @@
 - NsWatchService validates hotplugged mounts
 - SandboxService logs namespace violations via validator
 - Added ns_hotplug.rs integration test
+- Makefile bootloader target links with lld-link
 ## [v0.88] - 2025-07-22
 ### Fixed
 - Rust ensemble agent tests write to a safe temporary directory.
