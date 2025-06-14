@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: ninep_adapter.rs v0.1
+// Filename: ninep_adapter.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-07-16
+// Date Modified: 2025-07-23
 
 //! Compatibility helpers for the `ninep` crate.
 //!
@@ -37,13 +37,18 @@ pub fn verify_open(client: &mut TcpClient, path: &str, _mode: Mode) -> io::Resul
 mod tests {
     use super::*;
     use crate::{FsConfig, server::FsServer};
-    use ninep::fs::{Perm, Mode};
     use ninep::client::TcpClient;
+    use ninep::fs::{Mode, Perm};
     use serial_test::serial;
 
     fn start() -> (FsServer, TcpClient) {
-        let mut srv = FsServer::new(FsConfig { root: "/".into(), port: 5655, readonly: false });
-        srv.start().unwrap_or_else(|e| panic!("server start failed: {e}"));
+        let mut srv = FsServer::new(FsConfig {
+            root: "/".into(),
+            port: 5655,
+            readonly: false,
+        });
+        srv.start()
+            .unwrap_or_else(|e| panic!("server start failed: {e}"));
         std::thread::sleep(std::time::Duration::from_millis(100));
         let client = TcpClient::new_tcp("tester".to_string(), "127.0.0.1:5655", "")
             .unwrap_or_else(|e| panic!("client connect failed: {e}"));
@@ -54,8 +59,13 @@ mod tests {
     #[serial]
     fn slice_read() {
         let (mut srv, mut cli) = start();
-        cli.create("/", "file", Perm::OWNER_READ | Perm::OWNER_WRITE, Mode::FILE)
-            .unwrap_or_else(|e| panic!("create failed: {e}"));
+        cli.create(
+            "/",
+            "file",
+            Perm::OWNER_READ | Perm::OWNER_WRITE,
+            Mode::FILE,
+        )
+        .unwrap_or_else(|e| panic!("create failed: {e}"));
         cli.write("/file", 0, b"abcdef")
             .unwrap_or_else(|e| panic!("write failed: {e}"));
         let slice = read_slice(&mut cli, "/file", 2, 3)
@@ -64,4 +74,3 @@ mod tests {
         let _ = srv; // drop after test
     }
 }
-
