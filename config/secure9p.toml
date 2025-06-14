@@ -1,0 +1,8 @@
+[[namespace]]
+agent = "lukas"
+root = "/mnt/agents/lukas"
+read_only = true
+
+[[policy]]
+agent = "lukas"
+allow = ["read:/mnt/agents/lukas/input", "write:/mnt/agents/lukas/output"]

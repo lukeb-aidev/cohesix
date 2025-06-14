@@ -14,10 +14,13 @@ fn ld_preload_blocked() {
         r#"{"DroneWorker":{"verbs":["open"],"paths":["/tmp"]}}"#,
     )
     .unwrap();
-    fs::write("/srv/cohrole", "DroneWorker").unwrap();
+    let srv_dir = std::env::temp_dir();
+    fs::write(srv_dir.join("cohrole"), "DroneWorker").unwrap();
     std::env::set_var("LD_PRELOAD", "evil.so");
     let res = open("/tmp/ok", 0);
     assert!(res.is_err());
-    let log = fs::read_to_string("/log/sandbox.log").unwrap();
+    let log_dir = std::env::var("COHESIX_LOG_DIR").map(std::path::PathBuf::from).unwrap_or_else(|_| std::env::temp_dir());
+    fs::create_dir_all(&log_dir).unwrap();
+    let log = fs::read_to_string(log_dir.join("sandbox.log")).unwrap();
     assert!(log.contains("open_preload"));
 }

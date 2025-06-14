@@ -9,12 +9,14 @@ use serial_test::serial;
 #[test]
 #[serial]
 fn panic_hook_works() {
-    fs::create_dir_all("/srv").unwrap();
-    std::panic::set_hook(Box::new(|_| {
-        fs::write("/srv/panic.log", "panic").ok();
+    let srv_dir = std::env::temp_dir();
+    fs::create_dir_all(&srv_dir).unwrap();
+    let log_path = srv_dir.join("panic.log");
+    std::panic::set_hook(Box::new(move |_| {
+        fs::write(&log_path, "panic").ok();
     }));
     let _ = std::panic::catch_unwind(|| panic!("boom"));
-    assert_eq!(fs::read_to_string("/srv/panic.log").unwrap(), "panic");
+    assert_eq!(fs::read_to_string(log_path).unwrap(), "panic");
 }
 
 #[test]
@@ -27,13 +29,14 @@ fn memory_growth_within_bounds() {
 #[test]
 #[serial]
 fn no_unclosed_caps() {
-    fs::create_dir_all("/srv").unwrap();
-    let caps_before = fs::read_dir("/srv").unwrap().count();
+    let srv_dir = std::env::temp_dir();
+    fs::create_dir_all(&srv_dir).unwrap();
+    let caps_before = fs::read_dir(&srv_dir).unwrap().count();
     {
-        let f = fs::File::create("/srv/tmp_cap").unwrap();
+        let f = fs::File::create(srv_dir.join("tmp_cap")).unwrap();
         drop(f);
     }
-    let caps_after = fs::read_dir("/srv").unwrap().count();
+    let caps_after = fs::read_dir(&srv_dir).unwrap().count();
     assert!(caps_after >= caps_before);
 }
 

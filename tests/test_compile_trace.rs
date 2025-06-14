@@ -14,7 +14,8 @@ fn compile_reproducible() {
     fs::create_dir_all("/mnt/data").unwrap();
     let dir = Builder::new().prefix("cohcc").tempdir_in("/mnt/data").unwrap();
     std::env::set_current_dir(&dir).unwrap();
-    fs::create_dir_all("/log").unwrap();
+    let log_dir = std::env::var("COHESIX_LOG_DIR").map(std::path::PathBuf::from).unwrap_or_else(|_| std::env::temp_dir());
+    fs::create_dir_all(&log_dir).unwrap();
     let src = dir.path().join("hello.c");
     File::create(&src)
         .unwrap()
@@ -35,7 +36,7 @@ fn compile_reproducible() {
         .unwrap();
     let h2 = guard::hash_output(&out).unwrap();
     assert_eq!(h1, h2);
-    fs::write("/log/cohcc_ci_trace.log", h2.as_bytes()).unwrap();
+    fs::write(log_dir.join("cohcc_ci_trace.log"), h2.as_bytes()).unwrap();
 }
 
 #[test]
