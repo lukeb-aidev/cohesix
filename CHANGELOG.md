@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v0.50
-// Date Modified: 2025-07-23
+// Date Modified: 2025-07-24
 ## [vNext] - 2025-07-23
 ### Temp path fixes and QEMU script guard
 - Ensemble tests use writable temp directory via COHESIX_ENS_TMP
@@ -21,6 +21,7 @@
 - Added ns_hotplug.rs integration test
 - Makefile bootloader target links with lld-link
 - CLI scripts now use wrapper binaries in `bin/` so classification headers remain the first line
+- Header cleanup for `cli/cohcli.py` and boot logging scripts
 - `test_boot_efi` wrapper added; Makefile updated accordingly
 - BootMustSucceed rule verifies /trace/boot_trace.json at startup
 - Makefile now includes fmt/lint/check targets and platform flags
