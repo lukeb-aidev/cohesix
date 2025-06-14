@@ -1,3 +1,7 @@
+# CLASSIFICATION: COMMUNITY
+# Filename: justfile v0.1
+# Author: Lukas Bower
+# Date Modified: 2025-07-24
 # Quick-tasks for Cohesix developers
 
 # ---- primary CI replica ----

@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: METADATA.md v3.13
+// Filename: METADATA.md v3.14
 // Author: Lukas Bower
-// Date Modified: 2025-07-23
+// Date Modified: 2025-07-24
 
 ## Canonical Documents
 
@@ -123,3 +123,7 @@
 | docs/community/architecture/BOOT_KERNEL_FLOW.md | v0.1 | 2025-07-23 | COMMUNITY | | |
 | docs/community/archive/examples_README.md | v0.2 | 2025-07-23 | COMMUNITY | | |
 | CONTRIBUTING.md | v1.1 | 2025-07-23 | COMMUNITY | | |
+| metadata.json | v0.1 | 2025-07-24 | COMMUNITY | | |
+| Cargo.toml | v0.1 | 2025-07-24 | COMMUNITY | | |
+| cohesix-9p/Cargo.toml | v0.1 | 2025-07-24 | COMMUNITY | | |
+| justfile | v0.1 | 2025-07-24 | COMMUNITY | | |

@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.50
-// Date Modified: 2025-07-23
-## [vNext] - 2025-07-23
+// Filename: CHANGELOG.md v0.51
+// Date Modified: 2025-07-24
+## [vNext] - 2025-07-24
 ### Temp path fixes and QEMU script guard
 - Ensemble tests use writable temp directory via COHESIX_ENS_TMP
 - SharedMemory, BaseAgent use TMPDIR and respect override vars
@@ -34,6 +34,7 @@
 - Boot trampoline writes `BOOT_OK` or `BOOT_FAIL:<reason>` to console and `/state/boot_success`
 - Added guidance to `docs/community/archive/examples_README.md`
 - Added `test_qemu_boot.rs` verifying QEMU boot log for `BOOT_OK` and CUDA setup
+- Added classification headers to metadata.json, Cargo.toml, cohesix-9p/Cargo.toml, and justfile
 ## [v0.88] - 2025-07-22
 - `qemu-check` now fails if `BOOT_FAIL` appears in `qemu_serial.log`
 ### Fixed
