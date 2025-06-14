@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v0.50
-// Date Modified: 2025-07-24
+// Date Modified: 2025-07-23
 ## [vNext] - 2025-07-23
 ### Temp path fixes and QEMU script guard
 - Ensemble tests use writable temp directory via COHESIX_ENS_TMP
@@ -30,6 +30,7 @@
 - CONTRIBUTING includes local setup, testing, and Codex instructions
 - Makefile adds `qemu` and `qemu-check` targets for serial-log boot testing
 - Boot trampoline writes `BOOT_OK` or `BOOT_FAIL:<reason>` to console and `/state/boot_success`
+- Added guidance to `docs/community/archive/examples_README.md`
 - Added `test_qemu_boot.rs` verifying QEMU boot log for `BOOT_OK` and CUDA setup
 ## [v0.88] - 2025-07-22
 - `qemu-check` now fails if `BOOT_FAIL` appears in `qemu_serial.log`
