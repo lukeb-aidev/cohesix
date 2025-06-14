@@ -25,8 +25,8 @@ pub fn validate_path(agent_root: &Path, requested: &Path) -> Result<PathBuf> {
 #[cfg(all(test, feature = "secure9p"))]
 mod tests {
     use super::*;
-    use tempfile::tempdir;
     use std::fs;
+    use tempfile::tempdir;
 
     #[test]
     fn rejects_escape() {
@@ -39,7 +39,8 @@ mod tests {
     }
 }
 
-use super::{policy_engine::PolicyEngine, cap_fid::Capability};
+use super::{cap_fid::Capability, policy_engine::PolicyEngine};
+
 use std::path::Path;
 
 pub fn enforce(ns: &str, cap: Capability, policy: &PolicyEngine) -> bool {
