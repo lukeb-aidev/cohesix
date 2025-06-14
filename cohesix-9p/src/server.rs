@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: server.rs v0.2
-// Date Modified: 2025-07-23
+// Filename: server.rs v0.3
+// Date Modified: 2025-07-24
 // Author: Lukas Bower
 
 use std::collections::HashMap;
@@ -97,7 +97,7 @@ impl CohesixFs {
 
     /// Mount a remote 9P server under the provided mountpoint.
     #[allow(dead_code)]
-    // TODO: expose once remote mount functionality is used by runtime
+    // FIXME: expose once remote mount functionality is used by runtime
     pub fn _mount_remote(&self, mountpoint: &str, addr: &str) -> AnyResult<()> {
         let client = TcpClient::new_tcp("cohesix".to_string(), addr, "/")?;
         match self.remotes.lock() {

@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: dispatcher.rs v1.0
+// Filename: dispatcher.rs v1.1
 // Author: Lukas Bower
-// Date Modified: 2025-06-17
+// Date Modified: 2025-07-24
 
 //! Syscall dispatcher for sandboxed workers.
 
@@ -25,19 +25,19 @@ impl SyscallDispatcher {
         match syscall {
             Syscall::Spawn { program, args } => {
                 debug!("dispatch spawn: {} {:?}", program, args);
-                // TODO(batch5): integrate with process launcher
+                // FIXME(batch5): integrate with process launcher
             }
             Syscall::CapGrant { target, capability } => {
                 debug!("dispatch cap_grant: {} -> {}", target, capability);
-                // TODO(batch5): apply capability change
+                // FIXME(batch5): apply capability change
             }
             Syscall::Mount { src, dest } => {
                 debug!("dispatch mount: {} -> {}", src, dest);
-                // TODO(batch5): call mount service
+                // FIXME(batch5): call mount service
             }
             Syscall::Exec { path } => {
                 debug!("dispatch exec: {}", path);
-                // TODO(batch5): exec binary in sandbox
+                // FIXME(batch5): exec binary in sandbox
             }
             Syscall::Unknown => {
                 debug!("unsupported syscall: Unknown");

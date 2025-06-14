@@ -1,13 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: dummy_test.rs v0.1
-// Date Modified: 2025-05-24
-// Author: Lukas Bower
-
-//! TODO: Implement dummy_test.rs.
-
-// CLASSIFICATION: COMMUNITY
-// Filename: dummy_test.rs v0.2
-// Date Modified: 2025-05-27
+// Filename: dummy_test.rs v0.3
+// Date Modified: 2025-07-24
 // Author: Lukas Bower
 
 //! Integration test for basic IR instruction functionality.
