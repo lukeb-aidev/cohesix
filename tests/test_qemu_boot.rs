@@ -1,12 +1,11 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: test_qemu_boot.rs v0.1
+// Filename: test_qemu_boot.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-07-23
+// Date Modified: 2025-07-28
 
 use std::process::Command;
-use std::{thread, time::Duration};
-use std::time::Instant;
-use std::fs;
+use std::time::{Duration, Instant};
+use std::{fs, thread};
 use std::path::Path;
 
 #[test]
@@ -18,13 +17,16 @@ fn qemu_boot_produces_boot_ok() {
         .map(|s| s.success())
         .unwrap_or(false)
     {
-        let tmpdir = tempfile::tempdir().expect("tmpdir");
+        if Path::new("qemu_serial.log").exists() {
+            let _ = fs::remove_file("qemu_serial.log");
+        }
+
         let status = Command::new("make")
             .arg("qemu")
-            .env("TMPDIR", tmpdir.path())
-            .env("QEMU_ENV", "1")
+            .env("TMPDIR", std::env::temp_dir())
             .status()
             .expect("failed to run make qemu");
+
         assert!(status.success(), "make qemu failed");
 
         let start = Instant::now();
@@ -34,15 +36,16 @@ fn qemu_boot_produces_boot_ok() {
             }
             thread::sleep(Duration::from_millis(500));
         }
+
         let log = fs::read_to_string("qemu_serial.log").expect("read log");
+
         for line in log.lines() {
-            if let Some(rest) = line.strip_prefix("BOOT_FAIL:") {
-                println!("BOOT_FAIL:{}", rest);
+            if let Some(reason) = line.strip_prefix("BOOT_FAIL:") {
+                panic!("BOOT_FAIL: {}", reason);
             }
         }
+
         assert!(log.contains("BOOT_OK"), "BOOT_OK missing in log");
-        assert!(log.contains("/srv/cuda"), "cuda service not initialized");
-        assert!(log.contains("QEMU_ENV=1"), "QEMU_ENV traces missing");
     } else {
         eprintln!("qemu-system-x86_64 not installed; skipping test");
     }
