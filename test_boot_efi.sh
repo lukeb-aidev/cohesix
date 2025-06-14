@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # CLASSIFICATION: COMMUNITY
-# Filename: test_boot_efi.sh v0.5
+# Filename: test_boot_efi.sh v0.6
 # Author: Lukas Bower
 # Date Modified: 2025-07-22
 set -euo pipefail
@@ -21,8 +21,23 @@ if [[ -z "$TOOLCHAIN" ]]; then
     fi
 fi
 echo "Using $TOOLCHAIN toolchain for UEFI build..."
+if [[ ! -f /usr/include/efi/efi.h ]]; then
+    echo "ERROR: gnu-efi headers not found" >&2
+    exit 1
+fi
+if [[ ! -f /usr/include/efi/x86_64/efibind.h && ! -f /usr/include/efi/$(uname -m)/efibind.h ]]; then
+    echo "WARNING: architecture headers missing; build may fail" >&2
+fi
+
+"$TOOLCHAIN" --version | head -n 1
+"$TOOLCHAIN" -E -x c - -v </dev/null 2>&1 | sed -n '/search starts here:/,/End of search list/p'
+
 make print-env CC="$TOOLCHAIN"
-make bootloader kernel CC="$TOOLCHAIN"
+make -n bootloader kernel CC="$TOOLCHAIN" > out/make_debug.log
+if ! make bootloader kernel CC="$TOOLCHAIN"; then
+    echo "Build failed" >&2
+    exit 1
+fi
 objdump -h out/EFI/BOOT/BOOTX64.EFI > out/BOOTX64_sections.txt
 
 LOGFILE="out/qemu_debug.log"
