@@ -6,7 +6,7 @@
 
 import json
 from pathlib import Path
-from python.validator import trace_integrity
+from validator import trace_integrity
 
 
 def test_corrupted_manifest_and_trace(tmp_path):
