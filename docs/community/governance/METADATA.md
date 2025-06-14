@@ -18,7 +18,7 @@
 | OSS_REUSE.md               | v1.7    | 2025-07-15    | COMMUNITY      |            |              |
 | Q_DAY.md                   | v1.0    | 2025-05-31    | PRIVATE        |            |              |
 | QUEEN_POLICY.md            | v1.1    | 2025-07-12    | PRIVATE        |            |              |
-| README.md                  | v0.2    | 2025-07-23    | PRIVATE        |            |              |
+| README.md                  | v0.11   | 2025-07-24    | PRIVATE        |            |              |
 | README_Codex.md            | v1.4    | 2025-06-16    | COMMUNITY      |            |              |
 | REMOTE_ACCESS.md           | v1.0    | 2025-05-24    | COMMUNITY      |            |              |
 | ROLE_MANIFEST.md           | v1.3    | 2025-07-12    | COMMUNITY      |            |              |
@@ -125,6 +125,18 @@
 | docs/community/archive/examples_README.md | v0.2 | 2025-07-23 | COMMUNITY | | |
 | cohesix_fetch_build.sh | v0.2 | 2025-06-14 | COMMUNITY | | |
 | CONTRIBUTING.md | v1.1 | 2025-07-23 | COMMUNITY | | |
+| config/secure9p.toml | v0.1 | 2025-07-24 | COMMUNITY | | |
+| src/secure9p/mod.rs | v0.1 | 2025-07-24 | COMMUNITY | | |
+| src/secure9p/auth_handler.rs | v0.1 | 2025-07-24 | COMMUNITY | | |
+| src/secure9p/cap_fid.rs | v0.1 | 2025-07-24 | COMMUNITY | | |
+| src/secure9p/policy_engine.rs | v0.1 | 2025-07-24 | COMMUNITY | | |
+| src/secure9p/namespace_resolver.rs | v0.1 | 2025-07-24 | COMMUNITY | | |
+| src/secure9p/sandbox.rs | v0.1 | 2025-07-24 | COMMUNITY | | |
+| src/secure9p/validator_hook.rs | v0.1 | 2025-07-24 | COMMUNITY | | |
+| src/secure9p/secure_9p_server.rs | v0.1 | 2025-07-24 | COMMUNITY | | |
+| tests/secure9p/tls_handshake.rs | v0.1 | 2025-07-24 | COMMUNITY | | |
+| tests/secure9p/namespace_traversal.rs | v0.1 | 2025-07-24 | COMMUNITY | | |
+| tests/secure9p/policy_denial.rs | v0.1 | 2025-07-24 | COMMUNITY | | |
 | cli/cohcli.py | v1.0 | 2025-07-15 | COMMUNITY | | |
 | scripts/collect_boot_logs.sh | v0.1 | 2025-07-12 | COMMUNITY | | |
 | scripts/generate_busybox_man.sh | v0.1 | 2025-06-08 | COMMUNITY | | |
