@@ -1,6 +1,6 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Makefile v0.16
-# Date Modified: 2025-07-23
+# Filename: Makefile v0.17
+# Date Modified: 2025-07-24
 # Author: Lukas Bower
 #
 # ─────────────────────────────────────────────────────────────
@@ -10,6 +10,8 @@
 #  • `make go-build` – vet Go workspace
 #  • `make go-test`  – run Go unit tests
 #  • `make c-shims`  – compile seL4 boot trampoline object
+#  • `make qemu`     – run boot image under QEMU
+#  • `make qemu-check` – verify boot log
 #  • `make help`     – list targets
 # ─────────────────────────────────────────────────────────────
 
@@ -230,11 +232,13 @@ qemu: ## Launch QEMU with built image and capture serial log
             -drive format=raw,file=fat:rw:out/ -net none -M q35 -m 256M \
             -no-reboot -nographic -serial mon:stdio 2>&1 | tee qemu_serial.log
 
-# Verify QEMU boot log contains BOOT_OK marker
-qemu-check: ## Check qemu_serial.log for BOOT_OK
+# Verify QEMU boot log and fail on BOOT_FAIL
+qemu-check: ## Check qemu_serial.log for BOOT_OK and fail on BOOT_FAIL
         @command -v qemu-system-x86_64 >/dev/null 2>&1 || { \
         echo "qemu-system-x86_64 not installed — skipping"; exit 0; }
         @test -f qemu_serial.log || { echo "qemu_serial.log missing"; exit 1; }
+        @if grep -q "BOOT_FAIL" qemu_serial.log; then \
+        echo "BOOT_FAIL detected"; exit 1; fi
         @grep -q "BOOT_OK" qemu_serial.log
 
 

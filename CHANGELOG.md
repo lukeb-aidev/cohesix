@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.49
+// Filename: CHANGELOG.md v0.50
 // Date Modified: 2025-07-23
 ## [vNext] - 2025-07-23
 ### Temp path fixes and QEMU script guard
@@ -13,6 +13,8 @@
 - Gpu telemetry includes temperature and utilization via nvml-wrapper
 - Added cuda_test.rs validating runtime CUDA presence
 - 9P server enforces per-session sandbox policies with validator logging
+- CMake CUDA keep directory respects TMPDIR
+- Rust tests use tempfile for temporary files instead of hardcoded /tmp
 - /proc/nsmap exposes per-role namespace maps
 - NsWatchService validates hotplugged mounts
 - SandboxService logs namespace violations via validator
@@ -20,6 +22,7 @@
 - Makefile bootloader target links with lld-link
 - CLI scripts now use wrapper binaries in `bin/` so classification headers remain the first line
 - `test_boot_efi` wrapper added; Makefile updated accordingly
+- BootMustSucceed rule verifies /trace/boot_trace.json at startup
 - Makefile now includes fmt/lint/check targets and platform flags
 - Added end-to-end traceflow test and CLI argument validation
 - Added 9P read/write, CUDA presence, and namespace rule tests
@@ -27,7 +30,12 @@
 - Added `BOOT_KERNEL_FLOW.md` diagram explaining boot through CLI
 - README begins with a vision paragraph summarizing why Cohesix matters
 - CONTRIBUTING includes local setup, testing, and Codex instructions
-- ## [v0.88] - 2025-07-22
+- Makefile adds `qemu` and `qemu-check` targets for serial-log boot testing
+- Boot trampoline writes `BOOT_OK` or `BOOT_FAIL:<reason>` to console and `/state/boot_success`
+- Added guidance to `docs/community/archive/examples_README.md`
+- Added `test_qemu_boot.rs` verifying QEMU boot log for `BOOT_OK` and CUDA setup
+## [v0.88] - 2025-07-22
+- `qemu-check` now fails if `BOOT_FAIL` appears in `qemu_serial.log`
 ### Fixed
 - `make qemu` and `make qemu-check` run QEMU with serial logging and grep for BOOT_OK
 - Bootloader writes BOOT_OK or BOOT_FAIL to /dev/console and /state/boot_success
