@@ -3,7 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-25
 
-use cohesix::p9::secure::secure_9p_server::start_secure_9p_server;
+use cohesix::secure9p::secure_9p_server::start_secure_9p_server;
 use jsonwebtoken::{encode, EncodingKey, Header};
 use rcgen::generate_simple_self_signed;
 use rustls::{Certificate, ClientConfig, RootCertStore, ClientConnection, StreamOwned};
@@ -13,7 +13,7 @@ use std::thread;
 use std::time::Duration;
 use std::fs;
 use std::io::Write;
-use cohesix::p9::secure::validator_hook::ValidatorHook;
+use cohesix::secure9p::validator_hook::ValidatorHook;
 
 #[test]
 fn tls_handshake() {
