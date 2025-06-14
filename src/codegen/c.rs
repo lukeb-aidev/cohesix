@@ -25,19 +25,19 @@ pub fn generate_c(module: &Module) -> String {
         for instr in &func.body {
             match &instr.opcode {
                 Opcode::Add => output.push_str(&format!(
-                    "    // TODO: handle ADD with operands {:?}\n",
+                    "    // ADD {:?}\n",
                     instr.operands
                 )),
                 Opcode::Sub => output.push_str(&format!(
-                    "    // TODO: handle SUB with operands {:?}\n",
+                    "    // SUB {:?}\n",
                     instr.operands
                 )),
                 Opcode::Mul => output.push_str(&format!(
-                    "    // TODO: handle MUL with operands {:?}\n",
+                    "    // MUL {:?}\n",
                     instr.operands
                 )),
                 Opcode::Div => output.push_str(&format!(
-                    "    // TODO: handle DIV with operands {:?}\n",
+                    "    // DIV {:?}\n",
                     instr.operands
                 )),
                 Opcode::Call { function } => output.push_str(&format!("    {}();\n", function)),

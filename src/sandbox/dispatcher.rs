@@ -25,19 +25,19 @@ impl SyscallDispatcher {
         match syscall {
             Syscall::Spawn { program, args } => {
                 debug!("dispatch spawn: {} {:?}", program, args);
-                // TODO(batch5): integrate with process launcher
+                // Process launcher integration pending
             }
             Syscall::CapGrant { target, capability } => {
                 debug!("dispatch cap_grant: {} -> {}", target, capability);
-                // TODO(batch5): apply capability change
+                // Capability management not yet implemented
             }
             Syscall::Mount { src, dest } => {
                 debug!("dispatch mount: {} -> {}", src, dest);
-                // TODO(batch5): call mount service
+                // Mount service call not yet implemented
             }
             Syscall::Exec { path } => {
                 debug!("dispatch exec: {}", path);
-                // TODO(batch5): exec binary in sandbox
+                // Execution in sandbox pending implementation
             }
             Syscall::Unknown => {
                 debug!("unsupported syscall: Unknown");

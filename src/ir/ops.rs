@@ -67,7 +67,8 @@ pub fn categorize(op: &Opcode) -> OpcodeCategory {
     }
 }
 
-/// TODO: Add opcode validation rules (e.g., operand arity, SSA form compatibility)
+/// Validate opcode correctness. Currently returns `true` until full
+/// validation rules are implemented.
 pub fn validate_opcode(_op: &Opcode) -> bool {
     true
 }

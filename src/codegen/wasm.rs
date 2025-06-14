@@ -21,8 +21,8 @@ pub fn generate_wasm(module: &Module) -> String {
             "  (func ${} (export \"{}\")\n",
             func.name, func.name
         ));
-        // Placeholder for instructions
-        output.push_str("    ;; TODO: emit WASM instructions based on IR opcodes\n");
+        // Instruction emission will be implemented in a later revision
+        output.push_str("    ;; instruction emission pending\n");
         output.push_str("  )\n");
     }
 

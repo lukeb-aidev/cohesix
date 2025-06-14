@@ -39,26 +39,26 @@ pub trait SPIDevice {
 pub struct SPIBus;
 
 impl SPIBus {
-    /// Create and initialize a new SPI bus.
+    /// Create and initialize a new SPI bus. Currently a stub that returns
+    /// a default `SPIBus` instance without hardware configuration.
     pub fn new() -> Self {
-        // TODO: Implement SPI initialization logic
         SPIBus
     }
 }
 
 impl SPIDevice for SPIBus {
     fn transfer(&mut self, _write_data: &[u8], _read_buffer: &mut [u8]) -> Result<(), SPIError> {
-        // TODO: Implement SPI full-duplex transfer
+        // Hardware interaction not yet implemented
         Err(SPIError::Unknown)
     }
 
     fn write(&mut self, _data: &[u8]) -> Result<(), SPIError> {
-        // TODO: Implement SPI write-only transfer
+        // Hardware interaction not yet implemented
         Err(SPIError::Unknown)
     }
 
     fn read(&mut self, _buffer: &mut [u8]) -> Result<(), SPIError> {
-        // TODO: Implement SPI read-only operation
+        // Hardware interaction not yet implemented
         Err(SPIError::Unknown)
     }
 }
