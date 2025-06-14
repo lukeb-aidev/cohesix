@@ -1,14 +1,15 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: server.rs v0.1
-// Date Modified: 2025-07-13
+// Filename: server.rs v0.2
+// Date Modified: 2025-07-23
 // Author: Lukas Bower
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use crate::ninep_adapter::{read_slice, verify_open};
+use crate::policy::{Access, SandboxPolicy};
 use anyhow::{Result as AnyResult, anyhow};
 use log::{info, warn};
 use ninep::{
@@ -16,13 +17,6 @@ use ninep::{
     fs::{FileMeta, IoUnit, Mode, Perm, QID_ROOT, Stat},
     server::{ClientId, ReadOutcome, Serve9p, Server},
 };
-
-/// Permission categories for the Cohesix file tree.
-#[derive(Copy, Clone, PartialEq, Eq)]
-enum Access {
-    Read,
-    Write,
-}
 
 fn check_perm(path: &str, access: Access) -> AnyResult<()> {
     crate::enforce_capability(path)?;
@@ -55,6 +49,8 @@ pub struct CohesixFs {
     qmap: Mutex<HashMap<u64, String>>,   // qid -> path
     next_qid: AtomicU64,
     remotes: Mutex<HashMap<String, TcpClient>>, // mountpoint -> client
+    policies: Mutex<HashMap<String, SandboxPolicy>>, // uname -> policy
+    validator_hook: Option<Arc<dyn Fn(&'static str, String, String, u64) + Send + Sync>>,
 }
 
 impl CohesixFs {
@@ -62,12 +58,16 @@ impl CohesixFs {
     pub fn new(root: PathBuf) -> Self {
         let mut qmap = HashMap::new();
         qmap.insert(QID_ROOT, String::from("/"));
+        let mut nodes = HashMap::new();
+        nodes.insert("/".into(), Node { data: Vec::new(), is_dir: true });
         Self {
             _root: root,
-            nodes: Mutex::new(HashMap::new()),
+            nodes: Mutex::new(nodes),
             qmap: Mutex::new(qmap),
             next_qid: AtomicU64::new(QID_ROOT + 1),
             remotes: Mutex::new(HashMap::new()),
+            policies: Mutex::new(HashMap::new()),
+            validator_hook: None,
         }
     }
 
@@ -124,6 +124,53 @@ impl CohesixFs {
         }
         None
     }
+
+    /// Assign a policy to a user/session name.
+    pub fn set_policy(&self, uname: String, policy: SandboxPolicy) {
+        match self.policies.lock() {
+            Ok(mut map) => {
+                map.insert(uname, policy);
+            }
+            Err(poisoned) => {
+                poisoned.into_inner().insert(uname, policy);
+            }
+        }
+    }
+
+    /// Register a validator hook for policy violations.
+    pub fn set_validator_hook(
+        &mut self,
+        hook: Arc<dyn Fn(&'static str, String, String, u64) + Send + Sync>,
+    ) {
+        self.validator_hook = Some(hook);
+    }
+
+    fn policy_for(&self, uname: &str) -> Option<SandboxPolicy> {
+        let map = match self.policies.lock() {
+            Ok(m) => m,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        map.get(uname).cloned()
+    }
+
+    fn check_access(&self, path: &str, access: Access, uname: &str) -> AnyResult<()> {
+        check_perm(path, access)?;
+        if let Some(pol) = self.policy_for(uname) {
+            if !pol.allows(path, access) {
+                if let Some(h) = &self.validator_hook {
+                    h(
+                        "9p_policy",
+                        path.to_string(),
+                        uname.to_string(),
+                        current_ts(),
+                    );
+                }
+                warn!("deny {:?} to {} by {}", access, path, uname);
+                return Err(anyhow!("permission denied"));
+            }
+        }
+        Ok(())
+    }
 }
 
 impl Serve9p for CohesixFs {
@@ -168,7 +215,8 @@ impl Serve9p for CohesixFs {
     ) -> ninep::Result<IoUnit> {
         let path = self.path_for(qid);
         // Opening a file always requires read permissions for now.
-        check_perm(&path, Access::Read).map_err(|e| e.to_string())?;
+        self.check_access(&path, Access::Read, _uname)
+            .map_err(|e| e.to_string())?;
         if let Some((sub, mut cli)) = self.remote_client(&path) {
             verify_open(&mut cli, &sub, mode).map_err(|e| e.to_string())?;
             return Ok(8192);
@@ -210,7 +258,8 @@ impl Serve9p for CohesixFs {
         } else {
             format!("{}/{}", base, name)
         };
-        check_perm(&path, Access::Write).map_err(|e| e.to_string())?;
+        self.check_access(&path, Access::Write, _uname)
+            .map_err(|e| e.to_string())?;
         let qid = self.alloc_qid(&path);
         match self.nodes.lock() {
             Ok(mut nodes) => {
@@ -244,6 +293,8 @@ impl Serve9p for CohesixFs {
         _uname: &str,
     ) -> ninep::Result<ReadOutcome> {
         let path = self.path_for(qid);
+        self.check_access(&path, Access::Read, _uname)
+            .map_err(|e| e.to_string())?;
         if let Some((sub, mut cli)) = self.remote_client(&path) {
             let slice = read_slice(&mut cli, &sub, offset, count).map_err(|e| e.to_string())?;
             return Ok(ReadOutcome::Immediate(slice));
@@ -301,7 +352,8 @@ impl Serve9p for CohesixFs {
         _uname: &str,
     ) -> ninep::Result<usize> {
         let path = self.path_for(qid);
-        check_perm(&path, Access::Write).map_err(|e| e.to_string())?;
+        self.check_access(&path, Access::Write, _uname)
+            .map_err(|e| e.to_string())?;
         if let Some((sub, mut cli)) = self.remote_client(&path) {
             let written = cli
                 .write(sub, offset as u64, &data)
@@ -322,7 +374,8 @@ impl Serve9p for CohesixFs {
 
     fn remove(&mut self, _cid: ClientId, qid: u64, _uname: &str) -> ninep::Result<()> {
         let path = self.path_for(qid);
-        check_perm(&path, Access::Write).map_err(|e| e.to_string())?;
+        self.check_access(&path, Access::Write, _uname)
+            .map_err(|e| e.to_string())?;
         match self.nodes.lock() {
             Ok(mut nodes) => {
                 nodes.remove(&path);
@@ -375,18 +428,44 @@ impl Serve9p for CohesixFs {
 /// Top-level 9P server wrapper.
 pub struct FsServer {
     cfg: super::FsConfig,
+    policies: Vec<(String, SandboxPolicy)>,
+    validator_hook: Option<Arc<dyn Fn(&'static str, String, String, u64) + Send + Sync>>,
     handle: Option<std::thread::JoinHandle<()>>,
 }
 
 impl FsServer {
     /// Create a server with the provided configuration.
     pub fn new(cfg: super::FsConfig) -> Self {
-        Self { cfg, handle: None }
+        Self {
+            cfg,
+            policies: Vec::new(),
+            validator_hook: None,
+            handle: None,
+        }
+    }
+
+    /// Configure a sandbox policy for a session/username before `start`.
+    pub fn set_policy(&mut self, uname: String, policy: SandboxPolicy) {
+        self.policies.push((uname, policy));
+    }
+
+    /// Register a validator hook applied to the inner filesystem.
+    pub fn set_validator_hook(
+        &mut self,
+        hook: Arc<dyn Fn(&'static str, String, String, u64) + Send + Sync>,
+    ) {
+        self.validator_hook = Some(hook);
     }
 
     /// Start serving over TCP.
     pub fn start(&mut self) -> AnyResult<()> {
-        let fs = CohesixFs::new(self.cfg.root.clone());
+        let mut fs = CohesixFs::new(self.cfg.root.clone());
+        for (u, p) in &self.policies {
+            fs.set_policy(u.clone(), p.clone());
+        }
+        if let Some(h) = &self.validator_hook {
+            fs.set_validator_hook(Arc::clone(h));
+        }
         let server = Server::new(fs);
         info!("Starting 9P server on {}", self.cfg.port);
         let handle = server.serve_tcp(self.cfg.port);
@@ -397,11 +476,25 @@ impl FsServer {
     /// Start serving over a Unix domain socket path.
     pub fn start_socket(&mut self, socket: impl Into<String>) -> AnyResult<()> {
         let path = socket.into();
-        let fs = CohesixFs::new(self.cfg.root.clone());
+        let mut fs = CohesixFs::new(self.cfg.root.clone());
+        for (u, p) in &self.policies {
+            fs.set_policy(u.clone(), p.clone());
+        }
+        if let Some(h) = &self.validator_hook {
+            fs.set_validator_hook(Arc::clone(h));
+        }
         let server = Server::new(fs);
         info!("Starting 9P server on {}", &path);
         let handle = server.serve_socket(path);
         self.handle = Some(handle);
         Ok(())
     }
+}
+
+fn current_ts() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
