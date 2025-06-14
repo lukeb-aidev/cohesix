@@ -117,6 +117,7 @@
 | tests/test_9p_read_write.rs | v0.1 | 2025-07-23 | COMMUNITY | | |
 | tests/test_cuda_presence.rs | v0.1 | 2025-07-23 | COMMUNITY | | |
 | tests/test_namespace_rule.rs | v0.1 | 2025-07-23 | COMMUNITY | | |
+| tests/test_trace_compare.py | v0.1 | 2025-07-23 | COMMUNITY | | |
 | docs/QUICKSTART.md | v0.1 | 2025-07-23 | COMMUNITY | | |
 | docs/community/architecture/BOOT_KERNEL_FLOW.md | v0.1 | 2025-07-23 | COMMUNITY | | |
 | CONTRIBUTING.md | v1.1 | 2025-07-23 | COMMUNITY | | |
