@@ -82,6 +82,8 @@ pub mod sim;
 
 /// 9P multiplexer utilities
 pub mod p9;
+#[cfg(feature = "secure9p")]
+pub mod secure9p;
 /// Networking daemons
 pub mod net;
 

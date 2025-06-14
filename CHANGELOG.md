@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v0.50
-// Date Modified: 2025-07-23
+// Date Modified: 2025-07-24
 ## [vNext] - 2025-07-23
 ### Temp path fixes and QEMU script guard
 - Ensemble tests use writable temp directory via COHESIX_ENS_TMP
@@ -13,6 +13,9 @@
 - Gpu telemetry includes temperature and utilization via nvml-wrapper
 - Added cuda_test.rs validating runtime CUDA presence
 - 9P server enforces per-session sandbox policies with validator logging
+- New `secure9p` feature flag toggles TLS-backed file server
+- Secure9P server added with TLS support, per-agent namespaces, capability checks, and JSON trace logging
+- Secure9P server added with TLS support, per-agent namespaces, capability checks, and JSON trace logging
 - CMake CUDA keep directory respects TMPDIR
 - Rust tests use tempfile for temporary files instead of hardcoded /tmp
 - /proc/nsmap exposes per-role namespace maps
