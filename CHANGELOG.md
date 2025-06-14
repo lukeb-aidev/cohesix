@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.52
-// Date Modified: 2025-07-26
+// Filename: CHANGELOG.md v0.53
+// Date Modified: 2025-07-28
 ## [vNext] - 2025-07-23
 ### Temp path fixes and QEMU script guard
 - cohesix_fetch_build.sh header updated and registered in METADATA
@@ -9,6 +9,7 @@
 - QEMU boot script checks for qemu-system-x86_64, sets TMPDIR, ensures writable paths
 - Boot test exits with code 0 when QEMU is missing so CI shows the step as skipped
 - Makefile v0.18 skips gnu-efi header checks and tolerates missing cargo tools
+- Makefile v0.19 consolidates duplicate qemu rules and enforces OVMF firmware
 - Converted remaining TODO comments to descriptive FIXME notes
 - `generate_c` now outputs basic arithmetic operations in C
 - Bootloader telemetry writes /state/boot_success; watchdog logs to /state/boot_error
