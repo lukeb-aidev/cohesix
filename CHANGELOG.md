@@ -44,6 +44,7 @@
 - CLI scripts now use wrapper binaries in `bin/` so classification headers remain the first line
 - `config/secure9p.toml` header repositioned and version updated to v0.2
 - Added integration test `test_qemu_boot.rs` to verify BOOT_OK in qemu_serial.log
+- New `scripts/check-qemu-deps.sh` verifies QEMU and gnu-efi packages before boot tests; README documents usage
 
 ## [v0.89] - 2025-07-25
 ### Changed

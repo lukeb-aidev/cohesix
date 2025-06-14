@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: README.md v0.11
+// Filename: README.md v0.12
 // Author: Lukas Bower
-// Date Modified: 2025-07-24
+// Date Modified: 2025-07-28
 
 
 # Cohesix
@@ -103,6 +103,16 @@ cd go && go test ./...
 # or
 GOWORK=$(pwd)/go/go.work go test ./go/...
 ```
+
+## Boot Testing
+
+Confirm QEMU and EFI dependencies with:
+
+```bash
+./scripts/check-qemu-deps.sh
+```
+
+The script highlights missing packages so you can install them before running boot tests.
 
 ---
 

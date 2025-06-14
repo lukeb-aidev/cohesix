@@ -18,7 +18,7 @@
 | OSS_REUSE.md               | v1.7    | 2025-07-15    | COMMUNITY      |            |              |
 | Q_DAY.md                   | v1.0    | 2025-05-31    | PRIVATE        |            |              |
 | QUEEN_POLICY.md            | v1.1    | 2025-07-12    | PRIVATE        |            |              |
-| README.md                  | v0.11   | 2025-07-24    | PRIVATE        |            |              |
+| README.md                  | v0.12   | 2025-07-28    | COMMUNITY        |            |              |
 | README_Codex.md            | v1.4    | 2025-06-16    | COMMUNITY      |            |              |
 | REMOTE_ACCESS.md           | v1.0    | 2025-05-24    | COMMUNITY      |            |              |
 | ROLE_MANIFEST.md           | v1.3    | 2025-07-12    | COMMUNITY      |            |              |
@@ -145,6 +145,7 @@
 | tests/secure9p/policy_denial.rs | v0.3 | 2025-07-26 | COMMUNITY | | |
 | tests/secure9p/agent_identifier.rs | v0.2 | 2025-07-26 | COMMUNITY | | |
 | cli/cohcli.py | v1.0 | 2025-07-15 | COMMUNITY | | |
+| scripts/check-qemu-deps.sh | v0.1 | 2025-07-28 | COMMUNITY | | |
 | scripts/collect_boot_logs.sh | v0.1 | 2025-07-12 | COMMUNITY | | |
 | scripts/generate_busybox_man.sh | v0.1 | 2025-06-08 | COMMUNITY | | |
 | scripts/manpage_scan.sh | v0.1 | 2025-06-08 | COMMUNITY | | |
