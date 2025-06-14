@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: queen.rs v0.3
+// Filename: queen.rs v0.4
 // Author: Lukas Bower
-// Date Modified: 2025-07-11
+// Date Modified: 2025-07-24
 
 //! seL4 root task hook for the Queen role.
 //! Loads the boot namespace and registers core services.
@@ -65,5 +65,6 @@ pub fn start() {
     ServiceRegistry::register_service("telemetry", "/srv/telemetry");
     ServiceRegistry::register_service("sim", "/sim");
     ServiceRegistry::register_service("p9mux", "/srv/p9mux");
-    // TODO(cohesix): spawn initial processes under this namespace
+    // Spawning of initial processes will be added in a future update
+    // FIXME(cohesix): spawn initial processes under this namespace
 }
