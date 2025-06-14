@@ -1,8 +1,9 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v0.51
-// Date Modified: 2025-07-24
-## [vNext] - 2025-07-24
+// Date Modified: 2025-06-14
+## [vNext] - 2025-07-23
 ### Temp path fixes and QEMU script guard
+- cohesix_fetch_build.sh header updated and registered in METADATA
 - Ensemble tests use writable temp directory via COHESIX_ENS_TMP
 - SharedMemory, BaseAgent use TMPDIR and respect override vars
 - QEMU boot script checks for qemu-system-x86_64, sets TMPDIR, ensures writable paths
@@ -18,6 +19,7 @@
 - /proc/nsmap exposes per-role namespace maps
 - NsWatchService validates hotplugged mounts
 - SandboxService logs namespace violations via validator
+- `cohesix-9p` tests use `std::env::temp_dir()` for server root
 - Added ns_hotplug.rs integration test
 - Makefile bootloader target links with lld-link
 - CLI scripts now use wrapper binaries in `bin/` so classification headers remain the first line
