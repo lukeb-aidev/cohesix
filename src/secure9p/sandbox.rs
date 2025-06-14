@@ -37,6 +37,8 @@ mod tests {
         assert!(p.ends_with("a"));
         assert!(validate_path(root, Path::new("../x")).is_err());
     }
+}
+
 use super::{policy_engine::PolicyEngine, cap_fid::Capability};
 use std::path::Path;
 

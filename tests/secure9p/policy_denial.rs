@@ -3,7 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-25
 
-use cohesix::p9::secure::policy_engine::PolicyEngine;
+use cohesix::secure9p::policy_engine::PolicyEngine;
 use serial_test::serial;
 use tempfile::tempdir;
 use std::fs;
