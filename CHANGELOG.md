@@ -11,6 +11,7 @@
 - CUDA runtime now exposes stub /srv/cuda when unavailable
 - Gpu telemetry includes temperature and utilization via nvml-wrapper
 - Added cuda_test.rs validating runtime CUDA presence
+- 9P server enforces per-session sandbox policies with validator logging
 ## [v0.88] - 2025-07-22
 ### Fixed
 - Rust ensemble agent tests write to a safe temporary directory.
