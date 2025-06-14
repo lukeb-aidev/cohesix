@@ -1,12 +1,14 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: README.md v0.9
+// Filename: README.md v0.10
 // Author: Lukas Bower
-// Date Modified: 2025-07-22
+// Date Modified: 2025-07-23
 
 
 # Cohesix
 
 Cohesix is a self‑contained, formally verified operating‑system and compiler suite designed for secure, scalable execution on edge and wearable devices.
+
+Why Cohesix? seL4 proofs guarantee strong isolation, cold boot completes in under 200 ms with GPU offload latency below 5 ms, dynamic 9P namespaces expose services like `/sim/` and `/srv/cuda`, and the BusyBox userland keeps the toolchain familiar.
 
 ---
 
