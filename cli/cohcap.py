@@ -76,8 +76,8 @@ def main():
     parser.add_argument("--man", action="store_true", help="Show man page")
     sub = parser.add_subparsers(dest="cmd")
 
-    l = sub.add_parser("list", help="List capabilities")
-    l.add_argument("--worker", required=True)
+    list_parser = sub.add_parser("list", help="List capabilities")
+    list_parser.add_argument("--worker", required=True)
 
     g = sub.add_parser("grant", help="Grant capability")
     g.add_argument("cap")

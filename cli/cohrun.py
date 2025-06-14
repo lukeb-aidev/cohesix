@@ -37,7 +37,9 @@ def safe_run(cmd: List[str]) -> int:
 def main():
     parser = argparse.ArgumentParser(description="Run Cohesix demo scenarios")
     parser.add_argument("--man", action="store_true", help="Show man page")
-    parser.add_argument("args", nargs=argparse.REMAINDER, help="Arguments passed to rust cohrun")
+    parser.add_argument(
+        "args", nargs=argparse.REMAINDER, help="Arguments passed to rust cohrun"
+    )
     opts = parser.parse_args()
 
     if opts.man:
