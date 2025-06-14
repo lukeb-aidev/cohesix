@@ -125,7 +125,7 @@
 | docs/community/archive/examples_README.md | v0.2 | 2025-07-23 | COMMUNITY | | |
 | cohesix_fetch_build.sh | v0.2 | 2025-06-14 | COMMUNITY | | |
 | CONTRIBUTING.md | v1.1 | 2025-07-23 | COMMUNITY | | |
-| config/secure9p.toml | v0.1 | 2025-07-24 | COMMUNITY | | |
+| config/secure9p.toml | v0.2 | 2025-07-26 | COMMUNITY | | |
 | src/secure9p/mod.rs | v0.2 | 2025-07-25 | COMMUNITY | | |
 | src/secure9p/auth_handler.rs | v0.2 | 2025-07-25 | COMMUNITY | | |
 | src/secure9p/cap_fid.rs | v0.2 | 2025-07-25 | COMMUNITY | | |

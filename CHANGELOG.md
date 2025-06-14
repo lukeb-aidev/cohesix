@@ -33,6 +33,7 @@
 - Added ns_hotplug.rs integration test
 - Makefile bootloader target links with lld-link
 - CLI scripts now use wrapper binaries in `bin/` so classification headers remain the first line
+- `config/secure9p.toml` header repositioned and version updated to v0.2
 
 ## [v0.89] - 2025-07-25
 ### Changed
