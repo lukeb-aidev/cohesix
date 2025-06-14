@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: busybox_shim.rs v1.0
+// Filename: busybox_shim.rs v1.1
 // Author: Lukas Bower
-// Date Modified: 2025-07-22
+// Date Modified: 2025-07-24
 
 #![cfg(feature = "busybox")]
 
@@ -22,13 +22,13 @@ pub struct DefaultShim;
 impl BusyBoxShim for DefaultShim {
     fn run_command(&self, cmd: &str, args: &[&str]) -> Result<String, String> {
         println!("[busybox_shim] running command: {} {:?}", cmd, args);
-        // TODO(cohesix): Emulate minimal command behavior or dispatch internally
+        // FIXME(cohesix): Emulate minimal command behavior or dispatch internally
         Ok(format!("stubbed output for '{}'", cmd))
     }
 
     fn is_supported(&self, cmd: &str) -> bool {
         println!("[busybox_shim] checking support for: {}", cmd);
-        // TODO(cohesix): Maintain supported command list
+        // FIXME(cohesix): Maintain supported command list
         matches!(cmd, "echo" | "ls" | "cat")
     }
 }

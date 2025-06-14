@@ -1,11 +1,13 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.50
-// Date Modified: 2025-07-23
+// Filename: CHANGELOG.md v0.51
+// Date Modified: 2025-07-24
 ## [vNext] - 2025-07-23
 ### Temp path fixes and QEMU script guard
 - Ensemble tests use writable temp directory via COHESIX_ENS_TMP
 - SharedMemory, BaseAgent use TMPDIR and respect override vars
 - QEMU boot script checks for qemu-system-x86_64, sets TMPDIR, ensures writable paths
+- Converted remaining TODO comments to descriptive FIXME notes
+- `generate_c` now outputs basic arithmetic operations in C
 - Bootloader telemetry writes /state/boot_success; watchdog logs to /state/boot_error
 - Validator paths now configurable via environment variables; CLI rule merge test added
 - `cohtrace` CLI now supports `--verify-trace` and `compare` commands for trace validation

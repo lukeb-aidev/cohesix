@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: wasm.rs v1.0
-// Date Modified: 2025-05-27
+// Filename: wasm.rs v1.1
+// Date Modified: 2025-07-24
 // Author: Lukas Bower
 
 //! WASM backend for the Coh_CC compiler. Translates IR into WebAssembly text (WAT) format.
@@ -21,8 +21,8 @@ pub fn generate_wasm(module: &Module) -> String {
             "  (func ${} (export \"{}\")\n",
             func.name, func.name
         ));
-        // Placeholder for instructions
-        output.push_str("    ;; TODO: emit WASM instructions based on IR opcodes\n");
+        // FIXME: emit WASM instructions based on IR opcodes
+        output.push_str("    ;; FIXME: instruction emission not implemented\n");
         output.push_str("  )\n");
     }
 

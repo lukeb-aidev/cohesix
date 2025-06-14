@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: ops.rs v1.0
-// Date Modified: 2025-05-31
+// Filename: ops.rs v1.1
+// Date Modified: 2025-07-24
 // Author: Lukas Bower
 
 //! Utility functions and constants for IR opcodes in the Cohesix compiler.
@@ -67,7 +67,7 @@ pub fn categorize(op: &Opcode) -> OpcodeCategory {
     }
 }
 
-/// TODO: Add opcode validation rules (e.g., operand arity, SSA form compatibility)
+/// FIXME: Add opcode validation rules (e.g., operand arity, SSA form compatibility)
 pub fn validate_opcode(_op: &Opcode) -> bool {
     true
 }

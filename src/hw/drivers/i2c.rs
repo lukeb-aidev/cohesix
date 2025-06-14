@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: i2c.rs v1.0
+// Filename: i2c.rs v1.1
 // Author: Lukas Bower
-// Date Modified: 2025-05-31
+// Date Modified: 2025-07-24
 
 //! I2C driver module for Cohesix hardware abstraction layer.
 //! Provides interfaces for initializing and interacting with I2C devices.
@@ -32,24 +32,24 @@ pub struct I2CBus;
 impl I2CBus {
     /// Initialize the I2C bus with default settings.
     pub fn new() -> Self {
-        // TODO: Implement hardware-specific initialization
+        // FIXME: Implement hardware-specific initialization
         I2CBus
     }
 }
 
 impl I2CDevice for I2CBus {
     fn write(&mut self, _address: u8, _data: &[u8]) -> Result<(), I2CError> {
-        // TODO: Implement I2C write transaction
+        // FIXME: Implement I2C write transaction
         Err(I2CError::Unknown)
     }
 
     fn read(&mut self, _address: u8, _buffer: &mut [u8]) -> Result<(), I2CError> {
-        // TODO: Implement I2C read transaction
+        // FIXME: Implement I2C read transaction
         Err(I2CError::Unknown)
     }
 
     fn write_read(&mut self, _address: u8, _data: &[u8], _buffer: &mut [u8]) -> Result<(), I2CError> {
-        // TODO: Implement I2C write-read transaction
+        // FIXME: Implement I2C write-read transaction
         Err(I2CError::Unknown)
     }
 }

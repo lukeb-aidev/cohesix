@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: lib.rs v0.2
-// Date Modified: 2025-07-22
+// Filename: lib.rs v0.3
+// Date Modified: 2025-07-24
 // Author: Lukas Bower
 
 //! Minimal filesystem layer for Cohesix-9P.
@@ -15,7 +15,7 @@
 // # Design Notes
 // * No network code yet – the transport layer will be injected later.
 // * API kept synchronous for now; will migrate to async once design stabilises.
-// * Explicit `TODO` markers call out un‑implemented sections so the hydration
+// * Explicit `FIXME` markers call out un‑implemented sections so the hydration
 //   linter will catch them.
 //
 // # Public Surface
