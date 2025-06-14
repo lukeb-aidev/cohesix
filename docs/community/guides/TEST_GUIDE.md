@@ -53,7 +53,8 @@ A rigorous, multi‐tiered testing strategy ensures each component of Cohesix is
 
 ### 3.3 Security & Regression Tests
 - Perform sandbox escape attempts; ensure seL4 caps block unauthorized access.  
-- Regression harness on filesystem operations and namespace remounting.
+- Regression harness on filesystem operations and namespace remounting.  
+- Confirm ensemble agents respect TMPDIR, COHESIX_ENS_TMP, and COHESIX_TRACE_TMP to avoid permission issues.
 
 ---
 
@@ -95,7 +96,8 @@ A rigorous, multi‐tiered testing strategy ensures each component of Cohesix is
 
 ### 6.2 CI & Automation
 - Smoke tests for `cohcli` commands (`codex run`, `hydrate_docs`).  
-- Validate log output in `codex_logs/` and correct filename conventions.
+- Validate log output in `codex_logs/` and correct filename conventions.  
+- Guard QEMU-based boot scripts with preflight check for qemu-system-x86_64; fail gracefully if missing.
 
 ### 6.3 Distributed & Remote Build
 - Simulate remote build via SSH; verify artifact transfer and exit status.
@@ -113,7 +115,8 @@ A rigorous, multi‐tiered testing strategy ensures each component of Cohesix is
 - **Auditing:** All new tests must be reviewed by at least one peer; document in PR.  
 - **Coverage:** Enforce 80%+ coverage across Rust and Go codebases.  
 - **Test Data Management:** Version‐control representative IR modules, fixture scripts, and sandbox images.  
-- **CI Enforcement:** GitHub Actions must run all tests on PR; failures block merges.
+- **CI Enforcement:** GitHub Actions must run all tests on PR; failures block merges.  
+- Temporary directories used by agents and boot scripts must be cleaned up after test runs. Use TMPDIR or custom env vars.
 
 ---
 
@@ -131,4 +134,5 @@ To ensure Cohesix meets modern security benchmarks, we incorporate OWASP standar
 - **Dependency Scanning:** Integrate SCA tools (e.g., `cargo audit`, `go list -m`) into CI to detect CVEs in OSS dependencies.
 - **Container & Image Scanning:** Apply tools like `Trivy` or `Clair` to any containerized images (e.g., Codex agents) before deployment.
 - **Secure Coding Practices:** Enforce secure patterns (input sanitization, least privilege, proper error handling) as part of code reviews.
-- **Security Logging:** Ensure all security events (authentication failures, permission denials) are logged and audited via 9P logs.
+- **Security Logging:** Ensure all security events (authentication failures, permission denials) are logged and audited via 9P logs.  
+- Enforce writable path validation in agent sandboxes to prevent privilege escalation or unintended FS writes.

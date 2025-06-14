@@ -55,7 +55,7 @@ and runs `validate_metadata_sync.py`.
   pip install pre-commit
   pre-commit install
   ```
-- **Agent Definitions**: `docs/community/AGENTS_AND_CLI.md` contains JSON schema for agent roles and prompts. Review and extend to add new Codex agents or tasks.
+- **Agent Definitions**: `docs/community/AGENTS_AND_CLI.md` contains JSON schema for agent roles and prompts. Review and extend to add new Codex agents or tasks. Agents should respect temporary directory environment variables such as `TMPDIR` or `COHESIX_TRACE_TMP` to avoid hardcoded `/tmp` paths.
 
 ## Agents & Task Schema
 
@@ -86,12 +86,15 @@ and runs `validate_metadata_sync.py`.
            - run: pre-commit run --all-files
            - run: pytest tests/codex/
      ```
+   - Note: QEMU is not available in the Codex environment, so related tests (e.g., `test_boot_efi.sh`) will fail unless explicitly skipped or mocked.
 4. **Audit Logs**: Store all Codex-generated outputs in `codex_logs/` with timestamps. Configure `cohcli` to write logs:  
    ```bash
    cohcli codex run <agent_id> --file path --log-dir codex_logs/
    ```
+   - Note: Codex cannot write logs to `/tmp` in its environment; logs must be redirected to a writable path like `codex_logs/` or a relative project directory.
 5. **Human Review Gate**: Require at least one code review approval for any PR with Codex-generated changes. Enforce via branch protection rules.
 6. **Metadata Sync**: Run `python scripts/validate_metadata_sync.py` before pushing changes to ensure document headers match `METADATA.md`.
+7. **Sandbox Environment**: Codex runs in a restricted sandbox with no persistent filesystem access, so all scripts should use `TMPDIR`, `COHESIX_TRACE_TMP`, or similar environment variables for temporary paths instead of hardcoded locations.
 
 ## Getting Started Quickly
 
