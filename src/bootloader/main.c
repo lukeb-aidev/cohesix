@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: main.c v0.1
+// Filename: main.c v0.2
 // Author: Lukas Bower
 // Date Modified: 2025-07-22
 // SPDX-License-Identifier: MIT
@@ -8,6 +8,7 @@
 
 EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
     InitializeLib(image, system_table);
+    Print(L"Starting Cohesix EFI loader...\n");
     Print(L"Booting Cohesix from UEFI...\n");
 
     EFI_STATUS status;

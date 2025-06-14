@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.43
+// Filename: CHANGELOG.md v0.44
 // Date Modified: 2025-07-22
 ## [v0.82] - 2025-07-22
 ### Added
@@ -7,6 +7,12 @@
 - `test_boot_efi.sh` now builds the stub and uses system OVMF firmware.
 ### Fixed
 - Corrected QEMU BIOS path in boot test.
+## [v0.83] - 2025-07-22
+### Added
+- Bootloader prints "Starting Cohesix EFI loader" on launch.
+- `test_boot_efi.sh` checks for QEMU and logs to `qemu_debug.log`.
+### Changed
+- `Makefile` includes `testboot` target to invoke the EFI boot test.
 ## [v0.79] - 2025-07-22
 ### Added
 - UEFI bootloader prototype and link script.
