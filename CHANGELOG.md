@@ -27,9 +27,11 @@
 - CONTRIBUTING includes local setup, testing, and Codex instructions
 - Makefile adds `qemu` and `qemu-check` targets for serial-log boot testing
 - `qemu-check` now fails if `BOOT_FAIL` appears in `qemu_serial.log`
-- Boot trampoline writes `BOOT_OK` or `BOOT_FAIL:<reason>` to console and `/state/boot_success`
-## [v0.88] - 2025-07-22
+- ## [v0.88] - 2025-07-22
 ### Fixed
+- `make qemu` and `make qemu-check` run QEMU with serial logging and grep for BOOT_OK
+- Bootloader writes BOOT_OK or BOOT_FAIL to /dev/console and /state/boot_success
+- Makefile adds `qemu` and `qemu-check` targets for serial-log boot testing
 - Rust ensemble agent tests write to a safe temporary directory.
 - QEMU launch scripts ensure `$HOME/cohesix/out` and `TMPDIR` exist.
 
