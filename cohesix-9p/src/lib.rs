@@ -27,7 +27,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
-use std::{path::PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{Result, bail};
 // Note: we avoid using private modules from the `p9` crate for now.
@@ -36,6 +36,7 @@ pub mod fs;
 mod server;
 pub use server::FsServer;
 pub mod ninep_adapter;
+pub mod policy;
 
 /// Enforce capability checks based on the active Cohesix role.
 pub fn enforce_capability(action: &str) -> Result<()> {
@@ -93,7 +94,7 @@ pub fn parse_version_message(buf: &[u8]) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ninep::fs::{Perm, Mode};
+    use ninep::fs::{Mode, Perm};
     use std::{thread, time::Duration};
 
     #[test]
@@ -121,19 +122,21 @@ mod tests {
 
     #[test]
     fn unix_socket_roundtrip() {
-        let mut srv = FsServer::new(FsConfig { port: 5660, ..Default::default() });
-        srv.start().unwrap_or_else(|e| panic!("start socket failed: {e}"));
+        let mut srv = FsServer::new(FsConfig {
+            port: 5660,
+            ..Default::default()
+        });
+        srv.start()
+            .unwrap_or_else(|e| panic!("start socket failed: {e}"));
         thread::sleep(Duration::from_millis(100));
 
-        let mut cli = ninep::client::TcpClient::new_tcp(
-            "tester".to_string(),
-            "127.0.0.1:5660",
-            "",
-        )
-        .unwrap_or_else(|e| panic!("connect failed: {e}"));
+        let mut cli = ninep::client::TcpClient::new_tcp("tester".to_string(), "127.0.0.1:5660", "")
+            .unwrap_or_else(|e| panic!("connect failed: {e}"));
         cli.create("/", "foo", Perm::OWNER_READ | Perm::OWNER_WRITE, Mode::FILE)
             .unwrap_or_else(|e| panic!("create failed: {e}"));
-        let st = cli.stat("/foo").unwrap_or_else(|e| panic!("stat failed: {e}"));
+        let st = cli
+            .stat("/foo")
+            .unwrap_or_else(|e| panic!("stat failed: {e}"));
         println!("created file size {}", st.n_bytes);
     }
 }
