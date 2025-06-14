@@ -1,16 +1,18 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: policy_engine.rs v0.1
 // Author: Lukas Bower
-// Date Modified: 2025-07-23
+// Date Modified: 2025-07-25
 
 //! Policy evaluation for Secure9P operations.
 
 #[cfg(feature = "secure9p")]
+use crate::p9::secure::cap_fid::Cap;
+#[cfg(feature = "secure9p")]
+use anyhow::Result;
+#[cfg(feature = "secure9p")]
 use serde::Deserialize;
 #[cfg(feature = "secure9p")]
 use std::collections::HashMap;
-#[cfg(feature = "secure9p")]
-use anyhow::{Result};
 
 #[cfg(feature = "secure9p")]
 #[derive(Deserialize)]
@@ -45,7 +47,10 @@ impl PolicyEngine {
             let parsed: Vec<(String, String)> = p
                 .allow
                 .into_iter()
-                .filter_map(|s| s.split_once(':').map(|(a, b)| (a.to_string(), b.to_string())))
+                .filter_map(|s| {
+                    s.split_once(':')
+                        .map(|(a, b)| (a.to_string(), b.to_string()))
+                })
                 .collect();
             rules.insert(p.agent, parsed);
         }
@@ -61,6 +66,33 @@ impl PolicyEngine {
 
     pub fn policy_for(&self, agent: &str) -> Vec<(String, String)> {
         self.rules.get(agent).cloned().unwrap_or_default()
+    }
+
+    pub fn new() -> Self {
+        Self {
+            rules: HashMap::new(),
+        }
+    }
+
+    pub fn allow(&mut self, agent: String, cap: Cap) {
+        let verb = if cap.contains(Cap::WRITE) {
+            "write"
+        } else {
+            "read"
+        };
+        self.rules
+            .entry(agent)
+            .or_default()
+            .push((verb.into(), String::new()));
+    }
+
+    pub fn check(&self, agent: &str, cap: Cap) -> bool {
+        let verb = if cap.contains(Cap::WRITE) {
+            "write"
+        } else {
+            "read"
+        };
+        self.allows(agent, verb, "")
     }
 }
 

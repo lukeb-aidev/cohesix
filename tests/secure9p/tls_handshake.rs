@@ -3,8 +3,8 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-25
 
-use cohesix::secure9p::{
-    auth_handler::NullAuth, cap_fid::Capability, policy_engine::PolicyEngine,
+use cohesix::p9::secure::{
+    auth_handler::NullAuth, cap_fid::Cap, policy_engine::PolicyEngine,
     secure_9p_server::Secure9pServer,
 };
 use rcgen::generate_simple_self_signed;
@@ -26,7 +26,7 @@ fn tls_handshake() {
         std::fs::write(&cert_path, cert.serialize_pem().unwrap()).unwrap();
         std::fs::write(&key_path, cert.serialize_private_key_pem()).unwrap();
         let mut policy = PolicyEngine::new();
-        policy.allow("anonymous".into(), Capability::Read);
+        policy.allow("anonymous".into(), Cap::READ);
         let server = Secure9pServer {
             port: 5690,
             cert_path: cert_path.to_string_lossy().into(),

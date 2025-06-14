@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.51
-// Date Modified: 2025-06-14
+// Filename: CHANGELOG.md v0.52
+// Date Modified: 2025-07-25
 ## [vNext] - 2025-07-23
 ### Temp path fixes and QEMU script guard
 - cohesix_fetch_build.sh header updated and registered in METADATA
@@ -22,6 +22,7 @@
 - Secure9P server added with TLS support, per-agent namespaces, capability checks, and JSON trace logging
 - Secure9P server added with TLS support, per-agent namespaces, capability checks, and JSON trace logging
 - Secure9P server log path now uses `COHESIX_LOG_DIR` with temp dir fallback; handshake test verifies log
+- Consolidated secure9p modules under `src/p9/secure`; removed old `src/secure9p` path
 - CMake CUDA keep directory respects TMPDIR
 - Rust tests use tempfile for temporary files instead of hardcoded /tmp
 - /proc/nsmap exposes per-role namespace maps
