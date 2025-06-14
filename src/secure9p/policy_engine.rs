@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: policy_engine.rs v0.2
+// Filename: policy_engine.rs v0.3
 // Author: Lukas Bower
-// Date Modified: 2025-07-25
+// Date Modified: 2025-07-26
 
 //! Policy evaluation for Secure9P operations.
 
@@ -33,6 +33,21 @@ pub struct PolicyEngine {
 
 #[cfg(feature = "secure9p")]
 impl PolicyEngine {
+    /// Create a new empty policy engine.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Add an allow rule for `agent` in the form "verb:path".
+    pub fn allow(&mut self, agent: String, rule: String) {
+        if let Some((verb, path)) = rule.split_once(':') {
+            self.rules
+                .entry(agent)
+                .or_default()
+                .push((verb.to_string(), path.to_string()));
+        }
+    }
+
     pub fn load(path: &std::path::Path) -> Result<Self> {
         let text = std::fs::read_to_string(path)?;
         let pf: PolicyFile = if path.extension().and_then(|e| e.to_str()) == Some("json") {
