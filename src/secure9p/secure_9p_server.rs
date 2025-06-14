@@ -1,19 +1,25 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: secure_9p_server.rs v0.1
+// Filename: secure_9p_server.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-07-24
+// Date Modified: 2025-07-25
 
 use std::io::Write;
 use std::sync::Arc;
 
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpListener;
-use tokio_rustls::{TlsAcceptor};
-use rustls::{pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs1KeyDer}, ServerConfig};
+use rustls::{
+    pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs1KeyDer},
+    ServerConfig,
+};
 use rustls_pemfile::{certs, rsa_private_keys};
 use serde_json::json;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpListener;
+use tokio_rustls::TlsAcceptor;
 
-use super::{auth_handler::AuthHandler, namespace_resolver::resolve, sandbox::enforce, validator_hook::ValidatorHook, cap_fid::{Capability}, policy_engine::PolicyEngine};
+use super::{
+    auth_handler::AuthHandler, cap_fid::Capability, namespace_resolver::resolve,
+    policy_engine::PolicyEngine, sandbox::enforce, validator_hook::ValidatorHook,
+};
 
 pub struct Secure9pServer<H: AuthHandler + Send + Sync + 'static> {
     pub port: u16,
@@ -62,10 +68,13 @@ impl<H: AuthHandler + Send + Sync + 'static> Secure9pServer<H> {
 }
 
 fn log_event(v: serde_json::Value) {
+    let log_dir = std::env::var("COHESIX_LOG_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::env::temp_dir());
     if let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open("/log/secure9p.log")
+        .open(log_dir.join("secure9p.log"))
     {
         let _ = serde_json::to_writer(&mut f, &v);
         let _ = writeln!(f);
