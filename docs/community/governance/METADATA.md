@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: METADATA.md v3.13
 // Author: Lukas Bower
-// Date Modified: 2025-07-23
+// Date Modified: 2025-06-14
 
 ## Canonical Documents
 
@@ -14,7 +14,7 @@
 | BUILD_PLAN.md              | v0.4    | 2025-07-11    | COMMUNITY      |            |              |
 | COMMERCIAL_PLAN.md         | v1.5    | 2025-06-08    | PRIVATE        |            |              |
 | DEPENDENCIES.md            | v0.5    | 2025-07-06    | COMMUNITY      |            |              |
-| METADATA.md                | v3.13   | 2025-07-23    | COMMUNITY      |            |              |
+| METADATA.md                | v3.13   | 2025-06-14    | COMMUNITY      |            |              |
 | OSS_REUSE.md               | v1.7    | 2025-07-15    | COMMUNITY      |            |              |
 | Q_DAY.md                   | v1.0    | 2025-05-31    | PRIVATE        |            |              |
 | QUEEN_POLICY.md            | v1.1    | 2025-07-12    | PRIVATE        |            |              |
@@ -43,6 +43,7 @@
 | AGENTS.md                 | v2.2    | 2025-07-22    | COMMUNITY      |     |              |
 | DEMO_SCENARIOS.md          | v1.0    | 2025-06-20    | COMMUNITY      |     |              |
 | VALIDATION_AND_TESTING.md  | v1.2    | 2025-07-20    | COMMUNITY      |     |              |
+| VALIDATION_SUMMARY.md       | v0.2    | 2025-06-14    | COMMUNITY      |     |              |
 | CLI_HELP_COHCLI.md         | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
 | CLI_HELP_COHRUN.md         | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
 | CLI_HELP_COHTRACE.md       | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
