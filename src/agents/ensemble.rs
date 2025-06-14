@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: ensemble.rs v0.2
+// Filename: ensemble.rs v0.3
 // Author: Lukas Bower
 // Date Modified: 2025-07-22
 
@@ -21,14 +21,15 @@ pub struct SharedMemory {
 
 impl SharedMemory {
     pub fn new(id: &str) -> Self {
-        let tmpdir = std::env::var("TMPDIR").unwrap_or("/tmp".to_string());
-        let root = std::env::var("COHESIX_ENS_TMP").unwrap_or_else(|_| format!("{}/ensemble", tmpdir));
+        let base_tmp = std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".to_string());
+        let root = std::env::var("COHESIX_ENS_TMP").unwrap_or_else(|_| format!("{}/ensemble", base_tmp));
         Self { path: format!("{root}/{id}/mem") }
     }
     pub fn read(&self) -> Option<String> { fs::read_to_string(&self.path).ok() }
     pub fn write(&self, data: &str) {
-        let base = std::path::Path::new(&self.path).parent().unwrap_or_else(|| std::path::Path::new("/ensemble"));
-        fs::create_dir_all(base).ok();
+        if let Some(base) = std::path::Path::new(&self.path).parent() {
+            fs::create_dir_all(base).ok();
+        }
         fs::write(&self.path, data).ok();
     }
 }
@@ -50,8 +51,8 @@ use serde_json;
 
 impl Migrateable for EnsembleAgent {
     fn migrate<T: AgentTransport>(&self, peer: &str, transport: &T) -> anyhow::Result<MigrationStatus> {
-        let tmpdir = std::env::var("TMPDIR").unwrap_or("/tmp".to_string());
-        let tmp = format!("{}/{}_ensemble.json", tmpdir, self.id);
+        let base_tmp = std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".to_string());
+        let tmp = format!("{}/{}_ensemble.json", base_tmp, self.id);
         let data = serde_json::to_string(&self.members.len()).unwrap_or_default();
         fs::write(&tmp, data)?;
         transport.send_state(&self.id, peer, &tmp)?;
@@ -85,12 +86,12 @@ impl EnsembleAgent {
     }
 
     fn log_scores(&self, scores: &[(String, f32)]) -> std::io::Result<()> {
-        let tmpdir = std::env::var("TMPDIR").unwrap_or("/tmp".to_string());
-        let root = std::env::var("COHESIX_ENS_TMP").unwrap_or_else(|_| format!("{}/ensemble", tmpdir));
+        let base_tmp = std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".to_string());
+        let root = std::env::var("COHESIX_ENS_TMP").unwrap_or_else(|_| format!("{}/ensemble", base_tmp));
         fs::create_dir_all(format!("{root}/{}/", self.id))?;
         let goals = serde_json::to_string(scores).unwrap_or_else(|_| "[]".into());
         fs::write(format!("{root}/{}/goals.json", self.id), goals)?;
-        let trace_root = std::env::var("COHESIX_TRACE_TMP").unwrap_or_else(|_| format!("{}/trace", tmpdir));
+        let trace_root = std::env::var("COHESIX_TRACE_TMP").unwrap_or_else(|_| format!("{}/trace", base_tmp));
         let mut f = OpenOptions::new().create(true).append(true)
             .open(format!("{trace_root}/ensemble_{}.log", self.id))?;
         writeln!(f, "tick")?;
