@@ -1,9 +1,10 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: main.c v0.2
+// Filename: main.c v0.3
 // Author: Lukas Bower
 // Date Modified: 2025-07-22
 // SPDX-License-Identifier: MIT
 #include <efi.h>
+#include <efiprot.h>
 #include <efilib.h>
 
 EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
@@ -53,11 +54,14 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
     }
     FreePool(kernel_path);
     Print(L"kernel.elf loaded successfully\n");
+    Print(L"Launching kernel.elf...\n");
 
     status = uefi_call_wrapper(system_table->BootServices->StartImage, 3,
                                kernel_image, NULL, NULL);
     if (EFI_ERROR(status)) {
-        Print(L"Kernel start failed: %r\n", status);
+        Print(L"Failed to start kernel. %r\n", status);
+        return status;
     }
+    Print(L"Kernel launched.\n");
     return status;
 }
