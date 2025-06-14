@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # CLASSIFICATION: COMMUNITY
-# Filename: test_boot_efi.sh v0.2
+# Filename: test_boot_efi.sh v0.3
 # Author: Lukas Bower
 # Date Modified: 2025-07-22
 set -euo pipefail
@@ -23,5 +23,6 @@ QEMU_ARGS=(-bios /usr/share/qemu/OVMF.fd \
 qemu-system-x86_64 "${QEMU_ARGS[@]}" -nographic -serial file:"${LOGFILE}" || true
 tail -n 20 "${LOGFILE}" || true
 
-grep -q "Booting Cohesix from UEFI" "${LOGFILE}"
-grep -q "kernel.elf loaded successfully" "${LOGFILE}"
+grep -q "EFI loader" "${LOGFILE}" || exit 1
+grep -q "Kernel launched" "${LOGFILE}" || exit 1
+

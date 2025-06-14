@@ -1,6 +1,12 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v0.44
 // Date Modified: 2025-07-22
+## [v0.84] - 2025-07-22
+### Fixed
+- Bootloader logs kernel launch progress and errors.
+- Kernel stub moved to `src/kernel/main.c`.
+- `test_boot_efi.sh` validates EFI loader messages.
+- Makefile now uses linker scripts for UEFI binaries.
 ## [v0.82] - 2025-07-22
 ### Added
 - Kernel UEFI stub built via new `make kernel` target.
