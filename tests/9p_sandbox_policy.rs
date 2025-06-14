@@ -6,6 +6,7 @@
 use cohesix_9p::{policy::SandboxPolicy, FsConfig, FsServer};
 use ninep::client::TcpClient;
 use serial_test::serial;
+use tempfile::tempdir;
 use std::fs;
 use std::sync::Arc;
 use std::time::Duration;
@@ -17,7 +18,10 @@ fn sandbox_violation_logged() {
         eprintln!("skipping sandbox_violation_logged: port busy");
         return;
     }
-    fs::create_dir_all("/log").unwrap();
+    let dir = tempdir().unwrap();
+    let log_dir = dir.path().join("log");
+    fs::create_dir_all(&log_dir).unwrap();
+    std::env::set_var("COHESIX_LOG_DIR", &log_dir);
     let mut srv = FsServer::new(FsConfig {
         port: 5670,
         ..Default::default()
@@ -41,6 +45,6 @@ fn sandbox_violation_logged() {
     let res = cli.write("/secret/data", 0, b"x");
     assert!(res.is_err());
 
-    let log = fs::read_to_string("/log/validator_runtime.log").unwrap();
+    let log = fs::read_to_string(log_dir.join("validator_runtime.log")).unwrap();
     assert!(log.contains("/secret/data"));
 }
