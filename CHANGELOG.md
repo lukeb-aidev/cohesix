@@ -8,6 +8,7 @@
 - SharedMemory, BaseAgent use TMPDIR and respect override vars
 - QEMU boot script checks for qemu-system-x86_64, sets TMPDIR, ensures writable paths
 - Boot test exits with code 0 when QEMU is missing so CI shows the step as skipped
+- Makefile v0.18 skips gnu-efi header checks and tolerates missing cargo tools
 - Converted remaining TODO comments to descriptive FIXME notes
 - `generate_c` now outputs basic arithmetic operations in C
 - Bootloader telemetry writes /state/boot_success; watchdog logs to /state/boot_error
