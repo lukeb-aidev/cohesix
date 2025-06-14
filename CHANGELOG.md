@@ -18,6 +18,7 @@
 - /proc/nsmap exposes per-role namespace maps
 - NsWatchService validates hotplugged mounts
 - SandboxService logs namespace violations via validator
+- `cohesix-9p` tests use `std::env::temp_dir()` for server root
 - Added ns_hotplug.rs integration test
 - Makefile bootloader target links with lld-link
 - CLI scripts now use wrapper binaries in `bin/` so classification headers remain the first line
