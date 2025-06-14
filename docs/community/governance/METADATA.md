@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: METADATA.md v3.10
+// Filename: METADATA.md v3.11
 // Author: Lukas Bower
-// Date Modified: 2025-07-22
+// Date Modified: 2025-07-23
 
 ## Canonical Documents
 
@@ -111,3 +111,8 @@
 | Makefile | v0.15 | 2025-07-23 | COMMUNITY | | |
 | test_boot_efi.sh | v0.9 | 2025-07-22 | COMMUNITY | | |
 | src/kernel/main.c | v0.2 | 2025-07-22 | COMMUNITY | | |
+| tests/test_traceflow.py | v0.1 | 2025-07-23 | COMMUNITY | | |
+| tests/test_invalid_cli.py | v0.1 | 2025-07-23 | COMMUNITY | | |
+| tests/test_9p_read_write.rs | v0.1 | 2025-07-23 | COMMUNITY | | |
+| tests/test_cuda_presence.rs | v0.1 | 2025-07-23 | COMMUNITY | | |
+| tests/test_namespace_rule.rs | v0.1 | 2025-07-23 | COMMUNITY | | |
