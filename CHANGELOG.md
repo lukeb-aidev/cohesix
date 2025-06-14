@@ -13,6 +13,8 @@
 - Validator paths now configurable via environment variables; CLI rule merge test added
 - `cohtrace` CLI now supports `--verify-trace` and `compare` commands for trace validation
 - CUDA runtime now exposes stub /srv/cuda when unavailable
+- secure9p sandbox uses Path to parse agent IDs; tests added for trailing
+  slashes and invalid namespaces
 - Gpu telemetry includes temperature and utilization via nvml-wrapper
 - Added cuda_test.rs validating runtime CUDA presence
 - 9P server enforces per-session sandbox policies with validator logging
@@ -20,6 +22,7 @@
 - Obsolete `src/secure9p` removed; `src/p9/secure` moved to `src/secure9p`
 - Secure9P server added with TLS support, per-agent namespaces, capability checks, and JSON trace logging
 - Secure9P server added with TLS support, per-agent namespaces, capability checks, and JSON trace logging
+- Secure9P server log path now uses `COHESIX_LOG_DIR` with temp dir fallback; handshake test verifies log
 - CMake CUDA keep directory respects TMPDIR
 - Rust tests use tempfile for temporary files instead of hardcoded /tmp
 - /proc/nsmap exposes per-role namespace maps

@@ -33,6 +33,28 @@ use std::{
 fn load_certs(path: &Path) -> anyhow::Result<Vec<Certificate>> {
     let mut rd = BufReader::new(File::open(path)?);
     Ok(certs(&mut rd)?.into_iter().map(Certificate).collect())
+use rustls::{
+    pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs1KeyDer},
+    ServerConfig,
+};
+use rustls_pemfile::{certs, rsa_private_keys};
+use serde_json::json;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpListener;
+use tokio_rustls::TlsAcceptor;
+
+use super::{
+    auth_handler::AuthHandler, cap_fid::Capability, namespace_resolver::resolve,
+    policy_engine::PolicyEngine, sandbox::enforce, validator_hook::ValidatorHook,
+};
+
+pub struct Secure9pServer<H: AuthHandler + Send + Sync + 'static> {
+    pub port: u16,
+    pub cert_path: String,
+    pub key_path: String,
+    pub auth_handler: H,
+    pub policy: PolicyEngine,
+    pub validator: Option<ValidatorHook>,
 }
 
 #[cfg(feature = "secure9p")]
@@ -103,6 +125,17 @@ pub fn start_secure_9p_server(addr: &str, cert: &Path, key: &Path) -> anyhow::Re
                 let _ = std::io::copy(&mut cursor, &mut writer);
             }
         });
+fn log_event(v: serde_json::Value) {
+    let log_dir = std::env::var("COHESIX_LOG_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::env::temp_dir());
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_dir.join("secure9p.log"))
+    {
+        let _ = serde_json::to_writer(&mut f, &v);
+        let _ = writeln!(f);
     }
     Ok(())
 }

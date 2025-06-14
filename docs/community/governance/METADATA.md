@@ -137,6 +137,7 @@
 | tests/secure9p/tls_handshake.rs | v0.1 | 2025-07-24 | COMMUNITY | | |
 | tests/secure9p/namespace_traversal.rs | v0.1 | 2025-07-24 | COMMUNITY | | |
 | tests/secure9p/policy_denial.rs | v0.1 | 2025-07-24 | COMMUNITY | | |
+| tests/secure9p/agent_identifier.rs | v0.1 | 2025-07-24 | COMMUNITY | | |
 | cli/cohcli.py | v1.0 | 2025-07-15 | COMMUNITY | | |
 | scripts/collect_boot_logs.sh | v0.1 | 2025-07-12 | COMMUNITY | | |
 | scripts/generate_busybox_man.sh | v0.1 | 2025-06-08 | COMMUNITY | | |
