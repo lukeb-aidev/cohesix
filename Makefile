@@ -175,13 +175,32 @@ boot: ## Build boot image for current PLATFORM
 
 
 testboot: ## Run UEFI boot test via QEMU
-	./test_boot_efi.sh
+./test_boot_efi.sh
+
+# Boot the built image in QEMU and capture serial output to qemu_serial.log
+qemu: bootloader kernel ## Run qemu-system-x86_64
+	@if command -v qemu-system-x86_64 >/dev/null 2>&1; then \
+	cp /usr/share/OVMF/OVMF_VARS.fd out/OVMF_VARS.fd 2>/dev/null || true; \
+	qemu-system-x86_64 -bios /usr/share/qemu/OVMF.fd \
+	-drive if=pflash,format=raw,file=out/OVMF_VARS.fd \
+	-drive format=raw,file=fat:rw:out/ -net none -M q35 -m 256M -no-reboot \
+	-nographic -serial mon:stdio 2>&1 | tee qemu_serial.log; \
+		else \
+	echo "QEMU not installed; skipping"; \
+	fi
+
+# Boot via QEMU and verify BOOT_OK marker in serial log
+qemu-check: ## Boot QEMU and check for BOOT_OK marker
+	@$(MAKE) qemu >/dev/null
+	@if [ -f qemu_serial.log ]; then \
+	grep -q "BOOT_OK" qemu_serial.log && echo "Boot success" || (grep -o 'BOOT_FAIL:[^\n]*' qemu_serial.log || echo "Boot failure"; exit 1); \
+	else \
+	echo "qemu_serial.log missing"; exit 1; \
+	fi
 
 print-env: ## Display compiler information
 	@echo "Toolchain: $(TOOLCHAIN)"
 	@echo "Compiler: $(CC)"
-	@$(CC) --version | head -n 1
-		
 	help: ## List available make targets
 	@grep -E '^[a-zA-Z_-]+:.*##' Makefile \
 	| awk 'BEGIN{FS=":.*##"; printf "Cohesix top-level build targets:\n"} {printf "  %-12s %s\n", $$1, $$2}'

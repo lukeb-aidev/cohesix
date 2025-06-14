@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: bootloader.c v0.4
+// Filename: bootloader.c v0.5
 // Author: Lukas Bower
-// Date Modified: 2025-07-22
+// Date Modified: 2025-07-23
 // SPDX-License-Identifier: MIT
 //
 // Cohesix OS bootloader (seL4 root task)
@@ -13,6 +13,9 @@
 #include <unistd.h>
 #include <time.h>
 #include <signal.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include "boot_trampoline.h"
 
 #define BOOT_ROLE_BUF       32
 #define BOOT_WATCHDOG_SECS  15
@@ -67,6 +70,33 @@ static void assign_caps(const char *role) {
     printf("[bootloader] assign caps for %s\n", role);
 }
 
+static void emit_console(const char *msg)
+{
+    int fd = open("/dev/console", O_WRONLY);
+    if (fd >= 0) {
+        write(fd, msg, strlen(msg));
+        write(fd, "\n", 1);
+        close(fd);
+    }
+}
+
+static void boot_success(void)
+{
+    emit_console("BOOT_OK");
+    int fd = open(BOOT_SUCCESS_PATH, O_WRONLY | O_CREAT, 0644);
+    if (fd >= 0) {
+        write(fd, "ok\n", 3);
+        close(fd);
+    }
+}
+
+static void boot_fail(const char *reason)
+{
+    char buf[64];
+    snprintf(buf, sizeof(buf), "BOOT_FAIL:%s", reason);
+    emit_console(buf);
+}
+
 static const char *script_for_role(const char *role) {
     if (strcmp(role, "DroneWorker") == 0)
         return "/init/worker.rc";
@@ -107,6 +137,11 @@ int main(void) {
     }
 
     assign_caps(role);
+
+    if (access("/srv/validator/live.sock", F_OK) == 0)
+        boot_success();
+    else
+        boot_fail("validator_missing");
 
     const char *script = script_for_role(role);
     alarm(0); /* boot init succeeded */
