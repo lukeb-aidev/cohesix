@@ -38,10 +38,6 @@ pub fn enforce_capability(cap_id: u32, requested_right: &str) -> CapabilityResul
 
 /// Stub for validating capability derivations.
 pub fn validate_derivation(parent_cap: u32, child_cap: u32) -> bool {
-    if child_cap > parent_cap && child_cap - parent_cap <= 10 {
-        true
-    } else {
-        false
-    }
+    child_cap > parent_cap && child_cap - parent_cap <= 10
 }
 

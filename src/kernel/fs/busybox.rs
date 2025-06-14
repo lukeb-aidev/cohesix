@@ -3,8 +3,6 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-22
 
-#![cfg(feature = "busybox")]
-
 //! Cohesix in-kernel BusyBox implementation.
 //! Provides minimal command handlers for embedded shell and diagnostics.
 
@@ -83,6 +81,7 @@ pub fn run_command(cmd: &str, args: &[&str]) {
                 let _ = std::fs::OpenOptions::new()
                     .create(true)
                     .write(true)
+                    .truncate(true)
                     .open(path);
             }
         }
