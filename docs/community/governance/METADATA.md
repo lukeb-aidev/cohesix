@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: METADATA.md v3.15
+// Filename: METADATA.md v3.16
 // Author: Lukas Bower
-// Date Modified: 2025-07-26
+// Date Modified: 2025-07-28
 
 ## Canonical Documents
 
@@ -150,6 +150,6 @@
 | scripts/manpage_scan.sh | v0.1 | 2025-06-08 | COMMUNITY | | |
 | scripts/verify-macos-setup.sh | v0.1 | 2025-06-05 | COMMUNITY | | |
 | metadata.json | v0.1 | 2025-07-24 | COMMUNITY | | |
-| Cargo.toml | v0.2 | 2025-07-26 | COMMUNITY | | |
+| Cargo.toml | v0.3 | 2025-07-28 | COMMUNITY | | |
 | cohesix-9p/Cargo.toml | v0.1 | 2025-07-24 | COMMUNITY | | |
 | justfile | v0.1 | 2025-07-24 | COMMUNITY | | |
