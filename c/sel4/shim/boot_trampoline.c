@@ -1,6 +1,6 @@
 // CLASSIFICATION: PRIVATE
-// Filename: boot_trampoline.c v0.3
-// Date Modified: 2025-07-15
+// Filename: boot_trampoline.c v0.4
+// Date Modified: 2025-07-22
 // Author: Lukas Bower
 //
 // ─────────────────────────────────────────────────────────────
@@ -23,12 +23,32 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdio.h>
+#include <fcntl.h>
+#include <unistd.h>
 
-static volatile uint8_t *const UART0 = (volatile uint8_t *)0x09000000;
-static char fallback_log[128];
+/*
+ * Boot stages:
+ * 1) Called from verified assembly with stack ready.
+ * 2) Verify Rust entry checksum.
+ * 3) Emit telemetry marker for successful hand-off.
+ * 4) Jump to rust_early_init(); never returns.
+ */
+
+static volatile uint8_t *const UART0 = (volatile uint8_t *)BOOT_TRAMPOLINE_UART_BASE;
+static char fallback_log[BOOT_TRAMPOLINE_LOG_SIZE];
 static size_t log_pos;
 
 int boot_trampoline_crc_ok = 0;
+
+/* Write a success marker for Fabric OS/validator */
+static void emit_success_telemetry(void)
+{
+    int fd = open(BOOT_SUCCESS_PATH, O_WRONLY | O_CREAT, 0644);
+    if (fd >= 0) {
+        write(fd, "ok\n", 3);
+        close(fd);
+    }
+}
 
 static void uart_putc(char c)
 {
@@ -62,7 +82,7 @@ static uint32_t crc32_calc(const uint8_t *data, size_t len)
     for (size_t i = 0; i < len; ++i) {
         crc ^= data[i];
         for (int j = 0; j < 8; ++j)
-            crc = (crc >> 1) ^ (0xEDB88320 & (-(int)(crc & 1)));
+            crc = (crc >> 1) ^ (BOOT_TRAMPOLINE_CRC_POLYNOMIAL & (-(int)(crc & 1)));
     }
     return ~crc;
 }
@@ -80,6 +100,7 @@ void boot_trampoline(void)
     extern void rust_early_init(void);
     extern trampoline_hdr_t __trampoline_hdr;
 
+    /* Phase 1: verify Rust entry and log result */
     uint32_t calc = crc32_calc((const uint8_t *)&rust_early_init,
                                __trampoline_hdr.length);
     boot_trampoline_crc_ok = (calc == __trampoline_hdr.crc);
@@ -87,6 +108,10 @@ void boot_trampoline(void)
     if (!boot_trampoline_crc_ok)
         panic_uart("panic: trampoline CRC mismatch\n");
 
+    /* Phase 2: emit boot success before hand-off */
+    emit_success_telemetry();
+
+    /* Phase 3: transfer control to Rust early init */
     rust_early_init();
     for (;;)
         ;
