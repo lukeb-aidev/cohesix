@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CONTRIBUTING.md v1.0
-// Date Modified: 2025-06-09
+// Filename: CONTRIBUTING.md v1.1
+// Date Modified: 2025-07-23
 // Author: Lukas Bower
 
 # Contributing to Cohesix
@@ -46,6 +46,32 @@ Every contribution must align with these pillars:
 - Open a PR to the `main` branch.
 - Ensure all CI tests pass (multi-arch, fuzz, validator, trace replay).
 - Expect a review by maintainers and the expert panel if touching core logic.
+
+## 🛠 Local Development Setup
+
+Ensure **Rust**, **Go**, and **Python 3** are installed and on your `PATH`.
+Run the following commands after cloning:
+
+```bash
+pip install -r requirements.txt
+cargo check
+go test ./...
+make all
+```
+
+### Running Tests
+
+Execute the full architecture test suite with:
+
+```bash
+./test_all_arch.sh
+```
+
+Unit tests can also be run individually via `cargo test`, `go test`, and `pytest`.
+
+### Codex Integration
+
+Use `cohcli codex init` to configure API keys, then `cohcli codex run <agent_id>` to generate scaffolds. See [README_Codex.md](docs/community/guides/README_Codex.md) for details.
 
 ## 🛡 Security and Licensing
 

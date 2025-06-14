@@ -20,6 +20,10 @@
 - Makefile now includes fmt/lint/check targets and platform flags
 - Added end-to-end traceflow test and CLI argument validation
 - Added 9P read/write, CUDA presence, and namespace rule tests
+- Added `docs/QUICKSTART.md` quick-start guide
+- Added `BOOT_KERNEL_FLOW.md` diagram explaining boot through CLI
+- README begins with a vision paragraph summarizing why Cohesix matters
+- CONTRIBUTING includes local setup, testing, and Codex instructions
 ## [v0.88] - 2025-07-22
 ### Fixed
 - Rust ensemble agent tests write to a safe temporary directory.
