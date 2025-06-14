@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: METADATA.md v3.13
+// Filename: METADATA.md v3.14
 // Author: Lukas Bower
-// Date Modified: 2025-07-23
+// Date Modified: 2025-06-14
 
 ## Canonical Documents
 
@@ -14,7 +14,7 @@
 | BUILD_PLAN.md              | v0.4    | 2025-07-11    | COMMUNITY      |            |              |
 | COMMERCIAL_PLAN.md         | v1.5    | 2025-06-08    | PRIVATE        |            |              |
 | DEPENDENCIES.md            | v0.5    | 2025-07-06    | COMMUNITY      |            |              |
-| METADATA.md                | v3.13   | 2025-07-23    | COMMUNITY      |            |              |
+| METADATA.md                | v3.14   | 2025-07-24    | COMMUNITY      |            |              |
 | OSS_REUSE.md               | v1.7    | 2025-07-15    | COMMUNITY      |            |              |
 | Q_DAY.md                   | v1.0    | 2025-05-31    | PRIVATE        |            |              |
 | QUEEN_POLICY.md            | v1.1    | 2025-07-12    | PRIVATE        |            |              |
@@ -43,6 +43,7 @@
 | AGENTS.md                 | v2.2    | 2025-07-22    | COMMUNITY      |     |              |
 | DEMO_SCENARIOS.md          | v1.0    | 2025-06-20    | COMMUNITY      |     |              |
 | VALIDATION_AND_TESTING.md  | v1.4    | 2025-07-24    | COMMUNITY      |     |              |
+| VALIDATION_SUMMARY.md       | v0.2    | 2025-06-14    | COMMUNITY      |     |              |
 | CLI_HELP_COHCLI.md         | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
 | CLI_HELP_COHRUN.md         | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
 | CLI_HELP_COHTRACE.md       | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
@@ -122,4 +123,14 @@
 | docs/QUICKSTART.md | v0.1 | 2025-07-23 | COMMUNITY | | |
 | docs/community/architecture/BOOT_KERNEL_FLOW.md | v0.1 | 2025-07-23 | COMMUNITY | | |
 | docs/community/archive/examples_README.md | v0.2 | 2025-07-23 | COMMUNITY | | |
+| cohesix_fetch_build.sh | v0.2 | 2025-06-14 | COMMUNITY | | |
 | CONTRIBUTING.md | v1.1 | 2025-07-23 | COMMUNITY | | |
+| cli/cohcli.py | v1.0 | 2025-07-15 | COMMUNITY | | |
+| scripts/collect_boot_logs.sh | v0.1 | 2025-07-12 | COMMUNITY | | |
+| scripts/generate_busybox_man.sh | v0.1 | 2025-06-08 | COMMUNITY | | |
+| scripts/manpage_scan.sh | v0.1 | 2025-06-08 | COMMUNITY | | |
+| scripts/verify-macos-setup.sh | v0.1 | 2025-06-05 | COMMUNITY | | |
+| metadata.json | v0.1 | 2025-07-24 | COMMUNITY | | |
+| Cargo.toml | v0.1 | 2025-07-24 | COMMUNITY | | |
+| cohesix-9p/Cargo.toml | v0.1 | 2025-07-24 | COMMUNITY | | |
+| justfile | v0.1 | 2025-07-24 | COMMUNITY | | |

@@ -1,3 +1,8 @@
+// CLASSIFICATION: COMMUNITY
+// Filename: VALIDATION_SUMMARY.md v0.2
+// Author: Lukas Bower
+// Date Modified: 2025-06-14
+
 # ✅ Cohesix Mac Environment Summary
 
 - Role: QueenPrimary
