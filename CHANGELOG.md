@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.53
+// Filename: CHANGELOG.md v0.54
 // Date Modified: 2025-07-28
 ## [vNext] - 2025-07-23
 ### Temp path fixes and QEMU script guard
@@ -19,6 +19,8 @@
 - GitHub workflow indentation corrected for OSS dependency audit
 - secure9p sandbox uses Path to parse agent IDs; tests added for trailing
   slashes and invalid namespaces
+- Cargo.toml v0.3 adds optional rustls and tokio-rustls dependencies to fix
+  secure9p feature build and clippy
 - `Capability` alias exposed in `cap_fid.rs` for consistent imports
 - Gpu telemetry includes temperature and utilization via nvml-wrapper
 - Policy engine exposes `new` and `allow` API; tests updated
