@@ -1,5 +1,5 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Makefile v0.15
+# Filename: Makefile v0.16
 # Date Modified: 2025-07-23
 # Author: Lukas Bower
 #
@@ -196,7 +196,27 @@ cohtrace: ## Run cohtrace CLI
 	cargo run -p cohcli_tools --bin cohtrace -- $(ARGS)
 
 cohcap: ## Run cohcap CLI
-	cargo run -p cohcli_tools --bin cohcap -- $(ARGS)
+        cargo run -p cohcli_tools --bin cohcap -- $(ARGS)
+
+# Run boot image under QEMU, logging serial output
+qemu: ## Launch QEMU with built image and capture serial log
+        @command -v qemu-system-x86_64 >/dev/null 2>&1 || { \
+        echo "qemu-system-x86_64 not installed — skipping"; exit 0; }
+        @mkdir -p out
+        @if [ ! -f out/EFI/BOOT/BOOTX64.EFI ]; then \
+        $(MAKE) bootloader kernel; fi
+        qemu-system-x86_64 \
+            -bios /usr/share/qemu/OVMF.fd \
+            -drive if=pflash,format=raw,file=/usr/share/OVMF/OVMF_VARS.fd \
+            -drive format=raw,file=fat:rw:out/ -net none -M q35 -m 256M \
+            -no-reboot -nographic -serial mon:stdio 2>&1 | tee qemu_serial.log
+
+# Verify QEMU boot log contains BOOT_OK marker
+qemu-check: ## Check qemu_serial.log for BOOT_OK
+        @command -v qemu-system-x86_64 >/dev/null 2>&1 || { \
+        echo "qemu-system-x86_64 not installed — skipping"; exit 0; }
+        @test -f qemu_serial.log || { echo "qemu_serial.log missing"; exit 1; }
+        @grep -q "BOOT_OK" qemu_serial.log
 
 
 
