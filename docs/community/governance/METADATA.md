@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: METADATA.md v3.11
+// Filename: METADATA.md v3.12
 // Author: Lukas Bower
 // Date Modified: 2025-07-23
 
@@ -18,7 +18,7 @@
 | OSS_REUSE.md               | v1.7    | 2025-07-15    | COMMUNITY      |            |              |
 | Q_DAY.md                   | v1.0    | 2025-05-31    | PRIVATE        |            |              |
 | QUEEN_POLICY.md            | v1.1    | 2025-07-12    | PRIVATE        |            |              |
-| README.md                  | v0.1    | 2025-05-24    | PRIVATE        |            |              |
+| README.md                  | v0.2    | 2025-07-23    | PRIVATE        |            |              |
 | README_Codex.md            | v1.4    | 2025-06-16    | COMMUNITY      |            |              |
 | REMOTE_ACCESS.md           | v1.0    | 2025-05-24    | COMMUNITY      |            |              |
 | ROLE_MANIFEST.md           | v1.3    | 2025-07-12    | COMMUNITY      |            |              |
@@ -116,3 +116,6 @@
 | tests/test_9p_read_write.rs | v0.1 | 2025-07-23 | COMMUNITY | | |
 | tests/test_cuda_presence.rs | v0.1 | 2025-07-23 | COMMUNITY | | |
 | tests/test_namespace_rule.rs | v0.1 | 2025-07-23 | COMMUNITY | | |
+| docs/QUICKSTART.md | v0.1 | 2025-07-23 | COMMUNITY | | |
+| docs/community/architecture/BOOT_KERNEL_FLOW.md | v0.1 | 2025-07-23 | COMMUNITY | | |
+| CONTRIBUTING.md | v1.1 | 2025-07-23 | COMMUNITY | | |
