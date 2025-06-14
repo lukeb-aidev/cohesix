@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: mod.rs v1.1
-// Date Modified: 2025-06-02
+// Filename: mod.rs v1.2
+// Date Modified: 2025-07-23
 // Author: Lukas Bower
 
 //! Services Module
@@ -8,13 +8,14 @@
 //! Defines basic runtime services for Cohesix including telemetry reporting,
 //! sandbox enforcement, health monitoring and IPC via the 9P protocol.
 
-pub mod telemetry;
-pub mod sandbox;
+pub mod devd;
+pub mod gpuinfo;
 pub mod health;
 pub mod ipc;
+pub mod nswatch;
+pub mod sandbox;
+pub mod telemetry;
 pub mod webcam;
-pub mod gpuinfo;
-pub mod devd;
 
 /// Generic interface implemented by all runtime services.
 pub trait Service {
@@ -28,7 +29,7 @@ pub trait Service {
 
 /// Initialize all registered services under the `/srv/` namespace.
 pub fn initialize_services() {
-    println!("[services] initializing telemetry, sandbox, health, IPC, webcam, GPU info and devd ...");
+    println!("[services] initializing telemetry, sandbox, health, IPC, webcam, GPU info, devd and nswatch ...");
     let mut services: Vec<Box<dyn Service>> = vec![
         Box::new(telemetry::TelemetryService::default()),
         Box::new(sandbox::SandboxService::default()),
@@ -37,6 +38,7 @@ pub fn initialize_services() {
         Box::new(webcam::WebcamService::default()),
         Box::new(gpuinfo::GpuInfoService::default()),
         Box::new(devd::DevdService::default()),
+        Box::new(nswatch::NsWatchService::default()),
     ];
     for svc in services.iter_mut() {
         println!("[services] starting {}", svc.name());
