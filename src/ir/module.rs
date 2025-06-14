@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: module.rs v1.0
-// Date Modified: 2025-05-31
+// Filename: module.rs v1.1
+// Date Modified: 2025-07-24
 // Author: Lukas Bower
 
 //! Defines the IR Module and associated utilities for the Cohesix compiler.
@@ -14,8 +14,11 @@ pub struct Module {
     pub name: String,
     /// Ordered list of functions within this module.
     pub functions: Vec<Function>,
+    /// Optional metadata associated with this module. Structured metadata
+    /// will replace this field in a future revision.
+    pub metadata: Option<String>,
     /// Optional metadata associated with this module.
-    pub metadata: Option<String>, // TODO: replace with structured metadata when ready
+    pub metadata: Option<String>, // FIXME: replace with structured metadata when ready
 }
 
 impl Module {
@@ -52,9 +55,10 @@ impl Module {
         out
     }
 
-    /// TODO: Validate structural integrity, uniqueness of function names, etc.
+    /// Validate structural integrity. Currently a stub that always returns `true`.
+    /// FIXME: Validate structural integrity, uniqueness of function names, etc.
     pub fn validate(&self) -> bool {
-        true // stub: always valid for now
+        true
     }
 
     /// Return a textual representation of the module using the IR printer.

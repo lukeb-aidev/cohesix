@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: README.md v0.10
+// Filename: README.md v0.11
 // Author: Lukas Bower
-// Date Modified: 2025-07-23
+// Date Modified: 2025-07-24
 
 
 # Cohesix
@@ -76,6 +76,7 @@ Initial demo services are enabled:
 * `/srv/webcam` and `/srv/gpuinfo` for workers
 * `cohrun physics_demo` to run a Rapier simulation
 * `cohtrace list` to view joined workers
+* Optional Secure 9P server with TLS via `--features secure9p` (see `config/secure9p.toml`)
 
 ### Running the GUI Orchestrator
 
