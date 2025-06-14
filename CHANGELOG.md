@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.49
-// Date Modified: 2025-07-23
+// Filename: CHANGELOG.md v0.50
+// Date Modified: 2025-07-24
 ## [vNext] - 2025-07-23
 ### Temp path fixes and QEMU script guard
 - Ensemble tests use writable temp directory via COHESIX_ENS_TMP
@@ -25,6 +25,8 @@
 - Added `BOOT_KERNEL_FLOW.md` diagram explaining boot through CLI
 - README begins with a vision paragraph summarizing why Cohesix matters
 - CONTRIBUTING includes local setup, testing, and Codex instructions
+- Makefile adds `qemu` and `qemu-check` targets for serial-log boot testing
+- `qemu-check` now fails if `BOOT_FAIL` appears in `qemu_serial.log`
 - ## [v0.88] - 2025-07-22
 ### Fixed
 - `make qemu` and `make qemu-check` run QEMU with serial logging and grep for BOOT_OK
