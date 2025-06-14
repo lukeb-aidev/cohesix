@@ -39,8 +39,18 @@ impl SsaVar {
     }
 }
 
-/// Placeholder function for parsing SSA-formatted strings.
+/// Parse an SSA-formatted string of the form `name#version`.
 pub fn parse_ssa(input: &str) -> Option<SsaVar> {
+    let mut parts = input.split('#');
+    let name = parts.next()?;
+    let version = parts.next()?.parse().ok()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    Some(SsaVar {
+        name: name.to_string(),
+        version,
+    })
     // FIXME(cohesix): Implement parser logic
     println!("[ssa] parse_ssa called with input: {}", input);
     None

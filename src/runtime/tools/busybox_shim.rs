@@ -22,12 +22,14 @@ pub struct DefaultShim;
 impl BusyBoxShim for DefaultShim {
     fn run_command(&self, cmd: &str, args: &[&str]) -> Result<String, String> {
         println!("[busybox_shim] running command: {} {:?}", cmd, args);
+        // Basic stub implementation; real command handling will use internal utilities
         // FIXME(cohesix): Emulate minimal command behavior or dispatch internally
         Ok(format!("stubbed output for '{}'", cmd))
     }
 
     fn is_supported(&self, cmd: &str) -> bool {
         println!("[busybox_shim] checking support for: {}", cmd);
+        // Supported command list is minimal for now
         // FIXME(cohesix): Maintain supported command list
         matches!(cmd, "echo" | "ls" | "cat")
     }

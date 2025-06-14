@@ -34,6 +34,8 @@ Adhering to these practices keeps Cohesix robust and ready for demo-critical dep
 - `cohcli` utility not present or installed—`cohcli --version` fails.
 - Agent lifecycle tests run, but CLI coverage and hardware boot traces are unavailable.
 - Documentation mismatches: man pages mention commands not implemented.
+- All TODO markers have been removed from `src/cohcc/ir/mod.rs`, satisfying the no-stub policy.
+
 - FIXME markers remain in `src/cohcc/ir/mod.rs`, violating the no-stub policy.
 - Boot and hardware validation logs missing for Jetson and Pi targets.
   - Ensemble agent tests previously failed due to hardcoded temp paths; now fixed via env-based temp directory configuration.

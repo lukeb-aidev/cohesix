@@ -25,12 +25,14 @@ pub struct DefaultEnforcer;
 impl PolicyEnforcer for DefaultEnforcer {
     fn check_worker_namespace(&self, namespace: &str) -> PolicyResult {
         println!("[policy] checking namespace '{}'", namespace);
+        // Namespace validation logic pending full policy integration
         // FIXME(cohesix): Validate namespace policy rules
         PolicyResult::Compliant
     }
 
     fn check_runtime_invariants(&self) -> PolicyResult {
         println!("[policy] checking runtime invariants...");
+        // Runtime invariant checks not yet enforced
         // FIXME(cohesix): Enforce invariant rules across system state
         PolicyResult::Compliant
     }

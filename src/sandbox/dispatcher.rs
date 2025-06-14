@@ -25,6 +25,19 @@ impl SyscallDispatcher {
         match syscall {
             Syscall::Spawn { program, args } => {
                 debug!("dispatch spawn: {} {:?}", program, args);
+                // Process launcher integration pending
+            }
+            Syscall::CapGrant { target, capability } => {
+                debug!("dispatch cap_grant: {} -> {}", target, capability);
+                // Capability management not yet implemented
+            }
+            Syscall::Mount { src, dest } => {
+                debug!("dispatch mount: {} -> {}", src, dest);
+                // Mount service call not yet implemented
+            }
+            Syscall::Exec { path } => {
+                debug!("dispatch exec: {}", path);
+                // Execution in sandbox pending implementation
                 // FIXME(batch5): integrate with process launcher
             }
             Syscall::CapGrant { target, capability } => {

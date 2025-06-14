@@ -24,7 +24,7 @@ pub fn run() -> anyhow::Result<()> {
         .parse()
         .unwrap_or(5000);
 
-    // Load IR from file
+    // Load IR from file; a full parser will be added later
     // FIXME: parse actual IR format
     let _ir_text = fs::read_to_string(input_path)?;
     // For now, stub: create empty module with name
