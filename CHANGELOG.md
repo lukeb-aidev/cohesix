@@ -23,7 +23,6 @@
 - New `secure9p` feature flag toggles TLS-backed file server
 - Obsolete `src/secure9p` removed; `src/p9/secure` moved to `src/secure9p`
 - Secure9P server added with TLS support, per-agent namespaces, capability checks, and JSON trace logging
-- Secure9P server added with TLS support, per-agent namespaces, capability checks, and JSON trace logging
 - Secure9P server log path now uses `COHESIX_LOG_DIR` with temp dir fallback; handshake test verifies log
 - CMake CUDA keep directory respects TMPDIR
 - Rust tests use tempfile for temporary files instead of hardcoded /tmp
