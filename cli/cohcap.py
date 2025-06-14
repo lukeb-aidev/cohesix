@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # CLASSIFICATION: COMMUNITY
 # Filename: cohcap.py v0.2
 # Author: Lukas Bower

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # CLASSIFICATION: COMMUNITY
 # Filename: vision_overlay_test.py v0.1
 # Date Modified: 2025-07-08

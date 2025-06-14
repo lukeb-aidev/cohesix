@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # CLASSIFICATION: COMMUNITY
 # Filename: test_scan_smoke.py v0.1
 # Author: Lukas Bower

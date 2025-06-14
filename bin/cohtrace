@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+HERE="$(dirname "$(realpath "$0")")/../cli"
+exec /usr/bin/env python3 "$HERE/cohtrace.py" "$@"

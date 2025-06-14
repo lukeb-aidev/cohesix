@@ -1,4 +1,3 @@
-#!/usr/bin/env bash
 # CLASSIFICATION: COMMUNITY
 # Filename: test_boot_efi.sh v0.9
 # Author: Lukas Bower
