@@ -17,9 +17,11 @@ objdump -h out/EFI/BOOT/BOOTX64.EFI > out/BOOTX64_sections.txt
 
 LOGFILE="out/qemu_debug.log"
 QEMU_ARGS=(-bios /usr/share/qemu/OVMF.fd \
-    -drive format=raw,file=fat:rw:out/ -net none -M q35 -m 256M -no-reboot)
+    -drive format=raw,file=fat:rw:out/ -net none -M q35 -m 256M \
+    -no-reboot -monitor none)
 
 qemu-system-x86_64 "${QEMU_ARGS[@]}" -nographic -serial file:"${LOGFILE}" || true
+tail -n 20 "${LOGFILE}" || true
 
 grep -q "Booting Cohesix from UEFI" "${LOGFILE}"
 grep -q "kernel.elf loaded successfully" "${LOGFILE}"
