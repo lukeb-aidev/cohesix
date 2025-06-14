@@ -24,6 +24,8 @@
 - Added `BOOT_KERNEL_FLOW.md` diagram explaining boot through CLI
 - README begins with a vision paragraph summarizing why Cohesix matters
 - CONTRIBUTING includes local setup, testing, and Codex instructions
+- `make qemu` and `make qemu-check` run QEMU with serial logging and grep for BOOT_OK
+- Bootloader writes BOOT_OK or BOOT_FAIL to /dev/console and /state/boot_success
 ## [v0.88] - 2025-07-22
 ### Fixed
 - Rust ensemble agent tests write to a safe temporary directory.
