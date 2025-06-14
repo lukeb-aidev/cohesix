@@ -108,5 +108,6 @@
 | CohesixBoot.inf | v0.1 | 2025-07-22 | COMMUNITY | | |
 | linker.ld | v0.1 | 2025-07-22 | COMMUNITY | | |
 | .cargo/config.toml | v0.1 | 2025-07-22 | COMMUNITY | | |
-| test_boot_efi.sh | v0.3 | 2025-07-22 | COMMUNITY | | |
+| Makefile | v0.11 | 2025-07-22 | COMMUNITY | | |
+| test_boot_efi.sh | v0.4 | 2025-07-22 | COMMUNITY | | |
 | src/kernel/main.c | v0.2 | 2025-07-22 | COMMUNITY | | |
