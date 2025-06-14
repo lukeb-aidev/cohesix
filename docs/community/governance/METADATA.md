@@ -104,11 +104,12 @@
 | README_NATIVE.md | v0.1 | 2025-07-22 | COMMUNITY | | |
 
 | src/bootloader/main.c | v0.2 | 2025-07-22 | COMMUNITY | | |
+| c/sel4/bootloader.c | v0.5 | 2025-07-23 | COMMUNITY | | |
 | bootloader.lds | v0.1 | 2025-07-22 | COMMUNITY | | |
 | CohesixBoot.inf | v0.1 | 2025-07-22 | COMMUNITY | | |
 | linker.ld | v0.1 | 2025-07-22 | COMMUNITY | | |
 | .cargo/config.toml | v0.1 | 2025-07-22 | COMMUNITY | | |
-| Makefile | v0.15 | 2025-07-23 | COMMUNITY | | |
+| Makefile | v0.16 | 2025-07-23 | COMMUNITY | | |
 | test_boot_efi.sh | v0.9 | 2025-07-22 | COMMUNITY | | |
 | src/kernel/main.c | v0.2 | 2025-07-22 | COMMUNITY | | |
 | tests/test_traceflow.py | v0.1 | 2025-07-23 | COMMUNITY | | |
