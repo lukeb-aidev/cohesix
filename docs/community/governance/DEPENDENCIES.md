@@ -12,7 +12,7 @@
 | BusyBox               | **1.36.1**   | <https://busybox.net> (GPL-2)          | Core UNIX tools + shell for lightweight utilities   |
 | musl libc             | 1.2.3        | <https://musl.libc.org> (MIT)          | POSIX-compat layer for Plan 9 ports & BusyBox       |
 | Go                    | **1.22**     | <https://go.dev> (BSD-style)           | CSP-based 9P services & auxiliary tooling           |
-| Python                | 3.10+        | <https://python.org> (PSF)             | DSL, testing harnesses, runtime validators          |
+| Python                | 3.10+        | <https://python.org> (PSF)             | DSL, testing harnesses, runtime validators. Ensemble agents and tests now respect TMPDIR/COHESIX_ENS_TMP for writable paths |
 | C++17 & CUDA Toolkit  | 11.8 / 11.8  | <https://developer.nvidia.com> (NVIDIA EULA) | Torch/TensorRT GPU deploy; Rapier physics in Rust |
 
 # Rust Crate Dependencies
@@ -31,6 +31,8 @@
 | regex-automata   | 0.4       | crates.io (MIT)   | Deterministic regex engine (utils)        |
 | bytes            | 1.5       | crates.io (MIT)   | Zero‑copy byte buffers (async 9P helper) |
 | p9               | 0.3.2     | crates.io (BSD-3-Clause) | 9P protocol server implementation |
+| tempdir / tempfile | latest  | crates.io (MIT)              | Writable test directories for agent validation & boot tests |
+
 # Go Dependencies
 
 | Module | Version | Source / License | Purpose |
@@ -46,6 +48,6 @@
 | BusyBox (CLI)   | 1.36.1  | GPL-2                       | Coreutils and shell support       |
 | curl            | 8.8.0   | curl License (MIT)          | HTTP fetches in build scripts     |
 | zip             | 3.0     | Info-ZIP License            | Artefact packaging (deploy-ci)    |
+| QEMU             | 8.1.2   | <https://www.qemu.org> (GPL-2)       | UEFI boot test, validates output from build pipelines     |
 | OpenSSL / libssl | 3.3       | <https://www.openssl.org> (Apache‑2.0/SSLeay) | Hash‑parity tests in boot measurement |
 | clang / LLVM    | 17.0    | Apache-2.0 / UIUC           | Compiling C shims for seL4        |
-

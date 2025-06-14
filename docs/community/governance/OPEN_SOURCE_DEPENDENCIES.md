@@ -22,3 +22,7 @@
 | sdl2 | 0.37 | MIT | Windowing & input | https://crates.io/crates/sdl2 |
 | cobra | 1.8.0 | Apache-2.0 | Go CLI framework | https://github.com/spf13/cobra |
 | chi | v5 | MIT | HTTP router for GUI orchestrator | https://github.com/go-chi/chi |
+
+| tempfile | 3.10 | MIT OR Apache-2.0 | Temporary directory and file handling in tests | https://crates.io/crates/tempfile |
+| qemu | system | GPL-2.0-only | Emulator used for UEFI boot testing | https://www.qemu.org/ |
+| cuda-sys | 0.3 | Apache-2.0 | Rust FFI bindings for NVIDIA CUDA | https://crates.io/crates/cuda-sys |

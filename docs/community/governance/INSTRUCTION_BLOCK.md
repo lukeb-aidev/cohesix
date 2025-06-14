@@ -133,6 +133,11 @@ Codex must auto-detect supported hardware and pass tests accordingly.
     Related technical docs must be merged (e.g., TOOLING_PLAN.md → IMPLEMENTATION_GUIDE.md).  
     CI must reject duplication or drift.
 
+14. TMPDIR + Writable Path Enforcement  
+    - All code must write to paths under `$TMPDIR`, `$COHESIX_ENS_TMP`, or `$COHESIX_TRACE_TMP` if applicable.  
+    - Hardcoded paths like `/tmp/foo.log` or `/var/...` are forbidden unless explicitly marked writable in container or CI.  
+    - Codex must enforce writable path compliance in test and runtime artifacts.
+
 ---
 
 ## 6 · Testing Requirements
@@ -144,6 +149,9 @@ Codex must auto-detect supported hardware and pass tests accordingly.
 - Trace Replay: Valid snapshots from `/history/` or `SimMount`  
 - Validator: Every syscall checked live by the runtime validator  
 - Role Override: Simulate using `COHROLE=` env/bootarg
+
+- Ensemble agents must test under `$COHESIX_ENS_TMP`, and validate safe cleanup afterward.  
+- QEMU test scripts (e.g., `test_boot_efi.sh`) must gracefully skip if `qemu-system-x86_64` is missing or not installed.
 
 ---
 
@@ -203,3 +211,4 @@ Enforced by `validate_classification.py`.
   - All dependencies are available  
   - No hydration or permission errors are present  
   - It can read + write to `/mnt/data/cohesix_active/` cleanly
+  - If `qemu-system-x86_64` is not present, Codex must log and skip boot tests instead of failing the entire pipeline.
