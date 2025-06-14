@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: secure_9p_server.rs v0.2
+// Filename: secure_9p_server.rs v0.3
 // Author: Lukas Bower
-// Date Modified: 2025-07-25
+// Date Modified: 2025-07-27
 
 //! TLS-wrapped 9P server with policy enforcement.
 
@@ -19,6 +19,8 @@ use rustls::{server::ServerConfig, Certificate, PrivateKey, ServerConnection, St
 #[cfg(feature = "secure9p")]
 use rustls_pemfile::{certs, pkcs8_private_keys};
 #[cfg(feature = "secure9p")]
+use serde_json::json;
+#[cfg(feature = "secure9p")]
 use std::{
     fs::File,
     io::{BufReader, Read, Write},
@@ -28,20 +30,26 @@ use std::{
     sync::Arc,
     thread,
 };
+#[cfg(feature = "secure9p")]
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+#[cfg(feature = "secure9p")]
+use tokio::net::TcpListener as TokioTcpListener;
+#[cfg(feature = "secure9p")]
+use tokio_rustls::TlsAcceptor;
 
 #[cfg(feature = "secure9p")]
 fn load_certs(path: &Path) -> anyhow::Result<Vec<Certificate>> {
     let mut rd = BufReader::new(File::open(path)?);
     Ok(certs(&mut rd)?.into_iter().map(Certificate).collect())
+}
+
+#[cfg(feature = "secure9p")]
 use rustls::{
     pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs1KeyDer},
     ServerConfig,
 };
-use rustls_pemfile::{certs, rsa_private_keys};
-use serde_json::json;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpListener;
-use tokio_rustls::TlsAcceptor;
+#[cfg(feature = "secure9p")]
+use rustls_pemfile::rsa_private_keys;
 
 use super::{
     auth_handler::AuthHandler, cap_fid::Capability, namespace_resolver::resolve,
@@ -110,21 +118,34 @@ pub fn start_secure_9p_server(addr: &str, cert: &Path, key: &Path) -> anyhow::Re
             let mut buf = Vec::new();
             let _ = tls.read_to_end(&mut buf);
             let mut cursor = std::io::Cursor::new(buf);
-            let id = auth_handler::extract_identity(tls.conn_mut(), &mut cursor).unwrap_or_else(|_| "unknown".into());
-            let MountNamespace { root, readonly } = match namespace_resolver::resolve_namespace(&id) {
+            let id = auth_handler::extract_identity(tls.conn_mut(), &mut cursor)
+                .unwrap_or_else(|_| "unknown".into());
+            let MountNamespace { root, readonly } = match namespace_resolver::resolve_namespace(&id)
+            {
                 Ok(ns) => ns,
                 Err(_) => return,
             };
             let socket = std::env::temp_dir().join(format!("secure9p_{id}.sock"));
-            let mut fs = FsServer::new(FsConfig { root, port: 0, readonly });
+            let mut fs = FsServer::new(FsConfig {
+                root,
+                port: 0,
+                readonly,
+            });
             fs.set_policy(id.clone(), policy_for(&engine, &id));
-            fs.set_validator_hook(Arc::new(move |ty, f, agent, _| hook.log(&agent, ty, &f, "")));
+            fs.set_validator_hook(Arc::new(move |ty, f, agent, _| {
+                hook.log(&agent, ty, &f, "")
+            }));
             fs.start_socket(&socket).ok();
             if let Ok(mut inner) = UnixStream::connect(&socket) {
                 let mut writer = inner.try_clone().unwrap();
                 let _ = std::io::copy(&mut cursor, &mut writer);
             }
         });
+    }
+    Ok(())
+}
+
+#[cfg(feature = "secure9p")]
 fn log_event(v: serde_json::Value) {
     let log_dir = std::env::var("COHESIX_LOG_DIR")
         .map(std::path::PathBuf::from)

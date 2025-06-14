@@ -43,8 +43,6 @@ rand = "0.8"
 v4l = "0.14"
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
 sdl2 = { version = "0.37", optional = true }
-rustls = { version = "0.22", default-features = false, features = ["tls12"], optional = true }
-tokio-rustls = { version = "0.24", default-features = false, optional = true }
 jsonwebtoken = { version = "9", optional = true }
 toml = { version = "0.8", optional = true }
 x509-parser = { version = "0.15", optional = true }
