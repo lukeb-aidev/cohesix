@@ -65,5 +65,6 @@ pub fn start() {
     ServiceRegistry::register_service("telemetry", "/srv/telemetry");
     ServiceRegistry::register_service("sim", "/sim");
     ServiceRegistry::register_service("p9mux", "/srv/p9mux");
+    // Spawning of initial processes will be added in a future update
     // FIXME(cohesix): spawn initial processes under this namespace
 }

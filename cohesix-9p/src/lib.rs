@@ -15,6 +15,7 @@
 // # Design Notes
 // * No network code yet – the transport layer will be injected later.
 // * API kept synchronous for now; will migrate to async once design stabilises.
+// * Explicit notes call out unimplemented sections so the hydration
 // * Explicit `FIXME` markers call out un‑implemented sections so the hydration
 //   linter will catch them.
 //

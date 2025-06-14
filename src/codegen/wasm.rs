@@ -21,6 +21,8 @@ pub fn generate_wasm(module: &Module) -> String {
             "  (func ${} (export \"{}\")\n",
             func.name, func.name
         ));
+        // Instruction emission will be implemented in a later revision
+        output.push_str("    ;; instruction emission pending\n");
         // FIXME: emit WASM instructions based on IR opcodes
         output.push_str("    ;; FIXME: instruction emission not implemented\n");
         output.push_str("  )\n");

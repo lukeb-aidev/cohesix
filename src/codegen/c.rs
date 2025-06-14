@@ -24,6 +24,22 @@ pub fn generate_c(module: &Module) -> String {
         output.push_str(&format!("void {}() {{\n", func.name));
         for instr in &func.body {
             match &instr.opcode {
+                Opcode::Add => output.push_str(&format!(
+                    "    // ADD {:?}\n",
+                    instr.operands
+                )),
+                Opcode::Sub => output.push_str(&format!(
+                    "    // SUB {:?}\n",
+                    instr.operands
+                )),
+                Opcode::Mul => output.push_str(&format!(
+                    "    // MUL {:?}\n",
+                    instr.operands
+                )),
+                Opcode::Div => output.push_str(&format!(
+                    "    // DIV {:?}\n",
+                    instr.operands
+                )),
                 Opcode::Add => {
                     if instr.operands.len() == 2 {
                         output.push_str(&format!(

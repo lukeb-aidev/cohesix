@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CODE_OF_CONDUCT.md v0.2
-// Date Modified: 2025-07-24
+// Filename: CODE_OF_CONDUCT.md v1.0
+// Date Modified: 2025-06-09
 // Author: Lukas Bower
 
 # Code of Conduct

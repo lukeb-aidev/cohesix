@@ -30,7 +30,8 @@ pub trait I2CDevice {
 pub struct I2CBus;
 
 impl I2CBus {
-    /// Initialize the I2C bus with default settings.
+    /// Initialize the I2C bus with default settings. This stub returns a
+    /// default `I2CBus` instance until hardware support is integrated.
     pub fn new() -> Self {
         // FIXME: Implement hardware-specific initialization
         I2CBus
@@ -39,16 +40,19 @@ impl I2CBus {
 
 impl I2CDevice for I2CBus {
     fn write(&mut self, _address: u8, _data: &[u8]) -> Result<(), I2CError> {
+        // Hardware interaction not yet implemented
         // FIXME: Implement I2C write transaction
         Err(I2CError::Unknown)
     }
 
     fn read(&mut self, _address: u8, _buffer: &mut [u8]) -> Result<(), I2CError> {
+        // Hardware interaction not yet implemented
         // FIXME: Implement I2C read transaction
         Err(I2CError::Unknown)
     }
 
     fn write_read(&mut self, _address: u8, _data: &[u8], _buffer: &mut [u8]) -> Result<(), I2CError> {
+        // Hardware interaction not yet implemented
         // FIXME: Implement I2C write-read transaction
         Err(I2CError::Unknown)
     }

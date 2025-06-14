@@ -97,6 +97,7 @@ impl CohesixFs {
 
     /// Mount a remote 9P server under the provided mountpoint.
     #[allow(dead_code)]
+    // This function will be made public once remote mounts are supported
     // FIXME: expose once remote mount functionality is used by runtime
     pub fn _mount_remote(&self, mountpoint: &str, addr: &str) -> AnyResult<()> {
         let client = TcpClient::new_tcp("cohesix".to_string(), addr, "/")?;
