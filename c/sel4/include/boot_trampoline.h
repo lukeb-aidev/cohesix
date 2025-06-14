@@ -1,6 +1,6 @@
 // CLASSIFICATION: PRIVATE
-// Filename: boot_trampoline.h v0.3
-// Date Modified: 2025-07-15
+// Filename: boot_trampoline.h v0.4
+// Date Modified: 2025-07-22
 // Author: Lukas Bower
 //
 // ─────────────────────────────────────────────────────────────
@@ -20,6 +20,12 @@ extern "C" {
 #endif
 
 #include <stdint.h>
+
+/* Boot constants used by the trampoline */
+#define BOOT_TRAMPOLINE_UART_BASE      0x09000000u
+#define BOOT_TRAMPOLINE_CRC_POLYNOMIAL 0xEDB88320u
+#define BOOT_TRAMPOLINE_LOG_SIZE       128
+#define BOOT_SUCCESS_PATH              "/state/boot_success"
 
 /**
  * @brief Entry invoked by verified seL4 assembly.

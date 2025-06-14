@@ -6,6 +6,7 @@
 - Ensemble tests use writable temp directory via COHESIX_ENS_TMP
 - SharedMemory, BaseAgent use TMPDIR and respect override vars
 - QEMU boot script checks for qemu-system-x86_64, sets TMPDIR, ensures writable paths
+- Bootloader telemetry writes /state/boot_success; watchdog logs to /state/boot_error
 ## [v0.88] - 2025-07-22
 ### Fixed
 - Rust ensemble agent tests write to a safe temporary directory.
