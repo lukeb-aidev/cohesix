@@ -11,7 +11,7 @@ import os
 import sys
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
-from python.validator import trace_integrity
+from validator import trace_integrity
 
 
 def test_failover_trace_consistency(tmp_path):

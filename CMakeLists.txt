@@ -1,5 +1,5 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: CMakeLists.txt v0.3
+# Filename: CMakeLists.txt v0.4
 # Author: Lukas Bower
 # Date Modified: 2025-07-22
 
@@ -17,6 +17,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Optional CUDA support
 find_package(CUDAToolkit)
 if(CUDAToolkit_FOUND)
+    file(MAKE_DIRECTORY "/tmp/cohesix_cuda")
+    set(CMAKE_CUDA_FLAGS "--keep-dir=/tmp/cohesix_cuda")
     enable_language(CUDA)
 endif()
 
