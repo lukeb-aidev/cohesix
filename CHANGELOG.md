@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.51
-// Date Modified: 2025-06-14
+// Filename: CHANGELOG.md v0.52
+// Date Modified: 2025-07-26
 ## [vNext] - 2025-07-23
 ### Temp path fixes and QEMU script guard
 - cohesix_fetch_build.sh header updated and registered in METADATA
@@ -18,6 +18,7 @@
 - secure9p sandbox uses Path to parse agent IDs; tests added for trailing
   slashes and invalid namespaces
 - Gpu telemetry includes temperature and utilization via nvml-wrapper
+- Policy engine exposes `new` and `allow` API; tests updated
 - Added cuda_test.rs validating runtime CUDA presence
 - 9P server enforces per-session sandbox policies with validator logging
 - New `secure9p` feature flag toggles TLS-backed file server

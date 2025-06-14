@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: secure_9p_server.rs v0.2
+// Filename: secure_9p_server.rs v0.3
 // Author: Lukas Bower
-// Date Modified: 2025-07-25
+// Date Modified: 2025-07-26
 
 //! TLS-wrapped 9P server with policy enforcement.
 
@@ -33,15 +33,7 @@ use std::{
 fn load_certs(path: &Path) -> anyhow::Result<Vec<Certificate>> {
     let mut rd = BufReader::new(File::open(path)?);
     Ok(certs(&mut rd)?.into_iter().map(Certificate).collect())
-use rustls::{
-    pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs1KeyDer},
-    ServerConfig,
-};
-use rustls_pemfile::{certs, rsa_private_keys};
-use serde_json::json;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpListener;
-use tokio_rustls::TlsAcceptor;
+}
 
 use super::{
     auth_handler::AuthHandler, cap_fid::Capability, namespace_resolver::resolve,
@@ -125,6 +117,10 @@ pub fn start_secure_9p_server(addr: &str, cert: &Path, key: &Path) -> anyhow::Re
                 let _ = std::io::copy(&mut cursor, &mut writer);
             }
         });
+    }
+    Ok(())
+}
+
 fn log_event(v: serde_json::Value) {
     let log_dir = std::env::var("COHESIX_LOG_DIR")
         .map(std::path::PathBuf::from)
