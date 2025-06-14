@@ -56,5 +56,8 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system_table) {
 
     status = uefi_call_wrapper(system_table->BootServices->StartImage, 3,
                                kernel_image, NULL, NULL);
+    if (EFI_ERROR(status)) {
+        Print(L"Kernel start failed: %r\n", status);
+    }
     return status;
 }
