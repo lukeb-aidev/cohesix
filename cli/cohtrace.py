@@ -41,7 +41,11 @@ def list_workers(base: Path):
         cohlog("No workers connected")
         return
     for worker in base.iterdir():
-        role = (worker / "role").read_text().strip() if (worker / "role").exists() else "Unknown"
+        role = (
+            (worker / "role").read_text().strip()
+            if (worker / "role").exists()
+            else "Unknown"
+        )
         services = []
         srv_dir = worker / "services"
         if srv_dir.exists():
@@ -54,10 +58,12 @@ def push_trace(worker_id: str, path: Path):
     os.makedirs(dest_dir, exist_ok=True)
     dest = dest_dir / "sim.json"
     import shutil
+
     shutil.copy(path, dest)
     cohlog(f"Trace pushed to {dest}")
     try:
         from cohesix.trace.validator import validate_trace
+
         validate_trace(str(dest), worker_id)
     except Exception as e:
         cohlog(f"Validation failed: {e}")

@@ -6,7 +6,7 @@
 
 import argparse
 import json
-import os
+import sys
 from pathlib import Path
 import tarfile
 import shlex
@@ -31,6 +31,7 @@ def safe_run(cmd: List[str]) -> int:
         f.write(f"{datetime.utcnow().isoformat()} {' '.join(quoted)}\n")
     result = subprocess.run(cmd)
     return result.returncode
+
 
 MANIFEST = Path("/srv/updates/manifest.json")
 UPDATE_DIR = Path("/srv/updates")
@@ -82,6 +83,7 @@ def main():
         install(args.name)
     else:
         p.print_help()
+
 
 if __name__ == "__main__":
     try:
