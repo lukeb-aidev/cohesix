@@ -1,13 +1,14 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: validator.rs v0.1
+// Filename: validator.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-07-04
+// Date Modified: 2025-07-22
 
 //! Runtime syscall validator for sandboxed agents.
 //! Violations are logged to `/srv/violations/<agent>.json` and the
 //! offending syscall is dropped.
 
 use crate::cohesix_types::{Role, Syscall};
+use crate::validator::config::get_config;
 use serde::Serialize;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -33,8 +34,9 @@ pub fn validate(agent: &str, role: Role, sc: &Syscall) -> bool {
 }
 
 fn log_violation(agent: &str, role: Role, sc: &Syscall) {
-    let path = format!("/srv/violations/{agent}.json");
-    fs::create_dir_all("/srv/violations").ok();
+    let cfg = get_config();
+    fs::create_dir_all(&cfg.violations_dir).ok();
+    let path = cfg.violations_dir.join(format!("{agent}.json"));
     let v = Violation {
         syscall: format!("{:?}", sc),
         role: format!("{:?}", role),

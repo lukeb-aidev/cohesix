@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: runtime.rs v0.3
+// Filename: runtime.rs v0.4
 // Author: Lukas Bower
-// Date Modified: 2025-07-04
+// Date Modified: 2025-07-22
 
 //! Agent runtime management.
 //!
@@ -17,6 +17,7 @@ use std::process::{Child, Command};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::runtime::ServiceRegistry;
+use crate::validator::config::get_config;
 use crate::cohesix_types::Role;
 use crate::trace::recorder;
 use crate::agent::directory::{AgentDirectory, AgentRecord};
@@ -28,6 +29,14 @@ pub struct AgentRuntime {
 
 use crate::agent_transport::AgentTransport;
 use crate::agent_migration::{Migrateable, MigrationStatus};
+
+fn agents_dir() -> String {
+    std::env::var("COHESIX_AGENTS_DIR").unwrap_or_else(|_| "/srv/agents".into())
+}
+
+fn agent_trace_dir() -> String {
+    std::env::var("COHESIX_AGENT_TRACE_DIR").unwrap_or_else(|_| "/srv/agent_trace".into())
+}
 
 impl Migrateable for AgentRuntime {
     fn migrate<T: AgentTransport>(&self, peer: &str, transport: &T) -> anyhow::Result<MigrationStatus> {
@@ -51,16 +60,18 @@ impl AgentRuntime {
             Role::Other(_) => return Err(anyhow::anyhow!("invalid role")),
             _ => {}
         }
-        fs::create_dir_all("/srv/agents")?;
-        let path = format!("/srv/agents/{agent_id}");
+        let agents_dir = agents_dir();
+        fs::create_dir_all(&agents_dir)?;
+        let path = format!("{}/{}", agents_dir, agent_id);
         fs::create_dir_all(&path)?;
         ServiceRegistry::register_service(agent_id, &path);
 
-        fs::create_dir_all("/srv/agent_trace")?;
+        let trace_dir = agent_trace_dir();
+        fs::create_dir_all(&trace_dir)?;
         let mut trace = OpenOptions::new()
             .create(true)
             .append(true)
-            .open(format!("/srv/agent_trace/{agent_id}"))?;
+            .open(format!("{}/{}", trace_dir, agent_id))?;
         writeln!(trace, "spawn {} {:?}", timestamp(), args)?;
         let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
         let _ = recorder::spawn(agent_id, &args[0], &arg_refs);
@@ -99,21 +110,23 @@ impl AgentRuntime {
         if let Some(mut child) = self.procs.remove(agent_id) {
             let _ = child.kill();
             let _ = child.wait();
+            let trace_dir = agent_trace_dir();
             let mut trace = OpenOptions::new()
                 .create(true)
                 .append(true)
-                .open(format!("/srv/agent_trace/{agent_id}"))?;
+                .open(format!("{}/{}", trace_dir, agent_id))?;
             writeln!(trace, "terminate {}", timestamp())?;
             recorder::event(agent_id, "terminate", "");
         }
-        std::fs::remove_dir_all(format!("/srv/agents/{agent_id}")).ok();
+        let agents_dir = agents_dir();
+        std::fs::remove_dir_all(format!("{}/{}", agents_dir, agent_id)).ok();
         AgentDirectory::remove(agent_id);
         Ok(())
     }
 
     /// Return the trace file path for an agent.
     pub fn trace(&self, agent_id: &str) -> PathBuf {
-        PathBuf::from(format!("/srv/agent_trace/{agent_id}"))
+        PathBuf::from(format!("{}/{}", agent_trace_dir(), agent_id))
     }
 }
 

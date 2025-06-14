@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: validator.rs v0.2
+// Filename: validator.rs v0.3
 // Author: Lukas Bower
-// Date Modified: 2025-07-11
+// Date Modified: 2025-07-22
 
 //! Simple simulation trace validator run on the Queen.
 
@@ -34,9 +34,11 @@ pub fn validate_trace(path: &str, worker: &str) -> anyhow::Result<()> {
         angle_ok,
         drift: trace.angle,
     };
-    let tmpdir = std::env::var("TMPDIR").unwrap_or("/tmp".to_string());
-    fs::create_dir_all(format!("{}/trace/reports", tmpdir)).ok();
-    let out = format!("{}/trace/reports/{worker}.report.json", tmpdir);
+    let base = std::env::var("COHESIX_TRACE_REPORT_DIR")
+        .or_else(|_| std::env::var("TMPDIR"))
+        .unwrap_or_else(|_| "/tmp".to_string());
+    fs::create_dir_all(format!("{}/trace/reports", base)).ok();
+    let out = format!("{}/trace/reports/{worker}.report.json", base);
     fs::write(&out, serde_json::to_string(&report)?)?;
     println!("[validator] report stored at {out}");
     Ok(())

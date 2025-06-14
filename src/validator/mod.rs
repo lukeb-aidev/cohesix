@@ -1,13 +1,17 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: mod.rs v0.1
+// Filename: mod.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-07-09
+// Date Modified: 2025-07-22
 
 //! Runtime validator utilities for rule violations.
+
+pub mod config;
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+use crate::validator::config::get_config;
 
 /// Structured rule violation alert.
 pub struct RuleViolation {
@@ -19,8 +23,10 @@ pub struct RuleViolation {
 
 /// Log a rule violation to the runtime validator log.
 pub fn log_violation(v: RuleViolation) {
-    fs::create_dir_all("/log").ok();
-    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open("/log/validator_runtime.log") {
+    let cfg = get_config();
+    fs::create_dir_all(&cfg.log_dir).ok();
+    let path = cfg.log_dir.join("validator_runtime.log");
+    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(path) {
         let _ = writeln!(
             f,
             "rule_violation(type=\"{}\", file=\"{}\", agent=\"{}\", time={})",
