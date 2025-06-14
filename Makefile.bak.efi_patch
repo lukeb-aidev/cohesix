@@ -1,6 +1,6 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Makefile v0.14
-# Date Modified: 2025-07-23
+# Filename: Makefile v0.13
+# Date Modified: 2025-07-22
 # Author: Lukas Bower
 #
 # ─────────────────────────────────────────────────────────────
@@ -114,9 +114,10 @@ bootloader:
 	@echo "🏁 Building UEFI bootloader using $(TOOLCHAIN)"
 	@mkdir -p out/EFI/BOOT
 	$(CC) $(CFLAGS_EFI) -c src/bootloader/main.c -o out/bootloader.o
-	lld-link /lib/crt0-efi-x86_64.o out/bootloader.o \
-	/out:out/bootloader.so /entry:efi_main /subsystem:efi_application \
-	/defaultlib:gnuefi.lib /defaultlib:efi.lib
+	grep -v '^//' bootloader.lds > out/bootloader.tmp.ld
+	$(LD) /usr/lib/crt0-efi-x86_64.o out/bootloader.o \
+	    -o out/bootloader.so -T out/bootloader.tmp.ld $(LD_FLAGS)
+	rm -f out/bootloader.tmp.ld
 	objcopy --target=efi-app-x86_64 out/bootloader.so out/BOOTX64.EFI
 	cp out/BOOTX64.EFI out/EFI/BOOT/BOOTX64.EFI
 
