@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: runtime.rs v0.8
+// Filename: runtime.rs v0.9
 // Author: Lukas Bower
 // Date Modified: 2025-07-22
 
@@ -21,6 +21,8 @@ use std::time::Instant;
 use cust::prelude::*;
 #[cfg(feature = "cuda")]
 use cust::CudaApiVersion;
+#[cfg(feature = "cuda")]
+use nvml_wrapper::{enum_wrappers::device::TemperatureSensor, Nvml};
 
 /// Wrapper around the CUDA driver library.
 pub struct CudaRuntime {
@@ -64,6 +66,11 @@ impl CudaRuntime {
         let present = lib.is_some() && ctx.is_some();
         #[cfg(not(feature = "cuda"))]
         let present = lib.is_some();
+        fs::create_dir_all("/srv/cuda").ok();
+        if !present {
+            warn!("CUDA unavailable; exposing stub interface at /srv/cuda");
+            fs::write("/srv/cuda/info", "cuda unavailable").ok();
+        }
         ServiceRegistry::register_service("cuda", "/srv/cuda");
         Ok(Self {
             lib,
@@ -71,6 +78,11 @@ impl CudaRuntime {
             ctx,
             present,
         })
+    }
+
+    /// Return true if CUDA libraries and context were successfully initialized.
+    pub fn is_present(&self) -> bool {
+        self.present
     }
 
     /// Load a verified symbol from the CUDA library.
@@ -234,6 +246,15 @@ impl CudaExecutor {
                 .map(|v| format!("{}.{}", v.major(), v.minor()))
                 .unwrap_or_default();
             let (free, total) = cust::memory::mem_get_info().unwrap_or((0, 0));
+            let (temp, util) = Nvml::init()
+                .ok()
+                .and_then(|nvml| nvml.device_by_index(0).ok())
+                .map(|dev| {
+                    let t = dev.temperature(TemperatureSensor::Gpu).ok().map(|v| v as f32);
+                    let u = dev.utilization_rates().ok().map(|u| u.gpu as u32);
+                    (t, u)
+                })
+                .unwrap_or((None, None));
             GpuTelemetry {
                 cuda_present: true,
                 driver_version: version,
@@ -241,6 +262,8 @@ impl CudaExecutor {
                 mem_free: free as u64,
                 fallback_reason: self.fallback_reason.clone(),
                 exec_time_ns: self.last_exec_ns,
+                temperature: temp,
+                gpu_utilization: util,
             }
         }
         #[cfg(not(feature = "cuda"))]
