@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v0.47
-// Date Modified: 2025-07-22
-## [vNext] - 2025-07-22
+// Date Modified: 2025-07-23
+## [vNext] - 2025-07-23
 ### Temp path fixes and QEMU script guard
 - Ensemble tests use writable temp directory via COHESIX_ENS_TMP
 - SharedMemory, BaseAgent use TMPDIR and respect override vars
@@ -12,6 +12,10 @@
 - Gpu telemetry includes temperature and utilization via nvml-wrapper
 - Added cuda_test.rs validating runtime CUDA presence
 - 9P server enforces per-session sandbox policies with validator logging
+- /proc/nsmap exposes per-role namespace maps
+- NsWatchService validates hotplugged mounts
+- SandboxService logs namespace violations via validator
+- Added ns_hotplug.rs integration test
 ## [v0.88] - 2025-07-22
 ### Fixed
 - Rust ensemble agent tests write to a safe temporary directory.

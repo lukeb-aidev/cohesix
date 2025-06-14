@@ -1,12 +1,13 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: sandbox.rs v1.0
-// Date Modified: 2025-06-02
+// Filename: sandbox.rs v1.1
+// Date Modified: 2025-07-23
 // Author: Lukas Bower
 
 //! Sandbox enforcement service
 
 use super::Service;
 use crate::security::capabilities;
+use crate::validator::{self, RuleViolation};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::process;
@@ -37,13 +38,23 @@ impl Service for SandboxService {
 impl SandboxService {
     fn log_violation(&self, verb: &str, path: &str, role: &str) {
         fs::create_dir_all("/log").ok();
-        if let Ok(mut f) = OpenOptions::new().create(true).append(true).open("/log/sandbox.log") {
+        if let Ok(mut f) = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("/log/sandbox.log")
+        {
             let _ = writeln!(
                 f,
                 "blocked action={verb} path={path} pid={} role={role}",
                 process::id()
             );
         }
+        validator::log_violation(RuleViolation {
+            type_: "ns_violation",
+            file: path.to_string(),
+            agent: role.to_string(),
+            time: validator::timestamp(),
+        });
     }
 
     /// Enforce a syscall verb/path for the given role.
@@ -58,4 +69,3 @@ impl SandboxService {
         allowed
     }
 }
-

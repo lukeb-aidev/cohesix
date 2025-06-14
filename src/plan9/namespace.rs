@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: namespace.rs v0.3
+// Filename: namespace.rs v0.4
 // Author: Lukas Bower
-// Date Modified: 2025-06-22
+// Date Modified: 2025-07-23
 
 //! Dynamic Plan 9 namespace loader for Cohesix.
 //!
@@ -10,6 +10,7 @@
 //! `unmount`. During tests, namespace actions are emulated by creating files
 //! under `/srv`.
 
+use crate::cohesix_types::{Role, RoleManifest};
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{self, Write};
@@ -24,16 +25,31 @@ pub struct BindFlags {
 
 impl Default for BindFlags {
     fn default() -> Self {
-        Self { after: false, before: false, create: false }
+        Self {
+            after: false,
+            before: false,
+            create: false,
+        }
     }
 }
 
 #[derive(Debug, Clone)]
 pub enum NsOp {
-    Bind { src: String, dst: String, flags: BindFlags },
-    Mount { srv: String, dst: String },
-    Srv { path: String },
-    Unmount { dst: String },
+    Bind {
+        src: String,
+        dst: String,
+        flags: BindFlags,
+    },
+    Mount {
+        srv: String,
+        dst: String,
+    },
+    Srv {
+        path: String,
+    },
+    Unmount {
+        dst: String,
+    },
 }
 
 #[derive(Default, Clone, Debug)]
@@ -95,17 +111,38 @@ impl NamespaceLoader {
             match tokens.as_slice() {
                 ["bind", flag, src, dst] if flag.starts_with('-') => {
                     let mut f = BindFlags::default();
-                    if flag.contains('a') { f.after = true; }
-                    if flag.contains('b') { f.before = true; }
-                    if flag.contains('c') { f.create = true; }
-                    ns.add_op(NsOp::Bind { src: src.to_string(), dst: dst.to_string(), flags: f });
+                    if flag.contains('a') {
+                        f.after = true;
+                    }
+                    if flag.contains('b') {
+                        f.before = true;
+                    }
+                    if flag.contains('c') {
+                        f.create = true;
+                    }
+                    ns.add_op(NsOp::Bind {
+                        src: src.to_string(),
+                        dst: dst.to_string(),
+                        flags: f,
+                    });
                 }
                 ["bind", src, dst] => {
-                    ns.add_op(NsOp::Bind { src: src.to_string(), dst: dst.to_string(), flags: BindFlags::default() });
+                    ns.add_op(NsOp::Bind {
+                        src: src.to_string(),
+                        dst: dst.to_string(),
+                        flags: BindFlags::default(),
+                    });
                 }
-                ["mount", srv, dst] => ns.add_op(NsOp::Mount { srv: srv.to_string(), dst: dst.to_string() }),
-                ["srv", path] => ns.add_op(NsOp::Srv { path: path.to_string() }),
-                ["unmount", dst] => ns.add_op(NsOp::Unmount { dst: dst.to_string() }),
+                ["mount", srv, dst] => ns.add_op(NsOp::Mount {
+                    srv: srv.to_string(),
+                    dst: dst.to_string(),
+                }),
+                ["srv", path] => ns.add_op(NsOp::Srv {
+                    path: path.to_string(),
+                }),
+                ["unmount", dst] => ns.add_op(NsOp::Unmount {
+                    dst: dst.to_string(),
+                }),
                 _ => println!("[namespace] ignoring malformed line: {}", line),
             }
         }
@@ -154,6 +191,8 @@ pub fn init_boot_namespace() -> io::Result<Namespace> {
     NamespaceLoader::apply(&mut ns)?;
     let agent = std::env::var("AGENT_ID").unwrap_or_else(|_| "default".into());
     ns.persist(&agent)?;
+    let role = RoleManifest::current_role();
+    let _ = ns.dump_proc_nsmap(&role);
     Ok(ns)
 }
 
@@ -166,9 +205,15 @@ impl Namespace {
             match op {
                 NsOp::Bind { src, dst, flags } => {
                     let mut flag = String::new();
-                    if flags.before { flag.push('b'); }
-                    if flags.after { flag.push('a'); }
-                    if flags.create { flag.push('c'); }
+                    if flags.before {
+                        flag.push('b');
+                    }
+                    if flags.after {
+                        flag.push('a');
+                    }
+                    if flags.create {
+                        flag.push('c');
+                    }
                     if flag.is_empty() {
                         writeln!(f, "bind {} {}", src, dst)?;
                     } else {
@@ -198,9 +243,15 @@ impl Namespace {
             match op {
                 NsOp::Bind { src, dst, flags } => {
                     let mut f = String::new();
-                    if flags.before { f.push('b'); }
-                    if flags.after { f.push('a'); }
-                    if flags.create { f.push('c'); }
+                    if flags.before {
+                        f.push('b');
+                    }
+                    if flags.after {
+                        f.push('a');
+                    }
+                    if flags.create {
+                        f.push('c');
+                    }
                     if f.is_empty() {
                         out.push(format!("bind {} {}", src, dst));
                     } else {
@@ -225,6 +276,17 @@ impl Namespace {
             }
         }
         node.mounts.first().cloned()
+    }
+
+    /// Dump this namespace to `/proc/nsmap/<role>` for traceability.
+    pub fn dump_proc_nsmap(&self, role: &Role) -> io::Result<()> {
+        let role_name = match role {
+            Role::Other(s) => s.clone(),
+            _ => format!("{:?}", role),
+        };
+        fs::create_dir_all("/proc/nsmap")?;
+        let path = format!("/proc/nsmap/{}", role_name);
+        fs::write(path, self.to_string())
     }
 }
 
