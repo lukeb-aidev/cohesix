@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: sandbox.rs v0.2
+// Filename: sandbox.rs v0.3
 // Author: Lukas Bower
-// Date Modified: 2025-07-25
+// Date Modified: 2025-07-27
 
 //! Path sanitization utilities for Secure9P.
 
@@ -25,8 +25,8 @@ pub fn validate_path(agent_root: &Path, requested: &Path) -> Result<PathBuf> {
 #[cfg(all(test, feature = "secure9p"))]
 mod tests {
     use super::*;
-    use tempfile::tempdir;
     use std::fs;
+    use tempfile::tempdir;
 
     #[test]
     fn rejects_escape() {
@@ -37,7 +37,9 @@ mod tests {
         assert!(p.ends_with("a"));
         assert!(validate_path(root, Path::new("../x")).is_err());
     }
-use super::{policy_engine::PolicyEngine, cap_fid::Capability};
+}
+
+use super::{cap_fid::Capability, policy_engine::PolicyEngine};
 use std::path::Path;
 
 pub fn enforce(ns: &str, cap: Capability, policy: &PolicyEngine) -> bool {
