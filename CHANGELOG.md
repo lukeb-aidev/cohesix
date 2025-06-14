@@ -7,18 +7,24 @@
 - Ensemble tests use writable temp directory via COHESIX_ENS_TMP
 - SharedMemory, BaseAgent use TMPDIR and respect override vars
 - QEMU boot script checks for qemu-system-x86_64, sets TMPDIR, ensures writable paths
+- Boot test exits with code 0 when QEMU is missing so CI shows the step as skipped
 - Converted remaining TODO comments to descriptive FIXME notes
 - `generate_c` now outputs basic arithmetic operations in C
 - Bootloader telemetry writes /state/boot_success; watchdog logs to /state/boot_error
 - Validator paths now configurable via environment variables; CLI rule merge test added
 - `cohtrace` CLI now supports `--verify-trace` and `compare` commands for trace validation
 - CUDA runtime now exposes stub /srv/cuda when unavailable
+- GitHub workflow indentation corrected for OSS dependency audit
+- secure9p sandbox uses Path to parse agent IDs; tests added for trailing
+  slashes and invalid namespaces
 - Gpu telemetry includes temperature and utilization via nvml-wrapper
 - Added cuda_test.rs validating runtime CUDA presence
 - 9P server enforces per-session sandbox policies with validator logging
 - New `secure9p` feature flag toggles TLS-backed file server
+- Obsolete `src/secure9p` removed; `src/p9/secure` moved to `src/secure9p`
 - Secure9P server added with TLS support, per-agent namespaces, capability checks, and JSON trace logging
 - Secure9P server added with TLS support, per-agent namespaces, capability checks, and JSON trace logging
+- Secure9P server log path now uses `COHESIX_LOG_DIR` with temp dir fallback; handshake test verifies log
 - CMake CUDA keep directory respects TMPDIR
 - Rust tests use tempfile for temporary files instead of hardcoded /tmp
 - /proc/nsmap exposes per-role namespace maps
