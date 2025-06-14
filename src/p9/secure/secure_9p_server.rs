@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: secure_9p_server.rs v0.1
+// Filename: secure_9p_server.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-07-23
+// Date Modified: 2025-07-25
 
 //! TLS-wrapped 9P server with policy enforcement.
 
@@ -21,7 +21,7 @@ use rustls_pemfile::{certs, pkcs8_private_keys};
 #[cfg(feature = "secure9p")]
 use std::{
     fs::File,
-    io::{BufReader, Read, Write},
+    io::{self, BufReader, Read, Write},
     net::TcpListener,
     os::unix::net::UnixStream,
     path::{Path, PathBuf},
@@ -59,6 +59,25 @@ fn policy_for(engine: &PolicyEngine, agent: &str) -> SandboxPolicy {
     pol
 }
 
+#[cfg(feature = "secure9p")]
+pub const MAX_PAYLOAD: usize = 1_048_576;
+
+#[cfg(feature = "secure9p")]
+pub fn read_payload<R: Read>(reader: &mut R, limit: usize) -> io::Result<Vec<u8>> {
+    let mut buf = Vec::new();
+    let mut tmp = [0u8; 4096];
+    while let Ok(n) = reader.read(&mut tmp) {
+        if n == 0 {
+            break;
+        }
+        buf.extend_from_slice(&tmp[..n]);
+        if buf.len() > limit {
+            return Err(io::Error::new(io::ErrorKind::Other, "payload too large"));
+        }
+    }
+    Ok(buf)
+}
+
 /// Start a TLS-wrapped 9P server listening on `addr` using `cert` and `key`.
 #[cfg(feature = "secure9p")]
 pub fn start_secure_9p_server(addr: &str, cert: &Path, key: &Path) -> anyhow::Result<()> {
@@ -85,8 +104,10 @@ pub fn start_secure_9p_server(addr: &str, cert: &Path, key: &Path) -> anyhow::Re
             if tls.complete_io().is_err() {
                 return;
             }
-            let mut buf = Vec::new();
-            let _ = tls.read_to_end(&mut buf);
+            let buf = match read_payload(&mut tls, MAX_PAYLOAD) {
+                Ok(b) => b,
+                Err(_) => return,
+            };
             let mut cursor = std::io::Cursor::new(buf);
             let id = auth_handler::extract_identity(tls.conn_mut(), &mut cursor).unwrap_or_else(|_| "unknown".into());
             let MountNamespace { root, readonly } = match namespace_resolver::resolve_namespace(&id) {

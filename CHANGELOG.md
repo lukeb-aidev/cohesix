@@ -15,6 +15,7 @@
 - CUDA runtime now exposes stub /srv/cuda when unavailable
 - secure9p sandbox uses Path to parse agent IDs; tests added for trailing
   slashes and invalid namespaces
+- Secure9p server caps TLS payload at 1MB to avoid DoS; regression test added
 - Gpu telemetry includes temperature and utilization via nvml-wrapper
 - Added cuda_test.rs validating runtime CUDA presence
 - 9P server enforces per-session sandbox policies with validator logging
