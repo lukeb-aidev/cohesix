@@ -1,6 +1,12 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v0.46
 // Date Modified: 2025-07-22
+## [vNext] - 2025-06-14
+### Temp path fixes and QEMU boot guard
+- Ensemble agent tests now use safe writable temp dir
+- Logs and shared memory paths now respect TMPDIR
+- QEMU script checks for presence of qemu-system-x86_64
+- QEMU boot script creates needed output folders and avoids hardcoded paths
 ## [v0.88] - 2025-07-22
 ### Fixed
 - Rust ensemble agent tests write to a safe temporary directory.
