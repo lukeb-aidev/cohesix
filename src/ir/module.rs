@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: module.rs v1.1
-// Date Modified: 2025-07-24
+// Filename: module.rs v1.2
+// Date Modified: 2025-07-28
 // Author: Lukas Bower
 
 //! Defines the IR Module and associated utilities for the Cohesix compiler.
@@ -17,8 +17,6 @@ pub struct Module {
     /// Optional metadata associated with this module. Structured metadata
     /// will replace this field in a future revision.
     pub metadata: Option<String>,
-    /// Optional metadata associated with this module.
-    pub metadata: Option<String>, // FIXME: replace with structured metadata when ready
 }
 
 impl Module {
