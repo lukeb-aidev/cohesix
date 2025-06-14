@@ -1,6 +1,6 @@
 // CLASSIFICATION: PRIVATE
-// Filename: boot_trampoline.c v0.4
-// Date Modified: 2025-07-22
+// Filename: boot_trampoline.c v0.5
+// Date Modified: 2025-07-23
 // Author: Lukas Bower
 //
 // ─────────────────────────────────────────────────────────────
@@ -45,8 +45,20 @@ static void emit_success_telemetry(void)
 {
     int fd = open(BOOT_SUCCESS_PATH, O_WRONLY | O_CREAT, 0644);
     if (fd >= 0) {
-        write(fd, "ok\n", 3);
+        write(fd, "BOOT_OK\n", 8);
         close(fd);
+    } else {
+        int cfd = open("/dev/console", O_WRONLY);
+        if (cfd >= 0) {
+            write(cfd, "BOOT_FAIL:boot_success_write\n", 28);
+            close(cfd);
+        }
+        return;
+    }
+    int cfd = open("/dev/console", O_WRONLY);
+    if (cfd >= 0) {
+        write(cfd, "BOOT_OK\n", 8);
+        close(cfd);
     }
 }
 
