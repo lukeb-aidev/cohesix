@@ -1,6 +1,12 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.44
+// Filename: CHANGELOG.md v0.45
 // Date Modified: 2025-07-22
+## [v0.85] - 2025-07-22
+### Added
+- Makefile supports GCC and Clang toolchains for UEFI builds.
+- Linker selection now follows compiler choice.
+- `test_boot_efi.sh` prints the toolchain used.
+
 ## [v0.84] - 2025-07-22
 ### Fixed
 - Bootloader logs kernel launch progress and errors.
