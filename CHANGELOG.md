@@ -1,8 +1,9 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.50
-// Date Modified: 2025-07-23
+// Filename: CHANGELOG.md v0.51
+// Date Modified: 2025-06-14
 ## [vNext] - 2025-07-23
 ### Temp path fixes and QEMU script guard
+- cohesix_fetch_build.sh header updated and registered in METADATA
 - Ensemble tests use writable temp directory via COHESIX_ENS_TMP
 - SharedMemory, BaseAgent use TMPDIR and respect override vars
 - QEMU boot script checks for qemu-system-x86_64, sets TMPDIR, ensures writable paths
