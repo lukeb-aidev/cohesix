@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: ensemble.rs v0.1
+// Filename: ensemble.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-07-10
+// Date Modified: 2025-07-22
 
 //! Cooperative ensemble agents with shared memory.
 
@@ -20,9 +20,16 @@ pub struct SharedMemory {
 }
 
 impl SharedMemory {
-    pub fn new(id: &str) -> Self { Self { path: format!("/ensemble/{id}/mem") } }
+    pub fn new(id: &str) -> Self {
+        let root = std::env::var("COHESIX_ENS_TMP").unwrap_or_else(|_| "/ensemble".into());
+        Self { path: format!("{root}/{id}/mem") }
+    }
     pub fn read(&self) -> Option<String> { fs::read_to_string(&self.path).ok() }
-    pub fn write(&self, data: &str) { fs::create_dir_all("/ensemble").ok(); fs::write(&self.path, data).ok(); }
+    pub fn write(&self, data: &str) {
+        let base = std::path::Path::new(&self.path).parent().unwrap_or_else(|| std::path::Path::new("/ensemble"));
+        fs::create_dir_all(base).ok();
+        fs::write(&self.path, data).ok();
+    }
 }
 
 pub trait DecisionAgent {
@@ -76,10 +83,13 @@ impl EnsembleAgent {
     }
 
     fn log_scores(&self, scores: &[(String, f32)]) -> std::io::Result<()> {
-        fs::create_dir_all(format!("/ensemble/{}/", self.id))?;
+        let root = std::env::var("COHESIX_ENS_TMP").unwrap_or_else(|_| "/ensemble".into());
+        fs::create_dir_all(format!("{root}/{}/", self.id))?;
         let goals = serde_json::to_string(scores).unwrap_or_else(|_| "[]".into());
-        fs::write(format!("/ensemble/{}/goals.json", self.id), goals)?;
-        let mut f = OpenOptions::new().create(true).append(true).open(format!("/trace/ensemble_{}.log", self.id))?;
+        fs::write(format!("{root}/{}/goals.json", self.id), goals)?;
+        let trace_root = std::env::var("COHESIX_TRACE_TMP").unwrap_or_else(|_| "/trace".into());
+        let mut f = OpenOptions::new().create(true).append(true)
+            .open(format!("{trace_root}/ensemble_{}.log", self.id))?;
         writeln!(f, "tick")?;
         Ok(())
     }
