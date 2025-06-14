@@ -14,10 +14,14 @@ fn mount_capacity_limit() {
         let path = format!("/srv/test{}", i);
         let static_path: &'static str = Box::leak(path.into_boxed_str());
         let tmp = std::env::temp_dir();
-        assert!(mount(tmp.to_str().unwrap(), static_path));
+        let tmp_str: &'static str =
+            Box::leak(tmp.to_str().unwrap().to_string().into_boxed_str());
+        assert!(mount(tmp_str, static_path));
     }
     let tmp = std::env::temp_dir();
-    assert!(!mount(tmp.to_str().unwrap(), "/srv/overflow"));
+    let tmp_str: &'static str =
+        Box::leak(tmp.to_str().unwrap().to_string().into_boxed_str());
+    assert!(!mount(tmp_str, "/srv/overflow"));
     assert_eq!(mount_count(), 8);
 }
 
