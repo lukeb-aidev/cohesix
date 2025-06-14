@@ -29,7 +29,8 @@ impl NetDriver {
         println!("[Net] Initializing network driver...");
         let interface = match env::var("COHESIX_NET_IFACE").as_deref() {
             Ok("virtio") => NetInterfaceType::VirtIO,
-            Ok("loopback") | _ => NetInterfaceType::Loopback,
+            Ok("loopback") => NetInterfaceType::Loopback,
+            _ => NetInterfaceType::Loopback,
         };
         NetDriver {
             interface,
