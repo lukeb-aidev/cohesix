@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: METADATA.md v3.14
 // Author: Lukas Bower
-// Date Modified: 2025-07-24
+// Date Modified: 2025-06-14
 
 ## Canonical Documents
 
@@ -43,6 +43,7 @@
 | AGENTS.md                 | v2.2    | 2025-07-22    | COMMUNITY      |     |              |
 | DEMO_SCENARIOS.md          | v1.0    | 2025-06-20    | COMMUNITY      |     |              |
 | VALIDATION_AND_TESTING.md  | v1.2    | 2025-07-20    | COMMUNITY      |     |              |
+| VALIDATION_SUMMARY.md       | v0.2    | 2025-06-14    | COMMUNITY      |     |              |
 | CLI_HELP_COHCLI.md         | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
 | CLI_HELP_COHRUN.md         | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
 | CLI_HELP_COHTRACE.md       | v0.1    | 2025-07-12    | COMMUNITY      |     |              |

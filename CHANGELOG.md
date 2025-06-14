@@ -37,6 +37,7 @@
 - Boot trampoline writes `BOOT_OK` or `BOOT_FAIL:<reason>` to console and `/state/boot_success`
 - Added guidance to `docs/community/archive/examples_README.md`
 - Added `test_qemu_boot.rs` verifying QEMU boot log for `BOOT_OK` and CUDA setup
+- `VALIDATION_SUMMARY.md` now includes classification headers and is tracked in `METADATA.md`.
 - Added classification headers to metadata.json, Cargo.toml, cohesix-9p/Cargo.toml, and justfile
 ## [v0.88] - 2025-07-22
 - `qemu-check` now fails if `BOOT_FAIL` appears in `qemu_serial.log`
