@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: ensemble_agent.rs v0.2
+// Filename: ensemble_agent.rs v0.3
 // Date Modified: 2025-07-22
 // Author: Cohesix Codex
 
@@ -21,9 +21,15 @@ fn ensemble_weighted_selects_best() {
     let cfg: Value = serde_json::from_str(&cfg_data).expect("invalid json");
     println!("{:?}", cfg);
 
+    // Use writable temp directory for ensemble log
+    let base = std::env::temp_dir().join("ensemble_test_dir");
+    std::fs::create_dir_all(&base).unwrap();
+    std::env::set_var("COHESIX_ENS_TMP", &base);
+    let dir = base.join("e1");
+    std::fs::create_dir_all(&dir).unwrap();
+
     // Pre-create goals log expected by the agent
-    fs::create_dir_all("/ensemble/e1").expect("failed to create ensemble dir");
-    let mut f = fs::File::create("/ensemble/e1/goals.json")
+    let mut f = fs::File::create(dir.join("goals.json"))
         .expect("failed to create goals log");
     writeln!(f, "{{\"goal\": \"balance\", \"score\": 1.0}}")
         .expect("failed to write mock goals");
@@ -33,11 +39,11 @@ fn ensemble_weighted_selects_best() {
     ens.add_agent(Box::new(FixedAgent { action: "B", score: 0.8 }));
     let act = ens.tick();
     assert_eq!(act, "B");
-    let data = std::fs::read_to_string("/ensemble/e1/goals.json")
+    let data = std::fs::read_to_string(dir.join("goals.json"))
         .expect("missing goals log");
     assert!(data.contains("B"));
 
     // Clean up mock files
-    let _ = fs::remove_file("/ensemble/e1/goals.json");
-    let _ = fs::remove_dir_all("/ensemble/e1");
+    let _ = fs::remove_file(dir.join("goals.json"));
+    let _ = fs::remove_dir_all(&base);
 }
