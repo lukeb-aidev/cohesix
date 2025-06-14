@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.45
+// Filename: CHANGELOG.md v0.46
 // Date Modified: 2025-07-22
 ## [v0.85] - 2025-07-22
 ### Added
@@ -12,6 +12,12 @@
 - Bootloader and kernel targets now place all intermediate files in `out/`.
 - `make print-env` shows selected toolchain and compiler version.
 - Clang builds use `ld.lld` with Windows COFF target.
+
+## [v0.87] - 2025-07-22
+### Fixed
+- Makefile detects gnu-efi headers and falls back to available arch.
+- Clang builds pass `-fuse-ld=lld` automatically.
+- `test_boot_efi.sh` logs include paths and stores `make -n` output.
 
 ## [v0.84] - 2025-07-22
 ### Fixed

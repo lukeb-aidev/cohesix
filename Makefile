@@ -1,5 +1,5 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Makefile v0.12
+# Filename: Makefile v0.13
 # Date Modified: 2025-07-22
 # Author: Lukas Bower
 #
@@ -21,26 +21,49 @@ PLATFORM ?= $(shell uname -m)
 CC ?= $(shell command -v clang >/dev/null 2>&1 && echo clang || echo gcc)
 TOOLCHAIN := $(if $(findstring clang,$(CC)),clang,gcc)
 
+EFI_BASE ?= /usr/include/efi
+EFI_ARCH ?= x86_64
+GNUEFI_HDR := $(EFI_BASE)/efi.h
+GNUEFI_BIND := $(EFI_BASE)/$(EFI_ARCH)/efibind.h
+
+$(info Checking for gnu-efi headers at $(EFI_BASE))
+ifeq ($(wildcard $(GNUEFI_HDR)),)
+$(error gnu-efi headers not found at $(GNUEFI_HDR))
+endif
+
+ifeq ($(wildcard $(GNUEFI_BIND)),)
+$(warning $(GNUEFI_BIND) missing. Falling back to x86_64 headers if available.)
+ifeq ($(EFI_ARCH),x86_64)
+$(error Required architecture headers missing.)
+else ifneq ($(wildcard $(EFI_BASE)/x86_64/efibind.h),)
+EFI_ARCH := x86_64
+GNUEFI_BIND := $(EFI_BASE)/$(EFI_ARCH)/efibind.h
+else
+$(error Required architecture headers missing.)
+endif
+endif
+
+EFI_INCLUDES := -I$(EFI_BASE) -I$(EFI_BASE)/$(EFI_ARCH)
+
 # Ensure compiler exists
 ifeq ($(shell command -v $(CC) >/dev/null 2>&1 && echo yes || echo no),no)
 $(error Compiler $(CC) not found)
 endif
 
-EFI_INCLUDES := -I/usr/include/efi -I/usr/include/efi/x86_64
-
 ifeq ($(TOOLCHAIN),clang)
 LD ?= ld.lld
 CFLAGS_EFI := $(EFI_INCLUDES) -ffreestanding -fshort-wchar -mno-red-zone \
        -DEFI_FUNCTION_WRAPPER -DGNU_EFI -fno-stack-protector -fno-pie \
-       -target x86_64-pc-win32-coff
+       -target x86_64-pc-win32-coff -fuse-ld=lld
 LDFLAGS_EFI := -shared -Bsymbolic -nostdlib -znocombreloc -L/usr/lib \
-       -lgnuefi -lefi -Wl,--subsystem,efi_application -Wl,--entry,efi_main
+       -lgnuefi -lefi --subsystem=efi_application --entry=efi_main
 else
 LD ?= ld.bfd
 CFLAGS_EFI := $(EFI_INCLUDES) -ffreestanding -fPIC -fshort-wchar -mno-red-zone \
        -DEFI_FUNCTION_WRAPPER -DGNU_EFI -fno-stack-protector -fno-strict-aliasing \
        -D__NO_INLINE__
-LDFLAGS_EFI := -shared -Bsymbolic -nostdlib -znocombreloc -L/usr/lib -lgnuefi -lefi
+LDFLAGS_EFI := -shared -Bsymbolic -nostdlib -znocombreloc -L/usr/lib -lgnuefi -lefi \
+       --subsystem=efi_application --entry=efi_main
 endif
 
 LD_FLAGS := $(LDFLAGS_EFI)
@@ -92,8 +115,8 @@ bootloader:
 	@mkdir -p out/EFI/BOOT
 	$(CC) $(CFLAGS_EFI) -c src/bootloader/main.c -o out/bootloader.o
 	grep -v '^//' bootloader.lds > out/bootloader.tmp.ld
-	$(LD) /usr/lib/crt0-efi-x86_64.o out/bootloader.o -o out/bootloader.so \
-	-T out/bootloader.tmp.ld $(LD_FLAGS)
+	$(LD) /usr/lib/crt0-efi-x86_64.o out/bootloader.o \
+	    -o out/bootloader.so -T out/bootloader.tmp.ld $(LD_FLAGS)
 	rm -f out/bootloader.tmp.ld
 	objcopy --target=efi-app-x86_64 out/bootloader.so out/BOOTX64.EFI
 	cp out/BOOTX64.EFI out/EFI/BOOT/BOOTX64.EFI
@@ -104,8 +127,8 @@ kernel:
 	@mkdir -p out
 	$(CC) $(CFLAGS_EFI) -c src/kernel/main.c -o out/kernel.o
 	grep -v '^//' linker.ld > out/kernel.tmp.ld
-	$(LD) /usr/lib/crt0-efi-x86_64.o out/kernel.o -o out/kernel.so \
-	-T out/kernel.tmp.ld $(LD_FLAGS)
+	$(LD) /usr/lib/crt0-efi-x86_64.o out/kernel.o \
+	    -o out/kernel.so -T out/kernel.tmp.ld $(LD_FLAGS)
 	rm -f out/kernel.tmp.ld
 	objcopy --target=efi-app-x86_64 out/kernel.so out/kernel.elf
 
