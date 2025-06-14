@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: METADATA.md v3.12
+// Filename: METADATA.md v3.13
 // Author: Lukas Bower
 // Date Modified: 2025-07-23
 
@@ -14,7 +14,7 @@
 | BUILD_PLAN.md              | v0.4    | 2025-07-11    | COMMUNITY      |            |              |
 | COMMERCIAL_PLAN.md         | v1.5    | 2025-06-08    | PRIVATE        |            |              |
 | DEPENDENCIES.md            | v0.5    | 2025-07-06    | COMMUNITY      |            |              |
-| METADATA.md                | v3.9    | 2025-07-22    | COMMUNITY      |            |              |
+| METADATA.md                | v3.13   | 2025-07-23    | COMMUNITY      |            |              |
 | OSS_REUSE.md               | v1.7    | 2025-07-15    | COMMUNITY      |            |              |
 | Q_DAY.md                   | v1.0    | 2025-05-31    | PRIVATE        |            |              |
 | QUEEN_POLICY.md            | v1.1    | 2025-07-12    | PRIVATE        |            |              |
@@ -109,7 +109,7 @@
 | CohesixBoot.inf | v0.1 | 2025-07-22 | COMMUNITY | | |
 | linker.ld | v0.1 | 2025-07-22 | COMMUNITY | | |
 | .cargo/config.toml | v0.1 | 2025-07-22 | COMMUNITY | | |
-| Makefile | v0.16 | 2025-07-23 | COMMUNITY | | |
+| Makefile | v0.17 | 2025-07-24 | COMMUNITY | | |
 | test_boot_efi.sh | v0.9 | 2025-07-22 | COMMUNITY | | |
 | src/kernel/main.c | v0.2 | 2025-07-22 | COMMUNITY | | |
 | tests/test_traceflow.py | v0.1 | 2025-07-23 | COMMUNITY | | |
@@ -118,6 +118,8 @@
 | tests/test_cuda_presence.rs | v0.1 | 2025-07-23 | COMMUNITY | | |
 | tests/test_namespace_rule.rs | v0.1 | 2025-07-23 | COMMUNITY | | |
 | tests/test_trace_compare.py | v0.1 | 2025-07-23 | COMMUNITY | | |
+| tests/test_qemu_boot.rs | v0.1 | 2025-07-23 | COMMUNITY | | |
 | docs/QUICKSTART.md | v0.1 | 2025-07-23 | COMMUNITY | | |
 | docs/community/architecture/BOOT_KERNEL_FLOW.md | v0.1 | 2025-07-23 | COMMUNITY | | |
+| docs/community/archive/examples_README.md | v0.2 | 2025-07-23 | COMMUNITY | | |
 | CONTRIBUTING.md | v1.1 | 2025-07-23 | COMMUNITY | | |
