@@ -3,8 +3,6 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-22
 
-#![cfg(feature = "busybox")]
-
 //! Execute BusyBox as the interactive shell with role-based command filtering.
 
 use std::fs::{self, OpenOptions};
