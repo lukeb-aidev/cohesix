@@ -12,7 +12,8 @@ use serial_test::serial;
 #[serial]
 fn bind_overlay_order() {
     let mut ns = Namespace { ops: vec![], private: true, root: Default::default() };
-    ns.add_op(NsOp::Mount { srv: "/tmp/src".into(), dst: "/a".into() });
+    let tmp = std::env::temp_dir().join("src");
+    ns.add_op(NsOp::Mount { srv: tmp.to_str().unwrap().into(), dst: "/a".into() });
     let mut f = BindFlags::default();
     f.after = true;
     ns.add_op(NsOp::Bind { src: "/a".into(), dst: "/b".into(), flags: f });
