@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # CLASSIFICATION: COMMUNITY
-# Filename: test_boot_efi.sh v0.3
+# Filename: test_boot_efi.sh v0.4
 # Author: Lukas Bower
 # Date Modified: 2025-07-22
 set -euo pipefail
@@ -12,7 +12,16 @@ if ! command -v qemu-system-x86_64 >/dev/null; then
     exit 1
 fi
 
-make bootloader kernel
+TOOLCHAIN="${CC:-}"
+if [[ -z "$TOOLCHAIN" ]]; then
+    if command -v clang >/dev/null; then
+        TOOLCHAIN=clang
+    else
+        TOOLCHAIN=gcc
+    fi
+fi
+echo "Using $TOOLCHAIN toolchain for UEFI build..."
+make bootloader kernel CC="$TOOLCHAIN"
 objdump -h out/EFI/BOOT/BOOTX64.EFI > out/BOOTX64_sections.txt
 
 LOGFILE="out/qemu_debug.log"
