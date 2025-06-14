@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: lib.rs v1.3
-// Date Modified: 2025-07-11
+// Filename: lib.rs v1.4
+// Date Modified: 2025-07-24
 // Author: Lukas Bower
 
 //! Root library for the Coh_CC compiler and platform integrations.
@@ -140,6 +140,7 @@ pub fn compile_from_file(input: &str, output: &str) -> anyhow::Result<()> {
     let _ir_text = fs::read_to_string(input)?;
 
     // Parsing of the IR format will be added later; create a stub Module for now.
+    // FIXME: parse IR once a format is available. For now create a stub Module.
     let module = ir::Module::new(input);
 
     // Choose backend based on output path.

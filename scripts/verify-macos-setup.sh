@@ -1,4 +1,8 @@
+# CLASSIFICATION: COMMUNITY
 #!/usr/bin/env bash
+# Filename: verify-macos-setup.sh v0.1
+# Author: Lukas Bower
+# Date Modified: 2025-06-05
 ###############################################################################
 # verify-macos-setup.sh – Cohesix helper
 #
