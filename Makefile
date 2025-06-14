@@ -88,12 +88,16 @@ kernel:
 boot:
 	$(MAKE) boot-$(PLATFORM)
 
+testboot:
+	./test_boot_efi.sh
+
 help:
 	@echo "Cohesix top‑level build targets:"
 	@echo "  all       – run go-build, go-test and c-shims"
 	@echo "  go-build  – vet Go workspace"
 	@echo "  go-test   – run Go unit tests"
 	@echo "  c-shims   – compile seL4 boot trampoline"
+	@echo "  testboot  – run UEFI boot test via QEMU"
 man: third_party/mandoc/mandoc
 	cp third_party/mandoc/mandoc bin/cohman
 
