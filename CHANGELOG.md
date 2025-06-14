@@ -26,8 +26,9 @@
 - README begins with a vision paragraph summarizing why Cohesix matters
 - CONTRIBUTING includes local setup, testing, and Codex instructions
 - Makefile adds `qemu` and `qemu-check` targets for serial-log boot testing
+- Boot trampoline writes `BOOT_OK` to `/dev/console` and `/state/boot_success`; failures log `BOOT_FAIL:<reason>`
+## [v0.88] - 2025-07-22
 - `qemu-check` now fails if `BOOT_FAIL` appears in `qemu_serial.log`
-- ## [v0.88] - 2025-07-22
 ### Fixed
 - `make qemu` and `make qemu-check` run QEMU with serial logging and grep for BOOT_OK
 - Bootloader writes BOOT_OK or BOOT_FAIL to /dev/console and /state/boot_success
