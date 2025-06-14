@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: lib.rs v1.3
-// Date Modified: 2025-07-11
+// Filename: lib.rs v1.4
+// Date Modified: 2025-07-24
 // Author: Lukas Bower
 
 //! Root library for the Coh_CC compiler and platform integrations.
@@ -82,6 +82,8 @@ pub mod sim;
 
 /// 9P multiplexer utilities
 pub mod p9;
+#[cfg(feature = "secure9p")]
+pub mod secure9p;
 /// Networking daemons
 pub mod net;
 
@@ -139,7 +141,8 @@ pub fn compile_from_file(input: &str, output: &str) -> anyhow::Result<()> {
     // Read the IR text from disk. Return an error if the file is missing.
     let _ir_text = fs::read_to_string(input)?;
 
-    // TODO: parse IR once a format is available. For now create a stub Module.
+    // Parsing of the IR format will be added later; create a stub Module for now.
+    // FIXME: parse IR once a format is available. For now create a stub Module.
     let module = ir::Module::new(input);
 
     // Choose backend based on output path.

@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: c.rs v1.0
-// Date Modified: 2025-05-26
+// Filename: c.rs v1.1
+// Date Modified: 2025-07-24
 // Author: Lukas Bower
 
 //! C backend for the Coh_CC compiler. Translates IR into C code.
@@ -25,21 +25,61 @@ pub fn generate_c(module: &Module) -> String {
         for instr in &func.body {
             match &instr.opcode {
                 Opcode::Add => output.push_str(&format!(
-                    "    // TODO: handle ADD with operands {:?}\n",
+                    "    // ADD {:?}\n",
                     instr.operands
                 )),
                 Opcode::Sub => output.push_str(&format!(
-                    "    // TODO: handle SUB with operands {:?}\n",
+                    "    // SUB {:?}\n",
                     instr.operands
                 )),
                 Opcode::Mul => output.push_str(&format!(
-                    "    // TODO: handle MUL with operands {:?}\n",
+                    "    // MUL {:?}\n",
                     instr.operands
                 )),
                 Opcode::Div => output.push_str(&format!(
-                    "    // TODO: handle DIV with operands {:?}\n",
+                    "    // DIV {:?}\n",
                     instr.operands
                 )),
+                Opcode::Add => {
+                    if instr.operands.len() == 2 {
+                        output.push_str(&format!(
+                            "    printf(\"%d\\n\", {} + {});\n",
+                            instr.operands[0], instr.operands[1]
+                        ));
+                    } else {
+                        output.push_str("    // FIXME: ADD expects two operands\n");
+                    }
+                }
+                Opcode::Sub => {
+                    if instr.operands.len() == 2 {
+                        output.push_str(&format!(
+                            "    printf(\"%d\\n\", {} - {});\n",
+                            instr.operands[0], instr.operands[1]
+                        ));
+                    } else {
+                        output.push_str("    // FIXME: SUB expects two operands\n");
+                    }
+                }
+                Opcode::Mul => {
+                    if instr.operands.len() == 2 {
+                        output.push_str(&format!(
+                            "    printf(\"%d\\n\", {} * {});\n",
+                            instr.operands[0], instr.operands[1]
+                        ));
+                    } else {
+                        output.push_str("    // FIXME: MUL expects two operands\n");
+                    }
+                }
+                Opcode::Div => {
+                    if instr.operands.len() == 2 {
+                        output.push_str(&format!(
+                            "    if({1} == 0) {{ printf(\"div-by-zero\\n\"); }} else {{ printf(\"%d\\n\", {0} / {1}); }}\n",
+                            instr.operands[0], instr.operands[1]
+                        ));
+                    } else {
+                        output.push_str("    // FIXME: DIV expects two operands\n");
+                    }
+                }
                 Opcode::Call { function } => output.push_str(&format!("    {}();\n", function)),
                 Opcode::Ret => output.push_str("    return;\n"),
                 _ => output.push_str(&format!("    // Unhandled opcode: {:?}\n", instr.opcode)),

@@ -6,3 +6,11 @@ read_only = true
 [[policy]]
 agent = "lukas"
 allow = ["read:/mnt/agents/lukas/input", "write:/mnt/agents/lukas/output"]
+# CLASSIFICATION: COMMUNITY
+# Filename: secure9p.toml v0.1
+# Author: Lukas Bower
+# Date Modified: 2025-07-24
+
+port = 5645
+cert = "cert.pem"
+key = "key.pem"

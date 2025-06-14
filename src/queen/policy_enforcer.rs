@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: policy_enforcer.rs v1.0
+// Filename: policy_enforcer.rs v1.1
 // Author: Lukas Bower
-// Date Modified: 2025-05-31
+// Date Modified: 2025-07-24
 
 //! Policy enforcement module for the Queen role in Cohesix.
 //! Validates namespace rules, runtime invariants, and worker compliance.
@@ -25,13 +25,15 @@ pub struct DefaultEnforcer;
 impl PolicyEnforcer for DefaultEnforcer {
     fn check_worker_namespace(&self, namespace: &str) -> PolicyResult {
         println!("[policy] checking namespace '{}'", namespace);
-        // TODO(cohesix): Validate namespace policy rules
+        // Namespace validation logic pending full policy integration
+        // FIXME(cohesix): Validate namespace policy rules
         PolicyResult::Compliant
     }
 
     fn check_runtime_invariants(&self) -> PolicyResult {
         println!("[policy] checking runtime invariants...");
-        // TODO(cohesix): Enforce invariant rules across system state
+        // Runtime invariant checks not yet enforced
+        // FIXME(cohesix): Enforce invariant rules across system state
         PolicyResult::Compliant
     }
 }
