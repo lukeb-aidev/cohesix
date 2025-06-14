@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.49
+// Filename: CHANGELOG.md v0.50
 // Date Modified: 2025-07-23
 ## [vNext] - 2025-07-23
 ### Temp path fixes and QEMU script guard
@@ -27,6 +27,7 @@
 - CONTRIBUTING includes local setup, testing, and Codex instructions
 - Makefile adds `qemu` and `qemu-check` targets for serial-log boot testing
 - Boot trampoline writes `BOOT_OK` or `BOOT_FAIL:<reason>` to console and `/state/boot_success`
+- Added guidance to `docs/community/archive/examples_README.md`
 ## [v0.88] - 2025-07-22
 ### Fixed
 - Rust ensemble agent tests write to a safe temporary directory.
