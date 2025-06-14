@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: VALIDATION_AND_TESTING.md v1.4
+// Filename: VALIDATION_AND_TESTING.md v1.5
 // Author: Lukas Bower
-// Date Modified: 2025-07-24
+// Date Modified: 2025-07-25
 
 # Validation and Testing
 
@@ -26,6 +26,7 @@ Cohesix uses layered tests and continuous validation to guarantee reliability ac
 `tools/simulate_batch.sh` can create a mock batch. Replay with `tools/replay_batch.sh` to verify recovery. Confirm `CODEX_BATCH: YES` appears in generated metadata.
 
   - `test_boot_efi` now includes a check for QEMU presence and creates `out/` and `tmp/` directories dynamically to avoid runtime errors.
+  - If QEMU is missing, the boot test logs a warning and exits with status 0 so CI marks the step as skipped.
 
 Adhering to these practices keeps Cohesix robust and ready for demo-critical deployments.
 

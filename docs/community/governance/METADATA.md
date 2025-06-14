@@ -42,7 +42,7 @@
 | AGENTS_AND_CLI.md          | v1.1    | 2025-07-18    | COMMUNITY      |     |              |
 | AGENTS.md                 | v2.2    | 2025-07-22    | COMMUNITY      |     |              |
 | DEMO_SCENARIOS.md          | v1.0    | 2025-06-20    | COMMUNITY      |     |              |
-| VALIDATION_AND_TESTING.md  | v1.4    | 2025-07-24    | COMMUNITY      |     |              |
+| VALIDATION_AND_TESTING.md  | v1.5    | 2025-07-25    | COMMUNITY      |     |              |
 | VALIDATION_SUMMARY.md       | v0.2    | 2025-06-14    | COMMUNITY      |     |              |
 | CLI_HELP_COHCLI.md         | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
 | CLI_HELP_COHRUN.md         | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
@@ -111,7 +111,7 @@
 | linker.ld | v0.1 | 2025-07-22 | COMMUNITY | | |
 | .cargo/config.toml | v0.1 | 2025-07-22 | COMMUNITY | | |
 | Makefile | v0.17 | 2025-07-24 | COMMUNITY | | |
-| test_boot_efi.sh | v0.9 | 2025-07-22 | COMMUNITY | | |
+| test_boot_efi.sh | v0.10 | 2025-07-25 | COMMUNITY | | |
 | src/kernel/main.c | v0.2 | 2025-07-22 | COMMUNITY | | |
 | tests/test_traceflow.py | v0.1 | 2025-07-23 | COMMUNITY | | |
 | tests/test_invalid_cli.py | v0.1 | 2025-07-23 | COMMUNITY | | |
