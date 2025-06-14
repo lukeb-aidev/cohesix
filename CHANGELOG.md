@@ -1,8 +1,9 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v0.51
-// Date Modified: 2025-07-24
+// Date Modified: 2025-06-14
 ## [vNext] - 2025-07-23
 ### Temp path fixes and QEMU script guard
+- cohesix_fetch_build.sh header updated and registered in METADATA
 - Ensemble tests use writable temp directory via COHESIX_ENS_TMP
 - SharedMemory, BaseAgent use TMPDIR and respect override vars
 - QEMU boot script checks for qemu-system-x86_64, sets TMPDIR, ensures writable paths
@@ -20,9 +21,11 @@
 - /proc/nsmap exposes per-role namespace maps
 - NsWatchService validates hotplugged mounts
 - SandboxService logs namespace violations via validator
+- `cohesix-9p` tests use `std::env::temp_dir()` for server root
 - Added ns_hotplug.rs integration test
 - Makefile bootloader target links with lld-link
 - CLI scripts now use wrapper binaries in `bin/` so classification headers remain the first line
+- Header cleanup for `cli/cohcli.py` and boot logging scripts
 - `test_boot_efi` wrapper added; Makefile updated accordingly
 - BootMustSucceed rule verifies /trace/boot_trace.json at startup
 - Makefile now includes fmt/lint/check targets and platform flags
@@ -36,6 +39,8 @@
 - Boot trampoline writes `BOOT_OK` or `BOOT_FAIL:<reason>` to console and `/state/boot_success`
 - Added guidance to `docs/community/archive/examples_README.md`
 - Added `test_qemu_boot.rs` verifying QEMU boot log for `BOOT_OK` and CUDA setup
+- `VALIDATION_SUMMARY.md` now includes classification headers and is tracked in `METADATA.md`.
+- Added classification headers to metadata.json, Cargo.toml, cohesix-9p/Cargo.toml, and justfile
 ## [v0.88] - 2025-07-22
 - `qemu-check` now fails if `BOOT_FAIL` appears in `qemu_serial.log`
 ### Fixed

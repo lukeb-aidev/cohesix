@@ -105,7 +105,7 @@ mod tests {
     #[test]
     fn custom_config_propagates() {
         let cfg = FsConfig {
-            root: "/tmp".into(),
+            root: std::env::temp_dir().into(),
             port: 9999,
             readonly: true,
         };
