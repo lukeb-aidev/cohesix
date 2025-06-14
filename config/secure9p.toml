@@ -1,3 +1,11 @@
+[[namespace]]
+agent = "lukas"
+root = "/mnt/agents/lukas"
+read_only = true
+
+[[policy]]
+agent = "lukas"
+allow = ["read:/mnt/agents/lukas/input", "write:/mnt/agents/lukas/output"]
 # CLASSIFICATION: COMMUNITY
 # Filename: secure9p.toml v0.1
 # Author: Lukas Bower

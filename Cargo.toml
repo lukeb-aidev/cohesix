@@ -43,6 +43,11 @@ rand = "0.8"
 v4l = "0.14"
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
 sdl2 = { version = "0.37", optional = true }
+rustls = { version = "0.22", default-features = false, features = ["tls12"], optional = true }
+tokio-rustls = { version = "0.24", default-features = false, optional = true }
+jsonwebtoken = { version = "9", optional = true }
+toml = { version = "0.8", optional = true }
+x509-parser = { version = "0.15", optional = true }
 
 [build-dependencies]
 which = "5.0"
@@ -62,7 +67,7 @@ tempfile = "3"
 proptest = "1"
 ninep = "0.3"
 libc = "0.2"
-rcgen = "0.11"
+rcgen = "0.13"
 
 [features]
 default = ["physics", "busybox"]
@@ -71,7 +76,8 @@ rapier = ["rapier3d"]
 physics = ["rapier3d"]
 busybox = []
 joystick = ["sdl2"]
-secure9p = ["tokio-rustls", "rustls", "rustls-pemfile"]
+secure9p = ["rustls", "tokio-rustls", "jsonwebtoken", "toml", "x509-parser"]
+
 [[bin]]
 name = "cohcc"
 path = "src/coh_cc/main.rs"
