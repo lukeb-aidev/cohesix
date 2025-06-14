@@ -128,7 +128,7 @@
 | config/secure9p.toml | v0.2 | 2025-07-26 | COMMUNITY | | |
 | src/secure9p/mod.rs | v0.2 | 2025-07-25 | COMMUNITY | | |
 | src/secure9p/auth_handler.rs | v0.2 | 2025-07-25 | COMMUNITY | | |
-| src/secure9p/cap_fid.rs | v0.2 | 2025-07-25 | COMMUNITY | | |
+| src/secure9p/cap_fid.rs | v0.3 | 2025-07-26 | COMMUNITY | | |
 | src/secure9p/policy_engine.rs | v0.2 | 2025-07-25 | COMMUNITY | | |
 | src/secure9p/namespace_resolver.rs | v0.2 | 2025-07-25 | COMMUNITY | | |
 | src/secure9p/sandbox.rs | v0.3 | 2025-07-26 | COMMUNITY | | |
