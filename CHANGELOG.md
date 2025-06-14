@@ -17,6 +17,7 @@
 - GitHub workflow indentation corrected for OSS dependency audit
 - secure9p sandbox uses Path to parse agent IDs; tests added for trailing
   slashes and invalid namespaces
+- `Capability` alias exposed in `cap_fid.rs` for consistent imports
 - Gpu telemetry includes temperature and utilization via nvml-wrapper
 - sandbox.rs enforce function exported for reuse; unit tests now compile
 - Added cuda_test.rs validating runtime CUDA presence
