@@ -1,8 +1,9 @@
+// CLASSIFICATION: COMMUNITY
+// Filename: cohesix_fetch_build.sh v0.2
+// Author: Lukas Bower
+// Date Modified: 2025-06-14
 #!/bin/bash
-# cohesix_fetch_build.sh
 # Fetch and fully build the Cohesix project using SSH Git auth.
-# Author: Lukas Bower
-# Date: 2025-06-12
 
 set -euo pipefail
 

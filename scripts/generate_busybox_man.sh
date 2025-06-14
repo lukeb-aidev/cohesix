@@ -1,4 +1,8 @@
+# CLASSIFICATION: COMMUNITY
 #!/bin/sh
+# Filename: generate_busybox_man.sh v0.1
+# Author: Lukas Bower
+# Date Modified: 2025-06-08
 set -e
 OUTDIR=docs/man
 mkdir -p "$OUTDIR"

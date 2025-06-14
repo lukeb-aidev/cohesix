@@ -1,4 +1,8 @@
+# CLASSIFICATION: COMMUNITY
 #!/bin/sh
+# Filename: manpage_scan.sh v0.1
+# Author: Lukas Bower
+# Date Modified: 2025-06-08
 # Scan for manpages and verify rendering via mandoc
 LOG=/var/log/manpage_check.log
 : > "$LOG"
