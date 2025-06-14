@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: telemetry.rs v1.3
+// Filename: telemetry.rs v1.4
 // Author: Lukas Bower
-// Date Modified: 2025-07-14
+// Date Modified: 2025-07-22
 
 //! Telemetry Core Module
 //!
@@ -72,4 +72,6 @@ pub struct GpuTelemetry {
     pub mem_free: u64,
     pub exec_time_ns: u64,
     pub fallback_reason: String,
+    pub temperature: Option<f32>,
+    pub gpu_utilization: Option<u32>,
 }
