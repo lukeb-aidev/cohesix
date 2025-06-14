@@ -1,9 +1,12 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: cap_fid.rs v0.2
+// Filename: cap_fid.rs v0.3
 // Author: Lukas Bower
-// Date Modified: 2025-07-25
+// Date Modified: 2025-07-26
 
 //! Capability-enforced Fid wrapper.
+//!
+//! The [`Capability`] type aliases the internal [`Cap`] bitflag set
+//! so other modules can depend on a stable name.
 
 #[cfg(feature = "secure9p")]
 use anyhow::{anyhow, Result};
@@ -20,6 +23,9 @@ bitflags! {
         const REMOVE = 0b0100;
     }
 }
+
+/// Public alias for [`Cap`] to present a stable API.
+pub type Capability = Cap;
 
 #[cfg(feature = "secure9p")]
 #[derive(Clone)]
