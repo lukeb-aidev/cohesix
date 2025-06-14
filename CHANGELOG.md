@@ -1,6 +1,11 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v0.46
 // Date Modified: 2025-07-22
+## [v0.88] - 2025-07-22
+### Fixed
+- Rust ensemble agent tests write to a safe temporary directory.
+- QEMU launch scripts ensure `$HOME/cohesix/out` and `TMPDIR` exist.
+
 ## [v0.85] - 2025-07-22
 ### Added
 - Makefile supports GCC and Clang toolchains for UEFI builds.
