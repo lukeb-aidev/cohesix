@@ -12,8 +12,9 @@ fn panic_hook_works() {
     let srv_dir = std::env::temp_dir();
     fs::create_dir_all(&srv_dir).unwrap();
     let log_path = srv_dir.join("panic.log");
+    let hook_path = log_path.clone();
     std::panic::set_hook(Box::new(move |_| {
-        fs::write(&log_path, "panic").ok();
+        fs::write(&hook_path, "panic").ok();
     }));
     let _ = std::panic::catch_unwind(|| panic!("boom"));
     assert_eq!(fs::read_to_string(log_path).unwrap(), "panic");
