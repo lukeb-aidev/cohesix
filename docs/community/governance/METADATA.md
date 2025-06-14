@@ -110,7 +110,7 @@
 | CohesixBoot.inf | v0.1 | 2025-07-22 | COMMUNITY | | |
 | linker.ld | v0.1 | 2025-07-22 | COMMUNITY | | |
 | .cargo/config.toml | v0.1 | 2025-07-22 | COMMUNITY | | |
-| Makefile | v0.18 | 2025-07-27 | COMMUNITY | | |
+| Makefile | v0.19 | 2025-07-28 | COMMUNITY | | |
 | test_boot_efi.sh | v0.10 | 2025-07-25 | COMMUNITY | | |
 | src/kernel/main.c | v0.2 | 2025-07-22 | COMMUNITY | | |
 | tests/test_traceflow.py | v0.1 | 2025-07-23 | COMMUNITY | | |
