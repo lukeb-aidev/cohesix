@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # CLASSIFICATION: COMMUNITY
 # Filename: ci_role_runner.py v0.2
 # Date Modified: 2025-07-03
