@@ -35,13 +35,19 @@ def safe_run(cmd: List[str]) -> int:
     result = subprocess.run(cmd)
     return result.returncode
 
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="CohCLI – Manage and interact with Cohesix nodes and services."
     )
     parser.add_argument("--man", action="store_true", help="Show man page")
     parser.add_argument("--version", action="store_true", help="Show version info")
-    parser.add_argument("--profile", choices=["queen", "worker"], default="worker", help="Execution profile")
+    parser.add_argument(
+        "--profile",
+        choices=["queen", "worker"],
+        default="worker",
+        help="Execution profile",
+    )
 
     subparsers = parser.add_subparsers(dest="command", help="CohCLI subcommands")
 
@@ -50,14 +56,18 @@ def parse_args():
         sp.add_argument("--verbose", action="store_true")
 
     # Subcommand: status
-    parser_status = subparsers.add_parser("status", help="Check node and service status")
+    parser_status = subparsers.add_parser(
+        "status", help="Check node and service status"
+    )
     add_common(parser_status)
     parser_status.set_defaults(func=handle_status)
 
     # Subcommand: boot
     parser_boot = subparsers.add_parser("boot", help="Trigger boot or reboot sequence")
     add_common(parser_boot)
-    parser_boot.add_argument("role", help="Role to boot (e.g., QueenPrimary, DroneWorker)")
+    parser_boot.add_argument(
+        "role", help="Role to boot (e.g., QueenPrimary, DroneWorker)"
+    )
     parser_boot.set_defaults(func=handle_boot)
 
     # Subcommand: trace
@@ -195,7 +205,9 @@ def parse_args():
     stream.add_argument("--port", required=True)
     stream.set_defaults(func=handle_stream_overlay)
 
-    intros = subparsers.add_parser("agent-introspect", help="Show agent introspection log")
+    intros = subparsers.add_parser(
+        "agent-introspect", help="Show agent introspection log"
+    )
     add_common(intros)
     intros.add_argument("agent_id")
     intros.set_defaults(func=handle_agent_introspect)
@@ -213,6 +225,7 @@ def parse_args():
     parser.set_defaults(func=lambda a: parser.print_help())
     return parser.parse_args()
 
+
 def main():
     args = parse_args()
     if getattr(args, "version", False):
@@ -228,8 +241,10 @@ def main():
         cohlog("No command provided. Use -h for help.")
         sys.exit(1)
 
+
 def handle_status(args):
     import os
+
     role = os.environ.get("COH_ROLE", "Unknown")
     cohlog(f"Node status OK – role: {role}")
     if args.verbose:
@@ -238,19 +253,23 @@ def handle_status(args):
             if k.startswith("COH"):  # show Cohesix-related vars
                 cohlog(f"  {k}={v}")
 
+
 def handle_boot(args):
     cohlog(f"Booting role: {args.role} ...")
     try:
         from cohesix.runtime.env import init
+
         init.initialize_runtime_env()
         os.environ["COH_ROLE"] = args.role
         cohlog("Boot sequence complete")
     except Exception as e:
         cohlog(f"Boot failed: {e}")
 
+
 def handle_trace(args):
     filter_val = args.filter or "*"
     cohlog(f"Showing trace log entries matching '{filter_val}' (stub)")
+
 
 def handle_trace_violations():
     path = "/srv/violations/runtime.json"
@@ -259,12 +278,15 @@ def handle_trace_violations():
     else:
         cohlog("No violations logged")
 
+
 def handle_replay(args):
     from pathlib import Path
     from scripts import cohtrace
+
     trace = cohtrace.read_trace(Path(args.path))
     for ev in trace:
         cohlog(f"replay {ev['event']} {ev['detail']}")
+
 
 def handle_dispatch_slm(args):
     req_dir = f"/srv/slm/dispatch/{args.target}"
@@ -272,6 +294,7 @@ def handle_dispatch_slm(args):
     req_path = os.path.join(req_dir, f"{args.model}.req")
     open(req_path, "w").write("1")
     cohlog(f"Dispatch request for {args.model} sent to {args.target}")
+
 
 def handle_agent(args):
     if args.agent_cmd == "start":
@@ -282,16 +305,19 @@ def handle_agent(args):
         cohlog(f"Migrating agent {args.agent_id} to {args.to}")
         try:
             from cohesix import agent_migration
+
             agent_migration.migrate(args.agent_id, args.to)
         except Exception as e:
             cohlog(f"Migration failed: {e}")
     else:
         cohlog("Unknown agent command")
 
+
 def handle_inference(args):
     os.environ["INFER_CONF"] = args.task
     script = os.path.join(os.path.dirname(__file__), "../scripts/worker_inference.py")
     safe_run(["python3", script])
+
 
 def handle_federation(args):
     if args.fed_cmd == "connect":
@@ -314,10 +340,12 @@ def handle_federation(args):
     else:
         cohlog("Unknown federation command")
 
+
 def handle_sim(args):
     if args.sim_cmd == "run" and args.scenario == "BalanceBot":
         try:
             from cohesix.sim.physics_adapter import PhysicsAdapter
+
             adapter = PhysicsAdapter.new()
             adapter.run_balance_bot(100)
             cohlog("BalanceBot simulation complete")
@@ -326,6 +354,7 @@ def handle_sim(args):
     else:
         cohlog("Unknown simulation scenario")
 
+
 def handle_sync_world(args):
     path = f"/srv/world_sync/{args.target}.json"
     if os.path.exists(path):
@@ -333,14 +362,17 @@ def handle_sync_world(args):
     else:
         cohlog(f"No snapshot for {args.target}")
 
+
 def handle_export_world(args):
     src = "/srv/world_model/world.json"
     if os.path.exists(src):
         import shutil
+
         shutil.copy(src, args.path)
         cohlog(f"World model exported to {args.path}")
     else:
         cohlog("World model not found")
+
 
 def handle_show_policy(args):
     path = f"/persist/policy/agent_{args.agent}.policy.json"
@@ -348,6 +380,7 @@ def handle_show_policy(args):
         cohlog(open(path).read())
     else:
         cohlog("No policy found")
+
 
 def handle_wipe_policy(args):
     path = f"/persist/policy/agent_{args.agent}.policy.json"
@@ -357,11 +390,14 @@ def handle_wipe_policy(args):
     else:
         cohlog("No policy found")
 
+
 def handle_vision_overlay(args):
     cohlog(f"Running vision overlay for {args.agent} (save={args.save})")
 
+
 def handle_stream_overlay(args):
     cohlog(f"Streaming overlay on port {args.port}")
+
 
 def handle_agent_introspect(args):
     path = f"/trace/introspect_{args.agent_id}.log"
@@ -370,21 +406,26 @@ def handle_agent_introspect(args):
     else:
         cohlog("No introspection data")
 
+
 def handle_elect_queen(args):
     cohlog(f"Electing queen using {args.mesh}")
 
+
 def handle_assume_role(args):
     open("/srv/queen/role", "w").write(args.role)
+
 
 def handle_upgrade(args):
     os.makedirs("/srv/upgrade", exist_ok=True)
     open("/srv/upgrade/url", "w").write(args.src)
     cohlog(f"Upgrade request for {args.src}")
 
+
 def handle_rollback(args):
     os.makedirs("/srv/upgrade", exist_ok=True)
     open("/srv/upgrade/rollback", "w").write("1")
     cohlog("Rollback requested")
+
 
 def handle_list_models(args):
     base = "/persist/models"
@@ -395,8 +436,10 @@ def handle_list_models(args):
     else:
         cohlog("No models")
 
+
 def handle_decrypt_model(args):
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
     path = os.path.join("/persist/models", args.model)
     data = open(path, "rb").read()
     nonce, ct = data[:12], data[12:]
@@ -407,8 +450,10 @@ def handle_decrypt_model(args):
     open(out, "wb").write(plain)
     cohlog(f"Decrypted to {out}")
 
+
 def handle_verify_model(args):
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
     path = os.path.join("/persist/models", args.model)
     sig_path = path + ".sig"
     key_path = "/keys/slm_signing.pub"
@@ -424,12 +469,15 @@ def handle_verify_model(args):
     except Exception:
         cohlog("Invalid signature")
 
+
 def handle_agent_ensemble_status(args):
     path = f"/ensemble/{args.ensemble}/goals.json"
     if os.path.exists(path):
         cohlog(open(path).read())
     else:
         cohlog("No ensemble data")
+
+
 if __name__ == "__main__":
     try:
         main()
