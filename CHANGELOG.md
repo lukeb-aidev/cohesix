@@ -8,6 +8,7 @@
 - QEMU boot script checks for qemu-system-x86_64, sets TMPDIR, ensures writable paths
 - Bootloader telemetry writes /state/boot_success; watchdog logs to /state/boot_error
 - Validator paths now configurable via environment variables; CLI rule merge test added
+- `cohtrace` CLI now supports `--verify-trace` and `compare` commands for trace validation
 - CUDA runtime now exposes stub /srv/cuda when unavailable
 - Gpu telemetry includes temperature and utilization via nvml-wrapper
 - Added cuda_test.rs validating runtime CUDA presence
@@ -24,10 +25,11 @@
 - Added `BOOT_KERNEL_FLOW.md` diagram explaining boot through CLI
 - README begins with a vision paragraph summarizing why Cohesix matters
 - CONTRIBUTING includes local setup, testing, and Codex instructions
+- ## [v0.88] - 2025-07-22
+### Fixed
 - `make qemu` and `make qemu-check` run QEMU with serial logging and grep for BOOT_OK
 - Bootloader writes BOOT_OK or BOOT_FAIL to /dev/console and /state/boot_success
-## [v0.88] - 2025-07-22
-### Fixed
+- Makefile adds `qemu` and `qemu-check` targets for serial-log boot testing
 - Rust ensemble agent tests write to a safe temporary directory.
 - QEMU launch scripts ensure `$HOME/cohesix/out` and `TMPDIR` exist.
 

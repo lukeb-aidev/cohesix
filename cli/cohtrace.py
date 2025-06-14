@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # CLASSIFICATION: COMMUNITY
-# Filename: cohtrace.py v0.6
+# Filename: cohtrace.py v0.7
 # Author: Lukas Bower
-# Date Modified: 2025-07-15
+# Date Modified: 2025-07-23
 
 """cohtrace – inspect connected workers."""
 
@@ -16,6 +16,7 @@ import time
 from typing import List
 from datetime import datetime
 import traceback
+import sys
 
 
 LOG_DIR = Path("/log")
@@ -63,9 +64,57 @@ def push_trace(worker_id: str, path: Path):
         cohlog(f"Validation failed: {e}")
 
 
+def verify_trace(path: Path) -> bool:
+    """Validate that *path* contains required boot events."""
+    required = {"boot_success", "namespace_mount"}
+    try:
+        events = json.loads(path.read_text())
+    except Exception:
+        cohlog("failed to parse trace file")
+        return False
+    names = {e.get("event") for e in events if isinstance(e, dict)}
+    missing = required - names
+    if missing:
+        cohlog("missing events: " + ",".join(sorted(missing)))
+        return False
+    cohlog("trace OK")
+    return True
+
+
+def compare_traces(expected: Path, actual: Path) -> bool:
+    """Compare two traces, printing differences."""
+    try:
+        exp = json.loads(expected.read_text())
+        act = json.loads(actual.read_text())
+    except Exception:
+        cohlog("failed to parse traces")
+        return False
+    exp_names = [e.get("event") for e in exp if isinstance(e, dict)]
+    act_names = [e.get("event") for e in act if isinstance(e, dict)]
+    missing = [e for e in exp_names if e not in act_names]
+    unexpected = [e for e in act_names if e not in exp_names]
+    mismatched_ts = []
+    for idx, (ee, ae) in enumerate(zip(exp, act)):
+        if not (isinstance(ee, dict) and isinstance(ae, dict)):
+            continue
+        if ee.get("event") != ae.get("event"):
+            continue
+        if "ts" in ee and "ts" in ae:
+            if abs(float(ee["ts"]) - float(ae["ts"])) > 1.0:
+                mismatched_ts.append(ee.get("event"))
+    if missing:
+        cohlog("missing events: " + ",".join(missing))
+    if unexpected:
+        cohlog("unexpected events: " + ",".join(unexpected))
+    if mismatched_ts:
+        cohlog("timestamp mismatches: " + ",".join(mismatched_ts))
+    return not (missing or unexpected or mismatched_ts)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--man", action="store_true", help="Show man page")
+    parser.add_argument("--verify-trace", help="Validate a boot trace file")
     sub = parser.add_subparsers(dest="cmd")
     sub.add_parser("list", help="List connected workers")
     push = sub.add_parser("push_trace", help="Push a simulation trace to the Queen")
@@ -75,11 +124,18 @@ def main():
     sub.add_parser("trust_check", help="Show worker trust levels")
     view = sub.add_parser("view_snapshot", help="View world snapshot for worker")
     view.add_argument("worker_id")
+    compare = sub.add_parser("compare", help="Compare two trace files")
+    compare.add_argument("--expected", required=True)
+    compare.add_argument("--actual", required=True)
+
     args = parser.parse_args()
     if args.man:
         man = os.path.join(os.path.dirname(__file__), "../bin/man")
         page = os.path.join(os.path.dirname(__file__), "../docs/man/cohtrace.1")
         os.execv(man, [man, page])
+    if args.verify_trace:
+        ok = verify_trace(Path(args.verify_trace))
+        sys.exit(0 if ok else 1)
     if args.cmd == "list":
         list_workers(Path("/srv/workers"))
     elif args.cmd == "push_trace":
@@ -110,6 +166,9 @@ def main():
             cohlog(path.read_text())
         else:
             cohlog("snapshot not found")
+    elif args.cmd == "compare":
+        ok = compare_traces(Path(args.expected), Path(args.actual))
+        sys.exit(0 if ok else 1)
     else:
         parser.print_help()
 
