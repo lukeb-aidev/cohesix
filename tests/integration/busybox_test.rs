@@ -19,10 +19,10 @@ fn busybox_ls_prints_files() {
 #[test]
 fn busybox_cat_works() {
     use std::fs;
-    let path = "/tmp/bb_test.txt";
-    fs::write(path, "hi").unwrap();
-    busybox::run_command("cat", &[path]);
-    let _ = fs::remove_file(path);
+    let path = std::env::temp_dir().join("bb_test.txt");
+    fs::write(&path, "hi").unwrap();
+    busybox::run_command("cat", &[path.to_str().unwrap()]);
+    let _ = fs::remove_file(&path);
 }
 
 #[test]
