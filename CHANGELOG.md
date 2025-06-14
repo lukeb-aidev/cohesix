@@ -17,13 +17,14 @@
 - GitHub workflow indentation corrected for OSS dependency audit
 - secure9p sandbox uses Path to parse agent IDs; tests added for trailing
   slashes and invalid namespaces
+- `Capability` alias exposed in `cap_fid.rs` for consistent imports
 - Gpu telemetry includes temperature and utilization via nvml-wrapper
 - Policy engine exposes `new` and `allow` API; tests updated
+- sandbox.rs enforce function exported for reuse; unit tests now compile
 - Added cuda_test.rs validating runtime CUDA presence
 - 9P server enforces per-session sandbox policies with validator logging
 - New `secure9p` feature flag toggles TLS-backed file server
 - Obsolete `src/secure9p` removed; `src/p9/secure` moved to `src/secure9p`
-- Secure9P server added with TLS support, per-agent namespaces, capability checks, and JSON trace logging
 - Secure9P server added with TLS support, per-agent namespaces, capability checks, and JSON trace logging
 - Secure9P server log path now uses `COHESIX_LOG_DIR` with temp dir fallback; handshake test verifies log
 - CMake CUDA keep directory respects TMPDIR
@@ -35,6 +36,7 @@
 - Added ns_hotplug.rs integration test
 - Makefile bootloader target links with lld-link
 - CLI scripts now use wrapper binaries in `bin/` so classification headers remain the first line
+- `config/secure9p.toml` header repositioned and version updated to v0.2
 
 ## [v0.89] - 2025-07-25
 ### Changed
