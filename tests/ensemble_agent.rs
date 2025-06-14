@@ -22,10 +22,13 @@ fn ensemble_weighted_selects_best() {
     println!("{:?}", cfg);
 
     // Use writable temp directory for ensemble log
-    let base = std::env::temp_dir().join("ensemble_test_dir");
-    std::fs::create_dir_all(&base).unwrap();
-    std::env::set_var("COHESIX_ENS_TMP", &base);
-    let dir = base.join("e1");
+    let path = std::env::var("COHESIX_ENS_TMP").unwrap_or_else(|_| {
+        let tmp = std::env::temp_dir().join("ensemble_test_dir");
+        std::fs::create_dir_all(&tmp).unwrap();
+        tmp.to_str().unwrap().to_string()
+    });
+    std::env::set_var("COHESIX_ENS_TMP", &path);
+    let dir = std::path::Path::new(&path).join("e1");
     std::fs::create_dir_all(&dir).unwrap();
 
     // Pre-create goals log expected by the agent
@@ -45,5 +48,5 @@ fn ensemble_weighted_selects_best() {
 
     // Clean up mock files
     let _ = fs::remove_file(dir.join("goals.json"));
-    let _ = fs::remove_dir_all(&base);
+    let _ = fs::remove_dir_all(&path);
 }

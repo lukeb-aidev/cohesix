@@ -31,9 +31,10 @@ use crate::agent_migration::{Migrateable, MigrationStatus};
 
 impl Migrateable for AgentRuntime {
     fn migrate<T: AgentTransport>(&self, peer: &str, transport: &T) -> anyhow::Result<MigrationStatus> {
-        let path = "/tmp/runtime_state.json";
-        std::fs::write(path, "runtime")?;
-        transport.send_state("runtime", peer, path)?;
+        let tmpdir = std::env::var("TMPDIR").unwrap_or("/tmp".to_string());
+        let path = format!("{}/runtime_state.json", tmpdir);
+        std::fs::write(&path, "runtime")?;
+        transport.send_state("runtime", peer, &path)?;
         Ok(MigrationStatus::Completed)
     }
 }

@@ -34,8 +34,9 @@ pub fn validate_trace(path: &str, worker: &str) -> anyhow::Result<()> {
         angle_ok,
         drift: trace.angle,
     };
-    fs::create_dir_all("/trace/reports").ok();
-    let out = format!("/trace/reports/{worker}.report.json");
+    let tmpdir = std::env::var("TMPDIR").unwrap_or("/tmp".to_string());
+    fs::create_dir_all(format!("{}/trace/reports", tmpdir)).ok();
+    let out = format!("{}/trace/reports/{worker}.report.json", tmpdir);
     fs::write(&out, serde_json::to_string(&report)?)?;
     println!("[validator] report stored at {out}");
     Ok(())
