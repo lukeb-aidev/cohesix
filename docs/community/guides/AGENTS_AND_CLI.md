@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: AGENTS_AND_CLI.md v1.1
+// Filename: AGENTS_AND_CLI.md v1.2
 // Author: Lukas Bower
-// Date Modified: 2025-07-18
+// Date Modified: 2025-07-25
 
 # Agents and CLI
 
@@ -60,5 +60,6 @@ All agents and CLI tools now support use of environment variables to redirect ou
 - `TMPDIR`: fallback base for all temp paths
 - `COHESIX_ENS_TMP`: override for ensemble agent directories
 - `COHESIX_TRACE_TMP`: override for validator trace outputs
+- `COHESIX_SECURE9P_CONFIG`: path to the Secure9P policy file
 
 This allows tests, simulations, and builds to succeed in environments where root or shared paths are not writable.

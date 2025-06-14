@@ -13,6 +13,7 @@
 - Validator paths now configurable via environment variables; CLI rule merge test added
 - `cohtrace` CLI now supports `--verify-trace` and `compare` commands for trace validation
 - CUDA runtime now exposes stub /srv/cuda when unavailable
+- Secure9P policy path now configurable via `COHESIX_SECURE9P_CONFIG`
 - secure9p sandbox uses Path to parse agent IDs; tests added for trailing
   slashes and invalid namespaces
 - Gpu telemetry includes temperature and utilization via nvml-wrapper

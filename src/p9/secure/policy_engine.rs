@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: policy_engine.rs v0.1
+// Filename: policy_engine.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-07-23
+// Date Modified: 2025-07-25
 
 //! Policy evaluation for Secure9P operations.
 
@@ -33,7 +33,7 @@ pub struct PolicyEngine {
 
 #[cfg(feature = "secure9p")]
 impl PolicyEngine {
-    pub fn load(path: &std::path::Path) -> Result<Self> {
+    pub fn load_from_path(path: &std::path::Path) -> Result<Self> {
         let text = std::fs::read_to_string(path)?;
         let pf: PolicyFile = if path.extension().and_then(|e| e.to_str()) == Some("json") {
             serde_json::from_str(&text)?
@@ -50,6 +50,14 @@ impl PolicyEngine {
             rules.insert(p.agent, parsed);
         }
         Ok(Self { rules })
+    }
+
+    pub fn load() -> Result<Self> {
+        use std::path::PathBuf;
+        let cfg = std::env::var("COHESIX_SECURE9P_CONFIG")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("config/secure9p.toml"));
+        Self::load_from_path(&cfg)
     }
 
     pub fn allows(&self, agent: &str, verb: &str, path: &str) -> bool {
@@ -77,8 +85,22 @@ mod tests {
             "{\"policy\":[{\"agent\":\"lukas\",\"allow\":[\"read:/a\"]}]}",
         )
         .unwrap();
-        let pe = PolicyEngine::load(&tmp).unwrap();
+        let pe = PolicyEngine::load_from_path(&tmp).unwrap();
         assert!(pe.allows("lukas", "read", "/a/foo"));
         assert!(!pe.allows("lukas", "write", "/a/foo"));
+    }
+
+    #[test]
+    fn env_override() {
+        let tmp = std::env::temp_dir().join("p.yaml");
+        fs::write(
+            &tmp,
+            "policy:\n- agent: test\n  allow:\n    - read:/a",
+        )
+        .unwrap();
+        std::env::set_var("COHESIX_SECURE9P_CONFIG", &tmp);
+        let pe = PolicyEngine::load().unwrap();
+        std::env::remove_var("COHESIX_SECURE9P_CONFIG");
+        assert!(pe.allows("test", "read", "/a/x"));
     }
 }

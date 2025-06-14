@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: secure_9p_server.rs v0.1
+// Filename: secure_9p_server.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-07-23
+// Date Modified: 2025-07-25
 
 //! TLS-wrapped 9P server with policy enforcement.
 
@@ -69,7 +69,7 @@ pub fn start_secure_9p_server(addr: &str, cert: &Path, key: &Path) -> anyhow::Re
         .with_no_client_auth()
         .with_single_cert(certs, key)?;
     let listener = TcpListener::bind(addr)?;
-    let engine = PolicyEngine::load(Path::new("config/secure9p.toml"))?;
+    let engine = PolicyEngine::load()?;
     let log_dir = std::env::var("COHESIX_LOG_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| std::env::temp_dir());
