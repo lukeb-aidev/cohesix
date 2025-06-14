@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # CLASSIFICATION: COMMUNITY
 # Filename: snapshot_writer.py v0.2
 # Author: Lukas Bower

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # CLASSIFICATION: COMMUNITY
 # Filename: fuzz_runner.py v0.1
 # Date Modified: 2025-06-25

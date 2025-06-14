@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # CLASSIFICATION: COMMUNITY
 # Filename: test_hotplug_doc.py v0.1
 # Author: Cohesix Codex

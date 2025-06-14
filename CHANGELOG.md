@@ -20,6 +20,8 @@
 - SandboxService logs namespace violations via validator
 - Added ns_hotplug.rs integration test
 - Makefile bootloader target links with lld-link
+- CLI scripts now use wrapper binaries in `bin/` so classification headers remain the first line
+- `test_boot_efi` wrapper added; Makefile updated accordingly
 - BootMustSucceed rule verifies /trace/boot_trace.json at startup
 - Makefile now includes fmt/lint/check targets and platform flags
 - Added end-to-end traceflow test and CLI argument validation

@@ -1,5 +1,4 @@
 
-#!/usr/bin/env python3
 # CLASSIFICATION: COMMUNITY
 # Filename: cohcli.py v1.0
 # Date Modified: 2025-07-15

@@ -86,7 +86,7 @@ and runs `validate_metadata_sync.py`.
            - run: pre-commit run --all-files
            - run: pytest tests/codex/
      ```
-   - Note: QEMU is not available in the Codex environment, so related tests (e.g., `test_boot_efi.sh`) will fail unless explicitly skipped or mocked.
+   - Note: QEMU is not available in the Codex environment, so related tests (e.g., `test_boot_efi`) will fail unless explicitly skipped or mocked.
 4. **Audit Logs**: Store all Codex-generated outputs in `codex_logs/` with timestamps. Configure `cohcli` to write logs:  
    ```bash
    cohcli codex run <agent_id> --file path --log-dir codex_logs/

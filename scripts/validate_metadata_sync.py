@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # CLASSIFICATION: COMMUNITY
 # Filename: validate_metadata_sync.py v0.1
 # Date Modified: 2025-06-09
