@@ -1,5 +1,5 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Makefile v0.9
+# Filename: Makefile v0.10
 # Date Modified: 2025-07-22
 # Author: Lukas Bower
 #
@@ -59,14 +59,14 @@ boot-aarch64:
 bootloader:
 	@echo "🏁 Building UEFI bootloader"
 	@mkdir -p out/EFI/BOOT
-	clang -ffreestanding -fPIC -fno-stack-protector -fshort-wchar \
-	-DEFI_FUNCTION_WRAPPER -DGNU_EFI -mno-red-zone \
-	-I/usr/include/efi -I/usr/include/efi/x86_64 \
-	-c src/bootloader/main.c -o bootloader.o
-	ld.lld /usr/lib/crt0-efi-x86_64.o bootloader.o \
-	-o bootloader.so -T /usr/lib/elf_x86_64_efi.lds \
-	-shared -Bsymbolic -nostdlib -znocombreloc \
-	-L/usr/lib -lgnuefi -lefi
+        clang -ffreestanding -fPIC -fno-stack-protector -fshort-wchar \
+        -DEFI_FUNCTION_WRAPPER -DGNU_EFI -mno-red-zone \
+        -I/usr/include/efi -I/usr/include/efi/x86_64 \
+        -c src/bootloader/main.c -o bootloader.o
+        ld.lld /usr/lib/crt0-efi-x86_64.o bootloader.o \
+        -o bootloader.so -T bootloader.lds \
+        -shared -Bsymbolic -nostdlib -znocombreloc \
+        -L/usr/lib -lgnuefi -lefi
 	       objcopy --target=efi-app-x86_64 bootloader.so BOOTX64.EFI
 	       cp BOOTX64.EFI out/EFI/BOOT/BOOTX64.EFI
 
@@ -74,14 +74,14 @@ bootloader:
 kernel:
 	@echo "🏁 Building kernel stub"
 	@mkdir -p out
-	clang -ffreestanding -fPIC -fno-stack-protector -fshort-wchar \
-	-DEFI_FUNCTION_WRAPPER -DGNU_EFI -mno-red-zone \
-	-I/usr/include/efi -I/usr/include/efi/x86_64 \
-	-c src/kernel/stub.c -o kernel.o
-	ld.lld /usr/lib/crt0-efi-x86_64.o kernel.o \
-	-o kernel.so -T /usr/lib/elf_x86_64_efi.lds \
-	-shared -Bsymbolic -nostdlib -znocombreloc \
-	-L/usr/lib -lgnuefi -lefi
+        clang -ffreestanding -fPIC -fno-stack-protector -fshort-wchar \
+        -DEFI_FUNCTION_WRAPPER -DGNU_EFI -mno-red-zone \
+        -I/usr/include/efi -I/usr/include/efi/x86_64 \
+        -c src/kernel/main.c -o kernel.o
+        ld.lld /usr/lib/crt0-efi-x86_64.o kernel.o \
+        -o kernel.so -T linker.ld \
+        -shared -Bsymbolic -nostdlib -znocombreloc \
+        -L/usr/lib -lgnuefi -lefi
 	objcopy --target=efi-app-x86_64 kernel.so kernel.elf
 	cp kernel.elf out/kernel.elf
 
