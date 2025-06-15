@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: cohesix_fetch_build.sh v0.3
+// Filename: cohesix_fetch_build.sh v0.4
 // Author: Lukas Bower
-// Date Modified: 2025-06-15
+// Date Modified: 2025-08-01
 #!/bin/bash
 # Fetch and fully build the Cohesix project using SSH Git auth.
 
@@ -37,6 +37,21 @@ fi
 
 echo "🦀 Building Rust components..."
 cargo build --all-targets --release
+
+echo "🔨 Building kernel ELF..."
+cargo build --bin kernel --release --features kernel_bin
+mkdir -p out
+cp target/release/kernel out/kernel.elf
+
+for f in initfs.img plan9.ns bootargs.txt boot_trace.json; do
+  if [ -f "$f" ]; then
+    cp "$f" out/
+  else
+    echo "⚠️ $f missing; creating placeholder" >&2
+    touch "out/$f"
+  fi
+done
+touch out/qemu_boot.log
 
 echo "🔍 Running Rust tests with detailed output..."
 RUST_BACKTRACE=1 cargo test --release -- --nocapture 2>&1 | tee rust_test_output.log
@@ -82,7 +97,7 @@ if command -v qemu-system-x86_64 >/dev/null; then
   fi
   TMPDIR="${TMPDIR:-$(mktemp -d)}"
   DISK_DIR="$TMPDIR/qemu_disk"
-  LOG_FILE="$TMPDIR/qemu_boot.log"
+  LOG_FILE="out/qemu_boot.log"
   mkdir -p "$DISK_DIR"
   timeout 10s qemu-system-x86_64 -kernel out/kernel.elf -nographic -serial file:"$LOG_FILE" &
   QEMU_PID=$!

@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.55
-// Date Modified: 2025-06-15
+// Filename: CHANGELOG.md v0.56
+// Date Modified: 2025-08-01
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
 • Consolidated OSS reuse files into LICENSES_AND_REUSE.md
@@ -8,13 +8,16 @@
 • Created CLI and Agent index at cli/README.md
 • Normalized headers and metadata across all affected documentation
 
-## [vNext] - 2025-07-23
+## [vNext] - 2025-08-01
 ### Temp path fixes and QEMU script guard
 - cohesix_fetch_build.sh header updated and registered in METADATA
 - QEMU boot log handling runs in background in cohesix_fetch_build.sh
 - Ensemble tests use writable temp directory via COHESIX_ENS_TMP
 - SharedMemory, BaseAgent use TMPDIR and respect override vars
 - QEMU boot script checks for qemu-system-x86_64, sets TMPDIR, ensures writable paths
+- cohesix_fetch_build.sh v0.4 stages kernel ELF and boot files in out/
+- Cargo.toml v0.5 adds kernel binary target
+- Added src/kernel/main.rs minimal entry for ELF boot
 - Boot test exits with code 0 when QEMU is missing so CI shows the step as skipped
 - Makefile v0.18 skips gnu-efi header checks and tolerates missing cargo tools
 - Makefile v0.19 consolidates duplicate qemu rules and enforces OVMF firmware

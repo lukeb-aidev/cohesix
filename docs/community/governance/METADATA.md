@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: METADATA.md v3.17
+// Filename: METADATA.md v3.18
 // Author: Lukas Bower
-// Date Modified: 2025-06-15
+// Date Modified: 2025-08-01
 
 ## Canonical Documents
 
@@ -14,7 +14,7 @@
 | BUILD_PLAN.md              | v0.4    | 2025-07-11    | COMMUNITY      |            |              |
 | COMMERCIAL_PLAN.md         | v1.5    | 2025-06-08    | PRIVATE        |            |              |
 | DEPENDENCIES.md            | v0.5    | 2025-07-06    | COMMUNITY      |            |              |
-| METADATA.md                | v3.14   | 2025-07-26    | COMMUNITY      |            |              |
+| METADATA.md                | v3.18   | 2025-08-01    | COMMUNITY      |            |              |
 | Q_DAY.md                   | v1.1    | 2025-06-15    | PRIVATE        |            |              |
 | README.md                  | v0.12   | 2025-07-28    | COMMUNITY        |            |              |
 | README_Codex.md            | v1.4    | 2025-06-16    | COMMUNITY      |            |              |
@@ -111,6 +111,7 @@
 | Makefile | v0.19 | 2025-07-28 | COMMUNITY | | |
 | test_boot_efi.sh | v0.11 | 2025-07-30 | COMMUNITY | | |
 | src/kernel/main.c | v0.2 | 2025-07-22 | COMMUNITY | | |
+| src/kernel/main.rs | v0.1 | 2025-08-01 | COMMUNITY | | |
 | tests/test_traceflow.py | v0.1 | 2025-07-23 | COMMUNITY | | |
 | tests/test_invalid_cli.py | v0.1 | 2025-07-23 | COMMUNITY | | |
 | tests/test_9p_read_write.rs | v0.1 | 2025-07-23 | COMMUNITY | | |
@@ -121,7 +122,7 @@
 | docs/QUICKSTART.md | v0.1 | 2025-07-23 | COMMUNITY | | |
 | docs/community/architecture/BOOT_KERNEL_FLOW.md | v0.1 | 2025-07-23 | COMMUNITY | | |
 | docs/community/archive/examples_README.md | v0.2 | 2025-07-23 | COMMUNITY | | |
-| cohesix_fetch_build.sh | v0.3 | 2025-06-15 | COMMUNITY | | |
+| cohesix_fetch_build.sh | v0.4 | 2025-08-01 | COMMUNITY | | |
 | CONTRIBUTING.md | v1.1 | 2025-07-23 | COMMUNITY | | |
 | config/secure9p.toml | v0.3 | 2025-07-31 | COMMUNITY | | |
 | src/secure9p/mod.rs | v0.2 | 2025-07-25 | COMMUNITY | | |
@@ -151,7 +152,7 @@
 | scripts/manpage_scan.sh | v0.1 | 2025-06-08 | COMMUNITY | | |
 | scripts/verify-macos-setup.sh | v0.1 | 2025-06-05 | COMMUNITY | | |
 | metadata.json | v0.1 | 2025-07-24 | COMMUNITY | | |
-| Cargo.toml | v0.4 | 2025-07-31 | COMMUNITY | | |
+| Cargo.toml | v0.5 | 2025-08-01 | COMMUNITY | | |
 | cohesix-9p/Cargo.toml | v0.1 | 2025-07-28 | COMMUNITY | | |
 | justfile | v0.1 | 2025-07-24 | COMMUNITY | | |
 | src/roles/mod.rs | v0.1 | 2025-07-31 | COMMUNITY | | |
