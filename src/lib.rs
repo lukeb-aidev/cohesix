@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: lib.rs v1.4
-// Date Modified: 2025-07-24
+// Filename: lib.rs v1.5
+// Date Modified: 2025-07-31
 // Author: Lukas Bower
 
 //! Root library for the Coh_CC compiler and platform integrations.
@@ -110,6 +110,9 @@ pub mod federation;
 pub mod validator;
 /// Watchdog daemon module
 pub mod watchdogd;
+
+/// Role modules
+pub mod roles;
 
 /// Bootloader subcrate utilities
 pub mod bootloader;

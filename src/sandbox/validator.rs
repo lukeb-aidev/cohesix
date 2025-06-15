@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: validator.rs v0.3
+// Filename: validator.rs v0.4
 // Author: Lukas Bower
-// Date Modified: 2025-07-23
+// Date Modified: 2025-07-31
 
 //! Runtime syscall validator for sandboxed agents.
 //! Violations are logged to `/srv/violations/<agent>.json` and the
@@ -27,7 +27,7 @@ struct Violation {
 /// Validate a syscall for the given role. Returns true if allowed.
 pub fn validate(agent: &str, role: Role, sc: &Syscall) -> bool {
     let allowed = match role {
-        Role::DroneWorker => true,
+        Role::DroneWorker | Role::InteractiveAIBooth => true,
         Role::QueenPrimary => !matches!(sc, Syscall::Spawn { .. }),
         _ => false,
     };

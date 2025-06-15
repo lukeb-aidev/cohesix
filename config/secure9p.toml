@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: secure9p.toml v0.2
+// Filename: secure9p.toml v0.3
 // Author: Lukas Bower
-// Date Modified: 2025-07-26
+// Date Modified: 2025-07-31
 
 [[namespace]]
 agent = "lukas"
@@ -15,3 +15,12 @@ allow = ["read:/mnt/agents/lukas/input", "write:/mnt/agents/lukas/output"]
 port = 5645
 cert = "cert.pem"
 key = "key.pem"
+
+[[namespace]]
+agent = "interactive_aibooth"
+root = "/srv/aibooth"
+read_only = false
+
+[[policy]]
+agent = "interactive_aibooth"
+allow = ["read:/input/mic", "read:/input/cam", "write:/mnt/ui_in", "write:/mnt/speak", "read:/mnt/face_match"]

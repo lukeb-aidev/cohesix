@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: test_bootflow.py v0.1
+# Filename: test_bootflow.py v0.2
 # Author: Lukas Bower
-# Date Modified: 2025-06-17
+# Date Modified: 2025-07-31
 
 import os
 import tempfile
@@ -13,6 +13,7 @@ ROLES = [
     "QueenPrimary",
     "DroneWorker",
     "KioskInteractive",
+    "InteractiveAIBooth",
     "SensorRelay",
     "SimulatorTest",
 ]
