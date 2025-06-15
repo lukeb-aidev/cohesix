@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: METADATA.md v3.16
+// Filename: METADATA.md v3.17
 // Author: Lukas Bower
-// Date Modified: 2025-07-23
+// Date Modified: 2025-08-01
 
 ## Canonical Documents
 
@@ -146,7 +146,7 @@
 | tests/secure9p/namespace_traversal.rs | v0.1 | 2025-07-24 | COMMUNITY | | |
 | tests/secure9p/policy_denial.rs | v0.3 | 2025-07-26 | COMMUNITY | | |
 | tests/secure9p/agent_identifier.rs | v0.2 | 2025-07-26 | COMMUNITY | | |
-| cli/cohcli.py | v1.0 | 2025-07-15 | COMMUNITY | | |
+| cli/cohcli.py | v1.1 | 2025-08-01 | COMMUNITY | | |
 | scripts/check-qemu-deps.sh | v0.1 | 2025-07-28 | COMMUNITY | | |
 | scripts/collect_boot_logs.sh | v0.1 | 2025-07-12 | COMMUNITY | | |
 | scripts/generate_busybox_man.sh | v0.1 | 2025-06-08 | COMMUNITY | | |

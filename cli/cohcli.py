@@ -1,6 +1,6 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohcli.py v1.0
-# Date Modified: 2025-07-15
+# Filename: cohcli.py v1.1
+# Date Modified: 2025-08-01
 # Author: Lukas Bower
 
 """
@@ -18,7 +18,7 @@ from typing import List
 import traceback
 
 
-LOG_DIR = Path("/log")
+LOG_DIR = Path(os.getenv("COHESIX_LOG", Path.home() / ".cohesix" / "log"))
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 

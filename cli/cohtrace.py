@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohtrace.py v0.7
+# Filename: cohtrace.py v0.8
 # Author: Lukas Bower
-# Date Modified: 2025-07-23
+# Date Modified: 2025-08-01
 
 """cohtrace – inspect connected workers."""
 
@@ -18,7 +18,7 @@ import traceback
 import sys
 
 
-LOG_DIR = Path("/log")
+LOG_DIR = Path(os.getenv("COHESIX_LOG", Path.home() / ".cohesix" / "log"))
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 

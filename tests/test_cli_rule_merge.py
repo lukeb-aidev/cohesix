@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: test_cli_rule_merge.py v0.1
+# Filename: test_cli_rule_merge.py v0.2
 # Author: Lukas Bower
-# Date Modified: 2025-07-22
+# Date Modified: 2025-08-01
 """Test live rule merge using the cohrun CLI."""
 
 import json
@@ -18,13 +18,15 @@ def test_cohrun_inject_rule(tmp_path, monkeypatch):
         "#!/usr/bin/env python3\n"
         "import sys,shutil,os\n"
         "src=sys.argv[sys.argv.index('--from')+1]\n"
-        "os.makedirs('/srv/validator',exist_ok=True)\n"
-        "import shutil; shutil.copy(src,'/srv/validator/inject_rule')\n"
+        "dest=os.environ.get('VALIDATOR_DIR','/srv/validator')\n"
+        "os.makedirs(dest,exist_ok=True)\n"
+        "shutil.copy(src,os.path.join(dest,'inject_rule'))\n"
     )
     script.chmod(0o755)
 
-    env = dict(os.environ, COHRUN_BIN=str(script))
+    validator_dir = tmp_path / 'validator'
+    env = dict(os.environ, COHRUN_BIN=str(script), VALIDATOR_DIR=str(validator_dir), COHESIX_LOG=str(tmp_path / 'log'))
     subprocess.run(["python3", "cli/cohrun.py", "inject-rule", "--from", str(rule)], env=env, check=True)
-    assert Path("/srv/validator/inject_rule").exists()
-    data = Path("/srv/validator/inject_rule").read_text()
+    assert (validator_dir / "inject_rule").exists()
+    data = (validator_dir / "inject_rule").read_text()
     assert "sensor" in data
