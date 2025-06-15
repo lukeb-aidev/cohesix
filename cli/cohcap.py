@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohcap.py v0.2
+# Filename: cohcap.py v0.3
 # Author: Lukas Bower
-# Date Modified: 2025-07-15
+# Date Modified: 2025-08-01
 """cohcap – manage demo capabilities."""
 
 import argparse
@@ -15,7 +15,7 @@ from typing import List
 import traceback
 
 
-LOG_DIR = Path("/log")
+LOG_DIR = Path(os.getenv("COHESIX_LOG", Path.home() / ".cohesix" / "log"))
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 
