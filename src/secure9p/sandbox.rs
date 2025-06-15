@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: sandbox.rs v0.3
+// Filename: sandbox.rs v0.4
 // Author: Lukas Bower
-// Date Modified: 2025-07-26
+// Date Modified: 2025-07-31
 
 //! Path sanitization utilities for Secure9P.
 
@@ -41,7 +41,6 @@ mod tests {
 
 use super::{cap_fid::Capability, policy_engine::PolicyEngine};
 
-use std::path::Path;
 
 pub fn enforce(ns: &str, cap: Capability, policy: &PolicyEngine) -> bool {
     let ns = ns.trim_end_matches('/');
