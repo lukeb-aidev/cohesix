@@ -152,5 +152,5 @@
 | scripts/verify-macos-setup.sh | v0.1 | 2025-06-05 | COMMUNITY | | |
 | metadata.json | v0.1 | 2025-07-24 | COMMUNITY | | |
 | Cargo.toml | v0.3 | 2025-07-28 | COMMUNITY | | |
-| cohesix-9p/Cargo.toml | v0.1 | 2025-07-24 | COMMUNITY | | |
+| cohesix-9p/Cargo.toml | v0.1 | 2025-07-28 | COMMUNITY | | |
 | justfile | v0.1 | 2025-07-24 | COMMUNITY | | |
