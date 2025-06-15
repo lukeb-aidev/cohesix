@@ -47,6 +47,7 @@
 - New `scripts/check-qemu-deps.sh` verifies QEMU and gnu-efi packages before boot tests; README documents usage
 
 - cohesix-9p/Cargo.toml edition set to 2021 to support async features
+- Fixed missing closing braces in `tls_handshake` test
 
 ## [v0.89] - 2025-07-25
 ### Changed
