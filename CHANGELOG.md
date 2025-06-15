@@ -18,6 +18,8 @@
 - CUDA runtime now exposes stub /srv/cuda when unavailable
 - Added InteractiveAIBooth role with Secure9P namespace and optional CUDA support
 - GitHub workflow indentation corrected for OSS dependency audit
+- Validator uses `COHESIX_TRACE_TMP` for boot trace lookups; tests use
+  `std::env::temp_dir` and clear expects to avoid permission errors.
 - secure9p sandbox uses Path to parse agent IDs; tests added for trailing
   slashes and invalid namespaces
 - Secure9P build fixes with rustls 0.23, policy clone, path validation, and
