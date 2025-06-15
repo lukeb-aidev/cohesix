@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: cohesix_fetch_build.sh v0.5
+// Filename: cohesix_fetch_build.sh v0.6
 // Author: Lukas Bower
-// Date Modified: 2025-08-01
+// Date Modified: 2025-08-02
 #!/bin/bash
 # Fetch and fully build the Cohesix project using SSH Git auth.
 
@@ -40,7 +40,11 @@ cargo build --all-targets --release
 
 echo "🛠️ Building kernel ELF..."
 mkdir -p out
-cargo build --bin kernel --release --features kernel_bin
+cargo build --release --features kernel_bin
+if [ ! -f target/release/kernel ]; then
+  echo "❌ Kernel binary missing at target/release/kernel" >&2
+  exit 1
+fi
 cp target/release/kernel out/kernel.elf
 
 for f in initfs.img plan9.ns bootargs.txt boot_trace.json; do
@@ -91,15 +95,16 @@ echo "✅ All builds complete."
 
 # Optional QEMU boot check
 if command -v qemu-system-x86_64 >/dev/null; then
-  if [ ! -f out/kernel.elf ]; then
-    echo "❌ Kernel ELF not found at out/kernel.elf"
+  KERNEL_ELF="out/kernel.elf"
+  if [ ! -f "$KERNEL_ELF" ]; then
+    echo "❌ Kernel ELF not found at $KERNEL_ELF"
     exit 1
   fi
   TMPDIR="${TMPDIR:-$(mktemp -d)}"
   DISK_DIR="$TMPDIR/qemu_disk"
   LOG_FILE="out/qemu_boot.log"
   mkdir -p "$DISK_DIR"
-  timeout 10s qemu-system-x86_64 -kernel out/kernel.elf -nographic -serial file:"$LOG_FILE" &
+  timeout 10s qemu-system-x86_64 -kernel "$KERNEL_ELF" -nographic -serial file:"$LOG_FILE" &
   QEMU_PID=$!
   sleep 3
   tail -n 20 "$LOG_FILE" || echo "❌ Could not read QEMU log"
