@@ -41,7 +41,7 @@ pub fn read_state(agent: &str) -> Option<JoystickState> {
     if js.num_joysticks().ok()? <= 0 {
         return None;
     }
-    let mut joy = js.open(0).ok()?;
+    let joy = js.open(0).ok()?;
     let axes = (0..joy.num_axes() as i32)
         .map(|i| joy.axis(i as u32).unwrap_or(0))
         .collect::<Vec<_>>();
