@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY  
-// Filename: FAQ v1.0  
+// Filename: FAQ.md v1.0
 // Author: Lukas Bower  
 // Date Modified: 2025-06-15
 
