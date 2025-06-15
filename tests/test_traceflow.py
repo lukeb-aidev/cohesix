@@ -15,11 +15,11 @@ def test_traceflow(tmp_path):
     Path("/log").mkdir(parents=True, exist_ok=True)
     Path("/trace/w1").mkdir(parents=True, exist_ok=True)
 
-    subprocess.run(["python3", "cli/cohcap.py", "grant", "camera", "--to", "w1"], env=env, check=True)
-    subprocess.run(["python3", "cli/cohcli.py", "boot", "DroneWorker"], check=True)
+    subprocess.run(["python3", str(Path("cli/cohcap.py").resolve()), "grant", "camera", "--to", "w1"], env=env, check=True)
+    subprocess.run(["python3", str(Path("cli/cohcli.py").resolve()), "boot", "DroneWorker"], check=True)
     trace = tmp_path / "trace.json"
     trace.write_text('{"frames": []}')
-    subprocess.run(["python3", "cli/cohtrace.py", "push_trace", "w1", str(trace)], check=True)
+    subprocess.run(["python3", str(Path("cli/cohtrace.py").resolve()), "push_trace", "w1", str(trace)], check=True)
     out = Path("/trace/w1/sim.json")
     assert out.exists()
     assert out.read_text().strip() == '{"frames": []}'

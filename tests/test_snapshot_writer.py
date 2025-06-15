@@ -17,7 +17,7 @@ def test_snapshot_writer(tmp_path):
     (tmp_path/'srv/agent_meta').mkdir(parents=True)
     (tmp_path/'sim/world.json').write_text('{"a":1}')
     (tmp_path/'srv/agent_meta/role.txt').write_text('DroneWorker')
-    proc = subprocess.Popen([str(script)], cwd=tmp_path, env=env)
+    proc = subprocess.Popen(["python3", str(script)], cwd=tmp_path, env=env)
     time.sleep(1.5)
     proc.terminate()
     snap = tmp_path/'history/snapshots/test.json'

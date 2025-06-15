@@ -23,6 +23,7 @@
   secure9p feature build and clippy
 - `Capability` alias exposed in `cap_fid.rs` for consistent imports
 - Gpu telemetry includes temperature and utilization via nvml-wrapper
+- Fixed Python import paths and enabled pytest discovery across all tests
 - Policy engine exposes `new` and `allow` API; tests updated
 - sandbox.rs enforce function exported for reuse; unit tests now compile
 - Added cuda_test.rs validating runtime CUDA presence

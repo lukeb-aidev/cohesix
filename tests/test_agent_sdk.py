@@ -6,7 +6,6 @@
 import os
 import json
 import sys
-sys.path.insert(0, str((os.path.dirname(__file__)+'/../python').replace('\\','/')))
 
 
 def test_agent_context_defaults(tmp_path, monkeypatch):
