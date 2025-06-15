@@ -40,18 +40,6 @@ impl SyscallDispatcher {
                 // Execution in sandbox pending implementation
                 // FIXME(batch5): integrate with process launcher
             }
-            Syscall::CapGrant { target, capability } => {
-                debug!("dispatch cap_grant: {} -> {}", target, capability);
-                // FIXME(batch5): apply capability change
-            }
-            Syscall::Mount { src, dest } => {
-                debug!("dispatch mount: {} -> {}", src, dest);
-                // FIXME(batch5): call mount service
-            }
-            Syscall::Exec { path } => {
-                debug!("dispatch exec: {}", path);
-                // FIXME(batch5): exec binary in sandbox
-            }
             Syscall::Unknown => {
                 debug!("unsupported syscall: Unknown");
             }

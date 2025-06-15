@@ -40,46 +40,6 @@ pub fn generate_c(module: &Module) -> String {
                     "    // DIV {:?}\n",
                     instr.operands
                 )),
-                Opcode::Add => {
-                    if instr.operands.len() == 2 {
-                        output.push_str(&format!(
-                            "    printf(\"%d\\n\", {} + {});\n",
-                            instr.operands[0], instr.operands[1]
-                        ));
-                    } else {
-                        output.push_str("    // FIXME: ADD expects two operands\n");
-                    }
-                }
-                Opcode::Sub => {
-                    if instr.operands.len() == 2 {
-                        output.push_str(&format!(
-                            "    printf(\"%d\\n\", {} - {});\n",
-                            instr.operands[0], instr.operands[1]
-                        ));
-                    } else {
-                        output.push_str("    // FIXME: SUB expects two operands\n");
-                    }
-                }
-                Opcode::Mul => {
-                    if instr.operands.len() == 2 {
-                        output.push_str(&format!(
-                            "    printf(\"%d\\n\", {} * {});\n",
-                            instr.operands[0], instr.operands[1]
-                        ));
-                    } else {
-                        output.push_str("    // FIXME: MUL expects two operands\n");
-                    }
-                }
-                Opcode::Div => {
-                    if instr.operands.len() == 2 {
-                        output.push_str(&format!(
-                            "    if({1} == 0) {{ printf(\"div-by-zero\\n\"); }} else {{ printf(\"%d\\n\", {0} / {1}); }}\n",
-                            instr.operands[0], instr.operands[1]
-                        ));
-                    } else {
-                        output.push_str("    // FIXME: DIV expects two operands\n");
-                    }
-                }
                 Opcode::Call { function } => output.push_str(&format!("    {}();\n", function)),
                 Opcode::Ret => output.push_str("    return;\n"),
                 _ => output.push_str(&format!("    // Unhandled opcode: {:?}\n", instr.opcode)),
