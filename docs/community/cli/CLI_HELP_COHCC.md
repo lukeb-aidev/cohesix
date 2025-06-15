@@ -1,15 +1,17 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CLI_HELP_COHCC.md v0.1
 // Author: Lukas Bower
-// Date Modified: 2025-07-12
+// Date Modified: 2025-06-15
 
 # cohcc
 
-Cohesix compiler front-end for Cohesix IR modules.
+*(Applies to: DroneWorker, SimulatorTest)*
 
 ```bash
 Usage: cohcc --input <file> [--output a.out] [--target x86_64|aarch64] [--timeout ms]
 ```
+
+See CLI README.md for full role-by-command mapping.
 
 ## Options
 - `--input` – path to IR file to compile (required)

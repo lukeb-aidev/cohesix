@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: SECURITY_POLICY.md v1.0
-// Date Modified: 2025-05-27
+// Date Modified: 2025-07-31
 // Author: Lukas Bower
 
 # Security Policy
@@ -38,6 +38,7 @@ Applies to all Cohesix components (bootloader, kernel patches, Plan 9 userland
   - Create a private branch for the fix.  
   - Include tests or validation harnesses demonstrating the remediation.  
   - Submit a pull request tagged `[SECURITY]` for review.  
+- All fixes must emit validator-compatible trace logs and snapshots to `/log/trace/security_<ts>.log` and `/history/snapshots/security_fix_<ts>.json`.
 - **Code Review**: Security fixes require at least two independent reviewers, including one security specialist.  
 - **Testing**: Automated tests (unit, integration, fuzzing) must cover the vulnerability scenario.
 
@@ -61,6 +62,7 @@ Applies to all Cohesix components (bootloader, kernel patches, Plan 9 userland
 ## Incident Response & Metrics
 
 - Maintain an incident log (`security/incidents.log`) with timestamps, actions, and lessons learned.  
+- All incident events must emit trace records for validator replay, and include system state snapshots if available.
 - Conduct quarterly security reviews and tabletop exercises.  
 - Track Mean Time to Acknowledge (MTTA) and Mean Time to Remediate (MTTR), with goals of < 48 hours and < 14 days respectively.
 
@@ -68,5 +70,6 @@ Applies to all Cohesix components (bootloader, kernel patches, Plan 9 userland
 
 - The security team meets monthly to review open issues and update this policy.  
 - Changes to this policy are versioned in `docs/security/SECURITY_POLICY.md` and reflected in `CHANGELOG.md`.
+- Validator enforcement rules related to security response must be versioned in `validator/rules/security/` and updated in trace-linked CI.
 
 > _Maintaining a robust security posture is critical to Cohesix’s mission of delivering a secure, trustworthy edge computing platform._

@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: MISSION_AND_ARCHITECTURE.md v1.1
 // Author: Lukas Bower
-// Date Modified: 2025-07-20
+// Date Modified: 2025-07-31
 
 # Mission and Architecture
 
@@ -17,6 +17,7 @@ Cohesix aims to deliver a secure, fast edge operating system with an integrated 
 - **Physics Core:** Rapier‑based `/sim/` for workers
 - **GPU Support:** `/srv/cuda` with graceful fallback if absent
 - **OSS Policy:** only Apache 2.0, MIT, or BSD components
+- **Trace Layer:** All syscalls, agent actions, and CLI invocations are recorded in `/log/trace/` and versioned for replay
 
 ## Implementation Overview
 - **Bootloader:** minimal seL4 loader with early telemetry
@@ -38,6 +39,7 @@ Cohesix delivers a formally verified foundation for tomorrow’s edge and wearab
 - **Edge‑First Performance:** Boot in under 200 ms with GPU offload latency below 5 ms.
 - **Modular Architecture:** 9P namespaces let services like `/sim/` and `/srv/cuda` be attached or replaced dynamically.
 - **Familiar Toolchain:** BusyBox and POSIX shims keep developer ramp‑up short.
+- **End-to-End Observability:** Every agent action and system event is traced and can be replayed during CI or simulation
 
 ## Phases & Milestones
 | Phase               | Deliverables                                   | Target Date |
@@ -58,3 +60,4 @@ Cohesix delivers a formally verified foundation for tomorrow’s edge and wearab
 - **Advertising & Retail:** Privacy‑preserving analytics at the edge.
 - **Energy & Mining:** Autonomous control with strict isolation.
 - **Defense & Military:** Verifiable platforms for mission‑critical deployments.
+- **Autonomy & Robotics:** Embedded control with physics feedback and deterministic execution

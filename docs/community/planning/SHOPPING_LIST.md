@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: SHOPPING_LIST.md v1.3
-// Date Modified: 2025-05-25
+// Date Modified: 2025-07-31
 // Author: Lukas Bower
 
 # Hardware & Cloud Shopping List
@@ -23,6 +23,7 @@ Cohesix development and CI leverage both on-prem edge hardware and AWS cloud res
 | AWS EC2 t3.medium        | t3.medium (2 vCPU, 4 GB RAM) | $0.0416/hr   | General x86 CI build & test runner                   |
 | AWS S3 Storage           | Standard Tier, 50 GB        | $1.15/mo     | Artifact storage for CI logs, images, `codex_logs/`   |
 | Amazon RDS (Optional)    | db.t3.micro (1 vCPU, 1 GB)  | $15/mo       | Central metadata DB for batch orchestration state    |
+| AWS EFS (Optional)       | Shared NFS mount, 10 GB         | $0.30/mo     | Shared validator trace snapshots across CI runners   |
 
 ## Rationale
 
@@ -31,3 +32,4 @@ Cohesix development and CI leverage both on-prem edge hardware and AWS cloud res
 - **ARM CI on Graviton:** Eliminates cross-compilation issues and accelerates CI for aarch64 targets.
 - **x86 CI on t3.medium:** Complements ARM builds with x86 coverage, ensuring multi-arch robustness.
 - **S3 & RDS:** Persistent storage and state management for CI artifacts, logs, and automated batch control data.
+- **EFS (Optional):** Enables multi-runner trace access for validator replay and CI snapshot syncing.

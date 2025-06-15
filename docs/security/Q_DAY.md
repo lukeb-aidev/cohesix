@@ -1,7 +1,7 @@
 // CLASSIFICATION: PRIVATE
 // Filename: Q_DAY.md v1.1
 // Author: Lukas Bower
-// Date Modified: 2025-06-15
+// Date Modified: 2025-07-31
 
 # Q-Day Preparation for Cohesix
 
@@ -47,11 +47,17 @@ All cryptographic modules must support algorithm agility. Keys, signatures, and 
 - Avoid long-lived encrypted blobs unless sealed with PQC.
 - Archive trace logs and telemetry with key expiration logic.
 
+### 2.5 · Trace and Snapshot Signing
+
+- All validator traces, simulation snapshots, and system logs must be signed using a hybrid or post-quantum scheme.
+- Signatures are stored alongside `.trace` or `.snapshot` files as `.sig`, and verified during replay or CI.
+
 ## 3 · Simulation and Testing
 
 - Add Q-Day failure simulation mode in SimulatorTest role
 - Run integrity revalidation with revoked legacy crypto
 - Benchmark PQC-ready boot and agent validation pipelines
+- Validate trace signature verification across replay, boot audit, and federation sync scenarios
 - Track NIST Post-Quantum Cryptography Standardization (FIPS 203–205), ETSI quantum-safe recommendations, and BSI TR-02102 guidelines; incorporate published vectors and validation criteria into Cohesix test harnesses as they become available.
 
 ## 4 · Timeline and Trigger
@@ -59,6 +65,7 @@ All cryptographic modules must support algorithm agility. Keys, signatures, and 
 - Begin simulation tests by 2026
 - Migrate key validation paths to hybrid/PQC by 2028
 - Freeze legacy crypto paths by 2029, pending industry alignment
+- Require validator trace signing by 2027 for all CI, simulation, and physical agent deployments
 
 ## 5 · Strategy Summary
 

@@ -68,7 +68,8 @@ Codex must auto-detect supported hardware and pass tests accordingly.
 ## 5 · Bulletproof Workflow Rules
 
 1. Single-Step Hydration  
-   Every file must be hydrated to `/mnt/data/cohesix_active/` in the *same execution frame* as creation. No staging, no deferred batches.
+   Every file must be hydrated to `/mnt/data/cohesix_active/` in the *same execution frame* as creation.  
+   Hydration and file creation must occur together — batching or deferred writes are not allowed.
 
 2. Atomic Write Only  
    Use temp-write + rename. Hydration is valid only if:
@@ -86,7 +87,7 @@ Codex must auto-detect supported hardware and pass tests accordingly.
    - `// CLASSIFICATION:`  
    - `// Filename vX.Y`  
    - `// Author: Lukas Bower`  
-   - `// Date Modified: 2025-06-15
+   - `// Date Modified: YYYY-MM-DD`
    - Registered in `METADATA.md`  
    - Entry added to `CHANGELOG.md`
 
@@ -162,7 +163,7 @@ Codex must auto-detect supported hardware and pass tests accordingly.
 | Fuzzy Requirements       | Rule #13: Clarify in METADATA.md + inline comments |
 | Incomplete Hydration     | Atomic write + size checks + watchdog recovery     |
 | Build Breakage on Arch   | CI matrix + fallback builds                        |
-| OSS License Violation    | SPDX headers + `LICENSES_AND_REUSE.md` audit                |
+| OSS License Violation    | SPDX headers + `LICENSES_AND_REUSE.md` audit       |
 | Faulty Stubs             | CI blocklist of all placeholder patterns           |
 | Memory Errors            | Rust for all unsafe or low-level logic             |
 | Clock Drift / Timeout    | Watchdog + tick-based trace validation             |

@@ -1,7 +1,7 @@
 // CLASSIFICATION: PRIVATE
 // Filename: THREAT_MODEL.md v1.1
 // Author: Lukas Bower
-// Date Modified: 2025-06-15
+// Date Modified: 2025-07-31
 
 # Threat Model for Cohesix
 
@@ -50,12 +50,14 @@ This file consolidates the previous `docs/security/THREAT_MODEL.md` and `docs/pr
 | GPU side channel    | - Limit precision; introduce noise; isolate workloads             |
 | Dependency compromise| - Enforce SCA scanning; pin to known-good hashes in DEPENDENCIES.md |
 | Instruction injection| - Lint AGENTS.md; require well-formed entries; code review      |
+| Trace and replay tampering | - Sign all trace logs and snapshots; verify in CI and replay using validator  |
 
 ## 5. Risk Assessment
 
 - **High**: Bootloader tampering, Supply-chain compromise
 - **Medium**: IR manipulation, 9P spoofing, Agent injection
 - **Low**: GPU side channels (mitigations reduce feasibility)
+- **Medium**: Trace tampering (mitigated via signature and replay enforcement)
 
 ## 6. Review & Updates
 

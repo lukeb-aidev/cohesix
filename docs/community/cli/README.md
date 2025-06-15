@@ -21,7 +21,19 @@ Each help page contains usage examples and command summaries.
 
 `AGENTS_AND_CLI.md` defines Codex agent schemas and links them to CLI commands. The high-level guide in [cli.md](cli.md) explains common patterns, such as `cohcli agent start` or `cohrun physics_demo`.
 
+
 ## Roles and CLI Tools
 
 Role assignments described in [../governance/ROLE_POLICY.md](../governance/ROLE_POLICY.md) determine which CLI actions are permitted. Queens enforce these policies when commands are issued over the network or via local agents.
+
+## CLI Matrix by Role
+
+| Role             | Primary CLI Tools                   |
+|------------------|--------------------------------------|
+| QueenPrimary     | cohcli, cohrun, cohtrace             |
+| DroneWorker      | cohrun, cohtrace, cohcc              |
+| KioskInteractive | cohcap, cohrun                       |
+| SimulatorTest    | cohrun, cohtrace, cohcc              |
+
+For a full list of role-bound commands, see each individual CLI_HELP_*.md file.
 

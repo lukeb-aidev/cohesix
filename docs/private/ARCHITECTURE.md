@@ -1,7 +1,7 @@
 // CLASSIFICATION: PRIVATE
 // Filename: ARCHITECTURE.md v0.3
 // Author: Lukas Bower
-// Date Modified: 2025-06-15
+// Date Modified: 2025-07-31
 
 # Cohesix System Architecture · v0.3 (Private)
 
@@ -88,6 +88,7 @@ Every OS object—device, shader, physics body—is surfaced as a 9P file.
   * `/sim/world` — binary scene snapshot (9P read).
   * `/sim/step`  — write tick request (blocking).
 * Deterministic across x86_64 / aarch64 by forcing `f32` maths & Rapier’s `dim3` feature flags.
+* Trace logs for each simulation tick are written to `/log/trace/rapier_<tick>.log` for validator replay and CI snapshot comparison.
 
 ---
 
@@ -142,6 +143,7 @@ Every OS object—device, shader, physics body—is surfaced as a 9P file.
 * seL4 capabilities ↔ 9P attach tokens (CohCap) are 1‑to‑1 mapped.
 * Runtime Validator enforces policy rules (see `ROLE_POLICY.md`) with hot‑reload.
 * Supply‑chain: GitHub Actions uploads SBOM to dependency tracker; `cargo deny` blocks unknown licences.
+* All syscall, agent, and CLI activity is traced to `/log/trace/` and can be diffed using `cohtrace`.
 
 ---
 

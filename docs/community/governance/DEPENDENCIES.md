@@ -1,9 +1,11 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: DEPENDENCIES.md v0.5
 // Author: Lukas Bower
-// Date Modified: 2025-07-06
+// Date Modified: 2025-06-15
 
 # System Dependencies
+
+> For SPDX-style licenses and consolidation rationale, see: LICENSES_AND_REUSE.md
 
 | Dependency            | Version      | Source / License                       | Notes                                               |
 |-----------------------|--------------|----------------------------------------|-----------------------------------------------------|
@@ -12,7 +14,7 @@
 | BusyBox               | **1.36.1**   | <https://busybox.net> (GPL-2)          | Core UNIX tools + shell for lightweight utilities   |
 | musl libc             | 1.2.3        | <https://musl.libc.org> (MIT)          | POSIX-compat layer for Plan 9 ports & BusyBox       |
 | Go                    | **1.22**     | <https://go.dev> (BSD-style)           | CSP-based 9P services & auxiliary tooling           |
-| Python                | 3.10+        | <https://python.org> (PSF)             | DSL, testing harnesses, runtime validators. Ensemble agents and tests now respect TMPDIR/COHESIX_ENS_TMP for writable paths |
+| Python                | 3.10+        | <https://python.org> (PSF)             | DSL, testing harnesses, runtime validators. Ensemble agents and tests now respect TMPDIR/COHESIX_ENS_TMP for writable paths Snapshot and validator traces now explicitly support TMPDIR and override guards. |
 | C++17 & CUDA Toolkit  | 11.8 / 11.8  | <https://developer.nvidia.com> (NVIDIA EULA) | Torch/TensorRT GPU deploy; Rapier physics in Rust |
 
 # Rust Crate Dependencies
@@ -48,6 +50,6 @@
 | BusyBox (CLI)   | 1.36.1  | GPL-2                       | Coreutils and shell support       |
 | curl            | 8.8.0   | curl License (MIT)          | HTTP fetches in build scripts     |
 | zip             | 3.0     | Info-ZIP License            | Artefact packaging (deploy-ci)    |
-| QEMU             | 8.1.2   | <https://www.qemu.org> (GPL-2)       | UEFI boot test, validates output from build pipelines     |
+| QEMU             | 8.1.2   | <https://www.qemu.org> (GPL-2)       | UEFI boot test; used in CI to validate firmware and kernel traces     |
 | OpenSSL / libssl | 3.3       | <https://www.openssl.org> (Apache‑2.0/SSLeay) | Hash‑parity tests in boot measurement |
 | clang / LLVM    | 17.0    | Apache-2.0 / UIUC           | Compiling C shims for seL4        |

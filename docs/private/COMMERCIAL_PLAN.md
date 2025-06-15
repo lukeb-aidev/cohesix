@@ -1,6 +1,6 @@
 // CLASSIFICATION: PRIVATE
 // Filename: COMMERCIAL_PLAN.md v1.5
-// Date Modified: 2025-06-08
+// Date Modified: 2025-07-31
 // Author: Lukas Bower
 
 # Cohesix Commercial Plan
@@ -42,6 +42,10 @@ Cohesix delivers a formally verified, micro‑kernel–based edge compute platfo
 | Q1 2026 | General availability and channel onboarding      |
 | Q2 2026 | Marketplace listings on AWS and Azure            |
 | Q3 2026 | Expansion into consumer AR/VR OEM engagements    |
+
+Additional channel acceleration will include:
+- Cohesix Codex plugin listing in VS Code Marketplace (planned Q4 2025)
+- Early-stage outbound sales via EY alliance team to select APAC OEMs
 
 ## 6. Financial Projections (AUD)
 | Year                | 2025 (H2) | 2026       | 2027       | 2028       |
@@ -88,12 +92,14 @@ Cohesix regularly publishes upstream performance comparisons against Linux and F
 | Adoption inertia vs. entrenched Linux   | Highlight formal security proofs and early wins |
 | OSS license compliance                  | Enforce Apache 2.0/MIT/BSD via automated SBOM |
 | Toolchain fragmentation                 | Prioritize Coh‑CLI SDK with plugin model  |
+| Talent retention in competitive AI market | Equity-linked incentives and university co-research programs |
 
 ## 11. Metrics & Traction Plan
 - **Time‑to‑integration** – target < 4 weeks for new OEMs
 - **Uptime SLA** – maintain 99.9% device availability
 - **Developer NPS** – aim for a score above 40
 - **Monthly active deployments** – report growth rate quarterly
+- **Trace replay fidelity** – ≥ 99.5% agreement in CI trace validator
 
 ## 12. Appendix
 - **IP Strategy** – kernel extensions dual‑licensed; userland and SDK permissive OSS

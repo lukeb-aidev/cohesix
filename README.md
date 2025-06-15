@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: README.md v0.12
 // Author: Lukas Bower
-// Date Modified: 2025-07-23
+// Date Modified: 2025-06-15
 
 
 # Cohesix
@@ -25,6 +25,8 @@ Cohesix combines a micro‑kernel architecture (seL4‑derived) with Plan 9‑
 - **Modular boot & sandboxing** with trace validation
 - **Joystick input** via SDL2 for interactive demos
 
+  - **Trace-first validation** with CI-enforced snapshots and syscall replay
+
 ---
 
 ## 📚 Documentation
@@ -37,6 +39,12 @@ Community documents live in `docs/community/`, while private strategy files are 
 | `docs/community/INSTRUCTION_BLOCK.md` | Canonical workflow rules |
 | `PROJECT_MANIFEST.md` | Consolidated changelog, metadata, and OSS dependencies |
 | `docs/private/COMMERCIAL_PLAN.md` | Market & investor messaging (restricted) |
+| `docs/security/THREAT_MODEL.md` | Security assumptions and threat surfaces |
+| `docs/security/SECURITY_POLICY.md` | Defense strategy, mitigations, secure boot |
+
+| `docs/community/governance/LICENSES_AND_REUSE.md` | SPDX matrix and OSS reuse policy |
+| `docs/community/governance/ROLE_POLICY.md` | Role manifest and execution policy |
+| `docs/community/cli/README.md` | CLI and agent command index |
 
 ---
 
@@ -63,10 +71,12 @@ To regenerate compiler/OS stubs:
 ./hydrate_cohcc_batch5.sh
 ```
 
+All major commands emit validator-compatible logs and snapshots to `./log/trace/` and `./history/snapshots/`.
+
 Or explore runtime scenarios with the Codex CLI tools:
 
 ``` 
-cohbuild, cohrun, cohtrace, cohcap
+cohbuild, cohrun, cohtrace, cohcap — see cli/README.md for usage by role
 ```
 
 ### Demo Scaffolds
@@ -102,6 +112,11 @@ cargo test --workspace
 cd go && go test ./...
 # or
 GOWORK=$(pwd)/go/go.work go test ./go/...
+```
+
+Run `cohtrace diff` to compare validator snapshots between runs:
+```bash
+./target/debug/cohtrace diff --from last --to previous
 ```
 
 ## Boot Testing

@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: TEST_GUIDE.md v1.4
-// Date Modified: 2025-07-12
+// Date Modified: 2025-07-31
 // Author: Lukas Bower
 
 # Testing Guide
@@ -98,6 +98,7 @@ A rigorous, multi‐tiered testing strategy ensures each component of Cohesix is
 - Smoke tests for `cohcli` commands (`codex run`, `hydrate_docs`).  
 - Validate log output in `codex_logs/` and correct filename conventions.  
 - Guard QEMU-based boot scripts with preflight check for qemu-system-x86_64; fail gracefully if missing.
+- Ensure `validate_metadata_sync.py` passes after hydration and Codex runs; include it as a required GitHub Action step.
 
 ### 6.3 Distributed & Remote Build
 - Simulate remote build via SSH; verify artifact transfer and exit status.
@@ -113,7 +114,7 @@ A rigorous, multi‐tiered testing strategy ensures each component of Cohesix is
 ## 7. Additional Testing Practices
 
 - **Auditing:** All new tests must be reviewed by at least one peer; document in PR.  
-- **Coverage:** Enforce 80%+ coverage across Rust and Go codebases.  
+- **Coverage:** Enforce 80%+ coverage across Rust and Go codebases, including CLI, validator, and driver subsystems.  
 - **Test Data Management:** Version‐control representative IR modules, fixture scripts, and sandbox images.  
 - **CI Enforcement:** GitHub Actions must run all tests on PR; failures block merges.  
 - Temporary directories used by agents and boot scripts must be cleaned up after test runs. Use TMPDIR or custom env vars.
@@ -136,3 +137,4 @@ To ensure Cohesix meets modern security benchmarks, we incorporate OWASP standar
 - **Secure Coding Practices:** Enforce secure patterns (input sanitization, least privilege, proper error handling) as part of code reviews.
 - **Security Logging:** Ensure all security events (authentication failures, permission denials) are logged and audited via 9P logs.  
 - Enforce writable path validation in agent sandboxes to prevent privilege escalation or unintended FS writes.
+- Codex-generated stubs must be immediately replaced or removed before commit. CI fails if placeholder patterns are detected.

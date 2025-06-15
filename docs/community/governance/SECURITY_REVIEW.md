@@ -35,7 +35,7 @@ alignment with seL4 principles and adherence to OWASP development guidelines.
 
 1. Schedule quarterly seL4 proof refreshes after major patch sets.
 2. Expand fuzz testing for 9P protocol handlers.
-3. Document incident response playbooks in `SECURITY_POLICY.md`.
+3. Document and regularly test incident response playbooks in `SECURITY_POLICY.md`.
 
 ## July 2025 Updates
 
@@ -43,5 +43,13 @@ alignment with seL4 principles and adherence to OWASP development guidelines.
   blocked actions to `/log/sandbox.log` with PID and `cohrole`.
 - FFI entry points loaded via `libloading` are wrapped by the validator and
   unknown symbols are rejected.
+- All validator rules loaded via FFI now require rule metadata to enforce versioning and temporal boundaries (see `VALIDATION_AND_TESTING.md`).
 
 
+
+
+## Next Review
+
+- Target Date: 2025-10-01
+- Lead Reviewer: Security Engineering Lead (TBD)
+- Scope: Validator rule integrity, 9P isolation tests, secure FFI behavior

@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: 9P_README.md v0.1
-// Date Modified: 2025-07-13
+// Date Modified: 2025-07-31
 // Author: Lukas Bower
 
 # Cohesix 9P Server Overview
@@ -27,3 +27,12 @@ is validated before writes occur. Reads are allowed everywhere by default.
 The server is intentionally minimal. Extended attributes and authentication are
 not implemented. Write attempts to restricted paths return permission errors and
 are logged.
+
+
+## Security and Trace Integration
+
+All write operations are subject to capability enforcement via `/etc/cohcap.json`. Attempts to access restricted namespaces such as `/srv` or `/history` without explicit grants are denied and logged.
+
+All `walk`, `read`, and `write` calls are traced via `cohtrace` and appear in trace replays for validator inspection.
+
+Future extensions may add TLS-wrapped transport and role-scoped namespace enforcement as defined in `SECURITY_POLICY.md`.

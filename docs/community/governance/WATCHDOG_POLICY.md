@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: WATCHDOG_POLICY.md v1.4
-// Date Modified: 2025-06-05
+// Date Modified: 2025-07-31
 // Author: Lukas Bower
 
 # Watchdog Policy
@@ -17,7 +17,7 @@ This document defines the 15‑minute watchdog policy for the Cohesix ChatGPT hy
 
 ## Heartbeat Requirements
 
-1. **Interval:** Emit a heartbeat at **no more than 5 minutes** apart (i.e., at least once every 5 minutes).  
+1. **Interval:** Emit a heartbeat at least once every 5 minutes. Intervals greater than 300 seconds will trigger a warning and potential restart.  
 2. **Payload:** Include a timestamp, batch ID, and current step status.  
 3. **Verification:** The watchdog process verifies timestamp freshness; if the latest heartbeat is older than 15 minutes, it triggers recovery.
 
@@ -26,7 +26,7 @@ This document defines the 15‑minute watchdog policy for the Cohesix ChatGPT hy
 Upon heartbeat timeout (15 minutes without a valid ping):
 
 1. **Container Restart:** Automatically restart the hydration container or ChatGPT agent process to clear any hung state.  
-2. **State Integrity Check:** On startup, re-run `validate_metadata_sync.py` (see `README_Codex.md`) and confirm that all expected files from the last checkpoint are present and valid.
+2. **State Integrity Check:** On startup, re-run `validate_metadata_sync.py` and cross-check against `METADATA.md` and `CHANGELOG.md`. Confirm that all checkpointed files exist, are complete, and version-aligned.
 3. **Resume Batches:** Continue from the last known successful step rather than restarting the entire pipeline.  
 4. **Retry Limits:** If recovery has been attempted **3 times** without progress, escalate to manual intervention.
 
@@ -49,7 +49,7 @@ Upon heartbeat timeout (15 minutes without a valid ping):
 
 - All heartbeat events (success/failure) must be appended to `watchdog.log` with ISO8601 timestamps.  
 - Recovery actions must be logged with before/after snapshots of file tree and metadata.  
-- Retain logs for **30 days** for post‑mortem analysis.
+- Retain logs for **90 days** to support post‑mortem and compliance review.
 
 ## Configuration & Deployment
 
@@ -59,6 +59,7 @@ Upon heartbeat timeout (15 minutes without a valid ping):
 - **Docker Healthcheck:** Configure the hydration container’s `HEALTHCHECK` to call `/usr/local/bin/heartbeat-check.sh`.
 - **Heartbeat Helper:** Use `scripts/send-heartbeat.sh` to emit periodic pulses from long-running tasks.
 - **CI Integration:** Incorporate watchdog checks into GitHub Actions using a periodic workflow (`schedule: cron('*/15 * * * *')`).
+  Watchdog checks must run independently of success/failure states to ensure observability even during broken builds.
 
 ---
 

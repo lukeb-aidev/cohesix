@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: NETWORKING.md v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-07-13
+// Date Modified: 2025-07-31
 
 # Cohesix Networking
 
@@ -23,3 +23,10 @@ also forwarded to the runtime validator on error.
 ## HTTP Fallback
 - POSTs to a configured URL if TCP bind or connection fails
 - Used to maintain minimal connectivity during network disruptions
+
+## Security and Trace Integration
+
+- All 9P messages, discovery packets, and fallback POSTs are logged to `/log/net_trace.log`
+- TLS is planned for 9P-over-TCP transport in future releases
+- Validator intercepts malformed or unexpected network events and raises alerts
+- Broadcast suppression and packet filtering rules are enforced by `/etc/cohnet.conf`

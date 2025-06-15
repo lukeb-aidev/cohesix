@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: AGENTS.md v2.2
 // Author: Lukas Bower
-// Date Modified: 2025-07-22
+// Date Modified: 2025-06-15
 
 # Codex Agent Tasks
 This file contains Codex-executable tasks for the Cohesix system.
@@ -39,6 +39,12 @@ Input: go/orchestrator/http/server.go, docs/community/gui_orchestrator.md
 Output: log/gui_check.md
 Checks: All required middleware are registered in the correct order. Dev mode bypasses auth logic.
 
+### Task Title: Validate Trace Snapshot Emission
+Description: Confirm that CLI and runtime operations emit trace snapshots to the expected location under COHESIX_TRACE_TMP or TMPDIR.
+Input: src/, cli/, tools/
+Output: log/trace_snapshot_check.md
+Checks: Snapshot files emitted. Trace logs present. Paths respect environment constraints.
+
 ## Related Documents
 Include references to supporting files to help Codex agents resolve context. Minimum recommended:
 docs/community/INSTRUCTION_BLOCK.md
@@ -54,3 +60,4 @@ Codex executes in a restricted environment. All agent tasks must:
 - Avoid network fetches unless explicitly permitted
 - Use TMPDIR-respecting writable paths
 - Avoid absolute paths or root-only directories
+- Avoid spawning background threads or processes that persist after task completion

@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: VALIDATION_AND_TESTING.md v1.5
 // Author: Lukas Bower
-// Date Modified: 2025-07-23
+// Date Modified: 2025-07-31
 
 # Validation and Testing
 
@@ -15,9 +15,9 @@ Cohesix uses layered tests and continuous validation to guarantee reliability ac
 - **Multi-Arch CI:** run `./test_all_arch.sh` for aarch64 and x86_64
 - **Auto-run script:** `scripts/autorun_tests.py` watches for changes and executes tests automatically.
 - **Replay Harness:** re-run traces from `/history/` and verify outcomes
-  - `Ensemble Agent Tests:` create temp directories using `COHESIX_ENS_TMP` or system temp paths; validate cleanup and path safety.
+  - `Ensemble Agent Tests:` use `COHESIX_ENS_TMP` or `$TMPDIR` to isolate environments. Validate cleanup, trace replay integrity, and temp path safety.
 
-## CI Hooks
+-## CI Hooks
 - `scripts/validate_metadata_sync.py` ensures document headers match `METADATA.md`
 - `tools/validate_batch.sh` checks file structure after each checkpoint
 - `scripts/collect_boot_logs.sh` uploads logs from Jetson Orin Nano and Raspberry Pi 5
@@ -29,6 +29,16 @@ Cohesix uses layered tests and continuous validation to guarantee reliability ac
   - If QEMU is missing, the boot test logs a warning and exits with status 0 so CI marks the step as skipped.
 
 Adhering to these practices keeps Cohesix robust and ready for demo-critical deployments.
+
+## Validator Metadata Enforcement
+
+As of July 2025, all validator rules must include:
+
+- `version` field
+- `activation_window` (start and end ticks or timestamp bounds)
+- `source` identifier (e.g., CLI, FFI, embedded)
+
+The validator will reject any rule missing metadata and log violations to `/log/validation_rules.log`. These checks are required for CI pass.
 
 ## Alpha Validation Issues
 - `cohcc` binary missing from build artifacts; CLI docs reference a non-existent executable.

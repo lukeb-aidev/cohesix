@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: COH_CC_DEVELOPER_GUIDE.md v1.0
 // Author: Lukas Bower
-// Date Modified: 2025-06-15
+// Date Modified: 2025-07-31
 
 # Coh_CC Developer Guide
 
@@ -36,6 +36,8 @@ Coh_CC enables development for all Cohesix roles and execution layers:
 - **GlassesAgent**: wearable interfaces, HUDs
 - **SimulatorTest**: scenario execution, trace validation
 - **DroneWorker / SensorRelay**: streaming, telemetry
+
+See `ROLE_POLICY.md` for full role descriptions and expected execution behaviors.
 
 ### Features Supported by Coh_CC:
 - Sandboxed syscall wrappers
@@ -100,6 +102,8 @@ Coh_CC ensures:
 - Capability-safe linking
 - Automatic validator registration for agents
 
+- Snapshot emission and syscall trace logging for CI replay
+
 ---
 
 ## Contributing and Extending
@@ -119,6 +123,8 @@ If you wish to:
 - Review example agents in `examples/`
 - Validate using `cohtrace` and `cohrun`
 - Join the dev channel: `#cohesix-dev` on Matrix
+
+- Review validator requirements in `VALIDATION_AND_TESTING.md`
 
 ---
 

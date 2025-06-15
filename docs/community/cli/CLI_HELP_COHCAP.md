@@ -1,15 +1,18 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CLI_HELP_COHCAP.md v0.1
 // Author: Lukas Bower
-// Date Modified: 2025-07-12
+// Date Modified: 2025-06-15
+
 
 # cohcap
+*(Applies to: KioskInteractive, DroneWorker, SimulatorTest)*
 
 Placeholder capability management CLI used for demos.
 
 ```bash
 Usage: cohcap <command> [options]
 ```
+See CLI README.md for full role-by-command mapping.
 
 ## Commands
 - `list` – show available capabilities

@@ -13,7 +13,7 @@ All Cohesix code and dependencies must be licensed under **Apache-2.0**, **MIT**
 
 ## 2 · Reuse Policy
 
-Only the licenses above are permitted. GPL or LGPL code is prohibited unless fully isolated. Every dependency is recorded in this document and audited during CI runs. Contributions must retain upstream copyright notices and provide public access to source code when required.
+Only the licenses above are permitted. GPL or LGPL code is prohibited unless fully isolated. Every dependency is recorded in this document and audited during CI runs. Contributions must retain upstream copyright notices and provide public access to source code when required. CI checks will reject any non-approved license or missing SPDX header.
 
 ## 3 · Open Source Dependencies
 
@@ -46,10 +46,11 @@ The table below lists current third-party packages used by Cohesix.
 |------|---------|------|-------------|------|
 | sha2 | 0.10 | MIT OR Apache-2.0 | LICENSES/sha2-0.10.txt |  |
 | anyhow | 1.0 | MIT OR Apache-2.0 | LICENSES/anyhow-1.0.txt |  |
+| tokio | 1 | MIT | N/A |  |
 
 ## 5 · Audit References
 
 - `sbom_spdx_2.3.json` – SPDX formatted software bill of materials
 - `sbom_cyclonedx_1.5.json` – CycloneDX formatted SBOM
 - Continuous license scanning via `cargo deny` and GitHub dependency graph
-
+- SPDX documents and license scan output are included in every milestone archive

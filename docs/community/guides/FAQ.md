@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY  
 // Filename: FAQ.md v1.0
 // Author: Lukas Bower  
-// Date Modified: 2025-06-15
+// Date Modified: 2025-07-31
 
 # ⚠️ Cohesix: Skeptic's FAQ  
 _“If it’s so great, prove it.”_
@@ -23,6 +23,7 @@ It’s built on a **Beehive paradigm**:
 - **Queens** provide secure orchestration
 - **Workers** guided by queen, can act autonomously at the edge
 - **Sensors, Kiosks, and Drones** each serve defined roles, preconfigured by a role manifest
+- **Trace-first**: Every syscall, network packet, and physical action is recorded and replayable
 
 Each role in the manifest — from `QueenPrimary` to `SensorRelay` — represents a real-world deployment need:
 - Cloud-scale AI tasking
@@ -89,7 +90,7 @@ We don’t overhype — we ship.
 Yes. Cohesix includes:
 - `/srv/cuda` interface for on-board NVIDIA Jetson-class acceleration.
 - `/sim/` interface backed by Rapier physics engine for real-world grounding.
-- Automatic fallback and logging if hardware is unavailable.
+- Graceful fallback with logging if CUDA or Rapier is unavailable. All failures are trace-captured.
 
 This means **edge agents can reason about space, time, force — and offload heavy math to GPU** where available.
 
@@ -135,4 +136,4 @@ It’s early.
 Some userland features are still light. GUI orchestration is primitive. CLI tools are improving but not rich. Community is small (but growing).  
 However, **architecture, security model, and role-based isolation are rock-solid**.
 
-You’re seeing the foundation of something built to last — not a hype balloon.
+You’re seeing the foundation of something built to last — not a hype balloon. But unlike most alpha projects, this one traces every action, validates it, and fails loudly if invariants are broken.
