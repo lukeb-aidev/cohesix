@@ -17,18 +17,18 @@
 #include <sys/stat.h>
 #include "boot_trampoline.h"
 
-#define BOOT_ROLE_BUF       32
-#define BOOT_WATCHDOG_SECS  15
-#define PATH_COHROLE        "/srv/cohrole"
-#define PATH_BOOT_LOG       "/log/bootloader_init.log"
-#define PATH_BOOT_ERROR     "/state/boot_error"
+#define COH_BOOT_ROLE_BUF       32
+#define COH_BOOT_WATCHDOG_SECS  15
+#define COH_PATH_COHROLE        "/srv/cohrole"
+#define COH_PATH_BOOT_LOG       "/log/bootloader_init.log"
+#define COH_PATH_BOOT_ERROR     "/state/boot_error"
 
 extern int boot_trampoline_crc_ok;
 
 static void watchdog_handler(int sig)
 {
     (void)sig;
-    FILE *f = fopen(PATH_BOOT_ERROR, "a");
+    FILE *f = fopen(COH_PATH_BOOT_ERROR, "a");
     if (f) {
         fprintf(f, "%ld watchdog timeout\n", (long)time(NULL));
         fclose(f);
@@ -38,13 +38,13 @@ static void watchdog_handler(int sig)
 
 static const char *detect_role(void) {
     const char *role = getenv("cohrole");
-    static char buf[BOOT_ROLE_BUF];
+    static char buf[COH_BOOT_ROLE_BUF];
     FILE *f = NULL;
 
     if (role && *role)
         return role;
 
-    f = fopen(PATH_COHROLE, "r");
+    f = fopen(COH_PATH_COHROLE, "r");
     if (f) {
         if (fgets(buf, sizeof(buf), f)) {
             buf[strcspn(buf, "\r\n")] = '\0';
@@ -83,7 +83,7 @@ static void emit_console(const char *msg)
 static void boot_success(void)
 {
     emit_console("BOOT_OK");
-    int fd = open(BOOT_SUCCESS_PATH, O_WRONLY | O_CREAT, 0644);
+    int fd = open(COH_BOOT_SUCCESS_PATH, O_WRONLY | O_CREAT, 0644);
     if (fd >= 0) {
         write(fd, "ok\n", 3);
         close(fd);
@@ -118,18 +118,18 @@ static const char *script_for_role(const char *role) {
  */
 int main(void) {
     signal(SIGALRM, watchdog_handler);
-    alarm(BOOT_WATCHDOG_SECS);
+    alarm(COH_BOOT_WATCHDOG_SECS);
 
     const char *role = detect_role();
     FILE *f;
-    char srv_path[] = PATH_COHROLE;
+    char srv_path[] = COH_PATH_COHROLE;
     f = fopen(srv_path, "w");
     if (f) {
         fprintf(f, "%s", role);
         fclose(f);
     }
 
-    f = fopen(PATH_BOOT_LOG, "a");
+    f = fopen(COH_PATH_BOOT_LOG, "a");
     if (f) {
         fprintf(f, "%ld, %s, %d\n", (long)time(NULL), role,
                 boot_trampoline_crc_ok);

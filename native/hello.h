@@ -3,9 +3,9 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-22
 // SPDX-License-Identifier: MIT
-#ifndef COHESIX_HELLO_H
-#define COHESIX_HELLO_H
+#ifndef COH_HELLO_H
+#define COH_HELLO_H
 
 void hello();
 
-#endif // COHESIX_HELLO_H
+#endif // COH_HELLO_H
