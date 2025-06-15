@@ -4,8 +4,9 @@
 // Date Modified: 2025-07-22
 
 use once_cell::sync::Lazy;
-use std::path::{PathBuf};
+use std::path::PathBuf;
 use std::sync::RwLock;
+use thiserror::Error;
 
 /// Runtime configurable validator paths.
 #[derive(Clone)]
@@ -30,13 +31,26 @@ impl Default for ValidatorConfig {
 
 static CONFIG: Lazy<RwLock<ValidatorConfig>> = Lazy::new(|| RwLock::new(ValidatorConfig::default()));
 
+/// Errors produced by validator config operations.
+#[derive(Debug, Error)]
+pub enum ConfigError {
+    #[error("validator config lock poisoned")]
+    LockPoisoned,
+}
+
 /// Replace the global validator configuration.
-pub fn set_config(cfg: ValidatorConfig) {
-    let mut guard = CONFIG.write().expect("config lock");
+pub fn set_config(cfg: ValidatorConfig) -> Result<(), ConfigError> {
+    let mut guard = CONFIG
+        .write()
+        .map_err(|_| ConfigError::LockPoisoned)?;
     *guard = cfg;
+    Ok(())
 }
 
 /// Get a clone of the current configuration.
-pub fn get_config() -> ValidatorConfig {
-    CONFIG.read().expect("config lock").clone()
+pub fn get_config() -> Result<ValidatorConfig, ConfigError> {
+    CONFIG
+        .read()
+        .map_err(|_| ConfigError::LockPoisoned)
+        .map(|g| g.clone())
 }

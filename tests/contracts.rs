@@ -41,9 +41,9 @@ fn service_registration_contract() {
     }
     fs::create_dir_all("/srv").unwrap();
     fs::write("/srv/cohrole", "DroneWorker").unwrap();
-    ServiceRegistry::reset();
-    ServiceRegistry::register_service("svc", "/srv/svc");
-    assert!(ServiceRegistry::lookup("svc").is_some());
+    ServiceRegistry::reset().unwrap();
+    ServiceRegistry::register_service("svc", "/srv/svc").unwrap();
+    assert!(ServiceRegistry::lookup("svc").unwrap().is_some());
 }
 
 #[test]

@@ -26,8 +26,10 @@ impl WorkerHotplug {
         }
         ServiceMeshRegistry::register(node_id, "bootns", "/srv/bootns", "QueenPrimary", 60);
         let _ = ServiceMeshRegistry::mount_remote_service(node_id, "bootns");
-        for svc in ServiceRegistry::list_services() {
-            ServiceMeshRegistry::register(node_id, &svc, &format!("/srv/{svc}"), "DroneWorker", 30);
+        if let Ok(list) = ServiceRegistry::list_services() {
+            for svc in list {
+                ServiceMeshRegistry::register(node_id, &svc, &format!("/srv/{svc}"), "DroneWorker", 30);
+            }
         }
     }
 
@@ -35,7 +37,7 @@ impl WorkerHotplug {
     pub fn retire(node_id: &str) {
         for entry in ServiceMeshRegistry::list() {
             if entry.node == node_id {
-                ServiceRegistry::unregister_service(&entry.name);
+                let _ = ServiceRegistry::unregister_service(&entry.name);
                 ServiceMeshRegistry::unregister(&entry.node, &entry.name);
             }
         }

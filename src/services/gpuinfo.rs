@@ -26,7 +26,7 @@ impl Service for GpuInfoService {
             .and_then(|o| String::from_utf8(o.stdout).ok())
             .unwrap_or_else(|| "None".into());
         std::fs::write("/srv/gpuinfo", info.trim()).ok();
-        ServiceRegistry::register_service("gpuinfo", "/srv/gpuinfo");
+        let _ = ServiceRegistry::register_service("gpuinfo", "/srv/gpuinfo");
         self.initialized = true;
         println!("[gpuinfo] initialized");
     }
