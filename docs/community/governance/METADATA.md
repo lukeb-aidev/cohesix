@@ -21,7 +21,7 @@
 | README.md                  | v0.12   | 2025-07-28    | COMMUNITY        |            |              |
 | README_Codex.md            | v1.4    | 2025-06-16    | COMMUNITY      |            |              |
 | REMOTE_ACCESS.md           | v1.0    | 2025-05-24    | COMMUNITY      |            |              |
-| ROLE_MANIFEST.md           | v1.3    | 2025-07-12    | COMMUNITY      |            |              |
+| ROLE_MANIFEST.md           | v1.4    | 2025-07-31    | COMMUNITY      |            |              |
 | NETWORKING.md              | v0.2    | 2025-07-13    | COMMUNITY      |     |              |
 | SHOPPING_LIST.md           | v1.3    | 2025-05-25    | COMMUNITY      |            |              |
 | STATUS_UPDATE_GUIDE.md     | v1.3    | 2025-05-25    | COMMUNITY      |            |              |
@@ -105,7 +105,7 @@
 | README_NATIVE.md | v0.1 | 2025-07-22 | COMMUNITY | | |
 
 | src/bootloader/main.c | v0.2 | 2025-07-22 | COMMUNITY | | |
-| c/sel4/bootloader.c | v0.5 | 2025-07-23 | COMMUNITY | | |
+| c/sel4/bootloader.c | v0.6 | 2025-07-31 | COMMUNITY | | |
 | bootloader.lds | v0.1 | 2025-07-22 | COMMUNITY | | |
 | CohesixBoot.inf | v0.1 | 2025-07-22 | COMMUNITY | | |
 | linker.ld | v0.1 | 2025-07-22 | COMMUNITY | | |
@@ -125,7 +125,7 @@
 | docs/community/archive/examples_README.md | v0.2 | 2025-07-23 | COMMUNITY | | |
 | cohesix_fetch_build.sh | v0.2 | 2025-06-14 | COMMUNITY | | |
 | CONTRIBUTING.md | v1.1 | 2025-07-23 | COMMUNITY | | |
-| config/secure9p.toml | v0.2 | 2025-07-26 | COMMUNITY | | |
+| config/secure9p.toml | v0.3 | 2025-07-31 | COMMUNITY | | |
 | src/secure9p/mod.rs | v0.2 | 2025-07-25 | COMMUNITY | | |
 | src/secure9p/auth_handler.rs | v0.4 | 2025-07-31 | COMMUNITY | | |
 | src/secure9p/cap_fid.rs | v0.2 | 2025-07-25 | COMMUNITY | | |
@@ -156,3 +156,5 @@
 | Cargo.toml | v0.4 | 2025-07-31 | COMMUNITY | | |
 | cohesix-9p/Cargo.toml | v0.1 | 2025-07-28 | COMMUNITY | | |
 | justfile | v0.1 | 2025-07-24 | COMMUNITY | | |
+| src/roles/mod.rs | v0.1 | 2025-07-31 | COMMUNITY | | |
+| src/roles/interactive_aibooth.rs | v0.1 | 2025-07-31 | COMMUNITY | | |
