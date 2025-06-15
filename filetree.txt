@@ -111,6 +111,8 @@ src/init/mod.rs
 src/init/queen.rs
 src/init/sensor.rs
 src/init/worker.rs
+src/roles/mod.rs
+src/roles/interactive_aibooth.rs
 src/ir/block.rs
 src/ir/context.rs
 src/ir/function.rs

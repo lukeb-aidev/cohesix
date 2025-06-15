@@ -28,6 +28,7 @@ pub enum Syscall {
 pub enum Role {
     QueenPrimary,
     DroneWorker,
+    InteractiveAIBooth,
     KioskInteractive,
     GlassesAgent,
     SensorRelay,
@@ -48,6 +49,7 @@ impl RoleManifest {
         match role_str.trim() {
             "QueenPrimary" => Role::QueenPrimary,
             "DroneWorker" => Role::DroneWorker,
+            "InteractiveAIBooth" => Role::InteractiveAIBooth,
             "KioskInteractive" => Role::KioskInteractive,
             "GlassesAgent" => Role::GlassesAgent,
             "SensorRelay" => Role::SensorRelay,
