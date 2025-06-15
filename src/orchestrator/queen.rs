@@ -86,11 +86,11 @@ impl Queen {
     pub fn check_timeouts(&mut self) {
         let now = timestamp();
         for (id, info) in self.workers.iter_mut() {
-            if now.saturating_sub(info.last_seen) > self.timeout.as_secs() {
-                if !info.quarantined {
-                    log_fault(id);
-                    info.quarantined = true;
-                }
+            if now.saturating_sub(info.last_seen) > self.timeout.as_secs()
+                && !info.quarantined
+            {
+                log_fault(id);
+                info.quarantined = true;
             }
         }
     }

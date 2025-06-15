@@ -12,6 +12,7 @@ use crate::ninep_adapter::{read_slice, verify_open};
 use crate::policy::{Access, SandboxPolicy};
 use anyhow::{Result as AnyResult, anyhow};
 use log::{info, warn};
+use crate::fs::ValidatorHook;
 use ninep::{
     client::TcpClient,
     fs::{FileMeta, IoUnit, Mode, Perm, QID_ROOT, Stat},
@@ -20,11 +21,9 @@ use ninep::{
 
 fn check_perm(path: &str, access: Access) -> AnyResult<()> {
     crate::enforce_capability(path)?;
-    if path.starts_with("/proc") || path.starts_with("/history") {
-        if access == Access::Write {
-            warn!("deny write to restricted path: {}", path);
-            return Err(anyhow!("permission denied"));
-        }
+    if (path.starts_with("/proc") || path.starts_with("/history")) && access == Access::Write {
+        warn!("deny write to restricted path: {}", path);
+        return Err(anyhow!("permission denied"));
     }
     if path.starts_with("/mnt") && access == Access::Write {
         warn!("deny write to /mnt: {}", path);
@@ -50,7 +49,7 @@ pub struct CohesixFs {
     next_qid: AtomicU64,
     remotes: Mutex<HashMap<String, TcpClient>>, // mountpoint -> client
     policies: Mutex<HashMap<String, SandboxPolicy>>, // uname -> policy
-    validator_hook: Option<Arc<dyn Fn(&'static str, String, String, u64) + Send + Sync>>,
+    validator_hook: Option<Arc<ValidatorHook>>,
 }
 
 impl CohesixFs {
@@ -139,10 +138,7 @@ impl CohesixFs {
     }
 
     /// Register a validator hook for policy violations.
-    pub fn set_validator_hook(
-        &mut self,
-        hook: Arc<dyn Fn(&'static str, String, String, u64) + Send + Sync>,
-    ) {
+    pub fn set_validator_hook(&mut self, hook: Arc<ValidatorHook>) {
         self.validator_hook = Some(hook);
     }
 
@@ -430,7 +426,7 @@ impl Serve9p for CohesixFs {
 pub struct FsServer {
     cfg: super::FsConfig,
     policies: Vec<(String, SandboxPolicy)>,
-    validator_hook: Option<Arc<dyn Fn(&'static str, String, String, u64) + Send + Sync>>,
+    validator_hook: Option<Arc<ValidatorHook>>,
     handle: Option<std::thread::JoinHandle<()>>,
 }
 
@@ -451,10 +447,7 @@ impl FsServer {
     }
 
     /// Register a validator hook applied to the inner filesystem.
-    pub fn set_validator_hook(
-        &mut self,
-        hook: Arc<dyn Fn(&'static str, String, String, u64) + Send + Sync>,
-    ) {
+    pub fn set_validator_hook(&mut self, hook: Arc<ValidatorHook>) {
         self.validator_hook = Some(hook);
     }
 
