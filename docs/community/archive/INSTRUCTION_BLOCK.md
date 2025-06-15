@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: INSTRUCTION_BLOCK.md v4.0
 // Author: Lukas Bower
-// Date Modified: 2025-07-11
+// Date Modified: 2025-06-15
 
 ## 0 · Classification Header Requirement
 All canonical documents **must** begin with a classification header as the first non-blank line.
@@ -71,7 +71,7 @@ Reference the file list in **METADATA.md**. It is the sole source of truth for d
 12. **Upstream Sync**
     Monthly rebase of seL4 & 9front.
 13. **OSS License Guard**
-    All imports must be MIT/BSD/Apache 2.0, recorded in `OSS_REUSE.md` with SPDX hash.
+    All imports must be MIT/BSD/Apache 2.0, recorded in `LICENSES_AND_REUSE.md` with SPDX hash.
 14. **Documentation Simplification (v3.2)**
     Consolidate related docs and enforce metadata consistency.
 15. **Codex-Generated Batches**

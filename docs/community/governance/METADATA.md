@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: METADATA.md v3.17
 // Author: Lukas Bower
-// Date Modified: 2025-08-01
+// Date Modified: 2025-06-15
 
 ## Canonical Documents
 
@@ -15,18 +15,15 @@
 | COMMERCIAL_PLAN.md         | v1.5    | 2025-06-08    | PRIVATE        |            |              |
 | DEPENDENCIES.md            | v0.5    | 2025-07-06    | COMMUNITY      |            |              |
 | METADATA.md                | v3.14   | 2025-07-26    | COMMUNITY      |            |              |
-| OSS_REUSE.md               | v1.7    | 2025-07-15    | COMMUNITY      |            |              |
-| Q_DAY.md                   | v1.0    | 2025-05-31    | PRIVATE        |            |              |
-| QUEEN_POLICY.md            | v1.1    | 2025-07-12    | PRIVATE        |            |              |
+| Q_DAY.md                   | v1.1    | 2025-06-15    | PRIVATE        |            |              |
 | README.md                  | v0.12   | 2025-07-28    | COMMUNITY        |            |              |
 | README_Codex.md            | v1.4    | 2025-06-16    | COMMUNITY      |            |              |
 | REMOTE_ACCESS.md           | v1.0    | 2025-05-24    | COMMUNITY      |            |              |
-| ROLE_MANIFEST.md           | v1.4    | 2025-07-31    | COMMUNITY      |            |              |
 | NETWORKING.md              | v0.2    | 2025-07-13    | COMMUNITY      |     |              |
 | SHOPPING_LIST.md           | v1.3    | 2025-05-25    | COMMUNITY      |            |              |
 | STATUS_UPDATE_GUIDE.md     | v1.3    | 2025-05-25    | COMMUNITY      |            |              |
 | TEST_GUIDE.md              | v1.4    | 2025-07-12    | COMMUNITY      |            |              |
-| THREAT_MODEL.md            | v1.0    | 2025-05-27    | PRIVATE        |            |              |
+| THREAT_MODEL.md            | v1.1    | 2025-06-15    | PRIVATE        |            |              |
 | TECHNICAL_RISK.md         | v1.1    | 2025-06-08    | PRIVATE        |     |              |
 | WATCHDOG_POLICY.md         | v1.4    | 2025-06-05    | COMMUNITY      |            |              |
 | cli.md                     | v0.3    | 2025-07-12    | COMMUNITY      |     |              |
@@ -37,9 +34,10 @@
 | TRACE_CONSENSUS.md         | v0.1    | 2025-07-05    | COMMUNITY      |            |              |
 | SECURITY_REVIEW.md         | v0.2    | 2025-07-13    | COMMUNITY      |     |              |
 | COMPILER_REVIEW.md         | v0.1    | 2025-07-11    | COMMUNITY      |          |              
-| OPEN_SOURCE_DEPENDENCIES.md | v0.4    | 2025-07-20    | COMMUNITY      |     |              |
-| LICENSE_MATRIX.md           | v0.2    | 2025-07-15    | COMMUNITY      |     |              |
 | AGENTS_AND_CLI.md          | v1.2    | 2025-07-26    | COMMUNITY      |     |              |
+| LICENSES_AND_REUSE.md     | v1.0    | 2025-06-15    | COMMUNITY      |     |              |
+| ROLE_POLICY.md            | v1.0    | 2025-06-15    | COMMUNITY      |     |              |
+| cli/README.md             | v1.0    | 2025-06-15    | COMMUNITY      |     |              |
 | AGENTS.md                 | v2.2    | 2025-07-22    | COMMUNITY      |     |              |
 | DEMO_SCENARIOS.md          | v1.0    | 2025-06-20    | COMMUNITY      |     |              |
 | VALIDATION_AND_TESTING.md  | v1.5    | 2025-07-25    | COMMUNITY      |     |              |
