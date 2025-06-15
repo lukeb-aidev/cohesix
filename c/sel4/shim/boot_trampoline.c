@@ -35,8 +35,9 @@
  * 4) Jump to rust_early_init(); never returns.
  */
 
-static volatile uint8_t *const UART0 = (volatile uint8_t *)BOOT_TRAMPOLINE_UART_BASE;
-static char fallback_log[BOOT_TRAMPOLINE_LOG_SIZE];
+static volatile uint8_t *const UART0 =
+    (volatile uint8_t *)COH_BOOT_TRAMPOLINE_UART_BASE;
+static char fallback_log[COH_BOOT_TRAMPOLINE_LOG_SIZE];
 static size_t log_pos;
 
 int boot_trampoline_crc_ok = 0;
@@ -61,7 +62,7 @@ static void emit_success_telemetry(void)
         close(cfd);
     }
 
-    int fd = open(BOOT_SUCCESS_PATH, O_WRONLY | O_CREAT, 0644);
+    int fd = open(COH_BOOT_SUCCESS_PATH, O_WRONLY | O_CREAT, 0644);
     if (fd >= 0) {
         write(fd, "BOOT_OK\n", 8);
         close(fd);
@@ -102,7 +103,8 @@ static uint32_t crc32_calc(const uint8_t *data, size_t len)
     for (size_t i = 0; i < len; ++i) {
         crc ^= data[i];
         for (int j = 0; j < 8; ++j)
-            crc = (crc >> 1) ^ (BOOT_TRAMPOLINE_CRC_POLYNOMIAL & (-(int)(crc & 1)));
+            crc = (crc >> 1) ^
+                  (COH_BOOT_TRAMPOLINE_CRC_POLYNOMIAL & (-(int)(crc & 1)));
     }
     return ~crc;
 }

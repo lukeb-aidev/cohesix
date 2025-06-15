@@ -1,5 +1,3 @@
-
-
 // CLASSIFICATION: COMMUNITY
 // Filename: COH_CC_DEVELOPER_GUIDE.md v1.0
 // Author: Lukas Bower
