@@ -12,19 +12,20 @@
 // (some static‑analysis tools discourage `#pragma once`).
 // ─────────────────────────────────────────────────────────────
 
-#ifndef COHESIX_BOOT_TRAMPOLINE_H
-#define COHESIX_BOOT_TRAMPOLINE_H
+#ifndef COH_BOOT_TRAMPOLINE_H
+#define COH_BOOT_TRAMPOLINE_H
 
+/* Allow C++ linkage when included from Rust */
 #ifdef __cplusplus
 extern "C" {
-#endif
+#endif // __cplusplus
 
 #include <stdint.h>
 
 /* Boot constants used by the trampoline */
-#define BOOT_TRAMPOLINE_UART_BASE      0x09000000u
-#define BOOT_TRAMPOLINE_CRC_POLYNOMIAL 0xEDB88320u
-#define BOOT_TRAMPOLINE_LOG_SIZE       128
+#define COH_BOOT_TRAMPOLINE_UART_BASE      0x09000000u
+#define COH_BOOT_TRAMPOLINE_CRC_POLYNOMIAL 0xEDB88320u
+#define COH_BOOT_TRAMPOLINE_LOG_SIZE       128
 #include "boot_success.h"
 
 /**
@@ -44,8 +45,9 @@ typedef struct {
 
 extern int boot_trampoline_crc_ok;
 
+/* Close extern "C" block when compiled as C++ */
 #ifdef __cplusplus
 }
-#endif
+#endif // __cplusplus
 
-#endif /* COHESIX_BOOT_TRAMPOLINE_H */
+#endif /* COH_BOOT_TRAMPOLINE_H */

@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: AGENTS_AND_CLI.md v1.2
 // Author: Lukas Bower
-// Date Modified: 2025-07-26
+// Date Modified: 2025-07-23
 
 # Agents and CLI
 
