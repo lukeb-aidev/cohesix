@@ -3,7 +3,6 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-22
 
-#![cfg(feature = "rapier")]
 
 //! Rapier physics engine bridge exposing a simple command interface.
 //!
@@ -14,7 +13,7 @@
 use crate::runtime::ServiceRegistry;
 use rapier3d::prelude::*;
 use rapier3d::pipeline::QueryPipeline;
-use rapier3d::na::{Quaternion, UnitQuaternion};
+use rapier3d::na::UnitQuaternion;
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
@@ -296,10 +295,10 @@ pub fn deterministic_harness(seed: u64, steps: u32) -> Vec<SimSnapshot> {
 fn collect_snapshot(bodies: &RigidBodySet, step: u64) -> SimSnapshot {
     let mut bodies_out = Vec::new();
     for (handle, body) in bodies.iter() {
-        let (id, gen) = handle.into_raw_parts();
+        let (id, r#gen) = handle.into_raw_parts();
         bodies_out.push(BodyState {
             index: id,
-            generation: gen,
+            generation: r#gen,
             position: [body.translation().x, body.translation().y, body.translation().z],
             velocity: [body.linvel().x, body.linvel().y, body.linvel().z],
             rotation: [

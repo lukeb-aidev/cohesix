@@ -90,21 +90,21 @@ build: ## Build Rust workspace
 	@cargo build --workspace || echo "cargo build failed"
 
 fmt: ## Run code formatters
-        @if command -v cargo-fmt >/dev/null 2>&1; then \
-        cargo fmt --all; \
-        else \
-        echo "cargo fmt not installed"; \
-        fi
-        @if command -v black >/dev/null 2>&1; then \
-        black python tests; \
-        else \
-        echo "black not installed"; \
-        fi
+	@if command -v cargo-fmt >/dev/null 2>&1; then \
+	cargo fmt --all; \
+	else \
+	echo "cargo fmt not installed"; \
+	fi
+	@if command -v black >/dev/null 2>&1; then \
+	black python tests; \
+	else \
+	echo "black not installed"; \
+	fi
 	@if command -v gofmt >/dev/null 2>&1; then \
 	gofmt -w $(shell find go -name '*.go'); \
 	else \
 	echo "gofmt not installed"; \
-fi
+	fi
 
 lint: ## Run linters
 	@cargo clippy --all-targets >/dev/null 2>&1 || \
@@ -165,6 +165,7 @@ bootloader: check-efi ## Build UEFI bootloader
 	/defaultlib:gnuefi.lib /defaultlib:efi.lib
 	objcopy --target=efi-app-x86_64 out/bootloader.so out/BOOTX64.EFI
 	cp out/BOOTX64.EFI out/EFI/BOOT/BOOTX64.EFI
+	cp out/BOOTX64.EFI out/bootx64.efi
 
 
 kernel: check-efi ## Build kernel stub
@@ -214,9 +215,9 @@ qemu: ## Launch QEMU with built image and capture serial log
 	if [ ! -f out/EFI/BOOT/BOOTX64.EFI ]; then $(MAKE) bootloader kernel; fi; \
 	qemu-system-x86_64 \
 		-bios /usr/share/qemu/OVMF.fd \
-            -drive if=pflash,format=raw,file=/usr/share/OVMF/OVMF_VARS.fd \
-            -drive format=raw,file=fat:rw:out/ -net none -M q35 -m 256M \
-            -no-reboot -nographic -serial mon:stdio 2>&1 | tee qemu_serial.log; fi
+	    -drive if=pflash,format=raw,file=/usr/share/OVMF/OVMF_VARS.fd \
+	    -drive format=raw,file=fat:rw:out/ -net none -M q35 -m 256M \
+	    -no-reboot -nographic -serial mon:stdio 2>&1 | tee qemu_serial.log; fi
 
 # Verify QEMU boot log and fail on BOOT_FAIL
 qemu-check: ## Check qemu_serial.log for BOOT_OK and fail on BOOT_FAIL

@@ -34,6 +34,7 @@ use anyhow::{Result, bail};
 // Note: we avoid using private modules from the `p9` crate for now.
 
 pub mod fs;
+pub use fs::ValidatorHook;
 mod server;
 pub use server::FsServer;
 pub mod ninep_adapter;
