@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: policy_engine.rs v0.3
+// Filename: policy_engine.rs v0.4
 // Author: Lukas Bower
-// Date Modified: 2025-07-26
+// Date Modified: 2025-07-31
 
 //! Policy evaluation for Secure9P operations.
 
@@ -26,7 +26,7 @@ struct PolicyEntry {
 }
 
 #[cfg(feature = "secure9p")]
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct PolicyEngine {
     rules: HashMap<String, Vec<(String, String)>>,
 }
@@ -71,6 +71,22 @@ impl PolicyEngine {
         self.rules
             .get(agent)
             .map(|v| v.iter().any(|(op, p)| op == verb && path.starts_with(p)))
+            .unwrap_or(false)
+    }
+
+    pub fn check(&self, agent: &str, cap: crate::secure9p::cap_fid::Capability) -> bool {
+        let verb = if cap.contains(crate::secure9p::cap_fid::Cap::READ) {
+            "read"
+        } else if cap.contains(crate::secure9p::cap_fid::Cap::WRITE) {
+            "write"
+        } else if cap.contains(crate::secure9p::cap_fid::Cap::REMOVE) {
+            "remove"
+        } else {
+            return false;
+        };
+        self.rules
+            .get(agent)
+            .map(|v| v.iter().any(|(op, _)| op == verb))
             .unwrap_or(false)
     }
 
