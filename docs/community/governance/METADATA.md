@@ -142,6 +142,7 @@
 | src/secure9p/secure_9p_server.rs | v0.3 | 2025-07-26 | COMMUNITY | | |
 | tests/secure9p/tls_handshake.rs | v0.3 | 2025-07-26 | COMMUNITY | | |
 | tests/secure9p/tls_handshake.rs | v0.4 | 2025-07-29 | COMMUNITY | | |
+| tests/secure9p/tls_handshake.rs | v0.5 | 2025-07-30 | COMMUNITY | | |
 | tests/secure9p/namespace_traversal.rs | v0.1 | 2025-07-24 | COMMUNITY | | |
 | tests/secure9p/policy_denial.rs | v0.3 | 2025-07-26 | COMMUNITY | | |
 | tests/secure9p/agent_identifier.rs | v0.2 | 2025-07-26 | COMMUNITY | | |

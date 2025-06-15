@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v0.54
-// Date Modified: 2025-07-28
+// Date Modified: 2025-07-30
 ## [vNext] - 2025-07-23
 ### Temp path fixes and QEMU script guard
 - cohesix_fetch_build.sh header updated and registered in METADATA
@@ -45,6 +45,7 @@
 - `config/secure9p.toml` header repositioned and version updated to v0.2
 - Added integration test `test_qemu_boot.rs` to verify BOOT_OK in qemu_serial.log
 - New `scripts/check-qemu-deps.sh` verifies QEMU and gnu-efi packages before boot tests; README documents usage
+- Thread spawn closure in `tls_handshake` test now closes correctly to avoid unclosed delimiters
 
 - cohesix-9p/Cargo.toml edition set to 2021 to support async features
 - Fixed missing closing braces in `tls_handshake` test
