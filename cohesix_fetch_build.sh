@@ -1,23 +1,17 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: cohesix_fetch_build.sh v0.6
+// Filename: cohesix_fetch_build.sh v0.7
 // Author: Lukas Bower
-// Date Modified: 2025-08-02
+// Date Modified: 2025-08-15
 #!/bin/bash
 # Fetch and fully build the Cohesix project using SSH Git auth.
 
 set -euo pipefail
 
-timestamp=$(date +%Y%m%d_%H%M%S)
 cd "$HOME"
-
 echo "📦 Cloning Git repo via SSH..."
 
-# Backup existing folder if it exists
-if [ -d "cohesix" ]; then
-  mv cohesix "cohesix_backup_$timestamp"
-  echo "🗂️ Moved existing repo to cohesix_backup_$timestamp"
-fi
-
+# Remove any existing clone to ensure a clean build
+rm -rf cohesix
 # Clone using SSH key (assumes GitHub SSH auth already configured)
 git clone git@github.com:lukeb-aidev/cohesix.git
 cd cohesix
