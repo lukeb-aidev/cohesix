@@ -14,8 +14,8 @@ import pytest
 
 
 @pytest.fixture
-def tmpboot(tmp_path):
-    os.chdir(tmp_path)
+def tmpboot(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
     os.environ['COH_ROLE'] = 'DroneWorker'
     Path('srv').mkdir()
     return tmp_path
