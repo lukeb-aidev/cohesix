@@ -12,11 +12,14 @@ use std::collections::HashMap;
 
 use crate::policy::{Access, SandboxPolicy};
 
+/// Shared validator hook signature used by [`InMemoryFs`] and related modules.
+pub type ValidatorHook = dyn Fn(&'static str, String, String, u64) + Send + Sync;
+
 /// Simple in-memory filesystem tree.
 #[derive(Default)]
 pub struct InMemoryFs {
     nodes: HashMap<String, Vec<u8>>, // path -> contents
-    validator_hook: Option<Box<dyn Fn(&'static str, String, String, u64) + Send + Sync>>,
+    validator_hook: Option<Box<ValidatorHook>>,
     policy: Option<SandboxPolicy>,
 }
 

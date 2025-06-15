@@ -126,6 +126,7 @@ pub fn start_secure_9p_server(addr: &str, cert: &Path, key: &Path) -> anyhow::Re
 }
 
 #[cfg(feature = "secure9p")]
+#[allow(dead_code)]
 fn log_event(v: serde_json::Value) {
     let log_dir = std::env::var("COHESIX_LOG_DIR")
         .map(std::path::PathBuf::from)

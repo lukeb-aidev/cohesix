@@ -13,13 +13,13 @@ fn agent_lifecycle() {
     let dir = tempdir().unwrap();
     std::env::set_current_dir(&dir).unwrap();
     std::fs::create_dir_all("/srv").unwrap();
+    std::fs::create_dir_all("/srv/agents/a1").unwrap();
     let _ = std::fs::remove_file("/srv/telemetry");
     let _ = std::fs::remove_dir_all("/srv/telemetry");
 
     let mut rt = AgentRuntime::new();
     let args = vec!["true".to_string()];
     let _ = rt.spawn("a1", Role::DroneWorker, &args);
-    std::fs::create_dir_all("/srv/agents/a1").ok();
     assert!(std::path::Path::new("/srv/agents/a1").exists());
 
     sensors::read_temperature("a1");
