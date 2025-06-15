@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: test_boot_efi.sh v0.10
+# Filename: test_boot_efi.sh v0.11
 # Author: Lukas Bower
-# Date Modified: 2025-07-25
+# Date Modified: 2025-07-30
 set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
@@ -12,9 +12,22 @@ if ! command -v qemu-system-x86_64 >/dev/null; then
     exit 0
 fi
 
-TMPDIR=$(mktemp -d)
+if [ -z "${TMPDIR:-}" ]; then
+    TMPDIR="$(mktemp -d)"
+fi
 if [ ! -f "$TMPDIR/OVMF_VARS.fd" ]; then
-    cp /usr/share/OVMF/OVMF_VARS.fd "$TMPDIR/" || echo "Missing OVMF_VARS.fd — please install OVMF"
+    if ! cp /usr/share/OVMF/OVMF_VARS.fd "$TMPDIR/" 2>/dev/null; then
+        echo "OVMF firmware not found — install 'ovmf' package" >&2
+    fi
+fi
+OVMF_CODE="/usr/share/qemu/OVMF.fd"
+if [ ! -f "$OVMF_CODE" ]; then
+    for p in /usr/share/OVMF/OVMF_CODE.fd /usr/share/OVMF/OVMF.fd /usr/share/edk2/ovmf/OVMF_CODE.fd; do
+        if [ -f "$p" ]; then
+            OVMF_CODE="$p"
+            break
+        fi
+    done
 fi
 export TMPDIR
 mkdir -p "$HOME/cohesix/out"
@@ -48,14 +61,14 @@ if ! make bootloader kernel CC="$TOOLCHAIN"; then
 fi
 objdump -h out/EFI/BOOT/BOOTX64.EFI > out/BOOTX64_sections.txt
 
-LOGFILE="out/qemu_debug.log"
-QEMU_ARGS=(-bios /usr/share/qemu/OVMF.fd \
+LOGFILE="$TMPDIR/qemu_boot.log"
+QEMU_ARGS=(-bios "$OVMF_CODE" \
     -drive if=pflash,format=raw,file="$TMPDIR/OVMF_VARS.fd" \
     -drive format=raw,file=fat:rw:out/ -net none -M q35 -m 256M \
     -no-reboot -monitor none)
 
 qemu-system-x86_64 "${QEMU_ARGS[@]}" -nographic -serial file:"${LOGFILE}" || true
-tail -n 20 "${LOGFILE}" || true
+tail -n 20 "${LOGFILE}" || echo "Boot log unavailable — check TMPDIR or QEMU exit code"
 
 grep -q "EFI loader" "${LOGFILE}" || exit 1
 grep -q "Kernel launched" "${LOGFILE}" || exit 1
