@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: cohesix_fetch_build.sh v0.4
+// Filename: cohesix_fetch_build.sh v0.5
 // Author: Lukas Bower
 // Date Modified: 2025-08-01
 #!/bin/bash
@@ -38,9 +38,9 @@ fi
 echo "🦀 Building Rust components..."
 cargo build --all-targets --release
 
-echo "🔨 Building kernel ELF..."
-cargo build --bin kernel --release --features kernel_bin
+echo "🛠️ Building kernel ELF..."
 mkdir -p out
+cargo build --bin kernel --release --features kernel_bin
 cp target/release/kernel out/kernel.elf
 
 for f in initfs.img plan9.ns bootargs.txt boot_trace.json; do
