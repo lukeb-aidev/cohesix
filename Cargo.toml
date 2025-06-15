@@ -6,7 +6,7 @@
 name    = "cohesix"
 version = "0.1.0"
 edition = "2021"
-authors = ["Lukas Bower <you@domain.com>"]
+authors = ["Lukas Bower <lukas.bower@gmail.com>"]
 build = "build.rs"
 
 [dependencies]
