@@ -1,13 +1,17 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: queen_watchdog.rs v0.1
+// Filename: queen_watchdog.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-07-09
+// Date Modified: 2025-08-01
 
 //! Worker-side watchdog monitoring queen heartbeat.
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+fn queen_dir() -> String {
+    std::env::var("COHESIX_QUEEN_DIR").unwrap_or_else(|_| "/srv/queen".into())
+}
 
 /// Monitor the queen heartbeat and self-promote on failure.
 pub struct QueenWatchdog {
@@ -23,7 +27,8 @@ impl QueenWatchdog {
 
     /// Check queen heartbeat and elect self if needed.
     pub fn check(&mut self) {
-        let ts = fs::metadata("/srv/queen/heartbeat")
+        let hb_path = format!("{}/heartbeat", queen_dir());
+        let ts = fs::metadata(&hb_path)
             .and_then(|m| m.modified())
             .unwrap_or(UNIX_EPOCH);
         let age = SystemTime::now().duration_since(ts).unwrap_or_default();
@@ -38,8 +43,9 @@ impl QueenWatchdog {
     }
 
     fn promote(&self) {
-        fs::create_dir_all("/srv/queen").ok();
-        if let Ok(mut f) = OpenOptions::new().create(true).write(true).open("/srv/queen/role") {
+        let qdir = queen_dir();
+        fs::create_dir_all(&qdir).ok();
+        if let Ok(mut f) = OpenOptions::new().create(true).write(true).open(format!("{}/role", qdir)) {
             let _ = write!(f, "QueenPrimary");
         }
         fs::create_dir_all("/log").ok();

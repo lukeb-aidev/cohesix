@@ -50,6 +50,8 @@
 - CMake CUDA keep directory respects TMPDIR
 - Python CLI tools use COHESIX_LOG environment variable; tests redirect logs to tmp paths
 - Rust tests use tempfile for temporary files instead of hardcoded /tmp
+- QueenWatchdog respects `COHESIX_QUEEN_DIR`; failover test uses temp path and
+  explicit expect message
 - /proc/nsmap exposes per-role namespace maps
 - NsWatchService validates hotplugged mounts
 - SandboxService logs namespace violations via validator
