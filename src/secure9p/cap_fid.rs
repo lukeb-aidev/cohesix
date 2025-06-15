@@ -17,6 +17,7 @@ use std::path::PathBuf;
 
 #[cfg(feature = "secure9p")]
 bitflags! {
+    #[derive(Clone, Copy, PartialEq, Eq)]
     pub struct Cap: u8 {
         const READ = 0b0001;
         const WRITE = 0b0010;

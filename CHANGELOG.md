@@ -19,6 +19,8 @@
 - GitHub workflow indentation corrected for OSS dependency audit
 - secure9p sandbox uses Path to parse agent IDs; tests added for trailing
   slashes and invalid namespaces
+- Secure9P build fixes with rustls 0.23, policy clone, path validation, and
+  handshake cleanup
 - Cargo.toml v0.3 adds optional rustls and tokio-rustls dependencies to fix
   secure9p feature build and clippy
 - `Capability` alias exposed in `cap_fid.rs` for consistent imports
