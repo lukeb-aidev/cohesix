@@ -111,7 +111,7 @@ It’s alpha-grade, but already boots and runs tasks on:
 ### 🔹 Q8: Is it open source?
 
 **A:**  
-Yes — everything is licensed under **Apache 2.0**, **MIT**, or **BSD**. No GPL contamination. All dependencies are tracked in `OSS_REUSE.md`, and SBOM generation is built into the CI pipeline.
+Yes — everything is licensed under **Apache 2.0**, **MIT**, or **BSD**. No GPL contamination. All dependencies are tracked in `LICENSES_AND_REUSE.md`, and SBOM generation is built into the CI pipeline.
 
 ---
 

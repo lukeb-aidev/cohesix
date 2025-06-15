@@ -1,10 +1,24 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: OPEN_SOURCE_DEPENDENCIES.md v0.4
+// Filename: LICENSES_AND_REUSE.md v1.0
 // Author: Lukas Bower
-// Date Modified: 2025-07-20
-# Open Source Dependencies
+// Date Modified: 2025-06-15
 
-| Name | Version | SPDX License | Purpose | Upstream |
+# Licensing and OSS Reuse
+
+This document merges `LICENSE_MATRIX.md`, `OSS_REUSE.md`, and `OPEN_SOURCE_DEPENDENCIES.md` into a single reference for Cohesix licensing and third-party software management.
+
+## 1 · SPDX Summary
+
+All Cohesix code and dependencies must be licensed under **Apache-2.0**, **MIT**, or **BSD** variants. Each file includes an SPDX header matching its license, and all external packages appear in the SBOM files `sbom_spdx_2.3.json` and `sbom_cyclonedx_1.5.json`.
+
+## 2 · Reuse Policy
+
+Only the licenses above are permitted. GPL or LGPL code is prohibited unless fully isolated. Every dependency is recorded in this document and audited during CI runs. Contributions must retain upstream copyright notices and provide public access to source code when required.
+
+## 3 · Open Source Dependencies
+
+The table below lists current third-party packages used by Cohesix.
+
 |------|---------|--------------|---------|---------|
 | sha2 | 0.10 | MIT OR Apache-2.0 | Hashing for integrity checks | https://crates.io/crates/sha2 |
 | anyhow | 1.0 | MIT OR Apache-2.0 | Error handling in Rust | https://crates.io/crates/anyhow |
@@ -26,3 +40,16 @@
 | tempfile | 3.10 | MIT OR Apache-2.0 | Temporary directory and file handling in tests | https://crates.io/crates/tempfile |
 | qemu | system | GPL-2.0-only | Emulator used for UEFI boot testing | https://www.qemu.org/ |
 | cuda-sys | 0.3 | Apache-2.0 | Rust FFI bindings for NVIDIA CUDA | https://crates.io/crates/cuda-sys |
+\n## 4 · License Matrix
+
+| Name | Version | SPDX | License File | CVEs |
+|------|---------|------|-------------|------|
+| sha2 | 0.10 | MIT OR Apache-2.0 | LICENSES/sha2-0.10.txt |  |
+| anyhow | 1.0 | MIT OR Apache-2.0 | LICENSES/anyhow-1.0.txt |  |
+
+## 5 · Audit References
+
+- `sbom_spdx_2.3.json` – SPDX formatted software bill of materials
+- `sbom_cyclonedx_1.5.json` – CycloneDX formatted SBOM
+- Continuous license scanning via `cargo deny` and GitHub dependency graph
+

@@ -1,9 +1,11 @@
 // CLASSIFICATION: PRIVATE
-// Filename: Q_DAY.md v1.0
+// Filename: Q_DAY.md v1.1
 // Author: Lukas Bower
-// Date Modified: 2025-05-31
+// Date Modified: 2025-06-15
 
 # Q-Day Preparation for Cohesix
+
+This file merges `docs/security/Q_DAY.md` and `docs/private/Q_DAY.md`. Q-Day refers to the projected future date when quantum computers can break classical encryption.
 
 Q-Day refers to the projected future date when quantum computers will be capable of breaking classical encryption methods such as RSA and ECC. This event would render vast swaths of existing digital infrastructure insecure, particularly where long-term confidentiality or identity is at stake.
 

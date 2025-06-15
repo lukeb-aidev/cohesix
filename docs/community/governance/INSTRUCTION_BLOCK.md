@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: INSTRUCTION_BLOCK.md v3.6
 // Author: Lukas Bower
-// Date Modified: 2025-06-07
+// Date Modified: 2025-06-15
 
 ## 0 · Classification Header — Mandatory
 
@@ -37,7 +37,7 @@ Documents archived in `/canvas/archive/` are read-only and excluded from Codex w
 - Roles: QueenPrimary, KioskInteractive, DroneWorker, GlassesAgent, SensorRelay, SimulatorTest  
 - Physics: `/sim/` (Rapier) active on Worker nodes  
 - GPU: `/srv/cuda` for CUDA-enabled agents; fallback must log gracefully  
-- Licensing: Only Apache 2.0, MIT, or BSD allowed (see `OSS_REUSE.md`)
+- Licensing: Only Apache 2.0, MIT, or BSD allowed (see `LICENSES_AND_REUSE.md`)
 
 ---
 
@@ -86,7 +86,7 @@ Codex must auto-detect supported hardware and pass tests accordingly.
    - `// CLASSIFICATION:`  
    - `// Filename vX.Y`  
    - `// Author: Lukas Bower`  
-   - `// Date Modified: YYYY-MM-DD`  
+   - `// Date Modified: 2025-06-15
    - Registered in `METADATA.md`  
    - Entry added to `CHANGELOG.md`
 
@@ -127,7 +127,7 @@ Codex must auto-detect supported hardware and pass tests accordingly.
     All imported code must:
     - Be Apache 2.0, MIT, or BSD  
     - Include SPDX license header  
-    - Be logged in `OSS_REUSE.md`
+    - Be logged in `LICENSES_AND_REUSE.md`
 
 13. Documentation Consolidation Guard  
     Related technical docs must be merged (e.g., TOOLING_PLAN.md → IMPLEMENTATION_GUIDE.md).  
@@ -162,7 +162,7 @@ Codex must auto-detect supported hardware and pass tests accordingly.
 | Fuzzy Requirements       | Rule #13: Clarify in METADATA.md + inline comments |
 | Incomplete Hydration     | Atomic write + size checks + watchdog recovery     |
 | Build Breakage on Arch   | CI matrix + fallback builds                        |
-| OSS License Violation    | SPDX headers + `OSS_REUSE.md` audit                |
+| OSS License Violation    | SPDX headers + `LICENSES_AND_REUSE.md` audit                |
 | Faulty Stubs             | CI blocklist of all placeholder patterns           |
 | Memory Errors            | Rust for all unsafe or low-level logic             |
 | Clock Drift / Timeout    | Watchdog + tick-based trace validation             |
