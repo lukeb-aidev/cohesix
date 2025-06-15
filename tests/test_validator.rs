@@ -10,7 +10,9 @@ use std::fs;
 #[test]
 fn validator_blocks_non_worker_spawn() {
     fs::create_dir_all("/srv/violations").unwrap();
-    std::env::set_var("COHESIX_VIOLATIONS_DIR", "/srv/violations");
+    unsafe {
+        std::env::set_var("COHESIX_VIOLATIONS_DIR", "/srv/violations");
+    }
     fs::write("/srv/cohrole", "KioskInteractive").unwrap();
     SyscallDispatcher::dispatch(Syscall::Spawn { program: "echo".into(), args: vec!["hi".into()] });
     let viol = fs::read_to_string("/srv/violations/runtime.json").unwrap();

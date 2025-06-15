@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: migration.rs v0.2
+// Filename: migration.rs v0.3
 // Author: Lukas Bower
-// Date Modified: 2025-07-03
+// Date Modified: 2025-08-16
 
 //! Agent state serialization and migration support.
 //!
@@ -61,7 +61,9 @@ pub fn restore(agent_id: &str, state: &AgentState) -> anyhow::Result<()> {
     ServiceRegistry::unregister_service(agent_id)?;
     ServiceRegistry::register_service(agent_id, &format!("/srv/agents/{agent_id}"))?;
     for (k, v) in &state.env {
-        std::env::set_var(k, v);
+        unsafe {
+            std::env::set_var(k, v);
+        }
     }
     Ok(())
 }

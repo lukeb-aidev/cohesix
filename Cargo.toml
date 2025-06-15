@@ -1,11 +1,11 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Cargo.toml v0.6
+# Filename: Cargo.toml v0.7
 # Author: Lukas Bower
-# Date Modified: 2025-08-01
+# Date Modified: 2025-08-16
 [package]
 name    = "cohesix"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 authors = ["Lukas Bower <lukas.bower@gmail.com>"]
 build = "build.rs"
 

@@ -1,6 +1,6 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Makefile v0.19
-# Date Modified: 2025-07-28
+# Filename: Makefile v0.20
+# Date Modified: 2025-08-16
 # Author: Lukas Bower
 #
 # ─────────────────────────────────────────────────────────────
@@ -90,15 +90,16 @@ build: ## Build Rust workspace
 	@cargo build --workspace || echo "cargo build failed"
 
 fmt: ## Run code formatters
-	@cargo fmt >/dev/null 2>&1 || { \
-	echo "cargo fmt failed; running rustfmt manually"; \
-	find . -name '*.rs' -not -path './target/*' -print0 | xargs -0 rustfmt || true; \
-	}
-	@if command -v black >/dev/null 2>&1; then \
-	black python tests; \
-	else \
-	echo "black not installed"; \
-	fi
+        @if command -v cargo-fmt >/dev/null 2>&1; then \
+        cargo fmt --all; \
+        else \
+        echo "cargo fmt not installed"; \
+        fi
+        @if command -v black >/dev/null 2>&1; then \
+        black python tests; \
+        else \
+        echo "black not installed"; \
+        fi
 	@if command -v gofmt >/dev/null 2>&1; then \
 	gofmt -w $(shell find go -name '*.go'); \
 	else \

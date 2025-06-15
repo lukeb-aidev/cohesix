@@ -16,6 +16,12 @@
 - SharedMemory, BaseAgent use TMPDIR and respect override vars
 - QEMU boot script checks for qemu-system-x86_64, sets TMPDIR, ensures writable paths
 - cohesix_fetch_build.sh v0.4 stages kernel ELF and boot files in out/
+### [2025-08-16] Misc fixes
+- Cargo.toml edition bumped to 2024
+- Policy memory shared path respects COHESIX_POLICY_TMP for tests
+- cohesix_fetch_build.sh removes -daemonize and validates bootx64.efi
+- Makefile fmt target warns if formatters missing
+- policy_restore_test writes within tempdir
 - Cargo.toml v0.5 adds kernel binary target
 - Added src/kernel/main.rs minimal entry for ELF boot
  - cohesix_fetch_build.sh v0.6 builds kernel with cargo and validates artifact

@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: role_main.rs v0.1
+// Filename: role_main.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-07-22
+// Date Modified: 2025-08-16
 
 use std::env;
 use std::fs;
@@ -20,7 +20,9 @@ mod tests {
 
     #[test]
     fn env_override() {
-        env::set_var("COHROLE", "DroneWorker");
+        unsafe {
+            env::set_var("COHROLE", "DroneWorker");
+        }
         assert_eq!(current_role(), "DroneWorker");
     }
 }
