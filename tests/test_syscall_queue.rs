@@ -10,7 +10,9 @@ use serial_test::serial;
 #[test]
 #[serial]
 fn queue_dequeue_dispatch_order() {
-    std::env::set_var("COHROLE", "DroneWorker");
+    unsafe {
+        std::env::set_var("COHROLE", "DroneWorker");
+    }
     let mut q = SyscallQueue::new();
     q.enqueue(Syscall::Spawn {
         program: "a".into(),
@@ -34,7 +36,9 @@ fn queue_dequeue_dispatch_order() {
 #[test]
 #[serial]
 fn dequeue_blocked_for_non_worker() {
-    std::env::set_var("COHROLE", "QueenPrimary");
+    unsafe {
+        std::env::set_var("COHROLE", "QueenPrimary");
+    }
     std::fs::write("/srv/cohrole", "QueenPrimary").unwrap();
     let mut q = SyscallQueue::new();
     q.enqueue(Syscall::Exec {

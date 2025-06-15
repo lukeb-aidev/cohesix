@@ -15,7 +15,9 @@ fn promotes_on_missed_heartbeats() {
     let dir = tempdir().expect("Failed to create temp queen dir");
     let qdir = dir.path().join("queen");
     fs::create_dir_all(&qdir).expect("Failed to create queen dir");
-    env::set_var("COHESIX_QUEEN_DIR", &qdir);
+    unsafe {
+        env::set_var("COHESIX_QUEEN_DIR", &qdir);
+    }
 
     let hb = qdir.join("heartbeat");
     fs::write(&hb, "1").expect("Failed to write heartbeat");
@@ -27,5 +29,7 @@ fn promotes_on_missed_heartbeats() {
     let role = fs::read_to_string(qdir.join("role"))
         .expect("Failed to bind or promote: check test permissions or replace with temp socket");
     assert_eq!(role, "QueenPrimary");
-    env::remove_var("COHESIX_QUEEN_DIR");
+    unsafe {
+        env::remove_var("COHESIX_QUEEN_DIR");
+    }
 }

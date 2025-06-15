@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: cohesix_fetch_build.sh v0.7
+// Filename: cohesix_fetch_build.sh v0.8
 // Author: Lukas Bower
-// Date Modified: 2025-08-15
+// Date Modified: 2025-08-16
 #!/bin/bash
 # Fetch and fully build the Cohesix project using SSH Git auth.
 
@@ -107,7 +107,12 @@ if command -v qemu-system-x86_64 >/dev/null; then
   DISK_DIR="$TMPDIR/qemu_disk"
   LOG_FILE="out/qemu_boot.log"
   mkdir -p "$DISK_DIR"
-  qemu-system-x86_64 -kernel "$KERNEL_ELF" -nographic -serial file:"$LOG_FILE" -daemonize
+  UEFI_IMG="out/bootx64.efi"
+  if [ ! -f "$UEFI_IMG" ]; then
+    echo "❌ bootx64.efi missing in out" >&2
+    exit 1
+  fi
+  qemu-system-x86_64 -kernel "$KERNEL_ELF" -nographic -serial file:"$LOG_FILE"
   sleep 3
   echo "📜 Boot log (tail):"
   tail -n 20 "$LOG_FILE" || echo "❌ Could not read QEMU log"

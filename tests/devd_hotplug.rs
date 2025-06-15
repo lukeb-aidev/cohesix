@@ -16,7 +16,9 @@ use tempfile::tempdir;
 #[serial]
 fn device_attach_detach() {
     let dir = tempdir().expect("create temp dir");
-    std::env::set_var("COH_DEV_ROOT", dir.path());
+    unsafe {
+        std::env::set_var("COH_DEV_ROOT", dir.path());
+    }
     ServiceRegistry::reset().unwrap();
     let mut svc = DevdService::default();
     svc.init();
@@ -36,7 +38,9 @@ fn validator_violation() {
         return;
     }
     let dir = tempdir().expect("create temp dir");
-    std::env::set_var("COH_DEV_ROOT", dir.path());
+    unsafe {
+        std::env::set_var("COH_DEV_ROOT", dir.path());
+    }
     let _ = fs::remove_dir_all("/log");
     ServiceRegistry::reset().unwrap();
     let mut svc = DevdService::default();
