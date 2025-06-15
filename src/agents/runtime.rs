@@ -17,7 +17,6 @@ use std::process::{Child, Command};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::runtime::ServiceRegistry;
-use crate::validator::config::get_config;
 use crate::cohesix_types::Role;
 use crate::trace::recorder;
 use crate::agent::directory::{AgentDirectory, AgentRecord};

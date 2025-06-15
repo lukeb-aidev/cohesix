@@ -11,7 +11,7 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::validator::config::{get_config, ConfigError};
+use crate::validator::config::get_config;
 use log::error;
 
 /// Structured rule violation alert.

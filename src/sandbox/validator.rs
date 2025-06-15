@@ -8,7 +8,7 @@
 //! offending syscall is dropped.
 
 use crate::cohesix_types::{Role, Syscall};
-use crate::validator::config::{get_config, ConfigError};
+use crate::validator::config::get_config;
 use log::error;
 use serde::Serialize;
 use std::fs::{self, OpenOptions};
