@@ -1,17 +1,17 @@
 // CLASSIFICATION: PRIVATE
 // Filename: ARCHITECTURE.md v0.3
 // Author: Lukas Bower
-// Date Modified: 2025-05-31
+// Date Modified: 2025-06-15
 
 # Cohesix System Architecture · v0.3 (Private)
 
 > **Canonical cross‑refs:**  
 > • INSTRUCTION_BLOCK.md (community) — build & workflow rules  
-> • ROLE_MANIFEST.md (private) — runtime role taxonomy  
-> • QUEEN_POLICY.md (private) — policy enforcement & trace validation  
+> • ROLE_POLICY.md (private) — runtime role taxonomy  
+> • ROLE_POLICY.md (private) — policy enforcement & trace validation  
 > • CI_SETUP.md (community) — build/CI pipeline  
 > • TOOLING_PLAN.md (private) — CLI & dev‑tool roadmap  
-> • OSS_REUSE.md (private) — third‑party licence ledger  
+> • LICENSES_AND_REUSE.md (private) — third‑party licence ledger  
 
 ---
 
@@ -133,14 +133,14 @@ Every OS object—device, shader, physics body—is surfaced as a 9P file.
 | **ring** | BSD‑style | TLS helpers |
 | **SPDX‑SBOM‑Generator** | Apache‑2 | Licence scan in CI |
 
-(Full ledger lives in **OSS_REUSE.md**.)
+(Full ledger lives in **LICENSES_AND_REUSE.md**.)
 
 ---
 
 ## 9. Security Model
 
 * seL4 capabilities ↔ 9P attach tokens (CohCap) are 1‑to‑1 mapped.
-* Runtime Validator enforces policy rules (see `QUEEN_POLICY.md`) with hot‑reload.
+* Runtime Validator enforces policy rules (see `ROLE_POLICY.md`) with hot‑reload.
 * Supply‑chain: GitHub Actions uploads SBOM to dependency tracker; `cargo deny` blocks unknown licences.
 
 ---

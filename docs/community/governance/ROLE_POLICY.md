@@ -1,9 +1,12 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: ROLE_MANIFEST.md v1.4
-// Date Modified: 2025-07-31
+// Filename: ROLE_POLICY.md v1.0
 // Author: Lukas Bower
+// Date Modified: 2025-06-15
 
-# Role Manifest
+# Role Policy
+
+This document merges `ROLE_MANIFEST.md` and the private `QUEEN_POLICY.md` into a single reference. It outlines runtime roles and the policies that govern the Queen role.
+
 
 At boot, Cohesix reads the declared runtime role from `/srv/cohrole` to determine which services and agents to initialize. Each role encapsulates a distinct set of responsibilities, interfaces, and resource privileges—ensuring least-privilege operation and clear service orchestration.
 
@@ -25,3 +28,11 @@ At boot, Cohesix reads the declared runtime role from `/srv/cohrole` to determin
 This manifest guides both the OS initialization sequence and the Codex automation, ensuring every component is aware of its context and dependencies within the Cohesix platform.
 
 Federated deployments may declare hierarchical roles. A Queen inheriting from another uses `inherit:<parent_id>` in `/srv/queen_id/role` which is exchanged during federation handshakes. All child queens inherit base policies while applying their own overlays.
+
+
+## Queen Policy
+
+
+This document defines internal enforcement policies for the Queen role.
+
+Federated queens may delegate sub-roles to peers. The policy engine resolves conflicts by preferring the latest timestamped policy file within `/srv/<peer>/policy_override.json`. Administrators can supply explicit rules to override time-based resolution.

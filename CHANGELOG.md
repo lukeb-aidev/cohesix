@@ -1,6 +1,13 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v0.55
-// Date Modified: 2025-08-01
+// Date Modified: 2025-06-15
+[2025-06-15] Docs Consolidation Pass v1.0
+• Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
+• Consolidated OSS reuse files into LICENSES_AND_REUSE.md
+• Unified role documents into ROLE_POLICY.md
+• Created CLI and Agent index at cli/README.md
+• Normalized headers and metadata across all affected documentation
+
 ## [vNext] - 2025-07-23
 ### Temp path fixes and QEMU script guard
 - cohesix_fetch_build.sh header updated and registered in METADATA
@@ -416,7 +423,7 @@
 - Updated BATCH_PLAN.md to v0.6 with current batch statuses.
 
 // Filename: CHANGELOG.md v0.27
-// Date Modified: 2025-07-11
+// Date Modified: 2025-06-15
 // Author: Lukas Bower
 ## [v0.43] - 2025-07-11
 ### Added
@@ -426,7 +433,7 @@
 - CLI `cohrun goal_*` and trust zone commands.
 - `cohtrace trust_check` lists current trust zones.
 // Filename: CHANGELOG.md v0.28
-// Date Modified: 2025-06-08
+// Date Modified: 2025-06-15
 // Author: Lukas Bower
 ## [v0.44] - 2025-06-08
 ### Added

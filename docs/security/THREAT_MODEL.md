@@ -1,11 +1,12 @@
-// CLASSIFICATION: COMMUNITY
-// Filename: THREAT_MODEL.md v1.0
-// Date Modified: 2025-05-27
+// CLASSIFICATION: PRIVATE
+// Filename: THREAT_MODEL.md v1.1
 // Author: Lukas Bower
+// Date Modified: 2025-06-15
 
 # Threat Model for Cohesix
 
-This document identifies assets, threat agents, attack vectors, and mitigations for the Cohesix platform.
+This file consolidates the previous `docs/security/THREAT_MODEL.md` and `docs/private/THREAT_MODEL.md`. It identifies assets, threat agents, attack vectors, and mitigations for the Cohesix platform.
+
 
 ## 1. Assets
 
