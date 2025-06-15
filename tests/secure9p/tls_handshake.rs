@@ -64,4 +64,3 @@ fn tls_handshake() {
     let log = fs::read_to_string(hook_path).unwrap();
     assert!(log.contains("tester"));
 }
-}
