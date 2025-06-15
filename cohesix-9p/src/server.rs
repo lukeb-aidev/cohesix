@@ -8,14 +8,14 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
+use crate::fs::ValidatorHook;
 use crate::ninep_adapter::{read_slice, verify_open};
 use crate::policy::{Access, SandboxPolicy};
-use anyhow::{Result as AnyResult, anyhow};
+use anyhow::{anyhow, Result as AnyResult};
 use log::{info, warn};
-use crate::fs::ValidatorHook;
 use ninep::{
     client::TcpClient,
-    fs::{FileMeta, IoUnit, Mode, Perm, QID_ROOT, Stat},
+    fs::{FileMeta, IoUnit, Mode, Perm, Stat, QID_ROOT},
     server::{ClientId, ReadOutcome, Serve9p, Server},
 };
 
@@ -58,7 +58,13 @@ impl CohesixFs {
         let mut qmap = HashMap::new();
         qmap.insert(QID_ROOT, String::from("/"));
         let mut nodes = HashMap::new();
-        nodes.insert("/".into(), Node { data: Vec::new(), is_dir: true });
+        nodes.insert(
+            "/".into(),
+            Node {
+                data: Vec::new(),
+                is_dir: true,
+            },
+        );
         Self {
             _root: root,
             nodes: Mutex::new(nodes),
@@ -152,19 +158,20 @@ impl CohesixFs {
 
     fn check_access(&self, path: &str, access: Access, uname: &str) -> AnyResult<()> {
         check_perm(path, access)?;
-        if let Some(pol) = self.policy_for(uname) {
-            if !pol.allows(path, access) {
-                if let Some(h) = &self.validator_hook {
-                    h(
-                        "9p_policy",
-                        path.to_string(),
-                        uname.to_string(),
-                        current_ts(),
-                    );
-                }
-                warn!("deny {:?} to {} by {}", access, path, uname);
-                return Err(anyhow!("permission denied"));
+        if self
+            .policy_for(uname)
+            .is_some_and(|pol| !pol.allows(path, access))
+        {
+            if let Some(h) = &self.validator_hook {
+                h(
+                    "9p_policy",
+                    path.to_string(),
+                    uname.to_string(),
+                    current_ts(),
+                );
             }
+            warn!("deny {:?} to {} by {}", access, path, uname);
+            return Err(anyhow!("permission denied"));
         }
         Ok(())
     }
