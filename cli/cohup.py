@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohup.py v0.3
+# Filename: cohup.py v0.4
 # Author: Lukas Bower
-# Date Modified: 2025-07-15
+# Date Modified: 2025-08-01
 
 """cohup – live patching utility."""
 
@@ -17,7 +17,7 @@ from typing import List
 import traceback
 
 
-LOG_DIR = Path("/log")
+LOG_DIR = Path(os.getenv("COHESIX_LOG", Path.home() / ".cohesix" / "log"))
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 

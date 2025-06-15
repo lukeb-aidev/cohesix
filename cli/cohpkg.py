@@ -1,12 +1,13 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohpkg.py v0.2
+# Filename: cohpkg.py v0.4
 # Author: Lukas Bower
-# Date Modified: 2025-07-15
+# Date Modified: 2025-08-01
 """cohpkg – minimal package manager for Cohesix."""
 
 import argparse
 import json
 import sys
+import os
 from pathlib import Path
 import tarfile
 import shlex
@@ -15,7 +16,7 @@ from datetime import datetime
 from typing import List
 import traceback
 
-LOG_DIR = Path("/log")
+LOG_DIR = Path(os.getenv("COHESIX_LOG", Path.home() / ".cohesix" / "log"))
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -33,8 +34,8 @@ def safe_run(cmd: List[str]) -> int:
     return result.returncode
 
 
-MANIFEST = Path("/srv/updates/manifest.json")
-UPDATE_DIR = Path("/srv/updates")
+UPDATE_DIR = Path(os.getenv("COHPKG_DIR", "/srv/updates"))
+MANIFEST = Path(os.getenv("COHPKG_MANIFEST", str(UPDATE_DIR / "manifest.json")))
 INSTALL_DIR = Path("/opt")
 
 
