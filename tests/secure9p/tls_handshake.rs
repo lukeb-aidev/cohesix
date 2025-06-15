@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: tls_handshake.rs v0.4
+// Filename: tls_handshake.rs v0.5
 // Author: Lukas Bower
-// Date Modified: 2025-07-29
+// Date Modified: 2025-07-30
 
 use cohesix::secure9p::secure_9p_server::start_secure_9p_server;
 use jsonwebtoken::{encode, EncodingKey, Header};
@@ -63,4 +63,5 @@ fn tls_handshake() {
     hook.log("tester", "read", "/tmp/x", "ok");
     let log = fs::read_to_string(hook_path).unwrap();
     assert!(log.contains("tester"));
+}
 }
