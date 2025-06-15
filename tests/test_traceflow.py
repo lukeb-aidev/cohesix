@@ -9,6 +9,7 @@ import subprocess
 import os
 import shutil
 from pathlib import Path
+import pytest
 
 
 def test_traceflow(tmp_path):
@@ -18,10 +19,13 @@ def test_traceflow(tmp_path):
     trace_root = tmp_path / "trace"
     (trace_root / "w1").mkdir(parents=True, exist_ok=True)
     if Path("/trace").exists() or Path("/trace").is_symlink():
-        try:
-            Path("/trace").unlink()
-        except IsADirectoryError:
-            shutil.rmtree("/trace")
+        if os.access("/trace", os.W_OK):
+            try:
+                Path("/trace").unlink()
+            except IsADirectoryError:
+                shutil.rmtree("/trace")
+        else:
+            pytest.skip("insufficient permissions to modify /trace")
     os.symlink(trace_root, "/trace")
 
     subprocess.run(["python3", str(Path("cli/cohcap.py").resolve()), "grant", "camera", "--to", "w1"], env=env, check=True)
