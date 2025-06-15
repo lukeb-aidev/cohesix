@@ -8,7 +8,7 @@
 set -euo pipefail
 
 timestamp=$(date +%Y%m%d_%H%M%S)
-cd ~
+cd "$HOME"
 
 echo "📦 Cloning Git repo via SSH..."
 
@@ -26,6 +26,7 @@ echo "📦 Updating submodules (if any)..."
 git submodule update --init --recursive
 
 echo "🐍 Setting up Python venv..."
+command -v python3 >/dev/null || { echo "❌ python3 not found"; exit 1; }
 python3 -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip setuptools wheel
@@ -35,7 +36,7 @@ if [ -f requirements.txt ]; then
 fi
 
 echo "🦀 Building Rust components..."
-cargo build --release
+cargo build --all-targets --release
 
 echo "🔍 Running Rust tests with detailed output..."
 RUST_BACKTRACE=1 cargo test --release -- --nocapture 2>&1 | tee rust_test_output.log
@@ -47,10 +48,14 @@ else
   echo "✅ Rust tests passed."
 fi
 
-echo "🐹 Building Go components..."
-if [ -f go.mod ]; then
-  go build ./...
-  go test ./...
+if command -v go &> /dev/null; then
+  echo "🐹 Building Go components..."
+  if [ -f go.mod ]; then
+    go build ./...
+    go test ./...
+  fi
+else
+  echo "⚠️ Go not found; skipping Go build"
 fi
 
 echo "🐍 Running Python tests (pytest)..."
@@ -71,11 +76,15 @@ echo "✅ All builds complete."
 
 # Optional QEMU boot check
 if command -v qemu-system-x86_64 >/dev/null; then
+  if [ ! -f out/kernel.elf ]; then
+    echo "❌ Kernel ELF not found at out/kernel.elf"
+    exit 1
+  fi
   TMPDIR="${TMPDIR:-$(mktemp -d)}"
   DISK_DIR="$TMPDIR/qemu_disk"
   LOG_FILE="$TMPDIR/qemu_boot.log"
   mkdir -p "$DISK_DIR"
-  qemu-system-x86_64 -kernel out/kernel.elf -nographic -serial file:"$LOG_FILE" &
+  timeout 10s qemu-system-x86_64 -kernel out/kernel.elf -nographic -serial file:"$LOG_FILE" &
   QEMU_PID=$!
   sleep 3
   tail -n 20 "$LOG_FILE" || echo "❌ Could not read QEMU log"
