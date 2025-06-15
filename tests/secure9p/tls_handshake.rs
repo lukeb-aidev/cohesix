@@ -28,7 +28,9 @@ fn tls_handshake() {
         "\n[[namespace]]\nagent='tester'\nroot='/tmp'\nread_only=false\n",
     )
     .unwrap();
-    std::env::set_var("COHESIX_LOG_DIR", dir.path());
+    unsafe {
+        std::env::set_var("COHESIX_LOG_DIR", dir.path());
+    }
     let cert = generate_simple_self_signed(vec!["localhost".into()]).unwrap();
     let cert_path = dir.path().join("cert.pem");
     let key_path = dir.path().join("key.pem");

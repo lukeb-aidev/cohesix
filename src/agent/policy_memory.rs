@@ -1,12 +1,13 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: policy_memory.rs v0.3
+// Filename: policy_memory.rs v0.4
 // Author: Lukas Bower
-// Date Modified: 2025-08-15
+// Date Modified: 2025-08-16
 
 //! Persistent policy memory utilities.
 
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
 pub struct PolicyMemory {
@@ -52,17 +53,32 @@ impl PolicyMemory {
         Ok(())
     }
 
+    /// Determine the shared policy path respecting environment overrides.
+    fn shared_path() -> PathBuf {
+        if let Ok(base) = std::env::var("COHESIX_POLICY_TMP")
+            .or_else(|_| std::env::var("TMPDIR"))
+        {
+            Path::new(&base).join("policy_shared.json")
+        } else {
+            Path::new("/srv").join("policy_shared.json")
+        }
+    }
+
     /// Save the policy memory to a shared location for quick retrieval.
     pub fn save_shared(mem: &Self) -> anyhow::Result<()> {
-        fs::create_dir_all("/srv").ok();
+        let path = Self::shared_path();
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
         let buf = serde_json::to_vec(mem)?;
-        fs::write("/srv/policy_shared.json", buf)?;
+        fs::write(&path, buf)?;
         Ok(())
     }
 
     /// Load policy memory from the shared location if present.
     pub fn load_shared() -> anyhow::Result<Self> {
-        if let Ok(buf) = fs::read("/srv/policy_shared.json") {
+        let path = Self::shared_path();
+        if let Ok(buf) = fs::read(&path) {
             let m = serde_json::from_slice(&buf)?;
             Ok(m)
         } else {

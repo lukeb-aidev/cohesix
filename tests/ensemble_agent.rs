@@ -28,7 +28,9 @@ fn ensemble_weighted_selects_best() {
         path.to_str().unwrap().to_string()
     });
     let dir_root = std::path::PathBuf::from(dir_root);
-    std::env::set_var("COHESIX_ENS_TMP", &dir_root);
+    unsafe {
+        std::env::set_var("COHESIX_ENS_TMP", &dir_root);
+    }
     let dir = dir_root.join("e1");
     std::fs::create_dir_all(&dir).unwrap();
 

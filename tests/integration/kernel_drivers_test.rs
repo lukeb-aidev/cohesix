@@ -22,7 +22,9 @@ fn net_driver_loopback_roundtrip() {
 
 #[test]
 fn gpu_driver_env_selection() {
-    std::env::set_var("COHESIX_GPU", "cuda");
+    unsafe {
+        std::env::set_var("COHESIX_GPU", "cuda");
+    }
     let driver = GpuDriver::initialize();
     assert!(driver.is_available());
 }

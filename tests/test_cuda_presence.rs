@@ -12,7 +12,9 @@ fn cuda_presence_and_telemetry() {
     let dir = tempdir().unwrap();
     std::env::set_current_dir(&dir).unwrap();
     std::fs::create_dir_all("/log").unwrap();
-    std::env::set_var("COHESIX_LOG_DIR", "/log");
+    unsafe {
+        std::env::set_var("COHESIX_LOG_DIR", "/log");
+    }
 
     let rt = match CudaRuntime::try_new() {
         Ok(rt) => rt,
