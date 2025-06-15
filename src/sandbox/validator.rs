@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: validator.rs v0.4
+// Filename: validator.rs v0.5
 // Author: Lukas Bower
-// Date Modified: 2025-07-31
+// Date Modified: 2025-08-02
 
 //! Runtime syscall validator for sandboxed agents.
 //! Violations are logged to `/srv/violations/<agent>.json` and the
@@ -62,7 +62,10 @@ fn log_violation(agent: &str, role: Role, sc: &Syscall) {
 /// BootMustSucceed rule.
 /// Wait for `/trace/boot_trace.json` and verify it contains a `boot_success` event.
 pub fn boot_must_succeed() -> bool {
-    let path = Path::new("/trace/boot_trace.json");
+    let base = std::env::var("COHESIX_TRACE_TMP")
+        .or_else(|_| std::env::var("TMPDIR"))
+        .unwrap_or_else(|_| "/trace".to_string());
+    let path = Path::new(&base).join("boot_trace.json");
     let start = Instant::now();
     while !path.exists() && start.elapsed() < Duration::from_secs(5) {
         sleep(Duration::from_millis(100));
@@ -71,7 +74,7 @@ pub fn boot_must_succeed() -> bool {
         println!("BOOT_FAIL:missing_trace");
         return false;
     }
-    let data = match fs::read_to_string(path) {
+    let data = match fs::read_to_string(&path) {
         Ok(d) => d,
         Err(_) => return false,
     };
