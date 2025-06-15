@@ -37,6 +37,7 @@ pub mod fs;
 mod server;
 pub use server::FsServer;
 pub mod ninep_adapter;
+/// Policy enforcement and capability checks for Cohesix-9P.
 pub mod policy;
 
 /// Enforce capability checks based on the active Cohesix role.

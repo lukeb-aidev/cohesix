@@ -58,7 +58,7 @@ mod tests {
     #[test]
     #[serial]
     fn slice_read() {
-        let (mut srv, mut cli) = start();
+        let (srv, mut cli) = start();
         cli.create(
             "/",
             "file",
