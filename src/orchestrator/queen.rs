@@ -37,27 +37,36 @@ impl Queen {
         fs::create_dir_all("/srv/registry/join")?;
         fs::create_dir_all("/srv/registry/ping")?;
         fs::create_dir_all("/srv/registry/ack")?;
-        Ok(Self { workers: HashMap::new(), timeout: Duration::from_secs(timeout_secs) })
+        Ok(Self {
+            workers: HashMap::new(),
+            timeout: Duration::from_secs(timeout_secs),
+        })
     }
 
     /// Process join requests queued in `/srv/registry/join`.
     pub fn process_joins(&mut self) {
         if let Ok(entries) = fs::read_dir("/srv/registry/join") {
             for e in entries.flatten() {
-                if let Ok(mut f) = fs::File::open(e.path()) {
-                    if let Ok(req) = from_read::<_, JoinRequest>(&mut f) {
-                        self.workers.insert(
-                            req.worker_id.clone(),
-                            WorkerInfo { last_seen: timestamp(), quarantined: false },
-                        );
-                        // create worker dir and ack
-                        fs::create_dir_all(format!("/srv/worker/{}", req.worker_id)).ok();
-                        let ack = JoinAck { worker_id: req.worker_id.clone(), queen_id: hostname() };
-                        if let Ok(data) = to_vec(&ack) {
-                            fs::create_dir_all("/srv/registry/ack").ok();
-                            let path = format!("/srv/registry/ack/{}.msg", req.worker_id);
-                            let _ = fs::write(path, data);
-                        }
+                if let Ok(req) = fs::File::open(e.path()).and_then(|mut f| {
+                    from_read::<_, JoinRequest>(&mut f).map_err(std::io::Error::other)
+                }) {
+                    self.workers.insert(
+                        req.worker_id.clone(),
+                        WorkerInfo {
+                            last_seen: timestamp(),
+                            quarantined: false,
+                        },
+                    );
+                    // create worker dir and ack
+                    fs::create_dir_all(format!("/srv/worker/{}", req.worker_id)).ok();
+                    let ack = JoinAck {
+                        worker_id: req.worker_id.clone(),
+                        queen_id: hostname(),
+                    };
+                    if let Ok(data) = to_vec(&ack) {
+                        fs::create_dir_all("/srv/registry/ack").ok();
+                        let path = format!("/srv/registry/ack/{}.msg", req.worker_id);
+                        let _ = fs::write(path, data);
                     }
                 }
                 let _ = fs::remove_file(e.path());
@@ -69,12 +78,12 @@ impl Queen {
     pub fn ingest_pings(&mut self) {
         if let Ok(entries) = fs::read_dir("/srv/registry/ping") {
             for e in entries.flatten() {
-                if let Ok(mut f) = fs::File::open(e.path()) {
-                    if let Ok(ping) = from_read::<_, HealthPing>(&mut f) {
-                        if let Some(w) = self.workers.get_mut(&ping.worker_id) {
-                            w.last_seen = ping.ts;
-                            w.quarantined = false;
-                        }
+                if let Ok(ping) = fs::File::open(e.path()).and_then(|mut f| {
+                    from_read::<_, HealthPing>(&mut f).map_err(std::io::Error::other)
+                }) {
+                    if let Some(w) = self.workers.get_mut(&ping.worker_id) {
+                        w.last_seen = ping.ts;
+                        w.quarantined = false;
                     }
                 }
                 let _ = fs::remove_file(e.path());
@@ -86,9 +95,7 @@ impl Queen {
     pub fn check_timeouts(&mut self) {
         let now = timestamp();
         for (id, info) in self.workers.iter_mut() {
-            if now.saturating_sub(info.last_seen) > self.timeout.as_secs()
-                && !info.quarantined
-            {
+            if now.saturating_sub(info.last_seen) > self.timeout.as_secs() && !info.quarantined {
                 log_fault(id);
                 info.quarantined = true;
             }
