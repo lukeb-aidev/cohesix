@@ -16,13 +16,13 @@ fn webcam_permission_check() {
     fs::create_dir_all("srv").unwrap();
     let _ = fs::remove_dir_all("/srv/webcam");
     fs::write("/srv/cohrole", "QueenPrimary").unwrap();
-    ServiceRegistry::reset();
+    ServiceRegistry::reset().unwrap();
     let mut svc = WebcamService::default();
     svc.init();
     assert!(!Path::new("/srv/webcam").exists());
 
     fs::write("/srv/cohrole", "DroneWorker").unwrap();
-    ServiceRegistry::reset();
+    ServiceRegistry::reset().unwrap();
     let mut svc = WebcamService::default();
     svc.init();
     assert!(Path::new("/srv/webcam").exists());

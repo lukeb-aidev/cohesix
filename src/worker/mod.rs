@@ -35,7 +35,7 @@ use crate::runtime::ServiceRegistry;
 
 /// Register worker services during initialization.
 pub fn register_services() {
-    ServiceRegistry::register_service("cuda", "/srv/cuda");
-    ServiceRegistry::register_service("shell", "/srv/shell_out");
-    ServiceRegistry::register_service("diag", "/srv/diagnostics");
+    let _ = ServiceRegistry::register_service("cuda", "/srv/cuda");
+    let _ = ServiceRegistry::register_service("shell", "/srv/shell_out");
+    let _ = ServiceRegistry::register_service("diag", "/srv/diagnostics");
 }

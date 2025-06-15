@@ -12,6 +12,8 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
+use thiserror::Error;
+
 use once_cell::sync::Lazy;
 
 use crate::cohesix_types::{Role, RoleManifest};
@@ -28,48 +30,71 @@ pub struct ServiceHandle {
 static REGISTRY: Lazy<Mutex<HashMap<String, ServiceHandle>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
+/// Errors returned by [`ServiceRegistry`] operations.
+#[derive(Debug, Error)]
+pub enum ServiceRegistryError {
+    #[error("service registry lock poisoned")]
+    LockPoisoned,
+}
+
+type RegistryResult<T> = Result<T, ServiceRegistryError>;
+
 /// Registry for runtime services.
 pub struct ServiceRegistry;
 
 impl ServiceRegistry {
     /// Register a service path for the current role.
-    pub fn register_service(name: &str, path: &str) {
+    pub fn register_service(name: &str, path: &str) -> RegistryResult<()> {
         let role = RoleManifest::current_role();
         let handle = ServiceHandle {
             path: path.into(),
             role,
         };
-        REGISTRY.lock().unwrap().insert(name.into(), handle);
+        REGISTRY
+            .lock()
+            .map_err(|_| ServiceRegistryError::LockPoisoned)?
+            .insert(name.into(), handle);
+        Ok(())
     }
 
     /// Remove a previously registered service.
-    pub fn unregister_service(name: &str) {
-        REGISTRY.lock().unwrap().remove(name);
+    pub fn unregister_service(name: &str) -> RegistryResult<()> {
+        REGISTRY
+            .lock()
+            .map_err(|_| ServiceRegistryError::LockPoisoned)?
+            .remove(name);
+        Ok(())
     }
 
     /// Lookup a service handle if visible to the current role.
-    pub fn lookup(name: &str) -> Option<ServiceHandle> {
+    pub fn lookup(name: &str) -> RegistryResult<Option<ServiceHandle>> {
         let role = RoleManifest::current_role();
-        REGISTRY
+        let opt = REGISTRY
             .lock()
-            .unwrap()
+            .map_err(|_| ServiceRegistryError::LockPoisoned)?
             .get(name)
             .cloned()
-            .filter(|h| h.role == role || role == Role::QueenPrimary)
+            .filter(|h| h.role == role || role == Role::QueenPrimary);
+        Ok(opt)
     }
 
     /// Clear all registered services. Only used in tests.
-    pub fn reset() {
-        REGISTRY.lock().unwrap().clear();
+    pub fn reset() -> RegistryResult<()> {
+        REGISTRY
+            .lock()
+            .map_err(|_| ServiceRegistryError::LockPoisoned)?
+            .clear();
+        Ok(())
     }
 
     /// Return the names of all registered services.
-    pub fn list_services() -> Vec<String> {
-        REGISTRY
+    pub fn list_services() -> RegistryResult<Vec<String>> {
+        let list = REGISTRY
             .lock()
-            .unwrap()
+            .map_err(|_| ServiceRegistryError::LockPoisoned)?
             .keys()
             .cloned()
-            .collect()
+            .collect();
+        Ok(list)
     }
 }

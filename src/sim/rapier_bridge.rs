@@ -65,7 +65,7 @@ impl SimBridge {
     pub fn start() -> Self {
         let (tx, rx) = mpsc::channel();
         thread::spawn(move || simulation_loop(rx));
-        ServiceRegistry::register_service("sim", "/sim");
+        let _ = ServiceRegistry::register_service("sim", "/sim");
         Self { tx }
     }
 

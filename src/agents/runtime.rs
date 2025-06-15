@@ -64,7 +64,7 @@ impl AgentRuntime {
         fs::create_dir_all(&agents_dir)?;
         let path = format!("{}/{}", agents_dir, agent_id);
         fs::create_dir_all(&path)?;
-        ServiceRegistry::register_service(agent_id, &path);
+        ServiceRegistry::register_service(agent_id, &path)?;
 
         let trace_dir = agent_trace_dir();
         fs::create_dir_all(&trace_dir)?;

@@ -71,7 +71,7 @@ impl CudaRuntime {
             warn!("CUDA unavailable; exposing stub interface at /srv/cuda");
             fs::write("/srv/cuda/info", "cuda unavailable").ok();
         }
-        ServiceRegistry::register_service("cuda", "/srv/cuda");
+        let _ = ServiceRegistry::register_service("cuda", "/srv/cuda");
         Ok(Self {
             lib,
             #[cfg(feature = "cuda")]

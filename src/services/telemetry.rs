@@ -23,7 +23,7 @@ impl Service for TelemetryService {
     fn init(&mut self) {
         self.initialized = true;
         println!("[telemetry] initialized");
-        ServiceRegistry::register_service("telemetry", "/srv/telemetry");
+        let _ = ServiceRegistry::register_service("telemetry", "/srv/telemetry");
         TelemetrySyncLoop::spawn();
     }
 
