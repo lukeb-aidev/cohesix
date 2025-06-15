@@ -1,6 +1,6 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: test_integration_boot.py v0.1
-# Date Modified: 2025-07-16
+# Filename: test_integration_boot.py v0.2
+# Date Modified: 2025-07-31
 # Author: Cohesix Codex
 
 """Boot simulation integration test for Cohesix."""
@@ -45,7 +45,7 @@ def test_boot_services(tmp_path):
     assert "role startup success" in open("/log/session.log").read()
 
     import subprocess
-    for role in ("QueenPrimary", "DroneWorker", "KioskInteractive"):
+    for role in ("QueenPrimary", "DroneWorker", "KioskInteractive", "InteractiveAIBooth"):
         env = dict(os.environ, COH_ROLE=role)
         res = subprocess.run(["python3", "cli/cohcli.py", "status"], env=env, capture_output=True, text=True)
         assert role in res.stdout

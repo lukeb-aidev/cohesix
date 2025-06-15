@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: capabilities.rs v0.1
+// Filename: capabilities.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-07-13
+// Date Modified: 2025-07-31
 
 //! Runtime capability map loaded from `/etc/cohcap.json`.
 //! Maps roles to allowed syscall verbs and path prefixes.
@@ -37,6 +37,10 @@ fn default_caps() -> HashMap<String, RoleCaps> {
         (
             "DroneWorker".into(),
             RoleCaps { verbs: vec!["open".into()], paths: vec!["/sim".into(), "/srv/cuda".into()] },
+        ),
+        (
+            "InteractiveAIBooth".into(),
+            RoleCaps { verbs: vec!["open".into()], paths: vec!["/input".into(), "/mnt".into(), "/srv/cuda".into()] },
         ),
         (
             "KioskInteractive".into(),

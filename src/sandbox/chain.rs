@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: chain.rs v0.1
+// Filename: chain.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-06-19
+// Date Modified: 2025-07-31
 
 //! Execute syscall chains within the sandbox environment.
 //!
@@ -28,7 +28,7 @@ impl SandboxChainExecutor for DefaultChainExecutor {
         let role = RoleManifest::current_role();
         if !matches!(
             role,
-            Role::DroneWorker | Role::SimulatorTest | Role::QueenPrimary
+            Role::DroneWorker | Role::InteractiveAIBooth | Role::SimulatorTest | Role::QueenPrimary
         ) {
             debug!("chain execution blocked for role: {:?}", role);
             return;

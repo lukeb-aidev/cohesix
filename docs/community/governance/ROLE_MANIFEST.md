@@ -1,11 +1,13 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: ROLE_MANIFEST.md v1.3
-// Date Modified: 2025-07-22
+// Filename: ROLE_MANIFEST.md v1.4
+// Date Modified: 2025-07-31
 // Author: Lukas Bower
 
 # Role Manifest
 
 At boot, Cohesix reads the declared runtime role from `/srv/cohrole` to determine which services and agents to initialize. Each role encapsulates a distinct set of responsibilities, interfaces, and resource privileges—ensuring least-privilege operation and clear service orchestration.
+
+<!-- New hybrid AI kiosk role combining Jetson GPU features with interactive booth UI -->
 
 | Role             | Description                                   | Interface                  |
 |------------------|-----------------------------------------------|----------------------------|
@@ -13,6 +15,7 @@ At boot, Cohesix reads the declared runtime role from `/srv/cohrole` to determin
 | RegionalQueen    | Cloud-native cluster orchestrator: handles dynamic resource allocation, auto-scaling, and failover across multiple nodes, leveraging cloud hooks at boot. | gRPC control plane         |
 | BareMetalQueen   | Bare-metal orchestrator for isolated or private networks, bootstrapping directly on hardware with minimal dependencies and direct device management. | Proprietary hardware interface |
 | DroneWorker      | Physics & sensor processing: runs Rapier-based simulations and aggregates sensor inputs. | `/sim/` namespace          |
+| InteractiveAIBooth | Hybrid AI kiosk booth with Jetson acceleration and UI services. | `/srv/cuda` + Secure9P |
 | KioskInteractive | Local human–machine interface: handles AR user interactions on kiosk displays. | WebSocket + 9P namespace   |
 | GlassesAgent     | Vision pipeline & UI renderer for AR glasses: processes camera feeds and renders overlays via CUDA. | `/srv/cuda` + 9P streams   |
 | SensorRelay      | Sensor data aggregator: collects and forwards sensor streams to other roles. | 9P file streams            |
