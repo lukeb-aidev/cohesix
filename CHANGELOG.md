@@ -46,6 +46,8 @@
 - Added integration test `test_qemu_boot.rs` to verify BOOT_OK in qemu_serial.log
 - New `scripts/check-qemu-deps.sh` verifies QEMU and gnu-efi packages before boot tests; README documents usage
 
+- cohesix-9p/Cargo.toml edition set to 2021 to support async features
+
 ## [v0.89] - 2025-07-25
 ### Changed
 - Secure9P tests start consolidated server with `start_secure_9p_server` using temporary TLS and policy files.
