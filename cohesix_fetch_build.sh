@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: cohesix_fetch_build.sh v0.2
+// Filename: cohesix_fetch_build.sh v0.3
 // Author: Lukas Bower
-// Date Modified: 2025-06-14
+// Date Modified: 2025-06-15
 #!/bin/bash
 # Fetch and fully build the Cohesix project using SSH Git auth.
 
@@ -68,3 +68,23 @@ if [ -f CMakeLists.txt ]; then
 fi
 
 echo "✅ All builds complete."
+
+# Optional QEMU boot check
+if command -v qemu-system-x86_64 >/dev/null; then
+  TMPDIR="${TMPDIR:-$(mktemp -d)}"
+  DISK_DIR="$TMPDIR/qemu_disk"
+  LOG_FILE="$TMPDIR/qemu_boot.log"
+  mkdir -p "$DISK_DIR"
+  qemu-system-x86_64 -kernel out/kernel.elf -nographic -serial file:"$LOG_FILE" &
+  QEMU_PID=$!
+  sleep 3
+  tail -n 20 "$LOG_FILE" || echo "❌ Could not read QEMU log"
+  if grep -q "BOOT_OK" "$LOG_FILE"; then
+    echo "✅ QEMU boot succeeded"
+  else
+    echo "❌ BOOT_OK not found in log"
+  fi
+  wait $QEMU_PID || echo "❌ QEMU exited with error"
+else
+  echo "⚠️ qemu-system-x86_64 not installed; skipping boot test"
+fi
