@@ -111,7 +111,7 @@
 | Makefile | v0.19 | 2025-07-28 | COMMUNITY | | |
 | test_boot_efi.sh | v0.11 | 2025-07-30 | COMMUNITY | | |
 | src/kernel/main.c | v0.2 | 2025-07-22 | COMMUNITY | | |
-| src/kernel/main.rs | v0.1 | 2025-08-01 | COMMUNITY | | |
+| src/kernel/main.rs | v0.2 | 2025-08-02 | COMMUNITY | | |
 | tests/test_traceflow.py | v0.1 | 2025-07-23 | COMMUNITY | | |
 | tests/test_invalid_cli.py | v0.1 | 2025-07-23 | COMMUNITY | | |
 | tests/test_9p_read_write.rs | v0.1 | 2025-07-23 | COMMUNITY | | |
@@ -122,7 +122,7 @@
 | docs/QUICKSTART.md | v0.1 | 2025-07-23 | COMMUNITY | | |
 | docs/community/architecture/BOOT_KERNEL_FLOW.md | v0.1 | 2025-07-23 | COMMUNITY | | |
 | docs/community/archive/examples_README.md | v0.2 | 2025-07-23 | COMMUNITY | | |
-| cohesix_fetch_build.sh | v0.5 | 2025-08-01 | COMMUNITY | | |
+| cohesix_fetch_build.sh | v0.6 | 2025-08-02 | COMMUNITY | | |
 | CONTRIBUTING.md | v1.1 | 2025-07-23 | COMMUNITY | | |
 | config/secure9p.toml | v0.3 | 2025-07-31 | COMMUNITY | | |
 | src/secure9p/mod.rs | v0.2 | 2025-07-25 | COMMUNITY | | |

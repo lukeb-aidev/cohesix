@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.57
-// Date Modified: 2025-08-01
+// Filename: CHANGELOG.md v0.58
+// Date Modified: 2025-08-02
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
 • Consolidated OSS reuse files into LICENSES_AND_REUSE.md
@@ -8,7 +8,7 @@
 • Created CLI and Agent index at cli/README.md
 • Normalized headers and metadata across all affected documentation
 
-## [vNext] - 2025-08-01
+## [vNext] - 2025-08-02
 ### Temp path fixes and QEMU script guard
 - cohesix_fetch_build.sh header updated and registered in METADATA
 - QEMU boot log handling runs in background in cohesix_fetch_build.sh
@@ -18,6 +18,8 @@
 - cohesix_fetch_build.sh v0.4 stages kernel ELF and boot files in out/
 - Cargo.toml v0.5 adds kernel binary target
 - Added src/kernel/main.rs minimal entry for ELF boot
+ - cohesix_fetch_build.sh v0.6 builds kernel with cargo and validates artifact
+ - src/kernel/main.rs v0.2 gated by `kernel_bin` feature
 - cohesix_fetch_build.sh v0.5 builds kernel ELF using kernel_bin feature
 - Cargo.toml v0.6 keeps kernel_bin feature gating for tests
 - Boot test exits with code 0 when QEMU is missing so CI shows the step as skipped
