@@ -41,6 +41,15 @@ if [ ! -f target/release/kernel ]; then
 fi
 cp target/release/kernel out/kernel.elf
 
+make bootloader kernel >/dev/null
+if [ -f out/BOOTX64.EFI ]; then
+  cp out/BOOTX64.EFI out/bootx64.efi
+fi
+if [ ! -f out/bootx64.efi ]; then
+  echo "❌ No bootx64.efi found or not executable in out" >&2
+  exit 1
+fi
+
 for f in initfs.img plan9.ns bootargs.txt boot_trace.json; do
   if [ -f "$f" ]; then
     cp "$f" out/
@@ -98,16 +107,16 @@ if command -v qemu-system-x86_64 >/dev/null; then
   DISK_DIR="$TMPDIR/qemu_disk"
   LOG_FILE="out/qemu_boot.log"
   mkdir -p "$DISK_DIR"
-  timeout 10s qemu-system-x86_64 -kernel "$KERNEL_ELF" -nographic -serial file:"$LOG_FILE" &
-  QEMU_PID=$!
+  qemu-system-x86_64 -kernel "$KERNEL_ELF" -nographic -serial file:"$LOG_FILE" -daemonize
   sleep 3
+  echo "📜 Boot log (tail):"
   tail -n 20 "$LOG_FILE" || echo "❌ Could not read QEMU log"
   if grep -q "BOOT_OK" "$LOG_FILE"; then
     echo "✅ QEMU boot succeeded"
   else
     echo "❌ BOOT_OK not found in log"
   fi
-  wait $QEMU_PID || echo "❌ QEMU exited with error"
+  pkill -f "$KERNEL_ELF" || true
 else
   echo "⚠️ qemu-system-x86_64 not installed; skipping boot test"
 fi

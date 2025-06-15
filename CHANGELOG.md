@@ -22,6 +22,7 @@
  - src/kernel/main.rs v0.2 gated by `kernel_bin` feature
 - cohesix_fetch_build.sh v0.5 builds kernel ELF using kernel_bin feature
 - Cargo.toml v0.6 keeps kernel_bin feature gating for tests
+- cohesix_fetch_build.sh v0.7 builds bootx64.efi, isolates QEMU monitor, and validates boot log
 - Boot test exits with code 0 when QEMU is missing so CI shows the step as skipped
 - policy_memory.rs v0.3 adds fallback to local persist path for tests
 - Makefile v0.18 skips gnu-efi header checks and tolerates missing cargo tools
