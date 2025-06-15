@@ -13,7 +13,9 @@ use serial_test::serial;
 fn capture_dummy_when_missing() {
     let dir = tempdir().unwrap();
     let out = dir.path().join("frame.jpg");
-    std::env::set_var("VIDEO_DEVICE", dir.path().join("missing").to_str().unwrap());
+    unsafe {
+        std::env::set_var("VIDEO_DEVICE", dir.path().join("missing").to_str().unwrap());
+    }
     capture::capture_jpeg(out.to_str().unwrap()).unwrap();
     assert!(out.exists());
     let data = fs::read(&out).unwrap();

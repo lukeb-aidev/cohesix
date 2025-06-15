@@ -9,6 +9,7 @@ use std::fs;
 #[test]
 fn open_denied_logs_violation() {
     fs::create_dir_all("/etc").unwrap();
+    unsafe { std::env::set_var("COHESIX_LOG_DIR", "/log"); }
     let log_dir = std::path::PathBuf::from("/log");
     fs::create_dir_all(&log_dir).unwrap();
     fs::write(
@@ -22,6 +23,7 @@ fn open_denied_logs_violation() {
     assert!(res.is_err());
     let log = fs::read_to_string(log_dir.join("sandbox.log")).unwrap();
     assert!(log.contains("blocked action=open"));
+    unsafe { std::env::remove_var("COHESIX_LOG_DIR"); }
 }
 
 #[test]

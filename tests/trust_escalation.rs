@@ -19,13 +19,17 @@ fn ld_preload_blocked() {
     )
     .unwrap();
     fs::write("/srv/cohrole", "DroneWorker").unwrap();
-    std::env::set_var("LD_PRELOAD", "evil.so");
+    unsafe {
+        std::env::set_var("LD_PRELOAD", "evil.so");
+    }
     let path = tmpdir.join("ok");
     let res = open(path.to_str().unwrap(), 0);
     assert!(res.is_err());
     let log_dir = std::path::PathBuf::from("/log");
     fs::create_dir_all(&log_dir).unwrap();
-    std::env::set_var("COHESIX_LOG_DIR", "/log");
+    unsafe {
+        std::env::set_var("COHESIX_LOG_DIR", "/log");
+    }
     let log = fs::read_to_string(log_dir.join("sandbox.log")).unwrap();
     assert!(log.contains("open_preload"));
 }

@@ -21,7 +21,9 @@ fn sandbox_violation_logged() {
     let dir = tempdir().unwrap();
     let log_dir = dir.path().join("log");
     fs::create_dir_all(&log_dir).unwrap();
-    std::env::set_var("COHESIX_LOG_DIR", &log_dir);
+    unsafe {
+        std::env::set_var("COHESIX_LOG_DIR", &log_dir);
+    }
     let mut srv = FsServer::new(FsConfig {
         port: 5670,
         ..Default::default()

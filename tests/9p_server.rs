@@ -36,9 +36,13 @@ fn msg(op: u8, path: &str) -> Vec<u8> {
 #[serial]
 fn walk_srv() -> io::Result<()> {
     let env = setup("QueenPrimary")?;
-    std::env::set_var("COHROLE_PATH", &env.cohrole);
+    unsafe {
+        std::env::set_var("COHROLE_PATH", &env.cohrole);
+    }
     let resp = handle_9p_session(&msg(0x03, "/srv"));
-    std::env::remove_var("COHROLE_PATH");
+    unsafe {
+        std::env::remove_var("COHROLE_PATH");
+    }
     assert!(matches!(parse_message(&resp), P9Message::Rwalk));
     Ok(())
 }
@@ -47,9 +51,13 @@ fn walk_srv() -> io::Result<()> {
 #[serial]
 fn worker_write_denied() -> io::Result<()> {
     let env = setup("DroneWorker")?;
-    std::env::set_var("COHROLE_PATH", &env.cohrole);
+    unsafe {
+        std::env::set_var("COHROLE_PATH", &env.cohrole);
+    }
     let resp = handle_9p_session(&msg(0x09, "/proc/x"));
-    std::env::remove_var("COHROLE_PATH");
+    unsafe {
+        std::env::remove_var("COHROLE_PATH");
+    }
     assert!(matches!(parse_message(&resp), P9Message::Unknown(0xfd)));
     Ok(())
 }
