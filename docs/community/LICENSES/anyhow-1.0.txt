@@ -1,1 +1,11 @@
-UNKNOWN
+MIT OR Apache-2.0
+
+This package is dual-licensed.
+
+You may use this package under either the MIT license or the Apache 2.0 license, at your option.
+
+SPDX-License-Identifier: MIT OR Apache-2.0
+
+For license texts, see:
+- https://opensource.org/licenses/MIT
+- https://www.apache.org/licenses/LICENSE-2.0

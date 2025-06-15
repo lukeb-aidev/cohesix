@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: REMOTE_ACCESS.md v1.0
-// Date Modified: 2025-05-24
+// Date Modified: 2025-07-31
 // Author: Lukas Bower
 
 # REMOTE ACCESS
@@ -59,7 +59,7 @@ This document provides a bulletproof, step-by-step guide for a typical community
 3. Configure `iptables` or `ufw` to allow only the forwarded port and loopback:
    ```bash
    sudo ufw default deny incoming
-   sudo ufw allow 22/tcp
+   sudo ufw allow 2222/tcp  # or the port forwarded from the router
    sudo ufw enable
    ```
 4. Verify firewall rules:
@@ -70,10 +70,10 @@ This document provides a bulletproof, step-by-step guide for a typical community
 ## Step 5: Establish a Secure 9P/TLS or Reverse Tunnel (Optional Alternative)
 - **Direct TLS**:
   1. Generate certificates (CA-signed or self-signed) on the Queen.
-  2. Configure the Worker to mount the 9P namespace over TLS:
-     ```bash
-     coh-9p-mount --tls --host queen.example.com --port 564 --mountpoint /srv/coh
-     ```
+ 2. Configure the Worker to mount the Cohesix 9P namespace over TLS using `coh-9p-mount`:
+    ```bash
+    coh-9p-mount --tls --host queen.example.com --port 564 --mountpoint /srv/coh
+    ```
 - **Reverse SSH Tunnel** (if forward ports blocked or ISP CGNAT):
   1. On the Worker, create a persistent reverse tunnel:
      ```bash
@@ -95,6 +95,10 @@ This document provides a bulletproof, step-by-step guide for a typical community
    sudo journalctl -u coh-queen
    ```
 3. Run a sample workload to confirm end-to-end functionality.
+4. (Optional) Validate worker registration and tracing:
+   ```bash
+   cohtrace list --scope worker
+   ```
 
 ## Common Pitfalls & Troubleshooting
 - **Double NAT / CGNAT**: ISP uses carrier-grade NAT—port forwarding won’t work. Use reverse SSH tunnel or VPN.

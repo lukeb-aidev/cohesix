@@ -1,11 +1,20 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: cli.md v0.3
 // Author: Lukas Bower
-// Date Modified: 2025-07-12
+// Date Modified: 2025-06-15
 
 # Cohesix CLI Guide
 
 This guide summarises key commands for `cohcli` and `cohup`.
+
+## CLI by Role Reference
+
+| Role             | Commands Relevant To Role                  |
+|------------------|--------------------------------------------|
+| QueenPrimary     | cohup join, cohup list-peers, cohcli agent migrate |
+| KioskInteractive | cohrun kiosk_start, cohrun kiosk_event     |
+| DroneWorker      | cohcli agent migrate                       |
+| SimulatorTest    | cohtrace kiosk_ping                        |
 
 ## cohup patch
 Apply a live patch to a running node.
@@ -50,3 +59,5 @@ cohtrace kiosk_ping
 ```
 
 See also: [Detailed CLI help](CLI_HELP_COHCLI.md).
+
+For a complete index and role-by-tool breakdown, see: cli/README.md

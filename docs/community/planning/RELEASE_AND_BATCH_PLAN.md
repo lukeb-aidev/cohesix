@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: RELEASE_AND_BATCH_PLAN.md v1.0
 // Author: Lukas Bower
-// Date Modified: 2025-06-20
+// Date Modified: 2025-07-31
 
 # Release and Batch Plan
 
@@ -12,6 +12,8 @@ This document merges the release criteria and the rolling batch plan used for Co
 2. **OS Runtime** – seL4 boot with CohRole init, Plan 9 services, `/sim/` and `/srv/cuda` validated by CI.
 3. **Tooling** – BusyBox utilities, SSH, `man`, package stub, monitoring tools.
 4. **AI/Codex** – Agents defined in `AGENTS_AND_CLI.md`; smoke tests run via `pytest tests/codex/`.
+
+5. **Trace & Validator** – All agent, syscall, and CLI traces replayed via validator; `cohtrace` snapshot and diff tools tested in CI.
 
 Success requires passing all tests on aarch64 and x86_64 using `test_all_arch.sh`.
 
@@ -26,3 +28,5 @@ Batches are grouped by component and executed in order. Examples:
 Each batch defines deliverables, dependencies, and CI commands. Checkpoints occur every 10 files with logs stored in `codex_logs/`.
 
 Upcoming work includes aligning METADATA versions, updating CHANGELOG entries, and running matrix CI after major document updates.
+
+Batch trace logs are emitted to `/log/status_trace/` and snapshots are captured under `/history/snapshots/` for validator replay.

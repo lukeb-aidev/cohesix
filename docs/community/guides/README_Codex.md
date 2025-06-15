@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: README_Codex.md v1.4
-// Date Modified: 2025-06-16
+// Date Modified: 2025-07-31
 // Author: Lukas Bower
 
 # README Codex
@@ -85,6 +85,7 @@ and runs `validate_metadata_sync.py`.
            - run: pip install cohcli pre-commit pytest
            - run: pre-commit run --all-files
            - run: pytest tests/codex/
+           - run: python scripts/validate_metadata_sync.py
      ```
    - Note: QEMU is not available in the Codex environment, so related tests (e.g., `test_boot_efi`) will fail unless explicitly skipped or mocked.
 4. **Audit Logs**: Store all Codex-generated outputs in `codex_logs/` with timestamps. Configure `cohcli` to write logs:  
@@ -92,9 +93,10 @@ and runs `validate_metadata_sync.py`.
    cohcli codex run <agent_id> --file path --log-dir codex_logs/
    ```
    - Note: Codex cannot write logs to `/tmp` in its environment; logs must be redirected to a writable path like `codex_logs/` or a relative project directory.
-5. **Human Review Gate**: Require at least one code review approval for any PR with Codex-generated changes. Enforce via branch protection rules.
+5. **Human Review Gate**: Require at least one code review approval for any PR with Codex-generated changes. Enforce via GitHub branch protection rules with status checks enabled.
 6. **Metadata Sync**: Run `python scripts/validate_metadata_sync.py` before pushing changes to ensure document headers match `METADATA.md`.
 7. **Sandbox Environment**: Codex runs in a restricted sandbox with no persistent filesystem access, so all scripts should use `TMPDIR`, `COHESIX_TRACE_TMP`, or similar environment variables for temporary paths instead of hardcoded locations.
+   Hardcoded `/tmp/` or `/var/` paths are explicitly blocked in Codex CI.
 
 ## Getting Started Quickly
 

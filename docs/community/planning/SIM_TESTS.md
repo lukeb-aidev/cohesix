@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: SIM_TESTS.md v0.1
 // Author: Lukas Bower
-// Date Modified: 2025-07-13
+// Date Modified: 2025-07-31
 
 # Simulation Snapshot & Replay Tests
 
@@ -26,6 +26,8 @@ Snapshots are written to `/sim/world.json` and contain:
 }
 ```
 
+Trace files corresponding to snapshot runs are saved under `/log/trace/sim_<timestamp>.log` and include every force, state change, and agent action.
+
 ## Replay Instructions
 
 1. Run any simulation that creates `/sim/world.json`.
@@ -34,3 +36,5 @@ Snapshots are written to `/sim/world.json` and contain:
 4. The deterministic harness can be invoked using `deterministic_harness(seed, steps)`.
 
 Logs for each run are stored under `/srv/trace/sim.log` and should be identical across architectures when using the same seed.
+
+Snapshot and trace consistency is validated automatically by the CI harness using `cohtrace diff`.

@@ -7,6 +7,21 @@
 
 This document merges `ROLE_MANIFEST.md` and the private `QUEEN_POLICY.md` into a single reference. It outlines runtime roles and the policies that govern the Queen role.
 
+## Role Summary
+
+| Role             | Summary Purpose                     |
+|------------------|-------------------------------------|
+| QueenPrimary     | Cloud orchestrator and CI manager   |
+| RegionalQueen    | Multi-node cloud federation lead    |
+| BareMetalQueen   | On-premise orchestration node       |
+| DroneWorker      | Physical simulation + sensors       |
+| InteractiveAIBooth | AI kiosk with Jetson + UI stack  |
+| KioskInteractive | Standalone human interface terminal |
+| GlassesAgent     | AR rendering for glasses            |
+| SensorRelay      | Sensor aggregator + forwarder       |
+| SimulatorTest    | Scenario trace + test validation    |
+
+See below for full technical descriptions, interfaces, and orchestration behavior.
 
 At boot, Cohesix reads the declared runtime role from `/srv/cohrole` to determine which services and agents to initialize. Each role encapsulates a distinct set of responsibilities, interfaces, and resource privileges—ensuring least-privilege operation and clear service orchestration.
 
@@ -32,6 +47,7 @@ Federated deployments may declare hierarchical roles. A Queen inheriting from an
 
 ## Queen Policy
 
+The policies described here apply only to QueenPrimary, RegionalQueen, and BareMetalQueen roles.
 
 This document defines internal enforcement policies for the Queen role.
 

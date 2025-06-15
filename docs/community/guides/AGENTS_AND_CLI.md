@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: AGENTS_AND_CLI.md v1.2
 // Author: Lukas Bower
-// Date Modified: 2025-07-23
+// Date Modified: 2025-07-31
 
 # Agents and CLI
 
@@ -37,6 +37,19 @@ All CLI commands are invoked via small wrapper scripts that call the Python sour
 - **cohcc** – compiler front-end for Cohesix IR
 - **cohcap** – capability management for demo scenarios
 - **cohshell** – wrapper for Cohesix BusyBox; symlink to `/bin/sh` for minimal rootfs
+- **cohmeta** – displays current metadata version and role bindings
+
+### CLI by Role
+
+| Role           | Tools Used                      |
+|----------------|----------------------------------|
+| QueenPrimary   | cohcli, cohrun, cohtrace         |
+| DroneWorker    | cohrun, cohtrace, cohcc          |
+| KioskInteractive | cohcap, cohcli                 |
+| SensorRelay    | cohshell, cohtrace               |
+| SimulatorTest  | cohcli, cohrun, cohcc, cohtrace  |
+
+For detailed command breakdowns by tool, see CLI_HELP_*.md.
 
 Example usage:
 ```bash
@@ -52,6 +65,8 @@ cohtrace list
 
 Validators run automatically via `validate_metadata_sync.py` and CI hooks to ensure all generated files match `METADATA.md`.
 
+For a role-by-role breakdown of tool usage, see the CLI matrix above.
+
 
 ## Temporary Directory Behavior
 
@@ -63,3 +78,5 @@ All agents and CLI tools now support use of environment variables to redirect ou
 - `COHESIX_LOG_DIR`: directory for runtime logs (falls back to the system temp dir if unset)
 
 This allows tests, simulations, and builds to succeed in environments where root or shared paths are not writable.
+
+These variables are validated at startup and will raise a warning if they point to a non-writable or nonexistent path.

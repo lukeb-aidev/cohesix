@@ -1,15 +1,16 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CLI_HELP_COHCLI.md v0.1
 // Author: Lukas Bower
-// Date Modified: 2025-07-12
+// Date Modified: 2025-06-15
 
 # cohcli
 
-Command-line interface for interacting with Cohesix services and workers.
+*(Applies to: QueenPrimary, DroneWorker, SimulatorTest)*
 
 ```bash
 Usage: cohcli <command> [options]
 ```
+See CLI README.md for full role-by-command mapping.
 
 ## Commands
 - `status [--verbose]` – show local node status
@@ -32,6 +33,7 @@ cohcli dispatch-slm --target worker04 --model kiosk_v1
 
 # Run BalanceBot demo simulation
 cohcli sim run BalanceBot
+```
 
 ## Codex Suggestions
 `cohcli codex suggest` analyzes your history and proposes full commands. This can

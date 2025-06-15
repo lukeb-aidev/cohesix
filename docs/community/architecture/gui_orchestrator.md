@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: gui_orchestrator.md v1.2
 // Author: Lukas Bower
-// Date Modified: 2025-07-21
+// Date Modified: 2025-07-31
 
 # Web GUI Orchestrator
 
@@ -13,7 +13,7 @@ by a Go service using the chi router with JSON APIs.
 
 The orchestrator queries the `/srv` namespace and the worker registry at
 `/srv/agents/active.json` to display agent status, role assignments,
-federation peers, and boot logs. Static content under `gui/` or `static/` is
+federation peers, and boot logs. The GUI is secured by default and exposes only authenticated and rate-limited endpoints unless explicitly run in developer mode. Static content under `gui/` or `static/` is
 served directly over HTTP. WebSocket support remains available for live
 updates.
 
@@ -51,7 +51,7 @@ served directly by Plan 9's webfs or the embedded server.
 | `--port` | Listen port | `8888` |
 | `--bind` | Bind address | `127.0.0.1` |
 | `--static-dir` | Directory for static files | `static` |
-| `--dev` | Development mode (disables auth) | `false` |
+| `--dev` | Development mode (disables auth and enables verbose reloads) | `false` |
 | `--log-file` | Access log path | `/log/gui_access.log` |
 
 Run with example:
@@ -64,3 +64,4 @@ go run ./go/cmd/gui-orchestrator --port 8080 --bind 0.0.0.0 --static-dir gui/sta
 
 Basic HTTP auth is enabled unless `--dev` is supplied. Credentials are loaded from `/srv/orch_user.json` containing `{"user":"admin","pass":"secret"}`. Each client is limited to 60 requests per minute via an in-memory token bucket. Excess requests return HTTP `429 Too Many Requests`.
 
+Future enhancements may include JWT-based session tokens and TLS termination behind a reverse proxy.

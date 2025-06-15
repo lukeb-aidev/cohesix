@@ -1,11 +1,11 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CODE_OF_CONDUCT.md v1.0
-// Date Modified: 2025-06-09
+// Date Modified: 2025-06-15
 // Author: Lukas Bower
 
 # Code of Conduct
 
-FIXME: Provide a concise summary of reporting guidelines and enforcement procedures.
+This document outlines the expected standards of behavior for all participants, how to report violations, and how enforcement decisions are made.
 
 Cohesix is an open source project dedicated to building secure, high-performance, and community-driven software. We expect all contributors to uphold the highest standards of respectful, inclusive, and constructive behavior.
 

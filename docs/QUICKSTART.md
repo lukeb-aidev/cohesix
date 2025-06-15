@@ -1,11 +1,13 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: QUICKSTART.md v0.1
 // Author: Lukas Bower
-// Date Modified: 2025-07-23
+// Date Modified: 2025-06-15
 
 # Cohesix Quick Start
 
 This short guide gets you from a fresh clone to tracing your first boot in five steps.
+
+All commands emit validator-compatible trace logs to `./log/trace/` and snapshots to `./history/snapshots/`.
 
 1. **Clone the repo**
    ```bash
@@ -16,6 +18,7 @@ This short guide gets you from a fresh clone to tracing your first boot in five 
    ```bash
    sudo apt install build-essential golang python3 python3-pip
    curl https://sh.rustup.rs -sSf | sh
+   pip3 install -r tools/requirements.txt
    ```
 3. **Build everything**
    ```bash
@@ -30,5 +33,10 @@ This short guide gets you from a fresh clone to tracing your first boot in five 
    ./target/debug/cohtrace last --pretty
    ```
    Traces are stored in `./history/` and can be examined with `cohtrace` commands.
+
+   You can diff traces between runs using:
+   ```bash
+   ./target/debug/cohtrace diff --from last --to previous
+   ```
 
 For more CLI examples see `docs/community/AGENTS_AND_CLI.md`.

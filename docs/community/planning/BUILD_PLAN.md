@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: BUILD_PLAN.md v0.4
-// Date Modified: 2025-07-11
+// Date Modified: 2025-07-31
 // Author: Lukas Bower
 
 # Build Plan
@@ -36,6 +36,8 @@ This document outlines the step-by-step build strategy for Cohesix, covering nat
    ```bash
    cargo build --release --target aarch64-unknown-linux-gnu
    cohcc --input demo.ir --output demo.c --target aarch64
+   # Optionally emit snapshot and trace log
+   cohtrace snapshot --tag local_build
    ```
 
 ## 3. Dockerized Multi-Arch Builds
@@ -121,6 +123,7 @@ We use Docker Buildx to create reproducible, multi-arch images.
   - Docker multi-arch build and push
   - BusyBox build and test
   - Reproducibility check
+  - Ensure `validate_metadata_sync.py` and `cohtrace list --scope ci` are run at the end of each job to validate trace emission and metadata alignment
 
 ---
 

@@ -35,18 +35,18 @@
 | SECURITY_REVIEW.md         | v0.2    | 2025-07-13    | COMMUNITY      |     |              |
 | COMPILER_REVIEW.md         | v0.1    | 2025-07-11    | COMMUNITY      |          |              
 | AGENTS_AND_CLI.md          | v1.2    | 2025-07-26    | COMMUNITY      |     |              |
-| LICENSES_AND_REUSE.md     | v1.0    | 2025-06-15    | COMMUNITY      |     |              |
+| LICENSES_AND_REUSE.md     | v1.1    | 2025-07-31    | COMMUNITY      |     |              |
 | ROLE_POLICY.md            | v1.0    | 2025-06-15    | COMMUNITY      |     |              |
-| cli/README.md             | v1.0    | 2025-06-15    | COMMUNITY      |     |              |
+| cli/README.md             | v1.0    | 2025-07-31    | COMMUNITY      |     |              |
 | AGENTS.md                 | v2.2    | 2025-07-22    | COMMUNITY      |     |              |
 | DEMO_SCENARIOS.md          | v1.0    | 2025-06-20    | COMMUNITY      |     |              |
 | VALIDATION_AND_TESTING.md  | v1.5    | 2025-07-25    | COMMUNITY      |     |              |
 | VALIDATION_SUMMARY.md       | v0.2    | 2025-06-14    | COMMUNITY      |     |              |
-| CLI_HELP_COHCLI.md         | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
-| CLI_HELP_COHRUN.md         | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
-| CLI_HELP_COHTRACE.md       | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
-| CLI_HELP_COHCC.md          | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
-| CLI_HELP_COHCAP.md         | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
+| CLI_HELP_COHCLI.md         | v0.1    | 2025-06-15    | COMMUNITY      |     |              |
+| CLI_HELP_COHRUN.md         | v0.1    | 2025-06-15    | COMMUNITY      |     |              |
+| CLI_HELP_COHTRACE.md       | v0.1    | 2025-06-15    | COMMUNITY      |     |              |
+| CLI_HELP_COHCC.md          | v0.1    | 2025-06-15    | COMMUNITY      |     |              |
+| CLI_HELP_COHCAP.md         | v0.1    | 2025-06-15    | COMMUNITY      |     |              |
 | MANIFEST.md               | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
 | awk.1                     | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
 | cat.1                     | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
@@ -93,7 +93,7 @@
 | cohpkg.1                   | v0.1    | 2025-07-13    | COMMUNITY      |     |              |
 | SIM_TESTS.md               | v0.1    | 2025-07-13    | COMMUNITY      |     |             |
 | devices/HOTPLUG.md | v0.1 | 2025-07-14 | COMMUNITY | | |
-| INSTRUCTION_BLOCK.md | v4.0 | 2025-07-11 | COMMUNITY | | |
+| INSTRUCTION_BLOCK.md | v4.1 | 2025-07-31 | COMMUNITY | | |
 | PROJECT_MANIFEST.md | v0.1 | 2025-07-22 | COMMUNITY | | |
 | tests/gpu_demos/add.cu           | v0.2    | 2025-07-22    | COMMUNITY      |     |              |
 | CodexCheck.md | v0.1 | 2025-07-22 | COMMUNITY | | |

@@ -1,14 +1,38 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CLI_HELP_COHRUN.md v0.1
 // Author: Lukas Bower
-// Date Modified: 2025-07-12
+// Date Modified: 2025-06-15
 
 # cohrun
+
+*(Applies to: QueenPrimary, DroneWorker, SimulatorTest)*
 
 Utility for running Cohesix demo scenarios and orchestrator actions.
 
 ```bash
 Usage: cohrun <command> [options]
+```
+
+See CLI README.md for full role-by-command mapping and related tools.
+
+## Role–Command Matrix
+```
+| Command                      | Applies To         |
+|------------------------------|--------------------|
+| physics_demo                 | SimulatorTest      |
+| test_webcam                  | SimulatorTest      |
+| webcam_tilt                  | SimulatorTest      |
+| kiosk_start                  | KioskInteractive   |
+| kiosk_event                  | KioskInteractive   |
+| orchestrator status          | QueenPrimary       |
+| orchestrator assign          | QueenPrimary       |
+| gpu_status                   | QueenPrimary       |
+| gpu_dispatch                 | QueenPrimary       |
+| goal add                     | QueenPrimary       |
+| goal list                    | QueenPrimary       |
+| goal assign                  | QueenPrimary       |
+| trace_replay                 | SimulatorTest      |
+| inject_rule                  | SimulatorTest      |
 ```
 
 ## Commands
