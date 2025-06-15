@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: policy_memory.rs v0.2
+// Filename: policy_memory.rs v0.3
 // Author: Lukas Bower
-// Date Modified: 2025-07-12
+// Date Modified: 2025-08-15
 
 //! Persistent policy memory utilities.
 
@@ -17,20 +17,37 @@ pub struct PolicyMemory {
 
 impl PolicyMemory {
     pub fn load(agent_id: &str) -> anyhow::Result<Self> {
-        let path = format!("/persist/policy/agent_{agent_id}.policy.json");
-        if let Ok(data) = fs::read(&path) {
+        let primary = format!("/persist/policy/agent_{agent_id}.policy.json");
+        if let Ok(data) = fs::read(&primary) {
             let mem = serde_json::from_slice(&data)?;
             Ok(mem)
         } else {
-            Ok(Self::default())
+            // Fall back to a local path so tests can run without root perms
+            let fallback = format!("persist/policy/agent_{agent_id}.policy.json");
+            if let Ok(data) = fs::read(&fallback) {
+                let mem = serde_json::from_slice(&data)?;
+                Ok(mem)
+            } else {
+                Ok(Self::default())
+            }
         }
     }
 
     pub fn save(&self, agent_id: &str) -> anyhow::Result<()> {
-        let path = format!("/persist/policy/agent_{agent_id}.policy.json");
-        fs::create_dir_all("/persist/policy").ok();
         let data = serde_json::to_vec_pretty(self)?;
-        fs::write(path, &data)?;
+        let primary_path = format!("/persist/policy/agent_{agent_id}.policy.json");
+        // Try to write to the standard location first
+        let primary_res = fs::create_dir_all("/persist/policy")
+            .and_then(|_| fs::write(&primary_path, &data));
+
+        if primary_res.is_err() {
+            // Fallback for tests or sandboxed envs: write relative to cwd
+            let local_dir = std::path::PathBuf::from("persist/policy");
+            fs::create_dir_all(&local_dir)?;
+            let fallback_path = local_dir.join(format!("agent_{agent_id}.policy.json"));
+            fs::write(&fallback_path, &data)?;
+        }
+
         Self::save_shared(self)?;
         Ok(())
     }
