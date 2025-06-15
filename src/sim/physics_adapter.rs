@@ -3,7 +3,6 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-22
 
-#![cfg(feature = "rapier")]
 
 //! Adapter for running Rapier-based physics simulations.
 
