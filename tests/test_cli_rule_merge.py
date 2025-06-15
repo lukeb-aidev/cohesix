@@ -15,6 +15,7 @@ def test_cohrun_inject_rule(tmp_path, monkeypatch):
 
     script = tmp_path / "dummy_bin.py"
     script.write_text(
+        "#!/usr/bin/env python3\n"
         "import sys,shutil,os\n"
         "src=sys.argv[sys.argv.index('--from')+1]\n"
         "os.makedirs('/srv/validator',exist_ok=True)\n"
