@@ -50,7 +50,7 @@ pub fn parse_ssa(input: &str) -> Option<SsaVar> {
     Some(SsaVar {
         name: name.to_string(),
         version,
-    })
+    });
     // FIXME(cohesix): Implement parser logic
     println!("[ssa] parse_ssa called with input: {}", input);
     None

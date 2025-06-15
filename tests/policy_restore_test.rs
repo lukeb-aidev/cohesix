@@ -16,8 +16,7 @@ fn policy_persistence_roundtrip() {
     mem.decisions.push("a".into());
     mem.q_values.push(1.0);
     mem.successes.push(true);
-    let path = dir.path().join("testagent");
-    PolicyMemory::save_shared(&mem, &path).unwrap();
+    PolicyMemory::save_shared(&mem).unwrap();
 
     let loaded = PolicyMemory::load_shared().unwrap();
     assert_eq!(loaded.decisions.len(), 1);
