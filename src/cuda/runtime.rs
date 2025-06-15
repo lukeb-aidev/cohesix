@@ -204,7 +204,7 @@ impl CudaExecutor {
             let stream = Stream::new(StreamFlags::NON_BLOCKING, None).map_err(|e| e.to_string())?;
             let a = DeviceBuffer::from_slice(&[1.0f32, 2.0, 3.0]).map_err(|e| e.to_string())?;
             let b = DeviceBuffer::from_slice(&[4.0f32, 5.0, 6.0]).map_err(|e| e.to_string())?;
-            let mut out = DeviceBuffer::from_slice(&[0.0f32; 3]).map_err(|e| e.to_string())?;
+            let out = DeviceBuffer::from_slice(&[0.0f32; 3]).map_err(|e| e.to_string())?;
             unsafe {
                 launch!(module.sum<<<1, 3, 0, stream>>>(a.as_device_ptr(), b.as_device_ptr(), out.as_device_ptr(), 3))
                     .map_err(|e| e.to_string())?;
@@ -246,15 +246,23 @@ impl CudaExecutor {
                 .map(|v| format!("{}.{}", v.major(), v.minor()))
                 .unwrap_or_default();
             let (free, total) = cust::memory::mem_get_info().unwrap_or((0, 0));
-            let (temp, util) = Nvml::init()
-                .ok()
-                .and_then(|nvml| nvml.device_by_index(0).ok())
-                .map(|dev| {
-                    let t = dev.temperature(TemperatureSensor::Gpu).ok().map(|v| v as f32);
-                    let u = dev.utilization_rates().ok().map(|u| u.gpu as u32);
+            let (temp, util) = if let Ok(nvml) = Nvml::init() {
+                if let Ok(dev) = nvml.device_by_index(0) {
+                    let t = dev
+                        .temperature(TemperatureSensor::Gpu)
+                        .ok()
+                        .map(|v| v as f32);
+                    let u = dev
+                        .utilization_rates()
+                        .ok()
+                        .map(|u| u.gpu as u32);
                     (t, u)
-                })
-                .unwrap_or((None, None));
+                } else {
+                    (None, None)
+                }
+            } else {
+                (None, None)
+            };
             GpuTelemetry {
                 cuda_present: true,
                 driver_version: version,
