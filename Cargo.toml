@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Cargo.toml v0.4
+# Filename: Cargo.toml v0.5
 # Author: Lukas Bower
-# Date Modified: 2025-07-31
+# Date Modified: 2025-08-01
 [package]
 name    = "cohesix"
 version = "0.1.0"
@@ -79,7 +79,17 @@ physics = ["rapier3d"]
 busybox = []
 joystick = ["sdl2"]
 secure9p = ["rustls", "tokio-rustls", "jsonwebtoken", "toml", "x509-parser", "serde_yaml", "webpki-roots", "rustls-pemfile"]
+kernel_bin = []
+
+[profile.release]
+panic = "abort"
 
 [[bin]]
 name = "cohcc"
 path = "src/coh_cc/main.rs"
+
+[[bin]]
+name = "kernel"
+path = "src/kernel/main.rs"
+test = false
+required-features = ["kernel_bin"]
