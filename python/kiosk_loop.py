@@ -7,11 +7,14 @@
 
 from __future__ import annotations
 import json
+import logging
 import os
 import signal
 import time
 from contextlib import contextmanager
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 from sensors.sensor_proxy import run_once as capture_sensors, SENSOR_DIR
 from validator import Validator
@@ -58,7 +61,10 @@ def append_event(event: dict) -> None:
         except Exception:
             events = []
     events.append(event)
-    FED_PATH.write_text(json.dumps(events))
+    try:
+        FED_PATH.write_text(json.dumps(events))
+    except OSError as exc:
+        logger.error("failed to write federation log %s: %s", FED_PATH, exc)
 
 
 def append_summary(trace_name: str, allowed: bool) -> None:
@@ -69,8 +75,11 @@ def append_summary(trace_name: str, allowed: bool) -> None:
         f"{'PASS' if allowed else 'FAIL'} |\n"
     )
     SUMMARY_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with SUMMARY_FILE.open("a") as f:
-        f.write(row)
+    try:
+        with SUMMARY_FILE.open("a") as f:
+            f.write(row)
+    except OSError as exc:
+        logger.error("failed to write summary %s: %s", SUMMARY_FILE, exc)
 
 
 def main() -> None:
@@ -81,9 +90,11 @@ def main() -> None:
                 sensors = {}
                 for f in SENSOR_DIR.glob("*.json"):
                     try:
-                        data = json.loads(f.read_text())
+                        text = f.read_text()
+                        data = json.loads(text)
                         sensors[f.stem] = float(data.get("value", 0))
-                    except Exception:
+                    except (OSError, json.JSONDecodeError) as exc:
+                        logger.error("failed to read sensor %s: %s", f, exc)
                         continue
                 allowed = validator.evaluate_all(sensors)
                 validator.emit_trace(sensors, allowed, TRACE_PATH)
@@ -93,8 +104,11 @@ def main() -> None:
                 time.sleep(5)
         except TimeoutError:
             LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-            with LOG_PATH.open("a") as f:
-                f.write(f"{int(time.time())}: watchdog timeout\n")
+            try:
+                with LOG_PATH.open("a") as f:
+                    f.write(f"{int(time.time())}: watchdog timeout\n")
+            except OSError as exc:
+                logger.error("failed to write log %s: %s", LOG_PATH, exc)
             continue
 
 

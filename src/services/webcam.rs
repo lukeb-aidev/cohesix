@@ -40,7 +40,7 @@ impl Service for WebcamService {
             if capture::capture_jpeg(frame_path).is_ok() {
                 println!("[webcam] captured initial frame");
             }
-            ServiceRegistry::register_service("webcam", "/srv/webcam");
+            let _ = ServiceRegistry::register_service("webcam", "/srv/webcam");
         } else {
             println!("[webcam] service disabled for role {role:?}");
         }

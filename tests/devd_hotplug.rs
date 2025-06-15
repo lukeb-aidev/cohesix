@@ -17,15 +17,15 @@ use tempfile::tempdir;
 fn device_attach_detach() {
     let dir = tempdir().expect("create temp dir");
     std::env::set_var("COH_DEV_ROOT", dir.path());
-    ServiceRegistry::reset();
+    ServiceRegistry::reset().unwrap();
     let mut svc = DevdService::default();
     svc.init();
     fs::File::create(dir.path().join("video0")).expect("create video device");
     sleep(Duration::from_millis(500));
-    assert!(ServiceRegistry::lookup("video0").is_some());
+    assert!(ServiceRegistry::lookup("video0").unwrap().is_some());
     fs::remove_file(dir.path().join("video0")).expect("remove video device");
     sleep(Duration::from_millis(500));
-    assert!(ServiceRegistry::lookup("video0").is_none());
+    assert!(ServiceRegistry::lookup("video0").unwrap().is_none());
 }
 
 #[test]
@@ -38,7 +38,7 @@ fn validator_violation() {
     let dir = tempdir().expect("create temp dir");
     std::env::set_var("COH_DEV_ROOT", dir.path());
     let _ = fs::remove_dir_all("/log");
-    ServiceRegistry::reset();
+    ServiceRegistry::reset().unwrap();
     let mut svc = DevdService::default();
     svc.init();
     fs::File::create(dir.path().join("baddev")).expect("create invalid device");

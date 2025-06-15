@@ -5,9 +5,12 @@
 """Python-side validation helpers with live rule updates."""
 
 import json
+import logging
 import operator
 import time
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 def trace_integrity(path: Path) -> bool:
@@ -44,7 +47,15 @@ class Validator:
 
     def inject_rule(self, path: Path) -> None:
         """Load a rule from *path* and store internal metadata."""
-        rule = json.loads(path.read_text())
+        try:
+            text = path.read_text()
+            rule = json.loads(text)
+        except OSError as exc:
+            logger.error("failed to read rule %s: %s", path, exc)
+            return
+        except json.JSONDecodeError as exc:
+            logger.error("invalid rule JSON %s: %s", path, exc)
+            return
         if not isinstance(rule.get("conditions"), list):
             raise ValueError("invalid rule format")
         for cond in rule["conditions"]:
@@ -91,8 +102,11 @@ class Validator:
         """Append a cohtrace-compatible event."""
         evt = {"ts": time.time(), "sensors": sensors, "allow": allow}
         path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a") as f:
-            f.write(json.dumps(evt) + "\n")
+        try:
+            with path.open("a") as f:
+                f.write(json.dumps(evt) + "\n")
+        except OSError as exc:
+            logger.error("failed to write trace %s: %s", path, exc)
 
 
 __all__ = ["trace_integrity", "Validator"]
@@ -103,12 +117,17 @@ def main_live():
     while True:
         inj = Path("/srv/validator/inject_rule")
         if inj.exists():
-            validator.inject_rule(inj)
-            inj.unlink()
+            try:
+                validator.inject_rule(inj)
+                inj.unlink()
+            except Exception as exc:  # safety catch
+                logger.error("failed to inject rule %s: %s", inj, exc)
         for f in Path("/srv/sensors").glob("*.json"):
             try:
-                data = json.loads(f.read_text())
-            except Exception:
+                text = f.read_text()
+                data = json.loads(text)
+            except (OSError, json.JSONDecodeError) as exc:
+                logger.error("failed to read sensor %s: %s", f, exc)
                 continue
             if not validator.evaluate(f.stem, float(data.get("value", 0))):
                 print(f"violation {f.stem}")

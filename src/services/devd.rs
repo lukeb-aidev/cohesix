@@ -38,7 +38,7 @@ impl Service for DevdService {
                         let path = format!("{}/{}", root, dev_name);
                         if event.mask.contains(EventMask::CREATE) {
                             if is_device_allowed(&path) {
-                                ServiceRegistry::register_service(&dev_name, &path);
+                                let _ = ServiceRegistry::register_service(&dev_name, &path);
                             } else {
                                 validator::log_violation(RuleViolation {
                                     type_: "device_violation",
@@ -48,7 +48,7 @@ impl Service for DevdService {
                                 });
                             }
                         } else if event.mask.contains(EventMask::DELETE) {
-                            ServiceRegistry::unregister_service(&dev_name);
+                            let _ = ServiceRegistry::unregister_service(&dev_name);
                         }
                     }
                 }

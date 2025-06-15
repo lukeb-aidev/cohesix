@@ -58,8 +58,8 @@ pub fn serialize(agent_id: &str) -> anyhow::Result<AgentState> {
 pub fn restore(agent_id: &str, state: &AgentState) -> anyhow::Result<()> {
     fs::create_dir_all(format!("/srv/agents/{agent_id}")).ok();
     fs::write(format!("/srv/agent_trace/{agent_id}"), &state.trace).ok();
-    ServiceRegistry::unregister_service(agent_id);
-    ServiceRegistry::register_service(agent_id, &format!("/srv/agents/{agent_id}"));
+    ServiceRegistry::unregister_service(agent_id)?;
+    ServiceRegistry::register_service(agent_id, &format!("/srv/agents/{agent_id}"))?;
     for (k, v) in &state.env {
         std::env::set_var(k, v);
     }
@@ -77,7 +77,7 @@ pub fn migrate(
     push(agent_id, &state)?;
     stop(agent_id)?;
     fs::remove_dir_all(format!("/srv/agents/{agent_id}")).ok();
-    ServiceRegistry::unregister_service(agent_id);
+    ServiceRegistry::unregister_service(agent_id)?;
     Ok(())
 }
 

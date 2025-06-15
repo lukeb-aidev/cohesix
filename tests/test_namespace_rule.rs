@@ -4,7 +4,7 @@
 // Date Modified: 2025-07-23
 
 use cohesix::services::{sandbox::SandboxService, Service};
-use cohesix::validator::{self, config::ValidatorConfig, RuleViolation};
+use cohesix::validator::{self, config::ValidatorConfig};
 use tempfile::tempdir;
 
 #[test]
@@ -16,7 +16,8 @@ fn validator_denies_forbidden_path() {
     validator::config::set_config(ValidatorConfig {
         log_dir: log_dir.clone(),
         violations_dir: viol_dir,
-    });
+    })
+    .unwrap();
     std::fs::create_dir_all(&log_dir).unwrap();
 
     let mut svc = SandboxService::default();
