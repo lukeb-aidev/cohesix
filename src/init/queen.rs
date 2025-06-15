@@ -62,9 +62,9 @@ pub fn start() {
     fs::create_dir_all("/srv/world_state").ok();
     let world = serde_json::json!({"workers": [], "active_traces": [], "telemetry": {}});
     let _ = fs::write("/srv/world_state/world.json", serde_json::to_string(&world).unwrap());
-    ServiceRegistry::register_service("telemetry", "/srv/telemetry");
-    ServiceRegistry::register_service("sim", "/sim");
-    ServiceRegistry::register_service("p9mux", "/srv/p9mux");
+    let _ = ServiceRegistry::register_service("telemetry", "/srv/telemetry");
+    let _ = ServiceRegistry::register_service("sim", "/sim");
+    let _ = ServiceRegistry::register_service("p9mux", "/srv/p9mux");
     // Spawning of initial processes will be added in a future update
     // FIXME(cohesix): spawn initial processes under this namespace
 }

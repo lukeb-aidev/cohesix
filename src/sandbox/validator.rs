@@ -8,7 +8,8 @@
 //! offending syscall is dropped.
 
 use crate::cohesix_types::{Role, Syscall};
-use crate::validator::config::get_config;
+use crate::validator::config::{get_config, ConfigError};
+use log::error;
 use serde::Serialize;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -37,7 +38,13 @@ pub fn validate(agent: &str, role: Role, sc: &Syscall) -> bool {
 }
 
 fn log_violation(agent: &str, role: Role, sc: &Syscall) {
-    let cfg = get_config();
+    let cfg = match get_config() {
+        Ok(c) => c,
+        Err(e) => {
+            error!("validator config error: {e}");
+            return;
+        }
+    };
     fs::create_dir_all(&cfg.violations_dir).ok();
     let path = cfg.violations_dir.join(format!("{agent}.json"));
     let v = Violation {
