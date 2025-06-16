@@ -1,9 +1,9 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: rapier_bridge.rs v0.5
+// Filename: rapier_bridge.rs v0.6
 // Author: Lukas Bower
-// Date Modified: 2025-08-16
+// Date Modified: 2025-08-17
 // Relies on rand and Rapier; omitted from UEFI builds.
-#![cfg(not(feature = "uefi"))]
+#![cfg(not(target_os = "uefi"))]
 
 
 //! Rapier physics engine bridge exposing a simple command interface.
