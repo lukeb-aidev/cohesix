@@ -166,6 +166,7 @@ bootloader: check-efi ## Build UEFI bootloader
 	objcopy --target=efi-app-x86_64 out/bootloader.so out/BOOTX64.EFI
 	cp out/BOOTX64.EFI out/EFI/BOOT/BOOTX64.EFI
 	cp out/BOOTX64.EFI out/bootx64.efi
+	chmod +x out/bootx64.efi
 
 
 kernel: check-efi ## Build kernel stub

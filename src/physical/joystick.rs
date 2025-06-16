@@ -42,11 +42,11 @@ pub fn read_state(agent: &str) -> Option<JoystickState> {
         return None;
     }
     let joy = js.open(0).ok()?;
-    let axes = (0..joy.num_axes() as i32)
-        .map(|i| joy.axis(i as u32).unwrap_or(0))
+    let axes = (0..joy.num_axes())
+        .map(|i| joy.axis(i).unwrap_or(0))
         .collect::<Vec<_>>();
-    let buttons = (0..joy.num_buttons() as i32)
-        .map(|i| joy.button(i as u32).unwrap_or(false))
+    let buttons = (0..joy.num_buttons())
+        .map(|i| joy.button(i).unwrap_or(false))
         .collect::<Vec<_>>();
 
     fs::create_dir_all("/srv").ok();

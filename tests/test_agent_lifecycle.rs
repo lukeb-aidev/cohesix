@@ -4,8 +4,8 @@
 // Author: Cohesix Codex
 
 use cohesix::agents::runtime::AgentRuntime;
-use cohesix::physical::sensors;
 use cohesix::cohesix_types::Role;
+use cohesix::physical::sensors;
 use tempfile::tempdir;
 
 #[test]
@@ -13,19 +13,22 @@ fn agent_lifecycle() {
     let dir = tempdir().unwrap();
     std::env::set_current_dir(&dir).unwrap();
     std::fs::create_dir_all("/srv").unwrap();
-    std::fs::create_dir_all("/srv/agents/a1").unwrap();
-    let _ = std::fs::remove_file("/srv/telemetry");
-    let _ = std::fs::remove_dir_all("/srv/telemetry");
+    let agents = dir.path().join("agents");
+    let traces = dir.path().join("trace");
+    std::env::set_var("COHESIX_AGENTS_DIR", &agents);
+    std::env::set_var("COHESIX_AGENT_TRACE_DIR", &traces);
+    std::fs::create_dir_all(&agents).unwrap();
+    std::fs::create_dir_all(&traces).unwrap();
 
     let mut rt = AgentRuntime::new();
     let args = vec!["true".to_string()];
     let _ = rt.spawn("a1", Role::DroneWorker, &args);
-    assert!(std::path::Path::new("/srv/agents/a1").exists());
+    assert!(agents.join("a1").exists());
 
     sensors::read_temperature("a1");
     rt.terminate("a1").unwrap();
 
-    if let Ok(trace) = std::fs::read_to_string("/srv/agent_trace/a1") {
+    if let Ok(trace) = std::fs::read_to_string(traces.join("a1")) {
         assert!(trace.contains("spawn"));
         assert!(trace.contains("terminate"));
     } else {
