@@ -1,6 +1,6 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Makefile v0.20
-# Date Modified: 2025-08-16
+# Filename: Makefile v0.21
+# Date Modified: 2025-08-27
 # Author: Lukas Bower
 #
 # ─────────────────────────────────────────────────────────────
@@ -16,7 +16,7 @@
 # ─────────────────────────────────────────────────────────────
 
 .PHONY: build all go-build go-test c-shims help fmt lint check \
-    boot boot-x86_64 boot-aarch64 bootloader kernel cohrun cohbuild cohtrace cohcap test
+    boot boot-x86_64 boot-aarch64 bootloader kernel init-efi cohrun cohbuild cohtrace cohcap test
 
 PLATFORM ?= $(shell uname -m)
 TARGET ?= $(PLATFORM)
@@ -82,7 +82,7 @@ echo "Required architecture headers missing."; exit 1; \
 fi; \
 fi
 
-.PHONY: build all go-build go-test c-shims help fmt lint check cohrun cohbuild cohtrace cohcap kernel
+.PHONY: build all go-build go-test c-shims help fmt lint check cohrun cohbuild cohtrace cohcap kernel init-efi
 
 all: go-build go-test c-shims ## Run vet, tests and C shims
 
@@ -172,15 +172,23 @@ bootloader: check-efi ## Build UEFI bootloader
 	chmod +x $(HOME)/cohesix/out/bootx64.efi
 
 
-kernel: check-efi ## Build kernel stub
+kernel: check-efi init-efi ## Build kernel stub
 	@echo "🏁 Building kernel stub using $(TOOLCHAIN)"
 	@mkdir -p out
 	$(CC) $(CFLAGS_EFI) -c src/kernel/main.c -o out/kernel.o
-	grep -v '^//' linker.ld > out/kernel.tmp.ld
+	        grep -v '^//' linker.ld > out/kernel.tmp.ld
 	$(LD) /usr/lib/crt0-efi-x86_64.o out/kernel.o \
-	    -o out/kernel.so -T out/kernel.tmp.ld $(LD_FLAGS)
-	rm -f out/kernel.tmp.ld
+            -o out/kernel.so -T out/kernel.tmp.ld $(LD_FLAGS)
+	        rm -f out/kernel.tmp.ld
 	objcopy --target=efi-app-x86_64 out/kernel.so out/kernel.elf
+
+init-efi: check-efi ## Build init EFI binary
+	@echo "🏁 Building init EFI using $(TOOLCHAIN)"
+	@mkdir -p out/bin
+	$(CC) $(CFLAGS_EFI) -c src/init_efi/main.c -o out/init_efi.o
+	$(LD) /usr/lib/crt0-efi-x86_64.o out/init_efi.o \
+	-o out/init_efi.so $(LD_FLAGS)
+	objcopy --target=efi-app-x86_64 out/init_efi.so out/bin/init.efi
 
 boot: ## Build boot image for current PLATFORM
 	$(MAKE) boot-$(PLATFORM)
@@ -200,7 +208,7 @@ man: third_party/mandoc/mandoc ## Install man page tool
 	cp third_party/mandoc/mandoc bin/cohman
 
 cohrun: ## Run cohrun CLI
-    cargo run -p cohcli_tools --bin cohrun_cli -- $(ARGS)
+	    cargo run -p cohcli_tools --bin cohrun_cli -- $(ARGS)
 
 cohbuild: ## Run cohbuild CLI
 	cargo run -p cohcli_tools --bin cohbuild -- $(ARGS)

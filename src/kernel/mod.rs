@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: mod.rs v0.1
+// Filename: mod.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-07-22
+// Date Modified: 2025-08-27
 
 pub mod boot {
     pub mod bootloader;
@@ -19,6 +19,8 @@ pub mod fs {
     pub mod busybox;
     pub mod initfs;
     pub mod plan9;
+    #[cfg(feature = "minimal_uefi")]
+    pub mod fat;
 }
 
 pub mod physics {

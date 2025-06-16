@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.63
+// Filename: CHANGELOG.md v0.64
 // Date Modified: 2025-08-27
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
@@ -21,6 +21,10 @@
 - sensors.rs respects COHESIX_TELEMETRY_PATH for tests
 - test_agent_lifecycle uses temp directories only
 - boot_trace_rule tests use tempfile::tempdir to avoid PermissionDenied errors
+### Added
+- FAT partition mount under `minimal_uefi` with `/bin/init.efi` bootstrap
+- Makefile builds `init-efi` target and copies binary to FAT directory
+- `fs::open_bin` API for loading binaries from the FAT root
 - Cargo.toml v0.9 removes unsupported `feature` key in target deps and
   gates getrandom for UEFI builds
 - Cargo.toml v0.10 adds `minimal_uefi` feature and gates async crates
