@@ -22,6 +22,7 @@
 - Cargo.toml v0.9 removes unsupported `feature` key in target deps and
   gates getrandom for UEFI builds
 - Cargo.toml v0.10 adds `minimal_uefi` feature and gates async crates
+- Fixed x86_64-unknown-uefi build by gating getrandom and entropy sources
 
 ## [v0.90] - 2025-08-16
 ### Changed
