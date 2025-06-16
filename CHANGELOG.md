@@ -25,6 +25,7 @@
 - FAT partition mount under `minimal_uefi` with `/bin/init.efi` bootstrap
 - Makefile builds `init-efi` target and copies binary to FAT directory
 - `fs::open_bin` API for loading binaries from the FAT root
+- full_fetch_and_build.sh v0.1 builds userland EFI binaries into out/bin
 - Cargo.toml v0.9 removes unsupported `feature` key in target deps and
   gates getrandom for UEFI builds
 - Cargo.toml v0.10 adds `minimal_uefi` feature and gates async crates
