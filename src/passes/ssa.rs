@@ -49,3 +49,9 @@ impl IRPass for SsaPass {
         }
     }
 }
+
+impl Default for SsaPass {
+    fn default() -> Self {
+        Self::new()
+    }
+}

@@ -55,9 +55,8 @@ impl AgentRuntime {
 
     /// Spawn a new agent process with the given role and arguments.
     pub fn spawn(&mut self, agent_id: &str, role: Role, args: &[String]) -> anyhow::Result<()> {
-        match role {
-            Role::Other(_) => return Err(anyhow::anyhow!("invalid role")),
-            _ => {}
+        if let Role::Other(_) = role {
+            return Err(anyhow::anyhow!("invalid role"));
         }
         let agents_dir = agents_dir();
         fs::create_dir_all(&agents_dir)?;
@@ -134,4 +133,10 @@ fn timestamp() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+impl Default for AgentRuntime {
+    fn default() -> Self {
+        Self::new()
+    }
 }
