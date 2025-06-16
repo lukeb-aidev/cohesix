@@ -4,7 +4,6 @@
 # Date Modified: 2025-08-17
 
 [build]
-target = "x86_64-unknown-uefi"
 
 [target.x86_64-unknown-uefi]
 linker = "lld-link"
