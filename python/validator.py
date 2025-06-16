@@ -1,14 +1,20 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: validator.py v0.4
+# Filename: validator.py v0.5
 # Author: Lukas Bower
-# Date Modified: 2025-06-09
+# Date Modified: 2025-08-18
 """Python-side validation helpers with live rule updates."""
 
 import json
 import logging
 import operator
+import sys
 import time
 from pathlib import Path
+
+try:
+    import tomllib  # Python 3.11+
+except ModuleNotFoundError:  # pragma: no cover - fallback for older Python
+    import tomli as tomllib
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +45,44 @@ OPS = {
 }
 
 
+def _load_rule(path: Path) -> dict:
+    """Load and validate a rule file from *path*."""
+    try:
+        text = path.read_text()
+    except OSError as exc:  # pragma: no cover - I/O errors
+        raise RuntimeError(f"failed to read rule {path}: {exc}") from exc
+
+    try:
+        if path.suffix.lower() in {".toml", ".tml"}:
+            data = tomllib.loads(text)
+        else:
+            data = json.loads(text)
+    except Exception as exc:
+        raise ValueError(f"invalid rule format in {path}: {exc}") from exc
+
+    allowed_top = {"conditions", "logic", "duration_active", "timeout"}
+    unknown_top = set(data) - allowed_top
+    if unknown_top:
+        raise ValueError(f"unknown rule fields: {', '.join(sorted(unknown_top))}")
+
+    if not isinstance(data.get("conditions"), list):
+        raise ValueError("invalid rule format: conditions must be a list")
+
+    for cond in data["conditions"]:
+        if not isinstance(cond, dict):
+            raise ValueError("invalid rule format: condition not dict")
+        allowed_cond = {"sensor", "op", "threshold"}
+        unknown_cond = set(cond) - allowed_cond
+        if unknown_cond:
+            raise ValueError(
+                f"unknown condition fields: {', '.join(sorted(unknown_cond))}"
+            )
+        if cond.get("op") not in OPS:
+            raise ValueError(f"invalid op {cond.get('op')}")
+
+    return data
+
+
 class Validator:
     """Runtime validator supporting rule chains with timeouts."""
 
@@ -47,22 +91,7 @@ class Validator:
 
     def inject_rule(self, path: Path) -> None:
         """Load a rule from *path* and store internal metadata."""
-        try:
-            text = path.read_text()
-            rule = json.loads(text)
-        except OSError as exc:
-            logger.error("failed to read rule %s: %s", path, exc)
-            return
-        except json.JSONDecodeError as exc:
-            logger.error("invalid rule JSON %s: %s", path, exc)
-            return
-        if not isinstance(rule.get("conditions"), list):
-            raise ValueError("invalid rule format")
-        for cond in rule["conditions"]:
-            if not all(k in cond for k in ("sensor", "op", "threshold")):
-                raise ValueError("invalid rule format")
-            if cond["op"] not in OPS:
-                raise ValueError("invalid rule format")
+        rule = _load_rule(path)
         rule.setdefault("logic", "AND")
         rule.setdefault("duration_active", 1)
         rule.setdefault("timeout", 0)
@@ -112,8 +141,14 @@ class Validator:
 __all__ = ["trace_integrity", "Validator"]
 
 
-def main_live():
+def main_live(result_path: Path | None = None) -> None:
     validator = Validator()
+    results: list[dict] = []
+    if result_path:
+        result_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = result_path.with_suffix(".tmp")
+        tmp.write_text("[]")
+        tmp.replace(result_path)
     while True:
         inj = Path("/srv/validator/inject_rule")
         if inj.exists():
@@ -129,8 +164,15 @@ def main_live():
             except (OSError, json.JSONDecodeError) as exc:
                 logger.error("failed to read sensor %s: %s", f, exc)
                 continue
-            if not validator.evaluate(f.stem, float(data.get("value", 0))):
-                print(f"violation {f.stem}")
+            allowed = validator.evaluate(f.stem, float(data.get("value", 0)))
+            if not allowed:
+                logger.warning("violation %s", f.stem)
+            results.append({"ts": time.time(), "sensor": f.stem, "allow": allowed})
+            if result_path:
+                result_path.parent.mkdir(parents=True, exist_ok=True)
+                tmp = result_path.with_suffix(".tmp")
+                tmp.write_text(json.dumps(results))
+                tmp.replace(result_path)
         time.sleep(0.1)
 
 
@@ -139,7 +181,19 @@ if __name__ == "__main__":
 
     ap = argparse.ArgumentParser()
     ap.add_argument("--live", action="store_true", help="run live validator loop")
+    ap.add_argument("--output", help="write validator results to file")
+    ap.add_argument("--log", default="info", help="logging level")
     args = ap.parse_args()
 
-    if args.live:
-        main_live()
+    logging.basicConfig(level=getattr(logging, args.log.upper(), logging.INFO))
+
+    try:
+        if args.live:
+            out = Path(args.output) if args.output else None
+            main_live(out)
+        else:
+            ap.print_help()
+            sys.exit(1)
+    except Exception as exc:  # safety catch to ensure non-zero exit
+        logger.error("validator failed: %s", exc)
+        sys.exit(1)

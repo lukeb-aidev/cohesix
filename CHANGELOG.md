@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.60
-// Date Modified: 2025-08-17
+// Filename: CHANGELOG.md v0.61
+// Date Modified: 2025-08-18
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
 • Consolidated OSS reuse files into LICENSES_AND_REUSE.md
@@ -331,6 +331,12 @@
 ### Changed
 - Boot trampoline validates SHA256 CRC before jumping.
 - bootloader defaults to DroneWorker role and logs init.
+
+## [v0.61] - 2025-08-18
+### Changed
+- Python validator CLI hardened with strict rule validation and logging options.
+- Added `--output` flag to save results.
+- Validator now exits with non-zero status on failure.
 
 ## [v0.60] - 2025-07-15
 ### Changed
