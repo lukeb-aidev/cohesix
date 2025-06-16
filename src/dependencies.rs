@@ -86,3 +86,9 @@ pub fn preload_dependencies() -> DependencyRegistry {
 
     registry
 }
+
+impl Default for DependencyRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}

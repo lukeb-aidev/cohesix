@@ -22,3 +22,9 @@ impl SelfTuningStabilizer {
         EnsemblePolicy::select(input, &mut self.policy)
     }
 }
+
+impl Default for SelfTuningStabilizer {
+    fn default() -> Self {
+        Self::new()
+    }
+}

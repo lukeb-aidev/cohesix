@@ -44,3 +44,9 @@ impl IRPass for DeadCode {
         }
     }
 }
+
+impl Default for DeadCode {
+    fn default() -> Self {
+        Self::new()
+    }
+}

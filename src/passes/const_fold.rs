@@ -74,3 +74,9 @@ impl IRPass for ConstFold {
         }
     }
 }
+
+impl Default for ConstFold {
+    fn default() -> Self {
+        Self::new()
+    }
+}

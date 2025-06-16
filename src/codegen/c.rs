@@ -17,7 +17,7 @@ pub fn generate_c(module: &Module) -> String {
     for func in &module.functions {
         output.push_str(&format!("void {}();\n", func.name));
     }
-    output.push_str("\n");
+    output.push('\n');
 
     // Function definitions
     for func in &module.functions {

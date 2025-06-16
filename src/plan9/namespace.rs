@@ -16,21 +16,11 @@ use std::fs::{self, File};
 use std::io::{self, Write};
 
 /// Namespace operation extracted from configuration.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct BindFlags {
     pub after: bool,
     pub before: bool,
     pub create: bool,
-}
-
-impl Default for BindFlags {
-    fn default() -> Self {
-        Self {
-            after: false,
-            before: false,
-            create: false,
-        }
-    }
 }
 
 #[derive(Debug, Clone)]

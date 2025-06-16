@@ -38,7 +38,7 @@ fn ts() -> u64 {
 pub fn read_state(agent: &str) -> Option<JoystickState> {
     let sdl = sdl2::init().ok()?;
     let js = sdl.joystick().ok()?;
-    if js.num_joysticks().ok()? <= 0 {
+    if js.num_joysticks().ok()? == 0 {
         return None;
     }
     let joy = js.open(0).ok()?;
