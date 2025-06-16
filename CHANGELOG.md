@@ -886,3 +886,9 @@
 ### Added
 - Restored CI workflow with Rust, Python, Go and shell checks
 - Updated VALIDATION_SUMMARY.md with build results
+
+## [v0.63] - 2025-08-27
+### Added
+- Kernel user API exposing `sys_log` and `sys_exit` via function pointers
+- Process table tracks exited state and exit codes
+- Test userland binary `logdemo` prints two lines then exits with code 42

@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: bootloader.rs v1.3
+// Filename: bootloader.rs v1.4
 // Author: Lukas Bower
 // Date Modified: 2025-08-27
 //==============================================================================
@@ -42,6 +42,7 @@ impl BootAgent {
         Self::prepare_kernel(&ctx);
         crate::trace::recorder::event("boot", "init", "finish");
         role_hooks::setup(&ctx.role);
+        crate::kernel::user_api::init_user_api();
         userland_bootstrap::dispatch_user("init");
     }
 
