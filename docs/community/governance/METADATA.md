@@ -165,6 +165,7 @@
 | src/lib/init.rs | v0.1 | 2025-08-17 | COMMUNITY | | |
 | src/kernel/userland_bootstrap.rs | v0.3 | 2025-08-27 | COMMUNITY | | |
 | src/kernel/user_api.rs | v0.1 | 2025-08-27 | COMMUNITY | | |
+| src/kernel/config.rs | v0.1 | 2025-08-27 | COMMUNITY | | |
 | src/userbin/logdemo.rs | v0.1 | 2025-08-27 | COMMUNITY | | |
 | src/init_efi/main.c | v0.1 | 2025-08-27 | COMMUNITY | | |
 | full_fetch_and_build.sh | v0.1 | 2025-08-27 | COMMUNITY | | |
