@@ -1,7 +1,8 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: devd.rs v0.1
+// Filename: devd.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-07-13
+// Date Modified: 2025-08-17
+#![cfg(not(target_os = "uefi"))]
 
 //! Device hotplug detection service using inotify.
 

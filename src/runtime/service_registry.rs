@@ -1,7 +1,8 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: service_registry.rs v0.3
+// Filename: service_registry.rs v0.4
 // Author: Lukas Bower
-// Date Modified: 2025-07-03
+// Date Modified: 2025-08-17
+#![cfg(not(target_os = "uefi"))]
 
 //! Runtime service registry for Cohesix.
 //!

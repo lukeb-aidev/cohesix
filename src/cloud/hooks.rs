@@ -1,7 +1,8 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: hooks.rs v0.1
+// Filename: hooks.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-06-17
+// Date Modified: 2025-08-17
+#![cfg(not(target_os = "uefi"))]
 
 //! Cloud initialization hooks for Queen nodes.
 

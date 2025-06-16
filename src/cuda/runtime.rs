@@ -1,7 +1,8 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: runtime.rs v0.9
+// Filename: runtime.rs v0.10
 // Author: Lukas Bower
-// Date Modified: 2025-07-22
+// Date Modified: 2025-08-17
+#![cfg(not(target_os = "uefi"))]
 
 //! Runtime CUDA integration using dynamic loading of `libcuda.so`.
 //! Falls back gracefully if no CUDA driver is present.

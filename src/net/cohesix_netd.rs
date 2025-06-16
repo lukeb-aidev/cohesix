@@ -1,7 +1,8 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: cohesix_netd.rs v0.1
+// Filename: cohesix_netd.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-07-13
+// Date Modified: 2025-08-17
+#![cfg(not(target_os = "uefi"))]
 
 //! Network daemon providing 9P over TCP with discovery and HTTP fallback.
 

@@ -1,7 +1,8 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: upgrade_manager.rs v0.1
+// Filename: upgrade_manager.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-07-10
+// Date Modified: 2025-08-17
+#![cfg(not(target_os = "uefi"))]
 
 //! Handles atomic upgrades and rollbacks of Cohesix bundles.
 

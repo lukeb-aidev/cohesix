@@ -1,7 +1,8 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: multiplexer.rs v0.2
+// Filename: multiplexer.rs v0.3
 // Author: Lukas Bower
-// Date Modified: 2025-06-25
+// Date Modified: 2025-08-17
+#![cfg(not(target_os = "uefi"))]
 
 //! Concurrent 9P request multiplexer.
 //!
