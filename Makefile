@@ -200,7 +200,7 @@ man: third_party/mandoc/mandoc ## Install man page tool
 	cp third_party/mandoc/mandoc bin/cohman
 
 cohrun: ## Run cohrun CLI
-	cargo run -p cohcli_tools --bin cohrun -- $(ARGS)
+    cargo run -p cohcli_tools --bin cohrun_cli -- $(ARGS)
 
 cohbuild: ## Run cohbuild CLI
 	cargo run -p cohcli_tools --bin cohbuild -- $(ARGS)

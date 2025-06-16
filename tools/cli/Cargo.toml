@@ -1,3 +1,8 @@
+# CLASSIFICATION: COMMUNITY
+# Filename: tools/cli/Cargo.toml v0.2
+# Author: Lukas Bower
+# Date Modified: 2025-08-16
+
 [package]
 name = "cohcli_tools"
 version = "0.1.0"

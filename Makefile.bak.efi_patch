@@ -156,7 +156,7 @@ man: third_party/mandoc/mandoc
 	cp third_party/mandoc/mandoc bin/cohman
 
 cohrun:
-	cargo run -p cohcli_tools --bin cohrun -- $(ARGS)
+    cargo run -p cohcli_tools --bin cohrun_cli -- $(ARGS)
 
 cohbuild:
 	cargo run -p cohcli_tools --bin cohbuild -- $(ARGS)
