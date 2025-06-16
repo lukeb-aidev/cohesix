@@ -66,6 +66,33 @@ pub struct Namespace {
     pub root: NamespaceNode,
 }
 
+impl std::fmt::Display for Namespace {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for (idx, op) in self.ops.iter().enumerate() {
+            if idx > 0 {
+                writeln!(f)?;
+            }
+            match op {
+                NsOp::Bind { src, dst, flags } => {
+                    let mut flag = String::new();
+                    if flags.before { flag.push('b'); }
+                    if flags.after { flag.push('a'); }
+                    if flags.create { flag.push('c'); }
+                    if flag.is_empty() {
+                        write!(f, "bind {} {}", src, dst)?;
+                    } else {
+                        write!(f, "bind -{} {} {}", flag, src, dst)?;
+                    }
+                }
+                NsOp::Mount { srv, dst } => write!(f, "mount {} {}", srv, dst)?,
+                NsOp::Srv { path } => write!(f, "srv {}", path)?,
+                NsOp::Unmount { dst } => write!(f, "unmount {}", dst)?,
+            }
+        }
+        Ok(())
+    }
+}
+
 impl Namespace {
     /// Add an operation to the namespace.
     pub fn add_op(&mut self, op: NsOp) {
@@ -228,32 +255,7 @@ impl Namespace {
 
     /// Serialize namespace operations to a string.
     pub fn to_string(&self) -> String {
-        let mut out = Vec::new();
-        for op in &self.ops {
-            match op {
-                NsOp::Bind { src, dst, flags } => {
-                    let mut f = String::new();
-                    if flags.before {
-                        f.push('b');
-                    }
-                    if flags.after {
-                        f.push('a');
-                    }
-                    if flags.create {
-                        f.push('c');
-                    }
-                    if f.is_empty() {
-                        out.push(format!("bind {} {}", src, dst));
-                    } else {
-                        out.push(format!("bind -{} {} {}", f, src, dst));
-                    }
-                }
-                NsOp::Mount { srv, dst } => out.push(format!("mount {} {}", srv, dst)),
-                NsOp::Srv { path } => out.push(format!("srv {}", path)),
-                NsOp::Unmount { dst } => out.push(format!("unmount {}", dst)),
-            }
-        }
-        out.join("\n")
+        format!("{}", self)
     }
 
     /// Resolve a path through the namespace and return the first mount target.

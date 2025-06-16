@@ -15,6 +15,12 @@ pub struct QueenSyncDaemon {
     pub last_snapshot: Option<WorldModelSnapshot>,
 }
 
+impl Default for QueenSyncDaemon {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl QueenSyncDaemon {
     /// Create a new sync daemon.
     pub fn new() -> Self {

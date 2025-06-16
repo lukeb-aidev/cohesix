@@ -20,7 +20,11 @@ pub fn open(ns: &Namespace, path: &str) -> io::Result<File> {
 
 pub fn create(ns: &Namespace, path: &str) -> io::Result<File> {
     if let Some(real) = ns.resolve(path) {
-        OpenOptions::new().create(true).write(true).open(real)
+        OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(real)
     } else {
         Err(io::Error::new(io::ErrorKind::NotFound, "path not in namespace"))
     }

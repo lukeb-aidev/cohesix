@@ -18,6 +18,12 @@ pub struct PhysicsAdapter {
     colliders: ColliderSet,
 }
 
+impl Default for PhysicsAdapter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PhysicsAdapter {
     /// Create a new adapter with empty world.
     pub fn new() -> Self {

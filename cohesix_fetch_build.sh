@@ -44,6 +44,7 @@ cp target/release/kernel out/kernel.elf
 make bootloader kernel >/dev/null
 if [ -f out/BOOTX64.EFI ]; then
   cp out/BOOTX64.EFI out/bootx64.efi
+  chmod +x out/bootx64.efi
 fi
 if [ ! -f out/bootx64.efi ]; then
   echo "❌ No bootx64.efi found or not executable in out" >&2

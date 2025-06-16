@@ -37,7 +37,7 @@ pub fn initialize_services() {
         Box::new(ipc::IpcService::default()),
         Box::new(webcam::WebcamService::default()),
         Box::new(gpuinfo::GpuInfoService::default()),
-        Box::new(devd::DevdService::default()),
+        Box::new(devd::DevdService),
         Box::new(nswatch::NsWatchService::default()),
     ];
     for svc in services.iter_mut() {

@@ -16,6 +16,12 @@ pub struct SyscallQueue {
     buffer: VecDeque<Syscall>,
 }
 
+impl Default for SyscallQueue {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SyscallQueue {
     /// Create an empty queue.
     pub fn new() -> Self {

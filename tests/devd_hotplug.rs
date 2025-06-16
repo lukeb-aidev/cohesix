@@ -20,7 +20,7 @@ fn device_attach_detach() {
         std::env::set_var("COH_DEV_ROOT", dir.path());
     }
     ServiceRegistry::reset().unwrap();
-    let mut svc = DevdService::default();
+    let mut svc = DevdService;
     svc.init();
     fs::File::create(dir.path().join("video0")).expect("create video device");
     sleep(Duration::from_millis(500));
@@ -43,7 +43,7 @@ fn validator_violation() {
     }
     let _ = fs::remove_dir_all("/log");
     ServiceRegistry::reset().unwrap();
-    let mut svc = DevdService::default();
+    let mut svc = DevdService;
     svc.init();
     fs::File::create(dir.path().join("baddev")).expect("create invalid device");
     sleep(Duration::from_millis(500));
