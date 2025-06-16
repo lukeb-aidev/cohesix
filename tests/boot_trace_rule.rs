@@ -1,50 +1,40 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: boot_trace_rule.rs v0.2
+// Filename: boot_trace_rule.rs v0.3
 // Author: Cohesix Codex
-// Date Modified: 2025-08-02
+// Date Modified: 2025-08-18
 
 use cohesix::sandbox::validator::boot_must_succeed;
 use std::fs;
 use serial_test::serial;
+use tempfile::tempdir;
 
 #[test]
 #[serial]
 fn boot_trace_success() {
-    let dir = std::env::temp_dir().join("boot_trace_rule");
-    fs::create_dir_all(&dir)
-        .expect("Could not open boot trace file -- check test sandbox permissions");
-    unsafe {
-        std::env::set_var("COHESIX_TRACE_TMP", &dir);
-    }
-    fs::write(dir.join("boot_trace.json"), "[{\"event\":\"boot_success\"}]")
-        .expect("Could not open boot trace file -- check test sandbox permissions");
+    let dir = tempdir().expect("tempdir creation failed");
+    std::env::set_var("COHESIX_TRACE_TMP", dir.path());
+    fs::write(dir.path().join("boot_trace.json"), "[{\"event\":\"boot_success\"}]")
+        .expect("unable to write boot trace file");
     assert!(boot_must_succeed());
+    std::env::remove_var("COHESIX_TRACE_TMP");
 }
 
 #[test]
 #[serial]
 fn boot_trace_missing() {
-    let dir = std::env::temp_dir().join("boot_trace_rule");
-    let path = dir.join("boot_trace.json");
-    let _ = fs::remove_file(&path);
-    fs::create_dir_all(&dir)
-        .expect("Could not open boot trace file -- check test sandbox permissions");
-    unsafe {
-        std::env::set_var("COHESIX_TRACE_TMP", &dir);
-    }
+    let dir = tempdir().expect("tempdir creation failed");
+    std::env::set_var("COHESIX_TRACE_TMP", dir.path());
     assert!(!boot_must_succeed());
+    std::env::remove_var("COHESIX_TRACE_TMP");
 }
 
 #[test]
 #[serial]
 fn boot_trace_invalid_json() {
-    let dir = std::env::temp_dir().join("boot_trace_rule");
-    fs::create_dir_all(&dir)
-        .expect("Could not open boot trace file -- check test sandbox permissions");
-    unsafe {
-        std::env::set_var("COHESIX_TRACE_TMP", &dir);
-    }
-    fs::write(dir.join("boot_trace.json"), "not-json")
-        .expect("Could not open boot trace file -- check test sandbox permissions");
+    let dir = tempdir().expect("tempdir creation failed");
+    std::env::set_var("COHESIX_TRACE_TMP", dir.path());
+    fs::write(dir.path().join("boot_trace.json"), "not-json")
+        .expect("unable to write boot trace file");
     assert!(!boot_must_succeed());
+    std::env::remove_var("COHESIX_TRACE_TMP");
 }
