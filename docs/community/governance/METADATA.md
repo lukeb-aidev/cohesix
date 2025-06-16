@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: METADATA.md v3.18
+// Filename: METADATA.md v3.19
 // Author: Lukas Bower
-// Date Modified: 2025-08-01
+// Date Modified: 2025-08-16
 
 ## Canonical Documents
 
@@ -157,3 +157,4 @@
 | justfile | v0.1 | 2025-07-24 | COMMUNITY | | |
 | src/roles/mod.rs | v0.1 | 2025-07-31 | COMMUNITY | | |
 | src/roles/interactive_aibooth.rs | v0.1 | 2025-07-31 | COMMUNITY | | |
+| src/rc/init.rs | v0.2 | 2025-08-16 | COMMUNITY | | |
