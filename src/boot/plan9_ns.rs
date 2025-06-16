@@ -82,25 +82,29 @@ impl Namespace {
 
     /// Serialize namespace to a Plan 9 compatible text format.
     pub fn to_string(&self) -> String {
-        let mut lines = Vec::new();
-        for a in &self.actions {
+        format!("{}", self)
+    }
+}
+
+impl std::fmt::Display for Namespace {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for (idx, a) in self.actions.iter().enumerate() {
+            if idx > 0 {
+                writeln!(f)?;
+            }
             match a {
                 NsAction::Bind { src, dst, after } => {
                     if *after {
-                        lines.push(format!("bind -a {} {}", src, dst));
+                        write!(f, "bind -a {} {}", src, dst)?;
                     } else {
-                        lines.push(format!("bind {} {}", src, dst));
+                        write!(f, "bind {} {}", src, dst)?;
                     }
                 }
-                NsAction::Mount { srv, dst } => {
-                    lines.push(format!("mount {} {}", srv, dst));
-                }
-                NsAction::Srv { path } => {
-                    lines.push(format!("srv {}", path));
-                }
+                NsAction::Mount { srv, dst } => write!(f, "mount {} {}", srv, dst)?,
+                NsAction::Srv { path } => write!(f, "srv {}", path)?,
             }
         }
-        lines.join("\n")
+        Ok(())
     }
 }
 

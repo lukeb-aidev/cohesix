@@ -20,6 +20,12 @@ pub struct Shell {
     pub history: VecDeque<String>,
 }
 
+impl Default for Shell {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Shell {
     /// Create a new shell instance.
     pub fn new() -> Self {

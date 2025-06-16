@@ -137,6 +137,12 @@ pub struct CudaExecutor {
     fallback_reason: String,
 }
 
+impl Default for CudaExecutor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CudaExecutor {
     pub fn new() -> Self {
         let rt = CudaRuntime::try_new().unwrap_or_else(|_| CudaRuntime {
@@ -255,7 +261,7 @@ impl CudaExecutor {
                     let u = dev
                         .utilization_rates()
                         .ok()
-                        .map(|u| u.gpu as u32);
+                        .map(|u| u.gpu);
                     (t, u)
                 } else {
                     (None, None)

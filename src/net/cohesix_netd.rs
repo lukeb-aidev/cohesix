@@ -19,6 +19,12 @@ pub struct CohesixNetd {
     pub discovery_port: u16,
 }
 
+impl Default for CohesixNetd {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CohesixNetd {
     /// Create a new daemon with default ports.
     pub fn new() -> Self {
