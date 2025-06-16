@@ -38,3 +38,4 @@ pub mod syscalls {
 pub mod upgrade;
 
 pub mod proc_mgr;
+pub mod userland_bootstrap;
