@@ -1,7 +1,9 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: worker.rs v0.3
+// Filename: worker.rs v0.4
 // Author: Lukas Bower
-// Date Modified: 2025-07-11
+// Date Modified: 2025-08-16
+// Uses rand for trace IDs; disabled for UEFI builds where getrandom isn't available.
+#![cfg(not(feature = "uefi"))]
 
 //! DroneWorker role initialisation.
 

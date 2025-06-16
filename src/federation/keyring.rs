@@ -1,7 +1,9 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: keyring.rs v1.0
+// Filename: keyring.rs v1.1
 // Author: Codex
-// Date Modified: 2025-06-07
+// Date Modified: 2025-08-16
+// This module uses ring::rand which relies on getrandom; it is disabled on UEFI.
+#![cfg(not(feature = "uefi"))]
 
 //! Cryptographic keyring for trusted queen federation.
 //!
