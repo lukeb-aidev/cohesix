@@ -79,7 +79,7 @@ impl EnsembleAgent {
             Arbitration::Weighted => {
                 proposals.iter().cloned().max_by(|a, b| a.1.partial_cmp(&b.1).unwrap()).map(|p| p.0).unwrap_or_default()
             }
-            Arbitration::Fallback => proposals.get(0).map(|p| p.0.clone()).unwrap_or_default(),
+            Arbitration::Fallback => proposals.first().map(|p| p.0.clone()).unwrap_or_default(),
         };
         let _ = self.log_scores(&proposals);
         action

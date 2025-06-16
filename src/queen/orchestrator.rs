@@ -78,10 +78,9 @@ impl QueenOrchestrator {
     pub fn sync_workers(&mut self) {
         if let Ok(entries) = fs::read_dir("/srv/netinit") {
             for ent in entries.flatten() {
-                if let Ok(wid) = ent.file_name().into_string() {
-                    let path = ent.path().join("ip");
-                    if let Ok(ip) = fs::read_to_string(&path) {
-                        let rec = self
+                let path = ent.path().join("ip");
+                if let (Ok(wid), Ok(ip)) = (ent.file_name().into_string(), fs::read_to_string(&path)) {
+                    let rec = self
                             .workers
                             .entry(wid.clone())
                             .or_insert_with(|| WorkerRecord {
@@ -102,9 +101,8 @@ impl QueenOrchestrator {
                                     .map(|c| c.lines().map(|s| s.to_string()).collect())
                                     .unwrap_or_else(|_| Vec::new()),
                             });
-                        rec.last_seen = timestamp();
-                        rec.ip = ip.trim().into();
-                    }
+                    rec.last_seen = timestamp();
+                    rec.ip = ip.trim().into();
                 }
             }
         }
@@ -256,7 +254,7 @@ impl QueenOrchestrator {
                 ids.get(i).cloned()
             }
             SchedulePolicy::GpuPriority => self.schedule_gpu(agent_id),
-            _ => ids.get(0).cloned(),
+            _ => ids.first().cloned(),
         };
         if let Some(ref id) = target {
             recorder::event(

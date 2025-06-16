@@ -73,8 +73,8 @@ pub fn extract_identity(
     let mut line = String::new();
     let mut reader = std::io::BufReader::new(stream);
     reader.read_line(&mut line)?;
-    if line.starts_with("JWT ") {
-        let token = line[4..].trim();
+    if let Some(token) = line.strip_prefix("JWT ") {
+        let token = token.trim();
         let data = decode::<Claims>(
             token,
             &DecodingKey::from_secret(b"cohesix"),

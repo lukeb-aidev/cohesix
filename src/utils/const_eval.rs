@@ -98,5 +98,5 @@ pub fn eval(expr: &str) -> Result<i64, String> {
 
 /// Returns true if the input string appears to be a valid const expression.
 pub fn is_valid_expression(expr: &str) -> bool {
-    expr.chars().all(|c| c.is_digit(10) || "+-*/() ".contains(c))
+    expr.chars().all(|c| c.is_ascii_digit() || "+-*/() ".contains(c))
 }

@@ -38,3 +38,9 @@ impl IRPass for NopPass {
         }
     }
 }
+
+impl Default for NopPass {
+    fn default() -> Self {
+        Self::new()
+    }
+}

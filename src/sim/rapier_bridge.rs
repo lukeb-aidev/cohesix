@@ -207,7 +207,7 @@ pub fn example_gravity_drop() -> SimObject {
     let state = fs::read_to_string("/sim/state").unwrap_or_default();
     let line = state.lines().next().unwrap_or("");
     let parts: Vec<&str> = line.split_whitespace().collect();
-    let id = parts.get(0).cloned().unwrap_or("");
+    let id = parts.first().cloned().unwrap_or("");
     SimObject {
         id: RigidBodyHandle::from_raw_parts(id.trim_matches(|c| c == '(' || c == ')').parse().unwrap_or(0), 0),
         pos: vector![0.0, 0.0, 0.0],
