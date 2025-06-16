@@ -112,7 +112,7 @@
 | test_boot_efi.sh | v0.13 | 2025-08-25 | COMMUNITY | | |
 | src/kernel/main.c | v0.2 | 2025-07-22 | COMMUNITY | | |
 | src/kernel/main.rs | v0.2 | 2025-08-02 | COMMUNITY | | |
-| src/kernel/proc_mgr.rs | v0.1 | 2025-08-26 | COMMUNITY | | |
+| src/kernel/proc_mgr.rs | v0.2 | 2025-08-27 | COMMUNITY | | |
 | tests/test_traceflow.py | v0.1 | 2025-07-23 | COMMUNITY | | |
 | tests/test_invalid_cli.py | v0.1 | 2025-07-23 | COMMUNITY | | |
 | tests/test_9p_read_write.rs | v0.1 | 2025-07-23 | COMMUNITY | | |
@@ -155,7 +155,7 @@
 | scripts/manpage_scan.sh | v0.1 | 2025-06-08 | COMMUNITY | | |
 | scripts/verify-macos-setup.sh | v0.1 | 2025-06-05 | COMMUNITY | | |
 | metadata.json | v0.1 | 2025-07-24 | COMMUNITY | | |
-| Cargo.toml | v0.11 | 2025-08-27 | COMMUNITY | | |
+| Cargo.toml | v0.12 | 2025-08-27 | COMMUNITY | | |
 | cohesix-9p/Cargo.toml | v0.1 | 2025-07-28 | COMMUNITY | | |
 | tools/cli/Cargo.toml | v0.2 | 2025-08-16 | COMMUNITY | | |
 | justfile | v0.1 | 2025-07-24 | COMMUNITY | | |
@@ -163,5 +163,7 @@
 | src/roles/interactive_aibooth.rs | v0.1 | 2025-07-31 | COMMUNITY | | |
 | src/rc/init.rs | v0.2 | 2025-08-16 | COMMUNITY | | |
 | src/lib/init.rs | v0.1 | 2025-08-17 | COMMUNITY | | |
-| src/kernel/userland_bootstrap.rs | v0.2 | 2025-08-27 | COMMUNITY | | |
+| src/kernel/userland_bootstrap.rs | v0.3 | 2025-08-27 | COMMUNITY | | |
+| src/kernel/user_api.rs | v0.1 | 2025-08-27 | COMMUNITY | | |
+| src/userbin/logdemo.rs | v0.1 | 2025-08-27 | COMMUNITY | | |
 | src/init_efi/main.c | v0.1 | 2025-08-27 | COMMUNITY | | |

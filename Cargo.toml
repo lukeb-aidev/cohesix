@@ -1,5 +1,5 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Cargo.toml v0.11
+# Filename: Cargo.toml v0.12
 # Author: Lukas Bower
 # Date Modified: 2025-08-27
 [package]
@@ -101,3 +101,8 @@ name = "kernel"
 path = "src/kernel/main.rs"
 test = false
 required-features = ["kernel_bin", "minimal_uefi"]
+
+[[bin]]
+name = "logdemo"
+path = "src/userbin/logdemo.rs"
+required-features = ["minimal_uefi"]
