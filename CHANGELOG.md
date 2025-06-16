@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v0.62
-// Date Modified: 2025-08-18
+// Date Modified: 2025-08-26
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
 • Consolidated OSS reuse files into LICENSES_AND_REUSE.md
@@ -28,6 +28,11 @@
 - Fixed x86_64-unknown-uefi build by gating getrandom and entropy sources
 - test_boot_efi.sh v0.13 logs to `logs/` and emits test summaries
 - test_all_arch.sh v1.1, run-smoke-tests.sh v0.4 now output logs and summaries
+
+## [v0.91] - 2025-08-26
+### Added
+- Kernel `proc_mgr` module providing a minimal userspace process model.
+- Unit tests exercising `spawn` and `list` functions.
 
 ## [v0.90] - 2025-08-16
 ### Changed
