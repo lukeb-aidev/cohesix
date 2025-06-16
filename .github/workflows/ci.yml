@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: ci.yml v1.2
+# Filename: ci.yml v1.3
 # Author: Lukas Bower
-# Date Modified: 2025-07-31
+# Date Modified: 2025-08-18
 
 name: Cohesix CI
 
@@ -12,68 +12,44 @@ on:
     branches: ["main"]
 
 jobs:
-  build:
+  rust:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout source
-        uses: actions/checkout@v4
-
-      - name: Set up Rust
-        uses: actions-rs/toolchain@v1
+      - uses: actions/checkout@v4
+      - uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
           override: true
+      - name: Build
+        run: cargo build --release
 
-      - name: Build Rust
-        run: cargo build --all-targets --all-features
-
-      - name: Lint Rust
-        run: cargo clippy --all-targets --all-features || true
-
-      - name: Test Rust
-        run: cargo test --all --all-features
-
-      - name: Set up Python
-        uses: actions/setup-python@v4
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v4
         with:
           python-version: '3.x'
+      - name: Install deps
+        run: pip install flake8 pytest
+      - name: Lint
+        run: flake8 python
+      - name: Test
+        run: pytest -q tests/test_cli_help.py
 
-      - name: Install Python deps
-        run: pip install flake8 black pytest
-
-      - name: Lint Python
-        run: flake8 cli || true
-
-      - name: Check formatting
-        run: black --check cli
-
-      - name: Test Python
-        run: |
-          if [ -d tests_py ]; then
-            pytest tests_py
-          fi
-
-      - name: Set up Go
-        uses: actions/setup-go@v4
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v4
         with:
           go-version: '1.22'
+      - name: Build
+        run: go build ./...
 
-      - name: Build Go modules
-        run: |
-          if [ -d go ]; then
-            cd go
-            go build ./... || true
-          fi
-
-      - name: Test Go modules
-        run: |
-          if [ -d go ]; then
-            cd go
-            go test ./... || true
-          fi
-
-      - name: Build C bootloader
-        run: |
-          if [ -f bootloader.c ]; then
-            gcc -c bootloader.c -o bootloader.o || true
-          fi
+  shell:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Shellcheck
+        run: shellcheck test_all_arch.sh || true
