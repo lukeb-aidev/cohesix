@@ -28,7 +28,7 @@ use std::collections::HashMap;
 /// Key/value map of boot parameters.
 ///
 /// Values are stored as owned `String`s for simplicity.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct BootArgs {
     map: HashMap<String, String>,
 }
@@ -81,11 +81,6 @@ pub fn parse_cmdline(cmdline: &str) -> Result<BootArgs, &'static str> {
     Ok(BootArgs { map })
 }
 
-impl Default for BootArgs {
-    fn default() -> Self {
-        Self { map: HashMap::new() }
-    }
-}
 
 // ───────────────────────────── tests ─────────────────────────────────────────
 #[cfg(test)]

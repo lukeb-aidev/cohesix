@@ -123,7 +123,7 @@ pub fn run(cli: Cli) {
                 let mut goals: Vec<Value> = fs::read_to_string("/srv/goals/active_goals.json")
                     .ok()
                     .and_then(|d| serde_json::from_str(&d).ok())
-                    .unwrap_or_else(Vec::new);
+                    .unwrap_or_default();
                 let mut val: Value = serde_json::from_str(&json).unwrap_or_default();
                 let id = format!("g{}", goals.len() + 1);
                 if let Some(obj) = val.as_object_mut() {
@@ -147,7 +147,7 @@ pub fn run(cli: Cli) {
                 let mut goals: Vec<Value> = fs::read_to_string("/srv/goals/active_goals.json")
                     .ok()
                     .and_then(|d| serde_json::from_str(&d).ok())
-                    .unwrap_or_else(Vec::new);
+                    .unwrap_or_default();
                 for g in &mut goals {
                     if g["id"] == goal_id {
                         g["assigned_worker"] = Value::String(worker_id.clone());

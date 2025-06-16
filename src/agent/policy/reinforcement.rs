@@ -25,3 +25,9 @@ impl ReinforcementPolicy {
         self.reward
     }
 }
+
+impl Default for ReinforcementPolicy {
+    fn default() -> Self {
+        Self::new()
+    }
+}
