@@ -41,7 +41,7 @@ pub fn run_demo() {
 
     if let Some(body) = bodies.get(handle) {
         let pos = body.translation();
-        let state = BodyState { pos: [pos.x as f32, pos.y as f32, pos.z as f32] };
+        let state = BodyState { pos: [pos.x, pos.y, pos.z] };
         let json = serde_json::to_string(&state).unwrap();
         fs::write("/trace/last_sim.json", json).ok();
     }

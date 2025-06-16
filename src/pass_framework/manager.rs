@@ -38,3 +38,9 @@ impl PassManager {
         self.passes.len()
     }
 }
+
+impl Default for PassManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}

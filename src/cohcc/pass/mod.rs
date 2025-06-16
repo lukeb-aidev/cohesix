@@ -30,3 +30,9 @@ impl PassManager {
         }
     }
 }
+
+impl Default for PassManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}

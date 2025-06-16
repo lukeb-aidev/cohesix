@@ -6,6 +6,7 @@
 //! Defines the IR Module and associated utilities for the Cohesix compiler.
 
 use crate::ir::Function;
+use std::fmt;
 
 /// A compilation unit containing multiple functions.
 #[derive(Clone, Debug)]
@@ -44,14 +45,6 @@ impl Module {
         self.functions.iter()
     }
 
-    /// Pretty-prints the module and its functions.
-    pub fn to_string(&self) -> String {
-        let mut out = format!("Module: {}\n", self.name);
-        for func in &self.functions {
-            out.push_str(&format!("{}", func)); // assumes Function has Display impl
-        }
-        out
-    }
 
     /// Validate structural integrity. Currently a stub that always returns `true`.
     /// FIXME: Validate structural integrity, uniqueness of function names, etc.
@@ -62,5 +55,15 @@ impl Module {
     /// Return a textual representation of the module using the IR printer.
     pub fn print_ir(&self) -> String {
         crate::ir::printer::print_module(self)
+    }
+}
+
+impl fmt::Display for Module {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "Module: {}", self.name)?;
+        for func in &self.functions {
+            writeln!(f, "{}", func)?;
+        }
+        Ok(())
     }
 }

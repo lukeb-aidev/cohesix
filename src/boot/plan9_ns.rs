@@ -80,10 +80,6 @@ impl Namespace {
         &self.actions
     }
 
-    /// Serialize namespace to a Plan 9 compatible text format.
-    pub fn to_string(&self) -> String {
-        format!("{}", self)
-    }
 }
 
 impl std::fmt::Display for Namespace {
