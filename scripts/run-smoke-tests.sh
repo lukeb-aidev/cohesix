@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: run-smoke-tests.sh v0.3
-// Date Modified: 2025-06-16
+// Filename: run-smoke-tests.sh v0.4
+// Date Modified: 2025-08-25
 // Author: Lukas Bower
 
 
@@ -32,10 +32,34 @@ set -euo pipefail
 
 msg()  { printf "\e[32m[smoke]\e[0m %s\n" "$*"; }
 warn() { printf "\e[33m[warn]\e[0m %s\n" "$*"; }
-fail() { printf "\e[31m[FAIL]\e[0m %s\n" "$*"; exit 1; }
+fail() { FATAL_ERROR="$*"; printf "\e[31m[FAIL]\e[0m %s\n" "$*"; exit 1; }
 
 ROOT_DIR="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 cd "$ROOT_DIR"
+
+LOG_DIR="$ROOT_DIR/logs"
+mkdir -p "$LOG_DIR"
+TS="$(date +%Y%m%d_%H%M%S)"
+LOG_FILE="$LOG_DIR/run_smoke_tests_${TS}.log"
+SUMMARY_FILE="$LOG_DIR/test_summary.txt"
+START_TIME="$(date +%s)"
+FATAL_ERROR=""
+
+exec > >(tee "$LOG_FILE") 2>&1
+
+write_summary() {
+    local verdict=$1
+    local end_time="$(date +%s)"
+    local duration=$(( end_time - START_TIME ))
+    cat <<EOF > "$SUMMARY_FILE"
+Timestamp: $(date '+%Y-%m-%d %H:%M:%S')
+Verdict: $verdict
+Duration: ${duration}s
+Fatal Error: ${FATAL_ERROR:-none}
+EOF
+}
+
+trap 'c=$?; verdict=PASS; [ $c -ne 0 ] && verdict=FAIL; write_summary "$verdict"' EXIT
 
 # --------------------------------------------------------------------------- #
 # 1. Cargo sanity
@@ -62,7 +86,7 @@ fi
 # --------------------------------------------------------------------------- #
 # 3. BusyBox smoke (if present)
 # --------------------------------------------------------------------------- #
-BUSYBOX="$(find out/busybox -type f -name busybox | head -n1 || true)"
+BUSYBOX="$(find out/busybox -type f -name busybox | head -n1 || true)" # non-blocking
 if [[ -x "$BUSYBOX" ]]; then
   msg "Testing BusyBox → $BUSYBOX"
   TEMP_DIR="$(mktemp -d)"
@@ -88,7 +112,7 @@ sleep 2; touch "$HB_FILE"
 
 # Allow one more interval then kill watchdog
 sleep 2
-kill "$WATCH_PID" || true
+kill "$WATCH_PID" || true  # allow missing process
 rm -f "$HB_FILE" "$HB_FILE.recovered" /tmp/cohesix_smoke.log
 
 msg "✅  Smoke tests completed successfully."
