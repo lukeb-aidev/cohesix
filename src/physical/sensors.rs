@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: sensors.rs v0.4
+// Filename: sensors.rs v0.5
 // Author: Lukas Bower
-// Date Modified: 2025-07-13
+// Date Modified: 2025-08-17
 
 //! Physical sensor interface.
 //!
@@ -10,6 +10,7 @@
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
+use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::trace::recorder;
@@ -28,13 +29,27 @@ fn ts() -> u64 {
         .unwrap_or(0)
 }
 
+fn telemetry_path() -> String {
+    std::env::var("COHESIX_TELEMETRY_PATH").unwrap_or_else(|_| "/srv/telemetry".into())
+}
+
+fn trace_path(agent: &str) -> String {
+    let base = std::env::var("COHESIX_AGENT_TRACE_DIR").unwrap_or_else(|_| "/srv/agent_trace".into());
+    format!("{}/{}", base, agent)
+}
+
 pub fn read_temperature(agent: &str) -> f32 {
     let value = read_hw_temperature()
         .or_else(|| read_sensor_value("/srv/sensors/temperature.json"))
         .unwrap_or(42.0);
-    fs::create_dir_all("/srv").ok();
-    log("/srv/telemetry", &format!("{} temp {}", ts(), value));
-    log(&format!("/srv/agent_trace/{agent}"), &format!("temp {}", value));
+    let telem = telemetry_path();
+    if let Some(parent) = Path::new(&telem).parent() {
+        fs::create_dir_all(parent).ok();
+    }
+    log(&telem, &format!("{} temp {}", ts(), value));
+    let trace = trace_path(agent);
+    fs::create_dir_all(std::path::Path::new(&trace).parent().unwrap()).ok();
+    log(&trace, &format!("temp {}", value));
     recorder::event(agent, "sensor-triggered-action", &format!("temp:{}", value));
     value
 }
@@ -43,16 +58,28 @@ pub fn read_tilt(agent: &str) -> f32 {
     let value = read_hw_accel()
         .or_else(|| read_sensor_value("/srv/sensors/accelerometer.json"))
         .unwrap_or(0.0);
-    log("/srv/telemetry", &format!("{} tilt {}", ts(), value));
-    log(&format!("/srv/agent_trace/{agent}"), &format!("tilt {}", value));
+    let telem = telemetry_path();
+    if let Some(parent) = Path::new(&telem).parent() {
+        fs::create_dir_all(parent).ok();
+    }
+    log(&telem, &format!("{} tilt {}", ts(), value));
+    let trace = trace_path(agent);
+    fs::create_dir_all(Path::new(&trace).parent().unwrap()).ok();
+    log(&trace, &format!("tilt {}", value));
     recorder::event(agent, "sensor-triggered-action", &format!("tilt:{}", value));
     value
 }
 
 pub fn read_motion(agent: &str) -> bool {
     let value = read_hw_motion().unwrap_or(false);
-    log("/srv/telemetry", &format!("{} motion {}", ts(), value));
-    log(&format!("/srv/agent_trace/{agent}"), &format!("motion {}", value));
+    let telem = telemetry_path();
+    if let Some(parent) = Path::new(&telem).parent() {
+        fs::create_dir_all(parent).ok();
+    }
+    log(&telem, &format!("{} motion {}", ts(), value));
+    let trace = trace_path(agent);
+    fs::create_dir_all(Path::new(&trace).parent().unwrap()).ok();
+    log(&trace, &format!("motion {}", value));
     recorder::event(agent, "sensor-triggered-action", &format!("motion:{}", value));
     value
 }
