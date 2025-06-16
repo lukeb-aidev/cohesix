@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.59
-// Date Modified: 2025-08-16
+// Filename: CHANGELOG.md v0.60
+// Date Modified: 2025-08-17
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
 • Consolidated OSS reuse files into LICENSES_AND_REUSE.md
@@ -15,6 +15,7 @@
 - Ensemble tests use writable temp directory via COHESIX_ENS_TMP
 - SharedMemory, BaseAgent use TMPDIR and respect override vars
 - QEMU boot script checks for qemu-system-x86_64, sets TMPDIR, ensures writable paths
+- test_boot_efi.sh verifies bootx64.efi and FAT directory before launch; logs /out manifest on failure
 - cohesix_fetch_build.sh v0.4 stages kernel ELF and boot files in out/
 - src/lib/init.rs placeholder module to satisfy module resolution
 - sensors.rs respects COHESIX_TELEMETRY_PATH for tests
