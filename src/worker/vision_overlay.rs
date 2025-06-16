@@ -12,6 +12,12 @@ pub struct VisionOverlay {
     frames: u32,
 }
 
+impl Default for VisionOverlay {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl VisionOverlay {
     /// Create a new overlay handler.
     pub fn new() -> Self {

@@ -21,6 +21,12 @@ pub struct WatchdogDaemon {
     last_restart: Option<SystemTime>,
 }
 
+impl Default for WatchdogDaemon {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl WatchdogDaemon {
     /// Create a new watchdog daemon with default paths.
     pub fn new() -> Self {
