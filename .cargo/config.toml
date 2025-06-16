@@ -1,13 +1,13 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: config.toml v0.2
+# Filename: config.toml v0.3
 # Author: Lukas Bower
-# Date Modified: 2025-06-16
+# Date Modified: 2025-08-17
 
 [build]
 target = "x86_64-unknown-uefi"
 
 [target.x86_64-unknown-uefi]
-linker = "clang"
+linker = "lld-link"
 rustflags = [
   "-C", "link-arg=-mno-red-zone",
   "-C", "link-arg=-ffreestanding",

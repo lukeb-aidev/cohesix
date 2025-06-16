@@ -1,7 +1,8 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: hotplug.rs v0.2
+// Filename: hotplug.rs v0.3
 // Author: Lukas Bower
-// Date Modified: 2025-07-03
+// Date Modified: 2025-08-17
+#![cfg(not(target_os = "uefi"))]
 
 //! Worker discovery and retirement hooks.
 //!
