@@ -1,8 +1,11 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: mod.rs v0.1
+// Filename: mod.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-07-04
+// Date Modified: 2025-08-27
 
 //! Filesystem utilities root module.
+
+#[cfg(feature = "minimal_uefi")]
+pub use crate::kernel::fs::fat::open_bin;
 
 pub mod overlay;

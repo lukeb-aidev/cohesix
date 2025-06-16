@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Cargo.toml v0.10
+# Filename: Cargo.toml v0.11
 # Author: Lukas Bower
-# Date Modified: 2025-08-17
+# Date Modified: 2025-08-27
 [package]
 name    = "cohesix"
 version = "0.1.0"
@@ -13,6 +13,7 @@ build = "build.rs"
 anyhow = "1.0"
 log = "0.4"
 bitflags = "2"
+fatfs = "0.3.6"
 
 [target.'cfg(not(target_os = "uefi"))'.dependencies]
 cohesix-9p = { path = "cohesix-9p" }
