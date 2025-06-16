@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: init.rs v0.1
+// Filename: init.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-07-22
+// Date Modified: 2025-08-16
 
 //! Minimal Plan 9 style init parser for Cohesix.
 
@@ -27,8 +27,20 @@ pub fn run() -> io::Result<()> {
             }
         }
     } else {
-        println!("Welcome to Cohesix rc");
-        println!("/dev/console: _");
+        const BANNER: &str = r"  _____            _     _
+ / ____|          | |   (_)
+| |     ___   ___ | |__  _ _ __  ___
+| |    / _ \ / _ \| '_ \| | '_ \/ __|
+| |___| (_) | (_) | |_) | | | | \__ \
+ \_____|___/ \___/|_.__/|_|_| |_|___/";
+
+        println!("{}", BANNER);
+        let bee = if std::env::var("LANG").unwrap_or_default().contains("UTF-8") {
+            "🐝"
+        } else {
+            "BEE"
+        };
+        println!("{}", bee);
     }
     ns.persist("boot")?;
     let elapsed = start.elapsed().as_millis();
