@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: secure_9p_server.rs v0.4
+// Filename: secure_9p_server.rs v0.5
 // Author: Lukas Bower
-// Date Modified: 2025-07-31
+// Date Modified: 2025-08-18
 
 //! TLS-wrapped 9P server with policy enforcement.
 
@@ -70,7 +70,7 @@ fn policy_for(engine: &PolicyEngine, agent: &str) -> SandboxPolicy {
 
 /// Start a TLS-wrapped 9P server listening on `addr` using `cert` and `key`.
 #[cfg(feature = "secure9p")]
-pub fn start_secure_9p_server(addr: &str, cert: &Path, key: &Path) -> anyhow::Result<()> {
+fn start_secure_9p_server_sync(addr: &str, cert: &Path, key: &Path) -> anyhow::Result<()> {
     let certs = load_certs(cert)?;
     let key = load_key(key)?;
     let tls_cfg = ServerConfig::builder()
@@ -123,6 +123,12 @@ pub fn start_secure_9p_server(addr: &str, cert: &Path, key: &Path) -> anyhow::Re
         });
     }
     Ok(())
+}
+
+#[cfg(feature = "secure9p")]
+#[tokio::main(flavor = "current_thread")]
+pub async fn start_secure_9p_server(addr: &str, cert: &Path, key: &Path) -> anyhow::Result<()> {
+    start_secure_9p_server_sync(addr, cert, key)
 }
 
 #[cfg(feature = "secure9p")]
