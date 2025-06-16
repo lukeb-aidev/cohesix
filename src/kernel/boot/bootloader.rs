@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: bootloader.rs v1.2
+// Filename: bootloader.rs v1.3
 // Author: Lukas Bower
-// Date Modified: 2025-07-22
+// Date Modified: 2025-08-27
 //==============================================================================
 // COHESIX · BOOTLOADER MODULE
 //------------------------------------------------------------------------------
@@ -17,6 +17,8 @@ pub struct BootAgent;
 
 use super::role_hooks;
 use crate::kernel::userland_bootstrap;
+#[cfg(feature = "minimal_uefi")]
+use crate::kernel::fs::fat;
 
 impl BootAgent {
     /// Initialize the bootloader and perform pre-seL4 setup.
@@ -34,6 +36,8 @@ impl BootAgent {
             });
 
         Self::setup_memory_zones();
+        #[cfg(feature = "minimal_uefi")]
+        fat::mount_root();
         Self::discover_devices();
         Self::prepare_kernel(&ctx);
         crate::trace::recorder::event("boot", "init", "finish");
