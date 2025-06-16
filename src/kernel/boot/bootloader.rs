@@ -16,6 +16,7 @@
 pub struct BootAgent;
 
 use super::role_hooks;
+use crate::kernel::userland_bootstrap;
 
 impl BootAgent {
     /// Initialize the bootloader and perform pre-seL4 setup.
@@ -37,6 +38,7 @@ impl BootAgent {
         Self::prepare_kernel(&ctx);
         crate::trace::recorder::event("boot", "init", "finish");
         role_hooks::setup(&ctx.role);
+        userland_bootstrap::dispatch_user("init");
     }
 
     /// Perform essential checks before kernel handoff.
