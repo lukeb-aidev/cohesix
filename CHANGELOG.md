@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.58
-// Date Modified: 2025-08-02
+// Filename: CHANGELOG.md v0.59
+// Date Modified: 2025-08-16
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
 • Consolidated OSS reuse files into LICENSES_AND_REUSE.md
@@ -28,6 +28,7 @@
  - src/kernel/main.rs v0.2 gated by `kernel_bin` feature
 - cohesix_fetch_build.sh v0.5 builds kernel ELF using kernel_bin feature
 - Cargo.toml v0.6 keeps kernel_bin feature gating for tests
+- rc init displays ASCII Cohesix wordmark with bee icon
 - cohesix_fetch_build.sh v0.7 builds bootx64.efi, isolates QEMU monitor, and validates boot log
 - Boot test exits with code 0 when QEMU is missing so CI shows the step as skipped
 - policy_memory.rs v0.3 adds fallback to local persist path for tests
