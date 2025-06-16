@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Cargo.toml v0.8
+# Filename: Cargo.toml v0.9
 # Author: Lukas Bower
-# Date Modified: 2025-08-16
+# Date Modified: 2025-08-17
 [package]
 name    = "cohesix"
 version = "0.1.0"
@@ -28,6 +28,7 @@ rustls = { version = "0.23", optional = true }
 tokio-rustls = { version = "0.24", optional = true }
 webpki-roots = { version = "1", optional = true }
 once_cell = "1"
+getrandom = { version = "0.2", optional = true }
 cohesix-9p = { path = "cohesix-9p" }
 serde = { version = "1", features = ["derive"] }
 hex = "0.4"
@@ -44,7 +45,7 @@ jsonwebtoken = { version = "9", optional = true }
 toml = { version = "0.8", optional = true }
 x509-parser = { version = "0.15", optional = true }
 
-[target.'cfg(not(feature = "uefi"))'.dependencies]
+[target.'cfg(not(target_os = "uefi"))'.dependencies]
 sha2 = "0.10"
 serde_json = "1"
 ring = "0.17.8"
@@ -52,6 +53,7 @@ rand = "0.8"
 aes-gcm = { version = "0.10", features = ["aes"] }
 aead = "0.5"
 aes = "0.8"
+getrandom = { version = "0.2", optional = true }
 
 [build-dependencies]
 which = "5.0"
@@ -83,6 +85,7 @@ joystick = ["sdl2"]
 secure9p = ["rustls", "tokio-rustls", "jsonwebtoken", "toml", "x509-parser", "serde_yaml", "webpki-roots", "rustls-pemfile"]
 kernel_bin = []
 uefi = []
+entropy = ["getrandom"]
 
 [profile.release]
 panic = "abort"
