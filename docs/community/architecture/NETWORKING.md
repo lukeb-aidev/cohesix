@@ -1,32 +1,32 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: NETWORKING.md v0.2
+// Filename: NETWORKING.md v0.3
 // Author: Lukas Bower
-// Date Modified: 2025-07-31
+// Date Modified: 2025-06-15
 
-# Cohesix Networking
+# Cohesix 9P Server Overview
 
-`cohesix_netd` provides TCP transport for 9P services and performs node
-discovery. The daemon broadcasts a presence packet on startup and listens on
-port 564 for 9P messages. Discovery uses UDP broadcast to
-`255.255.255.255` by default and falls back to `127.0.0.1` if the network
-rejects broadcasts. If the TCP listener fails it sends an HTTP POST via
-`ureq` as a fallback channel.
+The 9P server is a core part of Cohesix IPC (inter-process communication) and remote namespace access.
 
-Logs are written to `/srv/network/events.log` with RFC3339 timestamps and are
-also forwarded to the runtime validator on error.
+A hardened variant called Secure9P is also under development, adding TLS transport, authentication, and namespace isolation.
 
-## Discovery
-- UDP broadcast on port 9864 with the message `cohesix_netd_discovery`
-  sent to `255.255.255.255` (falling back to `127.0.0.1` if needed)
-- Workers listen for this packet to locate the Queen
+---
 
-## HTTP Fallback
-- POSTs to a configured URL if TCP bind or connection fails
-- Used to maintain minimal connectivity during network disruptions
+## Basic Operation
+
+- Listens on TCP port 564 by default
+- Exposes a 9P service mountable by Workers or other agents
+- Maps namespace from `/srv` and logs activity to `/log/net_trace.log`
+
+---
 
 ## Security and Trace Integration
 
-- All 9P messages, discovery packets, and fallback POSTs are logged to `/log/net_trace.log`
-- TLS is planned for 9P-over-TCP transport in future releases
-- Validator intercepts malformed or unexpected network events and raises alerts
-- Broadcast suppression and packet filtering rules are enforced by `/etc/cohnet.conf`
+All `walk`, `read`, and `write` calls are traced via `cohtrace` and appear in trace replays for validator inspection.
+
+All write operations are subject to capability enforcement via `/etc/cohcap.json`.
+
+Unauthorized write attempts are rejected and logged.
+
+Future extensions may add TLS-wrapped transport and role-scoped namespace enforcement as defined in `SECURITY_POLICY.md`.
+
+For enhanced authentication and encrypted transport, the Secure9P variant is under active development. Secure9P wraps 9P traffic in TLS and uses capability tokens and role-aware namespace resolution as described in `SECURE9P_OVERVIEW.md`.
