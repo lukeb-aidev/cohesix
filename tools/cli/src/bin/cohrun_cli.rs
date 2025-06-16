@@ -1,7 +1,8 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: cohrun.rs v0.1
+// Filename: cohrun_cli.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-07-21
+// Date Modified: 2025-08-16
+// Renamed to avoid collision with main cohrun binary.
 
 use clap::Parser;
 use std::fs;

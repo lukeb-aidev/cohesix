@@ -19,6 +19,13 @@
 - src/lib/init.rs placeholder module to satisfy module resolution
 - sensors.rs respects COHESIX_TELEMETRY_PATH for tests
 - test_agent_lifecycle uses temp directories only
+
+## [v0.90] - 2025-08-16
+### Changed
+- Added `uefi` feature flag and cfg guards for crates using getrandom
+- Moved rand, sha2, serde_json and ring under conditional dependencies
+- Renamed tools/cli `cohrun` binary to `cohrun_cli` to avoid collisions
+- Makefile targets updated accordingly
 ### [2025-08-16] Misc fixes
 - Cargo.toml edition bumped to 2024
 - Policy memory shared path respects COHESIX_POLICY_TMP for tests
