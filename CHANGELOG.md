@@ -20,6 +20,7 @@
 - src/lib/init.rs placeholder module to satisfy module resolution
 - sensors.rs respects COHESIX_TELEMETRY_PATH for tests
 - test_agent_lifecycle uses temp directories only
+- boot_trace_rule tests use tempfile::tempdir to avoid PermissionDenied errors
 - Cargo.toml v0.9 removes unsupported `feature` key in target deps and
   gates getrandom for UEFI builds
 - Cargo.toml v0.10 adds `minimal_uefi` feature and gates async crates

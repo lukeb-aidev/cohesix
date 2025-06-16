@@ -119,6 +119,7 @@
 | tests/test_namespace_rule.rs | v0.1 | 2025-07-23 | COMMUNITY | | |
 | tests/test_trace_compare.py | v0.1 | 2025-07-23 | COMMUNITY | | |
 | tests/test_qemu_boot.rs | v0.2 | 2025-07-28 | COMMUNITY | | |
+| tests/boot_trace_rule.rs | v0.3 | 2025-08-18 | COMMUNITY | | |
 | docs/QUICKSTART.md | v0.1 | 2025-07-23 | COMMUNITY | | |
 | docs/community/architecture/BOOT_KERNEL_FLOW.md | v0.1 | 2025-07-23 | COMMUNITY | | |
 | docs/community/archive/examples_README.md | v0.2 | 2025-07-23 | COMMUNITY | | |
