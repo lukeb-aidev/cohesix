@@ -37,12 +37,24 @@ impl PassManager {
     }
 }
 
+impl Default for PassManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Example pass that removes `Nop` instructions.
 pub struct DeadCodeEliminationPass;
 
 impl DeadCodeEliminationPass {
     /// Create a new dead code elimination pass.
     pub fn new() -> Self { Self }
+}
+
+impl Default for DeadCodeEliminationPass {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Pass for DeadCodeEliminationPass {

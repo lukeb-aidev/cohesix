@@ -253,10 +253,6 @@ impl Namespace {
         fs::write(&path, self.to_string())
     }
 
-    /// Serialize namespace operations to a string.
-    pub fn to_string(&self) -> String {
-        format!("{}", self)
-    }
 
     /// Resolve a path through the namespace and return the first mount target.
     pub fn resolve(&self, path: &str) -> Option<String> {
