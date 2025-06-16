@@ -134,7 +134,7 @@
 | src/secure9p/namespace_resolver.rs | v0.2 | 2025-07-25 | COMMUNITY | | |
 | src/secure9p/sandbox.rs | v0.4 | 2025-07-31 | COMMUNITY | | |
 | src/secure9p/validator_hook.rs | v0.2 | 2025-07-25 | COMMUNITY | | |
-| src/secure9p/secure_9p_server.rs | v0.4 | 2025-07-31 | COMMUNITY | | |
+| src/secure9p/secure_9p_server.rs | v0.5 | 2025-08-18 | COMMUNITY | | |
 | tests/secure9p/tls_handshake.rs | v0.1 | 2025-07-24 | COMMUNITY | | |
 | src/secure9p/sandbox.rs | v0.3 | 2025-07-26 | COMMUNITY | | |
 | src/secure9p/validator_hook.rs | v0.2 | 2025-07-25 | COMMUNITY | | |
