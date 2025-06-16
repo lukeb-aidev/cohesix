@@ -1,7 +1,8 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: nswatch.rs v0.1
+// Filename: nswatch.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-07-23
+// Date Modified: 2025-08-17
+#![cfg(not(target_os = "uefi"))]
 
 //! Namespace hotplug watcher service
 

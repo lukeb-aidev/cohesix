@@ -1,7 +1,8 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: queen.rs v0.4
+// Filename: queen.rs v0.5
 // Author: Lukas Bower
-// Date Modified: 2025-07-24
+// Date Modified: 2025-08-17
+#![cfg(not(target_os = "uefi"))]
 
 //! seL4 root task hook for the Queen role.
 //! Loads the boot namespace and registers core services.
