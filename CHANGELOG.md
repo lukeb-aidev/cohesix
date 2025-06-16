@@ -16,6 +16,9 @@
 - SharedMemory, BaseAgent use TMPDIR and respect override vars
 - QEMU boot script checks for qemu-system-x86_64, sets TMPDIR, ensures writable paths
 - cohesix_fetch_build.sh v0.4 stages kernel ELF and boot files in out/
+- src/lib/init.rs placeholder module to satisfy module resolution
+- sensors.rs respects COHESIX_TELEMETRY_PATH for tests
+- test_agent_lifecycle uses temp directories only
 ### [2025-08-16] Misc fixes
 - Cargo.toml edition bumped to 2024
 - Policy memory shared path respects COHESIX_POLICY_TMP for tests
