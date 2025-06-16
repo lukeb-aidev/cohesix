@@ -36,3 +36,5 @@ pub mod syscalls {
     pub mod syscall_table;
 }
 pub mod upgrade;
+
+pub mod proc_mgr;
