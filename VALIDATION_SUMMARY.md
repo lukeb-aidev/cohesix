@@ -1,20 +1,15 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: VALIDATION_SUMMARY.md v0.2
+// Filename: VALIDATION_SUMMARY.md v0.3
 // Author: Lukas Bower
-// Date Modified: 2025-06-15
+// Date Modified: 2025-08-18
 
-# ✅ Cohesix Mac Environment Summary
+# Validation Summary
 
-- Role: QueenPrimary
-- CLI Path: ./tools
-- Trace Path: ./traces
-- Python: Python 3.9.6
-- Pip: pip 21.2.4 from /Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/site-packages/pip (python 3.9)
+## Build Status
+- **Rust**: success (`cargo build --release`, warning: nvcc not found)
+- **Python**: flake8 reported 9 issues; pytest 5 passed
+- **Go**: success (`go build ./...`)
+- **Shell**: shellcheck on `test_all_arch.sh` reported 1 error and 3 warnings
 
-
-## Trace & Validation Hooks
-
-- All CLI, syscall, and federation actions are traced to `./traces` for replay and CI enforcement
-- Snapshot files are saved under `./history/snapshots/` and validated using `cohtrace diff`
-- This system uses trace-first validation to ensure deterministic behavior across platforms
-
+## Test Results
+- Pytest: 5 tests passed
