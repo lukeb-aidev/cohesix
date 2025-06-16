@@ -163,3 +163,4 @@
 | src/roles/interactive_aibooth.rs | v0.1 | 2025-07-31 | COMMUNITY | | |
 | src/rc/init.rs | v0.2 | 2025-08-16 | COMMUNITY | | |
 | src/lib/init.rs | v0.1 | 2025-08-17 | COMMUNITY | | |
+| src/kernel/userland_bootstrap.rs | v0.1 | 2025-08-27 | COMMUNITY | | |

@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.62
-// Date Modified: 2025-08-26
+// Filename: CHANGELOG.md v0.63
+// Date Modified: 2025-08-27
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
 • Consolidated OSS reuse files into LICENSES_AND_REUSE.md
@@ -33,6 +33,12 @@
 ### Added
 - Kernel `proc_mgr` module providing a minimal userspace process model.
 - Unit tests exercising `spawn` and `list` functions.
+
+## [v0.92] - 2025-08-27
+### Added
+- `userland_bootstrap` module with static dispatch table for built-in user programs.
+- `dispatch_user` spawns and executes named entries via `proc_mgr`.
+- Boot sequence invokes `dispatch_user("init")` to run the demo init program.
 
 ## [v0.90] - 2025-08-16
 ### Changed
