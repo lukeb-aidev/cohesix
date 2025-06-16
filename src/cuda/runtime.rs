@@ -29,6 +29,7 @@ use nvml_wrapper::{enum_wrappers::device::TemperatureSensor, Nvml};
 pub struct CudaRuntime {
     lib: Option<Library>,
     #[cfg(feature = "cuda")]
+    #[allow(dead_code)] // context kept alive but unused directly
     ctx: Option<Context>,
     present: bool,
 }
