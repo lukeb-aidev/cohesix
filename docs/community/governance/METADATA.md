@@ -109,7 +109,7 @@
 | linker.ld | v0.1 | 2025-07-22 | COMMUNITY | | |
 | .cargo/config.toml | v0.1 | 2025-07-22 | COMMUNITY | | |
 | Makefile | v0.19 | 2025-07-28 | COMMUNITY | | |
-| test_boot_efi.sh | v0.12 | 2025-08-17 | COMMUNITY | | |
+| test_boot_efi.sh | v0.13 | 2025-08-25 | COMMUNITY | | |
 | src/kernel/main.c | v0.2 | 2025-07-22 | COMMUNITY | | |
 | src/kernel/main.rs | v0.2 | 2025-08-02 | COMMUNITY | | |
 | tests/test_traceflow.py | v0.1 | 2025-07-23 | COMMUNITY | | |

@@ -26,6 +26,8 @@
 - Cargo.toml v0.10 adds `minimal_uefi` feature and gates async crates
 - secure_9p_server.rs updated to async entry under `tokio::main`
 - Fixed x86_64-unknown-uefi build by gating getrandom and entropy sources
+- test_boot_efi.sh v0.13 logs to `logs/` and emits test summaries
+- test_all_arch.sh v1.1, run-smoke-tests.sh v0.4 now output logs and summaries
 
 ## [v0.90] - 2025-08-16
 ### Changed

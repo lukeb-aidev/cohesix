@@ -1,6 +1,7 @@
 # Logs and artifacts
 *.log
 codex_logs/
+logs/
 
 # Rust
 /target/
