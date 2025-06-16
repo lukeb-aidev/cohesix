@@ -45,6 +45,11 @@
 - `dispatch_user` spawns and executes named entries via `proc_mgr`.
 - Boot sequence invokes `dispatch_user("init")` to run the demo init program.
 
+## [v0.93] - 2025-08-27
+### Added
+- Kernel config reader `load_config` for non-UEFI builds.
+- Kernel main logs `/etc/init.conf` when present.
+
 ## [v0.90] - 2025-08-16
 ### Changed
 - Added `uefi` feature flag and cfg guards for crates using getrandom
