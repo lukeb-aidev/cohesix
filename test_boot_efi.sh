@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: test_boot_efi.sh v0.11
+# Filename: test_boot_efi.sh v0.12
 # Author: Lukas Bower
-# Date Modified: 2025-07-30
+# Date Modified: 2025-08-17
 set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
@@ -59,6 +59,16 @@ if ! make bootloader kernel CC="$TOOLCHAIN"; then
     echo "Build failed" >&2
     exit 1
 fi
+if [ ! -f out/EFI/BOOT/BOOTX64.EFI ]; then
+    echo "ERROR: bootx64.efi missing in out/" >&2
+    ls -R /out > /tmp/out_manifest.txt 2>/dev/null || true
+    exit 1
+fi
+if [ ! -d out ] || [ -z "$(ls -A out 2>/dev/null)" ]; then
+    echo "ERROR: FAT source directory 'out' missing or empty" >&2
+    ls -R /out > /tmp/out_manifest.txt 2>/dev/null || true
+    exit 1
+fi
 objdump -h out/EFI/BOOT/BOOTX64.EFI > out/BOOTX64_sections.txt
 
 LOGFILE="$TMPDIR/qemu_boot.log"
@@ -67,9 +77,16 @@ QEMU_ARGS=(-bios "$OVMF_CODE" \
     -drive format=raw,file=fat:rw:out/ -net none -M q35 -m 256M \
     -no-reboot -monitor none)
 
-qemu-system-x86_64 "${QEMU_ARGS[@]}" -nographic -serial file:"${LOGFILE}" || true
+if ! qemu-system-x86_64 "${QEMU_ARGS[@]}" -nographic -serial file:"${LOGFILE}"; then
+    echo "QEMU execution failed" >&2
+    ls -R /out > /tmp/out_manifest.txt 2>/dev/null || true
+    exit 1
+fi
 tail -n 20 "${LOGFILE}" || echo "Boot log unavailable — check TMPDIR or QEMU exit code"
 
-grep -q "EFI loader" "${LOGFILE}" || exit 1
-grep -q "Kernel launched" "${LOGFILE}" || exit 1
+if ! grep -q "EFI loader" "${LOGFILE}" || ! grep -q "Kernel launched" "${LOGFILE}"; then
+    echo "Boot log verification failed" >&2
+    ls -R /out > /tmp/out_manifest.txt 2>/dev/null || true
+    exit 1
+fi
 
