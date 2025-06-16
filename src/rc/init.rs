@@ -11,11 +11,12 @@ use std::io::{self, BufRead, Write};
 use std::time::Instant;
 
 pub fn run() -> io::Result<()> {
-    const BANNER: &str = r"   ____      _               _      
+    const BANNER: &str = r"  
+   ____      _               _      
   / ___|___ | |__   ___  ___(_)_  __
  | |   / _ \| '_ \ / _ \/ __| \ \/ /
  | |__| (_) | | | |  __/\__ \ |>  < 
-  \____\___/|_| |_|\___||___/_/_/\_\
+  \____\___/|_| |_|\___||___/_/_/\_\                              
                                     ";
 
     println!("{}", BANNER);
