@@ -1,7 +1,9 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: decryptor.rs v0.1
+// Filename: decryptor.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-07-10
+// Date Modified: 2025-08-16
+// Random token generation uses rand; this is skipped for UEFI builds.
+#![cfg(not(feature = "uefi"))]
 
 //! AES-GCM encrypted SLM container loader.
 
