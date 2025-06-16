@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.64
+// Filename: CHANGELOG.md v0.65
 // Date Modified: 2025-08-27
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
@@ -49,6 +49,11 @@
 ### Added
 - Kernel config reader `load_config` for non-UEFI builds.
 - Kernel main logs `/etc/init.conf` when present.
+
+## [v0.94] - 2025-08-27
+### Added
+- Sample `etc/init.conf` configuration added to repository.
+- `full_fetch_and_build.sh` populates `out/etc` with `init.conf` if missing.
 
 ## [v0.90] - 2025-08-16
 ### Changed
