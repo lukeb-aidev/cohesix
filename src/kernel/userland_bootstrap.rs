@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: userland_bootstrap.rs v0.2
+// Filename: userland_bootstrap.rs v0.3
 // Author: Lukas Bower
 // Date Modified: 2025-08-27
 
@@ -43,6 +43,7 @@ mod static_table {
 
 #[cfg(feature = "minimal_uefi")]
 use crate::fs;
+use crate::kernel::proc_mgr::ProcessState;
 
 /// Spawn a user program by name, loading the binary from FAT when `minimal_uefi` is enabled.
 pub fn dispatch_user(name: &str) {
@@ -52,8 +53,13 @@ pub fn dispatch_user(name: &str) {
         match fs::open_bin(&path) {
             Some(bin) => {
                 let entry = bin.as_ptr() as usize;
-                let pid = proc_mgr::spawn(name, entry);
-                println!("[userland_bootstrap] spawned {} as pid {}", name, pid);
+                let name_static: &'static str = Box::leak(name.to_string().into_boxed_str());
+                let pid = proc_mgr::spawn(name_static, entry);
+                println!("[userland_bootstrap] spawned {} as pid {}", name_static, pid);
+                proc_mgr::set_current(pid);
+                proc_mgr::update_state(pid, ProcessState::Running);
+                let func: fn() = unsafe { core::mem::transmute(entry) };
+                func();
             }
             None => {
                 eprintln!("[userland_bootstrap] missing or invalid {}", path);

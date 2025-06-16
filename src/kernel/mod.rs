@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: mod.rs v0.2
+// Filename: mod.rs v0.3
 // Author: Lukas Bower
 // Date Modified: 2025-08-27
 
@@ -41,3 +41,4 @@ pub mod upgrade;
 
 pub mod proc_mgr;
 pub mod userland_bootstrap;
+pub mod user_api;
