@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: full_fetch_and_build.sh v0.1
+// Filename: full_fetch_and_build.sh v0.2
 // Author: Lukas Bower
 // Date Modified: 2025-08-27
 #!/usr/bin/env bash
@@ -9,6 +9,10 @@ ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 cd "$ROOT"
 
 mkdir -p out/bin
+mkdir -p out/etc
+if [ ! -f out/etc/init.conf ] && [ -f etc/init.conf ]; then
+  cp etc/init.conf out/etc/init.conf
+fi
 
 msg(){ printf "\e[32m[build]\e[0m %s\n" "$*"; }
 fail(){ printf "\e[31m[error]\e[0m %s\n" "$*" >&2; exit 1; }
