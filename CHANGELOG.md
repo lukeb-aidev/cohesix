@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.61
+// Filename: CHANGELOG.md v0.62
 // Date Modified: 2025-08-18
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
@@ -866,3 +866,8 @@
 ### Added
 - `autorun_tests.py` script for automatic test execution on file changes.
 
+
+## [v0.62] - 2025-08-18
+### Added
+- Restored CI workflow with Rust, Python, Go and shell checks
+- Updated VALIDATION_SUMMARY.md with build results
