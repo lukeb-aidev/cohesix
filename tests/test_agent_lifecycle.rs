@@ -10,30 +10,27 @@ use tempfile::tempdir;
 
 #[test]
 fn agent_lifecycle() {
-    let dir = tempdir().unwrap();
-    std::env::set_current_dir(&dir).unwrap();
-    std::fs::create_dir_all("/srv").unwrap();
+    let dir = tempdir().expect("tempdir");
     let agents = dir.path().join("agents");
     let traces = dir.path().join("trace");
+    let telemetry = dir.path().join("telemetry.log");
     std::env::set_var("COHESIX_AGENTS_DIR", &agents);
     std::env::set_var("COHESIX_AGENT_TRACE_DIR", &traces);
-    std::fs::create_dir_all(&agents).unwrap();
-    std::fs::create_dir_all(&traces).unwrap();
+    std::env::set_var("COHESIX_TELEMETRY_PATH", &telemetry);
+    std::fs::create_dir_all(&agents).expect("create agents dir");
+    std::fs::create_dir_all(&traces).expect("create trace dir");
 
     let mut rt = AgentRuntime::new();
     let args = vec!["true".to_string()];
-    let _ = rt.spawn("a1", Role::DroneWorker, &args);
+    rt.spawn("a1", Role::DroneWorker, &args).expect("spawn agent");
     assert!(agents.join("a1").exists());
 
     sensors::read_temperature("a1");
-    rt.terminate("a1").unwrap();
+    rt.terminate("a1").expect("terminate agent");
 
-    if let Ok(trace) = std::fs::read_to_string(traces.join("a1")) {
-        assert!(trace.contains("spawn"));
-        assert!(trace.contains("terminate"));
-    } else {
-        panic!("missing trace");
-    }
-    let tel = std::fs::read_to_string("/srv/telemetry").unwrap();
+    let trace = std::fs::read_to_string(traces.join("a1")).expect("read trace");
+    assert!(trace.contains("spawn"));
+    assert!(trace.contains("terminate"));
+    let tel = std::fs::read_to_string(&telemetry).expect("read telemetry");
     assert!(tel.contains("temp"));
 }

@@ -167,6 +167,9 @@ bootloader: check-efi ## Build UEFI bootloader
 	cp out/BOOTX64.EFI out/EFI/BOOT/BOOTX64.EFI
 	cp out/BOOTX64.EFI out/bootx64.efi
 	chmod +x out/bootx64.efi
+	mkdir -p $(HOME)/cohesix/out
+	cp out/bootx64.efi $(HOME)/cohesix/out/bootx64.efi
+	chmod +x $(HOME)/cohesix/out/bootx64.efi
 
 
 kernel: check-efi ## Build kernel stub
