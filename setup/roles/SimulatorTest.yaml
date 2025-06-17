@@ -1,0 +1,7 @@
+// CLASSIFICATION: COMMUNITY
+// Filename: SimulatorTest.yaml v0.1
+// Author: Lukas Bower
+// Date Modified: 2025-09-05
+role: SimulatorTest
+sandbox: true
+log_all_actions: true

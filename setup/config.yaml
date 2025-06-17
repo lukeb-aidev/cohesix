@@ -1,0 +1,14 @@
+// CLASSIFICATION: COMMUNITY
+// Filename: config.yaml v0.1
+// Author: Lukas Bower
+// Date Modified: 2025-09-05
+hostname: cohesix-dev
+default_role: Worker
+network:
+  dhcp: true
+logging:
+  level: info
+  output: /var/log/cohesix.log
+services:
+  enable_9p: true
+  enable_cuda: false

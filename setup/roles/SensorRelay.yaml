@@ -1,0 +1,7 @@
+// CLASSIFICATION: COMMUNITY
+// Filename: SensorRelay.yaml v0.1
+// Author: Lukas Bower
+// Date Modified: 2025-09-05
+role: SensorRelay
+sampling_rate_hz: 100
+persist_data: false
