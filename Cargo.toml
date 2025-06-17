@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Cargo.toml v0.13
+# Filename: Cargo.toml v0.14
 # Author: Lukas Bower
-# Date Modified: 2025-08-28
+# Date Modified: 2025-09-05
 [package]
 name    = "cohesix"
 version = "0.1.0"
@@ -106,3 +106,9 @@ required-features = ["kernel_bin", "minimal_uefi"]
 name = "logdemo"
 path = "src/userbin/logdemo.rs"
 required-features = ["minimal_uefi"]
+
+[[bin]]
+name = "init"
+path = "src/init/main.rs"
+required-features = ["minimal_uefi"]
+
