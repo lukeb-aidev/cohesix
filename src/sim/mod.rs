@@ -13,4 +13,5 @@ pub mod physics_adapter;
 pub mod introspect;
 #[cfg(feature = "rapier")]
 pub mod physics_demo;
+#[cfg(feature = "rapier")]
 pub mod webcam_tilt;
