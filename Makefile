@@ -1,6 +1,6 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Makefile v0.21
-# Date Modified: 2025-08-27
+# Filename: Makefile v0.22
+# Date Modified: 2025-09-02
 # Author: Lukas Bower
 #
 # ─────────────────────────────────────────────────────────────
@@ -163,13 +163,8 @@ bootloader: check-efi ## Build UEFI bootloader
 	lld-link /lib/crt0-efi-x86_64.o out/bootloader.o \
 	/out:out/bootloader.so /entry:efi_main /subsystem:efi_application \
 	/defaultlib:gnuefi.lib /defaultlib:efi.lib
-	objcopy --target=efi-app-x86_64 out/bootloader.so out/BOOTX64.EFI
-	cp out/BOOTX64.EFI out/EFI/BOOT/BOOTX64.EFI
-	cp out/BOOTX64.EFI out/bootx64.efi
-	chmod +x out/bootx64.efi
-	mkdir -p $(HOME)/cohesix/out
-	cp out/bootx64.efi $(HOME)/cohesix/out/bootx64.efi
-	chmod +x $(HOME)/cohesix/out/bootx64.efi
+objcopy --target=efi-app-x86_64 out/bootloader.so out/BOOTX64.EFI
+cp out/BOOTX64.EFI out/EFI/BOOT/BOOTX64.EFI
 
 
 kernel: check-efi init-efi ## Build kernel stub
@@ -180,7 +175,6 @@ kernel: check-efi init-efi ## Build kernel stub
 	$(LD) /usr/lib/crt0-efi-x86_64.o out/kernel.o \
             -o out/kernel.so -T out/kernel.tmp.ld $(LD_FLAGS)
 	        rm -f out/kernel.tmp.ld
-	objcopy --target=efi-app-x86_64 out/kernel.so out/kernel.elf
 
 init-efi: check-efi ## Build init EFI binary
 	@echo "🏁 Building init EFI using $(TOOLCHAIN)"
@@ -222,14 +216,14 @@ cohcap: ## Run cohcap CLI
 # Run boot image under QEMU, logging serial output
 qemu: ## Launch QEMU with built image and capture serial log
 	@command -v qemu-system-x86_64 >/dev/null 2>&1 || { echo "qemu-system-x86_64 not installed — skipping"; exit 0; }
-	@if [ "$(EFI_AVAILABLE)" != "1" ]; then echo "gnu-efi headers not found — skipping qemu"; \
-	else mkdir -p out; \
-	if [ ! -f out/EFI/BOOT/BOOTX64.EFI ]; then $(MAKE) bootloader kernel; fi; \
-	qemu-system-x86_64 \
-		-bios /usr/share/qemu/OVMF.fd \
-	    -drive if=pflash,format=raw,file=/usr/share/OVMF/OVMF_VARS.fd \
-	    -drive format=raw,file=fat:rw:out/ -net none -M q35 -m 256M \
-	    -no-reboot -nographic -serial mon:stdio 2>&1 | tee qemu_serial.log; fi
+@if [ "$(EFI_AVAILABLE)" != "1" ]; then echo "gnu-efi headers not found — skipping qemu"; \
+else mkdir -p out; \
+if [ ! -f out/cohesix.iso ]; then ./make_iso.sh; fi; \
+qemu-system-x86_64 \
+        -bios /usr/share/qemu/OVMF.fd \
+    -drive if=pflash,format=raw,file=/usr/share/OVMF/OVMF_VARS.fd \
+    -cdrom out/cohesix.iso -net none -M q35 -m 256M \
+    -no-reboot -nographic -serial mon:stdio 2>&1 | tee qemu_serial.log; fi
 
 # Verify QEMU boot log and fail on BOOT_FAIL
 qemu-check: ## Check qemu_serial.log for BOOT_OK and fail on BOOT_FAIL
