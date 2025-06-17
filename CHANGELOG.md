@@ -972,3 +972,9 @@
 - scripts/make_iso.sh creates the bootable ISO using xorriso.
 - full_fetch_and_build.sh invokes the new script after building.
 
+## [v0.105] - 2025-09-08
+### Added
+- Bootloader verifies `kernel.elf` against `kernel.sha1` before launch.
+- Mismatched hashes or missing kernels write to `boot.log` on the EFI volume.
+- `sha1.c` implementation added to bootloader build.
+
