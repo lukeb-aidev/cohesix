@@ -1,0 +1,7 @@
+// CLASSIFICATION: COMMUNITY
+// Filename: default.yaml v0.1
+// Author: Lukas Bower
+// Date Modified: 2025-08-30
+telemetry_interval: 30
+trace_policy: "/etc/trace/policy.yaml"
+validator: true

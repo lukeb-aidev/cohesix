@@ -172,3 +172,13 @@
 | etc/init.conf | v0.1 | 2025-08-27 | COMMUNITY | | |
 | etc/init.cfg | v0.1 | 2025-08-30 | COMMUNITY | | |
 | make_iso.sh | v0.1 | 2025-08-28 | COMMUNITY | | |
+| configs/roles/QueenPrimary.yaml | v0.1 | 2025-08-30 | COMMUNITY | | |
+| configs/roles/WorkerDrone.yaml | v0.1 | 2025-08-30 | COMMUNITY | | |
+| configs/roles/DroneWorker.yaml | v0.1 | 2025-08-30 | COMMUNITY | | |
+| configs/roles/SensorRelay.yaml | v0.1 | 2025-08-30 | COMMUNITY | | |
+| configs/roles/KioskInteractive.yaml | v0.1 | 2025-08-30 | COMMUNITY | | |
+| configs/roles/SimulatorTest.yaml | v0.1 | 2025-08-30 | COMMUNITY | | |
+| configs/roles/GlassesAgent.yaml | v0.1 | 2025-08-30 | COMMUNITY | | |
+| configs/roles/default.yaml | v0.1 | 2025-08-30 | COMMUNITY | | |
+| src/runtime/role_config.rs | v0.1 | 2025-08-30 | COMMUNITY | | |
+| tests/role_config.rs | v0.1 | 2025-08-30 | COMMUNITY | | |

@@ -13,6 +13,10 @@ mkdir -p out/etc
 if [ ! -f out/etc/init.conf ] && [ -f etc/init.conf ]; then
   cp etc/init.conf out/etc/init.conf
 fi
+if [ -d configs/roles ]; then
+  mkdir -p out/etc/roles
+  cp configs/roles/*.yaml out/etc/roles/
+fi
 
 msg(){ printf "\e[32m[build]\e[0m %s\n" "$*"; }
 fail(){ printf "\e[31m[error]\e[0m %s\n" "$*" >&2; exit 1; }

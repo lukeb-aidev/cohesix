@@ -67,6 +67,13 @@
 - `full_fetch_and_build.sh` calls `make_iso.sh` and checks QEMU ISO boot config.
 - `test_boot_efi.sh` boots from `out/cohesix.iso` and validates kernel launch.
 
+## [v0.96] - 2025-08-30
+### Added
+- Role-specific YAML configs under `configs/roles/`
+- `make_iso.sh` and `full_fetch_and_build.sh` copy role configs to `/etc/roles`
+- `init` binary loads `/etc/roles/<ROLE>.yaml` with fallback to `default.yaml`
+- `src/runtime::role_config` module with unit tests
+
 ## [v0.90] - 2025-08-16
 ### Changed
 - Added `uefi` feature flag and cfg guards for crates using getrandom
