@@ -7,6 +7,7 @@ use clap::{Parser, Subcommand};
 use crate::queen::orchestrator::{QueenOrchestrator, SchedulePolicy};
 #[cfg(feature = "rapier")]
 use crate::sim::physics_demo;
+#[cfg(feature = "rapier")]
 use crate::sim::webcam_tilt;
 use crate::webcam::capture;
 
@@ -24,6 +25,7 @@ pub enum Commands {
     #[cfg(feature = "rapier")]
     PhysicsDemo,
     TestWebcam,
+    #[cfg(feature = "rapier")]
     WebcamTilt,
     KioskStart,
     KioskEvent {
@@ -74,6 +76,7 @@ pub fn run(cli: Cli) {
                 println!("webcam capture failed");
             }
         }
+        #[cfg(feature = "rapier")]
         Commands::WebcamTilt => webcam_tilt::run(None),
         Commands::KioskStart => {
             crate::init::kiosk::start();
