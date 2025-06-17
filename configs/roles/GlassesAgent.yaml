@@ -1,0 +1,9 @@
+// CLASSIFICATION: COMMUNITY
+// Filename: GlassesAgent.yaml v0.1
+// Author: Lukas Bower
+// Date Modified: 2025-08-30
+telemetry_interval: 25
+trace_policy: "/etc/trace/policy.yaml"
+validator: true
+# AR display resolution
+resolution: "1280x720"

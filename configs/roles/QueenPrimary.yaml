@@ -1,0 +1,11 @@
+// CLASSIFICATION: COMMUNITY
+// Filename: QueenPrimary.yaml v0.1
+// Author: Lukas Bower
+// Date Modified: 2025-08-30
+# Telemetry interval in seconds
+telemetry_interval: 30
+# Path to trace policy file
+trace_policy: "/etc/trace/policy.yaml"
+# Enable runtime validator at boot
+validator: true
+# Additional parameters specific to QueenPrimary go here
