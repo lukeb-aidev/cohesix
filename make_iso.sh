@@ -41,5 +41,9 @@ fi
 
 CONFIG_SRC="$ROOT/etc/init.conf"
 [ -f "$CONFIG_SRC" ] && cp -f "$CONFIG_SRC" "$ETC_DIR/"
+if [ -d "$ROOT/configs/roles" ]; then
+  mkdir -p "$ETC_DIR/roles"
+  cp "$ROOT"/configs/roles/*.yaml "$ETC_DIR/roles/"
+fi
 
 xorriso -as mkisofs -R -o "$ISO_OUT" "$ISO_DIR"

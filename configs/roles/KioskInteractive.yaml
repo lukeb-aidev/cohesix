@@ -1,0 +1,9 @@
+// CLASSIFICATION: COMMUNITY
+// Filename: KioskInteractive.yaml v0.1
+// Author: Lukas Bower
+// Date Modified: 2025-08-30
+telemetry_interval: 20
+trace_policy: "/etc/trace/policy.yaml"
+validator: true
+# Path to kiosk bundle
+bundle_path: "/srv/ui_bundle/kiosk_v1"

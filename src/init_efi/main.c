@@ -6,6 +6,7 @@
 #include <efi.h>
 #include <efilib.h>
 #include <string.h>
+#include <stdio.h>
 
 EFI_STATUS
 efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *systab) {
@@ -29,29 +30,52 @@ efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *systab) {
         return status;
     }
 
+    CHAR8 role[64] = "default";
     status = uefi_call_wrapper(root->Open, 5, root, &file,
-                               L"\\etc\\init.cfg", EFI_FILE_MODE_READ, 0);
+                               L"\\srv\\cohrole", EFI_FILE_MODE_READ, 0);
+    if (!EFI_ERROR(status)) {
+        UINTN rsz = sizeof(role) - 1;
+        if (EFI_ERROR(uefi_call_wrapper(file->Read, 3, file, &rsz, role))) {
+            Print(L"[init] failed reading cohrole\n");
+        }
+        role[rsz] = '\0';
+        uefi_call_wrapper(file->Close, 1, file);
+        CHAR8 *nl = strchr((CHAR8 *)role, '\n');
+        if (nl) *nl = '\0';
+    } else {
+        Print(L"[init] /srv/cohrole missing; using default role\n");
+    }
+
+    CHAR8 path_ascii[128];
+    snprintf(path_ascii, sizeof(path_ascii), "\\\etc\\roles\\%a.yaml", role);
+    CHAR16 path[128];
+    for (int i = 0; path_ascii[i]; i++)
+        path[i] = (CHAR16)path_ascii[i];
+    path[strlen(path_ascii)] = L'\0';
+
+    status = uefi_call_wrapper(root->Open, 5, root, &file,
+                               path, EFI_FILE_MODE_READ, 0);
     if (EFI_ERROR(status)) {
-        Print(L"[init] warning: /etc/init.cfg not found\n");
+        Print(L"[init] role config not found; using default.yaml\n");
+        status = uefi_call_wrapper(root->Open, 5, root, &file,
+                                   L"\\etc\\roles\\default.yaml", EFI_FILE_MODE_READ, 0);
+    }
+
+    if (EFI_ERROR(status)) {
+        Print(L"[init] no role configuration available\n");
         return EFI_SUCCESS;
     }
 
-    CHAR8 buf[256];
+    CHAR8 buf[128];
     UINTN sz = sizeof(buf) - 1;
     status = uefi_call_wrapper(file->Read, 3, file, &sz, buf);
     buf[sz] = '\0';
     uefi_call_wrapper(file->Close, 1, file);
     if (EFI_ERROR(status)) {
-        Print(L"[init] failed to read /etc/init.cfg\n");
-        return EFI_ABORTED;
+        Print(L"[init] failed to read role config\n");
+    } else {
+        Print(L"[init] loaded role config: %a\n", buf);
     }
 
-    if (strstr((CHAR8 *)buf, "init_mode") == NULL ||
-        strstr((CHAR8 *)buf, "start_services") == NULL) {
-        Print(L"[init] missing required keys in /etc/init.cfg\n");
-        return EFI_ABORTED;
-    }
-
-    Print(L"[init] configuration OK\n");
     return EFI_SUCCESS;
 }
