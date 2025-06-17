@@ -1,8 +1,3 @@
-// CLASSIFICATION: COMMUNITY
-// Filename: scripts/make_iso.sh v0.1
-// Author: Lukas Bower
-// Date Modified: 2025-09-07
-
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -26,6 +21,7 @@ else
 fi
 
 [ -f "$KERNEL_SRC" ] || error "Missing $KERNEL_SRC"
+[ ! -f "$ROOT/out/kernel.efi" ] && echo "❌ Missing kernel.efi" && exit 1
 [ -f "$INIT_SRC" ] || error "Missing $INIT_SRC"
 
 rm -rf "$ISO_DIR"
