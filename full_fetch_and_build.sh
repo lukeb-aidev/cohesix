@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: full_fetch_and_build.sh v0.5
+// Filename: full_fetch_and_build.sh v0.6
 // Author: Lukas Bower
-// Date Modified: 2025-09-02
+// Date Modified: 2025-09-03
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -24,6 +24,11 @@ done
 
 msg(){ printf "\e[32m[build]\e[0m %s\n" "$*"; }
 fail(){ printf "\e[31m[error]\e[0m %s\n" "$*" >&2; exit 1; }
+
+msg "Building workspace (secure9p)"
+cargo build --release --all-targets --no-default-features --features "secure9p"
+msg "Running library tests"
+cargo test --release --lib || true
 
 TARGET="x86_64-unknown-uefi"
 
