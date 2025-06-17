@@ -38,6 +38,7 @@
 - Fixed x86_64-unknown-uefi build by gating getrandom and entropy sources
 - test_boot_efi.sh v0.13 logs to `logs/` and emits test summaries
 - test_all_arch.sh v1.1, run-smoke-tests.sh v0.4 now output logs and summaries
+- make_iso.sh script creates bootable ISO under out/cohesix.iso
 
 ## [v0.91] - 2025-08-26
 ### Added
