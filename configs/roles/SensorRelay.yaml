@@ -1,0 +1,9 @@
+// CLASSIFICATION: COMMUNITY
+// Filename: SensorRelay.yaml v0.1
+// Author: Lukas Bower
+// Date Modified: 2025-08-30
+telemetry_interval: 60
+trace_policy: "/etc/trace/policy.yaml"
+validator: true
+# Sensor relay port
+relay_port: 7000
