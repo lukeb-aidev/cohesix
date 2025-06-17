@@ -170,3 +170,4 @@
 | src/init_efi/main.c | v0.1 | 2025-08-27 | COMMUNITY | | |
 | full_fetch_and_build.sh | v0.2 | 2025-08-27 | COMMUNITY | | |
 | etc/init.conf | v0.1 | 2025-08-27 | COMMUNITY | | |
+| make_iso.sh | v0.1 | 2025-08-28 | COMMUNITY | | |
