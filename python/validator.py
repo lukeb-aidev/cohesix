@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: validator.py v0.5
+# Filename: validator.py v0.6
 # Author: Lukas Bower
-# Date Modified: 2025-08-18
+# Date Modified: 2025-09-09
 """Python-side validation helpers with live rule updates."""
 
 import json
@@ -10,6 +10,7 @@ import operator
 import sys
 import time
 from pathlib import Path
+from jsonschema import ValidationError, validate
 
 try:
     import tomllib  # Python 3.11+
@@ -17,6 +18,18 @@ except ModuleNotFoundError:  # pragma: no cover - fallback for older Python
     import tomli as tomllib
 
 logger = logging.getLogger(__name__)
+
+TRACE_EVENT_SCHEMA = {
+    "type": "object",
+    "required": ["ts", "event"],
+    "properties": {
+        "ts": {"type": "number"},
+        "event": {"type": "string"},
+        "detail": {},
+    },
+}
+
+TRACE_SCHEMA = {"type": "array", "items": TRACE_EVENT_SCHEMA}
 
 
 def trace_integrity(path: Path) -> bool:
@@ -28,11 +41,26 @@ def trace_integrity(path: Path) -> bool:
     for ln in lines:
         try:
             ev = json.loads(ln)
-        except json.JSONDecodeError:
-            return False
-        if "ts" not in ev or "event" not in ev:
+            validate(ev, TRACE_EVENT_SCHEMA)
+        except (json.JSONDecodeError, ValidationError):
             return False
     return True
+
+
+def load_trace_file(path: Path, fmt: str = "json") -> list[dict]:
+    """Load a trace file and validate its schema."""
+    try:
+        if fmt == "jsonl":
+            events = [json.loads(line) for line in path.read_text().splitlines()]
+        else:
+            events = json.loads(path.read_text())
+    except Exception as exc:
+        raise RuntimeError(f"failed to read trace {path}: {exc}") from exc
+    try:
+        validate(events, TRACE_SCHEMA)
+    except ValidationError as exc:
+        raise ValueError(f"trace schema error: {exc.message}") from exc
+    return events
 
 
 OPS = {
@@ -138,7 +166,7 @@ class Validator:
             logger.error("failed to write trace %s: %s", path, exc)
 
 
-__all__ = ["trace_integrity", "Validator"]
+__all__ = ["trace_integrity", "Validator", "load_trace_file"]
 
 
 def main_live(result_path: Path | None = None) -> None:
@@ -181,6 +209,10 @@ if __name__ == "__main__":
 
     ap = argparse.ArgumentParser()
     ap.add_argument("--live", action="store_true", help="run live validator loop")
+    ap.add_argument("--input", help="validate trace file and exit")
+    ap.add_argument(
+        "--format", choices=["json", "jsonl"], default="json", help="trace file format"
+    )
     ap.add_argument("--output", help="write validator results to file")
     ap.add_argument("--log", default="info", help="logging level")
     args = ap.parse_args()
@@ -191,6 +223,10 @@ if __name__ == "__main__":
         if args.live:
             out = Path(args.output) if args.output else None
             main_live(out)
+        elif args.input:
+            load_trace_file(Path(args.input), args.format)
+            print("trace valid")
+            sys.exit(0)
         else:
             ap.print_help()
             sys.exit(1)

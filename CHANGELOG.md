@@ -978,3 +978,9 @@
 - Mismatched hashes or missing kernels write to `boot.log` on the EFI volume.
 - `sha1.c` implementation added to bootloader build.
 
+## [v0.106] - 2025-09-09
+### Added
+- `validator.py` can validate trace files via `--input` and `--format`.
+- JSON schema checks ensure trace integrity before parsing.
+- `requirements.txt` now includes `jsonschema`.
+
