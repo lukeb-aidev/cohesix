@@ -77,8 +77,10 @@ mod tests {
             "\n[[namespace]]\nagent='a'\nroot='/x'\nread_only=true\n",
         )
         .unwrap();
-        let mut map = MAP.write().unwrap();
-        *map = None;
+        {
+            let mut map = MAP.write().unwrap();
+            *map = None;
+        }
         std::fs::create_dir_all("config").ok();
         std::fs::copy(&cfg_path, "config/secure9p.toml").unwrap();
         let ns = resolve_namespace("a").unwrap();
