@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.72
+// Filename: CHANGELOG.md v0.73
 // Date Modified: 2025-09-05
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
@@ -954,4 +954,11 @@
 ## [v0.101] - 2025-09-05
 ### Added
 - init binary target for UEFI builds.
+
+## [v0.102] - 2025-09-05
+### Added
+- Default system config at `setup/config.yaml` copied into ISO builds.
+- Role configs under `setup/roles/` with QueenPrimary, KioskInteractive, DroneWorker,
+  GlassesAgent, SensorRelay and SimulatorTest defaults.
+- `full_fetch_and_build.sh` v0.7 verifies these configs and copies them to `$ISO_ROOT`.
 
