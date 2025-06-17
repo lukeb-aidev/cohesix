@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.66
-// Date Modified: 2025-08-28
+// Filename: CHANGELOG.md v0.67
+// Date Modified: 2025-08-29
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
 • Consolidated OSS reuse files into LICENSES_AND_REUSE.md
@@ -57,9 +57,15 @@
 - Kernel main logs `/etc/init.conf` when present.
 
 ## [v0.94] - 2025-08-27
+
 ### Added
 - Sample `etc/init.conf` configuration added to repository.
 - `full_fetch_and_build.sh` populates `out/etc` with `init.conf` if missing.
+
+## [v0.95] - 2025-08-29
+### Changed
+- `full_fetch_and_build.sh` calls `make_iso.sh` and checks QEMU ISO boot config.
+- `test_boot_efi.sh` boots from `out/cohesix.iso` and validates kernel launch.
 
 ## [v0.90] - 2025-08-16
 ### Changed
