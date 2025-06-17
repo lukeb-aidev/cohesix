@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: init.rs v1.0
 // Author: Lukas Bower
-// Date Modified: 2025-05-31
+// Date Modified: 2025-09-02
 
 //! Runtime environment initialization for Cohesix.
 //! Sets up runtime globals, telemetry, role configuration, and system entropy.
@@ -18,7 +18,7 @@ pub fn initialize_runtime_env() {
 /// Load configuration file or fallback defaults.
 pub fn load_config() {
     println!("[env] Loading configuration...");
-    let path = "/etc/cohesix.cfg";
+    let path = "/etc/cohesix/config.yaml";
     match std::fs::read_to_string(path) {
         Ok(cfg) => println!("[env] loaded {} bytes of config", cfg.len()),
         Err(_) => println!("[env] using default configuration"),

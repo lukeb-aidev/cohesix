@@ -23,6 +23,7 @@ rm -rf "$ISO_DIR"
 mkdir -p "$ISO_DIR/EFI/BOOT"
 
 cp -f "$KERNEL_SRC" "$ISO_DIR/EFI/BOOT/bootx64.efi" || error "copy kernel"
+cp -f "$KERNEL_SRC" "$ISO_DIR/kernel.efi" || error "copy kernel root"
 [ -d "$ROOT/out/bin" ] && cp -a "$ROOT/out/bin" "$ISO_DIR/"
 [ -d "$ROOT/out/etc" ] && cp -a "$ROOT/out/etc" "$ISO_DIR/"
 [ -d "$ROOT/out/roles" ] && cp -a "$ROOT/out/roles" "$ISO_DIR/"
