@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.67
-// Date Modified: 2025-08-29
+// Filename: CHANGELOG.md v0.68
+// Date Modified: 2025-09-02
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
 • Consolidated OSS reuse files into LICENSES_AND_REUSE.md
@@ -73,6 +73,12 @@
 - `make_iso.sh` and `full_fetch_and_build.sh` copy role configs to `/etc/roles`
 - `init` binary loads `/etc/roles/<ROLE>.yaml` with fallback to `default.yaml`
 - `src/runtime::role_config` module with unit tests
+
+## [v0.97] - 2025-09-02
+### Changed
+- Removed legacy UEFI FAT boot logic and staging of `bootx64.efi`.
+- QEMU commands now boot strictly from `out/cohesix.iso`.
+- `cohesix_fetch_build.sh` builds the ISO and runs QEMU using it.
 
 ## [v0.90] - 2025-08-16
 ### Changed

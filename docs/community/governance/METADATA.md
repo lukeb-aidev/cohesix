@@ -108,7 +108,7 @@
 | CohesixBoot.inf | v0.1 | 2025-07-22 | COMMUNITY | | |
 | linker.ld | v0.1 | 2025-07-22 | COMMUNITY | | |
 | .cargo/config.toml | v0.1 | 2025-07-22 | COMMUNITY | | |
-| Makefile | v0.21 | 2025-08-27 | COMMUNITY | | |
+| Makefile | v0.22 | 2025-09-02 | COMMUNITY | | |
 | test_boot_efi.sh | v0.14 | 2025-08-29 | COMMUNITY | | |
 | src/kernel/main.c | v0.2 | 2025-07-22 | COMMUNITY | | |
 | src/kernel/main.rs | v0.2 | 2025-08-02 | COMMUNITY | | |
@@ -125,7 +125,7 @@
 | docs/QUICKSTART.md | v0.1 | 2025-07-23 | COMMUNITY | | |
 | docs/community/architecture/BOOT_KERNEL_FLOW.md | v0.1 | 2025-07-23 | COMMUNITY | | |
 | docs/community/archive/examples_README.md | v0.2 | 2025-07-23 | COMMUNITY | | |
-| cohesix_fetch_build.sh | v0.7 | 2025-08-15 | COMMUNITY | | |
+| cohesix_fetch_build.sh | v0.9 | 2025-09-02 | COMMUNITY | | |
 | CONTRIBUTING.md | v1.1 | 2025-07-23 | COMMUNITY | | |
 | config/secure9p.toml | v0.3 | 2025-07-31 | COMMUNITY | | |
 | src/secure9p/mod.rs | v0.2 | 2025-07-25 | COMMUNITY | | |
@@ -168,7 +168,7 @@
 | src/kernel/config.rs | v0.1 | 2025-08-27 | COMMUNITY | | |
 | src/userbin/logdemo.rs | v0.1 | 2025-08-27 | COMMUNITY | | |
 | src/init_efi/main.c | v0.2 | 2025-08-30 | COMMUNITY | | |
-| full_fetch_and_build.sh | v0.3 | 2025-08-29 | COMMUNITY | | |
+| full_fetch_and_build.sh | v0.4 | 2025-09-02 | COMMUNITY | | |
 | etc/init.conf | v0.1 | 2025-08-27 | COMMUNITY | | |
 | etc/init.cfg | v0.1 | 2025-08-30 | COMMUNITY | | |
 | make_iso.sh | v0.1 | 2025-08-28 | COMMUNITY | | |

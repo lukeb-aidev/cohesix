@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: cohesix_fetch_build.sh v0.8
+// Filename: cohesix_fetch_build.sh v0.9
 // Author: Lukas Bower
-// Date Modified: 2025-08-16
+// Date Modified: 2025-09-02
 #!/bin/bash
 # Fetch and fully build the Cohesix project using SSH Git auth.
 
@@ -32,24 +32,14 @@ fi
 echo "🦀 Building Rust components..."
 cargo build --all-targets --release
 
-echo "🛠️ Building kernel ELF..."
+echo "🛠️ Building kernel EFI and ISO..."
 mkdir -p out
-cargo build --release --features kernel_bin
-if [ ! -f target/release/kernel ]; then
-  echo "❌ Kernel binary missing at target/release/kernel" >&2
-  exit 1
-fi
-cp target/release/kernel out/kernel.elf
-
-make bootloader kernel >/dev/null
-if [ -f out/BOOTX64.EFI ]; then
-  cp out/BOOTX64.EFI out/bootx64.efi
-  chmod +x out/bootx64.efi
-fi
-if [ ! -f out/bootx64.efi ]; then
-  echo "❌ No bootx64.efi found or not executable in out" >&2
-  exit 1
-fi
+cargo build --release --target x86_64-unknown-uefi --bin kernel \
+  --no-default-features --features minimal_uefi,kernel_bin
+[ -f target/x86_64-unknown-uefi/release/kernel.efi ] || {
+  echo "❌ kernel.efi missing" >&2; exit 1; }
+./make_iso.sh
+[ -f out/cohesix.iso ] || { echo "❌ ISO build failed" >&2; exit 1; }
 
 for f in initfs.img plan9.ns bootargs.txt boot_trace.json; do
   if [ -f "$f" ]; then
@@ -99,21 +89,18 @@ echo "✅ All builds complete."
 
 # Optional QEMU boot check
 if command -v qemu-system-x86_64 >/dev/null; then
-  KERNEL_ELF="out/kernel.elf"
-  if [ ! -f "$KERNEL_ELF" ]; then
-    echo "❌ Kernel ELF not found at $KERNEL_ELF"
+  ISO_IMG="out/cohesix.iso"
+  if [ ! -f "$ISO_IMG" ]; then
+    echo "❌ cohesix.iso missing in out" >&2
     exit 1
   fi
   TMPDIR="${TMPDIR:-$(mktemp -d)}"
-  DISK_DIR="$TMPDIR/qemu_disk"
   LOG_FILE="out/qemu_boot.log"
-  mkdir -p "$DISK_DIR"
-  UEFI_IMG="out/bootx64.efi"
-  if [ ! -f "$UEFI_IMG" ]; then
-    echo "❌ bootx64.efi missing in out" >&2
-    exit 1
-  fi
-  qemu-system-x86_64 -kernel "$KERNEL_ELF" -nographic -serial file:"$LOG_FILE"
+  qemu-system-x86_64 \
+    -bios /usr/share/qemu/OVMF.fd \
+    -drive if=pflash,format=raw,file="$TMPDIR/OVMF_VARS.fd" \
+    -cdrom "$ISO_IMG" -net none -M q35 -m 256M \
+    -no-reboot -nographic -serial file:"$LOG_FILE"
   sleep 3
   echo "📜 Boot log (tail):"
   tail -n 20 "$LOG_FILE" || echo "❌ Could not read QEMU log"
@@ -122,7 +109,6 @@ if command -v qemu-system-x86_64 >/dev/null; then
   else
     echo "❌ BOOT_OK not found in log"
   fi
-  pkill -f "$KERNEL_ELF" || true
 else
   echo "⚠️ qemu-system-x86_64 not installed; skipping boot test"
 fi
