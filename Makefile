@@ -159,10 +159,11 @@ boot-aarch64: ## Build boot image for aarch64
 bootloader: check-efi ## Build UEFI bootloader
 	@echo "🏁 Building UEFI bootloader using $(TOOLCHAIN)"
 	@mkdir -p out/EFI/BOOT
-	$(CC) $(CFLAGS_EFI) -c src/bootloader/main.c -o out/bootloader.o
-	lld-link /lib/crt0-efi-x86_64.o out/bootloader.o \
-	/out:out/bootloader.so /entry:efi_main /subsystem:efi_application \
-	/defaultlib:gnuefi.lib /defaultlib:efi.lib
+    $(CC) $(CFLAGS_EFI) -c src/bootloader/main.c -o out/bootloader.o
+    $(CC) $(CFLAGS_EFI) -c src/bootloader/sha1.c -o out/sha1.o
+    lld-link /lib/crt0-efi-x86_64.o out/bootloader.o out/sha1.o \
+        /out:out/bootloader.so /entry:efi_main /subsystem:efi_application \
+        /defaultlib:gnuefi.lib /defaultlib:efi.lib
 objcopy --target=efi-app-x86_64 out/bootloader.so out/BOOTX64.EFI
 cp out/BOOTX64.EFI out/EFI/BOOT/BOOTX64.EFI
 
