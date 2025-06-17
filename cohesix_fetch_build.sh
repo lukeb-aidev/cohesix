@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: cohesix_fetch_build.sh v0.9
+// Filename: cohesix_fetch_build.sh v0.10
 // Author: Lukas Bower
-// Date Modified: 2025-09-02
+// Date Modified: 2025-09-10
 #!/bin/bash
 # Fetch and fully build the Cohesix project using SSH Git auth.
 
@@ -40,6 +40,7 @@ cargo build --release --target x86_64-unknown-uefi --bin kernel \
   echo "❌ kernel.efi missing" >&2; exit 1; }
 ./make_iso.sh
 [ -f out/cohesix.iso ] || { echo "❌ ISO build failed" >&2; exit 1; }
+[ -f out_iso/EFI/BOOT/bootx64.efi ] || { echo "❌ bootx64.efi missing after ISO build" >&2; exit 1; }
 
 for f in initfs.img plan9.ns bootargs.txt boot_trace.json; do
   if [ -f "$f" ]; then
@@ -49,7 +50,6 @@ for f in initfs.img plan9.ns bootargs.txt boot_trace.json; do
     touch "out/$f"
   fi
 done
-touch out/qemu_boot.log
 
 echo "🔍 Running Rust tests with detailed output..."
 RUST_BACKTRACE=1 cargo test --release -- --nocapture 2>&1 | tee rust_test_output.log
@@ -95,19 +95,26 @@ if command -v qemu-system-x86_64 >/dev/null; then
     exit 1
   fi
   TMPDIR="${TMPDIR:-$(mktemp -d)}"
-  LOG_FILE="out/qemu_boot.log"
+  LOG_DIR="$PWD/logs"
+  mkdir -p "$LOG_DIR"
+  SERIAL_LOG="$TMPDIR/qemu_boot.log"
+  LOG_FILE="$LOG_DIR/qemu_boot.log"
+  if [ -f "$LOG_FILE" ]; then
+    mv "$LOG_FILE" "$LOG_FILE.$(date +%Y%m%d_%H%M%S)"
+  fi
   qemu-system-x86_64 \
     -bios /usr/share/qemu/OVMF.fd \
     -drive if=pflash,format=raw,file="$TMPDIR/OVMF_VARS.fd" \
     -cdrom "$ISO_IMG" -net none -M q35 -m 256M \
-    -no-reboot -nographic -serial file:"$LOG_FILE"
-  sleep 3
+    -no-reboot -nographic -serial file:"$SERIAL_LOG"
+  cat "$SERIAL_LOG" >> "$LOG_FILE" 2>/dev/null || true
   echo "📜 Boot log (tail):"
-  tail -n 20 "$LOG_FILE" || echo "❌ Could not read QEMU log"
-  if grep -q "BOOT_OK" "$LOG_FILE"; then
+  tail -n 20 "$SERIAL_LOG" || echo "❌ Could not read QEMU log"
+  if grep -q "BOOT_OK" "$SERIAL_LOG"; then
     echo "✅ QEMU boot succeeded"
   else
     echo "❌ BOOT_OK not found in log"
+    exit 1
   fi
 else
   echo "⚠️ qemu-system-x86_64 not installed; skipping boot test"
