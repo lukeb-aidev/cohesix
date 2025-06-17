@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v0.74
-// Date Modified: 2025-09-06
+// Date Modified: 2025-09-07
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
 • Consolidated OSS reuse files into LICENSES_AND_REUSE.md
@@ -966,4 +966,9 @@
 ### Fixed
 - `RoleConfig::load_active` now honors `ROLE_CONFIG_DIR` allowing tests to
   supply temporary role directories.
+
+## [v0.104] - 2025-09-07
+### Added
+- scripts/make_iso.sh creates the bootable ISO using xorriso.
+- full_fetch_and_build.sh invokes the new script after building.
 
