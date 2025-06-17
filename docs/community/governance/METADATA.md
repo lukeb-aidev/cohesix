@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: METADATA.md v3.22
+// Filename: METADATA.md v3.23
 // Author: Lukas Bower
-// Date Modified: 2025-09-05
+// Date Modified: 2025-09-12
 
 ## Canonical Documents
 
@@ -155,6 +155,7 @@
 | scripts/manpage_scan.sh | v0.1 | 2025-06-08 | COMMUNITY | | |
 | scripts/verify-macos-setup.sh | v0.1 | 2025-06-05 | COMMUNITY | | |
 | scripts/make_iso.sh | v0.1 | 2025-09-07 | COMMUNITY | | |
+| tools/make_iso.sh | v0.1 | 2025-09-12 | COMMUNITY | | |
 | metadata.json | v0.1 | 2025-07-24 | COMMUNITY | | |
 | Cargo.toml | v0.14 | 2025-09-05 | COMMUNITY | | |
 | cohesix-9p/Cargo.toml | v0.1 | 2025-07-28 | COMMUNITY | | |
