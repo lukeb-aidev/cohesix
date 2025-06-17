@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: full_fetch_and_build.sh v0.4
+// Filename: full_fetch_and_build.sh v0.5
 // Author: Lukas Bower
 // Date Modified: 2025-09-02
 #!/usr/bin/env bash
@@ -8,15 +8,19 @@ set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 cd "$ROOT"
 
-mkdir -p out/bin
-mkdir -p out/etc
-if [ ! -f out/etc/init.conf ] && [ -f etc/init.conf ]; then
-  cp etc/init.conf out/etc/init.conf
-fi
+mkdir -p out/bin out/roles out/etc/cohesix out/setup
 if [ -d configs/roles ]; then
-  mkdir -p out/etc/roles
-  cp configs/roles/*.yaml out/etc/roles/
+  for cfg in configs/roles/*.yaml; do
+    role="$(basename "$cfg" .yaml)"
+    mkdir -p "out/roles/$role"
+    cp "$cfg" "out/roles/$role/config.yaml" || fail "copy $cfg"
+  done
+  cp configs/roles/default.yaml out/etc/cohesix/config.yaml
 fi
+for shf in setup/init.sh setup/*.sh; do
+  [ -f "$shf" ] || continue
+  cp "$shf" out/setup/ || fail "copy $shf"
+done
 
 msg(){ printf "\e[32m[build]\e[0m %s\n" "$*"; }
 fail(){ printf "\e[31m[error]\e[0m %s\n" "$*" >&2; exit 1; }
@@ -58,6 +62,9 @@ jq -r '.packages[].targets[] | select(.kind[]=="bin") | .name' "$META" | sort -u
   fi
  done
 rm -f "$META"
+
+[ -f out/bin/init.efi ] || fail "out/bin/init.efi missing"
+[ -f out/etc/cohesix/config.yaml ] || fail "out/etc/cohesix/config.yaml missing"
 
 msg "Creating bootable ISO…"
 ./make_iso.sh
