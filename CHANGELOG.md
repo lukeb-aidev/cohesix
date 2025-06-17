@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.68
+// Filename: CHANGELOG.md v0.69
 // Date Modified: 2025-09-02
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
@@ -79,6 +79,12 @@
 - Removed legacy UEFI FAT boot logic and staging of `bootx64.efi`.
 - QEMU commands now boot strictly from `out/cohesix.iso`.
 - `cohesix_fetch_build.sh` builds the ISO and runs QEMU using it.
+
+## [v0.98] - 2025-09-02
+### Changed
+- Normalized ISO layout in `out/` preserving kernel, bin, roles, and config files.
+- `make_iso.sh` copies the structured `out/` tree and sets FAT root.
+- `init.efi` reads `/etc/cohesix/config.yaml` with role fallback under `/roles/`.
 
 ## [v0.90] - 2025-08-16
 ### Changed
