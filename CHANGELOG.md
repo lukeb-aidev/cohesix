@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.69
-// Date Modified: 2025-09-02
+// Filename: CHANGELOG.md v0.70
+// Date Modified: 2025-09-03
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
 • Consolidated OSS reuse files into LICENSES_AND_REUSE.md
@@ -85,6 +85,12 @@
 - Normalized ISO layout in `out/` preserving kernel, bin, roles, and config files.
 - `make_iso.sh` copies the structured `out/` tree and sets FAT root.
 - `init.efi` reads `/etc/cohesix/config.yaml` with role fallback under `/roles/`.
+
+## [v0.99] - 2025-09-03
+### Changed
+- `full_fetch_and_build.sh` builds the workspace with `--no-default-features` and
+  runs library tests only.
+- Runtime role configuration base directory fixed to `/roles`.
 
 ## [v0.90] - 2025-08-16
 ### Changed
