@@ -154,6 +154,7 @@
 | scripts/generate_busybox_man.sh | v0.1 | 2025-06-08 | COMMUNITY | | |
 | scripts/manpage_scan.sh | v0.1 | 2025-06-08 | COMMUNITY | | |
 | scripts/verify-macos-setup.sh | v0.1 | 2025-06-05 | COMMUNITY | | |
+| scripts/make_iso.sh | v0.1 | 2025-09-07 | COMMUNITY | | |
 | metadata.json | v0.1 | 2025-07-24 | COMMUNITY | | |
 | Cargo.toml | v0.14 | 2025-09-05 | COMMUNITY | | |
 | cohesix-9p/Cargo.toml | v0.1 | 2025-07-28 | COMMUNITY | | |
@@ -169,7 +170,7 @@
 | src/userbin/logdemo.rs | v0.1 | 2025-08-27 | COMMUNITY | | |
 | src/init/main.rs | v0.1 | 2025-09-05 | COMMUNITY | | |
 | src/init_efi/main.c | v0.3 | 2025-09-02 | COMMUNITY | | |
-| full_fetch_and_build.sh | v0.7 | 2025-09-05 | COMMUNITY | | |
+| full_fetch_and_build.sh | v0.8 | 2025-09-07 | COMMUNITY | | |
 | etc/init.conf | v0.1 | 2025-08-27 | COMMUNITY | | |
 | etc/init.cfg | v0.1 | 2025-08-30 | COMMUNITY | | |
 | make_iso.sh | v0.3 | 2025-09-03 | COMMUNITY | | |

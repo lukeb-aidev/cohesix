@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: full_fetch_and_build.sh v0.7
+// Filename: full_fetch_and_build.sh v0.8
 // Author: Lukas Bower
-// Date Modified: 2025-09-05
+// Date Modified: 2025-09-07
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -82,7 +82,7 @@ rm -f "$META"
 [ -f out/etc/cohesix/config.yaml ] || fail "out/etc/cohesix/config.yaml missing"
 
 msg "Creating bootable ISO…"
-./make_iso.sh
+./scripts/make_iso.sh
 [ -f out/cohesix.iso ] || fail "ISO not created"
 
 if grep -q "-cdrom out/cohesix.iso" test_boot_efi.sh 2>/dev/null; then
