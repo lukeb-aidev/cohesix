@@ -109,7 +109,7 @@
 | linker.ld | v0.1 | 2025-07-22 | COMMUNITY | | |
 | .cargo/config.toml | v0.1 | 2025-07-22 | COMMUNITY | | |
 | Makefile | v0.21 | 2025-08-27 | COMMUNITY | | |
-| test_boot_efi.sh | v0.13 | 2025-08-25 | COMMUNITY | | |
+| test_boot_efi.sh | v0.14 | 2025-08-29 | COMMUNITY | | |
 | src/kernel/main.c | v0.2 | 2025-07-22 | COMMUNITY | | |
 | src/kernel/main.rs | v0.2 | 2025-08-02 | COMMUNITY | | |
 | src/kernel/proc_mgr.rs | v0.2 | 2025-08-27 | COMMUNITY | | |
@@ -168,6 +168,6 @@
 | src/kernel/config.rs | v0.1 | 2025-08-27 | COMMUNITY | | |
 | src/userbin/logdemo.rs | v0.1 | 2025-08-27 | COMMUNITY | | |
 | src/init_efi/main.c | v0.1 | 2025-08-27 | COMMUNITY | | |
-| full_fetch_and_build.sh | v0.2 | 2025-08-27 | COMMUNITY | | |
+| full_fetch_and_build.sh | v0.3 | 2025-08-29 | COMMUNITY | | |
 | etc/init.conf | v0.1 | 2025-08-27 | COMMUNITY | | |
 | make_iso.sh | v0.1 | 2025-08-28 | COMMUNITY | | |
