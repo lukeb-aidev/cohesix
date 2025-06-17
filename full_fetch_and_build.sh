@@ -1,29 +1,39 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: full_fetch_and_build.sh v0.6
+// Filename: full_fetch_and_build.sh v0.7
 // Author: Lukas Bower
-// Date Modified: 2025-09-03
+// Date Modified: 2025-09-05
 #!/usr/bin/env bash
 set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 cd "$ROOT"
 
-mkdir -p out/bin out/roles out/etc/cohesix out/setup
-if [ -d configs/roles ]; then
-  for cfg in configs/roles/*.yaml; do
-    role="$(basename "$cfg" .yaml)"
-    mkdir -p "out/roles/$role"
-    cp "$cfg" "out/roles/$role/config.yaml" || fail "copy $cfg"
-  done
-  cp configs/roles/default.yaml out/etc/cohesix/config.yaml
-fi
-for shf in setup/init.sh setup/*.sh; do
-  [ -f "$shf" ] || continue
-  cp "$shf" out/setup/ || fail "copy $shf"
-done
+ISO_ROOT="${ISO_ROOT:-out}"
+mkdir -p "$ISO_ROOT/bin" "$ISO_ROOT/roles" "$ISO_ROOT/etc/cohesix" "$ISO_ROOT/setup"
 
 msg(){ printf "\e[32m[build]\e[0m %s\n" "$*"; }
 fail(){ printf "\e[31m[error]\e[0m %s\n" "$*" >&2; exit 1; }
+
+if [ ! -f setup/config.yaml ]; then
+  fail "setup/config.yaml missing"
+fi
+cp setup/config.yaml "$ISO_ROOT/etc/cohesix/config.yaml" || fail "copy setup/config.yaml"
+msg "Copied setup/config.yaml to $ISO_ROOT/etc/cohesix/config.yaml"
+
+if ls setup/roles/*.yaml >/dev/null 2>&1; then
+  for cfg in setup/roles/*.yaml; do
+    role="$(basename "$cfg" .yaml)"
+    mkdir -p "$ISO_ROOT/roles/$role"
+    cp "$cfg" "$ISO_ROOT/roles/$role/config.yaml" || fail "copy $cfg"
+    msg "Copied $cfg to $ISO_ROOT/roles/$role/config.yaml"
+  done
+else
+  fail "No role configs found in setup/roles"
+fi
+for shf in setup/init.sh setup/*.sh; do
+  [ -f "$shf" ] || continue
+  cp "$shf" "$ISO_ROOT/setup/" || fail "copy $shf"
+done
 
 msg "Building workspace (secure9p)"
 cargo build --release --all-targets --no-default-features --features "secure9p"
