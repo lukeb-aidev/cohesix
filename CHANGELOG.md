@@ -1,12 +1,17 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.65
-// Date Modified: 2025-08-27
+// Filename: CHANGELOG.md v0.66
+// Date Modified: 2025-08-28
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
 • Consolidated OSS reuse files into LICENSES_AND_REUSE.md
 • Unified role documents into ROLE_POLICY.md
 • Created CLI and Agent index at cli/README.md
 • Normalized headers and metadata across all affected documentation
+
+## [v0.66] - 2025-08-28
+### Added
+- `rc` init now parses `/etc/init.conf` using `toml` and logs init_mode and services.
+- Cargo.toml v0.13 enables the `toml` crate for userland config.
 
 ## [vNext] - 2025-08-02
 ### Temp path fixes and QEMU script guard
