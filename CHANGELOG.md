@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.73
-// Date Modified: 2025-09-05
+// Filename: CHANGELOG.md v0.74
+// Date Modified: 2025-09-06
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
 • Consolidated OSS reuse files into LICENSES_AND_REUSE.md
@@ -961,4 +961,9 @@
 - Role configs under `setup/roles/` with QueenPrimary, KioskInteractive, DroneWorker,
   GlassesAgent, SensorRelay and SimulatorTest defaults.
 - `full_fetch_and_build.sh` v0.7 verifies these configs and copies them to `$ISO_ROOT`.
+
+## [v0.103] - 2025-09-06
+### Fixed
+- `RoleConfig::load_active` now honors `ROLE_CONFIG_DIR` allowing tests to
+  supply temporary role directories.
 

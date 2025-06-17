@@ -1,9 +1,9 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: role_config.rs v0.1
+// Filename: role_config.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-08-30
+// Date Modified: 2025-09-06
 
-use cohesix::runtime::role_config::{load_active, RoleConfig};
+use cohesix::runtime::role_config::load_active;
 use serial_test::serial;
 use std::fs;
 use tempfile::tempdir;
