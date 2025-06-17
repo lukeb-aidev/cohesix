@@ -181,8 +181,8 @@
 | configs/roles/SimulatorTest.yaml | v0.1 | 2025-08-30 | COMMUNITY | | |
 | configs/roles/GlassesAgent.yaml | v0.1 | 2025-08-30 | COMMUNITY | | |
 | configs/roles/default.yaml | v0.1 | 2025-08-30 | COMMUNITY | | |
-| src/runtime/role_config.rs | v0.2 | 2025-09-03 | COMMUNITY | | |
-| tests/role_config.rs | v0.1 | 2025-08-30 | COMMUNITY | | |
+| src/runtime/role_config.rs | v0.3 | 2025-09-06 | COMMUNITY | | |
+| tests/role_config.rs | v0.2 | 2025-09-06 | COMMUNITY | | |
 | setup/config.yaml | v0.1 | 2025-09-05 | COMMUNITY | | |
 | setup/roles/QueenPrimary.yaml | v0.1 | 2025-09-05 | COMMUNITY | | |
 | setup/roles/KioskInteractive.yaml | v0.1 | 2025-09-05 | COMMUNITY | | |

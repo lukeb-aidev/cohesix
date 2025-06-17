@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: role_config.rs v0.2
+// Filename: role_config.rs v0.3
 // Author: Lukas Bower
-// Date Modified: 2025-09-03
+// Date Modified: 2025-09-06
 
 use serde::Deserialize;
 use std::fs;
@@ -35,13 +35,18 @@ pub fn load_for_role(dir: &Path, role: &str) -> std::io::Result<RoleConfig> {
 
 pub fn load_active() -> RoleConfig {
     let cohrole_path = std::env::var("COHROLE_PATH").unwrap_or_else(|_| "/srv/cohrole".into());
-    let roles_dir: PathBuf = PathBuf::from("/roles");
+    let roles_dir: PathBuf = std::env::var("ROLE_CONFIG_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("/roles"));
     let role = fs::read_to_string(&cohrole_path).unwrap_or_else(|_| "default".into());
     match load_for_role(&roles_dir, role.trim()) {
         Ok(cfg) => cfg,
-        Err(e) => {
-            eprintln!("[init] using default role config: {}", e);
-            load_for_role(&roles_dir, "default").unwrap_or_default()
-        }
+        Err(_) => match load_for_role(&roles_dir, "default") {
+            Ok(cfg) => cfg,
+            Err(e) => {
+                eprintln!("[init] using default role config: {}", e);
+                RoleConfig::default()
+            }
+        },
     }
 }
