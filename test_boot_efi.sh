@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: test_boot_efi.sh v0.13
+# Filename: test_boot_efi.sh v0.14
 # Author: Lukas Bower
-# Date Modified: 2025-08-25
+# Date Modified: 2025-08-29
 set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
@@ -85,20 +85,17 @@ make -n bootloader kernel CC="$TOOLCHAIN" > out/make_debug.log
 if ! make bootloader kernel CC="$TOOLCHAIN"; then
     fail "Build failed"
 fi
-if [ ! -f out/EFI/BOOT/BOOTX64.EFI ]; then
-    ls -R /out > /tmp/out_manifest.txt 2>/dev/null || true  # non-blocking info
-    fail "bootx64.efi missing in out/"
+./make_iso.sh
+if [ ! -f out/cohesix.iso ]; then
+    ls -R out > /tmp/out_manifest.txt 2>/dev/null || true  # non-blocking info
+    fail "cohesix.iso missing in out/"
 fi
-if [ ! -d out ] || [ -z "$(ls -A out 2>/dev/null)" ]; then
-    ls -R /out > /tmp/out_manifest.txt 2>/dev/null || true  # non-blocking info
-    fail "FAT source directory 'out' missing or empty"
-fi
-objdump -h out/EFI/BOOT/BOOTX64.EFI > out/BOOTX64_sections.txt
+objdump -h out/kernel.efi > out/kernel_sections.txt
 
 LOGFILE="$TMPDIR/qemu_boot.log"
 QEMU_ARGS=(-bios "$OVMF_CODE" \
     -drive if=pflash,format=raw,file="$TMPDIR/OVMF_VARS.fd" \
-    -drive format=raw,file=fat:rw:out/ -net none -M q35 -m 256M \
+    -cdrom out/cohesix.iso -net none -M q35 -m 256M \
     -no-reboot -monitor none)
 
 if ! qemu-system-x86_64 "${QEMU_ARGS[@]}" -nographic -serial file:"${LOGFILE}"; then

@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: full_fetch_and_build.sh v0.2
+// Filename: full_fetch_and_build.sh v0.3
 // Author: Lukas Bower
-// Date Modified: 2025-08-27
+// Date Modified: 2025-08-29
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -55,10 +55,14 @@ jq -r '.packages[].targets[] | select(.kind[]=="bin") | .name' "$META" | sort -u
  done
 rm -f "$META"
 
-if grep -q "fat:rw:out/" test_boot_efi.sh 2>/dev/null; then
-  msg "FAT drive configuration verified in QEMU boot script"
+msg "Creating bootable ISO…"
+./make_iso.sh
+[ -f out/cohesix.iso ] || fail "ISO not created"
+
+if grep -q "-cdrom out/cohesix.iso" test_boot_efi.sh 2>/dev/null; then
+  msg "ISO boot configuration verified in QEMU boot script"
 else
-  fail "FAT drive mount missing in QEMU boot script"
+  fail "ISO boot option missing in QEMU boot script"
 fi
 
 msg "Full build complete. Artifacts in out/"
