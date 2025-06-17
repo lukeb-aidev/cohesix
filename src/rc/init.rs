@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: init.rs v0.2
+// Filename: init.rs v0.3
 // Author: Lukas Bower
-// Date Modified: 2025-08-16
+// Date Modified: 2025-08-28
 
 //! Minimal Plan 9 style init parser for Cohesix.
 
@@ -9,6 +9,26 @@ use crate::plan9::namespace::NamespaceLoader;
 use std::fs;
 use std::io::{self, BufRead, Write};
 use std::time::Instant;
+use log::warn;
+
+#[cfg(not(target_os = "uefi"))]
+use serde::Deserialize;
+#[cfg(not(target_os = "uefi"))]
+use toml;
+
+#[cfg(not(target_os = "uefi"))]
+#[derive(Debug, Deserialize)]
+struct InitConf {
+    init_mode: Option<String>,
+    start_services: Option<Vec<String>>,
+}
+
+#[cfg(not(target_os = "uefi"))]
+fn load_init_conf() -> Option<InitConf> {
+    std::fs::read_to_string("/etc/init.conf")
+        .ok()
+        .and_then(|data| toml::from_str(&data).ok())
+}
 
 pub fn run() -> io::Result<()> {
     const BANNER: &str = r"  
@@ -21,6 +41,19 @@ pub fn run() -> io::Result<()> {
 
     println!("{}", BANNER);
     println!("C O H E S I X   R U N T I M E   🐝");
+
+    #[cfg(not(target_os = "uefi"))]
+    match load_init_conf() {
+        Some(cfg) => {
+            if let Some(mode) = cfg.init_mode {
+                println!("[rc] init_mode: {}", mode);
+            }
+            if let Some(services) = cfg.start_services {
+                println!("[rc] would start services: {}", services.join(", "));
+            }
+        }
+        None => warn!("[rc] missing or invalid /etc/init.conf; using defaults"),
+    }
 
     let start = Instant::now();
     let mut ns = NamespaceLoader::load()?;
