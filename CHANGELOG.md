@@ -984,3 +984,11 @@
 - JSON schema checks ensure trace integrity before parsing.
 - `requirements.txt` now includes `jsonschema`.
 
+## [v0.107] - 2025-09-10
+### Changed
+- `test_boot_efi.sh` now checks for `bootx64.efi` and preserves QEMU logs under
+  `logs/qemu_boot.log`. Failed boots print the last 20 log lines and exit with
+  status 1.
+- `cohesix_fetch_build.sh` uses the same log location and verifies `bootx64.efi`
+  after ISO creation.
+

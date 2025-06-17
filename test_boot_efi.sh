@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: test_boot_efi.sh v0.14
+# Filename: test_boot_efi.sh v0.15
 # Author: Lukas Bower
-# Date Modified: 2025-08-29
+# Date Modified: 2025-09-10
 set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
@@ -90,22 +90,31 @@ if [ ! -f out/cohesix.iso ]; then
     ls -R out > /tmp/out_manifest.txt 2>/dev/null || true  # non-blocking info
     fail "cohesix.iso missing in out/"
 fi
+if [ ! -f out_iso/EFI/BOOT/bootx64.efi ]; then
+    fail "bootx64.efi missing in out_iso/"
+fi
 objdump -h out/kernel.efi > out/kernel_sections.txt
 
-LOGFILE="$TMPDIR/qemu_boot.log"
+SERIAL_LOG="$TMPDIR/qemu_boot.log"
+QEMU_LOG="$LOG_DIR/qemu_boot.log"
+if [ -f "$QEMU_LOG" ]; then
+    mv "$QEMU_LOG" "$QEMU_LOG.$TIMESTAMP"
+fi
 QEMU_ARGS=(-bios "$OVMF_CODE" \
     -drive if=pflash,format=raw,file="$TMPDIR/OVMF_VARS.fd" \
     -cdrom out/cohesix.iso -net none -M q35 -m 256M \
     -no-reboot -monitor none)
 
-if ! qemu-system-x86_64 "${QEMU_ARGS[@]}" -nographic -serial file:"${LOGFILE}"; then
-    ls -R /out > /tmp/out_manifest.txt 2>/dev/null || true  # non-blocking info
+if ! qemu-system-x86_64 "${QEMU_ARGS[@]}" -nographic -serial file:"${SERIAL_LOG}"; then
+    cat "$SERIAL_LOG" >> "$QEMU_LOG" 2>/dev/null || true
+    tail -n 20 "$SERIAL_LOG" || true
     fail "QEMU execution failed"
 fi
-tail -n 20 "${LOGFILE}" || echo "Boot log unavailable — check TMPDIR or QEMU exit code"
+cat "$SERIAL_LOG" >> "$QEMU_LOG" 2>/dev/null || true
+tail -n 20 "$SERIAL_LOG" || echo "Boot log unavailable — check TMPDIR or QEMU exit code"
 
-if ! grep -q "EFI loader" "${LOGFILE}" || ! grep -q "Kernel launched" "${LOGFILE}"; then
-    ls -R /out > /tmp/out_manifest.txt 2>/dev/null || true  # non-blocking info
+if ! grep -q "EFI loader" "$SERIAL_LOG" || ! grep -q "Kernel launched" "$SERIAL_LOG"; then
+    tail -n 20 "$SERIAL_LOG" || true
     fail "Boot log verification failed"
 fi
 
