@@ -915,3 +915,7 @@
 - Kernel user API exposing `sys_log` and `sys_exit` via function pointers
 - Process table tracks exited state and exit codes
 - Test userland binary `logdemo` prints two lines then exits with code 42
+
+## [v0.64] - 2025-08-30
+### Added
+- init.efi loads /etc/init.cfg and validates required keys
