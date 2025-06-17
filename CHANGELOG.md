@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v0.74
-// Date Modified: 2025-09-07
+// Date Modified: 2025-09-12
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
 • Consolidated OSS reuse files into LICENSES_AND_REUSE.md
@@ -995,4 +995,8 @@
 ## [v0.108] - 2025-09-11
 ### Changed
 - ci.yml v1.5 consolidates build steps and prints per-language validation summary.
+
+## [v0.109] - 2025-09-12
+### Added
+- `tools/make_iso.sh` assembles a complete Cohesix ISO including configs, CLI tools and man pages.
 
