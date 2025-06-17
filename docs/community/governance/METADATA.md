@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: METADATA.md v3.20
+// Filename: METADATA.md v3.21
 // Author: Lukas Bower
-// Date Modified: 2025-08-27
+// Date Modified: 2025-09-05
 
 ## Canonical Documents
 
@@ -155,7 +155,7 @@
 | scripts/manpage_scan.sh | v0.1 | 2025-06-08 | COMMUNITY | | |
 | scripts/verify-macos-setup.sh | v0.1 | 2025-06-05 | COMMUNITY | | |
 | metadata.json | v0.1 | 2025-07-24 | COMMUNITY | | |
-| Cargo.toml | v0.13 | 2025-08-28 | COMMUNITY | | |
+| Cargo.toml | v0.14 | 2025-09-05 | COMMUNITY | | |
 | cohesix-9p/Cargo.toml | v0.1 | 2025-07-28 | COMMUNITY | | |
 | tools/cli/Cargo.toml | v0.2 | 2025-08-16 | COMMUNITY | | |
 | justfile | v0.1 | 2025-07-24 | COMMUNITY | | |
@@ -167,6 +167,7 @@
 | src/kernel/user_api.rs | v0.1 | 2025-08-27 | COMMUNITY | | |
 | src/kernel/config.rs | v0.1 | 2025-08-27 | COMMUNITY | | |
 | src/userbin/logdemo.rs | v0.1 | 2025-08-27 | COMMUNITY | | |
+| src/init/main.rs | v0.1 | 2025-09-05 | COMMUNITY | | |
 | src/init_efi/main.c | v0.3 | 2025-09-02 | COMMUNITY | | |
 | full_fetch_and_build.sh | v0.6 | 2025-09-03 | COMMUNITY | | |
 | etc/init.conf | v0.1 | 2025-08-27 | COMMUNITY | | |
