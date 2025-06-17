@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Cargo.toml v0.12
+# Filename: Cargo.toml v0.13
 # Author: Lukas Bower
-# Date Modified: 2025-08-27
+# Date Modified: 2025-08-28
 [package]
 name    = "cohesix"
 version = "0.1.0"
@@ -52,7 +52,7 @@ v4l = "0.14"
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
 sdl2 = { version = "0.37", optional = true }
 jsonwebtoken = { version = "9", optional = true }
-toml = { version = "0.8", optional = true }
+toml = { version = "0.8" }
 x509-parser = { version = "0.15", optional = true }
 
 [build-dependencies]
@@ -82,7 +82,7 @@ rapier = ["rapier3d"]
 physics = ["rapier3d"]
 busybox = []
 joystick = ["sdl2"]
-secure9p = ["rustls", "tokio-rustls", "jsonwebtoken", "toml", "x509-parser", "serde_yaml", "webpki-roots", "rustls-pemfile"]
+secure9p = ["rustls", "tokio-rustls", "jsonwebtoken", "x509-parser", "serde_yaml", "webpki-roots", "rustls-pemfile"]
 kernel_bin = []
 uefi = []
 # minimal_uefi: ensures only firmware-safe crates are compiled
