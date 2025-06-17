@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.70
-// Date Modified: 2025-09-03
+// Filename: CHANGELOG.md v0.71
+// Date Modified: 2025-09-04
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
 • Consolidated OSS reuse files into LICENSES_AND_REUSE.md
@@ -944,3 +944,9 @@
 ## [v0.64] - 2025-08-30
 ### Added
 - init.efi loads /etc/init.cfg and validates required keys
+
+## [v0.100] - 2025-09-04
+### Changed
+- `.github/workflows/ci.yml` v1.4 adds cross-target matrix for ISO and Linux builds.
+- CI disables CUDA by default via `RUSTFLAGS=--cfg no_cuda`.
+- UEFI job verifies kernel and role configs are present and uploads artifacts.
