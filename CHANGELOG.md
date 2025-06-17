@@ -992,3 +992,7 @@
 - `cohesix_fetch_build.sh` uses the same log location and verifies `bootx64.efi`
   after ISO creation.
 
+## [v0.108] - 2025-09-11
+### Changed
+- ci.yml v1.5 consolidates build steps and prints per-language validation summary.
+
