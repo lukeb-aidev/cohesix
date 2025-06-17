@@ -167,11 +167,11 @@
 | src/kernel/user_api.rs | v0.1 | 2025-08-27 | COMMUNITY | | |
 | src/kernel/config.rs | v0.1 | 2025-08-27 | COMMUNITY | | |
 | src/userbin/logdemo.rs | v0.1 | 2025-08-27 | COMMUNITY | | |
-| src/init_efi/main.c | v0.2 | 2025-08-30 | COMMUNITY | | |
-| full_fetch_and_build.sh | v0.4 | 2025-09-02 | COMMUNITY | | |
+| src/init_efi/main.c | v0.3 | 2025-09-02 | COMMUNITY | | |
+| full_fetch_and_build.sh | v0.5 | 2025-09-02 | COMMUNITY | | |
 | etc/init.conf | v0.1 | 2025-08-27 | COMMUNITY | | |
 | etc/init.cfg | v0.1 | 2025-08-30 | COMMUNITY | | |
-| make_iso.sh | v0.1 | 2025-08-28 | COMMUNITY | | |
+| make_iso.sh | v0.2 | 2025-09-02 | COMMUNITY | | |
 | configs/roles/QueenPrimary.yaml | v0.1 | 2025-08-30 | COMMUNITY | | |
 | configs/roles/WorkerDrone.yaml | v0.1 | 2025-08-30 | COMMUNITY | | |
 | configs/roles/DroneWorker.yaml | v0.1 | 2025-08-30 | COMMUNITY | | |
