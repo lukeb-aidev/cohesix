@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: cohesix_fetch_build.sh v0.10
+// Filename: cohesix_fetch_build.sh v0.11
 // Author: Lukas Bower
-// Date Modified: 2025-09-10
+// Date Modified: 2025-09-13
 #!/bin/bash
 # Fetch and fully build the Cohesix project using SSH Git auth.
 
@@ -32,24 +32,31 @@ fi
 echo "🦀 Building Rust components..."
 cargo build --all-targets --release
 
-echo "🛠️ Building kernel EFI and ISO..."
-mkdir -p out
-cargo build --release --target x86_64-unknown-uefi --bin kernel \
+TARGET="x86_64-unknown-uefi"
+echo "🛠️ Building kernel EFI..."
+mkdir -p out/bin out/etc/cohesix out/roles
+cargo build --release --target "$TARGET" --bin kernel \
   --no-default-features --features minimal_uefi,kernel_bin
-[ -f target/x86_64-unknown-uefi/release/kernel.efi ] || {
-  echo "❌ kernel.efi missing" >&2; exit 1; }
-./make_iso.sh
-[ -f out/cohesix.iso ] || { echo "❌ ISO build failed" >&2; exit 1; }
-[ -f out_iso/EFI/BOOT/bootx64.efi ] || { echo "❌ bootx64.efi missing after ISO build" >&2; exit 1; }
+KERNEL_EFI="target/${TARGET}/release/kernel.efi"
+[ -f "$KERNEL_EFI" ] || { echo "❌ kernel.efi missing" >&2; exit 1; }
+cp "$KERNEL_EFI" out/kernel.efi
+
+echo "🛠️ Building init EFI..."
+cargo build --release --target "$TARGET" --bin init \
+  --no-default-features --features minimal_uefi
+INIT_EFI="target/${TARGET}/release/init"
+[ -f "$INIT_EFI" ] || { echo "❌ init EFI missing" >&2; exit 1; }
+cp "$INIT_EFI" out/bin/init.efi
 
 for f in initfs.img plan9.ns bootargs.txt boot_trace.json; do
   if [ -f "$f" ]; then
     cp "$f" out/
-  else
-    echo "⚠️ $f missing; creating placeholder" >&2
-    touch "out/$f"
   fi
 done
+
+echo "📀 Creating ISO..."
+./scripts/make_iso.sh
+[ -f out/cohesix.iso ] || { echo "❌ ISO build failed" >&2; exit 1; }
 
 echo "🔍 Running Rust tests with detailed output..."
 RUST_BACKTRACE=1 cargo test --release -- --nocapture 2>&1 | tee rust_test_output.log
@@ -74,6 +81,9 @@ fi
 echo "🐍 Running Python tests (pytest)..."
 if command -v pytest &> /dev/null; then
   pytest -v || true
+fi
+if command -v flake8 &> /dev/null; then
+  flake8 python tests || true
 fi
 
 echo "🧱 CMake config (if present)..."
@@ -102,8 +112,27 @@ if command -v qemu-system-x86_64 >/dev/null; then
   if [ -f "$LOG_FILE" ]; then
     mv "$LOG_FILE" "$LOG_FILE.$(date +%Y%m%d_%H%M%S)"
   fi
+  OVMF_CODE="/usr/share/qemu/OVMF.fd"
+  if [ ! -f "$OVMF_CODE" ]; then
+    for p in /usr/share/OVMF/OVMF_CODE.fd /usr/share/OVMF/OVMF.fd /usr/share/edk2/ovmf/OVMF_CODE.fd; do
+      if [ -f "$p" ]; then
+        OVMF_CODE="$p"
+        break
+      fi
+    done
+  fi
+  OVMF_VARS=""
+  for p in /usr/share/OVMF/OVMF_VARS.fd /usr/share/edk2/ovmf/OVMF_VARS.fd; do
+    if [ -f "$p" ]; then
+      OVMF_VARS="$p"
+      break
+    fi
+  done
+  [ -f "$OVMF_CODE" ] || { echo "OVMF firmware not found" >&2; exit 1; }
+  [ -n "$OVMF_VARS" ] || { echo "OVMF_VARS.fd not found" >&2; exit 1; }
+  cp "$OVMF_VARS" "$TMPDIR/OVMF_VARS.fd"
   qemu-system-x86_64 \
-    -bios /usr/share/qemu/OVMF.fd \
+    -bios "$OVMF_CODE" \
     -drive if=pflash,format=raw,file="$TMPDIR/OVMF_VARS.fd" \
     -cdrom "$ISO_IMG" -net none -M q35 -m 256M \
     -no-reboot -nographic -serial file:"$SERIAL_LOG"
