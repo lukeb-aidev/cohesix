@@ -1127,3 +1127,10 @@
   skips EFI builds when incompatible. Kernel and init EFI artifacts are verified
   to be non-empty.
 
+## [v0.132] - 2025-12-02
+### Changed
+- `scripts/make_iso.sh` uses EFI binaries from `out/bin/`, builds `/boot/efi` hierarchy,
+  and detects architecture via `$TARGET`.
+- Gracefully skips ISO creation when `xorriso`, `grub-mkrescue`, or `mtools` are missing.
+- Root wrapper `make_iso.sh` bumped to v0.6.
+
