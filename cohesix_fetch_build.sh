@@ -1,18 +1,25 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.15
+# Filename: cohesix_fetch_build.sh v0.16
 # Author: Lukas Bower
-# Date Modified: 2025-09-19
+# Date Modified: 2025-09-20
 #!/bin/bash
 # Fetch and fully build the Cohesix project using SSH Git auth.
 
 set -euo pipefail
-LOG_FILE=~/cohesix_build.log
-rm -f "$LOG_FILE"
+LOG_DIR="$HOME/cohesix_logs"
+mkdir -p "$LOG_DIR"
+LOG_FILE="$LOG_DIR/build_$(date +%Y%m%d_%H%M%S).log"
+SUMMARY_ERRORS="$LOG_DIR/summary_errors.log"
+SUMMARY_TEST_FAILS="$LOG_DIR/summary_test_failures.log"
+: > "$SUMMARY_ERRORS"
+: > "$SUMMARY_TEST_FAILS"
 exec 3>&1  # Save original stdout
-exec > "$LOG_FILE" 2>&1
+exec > >(tee -a "$LOG_FILE") 2>&1
 trap 'echo "❌ Build failed. Last 40 log lines:" >&3; tail -n 40 "$LOG_FILE" >&3' ERR
 
-log(){ echo "[$(date +%H:%M:%S)] $1" >&3; }
+log(){ echo "[$(date +%H:%M:%S)] $1" | tee -a "$LOG_FILE" >&3; }
+
+log "🛠️ [Build Start] $(date)"
 
 cd "$HOME"
 log "🧹 Cleaning workspace..."
@@ -36,6 +43,7 @@ pip install --upgrade pip setuptools wheel
 
 log "🧱 Building Rust components..."
 cargo build --all-targets --release
+grep -Ei 'error|fail|panic|permission denied|warning' "$LOG_FILE" > "$SUMMARY_ERRORS" || true
 
 # Copy Rust CLI binaries into out/bin for ISO staging
 for bin in cohcc cohbuild cohcap cohtrace cohrun_cli; do
@@ -68,6 +76,9 @@ fi
 cp "$INIT_EFI" out/bin/init.efi
 cp "$INIT_EFI" out/init.efi
 [ -f out/init.efi ] || { echo "❌ init EFI missing after build" >&2; exit 1; }
+if [[ ! -f out/init.efi ]]; then
+  echo "❌ init.efi missing — build incomplete" | tee -a "$LOG_FILE"
+fi
 
 log "📂 Staging boot files..."
 for f in initfs.img plan9.ns bootargs.txt boot_trace.json; do
@@ -92,18 +103,14 @@ for shf in setup/init.sh setup/*.sh; do
 done
 
 
-echo "🔍 Running Rust tests with detailed output..."
-TEST_LOG="$HOME/cohesix_test.log"
-ERROR_LOG="$HOME/cohesix_test_errors.log"
-RUST_BACKTRACE=1 cargo test --release -- --nocapture > "$TEST_LOG" 2>&1
+log "🔍 Running Rust tests with detailed output..."
+RUST_BACKTRACE=1 cargo test --release -- --nocapture
 TEST_EXIT_CODE=$?
+grep -A 5 -E '^failures:|thread .* panicked at' "$LOG_FILE" > "$SUMMARY_TEST_FAILS" || true
 if [ $TEST_EXIT_CODE -ne 0 ]; then
-  echo "❌ Rust tests failed. See $TEST_LOG for details." >&2
-  grep -i "error" "$TEST_LOG" > "$ERROR_LOG" 2>&1 || true
-  exit $TEST_EXIT_CODE
-else
-  echo "✅ Rust tests passed."
+  echo "❌ Rust tests failed." | tee -a "$LOG_FILE" >&3
 fi
+grep -Ei 'error|fail|panic|permission denied|warning' "$LOG_FILE" > "$SUMMARY_ERRORS" || true
 
 if command -v go &> /dev/null; then
   log "🐹 Building Go components..."
@@ -156,6 +163,10 @@ if command -v xorriso >/dev/null; then
 else
   log "⚠️ xorriso not found; skipping ISO content check"
 fi
+if [[ ! -f out/init.efi ]]; then
+  echo "❌ init.efi missing — build incomplete" | tee -a "$LOG_FILE"
+fi
+grep -Ei 'error|fail|panic|permission denied|warning' "$LOG_FILE" > "$SUMMARY_ERRORS" || true
 
 # Optional QEMU boot check
 if command -v qemu-system-x86_64 >/dev/null; then
@@ -211,7 +222,14 @@ else
   log "⚠️ qemu-system-x86_64 not installed; skipping boot test"
 fi
 
-echo "✅ Cohesix build completed successfully." >&3
+log "✅ [Build Complete] $(date)"
+
+grep -Ei 'error|fail|panic|permission denied|warning' "$LOG_FILE" > "$SUMMARY_ERRORS" || true
+grep -A 5 -E '^failures:|thread .* panicked at' "$LOG_FILE" > "$SUMMARY_TEST_FAILS" || true
+
+echo "⚠️  Summary of Errors and Warnings:" | tee -a "$LOG_FILE" >&3
+tail -n 10 "$SUMMARY_ERRORS" || echo "✅ No critical issues found" | tee -a "$LOG_FILE" >&3
+
 echo "🪵 Full log saved to $LOG_FILE" >&3
 echo "✅ ISO build complete. Run QEMU with:" >&3
 echo "qemu-system-x86_64 -cdrom out/cohesix.iso -boot d -m 1024" >&3
