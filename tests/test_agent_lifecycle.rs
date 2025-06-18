@@ -10,6 +10,8 @@ use tempfile::tempdir;
 
 #[test]
 fn agent_lifecycle() {
+    let trace_dir = std::env::var("TRACE_OUT").unwrap_or("/tmp/cohesix_trace".into());
+    std::fs::create_dir_all(&trace_dir).expect("create TRACE_OUT dir");
     let dir = tempdir().expect("tempdir");
     let agents = dir.path().join("agents");
     let traces = dir.path().join("trace");

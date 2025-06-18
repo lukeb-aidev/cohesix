@@ -28,12 +28,28 @@ struct TraceEvent {
 
 /// Record a syscall-like event.
 fn record(agent: &str, event: &str, detail: &str, ok: bool) {
-    fs::create_dir_all("/srv/trace").ok();
+    // Determine trace directory from TRACE_OUT or default to /srv/trace
+    let base = std::env::var("TRACE_OUT").unwrap_or_else(|_| "/srv/trace".into());
+    let mut dir = std::path::PathBuf::from(base);
+    if fs::create_dir_all(&dir).is_err() {
+        dir = std::env::temp_dir().join("cohesix_trace");
+        fs::create_dir_all(&dir).ok();
+    }
+    let path = dir.join("live.log");
     let mut f = OpenOptions::new()
         .create(true)
         .append(true)
-        .open("/srv/trace/live.log")
-        .unwrap();
+        .open(&path)
+        .unwrap_or_else(|_| {
+            let tmp_dir = std::env::temp_dir().join("cohesix_trace");
+            fs::create_dir_all(&tmp_dir).ok();
+            let tmp_path = tmp_dir.join("live.log");
+            OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&tmp_path)
+                .unwrap_or_else(|e| panic!("trace record failed: {}", e))
+        });
     let ev = TraceEvent {
         ts: now(),
         agent: agent.into(),
@@ -52,6 +68,11 @@ fn record(agent: &str, event: &str, detail: &str, ok: bool) {
 
 /// Spawn a process while recording the event.
 pub fn spawn(agent: &str, cmd: &str, args: &[&str]) -> std::io::Result<()> {
+    if let Ok(dir) = std::env::var("TRACE_OUT") {
+        fs::create_dir_all(&dir).ok();
+    } else {
+        fs::create_dir_all("/srv/trace").ok();
+    }
     let result = Command::new(cmd)
         .args(args)
         .stdout(Stdio::null())
