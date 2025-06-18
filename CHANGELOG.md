@@ -1051,3 +1051,9 @@
 ### Fixed
 - `cohesix_fetch_build.sh` ensures `out/bin` exists before copying `cohcc` and validates the binary path.
 
+## [v0.119] - 2025-09-21
+### Changed
+- `make kernel` now builds the Rust kernel and produces `BOOTX64.EFI` in `out/`.
+- ISO creation scripts expect `BOOTX64.EFI` instead of `kernel.efi`.
+- Top-level `make build` and `make all` invoke the kernel build automatically.
+

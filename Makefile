@@ -1,6 +1,6 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Makefile v0.22
-# Date Modified: 2025-09-02
+# Filename: Makefile v0.23
+# Date Modified: 2025-09-21
 # Author: Lukas Bower
 #
 # ─────────────────────────────────────────────────────────────
@@ -84,9 +84,9 @@ fi
 
 .PHONY: build all go-build go-test c-shims help fmt lint check cohrun cohbuild cohtrace cohcap kernel init-efi
 
-all: go-build go-test c-shims ## Run vet, tests and C shims
+all: go-build go-test c-shims kernel ## Run vet, tests, C shims and kernel
 
-build: ## Build Rust workspace
+build: kernel ## Build Rust workspace and kernel
 	@cargo build --workspace || echo "cargo build failed"
 
 fmt: ## Run code formatters
@@ -159,23 +159,22 @@ boot-aarch64: ## Build boot image for aarch64
 bootloader: check-efi ## Build UEFI bootloader
 	@echo "🏁 Building UEFI bootloader using $(TOOLCHAIN)"
 	@mkdir -p out/EFI/BOOT
-    $(CC) $(CFLAGS_EFI) -c src/bootloader/main.c -o out/bootloader.o
-    $(CC) $(CFLAGS_EFI) -c src/bootloader/sha1.c -o out/sha1.o
-    lld-link /lib/crt0-efi-x86_64.o out/bootloader.o out/sha1.o \
-        /out:out/bootloader.so /entry:efi_main /subsystem:efi_application \
-        /defaultlib:gnuefi.lib /defaultlib:efi.lib
-objcopy --target=efi-app-x86_64 out/bootloader.so out/BOOTX64.EFI
-cp out/BOOTX64.EFI out/EFI/BOOT/BOOTX64.EFI
+	$(CC) $(CFLAGS_EFI) -c src/bootloader/main.c -o out/bootloader.o
+	$(CC) $(CFLAGS_EFI) -c src/bootloader/sha1.c -o out/sha1.o
+	$(LD) /usr/lib/crt0-efi-x86_64.o out/bootloader.o out/sha1.o \
+	    -o out/bootloader.so -T linker.ld $(LD_FLAGS)
+	objcopy --target=efi-app-x86_64 out/bootloader.so out/bootloader.efi
+	cp out/bootloader.efi out/EFI/BOOT/BOOTX64.EFI
 
 
-kernel: check-efi init-efi ## Build kernel stub
-	@echo "🏁 Building kernel stub using $(TOOLCHAIN)"
-	@mkdir -p out
-	$(CC) $(CFLAGS_EFI) -c src/kernel/main.c -o out/kernel.o
-	        grep -v '^//' linker.ld > out/kernel.tmp.ld
-	$(LD) /usr/lib/crt0-efi-x86_64.o out/kernel.o \
-            -o out/kernel.so -T out/kernel.tmp.ld $(LD_FLAGS)
-	        rm -f out/kernel.tmp.ld
+kernel: check-efi ## Build Rust kernel BOOTX64.EFI
+	@echo "🏁 Building Rust kernel"
+	cargo build --release --target x86_64-unknown-uefi --bin kernel \
+	    --no-default-features --features minimal_uefi,kernel_bin
+	@mkdir -p out/EFI/BOOT
+	cp target/x86_64-unknown-uefi/release/kernel.efi out/kernel.so
+	objcopy --target=efi-app-x86_64 out/kernel.so out/BOOTX64.EFI
+	cp out/BOOTX64.EFI out/EFI/BOOT/BOOTX64.EFI
 
 init-efi: check-efi ## Build init EFI binary
 	@echo "🏁 Building init EFI using $(TOOLCHAIN)"
@@ -217,14 +216,14 @@ cohcap: ## Run cohcap CLI
 # Run boot image under QEMU, logging serial output
 qemu: ## Launch QEMU with built image and capture serial log
 	@command -v qemu-system-x86_64 >/dev/null 2>&1 || { echo "qemu-system-x86_64 not installed — skipping"; exit 0; }
-@if [ "$(EFI_AVAILABLE)" != "1" ]; then echo "gnu-efi headers not found — skipping qemu"; \
-else mkdir -p out; \
-if [ ! -f out/cohesix.iso ]; then ./make_iso.sh; fi; \
-qemu-system-x86_64 \
-        -bios /usr/share/qemu/OVMF.fd \
-    -drive if=pflash,format=raw,file=/usr/share/OVMF/OVMF_VARS.fd \
-    -cdrom out/cohesix.iso -net none -M q35 -m 256M \
-    -no-reboot -nographic -serial mon:stdio 2>&1 | tee qemu_serial.log; fi
+	@if [ "$(EFI_AVAILABLE)" != "1" ]; then echo "gnu-efi headers not found — skipping qemu"; \
+	else mkdir -p out; \
+	if [ ! -f out/cohesix.iso ]; then ./make_iso.sh; fi; \
+	qemu-system-x86_64 \
+	        -bios /usr/share/qemu/OVMF.fd \
+	    -drive if=pflash,format=raw,file=/usr/share/OVMF/OVMF_VARS.fd \
+	    -cdrom out/cohesix.iso -net none -M q35 -m 256M \
+	    -no-reboot -nographic -serial mon:stdio 2>&1 | tee qemu_serial.log; fi
 
 # Verify QEMU boot log and fail on BOOT_FAIL
 qemu-check: ## Check qemu_serial.log for BOOT_OK and fail on BOOT_FAIL
