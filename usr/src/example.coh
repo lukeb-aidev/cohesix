@@ -1,0 +1,5 @@
+// CLASSIFICATION: COMMUNITY
+// Filename: example.coh v0.1
+// Author: Lukas Bower
+// Date Modified: 2025-09-24
+print("hello from example")

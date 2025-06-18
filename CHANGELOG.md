@@ -1078,3 +1078,9 @@
 - Shell loop entry via `sh_loop::run` invoked during userland bootstrap.
 ### Changed
 - `userland_bootstrap.rs` now initializes runtime and rc before starting the shell.
+
+## [v0.124] - 2025-09-24
+### Added
+- `cohcc` command available within the interactive shell.
+- Example source file at `/usr/src/example.coh` for quick testing.
+- Test `test_cohcc_shell.rs` validates shell compilation pathway.

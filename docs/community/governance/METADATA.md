@@ -122,6 +122,7 @@
 | tests/test_qemu_boot.rs | v0.2 | 2025-07-28 | COMMUNITY | | |
 | tests/boot_trace_rule.rs | v0.3 | 2025-08-18 | COMMUNITY | | |
 | tests/kernel_proc_mgr.rs | v0.1 | 2025-08-26 | COMMUNITY | | |
+| tests/test_cohcc_shell.rs | v0.1 | 2025-09-24 | COMMUNITY | | |
 | docs/QUICKSTART.md | v0.1 | 2025-07-23 | COMMUNITY | | |
 | docs/community/architecture/BOOT_KERNEL_FLOW.md | v0.1 | 2025-07-23 | COMMUNITY | | |
 | docs/community/archive/examples_README.md | v0.2 | 2025-07-23 | COMMUNITY | | |
@@ -197,4 +198,5 @@
 | userland/miniroot/bin/echo | v0.1 | 2025-09-23 | COMMUNITY | | |
 | userland/miniroot/bin/help | v0.1 | 2025-09-23 | COMMUNITY | | |
 | userland/miniroot/bin/ls | v0.1 | 2025-09-23 | COMMUNITY | | |
+| usr/src/example.coh | v0.1 | 2025-09-24 | COMMUNITY | | |
 | src/sh_loop.rs | v0.1 | 2025-09-23 | COMMUNITY | | |
