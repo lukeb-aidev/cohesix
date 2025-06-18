@@ -1067,3 +1067,8 @@
 - `secure9p` feature now pulls in `tokio` as an optional dependency.
 - Cargo manifest marks `tokio` optional to avoid unnecessary compile overhead.
 
+## [v0.122] - 2025-09-23
+### Added
+- `userland/miniroot` with basic `echo`, `help`, and `ls` utilities.
+- `tools/make_iso.sh` copies miniroot into the ISO and validates presence.
+- `rc/init.rs` binds `/miniroot` to `/` when present for interactive tests.

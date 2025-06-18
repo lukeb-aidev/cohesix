@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: init.rs v0.3
+// Filename: init.rs v0.4
 // Author: Lukas Bower
-// Date Modified: 2025-08-28
+// Date Modified: 2025-09-23
 
 //! Minimal Plan 9 style init parser for Cohesix.
 
@@ -57,6 +57,13 @@ pub fn run() -> io::Result<()> {
 
     let start = Instant::now();
     let mut ns = NamespaceLoader::load()?;
+    if std::path::Path::new("/miniroot").exists() {
+        ns.add_op(crate::plan9::namespace::NsOp::Bind {
+            src: "/miniroot".to_string(),
+            dst: "/".to_string(),
+            flags: crate::plan9::namespace::BindFlags { before: true, after: false, create: false },
+        });
+    }
     NamespaceLoader::apply(&mut ns)?;
     if let Ok(file) = fs::File::open("/boot/rc.local") {
         for line in io::BufReader::new(file).lines() {
