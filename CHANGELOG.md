@@ -1027,3 +1027,9 @@
   `~/cohesix_build.log`. High-level step summaries are printed, and failures
   show the last 40 log lines for troubleshooting.
 
+## [v0.115] - 2025-09-18
+### Fixed
+- `cohesix_fetch_build.sh` verifies all components build before running
+  `make_iso.sh`, stages configuration and role files, and validates the ISO
+  output size and contents.
+
