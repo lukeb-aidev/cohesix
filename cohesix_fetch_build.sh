@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.18
+# Filename: cohesix_fetch_build.sh v0.19
 # Author: Lukas Bower
-# Date Modified: 2025-09-21
+# Date Modified: 2025-09-27
 #!/bin/bash
 # Fetch and fully build the Cohesix project using SSH Git auth.
 
@@ -42,7 +42,7 @@ pip install --upgrade pip setuptools wheel
 [ -f requirements.txt ] && pip install -r requirements.txt
 
 log "🧱 Building Rust components..."
-cargo build --all-targets --release
+cargo build --all-targets --release --features secure9p
 grep -Ei 'error|fail|panic|permission denied|warning' "$LOG_FILE" > "$SUMMARY_ERRORS" || true
 
 # Ensure output directory exists before copying Rust binaries
