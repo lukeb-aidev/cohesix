@@ -1,14 +1,14 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: busybox_runner.rs v0.6
+// Filename: busybox_runner.rs v0.7
 // Author: Lukas Bower
-// Date Modified: 2025-09-24
+// Date Modified: 2025-09-25
 
 //! Execute BusyBox as the interactive shell with role-based command filtering.
 
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use chrono::Utc;
 use std::process;
 
@@ -88,12 +88,32 @@ pub fn spawn_shell() {
         log_event(&mut log, &format!("CMD {}", line.trim_end()));
         if cmd == "cohcc" {
             if let Some(src) = tokens.get(1) {
+                let mut out_path = Path::new("/tmp/a.out").to_path_buf();
+                if tokens.len() >= 4 && tokens[2] == "-o" {
+                    out_path = PathBuf::from(tokens[3]);
+                }
+                if !(out_path.starts_with("/tmp/") || out_path.starts_with("/usr/bin/")) {
+                    let msg = b"output must be under /tmp or /usr/bin\n";
+                    let _ = console.write_all(msg);
+                    let _ = fs::write("/srv/shell_out", msg);
+                    line.clear();
+                    continue;
+                }
                 if src.starts_with("/usr/src/") || src.starts_with("/tmp/") {
                     match crate::coh_cc::compile(src) {
-                        Ok(out_path) => {
-                            let msg = format!("compiled {}\n", out_path.display());
-                            let _ = console.write_all(msg.as_bytes());
-                            let _ = fs::write("/srv/shell_out", msg.as_bytes());
+                        Ok(bytes) => {
+                            if let Some(parent) = out_path.parent() {
+                                fs::create_dir_all(parent).ok();
+                            }
+                            if fs::write(&out_path, &bytes).is_ok() {
+                                let msg = format!("compiled {}\n", out_path.display());
+                                let _ = console.write_all(msg.as_bytes());
+                                let _ = fs::write("/srv/shell_out", msg.as_bytes());
+                            } else {
+                                let msg = b"write failed\n";
+                                let _ = console.write_all(msg);
+                                let _ = fs::write("/srv/shell_out", msg);
+                            }
                         }
                         Err(e) => {
                             let msg = format!("compile failed: {}\n", e);
@@ -107,7 +127,7 @@ pub fn spawn_shell() {
                     let _ = fs::write("/srv/shell_out", msg);
                 }
             } else {
-                let msg = b"usage: cohcc <file>\n";
+                let msg = b"usage: cohcc <file> -o <out>\n";
                 let _ = console.write_all(msg);
                 let _ = fs::write("/srv/shell_out", msg);
             }
