@@ -1,30 +1,29 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.12
+# Filename: cohesix_fetch_build.sh v0.13
 # Author: Lukas Bower
-# Date Modified: 2025-09-15
+# Date Modified: 2025-09-17
 #!/bin/bash
 # Fetch and fully build the Cohesix project using SSH Git auth.
 
 set -euo pipefail
-
-LOG_FILE="$HOME/cohesix_build.log"
-: > "$LOG_FILE"
-trap 'echo "❌ Build failed. Last 40 lines:" && tail -n 40 "$LOG_FILE"' ERR
-exec > >(tee -a "$LOG_FILE") 2>&1
+LOG_FILE=~/cohesix_build.log
+rm -f "$LOG_FILE"
+exec 3>&1  # Save original stdout
+exec > "$LOG_FILE" 2>&1
+trap 'echo "❌ Build failed. Last 40 log lines:" >&3; tail -n 40 "$LOG_FILE" >&3' ERR
 
 cd "$HOME"
-echo "📦 Cloning Git repo via SSH..."
-
-# Remove any existing clone to ensure a clean build
+echo "[1/5] 🧹 Cleaning workspace..." >&3
 rm -rf cohesix
-# Clone using SSH key (assumes GitHub SSH auth already configured)
+
+echo "[2/5] 📦 Cloning repository..." >&3
 git clone git@github.com:lukeb-aidev/cohesix.git
 cd cohesix
 
 echo "📦 Updating submodules (if any)..."
 git submodule update --init --recursive
 
-echo "🐍 Setting up Python venv..."
+echo "[3/5] 🐍 Setting up Python environment..." >&3
 command -v python3 >/dev/null || { echo "❌ python3 not found"; exit 1; }
 python3 -m venv .venv
 source .venv/bin/activate
@@ -34,7 +33,7 @@ if [ -f requirements.txt ]; then
   pip install -r requirements.txt
 fi
 
-echo "🦀 Building Rust components..."
+echo "[4/5] 🧱 Building Rust components..." >&3
 cargo build --all-targets --release
 
 TARGET="x86_64-unknown-uefi"
@@ -69,18 +68,18 @@ for f in initfs.img plan9.ns bootargs.txt boot_trace.json; do
   fi
 done
 
-echo "📀 Creating ISO..."
+echo "[5/5] 📀 Creating ISO image..." >&3
 ./scripts/make_iso.sh
 [ -f out/cohesix.iso ] || { echo "❌ ISO build failed" >&2; exit 1; }
 
 echo "🔍 Running Rust tests with detailed output..."
 TEST_LOG="$HOME/cohesix_test.log"
 ERROR_LOG="$HOME/cohesix_test_errors.log"
-RUST_BACKTRACE=1 cargo test --release -- --nocapture 2>&1 | tee "$TEST_LOG"
-TEST_EXIT_CODE=${PIPESTATUS[0]}
+RUST_BACKTRACE=1 cargo test --release -- --nocapture > "$TEST_LOG" 2>&1
+TEST_EXIT_CODE=$?
 if [ $TEST_EXIT_CODE -ne 0 ]; then
   echo "❌ Rust tests failed. See $TEST_LOG for details." >&2
-  grep -i "error" "$TEST_LOG" | tee "$ERROR_LOG" >&2 || true
+  grep -i "error" "$TEST_LOG" > "$ERROR_LOG" 2>&1 || true
   exit $TEST_EXIT_CODE
 else
   echo "✅ Rust tests passed."
@@ -168,8 +167,5 @@ else
   echo "⚠️ qemu-system-x86_64 not installed; skipping boot test"
 fi
 
-echo "✅ Build artifacts:"
-echo " - Kernel EFI: $(realpath out/kernel.efi)"
-echo " - Init EFI: $(realpath out/bin/init.efi)"
-echo " - ISO image: $(realpath out/cohesix.iso)"
-echo "Full build log: $LOG_FILE"
+echo "✅ Cohesix build completed successfully." >&3
+echo "🪵 Full log saved to $LOG_FILE" >&3
