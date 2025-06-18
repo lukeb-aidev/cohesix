@@ -1084,3 +1084,10 @@
 - `cohcc` command available within the interactive shell.
 - Example source file at `/usr/src/example.coh` for quick testing.
 - Test `test_cohcc_shell.rs` validates shell compilation pathway.
+
+## [v0.125] - 2025-09-25
+### Changed
+- `cohcc` shell command supports `-o` for output redirection.
+- `cohcc::compile()` now returns binary bytes for file output.
+### Added
+- Test `test_cohcc_output.rs` verifies binary creation.
