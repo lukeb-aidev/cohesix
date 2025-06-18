@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: busybox_runner.rs v0.5
+// Filename: busybox_runner.rs v0.6
 // Author: Lukas Bower
-// Date Modified: 2025-07-31
+// Date Modified: 2025-09-24
 
 //! Execute BusyBox as the interactive shell with role-based command filtering.
 
@@ -18,8 +18,8 @@ fn allowed_cmd(role: &str, cmd: &str) -> bool {
     match role {
         "QueenPrimary" => true,
         "DroneWorker" => !matches!(cmd, "wget" | "curl"),
-        "InteractiveAIBooth" => matches!(cmd, "echo" | "ls" | "mount" | "cat"),
-        "KioskInteractive" => matches!(cmd, "echo" | "ls" | "mount" | "cat"),
+        "InteractiveAIBooth" => matches!(cmd, "echo" | "ls" | "mount" | "cat" | "cohcc"),
+        "KioskInteractive" => matches!(cmd, "echo" | "ls" | "mount" | "cat" | "cohcc"),
         _ => false,
     }
 }
@@ -86,7 +86,32 @@ pub fn spawn_shell() {
         }
         let cmd = tokens[0];
         log_event(&mut log, &format!("CMD {}", line.trim_end()));
-        if allowed_cmd(&role, cmd) {
+        if cmd == "cohcc" {
+            if let Some(src) = tokens.get(1) {
+                if src.starts_with("/usr/src/") || src.starts_with("/tmp/") {
+                    match crate::coh_cc::compile(src) {
+                        Ok(out_path) => {
+                            let msg = format!("compiled {}\n", out_path.display());
+                            let _ = console.write_all(msg.as_bytes());
+                            let _ = fs::write("/srv/shell_out", msg.as_bytes());
+                        }
+                        Err(e) => {
+                            let msg = format!("compile failed: {}\n", e);
+                            let _ = console.write_all(msg.as_bytes());
+                            let _ = fs::write("/srv/shell_out", msg.as_bytes());
+                        }
+                    }
+                } else {
+                    let msg = b"path must be under /usr/src or /tmp\n";
+                    let _ = console.write_all(msg);
+                    let _ = fs::write("/srv/shell_out", msg);
+                }
+            } else {
+                let msg = b"usage: cohcc <file>\n";
+                let _ = console.write_all(msg);
+                let _ = fs::write("/srv/shell_out", msg);
+            }
+        } else if allowed_cmd(&role, cmd) {
             let output = Command::new("/bin/busybox").args(&tokens).output();
             if let Ok(out) = output {
                 let _ = console.write_all(&out.stdout);
