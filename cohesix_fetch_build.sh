@@ -1,7 +1,7 @@
-// CLASSIFICATION: COMMUNITY
-// Filename: cohesix_fetch_build.sh v0.12
-// Author: Lukas Bower
-// Date Modified: 2025-09-15
+# CLASSIFICATION: COMMUNITY
+# Filename: cohesix_fetch_build.sh v0.12
+# Author: Lukas Bower
+# Date Modified: 2025-09-15
 #!/bin/bash
 # Fetch and fully build the Cohesix project using SSH Git auth.
 
@@ -57,6 +57,11 @@ fi
 mkdir -p out/bin
 cp "$INIT_EFI" out/bin/init.efi
 cp "$INIT_EFI" out/init.efi
+if [[ ! -f out/init.efi ]]; then
+  echo "❌ init EFI missing after build. Check target path or build.rs logic." >&2
+  find ./target -name '*.efi' >&2
+  exit 1
+fi
 
 for f in initfs.img plan9.ns bootargs.txt boot_trace.json; do
   if [ -f "$f" ]; then
@@ -69,10 +74,13 @@ echo "📀 Creating ISO..."
 [ -f out/cohesix.iso ] || { echo "❌ ISO build failed" >&2; exit 1; }
 
 echo "🔍 Running Rust tests with detailed output..."
-RUST_BACKTRACE=1 cargo test --release -- --nocapture 2>&1 | tee rust_test_output.log
+TEST_LOG="$HOME/cohesix_test.log"
+ERROR_LOG="$HOME/cohesix_test_errors.log"
+RUST_BACKTRACE=1 cargo test --release -- --nocapture 2>&1 | tee "$TEST_LOG"
 TEST_EXIT_CODE=${PIPESTATUS[0]}
 if [ $TEST_EXIT_CODE -ne 0 ]; then
-  echo "❌ Rust tests failed. See rust_test_output.log for details."
+  echo "❌ Rust tests failed. See $TEST_LOG for details." >&2
+  grep -i "error" "$TEST_LOG" | tee "$ERROR_LOG" >&2 || true
   exit $TEST_EXIT_CODE
 else
   echo "✅ Rust tests passed."
