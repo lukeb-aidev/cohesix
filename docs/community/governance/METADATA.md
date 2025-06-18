@@ -157,7 +157,7 @@
 | scripts/make_iso.sh | v0.2 | 2025-09-19 | COMMUNITY | | |
 | tools/make_iso.sh | v0.1 | 2025-09-12 | COMMUNITY | | |
 | metadata.json | v0.1 | 2025-07-24 | COMMUNITY | | |
-| Cargo.toml | v0.14 | 2025-09-05 | COMMUNITY | | |
+| Cargo.toml | v0.15 | 2025-09-22 | COMMUNITY | | |
 | cohesix-9p/Cargo.toml | v0.1 | 2025-07-28 | COMMUNITY | | |
 | tools/cli/Cargo.toml | v0.2 | 2025-08-16 | COMMUNITY | | |
 | justfile | v0.1 | 2025-07-24 | COMMUNITY | | |
