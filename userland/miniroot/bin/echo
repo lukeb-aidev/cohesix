@@ -1,0 +1,6 @@
+#!/bin/sh
+# CLASSIFICATION: COMMUNITY
+# Filename: echo v0.1
+# Author: Lukas Bower
+# Date Modified: 2025-09-23
+printf '%s\n' "$@"

@@ -155,7 +155,7 @@
 | scripts/manpage_scan.sh | v0.1 | 2025-06-08 | COMMUNITY | | |
 | scripts/verify-macos-setup.sh | v0.1 | 2025-06-05 | COMMUNITY | | |
 | scripts/make_iso.sh | v0.2 | 2025-09-19 | COMMUNITY | | |
-| tools/make_iso.sh | v0.1 | 2025-09-12 | COMMUNITY | | |
+| tools/make_iso.sh | v0.3 | 2025-09-23 | COMMUNITY | | |
 | metadata.json | v0.1 | 2025-07-24 | COMMUNITY | | |
 | Cargo.toml | v0.15 | 2025-09-22 | COMMUNITY | | |
 | cohesix-9p/Cargo.toml | v0.1 | 2025-07-28 | COMMUNITY | | |
@@ -163,7 +163,7 @@
 | justfile | v0.1 | 2025-07-24 | COMMUNITY | | |
 | src/roles/mod.rs | v0.1 | 2025-07-31 | COMMUNITY | | |
 | src/roles/interactive_aibooth.rs | v0.1 | 2025-07-31 | COMMUNITY | | |
-| src/rc/init.rs | v0.3 | 2025-08-28 | COMMUNITY | | |
+| src/rc/init.rs | v0.4 | 2025-09-23 | COMMUNITY | | |
 | src/lib/init.rs | v0.1 | 2025-08-17 | COMMUNITY | | |
 | src/kernel/userland_bootstrap.rs | v0.3 | 2025-08-27 | COMMUNITY | | |
 | src/kernel/user_api.rs | v0.1 | 2025-08-27 | COMMUNITY | | |
@@ -193,3 +193,7 @@
 | setup/roles/SensorRelay.yaml | v0.1 | 2025-09-05 | COMMUNITY | | |
 | setup/roles/SimulatorTest.yaml | v0.1 | 2025-09-05 | COMMUNITY | | |
 | ci/qemu_boot_check.sh | v0.1 | 2025-09-21 | COMMUNITY | | |
+| userland/miniroot/README.md | v0.1 | 2025-09-23 | COMMUNITY | | |
+| userland/miniroot/bin/echo | v0.1 | 2025-09-23 | COMMUNITY | | |
+| userland/miniroot/bin/help | v0.1 | 2025-09-23 | COMMUNITY | | |
+| userland/miniroot/bin/ls | v0.1 | 2025-09-23 | COMMUNITY | | |
