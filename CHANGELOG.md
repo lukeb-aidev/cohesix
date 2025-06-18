@@ -1103,3 +1103,9 @@
 - `cohesix_fetch_build.sh` builds with `--features secure9p`.
 - `scripts/make_iso.sh` now stages `userland/miniroot`, `/usr/src/example.coh`, and creates writable `/tmp`.
 - Wrapper `make_iso.sh` bumped for consistency.
+## [v0.128] - 2025-06-18
+### Fixed
+- Added `tokio` dependency with full features.
+- Resolved `UnboundedReceiver` type inference in `p9/multiplexer.rs`.
+- Removed unused imports in `coh_cc/mod.rs` and `kernel/userland_bootstrap.rs`.
+
