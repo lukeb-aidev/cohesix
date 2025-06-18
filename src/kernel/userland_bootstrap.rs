@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: userland_bootstrap.rs v0.3
+// Filename: userland_bootstrap.rs v0.4
 // Author: Lukas Bower
-// Date Modified: 2025-08-27
+// Date Modified: 2025-09-23
 
 //! Lightweight userland dispatcher.
 
@@ -18,7 +18,11 @@ mod static_table {
     }
 
     fn init_program() {
-        println!("Hello from init");
+        crate::runtime::env::init::initialize_runtime_env();
+        if let Err(e) = crate::rc::init::run() {
+            eprintln!("[userland_bootstrap] rc init failed: {}", e);
+        }
+        crate::sh_loop::run();
     }
 
     fn panic_program() {
