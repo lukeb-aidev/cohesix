@@ -1,14 +1,14 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: tools/make_iso.sh v0.1
+// Filename: tools/make_iso.sh v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-09-12
+// Date Modified: 2025-09-21
 #!/usr/bin/env bash
 set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 ISO_ROOT="$ROOT/out/iso_root"
 ISO_OUT="$ROOT/out/cohesix.iso"
-KERNEL_SRC="$ROOT/out/kernel.efi"
+KERNEL_SRC="$ROOT/out/BOOTX64.EFI"
 
 error(){ echo "[make_iso] $1" >&2; exit 1; }
 

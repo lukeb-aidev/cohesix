@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: test_boot_efi.sh v0.15
+# Filename: test_boot_efi.sh v0.16
 # Author: Lukas Bower
-# Date Modified: 2025-09-10
+# Date Modified: 2025-09-21
 set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
@@ -93,7 +93,7 @@ fi
 if [ ! -f out_iso/EFI/BOOT/bootx64.efi ]; then
     fail "bootx64.efi missing in out_iso/"
 fi
-objdump -h out/kernel.efi > out/kernel_sections.txt
+objdump -h out/BOOTX64.EFI > out/kernel_sections.txt
 
 SERIAL_LOG="$TMPDIR/qemu_boot.log"
 QEMU_LOG="$LOG_DIR/qemu_boot.log"

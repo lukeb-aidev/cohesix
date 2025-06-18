@@ -1,5 +1,5 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.17
+# Filename: cohesix_fetch_build.sh v0.18
 # Author: Lukas Bower
 # Date Modified: 2025-09-21
 #!/bin/bash
@@ -75,7 +75,7 @@ cargo build --release --target "$TARGET" --bin kernel \
   --no-default-features --features minimal_uefi,kernel_bin
 KERNEL_EFI="target/${TARGET}/release/kernel.efi"
 [ -f "$KERNEL_EFI" ] || { echo "❌ kernel.efi missing" >&2; exit 1; }
-cp "$KERNEL_EFI" out/kernel.efi
+cp "$KERNEL_EFI" out/BOOTX64.EFI
 
 log "🛠️ Building init EFI..."
 cargo build --release --target "$TARGET" --bin init \
@@ -170,8 +170,8 @@ if [ "$ISO_SIZE" -le $((1024*1024)) ]; then
   exit 1
 fi
 if command -v xorriso >/dev/null; then
-  xorriso -indev out/cohesix.iso -find / -name kernel.efi -print | grep -q kernel.efi || {
-    echo "❌ kernel.efi missing in ISO" >&2; exit 1; }
+  xorriso -indev out/cohesix.iso -find / -name BOOTX64.EFI -print | grep -q BOOTX64.EFI || {
+    echo "❌ BOOTX64.EFI missing in ISO" >&2; exit 1; }
 else
   log "⚠️ xorriso not found; skipping ISO content check"
 fi
