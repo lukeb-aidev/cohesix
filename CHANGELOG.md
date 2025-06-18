@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.76
-// Date Modified: 2025-09-26
+// Filename: CHANGELOG.md v0.77
+// Date Modified: 2025-09-27
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
 • Consolidated OSS reuse files into LICENSES_AND_REUSE.md
@@ -1097,3 +1097,9 @@
 - Runtime loader `load_and_run` for `.out` binaries.
 - `run` command available in the interactive shell.
 - Tests `test_loader.rs` and `test_run_shell.rs` cover loader usage.
+
+## [v0.127] - 2025-09-27
+### Changed
+- `cohesix_fetch_build.sh` builds with `--features secure9p`.
+- `scripts/make_iso.sh` now stages `userland/miniroot`, `/usr/src/example.coh`, and creates writable `/tmp`.
+- Wrapper `make_iso.sh` bumped for consistency.

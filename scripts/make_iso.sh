@@ -1,3 +1,7 @@
+// CLASSIFICATION: COMMUNITY
+// Filename: scripts/make_iso.sh v0.3
+// Author: Lukas Bower
+// Date Modified: 2025-09-27
 #!/usr/bin/env bash
 # ISO layout:
 #   bin/               - runtime binaries
@@ -6,6 +10,9 @@
 #   home/cohesix/      - Python libraries
 #   etc/               - system configuration
 #   roles/             - role definitions
+#   userland/          - minimal shell utilities
+#   usr/src/           - test sources
+#   tmp/               - writable temp space
 set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
@@ -32,7 +39,8 @@ fi
 [ -f "$INIT_SRC" ] || error "Missing $INIT_SRC"
 
 rm -rf "$ISO_DIR"
-mkdir -p "$ISO_DIR"/{bin,usr/bin,usr/cli,home/cohesix,etc/cohesix,roles,EFI/BOOT}
+mkdir -p "$ISO_DIR"/{bin,usr/bin,usr/cli,home/cohesix,etc/cohesix,roles,EFI/BOOT,usr/src,userland,tmp,srv}
+chmod 1777 "$ISO_DIR/tmp"
 
 cp "$KERNEL_SRC" "$ISO_DIR/EFI/BOOT/bootx64.efi"
 cp "$KERNEL_SRC" "$ISO_DIR/kernel.efi"
@@ -63,6 +71,17 @@ ln -sf /usr/bin/python3 "$ISO_DIR/usr/bin/python3"
 # Python libraries for runtime
 if [ -d "$ROOT/python" ]; then
   cp -a "$ROOT/python" "$ISO_DIR/home/cohesix/python"
+fi
+
+# Minimal userland utilities
+if [ -d "$ROOT/userland/miniroot" ]; then
+  cp -a "$ROOT/userland/miniroot" "$ISO_DIR/userland/miniroot"
+fi
+
+# Example source files
+if [ -f "$ROOT/usr/src/example.coh" ]; then
+  mkdir -p "$ISO_DIR/usr/src"
+  cp "$ROOT/usr/src/example.coh" "$ISO_DIR/usr/src/example.coh"
 fi
 
 if [ -f "$ROOT/out/etc/cohesix/config.yaml" ]; then
