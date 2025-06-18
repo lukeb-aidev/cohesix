@@ -1115,3 +1115,9 @@
   via `rustup`. The script falls back to `aarch64-unknown-linux-gnu` when the
   variable is unset.
 
+## [v0.130] - 2025-11-30
+### Added
+- `cohesix_fetch_build.sh` verifies the C toolchain by compiling and running a
+  dummy program, ensuring `gcc` and linker functionality before building C
+  components.
+
