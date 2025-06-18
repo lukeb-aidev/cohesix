@@ -1010,3 +1010,9 @@
 - Consolidated BusyBox build scripts into `build_busybox.sh` with cross-arch
   support and installer options. Old `build-busybox.sh` removed.
 
+## [v0.112] - 2025-09-15
+### Fixed
+- `cohesix_fetch_build.sh` restores the init EFI build using the correct
+  target triple and writes all build output to `~/cohesix_build.log` for
+  troubleshooting.
+

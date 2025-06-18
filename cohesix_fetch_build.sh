@@ -1,11 +1,16 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: cohesix_fetch_build.sh v0.11
+// Filename: cohesix_fetch_build.sh v0.12
 // Author: Lukas Bower
-// Date Modified: 2025-09-13
+// Date Modified: 2025-09-15
 #!/bin/bash
 # Fetch and fully build the Cohesix project using SSH Git auth.
 
 set -euo pipefail
+
+LOG_FILE="$HOME/cohesix_build.log"
+: > "$LOG_FILE"
+trap 'echo "❌ Build failed. Last 40 lines:" && tail -n 40 "$LOG_FILE"' ERR
+exec > >(tee -a "$LOG_FILE") 2>&1
 
 cd "$HOME"
 echo "📦 Cloning Git repo via SSH..."
@@ -44,9 +49,14 @@ cp "$KERNEL_EFI" out/kernel.efi
 echo "🛠️ Building init EFI..."
 cargo build --release --target "$TARGET" --bin init \
   --no-default-features --features minimal_uefi
-INIT_EFI="target/${TARGET}/release/init"
-[ -f "$INIT_EFI" ] || { echo "❌ init EFI missing" >&2; exit 1; }
+INIT_EFI="target/${TARGET}/release/init.efi"
+if [ ! -f "$INIT_EFI" ]; then
+  echo "❌ init EFI missing at $INIT_EFI" >&2
+  exit 1
+fi
+mkdir -p out/bin
 cp "$INIT_EFI" out/bin/init.efi
+cp "$INIT_EFI" out/init.efi
 
 for f in initfs.img plan9.ns bootargs.txt boot_trace.json; do
   if [ -f "$f" ]; then
@@ -108,9 +118,9 @@ if command -v qemu-system-x86_64 >/dev/null; then
   LOG_DIR="$PWD/logs"
   mkdir -p "$LOG_DIR"
   SERIAL_LOG="$TMPDIR/qemu_boot.log"
-  LOG_FILE="$LOG_DIR/qemu_boot.log"
-  if [ -f "$LOG_FILE" ]; then
-    mv "$LOG_FILE" "$LOG_FILE.$(date +%Y%m%d_%H%M%S)"
+  QEMU_LOG="$LOG_DIR/qemu_boot.log"
+  if [ -f "$QEMU_LOG" ]; then
+    mv "$QEMU_LOG" "$QEMU_LOG.$(date +%Y%m%d_%H%M%S)"
   fi
   OVMF_CODE="/usr/share/qemu/OVMF.fd"
   if [ ! -f "$OVMF_CODE" ]; then
@@ -136,6 +146,7 @@ if command -v qemu-system-x86_64 >/dev/null; then
     -drive if=pflash,format=raw,file="$TMPDIR/OVMF_VARS.fd" \
     -cdrom "$ISO_IMG" -net none -M q35 -m 256M \
     -no-reboot -nographic -serial file:"$SERIAL_LOG"
+  cat "$SERIAL_LOG" >> "$QEMU_LOG" 2>/dev/null || true
   cat "$SERIAL_LOG" >> "$LOG_FILE" 2>/dev/null || true
   echo "📜 Boot log (tail):"
   tail -n 20 "$SERIAL_LOG" || echo "❌ Could not read QEMU log"
@@ -148,3 +159,9 @@ if command -v qemu-system-x86_64 >/dev/null; then
 else
   echo "⚠️ qemu-system-x86_64 not installed; skipping boot test"
 fi
+
+echo "✅ Build artifacts:"
+echo " - Kernel EFI: $(realpath out/kernel.efi)"
+echo " - Init EFI: $(realpath out/bin/init.efi)"
+echo " - ISO image: $(realpath out/cohesix.iso)"
+echo "Full build log: $LOG_FILE"
