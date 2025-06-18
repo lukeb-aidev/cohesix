@@ -11,7 +11,7 @@ set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 ISO_DIR="$ROOT/out/iso_root"
 ISO_OUT="$ROOT/out/cohesix.iso"
-KERNEL_SRC="$ROOT/out/kernel.efi"
+KERNEL_SRC="$ROOT/out/BOOTX64.EFI"
 INIT_SRC="$ROOT/out/bin/init.efi"
 
 error() {
@@ -28,7 +28,7 @@ else
 fi
 
 [ -f "$KERNEL_SRC" ] || error "Missing $KERNEL_SRC"
-[ ! -f "$ROOT/out/kernel.efi" ] && echo "❌ Missing kernel.efi" && exit 1
+[ ! -f "$ROOT/out/BOOTX64.EFI" ] && echo "❌ Missing BOOTX64.EFI" && exit 1
 [ -f "$INIT_SRC" ] || error "Missing $INIT_SRC"
 
 rm -rf "$ISO_DIR"
