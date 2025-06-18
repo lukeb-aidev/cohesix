@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.77
-// Date Modified: 2025-09-27
+// Filename: CHANGELOG.md v0.78
+// Date Modified: 2025-11-30
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
 • Consolidated OSS reuse files into LICENSES_AND_REUSE.md
@@ -1108,4 +1108,10 @@
 - Added `tokio` dependency with full features.
 - Resolved `UnboundedReceiver` type inference in `p9/multiplexer.rs`.
 - Removed unused imports in `coh_cc/mod.rs` and `kernel/userland_bootstrap.rs`.
+
+## [v0.129] - 2025-11-30
+### Fixed
+- `cohesix_fetch_build.sh` now validates `$TARGET` and installs missing targets
+  via `rustup`. The script falls back to `aarch64-unknown-linux-gnu` when the
+  variable is unset.
 
