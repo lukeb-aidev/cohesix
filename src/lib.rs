@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: lib.rs v1.6
-// Date Modified: 2025-08-17
+// Filename: lib.rs v1.7
+// Date Modified: 2025-09-23
 // Author: Lukas Bower
 #![cfg(not(target_os = "uefi"))]
 
@@ -90,6 +90,8 @@ pub mod net;
 
 /// Shell helpers
 pub mod shell;
+/// Interactive shell loop
+pub mod sh_loop;
 
 /// Plan 9 userland helpers
 pub mod plan9;

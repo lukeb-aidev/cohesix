@@ -27,3 +27,4 @@ cohesix_backup_*.tar.gz
 /go/bin
 c/sel4/shim/*.o
 prebuilt/mandoc/mandoc.*
+.cache/
