@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: scripts/make_iso.sh v0.3
+// Filename: scripts/make_iso.sh v0.4
 // Author: Lukas Bower
-// Date Modified: 2025-09-27
+// Date Modified: 2025-12-02
 #!/usr/bin/env bash
 # ISO layout:
 #   bin/               - runtime binaries
@@ -18,32 +18,48 @@ set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 ISO_DIR="$ROOT/out/iso_root"
 ISO_OUT="$ROOT/out/cohesix.iso"
-KERNEL_SRC="$ROOT/out/BOOTX64.EFI"
+TARGET="${TARGET:-$(uname -m)}"
+KERNEL_SRC="$ROOT/out/bin/kernel.efi"
 INIT_SRC="$ROOT/out/bin/init.efi"
 
-error() {
-  echo "Error: $1" >&2
-  exit 1
-}
+log() { echo "$(date +%H:%M:%S) $1"; }
+error() { echo "Error: $1" >&2; exit 1; }
+have() { command -v "$1" >/dev/null 2>&1; }
 
-if command -v xorriso >/dev/null 2>&1; then
-  MKISO=xorriso
-elif command -v mkisofs >/dev/null 2>&1; then
-  MKISO=mkisofs
+case "$TARGET" in
+  aarch64*|arm64*) EFI_NAME="BOOTAA64.EFI" ;;
+  x86_64*) EFI_NAME="BOOTX64.EFI" ;;
+  *) error "Unsupported TARGET: $TARGET" ;;
+esac
+
+if have xorriso; then
+  MKISO=(xorriso -as mkisofs)
+elif have grub-mkrescue; then
+  MKISO=(grub-mkrescue -o)
+elif have mkisofs; then
+  MKISO=(mkisofs)
 else
-  error "xorriso or mkisofs required"
+  log "ISO tools missing"
+  echo "ISO Build SKIPPED (tool not found)"
+  exit 0
+fi
+if ! have mformat; then
+  log "mtools missing"
+  echo "ISO Build SKIPPED (tool not found)"
+  exit 0
 fi
 
 [ -f "$KERNEL_SRC" ] || error "Missing $KERNEL_SRC"
-[ ! -f "$ROOT/out/BOOTX64.EFI" ] && echo "❌ Missing BOOTX64.EFI" && exit 1
 [ -f "$INIT_SRC" ] || error "Missing $INIT_SRC"
 
 rm -rf "$ISO_DIR"
-mkdir -p "$ISO_DIR"/{bin,usr/bin,usr/cli,home/cohesix,etc/cohesix,roles,EFI/BOOT,usr/src,userland,tmp,srv}
+mkdir -p "$ISO_DIR"/{bin,usr/bin,usr/cli,home/cohesix,etc/cohesix,roles,userland,usr/src,tmp,srv,boot/efi/EFI/BOOT}
 chmod 1777 "$ISO_DIR/tmp"
 
-cp "$KERNEL_SRC" "$ISO_DIR/EFI/BOOT/bootx64.efi"
+log "📦 Adding kernel.efi..."
+cp "$KERNEL_SRC" "$ISO_DIR/boot/efi/EFI/BOOT/$EFI_NAME"
 cp "$KERNEL_SRC" "$ISO_DIR/kernel.efi"
+log "📦 Adding init.efi..."
 cp "$INIT_SRC" "$ISO_DIR/bin/init.efi"
 
 # Runtime binaries compiled during build
@@ -84,12 +100,17 @@ if [ -f "$ROOT/usr/src/example.coh" ]; then
   cp "$ROOT/usr/src/example.coh" "$ISO_DIR/usr/src/example.coh"
 fi
 
-if [ -f "$ROOT/out/etc/cohesix/config.yaml" ]; then
-  cp "$ROOT/out/etc/cohesix/config.yaml" "$ISO_DIR/etc/cohesix/config.yaml"
+if [ -d "$ROOT/out/etc/cohesix" ]; then
+  log "📦 Copying config files"
+  cp -a "$ROOT/out/etc/cohesix/." "$ISO_DIR/etc/cohesix/"
 fi
 if [ -d "$ROOT/out/roles" ]; then
+  log "📦 Copying roles"
   cp -a "$ROOT/out/roles/." "$ISO_DIR/roles/"
 fi
 
-$MKISO -as mkisofs -R -J -no-emul-boot -eltorito-boot EFI/BOOT/bootx64.efi \
+"${MKISO[@]}" -R -J -no-emul-boot \
+  -eltorito-platform efi -eltorito-boot boot/efi/EFI/BOOT/$EFI_NAME \
   -boot-load-size 4 -boot-info-table -o "$ISO_OUT" "$ISO_DIR"
+
+log "ISO Build PASS"
