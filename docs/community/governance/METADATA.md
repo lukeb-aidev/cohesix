@@ -192,3 +192,4 @@
 | setup/roles/GlassesAgent.yaml | v0.1 | 2025-09-05 | COMMUNITY | | |
 | setup/roles/SensorRelay.yaml | v0.1 | 2025-09-05 | COMMUNITY | | |
 | setup/roles/SimulatorTest.yaml | v0.1 | 2025-09-05 | COMMUNITY | | |
+| ci/qemu_boot_check.sh | v0.1 | 2025-09-21 | COMMUNITY | | |

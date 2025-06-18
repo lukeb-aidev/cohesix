@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: ci.yml v1.5
+# Filename: ci.yml v1.6
 # Author: Lukas Bower
-# Date Modified: 2025-09-11
+# Date Modified: 2025-09-21
 
 name: Cohesix CI
 
@@ -59,6 +59,8 @@ jobs:
           make lint || true
           make test || true
           make build || true
+      - name: Verify QEMU boot
+        run: ci/qemu_boot_check.sh
       - name: Validation summary
         run: |
           echo "Rust: ${{ steps.rust.outputs.pass }} passed, ${{ steps.rust.outputs.fail }} failed"
