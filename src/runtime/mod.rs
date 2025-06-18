@@ -7,8 +7,9 @@
 
 pub mod env;
 pub mod ipc;
-pub mod service_registry;
+pub mod loader;
 pub mod role_config;
+pub mod service_registry;
 
 pub use env::init::initialize_runtime_env;
 pub use service_registry::ServiceRegistry;

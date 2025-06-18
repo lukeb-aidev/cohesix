@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.75
-// Date Modified: 2025-09-20
+// Filename: CHANGELOG.md v0.76
+// Date Modified: 2025-09-26
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
 • Consolidated OSS reuse files into LICENSES_AND_REUSE.md
@@ -1091,3 +1091,9 @@
 - `cohcc::compile()` now returns binary bytes for file output.
 ### Added
 - Test `test_cohcc_output.rs` verifies binary creation.
+
+## [v0.126] - 2025-09-26
+### Added
+- Runtime loader `load_and_run` for `.out` binaries.
+- `run` command available in the interactive shell.
+- Tests `test_loader.rs` and `test_run_shell.rs` cover loader usage.
