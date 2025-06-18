@@ -1,7 +1,7 @@
-// CLASSIFICATION: COMMUNITY
-// Filename: full_fetch_and_build.sh v0.8
-// Author: Lukas Bower
-// Date Modified: 2025-09-07
+# CLASSIFICATION: COMMUNITY
+# Filename: full_fetch_and_build.sh v0.8
+# Author: Lukas Bower
+# Date Modified: 2025-09-07
 #!/usr/bin/env bash
 set -euo pipefail
 
