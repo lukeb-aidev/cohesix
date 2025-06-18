@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: multiplexer.rs v0.3
+// Filename: multiplexer.rs v0.4
 // Author: Lukas Bower
-// Date Modified: 2025-08-17
+// Date Modified: 2025-06-18
 #![cfg(not(target_os = "uefi"))]
 
 //! Concurrent 9P request multiplexer.
@@ -71,7 +71,8 @@ impl Multiplexer {
 
     /// Serve incoming requests on the attached channel.
     pub async fn serve(&self) {
-        let mut rx_opt = self.rx.lock().unwrap().take();
+        let mut rx_opt: Option<UnboundedReceiver<P9Request>> =
+            self.rx.lock().unwrap().take();
         if let Some(ref mut rx) = rx_opt {
             while let Some(req) = rx.recv().await {
                 let _ = self.handle(req);
