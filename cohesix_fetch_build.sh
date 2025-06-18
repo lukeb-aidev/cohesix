@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.16
+# Filename: cohesix_fetch_build.sh v0.17
 # Author: Lukas Bower
-# Date Modified: 2025-09-20
+# Date Modified: 2025-09-21
 #!/bin/bash
 # Fetch and fully build the Cohesix project using SSH Git auth.
 
@@ -45,8 +45,20 @@ log "🧱 Building Rust components..."
 cargo build --all-targets --release
 grep -Ei 'error|fail|panic|permission denied|warning' "$LOG_FILE" > "$SUMMARY_ERRORS" || true
 
-# Copy Rust CLI binaries into out/bin for ISO staging
-for bin in cohcc cohbuild cohcap cohtrace cohrun_cli; do
+# Ensure output directory exists before copying Rust binaries
+mkdir -p out/bin
+
+# Confirm cohcc built successfully before copying
+rm -f out/bin/cohcc
+if [[ -f target/release/cohcc ]]; then
+  cp target/release/cohcc out/bin/cohcc
+else
+  echo "❌ cohcc not found at expected location" >&2
+  exit 1
+fi
+
+# Copy other Rust CLI binaries into out/bin for ISO staging
+for bin in cohbuild cohcap cohtrace cohrun_cli; do
   BIN_PATH="target/release/$bin"
   [ -f "$BIN_PATH" ] && cp "$BIN_PATH" "out/bin/$bin"
 done
