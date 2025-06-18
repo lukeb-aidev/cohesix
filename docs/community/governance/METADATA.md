@@ -125,7 +125,7 @@
 | docs/QUICKSTART.md | v0.1 | 2025-07-23 | COMMUNITY | | |
 | docs/community/architecture/BOOT_KERNEL_FLOW.md | v0.1 | 2025-07-23 | COMMUNITY | | |
 | docs/community/archive/examples_README.md | v0.2 | 2025-07-23 | COMMUNITY | | |
-| cohesix_fetch_build.sh | v0.16 | 2025-09-20 | COMMUNITY | | |
+| cohesix_fetch_build.sh | v0.17 | 2025-09-21 | COMMUNITY | | |
 | CONTRIBUTING.md | v1.1 | 2025-07-23 | COMMUNITY | | |
 | config/secure9p.toml | v0.3 | 2025-07-31 | COMMUNITY | | |
 | src/secure9p/mod.rs | v0.2 | 2025-07-25 | COMMUNITY | | |
