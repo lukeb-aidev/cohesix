@@ -1057,3 +1057,8 @@
 - ISO creation scripts expect `BOOTX64.EFI` instead of `kernel.efi`.
 - Top-level `make build` and `make all` invoke the kernel build automatically.
 
+## [v0.120] - 2025-09-21
+### Added
+- CI boot verification script `ci/qemu_boot_check.sh`.
+- Workflow `ci.yml` runs this script after building the project.
+
