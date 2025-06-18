@@ -201,3 +201,6 @@
 | userland/miniroot/bin/ls | v0.1 | 2025-09-23 | COMMUNITY | | |
 | usr/src/example.coh | v0.1 | 2025-09-24 | COMMUNITY | | |
 | src/sh_loop.rs | v0.1 | 2025-09-23 | COMMUNITY | | |
+| src/runtime/loader.rs | v0.1 | 2025-09-26 | COMMUNITY | | |
+| tests/test_loader.rs | v0.1 | 2025-09-26 | COMMUNITY | | |
+| tests/test_run_shell.rs | v0.1 | 2025-09-26 | COMMUNITY | | |

@@ -5,21 +5,22 @@
 
 //! Execute BusyBox as the interactive shell with role-based command filtering.
 
+use chrono::Utc;
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
-use std::process::{Command, Stdio};
 use std::path::{Path, PathBuf};
-use chrono::Utc;
 use std::process;
+use std::process::{Command, Stdio};
 
 use crate::runtime::env::init::detect_cohrole;
+use crate::runtime::loader;
 
 fn allowed_cmd(role: &str, cmd: &str) -> bool {
     match role {
         "QueenPrimary" => true,
         "DroneWorker" => !matches!(cmd, "wget" | "curl"),
-        "InteractiveAIBooth" => matches!(cmd, "echo" | "ls" | "mount" | "cat" | "cohcc"),
-        "KioskInteractive" => matches!(cmd, "echo" | "ls" | "mount" | "cat" | "cohcc"),
+        "InteractiveAIBooth" => matches!(cmd, "echo" | "ls" | "mount" | "cat" | "cohcc" | "run"),
+        "KioskInteractive" => matches!(cmd, "echo" | "ls" | "mount" | "cat" | "cohcc" | "run"),
         _ => false,
     }
 }
@@ -33,7 +34,10 @@ fn log_event(log: &mut std::fs::File, event: &str) {
 /// Launch BusyBox shell reading from `/dev/console` and writing to `/srv/shell_out`.
 pub fn spawn_shell() {
     let role = detect_cohrole();
-    let console = OpenOptions::new().read(true).write(true).open("/dev/console");
+    let console = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open("/dev/console");
     let stdin = console
         .as_ref()
         .map(|f| Stdio::from(f.try_clone().unwrap()))
@@ -76,9 +80,13 @@ pub fn spawn_shell() {
         .unwrap();
     log_event(&mut log, &format!("SESSION START {}", role));
 
-
     let mut line = String::new();
-    while reader.read_line(&mut line).ok().filter(|n| *n > 0).is_some() {
+    while reader
+        .read_line(&mut line)
+        .ok()
+        .filter(|n| *n > 0)
+        .is_some()
+    {
         let tokens: Vec<&str> = line.split_whitespace().collect();
         if tokens.is_empty() {
             line.clear();
@@ -128,6 +136,25 @@ pub fn spawn_shell() {
                 }
             } else {
                 let msg = b"usage: cohcc <file> -o <out>\n";
+                let _ = console.write_all(msg);
+                let _ = fs::write("/srv/shell_out", msg);
+            }
+        } else if cmd == "run" {
+            if let Some(bin) = tokens.get(1) {
+                match loader::load_and_run(bin) {
+                    Ok(_) => {
+                        let msg = format!("ran {}\n", bin);
+                        let _ = console.write_all(msg.as_bytes());
+                        let _ = fs::write("/srv/shell_out", msg.as_bytes());
+                    }
+                    Err(e) => {
+                        let msg = format!("run failed: {}\n", e);
+                        let _ = console.write_all(msg.as_bytes());
+                        let _ = fs::write("/srv/shell_out", msg.as_bytes());
+                    }
+                }
+            } else {
+                let msg = b"usage: run <file>\n";
                 let _ = console.write_all(msg);
                 let _ = fs::write("/srv/shell_out", msg);
             }
