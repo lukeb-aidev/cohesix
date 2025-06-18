@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.14
+# Filename: cohesix_fetch_build.sh v0.15
 # Author: Lukas Bower
-# Date Modified: 2025-09-18
+# Date Modified: 2025-09-19
 #!/bin/bash
 # Fetch and fully build the Cohesix project using SSH Git auth.
 
@@ -21,6 +21,7 @@ rm -rf cohesix
 log "📦 Cloning repository..."
 git clone git@github.com:lukeb-aidev/cohesix.git
 cd cohesix
+ROOT="$(pwd)"
 
 log "📦 Updating submodules (if any)..."
 git submodule update --init --recursive
@@ -35,6 +36,17 @@ pip install --upgrade pip setuptools wheel
 
 log "🧱 Building Rust components..."
 cargo build --all-targets --release
+
+# Copy Rust CLI binaries into out/bin for ISO staging
+for bin in cohcc cohbuild cohcap cohtrace cohrun_cli; do
+  BIN_PATH="target/release/$bin"
+  [ -f "$BIN_PATH" ] && cp "$BIN_PATH" "out/bin/$bin"
+done
+
+# Stage shell wrappers for Python CLI tools
+for script in cohcli cohcap cohtrace cohrun cohbuild cohup cohpkg; do
+  [ -f "bin/$script" ] && cp "bin/$script" "out/bin/$script"
+done
 
 TARGET="x86_64-unknown-uefi"
 log "🛠️ Building kernel EFI..."
@@ -95,7 +107,9 @@ fi
 
 if command -v go &> /dev/null; then
   log "🐹 Building Go components..."
-  (cd go && go build ./...)
+  mkdir -p out/bin
+  (cd go/cmd/coh-9p-helper && go build -o "$ROOT/out/bin/coh-9p-helper")
+  (cd go/cmd/gui-orchestrator && go build -o "$ROOT/out/bin/gui-orchestrator")
   (cd go && go test ./...)
 else
   log "⚠️ Go not found; skipping Go build"
@@ -118,6 +132,13 @@ fi
 echo "✅ All builds complete."
 
 log "📀 Creating ISO..."
+# ISO root layout:
+#   out/iso_root/bin            - runtime binaries (kernel, init, busybox)
+#   out/iso_root/usr/bin        - CLI wrappers and Go tools
+#   out/iso_root/usr/cli        - Python CLI modules
+#   out/iso_root/home/cohesix   - Python libraries
+#   out/iso_root/etc            - configuration files
+#   out/iso_root/roles          - role definitions
 if [ "${VIRTUAL_ENV:-}" != "$(pwd)/.venv" ]; then
   echo "❌ Python venv not active before ISO build" >&2
   exit 1
@@ -192,3 +213,5 @@ fi
 
 echo "✅ Cohesix build completed successfully." >&3
 echo "🪵 Full log saved to $LOG_FILE" >&3
+echo "✅ ISO build complete. Run QEMU with:" >&3
+echo "qemu-system-x86_64 -cdrom out/cohesix.iso -boot d -m 1024" >&3

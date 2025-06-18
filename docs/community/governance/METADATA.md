@@ -125,7 +125,7 @@
 | docs/QUICKSTART.md | v0.1 | 2025-07-23 | COMMUNITY | | |
 | docs/community/architecture/BOOT_KERNEL_FLOW.md | v0.1 | 2025-07-23 | COMMUNITY | | |
 | docs/community/archive/examples_README.md | v0.2 | 2025-07-23 | COMMUNITY | | |
-| cohesix_fetch_build.sh | v0.14 | 2025-09-18 | COMMUNITY | | |
+| cohesix_fetch_build.sh | v0.15 | 2025-09-19 | COMMUNITY | | |
 | CONTRIBUTING.md | v1.1 | 2025-07-23 | COMMUNITY | | |
 | config/secure9p.toml | v0.3 | 2025-07-31 | COMMUNITY | | |
 | src/secure9p/mod.rs | v0.2 | 2025-07-25 | COMMUNITY | | |
@@ -154,7 +154,7 @@
 | scripts/generate_busybox_man.sh | v0.1 | 2025-06-08 | COMMUNITY | | |
 | scripts/manpage_scan.sh | v0.1 | 2025-06-08 | COMMUNITY | | |
 | scripts/verify-macos-setup.sh | v0.1 | 2025-06-05 | COMMUNITY | | |
-| scripts/make_iso.sh | v0.1 | 2025-09-07 | COMMUNITY | | |
+| scripts/make_iso.sh | v0.2 | 2025-09-19 | COMMUNITY | | |
 | tools/make_iso.sh | v0.1 | 2025-09-12 | COMMUNITY | | |
 | metadata.json | v0.1 | 2025-07-24 | COMMUNITY | | |
 | Cargo.toml | v0.14 | 2025-09-05 | COMMUNITY | | |
@@ -174,7 +174,7 @@
 | full_fetch_and_build.sh | v0.8 | 2025-09-07 | COMMUNITY | | |
 | etc/init.conf | v0.1 | 2025-08-27 | COMMUNITY | | |
 | etc/init.cfg | v0.1 | 2025-08-30 | COMMUNITY | | |
-| make_iso.sh | v0.3 | 2025-09-03 | COMMUNITY | | |
+| make_iso.sh | v0.4 | 2025-09-19 | COMMUNITY | | |
 | configs/roles/QueenPrimary.yaml | v0.1 | 2025-08-30 | COMMUNITY | | |
 | configs/roles/WorkerDrone.yaml | v0.1 | 2025-08-30 | COMMUNITY | | |
 | configs/roles/DroneWorker.yaml | v0.1 | 2025-08-30 | COMMUNITY | | |
