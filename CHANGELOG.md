@@ -1021,3 +1021,9 @@
 - Hardened `open_denied_logs_violation` test to avoid PermissionDenied panics
   by checking log and config paths before use.
 
+## [v0.114] - 2025-09-17
+### Added
+- Quiet console output in `cohesix_fetch_build.sh` with full log saved to
+  `~/cohesix_build.log`. High-level step summaries are printed, and failures
+  show the last 40 log lines for troubleshooting.
+
