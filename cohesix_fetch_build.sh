@@ -1,5 +1,5 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.20
+# Filename: cohesix_fetch_build.sh v0.21
 # Author: Lukas Bower
 # Date Modified: 2025-11-30
 #!/bin/bash
@@ -177,6 +177,26 @@ if command -v pytest &> /dev/null; then
 fi
 if command -v flake8 &> /dev/null; then
   flake8 python tests || true
+fi
+
+log "🔧 Checking C compiler..."
+if ! command -v gcc >/dev/null 2>&1; then
+  echo "❌ gcc not found. Install with: sudo apt install build-essential" >&2
+  exit 1
+fi
+CC_TEST_C="$(mktemp --suffix=.c coherix_cc_test.XXXX)"
+cat <<'EOF' > "$CC_TEST_C"
+#include <stdio.h>
+int main(void){ printf("hello\n"); return 0; }
+EOF
+CC_TEST_BIN="${CC_TEST_C%.c}"
+if gcc "$CC_TEST_C" -o "$CC_TEST_BIN" >/dev/null 2>&1 && "$CC_TEST_BIN" >/dev/null; then
+  log "✅ C compiler operational"
+  rm -f "$CC_TEST_C" "$CC_TEST_BIN"
+else
+  echo "❌ C compiler or linker failed" >&2
+  rm -f "$CC_TEST_C" "$CC_TEST_BIN"
+  exit 1
 fi
 
 log "🧱 Building C components..."
