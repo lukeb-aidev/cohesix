@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.19
+# Filename: cohesix_fetch_build.sh v0.20
 # Author: Lukas Bower
-# Date Modified: 2025-09-27
+# Date Modified: 2025-11-30
 #!/bin/bash
 # Fetch and fully build the Cohesix project using SSH Git auth.
 
@@ -42,7 +42,24 @@ pip install --upgrade pip setuptools wheel
 [ -f requirements.txt ] && pip install -r requirements.txt
 
 log "🧱 Building Rust components..."
-cargo build --all-targets --release --features secure9p
+# Use provided TARGET or default to aarch64-unknown-linux-gnu
+: "${TARGET:=aarch64-unknown-linux-gnu}"
+if [ -z "$TARGET" ]; then
+  log "⚠️ TARGET not set; defaulting to aarch64-unknown-linux-gnu"
+  TARGET="aarch64-unknown-linux-gnu"
+fi
+
+# Install the target if rustup is available and it's not already installed
+if command -v rustup >/dev/null 2>&1; then
+  if ! rustup target list --installed | grep -q "^${TARGET}$"; then
+    log "🔧 Installing Rust target ${TARGET}"
+    rustup target add "${TARGET}"
+  fi
+else
+  log "⚠️ rustup not found; assuming ${TARGET} toolchain is installed"
+fi
+
+cargo build --all-targets --release --target "${TARGET}" --features secure9p
 grep -Ei 'error|fail|panic|permission denied|warning' "$LOG_FILE" > "$SUMMARY_ERRORS" || true
 
 # Ensure output directory exists before copying Rust binaries
@@ -67,8 +84,6 @@ done
 for script in cohcli cohcap cohtrace cohrun cohbuild cohup cohpkg; do
   [ -f "bin/$script" ] && cp "bin/$script" "out/bin/$script"
 done
-
-TARGET="x86_64-unknown-uefi"
 log "🛠️ Building kernel EFI..."
 mkdir -p out/bin out/etc/cohesix out/roles out/setup
 cargo build --release --target "$TARGET" --bin kernel \
