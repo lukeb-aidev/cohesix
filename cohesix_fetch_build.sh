@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.21
+# Filename: cohesix_fetch_build.sh v0.22
 # Author: Lukas Bower
-# Date Modified: 2025-11-30
+# Date Modified: 2025-12-01
 #!/bin/bash
 # Fetch and fully build the Cohesix project using SSH Git auth.
 
@@ -106,27 +106,37 @@ done
 for script in cohcli cohcap cohtrace cohrun cohbuild cohup cohpkg; do
   [ -f "bin/$script" ] && cp "bin/$script" "out/bin/$script"
 done
-log "🛠️ Building kernel EFI..."
-mkdir -p out/bin out/etc/cohesix out/roles out/setup
-cargo build --release --target "$TARGET" --bin kernel \
-  --no-default-features --features minimal_uefi,kernel_bin
-KERNEL_EFI="target/${TARGET}/release/kernel.efi"
-[ -f "$KERNEL_EFI" ] || { echo "❌ kernel.efi missing" >&2; exit 1; }
-cp "$KERNEL_EFI" out/BOOTX64.EFI
 
-log "🛠️ Building init EFI..."
-cargo build --release --target "$TARGET" --bin init \
-  --no-default-features --features minimal_uefi
-INIT_EFI="target/${TARGET}/release/init.efi"
-if [ ! -f "$INIT_EFI" ]; then
-  echo "❌ init EFI missing at $INIT_EFI" >&2
-  exit 1
-fi
-cp "$INIT_EFI" out/bin/init.efi
-cp "$INIT_EFI" out/init.efi
-[ -f out/init.efi ] || { echo "❌ init EFI missing after build" >&2; exit 1; }
-if [[ ! -f out/init.efi ]]; then
-  echo "❌ init.efi missing — build incomplete" | tee -a "$LOG_FILE"
+EFI_SUPPORTED=0
+case "$TARGET" in
+  *-uefi) EFI_SUPPORTED=1 ;;
+esac
+
+if [ "$EFI_SUPPORTED" -eq 1 ]; then
+  log "🛠️ Building kernel EFI..."
+  mkdir -p out/bin out/etc/cohesix out/roles out/setup
+  if ! cargo build --release --target "$TARGET" --bin kernel \
+    --no-default-features --features minimal_uefi,kernel_bin; then
+    echo "❌ kernel EFI build failed" >&2
+    exit 1
+  fi
+  KERNEL_EFI="target/${TARGET}/release/kernel.efi"
+  [ -s "$KERNEL_EFI" ] || { echo "❌ kernel EFI missing or empty" >&2; exit 1; }
+  cp "$KERNEL_EFI" out/BOOTX64.EFI
+
+  log "🛠️ Building init EFI..."
+  if ! cargo build --release --target "$TARGET" --bin init \
+    --no-default-features --features minimal_uefi; then
+    echo "❌ init EFI build failed" >&2
+    exit 1
+  fi
+  INIT_EFI="target/${TARGET}/release/init.efi"
+  [ -s "$INIT_EFI" ] || { echo "❌ init EFI missing or empty" >&2; exit 1; }
+  cp "$INIT_EFI" out/bin/init.efi
+  cp "$INIT_EFI" out/init.efi
+  [ -f out/init.efi ] || { echo "❌ init EFI missing after build" >&2; exit 1; }
+else
+  log "⚠️ TARGET $TARGET not UEFI-compatible; skipping EFI build"
 fi
 
 log "📂 Staging boot files..."
