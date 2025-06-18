@@ -1005,3 +1005,8 @@
 - `cohesix_fetch_build.sh` builds `init.efi`, copies kernel and init into `out/`,
   invokes `scripts/make_iso.sh`, and validates OVMF firmware before running QEMU.
 
+## [v0.111] - 2025-09-14
+### Changed
+- Consolidated BusyBox build scripts into `build_busybox.sh` with cross-arch
+  support and installer options. Old `build-busybox.sh` removed.
+

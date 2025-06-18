@@ -65,7 +65,6 @@ go/orchestrator/static/serve.go
 go/internal/tooling/cli.go
 justfile
 scripts/boottrace.py
-scripts/build-busybox.sh
 scripts/build_busybox.sh
 scripts/cohtrace.py
 scripts/deploy-ci.sh
