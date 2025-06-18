@@ -3,13 +3,13 @@
 // Author: Lukas Bower
 // Date Modified: 2025-09-25
 
-pub mod config;
-pub mod logging;
 pub mod backend;
-pub mod parser;
+pub mod config;
 pub mod guard;
-pub mod rust_wrapper;
 pub mod ir;
+pub mod logging;
+pub mod parser;
+pub mod rust_wrapper;
 pub mod toolchain;
 
 use std::path::PathBuf;
@@ -19,7 +19,9 @@ use std::path::PathBuf;
 pub fn compile(source: &str) -> anyhow::Result<Vec<u8>> {
     let out = std::env::temp_dir().join("cohcc_shell.out");
     crate::compile_from_file(source, out.to_str().unwrap())?;
-    let bytes = std::fs::read(&out)?;
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"COHB");
+    bytes.push(1);
+    bytes.extend_from_slice(&std::fs::read(&out)?);
     Ok(bytes)
 }
-
