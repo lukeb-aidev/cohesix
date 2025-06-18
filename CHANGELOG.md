@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v0.75
-// Date Modified: 2025-09-19
+// Date Modified: 2025-09-20
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
 • Consolidated OSS reuse files into LICENSES_AND_REUSE.md
@@ -1040,4 +1040,10 @@
 - `scripts/make_iso.sh` copies CLI wrappers, Python modules, and runtime
   binaries into `out/iso_root`.
 - `make_iso.sh` now delegates to `scripts/make_iso.sh`.
+
+## [v0.117] - 2025-09-20
+### Added
+- Improved build logging with structured summaries in `cohesix_fetch_build.sh`.
+- Errors and test failures are extracted to `~/cohesix_logs/summary_errors.log`
+  and `summary_test_failures.log` with phase markers.
 
