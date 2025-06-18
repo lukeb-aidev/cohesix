@@ -1072,3 +1072,9 @@
 - `userland/miniroot` with basic `echo`, `help`, and `ls` utilities.
 - `tools/make_iso.sh` copies miniroot into the ISO and validates presence.
 - `rc/init.rs` binds `/miniroot` to `/` when present for interactive tests.
+
+## [v0.123] - 2025-09-23
+### Added
+- Shell loop entry via `sh_loop::run` invoked during userland bootstrap.
+### Changed
+- `userland_bootstrap.rs` now initializes runtime and rc before starting the shell.
