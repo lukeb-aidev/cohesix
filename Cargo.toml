@@ -35,7 +35,7 @@ nvml-wrapper = { version = "0.11", optional = true }
 inotify = "0.10"
 rapier3d = { version = "0.17.2", optional = true }
 ureq = "2.9"
-tokio = { version = "1", features = ["sync", "rt", "io-util", "macros"], optional = true }
+tokio = { version = "1", features = ["full"] }
 rustls-pemfile = { version = "1", optional = true }
 rustls = { version = "0.23", optional = true }
 tokio-rustls = { version = "0.26", optional = true }
@@ -82,7 +82,7 @@ rapier = ["rapier3d"]
 physics = ["rapier3d"]
 busybox = []
 joystick = ["sdl2"]
-secure9p = ["tokio", "rustls", "tokio-rustls", "jsonwebtoken", "x509-parser", "webpki-roots", "rustls-pemfile"]
+secure9p = ["rustls", "tokio-rustls", "jsonwebtoken", "x509-parser", "webpki-roots", "rustls-pemfile"]
 kernel_bin = []
 uefi = []
 # minimal_uefi: ensures only firmware-safe crates are compiled
