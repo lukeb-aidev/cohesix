@@ -1000,3 +1000,8 @@
 ### Added
 - `tools/make_iso.sh` assembles a complete Cohesix ISO including configs, CLI tools and man pages.
 
+## [v0.110] - 2025-09-13
+### Changed
+- `cohesix_fetch_build.sh` builds `init.efi`, copies kernel and init into `out/`,
+  invokes `scripts/make_iso.sh`, and validates OVMF firmware before running QEMU.
+
