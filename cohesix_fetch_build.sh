@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.13
+# Filename: cohesix_fetch_build.sh v0.14
 # Author: Lukas Bower
-# Date Modified: 2025-09-17
+# Date Modified: 2025-09-18
 #!/bin/bash
 # Fetch and fully build the Cohesix project using SSH Git auth.
 
@@ -12,40 +12,40 @@ exec 3>&1  # Save original stdout
 exec > "$LOG_FILE" 2>&1
 trap 'echo "❌ Build failed. Last 40 log lines:" >&3; tail -n 40 "$LOG_FILE" >&3' ERR
 
+log(){ echo "[$(date +%H:%M:%S)] $1" >&3; }
+
 cd "$HOME"
-echo "[1/5] 🧹 Cleaning workspace..." >&3
+log "🧹 Cleaning workspace..."
 rm -rf cohesix
 
-echo "[2/5] 📦 Cloning repository..." >&3
+log "📦 Cloning repository..."
 git clone git@github.com:lukeb-aidev/cohesix.git
 cd cohesix
 
-echo "📦 Updating submodules (if any)..."
+log "📦 Updating submodules (if any)..."
 git submodule update --init --recursive
 
-echo "[3/5] 🐍 Setting up Python environment..." >&3
-command -v python3 >/dev/null || { echo "❌ python3 not found"; exit 1; }
+log "🐍 Setting up Python environment..."
+command -v python3 >/dev/null || { echo "❌ python3 not found" >&2; exit 1; }
 python3 -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip setuptools wheel
 
-if [ -f requirements.txt ]; then
-  pip install -r requirements.txt
-fi
+[ -f requirements.txt ] && pip install -r requirements.txt
 
-echo "[4/5] 🧱 Building Rust components..." >&3
+log "🧱 Building Rust components..."
 cargo build --all-targets --release
 
 TARGET="x86_64-unknown-uefi"
-echo "🛠️ Building kernel EFI..."
-mkdir -p out/bin out/etc/cohesix out/roles
+log "🛠️ Building kernel EFI..."
+mkdir -p out/bin out/etc/cohesix out/roles out/setup
 cargo build --release --target "$TARGET" --bin kernel \
   --no-default-features --features minimal_uefi,kernel_bin
 KERNEL_EFI="target/${TARGET}/release/kernel.efi"
 [ -f "$KERNEL_EFI" ] || { echo "❌ kernel.efi missing" >&2; exit 1; }
 cp "$KERNEL_EFI" out/kernel.efi
 
-echo "🛠️ Building init EFI..."
+log "🛠️ Building init EFI..."
 cargo build --release --target "$TARGET" --bin init \
   --no-default-features --features minimal_uefi
 INIT_EFI="target/${TARGET}/release/init.efi"
@@ -53,24 +53,32 @@ if [ ! -f "$INIT_EFI" ]; then
   echo "❌ init EFI missing at $INIT_EFI" >&2
   exit 1
 fi
-mkdir -p out/bin
 cp "$INIT_EFI" out/bin/init.efi
 cp "$INIT_EFI" out/init.efi
-if [[ ! -f out/init.efi ]]; then
-  echo "❌ init EFI missing after build. Check target path or build.rs logic." >&2
-  find ./target -name '*.efi' >&2
-  exit 1
-fi
+[ -f out/init.efi ] || { echo "❌ init EFI missing after build" >&2; exit 1; }
 
+log "📂 Staging boot files..."
 for f in initfs.img plan9.ns bootargs.txt boot_trace.json; do
-  if [ -f "$f" ]; then
-    cp "$f" out/
-  fi
+  [ -f "$f" ] && cp "$f" out/
 done
 
-echo "[5/5] 📀 Creating ISO image..." >&3
-./scripts/make_iso.sh
-[ -f out/cohesix.iso ] || { echo "❌ ISO build failed" >&2; exit 1; }
+log "📂 Staging configuration..."
+[ -f setup/config.yaml ] || { echo "❌ setup/config.yaml missing" >&2; exit 1; }
+cp setup/config.yaml out/etc/cohesix/config.yaml
+if ls setup/roles/*.yaml >/dev/null 2>&1; then
+  for cfg in setup/roles/*.yaml; do
+    role="$(basename "$cfg" .yaml)"
+    mkdir -p "out/roles/$role"
+    cp "$cfg" "out/roles/$role/config.yaml"
+  done
+else
+  echo "❌ No role configs found in setup/roles" >&2
+  exit 1
+fi
+for shf in setup/init.sh setup/*.sh; do
+  [ -f "$shf" ] && cp "$shf" out/setup/
+done
+
 
 echo "🔍 Running Rust tests with detailed output..."
 TEST_LOG="$HOME/cohesix_test.log"
@@ -86,16 +94,14 @@ else
 fi
 
 if command -v go &> /dev/null; then
-  echo "🐹 Building Go components..."
-  if [ -f go.mod ]; then
-    go build ./...
-    go test ./...
-  fi
+  log "🐹 Building Go components..."
+  (cd go && go build ./...)
+  (cd go && go test ./...)
 else
-  echo "⚠️ Go not found; skipping Go build"
+  log "⚠️ Go not found; skipping Go build"
 fi
 
-echo "🐍 Running Python tests (pytest)..."
+log "🐍 Running Python tests..."
 if command -v pytest &> /dev/null; then
   pytest -v || true
 fi
@@ -103,16 +109,32 @@ if command -v flake8 &> /dev/null; then
   flake8 python tests || true
 fi
 
-echo "🧱 CMake config (if present)..."
+log "🧱 Building C components..."
 if [ -f CMakeLists.txt ]; then
-  mkdir -p build && cd build
-  cmake ..
-  make -j$(nproc)
-  ctest --output-on-failure || true
-  cd ..
+  mkdir -p build
+  (cd build && cmake .. && make -j$(nproc))
 fi
 
 echo "✅ All builds complete."
+
+log "📀 Creating ISO..."
+if [ "${VIRTUAL_ENV:-}" != "$(pwd)/.venv" ]; then
+  echo "❌ Python venv not active before ISO build" >&2
+  exit 1
+fi
+./scripts/make_iso.sh
+[ -f out/cohesix.iso ] || { echo "❌ ISO build failed" >&2; exit 1; }
+ISO_SIZE=$(stat -c %s out/cohesix.iso)
+if [ "$ISO_SIZE" -le $((1024*1024)) ]; then
+  echo "❌ ISO build incomplete or missing required tools" >&2
+  exit 1
+fi
+if command -v xorriso >/dev/null; then
+  xorriso -indev out/cohesix.iso -find / -name kernel.efi -print | grep -q kernel.efi || {
+    echo "❌ kernel.efi missing in ISO" >&2; exit 1; }
+else
+  log "⚠️ xorriso not found; skipping ISO content check"
+fi
 
 # Optional QEMU boot check
 if command -v qemu-system-x86_64 >/dev/null; then
@@ -148,6 +170,7 @@ if command -v qemu-system-x86_64 >/dev/null; then
   [ -f "$OVMF_CODE" ] || { echo "OVMF firmware not found" >&2; exit 1; }
   [ -n "$OVMF_VARS" ] || { echo "OVMF_VARS.fd not found" >&2; exit 1; }
   cp "$OVMF_VARS" "$TMPDIR/OVMF_VARS.fd"
+  log "🧪 Booting ISO in QEMU..."
   qemu-system-x86_64 \
     -bios "$OVMF_CODE" \
     -drive if=pflash,format=raw,file="$TMPDIR/OVMF_VARS.fd" \
@@ -158,13 +181,13 @@ if command -v qemu-system-x86_64 >/dev/null; then
   echo "📜 Boot log (tail):"
   tail -n 20 "$SERIAL_LOG" || echo "❌ Could not read QEMU log"
   if grep -q "BOOT_OK" "$SERIAL_LOG"; then
-    echo "✅ QEMU boot succeeded"
+    log "✅ QEMU boot succeeded"
   else
-    echo "❌ BOOT_OK not found in log"
+    echo "❌ BOOT_OK not found in log" >&2
     exit 1
   fi
 else
-  echo "⚠️ qemu-system-x86_64 not installed; skipping boot test"
+  log "⚠️ qemu-system-x86_64 not installed; skipping boot test"
 fi
 
 echo "✅ Cohesix build completed successfully." >&3
