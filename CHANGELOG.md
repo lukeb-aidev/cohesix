@@ -1062,3 +1062,8 @@
 - CI boot verification script `ci/qemu_boot_check.sh`.
 - Workflow `ci.yml` runs this script after building the project.
 
+## [v0.121] - 2025-09-22
+### Changed
+- `secure9p` feature now pulls in `tokio` as an optional dependency.
+- Cargo manifest marks `tokio` optional to avoid unnecessary compile overhead.
+
