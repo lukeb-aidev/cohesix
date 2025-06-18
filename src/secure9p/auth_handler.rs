@@ -88,7 +88,7 @@ pub fn extract_identity(
 #[cfg(all(test, feature = "secure9p"))]
 mod tests {
     use super::*;
-    use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
+    use rustls::pki_types::PrivatePkcs8KeyDer;
     use rustls::{ClientConfig, ServerConfig, RootCertStore};
     use rustls::{ClientConnection, ServerConnection};
     use std::sync::Arc;
