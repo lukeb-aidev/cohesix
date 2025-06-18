@@ -37,9 +37,31 @@ log "🐍 Setting up Python environment..."
 command -v python3 >/dev/null || { echo "❌ python3 not found" >&2; exit 1; }
 python3 -m venv .venv
 source .venv/bin/activate
-pip install --upgrade pip setuptools wheel
+# Ensure \$HOME/.local/bin is included for user installs
+export PATH="$HOME/.local/bin:$PATH"
+# Upgrade pip and base tooling; fall back to ensurepip if needed
+python -m pip install --upgrade pip setuptools wheel --break-system-packages \
+  || python -m ensurepip --upgrade
 
-[ -f requirements.txt ] && pip install -r requirements.txt
+[ -f requirements.txt ] && python -m pip install -r requirements.txt \
+  --break-system-packages || true
+
+# Install Python linters if missing
+for tool in flake8 mypy black; do
+  if ! command -v "$tool" >/dev/null 2>&1; then
+    python -m pip install "$tool" --break-system-packages || \
+      echo "⚠️ could not install $tool" >&2
+  fi
+done
+
+# Validate presence of Python files before linting
+if find python tests -name '*.py' | grep -q .; then
+  flake8 python tests || true
+  mypy python tests || true
+  black --check python tests || true
+else
+  log "ℹ️ No Python files detected; skipping lint checks"
+fi
 
 log "🧱 Building Rust components..."
 # Use provided TARGET or default to aarch64-unknown-linux-gnu
