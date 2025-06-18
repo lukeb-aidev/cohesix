@@ -1047,3 +1047,7 @@
 - Errors and test failures are extracted to `~/cohesix_logs/summary_errors.log`
   and `summary_test_failures.log` with phase markers.
 
+## [v0.118] - 2025-09-21
+### Fixed
+- `cohesix_fetch_build.sh` ensures `out/bin` exists before copying `cohcc` and validates the binary path.
+
