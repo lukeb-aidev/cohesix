@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.74
-// Date Modified: 2025-09-12
+// Filename: CHANGELOG.md v0.75
+// Date Modified: 2025-09-19
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
 • Consolidated OSS reuse files into LICENSES_AND_REUSE.md
@@ -1032,4 +1032,12 @@
 - `cohesix_fetch_build.sh` verifies all components build before running
   `make_iso.sh`, stages configuration and role files, and validates the ISO
   output size and contents.
+
+## [v0.116] - 2025-09-19
+### Added
+- `cohesix_fetch_build.sh` stages Rust, Go, and Python tools into `out/bin`
+  and prints a QEMU boot hint.
+- `scripts/make_iso.sh` copies CLI wrappers, Python modules, and runtime
+  binaries into `out/iso_root`.
+- `make_iso.sh` now delegates to `scripts/make_iso.sh`.
 
