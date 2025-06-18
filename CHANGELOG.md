@@ -1121,3 +1121,9 @@
   dummy program, ensuring `gcc` and linker functionality before building C
   components.
 
+## [v0.131] - 2025-12-01
+### Fixed
+- `cohesix_fetch_build.sh` now checks the target triple for UEFI support and
+  skips EFI builds when incompatible. Kernel and init EFI artifacts are verified
+  to be non-empty.
+
