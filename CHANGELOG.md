@@ -1016,3 +1016,8 @@
   target triple and writes all build output to `~/cohesix_build.log` for
   troubleshooting.
 
+## [v0.113] - 2025-09-16
+### Fixed
+- Hardened `open_denied_logs_violation` test to avoid PermissionDenied panics
+  by checking log and config paths before use.
+
