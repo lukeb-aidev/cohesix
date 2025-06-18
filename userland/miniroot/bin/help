@@ -1,0 +1,11 @@
+#!/bin/sh
+# CLASSIFICATION: COMMUNITY
+# Filename: help v0.1
+# Author: Lukas Bower
+# Date Modified: 2025-09-23
+cat <<END
+Available commands:
+  echo - print arguments
+  help - show this message
+  ls   - list directory
+END

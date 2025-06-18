@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: tools/make_iso.sh v0.2
+// Filename: tools/make_iso.sh v0.3
 // Author: Lukas Bower
-// Date Modified: 2025-09-21
+// Date Modified: 2025-09-23
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -24,6 +24,10 @@ fi
 
 rm -rf "$ISO_ROOT"
 mkdir -p "$ISO_ROOT"/{{bin,usr/bin,usr/share/cohesix/man,etc,roles,srv,home/cohesix,EFI/BOOT}}
+# Include optional miniroot for early shell testing
+if [ -d "$ROOT/userland/miniroot" ]; then
+    cp -a "$ROOT/userland/miniroot" "$ISO_ROOT/miniroot"
+fi
 
 # Kernel and bootloader
 cp "$KERNEL_SRC" "$ISO_ROOT/EFI/BOOT/bootx64.efi"
@@ -96,6 +100,7 @@ validate(){
     if ! check "srv/cohrole" && ! check "etc/cohrole"; then
         echo "cohrole missing"; fail=1
     fi
+    check "miniroot/bin/echo" || { echo "miniroot missing"; fail=1; }
     [ $fail -eq 0 ] || { echo "ISO validation failed"; exit 1; }
     echo "ISO validation passed"
 }
