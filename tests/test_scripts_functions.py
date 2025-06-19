@@ -4,18 +4,22 @@
 # Date Modified: 2025-07-22
 """Unit tests for Python helper scripts."""
 
+import sys
 import types
 import subprocess
 from pathlib import Path
 
-import pytest
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # noqa: E402
 
-import scripts.boottrace as boottrace
-import scripts.cohtrace as cohtrace
-import scripts.snapshot_writer as snapshot_writer
-import scripts.autorun_tests as autorun_tests
-import scripts.full_trace_audit as full_trace_audit
+import pytest  # noqa: E402
 
+import scripts.boottrace as boottrace  # noqa: E402
+import scripts.cohtrace as cohtrace  # noqa: E402
+import scripts.snapshot_writer as snapshot_writer  # noqa: E402
+import scripts.autorun_tests as autorun_tests  # noqa: E402
+import scripts.full_trace_audit as full_trace_audit  # noqa: E402
+
+worker_inference: types.ModuleType | None
 try:
     import scripts.worker_inference as worker_inference
 except ModuleNotFoundError:  # cv2 missing
@@ -34,7 +38,7 @@ def test_boottrace_log_event(tmp_path):
 
 def test_cohtrace_roundtrip(tmp_path):
     p = tmp_path / "trace.json"
-    trace = []
+    trace: list[dict[str, str]] = []
     cohtrace.log_event(trace, "e", "d")
     cohtrace.write_trace(p, trace)
     loaded = cohtrace.read_trace(p)
@@ -100,6 +104,7 @@ def test_worker_inference_run(monkeypatch, tmp_path):
             detectMultiScale=lambda *a, **kw: []
         ),
     )
+    assert worker_inference is not None
     monkeypatch.setattr(worker_inference, "cv2", dummy_cv2)
     out_file = tmp_path / "out.txt"
 

@@ -19,16 +19,16 @@ TRACE_EVENT_SCHEMA = {
 TRACE_SCHEMA = {"type": "array", "items": TRACE_EVENT_SCHEMA}
 
 
-def log_event(trace, event, detail):
+def log_event(trace: list[dict[str, str]], event: str, detail: str) -> None:
     trace.append({"event": event, "detail": detail})
 
 
-def write_trace(path: Path, trace):
+def write_trace(path: Path, trace: list[dict[str, str]]) -> None:
     with path.open("w") as f:
         json.dump(trace, f)
 
 
-def read_trace(path: Path):
+def read_trace(path: Path) -> list[dict[str, str]]:
     try:
         data = json.loads(path.read_text())
         validate(data, TRACE_SCHEMA)
@@ -37,7 +37,7 @@ def read_trace(path: Path):
         raise RuntimeError(f"invalid trace {path}: {exc}")
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("mode", choices=["record", "replay"])
     parser.add_argument("file")
@@ -45,7 +45,7 @@ def main():
 
     path = Path(args.file)
     if args.mode == "record":
-        trace = []
+        trace: list[dict[str, str]] = []
         log_event(trace, "spawn", "shell")
         write_trace(path, trace)
     else:
