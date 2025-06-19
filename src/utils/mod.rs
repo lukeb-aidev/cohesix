@@ -14,6 +14,8 @@ pub mod const_eval;
 pub mod format;
 /// Miscellaneous helper utilities.
 pub mod helpers;
+/// GPU runtime helpers.
+pub mod gpu;
 
 /// Initializes any global utilities that require boot-time setup.
 pub fn init_utils() {

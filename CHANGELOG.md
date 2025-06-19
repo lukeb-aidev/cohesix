@@ -1170,3 +1170,9 @@
 - CUDA tests check GPU availability and permissions.
 - cohesix_fetch_build.sh exports COH_PLATFORM and COH_GPU.
 - mypy and flake8 warnings resolved.
+
+## [v0.140] - 2025-12-12
+### Fixed
+- `cuda_kernel_result_file` test now uses `tempfile` paths and skips when CUDA or
+  permissions are unavailable.
+- Added `coh_check_gpu_runtime` helper for runtime GPU validation.
