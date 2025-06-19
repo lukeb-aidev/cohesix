@@ -5,10 +5,9 @@
 
 """Replay boot and service lifecycle, verifying syscall trace."""
 
-import json
 from pathlib import Path
 
-TRACE_PATH = Path('srv/trace/sim.log')
+TRACE_PATH = Path("srv/trace/sim.log")
 
 
 def main():
@@ -19,5 +18,5 @@ def main():
         print("no trace found")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

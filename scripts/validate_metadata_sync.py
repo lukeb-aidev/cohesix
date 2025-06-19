@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 # Align with repository layout
-METADATA_PATH = Path('docs/community/governance/METADATA.md')
+METADATA_PATH = Path("docs/community/governance/METADATA.md")
 
 # Regex patterns for headers
 CLASS_RE = re.compile(r"CLASSIFICATION:\s*(\w+)")
@@ -22,9 +22,9 @@ def parse_metadata(path: Path):
     with path.open() as f:
         for line in f:
             line = line.strip()
-            if not line.startswith('|') or line.startswith('|-'):
+            if not line.startswith("|") or line.startswith("|-"):
                 continue
-            cols = [c.strip() for c in line.strip('|').split('|')]
+            cols = [c.strip() for c in line.strip("|").split("|")]
             if len(cols) < 4:
                 continue
             if cols[0] == "Filename" and cols[1] == "Version":
@@ -36,22 +36,24 @@ def parse_metadata(path: Path):
 
 def check_file(filename: str, version: str, classification: str):
     search_roots = [
-        Path('.'),
-        Path('docs/community'),
-        Path('docs/private'),
-        Path('docs/man'),
-        Path('docs/devices'),
-        Path('scripts'),
-        Path('resources'),
-        Path('tests'),
+        Path("."),
+        Path("docs/community"),
+        Path("docs/private"),
+        Path("docs/man"),
+        Path("docs/devices"),
+        Path("scripts"),
+        Path("resources"),
+        Path("tests"),
     ]
-    candidates = [p for root in search_roots for p in root.rglob(filename) if p.is_file()]
+    candidates = [
+        p for root in search_roots for p in root.rglob(filename) if p.is_file()
+    ]
     if not candidates:
         return None, [f"Missing file: {filename}"]
 
     for p in candidates:
         with p.open() as f:
-            lines = [next(f, '') for _ in range(5)]
+            lines = [next(f, "") for _ in range(5)]
         found_class = None
         found_version = None
         for ln in lines:
@@ -70,7 +72,7 @@ def check_file(filename: str, version: str, classification: str):
     p = candidates[0]
     errors = []
     with p.open() as f:
-        lines = [next(f, '') for _ in range(5)]
+        lines = [next(f, "") for _ in range(5)]
     found_class = None
     found_version = None
     for ln in lines:
@@ -83,9 +85,13 @@ def check_file(filename: str, version: str, classification: str):
             if m:
                 found_version = m.group(1)
     if found_class != classification:
-        errors.append(f"{p}: classification '{found_class}' does not match expected '{classification}'")
+        errors.append(
+            f"{p}: classification '{found_class}' does not match expected '{classification}'"
+        )
     if found_version != version:
-        errors.append(f"{p}: version '{found_version}' does not match expected '{version}'")
+        errors.append(
+            f"{p}: version '{found_version}' does not match expected '{version}'"
+        )
     return p, errors
 
 

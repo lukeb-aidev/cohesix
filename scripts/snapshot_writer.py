@@ -30,11 +30,11 @@ def write_snapshot(base: Path, worker_id: str):
     snap = collect_snapshot(worker_id)
     base.mkdir(parents=True, exist_ok=True)
     path = base / f"{worker_id}.json"
-    tmp = path.with_suffix('.tmp')
+    tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(snap, indent=2))
     if tmp.stat().st_size == 0:
         tmp.unlink()
-        raise RuntimeError('snapshot write produced empty file')
+        raise RuntimeError("snapshot write produced empty file")
     tmp.replace(path)
     return path
 

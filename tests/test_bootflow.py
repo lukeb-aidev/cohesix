@@ -24,7 +24,9 @@ def test_bootflow_roles():
         srv = Path(tmp) / "srv"
         os.environ["SRV_DIR"] = str(srv)
         for role in ROLES:
-            subprocess.run(["python3", "scripts/boottrace.py", "role_detected"], check=True)
+            subprocess.run(
+                ["python3", "scripts/boottrace.py", "role_detected"], check=True
+            )
             srv.mkdir(exist_ok=True)
             (srv / "cohrole").write_text(role)
             assert (srv / "cohrole").read_text() == role
