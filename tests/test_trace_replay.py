@@ -25,7 +25,7 @@ def test_trace_replay(tmpboot):
     sys.path.append(str(Path(__file__).resolve().parents[1] / "scripts"))
     import cohtrace
 
-    events = []
+    events: list[dict[str, str]] = []
     cohtrace.log_event(events, "spawn", "busybox")
     cohtrace.log_event(events, "mount", "/srv/telemetry")
     tmp = tmpboot / "trace.trc"

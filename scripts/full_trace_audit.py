@@ -10,7 +10,7 @@ from pathlib import Path
 TRACE_PATH = Path("srv/trace/sim.log")
 
 
-def main():
+def main() -> None:
     if TRACE_PATH.exists():
         lines = TRACE_PATH.read_text().splitlines()
         print(f"trace lines: {len(lines)}")
