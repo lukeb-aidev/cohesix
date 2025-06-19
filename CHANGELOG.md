@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.78
-// Date Modified: 2025-11-30
+// Filename: CHANGELOG.md v0.79
+// Date Modified: 2025-12-04
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
 • Consolidated OSS reuse files into LICENSES_AND_REUSE.md
@@ -1138,4 +1138,10 @@
 ### Fixed
 - `cohesix_fetch_build.sh` prompts for architecture or defaults to x86_64 when
   non-interactive, exporting `COHESIX_TARGET` for all build steps.
+
+## [v0.134] - 2025-12-04
+### Fixed
+- `cohesix_fetch_build.sh` builds `cohcc` with the target triple and copies the
+  release binary from `target/${COHESIX_TARGET}/release/` to `out/bin/`. The
+  script now fails early if the binary is missing.
 
