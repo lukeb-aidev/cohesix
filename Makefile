@@ -1,6 +1,6 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Makefile v0.23
-# Date Modified: 2025-09-21
+# Filename: Makefile v0.24
+# Date Modified: 2025-12-15
 # Author: Lukas Bower
 #
 # ─────────────────────────────────────────────────────────────
@@ -16,7 +16,7 @@
 # ─────────────────────────────────────────────────────────────
 
 .PHONY: build all go-build go-test c-shims help fmt lint check \
-    boot boot-x86_64 boot-aarch64 bootloader kernel init-efi cohrun cohbuild cohtrace cohcap test
+	boot boot-x86_64 boot-aarch64 bootloader kernel init-efi cohrun cohbuild cohtrace cohcap test test-python
 
 PLATFORM ?= $(shell uname -m)
 TARGET ?= $(PLATFORM)
@@ -107,26 +107,26 @@ fmt: ## Run code formatters
 	fi
 
 lint: ## Run linters
-@cargo clippy --all-targets >/dev/null 2>&1 || \
-echo "cargo clippy failed; skipping Rust lint"
-@if command -v flake8 >/dev/null 2>&1; then \
-flake8 python tests; \
-else \
-echo "flake8 not installed"; \
-fi
-@if command -v black >/dev/null 2>&1; then \
-black --check python tests; \
-fi
-@if command -v mypy >/dev/null 2>&1; then \
-mypy --ignore-missing-imports python tests/python; \
-fi
-@if command -v gofmt >/dev/null 2>&1; then \
-gofmt -l $(shell find go -name '*.go'); \
-fi
+	@cargo clippy --all-targets >/dev/null 2>&1 || \
+	echo "cargo clippy failed; skipping Rust lint"
+	@if command -v flake8 >/dev/null 2>&1; then \
+		flake8 python tests; \
+		else \
+		echo "flake8 not installed"; \
+		fi
+		@if command -v black >/dev/null 2>&1; then \
+		black --check python tests; \
+		fi
+		@if command -v mypy >/dev/null 2>&1; then \
+		mypy --ignore-missing-imports python tests/python; \
+		fi
+		@if command -v gofmt >/dev/null 2>&1; then \
+		gofmt -l $(shell find go -name '*.go'); \
+		fi
 
 check: test ## Run full test suite
 
-.PHONY: test
+.PHONY: test test-python
 test: ## Run Rust, Python, Go and C tests
 	@echo "🦀 Rust tests …"
 	@RUST_BACKTRACE=1 cargo test --release || echo "cargo tests failed"
@@ -136,6 +136,10 @@ test: ## Run Rust, Python, Go and C tests
 	@GOWORK=$(CURDIR)/go/go.work go test ./go/... || echo "go tests failed"
 	@echo "🧱 C tests …"
 	@cd build && ctest --output-on-failure || true
+
+test-python:
+	@echo "🐍 Python tests …"
+	@pytest -v
 
 go-build: ## Vet Go workspace
 	@echo "🔧 Go vet …"

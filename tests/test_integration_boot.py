@@ -9,8 +9,6 @@ import os
 import pytest
 
 try:
-    from cohesix.cuda.runtime import CudaExecutor
-    from cohesix.sim.rapier_bridge import SimBridge, SimCommand
     from cohesix.plan9.namespace import NamespaceLoader
     from cohesix.shell import busybox_runner
 except Exception:  # pragma: no cover - skip if crate not built for Python

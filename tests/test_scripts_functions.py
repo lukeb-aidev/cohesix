@@ -4,12 +4,9 @@
 # Date Modified: 2025-07-22
 """Unit tests for Python helper scripts."""
 
-import sys
 import types
 import subprocess
 from pathlib import Path
-import builtins
-import json
 
 import pytest
 

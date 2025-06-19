@@ -4,8 +4,6 @@
 # Date Modified: 2025-07-12
 """Test live rule injection merge."""
 
-from pathlib import Path
-
 from validator import Validator
 import json
 
