@@ -1145,3 +1145,8 @@
   release binary from `target/${COHESIX_TARGET}/release/` to `out/bin/`. The
   script now fails early if the binary is missing.
 
+## [v0.135] - 2025-12-06
+### Fixed
+- `cohesix_fetch_build.sh` ensures `out/etc/cohesix/` exists before copying
+  `config/config.yaml` and stops with a clear error if the file is missing.
+

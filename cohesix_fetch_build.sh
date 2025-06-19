@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.24
+# Filename: cohesix_fetch_build.sh v0.25
 # Author: Lukas Bower
-# Date Modified: 2025-12-04
+# Date Modified: 2025-12-06
 #!/bin/bash
 # Fetch and fully build the Cohesix project using SSH Git auth.
 
@@ -117,6 +117,9 @@ for script in cohcli cohcap cohtrace cohrun cohbuild cohup cohpkg; do
   [ -f "bin/$script" ] && cp "bin/$script" "out/bin/$script"
 done
 
+# Ensure staging directories exist for config and roles
+mkdir -p out/etc/cohesix out/roles out/setup
+
 EFI_SUPPORTED=0
 case "$COHESIX_TARGET" in
   *-uefi) EFI_SUPPORTED=1 ;;
@@ -124,7 +127,6 @@ esac
 
 if [ "$EFI_SUPPORTED" -eq 1 ]; then
   log "🛠️ Building kernel EFI..."
-  mkdir -p out/bin out/etc/cohesix out/roles out/setup
   if ! cargo build --release --target "$COHESIX_TARGET" --bin kernel \
     --no-default-features --features minimal_uefi,kernel_bin; then
     echo "❌ kernel EFI build failed" >&2
@@ -155,8 +157,12 @@ for f in initfs.img plan9.ns bootargs.txt boot_trace.json; do
 done
 
 log "📂 Staging configuration..."
-[ -f setup/config.yaml ] || { echo "❌ setup/config.yaml missing" >&2; exit 1; }
-cp setup/config.yaml out/etc/cohesix/config.yaml
+mkdir -p out/etc/cohesix
+if [ ! -f config/config.yaml ]; then
+  echo "❌ config/config.yaml not found. Build cannot continue." >&2
+  exit 1
+fi
+cp config/config.yaml out/etc/cohesix/
 if ls setup/roles/*.yaml >/dev/null 2>&1; then
   for cfg in setup/roles/*.yaml; do
     role="$(basename "$cfg" .yaml)"
