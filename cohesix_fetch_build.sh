@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.27
+# Filename: cohesix_fetch_build.sh v0.28
 # Author: Lukas Bower
-# Date Modified: 2025-12-10
+# Date Modified: 2025-12-15
 #!/bin/bash
 # Fetch and fully build the Cohesix project using SSH Git auth.
 
@@ -32,16 +32,34 @@ ROOT="$(pwd)"
 
 # Detect platform and GPU availability
 COH_PLATFORM="$(uname -m)"
-if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1; then
-  COH_GPU=1
+case "$COH_PLATFORM" in
+  x86_64|amd64)
+    COH_ARCH="x86_64"
+    ;;
+  aarch64|arm64)
+    COH_ARCH="aarch64"
+    ;;
+  *)
+    COH_ARCH="$COH_PLATFORM"
+    ;;
+esac
+
+COH_GPU=0
+if command -v nvidia-smi >/dev/null 2>&1; then
+  if nvidia-smi > /tmp/nvidia_smi.log 2>&1; then
+    COH_GPU=1
+    log "nvidia-smi output:" && cat /tmp/nvidia_smi.log
+  else
+    log "nvidia-smi present but failed: $(cat /tmp/nvidia_smi.log)"
+  fi
 elif [ -c /dev/nvidia0 ]; then
   COH_GPU=1
-else
-  COH_GPU=0
+elif command -v lspci >/dev/null 2>&1 && lspci | grep -qi nvidia; then
+  COH_GPU=1
 fi
-export COH_PLATFORM
-export COH_GPU
-log "Platform: $COH_PLATFORM, GPU present: $COH_GPU"
+export COH_ARCH COH_GPU
+export COH_PLATFORM="$COH_ARCH"
+log "Detected platform: $COH_ARCH, GPU=$COH_GPU"
 
 log "📦 Updating submodules (if any)..."
 git submodule update --init --recursive

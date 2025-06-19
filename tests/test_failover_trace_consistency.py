@@ -5,11 +5,6 @@
 """Verify trace integrity during failover replay."""
 
 import json
-from pathlib import Path
-import os
-import sys
-
-sys.path.append(str(Path(__file__).resolve().parents[1]))
 from validator import trace_integrity
 
 
