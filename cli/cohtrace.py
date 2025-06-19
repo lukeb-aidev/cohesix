@@ -94,8 +94,8 @@ def compare_traces(expected: Path, actual: Path) -> bool:
     except Exception:
         cohlog("failed to parse traces")
         return False
-    exp_names = [e.get("event") for e in exp if isinstance(e, dict)]
-    act_names = [e.get("event") for e in act if isinstance(e, dict)]
+    exp_names = [str(e["event"]) for e in exp if isinstance(e, dict) and "event" in e]
+    act_names = [str(e["event"]) for e in act if isinstance(e, dict) and "event" in e]
     missing = [e for e in exp_names if e not in act_names]
     unexpected = [e for e in act_names if e not in exp_names]
     mismatched_ts = []
@@ -106,7 +106,7 @@ def compare_traces(expected: Path, actual: Path) -> bool:
             continue
         if "ts" in ee and "ts" in ae:
             if abs(float(ee["ts"]) - float(ae["ts"])) > 1.0:
-                mismatched_ts.append(ee.get("event"))
+                mismatched_ts.append(str(ee.get("event")))
     if missing:
         cohlog("missing events: " + ",".join(missing))
     if unexpected:

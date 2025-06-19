@@ -7,10 +7,11 @@ import json
 import os
 import time
 from pathlib import Path
+from typing import Any
 
 
-def collect_snapshot(worker_id: str) -> dict:
-    snap = {"worker_id": worker_id, "timestamp": int(time.time())}
+def collect_snapshot(worker_id: str) -> dict[str, Any]:
+    snap: dict[str, Any] = {"worker_id": worker_id, "timestamp": int(time.time())}
     world = Path("/sim/world.json")
     if world.exists():
         try:
