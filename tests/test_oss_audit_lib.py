@@ -4,8 +4,12 @@
 # Date Modified: 2025-07-22
 """Unit tests for OSS audit helpers."""
 
+from pathlib import Path
+import sys
 import pytest
-from tools.oss_audit import security_check, license_fetch, scan
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # noqa: E402
+from tools.oss_audit import security_check, license_fetch, scan  # noqa: E402
 
 tomli = pytest.importorskip("tomli", reason="tomli not installed")
 

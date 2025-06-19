@@ -40,7 +40,7 @@ def write_snapshot(base: Path, worker_id: str):
     return path
 
 
-def main():
+def main() -> None:
     worker_id = os.environ.get("WORKER_ID", "local")
     out_dir = Path(os.environ.get("SNAPSHOT_BASE", "/history/snapshots"))
     while True:
