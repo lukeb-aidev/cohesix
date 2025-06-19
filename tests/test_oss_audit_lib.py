@@ -4,15 +4,10 @@
 # Date Modified: 2025-07-22
 """Unit tests for OSS audit helpers."""
 
-import json
-from pathlib import Path
-import types
-import subprocess
-
 import pytest
+from tools.oss_audit import security_check, license_fetch, scan
 
 tomli = pytest.importorskip("tomli", reason="tomli not installed")
-from tools.oss_audit import security_check, license_fetch, scan
 
 
 def test_parse_spdx_header(tmp_path):

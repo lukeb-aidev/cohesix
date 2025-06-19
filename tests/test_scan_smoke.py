@@ -5,9 +5,7 @@
 """Smoke test for OSS audit scanner."""
 
 import subprocess
-from pathlib import Path
 import json
-import os
 import sys
 
 

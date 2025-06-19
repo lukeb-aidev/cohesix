@@ -6,7 +6,6 @@
 
 
 def test_snapshot_roundtrip(tmp_path):
-    data = {"a": 1}
     path = tmp_path / "snap.json"
     path.write_text('{"a":1}')
     text = path.read_text()
