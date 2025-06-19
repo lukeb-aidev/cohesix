@@ -20,11 +20,11 @@ mapping = {
 }
 
 
-def build(src: Path, dst: Path):
+def build(src: Path, dst: Path) -> None:
     subprocess.run(["pandoc", "-s", "-t", "man", str(src), "-o", str(dst)], check=True)
 
 
-def main():
+def main() -> None:
     for md, man in mapping.items():
         src = DOCS / md
         dst = MAN / man

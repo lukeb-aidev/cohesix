@@ -10,7 +10,7 @@ import os
 import subprocess
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--role", action="append")
     args = parser.parse_args()

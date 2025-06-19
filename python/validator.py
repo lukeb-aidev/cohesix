@@ -114,7 +114,7 @@ def _load_rule(path: Path) -> dict:
 class Validator:
     """Runtime validator supporting rule chains with timeouts."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.rules: list[dict] = []
 
     def inject_rule(self, path: Path) -> None:

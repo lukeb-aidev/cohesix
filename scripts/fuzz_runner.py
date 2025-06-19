@@ -16,7 +16,7 @@ def run_trace(trace: Path) -> str:
     return result.stdout.decode("utf-8") + result.stderr.decode("utf-8")
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", required=True)
     parser.add_argument("--role", required=True)

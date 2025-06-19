@@ -96,7 +96,7 @@ def check_file(filename: str, version: str, classification: str):
     return p, errors
 
 
-def main():
+def main() -> None:
     entries = parse_metadata(METADATA_PATH)
     all_errors = []
     for filename, version, classification in entries:

@@ -21,7 +21,7 @@ def log_event(evt: str) -> None:
         fh.write(f"{ts:.6f} {evt}\n")
 
 
-def main():
+def main() -> None:
     if len(sys.argv) < 2:
         print("usage: boottrace.py <event> [...]", file=sys.stderr)
         sys.exit(1)
