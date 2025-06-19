@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: validator.py v0.6
+# Filename: validator.py v0.7
 # Author: Lukas Bower
-# Date Modified: 2025-09-09
+# Date Modified: 2025-12-10
 """Python-side validation helpers with live rule updates."""
 
 import json
@@ -13,11 +13,9 @@ from pathlib import Path
 from jsonschema import ValidationError, validate
 
 try:
-    import tomllib as _tomllib  # Python 3.11+
+    import tomllib as tomllib  # Python 3.11+
 except ModuleNotFoundError:  # pragma: no cover - fallback for older Python
-    import tomli as _tomllib
-
-tomllib = _tomllib
+    import tomli as tomllib  # type: ignore
 
 logger = logging.getLogger(__name__)
 
