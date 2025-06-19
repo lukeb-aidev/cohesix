@@ -8,9 +8,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 import urllib.request
 from pathlib import Path
+from typing import Any, cast
 import tomli
 
 from .license_fetch import fetch_license_text
@@ -57,13 +57,13 @@ def generate_outputs(deps: list[dict], outdir: Path) -> None:
     license_dir = outdir / "LICENSES"
     license_dir.mkdir(exist_ok=True)
 
-    sbom_spdx = {
+    sbom_spdx: dict[str, Any] = {
         "SPDXID": "SPDXRef-DOCUMENT",
         "spdxVersion": "SPDX-2.3",
         "name": "Cohesix OSS SBOM",
         "packages": [],
     }
-    sbom_cdx = {
+    sbom_cdx: dict[str, Any] = {
         "bomFormat": "CycloneDX",
         "specVersion": "1.5",
         "version": 1,
@@ -107,7 +107,7 @@ def generate_outputs(deps: list[dict], outdir: Path) -> None:
         vulns = query_osv("crates.io", name, version)
         cve_summary = ", ".join(v["id"] for v in vulns) if vulns else ""
 
-        sbom_spdx["packages"].append(
+        cast(list, sbom_spdx["packages"]).append(
             {
                 "name": name,
                 "SPDXID": f"SPDXRef-{name}",
@@ -117,7 +117,7 @@ def generate_outputs(deps: list[dict], outdir: Path) -> None:
                 "checksums": [{"alg": "SHA256", "checksumValue": sha}],
             }
         )
-        sbom_cdx["components"].append(
+        cast(list, sbom_cdx["components"]).append(
             {
                 "type": "library",
                 "name": name,
@@ -128,7 +128,8 @@ def generate_outputs(deps: list[dict], outdir: Path) -> None:
         )
         md_lines.append(f"| {name} | {version} | {license_id} |")
         matrix_lines.append(
-            f"| {name} | {version} | {license_id} | LICENSES/{lic_file.name} | {cve_summary} |"
+            f"| {name} | {version} | {license_id} | LICENSES/{lic_file.name} | "
+            f"{cve_summary} |"
         )
 
     (outdir / "OPEN_SOURCE_DEPENDENCIES.md").write_text("\n".join(md_lines))
