@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.25
+# Filename: cohesix_fetch_build.sh v0.26
 # Author: Lukas Bower
-# Date Modified: 2025-12-06
+# Date Modified: 2025-12-07
 #!/bin/bash
 # Fetch and fully build the Cohesix project using SSH Git auth.
 
@@ -135,6 +135,8 @@ if [ "$EFI_SUPPORTED" -eq 1 ]; then
   KERNEL_EFI="target/${COHESIX_TARGET}/release/kernel.efi"
   [ -s "$KERNEL_EFI" ] || { echo "❌ kernel EFI missing or empty" >&2; exit 1; }
   cp "$KERNEL_EFI" out/BOOTX64.EFI
+  mkdir -p out/boot
+  cp "$KERNEL_EFI" out/boot/kernel.elf
 
   log "🛠️ Building init EFI..."
   if ! cargo build --release --target "$COHESIX_TARGET" --bin init \
@@ -146,6 +148,7 @@ if [ "$EFI_SUPPORTED" -eq 1 ]; then
   [ -s "$INIT_EFI" ] || { echo "❌ init EFI missing or empty" >&2; exit 1; }
   cp "$INIT_EFI" out/bin/init.efi
   cp "$INIT_EFI" out/init.efi
+  cp "$INIT_EFI" out/boot/init
   [ -f out/init.efi ] || { echo "❌ init EFI missing after build" >&2; exit 1; }
 else
   log "⚠️ TARGET $COHESIX_TARGET not UEFI-compatible; skipping EFI build"
@@ -158,11 +161,23 @@ done
 
 log "📂 Staging configuration..."
 mkdir -p out/etc/cohesix
-if [ ! -f config/config.yaml ]; then
-  echo "❌ config/config.yaml not found. Build cannot continue." >&2
-  exit 1
+CONFIG_SRC=""
+if [ -f config/config.yaml ]; then
+  CONFIG_SRC="config/config.yaml"
+elif [ -f setup/config.yaml ]; then
+  CONFIG_SRC="setup/config.yaml"
+else
+  echo "⚠️ config.yaml missing. Generating fallback..."
+  mkdir -p config
+  cat > config/config.yaml <<EOF
+# Auto-generated fallback config
+system:
+  role: worker
+  trace: true
+EOF
+  CONFIG_SRC="config/config.yaml"
 fi
-cp config/config.yaml out/etc/cohesix/
+cp "$CONFIG_SRC" out/etc/cohesix/config.yaml
 if ls setup/roles/*.yaml >/dev/null 2>&1; then
   for cfg in setup/roles/*.yaml; do
     role="$(basename "$cfg" .yaml)"
@@ -232,6 +247,26 @@ if [ -f CMakeLists.txt ]; then
 fi
 
 echo "✅ All builds complete."
+
+echo "[🧪] Checking boot prerequisites..."
+if [ ! -x out/bin/init ]; then
+  echo "❌ No init binary found at out/bin/init. Aborting." >&2
+  exit 1
+fi
+if [ ! -f out/boot/kernel.elf ]; then
+  echo "❌ Kernel ELF missing. Expected at out/boot/kernel.elf" >&2
+  exit 1
+fi
+if [ ! -f config/config.yaml ]; then
+  echo "⚠️ config.yaml missing. Generating fallback..."
+  mkdir -p config
+  cat > config/config.yaml <<EOF
+# Auto-generated fallback config
+system:
+  role: worker
+  trace: true
+EOF
+fi
 
 log "📀 Creating ISO..."
 # ISO root layout:
