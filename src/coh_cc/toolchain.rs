@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: toolchain.rs v0.2
+// Filename: toolchain.rs v0.3
 // Author: Lukas Bower
-// Date Modified: 2025-07-18
+// Date Modified: 2025-12-09
 
 use std::path::{Path, PathBuf};
 
@@ -19,8 +19,16 @@ impl Toolchain {
             anyhow::bail!("toolchain directory cannot be empty");
         }
         let canon = base.canonicalize().unwrap_or(base.clone());
-        if !canon.starts_with("/mnt/data") {
-            anyhow::bail!("toolchain directory must be under /mnt/data");
+        let allowed_root =
+            std::env::var("COHESIX_TOOLCHAIN_ROOT").unwrap_or_else(|_| "/mnt/data".into());
+        let allowed_root = Path::new(&allowed_root)
+            .canonicalize()
+            .unwrap_or_else(|_| PathBuf::from(allowed_root));
+        if !canon.starts_with(&allowed_root) {
+            anyhow::bail!(
+                "toolchain directory must be under {}",
+                allowed_root.display()
+            );
         }
         Ok(Toolchain { base: canon })
     }
