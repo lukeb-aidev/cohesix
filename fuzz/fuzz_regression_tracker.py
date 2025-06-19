@@ -6,7 +6,6 @@
 
 """Track fuzz traces that cause regressions and rerun them before merge."""
 
-import os
 import subprocess
 from pathlib import Path
 
@@ -20,11 +19,11 @@ def track(trace_path: str):
     if res.returncode != 0 or b"panic" in res.stdout or b"panic" in res.stderr:
         target = CONFIRMED / p.name
         if not target.exists():
-            tmp = target.with_suffix('.tmp')
+            tmp = target.with_suffix(".tmp")
             tmp.write_text(p.read_text())
             if tmp.stat().st_size == 0:
                 tmp.unlink()
-                raise RuntimeError('regression trace empty')
+                raise RuntimeError("regression trace empty")
             tmp.replace(target)
 
 
@@ -40,5 +39,6 @@ def rerun_confirmed() -> bool:
 
 if __name__ == "__main__":
     import sys
+
     if len(sys.argv) > 1:
         track(sys.argv[1])

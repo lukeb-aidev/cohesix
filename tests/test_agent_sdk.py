@@ -4,8 +4,6 @@
 # Date Modified: 2025-07-15
 
 import os
-import json
-import sys
 
 
 def test_agent_context_defaults(tmp_path, monkeypatch):
@@ -17,6 +15,7 @@ def test_agent_context_defaults(tmp_path, monkeypatch):
 
     import importlib
     import agent_sdk
+
     importlib.reload(agent_sdk)
     from agent_sdk import AgentContext
 
@@ -40,6 +39,7 @@ def test_role_lifecycle_boot(tmp_path, monkeypatch):
 
     import importlib
     import agent_sdk
+
     importlib.reload(agent_sdk)
     from agent_sdk import AgentContext
 
@@ -64,6 +64,7 @@ def test_simulated_migration(monkeypatch, tmp_path):
 
     import importlib
     import agent_sdk
+
     importlib.reload(agent_sdk)
     from agent_sdk import AgentContext
 

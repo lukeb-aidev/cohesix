@@ -11,7 +11,7 @@ import subprocess
 
 import pytest
 
-tomli = pytest.importorskip('tomli', reason='tomli not installed')
+tomli = pytest.importorskip("tomli", reason="tomli not installed")
 from tools.oss_audit import security_check, license_fetch, scan
 
 
@@ -41,10 +41,17 @@ def test_validate_licenses(tmp_path):
 def test_query_osv(monkeypatch):
     def fake_urlopen(req):
         class R:
-            def __enter__(self): return self
-            def __exit__(self, *a): pass
-            def read(self): return b'{"vulns": []}'
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+            def read(self):
+                return b'{"vulns": []}'
+
         return R()
+
     monkeypatch.setattr(security_check.urllib.request, "urlopen", fake_urlopen)
     vulns = security_check.query_osv("crates.io", "foo", "0.1")
     assert vulns == []
@@ -58,7 +65,7 @@ def test_fetch_license_text(monkeypatch, tmp_path):
 
 def test_parse_cargo_toml(tmp_path):
     toml = tmp_path / "Cargo.toml"
-    toml.write_text("[dependencies]\nfoo = \"0.1\"")
+    toml.write_text('[dependencies]\nfoo = "0.1"')
     deps = scan.parse_cargo_toml(toml)
     assert deps == [("foo", "0.1", "https://crates.io/crates/foo")]
 
@@ -66,7 +73,7 @@ def test_parse_cargo_toml(tmp_path):
 def test_scan_paths(tmp_path):
     d = tmp_path / "pkg"
     d.mkdir()
-    (d / "Cargo.toml").write_text("[dependencies]\nfoo=\"0.1\"")
+    (d / "Cargo.toml").write_text('[dependencies]\nfoo="0.1"')
     res = scan.scan_paths([str(tmp_path)])
     assert res[0]["name"] == "foo"
 
@@ -80,8 +87,11 @@ def test_generate_outputs(monkeypatch, tmp_path):
 
 
 def test_run_audit(monkeypatch, tmp_path):
-    monkeypatch.setattr(scan, "scan_paths", lambda p: [{"name": "foo", "version": "0.1", "source": "u"}])
-    monkeypatch.setattr(scan, "generate_outputs", lambda deps, out: out.mkdir(exist_ok=True))
+    monkeypatch.setattr(
+        scan, "scan_paths", lambda p: [{"name": "foo", "version": "0.1", "source": "u"}]
+    )
+    monkeypatch.setattr(
+        scan, "generate_outputs", lambda deps, out: out.mkdir(exist_ok=True)
+    )
     scan.run_audit(["."], str(tmp_path))
     assert tmp_path.exists()
-

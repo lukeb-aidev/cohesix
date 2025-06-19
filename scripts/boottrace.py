@@ -3,7 +3,7 @@
 # Author: Lukas Bower
 # Date Modified: 2025-06-17
 
-#!/usr/bin/env python3
+#!/usr/bin/env python3  # noqa: E265
 """Boot-time event logger."""
 
 import os

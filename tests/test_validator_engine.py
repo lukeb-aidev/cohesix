@@ -6,8 +6,6 @@
 
 import json
 import time
-import os
-import sys
 from pathlib import Path
 
 from validator import Validator

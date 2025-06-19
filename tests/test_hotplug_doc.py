@@ -6,8 +6,9 @@
 
 from pathlib import Path
 
-DOC = Path('docs/devices/HOTPLUG.md')
+DOC = Path("docs/devices/HOTPLUG.md")
+
 
 def test_hotplug_doc_exists():
-    assert DOC.exists(), 'HOTPLUG.md must exist'
-    assert DOC.read_text().strip(), 'HOTPLUG.md should not be empty'
+    assert DOC.exists(), "HOTPLUG.md must exist"
+    assert DOC.read_text().strip(), "HOTPLUG.md should not be empty"

@@ -12,5 +12,7 @@ def test_infer_loop(tmp_path):
     log = tmp_path / "infer.log"
     env = os.environ.copy()
     env["INFER_CONF"] = "motion"
-    subprocess.run(["python3", "-m", "cohesix.webcam.worker_inference"], env=env, check=False)
+    subprocess.run(
+        ["python3", "-m", "cohesix.webcam.worker_inference"], env=env, check=False
+    )
     assert True

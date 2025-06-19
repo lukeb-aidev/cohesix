@@ -9,9 +9,12 @@ import os
 import subprocess
 from pathlib import Path
 
+
 def test_cohrun_inject_rule(tmp_path, monkeypatch):
     rule = tmp_path / "rule.json"
-    rule.write_text(json.dumps({"conditions": [{"sensor": "t", "op": ">", "threshold": 1}]}))
+    rule.write_text(
+        json.dumps({"conditions": [{"sensor": "t", "op": ">", "threshold": 1}]})
+    )
 
     script = tmp_path / "dummy_bin.py"
     script.write_text(
@@ -24,9 +27,18 @@ def test_cohrun_inject_rule(tmp_path, monkeypatch):
     )
     script.chmod(0o755)
 
-    validator_dir = tmp_path / 'validator'
-    env = dict(os.environ, COHRUN_BIN=str(script), VALIDATOR_DIR=str(validator_dir), COHESIX_LOG=str(tmp_path / 'log'))
-    subprocess.run(["python3", "cli/cohrun.py", "inject-rule", "--from", str(rule)], env=env, check=True)
+    validator_dir = tmp_path / "validator"
+    env = dict(
+        os.environ,
+        COHRUN_BIN=str(script),
+        VALIDATOR_DIR=str(validator_dir),
+        COHESIX_LOG=str(tmp_path / "log"),
+    )
+    subprocess.run(
+        ["python3", "cli/cohrun.py", "inject-rule", "--from", str(rule)],
+        env=env,
+        check=True,
+    )
     assert (validator_dir / "inject_rule").exists()
     data = (validator_dir / "inject_rule").read_text()
     assert "sensor" in data

@@ -18,6 +18,7 @@ import scripts.cohtrace as cohtrace
 import scripts.snapshot_writer as snapshot_writer
 import scripts.autorun_tests as autorun_tests
 import scripts.full_trace_audit as full_trace_audit
+
 try:
     import scripts.worker_inference as worker_inference
 except ModuleNotFoundError:  # cv2 missing
@@ -70,8 +71,10 @@ def test_autorun_snapshot(tmp_path, monkeypatch):
 
 def test_autorun_run_tests(monkeypatch):
     calls = []
+
     def fake_run(cmd, check=False):
         calls.append(tuple(cmd))
+
     monkeypatch.setattr(subprocess, "run", fake_run)
     autorun_tests.run_tests()
     assert any(cmd[0] == "cargo" for cmd in calls)
@@ -92,17 +95,21 @@ def test_worker_inference_run(monkeypatch, tmp_path):
     class DummyCap:
         def read(self):
             return False, None
+
     cap = DummyCap()
     dummy_cv2 = types.SimpleNamespace(
         VideoCapture=lambda p: cap,
-        CascadeClassifier=lambda p: types.SimpleNamespace(detectMultiScale=lambda *a, **kw: [])
+        CascadeClassifier=lambda p: types.SimpleNamespace(
+            detectMultiScale=lambda *a, **kw: []
+        ),
     )
     monkeypatch.setattr(worker_inference, "cv2", dummy_cv2)
     out_file = tmp_path / "out.txt"
+
     def fake_open(path, mode="r"):
         assert path == "/srv/infer/out"
         return open(out_file, "w")
+
     monkeypatch.setattr(worker_inference, "open", fake_open)
     worker_inference.run()
     assert out_file.exists()
-
