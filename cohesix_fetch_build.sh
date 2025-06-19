@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.23
+# Filename: cohesix_fetch_build.sh v0.24
 # Author: Lukas Bower
-# Date Modified: 2025-12-03
+# Date Modified: 2025-12-04
 #!/bin/bash
 # Fetch and fully build the Cohesix project using SSH Git auth.
 
@@ -90,7 +90,7 @@ else
   log "⚠️ rustup not found; assuming ${COHESIX_TARGET} toolchain is installed"
 fi
 
-cargo build --all-targets --release --target "${COHESIX_TARGET}" --features secure9p
+cargo build --release --target "${COHESIX_TARGET}" --bin cohcc --features secure9p
 grep -Ei 'error|fail|panic|permission denied|warning' "$LOG_FILE" > "$SUMMARY_ERRORS" || true
 
 # Ensure output directory exists before copying Rust binaries
@@ -98,16 +98,17 @@ mkdir -p out/bin
 
 # Confirm cohcc built successfully before copying
 rm -f out/bin/cohcc
-if [[ -f target/release/cohcc ]]; then
-  cp target/release/cohcc out/bin/cohcc
+COHCC_PATH="target/${COHESIX_TARGET}/release/cohcc"
+if [[ -f "$COHCC_PATH" ]]; then
+  cp "$COHCC_PATH" out/bin/cohcc
 else
-  echo "❌ cohcc not found at expected location" >&2
+  echo "❌ cohcc not found at $COHCC_PATH" >&2
   exit 1
 fi
 
 # Copy other Rust CLI binaries into out/bin for ISO staging
 for bin in cohbuild cohcap cohtrace cohrun_cli; do
-  BIN_PATH="target/release/$bin"
+  BIN_PATH="target/${COHESIX_TARGET}/release/$bin"
   [ -f "$BIN_PATH" ] && cp "$BIN_PATH" "out/bin/$bin"
 done
 
