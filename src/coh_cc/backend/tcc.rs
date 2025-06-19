@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: tcc.rs v0.4
+// Filename: tcc.rs v0.5
 // Author: Lukas Bower
-// Date Modified: 2025-07-18
+// Date Modified: 2025-12-09
 
 use std::fs::{self, File};
 use std::io::Write;
@@ -27,7 +27,9 @@ impl CompilerBackend for TccBackend {
         if !["x86_64-linux-musl", "aarch64-linux-musl"].contains(&target) {
             anyhow::bail!("unsupported target {target}");
         }
-        if !sysroot.starts_with("/mnt/data") || !sysroot.exists() {
+        let allowed_root =
+            std::env::var("COHESIX_TOOLCHAIN_ROOT").unwrap_or_else(|_| "/mnt/data".into());
+        if !sysroot.starts_with(&allowed_root) || !sysroot.exists() {
             anyhow::bail!("invalid sysroot");
         }
         if let Some(parent) = out_path.parent() {
