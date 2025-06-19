@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: AGENTS.md v2.2
+// Filename: AGENTS.md v2.3
 // Author: Lukas Bower
-// Date Modified: 2025-06-15
+// Date Modified: 2025-06-19
 
 # Codex Agent Tasks
 This file contains Codex-executable tasks for the Cohesix system.
@@ -45,11 +45,23 @@ Input: src/, cli/, tools/
 Output: log/trace_snapshot_check.md
 Checks: Snapshot files emitted. Trace logs present. Paths respect environment constraints.
 
+### Task Title: Check Watchdog Heartbeat Logs
+Description: Ensure watchdog heartbeats are recorded every 5 minutes and recovery attempts are logged.
+Input: log/watchdog/
+Output: log/watchdog_policy_check.md
+Checks: Heartbeat intervals ≤ 5 minutes. Restart logs present for any stalled tasks.
+
+### Task Title: Verify Role Policy Alignment
+Description: Confirm that runtime role declarations match the entries in ROLE_POLICY.md and that `/srv/cohrole` exposes a valid role.
+Input: docs/community/governance/ROLE_POLICY.md, /srv/cohrole
+Output: log/role_policy_check.md
+Checks: `/srv/cohrole` value exists in ROLE_POLICY.md table. No missing or unknown roles.
+
 ## Related Documents
 Include references to supporting files to help Codex agents resolve context. Minimum recommended:
-docs/community/INSTRUCTION_BLOCK.md
-docs/community/END_USER_DEMOS.md
-docs/community/COMMERCIAL_PLAN.md
+docs/community/governance/INSTRUCTION_BLOCK.md
+docs/community/planning/DEMO_SCENARIOS.md
+docs/private/COMMERCIAL_PLAN.md
 
 ## Execution Notes
 Codex is automatically triggered by GitHub Actions.
