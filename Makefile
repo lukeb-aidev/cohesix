@@ -107,16 +107,22 @@ fmt: ## Run code formatters
 	fi
 
 lint: ## Run linters
-	@cargo clippy --all-targets >/dev/null 2>&1 || \
-	echo "cargo clippy failed; skipping Rust lint"
-	@if command -v flake8 >/dev/null 2>&1; then \
-	flake8 python tests; \
-	else \
-	echo "flake8 not installed"; \
-	fi
-	@if command -v gofmt >/dev/null 2>&1; then \
-	gofmt -l $(shell find go -name '*.go'); \
-	fi
+@cargo clippy --all-targets >/dev/null 2>&1 || \
+echo "cargo clippy failed; skipping Rust lint"
+@if command -v flake8 >/dev/null 2>&1; then \
+flake8 python tests; \
+else \
+echo "flake8 not installed"; \
+fi
+@if command -v black >/dev/null 2>&1; then \
+black --check python tests; \
+fi
+@if command -v mypy >/dev/null 2>&1; then \
+mypy --ignore-missing-imports python tests/python; \
+fi
+@if command -v gofmt >/dev/null 2>&1; then \
+gofmt -l $(shell find go -name '*.go'); \
+fi
 
 check: test ## Run full test suite
 

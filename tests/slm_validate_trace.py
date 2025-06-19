@@ -6,13 +6,12 @@
 # SLM Action: validate
 # Target: trace
 
-import json
 from pathlib import Path
 from scripts import cohtrace
 
 trace = []
-cohtrace.log_event(trace, 'spawn', 'demo')
-path = Path('slm.trc')
+cohtrace.log_event(trace, "spawn", "demo")
+path = Path("slm.trc")
 cohtrace.write_trace(path, trace)
 reloaded = cohtrace.read_trace(path)
 assert reloaded == trace

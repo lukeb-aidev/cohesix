@@ -6,7 +6,9 @@
 """Sensor normalization utilities with smoothing and anomaly detection."""
 
 from __future__ import annotations
+
 import time
+
 
 class SensorNormalizer:
     """Low-pass filter normalizer with anomaly flags."""

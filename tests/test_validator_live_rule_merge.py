@@ -5,9 +5,6 @@
 """Test live rule injection merge."""
 
 from pathlib import Path
-import os
-import sys
-from pathlib import Path
 
 from validator import Validator
 import json
@@ -26,4 +23,3 @@ def test_validator_live_rule_merge(tmp_path):
     for _ in range(2):
         assert v.evaluate("accelerometer", 1.3)
     assert not v.evaluate("accelerometer", 1.3)
-

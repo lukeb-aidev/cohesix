@@ -12,12 +12,13 @@ import os
 
 BASE = os.environ.get("COH_BASE", "")
 
+
 class AgentContext:
     """Access runtime metadata and world snapshot."""
 
     def __init__(self):
-        self.role = self._read_text(f"{BASE}/srv/agent_meta/role.txt") or 'Unknown'
-        self.uptime = self._read_text(f"{BASE}/srv/agent_meta/uptime.txt") or '0'
+        self.role = self._read_text(f"{BASE}/srv/agent_meta/role.txt") or "Unknown"
+        self.uptime = self._read_text(f"{BASE}/srv/agent_meta/uptime.txt") or "0"
         self.last_goal = self._read_json(f"{BASE}/srv/agent_meta/last_goal.json")
         self.world_snapshot = self._read_json(f"{BASE}/srv/world_state/world.json")
 
@@ -37,4 +38,5 @@ class AgentContext:
         except json.JSONDecodeError:
             return {}
 
-__all__ = ['AgentContext']
+
+__all__ = ["AgentContext"]

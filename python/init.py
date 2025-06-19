@@ -3,4 +3,4 @@
 # Author: Lukas Bower
 # Date Modified: 2025-07-22
 """Compatibility module for legacy imports."""
-from .validator import *
+from .validator import *  # noqa: F401,F403

@@ -24,5 +24,5 @@ def test_parse_toml(tmp_path: Path) -> None:
     p.write_text("""[[conditions]]\nsensor='s'\nop='>'\nthreshold=1\n""")
     v = Validator()
     v.inject_rule(p)
-    assert v.evaluate('s', 2) is False
-    assert v.evaluate('s', 0) is True
+    assert v.evaluate("s", 2) is False
+    assert v.evaluate("s", 0) is True

@@ -3,7 +3,7 @@
 # Author: Lukas Bower
 # Date Modified: 2025-07-14
 
-#!/usr/bin/env python3
+#!/usr/bin/env python3  # noqa: E265
 """Continuous test runner for Cohesix.
 
 Watches the workspace for file modifications and automatically
@@ -48,8 +48,9 @@ def watch(interval: float) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Auto-run tests on changes")
-    parser.add_argument("--interval", type=float, default=1.0,
-                        help="Polling interval in seconds")
+    parser.add_argument(
+        "--interval", type=float, default=1.0, help="Polling interval in seconds"
+    )
     args = parser.parse_args()
     watch(args.interval)
 

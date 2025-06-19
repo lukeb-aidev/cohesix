@@ -5,13 +5,14 @@
 """Run trace fuzzing iterations and report failures."""
 
 import argparse
-import json
 import subprocess
 from pathlib import Path
 
 
 def run_trace(trace: Path) -> str:
-    result = subprocess.run(["python3", "scripts/cohtrace.py", "replay", str(trace)], capture_output=True)
+    result = subprocess.run(
+        ["python3", "scripts/cohtrace.py", "replay", str(trace)], capture_output=True
+    )
     return result.stdout.decode("utf-8") + result.stderr.decode("utf-8")
 
 
@@ -28,19 +29,22 @@ def main():
 
     for i in range(args.iterations):
         out_file = input_path.with_suffix(f".{i}.fuzz.trc")
-        subprocess.run([
-            "cargo",
-            "run",
-            "-p",
-            "cohfuzz",
-            "--",
-            "--input",
-            str(input_path),
-            "--role",
-            args.role,
-            "--iterations",
-            "1",
-        ], check=True)
+        subprocess.run(
+            [
+                "cargo",
+                "run",
+                "-p",
+                "cohfuzz",
+                "--",
+                "--input",
+                str(input_path),
+                "--role",
+                args.role,
+                "--iterations",
+                "1",
+            ],
+            check=True,
+        )
         log = run_trace(out_file)
         if any(word in log for word in ["panic", "unauthorized", "trap"]):
             with open(log_dir / f"fail_{i}.log", "w") as f:

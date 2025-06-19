@@ -13,7 +13,9 @@ import pytest
 
 
 def test_traceflow(tmp_path):
-    env = dict(os.environ, CAP_BASE=str(tmp_path / "caps"), COHESIX_LOG=str(tmp_path / "log"))
+    env = dict(
+        os.environ, CAP_BASE=str(tmp_path / "caps"), COHESIX_LOG=str(tmp_path / "log")
+    )
     log_dir = Path(env["COHESIX_LOG"])
     log_dir.mkdir(parents=True, exist_ok=True)
     trace_root = tmp_path / "trace"
@@ -28,11 +30,34 @@ def test_traceflow(tmp_path):
             pytest.skip("insufficient permissions to modify /trace")
     os.symlink(trace_root, "/trace")
 
-    subprocess.run(["python3", str(Path("cli/cohcap.py").resolve()), "grant", "camera", "--to", "w1"], env=env, check=True)
-    subprocess.run(["python3", str(Path("cli/cohcli.py").resolve()), "boot", "DroneWorker"], check=True)
+    subprocess.run(
+        [
+            "python3",
+            str(Path("cli/cohcap.py").resolve()),
+            "grant",
+            "camera",
+            "--to",
+            "w1",
+        ],
+        env=env,
+        check=True,
+    )
+    subprocess.run(
+        ["python3", str(Path("cli/cohcli.py").resolve()), "boot", "DroneWorker"],
+        check=True,
+    )
     trace = tmp_path / "trace.json"
     trace.write_text('{"frames": []}')
-    subprocess.run(["python3", str(Path("cli/cohtrace.py").resolve()), "push_trace", "w1", str(trace)], check=True)
+    subprocess.run(
+        [
+            "python3",
+            str(Path("cli/cohtrace.py").resolve()),
+            "push_trace",
+            "w1",
+            str(trace),
+        ],
+        check=True,
+    )
     out = trace_root / "w1" / "sim.json"
     assert out.exists()
     assert out.read_text().strip() == '{"frames": []}'

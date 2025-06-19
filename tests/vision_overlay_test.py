@@ -11,12 +11,10 @@ from pathlib import Path
 
 
 def test_vision_overlay_cli():
-    cli = Path(__file__).resolve().parents[1] / 'cli' / 'cohcli.py'
-    result = subprocess.run([
-        sys.executable,
-        str(cli),
-        'vision-overlay',
-        '--agent=test'
-    ], capture_output=True, text=True)
-    assert 'vision overlay' in result.stdout
-
+    cli = Path(__file__).resolve().parents[1] / "cli" / "cohcli.py"
+    result = subprocess.run(
+        [sys.executable, str(cli), "vision-overlay", "--agent=test"],
+        capture_output=True,
+        text=True,
+    )
+    assert "vision overlay" in result.stdout
