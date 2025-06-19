@@ -1,3 +1,7 @@
-pytest
-jsonschema
-tomli
+pytest==8.1.1
+jsonschema==4.24.0
+tomli==2.2.1
+black==25.1.0
+flake8==7.2.0
+mypy==1.16.1
+types-jsonschema==4.24.0.20250528

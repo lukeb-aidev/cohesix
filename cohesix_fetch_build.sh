@@ -74,22 +74,22 @@ export PATH="$HOME/.local/bin:$PATH"
 python -m pip install --upgrade pip setuptools wheel --break-system-packages \
   || python -m ensurepip --upgrade
 
-[ -f requirements.txt ] && python -m pip install -r requirements.txt \
-  --break-system-packages || true
+if [ -f requirements.txt ]; then
+  python -m pip install -r requirements.txt --break-system-packages
+fi
 
 # Install Python linters if missing
 for tool in flake8 mypy black; do
   if ! command -v "$tool" >/dev/null 2>&1; then
-    python -m pip install "$tool" --break-system-packages || \
-      echo "⚠️ could not install $tool" >&2
+    python -m pip install "$tool" --break-system-packages
   fi
 done
 
 # Validate presence of Python files before linting
 if find python tests -name '*.py' | grep -q .; then
-  flake8 python tests || true
-  mypy python tests || true
-  black --check python tests || true
+  flake8 python tests
+  mypy python tests
+  black --check python tests
 else
   log "ℹ️ No Python files detected; skipping lint checks"
 fi
@@ -245,10 +245,10 @@ fi
 
 log "🐍 Running Python tests..."
 if command -v pytest &> /dev/null; then
-  pytest -v || true
+  pytest -v
 fi
 if command -v flake8 &> /dev/null; then
-  flake8 python tests || true
+  flake8 python tests
 fi
 
 log "🔧 Checking C compiler..."
