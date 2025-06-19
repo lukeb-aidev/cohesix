@@ -119,6 +119,15 @@ Run `cohtrace diff` to compare validator snapshots between runs:
 ./target/debug/cohtrace diff --from last --to previous
 ```
 
+## Environment Flags
+
+The helper script `cohesix_fetch_build.sh` sets two variables after cloning:
+
+* `COH_PLATFORM` – the host architecture from `uname -m`
+* `COH_GPU` – `1` if an NVIDIA device is accessible, else `0`
+
+CUDA tests and builds skip when `COH_GPU=0`.
+
 ## Boot Testing
 
 Confirm QEMU and EFI dependencies with:

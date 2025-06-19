@@ -1164,3 +1164,9 @@
 ## [v0.138] - 2025-12-09
 ### Fixed
 - `test_compile_trace.rs` writes all artifacts to a temporary directory and sets execution permissions explicitly. Toolchain path checks now honor the `COHESIX_TOOLCHAIN_ROOT` environment variable, allowing tests to run in sandboxed environments.
+
+## [v0.139] - 2025-12-10
+### Fixed
+- CUDA tests check GPU availability and permissions.
+- cohesix_fetch_build.sh exports COH_PLATFORM and COH_GPU.
+- mypy and flake8 warnings resolved.

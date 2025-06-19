@@ -15,8 +15,8 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
-from sensors.sensor_proxy import run_once as capture_sensors, SENSOR_DIR
-from validator import Validator
+from sensors.sensor_proxy import run_once as capture_sensors, SENSOR_DIR  # type: ignore
+from validator import Validator  # type: ignore
 
 
 logger = logging.getLogger(__name__)
@@ -107,8 +107,8 @@ def main() -> None:
         except TimeoutError:
             LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
             try:
-                with LOG_PATH.open("a") as f:
-                    f.write(f"{int(time.time())}: watchdog timeout\n")
+                with LOG_PATH.open("a") as logf:
+                    logf.write(f"{int(time.time())}: watchdog timeout\n")
             except OSError as exc:
                 logger.error("failed to write log %s: %s", LOG_PATH, exc)
             continue
