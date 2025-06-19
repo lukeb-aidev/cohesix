@@ -1160,3 +1160,7 @@
 ## [v0.137] - 2025-12-08
 ### Fixed
 - `test_cohcc_output.rs` now writes example sources to a temporary directory and marks the output binary executable to avoid permission errors on restricted systems. The helper `coh_cc::compile` no longer unwraps temp paths.
+
+## [v0.138] - 2025-12-09
+### Fixed
+- `test_compile_trace.rs` writes all artifacts to a temporary directory and sets execution permissions explicitly. Toolchain path checks now honor the `COHESIX_TOOLCHAIN_ROOT` environment variable, allowing tests to run in sandboxed environments.
