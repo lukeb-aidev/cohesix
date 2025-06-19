@@ -13,9 +13,11 @@ from pathlib import Path
 from jsonschema import ValidationError, validate
 
 try:
-    import tomllib  # Python 3.11+
+    import tomllib as _tomllib  # Python 3.11+
 except ModuleNotFoundError:  # pragma: no cover - fallback for older Python
-    import tomli as tomllib
+    import tomli as _tomllib
+
+tomllib = _tomllib
 
 logger = logging.getLogger(__name__)
 

@@ -6,6 +6,7 @@
 """Simulated kiosk UI event loop for KioskInteractive role."""
 
 from __future__ import annotations
+
 import json
 import logging
 import os
@@ -14,10 +15,11 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
-logger = logging.getLogger(__name__)
-
 from sensors.sensor_proxy import run_once as capture_sensors, SENSOR_DIR
 from validator import Validator
+
+
+logger = logging.getLogger(__name__)
 
 BASE = os.environ.get("COH_BASE", "")
 FED_PATH = Path(BASE) / "srv" / "kiosk_federation.json"

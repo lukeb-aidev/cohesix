@@ -20,14 +20,16 @@ def test_corrupted_manifest_and_trace(tmp_path):
         json.loads(manifest.read_text())
     except json.JSONDecodeError as e:
         with open(log_file, "a") as f:
-            f.write(f"rule_violation(type=\"slm_manifest\", file=\"{manifest}\", error=\"{e.msg}\")\n")
+            f.write(
+                f'rule_violation(type="slm_manifest", file="{manifest}", error="{e.msg}")\n'
+            )
 
     trace = tmp_path / "broken.trc"
     trace.write_text("{invalid:true}\n")
     ok = trace_integrity(trace)
     assert not ok
     with open(log_file, "a") as f:
-        f.write(f"rule_violation(type=\"trace_integrity\", file=\"{trace}\")\n")
+        f.write(f'rule_violation(type="trace_integrity", file="{trace}")\n')
 
     log_contents = log_file.read_text()
     assert str(manifest) in log_contents

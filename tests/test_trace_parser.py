@@ -5,7 +5,6 @@
 """Validate trace_integrity utility."""
 
 from pathlib import Path
-import sys
 
 from validator import trace_integrity
 

@@ -48,7 +48,18 @@ def test_boot_services(tmp_path):
     assert "role startup success" in (log_dir / "session.log").read_text()
 
     import subprocess
-    for role in ("QueenPrimary", "DroneWorker", "KioskInteractive", "InteractiveAIBooth"):
+
+    for role in (
+        "QueenPrimary",
+        "DroneWorker",
+        "KioskInteractive",
+        "InteractiveAIBooth",
+    ):
         env = dict(os.environ, COH_ROLE=role, COHESIX_LOG=env_log)
-        res = subprocess.run(["python3", "cli/cohcli.py", "status"], env=env, capture_output=True, text=True)
+        res = subprocess.run(
+            ["python3", "cli/cohcli.py", "status"],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
         assert role in res.stdout
