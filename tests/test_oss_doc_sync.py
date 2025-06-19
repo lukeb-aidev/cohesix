@@ -3,10 +3,16 @@
 # Author: Cohesix Codex
 # Date Modified: 2025-07-14
 """Ensure OPEN_SOURCE_DEPENDENCIES.md lists Cargo dependencies."""
+import types
+
 try:
-    import tomllib as tomli
+    import tomllib
+
+    toml_parser: types.ModuleType = tomllib
 except ModuleNotFoundError:
-    import tomli
+    import tomli  # type: ignore[import-not-found]
+
+    toml_parser = tomli
 from pathlib import Path
 
 DOC_PATH = Path("docs/community/OPEN_SOURCE_DEPENDENCIES.md")
@@ -16,7 +22,7 @@ CARGO = Path("Cargo.toml")
 
 
 def cargo_deps():
-    data = tomli.loads(CARGO.read_text())
+    data = toml_parser.loads(CARGO.read_text())
     deps = []
     for name, spec in data.get("dependencies", {}).items():
         if isinstance(spec, dict) and spec.get("optional"):
