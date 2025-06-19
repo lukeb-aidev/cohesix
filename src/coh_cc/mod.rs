@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: mod.rs v0.8
+// Filename: mod.rs v0.9
 // Author: Lukas Bower
-// Date Modified: 2025-06-18
+// Date Modified: 2025-12-08
 
 pub mod backend;
 pub mod config;
@@ -16,7 +16,10 @@ pub mod toolchain;
 /// Returns the path to the generated output on success.
 pub fn compile(source: &str) -> anyhow::Result<Vec<u8>> {
     let out = std::env::temp_dir().join("cohcc_shell.out");
-    crate::compile_from_file(source, out.to_str().unwrap())?;
+    let out_str = out
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("non-UTF8 temp path"))?;
+    crate::compile_from_file(source, out_str)?;
     let mut bytes = Vec::new();
     bytes.extend_from_slice(b"COHB");
     bytes.push(1);

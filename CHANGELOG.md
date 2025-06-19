@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.79
-// Date Modified: 2025-12-04
+// Filename: CHANGELOG.md v0.80
+// Date Modified: 2025-12-08
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
 • Consolidated OSS reuse files into LICENSES_AND_REUSE.md
@@ -1157,3 +1157,6 @@
 - Auto-generates a fallback `config.yaml` if none is provided.
 - Version bumps for `cohesix_fetch_build.sh`, `make_iso.sh`, and `scripts/make_iso.sh`.
 
+## [v0.137] - 2025-12-08
+### Fixed
+- `test_cohcc_output.rs` now writes example sources to a temporary directory and marks the output binary executable to avoid permission errors on restricted systems. The helper `coh_cc::compile` no longer unwraps temp paths.
