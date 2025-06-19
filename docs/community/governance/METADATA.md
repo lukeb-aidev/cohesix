@@ -118,6 +118,7 @@
 | tests/test_9p_read_write.rs | v0.1 | 2025-07-23 | COMMUNITY | | |
 | tests/test_cuda_presence.rs | v0.2 | 2025-12-10 | COMMUNITY | | |
 | tests/test_cuda_exec.rs | v0.5 | 2025-12-10 | COMMUNITY | | |
+| tests/test_cuda_kernel.rs | v0.4 | 2025-12-12 | COMMUNITY | | |
 | tests/test_namespace_rule.rs | v0.1 | 2025-07-23 | COMMUNITY | | |
 | tests/test_trace_compare.py | v0.1 | 2025-07-23 | COMMUNITY | | |
 | tests/test_qemu_boot.rs | v0.2 | 2025-07-28 | COMMUNITY | | |
@@ -203,6 +204,7 @@
 | userland/miniroot/bin/ls | v0.1 | 2025-09-23 | COMMUNITY | | |
 | usr/src/example.coh | v0.1 | 2025-09-24 | COMMUNITY | | |
 | src/sh_loop.rs | v0.1 | 2025-09-23 | COMMUNITY | | |
+| src/utils/gpu.rs | v0.1 | 2025-12-12 | COMMUNITY | | |
 | src/runtime/loader.rs | v0.1 | 2025-09-26 | COMMUNITY | | |
 | tests/test_loader.rs | v0.1 | 2025-09-26 | COMMUNITY | | |
 | tests/test_run_shell.rs | v0.1 | 2025-09-26 | COMMUNITY | | |
