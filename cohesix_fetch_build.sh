@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.26
+# Filename: cohesix_fetch_build.sh v0.27
 # Author: Lukas Bower
-# Date Modified: 2025-12-07
+# Date Modified: 2025-12-10
 #!/bin/bash
 # Fetch and fully build the Cohesix project using SSH Git auth.
 
@@ -29,6 +29,19 @@ log "📦 Cloning repository..."
 git clone git@github.com:lukeb-aidev/cohesix.git
 cd cohesix
 ROOT="$(pwd)"
+
+# Detect platform and GPU availability
+COH_PLATFORM="$(uname -m)"
+if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1; then
+  COH_GPU=1
+elif [ -c /dev/nvidia0 ]; then
+  COH_GPU=1
+else
+  COH_GPU=0
+fi
+export COH_PLATFORM
+export COH_GPU
+log "Platform: $COH_PLATFORM, GPU present: $COH_GPU"
 
 log "📦 Updating submodules (if any)..."
 git submodule update --init --recursive
