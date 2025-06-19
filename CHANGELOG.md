@@ -1150,3 +1150,10 @@
 - `cohesix_fetch_build.sh` ensures `out/etc/cohesix/` exists before copying
   `config/config.yaml` and stops with a clear error if the file is missing.
 
+## [v0.136] - 2025-12-07
+### Fixed
+- Boot prerequisite checks for kernel and init binaries before ISO creation.
+- `scripts/make_iso.sh` now stages kernel and init from `out/boot/` and copies the bootloader.
+- Auto-generates a fallback `config.yaml` if none is provided.
+- Version bumps for `cohesix_fetch_build.sh`, `make_iso.sh`, and `scripts/make_iso.sh`.
+

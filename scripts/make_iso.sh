@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: scripts/make_iso.sh v0.4
+// Filename: scripts/make_iso.sh v0.5
 // Author: Lukas Bower
-// Date Modified: 2025-12-02
+// Date Modified: 2025-12-07
 #!/usr/bin/env bash
 # ISO layout:
 #   bin/               - runtime binaries
@@ -19,8 +19,9 @@ ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 ISO_DIR="$ROOT/out/iso_root"
 ISO_OUT="$ROOT/out/cohesix.iso"
 TARGET="${TARGET:-$(uname -m)}"
-KERNEL_SRC="$ROOT/out/bin/kernel.efi"
-INIT_SRC="$ROOT/out/bin/init.efi"
+KERNEL_SRC="$ROOT/out/boot/kernel.elf"
+INIT_SRC="$ROOT/out/boot/init"
+BOOTLOADER_SRC=""
 
 log() { echo "$(date +%H:%M:%S) $1"; }
 error() { echo "Error: $1" >&2; exit 1; }
@@ -31,6 +32,7 @@ case "$TARGET" in
   x86_64*) EFI_NAME="BOOTX64.EFI" ;;
   *) error "Unsupported TARGET: $TARGET" ;;
 esac
+BOOTLOADER_SRC="$ROOT/out/$EFI_NAME"
 
 if have xorriso; then
   MKISO=(xorriso -as mkisofs)
@@ -49,18 +51,20 @@ if ! have mformat; then
   exit 0
 fi
 
+[ -f "$BOOTLOADER_SRC" ] || error "Missing $BOOTLOADER_SRC"
 [ -f "$KERNEL_SRC" ] || error "Missing $KERNEL_SRC"
-[ -f "$INIT_SRC" ] || error "Missing $INIT_SRC"
+[ -x "$INIT_SRC" ] || error "Missing $INIT_SRC"
 
 rm -rf "$ISO_DIR"
 mkdir -p "$ISO_DIR"/{bin,usr/bin,usr/cli,home/cohesix,etc/cohesix,roles,userland,usr/src,tmp,srv,boot/efi/EFI/BOOT}
 chmod 1777 "$ISO_DIR/tmp"
 
-log "📦 Adding kernel.efi..."
-cp "$KERNEL_SRC" "$ISO_DIR/boot/efi/EFI/BOOT/$EFI_NAME"
-cp "$KERNEL_SRC" "$ISO_DIR/kernel.efi"
-log "📦 Adding init.efi..."
-cp "$INIT_SRC" "$ISO_DIR/bin/init.efi"
+log "📦 Adding bootloader..."
+cp "$BOOTLOADER_SRC" "$ISO_DIR/boot/efi/EFI/BOOT/$EFI_NAME"
+log "📦 Adding kernel..."
+cp "$KERNEL_SRC" "$ISO_DIR/kernel.elf"
+log "📦 Adding init..."
+cp "$INIT_SRC" "$ISO_DIR/init"
 
 # Runtime binaries compiled during build
 if [ -d "$ROOT/out/bin" ]; then
