@@ -1134,3 +1134,8 @@
 - Gracefully skips ISO creation when `xorriso`, `grub-mkrescue`, or `mtools` are missing.
 - Root wrapper `make_iso.sh` bumped to v0.6.
 
+## [v0.133] - 2025-12-03
+### Fixed
+- `cohesix_fetch_build.sh` prompts for architecture or defaults to x86_64 when
+  non-interactive, exporting `COHESIX_TARGET` for all build steps.
+

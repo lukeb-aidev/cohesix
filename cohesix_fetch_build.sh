@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.22
+# Filename: cohesix_fetch_build.sh v0.23
 # Author: Lukas Bower
-# Date Modified: 2025-12-01
+# Date Modified: 2025-12-03
 #!/bin/bash
 # Fetch and fully build the Cohesix project using SSH Git auth.
 
@@ -64,24 +64,33 @@ else
 fi
 
 log "🧱 Building Rust components..."
-# Use provided TARGET or default to aarch64-unknown-linux-gnu
-: "${TARGET:=aarch64-unknown-linux-gnu}"
-if [ -z "$TARGET" ]; then
-  log "⚠️ TARGET not set; defaulting to aarch64-unknown-linux-gnu"
-  TARGET="aarch64-unknown-linux-gnu"
+# Prompt for architecture unless running non-interactively
+if [ -z "${CI:-}" ] && [ -t 0 ]; then
+  log "Select target architecture:"
+  PS3="Architecture? "
+  select opt in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu; do
+    if [ -n "$opt" ]; then
+      COHESIX_TARGET="$opt"
+      break
+    fi
+  done
+else
+  COHESIX_TARGET="${COHESIX_TARGET:-x86_64-unknown-linux-gnu}"
 fi
+export COHESIX_TARGET
+log "Using target $COHESIX_TARGET"
 
 # Install the target if rustup is available and it's not already installed
 if command -v rustup >/dev/null 2>&1; then
-  if ! rustup target list --installed | grep -q "^${TARGET}$"; then
-    log "🔧 Installing Rust target ${TARGET}"
-    rustup target add "${TARGET}"
+  if ! rustup target list --installed | grep -q "^${COHESIX_TARGET}$"; then
+    log "🔧 Installing Rust target ${COHESIX_TARGET}"
+    rustup target add "${COHESIX_TARGET}"
   fi
 else
-  log "⚠️ rustup not found; assuming ${TARGET} toolchain is installed"
+  log "⚠️ rustup not found; assuming ${COHESIX_TARGET} toolchain is installed"
 fi
 
-cargo build --all-targets --release --target "${TARGET}" --features secure9p
+cargo build --all-targets --release --target "${COHESIX_TARGET}" --features secure9p
 grep -Ei 'error|fail|panic|permission denied|warning' "$LOG_FILE" > "$SUMMARY_ERRORS" || true
 
 # Ensure output directory exists before copying Rust binaries
@@ -108,35 +117,35 @@ for script in cohcli cohcap cohtrace cohrun cohbuild cohup cohpkg; do
 done
 
 EFI_SUPPORTED=0
-case "$TARGET" in
+case "$COHESIX_TARGET" in
   *-uefi) EFI_SUPPORTED=1 ;;
 esac
 
 if [ "$EFI_SUPPORTED" -eq 1 ]; then
   log "🛠️ Building kernel EFI..."
   mkdir -p out/bin out/etc/cohesix out/roles out/setup
-  if ! cargo build --release --target "$TARGET" --bin kernel \
+  if ! cargo build --release --target "$COHESIX_TARGET" --bin kernel \
     --no-default-features --features minimal_uefi,kernel_bin; then
     echo "❌ kernel EFI build failed" >&2
     exit 1
   fi
-  KERNEL_EFI="target/${TARGET}/release/kernel.efi"
+  KERNEL_EFI="target/${COHESIX_TARGET}/release/kernel.efi"
   [ -s "$KERNEL_EFI" ] || { echo "❌ kernel EFI missing or empty" >&2; exit 1; }
   cp "$KERNEL_EFI" out/BOOTX64.EFI
 
   log "🛠️ Building init EFI..."
-  if ! cargo build --release --target "$TARGET" --bin init \
+  if ! cargo build --release --target "$COHESIX_TARGET" --bin init \
     --no-default-features --features minimal_uefi; then
     echo "❌ init EFI build failed" >&2
     exit 1
   fi
-  INIT_EFI="target/${TARGET}/release/init.efi"
+  INIT_EFI="target/${COHESIX_TARGET}/release/init.efi"
   [ -s "$INIT_EFI" ] || { echo "❌ init EFI missing or empty" >&2; exit 1; }
   cp "$INIT_EFI" out/bin/init.efi
   cp "$INIT_EFI" out/init.efi
   [ -f out/init.efi ] || { echo "❌ init EFI missing after build" >&2; exit 1; }
 else
-  log "⚠️ TARGET $TARGET not UEFI-compatible; skipping EFI build"
+  log "⚠️ TARGET $COHESIX_TARGET not UEFI-compatible; skipping EFI build"
 fi
 
 log "📂 Staging boot files..."
