@@ -1,19 +1,22 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: test_cohcc_output.rs v0.1
+// Filename: test_cohcc_output.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-09-25
+// Date Modified: 2025-12-08
 
-use std::fs;
+use std::fs::{self, Permissions};
+use std::os::unix::fs::PermissionsExt;
 use tempfile::tempdir;
 
 #[test]
-fn compile_creates_binary() {
-    let dir = tempdir().unwrap();
+fn compile_creates_binary() -> anyhow::Result<()> {
+    let dir = tempdir()?;
+    let src = dir.path().join("example.coh");
     let out = dir.path().join("out.bin");
-    fs::create_dir_all("/usr/src").unwrap();
-    fs::write("/usr/src/example.coh", "print('ok')").unwrap();
-    let bytes = cohesix::coh_cc::compile("/usr/src/example.coh").unwrap();
-    fs::write(&out, &bytes).unwrap();
-    let meta = fs::metadata(&out).unwrap();
+    fs::write(&src, "print('ok')")?;
+    let bytes = cohesix::coh_cc::compile(src.to_str().expect("valid UTF-8 path"))?;
+    fs::write(&out, &bytes)?;
+    fs::set_permissions(&out, Permissions::from_mode(0o755))?;
+    let meta = fs::metadata(&out)?;
     assert!(meta.len() > 0);
+    Ok(())
 }
