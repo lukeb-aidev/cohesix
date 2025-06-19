@@ -86,7 +86,8 @@ def check_file(filename: str, version: str, classification: str):
                 found_version = m.group(1)
     if found_class != classification:
         errors.append(
-            f"{p}: classification '{found_class}' does not match expected '{classification}'"
+            f"{p}: classification '{found_class}' does not match "
+            f"expected '{classification}'"
         )
     if found_version != version:
         errors.append(
