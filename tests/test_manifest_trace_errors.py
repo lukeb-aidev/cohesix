@@ -5,7 +5,6 @@
 """Validate error handling for corrupted SLM manifests and traces."""
 
 import json
-from pathlib import Path
 from validator import trace_integrity
 
 
@@ -19,10 +18,12 @@ def test_corrupted_manifest_and_trace(tmp_path):
     try:
         json.loads(manifest.read_text())
     except json.JSONDecodeError as e:
+        msg = (
+            f'rule_violation(type="slm_manifest", file="{manifest}", '
+            f'error="{e.msg}")\n'
+        )
         with open(log_file, "a") as f:
-            f.write(
-                f'rule_violation(type="slm_manifest", file="{manifest}", error="{e.msg}")\n'
-            )
+            f.write(msg)
 
     trace = tmp_path / "broken.trc"
     trace.write_text("{invalid:true}\n")

@@ -7,7 +7,6 @@
 import json
 import os
 import subprocess
-from pathlib import Path
 
 
 def test_cohrun_inject_rule(tmp_path, monkeypatch):

@@ -9,7 +9,6 @@ import subprocess
 
 
 def test_infer_loop(tmp_path):
-    log = tmp_path / "infer.log"
     env = os.environ.copy()
     env["INFER_CONF"] = "motion"
     subprocess.run(

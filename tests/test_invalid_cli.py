@@ -6,7 +6,6 @@
 """Check CLI tools reject invalid arguments."""
 
 import subprocess
-from pathlib import Path
 import os
 import pytest
 
