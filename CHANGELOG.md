@@ -1176,3 +1176,9 @@
 - `cuda_kernel_result_file` test now uses `tempfile` paths and skips when CUDA or
   permissions are unavailable.
 - Added `coh_check_gpu_runtime` helper for runtime GPU validation.
+
+## [v0.141] - 2025-12-15
+### Fixed
+- `bind_overlay_order` test now uses a temporary `/srv` directory when possible
+  and skips if permissions are insufficient. Errors include the current UID for
+  easier diagnostics.
