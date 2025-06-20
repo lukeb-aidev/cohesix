@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: scripts/make_iso.sh v0.7
+# Filename: scripts/make_iso.sh v0.8
 # Author: Lukas Bower
-# Date Modified: 2025-12-18
+# Date Modified: 2025-12-19
 #!/bin/bash
 # ISO layout:
 #   bin/               - runtime binaries
@@ -51,6 +51,10 @@ if ! have mformat; then
   exit 0
 fi
 
+log "Using bootloader source: $BOOTLOADER_SRC"
+log "Kernel source: $KERNEL_SRC"
+log "Init source: $INIT_SRC"
+
 [ -f "$BOOTLOADER_SRC" ] || {
   KERNEL_EFI="$ROOT/target/${TARGET}-unknown-uefi/release/kernel.efi"
   if [ -f "$KERNEL_EFI" ]; then
@@ -67,13 +71,17 @@ fi
 rm -rf "$ISO_DIR"
 mkdir -p "$ISO_DIR"/{bin,usr/bin,usr/cli,home/cohesix,etc/cohesix,roles,userland,usr/src,tmp,srv,boot/efi/EFI/BOOT}
 chmod 1777 "$ISO_DIR/tmp"
+log "ISO staging directory prepared at $ISO_DIR"
 
 log "📦 Adding bootloader..."
 cp "$BOOTLOADER_SRC" "$ISO_DIR/boot/efi/EFI/BOOT/$EFI_NAME"
+[[ -f "$ISO_DIR/boot/efi/EFI/BOOT/$EFI_NAME" ]] || error "missing bootloader in ISO"
 log "📦 Adding kernel..."
 cp "$KERNEL_SRC" "$ISO_DIR/kernel.elf"
+[[ -f "$ISO_DIR/kernel.elf" ]] || error "missing kernel.elf in ISO"
 log "📦 Adding init..."
 cp "$INIT_SRC" "$ISO_DIR/init"
+[[ -f "$ISO_DIR/init" ]] || error "missing init in ISO"
 
 # Runtime binaries compiled during build
 if [ -d "$ROOT/out/bin" ]; then
@@ -126,9 +134,12 @@ fi
   -eltorito-platform efi -eltorito-boot boot/efi/EFI/BOOT/$EFI_NAME \
   -boot-load-size 4 -boot-info-table -o "$ISO_OUT" "$ISO_DIR"
 
+log "ISO generation command completed"
+
 if [ ! -f "$ISO_OUT" ]; then
   error "ISO not created at $ISO_OUT"
 fi
+[[ -s "$ISO_OUT" ]] || error "ISO file empty at $ISO_OUT"
 
 SIZE=$(du -h "$ISO_OUT" | awk '{print $1}')
 log "ISO Build PASS ($SIZE) at $ISO_OUT"

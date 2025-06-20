@@ -1194,3 +1194,10 @@
 - Makefile qemu target fails early if BOOTX64.EFI or ISO missing.
 - test_qemu_boot.rs prints build commands and logs when artifacts are absent.
 
+## [v0.144] - 2025-12-19
+### Added
+- scripts/validate_iso_build.sh for standalone ISO checks.
+### Changed
+- scripts/make_iso.sh validates each copied file and logs expected paths.
+- cohesix_fetch_build.sh chains EFI → ISO → boot tests with diagnostic checks.
+- tests/test_qemu_boot.rs verifies artifacts before boot and dumps QEMU log tail.

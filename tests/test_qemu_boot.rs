@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: test_qemu_boot.rs v0.4
+// Filename: test_qemu_boot.rs v0.5
 // Author: Lukas Bower
-// Date Modified: 2025-12-18
+// Date Modified: 2025-12-19
 
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -17,6 +17,10 @@ fn qemu_boot_produces_boot_ok() {
         .map(|s| s.success())
         .unwrap_or(false)
     {
+        assert!(Path::new("out/BOOTX64.EFI").exists(),
+            "ISO not generated; out/BOOTX64.EFI missing");
+        assert!(Path::new("out/cohesix.iso").exists(),
+            "ISO not generated; make_iso.sh likely failed or preconditions not met");
         if Path::new("qemu_serial.log").exists() {
             let _ = fs::remove_file("qemu_serial.log");
         }
@@ -34,7 +38,7 @@ fn qemu_boot_produces_boot_ok() {
             .status()
             .expect("failed to run make qemu");
 
-        assert!(status.success(), "make qemu failed");
+        assert!(status.success(), "make qemu failed with {:?}", status);
         if !Path::new("out/cohesix.iso").exists() {
             eprintln!("out/cohesix.iso missing after running make qemu");
             eprintln!("make qemu preview:\n{}", String::from_utf8_lossy(&dry.stdout));
@@ -55,7 +59,8 @@ fn qemu_boot_produces_boot_ok() {
         }
 
         let log = fs::read_to_string("qemu_serial.log").expect("read log");
-        println!("QEMU log:\n{}", log);
+        let tail: Vec<&str> = log.lines().rev().take(20).collect();
+        println!("QEMU log (tail):\n{}", tail.into_iter().rev().collect::<Vec<_>>().join("\n"));
 
         for line in log.lines() {
             if let Some(reason) = line.strip_prefix("BOOT_FAIL:") {
