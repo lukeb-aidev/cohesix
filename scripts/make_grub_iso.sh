@@ -1,15 +1,14 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: make_grub_iso.sh v0.1
+// Filename: make_grub_iso.sh v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-12-28
+// Date Modified: 2025-12-30
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-ISO_ROOT="$ROOT/out/grub_iso_root"
+ISO_ROOT="$ROOT/out/stage"
 ISO_OUT="$ROOT/out/cohesix_grub.iso"
-
-# Prepare staging directory
-rm -rf "$ISO_ROOT"
+# Ensure stage directory exists
+[ -d "$ISO_ROOT" ] || { echo "stage directory missing: $ISO_ROOT" >&2; exit 1; }
 mkdir -p "$ISO_ROOT/boot/grub"
 
 # Copy kernel, userland, and config
@@ -37,7 +36,10 @@ fi
 grub-mkrescue -o "$ISO_OUT" "$ISO_ROOT" >/dev/null 2>&1
 
 if [ -f "$ISO_OUT" ] && [ -s "$ISO_OUT" ]; then
-    echo "GRUB ISO OK: $ISO_OUT"
+    BIN_COUNT=$(find "$ISO_ROOT/bin" -type f -perm -111 | wc -l)
+    ROLE_COUNT=$(find "$ISO_ROOT/roles" -name '*.yaml' | wc -l)
+    SIZE_MB=$(du -m "$ISO_OUT" | awk '{print $1}')
+    echo "ISO BUILD OK: ${BIN_COUNT} binaries, ${ROLE_COUNT} roles, ${SIZE_MB}MB total"
 else
     echo "ERROR: ISO build failed" >&2
     exit 1

@@ -1256,3 +1256,8 @@
 ### Changed
 - Added scripts/boot_qemu.sh launching GRUB ISO via QEMU.
 - tests/test_qemu_boot.rs now looks for COHESIX_BOOT_OK and captures serial logs.
+
+## [v0.155] - 2025-12-30
+### Changed
+- cohesix_fetch_build.sh stages full root filesystem under out/stage and invokes make_grub_iso.sh
+- make_grub_iso.sh builds ISO from staged directory and prints summary counts
