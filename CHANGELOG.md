@@ -1251,3 +1251,8 @@
 ## [v0.153] - 2025-12-28
 ### Added
 - scripts/make_grub_iso.sh builds GRUB ISO with seL4 kernel and Cohesix root task
+
+## [v0.154] - 2025-12-29
+### Changed
+- Added scripts/boot_qemu.sh launching GRUB ISO via QEMU.
+- tests/test_qemu_boot.rs now looks for COHESIX_BOOT_OK and captures serial logs.

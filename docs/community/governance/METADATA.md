@@ -122,7 +122,7 @@
 | tests/test_namespace_rule.rs | v0.1 | 2025-07-23 | COMMUNITY | | |
 | tests/test_namespace_semantics.rs | v0.2 | 2025-12-15 | COMMUNITY | | |
 | tests/test_trace_compare.py | v0.1 | 2025-07-23 | COMMUNITY | | |
-| tests/test_qemu_boot.rs | v0.9 | 2025-12-23 | COMMUNITY | | |
+| tests/test_qemu_boot.rs | v0.10 | 2025-12-29 | COMMUNITY | | |
 | tests/test_boot_build_chain.rs | v0.1 | 2025-12-24 | COMMUNITY | | |
 | tests/boot_trace_rule.rs | v0.3 | 2025-08-18 | COMMUNITY | | |
 | tests/kernel_proc_mgr.rs | v0.1 | 2025-08-26 | COMMUNITY | | |
@@ -165,6 +165,7 @@
 | scripts/make_iso.sh | v0.11 | 2025-12-22 | COMMUNITY | | |
 | scripts/make_grub_iso.sh | v0.1 | 2025-12-28 | COMMUNITY | | |
 | scripts/debug_qemu_boot.sh | v0.2 | 2025-12-23 | COMMUNITY | | |
+| scripts/boot_qemu.sh | v0.1 | 2025-12-29 | COMMUNITY | | |
 | scripts/validate_iso_build.sh | v0.1 | 2025-12-19 | COMMUNITY | | |
 | scripts/fetch_sel4.sh | v0.1 | 2025-12-25 | COMMUNITY | | |
 | scripts/build_root_elf.sh | v0.2 | 2025-12-27 | COMMUNITY | | |
