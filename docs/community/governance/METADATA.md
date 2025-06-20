@@ -122,7 +122,7 @@
 | tests/test_namespace_rule.rs | v0.1 | 2025-07-23 | COMMUNITY | | |
 | tests/test_namespace_semantics.rs | v0.2 | 2025-12-15 | COMMUNITY | | |
 | tests/test_trace_compare.py | v0.1 | 2025-07-23 | COMMUNITY | | |
-| tests/test_qemu_boot.rs | v0.6 | 2025-12-20 | COMMUNITY | | |
+| tests/test_qemu_boot.rs | v0.7 | 2025-12-21 | COMMUNITY | | |
 | tests/boot_trace_rule.rs | v0.3 | 2025-08-18 | COMMUNITY | | |
 | tests/kernel_proc_mgr.rs | v0.1 | 2025-08-26 | COMMUNITY | | |
 | tests/test_cohcc_shell.rs | v0.2 | 2025-09-25 | COMMUNITY | | |
@@ -130,7 +130,7 @@
 | docs/QUICKSTART.md | v0.1 | 2025-07-23 | COMMUNITY | | |
 | docs/community/architecture/BOOT_KERNEL_FLOW.md | v0.1 | 2025-07-23 | COMMUNITY | | |
 | docs/community/archive/examples_README.md | v0.2 | 2025-07-23 | COMMUNITY | | |
-| cohesix_fetch_build.sh | v0.30 | 2025-12-19 | COMMUNITY | | |
+| cohesix_fetch_build.sh | v0.31 | 2025-12-21 | COMMUNITY | | |
 | CONTRIBUTING.md | v1.1 | 2025-07-23 | COMMUNITY | | |
 | config/secure9p.toml | v0.3 | 2025-07-31 | COMMUNITY | | |
 | src/secure9p/mod.rs | v0.2 | 2025-07-25 | COMMUNITY | | |
@@ -160,7 +160,7 @@
 | scripts/generate_busybox_man.sh | v0.1 | 2025-06-08 | COMMUNITY | | |
 | scripts/manpage_scan.sh | v0.1 | 2025-06-08 | COMMUNITY | | |
 | scripts/verify-macos-setup.sh | v0.1 | 2025-06-05 | COMMUNITY | | |
-| scripts/make_iso.sh | v0.9 | 2025-12-20 | COMMUNITY | | |
+| scripts/make_iso.sh | v0.10 | 2025-12-21 | COMMUNITY | | |
 | scripts/validate_iso_build.sh | v0.1 | 2025-12-19 | COMMUNITY | | |
 | tools/make_iso.sh | v0.3 | 2025-09-23 | COMMUNITY | | |
 | metadata.json | v0.1 | 2025-07-24 | COMMUNITY | | |

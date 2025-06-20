@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: scripts/make_iso.sh v0.9
+# Filename: scripts/make_iso.sh v0.10
 # Author: Lukas Bower
-# Date Modified: 2025-12-20
+# Date Modified: 2025-12-21
 #!/bin/bash
 # ISO layout:
 #   bin/               - runtime binaries
@@ -72,12 +72,14 @@ log "ISO staging directory prepared at $ISO_DIR"
 log "📦 Adding bootloader..."
 cp "$BOOTLOADER_SRC" "$ISO_DIR/boot/efi/EFI/BOOT/$EFI_NAME"
 [[ -f "$ISO_DIR/boot/efi/EFI/BOOT/$EFI_NAME" ]] || error "missing bootloader in ISO"
+log "✅ Bootloader installed"
 log "📦 Adding kernel..."
 cp "$KERNEL_SRC" "$ISO_DIR/kernel.elf"
 [[ -f "$ISO_DIR/kernel.elf" ]] || error "missing kernel.elf in ISO"
 log "📦 Adding init..."
 cp "$INIT_SRC" "$ISO_DIR/init"
 [[ -f "$ISO_DIR/init" ]] || error "missing init in ISO"
+log "✅ Kernel and init installed"
 
 # Runtime binaries compiled during build
 if [ -d "$ROOT/out/bin" ]; then
@@ -125,17 +127,24 @@ if [ -d "$ROOT/out/roles" ]; then
   log "📦 Copying roles"
   cp -a "$ROOT/out/roles/." "$ISO_DIR/roles/"
 fi
+log "✅ Files copied"
 
-"${MKISO[@]}" -R -J -no-emul-boot \
+log "📦 Running mkisofs" 
+if ! "${MKISO[@]}" -R -J -no-emul-boot \
   -eltorito-platform efi -eltorito-boot boot/efi/EFI/BOOT/$EFI_NAME \
-  -boot-load-size 4 -boot-info-table -o "$ISO_OUT" "$ISO_DIR"
-
-log "ISO generation command completed"
+  -boot-load-size 4 -boot-info-table -o "$ISO_OUT" "$ISO_DIR" \
+  >"$ISO_DIR/mkisofs.log" 2>&1; then
+  echo "mkisofs failed" >&2
+  cat "$ISO_DIR/mkisofs.log" >&2
+  exit 1
+fi
+log "✅ mkisofs finished"
 
 if [ ! -f "$ISO_OUT" ]; then
   error "ISO not created at $ISO_OUT"
 fi
 [[ -s "$ISO_OUT" ]] || error "ISO file empty at $ISO_OUT"
+[[ -r "$ISO_OUT" ]] || error "ISO not readable at $ISO_OUT"
 
 SIZE=$(du -h "$ISO_OUT" | awk '{print $1}')
 log "ISO Build PASS ($SIZE) at $ISO_OUT"
