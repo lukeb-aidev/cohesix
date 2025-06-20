@@ -1201,3 +1201,9 @@
 - scripts/make_iso.sh validates each copied file and logs expected paths.
 - cohesix_fetch_build.sh chains EFI → ISO → boot tests with diagnostic checks.
 - tests/test_qemu_boot.rs verifies artifacts before boot and dumps QEMU log tail.
+
+## [v0.145] - 2025-12-20
+### Fixed
+- test_qemu_boot.rs prints qemu command, retries on failure, and checks log presence.
+- scripts/make_iso.sh exits with errors when ISO tools are missing.
+
