@@ -117,3 +117,7 @@ required-features = ["minimal_uefi"]
 name = "cohesix_root"
 path = "src/root/main.rs"
 
+[[bin]]
+name = "sel4_entry"
+path = "src/bootstrap/sel4_entry.rs"
+
