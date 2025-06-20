@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.84
-// Date Modified: 2025-12-28
+// Filename: CHANGELOG.md v0.85
+// Date Modified: 2025-12-31
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
 • Consolidated OSS reuse files into LICENSES_AND_REUSE.md
@@ -1261,3 +1261,7 @@
 ### Changed
 - cohesix_fetch_build.sh stages full root filesystem under out/stage and invokes make_grub_iso.sh
 - make_grub_iso.sh builds ISO from staged directory and prints summary counts
+
+## [v0.156] - 2025-12-31
+### Added
+- Minimal seL4 entry stub at src/bootstrap/sel4_entry.rs logging COHESIX_BOOT_OK and launching shell
