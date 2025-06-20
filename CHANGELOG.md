@@ -1213,3 +1213,10 @@
 - cohesix_fetch_build.sh validates ISO artifacts and logs sha256 checksums.
 - tests/test_qemu_boot.rs fully validates QEMU execution and dumps log tails on error.
 
+## [v0.147] - 2025-12-22
+### Added
+- scripts/debug_qemu_boot.sh provides preboot diagnostics and QEMU dry-run output.
+### Changed
+- scripts/make_iso.sh validates mountability via isoinfo.
+- tests/test_qemu_boot.rs uses debug_qemu_boot.sh and logs boot traces.
+
