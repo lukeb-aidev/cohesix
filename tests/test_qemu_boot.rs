@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: test_qemu_boot.rs v0.2
+// Filename: test_qemu_boot.rs v0.3
 // Author: Lukas Bower
-// Date Modified: 2025-07-28
+// Date Modified: 2025-12-17
 
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -21,6 +21,13 @@ fn qemu_boot_produces_boot_ok() {
             let _ = fs::remove_file("qemu_serial.log");
         }
 
+        let dry = Command::new("make")
+            .arg("-n")
+            .arg("qemu")
+            .output()
+            .expect("failed to preview qemu command");
+        println!("{}", String::from_utf8_lossy(&dry.stdout));
+
         let status = Command::new("make")
             .arg("qemu")
             .env("TMPDIR", std::env::temp_dir())
@@ -28,6 +35,7 @@ fn qemu_boot_produces_boot_ok() {
             .expect("failed to run make qemu");
 
         assert!(status.success(), "make qemu failed");
+        assert!(Path::new("out/cohesix.iso").exists(), "out/cohesix.iso missing");
 
         let start = Instant::now();
         while !Path::new("qemu_serial.log").exists() {
@@ -38,6 +46,7 @@ fn qemu_boot_produces_boot_ok() {
         }
 
         let log = fs::read_to_string("qemu_serial.log").expect("read log");
+        println!("QEMU log:\n{}", log);
 
         for line in log.lines() {
             if let Some(reason) = line.strip_prefix("BOOT_FAIL:") {

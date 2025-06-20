@@ -1,8 +1,8 @@
-// CLASSIFICATION: COMMUNITY
-// Filename: scripts/make_iso.sh v0.5
-// Author: Lukas Bower
-// Date Modified: 2025-12-07
-#!/usr/bin/env bash
+# CLASSIFICATION: COMMUNITY
+# Filename: scripts/make_iso.sh v0.6
+# Author: Lukas Bower
+# Date Modified: 2025-12-17
+#!/bin/bash
 # ISO layout:
 #   bin/               - runtime binaries
 #   usr/bin/           - CLI wrappers and Go tools
@@ -117,4 +117,9 @@ fi
   -eltorito-platform efi -eltorito-boot boot/efi/EFI/BOOT/$EFI_NAME \
   -boot-load-size 4 -boot-info-table -o "$ISO_OUT" "$ISO_DIR"
 
-log "ISO Build PASS"
+if [ ! -f "$ISO_OUT" ]; then
+  error "ISO not created at $ISO_OUT"
+fi
+
+SIZE=$(du -h "$ISO_OUT" | awk '{print $1}')
+log "ISO Build PASS ($SIZE) at $ISO_OUT"
