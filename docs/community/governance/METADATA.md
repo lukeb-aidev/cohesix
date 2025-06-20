@@ -156,6 +156,7 @@
 | tests/secure9p/agent_identifier.rs | v0.2 | 2025-07-26 | COMMUNITY | | |
 | cli/cohcli.py | v1.1 | 2025-08-01 | COMMUNITY | | |
 | validator.pyi | v0.1 | 2025-12-10 | COMMUNITY | | |
+| scripts/build_sel4_kernel.sh | v0.1 | 2025-12-26 | COMMUNITY | | |
 | scripts/check-qemu-deps.sh | v0.1 | 2025-07-28 | COMMUNITY | | |
 | scripts/collect_boot_logs.sh | v0.1 | 2025-07-12 | COMMUNITY | | |
 | scripts/generate_busybox_man.sh | v0.1 | 2025-06-08 | COMMUNITY | | |
