@@ -1220,3 +1220,9 @@
 - scripts/make_iso.sh validates mountability via isoinfo.
 - tests/test_qemu_boot.rs uses debug_qemu_boot.sh and logs boot traces.
 
+## [v0.148] - 2025-12-23
+### Changed
+- scripts/debug_qemu_boot.sh enforces bash interpreter and signals DEBUG_BOOT_READY.
+- tests/test_qemu_boot.rs invokes the script via bash and checks readiness.
+- Added unit test ensuring debug_qemu_boot.sh is executable.
+

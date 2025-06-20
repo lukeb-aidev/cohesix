@@ -1,8 +1,9 @@
+#!/bin/bash
 # CLASSIFICATION: COMMUNITY
-# Filename: scripts/debug_qemu_boot.sh v0.1
+# Filename: scripts/debug_qemu_boot.sh v0.2
 # Author: Lukas Bower
-# Date Modified: 2025-12-22
-#!/usr/bin/env bash
+# Date Modified: 2025-12-23
+# Ensures this script runs cleanly under Bash for CI use
 set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
@@ -47,8 +48,8 @@ fi
 timeout 2 "$QEMU" -cdrom "$ISO" -nographic -d int -D "$LOG_DIR/bootlog.txt" -S -snapshot >/dev/null 2>>"$INVOC_LOG" || true
 
 if [[ $missing -eq 0 ]]; then
-  echo "BOOT SCRIPT READY"
+  echo "DEBUG_BOOT_READY"
 else
-  echo "BOOT SCRIPT NOT READY"
+  echo "DEBUG_BOOT_FAILED"
   exit 1
 fi
