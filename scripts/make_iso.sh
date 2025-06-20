@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: scripts/make_iso.sh v0.8
+# Filename: scripts/make_iso.sh v0.9
 # Author: Lukas Bower
-# Date Modified: 2025-12-19
+# Date Modified: 2025-12-20
 #!/bin/bash
 # ISO layout:
 #   bin/               - runtime binaries
@@ -41,14 +41,10 @@ elif have grub-mkrescue; then
 elif have mkisofs; then
   MKISO=(mkisofs)
 else
-  log "ISO tools missing"
-  echo "ISO Build SKIPPED (tool not found)"
-  exit 0
+  error "ISO tools missing"
 fi
 if ! have mformat; then
-  log "mtools missing"
-  echo "ISO Build SKIPPED (tool not found)"
-  exit 0
+  error "mtools missing"
 fi
 
 log "Using bootloader source: $BOOTLOADER_SRC"
