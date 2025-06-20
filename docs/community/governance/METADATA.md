@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: METADATA.md v3.25
+// Filename: METADATA.md v3.26
 // Author: Lukas Bower
-// Date Modified: 2025-12-25
+// Date Modified: 2025-06-20
 
 ## Canonical Documents
 
@@ -166,6 +166,7 @@
 | scripts/debug_qemu_boot.sh | v0.2 | 2025-12-23 | COMMUNITY | | |
 | scripts/validate_iso_build.sh | v0.1 | 2025-12-19 | COMMUNITY | | |
 | scripts/fetch_sel4.sh | v0.1 | 2025-12-25 | COMMUNITY | | |
+| scripts/build_root_elf.sh | v0.1 | 2025-06-20 | COMMUNITY | | |
 | tools/make_iso.sh | v0.3 | 2025-09-23 | COMMUNITY | | |
 | metadata.json | v0.1 | 2025-07-24 | COMMUNITY | | |
 | Cargo.toml | v0.15 | 2025-09-22 | COMMUNITY | | |
