@@ -122,7 +122,7 @@
 | tests/test_namespace_rule.rs | v0.1 | 2025-07-23 | COMMUNITY | | |
 | tests/test_namespace_semantics.rs | v0.2 | 2025-12-15 | COMMUNITY | | |
 | tests/test_trace_compare.py | v0.1 | 2025-07-23 | COMMUNITY | | |
-| tests/test_qemu_boot.rs | v0.2 | 2025-07-28 | COMMUNITY | | |
+| tests/test_qemu_boot.rs | v0.3 | 2025-12-17 | COMMUNITY | | |
 | tests/boot_trace_rule.rs | v0.3 | 2025-08-18 | COMMUNITY | | |
 | tests/kernel_proc_mgr.rs | v0.1 | 2025-08-26 | COMMUNITY | | |
 | tests/test_cohcc_shell.rs | v0.2 | 2025-09-25 | COMMUNITY | | |
@@ -160,7 +160,7 @@
 | scripts/generate_busybox_man.sh | v0.1 | 2025-06-08 | COMMUNITY | | |
 | scripts/manpage_scan.sh | v0.1 | 2025-06-08 | COMMUNITY | | |
 | scripts/verify-macos-setup.sh | v0.1 | 2025-06-05 | COMMUNITY | | |
-| scripts/make_iso.sh | v0.5 | 2025-12-07 | COMMUNITY | | |
+| scripts/make_iso.sh | v0.6 | 2025-12-17 | COMMUNITY | | |
 | tools/make_iso.sh | v0.3 | 2025-09-23 | COMMUNITY | | |
 | metadata.json | v0.1 | 2025-07-24 | COMMUNITY | | |
 | Cargo.toml | v0.15 | 2025-09-22 | COMMUNITY | | |
@@ -180,7 +180,7 @@
 | full_fetch_and_build.sh | v0.8 | 2025-09-07 | COMMUNITY | | |
 | etc/init.conf | v0.1 | 2025-08-27 | COMMUNITY | | |
 | etc/init.cfg | v0.1 | 2025-08-30 | COMMUNITY | | |
-| make_iso.sh | v0.7 | 2025-12-07 | COMMUNITY | | |
+| make_iso.sh | v0.8 | 2025-12-17 | COMMUNITY | | |
 | configs/roles/QueenPrimary.yaml | v0.1 | 2025-08-30 | COMMUNITY | | |
 | configs/roles/WorkerDrone.yaml | v0.1 | 2025-08-30 | COMMUNITY | | |
 | configs/roles/DroneWorker.yaml | v0.1 | 2025-08-30 | COMMUNITY | | |
