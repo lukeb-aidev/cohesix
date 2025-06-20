@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: METADATA.md v3.28
+// Filename: METADATA.md v3.29
 // Author: Lukas Bower
-// Date Modified: 2025-12-28
+// Date Modified: 2025-12-31
 
 ## Canonical Documents
 
@@ -218,3 +218,5 @@
 | src/runtime/loader.rs | v0.1 | 2025-09-26 | COMMUNITY | | |
 | tests/test_loader.rs | v0.1 | 2025-09-26 | COMMUNITY | | |
 | tests/test_run_shell.rs | v0.1 | 2025-09-26 | COMMUNITY | | |
+| src/bootstrap/sel4_entry.rs | v0.1 | 2025-12-31 | COMMUNITY | | |
+
