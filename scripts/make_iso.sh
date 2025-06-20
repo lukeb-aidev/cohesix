@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: scripts/make_iso.sh v0.6
+# Filename: scripts/make_iso.sh v0.7
 # Author: Lukas Bower
-# Date Modified: 2025-12-17
+# Date Modified: 2025-12-18
 #!/bin/bash
 # ISO layout:
 #   bin/               - runtime binaries
@@ -51,7 +51,16 @@ if ! have mformat; then
   exit 0
 fi
 
-[ -f "$BOOTLOADER_SRC" ] || error "Missing $BOOTLOADER_SRC"
+[ -f "$BOOTLOADER_SRC" ] || {
+  KERNEL_EFI="$ROOT/target/${TARGET}-unknown-uefi/release/kernel.efi"
+  if [ -f "$KERNEL_EFI" ]; then
+    log "Generating $BOOTLOADER_SRC from kernel EFI"
+    objcopy --target=efi-app-$TARGET "$KERNEL_EFI" "$BOOTLOADER_SRC" \
+      || error "Failed to create $BOOTLOADER_SRC"
+  else
+    error "Missing $BOOTLOADER_SRC and $KERNEL_EFI"
+  fi
+}
 [ -f "$KERNEL_SRC" ] || error "Missing $KERNEL_SRC"
 [ -x "$INIT_SRC" ] || error "Missing $INIT_SRC"
 
@@ -123,3 +132,4 @@ fi
 
 SIZE=$(du -h "$ISO_OUT" | awk '{print $1}')
 log "ISO Build PASS ($SIZE) at $ISO_OUT"
+log "Staged files:" && find "$ISO_DIR" -type f | sort

@@ -1187,3 +1187,10 @@
 - ISO build script now uses bash and validates output paths.
 - QEMU boot test logs command and ensures ISO exists before boot.
 
+## [v0.143] - 2025-12-18
+### Fixed
+- make_iso.sh verifies BOOTX64.EFI presence and lists staged files.
+- cohesix_fetch_build.sh validates kernel and init outputs before ISO build.
+- Makefile qemu target fails early if BOOTX64.EFI or ISO missing.
+- test_qemu_boot.rs prints build commands and logs when artifacts are absent.
+

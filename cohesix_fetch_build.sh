@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.28
+# Filename: cohesix_fetch_build.sh v0.29
 # Author: Lukas Bower
-# Date Modified: 2025-12-15
+# Date Modified: 2025-12-18
 #!/bin/bash
 # Fetch and fully build the Cohesix project using SSH Git auth.
 
@@ -166,8 +166,10 @@ if [ "$EFI_SUPPORTED" -eq 1 ]; then
   KERNEL_EFI="target/${COHESIX_TARGET}/release/kernel.efi"
   [ -s "$KERNEL_EFI" ] || { echo "❌ kernel EFI missing or empty" >&2; exit 1; }
   cp "$KERNEL_EFI" out/BOOTX64.EFI
+  [ -s out/BOOTX64.EFI ] || { echo "❌ failed to create out/BOOTX64.EFI" >&2; exit 1; }
   mkdir -p out/boot
   cp "$KERNEL_EFI" out/boot/kernel.elf
+  [ -s out/boot/kernel.elf ] || { echo "❌ failed to stage kernel.elf" >&2; exit 1; }
 
   log "🛠️ Building init EFI..."
   if ! cargo build --release --target "$COHESIX_TARGET" --bin init \
@@ -181,6 +183,7 @@ if [ "$EFI_SUPPORTED" -eq 1 ]; then
   cp "$INIT_EFI" out/init.efi
   cp "$INIT_EFI" out/boot/init
   [ -f out/init.efi ] || { echo "❌ init EFI missing after build" >&2; exit 1; }
+  [ -s out/bin/init.efi ] || { echo "❌ failed to stage init.efi" >&2; exit 1; }
 else
   log "⚠️ TARGET $COHESIX_TARGET not UEFI-compatible; skipping EFI build"
 fi
@@ -311,6 +314,7 @@ if [ "${VIRTUAL_ENV:-}" != "$(pwd)/.venv" ]; then
   echo "❌ Python venv not active before ISO build" >&2
   exit 1
 fi
+[ -f out/BOOTX64.EFI ] || { echo "❌ out/BOOTX64.EFI missing" >&2; exit 1; }
 bash ./scripts/make_iso.sh
 [ -f out/cohesix.iso ] || { echo "❌ ISO build failed" >&2; exit 1; }
 ISO_SIZE=$(stat -c %s out/cohesix.iso)
