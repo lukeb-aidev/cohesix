@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: test_qemu_boot.rs v0.7
+// Filename: test_qemu_boot.rs v0.8
 // Author: Lukas Bower
-// Date Modified: 2025-12-21
+// Date Modified: 2025-12-22
 
 use std::fs;
 use std::path::Path;
@@ -22,21 +22,21 @@ fn qemu_boot_produces_boot_ok() {
         return;
     }
 
-    let version = Command::new(qemu)
-        .arg("--version")
-        .output()
-        .expect("check qemu version");
-    println!("{}", String::from_utf8_lossy(&version.stdout));
-
-    let iso = Path::new("out/cohesix.iso");
-    if !iso.is_file() {
-        panic!("QEMU ISO missing: ISO was not built or misplaced");
+    if Path::new("logs").is_dir() == false {
+        fs::create_dir_all("logs").unwrap();
     }
-    let boot = Path::new("out/BOOTX64.EFI");
-    assert!(boot.is_file(), "out/BOOTX64.EFI missing");
 
-    if Path::new("qemu_serial.log").exists() {
-        let _ = fs::remove_file("qemu_serial.log");
+    let debug = Command::new("scripts/debug_qemu_boot.sh")
+        .output()
+        .expect("run debug script");
+    let dbg_out = String::from_utf8_lossy(&debug.stdout);
+    println!("{}", dbg_out);
+    if !debug.status.success() || !dbg_out.contains("BOOT SCRIPT READY") {
+        panic!("Preboot check failed: cohesix.iso missing or QEMU misconfigured");
+    }
+
+    if Path::new("logs/qemu_serial.log").exists() {
+        let _ = fs::remove_file("logs/qemu_serial.log");
     }
 
     let status = Command::new(qemu)
@@ -44,27 +44,37 @@ fn qemu_boot_produces_boot_ok() {
             "-cdrom",
             "out/cohesix.iso",
             "-serial",
-            "file:qemu_serial.log",
+            "file:logs/qemu_serial.log",
             "-display",
             "none",
             "-no-reboot",
+            "-d",
+            "int",
+            "-D",
+            "logs/qemu_boot_trace.txt",
         ])
         .status()
         .expect("launch qemu");
 
     if !status.success() {
-        dump_log_tail("qemu_serial.log", 40);
+        dump_log_tail("logs/qemu_serial.log", 40);
+        if let Ok(inv) = fs::read_to_string("logs/qemu_invocation.log") {
+            eprintln!("qemu_invocation.log:\n{}", inv);
+        }
         panic!("QEMU exited with error");
     }
 
-    if !Path::new("qemu_serial.log").is_file() {
+    if !Path::new("logs/qemu_serial.log").is_file() {
         panic!("QEMU execution failed before log output began");
     }
 
-    let log = fs::read_to_string("qemu_serial.log").expect("read log");
+    let log = fs::read_to_string("logs/qemu_serial.log").expect("read log");
 
     if !log.contains("BOOT_OK") {
         eprintln!("{}", log);
+        if let Ok(trace) = fs::read_to_string("logs/qemu_boot_trace.txt") {
+            eprintln!("qemu_boot_trace:\n{}", trace);
+        }
         panic!("QEMU booted but system did not reach OK marker. Check kernel.efi, boot script, or /init path");
     }
 }

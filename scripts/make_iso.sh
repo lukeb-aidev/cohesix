@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: scripts/make_iso.sh v0.10
+# Filename: scripts/make_iso.sh v0.11
 # Author: Lukas Bower
-# Date Modified: 2025-12-21
+# Date Modified: 2025-12-22
 #!/bin/bash
 # ISO layout:
 #   bin/               - runtime binaries
@@ -144,7 +144,19 @@ if [ ! -f "$ISO_OUT" ]; then
   error "ISO not created at $ISO_OUT"
 fi
 [[ -s "$ISO_OUT" ]] || error "ISO file empty at $ISO_OUT"
+
 [[ -r "$ISO_OUT" ]] || error "ISO not readable at $ISO_OUT"
+
+if command -v isoinfo >/dev/null 2>&1; then
+  if ! isoinfo -i "$ISO_OUT" -d >/dev/null 2>&1; then
+    echo "ISO mount check failed" >&2
+    find "$ISO_DIR" -maxdepth 2 -type f >&2
+    exit 1
+  fi
+  log "ISO mount check passed"
+else
+  log "isoinfo not installed; skipping mount check"
+fi
 
 SIZE=$(du -h "$ISO_OUT" | awk '{print $1}')
 log "ISO Build PASS ($SIZE) at $ISO_OUT"
