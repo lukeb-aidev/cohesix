@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: METADATA.md v3.27
+// Filename: METADATA.md v3.28
 // Author: Lukas Bower
-// Date Modified: 2025-12-27
+// Date Modified: 2025-12-28
 
 ## Canonical Documents
 
@@ -163,6 +163,7 @@
 | scripts/manpage_scan.sh | v0.1 | 2025-06-08 | COMMUNITY | | |
 | scripts/verify-macos-setup.sh | v0.1 | 2025-06-05 | COMMUNITY | | |
 | scripts/make_iso.sh | v0.11 | 2025-12-22 | COMMUNITY | | |
+| scripts/make_grub_iso.sh | v0.1 | 2025-12-28 | COMMUNITY | | |
 | scripts/debug_qemu_boot.sh | v0.2 | 2025-12-23 | COMMUNITY | | |
 | scripts/validate_iso_build.sh | v0.1 | 2025-12-19 | COMMUNITY | | |
 | scripts/fetch_sel4.sh | v0.1 | 2025-12-25 | COMMUNITY | | |
