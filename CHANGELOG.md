@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.81
-// Date Modified: 2025-12-26
+// Filename: CHANGELOG.md v0.82
+// Date Modified: 2025-06-20
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
 • Consolidated OSS reuse files into LICENSES_AND_REUSE.md
@@ -1238,3 +1238,7 @@
 ## [v0.150] - 2025-12-26
 ### Added
 - scripts/build_sel4_kernel.sh builds the seL4 kernel for QEMU pc99.
+
+## [v0.151] - 2025-06-20
+### Added
+- Add static seL4 root task build (cohesix_root.elf)

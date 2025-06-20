@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: root_task.c v0.1
+// Filename: root_task.c v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-06-07
+// Date Modified: 2025-06-20
 
 /*
  * Simplified seL4 root task stub for Cohesix.
@@ -29,7 +29,7 @@ int main(int argc, char **argv) {
     (void)argc; (void)argv;
     write_role();
     return 0;
-
+}
 
 #include <stddef.h>
 
