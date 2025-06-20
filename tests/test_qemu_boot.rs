@@ -1,16 +1,35 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: test_qemu_boot.rs v0.8
+// Filename: test_qemu_boot.rs v0.9
 // Author: Lukas Bower
-// Date Modified: 2025-12-22
+// Date Modified: 2025-12-23
 
 use std::fs;
 use std::path::Path;
 use std::process::Command;
+use std::os::unix::fs::PermissionsExt;
 
 fn dump_log_tail(path: &str, lines: usize) {
     if let Ok(data) = fs::read_to_string(path) {
         let tail: Vec<&str> = data.lines().rev().take(lines).collect();
         eprintln!("QEMU log tail:\n{}", tail.into_iter().rev().collect::<Vec<_>>().join("\n"));
+    }
+}
+
+#[test]
+fn debug_qemu_boot_script_runs() {
+    let meta = fs::metadata("scripts/debug_qemu_boot.sh")
+        .expect("debug_qemu_boot.sh missing");
+    if meta.permissions().mode() & 0o111 == 0 {
+        panic!("debug_qemu_boot.sh is not executable or malformed");
+    }
+
+    let run = Command::new("bash")
+        .arg("scripts/debug_qemu_boot.sh")
+        .output()
+        .expect("failed to invoke debug script");
+
+    if run.status.code() == Some(126) || run.status.code() == Some(127) {
+        panic!("debug_qemu_boot.sh is not executable or malformed");
     }
 }
 
@@ -26,12 +45,13 @@ fn qemu_boot_produces_boot_ok() {
         fs::create_dir_all("logs").unwrap();
     }
 
-    let debug = Command::new("scripts/debug_qemu_boot.sh")
+    let debug = Command::new("bash")
+        .arg("scripts/debug_qemu_boot.sh")
         .output()
         .expect("run debug script");
     let dbg_out = String::from_utf8_lossy(&debug.stdout);
     println!("{}", dbg_out);
-    if !debug.status.success() || !dbg_out.contains("BOOT SCRIPT READY") {
+    if !debug.status.success() || !dbg_out.contains("DEBUG_BOOT_READY") {
         panic!("Preboot check failed: cohesix.iso missing or QEMU misconfigured");
     }
 
