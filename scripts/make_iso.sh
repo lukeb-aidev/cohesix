@@ -58,7 +58,7 @@ log "Init source: $INIT_SRC"
     objcopy --target=efi-app-$TARGET "$KERNEL_EFI" "$BOOTLOADER_SRC" \
       || error "Failed to create $BOOTLOADER_SRC"
   else
-    error "Missing $BOOTLOADER_SRC and $KERNEL_EFI"
+    error "Missing bootloader $BOOTLOADER_SRC and kernel EFI $KERNEL_EFI"
   fi
 }
 [ -f "$KERNEL_SRC" ] || error "Missing $KERNEL_SRC"
@@ -119,13 +119,21 @@ if [ -f "$ROOT/usr/src/example.coh" ]; then
   cp "$ROOT/usr/src/example.coh" "$ISO_DIR/usr/src/example.coh"
 fi
 
+if [ -f "$ROOT/out/etc/cohesix/config.yaml" ]; then
+  log "📦 Staging config.yaml"
+  mkdir -p "$ISO_DIR/etc/cohesix"
+  cp "$ROOT/out/etc/cohesix/config.yaml" "$ISO_DIR/etc/cohesix/config.yaml"
+else
+  error "config.yaml not found in $ROOT/out/etc/cohesix"
+fi
 if [ -d "$ROOT/out/etc/cohesix" ]; then
-  log "📦 Copying config files"
-  cp -a "$ROOT/out/etc/cohesix/." "$ISO_DIR/etc/cohesix/"
+  cp -a "$ROOT/out/etc/cohesix"/*.toml "$ISO_DIR/etc/cohesix/" 2>/dev/null || true
 fi
 if [ -d "$ROOT/out/roles" ]; then
   log "📦 Copying roles"
   cp -a "$ROOT/out/roles/." "$ISO_DIR/roles/"
+else
+  error "roles directory missing in $ROOT/out/roles"
 fi
 log "✅ Files copied"
 

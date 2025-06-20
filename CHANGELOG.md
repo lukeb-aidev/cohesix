@@ -1226,3 +1226,11 @@
 - tests/test_qemu_boot.rs invokes the script via bash and checks readiness.
 - Added unit test ensuring debug_qemu_boot.sh is executable.
 
+## [v0.149] - 2025-12-24
+### Changed
+- cohesix_fetch_build.sh builds ISO before running tests and logs key milestones.
+- scripts/make_iso.sh fails loudly when BOOTX64.EFI or config.yaml are missing.
+- tests/test_qemu_boot.rs assert presence of ISO and EFI before running QEMU.
+### Added
+- tests/test_boot_build_chain.rs verifies build script log markers.
+
