@@ -311,7 +311,7 @@ if [ "${VIRTUAL_ENV:-}" != "$(pwd)/.venv" ]; then
   echo "❌ Python venv not active before ISO build" >&2
   exit 1
 fi
-./scripts/make_iso.sh
+bash ./scripts/make_iso.sh
 [ -f out/cohesix.iso ] || { echo "❌ ISO build failed" >&2; exit 1; }
 ISO_SIZE=$(stat -c %s out/cohesix.iso)
 if [ "$ISO_SIZE" -le $((1024*1024)) ]; then
