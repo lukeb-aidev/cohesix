@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.82
-// Date Modified: 2025-06-20
+// Filename: CHANGELOG.md v0.83
+// Date Modified: 2025-12-27
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
 • Consolidated OSS reuse files into LICENSES_AND_REUSE.md
@@ -1242,3 +1242,8 @@
 ## [v0.151] - 2025-06-20
 ### Added
 - Add static seL4 root task build (cohesix_root.elf)
+
+## [v0.152] - 2025-12-27
+### Added
+- Rust cohesix_root static ELF build script
+- src/root/main.rs entry point for seL4 root task
