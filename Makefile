@@ -227,9 +227,12 @@ cohcap: ## Run cohcap CLI
 qemu: ## Launch QEMU with built image and capture serial log
 	@command -v qemu-system-x86_64 >/dev/null 2>&1 || { echo "qemu-system-x86_64 not installed — skipping"; exit 0; }
 	@if [ "$(EFI_AVAILABLE)" != "1" ]; then echo "gnu-efi headers not found — skipping qemu"; \
-	else mkdir -p out; \
-	if [ ! -f out/cohesix.iso ]; then ./make_iso.sh; fi; \
-	qemu-system-x86_64 \
+       else mkdir -p out; \
+       if [ ! -f out/BOOTX64.EFI ]; then \
+            echo "Missing out/BOOTX64.EFI; run 'make kernel'"; exit 1; fi; \
+       if [ ! -f out/cohesix.iso ]; then ./make_iso.sh; fi; \
+       [ -f out/cohesix.iso ] || { echo "ISO build failed"; exit 1; }; \
+       qemu-system-x86_64 \
 	        -bios /usr/share/qemu/OVMF.fd \
 	    -drive if=pflash,format=raw,file=/usr/share/OVMF/OVMF_VARS.fd \
 	    -cdrom out/cohesix.iso -net none -M q35 -m 256M \
