@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v0.80
-// Date Modified: 2025-12-08
+// Date Modified: 2025-12-25
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
 • Consolidated OSS reuse files into LICENSES_AND_REUSE.md
@@ -1234,3 +1234,8 @@
 ### Added
 - tests/test_boot_build_chain.rs verifies build script log markers.
 
+
+## [v0.150] - 2025-12-25
+### Added
+- seL4 kernel and seL4_tools added as git submodules.
+- scripts/fetch_sel4.sh clones or updates the seL4 repositories.
