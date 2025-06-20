@@ -41,6 +41,9 @@ fn qemu_boot_produces_boot_ok() {
         return;
     }
 
+    assert!(Path::new("out/cohesix.iso").exists(), "ISO not built or misplaced");
+    assert!(Path::new("out/BOOTX64.EFI").exists(), "Missing UEFI binary: expected out/BOOTX64.EFI");
+
     if Path::new("logs").is_dir() == false {
         fs::create_dir_all("logs").unwrap();
     }

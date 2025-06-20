@@ -171,6 +171,8 @@ if [ "$EFI_SUPPORTED" -eq 1 ]; then
   cp "$KERNEL_EFI" out/boot/kernel.elf
   [ -s out/boot/kernel.elf ] || { echo "❌ failed to stage kernel.elf" >&2; exit 1; }
   log "kernel EFI built at $KERNEL_EFI"
+  echo "kernel build complete" >&3
+  echo "EFI binary created at out/BOOTX64.EFI" >&3
 
   log "🛠️ Building init EFI..."
   if ! cargo build --release --target "$COHESIX_TARGET" --bin init \
@@ -214,6 +216,7 @@ EOF
   CONFIG_SRC="config/config.yaml"
 fi
 cp "$CONFIG_SRC" out/etc/cohesix/config.yaml
+log "config.yaml staged from $CONFIG_SRC"
 if ls setup/roles/*.yaml >/dev/null 2>&1; then
   for cfg in setup/roles/*.yaml; do
     role="$(basename "$cfg" .yaml)"
@@ -227,6 +230,71 @@ fi
 for shf in setup/init.sh setup/*.sh; do
   [ -f "$shf" ] && cp "$shf" out/setup/
 done
+
+echo "[🧪] Checking boot prerequisites..."
+if [ ! -x out/bin/init ]; then
+  echo "❌ No init binary found at out/bin/init. Aborting." >&2
+  exit 1
+fi
+if [ ! -f out/boot/kernel.elf ]; then
+  echo "❌ Kernel ELF missing. Expected at out/boot/kernel.elf" >&2
+  exit 1
+fi
+if [ ! -f config/config.yaml ]; then
+  echo "⚠️ config.yaml missing. Generating fallback..."
+  mkdir -p config
+  cat > config/config.yaml <<EOF
+# Auto-generated fallback config
+system:
+  role: worker
+  trace: true
+EOF
+fi
+
+log "📀 Creating ISO..."
+if [ "${VIRTUAL_ENV:-}" != "$(pwd)/.venv" ]; then
+  echo "❌ Python venv not active before ISO build" >&2
+  exit 1
+fi
+[ -f out/BOOTX64.EFI ] || { echo "❌ out/BOOTX64.EFI missing" >&2; exit 1; }
+bash ./scripts/make_iso.sh || { echo "❌ make_iso.sh failed" >&2; exit 1; }
+if [ ! -f out/cohesix.iso ]; then
+  echo "❌ ISO build failed" >&2
+  exit 1
+fi
+log "ISO successfully built"
+echo "ISO successfully built" >&3
+ls -l out/
+du -sh out/
+if [ ! -r out/cohesix.iso ]; then
+  echo "❌ out/cohesix.iso not readable" >&2
+  exit 1
+fi
+if [ ! -f out/BOOTX64.EFI ]; then
+  echo "❌ out/BOOTX64.EFI missing after ISO build" >&2
+  exit 1
+fi
+if [ ! -f config/config.yaml ]; then
+  echo "❌ config/config.yaml missing" >&2
+  exit 1
+fi
+ls -lh out/ >> "$LOG_FILE"
+sha256sum out/cohesix.iso >> "$LOG_FILE"
+ISO_SIZE=$(stat -c %s out/cohesix.iso)
+[ -x scripts/validate_iso_build.sh ] && scripts/validate_iso_build.sh || true
+if [ "$ISO_SIZE" -le $((1024*1024)) ]; then
+  echo "❌ ISO build incomplete or missing required tools" >&2
+  exit 1
+fi
+if command -v xorriso >/dev/null; then
+  xorriso -indev out/cohesix.iso -find / -name BOOTX64.EFI -print | grep -q BOOTX64.EFI || {
+    echo "❌ BOOTX64.EFI missing in ISO" >&2; exit 1; }
+else
+  log "⚠️ xorriso not found; skipping ISO content check"
+fi
+if [[ ! -f out/init.efi ]]; then
+  echo "❌ init.efi missing — build incomplete" | tee -a "$LOG_FILE"
+fi
 
 
 log "🔍 Running Rust tests with detailed output..."
@@ -322,39 +390,6 @@ if [ ! -f out/cohesix.iso ]; then
   echo "❌ ISO build failed" >&2
   exit 1
 fi
-log "ISO build complete"
-ls -l out/
-du -sh out/
-if [ ! -r out/cohesix.iso ]; then
-  echo "❌ out/cohesix.iso not readable" >&2
-  exit 1
-fi
-if [ ! -f out/BOOTX64.EFI ]; then
-  echo "❌ out/BOOTX64.EFI missing after ISO build" >&2
-  exit 1
-fi
-if [ ! -f config/config.yaml ]; then
-  echo "❌ config/config.yaml missing" >&2
-  exit 1
-fi
-ls -lh out/ >> "$LOG_FILE"
-sha256sum out/cohesix.iso >> "$LOG_FILE"
-ISO_SIZE=$(stat -c %s out/cohesix.iso)
-[ -x scripts/validate_iso_build.sh ] && scripts/validate_iso_build.sh || true
-if [ "$ISO_SIZE" -le $((1024*1024)) ]; then
-  echo "❌ ISO build incomplete or missing required tools" >&2
-  exit 1
-fi
-if command -v xorriso >/dev/null; then
-  xorriso -indev out/cohesix.iso -find / -name BOOTX64.EFI -print | grep -q BOOTX64.EFI || {
-    echo "❌ BOOTX64.EFI missing in ISO" >&2; exit 1; }
-else
-  log "⚠️ xorriso not found; skipping ISO content check"
-fi
-if [[ ! -f out/init.efi ]]; then
-  echo "❌ init.efi missing — build incomplete" | tee -a "$LOG_FILE"
-fi
-grep -Ei 'error|fail|panic|permission denied|warning' "$LOG_FILE" > "$SUMMARY_ERRORS" || true
 
 # Optional QEMU boot check
 if command -v qemu-system-x86_64 >/dev/null; then
