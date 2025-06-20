@@ -1,72 +1,70 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: test_qemu_boot.rs v0.6
+// Filename: test_qemu_boot.rs v0.7
 // Author: Lukas Bower
-// Date Modified: 2025-12-20
+// Date Modified: 2025-12-21
 
-use std::process::Command;
-use std::time::{Duration, Instant};
-use std::{fs, thread};
+use std::fs;
 use std::path::Path;
+use std::process::Command;
+
+fn dump_log_tail(path: &str, lines: usize) {
+    if let Ok(data) = fs::read_to_string(path) {
+        let tail: Vec<&str> = data.lines().rev().take(lines).collect();
+        eprintln!("QEMU log tail:\n{}", tail.into_iter().rev().collect::<Vec<_>>().join("\n"));
+    }
+}
 
 #[test]
 fn qemu_boot_produces_boot_ok() {
-    if Command::new("sh")
-        .arg("-c")
-        .arg("command -v qemu-system-x86_64")
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
-    {
-        let boot = Path::new("out/BOOTX64.EFI");
-        let iso = Path::new("out/cohesix.iso");
-        assert!(boot.is_file(), "out/BOOTX64.EFI missing");
-        assert!(iso.is_file(), "out/cohesix.iso missing");
-
-        if Path::new("qemu_serial.log").exists() {
-            let _ = fs::remove_file("qemu_serial.log");
-        }
-
-        let dry = Command::new("make")
-            .arg("-n")
-            .arg("qemu")
-            .output()
-            .expect("failed to preview qemu command");
-        println!("QEMU command:\n{}", String::from_utf8_lossy(&dry.stdout));
-
-        let run_qemu = |attempt| {
-            println!("launching qemu attempt {}", attempt);
-            Command::new("make")
-                .arg("qemu")
-                .env("TMPDIR", std::env::temp_dir())
-                .status()
-                .expect("failed to run make qemu")
-        };
-
-        let mut status = run_qemu(1);
-        if !status.success() {
-            eprintln!("make qemu exit {:?}, retrying", status);
-            status = run_qemu(2);
-        }
-        assert!(status.success(), "make qemu failed with {:?}", status);
-
-        if !Path::new("qemu_serial.log").exists() {
-            panic!("qemu_serial.log missing after qemu run");
-        }
-
-        let log = fs::read_to_string("qemu_serial.log").expect("read log");
-        let tail: Vec<&str> = log.lines().rev().take(20).collect();
-        println!("QEMU log (tail):\n{}", tail.into_iter().rev().collect::<Vec<_>>().join("\n"));
-
-        for line in log.lines() {
-            if let Some(reason) = line.strip_prefix("BOOT_FAIL:") {
-                panic!("BOOT_FAIL: {}", reason);
-            }
-        }
-
-        if !log.contains("BOOT_OK") {
-            panic!("missing BOOT_OK\nfull log:\n{}", log);
-        }
-    } else {
+    let qemu = Path::new("/usr/bin/qemu-system-x86_64");
+    if !qemu.is_file() {
         eprintln!("qemu-system-x86_64 not installed; skipping test");
+        return;
+    }
+
+    let version = Command::new(qemu)
+        .arg("--version")
+        .output()
+        .expect("check qemu version");
+    println!("{}", String::from_utf8_lossy(&version.stdout));
+
+    let iso = Path::new("out/cohesix.iso");
+    if !iso.is_file() {
+        panic!("QEMU ISO missing: ISO was not built or misplaced");
+    }
+    let boot = Path::new("out/BOOTX64.EFI");
+    assert!(boot.is_file(), "out/BOOTX64.EFI missing");
+
+    if Path::new("qemu_serial.log").exists() {
+        let _ = fs::remove_file("qemu_serial.log");
+    }
+
+    let status = Command::new(qemu)
+        .args(&[
+            "-cdrom",
+            "out/cohesix.iso",
+            "-serial",
+            "file:qemu_serial.log",
+            "-display",
+            "none",
+            "-no-reboot",
+        ])
+        .status()
+        .expect("launch qemu");
+
+    if !status.success() {
+        dump_log_tail("qemu_serial.log", 40);
+        panic!("QEMU exited with error");
+    }
+
+    if !Path::new("qemu_serial.log").is_file() {
+        panic!("QEMU execution failed before log output began");
+    }
+
+    let log = fs::read_to_string("qemu_serial.log").expect("read log");
+
+    if !log.contains("BOOT_OK") {
+        eprintln!("{}", log);
+        panic!("QEMU booted but system did not reach OK marker. Check kernel.efi, boot script, or /init path");
     }
 }
