@@ -112,3 +112,8 @@ name = "init"
 path = "src/init/main.rs"
 required-features = ["minimal_uefi"]
 
+
+[[bin]]
+name = "cohesix_root"
+path = "src/root/main.rs"
+
