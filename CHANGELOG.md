@@ -1182,3 +1182,8 @@
 - `bind_overlay_order` test now uses a temporary `/srv` directory when possible
   and skips if permissions are insufficient. Errors include the current UID for
   easier diagnostics.
+## [v0.142] - 2025-12-17
+### Fixed
+- ISO build script now uses bash and validates output paths.
+- QEMU boot test logs command and ensures ISO exists before boot.
+
