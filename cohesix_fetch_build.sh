@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.29
+# Filename: cohesix_fetch_build.sh v0.30
 # Author: Lukas Bower
-# Date Modified: 2025-12-18
+# Date Modified: 2025-12-19
 #!/bin/bash
 # Fetch and fully build the Cohesix project using SSH Git auth.
 
@@ -170,6 +170,7 @@ if [ "$EFI_SUPPORTED" -eq 1 ]; then
   mkdir -p out/boot
   cp "$KERNEL_EFI" out/boot/kernel.elf
   [ -s out/boot/kernel.elf ] || { echo "❌ failed to stage kernel.elf" >&2; exit 1; }
+  log "kernel EFI built at $KERNEL_EFI"
 
   log "🛠️ Building init EFI..."
   if ! cargo build --release --target "$COHESIX_TARGET" --bin init \
@@ -184,6 +185,7 @@ if [ "$EFI_SUPPORTED" -eq 1 ]; then
   cp "$INIT_EFI" out/boot/init
   [ -f out/init.efi ] || { echo "❌ init EFI missing after build" >&2; exit 1; }
   [ -s out/bin/init.efi ] || { echo "❌ failed to stage init.efi" >&2; exit 1; }
+  log "init EFI built at $INIT_EFI"
 else
   log "⚠️ TARGET $COHESIX_TARGET not UEFI-compatible; skipping EFI build"
 fi
@@ -315,9 +317,16 @@ if [ "${VIRTUAL_ENV:-}" != "$(pwd)/.venv" ]; then
   exit 1
 fi
 [ -f out/BOOTX64.EFI ] || { echo "❌ out/BOOTX64.EFI missing" >&2; exit 1; }
-bash ./scripts/make_iso.sh
-[ -f out/cohesix.iso ] || { echo "❌ ISO build failed" >&2; exit 1; }
+bash ./scripts/make_iso.sh || { echo "❌ make_iso.sh failed" >&2; exit 1; }
+if [ ! -f out/cohesix.iso ]; then
+  echo "❌ ISO build failed" >&2
+  exit 1
+fi
+log "ISO build complete"
+ls -l out/
+du -sh out/
 ISO_SIZE=$(stat -c %s out/cohesix.iso)
+[ -x scripts/validate_iso_build.sh ] && scripts/validate_iso_build.sh || true
 if [ "$ISO_SIZE" -le $((1024*1024)) ]; then
   echo "❌ ISO build incomplete or missing required tools" >&2
   exit 1
@@ -373,10 +382,15 @@ if command -v qemu-system-x86_64 >/dev/null; then
     -drive if=pflash,format=raw,file="$TMPDIR/OVMF_VARS.fd" \
     -cdrom "$ISO_IMG" -net none -M q35 -m 256M \
     -no-reboot -nographic -serial file:"$SERIAL_LOG"
+  QEMU_EXIT=$?
   cat "$SERIAL_LOG" >> "$QEMU_LOG" 2>/dev/null || true
   cat "$SERIAL_LOG" >> "$LOG_FILE" 2>/dev/null || true
   echo "📜 Boot log (tail):"
   tail -n 20 "$SERIAL_LOG" || echo "❌ Could not read QEMU log"
+  if [ "$QEMU_EXIT" -ne 0 ]; then
+    echo "❌ QEMU exited with code $QEMU_EXIT" >&2
+    exit 1
+  fi
   if grep -q "BOOT_OK" "$SERIAL_LOG"; then
     log "✅ QEMU boot succeeded"
   else
