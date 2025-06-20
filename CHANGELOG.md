@@ -1207,3 +1207,9 @@
 - test_qemu_boot.rs prints qemu command, retries on failure, and checks log presence.
 - scripts/make_iso.sh exits with errors when ISO tools are missing.
 
+## [v0.146] - 2025-12-21
+### Changed
+- scripts/make_iso.sh logs mkisofs stderr on failure and verifies ISO readability.
+- cohesix_fetch_build.sh validates ISO artifacts and logs sha256 checksums.
+- tests/test_qemu_boot.rs fully validates QEMU execution and dumps log tails on error.
+

@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.30
+# Filename: cohesix_fetch_build.sh v0.31
 # Author: Lukas Bower
-# Date Modified: 2025-12-19
+# Date Modified: 2025-12-21
 #!/bin/bash
 # Fetch and fully build the Cohesix project using SSH Git auth.
 
@@ -325,6 +325,20 @@ fi
 log "ISO build complete"
 ls -l out/
 du -sh out/
+if [ ! -r out/cohesix.iso ]; then
+  echo "❌ out/cohesix.iso not readable" >&2
+  exit 1
+fi
+if [ ! -f out/BOOTX64.EFI ]; then
+  echo "❌ out/BOOTX64.EFI missing after ISO build" >&2
+  exit 1
+fi
+if [ ! -f config/config.yaml ]; then
+  echo "❌ config/config.yaml missing" >&2
+  exit 1
+fi
+ls -lh out/ >> "$LOG_FILE"
+sha256sum out/cohesix.iso >> "$LOG_FILE"
 ISO_SIZE=$(stat -c %s out/cohesix.iso)
 [ -x scripts/validate_iso_build.sh ] && scripts/validate_iso_build.sh || true
 if [ "$ISO_SIZE" -le $((1024*1024)) ]; then
