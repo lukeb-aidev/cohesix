@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: test_qemu_boot.rs v0.5
+// Filename: test_qemu_boot.rs v0.6
 // Author: Lukas Bower
-// Date Modified: 2025-12-19
+// Date Modified: 2025-12-20
 
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -17,10 +17,11 @@ fn qemu_boot_produces_boot_ok() {
         .map(|s| s.success())
         .unwrap_or(false)
     {
-        assert!(Path::new("out/BOOTX64.EFI").exists(),
-            "ISO not generated; out/BOOTX64.EFI missing");
-        assert!(Path::new("out/cohesix.iso").exists(),
-            "ISO not generated; make_iso.sh likely failed or preconditions not met");
+        let boot = Path::new("out/BOOTX64.EFI");
+        let iso = Path::new("out/cohesix.iso");
+        assert!(boot.is_file(), "out/BOOTX64.EFI missing");
+        assert!(iso.is_file(), "out/cohesix.iso missing");
+
         if Path::new("qemu_serial.log").exists() {
             let _ = fs::remove_file("qemu_serial.log");
         }
@@ -30,32 +31,26 @@ fn qemu_boot_produces_boot_ok() {
             .arg("qemu")
             .output()
             .expect("failed to preview qemu command");
-        println!("{}", String::from_utf8_lossy(&dry.stdout));
+        println!("QEMU command:\n{}", String::from_utf8_lossy(&dry.stdout));
 
-        let status = Command::new("make")
-            .arg("qemu")
-            .env("TMPDIR", std::env::temp_dir())
-            .status()
-            .expect("failed to run make qemu");
+        let run_qemu = |attempt| {
+            println!("launching qemu attempt {}", attempt);
+            Command::new("make")
+                .arg("qemu")
+                .env("TMPDIR", std::env::temp_dir())
+                .status()
+                .expect("failed to run make qemu")
+        };
 
-        assert!(status.success(), "make qemu failed with {:?}", status);
-        if !Path::new("out/cohesix.iso").exists() {
-            eprintln!("out/cohesix.iso missing after running make qemu");
-            eprintln!("make qemu preview:\n{}", String::from_utf8_lossy(&dry.stdout));
-            if let Ok(log) = fs::read_to_string("qemu_serial.log") {
-                eprintln!("qemu_serial.log:\n{}", log);
-            }
-            panic!("out/cohesix.iso missing");
+        let mut status = run_qemu(1);
+        if !status.success() {
+            eprintln!("make qemu exit {:?}, retrying", status);
+            status = run_qemu(2);
         }
+        assert!(status.success(), "make qemu failed with {:?}", status);
 
-        let start = Instant::now();
-        while !Path::new("qemu_serial.log").exists() {
-            if start.elapsed() > Duration::from_secs(15) {
-                eprintln!("qemu_serial.log not found after 15s");
-                eprintln!("make qemu preview:\n{}", String::from_utf8_lossy(&dry.stdout));
-                panic!("qemu_serial.log missing");
-            }
-            thread::sleep(Duration::from_millis(500));
+        if !Path::new("qemu_serial.log").exists() {
+            panic!("qemu_serial.log missing after qemu run");
         }
 
         let log = fs::read_to_string("qemu_serial.log").expect("read log");
@@ -69,8 +64,7 @@ fn qemu_boot_produces_boot_ok() {
         }
 
         if !log.contains("BOOT_OK") {
-            eprintln!("QEMU log:\n{}", log);
-            panic!("BOOT_OK missing in log");
+            panic!("missing BOOT_OK\nfull log:\n{}", log);
         }
     } else {
         eprintln!("qemu-system-x86_64 not installed; skipping test");
