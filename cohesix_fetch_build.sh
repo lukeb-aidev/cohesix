@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.31
+# Filename: cohesix_fetch_build.sh v0.32
 # Author: Lukas Bower
-# Date Modified: 2025-12-21
+# Date Modified: 2025-12-30
 #!/bin/bash
 # Fetch and fully build the Cohesix project using SSH Git auth.
 
@@ -29,6 +29,7 @@ log "📦 Cloning repository..."
 git clone git@github.com:lukeb-aidev/cohesix.git
 cd cohesix
 ROOT="$(pwd)"
+STAGE_DIR="$ROOT/out/stage"
 
 # Detect platform and GPU availability
 COH_PLATFORM="$(uname -m)"
@@ -125,31 +126,31 @@ cargo build --release --target "${COHESIX_TARGET}" --bin cohcc --features secure
 grep -Ei 'error|fail|panic|permission denied|warning' "$LOG_FILE" > "$SUMMARY_ERRORS" || true
 
 # Ensure output directory exists before copying Rust binaries
-mkdir -p out/bin
+mkdir -p "$STAGE_DIR/bin"
 
 # Confirm cohcc built successfully before copying
-rm -f out/bin/cohcc
+rm -f "$STAGE_DIR/bin/cohcc"
 COHCC_PATH="target/${COHESIX_TARGET}/release/cohcc"
 if [[ -f "$COHCC_PATH" ]]; then
-  cp "$COHCC_PATH" out/bin/cohcc
+  cp "$COHCC_PATH" "$STAGE_DIR/bin/cohcc"
 else
   echo "❌ cohcc not found at $COHCC_PATH" >&2
   exit 1
 fi
 
 # Copy other Rust CLI binaries into out/bin for ISO staging
-for bin in cohbuild cohcap cohtrace cohrun_cli; do
+for bin in cohbuild cohcap cohtrace cohrun_cli validator fs nsbuilder shell; do
   BIN_PATH="target/${COHESIX_TARGET}/release/$bin"
-  [ -f "$BIN_PATH" ] && cp "$BIN_PATH" "out/bin/$bin"
+  [ -f "$BIN_PATH" ] && cp "$BIN_PATH" "$STAGE_DIR/bin/$bin"
 done
 
 # Stage shell wrappers for Python CLI tools
 for script in cohcli cohcap cohtrace cohrun cohbuild cohup cohpkg; do
-  [ -f "bin/$script" ] && cp "bin/$script" "out/bin/$script"
+  [ -f "bin/$script" ] && cp "bin/$script" "$STAGE_DIR/bin/$script"
 done
 
 # Ensure staging directories exist for config and roles
-mkdir -p out/etc/cohesix out/roles out/setup
+mkdir -p "$STAGE_DIR/etc" "$STAGE_DIR/roles" "$STAGE_DIR/init"
 
 EFI_SUPPORTED=0
 case "$COHESIX_TARGET" in
@@ -165,11 +166,11 @@ if [ "$EFI_SUPPORTED" -eq 1 ]; then
   fi
   KERNEL_EFI="target/${COHESIX_TARGET}/release/kernel.efi"
   [ -s "$KERNEL_EFI" ] || { echo "❌ kernel EFI missing or empty" >&2; exit 1; }
-  cp "$KERNEL_EFI" out/BOOTX64.EFI
-  [ -s out/BOOTX64.EFI ] || { echo "❌ failed to create out/BOOTX64.EFI" >&2; exit 1; }
-  mkdir -p out/boot
-  cp "$KERNEL_EFI" out/boot/kernel.elf
-  [ -s out/boot/kernel.elf ] || { echo "❌ failed to stage kernel.elf" >&2; exit 1; }
+  cp "$KERNEL_EFI" "$STAGE_DIR/BOOTX64.EFI"
+  [ -s "$STAGE_DIR/BOOTX64.EFI" ] || { echo "❌ failed to create $STAGE_DIR/BOOTX64.EFI" >&2; exit 1; }
+  mkdir -p "$STAGE_DIR/boot"
+  cp "$KERNEL_EFI" "$STAGE_DIR/boot/kernel.elf"
+  [ -s "$STAGE_DIR/boot/kernel.elf" ] || { echo "❌ failed to stage kernel.elf" >&2; exit 1; }
   log "kernel EFI built at $KERNEL_EFI"
   echo "kernel build complete" >&3
   echo "EFI binary created at out/BOOTX64.EFI" >&3
@@ -182,23 +183,24 @@ if [ "$EFI_SUPPORTED" -eq 1 ]; then
   fi
   INIT_EFI="target/${COHESIX_TARGET}/release/init.efi"
   [ -s "$INIT_EFI" ] || { echo "❌ init EFI missing or empty" >&2; exit 1; }
-  cp "$INIT_EFI" out/bin/init.efi
-  cp "$INIT_EFI" out/init.efi
-  cp "$INIT_EFI" out/boot/init
-  [ -f out/init.efi ] || { echo "❌ init EFI missing after build" >&2; exit 1; }
-  [ -s out/bin/init.efi ] || { echo "❌ failed to stage init.efi" >&2; exit 1; }
+  cp "$INIT_EFI" "$STAGE_DIR/bin/init.efi"
+  cp "$INIT_EFI" "$STAGE_DIR/init.efi"
+  cp "$INIT_EFI" "$STAGE_DIR/boot/init"
+  [ -f "$STAGE_DIR/init.efi" ] || { echo "❌ init EFI missing after build" >&2; exit 1; }
+  [ -s "$STAGE_DIR/bin/init.efi" ] || { echo "❌ failed to stage init.efi" >&2; exit 1; }
   log "init EFI built at $INIT_EFI"
 else
   log "⚠️ TARGET $COHESIX_TARGET not UEFI-compatible; skipping EFI build"
 fi
 
 log "📂 Staging boot files..."
+mkdir -p "$STAGE_DIR/boot"
 for f in initfs.img plan9.ns bootargs.txt boot_trace.json; do
-  [ -f "$f" ] && cp "$f" out/
+  [ -f "$f" ] && cp "$f" "$STAGE_DIR/boot/"
 done
 
 log "📂 Staging configuration..."
-mkdir -p out/etc/cohesix
+mkdir -p "$STAGE_DIR/config"
 CONFIG_SRC=""
 if [ -f config/config.yaml ]; then
   CONFIG_SRC="config/config.yaml"
@@ -215,28 +217,42 @@ system:
 EOF
   CONFIG_SRC="config/config.yaml"
 fi
-cp "$CONFIG_SRC" out/etc/cohesix/config.yaml
+mkdir -p "$STAGE_DIR/config"
+cp "$CONFIG_SRC" "$STAGE_DIR/config/config.yaml"
 log "config.yaml staged from $CONFIG_SRC"
 if ls setup/roles/*.yaml >/dev/null 2>&1; then
   for cfg in setup/roles/*.yaml; do
     role="$(basename "$cfg" .yaml)"
-    mkdir -p "out/roles/$role"
-    cp "$cfg" "out/roles/$role/config.yaml"
+    mkdir -p "$STAGE_DIR/roles/$role"
+    cp "$cfg" "$STAGE_DIR/roles/$role/config.yaml"
   done
 else
   echo "❌ No role configs found in setup/roles" >&2
   exit 1
 fi
 for shf in setup/init.sh setup/*.sh; do
-  [ -f "$shf" ] && cp "$shf" out/setup/
+  [ -f "$shf" ] && cp "$shf" "$STAGE_DIR/init/"
 done
 
+# Generate manifest of staged binaries
+MANIFEST="$STAGE_DIR/manifest.json"
+echo '{"binaries":[' > "$MANIFEST"
+first=1
+for bin in $(find "$STAGE_DIR/bin" -type f -perm -111); do
+  hash=$(sha256sum "$bin" | awk '{print $1}')
+  ver=$(git rev-parse --short HEAD)
+  if [ $first -eq 0 ]; then echo ',' >> "$MANIFEST"; fi
+  first=0
+  printf '{"file":"%s","hash":"%s","version":"%s"}' "${bin#$STAGE_DIR/}" "$hash" "$ver" >> "$MANIFEST"
+done
+echo ']}' >> "$MANIFEST"
+
 echo "[🧪] Checking boot prerequisites..."
-if [ ! -x out/bin/init ]; then
-  echo "❌ No init binary found at out/bin/init. Aborting." >&2
+if [ ! -x "$STAGE_DIR/bin/init" ] && [ ! -x "$STAGE_DIR/bin/init.efi" ]; then
+  echo "❌ No init binary found in $STAGE_DIR/bin. Aborting." >&2
   exit 1
 fi
-if [ ! -f out/boot/kernel.elf ]; then
+if [ ! -f "$STAGE_DIR/boot/kernel.elf" ]; then
   echo "❌ Kernel ELF missing. Expected at out/boot/kernel.elf" >&2
   exit 1
 fi
@@ -256,9 +272,9 @@ if [ "${VIRTUAL_ENV:-}" != "$(pwd)/.venv" ]; then
   echo "❌ Python venv not active before ISO build" >&2
   exit 1
 fi
-[ -f out/BOOTX64.EFI ] || { echo "❌ out/BOOTX64.EFI missing" >&2; exit 1; }
-bash ./scripts/make_iso.sh || { echo "❌ make_iso.sh failed" >&2; exit 1; }
-if [ ! -f out/cohesix.iso ]; then
+[ -f "$STAGE_DIR/BOOTX64.EFI" ] || { echo "❌ $STAGE_DIR/BOOTX64.EFI missing" >&2; exit 1; }
+bash ./scripts/make_grub_iso.sh || { echo "❌ make_grub_iso.sh failed" >&2; exit 1; }
+if [ ! -f out/cohesix_grub.iso ]; then
   echo "❌ ISO build failed" >&2
   exit 1
 fi
@@ -266,12 +282,12 @@ log "ISO successfully built"
 echo "ISO successfully built" >&3
 ls -l out/
 du -sh out/
-if [ ! -r out/cohesix.iso ]; then
-  echo "❌ out/cohesix.iso not readable" >&2
+if [ ! -r out/cohesix_grub.iso ]; then
+  echo "❌ out/cohesix_grub.iso not readable" >&2
   exit 1
 fi
-if [ ! -f out/BOOTX64.EFI ]; then
-  echo "❌ out/BOOTX64.EFI missing after ISO build" >&2
+if [ ! -f "$STAGE_DIR/BOOTX64.EFI" ]; then
+  echo "❌ $STAGE_DIR/BOOTX64.EFI missing after ISO build" >&2
   exit 1
 fi
 if [ ! -f config/config.yaml ]; then
@@ -279,15 +295,15 @@ if [ ! -f config/config.yaml ]; then
   exit 1
 fi
 ls -lh out/ >> "$LOG_FILE"
-sha256sum out/cohesix.iso >> "$LOG_FILE"
-ISO_SIZE=$(stat -c %s out/cohesix.iso)
+sha256sum out/cohesix_grub.iso >> "$LOG_FILE"
+ISO_SIZE=$(stat -c %s out/cohesix_grub.iso)
 [ -x scripts/validate_iso_build.sh ] && scripts/validate_iso_build.sh || true
 if [ "$ISO_SIZE" -le $((1024*1024)) ]; then
   echo "❌ ISO build incomplete or missing required tools" >&2
   exit 1
 fi
 if command -v xorriso >/dev/null; then
-  xorriso -indev out/cohesix.iso -find / -name BOOTX64.EFI -print | grep -q BOOTX64.EFI || {
+  xorriso -indev out/cohesix_grub.iso -find / -name BOOTX64.EFI -print | grep -q BOOTX64.EFI || {
     echo "❌ BOOTX64.EFI missing in ISO" >&2; exit 1; }
 else
   log "⚠️ xorriso not found; skipping ISO content check"
@@ -308,9 +324,9 @@ grep -Ei 'error|fail|panic|permission denied|warning' "$LOG_FILE" > "$SUMMARY_ER
 
 if command -v go &> /dev/null; then
   log "🐹 Building Go components..."
-  mkdir -p out/bin
-  (cd go/cmd/coh-9p-helper && go build -o "$ROOT/out/bin/coh-9p-helper")
-  (cd go/cmd/gui-orchestrator && go build -o "$ROOT/out/bin/gui-orchestrator")
+  mkdir -p "$STAGE_DIR/bin"
+  (cd go/cmd/coh-9p-helper && go build -o "$STAGE_DIR/bin/coh-9p-helper")
+  (cd go/cmd/gui-orchestrator && go build -o "$STAGE_DIR/bin/gui-orchestrator")
   (cd go && go test ./...)
 else
   log "⚠️ Go not found; skipping Go build"
@@ -350,15 +366,28 @@ if [ -f CMakeLists.txt ]; then
   (cd build && cmake .. && make -j$(nproc))
 fi
 
+log "📦 Building BusyBox..."
+scripts/build_busybox.sh "$COH_ARCH"
+BUSYBOX_BIN="out/busybox/$COH_ARCH/bin/busybox"
+if [ -x "$BUSYBOX_BIN" ]; then
+  cp "$BUSYBOX_BIN" "$STAGE_DIR/bin/busybox"
+  for app in sh ls cat echo mount umount; do
+    ln -sf busybox "$STAGE_DIR/bin/$app"
+  done
+else
+  echo "❌ BusyBox build failed" >&2
+  exit 1
+fi
+
 echo "✅ All builds complete."
 
 echo "[🧪] Checking boot prerequisites..."
-if [ ! -x out/bin/init ]; then
-  echo "❌ No init binary found at out/bin/init. Aborting." >&2
+if [ ! -x "$STAGE_DIR/bin/init" ] && [ ! -x "$STAGE_DIR/bin/init.efi" ]; then
+  echo "❌ No init binary found in $STAGE_DIR/bin. Aborting." >&2
   exit 1
 fi
-if [ ! -f out/boot/kernel.elf ]; then
-  echo "❌ Kernel ELF missing. Expected at out/boot/kernel.elf" >&2
+if [ ! -f "$STAGE_DIR/boot/kernel.elf" ]; then
+  echo "❌ Kernel ELF missing. Expected at $STAGE_DIR/boot/kernel.elf" >&2
   exit 1
 fi
 if [ ! -f config/config.yaml ]; then
@@ -384,18 +413,18 @@ if [ "${VIRTUAL_ENV:-}" != "$(pwd)/.venv" ]; then
   echo "❌ Python venv not active before ISO build" >&2
   exit 1
 fi
-[ -f out/BOOTX64.EFI ] || { echo "❌ out/BOOTX64.EFI missing" >&2; exit 1; }
-bash ./scripts/make_iso.sh || { echo "❌ make_iso.sh failed" >&2; exit 1; }
-if [ ! -f out/cohesix.iso ]; then
+[ -f "$STAGE_DIR/BOOTX64.EFI" ] || { echo "❌ $STAGE_DIR/BOOTX64.EFI missing" >&2; exit 1; }
+bash ./scripts/make_grub_iso.sh || { echo "❌ make_grub_iso.sh failed" >&2; exit 1; }
+if [ ! -f out/cohesix_grub.iso ]; then
   echo "❌ ISO build failed" >&2
   exit 1
 fi
 
 # Optional QEMU boot check
 if command -v qemu-system-x86_64 >/dev/null; then
-  ISO_IMG="out/cohesix.iso"
+  ISO_IMG="out/cohesix_grub.iso"
   if [ ! -f "$ISO_IMG" ]; then
-    echo "❌ cohesix.iso missing in out" >&2
+    echo "❌ cohesix_grub.iso missing in out" >&2
     exit 1
   fi
   TMPDIR="${TMPDIR:-$(mktemp -d)}"
@@ -450,6 +479,11 @@ else
   log "⚠️ qemu-system-x86_64 not installed; skipping boot test"
 fi
 
+BIN_COUNT=$(find "$STAGE_DIR/bin" -type f -perm -111 | wc -l)
+ROLE_COUNT=$(find "$STAGE_DIR/roles" -name '*.yaml' | wc -l)
+ISO_SIZE_MB=$(du -m out/cohesix_grub.iso | awk '{print $1}')
+echo "ISO BUILD OK: ${BIN_COUNT} binaries, ${ROLE_COUNT} roles, ${ISO_SIZE_MB}MB total" >&3
+
 log "✅ [Build Complete] $(date)"
 
 grep -Ei 'error|fail|panic|permission denied|warning' "$LOG_FILE" > "$SUMMARY_ERRORS" || true
@@ -460,4 +494,4 @@ tail -n 10 "$SUMMARY_ERRORS" || echo "✅ No critical issues found" | tee -a "$L
 
 echo "🪵 Full log saved to $LOG_FILE" >&3
 echo "✅ ISO build complete. Run QEMU with:" >&3
-echo "qemu-system-x86_64 -cdrom out/cohesix.iso -boot d -m 1024" >&3
+echo "qemu-system-x86_64 -cdrom out/cohesix_grub.iso -boot d -m 1024" >&3
