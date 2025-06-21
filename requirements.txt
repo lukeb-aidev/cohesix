@@ -5,3 +5,4 @@ black==25.1.0
 flake8==7.2.0
 mypy==1.16.1
 types-jsonschema==4.24.0.20250528
+PyYAML==6.0.1

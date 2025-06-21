@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.88
-// Date Modified: 2026-01-05
+// Filename: CHANGELOG.md v0.89
+// Date Modified: 2026-01-08
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
 • Consolidated OSS reuse files into LICENSES_AND_REUSE.md
@@ -1306,4 +1306,10 @@
 ### Changed
 - `build_sel4_kernel.sh` auto-detects architecture and removes manual selection.
 - `cohesix_fetch_build.sh` selects Rust target based on `uname -m` with no prompts.
+
+## [v0.164] - 2026-01-08
+### Fixed
+- seL4 kernel build works on x86_64 and aarch64 with automatic toolchain checks.
+- `fetch_sel4.sh` validates host architecture and compiler availability.
+- Missing PyYAML dependency added to requirements and installed during build.
 
