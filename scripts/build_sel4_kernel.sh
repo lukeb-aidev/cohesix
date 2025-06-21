@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: build_sel4_kernel.sh v0.1
+// Filename: build_sel4_kernel.sh v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-12-26
+// Date Modified: 2025-12-31
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -12,7 +12,11 @@ BUILD_DIR="$ROOT/out/sel4_build"
 OUT_ELF="$ROOT/out/sel4.elf"
 
 CMAKE_INIT="$TOOLS/cmake-tool/init-build.sh"
+# Use system ninja if sel4_tools copy is unavailable
 NINJA="$TOOLS/bin/ninja"
+if [ ! -x "$NINJA" ]; then
+    NINJA="$(command -v ninja)"
+fi
 
 msg() { printf "\e[32m==>\e[0m %s\n" "$*"; }
 die() { printf "\e[31m[ERR]\e[0m %s\n" "$*" >&2; exit 1; }
