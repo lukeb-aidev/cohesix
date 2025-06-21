@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: tools/make_iso.sh v0.3
+// Filename: tools/make_iso.sh v0.4
 // Author: Lukas Bower
-// Date Modified: 2025-09-23
+// Date Modified: 2026-01-26
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -50,7 +50,9 @@ ln -sf cohcli "$ISO_ROOT/usr/bin/cohesix"
 # BusyBox and shell
 if [ -x "$ROOT/out/bin/busybox" ]; then
     cp "$ROOT/out/bin/busybox" "$ISO_ROOT/bin/busybox"
-    ln -sf busybox "$ISO_ROOT/bin/sh"
+    for app in ash sh ls cp mv echo mount cat ps kill; do
+        ln -sf busybox "$ISO_ROOT/bin/$app"
+    done
 fi
 
 command -v bash >/dev/null 2>&1 && ln -sf "$(command -v bash)" "$ISO_ROOT/bin/bash"
