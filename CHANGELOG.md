@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.91
-// Date Modified: 2026-02-01
+// Filename: CHANGELOG.md v0.92
+// Date Modified: 2026-02-03
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
 • Consolidated OSS reuse files into LICENSES_AND_REUSE.md
@@ -1382,3 +1382,7 @@
 ## [v0.178] - 2026-02-02
 ### Fixed
 - `bootstrap_sel4_tools.sh` detects virtualenv and omits `--user` when installing Python dependencies to avoid pip errors.
+
+## [v0.179] - 2026-02-03
+### Added
+- `build_root_elf.sh` enables `rapier` and optional `cuda` features when building `cohesix_root.elf`.
