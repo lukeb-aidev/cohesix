@@ -1366,3 +1366,7 @@
 ## [v0.174] - 2026-01-28
 ### Fixed
 - `build_sel4_kernel.sh` now checks for `gcc-aarch64-linux-gnu` when building `imx8mm_evk` regardless of host architecture and selects `aarch64-linux-gnu-gcc` when available.
+
+## [v0.175] - 2026-01-29
+### Changed
+- `build_sel4_kernel.sh` installs `ninja-build` if Ninja is missing and re-exports `CMAKE_MAKE_PROGRAM` after installation.
