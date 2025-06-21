@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: make_grub_iso.sh v0.7
+// Filename: make_grub_iso.sh v0.8
 // Author: Lukas Bower
-// Date Modified: 2026-01-20
+// Date Modified: 2026-01-26
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -50,6 +50,15 @@ system:
 EOF
 fi
 cp "$CONFIG_YAML" "$ISO_ROOT/boot/config.yaml"
+
+# BusyBox utilities
+mkdir -p "$ISO_ROOT/bin"
+if [ -x "$ROOT/out/bin/busybox" ]; then
+    cp "$ROOT/out/bin/busybox" "$ISO_ROOT/bin/busybox"
+    for app in ash sh ls cp mv echo mount cat ps kill; do
+        ln -sf busybox "$ISO_ROOT/bin/$app"
+    done
+fi
 
 # Generate grub.cfg
 cat >"$ISO_ROOT/boot/grub/grub.cfg" <<CFG
