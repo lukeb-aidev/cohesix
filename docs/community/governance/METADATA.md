@@ -156,7 +156,7 @@
 | tests/secure9p/agent_identifier.rs | v0.2 | 2025-07-26 | COMMUNITY | | |
 | cli/cohcli.py | v1.1 | 2025-08-01 | COMMUNITY | | |
 | validator.pyi | v0.1 | 2025-12-10 | COMMUNITY | | |
-| scripts/build_sel4_kernel.sh | v0.4 | 2026-01-07 | COMMUNITY | | |
+| scripts/build_sel4_kernel.sh | v0.5 | 2026-01-08 | COMMUNITY | | |
 | scripts/check-qemu-deps.sh | v0.1 | 2025-07-28 | COMMUNITY | | |
 | scripts/collect_boot_logs.sh | v0.1 | 2025-07-12 | COMMUNITY | | |
 | scripts/generate_busybox_man.sh | v0.1 | 2025-06-08 | COMMUNITY | | |
@@ -167,7 +167,7 @@
 | scripts/debug_qemu_boot.sh | v0.2 | 2025-12-23 | COMMUNITY | | |
 | scripts/boot_qemu.sh | v0.1 | 2025-12-29 | COMMUNITY | | |
 | scripts/validate_iso_build.sh | v0.1 | 2025-12-19 | COMMUNITY | | |
-| scripts/fetch_sel4.sh | v0.1 | 2025-12-25 | COMMUNITY | | |
+| scripts/fetch_sel4.sh | v0.2 | 2026-01-08 | COMMUNITY | | |
 | scripts/build_root_elf.sh | v0.2 | 2025-12-27 | COMMUNITY | | |
 | tools/make_iso.sh | v0.3 | 2025-09-23 | COMMUNITY | | |
 | metadata.json | v0.1 | 2025-07-24 | COMMUNITY | | |
