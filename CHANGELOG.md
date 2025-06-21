@@ -1270,3 +1270,8 @@
 ### Added
 - src/util/debug_log.rs providing seL4 DebugPutChar logger and debug! macro.
 - src/bootstrap/sel4_entry.rs now logs boot messages using debug!.
+
+## [v0.158] - 2025-12-31
+### Changed
+- build_sel4_kernel.sh now falls back to system ninja when tools-provided ninja
+  is unavailable.
