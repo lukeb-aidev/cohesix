@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.90
-// Date Modified: 2026-01-25
+// Filename: CHANGELOG.md v0.91
+// Date Modified: 2026-02-01
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
 • Consolidated OSS reuse files into LICENSES_AND_REUSE.md
@@ -1374,3 +1374,7 @@
 ## [v0.176] - 2026-02-01
 ### Changed
 - `build_sel4_kernel.sh` creates `settings.cmake` with default `KernelWordSize` and `KernelSel4Arch` when missing.
+
+## [v0.177] - 2026-02-01
+### Changed
+- `build_sel4_kernel.sh` now calls `bootstrap_sel4_tools.sh` to auto-install Python modules.

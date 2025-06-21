@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: METADATA.md v3.32
+// Filename: METADATA.md v3.33
 // Author: Lukas Bower
 // Date Modified: 2026-02-01
 
@@ -14,9 +14,9 @@
 | BUILD_PLAN.md              | v0.4    | 2025-07-11    | COMMUNITY      |            |              |
 | COMMERCIAL_PLAN.md         | v1.5    | 2025-06-08    | PRIVATE        |            |              |
 | DEPENDENCIES.md            | v0.5    | 2025-07-06    | COMMUNITY      |            |              |
-| METADATA.md                | v3.18   | 2025-08-01    | COMMUNITY      |            |              |
+| METADATA.md                | v3.33   | 2026-02-01    | COMMUNITY      | | |
 | Q_DAY.md                   | v1.1    | 2025-06-15    | PRIVATE        |            |              |
-| README.md                  | v0.12   | 2025-07-28    | COMMUNITY        |            |              |
+| README.md                  | v0.13   | 2026-02-01    | COMMUNITY        | | |
 | README_Codex.md            | v1.4    | 2025-06-16    | COMMUNITY      |            |              |
 | REMOTE_ACCESS.md           | v1.0    | 2025-05-24    | COMMUNITY      |            |              |
 | NETWORKING.md              | v0.2    | 2025-07-13    | COMMUNITY      |     |              |
@@ -227,3 +227,5 @@
 | src/util/debug_log.rs | v0.2 | 2025-12-31 | COMMUNITY | | |
 
 | requirements.txt | v0.2 | 2026-01-27 | COMMUNITY | | |
+
+The script `scripts/bootstrap_sel4_tools.sh` installs Jinja2 and PyYAML before kernel builds.
