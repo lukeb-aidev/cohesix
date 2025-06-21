@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-# Filename: scripts/make_iso.sh v0.13
+# Filename: scripts/make_iso.sh v0.14
 # Author: Lukas Bower
-# Date Modified: 2026-01-20
+# Date Modified: 2026-01-26
 #!/bin/bash
 # ISO layout:
 #   bin/               - runtime binaries
@@ -84,6 +84,12 @@ log "✅ Kernel and init installed"
 # Runtime binaries compiled during build
 if [ -d "$ROOT/out/bin" ]; then
   cp -a "$ROOT/out/bin/." "$ISO_DIR/bin/"
+fi
+if [ -x "$ROOT/out/bin/busybox" ]; then
+  cp "$ROOT/out/bin/busybox" "$ISO_DIR/bin/busybox"
+  for app in ash sh ls cp mv echo mount cat ps kill; do
+    ln -sf busybox "$ISO_DIR/bin/$app"
+  done
 fi
 if [ -f "$ROOT/userland/miniroot/bin/init" ]; then
   cp "$ROOT/userland/miniroot/bin/init" "$ISO_DIR/bin/init"

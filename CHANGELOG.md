@@ -1343,3 +1343,9 @@
 - cohrun can boot the latest ISO via QEMU when --iso is provided.
 - cohtrace gains "capture" subcommand to save boot or command traces.
 - cohcap now includes "show" to list capabilities for all workers.
+
+## [v0.170] - 2026-01-26
+### Added
+- Static BusyBox build via `scripts/build_busybox.sh` installs to `out/bin/busybox`.
+- ISO generation scripts link BusyBox applets (`sh`, `ls`, `cp`, `mv`, `echo`, `mount`, `cat`, `ps`, `kill`).
+- BusyBox included in GRUB-based images and validation checks updated.
