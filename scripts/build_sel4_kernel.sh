@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: build_sel4_kernel.sh v0.8
+// Filename: build_sel4_kernel.sh v0.9
 // Author: Lukas Bower
-// Date Modified: 2026-01-27
+// Date Modified: 2026-01-28
 #!/bin/bash
 # Auto-detect target architecture and configure seL4 build
 set -euo pipefail
@@ -28,16 +28,8 @@ missing_pkgs=()
 for pkg in ninja-build cmake gcc python3-yaml; do
     dpkg -s "$pkg" >/dev/null 2>&1 || missing_pkgs+=("$pkg")
 done
-if [ "$(uname -m)" = "aarch64" ]; then
-    command -v aarch64-linux-gnu-gcc >/dev/null 2>&1 || missing_pkgs+=("gcc-aarch64-linux-gnu")
-fi
-if [ ${#missing_pkgs[@]} -gt 0 ] && command -v apt-get >/dev/null 2>&1; then
-    msg "Installing packages: ${missing_pkgs[*]}"
-    sudo apt-get update -y >/dev/null
-    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ${missing_pkgs[*]} >/dev/null
-    NINJA="$(command -v ninja || true)"
-    CMAKE="$(command -v cmake || true)"
-fi
+
+
 
 [ -x "$CMAKE" ] || die "cmake not found"
 [ -x "$NINJA" ] || die "Missing ninja at $NINJA"
@@ -68,16 +60,27 @@ case "$ARCH" in
         KERNEL_ARCH="aarch64"
         KERNEL_SEL4_ARCH="aarch64"
         KERNEL_WORD_SIZE=64
-        if command -v aarch64-linux-gnu-gcc >/dev/null 2>&1; then
-            CC="aarch64-linux-gnu-gcc"
-        else
-            CC="gcc"
-        fi
+        CC="gcc"
         ;;
     *)
         die "Unsupported architecture: $ARCH"
         ;;
 esac
+
+if [ "$KERNEL_PLATFORM" = "imx8mm_evk" ]; then
+    command -v aarch64-linux-gnu-gcc >/dev/null 2>&1 || missing_pkgs+=("gcc-aarch64-linux-gnu")
+    if command -v aarch64-linux-gnu-gcc >/dev/null 2>&1; then
+        CC="aarch64-linux-gnu-gcc"
+    fi
+fi
+
+if [ ${#missing_pkgs[@]} -gt 0 ] && command -v apt-get >/dev/null 2>&1; then
+    msg "Installing packages: ${missing_pkgs[*]}"
+    sudo apt-get update -y >/dev/null
+    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ${missing_pkgs[*]} >/dev/null
+    NINJA="$(command -v ninja || true)"
+    CMAKE="$(command -v cmake || true)"
+fi
 
 msg "Host arch: $ARCH, target platform: $KERNEL_PLATFORM"
 msg "Using compiler: $(command -v $CC)"
