@@ -1,15 +1,15 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohcap.py v0.3
+# Filename: cohcap.py v0.4
 # Author: Lukas Bower
-# Date Modified: 2025-08-01
+# Date Modified: 2026-01-25
 """cohcap – manage demo capabilities."""
 
 import argparse
 import os
-from pathlib import Path
+import subprocess
 import sys
 import shlex
-import subprocess
+from pathlib import Path
 from datetime import datetime
 from typing import List
 import traceback
@@ -31,6 +31,14 @@ def safe_run(cmd: List[str]) -> int:
         f.write(f"{datetime.utcnow().isoformat()} {' '.join(quoted)}\n")
     result = subprocess.run(cmd)
     return result.returncode
+
+
+def repo_root() -> Path:
+    try:
+        root = subprocess.check_output(["git", "rev-parse", "--show-toplevel"], text=True).strip()
+        return Path(root)
+    except Exception:
+        return Path.cwd()
 
 
 BASE_ENV = "CAP_BASE"
@@ -71,6 +79,13 @@ def revoke_cap(worker: str, cap: str):
     cohlog(f"revoked {cap} from {worker}")
 
 
+def show_all():
+    base = cap_dir()
+    for path in sorted(base.glob("*.caps")):
+        caps = path.read_text().splitlines()
+        cohlog(f"{path.stem}: {', '.join(caps)}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Manage demo capabilities")
     parser.add_argument("--man", action="store_true", help="Show man page")
@@ -82,6 +97,8 @@ def main():
     g = sub.add_parser("grant", help="Grant capability")
     g.add_argument("cap")
     g.add_argument("--to", dest="worker", required=True)
+
+    sub.add_parser("show", help="Show capabilities for all workers")
 
     r = sub.add_parser("revoke", help="Revoke capability")
     r.add_argument("cap")
@@ -100,6 +117,8 @@ def main():
         grant_cap(args.worker, args.cap)
     elif args.cmd == "revoke":
         revoke_cap(args.worker, args.cap)
+    elif args.cmd == "show":
+        show_all()
     else:
         parser.print_help()
         sys.exit(1)

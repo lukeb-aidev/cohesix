@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.89
-// Date Modified: 2026-01-08
+// Filename: CHANGELOG.md v0.90
+// Date Modified: 2026-01-25
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
 • Consolidated OSS reuse files into LICENSES_AND_REUSE.md
@@ -1336,3 +1336,10 @@
 - Minimal `/bin/init` launcher and placeholder `/bin/rc` script for boot.
 - ISO staging directory moved to `out/iso`.
 - Build scripts copy userland binaries into the ISO image.
+
+## [v0.169] - 2026-01-25
+### Added
+- Python CLI cohbuild orchestrates kernel, userland, and ISO build steps.
+- cohrun can boot the latest ISO via QEMU when --iso is provided.
+- cohtrace gains "capture" subcommand to save boot or command traces.
+- cohcap now includes "show" to list capabilities for all workers.
