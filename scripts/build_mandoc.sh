@@ -1,7 +1,7 @@
-// CLASSIFICATION: COMMUNITY
-// Filename: build_mandoc.sh v0.1
-// Author: Lukas Bower
-// Date Modified: 2025-07-12
+# CLASSIFICATION: COMMUNITY
+# Filename: build_mandoc.sh v0.1
+# Author: Lukas Bower
+# Date Modified: 2025-07-12
 #!/bin/sh
 set -e
 VER=1.9.9

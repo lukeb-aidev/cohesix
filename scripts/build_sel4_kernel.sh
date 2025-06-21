@@ -1,7 +1,7 @@
-// CLASSIFICATION: COMMUNITY
-// Filename: build_sel4_kernel.sh v0.12
-// Author: Lukas Bower
-// Date Modified: 2026-02-12
+# CLASSIFICATION: COMMUNITY
+# Filename: build_sel4_kernel.sh v0.12
+# Author: Lukas Bower
+# Date Modified: 2026-02-12
 #!/bin/bash
 # Auto-detect target architecture and configure seL4 build
 set -euo pipefail

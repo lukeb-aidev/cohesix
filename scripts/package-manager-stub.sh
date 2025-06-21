@@ -1,7 +1,7 @@
-// CLASSIFICATION: COMMUNITY
-// Filename: package-manager-stub.sh v0.3
-// Date Modified: 2025-06-17
-// Author: Lukas Bower
+# CLASSIFICATION: COMMUNITY
+# Filename: package-manager-stub.sh v0.3
+# Date Modified: 2025-06-17
+# Author: Lukas Bower
 
 #!/usr/bin/env bash
 ###############################################################################

@@ -1,7 +1,7 @@
-// CLASSIFICATION: COMMUNITY
-// Filename: make_grub_iso.sh v0.9
-// Author: Lukas Bower
-// Date Modified: 2026-02-04
+# CLASSIFICATION: COMMUNITY
+# Filename: make_grub_iso.sh v0.9
+# Author: Lukas Bower
+# Date Modified: 2026-02-04
 #!/usr/bin/env bash
 set -euo pipefail
 
