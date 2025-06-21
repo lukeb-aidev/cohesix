@@ -19,7 +19,7 @@ Each help page contains usage examples and command summaries.
 
 ## Agent and CLI Interaction
 
-`AGENTS_AND_CLI.md` defines Codex agent schemas and links them to CLI commands. The high-level guide in [cli.md](cli.md) explains common patterns, such as `cohcli agent start` or `cohrun physics_demo`.
+`AGENTS_AND_CLI.md` defines Codex agent schemas and links them to CLI commands. The high-level guide in [CLI.md](CLI.md) explains common patterns, such as `cohcli agent start` or `cohrun physics_demo`.
 
 
 ## Roles and CLI Tools

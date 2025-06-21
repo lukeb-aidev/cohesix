@@ -1,11 +1,11 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: BUILD_PLAN.md v0.4
-// Date Modified: 2025-07-31
+// Filename: BUILD_PLAN.md v0.5
+// Date Modified: 2026-02-05
 // Author: Lukas Bower
 
 # Build Plan
 
-This document outlines the step-by-step build strategy for Cohesix, covering native builds, cross-compilation, container images, and reproducible artifacts.
+This document outlines the step-by-step build strategy for Cohesix, covering native builds, cross-compilation, container images, and reproducible artifacts. The preferred approach is to use `cohesix_fetch_build.sh`, which downloads prerequisites and assembles `cohesix_root.elf` and the GRUB-ready boot image in one step.
 
 ## 1. Prerequisites
 - **Rust Toolchain**: Install via `rustup` (stable channel, version ≥ 1.76 for the 2024 edition) with targets:
@@ -32,10 +32,10 @@ This document outlines the step-by-step build strategy for Cohesix, covering nat
    ```bash
    ./test_all_arch.sh
    ```
-4. Generate cross-arch artifacts:
+4. Generate cross-arch artifacts and the boot image:
    ```bash
    cargo build --release --target aarch64-unknown-linux-gnu
-   cohcc --input demo.ir --output demo.c --target aarch64
+   cohesix_fetch_build.sh --target aarch64
    # Optionally emit snapshot and trace log
    cohtrace snapshot --tag local_build
    ```

@@ -38,7 +38,7 @@ The table below lists current third-party packages used by Cohesix.
 | chi | v5 | MIT | HTTP router for GUI orchestrator | https://github.com/go-chi/chi |
 
 | tempfile | 3.10 | MIT OR Apache-2.0 | Temporary directory and file handling in tests | https://crates.io/crates/tempfile |
-| qemu | system | GPL-2.0-only | Emulator used for UEFI boot testing | https://www.qemu.org/ |
+| qemu | system | GPL-2.0-only | Emulator used for GRUB/Multiboot2 boot testing | https://www.qemu.org/ |
 | cuda-sys | 0.3 | Apache-2.0 | Rust FFI bindings for NVIDIA CUDA | https://crates.io/crates/cuda-sys |
 \n## 4 · License Matrix
 
