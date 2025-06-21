@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: README.md v0.12
+// Filename: README.md v0.13
 // Author: Lukas Bower
-// Date Modified: 2025-06-15
+// Date Modified: 2026-02-01
 
 
 # Cohesix
@@ -137,6 +137,12 @@ Confirm QEMU and EFI dependencies with:
 ```
 
 The script highlights missing packages so you can install them before running boot tests.
+
+### Building the seL4 Kernel
+
+Use `./scripts/build_sel4_kernel.sh` to compile the kernel. The helper
+`bootstrap_sel4_tools.sh` runs first and installs Jinja2 and PyYAML if
+they are missing.
 
 ---
 
