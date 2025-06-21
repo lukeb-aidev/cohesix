@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: build_root_elf.sh v0.2
+// Filename: build_root_elf.sh v0.3
 // Author: Lukas Bower
-// Date Modified: 2025-12-27
+// Date Modified: 2026-02-03
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -28,11 +28,16 @@ case "$ARCH" in
 esac
 
 mkdir -p "$OUT_DIR"
+FEATURES="rapier"
+if [ "${COH_GPU:-0}" = "1" ]; then
+    FEATURES="${FEATURES},cuda"
+fi
+
 if [[ "$TARGET" == *musl ]]; then
     RUSTFLAGS="-C link-arg=-static" \
-        cargo build --release --bin cohesix_root --target "$TARGET"
+        cargo build --release --bin cohesix_root --target "$TARGET" --features "$FEATURES"
 else
-    cargo build --release --bin cohesix_root --target "$TARGET"
+    cargo build --release --bin cohesix_root --target "$TARGET" --features "$FEATURES"
 fi
 cp "target/$TARGET/release/cohesix_root" "$OUT_ELF"
 
