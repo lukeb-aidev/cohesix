@@ -1273,5 +1273,7 @@
 
 ## [v0.158] - 2025-12-31
 ### Changed
+- scripts/make_grub_iso.sh now builds missing artifacts and stages files before
+  calling grub-mkrescue.
 - build_sel4_kernel.sh now falls back to system ninja when tools-provided ninja
   is unavailable.
