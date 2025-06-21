@@ -1,12 +1,12 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: make_grub_iso.sh v0.6
+// Filename: make_grub_iso.sh v0.7
 // Author: Lukas Bower
 // Date Modified: 2026-01-20
 #!/usr/bin/env bash
 set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-ISO_ROOT="$ROOT/out/stage"
+ISO_ROOT="$ROOT/out/iso"
 ISO_OUT="$ROOT/out/cohesix_grub.iso"
 ROLE="${1:-${COHROLE:-QueenPrimary}}"
 

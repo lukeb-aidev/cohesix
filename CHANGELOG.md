@@ -1330,3 +1330,9 @@
   validates ISO boot via QEMU. Cleans staging on failure.
 - Root wrapper `make_iso.sh` bumped for consistency.
 
+
+## [v0.168] - 2026-01-20
+### Added
+- Minimal `/bin/init` launcher and placeholder `/bin/rc` script for boot.
+- ISO staging directory moved to `out/iso`.
+- Build scripts copy userland binaries into the ISO image.
