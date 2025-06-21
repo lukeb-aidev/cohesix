@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v0.92
-// Date Modified: 2026-02-03
+// Date Modified: 2026-02-11
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
 • Consolidated OSS reuse files into LICENSES_AND_REUSE.md
@@ -1399,3 +1399,7 @@
 - `BUILD_PLAN.md` notes `cohesix_fetch_build.sh` and root ELF generation.
 - Renamed lower-case filenames (`cli.md`, `gui_orchestrator.md`, `README_Codex.md`, `examples_README.md`) to uppercase.
 - Removed deprecated `NETWORKING.md` and updated license notes for QEMU.
+
+## [v0.182] - 2026-02-11
+### Added
+- Refined demo scenarios; added "The Bee Learns" as flagship demo; removed weaker entries.

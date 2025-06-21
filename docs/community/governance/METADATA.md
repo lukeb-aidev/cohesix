@@ -38,7 +38,7 @@
 | ROLE_POLICY.md            | v1.0    | 2025-06-15    | COMMUNITY      |     |              |
 | cli/README.md             | v1.0    | 2025-07-31    | COMMUNITY      |     |              |
 | AGENTS.md                 | v2.2    | 2025-07-22    | COMMUNITY      |     |              |
-| DEMO_SCENARIOS.md          | v1.0    | 2025-06-20    | COMMUNITY      |     |              |
+| DEMO_SCENARIOS.md          | v1.1    | 2026-02-11    | COMMUNITY      |     |              |
 | VALIDATION_AND_TESTING.md  | v1.5    | 2025-07-25    | COMMUNITY      |     |              |
 | VALIDATION_SUMMARY.md       | v0.3    | 2025-08-18    | COMMUNITY      |     |              |
 | CLI_HELP_COHCLI.md         | v0.1    | 2025-06-15    | COMMUNITY      |     |              |
