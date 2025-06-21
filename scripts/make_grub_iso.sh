@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: make_grub_iso.sh v0.8
+// Filename: make_grub_iso.sh v0.9
 // Author: Lukas Bower
-// Date Modified: 2026-01-26
+// Date Modified: 2026-02-04
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -62,6 +62,23 @@ if [ -x "$ROOT/out/bin/busybox" ]; then
     for app in ash sh ls cp mv echo mount cat ps kill; do
         ln -sf busybox "$ISO_ROOT/bin/$app"
     done
+fi
+
+# Man pages and mandoc
+if [ -d "$ROOT/docs/man" ]; then
+    mkdir -p "$ISO_ROOT/usr/share/cohesix/man"
+    cp "$ROOT"/docs/man/*.1 "$ISO_ROOT/usr/share/cohesix/man/" 2>/dev/null || true
+    cp "$ROOT"/docs/man/*.8 "$ISO_ROOT/usr/share/cohesix/man/" 2>/dev/null || true
+fi
+if [ -f "$ROOT/bin/mandoc" ]; then
+    cp "$ROOT/bin/mandoc" "$ISO_ROOT/bin/mandoc" && chmod +x "$ISO_ROOT/bin/mandoc"
+fi
+if [ -d "$ROOT/prebuilt/mandoc" ]; then
+    mkdir -p "$ISO_ROOT/prebuilt/mandoc"
+    cp "$ROOT"/prebuilt/mandoc/mandoc.* "$ISO_ROOT/prebuilt/mandoc/" 2>/dev/null || true
+fi
+if [ -f "$ROOT/bin/man" ]; then
+    cp "$ROOT/bin/man" "$ISO_ROOT/bin/man" && chmod +x "$ISO_ROOT/bin/man"
 fi
 
 # Generate grub.cfg

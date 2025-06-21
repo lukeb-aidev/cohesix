@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.37
+# Filename: cohesix_fetch_build.sh v0.38
 # Author: Lukas Bower
-# Date Modified: 2026-01-20
+# Date Modified: 2026-02-04
 #!/bin/bash
 # Fetch and fully build the Cohesix project using SSH Git auth.
 
@@ -413,6 +413,27 @@ if [ -x "$BUSYBOX_BIN" ]; then
   fi
 else
   echo "❌ BusyBox build failed" >&2
+  exit 1
+fi
+
+log "📖 Building mandoc and staging man pages..."
+scripts/build_mandoc.sh
+MANDOC_BIN="prebuilt/mandoc/mandoc.$COH_ARCH"
+if [ -x "$MANDOC_BIN" ]; then
+  mkdir -p "$STAGE_DIR/prebuilt/mandoc"
+  cp "$MANDOC_BIN" "$STAGE_DIR/prebuilt/mandoc/"
+  chmod +x "$STAGE_DIR/prebuilt/mandoc/mandoc.$COH_ARCH"
+  cp bin/mandoc "$STAGE_DIR/bin/mandoc"
+  chmod +x "$STAGE_DIR/bin/mandoc"
+  cp bin/man "$STAGE_DIR/bin/man"
+  chmod +x "$STAGE_DIR/bin/man"
+  if [ -d docs/man ]; then
+    mkdir -p "$STAGE_DIR/usr/share/cohesix/man"
+    cp docs/man/*.1 "$STAGE_DIR/usr/share/cohesix/man/" 2>/dev/null || true
+    cp docs/man/*.8 "$STAGE_DIR/usr/share/cohesix/man/" 2>/dev/null || true
+  fi
+else
+  echo "❌ mandoc build failed" >&2
   exit 1
 fi
 
