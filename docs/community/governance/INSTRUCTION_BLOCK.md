@@ -5,17 +5,17 @@
 
 ## 0 · Classification Header — Mandatory
 
-Every canonical **source** file must begin with a `// CLASSIFICATION:` header.
+Every canonical **source** file must begin with a `CLASSIFICATION` header formatted for the file type:
+- Rust/C/Go: `// CLASSIFICATION: ...`
+- Bash scripts: `# CLASSIFICATION: ...`
+- YAML/TOML: `# CLASSIFICATION: ...`
+- Markdown and plaintext: may include the header anywhere, or omit it entirely (manual validation allowed).
+
 Valid values are:
+- COMMUNITY
+- PRIVATE
 
-// CLASSIFICATION: COMMUNITY
-or
-// CLASSIFICATION: PRIVATE
-
-No other lines may precede this header for code files. Non-code or special
-purpose assets (shell scripts, YAML, TOML, plaintext) may format or place the
-classification header differently, or omit it entirely. Enforcement for such
-files may occur during manual or deferred review to keep CI runs short.
+Source files must place the header at the top of the file. Other formats may defer this placement.
 
 ---
 
@@ -67,6 +67,7 @@ Codex must auto-detect supported hardware and pass tests accordingly.
 | Userland/Services | Go            | CSP-style concurrency               |
 | Tooling & Testing | Python        | CLI, validator, DSL, glue           |
 | CUDA Models       | C++ / CUDA    | Jetson inference & deployment       |
+| Shell Scripts (Bash) | Bash       | Used for build orchestration (e.g., GRUB → seL4 → Cohesix ISO), follows POSIX/Bash best practices |
 
 ---
 
@@ -89,16 +90,14 @@ Codex must auto-detect supported hardware and pass tests accordingly.
 
 4. Mandatory Headers
    Every canonical **source** file must include:
-   - `// CLASSIFICATION:`
+   - A correctly formatted `CLASSIFICATION:` line for the file type (`//` for source, `#` for shell/config)
    - `// Filename vX.Y`
    - `// Author: Lukas Bower`
    - `// Date Modified: YYYY-MM-DD`
-   - Registered in `METADATA.md`
-   - Entry added to `CHANGELOG.md`
+   - Registration in `METADATA.md`
+   - Entry in `CHANGELOG.md`
 
-   Shell scripts, YAML/TOML config files, and other plain-text assets may place
-   the `// CLASSIFICATION:` line elsewhere or omit it. CI may defer validation of
-   these cases to manual review to avoid long timeouts.
+   Shell scripts, YAML/TOML config files, and other plain-text assets may adjust header syntax to match their format. Manual validation is acceptable when CI time is constrained.
 
 5. Watchdog Heartbeat (Live)  
    Codex must:
@@ -161,7 +160,7 @@ Codex must auto-detect supported hardware and pass tests accordingly.
 - Role Override: Simulate using `COHROLE=` env/bootarg
 
 - Ensemble agents must test under `$COHESIX_ENS_TMP`, and validate safe cleanup afterward.
-- QEMU boot scripts for the GRUB → seL4 chain must gracefully skip if `qemu-system-x86_64` is missing or not installed.
+- QEMU boot scripts must support the GRUB → seL4 → Cohesix boot flow and gracefully skip if `qemu-system-x86_64` is missing or not installed.
 
 ---
 
