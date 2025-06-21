@@ -169,7 +169,7 @@
 | scripts/boot_qemu.sh | v0.1 | 2025-12-29 | COMMUNITY | | |
 | scripts/validate_iso_build.sh | v0.1 | 2025-12-19 | COMMUNITY | | |
 | scripts/fetch_sel4.sh | v0.2 | 2026-01-08 | COMMUNITY | | |
-| scripts/build_root_elf.sh | v0.2 | 2025-12-27 | COMMUNITY | | |
+| scripts/build_root_elf.sh | v0.3 | 2026-02-03 | COMMUNITY | | |
 | scripts/build_busybox.sh | v0.4 | 2026-01-26 | COMMUNITY | | |
 | tools/make_iso.sh | v0.4 | 2026-01-26 | COMMUNITY | | |
 | metadata.json | v0.1 | 2025-07-24 | COMMUNITY | | |
