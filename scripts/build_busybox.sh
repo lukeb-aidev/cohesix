@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: build_busybox.sh v0.3
-// Date Modified: 2025-09-14
+// Filename: build_busybox.sh v0.4
+// Date Modified: 2026-01-26
 // Author: Lukas Bower
 
 #!/usr/bin/env bash
@@ -8,9 +8,10 @@ set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 BUSYBOX_VERSION="1.36.1"
-BUSYBOX_URL="https://busybox.net/downloads/busybox-${BUSYBOX_VERSION}.tar.bz2"
+LOCAL_SRC="$ROOT/third_party/busybox"
 WORK_DIR="$ROOT/build/busybox"
 OUT_DIR="$ROOT/out/busybox"
+OUT_BIN="$ROOT/out/bin"
 SUPPORTED_ARCHS=("x86_64" "aarch64")
 
 msg()  { printf "\e[32m==>\e[0m %s\n" "$*"; }
@@ -22,20 +23,8 @@ for a in "${ARCHES[@]}"; do
   [[ " ${SUPPORTED_ARCHS[*]} " == *" $a "* ]] || die "Unsupported arch: $a"
 done
 
-mkdir -p "$WORK_DIR" "$OUT_DIR"
-TARBALL="$WORK_DIR/busybox-${BUSYBOX_VERSION}.tar.bz2"
-SRC_DIR="$WORK_DIR/src-${BUSYBOX_VERSION}"
-
-if [[ ! -f $TARBALL ]]; then
-  msg "Downloading BusyBox $BUSYBOX_VERSION"
-  curl -L "$BUSYBOX_URL" -o "$TARBALL"
-fi
-
-if [[ ! -d $SRC_DIR ]]; then
-  msg "Extracting BusyBox source"
-  tar -xf "$TARBALL" -C "$WORK_DIR"
-  mv "$WORK_DIR/busybox-$BUSYBOX_VERSION" "$SRC_DIR"
-fi
+mkdir -p "$WORK_DIR" "$OUT_DIR" "$OUT_BIN"
+SRC_DIR="$LOCAL_SRC"
 
 for ARCH in "${ARCHES[@]}"; do
   BUILD_DIR="$WORK_DIR/build-$ARCH"
@@ -63,12 +52,24 @@ for ARCH in "${ARCHES[@]}"; do
                  --enable APPLET_SYMLINKS \
                  --disable SELINUX \
                  --disable FEATURE_MOUNT_LABEL \
-                 --enable STATIC >/dev/null 2>&1 || true
+                 --enable STATIC \
+                 --enable ASH \
+                 --enable SH_IS_ASH \
+                 --enable LS \
+                 --enable CP \
+                 --enable MV \
+                 --enable ECHO \
+                 --enable MOUNT \
+                 --enable CAT \
+                 --enable PS \
+                 --enable KILL >/dev/null 2>&1 || true
   sed -i 's/# CONFIG_STATIC is not set/CONFIG_STATIC=y/' .config
   make olddefconfig >/dev/null
   make -j"$(nproc)" >/dev/null
   make CONFIG_PREFIX="$INSTALL_DIR" install >/dev/null
   strip "$INSTALL_DIR/bin/busybox"
+  mkdir -p "$OUT_BIN"
+  cp "$INSTALL_DIR/bin/busybox" "$OUT_BIN/busybox"
   popd > /dev/null
   msg "✅ BusyBox built → $INSTALL_DIR/bin/busybox"
 done
