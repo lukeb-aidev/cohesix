@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+HERE="$(cd "$(dirname "$0")/../cli" && pwd)"
+exec /usr/bin/env python3 "$HERE/cohbuild.py" "$@"
