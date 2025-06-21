@@ -131,7 +131,7 @@
 | docs/QUICKSTART.md | v0.1 | 2025-07-23 | COMMUNITY | | |
 | docs/community/architecture/BOOT_KERNEL_FLOW.md | v0.1 | 2025-07-23 | COMMUNITY | | |
 | docs/community/archive/examples_README.md | v0.2 | 2025-07-23 | COMMUNITY | | |
-| cohesix_fetch_build.sh | v0.36 | 2026-01-07 | COMMUNITY | | |
+| cohesix_fetch_build.sh | v0.37 | 2026-01-20 | COMMUNITY | | |
 | CONTRIBUTING.md | v1.1 | 2025-07-23 | COMMUNITY | | |
 | config/secure9p.toml | v0.3 | 2025-07-31 | COMMUNITY | | |
 | src/secure9p/mod.rs | v0.2 | 2025-07-25 | COMMUNITY | | |
@@ -162,8 +162,8 @@
 | scripts/generate_busybox_man.sh | v0.1 | 2025-06-08 | COMMUNITY | | |
 | scripts/manpage_scan.sh | v0.1 | 2025-06-08 | COMMUNITY | | |
 | scripts/verify-macos-setup.sh | v0.1 | 2025-06-05 | COMMUNITY | | |
-| scripts/make_iso.sh | v0.12 | 2026-01-20 | COMMUNITY | | |
-| scripts/make_grub_iso.sh | v0.6 | 2026-01-20 | COMMUNITY | | |
+| scripts/make_iso.sh | v0.13 | 2026-01-20 | COMMUNITY | | |
+| scripts/make_grub_iso.sh | v0.7 | 2026-01-20 | COMMUNITY | | |
 | scripts/debug_qemu_boot.sh | v0.2 | 2025-12-23 | COMMUNITY | | |
 | scripts/boot_qemu.sh | v0.1 | 2025-12-29 | COMMUNITY | | |
 | scripts/validate_iso_build.sh | v0.1 | 2025-12-19 | COMMUNITY | | |
@@ -207,10 +207,12 @@
 | setup/roles/SensorRelay.yaml | v0.1 | 2025-09-05 | COMMUNITY | | |
 | setup/roles/SimulatorTest.yaml | v0.1 | 2025-09-05 | COMMUNITY | | |
 | ci/qemu_boot_check.sh | v0.1 | 2025-09-21 | COMMUNITY | | |
-| userland/miniroot/README.md | v0.1 | 2025-09-23 | COMMUNITY | | |
+| userland/miniroot/README.md | v0.2 | 2026-01-20 | COMMUNITY | | |
 | userland/miniroot/bin/echo | v0.1 | 2025-09-23 | COMMUNITY | | |
 | userland/miniroot/bin/help | v0.1 | 2025-09-23 | COMMUNITY | | |
 | userland/miniroot/bin/ls | v0.1 | 2025-09-23 | COMMUNITY | | |
+| userland/miniroot/bin/init | v0.1 | 2026-01-20 | COMMUNITY | | |
+| userland/miniroot/bin/rc | v0.1 | 2026-01-20 | COMMUNITY | | |
 | usr/src/example.coh | v0.1 | 2025-09-24 | COMMUNITY | | |
 | src/sh_loop.rs | v0.1 | 2025-09-23 | COMMUNITY | | |
 | src/root/main.rs | v0.1 | 2025-12-27 | COMMUNITY | | |
