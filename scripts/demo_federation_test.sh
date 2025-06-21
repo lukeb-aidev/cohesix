@@ -1,7 +1,7 @@
-// CLASSIFICATION: COMMUNITY
-// Filename: demo_federation_test.sh v0.1
-// Date Modified: 2025-07-07
-// Author: Lukas Bower
+# CLASSIFICATION: COMMUNITY
+# Filename: demo_federation_test.sh v0.1
+# Date Modified: 2025-07-07
+# Author: Lukas Bower
 
 #!/usr/bin/env bash
 # Simple demo showing queen federation and agent migration

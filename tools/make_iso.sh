@@ -1,7 +1,7 @@
-// CLASSIFICATION: COMMUNITY
-// Filename: tools/make_iso.sh v0.4
-// Author: Lukas Bower
-// Date Modified: 2026-01-26
+# CLASSIFICATION: COMMUNITY
+# Filename: tools/make_iso.sh v0.4
+# Author: Lukas Bower
+# Date Modified: 2026-01-26
 #!/usr/bin/env bash
 set -euo pipefail
 

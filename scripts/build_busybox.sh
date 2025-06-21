@@ -1,7 +1,7 @@
-// CLASSIFICATION: COMMUNITY
-// Filename: build_busybox.sh v0.4
-// Date Modified: 2026-01-26
-// Author: Lukas Bower
+# CLASSIFICATION: COMMUNITY
+# Filename: build_busybox.sh v0.4
+# Date Modified: 2026-01-26
+# Author: Lukas Bower
 
 #!/usr/bin/env bash
 set -euo pipefail

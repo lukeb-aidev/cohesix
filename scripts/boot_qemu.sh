@@ -1,7 +1,7 @@
-// CLASSIFICATION: COMMUNITY
-// Filename: boot_qemu.sh v0.1
-// Author: Lukas Bower
-// Date Modified: 2025-12-29
+# CLASSIFICATION: COMMUNITY
+# Filename: boot_qemu.sh v0.1
+# Author: Lukas Bower
+# Date Modified: 2025-12-29
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
