@@ -1,4 +1,4 @@
-# CLASSIFICATION: COMMUNITY
+// CLASSIFICATION: COMMUNITY
 # Filename: make_iso.sh v0.8
 # Author: Lukas Bower
 # Date Modified: 2025-12-17
