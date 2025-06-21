@@ -1274,3 +1274,7 @@
 ## [v0.158] - 2026-01-01
 ### Changed
 - cohesix_fetch_build.sh now clones via HTTPS instead of SSH.
+- scripts/make_grub_iso.sh now builds missing artifacts and stages files before
+  calling grub-mkrescue.
+- build_sel4_kernel.sh now falls back to system ninja when tools-provided ninja
+  is unavailable.
