@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: examples_README.md v0.2
+// Filename: EXAMPLES_README.md v0.3
 // Author: Lukas Bower
-// Date Modified: 2025-07-23
+// Date Modified: 2026-02-05
 
 # Example Documents Directory
 

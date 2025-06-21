@@ -1392,3 +1392,10 @@
 - `build_mandoc.sh` invoked from `cohesix_fetch_build.sh` to compile a static `mandoc` binary.
 - All manual pages from `docs/man` and the `man` wrapper are bundled into the ISO.
 - `scripts/make_grub_iso.sh` stages `man` files and binaries during ISO creation.
+
+## [v0.181] - 2026-02-05
+### Updated
+- Community docs now reference GRUB and Multiboot2 boot flow.
+- `BUILD_PLAN.md` notes `cohesix_fetch_build.sh` and root ELF generation.
+- Renamed lower-case filenames (`cli.md`, `gui_orchestrator.md`, `README_Codex.md`, `examples_README.md`) to uppercase.
+- Removed deprecated `NETWORKING.md` and updated license notes for QEMU.
