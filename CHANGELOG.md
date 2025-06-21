@@ -1370,3 +1370,7 @@
 ## [v0.175] - 2026-01-29
 ### Changed
 - `build_sel4_kernel.sh` installs `ninja-build` if Ninja is missing and re-exports `CMAKE_MAKE_PROGRAM` after installation.
+
+## [v0.176] - 2026-02-01
+### Changed
+- `build_sel4_kernel.sh` creates `settings.cmake` with default `KernelWordSize` and `KernelSel4Arch` when missing.

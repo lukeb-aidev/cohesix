@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: METADATA.md v3.31
+// Filename: METADATA.md v3.32
 // Author: Lukas Bower
-// Date Modified: 2026-01-27
+// Date Modified: 2026-02-01
 
 ## Canonical Documents
 
@@ -156,7 +156,7 @@
 | tests/secure9p/agent_identifier.rs | v0.2 | 2025-07-26 | COMMUNITY | | |
 | cli/cohcli.py | v1.1 | 2025-08-01 | COMMUNITY | | |
 | validator.pyi | v0.1 | 2025-12-10 | COMMUNITY | | |
-| scripts/build_sel4_kernel.sh | v0.10 | 2026-01-29 | COMMUNITY | | |
+| scripts/build_sel4_kernel.sh | v0.11 | 2026-02-01 | COMMUNITY | | |
 | scripts/bootstrap_sel4_tools.sh | v0.1 | 2026-01-27 | COMMUNITY | | |
 | scripts/check-qemu-deps.sh | v0.1 | 2025-07-28 | COMMUNITY | | |
 | scripts/collect_boot_logs.sh | v0.1 | 2025-07-12 | COMMUNITY | | |
