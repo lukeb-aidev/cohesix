@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.86
-// Date Modified: 2025-12-31
+// Filename: CHANGELOG.md v0.87
+// Date Modified: 2026-01-01
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
 • Consolidated OSS reuse files into LICENSES_AND_REUSE.md
@@ -1270,3 +1270,7 @@
 ### Added
 - src/util/debug_log.rs providing seL4 DebugPutChar logger and debug! macro.
 - src/bootstrap/sel4_entry.rs now logs boot messages using debug!.
+
+## [v0.158] - 2026-01-01
+### Changed
+- cohesix_fetch_build.sh now clones via HTTPS instead of SSH.
