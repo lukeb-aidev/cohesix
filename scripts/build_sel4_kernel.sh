@@ -1,8 +1,6 @@
-// CLASSIFICATION: COMMUNITY
-// Filename: build_sel4_kernel.sh v0.2
-// Author: Lukas Bower
-// Date Modified: 2025-12-31
 #!/usr/bin/env bash
+## build_sel4_kernel.sh v0.3
+## Revised to remove invalid header lines and fix CMake invocation
 set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
@@ -11,25 +9,34 @@ TOOLS="$ROOT/third_party/sel4_tools"
 BUILD_DIR="$ROOT/out/sel4_build"
 OUT_ELF="$ROOT/out/sel4.elf"
 
-CMAKE_INIT="$TOOLS/cmake-tool/init-build.sh"
-# Use system ninja if sel4_tools copy is unavailable
+SETTINGS="$TOOLS/cmake-tool/settings.cmake"
 NINJA="$TOOLS/bin/ninja"
 if [ ! -x "$NINJA" ]; then
     NINJA="$(command -v ninja)"
 fi
 
+CMAKE="$(command -v cmake)"
+
 msg() { printf "\e[32m==>\e[0m %s\n" "$*"; }
 die() { printf "\e[31m[ERR]\e[0m %s\n" "$*" >&2; exit 1; }
 
-[ -x "$CMAKE_INIT" ] || die "Missing init-build.sh at $CMAKE_INIT"
+[ -x "$CMAKE" ] || die "cmake not found"
 [ -x "$NINJA" ] || die "Missing ninja at $NINJA"
 [ -d "$SEL4_DIR" ] || die "Missing seL4 repo at $SEL4_DIR"
 
 mkdir -p "$BUILD_DIR"
 pushd "$BUILD_DIR" >/dev/null
 
+if [ ! -f "$SETTINGS" ]; then
+    msg "Creating basic settings.cmake"
+    mkdir -p "$(dirname "$SETTINGS")"
+    touch "$SETTINGS"
+fi
+
 msg "Configuring seL4 kernel (pc99, x86_64)"
-"$CMAKE_INIT" -DPLATFORM=pc99 -DKernelSel4Arch=x86_64 "$SEL4_DIR" || die "CMake failed"
+"$CMAKE" -G Ninja -C "$SETTINGS" \
+    -DKernelArch=x86_64 -DKernelPlatform=pc99 \
+    "$SEL4_DIR" || die "CMake failed"
 
 msg "Building kernel"
 "$NINJA" kernel || die "Kernel build failed"
