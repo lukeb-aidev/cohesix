@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-# Filename: make_iso.sh v0.10
+# Filename: make_iso.sh v0.11
 # Author: Lukas Bower
-# Date Modified: 2026-01-20
+# Date Modified: 2026-02-11
 #!/bin/bash
 set -eu
 

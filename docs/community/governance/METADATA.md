@@ -226,5 +226,22 @@
 | src/util/debug_log.rs | v0.2 | 2025-12-31 | COMMUNITY | | |
 
 | requirements.txt | v0.2 | 2026-01-27 | COMMUNITY | | |
+| bin/demo_bee_learns | v0.1 | 2026-02-11 | COMMUNITY | | |
+| bin/demo_cloud_queen | v0.1 | 2026-02-11 | COMMUNITY | | |
+| bin/demo_cuda_edge | v0.1 | 2026-02-11 | COMMUNITY | | |
+| bin/demo_physics_webcam | v0.1 | 2026-02-11 | COMMUNITY | | |
+| bin/demo_trace_validation | v0.1 | 2026-02-11 | COMMUNITY | | |
+| bin/demo_secure_relay | v0.1 | 2026-02-11 | COMMUNITY | | |
+| bin/demo_sensor_world | v0.1 | 2026-02-11 | COMMUNITY | | |
+| bin/demo_multi_duel | v0.1 | 2026-02-11 | COMMUNITY | | |
+| src/demos/common.py | v0.1 | 2026-02-11 | COMMUNITY | | |
+| src/demos/bee_learns/main.py | v0.1 | 2026-02-11 | COMMUNITY | | |
+| src/demos/cloud_queen/main.py | v0.1 | 2026-02-11 | COMMUNITY | | |
+| src/demos/cuda_edge/main.py | v0.1 | 2026-02-11 | COMMUNITY | | |
+| src/demos/physics_webcam/main.py | v0.1 | 2026-02-11 | COMMUNITY | | |
+| src/demos/trace_validation/main.py | v0.1 | 2026-02-11 | COMMUNITY | | |
+| src/demos/secure_relay/main.py | v0.1 | 2026-02-11 | COMMUNITY | | |
+| src/demos/sensor_world/main.py | v0.1 | 2026-02-11 | COMMUNITY | | |
+| src/demos/multi_duel/main.py | v0.1 | 2026-02-11 | COMMUNITY | | |
 
 The script `scripts/bootstrap_sel4_tools.sh` installs Jinja2 and PyYAML before kernel builds.
