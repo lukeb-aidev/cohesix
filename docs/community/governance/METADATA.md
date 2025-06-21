@@ -219,4 +219,6 @@
 | tests/test_loader.rs | v0.1 | 2025-09-26 | COMMUNITY | | |
 | tests/test_run_shell.rs | v0.1 | 2025-09-26 | COMMUNITY | | |
 | src/bootstrap/sel4_entry.rs | v0.1 | 2025-12-31 | COMMUNITY | | |
+| src/util/mod.rs | v0.1 | 2025-12-31 | COMMUNITY | | |
+| src/util/debug_log.rs | v0.1 | 2025-12-31 | COMMUNITY | | |
 

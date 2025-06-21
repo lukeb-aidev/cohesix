@@ -37,7 +37,7 @@ mod static_table {
     pub fn dispatch(name: &str) {
         if let Some(entry) = ENTRIES.iter().find(|e| e.name == name) {
             let pid = proc_mgr::spawn(entry.name, entry.func as usize);
-            println!("[userland_bootstrap] spawned {} as pid {}", entry.name, pid);
+            crate::debug!("[userland_bootstrap] spawned {} as pid {}", entry.name, pid);
             (entry.func)();
         } else {
             eprintln!("[userland_bootstrap] unknown user entry: {}", name);
@@ -58,7 +58,7 @@ pub fn dispatch_user(name: &str) {
                 let entry = bin.as_ptr() as usize;
                 let name_static: &'static str = Box::leak(name.to_string().into_boxed_str());
                 let pid = proc_mgr::spawn(name_static, entry);
-                println!("[userland_bootstrap] spawned {} as pid {}", name_static, pid);
+                crate::debug!("[userland_bootstrap] spawned {} as pid {}", name_static, pid);
                 proc_mgr::set_current(pid);
                 proc_mgr::update_state(pid, proc_mgr::ProcessState::Running);
                 let func: fn() = unsafe { core::mem::transmute(entry) };
