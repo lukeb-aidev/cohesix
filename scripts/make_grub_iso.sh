@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: make_grub_iso.sh v0.3
+// Filename: make_grub_iso.sh v0.4
 // Author: Lukas Bower
 // Date Modified: 2025-12-31
 #!/usr/bin/env bash
@@ -7,6 +7,7 @@ set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 ISO_ROOT="$ROOT/out/stage"
 ISO_OUT="$ROOT/out/cohesix_grub.iso"
+ROLE="${1:-${COHROLE:-QueenPrimary}}"
 
 # Create stage directory if missing
 mkdir -p "$ISO_ROOT/boot/grub"
@@ -27,12 +28,13 @@ cp "$ROOT_ELF" "$ISO_ROOT/boot/userland.elf"
 cp "$ROOT/config/config.yaml" "$ISO_ROOT/boot/config.yaml"
 
 # Generate grub.cfg
-cat >"$ISO_ROOT/boot/grub/grub.cfg" <<'CFG'
+cat >"$ISO_ROOT/boot/grub/grub.cfg" <<CFG
 set default=0
 set timeout=0
+set CohRole=${ROLE}
 menuentry "Cohesix" {
   multiboot2 /boot/kernel.elf
-  module /boot/userland.elf CohRole=QueenPrimary
+  module /boot/userland.elf CohRole=${ROLE}
   module /boot/config.yaml
 }
 CFG

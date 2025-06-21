@@ -1281,3 +1281,8 @@
   calling grub-mkrescue.
 - build_sel4_kernel.sh now falls back to system ninja when tools-provided ninja
   is unavailable.
+
+## [v0.159] - 2025-12-31
+### Changed
+- scripts/make_grub_iso.sh accepts `COHROLE` or CLI argument to set `CohRole`
+  and injects the value into `grub.cfg`.
