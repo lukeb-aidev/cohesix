@@ -1,7 +1,7 @@
-// CLASSIFICATION: COMMUNITY
-// Filename: bootstrap_sel4_tools.sh v0.3
-// Author: Lukas Bower
-// Date Modified: 2026-02-12
+# CLASSIFICATION: COMMUNITY
+# Filename: bootstrap_sel4_tools.sh v0.3
+# Author: Lukas Bower
+# Date Modified: 2026-02-12
 #!/usr/bin/env bash
 set -euo pipefail
 

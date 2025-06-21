@@ -1,7 +1,7 @@
-// CLASSIFICATION: COMMUNITY
-// Filename: send-heartbeat.sh v0.2
-// Date Modified: 2025-06-17
-// Author: Lukas Bower
+# CLASSIFICATION: COMMUNITY
+# Filename: send-heartbeat.sh v0.2
+# Date Modified: 2025-06-17
+# Author: Lukas Bower
 
 #!/usr/bin/env bash
 ###############################################################################

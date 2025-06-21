@@ -1,7 +1,7 @@
-// CLASSIFICATION: COMMUNITY
-// Filename: build_root_elf.sh v0.3
-// Author: Lukas Bower
-// Date Modified: 2026-02-03
+# CLASSIFICATION: COMMUNITY
+# Filename: build_root_elf.sh v0.3
+# Author: Lukas Bower
+# Date Modified: 2026-02-03
 #!/usr/bin/env bash
 set -euo pipefail
 

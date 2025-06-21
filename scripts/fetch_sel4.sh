@@ -1,7 +1,7 @@
-// CLASSIFICATION: COMMUNITY
-// Filename: fetch_sel4.sh v0.2
-// Author: Lukas Bower
-// Date Modified: 2026-01-08
+# CLASSIFICATION: COMMUNITY
+# Filename: fetch_sel4.sh v0.2
+# Author: Lukas Bower
+# Date Modified: 2026-01-08
 
 #!/usr/bin/env bash
 set -euo pipefail

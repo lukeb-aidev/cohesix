@@ -1,7 +1,7 @@
-// CLASSIFICATION: COMMUNITY
-// Filename: setup_build_env.sh v0.1
-// Author: Lukas Bower
-// Date Modified: 2026-02-12
+# CLASSIFICATION: COMMUNITY
+# Filename: setup_build_env.sh v0.1
+# Author: Lukas Bower
+# Date Modified: 2026-02-12
 #!/usr/bin/env bash
 set -euo pipefail
 

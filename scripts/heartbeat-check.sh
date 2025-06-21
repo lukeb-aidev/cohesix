@@ -1,7 +1,7 @@
-// CLASSIFICATION: COMMUNITY
-// Filename: heartbeat-check.sh v0.2
-// Date Modified: 2025-06-01
-// Author: Lukas Bower
+# CLASSIFICATION: COMMUNITY
+# Filename: heartbeat-check.sh v0.2
+# Date Modified: 2025-06-01
+# Author: Lukas Bower
 
 #!/usr/bin/env bash
 ###############################################################################
