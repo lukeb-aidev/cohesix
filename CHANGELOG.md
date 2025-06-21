@@ -1271,8 +1271,11 @@
 - src/util/debug_log.rs providing seL4 DebugPutChar logger and debug! macro.
 - src/bootstrap/sel4_entry.rs now logs boot messages using debug!.
 
-## [v0.158] - 2026-01-01
+## [v0.158] - 2025-12-31
 ### Changed
+- src/bootstrap/sel4_entry.rs panic handler gated behind `std` feature.
+- Cargo.toml adds `std` and `sel4` features; `sel4_entry` excluded from tests.
+- src/util/debug_log.rs now falls back to stderr logging when `std` is enabled.
 - cohesix_fetch_build.sh now clones via HTTPS instead of SSH.
 - scripts/make_grub_iso.sh now builds missing artifacts and stages files before
   calling grub-mkrescue.

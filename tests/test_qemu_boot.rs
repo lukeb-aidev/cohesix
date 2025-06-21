@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: test_qemu_boot.rs v0.10
+// Filename: test_qemu_boot.rs v0.11
 // Author: Lukas Bower
-// Date Modified: 2025-12-29
+// Date Modified: 2025-12-31
 
 use std::fs;
 use std::path::Path;
@@ -22,7 +22,7 @@ fn qemu_grub_boot_ok() {
         return;
     }
 
-    assert!(Path::new("out/cohesix_grub.iso").exists(), "GRUB ISO not built");
+    assert!(Path::new("out/cohesix.iso").exists(), "ISO not built");
 
     if !Path::new("logs").is_dir() {
         fs::create_dir_all("logs").unwrap();
@@ -40,7 +40,7 @@ fn qemu_grub_boot_ok() {
     fs::write(log_path, &output.stdout).expect("write log");
 
     if !output.status.success() {
-        eprintln!("QEMU command: qemu-system-x86_64 -cdrom out/cohesix_grub.iso -nographic -serial mon:stdio -m 256");
+        eprintln!("QEMU command: qemu-system-x86_64 -cdrom out/cohesix.iso -nographic -serial mon:stdio -m 256");
         dump_log_tail(log_path, 20);
         panic!("QEMU exited with error");
     }
@@ -52,7 +52,7 @@ fn qemu_grub_boot_ok() {
     let log = fs::read_to_string(log_path).expect("read log");
 
     if !log.contains("COHESIX_BOOT_OK") {
-        eprintln!("QEMU command: qemu-system-x86_64 -cdrom out/cohesix_grub.iso -nographic -serial mon:stdio -m 256");
+        eprintln!("QEMU command: qemu-system-x86_64 -cdrom out/cohesix.iso -nographic -serial mon:stdio -m 256");
         dump_log_tail(log_path, 20);
         panic!("Boot marker COHESIX_BOOT_OK not found");
     }
