@@ -1270,3 +1270,8 @@
 ### Added
 - src/util/debug_log.rs providing seL4 DebugPutChar logger and debug! macro.
 - src/bootstrap/sel4_entry.rs now logs boot messages using debug!.
+
+## [v0.158] - 2025-12-31
+### Changed
+- scripts/make_grub_iso.sh now builds missing artifacts and stages files before
+  calling grub-mkrescue.
