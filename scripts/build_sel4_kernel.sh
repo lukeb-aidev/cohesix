@@ -1,9 +1,5 @@
-// CLASSIFICATION: COMMUNITY
-// Filename: build_sel4_kernel.sh v0.5
-// Author: Lukas Bower
-// Date Modified: 2026-01-08
-#!/usr/bin/env bash
-## Auto-detect target architecture and configure seL4 build
+#!/bin/bash
+# Auto-detect target architecture and configure seL4 build
 set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
@@ -49,7 +45,6 @@ pushd "$BUILD_DIR" >/dev/null
 if [ ! -f "$SETTINGS" ]; then
     msg "Creating basic settings.cmake"
     mkdir -p "$(dirname "$SETTINGS")"
-    touch "$SETTINGS"
 fi
 
 ARCH="$(uname -m)"
@@ -57,11 +52,15 @@ case "$ARCH" in
     x86_64|amd64)
         KERNEL_PLATFORM="pc99"
         KERNEL_ARCH="x86_64"
+        KERNEL_SEL4_ARCH="x86_64"
+        KERNEL_WORD_SIZE=64
         CC="gcc"
         ;;
     aarch64|arm64)
         KERNEL_PLATFORM="imx8mm_evk"
         KERNEL_ARCH="aarch64"
+        KERNEL_SEL4_ARCH="aarch64"
+        KERNEL_WORD_SIZE=64
         if command -v aarch64-linux-gnu-gcc >/dev/null 2>&1; then
             CC="aarch64-linux-gnu-gcc"
         else
@@ -73,17 +72,25 @@ case "$ARCH" in
         ;;
 esac
 
-msg "Host arch: $ARCH, using compiler: $(command -v $CC)"
+msg "Host arch: $ARCH, target platform: $KERNEL_PLATFORM"
+msg "Using compiler: $(command -v $CC)"
 export CMAKE_MAKE_PROGRAM="$(command -v ninja)"
+
+# Update settings.cmake with defaults
+cat > "$SETTINGS" <<EOF
+set(KernelWordSize ${KERNEL_WORD_SIZE} CACHE STRING "Default word size")
+set(KernelSel4Arch ${KERNEL_SEL4_ARCH} CACHE STRING "Default seL4 arch")
+EOF
 
 msg "Configuring seL4 kernel ($KERNEL_PLATFORM, $KERNEL_ARCH)"
 "$CMAKE" -G Ninja -C "$SETTINGS" \
     -DKernelArch="$KERNEL_ARCH" -DKernelPlatform="$KERNEL_PLATFORM" \
+    -DKernelSel4Arch="$KERNEL_SEL4_ARCH" -DKernelWordSize="$KERNEL_WORD_SIZE" \
     -DCMAKE_C_COMPILER="$CC" -DCMAKE_ASM_COMPILER="$CC" \
     "$SEL4_DIR" || die "CMake failed"
 
 msg "Building kernel"
-"$NINJA" kernel || die "Kernel build failed"
+"$NINJA" kernel.elf || die "Kernel build failed"
 
 KERN_SRC="$BUILD_DIR/kernel/kernel.elf"
 [ -f "$KERN_SRC" ] || die "Kernel ELF not found"
