@@ -1362,3 +1362,7 @@
 ## [v0.173] - 2026-01-27
 ### Added
 - `bootstrap_sel4_tools.sh` installs Python dependencies for seL4 build scripts.
+
+## [v0.174] - 2026-01-28
+### Fixed
+- `build_sel4_kernel.sh` now checks for `gcc-aarch64-linux-gnu` when building `imx8mm_evk` regardless of host architecture and selects `aarch64-linux-gnu-gcc` when available.
