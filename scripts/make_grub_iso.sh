@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: make_grub_iso.sh v0.4
+// Filename: make_grub_iso.sh v0.5
 // Author: Lukas Bower
-// Date Modified: 2025-12-31
+// Date Modified: 2026-01-02
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
@@ -45,11 +45,21 @@ if ! command -v grub-mkrescue >/dev/null 2>&1; then
     exit 1
 fi
 
+
 grub-mkrescue -o "$ISO_OUT" "$ISO_ROOT" >/dev/null 2>&1
 
+# Ensure summary directories exist before scanning
+mkdir -p "$ISO_ROOT/bin" "$ISO_ROOT/roles"
+
 if [ -f "$ISO_OUT" ] && [ -s "$ISO_OUT" ]; then
-    BIN_COUNT=$(find "$ISO_ROOT/bin" -type f -perm -111 | wc -l)
-    ROLE_COUNT=$(find "$ISO_ROOT/roles" -name '*.yaml' | wc -l)
+    BIN_COUNT=0
+    if [ -d "$ISO_ROOT/bin" ]; then
+        BIN_COUNT=$(find "$ISO_ROOT/bin" -type f -perm -111 | wc -l)
+    fi
+    ROLE_COUNT=0
+    if [ -d "$ISO_ROOT/roles" ]; then
+        ROLE_COUNT=$(find "$ISO_ROOT/roles" -name '*.yaml' | wc -l)
+    fi
     SIZE_MB=$(du -m "$ISO_OUT" | awk '{print $1}')
     echo "ISO BUILD OK: ${BIN_COUNT} binaries, ${ROLE_COUNT} roles, ${SIZE_MB}MB total"
 else
