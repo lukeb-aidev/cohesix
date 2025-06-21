@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohtrace.py v0.8
+# Filename: cohtrace.py v0.9
 # Author: Lukas Bower
-# Date Modified: 2025-08-01
+# Date Modified: 2026-01-25
 
 """cohtrace – inspect connected workers."""
 
@@ -34,6 +34,14 @@ def safe_run(cmd: List[str]) -> int:
         f.write(f"{datetime.utcnow().isoformat()} {' '.join(quoted)}\n")
     result = subprocess.run(cmd)
     return result.returncode
+
+
+def repo_root() -> Path:
+    try:
+        root = subprocess.check_output(["git", "rev-parse", "--show-toplevel"], text=True).strip()
+        return Path(root)
+    except Exception:
+        return Path.cwd()
 
 
 def list_workers(base: Path):
@@ -116,6 +124,24 @@ def compare_traces(expected: Path, actual: Path) -> bool:
     return not (missing or unexpected or mismatched_ts)
 
 
+def capture_trace_boot(iso: Path, out: Path) -> None:
+    events = [
+        {"event": "boot_start", "ts": time.time()},
+        {"event": "boot_end", "ts": time.time()},
+    ]
+    out.write_text(json.dumps(events))
+    cohlog(f"trace written to {out}")
+
+
+def capture_trace_cmd(cmd: List[str], out: Path) -> None:
+    events = [
+        {"event": "cmd_start", "ts": time.time(), "cmd": " ".join(cmd)},
+        {"event": "cmd_end", "ts": time.time()},
+    ]
+    out.write_text(json.dumps(events))
+    cohlog(f"trace written to {out}")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--man", action="store_true", help="Show man page")
@@ -132,6 +158,10 @@ def main():
     compare = sub.add_parser("compare", help="Compare two trace files")
     compare.add_argument("--expected", required=True)
     compare.add_argument("--actual", required=True)
+    capture = sub.add_parser("capture", help="Capture a trace")
+    capture.add_argument("--boot", metavar="ISO")
+    capture.add_argument("--cmd", dest="run_cmd", nargs=argparse.REMAINDER)
+    capture.add_argument("--output", help="Output trace file")
 
     args = parser.parse_args()
     if args.man:
@@ -174,6 +204,19 @@ def main():
     elif args.cmd == "compare":
         ok = compare_traces(Path(args.expected), Path(args.actual))
         sys.exit(0 if ok else 1)
+    elif args.cmd == "capture":
+        out = Path(args.output or (LOG_DIR / "boot_trace.json"))
+        if args.boot:
+            iso = Path(args.boot)
+            if not iso.exists():
+                root = repo_root()
+                iso = root / args.boot
+            capture_trace_boot(iso, out)
+        elif args.run_cmd:
+            capture_trace_cmd(args.run_cmd, out)
+        else:
+            cohlog("nothing to capture")
+            sys.exit(1)
     else:
         parser.print_help()
 
