@@ -1,19 +1,29 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: make_grub_iso.sh v0.2
+// Filename: make_grub_iso.sh v0.3
 // Author: Lukas Bower
-// Date Modified: 2025-12-30
+// Date Modified: 2025-12-31
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 ISO_ROOT="$ROOT/out/stage"
 ISO_OUT="$ROOT/out/cohesix_grub.iso"
-# Ensure stage directory exists
-[ -d "$ISO_ROOT" ] || { echo "stage directory missing: $ISO_ROOT" >&2; exit 1; }
+
+# Create stage directory if missing
 mkdir -p "$ISO_ROOT/boot/grub"
 
+# Ensure kernel and root task ELFs exist
+KERNEL_ELF="$ROOT/out/sel4.elf"
+ROOT_ELF="$ROOT/out/cohesix_root.elf"
+if [ ! -s "$KERNEL_ELF" ]; then
+    bash "$ROOT/scripts/build_sel4_kernel.sh"
+fi
+if [ ! -s "$ROOT_ELF" ]; then
+    bash "$ROOT/scripts/build_root_elf.sh"
+fi
+
 # Copy kernel, userland, and config
-cp "$ROOT/out/sel4.elf" "$ISO_ROOT/boot/kernel.elf"
-cp "$ROOT/out/cohesix_root.elf" "$ISO_ROOT/boot/userland.elf"
+cp "$KERNEL_ELF" "$ISO_ROOT/boot/kernel.elf"
+cp "$ROOT_ELF" "$ISO_ROOT/boot/userland.elf"
 cp "$ROOT/config/config.yaml" "$ISO_ROOT/boot/config.yaml"
 
 # Generate grub.cfg

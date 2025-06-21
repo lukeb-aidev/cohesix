@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.86
-// Date Modified: 2025-12-31
+// Filename: CHANGELOG.md v0.87
+// Date Modified: 2026-01-01
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
 • Consolidated OSS reuse files into LICENSES_AND_REUSE.md
@@ -1276,3 +1276,8 @@
 - src/bootstrap/sel4_entry.rs panic handler gated behind `std` feature.
 - Cargo.toml adds `std` and `sel4` features; `sel4_entry` excluded from tests.
 - src/util/debug_log.rs now falls back to stderr logging when `std` is enabled.
+- cohesix_fetch_build.sh now clones via HTTPS instead of SSH.
+- scripts/make_grub_iso.sh now builds missing artifacts and stages files before
+  calling grub-mkrescue.
+- build_sel4_kernel.sh now falls back to system ninja when tools-provided ninja
+  is unavailable.
