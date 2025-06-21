@@ -1,5 +1,5 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Cargo.toml v0.15
+# Filename: Cargo.toml v0.16
 # Author: Lukas Bower
 # Date Modified: 2025-09-22
 [package]
@@ -76,7 +76,9 @@ libc = "0.2"
 rcgen = "0.13"
 
 [features]
-default = ["physics", "busybox"]
+default = ["std", "physics", "busybox"]
+std = []
+sel4 = []
 cuda = ["cust", "nvml-wrapper"]
 rapier = ["rapier3d"]
 physics = ["rapier3d"]
@@ -120,4 +122,6 @@ path = "src/root/main.rs"
 [[bin]]
 name = "sel4_entry"
 path = "src/bootstrap/sel4_entry.rs"
+test = false
+required-features = ["sel4"]
 
