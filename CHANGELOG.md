@@ -1302,3 +1302,8 @@
 ### Changed
 - `make_iso.sh` now calls `scripts/make_grub_iso.sh`.
 
+## [v0.163] - 2026-01-07
+### Changed
+- `build_sel4_kernel.sh` auto-detects architecture and removes manual selection.
+- `cohesix_fetch_build.sh` selects Rust target based on `uname -m` with no prompts.
+
