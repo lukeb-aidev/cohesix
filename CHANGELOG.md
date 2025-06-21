@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.85
+// Filename: CHANGELOG.md v0.86
 // Date Modified: 2025-12-31
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
@@ -1265,3 +1265,8 @@
 ## [v0.156] - 2025-12-31
 ### Added
 - Minimal seL4 entry stub at src/bootstrap/sel4_entry.rs logging COHESIX_BOOT_OK and launching shell
+
+## [v0.157] - 2025-12-31
+### Added
+- src/util/debug_log.rs providing seL4 DebugPutChar logger and debug! macro.
+- src/bootstrap/sel4_entry.rs now logs boot messages using debug!.

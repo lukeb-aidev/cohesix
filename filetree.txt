@@ -215,6 +215,8 @@ src/utils/format.rs
 src/utils/helpers.rs
 src/utils/mod.rs
 src/utils/ssa_utils.rs
+src/util/mod.rs
+src/util/debug_log.rs
 src/worker/args.rs
 src/worker/mod.rs
 tests/codex/agents_test.rs
