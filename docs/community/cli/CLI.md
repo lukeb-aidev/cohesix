@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: cli.md v0.3
+// Filename: CLI.md v0.4
 // Author: Lukas Bower
-// Date Modified: 2025-06-15
+// Date Modified: 2026-02-05
 
 # Cohesix CLI Guide
 
