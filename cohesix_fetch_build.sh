@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.33
+# Filename: cohesix_fetch_build.sh v0.34
 # Author: Lukas Bower
-# Date Modified: 2026-01-01
+# Date Modified: 2026-01-05
 #!/bin/bash
 # Fetch and fully build the Cohesix project using SSH Git auth.
 
@@ -18,6 +18,20 @@ exec > >(tee -a "$LOG_FILE") 2>&1
 trap 'echo "❌ Build failed. Last 40 log lines:" >&3; tail -n 40 "$LOG_FILE" >&3' ERR
 
 log(){ echo "[$(date +%H:%M:%S)] $1" | tee -a "$LOG_FILE" >&3; }
+
+# Optional EFI build
+BUILD_EFI=0
+for arg in "$@"; do
+  case "$arg" in
+    --with-efi)
+      BUILD_EFI=1
+      ;;
+    *)
+      echo "Unknown option: $arg" >&2
+      exit 1
+      ;;
+  esac
+done
 
 log "🛠️ [Build Start] $(date)"
 
@@ -149,6 +163,11 @@ for script in cohcli cohcap cohtrace cohrun cohbuild cohup cohpkg; do
   [ -f "bin/$script" ] && cp "bin/$script" "$STAGE_DIR/bin/$script"
 done
 
+log "🧱 Building seL4 kernel..."
+bash scripts/build_sel4_kernel.sh || { echo "❌ seL4 kernel build failed" >&2; exit 1; }
+log "🧱 Building root ELF..."
+bash scripts/build_root_elf.sh || { echo "❌ root ELF build failed" >&2; exit 1; }
+
 # Ensure staging directories exist for config and roles
 mkdir -p "$STAGE_DIR/etc" "$STAGE_DIR/roles" "$STAGE_DIR/init"
 
@@ -157,7 +176,7 @@ case "$COHESIX_TARGET" in
   *-uefi) EFI_SUPPORTED=1 ;;
 esac
 
-if [ "$EFI_SUPPORTED" -eq 1 ]; then
+if [ "$BUILD_EFI" -eq 1 ] && [ "$EFI_SUPPORTED" -eq 1 ]; then
   log "🛠️ Building kernel EFI..."
   if ! cargo build --release --target "$COHESIX_TARGET" --bin kernel \
     --no-default-features --features minimal_uefi,kernel_bin; then
@@ -190,11 +209,13 @@ if [ "$EFI_SUPPORTED" -eq 1 ]; then
   [ -s "$STAGE_DIR/bin/init.efi" ] || { echo "❌ failed to stage init.efi" >&2; exit 1; }
   log "init EFI built at $INIT_EFI"
 else
-  log "⚠️ TARGET $COHESIX_TARGET not UEFI-compatible; skipping EFI build"
+  log "⚠️ EFI build disabled or target not UEFI-compatible; skipping EFI build"
 fi
 
 log "📂 Staging boot files..."
 mkdir -p "$STAGE_DIR/boot"
+cp out/sel4.elf "$STAGE_DIR/boot/kernel.elf"
+cp out/cohesix_root.elf "$STAGE_DIR/boot/userland.elf"
 for f in initfs.img plan9.ns bootargs.txt boot_trace.json; do
   [ -f "$f" ] && cp "$f" "$STAGE_DIR/boot/"
 done
@@ -272,7 +293,9 @@ if [ "${VIRTUAL_ENV:-}" != "$(pwd)/.venv" ]; then
   echo "❌ Python venv not active before ISO build" >&2
   exit 1
 fi
-[ -f "$STAGE_DIR/BOOTX64.EFI" ] || { echo "❌ $STAGE_DIR/BOOTX64.EFI missing" >&2; exit 1; }
+if [ "$BUILD_EFI" -eq 1 ]; then
+  [ -f "$STAGE_DIR/BOOTX64.EFI" ] || { echo "❌ $STAGE_DIR/BOOTX64.EFI missing" >&2; exit 1; }
+fi
 bash ./scripts/make_grub_iso.sh || { echo "❌ make_grub_iso.sh failed" >&2; exit 1; }
 if [ ! -f out/cohesix_grub.iso ]; then
   echo "❌ ISO build failed" >&2
@@ -286,9 +309,11 @@ if [ ! -r out/cohesix_grub.iso ]; then
   echo "❌ out/cohesix_grub.iso not readable" >&2
   exit 1
 fi
-if [ ! -f "$STAGE_DIR/BOOTX64.EFI" ]; then
-  echo "❌ $STAGE_DIR/BOOTX64.EFI missing after ISO build" >&2
-  exit 1
+if [ "$BUILD_EFI" -eq 1 ]; then
+  if [ ! -f "$STAGE_DIR/BOOTX64.EFI" ]; then
+    echo "❌ $STAGE_DIR/BOOTX64.EFI missing after ISO build" >&2
+    exit 1
+  fi
 fi
 if [ ! -f config/config.yaml ]; then
   echo "❌ config/config.yaml missing" >&2
@@ -303,12 +328,14 @@ if [ "$ISO_SIZE" -le $((1024*1024)) ]; then
   exit 1
 fi
 if command -v xorriso >/dev/null; then
-  xorriso -indev out/cohesix_grub.iso -find / -name BOOTX64.EFI -print | grep -q BOOTX64.EFI || {
-    echo "❌ BOOTX64.EFI missing in ISO" >&2; exit 1; }
+  if [ "$BUILD_EFI" -eq 1 ]; then
+    xorriso -indev out/cohesix_grub.iso -find / -name BOOTX64.EFI -print | grep -q BOOTX64.EFI || {
+      echo "❌ BOOTX64.EFI missing in ISO" >&2; exit 1; }
+  fi
 else
   log "⚠️ xorriso not found; skipping ISO content check"
 fi
-if [[ ! -f out/init.efi ]]; then
+if [ "$BUILD_EFI" -eq 1 ] && [[ ! -f out/init.efi ]]; then
   echo "❌ init.efi missing — build incomplete" | tee -a "$LOG_FILE"
 fi
 
@@ -413,7 +440,9 @@ if [ "${VIRTUAL_ENV:-}" != "$(pwd)/.venv" ]; then
   echo "❌ Python venv not active before ISO build" >&2
   exit 1
 fi
-[ -f "$STAGE_DIR/BOOTX64.EFI" ] || { echo "❌ $STAGE_DIR/BOOTX64.EFI missing" >&2; exit 1; }
+if [ "$BUILD_EFI" -eq 1 ]; then
+  [ -f "$STAGE_DIR/BOOTX64.EFI" ] || { echo "❌ $STAGE_DIR/BOOTX64.EFI missing" >&2; exit 1; }
+fi
 bash ./scripts/make_grub_iso.sh || { echo "❌ make_grub_iso.sh failed" >&2; exit 1; }
 if [ ! -f out/cohesix_grub.iso ]; then
   echo "❌ ISO build failed" >&2

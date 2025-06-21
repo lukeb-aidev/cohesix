@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.87
-// Date Modified: 2026-01-01
+// Filename: CHANGELOG.md v0.88
+// Date Modified: 2026-01-05
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
 • Consolidated OSS reuse files into LICENSES_AND_REUSE.md
@@ -1291,3 +1291,8 @@
 ### Changed
 - scripts/make_grub_iso.sh now ensures bin and roles directories exist before scanning
   and defaults summary counts to zero if absent.
+
+## [v0.161] - 2026-01-05
+### Changed
+- cohesix_fetch_build.sh builds seL4 kernel and root ELF via helper scripts.
+- EFI build logic is disabled by default and enabled with `--with-efi`.
