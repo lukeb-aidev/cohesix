@@ -22,6 +22,7 @@
 - QEMU boot script checks for qemu-system-x86_64, sets TMPDIR, ensures writable paths
 - test_boot_efi.sh verifies bootx64.efi and FAT directory before launch; logs /out manifest on failure
 - cohesix_fetch_build.sh v0.4 stages kernel ELF and boot files in out/
+- cohesix_fetch_build.sh clones via SSH without credentials
 - src/lib/init.rs placeholder module to satisfy module resolution
 - sensors.rs respects COHESIX_TELEMETRY_PATH for tests
 - test_agent_lifecycle uses temp directories only
