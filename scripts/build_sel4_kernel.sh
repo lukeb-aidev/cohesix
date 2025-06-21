@@ -1,40 +1,30 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: build_sel4_kernel.sh v0.11
+// Filename: build_sel4_kernel.sh v0.12
 // Author: Lukas Bower
-// Date Modified: 2026-02-01
+// Date Modified: 2026-02-12
 #!/bin/bash
 # Auto-detect target architecture and configure seL4 build
 set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+source "$ROOT/scripts/setup_build_env.sh"
 SEL4_DIR="$ROOT/third_party/sel4"
 TOOLS="$ROOT/third_party/sel4_tools"
 BUILD_DIR="$ROOT/out/sel4_build"
 OUT_ELF="$ROOT/out/sel4.elf"
 
 SETTINGS="$TOOLS/cmake-tool/settings.cmake"
-NINJA="$TOOLS/bin/ninja"
-if [ ! -x "$NINJA" ]; then
-    NINJA="$(command -v ninja || true)"
-fi
-
+NINJA="$(command -v ninja || true)"
 CMAKE="$(command -v cmake || true)"
+GEN="Ninja"
+if [ -z "$NINJA" ]; then
+    GEN="Unix Makefiles"
+else
+    export CMAKE_MAKE_PROGRAM="$NINJA"
+fi
 
 msg() { printf "\e[32m==>\e[0m %s\n" "$*"; }
 die() { printf "\e[31m[ERR]\e[0m %s\n" "$*" >&2; exit 1; }
-
-# Ensure required host tools are installed
-missing_pkgs=()
-for pkg in cmake gcc python3-yaml; do
-    dpkg -s "$pkg" >/dev/null 2>&1 || missing_pkgs+=("$pkg")
-done
-
-# Install ninja-build if no ninja executable is available
-if [ -z "$NINJA" ]; then
-    dpkg -s ninja-build >/dev/null 2>&1 || missing_pkgs+=("ninja-build")
-fi
-
-
 
 [ -d "$SEL4_DIR" ] || die "Missing seL4 repo at $SEL4_DIR"
 
@@ -82,26 +72,22 @@ case "$ARCH" in
 esac
 
 if [ "$KERNEL_PLATFORM" = "imx8mm_evk" ]; then
-    command -v aarch64-linux-gnu-gcc >/dev/null 2>&1 || missing_pkgs+=("gcc-aarch64-linux-gnu")
     if command -v aarch64-linux-gnu-gcc >/dev/null 2>&1; then
         CC="aarch64-linux-gnu-gcc"
+    else
+        die "aarch64-linux-gnu-gcc not found"
     fi
 fi
 
-if [ ${#missing_pkgs[@]} -gt 0 ] && command -v apt-get >/dev/null 2>&1; then
-    msg "Installing packages: ${missing_pkgs[*]}"
-    sudo apt-get update -y >/dev/null
-    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ${missing_pkgs[*]} >/dev/null
-    NINJA="$(command -v ninja || true)"
-    CMAKE="$(command -v cmake || true)"
-    export CMAKE_MAKE_PROGRAM="$NINJA"
-fi
 
 msg "Host arch: $ARCH, target platform: $KERNEL_PLATFORM"
 msg "Using compiler: $(command -v $CC)"
 [ -x "$CMAKE" ] || die "cmake not found"
-[ -x "$NINJA" ] || die "Missing ninja at $NINJA"
-export CMAKE_MAKE_PROGRAM="$(command -v ninja)"
+if [ "$GEN" = "Ninja" ]; then
+    msg "Using Ninja at $NINJA"
+else
+    msg "Ninja not found; using Unix Makefiles"
+fi
 
 # Update settings.cmake with defaults
 cat > "$SETTINGS" <<EOF
@@ -110,14 +96,18 @@ set(KernelSel4Arch ${KERNEL_SEL4_ARCH} CACHE STRING "Default seL4 arch" FORCE)
 EOF
 
 msg "Configuring seL4 kernel ($KERNEL_PLATFORM, $KERNEL_ARCH)"
-"$CMAKE" -G Ninja -C "$SETTINGS" \
+"$CMAKE" -G "$GEN" -C "$SETTINGS" \
     -DKernelArch="$KERNEL_ARCH" -DKernelPlatform="$KERNEL_PLATFORM" \
     -DKernelSel4Arch="$KERNEL_SEL4_ARCH" -DKernelWordSize="$KERNEL_WORD_SIZE" \
     -DCMAKE_C_COMPILER="$CC" -DCMAKE_ASM_COMPILER="$CC" \
     "$SEL4_DIR" || die "CMake failed"
 
 msg "Building kernel"
-"$NINJA" kernel.elf || die "Kernel build failed"
+if [ "$GEN" = "Ninja" ]; then
+    "$NINJA" kernel.elf || die "Kernel build failed"
+else
+    make -j"$(nproc)" kernel.elf || die "Kernel build failed"
+fi
 
 [ -f "$BUILD_DIR/kernel.elf" ] && KERN_SRC="$BUILD_DIR/kernel.elf" || KERN_SRC="$BUILD_DIR/kernel/kernel.elf"
 [ -f "$KERN_SRC" ] || die "Kernel ELF not found"

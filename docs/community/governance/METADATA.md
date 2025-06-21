@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: METADATA.md v3.33
+// Filename: METADATA.md v3.34
 // Author: Lukas Bower
-// Date Modified: 2026-02-01
+// Date Modified: 2026-02-12
 
 ## Canonical Documents
 
@@ -14,9 +14,9 @@
 | BUILD_PLAN.md              | v0.5    | 2026-02-05    | COMMUNITY      |            |              |
 | COMMERCIAL_PLAN.md         | v1.5    | 2025-06-08    | PRIVATE        |            |              |
 | DEPENDENCIES.md            | v0.5    | 2025-07-06    | COMMUNITY      |            |              |
-| METADATA.md                | v3.33   | 2026-02-01    | COMMUNITY      | | |
+| METADATA.md                | v3.34   | 2026-02-12    | COMMUNITY      | | |
 | Q_DAY.md                   | v1.1    | 2025-06-15    | PRIVATE        |            |              |
-| README.md                  | v0.13   | 2026-02-01    | COMMUNITY        | | |
+| README.md                  | v0.14   | 2026-02-12    | COMMUNITY        | | |
 | README_CODEX.md            | v1.5    | 2026-02-05    | COMMUNITY      |            |              |
 | REMOTE_ACCESS.md           | v1.0    | 2025-05-24    | COMMUNITY      |            |              |
 | SHOPPING_LIST.md           | v1.3    | 2025-05-25    | COMMUNITY      |            |              |
@@ -155,8 +155,9 @@
 | tests/secure9p/agent_identifier.rs | v0.2 | 2025-07-26 | COMMUNITY | | |
 | cli/cohcli.py | v1.1 | 2025-08-01 | COMMUNITY | | |
 | validator.pyi | v0.1 | 2025-12-10 | COMMUNITY | | |
-| scripts/build_sel4_kernel.sh | v0.11 | 2026-02-01 | COMMUNITY | | |
-| scripts/bootstrap_sel4_tools.sh | v0.2 | 2026-02-02 | COMMUNITY | | |
+| scripts/build_sel4_kernel.sh | v0.12 | 2026-02-12 | COMMUNITY | | |
+| scripts/bootstrap_sel4_tools.sh | v0.3 | 2026-02-12 | COMMUNITY | | |
+| scripts/setup_build_env.sh | v0.1 | 2026-02-12 | COMMUNITY | | |
 | scripts/check-qemu-deps.sh | v0.1 | 2025-07-28 | COMMUNITY | | |
 | scripts/collect_boot_logs.sh | v0.1 | 2025-07-12 | COMMUNITY | | |
 | scripts/generate_busybox_man.sh | v0.1 | 2025-06-08 | COMMUNITY | | |
