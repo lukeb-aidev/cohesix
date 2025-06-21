@@ -1286,3 +1286,8 @@
 ### Changed
 - scripts/make_grub_iso.sh accepts `COHROLE` or CLI argument to set `CohRole`
   and injects the value into `grub.cfg`.
+
+## [v0.160] - 2026-01-02
+### Changed
+- scripts/make_grub_iso.sh now ensures bin and roles directories exist before scanning
+  and defaults summary counts to zero if absent.
