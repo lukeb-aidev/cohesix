@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+HERE="$(cd \"$(dirname \"$0\")/../src/demos/physics_webcam\" && pwd)"
+exec /usr/bin/env python3 "$HERE/main.py" "$@"
