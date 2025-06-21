@@ -1349,3 +1349,8 @@
 - Static BusyBox build via `scripts/build_busybox.sh` installs to `out/bin/busybox`.
 - ISO generation scripts link BusyBox applets (`sh`, `ls`, `cp`, `mv`, `echo`, `mount`, `cat`, `ps`, `kill`).
 - BusyBox included in GRUB-based images and validation checks updated.
+
+## [v0.171] - 2026-01-27
+### Added
+- Plan 9-style CLI tools `srv`, `mount`, `import`, and `exportfs` for basic namespace operations.
+- Secure9P handshake now logs via `cohtrace` with stubbed certificate validation.

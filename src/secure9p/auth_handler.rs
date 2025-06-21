@@ -16,6 +16,7 @@ use rustls::pki_types::CertificateDer;
 use x509_parser::prelude::*;
 #[cfg(feature = "secure9p")]
 use std::io::BufRead;
+use crate::trace::recorder::event;
 
 #[cfg(feature = "secure9p")]
 fn parse_cn(cert: &CertificateDer<'_>) -> Option<String> {
@@ -26,6 +27,13 @@ fn parse_cn(cert: &CertificateDer<'_>) -> Option<String> {
         .next()
         .map(|cn| cn.as_str().unwrap_or("").to_string());
     cn
+}
+
+#[cfg(feature = "secure9p")]
+fn validate_cert_stub(cert: &CertificateDer<'_>) -> bool {
+    let _ = cert;
+    event("secure9p", "validate_cert", "stub");
+    true
 }
 
 #[cfg(feature = "secure9p")]
@@ -66,8 +74,12 @@ pub fn extract_identity(
     stream: &mut dyn std::io::Read,
 ) -> Result<String> {
     if let Some(certs) = conn.peer_certificates() {
-        if let Some(id) = certs.first().and_then(parse_cn) {
-            return Ok(id);
+        if let Some(cert) = certs.first() {
+            if validate_cert_stub(cert) {
+                if let Some(id) = parse_cn(cert) {
+                    return Ok(id);
+                }
+            }
         }
     }
     let mut line = String::new();

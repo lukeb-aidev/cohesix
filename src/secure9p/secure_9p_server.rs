@@ -23,11 +23,13 @@ use std::{
     fs::File,
     io::{BufReader, Read, Write},
     net::TcpListener,
+    net::TcpStream,
     os::unix::net::UnixStream,
     path::{Path, PathBuf},
     sync::Arc,
     thread,
 };
+use crate::trace::recorder::event;
 
 #[cfg(feature = "secure9p")]
 fn load_certs(path: &Path) -> anyhow::Result<Vec<rustls::pki_types::CertificateDer<'static>>> {
@@ -68,6 +70,20 @@ fn policy_for(engine: &PolicyEngine, agent: &str) -> SandboxPolicy {
     pol
 }
 
+#[cfg(feature = "secure9p")]
+fn handshake_stub(conn: &mut ServerConnection, tcp: &mut TcpStream) -> bool {
+    match conn.complete_io(tcp) {
+        Ok(_) => {
+            event("secure9p", "handshake", "ok");
+            true
+        }
+        Err(e) => {
+            event("secure9p", "handshake_fail", &e.to_string());
+            false
+        }
+    }
+}
+
 /// Start a TLS-wrapped 9P server listening on `addr` using `cert` and `key`.
 #[cfg(feature = "secure9p")]
 fn start_secure_9p_server_sync(addr: &str, cert: &Path, key: &Path) -> anyhow::Result<()> {
@@ -89,7 +105,7 @@ fn start_secure_9p_server_sync(addr: &str, cert: &Path, key: &Path) -> anyhow::R
         let hook = hook.clone();
         thread::spawn(move || {
             let mut conn = ServerConnection::new(cfg).unwrap();
-            if conn.complete_io(&mut tcp).is_err() {
+            if !handshake_stub(&mut conn, &mut tcp) {
                 return;
             }
             let mut tls = StreamOwned::new(conn, tcp);
