@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: README.md v0.13
+// Filename: README.md v0.14
 // Author: Lukas Bower
-// Date Modified: 2026-02-01
+// Date Modified: 2026-02-12
 
 
 # Cohesix
@@ -140,9 +140,10 @@ The script highlights missing packages so you can install them before running bo
 
 ### Building the seL4 Kernel
 
-Use `./scripts/build_sel4_kernel.sh` to compile the kernel. The helper
-`bootstrap_sel4_tools.sh` runs first and installs Jinja2 and PyYAML if
-they are missing.
+Run `./scripts/setup_build_env.sh` to install compilers and Python
+dependencies. Then use `./scripts/build_sel4_kernel.sh` to compile the
+kernel. The helper `bootstrap_sel4_tools.sh` fetches seL4 repositories
+and ensures tooling permissions are correct.
 
 ---
 
