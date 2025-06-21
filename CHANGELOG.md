@@ -1409,3 +1409,13 @@
 - Runnable implementations for all demo scenarios in `DEMO_SCENARIOS.md`.
 - ISO build now bundles demo launchers and assets.
 - Test scripts validate each demo under `tests/demos/`.
+
+## [v0.184] - 2026-02-12
+### Added
+- `setup_build_env.sh` installs build dependencies and Python modules.
+### Changed
+- `bootstrap_sel4_tools.sh` now clones missing repositories and checks
+  `settings.cmake` permissions.
+- `build_sel4_kernel.sh` sources the new environment script, defines
+  explicit CMake variables, and falls back to `Unix Makefiles` when
+  Ninja is unavailable.
