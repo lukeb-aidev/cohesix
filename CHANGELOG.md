@@ -1378,3 +1378,7 @@
 ## [v0.177] - 2026-02-01
 ### Changed
 - `build_sel4_kernel.sh` now calls `bootstrap_sel4_tools.sh` to auto-install Python modules.
+
+## [v0.178] - 2026-02-02
+### Fixed
+- `bootstrap_sel4_tools.sh` detects virtualenv and omits `--user` when installing Python dependencies to avoid pip errors.

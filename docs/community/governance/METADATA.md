@@ -157,7 +157,7 @@
 | cli/cohcli.py | v1.1 | 2025-08-01 | COMMUNITY | | |
 | validator.pyi | v0.1 | 2025-12-10 | COMMUNITY | | |
 | scripts/build_sel4_kernel.sh | v0.11 | 2026-02-01 | COMMUNITY | | |
-| scripts/bootstrap_sel4_tools.sh | v0.1 | 2026-01-27 | COMMUNITY | | |
+| scripts/bootstrap_sel4_tools.sh | v0.2 | 2026-02-02 | COMMUNITY | | |
 | scripts/check-qemu-deps.sh | v0.1 | 2025-07-28 | COMMUNITY | | |
 | scripts/collect_boot_logs.sh | v0.1 | 2025-07-12 | COMMUNITY | | |
 | scripts/generate_busybox_man.sh | v0.1 | 2025-06-08 | COMMUNITY | | |
