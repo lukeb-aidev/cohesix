@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: build_sel4_kernel.sh v0.9
+// Filename: build_sel4_kernel.sh v0.10
 // Author: Lukas Bower
-// Date Modified: 2026-01-28
+// Date Modified: 2026-01-29
 #!/bin/bash
 # Auto-detect target architecture and configure seL4 build
 set -euo pipefail
@@ -25,14 +25,17 @@ die() { printf "\e[31m[ERR]\e[0m %s\n" "$*" >&2; exit 1; }
 
 # Ensure required host tools are installed
 missing_pkgs=()
-for pkg in ninja-build cmake gcc python3-yaml; do
+for pkg in cmake gcc python3-yaml; do
     dpkg -s "$pkg" >/dev/null 2>&1 || missing_pkgs+=("$pkg")
 done
 
+# Install ninja-build if no ninja executable is available
+if [ -z "$NINJA" ]; then
+    dpkg -s ninja-build >/dev/null 2>&1 || missing_pkgs+=("ninja-build")
+fi
 
 
-[ -x "$CMAKE" ] || die "cmake not found"
-[ -x "$NINJA" ] || die "Missing ninja at $NINJA"
+
 [ -d "$SEL4_DIR" ] || die "Missing seL4 repo at $SEL4_DIR"
 
 # Install Python tooling required by seL4 build scripts
@@ -80,10 +83,13 @@ if [ ${#missing_pkgs[@]} -gt 0 ] && command -v apt-get >/dev/null 2>&1; then
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ${missing_pkgs[*]} >/dev/null
     NINJA="$(command -v ninja || true)"
     CMAKE="$(command -v cmake || true)"
+    export CMAKE_MAKE_PROGRAM="$NINJA"
 fi
 
 msg "Host arch: $ARCH, target platform: $KERNEL_PLATFORM"
 msg "Using compiler: $(command -v $CC)"
+[ -x "$CMAKE" ] || die "cmake not found"
+[ -x "$NINJA" ] || die "Missing ninja at $NINJA"
 export CMAKE_MAKE_PROGRAM="$(command -v ninja)"
 
 # Update settings.cmake with defaults
