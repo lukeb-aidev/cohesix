@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-# Filename: scripts/make_iso.sh v0.11
+# Filename: scripts/make_iso.sh v0.13
 # Author: Lukas Bower
-# Date Modified: 2025-12-22
+# Date Modified: 2026-01-20
 #!/bin/bash
 # ISO layout:
 #   bin/               - runtime binaries
@@ -84,6 +84,14 @@ log "✅ Kernel and init installed"
 # Runtime binaries compiled during build
 if [ -d "$ROOT/out/bin" ]; then
   cp -a "$ROOT/out/bin/." "$ISO_DIR/bin/"
+fi
+if [ -f "$ROOT/userland/miniroot/bin/init" ]; then
+  cp "$ROOT/userland/miniroot/bin/init" "$ISO_DIR/bin/init"
+  chmod +x "$ISO_DIR/bin/init"
+fi
+if [ -f "$ROOT/userland/miniroot/bin/rc" ]; then
+  cp "$ROOT/userland/miniroot/bin/rc" "$ISO_DIR/bin/rc"
+  chmod +x "$ISO_DIR/bin/rc"
 fi
 
 # Python CLI modules

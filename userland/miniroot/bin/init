@@ -1,0 +1,11 @@
+#!/bin/sh
+# CLASSIFICATION: COMMUNITY
+# Filename: init v0.1
+# Author: Lukas Bower
+# Date Modified: 2026-01-20
+
+# Launch Plan9 rc if available, otherwise fallback to sh
+if [ -x /bin/rc ]; then
+    exec /bin/rc "$@"
+fi
+exec /bin/sh "$@"

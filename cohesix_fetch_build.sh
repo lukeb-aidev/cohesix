@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.36
+# Filename: cohesix_fetch_build.sh v0.37
 # Author: Lukas Bower
-# Date Modified: 2026-01-07
+# Date Modified: 2026-01-20
 #!/bin/bash
 # Fetch and fully build the Cohesix project using SSH Git auth.
 
@@ -43,7 +43,7 @@ log "📦 Cloning repository..."
 git clone git@github.com:lukeb-aidev/cohesix.git
 cd cohesix
 ROOT="$(pwd)"
-STAGE_DIR="$ROOT/out/stage"
+STAGE_DIR="$ROOT/out/iso"
 
 # Detect platform and GPU availability
 COH_PLATFORM="$(uname -m)"
@@ -403,6 +403,14 @@ if [ -x "$BUSYBOX_BIN" ]; then
   for app in sh ls cat echo mount umount; do
     ln -sf busybox "$STAGE_DIR/bin/$app"
   done
+  if [ -f "userland/miniroot/bin/init" ]; then
+    cp "userland/miniroot/bin/init" "$STAGE_DIR/bin/init"
+    chmod +x "$STAGE_DIR/bin/init"
+  fi
+  if [ -f "userland/miniroot/bin/rc" ]; then
+    cp "userland/miniroot/bin/rc" "$STAGE_DIR/bin/rc"
+    chmod +x "$STAGE_DIR/bin/rc"
+  fi
 else
   echo "❌ BusyBox build failed" >&2
   exit 1
@@ -432,12 +440,12 @@ fi
 
 log "📀 Creating ISO..."
 # ISO root layout:
-#   out/iso_root/bin            - runtime binaries (kernel, init, busybox)
-#   out/iso_root/usr/bin        - CLI wrappers and Go tools
-#   out/iso_root/usr/cli        - Python CLI modules
-#   out/iso_root/home/cohesix   - Python libraries
-#   out/iso_root/etc            - configuration files
-#   out/iso_root/roles          - role definitions
+#   out/iso/bin            - runtime binaries (kernel, init, busybox)
+#   out/iso/usr/bin        - CLI wrappers and Go tools
+#   out/iso/usr/cli        - Python CLI modules
+#   out/iso/home/cohesix   - Python libraries
+#   out/iso/etc            - configuration files
+#   out/iso/roles          - role definitions
 if [ "${VIRTUAL_ENV:-}" != "$(pwd)/.venv" ]; then
   echo "❌ Python venv not active before ISO build" >&2
   exit 1
