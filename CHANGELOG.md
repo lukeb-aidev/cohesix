@@ -1324,3 +1324,9 @@
 - `build_sel4_kernel.sh` forces `KernelWordSize` in CMake cache and adds
   classification headers. Compatible with Jetson Orin Nano (aarch64).
 
+## [v0.167] - 2026-01-20
+### Added
+- `make_grub_iso.sh` builds `init.efi`, generates fallback `config.yaml`, and
+  validates ISO boot via QEMU. Cleans staging on failure.
+- Root wrapper `make_iso.sh` bumped for consistency.
+
