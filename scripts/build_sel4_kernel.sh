@@ -1,3 +1,7 @@
+// CLASSIFICATION: COMMUNITY
+// Filename: build_sel4_kernel.sh v0.11
+// Author: Lukas Bower
+// Date Modified: 2026-02-01
 #!/bin/bash
 # Auto-detect target architecture and configure seL4 build
 set -euo pipefail
@@ -115,7 +119,7 @@ msg "Configuring seL4 kernel ($KERNEL_PLATFORM, $KERNEL_ARCH)"
 msg "Building kernel"
 "$NINJA" kernel.elf || die "Kernel build failed"
 
-KERN_SRC="$BUILD_DIR/kernel/kernel.elf"
+[ -f "$BUILD_DIR/kernel.elf" ] && KERN_SRC="$BUILD_DIR/kernel.elf" || KERN_SRC="$BUILD_DIR/kernel/kernel.elf"
 [ -f "$KERN_SRC" ] || die "Kernel ELF not found"
 cp "$KERN_SRC" "$OUT_ELF"
 popd >/dev/null
