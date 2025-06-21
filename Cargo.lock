@@ -529,6 +529,8 @@ dependencies = [
  "chrono",
  "clap",
  "cohesix",
+ "cohesix-9p",
+ "ninep",
 ]
 
 [[package]]
