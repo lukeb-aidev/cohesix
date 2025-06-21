@@ -28,8 +28,12 @@ case "$ARCH" in
 esac
 
 mkdir -p "$OUT_DIR"
-RUSTFLAGS="-C link-arg=-static" \
+if [[ "$TARGET" == *musl ]]; then
+    RUSTFLAGS="-C link-arg=-static" \
+        cargo build --release --bin cohesix_root --target "$TARGET"
+else
     cargo build --release --bin cohesix_root --target "$TARGET"
+fi
 cp "target/$TARGET/release/cohesix_root" "$OUT_ELF"
 
 [ -s "$OUT_ELF" ] && echo "ROOT TASK BUILD OK: $OUT_ELF"
