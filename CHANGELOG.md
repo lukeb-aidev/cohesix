@@ -1358,3 +1358,7 @@
 ## [v0.172] - 2026-01-27
 ### Added
 - `requirements.txt` now includes `jinja2==3.1.6` for templating support.
+
+## [v0.173] - 2026-01-27
+### Added
+- `bootstrap_sel4_tools.sh` installs Python dependencies for seL4 build scripts.
