@@ -122,7 +122,7 @@
 | tests/test_namespace_rule.rs | v0.1 | 2025-07-23 | COMMUNITY | | |
 | tests/test_namespace_semantics.rs | v0.2 | 2025-12-15 | COMMUNITY | | |
 | tests/test_trace_compare.py | v0.1 | 2025-07-23 | COMMUNITY | | |
-| tests/test_qemu_boot.rs | v0.10 | 2025-12-29 | COMMUNITY | | |
+| tests/test_qemu_boot.rs | v0.11 | 2025-12-31 | COMMUNITY | | |
 | tests/test_boot_build_chain.rs | v0.1 | 2025-12-24 | COMMUNITY | | |
 | tests/boot_trace_rule.rs | v0.3 | 2025-08-18 | COMMUNITY | | |
 | tests/kernel_proc_mgr.rs | v0.1 | 2025-08-26 | COMMUNITY | | |
@@ -171,7 +171,7 @@
 | scripts/build_root_elf.sh | v0.2 | 2025-12-27 | COMMUNITY | | |
 | tools/make_iso.sh | v0.3 | 2025-09-23 | COMMUNITY | | |
 | metadata.json | v0.1 | 2025-07-24 | COMMUNITY | | |
-| Cargo.toml | v0.15 | 2025-09-22 | COMMUNITY | | |
+| Cargo.toml | v0.16 | 2025-09-22 | COMMUNITY | | |
 | cohesix-9p/Cargo.toml | v0.1 | 2025-07-28 | COMMUNITY | | |
 | tools/cli/Cargo.toml | v0.2 | 2025-08-16 | COMMUNITY | | |
 | justfile | v0.1 | 2025-07-24 | COMMUNITY | | |
@@ -218,7 +218,7 @@
 | src/runtime/loader.rs | v0.1 | 2025-09-26 | COMMUNITY | | |
 | tests/test_loader.rs | v0.1 | 2025-09-26 | COMMUNITY | | |
 | tests/test_run_shell.rs | v0.1 | 2025-09-26 | COMMUNITY | | |
-| src/bootstrap/sel4_entry.rs | v0.1 | 2025-12-31 | COMMUNITY | | |
+| src/bootstrap/sel4_entry.rs | v0.2 | 2025-12-31 | COMMUNITY | | |
 | src/util/mod.rs | v0.1 | 2025-12-31 | COMMUNITY | | |
-| src/util/debug_log.rs | v0.1 | 2025-12-31 | COMMUNITY | | |
+| src/util/debug_log.rs | v0.2 | 2025-12-31 | COMMUNITY | | |
 

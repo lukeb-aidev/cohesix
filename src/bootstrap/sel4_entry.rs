@@ -1,11 +1,15 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: sel4_entry.rs v0.1
+// Filename: sel4_entry.rs v0.2
 // Author: Lukas Bower
 // Date Modified: 2025-12-31
 
-#![no_std]
+#![cfg_attr(not(feature = "std"), no_std)]
 #![no_main]
 
+#[cfg(feature = "std")]
+extern crate std;
+
+#[cfg(not(feature = "std"))]
 use core::panic::PanicInfo;
 use cohesix::debug;
 
@@ -17,6 +21,7 @@ pub extern "C" fn _sel4_start() -> ! {
     loop {}
 }
 
+#[cfg(not(feature = "std"))]
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
     loop {}
