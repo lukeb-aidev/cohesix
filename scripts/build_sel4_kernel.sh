@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: build_sel4_kernel.sh v0.10
+// Filename: build_sel4_kernel.sh v0.11
 // Author: Lukas Bower
-// Date Modified: 2026-01-29
+// Date Modified: 2026-02-01
 #!/bin/bash
 # Auto-detect target architecture and configure seL4 build
 set -euo pipefail
@@ -47,6 +47,17 @@ pushd "$BUILD_DIR" >/dev/null
 if [ ! -f "$SETTINGS" ]; then
     msg "Creating basic settings.cmake"
     mkdir -p "$(dirname "$SETTINGS")"
+    tmp_arch="$(uname -m)"
+    case "$tmp_arch" in
+        aarch64|arm64)
+            echo "set(KernelWordSize 64 CACHE STRING \"Default word size\" FORCE)" > "$SETTINGS"
+            echo "set(KernelSel4Arch aarch64 CACHE STRING \"Default seL4 arch\" FORCE)" >> "$SETTINGS"
+            ;;
+        *)
+            echo "set(KernelWordSize 64 CACHE STRING \"Default word size\" FORCE)" > "$SETTINGS"
+            echo "set(KernelSel4Arch x86_64 CACHE STRING \"Default seL4 arch\" FORCE)" >> "$SETTINGS"
+            ;;
+    esac
 fi
 
 ARCH="$(uname -m)"
