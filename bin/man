@@ -1,3 +1,20 @@
 #!/bin/sh
 # Minimal man command for Cohesix using mandoc
-exec /bin/mandoc -a "$@" | less
+
+if [ $# -eq 0 ]; then
+    echo "usage: man <topic>" >&2
+    exit 1
+fi
+
+topic="$1"
+shift || true
+page="$topic"
+if [ ! -f "$page" ]; then
+    page=$(ls /usr/share/cohesix/man/"$topic".* 2>/dev/null | head -n1)
+fi
+if [ ! -f "$page" ]; then
+    echo "man: no entry for $topic" >&2
+    exit 1
+fi
+
+exec /bin/mandoc -a "$page" "$@" | less
