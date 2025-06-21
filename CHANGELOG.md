@@ -1319,3 +1319,8 @@
   `settings.cmake`.
 - Ninja now builds `kernel.elf` target on both architectures.
 
+## [v0.166] - 2026-01-10
+### Fixed
+- `build_sel4_kernel.sh` forces `KernelWordSize` in CMake cache and adds
+  classification headers. Compatible with Jetson Orin Nano (aarch64).
+
