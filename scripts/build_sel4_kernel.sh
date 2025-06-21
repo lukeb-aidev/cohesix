@@ -1,6 +1,9 @@
+// CLASSIFICATION: COMMUNITY
+// Filename: build_sel4_kernel.sh v0.4
+// Author: Lukas Bower
+// Date Modified: 2026-01-07
 #!/usr/bin/env bash
-## build_sel4_kernel.sh v0.3
-## Revised to remove invalid header lines and fix CMake invocation
+## Auto-detect target architecture and configure seL4 build
 set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
@@ -33,9 +36,24 @@ if [ ! -f "$SETTINGS" ]; then
     touch "$SETTINGS"
 fi
 
-msg "Configuring seL4 kernel (pc99, x86_64)"
+ARCH="$(uname -m)"
+case "$ARCH" in
+    x86_64|amd64)
+        KERNEL_PLATFORM="pc99"
+        KERNEL_ARCH="x86_64"
+        ;;
+    aarch64|arm64)
+        KERNEL_PLATFORM="imx8mm_evk"
+        KERNEL_ARCH="aarch64"
+        ;;
+    *)
+        die "Unsupported architecture: $ARCH"
+        ;;
+esac
+
+msg "Configuring seL4 kernel ($KERNEL_PLATFORM, $KERNEL_ARCH)"
 "$CMAKE" -G Ninja -C "$SETTINGS" \
-    -DKernelArch=x86_64 -DKernelPlatform=pc99 \
+    -DKernelArch="$KERNEL_ARCH" -DKernelPlatform="$KERNEL_PLATFORM" \
     "$SEL4_DIR" || die "CMake failed"
 
 msg "Building kernel"
