@@ -1386,3 +1386,9 @@
 ## [v0.179] - 2026-02-03
 ### Added
 - `build_root_elf.sh` enables `rapier` and optional `cuda` features when building `cohesix_root.elf`.
+
+## [v0.180] - 2026-02-04
+### Added
+- `build_mandoc.sh` invoked from `cohesix_fetch_build.sh` to compile a static `mandoc` binary.
+- All manual pages from `docs/man` and the `man` wrapper are bundled into the ISO.
+- `scripts/make_grub_iso.sh` stages `man` files and binaries during ISO creation.
