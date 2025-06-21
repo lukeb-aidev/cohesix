@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+HERE="$(cd \"$(dirname \"$0\")/../src/demos/multi_duel\" && pwd)"
+exec /usr/bin/env python3 "$HERE/main.py" "$@"

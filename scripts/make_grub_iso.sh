@@ -64,6 +64,17 @@ if [ -x "$ROOT/out/bin/busybox" ]; then
     done
 fi
 
+# Demo launchers and assets
+for f in "$ROOT"/bin/demo_*; do
+    if [ -f "$f" ]; then
+        cp "$f" "$ISO_ROOT/bin/" && chmod +x "$ISO_ROOT/bin/$(basename "$f")"
+    fi
+done
+if [ -d "$ROOT/src/demos" ]; then
+    mkdir -p "$ISO_ROOT/usr/share/cohesix/src"
+    cp -r "$ROOT/src/demos" "$ISO_ROOT/usr/share/cohesix/src/" 2>/dev/null || true
+fi
+
 # Man pages and mandoc
 if [ -d "$ROOT/docs/man" ]; then
     mkdir -p "$ISO_ROOT/usr/share/cohesix/man"
@@ -80,6 +91,12 @@ fi
 if [ -f "$ROOT/bin/man" ]; then
     cp "$ROOT/bin/man" "$ISO_ROOT/bin/man" && chmod +x "$ISO_ROOT/bin/man"
 fi
+
+# Optional demo libraries
+mkdir -p "$ISO_ROOT/lib"
+for lib in "$ROOT"/prebuilt/lib/*.so; do
+    [ -f "$lib" ] && cp "$lib" "$ISO_ROOT/lib/" || true
+done
 
 # Generate grub.cfg
 cat >"$ISO_ROOT/boot/grub/grub.cfg" <<CFG
