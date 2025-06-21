@@ -1296,3 +1296,8 @@
 ### Changed
 - cohesix_fetch_build.sh builds seL4 kernel and root ELF via helper scripts.
 - EFI build logic is disabled by default and enabled with `--with-efi`.
+
+## [v0.162] - 2026-01-06
+### Changed
+- `make_iso.sh` now calls `scripts/make_grub_iso.sh`.
+
