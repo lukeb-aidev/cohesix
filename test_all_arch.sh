@@ -63,3 +63,9 @@ fi
 if ! bash tests/demo_sensor_feedback.sh; then
     fail "demo_sensor_feedback.sh failed"
 fi
+
+for t in tests/demos/test_*.sh; do
+    if ! bash "$t"; then
+        fail "$(basename "$t") failed"
+    fi
+done

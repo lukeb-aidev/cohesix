@@ -1403,3 +1403,9 @@
 ## [v0.182] - 2026-02-11
 ### Added
 - Refined demo scenarios; added "The Bee Learns" as flagship demo; removed weaker entries.
+
+## [v0.183] - 2026-02-11
+### Added
+- Runnable implementations for all demo scenarios in `DEMO_SCENARIOS.md`.
+- ISO build now bundles demo launchers and assets.
+- Test scripts validate each demo under `tests/demos/`.
