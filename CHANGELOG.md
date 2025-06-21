@@ -1313,3 +1313,9 @@
 - `fetch_sel4.sh` validates host architecture and compiler availability.
 - Missing PyYAML dependency added to requirements and installed during build.
 
+## [v0.165] - 2026-01-09
+### Fixed
+- `build_sel4_kernel.sh` sets required CMake options and writes defaults to
+  `settings.cmake`.
+- Ninja now builds `kernel.elf` target on both architectures.
+
