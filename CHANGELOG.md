@@ -1354,3 +1354,7 @@
 ### Added
 - Plan 9-style CLI tools `srv`, `mount`, `import`, and `exportfs` for basic namespace operations.
 - Secure9P handshake now logs via `cohtrace` with stubbed certificate validation.
+
+## [v0.172] - 2026-01-27
+### Added
+- `requirements.txt` now includes `jinja2==3.1.6` for templating support.
