@@ -1,7 +1,7 @@
-// CLASSIFICATION: COMMUNITY
-// Filename: test_cohbox.sh v0.1
-// Author: Lukas Bower
-// Date Modified: 2025-07-18
+# CLASSIFICATION: COMMUNITY
+# Filename: test_cohbox.sh v0.1
+# Author: Lukas Bower
+# Date Modified: 2025-07-18
 
 #!/usr/bin/env bash
 set -euo pipefail

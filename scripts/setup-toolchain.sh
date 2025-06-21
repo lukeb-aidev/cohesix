@@ -1,7 +1,7 @@
-// CLASSIFICATION: COMMUNITY
-// Filename: setup-toolchain.sh v0.1
-// Date Modified: 2025-06-05
-// Author: Lukas Bower
+# CLASSIFICATION: COMMUNITY
+# Filename: setup-toolchain.sh v0.1
+# Date Modified: 2025-06-05
+# Author: Lukas Bower
 
 #!/usr/bin/env bash
 ###############################################################################
