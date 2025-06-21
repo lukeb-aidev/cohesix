@@ -1,13 +1,22 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: make_grub_iso.sh v0.5
+// Filename: make_grub_iso.sh v0.6
 // Author: Lukas Bower
-// Date Modified: 2026-01-02
+// Date Modified: 2026-01-20
 #!/usr/bin/env bash
 set -euo pipefail
+
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 ISO_ROOT="$ROOT/out/stage"
 ISO_OUT="$ROOT/out/cohesix_grub.iso"
 ROLE="${1:-${COHROLE:-QueenPrimary}}"
+
+success=0
+cleanup() {
+    if [ $success -ne 1 ]; then
+        rm -rf "$ISO_ROOT"
+    fi
+}
+trap cleanup EXIT
 
 # Create stage directory if missing
 mkdir -p "$ISO_ROOT/boot/grub"
@@ -15,17 +24,32 @@ mkdir -p "$ISO_ROOT/boot/grub"
 # Ensure kernel and root task ELFs exist
 KERNEL_ELF="$ROOT/out/sel4.elf"
 ROOT_ELF="$ROOT/out/cohesix_root.elf"
+INIT_EFI="$ROOT/out/bin/init.efi"
 if [ ! -s "$KERNEL_ELF" ]; then
     bash "$ROOT/scripts/build_sel4_kernel.sh"
 fi
 if [ ! -s "$ROOT_ELF" ]; then
     bash "$ROOT/scripts/build_root_elf.sh"
 fi
+if [ ! -x "$INIT_EFI" ]; then
+    (cd "$ROOT" && make init-efi) || { echo "init-efi build failed" >&2; exit 1; }
+fi
 
 # Copy kernel, userland, and config
 cp "$KERNEL_ELF" "$ISO_ROOT/boot/kernel.elf"
 cp "$ROOT_ELF" "$ISO_ROOT/boot/userland.elf"
-cp "$ROOT/config/config.yaml" "$ISO_ROOT/boot/config.yaml"
+CONFIG_YAML="$ROOT/config/config.yaml"
+if [ ! -f "$CONFIG_YAML" ]; then
+    echo "Generating default config.yaml" >&2
+    mkdir -p "$ROOT/config"
+    cat > "$CONFIG_YAML" <<EOF
+# Auto-generated fallback config
+system:
+  role: worker
+  trace: true
+EOF
+fi
+cp "$CONFIG_YAML" "$ISO_ROOT/boot/config.yaml"
 
 # Generate grub.cfg
 cat >"$ISO_ROOT/boot/grub/grub.cfg" <<CFG
@@ -66,3 +90,40 @@ else
     echo "ERROR: ISO build failed" >&2
     exit 1
 fi
+
+if command -v qemu-system-x86_64 >/dev/null 2>&1; then
+    OVMF_CODE=""
+    for p in /usr/share/OVMF/OVMF_CODE.fd /usr/share/OVMF/OVMF.fd /usr/share/qemu/OVMF.fd /usr/share/edk2/ovmf/OVMF_CODE.fd; do
+        if [ -f "$p" ]; then
+            OVMF_CODE="$p"
+            break
+        fi
+    done
+    OVMF_VARS=""
+    for p in /usr/share/OVMF/OVMF_VARS.fd /usr/share/edk2/ovmf/OVMF_VARS.fd; do
+        if [ -f "$p" ]; then
+            OVMF_VARS="$p"
+            break
+        fi
+    done
+    if [ -n "$OVMF_CODE" ] && [ -n "$OVMF_VARS" ]; then
+        TMP_VARS="$(mktemp)"
+        cp "$OVMF_VARS" "$TMP_VARS"
+        qemu-system-x86_64 -bios "$OVMF_CODE" \
+            -drive if=pflash,format=raw,file="$TMP_VARS" \
+            -cdrom "$ISO_OUT" -net none -M q35 -m 256M \
+            -nographic -no-reboot -serial mon:stdio >/dev/null 2>&1
+        QEMU_STATUS=$?
+        rm -f "$TMP_VARS"
+        if [ $QEMU_STATUS -ne 0 ]; then
+            echo "ERROR: QEMU boot failed" >&2
+            exit 1
+        fi
+    else
+        echo "WARNING: OVMF firmware not found; skipping boot test" >&2
+    fi
+else
+    echo "WARNING: qemu-system-x86_64 not available; skipping boot test" >&2
+fi
+
+success=1
