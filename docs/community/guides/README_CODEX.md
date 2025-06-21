@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: README_Codex.md v1.4
-// Date Modified: 2025-07-31
+// Filename: README_CODEX.md v1.5
+// Date Modified: 2026-02-05
 // Author: Lukas Bower
 
 # README Codex

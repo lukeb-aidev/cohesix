@@ -48,7 +48,7 @@ Cohesix delivers a formally verified foundation for tomorrow’s edge and wearab
 | **Boot & Runtime**  | seL4 + Plan 9 userland bootable image          | 2025-08-15  |
 | **GPU & Physics**   | `/srv/cuda` service + Rapier integration        | 2025-09-30  |
 | **Coreutils & CLI** | BusyBox, SSH, `man` utilities                   | 2025-10-15  |
-| **Codex Enablement**| README_Codex, agent specs, CI smoke tests       | 2025-11-01  |
+| **Codex Enablement**| README_CODEX, agent specs, CI smoke tests       | 2025-11-01  |
 
 ## Key Highlights
 - **Sub‑200 ms Cold Boot** on Jetson Orin Nano 8 GB.

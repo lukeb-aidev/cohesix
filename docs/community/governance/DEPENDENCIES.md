@@ -50,6 +50,6 @@
 | BusyBox (CLI)   | 1.36.1  | GPL-2                       | Coreutils and shell support       |
 | curl            | 8.8.0   | curl License (MIT)          | HTTP fetches in build scripts     |
 | zip             | 3.0     | Info-ZIP License            | Artefact packaging (deploy-ci)    |
-| QEMU             | 8.1.2   | <https://www.qemu.org> (GPL-2)       | UEFI boot test; used in CI to validate firmware and kernel traces     |
+| QEMU             | 8.1.2   | <https://www.qemu.org> (GPL-2)       | Multiboot2 boot test via GRUB; validates firmware and kernel traces     |
 | OpenSSL / libssl | 3.3       | <https://www.openssl.org> (Apache‑2.0/SSLeay) | Hash‑parity tests in boot measurement |
 | clang / LLVM    | 17.0    | Apache-2.0 / UIUC           | Compiling C shims for seL4        |
