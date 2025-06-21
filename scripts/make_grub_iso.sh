@@ -32,7 +32,11 @@ if [ ! -s "$ROOT_ELF" ]; then
     bash "$ROOT/scripts/build_root_elf.sh"
 fi
 if [ ! -x "$INIT_EFI" ]; then
-    (cd "$ROOT" && make init-efi) || { echo "init-efi build failed" >&2; exit 1; }
+    if (cd "$ROOT" && make init-efi >/dev/null 2>&1); then
+        echo "init-efi built" >&2
+    else
+        echo "WARNING: init-efi build failed; continuing without EFI" >&2
+    fi
 fi
 
 # Copy kernel, userland, and config
@@ -102,14 +106,14 @@ fi
 
 if command -v qemu-system-x86_64 >/dev/null 2>&1; then
     OVMF_CODE=""
-    for p in /usr/share/OVMF/OVMF_CODE.fd /usr/share/OVMF/OVMF.fd /usr/share/qemu/OVMF.fd /usr/share/edk2/ovmf/OVMF_CODE.fd; do
+    for p in /usr/share/OVMF/OVMF_CODE.fd /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF.fd /usr/share/qemu/OVMF.fd /usr/share/edk2/ovmf/OVMF_CODE.fd; do
         if [ -f "$p" ]; then
             OVMF_CODE="$p"
             break
         fi
     done
     OVMF_VARS=""
-    for p in /usr/share/OVMF/OVMF_VARS.fd /usr/share/edk2/ovmf/OVMF_VARS.fd; do
+    for p in /usr/share/OVMF/OVMF_VARS.fd /usr/share/OVMF/OVMF_VARS_4M.fd /usr/share/edk2/ovmf/OVMF_VARS.fd; do
         if [ -f "$p" ]; then
             OVMF_VARS="$p"
             break
@@ -118,7 +122,7 @@ if command -v qemu-system-x86_64 >/dev/null 2>&1; then
     if [ -n "$OVMF_CODE" ] && [ -n "$OVMF_VARS" ]; then
         TMP_VARS="$(mktemp)"
         cp "$OVMF_VARS" "$TMP_VARS"
-        qemu-system-x86_64 -bios "$OVMF_CODE" \
+        timeout 20 qemu-system-x86_64 -bios "$OVMF_CODE" \
             -drive if=pflash,format=raw,file="$TMP_VARS" \
             -cdrom "$ISO_OUT" -net none -M q35 -m 256M \
             -nographic -no-reboot -serial mon:stdio >/dev/null 2>&1
