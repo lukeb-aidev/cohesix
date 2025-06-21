@@ -1,3 +1,7 @@
+// CLASSIFICATION: COMMUNITY
+// Filename: build_sel4_kernel.sh v0.7
+// Author: Lukas Bower
+// Date Modified: 2026-01-10
 #!/bin/bash
 # Auto-detect target architecture and configure seL4 build
 set -euo pipefail
@@ -78,8 +82,8 @@ export CMAKE_MAKE_PROGRAM="$(command -v ninja)"
 
 # Update settings.cmake with defaults
 cat > "$SETTINGS" <<EOF
-set(KernelWordSize ${KERNEL_WORD_SIZE} CACHE STRING "Default word size")
-set(KernelSel4Arch ${KERNEL_SEL4_ARCH} CACHE STRING "Default seL4 arch")
+set(KernelWordSize ${KERNEL_WORD_SIZE} CACHE STRING "Default word size" FORCE)
+set(KernelSel4Arch ${KERNEL_SEL4_ARCH} CACHE STRING "Default seL4 arch" FORCE)
 EOF
 
 msg "Configuring seL4 kernel ($KERNEL_PLATFORM, $KERNEL_ARCH)"
