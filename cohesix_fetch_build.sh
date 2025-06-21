@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.32
+# Filename: cohesix_fetch_build.sh v0.33
 # Author: Lukas Bower
-# Date Modified: 2025-12-30
+# Date Modified: 2026-01-01
 #!/bin/bash
 # Fetch and fully build the Cohesix project using SSH Git auth.
 
@@ -26,7 +26,7 @@ log "🧹 Cleaning workspace..."
 rm -rf cohesix
 
 log "📦 Cloning repository..."
-git clone git@github.com:lukeb-aidev/cohesix.git
+git clone https://github.com/lukeb-aidev/cohesix.git
 cd cohesix
 ROOT="$(pwd)"
 STAGE_DIR="$ROOT/out/stage"
