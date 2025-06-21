@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.35
+# Filename: cohesix_fetch_build.sh v0.36
 # Author: Lukas Bower
-# Date Modified: 2026-01-06
+# Date Modified: 2026-01-07
 #!/bin/bash
 # Fetch and fully build the Cohesix project using SSH Git auth.
 
@@ -110,18 +110,20 @@ else
 fi
 
 log "🧱 Building Rust components..."
-# Prompt for architecture unless running non-interactively
-if [ -z "${CI:-}" ] && [ -t 0 ]; then
-  log "Select target architecture:"
-  PS3="Architecture? "
-  select opt in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu; do
-    if [ -n "$opt" ]; then
-      COHESIX_TARGET="$opt"
-      break
-    fi
-  done
-else
-  COHESIX_TARGET="${COHESIX_TARGET:-x86_64-unknown-linux-gnu}"
+if [ -z "${COHESIX_TARGET:-}" ]; then
+  ARCH="$(uname -m)"
+  case "$ARCH" in
+    x86_64|amd64)
+      COHESIX_TARGET="x86_64-unknown-linux-gnu"
+      ;;
+    aarch64|arm64)
+      COHESIX_TARGET="aarch64-unknown-linux-gnu"
+      ;;
+    *)
+      log "⚠️ Unknown architecture $ARCH; defaulting to x86_64-unknown-linux-gnu"
+      COHESIX_TARGET="x86_64-unknown-linux-gnu"
+      ;;
+  esac
 fi
 export COHESIX_TARGET
 log "Using target $COHESIX_TARGET"
