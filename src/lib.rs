@@ -28,6 +28,8 @@ pub mod dependencies;
 
 /// Utilities and common helpers used across modules
 pub mod utils;
+/// Low-level logging and debugging helpers
+pub mod util;
 
 /// Runtime subsystem modules
 pub mod runtime;
