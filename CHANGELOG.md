@@ -1597,4 +1597,9 @@
 - Namespace builder supports `srv -c` and tests updated.
 - METADATA entries bumped accordingly.
 
+## [v0.213] - 2026-07-09
+### Added
+- `etc/init.conf.example` provides documented defaults for init configuration.
+- README references the example for customizing startup.
+
 
