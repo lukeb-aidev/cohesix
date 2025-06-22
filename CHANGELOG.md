@@ -1446,4 +1446,8 @@
 ### Changed
 - `setup_build_env.sh` uses numeric Ubuntu identifiers for CUDA repo URLs and maps `amd64` to `x86_64`.
 
+## [v0.190] - 2026-02-17
+### Changed
+- `bootstrap_sel4_tools.sh` clones seL4 and seL4_tools at branch `2024.1` when missing and installs `jinja2` and `pyyaml`.
+
 
