@@ -1426,4 +1426,9 @@
 - ARM build installs gcc-aarch64-linux-gnu.
 - CUDA apt key uses /etc/apt/keyrings.
 
+## [v0.186] - 2026-02-14
+### Changed
+- `build_sel4_kernel.sh` auto-detects host architecture, selects the matching
+  toolchain, cleans the build directory, and builds with Ninja.
+
 
