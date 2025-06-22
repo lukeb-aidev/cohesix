@@ -1442,4 +1442,8 @@
 - ISO build now validates man pages with `mandoc` and installs them to `/usr/share/man`.
 - `/srv/cuda` and `/sim` directories are guaranteed in the ISO for GPU and physics support.
 
+## [v0.189] - 2026-02-16
+### Changed
+- `setup_build_env.sh` uses numeric Ubuntu identifiers for CUDA repo URLs and maps `amd64` to `x86_64`.
+
 
