@@ -11,9 +11,14 @@ Every canonical **source** file must begin with a `CLASSIFICATION` header format
 - YAML/TOML: `# CLASSIFICATION: ...`
 - Markdown and plaintext: may include the header anywhere, or omit it entirely (manual validation allowed).
 
-Valid values are:
+Valid classification values are:
 - COMMUNITY
 - PRIVATE
+
+The header must also indlude the following, in the correct format for the file type:
+- Filename: INSTRUCTION_BLOCK.md v3.6
+- Author: Lukas Bower
+- Date Modified: [today's date]
 
 Source files must place the header at the top of the file. Other formats may defer this placement.
 
@@ -117,9 +122,19 @@ Codex must auto-detect supported hardware and pass tests accordingly.
    If a document isn’t in `METADATA.md`, it doesn’t exist.
 
 9. Build Must Pass CI Matrix  
-   All components must build and test on both:
-   - `aarch64` (Jetson, Pi)  
-   - `x86_64` (AWS or NUC)
+   All Cohesix components must build and test successfully on both target architectures:
+   - `aarch64` (Jetson Orin Nano, Raspberry Pi 5)
+   - `x86_64` (AWS EC2, Intel NUC fallback)
+
+   Required tests:
+   - Kernel build (seL4 with Cohesix patches)
+   - Userland and shell init
+   - Python and Go runtime verification
+   - CLI and compiler tools (`cohesix`, `cohcc`)
+   - CUDA + Rapier support if applicable
+   - ISO image boot in QEMU to working shell
+
+   CI must gracefully skip unavailable targets (e.g., QEMU missing) but must log the skip.
 
 10. Physics + CUDA Checks  
     - `/sim/` required if Rapier enabled  
