@@ -1,11 +1,11 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.43
+# Filename: cohesix_fetch_build.sh v0.44
 # Author: Lukas Bower
-# Date Modified: 2026-02-25
+# Date Modified: 2026-02-28
 #!/bin/bash
 # Fetch and fully build the Cohesix project using SSH Git auth.
 
-set -euo pipefail
+set -euxo pipefail
 LOG_DIR="$HOME/cohesix_logs"
 mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/build_$(date +%Y%m%d_%H%M%S).log"
@@ -34,6 +34,24 @@ for arg in "$@"; do
 done
 
 log "🛠️ [Build Start] $(date)"
+
+HOST_ARCH="$(uname -m)"
+log "Detected host architecture: $HOST_ARCH"
+
+log "📦 Installing build dependencies..."
+if command -v sudo >/dev/null 2>&1; then
+  SUDO="sudo"
+else
+  SUDO=""
+fi
+$SUDO apt-get update -y
+$SUDO apt-get install -y build-essential ninja-build wget git python3 python3-pip gcc-aarch64-linux-gnu cmake
+
+CMAKE_VER=$(cmake --version | head -n1 | awk '{print $3}')
+if ! dpkg --compare-versions "$CMAKE_VER" ge 3.20; then
+  log "cmake $CMAKE_VER too old; installing newer via pip"
+  python3 -m pip install --break-system-packages -U cmake
+fi
 
 cd "$HOME"
 log "🧹 Cleaning workspace..."
@@ -92,6 +110,7 @@ python -m pip install --upgrade pip setuptools wheel --break-system-packages \
 if [ -f requirements.txt ]; then
   python -m pip install -r requirements.txt --break-system-packages
 fi
+python -m pip install --break-system-packages -U sel4-deps
 
 # Install Python linters if missing
 for tool in flake8 mypy black; do
@@ -165,14 +184,36 @@ for script in cohcli cohcap cohtrace cohrun cohbuild cohup cohpkg; do
   [ -f "bin/$script" ] && cp "bin/$script" "$STAGE_DIR/bin/$script"
 done
 
-BUILD_DIR="$ROOT/out/sel4_build"
+SEL4_DIR="$ROOT/third_party/sel4"
+BUILD_DIR="$ROOT/out/sel4_build_${COH_ARCH}"
+log "📥 Fetching seL4 kernel..."
+if [ ! -d "$SEL4_DIR/.git" ]; then
+  git clone --depth=1 --branch 13.0.0 https://github.com/seL4/seL4.git "$SEL4_DIR"
+else
+  git -C "$SEL4_DIR" fetch origin 13.0.0 --depth=1
+  git -C "$SEL4_DIR" reset --hard FETCH_HEAD
+fi
+[ -d "$SEL4_DIR/src/arch/arm" ] || { echo "❌ seL4 src/arch/arm missing" >&2; exit 1; }
+[ -d "$SEL4_DIR/src/arch/aarch64" ] || { echo "❌ seL4 src/arch/aarch64 missing" >&2; exit 1; }
+[ -d "$SEL4_DIR/configs/include" ] || { echo "❌ seL4 configs/include missing" >&2; exit 1; }
+log "⚒️ Preparing build directory $BUILD_DIR"
 rm -rf "$BUILD_DIR"
-rm -f "$BUILD_DIR/CMakeCache.txt" "$BUILD_DIR"/*toolchain*.cmake 2>/dev/null
-rm -rf "$BUILD_DIR/CMakeFiles" 2>/dev/null
-log "🧹 Cleared $BUILD_DIR"
-
-log "🧱 Building seL4 kernel..."
-bash scripts/build_sel4_kernel.sh || { echo "❌ seL4 kernel build failed" >&2; exit 1; }
+mkdir -p "$BUILD_DIR"
+rm -f "$BUILD_DIR/CMakeCache.txt"
+cd "$BUILD_DIR"
+command -v ninja >/dev/null || { echo "❌ ninja not found" >&2; exit 1; }
+command -v cmake >/dev/null || { echo "❌ cmake not found" >&2; exit 1; }
+if [ "$COH_ARCH" = "aarch64" ]; then
+  command -v aarch64-linux-gnu-gcc >/dev/null || { echo "❌ gcc-aarch64-linux-gnu not found" >&2; exit 1; }
+  sel4-cmake "$SEL4_DIR" -DPLATFORM=qemu-arm-virt -DKernelSel4Arch=aarch64 -G Ninja
+else
+  command -v gcc >/dev/null || { echo "❌ gcc not found" >&2; exit 1; }
+  sel4-cmake "$SEL4_DIR" -DPLATFORM=pc99 -DKernelSel4Arch=x86_64 -G Ninja
+fi
+ninja kernel.elf
+cp kernel.elf "$ROOT/out/sel4.elf"
+log "✅ seL4 kernel built for $COH_ARCH"
+cd "$ROOT"
 log "🧱 Building root ELF..."
 bash scripts/build_root_elf.sh || { echo "❌ root ELF build failed" >&2; exit 1; }
 
