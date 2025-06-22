@@ -1555,3 +1555,9 @@
 - cohesix_fetch_build.sh now clones seL4_tools using branch `13.0.x-compatible`.
 - official_sel4_build.sh accepts a branch argument and uses `13.0.x-compatible` for seL4_tools.
 
+## [v0.206] - 2026-03-10
+### Fixed
+- cohesix_fetch_build.sh v0.46 uses official sel4-cmake for both x86_64 and aarch64.
+- Dependency installation simplified and cmake updated if below 3.20.
+- METADATA updated accordingly.
+

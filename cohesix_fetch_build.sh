@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
 # Filename: cohesix_fetch_build.sh v0.46
 # Author: Lukas Bower
-# Date Modified: 2025-06-22
+# Date Modified: 2026-03-10
 #!/bin/bash
 # Fetch and fully build the Cohesix project using SSH Git auth.
 
@@ -36,7 +36,20 @@ done
 log "🛠️ [Build Start] $(date)"
 
 HOST_ARCH="$(uname -m)"
-log "Detected host architecture: $HOST_ARCH"
+case "$HOST_ARCH" in
+  x86_64|amd64)
+    ARCH="x86_64";;
+  aarch64|arm64)
+    ARCH="aarch64";;
+  *)
+    echo "Unsupported host architecture: $HOST_ARCH" >&2; exit 1;;
+esac
+log "Detected host architecture: $ARCH"
+if [ "$ARCH" != "x86_64" ]; then
+  CROSS_X86="x86_64-linux-gnu-"
+else
+  CROSS_X86=""
+fi
 
 log "📦 Installing build dependencies..."
 if command -v sudo >/dev/null 2>&1; then
@@ -46,8 +59,7 @@ else
 fi
 $SUDO apt-get update -y
 $SUDO apt-get install -y build-essential ninja-build git wget \
-  qemu-system-x86 qemu-system-arm python3-pip libxml2-utils \
-  cmake gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+  python3 python3-pip cmake gcc-aarch64-linux-gnu
 
 CMAKE_VER=$(cmake --version 2>/dev/null | head -n1 | awk '{print $3}')
 if ! dpkg --compare-versions "$CMAKE_VER" ge 3.20; then
@@ -208,37 +220,48 @@ if [ -d "$SEL4_DIR/.git" ]; then
   git -C "$SEL4_DIR" fetch --depth=1 origin tag 13.0.0
   git -C "$SEL4_DIR" checkout -f 13.0.0
 else
-  git clone --depth=1 --branch 13.0.0 https://github.com/seL4/seL4.git "$SEL4_DIR"
+  git clone --branch 13.0.0 --depth=1 https://github.com/seL4/seL4.git "$SEL4_DIR"
 fi
-for p in src/arch/arm src/arch/aarch64 src/arch/x86 configs/include; do
+for p in configs src/arch/arm src/arch/x86; do
   [ -d "$SEL4_DIR/$p" ] || { echo "❌ Missing $p in seL4 repo" >&2; exit 1; }
 done
 log "✅ seL4 source ready"
 
 build_sel4_arch(){
   local arch="$1" cross="$2" platform="$3"
+  [[ "$arch" == "x86_64" || "$arch" == "aarch64" ]] || { echo "❌ unsupported arch $arch" >&2; exit 1; }
   local bdir="$ROOT/out/sel4_build_${arch}"
   log "⚒️ Building seL4 for $arch"
   rm -rf "$bdir"
   mkdir -p "$bdir"
   pushd "$bdir" >/dev/null
-  cmake -DCMAKE_TOOLCHAIN_FILE=../../third_party/sel4/gcc.cmake \
-        -DCROSS_COMPILER_PREFIX="$cross" \
-        -DPLATFORM="$platform" \
-        -DKernelSel4Arch="$arch" \
-        -G Ninja \
-        ../../third_party/sel4 || { echo "❌ cmake failed for $arch" >&2; exit 1; }
+  local cmake_args=(
+    -DCMAKE_TOOLCHAIN_FILE="$ROOT/third_party/sel4/gcc.cmake"
+    -DCROSS_COMPILER_PREFIX="$cross"
+    -DPLATFORM="$platform"
+    -DKernelSel4Arch="$arch"
+    -G Ninja "$ROOT/third_party/sel4"
+  )
+  if [ "$arch" = "aarch64" ]; then
+    cmake_args+=( -DDAARCH64=TRUE )
+  fi
+  sel4-cmake "${cmake_args[@]}" || { echo "❌ cmake failed for $arch" >&2; exit 1; }
   ninja || { echo "❌ ninja failed for $arch" >&2; exit 1; }
-  [ -f kernel.elf ] || { echo "❌ kernel.elf missing for $arch" >&2; exit 1; }
-  cp kernel.elf "$ROOT/out/sel4_${arch}.elf"
+  [ -f images/kernel.elf ] || { echo "❌ kernel.elf missing for $arch" >&2; exit 1; }
+  cp images/kernel.elf "$ROOT/out/sel4_${arch}.elf"
   popd >/dev/null
   log "✅ seL4 kernel built for $arch"
 }
 
-build_sel4_arch x86_64 "" pc99
+build_sel4_arch x86_64 "$CROSS_X86" pc99
 command -v aarch64-linux-gnu-gcc >/dev/null || { echo "❌ gcc-aarch64-linux-gnu not found" >&2; exit 1; }
 build_sel4_arch aarch64 aarch64-linux-gnu- qemu-arm-virt
-[ -f "$ROOT/out/sel4_x86_64.elf" ] && [ -f "$ROOT/out/sel4_aarch64.elf" ] || { echo "❌ seL4 build failed" >&2; exit 1; }
+if [ -f "$ROOT/out/sel4_x86_64.elf" ] && [ -f "$ROOT/out/sel4_aarch64.elf" ]; then
+  log "✅ seL4 builds succeeded for both architectures"
+else
+  echo "❌ seL4 build failed" >&2
+  exit 1
+fi
 cp "$ROOT/out/sel4_${COH_ARCH}.elf" "$ROOT/out/sel4.elf"
 cd "$ROOT"
 log "🧱 Building root ELF..."
