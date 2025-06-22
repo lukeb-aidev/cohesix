@@ -1,8 +1,8 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v0.94
 // Author: Lukas Bower
+// Date Modified: 2025-06-22
 
-// Date Modified: 2026-02-21
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
 • Consolidated OSS reuse files into LICENSES_AND_REUSE.md
@@ -1503,4 +1503,5 @@
 ## [v0.197] - 2026-02-21
 ### Changed
 - `bootstrap_sel4_tools.sh` resets existing seL4 and seL4_tools repositories to `origin/master` and clones `master` when missing.
+- `build_sel4_kernel.sh` now removes the previous build directory and cleans stale `CMakeFiles` before configuration.
 
