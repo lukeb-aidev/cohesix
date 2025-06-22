@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.46
+# Filename: cohesix_fetch_build.sh v0.47
 # Author: Lukas Bower
-# Date Modified: 2026-03-10
+# Date Modified: 2026-03-20
 #!/bin/bash
 # Fetch and fully build the Cohesix project using SSH Git auth.
 
@@ -18,20 +18,6 @@ exec > >(tee -a "$LOG_FILE") 2>&1
 trap 'echo "❌ Build failed. Last 40 log lines:" >&3; tail -n 40 "$LOG_FILE" >&3' ERR
 
 log(){ echo "[$(date +%H:%M:%S)] $1" | tee -a "$LOG_FILE" >&3; }
-
-# Optional EFI build
-BUILD_EFI=0
-for arg in "$@"; do
-  case "$arg" in
-    --with-efi)
-      BUILD_EFI=1
-      ;;
-    *)
-      echo "Unknown option: $arg" >&2
-      exit 1
-      ;;
-  esac
-done
 
 log "🛠️ [Build Start] $(date)"
 
@@ -89,6 +75,9 @@ git clone git@github.com:lukeb-aidev/cohesix.git
 cd cohesix
 ROOT="$(pwd)"
 STAGE_DIR="$ROOT/out/iso"
+mkdir -p "$ROOT/out/bin"
+# Clean up artifacts from previous builds
+rm -f "$ROOT/out/bin/init.efi" "$ROOT/out/boot/kernel.elf" 2>/dev/null || true
 
 # Detect platform and GPU availability
 COH_PLATFORM="$(uname -m)"
@@ -217,49 +206,30 @@ bash scripts/build_root_elf.sh || { echo "❌ root ELF build failed" >&2; exit 1
 # Ensure staging directories exist for config and roles
 mkdir -p "$STAGE_DIR/etc" "$STAGE_DIR/roles" "$STAGE_DIR/init"
 
-EFI_SUPPORTED=0
-case "$COHESIX_TARGET" in
-  *-uefi) EFI_SUPPORTED=1 ;;
-esac
-
-if [ "$BUILD_EFI" -eq 1 ] && [ "$EFI_SUPPORTED" -eq 1 ]; then
-  log "🛠️ Building kernel EFI..."
-  if ! cargo build --release --target "$COHESIX_TARGET" --bin kernel \
-    --no-default-features --features minimal_uefi,kernel_bin; then
-    echo "❌ kernel EFI build failed" >&2
-    exit 1
-  fi
-  KERNEL_EFI="target/${COHESIX_TARGET}/release/kernel.efi"
-  [ -s "$KERNEL_EFI" ] || { echo "❌ kernel EFI missing or empty" >&2; exit 1; }
-  cp "$KERNEL_EFI" "$STAGE_DIR/BOOTX64.EFI"
-  [ -s "$STAGE_DIR/BOOTX64.EFI" ] || { echo "❌ failed to create $STAGE_DIR/BOOTX64.EFI" >&2; exit 1; }
-  mkdir -p "$STAGE_DIR/boot"
-  cp "$KERNEL_EFI" "$STAGE_DIR/boot/kernel.elf"
-  [ -s "$STAGE_DIR/boot/kernel.elf" ] || { echo "❌ failed to stage kernel.elf" >&2; exit 1; }
-  log "kernel EFI built at $KERNEL_EFI"
-  echo "kernel build complete" >&3
-  echo "EFI binary created at out/BOOTX64.EFI" >&3
-
-  log "🛠️ Building init EFI..."
-  if ! cargo build --release --target "$COHESIX_TARGET" --bin init \
-    --no-default-features --features minimal_uefi; then
-    echo "❌ init EFI build failed" >&2
-    exit 1
-  fi
-  INIT_EFI="target/${COHESIX_TARGET}/release/init.efi"
-  [ -s "$INIT_EFI" ] || { echo "❌ init EFI missing or empty" >&2; exit 1; }
-  cp "$INIT_EFI" "$STAGE_DIR/bin/init.efi"
-  cp "$INIT_EFI" "$STAGE_DIR/init.efi"
-  cp "$INIT_EFI" "$STAGE_DIR/boot/init"
-  [ -f "$STAGE_DIR/init.efi" ] || { echo "❌ init EFI missing after build" >&2; exit 1; }
-  [ -s "$STAGE_DIR/bin/init.efi" ] || { echo "❌ failed to stage init.efi" >&2; exit 1; }
-  log "init EFI built at $INIT_EFI"
-else
-  log "⚠️ EFI build disabled or target not UEFI-compatible; skipping EFI build"
+# Build or update seL4 kernel from external workspace
+SEL4_WORKSPACE="$HOME/sel4_workspace"
+if [ ! -d "$SEL4_WORKSPACE" ]; then
+  echo "seL4 not found in ~/sel4_workspace. Please build it using the official sel4test-manifest flow before continuing." >&2
+  exit 1
 fi
+SEL4_BUILD_DIR="${SEL4_BUILD_DIR:-"$(find "$SEL4_WORKSPACE" -maxdepth 1 -type d -name 'build_*' | head -n1)"}"
+if [ -z "$SEL4_BUILD_DIR" ] || [ ! -d "$SEL4_BUILD_DIR" ]; then
+  echo "No build_* directory found under $SEL4_WORKSPACE" >&2
+  exit 1
+fi
+SRC_KERNEL="$SEL4_BUILD_DIR/kernel/kernel.elf"
+OUT_KERNEL="$ROOT/out/bin/kernel.elf"
+if [ ! -f "$OUT_KERNEL" ] || [ "$SRC_KERNEL" -nt "$OUT_KERNEL" ]; then
+  log "🏗️ Building seL4 kernel via ninja"
+  (cd "$SEL4_BUILD_DIR" && ninja)
+fi
+[ -f "$SRC_KERNEL" ] || { echo "Kernel build failed: $SRC_KERNEL missing" >&2; exit 1; }
+cp "$SRC_KERNEL" "$OUT_KERNEL"
+log "kernel.elf staged to $OUT_KERNEL"
 
 log "📂 Staging boot files..."
 mkdir -p "$STAGE_DIR/boot"
+cp "$OUT_KERNEL" "$STAGE_DIR/boot/kernel.elf"
 cp out/cohesix_root.elf "$STAGE_DIR/boot/userland.elf"
 for f in initfs.img plan9.ns bootargs.txt boot_trace.json; do
   [ -f "$f" ] && cp "$f" "$STAGE_DIR/boot/"
@@ -457,9 +427,6 @@ log "📀 Creating ISO..."
 if [ "${VIRTUAL_ENV:-}" != "$(pwd)/.venv" ]; then
   echo "❌ Python venv not active before ISO build" >&2
   exit 1
-fi
-if [ "$BUILD_EFI" -eq 1 ]; then
-  [ -f "$STAGE_DIR/BOOTX64.EFI" ] || { echo "❌ $STAGE_DIR/BOOTX64.EFI missing" >&2; exit 1; }
 fi
 
 bash ./scripts/make_grub_iso.sh
