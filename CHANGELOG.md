@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v0.92
-// Date Modified: 2026-02-11
+// Date Modified: 2026-02-20
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
 • Consolidated OSS reuse files into LICENSES_AND_REUSE.md
@@ -1478,6 +1478,9 @@
 - `cohesix_fetch_build.sh` verifies `plan9.ns` before ISO creation.
 
 ## [v0.194] - 2026-02-20
+### Added
+- Boot init starts `Secure9pServer` when the `secure9p` feature is enabled.
+- Role policies in `config/secure9p.toml` are validated against known roles.
 ### Changed
 - `LICENSES_AND_REUSE.md` clarifies BusyBox removal and lists **toybox** and **sbase** as BSD/MIT replacements.
 - `METADATA.md` updated to v1.2 for the licensing document.
