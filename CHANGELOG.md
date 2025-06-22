@@ -1561,3 +1561,10 @@
 - Dependency installation simplified and cmake updated if below 3.20.
 - METADATA updated accordingly.
 
+## [v0.207] - 2026-03-20
+### Changed
+- cohesix_fetch_build.sh v0.47 uses prebuilt seL4 workspace under ~/sel4_workspace.
+- scripts/make_iso.sh v0.15 expects kernel.elf in out/bin.
+- Old EFI build logic removed and artifacts cleaned on fetch.
+- METADATA updated accordingly.
+

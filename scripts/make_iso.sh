@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: scripts/make_iso.sh v0.14
+# Filename: scripts/make_iso.sh v0.15
 # Author: Lukas Bower
-# Date Modified: 2026-01-26
+# Date Modified: 2026-03-20
 #!/bin/bash
 # ISO layout:
 #   bin/               - runtime binaries
@@ -19,7 +19,7 @@ ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 ISO_DIR="$ROOT/out/iso_root"
 ISO_OUT="$ROOT/out/cohesix.iso"
 TARGET="${TARGET:-$(uname -m)}"
-KERNEL_SRC="$ROOT/out/boot/kernel.elf"
+KERNEL_SRC="$ROOT/out/bin/kernel.elf"
 INIT_SRC="$ROOT/out/boot/init"
 BOOTLOADER_SRC=""
 
