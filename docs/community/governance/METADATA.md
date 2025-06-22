@@ -34,7 +34,7 @@
 | SECURITY_REVIEW.md         | v0.2    | 2025-07-13    | COMMUNITY      |     |              |
 | COMPILER_REVIEW.md         | v0.1    | 2025-07-11    | COMMUNITY      |          |              
 | AGENTS_AND_CLI.md          | v1.2    | 2025-07-26    | COMMUNITY      |     |              |
-| LICENSES_AND_REUSE.md     | v1.1    | 2025-07-31    | COMMUNITY      |     |              |
+| LICENSES_AND_REUSE.md     | v1.2    | 2026-02-20    | COMMUNITY      |     |              |
 | ROLE_POLICY.md            | v1.0    | 2025-06-15    | COMMUNITY      |     |              |
 | cli/README.md             | v1.0    | 2025-07-31    | COMMUNITY      |     |              |
 | AGENTS.md                 | v2.2    | 2025-07-22    | COMMUNITY      |     |              |

@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: LICENSES_AND_REUSE.md v1.0
+// Filename: LICENSES_AND_REUSE.md v1.2
 // Author: Lukas Bower
-// Date Modified: 2025-06-15
+// Date Modified: 2026-02-20
 
 # Licensing and OSS Reuse
 
@@ -14,6 +14,10 @@ All Cohesix code and dependencies must be licensed under **Apache-2.0**, **MIT**
 ## 2 · Reuse Policy
 
 Only the licenses above are permitted. GPL or LGPL code is prohibited unless fully isolated. Every dependency is recorded in this document and audited during CI runs. Contributions must retain upstream copyright notices and provide public access to source code when required. CI checks will reject any non-approved license or missing SPDX header.
+
+### BusyBox Decommissioning
+
+BusyBox (GPL-2.0) previously supplied a compact set of core utilities. To comply with the project's Apache/MIT/BSD-only policy, BusyBox has been removed from all shipping images. Cohesix now relies on **toybox** (0BSD) and **sbase** (MIT) for equivalent functionality. The legacy BusyBox source remains under `third_party/` for reference and is excluded from release builds.
 
 ## 3 · Open Source Dependencies
 
@@ -36,6 +40,8 @@ The table below lists current third-party packages used by Cohesix.
 | sdl2 | 0.37 | MIT | Windowing & input | https://crates.io/crates/sdl2 |
 | cobra | 1.8.0 | Apache-2.0 | Go CLI framework | https://github.com/spf13/cobra |
 | chi | v5 | MIT | HTTP router for GUI orchestrator | https://github.com/go-chi/chi |
+| toybox | 0.9.6 | 0BSD | Minimal coreutils replacement | https://landley.net/toybox/ |
+| sbase | 0.6 | MIT | POSIX utilities (grep, sed, etc.) | https://git.suckless.org/sbase/ |
 
 | tempfile | 3.10 | MIT OR Apache-2.0 | Temporary directory and file handling in tests | https://crates.io/crates/tempfile |
 | qemu | system | GPL-2.0-only | Emulator used for GRUB/Multiboot2 boot testing | https://www.qemu.org/ |
@@ -47,6 +53,8 @@ The table below lists current third-party packages used by Cohesix.
 | sha2 | 0.10 | MIT OR Apache-2.0 | LICENSES/sha2-0.10.txt |  |
 | anyhow | 1.0 | MIT OR Apache-2.0 | LICENSES/anyhow-1.0.txt |  |
 | tokio | 1 | MIT | N/A |  |
+| toybox | 0.9.6 | 0BSD | N/A |  |
+| sbase | 0.6 | MIT | N/A |  |
 
 ## 5 · Audit References
 
