@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: cohesix_types.rs v1.0
+// Filename: cohesix_types.rs v1.1
 // Author: Lukas Bower
-// Date Modified: 2025-06-17
+// Date Modified: 2026-02-20
 
 //! Shared types for Cohesix modules.
 
@@ -56,6 +56,24 @@ impl RoleManifest {
             "SimulatorTest" => Role::SimulatorTest,
             other => Role::Other(other.to_string()),
         }
+    }
+}
+
+/// Names of roles recognised by the runtime.
+pub const VALID_ROLES: &[&str] = &[
+    "QueenPrimary",
+    "DroneWorker",
+    "InteractiveAIBooth",
+    "KioskInteractive",
+    "GlassesAgent",
+    "SensorRelay",
+    "SimulatorTest",
+];
+
+impl RoleManifest {
+    /// Check whether `role` matches a known role name.
+    pub fn is_valid_role(role: &str) -> bool {
+        VALID_ROLES.contains(&role)
     }
 }
 
