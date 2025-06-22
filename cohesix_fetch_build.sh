@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.48
+# Filename: cohesix_fetch_build.sh v0.49
 # Author: Lukas Bower
-# Date Modified: 2026-06-23
+# Date Modified: 2026-07-07
 #!/bin/bash
 # Fetch and fully build the Cohesix project using SSH Git auth.
 
@@ -234,6 +234,7 @@ log "kernel.elf staged to $OUT_KERNEL"
 log "📂 Staging boot files..."
 mkdir -p "$STAGE_DIR/boot"
 cp "$OUT_KERNEL" "$STAGE_DIR/boot/kernel.elf"
+log "kernel build complete"
 cp out/cohesix_root.elf "$STAGE_DIR/boot/userland.elf"
 for f in initfs.img plan9.ns bootargs.txt boot_trace.json; do
   [ -f "$f" ] && cp "$f" "$STAGE_DIR/boot/"
