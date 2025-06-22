@@ -1,4 +1,8 @@
 #!/bin/sh
+# CLASSIFICATION: COMMUNITY
+# Filename: man v0.2
+# Author: Lukas Bower
+# Date Modified: 2025-06-22
 # Minimal man command for Cohesix using mandoc
 
 if [ $# -eq 0 ]; then
@@ -10,7 +14,7 @@ topic="$1"
 shift || true
 page="$topic"
 if [ ! -f "$page" ]; then
-    page=$(ls /usr/share/cohesix/man/"$topic".* 2>/dev/null | head -n1)
+    page=$(ls /usr/share/man/"$topic".* 2>/dev/null | head -n1)
 fi
 if [ ! -f "$page" ]; then
     echo "man: no entry for $topic" >&2
