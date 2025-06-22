@@ -1,12 +1,12 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: build_mandoc.sh v0.1
+# Filename: build_mandoc.sh v0.2
 # Author: Lukas Bower
-# Date Modified: 2025-07-12
+# Date Modified: 2025-06-22
 #!/bin/sh
 set -e
 VER=1.9.9
 ARCH=$(uname -m)
-ROOT="$(dirname "$0")/.."
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$ROOT/prebuilt/mandoc"
 mkdir -p "$OUT"
 TMP=$(mktemp -d)
