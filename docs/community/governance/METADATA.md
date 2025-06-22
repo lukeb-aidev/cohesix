@@ -155,9 +155,9 @@
 | tests/secure9p/agent_identifier.rs | v0.2 | 2025-07-26 | COMMUNITY | | |
 | cli/cohcli.py | v1.1 | 2025-08-01 | COMMUNITY | | |
 | validator.pyi | v0.1 | 2025-12-10 | COMMUNITY | | |
-| scripts/build_sel4_kernel.sh | v0.17 | 2026-02-22 | COMMUNITY | | |
-| scripts/bootstrap_sel4_tools.sh | v0.5 | 2026-02-19 | COMMUNITY | | |
-| scripts/setup_build_env.sh | v0.3 | 2026-02-16 | COMMUNITY | | |
+| scripts/build_sel4_kernel.sh | v0.18 | 2026-02-27 | COMMUNITY | | |
+| scripts/bootstrap_sel4_tools.sh | v0.7 | 2026-02-27 | COMMUNITY | | |
+| scripts/setup_build_env.sh | v0.4 | 2026-02-27 | COMMUNITY | | |
 | scripts/check-qemu-deps.sh | v0.1 | 2025-07-28 | COMMUNITY | | |
 | scripts/collect_boot_logs.sh | v0.1 | 2025-07-12 | COMMUNITY | | |
 | scripts/generate_busybox_man.sh | v0.1 | 2025-06-08 | COMMUNITY | | |
@@ -259,4 +259,4 @@
 | bin/man | v0.2 | 2025-06-22 | COMMUNITY | | |
 | bin/mandoc | v0.2 | 2025-06-22 | COMMUNITY | | |
 
-The script `scripts/bootstrap_sel4_tools.sh` installs Jinja2 and PyYAML before kernel builds and ensures seL4 repositories track the `master` branch.
+The script `scripts/bootstrap_sel4_tools.sh` installs Jinja2 and PyYAML before kernel builds and ensures the seL4 repository tracks the `seL4-12.1.0` branch.
