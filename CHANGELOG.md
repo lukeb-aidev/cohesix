@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.92
-// Date Modified: 2026-02-11
+// Filename: CHANGELOG.md v0.93
+// Date Modified: 2026-02-20
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
 • Consolidated OSS reuse files into LICENSES_AND_REUSE.md
@@ -1481,4 +1481,9 @@
 ### Changed
 - `LICENSES_AND_REUSE.md` clarifies BusyBox removal and lists **toybox** and **sbase** as BSD/MIT replacements.
 - `METADATA.md` updated to v1.2 for the licensing document.
+
+## [v0.195] - 2026-02-20
+### Added
+- Basic read/write backends for the test 9P server.
+- Expanded `tests/9p_server.rs` to verify cross-role access and write restrictions.
 
