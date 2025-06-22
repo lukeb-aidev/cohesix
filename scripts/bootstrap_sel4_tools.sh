@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: bootstrap_sel4_tools.sh v0.6
+# Filename: bootstrap_sel4_tools.sh v0.7
 # Author: Lukas Bower
-# Date Modified: 2026-02-21
+# Date Modified: 2026-02-27
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -32,7 +32,7 @@ clone_repo(){
     fi
 }
 
-clone_repo "$SEL4" https://github.com/seL4/seL4.git master
+clone_repo "$SEL4" https://github.com/seL4/seL4.git seL4-12.1.0
 clone_repo "$TOOLS" https://github.com/seL4/seL4_tools.git master
 
 find "$TOOLS" -type f -name '*.sh' -exec chmod +x {} +

@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: build_sel4_kernel.sh v0.17
+# Filename: build_sel4_kernel.sh v0.18
 # Author: Lukas Bower
-# Date Modified: 2026-02-22
+# Date Modified: 2026-02-27
 #!/bin/bash
 # Auto-detect target architecture and configure seL4 build
 set -euo pipefail
@@ -43,8 +43,8 @@ case "$ARCH" in
     x86_64|amd64|x86)
         CROSS_COMPILER_PREFIX=""
         PLATFORM=pc99
-        KernelArch=x86
-        KernelSel4Arch=x86
+        KernelArch=x86_64
+        KernelSel4Arch=x86_64
         KernelWordSize=64
         ;;
     *)
@@ -72,7 +72,7 @@ cp kernel.elf "$OUT_ELF"
 popd >/dev/null
 
 if [ -s "$OUT_ELF" ]; then
-    printf "[✅] seL4 kernel built successfully (%s)\n" "$ARCH"
+    printf "✅ Kernel built successfully\n"
 else
     die "Output ELF empty"
 fi
