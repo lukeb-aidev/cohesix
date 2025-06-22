@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: build_sel4_kernel.sh v0.15
+# Filename: build_sel4_kernel.sh v0.16
 # Author: Lukas Bower
-# Date Modified: 2026-02-18
+# Date Modified: 2026-02-19
 #!/bin/bash
 # Auto-detect target architecture and configure seL4 build
 set -euo pipefail
@@ -20,10 +20,10 @@ die() { printf "\e[31m[⚠️]\e[0m %s\n" "$*" >&2; exit 1; }
 [ -x "$NINJA" ] || die "ninja not found"
 [ -x "$CMAKE" ] || die "cmake not found"
 
-[ -d "$SEL4_DIR" ] || die "Missing seL4 repo at $SEL4_DIR"
-
-# Install Python tooling required by seL4 build scripts
+# Fetch seL4 sources and install Python tooling
 bash "$ROOT/scripts/bootstrap_sel4_tools.sh"
+
+[ -d "$SEL4_DIR" ] || die "Missing seL4 repo at $SEL4_DIR"
 
 mkdir -p "$BUILD_DIR"
 rm -f "$BUILD_DIR/CMakeCache.txt" "$BUILD_DIR"/*toolchain*.cmake 2>/dev/null

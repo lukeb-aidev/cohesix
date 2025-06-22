@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: README.md v0.14
+// Filename: README.md v0.15
 // Author: Lukas Bower
-// Date Modified: 2026-02-12
+// Date Modified: 2026-02-19
 
 
 # Cohesix
@@ -57,6 +57,7 @@ Requires Rust **1.76** or newer (2024 edition).
 ```bash
 git clone https://github.com/<user>/cohesix.git
 cd cohesix
+./scripts/bootstrap_sel4_tools.sh   # fetch seL4 sources and Python deps
 ./scripts/run-smoke-tests.sh   # quick health check
 make all                       # Go vet + C shims
 cargo check --workspace        # Rust build
