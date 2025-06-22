@@ -29,6 +29,7 @@
 - sensors.rs respects COHESIX_TELEMETRY_PATH for tests
 - test_agent_lifecycle uses temp directories only
 - boot_trace_rule tests use tempfile::tempdir to avoid PermissionDenied errors
+- Classification headers added for all bin scripts; files registered in METADATA
 ### Added
 - FAT partition mount under `minimal_uefi` with `/bin/init.efi` bootstrap
 - Makefile builds `init-efi` target and copies binary to FAT directory

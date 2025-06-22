@@ -1,3 +1,7 @@
 #!/usr/bin/env bash
+# CLASSIFICATION: COMMUNITY
+# Filename: demo_bee_learns v0.1
+# Author: Lukas Bower
+# Date Modified: 2026-02-21
 HERE="$(cd \"$(dirname \"$0\")/../src/demos/bee_learns\" && pwd)"
 exec /usr/bin/env python3 "$HERE/main.py" "$@"
