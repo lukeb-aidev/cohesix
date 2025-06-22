@@ -1,0 +1,9 @@
+// CLASSIFICATION: COMMUNITY
+// Filename: plan9.ns v0.1
+// Author: Lukas Bower
+// Date Modified: 2026-02-19
+
+bind / /
+bind /bin /bin
+srv /srv
+mount /srv /srv
