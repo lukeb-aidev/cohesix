@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: fetch_sel4.sh v0.2
+# Filename: fetch_sel4.sh v0.3
 # Author: Lukas Bower
-# Date Modified: 2026-01-08
+# Date Modified: 2026-02-13
 
 #!/usr/bin/env bash
 set -euo pipefail
@@ -29,16 +29,19 @@ else
     command -v gcc >/dev/null 2>&1 || { echo "gcc not found" >&2; exit 1; }
 fi
 
-update_submodule() {
-    local path="$1"
-    local url="$2"
-    if [ ! -d "$path/.git" ]; then
-        git submodule add "$url" "$path" || true
+update_repo() {
+    local path="$1" url="$2"
+    if [ -d "$path/.git" ]; then
+        git -C "$path" fetch --all
+        git -C "$path" pull --ff-only
+    elif [ -d "$path" ]; then
+        echo "Directory $path exists; skipping clone" >&2
+    else
+        git clone "$url" "$path"
     fi
-    git submodule update --init --recursive "$path"
 }
 
-update_submodule "third_party/sel4" "https://github.com/seL4/seL4.git"
-update_submodule "third_party/sel4_tools" "https://github.com/seL4/seL4_tools.git"
+update_repo "third_party/sel4" "https://github.com/seL4/seL4.git"
+update_repo "third_party/sel4_tools" "https://github.com/seL4/seL4_tools.git"
 
 echo "seL4 repositories are up to date."

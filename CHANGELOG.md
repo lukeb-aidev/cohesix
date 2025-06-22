@@ -1419,3 +1419,11 @@
 - `build_sel4_kernel.sh` sources the new environment script, defines
   explicit CMake variables, and falls back to `Unix Makefiles` when
   Ninja is unavailable.
+
+## [v0.185] - 2026-02-13
+### Fixed
+- sel4 fetch script handles existing directories.
+- ARM build installs gcc-aarch64-linux-gnu.
+- CUDA apt key uses /etc/apt/keyrings.
+
+
