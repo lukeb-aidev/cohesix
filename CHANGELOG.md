@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.94
+// Filename: CHANGELOG.md v0.95
 // Author: Lukas Bower
-// Date Modified: 2025-06-22
+// Date Modified: 2026-07-10
 
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
@@ -1601,5 +1601,10 @@
 ### Added
 - `etc/init.conf.example` provides documented defaults for init configuration.
 - README references the example for customizing startup.
+
+## [v0.214] - 2026-07-10
+### Added
+- README documents how to build `initfs.img` and which binaries to include.
+- METADATA version bumped accordingly.
 
 
