@@ -205,7 +205,7 @@
 | setup/roles/GlassesAgent.yaml | v0.1 | 2025-09-05 | COMMUNITY | | |
 | setup/roles/SensorRelay.yaml | v0.1 | 2025-09-05 | COMMUNITY | | |
 | setup/roles/SimulatorTest.yaml | v0.1 | 2025-09-05 | COMMUNITY | | |
-| ci/qemu_boot_check.sh | v0.2 | 2026-02-21 | COMMUNITY | | |
+| ci/qemu_boot_check.sh | v0.3 | 2026-07-06 | COMMUNITY | | |
 | userland/miniroot/README.md | v0.2 | 2026-01-20 | COMMUNITY | | |
 | userland/miniroot/bin/echo | v0.1 | 2025-09-23 | COMMUNITY | | |
 | userland/miniroot/bin/help | v0.1 | 2025-09-23 | COMMUNITY | | |

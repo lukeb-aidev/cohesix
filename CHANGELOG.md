@@ -1579,4 +1579,10 @@
 - make_iso.sh v0.14 stages kernel.elf to out/bin and GRUB staging.
 - METADATA updated accordingly.
 
+## [v0.210] - 2026-07-06
+### Changed
+- ci/qemu_boot_check.sh v0.3 detects host architecture with `uname -m` and uses
+  QEMU_EFI.fd for aarch64 boots via `-bios`.
+- METADATA updated accordingly.
+
 
