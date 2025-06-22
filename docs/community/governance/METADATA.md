@@ -157,7 +157,7 @@
 | validator.pyi | v0.1 | 2025-12-10 | COMMUNITY | | |
 | scripts/build_sel4_kernel.sh | v0.14 | 2026-02-15 | COMMUNITY | | |
 | scripts/bootstrap_sel4_tools.sh | v0.3 | 2026-02-12 | COMMUNITY | | |
-| scripts/setup_build_env.sh | v0.2 | 2026-02-13 | COMMUNITY | | |
+| scripts/setup_build_env.sh | v0.3 | 2026-02-16 | COMMUNITY | | |
 | scripts/check-qemu-deps.sh | v0.1 | 2025-07-28 | COMMUNITY | | |
 | scripts/collect_boot_logs.sh | v0.1 | 2025-07-12 | COMMUNITY | | |
 | scripts/generate_busybox_man.sh | v0.1 | 2025-06-08 | COMMUNITY | | |
