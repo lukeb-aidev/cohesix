@@ -1,0 +1,13 @@
+// CLASSIFICATION: COMMUNITY
+// Filename: init.conf.example v0.1
+// Author: Lukas Bower
+// Date Modified: 2026-07-09
+
+# Example init configuration demonstrating valid keys
+# init_mode controls the startup safety level ("safe" or "full")
+# network toggles the network stack ("on" or "off")
+# start_services lists additional services to spawn
+
+init_mode = safe
+network = off
+start_services = ["shell", "monitor"]
