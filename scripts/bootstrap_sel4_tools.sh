@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: bootstrap_sel4_tools.sh v0.3
+# Filename: bootstrap_sel4_tools.sh v0.4
 # Author: Lukas Bower
-# Date Modified: 2026-02-12
+# Date Modified: 2026-02-17
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -13,18 +13,16 @@ SETTINGS="$TOOLS/cmake-tool/settings.cmake"
 msg(){ printf "\e[32m==>\e[0m %s\n" "$*"; }
 die(){ printf "\e[31m[ERR]\e[0m %s\n" "$*" >&2; exit 1; }
 
-clone_or_update(){
-    local dir="$1" url="$2"
+clone_repo(){
+    local dir="$1" url="$2" branch="$3"
     if [ ! -d "$dir/.git" ]; then
-        git clone "$url" "$dir"
-    else
-        git -C "$dir" fetch --all
-        git -C "$dir" pull --ff-only
+        [ -d "$dir" ] && rm -rf "$dir"
+        git clone --depth=1 --branch "$branch" "$url" "$dir"
     fi
 }
 
-clone_or_update "$SEL4" https://github.com/seL4/seL4.git
-clone_or_update "$TOOLS" https://github.com/seL4/seL4_tools.git
+clone_repo "$SEL4" https://github.com/seL4/seL4.git 2024.1
+clone_repo "$TOOLS" https://github.com/seL4/seL4_tools.git 2024.1
 
 find "$TOOLS" -type f -name '*.sh' -exec chmod +x {} +
 
@@ -33,3 +31,9 @@ if [ ! -f "$SETTINGS" ]; then
     echo "# Generated" > "$SETTINGS"
 fi
 [ -w "$SETTINGS" ] || die "Cannot write to $SETTINGS"
+
+pip_args=()
+if [ -z "${VIRTUAL_ENV:-}" ]; then
+    pip_args+=(--user)
+fi
+python3 -m pip install "${pip_args[@]}" jinja2 pyyaml >/dev/null
