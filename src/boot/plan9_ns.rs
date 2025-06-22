@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: plan9_ns.rs v0.1
+// Filename: plan9_ns.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-06-17
+// Date Modified: 2026-07-08
 
 //! Plan 9 style namespace builder for early boot.
 //! Parses boot arguments and produces a textual namespace description
@@ -29,10 +29,12 @@ pub enum NsAction {
         /// Destination path
         dst: String,
     },
-    /// `srv path`
+    /// `srv [-c] path`
     Srv {
         /// Service path
         path: String,
+        /// Remove existing service entry first
+        cleanup: bool,
     },
 }
 
@@ -68,9 +70,10 @@ impl Namespace {
     }
 
     /// Add a srv entry.
-    pub fn srv(mut self, path: &str) -> Self {
+    pub fn srv(mut self, path: &str, cleanup: bool) -> Self {
         self.actions.push(NsAction::Srv {
             path: path.to_string(),
+            cleanup,
         });
         self
     }
@@ -97,7 +100,13 @@ impl std::fmt::Display for Namespace {
                     }
                 }
                 NsAction::Mount { srv, dst } => write!(f, "mount {} {}", srv, dst)?,
-                NsAction::Srv { path } => write!(f, "srv {}", path)?,
+                NsAction::Srv { path, cleanup } => {
+                    if *cleanup {
+                        write!(f, "srv -c {}", path)?
+                    } else {
+                        write!(f, "srv {}", path)?
+                    }
+                }
             }
         }
         Ok(())
@@ -140,8 +149,8 @@ pub fn build_namespace(args: &BootArgs) -> Namespace {
     }
 
     ns = ns.bind(root, "/", false)
-        .bind("/bin", "/bin", true)
-        .srv("/srv");
+        .bind("/usr/coh/bin", "/bin", true)
+        .srv("/srv", true);
 
     for srv in &args.srv {
         ns = ns.mount(srv, "/srv");
@@ -171,7 +180,8 @@ pub fn parse_namespace(text: &str) -> Namespace {
             ["bind", "-a", src, dst] => ns = ns.bind(src, dst, true),
             ["bind", src, dst] => ns = ns.bind(src, dst, false),
             ["mount", srv, dst] => ns = ns.mount(srv, dst),
-            ["srv", path] => ns = ns.srv(path),
+            ["srv", "-c", path] => ns = ns.srv(path, true),
+            ["srv", path] => ns = ns.srv(path, false),
             _ => println!("[ns] ignoring malformed line: {}", line),
         }
     }
