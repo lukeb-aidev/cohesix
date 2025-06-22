@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.44
+# Filename: cohesix_fetch_build.sh v0.45
 # Author: Lukas Bower
-# Date Modified: 2026-02-28
+# Date Modified: 2026-03-01
 #!/bin/bash
 # Fetch and fully build the Cohesix project using SSH Git auth.
 
@@ -45,7 +45,8 @@ else
   SUDO=""
 fi
 $SUDO apt-get update -y
-$SUDO apt-get install -y build-essential ninja-build wget git python3 python3-pip gcc-aarch64-linux-gnu cmake
+$SUDO apt-get install -y build-essential ninja-build wget git python3 python3-pip gcc-aarch64-linux-gnu cmake \
+  qemu-system-x86 qemu-system-arm
 
 CMAKE_VER=$(cmake --version | head -n1 | awk '{print $3}')
 if ! dpkg --compare-versions "$CMAKE_VER" ge 3.20; then
@@ -185,34 +186,50 @@ for script in cohcli cohcap cohtrace cohrun cohbuild cohup cohpkg; do
 done
 
 SEL4_DIR="$ROOT/third_party/sel4"
-BUILD_DIR="$ROOT/out/sel4_build_${COH_ARCH}"
-log "📥 Fetching seL4 kernel..."
+SEL4_TOOLS="$ROOT/third_party/sel4_tools"
+log "📥 Fetching seL4 kernel and tools..."
 if [ ! -d "$SEL4_DIR/.git" ]; then
   git clone --depth=1 --branch 13.0.0 https://github.com/seL4/seL4.git "$SEL4_DIR"
 else
   git -C "$SEL4_DIR" fetch origin 13.0.0 --depth=1
   git -C "$SEL4_DIR" reset --hard FETCH_HEAD
 fi
-[ -d "$SEL4_DIR/src/arch/arm" ] || { echo "❌ seL4 src/arch/arm missing" >&2; exit 1; }
-[ -d "$SEL4_DIR/src/arch/aarch64" ] || { echo "❌ seL4 src/arch/aarch64 missing" >&2; exit 1; }
-[ -d "$SEL4_DIR/configs/include" ] || { echo "❌ seL4 configs/include missing" >&2; exit 1; }
-log "⚒️ Preparing build directory $BUILD_DIR"
-rm -rf "$BUILD_DIR"
-mkdir -p "$BUILD_DIR"
-rm -f "$BUILD_DIR/CMakeCache.txt"
-cd "$BUILD_DIR"
-command -v ninja >/dev/null || { echo "❌ ninja not found" >&2; exit 1; }
-command -v cmake >/dev/null || { echo "❌ cmake not found" >&2; exit 1; }
-if [ "$COH_ARCH" = "aarch64" ]; then
-  command -v aarch64-linux-gnu-gcc >/dev/null || { echo "❌ gcc-aarch64-linux-gnu not found" >&2; exit 1; }
-  sel4-cmake "$SEL4_DIR" -DPLATFORM=qemu-arm-virt -DKernelSel4Arch=aarch64 -G Ninja
+if [ ! -d "$SEL4_TOOLS/.git" ]; then
+  git clone --depth=1 --branch 13.0.0 https://github.com/seL4/sel4_tools.git "$SEL4_TOOLS"
 else
-  command -v gcc >/dev/null || { echo "❌ gcc not found" >&2; exit 1; }
-  sel4-cmake "$SEL4_DIR" -DPLATFORM=pc99 -DKernelSel4Arch=x86_64 -G Ninja
+  git -C "$SEL4_TOOLS" fetch origin 13.0.0 --depth=1
+  git -C "$SEL4_TOOLS" reset --hard FETCH_HEAD
 fi
-ninja kernel.elf
-cp kernel.elf "$ROOT/out/sel4.elf"
-log "✅ seL4 kernel built for $COH_ARCH"
+for req in "$SEL4_DIR/configs" "$SEL4_DIR/gcc.cmake" \
+           "$SEL4_DIR/src/arch/arm" "$SEL4_DIR/src/arch/aarch64" "$SEL4_DIR/src/arch/x86"; do
+  [ -e "$req" ] || { echo "❌ Missing $req" >&2; exit 1; }
+done
+
+build_sel4(){
+  local arch="$1" cross="$2" cache="$3" plat="$4"
+  local bdir="$ROOT/out/sel4_build_${arch}"
+  log "⚒️ Building seL4 for $arch"
+  rm -rf "$bdir"
+  mkdir -p "$bdir"
+  pushd "$bdir" >/dev/null
+  cmake -DCMAKE_TOOLCHAIN_FILE=../../third_party/sel4/gcc.cmake \
+        -DCROSS_COMPILER_PREFIX="$cross" \
+        -C ../../third_party/sel4/configs/include/"$cache" \
+        -DPLATFORM="$plat" \
+        -DKernelSel4Arch="$arch" \
+        -G Ninja \
+        ../../third_party/sel4 || { echo "❌ cmake failed for $arch" >&2; exit 1; }
+  ninja kernel.elf image || { echo "❌ ninja failed for $arch" >&2; exit 1; }
+  [ -f kernel.elf ] || { echo "❌ kernel.elf missing for $arch" >&2; exit 1; }
+  cp kernel.elf "$ROOT/out/sel4_${arch}.elf"
+  popd >/dev/null
+  log "✅ seL4 kernel built for $arch"
+}
+
+build_sel4 x86_64 "" X64_verified.cmake pc99
+command -v aarch64-linux-gnu-gcc >/dev/null || { echo "❌ gcc-aarch64-linux-gnu not found" >&2; exit 1; }
+build_sel4 aarch64 aarch64-linux-gnu- ARM_verified.cmake qemu_arm_virt
+cp "$ROOT/out/sel4_${COH_ARCH}.elf" "$ROOT/out/sel4.elf"
 cd "$ROOT"
 log "🧱 Building root ELF..."
 bash scripts/build_root_elf.sh || { echo "❌ root ELF build failed" >&2; exit 1; }
@@ -465,13 +482,17 @@ fi
 if [ "$BUILD_EFI" -eq 1 ]; then
   [ -f "$STAGE_DIR/BOOTX64.EFI" ] || { echo "❌ $STAGE_DIR/BOOTX64.EFI missing" >&2; exit 1; }
 fi
-bash ./scripts/make_grub_iso.sh || { echo "❌ make_grub_iso.sh failed" >&2; exit 1; }
-if [ ! -f out/cohesix_grub.iso ]; then
-  echo "❌ ISO build failed" >&2
-  exit 1
-fi
-log "ISO successfully built"
-du -h out/cohesix_grub.iso | tee -a "$LOG_FILE" >&3
+
+for ARCH in x86_64 aarch64; do
+  KERN="out/sel4_${ARCH}.elf"
+  if [ -f "$KERN" ]; then
+    cp "$KERN" "$STAGE_DIR/boot/kernel.elf"
+    bash ./scripts/make_grub_iso.sh || { echo "❌ make_grub_iso.sh failed for $ARCH" >&2; exit 1; }
+    mv out/cohesix_grub.iso "out/cohesix_grub_${ARCH}.iso"
+    log "ISO successfully built for $ARCH"
+  fi
+done
+du -h out/cohesix_grub_*.iso 2>/dev/null | tee -a "$LOG_FILE" >&3
 find "$STAGE_DIR/bin" -type f -print | tee -a "$LOG_FILE" >&3
 if [ ! -d "/srv/cuda" ] || ! command -v nvidia-smi >/dev/null 2>&1 || ! nvidia-smi >/dev/null 2>&1; then
   echo "⚠️ CUDA hardware or /srv/cuda not detected" | tee -a "$LOG_FILE" >&3
@@ -479,9 +500,9 @@ fi
 
 # Optional QEMU boot check
 if command -v qemu-system-x86_64 >/dev/null; then
-  ISO_IMG="out/cohesix_grub.iso"
+  ISO_IMG="out/cohesix_grub_${COH_ARCH}.iso"
   if [ ! -f "$ISO_IMG" ]; then
-    echo "❌ cohesix_grub.iso missing in out" >&2
+    echo "❌ ${ISO_IMG} missing in out" >&2
     exit 1
   fi
   TMPDIR="${TMPDIR:-$(mktemp -d)}"
@@ -538,9 +559,9 @@ fi
 
 BIN_COUNT=$(find "$STAGE_DIR/bin" -type f -perm -111 | wc -l)
 ROLE_COUNT=$(find "$STAGE_DIR/roles" -name '*.yaml' | wc -l)
-ISO_SIZE_MB=$(du -m out/cohesix_grub.iso | awk '{print $1}')
+ISO_SIZE_MB=$(du -m "out/cohesix_grub_${COH_ARCH}.iso" | awk '{print $1}')
 echo "ISO BUILD OK: ${BIN_COUNT} binaries, ${ROLE_COUNT} roles, ${ISO_SIZE_MB}MB total" >&3
-du -h out/cohesix_grub.iso | tee -a "$LOG_FILE" >&3
+du -h "out/cohesix_grub_${COH_ARCH}.iso" | tee -a "$LOG_FILE" >&3
 find "$STAGE_DIR/bin" -type f -print | tee -a "$LOG_FILE" >&3
 
 log "✅ [Build Complete] $(date)"
@@ -553,4 +574,4 @@ tail -n 10 "$SUMMARY_ERRORS" || echo "✅ No critical issues found" | tee -a "$L
 
 echo "🪵 Full log saved to $LOG_FILE" >&3
 echo "✅ ISO build complete. Run QEMU with:" >&3
-echo "qemu-system-x86_64 -cdrom out/cohesix_grub.iso -boot d -m 1024" >&3
+echo "qemu-system-x86_64 -cdrom out/cohesix_grub_${COH_ARCH}.iso -boot d -m 1024" >&3
