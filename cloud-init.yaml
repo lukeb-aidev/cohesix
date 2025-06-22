@@ -1,3 +1,7 @@
+// CLASSIFICATION: COMMUNITY
+// Filename: cloud-init.yaml v0.1
+// Author: Lukas Bower
+// Date Modified: 2026-02-19
 #cloud-config
 package_update: true
 package_upgrade: true
@@ -63,7 +67,7 @@ write_files:
       # Clone seL4 repo
       echo "Cloning seL4 repository..."
       cd $HOME
-      git clone https://github.com/seL4/seL4.git
+      git clone --depth=1 --branch 2024.1 https://github.com/seL4/seL4.git
       
       # Pull NVIDIA L4T Docker image
       echo "Pulling NVIDIA L4T Docker image..."
