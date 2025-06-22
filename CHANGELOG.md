@@ -1442,4 +1442,10 @@
 - ISO build now validates man pages with `mandoc` and installs them to `/usr/share/man`.
 - `/srv/cuda` and `/sim` directories are guaranteed in the ISO for GPU and physics support.
 
+## [v0.189] - 2026-02-16
+### Changed
+- `build.rs` now respects the `COH_GPU` environment variable and only attempts to
+  compile PTX with `nvcc` when `COH_GPU=1`. Otherwise it uses the prebuilt PTX
+  with a single warning message.
+
 
