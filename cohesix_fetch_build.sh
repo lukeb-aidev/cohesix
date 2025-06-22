@@ -203,9 +203,9 @@ if [ -d "$SEL4_TOOLS" ] && [ ! -d "$SEL4_TOOLS/.git" ]; then
   rm -rf "$SEL4_TOOLS"
 fi
 if [ ! -d "$SEL4_TOOLS/.git" ]; then
-  git clone --depth=1 --branch 13.0.0 https://github.com/seL4/sel4_tools.git "$SEL4_TOOLS"
+  git clone --depth=1 --branch 13.0.x-compatible https://github.com/seL4/sel4_tools.git "$SEL4_TOOLS"
 else
-  git -C "$SEL4_TOOLS" fetch origin 13.0.0 --depth=1
+  git -C "$SEL4_TOOLS" fetch origin 13.0.x-compatible --depth=1
   git -C "$SEL4_TOOLS" reset --hard FETCH_HEAD
 fi
 for req in "$SEL4_DIR/configs" "$SEL4_DIR/gcc.cmake" \

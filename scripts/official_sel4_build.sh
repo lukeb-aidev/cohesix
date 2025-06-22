@@ -29,16 +29,16 @@ fi
 
 # Step 2: clone repositories at tag 13.0.0
 clone(){
-    local dir=$1 url=$2
+    local dir=$1 url=$2 branch=$3
     if [ ! -d "$dir/.git" ]; then
-        git clone --depth 1 --branch 13.0.0 "$url" "$dir"
+        git clone --depth 1 --branch "$branch" "$url" "$dir"
     else
-        git -C "$dir" fetch origin 13.0.0 --depth 1
+        git -C "$dir" fetch origin "$branch" --depth 1
         git -C "$dir" reset --hard FETCH_HEAD
     fi
 }
-clone "$SEL4_DIR" https://github.com/seL4/seL4.git
-clone "$TOOLS_DIR" https://github.com/seL4/sel4_tools.git
+clone "$SEL4_DIR" https://github.com/seL4/seL4.git 13.0.0
+clone "$TOOLS_DIR" https://github.com/seL4/sel4_tools.git 13.0.x-compatible
 
 for req in "$SEL4_DIR/configs" "$SEL4_DIR/gcc.cmake" \
            "$SEL4_DIR/src/arch/arm" "$SEL4_DIR/src/arch/aarch64" "$SEL4_DIR/src/arch/x86"; do
