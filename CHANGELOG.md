@@ -1511,3 +1511,9 @@
 - Consolidated ISO build steps in `cohesix_fetch_build.sh`; final QEMU boot check retained.
 - Header bumped to v0.41 with updated metadata entries.
 
+## [v0.199] - 2026-02-23
+### Changed
+- `make_grub_iso.sh` now stages optional CUDA and physics assets when present.
+- Logged warnings when `/srv/cuda` or `/sim` directories are missing.
+- Updated metadata entries.
+
