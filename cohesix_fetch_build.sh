@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.45
+# Filename: cohesix_fetch_build.sh v0.46
 # Author: Lukas Bower
-# Date Modified: 2026-03-01
+# Date Modified: 2025-06-22
 #!/bin/bash
 # Fetch and fully build the Cohesix project using SSH Git auth.
 
@@ -45,13 +45,27 @@ else
   SUDO=""
 fi
 $SUDO apt-get update -y
-$SUDO apt-get install -y build-essential ninja-build wget git python3 python3-pip gcc-aarch64-linux-gnu cmake \
-  qemu-system-x86 qemu-system-arm
+$SUDO apt-get install -y build-essential ninja-build git wget \
+  qemu-system-x86 qemu-system-arm python3-pip libxml2-utils \
+  cmake gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
 
-CMAKE_VER=$(cmake --version | head -n1 | awk '{print $3}')
+CMAKE_VER=$(cmake --version 2>/dev/null | head -n1 | awk '{print $3}')
 if ! dpkg --compare-versions "$CMAKE_VER" ge 3.20; then
-  log "cmake $CMAKE_VER too old; installing newer via pip"
-  python3 -m pip install --break-system-packages -U cmake
+  log "cmake $CMAKE_VER too old; installing newer release binary"
+  TMP_CMAKE="$(mktemp -d)"
+  CMAKE_V=3.28.1
+  ARCH=$(uname -m)
+  case "$ARCH" in
+    aarch64|arm64)
+      CMAKE_PKG="cmake-${CMAKE_V}-linux-aarch64.tar.gz";;
+    *)
+      CMAKE_PKG="cmake-${CMAKE_V}-linux-x86_64.tar.gz";;
+  esac
+  wget -q "https://github.com/Kitware/CMake/releases/download/v${CMAKE_V}/${CMAKE_PKG}" -O "$TMP_CMAKE/$CMAKE_PKG"
+  tar -xf "$TMP_CMAKE/$CMAKE_PKG" -C "$TMP_CMAKE"
+  $SUDO cp -r "$TMP_CMAKE"/cmake-${CMAKE_V}-linux-*/{bin,share} /usr/local/
+  rm -rf "$TMP_CMAKE"
+  hash -r
 fi
 
 cd "$HOME"
@@ -186,35 +200,23 @@ for script in cohcli cohcap cohtrace cohrun cohbuild cohup cohpkg; do
 done
 
 SEL4_DIR="$ROOT/third_party/sel4"
-SEL4_TOOLS="$ROOT/third_party/sel4_tools"
-log "📥 Fetching seL4 kernel and tools..."
+log "📥 Fetching seL4 13.0.0..."
 if [ -d "$SEL4_DIR" ] && [ ! -d "$SEL4_DIR/.git" ]; then
-  log "⚠️ Removing non-git directory $SEL4_DIR"
   rm -rf "$SEL4_DIR"
 fi
-if [ ! -d "$SEL4_DIR/.git" ]; then
+if [ -d "$SEL4_DIR/.git" ]; then
+  git -C "$SEL4_DIR" fetch --depth=1 origin tag 13.0.0
+  git -C "$SEL4_DIR" checkout -f 13.0.0
+else
   git clone --depth=1 --branch 13.0.0 https://github.com/seL4/seL4.git "$SEL4_DIR"
-else
-  git -C "$SEL4_DIR" fetch origin 13.0.0 --depth=1
-  git -C "$SEL4_DIR" reset --hard FETCH_HEAD
 fi
-if [ -d "$SEL4_TOOLS" ] && [ ! -d "$SEL4_TOOLS/.git" ]; then
-  log "⚠️ Removing non-git directory $SEL4_TOOLS"
-  rm -rf "$SEL4_TOOLS"
-fi
-if [ ! -d "$SEL4_TOOLS/.git" ]; then
-  git clone --depth=1 --branch 13.0.x-compatible https://github.com/seL4/sel4_tools.git "$SEL4_TOOLS"
-else
-  git -C "$SEL4_TOOLS" fetch origin 13.0.x-compatible --depth=1
-  git -C "$SEL4_TOOLS" reset --hard FETCH_HEAD
-fi
-for req in "$SEL4_DIR/configs" "$SEL4_DIR/gcc.cmake" \
-           "$SEL4_DIR/src/arch/arm" "$SEL4_DIR/src/arch/aarch64" "$SEL4_DIR/src/arch/x86"; do
-  [ -e "$req" ] || { echo "❌ Missing $req" >&2; exit 1; }
+for p in src/arch/arm src/arch/aarch64 src/arch/x86 configs/include; do
+  [ -d "$SEL4_DIR/$p" ] || { echo "❌ Missing $p in seL4 repo" >&2; exit 1; }
 done
+log "✅ seL4 source ready"
 
-build_sel4(){
-  local arch="$1" cross="$2" cache="$3" plat="$4"
+build_sel4_arch(){
+  local arch="$1" cross="$2" platform="$3"
   local bdir="$ROOT/out/sel4_build_${arch}"
   log "⚒️ Building seL4 for $arch"
   rm -rf "$bdir"
@@ -222,21 +224,21 @@ build_sel4(){
   pushd "$bdir" >/dev/null
   cmake -DCMAKE_TOOLCHAIN_FILE=../../third_party/sel4/gcc.cmake \
         -DCROSS_COMPILER_PREFIX="$cross" \
-        -C ../../third_party/sel4/configs/include/"$cache" \
-        -DPLATFORM="$plat" \
+        -DPLATFORM="$platform" \
         -DKernelSel4Arch="$arch" \
         -G Ninja \
         ../../third_party/sel4 || { echo "❌ cmake failed for $arch" >&2; exit 1; }
-  ninja kernel.elf image || { echo "❌ ninja failed for $arch" >&2; exit 1; }
+  ninja || { echo "❌ ninja failed for $arch" >&2; exit 1; }
   [ -f kernel.elf ] || { echo "❌ kernel.elf missing for $arch" >&2; exit 1; }
   cp kernel.elf "$ROOT/out/sel4_${arch}.elf"
   popd >/dev/null
   log "✅ seL4 kernel built for $arch"
 }
 
-build_sel4 x86_64 "" X64_verified.cmake pc99
+build_sel4_arch x86_64 "" pc99
 command -v aarch64-linux-gnu-gcc >/dev/null || { echo "❌ gcc-aarch64-linux-gnu not found" >&2; exit 1; }
-build_sel4 aarch64 aarch64-linux-gnu- ARM_verified.cmake qemu_arm_virt
+build_sel4_arch aarch64 aarch64-linux-gnu- qemu-arm-virt
+[ -f "$ROOT/out/sel4_x86_64.elf" ] && [ -f "$ROOT/out/sel4_aarch64.elf" ] || { echo "❌ seL4 build failed" >&2; exit 1; }
 cp "$ROOT/out/sel4_${COH_ARCH}.elf" "$ROOT/out/sel4.elf"
 cd "$ROOT"
 log "🧱 Building root ELF..."
