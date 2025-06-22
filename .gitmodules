@@ -1,3 +1,0 @@
-[submodule "third_party/sel4_tools"]
-path = third_party/sel4_tools
-url = https://github.com/seL4/seL4_tools.git

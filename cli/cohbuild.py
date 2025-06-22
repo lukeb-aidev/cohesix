@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohbuild.py v0.1
+# Filename: cohbuild.py v0.2
 # Author: Lukas Bower
-# Date Modified: 2026-01-25
+# Date Modified: 2026-06-20
 """cohbuild – orchestrate Cohesix build stages."""
 
 import argparse
@@ -39,7 +39,6 @@ def run(cmd: List[str]) -> int:
 
 def build_all(root: Path) -> int:
     scripts = [
-        root / "scripts" / "build_sel4_kernel.sh",
         root / "scripts" / "build_root_elf.sh",
         root / "scripts" / "make_iso.sh",
     ]

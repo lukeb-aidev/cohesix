@@ -137,7 +137,6 @@ python -m pip install --upgrade pip setuptools wheel --break-system-packages \
 if [ -f requirements.txt ]; then
   python -m pip install -r requirements.txt --break-system-packages
 fi
-python -m pip install --break-system-packages -U sel4-deps
 
 # Install Python linters if missing
 for tool in flake8 mypy black; do
@@ -211,58 +210,6 @@ for script in cohcli cohcap cohtrace cohrun cohbuild cohup cohpkg; do
   [ -f "bin/$script" ] && cp "bin/$script" "$STAGE_DIR/bin/$script"
 done
 
-SEL4_DIR="$ROOT/third_party/sel4"
-log "📥 Fetching seL4 13.0.0..."
-if [ -d "$SEL4_DIR" ] && [ ! -d "$SEL4_DIR/.git" ]; then
-  rm -rf "$SEL4_DIR"
-fi
-if [ -d "$SEL4_DIR/.git" ]; then
-  git -C "$SEL4_DIR" fetch --depth=1 origin tag 13.0.0
-  git -C "$SEL4_DIR" checkout -f 13.0.0
-else
-  git clone --branch 13.0.0 --depth=1 https://github.com/seL4/seL4.git "$SEL4_DIR"
-fi
-for p in configs src/arch/arm src/arch/x86; do
-  [ -d "$SEL4_DIR/$p" ] || { echo "❌ Missing $p in seL4 repo" >&2; exit 1; }
-done
-log "✅ seL4 source ready"
-
-build_sel4_arch(){
-  local arch="$1" cross="$2" platform="$3"
-  [[ "$arch" == "x86_64" || "$arch" == "aarch64" ]] || { echo "❌ unsupported arch $arch" >&2; exit 1; }
-  local bdir="$ROOT/out/sel4_build_${arch}"
-  log "⚒️ Building seL4 for $arch"
-  rm -rf "$bdir"
-  mkdir -p "$bdir"
-  pushd "$bdir" >/dev/null
-  local cmake_args=(
-    -DCMAKE_TOOLCHAIN_FILE="$ROOT/third_party/sel4/gcc.cmake"
-    -DCROSS_COMPILER_PREFIX="$cross"
-    -DPLATFORM="$platform"
-    -DKernelSel4Arch="$arch"
-    -G Ninja "$ROOT/third_party/sel4"
-  )
-  if [ "$arch" = "aarch64" ]; then
-    cmake_args+=( -DDAARCH64=TRUE )
-  fi
-  sel4-cmake "${cmake_args[@]}" || { echo "❌ cmake failed for $arch" >&2; exit 1; }
-  ninja || { echo "❌ ninja failed for $arch" >&2; exit 1; }
-  [ -f images/kernel.elf ] || { echo "❌ kernel.elf missing for $arch" >&2; exit 1; }
-  cp images/kernel.elf "$ROOT/out/sel4_${arch}.elf"
-  popd >/dev/null
-  log "✅ seL4 kernel built for $arch"
-}
-
-build_sel4_arch x86_64 "$CROSS_X86" pc99
-command -v aarch64-linux-gnu-gcc >/dev/null || { echo "❌ gcc-aarch64-linux-gnu not found" >&2; exit 1; }
-build_sel4_arch aarch64 aarch64-linux-gnu- qemu-arm-virt
-if [ -f "$ROOT/out/sel4_x86_64.elf" ] && [ -f "$ROOT/out/sel4_aarch64.elf" ]; then
-  log "✅ seL4 builds succeeded for both architectures"
-else
-  echo "❌ seL4 build failed" >&2
-  exit 1
-fi
-cp "$ROOT/out/sel4_${COH_ARCH}.elf" "$ROOT/out/sel4.elf"
 cd "$ROOT"
 log "🧱 Building root ELF..."
 bash scripts/build_root_elf.sh || { echo "❌ root ELF build failed" >&2; exit 1; }
@@ -313,7 +260,6 @@ fi
 
 log "📂 Staging boot files..."
 mkdir -p "$STAGE_DIR/boot"
-cp out/sel4.elf "$STAGE_DIR/boot/kernel.elf"
 cp out/cohesix_root.elf "$STAGE_DIR/boot/userland.elf"
 for f in initfs.img plan9.ns bootargs.txt boot_trace.json; do
   [ -f "$f" ] && cp "$f" "$STAGE_DIR/boot/"
@@ -516,15 +462,7 @@ if [ "$BUILD_EFI" -eq 1 ]; then
   [ -f "$STAGE_DIR/BOOTX64.EFI" ] || { echo "❌ $STAGE_DIR/BOOTX64.EFI missing" >&2; exit 1; }
 fi
 
-for ARCH in x86_64 aarch64; do
-  KERN="out/sel4_${ARCH}.elf"
-  if [ -f "$KERN" ]; then
-    cp "$KERN" "$STAGE_DIR/boot/kernel.elf"
-    bash ./scripts/make_grub_iso.sh || { echo "❌ make_grub_iso.sh failed for $ARCH" >&2; exit 1; }
-    mv out/cohesix_grub.iso "out/cohesix_grub_${ARCH}.iso"
-    log "ISO successfully built for $ARCH"
-  fi
-done
+bash ./scripts/make_grub_iso.sh
 du -h out/cohesix_grub_*.iso 2>/dev/null | tee -a "$LOG_FILE" >&3
 find "$STAGE_DIR/bin" -type f -print | tee -a "$LOG_FILE" >&3
 if [ ! -d "/srv/cuda" ] || ! command -v nvidia-smi >/dev/null 2>&1 || ! nvidia-smi >/dev/null 2>&1; then

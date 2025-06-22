@@ -57,7 +57,6 @@ Requires Rust **1.76** or newer (2024 edition).
 ```bash
 git clone https://github.com/<user>/cohesix.git
 cd cohesix
-./scripts/bootstrap_sel4_tools.sh   # fetch seL4 sources and Python deps
 ./scripts/run-smoke-tests.sh   # quick health check
 make all                       # Go vet + C shims
 cargo check --workspace        # Rust build
@@ -138,14 +137,6 @@ Confirm QEMU and EFI dependencies with:
 ```
 
 The script highlights missing packages so you can install them before running boot tests.
-
-### Building the seL4 Kernel
-
-Run `./scripts/setup_build_env.sh` to install compilers and Python
-dependencies. Then use `./scripts/build_sel4_kernel.sh` to compile the
-kernel. The helper `bootstrap_sel4_tools.sh` fetches seL4 repositories
-and ensures tooling permissions are correct.
-
 ---
 
 ## 🧠 Learn More
