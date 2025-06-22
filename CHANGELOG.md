@@ -1585,4 +1585,10 @@
   QEMU_EFI.fd for aarch64 boots via `-bios`.
 - METADATA updated accordingly.
 
+## [v0.211] - 2026-07-07
+### Added
+- cohesix_fetch_build.sh logs "kernel build complete" after staging kernel ELF.
+- full_fetch_and_build.sh and scripts/make_iso.sh emit the same marker.
+- Version bumps recorded in METADATA.
+
 
