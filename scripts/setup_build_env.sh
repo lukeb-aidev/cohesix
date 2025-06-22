@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: setup_build_env.sh v0.2
+# Filename: setup_build_env.sh v0.3
 # Author: Lukas Bower
-# Date Modified: 2026-02-13
+# Date Modified: 2026-02-16
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -20,13 +20,26 @@ if command -v apt-get >/dev/null 2>&1; then
     add_cuda_repo() {
         local dist=$(lsb_release -cs)
         local arch=$(dpkg --print-architecture)
+        local numeric_dist
+        case "$dist" in
+            noble) numeric_dist="ubuntu2404" ;;
+            jammy) numeric_dist="ubuntu2204" ;;
+            focal) numeric_dist="ubuntu2004" ;;
+            bionic) numeric_dist="ubuntu1804" ;;
+            *) numeric_dist="$dist" ;;
+        esac
+        local narch="$arch"
+        if [[ "$arch" == "amd64" ]]; then
+            narch="x86_64"
+        fi
         local keyring=/etc/apt/keyrings/cuda-archive-keyring.gpg
         sudo mkdir -p /etc/apt/keyrings
         if [ ! -f "$keyring" ]; then
-            curl -fsSL "https://developer.download.nvidia.com/compute/cuda/repos/${dist}/${arch}/cuda-archive-keyring.gpg" \
+            # Previously: https://developer.download.nvidia.com/compute/cuda/repos/${dist}/${arch}/cuda-archive-keyring.gpg
+            curl -fsSL "https://developer.download.nvidia.com/compute/cuda/repos/${numeric_dist}/${narch}/cuda-archive-keyring.gpg" \
                 | sudo gpg --dearmor -o "$keyring"
         fi
-        echo "deb [signed-by=$keyring] https://developer.download.nvidia.com/compute/cuda/repos/${dist}/${arch}/ /" \
+        echo "deb [signed-by=$keyring] https://developer.download.nvidia.com/compute/cuda/repos/${numeric_dist}/${narch}/ /" \
             | sudo tee /etc/apt/sources.list.d/cuda.list >/dev/null
     }
 
