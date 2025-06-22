@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: build_sel4_kernel.sh v0.14
+# Filename: build_sel4_kernel.sh v0.15
 # Author: Lukas Bower
-# Date Modified: 2026-02-15
+# Date Modified: 2026-02-18
 #!/bin/bash
 # Auto-detect target architecture and configure seL4 build
 set -euo pipefail
@@ -15,7 +15,7 @@ OUT_ELF="$ROOT/out/sel4.elf"
 NINJA="$(command -v ninja || true)"
 CMAKE="$(command -v cmake || true)"
 msg() { printf "\e[32m==>\e[0m %s\n" "$*"; }
-die() { printf "\e[31m[ERR]\e[0m %s\n" "$*" >&2; exit 1; }
+die() { printf "\e[31m[⚠️]\e[0m %s\n" "$*" >&2; exit 1; }
 
 [ -x "$NINJA" ] || die "ninja not found"
 [ -x "$CMAKE" ] || die "cmake not found"
@@ -25,7 +25,8 @@ die() { printf "\e[31m[ERR]\e[0m %s\n" "$*" >&2; exit 1; }
 # Install Python tooling required by seL4 build scripts
 bash "$ROOT/scripts/bootstrap_sel4_tools.sh"
 
-rm -rf "$BUILD_DIR" && mkdir -p "$BUILD_DIR"
+mkdir -p "$BUILD_DIR"
+rm -f "$BUILD_DIR/CMakeCache.txt" "$BUILD_DIR"/*toolchain*.cmake 2>/dev/null
 
 ARCH="${host_arch:-${COH_ARCH:-$(uname -m)}}"
 ARCH="${ARCH,,}"
@@ -41,7 +42,7 @@ case "$ARCH" in
         CROSS_COMPILER_PREFIX=""
         PLATFORM=pc99
         KernelArch=x86
-        KernelSel4Arch=x86_64
+        KernelSel4Arch=x86
         KernelWordSize=64
         ;;
     *)
@@ -49,10 +50,8 @@ case "$ARCH" in
         ;;
 esac
 
-if [ -n "$CROSS_COMPILER_PREFIX" ]; then
-    command -v "${CROSS_COMPILER_PREFIX}gcc" >/dev/null \
-        || die "Cross compiler ${CROSS_COMPILER_PREFIX}gcc not found"
-fi
+command -v "${CROSS_COMPILER_PREFIX}gcc" >/dev/null \
+    || die "Cross compiler ${CROSS_COMPILER_PREFIX}gcc not found"
 
 msg "Using toolchain prefix: ${CROSS_COMPILER_PREFIX:-native}"
 
@@ -70,5 +69,8 @@ pushd "$BUILD_DIR" >/dev/null
 cp kernel.elf "$OUT_ELF"
 popd >/dev/null
 
-[ -s "$OUT_ELF" ] || die "Output ELF empty"
-msg "KERNEL BUILD OK: $OUT_ELF"
+if [ -s "$OUT_ELF" ]; then
+    printf "[✅] seL4 kernel built successfully (%s)\n" "$ARCH"
+else
+    die "Output ELF empty"
+fi
