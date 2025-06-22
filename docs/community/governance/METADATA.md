@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: METADATA.md v3.35
+// Filename: METADATA.md v3.36
 // Author: Lukas Bower
-// Date Modified: 2026-02-18
+// Date Modified: 2026-02-19
 
 ## Canonical Documents
 
@@ -244,5 +244,6 @@
 | src/demos/secure_relay/main.py | v0.1 | 2026-02-11 | COMMUNITY | | |
 | src/demos/sensor_world/main.py | v0.1 | 2026-02-11 | COMMUNITY | | |
 | src/demos/multi_duel/main.py | v0.1 | 2026-02-11 | COMMUNITY | | |
+| cloud-init.yaml | v0.1 | 2026-02-19 | COMMUNITY | | |
 
 The script `scripts/bootstrap_sel4_tools.sh` installs Jinja2 and PyYAML before kernel builds.
