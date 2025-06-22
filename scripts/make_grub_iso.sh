@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: make_grub_iso.sh v0.11
+# Filename: make_grub_iso.sh v0.12
 # Author: Lukas Bower
-# Date Modified: 2026-02-23
+# Date Modified: 2026-06-20
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -22,21 +22,19 @@ trap cleanup EXIT
 mkdir -p "$ISO_ROOT/boot/grub"
 
 # Ensure kernel and root task ELFs exist
-KERNEL_ELF="$ROOT/out/sel4.elf"
-ROOT_ELF="$ROOT/out/cohesix_root.elf"
-INIT_EFI="$ROOT/out/bin/init.efi"
+KERNEL_ELF="$ISO_ROOT/boot/kernel.elf"
+ROOT_ELF="$ISO_ROOT/boot/userland.elf"
+INIT_EFI="$ISO_ROOT/bin/init.efi"
 if [ ! -s "$KERNEL_ELF" ]; then
-    bash "$ROOT/scripts/build_sel4_kernel.sh"
+    echo "ERROR: kernel ELF missing at $KERNEL_ELF" >&2
+    exit 1
 fi
 if [ ! -s "$ROOT_ELF" ]; then
-    bash "$ROOT/scripts/build_root_elf.sh"
+    echo "ERROR: root ELF missing at $ROOT_ELF" >&2
+    exit 1
 fi
 if [ ! -x "$INIT_EFI" ]; then
-    if (cd "$ROOT" && make init-efi >/dev/null 2>&1); then
-        echo "init-efi built" >&2
-    else
-        echo "WARNING: init-efi build failed; continuing without EFI" >&2
-    fi
+    echo "WARNING: init EFI not found at $INIT_EFI" >&2
 fi
 
 # Copy kernel, userland, and config
