@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: bootstrap_sel4_tools.sh v0.4
+# Filename: bootstrap_sel4_tools.sh v0.5
 # Author: Lukas Bower
-# Date Modified: 2026-02-17
+# Date Modified: 2026-02-19
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -18,6 +18,9 @@ clone_repo(){
     if [ ! -d "$dir/.git" ]; then
         [ -d "$dir" ] && rm -rf "$dir"
         git clone --depth=1 --branch "$branch" "$url" "$dir"
+        msg "Cloned $url"
+    else
+        msg "Using existing $dir"
     fi
 }
 

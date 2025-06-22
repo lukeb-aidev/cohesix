@@ -1460,4 +1460,11 @@
   `KernelSel4Arch=x86`. Successful builds print a checkmark message and
   failures emit a warning emoji.
 
+## [v0.192] - 2026-02-19
+### Changed
+- `build_sel4_kernel.sh` invokes `bootstrap_sel4_tools.sh` before checking for
+  seL4 sources.
+- `bootstrap_sel4_tools.sh` now prints a status message and skips cloning when
+  `third_party/sel4/.git` exists.
+
 
