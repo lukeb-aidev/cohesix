@@ -1523,3 +1523,10 @@
 - Added log output confirming the clean step.
 - Updated metadata entries for the script.
 
+## [v0.201] - 2026-02-25
+### Added
+- `cohesix_fetch_build.sh` prints ISO size and staged binaries after grub-mkrescue.
+- Emits a warning when `/srv/cuda` or CUDA hardware is unavailable.
+- Summary appended to the end of the build log.
+- Updated metadata entries.
+
