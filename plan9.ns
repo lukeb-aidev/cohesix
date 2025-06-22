@@ -1,9 +1,16 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: plan9.ns v0.1
+// Filename: plan9.ns v0.2
 // Author: Lukas Bower
-// Date Modified: 2026-02-19
+// Date Modified: 2026-07-08
 
+# Map the root filesystem to /
 bind / /
-bind /bin /bin
-srv /srv
+
+# Add Cohesix binaries into the search path
+bind /usr/coh/bin /bin
+
+# Serve namespace entries from /srv with cleanup (-c)
+srv -c /srv
+
+# Use the served namespace at /srv
 mount /srv /srv
