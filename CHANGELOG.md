@@ -1431,4 +1431,10 @@
 - `build_sel4_kernel.sh` auto-detects host architecture, selects the matching
   toolchain, cleans the build directory, and builds with Ninja.
 
+## [v0.187] - 2026-02-15
+### Fixed
+- Kernel build now uses `host_arch` or `COH_ARCH` to select the toolchain
+  automatically without prompts.
+- Toolchain scripts are executed via `bash` to avoid sourcing issues.
+
 
