@@ -87,6 +87,7 @@ Initial demo services are enabled:
 * `cohrun physics_demo` to run a Rapier simulation
 * `cohtrace list` to view joined workers
 * Optional Secure 9P server with TLS via `--features secure9p` (see `config/secure9p.toml`)
+* Copy `etc/init.conf.example` to `/etc/init.conf` and adjust values to control startup behavior
 
 ### Running the GUI Orchestrator
 
