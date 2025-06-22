@@ -1481,4 +1481,7 @@
 ### Added
 - Boot init starts `Secure9pServer` when the `secure9p` feature is enabled.
 - Role policies in `config/secure9p.toml` are validated against known roles.
+### Changed
+- `LICENSES_AND_REUSE.md` clarifies BusyBox removal and lists **toybox** and **sbase** as BSD/MIT replacements.
+- `METADATA.md` updated to v1.2 for the licensing document.
 
