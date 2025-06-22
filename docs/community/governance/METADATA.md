@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: METADATA.md v3.37
 // Author: Lukas Bower
-// Date Modified: 2026-02-22
+// Date Modified: 2025-06-22
 
 ## Canonical Documents
 
@@ -247,4 +247,4 @@
 | cloud-init.yaml | v0.1 | 2026-02-19 | COMMUNITY | | |
 | plan9.ns | v0.1 | 2026-02-19 | COMMUNITY | | |
 
-The script `scripts/bootstrap_sel4_tools.sh` installs Jinja2 and PyYAML before kernel builds.
+The script `scripts/bootstrap_sel4_tools.sh` installs Jinja2 and PyYAML before kernel builds and ensures seL4 repositories track the `master` branch.
