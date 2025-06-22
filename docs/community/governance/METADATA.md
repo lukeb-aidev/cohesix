@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: METADATA.md v3.36
+// Filename: METADATA.md v3.37
 // Author: Lukas Bower
-// Date Modified: 2026-02-19
+// Date Modified: 2026-02-21
 
 ## Canonical Documents
 
@@ -156,7 +156,7 @@
 | cli/cohcli.py | v1.1 | 2025-08-01 | COMMUNITY | | |
 | validator.pyi | v0.1 | 2025-12-10 | COMMUNITY | | |
 | scripts/build_sel4_kernel.sh | v0.16 | 2026-02-19 | COMMUNITY | | |
-| scripts/bootstrap_sel4_tools.sh | v0.5 | 2026-02-19 | COMMUNITY | | |
+| scripts/bootstrap_sel4_tools.sh | v0.6 | 2026-02-21 | COMMUNITY | | |
 | scripts/setup_build_env.sh | v0.3 | 2026-02-16 | COMMUNITY | | |
 | scripts/check-qemu-deps.sh | v0.1 | 2025-07-28 | COMMUNITY | | |
 | scripts/collect_boot_logs.sh | v0.1 | 2025-07-12 | COMMUNITY | | |
@@ -247,4 +247,4 @@
 | cloud-init.yaml | v0.1 | 2026-02-19 | COMMUNITY | | |
 | plan9.ns | v0.1 | 2026-02-19 | COMMUNITY | | |
 
-The script `scripts/bootstrap_sel4_tools.sh` installs Jinja2 and PyYAML before kernel builds.
+The script `scripts/bootstrap_sel4_tools.sh` installs Jinja2 and PyYAML before kernel builds and ensures seL4 repositories track the `master` branch.
