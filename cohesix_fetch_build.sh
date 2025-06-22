@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.47
+# Filename: cohesix_fetch_build.sh v0.48
 # Author: Lukas Bower
-# Date Modified: 2026-03-20
+# Date Modified: 2026-06-23
 #!/bin/bash
 # Fetch and fully build the Cohesix project using SSH Git auth.
 
@@ -208,6 +208,10 @@ mkdir -p "$STAGE_DIR/etc" "$STAGE_DIR/roles" "$STAGE_DIR/init"
 
 # Build or update seL4 kernel from external workspace
 SEL4_WORKSPACE="$HOME/sel4_workspace"
+if [[ ! -f /sel4_workspace/build_pc99/kernel/kernel.elf && ! -f /sel4_workspace/build_qemu_arm/kernel/kernel.elf ]]; then
+  echo "ERROR: Missing /sel4_workspace. Run the official seL4 setup and build for x86_64 or aarch64 before continuing." >&2
+  exit 1
+fi
 if [ ! -d "$SEL4_WORKSPACE" ]; then
   echo "seL4 not found in ~/sel4_workspace. Please build it using the official sel4test-manifest flow before continuing." >&2
   exit 1
