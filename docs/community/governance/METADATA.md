@@ -187,7 +187,7 @@
 | full_fetch_and_build.sh | v0.8 | 2025-09-07 | COMMUNITY | | |
 | etc/init.conf | v0.1 | 2025-08-27 | COMMUNITY | | |
 | etc/init.cfg | v0.1 | 2025-08-30 | COMMUNITY | | |
-| make_iso.sh | v0.10 | 2026-01-20 | COMMUNITY | | |
+| make_iso.sh | v0.12 | 2026-06-22 | COMMUNITY | | |
 | configs/roles/QueenPrimary.yaml | v0.1 | 2025-08-30 | COMMUNITY | | |
 | configs/roles/WorkerDrone.yaml | v0.1 | 2025-08-30 | COMMUNITY | | |
 | configs/roles/DroneWorker.yaml | v0.1 | 2025-08-30 | COMMUNITY | | |
