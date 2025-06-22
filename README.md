@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: README.md v0.15
+// Filename: README.md v0.16
 // Author: Lukas Bower
-// Date Modified: 2026-02-19
+// Date Modified: 2026-07-10
 
 
 # Cohesix
@@ -128,6 +128,24 @@ The helper script `cohesix_fetch_build.sh` sets two variables after cloning:
 * `COH_GPU` – `1` if an NVIDIA device is accessible, else `0`
 
 CUDA tests and builds skip when `COH_GPU=0`.
+
+### Building initfs.img
+
+The initramfs provides early boot utilities. First build BusyBox:
+
+```bash
+./scripts/build_busybox.sh $(uname -m)
+```
+
+Copy `out/bin/busybox` and the scripts under `userland/miniroot/bin/` into a
+staging directory. From that directory run:
+
+```bash
+find . | cpio -o -H newc | gzip > ../../initfs.img
+```
+
+Ensure the archive includes at minimum `busybox`, `init`, `rc`, `echo`, `ls` and
+`help`. The `cpio` and `gzip` tools are required.
 
 ## Boot Testing
 
