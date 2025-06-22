@@ -1444,6 +1444,9 @@
 
 ## [v0.189] - 2026-02-16
 ### Changed
+- `build.rs` now respects the `COH_GPU` environment variable and only attempts to
+  compile PTX with `nvcc` when `COH_GPU=1`. Otherwise it uses the prebuilt PTX
+  with a single warning message.
 - `setup_build_env.sh` uses numeric Ubuntu identifiers for CUDA repo URLs and maps `amd64` to `x86_64`.
 
 
