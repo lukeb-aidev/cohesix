@@ -1540,3 +1540,7 @@
   missing `config.cmake` errors.
 - Updated metadata entries for the modified scripts.
 
+## [v0.203] - 2026-02-28
+### Added
+- cohesix_fetch_build.sh v0.44 installs build dependencies and builds seL4 kernel using sel4-cmake.
+- Updated metadata entries.
