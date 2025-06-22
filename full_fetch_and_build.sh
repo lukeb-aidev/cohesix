@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: full_fetch_and_build.sh v0.9
+# Filename: full_fetch_and_build.sh v0.10
 # Author: Lukas Bower
-# Date Modified: 2025-09-21
+# Date Modified: 2026-07-07
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -48,6 +48,7 @@ cargo build --release --target "$TARGET" --bin kernel \
 KERNEL_EFI="target/${TARGET}/release/kernel.efi"
 [ -f "$KERNEL_EFI" ] || fail "Kernel EFI missing at $KERNEL_EFI"
 cp "$KERNEL_EFI" out/BOOTX64.EFI
+msg "kernel build complete"
 
 # Build primary userland binary
 msg "Building init EFI…"
