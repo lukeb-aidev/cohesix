@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.40
+# Filename: cohesix_fetch_build.sh v0.41
 # Author: Lukas Bower
-# Date Modified: 2026-02-21
+# Date Modified: 2026-02-22
 #!/bin/bash
 # Fetch and fully build the Cohesix project using SSH Git auth.
 
@@ -270,80 +270,6 @@ for bin in $(find "$STAGE_DIR/bin" -type f -perm -111); do
 done
 echo ']}' >> "$MANIFEST"
 
-echo "[🧪] Checking boot prerequisites..."
-if [ ! -x "$STAGE_DIR/bin/init" ] && [ ! -x "$STAGE_DIR/bin/init.efi" ]; then
-  echo "❌ No init binary found in $STAGE_DIR/bin. Aborting." >&2
-  exit 1
-fi
-if [ ! -f "$STAGE_DIR/boot/kernel.elf" ]; then
-  echo "❌ Kernel ELF missing. Expected at out/boot/kernel.elf" >&2
-  exit 1
-fi
-if [ ! -f plan9.ns ]; then
-  echo "❌ plan9.ns missing in repository root" >&2
-  exit 1
-fi
-if [ ! -f config/config.yaml ]; then
-  echo "⚠️ config.yaml missing. Generating fallback..."
-  mkdir -p config
-  cat > config/config.yaml <<EOF
-# Auto-generated fallback config
-system:
-  role: worker
-  trace: true
-EOF
-fi
-
-log "📀 Creating ISO..."
-if [ "${VIRTUAL_ENV:-}" != "$(pwd)/.venv" ]; then
-  echo "❌ Python venv not active before ISO build" >&2
-  exit 1
-fi
-if [ "$BUILD_EFI" -eq 1 ]; then
-  [ -f "$STAGE_DIR/BOOTX64.EFI" ] || { echo "❌ $STAGE_DIR/BOOTX64.EFI missing" >&2; exit 1; }
-fi
-bash ./scripts/make_grub_iso.sh || { echo "❌ make_grub_iso.sh failed" >&2; exit 1; }
-if [ ! -f out/cohesix_grub.iso ]; then
-  echo "❌ ISO build failed" >&2
-  exit 1
-fi
-log "ISO successfully built"
-echo "ISO successfully built" >&3
-ls -l out/
-du -sh out/
-if [ ! -r out/cohesix_grub.iso ]; then
-  echo "❌ out/cohesix_grub.iso not readable" >&2
-  exit 1
-fi
-if [ "$BUILD_EFI" -eq 1 ]; then
-  if [ ! -f "$STAGE_DIR/BOOTX64.EFI" ]; then
-    echo "❌ $STAGE_DIR/BOOTX64.EFI missing after ISO build" >&2
-    exit 1
-  fi
-fi
-if [ ! -f config/config.yaml ]; then
-  echo "❌ config/config.yaml missing" >&2
-  exit 1
-fi
-ls -lh out/ >> "$LOG_FILE"
-sha256sum out/cohesix_grub.iso >> "$LOG_FILE"
-ISO_SIZE=$(stat -c %s out/cohesix_grub.iso)
-[ -x scripts/validate_iso_build.sh ] && scripts/validate_iso_build.sh || true
-if [ "$ISO_SIZE" -le $((1024*1024)) ]; then
-  echo "❌ ISO build incomplete or missing required tools" >&2
-  exit 1
-fi
-if command -v xorriso >/dev/null; then
-  if [ "$BUILD_EFI" -eq 1 ]; then
-    xorriso -indev out/cohesix_grub.iso -find / -name BOOTX64.EFI -print | grep -q BOOTX64.EFI || {
-      echo "❌ BOOTX64.EFI missing in ISO" >&2; exit 1; }
-  fi
-else
-  log "⚠️ xorriso not found; skipping ISO content check"
-fi
-if [ "$BUILD_EFI" -eq 1 ] && [[ ! -f out/init.efi ]]; then
-  echo "❌ init.efi missing — build incomplete" | tee -a "$LOG_FILE"
-fi
 
 
 log "🔍 Running Rust tests with detailed output..."
@@ -497,6 +423,7 @@ if [ ! -f out/cohesix_grub.iso ]; then
   echo "❌ ISO build failed" >&2
   exit 1
 fi
+log "ISO successfully built"
 
 # Optional QEMU boot check
 if command -v qemu-system-x86_64 >/dev/null; then

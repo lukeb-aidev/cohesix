@@ -1506,3 +1506,8 @@
 - `bootstrap_sel4_tools.sh` resets existing seL4 and seL4_tools repositories to `origin/master` and clones `master` when missing.
 - `build_sel4_kernel.sh` now removes the previous build directory and cleans stale `CMakeFiles` before configuration.
 
+## [v0.198] - 2026-02-22
+### Changed
+- Consolidated ISO build steps in `cohesix_fetch_build.sh`; final QEMU boot check retained.
+- Header bumped to v0.41 with updated metadata entries.
+
