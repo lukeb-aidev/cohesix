@@ -1453,4 +1453,11 @@
 ### Changed
 - `bootstrap_sel4_tools.sh` clones seL4 and seL4_tools at branch `2024.1` when missing and installs `jinja2` and `pyyaml`.
 
+## [v0.191] - 2026-02-18
+### Changed
+- `build_sel4_kernel.sh` now preserves the build directory, purges stale
+  CMake cache files, and verifies required tools. The x86 path uses
+  `KernelSel4Arch=x86`. Successful builds print a checkmark message and
+  failures emit a warning emoji.
+
 
