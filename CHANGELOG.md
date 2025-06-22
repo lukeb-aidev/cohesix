@@ -1517,3 +1517,9 @@
 - Logged warnings when `/srv/cuda` or `/sim` directories are missing.
 - Updated metadata entries.
 
+## [v0.200] - 2026-02-24
+### Changed
+- `cohesix_fetch_build.sh` cleans `out/sel4_build` before building the seL4 kernel.
+- Added log output confirming the clean step.
+- Updated metadata entries for the script.
+

@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.41
+# Filename: cohesix_fetch_build.sh v0.42
 # Author: Lukas Bower
-# Date Modified: 2026-02-22
+# Date Modified: 2026-02-24
 #!/bin/bash
 # Fetch and fully build the Cohesix project using SSH Git auth.
 
@@ -164,6 +164,12 @@ done
 for script in cohcli cohcap cohtrace cohrun cohbuild cohup cohpkg; do
   [ -f "bin/$script" ] && cp "bin/$script" "$STAGE_DIR/bin/$script"
 done
+
+BUILD_DIR="$ROOT/out/sel4_build"
+rm -rf "$BUILD_DIR"
+rm -f "$BUILD_DIR/CMakeCache.txt" "$BUILD_DIR"/*toolchain*.cmake 2>/dev/null
+rm -rf "$BUILD_DIR/CMakeFiles" 2>/dev/null
+log "🧹 Cleared $BUILD_DIR"
 
 log "🧱 Building seL4 kernel..."
 bash scripts/build_sel4_kernel.sh || { echo "❌ seL4 kernel build failed" >&2; exit 1; }
