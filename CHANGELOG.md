@@ -1477,3 +1477,8 @@
 - `plan9.ns` defines default namespace binds and srv mounts.
 - `cohesix_fetch_build.sh` verifies `plan9.ns` before ISO creation.
 
+## [v0.194] - 2026-02-20
+### Changed
+- `LICENSES_AND_REUSE.md` clarifies BusyBox removal and lists **toybox** and **sbase** as BSD/MIT replacements.
+- `METADATA.md` updated to v1.2 for the licensing document.
+
