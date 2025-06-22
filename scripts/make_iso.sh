@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: scripts/make_iso.sh v0.15
+# Filename: scripts/make_iso.sh v0.16
 # Author: Lukas Bower
-# Date Modified: 2026-03-20
+# Date Modified: 2026-07-07
 #!/bin/bash
 # ISO layout:
 #   bin/               - runtime binaries
@@ -75,6 +75,7 @@ cp "$BOOTLOADER_SRC" "$ISO_DIR/boot/efi/EFI/BOOT/$EFI_NAME"
 log "✅ Bootloader installed"
 log "📦 Adding kernel..."
 cp "$KERNEL_SRC" "$ISO_DIR/kernel.elf"
+log "kernel build complete"
 [[ -f "$ISO_DIR/kernel.elf" ]] || error "missing kernel.elf in ISO"
 log "📦 Adding init..."
 cp "$INIT_SRC" "$ISO_DIR/init"
