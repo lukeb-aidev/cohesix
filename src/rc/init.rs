@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: init.rs v0.4
+// Filename: init.rs v0.5
 // Author: Lukas Bower
-// Date Modified: 2025-09-23
+// Date Modified: 2026-02-20
 
 //! Minimal Plan 9 style init parser for Cohesix.
 
@@ -13,7 +13,7 @@ use log::warn;
 
 #[cfg(not(target_os = "uefi"))]
 use serde::Deserialize;
-#[cfg(not(target_os = "uefi"))]
+#[cfg(any(feature = "secure9p", not(target_os = "uefi")))]
 use toml;
 
 #[cfg(not(target_os = "uefi"))]
@@ -88,6 +88,8 @@ pub fn run() -> io::Result<()> {
         }
     }
     ns.persist("boot")?;
+    #[cfg(feature = "secure9p")]
+    start_secure9p();
     let elapsed = start.elapsed().as_millis();
     if let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)
@@ -97,4 +99,26 @@ pub fn run() -> io::Result<()> {
         let _ = writeln!(f, "init {}ms", elapsed);
     }
     Ok(())
+}
+
+#[cfg(feature = "secure9p")]
+fn start_secure9p() {
+    use crate::secure9p::secure_9p_server::start_secure_9p_server;
+    use std::path::Path;
+    if let Ok(data) = std::fs::read_to_string("config/secure9p.toml") {
+        if let Ok(v) = data.parse::<toml::Value>() {
+            if let (Some(p), Some(c), Some(k)) = (
+                v.get("port").and_then(|v| v.as_integer()),
+                v.get("cert").and_then(|v| v.as_str()),
+                v.get("key").and_then(|v| v.as_str()),
+            ) {
+                let addr = format!("0.0.0.0:{}", p);
+                let cert = c.to_string();
+                let key = k.to_string();
+                std::thread::spawn(move || {
+                    let _ = start_secure_9p_server(&addr, Path::new(&cert), Path::new(&key));
+                });
+            }
+        }
+    }
 }
