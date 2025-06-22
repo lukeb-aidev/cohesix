@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.39
+# Filename: cohesix_fetch_build.sh v0.40
 # Author: Lukas Bower
-# Date Modified: 2026-02-19
+# Date Modified: 2026-02-21
 #!/bin/bash
 # Fetch and fully build the Cohesix project using SSH Git auth.
 
@@ -358,8 +358,18 @@ grep -Ei 'error|fail|panic|permission denied|warning' "$LOG_FILE" > "$SUMMARY_ER
 if command -v go &> /dev/null; then
   log "🐹 Building Go components..."
   mkdir -p "$STAGE_DIR/bin"
-  (cd go/cmd/coh-9p-helper && go build -o "$STAGE_DIR/bin/coh-9p-helper")
-  (cd go/cmd/gui-orchestrator && go build -o "$STAGE_DIR/bin/gui-orchestrator")
+  for dir in go/cmd/*; do
+    if [ -f "$dir/main.go" ]; then
+      name="$(basename "$dir")"
+      log "  compiling $name for $COH_ARCH"
+      if GOOS=linux GOARCH="$COH_ARCH" go build -C "$dir" -o "$STAGE_DIR/bin/$name"; then
+        log "  built $name"
+      else
+        log "  cross build failed for $name; trying native"
+        (cd "$dir" && go build -o "$STAGE_DIR/bin/$name") || log "  build failed for $name"
+      fi
+    fi
+  done
   (cd go && go test ./...)
 else
   log "⚠️ Go not found; skipping Go build"
