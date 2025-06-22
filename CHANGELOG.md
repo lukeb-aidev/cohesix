@@ -1544,3 +1544,9 @@
 ### Added
 - cohesix_fetch_build.sh v0.44 installs build dependencies and builds seL4 kernel using sel4-cmake.
 - Updated metadata entries.
+## [v0.204] - 2026-03-01
+### Changed
+- cohesix_fetch_build.sh v0.45 builds seL4 kernels for x86_64 and aarch64 using official steps and stages architecture-specific ISOs.
+- Added scripts/official_sel4_build.sh implementing the official seL4 build flow.
+- Updated metadata entries.
+
