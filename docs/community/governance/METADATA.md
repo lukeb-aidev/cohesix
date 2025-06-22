@@ -155,9 +155,6 @@
 | tests/secure9p/agent_identifier.rs | v0.2 | 2025-07-26 | COMMUNITY | | |
 | cli/cohcli.py | v1.1 | 2025-08-01 | COMMUNITY | | |
 | validator.pyi | v0.1 | 2025-12-10 | COMMUNITY | | |
-| scripts/build_sel4_kernel.sh | v0.18 | 2026-02-27 | COMMUNITY | | |
-| scripts/official_sel4_build.sh | v0.1 | 2026-03-01 | COMMUNITY | | |
-| scripts/bootstrap_sel4_tools.sh | v0.7 | 2026-02-27 | COMMUNITY | | |
 | scripts/setup_build_env.sh | v0.4 | 2026-02-27 | COMMUNITY | | |
 | scripts/check-qemu-deps.sh | v0.1 | 2025-07-28 | COMMUNITY | | |
 | scripts/collect_boot_logs.sh | v0.1 | 2025-07-12 | COMMUNITY | | |
@@ -165,11 +162,10 @@
 | scripts/manpage_scan.sh | v0.1 | 2025-06-08 | COMMUNITY | | |
 | scripts/verify-macos-setup.sh | v0.1 | 2025-06-05 | COMMUNITY | | |
 | scripts/make_iso.sh | v0.14 | 2026-01-26 | COMMUNITY | | |
-| scripts/make_grub_iso.sh | v0.11 | 2026-02-23 | COMMUNITY | | |
+| scripts/make_grub_iso.sh | v0.12 | 2026-06-20 | COMMUNITY | | |
 | scripts/debug_qemu_boot.sh | v0.2 | 2025-12-23 | COMMUNITY | | |
 | scripts/boot_qemu.sh | v0.1 | 2025-12-29 | COMMUNITY | | |
 | scripts/validate_iso_build.sh | v0.1 | 2025-12-19 | COMMUNITY | | |
-| scripts/fetch_sel4.sh | v0.3 | 2026-02-13 | COMMUNITY | | |
 | scripts/build_root_elf.sh | v0.3 | 2026-02-03 | COMMUNITY | | |
 | scripts/build_busybox.sh | v0.4 | 2026-01-26 | COMMUNITY | | |
 | tools/make_iso.sh | v0.4 | 2026-01-26 | COMMUNITY | | |
@@ -260,4 +256,3 @@
 | bin/man | v0.2 | 2025-06-22 | COMMUNITY | | |
 | bin/mandoc | v0.2 | 2025-06-22 | COMMUNITY | | |
 
-The script `scripts/bootstrap_sel4_tools.sh` installs Jinja2 and PyYAML before kernel builds and ensures the seL4 repository tracks the `seL4-12.1.0` branch.
