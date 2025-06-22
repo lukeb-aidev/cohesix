@@ -188,11 +188,19 @@ done
 SEL4_DIR="$ROOT/third_party/sel4"
 SEL4_TOOLS="$ROOT/third_party/sel4_tools"
 log "📥 Fetching seL4 kernel and tools..."
+if [ -d "$SEL4_DIR" ] && [ ! -d "$SEL4_DIR/.git" ]; then
+  log "⚠️ Removing non-git directory $SEL4_DIR"
+  rm -rf "$SEL4_DIR"
+fi
 if [ ! -d "$SEL4_DIR/.git" ]; then
   git clone --depth=1 --branch 13.0.0 https://github.com/seL4/seL4.git "$SEL4_DIR"
 else
   git -C "$SEL4_DIR" fetch origin 13.0.0 --depth=1
   git -C "$SEL4_DIR" reset --hard FETCH_HEAD
+fi
+if [ -d "$SEL4_TOOLS" ] && [ ! -d "$SEL4_TOOLS/.git" ]; then
+  log "⚠️ Removing non-git directory $SEL4_TOOLS"
+  rm -rf "$SEL4_TOOLS"
 fi
 if [ ! -d "$SEL4_TOOLS/.git" ]; then
   git clone --depth=1 --branch 13.0.0 https://github.com/seL4/sel4_tools.git "$SEL4_TOOLS"
