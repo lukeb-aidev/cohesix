@@ -1568,3 +1568,9 @@
 - Old EFI build logic removed and artifacts cleaned on fetch.
 - METADATA updated accordingly.
 
+## [v0.208] - 2026-06-22
+### Changed
+- make_iso.sh now selects the seL4 kernel from /sel4_workspace based on architecture.
+- METADATA updated for make_iso.sh v0.12.
+
+
