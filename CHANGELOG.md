@@ -1472,3 +1472,8 @@
 ### Added
 - `cloud-init.yaml` is now canonical with classification header and seL4 clone pinned to branch `2024.1`.
 
+## [v0.193] - 2026-02-19
+### Added
+- `plan9.ns` defines default namespace binds and srv mounts.
+- `cohesix_fetch_build.sh` verifies `plan9.ns` before ISO creation.
+

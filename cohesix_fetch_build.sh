@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.38
+# Filename: cohesix_fetch_build.sh v0.39
 # Author: Lukas Bower
-# Date Modified: 2026-02-04
+# Date Modified: 2026-02-19
 #!/bin/bash
 # Fetch and fully build the Cohesix project using SSH Git auth.
 
@@ -279,6 +279,10 @@ if [ ! -f "$STAGE_DIR/boot/kernel.elf" ]; then
   echo "❌ Kernel ELF missing. Expected at out/boot/kernel.elf" >&2
   exit 1
 fi
+if [ ! -f plan9.ns ]; then
+  echo "❌ plan9.ns missing in repository root" >&2
+  exit 1
+fi
 if [ ! -f config/config.yaml ]; then
   echo "⚠️ config.yaml missing. Generating fallback..."
   mkdir -p config
@@ -446,6 +450,10 @@ if [ ! -x "$STAGE_DIR/bin/init" ] && [ ! -x "$STAGE_DIR/bin/init.efi" ]; then
 fi
 if [ ! -f "$STAGE_DIR/boot/kernel.elf" ]; then
   echo "❌ Kernel ELF missing. Expected at $STAGE_DIR/boot/kernel.elf" >&2
+  exit 1
+fi
+if [ ! -f plan9.ns ]; then
+  echo "❌ plan9.ns missing in repository root" >&2
   exit 1
 fi
 if [ ! -f config/config.yaml ]; then
