@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.42
+# Filename: cohesix_fetch_build.sh v0.43
 # Author: Lukas Bower
-# Date Modified: 2026-02-24
+# Date Modified: 2026-02-25
 #!/bin/bash
 # Fetch and fully build the Cohesix project using SSH Git auth.
 
@@ -430,6 +430,11 @@ if [ ! -f out/cohesix_grub.iso ]; then
   exit 1
 fi
 log "ISO successfully built"
+du -h out/cohesix_grub.iso | tee -a "$LOG_FILE" >&3
+find "$STAGE_DIR/bin" -type f -print | tee -a "$LOG_FILE" >&3
+if [ ! -d "/srv/cuda" ] || ! command -v nvidia-smi >/dev/null 2>&1 || ! nvidia-smi >/dev/null 2>&1; then
+  echo "⚠️ CUDA hardware or /srv/cuda not detected" | tee -a "$LOG_FILE" >&3
+fi
 
 # Optional QEMU boot check
 if command -v qemu-system-x86_64 >/dev/null; then
@@ -494,6 +499,8 @@ BIN_COUNT=$(find "$STAGE_DIR/bin" -type f -perm -111 | wc -l)
 ROLE_COUNT=$(find "$STAGE_DIR/roles" -name '*.yaml' | wc -l)
 ISO_SIZE_MB=$(du -m out/cohesix_grub.iso | awk '{print $1}')
 echo "ISO BUILD OK: ${BIN_COUNT} binaries, ${ROLE_COUNT} roles, ${ISO_SIZE_MB}MB total" >&3
+du -h out/cohesix_grub.iso | tee -a "$LOG_FILE" >&3
+find "$STAGE_DIR/bin" -type f -print | tee -a "$LOG_FILE" >&3
 
 log "✅ [Build Complete] $(date)"
 
