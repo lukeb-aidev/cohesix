@@ -1468,3 +1468,7 @@
   `third_party/sel4/.git` exists.
 
 
+## [v0.192] - 2026-02-19
+### Added
+- `cloud-init.yaml` is now canonical with classification header and seL4 clone pinned to branch `2024.1`.
+
