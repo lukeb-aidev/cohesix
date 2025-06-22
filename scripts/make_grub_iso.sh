@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: make_grub_iso.sh v0.9
+# Filename: make_grub_iso.sh v0.10
 # Author: Lukas Bower
-# Date Modified: 2026-02-04
+# Date Modified: 2026-02-15
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -77,9 +77,9 @@ fi
 
 # Man pages and mandoc
 if [ -d "$ROOT/docs/man" ]; then
-    mkdir -p "$ISO_ROOT/usr/share/cohesix/man"
-    cp "$ROOT"/docs/man/*.1 "$ISO_ROOT/usr/share/cohesix/man/" 2>/dev/null || true
-    cp "$ROOT"/docs/man/*.8 "$ISO_ROOT/usr/share/cohesix/man/" 2>/dev/null || true
+    mkdir -p "$ISO_ROOT/usr/share/man"
+    cp "$ROOT"/docs/man/*.1 "$ISO_ROOT/usr/share/man/" 2>/dev/null || true
+    cp "$ROOT"/docs/man/*.8 "$ISO_ROOT/usr/share/man/" 2>/dev/null || true
 fi
 if [ -f "$ROOT/bin/mandoc" ]; then
     cp "$ROOT/bin/mandoc" "$ISO_ROOT/bin/mandoc" && chmod +x "$ISO_ROOT/bin/mandoc"
@@ -92,11 +92,24 @@ if [ -f "$ROOT/bin/man" ]; then
     cp "$ROOT/bin/man" "$ISO_ROOT/bin/man" && chmod +x "$ISO_ROOT/bin/man"
 fi
 
+# Validate man pages using mandoc
+if [ -x "$ISO_ROOT/bin/mandoc" ]; then
+    for m in "$ISO_ROOT/usr/share/man"/*.[18]; do
+        "$ISO_ROOT/bin/mandoc" -Tascii "$m" >/dev/null || {
+            echo "mandoc parse failed for $m" >&2
+            exit 1
+        }
+    done
+fi
+
 # Optional demo libraries
 mkdir -p "$ISO_ROOT/lib"
 for lib in "$ROOT"/prebuilt/lib/*.so; do
     [ -f "$lib" ] && cp "$lib" "$ISO_ROOT/lib/" || true
 done
+
+# Ensure GPU and physics directories exist
+mkdir -p "$ISO_ROOT/srv/cuda" "$ISO_ROOT/sim"
 
 # Generate grub.cfg
 cat >"$ISO_ROOT/boot/grub/grub.cfg" <<CFG

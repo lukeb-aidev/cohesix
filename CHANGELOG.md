@@ -1437,4 +1437,9 @@
   automatically without prompts.
 - Toolchain scripts are executed via `bash` to avoid sourcing issues.
 
+## [v0.188] - 2026-02-15
+### Added
+- ISO build now validates man pages with `mandoc` and installs them to `/usr/share/man`.
+- `/srv/cuda` and `/sim` directories are guaranteed in the ISO for GPU and physics support.
+
 
