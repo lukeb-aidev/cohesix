@@ -1,8 +1,8 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.93
+// Filename: CHANGELOG.md v0.94
 // Author: Lukas Bower
 
-// Date Modified: 2026-02-20
+// Date Modified: 2026-02-21
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
 • Consolidated OSS reuse files into LICENSES_AND_REUSE.md
@@ -1453,7 +1453,7 @@
 
 ## [v0.190] - 2026-02-17
 ### Changed
-- `bootstrap_sel4_tools.sh` clones seL4 and seL4_tools at branch `2024.1` when missing and installs `jinja2` and `pyyaml`.
+- `bootstrap_sel4_tools.sh` clones seL4 and seL4_tools at branch `master` and resets existing repositories to `origin/master`. It installs `jinja2` and `pyyaml`.
 
 ## [v0.191] - 2026-02-18
 ### Changed
@@ -1472,7 +1472,7 @@
 
 ## [v0.192] - 2026-02-19
 ### Added
-- `cloud-init.yaml` is now canonical with classification header and seL4 clone pinned to branch `2024.1`.
+- `cloud-init.yaml` is now canonical with classification header and seL4 clone pinned to branch `master`.
 
 ## [v0.193] - 2026-02-19
 ### Added
@@ -1499,4 +1499,8 @@
 ### Changed
 - `cohesix_fetch_build.sh` compiles all Go services for the target architecture and stages them into the ISO.
 - DroneWorker physics initialization now creates a Rapier world instead of a stub.
+
+## [v0.197] - 2026-02-21
+### Changed
+- `bootstrap_sel4_tools.sh` resets existing seL4 and seL4_tools repositories to `origin/master` and clones `master` when missing.
 

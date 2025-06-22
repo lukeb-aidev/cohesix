@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: bootstrap_sel4_tools.sh v0.5
+# Filename: bootstrap_sel4_tools.sh v0.6
 # Author: Lukas Bower
-# Date Modified: 2026-02-19
+# Date Modified: 2026-02-21
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -17,15 +17,23 @@ clone_repo(){
     local dir="$1" url="$2" branch="$3"
     if [ ! -d "$dir/.git" ]; then
         [ -d "$dir" ] && rm -rf "$dir"
-        git clone --depth=1 --branch "$branch" "$url" "$dir"
-        msg "Cloned $url"
+        git clone --depth 1 --branch "$branch" "$url" "$dir"
+        msg "Cloned $url at $branch"
     else
-        msg "Using existing $dir"
+        local current
+        current=$(git -C "$dir" rev-parse --abbrev-ref HEAD)
+        if [ "$current" != "$branch" ]; then
+            git -C "$dir" fetch origin "$branch"
+            git -C "$dir" reset --hard "origin/$branch"
+            msg "Reset $dir to origin/$branch"
+        else
+            msg "Using existing $dir on $current"
+        fi
     fi
 }
 
-clone_repo "$SEL4" https://github.com/seL4/seL4.git 2024.1
-clone_repo "$TOOLS" https://github.com/seL4/seL4_tools.git 2024.1
+clone_repo "$SEL4" https://github.com/seL4/seL4.git master
+clone_repo "$TOOLS" https://github.com/seL4/seL4_tools.git master
 
 find "$TOOLS" -type f -name '*.sh' -exec chmod +x {} +
 
