@@ -136,13 +136,13 @@
 | src/secure9p/mod.rs | v0.2 | 2025-07-25 | COMMUNITY | | |
 | src/secure9p/auth_handler.rs | v0.4 | 2025-07-31 | COMMUNITY | | |
 | src/secure9p/cap_fid.rs | v0.2 | 2025-07-25 | COMMUNITY | | |
-| src/secure9p/policy_engine.rs | v0.4 | 2025-07-31 | COMMUNITY | | |
+| src/secure9p/policy_engine.rs | v0.5 | 2026-02-20 | COMMUNITY | | |
 | src/secure9p/cap_fid.rs | v0.3 | 2025-07-26 | COMMUNITY | | |
 | src/secure9p/policy_engine.rs | v0.2 | 2025-07-25 | COMMUNITY | | |
 | src/secure9p/namespace_resolver.rs | v0.2 | 2025-07-25 | COMMUNITY | | |
 | src/secure9p/sandbox.rs | v0.4 | 2025-07-31 | COMMUNITY | | |
 | src/secure9p/validator_hook.rs | v0.2 | 2025-07-25 | COMMUNITY | | |
-| src/secure9p/secure_9p_server.rs | v0.5 | 2025-08-18 | COMMUNITY | | |
+| src/secure9p/secure_9p_server.rs | v0.6 | 2026-02-20 | COMMUNITY | | |
 | tests/secure9p/tls_handshake.rs | v0.1 | 2025-07-24 | COMMUNITY | | |
 | src/secure9p/sandbox.rs | v0.3 | 2025-07-26 | COMMUNITY | | |
 | src/secure9p/validator_hook.rs | v0.2 | 2025-07-25 | COMMUNITY | | |
@@ -179,7 +179,7 @@
 | justfile | v0.1 | 2025-07-24 | COMMUNITY | | |
 | src/roles/mod.rs | v0.1 | 2025-07-31 | COMMUNITY | | |
 | src/roles/interactive_aibooth.rs | v0.1 | 2025-07-31 | COMMUNITY | | |
-| src/rc/init.rs | v0.4 | 2025-09-23 | COMMUNITY | | |
+| src/rc/init.rs | v0.5 | 2026-02-20 | COMMUNITY | | |
 | src/lib/init.rs | v0.1 | 2025-08-17 | COMMUNITY | | |
 | src/kernel/userland_bootstrap.rs | v0.4 | 2025-09-23 | COMMUNITY | | |
 | src/kernel/user_api.rs | v0.1 | 2025-08-27 | COMMUNITY | | |
