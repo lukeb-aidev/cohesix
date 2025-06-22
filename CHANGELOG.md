@@ -1591,4 +1591,10 @@
 - full_fetch_and_build.sh and scripts/make_iso.sh emit the same marker.
 - Version bumps recorded in METADATA.
 
+## [v0.212] - 2026-07-08
+### Changed
+- `plan9.ns` updated to use `/usr/coh/bin` and cleanup srv mounts.
+- Namespace builder supports `srv -c` and tests updated.
+- METADATA entries bumped accordingly.
+
 

@@ -242,7 +242,7 @@
 | src/demos/sensor_world/main.py | v0.1 | 2026-02-11 | COMMUNITY | | |
 | src/demos/multi_duel/main.py | v0.1 | 2026-02-11 | COMMUNITY | | |
 | cloud-init.yaml | v0.1 | 2026-02-19 | COMMUNITY | | |
-| plan9.ns | v0.1 | 2026-02-19 | COMMUNITY | | |
+| plan9.ns | v0.2 | 2026-07-08 | COMMUNITY | | |
 | bin/cohcli | v0.1 | 2026-02-21 | COMMUNITY | | |
 | bin/cohrun | v0.1 | 2026-02-21 | COMMUNITY | | |
 | bin/cohbuild | v0.1 | 2026-02-21 | COMMUNITY | | |

@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: test_nsbuilder.rs v0.1
-// Date Modified: 2025-06-17
+// Filename: test_nsbuilder.rs v0.2
+// Date Modified: 2026-07-08
 // Author: Cohesix Codex
 
 use cohesix::boot::plan9_ns::{BootArgs, build_namespace};
@@ -11,8 +11,8 @@ fn namespace_includes_core_paths() {
     let ns = build_namespace(&args);
     let text = ns.to_string();
     assert!(text.contains("bind / /"));
-    assert!(text.contains("bind -a /bin /bin"));
-    assert!(text.contains("srv /srv"));
+    assert!(text.contains("bind -a /usr/coh/bin /bin"));
+    assert!(text.contains("srv -c /srv"));
 }
 
 #[test]
