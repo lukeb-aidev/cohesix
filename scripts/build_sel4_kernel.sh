@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: build_sel4_kernel.sh v0.16
+# Filename: build_sel4_kernel.sh v0.17
 # Author: Lukas Bower
-# Date Modified: 2026-02-19
+# Date Modified: 2026-02-22
 #!/bin/bash
 # Auto-detect target architecture and configure seL4 build
 set -euo pipefail
@@ -25,8 +25,10 @@ bash "$ROOT/scripts/bootstrap_sel4_tools.sh"
 
 [ -d "$SEL4_DIR" ] || die "Missing seL4 repo at $SEL4_DIR"
 
+rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
 rm -f "$BUILD_DIR/CMakeCache.txt" "$BUILD_DIR"/*toolchain*.cmake 2>/dev/null
+rm -rf "$BUILD_DIR/CMakeFiles" 2>/dev/null
 
 ARCH="${host_arch:-${COH_ARCH:-$(uname -m)}}"
 ARCH="${ARCH,,}"
