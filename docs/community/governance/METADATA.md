@@ -246,5 +246,17 @@
 | src/demos/multi_duel/main.py | v0.1 | 2026-02-11 | COMMUNITY | | |
 | cloud-init.yaml | v0.1 | 2026-02-19 | COMMUNITY | | |
 | plan9.ns | v0.1 | 2026-02-19 | COMMUNITY | | |
+| bin/cohcli | v0.1 | 2026-02-21 | COMMUNITY | | |
+| bin/cohrun | v0.1 | 2026-02-21 | COMMUNITY | | |
+| bin/cohbuild | v0.1 | 2026-02-21 | COMMUNITY | | |
+| bin/cohcc | v0.1 | 2026-02-21 | COMMUNITY | | |
+| bin/cohtrace | v0.1 | 2026-02-21 | COMMUNITY | | |
+| bin/cohcap | v0.1 | 2026-02-21 | COMMUNITY | | |
+| bin/cohup | v0.1 | 2026-02-21 | COMMUNITY | | |
+| bin/cohpkg | v0.1 | 2026-02-21 | COMMUNITY | | |
+| bin/cohshell.sh | v0.1 | 2026-02-21 | COMMUNITY | | |
+| bin/cohman.sh | v0.1 | 2026-02-21 | COMMUNITY | | |
+| bin/man | v0.2 | 2025-06-22 | COMMUNITY | | |
+| bin/mandoc | v0.2 | 2025-06-22 | COMMUNITY | | |
 
 The script `scripts/bootstrap_sel4_tools.sh` installs Jinja2 and PyYAML before kernel builds and ensures seL4 repositories track the `master` branch.
