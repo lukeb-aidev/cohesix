@@ -164,7 +164,7 @@
 | scripts/manpage_scan.sh | v0.1 | 2025-06-08 | COMMUNITY | | |
 | scripts/verify-macos-setup.sh | v0.1 | 2025-06-05 | COMMUNITY | | |
 | scripts/make_iso.sh | v0.14 | 2026-01-26 | COMMUNITY | | |
-| scripts/make_grub_iso.sh | v0.10 | 2026-02-15 | COMMUNITY | | |
+| scripts/make_grub_iso.sh | v0.11 | 2026-02-23 | COMMUNITY | | |
 | scripts/debug_qemu_boot.sh | v0.2 | 2025-12-23 | COMMUNITY | | |
 | scripts/boot_qemu.sh | v0.1 | 2025-12-29 | COMMUNITY | | |
 | scripts/validate_iso_build.sh | v0.1 | 2025-12-19 | COMMUNITY | | |

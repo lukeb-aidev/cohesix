@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: make_grub_iso.sh v0.10
+# Filename: make_grub_iso.sh v0.11
 # Author: Lukas Bower
-# Date Modified: 2026-02-15
+# Date Modified: 2026-02-23
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -110,6 +110,19 @@ done
 
 # Ensure GPU and physics directories exist
 mkdir -p "$ISO_ROOT/srv/cuda" "$ISO_ROOT/sim"
+
+# Stage optional CUDA and physics assets if available
+if [ -d "$ROOT/srv/cuda" ]; then
+    cp -r "$ROOT/srv/cuda/." "$ISO_ROOT/srv/cuda/" 2>/dev/null || true
+else
+    echo "WARNING: $ROOT/srv/cuda missing; skipping CUDA staging" >&2
+fi
+
+if [ -d "$ROOT/sim" ]; then
+    cp -r "$ROOT/sim/." "$ISO_ROOT/sim/" 2>/dev/null || true
+else
+    echo "WARNING: $ROOT/sim missing; skipping physics assets" >&2
+fi
 
 # Generate grub.cfg
 cat >"$ISO_ROOT/boot/grub/grub.cfg" <<CFG
