@@ -1,8 +1,8 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.93
+// Filename: CHANGELOG.md v0.94
 // Author: Lukas Bower
 
-// Date Modified: 2026-02-20
+// Date Modified: 2026-02-22
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
 • Consolidated OSS reuse files into LICENSES_AND_REUSE.md
@@ -1499,4 +1499,8 @@
 ### Changed
 - `cohesix_fetch_build.sh` compiles all Go services for the target architecture and stages them into the ISO.
 - DroneWorker physics initialization now creates a Rapier world instead of a stub.
+
+## [v0.197] - 2026-02-22
+### Changed
+- `build_sel4_kernel.sh` now removes the previous build directory and cleans stale `CMakeFiles` before configuration.
 
