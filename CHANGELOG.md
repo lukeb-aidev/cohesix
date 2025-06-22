@@ -1550,3 +1550,8 @@
 - Added scripts/official_sel4_build.sh implementing the official seL4 build flow.
 - Updated metadata entries.
 
+## [v0.205] - 2026-03-02
+### Fixed
+- cohesix_fetch_build.sh now clones seL4_tools using branch `13.0.x-compatible`.
+- official_sel4_build.sh accepts a branch argument and uses `13.0.x-compatible` for seL4_tools.
+
