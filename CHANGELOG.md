@@ -1492,3 +1492,11 @@
 - Basic read/write backends for the test 9P server.
 - Expanded `tests/9p_server.rs` to verify cross-role access and write restrictions.
 
+## [v0.196] - 2026-02-21
+### Added
+- ARM boot verification via `ci/qemu_boot_check.sh` now tests `qemu-system-aarch64` when available.
+- `run_cuda_demo` executes `/srv/cuda/cuda_infer` at boot if CUDA is detected.
+### Changed
+- `cohesix_fetch_build.sh` compiles all Go services for the target architecture and stages them into the ISO.
+- DroneWorker physics initialization now creates a Rapier world instead of a stub.
+
