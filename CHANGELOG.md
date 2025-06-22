@@ -1530,3 +1530,13 @@
 - Summary appended to the end of the build log.
 - Updated metadata entries.
 
+## [v0.202] - 2026-02-27
+### Fixed
+- seL4 kernel build scripts now install the missing CUDA GPG key for both x86_64
+  and aarch64.
+- `build_sel4_kernel.sh` uses `KernelSel4Arch=x86_64` for x86 builds and logs
+  "✅ Kernel built successfully" on completion.
+- `bootstrap_sel4_tools.sh` clones the seL4 repository at `seL4-12.1.0` to avoid
+  missing `config.cmake` errors.
+- Updated metadata entries for the modified scripts.
+
