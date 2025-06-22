@@ -130,7 +130,7 @@
 | docs/QUICKSTART.md | v0.1 | 2025-07-23 | COMMUNITY | | |
 | docs/community/architecture/BOOT_KERNEL_FLOW.md | v0.2 | 2026-02-05 | COMMUNITY | | |
 | docs/community/archive/EXAMPLES_README.md | v0.3 | 2026-02-05 | COMMUNITY | | |
-| cohesix_fetch_build.sh | v0.44 | 2026-02-28 | COMMUNITY | | |
+| cohesix_fetch_build.sh | v0.45 | 2026-03-01 | COMMUNITY | | |
 | CONTRIBUTING.md | v1.1 | 2025-07-23 | COMMUNITY | | |
 | config/secure9p.toml | v0.3 | 2025-07-31 | COMMUNITY | | |
 | src/secure9p/mod.rs | v0.2 | 2025-07-25 | COMMUNITY | | |
@@ -156,6 +156,7 @@
 | cli/cohcli.py | v1.1 | 2025-08-01 | COMMUNITY | | |
 | validator.pyi | v0.1 | 2025-12-10 | COMMUNITY | | |
 | scripts/build_sel4_kernel.sh | v0.18 | 2026-02-27 | COMMUNITY | | |
+| scripts/official_sel4_build.sh | v0.1 | 2026-03-01 | COMMUNITY | | |
 | scripts/bootstrap_sel4_tools.sh | v0.7 | 2026-02-27 | COMMUNITY | | |
 | scripts/setup_build_env.sh | v0.4 | 2026-02-27 | COMMUNITY | | |
 | scripts/check-qemu-deps.sh | v0.1 | 2025-07-28 | COMMUNITY | | |
