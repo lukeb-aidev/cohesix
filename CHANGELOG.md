@@ -1574,4 +1574,9 @@
 - make_iso.sh now selects the seL4 kernel from /sel4_workspace based on architecture.
 - METADATA updated for make_iso.sh v0.12.
 
+## [v0.209] - 2026-06-30
+### Changed
+- make_iso.sh v0.14 stages kernel.elf to out/bin and GRUB staging.
+- METADATA updated accordingly.
+
 
