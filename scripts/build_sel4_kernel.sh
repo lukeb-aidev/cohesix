@@ -1,13 +1,13 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: build_sel4_kernel.sh v0.13
+# Filename: build_sel4_kernel.sh v0.14
 # Author: Lukas Bower
-# Date Modified: 2026-02-14
+# Date Modified: 2026-02-15
 #!/bin/bash
 # Auto-detect target architecture and configure seL4 build
 set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-source "$ROOT/scripts/setup_build_env.sh"
+bash "$ROOT/scripts/setup_build_env.sh"
 SEL4_DIR="$ROOT/third_party/sel4"
 BUILD_DIR="$ROOT/out/sel4_build"
 OUT_ELF="$ROOT/out/sel4.elf"
@@ -23,10 +23,12 @@ die() { printf "\e[31m[ERR]\e[0m %s\n" "$*" >&2; exit 1; }
 [ -d "$SEL4_DIR" ] || die "Missing seL4 repo at $SEL4_DIR"
 
 # Install Python tooling required by seL4 build scripts
-"$ROOT/scripts/bootstrap_sel4_tools.sh"
+bash "$ROOT/scripts/bootstrap_sel4_tools.sh"
 
 rm -rf "$BUILD_DIR" && mkdir -p "$BUILD_DIR"
-ARCH="$(uname -m)"
+
+ARCH="${host_arch:-${COH_ARCH:-$(uname -m)}}"
+ARCH="${ARCH,,}"
 case "$ARCH" in
     aarch64|arm64)
         CROSS_COMPILER_PREFIX=aarch64-linux-gnu-
@@ -35,7 +37,7 @@ case "$ARCH" in
         KernelSel4Arch=aarch64
         KernelWordSize=64
         ;;
-    x86_64|amd64)
+    x86_64|amd64|x86)
         CROSS_COMPILER_PREFIX=""
         PLATFORM=pc99
         KernelArch=x86
@@ -46,6 +48,13 @@ case "$ARCH" in
         die "Unsupported architecture: $ARCH"
         ;;
 esac
+
+if [ -n "$CROSS_COMPILER_PREFIX" ]; then
+    command -v "${CROSS_COMPILER_PREFIX}gcc" >/dev/null \
+        || die "Cross compiler ${CROSS_COMPILER_PREFIX}gcc not found"
+fi
+
+msg "Using toolchain prefix: ${CROSS_COMPILER_PREFIX:-native}"
 
 msg "Building seL4 for $ARCH"
 pushd "$BUILD_DIR" >/dev/null
