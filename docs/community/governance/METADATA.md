@@ -157,7 +157,7 @@
 | validator.pyi | v0.1 | 2025-12-10 | COMMUNITY | | |
 | scripts/build_sel4_kernel.sh | v0.12 | 2026-02-12 | COMMUNITY | | |
 | scripts/bootstrap_sel4_tools.sh | v0.3 | 2026-02-12 | COMMUNITY | | |
-| scripts/setup_build_env.sh | v0.1 | 2026-02-12 | COMMUNITY | | |
+| scripts/setup_build_env.sh | v0.2 | 2026-02-13 | COMMUNITY | | |
 | scripts/check-qemu-deps.sh | v0.1 | 2025-07-28 | COMMUNITY | | |
 | scripts/collect_boot_logs.sh | v0.1 | 2025-07-12 | COMMUNITY | | |
 | scripts/generate_busybox_man.sh | v0.1 | 2025-06-08 | COMMUNITY | | |
@@ -168,7 +168,7 @@
 | scripts/debug_qemu_boot.sh | v0.2 | 2025-12-23 | COMMUNITY | | |
 | scripts/boot_qemu.sh | v0.1 | 2025-12-29 | COMMUNITY | | |
 | scripts/validate_iso_build.sh | v0.1 | 2025-12-19 | COMMUNITY | | |
-| scripts/fetch_sel4.sh | v0.2 | 2026-01-08 | COMMUNITY | | |
+| scripts/fetch_sel4.sh | v0.3 | 2026-02-13 | COMMUNITY | | |
 | scripts/build_root_elf.sh | v0.3 | 2026-02-03 | COMMUNITY | | |
 | scripts/build_busybox.sh | v0.4 | 2026-01-26 | COMMUNITY | | |
 | tools/make_iso.sh | v0.4 | 2026-01-26 | COMMUNITY | | |
