@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: policy_engine.rs v0.4
+// Filename: policy_engine.rs v0.5
 // Author: Lukas Bower
-// Date Modified: 2025-07-31
+// Date Modified: 2026-02-20
 
 //! Policy evaluation for Secure9P operations.
 
@@ -65,6 +65,16 @@ impl PolicyEngine {
             rules.insert(p.agent, parsed);
         }
         Ok(Self { rules })
+    }
+
+    /// Verify that all policy entries reference valid roles.
+    pub fn validate_roles(&self) -> Result<()> {
+        for key in self.rules.keys() {
+            if !crate::cohesix_types::RoleManifest::is_valid_role(key) {
+                return Err(anyhow::anyhow!(format!("unknown role {key}")));
+            }
+        }
+        Ok(())
     }
 
     pub fn allows(&self, agent: &str, verb: &str, path: &str) -> bool {
