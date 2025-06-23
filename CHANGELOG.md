@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.96
+// Filename: CHANGELOG.md v0.97
 // Author: Lukas Bower
-// Date Modified: 2026-07-11
+// Date Modified: 2026-07-12
 
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
@@ -1613,3 +1613,10 @@
 - `cohesix_fetch_build.sh` installs `aarch64-unknown-linux-musl` target when building on AArch64.
 - `make_iso.sh` checks kernel paths relative to `$SEL4_WORKSPACE` and verifies staging.
 - METADATA versions updated accordingly.
+
+## [v0.216] - 2026-07-12
+### Added
+- `tests/requirements.txt` provides Python test dependencies.
+- `cohesix_fetch_build.sh` installs test requirements and logs pass/fail for Go and Python tests.
+### Changed
+- Version bumps for `cohesix_fetch_build.sh` and metadata entries.
