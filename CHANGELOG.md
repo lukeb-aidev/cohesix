@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.97
+// Filename: CHANGELOG.md v0.98
 // Author: Lukas Bower
-// Date Modified: 2026-07-12
+// Date Modified: 2026-07-22
 
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
@@ -1639,3 +1639,7 @@
 ### Fixed
 - Automatic musl toolchain installation on AArch64 in `cohesix_fetch_build.sh` and `build_root_elf.sh`.
 - Kernel path check in `make_iso.sh` now respects `$SEL4_WORKSPACE` and logs workspace contents on failure.
+
+## [v0.220] - 2026-07-22
+### Changed
+- Improve build robustness when CUDA is missing; fallback path added for cust-related crates.
