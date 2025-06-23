@@ -1658,3 +1658,8 @@
 - CUDA environment variables exported during root ELF build with verification logs.
 ### Changed
 - Improved build logs to show selected target and CUDA paths.
+
+## [v0.223] - 2026-07-22
+### Added
+- AARCH64 fallback for cust/CUDA when CUDA is not detected.
+- PIC enforcement for init-efi UEFI linker to resolve relocation errors.

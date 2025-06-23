@@ -1,5 +1,5 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Makefile v0.26
+# Filename: Makefile v0.27
 # Date Modified: 2026-07-22
 # Author: Lukas Bower
 #
@@ -50,7 +50,7 @@ endif
 
 ifeq ($(TOOLCHAIN),clang)
 LD ?= ld.lld
-CFLAGS_EFI := $(EFI_INCLUDES) -ffreestanding -fshort-wchar -mno-red-zone \
+CFLAGS_EFI := $(EFI_INCLUDES) -ffreestanding -fPIC -fshort-wchar -mno-red-zone \
        -DEFI_FUNCTION_WRAPPER -DGNU_EFI -fno-stack-protector -fno-pie \
        -target x86_64-pc-win32-coff -fuse-ld=lld
 EFI_SUBSYSTEM_FLAG := --subsystem=efi_application
@@ -59,7 +59,8 @@ EFI_SUBSYSTEM_FLAG :=
 $(warning Skipping --subsystem=efi_application on non-Windows linker)
 endif
 LDFLAGS_EFI := -shared -Bsymbolic -nostdlib -znocombreloc -L/usr/lib \
-       -lgnuefi -lefi $(EFI_SUBSYSTEM_FLAG) --entry=efi_main
+       -lgnuefi -lefi $(EFI_SUBSYSTEM_FLAG) --entry=efi_main \
+       -Wl,--no-dynamic-linker -Wl,-z,notext
 else
 LD ?= ld.bfd
 CFLAGS_EFI := $(EFI_INCLUDES) -ffreestanding -fPIC -fshort-wchar -mno-red-zone \
@@ -71,7 +72,8 @@ EFI_SUBSYSTEM_FLAG :=
 $(warning Skipping --subsystem=efi_application on non-Windows linker)
 endif
 LDFLAGS_EFI := -shared -Bsymbolic -nostdlib -znocombreloc -L/usr/lib -lgnuefi -lefi \
-       $(EFI_SUBSYSTEM_FLAG) --entry=efi_main
+       $(EFI_SUBSYSTEM_FLAG) --entry=efi_main \
+       -Wl,--no-dynamic-linker -Wl,-z,notext
 endif
 
 LD_FLAGS := $(LDFLAGS_EFI)
@@ -200,8 +202,9 @@ init-efi: check-efi ## Build init EFI binary
 	@echo "🏁 Building init EFI using $(TOOLCHAIN)"
 	@mkdir -p out/bin
 	$(CC) $(CFLAGS_EFI) -c src/init_efi/main.c -o out/init_efi.o
+	@echo "Linking for UEFI on $(shell uname -m)"
 	$(LD) /usr/lib/crt0-efi-x86_64.o out/init_efi.o \
-	-o out/init_efi.so $(LD_FLAGS)
+	    -o out/init_efi.so $(LD_FLAGS)
 	objcopy --target=efi-app-x86_64 out/init_efi.so out/bin/init.efi
 
 boot: ## Build boot image for current PLATFORM
