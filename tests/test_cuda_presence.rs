@@ -1,8 +1,10 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: test_cuda_presence.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-12-10
+// Date Modified: 2026-07-23
+#![cfg(feature = "cuda")]
 
+#[cfg(feature = "cuda")]
 use cohesix::cuda::runtime::{CudaExecutor, CudaRuntime};
 use cohesix::validator::{self, RuleViolation};
 use tempfile::tempdir;

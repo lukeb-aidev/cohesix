@@ -1,8 +1,10 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: test_ffi_validator.rs v0.1
-// Date Modified: 2025-07-13
+// Date Modified: 2026-07-23
+#![cfg(feature = "cuda")]
 // Author: Cohesix Codex
 
+#[cfg(feature = "cuda")]
 use cohesix::cuda::runtime::CudaRuntime;
 
 #[test]

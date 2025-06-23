@@ -1,8 +1,10 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: cuda_test.rs v0.1
-// Date Modified: 2025-07-22
+// Date Modified: 2026-07-23
+#![cfg(feature = "cuda")]
 // Author: Cohesix Codex
 
+#[cfg(feature = "cuda")]
 use cohesix::cuda::runtime::CudaRuntime;
 use cohesix::validator::{self, RuleViolation};
 use tempfile::tempdir;

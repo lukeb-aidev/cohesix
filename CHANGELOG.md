@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v0.99
 // Author: Lukas Bower
-// Date Modified: 2026-07-22
+// Date Modified: 2026-07-23
 
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
@@ -1663,3 +1663,12 @@
 ### Added
 - AARCH64 fallback for cust/CUDA when CUDA is not detected.
 - PIC enforcement for init-efi UEFI linker to resolve relocation errors.
+
+## [v0.224] - 2026-07-23
+### Added
+- Architecture-based Rust target detection across build scripts
+- CUDA fallback support when nvcc is missing
+### Fixed
+- Kernel ELF path logic and staging via SEL4_WORKSPACE
+### Changed
+- ISO build logs include target and kernel path validation

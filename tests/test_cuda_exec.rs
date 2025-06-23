@@ -1,8 +1,10 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: test_cuda_exec.rs v0.5
-// Date Modified: 2025-12-10
+// Date Modified: 2026-07-23
+#![cfg(feature = "cuda")]
 // Author: Cohesix Codex
 
+#[cfg(feature = "cuda")]
 use cohesix::cuda::runtime::{CudaExecutor, CudaRuntime};
 use std::fs::OpenOptions;
 use tempfile::tempdir;
