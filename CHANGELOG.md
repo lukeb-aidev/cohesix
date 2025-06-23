@@ -1627,3 +1627,10 @@
 - `mypy` now runs with `--check-untyped-defs` via build scripts and Makefile.
 ### Changed
 - Updated versions in `cohesix_fetch_build.sh`, `Makefile`, and scanner script.
+
+## [v0.218] - 2026-07-14
+### Fixed
+- Cohesix build script architecture detection unified via `detect_arch`.
+- ISO creation and QEMU boot now support aarch64.
+### Changed
+- Updated to v0.53 with build validations and directory staging.
