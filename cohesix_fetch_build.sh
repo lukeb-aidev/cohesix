@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.49
+# Filename: cohesix_fetch_build.sh v0.50
 # Author: Lukas Bower
-# Date Modified: 2026-07-07
+# Date Modified: 2026-07-11
 #!/bin/bash
 # Fetch and fully build the Cohesix project using SSH Git auth.
 
@@ -31,6 +31,12 @@ case "$HOST_ARCH" in
     echo "Unsupported host architecture: $HOST_ARCH" >&2; exit 1;;
 esac
 log "Detected host architecture: $ARCH"
+if [ "$ARCH" = "aarch64" ] && command -v rustup >/dev/null 2>&1; then
+  if ! rustup target list --installed | grep -q '^aarch64-unknown-linux-musl$'; then
+    rustup target add aarch64-unknown-linux-musl
+    log "✅ Rust target aarch64-unknown-linux-musl installed"
+  fi
+fi
 if [ "$ARCH" != "x86_64" ]; then
   CROSS_X86="x86_64-linux-gnu-"
 else

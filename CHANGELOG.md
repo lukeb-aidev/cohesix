@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.95
+// Filename: CHANGELOG.md v0.96
 // Author: Lukas Bower
-// Date Modified: 2026-07-10
+// Date Modified: 2026-07-11
 
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
@@ -1608,3 +1608,8 @@
 - METADATA version bumped accordingly.
 
 
+## [v0.215] - 2026-07-11
+### Fixed
+- `cohesix_fetch_build.sh` installs `aarch64-unknown-linux-musl` target when building on AArch64.
+- `make_iso.sh` checks kernel paths relative to `$SEL4_WORKSPACE` and verifies staging.
+- METADATA versions updated accordingly.
