@@ -1,5 +1,5 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.58
+# Filename: cohesix_fetch_build.sh v0.59
 # Author: Lukas Bower
 # Date Modified: 2026-07-24
 #!/bin/bash
@@ -49,12 +49,24 @@ if [ -z "${COHESIX_ARCH:-}" ]; then
         COHESIX_ARCH="$a"
         break
         ;;
-      *)
-        echo "Invalid choice" >&2
-        ;;
+      *) echo "Invalid choice" >&2;;
     esac
   done
-  echo "COHESIX_ARCH=$COHESIX_ARCH" > "$ENV_FILE"
+  if [ -z "${COHESIX_ARCH:-}" ]; then
+    echo "❌ Architecture not set" >&2
+    exit 1
+  fi
+  cat > "$ENV_FILE" <<EOF
+# CLASSIFICATION: COMMUNITY
+# Filename: .cohesix_env v0.2
+# Author: Lukas Bower
+# Date Modified: 2026-07-24
+# Cohesix build environment configuration
+COHESIX_ARCH=$COHESIX_ARCH
+EOF
+  echo "✅ Architecture '$COHESIX_ARCH' saved to $ENV_FILE" >&2
+else
+  echo "Using architecture from $ENV_FILE: $COHESIX_ARCH" >&2
 fi
 case "$COHESIX_ARCH" in
   x86_64) COHESIX_TARGET="x86_64-unknown-linux-gnu" ;;

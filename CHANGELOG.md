@@ -1681,3 +1681,9 @@
 - `cust_raw` builds when CUDA is missing using `--no-cuda` features.
 - Python wheel installs respect native architecture via arch-specific venvs.
 - Kernel path detection reliably falls back to `$SEL4_WORKSPACE`.
+
+## [v0.226] - 2026-07-24
+### Changed
+- Architecture selection now persistent and sourced from `.cohesix_env`.
+- CUDA fallback patched on aarch64 using CUDA_HOME and LD_LIBRARY_PATH overrides.
+- Fixed linker option conflict on x86_64 when building EFI init.
