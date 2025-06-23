@@ -1,19 +1,19 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: make_iso.sh v0.16
+# Filename: make_iso.sh v0.17
 # Author: Lukas Bower
-# Date Modified: 2025-06-23
+# Date Modified: 2026-07-22
 #!/bin/bash
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$SCRIPT_DIR"
-SEL4_WORKSPACE="${SEL4_WORKSPACE:-$HOME/sel4_workspace}"
-echo "Debug: SEL4_WORKSPACE=$SEL4_WORKSPACE"
+SEL4_WORKSPACE="${SEL4_WORKSPACE:-/home/ubuntu/sel4_workspace}"
+echo "Using kernel from: $SEL4_WORKSPACE"
 
 ARCH="$(uname -m)"
 echo "Detected build arch: $ARCH"
-if [[ ! -f "${SEL4_WORKSPACE}/build_pc99/kernel/kernel.elf" && ! -f "${SEL4_WORKSPACE}/build_qemu_arm/kernel/kernel.elf" ]]; then
-    echo "ERROR: Missing $SEL4_WORKSPACE. Run the official seL4 setup and build for x86_64 or aarch64 before continuing."
+if [[ ! -f "$SEL4_WORKSPACE/build_pc99/kernel/kernel.elf" && ! -f "$SEL4_WORKSPACE/build_qemu_arm/kernel/kernel.elf" ]]; then
+    echo "Kernel ELF not found at $SEL4_WORKSPACE/build_pc99/kernel/kernel.elf (or $SEL4_WORKSPACE/build_qemu_arm/kernel/kernel.elf). Did you run init-build.sh and ninja?"
     ls -l "$SEL4_WORKSPACE"/build_* || true
     exit 1
 fi
