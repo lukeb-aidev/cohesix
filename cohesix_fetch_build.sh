@@ -1,11 +1,11 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.57
+# Filename: cohesix_fetch_build.sh v0.58
 # Author: Lukas Bower
-# Date Modified: 2026-07-23
+# Date Modified: 2026-07-24
 #!/bin/bash
 
-ARCH="$(uname -m)"
-if [[ "$ARCH" = "aarch64" ]] && ! command -v aarch64-linux-musl-gcc >/dev/null 2>&1; then
+HOST_ARCH="$(uname -m)"
+if [[ "$HOST_ARCH" = "aarch64" ]] && ! command -v aarch64-linux-musl-gcc >/dev/null 2>&1; then
   if command -v sudo >/dev/null 2>&1; then
     SUDO=sudo
   else
@@ -39,27 +39,31 @@ log(){ echo "[$(date +%H:%M:%S)] $1" | tee -a "$LOG_FILE" >&3; }
 
 log "🛠️ [Build Start] $(date)"
 
-detect_arch() {
-  local m=$(uname -m)
-  case "$m" in
-    x86_64|amd64)
-      COH_ARCH="x86_64"
-      COHESIX_TARGET="x86_64-unknown-linux-gnu"
-      ;;
-    aarch64|arm64)
-      COH_ARCH="aarch64"
-      COHESIX_TARGET="aarch64-unknown-linux-gnu"
-      ;;
-    *)
-      echo "Unsupported architecture: $m" >&2
-      exit 1
-      ;;
-  esac
-  export COH_ARCH COHESIX_TARGET
-}
-
-detect_arch
-log "Detected architecture: $COH_ARCH"
+ENV_FILE="$(git rev-parse --show-toplevel 2>/dev/null || pwd)/.cohesix_env"
+[ -f "$ENV_FILE" ] && source "$ENV_FILE"
+if [ -z "${COHESIX_ARCH:-}" ]; then
+  echo "Select target architecture:" >&2
+  select a in x86_64 aarch64; do
+    case "$a" in
+      x86_64|aarch64)
+        COHESIX_ARCH="$a"
+        break
+        ;;
+      *)
+        echo "Invalid choice" >&2
+        ;;
+    esac
+  done
+  echo "COHESIX_ARCH=$COHESIX_ARCH" > "$ENV_FILE"
+fi
+case "$COHESIX_ARCH" in
+  x86_64) COHESIX_TARGET="x86_64-unknown-linux-gnu" ;;
+  aarch64) COHESIX_TARGET="aarch64-unknown-linux-gnu" ;;
+  *) echo "Unsupported architecture: $COHESIX_ARCH" >&2; exit 1 ;;
+esac
+COH_ARCH="$COHESIX_ARCH"
+export COHESIX_ARCH COHESIX_TARGET COH_ARCH
+log "Architecture: $COHESIX_ARCH (target $COHESIX_TARGET)"
 if [ "$COH_ARCH" = "aarch64" ] && command -v rustup >/dev/null 2>&1; then
   if ! rustup target list --installed | grep -q '^aarch64-unknown-linux-musl$'; then
     rustup target add aarch64-unknown-linux-musl
@@ -150,8 +154,9 @@ git submodule update --init --recursive
 
 log "🐍 Setting up Python environment..."
 command -v python3 >/dev/null || { echo "❌ python3 not found" >&2; exit 1; }
-python3 -m venv .venv
-source .venv/bin/activate
+VENV_DIR=".venv_${COHESIX_ARCH}"
+python3 -m venv "$VENV_DIR"
+source "$VENV_DIR/bin/activate"
 # Ensure \$HOME/.local/bin is included for user installs
 export PATH="$HOME/.local/bin:$PATH"
 # Upgrade pip and base tooling; fall back to ensurepip if needed
@@ -257,9 +262,10 @@ case "$COH_ARCH" in
   aarch64) KERNEL_SRC="$SEL4_WORKSPACE/build_qemu_arm/kernel/kernel.elf" ;;
   *) echo "Unknown arch $COH_ARCH" >&2; exit 1 ;;
 esac
-echo "ℹ️ Kernel source: $KERNEL_SRC"
+log "Checking kernel path: $KERNEL_SRC"
 if [ ! -f "$KERNEL_SRC" ]; then
   echo "❌ Kernel ELF not found at $KERNEL_SRC. Did you run init-build.sh + ninja?" >&2
+  ls -l "$SEL4_WORKSPACE"/build_* 2>/dev/null || true
   exit 1
 fi
 SEL4_BUILD_DIR="${SEL4_BUILD_DIR:-"$(find "$SEL4_WORKSPACE" -maxdepth 1 -type d -name 'build_*' | head -n1)"}"
@@ -496,7 +502,7 @@ log "📀 Creating ISO..."
 #   out/iso/home/cohesix   - Python libraries
 #   out/iso/etc            - configuration files
 #   out/iso/roles          - role definitions
-if [ "${VIRTUAL_ENV:-}" != "$(pwd)/.venv" ]; then
+if [ "${VIRTUAL_ENV:-}" != "$(pwd)/${VENV_DIR}" ]; then
   echo "❌ Python venv not active before ISO build" >&2
   exit 1
 fi
