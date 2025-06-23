@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.60
+# Filename: cohesix_fetch_build.sh v0.61
 # Author: Lukas Bower
-# Date Modified: 2026-07-25
+# Date Modified: 2026-07-26
 #!/bin/bash
 
 HOST_ARCH="$(uname -m)"
@@ -379,11 +379,11 @@ if command -v go &> /dev/null; then
     if [ -f "$dir/main.go" ]; then
       name="$(basename "$dir")"
       log "  compiling $name for $COH_ARCH"
-      if GOOS=linux GOARCH="$COH_ARCH" go build -C "$dir" -o "$STAGE_DIR/bin/$name"; then
+      if GOOS=linux GOARCH="$COH_ARCH" go build -tags unix -C "$dir" -o "$STAGE_DIR/bin/$name"; then
         log "  built $name"
       else
         log "  cross build failed for $name; trying native"
-        (cd "$dir" && go build -o "$STAGE_DIR/bin/$name") || log "  build failed for $name"
+        (cd "$dir" && go build -tags unix -o "$STAGE_DIR/bin/$name") || log "  build failed for $name"
       fi
     fi
   done
