@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.98
+// Filename: CHANGELOG.md v0.99
 // Author: Lukas Bower
 // Date Modified: 2026-07-22
 
@@ -1649,3 +1649,12 @@
 - Kernel ELF path detection now uses the SEL4_WORKSPACE variable for both x86_64 and aarch64 builds.
 ### Changed
 - Build scripts emit clearer diagnostics when kernel.elf is missing during ISO creation.
+
+## [v0.222] - 2026-07-22
+### Fixed
+- Corrected Rust target detection for aarch64 builds.
+- Init EFI build skips `--subsystem=efi_application` when linker lacks Windows support.
+### Added
+- CUDA environment variables exported during root ELF build with verification logs.
+### Changed
+- Improved build logs to show selected target and CUDA paths.
