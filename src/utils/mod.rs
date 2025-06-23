@@ -15,6 +15,7 @@ pub mod format;
 /// Miscellaneous helper utilities.
 pub mod helpers;
 /// GPU runtime helpers.
+#[cfg(feature = "cuda")]
 pub mod gpu;
 
 /// Initializes any global utilities that require boot-time setup.

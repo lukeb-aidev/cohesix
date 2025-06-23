@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: lib.rs v1.7
-// Date Modified: 2025-09-23
+// Filename: lib.rs v1.8
+// Date Modified: 2026-07-23
 // Author: Lukas Bower
 #![cfg(not(target_os = "uefi"))]
 
@@ -76,6 +76,7 @@ pub mod sandbox;
 pub mod kernel;
 
 /// CUDA runtime helpers
+#[cfg(feature = "cuda")]
 pub mod cuda;
 /// Secure launch module helpers
 pub mod slm;

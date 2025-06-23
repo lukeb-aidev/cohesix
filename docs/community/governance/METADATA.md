@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: METADATA.md v3.38
 // Author: Lukas Bower
-// Date Modified: 2026-07-10
+// Date Modified: 2026-07-23
 
 ## Canonical Documents
 
@@ -130,7 +130,7 @@
 | docs/QUICKSTART.md | v0.1 | 2025-07-23 | COMMUNITY | | |
 | docs/community/architecture/BOOT_KERNEL_FLOW.md | v0.2 | 2026-02-05 | COMMUNITY | | |
 | docs/community/archive/EXAMPLES_README.md | v0.3 | 2026-02-05 | COMMUNITY | | |
-| cohesix_fetch_build.sh | v0.56 | 2026-07-22 | COMMUNITY | | |
+| cohesix_fetch_build.sh | v0.57 | 2026-07-23 | COMMUNITY | | |
 | CONTRIBUTING.md | v1.1 | 2025-07-23 | COMMUNITY | | |
 | config/secure9p.toml | v0.3 | 2025-07-31 | COMMUNITY | | |
 | src/secure9p/mod.rs | v0.2 | 2025-07-25 | COMMUNITY | | |
@@ -165,7 +165,7 @@
 | scripts/debug_qemu_boot.sh | v0.2 | 2025-12-23 | COMMUNITY | | |
 | scripts/boot_qemu.sh | v0.1 | 2025-12-29 | COMMUNITY | | |
 | scripts/validate_iso_build.sh | v0.1 | 2025-12-19 | COMMUNITY | | |
-| scripts/build_root_elf.sh | v0.7 | 2026-07-22 | COMMUNITY | | |
+| scripts/build_root_elf.sh | v0.8 | 2026-07-23 | COMMUNITY | | |
 | scripts/build_busybox.sh | v0.4 | 2026-01-26 | COMMUNITY | | |
 | tools/make_iso.sh | v0.4 | 2026-01-26 | COMMUNITY | | |
 | metadata.json | v0.1 | 2025-07-24 | COMMUNITY | | |
@@ -187,7 +187,7 @@
 | etc/init.conf | v0.1 | 2025-08-27 | COMMUNITY | | |
 | etc/init.cfg | v0.1 | 2025-08-30 | COMMUNITY | | |
 | etc/init.conf.example | v0.1 | 2026-07-09 | COMMUNITY | | |
-| make_iso.sh | v0.17 | 2026-07-22 | COMMUNITY | | |
+| make_iso.sh | v0.18 | 2026-07-23 | COMMUNITY | | |
 | configs/roles/QueenPrimary.yaml | v0.1 | 2025-08-30 | COMMUNITY | | |
 | configs/roles/WorkerDrone.yaml | v0.1 | 2025-08-30 | COMMUNITY | | |
 | configs/roles/DroneWorker.yaml | v0.1 | 2025-08-30 | COMMUNITY | | |
