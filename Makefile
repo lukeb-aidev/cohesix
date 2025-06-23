@@ -1,6 +1,6 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Makefile v0.25
-# Date Modified: 2026-07-13
+# Filename: Makefile v0.26
+# Date Modified: 2026-07-22
 # Author: Lukas Bower
 #
 # ─────────────────────────────────────────────────────────────
@@ -53,15 +53,25 @@ LD ?= ld.lld
 CFLAGS_EFI := $(EFI_INCLUDES) -ffreestanding -fshort-wchar -mno-red-zone \
        -DEFI_FUNCTION_WRAPPER -DGNU_EFI -fno-stack-protector -fno-pie \
        -target x86_64-pc-win32-coff -fuse-ld=lld
+EFI_SUBSYSTEM_FLAG := --subsystem=efi_application
+ifeq ($(shell $(LD) -v 2>&1 | grep -E -c "(lld|mingw)"),0)
+EFI_SUBSYSTEM_FLAG :=
+$(warning Skipping --subsystem=efi_application on non-Windows linker)
+endif
 LDFLAGS_EFI := -shared -Bsymbolic -nostdlib -znocombreloc -L/usr/lib \
-       -lgnuefi -lefi --subsystem=efi_application --entry=efi_main
+       -lgnuefi -lefi $(EFI_SUBSYSTEM_FLAG) --entry=efi_main
 else
 LD ?= ld.bfd
 CFLAGS_EFI := $(EFI_INCLUDES) -ffreestanding -fPIC -fshort-wchar -mno-red-zone \
        -DEFI_FUNCTION_WRAPPER -DGNU_EFI -fno-stack-protector -fno-strict-aliasing \
        -D__NO_INLINE__
+EFI_SUBSYSTEM_FLAG := --subsystem=efi_application
+ifeq ($(shell $(LD) -v 2>&1 | grep -E -c "(lld|mingw)"),0)
+EFI_SUBSYSTEM_FLAG :=
+$(warning Skipping --subsystem=efi_application on non-Windows linker)
+endif
 LDFLAGS_EFI := -shared -Bsymbolic -nostdlib -znocombreloc -L/usr/lib -lgnuefi -lefi \
-       --subsystem=efi_application --entry=efi_main
+       $(EFI_SUBSYSTEM_FLAG) --entry=efi_main
 endif
 
 LD_FLAGS := $(LDFLAGS_EFI)

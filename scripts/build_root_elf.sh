@@ -1,5 +1,5 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: build_root_elf.sh v0.5
+# Filename: build_root_elf.sh v0.6
 # Author: Lukas Bower
 # Date Modified: 2026-07-22
 #!/usr/bin/env bash
@@ -44,6 +44,14 @@ case "$ARCH" in
         exit 1
         ;;
 esac
+
+CUDA_LIB="/usr/lib/${ARCH}-linux-gnu"
+export CUDA_HOME=/usr
+export PATH=/usr/bin:$PATH
+export LD_LIBRARY_PATH="${CUDA_LIB}:${LD_LIBRARY_PATH:-}"
+echo "CUDA_HOME=$CUDA_HOME"
+echo "nvcc path: $(command -v nvcc || echo 'nvcc not found')"
+ls -l "$CUDA_LIB" | grep cuda || true
 
 mkdir -p "$OUT_DIR"
 
