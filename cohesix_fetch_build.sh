@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.59
+# Filename: cohesix_fetch_build.sh v0.60
 # Author: Lukas Bower
-# Date Modified: 2026-07-24
+# Date Modified: 2026-07-25
 #!/bin/bash
 
 HOST_ARCH="$(uname -m)"
@@ -39,35 +39,9 @@ log(){ echo "[$(date +%H:%M:%S)] $1" | tee -a "$LOG_FILE" >&3; }
 
 log "🛠️ [Build Start] $(date)"
 
-ENV_FILE="$(git rev-parse --show-toplevel 2>/dev/null || pwd)/.cohesix_env"
-[ -f "$ENV_FILE" ] && source "$ENV_FILE"
-if [ -z "${COHESIX_ARCH:-}" ]; then
-  echo "Select target architecture:" >&2
-  select a in x86_64 aarch64; do
-    case "$a" in
-      x86_64|aarch64)
-        COHESIX_ARCH="$a"
-        break
-        ;;
-      *) echo "Invalid choice" >&2;;
-    esac
-  done
-  if [ -z "${COHESIX_ARCH:-}" ]; then
-    echo "❌ Architecture not set" >&2
-    exit 1
-  fi
-  cat > "$ENV_FILE" <<EOF
-# CLASSIFICATION: COMMUNITY
-# Filename: .cohesix_env v0.2
-# Author: Lukas Bower
-# Date Modified: 2026-07-24
-# Cohesix build environment configuration
-COHESIX_ARCH=$COHESIX_ARCH
-EOF
-  echo "✅ Architecture '$COHESIX_ARCH' saved to $ENV_FILE" >&2
-else
-  echo "Using architecture from $ENV_FILE: $COHESIX_ARCH" >&2
-fi
+ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+source "$ROOT/scripts/load_arch_config.sh"
+COH_ARCH="$COHESIX_ARCH"
 case "$COHESIX_ARCH" in
   x86_64) COHESIX_TARGET="x86_64-unknown-linux-gnu" ;;
   aarch64) COHESIX_TARGET="aarch64-unknown-linux-gnu" ;;
@@ -76,6 +50,28 @@ esac
 COH_ARCH="$COHESIX_ARCH"
 export COHESIX_ARCH COHESIX_TARGET COH_ARCH
 log "Architecture: $COHESIX_ARCH (target $COHESIX_TARGET)"
+CUDA_HOME=""
+if command -v nvcc >/dev/null 2>&1; then
+  NVCC_PATH="$(command -v nvcc)"
+  CUDA_HOME="$(dirname "$(dirname "$NVCC_PATH")")"
+elif [ -d /usr/local/cuda ]; then
+  CUDA_HOME="/usr/local/cuda"
+else
+  CUDA_HOME="$(ls -d /usr/local/cuda-* 2>/dev/null | head -n1)"
+fi
+if [ -n "$CUDA_HOME" ] && [ -f "$CUDA_HOME/bin/nvcc" ]; then
+  export CUDA_HOME
+  export PATH="$CUDA_HOME/bin:$PATH"
+  if [ -d "$CUDA_HOME/lib64" ]; then
+    export LD_LIBRARY_PATH="$CUDA_HOME/lib64:${LD_LIBRARY_PATH:-}"
+  elif [ -d "$CUDA_HOME/lib" ]; then
+    export LD_LIBRARY_PATH="$CUDA_HOME/lib:${LD_LIBRARY_PATH:-}"
+  fi
+  export CUDA_LIBRARY_PATH="$LD_LIBRARY_PATH"
+  log "CUDA detected at $CUDA_HOME"
+else
+  log "⚠️ CUDA toolkit not detected."
+fi
 if [ "$COH_ARCH" = "aarch64" ] && command -v rustup >/dev/null 2>&1; then
   if ! rustup target list --installed | grep -q '^aarch64-unknown-linux-musl$'; then
     rustup target add aarch64-unknown-linux-musl

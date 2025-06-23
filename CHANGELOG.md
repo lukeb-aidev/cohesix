@@ -1687,3 +1687,11 @@
 - Architecture selection now persistent and sourced from `.cohesix_env`.
 - CUDA fallback patched on aarch64 using CUDA_HOME and LD_LIBRARY_PATH overrides.
 - Fixed linker option conflict on x86_64 when building EFI init.
+
+## [v0.227] - 2026-07-25
+### Added
+- `scripts/load_arch_config.sh` centralizes architecture selection and writes to `~/.cohesix_config`.
+### Changed
+- `setup_build_env.sh`, `build_root_elf.sh`, `cohesix_fetch_build.sh`, and `make_iso.sh` source the persistent config without prompting.
+- `init-efi` link step now uses `-T linker.ld` for x86_64.
+- CUDA builds export `CUDA_LIBRARY_PATH` so `cust_raw` detects `/usr` installs.
