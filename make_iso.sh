@@ -1,38 +1,13 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: make_iso.sh v0.20
+# Filename: make_iso.sh v0.21
 # Author: Lukas Bower
-# Date Modified: 2026-07-24
+# Date Modified: 2026-07-25
 #!/bin/bash
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$SCRIPT_DIR"
-ENV_FILE="$ROOT/.cohesix_env"
-[ -f "$ENV_FILE" ] && source "$ENV_FILE"
-if [ -z "${COHESIX_ARCH:-}" ]; then
-    echo "Select target architecture:" >&2
-    select a in x86_64 aarch64; do
-        case "$a" in
-            x86_64|aarch64) COHESIX_ARCH="$a"; break;;
-            *) echo "Invalid choice" >&2;;
-        esac
-    done
-    if [ -z "${COHESIX_ARCH:-}" ]; then
-        echo "❌ Architecture not set" >&2
-        exit 1
-    fi
-    cat > "$ENV_FILE" <<EOF
-# CLASSIFICATION: COMMUNITY
-# Filename: .cohesix_env v0.2
-# Author: Lukas Bower
-# Date Modified: 2026-07-24
-# Cohesix build environment configuration
-COHESIX_ARCH=$COHESIX_ARCH
-EOF
-    echo "✅ Architecture '$COHESIX_ARCH' saved to $ENV_FILE" >&2
-else
-    echo "Using architecture from $ENV_FILE: $COHESIX_ARCH" >&2
-fi
+source "$ROOT/scripts/load_arch_config.sh"
 case "$COHESIX_ARCH" in
     x86_64) COHESIX_TARGET="x86_64-unknown-linux-gnu";;
     aarch64) COHESIX_TARGET="aarch64-unknown-linux-gnu";;

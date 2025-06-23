@@ -1,6 +1,6 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Makefile v0.28
-# Date Modified: 2026-07-22
+# Filename: Makefile v0.29
+# Date Modified: 2026-07-25
 # Author: Lukas Bower
 #
 # ─────────────────────────────────────────────────────────────
@@ -204,8 +204,8 @@ init-efi: check-efi ## Build init EFI binary
 	@mkdir -p out/bin
 	$(CC) $(CFLAGS_EFI) -c src/init_efi/main.c -o out/init_efi.o
 	@echo "Linking for UEFI on $(shell uname -m)"
-	$(LD) /usr/lib/crt0-efi-x86_64.o out/init_efi.o \
-	    -o out/init_efi.so $(LD_FLAGS)
+        $(LD) /usr/lib/crt0-efi-x86_64.o out/init_efi.o \
+            -o out/init_efi.so -T linker.ld $(LD_FLAGS)
 	objcopy --target=efi-app-x86_64 out/init_efi.so out/bin/init.efi
 
 boot: ## Build boot image for current PLATFORM
