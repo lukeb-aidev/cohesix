@@ -1,36 +1,12 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: build_root_elf.sh v0.10
+# Filename: build_root_elf.sh v0.11
 # Author: Lukas Bower
-# Date Modified: 2026-07-24
+# Date Modified: 2026-07-25
 #!/usr/bin/env bash
 set -euo pipefail
 
-ENV_FILE="$(git rev-parse --show-toplevel 2>/dev/null || pwd)/.cohesix_env"
-[ -f "$ENV_FILE" ] && source "$ENV_FILE"
-if [ -z "${COHESIX_ARCH:-}" ]; then
-    echo "Select target architecture:" >&2
-    select a in x86_64 aarch64; do
-        case "$a" in
-            x86_64|aarch64) COHESIX_ARCH="$a"; break;;
-            *) echo "Invalid choice" >&2;;
-        esac
-    done
-    if [ -z "${COHESIX_ARCH:-}" ]; then
-        echo "❌ Architecture not set" >&2
-        exit 1
-    fi
-    cat > "$ENV_FILE" <<EOF
-# CLASSIFICATION: COMMUNITY
-# Filename: .cohesix_env v0.2
-# Author: Lukas Bower
-# Date Modified: 2026-07-24
-# Cohesix build environment configuration
-COHESIX_ARCH=$COHESIX_ARCH
-EOF
-    echo "✅ Architecture '$COHESIX_ARCH' saved to $ENV_FILE" >&2
-else
-    echo "Using architecture from $ENV_FILE: $COHESIX_ARCH" >&2
-fi
+ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+source "$ROOT/scripts/load_arch_config.sh"
 
 HOST_ARCH="$(uname -m)"
 if [[ "$HOST_ARCH" = "aarch64" ]] && ! command -v aarch64-linux-musl-gcc >/dev/null 2>&1; then
@@ -88,6 +64,7 @@ if [ -n "$CUDA_HOME" ] && [ -f "$CUDA_HOME/bin/nvcc" ]; then
     elif [ -d "$CUDA_HOME/lib" ]; then
         export LD_LIBRARY_PATH="$CUDA_HOME/lib:${LD_LIBRARY_PATH:-}"
     fi
+    export CUDA_LIBRARY_PATH="$LD_LIBRARY_PATH"
     echo "CUDA detected at $CUDA_HOME"
 else
     echo "⚠️ CUDA toolkit not detected." >&2

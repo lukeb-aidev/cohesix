@@ -1,12 +1,14 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: setup_build_env.sh v0.4
+# Filename: setup_build_env.sh v0.5
 # Author: Lukas Bower
-# Date Modified: 2026-02-27
+# Date Modified: 2026-07-25
 #!/usr/bin/env bash
 set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 ARCH="$(uname -m)"
+# Load or prompt for persistent architecture configuration
+source "$ROOT/scripts/load_arch_config.sh" --prompt
 
 msg(){ printf "\e[32m==>\e[0m %s\n" "$*"; }
 die(){ printf "\e[31m[ERR]\e[0m %s\n" "$*" >&2; exit 1; }
