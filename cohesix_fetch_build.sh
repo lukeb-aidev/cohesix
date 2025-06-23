@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.50
+# Filename: cohesix_fetch_build.sh v0.51
 # Author: Lukas Bower
-# Date Modified: 2026-07-11
+# Date Modified: 2026-07-12
 #!/bin/bash
 # Fetch and fully build the Cohesix project using SSH Git auth.
 
@@ -131,6 +131,9 @@ python -m pip install --upgrade pip setuptools wheel --break-system-packages \
 
 if [ -f requirements.txt ]; then
   python -m pip install -r requirements.txt --break-system-packages
+fi
+if [ -f tests/requirements.txt ]; then
+  python -m pip install -r tests/requirements.txt --break-system-packages
 fi
 
 # Install Python linters if missing
@@ -320,14 +323,22 @@ if command -v go &> /dev/null; then
       fi
     fi
   done
-  (cd go && go test ./...)
+  if (cd go && go test ./...); then
+    log "✅ Go tests passed"
+  else
+    echo "❌ Go tests failed" | tee -a "$SUMMARY_TEST_FAILS" >&3
+  fi
 else
   log "⚠️ Go not found; skipping Go build"
 fi
 
 log "🐍 Running Python tests..."
 if command -v pytest &> /dev/null; then
-  pytest -v
+  if pytest -q; then
+    log "✅ Python tests passed"
+  else
+    echo "❌ Python tests failed" | tee -a "$SUMMARY_TEST_FAILS" >&3
+  fi
 fi
 if command -v flake8 &> /dev/null; then
   flake8 python tests

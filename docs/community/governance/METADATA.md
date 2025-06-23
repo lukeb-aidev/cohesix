@@ -130,7 +130,7 @@
 | docs/QUICKSTART.md | v0.1 | 2025-07-23 | COMMUNITY | | |
 | docs/community/architecture/BOOT_KERNEL_FLOW.md | v0.2 | 2026-02-05 | COMMUNITY | | |
 | docs/community/archive/EXAMPLES_README.md | v0.3 | 2026-02-05 | COMMUNITY | | |
-| cohesix_fetch_build.sh | v0.50 | 2026-07-11 | COMMUNITY | | |
+| cohesix_fetch_build.sh | v0.51 | 2026-07-12 | COMMUNITY | | |
 | CONTRIBUTING.md | v1.1 | 2025-07-23 | COMMUNITY | | |
 | config/secure9p.toml | v0.3 | 2025-07-31 | COMMUNITY | | |
 | src/secure9p/mod.rs | v0.2 | 2025-07-25 | COMMUNITY | | |
@@ -224,6 +224,7 @@
 | src/util/debug_log.rs | v0.2 | 2025-12-31 | COMMUNITY | | |
 
 | requirements.txt | v0.2 | 2026-01-27 | COMMUNITY | | |
+| tests/requirements.txt | v0.1 | 2026-07-12 | COMMUNITY | | |
 | bin/demo_bee_learns | v0.1 | 2026-02-11 | COMMUNITY | | |
 | bin/demo_cloud_queen | v0.1 | 2026-02-11 | COMMUNITY | | |
 | bin/demo_cuda_edge | v0.1 | 2026-02-11 | COMMUNITY | | |
