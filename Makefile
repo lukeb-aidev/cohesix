@@ -1,6 +1,6 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Makefile v0.24
-# Date Modified: 2025-12-15
+# Filename: Makefile v0.25
+# Date Modified: 2026-07-13
 # Author: Lukas Bower
 #
 # ─────────────────────────────────────────────────────────────
@@ -118,7 +118,7 @@ lint: ## Run linters
 		black --check python tests; \
 		fi
 		@if command -v mypy >/dev/null 2>&1; then \
-		mypy --ignore-missing-imports python tests/python; \
+mypy --ignore-missing-imports --check-untyped-defs python tests/python; \
 		fi
 		@if command -v gofmt >/dev/null 2>&1; then \
 		gofmt -l $(shell find go -name '*.go'); \
