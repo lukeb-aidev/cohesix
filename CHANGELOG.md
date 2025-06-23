@@ -1643,3 +1643,9 @@
 ## [v0.220] - 2026-07-22
 ### Changed
 - Improve build robustness when CUDA is missing; fallback path added for cust-related crates.
+
+## [v0.221] - 2026-07-22
+### Fixed
+- Kernel ELF path detection now uses the SEL4_WORKSPACE variable for both x86_64 and aarch64 builds.
+### Changed
+- Build scripts emit clearer diagnostics when kernel.elf is missing during ISO creation.
