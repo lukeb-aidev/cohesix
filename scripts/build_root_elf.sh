@@ -1,9 +1,27 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: build_root_elf.sh v0.3
+# Filename: build_root_elf.sh v0.4
 # Author: Lukas Bower
-# Date Modified: 2026-02-03
+# Date Modified: 2025-06-23
 #!/usr/bin/env bash
 set -euo pipefail
+
+ARCH="$(uname -m)"
+if [[ "$ARCH" = "aarch64" ]] && ! command -v aarch64-linux-musl-gcc >/dev/null 2>&1; then
+    if command -v sudo >/dev/null 2>&1; then
+        SUDO=sudo
+    else
+        SUDO=""
+    fi
+    echo "Missing aarch64-linux-musl-gcc. Attempting install via apt" >&2
+    if ! $SUDO apt update && ! $SUDO apt install -y musl-tools gcc-aarch64-linux-musl; then
+        echo "ERROR: Missing aarch64-linux-musl-gcc. Install with:\nsudo apt update && sudo apt install musl-tools gcc-aarch64-linux-musl" >&2
+        exit 1
+    fi
+    if ! command -v aarch64-linux-musl-gcc >/dev/null 2>&1; then
+        echo "ERROR: Missing aarch64-linux-musl-gcc. Install with:\nsudo apt update && sudo apt install musl-tools gcc-aarch64-linux-musl" >&2
+        exit 1
+    fi
+fi
 
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 OUT_DIR="$ROOT/out"

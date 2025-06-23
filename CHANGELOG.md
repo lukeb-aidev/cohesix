@@ -1634,3 +1634,8 @@
 - ISO creation and QEMU boot now support aarch64.
 ### Changed
 - Updated to v0.53 with build validations and directory staging.
+
+## [v0.219] - 2025-06-23
+### Fixed
+- Automatic musl toolchain installation on AArch64 in `cohesix_fetch_build.sh` and `build_root_elf.sh`.
+- Kernel path check in `make_iso.sh` now respects `$SEL4_WORKSPACE` and logs workspace contents on failure.
