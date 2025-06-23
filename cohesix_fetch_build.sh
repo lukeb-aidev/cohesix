@@ -1,5 +1,5 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.55
+# Filename: cohesix_fetch_build.sh v0.56
 # Author: Lukas Bower
 # Date Modified: 2026-07-22
 #!/bin/bash
@@ -182,20 +182,10 @@ else
 fi
 
 log "🧱 Building Rust components..."
-if [ -z "${COHESIX_TARGET:-}" ]; then
-  ARCH="$(uname -m)"
-  case "$ARCH" in
-    x86_64|amd64)
-      COHESIX_TARGET="x86_64-unknown-linux-gnu"
-      ;;
-    aarch64|arm64)
-      COHESIX_TARGET="aarch64-unknown-linux-gnu"
-      ;;
-    *)
-      log "⚠️ Unknown architecture $ARCH; defaulting to x86_64-unknown-linux-gnu"
-      COHESIX_TARGET="x86_64-unknown-linux-gnu"
-      ;;
-  esac
+if [[ "$(uname -m)" == "aarch64" ]]; then
+  COHESIX_TARGET="aarch64-unknown-linux-gnu"
+else
+  COHESIX_TARGET="x86_64-unknown-linux-gnu"
 fi
 export COHESIX_TARGET
 log "Using target $COHESIX_TARGET"
@@ -245,6 +235,9 @@ done
 
 cd "$ROOT"
 log "🧱 Building root ELF..."
+log "CUDA_HOME=${CUDA_HOME:-}" 
+log "nvcc path: $(command -v nvcc || echo 'not found')"
+log "LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-}"
 bash scripts/build_root_elf.sh || { echo "❌ root ELF build failed" >&2; exit 1; }
 [ -f out/cohesix_root.elf ] || { echo "❌ out/cohesix_root.elf missing" >&2; exit 1; }
 
