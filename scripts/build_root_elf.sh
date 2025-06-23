@@ -1,5 +1,5 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: build_root_elf.sh v0.6
+# Filename: build_root_elf.sh v0.7
 # Author: Lukas Bower
 # Date Modified: 2026-07-22
 #!/usr/bin/env bash
@@ -49,9 +49,16 @@ CUDA_LIB="/usr/lib/${ARCH}-linux-gnu"
 export CUDA_HOME=/usr
 export PATH=/usr/bin:$PATH
 export LD_LIBRARY_PATH="${CUDA_LIB}:${LD_LIBRARY_PATH:-}"
+echo "Target arch: $(uname -m)"
 echo "CUDA_HOME=$CUDA_HOME"
 echo "nvcc path: $(command -v nvcc || echo 'nvcc not found')"
 ls -l "$CUDA_LIB" | grep cuda || true
+
+if ! command -v nvcc >/dev/null; then
+    echo "CUDA not detected — skipping cust support"
+    echo "⚠️ cust_raw could not detect CUDA. Rebuilding without CUDA features."
+    export CARGO_BUILD_FLAGS="--no-default-features --features=no-cuda"
+fi
 
 mkdir -p "$OUT_DIR"
 
@@ -79,9 +86,9 @@ fi
 
 if [[ "$TARGET" == *musl ]]; then
     RUSTFLAGS="-C link-arg=-static" \
-        cargo build --release --bin cohesix_root --target "$TARGET" --features "$FEATURES"
+        cargo build --release ${CARGO_BUILD_FLAGS:-} --bin cohesix_root --target "$TARGET" --features "$FEATURES"
 else
-    cargo build --release --bin cohesix_root --target "$TARGET" --features "$FEATURES"
+    cargo build --release ${CARGO_BUILD_FLAGS:-} --bin cohesix_root --target "$TARGET" --features "$FEATURES"
 fi
 cp "target/$TARGET/release/cohesix_root" "$OUT_ELF"
 
