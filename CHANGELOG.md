@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v0.99
 // Author: Lukas Bower
-// Date Modified: 2026-07-23
+// Date Modified: 2026-07-24
 
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
@@ -1672,3 +1672,12 @@
 - Kernel ELF path logic and staging via SEL4_WORKSPACE
 ### Changed
 - ISO build logs include target and kernel path validation
+
+## [v0.225] - 2026-07-24
+### Added
+- Interactive architecture selection stored in `.cohesix_env`.
+- User-facing logs for selected architecture, CUDA fallback, and kernel ELF checks.
+### Fixed
+- `cust_raw` builds when CUDA is missing using `--no-cuda` features.
+- Python wheel installs respect native architecture via arch-specific venvs.
+- Kernel path detection reliably falls back to `$SEL4_WORKSPACE`.
