@@ -1,5 +1,5 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: build_root_elf.sh v0.9
+# Filename: build_root_elf.sh v0.10
 # Author: Lukas Bower
 # Date Modified: 2026-07-24
 #!/usr/bin/env bash
@@ -15,7 +15,21 @@ if [ -z "${COHESIX_ARCH:-}" ]; then
             *) echo "Invalid choice" >&2;;
         esac
     done
-    echo "COHESIX_ARCH=$COHESIX_ARCH" > "$ENV_FILE"
+    if [ -z "${COHESIX_ARCH:-}" ]; then
+        echo "❌ Architecture not set" >&2
+        exit 1
+    fi
+    cat > "$ENV_FILE" <<EOF
+# CLASSIFICATION: COMMUNITY
+# Filename: .cohesix_env v0.2
+# Author: Lukas Bower
+# Date Modified: 2026-07-24
+# Cohesix build environment configuration
+COHESIX_ARCH=$COHESIX_ARCH
+EOF
+    echo "✅ Architecture '$COHESIX_ARCH' saved to $ENV_FILE" >&2
+else
+    echo "Using architecture from $ENV_FILE: $COHESIX_ARCH" >&2
 fi
 
 HOST_ARCH="$(uname -m)"
@@ -54,16 +68,37 @@ case "$ARCH" in
         ;;
 esac
 
-CUDA_LIB="/usr/lib/${ARCH}-linux-gnu"
-export CUDA_HOME=/usr
-export PATH=/usr/bin:$PATH
-export LD_LIBRARY_PATH="${CUDA_LIB}:${LD_LIBRARY_PATH:-}"
+
+# Detect CUDA installation
+CUDA_HOME=""
+if command -v nvcc >/dev/null 2>&1; then
+    NVCC_PATH="$(command -v nvcc)"
+    CUDA_HOME="$(dirname "$(dirname "$NVCC_PATH")")"
+elif [ -d /usr/local/cuda ]; then
+    CUDA_HOME="/usr/local/cuda"
+else
+    CUDA_HOME="$(ls -d /usr/local/cuda-* 2>/dev/null | head -n1)"
+fi
+
+if [ -n "$CUDA_HOME" ] && [ -f "$CUDA_HOME/bin/nvcc" ]; then
+    export CUDA_HOME
+    export PATH="$CUDA_HOME/bin:$PATH"
+    if [ -d "$CUDA_HOME/lib64" ]; then
+        export LD_LIBRARY_PATH="$CUDA_HOME/lib64:${LD_LIBRARY_PATH:-}"
+    elif [ -d "$CUDA_HOME/lib" ]; then
+        export LD_LIBRARY_PATH="$CUDA_HOME/lib:${LD_LIBRARY_PATH:-}"
+    fi
+    echo "CUDA detected at $CUDA_HOME"
+else
+    echo "⚠️ CUDA toolkit not detected." >&2
+fi
+
 echo "Using Rust target: $TARGET"
 echo "nvcc path: $(command -v nvcc || echo 'not found')"
 
 mkdir -p "$OUT_DIR"
 
-if command -v nvcc >/dev/null 2>&1 && [ -d /usr/local/cuda ]; then
+if [ -n "$CUDA_HOME" ] && command -v nvcc >/dev/null 2>&1; then
     echo "CUDA detected; building with GPU support"
     FEATURES="rapier,cuda"
     CARGO_ARGS=()
