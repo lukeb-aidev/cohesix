@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.52
+# Filename: cohesix_fetch_build.sh v0.53
 # Author: Lukas Bower
-# Date Modified: 2026-07-13
+# Date Modified: 2026-07-14
 #!/bin/bash
 # Fetch and fully build the Cohesix project using SSH Git auth.
 
@@ -21,23 +21,34 @@ log(){ echo "[$(date +%H:%M:%S)] $1" | tee -a "$LOG_FILE" >&3; }
 
 log "🛠️ [Build Start] $(date)"
 
-HOST_ARCH="$(uname -m)"
-case "$HOST_ARCH" in
-  x86_64|amd64)
-    ARCH="x86_64";;
-  aarch64|arm64)
-    ARCH="aarch64";;
-  *)
-    echo "Unsupported host architecture: $HOST_ARCH" >&2; exit 1;;
-esac
-log "Detected host architecture: $ARCH"
-if [ "$ARCH" = "aarch64" ] && command -v rustup >/dev/null 2>&1; then
+detect_arch() {
+  local m=$(uname -m)
+  case "$m" in
+    x86_64|amd64)
+      COH_ARCH="x86_64"
+      COHESIX_TARGET="x86_64-unknown-linux-gnu"
+      ;;
+    aarch64|arm64)
+      COH_ARCH="aarch64"
+      COHESIX_TARGET="aarch64-unknown-linux-gnu"
+      ;;
+    *)
+      echo "Unsupported architecture: $m" >&2
+      exit 1
+      ;;
+  esac
+  export COH_ARCH COHESIX_TARGET
+}
+
+detect_arch
+log "Detected architecture: $COH_ARCH"
+if [ "$COH_ARCH" = "aarch64" ] && command -v rustup >/dev/null 2>&1; then
   if ! rustup target list --installed | grep -q '^aarch64-unknown-linux-musl$'; then
     rustup target add aarch64-unknown-linux-musl
     log "✅ Rust target aarch64-unknown-linux-musl installed"
   fi
 fi
-if [ "$ARCH" != "x86_64" ]; then
+if [ "$COH_ARCH" != "x86_64" ]; then
   CROSS_X86="x86_64-linux-gnu-"
 else
   CROSS_X86=""
@@ -185,7 +196,7 @@ cargo build --release --target "${COHESIX_TARGET}" --bin cohcc --features secure
 grep -Ei 'error|fail|panic|permission denied|warning' "$LOG_FILE" > "$SUMMARY_ERRORS" || true
 
 # Ensure output directory exists before copying Rust binaries
-mkdir -p "$STAGE_DIR/bin"
+mkdir -p "$STAGE_DIR/bin" "$STAGE_DIR/usr/bin" "$STAGE_DIR/usr/cli" "$STAGE_DIR/home/cohesix"
 
 # Confirm cohcc built successfully before copying
 rm -f "$STAGE_DIR/bin/cohcc"
@@ -205,15 +216,23 @@ done
 
 # Stage shell wrappers for Python CLI tools
 for script in cohcli cohcap cohtrace cohrun cohbuild cohup cohpkg; do
-  [ -f "bin/$script" ] && cp "bin/$script" "$STAGE_DIR/bin/$script"
+  if [ -f "bin/$script" ]; then
+    cp "bin/$script" "$STAGE_DIR/bin/$script"
+    cp "bin/$script" "$STAGE_DIR/usr/bin/$script"
+    sed -i '1c #!/usr/bin/env python3' "$STAGE_DIR/bin/$script"
+    sed -i '1c #!/usr/bin/env python3' "$STAGE_DIR/usr/bin/$script"
+    chmod +x "$STAGE_DIR/bin/$script" "$STAGE_DIR/usr/bin/$script"
+  fi
 done
 
 cd "$ROOT"
 log "🧱 Building root ELF..."
 bash scripts/build_root_elf.sh || { echo "❌ root ELF build failed" >&2; exit 1; }
+[ -f out/cohesix_root.elf ] || { echo "❌ out/cohesix_root.elf missing" >&2; exit 1; }
 
 # Ensure staging directories exist for config and roles
-mkdir -p "$STAGE_DIR/etc" "$STAGE_DIR/roles" "$STAGE_DIR/init"
+mkdir -p "$STAGE_DIR/etc" "$STAGE_DIR/roles" "$STAGE_DIR/init" \
+         "$STAGE_DIR/usr/bin" "$STAGE_DIR/usr/cli" "$STAGE_DIR/home/cohesix"
 
 # Build or update seL4 kernel from external workspace
 SEL4_WORKSPACE="$HOME/sel4_workspace"
@@ -239,15 +258,28 @@ fi
 [ -f "$SRC_KERNEL" ] || { echo "Kernel build failed: $SRC_KERNEL missing" >&2; exit 1; }
 cp "$SRC_KERNEL" "$OUT_KERNEL"
 log "kernel.elf staged to $OUT_KERNEL"
+log "Building init EFI binary..."
+make init-efi >/dev/null
+INIT_EFI="$ROOT/out/bin/init.efi"
+[ -f "$INIT_EFI" ] || { echo "❌ init.efi build failed" >&2; exit 1; }
+cp "$INIT_EFI" "$STAGE_DIR/bin/init.efi"
+
 
 log "📂 Staging boot files..."
 mkdir -p "$STAGE_DIR/boot"
 cp "$OUT_KERNEL" "$STAGE_DIR/boot/kernel.elf"
 log "kernel build complete"
 cp out/cohesix_root.elf "$STAGE_DIR/boot/userland.elf"
-for f in initfs.img plan9.ns bootargs.txt boot_trace.json; do
+for f in initfs.img bootargs.txt boot_trace.json; do
   [ -f "$f" ] && cp "$f" "$STAGE_DIR/boot/"
 done
+if [ -f plan9.ns ]; then
+  mkdir -p "$STAGE_DIR/etc"
+  cp plan9.ns "$STAGE_DIR/etc/plan9.ns"
+else
+  echo "❌ plan9.ns missing in repository root" >&2
+  exit 1
+fi
 
 log "📂 Staging configuration..."
 mkdir -p "$STAGE_DIR/config"
@@ -423,8 +455,8 @@ if [ ! -f "$STAGE_DIR/boot/kernel.elf" ]; then
   echo "❌ Kernel ELF missing. Expected at $STAGE_DIR/boot/kernel.elf" >&2
   exit 1
 fi
-if [ ! -f plan9.ns ]; then
-  echo "❌ plan9.ns missing in repository root" >&2
+if [ ! -f "$STAGE_DIR/etc/plan9.ns" ]; then
+  echo "❌ plan9.ns missing at $STAGE_DIR/etc/plan9.ns" >&2
   exit 1
 fi
 if [ ! -f config/config.yaml ]; then
@@ -452,15 +484,21 @@ if [ "${VIRTUAL_ENV:-}" != "$(pwd)/.venv" ]; then
 fi
 
 bash ./scripts/make_grub_iso.sh
-du -h out/cohesix_grub_*.iso 2>/dev/null | tee -a "$LOG_FILE" >&3
+ISO_OUT="out/cohesix_grub.iso"
+if [ ! -f "$ISO_OUT" ]; then
+  echo "❌ ISO build failed: $ISO_OUT missing" >&2
+  exit 1
+fi
+du -h "$ISO_OUT" 2>/dev/null | tee -a "$LOG_FILE" >&3
 find "$STAGE_DIR/bin" -type f -print | tee -a "$LOG_FILE" >&3
 if [ ! -d "/srv/cuda" ] || ! command -v nvidia-smi >/dev/null 2>&1 || ! nvidia-smi >/dev/null 2>&1; then
   echo "⚠️ CUDA hardware or /srv/cuda not detected" | tee -a "$LOG_FILE" >&3
 fi
 
 # Optional QEMU boot check
-if command -v qemu-system-x86_64 >/dev/null; then
-  ISO_IMG="out/cohesix_grub_${COH_ARCH}.iso"
+QEMU_BIN="qemu-system-${COH_ARCH}"
+ISO_IMG="$ISO_OUT"
+if [ -x "$(command -v "$QEMU_BIN" 2>/dev/null)" ]; then
   if [ ! -f "$ISO_IMG" ]; then
     echo "❌ ${ISO_IMG} missing in out" >&2
     exit 1
@@ -470,33 +508,31 @@ if command -v qemu-system-x86_64 >/dev/null; then
   mkdir -p "$LOG_DIR"
   SERIAL_LOG="$TMPDIR/qemu_boot.log"
   QEMU_LOG="$LOG_DIR/qemu_boot.log"
-  if [ -f "$QEMU_LOG" ]; then
-    mv "$QEMU_LOG" "$QEMU_LOG.$(date +%Y%m%d_%H%M%S)"
-  fi
-  OVMF_CODE="/usr/share/qemu/OVMF.fd"
-  if [ ! -f "$OVMF_CODE" ]; then
-    for p in /usr/share/OVMF/OVMF_CODE.fd /usr/share/OVMF/OVMF.fd /usr/share/edk2/ovmf/OVMF_CODE.fd; do
-      if [ -f "$p" ]; then
-        OVMF_CODE="$p"
-        break
-      fi
-    done
-  fi
+  [ -f "$QEMU_LOG" ] && mv "$QEMU_LOG" "$QEMU_LOG.$(date +%Y%m%d_%H%M%S)"
+  OVMF_CODE=""
   OVMF_VARS=""
-  for p in /usr/share/OVMF/OVMF_VARS.fd /usr/share/edk2/ovmf/OVMF_VARS.fd; do
-    if [ -f "$p" ]; then
-      OVMF_VARS="$p"
-      break
-    fi
-  done
-  [ -f "$OVMF_CODE" ] || { echo "OVMF firmware not found" >&2; exit 1; }
-  [ -n "$OVMF_VARS" ] || { echo "OVMF_VARS.fd not found" >&2; exit 1; }
-  cp "$OVMF_VARS" "$TMPDIR/OVMF_VARS.fd"
+  if [ "$COH_ARCH" = "x86_64" ]; then
+    for p in /usr/share/qemu/OVMF.fd /usr/share/OVMF/OVMF_CODE.fd /usr/share/OVMF/OVMF.fd /usr/share/edk2/ovmf/OVMF_CODE.fd; do
+      [ -f "$p" ] && OVMF_CODE="$p" && break
+    done
+    for p in /usr/share/OVMF/OVMF_VARS.fd /usr/share/edk2/ovmf/OVMF_VARS.fd; do
+      [ -f "$p" ] && OVMF_VARS="$p" && break
+    done
+    [ -f "$OVMF_CODE" ] || { echo "OVMF firmware not found" >&2; exit 1; }
+    [ -n "$OVMF_VARS" ] || { echo "OVMF_VARS.fd not found" >&2; exit 1; }
+    cp "$OVMF_VARS" "$TMPDIR/OVMF_VARS.fd"
+    QEMU_EXTRA=(-bios "$OVMF_CODE" -drive if=pflash,format=raw,file="$TMPDIR/OVMF_VARS.fd" -M q35)
+  else
+    for p in /usr/share/qemu/QEMU_EFI.fd /usr/share/AAVMF/AAVMF_CODE.fd; do
+      [ -f "$p" ] && OVMF_CODE="$p" && break
+    done
+    [ -n "$OVMF_CODE" ] && QEMU_EXTRA=(-bios "$OVMF_CODE") || QEMU_EXTRA=()
+    QEMU_EXTRA+=(-machine virt -cpu cortex-a57)
+  fi
   log "🧪 Booting ISO in QEMU..."
-  qemu-system-x86_64 \
-    -bios "$OVMF_CODE" \
-    -drive if=pflash,format=raw,file="$TMPDIR/OVMF_VARS.fd" \
-    -cdrom "$ISO_IMG" -net none -M q35 -m 256M \
+  "$QEMU_BIN" \
+    "${QEMU_EXTRA[@]}" \
+    -cdrom "$ISO_IMG" -net none -m 1024M \
     -no-reboot -nographic -serial file:"$SERIAL_LOG"
   QEMU_EXIT=$?
   cat "$SERIAL_LOG" >> "$QEMU_LOG" 2>/dev/null || true
@@ -514,14 +550,14 @@ if command -v qemu-system-x86_64 >/dev/null; then
     exit 1
   fi
 else
-  log "⚠️ qemu-system-x86_64 not installed; skipping boot test"
+  log "⚠️ $QEMU_BIN not installed; skipping boot test"
 fi
 
 BIN_COUNT=$(find "$STAGE_DIR/bin" -type f -perm -111 | wc -l)
 ROLE_COUNT=$(find "$STAGE_DIR/roles" -name '*.yaml' | wc -l)
-ISO_SIZE_MB=$(du -m "out/cohesix_grub_${COH_ARCH}.iso" | awk '{print $1}')
+ISO_SIZE_MB=$(du -m "$ISO_OUT" | awk '{print $1}')
 echo "ISO BUILD OK: ${BIN_COUNT} binaries, ${ROLE_COUNT} roles, ${ISO_SIZE_MB}MB total" >&3
-du -h "out/cohesix_grub_${COH_ARCH}.iso" | tee -a "$LOG_FILE" >&3
+du -h "$ISO_OUT" | tee -a "$LOG_FILE" >&3
 find "$STAGE_DIR/bin" -type f -print | tee -a "$LOG_FILE" >&3
 
 log "✅ [Build Complete] $(date)"
@@ -534,4 +570,4 @@ tail -n 10 "$SUMMARY_ERRORS" || echo "✅ No critical issues found" | tee -a "$L
 
 echo "🪵 Full log saved to $LOG_FILE" >&3
 echo "✅ ISO build complete. Run QEMU with:" >&3
-echo "qemu-system-x86_64 -cdrom out/cohesix_grub_${COH_ARCH}.iso -boot d -m 1024" >&3
+echo "qemu-system-${COH_ARCH} -cdrom $ISO_OUT -boot d -m 1024" >&3
