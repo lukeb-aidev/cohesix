@@ -50,9 +50,11 @@ for ARCH in "${ARCHES[@]}"; do
   make defconfig >/dev/null
   scripts/config --enable FEATURE_INSTALLER \
                  --enable APPLET_SYMLINKS \
-                 --disable SELINUX \
-                 --disable FEATURE_MOUNT_LABEL \
-                 --enable STATIC \
+                --disable SELINUX \
+                --disable FEATURE_MOUNT_LABEL \
+                --disable TC \
+                --disable FEATURE_TC_INGRESS \
+                --enable STATIC \
                  --enable ASH \
                  --enable SH_IS_ASH \
                  --enable LS \
