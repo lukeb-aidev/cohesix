@@ -1,13 +1,14 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: interactive_aibooth.rs v0.1
 // Author: Lukas Bower
-// Date Modified: 2025-07-31
+// Date Modified: 2026-07-23
 
 //! Initialization routines for the InteractiveAIBooth role.
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use crate::runtime::env::init::detect_cohrole;
+#[cfg(feature = "cuda")]
 use crate::cuda::runtime::CudaRuntime;
 use crate::runtime::ServiceRegistry;
 
@@ -33,6 +34,7 @@ pub fn start() {
     }
 
     // Initialize CUDA runtime if available
+    #[cfg(feature = "cuda")]
     match CudaRuntime::try_new() {
         Ok(rt) => {
             if rt.is_present() {

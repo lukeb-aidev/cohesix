@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: gpu.rs v1.1
 // Author: Lukas Bower
-// Date Modified: 2025-07-20
+// Date Modified: 2026-07-23
 
 //! GPU driver interface for Cohesix kernel-space runtime.
 //! This module provides initialization hooks and runtime checks for GPU availability and basic interaction.
@@ -45,10 +45,15 @@ impl GpuDriver {
     pub fn launch_task(&self) {
         match self.backend {
             GpuBackend::NvidiaCuda => {
-                let mut exec = crate::cuda::runtime::CudaExecutor::new();
-                if let Err(e) = exec.load_kernel(None).and_then(|_| exec.launch()) {
-                    println!("[GPU] CUDA task failed: {e}");
+                #[cfg(feature = "cuda")]
+                {
+                    let mut exec = crate::cuda::runtime::CudaExecutor::new();
+                    if let Err(e) = exec.load_kernel(None).and_then(|_| exec.launch()) {
+                        println!("[GPU] CUDA task failed: {e}");
+                    }
                 }
+                #[cfg(not(feature = "cuda"))]
+                println!("[GPU] CUDA support disabled at compile time");
             }
             GpuBackend::SoftwareFallback => println!("[GPU] Running software fallback"),
             GpuBackend::None => println!("[GPU] No GPU backend available"),

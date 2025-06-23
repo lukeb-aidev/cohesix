@@ -1,7 +1,9 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: gpu.rs v0.1
 // Author: Lukas Bower
-// Date Modified: 2025-12-12
+// Date Modified: 2026-07-23
+
+#![cfg(feature = "cuda")]
 
 use crate::cuda::runtime::{CudaExecutor, CudaRuntime};
 use std::fs::OpenOptions;

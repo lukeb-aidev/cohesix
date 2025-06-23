@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: make_iso.sh v0.17
+# Filename: make_iso.sh v0.18
 # Author: Lukas Bower
-# Date Modified: 2026-07-22
+# Date Modified: 2026-07-23
 #!/bin/bash
 set -eu
 
@@ -12,11 +12,6 @@ echo "Using kernel from: $SEL4_WORKSPACE"
 
 ARCH="$(uname -m)"
 echo "Detected build arch: $ARCH"
-if [[ ! -f "$SEL4_WORKSPACE/build_pc99/kernel/kernel.elf" && ! -f "$SEL4_WORKSPACE/build_qemu_arm/kernel/kernel.elf" ]]; then
-    echo "Kernel ELF not found at $SEL4_WORKSPACE/build_pc99/kernel/kernel.elf (or $SEL4_WORKSPACE/build_qemu_arm/kernel/kernel.elf). Did you run init-build.sh and ninja?"
-    ls -l "$SEL4_WORKSPACE"/build_* || true
-    exit 1
-fi
 
 mkdir -p "$ROOT/out/bin" "$ROOT/out/iso/boot"
 
@@ -34,7 +29,11 @@ case "$ARCH" in
 esac
 
 echo "ℹ️ Kernel source: $KERNEL_SRC"
-[ -f "$KERNEL_SRC" ] || { echo "Missing kernel at $KERNEL_SRC" >&2; exit 1; }
+if [ ! -f "$KERNEL_SRC" ]; then
+    echo "❌ Kernel ELF not found at $KERNEL_SRC. Did you run init-build.sh + ninja?" >&2
+    ls -l "$SEL4_WORKSPACE"/build_* || true
+    exit 1
+fi
 cp "$KERNEL_SRC" "$ROOT/out/bin/kernel.elf"
 cp "$KERNEL_SRC" "$ROOT/out/iso/boot/kernel.elf"
 if [[ ! -f "$ROOT/out/iso/boot/kernel.elf" ]]; then

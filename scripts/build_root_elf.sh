@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: build_root_elf.sh v0.7
+# Filename: build_root_elf.sh v0.8
 # Author: Lukas Bower
-# Date Modified: 2026-07-22
+# Date Modified: 2026-07-23
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -30,14 +30,10 @@ OUT_ELF="$OUT_DIR/cohesix_root.elf"
 ARCH="${ARCH:-$(uname -m)}"
 case "$ARCH" in
     aarch64|arm64)
-        TARGET="aarch64-unknown-linux-musl"
+        TARGET="aarch64-unknown-linux-gnu"
         ;;
-    x86_64)
-        if command -v x86_64-linux-musl-gcc >/dev/null 2>&1; then
-            TARGET="x86_64-unknown-linux-musl"
-        else
-            TARGET="x86_64-unknown-linux-gnu"
-        fi
+    x86_64|amd64)
+        TARGET="x86_64-unknown-linux-gnu"
         ;;
     *)
         echo "Unsupported architecture: $ARCH" >&2
@@ -50,13 +46,13 @@ export CUDA_HOME=/usr
 export PATH=/usr/bin:$PATH
 export LD_LIBRARY_PATH="${CUDA_LIB}:${LD_LIBRARY_PATH:-}"
 echo "Target arch: $(uname -m)"
+echo "Using Rust target: $TARGET"
 echo "CUDA_HOME=$CUDA_HOME"
 echo "nvcc path: $(command -v nvcc || echo 'nvcc not found')"
 ls -l "$CUDA_LIB" | grep cuda || true
 
-if ! command -v nvcc >/dev/null; then
-    echo "CUDA not detected — skipping cust support"
-    echo "⚠️ cust_raw could not detect CUDA. Rebuilding without CUDA features."
+if ! command -v nvcc >/dev/null || [ ! -d /usr/local/cuda ]; then
+    echo "⚠️ CUDA not found. Building without GPU acceleration."
     export CARGO_BUILD_FLAGS="--no-default-features --features=no-cuda"
 fi
 

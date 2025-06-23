@@ -1,9 +1,12 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: test_cuda_kernel.rs v0.4
-// Date Modified: 2025-12-12
+// Date Modified: 2026-07-23
+#![cfg(feature = "cuda")]
 // Author: Cohesix Codex
 
+#[cfg(feature = "cuda")]
 use cohesix::cuda::runtime::CudaExecutor;
+#[cfg(feature = "cuda")]
 use cohesix::utils::gpu::coh_check_gpu_runtime;
 use tempfile::{tempdir, NamedTempFile};
 

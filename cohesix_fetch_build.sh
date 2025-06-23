@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.56
+# Filename: cohesix_fetch_build.sh v0.57
 # Author: Lukas Bower
-# Date Modified: 2026-07-22
+# Date Modified: 2026-07-23
 #!/bin/bash
 
 ARCH="$(uname -m)"
@@ -248,12 +248,18 @@ mkdir -p "$STAGE_DIR/etc" "$STAGE_DIR/roles" "$STAGE_DIR/init" \
 # Build or update seL4 kernel from external workspace
 SEL4_WORKSPACE="${SEL4_WORKSPACE:-/home/ubuntu/sel4_workspace}"
 echo "Using kernel from: $SEL4_WORKSPACE"
-if [[ ! -f "$SEL4_WORKSPACE/build_pc99/kernel/kernel.elf" && ! -f "$SEL4_WORKSPACE/build_qemu_arm/kernel/kernel.elf" ]]; then
-  echo "Kernel ELF not found at $SEL4_WORKSPACE/build_pc99/kernel/kernel.elf (or $SEL4_WORKSPACE/build_qemu_arm/kernel/kernel.elf). Did you run init-build.sh and ninja?" >&2
+if [ ! -d "$SEL4_WORKSPACE" ]; then
+  echo "seL4 not found in $SEL4_WORKSPACE. Please build it using the official sel4test-manifest flow before continuing." >&2
   exit 1
 fi
-if [ ! -d "$SEL4_WORKSPACE" ]; then
-  echo "seL4 not found in ~/sel4_workspace. Please build it using the official sel4test-manifest flow before continuing." >&2
+case "$COH_ARCH" in
+  x86_64) KERNEL_SRC="$SEL4_WORKSPACE/build_pc99/kernel/kernel.elf" ;;
+  aarch64) KERNEL_SRC="$SEL4_WORKSPACE/build_qemu_arm/kernel/kernel.elf" ;;
+  *) echo "Unknown arch $COH_ARCH" >&2; exit 1 ;;
+esac
+echo "ℹ️ Kernel source: $KERNEL_SRC"
+if [ ! -f "$KERNEL_SRC" ]; then
+  echo "❌ Kernel ELF not found at $KERNEL_SRC. Did you run init-build.sh + ninja?" >&2
   exit 1
 fi
 SEL4_BUILD_DIR="${SEL4_BUILD_DIR:-"$(find "$SEL4_WORKSPACE" -maxdepth 1 -type d -name 'build_*' | head -n1)"}"
