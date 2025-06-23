@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: build_root_elf.sh v0.4
+# Filename: build_root_elf.sh v0.5
 # Author: Lukas Bower
-# Date Modified: 2025-06-23
+# Date Modified: 2026-07-22
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -46,9 +46,27 @@ case "$ARCH" in
 esac
 
 mkdir -p "$OUT_DIR"
+
 FEATURES="rapier"
+cuda_available() {
+    command -v nvcc >/dev/null 2>&1 && return 0
+    [ -n "${CUDA_HOME:-}" ] && [ -d "$CUDA_HOME" ] && return 0
+    [ -d /usr/local/cuda ] && return 0
+    return 1
+}
+
 if [ "${COH_GPU:-0}" = "1" ]; then
-    FEATURES="${FEATURES},cuda"
+    if cuda_available; then
+        FEATURES="${FEATURES},cuda"
+    else
+        echo "⚠️ CUDA toolkit not detected. Building without GPU support." >&2
+        echo "Install with: sudo apt install nvidia-cuda-toolkit" >&2
+        echo "Or visit: https://developer.nvidia.com/cuda-downloads" >&2
+        FEATURES="${FEATURES},no-cuda"
+        COH_GPU=0
+    fi
+else
+    FEATURES="${FEATURES},no-cuda"
 fi
 
 if [[ "$TARGET" == *musl ]]; then
