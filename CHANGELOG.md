@@ -1695,3 +1695,7 @@
 - `setup_build_env.sh`, `build_root_elf.sh`, `cohesix_fetch_build.sh`, and `make_iso.sh` source the persistent config without prompting.
 - `init-efi` link step now uses `-T linker.ld` for x86_64.
 - CUDA builds export `CUDA_LIBRARY_PATH` so `cust_raw` detects `/usr` installs.
+
+## [v0.228] - 2026-07-26
+### Fixed
+- Fixed missing platform build tags and fallback for gui-orchestrator signal handling.
