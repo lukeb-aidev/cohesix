@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: cuda.rs v1.1
 // Author: Lukas Bower
-// Date Modified: 2025-07-20
+// Date Modified: 2026-07-23
 
 //! CUDA physics integration module for Cohesix kernel-space.
 //! Provides CUDA dispatch scaffolding and GPU acceleration hooks for physics kernels.
@@ -29,9 +29,16 @@ pub fn check_cuda_status() -> CudaStatus {
 pub fn launch_physics_kernel() -> Result<(), String> {
     match check_cuda_status() {
         CudaStatus::Available => {
-            let mut exec = crate::cuda::runtime::CudaExecutor::new();
-            exec.load_kernel(None)?;
-            exec.launch()
+            #[cfg(feature = "cuda")]
+            {
+                let mut exec = crate::cuda::runtime::CudaExecutor::new();
+                exec.load_kernel(None)?;
+                return exec.launch();
+            }
+            #[cfg(not(feature = "cuda"))]
+            {
+                return Err("cuda feature disabled".into());
+            }
         }
         CudaStatus::NotDetected => Err("cuda not detected".into()),
         CudaStatus::UnsupportedDriver => Err("cuda driver unsupported".into()),
