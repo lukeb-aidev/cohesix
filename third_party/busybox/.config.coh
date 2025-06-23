@@ -43,4 +43,7 @@ CONFIG_KILL=y
 CONFIG_SLEEP=y
 CONFIG_MOUNT=y
 CONFIG_UMOUNT=y
+#
+# Networking Utilities
+# CONFIG_TC is not set
 
