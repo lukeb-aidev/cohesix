@@ -1,8 +1,26 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.53
+# Filename: cohesix_fetch_build.sh v0.54
 # Author: Lukas Bower
-# Date Modified: 2026-07-14
+# Date Modified: 2025-06-23
 #!/bin/bash
+
+ARCH="$(uname -m)"
+if [[ "$ARCH" = "aarch64" ]] && ! command -v aarch64-linux-musl-gcc >/dev/null 2>&1; then
+  if command -v sudo >/dev/null 2>&1; then
+    SUDO=sudo
+  else
+    SUDO=""
+  fi
+  echo "Missing aarch64-linux-musl-gcc. Attempting install via apt" >&2
+  if ! $SUDO apt update && ! $SUDO apt install -y musl-tools gcc-aarch64-linux-musl; then
+    echo "ERROR: Missing aarch64-linux-musl-gcc. Install with:\nsudo apt update && sudo apt install musl-tools gcc-aarch64-linux-musl" >&2
+    exit 1
+  fi
+  if ! command -v aarch64-linux-musl-gcc >/dev/null 2>&1; then
+    echo "ERROR: Missing aarch64-linux-musl-gcc. Install with:\nsudo apt update && sudo apt install musl-tools gcc-aarch64-linux-musl" >&2
+    exit 1
+  fi
+fi
 # Fetch and fully build the Cohesix project using SSH Git auth.
 
 set -euxo pipefail
