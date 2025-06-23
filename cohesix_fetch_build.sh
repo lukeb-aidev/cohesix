@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.51
+# Filename: cohesix_fetch_build.sh v0.52
 # Author: Lukas Bower
-# Date Modified: 2026-07-12
+# Date Modified: 2026-07-13
 #!/bin/bash
 # Fetch and fully build the Cohesix project using SSH Git auth.
 
@@ -146,7 +146,7 @@ done
 # Validate presence of Python files before linting
 if find python tests -name '*.py' | grep -q .; then
   flake8 python tests
-  mypy python tests
+  mypy python tests --check-untyped-defs
   black --check python tests
 else
   log "ℹ️ No Python files detected; skipping lint checks"

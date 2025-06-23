@@ -1,20 +1,22 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: scan.py v0.2
+# Filename: scan.py v0.3
 # Author: Lukas Bower
-# Date Modified: 2026-07-12
+# Date Modified: 2026-07-13
 """Repository OSS dependency scanner for Cohesix."""
 
 from __future__ import annotations
 import argparse
 import hashlib
+import importlib
 import json
 import urllib.request
 from pathlib import Path
 from typing import Any, cast
+
 try:
-    import tomllib as tomli  # Python 3.11+
+    tomli = importlib.import_module("tomllib")  # Python 3.11+
 except ModuleNotFoundError:  # pragma: no cover - fallback for older versions
-    import tomli
+    tomli = importlib.import_module("tomli")
 
 from .license_fetch import fetch_license_text
 from .security_check import query_osv

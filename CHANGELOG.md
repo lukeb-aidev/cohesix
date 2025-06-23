@@ -1620,3 +1620,10 @@
 - `cohesix_fetch_build.sh` installs test requirements and logs pass/fail for Go and Python tests.
 ### Changed
 - Version bumps for `cohesix_fetch_build.sh` and metadata entries.
+
+## [v0.217] - 2026-07-13
+### Fixed
+- Resolved mypy duplicate import of `tomli` in `tools/oss_audit/scan.py`.
+- `mypy` now runs with `--check-untyped-defs` via build scripts and Makefile.
+### Changed
+- Updated versions in `cohesix_fetch_build.sh`, `Makefile`, and scanner script.
