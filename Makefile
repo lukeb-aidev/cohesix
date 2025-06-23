@@ -1,5 +1,5 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Makefile v0.27
+# Filename: Makefile v0.28
 # Date Modified: 2026-07-22
 # Author: Lukas Bower
 #
@@ -58,9 +58,10 @@ ifeq ($(shell $(LD) -v 2>&1 | grep -E -c "(lld|mingw)"),0)
 EFI_SUBSYSTEM_FLAG :=
 $(warning Skipping --subsystem=efi_application on non-Windows linker)
 endif
+NO_DYN_FLAG := $(shell $(LD) --help 2>/dev/null | grep -q no-dynamic-linker && echo --no-dynamic-linker)
 LDFLAGS_EFI := -shared -Bsymbolic -nostdlib -znocombreloc -L/usr/lib \
        -lgnuefi -lefi $(EFI_SUBSYSTEM_FLAG) --entry=efi_main \
-       -Wl,--no-dynamic-linker -Wl,-z,notext
+       $(NO_DYN_FLAG) -z notext
 else
 LD ?= ld.bfd
 CFLAGS_EFI := $(EFI_INCLUDES) -ffreestanding -fPIC -fshort-wchar -mno-red-zone \
@@ -73,7 +74,7 @@ $(warning Skipping --subsystem=efi_application on non-Windows linker)
 endif
 LDFLAGS_EFI := -shared -Bsymbolic -nostdlib -znocombreloc -L/usr/lib -lgnuefi -lefi \
        $(EFI_SUBSYSTEM_FLAG) --entry=efi_main \
-       -Wl,--no-dynamic-linker -Wl,-z,notext
+       $(NO_DYN_FLAG) -z notext
 endif
 
 LD_FLAGS := $(LDFLAGS_EFI)
