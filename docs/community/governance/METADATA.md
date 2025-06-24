@@ -109,7 +109,8 @@
 | bootloader.lds | v0.1 | 2025-07-22 | COMMUNITY | | |
 | CohesixBoot.inf | v0.1 | 2025-07-22 | COMMUNITY | | |
 | linker.ld | v0.1 | 2025-07-22 | COMMUNITY | | |
-| .cargo/config.toml | v0.4 | 2025-06-24 | COMMUNITY | | |
+| .bashrc | v0.1 | 2026-08-09 | COMMUNITY | | |
+| .cargo/config.toml | v0.5 | 2026-08-09 | COMMUNITY | | |
 | build.rs | v0.7 | 2026-08-03 | COMMUNITY | | |
 | Makefile | v0.32 | 2026-07-30 | COMMUNITY | | |
 | test_boot_efi.sh | v0.15 | 2025-09-10 | COMMUNITY | | |
