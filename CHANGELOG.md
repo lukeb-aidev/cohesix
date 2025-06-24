@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v1.00
 // Author: Lukas Bower
-// Date Modified: 2026-08-08
+// Date Modified: 2026-08-10
 
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
@@ -1796,3 +1796,7 @@
 ### Fixed
 - `cohesix_fetch_build.sh` exports CUDA paths before building.
 - Cargo uses `git-fetch-with-cli` to avoid HTTPS auth failures.
+
+## [v0.247] - 2026-08-10
+### Changed
+- Converted git dependencies to SSH and updated Cargo configuration to use CLI fallback.
