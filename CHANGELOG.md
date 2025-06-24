@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v0.99
+// Filename: CHANGELOG.md v1.00
 // Author: Lukas Bower
-// Date Modified: 2026-07-24
+// Date Modified: 2026-07-26
 
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
@@ -1699,3 +1699,10 @@
 ## [v0.228] - 2026-07-26
 ### Fixed
 - Fixed missing platform build tags and fallback for gui-orchestrator signal handling.
+
+## [v0.229] - 2026-07-26
+### Changed
+- Added `CFLAGS_IGNORE_RESULT` variable in Makefile allowing selective
+  suppression of `-Wunused-result` for UEFI loaders where error codes are logged
+  then ignored.
+- Default builds still compile with `-Wunused-result` enabled.

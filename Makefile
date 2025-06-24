@@ -1,6 +1,6 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Makefile v0.29
-# Date Modified: 2026-07-25
+# Filename: Makefile v0.30
+# Date Modified: 2026-07-26
 # Author: Lukas Bower
 #
 # ─────────────────────────────────────────────────────────────
@@ -78,6 +78,12 @@ LDFLAGS_EFI := -shared -Bsymbolic -nostdlib -znocombreloc -L/usr/lib -lgnuefi -l
 endif
 
 LD_FLAGS := $(LDFLAGS_EFI)
+
+# Compile with warnings for unused results by default
+CFLAGS_WARN := -Wall -Wextra -Wunused-result
+# Some UEFI helpers intentionally ignore return statuses; allow selective
+# suppression for those objects only.
+CFLAGS_IGNORE_RESULT := $(CFLAGS_WARN) -Wno-unused-result
 
 $(info Using $(TOOLCHAIN) toolchain for UEFI build...)
 
@@ -163,10 +169,10 @@ go-test: ## Run Go unit tests
 	@GOWORK=$(CURDIR)/go/go.work go test ./go/...
 
 c/sel4/shim/boot_trampoline.o: c/sel4/shim/boot_trampoline.c
-	$(CC) -I c/sel4/include -c $< -o $@
+    $(CC) $(CFLAGS_WARN) -I c/sel4/include -c $< -o $@
 
 c/sel4/bootloader.o: c/sel4/bootloader.c
-	$(CC) -I c/sel4/include -c $< -o $@
+    $(CC) $(CFLAGS_WARN) -I c/sel4/include -c $< -o $@
 
 c-shims: c/sel4/shim/boot_trampoline.o c/sel4/bootloader.o ## Build C shims
 	@echo "🔧 Building C shims …"
@@ -180,10 +186,11 @@ boot-aarch64: ## Build boot image for aarch64
 	cargo build --release --target aarch64-unknown-linux-gnu
 
 bootloader: check-efi ## Build UEFI bootloader
-	@echo "🏁 Building UEFI bootloader using $(TOOLCHAIN)"
-	@mkdir -p out/EFI/BOOT
-	$(CC) $(CFLAGS_EFI) -c src/bootloader/main.c -o out/bootloader.o
-	$(CC) $(CFLAGS_EFI) -c src/bootloader/sha1.c -o out/sha1.o
+        @echo "🏁 Building UEFI bootloader using $(TOOLCHAIN)"
+        @mkdir -p out/EFI/BOOT
+    # main.c discards EFI status codes after logging
+    $(CC) $(CFLAGS_EFI) $(CFLAGS_IGNORE_RESULT) -c src/bootloader/main.c -o out/bootloader.o
+    $(CC) $(CFLAGS_EFI) $(CFLAGS_WARN) -c src/bootloader/sha1.c -o out/sha1.o
 	$(LD) /usr/lib/crt0-efi-x86_64.o out/bootloader.o out/sha1.o \
 	    -o out/bootloader.so -T linker.ld $(LD_FLAGS)
 	objcopy --target=efi-app-x86_64 out/bootloader.so out/bootloader.efi
@@ -200,10 +207,11 @@ kernel: check-efi ## Build Rust kernel BOOTX64.EFI
 	cp out/BOOTX64.EFI out/EFI/BOOT/BOOTX64.EFI
 
 init-efi: check-efi ## Build init EFI binary
-	@echo "🏁 Building init EFI using $(TOOLCHAIN)"
-	@mkdir -p out/bin
-	$(CC) $(CFLAGS_EFI) -c src/init_efi/main.c -o out/init_efi.o
-	@echo "Linking for UEFI on $(shell uname -m)"
+        @echo "🏁 Building init EFI using $(TOOLCHAIN)"
+        @mkdir -p out/bin
+    # init uses wrapper calls that intentionally drop errors
+    $(CC) $(CFLAGS_EFI) $(CFLAGS_IGNORE_RESULT) -c src/init_efi/main.c -o out/init_efi.o
+        @echo "Linking for UEFI on $(shell uname -m)"
         $(LD) /usr/lib/crt0-efi-x86_64.o out/init_efi.o \
             -o out/init_efi.so -T linker.ld $(LD_FLAGS)
 	objcopy --target=efi-app-x86_64 out/init_efi.so out/bin/init.efi
