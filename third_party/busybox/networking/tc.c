@@ -49,6 +49,7 @@
 #include "libiproute/ip_common.h"
 #include "libiproute/rt_names.h"
 #include <linux/pkt_sched.h> /* for the TC_H_* macros */
+#include "busybox_cbq_compat.h" /* shim for missing CBQ defs */
 
 /* This is the deprecated multiqueue interface */
 #ifndef TCA_PRIO_MAX
