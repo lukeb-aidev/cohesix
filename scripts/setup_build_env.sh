@@ -8,7 +8,11 @@ set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 ARCH="$(uname -m)"
 # Load or prompt for persistent architecture configuration
-source "$ROOT/scripts/load_arch_config.sh" --prompt
+if [ -f "$ROOT/scripts/load_arch_config.sh" ]; then
+    source "$ROOT/scripts/load_arch_config.sh" --prompt
+else
+    echo "⚠️  load_arch_config.sh not found. Skipping architecture config."
+fi
 
 msg(){ printf "\e[32m==>\e[0m %s\n" "$*"; }
 die(){ printf "\e[31m[ERR]\e[0m %s\n" "$*" >&2; exit 1; }
@@ -61,3 +65,4 @@ python3 -m pip install --upgrade pip >/dev/null
 python3 -m pip install jinja2 ply pyyaml >/dev/null
 
 deactivate
+echo "✅ Build environment setup complete."
