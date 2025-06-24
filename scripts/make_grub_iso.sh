@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: make_grub_iso.sh v0.12
+# Filename: make_grub_iso.sh v0.13
 # Author: Lukas Bower
-# Date Modified: 2026-06-20
+# Date Modified: 2026-08-04
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -9,6 +9,32 @@ ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 ISO_ROOT="$ROOT/out/iso"
 ISO_OUT="$ROOT/out/cohesix_grub.iso"
 ROLE="${1:-${COHROLE:-QueenPrimary}}"
+
+ensure_plan9_ns() {
+    local ns_path="$HOME/cohesix/config/plan9.ns"
+    if [ ! -f "$ns_path" ]; then
+        echo "⚠️ $ns_path missing. Generating default..."
+        mkdir -p "$(dirname "$ns_path")"
+        cat > "$ns_path" <<'EOF'
+// CLASSIFICATION: COMMUNITY
+// Filename: config/plan9.ns v0.1
+// Author: Lukas Bower
+// Date Modified: 2026-08-04
+mount -b /dev /dev
+mount -b /proc /proc
+bind -a /bin /bin
+bind -a /usr/py /usr/py
+bind -a /srv /srv
+bind -a /mnt/9root /
+EOF
+    fi
+    mkdir -p "$ISO_ROOT/etc"
+    if cp "$ns_path" "$ISO_ROOT/etc/plan9.ns"; then
+        echo "✅ plan9.ns staged"
+    else
+        echo "⚠️ plan9.ns staging failed" >&2
+    fi
+}
 
 success=0
 cleanup() {
@@ -52,6 +78,7 @@ system:
 EOF
 fi
 cp "$CONFIG_YAML" "$ISO_ROOT/boot/config.yaml"
+ensure_plan9_ns
 
 # BusyBox utilities
 mkdir -p "$ISO_ROOT/bin"

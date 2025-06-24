@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.61
+# Filename: cohesix_fetch_build.sh v0.62
 # Author: Lukas Bower
-# Date Modified: 2026-07-26
+# Date Modified: 2026-08-04
 #!/bin/bash
 
 HOST_ARCH="$(uname -m)"
@@ -305,13 +305,34 @@ cp out/cohesix_root.elf "$STAGE_DIR/boot/userland.elf"
 for f in initfs.img bootargs.txt boot_trace.json; do
   [ -f "$f" ] && cp "$f" "$STAGE_DIR/boot/"
 done
-if [ -f plan9.ns ]; then
+
+ensure_plan9_ns() {
+  local ns_path="$ROOT/config/plan9.ns"
+  if [ ! -f "$ns_path" ]; then
+    log "⚠️ config/plan9.ns missing. Generating default..."
+    mkdir -p "$ROOT/config"
+    cat > "$ns_path" <<'EOF'
+// CLASSIFICATION: COMMUNITY
+// Filename: config/plan9.ns v0.1
+// Author: Lukas Bower
+// Date Modified: 2026-08-04
+mount -b /dev /dev
+mount -b /proc /proc
+bind -a /bin /bin
+bind -a /usr/py /usr/py
+bind -a /srv /srv
+bind -a /mnt/9root /
+EOF
+  fi
   mkdir -p "$STAGE_DIR/etc"
-  cp plan9.ns "$STAGE_DIR/etc/plan9.ns"
-else
-  echo "❌ plan9.ns missing in repository root" >&2
-  exit 1
-fi
+  if cp "$ns_path" "$STAGE_DIR/etc/plan9.ns"; then
+    log "✅ plan9.ns staged"
+  else
+    log "⚠️ plan9.ns staging failed"
+  fi
+}
+
+ensure_plan9_ns
 
 log "📂 Staging configuration..."
 mkdir -p "$STAGE_DIR/config"
