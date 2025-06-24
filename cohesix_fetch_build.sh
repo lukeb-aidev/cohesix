@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.63
+# Filename: cohesix_fetch_build.sh v0.64
 # Author: Lukas Bower
-# Date Modified: 2026-08-05
+# Date Modified: 2026-08-09
 #!/bin/bash
 
 HOST_ARCH="$(uname -m)"
@@ -24,6 +24,11 @@ fi
 # Fetch and fully build the Cohesix project using SSH Git auth.
 
 set -euxo pipefail
+export CUDA_HOME="${CUDA_HOME:-/usr}"
+export CUDA_INCLUDE_DIR="${CUDA_INCLUDE_DIR:-$CUDA_HOME/include}"
+export CUDA_LIBRARY_PATH="${CUDA_LIBRARY_PATH:-/usr/lib/x86_64-linux-gnu}"
+export PATH="$CUDA_HOME/bin:$PATH"
+export LD_LIBRARY_PATH="$CUDA_LIBRARY_PATH:${LD_LIBRARY_PATH:-}"
 LOG_DIR="$HOME/cohesix_logs"
 mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/build_$(date +%Y%m%d_%H%M%S).log"
@@ -58,26 +63,28 @@ log "Architecture: $COH_ARCH (target $COHESIX_TARGET)"
 
 
 # CUDA detection and environment setup
-CUDA_HOME=""
-if command -v nvcc >/dev/null 2>&1; then
-  NVCC_PATH="$(command -v nvcc)"
-  CUDA_HOME="$(dirname "$(dirname "$NVCC_PATH")")"
-elif [ -d /usr/local/cuda ]; then
-  CUDA_HOME="/usr/local/cuda"
-else
-  shopt -s nullglob
-  CUDA_MATCHES=(/usr/local/cuda-*arm64 /usr/local/cuda-*)
-  CUDA_HOME="${CUDA_MATCHES[0]:-}"
-  # Manual override for environments where cuda.h is in /usr/include but no nvcc exists
-  if [ "$CUDA_HOME" = "/usr" ] && [ -f "/usr/include/cuda.h" ]; then
-    export CUDA_INCLUDE_DIR="/usr/include"
-    export CUDA_LIBRARY_PATH="/usr/lib/x86_64-linux-gnu"
-    export LD_LIBRARY_PATH="$CUDA_LIBRARY_PATH:$LD_LIBRARY_PATH"
-    log "✅ Manually set CUDA paths for cust_raw: CUDA_HOME=$CUDA_HOME"
-  fi
-  shopt -u nullglob
-  if [ -z "$CUDA_HOME" ] || [ ! -d "$CUDA_HOME" ]; then
-    CUDA_HOME="/usr"
+CUDA_HOME="${CUDA_HOME:-}"
+if [ -z "$CUDA_HOME" ]; then
+  if command -v nvcc >/dev/null 2>&1; then
+    NVCC_PATH="$(command -v nvcc)"
+    CUDA_HOME="$(dirname "$(dirname "$NVCC_PATH")")"
+  elif [ -d /usr/local/cuda ]; then
+    CUDA_HOME="/usr/local/cuda"
+  else
+    shopt -s nullglob
+    CUDA_MATCHES=(/usr/local/cuda-*arm64 /usr/local/cuda-*)
+    CUDA_HOME="${CUDA_MATCHES[0]:-}"
+    # Manual override for environments where cuda.h is in /usr/include but no nvcc exists
+    if [ "$CUDA_HOME" = "/usr" ] && [ -f "/usr/include/cuda.h" ]; then
+      export CUDA_INCLUDE_DIR="/usr/include"
+      export CUDA_LIBRARY_PATH="/usr/lib/x86_64-linux-gnu"
+      export LD_LIBRARY_PATH="$CUDA_LIBRARY_PATH:$LD_LIBRARY_PATH"
+      log "✅ Manually set CUDA paths for cust_raw: CUDA_HOME=$CUDA_HOME"
+    fi
+    shopt -u nullglob
+    if [ -z "$CUDA_HOME" ] || [ ! -d "$CUDA_HOME" ]; then
+      CUDA_HOME="/usr"
+    fi
   fi
 fi
 
