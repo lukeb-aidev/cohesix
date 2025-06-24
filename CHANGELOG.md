@@ -1775,3 +1775,8 @@
 - Fallback `plan9.ns` generation logged during build.
 ### Changed
 - Removed redundant `config.yaml` fallback block in build script.
+
+## [v0.243] - 2026-08-06
+### Changed
+- Moved `no_std` attribute to `lib.rs` and refactored `debug_log` to use
+  `AtomicUsize` with safe access wrappers.

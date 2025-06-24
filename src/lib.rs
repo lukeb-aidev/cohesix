@@ -1,8 +1,9 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: lib.rs v1.8
-// Date Modified: 2026-07-23
+// Filename: lib.rs v1.9
+// Date Modified: 2026-08-06
 // Author: Lukas Bower
 #![cfg(not(target_os = "uefi"))]
+#![cfg_attr(not(feature = "std"), no_std)]
 
 //! Root library for the Coh_CC compiler and platform integrations.
 
