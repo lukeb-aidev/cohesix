@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Cargo.toml v0.19
+# Filename: Cargo.toml v0.20
 # Author: Lukas Bower
-# Date Modified: 2026-08-02
+# Date Modified: 2026-08-03
 [package]
 name    = "cohesix"
 version = "0.1.0"
@@ -125,4 +125,16 @@ name = "sel4_entry"
 path = "src/bootstrap/sel4_entry.rs"
 test = false
 required-features = ["sel4"]
+
+[[bin]]
+name = "cohtrace"
+path = "tools/cli/src/bin/cohtrace.rs"
+
+[[bin]]
+name = "cohcap"
+path = "tools/cli/src/bin/cohcap.rs"
+
+[[bin]]
+name = "cohbuild"
+path = "tools/cli/src/bin/cohbuild.rs"
 
