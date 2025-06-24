@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Cargo.toml v0.17
+# Filename: Cargo.toml v0.18
 # Author: Lukas Bower
-# Date Modified: 2026-07-22
+# Date Modified: 2026-07-28
 [package]
 name    = "cohesix"
 version = "0.1.0"
@@ -76,10 +76,10 @@ libc = "0.2"
 rcgen = "0.13"
 
 [features]
-default = ["std", "physics", "busybox"]
+default = []
+cuda = ["cohesix-cuda-runtime"]
 std = []
 sel4 = []
-cuda = ["cust", "nvml-wrapper"]
 rapier = ["rapier3d"]
 physics = ["rapier3d"]
 busybox = []
