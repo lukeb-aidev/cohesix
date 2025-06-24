@@ -1715,3 +1715,7 @@
 ### Added
 - `--socket` flag and `COH9P_SOCKET` env support for `coh-9p-helper`.
 
+## [v0.232] - 2026-07-28
+### Changed
+- CUDA feature gate now depends on the `cohesix-cuda-runtime` crate. Optional dependencies `cust` and `nvml-wrapper` remain available.
+
