@@ -204,7 +204,7 @@ int copy_tempfile(int fdin, char *name, char **tempname)
 
 	// Set permissions of output file
 	fstat(fdin, &statbuf);
-	fchmod(fd, statbuf.st_mode);
+       (void)fchmod(fd, statbuf.st_mode);
 
 	return fd;
 }

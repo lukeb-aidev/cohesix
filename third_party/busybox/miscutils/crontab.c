@@ -158,7 +158,7 @@ int crontab_main(int argc UNUSED_PARAM, char **argv)
 		/* No O_EXCL: we don't want to be stuck if earlier crontabs
 		 * were killed, leaving stale temp file behind */
 		src_fd = xopen3(tmp_fname, O_RDWR|O_CREAT|O_TRUNC, 0600);
-		fchown(src_fd, pas->pw_uid, pas->pw_gid);
+               (void)fchown(src_fd, pas->pw_uid, pas->pw_gid);
 		fd = open(pas->pw_name, O_RDONLY);
 		if (fd >= 0) {
 			bb_copyfd_eof(fd, src_fd);

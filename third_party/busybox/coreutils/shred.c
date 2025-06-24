@@ -101,7 +101,7 @@ int shred_main(int argc UNUSED_PARAM, char **argv)
 			}
 		}
 		if (opt & OPT_u) {
-			ftruncate(fd, 0);
+                       (void)ftruncate(fd, 0);
 			xunlink(fname);
 		}
 		xclose(fd);

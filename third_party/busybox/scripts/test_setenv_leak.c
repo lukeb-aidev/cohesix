@@ -11,7 +11,7 @@ int main(int argc, char **argv)
 		setenv("VAR", buf, 1);
 	}
 	printf("Check size of [heap] mapping:\n");
-	freopen("/proc/self/maps", "r", stdin);
+       (void)freopen("/proc/self/maps", "r", stdin);
 	while (fgets(buf, sizeof(buf), stdin))
 		fputs(buf, stdout);
 	return 0;

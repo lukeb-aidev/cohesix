@@ -1644,8 +1644,8 @@ int sed_main(int argc UNUSED_PARAM, char **argv)
 			/* Set permissions/owner of output file */
 			/* chmod'ing AFTER chown would preserve suid/sgid bits,
 			 * but GNU sed 4.2.1 does not preserve them either */
-			fchmod(nonstdoutfd, statbuf.st_mode);
-			fchown(nonstdoutfd, statbuf.st_uid, statbuf.st_gid);
+                       (void)fchmod(nonstdoutfd, statbuf.st_mode);
+                       (void)fchown(nonstdoutfd, statbuf.st_uid, statbuf.st_gid);
 
 			process_files();
 			fclose(G.nonstdout);

@@ -2370,7 +2370,7 @@ static int file_write(char *fn, char *first, char *last)
 		return -1;
 	cnt = last - first + 1;
 	charcnt = full_write(fd, first, cnt);
-	ftruncate(fd, charcnt);
+       (void)ftruncate(fd, charcnt);
 	if (charcnt == cnt) {
 		// good write
 		//modified_count = FALSE;
