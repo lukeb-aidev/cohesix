@@ -1719,3 +1719,7 @@
 ### Changed
 - CUDA feature gate now depends on the `cohesix-cuda-runtime` crate. Optional dependencies `cust` and `nvml-wrapper` remain available.
 
+## [v0.233] - 2026-07-29
+### Changed
+- `build.rs` now derives CUDA paths from `CUDA_HOME` when the `cuda` feature is enabled.
+
