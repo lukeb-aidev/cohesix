@@ -39,17 +39,23 @@ log(){ echo "[$(date +%H:%M:%S)] $1" | tee -a "$LOG_FILE" >&3; }
 
 log "🛠️ [Build Start] $(date)"
 
-ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+ROOT="$HOME/cohesix"
+if [ ! -f "$ROOT/scripts/load_arch_config.sh" ]; then
+  echo "❌ Missing: $ROOT/scripts/load_arch_config.sh" >&2
+  exit 1
+fi
 source "$ROOT/scripts/load_arch_config.sh"
-COH_ARCH="$COHESIX_ARCH"
+
 case "$COHESIX_ARCH" in
   x86_64) COHESIX_TARGET="x86_64-unknown-linux-gnu" ;;
   aarch64) COHESIX_TARGET="aarch64-unknown-linux-gnu" ;;
   *) echo "Unsupported architecture: $COHESIX_ARCH" >&2; exit 1 ;;
 esac
+
+export COHESIX_TARGET COHESIX_ARCH
 COH_ARCH="$COHESIX_ARCH"
-export COHESIX_ARCH COHESIX_TARGET COH_ARCH
-log "Architecture: $COHESIX_ARCH (target $COHESIX_TARGET)"
+log "Architecture: $COH_ARCH (target $COHESIX_TARGET)"
+
 CUDA_HOME=""
 if command -v nvcc >/dev/null 2>&1; then
   NVCC_PATH="$(command -v nvcc)"
@@ -59,6 +65,7 @@ elif [ -d /usr/local/cuda ]; then
 else
   CUDA_HOME="$(ls -d /usr/local/cuda-*arm64 /usr/local/cuda-* 2>/dev/null | head -n1)"
 fi
+
 if [ -n "$CUDA_HOME" ] && [ -f "$CUDA_HOME/bin/nvcc" ]; then
   export CUDA_HOME
   export PATH="$CUDA_HOME/bin:$PATH"
@@ -86,12 +93,14 @@ if [ -n "$CUDA_HOME" ] && [ -f "$CUDA_HOME/bin/nvcc" ]; then
 else
   log "⚠️ CUDA toolkit not detected."
 fi
+
 if [ "$COH_ARCH" = "aarch64" ] && command -v rustup >/dev/null 2>&1; then
   if ! rustup target list --installed | grep -q '^aarch64-unknown-linux-musl$'; then
     rustup target add aarch64-unknown-linux-musl
     log "✅ Rust target aarch64-unknown-linux-musl installed"
   fi
 fi
+
 if [ "$COH_ARCH" != "x86_64" ]; then
   CROSS_X86="x86_64-linux-gnu-"
 else
