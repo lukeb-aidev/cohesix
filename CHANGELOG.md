@@ -1767,3 +1767,11 @@
 - `config/plan9.ns` generated automatically if missing during build.
 - `scripts/make_grub_iso.sh` and `cohesix_fetch_build.sh` now stage `plan9.ns`
   from `config/plan9.ns` with a default fallback.
+
+## [v0.242] - 2026-08-05
+### Added
+- CUDA detection validates `nvcc` and `nvidia-smi` for ARM64 EC2 T4G support.
+- CLI binaries are copied into `out/bin` when present.
+- Fallback `plan9.ns` generation logged during build.
+### Changed
+- Removed redundant `config.yaml` fallback block in build script.
