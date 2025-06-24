@@ -555,8 +555,8 @@ int login_main(int argc UNUSED_PARAM, char **argv)
 
 	/* Try these, but don't complain if they fail.
 	 * _f_chown is safe wrt race t=ttyname(0);...;chown(t); */
-	fchown(0, pw->pw_uid, pw->pw_gid);
-	fchmod(0, 0600);
+       (void)fchown(0, pw->pw_uid, pw->pw_gid);
+       (void)fchmod(0, 0600);
 
 	/* We trust environment only if we run by root */
 	if (ENABLE_LOGIN_SCRIPTS && run_by_root)

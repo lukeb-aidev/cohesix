@@ -221,8 +221,8 @@ static void open_tty(void)
 		xopen(G.tty_name, O_RDWR | O_NONBLOCK); /* uses fd 0 */
 
 		/* Set proper protections and ownership */
-		fchown(0, 0, 0);        /* 0:0 */
-		fchmod(0, 0620);        /* crw--w---- */
+               (void)fchown(0, 0, 0);        /* 0:0 */
+               (void)fchmod(0, 0620);        /* crw--w---- */
 	} else {
 		char *n;
 		/*
