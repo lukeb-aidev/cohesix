@@ -28,3 +28,6 @@ cohesix_backup_*.tar.gz
 c/sel4/shim/*.o
 prebuilt/mandoc/mandoc.*
 .cache/
+
+# Local Go binaries
+go/gui-orchestrator*
