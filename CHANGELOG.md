@@ -1711,3 +1711,7 @@
 ### Changed
 - `newSignalContext` now returns a cancel function across platforms.
 - `main.go` defers the returned cancel function after starting the server.
+## [v0.231] - 2026-07-27
+### Added
+- `--socket` flag and `COH9P_SOCKET` env support for `coh-9p-helper`.
+
