@@ -1754,3 +1754,10 @@
 - Restored CUDA feature dependencies to `cust` and `nvml-wrapper`. Removed
   reference to missing `cohesix-cuda-runtime` crate, resolving cargo build
   failure when enabling the `cuda` feature.
+
+## [v0.240] - 2026-08-03
+### Added
+- `cohtrace`, `cohcap`, and `cohbuild` binaries are now built by default when
+  running `cargo build --bins`.
+### Fixed
+- Build script no longer warns when the `cuda` feature is disabled.

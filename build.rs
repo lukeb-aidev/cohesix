@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: build.rs v0.6
+// Filename: build.rs v0.7
 // Author: Lukas Bower
-// Date Modified: 2026-07-29
+// Date Modified: 2026-08-03
 
 fn main() {
     use std::{env, process::Command};
@@ -41,7 +41,5 @@ fn main() {
         } else {
             println!("cargo:warning=nvcc missing; using prebuilt PTX");
         }
-    } else {
-        println!("cargo:warning=cuda feature disabled; using prebuilt PTX");
     }
 }
