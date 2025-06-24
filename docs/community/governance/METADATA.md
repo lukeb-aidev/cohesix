@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: METADATA.md v3.39
+// Filename: METADATA.md v3.40
 // Author: Lukas Bower
-// Date Modified: 2026-07-29
+// Date Modified: 2025-06-24
 
 ## Canonical Documents
 
@@ -16,7 +16,7 @@
 | DEPENDENCIES.md            | v0.5    | 2025-07-06    | COMMUNITY      |            |              |
 | METADATA.md                | v3.34   | 2026-02-12    | COMMUNITY      | | |
 | Q_DAY.md                   | v1.1    | 2025-06-15    | PRIVATE        |            |              |
-| README.md                  | v0.16   | 2026-07-10    | COMMUNITY        | | |
+| README.md                  | v0.17   | 2025-06-24    | COMMUNITY        | | |
 | README_CODEX.md            | v1.5    | 2026-02-05    | COMMUNITY      |            |              |
 | REMOTE_ACCESS.md           | v1.0    | 2025-05-24    | COMMUNITY      |            |              |
 | SHOPPING_LIST.md           | v1.3    | 2025-05-25    | COMMUNITY      |            |              |

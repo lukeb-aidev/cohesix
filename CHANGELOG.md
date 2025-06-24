@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v1.00
 // Author: Lukas Bower
-// Date Modified: 2026-07-26
+// Date Modified: 2025-06-24
 
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
@@ -1722,4 +1722,8 @@
 ## [v0.233] - 2026-07-29
 ### Changed
 - `build.rs` now derives CUDA paths from `CUDA_HOME` when the `cuda` feature is enabled.
+
+## [v0.234] - 2025-06-24
+### Added
+- README updated to v0.17 with CUDA build instructions requiring CUDA 12.4.
 
