@@ -1789,3 +1789,10 @@
 ## [v0.245] - 2026-08-08
 ### Changed
 - Upgraded `cust` to v0.12 with runtime features and patched `find_cuda_helper`.
+
+## [v0.246] - 2026-08-09
+### Added
+- `.bashrc` persists CUDA environment variables.
+### Fixed
+- `cohesix_fetch_build.sh` exports CUDA paths before building.
+- Cargo uses `git-fetch-with-cli` to avoid HTTPS auth failures.
