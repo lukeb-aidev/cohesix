@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: README.md v0.16
+// Filename: README.md v0.17
 // Author: Lukas Bower
-// Date Modified: 2026-07-10
+// Date Modified: 2025-06-24
 
 
 # Cohesix
@@ -60,6 +60,8 @@ cd cohesix
 ./scripts/run-smoke-tests.sh   # quick health check
 make all                       # Go vet + C shims
 cargo check --workspace        # Rust build
+cargo build --release --features=cuda \ 
+  # CUDA 12.4 required; set CUDA_HOME to override detection if installed in a non-standard path
 make go-test                  # Go unit tests (cd go && go test ./...)
 ./test_all_arch.sh             # run Rust, Go, and Python tests
 
