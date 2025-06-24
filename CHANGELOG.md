@@ -1748,3 +1748,9 @@
 ### Added
 - `.gitignore` now ignores local `go/gui-orchestrator*` build artifacts.
 - Removed stray compiled binaries from repository root.
+
+## [v0.239] - 2026-08-02
+### Fixed
+- Restored CUDA feature dependencies to `cust` and `nvml-wrapper`. Removed
+  reference to missing `cohesix-cuda-runtime` crate, resolving cargo build
+  failure when enabling the `cuda` feature.
