@@ -65,4 +65,15 @@ python3 -m pip install --upgrade pip >/dev/null
 python3 -m pip install jinja2 ply pyyaml >/dev/null
 
 deactivate
+
+# Ensure ~/.cohesix_config exists
+CONFIG_FILE="$HOME/.cohesix_config"
+if [ ! -f "$CONFIG_FILE" ]; then
+    echo "🔧 Creating default Cohesix config at $CONFIG_FILE"
+    cat > "$CONFIG_FILE" <<EOF
+# Cohesix Architecture Configuration
+COHESIX_ARCH=$(uname -m)
+EOF
+fi
+
 echo "✅ Build environment setup complete."
