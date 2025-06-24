@@ -56,6 +56,8 @@ export COHESIX_TARGET COHESIX_ARCH
 COH_ARCH="$COHESIX_ARCH"
 log "Architecture: $COH_ARCH (target $COHESIX_TARGET)"
 
+
+# CUDA detection and environment setup
 CUDA_HOME=""
 if command -v nvcc >/dev/null 2>&1; then
   NVCC_PATH="$(command -v nvcc)"
@@ -67,20 +69,35 @@ else
   CUDA_MATCHES=(/usr/local/cuda-*arm64 /usr/local/cuda-*)
   CUDA_HOME="${CUDA_MATCHES[0]:-}"
   shopt -u nullglob
+  if [ -z "$CUDA_HOME" ] || [ ! -d "$CUDA_HOME" ]; then
+    CUDA_HOME="/usr"
+  fi
 fi
 
 # Log CUDA fallback paths
 log "CUDA fallback paths tried: ${CUDA_MATCHES[*]:-none found}"
 
+export CUDA_HOME
+export PATH="$CUDA_HOME/bin:$PATH"
+if [ -d "$CUDA_HOME/lib64" ]; then
+  export LD_LIBRARY_PATH="$CUDA_HOME/lib64:${LD_LIBRARY_PATH:-}"
+elif [ -d "$CUDA_HOME/lib" ]; then
+  export LD_LIBRARY_PATH="$CUDA_HOME/lib:${LD_LIBRARY_PATH:-}"
+fi
+# Add robust library path fallback for common distros
+if [ -d "/usr/lib/x86_64-linux-gnu" ]; then
+  export LD_LIBRARY_PATH="/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH"
+fi
+export CUDA_LIBRARY_PATH="$LD_LIBRARY_PATH"
+
+if [ -f "$CUDA_HOME/include/cuda.h" ]; then
+  log "✅ Found cuda.h in $CUDA_HOME/include"
+else
+  echo "❌ cuda.h not found in $CUDA_HOME/include. Check CUDA installation." >&2
+  exit 1
+fi
+
 if [ -n "$CUDA_HOME" ] && [ -f "$CUDA_HOME/bin/nvcc" ]; then
-  export CUDA_HOME
-  export PATH="$CUDA_HOME/bin:$PATH"
-  if [ -d "$CUDA_HOME/lib64" ]; then
-    export LD_LIBRARY_PATH="$CUDA_HOME/lib64:${LD_LIBRARY_PATH:-}"
-  elif [ -d "$CUDA_HOME/lib" ]; then
-    export LD_LIBRARY_PATH="$CUDA_HOME/lib:${LD_LIBRARY_PATH:-}"
-  fi
-  export CUDA_LIBRARY_PATH="$LD_LIBRARY_PATH"
   log "CUDA detected at $CUDA_HOME"
   if nvcc --version >/tmp/nvcc_check.log 2>&1; then
     log "nvcc OK: $(grep -m1 release /tmp/nvcc_check.log)"
