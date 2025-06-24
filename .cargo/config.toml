@@ -1,9 +1,12 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: config.toml v0.3
+# Filename: config.toml v0.4
 # Author: Lukas Bower
-# Date Modified: 2025-08-17
+# Date Modified: 2025-06-24
 
 [build]
+
+[env]
+CUDA_HOME = "/home/ubuntu/cuda_12.4.1"
 
 [target.x86_64-unknown-uefi]
 linker = "lld-link"

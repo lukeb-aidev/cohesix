@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v1.00
 // Author: Lukas Bower
-// Date Modified: 2026-07-26
+// Date Modified: 2025-06-24
 
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
@@ -1718,4 +1718,8 @@
 ## [v0.232] - 2026-07-28
 ### Changed
 - CUDA feature gate now depends on the `cohesix-cuda-runtime` crate. Optional dependencies `cust` and `nvml-wrapper` remain available.
+
+## [v0.233] - 2025-06-24
+### Added
+- `.cargo/config.toml` now defines an `[env]` table setting `CUDA_HOME` for local CUDA builds.
 
