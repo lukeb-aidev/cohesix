@@ -1738,3 +1738,8 @@
 - `signal.go` replaces platform-specific signal helpers for `gui-orchestrator`.
 - Makefile adds `gui-orchestrator` target installing binary to `out/bin`.
 
+
+## [v0.237] - 2026-07-31
+### Added
+- Classification headers inserted in mount.1, umount.1, and sh.1.
+- METADATA updated with new manpage entries.
