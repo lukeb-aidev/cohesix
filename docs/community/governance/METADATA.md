@@ -25,7 +25,7 @@
 | THREAT_MODEL.md            | v1.1    | 2025-06-15    | PRIVATE        |            |              |
 | TECHNICAL_RISK.md         | v1.1    | 2025-06-08    | PRIVATE        |     |              |
 | WATCHDOG_POLICY.md         | v1.4    | 2025-06-05    | COMMUNITY      |            |              |
-| CLI.md                     | v0.4    | 2026-02-05    | COMMUNITY      |     |             |
+| CLI.md                     | v0.5    | 2026-07-27    | COMMUNITY      | | |
 | GUI_ORCHESTRATOR.md        | v1.3    | 2026-02-05    | COMMUNITY      |        |              |
 | FEDERATION.md              | v1.0    | 2025-06-07    | PRIVATE        |            |              |
 | SECURE_BOOT.md             | v1.0    | 2025-06-07    | PRIVATE        |            |              |
@@ -260,4 +260,5 @@
 | bin/mandoc | v0.2 | 2025-06-22 | COMMUNITY | | |
 | go/cmd/gui-orchestrator/signal_plan9.go | v0.3 | 2026-07-27 | COMMUNITY | | |
 | go/cmd/gui-orchestrator/signal_unix.go | v0.3 | 2026-07-27 | COMMUNITY | | |
+| go/cmd/coh-9p-helper/main.go | v0.4 | 2026-07-27 | COMMUNITY | | |
 
