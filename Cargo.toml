@@ -140,5 +140,5 @@ path = "tools/cli/src/bin/cohbuild.rs"
 
 
 [patch.crates-io]
-find_cuda_helper = { git = "ssh://git@github.com/Rust-GPU/find_cuda_helper.git", rev = "HEAD" }
+find_cuda_helper = { git = "git@github.com:Rust-GPU/find_cuda_helper.git", rev = "HEAD" }
 
