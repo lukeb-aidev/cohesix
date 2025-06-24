@@ -1725,3 +1725,7 @@
 ### Changed
 - `build.rs` now derives CUDA paths from `CUDA_HOME` when the `cuda` feature is enabled.
 
+## [v0.234] - 2025-06-24
+### Added
+- README updated to v0.17 with CUDA build instructions requiring CUDA 12.4.
+
