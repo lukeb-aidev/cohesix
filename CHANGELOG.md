@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v1.00
 // Author: Lukas Bower
-// Date Modified: 2025-06-24
+// Date Modified: 2026-08-08
 
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
@@ -1785,3 +1785,7 @@
 ### Changed
 - `make_iso.sh` improves robustness and error handling. Kernel paths use explicit
   variables and architecture validation is consolidated.
+
+## [v0.245] - 2026-08-08
+### Changed
+- Upgraded `cust` to v0.12 with runtime features and patched `find_cuda_helper`.
