@@ -68,6 +68,13 @@ else
   shopt -s nullglob
   CUDA_MATCHES=(/usr/local/cuda-*arm64 /usr/local/cuda-*)
   CUDA_HOME="${CUDA_MATCHES[0]:-}"
+  # Manual override for environments where cuda.h is in /usr/include but no nvcc exists
+  if [ "$CUDA_HOME" = "/usr" ] && [ -f "/usr/include/cuda.h" ]; then
+    export CUDA_INCLUDE_DIR="/usr/include"
+    export CUDA_LIBRARY_PATH="/usr/lib/x86_64-linux-gnu"
+    export LD_LIBRARY_PATH="$CUDA_LIBRARY_PATH:$LD_LIBRARY_PATH"
+    log "✅ Manually set CUDA paths for cust_raw: CUDA_HOME=$CUDA_HOME"
+  fi
   shopt -u nullglob
   if [ -z "$CUDA_HOME" ] || [ ! -d "$CUDA_HOME" ]; then
     CUDA_HOME="/usr"
