@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: METADATA.md v3.40
+// Filename: METADATA.md v3.41
 // Author: Lukas Bower
-// Date Modified: 2025-06-24
+// Date Modified: 2026-07-30
 
 ## Canonical Documents
 
@@ -108,7 +108,7 @@
 | linker.ld | v0.1 | 2025-07-22 | COMMUNITY | | |
 | .cargo/config.toml | v0.4 | 2025-06-24 | COMMUNITY | | |
 | build.rs | v0.6 | 2026-07-29 | COMMUNITY | | |
-| Makefile | v0.31 | 2026-07-29 | COMMUNITY | | |
+| Makefile | v0.32 | 2026-07-30 | COMMUNITY | | |
 | test_boot_efi.sh | v0.15 | 2025-09-10 | COMMUNITY | | |
 | src/kernel/main.c | v0.2 | 2025-07-22 | COMMUNITY | | |
 | src/kernel/main.rs | v0.2 | 2025-08-02 | COMMUNITY | | |
@@ -259,10 +259,9 @@
 | bin/cohman.sh | v0.1 | 2026-02-21 | COMMUNITY | | |
 | bin/man | v0.2 | 2025-06-22 | COMMUNITY | | |
 | bin/mandoc | v0.2 | 2025-06-22 | COMMUNITY | | |
-| go/cmd/gui-orchestrator/signal_plan9.go | v0.3 | 2025-06-24 | COMMUNITY | | |
-| go/cmd/gui-orchestrator/signal_unix.go | v0.3 | 2025-06-24 | COMMUNITY | | |
+| go/cmd/gui-orchestrator/signal.go | v0.4 | 2026-07-30 | COMMUNITY | | |
 | go/cmd/coh-9p-helper/main.go | v0.4 | 2025-06-24 | COMMUNITY | | |
 | go/cmd/coh-9p-helper/main_test.go | v0.1 | 2025-06-01 | COMMUNITY | | |
-| go/cmd/gui-orchestrator/main.go | v0.4 | 2025-06-24 | COMMUNITY | | |
+| go/cmd/gui-orchestrator/main.go | v0.4 | 2026-07-27 | COMMUNITY | | |
 | go/cmd/gui-orchestrator/main_test.go | v0.1 | 2025-06-12 | COMMUNITY | | |
 

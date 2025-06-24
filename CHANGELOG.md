@@ -1733,3 +1733,8 @@
 ### Added
 - `cuda-build` target in Makefile builds a release with CUDA features.
 
+## [v0.236] - 2026-07-30
+### Changed
+- `signal.go` replaces platform-specific signal helpers for `gui-orchestrator`.
+- Makefile adds `gui-orchestrator` target installing binary to `out/bin`.
+

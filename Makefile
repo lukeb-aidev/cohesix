@@ -1,6 +1,6 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Makefile v0.31
-# Date Modified: 2026-07-29
+# Filename: Makefile v0.32
+# Date Modified: 2026-07-30
 # Author: Lukas Bower
 #
 # ─────────────────────────────────────────────────────────────
@@ -17,7 +17,7 @@
 # ─────────────────────────────────────────────────────────────
 
 .PHONY: build cuda-build all go-build go-test c-shims help fmt lint check \
-        boot boot-x86_64 boot-aarch64 bootloader kernel init-efi cohrun cohbuild cohtrace cohcap test test-python
+        boot boot-x86_64 boot-aarch64 bootloader kernel init-efi cohrun cohbuild cohtrace cohcap gui-orchestrator test test-python
 
 PLATFORM ?= $(shell uname -m)
 TARGET ?= $(PLATFORM)
@@ -102,7 +102,7 @@ echo "Required architecture headers missing."; exit 1; \
 fi; \
 fi
 
-.PHONY: build cuda-build all go-build go-test c-shims help fmt lint check cohrun cohbuild cohtrace cohcap kernel init-efi
+.PHONY: build cuda-build all go-build go-test c-shims help fmt lint check cohrun cohbuild cohtrace cohcap gui-orchestrator kernel init-efi
 
 all: go-build go-test c-shims kernel ## Run vet, tests, C shims and kernel
 
@@ -248,6 +248,11 @@ cohtrace: ## Run cohtrace CLI
 
 cohcap: ## Run cohcap CLI
 	cargo run -p cohcli_tools --bin cohcap -- $(ARGS)
+
+gui-orchestrator: ## Build gui-orchestrator binary
+	@echo "Building gui-orchestrator"
+	@mkdir -p out/bin
+	@GOWORK=$(CURDIR)/go/go.work go build -o out/bin/gui-orchestrator ./go/cmd/gui-orchestrator
 
 # Run boot image under QEMU, logging serial output
 qemu: ## Launch QEMU with built image and capture serial log
