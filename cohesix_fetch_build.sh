@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.62
+# Filename: cohesix_fetch_build.sh v0.63
 # Author: Lukas Bower
-# Date Modified: 2026-08-04
+# Date Modified: 2026-08-05
 #!/bin/bash
 
 HOST_ARCH="$(uname -m)"
@@ -57,7 +57,7 @@ if command -v nvcc >/dev/null 2>&1; then
 elif [ -d /usr/local/cuda ]; then
   CUDA_HOME="/usr/local/cuda"
 else
-  CUDA_HOME="$(ls -d /usr/local/cuda-* 2>/dev/null | head -n1)"
+  CUDA_HOME="$(ls -d /usr/local/cuda-*arm64 /usr/local/cuda-* 2>/dev/null | head -n1)"
 fi
 if [ -n "$CUDA_HOME" ] && [ -f "$CUDA_HOME/bin/nvcc" ]; then
   export CUDA_HOME
@@ -69,6 +69,20 @@ if [ -n "$CUDA_HOME" ] && [ -f "$CUDA_HOME/bin/nvcc" ]; then
   fi
   export CUDA_LIBRARY_PATH="$LD_LIBRARY_PATH"
   log "CUDA detected at $CUDA_HOME"
+  if nvcc --version >/tmp/nvcc_check.log 2>&1; then
+    log "nvcc OK: $(grep -m1 release /tmp/nvcc_check.log)"
+  else
+    log "⚠️ nvcc failed: $(cat /tmp/nvcc_check.log)"
+  fi
+  if command -v nvidia-smi >/dev/null 2>&1; then
+    if nvidia-smi >/tmp/nvidia_smi.log 2>&1; then
+      log "nvidia-smi OK: $(grep -m1 'Driver Version' /tmp/nvidia_smi.log)"
+    else
+      log "⚠️ nvidia-smi failed: $(cat /tmp/nvidia_smi.log)"
+    fi
+  else
+    log "⚠️ nvidia-smi not found"
+  fi
 else
   log "⚠️ CUDA toolkit not detected."
 fi
@@ -224,6 +238,7 @@ rm -f "$STAGE_DIR/bin/cohcc"
 COHCC_PATH="target/${COHESIX_TARGET}/release/cohcc"
 if [[ -f "$COHCC_PATH" ]]; then
   cp "$COHCC_PATH" "$STAGE_DIR/bin/cohcc"
+  cp "$COHCC_PATH" "$ROOT/out/bin/cohcc"
 else
   echo "❌ cohcc not found at $COHCC_PATH" >&2
   exit 1
@@ -232,7 +247,10 @@ fi
 # Copy other Rust CLI binaries into out/bin for ISO staging
 for bin in cohbuild cohcap cohtrace cohrun_cli validator fs nsbuilder shell; do
   BIN_PATH="target/${COHESIX_TARGET}/release/$bin"
-  [ -f "$BIN_PATH" ] && cp "$BIN_PATH" "$STAGE_DIR/bin/$bin"
+  if [ -f "$BIN_PATH" ]; then
+    cp "$BIN_PATH" "$STAGE_DIR/bin/$bin"
+    cp "$BIN_PATH" "$ROOT/out/bin/$bin"
+  fi
 done
 
 # Stage shell wrappers for Python CLI tools
@@ -511,16 +529,6 @@ fi
 if [ ! -f "$STAGE_DIR/etc/plan9.ns" ]; then
   echo "❌ plan9.ns missing at $STAGE_DIR/etc/plan9.ns" >&2
   exit 1
-fi
-if [ ! -f config/config.yaml ]; then
-  echo "⚠️ config.yaml missing. Generating fallback..."
-  mkdir -p config
-  cat > config/config.yaml <<EOF
-# Auto-generated fallback config
-system:
-  role: worker
-  trace: true
-EOF
 fi
 
 log "📀 Creating ISO..."
