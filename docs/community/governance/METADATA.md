@@ -136,7 +136,7 @@
 | docs/community/architecture/BOOT_KERNEL_FLOW.md | v0.2 | 2026-02-05 | COMMUNITY | | |
 | docs/community/archive/EXAMPLES_README.md | v0.3 | 2026-02-05 | COMMUNITY | | |
 | .cohesix_env | v0.3 | 2026-07-25 | COMMUNITY | | |
-| cohesix_fetch_build.sh | v0.63 | 2026-08-05 | COMMUNITY | | |
+| cohesix_fetch_build.sh | v0.65 | 2026-08-11 | COMMUNITY | | |
 | CONTRIBUTING.md | v1.1 | 2025-07-23 | COMMUNITY | | |
 | config/secure9p.toml | v0.3 | 2025-07-31 | COMMUNITY | | |
 | config/plan9.ns | v0.1 | 2026-08-04 | COMMUNITY | | |
@@ -177,7 +177,7 @@
 | scripts/build_busybox.sh | v0.4 | 2026-01-26 | COMMUNITY | | |
 | tools/make_iso.sh | v0.4 | 2026-01-26 | COMMUNITY | | |
 | metadata.json | v0.1 | 2025-07-24 | COMMUNITY | | |
-| Cargo.toml | v0.22 | 2026-08-10 | COMMUNITY | | |
+| Cargo.toml | v0.23 | 2026-08-11 | COMMUNITY | | |
 | cohesix-9p/Cargo.toml | v0.1 | 2025-07-28 | COMMUNITY | | |
 | tools/cli/Cargo.toml | v0.2 | 2025-08-16 | COMMUNITY | | |
 | justfile | v0.1 | 2025-07-24 | COMMUNITY | | |
