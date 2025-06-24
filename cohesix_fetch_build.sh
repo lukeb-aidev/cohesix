@@ -63,8 +63,14 @@ if command -v nvcc >/dev/null 2>&1; then
 elif [ -d /usr/local/cuda ]; then
   CUDA_HOME="/usr/local/cuda"
 else
-  CUDA_HOME="$(ls -d /usr/local/cuda-*arm64 /usr/local/cuda-* 2>/dev/null | head -n1)"
+  shopt -s nullglob
+  CUDA_MATCHES=(/usr/local/cuda-*arm64 /usr/local/cuda-*)
+  CUDA_HOME="${CUDA_MATCHES[0]:-}"
+  shopt -u nullglob
 fi
+
+# Log CUDA fallback paths
+log "CUDA fallback paths tried: ${CUDA_MATCHES[*]:-none found}"
 
 if [ -n "$CUDA_HOME" ] && [ -f "$CUDA_HOME/bin/nvcc" ]; then
   export CUDA_HOME
@@ -91,7 +97,7 @@ if [ -n "$CUDA_HOME" ] && [ -f "$CUDA_HOME/bin/nvcc" ]; then
     log "⚠️ nvidia-smi not found"
   fi
 else
-  log "⚠️ CUDA toolkit not detected."
+  log "⚠️ CUDA toolkit not detected. nvcc not found or invalid CUDA_HOME: $CUDA_HOME"
 fi
 
 if [ "$COH_ARCH" = "aarch64" ] && command -v rustup >/dev/null 2>&1; then
