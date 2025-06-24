@@ -242,29 +242,22 @@ else
   log "⚠️ rustup not found; assuming ${COHESIX_TARGET} toolchain is installed"
 fi
 
-cargo build --release --target "${COHESIX_TARGET}" --bin cohcc --features secure9p
+log "🧱 Building all Rust binaries in workspace (CLI, tools, validator, shell, etc)..."
+cargo build --release --workspace --all-targets --all-features
 grep -Ei 'error|fail|panic|permission denied|warning' "$LOG_FILE" > "$SUMMARY_ERRORS" || true
 
 # Ensure output directory exists before copying Rust binaries
 mkdir -p "$STAGE_DIR/bin" "$STAGE_DIR/usr/bin" "$STAGE_DIR/usr/cli" "$STAGE_DIR/home/cohesix"
 
-# Confirm cohcc built successfully before copying
-rm -f "$STAGE_DIR/bin/cohcc"
-COHCC_PATH="target/${COHESIX_TARGET}/release/cohcc"
-if [[ -f "$COHCC_PATH" ]]; then
-  cp "$COHCC_PATH" "$STAGE_DIR/bin/cohcc"
-  cp "$COHCC_PATH" "$ROOT/out/bin/cohcc"
-else
-  echo "❌ cohcc not found at $COHCC_PATH" >&2
-  exit 1
-fi
-
-# Copy other Rust CLI binaries into out/bin for ISO staging
-for bin in cohbuild cohcap cohtrace cohrun_cli validator fs nsbuilder shell; do
+# Copy Rust CLI binaries into out/bin for ISO staging (copy only, skip build)
+# The workspace build above already built all binaries, so just copy them if present.
+for bin in cohcc cohbuild cohcap cohtrace cohrun_cli validator fs nsbuilder shell; do
   BIN_PATH="target/${COHESIX_TARGET}/release/$bin"
   if [ -f "$BIN_PATH" ]; then
     cp "$BIN_PATH" "$STAGE_DIR/bin/$bin"
     cp "$BIN_PATH" "$ROOT/out/bin/$bin"
+  else
+    echo "⚠️ $bin not found at $BIN_PATH" >&2
   fi
 done
 
