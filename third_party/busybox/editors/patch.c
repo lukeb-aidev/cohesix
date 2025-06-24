@@ -585,7 +585,7 @@ int patch_main(int argc UNUSED_PARAM, char **argv)
 						TT.fileout = xmkstemp(TT.tempname);
 						// Set permissions of output file
 						fstat(TT.filein, &statbuf);
-						fchmod(TT.fileout, statbuf.st_mode);
+                                               (void)fchmod(TT.fileout, statbuf.st_mode);
 					} else {
 						TT.tempname = (char*)"";
 						TT.fileout = xopen("/dev/null", O_WRONLY);

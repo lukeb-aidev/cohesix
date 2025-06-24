@@ -149,8 +149,8 @@ int FAST_FUNC update_passwd(const char *filename,
 
  created:
 	if (fstat(old_fd, &sb) == 0) {
-		fchmod(new_fd, sb.st_mode & 0777); /* ignore errors */
-		fchown(new_fd, sb.st_uid, sb.st_gid);
+               (void)fchmod(new_fd, sb.st_mode & 0777); /* ignore errors */
+               (void)fchown(new_fd, sb.st_uid, sb.st_gid);
 	}
 	errno = 0;
 	new_fp = xfdopen_for_write(new_fd);

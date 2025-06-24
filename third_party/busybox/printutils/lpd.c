@@ -277,7 +277,7 @@ int lpd_main(int argc UNUSED_PARAM, char **argv)
 
 		if (spooling) {
 			// chmod completely downloaded file as "readable+writable"
-			fchmod(fd, 0600);
+                       (void)fchmod(fd, 0600);
 			// accumulate dump state
 			// N.B. after all files are dumped spooling should be 1+2+4==7
 			spooling |= (1 << (s[0]-1)); // bit 1: ctrlfile; bit 2: datafile
