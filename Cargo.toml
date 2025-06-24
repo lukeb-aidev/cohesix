@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Cargo.toml v0.21
+# Filename: Cargo.toml v0.22
 # Author: Lukas Bower
-# Date Modified: 2026-08-08
+# Date Modified: 2026-08-10
 [package]
 name    = "cohesix"
 version = "0.1.0"
@@ -140,5 +140,5 @@ path = "tools/cli/src/bin/cohbuild.rs"
 
 
 [patch.crates-io]
-find_cuda_helper = { git = "https://github.com/Rust-GPU/find_cuda_helper", rev = "HEAD" }
+find_cuda_helper = { git = "ssh://git@github.com/Rust-GPU/find_cuda_helper.git", rev = "HEAD" }
 
