@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: main.go v0.3
-// Date Modified: 2025-06-10
+// Filename: main.go v0.4
+// Date Modified: 2026-07-27
 // Author: Lukas Bower
 //
 // ─────────────────────────────────────────────────────────────
@@ -13,7 +13,10 @@
 //
 // Usage:
 //
-//	go run ./go/cmd/coh-9p-helper --listen :5640
+//	go run ./go/cmd/coh-9p-helper --listen :5640 [--socket /path/to.sock]
+//
+// The socket path defaults to filepath.Join(os.TempDir(), "coh9p.sock") or the
+// value of the COH9P_SOCKET environment variable.
 //
 // ─────────────────────────────────────────────────────────────
 package main
@@ -23,13 +26,17 @@ import (
 	"io"
 	"log"
 	"net"
+	"os"
+	"path/filepath"
 )
 
 var listenAddr = flag.String("listen", ":5640", "TCP address to listen on")
+var socketPath = flag.String("socket", "", "Unix socket path for 9P server")
+var unixSocket string
 
 func handleConn(c net.Conn) {
 	defer c.Close()
-	u, err := net.Dial("unix", "/tmp/coh9p.sock")
+	u, err := net.Dial("unix", unixSocket)
 	if err != nil {
 		log.Printf("unix dial error: %v", err)
 		return
@@ -42,6 +49,15 @@ func handleConn(c net.Conn) {
 
 func main() {
 	flag.Parse()
+
+	unixSocket = *socketPath
+	if unixSocket == "" {
+		unixSocket = os.Getenv("COH9P_SOCKET")
+		if unixSocket == "" {
+			unixSocket = filepath.Join(os.TempDir(), "coh9p.sock")
+		}
+	}
+
 	l, err := net.Listen("tcp", *listenAddr)
 	if err != nil {
 		log.Fatal("listen:", err)
