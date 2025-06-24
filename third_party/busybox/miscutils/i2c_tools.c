@@ -1129,7 +1129,8 @@ static void NORETURN list_i2c_busses_and_exit(void)
 {
 	const char *const i2cdev_path = "/sys/class/i2c-dev";
 
-	char path[NAME_MAX], name[128];
+       enum { PATH_BUF_SIZE = 1024 };
+       char path[PATH_BUF_SIZE], name[128];
 	struct dirent *de, *subde;
 	enum adapter_type adt;
 	DIR *dir, *subdir;
@@ -1149,22 +1150,28 @@ static void NORETURN list_i2c_busses_and_exit(void)
 			continue;
 
 		/* Simple version for ISA chips. */
-		snprintf(path, NAME_MAX, "%s/%s/name",
-			 i2cdev_path, de->d_name);
-		fp = fopen_for_read(path);
-		if (fp == NULL) {
-			snprintf(path, NAME_MAX,
-				 "%s/%s/device/name",
-				 i2cdev_path, de->d_name);
-			fp = fopen_for_read(path);
-		}
+               rv = snprintf(path, PATH_BUF_SIZE, "%s/%s/name",
+                               i2cdev_path, de->d_name);
+               if (rv < 0 || rv >= PATH_BUF_SIZE)
+                       continue;
+               fp = fopen_for_read(path);
+               if (fp == NULL) {
+                       rv = snprintf(path, PATH_BUF_SIZE,
+                                    "%s/%s/device/name",
+                                    i2cdev_path, de->d_name);
+                       if (rv < 0 || rv >= PATH_BUF_SIZE)
+                               continue;
+                       fp = fopen_for_read(path);
+               }
 
 		/* Non-ISA chips require the hard-way. */
 		if (fp == NULL) {
-			snprintf(path, NAME_MAX,
-				 "%s/%s/device/name",
-				 i2cdev_path, de->d_name);
-			subdir = opendir(path);
+                       rv = snprintf(path, PATH_BUF_SIZE,
+                                    "%s/%s/device/name",
+                                    i2cdev_path, de->d_name);
+                       if (rv < 0 || rv >= PATH_BUF_SIZE)
+                               continue;
+                       subdir = opendir(path);
 			if (subdir == NULL)
 				continue;
 
@@ -1173,11 +1180,13 @@ static void NORETURN list_i2c_busses_and_exit(void)
 					continue;
 
 				if (is_prefixed_with(subde->d_name, "i2c-")) {
-					snprintf(path, NAME_MAX,
-						 "%s/%s/device/%s/name",
-						 i2cdev_path, de->d_name,
-						 subde->d_name);
-					fp = fopen_for_read(path);
+                                       rv = snprintf(path, PATH_BUF_SIZE,
+                                                    "%s/%s/device/%s/name",
+                                                    i2cdev_path, de->d_name,
+                                                    subde->d_name);
+                                       if (rv < 0 || rv >= PATH_BUF_SIZE)
+                                               continue;
+                                       fp = fopen_for_read(path);
 					break;
 				}
 			}
