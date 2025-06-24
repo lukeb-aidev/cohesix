@@ -108,7 +108,7 @@
 | linker.ld | v0.1 | 2025-07-22 | COMMUNITY | | |
 | .cargo/config.toml | v0.4 | 2025-06-24 | COMMUNITY | | |
 | build.rs | v0.6 | 2026-07-29 | COMMUNITY | | |
-| Makefile | v0.30 | 2026-07-26 | COMMUNITY | | |
+| Makefile | v0.31 | 2026-07-29 | COMMUNITY | | |
 | test_boot_efi.sh | v0.15 | 2025-09-10 | COMMUNITY | | |
 | src/kernel/main.c | v0.2 | 2025-07-22 | COMMUNITY | | |
 | src/kernel/main.rs | v0.2 | 2025-08-02 | COMMUNITY | | |

@@ -1729,3 +1729,7 @@
 ### Added
 - README updated to v0.17 with CUDA build instructions requiring CUDA 12.4.
 
+## [v0.235] - 2026-07-29
+### Added
+- `cuda-build` target in Makefile builds a release with CUDA features.
+
