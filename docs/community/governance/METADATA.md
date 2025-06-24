@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: METADATA.md v3.41
+// Filename: METADATA.md v3.42
 // Author: Lukas Bower
-// Date Modified: 2026-07-30
+// Date Modified: 2026-07-31
 
 ## Canonical Documents
 
@@ -72,6 +72,7 @@
 | ls.1                      | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
 | man.1                     | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
 | mkdir.1                   | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
+| mount.1                   | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
 | mount.8                   | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
 | mv.1                      | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
 | netstat.8                 | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
@@ -80,9 +81,11 @@
 | rm.1                      | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
 | scp.1                     | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
 | sed.1                     | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
+| sh.1                     | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
 | ssh.1                     | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
 | tail.1                    | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
 | top.1                     | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
+| umount.1                  | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
 | umount.8                  | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
 | wget.1                    | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
 | ifconfig.8                | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
