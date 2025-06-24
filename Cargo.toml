@@ -30,7 +30,7 @@ thiserror = "1"
 clap = { version = "4.5.4", features = ["derive"] }
 sysinfo = "0.30"
 libloading = "0.7"
-cust = { version = "0.3.2", optional = true, features = ["no-std", "runtime"] }
+cust = { version = "0.3.2", optional = true }
 nvml-wrapper = { version = "0.11", optional = true }
 inotify = "0.10"
 rapier3d = { version = "0.17.2", optional = true }
