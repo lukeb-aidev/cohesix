@@ -1743,3 +1743,8 @@
 ### Added
 - Classification headers inserted in mount.1, umount.1, and sh.1.
 - METADATA updated with new manpage entries.
+
+## [v0.238] - 2026-08-01
+### Added
+- `.gitignore` now ignores local `go/gui-orchestrator*` build artifacts.
+- Removed stray compiled binaries from repository root.
