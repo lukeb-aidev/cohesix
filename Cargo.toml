@@ -140,5 +140,5 @@ path = "tools/cli/src/bin/cohbuild.rs"
 
 
 [patch.crates-io]
-find_cuda_helper = { path = "third_party/find_cuda_helper" }
+find_cuda_helper = { path = "third_party/find_cuda_helper/find_cuda_helper-0.2.0" }
 
