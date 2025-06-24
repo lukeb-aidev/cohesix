@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: METADATA.md v3.38
+// Filename: METADATA.md v3.39
 // Author: Lukas Bower
-// Date Modified: 2026-07-23
+// Date Modified: 2026-07-29
 
 ## Canonical Documents
 
@@ -107,6 +107,7 @@
 | CohesixBoot.inf | v0.1 | 2025-07-22 | COMMUNITY | | |
 | linker.ld | v0.1 | 2025-07-22 | COMMUNITY | | |
 | .cargo/config.toml | v0.1 | 2025-07-22 | COMMUNITY | | |
+| build.rs | v0.6 | 2026-07-29 | COMMUNITY | | |
 | Makefile | v0.30 | 2026-07-26 | COMMUNITY | | |
 | test_boot_efi.sh | v0.15 | 2025-09-10 | COMMUNITY | | |
 | src/kernel/main.c | v0.2 | 2025-07-22 | COMMUNITY | | |
