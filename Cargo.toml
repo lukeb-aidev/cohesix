@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Cargo.toml v0.20
+# Filename: Cargo.toml v0.21
 # Author: Lukas Bower
-# Date Modified: 2026-08-03
+# Date Modified: 2026-08-08
 [package]
 name    = "cohesix"
 version = "0.1.0"
@@ -30,7 +30,7 @@ thiserror = "1"
 clap = { version = "4.5.4", features = ["derive"] }
 sysinfo = "0.30"
 libloading = "0.7"
-cust = { version = "0.3", optional = true }
+cust = { version = "0.12", optional = true, features = ["no-std", "runtime"] }
 nvml-wrapper = { version = "0.11", optional = true }
 inotify = "0.10"
 rapier3d = { version = "0.17.2", optional = true }
@@ -137,4 +137,8 @@ path = "tools/cli/src/bin/cohcap.rs"
 [[bin]]
 name = "cohbuild"
 path = "tools/cli/src/bin/cohbuild.rs"
+
+
+[patch.crates-io]
+find_cuda_helper = { git = "https://github.com/Rust-GPU/find_cuda_helper", rev = "HEAD" }
 
