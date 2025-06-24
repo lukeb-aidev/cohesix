@@ -1,6 +1,6 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Makefile v0.30
-# Date Modified: 2026-07-26
+# Filename: Makefile v0.31
+# Date Modified: 2026-07-29
 # Author: Lukas Bower
 #
 # ─────────────────────────────────────────────────────────────
@@ -10,13 +10,14 @@
 #  • `make go-build` – vet Go workspace
 #  • `make go-test`  – run Go unit tests
 #  • `make c-shims`  – compile seL4 boot trampoline object
+#  • `make cuda-build` – release build with CUDA features
 #  • `make qemu`     – run boot image under QEMU
 #  • `make qemu-check` – verify boot log
 #  • `make help`     – list targets
 # ─────────────────────────────────────────────────────────────
 
-.PHONY: build all go-build go-test c-shims help fmt lint check \
-	boot boot-x86_64 boot-aarch64 bootloader kernel init-efi cohrun cohbuild cohtrace cohcap test test-python
+.PHONY: build cuda-build all go-build go-test c-shims help fmt lint check \
+        boot boot-x86_64 boot-aarch64 bootloader kernel init-efi cohrun cohbuild cohtrace cohcap test test-python
 
 PLATFORM ?= $(shell uname -m)
 TARGET ?= $(PLATFORM)
@@ -101,12 +102,15 @@ echo "Required architecture headers missing."; exit 1; \
 fi; \
 fi
 
-.PHONY: build all go-build go-test c-shims help fmt lint check cohrun cohbuild cohtrace cohcap kernel init-efi
+.PHONY: build cuda-build all go-build go-test c-shims help fmt lint check cohrun cohbuild cohtrace cohcap kernel init-efi
 
 all: go-build go-test c-shims kernel ## Run vet, tests, C shims and kernel
 
 build: kernel ## Build Rust workspace and kernel
-	@cargo build --workspace || echo "cargo build failed"
+        @cargo build --workspace || echo "cargo build failed"
+
+cuda-build: ## Build release with CUDA features
+	cargo clean && cargo build --release --features=cuda
 
 fmt: ## Run code formatters
 	@if command -v cargo-fmt >/dev/null 2>&1; then \
