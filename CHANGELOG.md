@@ -1706,3 +1706,8 @@
   suppression of `-Wunused-result` for UEFI loaders where error codes are logged
   then ignored.
 - Default builds still compile with `-Wunused-result` enabled.
+
+## [v0.230] - 2026-07-27
+### Changed
+- `newSignalContext` now returns a cancel function across platforms.
+- `main.go` defers the returned cancel function after starting the server.

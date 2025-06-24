@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: main.go v0.3
+// Filename: main.go v0.4
 // Author: Lukas Bower
-// Date Modified: 2026-07-26
+// Date Modified: 2026-07-27
 // License: SPDX-License-Identifier: MIT OR Apache-2.0
 
 package main
@@ -36,7 +36,8 @@ func main() {
 	}
 
 	srv := orchestrator.New(cfg)
-	ctx := newSignalContext(context.Background())
+	ctx, cancel := newSignalContext(context.Background())
+	defer cancel()
 	if err := srv.Start(ctx); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("server error: %v", err)
 	}
