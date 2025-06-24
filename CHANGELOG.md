@@ -1780,3 +1780,8 @@
 ### Changed
 - Moved `no_std` attribute to `lib.rs` and refactored `debug_log` to use
   `AtomicUsize` with safe access wrappers.
+
+## [v0.244] - 2026-08-07
+### Changed
+- `make_iso.sh` improves robustness and error handling. Kernel paths use explicit
+  variables and architecture validation is consolidated.
