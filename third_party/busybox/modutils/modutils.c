@@ -91,14 +91,20 @@ int FAST_FUNC string_to_llist(char *string, llist_t **llist, const char *delim)
 
 char* FAST_FUNC filename2modname(const char *filename, char *modname)
 {
-	char local_modname[MODULE_NAME_LEN];
-	int i;
-	const char *from;
+       int i;
+       const char *from;
 
-	if (filename == NULL)
-		return NULL;
-	if (modname == NULL)
-		modname = local_modname;
+       if (filename == NULL)
+               return NULL;
+       if (modname == NULL) {
+               /*
+                * Allocate buffer when caller does not supply one.
+                * This avoids returning a pointer to a stack variable
+                * and keeps the function thread-safe.  The caller is
+                * responsible for freeing the returned string.
+                */
+               modname = xmalloc(MODULE_NAME_LEN);
+       }
 	// Disabled since otherwise "modprobe dir/name" would work
 	// as if it is "modprobe name". It is unclear why
 	// 'basenamization' was here in the first place.
@@ -108,10 +114,7 @@ char* FAST_FUNC filename2modname(const char *filename, char *modname)
 		modname[i] = (from[i] == '-') ? '_' : from[i];
 	modname[i] = '\0';
 
-	if (modname == local_modname)
-		return xstrdup(modname);
-
-	return modname;
+       return modname;
 }
 
 #if ENABLE_FEATURE_CMDLINE_MODULE_OPTIONS
