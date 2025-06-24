@@ -263,14 +263,6 @@ fi
 export COHESIX_TARGET
 log "Using target $COHESIX_TARGET"
 
-# Patch find_cuda_helper crate if not already staged
-if [ ! -d "third_party/find_cuda_helper" ]; then
-  log "📥 Downloading find_cuda_helper crate..."
-  mkdir -p third_party
-  curl -L https://crates.io/api/v1/crates/find_cuda_helper/0.2.0/download | tar -xz
-  mv find_cuda_helper-0.2.0 third_party/find_cuda_helper
-  log "✅ find_cuda_helper crate staged"
-fi
 
 # Install the target if rustup is available and it's not already installed
 if command -v rustup >/dev/null 2>&1; then
