@@ -715,7 +715,7 @@ popen_ls(const char *opt)
 		 * to something harmless. Paranoia,
 		 * ls won't read it anyway */
 		close(STDIN_FILENO);
-		dup(STDOUT_FILENO); /* copy will become STDIN_FILENO */
+               (void)dup(STDOUT_FILENO); /* copy will become STDIN_FILENO */
 #if BB_MMU
 		/* memset(&G, 0, sizeof(G)); - ls_main does it */
 		exit(ls_main(/*argc_unused*/ 0, (char**) argv));

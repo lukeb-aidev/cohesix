@@ -200,8 +200,8 @@ int makemime_main(int argc UNUSED_PARAM, char **argv)
 	argv += optind;
 
 	// respect -o output
-	if (opts & OPT_o)
-		freopen(opt_output, "w", stdout);
+       if (opts & OPT_o)
+               (void)freopen(opt_output, "w", stdout);
 
 	// no files given on command line? -> use stdin
 	if (!*argv)

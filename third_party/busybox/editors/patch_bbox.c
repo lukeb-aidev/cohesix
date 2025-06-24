@@ -173,7 +173,7 @@ int patch_main(int argc UNUSED_PARAM, char **argv)
 			dst_stream = xfopen_for_write("/dev/null");
 		} else {
 			dst_stream = xfopen_for_write(new_filename);
-			fchmod(fileno(dst_stream), saved_stat.st_mode);
+                       (void)fchmod(fileno(dst_stream), saved_stat.st_mode);
 		}
 
 		printf("patching file %s\n", new_filename);

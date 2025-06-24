@@ -80,7 +80,7 @@ static void convert(char *fn, int conv_type)
 		fd = xmkstemp(temp_fn);
 		if (fchmod(fd, st.st_mode) == -1)
 			bb_simple_perror_msg_and_die(temp_fn);
-		fchown(fd, st.st_uid, st.st_gid);
+               (void)fchown(fd, st.st_uid, st.st_gid);
 
 		out = xfdopen_for_write(fd);
 	}

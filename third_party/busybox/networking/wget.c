@@ -1082,7 +1082,7 @@ static void NOINLINE retrieve_file_data(FILE *dfp)
 			 * "wget -qO- 'http://example.com/empty' >>FILE" truncating FILE.
 			 */
 			if (!(option_mask32 & WGET_NO_FTRUNCATE))
-				ftruncate(G.output_fd, pos);
+                       (void)ftruncate(G.output_fd, pos);
 		}
 	}
 
