@@ -12,6 +12,8 @@ if [ -f "$ROOT/scripts/load_arch_config.sh" ]; then
     source "$ROOT/scripts/load_arch_config.sh" --prompt
 else
     echo "⚠️  load_arch_config.sh not found. Skipping architecture config."
+    export COHESIX_ARCH="$(uname -m)"
+    echo "🔧 Fallback: setting COHESIX_ARCH to $COHESIX_ARCH"
 fi
 
 msg(){ printf "\e[32m==>\e[0m %s\n" "$*"; }
