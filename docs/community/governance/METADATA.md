@@ -228,7 +228,7 @@
 | tests/test_run_shell.rs | v0.1 | 2025-09-26 | COMMUNITY | | |
 | src/bootstrap/sel4_entry.rs | v0.2 | 2025-12-31 | COMMUNITY | | |
 | src/util/mod.rs | v0.1 | 2025-12-31 | COMMUNITY | | |
-| src/util/debug_log.rs | v0.2 | 2025-12-31 | COMMUNITY | | |
+| src/util/debug_log.rs | v0.3 | 2026-08-06 | COMMUNITY | | |
 
 | requirements.txt | v0.2 | 2026-01-27 | COMMUNITY | | |
 | tests/requirements.txt | v0.1 | 2026-07-12 | COMMUNITY | | |
