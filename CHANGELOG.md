@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v1.00
 // Author: Lukas Bower
-// Date Modified: 2026-08-10
+// Date Modified: 2026-08-11
 
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
@@ -1800,3 +1800,9 @@
 ## [v0.247] - 2026-08-10
 ### Changed
 - Converted git dependencies to SSH and updated Cargo configuration to use CLI fallback.
+
+## [v0.248] - 2026-08-11
+### Changed
+- `find_cuda_helper` is fetched from crates.io and patched locally.
+- `cohesix_fetch_build.sh` downloads the crate if missing before building.
+- Cargo.toml now references the local patch and metadata updated.
