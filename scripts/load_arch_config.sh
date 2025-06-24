@@ -48,4 +48,9 @@ EOF_CFG
         fi
     fi
 fi
+if [ -z "${COHESIX_ARCH:-}" ]; then
+    echo "❌ COHESIX_ARCH not set after loading config" >&2
+    return 1 2>/dev/null || exit 1
+fi
+echo "✅ Loaded COHESIX_ARCH=$COHESIX_ARCH from $CONFIG_FILE" >&2
 export COHESIX_ARCH
