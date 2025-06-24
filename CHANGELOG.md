@@ -1722,4 +1722,6 @@
 ## [v0.233] - 2025-06-24
 ### Added
 - `.cargo/config.toml` now defines an `[env]` table setting `CUDA_HOME` for local CUDA builds.
+### Changed
+- `build.rs` now derives CUDA paths from `CUDA_HOME` when the `cuda` feature is enabled.
 
