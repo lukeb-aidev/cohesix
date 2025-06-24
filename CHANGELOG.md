@@ -1761,3 +1761,9 @@
   running `cargo build --bins`.
 ### Fixed
 - Build script no longer warns when the `cuda` feature is disabled.
+
+## [v0.241] - 2026-08-04
+### Added
+- `config/plan9.ns` generated automatically if missing during build.
+- `scripts/make_grub_iso.sh` and `cohesix_fetch_build.sh` now stage `plan9.ns`
+  from `config/plan9.ns` with a default fallback.

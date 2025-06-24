@@ -135,9 +135,10 @@
 | docs/community/architecture/BOOT_KERNEL_FLOW.md | v0.2 | 2026-02-05 | COMMUNITY | | |
 | docs/community/archive/EXAMPLES_README.md | v0.3 | 2026-02-05 | COMMUNITY | | |
 | .cohesix_env | v0.3 | 2026-07-25 | COMMUNITY | | |
-| cohesix_fetch_build.sh | v0.60 | 2026-07-25 | COMMUNITY | | |
+| cohesix_fetch_build.sh | v0.62 | 2026-08-04 | COMMUNITY | | |
 | CONTRIBUTING.md | v1.1 | 2025-07-23 | COMMUNITY | | |
 | config/secure9p.toml | v0.3 | 2025-07-31 | COMMUNITY | | |
+| config/plan9.ns | v0.1 | 2026-08-04 | COMMUNITY | | |
 | src/secure9p/mod.rs | v0.2 | 2025-07-25 | COMMUNITY | | |
 | src/secure9p/auth_handler.rs | v0.4 | 2025-07-31 | COMMUNITY | | |
 | src/secure9p/cap_fid.rs | v0.2 | 2025-07-25 | COMMUNITY | | |
@@ -166,7 +167,7 @@
 | scripts/generate_busybox_man.sh | v0.1 | 2025-06-08 | COMMUNITY | | |
 | scripts/manpage_scan.sh | v0.1 | 2025-06-08 | COMMUNITY | | |
 | scripts/verify-macos-setup.sh | v0.1 | 2025-06-05 | COMMUNITY | | |
-| scripts/make_grub_iso.sh | v0.12 | 2026-06-20 | COMMUNITY | | |
+| scripts/make_grub_iso.sh | v0.13 | 2026-08-04 | COMMUNITY | | |
 | scripts/debug_qemu_boot.sh | v0.2 | 2025-12-23 | COMMUNITY | | |
 | scripts/boot_qemu.sh | v0.1 | 2025-12-29 | COMMUNITY | | |
 | scripts/validate_iso_build.sh | v0.1 | 2025-12-19 | COMMUNITY | | |
