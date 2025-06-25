@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-23
 
+use std::{fs, string::String, vec::Vec, boxed::Box};
 //! Dynamic Plan 9 namespace loader for Cohesix.
 //!
 //! Parses namespace descriptions from the `BOOT_NS` environment variable or
