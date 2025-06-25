@@ -1,30 +1,19 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: sel4_entry.rs v0.3
+// Filename: sel4_entry.rs v0.4
 // Author: Lukas Bower
-// Date Modified: 2026-08-12
+// Date Modified: 2026-08-21
 
-#![cfg(feature = "sel4_entry_bin")]
-#![cfg_attr(not(feature = "std"), no_std)]
 #![no_main]
-
-#[cfg(feature = "std")]
-extern crate std;
-
-#[cfg(not(feature = "std"))]
-use core::panic::PanicInfo;
-use cohesix::debug;
+#![cfg(all(feature = "sel4", feature = "kernel_bin", feature = "minimal_uefi"))]
 
 #[no_mangle]
-pub extern "C" fn _sel4_start() -> ! {
-    debug!("COHESIX_BOOT_OK\n");
-    cohesix::sh_loop::run();
-    debug!("ENTRY SETUP OK\n");
-    loop {}
-}
+pub extern "C" fn _start() -> ! {
+    extern "C" {
+        static _sel4_kernel_entry: u8;
+    }
 
-#[cfg(not(feature = "std"))]
-#[panic_handler]
-fn panic(_info: &PanicInfo) -> ! {
-    loop {}
+    unsafe {
+        let entry = &_sel4_kernel_entry as *const u8;
+        core::arch::asm!("br {}", in(reg) entry, options(noreturn));
+    }
 }
-
