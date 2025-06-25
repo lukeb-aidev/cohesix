@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: README.md v0.17
+// Filename: README.md v0.18
 // Author: Lukas Bower
-// Date Modified: 2025-06-24
+// Date Modified: 2026-08-12
 
 
 # Cohesix
@@ -130,6 +130,22 @@ The helper script `cohesix_fetch_build.sh` sets two variables after cloning:
 * `COH_GPU` – `1` if an NVIDIA device is accessible, else `0`
 
 CUDA tests and builds skip when `COH_GPU=0`.
+
+### Building the seL4 entry binary
+
+The optional `sel4_entry_bin` feature compiles `src/bootstrap/sel4_entry.rs` into
+an ELF used for kernel-level boot testing. Regular workspace builds exclude this
+binary:
+
+```bash
+cargo build --workspace --all-targets --all-features
+```
+
+To produce the seL4 entry binary, enable the feature explicitly:
+
+```bash
+cargo build --workspace --all-targets --all-features --features sel4_entry_bin
+```
 
 ### Building initfs.img
 
