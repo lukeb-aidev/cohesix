@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v1.00
 // Author: Lukas Bower
-// Date Modified: 2026-08-23
+// Date Modified: 2026-08-31
 
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
@@ -1851,3 +1851,8 @@
 ## [v0.258] - 2026-08-30
 ### Fixed
 - check-efi target now soft-fails when `init.efi` is missing or malformed.
+
+## [v0.259] - 2026-08-31
+### Fixed
+- check-efi exits cleanly when `init.efi` does not exist. `init-efi` logs the
+  missing binary instead of failing.
