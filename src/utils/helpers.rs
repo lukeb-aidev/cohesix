@@ -2,6 +2,8 @@
 // Filename: helpers.rs v0.1
 // Date Modified: 2025-06-01
 // Author: Lukas Bower
+
+use std::{fs, string::String, vec::Vec, boxed::Box};
 //
 // ─────────────────────────────────────────────────────────────
 // Cohesix · Miscellaneous Utility Helpers
