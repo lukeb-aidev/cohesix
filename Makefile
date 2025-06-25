@@ -264,20 +264,20 @@ kernel: check-efi ## Build Rust kernel BOOTX64.EFI
 
 
 init-efi: check-efi ## Build init EFI binary
-        @echo "🏁 Building init EFI using $(TOOLCHAIN)"
-        @mkdir -p obj/init_efi out/iso/init
-        # init uses wrapper calls that intentionally drop errors
-        $(CROSS_CC) $(CFLAGS_INIT_EFI) $(CFLAGS_IGNORE_RESULT) -c src/init_efi/main.c -o obj/init_efi/main.o
-        @echo "Linking for UEFI on $(ARCH)"
-        $(CROSS_LD) \
-        -nostdlib \
-        -znocombreloc \
-        -T src/init_efi/linker.ld \
-        $(HOME)/gnu-efi/gnuefi/crt0-efi-aarch64.o \
-        obj/init_efi/main.o \
-        $(HOME)/gnu-efi/aarch64/lib/libefi.a \
-        $(HOME)/gnu-efi/gnuefi/libgnuefi.a \
-        -o out/iso/init/init.efi || scripts/manual_efi_link.sh
+	@echo "🏁 Building init EFI using $(TOOLCHAIN)"
+	@mkdir -p obj/init_efi out/iso/init
+	# init uses wrapper calls that intentionally drop errors
+	$(CROSS_CC) $(CFLAGS_INIT_EFI) $(CFLAGS_IGNORE_RESULT) -c src/init_efi/main.c -o obj/init_efi/main.o
+	@echo "Linking for UEFI on $(ARCH)"
+	$(CROSS_LD) \
+	-nostdlib \
+	-znocombreloc \
+	-T src/init_efi/linker.ld \
+	$(HOME)/gnu-efi/gnuefi/crt0-efi-aarch64.o \
+	obj/init_efi/main.o \
+	$(HOME)/gnu-efi/aarch64/lib/libefi.a \
+	$(HOME)/gnu-efi/gnuefi/libgnuefi.a \
+	-o out/iso/init/init.efi || scripts/manual_efi_link.sh
 ifeq ($(OS),Windows_NT)
 	@if command -v llvm-objdump >/dev/null 2>&1; then \
 	llvm-objdump -p out/iso/init/init.efi | grep -q "PE32"; \
