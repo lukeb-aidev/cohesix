@@ -112,7 +112,7 @@
 | .bashrc | v0.1 | 2026-08-09 | COMMUNITY | | |
 | .cargo/config.toml | v0.7 | 2026-08-23 | COMMUNITY | | |
 | build.rs | v0.8 | 2026-08-21 | COMMUNITY | | |
-| Makefile | v0.36 | 2026-08-27 | COMMUNITY | | |
+| Makefile | v0.37 | 2026-08-28 | COMMUNITY | | |
 | test_boot_efi.sh | v0.15 | 2025-09-10 | COMMUNITY | | |
 | src/kernel/main.c | v0.2 | 2025-07-22 | COMMUNITY | | |
 | src/kernel/main.rs | v0.2 | 2025-08-02 | COMMUNITY | | |
@@ -191,7 +191,7 @@
 | src/userbin/logdemo.rs | v0.1 | 2025-08-27 | COMMUNITY | | |
 | src/init/main.rs | v0.1 | 2025-09-05 | COMMUNITY | | |
 | src/init_efi/main.c | v0.3 | 2025-09-02 | COMMUNITY | | |
-| src/init_efi/linker.ld | v0.1 | 2026-08-26 | COMMUNITY | | |
+| src/init_efi/linker.ld | v0.2 | 2026-08-28 | COMMUNITY | | |
 | full_fetch_and_build.sh | v0.10 | 2026-07-07 | COMMUNITY | | |
 | etc/init.conf | v0.1 | 2025-08-27 | COMMUNITY | | |
 | etc/init.cfg | v0.1 | 2025-08-30 | COMMUNITY | | |
