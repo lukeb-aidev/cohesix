@@ -1847,3 +1847,7 @@
 ## [v0.257] - 2026-08-28
 ### Fixed
 - Removed -shared from init-efi link command and added -znocombreloc to fix aarch64 relocations.
+
+## [v0.258] - 2026-08-30
+### Fixed
+- check-efi target now soft-fails when `init.efi` is missing or malformed.
