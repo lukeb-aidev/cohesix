@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: manual_efi_link.sh v0.2
+# Filename: manual_efi_link.sh v0.3
 # Author: Lukas Bower
-# Date Modified: 2026-09-03
+# Date Modified: 2026-09-04
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
@@ -19,3 +19,15 @@ LOG_FILE="init_efi_link.log"
     "$HOME/gnu-efi/gnuefi/libgnuefi.a" \
     -o out/iso/init/init.efi
 } &> "$LOG_FILE"
+
+if grep -qi "rwx" "$LOG_FILE"; then
+  aarch64-linux-gnu-ld -nostdlib -znocombreloc --no-warn-rwx-segment \
+    -T src/init_efi/linker.ld \
+    "$HOME/gnu-efi/gnuefi/crt0-efi-aarch64.o" \
+    obj/init_efi/main.o \
+    "$HOME/gnu-efi/aarch64/lib/libefi.a" \
+    "$HOME/gnu-efi/gnuefi/libgnuefi.a" \
+    -o out/iso/init/init.efi >> "$LOG_FILE" 2>&1
+fi
+
+file out/iso/init/init.efi >> "$LOG_FILE"
