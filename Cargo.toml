@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Cargo.toml v0.23
+# Filename: Cargo.toml v0.24
 # Author: Lukas Bower
-# Date Modified: 2026-08-11
+# Date Modified: 2026-08-12
 [package]
 name    = "cohesix"
 version = "0.1.0"
@@ -91,6 +91,7 @@ uefi = []
 # minimal_uefi: ensures only firmware-safe crates are compiled
 minimal_uefi = []
 entropy = ["getrandom"]
+sel4_entry_bin = []
 
 [profile.release]
 panic = "abort"
@@ -124,7 +125,7 @@ path = "src/root/main.rs"
 name = "sel4_entry"
 path = "src/bootstrap/sel4_entry.rs"
 test = false
-required-features = ["sel4"]
+required-features = ["sel4_entry_bin"]
 
 [[bin]]
 name = "cohtrace"

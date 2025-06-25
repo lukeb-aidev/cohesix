@@ -1,8 +1,9 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: sel4_entry.rs v0.2
+// Filename: sel4_entry.rs v0.3
 // Author: Lukas Bower
-// Date Modified: 2025-12-31
+// Date Modified: 2026-08-12
 
+#![cfg(feature = "sel4_entry_bin")]
 #![cfg_attr(not(feature = "std"), no_std)]
 #![no_main]
 

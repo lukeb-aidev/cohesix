@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.65
+# Filename: cohesix_fetch_build.sh v0.66
 # Author: Lukas Bower
-# Date Modified: 2026-08-11
+# Date Modified: 2026-08-12
 #!/bin/bash
 
 HOST_ARCH="$(uname -m)"
@@ -60,6 +60,13 @@ esac
 export COHESIX_TARGET COHESIX_ARCH
 COH_ARCH="$COHESIX_ARCH"
 log "Architecture: $COH_ARCH (target $COHESIX_TARGET)"
+
+# Optional seL4 entry build flag
+SEL4_ENTRY=0
+if [[ ${1:-} == --sel4-entry ]]; then
+  SEL4_ENTRY=1
+  shift
+fi
 
 
 # CUDA detection and environment setup
@@ -275,7 +282,11 @@ else
 fi
 
 log "🧱 Building all Rust binaries in workspace (CLI, tools, validator, shell, etc)..."
-cargo build --release --workspace --all-targets --all-features
+FEATURES="cuda,std,sel4,rapier,physics,busybox,no-cuda,joystick,secure9p,kernel_bin,uefi,minimal_uefi,entropy"
+if [ "$SEL4_ENTRY" = 1 ]; then
+  FEATURES+=" ,sel4_entry_bin"
+fi
+cargo build --release --workspace --all-targets --no-default-features --features "$FEATURES"
 grep -Ei 'error|fail|panic|permission denied|warning' "$LOG_FILE" > "$SUMMARY_ERRORS" || true
 
 # Ensure output directory exists before copying Rust binaries
