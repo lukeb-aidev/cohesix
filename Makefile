@@ -233,10 +233,10 @@ init-efi: check-efi ## Build init EFI binary
 	# init uses wrapper calls that intentionally drop errors
 	$(CC) $(CFLAGS_INIT_EFI) $(CFLAGS_IGNORE_RESULT) -c src/init_efi/main.c -o out/init_efi.o
 	@echo "Linking for UEFI on $(shell uname -m)"
-	$(LD) /usr/lib/crt0-efi-x86_64.o out/init_efi.o \
-	-o out/init_efi.so -T linker.ld $(LD_FLAGS)
+	$(LD) /usr/lib/crt0-efi-$(EFI_ARCH).o out/init_efi.o \
+	-o out/init_efi.so -T src/init_efi/linker.ld $(LD_FLAGS)
 	@command -v objcopy >/dev/null 2>&1 || { echo "objcopy not found"; exit 1; }
-	objcopy --target=efi-app-x86_64 out/init_efi.so out/bin/init.efi
+	objcopy --target=efi-app-$(EFI_ARCH) out/init_efi.so out/bin/init.efi
 ifeq ($(OS),Windows_NT)
 	@if command -v llvm-objdump >/dev/null 2>&1; then \
 llvm-objdump -p out/bin/init.efi | grep -q "PE32"; \
