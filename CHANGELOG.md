@@ -1887,3 +1887,6 @@
 ### Changed
 - Makefile v0.42 links `init-efi` using `$(CROSS_CC)` and `$(CROSS_LD)`.
 - Fallback to `scripts/manual_efi_link.sh` if the link step fails.
+### Added
+- `CROSS_CC` and `CROSS_LD` variables for aarch64 cross-compiling.
+
