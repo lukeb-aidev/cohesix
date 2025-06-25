@@ -1897,6 +1897,16 @@
 ### Added
 - `verify-efi` make target validates `out/iso/init/init.efi` using `file`.
 
+## [v0.268] - 2026-09-08
+### Added
+- `src/init_efi/elf_aarch64_efi.lds` defines `ImageBase` for aarch64 EFI builds.
+### Fixed
+- `init-efi` link flags use `-T elf_aarch64_efi.lds` and link against `-lefi` and `-lgnuefi`.
+### Changed
+- `Makefile` v0.45 removes stub functions and adjusts init EFI link step.
+- `src/init_efi/main.c` v0.5 now relies on gnu-efi for libc helpers.
+- `scripts/manual_efi_link.sh` v0.5 mirrors the updated flags.
+
 ## [v0.267] - 2026-09-07
 ### Added
 - `src/init_efi/efistubs.c` provides minimal EFI-safe replacements for missing C stdlib functions.
