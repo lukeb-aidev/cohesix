@@ -1832,3 +1832,7 @@
 ## [v0.253] - 2026-08-24
 ### Fixed
 - Makefile platform check skips EFI validation on non-Windows hosts so `make init-efi` succeeds on Linux.
+
+## [v0.254] - 2026-08-25
+### Fixed
+- Makefile `init-efi` target now adds `-mno-red-zone` only when building on `x86_64` hosts.
