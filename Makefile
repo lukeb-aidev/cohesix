@@ -113,26 +113,26 @@ $(info Using $(TOOLCHAIN) toolchain for UEFI build...)
 
 .PHONY: check-efi
 check-efi:
-       @ls -lh out/iso/init
-       @if [ ! -f out/iso/init/init.efi ]; then \
-         echo "\xe2\x9d\x8c check-efi: init.efi not found. EFI build likely failed earlier."; \
-         exit 0; \
-       fi
-       @file out/iso/init/init.efi | grep -iq "EFI application" && \
-         echo "\xe2\x9c\x85 init.efi format OK" || \
-         { echo "\xe2\x9a\xa0\ufe0f init.efi found but does not appear valid"; exit 0; }
+	@ls -lh out/iso/init
+	@if [ ! -f out/iso/init/init.efi ]; then \
+	echo "\xe2\x9d\x8c check-efi: init.efi not found. EFI build likely failed earlier."; \
+	exit 0; \
+	fi
+	@file out/iso/init/init.efi | grep -iq "EFI application" && \
+	echo "\xe2\x9c\x85 init.efi format OK" || \
+	{ echo "\xe2\x9a\xa0\ufe0f init.efi found but does not appear valid"; exit 0; }
 ifeq ($(findstring Windows,$(HOST_OS)),Windows)
 	@if [ "$(EFI_AVAILABLE)" != "1" ]; then \
-echo "gnu-efi headers not found at $(GNUEFI_HDR)"; exit 1; \
-fi
+	echo "gnu-efi headers not found at $(GNUEFI_HDR)"; exit 1; \
+	fi
 	@if [ ! -f $(GNUEFI_BIND) ]; then \
-echo "$(GNUEFI_BIND) missing. Falling back to x86_64 headers if available."; \
-if [ "$(EFI_ARCH)" != "x86_64" ] && [ -f $(EFI_BASE)/x86_64/efibind.h ]; then \
-echo "Using $(EFI_BASE)/x86_64/efibind.h"; \
-else \
-echo "Required architecture headers missing."; exit 1; \
-fi; \
-fi
+	echo "$(GNUEFI_BIND) missing. Falling back to x86_64 headers if available."; \
+	if [ "$(EFI_ARCH)" != "x86_64" ] && [ -f $(EFI_BASE)/x86_64/efibind.h ]; then \
+	echo "Using $(EFI_BASE)/x86_64/efibind.h"; \
+	else \
+	echo "Required architecture headers missing."; exit 1; \
+	fi; \
+	fi
 else
 	@echo "Skipping Windows-only EFI header verification on $(HOST_OS)"
 	@if [ ! -f /usr/lib/aarch64-linux-gnu/gnuefi/libefi.a ] || \
@@ -143,6 +143,8 @@ else
 endif
 
 .PHONY: build cuda-build all go-build go-test c-shims help fmt lint check cohrun cohbuild cohtrace cohcap gui-orchestrator kernel init-efi
+.PHONY: init-efi
+.PHONY: verify-efi
 
 all: go-build go-test c-shims kernel ## Run vet, tests, C shims and kernel
 
@@ -259,15 +261,15 @@ init-efi: check-efi ## Build init EFI binary
 	# init uses wrapper calls that intentionally drop errors
 	$(CC) $(CFLAGS_INIT_EFI) $(CFLAGS_IGNORE_RESULT) -c src/init_efi/main.c -o obj/init_efi/main.o
 	@echo "Linking for UEFI on $(ARCH)"
-		       aarch64-linux-gnu-ld \
-		       -nostdlib \
-		       -znocombreloc \
-		       -T src/init_efi/linker.ld \
-		       $(CRT0) \
-		       obj/init_efi/main.o \
-		       /usr/lib/aarch64-linux-gnu/gnuefi/libefi.a \
-		       /usr/lib/aarch64-linux-gnu/gnuefi/libgnuefi.a \
-	       -o out/iso/init/init.efi
+	$(LD) \
+	-nostdlib \
+	-znocombreloc \
+	-T src/init_efi/linker.ld \
+	$(HOME)/gnu-efi/gnuefi/crt0-efi-aarch64.o \
+	obj/init_efi/main.o \
+	$(HOME)/gnu-efi/aarch64/lib/libefi.a \
+	$(HOME)/gnu-efi/gnuefi/libgnuefi.a \
+	-o out/iso/init/init.efi
 ifeq ($(OS),Windows_NT)
 	@if command -v llvm-objdump >/dev/null 2>&1; then \
 	llvm-objdump -p out/iso/init/init.efi | grep -q "PE32"; \
@@ -277,6 +279,15 @@ ifeq ($(OS),Windows_NT)
 else
 	@echo "Skipping PE header validation on $(HOST_OS)"
 endif
+
+verify-efi:
+	@if [ ! -f out/iso/init/init.efi ]; then \
+	echo "init.efi missing" >&2; exit 1; \
+	fi
+	@file out/iso/init/init.efi | grep -iq "EFI application" || { \
+	echo "invalid init.efi" >&2; exit 1; \
+	}
+	@echo "init.efi verified"
 
 boot: ## Build boot image for current PLATFORM
 	$(MAKE) boot-$(PLATFORM)
