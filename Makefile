@@ -242,14 +242,18 @@ kernel: check-efi ## Build Rust kernel BOOTX64.EFI
 
 init-efi: check-efi ## Build init EFI binary
 	@echo "🏁 Building init EFI using $(TOOLCHAIN)"
-	@mkdir -p out/iso/init
-	        # init uses wrapper calls that intentionally drop errors
-	        $(CC) $(CFLAGS_INIT_EFI) $(CFLAGS_IGNORE_RESULT) -c src/init_efi/main.c -o out/init_efi.o
+	@mkdir -p obj/init_efi out/iso/init
+	# init uses wrapper calls that intentionally drop errors
+	$(CC) $(CFLAGS_INIT_EFI) $(CFLAGS_IGNORE_RESULT) -c src/init_efi/main.c -o obj/init_efi/main.o
 	@echo "Linking for UEFI on $(ARCH)"
-	$(LD) $(CRT0) out/init_efi.o \
-	-o out/init_efi.so -T src/init_efi/linker.ld $(LD_FLAGS)
-	@command -v objcopy >/dev/null 2>&1 || { echo "objcopy not found"; exit 1; }
-	objcopy --target=efi-app-$(EFI_ARCH) out/init_efi.so out/iso/init/init.efi
+	$(LD) \
+	-nostdlib \
+	-znocombreloc \
+	-T src/init_efi/linker.ld \
+	$(CRT0) obj/init_efi/main.o \
+	-L/usr/lib -lgnuefi -lefi \
+	-e efi_main \
+	-o out/iso/init/init.efi
 ifeq ($(OS),Windows_NT)
 	@if command -v llvm-objdump >/dev/null 2>&1; then \
 	llvm-objdump -p out/iso/init/init.efi | grep -q "PE32"; \
