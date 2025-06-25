@@ -9,7 +9,7 @@
 //! system events, service behavior, and rule validation results.
 //! This supports validation agents, debugging, and runtime observability.
 
-use std::{fs, string::String, vec::Vec, boxed::Box};
+use std::boxed::Box;
 
 /// Enum representing the level of a trace event.
 #[derive(Debug)]
