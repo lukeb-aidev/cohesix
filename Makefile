@@ -37,7 +37,7 @@ HOST_OS ?= $(if $(OS),$(OS),$(shell uname -s))
 ARCH := $(shell uname -m)
 
 ifeq ($(ARCH),aarch64)
-CRT0 := /usr/lib/crt0-efi-aarch64.o
+CRT0 := $(HOME)/gnu-efi/gnuefi/crt0-efi-aarch64.o
 else ifeq ($(ARCH),x86_64)
 CRT0 := /usr/lib/x86_64-linux-gnu/crt0-efi-x86_64.o
 else
@@ -62,7 +62,7 @@ GNUEFI_BIND := $(EFI_BASE)/$(EFI_ARCH)/efibind.h
 
 EFI_AVAILABLE := $(shell [ -f "$(GNUEFI_HDR)" ] && echo 1 || echo 0)
 
-EFI_INCLUDES := -I$(EFI_BASE) -I$(EFI_BASE)/$(EFI_ARCH)
+EFI_INCLUDES := -I$(HOME)/gnu-efi/inc -I$(HOME)/gnu-efi/inc/aarch64
 
 # Ensure compiler exists
 ifeq ($(shell command -v $(CC) >/dev/null 2>&1 && echo yes || echo no),no)
