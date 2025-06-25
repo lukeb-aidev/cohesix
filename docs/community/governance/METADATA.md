@@ -175,6 +175,7 @@
 | scripts/build_root_elf.sh | v0.11 | 2026-07-25 | COMMUNITY | | |
 | scripts/load_arch_config.sh | v0.1 | 2026-07-25 | COMMUNITY | | |
 | scripts/build_busybox.sh | v0.4 | 2026-01-26 | COMMUNITY | | |
+| scripts/manual_efi_link.sh | v0.1 | 2026-09-02 | COMMUNITY | | |
 | tools/make_iso.sh | v0.4 | 2026-01-26 | COMMUNITY | | |
 | metadata.json | v0.1 | 2025-07-24 | COMMUNITY | | |
 | Cargo.toml | v0.26 | 2026-08-22 | COMMUNITY | | |
