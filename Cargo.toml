@@ -14,6 +14,7 @@ anyhow = "1.0"
 log = "0.4"
 bitflags = "2"
 fatfs = "0.3.6"
+cust = { version = "0.3.2", features = ["nvrtc", "driver"] }
 
 [target.'cfg(not(target_os = "uefi"))'.dependencies]
 cohesix-9p = { path = "cohesix-9p" }
