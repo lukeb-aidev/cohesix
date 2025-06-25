@@ -1,6 +1,6 @@
-	# CLASSIFICATION: COMMUNITY
-# Filename: Makefile v0.34
-# Date Modified: 2026-08-24
+# CLASSIFICATION: COMMUNITY
+# Filename: Makefile v0.35
+# Date Modified: 2026-08-25
 # Author: Lukas Bower
 #
 # ─────────────────────────────────────────────────────────────
@@ -34,6 +34,7 @@ endif
 # Detect build host operating system. On Windows, `$(OS)` is set to Windows_NT.
 # Fallback to `uname` when $(OS) is empty. Used to skip Windows-only EFI checks.
 HOST_OS ?= $(if $(OS),$(OS),$(shell uname -s))
+ARCH := $(shell uname -m)
 
 # Detect compiler; use environment override if provided
 CC ?= $(shell command -v clang >/dev/null 2>&1 && echo clang || echo gcc)
@@ -83,6 +84,12 @@ LDFLAGS_EFI := -shared -Bsymbolic -nostdlib -znocombreloc -L/usr/lib -lgnuefi -l
 endif
 
 LD_FLAGS := $(LDFLAGS_EFI)
+
+# Flags for building the init EFI binary
+CFLAGS_INIT_EFI := $(filter-out -mno-red-zone,$(CFLAGS_EFI))
+ifeq ($(ARCH),x86_64)
+CFLAGS_INIT_EFI += -mno-red-zone
+endif
 
 # Compile with warnings for unused results by default
 CFLAGS_WARN := -Wall -Wextra -Wunused-result
@@ -223,8 +230,8 @@ kernel: check-efi ## Build Rust kernel BOOTX64.EFI
 init-efi: check-efi ## Build init EFI binary
 	@echo "🏁 Building init EFI using $(TOOLCHAIN)"
 	@mkdir -p out/bin
-    # init uses wrapper calls that intentionally drop errors
-	$(CC) $(CFLAGS_EFI) $(CFLAGS_IGNORE_RESULT) -c src/init_efi/main.c -o out/init_efi.o
+	# init uses wrapper calls that intentionally drop errors
+	$(CC) $(CFLAGS_INIT_EFI) $(CFLAGS_IGNORE_RESULT) -c src/init_efi/main.c -o out/init_efi.o
 	@echo "Linking for UEFI on $(shell uname -m)"
 	$(LD) /usr/lib/crt0-efi-x86_64.o out/init_efi.o \
 	-o out/init_efi.so -T linker.ld $(LD_FLAGS)
