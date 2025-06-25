@@ -1,12 +1,18 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: main.c v0.3
+// Filename: main.c v0.4
 // Author: Lukas Bower
-// Date Modified: 2025-09-02
+// Date Modified: 2026-09-01
 // SPDX-License-Identifier: MIT
 #include <efi.h>
 #include <efilib.h>
 #include <string.h>
 #include <stdio.h>
+
+void *__stack_chk_guard = 0;
+void __stack_chk_fail(void) { while (1); }
+#define strchr __builtin_strchr
+#define strlen __builtin_strlen
+#define snprintf __builtin_snprintf
 
 EFI_STATUS
 efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *systab) {
@@ -52,7 +58,7 @@ efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *systab) {
         }
 
         CHAR8 path_ascii[128];
-        snprintf(path_ascii, sizeof(path_ascii), "\\\roles\\%a\\config.yaml", role);
+        snprintf(path_ascii, sizeof(path_ascii), "\\\roles\\%s\\config.yaml", role);
         CHAR16 path[128];
         for (int i = 0; path_ascii[i]; i++)
             path[i] = (CHAR16)path_ascii[i];

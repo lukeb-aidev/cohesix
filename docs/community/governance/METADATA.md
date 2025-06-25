@@ -190,7 +190,7 @@
 | src/kernel/config.rs | v0.1 | 2025-08-27 | COMMUNITY | | |
 | src/userbin/logdemo.rs | v0.1 | 2025-08-27 | COMMUNITY | | |
 | src/init/main.rs | v0.1 | 2025-09-05 | COMMUNITY | | |
-| src/init_efi/main.c | v0.3 | 2025-09-02 | COMMUNITY | | |
+| src/init_efi/main.c | v0.4 | 2026-09-01 | COMMUNITY | | |
 | src/init_efi/linker.ld | v0.3 | 2026-08-29 | COMMUNITY | | |
 | full_fetch_and_build.sh | v0.10 | 2026-07-07 | COMMUNITY | | |
 | etc/init.conf | v0.1 | 2025-08-27 | COMMUNITY | | |
