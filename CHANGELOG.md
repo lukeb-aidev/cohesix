@@ -1864,3 +1864,8 @@
 ## [v0.261] - 2026-09-02
 ### Added
 - `scripts/manual_efi_link.sh` builds `init.efi` using GNU EFI tools and logs to `init_efi_link.log`.
+
+## [v0.262] - 2026-09-03
+### Added
+- Documented manual EFI linking in `README.md`.
+- `scripts/manual_efi_link.sh` now version v0.2; expects GNU EFI build at `~/gnu-efi`.
