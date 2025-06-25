@@ -7,8 +7,6 @@
 //! Runtime CUDA integration using dynamic loading of `libcuda.so`.
 //! Falls back gracefully if no CUDA driver is present.
 
-use std::{string::String, vec::Vec, boxed::Box};
-
 use crate::runtime::ServiceRegistry;
 use libloading::{Library, Symbol};
 use crate::validator::{self, RuleViolation};

@@ -5,7 +5,6 @@
 
 //! WASM backend for the Coh_CC compiler. Translates IR into WebAssembly text (WAT) format.
 
-use std::{fs, string::String, vec::Vec, boxed::Box};
 
 use crate::ir::Module;
 

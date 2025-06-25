@@ -5,7 +5,6 @@
 
 //! GPU information service.
 
-use std::{fs, string::String, vec::Vec, boxed::Box};
 
 use crate::runtime::ServiceRegistry;
 use super::Service;

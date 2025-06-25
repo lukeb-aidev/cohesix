@@ -5,7 +5,6 @@
 
 //! Debug backend for the Coh_CC compiler. Emits human-readable IR dumps.
 
-use std::{fs, string::String, vec::Vec, boxed::Box};
 
 use crate::ir::Module;
 
