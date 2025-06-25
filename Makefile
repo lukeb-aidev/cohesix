@@ -1,6 +1,6 @@
 		# CLASSIFICATION: COMMUNITY
-# Filename: Makefile v0.42
-# Date Modified: 2026-09-06
+# Filename: Makefile v0.43
+# Date Modified: 2026-09-07
 # Author: Lukas Bower
 #
 # ─────────────────────────────────────────────────────────────
@@ -288,7 +288,7 @@ else
 	@echo "Skipping PE header validation on $(HOST_OS)"
 endif
 
-verify-efi:
+verify-efi: ## Verify init EFI binary
 	@if [ ! -f out/iso/init/init.efi ]; then \
 	echo "init.efi missing" >&2; exit 1; \
 	fi
