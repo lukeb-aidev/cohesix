@@ -2,9 +2,9 @@
 // Filename: manager.rs v1.0
 // Date Modified: 2025-05-26
 // Author: Lukas Bower
-use std::{fs, string::String, vec::Vec, boxed::Box};
-
 //! PassManager orchestrates the registration and execution of IR passes in Coh_CC.
+
+use std::{fs, string::String, vec::Vec, boxed::Box};
 
 use crate::ir::IRContext;
 use crate::pass_framework::traits::IRPass;

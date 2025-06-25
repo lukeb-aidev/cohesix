@@ -3,8 +3,9 @@
 // Date Modified: 2025-07-24
 // Author: Lukas Bower
 
-use std::{fs, string::String, vec::Vec, boxed::Box};
 //! C backend for the Coh_CC compiler. Translates IR into C code.
+
+use std::{fs, string::String, vec::Vec, boxed::Box};
 
 use crate::ir::{Module, Opcode};
 

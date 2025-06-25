@@ -3,8 +3,9 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-11
 
-use std::{fs, string::String, vec::Vec, boxed::Box};
 //! GPU information service.
+
+use std::{fs, string::String, vec::Vec, boxed::Box};
 
 use crate::runtime::ServiceRegistry;
 use super::Service;
