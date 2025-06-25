@@ -1,6 +1,6 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Makefile v0.35
-# Date Modified: 2026-08-25
+# Filename: Makefile v0.36
+# Date Modified: 2026-08-27
 # Author: Lukas Bower
 #
 # ─────────────────────────────────────────────────────────────
@@ -35,6 +35,18 @@ endif
 # Fallback to `uname` when $(OS) is empty. Used to skip Windows-only EFI checks.
 HOST_OS ?= $(if $(OS),$(OS),$(shell uname -s))
 ARCH := $(shell uname -m)
+
+ifeq ($(ARCH),aarch64)
+CRT0 := /usr/lib/crt0-efi-aarch64.o
+else ifeq ($(ARCH),x86_64)
+CRT0 := /usr/lib/x86_64-linux-gnu/crt0-efi-x86_64.o
+else
+$(error Unsupported architecture: $(ARCH))
+endif
+
+ifeq ($(wildcard $(CRT0)),)
+$(error crt0 object not found at $(CRT0))
+endif
 
 # Detect compiler; use environment override if provided
 CC ?= $(shell command -v clang >/dev/null 2>&1 && echo clang || echo gcc)
@@ -227,22 +239,23 @@ kernel: check-efi ## Build Rust kernel BOOTX64.EFI
 	objcopy --target=efi-app-x86_64 out/kernel.so out/BOOTX64.EFI
 	cp out/BOOTX64.EFI out/EFI/BOOT/BOOTX64.EFI
 
+
 init-efi: check-efi ## Build init EFI binary
 	@echo "🏁 Building init EFI using $(TOOLCHAIN)"
-	@mkdir -p out/bin
-	# init uses wrapper calls that intentionally drop errors
-	$(CC) $(CFLAGS_INIT_EFI) $(CFLAGS_IGNORE_RESULT) -c src/init_efi/main.c -o out/init_efi.o
-	@echo "Linking for UEFI on $(shell uname -m)"
-	$(LD) /usr/lib/crt0-efi-$(EFI_ARCH).o out/init_efi.o \
+	@mkdir -p out/iso/init
+	        # init uses wrapper calls that intentionally drop errors
+	        $(CC) $(CFLAGS_INIT_EFI) $(CFLAGS_IGNORE_RESULT) -c src/init_efi/main.c -o out/init_efi.o
+	@echo "Linking for UEFI on $(ARCH)"
+	$(LD) $(CRT0) out/init_efi.o \
 	-o out/init_efi.so -T src/init_efi/linker.ld $(LD_FLAGS)
 	@command -v objcopy >/dev/null 2>&1 || { echo "objcopy not found"; exit 1; }
-	objcopy --target=efi-app-$(EFI_ARCH) out/init_efi.so out/bin/init.efi
+	objcopy --target=efi-app-$(EFI_ARCH) out/init_efi.so out/iso/init/init.efi
 ifeq ($(OS),Windows_NT)
 	@if command -v llvm-objdump >/dev/null 2>&1; then \
-llvm-objdump -p out/bin/init.efi | grep -q "PE32"; \
-else \
-echo "llvm-objdump missing; skipping PE header check"; \
-fi
+	llvm-objdump -p out/iso/init/init.efi | grep -q "PE32"; \
+	else \
+	echo "llvm-objdump missing; skipping PE header check"; \
+	fi
 else
 	@echo "Skipping PE header validation on $(HOST_OS)"
 endif
