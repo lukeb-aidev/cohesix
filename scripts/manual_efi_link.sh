@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: manual_efi_link.sh v0.1
+# Filename: manual_efi_link.sh v0.2
 # Author: Lukas Bower
-# Date Modified: 2026-09-02
+# Date Modified: 2026-09-03
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"

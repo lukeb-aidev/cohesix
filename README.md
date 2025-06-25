@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: README.md v0.18
+// Filename: README.md v0.19
 // Author: Lukas Bower
-// Date Modified: 2026-08-12
+// Date Modified: 2026-09-03
 
 
 # Cohesix
@@ -174,6 +174,14 @@ Confirm QEMU and EFI dependencies with:
 ```
 
 The script highlights missing packages so you can install them before running boot tests.
+
+If the automatic build fails to produce `init.efi`, build it manually:
+
+```bash
+./scripts/manual_efi_link.sh
+```
+
+This script expects a GNU EFI build located at `~/gnu-efi`.
 ---
 
 ## 🧠 Learn More
