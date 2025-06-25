@@ -1,6 +1,6 @@
 		# CLASSIFICATION: COMMUNITY
-# Filename: Makefile v0.38
-# Date Modified: 2026-08-29
+# Filename: Makefile v0.39
+# Date Modified: 2026-08-30
 # Author: Lukas Bower
 #
 # ─────────────────────────────────────────────────────────────
@@ -113,6 +113,15 @@ $(info Using $(TOOLCHAIN) toolchain for UEFI build...)
 
 .PHONY: check-efi
 check-efi:
+	@if [ ! -f out/iso/init/init.efi ]; then \
+	echo "\xe2\x9d\x8c init.efi missing; skipping check-efi"; \
+	else \
+	command -v file >/dev/null 2>&1 && file out/iso/init/init.efi || \
+	echo "init.efi inspection failed"; \
+	command -v objdump >/dev/null 2>&1 && \
+	objdump -x out/iso/init/init.efi | grep EFI >/dev/null || \
+	echo "\xe2\x9a\xa0\ufe0f init.efi does not appear to be an EFI binary"; \
+	fi
 ifeq ($(findstring Windows,$(HOST_OS)),Windows)
 	@if [ "$(EFI_AVAILABLE)" != "1" ]; then \
 echo "gnu-efi headers not found at $(GNUEFI_HDR)"; exit 1; \
