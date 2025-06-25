@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: METADATA.md v3.44
 // Author: Lukas Bower
-// Date Modified: 2026-08-31
+// Date Modified: 2026-09-05
 
 ## Canonical Documents
 
@@ -112,7 +112,7 @@
 | .bashrc | v0.1 | 2026-08-09 | COMMUNITY | | |
 | .cargo/config.toml | v0.7 | 2026-08-23 | COMMUNITY | | |
 | build.rs | v0.8 | 2026-08-21 | COMMUNITY | | |
-| Makefile | v0.40 | 2026-08-31 | COMMUNITY | | |
+| Makefile | v0.41 | 2026-09-05 | COMMUNITY | | |
 | test_boot_efi.sh | v0.15 | 2025-09-10 | COMMUNITY | | |
 | src/kernel/main.c | v0.2 | 2025-07-22 | COMMUNITY | | |
 | src/kernel/main.rs | v0.2 | 2025-08-02 | COMMUNITY | | |

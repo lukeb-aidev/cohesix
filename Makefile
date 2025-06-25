@@ -1,6 +1,6 @@
 		# CLASSIFICATION: COMMUNITY
-# Filename: Makefile v0.40
-# Date Modified: 2026-08-31
+# Filename: Makefile v0.41
+# Date Modified: 2026-09-05
 # Author: Lukas Bower
 #
 # ─────────────────────────────────────────────────────────────
@@ -69,30 +69,36 @@ endif
 ifeq ($(TOOLCHAIN),clang)
 LD ?= ld.lld
 CFLAGS_EFI := $(EFI_INCLUDES) -ffreestanding -fPIC -fshort-wchar -mno-red-zone \
-	-DEFI_FUNCTION_WRAPPER -DGNU_EFI -fno-stack-protector -fno-pie \
-	-target x86_64-pc-win32-coff -fuse-ld=lld
+        -DEFI_FUNCTION_WRAPPER -DGNU_EFI -fno-stack-protector -fno-pie \
+        -target x86_64-pc-win32-coff -fuse-ld=lld
+EFI_SUBSYSTEM_FLAG :=
+ifeq ($(findstring Windows,$(HOST_OS)),Windows)
 EFI_SUBSYSTEM_FLAG := --subsystem=efi_application
 ifeq ($(shell $(LD) -v 2>&1 | grep -E -c "(lld|mingw)"),0)
 EFI_SUBSYSTEM_FLAG :=
 $(warning Skipping --subsystem=efi_application on non-Windows linker)
+endif
 endif
 NO_DYN_FLAG := $(shell $(LD) --help 2>/dev/null | grep -q no-dynamic-linker && echo --no-dynamic-linker)
 LDFLAGS_EFI := -shared -Bsymbolic -nostdlib -znocombreloc -L/usr/lib \
-	-lgnuefi -lefi $(EFI_SUBSYSTEM_FLAG) --entry=efi_main \
-	$(NO_DYN_FLAG) -z notext
+        -lgnuefi -lefi $(EFI_SUBSYSTEM_FLAG) --entry=efi_main \
+        $(NO_DYN_FLAG) -z notext
 else
 LD ?= ld.bfd
 CFLAGS_EFI := $(EFI_INCLUDES) -ffreestanding -fPIC -fshort-wchar -mno-red-zone \
-	-DEFI_FUNCTION_WRAPPER -DGNU_EFI -fno-stack-protector -fno-strict-aliasing \
-	-D__NO_INLINE__
+        -DEFI_FUNCTION_WRAPPER -DGNU_EFI -fno-stack-protector -fno-strict-aliasing \
+        -D__NO_INLINE__
+EFI_SUBSYSTEM_FLAG :=
+ifeq ($(findstring Windows,$(HOST_OS)),Windows)
 EFI_SUBSYSTEM_FLAG := --subsystem=efi_application
 ifeq ($(shell $(LD) -v 2>&1 | grep -E -c "(lld|mingw)"),0)
 EFI_SUBSYSTEM_FLAG :=
 $(warning Skipping --subsystem=efi_application on non-Windows linker)
 endif
+endif
 LDFLAGS_EFI := -shared -Bsymbolic -nostdlib -znocombreloc -L/usr/lib -lgnuefi -lefi \
-	$(EFI_SUBSYSTEM_FLAG) --entry=efi_main \
-	$(NO_DYN_FLAG) -z notext
+        $(EFI_SUBSYSTEM_FLAG) --entry=efi_main \
+        $(NO_DYN_FLAG) -z notext
 endif
 
 LD_FLAGS := $(LDFLAGS_EFI)
@@ -122,24 +128,23 @@ check-efi:
 	echo "\xe2\x9c\x85 init.efi format OK" || \
 	{ echo "\xe2\x9a\xa0\ufe0f init.efi found but does not appear valid"; exit 0; }
 ifeq ($(findstring Windows,$(HOST_OS)),Windows)
-	@if [ "$(EFI_AVAILABLE)" != "1" ]; then \
-	echo "gnu-efi headers not found at $(GNUEFI_HDR)"; exit 1; \
-	fi
-	@if [ ! -f $(GNUEFI_BIND) ]; then \
-	echo "$(GNUEFI_BIND) missing. Falling back to x86_64 headers if available."; \
-	if [ "$(EFI_ARCH)" != "x86_64" ] && [ -f $(EFI_BASE)/x86_64/efibind.h ]; then \
-	echo "Using $(EFI_BASE)/x86_64/efibind.h"; \
-	else \
-	echo "Required architecture headers missing."; exit 1; \
-	fi; \
-	fi
+        @if [ "$(EFI_AVAILABLE)" != "1" ]; then \
+        echo "gnu-efi headers not found at $(GNUEFI_HDR)"; exit 1; \
+        fi
+        @if [ ! -f $(GNUEFI_BIND) ]; then \
+        echo "$(GNUEFI_BIND) missing. Falling back to x86_64 headers if available."; \
+        if [ "$(EFI_ARCH)" != "x86_64" ] && [ -f $(EFI_BASE)/x86_64/efibind.h ]; then \
+        echo "Using $(EFI_BASE)/x86_64/efibind.h"; \
+        else \
+        echo "Required architecture headers missing."; exit 1; \
+        fi; \
+        fi
 else
-	@echo "Skipping Windows-only EFI header verification on $(HOST_OS)"
-	@if [ ! -f /usr/lib/aarch64-linux-gnu/gnuefi/libefi.a ] || \
-	    [ ! -f /usr/lib/aarch64-linux-gnu/gnuefi/libgnuefi.a ]; then \
-	    echo "Missing gnu-efi libs. Please install the gnu-efi package."; \
-	    exit 1; \
-	fi
+        @if [ ! -f $(HOME)/gnu-efi/gnuefi/libgnuefi.a ] || \
+            [ ! -f $(HOME)/gnu-efi/aarch64/lib/libefi.a ]; then \
+            echo "Missing gnu-efi libs under $(HOME)/gnu-efi"; \
+            exit 1; \
+        fi
 endif
 
 .PHONY: build cuda-build all go-build go-test c-shims help fmt lint check cohrun cohbuild cohtrace cohcap gui-orchestrator kernel init-efi

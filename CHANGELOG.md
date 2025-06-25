@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v1.00
 // Author: Lukas Bower
-// Date Modified: 2026-08-31
+// Date Modified: 2026-09-05
 
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
@@ -1876,3 +1876,9 @@
   re-links with `--no-warn-rwx-segment` when RWX warnings occur.
 ### Added
 - CI workflow step verifies the resulting `init.efi` type.
+
+## [v0.264] - 2026-09-05
+### Changed
+- Makefile v0.41 simplifies `check-efi` to only verify gnu-efi libraries under
+  `$(HOME)/gnu-efi` and applies Windows-specific checks via `HOST_OS`.
+- `--subsystem=efi_application` is now omitted on Linux hosts.
