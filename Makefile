@@ -131,23 +131,23 @@ check-efi:
 	echo "\xe2\x9c\x85 init.efi format OK" || \
 	{ echo "\xe2\x9a\xa0\ufe0f init.efi found but does not appear valid"; exit 0; }
 ifeq ($(findstring Windows,$(HOST_OS)),Windows)
-        @if [ "$(EFI_AVAILABLE)" != "1" ]; then \
-        echo "gnu-efi headers not found at $(GNUEFI_HDR)"; exit 1; \
-        fi
-        @if [ ! -f $(GNUEFI_BIND) ]; then \
-        echo "$(GNUEFI_BIND) missing. Falling back to x86_64 headers if available."; \
-        if [ "$(EFI_ARCH)" != "x86_64" ] && [ -f $(EFI_BASE)/x86_64/efibind.h ]; then \
-        echo "Using $(EFI_BASE)/x86_64/efibind.h"; \
-        else \
-        echo "Required architecture headers missing."; exit 1; \
-        fi; \
-        fi
+	@if [ "$(EFI_AVAILABLE)" != "1" ]; then \
+	echo "gnu-efi headers not found at $(GNUEFI_HDR)"; exit 1; \
+	fi
+	@if [ ! -f $(GNUEFI_BIND) ]; then \
+	echo "$(GNUEFI_BIND) missing. Falling back to x86_64 headers if available."; \
+	if [ "$(EFI_ARCH)" != "x86_64" ] && [ -f $(EFI_BASE)/x86_64/efibind.h ]; then \
+	echo "Using $(EFI_BASE)/x86_64/efibind.h"; \
+	else \
+	echo "Required architecture headers missing."; exit 1; \
+	fi; \
+	fi
 else
-        @if [ ! -f $(HOME)/gnu-efi/gnuefi/libgnuefi.a ] || \
-            [ ! -f $(HOME)/gnu-efi/aarch64/lib/libefi.a ]; then \
-            echo "Missing gnu-efi libs under $(HOME)/gnu-efi"; \
-            exit 1; \
-        fi
+	@if [ ! -f $(HOME)/gnu-efi/gnuefi/libgnuefi.a ] || \
+	[ ! -f $(HOME)/gnu-efi/aarch64/lib/libefi.a ]; then \
+	echo "Missing gnu-efi libs under $(HOME)/gnu-efi"; \
+	exit 1; \
+	fi
 endif
 
 .PHONY: build cuda-build all go-build go-test c-shims help fmt lint check cohrun cohbuild cohtrace cohcap gui-orchestrator kernel init-efi
