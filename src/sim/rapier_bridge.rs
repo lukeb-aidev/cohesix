@@ -5,14 +5,13 @@
 // Relies on rand and Rapier; omitted from UEFI builds.
 #![cfg(not(target_os = "uefi"))]
 
-use std::{fs, string::String, vec::Vec, boxed::Box};
-
-
 //! Rapier physics engine bridge exposing a simple command interface.
 //!
 //! Commands are written to `/sim/commands` and state snapshots are
 //! updated to `/sim/state`. All transitions are logged to
 //! `/srv/trace/sim.log`.
+
+use std::{fs, string::String, vec::Vec, boxed::Box};
 
 use crate::runtime::ServiceRegistry;
 use rapier3d::prelude::*;

@@ -3,12 +3,13 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-21
 
-use std::{fs, string::String, vec::Vec, boxed::Box};
 //! Trace Logging for Cohesix
 //!
 //! The trace module provides structured and timestamped logging support for
 //! system events, service behavior, and rule validation results.
 //! This supports validation agents, debugging, and runtime observability.
+
+use std::{fs, string::String, vec::Vec, boxed::Box};
 
 /// Enum representing the level of a trace event.
 #[derive(Debug)]

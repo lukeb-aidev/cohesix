@@ -4,10 +4,10 @@
 // Date Modified: 2025-08-17
 #![cfg(not(target_os = "uefi"))]
 
-use std::{fs, string::String, vec::Vec, boxed::Box};
-
 //! Runtime CUDA integration using dynamic loading of `libcuda.so`.
 //! Falls back gracefully if no CUDA driver is present.
+
+use std::{fs, string::String, vec::Vec, boxed::Box};
 
 use crate::runtime::ServiceRegistry;
 use libloading::{Library, Symbol};
