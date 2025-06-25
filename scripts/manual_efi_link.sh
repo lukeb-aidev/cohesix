@@ -1,9 +1,9 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: manual_efi_link.sh v0.3
+# Filename: manual_efi_link.sh v0.4
 # Author: Lukas Bower
-# Date Modified: 2026-09-04
-#!/usr/bin/env bash
-set -euo pipefail
+# Date Modified: 2026-09-07
+#!/bin/bash
+[ -n "$BASH_VERSION" ] && set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 cd "$ROOT"
 mkdir -p obj/init_efi out/iso/init
