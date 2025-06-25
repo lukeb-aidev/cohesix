@@ -1,5 +1,5 @@
 		# CLASSIFICATION: COMMUNITY
-# Filename: Makefile v0.43
+# Filename: Makefile v0.44
 # Date Modified: 2026-09-07
 # Author: Lukas Bower
 #
@@ -268,13 +268,15 @@ init-efi: check-efi ## Build init EFI binary
 	@mkdir -p obj/init_efi out/iso/init
 	# init uses wrapper calls that intentionally drop errors
 	$(CROSS_CC) $(CFLAGS_INIT_EFI) $(CFLAGS_IGNORE_RESULT) -c src/init_efi/main.c -o obj/init_efi/main.o
+	$(CROSS_CC) $(CFLAGS_INIT_EFI) $(CFLAGS_IGNORE_RESULT) -c src/init_efi/efistubs.c -o obj/init_efi/efistubs.o
 	@echo "Linking for UEFI on $(ARCH)"
-	$(CROSS_LD) \
+	$(CROSS_LD) --defsym=ImageBase=0x0 \
 	-nostdlib \
 	-znocombreloc \
 	-T src/init_efi/linker.ld \
 	$(HOME)/gnu-efi/gnuefi/crt0-efi-aarch64.o \
 	obj/init_efi/main.o \
+	obj/init_efi/efistubs.o \
 	$(HOME)/gnu-efi/aarch64/lib/libefi.a \
 	$(HOME)/gnu-efi/gnuefi/libgnuefi.a \
 	-o out/iso/init/init.efi || scripts/manual_efi_link.sh

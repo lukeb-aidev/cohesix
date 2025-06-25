@@ -112,7 +112,7 @@
 | .bashrc | v0.1 | 2026-08-09 | COMMUNITY | | |
 | .cargo/config.toml | v0.7 | 2026-08-23 | COMMUNITY | | |
 | build.rs | v0.8 | 2026-08-21 | COMMUNITY | | |
-| Makefile | v0.42 | 2026-09-06 | COMMUNITY | | |
+| Makefile | v0.44 | 2026-09-07 | COMMUNITY | | |
 | test_boot_efi.sh | v0.15 | 2025-09-10 | COMMUNITY | | |
 | src/kernel/main.c | v0.2 | 2025-07-22 | COMMUNITY | | |
 | src/kernel/main.rs | v0.2 | 2025-08-02 | COMMUNITY | | |
@@ -175,7 +175,7 @@
 | scripts/build_root_elf.sh | v0.11 | 2026-07-25 | COMMUNITY | | |
 | scripts/load_arch_config.sh | v0.1 | 2026-07-25 | COMMUNITY | | |
 | scripts/build_busybox.sh | v0.4 | 2026-01-26 | COMMUNITY | | |
-| scripts/manual_efi_link.sh | v0.3 | 2026-09-04 | COMMUNITY | | |
+| scripts/manual_efi_link.sh | v0.4 | 2026-09-07 | COMMUNITY | | |
 | tools/make_iso.sh | v0.4 | 2026-01-26 | COMMUNITY | | |
 | metadata.json | v0.1 | 2025-07-24 | COMMUNITY | | |
 | Cargo.toml | v0.26 | 2026-08-22 | COMMUNITY | | |
@@ -192,6 +192,7 @@
 | src/userbin/logdemo.rs | v0.1 | 2025-08-27 | COMMUNITY | | |
 | src/init/main.rs | v0.1 | 2025-09-05 | COMMUNITY | | |
 | src/init_efi/main.c | v0.4 | 2026-09-01 | COMMUNITY | | |
+| src/init_efi/efistubs.c | v0.1 | 2026-09-07 | COMMUNITY | | |
 | src/init_efi/linker.ld | v0.3 | 2026-08-29 | COMMUNITY | | |
 | full_fetch_and_build.sh | v0.10 | 2026-07-07 | COMMUNITY | | |
 | etc/init.conf | v0.1 | 2025-08-27 | COMMUNITY | | |
