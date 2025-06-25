@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: main.c v0.4
+// Filename: main.c v0.5
 // Author: Lukas Bower
-// Date Modified: 2026-09-01
+// Date Modified: 2026-09-08
 // SPDX-License-Identifier: MIT
 #include <efi.h>
 #include <efilib.h>
@@ -10,9 +10,6 @@
 
 void *__stack_chk_guard = 0;
 void __stack_chk_fail(void) { while (1); }
-#define strchr __builtin_strchr
-#define strlen __builtin_strlen
-#define snprintf __builtin_snprintf
 
 EFI_STATUS
 efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *systab) {
