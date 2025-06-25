@@ -1860,3 +1860,7 @@
 ## [v0.260] - 2026-09-01
 ### Changed
 - `src/init_efi/main.c` defines stack guard symbols and replaces `%a` format with `%s` for `snprintf`.
+
+## [v0.261] - 2026-09-02
+### Added
+- `scripts/manual_efi_link.sh` builds `init.efi` using GNU EFI tools and logs to `init_efi_link.log`.
