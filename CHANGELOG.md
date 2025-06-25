@@ -1817,3 +1817,8 @@
 ### Changed
 - `sel4_entry` binary now requires the `sel4`, `kernel_bin`, and `minimal_uefi` features.
 - `build.rs` emits a warning if the seL4 `kernel.elf` is missing.
+
+## [v0.251] - 2026-08-22
+### Fixed
+- Restored default `std` feature and disabled it for kernel and UEFI binaries.
+- Added missing `std` imports in `agent_main`.
