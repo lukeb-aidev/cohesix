@@ -5,7 +5,7 @@
 
 //! Telemetry loops coordinating metric exposure and simulation state.
 
-use std::{fs, string::String, vec::Vec, boxed::Box};
+use std::{string::String, vec::Vec, boxed::Box};
 
 use log::trace;
 use std::fs::{self, OpenOptions};
