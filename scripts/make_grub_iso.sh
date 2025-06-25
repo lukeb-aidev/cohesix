@@ -65,19 +65,18 @@ else
     echo "✅ init EFI present"
 fi
 
- # Kernel and root task already staged in $ISO_ROOT/boot/
-CONFIG_YAML="$ROOT/config/config.yaml"
-if [ ! -f "$CONFIG_YAML" ]; then
-    echo "Generating default config.yaml" >&2
-    mkdir -p "$ROOT/config"
-    cat > "$CONFIG_YAML" <<EOF
-# Auto-generated fallback config
-system:
-  role: worker
-  trace: true
-EOF
+SEL4_ENTRY="$ISO_ROOT/boot/sel4_entry"
+if [ ! -f "$SEL4_ENTRY" ]; then
+    echo "NOTE: sel4_entry not present; skipping sel4 boot hook" >&2
 fi
-cp "$CONFIG_YAML" "$ISO_ROOT/boot/config.yaml"
+
+ # Kernel and root task already staged in $ISO_ROOT/boot/
+CONFIG_YAML="$ROOT/out/boot/config.yaml"
+if [ ! -f "$CONFIG_YAML" ]; then
+    echo "WARNING: config.yaml not found in build output; boot may fail" >&2
+else
+    cp "$CONFIG_YAML" "$ISO_ROOT/boot/config.yaml"
+fi
 if [ -f "$INIT_EFI" ]; then
     chmod +x "$INIT_EFI"
 fi
