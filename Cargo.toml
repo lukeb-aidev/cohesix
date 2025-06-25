@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Cargo.toml v0.25
+# Filename: Cargo.toml v0.26
 # Author: Lukas Bower
-# Date Modified: 2026-08-21
+# Date Modified: 2026-08-22
 [package]
 name    = "cohesix"
 version = "0.1.0"
@@ -76,7 +76,7 @@ libc = "0.2"
 rcgen = "0.13"
 
 [features]
-default = []
+default = ["std"]
 cuda = ["nvml-wrapper", "cust"]
 std = []
 sel4 = []
@@ -104,16 +104,19 @@ path = "src/coh_cc/main.rs"
 name = "kernel"
 path = "src/kernel/main.rs"
 test = false
+default-features = false
 required-features = ["kernel_bin", "minimal_uefi"]
 
 [[bin]]
 name = "logdemo"
 path = "src/userbin/logdemo.rs"
+default-features = false
 required-features = ["minimal_uefi"]
 
 [[bin]]
 name = "init"
 path = "src/init/main.rs"
+default-features = false
 required-features = ["minimal_uefi"]
 
 
@@ -125,6 +128,7 @@ path = "src/root/main.rs"
 name = "sel4_entry"
 path = "src/bootstrap/sel4_entry.rs"
 test = false
+default-features = false
 required-features = ["sel4", "kernel_bin", "minimal_uefi"]
 
 [[bin]]
