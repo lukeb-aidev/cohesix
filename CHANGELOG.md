@@ -1869,3 +1869,10 @@
 ### Added
 - Documented manual EFI linking in `README.md`.
 - `scripts/manual_efi_link.sh` now version v0.2; expects GNU EFI build at `~/gnu-efi`.
+
+## [v0.263] - 2026-09-04
+### Changed
+- `scripts/manual_efi_link.sh` appends `file` output to `init_efi_link.log` and
+  re-links with `--no-warn-rwx-segment` when RWX warnings occur.
+### Added
+- CI workflow step verifies the resulting `init.efi` type.
