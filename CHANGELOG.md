@@ -1828,3 +1828,7 @@
 - Rust CLI and runtime binaries now build for `aarch64-unknown-linux-gnu`.
 - `Makefile` `init-efi` target uses a proper TAB separator.
 - Removed unused `tempdir` import in CUDA test.
+
+## [v0.253] - 2026-08-24
+### Fixed
+- Makefile platform check skips EFI validation on non-Windows hosts so `make init-efi` succeeds on Linux.
