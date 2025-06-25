@@ -1,6 +1,6 @@
-# CLASSIFICATION: COMMUNITY
-# Filename: Makefile v0.33
-# Date Modified: 2026-08-23
+	# CLASSIFICATION: COMMUNITY
+# Filename: Makefile v0.34
+# Date Modified: 2026-08-24
 # Author: Lukas Bower
 #
 # ─────────────────────────────────────────────────────────────
@@ -17,7 +17,7 @@
 # ─────────────────────────────────────────────────────────────
 
 .PHONY: build cuda-build all go-build go-test c-shims help fmt lint check \
-        boot boot-x86_64 boot-aarch64 bootloader kernel init-efi cohrun cohbuild cohtrace cohcap gui-orchestrator test test-python
+	 boot boot-x86_64 boot-aarch64 bootloader kernel init-efi cohrun cohbuild cohtrace cohcap gui-orchestrator test test-python
 
 PLATFORM ?= $(shell uname -m)
 TARGET ?= $(PLATFORM)
@@ -30,6 +30,10 @@ endif
 ifeq ($(JETSON),1)
 PLATFORM := aarch64
 endif
+
+# Detect build host operating system. On Windows, `$(OS)` is set to Windows_NT.
+# Fallback to `uname` when $(OS) is empty. Used to skip Windows-only EFI checks.
+HOST_OS ?= $(if $(OS),$(OS),$(shell uname -s))
 
 # Detect compiler; use environment override if provided
 CC ?= $(shell command -v clang >/dev/null 2>&1 && echo clang || echo gcc)
@@ -52,8 +56,8 @@ endif
 ifeq ($(TOOLCHAIN),clang)
 LD ?= ld.lld
 CFLAGS_EFI := $(EFI_INCLUDES) -ffreestanding -fPIC -fshort-wchar -mno-red-zone \
-       -DEFI_FUNCTION_WRAPPER -DGNU_EFI -fno-stack-protector -fno-pie \
-       -target x86_64-pc-win32-coff -fuse-ld=lld
+	-DEFI_FUNCTION_WRAPPER -DGNU_EFI -fno-stack-protector -fno-pie \
+	-target x86_64-pc-win32-coff -fuse-ld=lld
 EFI_SUBSYSTEM_FLAG := --subsystem=efi_application
 ifeq ($(shell $(LD) -v 2>&1 | grep -E -c "(lld|mingw)"),0)
 EFI_SUBSYSTEM_FLAG :=
@@ -61,21 +65,21 @@ $(warning Skipping --subsystem=efi_application on non-Windows linker)
 endif
 NO_DYN_FLAG := $(shell $(LD) --help 2>/dev/null | grep -q no-dynamic-linker && echo --no-dynamic-linker)
 LDFLAGS_EFI := -shared -Bsymbolic -nostdlib -znocombreloc -L/usr/lib \
-       -lgnuefi -lefi $(EFI_SUBSYSTEM_FLAG) --entry=efi_main \
-       $(NO_DYN_FLAG) -z notext
+	-lgnuefi -lefi $(EFI_SUBSYSTEM_FLAG) --entry=efi_main \
+	$(NO_DYN_FLAG) -z notext
 else
 LD ?= ld.bfd
 CFLAGS_EFI := $(EFI_INCLUDES) -ffreestanding -fPIC -fshort-wchar -mno-red-zone \
-       -DEFI_FUNCTION_WRAPPER -DGNU_EFI -fno-stack-protector -fno-strict-aliasing \
-       -D__NO_INLINE__
+	-DEFI_FUNCTION_WRAPPER -DGNU_EFI -fno-stack-protector -fno-strict-aliasing \
+	-D__NO_INLINE__
 EFI_SUBSYSTEM_FLAG := --subsystem=efi_application
 ifeq ($(shell $(LD) -v 2>&1 | grep -E -c "(lld|mingw)"),0)
 EFI_SUBSYSTEM_FLAG :=
 $(warning Skipping --subsystem=efi_application on non-Windows linker)
 endif
 LDFLAGS_EFI := -shared -Bsymbolic -nostdlib -znocombreloc -L/usr/lib -lgnuefi -lefi \
-       $(EFI_SUBSYSTEM_FLAG) --entry=efi_main \
-       $(NO_DYN_FLAG) -z notext
+	$(EFI_SUBSYSTEM_FLAG) --entry=efi_main \
+	$(NO_DYN_FLAG) -z notext
 endif
 
 LD_FLAGS := $(LDFLAGS_EFI)
@@ -90,6 +94,7 @@ $(info Using $(TOOLCHAIN) toolchain for UEFI build...)
 
 .PHONY: check-efi
 check-efi:
+ifeq ($(findstring Windows,$(HOST_OS)),Windows)
 	@if [ "$(EFI_AVAILABLE)" != "1" ]; then \
 echo "gnu-efi headers not found at $(GNUEFI_HDR)"; exit 1; \
 fi
@@ -101,6 +106,9 @@ else \
 echo "Required architecture headers missing."; exit 1; \
 fi; \
 fi
+else
+	@echo "Skipping Windows-only EFI header verification on $(HOST_OS)"
+endif
 
 .PHONY: build cuda-build all go-build go-test c-shims help fmt lint check cohrun cohbuild cohtrace cohcap gui-orchestrator kernel init-efi
 
@@ -197,6 +205,7 @@ bootloader: check-efi ## Build UEFI bootloader
 	$(CC) $(CFLAGS_EFI) $(CFLAGS_WARN) -c src/bootloader/sha1.c -o out/sha1.o
 	$(LD) /usr/lib/crt0-efi-x86_64.o out/bootloader.o out/sha1.o \
 	-o out/bootloader.so -T linker.ld $(LD_FLAGS)
+	@command -v objcopy >/dev/null 2>&1 || { echo "objcopy not found"; exit 1; }
 	objcopy --target=efi-app-x86_64 out/bootloader.so out/bootloader.efi
 	cp out/bootloader.efi out/EFI/BOOT/BOOTX64.EFI
 
@@ -207,6 +216,7 @@ kernel: check-efi ## Build Rust kernel BOOTX64.EFI
 	    --no-default-features --features minimal_uefi,kernel_bin
 	@mkdir -p out/EFI/BOOT
 	cp target/x86_64-unknown-uefi/release/kernel.efi out/kernel.so
+	@command -v objcopy >/dev/null 2>&1 || { echo "objcopy not found"; exit 1; }
 	objcopy --target=efi-app-x86_64 out/kernel.so out/BOOTX64.EFI
 	cp out/BOOTX64.EFI out/EFI/BOOT/BOOTX64.EFI
 
@@ -218,7 +228,17 @@ init-efi: check-efi ## Build init EFI binary
 	@echo "Linking for UEFI on $(shell uname -m)"
 	$(LD) /usr/lib/crt0-efi-x86_64.o out/init_efi.o \
 	-o out/init_efi.so -T linker.ld $(LD_FLAGS)
+	@command -v objcopy >/dev/null 2>&1 || { echo "objcopy not found"; exit 1; }
 	objcopy --target=efi-app-x86_64 out/init_efi.so out/bin/init.efi
+ifeq ($(OS),Windows_NT)
+	@if command -v llvm-objdump >/dev/null 2>&1; then \
+llvm-objdump -p out/bin/init.efi | grep -q "PE32"; \
+else \
+echo "llvm-objdump missing; skipping PE header check"; \
+fi
+else
+	@echo "Skipping PE header validation on $(HOST_OS)"
+endif
 
 boot: ## Build boot image for current PLATFORM
 	$(MAKE) boot-$(PLATFORM)
@@ -258,12 +278,12 @@ gui-orchestrator: ## Build gui-orchestrator binary
 qemu: ## Launch QEMU with built image and capture serial log
 	@command -v qemu-system-x86_64 >/dev/null 2>&1 || { echo "qemu-system-x86_64 not installed — skipping"; exit 0; }
 	@if [ "$(EFI_AVAILABLE)" != "1" ]; then echo "gnu-efi headers not found — skipping qemu"; \
-       else mkdir -p out; \
-       if [ ! -f out/BOOTX64.EFI ]; then \
-            echo "Missing out/BOOTX64.EFI; run 'make kernel'"; exit 1; fi; \
-       if [ ! -f out/cohesix.iso ]; then ./make_iso.sh; fi; \
-       [ -f out/cohesix.iso ] || { echo "ISO build failed"; exit 1; }; \
-       qemu-system-x86_64 \
+	else mkdir -p out; \
+	if [ ! -f out/BOOTX64.EFI ]; then \
+	     echo "Missing out/BOOTX64.EFI; run 'make kernel'"; exit 1; fi; \
+	if [ ! -f out/cohesix.iso ]; then ./make_iso.sh; fi; \
+	[ -f out/cohesix.iso ] || { echo "ISO build failed"; exit 1; }; \
+	qemu-system-x86_64 \
 	        -bios /usr/share/qemu/OVMF.fd \
 	    -drive if=pflash,format=raw,file=/usr/share/OVMF/OVMF_VARS.fd \
 	    -cdrom out/cohesix.iso -net none -M q35 -m 256M \
