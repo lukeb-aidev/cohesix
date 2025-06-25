@@ -3,8 +3,9 @@
 // Date Modified: 2025-07-24
 // Author: Lukas Bower
 
-use std::{fs, string::String, vec::Vec, boxed::Box};
 //! Utility functions and constants for IR opcodes in the Cohesix compiler.
+
+use std::{fs, string::String, vec::Vec, boxed::Box};
 
 use crate::ir::Opcode;
 
