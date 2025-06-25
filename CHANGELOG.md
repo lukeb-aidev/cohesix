@@ -1806,3 +1806,9 @@
 - `find_cuda_helper` is fetched from crates.io and patched locally.
 - `cohesix_fetch_build.sh` downloads the crate if missing before building.
 - Cargo.toml now references the local patch and metadata updated.
+
+## [v0.249] - 2026-08-12
+### Added
+- `sel4_entry_bin` feature to optionally compile the seL4 entry binary.
+### Changed
+- `cohesix_fetch_build.sh` builds the entry binary only when invoked with `--sel4-entry`.
