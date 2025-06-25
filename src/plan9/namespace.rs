@@ -10,7 +10,7 @@
 //! `unmount`. During tests, namespace actions are emulated by creating files
 //! under `/srv`.
 
-use std::{fs, string::String, vec::Vec, boxed::Box};
+use std::{string::String, vec::Vec, boxed::Box};
 
 use crate::cohesix_types::{Role, RoleManifest};
 use std::collections::HashMap;
