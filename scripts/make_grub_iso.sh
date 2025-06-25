@@ -60,12 +60,12 @@ if [ ! -s "$ROOT_ELF" ]; then
     exit 1
 fi
 if [ ! -x "$INIT_EFI" ]; then
-    echo "WARNING: init EFI not found at $INIT_EFI" >&2
+    echo "WARNING: init EFI not executable or missing at $INIT_EFI" >&2
+else
+    echo "✅ init EFI present"
 fi
 
-# Copy kernel, userland, and config
-cp "$KERNEL_ELF" "$ISO_ROOT/boot/kernel.elf"
-cp "$ROOT_ELF" "$ISO_ROOT/boot/userland.elf"
+ # Kernel and root task already staged in $ISO_ROOT/boot/
 CONFIG_YAML="$ROOT/config/config.yaml"
 if [ ! -f "$CONFIG_YAML" ]; then
     echo "Generating default config.yaml" >&2
@@ -78,6 +78,9 @@ system:
 EOF
 fi
 cp "$CONFIG_YAML" "$ISO_ROOT/boot/config.yaml"
+if [ -f "$INIT_EFI" ]; then
+    chmod +x "$INIT_EFI"
+fi
 ensure_plan9_ns
 
 # BusyBox utilities
