@@ -1,6 +1,6 @@
 		# CLASSIFICATION: COMMUNITY
-# Filename: Makefile v0.41
-# Date Modified: 2026-09-05
+# Filename: Makefile v0.42
+# Date Modified: 2026-09-06
 # Author: Lukas Bower
 #
 # ─────────────────────────────────────────────────────────────
@@ -51,6 +51,9 @@ endif
 # Detect compiler; use environment override if provided
 CC ?= $(shell command -v clang >/dev/null 2>&1 && echo clang || echo gcc)
 TOOLCHAIN := $(if $(findstring clang,$(CC)),clang,gcc)
+# Cross-compilers for aarch64 UEFI builds
+CROSS_CC ?= aarch64-linux-gnu-gcc
+CROSS_LD ?= aarch64-linux-gnu-ld
 
 EFI_BASE ?= /usr/include/efi
 EFI_ARCH ?= x86_64
@@ -261,20 +264,20 @@ kernel: check-efi ## Build Rust kernel BOOTX64.EFI
 
 
 init-efi: check-efi ## Build init EFI binary
-	@echo "🏁 Building init EFI using $(TOOLCHAIN)"
-	@mkdir -p obj/init_efi out/iso/init
-	# init uses wrapper calls that intentionally drop errors
-	$(CC) $(CFLAGS_INIT_EFI) $(CFLAGS_IGNORE_RESULT) -c src/init_efi/main.c -o obj/init_efi/main.o
-	@echo "Linking for UEFI on $(ARCH)"
-	$(LD) \
-	-nostdlib \
-	-znocombreloc \
-	-T src/init_efi/linker.ld \
-	$(HOME)/gnu-efi/gnuefi/crt0-efi-aarch64.o \
-	obj/init_efi/main.o \
-	$(HOME)/gnu-efi/aarch64/lib/libefi.a \
-	$(HOME)/gnu-efi/gnuefi/libgnuefi.a \
-	-o out/iso/init/init.efi
+        @echo "🏁 Building init EFI using $(TOOLCHAIN)"
+        @mkdir -p obj/init_efi out/iso/init
+        # init uses wrapper calls that intentionally drop errors
+        $(CROSS_CC) $(CFLAGS_INIT_EFI) $(CFLAGS_IGNORE_RESULT) -c src/init_efi/main.c -o obj/init_efi/main.o
+        @echo "Linking for UEFI on $(ARCH)"
+        $(CROSS_LD) \
+        -nostdlib \
+        -znocombreloc \
+        -T src/init_efi/linker.ld \
+        $(HOME)/gnu-efi/gnuefi/crt0-efi-aarch64.o \
+        obj/init_efi/main.o \
+        $(HOME)/gnu-efi/aarch64/lib/libefi.a \
+        $(HOME)/gnu-efi/gnuefi/libgnuefi.a \
+        -o out/iso/init/init.efi || scripts/manual_efi_link.sh
 ifeq ($(OS),Windows_NT)
 	@if command -v llvm-objdump >/dev/null 2>&1; then \
 	llvm-objdump -p out/iso/init/init.efi | grep -q "PE32"; \
