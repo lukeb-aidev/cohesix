@@ -1840,3 +1840,7 @@
 ### Fixed
 - init-efi build uses aarch64 linker script and arch-specific crt0 path.
 
+## [v0.256] - 2026-08-27
+### Fixed
+- init-efi build selects architecture-specific crt0 object based on host and writes output to `out/iso/init/init.efi`.
+
