@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v1.00
 // Author: Lukas Bower
-// Date Modified: 2026-08-11
+// Date Modified: 2026-08-23
 
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
@@ -1822,3 +1822,9 @@
 ### Fixed
 - Restored default `std` feature and disabled it for kernel and UEFI binaries.
 - Added missing `std` imports in `agent_main`.
+
+## [v0.252] - 2026-08-23
+### Fixed
+- Rust CLI and runtime binaries now build for `aarch64-unknown-linux-gnu`.
+- `Makefile` `init-efi` target uses a proper TAB separator.
+- Removed unused `tempdir` import in CUDA test.

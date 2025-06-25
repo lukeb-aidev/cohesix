@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.66
+# Filename: cohesix_fetch_build.sh v0.67
 # Author: Lukas Bower
-# Date Modified: 2026-08-12
+# Date Modified: 2026-08-23
 #!/bin/bash
 
 HOST_ARCH="$(uname -m)"
@@ -286,7 +286,7 @@ FEATURES="cuda,std,rapier,physics,busybox,no-cuda,joystick,secure9p,entropy"
 if [ "$SEL4_ENTRY" = 1 ]; then
   FEATURES+=",sel4,kernel_bin,minimal_uefi"
 fi
-cargo build --release --workspace --all-targets --no-default-features --features "$FEATURES" || true
+cargo build --release --workspace --all-targets --no-default-features --features "$FEATURES" --target "$COHESIX_TARGET" || true
 if grep -q "sel4_entry" "$SUMMARY_ERRORS"; then
   echo "⚠️ sel4_entry build failed or skipped — this is expected unless sel4,kernel_bin,minimal_uefi are all set" >&2
 fi
