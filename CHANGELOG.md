@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v1.00
 // Author: Lukas Bower
-// Date Modified: 2026-09-05
+// Date Modified: 2026-09-07
 
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
@@ -1889,3 +1889,9 @@
 ### Changed
 - Makefile v0.42 sets `CRT0` to `$(HOME)/gnu-efi/gnuefi/crt0-efi-aarch64.o` and
   updates `EFI_INCLUDES`.
+## [v0.266] - 2026-09-07
+### Added
+- `verify-efi` make target validates `out/iso/init/init.efi` using `file`.
+### Changed
+- Makefile v0.43 documents `verify-efi` in help output.
+
