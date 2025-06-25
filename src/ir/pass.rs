@@ -5,7 +5,7 @@
 
 //! Simple pass framework for transforming IR modules.
 
-use std::{fs, string::String, vec::Vec, boxed::Box};
+use std::{boxed::Box, vec::Vec};
 
 use crate::ir::{Module, Opcode};
 

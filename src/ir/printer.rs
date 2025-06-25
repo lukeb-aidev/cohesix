@@ -5,8 +5,6 @@
 
 //! Textual IR printer producing a simple textual representation.
 
-use std::{fs, string::String, vec::Vec, boxed::Box};
-
 use crate::ir::{Function, Module};
 use std::fmt::Write;
 

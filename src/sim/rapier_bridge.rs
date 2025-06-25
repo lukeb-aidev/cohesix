@@ -11,8 +11,6 @@
 //! updated to `/sim/state`. All transitions are logged to
 //! `/srv/trace/sim.log`.
 
-use std::{string::String, vec::Vec, boxed::Box};
-
 use crate::runtime::ServiceRegistry;
 use rapier3d::prelude::*;
 use rapier3d::pipeline::QueryPipeline;
