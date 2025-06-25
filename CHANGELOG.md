@@ -1836,3 +1836,7 @@
 ## [v0.254] - 2026-08-25
 ### Fixed
 - Makefile `init-efi` target now adds `-mno-red-zone` only when building on `x86_64` hosts.
+## [v0.255] - 2026-08-26
+### Fixed
+- init-efi build uses aarch64 linker script and arch-specific crt0 path.
+

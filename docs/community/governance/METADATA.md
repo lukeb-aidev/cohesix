@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: METADATA.md v3.42
+// Filename: METADATA.md v3.43
 // Author: Lukas Bower
-// Date Modified: 2026-07-31
+// Date Modified: 2026-08-26
 
 ## Canonical Documents
 
@@ -191,6 +191,7 @@
 | src/userbin/logdemo.rs | v0.1 | 2025-08-27 | COMMUNITY | | |
 | src/init/main.rs | v0.1 | 2025-09-05 | COMMUNITY | | |
 | src/init_efi/main.c | v0.3 | 2025-09-02 | COMMUNITY | | |
+| src/init_efi/linker.ld | v0.1 | 2026-08-26 | COMMUNITY | | |
 | full_fetch_and_build.sh | v0.10 | 2026-07-07 | COMMUNITY | | |
 | etc/init.conf | v0.1 | 2025-08-27 | COMMUNITY | | |
 | etc/init.cfg | v0.1 | 2025-08-30 | COMMUNITY | | |
