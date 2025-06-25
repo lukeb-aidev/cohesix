@@ -1856,3 +1856,7 @@
 ### Fixed
 - check-efi exits cleanly when `init.efi` does not exist. `init-efi` logs the
   missing binary instead of failing.
+
+## [v0.260] - 2026-09-01
+### Changed
+- `src/init_efi/main.c` defines stack guard symbols and replaces `%a` format with `%s` for `snprintf`.
