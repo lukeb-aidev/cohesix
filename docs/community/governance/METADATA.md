@@ -110,9 +110,9 @@
 | CohesixBoot.inf | v0.1 | 2025-07-22 | COMMUNITY | | |
 | linker.ld | v0.1 | 2025-07-22 | COMMUNITY | | |
 | .bashrc | v0.1 | 2026-08-09 | COMMUNITY | | |
-| .cargo/config.toml | v0.6 | 2026-08-10 | COMMUNITY | | |
+| .cargo/config.toml | v0.7 | 2026-08-23 | COMMUNITY | | |
 | build.rs | v0.8 | 2026-08-21 | COMMUNITY | | |
-| Makefile | v0.32 | 2026-07-30 | COMMUNITY | | |
+| Makefile | v0.33 | 2026-08-23 | COMMUNITY | | |
 | test_boot_efi.sh | v0.15 | 2025-09-10 | COMMUNITY | | |
 | src/kernel/main.c | v0.2 | 2025-07-22 | COMMUNITY | | |
 | src/kernel/main.rs | v0.2 | 2025-08-02 | COMMUNITY | | |
@@ -121,7 +121,7 @@
 | tests/test_invalid_cli.py | v0.1 | 2025-07-23 | COMMUNITY | | |
 | tests/test_9p_read_write.rs | v0.1 | 2025-07-23 | COMMUNITY | | |
 | tests/test_cuda_presence.rs | v0.2 | 2025-12-10 | COMMUNITY | | |
-| tests/test_cuda_exec.rs | v0.5 | 2025-12-10 | COMMUNITY | | |
+| tests/test_cuda_exec.rs | v0.6 | 2026-08-23 | COMMUNITY | | |
 | tests/test_cuda_kernel.rs | v0.4 | 2025-12-12 | COMMUNITY | | |
 | tests/test_namespace_rule.rs | v0.1 | 2025-07-23 | COMMUNITY | | |
 | tests/test_namespace_semantics.rs | v0.2 | 2025-12-15 | COMMUNITY | | |
@@ -136,7 +136,7 @@
 | docs/community/architecture/BOOT_KERNEL_FLOW.md | v0.2 | 2026-02-05 | COMMUNITY | | |
 | docs/community/archive/EXAMPLES_README.md | v0.3 | 2026-02-05 | COMMUNITY | | |
 | .cohesix_env | v0.3 | 2026-07-25 | COMMUNITY | | |
-| cohesix_fetch_build.sh | v0.66 | 2026-08-12 | COMMUNITY | | |
+| cohesix_fetch_build.sh | v0.67 | 2026-08-23 | COMMUNITY | | |
 | CONTRIBUTING.md | v1.1 | 2025-07-23 | COMMUNITY | | |
 | config/secure9p.toml | v0.3 | 2025-07-31 | COMMUNITY | | |
 | config/plan9.ns | v0.1 | 2026-08-04 | COMMUNITY | | |
