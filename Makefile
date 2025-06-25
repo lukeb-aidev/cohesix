@@ -1,6 +1,6 @@
 		# CLASSIFICATION: COMMUNITY
-# Filename: Makefile v0.41
-# Date Modified: 2026-09-05
+# Filename: Makefile v0.42
+# Date Modified: 2026-09-06
 # Author: Lukas Bower
 #
 # ─────────────────────────────────────────────────────────────
@@ -37,7 +37,7 @@ HOST_OS ?= $(if $(OS),$(OS),$(shell uname -s))
 ARCH := $(shell uname -m)
 
 ifeq ($(ARCH),aarch64)
-CRT0 := /usr/lib/crt0-efi-aarch64.o
+CRT0 := $(HOME)/gnu-efi/gnuefi/crt0-efi-aarch64.o
 else ifeq ($(ARCH),x86_64)
 CRT0 := /usr/lib/x86_64-linux-gnu/crt0-efi-x86_64.o
 else
@@ -51,6 +51,9 @@ endif
 # Detect compiler; use environment override if provided
 CC ?= $(shell command -v clang >/dev/null 2>&1 && echo clang || echo gcc)
 TOOLCHAIN := $(if $(findstring clang,$(CC)),clang,gcc)
+# Cross-compilation tools for aarch64 EFI binaries
+CROSS_CC := aarch64-linux-gnu-gcc
+CROSS_LD := aarch64-linux-gnu-ld
 
 EFI_BASE ?= /usr/include/efi
 EFI_ARCH ?= x86_64
@@ -59,7 +62,7 @@ GNUEFI_BIND := $(EFI_BASE)/$(EFI_ARCH)/efibind.h
 
 EFI_AVAILABLE := $(shell [ -f "$(GNUEFI_HDR)" ] && echo 1 || echo 0)
 
-EFI_INCLUDES := -I$(EFI_BASE) -I$(EFI_BASE)/$(EFI_ARCH)
+EFI_INCLUDES := -I$(HOME)/gnu-efi/inc -I$(HOME)/gnu-efi/inc/aarch64
 
 # Ensure compiler exists
 ifeq ($(shell command -v $(CC) >/dev/null 2>&1 && echo yes || echo no),no)
