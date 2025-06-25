@@ -111,7 +111,7 @@
 | linker.ld | v0.1 | 2025-07-22 | COMMUNITY | | |
 | .bashrc | v0.1 | 2026-08-09 | COMMUNITY | | |
 | .cargo/config.toml | v0.6 | 2026-08-10 | COMMUNITY | | |
-| build.rs | v0.7 | 2026-08-03 | COMMUNITY | | |
+| build.rs | v0.8 | 2026-08-21 | COMMUNITY | | |
 | Makefile | v0.32 | 2026-07-30 | COMMUNITY | | |
 | test_boot_efi.sh | v0.15 | 2025-09-10 | COMMUNITY | | |
 | src/kernel/main.c | v0.2 | 2025-07-22 | COMMUNITY | | |
@@ -177,7 +177,7 @@
 | scripts/build_busybox.sh | v0.4 | 2026-01-26 | COMMUNITY | | |
 | tools/make_iso.sh | v0.4 | 2026-01-26 | COMMUNITY | | |
 | metadata.json | v0.1 | 2025-07-24 | COMMUNITY | | |
-| Cargo.toml | v0.24 | 2026-08-12 | COMMUNITY | | |
+| Cargo.toml | v0.25 | 2026-08-21 | COMMUNITY | | |
 | cohesix-9p/Cargo.toml | v0.1 | 2025-07-28 | COMMUNITY | | |
 | tools/cli/Cargo.toml | v0.2 | 2025-08-16 | COMMUNITY | | |
 | justfile | v0.1 | 2025-07-24 | COMMUNITY | | |
@@ -227,7 +227,7 @@
 | src/runtime/loader.rs | v0.1 | 2025-09-26 | COMMUNITY | | |
 | tests/test_loader.rs | v0.1 | 2025-09-26 | COMMUNITY | | |
 | tests/test_run_shell.rs | v0.1 | 2025-09-26 | COMMUNITY | | |
-| src/bootstrap/sel4_entry.rs | v0.3 | 2026-08-12 | COMMUNITY | | |
+| src/bootstrap/sel4_entry.rs | v0.4 | 2026-08-21 | COMMUNITY | | |
 | src/util/mod.rs | v0.1 | 2025-12-31 | COMMUNITY | | |
 | src/util/debug_log.rs | v0.3 | 2026-08-06 | COMMUNITY | | |
 

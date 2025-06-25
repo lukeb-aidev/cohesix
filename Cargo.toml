@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Cargo.toml v0.24
+# Filename: Cargo.toml v0.25
 # Author: Lukas Bower
-# Date Modified: 2026-08-12
+# Date Modified: 2026-08-21
 [package]
 name    = "cohesix"
 version = "0.1.0"
@@ -125,7 +125,7 @@ path = "src/root/main.rs"
 name = "sel4_entry"
 path = "src/bootstrap/sel4_entry.rs"
 test = false
-required-features = ["sel4_entry_bin"]
+required-features = ["sel4", "kernel_bin", "minimal_uefi"]
 
 [[bin]]
 name = "cohtrace"

@@ -1,12 +1,26 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: build.rs v0.7
+// Filename: build.rs v0.8
 // Author: Lukas Bower
-// Date Modified: 2026-08-03
+// Date Modified: 2026-08-21
 
 fn main() {
-    use std::{env, process::Command};
+    use std::{env, process::Command, path::Path};
 
     println!("cargo:rerun-if-changed=tests/gpu_demos/add.cu");
+
+    let home = env::var("HOME").unwrap_or_default();
+    let target = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
+
+    let sel4_kernel = match target.as_str() {
+        "aarch64" => Path::new(&home).join("sel4_workspace/build_qemu_arm/kernel/kernel.elf"),
+        "x86_64" => Path::new(&home).join("sel4_workspace/build_pc99/kernel/kernel.elf"),
+        _ => return,
+    };
+
+    if !sel4_kernel.exists() {
+        println!("cargo:warning=sel4 kernel.elf not found at {}", sel4_kernel.display());
+        println!("cargo:warning=Try running `ninja` in ~/sel4_workspace/");
+    }
 
     if cfg!(feature = "cuda") {
         let cuda_home = env::var("CUDA_HOME").unwrap_or_else(|_| "/usr".into());

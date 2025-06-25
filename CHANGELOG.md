@@ -1812,3 +1812,8 @@
 - `sel4_entry_bin` feature to optionally compile the seL4 entry binary.
 ### Changed
 - `cohesix_fetch_build.sh` builds the entry binary only when invoked with `--sel4-entry`.
+
+## [v0.250] - 2026-08-21
+### Changed
+- `sel4_entry` binary now requires the `sel4`, `kernel_bin`, and `minimal_uefi` features.
+- `build.rs` emits a warning if the seL4 `kernel.elf` is missing.
