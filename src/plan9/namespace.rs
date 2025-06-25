@@ -3,13 +3,14 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-23
 
-use std::{fs, string::String, vec::Vec, boxed::Box};
 //! Dynamic Plan 9 namespace loader for Cohesix.
 //!
 //! Parses namespace descriptions from the `BOOT_NS` environment variable or
 //! `/boot/plan9.cfg`. Supported operations are `bind`, `mount`, `srv` and
 //! `unmount`. During tests, namespace actions are emulated by creating files
 //! under `/srv`.
+
+use std::{fs, string::String, vec::Vec, boxed::Box};
 
 use crate::cohesix_types::{Role, RoleManifest};
 use std::collections::HashMap;

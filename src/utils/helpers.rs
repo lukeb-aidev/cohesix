@@ -3,6 +3,9 @@
 // Date Modified: 2025-06-01
 // Author: Lukas Bower
 
+#![forbid(unsafe_code)]
+#![warn(missing_docs)]
+
 use std::{fs, string::String, vec::Vec, boxed::Box};
 //
 // ─────────────────────────────────────────────────────────────
@@ -19,9 +22,6 @@ use std::{fs, string::String, vec::Vec, boxed::Box};
 // All code is `unsafe`‑free and works in a `std` context; if we
 // need `no_std`, we’ll add conditional compilation.
 // ─────────────────────────────────────────────────────────────
-
-#![forbid(unsafe_code)]
-#![warn(missing_docs)]
 
 use std::{fmt::Write, thread, time::Duration};
 
