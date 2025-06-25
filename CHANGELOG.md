@@ -1882,3 +1882,10 @@
 - Makefile v0.41 simplifies `check-efi` to only verify gnu-efi libraries under
   `$(HOME)/gnu-efi` and applies Windows-specific checks via `HOST_OS`.
 - `--subsystem=efi_application` is now omitted on Linux hosts.
+
+## [v0.265] - 2026-09-06
+### Added
+- `CROSS_CC` and `CROSS_LD` variables for aarch64 cross-compiling.
+### Changed
+- Makefile v0.42 sets `CRT0` to `$(HOME)/gnu-efi/gnuefi/crt0-efi-aarch64.o` and
+  updates `EFI_INCLUDES`.
