@@ -1897,3 +1897,11 @@
 ### Added
 - `verify-efi` make target validates `out/iso/init/init.efi` using `file`.
 
+## [v0.267] - 2026-09-07
+### Added
+- `src/init_efi/efistubs.c` provides minimal EFI-safe replacements for missing C stdlib functions.
+### Fixed
+- `init-efi` Makefile target links with `--defsym=ImageBase=0x0` to satisfy EFI startup.
+### Changed
+- `Makefile` v0.44 compiles and links `efistubs.c`.
+- `scripts/manual_efi_link.sh` v0.4 now requires bash and guards pipefail.
