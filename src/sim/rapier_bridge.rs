@@ -5,6 +5,8 @@
 // Relies on rand and Rapier; omitted from UEFI builds.
 #![cfg(not(target_os = "uefi"))]
 
+use std::{fs, string::String, vec::Vec, boxed::Box};
+
 
 //! Rapier physics engine bridge exposing a simple command interface.
 //!
