@@ -1,6 +1,6 @@
-# CLASSIFICATION: COMMUNITY
-# Filename: Makefile v0.36
-# Date Modified: 2026-08-27
+		# CLASSIFICATION: COMMUNITY
+# Filename: Makefile v0.38
+# Date Modified: 2026-08-29
 # Author: Lukas Bower
 #
 # ─────────────────────────────────────────────────────────────
@@ -127,6 +127,11 @@ fi; \
 fi
 else
 	@echo "Skipping Windows-only EFI header verification on $(HOST_OS)"
+	@if [ ! -f /usr/lib/aarch64-linux-gnu/gnuefi/libefi.a ] || \
+	    [ ! -f /usr/lib/aarch64-linux-gnu/gnuefi/libgnuefi.a ]; then \
+	    echo "Missing gnu-efi libs. Please install the gnu-efi package."; \
+	    exit 1; \
+	fi
 endif
 
 .PHONY: build cuda-build all go-build go-test c-shims help fmt lint check cohrun cohbuild cohtrace cohcap gui-orchestrator kernel init-efi
@@ -246,14 +251,15 @@ init-efi: check-efi ## Build init EFI binary
 	# init uses wrapper calls that intentionally drop errors
 	$(CC) $(CFLAGS_INIT_EFI) $(CFLAGS_IGNORE_RESULT) -c src/init_efi/main.c -o obj/init_efi/main.o
 	@echo "Linking for UEFI on $(ARCH)"
-	$(LD) \
-	-nostdlib \
-	-znocombreloc \
-	-T src/init_efi/linker.ld \
-	$(CRT0) obj/init_efi/main.o \
-	-L/usr/lib -lgnuefi -lefi \
-	-e efi_main \
-	-o out/iso/init/init.efi
+		       aarch64-linux-gnu-ld \
+		       -nostdlib \
+		       -znocombreloc \
+		       -T src/init_efi/linker.ld \
+		       $(CRT0) \
+		       obj/init_efi/main.o \
+		       /usr/lib/aarch64-linux-gnu/gnuefi/libefi.a \
+		       /usr/lib/aarch64-linux-gnu/gnuefi/libgnuefi.a \
+	       -o out/iso/init/init.efi
 ifeq ($(OS),Windows_NT)
 	@if command -v llvm-objdump >/dev/null 2>&1; then \
 	llvm-objdump -p out/iso/init/init.efi | grep -q "PE32"; \
