@@ -1844,3 +1844,6 @@
 ### Fixed
 - init-efi build selects architecture-specific crt0 object based on host and writes output to `out/iso/init/init.efi`.
 
+## [v0.257] - 2026-08-28
+### Fixed
+- Removed -shared from init-efi link command and added -znocombreloc to fix aarch64 relocations.
