@@ -1882,3 +1882,8 @@
 - Makefile v0.41 simplifies `check-efi` to only verify gnu-efi libraries under
   `$(HOME)/gnu-efi` and applies Windows-specific checks via `HOST_OS`.
 - `--subsystem=efi_application` is now omitted on Linux hosts.
+
+## [v0.265] - 2026-09-06
+### Changed
+- Makefile v0.42 links `init-efi` using `$(CROSS_CC)` and `$(CROSS_LD)`.
+- Fallback to `scripts/manual_efi_link.sh` if the link step fails.
