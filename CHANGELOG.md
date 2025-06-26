@@ -1907,6 +1907,14 @@
 - `src/init_efi/main.c` v0.5 now relies on gnu-efi for libc helpers.
 - `scripts/manual_efi_link.sh` v0.5 mirrors the updated flags.
 
+## [v0.269] - 2026-09-09
+### Fixed
+- `src/init_efi/elf_aarch64_efi.lds` replaced with a minimal working script.
+- `make init-efi` now links successfully on AArch64.
+### Changed
+- `Cargo.toml` v0.27 renames CLI binaries to avoid collisions.
+- `Makefile` v0.46 updates cargo run targets accordingly.
+
 ## [v0.267] - 2026-09-07
 ### Added
 - `src/init_efi/efistubs.c` provides minimal EFI-safe replacements for missing C stdlib functions.

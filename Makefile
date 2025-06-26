@@ -1,6 +1,6 @@
 		# CLASSIFICATION: COMMUNITY
-# Filename: Makefile v0.45
-# Date Modified: 2026-09-08
+# Filename: Makefile v0.46
+# Date Modified: 2026-09-09
 # Author: Lukas Bower
 #
 # ─────────────────────────────────────────────────────────────
@@ -315,10 +315,10 @@ cohrun: ## Run cohrun CLI
 	    cargo run -p cohcli_tools --bin cohrun_cli -- $(ARGS)
 
 cohbuild: ## Run cohbuild CLI
-	cargo run -p cohcli_tools --bin cohbuild -- $(ARGS)
+        cargo run -p cohcli_tools --bin cohesix_build -- $(ARGS)
 
 cohtrace: ## Run cohtrace CLI
-	cargo run -p cohcli_tools --bin cohtrace -- $(ARGS)
+        cargo run -p cohcli_tools --bin cohesix_trace -- $(ARGS)
 
 cohcap: ## Run cohcap CLI
 	cargo run -p cohcli_tools --bin cohcap -- $(ARGS)
