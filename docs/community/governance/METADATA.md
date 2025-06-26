@@ -194,7 +194,7 @@
 | src/init_efi/main.c | v0.5 | 2026-09-08 | COMMUNITY | | |
 | src/init_efi/efistubs.c | v0.1 | 2026-09-07 | COMMUNITY | | |
 | src/init_efi/linker.ld | v0.3 | 2026-08-29 | COMMUNITY | | |
-| src/init_efi/elf_aarch64_efi.lds | v0.5 | 2026-09-12 | COMMUNITY | | |
+| src/init_efi/elf_aarch64_efi.lds | v0.6 | 2026-09-13 | COMMUNITY | | |
 | full_fetch_and_build.sh | v0.10 | 2026-07-07 | COMMUNITY | | |
 | etc/init.conf | v0.1 | 2025-08-27 | COMMUNITY | | |
 | etc/init.cfg | v0.1 | 2025-08-30 | COMMUNITY | | |
