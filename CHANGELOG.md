@@ -1938,3 +1938,11 @@
 ### Fixed
 - `elf_aarch64_efi.lds` v0.4 corrected `.bss` syntax for reliable linking.
 - `cohesix_fetch_build.sh` v0.68 copies all renamed binaries and drops stale names.
+
+## [v0.272] - 2026-09-12
+### Fixed
+- `Makefile` v0.47 ensures tab-only recipes and compiles `efistubs.c` for missing symbols.
+- `init-efi` target copies output to `out/bin/init.efi` and validates size.
+- `elf_aarch64_efi.lds` v0.5 starts with `ENTRY(_start)` and sets `ImageBase`.
+### Added
+- `check-tab-safety` Makefile target warns about space-indented recipes.
