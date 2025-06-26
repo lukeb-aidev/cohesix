@@ -48,18 +48,25 @@ efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *systab) {
             }
             role[rsz] = '\0';
             uefi_call_wrapper(file->Close, 1, file);
-            CHAR8 *nl = strchr((CHAR8 *)role, '\n');
+            /*
+             * gnu-efi defines CHAR8 as unsigned char, while standard C
+             * string helpers expect char*. Cast explicitly to avoid
+             * signedness warnings on some toolchains.
+             */
+            CHAR8 *nl = (CHAR8 *)strchr((char *)role, '\n');
             if (nl) *nl = '\0';
         } else {
             Print(L"[init] /srv/cohrole missing; using default role\n");
         }
 
         CHAR8 path_ascii[128];
-        snprintf(path_ascii, sizeof(path_ascii), "\\\roles\\%s\\config.yaml", role);
+        /* Cast role so snprintf sees a char* argument. */
+        snprintf((char *)path_ascii, sizeof(path_ascii), "\\\roles\\%s\\config.yaml", (char *)role);
         CHAR16 path[128];
         for (int i = 0; path_ascii[i]; i++)
             path[i] = (CHAR16)path_ascii[i];
-        path[strlen(path_ascii)] = L'\0';
+        /* strlen expects char*; cast accordingly. */
+        path[strlen((char *)path_ascii)] = L'\0';
 
         status = uefi_call_wrapper(root->Open, 5, root, &file,
                                    path, EFI_FILE_MODE_READ, 0);
