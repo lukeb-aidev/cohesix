@@ -95,7 +95,7 @@ $(warning Skipping --subsystem=efi_application on non-Windows linker)
 endif
 endif
 NO_DYN_FLAG := $(shell $(LD) --help 2>/dev/null | grep -q no-dynamic-linker && echo --no-dynamic-linker)
-LDFLAGS_EFI := -shared -Bsymbolic -nostdlib -znocombreloc -L/usr/lib
+LDFLAGS_EFI := -Bsymbolic -nostdlib -znocombreloc -L/usr/lib
 ifeq ($(CROSS_ARCH),aarch64)
 LDFLAGS_EFI += -L$(GNUEFI_LIBDIR)
 endif
@@ -114,7 +114,7 @@ EFI_SUBSYSTEM_FLAG :=
 $(warning Skipping --subsystem=efi_application on non-Windows linker)
 endif
 endif
-LDFLAGS_EFI := -shared -Bsymbolic -nostdlib -znocombreloc -L/usr/lib
+LDFLAGS_EFI := -Bsymbolic -nostdlib -znocombreloc -L/usr/lib
 ifeq ($(CROSS_ARCH),aarch64)
 LDFLAGS_EFI += -L$(GNUEFI_LIBDIR)
 endif
@@ -289,7 +289,7 @@ init-efi: check-efi ## Build init EFI binary
 	$(CROSS_CC) $(CFLAGS_INIT_EFI) $(CFLAGS_IGNORE_RESULT) -c src/init_efi/main.c -o obj/init_efi/main.o
 	$(CROSS_CC) $(CFLAGS_INIT_EFI) -c src/init_efi/efistubs.c -o obj/init_efi/efistubs.o
 	@echo "Linking for UEFI on $(CROSS_ARCH)"
-	$(CROSS_LD) -nostdlib -znocombreloc -shared -Bsymbolic \
+	$(CROSS_LD) -nostdlib -znocombreloc -Bsymbolic \
 	-T src/init_efi/elf_aarch64_efi.lds \
 	$(HOME)/gnu-efi/gnuefi/crt0-efi-aarch64.o \
 	obj/init_efi/main.o obj/init_efi/efistubs.o \
