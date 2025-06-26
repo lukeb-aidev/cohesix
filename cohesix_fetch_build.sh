@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.68
+# Filename: cohesix_fetch_build.sh v0.69
 # Author: Lukas Bower
-# Date Modified: 2026-09-11
+# Date Modified: 2026-09-14
 #!/bin/bash
 
 HOST_ARCH="$(uname -m)"
@@ -362,11 +362,7 @@ fi
 [ -f "$SRC_KERNEL" ] || { echo "Kernel build failed: $SRC_KERNEL missing" >&2; exit 1; }
 cp "$SRC_KERNEL" "$OUT_KERNEL"
 log "kernel.elf staged to $OUT_KERNEL"
-log "Building init EFI binary..."
-make init-efi >/dev/null
-INIT_EFI="$ROOT/out/bin/init.efi"
-[ -f "$INIT_EFI" ] || { echo "❌ init.efi build failed" >&2; exit 1; }
-cp "$INIT_EFI" "$STAGE_DIR/bin/init.efi"
+
 
 
 log "📂 Staging boot files..."
@@ -572,8 +568,8 @@ fi
 echo "✅ All builds complete."
 
 echo "[🧪] Checking boot prerequisites..."
-if [ ! -x "$STAGE_DIR/bin/init" ] && [ ! -x "$STAGE_DIR/bin/init.efi" ]; then
-  echo "❌ No init binary found in $STAGE_DIR/bin. Aborting." >&2
+if [ ! -x "$STAGE_DIR/bin/init" ]; then
+  echo "❌ init binary missing in $STAGE_DIR/bin" >&2
   exit 1
 fi
 if [ ! -f "$STAGE_DIR/boot/kernel.elf" ]; then
@@ -624,31 +620,9 @@ if [ -x "$(command -v "$QEMU_BIN" 2>/dev/null)" ]; then
   SERIAL_LOG="$TMPDIR/qemu_boot.log"
   QEMU_LOG="$LOG_DIR/qemu_boot.log"
   [ -f "$QEMU_LOG" ] && mv "$QEMU_LOG" "$QEMU_LOG.$(date +%Y%m%d_%H%M%S)"
-  OVMF_CODE=""
-  OVMF_VARS=""
-  if [ "$COH_ARCH" = "x86_64" ]; then
-    for p in /usr/share/qemu/OVMF.fd /usr/share/OVMF/OVMF_CODE.fd /usr/share/OVMF/OVMF.fd /usr/share/edk2/ovmf/OVMF_CODE.fd; do
-      [ -f "$p" ] && OVMF_CODE="$p" && break
-    done
-    for p in /usr/share/OVMF/OVMF_VARS.fd /usr/share/edk2/ovmf/OVMF_VARS.fd; do
-      [ -f "$p" ] && OVMF_VARS="$p" && break
-    done
-    [ -f "$OVMF_CODE" ] || { echo "OVMF firmware not found" >&2; exit 1; }
-    [ -n "$OVMF_VARS" ] || { echo "OVMF_VARS.fd not found" >&2; exit 1; }
-    cp "$OVMF_VARS" "$TMPDIR/OVMF_VARS.fd"
-    QEMU_EXTRA=(-bios "$OVMF_CODE" -drive if=pflash,format=raw,file="$TMPDIR/OVMF_VARS.fd" -M q35)
-  else
-    for p in /usr/share/qemu/QEMU_EFI.fd /usr/share/AAVMF/AAVMF_CODE.fd; do
-      [ -f "$p" ] && OVMF_CODE="$p" && break
-    done
-    [ -n "$OVMF_CODE" ] && QEMU_EXTRA=(-bios "$OVMF_CODE") || QEMU_EXTRA=()
-    QEMU_EXTRA+=(-machine virt -cpu cortex-a57)
-  fi
-  log "🧪 Booting ISO in QEMU..."
-  "$QEMU_BIN" \
-    "${QEMU_EXTRA[@]}" \
-    -cdrom "$ISO_IMG" -net none -m 1024M \
-    -no-reboot -nographic -serial file:"$SERIAL_LOG"
+  log "🧪 Booting ISO in QEMU (non-EFI)..."
+  qemu-system-aarch64 -M virt -cpu cortex-a57 -m 1024 \
+    -bios none -serial file:"$SERIAL_LOG" -cdrom "$ISO_IMG" -nographic
   QEMU_EXIT=$?
   cat "$SERIAL_LOG" >> "$QEMU_LOG" 2>/dev/null || true
   cat "$SERIAL_LOG" >> "$LOG_FILE" 2>/dev/null || true
