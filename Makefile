@@ -39,12 +39,12 @@ CROSS_LD ?= aarch64-linux-gnu-ld
 CROSS_ARCH ?= aarch64
 
 # gnu-efi library and include locations; override with env vars if set
-GNUEFI_LIBDIR ?= $(shell test -f /usr/lib/gnuefi/libgnuefi.a && echo /usr/lib/gnuefi || echo /usr/lib)
+GNUEFI_LIBDIR ?= /home/ubuntu/gnu-efi/gnuefi
 GNUEFI_INCDIR ?= $(shell test -d /usr/include/efi && echo /usr/include/efi || echo /usr/include)
 
 # Fallback to /usr/local/lib if libgnuefi.a resides there. This aids
 # macOS/Homebrew setups without impacting Linux builds.
-LOCAL_GNUEFI := $(shell [ -f /usr/local/lib/libgnuefi.a ] && echo -L/usr/local/lib -lgnuefi)
+LOCAL_GNUEFI :=
 
 # Common library flags
 LIBS := -lgnuefi -lefi
