@@ -60,6 +60,10 @@ CROSS_ARCH ?= aarch64
 GNUEFI_LIBDIR ?= $(shell test -f /usr/lib/gnuefi/libgnuefi.a && echo /usr/lib/gnuefi || echo /usr/lib)
 GNUEFI_INCDIR ?= $(shell test -d /usr/include/efi && echo /usr/include/efi || echo /usr/include)
 
+# Fallback to /usr/local/lib if libgnuefi.a resides there. This aids
+# macOS/Homebrew setups without impacting Linux builds.
+LOCAL_GNUEFI := $(shell [ -f /usr/local/lib/libgnuefi.a ] && echo -L/usr/local/lib -lgnuefi)
+
 # Common library flags
 LIBS := -lgnuefi -lefi
 
@@ -285,12 +289,14 @@ init-efi: check-efi ## Build init EFI binary
 	$(CROSS_CC) $(CFLAGS_INIT_EFI) $(CFLAGS_IGNORE_RESULT) -c src/init_efi/main.c -o obj/init_efi/main.o
 	$(CROSS_CC) $(CFLAGS_INIT_EFI) -c src/init_efi/efistubs.c -o obj/init_efi/efistubs.o
 	@echo "Linking for UEFI on $(CROSS_ARCH)"
-	$(CROSS_LD) -nostdlib -znocombreloc -shared -Bsymbolic \
-	-T src/init_efi/elf_aarch64_efi.lds \
-	$(HOME)/gnu-efi/gnuefi/crt0-efi-aarch64.o \
-	obj/init_efi/main.o obj/init_efi/efistubs.o \
-	-L$(GNUEFI_LIBDIR) $(LIBS) \
-	-o out/iso/init/init.efi || scripts/manual_efi_link.sh
+        $(CROSS_LD) -nostdlib -znocombreloc -shared -Bsymbolic \
+        -T src/init_efi/elf_aarch64_efi.lds \
+        $(HOME)/gnu-efi/gnuefi/crt0-efi-aarch64.o \
+        obj/init_efi/main.o obj/init_efi/efistubs.o \
+        # $(LOCAL_GNUEFI) adds -L/usr/local/lib -lgnuefi when that library is present
+        # so Homebrew installs work without impacting standard Linux paths.
+        -L$(GNUEFI_LIBDIR) $(LOCAL_GNUEFI) $(LIBS) \
+        -o out/iso/init/init.efi || scripts/manual_efi_link.sh
 	@cp out/iso/init/init.efi out/bin/init.efi
 	@test -s out/bin/init.efi || { echo "init.efi build failed" >&2; exit 1; }
 ifeq ($(OS),Windows_NT)
