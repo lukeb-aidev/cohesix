@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: elf_aarch64_efi.lds v0.2
+// Filename: elf_aarch64_efi.lds v0.3
 // Author: Lukas Bower
-// Date Modified: 2026-09-09
+// Date Modified: 2026-09-10
 /* SPDX-License-Identifier: MIT */
 OUTPUT_FORMAT("elf64-littleaarch64")
 ENTRY(_start)

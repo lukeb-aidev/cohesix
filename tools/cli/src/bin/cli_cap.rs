@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: cohcap.rs v0.1
+// Filename: cli_cap.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-07-21
+// Date Modified: 2026-09-10
 
 use clap::{Parser, Subcommand};
 use std::fs::{self, OpenOptions};
