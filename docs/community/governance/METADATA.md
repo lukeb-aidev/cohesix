@@ -126,7 +126,7 @@
 | tests/test_namespace_rule.rs | v0.1 | 2025-07-23 | COMMUNITY | | |
 | tests/test_namespace_semantics.rs | v0.2 | 2025-12-15 | COMMUNITY | | |
 | tests/test_trace_compare.py | v0.1 | 2025-07-23 | COMMUNITY | | |
-| tests/test_qemu_boot.rs | v0.11 | 2025-12-31 | COMMUNITY | | |
+| tests/test_qemu_boot.rs | v0.12 | 2026-09-20 | COMMUNITY | | |
 | tests/test_boot_build_chain.rs | v0.1 | 2025-12-24 | COMMUNITY | | |
 | tests/boot_trace_rule.rs | v0.3 | 2025-08-18 | COMMUNITY | | |
 | tests/kernel_proc_mgr.rs | v0.1 | 2025-08-26 | COMMUNITY | | |
