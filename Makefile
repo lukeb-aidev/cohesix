@@ -149,9 +149,7 @@ else
 	fi
 endif
 
-.PHONY: build cuda-build all go-build go-test c-shims help fmt lint check cohrun cohbuild cohtrace cli_cap gui-orchestrator kernel init-efi
-.PHONY: init-efi
-.PHONY: verify-efi
+.PHONY: build cuda-build all go-build go-test c-shims help fmt lint check cohrun cohbuild cohtrace cli_cap gui-orchestrator kernel init-efi verify-efi
 
 all: go-build go-test c-shims kernel ## Run vet, tests, C shims and kernel
 
@@ -275,7 +273,7 @@ init-efi: check-efi ## Build init EFI binary
 	-T src/init_efi/elf_aarch64_efi.lds \
 	$(HOME)/gnu-efi/gnuefi/crt0-efi-aarch64.o \
 	obj/init_efi/main.o obj/init_efi/efistubs.o \
-	-L$(GNUEFI_LIBDIR) $(LOCAL_GNUEFI) $(LIBS) \
+	/usr/lib/libefi.a /usr/lib/libgnuefi.a \
 	-o out/iso/init/init.efi || scripts/manual_efi_link.sh
 	@cp out/iso/init/init.efi out/bin/init.efi
 	@test -s out/bin/init.efi || { echo "init.efi build failed" >&2; exit 1; }
