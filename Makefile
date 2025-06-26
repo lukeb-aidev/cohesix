@@ -1,21 +1,3 @@
-				# CLASSIFICATION: COMMUNITY
-# Filename: Makefile v0.47
-# Date Modified: 2026-09-12
-# Author: Lukas Bower
-#
-# ─────────────────────────────────────────────────────────────
-# Cohesix · Top‑level Build Targets
-#
-#  • `make all`      – Go vet → Go tests → C shims
-#  • `make go-build` – vet Go workspace
-#  • `make go-test`  – run Go unit tests
-#  • `make c-shims`  – compile seL4 boot trampoline object
-#  • `make cuda-build` – release build with CUDA features
-#  • `make qemu`     – run boot image under QEMU
-#  • `make qemu-check` – verify boot log
-#  • `make help`     – list targets
-# ─────────────────────────────────────────────────────────────
-
 .PHONY: build cuda-build all go-build go-test c-shims help fmt lint check \
        boot boot-x86_64 boot-aarch64 bootloader kernel init-efi cohrun cohbuild cohtrace cli_cap gui-orchestrator test test-python check-tab-safety
 
@@ -293,7 +275,6 @@ init-efi: check-efi ## Build init EFI binary
 	-T src/init_efi/elf_aarch64_efi.lds \
 	$(HOME)/gnu-efi/gnuefi/crt0-efi-aarch64.o \
 	obj/init_efi/main.o obj/init_efi/efistubs.o \
-	$(LOCAL_GNUEFI) adds -L/usr/local/lib -lgnuefi when that library is present
 	-L$(GNUEFI_LIBDIR) $(LOCAL_GNUEFI) $(LIBS) \
 	-o out/iso/init/init.efi || scripts/manual_efi_link.sh
 	@cp out/iso/init/init.efi out/bin/init.efi
