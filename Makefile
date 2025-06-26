@@ -267,16 +267,17 @@ init-efi: check-efi ## Build init EFI binary
 	@mkdir -p obj/init_efi out/iso/init out/bin
 	@test -f /usr/lib/libgnuefi.a || { echo "Missing libgnuefi.a"; exit 1; }
 	@test -f /usr/lib/libefi.a || { echo "Missing libefi.a"; exit 1; }
-	@test -f /home/ubuntu/gnu-efi/gnuefi/crt0-efi-aarch64.o || { echo "Missing crt0-efi-aarch64.o"; exit 1; }
+	@test -f $(CRT0) || { echo "Missing crt0 object: $(CRT0)"; exit 1; }
 	# Compile source files
 	$(CROSS_CC) $(CFLAGS_INIT_EFI) $(CFLAGS_IGNORE_RESULT) -c src/init_efi/main.c -o obj/init_efi/main.o
 	$(CROSS_CC) $(CFLAGS_INIT_EFI) -c src/init_efi/efistubs.c -o obj/init_efi/efistubs.o
 	# Link objects explicitly
 	$(CROSS_LD) -nostdlib -znocombreloc -Bsymbolic \
 		-T src/init_efi/elf_aarch64_efi.lds \
-		/home/ubuntu/gnu-efi/gnuefi/crt0-efi-aarch64.o \
+		$(CRT0) \
 		obj/init_efi/main.o obj/init_efi/efistubs.o \
 		/usr/lib/libefi.a /usr/lib/libgnuefi.a \
+		--entry=efi_main -static \
 		-o out/iso/init/init.efi
 	# Verify output
 	@test -s out/iso/init/init.efi || { echo "init.efi not created"; exit 1; }
