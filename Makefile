@@ -1,6 +1,6 @@
-		# CLASSIFICATION: COMMUNITY
-# Filename: Makefile v0.46
-# Date Modified: 2026-09-09
+				# CLASSIFICATION: COMMUNITY
+# Filename: Makefile v0.47
+# Date Modified: 2026-09-12
 # Author: Lukas Bower
 #
 # ─────────────────────────────────────────────────────────────
@@ -17,7 +17,7 @@
 # ─────────────────────────────────────────────────────────────
 
 .PHONY: build cuda-build all go-build go-test c-shims help fmt lint check \
-       boot boot-x86_64 boot-aarch64 bootloader kernel init-efi cohrun cohbuild cohtrace cli_cap gui-orchestrator test test-python
+       boot boot-x86_64 boot-aarch64 bootloader kernel init-efi cohrun cohbuild cohtrace cli_cap gui-orchestrator test test-python check-tab-safety
 
 PLATFORM ?= $(shell uname -m)
 TARGET ?= $(PLATFORM)
@@ -261,20 +261,24 @@ kernel: check-efi ## Build Rust kernel BOOTX64.EFI
 	@command -v objcopy >/dev/null 2>&1 || { echo "objcopy not found"; exit 1; }
 	objcopy --target=efi-app-x86_64 out/kernel.so out/BOOTX64.EFI
 	cp out/BOOTX64.EFI out/EFI/BOOT/BOOTX64.EFI
+# Use tabs for all recipe lines. Run `make check-tab-safety` after edits.
 
 
 init-efi: check-efi ## Build init EFI binary
 	@echo "🏁 Building init EFI using $(TOOLCHAIN)"
-	@mkdir -p obj/init_efi out/iso/init
+	@mkdir -p obj/init_efi out/iso/init out/bin
 	# init uses wrapper calls that intentionally drop errors
 	$(CROSS_CC) $(CFLAGS_INIT_EFI) $(CFLAGS_IGNORE_RESULT) -c src/init_efi/main.c -o obj/init_efi/main.o
+	$(CROSS_CC) $(CFLAGS_INIT_EFI) -c src/init_efi/efistubs.c -o obj/init_efi/efistubs.o
 	@echo "Linking for UEFI on $(ARCH)"
 	$(CROSS_LD) -nostdlib -znocombreloc -shared -Bsymbolic \
 	-T src/init_efi/elf_aarch64_efi.lds \
 	$(HOME)/gnu-efi/gnuefi/crt0-efi-aarch64.o \
-	obj/init_efi/main.o \
+	obj/init_efi/main.o obj/init_efi/efistubs.o \
 	-L$(HOME)/gnu-efi/aarch64/lib -lefi -lgnuefi \
 	-o out/iso/init/init.efi || scripts/manual_efi_link.sh
+	@cp out/iso/init/init.efi out/bin/init.efi
+	@test -s out/bin/init.efi || { echo "init.efi build failed" >&2; exit 1; }
 ifeq ($(OS),Windows_NT)
 	@if command -v llvm-objdump >/dev/null 2>&1; then \
 	llvm-objdump -p out/iso/init/init.efi | grep -q "PE32"; \
@@ -321,7 +325,7 @@ cohtrace: ## Run cohtrace CLI
 	cargo run -p cohcli_tools --bin cohesix_trace -- $(ARGS)
 
 cli_cap: ## Run cohcap CLI
-       cargo run -p cohcli_tools --bin cli_cap -- $(ARGS)
+	cargo run -p cohcli_tools --bin cli_cap -- $(ARGS)
 
 gui-orchestrator: ## Build gui-orchestrator binary
 	@echo "Building gui-orchestrator"
@@ -353,4 +357,6 @@ qemu-check: ## Check qemu_serial.log for BOOT_OK and fail on BOOT_FAIL
 	@grep -q "BOOT_OK" qemu_serial.log
 
 
+check-tab-safety:
+	@grep -Pn "^\s{4,}[^\t]" Makefile && echo "WARNING: spaces used in recipe lines" || echo "Tab check passed"
 
