@@ -1,5 +1,9 @@
+# CLASSIFICATION: COMMUNITY
+# Filename: Makefile v0.48
+# Author: Lukas Bower
+# Date Modified: 2026-09-14
 .PHONY: build cuda-build all go-build go-test c-shims help fmt lint check \
-       boot boot-x86_64 boot-aarch64 bootloader kernel init-efi cohrun cohbuild cohtrace cli_cap gui-orchestrator test test-python check-tab-safety
+       boot boot-x86_64 boot-aarch64 bootloader kernel init-efi cohrun cohbuild cohtrace cli_cap gui-orchestrator test test-python check-tab-safety iso boot-grub
 
 PLATFORM ?= $(shell uname -m)
 TARGET ?= $(PLATFORM)
@@ -327,9 +331,17 @@ cli_cap: ## Run cohcap CLI
 	cargo run -p cohcli_tools --bin cli_cap -- $(ARGS)
 
 gui-orchestrator: ## Build gui-orchestrator binary
-	@echo "Building gui-orchestrator"
-	@mkdir -p out/bin
-	@GOWORK=$(CURDIR)/go/go.work go build -o out/bin/gui-orchestrator ./go/cmd/gui-orchestrator
+        @echo "Building gui-orchestrator"
+        @mkdir -p out/bin
+        @GOWORK=$(CURDIR)/go/go.work go build -o out/bin/gui-orchestrator ./go/cmd/gui-orchestrator
+
+iso:
+	@echo "Creating GRUB-based ISO (non-EFI)..."
+	./scripts/make_grub_iso.sh
+
+boot-grub: iso
+	qemu-system-aarch64 -M virt -cpu cortex-a57 -m 1024 -bios none -serial mon:stdio -cdrom out/cohesix_grub.iso -nographic
+
 
 # Run boot image under QEMU, logging serial output
 qemu: ## Launch QEMU with built image and capture serial log
