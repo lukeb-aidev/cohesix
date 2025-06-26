@@ -141,14 +141,14 @@ $(info Using $(TOOLCHAIN) toolchain for UEFI build...)
 
 .PHONY: check-efi
 check-efi:
-	@ls -lh out/iso/init
+	@mkdir -p out/iso/init
 	@if [ ! -f out/iso/init/init.efi ]; then \
-	echo "\xe2\x9d\x8c check-efi: init.efi not found. EFI build likely failed earlier."; \
-	exit 0; \
+		echo "❌ check-efi: init.efi not found. EFI build likely failed earlier."; \
+		exit 0; \
 	fi
 	@file out/iso/init/init.efi | grep -iq "EFI application" && \
-	echo "\xe2\x9c\x85 init.efi format OK" || \
-	{ echo "\xe2\x9a\xa0\ufe0f init.efi found but does not appear valid"; exit 0; }
+		echo "✅ init.efi format OK" || \
+		{ echo "⚠️ init.efi found but does not appear valid"; exit 0; }
 ifeq ($(findstring Windows,$(HOST_OS)),Windows)
 	@if [ "$(EFI_AVAILABLE)" != "1" ]; then \
 	echo "gnu-efi headers not found at $(GNUEFI_HDR)"; exit 1; \
