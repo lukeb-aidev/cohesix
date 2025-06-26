@@ -25,7 +25,7 @@ fn hotplug_violation_logged() {
         std::env::set_var("NS_HOTPLUG_ROOT", root.path());
         std::env::set_var("NS_ALLOW_PREFIX", allow.to_str().unwrap());
     }
-    let mut svc = NsWatchService::default();
+    let mut svc = NsWatchService;
     svc.init();
     fs::create_dir(root.path().join("bad")).unwrap();
     sleep(Duration::from_millis(500));

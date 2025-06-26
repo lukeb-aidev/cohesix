@@ -9,5 +9,5 @@ pub mod diagnostics;
 /// Telemetry sync loop polling simulation state.
 pub mod r#loop;
 pub mod router;
-pub mod telemetry;
+pub mod core;
 pub mod trace;

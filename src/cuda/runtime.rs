@@ -238,8 +238,8 @@ impl CudaExecutor {
     }
 
     /// Gather telemetry about the CUDA environment.
-    pub fn telemetry(&self) -> crate::telemetry::telemetry::GpuTelemetry {
-        use crate::telemetry::telemetry::GpuTelemetry;
+    pub fn telemetry(&self) -> crate::telemetry::core::GpuTelemetry {
+        use crate::telemetry::core::GpuTelemetry;
         if !self.rt.present {
             return GpuTelemetry {
                 cuda_present: false,
