@@ -192,6 +192,7 @@
 - Added classification headers to metadata.json, Cargo.toml, cohesix-9p/Cargo.toml, and justfile
 ## [v0.88] - 2025-07-22
 - `qemu-check` now fails if `BOOT_FAIL` appears in `qemu_serial.log`
+## [v0.269] - 2026-09-09
 ### Fixed
 - `make qemu` and `make qemu-check` run QEMU with serial logging and grep for BOOT_OK
 - Bootloader writes BOOT_OK or BOOT_FAIL to /dev/console and /state/boot_success
@@ -1914,6 +1915,15 @@
 ### Changed
 - `Cargo.toml` v0.27 renames CLI binaries to avoid collisions.
 - `Makefile` v0.46 updates cargo run targets accordingly.
+
+## [v0.270] - 2026-09-10
+### Fixed
+- `cargo build` warnings due to duplicate bin names resolved.
+### Changed
+- `Cargo.toml` v0.28 renames `cohcap` binary to `cohesix_cap`.
+- `tools/cli/src/bin/cli_cap.rs` renamed from `cohcap.rs`.
+- `Makefile` targets updated for `cli_cap`.
+- `src/init_efi/elf_aarch64_efi.lds` v0.3 updates header.
 
 ## [v0.267] - 2026-09-07
 ### Added

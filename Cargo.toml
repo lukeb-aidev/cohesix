@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Cargo.toml v0.27
+# Filename: Cargo.toml v0.28
 # Author: Lukas Bower
-# Date Modified: 2026-09-09
+# Date Modified: 2026-09-10
 [package]
 name    = "cohesix"
 version = "0.1.0"
@@ -104,19 +104,16 @@ path = "src/coh_cc/main.rs"
 name = "kernel"
 path = "src/kernel/main.rs"
 test = false
-default-features = false
 required-features = ["kernel_bin", "minimal_uefi"]
 
 [[bin]]
 name = "logdemo"
 path = "src/userbin/logdemo.rs"
-default-features = false
 required-features = ["minimal_uefi"]
 
 [[bin]]
 name = "init"
 path = "src/init/main.rs"
-default-features = false
 required-features = ["minimal_uefi"]
 
 
@@ -128,7 +125,6 @@ path = "src/root/main.rs"
 name = "sel4_entry"
 path = "src/bootstrap/sel4_entry.rs"
 test = false
-default-features = false
 required-features = ["sel4", "kernel_bin", "minimal_uefi"]
 
 [[bin]]
@@ -136,8 +132,8 @@ name = "cohesix_trace"
 path = "tools/cli/src/bin/cohtrace.rs"
 
 [[bin]]
-name = "cohcap"
-path = "tools/cli/src/bin/cohcap.rs"
+name = "cohesix_cap"
+path = "tools/cli/src/bin/cli_cap.rs"
 
 [[bin]]
 name = "cohesix_build"

@@ -17,7 +17,7 @@
 # ─────────────────────────────────────────────────────────────
 
 .PHONY: build cuda-build all go-build go-test c-shims help fmt lint check \
-	 boot boot-x86_64 boot-aarch64 bootloader kernel init-efi cohrun cohbuild cohtrace cohcap gui-orchestrator test test-python
+       boot boot-x86_64 boot-aarch64 bootloader kernel init-efi cohrun cohbuild cohtrace cli_cap gui-orchestrator test test-python
 
 PLATFORM ?= $(shell uname -m)
 TARGET ?= $(PLATFORM)
@@ -150,7 +150,7 @@ else
 	fi
 endif
 
-.PHONY: build cuda-build all go-build go-test c-shims help fmt lint check cohrun cohbuild cohtrace cohcap gui-orchestrator kernel init-efi
+.PHONY: build cuda-build all go-build go-test c-shims help fmt lint check cohrun cohbuild cohtrace cli_cap gui-orchestrator kernel init-efi
 .PHONY: init-efi
 .PHONY: verify-efi
 
@@ -320,8 +320,8 @@ cohbuild: ## Run cohbuild CLI
 cohtrace: ## Run cohtrace CLI
 	cargo run -p cohcli_tools --bin cohesix_trace -- $(ARGS)
 
-cohcap: ## Run cohcap CLI
-	cargo run -p cohcli_tools --bin cohcap -- $(ARGS)
+cli_cap: ## Run cohcap CLI
+       cargo run -p cohcli_tools --bin cli_cap -- $(ARGS)
 
 gui-orchestrator: ## Build gui-orchestrator binary
 	@echo "Building gui-orchestrator"
