@@ -37,7 +37,7 @@ pub fn launch_physics_kernel() -> Result<(), String> {
             }
             #[cfg(not(feature = "cuda"))]
             {
-                return Err("cuda feature disabled".into());
+                Err("cuda feature disabled".into())
             }
         }
         CudaStatus::NotDetected => Err("cuda not detected".into()),

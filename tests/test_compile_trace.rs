@@ -47,5 +47,5 @@ fn compile_reproducible() -> anyhow::Result<()> {
 #[test]
 #[should_panic]
 fn reject_dynamic_flags() {
-    let _ = guard::check_static_flags(&["-fPIC".to_string()]).unwrap();
+    guard::check_static_flags(&["-fPIC".to_string()]).unwrap();
 }

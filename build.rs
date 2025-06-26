@@ -17,7 +17,7 @@ fn main() {
         _ => return,
     };
 
-    if !sel4_kernel.exists() {
+    if !sel4_kernel.exists() && env::var_os("SKIP_SEL4_KERNEL_CHECK").is_none() {
         println!("cargo:warning=sel4 kernel.elf not found at {}", sel4_kernel.display());
         println!("cargo:warning=Try running `ninja` in ~/sel4_workspace/");
     }
