@@ -275,3 +275,4 @@
 | go/cmd/gui-orchestrator/main.go | v0.4 | 2026-07-27 | COMMUNITY | | |
 | go/cmd/gui-orchestrator/main_test.go | v0.1 | 2025-07-22 | COMMUNITY | | |
 
+| docs/community/guides/test_portability_guidelines.md | v0.1 | 2025-06-26 | COMMUNITY | | |
