@@ -1933,3 +1933,8 @@
 ### Changed
 - `Makefile` v0.44 compiles and links `efistubs.c`.
 - `scripts/manual_efi_link.sh` v0.4 now requires bash and guards pipefail.
+
+## [v0.271] - 2026-09-11
+### Fixed
+- `elf_aarch64_efi.lds` v0.4 corrected `.bss` syntax for reliable linking.
+- `cohesix_fetch_build.sh` v0.68 copies all renamed binaries and drops stale names.

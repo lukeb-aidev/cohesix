@@ -136,7 +136,7 @@
 | docs/community/architecture/BOOT_KERNEL_FLOW.md | v0.2 | 2026-02-05 | COMMUNITY | | |
 | docs/community/archive/EXAMPLES_README.md | v0.3 | 2026-02-05 | COMMUNITY | | |
 | .cohesix_env | v0.3 | 2026-07-25 | COMMUNITY | | |
-| cohesix_fetch_build.sh | v0.67 | 2026-08-23 | COMMUNITY | | |
+| cohesix_fetch_build.sh | v0.68 | 2026-09-11 | COMMUNITY | | |
 | CONTRIBUTING.md | v1.1 | 2025-07-23 | COMMUNITY | | |
 | config/secure9p.toml | v0.3 | 2025-07-31 | COMMUNITY | | |
 | config/plan9.ns | v0.1 | 2026-08-04 | COMMUNITY | | |
@@ -194,7 +194,7 @@
 | src/init_efi/main.c | v0.5 | 2026-09-08 | COMMUNITY | | |
 | src/init_efi/efistubs.c | v0.1 | 2026-09-07 | COMMUNITY | | |
 | src/init_efi/linker.ld | v0.3 | 2026-08-29 | COMMUNITY | | |
-| src/init_efi/elf_aarch64_efi.lds | v0.3 | 2026-09-10 | COMMUNITY | | |
+| src/init_efi/elf_aarch64_efi.lds | v0.4 | 2026-09-11 | COMMUNITY | | |
 | full_fetch_and_build.sh | v0.10 | 2026-07-07 | COMMUNITY | | |
 | etc/init.conf | v0.1 | 2025-08-27 | COMMUNITY | | |
 | etc/init.cfg | v0.1 | 2025-08-30 | COMMUNITY | | |
