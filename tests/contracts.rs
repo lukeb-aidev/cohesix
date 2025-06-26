@@ -10,10 +10,10 @@ use cohesix::agents::runtime::AgentRuntime;
 use cohesix::cohesix_types::Role;
 use std::io::ErrorKind;
 use std::net::TcpListener;
-use libc;
+use libc::geteuid;
 
 fn can_run_privileged_tests() -> bool {
-    if unsafe { libc::geteuid() } == 0 {
+    if unsafe { geteuid() } == 0 {
         return true;
     }
     match TcpListener::bind("127.0.0.1:1") {

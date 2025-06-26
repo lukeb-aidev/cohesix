@@ -28,7 +28,7 @@ fn ninep_read_write_roundtrip() {
     srv.start().unwrap();
     std::thread::sleep(std::time::Duration::from_millis(100));
 
-    let mut client = match TcpClient::new_tcp("tester".into(), &format!("127.0.0.1:{PORT}"), "/") {
+    let mut client = match TcpClient::new_tcp("tester".into(), format!("127.0.0.1:{PORT}"), "/") {
         Ok(c) => c,
         Err(e) => {
             eprintln!("skipping ninep_read_write_roundtrip: {e}");

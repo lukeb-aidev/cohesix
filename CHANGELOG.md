@@ -1956,3 +1956,9 @@
 - `cohesix_fetch_build.sh` v0.69 drops EFI checks and boots via GRUB.
 - `Makefile` v0.48 adds `iso` and `boot-grub` targets.
 
+## [v0.275] - 2026-09-14
+### Fixed
+- Clippy cleanups: removed module inception, unit struct defaults, and redundant returns.
+- Tests updated to pass clippy including netd borrow fixes.
+- build.rs now supports SKIP_SEL4_KERNEL_CHECK env var to suppress warnings.
+

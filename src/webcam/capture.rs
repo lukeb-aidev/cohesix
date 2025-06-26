@@ -10,7 +10,7 @@
 use image::{codecs::jpeg::JpegEncoder, ImageBuffer, Rgb};
 use std::fs;
 use std::path::Path;
-use crate::telemetry::telemetry::emit_kv;
+use crate::telemetry::core::emit_kv;
 use v4l::buffer::Type;
 use v4l::io::traits::CaptureStream;
 use v4l::prelude::*;

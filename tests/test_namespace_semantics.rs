@@ -48,10 +48,9 @@ fn bind_overlay_order() {
         srv: src.to_str().expect("utf8 path").into(),
         dst: "/a".into(),
     });
-    let mut f = BindFlags::default();
-    f.after = true;
+    let f = BindFlags { after: true, ..Default::default() };
     ns.add_op(NsOp::Bind { src: "/a".into(), dst: "/b".into(), flags: f });
-    NamespaceLoader::apply(&mut ns).expect(&format!(
+    NamespaceLoader::apply(&mut ns).unwrap_or_else(|_| panic!(
         "apply failed for uid {} on {:?}",
         uid, srv_path
     ));

@@ -8,7 +8,7 @@
 
 use crate::cohesix_types::{Role, RoleManifest};
 use crate::runtime::ServiceRegistry;
-use crate::telemetry::telemetry::emit_kv;
+use crate::telemetry::core::emit_kv;
 use v4l::prelude::*;
 use crate::webcam::capture;
 use super::Service;
