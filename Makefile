@@ -51,9 +51,17 @@ endif
 # Detect compiler; use environment override if provided
 CC ?= $(shell command -v clang >/dev/null 2>&1 && echo clang || echo gcc)
 TOOLCHAIN := $(if $(findstring clang,$(CC)),clang,gcc)
-# Cross-compilers for aarch64 UEFI builds
+# Cross-compilers for AArch64 UEFI builds
 CROSS_CC ?= aarch64-linux-gnu-gcc
 CROSS_LD ?= aarch64-linux-gnu-ld
+CROSS_ARCH ?= aarch64
+
+# gnu-efi library and include locations; override with env vars if set
+GNUEFI_LIBDIR ?= $(shell test -f /usr/lib/gnuefi/libgnuefi.a && echo /usr/lib/gnuefi || echo /usr/lib)
+GNUEFI_INCDIR ?= $(shell test -d /usr/include/efi && echo /usr/include/efi || echo /usr/include)
+
+# Common library flags
+LIBS := -lgnuefi -lefi
 
 EFI_BASE ?= /usr/include/efi
 EFI_ARCH ?= x86_64
@@ -62,7 +70,7 @@ GNUEFI_BIND := $(EFI_BASE)/$(EFI_ARCH)/efibind.h
 
 EFI_AVAILABLE := $(shell [ -f "$(GNUEFI_HDR)" ] && echo 1 || echo 0)
 
-EFI_INCLUDES := -I$(HOME)/gnu-efi/inc -I$(HOME)/gnu-efi/inc/aarch64
+EFI_INCLUDES := -I$(GNUEFI_INCDIR) -I$(GNUEFI_INCDIR)/$(CROSS_ARCH)
 
 # Ensure compiler exists
 ifeq ($(shell command -v $(CC) >/dev/null 2>&1 && echo yes || echo no),no)
@@ -83,8 +91,11 @@ $(warning Skipping --subsystem=efi_application on non-Windows linker)
 endif
 endif
 NO_DYN_FLAG := $(shell $(LD) --help 2>/dev/null | grep -q no-dynamic-linker && echo --no-dynamic-linker)
-LDFLAGS_EFI := -shared -Bsymbolic -nostdlib -znocombreloc -L/usr/lib \
-        -lgnuefi -lefi $(EFI_SUBSYSTEM_FLAG) --entry=efi_main \
+LDFLAGS_EFI := -shared -Bsymbolic -nostdlib -znocombreloc -L/usr/lib
+ifeq ($(CROSS_ARCH),aarch64)
+LDFLAGS_EFI += -L$(GNUEFI_LIBDIR)
+endif
+LDFLAGS_EFI += $(LIBS) $(EFI_SUBSYSTEM_FLAG) --entry=efi_main \
         $(NO_DYN_FLAG) -z notext
 else
 LD ?= ld.bfd
@@ -99,7 +110,11 @@ EFI_SUBSYSTEM_FLAG :=
 $(warning Skipping --subsystem=efi_application on non-Windows linker)
 endif
 endif
-LDFLAGS_EFI := -shared -Bsymbolic -nostdlib -znocombreloc -L/usr/lib -lgnuefi -lefi \
+LDFLAGS_EFI := -shared -Bsymbolic -nostdlib -znocombreloc -L/usr/lib
+ifeq ($(CROSS_ARCH),aarch64)
+LDFLAGS_EFI += -L$(GNUEFI_LIBDIR)
+endif
+LDFLAGS_EFI += $(LIBS) \
         $(EFI_SUBSYSTEM_FLAG) --entry=efi_main \
         $(NO_DYN_FLAG) -z notext
 endif
@@ -108,7 +123,7 @@ LD_FLAGS := $(LDFLAGS_EFI)
 
 # Flags for building the init EFI binary
 CFLAGS_INIT_EFI := $(filter-out -mno-red-zone,$(CFLAGS_EFI))
-ifeq ($(ARCH),x86_64)
+ifeq ($(CROSS_ARCH),x86_64)
 CFLAGS_INIT_EFI += -mno-red-zone
 endif
 
@@ -143,10 +158,8 @@ ifeq ($(findstring Windows,$(HOST_OS)),Windows)
 	fi; \
 	fi
 else
-	@if [ ! -f $(HOME)/gnu-efi/gnuefi/libgnuefi.a ] || \
-	[ ! -f $(HOME)/gnu-efi/aarch64/lib/libefi.a ]; then \
-	echo "Missing gnu-efi libs under $(HOME)/gnu-efi"; \
-	exit 1; \
+	@if [ ! -f $(GNUEFI_LIBDIR)/libgnuefi.a ]; then \
+	echo "Missing gnu-efi. Please install it."; exit 1; \
 	fi
 endif
 
@@ -267,15 +280,16 @@ kernel: check-efi ## Build Rust kernel BOOTX64.EFI
 init-efi: check-efi ## Build init EFI binary
 	@echo "🏁 Building init EFI using $(TOOLCHAIN)"
 	@mkdir -p obj/init_efi out/iso/init out/bin
+	@test -f $(GNUEFI_LIBDIR)/libgnuefi.a || { echo "Missing gnu-efi. Please install it."; exit 1; }
 	# init uses wrapper calls that intentionally drop errors
 	$(CROSS_CC) $(CFLAGS_INIT_EFI) $(CFLAGS_IGNORE_RESULT) -c src/init_efi/main.c -o obj/init_efi/main.o
 	$(CROSS_CC) $(CFLAGS_INIT_EFI) -c src/init_efi/efistubs.c -o obj/init_efi/efistubs.o
-	@echo "Linking for UEFI on $(ARCH)"
+	@echo "Linking for UEFI on $(CROSS_ARCH)"
 	$(CROSS_LD) -nostdlib -znocombreloc -shared -Bsymbolic \
 	-T src/init_efi/elf_aarch64_efi.lds \
 	$(HOME)/gnu-efi/gnuefi/crt0-efi-aarch64.o \
 	obj/init_efi/main.o obj/init_efi/efistubs.o \
-	-L$(HOME)/gnu-efi/aarch64/lib -lefi -lgnuefi \
+	-L$(GNUEFI_LIBDIR) $(LIBS) \
 	-o out/iso/init/init.efi || scripts/manual_efi_link.sh
 	@cp out/iso/init/init.efi out/bin/init.efi
 	@test -s out/bin/init.efi || { echo "init.efi build failed" >&2; exit 1; }
