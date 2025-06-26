@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.67
+# Filename: cohesix_fetch_build.sh v0.68
 # Author: Lukas Bower
-# Date Modified: 2026-08-23
+# Date Modified: 2026-09-11
 #!/bin/bash
 
 HOST_ARCH="$(uname -m)"
@@ -297,7 +297,7 @@ mkdir -p "$STAGE_DIR/bin" "$STAGE_DIR/usr/bin" "$STAGE_DIR/usr/cli" "$STAGE_DIR/
 
 # Copy Rust CLI binaries into out/bin for ISO staging (copy only, skip build)
 # The workspace build above already built all binaries, so just copy them if present.
-for bin in cohcc cohbuild cohcap cohtrace cohrun_cli validator fs nsbuilder shell; do
+for bin in cohcc cohesix_build cohesix_cap cohesix_trace cohrun_cli cohagent cohrole cohrun cohup cohesix_root kernel logdemo init sel4_entry; do
   BIN_PATH="target/${COHESIX_TARGET}/release/$bin"
   if [ -f "$BIN_PATH" ]; then
     cp "$BIN_PATH" "$STAGE_DIR/bin/$bin"
