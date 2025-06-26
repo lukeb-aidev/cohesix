@@ -39,7 +39,6 @@ fn tcp_9p_roundtrip() -> Result<(), Box<dyn std::error::Error>> {
         }
         Err(err) => return Err(err.into()),
     };
-    let netd = CohesixNetd { port, discovery_port: 9999 };
     let mut stream = match TcpStream::connect(("127.0.0.1", port)) {
         Ok(s) => s,
         Err(err) if err.kind() == ErrorKind::PermissionDenied => {
@@ -52,7 +51,6 @@ fn tcp_9p_roundtrip() -> Result<(), Box<dyn std::error::Error>> {
     let mut out = [0u8; 1];
     stream.read_exact(&mut out)?;
     assert_eq!(out[0], 0x6f);
-    drop(netd);
     Ok(())
 }
 

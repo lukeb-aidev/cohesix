@@ -74,7 +74,7 @@ impl Shell {
                         let args: Vec<&str> = cmd.args.iter().map(|s| s.as_str()).collect();
                         crate::kernel::fs::busybox::run_command(other, &args);
                     }
-                    #[allow(unreachable_patterns)]
+                    #[cfg(not(feature = "busybox"))]
                     _ => {}
                 }
             }
