@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v1.00
 // Author: Lukas Bower
-// Date Modified: 2026-09-15
+// Date Modified: 2026-09-20
 
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
@@ -1969,4 +1969,8 @@
 ## [v0.277] - 2025-06-26
 ### Added
 - `docs/community/guides/test_portability_guidelines.md` v0.1 summarizing filesystem-sensitive tests and recommendations.
+
+## [v0.278] - 2026-09-20
+### Fixed
+- `tests/test_qemu_boot.rs` v0.12 skips when ISO artifacts are missing and logs the skip reason.
 
