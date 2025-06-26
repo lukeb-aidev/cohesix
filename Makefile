@@ -267,19 +267,23 @@ init-efi: check-efi ## Build init EFI binary
 	@mkdir -p obj/init_efi out/iso/init out/bin
 	@test -f /usr/lib/libgnuefi.a || { echo "Missing libgnuefi.a"; exit 1; }
 	@test -f /usr/lib/libefi.a || { echo "Missing libefi.a"; exit 1; }
-	@test -f $(CRT0) || { echo "Missing crt0 object: $(CRT0)"; exit 1; }
+	@test -f /home/ubuntu/gnu-efi/gnuefi/crt0-efi-aarch64.o || { echo "Missing crt0-efi-aarch64.o"; exit 1; }
 	# Compile source files
-	$(CROSS_CC) $(CFLAGS_INIT_EFI) $(CFLAGS_IGNORE_RESULT) -c src/init_efi/main.c -o obj/init_efi/main.o
-	$(CROSS_CC) $(CFLAGS_INIT_EFI) -c src/init_efi/efistubs.c -o obj/init_efi/efistubs.o
+	aarch64-linux-gnu-gcc -I/usr/include/efi -I/usr/include/efi/aarch64 -ffreestanding -fPIC -fshort-wchar \
+		-DEFI_FUNCTION_WRAPPER -DGNU_EFI -fno-stack-protector -fno-strict-aliasing -D__NO_INLINE__ -Wall -Wextra \
+		-Wunused-result -Wno-unused-result -c src/init_efi/main.c -o obj/init_efi/main.o
+	aarch64-linux-gnu-gcc -I/usr/include/efi -I/usr/include/efi/aarch64 -ffreestanding -fPIC -fshort-wchar \
+		-DEFI_FUNCTION_WRAPPER -DGNU_EFI -fno-stack-protector -fno-strict-aliasing -D__NO_INLINE__ -c src/init_efi/efistubs.c -o obj/init_efi/efistubs.o
 	# Link objects explicitly
-	$(CROSS_LD) -nostdlib -znocombreloc -Bsymbolic \
+	aarch64-linux-gnu-ld -nostdlib -znocombreloc -Bsymbolic \
 		-T src/init_efi/elf_aarch64_efi.lds \
-		$(CRT0) \
+		/home/ubuntu/gnu-efi/gnuefi/crt0-efi-aarch64.o \
 		obj/init_efi/main.o obj/init_efi/efistubs.o \
 		/usr/lib/libefi.a /usr/lib/libgnuefi.a \
 		--entry=efi_main -static \
 		-o out/iso/init/init.efi
-	# Verify output
+	# Optional: objcopy to ensure proper EFI format (uncomment if needed)
+	# objcopy --target=efi-app-aarch64 out/iso/init/init.efi out/iso/init/init.efi.tmp && mv out/iso/init/init.efi.tmp out/iso/init/init.efi
 	@test -s out/iso/init/init.efi || { echo "init.efi not created"; exit 1; }
 	@cp out/iso/init/init.efi out/bin/init.efi
 	@file out/bin/init.efi || true
