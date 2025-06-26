@@ -1946,3 +1946,7 @@
 - `elf_aarch64_efi.lds` v0.5 starts with `ENTRY(_start)` and sets `ImageBase`.
 ### Added
 - `check-tab-safety` Makefile target warns about space-indented recipes.
+
+## [v0.273] - 2026-09-13
+### Fixed
+- `src/init_efi/elf_aarch64_efi.lds` v0.6 rewritten with clean EFI linker script.
