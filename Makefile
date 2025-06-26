@@ -259,7 +259,7 @@ boot-aarch64: ## Build boot image for aarch64
 bootloader: check-efi ## Build UEFI bootloader
 	@echo "🏁 Building UEFI bootloader using $(TOOLCHAIN)"
 	@mkdir -p out/EFI/BOOT
-    # main.c discards EFI status codes after logging
+	# main.c discards EFI status codes after logging
 	$(CC) $(CFLAGS_EFI) $(CFLAGS_IGNORE_RESULT) -c src/bootloader/main.c -o out/bootloader.o
 	$(CC) $(CFLAGS_EFI) $(CFLAGS_WARN) -c src/bootloader/sha1.c -o out/sha1.o
 	$(LD) /usr/lib/crt0-efi-x86_64.o out/bootloader.o out/sha1.o \
@@ -289,14 +289,14 @@ init-efi: check-efi ## Build init EFI binary
 	$(CROSS_CC) $(CFLAGS_INIT_EFI) $(CFLAGS_IGNORE_RESULT) -c src/init_efi/main.c -o obj/init_efi/main.o
 	$(CROSS_CC) $(CFLAGS_INIT_EFI) -c src/init_efi/efistubs.c -o obj/init_efi/efistubs.o
 	@echo "Linking for UEFI on $(CROSS_ARCH)"
-        $(CROSS_LD) -nostdlib -znocombreloc -shared -Bsymbolic \
-        -T src/init_efi/elf_aarch64_efi.lds \
-        $(HOME)/gnu-efi/gnuefi/crt0-efi-aarch64.o \
-        obj/init_efi/main.o obj/init_efi/efistubs.o \
-        # $(LOCAL_GNUEFI) adds -L/usr/local/lib -lgnuefi when that library is present
-        # so Homebrew installs work without impacting standard Linux paths.
-        -L$(GNUEFI_LIBDIR) $(LOCAL_GNUEFI) $(LIBS) \
-        -o out/iso/init/init.efi || scripts/manual_efi_link.sh
+	$(CROSS_LD) -nostdlib -znocombreloc -shared -Bsymbolic \
+	-T src/init_efi/elf_aarch64_efi.lds \
+	$(HOME)/gnu-efi/gnuefi/crt0-efi-aarch64.o \
+	obj/init_efi/main.o obj/init_efi/efistubs.o \
+	# $(LOCAL_GNUEFI) adds -L/usr/local/lib -lgnuefi when that library is present
+	# so Homebrew installs work without impacting standard Linux paths.
+	-L$(GNUEFI_LIBDIR) $(LOCAL_GNUEFI) $(LIBS) \
+	-o out/iso/init/init.efi || scripts/manual_efi_link.sh
 	@cp out/iso/init/init.efi out/bin/init.efi
 	@test -s out/bin/init.efi || { echo "init.efi build failed" >&2; exit 1; }
 ifeq ($(OS),Windows_NT)
@@ -379,4 +379,3 @@ qemu-check: ## Check qemu_serial.log for BOOT_OK and fail on BOOT_FAIL
 
 check-tab-safety:
 	@grep -Pn "^\s{4,}[^\t]" Makefile && echo "WARNING: spaces used in recipe lines" || echo "Tab check passed"
-
