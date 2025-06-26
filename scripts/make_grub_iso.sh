@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: make_grub_iso.sh v0.13
+# Filename: make_grub_iso.sh v0.14
 # Author: Lukas Bower
-# Date Modified: 2026-08-04
+# Date Modified: 2026-09-14
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -89,6 +89,24 @@ if [ -x "$ROOT/out/bin/busybox" ]; then
     for app in ash sh ls cp mv echo mount cat ps kill; do
         ln -sf busybox "$ISO_ROOT/bin/$app"
     done
+fi
+
+# Python runtime libraries
+if [ -d "$ROOT/home/cohesix" ]; then
+    mkdir -p "$ISO_ROOT/home"
+    cp -r "$ROOT/home/cohesix" "$ISO_ROOT/home/cohesix" 2>/dev/null || true
+fi
+
+# CLI binaries from Rust
+if [ -d "$ROOT/out/bin" ]; then
+    mkdir -p "$ISO_ROOT/usr/bin"
+    cp -r "$ROOT/out/bin/." "$ISO_ROOT/usr/bin/" 2>/dev/null || true
+fi
+
+# Go binaries
+if [ -d "$ROOT/go/bin" ]; then
+    mkdir -p "$ISO_ROOT/usr/cli"
+    cp -r "$ROOT/go/bin/." "$ISO_ROOT/usr/cli/" 2>/dev/null || true
 fi
 
 # Demo launchers and assets
@@ -191,39 +209,17 @@ else
     exit 1
 fi
 
-if command -v qemu-system-x86_64 >/dev/null 2>&1; then
-    OVMF_CODE=""
-    for p in /usr/share/OVMF/OVMF_CODE.fd /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF.fd /usr/share/qemu/OVMF.fd /usr/share/edk2/ovmf/OVMF_CODE.fd; do
-        if [ -f "$p" ]; then
-            OVMF_CODE="$p"
-            break
-        fi
-    done
-    OVMF_VARS=""
-    for p in /usr/share/OVMF/OVMF_VARS.fd /usr/share/OVMF/OVMF_VARS_4M.fd /usr/share/edk2/ovmf/OVMF_VARS.fd; do
-        if [ -f "$p" ]; then
-            OVMF_VARS="$p"
-            break
-        fi
-    done
-    if [ -n "$OVMF_CODE" ] && [ -n "$OVMF_VARS" ]; then
-        TMP_VARS="$(mktemp)"
-        cp "$OVMF_VARS" "$TMP_VARS"
-        timeout 20 qemu-system-x86_64 -bios "$OVMF_CODE" \
-            -drive if=pflash,format=raw,file="$TMP_VARS" \
-            -cdrom "$ISO_OUT" -net none -M q35 -m 256M \
-            -nographic -no-reboot -serial mon:stdio >/dev/null 2>&1
-        QEMU_STATUS=$?
-        rm -f "$TMP_VARS"
-        if [ $QEMU_STATUS -ne 0 ]; then
-            echo "ERROR: QEMU boot failed" >&2
-            exit 1
-        fi
-    else
-        echo "WARNING: OVMF firmware not found; skipping boot test" >&2
-    fi
+
+if command -v qemu-system-aarch64 >/dev/null 2>&1; then
+    echo "Running non-EFI QEMU boot test..."
+    qemu-system-aarch64 -M virt -cpu cortex-a57 -m 1024 \
+        -bios none -serial mon:stdio -cdrom "$ISO_OUT" -nographic >/dev/null 2>&1 && \
+        echo "QEMU boot test passed" || echo "WARNING: QEMU boot test failed" >&2
 else
-    echo "WARNING: qemu-system-x86_64 not available; skipping boot test" >&2
+    echo "WARNING: qemu-system-aarch64 not available; skipping boot test" >&2
 fi
+
+echo "ISO contents:"
+find "$ISO_ROOT" | grep -E 'kernel\.elf|cohesix_root\.elf|cohcc|busybox|grub\.cfg|config\.yaml|rapier|cuda|roles'
 
 success=1

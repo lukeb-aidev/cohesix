@@ -1950,3 +1950,9 @@
 ## [v0.273] - 2026-09-13
 ### Fixed
 - `src/init_efi/elf_aarch64_efi.lds` v0.6 rewritten with clean EFI linker script.
+## [v0.274] - 2026-09-14
+### Changed
+- `scripts/make_grub_iso.sh` v0.14 uses non-EFI QEMU and stages runtime assets.
+- `cohesix_fetch_build.sh` v0.69 drops EFI checks and boots via GRUB.
+- `Makefile` v0.48 adds `iso` and `boot-grub` targets.
+
