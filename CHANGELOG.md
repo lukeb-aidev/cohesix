@@ -1966,3 +1966,7 @@
 ### Fixed
 - `tests/introspect_self_diagnosis.rs` v0.2 skips when required resources are inaccessible.
 
+## [v0.277] - 2025-06-26
+### Added
+- `docs/community/guides/test_portability_guidelines.md` v0.1 summarizing filesystem-sensitive tests and recommendations.
+
