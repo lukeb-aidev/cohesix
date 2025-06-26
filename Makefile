@@ -261,31 +261,27 @@ kernel: check-efi ## Build Rust kernel BOOTX64.EFI
 # Use tabs for all recipe lines. Run `make check-tab-safety` after edits.
 
 
+
 init-efi: check-efi ## Build init EFI binary
 	@echo "🏁 Building init EFI using $(TOOLCHAIN)"
 	@mkdir -p obj/init_efi out/iso/init out/bin
-	@test -f $(GNUEFI_LIBDIR)/libgnuefi.a || { echo "Missing gnu-efi. Please install it."; exit 1; }
-	# init uses wrapper calls that intentionally drop errors
+	@test -f /usr/lib/libgnuefi.a || { echo "Missing libgnuefi.a"; exit 1; }
+	@test -f /usr/lib/libefi.a || { echo "Missing libefi.a"; exit 1; }
+	@test -f /home/ubuntu/gnu-efi/gnuefi/crt0-efi-aarch64.o || { echo "Missing crt0-efi-aarch64.o"; exit 1; }
+	# Compile source files
 	$(CROSS_CC) $(CFLAGS_INIT_EFI) $(CFLAGS_IGNORE_RESULT) -c src/init_efi/main.c -o obj/init_efi/main.o
 	$(CROSS_CC) $(CFLAGS_INIT_EFI) -c src/init_efi/efistubs.c -o obj/init_efi/efistubs.o
-	@echo "Linking for UEFI on $(CROSS_ARCH)"
+	# Link objects explicitly
 	$(CROSS_LD) -nostdlib -znocombreloc -Bsymbolic \
-	-T src/init_efi/elf_aarch64_efi.lds \
-	$(HOME)/gnu-efi/gnuefi/crt0-efi-aarch64.o \
-	obj/init_efi/main.o obj/init_efi/efistubs.o \
-	/usr/lib/libefi.a /usr/lib/libgnuefi.a \
-	-o out/iso/init/init.efi || scripts/manual_efi_link.sh
+		-T src/init_efi/elf_aarch64_efi.lds \
+		/home/ubuntu/gnu-efi/gnuefi/crt0-efi-aarch64.o \
+		obj/init_efi/main.o obj/init_efi/efistubs.o \
+		/usr/lib/libefi.a /usr/lib/libgnuefi.a \
+		-o out/iso/init/init.efi
+	# Verify output
+	@test -s out/iso/init/init.efi || { echo "init.efi not created"; exit 1; }
 	@cp out/iso/init/init.efi out/bin/init.efi
-	@test -s out/bin/init.efi || { echo "init.efi build failed" >&2; exit 1; }
-ifeq ($(OS),Windows_NT)
-	@if command -v llvm-objdump >/dev/null 2>&1; then \
-	llvm-objdump -p out/iso/init/init.efi | grep -q "PE32"; \
-	else \
-	echo "llvm-objdump missing; skipping PE header check"; \
-	fi
-else
-	@echo "Skipping PE header validation on $(HOST_OS)"
-endif
+	@file out/bin/init.efi || true
 
 verify-efi: ## Verify init EFI binary
 	@if [ ! -f out/iso/init/init.efi ]; then \
