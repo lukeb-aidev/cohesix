@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v1.00
 // Author: Lukas Bower
-// Date Modified: 2026-09-07
+// Date Modified: 2026-09-15
 
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
@@ -1961,4 +1961,8 @@
 - Clippy cleanups: removed module inception, unit struct defaults, and redundant returns.
 - Tests updated to pass clippy including netd borrow fixes.
 - build.rs now supports SKIP_SEL4_KERNEL_CHECK env var to suppress warnings.
+
+## [v0.276] - 2026-09-15
+### Fixed
+- `tests/introspect_self_diagnosis.rs` v0.2 skips when required resources are inaccessible.
 
