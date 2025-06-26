@@ -293,8 +293,7 @@ init-efi: check-efi ## Build init EFI binary
 	-T src/init_efi/elf_aarch64_efi.lds \
 	$(HOME)/gnu-efi/gnuefi/crt0-efi-aarch64.o \
 	obj/init_efi/main.o obj/init_efi/efistubs.o \
-	# $(LOCAL_GNUEFI) adds -L/usr/local/lib -lgnuefi when that library is present
-	# so Homebrew installs work without impacting standard Linux paths.
+	$(LOCAL_GNUEFI) adds -L/usr/local/lib -lgnuefi when that library is present
 	-L$(GNUEFI_LIBDIR) $(LOCAL_GNUEFI) $(LIBS) \
 	-o out/iso/init/init.efi || scripts/manual_efi_link.sh
 	@cp out/iso/init/init.efi out/bin/init.efi
