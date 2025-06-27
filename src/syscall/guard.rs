@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: guard.rs v0.1
+// Filename: guard.rs v0.2
 // Author: Lukas Bower
 // Date Modified: 2026-09-30
 
@@ -14,6 +14,7 @@ pub enum SyscallOp {
     CapGrant,
     Mount,
     Exec,
+    ApplyNs,
 }
 
 impl From<&Syscall> for SyscallOp {
@@ -23,6 +24,7 @@ impl From<&Syscall> for SyscallOp {
             Syscall::CapGrant { .. } => SyscallOp::CapGrant,
             Syscall::Mount { .. } => SyscallOp::Mount,
             Syscall::Exec { .. } => SyscallOp::Exec,
+            Syscall::ApplyNamespace => SyscallOp::ApplyNs,
             Syscall::Unknown => SyscallOp::Exec,
         }
     }
@@ -32,7 +34,10 @@ pub static PERMISSIONS: Lazy<HashMap<Role, HashSet<SyscallOp>>> = Lazy::new(|| {
     use Role::*;
     use SyscallOp::*;
     let mut m: HashMap<Role, HashSet<SyscallOp>> = HashMap::new();
-    m.insert(QueenPrimary, [Spawn, CapGrant, Mount, Exec].into_iter().collect());
+    m.insert(
+        QueenPrimary,
+        [Spawn, CapGrant, Mount, Exec, ApplyNs].into_iter().collect(),
+    );
     m.insert(
         DroneWorker,
         [Spawn, CapGrant, Mount].into_iter().collect(),
