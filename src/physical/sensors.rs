@@ -34,7 +34,8 @@ fn telemetry_path() -> String {
 }
 
 fn trace_path(agent: &str) -> String {
-    let base = std::env::var("COHESIX_AGENT_TRACE_DIR").unwrap_or_else(|_| "/srv/agent_trace".into());
+    let base =
+        std::env::var("COHESIX_AGENT_TRACE_DIR").unwrap_or_else(|_| "/srv/agent_trace".into());
     format!("{}/{}", base, agent)
 }
 
@@ -48,7 +49,12 @@ pub fn read_temperature(agent: &str) -> f32 {
     }
     log(&telem, &format!("{} temp {}", ts(), value));
     let trace = trace_path(agent);
-    fs::create_dir_all(std::path::Path::new(&trace).parent().unwrap()).ok();
+    fs::create_dir_all(
+        std::path::Path::new(&trace)
+            .parent()
+            .expect("trace path missing parent"),
+    )
+    .ok();
     log(&trace, &format!("temp {}", value));
     recorder::event(agent, "sensor-triggered-action", &format!("temp:{}", value));
     value
@@ -64,7 +70,12 @@ pub fn read_tilt(agent: &str) -> f32 {
     }
     log(&telem, &format!("{} tilt {}", ts(), value));
     let trace = trace_path(agent);
-    fs::create_dir_all(Path::new(&trace).parent().unwrap()).ok();
+    fs::create_dir_all(
+        Path::new(&trace)
+            .parent()
+            .expect("trace path missing parent"),
+    )
+    .ok();
     log(&trace, &format!("tilt {}", value));
     recorder::event(agent, "sensor-triggered-action", &format!("tilt:{}", value));
     value
@@ -78,9 +89,18 @@ pub fn read_motion(agent: &str) -> bool {
     }
     log(&telem, &format!("{} motion {}", ts(), value));
     let trace = trace_path(agent);
-    fs::create_dir_all(Path::new(&trace).parent().unwrap()).ok();
+    fs::create_dir_all(
+        Path::new(&trace)
+            .parent()
+            .expect("trace path missing parent"),
+    )
+    .ok();
     log(&trace, &format!("motion {}", value));
-    recorder::event(agent, "sensor-triggered-action", &format!("motion:{}", value));
+    recorder::event(
+        agent,
+        "sensor-triggered-action",
+        &format!("motion:{}", value),
+    );
     value
 }
 
@@ -109,11 +129,16 @@ fn read_hw_temperature() -> Option<f32> {
 }
 
 fn read_hw_accel() -> Option<f32> {
-    let env = std::env::var("MOCK_ACCEL").ok().and_then(|v| v.parse().ok());
+    let env = std::env::var("MOCK_ACCEL")
+        .ok()
+        .and_then(|v| v.parse().ok());
     if env.is_some() {
         return env;
     }
-    let paths = ["/sys/bus/iio/devices/iio:device0/in_accel_x_raw", "/tmp/accel_mock"];
+    let paths = [
+        "/sys/bus/iio/devices/iio:device0/in_accel_x_raw",
+        "/tmp/accel_mock",
+    ];
     for p in paths.iter() {
         if let Ok(contents) = std::fs::read_to_string(p) {
             if let Ok(v) = contents.trim().parse::<f32>() {
@@ -125,7 +150,9 @@ fn read_hw_accel() -> Option<f32> {
 }
 
 fn read_hw_motion() -> Option<bool> {
-    let env = std::env::var("MOCK_MOTION").ok().and_then(|v| v.parse().ok());
+    let env = std::env::var("MOCK_MOTION")
+        .ok()
+        .and_then(|v| v.parse().ok());
     if env.is_some() {
         return env;
     }
