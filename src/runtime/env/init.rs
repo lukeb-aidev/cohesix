@@ -7,10 +7,42 @@
 //! Sets up runtime globals, telemetry, role configuration, and system entropy.
 
 /// Initialize the runtime environment at startup.
+use std::fs;
+
+#[derive(Debug, Default, Clone)]
+pub struct BootArgs {
+    pub cohrole: Option<String>,
+    pub secure9p: bool,
+    pub busybox: bool,
+    pub no_cuda: bool,
+}
+
+pub fn parse_boot_args() -> BootArgs {
+    let mut args = BootArgs::default();
+    if let Ok(role) = std::env::var("COHROLE") {
+        args.cohrole = Some(role);
+    } else if let Ok(role) = fs::read_to_string("/srv/cohrole") {
+        args.cohrole = Some(role.trim().to_string());
+    }
+    args.secure9p = std::env::var("secure9p").ok().as_deref() == Some("1");
+    args.busybox = std::env::var("busybox").map(|v| v != "0").unwrap_or(true);
+    args.no_cuda = std::env::var("no-cuda").ok().as_deref() == Some("1");
+    args
+}
+
 pub fn initialize_runtime_env() {
     println!("[env] Initializing runtime environment...");
     load_config();
-    let role = detect_cohrole();
+    let boot = parse_boot_args();
+    if let Some(role) = &boot.cohrole {
+        std::env::set_var("cohrole", role);
+        fs::write("/srv/cohrole", role).ok();
+    }
+    println!("[env] boot args: {:?}", boot);
+    let role = boot
+        .cohrole
+        .clone()
+        .unwrap_or_else(|| detect_cohrole());
     println!("[env] running as role: {}", role);
     // In the future this will also seed entropy and launch telemetry threads.
 }
