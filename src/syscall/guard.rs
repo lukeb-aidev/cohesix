@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: guard.rs v0.2
+// Filename: guard.rs v0.3
 // Author: Lukas Bower
 // Date Modified: 2026-09-30
 
@@ -36,12 +36,11 @@ pub static PERMISSIONS: Lazy<HashMap<Role, HashSet<SyscallOp>>> = Lazy::new(|| {
     let mut m: HashMap<Role, HashSet<SyscallOp>> = HashMap::new();
     m.insert(
         QueenPrimary,
-        [Spawn, CapGrant, Mount, Exec, ApplyNs].into_iter().collect(),
+        [Spawn, CapGrant, Mount, Exec, ApplyNs]
+            .into_iter()
+            .collect(),
     );
-    m.insert(
-        DroneWorker,
-        [Spawn, CapGrant, Mount].into_iter().collect(),
-    );
+    m.insert(DroneWorker, [Spawn, CapGrant, Mount].into_iter().collect());
     m.insert(
         InteractiveAIBooth,
         [Spawn, CapGrant, Mount].into_iter().collect(),
@@ -55,7 +54,13 @@ pub static PERMISSIONS: Lazy<HashMap<Role, HashSet<SyscallOp>>> = Lazy::new(|| {
 
 pub fn check_permission(role: Role, sc: &Syscall) -> bool {
     let op = SyscallOp::from(sc);
-    let allowed = PERMISSIONS.get(&role).map_or(false, |set| set.contains(&op));
-    log::info!("Syscall {:?} attempted by {:?}: {:?}", op, role, allowed);
+    let allowed = PERMISSIONS
+        .get(&role)
+        .map_or(false, |set| set.contains(&op));
+    if !allowed {
+        log::warn!("permission denied: {:?} for {:?}", op, role);
+    } else {
+        log::info!("permission allowed: {:?} for {:?}", op, role);
+    }
     allowed
 }
