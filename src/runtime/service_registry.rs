@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: service_registry.rs v0.4
+// Filename: service_registry.rs v0.5
 // Author: Lukas Bower
-// Date Modified: 2025-08-17
+// Date Modified: 2026-09-24
 #![cfg(not(target_os = "uefi"))]
 
 //! Runtime service registry for Cohesix.
@@ -75,7 +75,7 @@ impl ServiceRegistry {
             .map_err(|_| ServiceRegistryError::LockPoisoned)?
             .get(name)
             .cloned()
-            .filter(|h| h.role == role || role == Role::QueenPrimary);
+            .filter(|h| h.role == role || matches!(role, Role::QueenPrimary));
         Ok(opt)
     }
 
