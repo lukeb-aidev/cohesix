@@ -258,7 +258,13 @@ impl Namespace {
         let dir = srv_root().join("bootns");
         fs::create_dir_all(&dir)?;
         let path = dir.join(agent_id);
-        fs::write(&path, self.to_string())
+        match fs::write(&path, self.to_string()) {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                eprintln!("[namespace] persist failed for {}: {}", path.display(), e);
+                Err(e)
+            }
+        }
     }
 
 

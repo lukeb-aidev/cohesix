@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: plan9.ns v0.2
+// Filename: plan9.ns v0.3
 // Author: Lukas Bower
-// Date Modified: 2026-07-08
+// Date Modified: 2026-10-07
 
 # Map the root filesystem to /
 bind / /
@@ -14,3 +14,7 @@ srv -c /srv
 
 # Use the served namespace at /srv
 mount /srv /srv
+mount /srv/telemetry /telemetry
+mount /srv/shell_out /shell_out
+mount /home/cohesix /home/cohesix
+mount /srv/cuda /srv/cuda
