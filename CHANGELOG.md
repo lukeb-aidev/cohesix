@@ -2008,3 +2008,7 @@
 ## [v0.285] - 2026-09-30
 ### Fixed
 - `tests/test_syscalls.rs` v0.2 respects role-based permissions and asserts `PermissionDenied` when access is blocked.
+
+## [v0.286] - 2026-09-30
+### Fixed
+- `tests/test_syscalls.rs` v0.3 handles namespace application denial gracefully based on role.
