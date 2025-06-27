@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: tools/make_iso.sh v0.5
+# Filename: tools/make_iso.sh v0.6
 # Author: Lukas Bower
-# Date Modified: 2026-10-07
+# Date Modified: 2026-10-10
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -84,6 +84,14 @@ fi
 
 # Optional role file
 [ -f "$ROOT/out/srv/cohrole" ] && cp "$ROOT/out/srv/cohrole" "$ISO_ROOT/srv/cohrole"
+
+# Cloud hook configuration
+if [ -f "$ROOT/etc/cloud.toml" ]; then
+    cp "$ROOT/etc/cloud.toml" "$ISO_ROOT/etc/cloud.toml"
+fi
+if [ -n "${CLOUD_HOOK_URL:-}" ]; then
+    echo "$CLOUD_HOOK_URL" > "$ISO_ROOT/etc/cloud_hook"
+fi
 
 "${MKISO[@]}" -R -J -o "$ISO_OUT" "$ISO_ROOT"
 

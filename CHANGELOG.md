@@ -2070,3 +2070,12 @@
 ### Fixed
 - test suite checks cohtrace trace command execution.
 
+## [v0.297] - 2026-10-10
+### Added
+- Cloud orchestrator hooks for Queen registration and heartbeat.
+- Workers ping cloud endpoint when CLOUD_HOOK_URL is set.
+- `cohtrace cloud` shows queen ID, heartbeat, and worker count.
+- ISO builder bundles optional cloud hook configuration.
+### Changed
+- `src/cloud/mod.rs` exports new orchestrator module.
+

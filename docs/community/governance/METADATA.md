@@ -176,7 +176,7 @@
 | scripts/load_arch_config.sh | v0.1 | 2026-07-25 | COMMUNITY | | |
 | scripts/build_busybox.sh | v0.4 | 2026-01-26 | COMMUNITY | | |
 | scripts/manual_efi_link.sh | v0.5 | 2026-09-08 | COMMUNITY | | |
-| tools/make_iso.sh | v0.5 | 2026-10-07 | COMMUNITY | | |
+| tools/make_iso.sh | v0.6 | 2026-10-10 | COMMUNITY | | |
 | metadata.json | v0.1 | 2025-07-24 | COMMUNITY | | |
 | Cargo.toml | v0.29 | 2026-09-30 | COMMUNITY | | |
 | cohesix-9p/Cargo.toml | v0.1 | 2025-07-28 | COMMUNITY | | |
@@ -235,11 +235,15 @@
 | src/root/main.rs | v0.1 | 2025-12-27 | COMMUNITY | | |
 | src/utils/gpu.rs | v0.1 | 2025-12-12 | COMMUNITY | | |
 | src/cli/mod.rs | v1.3 | 2026-10-08 | COMMUNITY | | |
-| src/cli/cohtrace.rs | v0.3 | 2026-10-09 | COMMUNITY | | |
+| src/cli/cohtrace.rs | v0.4 | 2026-10-10 | COMMUNITY | | |
+| src/cloud/mod.rs | v0.2 | 2026-10-10 | COMMUNITY | | |
+| src/cloud/orchestrator.rs | v0.1 | 2026-10-10 | COMMUNITY | | |
+| src/lib.rs | v1.10 | 2026-10-10 | COMMUNITY | | |
 | src/runtime/loader.rs | v0.2 | 2026-10-07 | COMMUNITY | | |
 | tests/test_loader.rs | v0.1 | 2025-09-26 | COMMUNITY | | |
 | tests/test_run_shell.rs | v0.1 | 2025-09-26 | COMMUNITY | | |
 | tests/test_runtime_cli.rs | v0.3 | 2026-10-09 | COMMUNITY | | |
+| tests/test_cloud_hooks.rs | v0.1 | 2026-10-10 | COMMUNITY | | |
 | tests/test_syscalls.rs | v0.6 | 2026-09-30 | COMMUNITY | | |
 | tests/introspect_self_diagnosis.rs | v0.2 | 2026-09-15 | COMMUNITY | | |
 | src/bootstrap/sel4_entry.rs | v0.4 | 2026-08-21 | COMMUNITY | | |
