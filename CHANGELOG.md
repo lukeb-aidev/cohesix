@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v1.00
 // Author: Lukas Bower
-// Date Modified: 2026-09-20
+// Date Modified: 2026-09-30
 
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
@@ -1999,3 +1999,8 @@
 ### Fixed
 - `ServiceRegistry` logs registration lifecycle events and exposes `TestRegistryGuard` for cleanup.
 - `tests/test_service_registry.rs` v0.3 ensures registry isolation and validates state after each operation.
+
+## [v0.284] - 2026-09-30
+### Fixed
+- `SyscallQueue::dequeue` logs role and result to aid debugging.
+- `tests/test_syscall_queue.rs` v1.1 now asserts permission denial instead of unwrapping write errors.
