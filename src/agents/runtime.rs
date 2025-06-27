@@ -9,6 +9,7 @@
 //! registered under `/srv/agents/<id>` and a trace log is kept in
 //! `/srv/agent_trace/<id>`.
 
+use anyhow::Context;
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -16,18 +17,18 @@ use std::path::PathBuf;
 use std::process::{Child, Command};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::runtime::ServiceRegistry;
-use crate::cohesix_types::Role;
-use crate::trace::recorder;
 use crate::agent::directory::{AgentDirectory, AgentRecord};
+use crate::cohesix_types::Role;
+use crate::runtime::ServiceRegistry;
+use crate::trace::recorder;
 
 /// Runtime responsible for managing spawned agents.
 pub struct AgentRuntime {
     pub procs: HashMap<String, Child>,
 }
 
-use crate::agent_transport::AgentTransport;
 use crate::agent_migration::{Migrateable, MigrationStatus};
+use crate::agent_transport::AgentTransport;
 
 fn agents_dir() -> String {
     std::env::var("COHESIX_AGENTS_DIR").unwrap_or_else(|_| "/srv/agents".into())
@@ -38,7 +39,11 @@ fn agent_trace_dir() -> String {
 }
 
 impl Migrateable for AgentRuntime {
-    fn migrate<T: AgentTransport>(&self, peer: &str, transport: &T) -> anyhow::Result<MigrationStatus> {
+    fn migrate<T: AgentTransport>(
+        &self,
+        peer: &str,
+        transport: &T,
+    ) -> anyhow::Result<MigrationStatus> {
         let tmpdir = std::env::var("TMPDIR").unwrap_or("/tmp".to_string());
         let path = format!("{}/runtime_state.json", tmpdir);
         std::fs::write(&path, "runtime")?;
@@ -50,7 +55,9 @@ impl Migrateable for AgentRuntime {
 impl AgentRuntime {
     /// Create a new agent runtime manager.
     pub fn new() -> Self {
-        Self { procs: HashMap::new() }
+        Self {
+            procs: HashMap::new(),
+        }
     }
 
     /// Spawn a new agent process with the given role and arguments.
@@ -59,17 +66,21 @@ impl AgentRuntime {
             return Err(anyhow::anyhow!("invalid role"));
         }
         let agents_dir = agents_dir();
-        fs::create_dir_all(&agents_dir)?;
+        fs::create_dir_all(&agents_dir)
+            .with_context(|| format!("failed to create agents dir {agents_dir}"))?;
         let path = format!("{}/{}", agents_dir, agent_id);
-        fs::create_dir_all(&path)?;
-        ServiceRegistry::register_service(agent_id, &path)?;
+        fs::create_dir_all(&path).with_context(|| format!("failed to create agent path {path}"))?;
+        ServiceRegistry::register_service(agent_id, &path).context("service registry failed")?;
 
         let trace_dir = agent_trace_dir();
-        fs::create_dir_all(&trace_dir)?;
+        fs::create_dir_all(&trace_dir)
+            .with_context(|| format!("failed to create trace dir {trace_dir}"))?;
+        let trace_path = format!("{}/{}", trace_dir, agent_id);
         let mut trace = OpenOptions::new()
             .create(true)
             .append(true)
-            .open(format!("{}/{}", trace_dir, agent_id))?;
+            .open(&trace_path)
+            .with_context(|| format!("open trace file {trace_path}"))?;
         writeln!(trace, "spawn {} {:?}", timestamp(), args)?;
         let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
         let _ = recorder::spawn(agent_id, &args[0], &arg_refs);
@@ -78,7 +89,9 @@ impl AgentRuntime {
         if args.len() > 1 {
             cmd.args(&args[1..]);
         }
-        let child = cmd.spawn()?;
+        let child = cmd
+            .spawn()
+            .with_context(|| format!("failed to spawn agent {} command {}", agent_id, args[0]))?;
         self.procs.insert(agent_id.to_string(), child);
         AgentDirectory::update(AgentRecord {
             id: agent_id.into(),
