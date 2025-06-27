@@ -1984,3 +1984,8 @@
 ### Fixed
 - `AgentRuntime::spawn` now includes context on failure and avoids panics.
 - `tests/test_scenario_engine.rs` v0.3 adds invalid command coverage.
+
+## [v0.281] - 2026-09-22
+### Fixed
+- `ScenarioEngine::run` v0.2 validates boot ISO presence and returns an error when missing.
+- `tests/test_scenario_engine.rs` v0.4 skips tests if ISO is absent and logs why.
