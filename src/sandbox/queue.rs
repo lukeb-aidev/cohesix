@@ -1,12 +1,12 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: queue.rs v1.0
+// Filename: queue.rs v1.1
 // Author: Lukas Bower
-// Date Modified: 2025-06-17
+// Date Modified: 2026-09-30
 
 //! Syscall queue for sandbox mediation.
 
 use std::collections::VecDeque;
-use log::debug;
+use log::{debug, info};
 
 use crate::cohesix_types::{Role, RoleManifest, Syscall};
 
@@ -36,8 +36,13 @@ impl SyscallQueue {
     /// Dequeue the next syscall if the current role is `DroneWorker`.
     pub fn dequeue(&mut self) -> Option<Syscall> {
         match RoleManifest::current_role() {
-            Role::DroneWorker => self.buffer.pop_front(),
+            Role::DroneWorker => {
+                let sc = self.buffer.pop_front();
+                info!("Role {:?} attempted dequeue: {:?}", Role::DroneWorker, sc);
+                sc
+            }
             role => {
+                info!("Role {:?} attempted dequeue: PermissionDenied", role);
                 debug!("syscall dequeue blocked for role: {:?}", role);
                 None
             }

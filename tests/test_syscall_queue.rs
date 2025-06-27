@@ -1,10 +1,11 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: test_syscall_queue.rs v1.0
+// Filename: test_syscall_queue.rs v1.1
 // Author: Lukas Bower
-// Date Modified: 2025-06-17
+// Date Modified: 2026-09-30
 
 use cohesix::cohesix_types::Syscall;
 use cohesix::sandbox::{dispatcher::SyscallDispatcher, queue::SyscallQueue};
+use libc::geteuid;
 use serial_test::serial;
 
 #[test]
@@ -39,10 +40,24 @@ fn dequeue_blocked_for_non_worker() {
     unsafe {
         std::env::set_var("COHROLE", "QueenPrimary");
     }
-    std::fs::write("/srv/cohrole", "QueenPrimary").unwrap();
+    // Attempting to write directly to `/srv/cohrole` should fail for
+    // non-Worker roles when not running as root.
+    if unsafe { geteuid() } != 0 {
+        match std::fs::write("/srv/cohrole", "QueenPrimary") {
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => (),
+            Err(e) => panic!("Unexpected error: {e}"),
+            Ok(_) => panic!("expected permission denial when writing /srv/cohrole"),
+        }
+    } else {
+        let _ = std::fs::write("/srv/cohrole", "QueenPrimary");
+    }
     let mut q = SyscallQueue::new();
     q.enqueue(Syscall::Exec {
         path: "/bin/ls".into(),
     });
-    assert!(q.dequeue().is_none(), "queen should not dequeue syscalls");
+    assert!(
+        q.dequeue().is_none(),
+        "queen should not dequeue syscalls"
+    );
+    // This is the expected outcome for non-Worker roles
 }
