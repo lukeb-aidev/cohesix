@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: loader.rs v0.1
+// Filename: loader.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-09-26
+// Date Modified: 2026-10-07
 
 use anyhow::{Context, Result};
 use std::fs::File;
@@ -10,7 +10,7 @@ use std::io::Read;
 const MAGIC: &[u8; 4] = b"COHB";
 const VERSION: u8 = 1;
 
-/// Load a `cohcc` binary and simulate execution.
+/// Load a `cohcc` binary and execute the embedded program.
 pub fn load_and_run(path: &str) -> Result<()> {
     let mut f = File::open(path).with_context(|| format!("open {path}"))?;
     let mut data = Vec::new();
@@ -24,16 +24,20 @@ pub fn load_and_run(path: &str) -> Result<()> {
     if data[4] != VERSION {
         anyhow::bail!("unsupported version {}", data[4]);
     }
-    for opcode in &data[5..] {
-        match opcode {
-            0x01 => println!("[EXEC: ADD]"),
-            0x02 => println!("[EXEC: PRINT]"),
-            0xFF => {
-                println!("[EXEC: END]");
-                break;
-            }
-            other => println!("[EXEC: UNKNOWN 0x{other:02X}]"),
-        }
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::Command;
+
+    let exe_bytes = &data[5..];
+    let tmp_path = "/tmp/coh_exec.bin";
+    fs::write(tmp_path, exe_bytes).context("write temp exe")?;
+    let mut perm = fs::metadata(tmp_path)?.permissions();
+    perm.set_mode(0o755);
+    fs::set_permissions(tmp_path, perm)?;
+    let status = Command::new(tmp_path).status().context("exec")?;
+    fs::remove_file(tmp_path).ok();
+    if !status.success() {
+        anyhow::bail!("program exited with {:?}", status.code());
     }
     Ok(())
 }
