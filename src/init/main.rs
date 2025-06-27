@@ -1,16 +1,33 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: main.rs v0.1
+// Filename: main.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-09-05
+// Date Modified: 2026-10-07
 
 #[cfg(not(target_os = "uefi"))]
 fn main() {
-    use cohesix::runtime::env::init::initialize_runtime_env;
+    use cohesix::runtime::env::init::{initialize_runtime_env, parse_boot_args};
     use cohesix::runtime::role_config::load_active;
+    use cohesix::runtime::ServiceRegistry;
+    use std::process::Command;
     println!("[init] starting user init");
     initialize_runtime_env();
+    let boot = parse_boot_args();
+    println!("[init] secure9p: {}", boot.secure9p);
+    println!("[init] cuda_disabled: {}", boot.no_cuda);
+    println!("[init] busybox: {}", boot.busybox);
     let role = std::env::var("cohrole").unwrap_or_else(|_| "unknown".into());
     let cfg = load_active();
+    match Command::new("coh-9p-helper").spawn() {
+        Ok(_) => {
+            let _ = ServiceRegistry::register_service("coh9p", "/srv/coh9p");
+            println!("[init] coh-9p-helper started");
+        }
+        Err(e) => eprintln!("[init] coh-9p-helper start failed: {e}"),
+    }
+    match Command::new("cohtrace").arg("status").spawn() {
+        Ok(_) => println!("[init] cohtrace service started"),
+        Err(e) => eprintln!("[init] cohtrace start failed: {e}"),
+    }
     if cfg.validator.unwrap_or(true) {
         match std::process::Command::new("python3")
             .arg("python/validator.py")
