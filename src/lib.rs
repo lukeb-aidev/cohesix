@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: lib.rs v1.9
-// Date Modified: 2026-08-06
+// Filename: lib.rs v1.10
+// Date Modified: 2026-10-10
 // Author: Lukas Bower
 #![cfg(not(target_os = "uefi"))]
 #![cfg_attr(not(feature = "std"), no_std)]
@@ -90,6 +90,8 @@ pub mod sim;
 
 /// 9P multiplexer utilities
 pub mod p9;
+/// Cloud integration helpers
+pub mod cloud;
 #[cfg(feature = "secure9p")]
 pub mod secure9p;
 /// Networking daemons

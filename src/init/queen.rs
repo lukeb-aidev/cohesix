@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: queen.rs v0.5
 // Author: Lukas Bower
-// Date Modified: 2025-08-17
+// Date Modified: 2026-10-10
 #![cfg(not(target_os = "uefi"))]
 
 //! seL4 root task hook for the Queen role.
@@ -16,6 +16,7 @@ use cohesix_9p::fs::InMemoryFs;
 use crate::boot::plan9_ns::load_namespace;
 use crate::runtime::ServiceRegistry;
 use serde_json;
+use crate::cloud::orchestrator::{register_queen, send_heartbeat};
 
 fn log(msg: &str) {
     match OpenOptions::new().append(true).open("/dev/log") {
@@ -66,6 +67,16 @@ pub fn start() {
     let _ = ServiceRegistry::register_service("telemetry", "/srv/telemetry");
     let _ = ServiceRegistry::register_service("sim", "/sim");
     let _ = ServiceRegistry::register_service("p9mux", "/srv/p9mux");
+
+    if let Ok(url) = std::env::var("CLOUD_HOOK_URL") {
+        match register_queen(&url) {
+            Ok(id) => {
+                let _ = send_heartbeat(id.clone());
+                log(&format!("Registered Queen to cloud: {id}"));
+            }
+            Err(e) => log(&format!("cloud registration failed: {e}")),
+        }
+    }
     // Spawning of initial processes will be added in a future update
     // FIXME(cohesix): spawn initial processes under this namespace
 }
