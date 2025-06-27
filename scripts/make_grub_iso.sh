@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: make_grub_iso.sh v0.14
+# Filename: make_grub_iso.sh v0.15
 # Author: Lukas Bower
-# Date Modified: 2026-09-14
+# Date Modified: 2026-09-21
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -92,9 +92,9 @@ if [ -x "$ROOT/out/bin/busybox" ]; then
 fi
 
 # Python runtime libraries
-if [ -d "$ROOT/home/cohesix" ]; then
+if [ -d "$ROOT/python" ]; then
     mkdir -p "$ISO_ROOT/home"
-    cp -r "$ROOT/home/cohesix" "$ISO_ROOT/home/cohesix" 2>/dev/null || true
+    cp -r "$ROOT/python" "$ISO_ROOT/home/cohesix" 2>/dev/null || true
 fi
 
 # CLI binaries from Rust
@@ -107,6 +107,10 @@ fi
 if [ -d "$ROOT/go/bin" ]; then
     mkdir -p "$ISO_ROOT/usr/cli"
     cp -r "$ROOT/go/bin/." "$ISO_ROOT/usr/cli/" 2>/dev/null || true
+    if [ -f "$ROOT/go/bin/coh-9p-helper" ]; then
+        mkdir -p "$ISO_ROOT/srv/9p"
+        cp "$ROOT/go/bin/coh-9p-helper" "$ISO_ROOT/srv/9p/" || true
+    fi
 fi
 
 # Demo launchers and assets
@@ -160,13 +164,15 @@ mkdir -p "$ISO_ROOT/srv/cuda" "$ISO_ROOT/sim"
 if [ -d "$ROOT/srv/cuda" ]; then
     cp -r "$ROOT/srv/cuda/." "$ISO_ROOT/srv/cuda/" 2>/dev/null || true
 else
-    echo "WARNING: $ROOT/srv/cuda missing; skipping CUDA staging" >&2
+    echo "WARNING: $ROOT/srv/cuda missing; creating stub" >&2
+    echo '{}' > "$ISO_ROOT/srv/cuda/README.stub"
 fi
 
 if [ -d "$ROOT/sim" ]; then
     cp -r "$ROOT/sim/." "$ISO_ROOT/sim/" 2>/dev/null || true
 else
-    echo "WARNING: $ROOT/sim missing; skipping physics assets" >&2
+    echo "WARNING: $ROOT/sim missing; creating stub" >&2
+    echo '{}' > "$ISO_ROOT/sim/placeholder.json"
 fi
 
 # Generate grub.cfg

@@ -1974,3 +1974,9 @@
 ### Fixed
 - `tests/test_qemu_boot.rs` v0.12 skips when ISO artifacts are missing and logs the skip reason.
 
+## [v0.279] - 2026-09-21
+### Fixed
+- `cohesix_fetch_build.sh` v0.70 stages config.yaml to out/boot and copies python libs.
+- `make_grub_iso.sh` v0.15 copies python/ to /home/cohesix, adds Secure9P helper, and stubs CUDA/sim content.
+- Added `setup/init.sh` v0.1 placeholder startup script.
+

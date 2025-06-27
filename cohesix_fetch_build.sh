@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.69
+# Filename: cohesix_fetch_build.sh v0.70
 # Author: Lukas Bower
-# Date Modified: 2026-09-14
+# Date Modified: 2026-09-21
 #!/bin/bash
 
 HOST_ARCH="$(uname -m)"
@@ -329,6 +329,11 @@ bash scripts/build_root_elf.sh || { echo "❌ root ELF build failed" >&2; exit 1
 # Ensure staging directories exist for config and roles
 mkdir -p "$STAGE_DIR/etc" "$STAGE_DIR/roles" "$STAGE_DIR/init" \
          "$STAGE_DIR/usr/bin" "$STAGE_DIR/usr/cli" "$STAGE_DIR/home/cohesix"
+if [ -d python ]; then
+  cp -r python "$STAGE_DIR/home/cohesix" 2>/dev/null || true
+  mkdir -p "$ROOT/out/home"
+  cp -r python "$ROOT/out/home/cohesix" 2>/dev/null || true
+fi
 
 # Build or update seL4 kernel from external workspace
 SEL4_WORKSPACE="${SEL4_WORKSPACE:-/home/ubuntu/sel4_workspace}"
@@ -420,8 +425,10 @@ system:
 EOF
   CONFIG_SRC="config/config.yaml"
 fi
-mkdir -p "$STAGE_DIR/config"
+mkdir -p "$STAGE_DIR/config" "$STAGE_DIR/boot" "$ROOT/out/boot"
 cp "$CONFIG_SRC" "$STAGE_DIR/config/config.yaml"
+cp "$CONFIG_SRC" "$STAGE_DIR/boot/config.yaml"
+cp "$CONFIG_SRC" "$ROOT/out/boot/config.yaml"
 log "config.yaml staged from $CONFIG_SRC"
 if ls setup/roles/*.yaml >/dev/null 2>&1; then
   for cfg in setup/roles/*.yaml; do
