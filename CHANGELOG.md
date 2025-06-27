@@ -2004,3 +2004,7 @@
 ### Fixed
 - `SyscallQueue::dequeue` logs role and result to aid debugging.
 - `tests/test_syscall_queue.rs` v1.1 now asserts permission denial instead of unwrapping write errors.
+
+## [v0.285] - 2026-09-30
+### Fixed
+- `tests/test_syscalls.rs` v0.2 respects role-based permissions and asserts `PermissionDenied` when access is blocked.
