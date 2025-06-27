@@ -1989,3 +1989,8 @@
 ### Fixed
 - `ScenarioEngine::run` v0.2 validates boot ISO presence and returns an error when missing.
 - `tests/test_scenario_engine.rs` v0.4 skips tests if ISO is absent and logs why.
+
+## [v0.282] - 2026-09-24
+### Fixed
+- `ServiceRegistry::lookup` now matches `Role::QueenPrimary` via `matches!` for clarity.
+- `tests/test_service_registry.rs` uses `COHROLE` env var to avoid leaking `/srv/cohrole` state.
