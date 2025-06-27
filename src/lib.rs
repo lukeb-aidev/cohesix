@@ -73,6 +73,9 @@ pub mod worker;
 /// Sandbox helpers (profiles, syscall queueing).
 pub mod sandbox;
 
+/// Syscall permission guard helpers
+pub mod syscall;
+
 /// Kernel modules and drivers
 pub mod kernel;
 
