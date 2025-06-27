@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: mod.rs v1.0
-// Date Modified: 2025-06-02
+// Filename: mod.rs v1.1
+// Date Modified: 2026-09-30
 // Author: Lukas Bower
 
 //! Runtime subsystem modules
@@ -12,4 +12,4 @@ pub mod role_config;
 pub mod service_registry;
 
 pub use env::init::initialize_runtime_env;
-pub use service_registry::ServiceRegistry;
+pub use service_registry::{ServiceRegistry, TestRegistryGuard};
