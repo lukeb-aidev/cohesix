@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: ROLE_POLICY.md v1.0
+// Filename: ROLE_POLICY.md v1.1
 // Author: Lukas Bower
-// Date Modified: 2025-06-15
+// Date Modified: 2026-09-30
 
 # Role Policy
 
@@ -41,6 +41,14 @@ At boot, Cohesix reads the declared runtime role from `/srv/cohrole` to determin
 ```
 
 This manifest guides both the OS initialization sequence and the Codex automation, ensuring every component is aware of its context and dependencies within the Cohesix platform.
+
+### Additional Role Details
+
+* **KioskInteractive** – offers a local UI terminal with restricted command set.
+* **DroneWorker** – runs physics and sensor pipelines for autonomous drones.
+* **GlassesAgent** – provides AR overlays using CUDA when available.
+* **SensorRelay** – forwards raw sensor data to other agents.
+* **SimulatorTest** – replays recorded traces to validate system behavior.
 
 Federated deployments may declare hierarchical roles. A Queen inheriting from another uses `inherit:<parent_id>` in `/srv/queen_id/role` which is exchanged during federation handshakes. All child queens inherit base policies while applying their own overlays.
 

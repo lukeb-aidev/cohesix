@@ -35,7 +35,7 @@
 | COMPILER_REVIEW.md         | v0.1    | 2025-07-11    | COMMUNITY      |          |              
 | AGENTS_AND_CLI.md          | v1.2    | 2025-07-26    | COMMUNITY      |     |              |
 | LICENSES_AND_REUSE.md     | v1.2    | 2026-02-20    | COMMUNITY      |     |              |
-| ROLE_POLICY.md            | v1.0    | 2025-06-15    | COMMUNITY      |     |              |
+| ROLE_POLICY.md            | v1.1    | 2026-09-30    | COMMUNITY      |     |              |
 | cli/README.md             | v1.0    | 2025-07-31    | COMMUNITY      |     |              |
 | AGENTS.md                 | v2.2    | 2025-07-22    | COMMUNITY      |     |              |
 | DEMO_SCENARIOS.md          | v1.1    | 2026-02-11    | COMMUNITY      |     |              |
@@ -138,7 +138,7 @@
 | .cohesix_env | v0.3 | 2026-07-25 | COMMUNITY | | |
 | cohesix_fetch_build.sh | v0.70 | 2026-09-21 | COMMUNITY | | |
 | CONTRIBUTING.md | v1.1 | 2025-07-23 | COMMUNITY | | |
-| config/secure9p.toml | v0.3 | 2025-07-31 | COMMUNITY | | |
+| config/secure9p.toml | v0.4 | 2026-09-30 | COMMUNITY | | |
 | config/plan9.ns | v0.1 | 2026-08-04 | COMMUNITY | | |
 | src/secure9p/mod.rs | v0.2 | 2025-07-25 | COMMUNITY | | |
 | src/secure9p/auth_handler.rs | v0.4 | 2025-07-31 | COMMUNITY | | |
@@ -178,12 +178,17 @@
 | scripts/manual_efi_link.sh | v0.5 | 2026-09-08 | COMMUNITY | | |
 | tools/make_iso.sh | v0.4 | 2026-01-26 | COMMUNITY | | |
 | metadata.json | v0.1 | 2025-07-24 | COMMUNITY | | |
-| Cargo.toml | v0.28 | 2026-09-10 | COMMUNITY | | |
+| Cargo.toml | v0.29 | 2026-09-30 | COMMUNITY | | |
 | cohesix-9p/Cargo.toml | v0.1 | 2025-07-28 | COMMUNITY | | |
 | tools/cli/Cargo.toml | v0.2 | 2025-08-16 | COMMUNITY | | |
 | justfile | v0.1 | 2025-07-24 | COMMUNITY | | |
-| src/roles/mod.rs | v0.1 | 2025-07-31 | COMMUNITY | | |
+| src/roles/mod.rs | v0.2 | 2026-09-30 | COMMUNITY | | |
 | src/roles/interactive_aibooth.rs | v0.1 | 2025-07-31 | COMMUNITY | | |
+| src/roles/drone_worker.rs | v0.1 | 2026-09-30 | COMMUNITY | | |
+| src/roles/kiosk_interactive.rs | v0.1 | 2026-09-30 | COMMUNITY | | |
+| src/roles/glasses_agent.rs | v0.1 | 2026-09-30 | COMMUNITY | | |
+| src/roles/sensor_relay.rs | v0.1 | 2026-09-30 | COMMUNITY | | |
+| src/roles/simulator_test.rs | v0.1 | 2026-09-30 | COMMUNITY | | |
 | src/rc/init.rs | v0.5 | 2026-02-20 | COMMUNITY | | |
 | src/lib/init.rs | v0.1 | 2025-08-17 | COMMUNITY | | |
 | src/kernel/userland_bootstrap.rs | v0.4 | 2025-09-23 | COMMUNITY | | |
@@ -232,7 +237,7 @@
 | src/runtime/loader.rs | v0.1 | 2025-09-26 | COMMUNITY | | |
 | tests/test_loader.rs | v0.1 | 2025-09-26 | COMMUNITY | | |
 | tests/test_run_shell.rs | v0.1 | 2025-09-26 | COMMUNITY | | |
-| tests/test_syscalls.rs | v0.5 | 2026-09-30 | COMMUNITY | | |
+| tests/test_syscalls.rs | v0.6 | 2026-09-30 | COMMUNITY | | |
 | tests/introspect_self_diagnosis.rs | v0.2 | 2026-09-15 | COMMUNITY | | |
 | src/bootstrap/sel4_entry.rs | v0.4 | 2026-08-21 | COMMUNITY | | |
 | src/util/mod.rs | v0.1 | 2025-12-31 | COMMUNITY | | |

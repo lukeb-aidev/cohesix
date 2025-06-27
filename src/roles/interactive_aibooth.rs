@@ -8,7 +8,7 @@
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use crate::runtime::env::init::detect_cohrole;
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(feature = "no-cuda")))]
 use crate::cuda::runtime::CudaRuntime;
 use crate::runtime::ServiceRegistry;
 
@@ -34,7 +34,7 @@ pub fn start() {
     }
 
     // Initialize CUDA runtime if available
-    #[cfg(feature = "cuda")]
+    #[cfg(all(feature = "cuda", not(feature = "no-cuda")))]
     match CudaRuntime::try_new() {
         Ok(rt) => {
             if rt.is_present() {
@@ -44,6 +44,10 @@ pub fn start() {
             }
         }
         Err(e) => log(&format!("cuda init error: {e}")),
+    }
+    #[cfg(any(not(feature = "cuda"), feature = "no-cuda"))]
+    {
+        log("[aibooth] CUDA pipeline disabled");
     }
     let _ = ServiceRegistry::register_service("aibooth", "/srv/aibooth");
     log("[aibooth] startup complete");
