@@ -57,7 +57,7 @@ impl Shell {
                 // BusyBox. This keeps the shell functional during early boot
                 // without needing a full command parser.
                 match cmd.name.as_str() {
-                    #[cfg(feature = "busybox")]
+                    #[cfg(feature = "busybox_client")]
                     "busybox" => {
                         if let Some(sub) = cmd.args.first() {
                             let rest: Vec<&str> = cmd.args[1..]
@@ -69,12 +69,12 @@ impl Shell {
                             println!("[shell] usage: busybox <command>");
                         }
                     }
-                    #[cfg(feature = "busybox")]
+                    #[cfg(feature = "busybox_client")]
                     other => {
                         let args: Vec<&str> = cmd.args.iter().map(|s| s.as_str()).collect();
                         crate::kernel::fs::busybox::run_command(other, &args);
                     }
-                    #[cfg(not(feature = "busybox"))]
+                    #[cfg(not(feature = "busybox_client"))]
                     _ => {}
                 }
             }

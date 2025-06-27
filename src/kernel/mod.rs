@@ -15,7 +15,7 @@ pub mod drivers {
 }
 
 pub mod fs {
-    #[cfg(feature = "busybox")]
+    #[cfg(feature = "busybox_client")]
     pub mod busybox;
     pub mod initfs;
     pub mod plan9;
