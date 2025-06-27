@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: service_registry.rs v0.5
+// Filename: service_registry.rs v0.6
 // Author: Lukas Bower
-// Date Modified: 2026-09-24
+// Date Modified: 2026-09-30
 #![cfg(not(target_os = "uefi"))]
 
 //! Runtime service registry for Cohesix.
@@ -16,6 +16,7 @@ use std::sync::Mutex;
 use thiserror::Error;
 
 use once_cell::sync::Lazy;
+use log::info;
 
 use crate::cohesix_types::{Role, RoleManifest};
 
@@ -49,12 +50,13 @@ impl ServiceRegistry {
         let role = RoleManifest::current_role();
         let handle = ServiceHandle {
             path: path.into(),
-            role,
+            role: role.clone(),
         };
         REGISTRY
             .lock()
             .map_err(|_| ServiceRegistryError::LockPoisoned)?
             .insert(name.into(), handle);
+        info!("Service {:?} registered by {:?}", name, role);
         Ok(())
     }
 
@@ -64,6 +66,7 @@ impl ServiceRegistry {
             .lock()
             .map_err(|_| ServiceRegistryError::LockPoisoned)?
             .remove(name);
+        info!("Service {:?} unregistered", name);
         Ok(())
     }
 
@@ -76,6 +79,7 @@ impl ServiceRegistry {
             .get(name)
             .cloned()
             .filter(|h| h.role == role || matches!(role, Role::QueenPrimary));
+        info!("Lookup for service {:?} by {:?}: {}", name, role, opt.is_some());
         Ok(opt)
     }
 
@@ -97,5 +101,20 @@ impl ServiceRegistry {
             .cloned()
             .collect();
         Ok(list)
+    }
+}
+
+pub struct TestRegistryGuard;
+
+impl TestRegistryGuard {
+    pub fn new() -> Self {
+        let _ = ServiceRegistry::reset();
+        TestRegistryGuard
+    }
+}
+
+impl Drop for TestRegistryGuard {
+    fn drop(&mut self) {
+        let _ = ServiceRegistry::reset();
     }
 }
