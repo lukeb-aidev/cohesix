@@ -1980,3 +1980,7 @@
 - `make_grub_iso.sh` v0.15 copies python/ to /home/cohesix, adds Secure9P helper, and stubs CUDA/sim content.
 - Added `setup/init.sh` v0.1 placeholder startup script.
 
+## [v0.280] - 2026-09-21
+### Fixed
+- `AgentRuntime::spawn` now includes context on failure and avoids panics.
+- `tests/test_scenario_engine.rs` v0.3 adds invalid command coverage.
