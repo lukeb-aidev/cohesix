@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: syscall.rs v0.3
 // Author: Lukas Bower
-// Date Modified: 2025-06-30
+// Date Modified: 2026-09-30
 
 //! seL4 syscall glue translating Plan 9 style calls into Cohesix runtime actions.
 //! Provides minimal capability enforcement based on `ROLE_MANIFEST.md`.
@@ -12,6 +12,8 @@ use std::process;
 use std::process::Command;
 
 use crate::security::capabilities;
+use crate::sandbox::validator;
+use crate::cohesix_types::{RoleManifest, Syscall};
 
 use crate::runtime::env::init::detect_cohrole;
 
@@ -59,13 +61,31 @@ pub fn write(file: &mut File, buf: &[u8]) -> Result<usize, std::io::Error> {
 /// Execute a command with arguments using the host OS when allowed.
 pub fn exec(cmd: &str, args: &[&str]) -> Result<(), std::io::Error> {
     let role = detect_cohrole();
+    let role_enum = RoleManifest::current_role();
+    println!("[sel4] exec attempt role={:?}", role_enum);
+    let sc = Syscall::Exec { path: cmd.to_string() };
+    let allowed = validator::validate("sel4", role_enum.clone(), &sc);
+    println!("[sel4] validator result for {:?}: {}", role_enum, allowed);
+    if !allowed {
+        log_block("exec_validator", cmd, &role);
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "validator denied",
+        ));
+    }
     if std::env::var("LD_PRELOAD").is_ok() {
         log_block("exec_preload", cmd, &role);
-        return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "preload blocked"));
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "preload blocked",
+        ));
     }
     if !role_allows_exec(&role) || !capabilities::role_allows(&role, "exec", cmd) {
         log_block("exec", cmd, &role);
-        return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "capability denied"));
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "capability denied",
+        ));
     }
     println!("[sel4:{role}] exec {cmd} {:?}", args);
     Command::new(cmd).args(args).spawn()?.wait()?;
