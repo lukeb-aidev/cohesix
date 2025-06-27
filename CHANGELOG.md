@@ -2016,3 +2016,7 @@
 ## [v0.287] - 2026-09-30
 ### Fixed
 - Split `open_read_write` into role-aware tests. `apply_ns_denied_for_worker` asserts permission denial while `file_rw_allowed_for_queen` performs file I/O successfully.
+
+## [v0.288] - 2026-09-30
+### Fixed
+- Added `ApplyNamespace` syscall with permission for `QueenPrimary`. Introduced `apply_ns` helper and updated tests.

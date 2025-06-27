@@ -1,10 +1,11 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: test_syscalls.rs v0.4
+// Filename: test_syscalls.rs v0.5
 // Date Modified: 2026-09-30
 // Author: Cohesix Codex
 
 use cohesix::cohesix_types::RoleManifest;
-use cohesix::plan9::namespace::{Namespace, NamespaceLoader, NsOp};
+use cohesix::plan9::namespace::{Namespace, NsOp};
+use cohesix::syscall::ns::apply_ns;
 use cohesix::plan9::syscalls;
 use serial_test::serial;
 use std::io::ErrorKind;
@@ -33,7 +34,7 @@ fn apply_ns_denied_for_worker() {
 
     let role = RoleManifest::current_role();
     println!("Running as role: {:?}", role);
-    match NamespaceLoader::apply(&mut ns) {
+    match apply_ns(&mut ns) {
         Ok(_) => panic!("Worker should not be able to apply namespace"),
         Err(e) => assert_eq!(e.kind(), ErrorKind::PermissionDenied),
     }
@@ -67,7 +68,7 @@ fn file_rw_allowed_for_queen() {
 
     let role = RoleManifest::current_role();
     println!("Running as role: {:?}", role);
-    match NamespaceLoader::apply(&mut ns) {
+    match apply_ns(&mut ns) {
         Ok(_) => {}
         Err(e) => {
             match prev {
