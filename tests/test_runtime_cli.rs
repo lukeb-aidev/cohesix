@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: test_runtime_cli.rs v0.1
+// Filename: test_runtime_cli.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2026-10-07
+// Date Modified: 2026-10-08
 
 #![cfg(feature = "busybox")]
 
@@ -28,4 +28,15 @@ fn cli_tools_execute() {
     if out.is_empty() { return; }
     assert!(out.contains("role:"));
     assert!(out.contains("compiled") || out.contains("ran"));
+}
+
+#[test]
+fn cohtrace_status_output() {
+    use std::process::Command;
+    let output = Command::new(env!("CARGO_BIN_EXE_cohesix_trace"))
+        .arg("status")
+        .output()
+        .expect("run cohtrace");
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("Validator") || text.contains("role"));
 }
