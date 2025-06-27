@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: namespace.rs v0.4
+// Filename: namespace.rs v0.5
 // Author: Lukas Bower
-// Date Modified: 2025-07-23
+// Date Modified: 2026-09-30
 
 //! Dynamic Plan 9 namespace loader for Cohesix.
 //!
@@ -103,6 +103,12 @@ impl Namespace {
 /// Loader handling boot-time and runtime namespace files.
 pub struct NamespaceLoader;
 
+fn srv_root() -> std::path::PathBuf {
+    std::env::var("COHESIX_SRV_ROOT")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from("/srv"))
+}
+
 impl NamespaceLoader {
     /// Load namespace from `BOOT_NS` env var or `/boot/plan9.cfg`.
     pub fn load() -> io::Result<Namespace> {
@@ -168,7 +174,8 @@ impl NamespaceLoader {
 
     /// Apply namespace operations building the in-memory tree and `/srv` files.
     pub fn apply(ns: &mut Namespace) -> io::Result<()> {
-        fs::create_dir_all("/srv")?;
+        let srv_dir = srv_root();
+        fs::create_dir_all(&srv_dir)?;
         for op in &ns.ops {
             match op {
                 NsOp::Srv { path } => {
@@ -178,7 +185,7 @@ impl NamespaceLoader {
                     let node = ns.root.get_or_create(dst);
                     node.mounts.push(srv.clone());
                     let name = dst.trim_start_matches('/');
-                    let file = format!("/srv/{}", name.replace('/', "_"));
+                    let file = srv_dir.join(name.replace('/', "_"));
                     fs::write(file, srv.as_bytes())?;
                 }
                 NsOp::Bind { src, dst, flags } => {
@@ -216,8 +223,9 @@ pub fn init_boot_namespace() -> io::Result<Namespace> {
 impl Namespace {
     /// Write the namespace operations to `/srv/bootns` for inspection.
     pub fn expose(&self) -> io::Result<()> {
-        fs::create_dir_all("/srv").ok();
-        let mut f = File::create("/srv/bootns")?;
+        let srv_dir = srv_root();
+        fs::create_dir_all(&srv_dir).ok();
+        let mut f = File::create(srv_dir.join("bootns"))?;
         for op in &self.ops {
             match op {
                 NsOp::Bind { src, dst, flags } => {
@@ -247,9 +255,9 @@ impl Namespace {
 
     /// Persist namespace for an agent under `/srv/bootns/<id>`.
     pub fn persist(&self, agent_id: &str) -> io::Result<()> {
-        let dir = "/srv/bootns";
-        fs::create_dir_all(dir)?;
-        let path = format!("{}/{}", dir, agent_id);
+        let dir = srv_root().join("bootns");
+        fs::create_dir_all(&dir)?;
+        let path = dir.join(agent_id);
         fs::write(&path, self.to_string())
     }
 

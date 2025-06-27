@@ -5,5 +5,5 @@
 
 //! Shell utilities including BusyBox runner.
 
-#[cfg(feature = "busybox")]
+#[cfg(feature = "busybox_client")]
 pub mod busybox_runner;

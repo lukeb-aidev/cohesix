@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: secure9p.toml v0.3
+// Filename: secure9p.toml v0.4
 // Author: Lukas Bower
-// Date Modified: 2025-07-31
+// Date Modified: 2026-09-30
 
 [[namespace]]
 agent = "lukas"
@@ -24,3 +24,48 @@ read_only = false
 [[policy]]
 agent = "interactive_aibooth"
 allow = ["read:/input/mic", "read:/input/cam", "write:/mnt/ui_in", "write:/mnt/speak", "read:/mnt/face_match"]
+
+[[namespace]]
+agent = "kiosk_interactive"
+root = "/srv/kiosk"
+read_only = false
+
+[[policy]]
+agent = "kiosk_interactive"
+allow = ["write:/mnt/ui_in", "read:/input"]
+
+[[namespace]]
+agent = "drone_worker"
+root = "/srv/drone"
+read_only = false
+
+[[policy]]
+agent = "drone_worker"
+allow = ["read:/sim", "write:/srv/telemetry"]
+
+[[namespace]]
+agent = "glasses_agent"
+root = "/srv/glasses"
+read_only = false
+
+[[policy]]
+agent = "glasses_agent"
+allow = ["read:/input/cam", "write:/srv/cuda"]
+
+[[namespace]]
+agent = "sensor_relay"
+root = "/srv/relay"
+read_only = false
+
+[[policy]]
+agent = "sensor_relay"
+allow = ["read:/input", "write:/srv/telemetry"]
+
+[[namespace]]
+agent = "simulator_test"
+root = "/srv/simtest"
+read_only = true
+
+[[policy]]
+agent = "simulator_test"
+allow = ["read:/sim/data", "write:/srv/testlog"]

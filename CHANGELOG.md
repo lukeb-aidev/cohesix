@@ -2034,3 +2034,10 @@
 ### Fixed
 - Validator logs syscall tag and fallback path for namespace operations.
 
+## [v0.292] - 2026-09-30
+### Added
+- Role modules for DroneWorker, KioskInteractive, GlassesAgent, SensorRelay, and SimulatorTest.
+- COHESIX_SRV_ROOT env path for namespace tests.
+### Fixed
+- Validator covers all roles and logs unknown requests.
+
