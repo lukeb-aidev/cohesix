@@ -26,7 +26,7 @@ impl Plan9Shim for DefaultShim {
         // treated as a raw 9P message that is forwarded to the mini 9P server
         // implementation.
         match path {
-            #[cfg(feature = "busybox")]
+            #[cfg(feature = "busybox_client")]
             "/busybox" => {
                 let args: Vec<&str> = data
                     .map(|d| std::str::from_utf8(d).unwrap_or("").split_whitespace().collect())

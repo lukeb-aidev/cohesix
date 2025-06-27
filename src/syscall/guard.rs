@@ -46,6 +46,18 @@ pub static PERMISSIONS: Lazy<HashMap<Role, HashSet<SyscallOp>>> = Lazy::new(|| {
         [Spawn, CapGrant, Mount].into_iter().collect(),
     );
     m.insert(
+        KioskInteractive,
+        [Spawn, CapGrant, Mount, Exec].into_iter().collect(),
+    );
+    m.insert(
+        GlassesAgent,
+        [Spawn, CapGrant, Mount, Exec].into_iter().collect(),
+    );
+    m.insert(
+        SensorRelay,
+        [Spawn, CapGrant, Mount].into_iter().collect(),
+    );
+    m.insert(
         SimulatorTest,
         [Spawn, CapGrant, Mount, Exec].into_iter().collect(),
     );
@@ -54,13 +66,19 @@ pub static PERMISSIONS: Lazy<HashMap<Role, HashSet<SyscallOp>>> = Lazy::new(|| {
 
 pub fn check_permission(role: Role, sc: &Syscall) -> bool {
     let op = SyscallOp::from(sc);
-    let allowed = PERMISSIONS
-        .get(&role)
-        .map_or(false, |set| set.contains(&op));
-    if !allowed {
-        log::warn!("permission denied: {:?} for {:?}", op, role);
-    } else {
-        log::info!("permission allowed: {:?} for {:?}", op, role);
+    let allowed = PERMISSIONS.get(&role).map(|set| set.contains(&op));
+    match allowed {
+        Some(true) => {
+            log::info!("permission allowed: {:?} for {:?}", op, role);
+            true
+        }
+        Some(false) => {
+            log::warn!("permission denied: {:?} for {:?}", op, role);
+            false
+        }
+        None => {
+            log::warn!("unknown role {:?} attempted {:?}", role, op);
+            false
+        }
     }
-    allowed
 }

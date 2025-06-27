@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Cargo.toml v0.28
+# Filename: Cargo.toml v0.29
 # Author: Lukas Bower
-# Date Modified: 2026-09-10
+# Date Modified: 2026-09-30
 [package]
 name    = "cohesix"
 version = "0.1.0"
@@ -82,7 +82,9 @@ std = []
 sel4 = []
 rapier = ["rapier3d"]
 physics = ["rapier3d"]
-busybox = []
+busybox_client = []
+busybox_build = []
+busybox = ["busybox_client", "busybox_build"]
 no-cuda = []
 joystick = ["sdl2"]
 secure9p = ["rustls", "tokio-rustls", "jsonwebtoken", "x509-parser", "webpki-roots", "rustls-pemfile"]
