@@ -40,6 +40,10 @@ impl SyscallDispatcher {
                 // Execution in sandbox pending implementation
                 // FIXME(batch5): integrate with process launcher
             }
+            Syscall::ApplyNamespace => {
+                debug!("dispatch apply namespace");
+                // Namespace application to be handled by runtime
+            }
             Syscall::Unknown => {
                 debug!("unsupported syscall: Unknown");
             }
