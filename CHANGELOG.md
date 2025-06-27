@@ -1994,3 +1994,8 @@
 ### Fixed
 - `ServiceRegistry::lookup` now matches `Role::QueenPrimary` via `matches!` for clarity.
 - `tests/test_service_registry.rs` uses `COHROLE` env var to avoid leaking `/srv/cohrole` state.
+
+## [v0.283] - 2026-09-30
+### Fixed
+- `ServiceRegistry` logs registration lifecycle events and exposes `TestRegistryGuard` for cleanup.
+- `tests/test_service_registry.rs` v0.3 ensures registry isolation and validates state after each operation.
