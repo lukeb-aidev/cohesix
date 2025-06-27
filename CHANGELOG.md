@@ -2025,3 +2025,8 @@
 ### Fixed
 - Added explicit validator rule allowing `QueenPrimary` to call `ApplyNamespace`.
 - `apply_ns` now routes through validator and logs permission results.
+
+## [v0.290] - 2026-09-30
+### Fixed
+- Validator logs decision path for namespace application.
+- Re-exported `apply_ns` from `syscall` module.

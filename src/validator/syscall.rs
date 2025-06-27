@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: syscall.rs v0.1
+// Filename: syscall.rs v0.2
 // Author: Lukas Bower
 // Date Modified: 2026-09-30
 
@@ -19,5 +19,6 @@ pub fn validate_syscall(role: Role, sc: &Syscall) -> bool {
     if !allowed {
         log::warn!("syscall {:?} denied for {:?}", sc, role);
     }
+    println!("Validator: role={:?}, syscall={:?} -> {}", role, sc, allowed);
     allowed
 }
