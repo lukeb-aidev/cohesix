@@ -1,13 +1,14 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: test_capabilities.rs v0.3
-// Date Modified: 2025-09-20
+// Date Modified: 2026-09-30
 // Author: Cohesix Codex
 
 use cohesix::seL4::syscall::exec;
-use std::fs::{self, File};
+use std::fs::File;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use libc::geteuid;
+use env_logger;
 
 #[test]
 fn open_denied_logs_violation() -> std::io::Result<()> {
@@ -41,9 +42,8 @@ fn open_denied_logs_violation() -> std::io::Result<()> {
 
 #[test]
 fn exec_denied_for_worker() {
-    let srv_dir = std::env::temp_dir();
-    fs::write(srv_dir.join("cohrole"), "DroneWorker")
-        .unwrap_or_else(|e| panic!("exec_denied_for_worker failed: {}", e));
+    let _ = env_logger::builder().is_test(true).try_init();
+    std::env::set_var("COHROLE", "DroneWorker");
     let res = exec("/bin/echo", &["hi"]);
-    assert!(res.is_err());
+    assert!(res.is_err(), "worker exec unexpectedly succeeded");
 }
