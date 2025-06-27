@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: init.rs v1.0
+// Filename: init.rs v1.1
 // Author: Lukas Bower
-// Date Modified: 2025-09-02
+// Date Modified: 2026-09-30
 
 //! Runtime environment initialization for Cohesix.
 //! Sets up runtime globals, telemetry, role configuration, and system entropy.
@@ -28,6 +28,9 @@ pub fn load_config() {
 /// Detect and expose the Cohesix role (e.g., QueenPrimary, DroneWorker).
 pub fn detect_cohrole() -> String {
     println!("[env] Detecting Cohesix role...");
-    std::env::var("COH_ROLE").unwrap_or_else(|_| "Unknown".into())
+    match crate::cohesix_types::RoleManifest::current_role() {
+        crate::cohesix_types::Role::Other(name) => name,
+        r => format!("{:?}", r),
+    }
 }
 

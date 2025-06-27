@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: cohesix_types.rs v1.1
+// Filename: cohesix_types.rs v1.2
 // Author: Lukas Bower
-// Date Modified: 2026-02-20
+// Date Modified: 2026-09-30
 
 //! Shared types for Cohesix modules.
 
@@ -24,7 +24,7 @@ pub enum Syscall {
 }
 
 /// Runtime roles recognised by Cohesix.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Role {
     QueenPrimary,
     DroneWorker,
