@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: cohesix_types.rs v1.2
+// Filename: cohesix_types.rs v1.3
 // Author: Lukas Bower
 // Date Modified: 2026-09-30
 
@@ -19,6 +19,8 @@ pub enum Syscall {
     Mount { src: String, dest: String },
     /// Execute a binary directly.
     Exec { path: String },
+    /// Apply a namespace description to the current process.
+    ApplyNamespace,
     /// Placeholder for unknown or unsupported syscall variants.
     Unknown,
 }
