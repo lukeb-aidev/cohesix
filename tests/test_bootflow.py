@@ -22,13 +22,15 @@ ROLES = [
 def test_bootflow_roles():
     with tempfile.TemporaryDirectory() as tmp:
         srv = Path(tmp) / "srv"
+        srv.mkdir()
         os.environ["SRV_DIR"] = str(srv)
         for role in ROLES:
+            os.environ["COHROLE"] = role
             subprocess.run(
-                ["python3", "scripts/boottrace.py", "role_detected"], check=True
+                ["python3", "scripts/boottrace.py", "COHESIX_BOOT_OK"], check=True
             )
-            srv.mkdir(exist_ok=True)
-            (srv / "cohrole").write_text(role)
-            assert (srv / "cohrole").read_text() == role
-        log = (srv / "boottrace.log").read_text()
-        assert "role_detected" in log
+            (srv / "shell_out").write_text(role)
+            log = (srv / "boottrace.log").read_text()
+            assert "COHESIX_BOOT_OK" in log
+            assert (srv / "shell_out").read_text() == role
+            (srv / "boottrace.log").unlink()

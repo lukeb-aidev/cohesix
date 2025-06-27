@@ -34,6 +34,8 @@ fn log_event(log: &mut std::fs::File, event: &str) {
 /// Launch BusyBox shell reading from `/dev/console` and writing to `/srv/shell_out`.
 pub fn spawn_shell() {
     let role = detect_cohrole();
+    println!("[shell] starting BusyBox shell");
+    std::fs::write("/log/shell_start", role.as_bytes()).ok();
     let console = OpenOptions::new()
         .read(true)
         .write(true)
@@ -79,6 +81,13 @@ pub fn spawn_shell() {
         })
         .unwrap();
     log_event(&mut log, &format!("SESSION START {}", role));
+
+    if std::path::Path::new("/etc/test_boot.sh").exists() {
+        let _ = Command::new("/bin/busybox")
+            .arg("sh")
+            .arg("/etc/test_boot.sh")
+            .status();
+    }
 
     let mut line = String::new();
     while reader

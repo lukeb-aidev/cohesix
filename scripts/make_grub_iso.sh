@@ -81,6 +81,15 @@ if [ -f "$INIT_EFI" ]; then
     chmod +x "$INIT_EFI"
 fi
 ensure_plan9_ns
+# Copy test boot script
+if [ -f "$ROOT/etc/test_boot.sh" ]; then
+    mkdir -p "$ISO_ROOT/etc"
+    cp "$ROOT/etc/test_boot.sh" "$ISO_ROOT/etc/test_boot.sh"
+fi
+# Boot arguments
+if [ -f "$ROOT/bootargs.txt" ]; then
+    cp "$ROOT/bootargs.txt" "$ISO_ROOT/boot/bootargs.txt"
+fi
 
 # BusyBox utilities
 mkdir -p "$ISO_ROOT/bin"
@@ -184,6 +193,7 @@ menuentry "Cohesix" {
   multiboot2 /boot/kernel.elf
   module /boot/userland.elf CohRole=${ROLE}
   module /boot/config.yaml
+  module /boot/bootargs.txt
 }
 CFG
 

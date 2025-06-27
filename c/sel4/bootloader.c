@@ -22,6 +22,7 @@
 #define COH_PATH_COHROLE        "/srv/cohrole"
 #define COH_PATH_BOOT_LOG       "/log/bootloader_init.log"
 #define COH_PATH_BOOT_ERROR     "/state/boot_error"
+#define COH_BOOTARGS_PATH       "/boot/bootargs.txt"
 
 extern int boot_trampoline_crc_ok;
 
@@ -98,6 +99,34 @@ static void boot_fail(const char *reason)
     emit_console(buf);
 }
 
+static void load_bootargs(void)
+{
+    FILE *f = fopen(COH_BOOTARGS_PATH, "r");
+    if (!f)
+        return;
+    char buf[256];
+    size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+    fclose(f);
+    buf[n] = '\0';
+    char *tok = strtok(buf, " \n\r\t");
+    while (tok) {
+        char *eq = strchr(tok, '=');
+        if (eq) {
+            *eq = '\0';
+            char *val = eq + 1;
+            setenv(tok, val, 1);
+            if (strcmp(tok, "COHROLE") == 0) {
+                FILE *srv = fopen(COH_PATH_COHROLE, "w");
+                if (srv) {
+                    fprintf(srv, "%s", val);
+                    fclose(srv);
+                }
+            }
+        }
+        tok = strtok(NULL, " \n\r\t");
+    }
+}
+
 static const char *script_for_role(const char *role) {
     if (strcmp(role, "DroneWorker") == 0)
         return "/init/worker.rc";
@@ -122,6 +151,8 @@ static const char *script_for_role(const char *role) {
 int main(void) {
     signal(SIGALRM, watchdog_handler);
     alarm(COH_BOOT_WATCHDOG_SECS);
+
+    load_bootargs();
 
     const char *role = detect_role();
     FILE *f;
