@@ -2041,3 +2041,10 @@
 ### Fixed
 - Validator covers all roles and logs unknown requests.
 
+
+## [v0.293] - 2026-09-30
+### Added
+- setup_test_targets.sh for rustup target install
+- validator matrix and secure9p config tests
+- FEATURE_FLAGS.md documents secure9p and no-cuda
+

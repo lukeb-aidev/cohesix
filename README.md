@@ -115,6 +115,7 @@ cargo test --workspace
 cd go && go test ./...
 # or
 GOWORK=$(pwd)/go/go.work go test ./go/...
+./tools/setup_test_targets.sh    # install cross targets if missing
 ```
 
 Run `cohtrace diff` to compare validator snapshots between runs:

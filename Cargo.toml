@@ -92,7 +92,6 @@ kernel_bin = []
 uefi = []
 # minimal_uefi: ensures only firmware-safe crates are compiled
 minimal_uefi = []
-entropy = ["getrandom"]
 sel4_entry_bin = []
 
 [profile.release]
