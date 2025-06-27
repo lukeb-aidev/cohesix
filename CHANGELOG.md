@@ -2030,3 +2030,7 @@
 ### Fixed
 - Validator logs decision path for namespace application.
 - Re-exported `apply_ns` from `syscall` module.
+## [v0.291] - 2026-09-30
+### Fixed
+- Validator logs syscall tag and fallback path for namespace operations.
+
