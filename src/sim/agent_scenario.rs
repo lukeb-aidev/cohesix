@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: agent_scenario.rs v0.1
+// Filename: agent_scenario.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-06-21
+// Date Modified: 2026-09-22
 
 //! Scenario engine for automated agent tests.
 //!
@@ -38,6 +38,17 @@ pub struct ScenarioEngine;
 
 impl ScenarioEngine {
     pub fn run(path: &Path) -> anyhow::Result<()> {
+        let iso = if Path::new("out/cohesix_grub.iso").exists() {
+            Path::new("out/cohesix_grub.iso")
+        } else {
+            Path::new("out/cohesix.iso")
+        };
+        if !iso.exists() {
+            return Err(anyhow::anyhow!(
+                "boot ISO not found; expected {} or out/cohesix.iso",
+                iso.display()
+            ));
+        }
         let data = fs::read_to_string(path)?;
         let cfg: ScenarioConfig = serde_json::from_str(&data)?;
         recorder::event("scenario", "start", &cfg.id);
