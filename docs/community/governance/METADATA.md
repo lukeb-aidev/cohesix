@@ -283,3 +283,7 @@
 | go/cmd/gui-orchestrator/main_test.go | v0.1 | 2025-07-22 | COMMUNITY | | |
 
 | docs/community/guides/test_portability_guidelines.md | v0.1 | 2025-06-26 | COMMUNITY | | |
+| tools/setup_test_targets.sh | v0.1 | 2026-09-30 | COMMUNITY | | |
+| docs/FEATURE_FLAGS.md | v0.1 | 2026-09-30 | COMMUNITY | | |
+| tests/test_validator_matrix.rs | v0.1 | 2026-09-30 | COMMUNITY | | |
+| tests/test_secure9p_config.rs | v0.1 | 2026-09-30 | COMMUNITY | | |

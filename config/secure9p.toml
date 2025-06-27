@@ -17,6 +17,15 @@ cert = "cert.pem"
 key = "key.pem"
 
 [[namespace]]
+agent = "queen_primary"
+root = "/srv/queen"
+read_only = false
+
+[[policy]]
+agent = "queen_primary"
+allow = ["read:/srv", "write:/srv"]
+
+[[namespace]]
 agent = "interactive_aibooth"
 root = "/srv/aibooth"
 read_only = false
