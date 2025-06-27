@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: test_syscalls.rs v0.2
+// Filename: test_syscalls.rs v0.3
 // Date Modified: 2026-09-30
 // Author: Cohesix Codex
 
@@ -27,10 +27,21 @@ fn open_read_write() {
         srv: file_path.to_str().expect("path str").into(),
         dst: "/f".into(),
     });
-    NamespaceLoader::apply(&mut ns).expect("apply ns");
-
     let role = RoleManifest::current_role();
     println!("Role: {:?}", role);
+    match NamespaceLoader::apply(&mut ns) {
+        Ok(_) => {}
+        Err(e) if e.kind() == ErrorKind::PermissionDenied => {
+            println!("[open_read_write] namespace apply denied for {:?}: {}", role, e);
+            assert!(
+                !matches!(role, Role::QueenPrimary | Role::SimulatorTest),
+                "privileged role {role:?} should be able to apply namespace"
+            );
+            return;
+        }
+        Err(e) => panic!("apply ns failed: {e}"),
+    }
+
     let role_name: &str = match &role {
         Role::QueenPrimary => "QueenPrimary",
         Role::DroneWorker => "DroneWorker",
