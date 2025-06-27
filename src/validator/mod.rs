@@ -1,11 +1,12 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: mod.rs v0.2
+// Filename: mod.rs v0.3
 // Author: Lukas Bower
-// Date Modified: 2025-07-22
+// Date Modified: 2026-09-30
 
 //! Runtime validator utilities for rule violations.
 
 pub mod config;
+pub mod syscall;
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;

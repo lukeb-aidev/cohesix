@@ -2020,3 +2020,8 @@
 ## [v0.288] - 2026-09-30
 ### Fixed
 - Added `ApplyNamespace` syscall with permission for `QueenPrimary`. Introduced `apply_ns` helper and updated tests.
+
+## [v0.289] - 2026-09-30
+### Fixed
+- Added explicit validator rule allowing `QueenPrimary` to call `ApplyNamespace`.
+- `apply_ns` now routes through validator and logs permission results.
