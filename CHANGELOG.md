@@ -2048,3 +2048,13 @@
 - validator matrix and secure9p config tests
 - FEATURE_FLAGS.md documents secure9p and no-cuda
 
+## [v0.294] - 2026-10-07
+### Added
+- Go helper services launched from init with service registry logging.
+- CLI dispatch supports cohcc, cohtrace, and cohcap.
+- cohtrace status command shows role, namespaces, and validator state.
+- Runtime loader executes cohcc binaries via exec.
+- ISO includes cohesix-shell, cohcc, and test_boot.sh.
+### Fixed
+- Feature flags logged at boot for easier debugging.
+

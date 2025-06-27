@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: tools/make_iso.sh v0.4
+# Filename: tools/make_iso.sh v0.5
 # Author: Lukas Bower
-# Date Modified: 2026-01-26
+# Date Modified: 2026-10-07
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -39,10 +39,12 @@ if [ -d "$ROOT/out/bin" ]; then
 fi
 
 # CLI wrappers
-for tool in cohcli cohcap cohtrace cohrun cohbuild; do
+for tool in cohcli cohcap cohtrace cohrun cohbuild cohcc cohshell.sh; do
     if [ -f "$ROOT/bin/$tool" ]; then
-        cp "$ROOT/bin/$tool" "$ISO_ROOT/usr/bin/$tool"
-        chmod +x "$ISO_ROOT/usr/bin/$tool"
+        dest="$tool"
+        [ "$tool" = "cohshell.sh" ] && dest="cohesix-shell"
+        cp "$ROOT/bin/$tool" "$ISO_ROOT/usr/bin/$dest"
+        chmod +x "$ISO_ROOT/usr/bin/$dest"
     fi
 done
 ln -sf cohcli "$ISO_ROOT/usr/bin/cohesix"
@@ -91,9 +93,9 @@ validate(){
     check(){ [ -e "$root/$1" ]; }
     exec_check(){ [ -x "$root/$1" ]; }
 
-    for t in cohesix cohcap cohtrace cohrun cohbuild; do
+    for t in cohesix cohcap cohtrace cohrun cohbuild cohcc cohesix-shell; do
         exec_check "usr/bin/$t" || { echo "Missing $t"; fail=1; }
-        check "usr/share/cohesix/man/${t}.1" || { echo "Man page missing for $t"; fail=1; }
+        check "usr/share/cohesix/man/${t%.sh}.1" || { echo "Man page missing for $t"; fail=1; }
     done
     exec_check "usr/bin/python3" || { echo "python3 missing"; fail=1; }
     exec_check "bin/busybox" || { echo "busybox missing"; fail=1; }
@@ -103,6 +105,7 @@ validate(){
         echo "cohrole missing"; fail=1
     fi
     check "miniroot/bin/echo" || { echo "miniroot missing"; fail=1; }
+    check "etc/test_boot.sh" || { echo "test_boot.sh missing"; fail=1; }
     [ $fail -eq 0 ] || { echo "ISO validation failed"; exit 1; }
     echo "ISO validation passed"
 }
