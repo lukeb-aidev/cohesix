@@ -2012,3 +2012,7 @@
 ## [v0.286] - 2026-09-30
 ### Fixed
 - `tests/test_syscalls.rs` v0.3 handles namespace application denial gracefully based on role.
+
+## [v0.287] - 2026-09-30
+### Fixed
+- Split `open_read_write` into role-aware tests. `apply_ns_denied_for_worker` asserts permission denial while `file_rw_allowed_for_queen` performs file I/O successfully.
