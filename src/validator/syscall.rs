@@ -5,6 +5,7 @@
 
 use crate::cohesix_types::{Role, Syscall};
 use crate::syscall::guard::check_permission;
+use crate::validator::record_syscall;
 
 /// Validate a syscall based on static role rules and guard defaults.
 pub fn validate_syscall(role: Role, sc: &Syscall) -> bool {
@@ -24,6 +25,10 @@ pub fn validate_syscall(role: Role, sc: &Syscall) -> bool {
         );
         log::warn!("syscall {:?} denied for {:?}", sc, role);
     }
-    println!("Validator: role={:?}, syscall={:?} -> {}", role, sc, allowed);
+    println!(
+        "Validator: role={:?}, syscall={:?} -> {}",
+        role, sc, allowed
+    );
+    record_syscall(sc);
     allowed
 }

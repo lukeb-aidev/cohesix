@@ -2063,3 +2063,10 @@
 - cohtrace CLI module integrated into dispatcher with `run_cohtrace`.
 - CLI test validates `cohtrace status` output.
 
+## [v0.296] - 2026-10-09
+### Added
+- cohtrace status reports live validator state, role and active mounts.
+- cohtrace trace shows recent validated syscalls.
+### Fixed
+- test suite checks cohtrace trace command execution.
+
