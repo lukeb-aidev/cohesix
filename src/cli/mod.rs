@@ -1,12 +1,13 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: mod.rs v1.2
-// Date Modified: 2026-10-07
+// Filename: mod.rs v1.3
+// Date Modified: 2026-10-08
 // Author: Lukas Bower
 
 //! CLI module for Coh_CC compiler. Exports argument parser and main entry.
 
 pub mod args;
 pub mod federation;
+pub mod cohtrace;
 
 use crate::cli::args::build_cli;
 use crate::codegen::dispatch::{dispatch, infer_backend_from_path, Backend};
@@ -16,7 +17,6 @@ use std::path::Path;
 use std::process::Command;
 use std::env;
 use crate::coh_cc::ir::schema::load_ir_from_file;
-use crate::cli::cohtrace;
 
 /// Entry point for the CLI. Parses arguments, reads IR, dispatches codegen, and writes output.
 pub fn run() -> anyhow::Result<()> {
@@ -24,11 +24,12 @@ pub fn run() -> anyhow::Result<()> {
     let exe = Path::new(&args[0])
         .file_name()
         .and_then(|s| s.to_str())
-        .unwrap_or("cohcc");
+        .unwrap_or("cohcc")
+        .to_string();
     let cmd = if exe == "cohesix" && args.len() > 1 {
         args.remove(1)
     } else {
-        exe.to_string()
+        exe.clone()
     };
     let remaining = if exe == "cohesix" { args.split_off(2) } else { args.split_off(1) };
 
@@ -51,14 +52,7 @@ pub fn run() -> anyhow::Result<()> {
             println!("Generated {} (timeout: {} ms)", output_path, timeout);
         }
         "cohtrace" => {
-            if remaining.first().map(|s| s.as_str()) == Some("status") {
-                cohtrace::status();
-            } else {
-                let status = Command::new("/usr/bin/cohtrace").args(&remaining).status()?;
-                if !status.success() {
-                    anyhow::bail!("cohtrace exited with {:?}", status.code());
-                }
-            }
+            cohtrace::run_cohtrace(&remaining).map_err(anyhow::Error::msg)?;
         }
         "cohcap" => {
             let status = Command::new("/usr/bin/cohcap").args(&remaining).status()?;

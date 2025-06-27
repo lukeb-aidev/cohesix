@@ -2058,3 +2058,8 @@
 ### Fixed
 - Feature flags logged at boot for easier debugging.
 
+## [v0.295] - 2026-10-08
+### Added
+- cohtrace CLI module integrated into dispatcher with `run_cohtrace`.
+- CLI test validates `cohtrace status` output.
+
