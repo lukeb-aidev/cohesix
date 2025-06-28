@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: runtime.rs v0.10
+// Filename: runtime.rs v0.11
 // Author: Lukas Bower
-// Date Modified: 2025-08-17
+// Date Modified: 2026-10-27
 #![cfg(not(target_os = "uefi"))]
 
 //! Runtime CUDA integration using dynamic loading of `libcuda.so`.
@@ -71,6 +71,8 @@ impl CudaRuntime {
         fs::create_dir_all("/srv/cuda").ok();
         if !present {
             warn!("CUDA unavailable; exposing stub interface at /srv/cuda");
+            println!("CUDA not detected on this build target, skipping CUDA tests.");
+            std::io::stdout().flush().unwrap();
             fs::write("/srv/cuda/info", "cuda unavailable").ok();
         }
         let _ = ServiceRegistry::register_service("cuda", "/srv/cuda");
