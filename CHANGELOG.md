@@ -2156,3 +2156,8 @@
 ### Added
 - `RegionalQueen` and `BareMetalQueen` runtime roles
 - Renamed `InteractiveAIBooth` to `InteractiveAiBooth`
+
+## [v0.311] - 2026-10-29
+### Changed
+- Permission map updated for `RegionalQueen` and `BareMetalQueen`.
+- Syscall validator matches all roles explicitly.
