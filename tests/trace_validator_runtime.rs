@@ -36,8 +36,10 @@ fn attempt_mount() -> std::io::Result<()> {
 #[test]
 #[serial]
 fn mount_permission_matrix() {
-    fs::create_dir_all("/srv/violations").unwrap();
-    assert!(fs::metadata("/srv/violations").is_ok(), "Violations dir should exist");
+    let create_dir_result = fs::create_dir_all("/srv/violations");
+    assert!(create_dir_result.is_ok(), "expected OK creating /srv/violations, got {:?}", create_dir_result);
+    let metadata_result = fs::metadata("/srv/violations");
+    assert!(metadata_result.is_ok(), "expected OK metadata for /srv/violations, got {:?}", metadata_result);
     std::env::set_var("COHESIX_VIOLATIONS_DIR", "/srv/violations");
 
     for role in [
@@ -55,7 +57,7 @@ fn mount_permission_matrix() {
         let result = attempt_mount();
         println!("Mount result under {}: {:?}", role, result);
 
-        if role.contains("Queen") || role == "SensorRelay" || role == "SimulatorTest" {
+        if role.contains("Queen") || role == "SimulatorTest" {
             assert!(result.is_ok(), "Mount should succeed for {}, got {:?}", role, result);
         } else {
             assert!(
@@ -71,8 +73,10 @@ fn mount_permission_matrix() {
 #[test]
 #[serial]
 fn apply_namespace_permission_matrix() {
-    fs::create_dir_all("/srv/violations").unwrap();
-    assert!(fs::metadata("/srv/violations").is_ok(), "Violations dir should exist");
+    let create_dir_result = fs::create_dir_all("/srv/violations");
+    assert!(create_dir_result.is_ok(), "expected OK creating /srv/violations, got {:?}", create_dir_result);
+    let metadata_result = fs::metadata("/srv/violations");
+    assert!(metadata_result.is_ok(), "expected OK metadata for /srv/violations, got {:?}", metadata_result);
     std::env::set_var("COHESIX_VIOLATIONS_DIR", "/srv/violations");
 
     for role in [
