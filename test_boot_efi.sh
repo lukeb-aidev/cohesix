@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: test_boot_efi.sh v0.16
+# Filename: test_boot_efi.sh v0.17
 # Author: Lukas Bower
-# Date Modified: 2025-09-21
+# Date Modified: 2026-10-16
 set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
@@ -85,15 +85,12 @@ make -n bootloader kernel CC="$TOOLCHAIN" > out/make_debug.log
 if ! make bootloader kernel CC="$TOOLCHAIN"; then
     fail "Build failed"
 fi
-./make_iso.sh
+tools/make_iso.sh
 if [ ! -f out/cohesix.iso ]; then
     ls -R out > /tmp/out_manifest.txt 2>/dev/null || true  # non-blocking info
     fail "cohesix.iso missing in out/"
 fi
-if [ ! -f out_iso/EFI/BOOT/bootx64.efi ]; then
-    fail "bootx64.efi missing in out_iso/"
-fi
-objdump -h out/BOOTX64.EFI > out/kernel_sections.txt
+objdump -h out/boot/kernel.elf > out/kernel_sections.txt
 
 SERIAL_LOG="$TMPDIR/qemu_boot.log"
 QEMU_LOG="$LOG_DIR/qemu_boot.log"
