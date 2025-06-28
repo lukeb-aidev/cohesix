@@ -2238,3 +2238,8 @@
 ### Changed
 - `mount_permission_policy_matrix` now invokes `ApplyNamespace` via
   `attempt_apply_namespace` and verifies PermissionDenied for non-queen roles.
+
+## [v0.326] - 2026-11-09
+### Changed
+- Split `mount_permission_policy_matrix` into `mount_permission_matrix` and
+  `apply_namespace_permission_matrix` for clearer role enforcement.
