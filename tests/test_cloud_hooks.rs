@@ -1,12 +1,13 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: test_cloud_hooks.rs v0.3
+// Filename: test_cloud_hooks.rs v0.4
 // Author: Lukas Bower
-// Date Modified: 2026-10-27
+// Date Modified: 2026-10-28
 
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::sync::{Arc, Mutex};
 use std::thread;
+use tempfile;
 
 use cohesix::cloud::orchestrator::{register_queen, send_heartbeat};
 
@@ -40,7 +41,9 @@ fn queen_worker_cloud_flow() {
         }
         std::io::stdout().flush().unwrap();
     });
-    std::fs::create_dir_all("/srv").ok();
+    let tmp_dir = tempfile::tempdir().unwrap();
+    std::env::set_var("COHESIX_SRV_ROOT", tmp_dir.path());
+    std::fs::create_dir_all(tmp_dir.path()).unwrap();
     std::env::set_var("CLOUD_HOOK_URL", format!("http://127.0.0.1:{port}"));
     println!("CLOUD_HOOK_URL={}", std::env::var("CLOUD_HOOK_URL").unwrap());
     std::io::stdout().flush().unwrap();
