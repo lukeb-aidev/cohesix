@@ -111,8 +111,9 @@ pub fn send_heartbeat(id: QueenId) -> Result<(), Error> {
     fs::create_dir_all("/srv/cloud").ok();
     fs::write("/srv/cloud/state.json", &data).ok();
     fs::write("/srv/cloud/last_heartbeat", ts.to_string()).ok();
-    println!("POST /heartbeat to {}", url.trim_end_matches('/'));
-    std::io::stdout().flush().ok();
+    let url = url.trim_end_matches('/');
+    println!("POST /heartbeat sent to {}", url);
+    std::io::stdout().flush().unwrap();
     Ok(())
 }
 
