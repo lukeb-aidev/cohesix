@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: orchestrator.rs v0.2
+// Filename: orchestrator.rs v0.3
 // Author: Lukas Bower
-// Date Modified: 2026-10-11
+// Date Modified: 2026-10-25
 #![cfg(not(target_os = "uefi"))]
 
 //! Cloud orchestration hooks for the Queen role.
@@ -56,6 +56,8 @@ pub fn register_queen(cloud_url: &str) -> Result<QueenId, Error> {
     fs::create_dir_all("/srv/cloud").ok();
     fs::write("/srv/cloud/queen_id", &id).ok();
     fs::write("/srv/cloud/url", cloud_url).ok();
+    println!("Queen registered to cloud: {cloud_url}");
+    std::io::stdout().flush().ok();
     Ok(id)
 }
 
@@ -109,6 +111,8 @@ pub fn send_heartbeat(id: QueenId) -> Result<(), Error> {
     fs::create_dir_all("/srv/cloud").ok();
     fs::write("/srv/cloud/state.json", &data).ok();
     fs::write("/srv/cloud/last_heartbeat", ts.to_string()).ok();
+    println!("POST /heartbeat to {}", url.trim_end_matches('/'));
+    std::io::stdout().flush().ok();
     Ok(())
 }
 
