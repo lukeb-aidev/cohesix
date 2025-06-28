@@ -52,7 +52,7 @@ fn mount_permission_matrix() {
         let result = attempt_mount();
         println!("Mount result under {}: {:?}", role, result);
 
-        if role.contains("Queen") || role == "SimulatorTest" || role == "SensorRelay" {
+        if role.contains("Queen") || role == "SimulatorTest" {
             assert!(result.is_ok(), "Mount should succeed for {}", role);
         } else {
             assert!(
@@ -78,6 +78,10 @@ fn apply_namespace_permission_matrix() {
         "BareMetalQueen",
         "SimulatorTest",
         "SensorRelay",
+        "DroneWorker",
+        "InteractiveAiBooth",
+        "KioskInteractive",
+        "GlassesAgent",
     ] {
         std::env::set_var("COHROLE", role);
         let result = attempt_apply_namespace();
@@ -88,8 +92,9 @@ fn apply_namespace_permission_matrix() {
         } else {
             assert!(
                 matches!(result, Err(ref e) if e.kind() == std::io::ErrorKind::PermissionDenied),
-                "ApplyNamespace denied for {}",
-                role
+                "ApplyNamespace denied for {}, got {:?}",
+                role,
+                result
             );
         }
     }
