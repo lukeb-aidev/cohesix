@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: test_syscall_queue.rs v1.1
+// Filename: test_syscall_queue.rs v1.2
 // Author: Lukas Bower
-// Date Modified: 2026-09-30
+// Date Modified: 2026-11-05
 
 use cohesix::cohesix_types::Syscall;
 use cohesix::sandbox::{dispatcher::SyscallDispatcher, queue::SyscallQueue};
@@ -11,27 +11,47 @@ use serial_test::serial;
 #[test]
 #[serial]
 fn queue_dequeue_dispatch_order() {
-    unsafe {
-        std::env::set_var("COHROLE", "DroneWorker");
-    }
-    let mut q = SyscallQueue::new();
-    q.enqueue(Syscall::Spawn {
-        program: "a".into(),
-        args: vec!["1".into()],
-    });
-    q.enqueue(Syscall::Mount {
-        src: "/dev".into(),
-        dest: "/mnt".into(),
-    });
-    q.enqueue(Syscall::Exec {
-        path: "/bin/run".into(),
-    });
+    let calls = [
+        Syscall::Spawn {
+            program: "a".into(),
+            args: vec!["1".into()],
+        },
+        Syscall::Mount {
+            src: "/dev".into(),
+            dest: "/mnt".into(),
+        },
+        Syscall::Exec {
+            path: "/bin/run".into(),
+        },
+    ];
 
-    SyscallDispatcher::dispatch_queue(&mut q);
-    assert!(
-        q.dequeue().is_none(),
-        "queue should be empty after dispatch"
-    );
+    for role in ["DroneWorker", "QueenPrimary"] {
+        unsafe {
+            std::env::set_var("COHROLE", role);
+        }
+        let _ = std::fs::remove_file("/srv/cohrole");
+        let mut q = SyscallQueue::new();
+        for sc in &calls {
+            q.enqueue(sc.clone());
+        }
+
+        let mut results = Vec::new();
+        while let Some(sc) = q.dequeue() {
+            let role_cur = cohesix::cohesix_types::RoleManifest::current_role();
+            let allowed =
+                cohesix::sandbox::validator::validate("runtime", role_cur, &sc);
+            SyscallDispatcher::dispatch(sc);
+            results.push(allowed);
+        }
+
+        if role == "DroneWorker" {
+            assert_eq!(results, vec![true, true, false]);
+        } else {
+            assert!(results.is_empty(), "{} should not dispatch", role);
+        }
+
+        assert!(q.dequeue().is_none(), "queue should be empty after dispatch");
+    }
 }
 
 #[test]
