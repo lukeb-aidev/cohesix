@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: test_worker_join.rs v0.5
+// Filename: test_worker_join.rs v0.6
 // Date Modified: 2026-10-31
 // Author: Lukas Bower
 
@@ -19,7 +19,11 @@ fn worker_join_ack() {
     let w = Worker::new("w1", "/srv/registry");
     let result = spawn_worker();
     println!("Worker join result: {:?}", result);
-    assert!(matches!(result, Err(_)), "Expected exec to fail, got: {:?}", result);
+    assert!(
+        matches!(result, Err(ref e) if e.kind() == std::io::ErrorKind::PermissionDenied),
+        "Expected PermissionDenied, got: {:?}",
+        result
+    );
     q.process_joins();
     assert!(w.check_ack().is_none());
 }
