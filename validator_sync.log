@@ -1,0 +1,11 @@
+Validator + tests fully aligned.
+Role vs syscall matrix:
+QueenPrimary     Mount=Y Exec=Y ApplyNamespace=Y
+RegionalQueen    Mount=Y Exec=Y ApplyNamespace=Y
+BareMetalQueen   Mount=Y Exec=Y ApplyNamespace=Y
+DroneWorker      Mount=Y Exec=Y ApplyNamespace=N
+InteractiveAiBooth Mount=Y Exec=Y ApplyNamespace=N
+KioskInteractive Mount=Y Exec=Y ApplyNamespace=N
+GlassesAgent     Mount=Y Exec=Y ApplyNamespace=N
+SensorRelay      Mount=Y Exec=N ApplyNamespace=N
+SimulatorTest    Mount=Y Exec=Y ApplyNamespace=N
