@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: bootloader.c v0.7
 // Author: Lukas Bower
-// Date Modified: 2026-10-28
+// Date Modified: 2026-06-28
 // SPDX-License-Identifier: MIT
 //
 // Cohesix OS bootloader (seL4 root task)
@@ -38,7 +38,7 @@ static void watchdog_handler(int sig)
 }
 
 static const char *detect_role(void) {
-    const char *role = getenv("cohrole");
+    const char *role = getenv("COHROLE");
     static char buf[COH_BOOT_ROLE_BUF];
     FILE *f = NULL;
 
@@ -51,6 +51,8 @@ static const char *detect_role(void) {
             buf[strcspn(buf, "\r\n")] = '\0';
             fclose(f);
             if (strcmp(buf, "QueenPrimary") == 0 ||
+                strcmp(buf, "RegionalQueen") == 0 ||
+                strcmp(buf, "BareMetalQueen") == 0 ||
                 strcmp(buf, "KioskInteractive") == 0 ||
                 strcmp(buf, "InteractiveAiBooth") == 0 ||
                 strcmp(buf, "DroneWorker") == 0 ||
