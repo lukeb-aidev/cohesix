@@ -57,7 +57,8 @@ pub fn register_queen(cloud_url: &str) -> Result<QueenId, Error> {
     fs::write("/srv/cloud/queen_id", &id).ok();
     fs::write("/srv/cloud/url", cloud_url).ok();
     println!("Queen registered to cloud: {cloud_url}");
-    std::io::stdout().flush().ok();
+    std::io::stdout().flush().unwrap();
+    let _ = send_heartbeat(id.clone());
     Ok(id)
 }
 
