@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: test_cloud_threads.rs v0.2
+// Filename: test_cloud_threads.rs v0.3
 // Author: Lukas Bower
 // Date Modified: 2026-10-28
 
@@ -34,10 +34,10 @@ fn orchestrator_threads_flow() {
         }
     });
 
-    let temp_dir = tempfile::tempdir().unwrap();
-    std::env::set_var("COHESIX_SRV_ROOT", temp_dir.path().to_str().unwrap());
-    println!("Opening file: {:?}", temp_dir.path().join("cloud"));
-    std::fs::create_dir_all(temp_dir.path().join("cloud")).unwrap();
+    let tmp_dir = tempfile::tempdir().unwrap();
+    std::env::set_var("COHESIX_SRV_ROOT", tmp_dir.path());
+    println!("Opening file: {:?}", tmp_dir.path().join("cloud"));
+    std::fs::create_dir_all(tmp_dir.path().join("cloud")).unwrap();
     let url = format!("http://127.0.0.1:{port}");
 
     let queen = thread::spawn({
