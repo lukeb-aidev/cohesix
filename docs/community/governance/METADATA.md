@@ -184,8 +184,8 @@
 | justfile | v0.1 | 2025-07-24 | COMMUNITY | | |
 | src/roles/mod.rs | v0.2 | 2026-09-30 | COMMUNITY | | |
 | src/roles/interactive_aibooth.rs | v0.1 | 2025-07-31 | COMMUNITY | | |
-| src/roles/drone_worker.rs | v0.1 | 2026-09-30 | COMMUNITY | | |
-| src/roles/kiosk_interactive.rs | v0.1 | 2026-09-30 | COMMUNITY | | |
+| src/roles/drone_worker.rs | v0.3 | 2026-10-12 | COMMUNITY | | |
+| src/roles/kiosk_interactive.rs | v0.3 | 2026-10-12 | COMMUNITY | | |
 | src/roles/glasses_agent.rs | v0.1 | 2026-09-30 | COMMUNITY | | |
 | src/roles/sensor_relay.rs | v0.1 | 2026-09-30 | COMMUNITY | | |
 | src/roles/simulator_test.rs | v0.1 | 2026-09-30 | COMMUNITY | | |
