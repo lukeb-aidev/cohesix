@@ -185,6 +185,7 @@
 | src/roles/glasses_agent.rs | v0.1 | 2026-09-30 | COMMUNITY | | |
 | src/roles/sensor_relay.rs | v0.1 | 2026-09-30 | COMMUNITY | | |
 | src/roles/simulator_test.rs | v0.1 | 2026-09-30 | COMMUNITY | | |
+| src/security/capabilities.rs | v0.4 | 2026-10-29 | COMMUNITY | | |
 | src/rc/init.rs | v0.5 | 2026-02-20 | COMMUNITY | | |
 | src/lib/init.rs | v0.1 | 2025-08-17 | COMMUNITY | | |
 | src/kernel/userland_bootstrap.rs | v0.4 | 2025-09-23 | COMMUNITY | | |
