@@ -58,7 +58,7 @@ fn mount_permission_matrix() {
         let result = attempt_mount();
         println!("Mount result under {}: {:?}", role, result);
 
-        if role.contains("Queen") || role == "SimulatorTest" {
+        if role.contains("Queen") || role == "DroneWorker" {
             assert!(result.is_ok(), "Mount should succeed for {}, got {:?}", role, result);
         } else {
             assert!(
