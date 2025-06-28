@@ -2097,3 +2097,7 @@
 ### Added
 - `cohtrace cloud` now lists active workers with their roles from `/srv/agents/active.json`.
 
+## [v0.301] - 2026-10-14
+### Added
+- Test `test_cloud_threads.rs` verifies multithreaded Queen and Worker cloud registration.
+

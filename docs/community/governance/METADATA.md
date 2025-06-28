@@ -244,6 +244,7 @@
 | tests/test_run_shell.rs | v0.1 | 2025-09-26 | COMMUNITY | | |
 | tests/test_runtime_cli.rs | v0.3 | 2026-10-09 | COMMUNITY | | |
 | tests/test_cloud_hooks.rs | v0.1 | 2026-10-10 | COMMUNITY | | |
+| tests/test_cloud_threads.rs | v0.1 | 2026-10-14 | COMMUNITY | | |
 | tests/test_syscalls.rs | v0.6 | 2026-09-30 | COMMUNITY | | |
 | tests/introspect_self_diagnosis.rs | v0.2 | 2026-09-15 | COMMUNITY | | |
 | src/bootstrap/sel4_entry.rs | v0.4 | 2026-08-21 | COMMUNITY | | |
