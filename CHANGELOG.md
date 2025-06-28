@@ -2201,3 +2201,9 @@
 - Replaced `worker_join_ack` with two new tests: `worker_join_denied_for_worker_role`
   and `worker_join_succeeds_for_queen` for clear validation of role-based join
   behavior.
+
+## [v0.319] - 2026-11-01
+### Changed
+- Reworked `validator_logs_mount_violation` into a table-driven test named
+  `mount_permission_matrix` covering `QueenPrimary`, `SensorRelay`, and
+  `GlassesAgent` roles.
