@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: test_boot_efi.sh v0.16
+# Filename: test_boot_efi.sh v0.17
 # Author: Lukas Bower
-# Date Modified: 2025-09-21
+# Date Modified: 2026-10-16
 set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
@@ -43,20 +43,6 @@ fi
 if [ -z "${TMPDIR:-}" ]; then
     TMPDIR="$(mktemp -d)"
 fi
-if [ ! -f "$TMPDIR/OVMF_VARS.fd" ]; then
-    if ! cp /usr/share/OVMF/OVMF_VARS.fd "$TMPDIR/" 2>/dev/null; then
-        echo "OVMF firmware not found — install 'ovmf' package" >&2
-    fi
-fi
-OVMF_CODE="/usr/share/qemu/OVMF.fd"
-if [ ! -f "$OVMF_CODE" ]; then
-    for p in /usr/share/OVMF/OVMF_CODE.fd /usr/share/OVMF/OVMF.fd /usr/share/edk2/ovmf/OVMF_CODE.fd; do
-        if [ -f "$p" ]; then
-            OVMF_CODE="$p"
-            break
-        fi
-    done
-fi
 export TMPDIR
 mkdir -p "$HOME/cohesix/out"
 touch "$HOME/cohesix/out/boot-ready.txt"
@@ -85,7 +71,7 @@ make -n bootloader kernel CC="$TOOLCHAIN" > out/make_debug.log
 if ! make bootloader kernel CC="$TOOLCHAIN"; then
     fail "Build failed"
 fi
-./make_iso.sh
+tools/make_iso.sh
 if [ ! -f out/cohesix.iso ]; then
     ls -R out > /tmp/out_manifest.txt 2>/dev/null || true  # non-blocking info
     fail "cohesix.iso missing in out/"
@@ -93,16 +79,13 @@ fi
 if [ ! -f out_iso/EFI/BOOT/bootx64.efi ]; then
     fail "bootx64.efi missing in out_iso/"
 fi
-objdump -h out/BOOTX64.EFI > out/kernel_sections.txt
 
 SERIAL_LOG="$TMPDIR/qemu_boot.log"
 QEMU_LOG="$LOG_DIR/qemu_boot.log"
 if [ -f "$QEMU_LOG" ]; then
     mv "$QEMU_LOG" "$QEMU_LOG.$TIMESTAMP"
 fi
-QEMU_ARGS=(-bios "$OVMF_CODE" \
-    -drive if=pflash,format=raw,file="$TMPDIR/OVMF_VARS.fd" \
-    -cdrom out/cohesix.iso -net none -M q35 -m 256M \
+QEMU_ARGS=(-cdrom out/cohesix.iso -net none -M q35 -m 256M \
     -no-reboot -monitor none)
 
 if ! qemu-system-x86_64 "${QEMU_ARGS[@]}" -nographic -serial file:"${SERIAL_LOG}"; then

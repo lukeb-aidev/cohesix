@@ -2106,3 +2106,8 @@
 - `cohesix_fetch_build.sh` v0.71 now clones the repository before sourcing
   `load_arch_config.sh` and verifies its presence.
 
+## [v0.303] - 2026-10-16
+### Changed
+- `Makefile` v0.49 uses `tools/make_iso.sh` and runs QEMU on both architectures.
+- `test_boot_efi.sh` v0.17 drops BOOTX64.EFI checks and EFI QEMU flags.
+
