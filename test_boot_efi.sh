@@ -43,20 +43,6 @@ fi
 if [ -z "${TMPDIR:-}" ]; then
     TMPDIR="$(mktemp -d)"
 fi
-if [ ! -f "$TMPDIR/OVMF_VARS.fd" ]; then
-    if ! cp /usr/share/OVMF/OVMF_VARS.fd "$TMPDIR/" 2>/dev/null; then
-        echo "OVMF firmware not found — install 'ovmf' package" >&2
-    fi
-fi
-OVMF_CODE="/usr/share/qemu/OVMF.fd"
-if [ ! -f "$OVMF_CODE" ]; then
-    for p in /usr/share/OVMF/OVMF_CODE.fd /usr/share/OVMF/OVMF.fd /usr/share/edk2/ovmf/OVMF_CODE.fd; do
-        if [ -f "$p" ]; then
-            OVMF_CODE="$p"
-            break
-        fi
-    done
-fi
 export TMPDIR
 mkdir -p "$HOME/cohesix/out"
 touch "$HOME/cohesix/out/boot-ready.txt"
@@ -90,16 +76,16 @@ if [ ! -f out/cohesix.iso ]; then
     ls -R out > /tmp/out_manifest.txt 2>/dev/null || true  # non-blocking info
     fail "cohesix.iso missing in out/"
 fi
-objdump -h out/boot/kernel.elf > out/kernel_sections.txt
+if [ ! -f out_iso/EFI/BOOT/bootx64.efi ]; then
+    fail "bootx64.efi missing in out_iso/"
+fi
 
 SERIAL_LOG="$TMPDIR/qemu_boot.log"
 QEMU_LOG="$LOG_DIR/qemu_boot.log"
 if [ -f "$QEMU_LOG" ]; then
     mv "$QEMU_LOG" "$QEMU_LOG.$TIMESTAMP"
 fi
-QEMU_ARGS=(-bios "$OVMF_CODE" \
-    -drive if=pflash,format=raw,file="$TMPDIR/OVMF_VARS.fd" \
-    -cdrom out/cohesix.iso -net none -M q35 -m 256M \
+QEMU_ARGS=(-cdrom out/cohesix.iso -net none -M q35 -m 256M \
     -no-reboot -monitor none)
 
 if ! qemu-system-x86_64 "${QEMU_ARGS[@]}" -nographic -serial file:"${SERIAL_LOG}"; then
