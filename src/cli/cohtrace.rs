@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: cohtrace.rs v0.4
 // Author: Lukas Bower
-// Date Modified: 2026-10-10
+// Date Modified: 2026-10-13
 
 //! Minimal debug CLI for runtime trace inspection.
 
@@ -50,14 +50,38 @@ pub fn run_cohtrace(args: &[String]) -> Result<(), String> {
         "cloud" => {
             let data = fs::read_to_string("/srv/cloud/state.json").unwrap_or_default();
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(&data) {
-                let queen = v.get("queen_id").and_then(|v| v.as_str()).unwrap_or("unknown");
+                let queen = v
+                    .get("queen_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
                 let ts = v.get("ts").and_then(|v| v.as_u64()).unwrap_or(0);
-                let workers = v.get("worker_count").and_then(|v| v.as_u64()).unwrap_or(0);
+                let workers = v
+                    .get("worker_count")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
                 println!("Queen ID: {}", queen);
                 println!("Last heartbeat: {}", ts);
                 println!("Connected Workers: {}", workers);
             } else {
                 println!("cloud state unavailable");
+            }
+
+            if let Ok(active) = fs::read_to_string("/srv/agents/active.json") {
+                if let Ok(entries) = serde_json::from_str::<serde_json::Value>(&active) {
+                    if let Some(arr) = entries.as_array() {
+                        for entry in arr {
+                            let id = entry
+                                .get("worker_id")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("unknown");
+                            let role = entry
+                                .get("role")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("unknown");
+                            println!("Worker {id}: {role}");
+                        }
+                    }
+                }
             }
             Ok(())
         }

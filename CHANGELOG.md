@@ -2093,3 +2093,7 @@
 ### Changed
 - DroneWorker and KioskInteractive log the URL source and ping `/worker_ping`.
 
+## [v0.300] - 2026-10-13
+### Added
+- `cohtrace cloud` now lists active workers with their roles from `/srv/agents/active.json`.
+
