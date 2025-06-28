@@ -2222,3 +2222,9 @@
 ### Changed
 - `tests/test_syscall_queue.rs` v1.2 validates dispatch results for `DroneWorker`
   and asserts `Spawn`/`Exec` are denied for `QueenPrimary`.
+
+## [v0.323] - 2026-11-06
+### Changed
+- `mount_permission_matrix` test renamed to `mount_permission_policy_matrix` and
+  rewritten to explicitly validate the validator permission policy across queen
+  and non-queen roles.
