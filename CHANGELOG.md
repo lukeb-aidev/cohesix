@@ -2185,3 +2185,8 @@
 ### Fixed
 - `worker_join_ack` test now accepts `PermissionDenied` or Exec format errors,
   ensuring cross-build robustness.
+
+## [v0.316] - 2026-10-31
+### Fixed
+- Relaxed `worker_join_ack` assertion to expect any exec failure and log the
+  full error for sandbox validation across environments.
