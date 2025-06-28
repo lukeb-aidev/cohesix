@@ -2110,4 +2110,9 @@
 ### Changed
 - `Makefile` v0.49 uses `tools/make_iso.sh` and runs QEMU on both architectures.
 - `test_boot_efi.sh` v0.17 drops BOOTX64.EFI checks and EFI QEMU flags.
+- Merged ISO build scripts into tools/make_iso.sh.
+- Removed BOOTX64.EFI references; GRUB loads kernel.elf and userland.elf.
+### Added
+- ISO builder stages CLI tools, BusyBox, cohesix-shell, Go helpers, and man pages.
+
 

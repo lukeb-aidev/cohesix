@@ -168,15 +168,14 @@
 | scripts/generate_busybox_man.sh | v0.1 | 2025-06-08 | COMMUNITY | | |
 | scripts/manpage_scan.sh | v0.1 | 2025-06-08 | COMMUNITY | | |
 | scripts/verify-macos-setup.sh | v0.1 | 2025-06-05 | COMMUNITY | | |
-| scripts/make_grub_iso.sh | v0.15 | 2026-09-21 | COMMUNITY | | |
-| scripts/debug_qemu_boot.sh | v0.2 | 2025-12-23 | COMMUNITY | | |
+| scripts/debug_qemu_boot.sh | v0.3 | 2026-10-16 | COMMUNITY | | |
 | scripts/boot_qemu.sh | v0.1 | 2025-12-29 | COMMUNITY | | |
-| scripts/validate_iso_build.sh | v0.1 | 2025-12-19 | COMMUNITY | | |
+| scripts/validate_iso_build.sh | v0.2 | 2026-10-16 | COMMUNITY | | |
 | scripts/build_root_elf.sh | v0.11 | 2026-07-25 | COMMUNITY | | |
 | scripts/load_arch_config.sh | v0.1 | 2026-07-25 | COMMUNITY | | |
 | scripts/build_busybox.sh | v0.4 | 2026-01-26 | COMMUNITY | | |
 | scripts/manual_efi_link.sh | v0.5 | 2026-09-08 | COMMUNITY | | |
-| tools/make_iso.sh | v0.6 | 2026-10-10 | COMMUNITY | | |
+| tools/make_iso.sh | v0.7 | 2026-10-16 | COMMUNITY | | |
 | metadata.json | v0.1 | 2025-07-24 | COMMUNITY | | |
 | Cargo.toml | v0.29 | 2026-09-30 | COMMUNITY | | |
 | cohesix-9p/Cargo.toml | v0.1 | 2025-07-28 | COMMUNITY | | |
@@ -204,7 +203,6 @@
 | etc/init.conf | v0.1 | 2025-08-27 | COMMUNITY | | |
 | etc/init.cfg | v0.1 | 2025-08-30 | COMMUNITY | | |
 | etc/init.conf.example | v0.1 | 2026-07-09 | COMMUNITY | | |
-| make_iso.sh | v0.22 | 2026-08-05 | COMMUNITY | | |
 | configs/roles/QueenPrimary.yaml | v0.1 | 2025-08-30 | COMMUNITY | | |
 | configs/roles/WorkerDrone.yaml | v0.1 | 2025-08-30 | COMMUNITY | | |
 | configs/roles/DroneWorker.yaml | v0.1 | 2025-08-30 | COMMUNITY | | |

@@ -246,22 +246,20 @@ bootloader: check-efi ## Build UEFI bootloader
 	# main.c discards EFI status codes after logging
 	$(CC) $(CFLAGS_EFI) $(CFLAGS_IGNORE_RESULT) -c src/bootloader/main.c -o out/bootloader.o
 	$(CC) $(CFLAGS_EFI) $(CFLAGS_WARN) -c src/bootloader/sha1.c -o out/sha1.o
-	$(LD) /usr/lib/crt0-efi-x86_64.o out/bootloader.o out/sha1.o \
-	-o out/bootloader.so -T linker.ld $(LD_FLAGS)
-	@command -v objcopy >/dev/null 2>&1 || { echo "objcopy not found"; exit 1; }
-	objcopy --target=efi-app-x86_64 out/bootloader.so out/bootloader.efi
-	cp out/bootloader.efi out/EFI/BOOT/BOOTX64.EFI
+        $(LD) /usr/lib/crt0-efi-x86_64.o out/bootloader.o out/sha1.o \
+        -o out/bootloader.so -T linker.ld $(LD_FLAGS)
+        @command -v objcopy >/dev/null 2>&1 || { echo "objcopy not found"; exit 1; }
+        objcopy --target=efi-app-x86_64 out/bootloader.so out/bootloader.efi
 
 
-kernel: check-efi ## Build Rust kernel BOOTX64.EFI
+kernel: check-efi ## Build Rust kernel ELF
 	@echo "🏁 Building Rust kernel"
 	cargo build --release --target x86_64-unknown-uefi --bin kernel \
 	    --no-default-features --features minimal_uefi,kernel_bin
-	@mkdir -p out/EFI/BOOT
-	cp target/x86_64-unknown-uefi/release/kernel.efi out/kernel.so
-	@command -v objcopy >/dev/null 2>&1 || { echo "objcopy not found"; exit 1; }
-	objcopy --target=efi-app-x86_64 out/kernel.so out/BOOTX64.EFI
-	cp out/BOOTX64.EFI out/EFI/BOOT/BOOTX64.EFI
+        @mkdir -p out
+        cp target/x86_64-unknown-uefi/release/kernel.efi out/kernel.so
+        @command -v objcopy >/dev/null 2>&1 || { echo "objcopy not found"; exit 1; }
+        objcopy --target=efi-app-x86_64 out/kernel.so out/kernel.elf
 # Use tabs for all recipe lines. Run `make check-tab-safety` after edits.
 
 
@@ -336,11 +334,11 @@ gui-orchestrator: ## Build gui-orchestrator binary
         @GOWORK=$(CURDIR)/go/go.work go build -o out/bin/gui-orchestrator ./go/cmd/gui-orchestrator
 
 iso:
-	@echo "Creating GRUB-based ISO (non-EFI)..."
-	./scripts/make_grub_iso.sh
+        @echo "Creating GRUB-based ISO (non-EFI)..."
+        ./tools/make_iso.sh
 
 boot-grub: iso
-	qemu-system-aarch64 -M virt -cpu cortex-a57 -m 1024 -bios none -serial mon:stdio -cdrom out/cohesix_grub.iso -nographic
+        qemu-system-aarch64 -M virt -cpu cortex-a57 -m 1024 -bios none -serial mon:stdio -cdrom out/cohesix.iso -nographic
 
 
 # Run boot image under QEMU, logging serial output
@@ -357,6 +355,7 @@ qemu: ## Launch QEMU with built image and capture serial log
                -cdrom out/cohesix.iso -net none -nographic -no-reboot \
                -serial mon:stdio 2>&1 | tee qemu_serial.log; \
        fi
+
 
 # Verify QEMU boot log and fail on BOOT_FAIL
 qemu-check: ## Check qemu_serial.log for BOOT_OK and fail on BOOT_FAIL
