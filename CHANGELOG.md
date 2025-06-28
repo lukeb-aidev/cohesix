@@ -2135,3 +2135,9 @@
 - Cloud hooks test logs Queen and Worker registration
 - Queen and Worker now print heartbeat and status lines
 
+## [v0.307] - 2026-10-27
+### Fixed
+- Orchestrator sends heartbeat immediately after registration and flushes logs
+- Cloud hook test retries log fetch for async reliability
+- CUDA detection logs skip message when GPU absent
+
