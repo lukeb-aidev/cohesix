@@ -232,13 +232,13 @@
 | src/cli/mod.rs | v1.3 | 2026-10-08 | COMMUNITY | | |
 | src/cli/cohtrace.rs | v0.4 | 2026-10-13 | COMMUNITY | | |
 | src/cloud/mod.rs | v0.2 | 2026-10-10 | COMMUNITY | | |
-| src/cloud/orchestrator.rs | v0.3 | 2026-10-25 | COMMUNITY | | |
+| src/cloud/orchestrator.rs | v0.4 | 2026-10-27 | COMMUNITY | | |
 | src/lib.rs | v1.10 | 2026-10-10 | COMMUNITY | | |
 | src/runtime/loader.rs | v0.2 | 2026-10-07 | COMMUNITY | | |
 | tests/test_loader.rs | v0.1 | 2025-09-26 | COMMUNITY | | |
 | tests/test_run_shell.rs | v0.1 | 2025-09-26 | COMMUNITY | | |
 | tests/test_runtime_cli.rs | v0.3 | 2026-10-09 | COMMUNITY | | |
-| tests/test_cloud_hooks.rs | v0.2 | 2026-10-25 | COMMUNITY | | |
+| tests/test_cloud_hooks.rs | v0.3 | 2026-10-27 | COMMUNITY | | |
 | tests/test_cloud_threads.rs | v0.1 | 2026-10-14 | COMMUNITY | | |
 | tests/test_syscalls.rs | v0.6 | 2026-09-30 | COMMUNITY | | |
 | tests/introspect_self_diagnosis.rs | v0.2 | 2026-09-15 | COMMUNITY | | |
