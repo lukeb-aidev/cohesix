@@ -2129,3 +2129,9 @@
 ### Changed
 - Makefile v0.50 removes obsolete EFI rules and testboot target.
 - Deleted test_boot_efi.sh and wrapper script.
+
+## [v0.306] - 2026-10-25
+### Fixed
+- Cloud hooks test logs Queen and Worker registration
+- Queen and Worker now print heartbeat and status lines
+
