@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: orchestrator.rs v0.6
+// Filename: orchestrator.rs v0.7
 // Author: Lukas Bower
 // Date Modified: 2026-10-28
 #![cfg(not(target_os = "uefi"))]
@@ -87,8 +87,10 @@ pub fn send_heartbeat(id: QueenId) -> Result<(), Error> {
     let role = crate::cohesix_types::RoleManifest::current_role();
     let role_name = match &role {
         crate::cohesix_types::Role::QueenPrimary => "QueenPrimary",
+        crate::cohesix_types::Role::RegionalQueen => "RegionalQueen",
+        crate::cohesix_types::Role::BareMetalQueen => "BareMetalQueen",
         crate::cohesix_types::Role::DroneWorker => "DroneWorker",
-        crate::cohesix_types::Role::InteractiveAIBooth => "InteractiveAIBooth",
+        crate::cohesix_types::Role::InteractiveAiBooth => "InteractiveAiBooth",
         crate::cohesix_types::Role::KioskInteractive => "KioskInteractive",
         crate::cohesix_types::Role::GlassesAgent => "GlassesAgent",
         crate::cohesix_types::Role::SensorRelay => "SensorRelay",

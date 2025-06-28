@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: cohesix_types.rs v1.3
+// Filename: cohesix_types.rs v1.4
 // Author: Lukas Bower
-// Date Modified: 2026-09-30
+// Date Modified: 2026-10-28
 
 //! Shared types for Cohesix modules.
 
@@ -29,8 +29,10 @@ pub enum Syscall {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Role {
     QueenPrimary,
+    RegionalQueen,
+    BareMetalQueen,
     DroneWorker,
-    InteractiveAIBooth,
+    InteractiveAiBooth,
     KioskInteractive,
     GlassesAgent,
     SensorRelay,
@@ -50,8 +52,10 @@ impl RoleManifest {
             .unwrap_or_else(|| "QueenPrimary".to_string());
         match role_str.trim() {
             "QueenPrimary" => Role::QueenPrimary,
+            "RegionalQueen" => Role::RegionalQueen,
+            "BareMetalQueen" => Role::BareMetalQueen,
             "DroneWorker" => Role::DroneWorker,
-            "InteractiveAIBooth" => Role::InteractiveAIBooth,
+            "InteractiveAiBooth" => Role::InteractiveAiBooth,
             "KioskInteractive" => Role::KioskInteractive,
             "GlassesAgent" => Role::GlassesAgent,
             "SensorRelay" => Role::SensorRelay,
@@ -64,8 +68,10 @@ impl RoleManifest {
 /// Names of roles recognised by the runtime.
 pub const VALID_ROLES: &[&str] = &[
     "QueenPrimary",
+    "RegionalQueen",
+    "BareMetalQueen",
     "DroneWorker",
-    "InteractiveAIBooth",
+    "InteractiveAiBooth",
     "KioskInteractive",
     "GlassesAgent",
     "SensorRelay",

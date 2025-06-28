@@ -1,6 +1,6 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: test_integration_boot.py v0.2
-# Date Modified: 2025-08-01
+# Filename: test_integration_boot.py v0.3
+# Date Modified: 2026-10-28
 # Author: Cohesix Codex
 
 """Boot simulation integration test for Cohesix."""
@@ -49,9 +49,11 @@ def test_boot_services(tmp_path):
 
     for role in (
         "QueenPrimary",
+        "RegionalQueen",
+        "BareMetalQueen",
         "DroneWorker",
         "KioskInteractive",
-        "InteractiveAIBooth",
+        "InteractiveAiBooth",
     ):
         env = dict(os.environ, COH_ROLE=role, COHESIX_LOG=env_log)
         res = subprocess.run(

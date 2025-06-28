@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: test_bootflow.py v0.2
+# Filename: test_bootflow.py v0.3
 # Author: Lukas Bower
-# Date Modified: 2025-07-31
+# Date Modified: 2026-10-28
 
 import os
 import tempfile
@@ -11,9 +11,11 @@ from pathlib import Path
 
 ROLES = [
     "QueenPrimary",
+    "RegionalQueen",
+    "BareMetalQueen",
     "DroneWorker",
     "KioskInteractive",
-    "InteractiveAIBooth",
+    "InteractiveAiBooth",
     "SensorRelay",
     "SimulatorTest",
 ]
