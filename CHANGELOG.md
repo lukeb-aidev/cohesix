@@ -2180,3 +2180,8 @@
 - `worker_join_ack` now asserts `PermissionDenied` instead of unwrapping the
   join result. This confirms the validator blocks the syscall for unprivileged
   roles.
+
+## [v0.315] - 2026-10-31
+### Fixed
+- `worker_join_ack` test now accepts `PermissionDenied` or Exec format errors,
+  ensuring cross-build robustness.

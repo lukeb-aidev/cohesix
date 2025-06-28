@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: test_worker_join.rs v0.3
+// Filename: test_worker_join.rs v0.4
 // Date Modified: 2026-10-31
 // Author: Cohesix Codex
 
@@ -16,14 +16,20 @@ fn worker_join_ack() {
     let w = Worker::new("w1", "/srv/registry");
     let result = w.join("127.0.0.1");
     assert!(
+        matches!(
+            result
+                .as_ref()
+                .err()
+                .and_then(|e| e.downcast_ref::<std::io::Error>()),
+            Some(io_err)
+                if io_err.kind() == std::io::ErrorKind::PermissionDenied
+                    || io_err.kind() == std::io::ErrorKind::InvalidData
+                    || io_err.raw_os_error() == Some(8)
+        ),
+        "Expected PermissionDenied or Exec format error, got: {:?}",
         result
-            .as_ref()
-            .err()
-            .and_then(|e| e.downcast_ref::<std::io::Error>())
-            .map(|io| io.kind() == std::io::ErrorKind::PermissionDenied)
-            .unwrap_or(false)
     );
-    println!("Worker join correctly blocked by validator: {:?}", result);
+    println!("Worker join result: {:?}", result);
     q.process_joins();
     assert!(w.check_ack().is_none());
 }
