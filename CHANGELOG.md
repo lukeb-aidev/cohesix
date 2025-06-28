@@ -2115,4 +2115,12 @@
 ### Added
 - ISO builder stages CLI tools, BusyBox, cohesix-shell, Go helpers, and man pages.
 
+## [v0.304] - 2026-10-16
+### Changed
+- README clarifies GRUB-based ISO creation via `tools/make_iso.sh` and removes
+  manual EFI link instructions.
+- CI workflow drops the `manual_efi_link.sh` step.
+### Added
+- CUDA features disable gracefully when GPUs are absent.
+
 
