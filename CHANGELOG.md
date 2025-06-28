@@ -2124,3 +2124,8 @@
 - CUDA features disable gracefully when GPUs are absent.
 
 
+
+## [v0.305] - 2026-10-16
+### Changed
+- Makefile v0.50 removes obsolete EFI rules and testboot target.
+- Deleted test_boot_efi.sh and wrapper script.

@@ -1,3 +1,0 @@
-#!/usr/bin/env bash
-HERE="$(dirname "$(realpath "$0")")"
-exec /usr/bin/env bash "$HERE/test_boot_efi.sh" "$@"
