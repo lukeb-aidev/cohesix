@@ -1,31 +1,32 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: test_validator_matrix.rs v0.1
+// Filename: test_validator_matrix.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2026-09-30
+// Date Modified: 2026-11-02
 
 use cohesix::cohesix_types::{Role, Syscall, VALID_ROLES};
 use cohesix::validator::syscall::validate_syscall;
+use cohesix::syscall::guard::{PERMISSIONS, SyscallOp};
+use std::io::ErrorKind;
 
 #[test]
 fn validator_matrix_coverage() {
     let syscalls = vec![
-        Syscall::Spawn {
+        (SyscallOp::Spawn, Syscall::Spawn {
             program: "p".into(),
             args: vec![],
-        },
-        Syscall::CapGrant {
+        }),
+        (SyscallOp::CapGrant, Syscall::CapGrant {
             target: "t".into(),
             capability: "c".into(),
-        },
-        Syscall::Mount {
+        }),
+        (SyscallOp::Mount, Syscall::Mount {
             src: "s".into(),
             dest: "d".into(),
-        },
-        Syscall::Exec {
+        }),
+        (SyscallOp::Exec, Syscall::Exec {
             path: "/bin/true".into(),
-        },
-        Syscall::ApplyNamespace,
-        Syscall::Unknown,
+        }),
+        (SyscallOp::ApplyNs, Syscall::ApplyNamespace),
     ];
 
     for role_name in VALID_ROLES {
@@ -39,11 +40,31 @@ fn validator_matrix_coverage() {
             "GlassesAgent" => Role::GlassesAgent,
             "SensorRelay" => Role::SensorRelay,
             "SimulatorTest" => Role::SimulatorTest,
-            _ => continue,
+            other => Role::Other(other.into()),
         };
 
-        for sc in &syscalls {
-            let _ = validate_syscall(role.clone(), sc);
+        for (op, sc) in &syscalls {
+            let expect_allowed = PERMISSIONS
+                .get(&role)
+                .map_or(false, |set| set.contains(op));
+            let result = if validate_syscall(role.clone(), sc) {
+                Ok(())
+            } else {
+                Err(std::io::Error::new(ErrorKind::PermissionDenied, "denied"))
+            };
+            if expect_allowed {
+                assert!(
+                    result.is_ok(),
+                    "Expected Ok(()) for {:?} {:?}",
+                    role, op
+                );
+            } else {
+                assert!(
+                    matches!(result, Err(ref e) if e.kind() == ErrorKind::PermissionDenied),
+                    "Expected PermissionDenied for {:?} {:?}",
+                    role, op
+                );
+            }
         }
     }
 }
