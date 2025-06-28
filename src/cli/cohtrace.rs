@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: cohtrace.rs v0.4
+// Filename: cohtrace.rs v0.5
 // Author: Lukas Bower
-// Date Modified: 2026-10-13
+// Date Modified: 2026-10-28
 
 //! Minimal debug CLI for runtime trace inspection.
 
@@ -20,8 +20,10 @@ pub fn run_cohtrace(args: &[String]) -> Result<(), String> {
             let role = RoleManifest::current_role();
             let role_name = match &role {
                 Role::QueenPrimary => "QueenPrimary",
+                Role::RegionalQueen => "RegionalQueen",
+                Role::BareMetalQueen => "BareMetalQueen",
                 Role::DroneWorker => "DroneWorker",
-                Role::InteractiveAIBooth => "InteractiveAIBooth",
+                Role::InteractiveAiBooth => "InteractiveAiBooth",
                 Role::KioskInteractive => "KioskInteractive",
                 Role::GlassesAgent => "GlassesAgent",
                 Role::SensorRelay => "SensorRelay",

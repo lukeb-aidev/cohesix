@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: bootloader.c v0.7
 // Author: Lukas Bower
-// Date Modified: 2026-10-29
+// Date Modified: 2026-06-28
 // SPDX-License-Identifier: MIT
 //
 // Cohesix OS bootloader (seL4 root task)
@@ -54,7 +54,7 @@ static const char *detect_role(void) {
                 strcmp(buf, "RegionalQueen") == 0 ||
                 strcmp(buf, "BareMetalQueen") == 0 ||
                 strcmp(buf, "KioskInteractive") == 0 ||
-                strcmp(buf, "InteractiveAIBooth") == 0 ||
+                strcmp(buf, "InteractiveAiBooth") == 0 ||
                 strcmp(buf, "DroneWorker") == 0 ||
                 strcmp(buf, "GlassesAgent") == 0 ||
                 strcmp(buf, "SensorRelay") == 0 ||
@@ -134,7 +134,7 @@ static const char *script_for_role(const char *role) {
         return "/init/worker.rc";
     if (strcmp(role, "KioskInteractive") == 0)
         return "/init/kiosk.rc";
-    if (strcmp(role, "InteractiveAIBooth") == 0)
+    if (strcmp(role, "InteractiveAiBooth") == 0)
         return "/init/kiosk.rc";
     if (strcmp(role, "SensorRelay") == 0)
         return "/init/sensor.rc";

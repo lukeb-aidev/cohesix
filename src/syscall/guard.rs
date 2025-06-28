@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: guard.rs v0.3
+// Filename: guard.rs v0.4
 // Author: Lukas Bower
-// Date Modified: 2026-09-30
+// Date Modified: 2026-10-28
 
 use once_cell::sync::Lazy;
 use std::collections::{HashMap, HashSet};
@@ -40,9 +40,21 @@ pub static PERMISSIONS: Lazy<HashMap<Role, HashSet<SyscallOp>>> = Lazy::new(|| {
             .into_iter()
             .collect(),
     );
+    m.insert(
+        RegionalQueen,
+        [Spawn, CapGrant, Mount, Exec, ApplyNs]
+            .into_iter()
+            .collect(),
+    );
+    m.insert(
+        BareMetalQueen,
+        [Spawn, CapGrant, Mount, Exec, ApplyNs]
+            .into_iter()
+            .collect(),
+    );
     m.insert(DroneWorker, [Spawn, CapGrant, Mount].into_iter().collect());
     m.insert(
-        InteractiveAIBooth,
+        InteractiveAiBooth,
         [Spawn, CapGrant, Mount].into_iter().collect(),
     );
     m.insert(
