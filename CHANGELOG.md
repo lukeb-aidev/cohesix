@@ -2079,3 +2079,11 @@
 ### Changed
 - `src/cloud/mod.rs` exports new orchestrator module.
 
+## [v0.298] - 2026-10-11
+### Added
+- `CloudOrchestrator` struct manages registration and heartbeats.
+- Heartbeat thread spawns automatically with 10s interval.
+- Embedded HTTP listener writes POST `/command` bodies to `/srv/cloud/commands`.
+### Changed
+- Queen initialization uses `CloudOrchestrator::start()`.
+
