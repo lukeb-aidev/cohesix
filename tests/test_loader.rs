@@ -14,7 +14,8 @@ fn load_valid_binary() {
     let path = dir.path().join("ok.out");
     let mut f = File::create(&path).unwrap();
     f.write_all(b"COHB").unwrap();
-    f.write_all(&[1, 0x01, 0xFF]).unwrap();
+    f.write_all(&[1]).unwrap();
+    f.write_all(b"#!/bin/sh\nexit 0\n").unwrap();
     assert!(load_and_run(path.to_str().unwrap()).is_ok());
 }
 
