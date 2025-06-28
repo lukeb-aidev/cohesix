@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: kiosk_interactive.rs v0.3
+// Filename: kiosk_interactive.rs v0.4
 // Author: Lukas Bower
-// Date Modified: 2026-10-12
+// Date Modified: 2026-10-25
 
 //! Initialization routines for the KioskInteractive role.
 
@@ -34,9 +34,10 @@ pub fn start() {
     }
     let url = url.trim().to_string();
     if !url.is_empty() {
-        let _ = Agent::new()
-            .post(&format!("{}/worker_ping", url.trim_end_matches('/')))
-            .send_string("status=ready");
+        let endpoint = format!("{}/worker_ping", url.trim_end_matches('/'));
+        println!("Worker sending status=ready to {}", endpoint);
+        std::io::stdout().flush().ok();
+        let _ = Agent::new().post(&endpoint).send_string("status=ready");
         log(&format!(
             "Worker registered to Queen cloud endpoint at {} (source: {})",
             url, source
