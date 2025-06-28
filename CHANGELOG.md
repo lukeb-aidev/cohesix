@@ -2101,3 +2101,8 @@
 ### Added
 - Test `test_cloud_threads.rs` verifies multithreaded Queen and Worker cloud registration.
 
+## [v0.302] - 2026-10-15
+### Changed
+- `cohesix_fetch_build.sh` v0.71 now clones the repository before sourcing
+  `load_arch_config.sh` and verifies its presence.
+
