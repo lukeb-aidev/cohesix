@@ -125,7 +125,7 @@ fn spawn_command_listener() {
     std::thread::spawn(|| {
         if let Ok(server) = Server::http("0.0.0.0:8070") {
             fs::create_dir_all("/srv/cloud/commands").ok();
-            for req in server.incoming_requests() {
+            for mut req in server.incoming_requests() {
                 if req.method() == &Method::Post && req.url() == "/command" {
                     let mut body = String::new();
                     if req.as_reader().read_to_string(&mut body).is_ok() {
