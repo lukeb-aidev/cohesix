@@ -2169,3 +2169,8 @@
 - Capability map entries for `RegionalQueen`, `BareMetalQueen`, `GlassesAgent`,
   `SensorRelay`, and `SimulatorTest`.
 - Updated existing map entry to `InteractiveAiBooth`.
+
+## [v0.313] - 2026-10-30
+### Fixed
+- `worker_join_ack` test now sets `COHROLE` to `QueenPrimary` to match
+  validator role enforcement.
