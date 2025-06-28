@@ -15,7 +15,7 @@ This document merges `ROLE_MANIFEST.md` and the private `QUEEN_POLICY.md` into a
 | RegionalQueen    | Multi-node cloud federation lead    |
 | BareMetalQueen   | On-premise orchestration node       |
 | DroneWorker      | Physical simulation + sensors       |
-| InteractiveAIBooth | AI kiosk with Jetson + UI stack  |
+| InteractiveAiBooth | AI kiosk with Jetson + UI stack  |
 | KioskInteractive | Standalone human interface terminal |
 | GlassesAgent     | AR rendering for glasses            |
 | SensorRelay      | Sensor aggregator + forwarder       |
@@ -23,7 +23,12 @@ This document merges `ROLE_MANIFEST.md` and the private `QUEEN_POLICY.md` into a
 
 See below for full technical descriptions, interfaces, and orchestration behavior.
 
-At boot, Cohesix reads the declared runtime role from `/srv/cohrole` to determine which services and agents to initialize. Each role encapsulates a distinct set of responsibilities, interfaces, and resource privileges—ensuring least-privilege operation and clear service orchestration.
+At boot, Cohesix reads the declared runtime role from `/srv/cohrole` to determine which services and agents to initialize.
+Typical contents of /srv/cohrole might be:
+  QueenPrimary
+  DroneWorker
+  KioskInteractive
+This string is matched directly against the RoleManifest.
 
 <!-- New hybrid AI kiosk role combining Jetson GPU features with interactive booth UI -->
 
@@ -33,7 +38,7 @@ At boot, Cohesix reads the declared runtime role from `/srv/cohrole` to determin
 | RegionalQueen    | Cloud-native cluster orchestrator: handles dynamic resource allocation, auto-scaling, and failover across multiple nodes, leveraging cloud hooks at boot. | gRPC control plane         |
 | BareMetalQueen   | Bare-metal orchestrator for isolated or private networks, bootstrapping directly on hardware with minimal dependencies and direct device management. | Proprietary hardware interface |
 | DroneWorker      | Physics & sensor processing: runs Rapier-based simulations and aggregates sensor inputs. | `/sim/` namespace          |
-| InteractiveAIBooth | Hybrid AI kiosk booth with Jetson acceleration and UI services. | `/srv/cuda` + Secure9P |
+| InteractiveAiBooth | Hybrid AI kiosk booth with Jetson acceleration and UI services. | `/srv/cuda` + Secure9P |
 | KioskInteractive | Local human–machine interface: handles AR user interactions on kiosk displays. | WebSocket + 9P namespace   |
 | GlassesAgent     | Vision pipeline & UI renderer for AR glasses: processes camera feeds and renders overlays via CUDA. | `/srv/cuda` + 9P streams   |
 | SensorRelay      | Sensor data aggregator: collects and forwards sensor streams to other roles. | 9P file streams            |
@@ -50,6 +55,8 @@ This manifest guides both the OS initialization sequence and the Codex automatio
 * **SensorRelay** – forwards raw sensor data to other agents.
 * **SimulatorTest** – replays recorded traces to validate system behavior.
 
+Each role's interface and privileges are strictly enforced by the Secure9P validator and policy files, ensuring only authorized namespaces and operations are available at runtime.
+
 Federated deployments may declare hierarchical roles. A Queen inheriting from another uses `inherit:<parent_id>` in `/srv/queen_id/role` which is exchanged during federation handshakes. All child queens inherit base policies while applying their own overlays.
 
 
@@ -60,3 +67,5 @@ The policies described here apply only to QueenPrimary, RegionalQueen, and BareM
 This document defines internal enforcement policies for the Queen role.
 
 Federated queens may delegate sub-roles to peers. The policy engine resolves conflicts by preferring the latest timestamped policy file within `/srv/<peer>/policy_override.json`. Administrators can supply explicit rules to override time-based resolution.
+
+✅ This policy file is aligned with Secure9P enforcement and runtime validator checks.

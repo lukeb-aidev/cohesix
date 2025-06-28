@@ -17,12 +17,12 @@ cert = "cert.pem"
 key = "key.pem"
 
 [[namespace]]
-agent = "queen_primary"
+agent = "QueenPrimary"
 root = "/srv/queen"
 read_only = false
 
 [[policy]]
-agent = "queen_primary"
+agent = "QueenPrimary"
 allow = ["read:/srv", "write:/srv"]
 
 [[namespace]]
