@@ -37,23 +37,26 @@ fn attempt_mount() -> std::io::Result<()> {
 #[serial]
 fn mount_permission_matrix() {
     fs::create_dir_all("/srv/violations").unwrap();
-    unsafe {
-        std::env::set_var("COHESIX_VIOLATIONS_DIR", "/srv/violations");
-    }
+    assert!(fs::metadata("/srv/violations").is_ok(), "Violations dir should exist");
+    std::env::set_var("COHESIX_VIOLATIONS_DIR", "/srv/violations");
 
     for role in [
         "QueenPrimary",
         "RegionalQueen",
         "BareMetalQueen",
-        "SimulatorTest",
+        "DroneWorker",
+        "InteractiveAiBooth",
+        "KioskInteractive",
+        "GlassesAgent",
         "SensorRelay",
+        "SimulatorTest",
     ] {
         std::env::set_var("COHROLE", role);
         let result = attempt_mount();
         println!("Mount result under {}: {:?}", role, result);
 
-        if role.contains("Queen") {
-            assert!(result.is_ok(), "Mount should succeed for {}", role);
+        if role.contains("Queen") || role == "SensorRelay" || role == "SimulatorTest" {
+            assert!(result.is_ok(), "Mount should succeed for {}, got {:?}", role, result);
         } else {
             assert!(
                 matches!(result, Err(ref e) if e.kind() == std::io::ErrorKind::PermissionDenied),
@@ -69,9 +72,8 @@ fn mount_permission_matrix() {
 #[serial]
 fn apply_namespace_permission_matrix() {
     fs::create_dir_all("/srv/violations").unwrap();
-    unsafe {
-        std::env::set_var("COHESIX_VIOLATIONS_DIR", "/srv/violations");
-    }
+    assert!(fs::metadata("/srv/violations").is_ok(), "Violations dir should exist");
+    std::env::set_var("COHESIX_VIOLATIONS_DIR", "/srv/violations");
 
     for role in [
         "QueenPrimary",
@@ -89,7 +91,7 @@ fn apply_namespace_permission_matrix() {
         println!("ApplyNamespace result under {}: {:?}", role, result);
 
         if role.contains("Queen") {
-            assert!(result.is_ok(), "ApplyNamespace should succeed for {}", role);
+            assert!(result.is_ok(), "ApplyNamespace should succeed for {}, got {:?}", role, result);
         } else {
             assert!(
                 matches!(result, Err(ref e) if e.kind() == std::io::ErrorKind::PermissionDenied),
