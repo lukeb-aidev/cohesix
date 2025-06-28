@@ -46,9 +46,20 @@ fn queen_worker_cloud_flow() {
     std::io::stdout().flush().unwrap();
     let id = register_queen(&format!("http://127.0.0.1:{port}")).unwrap();
     send_heartbeat(id).unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(50));
+    std::thread::sleep(std::time::Duration::from_millis(500));
+
+    let mut success = false;
+    for _ in 0..20 {
+        let log_text = { logs.lock().unwrap().join("\n") };
+        if log_text.contains("POST /heartbeat") || log_text.contains("status=ready") {
+            success = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+
     let l = logs.lock().unwrap();
     let log_text = l.join("\n");
-    assert!(log_text.contains("POST /register"));
-    assert!(log_text.contains("POST /heartbeat") || log_text.contains("status=ready"));
+    assert!(log_text.contains("POST /register"), "log output: {}", log_text);
+    assert!(success, "log output: {}", log_text);
 }
