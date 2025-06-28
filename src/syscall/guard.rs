@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: guard.rs v0.4
+// Filename: guard.rs v0.5
 // Author: Lukas Bower
-// Date Modified: 2026-10-28
+// Date Modified: 2026-10-29
 
 use once_cell::sync::Lazy;
 use std::collections::{HashMap, HashSet};
@@ -65,10 +65,7 @@ pub static PERMISSIONS: Lazy<HashMap<Role, HashSet<SyscallOp>>> = Lazy::new(|| {
         GlassesAgent,
         [Spawn, CapGrant, Mount, Exec].into_iter().collect(),
     );
-    m.insert(
-        SensorRelay,
-        [Spawn, CapGrant, Mount].into_iter().collect(),
-    );
+    m.insert(SensorRelay, [Spawn, CapGrant, Mount].into_iter().collect());
     m.insert(
         SimulatorTest,
         [Spawn, CapGrant, Mount, Exec].into_iter().collect(),
