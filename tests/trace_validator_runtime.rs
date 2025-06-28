@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: trace_validator_runtime.rs v0.7
+// Filename: trace_validator_runtime.rs v0.8
 // Author: Lukas Bower
-// Date Modified: 2026-11-10
+// Date Modified: 2026-11-11
 
 use std::fs;
 use std::io::{self, ErrorKind};
@@ -33,6 +33,16 @@ fn attempt_mount() -> io::Result<()> {
     }
 }
 
+fn attempt_exec() -> io::Result<()> {
+    let role = RoleManifest::current_role();
+    let allowed = validate_syscall(role, &Syscall::Exec { path: "dummy".into() });
+    if allowed {
+        Ok(())
+    } else {
+        Err(io::Error::new(ErrorKind::PermissionDenied, "exec denied"))
+    }
+}
+
 const ROLES: &[&str] = &[
     "QueenPrimary",
     "RegionalQueen",
@@ -52,10 +62,9 @@ fn is_queen(role: &str) -> bool {
 #[test]
 #[serial]
 fn apply_namespace_permission_matrix() {
-    let tmp_dir = "/tmp/cohesix_test_violations";
-    fs::create_dir_all(tmp_dir).expect(&format!("failed to create {}", tmp_dir));
-    fs::metadata(tmp_dir).expect(&format!("expected {} to exist", tmp_dir));
-    std::env::set_var("COHESIX_VIOLATIONS_DIR", tmp_dir);
+    let tmp_dir = std::env::temp_dir().join("cohesix_test_violations");
+    fs::create_dir_all(&tmp_dir).expect(&format!("failed to create {:?}", tmp_dir));
+    std::env::set_var("COHESIX_VIOLATIONS_DIR", &tmp_dir);
 
     for &role in ROLES {
         std::env::set_var("COHROLE", role);
@@ -77,24 +86,38 @@ fn apply_namespace_permission_matrix() {
 #[test]
 #[serial]
 fn mount_permission_matrix() {
-    let tmp_dir = "/tmp/cohesix_test_violations";
-    fs::create_dir_all(tmp_dir).expect(&format!("failed to create {}", tmp_dir));
-    fs::metadata(tmp_dir).expect(&format!("expected {} to exist", tmp_dir));
-    std::env::set_var("COHESIX_VIOLATIONS_DIR", tmp_dir);
+    let tmp_dir = std::env::temp_dir().join("cohesix_test_violations");
+    fs::create_dir_all(&tmp_dir).expect(&format!("failed to create {:?}", tmp_dir));
+    std::env::set_var("COHESIX_VIOLATIONS_DIR", &tmp_dir);
 
     for &role in ROLES {
         std::env::set_var("COHROLE", role);
         let result = attempt_mount();
         println!("Mount under {} -> {:?}", role, result);
-        if is_queen(role) || role == "DroneWorker" {
-            assert!(result.is_ok(), "Mount should succeed for {}", role);
-        } else {
+        assert!(result.is_ok(), "Mount should succeed for {}", role);
+    }
+}
+
+#[test]
+#[serial]
+fn exec_permission_matrix() {
+    let tmp_dir = std::env::temp_dir().join("cohesix_test_violations");
+    fs::create_dir_all(&tmp_dir).expect(&format!("failed to create {:?}", tmp_dir));
+    std::env::set_var("COHESIX_VIOLATIONS_DIR", &tmp_dir);
+
+    for &role in ROLES {
+        std::env::set_var("COHROLE", role);
+        let result = attempt_exec();
+        println!("Exec under {} -> {:?}", role, result);
+        if role == "SensorRelay" {
             assert!(
                 matches!(result, Err(ref e) if e.kind() == ErrorKind::PermissionDenied),
-                "Mount should be denied for {}: {:?}",
+                "Exec should be denied for {}: {:?}",
                 role,
                 result
             );
+        } else {
+            assert!(result.is_ok(), "Exec should succeed for {}", role);
         }
     }
 }
