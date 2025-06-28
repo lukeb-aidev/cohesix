@@ -2190,3 +2190,8 @@
 ### Fixed
 - Relaxed `worker_join_ack` assertion to expect any exec failure and log the
   full error for sandbox validation across environments.
+
+## [v0.317] - 2026-10-31
+### Fixed
+- `worker_join_ack` now explicitly checks for `PermissionDenied`,
+  aligning the test with validator sandbox enforcement.
