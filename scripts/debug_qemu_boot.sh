@@ -1,8 +1,8 @@
 #!/bin/bash
 # CLASSIFICATION: COMMUNITY
-# Filename: scripts/debug_qemu_boot.sh v0.2
+# Filename: scripts/debug_qemu_boot.sh v0.3
 # Author: Lukas Bower
-# Date Modified: 2025-12-23
+# Date Modified: 2026-10-16
 # Ensures this script runs cleanly under Bash for CI use
 set -euo pipefail
 
@@ -14,7 +14,7 @@ mkdir -p "$LOG_DIR"
 INVOC_LOG="$LOG_DIR/qemu_invocation.log"
 
 ISO="$ROOT/out/cohesix.iso"
-EFI="$ROOT/out/BOOTX64.EFI"
+ROOT_ELF="$ROOT/out/cohesix_root.elf"
 CFG="$ROOT/config/config.yaml"
 
 missing=0
@@ -30,7 +30,7 @@ check_file() {
 
 echo "Working directory: $(pwd)"
 check_file "$ISO"
-check_file "$EFI"
+check_file "$ROOT_ELF"
 check_file "$CFG"
 
 du -sh out 2>/dev/null || true

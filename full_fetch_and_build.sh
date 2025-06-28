@@ -47,7 +47,7 @@ cargo build --release --target "$TARGET" --bin kernel \
   --no-default-features --features minimal_uefi,kernel_bin
 KERNEL_EFI="target/${TARGET}/release/kernel.efi"
 [ -f "$KERNEL_EFI" ] || fail "Kernel EFI missing at $KERNEL_EFI"
-cp "$KERNEL_EFI" out/BOOTX64.EFI
+cp "$KERNEL_EFI" out/bin/kernel.elf
 msg "kernel build complete"
 
 # Build primary userland binary

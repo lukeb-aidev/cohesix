@@ -602,8 +602,8 @@ if [ "${VIRTUAL_ENV:-}" != "$(pwd)/${VENV_DIR}" ]; then
   exit 1
 fi
 
-bash scripts/make_grub_iso.sh
-ISO_OUT="out/cohesix_grub.iso"
+bash tools/make_iso.sh
+ISO_OUT="out/cohesix.iso"
 if [ ! -f "$ISO_OUT" ]; then
   echo "❌ ISO build failed: $ISO_OUT missing" >&2
   exit 1
