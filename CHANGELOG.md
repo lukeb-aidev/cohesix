@@ -2151,3 +2151,8 @@
 - Introduced `with_srv_root!` macro and replaced hardcoded `/srv` paths in
   orchestrator and namespace loader.
 - Tests now set `COHESIX_SRV_ROOT` to a temporary directory.
+
+## [v0.310] - 2026-10-29
+### Fixed
+- **bootloader.c**: `detect_role()` now reads `COHROLE` and accepts
+  `RegionalQueen` and `BareMetalQueen` roles.
