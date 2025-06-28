@@ -112,8 +112,7 @@
 | .bashrc | v0.1 | 2026-08-09 | COMMUNITY | | |
 | .cargo/config.toml | v0.7 | 2026-08-23 | COMMUNITY | | |
 | build.rs | v0.8 | 2026-08-21 | COMMUNITY | | |
-| Makefile | v0.49 | 2026-10-16 | COMMUNITY | | |
-| test_boot_efi.sh | v0.17 | 2026-10-16 | COMMUNITY | | |
+| Makefile | v0.50 | 2026-10-16 | COMMUNITY | | |
 | src/kernel/main.c | v0.2 | 2025-07-22 | COMMUNITY | | |
 | src/kernel/main.rs | v0.2 | 2025-08-02 | COMMUNITY | | |
 | src/kernel/proc_mgr.rs | v0.2 | 2025-08-27 | COMMUNITY | | |
