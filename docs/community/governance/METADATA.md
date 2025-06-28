@@ -123,7 +123,7 @@
 | tests/test_cuda_exec.rs | v0.6 | 2026-08-23 | COMMUNITY | | |
 | tests/test_cuda_kernel.rs | v0.4 | 2025-12-12 | COMMUNITY | | |
 | tests/test_namespace_rule.rs | v0.1 | 2025-07-23 | COMMUNITY | | |
-| tests/test_namespace_semantics.rs | v0.2 | 2025-12-15 | COMMUNITY | | |
+| tests/test_namespace_semantics.rs | v0.3 | 2026-11-05 | COMMUNITY | | |
 | tests/test_trace_compare.py | v0.1 | 2025-07-23 | COMMUNITY | | |
 | tests/test_qemu_boot.rs | v0.12 | 2026-09-20 | COMMUNITY | | |
 | tests/test_boot_build_chain.rs | v0.1 | 2025-12-24 | COMMUNITY | | |
