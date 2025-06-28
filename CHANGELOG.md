@@ -2163,3 +2163,9 @@
 - Syscall validator matches all roles explicitly.
 - `secure9p.toml` agents normalized to lowercase with underscores
 - Added namespace and policy blocks for `regional_queen` and `bare_metal_queen`
+
+## [v0.312] - 2026-10-29
+### Added
+- Capability map entries for `RegionalQueen`, `BareMetalQueen`, `GlassesAgent`,
+  `SensorRelay`, and `SimulatorTest`.
+- Updated existing map entry to `InteractiveAiBooth`.
