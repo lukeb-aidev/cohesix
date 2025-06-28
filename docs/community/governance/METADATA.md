@@ -237,7 +237,7 @@
 | src/cli/mod.rs | v1.3 | 2026-10-08 | COMMUNITY | | |
 | src/cli/cohtrace.rs | v0.4 | 2026-10-10 | COMMUNITY | | |
 | src/cloud/mod.rs | v0.2 | 2026-10-10 | COMMUNITY | | |
-| src/cloud/orchestrator.rs | v0.1 | 2026-10-10 | COMMUNITY | | |
+| src/cloud/orchestrator.rs | v0.2 | 2026-10-11 | COMMUNITY | | |
 | src/lib.rs | v1.10 | 2026-10-10 | COMMUNITY | | |
 | src/runtime/loader.rs | v0.2 | 2026-10-07 | COMMUNITY | | |
 | tests/test_loader.rs | v0.1 | 2025-09-26 | COMMUNITY | | |
