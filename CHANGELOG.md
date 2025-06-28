@@ -2228,3 +2228,8 @@
 - `mount_permission_matrix` test renamed to `mount_permission_policy_matrix` and
   rewritten to explicitly validate the validator permission policy across queen
   and non-queen roles.
+
+## [v0.324] - 2026-11-07
+### Changed
+- `mount_permission_policy_matrix` explicitly asserts success for queen roles and
+  `PermissionDenied` for others.
