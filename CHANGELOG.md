@@ -2087,3 +2087,9 @@
 ### Changed
 - Queen initialization uses `CloudOrchestrator::start()`.
 
+## [v0.299] - 2026-10-12
+### Added
+- Workers read `/srv/cloud/url` when `CLOUD_HOOK_URL` is unset.
+### Changed
+- DroneWorker and KioskInteractive log the URL source and ping `/worker_ping`.
+
