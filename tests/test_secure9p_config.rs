@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: test_secure9p_config.rs v0.2
+// Filename: test_secure9p_config.rs v0.1
 // Author: Lukas Bower
-// Date Modified: 2026-10-28
+// Date Modified: 2026-09-30
 
 use std::fs;
 
@@ -15,13 +15,24 @@ fn secure9p_roles_match_manifest() {
                 let cleaned = agent
                     .trim_matches(' ')
                     .trim_matches('"')
-                    .replace('_', "");
+                    .to_string();
                 roles_in_cfg.push(cleaned);
             }
         }
     }
     for role in cohesix::cohesix_types::VALID_ROLES {
-        let name = role.to_ascii_lowercase();
+        let mut name = String::new();
+        for (i, ch) in role.chars().enumerate() {
+            if ch.is_uppercase() {
+                if i != 0 {
+                    name.push('_');
+                }
+                name.push(ch.to_ascii_lowercase());
+            } else {
+                name.push(ch);
+            }
+        }
+        name = name.to_ascii_lowercase();
         assert!(roles_in_cfg.iter().any(|r| r == &name), "{} missing", role);
     }
 }
