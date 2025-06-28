@@ -2195,3 +2195,9 @@
 ### Fixed
 - `worker_join_ack` now explicitly checks for `PermissionDenied`,
   aligning the test with validator sandbox enforcement.
+
+## [v0.318] - 2026-10-31
+### Changed
+- Replaced `worker_join_ack` with two new tests: `worker_join_denied_for_worker_role`
+  and `worker_join_succeeds_for_queen` for clear validation of role-based join
+  behavior.
