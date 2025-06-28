@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.70
+# Filename: cohesix_fetch_build.sh v0.71
 # Author: Lukas Bower
-# Date Modified: 2026-09-21
+# Date Modified: 2026-10-15
 #!/bin/bash
 
 HOST_ARCH="$(uname -m)"
@@ -44,12 +44,20 @@ log(){ echo "[$(date +%H:%M:%S)] $1" | tee -a "$LOG_FILE" >&3; }
 
 log "🛠️ [Build Start] $(date)"
 
-ROOT="$HOME/cohesix"
-if [ ! -f "$ROOT/scripts/load_arch_config.sh" ]; then
+# Clone repository before sourcing any configuration so a fresh checkout
+# is available even when $HOME is empty.
+cd "$HOME"
+log "📦 Cloning repository..."
+rm -rf cohesix
+git clone git@github.com:lukeb-aidev/cohesix.git
+cd cohesix
+ROOT="$(pwd)"
+if [ -f "$ROOT/scripts/load_arch_config.sh" ]; then
+  source "$ROOT/scripts/load_arch_config.sh"
+else
   echo "❌ Missing: $ROOT/scripts/load_arch_config.sh" >&2
   exit 1
 fi
-source "$ROOT/scripts/load_arch_config.sh"
 
 case "$COHESIX_ARCH" in
   x86_64) COHESIX_TARGET="x86_64-unknown-linux-gnu" ;;
@@ -180,14 +188,7 @@ if ! dpkg --compare-versions "$CMAKE_VER" ge 3.20; then
   hash -r
 fi
 
-cd "$HOME"
-log "🧹 Cleaning workspace..."
-rm -rf cohesix
-
-log "📦 Cloning repository..."
-git clone git@github.com:lukeb-aidev/cohesix.git
-cd cohesix
-ROOT="$(pwd)"
+cd "$ROOT"
 STAGE_DIR="$ROOT/out/iso"
 mkdir -p "$ROOT/out/bin"
 # Clean up artifacts from previous builds
