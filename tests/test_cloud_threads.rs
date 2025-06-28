@@ -1,11 +1,12 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: test_cloud_threads.rs v0.1
+// Filename: test_cloud_threads.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2026-10-14
+// Date Modified: 2026-10-28
 
 use std::net::TcpListener;
 use std::sync::{Arc, Mutex};
 use std::thread;
+use tempfile;
 use tiny_http::{Response, Server};
 
 use cohesix::cloud::orchestrator::{register_queen, send_heartbeat};
@@ -18,12 +19,13 @@ fn orchestrator_threads_flow() {
         return;
     }
 
+    println!("Opening file: {:?}", "127.0.0.1:0");
     let server = Server::http("127.0.0.1:0").unwrap();
     let port = server.server_addr().to_ip().unwrap().port();
     let logs = Arc::new(Mutex::new(Vec::new()));
     let srv_logs = logs.clone();
     let server_handle = thread::spawn(move || {
-        for _ in 0..4 {
+        for _ in 0..5 {
             if let Ok(req) = server.recv() {
                 let entry = format!("{} {}", req.method(), req.url());
                 srv_logs.lock().unwrap().push(entry);
@@ -32,7 +34,10 @@ fn orchestrator_threads_flow() {
         }
     });
 
-    std::fs::create_dir_all("/srv/cloud").unwrap();
+    let temp_dir = tempfile::tempdir().unwrap();
+    std::env::set_var("COHESIX_SRV_ROOT", temp_dir.path().to_str().unwrap());
+    println!("Opening file: {:?}", temp_dir.path().join("cloud"));
+    std::fs::create_dir_all(temp_dir.path().join("cloud")).unwrap();
     let url = format!("http://127.0.0.1:{port}");
 
     let queen = thread::spawn({

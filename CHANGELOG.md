@@ -2141,3 +2141,7 @@
 - Cloud hook test retries log fetch for async reliability
 - CUDA detection logs skip message when GPU absent
 
+
+## [v0.308] - 2026-10-28
+### Fixed
+- Cloud threads test now honors COHESIX_SRV_ROOT and binds user-safe ports.
