@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: trace_validator_runtime.rs v0.3
-// Date Modified: 2026-11-06
+// Filename: trace_validator_runtime.rs v0.4
+// Date Modified: 2026-11-07
 // Author: Lukas Bower
 
 use std::fs;
@@ -32,13 +32,15 @@ fn mount_permission_policy_matrix() {
         std::env::set_var("COHROLE", role);
         let result = attempt_mount_or_namespace_op();
         println!("Mount result under {}: {:?}", role, result);
+
         if role.contains("Queen") {
-            assert!(result.is_ok(), "Expected success for role {}", role);
+            assert!(result.is_ok(), "Expected success for {}", role);
         } else {
             assert!(
                 matches!(result, Err(ref e) if e.kind() == std::io::ErrorKind::PermissionDenied),
-                "Expected PermissionDenied for role {}",
-                role
+                "Expected PermissionDenied for {}, got {:?}",
+                role,
+                result
             );
         }
     }
