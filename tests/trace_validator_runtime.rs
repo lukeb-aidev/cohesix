@@ -36,11 +36,12 @@ fn attempt_mount() -> std::io::Result<()> {
 #[test]
 #[serial]
 fn mount_permission_matrix() {
-    let create_dir_result = fs::create_dir_all("/srv/violations");
-    assert!(create_dir_result.is_ok(), "expected OK creating /srv/violations, got {:?}", create_dir_result);
-    let metadata_result = fs::metadata("/srv/violations");
-    assert!(metadata_result.is_ok(), "expected OK metadata for /srv/violations, got {:?}", metadata_result);
-    std::env::set_var("COHESIX_VIOLATIONS_DIR", "/srv/violations");
+    let tmp_dir = "/tmp/cohesix_test_violations";
+    let create_dir_result = fs::create_dir_all(tmp_dir);
+    assert!(create_dir_result.is_ok(), "expected OK creating {}, got {:?}", tmp_dir, create_dir_result);
+    let metadata_result = fs::metadata(tmp_dir);
+    assert!(metadata_result.is_ok(), "expected OK metadata for {}, got {:?}", tmp_dir, metadata_result);
+    std::env::set_var("COHESIX_VIOLATIONS_DIR", tmp_dir);
 
     for role in [
         "QueenPrimary",
@@ -73,11 +74,12 @@ fn mount_permission_matrix() {
 #[test]
 #[serial]
 fn apply_namespace_permission_matrix() {
-    let create_dir_result = fs::create_dir_all("/srv/violations");
-    assert!(create_dir_result.is_ok(), "expected OK creating /srv/violations, got {:?}", create_dir_result);
-    let metadata_result = fs::metadata("/srv/violations");
-    assert!(metadata_result.is_ok(), "expected OK metadata for /srv/violations, got {:?}", metadata_result);
-    std::env::set_var("COHESIX_VIOLATIONS_DIR", "/srv/violations");
+    let tmp_dir = "/tmp/cohesix_test_violations";
+    let create_dir_result = fs::create_dir_all(tmp_dir);
+    assert!(create_dir_result.is_ok(), "expected OK creating {}, got {:?}", tmp_dir, create_dir_result);
+    let metadata_result = fs::metadata(tmp_dir);
+    assert!(metadata_result.is_ok(), "expected OK metadata for {}, got {:?}", tmp_dir, metadata_result);
+    std::env::set_var("COHESIX_VIOLATIONS_DIR", tmp_dir);
 
     for role in [
         "QueenPrimary",
