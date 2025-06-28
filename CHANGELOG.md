@@ -127,7 +127,7 @@
 - Validator paths now configurable via environment variables; CLI rule merge test added
 - `cohtrace` CLI now supports `--verify-trace` and `compare` commands for trace validation
 - CUDA runtime now exposes stub /srv/cuda when unavailable
-- Added InteractiveAIBooth role with Secure9P namespace and optional CUDA support
+- Added InteractiveAiBooth role with Secure9P namespace and optional CUDA support
 - GitHub workflow indentation corrected for OSS dependency audit
 - Validator uses `COHESIX_TRACE_TMP` for boot trace lookups; tests use
   `std::env::temp_dir` and clear expects to avoid permission errors.
@@ -2151,3 +2151,8 @@
 - Introduced `with_srv_root!` macro and replaced hardcoded `/srv` paths in
   orchestrator and namespace loader.
 - Tests now set `COHESIX_SRV_ROOT` to a temporary directory.
+
+## [v0.310] - 2026-10-28
+### Added
+- `RegionalQueen` and `BareMetalQueen` runtime roles
+- Renamed `InteractiveAIBooth` to `InteractiveAiBooth`

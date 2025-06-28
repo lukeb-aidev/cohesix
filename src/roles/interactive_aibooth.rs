@@ -1,9 +1,9 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: interactive_aibooth.rs v0.1
+// Filename: interactive_aibooth.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2026-07-23
+// Date Modified: 2026-10-28
 
-//! Initialization routines for the InteractiveAIBooth role.
+//! Initialization routines for the InteractiveAiBooth role.
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -23,7 +23,7 @@ fn log(msg: &str) {
 
 /// Start the Interactive AI Booth environment.
 pub fn start() {
-    if detect_cohrole() != "InteractiveAIBooth" {
+    if detect_cohrole() != "InteractiveAiBooth" {
         log("access denied: wrong role");
         return;
     }
