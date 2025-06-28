@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: README.md v0.19
+// Filename: README.md v0.20
 // Author: Lukas Bower
-// Date Modified: 2026-09-03
+// Date Modified: 2026-10-16
 
 
 # Cohesix
@@ -130,7 +130,7 @@ The helper script `cohesix_fetch_build.sh` sets two variables after cloning:
 * `COH_PLATFORM` – the host architecture from `uname -m`
 * `COH_GPU` – `1` if an NVIDIA device is accessible, else `0`
 
-CUDA tests and builds skip when `COH_GPU=0`.
+CUDA tests and builds skip when `COH_GPU=0`; runtime features disable gracefully.
 
 ### Building the seL4 entry binary
 
@@ -168,7 +168,7 @@ Ensure the archive includes at minimum `busybox`, `init`, `rc`, `echo`, `ls` and
 
 ## Boot Testing
 
-Confirm QEMU and EFI dependencies with:
+Confirm QEMU dependencies with:
 
 ```bash
 ./scripts/check-qemu-deps.sh
@@ -176,13 +176,17 @@ Confirm QEMU and EFI dependencies with:
 
 The script highlights missing packages so you can install them before running boot tests.
 
-If the automatic build fails to produce `init.efi`, build it manually:
+Build the GRUB-based ISO:
 
 ```bash
-./scripts/manual_efi_link.sh
+./tools/make_iso.sh
 ```
 
-This script expects a GNU EFI build located at `~/gnu-efi`.
+Run the QEMU boot check to verify the GRUB → seL4 → Cohesix flow:
+
+```bash
+ci/qemu_boot_check.sh
+```
 ---
 
 ## 🧠 Learn More

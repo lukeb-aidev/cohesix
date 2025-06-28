@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: BOOT_KERNEL_FLOW.md v0.2
+// Filename: BOOT_KERNEL_FLOW.md v0.3
 // Author: Lukas Bower
-// Date Modified: 2026-02-05
+// Date Modified: 2026-10-16
 
 # Boot → Kernel → Validator → CLI Flow
 
@@ -35,3 +35,5 @@ For detailed architecture discussion see
 [`MISSION_AND_ARCHITECTURE.md`](MISSION_AND_ARCHITECTURE.md).
 
 The entire boot chain and root image are built via `cohesix_fetch_build.sh`.
+Afterwards run `tools/make_iso.sh` to assemble the GRUB ISO containing
+`kernel.elf` and `userland.elf`.

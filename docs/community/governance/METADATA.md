@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: METADATA.md v3.44
+// Filename: METADATA.md v3.45
 // Author: Lukas Bower
-// Date Modified: 2026-09-05
+// Date Modified: 2026-10-16
 
 ## Canonical Documents
 
@@ -16,7 +16,7 @@
 | DEPENDENCIES.md            | v0.5    | 2025-07-06    | COMMUNITY      |            |              |
 | METADATA.md                | v3.34   | 2026-02-12    | COMMUNITY      | | |
 | Q_DAY.md                   | v1.1    | 2025-06-15    | PRIVATE        |            |              |
-| README.md                  | v0.19   | 2026-09-03    | COMMUNITY        | | |
+| README.md                  | v0.20   | 2026-10-16   | COMMUNITY        | | |
 | README_CODEX.md            | v1.5    | 2026-02-05    | COMMUNITY      |            |              |
 | REMOTE_ACCESS.md           | v1.0    | 2025-05-24    | COMMUNITY      |            |              |
 | SHOPPING_LIST.md           | v1.3    | 2025-05-25    | COMMUNITY      |            |              |
@@ -133,7 +133,7 @@
 | tests/test_cohcc_shell.rs | v0.2 | 2025-09-25 | COMMUNITY | | |
 | tests/test_cohcc_output.rs | v0.2 | 2025-12-08 | COMMUNITY | | |
 | docs/QUICKSTART.md | v0.1 | 2025-07-23 | COMMUNITY | | |
-| docs/community/architecture/BOOT_KERNEL_FLOW.md | v0.2 | 2026-02-05 | COMMUNITY | | |
+| docs/community/architecture/BOOT_KERNEL_FLOW.md | v0.3 | 2026-10-16 | COMMUNITY | | |
 | docs/community/archive/EXAMPLES_README.md | v0.3 | 2026-02-05 | COMMUNITY | | |
 | .cohesix_env | v0.3 | 2026-07-25 | COMMUNITY | | |
 | cohesix_fetch_build.sh | v0.71 | 2026-10-15 | COMMUNITY | | |
@@ -174,7 +174,6 @@
 | scripts/build_root_elf.sh | v0.11 | 2026-07-25 | COMMUNITY | | |
 | scripts/load_arch_config.sh | v0.1 | 2026-07-25 | COMMUNITY | | |
 | scripts/build_busybox.sh | v0.4 | 2026-01-26 | COMMUNITY | | |
-| scripts/manual_efi_link.sh | v0.5 | 2026-09-08 | COMMUNITY | | |
 | metadata.json | v0.1 | 2025-07-24 | COMMUNITY | | |
 | Cargo.toml | v0.29 | 2026-09-30 | COMMUNITY | | |
 | cohesix-9p/Cargo.toml | v0.1 | 2025-07-28 | COMMUNITY | | |
