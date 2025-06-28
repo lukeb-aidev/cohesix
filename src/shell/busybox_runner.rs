@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: busybox_runner.rs v0.7
+// Filename: busybox_runner.rs v0.8
 // Author: Lukas Bower
-// Date Modified: 2025-09-25
+// Date Modified: 2026-10-28
 
 //! Execute BusyBox as the interactive shell with role-based command filtering.
 
@@ -19,7 +19,7 @@ fn allowed_cmd(role: &str, cmd: &str) -> bool {
     match role {
         "QueenPrimary" => true,
         "DroneWorker" => !matches!(cmd, "wget" | "curl"),
-        "InteractiveAIBooth" => matches!(cmd, "echo" | "ls" | "mount" | "cat" | "cohcc" | "run"),
+        "InteractiveAiBooth" => matches!(cmd, "echo" | "ls" | "mount" | "cat" | "cohcc" | "run"),
         "KioskInteractive" => matches!(cmd, "echo" | "ls" | "mount" | "cat" | "cohcc" | "run"),
         _ => false,
     }
