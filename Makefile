@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Makefile v0.48
+# Filename: Makefile v0.49
 # Author: Lukas Bower
-# Date Modified: 2026-09-14
+# Date Modified: 2026-10-16
 .PHONY: build cuda-build all go-build go-test c-shims help fmt lint check \
        boot boot-x86_64 boot-aarch64 bootloader kernel init-efi cohrun cohbuild cohtrace cli_cap gui-orchestrator test test-python check-tab-safety iso boot-grub
 
@@ -345,18 +345,18 @@ boot-grub: iso
 
 # Run boot image under QEMU, logging serial output
 qemu: ## Launch QEMU with built image and capture serial log
-	@command -v qemu-system-x86_64 >/dev/null 2>&1 || { echo "qemu-system-x86_64 not installed — skipping"; exit 0; }
-	@if [ "$(EFI_AVAILABLE)" != "1" ]; then echo "gnu-efi headers not found — skipping qemu"; \
-	else mkdir -p out; \
-	if [ ! -f out/BOOTX64.EFI ]; then \
-	     echo "Missing out/BOOTX64.EFI; run 'make kernel'"; exit 1; fi; \
-	if [ ! -f out/cohesix.iso ]; then ./make_iso.sh; fi; \
-	[ -f out/cohesix.iso ] || { echo "ISO build failed"; exit 1; }; \
-	qemu-system-x86_64 \
-	        -bios /usr/share/qemu/OVMF.fd \
-	    -drive if=pflash,format=raw,file=/usr/share/OVMF/OVMF_VARS.fd \
-	    -cdrom out/cohesix.iso -net none -M q35 -m 256M \
-	    -no-reboot -nographic -serial mon:stdio 2>&1 | tee qemu_serial.log; fi
+       @command -v qemu-system-$(ARCH) >/dev/null 2>&1 || { echo "qemu-system-$(ARCH) not installed — skipping"; exit 0; }
+       @mkdir -p out
+       @if [ ! -f out/cohesix.iso ]; then tools/make_iso.sh; fi
+       @[ -f out/cohesix.iso ] || { echo "ISO build failed"; exit 1; }
+       @if [ "$(ARCH)" = "x86_64" ]; then \
+               qemu-system-x86_64 -cdrom out/cohesix.iso -net none -M q35 -m 256M \
+               -no-reboot -nographic -serial mon:stdio 2>&1 | tee qemu_serial.log; \
+       else \
+               qemu-system-aarch64 -machine virt -cpu cortex-a53 -m 256M \
+               -cdrom out/cohesix.iso -net none -nographic -no-reboot \
+               -serial mon:stdio 2>&1 | tee qemu_serial.log; \
+       fi
 
 # Verify QEMU boot log and fail on BOOT_FAIL
 qemu-check: ## Check qemu_serial.log for BOOT_OK and fail on BOOT_FAIL
