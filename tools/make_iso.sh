@@ -92,6 +92,9 @@ fi
 if [ -n "${CLOUD_HOOK_URL:-}" ]; then
     echo "$CLOUD_HOOK_URL" > "$ISO_ROOT/etc/cloud_hook"
 fi
+if [ ! -f "$ROOT/etc/cloud.toml" ] && [ -z "${CLOUD_HOOK_URL:-}" ]; then
+    echo "[make_iso] Warning: CLOUD_HOOK_URL unset and etc/cloud.toml missing" >&2
+fi
 
 "${MKISO[@]}" -R -J -o "$ISO_OUT" "$ISO_ROOT"
 

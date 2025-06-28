@@ -38,6 +38,8 @@ This guide describes how to deploy Cohesix in a cloud-native setup where the Que
 | `COHESIX_SRV_ROOT`    | `/tmp/srv`                     | Redirects /srv in non-root setups.      |
 | `NO_CUDA`             | `1`                            | Disables CUDA initialization.           |
 
+If `CLOUD_HOOK_URL` is not set, place the hook URL in `/etc/cloud.toml` so `make_iso.sh` can embed it during ISO creation.
+
 ### Example QueenPrimary start
 ```bash
 export COHROLE=QueenPrimary
