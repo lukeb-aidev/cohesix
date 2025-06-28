@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: trace_validator_runtime.rs v0.4
-// Date Modified: 2026-11-07
+// Filename: trace_validator_runtime.rs v0.5
+// Date Modified: 2026-11-08
 // Author: Lukas Bower
 
 use std::fs;
@@ -9,7 +9,7 @@ use cohesix::plan9::namespace::Namespace;
 use cohesix::syscall::apply_ns;
 use serial_test::serial;
 
-fn attempt_mount_or_namespace_op() -> std::io::Result<()> {
+fn attempt_apply_namespace() -> std::io::Result<()> {
     let mut ns = Namespace::default();
     apply_ns(&mut ns)
 }
@@ -30,8 +30,8 @@ fn mount_permission_policy_matrix() {
         "SimulatorTest",
     ] {
         std::env::set_var("COHROLE", role);
-        let result = attempt_mount_or_namespace_op();
-        println!("Mount result under {}: {:?}", role, result);
+        let result = attempt_apply_namespace();
+        println!("ApplyNamespace result under {}: {:?}", role, result);
 
         if role.contains("Queen") {
             assert!(result.is_ok(), "Expected success for {}", role);
