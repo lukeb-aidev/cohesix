@@ -2243,3 +2243,7 @@
 ### Changed
 - Split `mount_permission_policy_matrix` into `mount_permission_matrix` and
   `apply_namespace_permission_matrix` for clearer role enforcement.
+
+## [v0.327] - 2026-11-10
+### Changed
+- Rewrote `trace_validator_runtime.rs` to enforce role permissions with serial tests and detailed logging.
