@@ -1,127 +1,122 @@
-# CLASSIFICATION: COMMUNITY
-# Filename: tools/make_iso.sh v0.6
-# Author: Lukas Bower
-# Date Modified: 2026-10-10
+// CLASSIFICATION: COMMUNITY
+// Filename: tools/make_iso.sh v0.7
+// Author: Lukas Bower
+// Date Modified: 2026-10-16
 #!/usr/bin/env bash
 set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-ISO_ROOT="$ROOT/out/iso_root"
+ISO_ROOT="$ROOT/out/iso"
 ISO_OUT="$ROOT/out/cohesix.iso"
-KERNEL_SRC="$ROOT/out/BOOTX64.EFI"
+ROLE="${1:-${COHROLE:-QueenPrimary}}"
 
-error(){ echo "[make_iso] $1" >&2; exit 1; }
+cleanup() {
+    [ -d "$ISO_ROOT" ] && rm -rf "$ISO_ROOT"
+}
+trap cleanup EXIT
 
-if command -v xorriso >/dev/null 2>&1; then
-    MKISO=(xorriso -as mkisofs)
-elif command -v mkisofs >/dev/null 2>&1; then
-    MKISO=(mkisofs)
-else
-    error "xorriso or mkisofs required"
+mkdir -p "$ISO_ROOT/boot/grub" "$ISO_ROOT/bin" "$ISO_ROOT/usr/bin" \
+         "$ISO_ROOT/usr/cli" "$ISO_ROOT/usr/share/man" "$ISO_ROOT/usr/share/cohesix/man" \
+         "$ISO_ROOT/etc" "$ISO_ROOT/roles" "$ISO_ROOT/srv" "$ISO_ROOT/home/cohesix"
+
+KERNEL_SRC="$ROOT/out/bin/kernel.elf"
+ROOT_SRC="$ROOT/out/cohesix_root.elf"
+
+[ -f "$KERNEL_SRC" ] || { echo "kernel.elf missing at $KERNEL_SRC" >&2; exit 1; }
+[ -f "$ROOT_SRC" ] || { echo "userland.elf missing at $ROOT_SRC" >&2; exit 1; }
+
+cp "$KERNEL_SRC" "$ISO_ROOT/boot/kernel.elf"
+cp "$ROOT_SRC" "$ISO_ROOT/boot/userland.elf"
+
+if [ -f "$ROOT/out/boot/config.yaml" ]; then
+    cp "$ROOT/out/boot/config.yaml" "$ISO_ROOT/boot/config.yaml"
+fi
+[ -f "$ROOT/bootargs.txt" ] && cp "$ROOT/bootargs.txt" "$ISO_ROOT/boot/bootargs.txt"
+
+# BusyBox and shell
+if [ -x "$ROOT/out/bin/busybox" ]; then
+    cp "$ROOT/out/bin/busybox" "$ISO_ROOT/bin/busybox"
+    for a in ash sh ls cp mv echo mount cat ps kill; do
+        ln -sf busybox "$ISO_ROOT/bin/$a"
+    done
 fi
 
-[ -f "$KERNEL_SRC" ] || error "Missing kernel $KERNEL_SRC"
-
-rm -rf "$ISO_ROOT"
-mkdir -p "$ISO_ROOT"/{{bin,usr/bin,usr/share/cohesix/man,etc,roles,srv,home/cohesix,EFI/BOOT}}
-# Include optional miniroot for early shell testing
-if [ -d "$ROOT/userland/miniroot" ]; then
-    cp -a "$ROOT/userland/miniroot" "$ISO_ROOT/miniroot"
-fi
-
-# Kernel and bootloader
-cp "$KERNEL_SRC" "$ISO_ROOT/EFI/BOOT/bootx64.efi"
-cp "$KERNEL_SRC" "$ISO_ROOT/kernel.efi"
-
-# Copy runtime binaries
-if [ -d "$ROOT/out/bin" ]; then
-    cp -a "$ROOT/out/bin/." "$ISO_ROOT/bin/"
-fi
-
-# CLI wrappers
-for tool in cohcli cohcap cohtrace cohrun cohbuild cohcc cohshell.sh; do
-    if [ -f "$ROOT/bin/$tool" ]; then
-        dest="$tool"
-        [ "$tool" = "cohshell.sh" ] && dest="cohesix-shell"
-        cp "$ROOT/bin/$tool" "$ISO_ROOT/usr/bin/$dest"
+# CLI tools
+for t in cohcli cohcap cohtrace cohrun cohbuild cohcc cohshell.sh; do
+    if [ -f "$ROOT/bin/$t" ]; then
+        dest="$t"
+        [ "$t" = "cohshell.sh" ] && dest="cohesix-shell"
+        cp "$ROOT/bin/$t" "$ISO_ROOT/usr/bin/$dest"
         chmod +x "$ISO_ROOT/usr/bin/$dest"
     fi
 done
 ln -sf cohcli "$ISO_ROOT/usr/bin/cohesix"
 
-# BusyBox and shell
-if [ -x "$ROOT/out/bin/busybox" ]; then
-    cp "$ROOT/out/bin/busybox" "$ISO_ROOT/bin/busybox"
-    for app in ash sh ls cp mv echo mount cat ps kill; do
-        ln -sf busybox "$ISO_ROOT/bin/$app"
-    done
+# Go helpers
+if [ -d "$ROOT/go/bin" ]; then
+    cp -r "$ROOT/go/bin/." "$ISO_ROOT/usr/cli/" 2>/dev/null || true
+    if [ -f "$ROOT/go/bin/coh-9p-helper" ]; then
+        mkdir -p "$ISO_ROOT/srv/9p"
+        cp "$ROOT/go/bin/coh-9p-helper" "$ISO_ROOT/srv/9p/"
+    fi
 fi
 
-command -v bash >/dev/null 2>&1 && ln -sf "$(command -v bash)" "$ISO_ROOT/bin/bash"
-ln -sf /usr/bin/python3 "$ISO_ROOT/usr/bin/python3"
+# Python runtime modules
+[ -d "$ROOT/python" ] && cp -r "$ROOT/python" "$ISO_ROOT/home/cohesix" 2>/dev/null || true
 
 # Man pages
 if [ -d "$ROOT/docs/man" ]; then
-    cp "$ROOT"/docs/man/*.1 "$ISO_ROOT/usr/share/cohesix/man/"
+    cp "$ROOT"/docs/man/*.1 "$ISO_ROOT/usr/share/man/" 2>/dev/null || true
+    cp "$ROOT"/docs/man/*.8 "$ISO_ROOT/usr/share/man/" 2>/dev/null || true
 fi
-if [ -f "$ROOT/bin/man" ]; then
-    cp "$ROOT/bin/man" "$ISO_ROOT/usr/bin/man" && chmod +x "$ISO_ROOT/usr/bin/man"
-fi
-if [ -f "$ROOT/bin/mandoc" ]; then
-    cp "$ROOT/bin/mandoc" "$ISO_ROOT/bin/mandoc" && chmod +x "$ISO_ROOT/bin/mandoc"
-fi
+[ -f "$ROOT/bin/mandoc" ] && cp "$ROOT/bin/mandoc" "$ISO_ROOT/bin/mandoc" && chmod +x "$ISO_ROOT/bin/mandoc"
+[ -f "$ROOT/bin/man" ] && cp "$ROOT/bin/man" "$ISO_ROOT/bin/man" && chmod +x "$ISO_ROOT/bin/man"
 
-# Configuration files
-cp -a "$ROOT/etc/." "$ISO_ROOT/etc/" 2>/dev/null || true
+# plan9 namespace and test boot script
+if [ -f "$ROOT/config/plan9.ns" ]; then
+    cp "$ROOT/config/plan9.ns" "$ISO_ROOT/etc/plan9.ns"
+fi
+[ -f "$ROOT/etc/test_boot.sh" ] && cp "$ROOT/etc/test_boot.sh" "$ISO_ROOT/etc/test_boot.sh"
+
+# roles and config
+if [ -d "$ROOT/out/roles" ]; then
+    cp -a "$ROOT/out/roles/." "$ISO_ROOT/roles/"
+fi
 if [ -f "$ROOT/out/etc/cohesix/config.yaml" ]; then
     mkdir -p "$ISO_ROOT/etc/cohesix"
     cp "$ROOT/out/etc/cohesix/config.yaml" "$ISO_ROOT/etc/cohesix/config.yaml"
 fi
-if [ -d "$ROOT/out/roles" ]; then
-    cp -a "$ROOT/out/roles/." "$ISO_ROOT/roles/"
-fi
-[ -f "$ISO_ROOT/etc/cohesix/config.yaml" ] || error "config.yaml missing"
+[ -f "$ISO_ROOT/etc/cohesix/config.yaml" ] || { echo "config.yaml missing" >&2; exit 1; }
 
-# Optional role file
-[ -f "$ROOT/out/srv/cohrole" ] && cp "$ROOT/out/srv/cohrole" "$ISO_ROOT/srv/cohrole"
+# Optional miniroot for early shell testing
+[ -d "$ROOT/userland/miniroot" ] && cp -a "$ROOT/userland/miniroot" "$ISO_ROOT/miniroot"
 
-# Cloud hook configuration
-if [ -f "$ROOT/etc/cloud.toml" ]; then
-    cp "$ROOT/etc/cloud.toml" "$ISO_ROOT/etc/cloud.toml"
-fi
-if [ -n "${CLOUD_HOOK_URL:-}" ]; then
-    echo "$CLOUD_HOOK_URL" > "$ISO_ROOT/etc/cloud_hook"
-fi
-if [ ! -f "$ROOT/etc/cloud.toml" ] && [ -z "${CLOUD_HOOK_URL:-}" ]; then
-    echo "[make_iso] Warning: CLOUD_HOOK_URL unset and etc/cloud.toml missing" >&2
-fi
+cat >"$ISO_ROOT/boot/grub/grub.cfg" <<CFG
+set default=0
+set timeout=0
+set CohRole=${ROLE}
+menuentry "Cohesix" {
+  multiboot2 /boot/kernel.elf
+  module /boot/userland.elf CohRole=\${CohRole}
+  module /boot/config.yaml
+  module /boot/bootargs.txt
+}
+CFG
 
-"${MKISO[@]}" -R -J -o "$ISO_OUT" "$ISO_ROOT"
+command -v grub-mkrescue >/dev/null 2>&1 || { echo "grub-mkrescue not found" >&2; exit 1; }
 
-# Validation step
+grub-mkrescue -o "$ISO_OUT" "$ISO_ROOT" >/dev/null 2>&1
+
 validate(){
-    local root="$1"; local ok=0; local fail=0
-    check(){ [ -e "$root/$1" ]; }
-    exec_check(){ [ -x "$root/$1" ]; }
-
+    local r="$1"; local fail=0
     for t in cohesix cohcap cohtrace cohrun cohbuild cohcc cohesix-shell; do
-        exec_check "usr/bin/$t" || { echo "Missing $t"; fail=1; }
-        check "usr/share/cohesix/man/${t%.sh}.1" || { echo "Man page missing for $t"; fail=1; }
+        [ -x "$r/usr/bin/$t" ] || { echo "Missing $t"; fail=1; }
+        [ -f "$r/usr/share/man/${t%.sh}.1" ] || { echo "Man page missing for $t"; fail=1; }
     done
-    exec_check "usr/bin/python3" || { echo "python3 missing"; fail=1; }
-    exec_check "bin/busybox" || { echo "busybox missing"; fail=1; }
-    exec_check "usr/bin/man" || { echo "man tool missing"; fail=1; }
-    check "etc/cohesix/config.yaml" || { echo "config.yaml missing"; fail=1; }
-    if ! check "srv/cohrole" && ! check "etc/cohrole"; then
-        echo "cohrole missing"; fail=1
-    fi
-    check "miniroot/bin/echo" || { echo "miniroot missing"; fail=1; }
-    check "etc/test_boot.sh" || { echo "test_boot.sh missing"; fail=1; }
+    [ -x "$r/bin/busybox" ] || { echo "busybox missing"; fail=1; }
+    [ -f "$r/etc/cohesix/config.yaml" ] || { echo "config.yaml missing"; fail=1; }
     [ $fail -eq 0 ] || { echo "ISO validation failed"; exit 1; }
     echo "ISO validation passed"
 }
 
 validate "$ISO_ROOT"
-
-# Boot test hint
-# Run: qemu-system-x86_64 -cdrom "$ISO_OUT" -m 512M -nographic -no-reboot

@@ -2106,3 +2106,10 @@
 - `cohesix_fetch_build.sh` v0.71 now clones the repository before sourcing
   `load_arch_config.sh` and verifies its presence.
 
+## [v0.303] - 2026-10-16
+### Changed
+- Merged ISO build scripts into tools/make_iso.sh.
+- Removed BOOTX64.EFI references; GRUB loads kernel.elf and userland.elf.
+### Added
+- ISO builder stages CLI tools, BusyBox, cohesix-shell, Go helpers, and man pages.
+

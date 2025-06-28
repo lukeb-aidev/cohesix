@@ -40,7 +40,7 @@ def run(cmd: List[str]) -> int:
 def build_all(root: Path) -> int:
     scripts = [
         root / "scripts" / "build_root_elf.sh",
-        root / "scripts" / "make_iso.sh",
+        root / "tools" / "make_iso.sh",
     ]
     for s in scripts:
         if not s.exists():
