@@ -2217,3 +2217,8 @@
 ### Changed
 - `bind_overlay_order` now sets `COHROLE` to `QueenPrimary` and matches on the
   result. A subtest verifies `PermissionDenied` for `DroneWorker`.
+
+## [v0.322] - 2026-11-05
+### Changed
+- `tests/test_syscall_queue.rs` v1.2 validates dispatch results for `DroneWorker`
+  and asserts `Spawn`/`Exec` are denied for `QueenPrimary`.
