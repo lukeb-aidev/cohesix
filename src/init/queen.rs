@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: queen.rs v0.5
+// Filename: queen.rs v0.6
 // Author: Lukas Bower
-// Date Modified: 2026-10-10
+// Date Modified: 2026-10-11
 #![cfg(not(target_os = "uefi"))]
 
 //! seL4 root task hook for the Queen role.
@@ -11,12 +11,12 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use ureq::Agent;
 
-use crate::plan9::namespace::NamespaceLoader;
-use cohesix_9p::fs::InMemoryFs;
 use crate::boot::plan9_ns::load_namespace;
+use crate::cloud::orchestrator::CloudOrchestrator;
+use crate::plan9::namespace::NamespaceLoader;
 use crate::runtime::ServiceRegistry;
+use cohesix_9p::fs::InMemoryFs;
 use serde_json;
-use crate::cloud::orchestrator::{register_queen, send_heartbeat};
 
 fn log(msg: &str) {
     match OpenOptions::new().append(true).open("/dev/log") {
@@ -63,18 +63,18 @@ pub fn start() {
     // initialize world state summary
     fs::create_dir_all("/srv/world_state").ok();
     let world = serde_json::json!({"workers": [], "active_traces": [], "telemetry": {}});
-    let _ = fs::write("/srv/world_state/world.json", serde_json::to_string(&world).unwrap());
+    let _ = fs::write(
+        "/srv/world_state/world.json",
+        serde_json::to_string(&world).unwrap(),
+    );
     let _ = ServiceRegistry::register_service("telemetry", "/srv/telemetry");
     let _ = ServiceRegistry::register_service("sim", "/sim");
     let _ = ServiceRegistry::register_service("p9mux", "/srv/p9mux");
 
     if let Ok(url) = std::env::var("CLOUD_HOOK_URL") {
-        match register_queen(&url) {
-            Ok(id) => {
-                let _ = send_heartbeat(id.clone());
-                log(&format!("Registered Queen to cloud: {id}"));
-            }
-            Err(e) => log(&format!("cloud registration failed: {e}")),
+        match CloudOrchestrator::start(&url) {
+            Ok(_) => log("Cloud orchestrator started"),
+            Err(e) => log(&format!("cloud orchestration failed: {e}")),
         }
     }
     // Spawning of initial processes will be added in a future update
