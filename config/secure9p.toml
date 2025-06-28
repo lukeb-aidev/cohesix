@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: secure9p.toml v0.4
+// Filename: secure9p.toml v0.5
 // Author: Lukas Bower
-// Date Modified: 2026-09-30
+// Date Modified: 2026-10-28
 
 [[namespace]]
 agent = "lukas"
@@ -23,6 +23,24 @@ read_only = false
 
 [[policy]]
 agent = "QueenPrimary"
+allow = ["read:/srv", "write:/srv"]
+
+[[namespace]]
+agent = "regional_queen"
+root = "/srv/regional"
+read_only = false
+
+[[policy]]
+agent = "regional_queen"
+allow = ["read:/srv", "write:/srv"]
+
+[[namespace]]
+agent = "bare_metal_queen"
+root = "/srv/bmqueen"
+read_only = false
+
+[[policy]]
+agent = "bare_metal_queen"
 allow = ["read:/srv", "write:/srv"]
 
 [[namespace]]
