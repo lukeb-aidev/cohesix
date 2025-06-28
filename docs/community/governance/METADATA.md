@@ -242,7 +242,7 @@
 | tests/test_runtime_cli.rs | v0.3 | 2026-10-09 | COMMUNITY | | |
 | tests/test_cloud_hooks.rs | v0.4 | 2026-10-28 | COMMUNITY | | |
 | tests/test_cloud_threads.rs | v0.3 | 2026-10-28 | COMMUNITY | | |
-| tests/trace_validator_runtime.rs | v0.5 | 2026-11-08 | COMMUNITY | | |
+| tests/trace_validator_runtime.rs | v0.6 | 2026-11-09 | COMMUNITY | | |
 | tests/test_syscalls.rs | v0.6 | 2026-09-30 | COMMUNITY | | |
 | tests/test_syscall_queue.rs | v1.2 | 2026-11-05 | COMMUNITY | | |
 | tests/test_worker_join.rs | v0.7 | 2026-10-31 | COMMUNITY | | |
