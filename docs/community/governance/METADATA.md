@@ -175,7 +175,6 @@
 | scripts/load_arch_config.sh | v0.1 | 2026-07-25 | COMMUNITY | | |
 | scripts/build_busybox.sh | v0.4 | 2026-01-26 | COMMUNITY | | |
 | scripts/manual_efi_link.sh | v0.5 | 2026-09-08 | COMMUNITY | | |
-| tools/make_iso.sh | v0.7 | 2026-10-16 | COMMUNITY | | |
 | metadata.json | v0.1 | 2025-07-24 | COMMUNITY | | |
 | Cargo.toml | v0.29 | 2026-09-30 | COMMUNITY | | |
 | cohesix-9p/Cargo.toml | v0.1 | 2025-07-28 | COMMUNITY | | |
