@@ -2161,3 +2161,5 @@
 ### Changed
 - Permission map updated for `RegionalQueen` and `BareMetalQueen`.
 - Syscall validator matches all roles explicitly.
+- `secure9p.toml` agents normalized to lowercase with underscores
+- Added namespace and policy blocks for `regional_queen` and `bare_metal_queen`
