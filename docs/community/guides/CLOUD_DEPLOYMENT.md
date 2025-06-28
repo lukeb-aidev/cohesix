@@ -103,13 +103,13 @@ COHROLE=QueenPrimary ./target/release/cohesix-shell
 ```bash
 COHROLE=DroneWorker CLOUD_HOOK_URL=http://localhost:8080 ./target/release/cohesix-shell
 ```
-- Use `cohtrace cloud` to view orchestration state.
+ - Use `cohtrace cloud` to view orchestration state and worker roles.
 
 ---
 
 ## ✅ Verifying Deployment
 - Check Queen logs under `/log/trace` for registration and validator activity.
-- Run `cohtrace cloud` on any node to verify Queen ID, last heartbeat, and connected Workers.
+ - Run `cohtrace cloud` on any node to verify Queen ID, last heartbeat, and active Workers with roles.
 
 ---
 
