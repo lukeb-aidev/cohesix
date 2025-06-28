@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: orchestrator.rs v0.5
+// Filename: orchestrator.rs v0.6
 // Author: Lukas Bower
 // Date Modified: 2026-10-28
 #![cfg(not(target_os = "uefi"))]
@@ -12,18 +12,12 @@ use anyhow::Error;
 use serde::Serialize;
 use std::fs;
 use std::io::{self, Write};
-use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tiny_http::{Method, Response, Server};
 use ureq::Agent;
 
 pub type QueenId = String;
 
-fn srv_root() -> PathBuf {
-    std::env::var("COHESIX_SRV_ROOT")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("/srv"))
-}
 
 /// Cloud orchestrator runtime handle.
 pub struct CloudOrchestrator {
@@ -60,14 +54,12 @@ pub fn register_queen(cloud_url: &str) -> Result<QueenId, Error> {
         return Err(anyhow::anyhow!("registration failed: {}", resp.status()));
     }
     let id = resp.into_string().unwrap_or_else(|_| "queen".into());
-    let srv = srv_root();
-    let cloud_dir = srv.join("cloud");
-    println!("Opening file: {:?}", cloud_dir);
-    fs::create_dir_all(&cloud_dir).ok();
-    println!("Opening file: {:?}", cloud_dir.join("queen_id"));
-    fs::write(cloud_dir.join("queen_id"), &id).ok();
-    println!("Opening file: {:?}", cloud_dir.join("url"));
-    fs::write(cloud_dir.join("url"), cloud_url).ok();
+    println!("Opening file: {:?}", crate::with_srv_root!("cloud"));
+    fs::create_dir_all(crate::with_srv_root!("cloud")).ok();
+    println!("Opening file: {:?}", crate::with_srv_root!("cloud/queen_id"));
+    fs::write(crate::with_srv_root!("cloud/queen_id"), &id).ok();
+    println!("Opening file: {:?}", crate::with_srv_root!("cloud/url"));
+    fs::write(crate::with_srv_root!("cloud/url"), cloud_url).ok();
     println!("POST /register sent to {}", url);
     let _ = send_heartbeat(id.clone());
     std::io::stdout().flush().unwrap();
@@ -86,9 +78,8 @@ struct Heartbeat<'a> {
 /// Send a status heartbeat to the cloud orchestrator.
 /// Updates `/srv/cloud/state.json` with the latest info.
 pub fn send_heartbeat(id: QueenId) -> Result<(), Error> {
-    let srv = srv_root();
-    println!("Opening file: {:?}", srv.join("cloud/url"));
-    let url = fs::read_to_string(srv.join("cloud/url")).unwrap_or_default();
+    println!("Opening file: {:?}", crate::with_srv_root!("cloud/url"));
+    let url = fs::read_to_string(crate::with_srv_root!("cloud/url")).unwrap_or_default();
     if url.is_empty() {
         return Ok(());
     }
@@ -123,12 +114,12 @@ pub fn send_heartbeat(id: QueenId) -> Result<(), Error> {
     if !(200..300).contains(&resp.status()) {
         return Err(anyhow::anyhow!("heartbeat failed: {}", resp.status()));
     }
-    println!("Opening file: {:?}", srv.join("cloud"));
-    fs::create_dir_all(srv.join("cloud")).ok();
-    println!("Opening file: {:?}", srv.join("cloud/state.json"));
-    fs::write(srv.join("cloud/state.json"), &data).ok();
-    println!("Opening file: {:?}", srv.join("cloud/last_heartbeat"));
-    fs::write(srv.join("cloud/last_heartbeat"), ts.to_string()).ok();
+    println!("Opening file: {:?}", crate::with_srv_root!("cloud"));
+    fs::create_dir_all(crate::with_srv_root!("cloud")).ok();
+    println!("Opening file: {:?}", crate::with_srv_root!("cloud/state.json"));
+    fs::write(crate::with_srv_root!("cloud/state.json"), &data).ok();
+    println!("Opening file: {:?}", crate::with_srv_root!("cloud/last_heartbeat"));
+    fs::write(crate::with_srv_root!("cloud/last_heartbeat"), ts.to_string()).ok();
     let url = url.trim_end_matches('/');
     println!("POST /heartbeat sent to {}", url);
     std::io::stdout().flush().unwrap();
@@ -136,9 +127,8 @@ pub fn send_heartbeat(id: QueenId) -> Result<(), Error> {
 }
 
 fn count_workers() -> usize {
-    let srv = srv_root();
-    println!("Opening file: {:?}", srv.join("agents/active.json"));
-    if let Ok(data) = fs::read_to_string(srv.join("agents/active.json")) {
+    println!("Opening file: {:?}", crate::with_srv_root!("agents/active.json"));
+    if let Ok(data) = fs::read_to_string(crate::with_srv_root!("agents/active.json")) {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&data) {
             return v.as_array().map(|a| a.len()).unwrap_or(0);
         }
@@ -149,9 +139,8 @@ fn count_workers() -> usize {
 fn spawn_command_listener() {
     std::thread::spawn(|| {
         if let Ok(server) = Server::http("0.0.0.0:4070") {
-            let srv = srv_root();
-            println!("Opening file: {:?}", srv.join("cloud/commands"));
-            fs::create_dir_all(srv.join("cloud/commands")).ok();
+            println!("Opening file: {:?}", crate::with_srv_root!("cloud/commands"));
+            fs::create_dir_all(crate::with_srv_root!("cloud/commands")).ok();
             for mut req in server.incoming_requests() {
                 if req.method() == &Method::Post && req.url() == "/command" {
                     let mut body = String::new();
@@ -160,7 +149,7 @@ fn spawn_command_listener() {
                             .duration_since(UNIX_EPOCH)
                             .map(|d| d.as_secs())
                             .unwrap_or(0);
-                        let path = srv.join(format!("cloud/commands/{ts}"));
+                        let path = crate::with_srv_root!(&format!("cloud/commands/{ts}"));
                         println!("Opening file: {:?}", path);
                         let _ = fs::write(&path, body);
                     }
@@ -175,9 +164,8 @@ fn spawn_command_listener() {
 
 /// Placeholder for receiving orchestration commands from the cloud.
 pub fn receive_commands() -> Vec<String> {
-    let srv = srv_root();
-    println!("Opening file: {:?}", srv.join("cloud/commands"));
-    if let Ok(entries) = fs::read_dir(srv.join("cloud/commands")) {
+    println!("Opening file: {:?}", crate::with_srv_root!("cloud/commands"));
+    if let Ok(entries) = fs::read_dir(crate::with_srv_root!("cloud/commands")) {
         let mut cmds = Vec::new();
         for e in entries.flatten() {
             println!("Opening file: {:?}", e.path());
