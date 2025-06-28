@@ -2156,3 +2156,8 @@
 ### Added
 - `RegionalQueen` and `BareMetalQueen` runtime roles
 - Renamed `InteractiveAIBooth` to `InteractiveAiBooth`
+
+## [v0.311] - 2026-10-29
+### Changed
+- `secure9p.toml` agents normalized to lowercase with underscores
+- Added namespace and policy blocks for `regional_queen` and `bare_metal_queen`

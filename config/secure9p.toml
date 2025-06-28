@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: secure9p.toml v0.5
+// Filename: secure9p.toml v0.6
 // Author: Lukas Bower
-// Date Modified: 2026-10-28
+// Date Modified: 2026-10-29
 
 [[namespace]]
 agent = "lukas"
@@ -17,12 +17,12 @@ cert = "cert.pem"
 key = "key.pem"
 
 [[namespace]]
-agent = "QueenPrimary"
+agent = "queen_primary"
 root = "/srv/queen"
 read_only = false
 
 [[policy]]
-agent = "QueenPrimary"
+agent = "queen_primary"
 allow = ["read:/srv", "write:/srv"]
 
 [[namespace]]
@@ -44,12 +44,12 @@ agent = "bare_metal_queen"
 allow = ["read:/srv", "write:/srv"]
 
 [[namespace]]
-agent = "interactive_aibooth"
+agent = "interactive_ai_booth"
 root = "/srv/aibooth"
 read_only = false
 
 [[policy]]
-agent = "interactive_aibooth"
+agent = "interactive_ai_booth"
 allow = ["read:/input/mic", "read:/input/cam", "write:/mnt/ui_in", "write:/mnt/speak", "read:/mnt/face_match"]
 
 [[namespace]]

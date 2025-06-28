@@ -137,7 +137,7 @@
 | .cohesix_env | v0.3 | 2026-07-25 | COMMUNITY | | |
 | cohesix_fetch_build.sh | v0.71 | 2026-10-15 | COMMUNITY | | |
 | CONTRIBUTING.md | v1.1 | 2025-07-23 | COMMUNITY | | |
-| config/secure9p.toml | v0.4 | 2026-09-30 | COMMUNITY | | |
+| config/secure9p.toml | v0.6 | 2026-10-29 | COMMUNITY | | |
 | config/plan9.ns | v0.1 | 2026-08-04 | COMMUNITY | | |
 | src/secure9p/mod.rs | v0.2 | 2025-07-25 | COMMUNITY | | |
 | src/secure9p/auth_handler.rs | v0.4 | 2025-07-31 | COMMUNITY | | |
