@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: syscall.rs v0.4
+// Filename: syscall.rs v0.5
 // Author: Lukas Bower
-// Date Modified: 2026-10-29
+// Date Modified: 2026-11-11
 
 use crate::cohesix_types::{Role, Syscall};
 use crate::syscall::guard::check_permission;
@@ -9,26 +9,51 @@ use crate::validator::record_syscall;
 
 /// Validate a syscall based on static role rules and guard defaults.
 pub fn validate_syscall(role: Role, sc: &Syscall) -> bool {
+    use Role::*;
+    use Syscall::*;
+
     println!("Validator received syscall: {:?}", sc);
-    match role.clone() {
-        Role::QueenPrimary => match sc {
-            Syscall::ApplyNamespace => {
-                log::info!("explicit rule: QueenPrimary may ApplyNamespace");
-                return true;
-            }
-            _ => {}
-        },
-        Role::RegionalQueen => {}
-        Role::BareMetalQueen => {}
-        Role::DroneWorker => {}
-        Role::InteractiveAiBooth => {}
-        Role::KioskInteractive => {}
-        Role::GlassesAgent => {}
-        Role::SensorRelay => {}
-        Role::SimulatorTest => {}
-        Role::Other(_) => {}
-    }
-    let allowed = check_permission(role.clone(), sc);
+
+    let allowed = match (role.clone(), sc) {
+        (
+            QueenPrimary
+            | RegionalQueen
+            | BareMetalQueen
+            | DroneWorker
+            | InteractiveAiBooth
+            | KioskInteractive
+            | GlassesAgent
+            | SensorRelay
+            | SimulatorTest,
+            Mount { .. },
+        ) => true,
+
+        (
+            QueenPrimary
+            | RegionalQueen
+            | BareMetalQueen
+            | DroneWorker
+            | InteractiveAiBooth
+            | KioskInteractive
+            | GlassesAgent
+            | SimulatorTest,
+            Exec { .. },
+        ) => true,
+        (SensorRelay, Exec { .. }) => false,
+
+        (QueenPrimary | RegionalQueen | BareMetalQueen, ApplyNamespace) => true,
+        (
+            DroneWorker
+            | InteractiveAiBooth
+            | KioskInteractive
+            | GlassesAgent
+            | SensorRelay
+            | SimulatorTest,
+            ApplyNamespace,
+        ) => false,
+        _ => check_permission(role.clone(), sc),
+    };
+
     if !allowed {
         println!(
             "Validator fallback deny: syscall {:?} not recognized for role {:?}",

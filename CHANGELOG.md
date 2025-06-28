@@ -2247,3 +2247,8 @@
 ## [v0.327] - 2026-11-10
 ### Changed
 - Rewrote `trace_validator_runtime.rs` to enforce role permissions with serial tests and detailed logging.
+
+## [v0.328] - 2026-11-11
+### Changed
+- Synchronized `validate_syscall` with new permission matrix and expanded
+  `trace_validator_runtime.rs` tests for mount, exec, and namespace.
