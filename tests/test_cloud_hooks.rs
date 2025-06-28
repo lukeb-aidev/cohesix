@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: test_cloud_hooks.rs v0.1
+// Filename: test_cloud_hooks.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2026-10-10
+// Date Modified: 2026-10-25
 
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -21,24 +21,29 @@ fn queen_worker_cloud_flow() {
     let logs = Arc::new(Mutex::new(Vec::new()));
     let log_ref = logs.clone();
     thread::spawn(move || {
-        if let Ok((mut stream, _)) = listener.accept() {
-            let mut buf = [0u8; 512];
-            if let Ok(n) = stream.read(&mut buf) {
-                log_ref
-                    .lock()
-                    .unwrap()
-                    .push(String::from_utf8_lossy(&buf[..n]).to_string());
-                if buf.starts_with(b"POST /register") {
-                    let resp = b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nQ123";
-                    let _ = stream.write_all(resp);
-                } else {
-                    let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+        for _ in 0..2 {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 512];
+                if let Ok(n) = stream.read(&mut buf) {
+                    log_ref
+                        .lock()
+                        .unwrap()
+                        .push(String::from_utf8_lossy(&buf[..n]).to_string());
+                    if buf.starts_with(b"POST /register") {
+                        let resp = b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nQ123";
+                        let _ = stream.write_all(resp);
+                    } else {
+                        let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+                    }
                 }
             }
         }
+        std::io::stdout().flush().ok();
     });
     std::fs::create_dir_all("/srv").ok();
     std::env::set_var("CLOUD_HOOK_URL", format!("http://127.0.0.1:{port}"));
+    println!("CLOUD_HOOK_URL={}", std::env::var("CLOUD_HOOK_URL").unwrap());
+    std::io::stdout().flush().unwrap();
     let id = register_queen(&format!("http://127.0.0.1:{port}")).unwrap();
     send_heartbeat(id).unwrap();
     std::thread::sleep(std::time::Duration::from_millis(50));
