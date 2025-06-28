@@ -1,75 +1,105 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: AGENTS.md v2.3
+// Filename: AGENTS.md v3.1
 // Author: Lukas Bower
-// Date Modified: 2025-06-19
+// Date Modified: 2025-06-28
 
-# Codex Agent Tasks
-This file contains Codex-executable tasks for the Cohesix system.
+# Cohesix Codex Agents
 
-## Task Format
-Each task must include the following fields:
-Task Title
-Description: What Codex should do
-Input: Source files or directories
-Output: Output paths or logs
-Checks: How Codex should verify success
+This file defines agent tasks for Cohesix. These automated agents support the build, test, and deployment pipeline, enforcing architectural principles, secure OS constraints, and cross-role compliance.
 
-## Example Tasks
+---
 
-### Task Title: Validate Kernel Hooks
-Description: Check that kernel and namespace source files include boot and trace validation hooks.
-Input: src/kernel/, src/namespace/
-Output: log/kernel_trace_results.md
-Checks: Validator hooks present. Trace log written to TMPDIR-respecting path. No hardcoded system paths used.
-### Task Title: Verify QEMU Boot Script Robustness
-Description: Ensure `test_boot_efi.sh` checks for QEMU availability, sets TMPDIR, and creates required writable directories.
-Input: test/test_boot_efi.sh
-Output: log/qemu_script_check.md
-Checks: QEMU presence verified. TMPDIR is initialized. No hardcoded paths. Script exits cleanly if QEMU is missing.
+## 📌 Project Context
 
-### Task Title: Check Temp Path Compliance
-Description: Ensure that all Rust tests and runtime modules respect TMPDIR, COHESIX_TRACE_TMP, or COHESIX_ENS_TMP where appropriate.
-Input: tests/, src/
-Output: log/temp_path_check.md
-Checks: All temporary paths use environment variables or OS tempdir. No /tmp or /dev/shm hardcoding.
+Cohesix is a secure OS platform built on seL4 + Plan9 principles with:
+- Role-based trust zones (QueenPrimary, DroneWorker, KioskInteractive, etc.)
+- Secure9P for policy and capability enforcement
+- Namespace and validator control
+- CUDA + Rapier physics modules
+- CLI tools in Rust, Go, Python
+- The custom compiler `cohcc`
 
-### Task Title: Check GUI Orchestrator Compliance
-Description: Confirm that dev mode disables auth and rate limiting, and that middleware stack is correctly ordered.
-Input: go/orchestrator/http/server.go, docs/community/gui_orchestrator.md
-Output: log/gui_check.md
-Checks: All required middleware are registered in the correct order. Dev mode bypasses auth logic.
+Agents run in CI (GitHub Actions) and locally, ensuring consistency, security, and sandbox guarantees across all roles and deployments.
 
-### Task Title: Validate Trace Snapshot Emission
-Description: Confirm that CLI and runtime operations emit trace snapshots to the expected location under COHESIX_TRACE_TMP or TMPDIR.
-Input: src/, cli/, tools/
-Output: log/trace_snapshot_check.md
-Checks: Snapshot files emitted. Trace logs present. Paths respect environment constraints.
+---
 
-### Task Title: Check Watchdog Heartbeat Logs
-Description: Ensure watchdog heartbeats are recorded every 5 minutes and recovery attempts are logged.
-Input: log/watchdog/
-Output: log/watchdog_policy_check.md
-Checks: Heartbeat intervals ≤ 5 minutes. Restart logs present for any stalled tasks.
+## 🚀 Agent Task Format
 
-### Task Title: Verify Role Policy Alignment
-Description: Confirm that runtime role declarations match the entries in ROLE_POLICY.md and that `/srv/cohrole` exposes a valid role.
-Input: docs/community/governance/ROLE_POLICY.md, /srv/cohrole
-Output: log/role_policy_check.md
-Checks: `/srv/cohrole` value exists in ROLE_POLICY.md table. No missing or unknown roles.
+Each agent task specifies:
 
-## Related Documents
-Include references to supporting files to help Codex agents resolve context. Minimum recommended:
-docs/community/governance/INSTRUCTION_BLOCK.md
-docs/community/planning/DEMO_SCENARIOS.md
-docs/private/COMMERCIAL_PLAN.md
+- **Task Title & ID:** Short label plus a unique ID for log filtering
+- **Goal:** What it guarantees
+- **Input:** Files/directories to scan
+- **Output:** Log files written
+- **Checks:** Explicit pass/fail conditions
 
-## Execution Notes
-Codex is automatically triggered by GitHub Actions.
-Agent output is written to log/codex_output.md.
-Build fails if any agent task fails or emits a warning.
+Agents always respect TMPDIR, COHESIX_TRACE_TMP, or COHESIX_ENS_TMP — never hardcoded /tmp or /dev/shm.
 
-Codex executes in a restricted environment. All agent tasks must:
-- Avoid network fetches unless explicitly permitted
-- Use TMPDIR-respecting writable paths
-- Avoid absolute paths or root-only directories
-- Avoid spawning background threads or processes that persist after task completion
+---
+
+## ✅ Example Agent Tasks
+
+### Task Title: Kernel Hook Verification (AGENT:KERNEL_TRACE)
+- **Goal:** Ensure kernel + namespace modules include boot + validator trace hooks.
+- **Input:** src/kernel/, src/namespace/
+- **Output:** log/kernel_trace_check.md
+- **Checks:** Trace hooks and validator calls present on boot.
+- Example log:  
+  `✅ Validator hook found in src/kernel/init.rs`
+
+### Task Title: QEMU Boot ISO Sanity (AGENT:BOOT_ISO_SANITY)
+- **Goal:** Validate `make_iso.sh` produces a bootable ISO that starts validator + shell.
+- **Input:** tools/make_iso.sh, tests/test_bootflow.py
+- **Output:** log/iso_boot_check.md
+- **Checks:** ISO mounts, boots via QEMU, shell launches as QueenPrimary.
+- Example log:  
+  `✅ ISO booted via QEMU. Validator active. Shell running.`
+
+### Task Title: Complete Userland Tool Staging (AGENT:USERLAND_TOOLS)
+- **Goal:** Ensure ISO contains cohesix-shell, CLI tools, cohcc, cohtrace, mandoc, BusyBox.
+- **Input:** tools/make_iso.sh, /out/iso/
+- **Output:** log/userland_tool_check.md
+- **Checks:** All binaries staged under /usr/bin or /bin. Shell responds to CLI commands.
+
+### Task Title: Secure9P + Role Policy Audit (AGENT:ROLE_POLICY_CHECK)
+- **Goal:** Confirm runtime role + validator matches ROLE_POLICY.md and secure9p.toml.
+- **Input:** docs/community/governance/ROLE_POLICY.md, config/secure9p.toml, /srv/cohrole
+- **Output:** log/secure9p_policy_check.md
+- **Checks:** Roles aligned, Secure9P validated.
+
+### Task Title: Watchdog Heartbeat + Recovery (AGENT:WATCHDOG_RECOVERY)
+- **Goal:** Check watchdog heartbeats ≤ 5 min, document restarts.
+- **Input:** log/watchdog/
+- **Output:** log/watchdog_check.md
+- **Checks:** No stale tasks; recovery attempts logged.
+
+---
+
+## 🔍 Supporting Documents
+
+- `docs/community/governance/INSTRUCTION_BLOCK.md` — canonical build + hydration rules
+- `docs/community/governance/ROLE_POLICY.md` — trust zones, Secure9P role definitions
+- `docs/community/planning/DEMO_SCENARIOS.md` — validator + namespace scenario references
+- `docs/private/COMMERCIAL_PLAN.md` — milestones linked to agent enforcement
+
+---
+
+## ⚙️ Execution & Environment Notes
+
+- Agents run under GitHub Actions workflows (x86_64 and aarch64 runners with CUDA fallback) and local CI.
+- Output always written to TMPDIR, COHESIX_TRACE_TMP, or COHESIX_ENS_TMP.
+- Any agent failing its check fails the entire build, with logs captured for review.
+- No absolute system paths, no persistent background tasks.
+
+---
+
+## ✨ Goal of This Agent System
+
+To ensure every build of Cohesix:
+- Boots cleanly via QEMU or Jetson into a validator-protected shell
+- Includes the full userland toolchain (CLI, cohcc, BusyBox, mandoc)
+- Enforces role trust + Secure9P policy
+- Logs watchdog + validator output for audits
+- Aligns 100% with INSTRUCTION_BLOCK.md and the evolving architecture.
+
+✅ With these agents, each build is provably secure, fully testable, and production-grade.
