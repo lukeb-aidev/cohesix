@@ -2207,3 +2207,8 @@
 - Reworked `validator_logs_mount_violation` into a table-driven test named
   `mount_permission_matrix` covering `QueenPrimary`, `SensorRelay`, and
   `GlassesAgent` roles.
+
+## [v0.320] - 2026-11-02
+### Changed
+- Rewrote `validator_matrix_coverage` as a comprehensive table-driven test using
+  the validator permission matrix for all roles and core syscalls.
