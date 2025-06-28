@@ -2145,3 +2145,9 @@
 ## [v0.308] - 2026-10-28
 ### Fixed
 - Cloud threads test now honors COHESIX_SRV_ROOT and binds user-safe ports.
+
+## [v0.309] - 2026-10-28
+### Changed
+- Introduced `with_srv_root!` macro and replaced hardcoded `/srv` paths in
+  orchestrator and namespace loader.
+- Tests now set `COHESIX_SRV_ROOT` to a temporary directory.
