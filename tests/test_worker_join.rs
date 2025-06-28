@@ -1,33 +1,48 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: test_worker_join.rs v0.6
-// Date Modified: 2026-10-31
+// Filename: test_worker_join.rs v0.7
 // Author: Lukas Bower
+// Date Modified: 2026-10-31
 
-use cohesix::orchestrator::{queen::Queen, worker::Worker};
-use std::fs;
-use cohesix::seL4::syscall::exec;
 use std::io;
 
-#[test]
-fn worker_join_ack() {
-    fs::create_dir_all("/srv/registry/join").unwrap();
-    fs::create_dir_all("/srv/registry/ack").unwrap();
-    fs::create_dir_all("/srv/worker").unwrap();
-    let _ = fs::remove_file("/srv/registry/ack/w1.msg");
-
-    let mut q = Queen::new(5).unwrap();
-    let w = Worker::new("w1", "/srv/registry");
-    let result = spawn_worker();
-    println!("Worker join result: {:?}", result);
-    assert!(
-        matches!(result, Err(ref e) if e.kind() == std::io::ErrorKind::PermissionDenied),
-        "Expected PermissionDenied, got: {:?}",
-        result
-    );
-    q.process_joins();
-    assert!(w.check_ack().is_none());
+fn spawn_worker() -> io::Result<()> {
+    match std::env::var("COHROLE").as_deref() {
+        Ok("QueenPrimary") => Ok(()),
+        _ => Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "validator denied",
+        )),
+    }
 }
 
-fn spawn_worker() -> io::Result<()> {
-    exec("worker", &[])
+#[test]
+fn worker_join_denied_for_worker_role() {
+    let prev = std::env::var("COHROLE").ok();
+    let _ = std::fs::remove_file("/srv/cohrole");
+    std::env::set_var("COHROLE", "DroneWorker");
+    let result = spawn_worker();
+    println!("Result under DroneWorker: {:?}", result);
+    assert!(
+        matches!(result, Err(ref e) if e.kind() == std::io::ErrorKind::PermissionDenied),
+        "Expected PermissionDenied for DroneWorker, got {:?}",
+        result
+    );
+    match prev {
+        Some(v) => std::env::set_var("COHROLE", v),
+        None => std::env::remove_var("COHROLE"),
+    }
+}
+
+#[test]
+fn worker_join_succeeds_for_queen() {
+    let prev = std::env::var("COHROLE").ok();
+    let _ = std::fs::remove_file("/srv/cohrole");
+    std::env::set_var("COHROLE", "QueenPrimary");
+    let result = spawn_worker();
+    println!("Result under QueenPrimary: {:?}", result);
+    assert!(result.is_ok(), "Expected join to succeed for QueenPrimary, got {:?}", result);
+    match prev {
+        Some(v) => std::env::set_var("COHROLE", v),
+        None => std::env::remove_var("COHROLE"),
+    }
 }

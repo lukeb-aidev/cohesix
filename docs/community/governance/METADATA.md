@@ -243,7 +243,7 @@
 | tests/test_cloud_hooks.rs | v0.4 | 2026-10-28 | COMMUNITY | | |
 | tests/test_cloud_threads.rs | v0.3 | 2026-10-28 | COMMUNITY | | |
 | tests/test_syscalls.rs | v0.6 | 2026-09-30 | COMMUNITY | | |
-| tests/test_worker_join.rs | v0.6 | 2026-10-31 | COMMUNITY | | |
+| tests/test_worker_join.rs | v0.7 | 2026-10-31 | COMMUNITY | | |
 | tests/introspect_self_diagnosis.rs | v0.2 | 2026-09-15 | COMMUNITY | | |
 | src/bootstrap/sel4_entry.rs | v0.4 | 2026-08-21 | COMMUNITY | | |
 | src/util/mod.rs | v0.2 | 2026-10-28 | COMMUNITY | | |
