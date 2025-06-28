@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: mod.rs v0.2
+// Filename: mod.rs v0.3
 // Author: Lukas Bower
-// Date Modified: 2026-09-30
+// Date Modified: 2026-10-28
 
 //! Role modules for additional Cohesix roles.
 
@@ -15,7 +15,7 @@ pub mod simulator_test;
 /// Dispatch role initialization based on the role string.
 pub fn start_role(role: &str) {
     match role {
-        "InteractiveAIBooth" => interactive_aibooth::start(),
+        "InteractiveAiBooth" => interactive_aibooth::start(),
         "DroneWorker" => drone_worker::start(),
         "KioskInteractive" => kiosk_interactive::start(),
         "GlassesAgent" => glasses_agent::start(),

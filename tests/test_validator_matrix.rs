@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: test_validator_matrix.rs v0.1
+// Filename: test_validator_matrix.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2026-09-30
+// Date Modified: 2026-10-28
 
 use cohesix::cohesix_types::{Role, Syscall, VALID_ROLES};
 use cohesix::validator::syscall::validate_syscall;
@@ -31,8 +31,10 @@ fn validator_matrix_coverage() {
     for role_name in VALID_ROLES {
         let role = match *role_name {
             "QueenPrimary" => Role::QueenPrimary,
+            "RegionalQueen" => Role::RegionalQueen,
+            "BareMetalQueen" => Role::BareMetalQueen,
             "DroneWorker" => Role::DroneWorker,
-            "InteractiveAIBooth" => Role::InteractiveAIBooth,
+            "InteractiveAiBooth" => Role::InteractiveAiBooth,
             "KioskInteractive" => Role::KioskInteractive,
             "GlassesAgent" => Role::GlassesAgent,
             "SensorRelay" => Role::SensorRelay,
