@@ -2212,3 +2212,8 @@
 ### Changed
 - Rewrote `validator_matrix_coverage` as a comprehensive table-driven test using
   the validator permission matrix for all roles and core syscalls.
+
+## [v0.321] - 2026-11-05
+### Changed
+- `bind_overlay_order` now sets `COHROLE` to `QueenPrimary` and matches on the
+  result. A subtest verifies `PermissionDenied` for `DroneWorker`.
