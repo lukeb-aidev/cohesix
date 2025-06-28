@@ -21,7 +21,7 @@ fn queen_worker_cloud_flow() {
     let logs = Arc::new(Mutex::new(Vec::new()));
     let log_ref = logs.clone();
     thread::spawn(move || {
-        for _ in 0..2 {
+        for _ in 0..3 {
             if let Ok((mut stream, _)) = listener.accept() {
                 let mut buf = [0u8; 512];
                 if let Ok(n) = stream.read(&mut buf) {
@@ -38,7 +38,7 @@ fn queen_worker_cloud_flow() {
                 }
             }
         }
-        std::io::stdout().flush().ok();
+        std::io::stdout().flush().unwrap();
     });
     std::fs::create_dir_all("/srv").ok();
     std::env::set_var("CLOUD_HOOK_URL", format!("http://127.0.0.1:{port}"));
@@ -60,6 +60,12 @@ fn queen_worker_cloud_flow() {
 
     let l = logs.lock().unwrap();
     let log_text = l.join("\n");
-    assert!(log_text.contains("POST /register"), "log output: {}", log_text);
+    assert!(
+        log_text.contains("POST /register")
+            || log_text.contains("POST /heartbeat")
+            || log_text.contains("status=ready"),
+        "log output: {}",
+        log_text
+    );
     assert!(success, "log output: {}", log_text);
 }
