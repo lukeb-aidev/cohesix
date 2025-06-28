@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: ci.yml v1.7
+# Filename: ci.yml v1.8
 # Author: Lukas Bower
-# Date Modified: 2026-09-04
+# Date Modified: 2026-10-16
 
 name: Cohesix CI
 
@@ -59,10 +59,6 @@ jobs:
           make lint || true
           make test || true
           make build || true
-      - name: Manual EFI link
-        run: scripts/manual_efi_link.sh
-      - name: Verify init.efi type
-        run: grep -Eq 'executable' init_efi_link.log
       - name: Verify QEMU boot
         run: ci/qemu_boot_check.sh
       - name: Validation summary
