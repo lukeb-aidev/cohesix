@@ -2174,3 +2174,9 @@
 ### Fixed
 - `worker_join_ack` test now sets `COHROLE` to `QueenPrimary` to match
   validator role enforcement.
+
+## [v0.314] - 2026-10-31
+### Fixed
+- `worker_join_ack` now asserts `PermissionDenied` instead of unwrapping the
+  join result. This confirms the validator blocks the syscall for unprivileged
+  roles.
