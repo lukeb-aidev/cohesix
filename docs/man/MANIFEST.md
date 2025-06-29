@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: MANIFEST.md v0.1
+// Filename: MANIFEST.md v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-07-12
+// Date Modified: 2025-06-29
 
 # Manpage Manifest
 
@@ -12,9 +12,12 @@
 | chmod | 1 | change file modes | docs/man/chmod.1 |
 | chown | 1 | change file owner and group | docs/man/chown.1 |
 | cohagent | 1 | agent control utility | docs/man/cohagent.1 |
+| cohbuild | 1 | build orchestrator for Cohesix | docs/man/cohbuild.1 |
 | cohcap | 1 | manage demo capabilities | docs/man/cohcap.1 |
 | cohcc | 1 | compile Cohesix IR modules | docs/man/cohcc.1 |
 | cohcli | 1 | interact with Cohesix | docs/man/cohcli.1 |
+| cohesix | 1 | symlink to cohcli, primary CLI dispatcher | docs/man/cohesix.1 |
+| cohesix-shell | 1 | invoke interactive shell | docs/man/cohesix-shell.1 |
 | cohrole | 1 | display current role | docs/man/cohrole.1 |
 | cohrun | 1 | run Cohesix demo scenarios | docs/man/cohrun.1 |
 | cohtrace | 1 | trace inspection utilities | docs/man/cohtrace.1 |
