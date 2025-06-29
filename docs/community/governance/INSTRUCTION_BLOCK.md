@@ -229,7 +229,14 @@ the header, with verification performed manually or during deferred checks.
 
 ## 10 · Collaboration and Codex Protocol
 
-- Task format: `YYYY-MM-DD`  
+- Task format:
+- **Task Title & ID:** Short label plus unique ID for CI / logs (e.g. FixOverlayMount-042)
+- **Goal:** What the change guarantees (e.g. ensures explicit role validation for Mount/Exec/Namespace)
+- **Input:** Files/directories to read or modify (explicit globs e.g. src/**/*.rs tests/**/*.rs)
+- **Output:** Files generated or updated (logs, diffs, validator_sync.log, build artifacts)
+- **Checks:** Explicit pass/fail conditions (cargo test, pytest, integration scenarios)
+- **Notes:** Any design rationale or security caveats
+
 - Codex Responsibilities: Hydrate, validate, crosslink, archive
   - Classification header checks may be deferred to manual review when CI time is constrained
 - Human Responsibilities: Set intent, resolve ambiguity, approve merges
