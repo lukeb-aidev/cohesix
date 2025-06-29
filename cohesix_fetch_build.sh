@@ -530,19 +530,35 @@ grep -Ei 'error|fail|panic|permission denied|warning' "$LOG_FILE" > "$SUMMARY_ER
 
 if command -v go &> /dev/null; then
   log "🐹 Building Go components..."
-  mkdir -p "$STAGE_DIR/bin"
+
+  # Ensure GOARCH maps correctly
+  if [ "$COH_ARCH" = "aarch64" ]; then
+    GOARCH="arm64"
+  elif [ "$COH_ARCH" = "x86_64" ]; then
+    GOARCH="amd64"
+  else
+    GOARCH="$COH_ARCH"
+  fi
+
+  mkdir -p "$STAGE_DIR/bin" "$STAGE_DIR/usr/bin"
+
   for dir in go/cmd/*; do
     if [ -f "$dir/main.go" ]; then
       name="$(basename "$dir")"
-      log "  compiling $name for $COH_ARCH"
-      if GOOS=linux GOARCH="$COH_ARCH" go build -tags unix -C "$dir" -o "$STAGE_DIR/bin/$name"; then
+      log "  ensuring modules for $name"
+      (cd "$dir" && go mod tidy)
+      log "  compiling $name for $COH_ARCH as GOARCH=$GOARCH"
+      if GOOS=linux GOARCH="$GOARCH" go build -tags unix -C "$dir" -o "$STAGE_DIR/bin/$name"; then
         log "  built $name"
+        cp "$STAGE_DIR/bin/$name" "$STAGE_DIR/usr/bin/$name"
       else
         log "  cross build failed for $name; trying native"
         (cd "$dir" && go build -tags unix -o "$STAGE_DIR/bin/$name") || log "  build failed for $name"
+        cp "$STAGE_DIR/bin/$name" "$STAGE_DIR/usr/bin/$name" 2>/dev/null || true
       fi
     fi
   done
+
   if (cd go && go test ./...); then
     log "✅ Go tests passed"
   else
