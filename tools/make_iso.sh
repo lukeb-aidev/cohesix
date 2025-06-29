@@ -121,10 +121,36 @@ menuentry "Cohesix" {
 }
 CFG
 
+ARCH="$(uname -m)"
+case "$ARCH" in
+  x86_64|amd64)
+    GRUB_TARGET="i386-pc-efi"
+    GRUB_MODULE_PATH="/usr/lib/grub/i386-pc"
+    ;;
+  aarch64|arm64)
+    GRUB_TARGET="arm64-efi"
+    GRUB_MODULE_PATH="/usr/lib/grub/arm64-efi"
+    ;;
+  *)
+    log "❌ Unsupported architecture: $ARCH"
+    exit 1
+    ;;
+esac
+
+log "Detected arch: $ARCH, using GRUB target: $GRUB_TARGET"
+
+if [ ! -d "$GRUB_MODULE_PATH" ]; then
+    log "⚠️  GRUB modules for $GRUB_TARGET not found at $GRUB_MODULE_PATH. Skipping ISO creation."
+    exit 0
+fi
+
 command -v grub-mkrescue >/dev/null 2>&1 || { log "grub-mkrescue not found"; exit 1; }
+command -v xorriso >/dev/null 2>&1 || { log "xorriso not found (required by grub-mkrescue)"; exit 1; }
 
 log "Creating ISO image at $ISO_OUT..."
-grub-mkrescue -o "$ISO_OUT" "$ISO_ROOT" || { log "grub-mkrescue failed"; exit 1; }
+grub-mkrescue -o "$ISO_OUT" "$ISO_ROOT" \
+    --modules="part_gpt efi_gop efi_uga ext2 fat normal iso9660 configfile linux" \
+    || { log "grub-mkrescue failed"; exit 1; }
 
 # Validation
 fail=0
