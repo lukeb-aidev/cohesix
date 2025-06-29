@@ -1,6 +1,6 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: build_busybox.sh v0.4
-# Date Modified: 2026-01-26
+# Filename: build_busybox.sh v0.5
+# Date Modified: 2026-11-16
 # Author: Lukas Bower
 
 #!/usr/bin/env bash
@@ -67,6 +67,8 @@ for ARCH in "${ARCHES[@]}"; do
                  --enable KILL >/dev/null 2>&1 || true
   sed -i 's/# CONFIG_STATIC is not set/CONFIG_STATIC=y/' .config
   make olddefconfig >/dev/null
+  echo "BusyBox config summary:" >&2
+  grep -E '^(CONFIG_STATIC|CONFIG_ASH|CONFIG_SH_IS_ASH|CONFIG_LS|CONFIG_CP|CONFIG_MV|CONFIG_ECHO|CONFIG_MOUNT|CONFIG_CAT|CONFIG_PS|CONFIG_KILL)' .config >&2
   make -j"$(nproc)" >/dev/null
   make CONFIG_PREFIX="$INSTALL_DIR" install >/dev/null
   strip "$INSTALL_DIR/bin/busybox"

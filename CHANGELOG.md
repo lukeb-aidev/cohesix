@@ -2272,3 +2272,8 @@
 ### Added
 - Compiled static `/bin/hello` for aarch64 and staged into the ISO.
 - Updated `test_validator.rs` to validate exec of `/bin/hello`.
+
+## [v0.333] - 2026-11-16
+### Changed
+- `cohesix_fetch_build.sh` now builds BusyBox before Rust binaries.
+- `scripts/build_busybox.sh` prints config summary and bumped to v0.5.
