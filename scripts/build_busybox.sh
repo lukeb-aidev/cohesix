@@ -1,6 +1,6 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: build_busybox.sh v0.5
-# Date Modified: 2026-11-16
+# Filename: build_busybox.sh v0.6
+# Date Modified: 2026-11-17
 # Author: Lukas Bower
 
 #!/usr/bin/env bash
@@ -12,6 +12,7 @@ LOCAL_SRC="$ROOT/third_party/busybox"
 WORK_DIR="$ROOT/build/busybox"
 OUT_DIR="$ROOT/out/busybox"
 OUT_BIN="$ROOT/out/bin"
+ISO_BIN="$ROOT/out/iso/bin"
 SUPPORTED_ARCHS=("x86_64" "aarch64")
 
 msg()  { printf "\e[32m==>\e[0m %s\n" "$*"; }
@@ -23,7 +24,7 @@ for a in "${ARCHES[@]}"; do
   [[ " ${SUPPORTED_ARCHS[*]} " == *" $a "* ]] || die "Unsupported arch: $a"
 done
 
-mkdir -p "$WORK_DIR" "$OUT_DIR" "$OUT_BIN"
+mkdir -p "$WORK_DIR" "$OUT_DIR" "$OUT_BIN" "$ISO_BIN"
 SRC_DIR="$LOCAL_SRC"
 
 for ARCH in "${ARCHES[@]}"; do
@@ -37,7 +38,7 @@ for ARCH in "${ARCHES[@]}"; do
 
   case "$ARCH" in
     x86_64)
-      export CROSS_COMPILE=""
+      unset CROSS_COMPILE
       export CC="gcc"
       ;;
     aarch64)
@@ -46,15 +47,15 @@ for ARCH in "${ARCHES[@]}"; do
       ;;
   esac
 
-  make mrproper >/dev/null || true
-  make defconfig >/dev/null
+  make mrproper || true
+  make defconfig
   scripts/config --enable FEATURE_INSTALLER \
                  --enable APPLET_SYMLINKS \
-                --disable SELINUX \
-                --disable FEATURE_MOUNT_LABEL \
-                --disable TC \
-                --disable FEATURE_TC_INGRESS \
-                --enable STATIC \
+                 --disable SELINUX \
+                 --disable FEATURE_MOUNT_LABEL \
+                 --disable TC \
+                 --disable FEATURE_TC_INGRESS \
+                 --enable CONFIG_STATIC \
                  --enable ASH \
                  --enable SH_IS_ASH \
                  --enable LS \
@@ -64,18 +65,18 @@ for ARCH in "${ARCHES[@]}"; do
                  --enable MOUNT \
                  --enable CAT \
                  --enable PS \
-                 --enable KILL >/dev/null 2>&1 || true
-  sed -i 's/# CONFIG_STATIC is not set/CONFIG_STATIC=y/' .config
-  make olddefconfig >/dev/null
-  echo "BusyBox config summary:" >&2
-  grep -E '^(CONFIG_STATIC|CONFIG_ASH|CONFIG_SH_IS_ASH|CONFIG_LS|CONFIG_CP|CONFIG_MV|CONFIG_ECHO|CONFIG_MOUNT|CONFIG_CAT|CONFIG_PS|CONFIG_KILL)' .config >&2
-  make -j"$(nproc)" >/dev/null
-  make CONFIG_PREFIX="$INSTALL_DIR" install >/dev/null
-  strip "$INSTALL_DIR/bin/busybox"
-  mkdir -p "$OUT_BIN"
+                 --enable KILL
+  make olddefconfig
+  echo "BusyBox config summary:"
+  grep -E '^(CONFIG_STATIC|CONFIG_ASH|CONFIG_SH_IS_ASH|CONFIG_LS|CONFIG_CP|CONFIG_MV|CONFIG_ECHO|CONFIG_MOUNT|CONFIG_CAT|CONFIG_PS|CONFIG_KILL)' .config
+
+  make -j"$(nproc)"
+  make CONFIG_PREFIX="$INSTALL_DIR" install
+  strip "$INSTALL_DIR/bin/busybox" || true
   cp "$INSTALL_DIR/bin/busybox" "$OUT_BIN/busybox"
+  cp "$INSTALL_DIR/bin/busybox" "$ISO_BIN/busybox"
   popd > /dev/null
-  msg "✅ BusyBox built → $INSTALL_DIR/bin/busybox"
+  msg "✅ BusyBox built → $INSTALL_DIR/bin/busybox (also staged to ISO)"
 done
 
 msg "All requested BusyBox builds complete."
