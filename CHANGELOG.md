@@ -2252,3 +2252,9 @@
 ### Changed
 - Synchronized `validate_syscall` with new permission matrix and expanded
   `trace_validator_runtime.rs` tests for mount, exec, and namespace.
+
+## [v0.329] - 2026-11-12
+### Fixed
+- `bind_overlay_order` now uses `apply_ns` for role enforcement.
+- Updated validator permissions for `DroneWorker` and `InteractiveAiBooth` to allow `Exec`.
+- Expanded runtime validator tests to cover overlay namespace application.

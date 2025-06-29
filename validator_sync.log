@@ -9,3 +9,6 @@ KioskInteractive Mount=Y Exec=Y ApplyNamespace=N
 GlassesAgent     Mount=Y Exec=Y ApplyNamespace=N
 SensorRelay      Mount=Y Exec=N ApplyNamespace=N
 SimulatorTest    Mount=Y Exec=Y ApplyNamespace=N
+Overlay namespace apply allowed for QueenPrimary
+Overlay namespace apply allowed for QueenPrimary
+DroneWorker exec permitted

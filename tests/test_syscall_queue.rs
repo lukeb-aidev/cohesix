@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: test_syscall_queue.rs v1.2
+// Filename: test_syscall_queue.rs v1.3
 // Author: Lukas Bower
-// Date Modified: 2026-11-05
+// Date Modified: 2026-11-12
 
 use cohesix::cohesix_types::Syscall;
 use cohesix::sandbox::{dispatcher::SyscallDispatcher, queue::SyscallQueue};
@@ -45,7 +45,7 @@ fn queue_dequeue_dispatch_order() {
         }
 
         if role == "DroneWorker" {
-            assert_eq!(results, vec![true, true, false]);
+            assert_eq!(results, vec![true, true, true]);
         } else {
             assert!(results.is_empty(), "{} should not dispatch", role);
         }

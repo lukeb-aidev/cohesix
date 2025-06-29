@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: test_validator.rs v0.2
-// Date Modified: 2026-10-29
+// Filename: test_validator.rs v0.3
+// Date Modified: 2026-11-12
 // Author: Cohesix Codex
 
 use cohesix::cohesix_types::{Role, Syscall};
@@ -30,15 +30,8 @@ fn run_exec_as(role: &str) -> io::Result<()> {
 }
 
 #[test]
-fn validator_blocks_non_worker_spawn() {
-    assert!(matches!(
-        run_exec_as("DroneWorker"),
-        Err(ref e) if e.kind() == std::io::ErrorKind::PermissionDenied
-    ));
-
+fn validator_allows_worker_exec() {
     if let Err(e) = run_exec_as("DroneWorker") {
-        println!("Got expected error: {:?}", e);
-    } else {
-        panic!("Exec unexpectedly succeeded for DroneWorker");
+        panic!("Exec unexpectedly denied for DroneWorker: {}", e);
     }
 }
