@@ -2302,3 +2302,7 @@
 ## [v0.338] - 2026-11-19
 ### Added
 - PATH_SELF_INTERSECTION.md summarises a sweep-line algorithm for detecting path self-intersections.
+
+## [v0.339] - 2026-11-19
+### Added
+- Implemented sweep-line intersection detection module `src/geometry/sweep_line_intersection.py` with unit tests.
