@@ -456,29 +456,28 @@ EOF
 
 ensure_plan9_ns
 
-log "📂 Staging configuration..."
-mkdir -p "$STAGE_DIR/config"
-CONFIG_SRC=""
-if [ -f config/config.yaml ]; then
-  CONFIG_SRC="config/config.yaml"
-elif [ -f setup/config.yaml ]; then
-  CONFIG_SRC="setup/config.yaml"
-else
-  echo "⚠️ config.yaml missing. Generating fallback..."
-  mkdir -p config
-  cat > config/config.yaml <<EOF
-# Auto-generated fallback config
-system:
-  role: worker
-  trace: true
+# Always create a robust config/config.yaml and stage it
+log "📂 Ensuring configuration file exists..."
+CONFIG_PATH="$ROOT/config/config.yaml"
+mkdir -p "$(dirname "$CONFIG_PATH")"
+cat > "$CONFIG_PATH" <<EOF
+# CLASSIFICATION: COMMUNITY
+# Filename: config.yaml
+# Author: Lukas Bower
+# Date Modified: $(date +%Y-%m-%d)
+role: QueenPrimary
+network:
+  enabled: true
+  interfaces:
+    - eth0
+logging:
+  level: info
 EOF
-  CONFIG_SRC="config/config.yaml"
-fi
-mkdir -p "$STAGE_DIR/config" "$STAGE_DIR/boot" "$ROOT/out/boot"
-cp "$CONFIG_SRC" "$STAGE_DIR/config/config.yaml"
-cp "$CONFIG_SRC" "$STAGE_DIR/boot/config.yaml"
-cp "$CONFIG_SRC" "$ROOT/out/boot/config.yaml"
-log "config.yaml staged from $CONFIG_SRC"
+log "✅ config.yaml created at $CONFIG_PATH"
+
+# Stage config.yaml to ISO
+cp "$CONFIG_PATH" "$STAGE_DIR/etc/cohesix/config.yaml"
+log "✅ config.yaml staged to ISO"
 if ls setup/roles/*.yaml >/dev/null 2>&1; then
   for cfg in setup/roles/*.yaml; do
     role="$(basename "$cfg" .yaml)"
