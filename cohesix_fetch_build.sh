@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.71
+# Filename: cohesix_fetch_build.sh v0.72
 # Author: Lukas Bower
-# Date Modified: 2026-10-15
+# Date Modified: 2026-11-16
 #!/bin/bash
 
 HOST_ARCH="$(uname -m)"
@@ -259,6 +259,7 @@ if find python tests -name '*.py' | grep -q .; then
   mypy python tests --check-untyped-defs
   black --check python tests
 else
+
   log "ℹ️ No Python files detected; skipping lint checks"
 fi
 
