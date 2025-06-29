@@ -475,6 +475,11 @@ logging:
 EOF
 log "✅ config.yaml created at $CONFIG_PATH"
 
+# Also stage config.yaml into out for ISO build
+mkdir -p "$ROOT/out/etc/cohesix"
+cp "$CONFIG_PATH" "$ROOT/out/etc/cohesix/config.yaml"
+log "✅ config.yaml staged to $ROOT/out/etc/cohesix/config.yaml"
+
 # Stage config.yaml to ISO
 mkdir -p "$STAGE_DIR/etc/cohesix"
 cp "$CONFIG_PATH" "$STAGE_DIR/etc/cohesix/config.yaml"
