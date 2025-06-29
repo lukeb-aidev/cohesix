@@ -15,8 +15,8 @@ use std::sync::Mutex;
 
 use thiserror::Error;
 
-use once_cell::sync::Lazy;
 use log::info;
+use once_cell::sync::Lazy;
 
 use crate::cohesix_types::{Role, RoleManifest};
 
@@ -79,7 +79,12 @@ impl ServiceRegistry {
             .get(name)
             .cloned()
             .filter(|h| h.role == role || matches!(role, Role::QueenPrimary));
-        info!("Lookup for service {:?} by {:?}: {}", name, role, opt.is_some());
+        info!(
+            "Lookup for service {:?} by {:?}: {}",
+            name,
+            role,
+            opt.is_some()
+        );
         Ok(opt)
     }
 
@@ -118,6 +123,7 @@ pub struct TestRegistryGuard;
 
 impl TestRegistryGuard {
     pub fn new() -> Self {
+        // ensures clean state before each test
         let _ = ServiceRegistry::clear_all();
         TestRegistryGuard
     }
