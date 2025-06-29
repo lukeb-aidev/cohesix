@@ -44,7 +44,10 @@ fn default_caps() -> HashMap<String, RoleCaps> {
         ),
         (
             "DroneWorker".into(),
-            RoleCaps { verbs: vec!["open".into()], paths: vec!["/sim".into(), "/srv/cuda".into()] },
+            RoleCaps {
+                verbs: vec!["open".into(), "exec".into()],
+                paths: vec!["/sim".into(), "/srv/cuda".into()],
+            },
         ),
         (
             "InteractiveAiBooth".into(),
