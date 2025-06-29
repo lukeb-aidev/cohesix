@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.72
+# Filename: cohesix_fetch_build.sh v0.73
 # Author: Lukas Bower
-# Date Modified: 2026-11-16
+# Date Modified: 2026-11-17
 #!/bin/bash
 
 HOST_ARCH="$(uname -m)"
@@ -263,6 +263,53 @@ else
   log "ℹ️ No Python files detected; skipping lint checks"
 fi
 
+log "🔧 Checking C compiler..."
+if ! command -v gcc >/dev/null 2>&1; then
+  echo "❌ gcc not found. Install with: sudo apt install build-essential" >&2
+  exit 1
+fi
+CC_TEST_C="$(mktemp --suffix=.c coherix_cc_test.XXXX)"
+cat <<'EOF' > "$CC_TEST_C"
+#include <stdio.h>
+int main(void){ printf("hello\n"); return 0; }
+EOF
+CC_TEST_BIN="${CC_TEST_C%.c}"
+if gcc "$CC_TEST_C" -o "$CC_TEST_BIN" >/dev/null 2>&1 && "$CC_TEST_BIN" >/dev/null; then
+  log "✅ C compiler operational"
+  rm -f "$CC_TEST_C" "$CC_TEST_BIN"
+else
+  echo "❌ C compiler or linker failed" >&2
+  rm -f "$CC_TEST_C" "$CC_TEST_BIN"
+  exit 1
+fi
+
+log "🧱 Building C components..."
+if [ -f CMakeLists.txt ]; then
+  mkdir -p build
+  (cd build && cmake .. && make -j$(nproc))
+fi
+
+log "📦 Building BusyBox..."
+scripts/build_busybox.sh "$COH_ARCH"
+BUSYBOX_BIN="out/busybox/$COH_ARCH/bin/busybox"
+if [ -x "$BUSYBOX_BIN" ]; then
+  cp "$BUSYBOX_BIN" "$STAGE_DIR/bin/busybox"
+  for app in sh ls cat echo mount umount; do
+    ln -sf busybox "$STAGE_DIR/bin/$app"
+  done
+  if [ -f "userland/miniroot/bin/init" ]; then
+    cp "userland/miniroot/bin/init" "$STAGE_DIR/bin/init"
+    chmod +x "$STAGE_DIR/bin/init"
+  fi
+  if [ -f "userland/miniroot/bin/rc" ]; then
+    cp "userland/miniroot/bin/rc" "$STAGE_DIR/bin/rc"
+    chmod +x "$STAGE_DIR/bin/rc"
+  fi
+else
+  echo "❌ BusyBox build failed" >&2
+  exit 1
+fi
+
 log "🧱 Building Rust components..."
 if [[ "$(uname -m)" == "aarch64" ]]; then
   COHESIX_TARGET="aarch64-unknown-linux-gnu"
@@ -504,53 +551,6 @@ if command -v pytest &> /dev/null; then
 fi
 if command -v flake8 &> /dev/null; then
   flake8 python tests
-fi
-
-log "🔧 Checking C compiler..."
-if ! command -v gcc >/dev/null 2>&1; then
-  echo "❌ gcc not found. Install with: sudo apt install build-essential" >&2
-  exit 1
-fi
-CC_TEST_C="$(mktemp --suffix=.c coherix_cc_test.XXXX)"
-cat <<'EOF' > "$CC_TEST_C"
-#include <stdio.h>
-int main(void){ printf("hello\n"); return 0; }
-EOF
-CC_TEST_BIN="${CC_TEST_C%.c}"
-if gcc "$CC_TEST_C" -o "$CC_TEST_BIN" >/dev/null 2>&1 && "$CC_TEST_BIN" >/dev/null; then
-  log "✅ C compiler operational"
-  rm -f "$CC_TEST_C" "$CC_TEST_BIN"
-else
-  echo "❌ C compiler or linker failed" >&2
-  rm -f "$CC_TEST_C" "$CC_TEST_BIN"
-  exit 1
-fi
-
-log "🧱 Building C components..."
-if [ -f CMakeLists.txt ]; then
-  mkdir -p build
-  (cd build && cmake .. && make -j$(nproc))
-fi
-
-log "📦 Building BusyBox..."
-scripts/build_busybox.sh "$COH_ARCH"
-BUSYBOX_BIN="out/busybox/$COH_ARCH/bin/busybox"
-if [ -x "$BUSYBOX_BIN" ]; then
-  cp "$BUSYBOX_BIN" "$STAGE_DIR/bin/busybox"
-  for app in sh ls cat echo mount umount; do
-    ln -sf busybox "$STAGE_DIR/bin/$app"
-  done
-  if [ -f "userland/miniroot/bin/init" ]; then
-    cp "userland/miniroot/bin/init" "$STAGE_DIR/bin/init"
-    chmod +x "$STAGE_DIR/bin/init"
-  fi
-  if [ -f "userland/miniroot/bin/rc" ]; then
-    cp "userland/miniroot/bin/rc" "$STAGE_DIR/bin/rc"
-    chmod +x "$STAGE_DIR/bin/rc"
-  fi
-else
-  echo "❌ BusyBox build failed" >&2
-  exit 1
 fi
 
 log "📖 Building mandoc and staging man pages..."

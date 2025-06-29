@@ -1,5 +1,5 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: build_busybox.sh v0.6
+# Filename: build_busybox.sh v0.7
 # Date Modified: 2026-11-17
 # Author: Lukas Bower
 
