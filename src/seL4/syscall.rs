@@ -18,7 +18,7 @@ use crate::cohesix_types::{RoleManifest, Syscall};
 use crate::runtime::env::init::detect_cohrole;
 
 fn role_allows_exec(role: &str) -> bool {
-    matches!(role, "QueenPrimary" | "SimulatorTest")
+    matches!(role, "QueenPrimary" | "SimulatorTest" | "DroneWorker")
 }
 
 fn log_block(action: &str, path: &str, role: &str) {
