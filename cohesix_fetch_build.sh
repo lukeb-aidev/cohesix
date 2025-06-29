@@ -476,6 +476,7 @@ EOF
 log "✅ config.yaml created at $CONFIG_PATH"
 
 # Stage config.yaml to ISO
+mkdir -p "$STAGE_DIR/etc/cohesix"
 cp "$CONFIG_PATH" "$STAGE_DIR/etc/cohesix/config.yaml"
 log "✅ config.yaml staged to ISO"
 if ls setup/roles/*.yaml >/dev/null 2>&1; then
