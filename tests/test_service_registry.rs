@@ -13,6 +13,7 @@ use std::{env, fs};
 fn register_and_lookup() {
     let _ = env_logger::builder().is_test(true).try_init();
     let _guard = TestRegistryGuard::new();
+    ServiceRegistry::clear_all().unwrap();
     let srv_dir = std::env::temp_dir();
     fs::create_dir_all(&srv_dir).unwrap();
     let _ = fs::remove_file("/srv/cohrole");
@@ -35,6 +36,7 @@ fn register_and_lookup() {
 fn role_visibility() {
     let _ = env_logger::builder().is_test(true).try_init();
     let _guard = TestRegistryGuard::new();
+    ServiceRegistry::clear_all().unwrap();
     let srv_dir = std::env::temp_dir();
     fs::create_dir_all(&srv_dir).unwrap();
     let _ = fs::remove_file("/srv/cohrole");
@@ -57,6 +59,7 @@ fn role_visibility() {
 fn unregister() {
     let _ = env_logger::builder().is_test(true).try_init();
     let _guard = TestRegistryGuard::new();
+    ServiceRegistry::clear_all().unwrap();
     let srv_dir = std::env::temp_dir();
     fs::create_dir_all(&srv_dir).unwrap();
     let _ = fs::remove_file("/srv/cohrole");
