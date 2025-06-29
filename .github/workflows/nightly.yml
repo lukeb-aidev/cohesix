@@ -1,5 +1,5 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: nightly.yml v0.2
+# Filename: nightly.yml v0.3
 # Author: Lukas Bower
 # Date Modified: 2025-07-13
 
@@ -13,6 +13,7 @@ jobs:
   determinism:
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: true
       matrix:
         include:
           - os: ubuntu-latest
@@ -22,17 +23,42 @@ jobs:
             arch: aarch64
             target: aarch64-unknown-linux-gnu
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions-rs/toolchain@v1
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Rust toolchain
+        uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
           override: true
-      - run: rustup target add ${{ matrix.target }}
+
+      - name: Add target for cross-compilation
+        run: rustup target add ${{ matrix.target }}
+        shell: bash
+
       - name: Install cross compiler for aarch64
         if: matrix.arch == 'aarch64'
         run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
-      - run: cargo test --test sim_deterministic --release --target ${{ matrix.target }} | tee sim_test.log
-      - uses: actions/upload-artifact@v3
+        shell: bash
+
+      - name: Cache cargo registry
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Run determinism test
+        run: cargo test --test sim_deterministic --release --target ${{ matrix.target }} | tee sim_test.log
+        continue-on-error: false
+        shell: bash
+
+      - name: Upload simulation logs
+        uses: actions/upload-artifact@v3
         with:
           name: sim-${{ matrix.arch }}-logs
           path: sim_test.log
