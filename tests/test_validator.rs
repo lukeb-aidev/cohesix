@@ -22,7 +22,7 @@ fn run_exec_as(role: &str) -> io::Result<()> {
         "SimulatorTest" => Role::SimulatorTest,
         other => Role::Other(other.to_string()),
     };
-    const EXEC_PATH: &str = "/bin/hello";
+    const EXEC_PATH: &str = "/bin/busybox";
     println!("Using exec path: {}", EXEC_PATH);
     if validate_syscall(role_enum, &Syscall::Exec { path: EXEC_PATH.into() }) {
         Ok(())
