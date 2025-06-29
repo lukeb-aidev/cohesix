@@ -18,12 +18,27 @@ pub fn validate_syscall(role: Role, sc: &Syscall) -> bool {
         (
             QueenPrimary
             | RegionalQueen
+            | BareMetalQueen,
+            ApplyNamespace,
+        ) => true,
+        (
+            DroneWorker
+            | InteractiveAiBooth
+            | KioskInteractive
+            | GlassesAgent
+            | SensorRelay
+            | SimulatorTest,
+            ApplyNamespace,
+        ) => false,
+
+        (
+            QueenPrimary
+            | RegionalQueen
             | BareMetalQueen
             | DroneWorker
             | InteractiveAiBooth
             | KioskInteractive
             | GlassesAgent
-            | SensorRelay
             | SimulatorTest,
             Mount { .. },
         ) => true,
@@ -41,16 +56,6 @@ pub fn validate_syscall(role: Role, sc: &Syscall) -> bool {
         ) => true,
         (SensorRelay, Exec { .. }) => false,
 
-        (QueenPrimary | RegionalQueen | BareMetalQueen, ApplyNamespace) => true,
-        (
-            DroneWorker
-            | InteractiveAiBooth
-            | KioskInteractive
-            | GlassesAgent
-            | SensorRelay
-            | SimulatorTest,
-            ApplyNamespace,
-        ) => false,
         _ => check_permission(role.clone(), sc),
     };
 
