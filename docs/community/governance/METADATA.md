@@ -136,7 +136,7 @@
 | docs/community/architecture/BOOT_KERNEL_FLOW.md | v0.3 | 2026-10-16 | COMMUNITY | | |
 | docs/community/archive/EXAMPLES_README.md | v0.3 | 2026-02-05 | COMMUNITY | | |
 | .cohesix_env | v0.3 | 2026-07-25 | COMMUNITY | | |
-| cohesix_fetch_build.sh | v0.72 | 2026-11-16 | COMMUNITY | | |
+| cohesix_fetch_build.sh | v0.73 | 2026-11-17 | COMMUNITY | | |
 | CONTRIBUTING.md | v1.1 | 2025-07-23 | COMMUNITY | | |
 | config/secure9p.toml | v0.6 | 2026-10-29 | COMMUNITY | | |
 | config/plan9.ns | v0.1 | 2026-08-04 | COMMUNITY | | |
@@ -173,7 +173,7 @@
 | scripts/validate_iso_build.sh | v0.2 | 2026-10-16 | COMMUNITY | | |
 | scripts/build_root_elf.sh | v0.11 | 2026-07-25 | COMMUNITY | | |
 | scripts/load_arch_config.sh | v0.1 | 2026-07-25 | COMMUNITY | | |
-| scripts/build_busybox.sh | v0.5 | 2026-11-16 | COMMUNITY | | |
+| scripts/build_busybox.sh | v0.7 | 2026-11-17 | COMMUNITY | | |
 | metadata.json | v0.1 | 2025-07-24 | COMMUNITY | | |
 | Cargo.toml | v0.29 | 2026-09-30 | COMMUNITY | | |
 | cohesix-9p/Cargo.toml | v0.1 | 2025-07-28 | COMMUNITY | | |
@@ -245,7 +245,7 @@
 | tests/test_cloud_hooks.rs | v0.4 | 2026-10-28 | COMMUNITY | | |
 | tests/test_cloud_threads.rs | v0.3 | 2026-10-28 | COMMUNITY | | |
 | tests/trace_validator_runtime.rs | v0.9 | 2026-11-12 | COMMUNITY | | |
-| tests/test_syscalls.rs | v0.8 | 2026-11-14 | COMMUNITY | | |
+| tests/test_syscalls.rs | v0.9 | 2026-11-17 | COMMUNITY | | |
 | tests/test_syscall_queue.rs | v1.3 | 2026-11-12 | COMMUNITY | | |
 | tests/test_worker_join.rs | v0.7 | 2026-10-31 | COMMUNITY | | |
 | tests/introspect_self_diagnosis.rs | v0.2 | 2026-09-15 | COMMUNITY | | |
