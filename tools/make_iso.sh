@@ -114,9 +114,11 @@ fi
 log "Creating GRUB configuration..."
 cat >"$ISO_ROOT/boot/grub/grub.cfg" <<CFG
 set default=0
-set timeout=0
-set CohRole=${ROLE}
-menuentry "Cohesix" {
+set timeout=5
+if [ "\${CohRole}" == "" ]; then
+    set CohRole=${ROLE}
+fi
+menuentry "Cohesix (Role: \${CohRole})" {
   multiboot2 /boot/kernel.elf
   module /boot/userland.elf CohRole=\${CohRole}
 }
@@ -157,9 +159,9 @@ command -v xorriso >/dev/null 2>&1 || { log "xorriso not found (required by grub
 log "Creating ISO image at $ISO_OUT..."
 MODULES="part_gpt efi_gop ext2 fat normal iso9660 configfile linux"
 if [ "$ARCH" = "x86_64" ] || [ "$ARCH" = "amd64" ]; then
-    MODULES="part_gpt efi_gop efi_uga ext2 fat normal iso9660 configfile linux"
+    MODULES="part_gpt efi_gop efi_uga ext2 fat normal iso9660 configfile linux multiboot2 module"
 elif [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
-    MODULES="part_gpt efi_gop ext2 fat normal iso9660 configfile linux"
+    MODULES="part_gpt efi_gop ext2 fat normal iso9660 configfile linux multiboot2 module"
 fi
 
 log "Using GRUB modules: $MODULES"
