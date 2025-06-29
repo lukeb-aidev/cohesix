@@ -26,8 +26,10 @@ struct ValidationReport {
 pub fn validate_trace(path: &str, worker: &str) -> anyhow::Result<()> {
     let data = fs::read_to_string(path)?;
     let trace: TiltTrace = serde_json::from_str(&data)?;
+    println!("[validator] Loaded trace: offset={} angle={}", trace._offset, trace.angle);
     let angle_ok = trace.angle.abs() < 1.0;
     if !angle_ok {
+        println!("[validator] Angle check failed for worker {worker}, angle={}", trace.angle);
         trust::record_failure(worker);
     }
     let report = ValidationReport {
@@ -40,6 +42,7 @@ pub fn validate_trace(path: &str, worker: &str) -> anyhow::Result<()> {
     fs::create_dir_all(format!("{}/trace/reports", base)).ok();
     let out = format!("{}/trace/reports/{worker}.report.json", base);
     fs::write(&out, serde_json::to_string(&report)?)?;
+    println!("[validator] ValidationReport -> angle_ok={} drift={}", angle_ok, trace.angle);
     println!("[validator] report stored at {out}");
     Ok(())
 }
