@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: test_validator.rs v0.4
-// Date Modified: 2026-11-13
+// Filename: test_validator.rs v0.5
+// Date Modified: 2026-11-14
 // Author: Cohesix Codex
 
 use cohesix::cohesix_types::{Role, Syscall};
@@ -22,7 +22,7 @@ fn run_exec_as(role: &str) -> io::Result<()> {
         "SimulatorTest" => Role::SimulatorTest,
         other => Role::Other(other.to_string()),
     };
-    const EXEC_PATH: &str = "/bin/sh";
+    const EXEC_PATH: &str = "/bin/cohcli";
     println!("Using exec path: {}", EXEC_PATH);
     if validate_syscall(role_enum, &Syscall::Exec { path: EXEC_PATH.into() }) {
         Ok(())
