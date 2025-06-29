@@ -43,6 +43,7 @@ fn role_visibility() {
     let _ = env_logger::builder().is_test(true).try_init();
     let _guard = TestRegistryGuard::new();
     reset_env_and_srv();
+    ServiceRegistry::clear_all().unwrap(); // force clear global state to avoid cross-test residue
     let prev = env::var("COHROLE").ok();
     env::set_var("COHROLE", "DroneWorker");
 
