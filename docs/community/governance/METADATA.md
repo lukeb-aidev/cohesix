@@ -102,6 +102,7 @@
 | CMakeLists.txt | v0.1 | 2025-07-22 | COMMUNITY | | |
 | native/hello.cpp | v0.1 | 2025-07-22 | COMMUNITY | | |
 | native/hello.h | v0.1 | 2025-07-22 | COMMUNITY | | |
+| hello.c | v0.1 | 2026-11-15 | COMMUNITY | | |
 | README_NATIVE.md | v0.1 | 2025-07-22 | COMMUNITY | | |
 
 | src/bootloader/main.c | v0.2 | 2025-07-22 | COMMUNITY | | |
@@ -296,5 +297,5 @@
 | tools/setup_test_targets.sh | v0.1 | 2026-09-30 | COMMUNITY | | |
 | docs/FEATURE_FLAGS.md | v0.1 | 2026-09-30 | COMMUNITY | | |
 | tests/test_validator_matrix.rs | v0.2 | 2026-11-02 | COMMUNITY | | |
-| tests/test_validator.rs | v0.5 | 2026-11-14 | COMMUNITY | | |
+| tests/test_validator.rs | v0.6 | 2026-11-15 | COMMUNITY | | |
 | tests/test_secure9p_config.rs | v0.1 | 2026-09-30 | COMMUNITY | | |
