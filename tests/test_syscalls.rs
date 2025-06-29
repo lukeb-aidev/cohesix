@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: test_syscalls.rs v0.7
-// Date Modified: 2026-11-12
+// Filename: test_syscalls.rs v0.8
+// Date Modified: 2026-11-14
 // Author: Cohesix Codex
 
 use cohesix::cohesix_types::RoleManifest;
@@ -108,13 +108,13 @@ fn file_rw_allowed_for_queen() {
 #[test]
 #[serial]
 fn exec_allowed_for_worker() {
-    let allowed = validate_syscall(Role::DroneWorker, &Syscall::Exec { path: "/bin/test".into() });
+    let allowed = validate_syscall(Role::DroneWorker, &Syscall::Exec { path: "/bin/cohcli".into() });
     assert!(allowed, "DroneWorker exec should be allowed");
 }
 
 #[test]
 #[serial]
 fn exec_allowed_for_simtest() {
-    let allowed = validate_syscall(Role::SimulatorTest, &Syscall::Exec { path: "/bin/test".into() });
+    let allowed = validate_syscall(Role::SimulatorTest, &Syscall::Exec { path: "/bin/cohcli".into() });
     assert!(allowed, "SimulatorTest should be allowed to exec");
 }

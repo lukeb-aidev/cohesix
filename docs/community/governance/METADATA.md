@@ -244,7 +244,7 @@
 | tests/test_cloud_hooks.rs | v0.4 | 2026-10-28 | COMMUNITY | | |
 | tests/test_cloud_threads.rs | v0.3 | 2026-10-28 | COMMUNITY | | |
 | tests/trace_validator_runtime.rs | v0.9 | 2026-11-12 | COMMUNITY | | |
-| tests/test_syscalls.rs | v0.7 | 2026-11-12 | COMMUNITY | | |
+| tests/test_syscalls.rs | v0.8 | 2026-11-14 | COMMUNITY | | |
 | tests/test_syscall_queue.rs | v1.3 | 2026-11-12 | COMMUNITY | | |
 | tests/test_worker_join.rs | v0.7 | 2026-10-31 | COMMUNITY | | |
 | tests/introspect_self_diagnosis.rs | v0.2 | 2026-09-15 | COMMUNITY | | |
@@ -296,5 +296,5 @@
 | tools/setup_test_targets.sh | v0.1 | 2026-09-30 | COMMUNITY | | |
 | docs/FEATURE_FLAGS.md | v0.1 | 2026-09-30 | COMMUNITY | | |
 | tests/test_validator_matrix.rs | v0.2 | 2026-11-02 | COMMUNITY | | |
-| tests/test_validator.rs | v0.4 | 2026-11-13 | COMMUNITY | | |
+| tests/test_validator.rs | v0.5 | 2026-11-14 | COMMUNITY | | |
 | tests/test_secure9p_config.rs | v0.1 | 2026-09-30 | COMMUNITY | | |
