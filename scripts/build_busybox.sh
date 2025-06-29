@@ -49,23 +49,7 @@ for ARCH in "${ARCHES[@]}"; do
 
   make mrproper || true
   make defconfig
-  scripts/config --enable FEATURE_INSTALLER \
-                 --enable APPLET_SYMLINKS \
-                 --disable SELINUX \
-                 --disable FEATURE_MOUNT_LABEL \
-                 --disable TC \
-                 --disable FEATURE_TC_INGRESS \
-                 --enable CONFIG_STATIC \
-                 --enable ASH \
-                 --enable SH_IS_ASH \
-                 --enable LS \
-                 --enable CP \
-                 --enable MV \
-                 --enable ECHO \
-                 --enable MOUNT \
-                 --enable CAT \
-                 --enable PS \
-                 --enable KILL
+  sed -i 's/# CONFIG_STATIC is not set/CONFIG_STATIC=y/' .config
   make olddefconfig
   echo "BusyBox config summary:"
   grep -E '^(CONFIG_STATIC|CONFIG_ASH|CONFIG_SH_IS_ASH|CONFIG_LS|CONFIG_CP|CONFIG_MV|CONFIG_ECHO|CONFIG_MOUNT|CONFIG_CAT|CONFIG_PS|CONFIG_KILL)' .config
