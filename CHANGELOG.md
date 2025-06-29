@@ -2288,3 +2288,7 @@
 - `ServiceRegistry` now exposes `clear_all()` and `TestRegistryGuard` clears the
   registry on drop to prevent test state leakage.
 
+
+## [v0.336] - 2025-06-29
+### Added
+- Added stub man pages for `cohesix`, `cohesix-shell`, and `cohbuild`. Registered in METADATA.

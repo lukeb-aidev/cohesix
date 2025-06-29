@@ -46,15 +46,18 @@
 | CLI_HELP_COHTRACE.md       | v0.1    | 2025-06-15    | COMMUNITY      |     |              |
 | CLI_HELP_COHCC.md          | v0.1    | 2025-06-15    | COMMUNITY      |     |              |
 | CLI_HELP_COHCAP.md         | v0.1    | 2025-06-15    | COMMUNITY      |     |              |
-| MANIFEST.md               | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
+| MANIFEST.md               | v0.2    | 2025-06-29    | COMMUNITY      |     |              |
 | awk.1                     | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
 | cat.1                     | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
 | chmod.1                   | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
 | chown.1                   | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
-| cohagent.1                | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
+| cohagent.1                | v0.1    | 2025-07-12    | COMMUNITY      |     |            |
+| cohbuild.1                | v0.1    | 2025-06-29    | COMMUNITY      |     |            |
 | cohcap.1                  | v0.2    | 2025-07-15    | COMMUNITY      |     |              |
 | cohcc.1                   | v0.3    | 2025-07-17    | COMMUNITY      |     |              |
 | cohcli.1                  | v0.2    | 2025-07-14    | COMMUNITY      |     |              |
+| cohesix.1                | v0.1    | 2025-06-29    | COMMUNITY      |     |            |
+| cohesix-shell.1         | v0.1    | 2025-06-29    | COMMUNITY      |     |            |
 | cohman.1                 | v0.1    | 2025-07-15    | COMMUNITY      |     |
             |
 | cohrole.1                 | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
