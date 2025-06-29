@@ -1,40 +1,72 @@
 // CLASSIFICATION: PRIVATE
 // Filename: mod.rs · HAL x86_64
-// Date Modified: 2025-05-31
+// Date Modified: 2026-11-20
 // Author: Lukas Bower
 //
 // ─────────────────────────────────────────────────────────────
 // Cohesix Hardware Abstraction Layer – x86‑64 implementation
 //
-// Compilable stubs for early‑boot paging and interrupt setup on
-// 64‑bit Intel/AMD platforms.  Real mode/long mode transitions
-// and APIC configuration will be added during a future hydration
-// pass once the final PC-class target is confirmed.
+// Provides early‑boot paging and interrupt setup on 64‑bit
+// Intel/AMD platforms. The initial implementation maps the kernel
+// identity and enables long mode paging. APIC configuration will be
+// expanded in a future hydration pass.
 //
 // ## Public API
-// * [`init_paging`]     – map minimal identity & higher‑half pages.
+// * [`init_paging`]     – allocate page tables and enable paging.
 // * [`init_interrupts`] – initialise Local APIC / IO‑APIC.
 //
-// All functions currently log a debug message and return `Ok(())`.
+// Functions log actions and return `Ok(())` on success.
 // ─────────────────────────────────────────────────────────────
 
-#![forbid(unsafe_code)]
+#![allow(unsafe_code)]
 #![warn(missing_docs)]
 
-use log::debug;
+use log::{debug, info};
 
-/// Set up basic page tables for long mode.
+/// Allocate page tables and enable paging.
 ///
-/// Returns `Ok(())` so higher layers can link successfully.
+/// The kernel is identity-mapped so early boot code can run with paging enabled
+/// without relocating pointers.
 pub fn init_paging() -> Result<(), &'static str> {
-    #[derive(Default)]
-    struct BootPageTable {
-        entries: [u64; 512],
+    use core::arch::asm;
+
+    #[repr(align(4096))]
+    struct Table([u64; 512]);
+
+    static mut PML4: Table = Table([0; 512]);
+    static mut PDPTE: Table = Table([0; 512]);
+    static mut PDE: Table = Table([0; 512]);
+    static mut PT: Table = Table([0; 512]);
+
+    unsafe {
+        // Map first 2 MiB using 4 KiB pages.
+        for i in 0..512 {
+            PT.0[i] = (i as u64 * 0x1000) | 0b11;
+        }
+        PDE.0[0] = (&PT as *const _ as u64) | 0b11;
+        PDPTE.0[0] = (&PDE as *const _ as u64) | 0b11;
+        PML4.0[0] = (&PDPTE as *const _ as u64) | 0b11;
+
+        debug!("HAL/x86_64: page tables created");
+
+        // Load the PML4 into CR3.
+        asm!("mov cr3, {}", in(reg) &PML4 as *const _ as u64);
+
+        // Enable PAE via CR4.PAE
+        let mut cr4: u64;
+        asm!("mov {}, cr4", out(reg) cr4);
+        cr4 |= 1 << 5;
+        asm!("mov cr4, {}", in(reg) cr4);
+
+        // Enable paging via CR0.PG
+        let mut cr0: u64;
+        asm!("mov {}, cr0", out(reg) cr0);
+        cr0 |= 1 << 31;
+        asm!("mov cr0, {}", in(reg) cr0);
     }
 
-    let mut table = BootPageTable::default();
-    table.entries[0] = 0b11; // identity map first page
-    debug!("HAL/x86_64: Boot page table initialised");
+    info!("HAL/x86_64: mapped 0x00000000-0x00200000");
+    info!("HAL/x86_64: Paging enabled");
     Ok(())
 }
 
