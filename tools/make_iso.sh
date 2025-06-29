@@ -1,13 +1,22 @@
 #!/usr/bin/env bash
+# CLASSIFICATION: COMMUNITY
+# Filename: make_iso.sh v0.4
+# Author: Lukas Bower
+# Date Modified: 2026-11-17
+
 set -euo pipefail
 set -x
-set -v
-
-log() {
-    echo "[$(date +%H:%M:%S)] $*"
-}
 
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+LOG_DIR="${LOG_DIR:-$ROOT/log}"
+mkdir -p "$LOG_DIR"
+LOG_FILE="${LOG_FILE:-$LOG_DIR/make_iso.log}"
+: > "$LOG_FILE"
+exec 3>&1
+log() {
+    echo "[$(date +%H:%M:%S)] $*" | tee -a "$LOG_FILE" >&3
+}
+
 ISO_ROOT="$ROOT/out/iso"
 ISO_OUT="$ROOT/out/cohesix.iso"
 ROLE="${1:-${COHROLE:-QueenPrimary}}"
@@ -32,6 +41,9 @@ ROOT_SRC="$ROOT/out/cohesix_root.elf"
 log "Copying kernel and userland binaries..."
 cp "$KERNEL_SRC" "$ISO_ROOT/boot/kernel.elf"
 cp "$ROOT_SRC" "$ISO_ROOT/boot/userland.elf"
+sha256sum "$ISO_ROOT/boot/kernel.elf" | tee -a "$LOG_FILE" >&3
+sha256sum "$ISO_ROOT/boot/userland.elf" | tee -a "$LOG_FILE" >&3
+ls -lh "$ISO_ROOT/boot" | tee -a "$LOG_FILE" >&3
 
 log "Ensuring config.yaml exists..."
 if [ -f "$ROOT/out/etc/cohesix/config.yaml" ]; then
@@ -100,6 +112,8 @@ fi
 # Plan9 namespace and boot scripts
 [ -f "$ROOT/config/plan9.ns" ] && cp "$ROOT/config/plan9.ns" "$ISO_ROOT/etc/plan9.ns"
 [ -f "$ROOT/etc/test_boot.sh" ] && cp "$ROOT/etc/test_boot.sh" "$ISO_ROOT/etc/test_boot.sh"
+[ -f "$ISO_ROOT/etc/plan9.ns" ] || { log "ERROR: /etc/plan9.ns missing"; exit 1; }
+[ -f "$ISO_ROOT/etc/cohesix/config.yaml" ] || { log "ERROR: config.yaml missing in ISO"; exit 1; }
 
 # Roles
 if [ -d "$ROOT/out/roles" ]; then
@@ -110,35 +124,36 @@ fi
 # Miniroot
 [ -d "$ROOT/userland/miniroot" ] && cp -a "$ROOT/userland/miniroot" "$ISO_ROOT/miniroot"
 
-# GRUB config
-log "Creating GRUB configuration..."
-cat >"$ISO_ROOT/boot/grub/grub.cfg" <<CFG
-set default=0
-set timeout=5
-if [ "\${CohRole}" == "" ]; then
-    set CohRole=${ROLE}
-fi
-menuentry "Cohesix (Role: \${CohRole})" {
-  multiboot2 /boot/kernel.elf
-  module /boot/userland.elf CohRole=\${CohRole}
-}
-CFG
-
-ARCH="$(uname -m)"
+ARCH="${COH_ARCH:-$(uname -m)}"
 case "$ARCH" in
   x86_64|amd64)
     GRUB_TARGET="i386-pc-efi"
     GRUB_MODULE_PATH="/usr/lib/grub/i386-pc"
+    GRUB_ENTRY="  multiboot2 /boot/kernel.elf\n  module /boot/userland.elf CohRole=\${CohRole}"
     ;;
   aarch64|arm64)
     GRUB_TARGET="arm64-efi"
     GRUB_MODULE_PATH="/usr/lib/grub/arm64-efi"
+    GRUB_ENTRY="  linux /boot/kernel.elf CohRole=\${CohRole}"
     ;;
   *)
     log "❌ Unsupported architecture: $ARCH"
     exit 1
     ;;
 esac
+
+# GRUB config
+log "Creating GRUB configuration for $ARCH..."
+cat >"$ISO_ROOT/boot/grub/grub.cfg" <<CFG
+set default=0
+set timeout=5
+if [ "\${CohRole}" = "" ]; then
+    set CohRole=${ROLE}
+fi
+menuentry "Cohesix (Role: \${CohRole})" {
+$GRUB_ENTRY
+}
+CFG
 
 log "Detected arch: $ARCH, using GRUB target: $GRUB_TARGET"
 
@@ -152,6 +167,9 @@ if [ ! -d "$GRUB_MODULE_PATH" ]; then
     log "⚠️  GRUB modules for $GRUB_TARGET not found at $GRUB_MODULE_PATH. Skipping ISO creation."
     exit 0
 fi
+if [ "$ARCH" = "x86_64" ] || [ "$ARCH" = "amd64" ]; then
+    [ -f "$GRUB_MODULE_PATH/multiboot2.mod" ] || { log "ERROR: multiboot2.mod missing"; exit 1; }
+fi
 
 command -v grub-mkrescue >/dev/null 2>&1 || { log "grub-mkrescue not found"; exit 1; }
 command -v xorriso >/dev/null 2>&1 || { log "xorriso not found (required by grub-mkrescue)"; exit 1; }
@@ -159,12 +177,11 @@ command -v xorriso >/dev/null 2>&1 || { log "xorriso not found (required by grub
 log "Creating ISO image at $ISO_OUT..."
 MODULES="part_gpt efi_gop ext2 fat normal iso9660 configfile linux"
 if [ "$ARCH" = "x86_64" ] || [ "$ARCH" = "amd64" ]; then
-    MODULES="part_gpt efi_gop efi_uga ext2 fat normal iso9660 configfile linux multiboot2 module"
-elif [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
-    MODULES="part_gpt efi_gop ext2 fat normal iso9660 configfile linux multiboot2 module"
+    MODULES="$MODULES multiboot2"
 fi
 
 log "Using GRUB modules: $MODULES"
+log "DRY-RUN: grub-mkrescue -o $ISO_OUT $ISO_ROOT --modules=\"$MODULES\""
 grub-mkrescue -o "$ISO_OUT" "$ISO_ROOT" \
     --modules="$MODULES" \
     || { log "grub-mkrescue failed"; exit 1; }
@@ -191,5 +208,8 @@ if command -v tree >/dev/null 2>&1; then
 else
     find "$ISO_ROOT"
 fi
+
+log "QEMU x86_64 test: qemu-system-x86_64 -cdrom $ISO_OUT -boot d -m 1024"
+log "QEMU aarch64 test: qemu-system-aarch64 -M virt -cpu cortex-a57 -bios QEMU_EFI.fd -cdrom $ISO_OUT -m 1024"
 
 log "DEBUG: Finished make_iso.sh execution."
