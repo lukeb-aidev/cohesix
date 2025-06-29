@@ -2298,3 +2298,7 @@
 - kernel_boot_userland_fix_report.md summarising partial remediation of boot audit.
 - Minimal boot page table initialisation in HAL modules.
 
+
+## [v0.338] - 2026-11-19
+### Added
+- PATH_SELF_INTERSECTION.md summarises a sweep-line algorithm for detecting path self-intersections.
