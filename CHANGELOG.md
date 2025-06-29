@@ -2277,3 +2277,9 @@
 ### Changed
 - `cohesix_fetch_build.sh` now builds BusyBox before Rust binaries.
 - `scripts/build_busybox.sh` prints config summary and bumped to v0.5.
+
+## [v0.334] - 2026-11-17
+### Changed
+- BusyBox build now staged before Rust and Go builds.
+- Validator tests execute `/bin/busybox`.
+
