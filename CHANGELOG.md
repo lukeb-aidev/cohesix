@@ -2267,3 +2267,8 @@
 ### Fixed
 - Updated `test_validator.rs` to execute `/bin/cohcli` so exec permissions match the ISO.
 - Updated `test_syscalls.rs` to validate exec using `/bin/cohcli`.
+
+## [v0.332] - 2026-11-15
+### Added
+- Compiled static `/bin/hello` for aarch64 and staged into the ISO.
+- Updated `test_validator.rs` to validate exec of `/bin/hello`.
