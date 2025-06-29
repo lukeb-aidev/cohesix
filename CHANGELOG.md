@@ -2292,3 +2292,9 @@
 ## [v0.336] - 2025-06-29
 ### Added
 - Added stub man pages for `cohesix`, `cohesix-shell`, and `cohbuild`. Registered in METADATA.
+
+## [v0.337] - 2026-11-18
+### Added
+- kernel_boot_userland_fix_report.md summarising partial remediation of boot audit.
+- Minimal boot page table initialisation in HAL modules.
+
