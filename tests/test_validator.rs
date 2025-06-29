@@ -22,7 +22,7 @@ fn run_exec_as(role: &str) -> io::Result<()> {
         "SimulatorTest" => Role::SimulatorTest,
         other => Role::Other(other.to_string()),
     };
-    if validate_syscall(role_enum, &Syscall::Exec { path: "/bin/true".into() }) {
+    if validate_syscall(role_enum, &Syscall::Exec { path: "/bin/test".into() }) {
         Ok(())
     } else {
         Err(io::Error::new(io::ErrorKind::PermissionDenied, "exec denied"))
