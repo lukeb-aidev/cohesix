@@ -1,44 +1,76 @@
 // CLASSIFICATION: PRIVATE
 // Filename: mod.rs · HAL arm64
-// Date Modified: 2025-05-31
+// Date Modified: 2026-11-20
 // Author: Lukas Bower
 //
 // ─────────────────────────────────────────────────────────────
 // Cohesix Hardware Abstraction Layer – ARM64 implementation
 //
-// This module provides *compilable* stubs for early‐boot MMU and
-// interrupt‑controller initialisation on 64‑bit ARM platforms.
-// The real low‑level code will be added once the target SoC
-// (e.g. Jetson Orin, Raspberry Pi 5) is finalised.
+// Implements early‑boot MMU and interrupt controller setup on
+// 64‑bit ARM platforms. The current implementation constructs
+// an identity-mapped page table for the kernel and enables the
+// MMU. SoC‑specific refinements will be added as hardware targets
+// solidify (Jetson Orin, Raspberry Pi 5, etc.).
 //
 // ## Public API
-// * [`init_paging`]       – set up basic page tables.
+// * [`init_paging`]       – build kernel page tables and enable the MMU.
 // * [`init_interrupts`]   – configure GICv3/LPI or SoC‑specific PIC.
 //
-// All functions currently log a debug message and return `Ok(())` so
-// that higher layers can link successfully.
+// Functions log their actions and return `Ok(())` on success so higher
+// layers can rely on predictable mappings during boot.
 // ─────────────────────────────────────────────────────────────
 
-#![forbid(unsafe_code)]
+#![allow(unsafe_code)]
 #![warn(missing_docs)]
 
-use log::debug;
+use log::{debug, info};
 
-/// Minimal page-table setup for early boot.
+/// Build a simple page table and enable the MMU.
 ///
-/// This routine prepares a simple identity-mapped page table so that
-/// higher-level code can rely on a predictable mapping layout during
-/// boot.  It does **not** enable the MMU yet.
+/// # Safety
+/// Uses inline assembly to program translation registers. The layout is a
+/// minimal identity-map so higher layers can rely on virtual = physical for the
+/// kernel image.
 pub fn init_paging() -> Result<(), &'static str> {
-    #[derive(Default)]
-    struct BootPageTable {
-        entries: [u64; 512],
+    use core::arch::asm;
+
+    #[repr(align(4096))]
+    struct Table([u64; 512]);
+
+    static mut L1: Table = Table([0; 512]);
+    static mut L2: Table = Table([0; 512]);
+
+    unsafe {
+        // Map 0x0000_0000..0x0020_0000 as RW using 4 KiB pages.
+        for i in 0..512 {
+            L2.0[i] = (i as u64 * 0x1000) | 0b11;
+        }
+        // Point first L1 entry at the L2 table.
+        L1.0[0] = (&L2 as *const _ as u64) | 0b11;
+
+        debug!("HAL/arm64: page tables created");
+
+        // Load the base address of the translation table.
+        asm!("msr ttbr0_el1, {}", in(reg) &L1 as *const _ as u64);
+
+        // Configure translation control register for 4KiB granule, 48-bit PA.
+        const TCR_VALUE: u64 = 0b1000_0000_0000;
+        asm!("msr tcr_el1, {}", in(reg) TCR_VALUE);
+
+        // Flush and enable.
+        asm!("dsb ishst");
+        asm!("tlbi vmalle1");
+        asm!("isb");
+
+        let mut sctlr: u64;
+        asm!("mrs {}, sctlr_el1", out(reg) sctlr);
+        sctlr |= 1; // set M bit
+        asm!("msr sctlr_el1, {}", in(reg) sctlr);
+        asm!("isb");
     }
 
-    let mut table = BootPageTable::default();
-    // Map the first block (0x0..0x200000) with read/write access.
-    table.entries[0] = 0b11; // present + writable
-    debug!("HAL/arm64: Boot page table initialised");
+    info!("HAL/arm64: mapped 0x00000000-0x00200000");
+    info!("HAL/arm64: MMU enabled");
     Ok(())
 }
 

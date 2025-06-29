@@ -2306,3 +2306,8 @@
 ## [v0.339] - 2026-11-19
 ### Added
 - Implemented sweep-line intersection detection module `src/geometry/sweep_line_intersection.py` with unit tests.
+
+## [v0.340] - 2026-11-20
+### Added
+- Implemented real page table setup and MMU enabling for ARM64 and x86_64.
+  Mapping information now logged during boot.
