@@ -50,7 +50,6 @@ for ARCH in "${ARCHES[@]}"; do
   make mrproper || true
   make defconfig
   sed -i 's/# CONFIG_STATIC is not set/CONFIG_STATIC=y/' .config
-  make olddefconfig
   echo "BusyBox config summary:"
   grep -E '^(CONFIG_STATIC|CONFIG_ASH|CONFIG_SH_IS_ASH|CONFIG_LS|CONFIG_CP|CONFIG_MV|CONFIG_ECHO|CONFIG_MOUNT|CONFIG_CAT|CONFIG_PS|CONFIG_KILL)' .config
 
