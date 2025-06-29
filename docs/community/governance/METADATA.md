@@ -302,3 +302,4 @@
 | tests/test_validator_matrix.rs | v0.2 | 2026-11-02 | COMMUNITY | | |
 | tests/test_validator.rs | v0.6 | 2026-11-15 | COMMUNITY | | |
 | tests/test_secure9p_config.rs | v0.1 | 2026-09-30 | COMMUNITY | | |
+| docs/community/PATH_SELF_INTERSECTION.md | v0.1 | 2026-11-19 | COMMUNITY | | |
