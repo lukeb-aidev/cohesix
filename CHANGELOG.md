@@ -2258,3 +2258,7 @@
 - `bind_overlay_order` now uses `apply_ns` for role enforcement.
 - Updated validator permissions for `DroneWorker` and `InteractiveAiBooth` to allow `Exec`.
 - Expanded runtime validator tests to cover overlay namespace application.
+
+## [v0.330] - 2026-11-13
+### Fixed
+- Updated `test_validator.rs` to execute `/bin/sh` to avoid missing binary errors.
