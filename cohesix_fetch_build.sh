@@ -268,13 +268,13 @@ if ! command -v gcc >/dev/null 2>&1; then
   echo "❌ gcc not found. Install with: sudo apt install build-essential" >&2
   exit 1
 fi
-CC_TEST_C="$(mktemp --suffix=.c coherix_cc_test.XXXX)"
+CC_TEST_C="$(mktemp --suffix=.c cohesix_cc_test.XXXX)"
 cat <<'EOF' > "$CC_TEST_C"
 #include <stdio.h>
 int main(void){ printf("hello\n"); return 0; }
 EOF
 CC_TEST_BIN="${CC_TEST_C%.c}"
-if gcc "$CC_TEST_C" -o "$CC_TEST_BIN" >/dev/null 2>&1 && "$CC_TEST_BIN" >/dev/null; then
+if gcc "$CC_TEST_C" -o "$CC_TEST_BIN" >/dev/null 2>&1 && "./$CC_TEST_BIN" >/dev/null; then
   log "✅ C compiler operational"
   rm -f "$CC_TEST_C" "$CC_TEST_BIN"
 else
