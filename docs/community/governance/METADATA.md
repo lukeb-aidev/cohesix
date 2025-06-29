@@ -117,7 +117,7 @@
 | src/kernel/main.c | v0.2 | 2025-07-22 | COMMUNITY | | |
 | src/kernel/main.rs | v0.2 | 2025-08-02 | COMMUNITY | | |
 | src/kernel/proc_mgr.rs | v0.2 | 2025-08-27 | COMMUNITY | | |
-| tests/test_traceflow.py | v0.1 | 2025-07-23 | COMMUNITY | | |
+| tests/test_traceflow.py | v0.4 | 2025-12-20 | COMMUNITY | | |
 | tests/test_invalid_cli.py | v0.1 | 2025-07-23 | COMMUNITY | | |
 | tests/test_9p_read_write.rs | v0.1 | 2025-07-23 | COMMUNITY | | |
 | tests/test_cuda_presence.rs | v0.2 | 2025-12-10 | COMMUNITY | | |
