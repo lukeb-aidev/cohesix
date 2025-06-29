@@ -507,6 +507,12 @@ done
 echo ']}' >> "$MANIFEST"
 
 
+# 🗂 Prepare /srv namespace for tests (clean and set role)
+log "🗂 Preparing /srv namespace for tests..."
+sudo rm -rf /srv
+sudo mkdir -p /srv
+echo "DroneWorker" | sudo tee /srv/cohrole
+
 
 log "🔍 Running Rust tests with detailed output..."
 RUST_BACKTRACE=1 cargo test --release -- --nocapture
