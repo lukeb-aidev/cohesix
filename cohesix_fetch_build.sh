@@ -649,6 +649,27 @@ if [ ! -d "/srv/cuda" ] || ! command -v nvidia-smi >/dev/null 2>&1 || ! nvidia-s
 fi
 
 
+#
+# Additional ISO checks before QEMU boot
+log "🔍 Validating ISO with isoinfo..."
+if command -v isoinfo >/dev/null 2>&1; then
+  isoinfo -i "$ISO_OUT" -l | tee -a "$LOG_FILE" >&3 || true
+  isoinfo -i "$ISO_OUT" -R -f | tee -a "$LOG_FILE" >&3 || true
+else
+  log "⚠️ isoinfo not installed, skipping detailed ISO listing"
+fi
+log "🔍 Extracting GRUB config for review..."
+if command -v xorriso >/dev/null 2>&1; then
+  xorriso -osirrox on -indev "$ISO_OUT" -extract /boot/grub/grub.cfg /tmp/grub.cfg 2>/dev/null || true
+  if [ -f /tmp/grub.cfg ]; then
+    cat /tmp/grub.cfg | tee -a "$LOG_FILE" >&3
+  else
+    log "⚠️ grub.cfg not found in ISO"
+  fi
+else
+  log "⚠️ xorriso not installed, skipping GRUB config extraction"
+fi
+
 # Optional QEMU boot check (architecture-aware)
 ISO_IMG="$ISO_OUT"
 case "$COH_ARCH" in
