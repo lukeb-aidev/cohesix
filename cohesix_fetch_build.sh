@@ -636,8 +636,14 @@ if [ ! -f "$ISO_OUT" ]; then
   echo "❌ ISO build failed: $ISO_OUT missing" >&2
   exit 1
 fi
-du -h "$ISO_OUT" 2>/dev/null | tee -a "$LOG_FILE" >&3
-find "$STAGE_DIR/bin" -type f -print | tee -a "$LOG_FILE" >&3
+# Before cleanup deletes ISO_ROOT
+if [ -d "$STAGE_DIR/bin" ]; then
+  find "$STAGE_DIR/bin" -type f -print | tee -a "$LOG_FILE" >&3 || true
+fi
+if [ -f "$ISO_OUT" ]; then
+  du -h "$ISO_OUT" | tee -a "$LOG_FILE" >&3
+fi
+
 if [ ! -d "/srv/cuda" ] || ! command -v nvidia-smi >/dev/null 2>&1 || ! nvidia-smi >/dev/null 2>&1; then
   echo "⚠️ CUDA hardware or /srv/cuda not detected" | tee -a "$LOG_FILE" >&3
 fi
@@ -678,12 +684,13 @@ else
   log "⚠️ $QEMU_BIN not installed; skipping boot test"
 fi
 
+
 BIN_COUNT=$(find "$STAGE_DIR/bin" -type f -perm -111 | wc -l)
 ROLE_COUNT=$(find "$STAGE_DIR/roles" -name '*.yaml' | wc -l)
 ISO_SIZE_MB=$(du -m "$ISO_OUT" | awk '{print $1}')
 echo "ISO BUILD OK: ${BIN_COUNT} binaries, ${ROLE_COUNT} roles, ${ISO_SIZE_MB}MB total" >&3
-du -h "$ISO_OUT" | tee -a "$LOG_FILE" >&3
-find "$STAGE_DIR/bin" -type f -print | tee -a "$LOG_FILE" >&3
+
+cleanup
 
 log "✅ [Build Complete] $(date)"
 
