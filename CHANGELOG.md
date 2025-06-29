@@ -2262,3 +2262,8 @@
 ## [v0.330] - 2026-11-13
 ### Fixed
 - Updated `test_validator.rs` to execute `/bin/sh` to avoid missing binary errors.
+
+## [v0.331] - 2026-11-14
+### Fixed
+- Updated `test_validator.rs` to execute `/bin/cohcli` so exec permissions match the ISO.
+- Updated `test_syscalls.rs` to validate exec using `/bin/cohcli`.
