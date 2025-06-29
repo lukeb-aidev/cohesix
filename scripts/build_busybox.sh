@@ -6,7 +6,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+ROOT="$(cd "$(dirname "$0")"/../.. && pwd)"
 BUSYBOX_VERSION="1.36.1"
 LOCAL_SRC="$ROOT/third_party/busybox"
 WORK_DIR="$ROOT/build/busybox"
