@@ -648,41 +648,88 @@ if [ ! -d "/srv/cuda" ] || ! command -v nvidia-smi >/dev/null 2>&1 || ! nvidia-s
   echo "⚠️ CUDA hardware or /srv/cuda not detected" | tee -a "$LOG_FILE" >&3
 fi
 
-# Optional QEMU boot check
-QEMU_BIN="qemu-system-${COH_ARCH}"
+
+# Optional QEMU boot check (architecture-aware)
 ISO_IMG="$ISO_OUT"
-if [ -x "$(command -v "$QEMU_BIN" 2>/dev/null)" ]; then
-  if [ ! -f "$ISO_IMG" ]; then
-    echo "❌ ${ISO_IMG} missing in out" >&2
-    exit 1
-  fi
-  TMPDIR="${TMPDIR:-$(mktemp -d)}"
-  LOG_DIR="$PWD/logs"
-  mkdir -p "$LOG_DIR"
-  SERIAL_LOG="$TMPDIR/qemu_boot.log"
-  QEMU_LOG="$LOG_DIR/qemu_boot.log"
-  [ -f "$QEMU_LOG" ] && mv "$QEMU_LOG" "$QEMU_LOG.$(date +%Y%m%d_%H%M%S)"
-  log "🧪 Booting ISO in QEMU (non-EFI)..."
-  qemu-system-aarch64 -M virt -cpu cortex-a57 -m 1024 \
-    -bios none -serial file:"$SERIAL_LOG" -cdrom "$ISO_IMG" -nographic
-  QEMU_EXIT=$?
-  cat "$SERIAL_LOG" >> "$QEMU_LOG" 2>/dev/null || true
-  cat "$SERIAL_LOG" >> "$LOG_FILE" 2>/dev/null || true
-  echo "📜 Boot log (tail):"
-  tail -n 20 "$SERIAL_LOG" || echo "❌ Could not read QEMU log"
-  if [ "$QEMU_EXIT" -ne 0 ]; then
-    echo "❌ QEMU exited with code $QEMU_EXIT" >&2
-    exit 1
-  fi
-  if grep -q "BOOT_OK" "$SERIAL_LOG"; then
-    log "✅ QEMU boot succeeded"
-  else
-    echo "❌ BOOT_OK not found in log" >&2
-    exit 1
-  fi
-else
-  log "⚠️ $QEMU_BIN not installed; skipping boot test"
-fi
+case "$COH_ARCH" in
+  x86_64)
+    if [ -x "$(command -v qemu-system-x86_64 2>/dev/null)" ]; then
+      if [ ! -f "$ISO_IMG" ]; then
+        echo "❌ ${ISO_IMG} missing in out" >&2
+        exit 1
+      fi
+      TMPDIR="${TMPDIR:-$(mktemp -d)}"
+      LOG_DIR="$PWD/logs"
+      mkdir -p "$LOG_DIR"
+      SERIAL_LOG="$TMPDIR/qemu_boot.log"
+      QEMU_LOG="$LOG_DIR/qemu_boot.log"
+      [ -f "$QEMU_LOG" ] && mv "$QEMU_LOG" "$QEMU_LOG.$(date +%Y%m%d_%H%M%S)"
+      log "🧪 Booting ISO in QEMU for x86_64..."
+      qemu-system-x86_64 -m 1024 -cdrom "$ISO_IMG" -boot d -enable-kvm -serial file:"$SERIAL_LOG" -nographic
+      QEMU_EXIT=$?
+      cat "$SERIAL_LOG" >> "$QEMU_LOG" 2>/dev/null || true
+      cat "$SERIAL_LOG" >> "$LOG_FILE" 2>/dev/null || true
+      echo "📜 Boot log (tail):"
+      tail -n 20 "$SERIAL_LOG" || echo "❌ Could not read QEMU log"
+      if [ "$QEMU_EXIT" -ne 0 ]; then
+        echo "❌ QEMU exited with code $QEMU_EXIT" >&2
+        exit 1
+      fi
+      if grep -q "BOOT_OK" "$SERIAL_LOG"; then
+        log "✅ QEMU boot succeeded"
+      else
+        echo "❌ BOOT_OK not found in log" >&2
+        exit 1
+      fi
+    else
+      log "⚠️ qemu-system-x86_64 not installed; skipping boot test"
+    fi
+    ;;
+  aarch64)
+    if [ -x "$(command -v qemu-system-aarch64 2>/dev/null)" ]; then
+      if [ ! -f "$ISO_IMG" ]; then
+        echo "❌ ${ISO_IMG} missing in out" >&2
+        exit 1
+      fi
+      TMPDIR="${TMPDIR:-$(mktemp -d)}"
+      LOG_DIR="$PWD/logs"
+      mkdir -p "$LOG_DIR"
+      SERIAL_LOG="$TMPDIR/qemu_boot.log"
+      QEMU_LOG="$LOG_DIR/qemu_boot.log"
+      [ -f "$QEMU_LOG" ] && mv "$QEMU_LOG" "$QEMU_LOG.$(date +%Y%m%d_%H%M%S)"
+      log "🧪 Booting ISO in QEMU for aarch64..."
+      QEMU_EFI="/usr/share/qemu-efi-aarch64/QEMU_EFI.fd"
+      if [ -f "$QEMU_EFI" ]; then
+        qemu-system-aarch64 -M virt -cpu cortex-a57 -m 1024 \
+          -bios "$QEMU_EFI" \
+          -serial file:"$SERIAL_LOG" -cdrom "$ISO_IMG" -nographic
+      else
+        qemu-system-aarch64 -M virt -cpu cortex-a57 -m 1024 \
+          -bios none -serial file:"$SERIAL_LOG" -cdrom "$ISO_IMG" -nographic
+      fi
+      QEMU_EXIT=$?
+      cat "$SERIAL_LOG" >> "$QEMU_LOG" 2>/dev/null || true
+      cat "$SERIAL_LOG" >> "$LOG_FILE" 2>/dev/null || true
+      echo "📜 Boot log (tail):"
+      tail -n 20 "$SERIAL_LOG" || echo "❌ Could not read QEMU log"
+      if [ "$QEMU_EXIT" -ne 0 ]; then
+        echo "❌ QEMU exited with code $QEMU_EXIT" >&2
+        exit 1
+      fi
+      if grep -q "BOOT_OK" "$SERIAL_LOG"; then
+        log "✅ QEMU boot succeeded"
+      else
+        echo "❌ BOOT_OK not found in log" >&2
+        exit 1
+      fi
+    else
+      log "⚠️ qemu-system-aarch64 not installed; skipping boot test"
+    fi
+    ;;
+  *)
+    echo "Unsupported architecture for QEMU boot: $COH_ARCH" >&2
+    ;;
+esac
 
 
 BIN_COUNT=$(find "$STAGE_DIR/bin" -type f -perm -111 | wc -l)
