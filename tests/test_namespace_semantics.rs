@@ -1,10 +1,11 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: test_namespace_semantics.rs v0.3
-// Date Modified: 2026-11-05
+// Filename: test_namespace_semantics.rs v0.4
+// Date Modified: 2026-11-12
 // Author: Cohesix Codex
 
-use cohesix::plan9::namespace::{NamespaceLoader, NsOp, BindFlags};
+use cohesix::plan9::namespace::{NsOp, BindFlags};
 use cohesix::plan9::namespace::Namespace;
+use cohesix::syscall::apply_ns;
 use cohesix::plan9::srv_registry::{register_srv, lookup_srv};
 use serial_test::serial;
 
@@ -55,23 +56,31 @@ fn bind_overlay_order() {
     // set role to QueenPrimary and expect success
     let prev = env::var("COHROLE").ok();
     env::set_var("COHROLE", "QueenPrimary");
-    match NamespaceLoader::apply(&mut ns) {
+    fs::write("/srv/cohrole", "QueenPrimary").ok();
+    match apply_ns(&mut ns) {
         Ok(_) => assert_eq!(ns.root.get_or_create("/b").mounts.len(), 1),
-        Err(e) => panic!("apply failed for uid {} on {:?}: {}", uid, srv_path, e),
+        Err(e) => panic!("apply_ns failed for uid {} on {:?}: {}", uid, srv_path, e),
     }
 
     // subtest: DroneWorker should be denied
     env::set_var("COHROLE", "DroneWorker");
+    fs::write("/srv/cohrole", "DroneWorker").ok();
     let mut ns_denied = ns.clone();
-    match NamespaceLoader::apply(&mut ns_denied) {
+    match apply_ns(&mut ns_denied) {
         Err(ref e) if e.kind() == ErrorKind::PermissionDenied => (),
         Err(e) => panic!("unexpected error: {}", e),
         Ok(_) => panic!("expected PermissionDenied for DroneWorker"),
     }
 
     match prev {
-        Some(v) => env::set_var("COHROLE", v),
-        None => env::remove_var("COHROLE"),
+        Some(v) => {
+            env::set_var("COHROLE", &v);
+            fs::write("/srv/cohrole", v).ok();
+        }
+        None => {
+            env::remove_var("COHROLE");
+            let _ = fs::remove_file("/srv/cohrole");
+        }
     }
 }
 
