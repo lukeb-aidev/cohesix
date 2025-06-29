@@ -11,17 +11,21 @@ Welcome to the Coh_CC compiler and runtime environment guide for Cohesix. This d
 
 ## Supported Languages
 
-Coh_CC currently supports a streamlined and secure subset of the following languages:
+Coh_CC supports a streamlined, secure subset of languages, each with a clear role:
 
 | Language | Purpose | Notes |
 |----------|---------|-------|
-| **Rust** | Low-level, secure systems code | Recommended for drivers, kernel extensions, and secure agents |
-| **Go** | Userland services and orchestration | Ideal for CLI tools, APIs, and concurrent workflows |
-| **Python** | Tooling, scripts, prototyping | Used for glue logic, simulation, and validator hooks |
-| **C** | Kernel-level patches, legacy code support | Required for seL4 compatibility |
-| **C++ (CUDA)** | GPU workloads on Jetson targets | Used for inference, vector processing, and compute acceleration |
+| **Rust** | Low-level, secure systems code | For drivers, kernel extensions, trusted agents. Compiled for seL4/Plan9 on Jetson, Pi, NUC. |
+| **Go**   | Userland services, orchestration | Ideal for CLI tools, APIs, concurrency; builds to static binaries on all nodes. |
+| **C**    | Kernel patches, legacy modules  | Required for seL4, bootloader, and direct kernel IPC. |
+| **C++ (CUDA)** | GPU workloads on Jetson | For inference, vector ops, physics offload via `/srv/cuda`. |
+| **Python** | Developer & CI tooling | **Not deployed on Cohesix.** Used for local glue, validator scripts, simulation traces. |
 
-Additional language support is under evaluation, including WebAssembly for portable sandboxed agents.
+> **Note:**  
+> Python is strictly for developer machines (CI, orchestration, test harnesses).  
+> No Python interpreter is present on Cohesix nodes.
+
+Additional language support under evaluation includes WebAssembly for portable sandboxed agents.
 
 ---
 
