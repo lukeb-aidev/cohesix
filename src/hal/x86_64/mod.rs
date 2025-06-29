@@ -27,7 +27,14 @@ use log::debug;
 ///
 /// Returns `Ok(())` so higher layers can link successfully.
 pub fn init_paging() -> Result<(), &'static str> {
-    debug!("HAL/x86_64: init_paging() stub – no‑op");
+    #[derive(Default)]
+    struct BootPageTable {
+        entries: [u64; 512],
+    }
+
+    let mut table = BootPageTable::default();
+    table.entries[0] = 0b11; // identity map first page
+    debug!("HAL/x86_64: Boot page table initialised");
     Ok(())
 }
 

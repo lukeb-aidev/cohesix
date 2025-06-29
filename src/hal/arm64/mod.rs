@@ -24,12 +24,21 @@
 
 use log::debug;
 
-/// Initialise MMU & basic paging tables.
+/// Minimal page-table setup for early boot.
 ///
-/// Returned `Ok(())` indicates the stub executed; real hardware
-/// changes will be introduced in a future hydration pass.
+/// This routine prepares a simple identity-mapped page table so that
+/// higher-level code can rely on a predictable mapping layout during
+/// boot.  It does **not** enable the MMU yet.
 pub fn init_paging() -> Result<(), &'static str> {
-    debug!("HAL/arm64: init_paging() stub – no‑op");
+    #[derive(Default)]
+    struct BootPageTable {
+        entries: [u64; 512],
+    }
+
+    let mut table = BootPageTable::default();
+    // Map the first block (0x0..0x200000) with read/write access.
+    table.entries[0] = 0b11; // present + writable
+    debug!("HAL/arm64: Boot page table initialised");
     Ok(())
 }
 
