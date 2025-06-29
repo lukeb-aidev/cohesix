@@ -2283,3 +2283,8 @@
 - BusyBox build now staged before Rust and Go builds.
 - Validator tests execute `/bin/busybox`.
 
+## [v0.335] - 2026-11-17
+### Fixed
+- `ServiceRegistry` now exposes `clear_all()` and `TestRegistryGuard` clears the
+  registry on drop to prevent test state leakage.
+

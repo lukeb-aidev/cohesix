@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: service_registry.rs v0.6
+// Filename: service_registry.rs v0.7
 // Author: Lukas Bower
-// Date Modified: 2026-09-30
+// Date Modified: 2026-11-17
 #![cfg(not(target_os = "uefi"))]
 
 //! Runtime service registry for Cohesix.
@@ -92,6 +92,16 @@ impl ServiceRegistry {
         Ok(())
     }
 
+    /// Reset the global registry. This is separate from [`reset`] so
+    /// [`TestRegistryGuard`] can ensure no state leaks across tests.
+    pub fn clear_all() -> RegistryResult<()> {
+        let mut reg = REGISTRY
+            .lock()
+            .map_err(|_| ServiceRegistryError::LockPoisoned)?;
+        reg.clear();
+        Ok(())
+    }
+
     /// Return the names of all registered services.
     pub fn list_services() -> RegistryResult<Vec<String>> {
         let list = REGISTRY
@@ -108,13 +118,14 @@ pub struct TestRegistryGuard;
 
 impl TestRegistryGuard {
     pub fn new() -> Self {
-        let _ = ServiceRegistry::reset();
+        let _ = ServiceRegistry::clear_all();
         TestRegistryGuard
     }
 }
 
 impl Drop for TestRegistryGuard {
     fn drop(&mut self) {
-        let _ = ServiceRegistry::reset();
+        // Ignore any errors so test teardown remains quiet.
+        let _ = ServiceRegistry::clear_all();
     }
 }
