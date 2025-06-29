@@ -1,5 +1,5 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: ci.yml v1.8
+# Filename: ci.yml v1.9
 # Author: Lukas Bower
 # Date Modified: 2026-10-16
 
@@ -28,41 +28,44 @@ jobs:
           go-version: '1.22'
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y make
+
       - name: Run Rust build and tests
-        id: rust
         run: |
-          cargo build > rust_build.log 2>&1
-          cargo test > rust_test.log 2>&1 || true
-          pass=$(grep -o '[0-9]\+ passed' rust_test.log | awk '{s+=$1} END{print s+0}')
-          fail=$(grep -o '[0-9]\+ failed' rust_test.log | awk '{s+=$1} END{print s+0}')
-          echo "pass=$pass" >> "$GITHUB_OUTPUT"
-          echo "fail=$fail" >> "$GITHUB_OUTPUT"
+          cargo build | tee rust_build.log
+          cargo test | tee rust_test.log
+      - uses: actions/upload-artifact@v3
+        with:
+          name: rust-logs
+          path: |
+            rust_build.log
+            rust_test.log
+
       - name: Run Python tests
-        id: python
         run: |
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-          pytest > python_test.log 2>&1 || true
-          pass=$(grep -o '[0-9]\+ passed' python_test.log | awk '{s+=$1} END{print s+0}')
-          fail=$(grep -o '[0-9]\+ failed' python_test.log | awk '{s+=$1} END{print s+0}')
-          echo "pass=$pass" >> "$GITHUB_OUTPUT"
-          echo "fail=$fail" >> "$GITHUB_OUTPUT"
+          pytest | tee python_test.log
+      - uses: actions/upload-artifact@v3
+        with:
+          name: python-logs
+          path: python_test.log
+
       - name: Run Go tests
-        id: go
         run: |
-          GOWORK=$(pwd)/go/go.work go test ./... > go_test.log 2>&1 || true
-          pass=$(grep -c '^ok' go_test.log || true)
-          fail=$(grep -c '^FAIL' go_test.log || true)
-          echo "pass=$pass" >> "$GITHUB_OUTPUT"
-          echo "fail=$fail" >> "$GITHUB_OUTPUT"
+          GOWORK=$(pwd)/go/go.work go test ./... | tee go_test.log
+      - uses: actions/upload-artifact@v3
+        with:
+          name: go-logs
+          path: go_test.log
+
       - name: Run make targets
         run: |
-          make lint || true
-          make test || true
-          make build || true
+          make lint
+          make test
+          make build
+
       - name: Verify QEMU boot
         run: ci/qemu_boot_check.sh
+
       - name: Validation summary
         run: |
-          echo "Rust: ${{ steps.rust.outputs.pass }} passed, ${{ steps.rust.outputs.fail }} failed"
-          echo "Python: ${{ steps.python.outputs.pass }} passed, ${{ steps.python.outputs.fail }} failed"
-          echo "Go: ${{ steps.go.outputs.pass }} passed, ${{ steps.go.outputs.fail }} failed"
+          echo "✅ Cohesix CI completed. Review logs in the Artifacts tab if needed."

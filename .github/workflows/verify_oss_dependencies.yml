@@ -1,5 +1,5 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: verify_oss_dependencies.yml v0.2
+# Filename: verify_oss_dependencies.yml v0.3
 # Author: Lukas Bower
 # Date Modified: 2025-07-24
 
@@ -12,11 +12,7 @@ on:
 
 jobs:
   audit:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest]
-        arch: [x86_64, aarch64]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python
@@ -36,7 +32,14 @@ jobs:
         with:
           name: sbom
           path: sbom.spdx
-      - name: Check results
+      - name: Check and list results
         run: |
+          echo "📝 Listing audit output directory:"
+          ls -lh oss_audit_out
           test -f oss_audit_out/OPEN_SOURCE_DEPENDENCIES.md
           test -f oss_audit_out/LICENSE_MATRIX.md
+      - name: Upload OSS Audit outputs
+        uses: actions/upload-artifact@v3
+        with:
+          name: oss-audit
+          path: oss_audit_out/
