@@ -24,6 +24,7 @@ fn register_and_lookup() {
     assert_eq!(list, vec!["mock1".to_string()]);
     let h = ServiceRegistry::lookup("mock1").unwrap().expect("lookup failed");
     assert_eq!(h.path, srv_dir.join("mock1").to_str().unwrap());
+    ServiceRegistry::unregister_service("mock1").unwrap();
     match prev {
         Some(v) => env::set_var("COHROLE", v),
         None => env::remove_var("COHROLE"),
@@ -46,6 +47,7 @@ fn role_visibility() {
     assert!(ServiceRegistry::lookup("worker_only").unwrap().is_none());
     env::set_var("COHROLE", "QueenPrimary");
     assert!(ServiceRegistry::lookup("worker_only").unwrap().is_some());
+    ServiceRegistry::unregister_service("worker_only").unwrap();
     match prev {
         Some(v) => env::set_var("COHROLE", v),
         None => env::remove_var("COHROLE"),
