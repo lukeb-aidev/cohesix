@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 set -x
+set -v
 
 log() {
     echo "[$(date +%H:%M:%S)] $*"
@@ -139,6 +140,12 @@ esac
 
 log "Detected arch: $ARCH, using GRUB target: $GRUB_TARGET"
 
+log "DEBUG: ROOT=$ROOT"
+log "DEBUG: ISO_ROOT=$ISO_ROOT"
+log "DEBUG: ISO_OUT=$ISO_OUT"
+log "DEBUG: GRUB_MODULE_PATH=$GRUB_MODULE_PATH"
+log "DEBUG: checking if GRUB module dir exists: [ -d \"$GRUB_MODULE_PATH\" ]"
+
 if [ ! -d "$GRUB_MODULE_PATH" ]; then
     log "⚠️  GRUB modules for $GRUB_TARGET not found at $GRUB_MODULE_PATH. Skipping ISO creation."
     exit 0
@@ -148,8 +155,16 @@ command -v grub-mkrescue >/dev/null 2>&1 || { log "grub-mkrescue not found"; exi
 command -v xorriso >/dev/null 2>&1 || { log "xorriso not found (required by grub-mkrescue)"; exit 1; }
 
 log "Creating ISO image at $ISO_OUT..."
+MODULES="part_gpt efi_gop ext2 fat normal iso9660 configfile linux"
+if [ "$ARCH" = "x86_64" ] || [ "$ARCH" = "amd64" ]; then
+    MODULES="part_gpt efi_gop efi_uga ext2 fat normal iso9660 configfile linux"
+elif [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
+    MODULES="part_gpt efi_gop ext2 fat normal iso9660 configfile linux"
+fi
+
+log "Using GRUB modules: $MODULES"
 grub-mkrescue -o "$ISO_OUT" "$ISO_ROOT" \
-    --modules="part_gpt efi_gop efi_uga ext2 fat normal iso9660 configfile linux" \
+    --modules="$MODULES" \
     || { log "grub-mkrescue failed"; exit 1; }
 
 # Validation
@@ -174,3 +189,5 @@ if command -v tree >/dev/null 2>&1; then
 else
     find "$ISO_ROOT"
 fi
+
+log "DEBUG: Finished make_iso.sh execution."
