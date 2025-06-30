@@ -11,4 +11,4 @@ mkdir -p /srv/queen
 sleep 0.1
 rm /srv/queen/heartbeat
 mkdir -p /srv
-./target/debug/cohrun orchestrator status >/dev/null 2>&1 || true
+./target/debug/cohrun orchestrator status >"${TMPDIR:-$(mktemp -d)}/edge_failover.log" 2>&1 || true

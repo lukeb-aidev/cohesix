@@ -4,7 +4,8 @@
 # Date Modified: 2026-02-11
 #!/usr/bin/env bash
 set -euo pipefail
-mkdir -p /log/trace
-bin/demo_trace_validation >/dev/null 2>&1
-[ -s /log/trace/trace_validation.log ]
+LOG_DIR="${TMPDIR:-$(mktemp -d)}/trace"
+mkdir -p "$LOG_DIR"
+bin/demo_trace_validation >"$LOG_DIR/trace_validation.log" 2>&1
+[ -s "$LOG_DIR/trace_validation.log" ]
 

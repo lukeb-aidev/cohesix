@@ -4,7 +4,8 @@
 # Date Modified: 2026-02-11
 #!/usr/bin/env bash
 set -euo pipefail
-mkdir -p /log/trace
-bin/demo_secure_relay >/dev/null 2>&1
-[ -s /log/trace/secure_relay.log ]
+LOG_DIR="${TMPDIR:-$(mktemp -d)}/trace"
+mkdir -p "$LOG_DIR"
+bin/demo_secure_relay >"$LOG_DIR/secure_relay.log" 2>&1
+[ -s "$LOG_DIR/secure_relay.log" ]
 

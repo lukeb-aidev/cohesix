@@ -7,7 +7,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-LOG_DIR="/log"
+LOG_DIR="${TMPDIR:-$(mktemp -d)}/cohbox"
 BIN="$ROOT_DIR/bin/cohbox"
 
 mkdir -p "$LOG_DIR" /mnt/data
@@ -24,18 +24,18 @@ else
 fi
 
 # Run approved applets
-TMP="/mnt/data/cohbox_test"
+TMP="${TMPDIR:-$(mktemp -d)}/cohbox_test"
 mkdir -p "$TMP"
 
 "$BIN" sh -c 'true'
 "$BIN" echo "hello" > "$TMP/hello.txt"
-"$BIN" cat "$TMP/hello.txt" > /dev/null
+"$BIN" cat "$TMP/hello.txt" >"$LOG_DIR/cat.log"
 "$BIN" cp "$TMP/hello.txt" "$TMP/copy.txt"
-"$BIN" ls "$TMP" > /dev/null
+"$BIN" ls "$TMP" >"$LOG_DIR/ls.log"
 "$BIN" rm "$TMP/copy.txt"
 "$BIN" mkdir "$TMP/dir"
 "$BIN" rm -r "$TMP/dir"
-"$BIN" ps > /dev/null
+"$BIN" ps >"$LOG_DIR/ps.log"
 "$BIN" kill -0 $$
 "$BIN" sleep 0
 
