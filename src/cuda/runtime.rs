@@ -2,7 +2,8 @@
 // Filename: runtime.rs v0.11
 // Author: Lukas Bower
 // Date Modified: 2026-10-27
-#![cfg(not(target_os = "uefi"))]
+// Previously gated behind `#![cfg(not(target_os = "uefi"))]`.
+// Cohesix now always builds for UEFI, so CUDA runtime is unconditional.
 
 //! Runtime CUDA integration using dynamic loading of `libcuda.so`.
 //! Falls back gracefully if no CUDA driver is present.

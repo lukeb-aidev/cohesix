@@ -2,7 +2,6 @@
 // Filename: edge_controller.rs v1.2
 // Author: Lukas Bower
 // Date Modified: 2025-08-17
-#![cfg(not(target_os = "uefi"))]
 
 //! Role module for the Cohesix `EdgeController`.
 //! Manages edge device orchestration, resource scheduling, and health signaling in remote or distributed environments.

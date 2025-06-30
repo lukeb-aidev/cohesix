@@ -3,7 +3,6 @@
 // Author: Lukas Bower
 // Date Modified: 2025-08-17
 // Relies on rand and Rapier; omitted from UEFI builds.
-#![cfg(not(target_os = "uefi"))]
 
 //! Rapier physics engine bridge exposing a simple command interface.
 //!

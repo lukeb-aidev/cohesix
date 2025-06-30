@@ -16,8 +16,6 @@ bitflags = "2"
 fatfs = "0.3.6"
 cust = { version = "0.3.2", optional = true }
 xmas-elf = "0.10"
-
-[target.'cfg(not(target_os = "uefi"))'.dependencies]
 cohesix-9p = { path = "cohesix-9p" }
 sha2 = "0.10"
 serde_json = "1"

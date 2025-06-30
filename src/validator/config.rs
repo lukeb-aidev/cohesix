@@ -2,7 +2,6 @@
 // Filename: config.rs v0.2
 // Author: Lukas Bower
 // Date Modified: 2025-08-17
-#![cfg(not(target_os = "uefi"))]
 
 use once_cell::sync::Lazy;
 use std::path::PathBuf;

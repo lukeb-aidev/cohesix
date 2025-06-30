@@ -2,6 +2,7 @@
 // Filename: init.rs v0.5
 // Author: Lukas Bower
 // Date Modified: 2026-02-20
+// Formerly limited to non-UEFI builds; now always compiled for UEFI.
 
 //! Minimal Plan 9 style init parser for Cohesix.
 
@@ -11,19 +12,19 @@ use std::io::{self, BufRead, Write};
 use std::time::Instant;
 use log::warn;
 
-#[cfg(not(target_os = "uefi"))]
+
 use serde::Deserialize;
-#[cfg(any(feature = "secure9p", not(target_os = "uefi")))]
+#[cfg(feature = "secure9p")]
 use toml;
 
-#[cfg(not(target_os = "uefi"))]
+
 #[derive(Debug, Deserialize)]
 struct InitConf {
     init_mode: Option<String>,
     start_services: Option<Vec<String>>,
 }
 
-#[cfg(not(target_os = "uefi"))]
+
 fn load_init_conf() -> Option<InitConf> {
     std::fs::read_to_string("/etc/init.conf")
         .ok()
@@ -42,7 +43,7 @@ pub fn run() -> io::Result<()> {
     println!("{}", BANNER);
     println!("C O H E S I X   R U N T I M E   🐝");
 
-    #[cfg(not(target_os = "uefi"))]
+    
     match load_init_conf() {
         Some(cfg) => {
             if let Some(mode) = cfg.init_mode {

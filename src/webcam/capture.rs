@@ -2,7 +2,6 @@
 // Filename: capture.rs v0.3
 // Author: Lukas Bower
 // Date Modified: 2025-08-17
-#![cfg(not(target_os = "uefi"))]
 
 //! Capture a single JPEG frame from `/dev/video0`.
 //! Falls back to a generated blank image if the device is unavailable.
