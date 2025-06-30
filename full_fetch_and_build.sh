@@ -1,9 +1,10 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: full_fetch_and_build.sh v0.10
+# Filename: full_fetch_and_build.sh v0.11
 # Author: Lukas Bower
-# Date Modified: 2026-07-07
+# Date Modified: 2026-12-31
 #!/usr/bin/env bash
 set -euo pipefail
+export MEMCHR_DISABLE_RUNTIME_CPU_FEATURE_DETECTION=1
 
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 cd "$ROOT"

@@ -1,6 +1,6 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: deploy-ci.sh v0.2
-# Date Modified: 2025-06-01
+# Filename: deploy-ci.sh v0.3
+# Date Modified: 2026-12-31
 # Author: Lukas Bower
 
 #!/usr/bin/env bash
@@ -21,6 +21,7 @@
 # Required tools: cargo, git, zip
 ###############################################################################
 set -euo pipefail
+export MEMCHR_DISABLE_RUNTIME_CPU_FEATURE_DETECTION=1
 
 msg() { printf "\e[36m[deploy]\e[0m %s\n" "$*"; }
 err() { printf "\e[31m[error]\e[0m %s\n" "$*" >&2; exit 1; }
