@@ -14,9 +14,6 @@ use tempfile::tempdir;
 fn cli_tools_execute() {
     let dir = tempdir().unwrap();
     std::env::set_current_dir(&dir).unwrap();
-    if fs::create_dir_all("/dev").is_err() {
-        return;
-    }
     if fs::create_dir_all("/srv").is_err() {
         return;
     }
@@ -24,12 +21,13 @@ fn cli_tools_execute() {
         return;
     }
     fs::write("/usr/src/hello.c", "int main(){return 0;}").ok();
-    let mut console = match File::create("/dev/console") {
+    let mut console = match File::create("/srv/console") {
         Ok(c) => c,
         Err(_) => return,
     };
-    writeln!(console, "cohcc /usr/src/hello.c -o /tmp/hello.out").unwrap();
-    writeln!(console, "run /tmp/hello.out").unwrap();
+    let out_path = dir.path().join("hello.out");
+    writeln!(console, "cohcc /usr/src/hello.c -o {}", out_path.display()).unwrap();
+    writeln!(console, "run {}", out_path.display()).unwrap();
     writeln!(console, "cohtrace status").unwrap();
     writeln!(console, "exit").unwrap();
     spawn_shell();

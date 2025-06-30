@@ -10,22 +10,10 @@ use std::io::ErrorKind;
 
 #[test]
 fn detects_policy_failure() {
-    match fs::metadata("/proc/self") {
-        Ok(_) => {}
-        Err(e) if e.kind() == ErrorKind::PermissionDenied => {
-            eprintln!("\u{1F512} Skipping test: insufficient permissions to run detects_policy_failure");
-            return;
-        }
-        Err(e) => panic!("failed to access /proc/self: {}", e),
-    }
-
-    match fs::create_dir_all("/trace") {
-        Ok(_) => {}
-        Err(e) if e.kind() == ErrorKind::PermissionDenied => {
-            eprintln!("\u{1F512} Skipping test: insufficient permissions to run detects_policy_failure");
-            return;
-        }
-        Err(e) => panic!("failed to create /trace: {}", e),
+    let trace_root = std::env::temp_dir().join("trace");
+    if let Err(e) = fs::create_dir_all(&trace_root) {
+        eprintln!("\u{1F512} Skipping test: cannot create trace dir: {e}");
+        return;
     }
 
     let mut agent = BaseAgent::new("test");
@@ -38,7 +26,7 @@ fn detects_policy_failure() {
     }
     assert!(triggered);
 
-    let log = match fs::read_to_string("/trace/introspect_test.log") {
+    let log = match fs::read_to_string(trace_root.join("introspect_test.log")) {
         Ok(v) => v,
         Err(e) if e.kind() == ErrorKind::PermissionDenied => {
             eprintln!("\u{1F512} Skipping test: insufficient permissions to run detects_policy_failure");

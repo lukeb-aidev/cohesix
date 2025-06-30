@@ -14,10 +14,6 @@ use tempfile::tempdir;
 fn shell_runs_binary() {
     let dir = tempdir().unwrap();
     std::env::set_current_dir(&dir).unwrap();
-    if fs::create_dir_all("/dev").is_err() {
-        eprintln!("skipping shell_runs_binary: cannot create /dev");
-        return;
-    }
     if fs::create_dir_all("/srv").is_err() {
         eprintln!("skipping shell_runs_binary: cannot create /srv");
         return;
@@ -30,15 +26,16 @@ fn shell_runs_binary() {
         eprintln!("skipping shell_runs_binary: cannot write example.coh");
         return;
     }
-    let mut console = match File::create("/dev/console") {
+    let mut console = match File::create("/srv/console") {
         Ok(c) => c,
         Err(_) => {
-            eprintln!("skipping shell_runs_binary: cannot create /dev/console");
+            eprintln!("skipping shell_runs_binary: cannot create /srv/console");
             return;
         }
     };
-    writeln!(console, "cohcc /usr/src/example.coh -o /tmp/test.out").unwrap();
-    writeln!(console, "run /tmp/test.out").unwrap();
+    let out_path = dir.path().join("test.out");
+    writeln!(console, "cohcc /usr/src/example.coh -o {}", out_path.display()).unwrap();
+    writeln!(console, "run {}", out_path.display()).unwrap();
     writeln!(console, "exit").unwrap();
     spawn_shell();
     let out = fs::read_to_string("/srv/shell_out").unwrap_or_default();

@@ -39,7 +39,7 @@ def test_traceflow(tmp_path: Path) -> None:
     trace_root = tmp_path / "trace"
     (trace_root / "w1").mkdir(parents=True, exist_ok=True)
     _validate_config()
-    trace_link = Path("/trace")
+    trace_link = Path("/srv/trace")
     if trace_link.exists() or trace_link.is_symlink():
         if os.access(trace_link, os.W_OK):
             try:
@@ -48,13 +48,13 @@ def test_traceflow(tmp_path: Path) -> None:
                 try:
                     shutil.rmtree(trace_link)
                 except PermissionError:
-                    pytest.skip("insufficient permissions to modify /trace")
+                    pytest.skip("insufficient permissions to modify /srv/trace")
         else:
-            pytest.skip("insufficient permissions to modify /trace")
+            pytest.skip("insufficient permissions to modify /srv/trace")
     try:
         os.symlink(trace_root, trace_link)
     except PermissionError:
-        pytest.skip("insufficient permissions to modify /trace")
+        pytest.skip("insufficient permissions to modify /srv/trace")
 
     subprocess.run(
         [

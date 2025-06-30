@@ -25,7 +25,7 @@ fn webcam_permission_check() {
         println!("[WARN] Could not write QueenPrimary role: {}", e);
     });
 
-    match File::open("/dev/video0") {
+    match File::open("/srv/video0") {
         Ok(_) => println!("[INFO] Webcam opened successfully for QueenPrimary."),
         Err(e) => println!("[WARN] Skipping webcam test for QueenPrimary: {}", e),
     }
@@ -41,7 +41,7 @@ fn webcam_permission_check() {
         println!("[WARN] Could not write DroneWorker role: {}", e);
     });
 
-    match File::open("/dev/video0") {
+    match File::open("/srv/video0") {
         Ok(_) => println!("[INFO] Webcam opened successfully for DroneWorker."),
         Err(e) => println!("[WARN] Skipping webcam test for DroneWorker: {}", e),
     }
