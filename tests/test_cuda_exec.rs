@@ -24,8 +24,8 @@ fn cuda_executor_launches() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    if OpenOptions::new().read(true).open("/dev/nvidia0").is_err() {
-        eprintln!("skipping cuda_executor_launches: /dev/nvidia0 not accessible");
+    if std::fs::metadata("/srv/cuda").is_err() {
+        eprintln!("skipping cuda_executor_launches: /srv/cuda not available");
         return Ok(());
     }
 

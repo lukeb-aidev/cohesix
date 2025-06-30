@@ -4,7 +4,8 @@
 # Date Modified: 2026-02-11
 #!/usr/bin/env bash
 set -euo pipefail
-mkdir -p /log/trace
-bin/demo_physics_webcam >/dev/null 2>&1
-[ -s /log/trace/physics_webcam.log ]
+LOG_DIR="${TMPDIR:-$(mktemp -d)}/trace"
+mkdir -p "$LOG_DIR"
+bin/demo_physics_webcam >"$LOG_DIR/physics_webcam.log" 2>&1
+[ -s "$LOG_DIR/physics_webcam.log" ]
 

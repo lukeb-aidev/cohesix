@@ -8,10 +8,10 @@
 
 set -euo pipefail
 
-LOG=tests/gpu_swarm.log
+LOG="${TMPDIR:-$(mktemp -d)}/gpu_swarm.log"
 rm -f "$LOG"
 
-cohcli status > /dev/null || true
+cohcli status >"$LOG" 2>&1 || true
 
 # simulate scheduling across two workers
 for job in test1 test2 test3; do
