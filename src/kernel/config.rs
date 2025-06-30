@@ -2,7 +2,6 @@
 // Filename: config.rs v0.1
 // Author: Lukas Bower
 // Date Modified: 2025-08-27
-#![cfg(not(target_os = "uefi"))]
 
 use std::fs;
 

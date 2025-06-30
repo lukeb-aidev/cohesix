@@ -2,7 +2,6 @@
 // Filename: router.rs v1.1
 // Author: Lukas Bower
 // Date Modified: 2025-08-17
-#![cfg(not(target_os = "uefi"))]
 
 //! Telemetry routing and collection utilities.
 

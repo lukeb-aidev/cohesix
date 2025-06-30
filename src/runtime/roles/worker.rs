@@ -2,7 +2,6 @@
 // Filename: worker.rs v1.2
 // Author: Lukas Bower
 // Date Modified: 2025-08-17
-#![cfg(not(target_os = "uefi"))]
 
 //! Role module for the Cohesix `Worker`.
 //! A worker node executes assigned tasks, reports telemetry, and responds to commands from the queen or orchestrator.

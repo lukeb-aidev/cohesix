@@ -1,6 +1,8 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: lib.rs v1.11
 // Date Modified: 2026-11-27
+// Conditional `cfg(not(target_os = "uefi"))` sections were removed.
+// The library now always compiles all modules for UEFI.
 // Author: Lukas Bower
 #![cfg_attr(not(feature = "std"), no_std)]
 
@@ -18,15 +20,15 @@ pub mod passes;
 pub mod codegen;
 
 /// CLI interface for compiler invocation
-#[cfg(not(target_os = "uefi"))]
+
 pub mod cli;
 
 /// Minimal sandbox-safe compiler wrapper
-#[cfg(not(target_os = "uefi"))]
+
 pub mod coh_cc;
 
 /// Core dependencies validation and management
-#[cfg(not(target_os = "uefi"))]
+
 pub mod dependencies;
 
 /// Utilities and common helpers used across modules
@@ -37,88 +39,88 @@ pub mod util;
 /// Runtime subsystem modules
 pub mod runtime;
 /// Telemetry subsystem utilities
-#[cfg(not(target_os = "uefi"))]
+
 pub mod telemetry;
 /// Agent runtime modules
-#[cfg(not(target_os = "uefi"))]
+
 pub mod agents;
 /// Standalone agent helpers
-#[cfg(not(target_os = "uefi"))]
+
 pub mod agent;
 /// Migration control-plane helpers
-#[cfg(not(target_os = "uefi"))]
+
 pub mod agent_migration;
 /// Transport implementation for migrations
-#[cfg(not(target_os = "uefi"))]
+
 pub mod agent_transport;
 /// Queen orchestrator modules
-#[cfg(not(target_os = "uefi"))]
+
 pub mod queen;
 /// Trace recording modules
-#[cfg(not(target_os = "uefi"))]
+
 pub mod trace;
 /// Swarm runtime modules for distributed deployments
-#[cfg(not(target_os = "uefi"))]
+
 pub mod swarm;
 /// Physical sensor modules
-#[cfg(not(target_os = "uefi"))]
+
 pub mod physical;
 
 /// Boot helper modules
-#[cfg(not(target_os = "uefi"))]
+
 pub mod boot;
 
 /// Security modules (capabilities, sandbox enforcement)
-#[cfg(not(target_os = "uefi"))]
+
 pub mod security;
 
 /// Runtime services (telemetry, sandbox, health, ipc)
-#[cfg(not(target_os = "uefi"))]
+
 pub mod services;
 /// Webcam helpers
-#[cfg(not(target_os = "uefi"))]
+
 pub mod webcam;
 
 /// Common cross-module types.
 pub mod cohesix_types;
 
 /// Worker role modules
-#[cfg(not(target_os = "uefi"))]
+
 pub mod worker;
 
 /// Sandbox helpers (profiles, syscall queueing).
-#[cfg(not(target_os = "uefi"))]
+
 pub mod sandbox;
 
 /// Syscall permission guard helpers
-#[cfg(not(target_os = "uefi"))]
+
 pub mod syscall;
 
 /// Kernel modules and drivers
-#[cfg(not(target_os = "uefi"))]
+
 pub mod kernel;
 
 /// CUDA runtime helpers
 #[cfg(feature = "cuda")]
 pub mod cuda;
 /// Secure launch module helpers
-#[cfg(not(target_os = "uefi"))]
+
 pub mod slm;
 
 /// Physics simulation bridge
-#[cfg(not(target_os = "uefi"))]
+
 pub mod sim;
 
 /// 9P multiplexer utilities
-#[cfg(not(target_os = "uefi"))]
+
 pub mod p9;
 /// Cloud integration helpers
-#[cfg(not(target_os = "uefi"))]
+
 pub mod cloud;
-#[cfg(all(feature = "secure9p", not(target_os = "uefi")))]
+#[cfg(feature = "secure9p")]
 pub mod secure9p;
 /// Networking daemons
-#[cfg(not(target_os = "uefi"))]
+
 pub mod net;
 
 /// Shell helpers
@@ -130,39 +132,39 @@ pub mod sh_loop;
 pub mod plan9;
 
 /// POSIX compatibility helpers
-#[cfg(not(target_os = "uefi"))]
+
 pub mod posix;
 
 /// Filesystem overlay helpers
 pub mod fs;
 
 /// Shared world model structures
-#[cfg(not(target_os = "uefi"))]
+
 pub mod world_model;
 
 /// Distributed orchestration modules
-#[cfg(not(target_os = "uefi"))]
+
 pub mod orchestrator;
 /// Federation utilities
-#[cfg(not(target_os = "uefi"))]
+
 pub mod federation;
 /// Runtime rule validator
-#[cfg(not(target_os = "uefi"))]
+
 pub mod validator;
 /// Watchdog daemon module
-#[cfg(not(target_os = "uefi"))]
+
 pub mod watchdogd;
 
 /// Role modules
-#[cfg(not(target_os = "uefi"))]
+
 pub mod roles;
 
 /// Bootloader subcrate utilities
-#[cfg(not(target_os = "uefi"))]
+
 pub mod bootloader;
 
 /// Hardware abstraction layer
-#[cfg(not(target_os = "uefi"))]
+
 pub mod hal;
 
 /// rc style init parser
@@ -173,11 +175,11 @@ pub mod rc {
 
 #[allow(non_snake_case)]
 /// seL4 kernel bindings
-#[cfg(not(target_os = "uefi"))]
+
 pub mod seL4;
 
 /// Role-specific initialization hooks
-#[cfg(not(target_os = "uefi"))]
+
 pub mod init;
 
 /// Compile from an input IR file to the specified output path.
@@ -242,6 +244,6 @@ pub trait BootableRuntime {
 }
 
 /// Binary helper modules
-#[cfg(not(target_os = "uefi"))]
+
 pub mod binlib;
 

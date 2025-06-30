@@ -9,5 +9,5 @@
 pub mod kiosk;
 pub mod queen;
 pub mod sensor;
-#[cfg(not(target_os = "uefi"))]
+
 pub mod worker;

@@ -2,7 +2,6 @@
 // Filename: webcam.rs v0.3
 // Author: Lukas Bower
 // Date Modified: 2025-08-17
-#![cfg(not(target_os = "uefi"))]
 
 //! USB webcam service implemented with v4l2.
 

@@ -3,7 +3,6 @@
 // Author: Lukas Bower
 // Date Modified: 2025-08-17
 // Random token generation uses rand; this is skipped for UEFI builds.
-#![cfg(not(target_os = "uefi"))]
 
 //! AES-GCM encrypted SLM container loader.
 
