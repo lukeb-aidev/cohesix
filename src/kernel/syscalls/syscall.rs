@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: syscall.rs v1.4
+// Filename: syscall.rs v1.5
 // Author: Lukas Bower
-// Date Modified: 2026-11-22
+// Date Modified: 2026-11-23
 
 //! Kernel syscall interface layer for Cohesix.
 //! Provides syscall entry point, argument validation, and dispatch wiring.
@@ -134,8 +134,8 @@ pub unsafe fn init_syscall_trap() {
     }
 }
 
-/// Stub when running under host OS; no privileged instructions executed.
+/// Compiles only on bare-metal (target_os = "none"), safe stub otherwise.
 #[cfg(not(target_os = "none"))]
 pub unsafe fn init_syscall_trap() {
-    // Disabled under cargo test: requires privileged instruction
+    panic!("init_syscall_trap attempted on non-bare-metal target");
 }
