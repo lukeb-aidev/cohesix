@@ -1,15 +1,10 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix-secure9p/Cargo.toml v0.1
+# Filename: cohesix-secure9p/Cargo.toml v0.2
 # Author: Lukas Bower
 # Date Modified: 2026-12-31
 [package]
 name = "cohesix-secure9p"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 
 [dependencies]
-cohesix-9p = { path = "../cohesix-9p" }
-rustls = "0.23"
-rcgen = "0.13"
-anyhow = "1"
-

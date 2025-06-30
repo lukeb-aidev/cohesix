@@ -180,7 +180,8 @@
 | metadata.json | v0.1 | 2025-07-24 | COMMUNITY | | |
 | Cargo.toml | v0.30 | 2026-12-25 | COMMUNITY | | |
 | cohesix-9p/Cargo.toml | v0.3 | 2026-12-31 | COMMUNITY | | |
-| cohesix-secure9p/Cargo.toml | v0.1 | 2026-12-31 | COMMUNITY | | |
+| cohesix-secure9p/Cargo.toml | v0.2 | 2026-12-31 | COMMUNITY | | |
+| cohesix-secure9p/src/secure_stream.rs | v0.1 | 2026-12-31 | COMMUNITY | | |
 | tools/cli/Cargo.toml | v0.2 | 2025-08-16 | COMMUNITY | | |
 | justfile | v0.2 | 2026-12-31 | COMMUNITY | | |
 | src/roles/mod.rs | v0.2 | 2026-09-30 | COMMUNITY | | |
