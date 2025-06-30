@@ -3,10 +3,21 @@
 // Author: Lukas Bower
 // Date Modified: 2026-12-25
 
-//! Dummy RNG implementation for unsupported targets. Always fails.
+//! Deterministic RNG for unsupported targets.
 use core::mem::MaybeUninit;
+use core::sync::atomic::{AtomicU64, Ordering};
 use crate::Error;
 
-pub fn getrandom_inner(_: &mut [MaybeUninit<u8>]) -> Result<(), Error> {
-    Err(Error::UNSUPPORTED)
+static STATE: AtomicU64 = AtomicU64::new(0x1234_5678_9ABC_DEF0);
+
+pub fn getrandom_inner(dest: &mut [MaybeUninit<u8>]) -> Result<(), Error> {
+    let mut s = STATE.load(Ordering::Relaxed);
+    for b in dest.iter_mut() {
+        s ^= s.wrapping_shl(13);
+        s ^= s.wrapping_shr(7);
+        s ^= s.wrapping_shl(17);
+        b.write((s & 0xFF) as u8);
+    }
+    STATE.store(s, Ordering::Relaxed);
+    Ok(())
 }

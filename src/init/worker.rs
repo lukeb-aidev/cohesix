@@ -10,6 +10,7 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use crate::plan9::namespace::NamespaceLoader;
 use cohesix_9p::fs::InMemoryFs;
+use crate::utils::tiny_rng::TinyRng;
 
 fn log(msg: &str) {
     match OpenOptions::new().append(true).open("/srv/devlog") {
@@ -111,7 +112,8 @@ pub fn start() {
     fs::write("/srv/agent_meta/role.txt", &role).ok();
     fs::write("/srv/agent_meta/uptime.txt", "0").ok();
     fs::write("/srv/agent_meta/last_goal.json", "null").ok();
-    let trace_id = format!("{:08x}", rand::random::<u32>());
+    let mut rng = TinyRng::new(0xFACEFEED);
+    let trace_id = format!("{:08x}", rng.next_u32());
     fs::write("/srv/agent_meta/trace_id.txt", trace_id).ok();
 
     log("[worker] services ready");
