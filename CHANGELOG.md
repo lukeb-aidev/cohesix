@@ -2399,3 +2399,9 @@
 - Deleted `secure9p`, `net`, `devd`, and `nswatch` components.
 - Simplified telemetry and worker roles for UEFI-only builds.
 
+## [v0.357] - 2026-12-31
+### Added
+- Enabled SSE and SSE2 for `x86_64-unknown-uefi` targets in `.cargo/config.toml`.
+- Documented the SSE requirement in `README.md`.
+- Metadata updated accordingly.
+

@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: README.md v0.20
+// Filename: README.md v0.21
 // Author: Lukas Bower
-// Date Modified: 2026-10-16
+// Date Modified: 2026-12-31
 
 
 # Cohesix
@@ -131,6 +131,13 @@ The helper script `cohesix_fetch_build.sh` sets two variables after cloning:
 * `COH_GPU` – `1` if an NVIDIA device is accessible, else `0`
 
 CUDA tests and builds skip when `COH_GPU=0`; runtime features disable gracefully.
+
+### UEFI SSE Requirements
+
+UEFI builds for the `x86_64-unknown-uefi` target rely on SSE and SSE2
+instructions. These features are explicitly enabled in `.cargo/config.toml`
+to satisfy compile-time checks in crates like `ring` and to prevent
+runtime crashes on processors where the instructions are available.
 
 ### Building the seL4 entry binary
 
