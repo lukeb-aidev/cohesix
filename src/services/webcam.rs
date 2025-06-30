@@ -24,7 +24,7 @@ impl Service for WebcamService {
     fn init(&mut self) {
         let role = RoleManifest::current_role();
         if matches!(role, Role::DroneWorker | Role::SensorRelay) {
-            let dev_path = std::env::var("VIDEO_DEVICE").unwrap_or_else(|_| "/dev/video0".into());
+            let dev_path = std::env::var("VIDEO_DEVICE").unwrap_or_else(|_| "/srv/video0".into());
             match Device::with_path(&dev_path) {
                 Ok(_) => {
                     self.opened = true;

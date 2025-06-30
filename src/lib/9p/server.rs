@@ -20,7 +20,7 @@ struct Node {
 static FS: Lazy<Mutex<HashMap<String, Node>>> = Lazy::new(|| {
     let mut map = HashMap::new();
     map.insert("/".into(), Node { data: Vec::new() });
-    for d in ["/srv", "/proc", "/mnt", "/history"].iter() {
+    for d in ["/srv", "/mnt", "/history"].iter() {
         map.insert((*d).into(), Node { data: Vec::new() });
     }
     Mutex::new(map)
@@ -31,7 +31,7 @@ pub fn reset_fs() {
     let mut map = FS.lock().unwrap();
     map.clear();
     map.insert("/".into(), Node::default());
-    for d in ["/srv", "/proc", "/mnt", "/history"].iter() {
+    for d in ["/srv", "/mnt", "/history"].iter() {
         map.insert((*d).into(), Node::default());
     }
 }
@@ -47,9 +47,9 @@ fn cohrole() -> String {
 fn can_write(role: &str, path: &str) -> bool {
     match role {
         "QueenPrimary" => true,
-        "DroneWorker" => !(path.starts_with("/proc") || path.starts_with("/history")),
+        "DroneWorker" => !path.starts_with("/history"),
         _ => {
-            !path.starts_with("/proc") && !path.starts_with("/history") && !path.starts_with("/srv")
+            !path.starts_with("/history") && !path.starts_with("/srv")
         }
     }
 }

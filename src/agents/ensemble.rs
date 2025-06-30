@@ -21,7 +21,7 @@ pub struct SharedMemory {
 
 impl SharedMemory {
     pub fn new(id: &str) -> Self {
-        let base_tmp = std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".to_string());
+        let base_tmp = std::env::var("TMPDIR").unwrap_or_else(|_| "/srv".to_string());
         let root = std::env::var("COHESIX_ENS_TMP").unwrap_or_else(|_| format!("{}/ensemble", base_tmp));
         Self { path: format!("{root}/{id}/mem") }
     }
@@ -51,7 +51,7 @@ use serde_json;
 
 impl Migrateable for EnsembleAgent {
     fn migrate<T: AgentTransport>(&self, peer: &str, transport: &T) -> anyhow::Result<MigrationStatus> {
-        let base_tmp = std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".to_string());
+        let base_tmp = std::env::var("TMPDIR").unwrap_or_else(|_| "/srv".to_string());
         let tmp = format!("{}/{}_ensemble.json", base_tmp, self.id);
         let data = serde_json::to_string(&self.members.len()).unwrap_or_default();
         fs::write(&tmp, data)?;
@@ -86,7 +86,7 @@ impl EnsembleAgent {
     }
 
     fn log_scores(&self, scores: &[(String, f32)]) -> std::io::Result<()> {
-        let base_tmp = std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".to_string());
+        let base_tmp = std::env::var("TMPDIR").unwrap_or_else(|_| "/srv".to_string());
         let root = std::env::var("COHESIX_ENS_TMP").unwrap_or_else(|_| format!("{}/ensemble", base_tmp));
         fs::create_dir_all(format!("{root}/{}/", self.id))?;
         let goals = serde_json::to_string(scores).unwrap_or_else(|_| "[]".into());

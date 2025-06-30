@@ -55,7 +55,7 @@ fn default_caps() -> HashMap<String, RoleCaps> {
         ),
         (
             "KioskInteractive".into(),
-            RoleCaps { verbs: vec!["open".into()], paths: vec!["/dev/console".into()] },
+            RoleCaps { verbs: vec!["open".into()], paths: vec!["/srv/console".into()] },
         ),
         (
             "GlassesAgent".into(),

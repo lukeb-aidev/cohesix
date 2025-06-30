@@ -30,7 +30,7 @@ pub fn run_cohtrace(args: &[String]) -> Result<(), String> {
                 Role::SimulatorTest => "SimulatorTest",
                 Role::Other(s) => s,
             };
-            let ns_map = fs::read_to_string(format!("/proc/nsmap/{role_name}")).unwrap_or_default();
+            let ns_map = fs::read_to_string(format!("/srv/nsmap/{role_name}")).unwrap_or_default();
             println!("Validator: {}", if running { "active" } else { "inactive" });
             println!("Role: {}", role_name);
             for m in ns_map.lines() {

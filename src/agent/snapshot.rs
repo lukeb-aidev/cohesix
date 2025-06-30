@@ -28,7 +28,7 @@ use crate::agent_migration::{Migrateable, MigrationStatus};
 
 impl Migrateable for AgentSnapshot {
     fn migrate<T: AgentTransport>(&self, peer: &str, transport: &T) -> anyhow::Result<MigrationStatus> {
-        let tmpdir = std::env::var("TMPDIR").unwrap_or("/tmp".to_string());
+        let tmpdir = std::env::var("TMPDIR").unwrap_or("/srv".to_string());
         let tmp = format!("{}/agent_snapshot.msgpack", tmpdir);
         SnapshotWriter::write(&tmp, self)?;
         transport.send_state("snapshot", peer, &tmp)?;

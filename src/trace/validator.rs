@@ -38,7 +38,7 @@ pub fn validate_trace(path: &str, worker: &str) -> anyhow::Result<()> {
     };
     let base = std::env::var("COHESIX_TRACE_REPORT_DIR")
         .or_else(|_| std::env::var("TMPDIR"))
-        .unwrap_or_else(|_| "/tmp".to_string());
+        .unwrap_or_else(|_| "/srv".to_string());
     fs::create_dir_all(format!("{}/trace/reports", base)).ok();
     let out = format!("{}/trace/reports/{worker}.report.json", base);
     fs::write(&out, serde_json::to_string(&report)?)?;

@@ -28,7 +28,7 @@ impl CustodianRole for DefaultCustodian {
 
     fn sanitize_node(&mut self) -> Result<(), String> {
         println!("[custodian] sanitizing node...");
-        let tmpdir = std::env::var("TMPDIR").unwrap_or("/tmp".to_string());
+        let tmpdir = std::env::var("TMPDIR").unwrap_or("/srv".to_string());
         let tmp = std::path::Path::new(&format!("{}/cohesix", tmpdir));
         if tmp.exists() {
             std::fs::remove_dir_all(tmp).map_err(|e| e.to_string())?;

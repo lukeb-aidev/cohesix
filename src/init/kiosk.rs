@@ -13,7 +13,7 @@ use chrono::Utc;
 use crate::runtime::env::init::detect_cohrole;
 
 fn log(msg: &str) {
-    match OpenOptions::new().append(true).open("/dev/log") {
+    match OpenOptions::new().append(true).open("/srv/devlog") {
         Ok(mut f) => {
             let _ = writeln!(f, "{}", msg);
         }
