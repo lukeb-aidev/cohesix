@@ -28,7 +28,7 @@ pub fn load_and_run(path: &str) -> Result<()> {
     use std::process::Command;
 
     let exe_bytes = &data[5..];
-    let tmp_path = "/tmp/coh_exec.bin";
+    let tmp_path = "/srv/coh_exec.bin";
     fs::write(tmp_path, exe_bytes).context("write temp exe")?;
     #[cfg(unix)]
     {

@@ -44,7 +44,7 @@ impl Default for BasicTelemetryRouter {
 
 impl BasicTelemetryRouter {
     fn read_temperature() -> Option<f32> {
-        let candidates = ["/tmp/ina226_mock", "/sys/class/hwmon/hwmon0/temp1_input"];
+        let candidates = ["/srv/ina226_mock", "/sys/class/hwmon/hwmon0/temp1_input"];
         for path in candidates.iter() {
             if let Ok(contents) = std::fs::read_to_string(path) {
                 if let Ok(milli) = contents.trim().parse::<f32>() {

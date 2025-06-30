@@ -44,7 +44,7 @@ impl Migrateable for AgentRuntime {
         peer: &str,
         transport: &T,
     ) -> anyhow::Result<MigrationStatus> {
-        let tmpdir = std::env::var("TMPDIR").unwrap_or("/tmp".to_string());
+        let tmpdir = std::env::var("TMPDIR").unwrap_or("/srv".to_string());
         let path = format!("{}/runtime_state.json", tmpdir);
         std::fs::write(&path, "runtime")?;
         transport.send_state("runtime", peer, &path)?;
