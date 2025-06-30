@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: syscall.rs v1.3
+// Filename: syscall.rs v1.4
 // Author: Lukas Bower
-// Date Modified: 2026-11-21
+// Date Modified: 2026-11-22
 
 //! Kernel syscall interface layer for Cohesix.
 //! Provides syscall entry point, argument validation, and dispatch wiring.
@@ -11,7 +11,7 @@ use crate::kernel::security::l4_verified::{enforce_capability, CapabilityResult}
 use std::fs::OpenOptions;
 use std::io::Write;
 
-#[cfg(target_arch = "aarch64")]
+#[cfg(all(target_os = "none", target_arch = "aarch64"))]
 core::arch::global_asm!(
     r#"
     .global syscall_vector
@@ -26,7 +26,7 @@ syscall_vector:
 "#
 );
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_os = "none", target_arch = "x86_64"))]
 core::arch::global_asm!(
     r#"
     .global syscall_vector
@@ -94,6 +94,7 @@ pub extern "C" fn syscall_trap(
 }
 
 /// Configure MSR/VBAR so user-mode traps vector to `syscall_trap`.
+#[cfg(target_os = "none")]
 pub unsafe fn init_syscall_trap() {
     #[cfg(target_arch = "aarch64")]
     {
@@ -131,4 +132,10 @@ pub unsafe fn init_syscall_trap() {
             options(nostack)
         );
     }
+}
+
+/// Stub when running under host OS; no privileged instructions executed.
+#[cfg(not(target_os = "none"))]
+pub unsafe fn init_syscall_trap() {
+    // Disabled under cargo test: requires privileged instruction
 }
