@@ -2342,3 +2342,9 @@
 - HAL test modules now require `target_os = "none"` so privileged MMU
   instructions are skipped under standard `cargo test`.
 
+## [v0.347] - 2026-11-22
+### Fixed
+- `init_syscall_trap` and related assembly now compile only when
+  `target_os = "none"`. Host builds use a stub to avoid illegal
+  instructions during tests.
+
