@@ -332,13 +332,8 @@ else
 fi
 
 log "🧱 Building Rust components..."
-if [[ "$(uname -m)" == "aarch64" ]]; then
-  COHESIX_TARGET="aarch64-unknown-linux-gnu"
-else
-  COHESIX_TARGET="x86_64-unknown-linux-gnu"
-fi
-export COHESIX_TARGET
-log "Using target $COHESIX_TARGET"
+# Removed legacy Linux target override - using UEFI target from config
+log "Using UEFI target $COHESIX_TARGET"
 
 
 # Install the target if rustup is available and it's not already installed
@@ -454,13 +449,13 @@ ensure_plan9_ns() {
   if [ ! -f "$ns_path" ]; then
     log "⚠️ config/plan9.ns missing. Generating default..."
     mkdir -p "$ROOT/config"
-    cat > "$ns_path" <<'EOF'
+  cat > "$ns_path" <<'EOF'
 // CLASSIFICATION: COMMUNITY
 // Filename: config/plan9.ns v0.1
 // Author: Lukas Bower
 // Date Modified: 2026-08-04
-mount -b /dev /dev
-mount -b /proc /proc
+# mount -b /dev /dev  # Removed legacy Linux mount - not needed for UEFI
+# mount -b /proc /proc  # Removed legacy Linux mount - not needed for UEFI
 bind -a /bin /bin
 bind -a /usr/py /usr/py
 bind -a /srv /srv
