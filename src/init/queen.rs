@@ -2,7 +2,6 @@
 // Filename: queen.rs v0.6
 // Author: Lukas Bower
 // Date Modified: 2026-10-11
-#![cfg(not(target_os = "uefi"))]
 
 //! seL4 root task hook for the Queen role.
 //! Loads the boot namespace and registers core services.

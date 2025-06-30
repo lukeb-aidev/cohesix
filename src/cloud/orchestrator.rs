@@ -2,7 +2,6 @@
 // Filename: orchestrator.rs v0.7
 // Author: Lukas Bower
 // Date Modified: 2026-10-28
-#![cfg(not(target_os = "uefi"))]
 
 //! Cloud orchestration hooks for the Queen role.
 //! Provides registration and heartbeat routines for

@@ -3,7 +3,6 @@
 // Author: Lukas Bower
 // Date Modified: 2026-02-21
 // Uses rand for trace IDs; disabled for UEFI builds where getrandom isn't available.
-#![cfg(not(target_os = "uefi"))]
 
 //! DroneWorker role initialisation.
 
