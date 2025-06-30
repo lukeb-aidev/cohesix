@@ -10,4 +10,5 @@ pub mod namespace;
 pub mod shell;
 pub mod shim;
 pub mod syscalls;
+#[cfg(not(target_os = "uefi"))]
 pub mod srv_registry;
