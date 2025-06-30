@@ -1,6 +1,6 @@
 // CLASSIFICATION: PRIVATE
-// Filename: mod.rs v0.6
-// Date Modified: 2026-11-22
+// Filename: mod.rs v0.7
+// Date Modified: 2026-11-23
 // Author: Lukas Bower
 //
 // ─────────────────────────────────────────────────────────────
@@ -27,6 +27,7 @@ use log::{debug, info};
 ///
 /// The kernel is identity-mapped so early boot code can run with paging enabled
 /// without relocating pointers.
+#[cfg(target_os = "none")]
 pub fn init_paging() -> Result<(), &'static str> {
     use core::arch::asm;
 
@@ -71,6 +72,12 @@ pub fn init_paging() -> Result<(), &'static str> {
     info!("[HAL] Mapping 0x0 - 0x1000000 (identity)");
     info!("[HAL] Paging enabled on x86_64");
     Ok(())
+}
+
+/// Compiles only on bare-metal (target_os = "none"), safe stub otherwise.
+#[cfg(not(target_os = "none"))]
+pub fn init_paging() -> Result<(), &'static str> {
+    panic!("init_paging attempted on non-bare-metal target");
 }
 
 /// Configure LAPIC / IO‑APIC for early boot.

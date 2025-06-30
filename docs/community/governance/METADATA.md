@@ -254,9 +254,9 @@
 | tests/test_worker_join.rs | v0.7 | 2026-10-31 | COMMUNITY | | |
 | tests/introspect_self_diagnosis.rs | v0.2 | 2026-09-15 | COMMUNITY | | |
 | src/bootstrap/sel4_entry.rs | v0.4 | 2026-08-21 | COMMUNITY | | |
-| src/seL4/mod.rs | v0.2 | 2026-11-20 | COMMUNITY | | |
+| src/seL4/mod.rs | v0.3 | 2026-11-23 | COMMUNITY | | |
 | src/seL4/sel4_start.S | v0.3 | 2026-11-21 | COMMUNITY | | |
-| src/kernel/syscalls/syscall.rs | v1.4 | 2026-11-22 | COMMUNITY | | |
+| src/kernel/syscalls/syscall.rs | v1.5 | 2026-11-23 | COMMUNITY | | |
 | src/util/mod.rs | v0.2 | 2026-10-28 | COMMUNITY | | |
 | src/util/debug_log.rs | v0.3 | 2026-08-06 | COMMUNITY | | |
 | src/util/srv_root.rs | v0.1 | 2026-10-28 | COMMUNITY | | |
@@ -311,5 +311,5 @@
 | tests/test_sweep_line_intersection.py | v0.1 | 2026-11-19 | COMMUNITY | | |
 | log/simulated_boot_pipeline.md | v0.1 | 2026-11-20 | COMMUNITY | | |
 | tools/make_iso.sh | v0.5 | 2026-11-21 | COMMUNITY | | |
-| src/hal/arm64/mod.rs | v0.6 | 2026-11-22 | PRIVATE | | |
-| src/hal/x86_64/mod.rs | v0.6 | 2026-11-22 | PRIVATE | | |
+| src/hal/arm64/mod.rs | v0.7 | 2026-11-23 | PRIVATE | | |
+| src/hal/x86_64/mod.rs | v0.7 | 2026-11-23 | PRIVATE | | |
