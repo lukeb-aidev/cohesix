@@ -192,7 +192,7 @@
 | src/security/capabilities.rs | v0.4 | 2026-10-29 | COMMUNITY | | |
 | src/rc/init.rs | v0.5 | 2026-02-20 | COMMUNITY | | |
 | src/lib/init.rs | v0.1 | 2025-08-17 | COMMUNITY | | |
-| src/kernel/userland_bootstrap.rs | v0.6 | 2026-11-20 | COMMUNITY | | |
+| src/kernel/userland_bootstrap.rs | v0.7 | 2026-11-20 | COMMUNITY | | |
 | src/kernel/loader.rs | v0.1 | 2026-11-20 | COMMUNITY | | |
 | src/kernel/user_api.rs | v0.1 | 2025-08-27 | COMMUNITY | | |
 | src/kernel/config.rs | v0.1 | 2025-08-27 | COMMUNITY | | |
@@ -254,6 +254,9 @@
 | tests/test_worker_join.rs | v0.7 | 2026-10-31 | COMMUNITY | | |
 | tests/introspect_self_diagnosis.rs | v0.2 | 2026-09-15 | COMMUNITY | | |
 | src/bootstrap/sel4_entry.rs | v0.4 | 2026-08-21 | COMMUNITY | | |
+| src/seL4/mod.rs | v0.2 | 2026-11-20 | COMMUNITY | | |
+| src/seL4/sel4_start.S | v0.2 | 2026-11-20 | COMMUNITY | | |
+| src/kernel/syscalls/syscall.rs | v1.2 | 2026-11-20 | COMMUNITY | | |
 | src/util/mod.rs | v0.2 | 2026-10-28 | COMMUNITY | | |
 | src/util/debug_log.rs | v0.3 | 2026-08-06 | COMMUNITY | | |
 | src/util/srv_root.rs | v0.1 | 2026-10-28 | COMMUNITY | | |
