@@ -1,6 +1,6 @@
 // CLASSIFICATION: PRIVATE
-// Filename: mod.rs · HAL x86_64
-// Date Modified: 2026-11-20
+// Filename: mod.rs v0.5
+// Date Modified: 2026-11-21
 // Author: Lukas Bower
 //
 // ─────────────────────────────────────────────────────────────
@@ -36,14 +36,17 @@ pub fn init_paging() -> Result<(), &'static str> {
     static mut PML4: Table = Table([0; 512]);
     static mut PDPTE: Table = Table([0; 512]);
     static mut PDE: Table = Table([0; 512]);
-    static mut PT: Table = Table([0; 512]);
+    const EMPTY: Table = Table([0; 512]);
+    static mut PT: [Table; 8] = [EMPTY; 8];
 
     unsafe {
-        // Map first 2 MiB using 4 KiB pages.
-        for i in 0..512 {
-            PT.0[i] = (i as u64 * 0x1000) | 0b11;
+        // Identity-map 0x0000_0000..0x0100_0000 (16 MiB)
+        for tbl in 0..8 {
+            for i in 0..512 {
+                PT[tbl].0[i] = ((tbl as u64 * 0x200000) + (i as u64 * 0x1000)) | 0b11;
+            }
+            PDE.0[tbl] = (&PT[tbl] as *const _ as u64) | 0b11;
         }
-        PDE.0[0] = (&PT as *const _ as u64) | 0b11;
         PDPTE.0[0] = (&PDE as *const _ as u64) | 0b11;
         PML4.0[0] = (&PDPTE as *const _ as u64) | 0b11;
 
@@ -65,8 +68,8 @@ pub fn init_paging() -> Result<(), &'static str> {
         asm!("mov cr0, {}", in(reg) cr0);
     }
 
-    info!("HAL/x86_64: mapped 0x00000000-0x00200000");
-    info!("HAL/x86_64: Paging enabled");
+    info!("[HAL] Mapping 0x0 - 0x1000000 (identity)");
+    info!("[HAL] Paging enabled on x86_64");
     Ok(())
 }
 

@@ -2325,3 +2325,9 @@
 ### Added
 - Simulated boot pipeline documentation `log/simulated_boot_pipeline.md`.
 
+## [v0.344] - 2026-11-21
+### Added
+- Toolchain checks in `cohesix_fetch_build.sh` validate Rust targets, cross GCC and GRUB tools.
+- `tools/make_iso.sh` now verifies GRUB module directories and prints summary counts.
+- `init_paging` for ARM64 and x86_64 maps 16 MiB and enables the MMU or paging with diagnostic logs.
+

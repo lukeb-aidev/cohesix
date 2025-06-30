@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.73
+# Filename: cohesix_fetch_build.sh v0.74
 # Author: Lukas Bower
-# Date Modified: 2026-11-17
+# Date Modified: 2026-11-21
 #!/bin/bash
 
 HOST_ARCH="$(uname -m)"
@@ -68,6 +68,27 @@ esac
 export COHESIX_TARGET COHESIX_ARCH
 COH_ARCH="$COHESIX_ARCH"
 log "Architecture: $COH_ARCH (target $COHESIX_TARGET)"
+
+# Toolchain sanity checks
+if ! command -v rustup >/dev/null 2>&1; then
+  echo "❌ rustup not found. Install Rust toolchains before running" >&2
+  exit 1
+fi
+if ! rustup target list --installed | grep -q "^${COHESIX_TARGET}$"; then
+  echo "❌ Rust target ${COHESIX_TARGET} missing. Run: rustup target add ${COHESIX_TARGET}" >&2
+  exit 1
+fi
+case "$COH_ARCH" in
+  aarch64)
+    command -v aarch64-linux-musl-gcc >/dev/null 2>&1 || { echo "❌ aarch64-linux-musl-gcc missing" >&2; exit 1; }
+    ;;
+  x86_64)
+    command -v x86_64-linux-gnu-gcc >/dev/null 2>&1 || { echo "❌ x86_64-linux-gnu-gcc missing" >&2; exit 1; }
+    ;;
+esac
+command -v grub-mkrescue >/dev/null 2>&1 || { echo "❌ grub-mkrescue not found" >&2; exit 1; }
+command -v grub-mkimage >/dev/null 2>&1 || { echo "❌ grub-mkimage not found" >&2; exit 1; }
+
 
 # Optional seL4 entry build flag
 SEL4_ENTRY=0
