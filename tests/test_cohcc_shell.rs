@@ -14,10 +14,6 @@ use tempfile::tempdir;
 fn shell_runs_cohcc() {
     let dir = tempdir().unwrap();
     std::env::set_current_dir(&dir).unwrap();
-    if fs::create_dir_all("/dev").is_err() {
-        eprintln!("skipping shell_runs_cohcc: cannot create /dev");
-        return;
-    }
     if fs::create_dir_all("/srv").is_err() {
         eprintln!("skipping shell_runs_cohcc: cannot create /srv");
         return;
@@ -30,10 +26,10 @@ fn shell_runs_cohcc() {
         eprintln!("skipping shell_runs_cohcc: cannot write example.coh");
         return;
     }
-    let mut console = match File::create("/dev/console") {
+    let mut console = match File::create("/srv/console") {
         Ok(c) => c,
         Err(_) => {
-            eprintln!("skipping shell_runs_cohcc: cannot create /dev/console");
+            eprintln!("skipping shell_runs_cohcc: cannot create /srv/console");
             return;
         }
     };

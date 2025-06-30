@@ -15,9 +15,8 @@ use tempfile::tempdir;
 fn session_log_written() {
     let dir = tempdir().unwrap();
     std::env::set_current_dir(&dir).unwrap();
-    fs::create_dir_all("/dev").unwrap();
     fs::create_dir_all("/srv/trace").unwrap();
-    let mut console = File::create("/dev/console").unwrap();
+    let mut console = File::create("/srv/console").unwrap();
     writeln!(console, "echo hi").unwrap();
     writeln!(console, "exit").unwrap();
     spawn_shell();

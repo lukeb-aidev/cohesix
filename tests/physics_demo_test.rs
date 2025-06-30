@@ -13,7 +13,8 @@ use std::path::Path;
 #[cfg(feature = "rapier")]
 #[test]
 fn physics_demo_creates_trace() {
-    fs::create_dir_all("trace").unwrap();
+    let tdir = std::env::temp_dir().join("trace");
+    fs::create_dir_all(&tdir).unwrap();
     run_demo();
-    assert!(Path::new("/trace/last_sim.json").exists());
+    assert!(tdir.join("last_sim.json").exists());
 }

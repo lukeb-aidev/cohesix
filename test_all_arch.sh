@@ -48,6 +48,10 @@ if ! cargo test --workspace; then
     fail "cargo test failed"
 fi
 
+if ! cargo build --release --target aarch64-unknown-uefi; then
+    fail "uefi build failed"
+fi
+
 if ! GOWORK="$(pwd)/go/go.work" go test ./go/...; then
     fail "go test failed"
 fi

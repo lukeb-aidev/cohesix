@@ -17,7 +17,7 @@ fn queue_dequeue_dispatch_order() {
             args: vec!["1".into()],
         },
         Syscall::Mount {
-            src: "/dev".into(),
+            src: "/srv/dev".into(),
             dest: "/mnt".into(),
         },
         Syscall::Exec {

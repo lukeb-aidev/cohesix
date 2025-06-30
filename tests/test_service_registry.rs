@@ -7,6 +7,7 @@ use cohesix::runtime::{ServiceRegistry, TestRegistryGuard};
 use env_logger;
 use serial_test::serial;
 use std::{env, fs};
+use tempfile::tempdir;
 
 fn reset_env_and_srv() {
     let _ = fs::remove_file("/srv/cohrole");
@@ -23,11 +24,13 @@ fn register_and_lookup() {
     env::set_var("COHROLE", "DroneWorker");
 
     assert!(ServiceRegistry::list_services().unwrap().is_empty());
-    ServiceRegistry::register_service("mock1", "/tmp/mock1").unwrap();
+    let temp = tempdir().unwrap();
+    let svc = temp.path().join("mock1");
+    ServiceRegistry::register_service("mock1", svc.to_str().unwrap()).unwrap();
     let list = ServiceRegistry::list_services().unwrap();
     assert_eq!(list, vec!["mock1".to_string()]);
     let h = ServiceRegistry::lookup("mock1").unwrap().expect("lookup failed");
-    assert_eq!(h.path, "/tmp/mock1");
+    assert_eq!(h.path, svc.to_str().unwrap());
     ServiceRegistry::unregister_service("mock1").unwrap();
     assert!(ServiceRegistry::list_services().unwrap().is_empty());
 
@@ -46,7 +49,9 @@ fn role_visibility() {
     let prev = env::var("COHROLE").ok();
     env::set_var("COHROLE", "DroneWorker");
 
-    ServiceRegistry::register_service("worker_only", "/tmp/wo").unwrap();
+    let temp = tempdir().unwrap();
+    let svc = temp.path().join("wo");
+    ServiceRegistry::register_service("worker_only", svc.to_str().unwrap()).unwrap();
 
     env::set_var("COHROLE", "KioskInteractive");
     match ServiceRegistry::lookup("worker_only").unwrap() {
@@ -78,7 +83,9 @@ fn unregister() {
     env::set_var("COHROLE", "DroneWorker");
 
     assert!(ServiceRegistry::list_services().unwrap().is_empty());
-    ServiceRegistry::register_service("tmp", "/tmp/tmp").unwrap();
+    let temp = tempdir().unwrap();
+    let svc = temp.path().join("tmp");
+    ServiceRegistry::register_service("tmp", svc.to_str().unwrap()).unwrap();
     assert!(ServiceRegistry::lookup("tmp").unwrap().is_some());
     ServiceRegistry::unregister_service("tmp").unwrap();
     assert!(ServiceRegistry::lookup("tmp").unwrap().is_none());
