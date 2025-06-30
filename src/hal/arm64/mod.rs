@@ -1,6 +1,6 @@
 // CLASSIFICATION: PRIVATE
-// Filename: mod.rs · HAL arm64
-// Date Modified: 2026-11-20
+// Filename: mod.rs v0.5
+// Date Modified: 2026-11-21
 // Author: Lukas Bower
 //
 // ─────────────────────────────────────────────────────────────
@@ -38,15 +38,17 @@ pub fn init_paging() -> Result<(), &'static str> {
     struct Table([u64; 512]);
 
     static mut L1: Table = Table([0; 512]);
-    static mut L2: Table = Table([0; 512]);
+    const EMPTY: Table = Table([0; 512]);
+    static mut L2: [Table; 8] = [EMPTY; 8];
 
     unsafe {
-        // Map 0x0000_0000..0x0020_0000 as RW using 4 KiB pages.
-        for i in 0..512 {
-            L2.0[i] = (i as u64 * 0x1000) | 0b11;
+        // Identity-map 0x0000_0000..0x0100_0000 (16 MiB)
+        for tbl in 0..8 {
+            for i in 0..512 {
+                L2[tbl].0[i] = ((tbl as u64 * 0x200000) + (i as u64 * 0x1000)) | 0b11;
+            }
+            L1.0[tbl] = (&L2[tbl] as *const _ as u64) | 0b11;
         }
-        // Point first L1 entry at the L2 table.
-        L1.0[0] = (&L2 as *const _ as u64) | 0b11;
 
         debug!("HAL/arm64: page tables created");
 
@@ -69,8 +71,8 @@ pub fn init_paging() -> Result<(), &'static str> {
         asm!("isb");
     }
 
-    info!("HAL/arm64: mapped 0x00000000-0x00200000");
-    info!("HAL/arm64: MMU enabled");
+    info!("[HAL] Mapping 0x0 - 0x1000000 (identity)");
+    info!("[HAL] MMU enabled on ARM64");
     Ok(())
 }
 
