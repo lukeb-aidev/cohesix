@@ -114,7 +114,7 @@
 | CohesixBoot.inf | v0.1 | 2025-07-22 | COMMUNITY | | |
 | linker.ld | v0.1 | 2025-07-22 | COMMUNITY | | |
 | .bashrc | v0.1 | 2026-08-09 | COMMUNITY | | |
-| .cargo/config.toml | v0.7 | 2026-08-23 | COMMUNITY | | |
+| .cargo/config.toml | v0.8 | 2026-11-25 | COMMUNITY | | |
 | build.rs | v0.8 | 2026-08-21 | COMMUNITY | | |
 | Makefile | v0.50 | 2026-10-16 | COMMUNITY | | |
 | src/kernel/main.c | v0.2 | 2025-07-22 | COMMUNITY | | |
@@ -139,7 +139,7 @@
 | docs/community/architecture/BOOT_KERNEL_FLOW.md | v0.3 | 2026-10-16 | COMMUNITY | | |
 | docs/community/archive/EXAMPLES_README.md | v0.3 | 2026-02-05 | COMMUNITY | | |
 | .cohesix_env | v0.3 | 2026-07-25 | COMMUNITY | | |
-| cohesix_fetch_build.sh | v0.75 | 2026-11-24 | COMMUNITY | | |
+| cohesix_fetch_build.sh | v0.76 | 2026-11-25 | COMMUNITY | | |
 | CONTRIBUTING.md | v1.1 | 2025-07-23 | COMMUNITY | | |
 | config/secure9p.toml | v0.6 | 2026-10-29 | COMMUNITY | | |
 | config/plan9.ns | v0.1 | 2026-08-04 | COMMUNITY | | |
@@ -174,7 +174,7 @@
 | scripts/debug_qemu_boot.sh | v0.4 | 2026-11-24 | COMMUNITY | | |
 | scripts/boot_qemu.sh | v0.1 | 2025-12-29 | COMMUNITY | | |
 | scripts/validate_iso_build.sh | v0.2 | 2026-10-16 | COMMUNITY | | |
-| scripts/build_root_elf.sh | v0.11 | 2026-07-25 | COMMUNITY | | |
+| scripts/build_root_elf.sh | v0.12 | 2026-11-25 | COMMUNITY | | |
 | scripts/load_arch_config.sh | v0.1 | 2026-07-25 | COMMUNITY | | |
 | scripts/build_busybox.sh | v0.7 | 2026-11-17 | COMMUNITY | | |
 | metadata.json | v0.1 | 2025-07-24 | COMMUNITY | | |
@@ -310,6 +310,6 @@
 | src/geometry/sweep_line_intersection.py | v0.1 | 2026-11-19 | COMMUNITY | | |
 | tests/test_sweep_line_intersection.py | v0.1 | 2026-11-19 | COMMUNITY | | |
 | log/simulated_boot_pipeline.md | v0.1 | 2026-11-20 | COMMUNITY | | |
-| tools/make_iso.sh | v0.5 | 2026-11-21 | COMMUNITY | | |
+| tools/make_iso.sh | v0.6 | 2026-11-25 | COMMUNITY | | |
 | src/hal/arm64/mod.rs | v0.7 | 2026-11-23 | PRIVATE | | |
 | src/hal/x86_64/mod.rs | v0.7 | 2026-11-23 | PRIVATE | | |

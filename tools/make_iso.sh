@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # CLASSIFICATION: COMMUNITY
-# Filename: make_iso.sh v0.5
+# Filename: make_iso.sh v0.6
 # Author: Lukas Bower
-# Date Modified: 2026-11-21
+# Date Modified: 2026-11-25
 
 set -euo pipefail
 set -x
@@ -27,21 +27,21 @@ cleanup() {
 trap cleanup EXIT
 
 log "Preparing ISO root at $ISO_ROOT"
-mkdir -p "$ISO_ROOT/boot/grub" "$ISO_ROOT/bin" "$ISO_ROOT/usr/bin" \
+mkdir -p "$ISO_ROOT/EFI/BOOT" "$ISO_ROOT/boot" "$ISO_ROOT/bin" "$ISO_ROOT/usr/bin" \
          "$ISO_ROOT/usr/cli" "$ISO_ROOT/usr/share/man" "$ISO_ROOT/usr/share/cohesix/man" \
          "$ISO_ROOT/etc/cohesix" "$ISO_ROOT/roles" "$ISO_ROOT/srv" \
          "$ISO_ROOT/home/cohesix" "$ISO_ROOT/upgrade" "$ISO_ROOT/log"
 
-KERNEL_SRC="$ROOT/out/bin/kernel.elf"
+KERNEL_SRC="$ROOT/out/bin/kernel.efi"
 ROOT_SRC="$ROOT/out/cohesix_root.elf"
 
-[ -f "$KERNEL_SRC" ] || { log "kernel.elf missing at $KERNEL_SRC"; exit 1; }
+[ -f "$KERNEL_SRC" ] || { log "kernel.efi missing at $KERNEL_SRC"; exit 1; }
 [ -f "$ROOT_SRC" ] || { log "userland.elf missing at $ROOT_SRC"; exit 1; }
 
 log "Copying kernel and userland binaries..."
-cp "$KERNEL_SRC" "$ISO_ROOT/boot/kernel.elf"
+cp "$KERNEL_SRC" "$ISO_ROOT/boot/kernel.efi"
 cp "$ROOT_SRC" "$ISO_ROOT/boot/userland.elf"
-sha256sum "$ISO_ROOT/boot/kernel.elf" | tee -a "$LOG_FILE" >&3
+sha256sum "$ISO_ROOT/boot/kernel.efi" | tee -a "$LOG_FILE" >&3
 sha256sum "$ISO_ROOT/boot/userland.elf" | tee -a "$LOG_FILE" >&3
 ls -lh "$ISO_ROOT/boot" | tee -a "$LOG_FILE" >&3
 
@@ -125,16 +125,13 @@ fi
 [ -d "$ROOT/userland/miniroot" ] && cp -a "$ROOT/userland/miniroot" "$ISO_ROOT/miniroot"
 
 ARCH="${COH_ARCH:-$(uname -m)}"
+UEFI_DIR="$ISO_ROOT/EFI/BOOT"
 case "$ARCH" in
   x86_64|amd64)
-    GRUB_TARGET="i386-pc-efi"
-    GRUB_MODULE_PATH="/usr/lib/grub/i386-pc"
-    GRUB_ENTRY="  multiboot2 /boot/kernel.elf\n  module /boot/userland.elf CohRole=\${CohRole}"
+    BOOT_EFI="BOOTX64.EFI"
     ;;
   aarch64|arm64)
-    GRUB_TARGET="arm64-efi"
-    GRUB_MODULE_PATH="/usr/lib/grub/arm64-efi"
-    GRUB_ENTRY="  linux /boot/kernel.elf CohRole=\${CohRole}"
+    BOOT_EFI="BOOTAA64.EFI"
     ;;
   *)
     log "❌ Unsupported architecture: $ARCH"
@@ -142,53 +139,16 @@ case "$ARCH" in
     ;;
 esac
 
-# GRUB config
-log "Creating GRUB configuration for $ARCH..."
-cat >"$ISO_ROOT/boot/grub/grub.cfg" <<CFG
-set default=0
-set timeout=5
-if [ "\${CohRole}" = "" ]; then
-    set CohRole=${ROLE}
-fi
-menuentry "Cohesix (Role: \${CohRole})" {
-$GRUB_ENTRY
-}
-CFG
+log "Staging EFI binary as $BOOT_EFI"
+cp "$KERNEL_SRC" "$UEFI_DIR/$BOOT_EFI"
 
-log "Detected arch: $ARCH, using GRUB target: $GRUB_TARGET"
-
-log "DEBUG: ROOT=$ROOT"
-log "DEBUG: ISO_ROOT=$ISO_ROOT"
-log "DEBUG: ISO_OUT=$ISO_OUT"
-log "DEBUG: GRUB_MODULE_PATH=$GRUB_MODULE_PATH"
-log "DEBUG: checking if GRUB module dir exists: [ -d \"$GRUB_MODULE_PATH\" ]"
-
-if [ ! -d "$GRUB_MODULE_PATH" ]; then
-    log "ERROR: GRUB modules for $GRUB_TARGET not found at $GRUB_MODULE_PATH"
-    exit 1
-fi
-module_count=$(find "$GRUB_MODULE_PATH" -name '*.mod' | wc -l)
-log "GRUB modules detected: $module_count in $GRUB_MODULE_PATH"
-if [ "$ARCH" = "x86_64" ] || [ "$ARCH" = "amd64" ]; then
-    [ -f "$GRUB_MODULE_PATH/multiboot2.mod" ] || { log "ERROR: multiboot2.mod missing"; exit 1; }
-elif [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
-    [ -f "$GRUB_MODULE_PATH/efi_gop.mod" ] || { log "ERROR: efi_gop.mod missing"; exit 1; }
-fi
-
-command -v grub-mkrescue >/dev/null 2>&1 || { log "grub-mkrescue not found"; exit 1; }
-command -v xorriso >/dev/null 2>&1 || { log "xorriso not found (required by grub-mkrescue)"; exit 1; }
+command -v xorriso >/dev/null 2>&1 || { log "xorriso not found"; exit 1; }
 
 log "Creating ISO image at $ISO_OUT..."
-MODULES="part_gpt efi_gop ext2 fat normal iso9660 configfile linux"
-if [ "$ARCH" = "x86_64" ] || [ "$ARCH" = "amd64" ]; then
-    MODULES="$MODULES multiboot2"
-fi
-
-log "Using GRUB modules: $MODULES"
-log "DRY-RUN: grub-mkrescue -o $ISO_OUT $ISO_ROOT --modules=\"$MODULES\""
-grub-mkrescue -o "$ISO_OUT" "$ISO_ROOT" \
-    --modules="$MODULES" \
-    || { log "grub-mkrescue failed"; exit 1; }
+xorriso -as mkisofs -R -J -joliet -V Cohesix -o "$ISO_OUT" \
+    -efi-boot "EFI/BOOT/$BOOT_EFI" -no-emul-boot "$ISO_ROOT" || {
+    log "xorriso failed"; exit 1;
+}
 
 # Validation
 fail=0
@@ -213,7 +173,7 @@ else
     find "$ISO_ROOT"
 fi
 
-log "QEMU x86_64 test: qemu-system-x86_64 -cdrom $ISO_OUT -boot d -m 1024"
-log "QEMU aarch64 test: qemu-system-aarch64 -M virt -cpu cortex-a57 -bios QEMU_EFI.fd -cdrom $ISO_OUT -m 1024"
+log "QEMU x86_64 test: qemu-system-x86_64 -bios OVMF.fd -cdrom $ISO_OUT -serial mon:stdio -nographic"
+log "QEMU aarch64 test: qemu-system-aarch64 -M virt -cpu cortex-a57 -bios QEMU_EFI.fd -cdrom $ISO_OUT -serial mon:stdio -nographic"
 
 log "DEBUG: Finished make_iso.sh execution."
