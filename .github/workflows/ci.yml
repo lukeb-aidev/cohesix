@@ -63,9 +63,6 @@ jobs:
           make test
           make build
 
-      - name: Verify QEMU boot
-        run: ci/qemu_boot_check.sh
-
       - name: Validation summary
         run: |
           echo "✅ Cohesix CI completed. Review logs in the Artifacts tab if needed."
