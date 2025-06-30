@@ -2371,3 +2371,8 @@
 - `scripts/build_root_elf.sh` now passes the linker flag to rustc using `-- -C linker=ld.lld`.
 - Updated metadata for `build_root_elf.sh` to v0.13.
 
+## [v0.352] - 2026-11-27
+### Changed
+- `scripts/build_root_elf.sh` uses linker settings from `.cargo/config.toml` instead of command line.
+- Version bumped to v0.14 in metadata.
+
