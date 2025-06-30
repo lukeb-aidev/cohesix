@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: lib.rs v0.3
-// Date Modified: 2025-07-24
+// Date Modified: 2026-12-31
 // Author: Lukas Bower
 
 //! Minimal filesystem layer for Cohesix-9P.
@@ -38,6 +38,8 @@ pub use fs::ValidatorHook;
 mod server;
 pub use server::FsServer;
 pub mod ninep_adapter;
+pub mod inprocess;
+pub use inprocess::InProcessStream;
 /// Policy enforcement and capability checks for Cohesix-9P.
 pub mod policy;
 
