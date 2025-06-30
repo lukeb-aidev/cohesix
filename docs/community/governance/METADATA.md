@@ -139,7 +139,7 @@
 | docs/community/architecture/BOOT_KERNEL_FLOW.md | v0.3 | 2026-10-16 | COMMUNITY | | |
 | docs/community/archive/EXAMPLES_README.md | v0.3 | 2026-02-05 | COMMUNITY | | |
 | .cohesix_env | v0.3 | 2026-07-25 | COMMUNITY | | |
-| cohesix_fetch_build.sh | v0.73 | 2026-11-17 | COMMUNITY | | |
+| cohesix_fetch_build.sh | v0.74 | 2026-11-21 | COMMUNITY | | |
 | CONTRIBUTING.md | v1.1 | 2025-07-23 | COMMUNITY | | |
 | config/secure9p.toml | v0.6 | 2026-10-29 | COMMUNITY | | |
 | config/plan9.ns | v0.1 | 2026-08-04 | COMMUNITY | | |
@@ -310,3 +310,6 @@
 | src/geometry/sweep_line_intersection.py | v0.1 | 2026-11-19 | COMMUNITY | | |
 | tests/test_sweep_line_intersection.py | v0.1 | 2026-11-19 | COMMUNITY | | |
 | log/simulated_boot_pipeline.md | v0.1 | 2026-11-20 | COMMUNITY | | |
+| tools/make_iso.sh | v0.5 | 2026-11-21 | COMMUNITY | | |
+| src/hal/arm64/mod.rs | v0.5 | 2026-11-21 | PRIVATE | | |
+| src/hal/x86_64/mod.rs | v0.5 | 2026-11-21 | PRIVATE | | |
