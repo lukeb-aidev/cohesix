@@ -52,6 +52,7 @@ cohesix-9p = { path = "cohesix-9p" }
 [workspace]
 members = [
     "cohesix-9p",
+    "cohesix-secure9p",
     "tools/cohfuzz",
     "tools/scenario_compiler",
     "tools/cli",
