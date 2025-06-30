@@ -15,9 +15,7 @@ use tempfile::tempdir;
 #[test]
 #[serial]
 fn run_scenario() {
-    if !std::path::Path::new("out/cohesix_grub.iso").exists()
-        && !std::path::Path::new("out/cohesix.iso").exists()
-    {
+    if !std::path::Path::new("out/cohesix.iso").exists() {
         eprintln!("ISO not present — skipping run_scenario");
         return;
     }
@@ -39,9 +37,7 @@ fn run_scenario() {
 #[test]
 #[serial]
 fn run_scenario_invalid_cmd() {
-    if !std::path::Path::new("out/cohesix_grub.iso").exists()
-        && !std::path::Path::new("out/cohesix.iso").exists()
-    {
+    if !std::path::Path::new("out/cohesix.iso").exists() {
         eprintln!("ISO not present — skipping run_scenario_invalid_cmd");
         return;
     }

@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.75
+# Filename: cohesix_fetch_build.sh v0.76
 # Author: Lukas Bower
-# Date Modified: 2026-11-24
+# Date Modified: 2026-11-25
 #!/bin/bash
 
 HOST_ARCH="$(uname -m)"
@@ -60,8 +60,8 @@ else
 fi
 
 case "$COHESIX_ARCH" in
-  x86_64) COHESIX_TARGET="x86_64-unknown-linux-gnu" ;;
-  aarch64) COHESIX_TARGET="aarch64-unknown-linux-gnu" ;;
+  x86_64) COHESIX_TARGET="x86_64-unknown-uefi" ;;
+  aarch64) COHESIX_TARGET="aarch64-unknown-uefi" ;;
   *) echo "Unsupported architecture: $COHESIX_ARCH" >&2; exit 1 ;;
 esac
 
@@ -86,8 +86,8 @@ case "$COH_ARCH" in
     command -v x86_64-linux-gnu-gcc >/dev/null 2>&1 || { echo "❌ x86_64-linux-gnu-gcc missing" >&2; exit 1; }
     ;;
 esac
-command -v grub-mkrescue >/dev/null 2>&1 || { echo "❌ grub-mkrescue not found" >&2; exit 1; }
-command -v grub-mkimage >/dev/null 2>&1 || { echo "❌ grub-mkimage not found" >&2; exit 1; }
+command -v ld.lld >/dev/null 2>&1 || { echo "❌ ld.lld not found" >&2; exit 1; }
+ld.lld --version >&3
 
 
 # Optional seL4 entry build flag
@@ -679,17 +679,6 @@ if command -v isoinfo >/dev/null 2>&1; then
 else
   log "⚠️ isoinfo not installed, skipping detailed ISO listing"
 fi
-log "🔍 Extracting GRUB config for review..."
-if command -v xorriso >/dev/null 2>&1; then
-  xorriso -osirrox on -indev "$ISO_OUT" -extract /boot/grub/grub.cfg /tmp/grub.cfg 2>/dev/null || true
-  if [ -f /tmp/grub.cfg ]; then
-    cat /tmp/grub.cfg | tee -a "$LOG_FILE" >&3
-  else
-    log "⚠️ grub.cfg not found in ISO"
-  fi
-else
-  log "⚠️ xorriso not installed, skipping GRUB config extraction"
-fi
 
 # Optional QEMU boot check (architecture-aware)
 ISO_IMG="$ISO_OUT"
@@ -707,7 +696,7 @@ case "$COH_ARCH" in
       QEMU_LOG="$LOG_DIR/qemu_boot.log"
       [ -f "$QEMU_LOG" ] && mv "$QEMU_LOG" "$QEMU_LOG.$(date +%Y%m%d_%H%M%S)"
       log "🧪 Booting ISO in QEMU for x86_64..."
-      qemu-system-x86_64 -m 1024 -cdrom "$ISO_IMG" -boot d -enable-kvm -serial mon:stdio -nographic 2>&1 | tee "$SERIAL_LOG"
+      qemu-system-x86_64 -bios OVMF.fd -cdrom "$ISO_IMG" -serial mon:stdio -nographic 2>&1 | tee "$SERIAL_LOG"
       # Switched to -serial mon:stdio for direct console output in SSH
       QEMU_EXIT=${PIPESTATUS[0]}
       cat "$SERIAL_LOG" >> "$QEMU_LOG" 2>/dev/null || true
@@ -743,14 +732,11 @@ case "$COH_ARCH" in
       log "🧪 Booting ISO in QEMU for aarch64..."
       QEMU_EFI="/usr/share/qemu-efi-aarch64/QEMU_EFI.fd"
       if [ -f "$QEMU_EFI" ]; then
-        qemu-system-aarch64 -M virt -cpu cortex-a57 -m 1024 \
-          -bios "$QEMU_EFI" \
+        qemu-system-aarch64 -M virt -cpu cortex-a57 -bios "$QEMU_EFI" \
           -serial mon:stdio -cdrom "$ISO_IMG" -nographic 2>&1 | tee "$SERIAL_LOG"
-        # Switched to -serial mon:stdio for direct console output in SSH
       else
-        qemu-system-aarch64 -M virt -cpu cortex-a57 -m 1024 \
-          -bios none -serial mon:stdio -cdrom "$ISO_IMG" -nographic 2>&1 | tee "$SERIAL_LOG"
-        # Switched to -serial mon:stdio for direct console output in SSH
+        qemu-system-aarch64 -M virt -cpu cortex-a57 -bios none \
+          -serial mon:stdio -cdrom "$ISO_IMG" -nographic 2>&1 | tee "$SERIAL_LOG"
       fi
       QEMU_EXIT=${PIPESTATUS[0]}
       cat "$SERIAL_LOG" >> "$QEMU_LOG" 2>/dev/null || true
@@ -794,4 +780,8 @@ tail -n 10 "$SUMMARY_ERRORS" || echo "✅ No critical issues found" | tee -a "$L
 
 echo "🪵 Full log saved to $LOG_FILE" >&3
 echo "✅ ISO build complete. Run QEMU with:" >&3
-echo "qemu-system-${COH_ARCH} -cdrom $ISO_OUT -boot d -m 1024" >&3
+if [ "$COH_ARCH" = "x86_64" ]; then
+  echo "qemu-system-x86_64 -bios OVMF.fd -cdrom $ISO_OUT -serial mon:stdio -nographic" >&3
+else
+  echo "qemu-system-aarch64 -M virt -cpu cortex-a57 -bios QEMU_EFI.fd -cdrom $ISO_OUT -serial mon:stdio -nographic" >&3
+fi
