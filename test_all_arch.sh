@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: test_all_arch.sh v1.1
+# Filename: test_all_arch.sh v1.2
 # Author: Lukas Bower
-# Date Modified: 2025-08-25
+# Date Modified: 2026-12-31
 
 #!/usr/bin/env bash
 ###############################################################################
@@ -14,6 +14,7 @@
 #   ./test_all_arch.sh
 ###############################################################################
 set -euo pipefail
+export MEMCHR_DISABLE_RUNTIME_CPU_FEATURE_DETECTION=1
 
 ROOT_DIR="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 cd "$ROOT_DIR"

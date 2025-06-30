@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.76
+# Filename: cohesix_fetch_build.sh v0.77
 # Author: Lukas Bower
-# Date Modified: 2026-11-25
+# Date Modified: 2026-12-31
 #!/bin/bash
 
 HOST_ARCH="$(uname -m)"
@@ -24,6 +24,7 @@ fi
 # Fetch and fully build the Cohesix project using SSH Git auth.
 
 set -euxo pipefail
+export MEMCHR_DISABLE_RUNTIME_CPU_FEATURE_DETECTION=1
 export CUDA_HOME="${CUDA_HOME:-/usr}"
 export CUDA_INCLUDE_DIR="${CUDA_INCLUDE_DIR:-$CUDA_HOME/include}"
 export CUDA_LIBRARY_PATH="${CUDA_LIBRARY_PATH:-/usr/lib/x86_64-linux-gnu}"

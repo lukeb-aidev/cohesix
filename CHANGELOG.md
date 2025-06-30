@@ -2406,3 +2406,9 @@
 - Documented the SSE requirement in `README.md`.
 - Metadata updated accordingly.
 
+## [v0.358] - 2026-12-31
+### Fixed
+- Disabled memchr runtime CPU feature detection in all build scripts and CI by
+  exporting `MEMCHR_DISABLE_RUNTIME_CPU_FEATURE_DETECTION=1` before running
+  `cargo` commands. Prevents `SIGILL` on constrained UEFI platforms.
+
