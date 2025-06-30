@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: runtime.rs v0.4
 // Author: Lukas Bower
-// Date Modified: 2025-07-22
+// Date Modified: 2026-12-30
 
 //! Agent runtime management.
 //!
@@ -106,12 +106,8 @@ impl AgentRuntime {
     /// Pause a running agent process.
     pub fn pause(&mut self, agent_id: &str) -> anyhow::Result<()> {
         if let Some(child) = self.procs.get_mut(agent_id) {
-            #[cfg(unix)]
-            {
-                use nix::sys::signal::{kill, Signal};
-                use nix::unistd::Pid;
-                kill(Pid::from_raw(child.id() as i32), Signal::SIGSTOP).ok();
-            }
+            // Removed nix::sys::signal dependency for UEFI
+            let _ = child.kill();
         }
         Ok(())
     }

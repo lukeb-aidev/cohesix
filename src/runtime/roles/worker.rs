@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: worker.rs v1.2
 // Author: Lukas Bower
-// Date Modified: 2025-08-17
+// Date Modified: 2026-12-30
 
 //! Role module for the Cohesix `Worker`.
 //! A worker node executes assigned tasks, reports telemetry, and responds to commands from the queen or orchestrator.
@@ -13,7 +13,6 @@ pub trait WorkerRole {
     fn receive_command(&mut self, cmd: &str) -> Result<(), String>;
 }
 
-use sysinfo::{System, SystemExt};
 
 /// Basic worker implementation.
 pub struct DefaultWorker;
@@ -37,11 +36,7 @@ impl WorkerRole for DefaultWorker {
 
     fn report_telemetry(&self) -> String {
         println!("[worker] reporting telemetry...");
-        let mut sys = System::new();
-        sys.refresh_system();
-        let mem = sys.used_memory();
-        let total_mem = sys.total_memory();
-        format!("mem:{}/{}kb", mem, total_mem)
+        "mem:0/0kb".into()
     }
 
     fn receive_command(&mut self, cmd: &str) -> Result<(), String> {

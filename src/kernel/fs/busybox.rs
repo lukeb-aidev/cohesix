@@ -1,12 +1,11 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: busybox.rs v1.0
 // Author: Lukas Bower
-// Date Modified: 2025-07-22
+// Date Modified: 2026-12-30
 
 //! Cohesix in-kernel BusyBox implementation.
 //! Provides minimal command handlers for embedded shell and diagnostics.
 
-use std::os::unix::fs::PermissionsExt;
 
 /// Available BusyBox commands.
 #[derive(Debug)]
@@ -111,16 +110,7 @@ pub fn run_command(cmd: &str, args: &[&str]) {
             }
         }
         BusyBoxCommand::Chmod => {
-            if args.len() == 2 {
-                if let Ok(mode) = u32::from_str_radix(args[0], 8) {
-                    use std::fs;
-                    let _ = fs::set_permissions(args[1], fs::Permissions::from_mode(mode));
-                } else {
-                    println!("chmod: invalid mode");
-                }
-            } else {
-                println!("chmod: usage chmod MODE FILE");
-            }
+            println!("chmod unsupported on UEFI");
         }
         BusyBoxCommand::Mount => {
             if args.len() >= 2 {
