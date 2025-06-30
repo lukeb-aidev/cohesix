@@ -1,8 +1,8 @@
 #!/bin/bash
 # CLASSIFICATION: COMMUNITY
-# Filename: scripts/debug_qemu_boot.sh v0.3
+# Filename: scripts/debug_qemu_boot.sh v0.4
 # Author: Lukas Bower
-# Date Modified: 2026-10-16
+# Date Modified: 2026-11-24
 # Ensures this script runs cleanly under Bash for CI use
 set -euo pipefail
 
@@ -45,7 +45,8 @@ if [[ -z "$QEMU" ]]; then
 fi
 "$QEMU" --version
 
-timeout 2 "$QEMU" -cdrom "$ISO" -nographic -d int -D "$LOG_DIR/bootlog.txt" -S -snapshot >/dev/null 2>>"$INVOC_LOG" || true
+timeout 2 "$QEMU" -cdrom "$ISO" -nographic -serial mon:stdio -d int -D "$LOG_DIR/bootlog.txt" -S -snapshot 2>&1 | tee -a "$INVOC_LOG" || true
+# Switched to -serial mon:stdio for direct console output in SSH
 
 if [[ $missing -eq 0 ]]; then
   echo "DEBUG_BOOT_READY"
