@@ -1,8 +1,8 @@
 # CLASSIFICATION: COMMUNITY
 #!/usr/bin/env bash
-# Filename: qemu_boot_check.sh v0.3
+# Filename: qemu_boot_check.sh v0.4
 # Author: Lukas Bower
-# Date Modified: 2026-07-06
+# Date Modified: 2026-11-24
 # This script boots Cohesix under QEMU for CI. Firmware assumptions:
 # - x86_64 uses OVMF for UEFI.
 # - aarch64 requires QEMU_EFI.fd provided by system packages
@@ -39,8 +39,8 @@ if [ "$ARCH" = "aarch64" ]; then
       -cpu cortex-a53 \
       -bios "$QEMU_EFI" \
       -drive format=raw,file=fat:rw:out/ \
-      -m 256M -net none -nographic -serial file:"$ARM_LOG" -no-reboot &
-  )
+      -m 256M -net none -nographic -serial mon:stdio -no-reboot 2>&1 | tee "$ARM_LOG" &
+  ) # Switched to -serial mon:stdio for direct console output in SSH
   QEMU_PID=$!
   LOG_PATH="$ARM_LOG"
 else
@@ -68,8 +68,8 @@ else
       -bios "$OVMF_CODE" \
       -pflash "$LOG_DIR/OVMF_VARS.fd" \
       -drive format=raw,file=fat:rw:out/ \
-      -m 256M -net none -nographic -serial file:"$LOG_FILE" -no-reboot &
-  )
+      -m 256M -net none -nographic -serial mon:stdio -no-reboot 2>&1 | tee "$LOG_FILE" &
+  ) # Switched to -serial mon:stdio for direct console output in SSH
   QEMU_PID=$!
   LOG_PATH="$LOG_FILE"
 fi

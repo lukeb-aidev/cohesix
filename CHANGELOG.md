@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v1.00
 // Author: Lukas Bower
-// Date Modified: 2026-11-22
+// Date Modified: 2026-11-24
 
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
@@ -2351,4 +2351,10 @@
 ## [v0.348] - 2026-11-23
 ### Changed
 - Added dual target_os guards to privileged kernel functions (`init_paging`, `switch_to_user`, `init_syscall_trap`). Host builds now panic on invocation.
+
+## [v0.349] - 2026-11-24
+### Changed
+- All QEMU scripts now run with `-serial mon:stdio` for live console output.
+- Updated versions: `ci/qemu_boot_check.sh` v0.4, `cohesix_fetch_build.sh` v0.75,
+  and `scripts/debug_qemu_boot.sh` v0.4.
 

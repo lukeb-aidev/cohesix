@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.74
+# Filename: cohesix_fetch_build.sh v0.75
 # Author: Lukas Bower
-# Date Modified: 2026-11-21
+# Date Modified: 2026-11-24
 #!/bin/bash
 
 HOST_ARCH="$(uname -m)"
@@ -707,8 +707,9 @@ case "$COH_ARCH" in
       QEMU_LOG="$LOG_DIR/qemu_boot.log"
       [ -f "$QEMU_LOG" ] && mv "$QEMU_LOG" "$QEMU_LOG.$(date +%Y%m%d_%H%M%S)"
       log "🧪 Booting ISO in QEMU for x86_64..."
-      qemu-system-x86_64 -m 1024 -cdrom "$ISO_IMG" -boot d -enable-kvm -serial file:"$SERIAL_LOG" -nographic
-      QEMU_EXIT=$?
+      qemu-system-x86_64 -m 1024 -cdrom "$ISO_IMG" -boot d -enable-kvm -serial mon:stdio -nographic 2>&1 | tee "$SERIAL_LOG"
+      # Switched to -serial mon:stdio for direct console output in SSH
+      QEMU_EXIT=${PIPESTATUS[0]}
       cat "$SERIAL_LOG" >> "$QEMU_LOG" 2>/dev/null || true
       cat "$SERIAL_LOG" >> "$LOG_FILE" 2>/dev/null || true
       echo "📜 Boot log (tail):"
@@ -744,12 +745,14 @@ case "$COH_ARCH" in
       if [ -f "$QEMU_EFI" ]; then
         qemu-system-aarch64 -M virt -cpu cortex-a57 -m 1024 \
           -bios "$QEMU_EFI" \
-          -serial file:"$SERIAL_LOG" -cdrom "$ISO_IMG" -nographic
+          -serial mon:stdio -cdrom "$ISO_IMG" -nographic 2>&1 | tee "$SERIAL_LOG"
+        # Switched to -serial mon:stdio for direct console output in SSH
       else
         qemu-system-aarch64 -M virt -cpu cortex-a57 -m 1024 \
-          -bios none -serial file:"$SERIAL_LOG" -cdrom "$ISO_IMG" -nographic
+          -bios none -serial mon:stdio -cdrom "$ISO_IMG" -nographic 2>&1 | tee "$SERIAL_LOG"
+        # Switched to -serial mon:stdio for direct console output in SSH
       fi
-      QEMU_EXIT=$?
+      QEMU_EXIT=${PIPESTATUS[0]}
       cat "$SERIAL_LOG" >> "$QEMU_LOG" 2>/dev/null || true
       cat "$SERIAL_LOG" >> "$LOG_FILE" 2>/dev/null || true
       echo "📜 Boot log (tail):"
