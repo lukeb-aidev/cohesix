@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: METADATA.md v3.45
+// Filename: METADATA.md v3.46
 // Author: Lukas Bower
-// Date Modified: 2026-10-16
+// Date Modified: 2026-11-24
 
 ## Canonical Documents
 
@@ -139,7 +139,7 @@
 | docs/community/architecture/BOOT_KERNEL_FLOW.md | v0.3 | 2026-10-16 | COMMUNITY | | |
 | docs/community/archive/EXAMPLES_README.md | v0.3 | 2026-02-05 | COMMUNITY | | |
 | .cohesix_env | v0.3 | 2026-07-25 | COMMUNITY | | |
-| cohesix_fetch_build.sh | v0.74 | 2026-11-21 | COMMUNITY | | |
+| cohesix_fetch_build.sh | v0.75 | 2026-11-24 | COMMUNITY | | |
 | CONTRIBUTING.md | v1.1 | 2025-07-23 | COMMUNITY | | |
 | config/secure9p.toml | v0.6 | 2026-10-29 | COMMUNITY | | |
 | config/plan9.ns | v0.1 | 2026-08-04 | COMMUNITY | | |
@@ -171,7 +171,7 @@
 | scripts/generate_busybox_man.sh | v0.1 | 2025-06-08 | COMMUNITY | | |
 | scripts/manpage_scan.sh | v0.1 | 2025-06-08 | COMMUNITY | | |
 | scripts/verify-macos-setup.sh | v0.1 | 2025-06-05 | COMMUNITY | | |
-| scripts/debug_qemu_boot.sh | v0.3 | 2026-10-16 | COMMUNITY | | |
+| scripts/debug_qemu_boot.sh | v0.4 | 2026-11-24 | COMMUNITY | | |
 | scripts/boot_qemu.sh | v0.1 | 2025-12-29 | COMMUNITY | | |
 | scripts/validate_iso_build.sh | v0.2 | 2026-10-16 | COMMUNITY | | |
 | scripts/build_root_elf.sh | v0.11 | 2026-07-25 | COMMUNITY | | |
@@ -224,7 +224,7 @@
 | setup/roles/GlassesAgent.yaml | v0.1 | 2025-09-05 | COMMUNITY | | |
 | setup/roles/SensorRelay.yaml | v0.1 | 2025-09-05 | COMMUNITY | | |
 | setup/roles/SimulatorTest.yaml | v0.1 | 2025-09-05 | COMMUNITY | | |
-| ci/qemu_boot_check.sh | v0.3 | 2026-07-06 | COMMUNITY | | |
+| ci/qemu_boot_check.sh | v0.4 | 2026-11-24 | COMMUNITY | | |
 | userland/miniroot/README.md | v0.2 | 2026-01-20 | COMMUNITY | | |
 | userland/miniroot/bin/echo | v0.1 | 2025-09-23 | COMMUNITY | | |
 | userland/miniroot/bin/help | v0.1 | 2025-09-23 | COMMUNITY | | |
