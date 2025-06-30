@@ -490,6 +490,22 @@ impl FsServer {
         self.handle = Some(handle);
         Ok(())
     }
+
+    /// Start serving over an arbitrary in-process stream.
+    pub fn start_on_stream<U: ninep::Stream + Send + 'static>(&mut self, stream: U) -> AnyResult<U> {
+        let mut fs = CohesixFs::new(self.cfg.root.clone());
+        for (u, p) in &self.policies {
+            fs.set_policy(u.clone(), p.clone());
+        }
+        if let Some(h) = &self.validator_hook {
+            fs.set_validator_hook(Arc::clone(h));
+        }
+        let server = Server::new(fs);
+        info!("[Plan9] cohesix-9p serving /usr, /etc, /srv");
+        let handle = server.serve_stream(stream.try_clone().map_err(|e| anyhow!(e))?);
+        self.handle = Some(handle);
+        Ok(stream)
+    }
 }
 
 fn current_ts() -> u64 {

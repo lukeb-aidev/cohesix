@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix-9p/Cargo.toml v0.2
+# Filename: cohesix-9p/Cargo.toml v0.3
 # Author: Lukas Bower
-# Date Modified: 2025-08-16
+# Date Modified: 2026-12-31
 [package]
 name = "cohesix-9p"
 version = "0.1.0"
@@ -13,6 +13,7 @@ log = "0.4"
 ninep = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+crossbeam-channel = "0.5"
 
 [dev-dependencies]
 serial_test = "2.0"

@@ -2412,3 +2412,7 @@
   exporting `MEMCHR_DISABLE_RUNTIME_CPU_FEATURE_DETECTION=1` before running
   `cargo` commands. Prevents `SIGILL` on constrained UEFI platforms.
 
+\n## [v0.359] - 2026-12-31
+### Added
+- In-process 9P transport and Secure9P TLS layer.
+- New crate cohesix-secure9p.
