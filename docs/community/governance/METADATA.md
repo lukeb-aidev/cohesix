@@ -233,13 +233,13 @@
 | userland/miniroot/bin/rc | v0.1 | 2026-01-20 | COMMUNITY | | |
 | usr/src/example.coh | v0.1 | 2025-09-24 | COMMUNITY | | |
 | src/sh_loop.rs | v0.1 | 2025-09-23 | COMMUNITY | | |
-| src/root/main.rs | v0.1 | 2025-12-27 | COMMUNITY | | |
+| src/root/main.rs | v0.2 | 2026-11-27 | COMMUNITY | | |
 | src/utils/gpu.rs | v0.1 | 2025-12-12 | COMMUNITY | | |
 | src/cli/mod.rs | v1.3 | 2026-10-08 | COMMUNITY | | |
 | src/cli/cohtrace.rs | v0.4 | 2026-10-13 | COMMUNITY | | |
 | src/cloud/mod.rs | v0.2 | 2026-10-10 | COMMUNITY | | |
 | src/cloud/orchestrator.rs | v0.6 | 2026-10-28 | COMMUNITY | | |
-| src/lib.rs | v1.10 | 2026-10-10 | COMMUNITY | | |
+| src/lib.rs | v1.11 | 2026-11-27 | COMMUNITY | | |
 | src/runtime/loader.rs | v0.2 | 2026-10-07 | COMMUNITY | | |
 | src/plan9/namespace.rs | v0.6 | 2026-10-28 | COMMUNITY | | |
 | src/validator/syscall.rs | v0.5 | 2026-11-11 | COMMUNITY | | |
