@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: config.toml v0.8
+# Filename: config.toml v0.9
 # Author: Lukas Bower
-# Date Modified: 2026-11-25
+# Date Modified: 2026-12-31
 
 
 [build]
@@ -20,7 +20,8 @@ rustflags = [
   "-C", "link-arg=-ffreestanding",
   "-C", "link-arg=-fPIC",
   "-C", "link-arg=-Wl,--subsystem,10",
-  "-C", "link-arg=-Tlinker.ld"
+  "-C", "link-arg=-Tlinker.ld",
+  "-C", "target-feature=+sse2,+sse"
 ]
 
 [target.aarch64-unknown-uefi]
