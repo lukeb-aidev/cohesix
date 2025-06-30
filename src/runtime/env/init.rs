@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: init.rs v1.1
+// Filename: init.rs v1.2
 // Author: Lukas Bower
-// Date Modified: 2026-09-30
+// Date Modified: 2026-12-02
 
 //! Runtime environment initialization for Cohesix.
 //! Sets up runtime globals, telemetry, role configuration, and system entropy.
@@ -17,9 +17,31 @@ pub struct BootArgs {
     pub no_cuda: bool,
 }
 
+/// Load the Cohesix role from `CohRole` environment variable or `/etc/role.conf`.
+/// Returns `Some(role)` if detected.
+pub fn load_role_setting() -> Option<String> {
+    if let Ok(env_role) = std::env::var("CohRole") {
+        println!("[BOOT] Loaded role: {env_role} from environment");
+        return Some(env_role);
+    }
+    let path = std::env::var("ROLE_CONF_PATH").unwrap_or_else(|_| "/etc/role.conf".into());
+    if let Ok(data) = fs::read_to_string(&path) {
+        for line in data.lines() {
+            if let Some(v) = line.strip_prefix("CohRole=") {
+                let role = v.trim().to_string();
+                println!("[BOOT] Loaded role: {} from {}", role, path);
+                return Some(role);
+            }
+        }
+    }
+    None
+}
+
 pub fn parse_boot_args() -> BootArgs {
     let mut args = BootArgs::default();
-    if let Ok(role) = std::env::var("COHROLE") {
+    if let Some(role) = load_role_setting() {
+        args.cohrole = Some(role);
+    } else if let Ok(role) = std::env::var("COHROLE") {
         args.cohrole = Some(role);
     } else if let Ok(role) = fs::read_to_string("/srv/cohrole") {
         args.cohrole = Some(role.trim().to_string());

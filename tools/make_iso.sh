@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # CLASSIFICATION: COMMUNITY
-# Filename: make_iso.sh v0.6
+# Filename: make_iso.sh v0.7
 # Author: Lukas Bower
-# Date Modified: 2026-11-25
+# Date Modified: 2026-12-02
 
 set -euo pipefail
 set -x
@@ -48,6 +48,8 @@ ls -lh "$ISO_ROOT/boot" | tee -a "$LOG_FILE" >&3
 log "Ensuring config.yaml exists..."
 if [ -f "$ROOT/out/etc/cohesix/config.yaml" ]; then
     cp "$ROOT/out/etc/cohesix/config.yaml" "$ISO_ROOT/etc/cohesix/config.yaml"
+    log "Creating default role.conf..."
+    echo "CohRole=DroneWorker" > "$ISO_ROOT/etc/role.conf"
 else
     log "ERROR: config.yaml missing in build output"
     exit 1

@@ -216,6 +216,8 @@
 | configs/roles/default.yaml | v0.1 | 2025-08-30 | COMMUNITY | | |
 | src/runtime/role_config.rs | v0.3 | 2025-09-06 | COMMUNITY | | |
 | tests/role_config.rs | v0.2 | 2025-09-06 | COMMUNITY | | |
+| src/runtime/env/init.rs | v1.2 | 2026-12-02 | COMMUNITY | | |
+| tests/boot_role.rs | v0.1 | 2026-12-02 | COMMUNITY | | |
 | setup/config.yaml | v0.1 | 2025-09-05 | COMMUNITY | | |
 | setup/init.sh | v0.1 | 2026-09-21 | COMMUNITY | | |
 | setup/roles/QueenPrimary.yaml | v0.1 | 2025-09-05 | COMMUNITY | | |
@@ -310,6 +312,6 @@
 | src/geometry/sweep_line_intersection.py | v0.1 | 2026-11-19 | COMMUNITY | | |
 | tests/test_sweep_line_intersection.py | v0.1 | 2026-11-19 | COMMUNITY | | |
 | log/simulated_boot_pipeline.md | v0.1 | 2026-11-20 | COMMUNITY | | |
-| tools/make_iso.sh | v0.6 | 2026-11-25 | COMMUNITY | | |
+| tools/make_iso.sh | v0.7 | 2026-12-02 | COMMUNITY | | |
 | src/hal/arm64/mod.rs | v0.7 | 2026-11-23 | PRIVATE | | |
 | src/hal/x86_64/mod.rs | v0.7 | 2026-11-23 | PRIVATE | | |
