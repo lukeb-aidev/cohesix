@@ -2358,3 +2358,11 @@
 - Updated versions: `ci/qemu_boot_check.sh` v0.4, `cohesix_fetch_build.sh` v0.75,
   and `scripts/debug_qemu_boot.sh` v0.4.
 
+## [v0.350] - 2026-11-25
+### Changed
+- Switched build pipeline to direct UEFI boot using `ld.lld` on both architectures.
+- Removed all GRUB logic from ISO creation scripts.
+- `cohesix_fetch_build.sh` v0.76 checks `ld.lld` and updates QEMU boot commands.
+- `tools/make_iso.sh` v0.6 stages `BOOTX64.EFI`/`BOOTAA64.EFI`.
+- Updated tests and metadata entries accordingly.
+

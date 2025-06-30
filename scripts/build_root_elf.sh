@@ -1,12 +1,18 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: build_root_elf.sh v0.11
+# Filename: build_root_elf.sh v0.12
 # Author: Lukas Bower
-# Date Modified: 2026-07-25
+# Date Modified: 2026-11-25
 #!/usr/bin/env bash
 set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 source "$ROOT/scripts/load_arch_config.sh"
+
+command -v ld.lld >/dev/null 2>&1 || {
+    echo "ERROR: ld.lld not found" >&2
+    exit 1
+}
+ld.lld --version >&2
 
 HOST_ARCH="$(uname -m)"
 if [[ "$HOST_ARCH" = "aarch64" ]] && ! command -v aarch64-linux-musl-gcc >/dev/null 2>&1; then
@@ -33,10 +39,10 @@ OUT_ELF="$OUT_DIR/cohesix_root.elf"
 ARCH="$COHESIX_ARCH"
 case "$ARCH" in
     aarch64|arm64)
-        TARGET="aarch64-unknown-linux-gnu"
+        TARGET="aarch64-unknown-uefi"
         ;;
     x86_64|amd64)
-        TARGET="x86_64-unknown-linux-gnu"
+        TARGET="x86_64-unknown-uefi"
         ;;
     *)
         echo "Unsupported architecture: $ARCH" >&2
@@ -85,12 +91,8 @@ else
     CARGO_ARGS=(--no-default-features)
 fi
 
-if [[ "$TARGET" == *musl ]]; then
-    RUSTFLAGS="-C link-arg=-static" \
-        cargo build --release "${CARGO_ARGS[@]}" --bin cohesix_root --target "$TARGET" --features "$FEATURES"
-else
-    cargo build --release "${CARGO_ARGS[@]}" --bin cohesix_root --target "$TARGET" --features "$FEATURES"
-fi
+cargo build --release "${CARGO_ARGS[@]}" --bin cohesix_root \
+    --target "$TARGET" --features "$FEATURES" -C linker=ld.lld
 cp "target/$TARGET/release/cohesix_root" "$OUT_ELF"
 
 [ -s "$OUT_ELF" ] && echo "ROOT TASK BUILD OK: $OUT_ELF"
