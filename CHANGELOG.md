@@ -2366,3 +2366,8 @@
 - `tools/make_iso.sh` v0.6 stages `BOOTX64.EFI`/`BOOTAA64.EFI`.
 - Updated tests and metadata entries accordingly.
 
+## [v0.351] - 2026-11-26
+### Changed
+- `scripts/build_root_elf.sh` now passes the linker flag to rustc using `-- -C linker=ld.lld`.
+- Updated metadata for `build_root_elf.sh` to v0.13.
+

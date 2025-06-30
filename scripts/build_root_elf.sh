@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: build_root_elf.sh v0.12
+# Filename: build_root_elf.sh v0.13
 # Author: Lukas Bower
-# Date Modified: 2026-11-25
+# Date Modified: 2026-11-26
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -92,7 +92,8 @@ else
 fi
 
 cargo build --release "${CARGO_ARGS[@]}" --bin cohesix_root \
-    --target "$TARGET" --features "$FEATURES" -C linker=ld.lld
+    --target "$TARGET" --features "$FEATURES" -- -C linker=ld.lld \
+    # Using -- -C linker=ld.lld to pass rustc linker explicitly
 cp "target/$TARGET/release/cohesix_root" "$OUT_ELF"
 
 [ -s "$OUT_ELF" ] && echo "ROOT TASK BUILD OK: $OUT_ELF"
