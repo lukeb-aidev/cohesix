@@ -2427,3 +2427,9 @@
 - Plan9 namespace now binds /usr and /etc for userland access.
 - make_iso.sh stages cli/ and demo assets into /usr/cli and /usr/bin.
 - validate_iso_build.sh lists staged binaries for verification.
+## [v0.362] - 2026-12-31
+### Changed
+- Replaced getrandom usage with deterministic TinyRng for UEFI builds.
+- Fixed Python module imports and path issues for CLI tests.
+- Corrected Go module paths so `go test ./...` passes.
+
