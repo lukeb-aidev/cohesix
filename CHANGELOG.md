@@ -2416,3 +2416,8 @@
 ### Added
 - In-process 9P transport and Secure9P TLS layer.
 - New crate cohesix-secure9p.
+
+## [v0.360] - 2026-12-31
+### Changed
+- Replaced TLS-based Secure9P layer with minimal no_std XOR stream.
+- cohesix-secure9p now builds for UEFI targets.
