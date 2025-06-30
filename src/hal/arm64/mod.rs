@@ -1,6 +1,6 @@
 // CLASSIFICATION: PRIVATE
-// Filename: mod.rs v0.5
-// Date Modified: 2026-11-21
+// Filename: mod.rs v0.6
+// Date Modified: 2026-11-22
 // Author: Lukas Bower
 //
 // ─────────────────────────────────────────────────────────────
@@ -85,7 +85,8 @@ pub fn init_interrupts() -> Result<(), &'static str> {
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "none"))]
+// Disabled under cargo test: hardware MMU instructions
 mod tests {
     use super::*;
 
