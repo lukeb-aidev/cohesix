@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: build_root_elf.sh v0.14
+# Filename: build_root_elf.sh v0.15
 # Author: Lukas Bower
-# Date Modified: 2026-11-27
+# Date Modified: 2026-12-01
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -92,8 +92,22 @@ else
 fi
 
 # Using linker from .cargo/config.toml for ld.lld
-cargo build --release "${CARGO_ARGS[@]}" --bin cohesix_root \
-    --target "$TARGET" --features "$FEATURES" \
-cp "target/$TARGET/release/cohesix_root" "$OUT_ELF"
+
+do_build() {
+    cargo build --release "${CARGO_ARGS[@]}" --bin cohesix_root \
+        --target "$TARGET" --features "$FEATURES"
+}
+
+copy_output() {
+    local built="target/$TARGET/release/cohesix_root"
+    if [ ! -s "$built" ]; then
+        echo "ERROR: expected ELF not found: $built" >&2
+        return 1
+    fi
+    cp "$built" "$OUT_ELF"
+}
+
+do_build
+copy_output
 
 [ -s "$OUT_ELF" ] && echo "ROOT TASK BUILD OK: $OUT_ELF"

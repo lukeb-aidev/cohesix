@@ -2376,3 +2376,8 @@
 - `scripts/build_root_elf.sh` uses linker settings from `.cargo/config.toml` instead of command line.
 - Version bumped to v0.14 in metadata.
 
+## [v0.353] - 2026-12-01
+### Fixed
+- `scripts/build_root_elf.sh` separates `cargo build` from copy operations to avoid passing shell commands as cargo arguments.
+- Metadata updated to v0.15.
+
