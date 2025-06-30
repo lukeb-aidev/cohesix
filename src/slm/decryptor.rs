@@ -9,6 +9,7 @@
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
 use aead::Aead;
 use ring::signature::{UnparsedPublicKey, ED25519};
+use crate::utils::tiny_rng::TinyRng;
 use std::fs;
 
 /// Memory token representing access to a decrypted SLM payload.
@@ -26,7 +27,8 @@ impl SLMDecryptor {
         let cipher = &data[12..];
         let aead = Aes256Gcm::new_from_slice(key)?;
         let plain = aead.decrypt(nonce, cipher).map_err(|e| anyhow::anyhow!(e))?;
-        Ok((plain, MemoryToken(rand::random())))
+        let mut rng = TinyRng::new(0xDEC0DE);
+        Ok((plain, MemoryToken(rng.next_u64())))
     }
 
     /// Verify the container signature if present.

@@ -14,6 +14,8 @@ pub mod const_eval;
 pub mod format;
 /// Miscellaneous helper utilities.
 pub mod helpers;
+/// Simple deterministic RNG.
+pub mod tiny_rng;
 /// GPU runtime helpers.
 #[cfg(feature = "cuda")]
 pub mod gpu;

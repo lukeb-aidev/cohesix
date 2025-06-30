@@ -14,7 +14,7 @@ use crate::runtime::ServiceRegistry;
 use rapier3d::prelude::*;
 use rapier3d::pipeline::QueryPipeline;
 use rapier3d::na::UnitQuaternion;
-use rand::{rngs::StdRng, Rng, SeedableRng};
+use crate::utils::tiny_rng::TinyRng;
 use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -235,7 +235,7 @@ pub fn deterministic_harness(seed: u64, steps: u32) -> Vec<SimSnapshot> {
     fs::create_dir_all("/srv/trace").ok();
     fs::create_dir_all("/sim").ok();
 
-    let mut rng = StdRng::seed_from_u64(seed);
+    let mut rng = TinyRng::new(seed);
     let mut pipeline = PhysicsPipeline::new();
     let gravity = vector![0.0, -9.81, 0.0];
     let params = IntegrationParameters::default();
@@ -261,9 +261,9 @@ pub fn deterministic_harness(seed: u64, steps: u32) -> Vec<SimSnapshot> {
     for step in 0..steps {
         if let Some(b) = bodies.get_mut(handle) {
             let force = vector![
-                rng.gen_range(-1.0..1.0),
-                rng.gen_range(-1.0..1.0),
-                rng.gen_range(-1.0..1.0),
+                rng.gen_range(-1.0, 1.0),
+                rng.gen_range(-1.0, 1.0),
+                rng.gen_range(-1.0, 1.0),
             ];
             b.add_force(force, true);
             log_transition(format!("force {:?} -> {:?}\n", force, handle));
