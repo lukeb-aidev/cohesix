@@ -36,7 +36,8 @@ pub mod arm64;
 #[cfg(target_arch = "x86_64")]
 pub mod x86_64;
 //__panel_test__
-#[cfg(test)]
+// Runs only under bare-metal QEMU targets to prevent SIGILL on host.
+#[cfg(all(test, target_os = "none"))]
 mod __panel_test_compile {
     // Ensure modules compile; privileged instructions are not executed in tests.
     #[test]
