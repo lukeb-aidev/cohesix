@@ -134,4 +134,5 @@ path = "tools/cli/src/bin/cohbuild.rs"
 find_cuda_helper = { path = "third_party/find_cuda_helper" }
 getrandom = { path = "third_party/getrandom_dummy" }
 rand_core = { path = "third_party/rand_core_patch" }
+ninep = { path = "third_party/ninep_portable" }
 

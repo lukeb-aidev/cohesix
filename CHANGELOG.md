@@ -12,6 +12,7 @@
 
 ## [v0.66] - 2025-08-28
 ### Added
+- Patched `ninep` crate for Unix optional support and added portable fork.
 - `rc` init now parses `/etc/init.conf` using `toml` and logs init_mode and services.
 - Cargo.toml v0.13 enables the `toml` crate for userland config.
 
