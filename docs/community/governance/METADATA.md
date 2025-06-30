@@ -192,7 +192,8 @@
 | src/security/capabilities.rs | v0.4 | 2026-10-29 | COMMUNITY | | |
 | src/rc/init.rs | v0.5 | 2026-02-20 | COMMUNITY | | |
 | src/lib/init.rs | v0.1 | 2025-08-17 | COMMUNITY | | |
-| src/kernel/userland_bootstrap.rs | v0.4 | 2025-09-23 | COMMUNITY | | |
+| src/kernel/userland_bootstrap.rs | v0.6 | 2026-11-20 | COMMUNITY | | |
+| src/kernel/loader.rs | v0.1 | 2026-11-20 | COMMUNITY | | |
 | src/kernel/user_api.rs | v0.1 | 2025-08-27 | COMMUNITY | | |
 | src/kernel/config.rs | v0.1 | 2025-08-27 | COMMUNITY | | |
 | src/userbin/logdemo.rs | v0.1 | 2025-08-27 | COMMUNITY | | |

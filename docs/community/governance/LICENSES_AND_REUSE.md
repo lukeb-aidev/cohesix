@@ -37,6 +37,7 @@ The table below lists current third-party packages used by Cohesix.
 | ureq | 2.9 | MIT OR Apache-2.0 | HTTP client | https://crates.io/crates/ureq |
 | serde | 1 | MIT OR Apache-2.0 | Serialization | https://crates.io/crates/serde |
 | serde_json | 1 | MIT OR Apache-2.0 | JSON serialization | https://crates.io/crates/serde_json |
+| xmas-elf | 0.10 | MIT OR Apache-2.0 | ELF parsing for loader | https://crates.io/crates/xmas-elf |
 | sdl2 | 0.37 | MIT | Windowing & input | https://crates.io/crates/sdl2 |
 | cobra | 1.8.0 | Apache-2.0 | Go CLI framework | https://github.com/spf13/cobra |
 | chi | v5 | MIT | HTTP router for GUI orchestrator | https://github.com/go-chi/chi |

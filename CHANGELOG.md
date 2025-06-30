@@ -2311,3 +2311,8 @@
 ### Added
 - Implemented real page table setup and MMU enabling for ARM64 and x86_64.
   Mapping information now logged during boot.
+\n## [v0.341] - 2026-11-20
+### Added
+- Introduced ELF loader `src/kernel/loader.rs` for kernel.
+- Updated `userland_bootstrap` to load `/bin/init` via the new loader.
+
