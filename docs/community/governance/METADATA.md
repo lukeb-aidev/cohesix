@@ -139,7 +139,7 @@
 | docs/community/architecture/BOOT_KERNEL_FLOW.md | v0.3 | 2026-10-16 | COMMUNITY | | |
 | docs/community/archive/EXAMPLES_README.md | v0.3 | 2026-02-05 | COMMUNITY | | |
 | .cohesix_env | v0.3 | 2026-07-25 | COMMUNITY | | |
-| cohesix_fetch_build.sh | v0.76 | 2026-11-25 | COMMUNITY | | |
+| cohesix_fetch_build.sh | v0.77 | 2026-12-31 | COMMUNITY | | |
 | CONTRIBUTING.md | v1.1 | 2025-07-23 | COMMUNITY | | |
 | config/secure9p.toml | v0.6 | 2026-10-29 | COMMUNITY | | |
 | config/plan9.ns | v0.1 | 2026-08-04 | COMMUNITY | | |
@@ -174,14 +174,14 @@
 | scripts/debug_qemu_boot.sh | v0.4 | 2026-11-24 | COMMUNITY | | |
 | scripts/boot_qemu.sh | v0.1 | 2025-12-29 | COMMUNITY | | |
 | scripts/validate_iso_build.sh | v0.2 | 2026-10-16 | COMMUNITY | | |
-| scripts/build_root_elf.sh | v0.15 | 2026-12-01 | COMMUNITY | | |
+| scripts/build_root_elf.sh | v0.16 | 2026-12-31 | COMMUNITY | | |
 | scripts/load_arch_config.sh | v0.1 | 2026-07-25 | COMMUNITY | | |
 | scripts/build_busybox.sh | v0.7 | 2026-11-17 | COMMUNITY | | |
 | metadata.json | v0.1 | 2025-07-24 | COMMUNITY | | |
 | Cargo.toml | v0.30 | 2026-12-25 | COMMUNITY | | |
 | cohesix-9p/Cargo.toml | v0.1 | 2025-07-28 | COMMUNITY | | |
 | tools/cli/Cargo.toml | v0.2 | 2025-08-16 | COMMUNITY | | |
-| justfile | v0.1 | 2025-07-24 | COMMUNITY | | |
+| justfile | v0.2 | 2026-12-31 | COMMUNITY | | |
 | src/roles/mod.rs | v0.2 | 2026-09-30 | COMMUNITY | | |
 | src/roles/interactive_aibooth.rs | v0.1 | 2025-07-31 | COMMUNITY | | |
 | src/roles/drone_worker.rs | v0.4 | 2026-10-25 | COMMUNITY | | |
@@ -202,7 +202,7 @@
 | src/init_efi/efistubs.c | v0.1 | 2026-09-07 | COMMUNITY | | |
 | src/init_efi/linker.ld | v0.3 | 2026-08-29 | COMMUNITY | | |
 | src/init_efi/elf_aarch64_efi.lds | v0.6 | 2026-09-13 | COMMUNITY | | |
-| full_fetch_and_build.sh | v0.10 | 2026-07-07 | COMMUNITY | | |
+| full_fetch_and_build.sh | v0.11 | 2026-12-31 | COMMUNITY | | |
 | etc/init.conf | v0.1 | 2025-08-27 | COMMUNITY | | |
 | etc/init.cfg | v0.1 | 2025-08-30 | COMMUNITY | | |
 | etc/init.conf.example | v0.1 | 2026-07-09 | COMMUNITY | | |

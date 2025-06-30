@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: ci.yml v1.9
+# Filename: ci.yml v1.10
 # Author: Lukas Bower
-# Date Modified: 2026-10-16
+# Date Modified: 2026-12-31
 
 name: Cohesix CI
 
@@ -33,6 +33,7 @@ jobs:
         run: rustup target add aarch64-unknown-uefi
       - name: Run Rust build and tests
         run: |
+          export MEMCHR_DISABLE_RUNTIME_CPU_FEATURE_DETECTION=1
           cargo build --release --target aarch64-unknown-uefi | tee rust_build.log
           cargo test | tee rust_test.log
       - uses: actions/upload-artifact@v4

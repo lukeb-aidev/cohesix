@@ -1,8 +1,9 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: justfile v0.1
+# Filename: justfile v0.2
 # Author: Lukas Bower
-# Date Modified: 2025-07-24
+# Date Modified: 2026-12-31
 # Quick-tasks for Cohesix developers
+export MEMCHR_DISABLE_RUNTIME_CPU_FEATURE_DETECTION := 1
 
 # ---- primary CI replica ----
 ci: fmt-check clippy test build

@@ -1,9 +1,10 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: build_root_elf.sh v0.15
+# Filename: build_root_elf.sh v0.16
 # Author: Lukas Bower
-# Date Modified: 2026-12-01
+# Date Modified: 2026-12-31
 #!/usr/bin/env bash
 set -euo pipefail
+export MEMCHR_DISABLE_RUNTIME_CPU_FEATURE_DETECTION=1
 
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 source "$ROOT/scripts/load_arch_config.sh"
