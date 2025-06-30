@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v1.00
 // Author: Lukas Bower
-// Date Modified: 2026-12-25
+// Date Modified: 2026-12-30
 
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
@@ -2392,4 +2392,10 @@
 ### Fixed
 - Patched `getrandom` with a local crate enabling the `dummy` RNG on unsupported targets and casting errno to `i32` for UEFI builds.
 - Updated `Cargo.toml` to select the dummy feature and patch crates.io accordingly.
+
+## [v0.356] - 2026-12-30
+### Removed
+- Purged Linux-only networking modules and dependencies (`tokio`, `inotify`, `nix`, `sysinfo`).
+- Deleted `secure9p`, `net`, `devd`, and `nswatch` components.
+- Simplified telemetry and worker roles for UEFI-only builds.
 

@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: loader.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2026-10-07
+// Date Modified: 2026-12-30
 
 use anyhow::{Context, Result};
 use std::fs::File;
@@ -25,15 +25,18 @@ pub fn load_and_run(path: &str) -> Result<()> {
         anyhow::bail!("unsupported version {}", data[4]);
     }
     use std::fs;
-    use std::os::unix::fs::PermissionsExt;
     use std::process::Command;
 
     let exe_bytes = &data[5..];
     let tmp_path = "/tmp/coh_exec.bin";
     fs::write(tmp_path, exe_bytes).context("write temp exe")?;
-    let mut perm = fs::metadata(tmp_path)?.permissions();
-    perm.set_mode(0o755);
-    fs::set_permissions(tmp_path, perm)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perm = fs::metadata(tmp_path)?.permissions();
+        perm.set_mode(0o755);
+        fs::set_permissions(tmp_path, perm)?;
+    }
     let status = Command::new(tmp_path).status().context("exec")?;
     fs::remove_file(tmp_path).ok();
     if !status.success() {

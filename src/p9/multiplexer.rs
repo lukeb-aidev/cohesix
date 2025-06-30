@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: multiplexer.rs v0.4
 // Author: Lukas Bower
-// Date Modified: 2025-06-18
+// Date Modified: 2026-12-30
 
 //! Concurrent 9P request multiplexer.
 //!
@@ -12,14 +12,14 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use tokio::sync::mpsc::UnboundedReceiver;
+use std::sync::mpsc::Receiver;
 
 use crate::runtime::ipc::p9::{P9Request, P9Response, P9Server};
 
 /// Multiplexer routing 9P requests to named services.
 pub struct Multiplexer {
     services: Arc<Mutex<HashMap<String, Arc<dyn P9Server + Send + Sync>>>>,
-    rx: Mutex<Option<UnboundedReceiver<P9Request>>>,
+    rx: Mutex<Option<Receiver<P9Request>>>,
 }
 
 impl Multiplexer {
@@ -37,7 +37,7 @@ impl Multiplexer {
     }
 
     /// Attach an async channel used to receive requests from the Go side.
-    pub fn attach_channel(&self, rx: UnboundedReceiver<P9Request>) {
+    pub fn attach_channel(&self, rx: Receiver<P9Request>) {
         *self.rx.lock().unwrap() = Some(rx);
     }
 
@@ -69,11 +69,11 @@ impl Multiplexer {
     }
 
     /// Serve incoming requests on the attached channel.
-    pub async fn serve(&self) {
-        let mut rx_opt: Option<UnboundedReceiver<P9Request>> =
+    pub fn serve(&self) {
+        let mut rx_opt: Option<Receiver<P9Request>> =
             self.rx.lock().unwrap().take();
-        if let Some(ref mut rx) = rx_opt {
-            while let Some(req) = rx.recv().await {
+        if let Some(rx) = rx_opt {
+            for req in rx {
                 let _ = self.handle(req);
             }
         }
