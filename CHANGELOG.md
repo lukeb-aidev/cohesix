@@ -2316,3 +2316,8 @@
 - Introduced ELF loader `src/kernel/loader.rs` for kernel.
 - Updated `userland_bootstrap` to load `/bin/init` via the new loader.
 
+## [v0.342] - 2026-11-20
+### Added
+- Implemented user-mode transition via `switch_to_user` for ARM64 and x86_64.
+- Syscall traps now configured with `init_syscall_trap` and `syscall_vector`.
+
