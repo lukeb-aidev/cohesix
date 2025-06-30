@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Makefile v0.50
+# Filename: Makefile v0.51
 # Author: Lukas Bower
-# Date Modified: 2026-10-16
+# Date Modified: 2026-12-31
 .PHONY: build cuda-build all go-build go-test c-shims help fmt lint check \
 	boot boot-x86_64 boot-aarch64 cohrun cohbuild cohtrace cli_cap gui-orchestrator test test-python check-tab-safety iso boot-grub qemu qemu-check
 
@@ -12,6 +12,8 @@ JETSON ?= 0
 ifeq ($(TARGET),jetson)
 PLATFORM := aarch64
 endif
+
+export MEMCHR_DISABLE_RUNTIME_CPU_FEATURE_DETECTION ?= 1
 
 ifeq ($(JETSON),1)
 PLATFORM := aarch64
