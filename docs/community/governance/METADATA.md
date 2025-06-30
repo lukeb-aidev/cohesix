@@ -174,7 +174,7 @@
 | scripts/debug_qemu_boot.sh | v0.4 | 2026-11-24 | COMMUNITY | | |
 | scripts/boot_qemu.sh | v0.1 | 2025-12-29 | COMMUNITY | | |
 | scripts/validate_iso_build.sh | v0.2 | 2026-10-16 | COMMUNITY | | |
-| scripts/build_root_elf.sh | v0.14 | 2026-11-27 | COMMUNITY | | |
+| scripts/build_root_elf.sh | v0.15 | 2026-12-01 | COMMUNITY | | |
 | scripts/load_arch_config.sh | v0.1 | 2026-07-25 | COMMUNITY | | |
 | scripts/build_busybox.sh | v0.7 | 2026-11-17 | COMMUNITY | | |
 | metadata.json | v0.1 | 2025-07-24 | COMMUNITY | | |
