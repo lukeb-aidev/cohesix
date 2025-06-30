@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: scripts/validate_iso_build.sh v0.2
+# Filename: scripts/validate_iso_build.sh v0.3
 # Author: Lukas Bower
-# Date Modified: 2026-10-16
+# Date Modified: 2026-12-31
 #!/bin/bash
 set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
@@ -18,3 +18,13 @@ error(){ echo "ERROR: $*" >&2; exit 1; }
 log "All required files present."
 ls -l "$ISO" "$KERNEL" "$ROOT_ELF"
 du -h "$ISO"
+
+# Inspect ISO contents
+MNT="${TMPDIR:-/tmp}/iso_mount"
+mkdir -p "$MNT"
+mount -o loop "$ISO" "$MNT"
+log "Listing /usr/bin and /usr/cli from ISO"
+ls "$MNT/usr/bin" || true
+ls "$MNT/usr/cli" || true
+umount "$MNT"
+rmdir "$MNT"

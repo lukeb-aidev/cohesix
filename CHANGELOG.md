@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v1.00
 // Author: Lukas Bower
-// Date Modified: 2026-12-30
+// Date Modified: 2026-12-31
 
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
@@ -2421,3 +2421,9 @@
 ### Changed
 - Replaced TLS-based Secure9P layer with minimal no_std XOR stream.
 - cohesix-secure9p now builds for UEFI targets.
+
+## [v0.361] - 2026-12-31
+### Added
+- Plan9 namespace now binds /usr and /etc for userland access.
+- make_iso.sh stages cli/ and demo assets into /usr/cli and /usr/bin.
+- validate_iso_build.sh lists staged binaries for verification.
