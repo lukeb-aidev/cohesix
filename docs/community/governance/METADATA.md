@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: METADATA.md v3.46
 // Author: Lukas Bower
-// Date Modified: 2026-11-24
+// Date Modified: 2026-12-31
 
 ## Canonical Documents
 
@@ -142,7 +142,7 @@
 | cohesix_fetch_build.sh | v0.77 | 2026-12-31 | COMMUNITY | | |
 | CONTRIBUTING.md | v1.1 | 2025-07-23 | COMMUNITY | | |
 | config/secure9p.toml | v0.6 | 2026-10-29 | COMMUNITY | | |
-| config/plan9.ns | v0.1 | 2026-08-04 | COMMUNITY | | |
+| config/plan9.ns | v0.2 | 2026-12-31 | COMMUNITY | | |
 | src/secure9p/mod.rs | v0.2 | 2025-07-25 | COMMUNITY | | |
 | src/secure9p/auth_handler.rs | v0.4 | 2025-07-31 | COMMUNITY | | |
 | src/secure9p/cap_fid.rs | v0.2 | 2025-07-25 | COMMUNITY | | |
@@ -173,7 +173,7 @@
 | scripts/verify-macos-setup.sh | v0.1 | 2025-06-05 | COMMUNITY | | |
 | scripts/debug_qemu_boot.sh | v0.4 | 2026-11-24 | COMMUNITY | | |
 | scripts/boot_qemu.sh | v0.1 | 2025-12-29 | COMMUNITY | | |
-| scripts/validate_iso_build.sh | v0.2 | 2026-10-16 | COMMUNITY | | |
+| scripts/validate_iso_build.sh | v0.3 | 2026-12-31 | COMMUNITY | | |
 | scripts/build_root_elf.sh | v0.16 | 2026-12-31 | COMMUNITY | | |
 | scripts/load_arch_config.sh | v0.1 | 2026-07-25 | COMMUNITY | | |
 | scripts/build_busybox.sh | v0.7 | 2026-11-17 | COMMUNITY | | |
@@ -285,7 +285,7 @@
 | src/demos/sensor_world/main.py | v0.1 | 2026-02-11 | COMMUNITY | | |
 | src/demos/multi_duel/main.py | v0.1 | 2026-02-11 | COMMUNITY | | |
 | cloud-init.yaml | v0.1 | 2026-02-19 | COMMUNITY | | |
-| plan9.ns | v0.2 | 2026-07-08 | COMMUNITY | | |
+| plan9.ns | v0.4 | 2026-12-31 | COMMUNITY | | |
 | bin/cohcli | v0.1 | 2026-02-21 | COMMUNITY | | |
 | bin/cohrun | v0.1 | 2026-02-21 | COMMUNITY | | |
 | bin/cohbuild | v0.1 | 2026-02-21 | COMMUNITY | | |
@@ -314,6 +314,6 @@
 | src/geometry/sweep_line_intersection.py | v0.1 | 2026-11-19 | COMMUNITY | | |
 | tests/test_sweep_line_intersection.py | v0.1 | 2026-11-19 | COMMUNITY | | |
 | log/simulated_boot_pipeline.md | v0.1 | 2026-11-20 | COMMUNITY | | |
-| tools/make_iso.sh | v0.7 | 2026-12-02 | COMMUNITY | | |
+| tools/make_iso.sh | v0.8 | 2026-12-31 | COMMUNITY | | |
 | src/hal/arm64/mod.rs | v0.7 | 2026-11-23 | PRIVATE | | |
 | src/hal/x86_64/mod.rs | v0.7 | 2026-11-23 | PRIVATE | | |

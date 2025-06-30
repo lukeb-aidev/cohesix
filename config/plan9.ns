@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: config/plan9.ns v0.1
+// Filename: config/plan9.ns v0.2
 // Author: Lukas Bower
-// Date Modified: 2026-08-04
+// Date Modified: 2026-12-31
 
 mount -b /dev /dev
 mount -b /proc /proc
@@ -9,3 +9,5 @@ bind -a /bin /bin
 bind -a /usr/py /usr/py
 bind -a /srv /srv
 bind -a /mnt/9root /
+bind -a /usr /usr
+bind -a /etc /etc
