@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v1.00
 // Author: Lukas Bower
-// Date Modified: 2026-11-24
+// Date Modified: 2026-12-25
 
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
@@ -2387,4 +2387,9 @@
 - Environment variable `CohRole` can override the config for testing.
 - `tools/make_iso.sh` v0.7 creates `/etc/role.conf` with default `CohRole=DroneWorker`.
 - Metadata updated for new files and versions.
+
+## [v0.355] - 2026-12-25
+### Fixed
+- Patched `getrandom` with a local crate enabling the `dummy` RNG on unsupported targets and casting errno to `i32` for UEFI builds.
+- Updated `Cargo.toml` to select the dummy feature and patch crates.io accordingly.
 

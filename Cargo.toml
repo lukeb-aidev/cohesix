@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Cargo.toml v0.29
+# Filename: Cargo.toml v0.30
 # Author: Lukas Bower
-# Date Modified: 2026-09-30
+# Date Modified: 2026-12-25
 [package]
 name    = "cohesix"
 version = "0.1.0"
@@ -24,7 +24,8 @@ rand = "0.8"
 aes-gcm = { version = "0.10", features = ["aes"] }
 aead = "0.5"
 aes = "0.8"
-getrandom = { version = "0.2", optional = true }
+# Use the dummy RNG implementation for unsupported targets like UEFI
+getrandom = { version = "0.2", features = ["dummy"], optional = true }
 env_logger = "0.11.7"
 thiserror = "1"
 clap = { version = "4.5.4", features = ["derive"] }
@@ -48,7 +49,7 @@ hostname = "0.3"
 chrono = "0.4"
 nix = { version = "0.28", default-features = false, features = ["signal"] }
 serde_yaml = { version = "0.9" }
-v4l = "0.14"
+v4l = { version = "0.14", default-features = false }
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
 sdl2 = { version = "0.37", optional = true }
 jsonwebtoken = { version = "9", optional = true }
@@ -143,4 +144,6 @@ path = "tools/cli/src/bin/cohbuild.rs"
 
 [patch.crates-io]
 find_cuda_helper = { path = "third_party/find_cuda_helper" }
+getrandom = { path = "third_party/getrandom_dummy" }
+rand_core = { path = "third_party/rand_core_patch" }
 
