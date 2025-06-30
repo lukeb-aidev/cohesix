@@ -309,3 +309,4 @@
 | docs/community/PATH_SELF_INTERSECTION.md | v0.1 | 2026-11-19 | COMMUNITY | | |
 | src/geometry/sweep_line_intersection.py | v0.1 | 2026-11-19 | COMMUNITY | | |
 | tests/test_sweep_line_intersection.py | v0.1 | 2026-11-19 | COMMUNITY | | |
+| log/simulated_boot_pipeline.md | v0.1 | 2026-11-20 | COMMUNITY | | |

@@ -2321,3 +2321,7 @@
 - Implemented user-mode transition via `switch_to_user` for ARM64 and x86_64.
 - Syscall traps now configured with `init_syscall_trap` and `syscall_vector`.
 
+## [v0.343] - 2026-11-20
+### Added
+- Simulated boot pipeline documentation `log/simulated_boot_pipeline.md`.
+
