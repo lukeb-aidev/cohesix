@@ -2381,3 +2381,10 @@
 - `scripts/build_root_elf.sh` separates `cargo build` from copy operations to avoid passing shell commands as cargo arguments.
 - Metadata updated to v0.15.
 
+## [v0.354] - 2026-12-02
+### Added
+- Boot-time role detection via `/etc/role.conf` loaded by `load_role_setting`.
+- Environment variable `CohRole` can override the config for testing.
+- `tools/make_iso.sh` v0.7 creates `/etc/role.conf` with default `CohRole=DroneWorker`.
+- Metadata updated for new files and versions.
+
