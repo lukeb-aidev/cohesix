@@ -2,7 +2,6 @@
 // Filename: multiplexer.rs v0.4
 // Author: Lukas Bower
 // Date Modified: 2025-06-18
-#![cfg(not(target_os = "uefi"))]
 
 //! Concurrent 9P request multiplexer.
 //!

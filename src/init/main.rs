@@ -2,8 +2,8 @@
 // Filename: main.rs v0.2
 // Author: Lukas Bower
 // Date Modified: 2026-10-07
+// UEFI-specific stub removed; full init runs on UEFI by default.
 
-#[cfg(not(target_os = "uefi"))]
 fn main() {
     use cohesix::runtime::env::init::{initialize_runtime_env, parse_boot_args};
     use cohesix::runtime::role_config::load_active;
@@ -44,7 +44,3 @@ fn main() {
     cohesix::sh_loop::run();
 }
 
-#[cfg(target_os = "uefi")]
-fn main() {
-    // Minimal UEFI init stub
-}

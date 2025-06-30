@@ -2,7 +2,6 @@
 // Filename: service_registry.rs v0.7
 // Author: Lukas Bower
 // Date Modified: 2026-11-17
-#![cfg(not(target_os = "uefi"))]
 
 //! Runtime service registry for Cohesix.
 //!

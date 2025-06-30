@@ -2,7 +2,6 @@
 // Filename: distributed_runner.rs v0.3
 // Author: Lukas Bower
 // Date Modified: 2025-08-17
-#![cfg(not(target_os = "uefi"))]
 
 //! Execute trace scenarios across multiple worker nodes and verify consistency.
 
