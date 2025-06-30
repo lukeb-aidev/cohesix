@@ -2348,3 +2348,7 @@
   `target_os = "none"`. Host builds use a stub to avoid illegal
   instructions during tests.
 
+## [v0.348] - 2026-11-23
+### Changed
+- Added dual target_os guards to privileged kernel functions (`init_paging`, `switch_to_user`, `init_syscall_trap`). Host builds now panic on invocation.
+
