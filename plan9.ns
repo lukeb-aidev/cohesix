@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: plan9.ns v0.3
+// Filename: plan9.ns v0.4
 // Author: Lukas Bower
-// Date Modified: 2026-10-07
+// Date Modified: 2026-12-31
 
 # Map the root filesystem to /
 bind / /
@@ -18,3 +18,6 @@ mount /srv/telemetry /telemetry
 mount /srv/shell_out /shell_out
 mount /home/cohesix /home/cohesix
 mount /srv/cuda /srv/cuda
+# Ensure standard directories exist inside the namespace
+bind /usr /usr
+bind /etc /etc

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # CLASSIFICATION: COMMUNITY
-# Filename: make_iso.sh v0.7
+# Filename: make_iso.sh v0.8
 # Author: Lukas Bower
-# Date Modified: 2026-12-02
+# Date Modified: 2026-12-31
 
 set -euo pipefail
 set -x
@@ -68,7 +68,10 @@ fi
 
 # CLI tools
 log "Staging CLI tools..."
-for t in cohcli cohcap cohtrace cohrun cohbuild cohcc cohshell.sh; do
+for t in cohcli cohcap cohtrace cohrun cohbuild cohcc cohshell.sh \
+         demo_bee_learns demo_cloud_queen demo_cuda_edge \
+         demo_secure_relay demo_sensor_world demo_multi_duel \
+         demo_physics_webcam demo_trace_validation; do
     if [ -f "$ROOT/bin/$t" ]; then
         dest="$t"
         [ "$t" = "cohshell.sh" ] && dest="cohesix-shell"
@@ -92,10 +95,28 @@ else
     log "WARNING: No Go helpers found"
 fi
 
+# Demos (CUDA and Rapier)
+if [ -d "$ROOT/src/demos" ]; then
+    log "Copying demo assets..."
+    mkdir -p "$ISO_ROOT/usr/cli/demos"
+    cp -r "$ROOT/src/demos" "$ISO_ROOT/usr/cli/" 2>/dev/null || true
+else
+    log "WARNING: demo sources not found"
+fi
+
+# Python CLI modules
+if [ -d "$ROOT/cli" ]; then
+    log "Copying Python CLI modules..."
+    cp -r "$ROOT/cli" "$ISO_ROOT/usr/cli" 2>/dev/null || true
+else
+    log "WARNING: cli directory missing"
+fi
+
 # Python modules
 if [ -d "$ROOT/python" ]; then
     log "Copying Python modules..."
     cp -r "$ROOT/python" "$ISO_ROOT/home/cohesix" 2>/dev/null || true
+    cp "$ROOT/python/validator.py" "$ISO_ROOT/usr/cli/" 2>/dev/null || true
 else
     log "WARNING: No Python modules directory found"
 fi
