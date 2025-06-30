@@ -311,5 +311,5 @@
 | tests/test_sweep_line_intersection.py | v0.1 | 2026-11-19 | COMMUNITY | | |
 | log/simulated_boot_pipeline.md | v0.1 | 2026-11-20 | COMMUNITY | | |
 | tools/make_iso.sh | v0.5 | 2026-11-21 | COMMUNITY | | |
-| src/hal/arm64/mod.rs | v0.5 | 2026-11-21 | PRIVATE | | |
-| src/hal/x86_64/mod.rs | v0.5 | 2026-11-21 | PRIVATE | | |
+| src/hal/arm64/mod.rs | v0.6 | 2026-11-22 | PRIVATE | | |
+| src/hal/x86_64/mod.rs | v0.6 | 2026-11-22 | PRIVATE | | |

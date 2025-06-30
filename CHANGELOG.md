@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v1.00
 // Author: Lukas Bower
-// Date Modified: 2026-09-30
+// Date Modified: 2026-11-22
 
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
@@ -2336,4 +2336,9 @@
 - ELF loader maps PT_LOAD segments and logs addresses.
 - Updated privilege drop sequence for ARM64 and x86_64.
 - Syscall trap vectors configure STAR and EFER on x86_64.
+
+## [v0.346] - 2026-11-22
+### Changed
+- HAL test modules now require `target_os = "none"` so privileged MMU
+  instructions are skipped under standard `cargo test`.
 
