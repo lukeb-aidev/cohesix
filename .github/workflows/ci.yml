@@ -33,7 +33,7 @@ jobs:
         run: |
           cargo build | tee rust_build.log
           cargo test | tee rust_test.log
-      - uses: actions/upload-artifact@v3
+      - uses: actions/upload-artifact@v4
         with:
           name: rust-logs
           path: |
@@ -44,7 +44,7 @@ jobs:
         run: |
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
           pytest | tee python_test.log
-      - uses: actions/upload-artifact@v3
+      - uses: actions/upload-artifact@v4
         with:
           name: python-logs
           path: python_test.log
@@ -52,7 +52,7 @@ jobs:
       - name: Run Go tests
         run: |
           GOWORK=$(pwd)/go/go.work go test ./... | tee go_test.log
-      - uses: actions/upload-artifact@v3
+      - uses: actions/upload-artifact@v4
         with:
           name: go-logs
           path: go_test.log

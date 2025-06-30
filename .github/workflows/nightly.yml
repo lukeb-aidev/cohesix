@@ -58,7 +58,7 @@ jobs:
         shell: bash
 
       - name: Upload simulation logs
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: sim-${{ matrix.arch }}-logs
           path: sim_test.log
