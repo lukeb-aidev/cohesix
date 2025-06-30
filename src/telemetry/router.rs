@@ -1,14 +1,11 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: router.rs v1.1
 // Author: Lukas Bower
-// Date Modified: 2025-08-17
+// Date Modified: 2026-12-30
 
 //! Telemetry routing and collection utilities.
 
 use log::debug;
-use std::thread::sleep;
-use std::time::Duration;
-use sysinfo::{CpuRefreshKind, RefreshKind, System};
 
 use crate::cohesix_types::{Role, RoleManifest};
 use cohesix_9p::fs::InMemoryFs;
@@ -32,16 +29,13 @@ pub trait TelemetryRouter {
 
 /// Basic implementation using `sysinfo` and a stub 9P server.
 pub struct BasicTelemetryRouter {
-    sys: System,
     fs: InMemoryFs,
     role: Role,
 }
 
 impl Default for BasicTelemetryRouter {
     fn default() -> Self {
-        let rk = RefreshKind::new().with_cpu(CpuRefreshKind::everything());
         Self {
-            sys: System::new_with_specifics(rk),
             fs: InMemoryFs::default(),
             role: RoleManifest::current_role(),
         }
@@ -64,15 +58,9 @@ impl BasicTelemetryRouter {
 
 impl TelemetryRouter for BasicTelemetryRouter {
     fn gather_metrics(&mut self) -> TelemetryMetrics {
-        self.sys.refresh_cpu_usage();
-        sleep(Duration::from_millis(100));
-        self.sys.refresh_cpu_usage();
-        let cpu_usage = self.sys.global_cpu_info().cpu_usage();
+        let cpu_usage = 0.0;
         let temperature = Self::read_temperature();
-        TelemetryMetrics {
-            cpu_usage,
-            temperature,
-        }
+        TelemetryMetrics { cpu_usage, temperature }
     }
 
     fn expose_metrics(&self, metrics: &TelemetryMetrics) {

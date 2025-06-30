@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: lib.rs v1.11
-// Date Modified: 2026-11-27
+// Date Modified: 2026-12-30
 // Conditional `cfg(not(target_os = "uefi"))` sections were removed.
 // The library now always compiles all modules for UEFI.
 // Author: Lukas Bower
@@ -117,11 +117,6 @@ pub mod p9;
 /// Cloud integration helpers
 
 pub mod cloud;
-#[cfg(feature = "secure9p")]
-pub mod secure9p;
-/// Networking daemons
-
-pub mod net;
 
 /// Shell helpers
 pub mod shell;

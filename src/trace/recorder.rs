@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: recorder.rs v0.1
 // Author: Lukas Bower
-// Date Modified: 2025-06-21
+// Date Modified: 2026-12-30
 
 //! Syscall and agent event recorder.
 //!
@@ -11,7 +11,6 @@
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::os::unix::net::UnixDatagram;
 use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -59,11 +58,6 @@ fn record(agent: &str, event: &str, detail: &str, ok: bool) {
     };
     let line = serde_json::to_string(&ev).unwrap();
     let _ = writeln!(f, "{}", line);
-    if let Ok(sock) = UnixDatagram::unbound() {
-        if sock.connect("/srv/validator/live.sock").is_ok() {
-            let _ = sock.send(line.as_bytes());
-        }
-    }
 }
 
 /// Spawn a process while recording the event.

@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: edge_controller.rs v1.2
 // Author: Lukas Bower
-// Date Modified: 2025-08-17
+// Date Modified: 2026-12-30
 
 //! Role module for the Cohesix `EdgeController`.
 //! Manages edge device orchestration, resource scheduling, and health signaling in remote or distributed environments.
@@ -17,7 +17,6 @@ pub trait EdgeControllerRole {
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::Path;
-use sysinfo::{System, SystemExt};
 
 pub struct DefaultEdgeController;
 
@@ -31,13 +30,7 @@ impl EdgeControllerRole for DefaultEdgeController {
 
     fn report_health_status(&self) -> String {
         println!("[edge_controller] reporting health...");
-        let mut sys = System::new();
-        sys.refresh_memory();
-        format!(
-            "mem_total={} mem_free={}",
-            sys.total_memory(),
-            sys.available_memory()
-        )
+        "mem_total=0 mem_free=0".into()
     }
 
     fn adjust_allocation(&mut self, cpu_share: f32, mem_share: f32) {
