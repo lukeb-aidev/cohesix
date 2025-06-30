@@ -11,7 +11,7 @@ use crate::runtime::env::init::detect_cohrole;
 use crate::runtime::ServiceRegistry;
 
 fn log(msg: &str) {
-    if let Ok(mut f) = OpenOptions::new().append(true).open("/dev/log") {
+    if let Ok(mut f) = OpenOptions::new().append(true).open("/srv/devlog") {
         let _ = writeln!(f, "{}", msg);
     } else {
         println!("{msg}");

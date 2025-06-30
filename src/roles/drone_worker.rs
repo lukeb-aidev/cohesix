@@ -12,7 +12,7 @@ use crate::runtime::ServiceRegistry;
 use ureq::Agent;
 
 fn log(msg: &str) {
-    if let Ok(mut f) = OpenOptions::new().append(true).open("/dev/log") {
+    if let Ok(mut f) = OpenOptions::new().append(true).open("/srv/devlog") {
         let _ = writeln!(f, "{}", msg);
     } else {
         println!("{msg}");

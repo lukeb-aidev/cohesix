@@ -9,7 +9,7 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 
 fn log(msg: &str) {
-    match OpenOptions::new().append(true).open("/dev/log") {
+    match OpenOptions::new().append(true).open("/srv/devlog") {
         Ok(mut f) => {
             let _ = writeln!(f, "{}", msg);
         }

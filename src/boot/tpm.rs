@@ -17,7 +17,7 @@ pub fn attest() -> anyhow::Result<()> {
         .create(true)
         .append(true)
         .open("/srv/boot/attestation.log")?;
-    if Path::new("/dev/tpm0").exists() {
+    if Path::new("/srv/tpm0").exists() {
         writeln!(log, "tpm present - attestation ok")?;
     } else {
         writeln!(log, "tpm not found - skipped")?;

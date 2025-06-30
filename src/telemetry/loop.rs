@@ -41,7 +41,7 @@ impl TelemetrySyncLoop {
             if state != last {
                 last = state.clone();
                 let _ = fs::write("/srv/telemetry", &state);
-                if let Ok(mut f) = OpenOptions::new().append(true).open("/dev/log") {
+                if let Ok(mut f) = OpenOptions::new().append(true).open("/srv/devlog") {
                     let _ = writeln!(f, "[telemetry_loop] updated state");
                 }
                 trace!("telemetry updated");

@@ -117,7 +117,7 @@ fn read_hw_temperature() -> Option<f32> {
     if env.is_some() {
         return env;
     }
-    let paths = ["/sys/class/thermal/thermal_zone0/temp", "/tmp/ina226_mock"];
+    let paths = ["/sys/class/thermal/thermal_zone0/temp", "/srv/ina226_mock"];
     for p in paths.iter() {
         if let Ok(contents) = std::fs::read_to_string(p) {
             if let Ok(v) = contents.trim().parse::<f32>() {
@@ -137,7 +137,7 @@ fn read_hw_accel() -> Option<f32> {
     }
     let paths = [
         "/sys/bus/iio/devices/iio:device0/in_accel_x_raw",
-        "/tmp/accel_mock",
+        "/srv/accel_mock",
     ];
     for p in paths.iter() {
         if let Ok(contents) = std::fs::read_to_string(p) {
@@ -156,7 +156,7 @@ fn read_hw_motion() -> Option<bool> {
     if env.is_some() {
         return env;
     }
-    let path = "/tmp/motion_mock";
+    let path = "/srv/motion_mock";
     if let Ok(contents) = std::fs::read_to_string(path) {
         return Some(contents.trim() == "1");
     }

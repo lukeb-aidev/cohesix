@@ -275,14 +275,14 @@ impl Namespace {
         node.mounts.first().cloned()
     }
 
-    /// Dump this namespace to `/proc/nsmap/<role>` for traceability.
+    /// Dump this namespace to `/srv/nsmap/<role>` for traceability.
     pub fn dump_proc_nsmap(&self, role: &Role) -> io::Result<()> {
         let role_name = match role {
             Role::Other(s) => s.clone(),
             _ => format!("{:?}", role),
         };
-        fs::create_dir_all("/proc/nsmap")?;
-        let path = format!("/proc/nsmap/{}", role_name);
+        fs::create_dir_all("/srv/nsmap")?;
+        let path = format!("/srv/nsmap/{}", role_name);
         fs::write(path, self.to_string())
     }
 }

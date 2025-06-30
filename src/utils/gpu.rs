@@ -8,7 +8,7 @@
 use crate::cuda::runtime::{CudaExecutor, CudaRuntime};
 use std::fs::OpenOptions;
 
-/// Validate CUDA runtime availability by opening `/dev/nvidia0` and
+/// Validate CUDA runtime availability by opening `/srv/nvidia0` and
 /// launching a minimal kernel. Returns `Ok(())` on success, or an
 /// error explaining why GPU execution is not possible.
 pub fn coh_check_gpu_runtime() -> Result<(), String> {
@@ -21,8 +21,8 @@ pub fn coh_check_gpu_runtime() -> Result<(), String> {
     }
     OpenOptions::new()
         .read(true)
-        .open("/dev/nvidia0")
-        .map_err(|e| format!("cannot open /dev/nvidia0: {e}"))?;
+        .open("/srv/nvidia0")
+        .map_err(|e| format!("cannot open /srv/nvidia0: {e}"))?;
     let mut exec = CudaExecutor::new();
     exec.load_kernel(Some(b"fake"))?;
     exec.launch()?;

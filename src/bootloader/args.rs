@@ -13,7 +13,7 @@
 //
 // Example cmdline:
 //
-//   root=/dev/nvme0n1p2 rw console=ttyS0,115200 panic=10
+//   root=/srv/nvme0n1p2 rw console=ttyS0,115200 panic=10
 //
 // # Public API
 // * [`BootArgs`] – read‑only view of parsed arguments
@@ -55,8 +55,8 @@ impl BootArgs {
 /// ```
 /// use cohesix::bootloader::args::{parse_cmdline, BootArgs};
 ///
-/// let args = parse_cmdline("root=/dev/sda1 quiet").unwrap();
-/// assert_eq!(args.get("root"), Some("/dev/sda1"));
+/// let args = parse_cmdline("root=/srv/sda1 quiet").unwrap();
+/// assert_eq!(args.get("root"), Some("/srv/sda1"));
 /// assert!(args.has_flag("quiet"));
 /// ```
 pub fn parse_cmdline(cmdline: &str) -> Result<BootArgs, &'static str> {
@@ -89,8 +89,8 @@ mod tests {
 
     #[test]
     fn parses_key_values() {
-        let args = parse_cmdline("root=/dev/sda rw").unwrap();
-        assert_eq!(args.get("root"), Some("/dev/sda"));
+        let args = parse_cmdline("root=/srv/sda rw").unwrap();
+        assert_eq!(args.get("root"), Some("/srv/sda"));
         assert_eq!(args.get("rw"), Some("1"));
     }
 
