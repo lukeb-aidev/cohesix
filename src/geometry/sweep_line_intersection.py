@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: sweep_line_intersection.py v0.1
+# Filename: sweep_line_intersection.py v0.2
 # Author: Lukas Bower
-# Date Modified: 2026-11-19
+# Date Modified: 2026-11-20
 """Sweep-line detection of path self-intersections.
 
 Implements a simple plane sweep algorithm to detect
@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from bisect import bisect_left
-from typing import List, Tuple
+from typing import List, Tuple, Sequence
 
 Point = Tuple[float, float]
 Segment = Tuple[Point, Point]
@@ -125,7 +125,9 @@ class _ActiveSet:
         return None
 
 
-def find_self_intersections(segments: List[Segment]) -> List[Point]:
+def find_self_intersections(
+    segments: Sequence[tuple[tuple[float, float], tuple[float, float]]]
+) -> List[Point]:
     """Detect intersection points among a collection of segments."""
     ordered_segments: List[Segment] = []
     events: List[_Event] = []
