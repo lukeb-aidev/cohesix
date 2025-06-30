@@ -81,7 +81,8 @@ pub fn early_init(cmdline: &str) -> Result<BootContext> {
 }
 
 // ───────────────────────────── tests ─────────────────────────────────────────
-#[cfg(test)]
+// Runs only under bare-metal QEMU targets to prevent SIGILL on host.
+#[cfg(all(test, target_os = "none"))]
 mod tests {
     use super::*;
 
