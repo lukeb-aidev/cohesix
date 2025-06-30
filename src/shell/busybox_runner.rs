@@ -31,7 +31,7 @@ fn log_event(log: &mut std::fs::File, event: &str) {
     let _ = writeln!(log, "[{} pid={}] {}", ts, pid, event);
 }
 
-/// Launch BusyBox shell reading from `/dev/console` and writing to `/srv/shell_out`.
+/// Launch BusyBox shell reading from `/srv/console` and writing to `/srv/shell_out`.
 pub fn spawn_shell() {
     let role = detect_cohrole();
     println!("[shell] starting BusyBox shell");
@@ -39,7 +39,7 @@ pub fn spawn_shell() {
     let console = OpenOptions::new()
         .read(true)
         .write(true)
-        .open("/dev/console");
+        .open("/srv/console");
     let stdin = console
         .as_ref()
         .map(|f| Stdio::from(f.try_clone().unwrap()))
@@ -56,7 +56,7 @@ pub fn spawn_shell() {
                 "ERROR",
                 "shell",
                 Path::new("/bin/busybox"),
-                Path::new("/dev/console"),
+                Path::new("/srv/console"),
                 &[],
                 &format!("spawn failed: {e}"),
             );
@@ -105,18 +105,18 @@ pub fn spawn_shell() {
         log_event(&mut log, &format!("CMD {}", line.trim_end()));
         if cmd == "cohcc" {
             if let Some(src) = tokens.get(1) {
-                let mut out_path = Path::new("/tmp/a.out").to_path_buf();
+                let mut out_path = Path::new("/srv/a.out").to_path_buf();
                 if tokens.len() >= 4 && tokens[2] == "-o" {
                     out_path = PathBuf::from(tokens[3]);
                 }
-                if !(out_path.starts_with("/tmp/") || out_path.starts_with("/usr/bin/")) {
-                    let msg = b"output must be under /tmp or /usr/bin\n";
+                if !(out_path.starts_with("/srv/") || out_path.starts_with("/usr/bin/")) {
+                    let msg = b"output must be under /srv or /usr/bin\n";
                     let _ = console.write_all(msg);
                     let _ = fs::write("/srv/shell_out", msg);
                     line.clear();
                     continue;
                 }
-                if src.starts_with("/usr/src/") || src.starts_with("/tmp/") {
+                if src.starts_with("/usr/src/") || src.starts_with("/srv/") {
                     match crate::coh_cc::compile(src) {
                         Ok(bytes) => {
                             if let Some(parent) = out_path.parent() {
@@ -139,7 +139,7 @@ pub fn spawn_shell() {
                         }
                     }
                 } else {
-                    let msg = b"path must be under /usr/src or /tmp\n";
+                    let msg = b"path must be under /usr/src or /srv\n";
                     let _ = console.write_all(msg);
                     let _ = fs::write("/srv/shell_out", msg);
                 }

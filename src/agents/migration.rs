@@ -29,7 +29,7 @@ use serde_json;
 
 impl Migrateable for AgentState {
     fn migrate<T: AgentTransport>(&self, peer: &str, transport: &T) -> anyhow::Result<MigrationStatus> {
-        let tmpdir = std::env::var("TMPDIR").unwrap_or("/tmp".to_string());
+        let tmpdir = std::env::var("TMPDIR").unwrap_or("/srv".to_string());
         let path = format!("{}/agent_state.json", tmpdir);
         std::fs::write(&path, serde_json::to_vec(self)?)?;
         transport.send_state("state", peer, &path)?;

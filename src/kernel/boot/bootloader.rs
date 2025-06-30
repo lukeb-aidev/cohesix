@@ -28,7 +28,7 @@ impl BootAgent {
         crate::trace::recorder::event("boot", "init", "start");
         Self::preflight_checks();
 
-        let cmdline = std::fs::read_to_string("/proc/cmdline").unwrap_or_default();
+        let cmdline = std::fs::read_to_string("/boot/cmdline").unwrap_or_default();
         let ctx = crate::bootloader::init::early_init(&cmdline)
             .unwrap_or_else(|_| crate::bootloader::init::BootContext {
                 args: crate::bootloader::args::BootArgs::default(),
@@ -71,7 +71,7 @@ impl BootAgent {
 
     fn discover_devices() {
         println!("[BootAgent] Enumerating early devices...");
-        if let Ok(entries) = std::fs::read_dir("/dev") {
+        if let Ok(entries) = std::fs::read_dir("/srv/dev") {
             for e in entries.flatten().take(3) {
                 println!("[BootAgent] device {}", e.path().display());
             }

@@ -18,7 +18,7 @@ pub enum CudaStatus {
 /// Entry point for probing CUDA capability on the system.
 pub fn check_cuda_status() -> CudaStatus {
     println!("[CUDA] Probing CUDA support...");
-    if std::path::Path::new("/dev/nvhost").exists() {
+    if std::path::Path::new("/srv/nvhost").exists() {
         CudaStatus::Available
     } else {
         CudaStatus::NotDetected

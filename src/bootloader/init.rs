@@ -88,8 +88,8 @@ mod tests {
 
     #[test]
     fn parses_simple_cmdline() {
-        let ctx = early_init("root=/dev/sda quiet").unwrap();
-        assert_eq!(ctx.args.get("root"), Some("/dev/sda"));
+        let ctx = early_init("root=/srv/sda quiet").unwrap();
+        assert_eq!(ctx.args.get("root"), Some("/srv/sda"));
         assert!(ctx.args.has_flag("quiet"));
         assert_eq!(ctx.role, "Unknown");
     }

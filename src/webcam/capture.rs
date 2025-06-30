@@ -3,7 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2025-08-17
 
-//! Capture a single JPEG frame from `/dev/video0`.
+//! Capture a single JPEG frame from `/srv/video0`.
 //! Falls back to a generated blank image if the device is unavailable.
 
 use image::{codecs::jpeg::JpegEncoder, ImageBuffer, Rgb};
@@ -16,7 +16,7 @@ use v4l::prelude::*;
 
 /// Capture a frame and write it to `path` in JPEG format.
 pub fn capture_jpeg(path: &str) -> anyhow::Result<()> {
-    let dev_path = std::env::var("VIDEO_DEVICE").unwrap_or_else(|_| "/dev/video0".into());
+    let dev_path = std::env::var("VIDEO_DEVICE").unwrap_or_else(|_| "/srv/video0".into());
     if !Path::new(&dev_path).exists() {
         emit_kv("webcam", &[("status", "missing"), ("device", &dev_path)]);
         return write_blank_jpeg(path);

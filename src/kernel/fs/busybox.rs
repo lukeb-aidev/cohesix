@@ -121,7 +121,7 @@ pub fn run_command(cmd: &str, args: &[&str]) {
         }
         BusyBoxCommand::Df => {
             println!("Filesystem     1K-blocks  Used Available Use% Mounted on");
-            println!("/dev/root            2048  1024      1024 50% /");
+            println!("/srv/root            2048  1024      1024 50% /");
         }
         BusyBoxCommand::Uptime => {
             println!("uptime: 0 days, 0:00");

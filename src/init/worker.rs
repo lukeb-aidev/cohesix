@@ -12,7 +12,7 @@ use crate::plan9::namespace::NamespaceLoader;
 use cohesix_9p::fs::InMemoryFs;
 
 fn log(msg: &str) {
-    match OpenOptions::new().append(true).open("/dev/log") {
+    match OpenOptions::new().append(true).open("/srv/devlog") {
         Ok(mut f) => {
             let _ = writeln!(f, "{}", msg);
         }
