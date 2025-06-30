@@ -40,6 +40,7 @@ pub mod syscalls {
 pub mod upgrade;
 
 pub mod proc_mgr;
+pub mod loader;
 pub mod userland_bootstrap;
 pub mod user_api;
 #[cfg(not(target_os = "uefi"))]
