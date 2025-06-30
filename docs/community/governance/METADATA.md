@@ -16,7 +16,7 @@
 | DEPENDENCIES.md            | v0.5    | 2025-07-06    | COMMUNITY      |            |              |
 | METADATA.md                | v3.34   | 2026-02-12    | COMMUNITY      | | |
 | Q_DAY.md                   | v1.1    | 2025-06-15    | PRIVATE        |            |              |
-| README.md                  | v0.20   | 2026-10-16   | COMMUNITY        | | |
+| README.md                  | v0.21   | 2026-12-31   | COMMUNITY        | | |
 | README_CODEX.md            | v1.5    | 2026-02-05    | COMMUNITY      |            |              |
 | REMOTE_ACCESS.md           | v1.0    | 2025-05-24    | COMMUNITY      |            |              |
 | SHOPPING_LIST.md           | v1.3    | 2025-05-25    | COMMUNITY      |            |              |
@@ -114,7 +114,7 @@
 | CohesixBoot.inf | v0.1 | 2025-07-22 | COMMUNITY | | |
 | linker.ld | v0.1 | 2025-07-22 | COMMUNITY | | |
 | .bashrc | v0.1 | 2026-08-09 | COMMUNITY | | |
-| .cargo/config.toml | v0.8 | 2026-11-25 | COMMUNITY | | |
+| .cargo/config.toml | v0.9 | 2026-12-31 | COMMUNITY | | |
 | build.rs | v0.8 | 2026-08-21 | COMMUNITY | | |
 | Makefile | v0.50 | 2026-10-16 | COMMUNITY | | |
 | src/kernel/main.c | v0.2 | 2025-07-22 | COMMUNITY | | |
