@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # CLASSIFICATION: COMMUNITY
-# Filename: make_iso.sh v0.4
+# Filename: make_iso.sh v0.5
 # Author: Lukas Bower
-# Date Modified: 2026-11-17
+# Date Modified: 2026-11-21
 
 set -euo pipefail
 set -x
@@ -164,11 +164,15 @@ log "DEBUG: GRUB_MODULE_PATH=$GRUB_MODULE_PATH"
 log "DEBUG: checking if GRUB module dir exists: [ -d \"$GRUB_MODULE_PATH\" ]"
 
 if [ ! -d "$GRUB_MODULE_PATH" ]; then
-    log "⚠️  GRUB modules for $GRUB_TARGET not found at $GRUB_MODULE_PATH. Skipping ISO creation."
-    exit 0
+    log "ERROR: GRUB modules for $GRUB_TARGET not found at $GRUB_MODULE_PATH"
+    exit 1
 fi
+module_count=$(find "$GRUB_MODULE_PATH" -name '*.mod' | wc -l)
+log "GRUB modules detected: $module_count in $GRUB_MODULE_PATH"
 if [ "$ARCH" = "x86_64" ] || [ "$ARCH" = "amd64" ]; then
     [ -f "$GRUB_MODULE_PATH/multiboot2.mod" ] || { log "ERROR: multiboot2.mod missing"; exit 1; }
+elif [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
+    [ -f "$GRUB_MODULE_PATH/efi_gop.mod" ] || { log "ERROR: efi_gop.mod missing"; exit 1; }
 fi
 
 command -v grub-mkrescue >/dev/null 2>&1 || { log "grub-mkrescue not found"; exit 1; }
