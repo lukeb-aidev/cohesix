@@ -258,6 +258,25 @@ where
         })
     }
 
+    /// Serve a single in-process stream.
+    pub fn serve_stream<U>(mut self, stream: U) -> JoinHandle<()>
+    where
+        U: Stream,
+    {
+        spawn(move || {
+            let session = Session::new_unattached(
+                ClientId(self.next_client_id),
+                self.msize,
+                self.roots.clone(),
+                self.s.clone(),
+                self.qids.clone(),
+                stream,
+            );
+            self.next_client_id += 1;
+            session.handle_connection();
+        })
+    }
+
     /// Bind this server to the specified path and serve over a unix socket.
     #[cfg(unix)]
     pub fn serve_socket(mut self, socket_name: impl Into<String>) -> JoinHandle<()> {
