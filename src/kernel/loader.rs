@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: loader.rs v0.1
+// Filename: loader.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2026-11-20
+// Date Modified: 2026-11-21
 
 use log::info;
 use thiserror::Error;
@@ -15,6 +15,15 @@ pub struct ProcessContext {
     pub entry_point: usize,
     pub stack_top: usize,
     pub page_table: Option<usize>,
+    pub segments: Vec<MappedSegment>,
+}
+
+/// Information about a loaded memory segment.
+pub struct MappedSegment {
+    pub vaddr: usize,
+    pub paddr: usize,
+    pub size: usize,
+    data: Box<[u8]>,
 }
 
 #[derive(Error, Debug)]
@@ -44,9 +53,23 @@ pub fn load_user_elf(path: &str) -> Result<ProcessContext, LoaderError> {
     };
 
     let elf = ElfFile::new(&data).map_err(|_| LoaderError::ParseError)?;
+    let mut segments = Vec::new();
     for ph in elf.program_iter() {
         if let Ok(Type::Load) = ph.get_type() {
-            log_segment(&ph);
+            let mem_size = ph.mem_size() as usize;
+            let file_size = ph.file_size() as usize;
+            let vaddr = ph.virtual_addr() as usize;
+            let offset = ph.offset() as usize;
+            let mut mem = vec![0u8; mem_size];
+            mem[..file_size].copy_from_slice(&data[offset..offset + file_size]);
+            let paddr = mem.as_ptr() as usize;
+            log_segment_map(vaddr, paddr, mem_size);
+            segments.push(MappedSegment {
+                vaddr,
+                paddr,
+                size: mem_size,
+                data: mem.into_boxed_slice(),
+            });
         }
     }
     let entry = elf.header.pt2.entry_point() as usize;
@@ -56,25 +79,13 @@ pub fn load_user_elf(path: &str) -> Result<ProcessContext, LoaderError> {
     Ok(ProcessContext {
         entry_point: entry,
         stack_top,
-        page_table: None,
+        page_table: Some(segments.as_ptr() as usize),
+        segments,
     })
 }
 
-fn log_segment(ph: &ProgramHeader) {
-    let vaddr = ph.virtual_addr();
-    let mem_size = ph.mem_size();
-    let flags = ph.flags();
-    let mut flag_str = String::new();
-    if flags.is_read() {
-        flag_str.push('R');
-    }
-    if flags.is_write() {
-        flag_str.push('W');
-    }
-    if flags.is_execute() {
-        flag_str.push('X');
-    }
-    info!("Mapping segment at 0x{vaddr:x} size 0x{mem_size:x} flags {flag_str}");
+fn log_segment_map(vaddr: usize, paddr: usize, size: usize) {
+    info!("[Loader] Loaded segment virt=0x{vaddr:x} phys=0x{paddr:x} size=0x{size:x}");
 }
 
 #[cfg(test)]

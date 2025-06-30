@@ -2331,3 +2331,9 @@
 - `tools/make_iso.sh` now verifies GRUB module directories and prints summary counts.
 - `init_paging` for ARM64 and x86_64 maps 16 MiB and enables the MMU or paging with diagnostic logs.
 
+## [v0.345] - 2026-11-21
+### Added
+- ELF loader maps PT_LOAD segments and logs addresses.
+- Updated privilege drop sequence for ARM64 and x86_64.
+- Syscall trap vectors configure STAR and EFER on x86_64.
+
