@@ -62,7 +62,7 @@ def list_workers(base: Path):
 
 
 def push_trace(worker_id: str, path: Path):
-    dest_dir = Path("/trace") / worker_id
+    dest_dir = Path("/srv/trace") / worker_id
     os.makedirs(dest_dir, exist_ok=True)
     dest = dest_dir / "sim.json"
     import shutil
