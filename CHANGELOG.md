@@ -2449,3 +2449,8 @@
 ### Fixed
 - Updated `getrandom_dummy` error conversion for non-UEFI targets so offline builds succeed.
 
+## [v0.367] - 2026-12-31
+### Added
+- `cohesix_fetch_build.sh` and `scripts/build_root_elf.sh` now run `cargo vendor`
+  automatically to recreate the `vendor/` directory for offline builds.
+
