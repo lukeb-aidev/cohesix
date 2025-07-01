@@ -9,7 +9,6 @@ use crate::queen::orchestrator::{QueenOrchestrator, SchedulePolicy};
 use crate::sim::physics_demo;
 #[cfg(feature = "rapier")]
 use crate::sim::webcam_tilt;
-use crate::webcam::capture;
 
 /// CLI wrapper for `cohrun` utility.
 #[derive(Parser)]
@@ -24,7 +23,6 @@ pub struct Cli {
 pub enum Commands {
     #[cfg(feature = "rapier")]
     PhysicsDemo,
-    TestWebcam,
     #[cfg(feature = "rapier")]
     WebcamTilt,
     KioskStart,
@@ -69,13 +67,6 @@ pub fn run(cli: Cli) {
     match cli.command {
         #[cfg(feature = "rapier")]
         Commands::PhysicsDemo => physics_demo::run_demo(),
-        Commands::TestWebcam => {
-            if capture::capture_jpeg("/srv/webcam/frame.jpg").is_ok() {
-                println!("frame saved to /srv/webcam/frame.jpg");
-            } else {
-                println!("webcam capture failed");
-            }
-        }
         #[cfg(feature = "rapier")]
         Commands::WebcamTilt => webcam_tilt::run(None),
         Commands::KioskStart => {
