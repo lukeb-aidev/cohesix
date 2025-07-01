@@ -244,7 +244,8 @@
 | src/cli/cohtrace.rs | v0.4 | 2026-10-13 | COMMUNITY | | |
 | src/cloud/mod.rs | v0.2 | 2026-10-10 | COMMUNITY | | |
 | src/cloud/orchestrator.rs | v0.8 | 2026-12-31 | COMMUNITY | | |
-| src/lib.rs | v1.11 | 2026-11-27 | COMMUNITY | | |
+| src/lib.rs | v1.12 | 2026-12-31 | COMMUNITY | | |
+| src/printk.rs | v0.1 | 2026-12-31 | COMMUNITY | | |
 | src/runtime/loader.rs | v0.2 | 2026-10-07 | COMMUNITY | | |
 | src/plan9/namespace.rs | v0.6 | 2026-10-28 | COMMUNITY | | |
 | src/validator/syscall.rs | v0.5 | 2026-11-11 | COMMUNITY | | |
