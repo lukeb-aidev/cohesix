@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: queen.rs v0.2
+// Filename: queen.rs v0.3
 // Author: Lukas Bower
-// Date Modified: 2025-07-04
+// Date Modified: 2026-12-31
 
 //! Queen-side orchestration for Workers.
 //!
@@ -111,10 +111,7 @@ fn timestamp() -> u64 {
 }
 
 fn hostname() -> String {
-    hostname::get()
-        .ok()
-        .and_then(|h| h.into_string().ok())
-        .unwrap_or_else(|| "queen".into())
+    "cohesix-uefi".into()
 }
 
 fn log_fault(id: &str) {

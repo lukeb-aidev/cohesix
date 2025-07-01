@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: run_main.rs v0.1
+// Filename: run_main.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-07-22
+// Date Modified: 2026-12-31
 
 use clap::{Parser, Subcommand};
 use crate::queen::orchestrator::{QueenOrchestrator, SchedulePolicy};
@@ -170,9 +170,10 @@ pub fn run(cli: Cli) {
             }
         }
         Commands::FederateWith { queen_url } => {
-            if let Ok(mut fm) = crate::queen::federation::FederationManager::new(
-                &hostname::get().unwrap_or_default().to_string_lossy(),
-            ) {
+            let hostname = "cohesix-uefi";
+            if let Ok(mut fm) =
+                crate::queen::federation::FederationManager::new(hostname)
+            {
                 if let Err(e) = fm.connect(&queen_url) {
                     println!("federation failed: {e}");
                 } else {

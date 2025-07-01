@@ -2480,3 +2480,8 @@
 ### Fixed
 - Pinned curve25519-dalek to 3.2.1 with `fiat_u64_backend` to restore missing elliptic curve types.
 
+## [v0.374] - 2026-12-31
+### Changed
+- Replaced `hostname` crate usage with static "cohesix-uefi" string.
+- Removed `hostname` dependency from Cargo.toml.
+

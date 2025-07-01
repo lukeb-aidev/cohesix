@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: orchestrator.rs v0.7
+// Filename: orchestrator.rs v0.8
 // Author: Lukas Bower
-// Date Modified: 2026-10-28
+// Date Modified: 2026-12-31
 
 //! Cloud orchestration hooks for the Queen role.
 //! Provides registration and heartbeat routines for
@@ -42,10 +42,8 @@ impl CloudOrchestrator {
 /// Register this Queen with the cloud orchestrator.
 /// On success the returned ID is written to `/srv/cloud/queen_id`.
 pub fn register_queen(cloud_url: &str) -> Result<QueenId, Error> {
-    let host = hostname::get()
-        .ok()
-        .and_then(|h| h.into_string().ok())
-        .unwrap_or_else(|| "queen".into());
+    let hostname = "cohesix-uefi";
+    let host = hostname.to_string();
     let url = format!("{}/register", cloud_url.trim_end_matches('/'));
     let body = serde_json::json!({ "hostname": host });
     let resp = Agent::new().post(&url).send_string(&body.to_string())?;
