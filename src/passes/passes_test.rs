@@ -2,7 +2,7 @@
 // Filename: passes_test.rs v1.0
 // Author: Lukas Bower
 // Date Modified: 2025-05-31
-//! Tests for IR pass framework
+/// Tests for IR pass framework
 
 use crate::prelude::*;
 #[cfg(test)]

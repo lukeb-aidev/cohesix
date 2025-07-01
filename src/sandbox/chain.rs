@@ -4,11 +4,11 @@
 // Date Modified: 2026-10-28
 
 use crate::prelude::*;
-//! Execute syscall chains within the sandbox environment.
-//!
-//! Chains are executed in FIFO order using the [`SyscallQueue`] and
-//! [`SyscallDispatcher`]. Role permissions are verified via
-//! `/srv/cohrole` before any syscalls are dispatched.
+/// Execute syscall chains within the sandbox environment.
+//
+/// Chains are executed in FIFO order using the [`SyscallQueue`] and
+/// [`SyscallDispatcher`]. Role permissions are verified via
+/// `/srv/cohrole` before any syscalls are dispatched.
 
 use log::debug;
 

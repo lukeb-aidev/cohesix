@@ -4,7 +4,7 @@
 // Date Modified: 2025-07-11
 
 use crate::prelude::*;
-//! Textual IR printer producing a simple textual representation.
+/// Textual IR printer producing a simple textual representation.
 
 use crate::ir::{Function, Module};
 use std::fmt::Write;

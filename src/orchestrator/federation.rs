@@ -4,11 +4,11 @@
 // Date Modified: 2026-12-31
 
 use crate::prelude::*;
-//! Queen federation utilities.
-//!
-//! Queens announce themselves via `/srv/federation/beacon` and
-//! exchange state with mutual authentication derived from a
-//! shared federation key.
+/// Queen federation utilities.
+//
+/// Queens announce themselves via `/srv/federation/beacon` and
+/// exchange state with mutual authentication derived from a
+/// shared federation key.
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;

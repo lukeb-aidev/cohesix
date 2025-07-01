@@ -5,7 +5,7 @@
 // Uses rand for trace IDs; disabled for UEFI builds where getrandom isn't available.
 
 use crate::prelude::*;
-//! DroneWorker role initialisation.
+/// DroneWorker role initialisation.
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;

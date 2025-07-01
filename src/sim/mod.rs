@@ -4,7 +4,7 @@
 // Date Modified: 2025-07-22
 
 use crate::prelude::*;
-//! Simulation subsystem modules.
+/// Simulation subsystem modules.
 
 #[cfg(feature = "rapier")]
 pub mod rapier_bridge;

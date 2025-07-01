@@ -4,6 +4,6 @@
 // Date Modified: 2025-07-10
 
 use crate::prelude::*;
-//! Secure SLM container utilities.
+/// Secure SLM container utilities.
 
 pub mod decryptor;

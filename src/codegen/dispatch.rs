@@ -4,7 +4,7 @@
 // Author: Lukas Bower
 
 use crate::prelude::*;
-//! Codegen dispatcher chooses the appropriate backend (C or WASM) to emit code.
+/// Codegen dispatcher chooses the appropriate backend (C or WASM) to emit code.
 
 use crate::ir::Module;
 

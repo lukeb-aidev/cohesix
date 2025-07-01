@@ -4,7 +4,7 @@
 // Date Modified: 2025-07-05
 
 use crate::prelude::*;
-//! Ensemble policy combining rule based and reinforcement policies.
+/// Ensemble policy combining rule based and reinforcement policies.
 
 use super::{RuleBasedPolicy, ReinforcementPolicy};
 

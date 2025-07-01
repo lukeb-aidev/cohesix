@@ -4,8 +4,8 @@
 // Date Modified: 2025-05-31
 
 use crate::prelude::*;
-//! Plan 9 shim for Cohesix kernel-to-userspace bridging.
-//! This module provides an adapter layer between kernel subsystems and 9P-style userland services.
+/// Plan 9 shim for Cohesix kernel-to-userspace bridging.
+/// This module provides an adapter layer between kernel subsystems and 9P-style userland services.
 
 /// Trait defining a basic Plan 9 shim interface.
 pub trait Plan9Shim {

@@ -16,8 +16,8 @@
 // ─────────────────────────────────────────────────────────────
 
 use crate::prelude::*;
-#![forbid(unsafe_code)]
-#![warn(missing_docs)]
+#[forbid(unsafe_code)]
+#[warn(missing_docs)]
 
 use sha2::{Digest, Sha256};
 

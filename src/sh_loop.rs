@@ -3,7 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2025-09-23
 
-//! Wrapper for launching the Cohesix interactive shell.
+/// Wrapper for launching the Cohesix interactive shell.
 
 #[cfg(feature = "busybox_client")]
 use crate::shell::busybox_runner::spawn_shell;

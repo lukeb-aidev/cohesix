@@ -4,6 +4,6 @@
 // Author: Lukas Bower
 
 use crate::prelude::*;
-//! Runtime environment setup helpers
+/// Runtime environment setup helpers
 
 pub mod init;

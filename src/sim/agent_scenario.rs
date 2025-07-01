@@ -4,11 +4,11 @@
 // Date Modified: 2026-09-22
 
 use crate::prelude::*;
-//! Scenario engine for automated agent tests.
-//!
-//! Reads a scenario configuration from `/boot/scenario.json`, spawns agents
-//! using `AgentRuntime`, applies mock environmental inputs and writes a score
-//! file under `/srv/scenario_result/<id>`.
+/// Scenario engine for automated agent tests.
+//
+/// Reads a scenario configuration from `/boot/scenario.json`, spawns agents
+/// using `AgentRuntime`, applies mock environmental inputs and writes a score
+/// file under `/srv/scenario_result/<id>`.
 
 use std::fs;
 use std::path::Path;

@@ -4,7 +4,7 @@
 // Date Modified: 2026-10-25
 
 use crate::prelude::*;
-//! Initialization routines for the DroneWorker role.
+/// Initialization routines for the DroneWorker role.
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;

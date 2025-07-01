@@ -5,7 +5,7 @@
 
 use crate::prelude::*;
 
-//! Adapter for running Rapier-based physics simulations.
+/// Adapter for running Rapier-based physics simulations.
 
 use rapier3d::prelude::*;
 use std::fs::{self, OpenOptions};

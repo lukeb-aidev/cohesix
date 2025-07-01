@@ -4,7 +4,7 @@
 // Date Modified: 2025-07-04
 
 use crate::prelude::*;
-//! Agent directory table maintained under `/srv/agents/agent_table.json`.
+/// Agent directory table maintained under `/srv/agents/agent_table.json`.
 
 use serde::{Deserialize, Serialize};
 use serde_json;

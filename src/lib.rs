@@ -14,7 +14,7 @@ pub mod prelude {
     pub use alloc::{boxed::Box, string::String, vec::Vec};
 }
 
-//! Root library for the Coh_CC compiler and platform integrations.
+/// Root library for the Coh_CC compiler and platform integrations.
 
 /// Intermediate Representation (IR) core types and utilities
 pub mod ir;

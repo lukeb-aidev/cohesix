@@ -4,7 +4,7 @@
 // Date Modified: 2025-06-25
 
 use crate::prelude::*;
-//! Scenario runner executing compiled scenarios tick-by-tick.
+/// Scenario runner executing compiled scenarios tick-by-tick.
 
 use crate::agents::runtime::AgentRuntime;
 use crate::trace::recorder;

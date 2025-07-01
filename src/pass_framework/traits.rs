@@ -6,7 +6,7 @@ use crate::prelude::*;
 // Date Modified: 2025-05-31
 // Author: Lukas Bower
 
-//! Defines the core traits for IR passes in the Cohesix compiler.
+/// Defines the core traits for IR passes in the Cohesix compiler.
 
 use crate::ir::IRContext;
 

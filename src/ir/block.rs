@@ -4,7 +4,7 @@
 // Date Modified: 2025-05-31
 
 use crate::prelude::*;
-//! Block: sequence of instructions with single entry and terminator.
+/// Block: sequence of instructions with single entry and terminator.
 
 pub struct Block {
     pub label: String,

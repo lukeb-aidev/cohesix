@@ -22,8 +22,8 @@
 // ─────────────────────────────────────────────────────────────
 
 use crate::prelude::*;
-#![forbid(unsafe_code)]
-#![warn(missing_docs)]
+#[forbid(unsafe_code)]
+#[warn(missing_docs)]
 
 /// Command‑line parser used by the bootloader.
 pub mod args;

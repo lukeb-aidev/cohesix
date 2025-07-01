@@ -4,11 +4,11 @@
 // Date Modified: 2025-07-12
 
 use crate::prelude::*;
-//! Queen-to-Queen federation manager.
-//!
-//! Handles handshake, trust negotiation and heartbeat exchange between
-//! peer QueenPrimary nodes. Uses the shared `federation` module for
-//! cryptographic primitives and snapshot transfer.
+/// Queen-to-Queen federation manager.
+//
+/// Handles handshake, trust negotiation and heartbeat exchange between
+/// peer QueenPrimary nodes. Uses the shared `federation` module for
+/// cryptographic primitives and snapshot transfer.
 
 use std::collections::HashMap;
 use std::fs;

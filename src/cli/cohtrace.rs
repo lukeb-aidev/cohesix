@@ -4,7 +4,7 @@
 // Date Modified: 2026-10-28
 
 use crate::prelude::*;
-//! Minimal debug CLI for runtime trace inspection.
+/// Minimal debug CLI for runtime trace inspection.
 
 use std::fs;
 use serde_json;

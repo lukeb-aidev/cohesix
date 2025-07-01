@@ -26,8 +26,8 @@
 // ─────────────────────────────────────────────────────────────
 
 use crate::prelude::*;
-#![allow(unsafe_code)]
-#![warn(missing_docs)]
+#[allow(unsafe_code)]
+#[warn(missing_docs)]
 
 /// ARM64 implementation – selected when compiling for `aarch64`.
 #[cfg(target_arch = "aarch64")]

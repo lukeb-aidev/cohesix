@@ -4,7 +4,7 @@
 // Author: Lukas Bower
 
 use crate::prelude::*;
-//! Codegen module for the Coh_CC compiler. Exposes supported backends and dispatch functionality.
+/// Codegen module for the Coh_CC compiler. Exposes supported backends and dispatch functionality.
 
 pub mod c;
 pub mod debug;

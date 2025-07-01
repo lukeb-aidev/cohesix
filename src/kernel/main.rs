@@ -4,7 +4,7 @@
 // Date Modified: 2025-08-02
 
 use crate::prelude::*;
-#![cfg(feature = "kernel_bin")]
+#[cfg(feature = "kernel_bin")]
 
 
 use cohesix::kernel::config;

@@ -4,12 +4,12 @@
 // Date Modified: 2025-07-13
 
 use crate::prelude::*;
-//! Joystick input via SDL2.
-#![cfg(feature = "joystick")]
-//!
-//! Reads joystick axes and button states and logs them to `/srv/telemetry`
-//! and `/srv/agent_trace/<id>`. Uses SDL2's joystick subsystem and falls back
-//! to `None` if no controller is detected.
+/// Joystick input via SDL2.
+#[cfg(feature = "joystick")]
+//
+/// Reads joystick axes and button states and logs them to `/srv/telemetry`
+/// and `/srv/agent_trace/<id>`. Uses SDL2's joystick subsystem and falls back
+/// to `None` if no controller is detected.
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;

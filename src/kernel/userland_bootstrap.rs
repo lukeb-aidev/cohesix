@@ -4,7 +4,7 @@
 // Date Modified: 2026-11-20
 
 use crate::prelude::*;
-//! Lightweight userland dispatcher.
+/// Lightweight userland dispatcher.
 
 use crate::kernel::{loader, proc_mgr};
 use crate::kernel::syscalls::syscall::init_syscall_trap;

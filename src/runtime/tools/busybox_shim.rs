@@ -4,12 +4,12 @@
 // Date Modified: 2025-07-24
 
 use crate::prelude::*;
-#![cfg(feature = "busybox_client")]
+#[cfg(feature = "busybox_client")]
 
-//! Cohesix BusyBox Shim
-//!
-//! Provides a lightweight abstraction to emulate BusyBox-style commands or syscall behaviors for sandboxed worker processes
-//! without depending on full POSIX compliance. This supports controlled fallback and reproducible behavior across edge nodes.
+/// Cohesix BusyBox Shim
+//
+/// Provides a lightweight abstraction to emulate BusyBox-style commands or syscall behaviors for sandboxed worker processes
+/// without depending on full POSIX compliance. This supports controlled fallback and reproducible behavior across edge nodes.
 
 /// Trait defining basic shim capabilities.
 pub trait BusyBoxShim {

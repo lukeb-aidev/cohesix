@@ -4,7 +4,7 @@
 // Date Modified: 2025-06-07
 
 use crate::prelude::*;
-//! Kernel and OS hash verification at boot.
+/// Kernel and OS hash verification at boot.
 
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
