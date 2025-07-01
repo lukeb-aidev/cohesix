@@ -1,5 +1,5 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.77
+# Filename: cohesix_fetch_build.sh v0.78
 # Author: Lukas Bower
 # Date Modified: 2026-12-31
 #!/bin/bash
@@ -69,6 +69,16 @@ esac
 export COHESIX_TARGET COHESIX_ARCH
 COH_ARCH="$COHESIX_ARCH"
 log "Architecture: $COH_ARCH (target $COHESIX_TARGET)"
+
+ensure_vendor() {
+  if [ ! -d "$ROOT/vendor" ]; then
+    log "📦 Running cargo vendor..."
+    cargo vendor -h >/dev/null 2>&1 || cargo install cargo-vendor
+    (cd "$ROOT" && cargo vendor > /dev/null)
+  fi
+}
+
+ensure_vendor
 
 # Toolchain sanity checks
 if ! command -v rustup >/dev/null 2>&1; then
