@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: tiny_ed25519.rs v0.1
+// Filename: tiny_ed25519.rs v0.2
 // Author: Lukas Bower
 // Date Modified: 2026-12-31
 

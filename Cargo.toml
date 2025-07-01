@@ -1,5 +1,5 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Cargo.toml v0.39
+# Filename: Cargo.toml v0.40
 # Author: Lukas Bower
 # Date Modified: 2026-12-31
 [package]
@@ -19,7 +19,7 @@ xmas-elf = "0.10"
 cohesix-9p = { path = "cohesix-9p" }
 sha2 = "0.10"
 hkdf = "0.12"
-ed25519-dalek = { version = "1", default-features = false }
+ed25519-dalek = { version = "2", default-features = false }
 serde_json = "1"
 rand = "0.8"
 aes-gcm = { version = "0.10", features = ["aes"] }
@@ -69,7 +69,7 @@ ninep = "0.3"
 
 [features]
 default = ["std"]
-cuda = ["nvml-wrapper", "cust"]
+cuda = ["cust"]
 std = []
 sel4 = []
 rapier = ["rapier3d"]
@@ -141,5 +141,4 @@ memchr = { path = "third_party/memchr_simple" }
 
 [target.'cfg(not(target_os = "uefi"))'.dependencies]
 libloading = "0.7"
-nvml-wrapper = { version = "0.11", optional = true }
 
