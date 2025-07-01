@@ -2499,3 +2499,8 @@
 - Addressed signature conversion edge case in `tiny_ed25519`.
 - CUDA telemetry now returns `GpuTelemetry` via `Result`.
 
+## [v0.378] - 2026-12-31
+### Changed
+- Added `printk` module providing log-based stubs for `println!`, `eprintln!`,
+  `print!`, and `dbg!` macros to support no_std builds.
+
