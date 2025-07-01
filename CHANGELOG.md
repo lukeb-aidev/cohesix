@@ -2454,3 +2454,9 @@
 - `cohesix_fetch_build.sh` and `scripts/build_root_elf.sh` now run `cargo vendor`
   automatically to recreate the `vendor/` directory for offline builds.
 
+## [v0.368] - 2026-12-31
+### Changed
+- Replaced remaining `ring` digest usage with `hkdf` + `sha2`.
+- Added `ed25519-dalek` and `hkdf` dependencies for minimal no_std crypto.
+- Removed vendored `rustls` crate.
+
