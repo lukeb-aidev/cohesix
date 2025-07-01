@@ -178,7 +178,7 @@
 | scripts/load_arch_config.sh | v0.1 | 2026-07-25 | COMMUNITY | | |
 | scripts/build_busybox.sh | v0.7 | 2026-11-17 | COMMUNITY | | |
 | metadata.json | v0.1 | 2025-07-24 | COMMUNITY | | |
-| Cargo.toml | v0.32 | 2026-12-31 | COMMUNITY | | |
+| Cargo.toml | v0.33 | 2026-12-31 | COMMUNITY | | |
 | cohesix-9p/Cargo.toml | v0.3 | 2026-12-31 | COMMUNITY | | |
 | cohesix-secure9p/Cargo.toml | v0.2 | 2026-12-31 | COMMUNITY | | |
 | cohesix-secure9p/src/secure_stream.rs | v0.1 | 2026-12-31 | COMMUNITY | | |
@@ -239,6 +239,7 @@
 | src/sh_loop.rs | v0.1 | 2025-09-23 | COMMUNITY | | |
 | src/root/main.rs | v0.2 | 2026-11-27 | COMMUNITY | | |
 | src/utils/gpu.rs | v0.1 | 2025-12-12 | COMMUNITY | | |
+| src/cuda/runtime.rs | v0.12 | 2026-12-31 | COMMUNITY | | |
 | src/cli/mod.rs | v1.3 | 2026-10-08 | COMMUNITY | | |
 | src/cli/cohtrace.rs | v0.4 | 2026-10-13 | COMMUNITY | | |
 | src/cloud/mod.rs | v0.2 | 2026-10-10 | COMMUNITY | | |

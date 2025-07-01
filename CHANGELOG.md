@@ -2460,3 +2460,7 @@
 - Added `ed25519-dalek` and `hkdf` dependencies for minimal no_std crypto.
 - Removed vendored `rustls` crate.
 
+## [v0.369] - 2026-12-31
+### Changed
+- UEFI builds skip `nvml-wrapper-sys` and libloading.
+
