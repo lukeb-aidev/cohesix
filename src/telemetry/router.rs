@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2026-12-30
 
+use crate::prelude::*;
 //! Telemetry routing and collection utilities.
 
 use log::debug;

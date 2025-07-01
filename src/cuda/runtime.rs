@@ -5,6 +5,7 @@
 // Previously gated behind `#![cfg(not(target_os = "uefi"))]`.
 // Cohesix now always builds for UEFI, so CUDA runtime is unconditional.
 
+use crate::prelude::*;
 //! Runtime CUDA integration using dynamic loading of `libcuda.so`.
 //! Falls back gracefully if no CUDA driver is present.
 

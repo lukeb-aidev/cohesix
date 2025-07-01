@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2026-12-31
 
+use crate::prelude::*;
 //! Queen-side orchestration for Workers.
 //!
 //! Handles worker join requests, monitors health, and

@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2026-02-20
 
+use crate::prelude::*;
 //! 9P file server implementation for Cohesix.
 //! Handles incoming 9P requests and routes them to appropriate virtual filesystem backends.
 

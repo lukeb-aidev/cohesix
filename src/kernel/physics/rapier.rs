@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-22
 
+use crate::prelude::*;
 
 #![cfg(feature = "rapier")]
 

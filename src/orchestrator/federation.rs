@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2026-12-31
 
+use crate::prelude::*;
 //! Queen federation utilities.
 //!
 //! Queens announce themselves via `/srv/federation/beacon` and

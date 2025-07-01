@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-24
 
+use crate::prelude::*;
 //! SSA Utilities
 //!
 //! This module provides helpers for Static Single Assignment (SSA) processing,

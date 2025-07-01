@@ -20,6 +20,7 @@
 // layers can rely on predictable mappings during boot.
 // ─────────────────────────────────────────────────────────────
 
+use crate::prelude::*;
 #![allow(unsafe_code)]
 #![warn(missing_docs)]
 

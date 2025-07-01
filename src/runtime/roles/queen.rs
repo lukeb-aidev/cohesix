@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2025-06-08
 
+use crate::prelude::*;
 //! Role module for the Cohesix `QueenPrimary`.
 //! The queen node governs distributed orchestration, manages metadata, dispatches workloads, and performs sandbox validation.
 

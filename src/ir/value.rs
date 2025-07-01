@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2025-05-31
 
+use crate::prelude::*;
 //! Value represents a SSA result or named constant in the IR.
 
 pub struct Value {

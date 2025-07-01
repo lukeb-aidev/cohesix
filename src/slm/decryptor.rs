@@ -4,6 +4,7 @@
 // Date Modified: 2025-08-17
 // Random token generation uses rand; this is skipped for UEFI builds.
 
+use crate::prelude::*;
 //! AES-GCM encrypted SLM container loader.
 
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce};

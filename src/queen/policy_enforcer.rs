@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-24
 
+use crate::prelude::*;
 //! Policy enforcement module for the Queen role in Cohesix.
 //! Validates namespace rules, runtime invariants, and worker compliance.
 

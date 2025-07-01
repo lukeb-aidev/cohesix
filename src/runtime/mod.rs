@@ -5,6 +5,7 @@
 // Cohesix is now pure UEFI; all runtime modules are always built.
 // Author: Lukas Bower
 
+use crate::prelude::*;
 //! Runtime subsystem modules
 
 pub mod env;

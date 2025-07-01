@@ -4,6 +4,7 @@
 // Date Modified: 2025-05-31
 //! Parser test scaffolding for Coh_CC
 
+use crate::prelude::*;
 #[cfg(test)]
 mod tests {
     use super::*;

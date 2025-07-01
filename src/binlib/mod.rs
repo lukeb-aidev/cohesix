@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-22
 
+use crate::prelude::*;
 //! Library wrappers for Cohesix binaries.
 
 pub mod agent_main;

@@ -4,6 +4,7 @@
 // Date Modified: 2025-08-27
 // SPDX-License-Identifier: MIT
 
+use crate::prelude::*;
 //! Kernel-exported userland API shims.
 //! Provides simple logging and exit hooks for minimal user programs.
 

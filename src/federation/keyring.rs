@@ -4,6 +4,7 @@
 // Date Modified: 2025-08-17
 // Uses TinyEd25519 with deterministic seeding for UEFI builds.
 
+use crate::prelude::*;
 //! Cryptographic keyring for trusted queen federation.
 //!
 //! Generates an Ed25519 keypair on first boot and stores the

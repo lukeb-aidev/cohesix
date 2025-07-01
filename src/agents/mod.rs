@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-10
 
+use crate::prelude::*;
 //! Agent-related runtime modules.
 
 pub mod runtime;

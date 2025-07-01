@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2025-06-02
 
+use crate::prelude::*;
 //! 9P protocol handler for Cohesix runtime.
 //! This module provides the IPC interface for file operations over the 9P protocol, enabling communication between kernel and userland services.
 

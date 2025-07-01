@@ -3,6 +3,7 @@
 // Author: Codex
 // Date Modified: 2025-06-07
 
+use crate::prelude::*;
 //! Federation module grouping keyring, handshake, and migration utilities.
 
 pub mod keyring;

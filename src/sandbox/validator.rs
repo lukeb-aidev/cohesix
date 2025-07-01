@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2026-09-30
 
+use crate::prelude::*;
 //! Runtime syscall validator for sandboxed agents.
 //! Violations are logged to `/srv/violations/<agent>.json` and the
 //! offending syscall is dropped.

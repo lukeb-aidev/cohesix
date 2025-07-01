@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2025-08-17
 
+use crate::prelude::*;
 //! Worker discovery and retirement hooks.
 //!
 //! When a worker joins it receives the current boot namespace and registers its

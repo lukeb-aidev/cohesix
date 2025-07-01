@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-01
 
+use crate::prelude::*;
 //! Telemetry loops coordinating metric exposure and simulation state.
 
 use log::trace;

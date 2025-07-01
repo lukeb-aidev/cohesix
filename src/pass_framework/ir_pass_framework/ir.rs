@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2025-05-31
 
+use crate::prelude::*;
 //! Façade module for IR types used in the pass framework.
 //! Re-exports core IR components for pass-level access and orchestration.
 

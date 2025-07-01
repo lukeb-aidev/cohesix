@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2025-08-27
 
+use crate::prelude::*;
 pub mod boot {
     pub mod bootloader;
     pub mod secure_boot;

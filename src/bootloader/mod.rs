@@ -21,6 +21,7 @@
 // * `handoff` – trampoline to kernel entry
 // ─────────────────────────────────────────────────────────────
 
+use crate::prelude::*;
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 

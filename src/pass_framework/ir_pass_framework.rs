@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2025-05-31
 
+use crate::prelude::*;
 //! Legacy IR pass façade for compatibility with older call-sites.
 //! Re-exports core IR structures (Function, Module, IRContext) for transitional use.
 

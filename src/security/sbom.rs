@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2025-05-31
 
+use crate::prelude::*;
 //! SBOM Generator for Cohesix
 //!
 //! This module generates a Software Bill of Materials (SBOM) that lists all third-party packages,

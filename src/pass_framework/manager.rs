@@ -4,7 +4,8 @@
 // Author: Lukas Bower
 //! PassManager orchestrates the registration and execution of IR passes in Coh_CC.
 
-use std::{boxed::Box, vec::Vec};
+use crate::prelude::*;
+use alloc::{boxed::Box, vec::Vec};
 
 use crate::ir::IRContext;
 use crate::pass_framework::traits::IRPass;

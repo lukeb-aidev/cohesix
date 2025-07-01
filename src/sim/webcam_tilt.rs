@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-11
 
+use crate::prelude::*;
 //! Map webcam input to a beam balance simulation.
 
 use rapier3d::prelude::*;

@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2025-05-31
 
+use crate::prelude::*;
 //! Plan 9 shim for Cohesix kernel-to-userspace bridging.
 //! This module provides an adapter layer between kernel subsystems and 9P-style userland services.
 

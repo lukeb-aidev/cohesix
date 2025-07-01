@@ -6,6 +6,7 @@
 // SLM Action: manage
 // Target: registry
 
+use crate::prelude::*;
 //! Registry for Small Language Models (SLMs) available to the Queen.
 //! Models are discovered under `/srv/slm/available` and can be
 //! activated for dispatch to workers.
