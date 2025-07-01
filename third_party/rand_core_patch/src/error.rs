@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: error.rs v0.1
+// Filename: error.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2026-12-25
+// Date Modified: 2026-12-31
 // Copyright 2018 Developers of the Rand project.
 //
 // Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
@@ -199,8 +199,15 @@ impl From<Error> for std::io::Error {
     #[inline]
     fn from(error: Error) -> Self {
         if let Some(code) = error.raw_os_error() {
-            // UEFI platforms expect a usize for from_raw_os_error
-            std::io::Error::from_raw_os_error(code as usize)
+            // UEFI platforms expect a usize for from_raw_os_error while others use `i32`.
+            #[cfg(target_os = "uefi")]
+            {
+                std::io::Error::from_raw_os_error(code as usize)
+            }
+            #[cfg(not(target_os = "uefi"))]
+            {
+                std::io::Error::from_raw_os_error(code as i32)
+            }
         } else {
             std::io::Error::new(std::io::ErrorKind::Other, error)
         }
