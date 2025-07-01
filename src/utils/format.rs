@@ -17,8 +17,8 @@
 // ─────────────────────────────────────────────────────────────
 
 use crate::prelude::*;
-#![forbid(unsafe_code)]
-#![warn(missing_docs)]
+#[forbid(unsafe_code)]
+#[warn(missing_docs)]
 
 /// Return a human‑readable string for a byte count using IEC (MiB) units.
 ///

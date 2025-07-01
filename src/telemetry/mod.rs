@@ -4,7 +4,7 @@
 // Date Modified: 2025-06-19
 
 use crate::prelude::*;
-//! Telemetry subsystem modules.
+/// Telemetry subsystem modules.
 
 pub mod diagnostics;
 /// Telemetry sync loop polling simulation state.

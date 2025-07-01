@@ -4,7 +4,7 @@
 // Author: Lukas Bower
 
 use crate::prelude::*;
-//! C backend for the Coh_CC compiler. Translates IR into C code.
+/// C backend for the Coh_CC compiler. Translates IR into C code.
 
 
 use crate::ir::{Module, Opcode};

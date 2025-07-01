@@ -4,7 +4,7 @@
 // Date Modified: 2025-07-22
 
 use crate::prelude::*;
-//! Minimal base agent with introspection logging and self-diagnosis.
+/// Minimal base agent with introspection logging and self-diagnosis.
 
 use crate::sim::introspect::{self, IntrospectionData};
 use serde_json;

@@ -4,7 +4,7 @@
 // Date Modified: 2025-07-11
 
 use crate::prelude::*;
-//! Simple trust zone escalation logic for workers.
+/// Simple trust zone escalation logic for workers.
 
 use std::fs;
 use std::path::Path;

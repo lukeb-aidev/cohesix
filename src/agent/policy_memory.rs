@@ -4,7 +4,7 @@
 // Date Modified: 2025-08-16
 
 use crate::prelude::*;
-//! Persistent policy memory utilities.
+/// Persistent policy memory utilities.
 
 use serde::{Deserialize, Serialize};
 use std::fs;

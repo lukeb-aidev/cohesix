@@ -5,13 +5,13 @@
 // Uses TinyEd25519 with deterministic seeding for UEFI builds.
 
 use crate::prelude::*;
-//! Cryptographic keyring for trusted queen federation.
-//!
-//! Generates an Ed25519 keypair on first boot and stores the
-//! private key under `/srv/federation` while exporting the
-//! public key to `/srv/federation/known_hosts/` for peers.
-//! Provides signing and verification helpers used during
-//! handshake and agent migration.
+/// Cryptographic keyring for trusted queen federation.
+//
+/// Generates an Ed25519 keypair on first boot and stores the
+/// private key under `/srv/federation` while exporting the
+/// public key to `/srv/federation/known_hosts/` for peers.
+/// Provides signing and verification helpers used during
+/// handshake and agent migration.
 
 use crate::utils::tiny_ed25519::TinyEd25519;
 use crate::utils::tiny_rng::TinyRng;

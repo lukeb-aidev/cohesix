@@ -4,11 +4,11 @@
 // Date Modified: 2026-12-30
 
 use crate::prelude::*;
-//! Syscall and agent event recorder.
-//!
-//! Logs spawn, exec, capability grants and read/write operations into
-//! `/srv/trace/live.log` with simple JSON lines. Supports replay of a
-//! trace file to re-execute scenarios.
+/// Syscall and agent event recorder.
+//
+/// Logs spawn, exec, capability grants and read/write operations into
+/// `/srv/trace/live.log` with simple JSON lines. Supports replay of a
+/// trace file to re-execute scenarios.
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;

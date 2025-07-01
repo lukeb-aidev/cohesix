@@ -5,11 +5,11 @@
 // Relies on rand and Rapier; omitted from UEFI builds.
 
 use crate::prelude::*;
-//! Rapier physics engine bridge exposing a simple command interface.
-//!
-//! Commands are written to `/sim/commands` and state snapshots are
-//! updated to `/sim/state`. All transitions are logged to
-//! `/srv/trace/sim.log`.
+/// Rapier physics engine bridge exposing a simple command interface.
+//
+/// Commands are written to `/sim/commands` and state snapshots are
+/// updated to `/sim/state`. All transitions are logged to
+/// `/srv/trace/sim.log`.
 
 use crate::runtime::ServiceRegistry;
 use rapier3d::prelude::*;

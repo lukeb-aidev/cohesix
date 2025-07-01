@@ -4,8 +4,8 @@
 // Date Modified: 2025-07-07
 
 use crate::prelude::*;
-//! Secure boot logic for Cohesix platform.
-//! Verifies boot integrity, firmware authenticity, and cryptographic signatures.
+/// Secure boot logic for Cohesix platform.
+/// Verifies boot integrity, firmware authenticity, and cryptographic signatures.
 
 /// Entry point for secure boot validation.
 pub fn validate_secure_boot() -> bool {

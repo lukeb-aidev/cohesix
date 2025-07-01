@@ -20,8 +20,8 @@
 // ─────────────────────────────────────────────────────────────
 
 use crate::prelude::*;
-#![forbid(unsafe_code)]
-#![warn(missing_docs)]
+#[forbid(unsafe_code)]
+#[warn(missing_docs)]
 
 /// Legacy argument parser wrapper. Prefer `cli::WorkerOpts`.
 pub mod args;

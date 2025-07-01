@@ -4,12 +4,12 @@
 // Date Modified: 2026-12-30
 
 use crate::prelude::*;
-//! Concurrent 9P request multiplexer.
-//!
-//! Registered services are mounted under `/srv/<name>` and are
-//! looked up by prefix when handling incoming requests. The
-//! multiplexer supports both synchronous and asynchronous handling
-//! and is used by the Go helper via a channel.
+/// Concurrent 9P request multiplexer.
+//
+/// Registered services are mounted under `/srv/<name>` and are
+/// looked up by prefix when handling incoming requests. The
+/// multiplexer supports both synchronous and asynchronous handling
+/// and is used by the Go helper via a channel.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};

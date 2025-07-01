@@ -4,7 +4,7 @@
 // Date Modified: 2026-10-28
 
 use crate::prelude::*;
-//! Initialization routines for the InteractiveAiBooth role.
+/// Initialization routines for the InteractiveAiBooth role.
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;

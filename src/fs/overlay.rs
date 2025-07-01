@@ -4,11 +4,11 @@
 // Date Modified: 2025-07-04
 
 use crate::prelude::*;
-//! Overlay filesystem for combining remote /srv paths.
-//!
-//! This is a lightweight shadow-mount implementation used by the
-//! Queen and Worker nodes to expose remote namespaces under
-//! `/srv/worker/<id>` or `/srv/queen`.
+/// Overlay filesystem for combining remote /srv paths.
+//
+/// This is a lightweight shadow-mount implementation used by the
+/// Queen and Worker nodes to expose remote namespaces under
+/// `/srv/worker/<id>` or `/srv/queen`.
 
 use std::collections::HashMap;
 use std::fs;

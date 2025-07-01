@@ -4,10 +4,10 @@
 // Author: Lukas Bower
 
 use crate::prelude::*;
-//! Services Module
-//!
-//! Defines basic runtime services for Cohesix including telemetry reporting,
-//! sandbox enforcement, health monitoring and IPC via the 9P protocol.
+/// Services Module
+//
+/// Defines basic runtime services for Cohesix including telemetry reporting,
+/// sandbox enforcement, health monitoring and IPC via the 9P protocol.
 
 pub mod gpuinfo;
 pub mod health;

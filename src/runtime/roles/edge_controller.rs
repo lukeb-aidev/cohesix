@@ -4,8 +4,8 @@
 // Date Modified: 2026-12-30
 
 use crate::prelude::*;
-//! Role module for the Cohesix `EdgeController`.
-//! Manages edge device orchestration, resource scheduling, and health signaling in remote or distributed environments.
+/// Role module for the Cohesix `EdgeController`.
+/// Manages edge device orchestration, resource scheduling, and health signaling in remote or distributed environments.
 
 /// Trait representing edge controller functionality.
 pub trait EdgeControllerRole {

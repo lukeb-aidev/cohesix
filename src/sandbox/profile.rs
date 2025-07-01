@@ -4,10 +4,10 @@
 // Date Modified: 2025-05-31
 
 use crate::prelude::*;
-//! Sandbox Profile Module
-//!
-//! Represents and enforces the execution constraints of sandboxed processes in Cohesix.
-//! Profiles govern resource limits, syscall permissions, and namespace visibility.
+/// Sandbox Profile Module
+//
+/// Represents and enforces the execution constraints of sandboxed processes in Cohesix.
+/// Profiles govern resource limits, syscall permissions, and namespace visibility.
 
 /// Struct representing a sandbox profile with basic attributes.
 pub struct SandboxProfile {

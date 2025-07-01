@@ -4,7 +4,7 @@
 // Date Modified: 2025-07-24
 
 use crate::prelude::*;
-//! Syscall dispatcher for sandboxed workers.
+/// Syscall dispatcher for sandboxed workers.
 
 use log::debug;
 

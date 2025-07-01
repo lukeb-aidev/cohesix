@@ -4,11 +4,11 @@
 // Date Modified: 2025-07-03
 
 use crate::prelude::*;
-//! Simple cluster coordination for multiple Queen nodes.
-//!
-//! Keeps track of participating nodes and elects a primary orchestrator. The
-//! election algorithm is intentionally naive: the lexicographically smallest
-//! node id becomes primary. Decisions are appended to `/srv/orchestration.log`.
+/// Simple cluster coordination for multiple Queen nodes.
+//
+/// Keeps track of participating nodes and elects a primary orchestrator. The
+/// election algorithm is intentionally naive: the lexicographically smallest
+/// node id becomes primary. Decisions are appended to `/srv/orchestration.log`.
 
 use std::fs::{OpenOptions, create_dir_all};
 use std::io::Write;

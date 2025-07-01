@@ -5,7 +5,7 @@
 // Formerly limited to non-UEFI builds; now always compiled for UEFI.
 
 use crate::prelude::*;
-//! Minimal Plan 9 style init parser for Cohesix.
+/// Minimal Plan 9 style init parser for Cohesix.
 
 use crate::plan9::namespace::NamespaceLoader;
 use std::fs;

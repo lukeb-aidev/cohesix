@@ -4,7 +4,7 @@
 // Date Modified: 2025-06-18
 
 use crate::prelude::*;
-//! Plan 9 userland utilities.
+/// Plan 9 userland utilities.
 
 pub mod fs;
 pub mod namespace;

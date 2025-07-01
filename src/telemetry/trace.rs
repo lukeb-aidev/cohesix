@@ -4,11 +4,11 @@
 // Date Modified: 2025-07-21
 
 use crate::prelude::*;
-//! Trace Logging for Cohesix
-//!
-//! The trace module provides structured and timestamped logging support for
-//! system events, service behavior, and rule validation results.
-//! This supports validation agents, debugging, and runtime observability.
+/// Trace Logging for Cohesix
+//
+/// The trace module provides structured and timestamped logging support for
+/// system events, service behavior, and rule validation results.
+/// This supports validation agents, debugging, and runtime observability.
 
 use alloc::boxed::Box;
 

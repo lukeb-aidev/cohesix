@@ -4,10 +4,10 @@
 // Date Modified: 2026-12-31
 
 use crate::prelude::*;
-//! Queen-side orchestration for Workers.
-//!
-//! Handles worker join requests, monitors health, and
-//! exposes the registry under `/srv/registry`.
+/// Queen-side orchestration for Workers.
+//
+/// Handles worker join requests, monitors health, and
+/// exposes the registry under `/srv/registry`.
 
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};

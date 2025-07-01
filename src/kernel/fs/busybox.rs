@@ -4,8 +4,8 @@
 // Date Modified: 2026-12-30
 
 use crate::prelude::*;
-//! Cohesix in-kernel BusyBox implementation.
-//! Provides minimal command handlers for embedded shell and diagnostics.
+/// Cohesix in-kernel BusyBox implementation.
+/// Provides minimal command handlers for embedded shell and diagnostics.
 
 
 /// Available BusyBox commands.

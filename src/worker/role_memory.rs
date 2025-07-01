@@ -4,7 +4,7 @@
 // Date Modified: 2025-07-12
 
 use crate::prelude::*;
-//! Persist and replay worker role context for failover recovery.
+/// Persist and replay worker role context for failover recovery.
 
 use std::fs;
 use std::path::Path;

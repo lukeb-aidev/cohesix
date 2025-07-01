@@ -4,7 +4,7 @@
 // Author: Lukas Bower
 
 use crate::prelude::*;
-//! Utility functions and constants for IR opcodes in the Cohesix compiler.
+/// Utility functions and constants for IR opcodes in the Cohesix compiler.
 
 use crate::ir::Opcode;
 

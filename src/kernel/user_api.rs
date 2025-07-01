@@ -5,8 +5,8 @@
 // SPDX-License-Identifier: MIT
 
 use crate::prelude::*;
-//! Kernel-exported userland API shims.
-//! Provides simple logging and exit hooks for minimal user programs.
+/// Kernel-exported userland API shims.
+/// Provides simple logging and exit hooks for minimal user programs.
 
 use crate::kernel::proc_mgr;
 

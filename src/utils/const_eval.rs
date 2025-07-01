@@ -4,10 +4,10 @@
 // Date Modified: 2025-05-31
 
 use crate::prelude::*;
-//! Constant Expression Evaluator
-//!
-//! Provides utility support for parsing and evaluating constant expressions at compile time
-//! or runtime as needed. Intended for use in macros, config parsers, or unit test expressions.
+/// Constant Expression Evaluator
+//
+/// Provides utility support for parsing and evaluating constant expressions at compile time
+/// or runtime as needed. Intended for use in macros, config parsers, or unit test expressions.
 
 
 

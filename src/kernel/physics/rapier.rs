@@ -5,10 +5,10 @@
 
 use crate::prelude::*;
 
-#![cfg(feature = "rapier")]
+#[cfg(feature = "rapier")]
 
-//! Rapier physics integration module for Cohesix.
-//! Provides hooks into the Rapier engine for simulating rigid body dynamics, collisions, and world stepping.
+/// Rapier physics integration module for Cohesix.
+/// Provides hooks into the Rapier engine for simulating rigid body dynamics, collisions, and world stepping.
 
 use rapier3d::prelude::*;
 

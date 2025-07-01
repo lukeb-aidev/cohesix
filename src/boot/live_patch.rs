@@ -4,7 +4,7 @@
 // Date Modified: 2025-07-05
 
 use crate::prelude::*;
-//! Live patching utilities for on-the-fly updates.
+/// Live patching utilities for on-the-fly updates.
 
 use sha2::{Digest, Sha256};
 use std::fs::{self, OpenOptions};

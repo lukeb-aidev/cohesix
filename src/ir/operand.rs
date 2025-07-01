@@ -4,7 +4,7 @@
 // Date Modified: 2025-05-31
 
 use crate::prelude::*;
-//! Operand enum: arguments to instructions (values, constants, etc.)
+/// Operand enum: arguments to instructions (values, constants, etc.)
 
 pub enum Operand {
     ValueRef(u32),

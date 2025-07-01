@@ -4,7 +4,7 @@
 // Date Modified: 2025-08-17
 
 use crate::prelude::*;
-//! Handles atomic upgrades and rollbacks of Cohesix bundles.
+/// Handles atomic upgrades and rollbacks of Cohesix bundles.
 
 use serde::Deserialize;
 use sha2::{Digest, Sha256};

@@ -3,10 +3,10 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-15
 
-//! High level agent migration helpers used by the orchestrator.
-//!
-//! Wraps the lower-level snapshot routines and federation
-//! transfer helpers to move agents between workers.
+/// High level agent migration helpers used by the orchestrator.
+//
+/// Wraps the lower-level snapshot routines and federation
+/// transfer helpers to move agents between workers.
 
 use crate::agents::migration as snap;
 use crate::agent_transport::AgentTransport;

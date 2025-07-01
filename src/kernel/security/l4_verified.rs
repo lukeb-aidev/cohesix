@@ -4,8 +4,8 @@
 // Date Modified: 2025-07-20
 
 use crate::prelude::*;
-//! seL4-verified capability enforcement layer.
-//! This module validates capability derivations and access rights against the static kernel proof model.
+/// seL4-verified capability enforcement layer.
+/// This module validates capability derivations and access rights against the static kernel proof model.
 
 /// Enumeration of capability check outcomes.
 #[derive(Debug, PartialEq)]

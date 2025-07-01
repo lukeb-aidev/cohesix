@@ -4,7 +4,7 @@
 // Date Modified: 2025-06-22
 
 use crate::prelude::*;
-//! Minimal Plan 9 style syscall wrappers for Cohesix.
+/// Minimal Plan 9 style syscall wrappers for Cohesix.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
