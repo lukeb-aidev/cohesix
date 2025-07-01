@@ -2445,3 +2445,7 @@
 ### Changed
 - Replaced ring-based Ed25519 with TinyEd25519 wrapper for no_std builds.
 
+## [v0.366] - 2026-12-31
+### Fixed
+- Updated `getrandom_dummy` error conversion for non-UEFI targets so offline builds succeed.
+
