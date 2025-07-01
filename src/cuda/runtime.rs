@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: runtime.rs v0.11
+// Filename: runtime.rs v0.12
 // Author: Lukas Bower
-// Date Modified: 2026-10-27
+// Date Modified: 2026-12-31
 // Previously gated behind `#![cfg(not(target_os = "uefi"))]`.
 // Cohesix now always builds for UEFI, so CUDA runtime is unconditional.
 
@@ -9,7 +9,12 @@
 //! Falls back gracefully if no CUDA driver is present.
 
 use crate::runtime::ServiceRegistry;
+#[cfg(not(target_os = "uefi"))]
 use libloading::{Library, Symbol};
+#[cfg(target_os = "uefi")]
+use core::marker::PhantomData as Symbol;
+#[cfg(target_os = "uefi")]
+type Library = ();
 use crate::validator::{self, RuleViolation};
 #[cfg(feature = "cuda")]
 use log::info;
@@ -23,13 +28,14 @@ use std::time::Instant;
 use cust::prelude::*;
 #[cfg(feature = "cuda")]
 use cust::CudaApiVersion;
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(target_os = "uefi")))]
 use nvml_wrapper::{enum_wrappers::device::TemperatureSensor, Nvml};
 
 /// Wrapper around the CUDA driver library.
 pub struct CudaRuntime {
+    #[cfg(not(target_os = "uefi"))]
     lib: Option<Library>,
-    #[cfg(feature = "cuda")]
+    #[cfg(all(feature = "cuda", not(target_os = "uefi")))]
     #[allow(dead_code)] // context kept alive but unused directly
     ctx: Option<Context>,
     present: bool,
@@ -44,45 +50,56 @@ static VALID_SYMBOLS: &[&str] = &[
 impl CudaRuntime {
     /// Attempt to load `libcuda.so` if the `cuda` feature is enabled.
     pub fn try_new() -> io::Result<Self> {
-        #[cfg(feature = "cuda")]
-        let (lib, ctx) = match unsafe { Library::new("libcuda.so") } {
-            Ok(l) => match cust::quick_init() {
-                Ok(c) => (Some(l), Some(c)),
-                Err(e) => {
-                    warn!("CUDA init failed: {}", e);
-                    (Some(l), None)
-                }
-            },
-            Err(e) => {
-                warn!("CUDA library not found: {}", e);
-                (None, None)
-            }
-        };
-
-        #[cfg(not(feature = "cuda"))]
-        let lib = {
-            warn!("CUDA feature disabled");
-            None
-        };
-
-        #[cfg(feature = "cuda")]
-        let present = lib.is_some() && ctx.is_some();
-        #[cfg(not(feature = "cuda"))]
-        let present = lib.is_some();
-        fs::create_dir_all("/srv/cuda").ok();
-        if !present {
-            warn!("CUDA unavailable; exposing stub interface at /srv/cuda");
-            println!("CUDA not detected on this build target, skipping CUDA tests.");
-            std::io::stdout().flush().unwrap();
-            fs::write("/srv/cuda/info", "cuda unavailable").ok();
-        }
-        let _ = ServiceRegistry::register_service("cuda", "/srv/cuda");
-        Ok(Self {
-            lib,
+        #[cfg(not(target_os = "uefi"))]
+        {
             #[cfg(feature = "cuda")]
-            ctx,
-            present,
-        })
+            let (lib, ctx) = match unsafe { Library::new("libcuda.so") } {
+                Ok(l) => match cust::quick_init() {
+                    Ok(c) => (Some(l), Some(c)),
+                    Err(e) => {
+                        warn!("CUDA init failed: {}", e);
+                        (Some(l), None)
+                    }
+                },
+                Err(e) => {
+                    warn!("CUDA library not found: {}", e);
+                    (None, None)
+                }
+            };
+
+            #[cfg(not(feature = "cuda"))]
+            let lib = {
+                warn!("CUDA feature disabled");
+                None
+            };
+
+            #[cfg(feature = "cuda")]
+            let present = lib.is_some() && ctx.is_some();
+            #[cfg(not(feature = "cuda"))]
+            let present = lib.is_some();
+            fs::create_dir_all("/srv/cuda").ok();
+            if !present {
+                warn!("CUDA unavailable; exposing stub interface at /srv/cuda");
+                println!("CUDA not detected on this build target, skipping CUDA tests.");
+                std::io::stdout().flush().unwrap();
+                fs::write("/srv/cuda/info", "cuda unavailable").ok();
+            }
+            let _ = ServiceRegistry::register_service("cuda", "/srv/cuda");
+            Ok(Self {
+                lib,
+                #[cfg(all(feature = "cuda", not(target_os = "uefi")))]
+                ctx,
+                present,
+            })
+        }
+        #[cfg(target_os = "uefi")]
+        {
+            fs::create_dir_all("/srv/cuda").ok();
+            warn!("CUDA unavailable on UEFI; exposing stub interface at /srv/cuda");
+            fs::write("/srv/cuda/info", "cuda unavailable").ok();
+            let _ = ServiceRegistry::register_service("cuda", "/srv/cuda");
+            Ok(Self { present: false })
+        }
     }
 
     /// Return true if CUDA libraries and context were successfully initialized.
@@ -91,6 +108,7 @@ impl CudaRuntime {
     }
 
     /// Load a verified symbol from the CUDA library.
+    #[cfg(not(target_os = "uefi"))]
     pub fn get_symbol<T>(&self, name: &[u8]) -> anyhow::Result<Symbol<T>> {
         let lib = self
             .lib
@@ -109,7 +127,13 @@ impl CudaRuntime {
         unsafe { lib.get::<T>(name).map_err(|e| anyhow::anyhow!(e.to_string())) }
     }
 
+    #[cfg(target_os = "uefi")]
+    pub fn get_symbol<T>(&self, _name: &[u8]) -> anyhow::Result<Symbol<T>> {
+        Err(anyhow::anyhow!("libloading disabled"))
+    }
+
     /// Initialize the CUDA driver via verified FFI entry.
+    #[cfg(not(target_os = "uefi"))]
     pub fn init_driver(&self) -> Result<(), String> {
         let sym: Symbol<unsafe extern "C" fn(u32) -> i32> =
             self.get_symbol(b"cuInit").map_err(|e| e.to_string())?;
@@ -132,6 +156,11 @@ impl CudaRuntime {
             Err(format!("cuInit failed: {}", res))
         }
     }
+
+    #[cfg(target_os = "uefi")]
+    pub fn init_driver(&self) -> Result<(), String> {
+        Err("cuda disabled".into())
+    }
 }
 
 /// Executor capable of loading PTX kernels and launching them.
@@ -151,8 +180,9 @@ impl Default for CudaExecutor {
 impl CudaExecutor {
     pub fn new() -> Self {
         let rt = CudaRuntime::try_new().unwrap_or_else(|_| CudaRuntime {
+            #[cfg(not(target_os = "uefi"))]
             lib: None,
-            #[cfg(feature = "cuda")]
+            #[cfg(all(feature = "cuda", not(target_os = "uefi")))]
             ctx: None,
             present: false,
         });
@@ -182,6 +212,21 @@ impl CudaExecutor {
     pub fn launch(&mut self) -> Result<(), String> {
         fs::create_dir_all("/log").ok();
         fs::create_dir_all("/srv/trace").ok();
+        #[cfg(target_os = "uefi")]
+        {
+            warn!("CUDA unavailable; stub launch");
+            OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("/log/gpu_runtime.log")
+                .and_then(|mut f| writeln!(f, "cuda disabled"))
+                .ok();
+            self.fallback_reason = "cuda disabled".into();
+            self.last_exec_ns = 0;
+            fs::write("/srv/cuda_result", b"cuda disabled").map_err(|e| e.to_string())?;
+            return Ok(());
+        }
+        #[cfg(not(target_os = "uefi"))]
         if self.rt.lib.is_none() || !self.rt.present {
             warn!("CUDA unavailable; stub launch");
             OpenOptions::new()
@@ -196,7 +241,7 @@ impl CudaExecutor {
             return Ok(());
         }
 
-        #[cfg(feature = "cuda")]
+        #[cfg(all(feature = "cuda", not(target_os = "uefi")))]
         {
             let len = self.kernel.as_ref().map(|k| k.len()).unwrap_or(0);
             info!("launching CUDA kernel size {}", len);
@@ -285,7 +330,7 @@ impl CudaExecutor {
                 gpu_utilization: util,
             }
         }
-        #[cfg(not(feature = "cuda"))]
+        #[cfg(any(target_os = "uefi", not(feature = "cuda")))]
         {
             GpuTelemetry {
                 cuda_present: false,
