@@ -9,6 +9,7 @@ use crate::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
+use crate::CohError;
 
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
 pub struct PolicyMemory {
@@ -18,7 +19,7 @@ pub struct PolicyMemory {
 }
 
 impl PolicyMemory {
-    pub fn load(agent_id: &str) -> anyhow::Result<Self> {
+    pub fn load(agent_id: &str) -> Result<Self, CohError> {
         let primary = format!("/persist/policy/agent_{agent_id}.policy.json");
         if let Ok(data) = fs::read(&primary) {
             let mem = serde_json::from_slice(&data)?;
@@ -35,7 +36,7 @@ impl PolicyMemory {
         }
     }
 
-    pub fn save(&self, agent_id: &str) -> anyhow::Result<()> {
+    pub fn save(&self, agent_id: &str) -> Result<(), CohError> {
         let data = serde_json::to_vec_pretty(self)?;
         let primary_path = format!("/persist/policy/agent_{agent_id}.policy.json");
         // Try to write to the standard location first
@@ -66,7 +67,7 @@ impl PolicyMemory {
     }
 
     /// Save the policy memory to a shared location for quick retrieval.
-    pub fn save_shared(mem: &Self) -> anyhow::Result<()> {
+    pub fn save_shared(mem: &Self) -> Result<(), CohError> {
         let path = Self::shared_path();
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
@@ -77,7 +78,7 @@ impl PolicyMemory {
     }
 
     /// Load policy memory from the shared location if present.
-    pub fn load_shared() -> anyhow::Result<Self> {
+    pub fn load_shared() -> Result<Self, CohError> {
         let path = Self::shared_path();
         if let Ok(buf) = fs::read(&path) {
             let m = serde_json::from_slice(&buf)?;

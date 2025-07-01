@@ -11,6 +11,7 @@ use crate::prelude::*;
 
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
+use crate::CohError;
 
 use crate::orchestrator::protocol::{HealthPing, JoinAck, JoinRequest};
 use rmp_serde::encode::to_vec;
@@ -29,7 +30,7 @@ impl Worker {
     }
 
     /// Send a join request to the Queen.
-    pub fn join(&self, ip: &str) -> anyhow::Result<()> {
+    pub fn join(&self, ip: &str) -> Result<(), CohError> {
         fs::create_dir_all(format!("{}/join", self.queen_path))?;
         let req = JoinRequest { worker_id: self.id.clone(), ip: ip.into() };
         let data = to_vec(&req)?;

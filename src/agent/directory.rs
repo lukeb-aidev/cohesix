@@ -23,9 +23,10 @@ pub struct AgentRecord {
 
 use crate::agent_transport::AgentTransport;
 use crate::agent_migration::{Migrateable, MigrationStatus};
+use crate::{CohError};
 
 impl Migrateable for AgentRecord {
-    fn migrate<T: AgentTransport>(&self, peer: &str, transport: &T) -> anyhow::Result<MigrationStatus> {
+    fn migrate<T: AgentTransport>(&self, peer: &str, transport: &T) -> Result<MigrationStatus, CohError> {
         let tmpdir = std::env::var("TMPDIR").unwrap_or("/srv".to_string());
         let tmp = format!("{}/record_{}.json", tmpdir, self.id);
         let data = serde_json::to_vec(self)?;

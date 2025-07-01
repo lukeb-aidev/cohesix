@@ -8,6 +8,7 @@ use crate::prelude::*;
 
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
+use crate::CohError;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::io::Read;
@@ -25,7 +26,7 @@ pub struct UpgradeManager;
 
 impl UpgradeManager {
     /// Apply an upgrade from the given URL.
-    pub fn apply_from_url(url: &str) -> anyhow::Result<()> {
+    pub fn apply_from_url(url: &str) -> Result<(), CohError> {
         let mut bytes = Vec::new();
         ureq::get(url).call()?.into_reader().read_to_end(&mut bytes)?;
         let manifest_url = format!("{url}.manifest");
@@ -35,7 +36,7 @@ impl UpgradeManager {
     }
 
     /// Apply an upgrade from local bytes with manifest.
-    pub fn apply_bundle(bundle: &[u8], manifest: &UpgradeManifest) -> anyhow::Result<()> {
+    pub fn apply_bundle(bundle: &[u8], manifest: &UpgradeManifest) -> Result<(), CohError> {
         fs::create_dir_all("/persist/upgrades")?;
         fs::create_dir_all("/log")?;
         let mut hasher = Sha256::new();
@@ -57,7 +58,7 @@ impl UpgradeManager {
     }
 
     /// Roll back to the last good image.
-    pub fn rollback() -> anyhow::Result<()> {
+    pub fn rollback() -> Result<(), CohError> {
         if fs::metadata("/persist/upgrades/previous.cohimg").is_ok() {
             let data = fs::read("/persist/upgrades/previous.cohimg")?;
             fs::write("/persist/upgrades/current.cohimg", data)?;
