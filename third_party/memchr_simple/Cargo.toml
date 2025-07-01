@@ -1,0 +1,14 @@
+[package]
+name = "memchr"
+version = "2.7.5"
+edition = "2021"
+authors = ["Andrew Gallant", "Lukas Bower"]
+license = "MIT OR Apache-2.0"
+description = "Minimal memchr reimplementation using safe loops for UEFI"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+std = []
+
