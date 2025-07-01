@@ -18,7 +18,9 @@ Cohesix is a secure OS platform built on seL4 + Plan9 principles with:
 - CUDA + Rapier physics modules
 - CLI tools in Rust, Go, Python
 - The custom compiler `cohcc`
-
+- Pure UEFI execution environment using LLVM/LLD (no Linux syscalls, no `/proc` or `/sys`)
+- Rust cross-targets: `x86_64-unknown-uefi`, `aarch64-unknown-uefi`
+- Pre-installed tools: `rustc`, `cargo`, `llvm`, `lld`, `clang`, `python3` (with `flake8`, `mypy`, `black`), `go`, `gcc`
 Agents run in CI (GitHub Actions) and locally, ensuring consistency, security, and sandbox guarantees across all roles and deployments.
 
 ---
@@ -87,6 +89,7 @@ Agents always respect TMPDIR, COHESIX_TRACE_TMP, or COHESIX_ENS_TMP — never ha
 ## ⚙️ Execution & Environment Notes
 
 - Agents run under GitHub Actions workflows (x86_64 and aarch64 runners with CUDA fallback) and local CI.
+- All builds target pure UEFI binaries using LLVM/LLD.
 - Output always written to TMPDIR, COHESIX_TRACE_TMP, or COHESIX_ENS_TMP.
 - Any agent failing its check fails the entire build, with logs captured for review.
 - No absolute system paths, no persistent background tasks.
