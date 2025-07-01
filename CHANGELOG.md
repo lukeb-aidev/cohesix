@@ -2433,3 +2433,7 @@
 - Fixed Python module imports and path issues for CLI tests.
 - Corrected Go module paths so `go test ./...` passes.
 
+## [v0.363] - 2026-12-31
+### Added
+- `.cargo/config.toml` now configures a `vendor` directory for offline builds.
+
