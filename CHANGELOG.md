@@ -2489,3 +2489,8 @@
 ### Removed
 - Webcam services and V4L dependencies for pure UEFI build compatibility.
 
+## [v0.376] - 2026-12-31
+### Fixed
+- Upgraded `ed25519-dalek` to version 2 and updated `tiny_ed25519.rs`.
+- Removed Nvml telemetry code and dependency from CUDA runtime.
+
