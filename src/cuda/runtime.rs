@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: runtime.rs v0.12
+// Filename: runtime.rs v0.13
 // Author: Lukas Bower
 // Date Modified: 2026-12-31
 // Previously gated behind `#![cfg(not(target_os = "uefi"))]`.
@@ -28,8 +28,6 @@ use std::time::Instant;
 use cust::prelude::*;
 #[cfg(feature = "cuda")]
 use cust::CudaApiVersion;
-#[cfg(all(feature = "cuda", not(target_os = "uefi")))]
-use nvml_wrapper::{enum_wrappers::device::TemperatureSensor, Nvml};
 
 /// Wrapper around the CUDA driver library.
 pub struct CudaRuntime {
@@ -302,23 +300,8 @@ impl CudaExecutor {
                 .map(|v| format!("{}.{}", v.major(), v.minor()))
                 .unwrap_or_default();
             let (free, total) = cust::memory::mem_get_info().unwrap_or((0, 0));
-            let (temp, util) = if let Ok(nvml) = Nvml::init() {
-                if let Ok(dev) = nvml.device_by_index(0) {
-                    let t = dev
-                        .temperature(TemperatureSensor::Gpu)
-                        .ok()
-                        .map(|v| v as f32);
-                    let u = dev
-                        .utilization_rates()
-                        .ok()
-                        .map(|u| u.gpu);
-                    (t, u)
-                } else {
-                    (None, None)
-                }
-            } else {
-                (None, None)
-            };
+            let temp = None;
+            let util = None;
             GpuTelemetry {
                 cuda_present: true,
                 driver_version: version,
