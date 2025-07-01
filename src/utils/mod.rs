@@ -16,6 +16,8 @@ pub mod format;
 pub mod helpers;
 /// Simple deterministic RNG.
 pub mod tiny_rng;
+/// Lightweight Ed25519 implementation.
+pub mod tiny_ed25519;
 /// GPU runtime helpers.
 #[cfg(feature = "cuda")]
 pub mod gpu;

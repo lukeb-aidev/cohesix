@@ -2441,3 +2441,7 @@
 ### Changed
 - Removed `ring` crate from workspace dependencies to prepare for SSE2-free UEFI builds.
 
+## [v0.365] - 2026-12-31
+### Changed
+- Replaced ring-based Ed25519 with TinyEd25519 wrapper for no_std builds.
+
