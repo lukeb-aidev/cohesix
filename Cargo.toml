@@ -1,5 +1,5 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Cargo.toml v0.38
+# Filename: Cargo.toml v0.39
 # Author: Lukas Bower
 # Date Modified: 2026-12-31
 [package]
@@ -39,7 +39,6 @@ hex = "0.4"
 rmp-serde = "1"
 chrono = "0.4"
 serde_yaml = { version = "0.9" }
-v4l = { version = "0.14", default-features = false }
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
 sdl2 = { version = "0.37", optional = true }
 toml = { version = "0.8" }
