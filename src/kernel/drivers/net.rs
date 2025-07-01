@@ -1,5 +1,7 @@
 
 use crate::prelude::*;
+extern crate alloc;
+use alloc::collections::VecDeque;
 // CLASSIFICATION: COMMUNITY
 // Filename: net.rs v1.0
 // Author: Lukas Bower
@@ -20,7 +22,7 @@ pub enum NetInterfaceType {
 pub struct NetDriver {
     pub interface: NetInterfaceType,
     pub initialized: bool,
-    queue: std::collections::VecDeque<Vec<u8>>, // simple loopback buffer
+    queue: VecDeque<Vec<u8>>, // simple loopback buffer
 }
 
 impl NetDriver {
@@ -36,7 +38,7 @@ impl NetDriver {
         NetDriver {
             interface,
             initialized: true,
-            queue: std::collections::VecDeque::new(),
+            queue: VecDeque::new(),
         }
     }
 

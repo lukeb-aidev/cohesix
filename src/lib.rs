@@ -235,7 +235,7 @@ pub fn compile_from_file_with_target(
 }
 
 /// Cohesix runtime error type.
-pub type CohError = Box<dyn std::error::Error + Send + Sync>;
+pub type CohError = alloc::boxed::Box<dyn core::error::Error + Send + Sync>;
 
 /// Trait implemented by runtime components that can boot themselves.
 pub trait BootableRuntime {
