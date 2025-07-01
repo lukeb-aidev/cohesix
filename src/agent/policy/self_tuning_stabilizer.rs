@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-05
 
+use crate::prelude::*;
 //! Adaptive stabilizer that learns optimal actions over time.
 
 use super::{EnsemblePolicy, ReinforcementPolicy};

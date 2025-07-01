@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2025-08-17
 
+use crate::prelude::*;
 //! Physical sensor interface.
 //!
 //! Reads normalized sensor data from `/srv/sensors/` and logs values both to

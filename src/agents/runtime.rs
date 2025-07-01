@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2026-12-30
 
+use crate::prelude::*;
 //! Agent runtime management.
 //!
 //! Spawns, traces and terminates agents in sandboxed namespaces. Each agent is

@@ -3,5 +3,6 @@
 // Author: Lukas Bower
 // Date Modified: 2025-08-17
 
+use crate::prelude::*;
 // Empty init module placeholder
 pub fn init() {}

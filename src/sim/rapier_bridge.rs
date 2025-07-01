@@ -4,6 +4,7 @@
 // Date Modified: 2025-08-17
 // Relies on rand and Rapier; omitted from UEFI builds.
 
+use crate::prelude::*;
 //! Rapier physics engine bridge exposing a simple command interface.
 //!
 //! Commands are written to `/sim/commands` and state snapshots are

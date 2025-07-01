@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2025-05-31
 
+use crate::prelude::*;
 //! Plan 9 filesystem abstraction for Cohesix.
 //! Provides in-memory structures and trait scaffolding for 9P-like filesystem operations.
 

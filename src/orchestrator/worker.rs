@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-04
 
+use crate::prelude::*;
 //! Worker-side orchestration logic.
 //!
 //! Sends join requests to the Queen and responds to ping

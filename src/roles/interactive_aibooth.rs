@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2026-10-28
 
+use crate::prelude::*;
 //! Initialization routines for the InteractiveAiBooth role.
 
 use std::fs::{self, OpenOptions};

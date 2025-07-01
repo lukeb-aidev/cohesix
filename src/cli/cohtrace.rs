@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2026-10-28
 
+use crate::prelude::*;
 //! Minimal debug CLI for runtime trace inspection.
 
 use std::fs;

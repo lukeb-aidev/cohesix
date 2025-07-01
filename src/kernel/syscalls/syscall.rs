@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2026-11-23
 
+use crate::prelude::*;
 //! Kernel syscall interface layer for Cohesix.
 //! Provides syscall entry point, argument validation, and dispatch wiring.
 

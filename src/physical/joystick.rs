@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-13
 
+use crate::prelude::*;
 //! Joystick input via SDL2.
 #![cfg(feature = "joystick")]
 //!

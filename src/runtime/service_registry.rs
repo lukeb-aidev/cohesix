@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2026-11-17
 
+use crate::prelude::*;
 //! Runtime service registry for Cohesix.
 //!
 //! Allows services under `/srv/` to be dynamically registered and

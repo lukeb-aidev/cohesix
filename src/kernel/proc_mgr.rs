@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2025-08-27
 
+use crate::prelude::*;
 //! Minimal userspace process manager for the Cohesix kernel.
 
 use once_cell::sync::Lazy;

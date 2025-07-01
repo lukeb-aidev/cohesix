@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-05
 
+use crate::prelude::*;
 //! Queen failover manager promoting a candidate when the primary is unresponsive.
 
 use std::fs::{self, OpenOptions};

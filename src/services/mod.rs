@@ -3,6 +3,7 @@
 // Date Modified: 2026-12-30
 // Author: Lukas Bower
 
+use crate::prelude::*;
 //! Services Module
 //!
 //! Defines basic runtime services for Cohesix including telemetry reporting,

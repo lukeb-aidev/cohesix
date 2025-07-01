@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2026-10-25
 
+use crate::prelude::*;
 //! Initialization routines for the KioskInteractive role.
 
 use std::fs::{self, OpenOptions};

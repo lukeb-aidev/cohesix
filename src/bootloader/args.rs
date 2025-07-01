@@ -20,6 +20,7 @@
 // * [`parse_cmdline`] – convert raw string → [`BootArgs`]
 // ─────────────────────────────────────────────────────────────
 
+use crate::prelude::*;
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 

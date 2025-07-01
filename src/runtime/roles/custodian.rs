@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2025-06-10
 
+use crate::prelude::*;
 //! Role module for the Cohesix `Custodian`.
 //! The custodian is responsible for overseeing local node integrity, data sanitation, and enforcing local policies on worker nodes.
 

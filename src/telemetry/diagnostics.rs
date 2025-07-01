@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-14
 
+use crate::prelude::*;
 //! Telemetry Diagnostics Module
 //!
 //! Provides diagnostic utilities for internal health, trace tagging, and fault event emission within Cohesix.

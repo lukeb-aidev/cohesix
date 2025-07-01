@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2025-06-10
 
+use crate::prelude::*;
 //! Role module for the Cohesix `Orchestrator`.
 //! Coordinates service deployment, role assignment, and dependency resolution across the distributed runtime.
 

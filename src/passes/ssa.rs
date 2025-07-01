@@ -3,6 +3,7 @@
 // Date Modified: 2025-05-26
 // Author: Lukas Bower
 
+use crate::prelude::*;
 //! A pass that converts IR into Static Single Assignment (SSA) form by renaming variables.
 
 use crate::ir::IRContext;

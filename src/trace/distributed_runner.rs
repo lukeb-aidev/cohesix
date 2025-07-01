@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2025-08-17
 
+use crate::prelude::*;
 //! Execute trace scenarios across multiple worker nodes and verify consistency.
 
 use std::collections::HashMap;

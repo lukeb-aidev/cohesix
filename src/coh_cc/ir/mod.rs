@@ -3,5 +3,6 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-18
 
+use crate::prelude::*;
 pub mod schema;
 pub mod emit;

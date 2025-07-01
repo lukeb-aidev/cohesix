@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-08
 
+use crate::prelude::*;
 //! World model snapshot and sync helpers.
 
 use serde::{Deserialize, Serialize};

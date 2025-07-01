@@ -1,5 +1,6 @@
 // Minimal in-memory transport implementation for tests and examples.
 
+use crate::prelude::*;
 // CLASSIFICATION: COMMUNITY
 // Filename: transport.rs v1.0
 // Author: Lukas Bower
