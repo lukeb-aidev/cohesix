@@ -8,6 +8,8 @@
 
 extern crate alloc;
 
+pub mod printk;
+
 /// Prelude re-exporting common `alloc` types for no_std modules
 pub mod prelude {
     pub use alloc::prelude::v1::*;
