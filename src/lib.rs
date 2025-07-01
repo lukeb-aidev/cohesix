@@ -77,9 +77,6 @@ pub mod security;
 /// Runtime services (telemetry, sandbox, health, ipc)
 
 pub mod services;
-/// Webcam helpers
-
-pub mod webcam;
 
 /// Common cross-module types.
 pub mod cohesix_types;
