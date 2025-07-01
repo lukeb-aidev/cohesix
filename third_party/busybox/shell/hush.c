@@ -6600,10 +6600,10 @@ static NOINLINE int expand_one_var(o_string *output, int n,
 	char *to_be_freed;
 	char *p;
 	char *var;
-	char exp_op;
-	char exp_save = exp_save; /* for compiler */
-	char *exp_saveptr; /* points to expansion operator */
-	char *exp_word = exp_word; /* for compiler */
+       char exp_op;
+       char exp_save = 0; /* previous expansion operator */
+       char *exp_saveptr; /* points to expansion operator */
+       char *exp_word = NULL;
 	char arg0;
 
 	val = NULL;
