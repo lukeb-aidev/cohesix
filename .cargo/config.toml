@@ -1,5 +1,5 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: config.toml v0.9
+# Filename: config.toml v0.10
 # Author: Lukas Bower
 # Date Modified: 2026-12-31
 
@@ -29,3 +29,9 @@ linker = "ld.lld"
 
 [net]
 git-fetch-with-cli = true
+
+[source.crates-io]
+replace-with = "vendored-sources"
+
+[source.vendored-sources]
+directory = "vendor"
