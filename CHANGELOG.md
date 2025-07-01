@@ -2476,3 +2476,7 @@
 ### Changed
 - Removed custom feature override for curve25519-dalek; defaults now build under UEFI.
 
+## [v0.373] - 2026-12-31
+### Fixed
+- Pinned curve25519-dalek to 3.2.1 with `fiat_u64_backend` to restore missing elliptic curve types.
+
