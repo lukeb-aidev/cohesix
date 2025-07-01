@@ -2485,3 +2485,7 @@
 - Replaced `hostname` crate usage with static "cohesix-uefi" string.
 - Removed `hostname` dependency from Cargo.toml.
 
+## [v0.375] - 2026-12-31
+### Removed
+- Webcam services and V4L dependencies for pure UEFI build compatibility.
+

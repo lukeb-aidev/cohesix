@@ -5,7 +5,6 @@
 
 //! Map webcam input to a beam balance simulation.
 
-use crate::webcam::capture;
 use rapier3d::prelude::*;
 use serde::Serialize;
 use std::fs;
@@ -19,9 +18,6 @@ struct TiltTrace {
 /// Run the webcam tilt simulation using an optional image path.
 pub fn run(image: Option<&str>) {
     let path = image.unwrap_or("/srv/webcam/frame.jpg");
-    if image.is_none() {
-        let _ = capture::capture_jpeg(path);
-    }
     let img = image::open(path).unwrap_or_else(|_| image::DynamicImage::new_luma8(1, 1));
     let offset = compute_offset(&img);
 
