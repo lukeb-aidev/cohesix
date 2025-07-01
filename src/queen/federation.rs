@@ -13,6 +13,7 @@ use crate::prelude::*;
 use std::collections::HashMap;
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
+use crate::CohError;
 
 use crate::federation::{handshake, keyring::Keyring};
 
@@ -40,7 +41,7 @@ pub struct FederationManager {
 
 impl FederationManager {
     /// Create a new federation manager for the given queen id.
-    pub fn new(id: &str) -> anyhow::Result<Self> {
+    pub fn new(id: &str) -> Result<Self, CohError> {
         let kr = Keyring::load_or_generate(id)?;
         let dir = format!("/srv/{id}");
         fs::create_dir_all(&dir).ok();
@@ -48,7 +49,7 @@ impl FederationManager {
     }
 
     /// Connect to a peer queen by initiating a signed handshake.
-    pub fn connect(&mut self, peer_id: &str) -> anyhow::Result<()> {
+    pub fn connect(&mut self, peer_id: &str) -> Result<(), CohError> {
         handshake::initiate(&self.id, peer_id, &["orchestrator".into()], &self.kr)?;
         self.registry.peers.insert(
             peer_id.into(),
@@ -63,7 +64,7 @@ impl FederationManager {
     }
 
     /// Disconnect from a peer queen and remove related state.
-    pub fn disconnect(&mut self, peer_id: &str) -> anyhow::Result<()> {
+    pub fn disconnect(&mut self, peer_id: &str) -> Result<(), CohError> {
         self.registry.peers.remove(peer_id);
         let dir = format!("/srv/federation/state/{peer_id}");
         if fs::metadata(&dir).is_ok() {
