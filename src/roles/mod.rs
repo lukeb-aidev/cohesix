@@ -4,7 +4,7 @@
 // Date Modified: 2026-10-28
 
 use crate::prelude::*;
-//! Role modules for additional Cohesix roles.
+/// Role modules for additional Cohesix roles.
 
 pub mod interactive_aibooth;
 pub mod drone_worker;

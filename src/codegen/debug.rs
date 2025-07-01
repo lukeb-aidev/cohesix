@@ -4,7 +4,7 @@
 // Author: Lukas Bower
 
 use crate::prelude::*;
-//! Debug backend for the Coh_CC compiler. Emits human-readable IR dumps.
+/// Debug backend for the Coh_CC compiler. Emits human-readable IR dumps.
 
 
 use crate::ir::Module;

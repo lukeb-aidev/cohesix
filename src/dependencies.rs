@@ -3,10 +3,10 @@
 // Date Modified: 2025-05-31
 // Author: Lukas Bower
 
-//! Dependency Tracker for Cohesix
-//!
-//! This module tracks runtime and build-time dependencies for key Cohesix services,
-//! allowing introspection, SBOM generation, and dependency auditing.
+/// Dependency Tracker for Cohesix
+//
+/// This module tracks runtime and build-time dependencies for key Cohesix services,
+/// allowing introspection, SBOM generation, and dependency auditing.
 
 use std::collections::HashMap;
 

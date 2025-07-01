@@ -4,8 +4,8 @@
 // Date Modified: 2026-10-11
 
 use crate::prelude::*;
-//! seL4 root task hook for the Queen role.
-//! Loads the boot namespace and registers core services.
+/// seL4 root task hook for the Queen role.
+/// Loads the boot namespace and registers core services.
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;

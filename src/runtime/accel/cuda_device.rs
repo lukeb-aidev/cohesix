@@ -4,8 +4,8 @@
 // Date Modified: 2025-05-31
 
 use crate::prelude::*;
-//! Runtime CUDA device abstraction for Cohesix.
-//! Provides interface to enumerate, validate, and dispatch to CUDA-capable hardware at runtime.
+/// Runtime CUDA device abstraction for Cohesix.
+/// Provides interface to enumerate, validate, and dispatch to CUDA-capable hardware at runtime.
 
 /// Represents the status of CUDA device probing.
 #[derive(Debug)]

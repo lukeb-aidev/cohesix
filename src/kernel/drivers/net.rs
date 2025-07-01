@@ -5,8 +5,8 @@ use crate::prelude::*;
 // Author: Lukas Bower
 // Date Modified: 2025-05-31
 
-//! Network driver interface for Cohesix kernel runtime.
-//! Provides initialization and basic transmit/receive capabilities, to be extended for real NICs.
+/// Network driver interface for Cohesix kernel runtime.
+/// Provides initialization and basic transmit/receive capabilities, to be extended for real NICs.
 
 /// Enumeration of supported network interfaces.
 #[derive(Debug, Clone, Copy)]

@@ -3,7 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-12
 
-//! Background watchdog daemon monitoring worker health.
+/// Background watchdog daemon monitoring worker health.
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;

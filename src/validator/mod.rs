@@ -4,7 +4,7 @@
 // Date Modified: 2026-09-30
 
 use crate::prelude::*;
-//! Runtime validator utilities for rule violations.
+/// Runtime validator utilities for rule violations.
 
 pub mod config;
 pub mod syscall;

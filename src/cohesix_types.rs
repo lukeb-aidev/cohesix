@@ -3,7 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2026-10-28
 
-//! Shared types for Cohesix modules.
+/// Shared types for Cohesix modules.
 
 use std::fs;
 use std::env;

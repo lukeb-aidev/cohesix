@@ -4,7 +4,7 @@
 // Date Modified: 2025-07-22
 
 use crate::prelude::*;
-//! Queen role modules.
+/// Queen role modules.
 
 pub mod policy_enforcer;
 pub mod orchestrator;

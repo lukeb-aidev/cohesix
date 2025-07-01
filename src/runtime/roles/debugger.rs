@@ -4,8 +4,8 @@
 // Date Modified: 2025-06-10
 
 use crate::prelude::*;
-//! Role module for the Cohesix `Debugger`.
-//! Provides diagnostic capabilities to inspect runtime state, trace execution, and emit system-level debug information.
+/// Role module for the Cohesix `Debugger`.
+/// Provides diagnostic capabilities to inspect runtime state, trace execution, and emit system-level debug information.
 
 use chrono;
 

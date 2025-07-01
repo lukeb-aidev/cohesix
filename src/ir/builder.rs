@@ -4,7 +4,7 @@
 // Date Modified: 2025-07-11
 
 use crate::prelude::*;
-//! IRBuilder for constructing Modules and Functions.
+/// IRBuilder for constructing Modules and Functions.
 
 use crate::ir::{Function, Instruction, Module, Opcode};
 

@@ -4,7 +4,7 @@
 // Date Modified: 2025-07-05
 
 use crate::prelude::*;
-//! Simple rule based policy.
+/// Simple rule based policy.
 
 pub struct RuleBasedPolicy;
 

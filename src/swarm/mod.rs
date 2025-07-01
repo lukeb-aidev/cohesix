@@ -4,7 +4,7 @@
 // Date Modified: 2025-07-01
 
 use crate::prelude::*;
-//! Swarm runtime modules for distributed Cohesix agents.
+/// Swarm runtime modules for distributed Cohesix agents.
 
 pub mod mesh;
 

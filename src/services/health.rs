@@ -4,7 +4,7 @@
 // Author: Lukas Bower
 
 use crate::prelude::*;
-//! Health monitoring service
+/// Health monitoring service
 
 use super::Service;
 

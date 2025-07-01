@@ -4,7 +4,7 @@
 // Date Modified: 2026-11-23
 
 use crate::prelude::*;
-//! seL4 integration module root.
+/// seL4 integration module root.
 
 pub mod syscall;
 

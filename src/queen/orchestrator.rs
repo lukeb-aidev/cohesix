@@ -4,11 +4,11 @@
 // Date Modified: 2025-07-11
 
 use crate::prelude::*;
-//! Queen orchestrator for managing worker nodes.
-//!
-//! Tracks workers via `/srv/netinit/<worker_id>` and issues spawn commands
-//! through `/srv/agents/<worker_id>/spawn`. Stale workers are restarted if no
-//! heartbeat is detected within a timeout.
+/// Queen orchestrator for managing worker nodes.
+//
+/// Tracks workers via `/srv/netinit/<worker_id>` and issues spawn commands
+/// through `/srv/agents/<worker_id>/spawn`. Stale workers are restarted if no
+/// heartbeat is detected within a timeout.
 
 use std::collections::HashMap;
 use std::fs;

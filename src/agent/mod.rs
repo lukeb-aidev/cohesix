@@ -4,7 +4,7 @@
 // Date Modified: 2025-07-05
 
 use crate::prelude::*;
-//! Standalone agent utilities.
+/// Standalone agent utilities.
 
 pub mod snapshot;
 pub mod directory;

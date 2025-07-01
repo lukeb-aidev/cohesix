@@ -4,7 +4,7 @@
 // Author: Lukas Bower
 
 use crate::prelude::*;
-//! IPC subsystem
+/// IPC subsystem
 
 pub mod p9;
 

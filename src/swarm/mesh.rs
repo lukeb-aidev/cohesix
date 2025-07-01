@@ -4,11 +4,11 @@
 // Date Modified: 2025-08-17
 
 use crate::prelude::*;
-//! Distributed service mesh registry tracking services across nodes.
-//!
-//! Each registered service is associated with a node id, a TTL and health
-//! status. Remote lookups will attempt a light-weight HTTP fetch from the
-//! requested node, acting as a simple stand-in for 9P federation.
+/// Distributed service mesh registry tracking services across nodes.
+//
+/// Each registered service is associated with a node id, a TTL and health
+/// status. Remote lookups will attempt a light-weight HTTP fetch from the
+/// requested node, acting as a simple stand-in for 9P federation.
 
 use std::collections::HashMap;
 use std::sync::Mutex;

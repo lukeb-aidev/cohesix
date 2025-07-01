@@ -4,7 +4,7 @@
 // Date Modified: 2026-07-23
 
 use crate::prelude::*;
-#![cfg(feature = "cuda")]
+#[cfg(feature = "cuda")]
 
 use crate::cuda::runtime::{CudaExecutor, CudaRuntime};
 use std::fs::OpenOptions;

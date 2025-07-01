@@ -4,7 +4,7 @@
 // Date Modified: 2026-10-28
 
 use crate::prelude::*;
-//! Execute BusyBox as the interactive shell with role-based command filtering.
+/// Execute BusyBox as the interactive shell with role-based command filtering.
 
 use chrono::Utc;
 use std::fs::{self, OpenOptions};

@@ -4,8 +4,8 @@
 // Date Modified: 2025-05-31
 
 use crate::prelude::*;
-//! Core 9P protocol definitions for Cohesix.
-//! Defines message types, tags, and stub handlers for 9P wire operations.
+/// Core 9P protocol definitions for Cohesix.
+/// Defines message types, tags, and stub handlers for 9P wire operations.
 
 /// 9P message types.
 #[derive(Debug)]

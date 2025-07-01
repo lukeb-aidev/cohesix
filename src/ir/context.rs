@@ -4,7 +4,7 @@
 // Date Modified: 2025-05-31
 
 use crate::prelude::*;
-//! IRContext provides stateful context for IR construction and analysis.
+/// IRContext provides stateful context for IR construction and analysis.
 
 use crate::ir::module::Module;
 
