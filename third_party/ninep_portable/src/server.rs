@@ -19,6 +19,9 @@ use std::{
 };
 
 #[cfg(unix)]
+use std::os::unix::net::UnixListener;
+
+#[cfg(unix)]
 
 /// Marker afid to denode that auth is not required for establishing connections
 pub const AFID_NO_AUTH: u32 = u32::MAX;
@@ -299,6 +302,16 @@ where
                 self.next_client_id += 1;
                 spawn(move || session.handle_connection());
             }
+        })
+    }
+
+    #[cfg(not(unix))]
+    /// Stub implementation for targets without Unix domain sockets. Falls back
+    /// to an empty handler to satisfy callers when building for UEFI-only
+    /// environments.
+    pub fn serve_socket(self, _socket_name: impl Into<String>) -> JoinHandle<()> {
+        spawn(|| {
+            eprintln!("Unix sockets are unsupported; secure stream fallback active");
         })
     }
 }
