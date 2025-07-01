@@ -2,7 +2,7 @@
 // Filename: keyring.rs v1.2
 // Author: Codex
 // Date Modified: 2025-08-17
-// This module uses ring::rand which relies on getrandom; it is disabled on UEFI.
+// Uses TinyEd25519 with deterministic seeding for UEFI builds.
 
 //! Cryptographic keyring for trusted queen federation.
 //!
@@ -12,13 +12,13 @@
 //! Provides signing and verification helpers used during
 //! handshake and agent migration.
 
-use ring::signature::{self, Ed25519KeyPair, KeyPair};
+use crate::utils::tiny_ed25519::TinyEd25519;
 use crate::utils::tiny_rng::TinyRng;
 use std::fs;
 
 /// Keyring holding the local queen's Ed25519 key pair.
 pub struct Keyring {
-    keypair: Ed25519KeyPair,
+    keypair: TinyEd25519,
 }
 
 impl Keyring {
@@ -28,36 +28,33 @@ impl Keyring {
         let priv_path = format!("/srv/federation/{}_key.pk8", queen_id);
         let pub_path = format!("/srv/federation/known_hosts/{}.pub", queen_id);
         if let Ok(buf) = fs::read(&priv_path) {
-            let keypair = if buf.len() == 32 {
-                Ed25519KeyPair::from_seed_unchecked(&buf)
-                    .map_err(|_| anyhow::anyhow!("invalid seed"))?
-            } else {
-                Ed25519KeyPair::from_pkcs8(&buf)
-                    .map_err(|_| anyhow::anyhow!("invalid key"))?
-            };
+            if buf.len() != 32 {
+                return Err(anyhow::anyhow!("invalid seed length"));
+            }
+            let mut seed = [0u8; 32];
+            seed.copy_from_slice(&buf);
+            let keypair = TinyEd25519::from_seed(&seed);
             Ok(Self { keypair })
         } else {
             let mut rng = TinyRng::new(0xA5A5_A5A5_A5A5_A5A5);
             let mut seed = [0u8; 32];
             rng.fill_bytes(&mut seed);
-            let keypair = Ed25519KeyPair::from_seed_unchecked(&seed)
-                .map_err(|_| anyhow::anyhow!("seed invalid"))?;
+            let keypair = TinyEd25519::from_seed(&seed);
             fs::write(&priv_path, &seed)?;
-            fs::write(&pub_path, keypair.public_key().as_ref())?;
+            fs::write(&pub_path, &keypair.public_key_bytes())?;
             Ok(Self { keypair })
         }
     }
 
     /// Sign a message and return the raw signature bytes.
     pub fn sign(&self, msg: &[u8]) -> Vec<u8> {
-        self.keypair.sign(msg).as_ref().to_vec()
+        self.keypair.sign(msg).to_vec()
     }
 
     /// Verify a peer's signature using its published public key.
     pub fn verify_peer(peer_id: &str, msg: &[u8], sig: &[u8]) -> anyhow::Result<bool> {
         let path = format!("/srv/federation/known_hosts/{}.pub", peer_id);
         let pk = fs::read(path)?;
-        let peer_key = signature::UnparsedPublicKey::new(&signature::ED25519, pk);
-        Ok(peer_key.verify(msg, sig).is_ok())
+        Ok(TinyEd25519::verify(&pk, msg, sig))
     }
 }

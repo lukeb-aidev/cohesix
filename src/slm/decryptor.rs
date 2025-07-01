@@ -8,7 +8,7 @@
 
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
 use aead::Aead;
-use ring::signature::{UnparsedPublicKey, ED25519};
+use crate::utils::tiny_ed25519::TinyEd25519;
 use crate::utils::tiny_rng::TinyRng;
 use std::fs;
 
@@ -36,8 +36,7 @@ impl SLMDecryptor {
         let sig_path = format!("{path}.sig");
         if let (Ok(data), Ok(sig)) = (fs::read(path), fs::read(sig_path)) {
             if let Ok(pubkey) = fs::read("/keys/slm_signing.pub") {
-                let key = UnparsedPublicKey::new(&ED25519, pubkey);
-                return key.verify(&data, &sig).is_ok();
+                return TinyEd25519::verify(&pubkey, &data, &sig);
             }
         }
         false
