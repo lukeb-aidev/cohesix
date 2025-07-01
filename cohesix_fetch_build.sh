@@ -86,8 +86,8 @@ if ! command -v rustup >/dev/null 2>&1; then
   exit 1
 fi
 if ! rustup target list --installed | grep -q "^${COHESIX_TARGET}$"; then
-  echo "❌ Rust target ${COHESIX_TARGET} missing. Run: rustup target add ${COHESIX_TARGET}" >&2
-  exit 1
+  echo "🔧 Installing missing Rust target ${COHESIX_TARGET}" >&2
+  rustup target add "${COHESIX_TARGET}"
 fi
 case "$COH_ARCH" in
   aarch64)
