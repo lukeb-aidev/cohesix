@@ -189,7 +189,7 @@ pub mod init;
 /// This helper loads the IR text, constructs a minimal [`ir::Module`],
 /// selects a backend based on the `output` extension and writes the generated
 /// code to disk.
-pub fn compile_from_file(input: &str, output: &str) -> anyhow::Result<()> {
+pub fn compile_from_file(input: &str, output: &str) -> Result<(), CohError> {
     use std::fs;
 
     // Read the IR text from disk. Return an error if the file is missing.
@@ -214,7 +214,7 @@ pub fn compile_from_file_with_target(
     input: &str,
     output: &str,
     target: &str,
-) -> anyhow::Result<()> {
+) -> Result<(), CohError> {
     use std::process::Command;
 
     compile_from_file(input, output)?;
@@ -238,6 +238,35 @@ pub fn compile_from_file_with_target(
 
 /// Cohesix runtime error type.
 pub type CohError = alloc::boxed::Box<dyn core::error::Error + Send + Sync>;
+
+#[derive(Debug)]
+struct StringError(String);
+
+impl core::fmt::Display for StringError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl core::error::Error for StringError {}
+
+pub(crate) fn new_err(msg: impl Into<String>) -> CohError {
+    alloc::boxed::Box::new(StringError(msg.into()))
+}
+
+#[macro_export]
+macro_rules! coh_bail {
+    ($($arg:tt)+) => {
+        return Err($crate::new_err(format!($($arg)+)));
+    };
+}
+
+#[macro_export]
+macro_rules! coh_error {
+    ($($arg:tt)+) => {
+        $crate::new_err(format!($($arg)+))
+    };
+}
 
 /// Trait implemented by runtime components that can boot themselves.
 pub trait BootableRuntime {
