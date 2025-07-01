@@ -265,6 +265,7 @@
 | src/util/debug_log.rs | v0.3 | 2026-08-06 | COMMUNITY | | |
 | src/util/srv_root.rs | v0.1 | 2026-10-28 | COMMUNITY | | |
 | src/utils/tiny_rng.rs | v0.1 | 2026-12-31 | COMMUNITY | | |
+| src/utils/tiny_ed25519.rs | v0.1 | 2026-12-31 | COMMUNITY | | |
 
 | requirements.txt | v0.2 | 2026-01-27 | COMMUNITY | | |
 | tests/requirements.txt | v0.1 | 2026-07-12 | COMMUNITY | | |
