@@ -2494,3 +2494,8 @@
 - Upgraded `ed25519-dalek` to version 2 and updated `tiny_ed25519.rs`.
 - Removed Nvml telemetry code and dependency from CUDA runtime.
 
+## [v0.377] - 2026-12-31
+### Fixed
+- Addressed signature conversion edge case in `tiny_ed25519`.
+- CUDA telemetry now returns `GpuTelemetry` via `Result`.
+
