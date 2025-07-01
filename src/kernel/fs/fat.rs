@@ -4,11 +4,11 @@
 // Date Modified: 2025-08-27
 
 use crate::prelude::*;
-//! Minimal FAT filesystem glue for the UEFI boot path.
-//! This is a temporary shim that relies on the host-provided
-//! FAT image supplied via QEMU `-drive format=raw,file=fat:rw:<dir>`.
-//!
-//! Only implemented for the `minimal_uefi` feature.
+/// Minimal FAT filesystem glue for the UEFI boot path.
+/// This is a temporary shim that relies on the host-provided
+/// FAT image supplied via QEMU `-drive format=raw,file=fat:rw:<dir>`.
+//
+/// Only implemented for the `minimal_uefi` feature.
 
 #[cfg(feature = "minimal_uefi")]
 use std::fs;

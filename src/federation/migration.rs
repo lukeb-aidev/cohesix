@@ -4,10 +4,10 @@
 // Date Modified: 2025-06-07
 
 use crate::prelude::*;
-//! Agent migration utilities across federated clusters.
-//! Uses snapshot files stored under `/mnt/snapshots/` and
-//! replicates them to peer queens via the federation state
-//! directory.
+/// Agent migration utilities across federated clusters.
+/// Uses snapshot files stored under `/mnt/snapshots/` and
+/// replicates them to peer queens via the federation state
+/// directory.
 
 use std::fs;
 

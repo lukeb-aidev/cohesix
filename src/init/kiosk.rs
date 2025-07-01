@@ -4,7 +4,7 @@
 // Date Modified: 2025-07-12
 
 use crate::prelude::*;
-//! KioskInteractive role initialisation.
+/// KioskInteractive role initialisation.
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;

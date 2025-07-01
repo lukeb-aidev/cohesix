@@ -4,11 +4,11 @@
 // Date Modified: 2025-07-12
 
 use crate::prelude::*;
-//! Queen-to-Queen handshake and capability negotiation.
-//!
-//! Each queen exposes its handshake files under
-//! `/srv/federation/state/<peer>/`. The handshake payload is
-//! JSON encoded and signed with the sender's keypair.
+/// Queen-to-Queen handshake and capability negotiation.
+//
+/// Each queen exposes its handshake files under
+/// `/srv/federation/state/<peer>/`. The handshake payload is
+/// JSON encoded and signed with the sender's keypair.
 
 use crate::federation::keyring::Keyring;
 use crate::queen::trust;

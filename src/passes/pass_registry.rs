@@ -4,8 +4,8 @@
 // Date Modified: 2025-05-31
 
 use crate::prelude::*;
-//! IR pass registry for Coh_CC
-//! Manages registration and dispatch of IR passes across the compiler pipeline.
+/// IR pass registry for Coh_CC
+/// Manages registration and dispatch of IR passes across the compiler pipeline.
 
 use super::ir_pass_trait::IRPass;
 

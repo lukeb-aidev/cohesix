@@ -6,7 +6,7 @@
 // Author: Lukas Bower
 
 use crate::prelude::*;
-//! Runtime subsystem modules
+/// Runtime subsystem modules
 
 pub mod env;
 

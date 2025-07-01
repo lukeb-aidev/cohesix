@@ -4,10 +4,10 @@
 // Date Modified: 2025-07-14
 
 use crate::prelude::*;
-//! Telemetry Diagnostics Module
-//!
-//! Provides diagnostic utilities for internal health, trace tagging, and fault event emission within Cohesix.
-//! Integrates with service-level telemetry and runtime validators.
+/// Telemetry Diagnostics Module
+//
+/// Provides diagnostic utilities for internal health, trace tagging, and fault event emission within Cohesix.
+/// Integrates with service-level telemetry and runtime validators.
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;

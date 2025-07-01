@@ -2,7 +2,7 @@
 // Filename: parser_tests.rs v1.0
 // Author: Lukas Bower
 // Date Modified: 2025-05-31
-//! Parser test scaffolding for Coh_CC
+/// Parser test scaffolding for Coh_CC
 
 use crate::prelude::*;
 #[cfg(test)]

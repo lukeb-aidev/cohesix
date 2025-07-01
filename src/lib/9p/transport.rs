@@ -6,8 +6,8 @@ use crate::prelude::*;
 // Author: Lukas Bower
 // Date Modified: 2025-05-31
 
-//! 9P transport layer for Cohesix.
-//! Responsible for sending and receiving 9P messages over an abstract I/O channel.
+/// 9P transport layer for Cohesix.
+/// Responsible for sending and receiving 9P messages over an abstract I/O channel.
 
 use super::protocol::{P9Message, parse_message, serialize_message};
 

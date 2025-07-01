@@ -4,12 +4,12 @@
 // Date Modified: 2026-10-28
 
 use crate::prelude::*;
-//! Dynamic Plan 9 namespace loader for Cohesix.
-//!
-//! Parses namespace descriptions from the `BOOT_NS` environment variable or
-//! `/boot/plan9.cfg`. Supported operations are `bind`, `mount`, `srv` and
-//! `unmount`. During tests, namespace actions are emulated by creating files
-//! under `/srv`.
+/// Dynamic Plan 9 namespace loader for Cohesix.
+//
+/// Parses namespace descriptions from the `BOOT_NS` environment variable or
+/// `/boot/plan9.cfg`. Supported operations are `bind`, `mount`, `srv` and
+/// `unmount`. During tests, namespace actions are emulated by creating files
+/// under `/srv`.
 
 use crate::cohesix_types::{Role, RoleManifest};
 use std::collections::HashMap;

@@ -4,7 +4,7 @@
 // Date Modified: 2025-05-31
 
 use crate::prelude::*;
-//! Instruction representation for the Cohesix IR.
+/// Instruction representation for the Cohesix IR.
 
 use std::fmt;
 

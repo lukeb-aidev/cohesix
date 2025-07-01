@@ -4,10 +4,10 @@
 // Date Modified: 2025-07-04
 
 use crate::prelude::*;
-//! Worker-side orchestration logic.
-//!
-//! Sends join requests to the Queen and responds to ping
-//! files for health monitoring.
+/// Worker-side orchestration logic.
+//
+/// Sends join requests to the Queen and responds to ping
+/// files for health monitoring.
 
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};

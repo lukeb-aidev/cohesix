@@ -4,7 +4,7 @@
 // Author: Lukas Bower
 
 use crate::prelude::*;
-//! Sandbox enforcement service
+/// Sandbox enforcement service
 
 use super::Service;
 use crate::security::capabilities;

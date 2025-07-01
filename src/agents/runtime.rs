@@ -4,11 +4,11 @@
 // Date Modified: 2026-12-30
 
 use crate::prelude::*;
-//! Agent runtime management.
-//!
-//! Spawns, traces and terminates agents in sandboxed namespaces. Each agent is
-//! registered under `/srv/agents/<id>` and a trace log is kept in
-//! `/srv/agent_trace/<id>`.
+/// Agent runtime management.
+//
+/// Spawns, traces and terminates agents in sandboxed namespaces. Each agent is
+/// registered under `/srv/agents/<id>` and a trace log is kept in
+/// `/srv/agent_trace/<id>`.
 
 use anyhow::Context;
 use std::collections::HashMap;

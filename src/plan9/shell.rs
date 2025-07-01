@@ -4,8 +4,8 @@
 // Date Modified: 2025-07-22
 
 use crate::prelude::*;
-//! Plan 9–style shell interface for Cohesix.
-//! Provides command execution, input dispatch, and basic parsing.
+/// Plan 9–style shell interface for Cohesix.
+/// Provides command execution, input dispatch, and basic parsing.
 
 use std::collections::VecDeque;
 

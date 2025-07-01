@@ -4,7 +4,7 @@
 // Date Modified: 2025-07-05
 
 use crate::prelude::*;
-//! Reinforcement learning style policy tracker.
+/// Reinforcement learning style policy tracker.
 
 pub struct ReinforcementPolicy {
     reward: f32,

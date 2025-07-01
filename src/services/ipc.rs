@@ -4,7 +4,7 @@
 // Author: Lukas Bower
 
 use crate::prelude::*;
-//! IPC service exposing a 9P server stub
+/// IPC service exposing a 9P server stub
 
 use super::Service;
 use crate::runtime::ipc::P9Server;

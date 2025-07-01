@@ -4,7 +4,7 @@
 // Date Modified: 2025-07-05
 
 use crate::prelude::*;
-//! Trace subsystem modules.
+/// Trace subsystem modules.
 
 pub mod recorder;
 pub mod distributed_runner;

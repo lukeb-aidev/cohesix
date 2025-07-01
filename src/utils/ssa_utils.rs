@@ -4,11 +4,11 @@
 // Date Modified: 2025-07-24
 
 use crate::prelude::*;
-//! SSA Utilities
-//!
-//! This module provides helpers for Static Single Assignment (SSA) processing,
-//! used in intermediate representations (IR) and compiler transformations.
-//! Intended for internal tools and validation of simplified SSA forms.
+/// SSA Utilities
+//
+/// This module provides helpers for Static Single Assignment (SSA) processing,
+/// used in intermediate representations (IR) and compiler transformations.
+/// Intended for internal tools and validation of simplified SSA forms.
 
 /// Represents a basic SSA variable with a version number.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

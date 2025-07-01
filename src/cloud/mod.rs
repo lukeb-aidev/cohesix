@@ -4,7 +4,7 @@
 // Date Modified: 2026-10-10
 
 use crate::prelude::*;
-//! Cloud-facing utilities.
+/// Cloud-facing utilities.
 
 pub mod hooks;
 pub mod orchestrator;

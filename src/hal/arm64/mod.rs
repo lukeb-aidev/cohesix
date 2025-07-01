@@ -21,8 +21,8 @@
 // ─────────────────────────────────────────────────────────────
 
 use crate::prelude::*;
-#![allow(unsafe_code)]
-#![warn(missing_docs)]
+#[allow(unsafe_code)]
+#[warn(missing_docs)]
 
 use log::{debug, info};
 

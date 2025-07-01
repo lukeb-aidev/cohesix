@@ -4,7 +4,7 @@
 // Date Modified: 2025-06-21
 
 use crate::prelude::*;
-//! Physical environment modules.
+/// Physical environment modules.
 
 pub mod sensors;
 pub mod joystick;

@@ -4,8 +4,8 @@
 // Date Modified: 2026-11-27
 
 use crate::prelude::*;
-//! Cohesix root task for seL4.
-//! Initializes runtime, loads Plan9 namespace, and launches shell.
+/// Cohesix root task for seL4.
+/// Initializes runtime, loads Plan9 namespace, and launches shell.
 
 
 fn real_main() {

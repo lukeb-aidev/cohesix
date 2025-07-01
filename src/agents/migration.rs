@@ -4,11 +4,11 @@
 // Date Modified: 2025-08-16
 
 use crate::prelude::*;
-//! Agent state serialization and migration support.
-//!
-//! This is a best-effort implementation that snapshots basic runtime state so a
-//! worker can restore an agent on a different node. Complex namespaces and
-//! process state are outside the scope of this helper.
+/// Agent state serialization and migration support.
+//
+/// This is a best-effort implementation that snapshots basic runtime state so a
+/// worker can restore an agent on a different node. Complex namespaces and
+/// process state are outside the scope of this helper.
 
 use std::collections::HashMap;
 use std::fs;

@@ -4,7 +4,7 @@
 // Author: Lukas Bower
 
 use crate::prelude::*;
-//! Telemetry service
+/// Telemetry service
 
 use super::Service;
 use crate::runtime::ServiceRegistry;

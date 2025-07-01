@@ -4,7 +4,7 @@
 // Date Modified: 2025-06-07
 
 use crate::prelude::*;
-//! TPM-based secure boot attestation helpers.
+/// TPM-based secure boot attestation helpers.
 
 use std::fs::OpenOptions;
 use std::io::Write;

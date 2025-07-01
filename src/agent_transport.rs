@@ -3,10 +3,10 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-15
 
-//! Agent transport helpers for migration.
-//!
-//! Provides filesystem-based transfer of agent snapshots
-//! and abstract trait for pluggable transport mechanisms.
+/// Agent transport helpers for migration.
+//
+/// Provides filesystem-based transfer of agent snapshots
+/// and abstract trait for pluggable transport mechanisms.
 
 use std::fs;
 use anyhow::Result;

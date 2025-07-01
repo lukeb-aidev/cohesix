@@ -4,11 +4,11 @@
 // Date Modified: 2025-07-04
 
 use crate::prelude::*;
-//! Agent snapshot helpers for live migration.
-//!
-//! Serializes an agent's policy, memory snapshot, and metrics
-//! to a MessagePack blob which can be transferred to another
-//! worker node.
+/// Agent snapshot helpers for live migration.
+//
+/// Serializes an agent's policy, memory snapshot, and metrics
+/// to a MessagePack blob which can be transferred to another
+/// worker node.
 
 use serde::{Deserialize, Serialize};
 use std::fs;

@@ -4,7 +4,7 @@
 // Date Modified: 2026-09-30
 
 use crate::prelude::*;
-//! Syscall queue for sandbox mediation.
+/// Syscall queue for sandbox mediation.
 
 use std::collections::VecDeque;
 use log::{debug, info};

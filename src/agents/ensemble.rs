@@ -4,7 +4,7 @@
 // Date Modified: 2025-07-22
 
 use crate::prelude::*;
-//! Cooperative ensemble agents with shared memory.
+/// Cooperative ensemble agents with shared memory.
 
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};

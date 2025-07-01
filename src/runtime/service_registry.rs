@@ -4,11 +4,11 @@
 // Date Modified: 2026-11-17
 
 use crate::prelude::*;
-//! Runtime service registry for Cohesix.
-//!
-//! Allows services under `/srv/` to be dynamically registered and
-//! looked up by name. Lookups are filtered by the caller's role
-//! as exposed via `/srv/cohrole`.
+/// Runtime service registry for Cohesix.
+//
+/// Allows services under `/srv/` to be dynamically registered and
+/// looked up by name. Lookups are filtered by the caller's role
+/// as exposed via `/srv/cohrole`.
 
 use std::collections::HashMap;
 use std::sync::Mutex;

@@ -4,8 +4,8 @@
 // Date Modified: 2025-06-08
 
 use crate::prelude::*;
-//! OSS manifest module for Cohesix.
-//! Tracks open-source components and license metadata included in the kernel and userland builds.
+/// OSS manifest module for Cohesix.
+/// Tracks open-source components and license metadata included in the kernel and userland builds.
 
 /// Represents a third-party dependency tracked in the manifest.
 pub struct Dependency {

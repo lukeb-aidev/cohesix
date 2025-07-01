@@ -4,10 +4,10 @@
 // Date Modified: 2025-05-31
 
 use crate::prelude::*;
-//! SBOM Generator for Cohesix
-//!
-//! This module generates a Software Bill of Materials (SBOM) that lists all third-party packages,
-//! licenses, versions, and source locations used in the build. This aids compliance, auditing, and secure supply chain verification.
+/// SBOM Generator for Cohesix
+//
+/// This module generates a Software Bill of Materials (SBOM) that lists all third-party packages,
+/// licenses, versions, and source locations used in the build. This aids compliance, auditing, and secure supply chain verification.
 
 use std::collections::HashMap;
 

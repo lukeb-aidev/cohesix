@@ -4,8 +4,8 @@
 // Date Modified: 2026-12-02
 
 use crate::prelude::*;
-//! Runtime environment initialization for Cohesix.
-//! Sets up runtime globals, telemetry, role configuration, and system entropy.
+/// Runtime environment initialization for Cohesix.
+/// Sets up runtime globals, telemetry, role configuration, and system entropy.
 
 /// Initialize the runtime environment at startup.
 use std::fs;

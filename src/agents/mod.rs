@@ -4,7 +4,7 @@
 // Date Modified: 2025-07-10
 
 use crate::prelude::*;
-//! Agent-related runtime modules.
+/// Agent-related runtime modules.
 
 pub mod runtime;
 pub mod ensemble;
