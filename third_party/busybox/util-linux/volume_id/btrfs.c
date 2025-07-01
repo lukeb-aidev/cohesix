@@ -90,7 +90,7 @@ int FAST_FUNC volume_id_probe_btrfs(struct volume_id *id /*,uint64_t off*/)
 	// minimum btrfs size is 256M
 	// so we never step out the device if we analyze
 	// the first and the second superblocks
-	struct btrfs_super_block *sb;
+       struct btrfs_super_block *sb = NULL;
 	unsigned off = 64;
 
 	while (off < 64*1024*1024) {
