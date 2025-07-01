@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: federation.rs v0.1
+// Filename: federation.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-07-04
+// Date Modified: 2026-12-31
 
 //! Queen federation utilities.
 //!
@@ -12,6 +12,8 @@
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::time::{SystemTime, UNIX_EPOCH};
+use sha2::Sha256;
+use hkdf::Hkdf;
 
 /// Summary: federation helper
 pub struct Federation {
@@ -50,9 +52,12 @@ impl Federation {
     /// Establish secure link with another queen using `queen_federation.key`.
     pub fn establish_secure(&self, peer_id: &str) -> anyhow::Result<()> {
         let key = fs::read("/boot/queen_federation.key")?;
-        let digest = ring::digest::digest(&ring::digest::SHA256, &key);
+        let hk = Hkdf::<Sha256>::new(None, &key);
+        let mut digest = [0u8; 32];
+        hk.expand(b"cohesix-federation", &mut digest)
+            .map_err(|_| anyhow::anyhow!("hkdf expand"))?;
         let path = format!("/srv/federation/{}.auth", peer_id);
-        fs::write(&path, digest.as_ref())?;
+        fs::write(&path, &digest)?;
         self.log_event("secure_link")?;
         Ok(())
     }
