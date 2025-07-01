@@ -9,6 +9,7 @@ use crate::prelude::*;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use crate::CohError;
 
 /// Failover manager checking heartbeat files.
 pub struct FailoverManager {
@@ -22,7 +23,7 @@ impl FailoverManager {
     }
 
     /// Check primary heartbeat and promote the candidate if necessary.
-    pub fn check_primary(&self) -> anyhow::Result<()> {
+    pub fn check_primary(&self) -> Result<(), CohError> {
         let last = fs::metadata("/srv/queen/primary_heartbeat")
             .and_then(|m| m.modified())
             .unwrap_or(UNIX_EPOCH);
@@ -32,7 +33,7 @@ impl FailoverManager {
         Ok(())
     }
 
-    fn promote_candidate(&self) -> anyhow::Result<()> {
+    fn promote_candidate(&self) -> Result<(), CohError> {
         log_event("promoting QueenCandidate")?;
         if let Ok(entries) = fs::read_dir("/srv/snapshots") {
             for e in entries.flatten() {

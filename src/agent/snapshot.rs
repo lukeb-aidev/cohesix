@@ -26,9 +26,10 @@ pub struct AgentSnapshot {
 
 use crate::agent_transport::AgentTransport;
 use crate::agent_migration::{Migrateable, MigrationStatus};
+use crate::CohError;
 
 impl Migrateable for AgentSnapshot {
-    fn migrate<T: AgentTransport>(&self, peer: &str, transport: &T) -> anyhow::Result<MigrationStatus> {
+    fn migrate<T: AgentTransport>(&self, peer: &str, transport: &T) -> Result<MigrationStatus, CohError> {
         let tmpdir = std::env::var("TMPDIR").unwrap_or("/srv".to_string());
         let tmp = format!("{}/agent_snapshot.msgpack", tmpdir);
         SnapshotWriter::write(&tmp, self)?;
@@ -42,7 +43,7 @@ pub struct SnapshotWriter;
 
 impl SnapshotWriter {
     /// Write the snapshot to the specified path.
-    pub fn write(path: &str, snapshot: &AgentSnapshot) -> anyhow::Result<()> {
+    pub fn write(path: &str, snapshot: &AgentSnapshot) -> Result<(), CohError> {
         let data = rmp_serde::to_vec(snapshot)?;
         fs::write(path, data)?;
         Ok(())
@@ -54,7 +55,7 @@ pub struct SnapshotReader;
 
 impl SnapshotReader {
     /// Read a snapshot from the specified file.
-    pub fn read(path: &str) -> anyhow::Result<AgentSnapshot> {
+    pub fn read(path: &str) -> Result<AgentSnapshot, CohError> {
         let buf = fs::read(path)?;
         let snap = rmp_serde::from_slice(&buf)?;
         Ok(snap)

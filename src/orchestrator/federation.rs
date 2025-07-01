@@ -15,6 +15,7 @@ use std::io::Write;
 use std::time::{SystemTime, UNIX_EPOCH};
 use sha2::Sha256;
 use hkdf::Hkdf;
+use crate::{coh_error, CohError};
 
 /// Summary: federation helper
 pub struct Federation {
@@ -28,7 +29,7 @@ impl Federation {
     }
 
     /// Announce this Queen to peers.
-    pub fn announce(&self) -> anyhow::Result<()> {
+    pub fn announce(&self) -> Result<(), CohError> {
         fs::create_dir_all("/srv/federation")?;
         fs::write("/srv/federation/beacon", self.queen_id.as_bytes())?;
         self.log_event("announce")?;
@@ -36,7 +37,7 @@ impl Federation {
     }
 
     /// Propagate a shared namespace directory to peers.
-    pub fn propagate_namespace(&self, path: &str) -> anyhow::Result<()> {
+    pub fn propagate_namespace(&self, path: &str) -> Result<(), CohError> {
         let tgt = format!("/srv/federation/shared/{}", self.queen_id);
         fs::create_dir_all(&tgt)?;
         for entry in fs::read_dir(path)? {
@@ -51,19 +52,19 @@ impl Federation {
     }
 
     /// Establish secure link with another queen using `queen_federation.key`.
-    pub fn establish_secure(&self, peer_id: &str) -> anyhow::Result<()> {
+    pub fn establish_secure(&self, peer_id: &str) -> Result<(), CohError> {
         let key = fs::read("/boot/queen_federation.key")?;
         let hk = Hkdf::<Sha256>::new(None, &key);
         let mut digest = [0u8; 32];
         hk.expand(b"cohesix-federation", &mut digest)
-            .map_err(|_| anyhow::anyhow!("hkdf expand"))?;
+            .map_err(|_| coh_error!("hkdf expand"))?;
         let path = format!("/srv/federation/{}.auth", peer_id);
         fs::write(&path, &digest)?;
         self.log_event("secure_link")?;
         Ok(())
     }
 
-    fn log_event(&self, msg: &str) -> anyhow::Result<()> {
+    fn log_event(&self, msg: &str) -> Result<(), CohError> {
         fs::create_dir_all("/srv/federation")?;
         let mut f = OpenOptions::new()
             .create(true)

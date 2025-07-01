@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use crate::CohError;
 
 use crate::orchestrator::protocol::{HealthPing, JoinAck, JoinRequest};
 use rmp_serde::decode::from_read;
@@ -33,7 +34,7 @@ pub struct Queen {
 
 impl Queen {
     /// Initialize the registry directory and orchestrator state.
-    pub fn new(timeout_secs: u64) -> anyhow::Result<Self> {
+    pub fn new(timeout_secs: u64) -> Result<Self, CohError> {
         fs::create_dir_all("/srv/registry")?;
         fs::create_dir_all("/srv/registry/join")?;
         fs::create_dir_all("/srv/registry/ping")?;

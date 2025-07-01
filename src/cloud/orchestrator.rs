@@ -8,7 +8,7 @@ use crate::prelude::*;
 /// Provides registration and heartbeat routines for
 /// interacting with a remote orchestrator service.
 
-use anyhow::Error;
+use crate::{coh_error, CohError};
 use serde::Serialize;
 use std::fs;
 use std::io::{self, Write};
@@ -26,7 +26,7 @@ pub struct CloudOrchestrator {
 
 impl CloudOrchestrator {
     /// Register the Queen, spawn heartbeat and command listener threads.
-    pub fn start(cloud_url: &str) -> Result<Self, Error> {
+    pub fn start(cloud_url: &str) -> Result<Self, CohError> {
         let id = register_queen(cloud_url)?;
         let hb_id = id.clone();
         std::thread::spawn(move || loop {
@@ -42,14 +42,14 @@ impl CloudOrchestrator {
 
 /// Register this Queen with the cloud orchestrator.
 /// On success the returned ID is written to `/srv/cloud/queen_id`.
-pub fn register_queen(cloud_url: &str) -> Result<QueenId, Error> {
+pub fn register_queen(cloud_url: &str) -> Result<QueenId, CohError> {
     let hostname = "cohesix-uefi";
     let host = hostname.to_string();
     let url = format!("{}/register", cloud_url.trim_end_matches('/'));
     let body = serde_json::json!({ "hostname": host });
     let resp = Agent::new().post(&url).send_string(&body.to_string())?;
     if !(200..300).contains(&resp.status()) {
-        return Err(anyhow::anyhow!("registration failed: {}", resp.status()));
+        return Err(coh_error!("registration failed: {}", resp.status()));
     }
     let id = resp.into_string().unwrap_or_else(|_| "queen".into());
     println!("Opening file: {:?}", crate::with_srv_root!("cloud"));
@@ -75,7 +75,7 @@ struct Heartbeat<'a> {
 
 /// Send a status heartbeat to the cloud orchestrator.
 /// Updates `/srv/cloud/state.json` with the latest info.
-pub fn send_heartbeat(id: QueenId) -> Result<(), Error> {
+pub fn send_heartbeat(id: QueenId) -> Result<(), CohError> {
     println!("Opening file: {:?}", crate::with_srv_root!("cloud/url"));
     let url = fs::read_to_string(crate::with_srv_root!("cloud/url")).unwrap_or_default();
     if url.is_empty() {
@@ -112,7 +112,7 @@ pub fn send_heartbeat(id: QueenId) -> Result<(), Error> {
         .post(&format!("{}/heartbeat", url.trim_end_matches('/')))
         .send_string(&data)?;
     if !(200..300).contains(&resp.status()) {
-        return Err(anyhow::anyhow!("heartbeat failed: {}", resp.status()));
+        return Err(coh_error!("heartbeat failed: {}", resp.status()));
     }
     println!("Opening file: {:?}", crate::with_srv_root!("cloud"));
     fs::create_dir_all(crate::with_srv_root!("cloud")).ok();
