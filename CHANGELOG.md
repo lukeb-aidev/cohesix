@@ -2437,3 +2437,7 @@
 ### Added
 - `.cargo/config.toml` now configures a `vendor` directory for offline builds.
 
+## [v0.364] - 2026-12-31
+### Changed
+- Removed `ring` crate from workspace dependencies to prepare for SSE2-free UEFI builds.
+
