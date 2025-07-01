@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: runtime.rs v0.13
+// Filename: runtime.rs v0.14
 // Author: Lukas Bower
 // Date Modified: 2026-12-31
 // Previously gated behind `#![cfg(not(target_os = "uefi"))]`.
@@ -284,15 +284,15 @@ impl CudaExecutor {
     }
 
     /// Gather telemetry about the CUDA environment.
-    pub fn telemetry(&self) -> crate::telemetry::core::GpuTelemetry {
+    pub fn telemetry(&self) -> Result<crate::telemetry::core::GpuTelemetry, String> {
         use crate::telemetry::core::GpuTelemetry;
         if !self.rt.present {
-            return GpuTelemetry {
+            return Ok(GpuTelemetry {
                 cuda_present: false,
                 fallback_reason: "not present".into(),
                 exec_time_ns: self.last_exec_ns,
                 ..Default::default()
-            };
+            });
         }
         #[cfg(feature = "cuda")]
         {
@@ -302,7 +302,7 @@ impl CudaExecutor {
             let (free, total) = cust::memory::mem_get_info().unwrap_or((0, 0));
             let temp = None;
             let util = None;
-            GpuTelemetry {
+            return Ok(GpuTelemetry {
                 cuda_present: true,
                 driver_version: version,
                 mem_total: total as u64,
@@ -311,16 +311,16 @@ impl CudaExecutor {
                 exec_time_ns: self.last_exec_ns,
                 temperature: temp,
                 gpu_utilization: util,
-            }
+            });
         }
         #[cfg(any(target_os = "uefi", not(feature = "cuda")))]
         {
-            GpuTelemetry {
+            return Ok(GpuTelemetry {
                 cuda_present: false,
                 fallback_reason: "feature disabled".into(),
                 exec_time_ns: self.last_exec_ns,
                 ..Default::default()
-            }
+            });
         }
     }
 }
