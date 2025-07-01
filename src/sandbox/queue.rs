@@ -4,9 +4,10 @@
 // Date Modified: 2026-09-30
 
 use crate::prelude::*;
+extern crate alloc;
+use alloc::collections::VecDeque;
 /// Syscall queue for sandbox mediation.
 
-use std::collections::VecDeque;
 use log::{debug, info};
 
 use crate::cohesix_types::{Role, RoleManifest, Syscall};
