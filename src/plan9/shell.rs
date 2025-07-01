@@ -4,10 +4,10 @@
 // Date Modified: 2025-07-22
 
 use crate::prelude::*;
+extern crate alloc;
+use alloc::collections::VecDeque;
 /// Plan 9–style shell interface for Cohesix.
 /// Provides command execution, input dispatch, and basic parsing.
-
-use std::collections::VecDeque;
 
 /// Represents a parsed shell command and arguments.
 #[derive(Debug)]
