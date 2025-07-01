@@ -2464,3 +2464,7 @@
 ### Changed
 - UEFI builds skip `nvml-wrapper-sys` and libloading.
 
+## [v0.370] - 2026-12-31
+### Fixed
+- Enabled `fiat_u64_backend` for curve25519-dalek to fix constant build errors.
+
