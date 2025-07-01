@@ -3,7 +3,8 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-18
 
-use std::boxed::Box;
+use crate::prelude::*;
+use alloc::boxed::Box;
 use std::path::Path;
 
 use crate::coh_cc::parser::input_type::CohInput;

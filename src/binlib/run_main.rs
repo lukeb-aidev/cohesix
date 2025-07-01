@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2026-12-31
 
+use crate::prelude::*;
 use clap::{Parser, Subcommand};
 use crate::queen::orchestrator::{QueenOrchestrator, SchedulePolicy};
 #[cfg(feature = "rapier")]

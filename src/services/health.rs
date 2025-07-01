@@ -3,6 +3,7 @@
 // Date Modified: 2025-06-02
 // Author: Lukas Bower
 
+use crate::prelude::*;
 //! Health monitoring service
 
 use super::Service;

@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-24
 
+use crate::prelude::*;
 //! SPI driver module for Cohesix hardware abstraction layer.
 //! Provides traits and structures to support SPI communication with peripheral devices.
 

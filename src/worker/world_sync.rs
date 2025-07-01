@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-08
 
+use crate::prelude::*;
 //! Worker side world model integration.
 
 use crate::world_model::WorldModelSnapshot;

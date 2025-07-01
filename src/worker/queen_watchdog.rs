@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2025-08-01
 
+use crate::prelude::*;
 //! Worker-side watchdog monitoring queen heartbeat.
 
 use std::fs::{self, OpenOptions};

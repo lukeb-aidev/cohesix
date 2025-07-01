@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2025-06-18
 
+use crate::prelude::*;
 //! Plan 9 userland utilities.
 
 pub mod fs;

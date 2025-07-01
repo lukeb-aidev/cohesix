@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-12
 
+use crate::prelude::*;
 //! Persist and replay worker role context for failover recovery.
 
 use std::fs;

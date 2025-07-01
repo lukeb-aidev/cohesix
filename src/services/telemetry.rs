@@ -3,6 +3,7 @@
 // Date Modified: 2025-06-19
 // Author: Lukas Bower
 
+use crate::prelude::*;
 //! Telemetry service
 
 use super::Service;

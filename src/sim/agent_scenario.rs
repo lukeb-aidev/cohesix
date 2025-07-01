@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2026-09-22
 
+use crate::prelude::*;
 //! Scenario engine for automated agent tests.
 //!
 //! Reads a scenario configuration from `/boot/scenario.json`, spawns agents

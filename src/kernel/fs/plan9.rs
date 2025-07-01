@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2025-06-20
 
+use crate::prelude::*;
 //! Plan 9 file protocol integration layer for Cohesix kernel-space.
 //! Provides abstraction and mount logic for exposing namespaces via 9P.
 

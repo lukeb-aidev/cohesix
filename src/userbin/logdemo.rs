@@ -4,6 +4,7 @@
 // Date Modified: 2025-08-27
 // SPDX-License-Identifier: MIT
 
+use crate::prelude::*;
 use cohesix::kernel::user_api::{SYS_EXIT, SYS_LOG};
 
 fn main() {

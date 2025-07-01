@@ -14,6 +14,7 @@
 // while new code should depend on `WorkerOpts` directly.
 // ─────────────────────────────────────────────────────────────
 
+use crate::prelude::*;
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 

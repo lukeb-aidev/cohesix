@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2026-11-20
 
+use crate::prelude::*;
 //! Lightweight userland dispatcher.
 
 use crate::kernel::{loader, proc_mgr};

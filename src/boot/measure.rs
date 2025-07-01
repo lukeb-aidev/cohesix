@@ -15,6 +15,7 @@
 // * [`extend_pcr`] – in‑place SHA‑256 extension of a 32‑byte PCR.
 // ─────────────────────────────────────────────────────────────
 
+use crate::prelude::*;
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 

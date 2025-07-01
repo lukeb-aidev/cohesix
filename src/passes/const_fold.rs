@@ -3,6 +3,7 @@
 // Date Modified: 2025-05-26
 // Author: Lukas Bower
 
+use crate::prelude::*;
 //! A pass that performs constant folding on the IR.
 
 use crate::ir::IRContext;

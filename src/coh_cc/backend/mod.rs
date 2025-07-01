@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-17
 
+use crate::prelude::*;
 pub mod registry;
 pub mod zig;
 pub mod tcc;

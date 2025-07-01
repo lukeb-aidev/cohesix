@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2025-06-08
 
+use crate::prelude::*;
 //! Role module for the Cohesix `Router`.
 //! The router handles message routing, inter-process dispatch, and namespace resolution for worker services.
 

@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-22
 
+use crate::prelude::*;
 //! Plan 9–style shell interface for Cohesix.
 //! Provides command execution, input dispatch, and basic parsing.
 

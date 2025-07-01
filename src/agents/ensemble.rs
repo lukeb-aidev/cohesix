@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-22
 
+use crate::prelude::*;
 //! Cooperative ensemble agents with shared memory.
 
 use std::collections::HashMap;

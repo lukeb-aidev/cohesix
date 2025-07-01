@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2026-10-28
 
+use crate::prelude::*;
 #[macro_export]
 macro_rules! with_srv_root {
     ($path:expr) => {{

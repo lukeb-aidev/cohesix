@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-22
 
+use crate::prelude::*;
 //! Simple simulation trace validator run on the Queen.
 
 use serde::{Deserialize, Serialize};

@@ -16,6 +16,7 @@
 // reused in early‑boot code if desired.
 // ─────────────────────────────────────────────────────────────
 
+use crate::prelude::*;
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 

@@ -3,6 +3,7 @@
 // Author: Codex
 // Date Modified: 2025-07-12
 
+use crate::prelude::*;
 //! Queen-to-Queen handshake and capability negotiation.
 //!
 //! Each queen exposes its handshake files under

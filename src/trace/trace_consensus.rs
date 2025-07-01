@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-05
 
+use crate::prelude::*;
 //! Merge trace logs from peer queens and ensure consensus.
 
 use std::collections::HashMap;

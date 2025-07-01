@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2026-10-29
 
+use crate::prelude::*;
 //! Runtime capability map loaded from `/etc/cohcap.json`.
 //! Maps roles to allowed syscall verbs and path prefixes.
 

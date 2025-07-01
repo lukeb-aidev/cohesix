@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2025-05-31
 
+use crate::prelude::*;
 //! Function IR node: owns instructions and metadata.
 
 use crate::ir::instruction::Instruction;
