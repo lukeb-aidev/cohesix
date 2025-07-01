@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2026-09-30
 
+use crate::prelude::*;
 //! Initialization routines for the GlassesAgent role.
 
 use std::fs::OpenOptions;

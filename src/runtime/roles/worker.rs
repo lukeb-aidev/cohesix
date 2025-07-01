@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2026-12-30
 
+use crate::prelude::*;
 //! Role module for the Cohesix `Worker`.
 //! A worker node executes assigned tasks, reports telemetry, and responds to commands from the queen or orchestrator.
 

@@ -3,6 +3,7 @@
 // Date Modified: 2025-07-28
 // Author: Lukas Bower
 
+use crate::prelude::*;
 //! Defines the IR Module and associated utilities for the Cohesix compiler.
 
 use crate::ir::Function;

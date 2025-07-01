@@ -4,6 +4,7 @@
 // Date Modified: 2025-08-17
 // Worker init uses rand; the module is excluded for UEFI builds.
 
+use crate::prelude::*;
 //! Initialization routines for Cohesix roles.
 
 pub mod kiosk;

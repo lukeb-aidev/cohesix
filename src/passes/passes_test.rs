@@ -4,6 +4,7 @@
 // Date Modified: 2025-05-31
 //! Tests for IR pass framework
 
+use crate::prelude::*;
 #[cfg(test)]
 mod tests {
     use super::*;

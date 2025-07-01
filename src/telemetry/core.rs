@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2026-09-14
 
+use crate::prelude::*;
 //! Telemetry Core Module
 //!
 //! The Cohesix telemetry system collects runtime metrics, service health data, diagnostic events,

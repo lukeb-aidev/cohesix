@@ -3,6 +3,7 @@
 // Date Modified: 2025-07-24
 // Author: Lukas Bower
 
+use crate::prelude::*;
 //! WASM backend for the Coh_CC compiler. Translates IR into WebAssembly text (WAT) format.
 
 

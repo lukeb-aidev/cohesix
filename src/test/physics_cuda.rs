@@ -3,6 +3,7 @@
 // Author: Codex
 // Date Modified: 2025-07-22
 
+use crate::prelude::*;
 #![cfg(all(feature = "cuda", feature = "rapier"))]
 
 use crate::cuda::runtime::CudaExecutor;

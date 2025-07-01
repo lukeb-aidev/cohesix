@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-04
 
+use crate::prelude::*;
 //! Orchestration protocol message types.
 //!
 //! Structures are serialized using MessagePack via `rmp-serde`.

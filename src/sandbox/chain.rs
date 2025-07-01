@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2026-10-28
 
+use crate::prelude::*;
 //! Execute syscall chains within the sandbox environment.
 //!
 //! Chains are executed in FIFO order using the [`SyscallQueue`] and

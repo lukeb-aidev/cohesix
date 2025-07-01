@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-12
 
+use crate::prelude::*;
 //! Edge-only fallback coordinator for temporary queen loss.
 
 use std::fs;

@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-24
 
+use crate::prelude::*;
 //! I2C driver module for Cohesix hardware abstraction layer.
 //! Provides interfaces for initializing and interacting with I2C devices.
 

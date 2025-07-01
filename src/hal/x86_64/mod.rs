@@ -18,6 +18,7 @@
 // Functions log actions and return `Ok(())` on success.
 // ─────────────────────────────────────────────────────────────
 
+use crate::prelude::*;
 #![allow(unsafe_code)]
 #![warn(missing_docs)]
 

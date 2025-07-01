@@ -3,6 +3,7 @@
 // Date Modified: 2025-05-26
 // Author: Lukas Bower
 
+use crate::prelude::*;
 //! Debug backend for the Coh_CC compiler. Emits human-readable IR dumps.
 
 

@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2026-10-28
 
+use crate::prelude::*;
 //! Dynamic Plan 9 namespace loader for Cohesix.
 //!
 //! Parses namespace descriptions from the `BOOT_NS` environment variable or

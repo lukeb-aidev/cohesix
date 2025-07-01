@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-11
 
+use crate::prelude::*;
 //! GPU information service.
 
 

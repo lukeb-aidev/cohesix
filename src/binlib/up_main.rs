@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-22
 
+use crate::prelude::*;
 use clap::{Parser, Subcommand};
 use anyhow::Result;
 use crate::cli::federation;

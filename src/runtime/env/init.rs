@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2026-12-02
 
+use crate::prelude::*;
 //! Runtime environment initialization for Cohesix.
 //! Sets up runtime globals, telemetry, role configuration, and system entropy.
 

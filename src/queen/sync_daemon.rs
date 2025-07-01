@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-08
 
+use crate::prelude::*;
 //! Queen<->Worker world model sync daemon.
 
 use crate::world_model::WorldModelSnapshot;

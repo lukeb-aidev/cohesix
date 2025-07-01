@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-12
 
+use crate::prelude::*;
 //! Queen-to-Queen federation manager.
 //!
 //! Handles handshake, trust negotiation and heartbeat exchange between

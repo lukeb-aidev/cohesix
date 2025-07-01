@@ -6,6 +6,14 @@
 // Author: Lukas Bower
 #![cfg_attr(not(feature = "std"), no_std)]
 
+extern crate alloc;
+
+/// Prelude re-exporting common `alloc` types for no_std modules
+pub mod prelude {
+    pub use alloc::prelude::v1::*;
+    pub use alloc::{boxed::Box, string::String, vec::Vec};
+}
+
 //! Root library for the Coh_CC compiler and platform integrations.
 
 /// Intermediate Representation (IR) core types and utilities

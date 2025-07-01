@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-08
 
+use crate::prelude::*;
 //! Live vision overlay utility.
 
 use std::time::{Duration, Instant};

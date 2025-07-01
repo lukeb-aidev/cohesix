@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2025-05-31
 
+use crate::prelude::*;
 //! Block: sequence of instructions with single entry and terminator.
 
 pub struct Block {
