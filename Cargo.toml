@@ -1,5 +1,5 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Cargo.toml v0.32
+# Filename: Cargo.toml v0.33
 # Author: Lukas Bower
 # Date Modified: 2026-12-31
 [package]
@@ -30,8 +30,6 @@ getrandom = { version = "0.2", features = ["dummy"] }
 env_logger = "0.11.7"
 thiserror = "1"
 clap = { version = "4.5.4", features = ["derive"] }
-libloading = "0.7"
-nvml-wrapper = { version = "0.11", optional = true }
 rapier3d = { version = "0.17.2", optional = true }
 ureq = { version = "2.9", default-features = false }
 tiny_http = "0.12"
@@ -137,4 +135,8 @@ getrandom = { path = "third_party/getrandom_dummy" }
 rand_core = { path = "third_party/rand_core_patch" }
 ninep = { path = "third_party/ninep_portable" }
 memchr = { path = "third_party/memchr_simple" }
+
+[target.'cfg(not(target_os = "uefi"))'.dependencies]
+libloading = "0.7"
+nvml-wrapper = { version = "0.11", optional = true }
 
