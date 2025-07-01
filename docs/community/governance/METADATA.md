@@ -178,7 +178,7 @@
 | scripts/load_arch_config.sh | v0.1 | 2026-07-25 | COMMUNITY | | |
 | scripts/build_busybox.sh | v0.7 | 2026-11-17 | COMMUNITY | | |
 | metadata.json | v0.1 | 2025-07-24 | COMMUNITY | | |
-| Cargo.toml | v0.37 | 2026-12-31 | COMMUNITY | | |
+| Cargo.toml | v0.38 | 2026-12-31 | COMMUNITY | | |
 | cohesix-9p/Cargo.toml | v0.3 | 2026-12-31 | COMMUNITY | | |
 | cohesix-secure9p/Cargo.toml | v0.2 | 2026-12-31 | COMMUNITY | | |
 | cohesix-secure9p/src/secure_stream.rs | v0.1 | 2026-12-31 | COMMUNITY | | |
@@ -243,7 +243,7 @@
 | src/cli/mod.rs | v1.3 | 2026-10-08 | COMMUNITY | | |
 | src/cli/cohtrace.rs | v0.4 | 2026-10-13 | COMMUNITY | | |
 | src/cloud/mod.rs | v0.2 | 2026-10-10 | COMMUNITY | | |
-| src/cloud/orchestrator.rs | v0.6 | 2026-10-28 | COMMUNITY | | |
+| src/cloud/orchestrator.rs | v0.8 | 2026-12-31 | COMMUNITY | | |
 | src/lib.rs | v1.11 | 2026-11-27 | COMMUNITY | | |
 | src/runtime/loader.rs | v0.2 | 2026-10-07 | COMMUNITY | | |
 | src/plan9/namespace.rs | v0.6 | 2026-10-28 | COMMUNITY | | |
