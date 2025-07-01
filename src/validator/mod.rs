@@ -4,13 +4,14 @@
 // Date Modified: 2026-09-30
 
 use crate::prelude::*;
+extern crate alloc;
+use alloc::collections::VecDeque;
 /// Runtime validator utilities for rule violations.
 
 pub mod config;
 pub mod syscall;
 
 use once_cell::sync::Lazy;
-use std::collections::VecDeque;
 use std::sync::Mutex;
 
 use crate::cohesix_types::Syscall;
