@@ -1,5 +1,5 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Cargo.toml v0.36
+# Filename: Cargo.toml v0.37
 # Author: Lukas Bower
 # Date Modified: 2026-12-31
 [package]
@@ -46,7 +46,9 @@ sdl2 = { version = "0.37", optional = true }
 toml = { version = "0.8" }
 
 [dependencies.curve25519-dalek]
-version = "4.1"
+version = "3.2.1"
+default-features = false
+features = ["fiat_u64_backend"]
 
 [build-dependencies]
 which = "5.0"
