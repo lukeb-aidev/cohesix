@@ -39,9 +39,10 @@ Documents archived in `/canvas/archive/` are read-only and excluded from Codex w
 ## 2 · Architecture Summary (Codex-Referencable)
 
 - Kernel: seL4 microkernel with Cohesix-specific patches
-- Userland: Plan 9 (9P namespace, rc shell, minimal POSIX)
+- Userland: Plan 9 (9P namespace, rc shell) in a pure UEFI environment (no POSIX layer)
 - Boot Target: ≤200 ms cold start (Jetson Orin Nano)
-- Boot Flow: GRUB → seL4 → Cohesix root task (replaces prior UEFI path)
+- Boot Flow: UEFI → seL4 → Cohesix root task
+- Rust cross-targets: `x86_64-unknown-uefi`, `aarch64-unknown-uefi` using LLVM/LLD
 - Security: seL4 proofs enforced; Plan 9 srv sandboxed
 - Role Exposure: Immutable `CohRole`, visible at `/srv/cohrole`  
 - Roles: QueenPrimary, KioskInteractive, DroneWorker, GlassesAgent, SensorRelay, SimulatorTest  
@@ -72,7 +73,7 @@ Codex must auto-detect supported hardware and pass tests accordingly.
 | Userland/Services | Go            | CSP-style concurrency               |
 | Tooling & Testing | Python        | CLI, validator, DSL, glue           |
 | CUDA Models       | C++ / CUDA    | Jetson inference & deployment       |
-| Shell Scripts (Bash) | Bash       | Used for build orchestration (e.g., GRUB → seL4 → Cohesix ISO), follows POSIX/Bash best practices |
+| Shell Scripts (Bash) | Bash       | Used for build orchestration in the UEFI execution environment (LLVM/LLD, Rust UEFI targets) |
 
 ---
 
@@ -175,7 +176,7 @@ Codex must auto-detect supported hardware and pass tests accordingly.
 - Role Override: Simulate using `COHROLE=` env/bootarg
 
 - Ensemble agents must test under `$COHESIX_ENS_TMP`, and validate safe cleanup afterward.
-- QEMU boot scripts must support the GRUB → seL4 → Cohesix boot flow and gracefully skip if `qemu-system-x86_64` is missing or not installed.
+- QEMU boot scripts must support the UEFI → seL4 → Cohesix boot flow and gracefully skip if `qemu-system-x86_64` is missing or not installed.
 
 ---
 
