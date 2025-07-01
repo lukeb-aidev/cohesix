@@ -2472,3 +2472,7 @@
 ### Changed
 - Updated curve25519-dalek feature to `u64_backend` for version 4.1.
 
+## [v0.372] - 2026-12-31
+### Changed
+- Removed custom feature override for curve25519-dalek; defaults now build under UEFI.
+
