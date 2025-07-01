@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: tiny_ed25519.rs v0.2
+// Filename: tiny_ed25519.rs v0.3
 // Author: Lukas Bower
 // Date Modified: 2026-12-31
 
@@ -43,7 +43,11 @@ impl TinyEd25519 {
             Ok(v) => v,
             Err(_) => return false,
         };
-        let sig = match Signature::from_bytes(sig.try_into().unwrap()) {
+        let sig_bytes: [u8; 64] = match sig.try_into() {
+            Ok(b) => b,
+            Err(_) => return false,
+        };
+        let sig = match Signature::from_bytes(&sig_bytes) {
             Ok(s) => s,
             Err(_) => return false,
         };
