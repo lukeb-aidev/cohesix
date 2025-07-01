@@ -2468,3 +2468,7 @@
 ### Fixed
 - Enabled `fiat_u64_backend` for curve25519-dalek to fix constant build errors.
 
+## [v0.371] - 2026-12-31
+### Changed
+- Updated curve25519-dalek feature to `u64_backend` for version 4.1.
+
