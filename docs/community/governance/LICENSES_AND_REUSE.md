@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: LICENSES_AND_REUSE.md v1.2
+// Filename: LICENSES_AND_REUSE.md v1.3
 // Author: Lukas Bower
-// Date Modified: 2026-02-20
+// Date Modified: 2026-12-31
 
 # Licensing and OSS Reuse
 
@@ -38,7 +38,6 @@ The table below lists current third-party packages used by Cohesix.
 | serde | 1 | MIT OR Apache-2.0 | Serialization | https://crates.io/crates/serde |
 | serde_json | 1 | MIT OR Apache-2.0 | JSON serialization | https://crates.io/crates/serde_json |
 | xmas-elf | 0.10 | MIT OR Apache-2.0 | ELF parsing for loader | https://crates.io/crates/xmas-elf |
-| sdl2 | 0.37 | MIT | Windowing & input | https://crates.io/crates/sdl2 |
 | cobra | 1.8.0 | Apache-2.0 | Go CLI framework | https://github.com/spf13/cobra |
 | chi | v5 | MIT | HTTP router for GUI orchestrator | https://github.com/go-chi/chi |
 | toybox | 0.9.6 | 0BSD | Minimal coreutils replacement | https://landley.net/toybox/ |

@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: IMPLEMENTATION_AND_TOOLING.md v1.0
+// Filename: IMPLEMENTATION_AND_TOOLING.md v1.1
 // Author: Lukas Bower
-// Date Modified: 2025-07-31
+// Date Modified: 2026-12-31
 
 # Implementation and Tooling
 
@@ -15,8 +15,6 @@ This document summarizes the Cohesix runtime architecture and the tooling used t
 - **Namespace:** Workers overlay the Queen’s namespace using 9P mounts
 - **Validator:** embedded rule engine intercepts syscalls and records traces
 - **Trace Snapshots:** Captured trace state is saved to `/history/snapshots/` for validator and CI replay
-- **Input:** joystick events captured via SDL2 integrate with the sensor
-  pipeline and feed `/srv/telemetry`
 
 ## Tooling Highlights
 - `tools/validate_batch.sh` verifies document headers at each checkpoint
