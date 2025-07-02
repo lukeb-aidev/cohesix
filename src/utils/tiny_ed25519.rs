@@ -57,10 +57,7 @@ impl TinyEd25519 {
         };
 
         // Parse the signature bytes into a Signature
-        let signature = match Signature::from_bytes(&sig_bytes) {
-            Ok(sig) => sig,
-            Err(_) => return false,
-        };
+        let signature = Signature::from_bytes(&sig_bytes);
 
         // Verify the signature against the message and public key
         public.verify(msg, &signature).is_ok()

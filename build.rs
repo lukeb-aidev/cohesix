@@ -18,11 +18,8 @@ fn main() {
     };
 
     if !sel4_kernel.exists() && env::var_os("SKIP_SEL4_KERNEL_CHECK").is_none() {
-        println!(
-            "cargo:warning=sel4 kernel.elf not found at {}",
-            sel4_kernel.display()
-        );
-        println!("cargo:warning=Try running `ninja` in ~/sel4_workspace/");
+        eprintln!("sel4 kernel.elf not found at {}", sel4_kernel.display());
+        eprintln!("Try running `ninja` in ~/sel4_workspace/");
     }
 
     if cfg!(feature = "cuda") {
@@ -57,11 +54,11 @@ fn main() {
                 ])
                 .status();
             match status {
-                Ok(s) if s.success() => println!("cargo:warning=PTX built"),
-                _ => println!("cargo:warning=nvcc failed, using prebuilt PTX"),
+                Ok(s) if s.success() => println!("cargo:info=PTX built"),
+                _ => println!("cargo:info=nvcc failed, using prebuilt PTX"),
             }
         } else {
-            println!("cargo:warning=nvcc missing; using prebuilt PTX");
+            println!("cargo:info=nvcc missing; using prebuilt PTX");
         }
     }
 }

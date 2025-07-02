@@ -3,8 +3,6 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-21
 
-use crate::prelude::*;
-use crate::CohError;
 use clap::Parser;
 use cohesix::coh_cc::{
     backend::registry::get_backend,
@@ -14,6 +12,7 @@ use cohesix::coh_cc::{
     toolchain::Toolchain,
 };
 use cohesix::telemetry::trace::init_panic_hook;
+use cohesix::CohError;
 use cohesix::{cohcc_error, cohcc_info};
 use std::path::Path;
 
