@@ -5,7 +5,6 @@
 
 /// Health monitoring service
 use super::Service;
-use crate::prelude::*;
 
 #[derive(Default)]
 pub struct HealthService {

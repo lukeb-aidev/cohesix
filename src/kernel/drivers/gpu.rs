@@ -3,7 +3,6 @@
 // Author: Lukas Bower
 // Date Modified: 2026-07-23
 
-use crate::prelude::*;
 /// GPU driver interface for Cohesix kernel-space runtime.
 /// This module provides initialization hooks and runtime checks for GPU availability and basic interaction.
 

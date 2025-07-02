@@ -5,7 +5,6 @@
 
 #[cfg(all(feature = "cuda", not(feature = "no-cuda")))]
 use crate::cuda::runtime::CudaRuntime;
-use crate::prelude::*;
 use crate::runtime::env::init::detect_cohrole;
 use crate::runtime::ServiceRegistry;
 /// Initialization routines for the InteractiveAiBooth role.

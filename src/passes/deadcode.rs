@@ -7,7 +7,6 @@
 use crate::ir::IRContext;
 use crate::ir::{Instruction, Opcode};
 use crate::pass_framework::traits::IRPass;
-use crate::prelude::*;
 
 /// Dead Code Elimination pass implementation.
 pub struct DeadCode;

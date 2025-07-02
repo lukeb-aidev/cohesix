@@ -3,7 +3,6 @@
 // Author: Lukas Bower
 // Date Modified: 2025-08-17
 
-use crate::prelude::*;
 use crate::runtime::ServiceRegistry;
 /// Worker discovery and retirement hooks.
 //

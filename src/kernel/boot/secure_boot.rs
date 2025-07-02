@@ -3,7 +3,6 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-07
 
-use crate::prelude::*;
 /// Secure boot logic for Cohesix platform.
 /// Verifies boot integrity, firmware authenticity, and cryptographic signatures.
 

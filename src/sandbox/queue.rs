@@ -3,7 +3,6 @@
 // Author: Lukas Bower
 // Date Modified: 2026-09-30
 
-use crate::prelude::*;
 extern crate alloc;
 use alloc::collections::VecDeque;
 /// Syscall queue for sandbox mediation.

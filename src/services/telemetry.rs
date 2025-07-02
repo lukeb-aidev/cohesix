@@ -5,7 +5,6 @@
 
 /// Telemetry service
 use super::Service;
-use crate::prelude::*;
 use crate::runtime::ServiceRegistry;
 use crate::telemetry::r#loop::TelemetrySyncLoop;
 

@@ -80,7 +80,7 @@ impl Multiplexer {
 
     /// Serve incoming requests on the attached channel.
     pub fn serve(&self) {
-        let mut rx_opt: Option<Receiver<P9Request>> = self.rx.lock().unwrap().take();
+        let rx_opt: Option<Receiver<P9Request>> = self.rx.lock().unwrap().take();
         if let Some(rx) = rx_opt {
             for req in rx {
                 let _ = self.handle(req);
