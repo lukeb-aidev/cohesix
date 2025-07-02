@@ -1,5 +1,5 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Cargo.toml v0.40
+# Filename: Cargo.toml v0.41
 # Author: Lukas Bower
 # Date Modified: 2026-12-31
 [package]
@@ -81,6 +81,7 @@ uefi = []
 # minimal_uefi: ensures only firmware-safe crates are compiled
 minimal_uefi = []
 sel4_entry_bin = []
+posix = ["cohesix_9p/posix"]
 
 [profile.release]
 panic = "abort"
