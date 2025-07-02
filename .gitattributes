@@ -3,5 +3,5 @@
 *.md text eol=lf
 *.sh text eol=lf
 
-# Vendor crates must be treated as binary to prevent line ending normalization
-vendor/** -text diff merge
+# Vendor crates must be treated as binary to prevent line ending normalization or merging
+vendor/** -text diff=false merge=false
