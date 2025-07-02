@@ -57,4 +57,3 @@ impl CompilerBackend for ZigBackend {
         self.compile_and_link(&input.path, out_path, &input.flags, toolchain)
     }
 }
-

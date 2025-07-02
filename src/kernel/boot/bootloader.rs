@@ -17,9 +17,9 @@ use crate::prelude::*;
 pub struct BootAgent;
 
 use super::role_hooks;
-use crate::kernel::userland_bootstrap;
 #[cfg(feature = "minimal_uefi")]
 use crate::kernel::fs::fat;
+use crate::kernel::userland_bootstrap;
 
 impl BootAgent {
     /// Initialize the bootloader and perform pre-seL4 setup.
@@ -30,11 +30,12 @@ impl BootAgent {
         Self::preflight_checks();
 
         let cmdline = std::fs::read_to_string("/boot/cmdline").unwrap_or_default();
-        let ctx = crate::bootloader::init::early_init(&cmdline)
-            .unwrap_or_else(|_| crate::bootloader::init::BootContext {
+        let ctx = crate::bootloader::init::early_init(&cmdline).unwrap_or_else(|_| {
+            crate::bootloader::init::BootContext {
                 args: crate::bootloader::args::BootArgs::default(),
                 role: "Unknown".into(),
-            });
+            }
+        });
 
         Self::setup_memory_zones();
         #[cfg(feature = "minimal_uefi")]

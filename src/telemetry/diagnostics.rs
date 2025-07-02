@@ -8,7 +8,6 @@ use crate::prelude::*;
 //
 /// Provides diagnostic utilities for internal health, trace tagging, and fault event emission within Cohesix.
 /// Integrates with service-level telemetry and runtime validators.
-
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -42,7 +41,11 @@ pub fn emit(entry: DiagnosticEntry) {
         .append(true)
         .open("/srv/telemetry/diagnostics.log")
     {
-        let _ = writeln!(f, "[{:?}] {}: {}", entry.severity, entry.category, entry.message);
+        let _ = writeln!(
+            f,
+            "[{:?}] {}: {}",
+            entry.severity, entry.category, entry.message
+        );
     }
 }
 

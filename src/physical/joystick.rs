@@ -10,7 +10,6 @@ use crate::prelude::*;
 /// Reads joystick axes and button states and logs them to `/srv/telemetry`
 /// and `/srv/agent_trace/<id>`. Uses SDL2's joystick subsystem and falls back
 /// to `None` if no controller is detected.
-
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -53,7 +52,10 @@ pub fn read_state(agent: &str) -> Option<JoystickState> {
     fs::create_dir_all("/srv").ok();
     let detail = format!("axes {:?} buttons {:?}", axes, buttons);
     log("/srv/telemetry", &format!("{} joystick {}", ts(), detail));
-    log(&format!("/srv/agent_trace/{agent}"), &format!("joystick {}", detail));
+    log(
+        &format!("/srv/agent_trace/{agent}"),
+        &format!("joystick {}", detail),
+    );
     recorder::event(agent, "joystick", &detail);
 
     Some(JoystickState { axes, buttons })

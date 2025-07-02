@@ -4,12 +4,12 @@
 // Date Modified: 2026-12-31
 
 use crate::prelude::*;
-use clap::{Parser, Subcommand};
 use crate::queen::orchestrator::{QueenOrchestrator, SchedulePolicy};
 #[cfg(feature = "rapier")]
 use crate::sim::physics_demo;
 #[cfg(feature = "rapier")]
 use crate::sim::webcam_tilt;
+use clap::{Parser, Subcommand};
 
 /// CLI wrapper for `cohrun` utility.
 #[derive(Parser)]
@@ -38,14 +38,30 @@ pub enum Commands {
         command: OrchestratorCmd,
     },
     GpuStatus,
-    GpuDispatch { task: String },
-    Goal { #[command(subcommand)] command: GoalCmd },
-    TrustEscalate { worker_id: String },
+    GpuDispatch {
+        task: String,
+    },
+    Goal {
+        #[command(subcommand)]
+        command: GoalCmd,
+    },
+    TrustEscalate {
+        worker_id: String,
+    },
     TrustReport,
-    FederateWith { queen_url: String },
+    FederateWith {
+        queen_url: String,
+    },
     WatchdogStatus,
-    TraceReplay { #[arg(long, default_value="failover")] context: String, #[arg(long, default_value_t = 5)] limit: u32 },
-    InjectRule { from: String },
+    TraceReplay {
+        #[arg(long, default_value = "failover")]
+        context: String,
+        #[arg(long, default_value_t = 5)]
+        limit: u32,
+    },
+    InjectRule {
+        from: String,
+    },
 }
 
 /// Orchestrator subcommands.
@@ -113,8 +129,8 @@ pub fn run(cli: Cli) {
         }
         Commands::Goal { command } => match command {
             GoalCmd::Add { json } => {
-                use std::fs;
                 use serde_json::Value;
+                use std::fs;
                 let mut goals: Vec<Value> = fs::read_to_string("/srv/goals/active_goals.json")
                     .ok()
                     .and_then(|d| serde_json::from_str(&d).ok())
@@ -126,7 +142,11 @@ pub fn run(cli: Cli) {
                 }
                 goals.push(val);
                 fs::create_dir_all("/srv/goals").ok();
-                fs::write("/srv/goals/active_goals.json", serde_json::to_string_pretty(&goals).unwrap()).ok();
+                fs::write(
+                    "/srv/goals/active_goals.json",
+                    serde_json::to_string_pretty(&goals).unwrap(),
+                )
+                .ok();
                 println!("goal {id} added");
             }
             GoalCmd::List => {
@@ -148,7 +168,11 @@ pub fn run(cli: Cli) {
                         g["assigned_worker"] = Value::String(worker_id.clone());
                     }
                 }
-                fs::write("/srv/goals/active_goals.json", serde_json::to_string_pretty(&goals).unwrap()).ok();
+                fs::write(
+                    "/srv/goals/active_goals.json",
+                    serde_json::to_string_pretty(&goals).unwrap(),
+                )
+                .ok();
                 println!("goal {goal_id} assigned to {worker_id}");
             }
         },
@@ -163,9 +187,7 @@ pub fn run(cli: Cli) {
         }
         Commands::FederateWith { queen_url } => {
             let hostname = "cohesix-uefi";
-            if let Ok(mut fm) =
-                crate::queen::federation::FederationManager::new(hostname)
-            {
+            if let Ok(mut fm) = crate::queen::federation::FederationManager::new(hostname) {
                 if let Err(e) = fm.connect(&queen_url) {
                     println!("federation failed: {e}");
                 } else {

@@ -14,7 +14,13 @@ pub enum InputType {
 }
 
 pub fn detect_input_type(path: &Path) -> InputType {
-    match path.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase().as_str() {
+    match path
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_lowercase()
+        .as_str()
+    {
         "rs" => InputType::Rust,
         "ir" => InputType::IR,
         _ => InputType::C,

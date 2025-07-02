@@ -5,7 +5,6 @@
 
 use crate::prelude::*;
 /// Simple pass framework for transforming IR modules.
-
 use alloc::{boxed::Box, vec::Vec};
 
 use crate::ir::{Module, Opcode};
@@ -25,7 +24,9 @@ pub struct PassManager {
 
 impl PassManager {
     /// Create an empty manager.
-    pub fn new() -> Self { Self { passes: Vec::new() } }
+    pub fn new() -> Self {
+        Self { passes: Vec::new() }
+    }
 
     /// Register a pass to run later.
     pub fn add_pass<P: Pass + 'static>(&mut self, pass: P) {
@@ -51,7 +52,9 @@ pub struct DeadCodeEliminationPass;
 
 impl DeadCodeEliminationPass {
     /// Create a new dead code elimination pass.
-    pub fn new() -> Self { Self }
+    pub fn new() -> Self {
+        Self
+    }
 }
 
 impl Default for DeadCodeEliminationPass {
@@ -61,7 +64,9 @@ impl Default for DeadCodeEliminationPass {
 }
 
 impl Pass for DeadCodeEliminationPass {
-    fn name(&self) -> &'static str { "DeadCodeElimination" }
+    fn name(&self) -> &'static str {
+        "DeadCodeElimination"
+    }
 
     fn run(&mut self, module: &mut Module) {
         for func in &mut module.functions {

@@ -3,9 +3,10 @@
 // Author: Lukas Bower
 // Date Modified: 2026-08-21
 
-use crate::prelude::*;
 #![no_main]
 #![cfg(all(feature = "sel4", feature = "kernel_bin", feature = "minimal_uefi"))]
+
+use crate::prelude::*;
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {

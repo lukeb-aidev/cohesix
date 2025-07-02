@@ -1,4 +1,3 @@
-
 use crate::prelude::*;
 extern crate alloc;
 use alloc::collections::VecDeque;
@@ -69,4 +68,3 @@ impl NetDriver {
         }
     }
 }
-

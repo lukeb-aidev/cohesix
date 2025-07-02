@@ -3,8 +3,8 @@
 // Date Modified: 2025-07-03
 // Author: Cohesix Codex
 
-use std::fs;
 use serial_test::serial;
+use std::fs;
 
 #[test]
 #[serial]
@@ -40,4 +40,3 @@ fn no_unclosed_caps() {
     let caps_after = fs::read_dir(&srv_dir).unwrap().count();
     assert!(caps_after >= caps_before);
 }
-

@@ -3,11 +3,11 @@
 // Author: Lukas Bower
 // Date Modified: 2026-08-22
 
-use crate::prelude::*;
-use clap::{Parser, Subcommand};
-use crate::agents::{runtime::AgentRuntime, migration};
+use crate::agents::{migration, runtime::AgentRuntime};
 use crate::cohesix_types::Role;
+use crate::prelude::*;
 use crate::{coh_error, CohError};
+use clap::{Parser, Subcommand};
 
 /// CLI arguments for `cohagent`.
 #[derive(Parser)]
@@ -20,9 +20,18 @@ pub struct Cli {
 /// Subcommands for `cohagent`.
 #[derive(Subcommand)]
 pub enum Command {
-    Start { id: String, role: String, program: String },
-    Pause { id: String },
-    Migrate { id: String, to: String },
+    Start {
+        id: String,
+        role: String,
+        program: String,
+    },
+    Pause {
+        id: String,
+    },
+    Migrate {
+        id: String,
+        to: String,
+    },
 }
 
 /// Execute the cohagent CLI commands.
@@ -41,7 +50,12 @@ pub fn run(cli: Cli) -> Result<(), CohError> {
             rt.pause(&id)?;
         }
         Command::Migrate { id, to } => {
-            migration::migrate(&id, |_| Err(coh_error!("fetch")), |_id, _| Ok(()), |_| Ok(()))?;
+            migration::migrate(
+                &id,
+                |_| Err(coh_error!("fetch")),
+                |_id, _| Ok(()),
+                |_| Ok(()),
+            )?;
             println!("migrated {} to {}", id, to);
         }
     }

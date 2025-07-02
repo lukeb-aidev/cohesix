@@ -3,10 +3,9 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-05
 
-use crate::prelude::*;
 /// Adaptive stabilizer that learns optimal actions over time.
-
 use super::{EnsemblePolicy, ReinforcementPolicy};
+use crate::prelude::*;
 
 pub struct SelfTuningStabilizer {
     policy: ReinforcementPolicy,
@@ -15,7 +14,9 @@ pub struct SelfTuningStabilizer {
 impl SelfTuningStabilizer {
     /// Create a new stabilizer.
     pub fn new() -> Self {
-        Self { policy: ReinforcementPolicy::new() }
+        Self {
+            policy: ReinforcementPolicy::new(),
+        }
     }
 
     /// Process input and return chosen action.

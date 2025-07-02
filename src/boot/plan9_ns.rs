@@ -7,7 +7,6 @@ use crate::prelude::*;
 /// Plan 9 style namespace builder for early boot.
 /// Parses boot arguments and produces a textual namespace description
 /// compatible with Plan 9 bind and mount rules.
-
 use std::fs;
 use std::io;
 
@@ -48,7 +47,9 @@ pub struct Namespace {
 impl Namespace {
     /// Create an empty namespace.
     pub fn new() -> Self {
-        Self { actions: Vec::new() }
+        Self {
+            actions: Vec::new(),
+        }
     }
 
     /// Add a bind command.
@@ -83,7 +84,6 @@ impl Namespace {
     pub fn actions(&self) -> &[NsAction] {
         &self.actions
     }
-
 }
 
 impl std::fmt::Display for Namespace {
@@ -144,12 +144,17 @@ pub fn parse_boot_args(args: &[String]) -> BootArgs {
 pub fn build_namespace(args: &BootArgs) -> Namespace {
     let mut ns = Namespace::new();
 
-    let root = if args.rootfs.is_empty() { "/" } else { &args.rootfs };
+    let root = if args.rootfs.is_empty() {
+        "/"
+    } else {
+        &args.rootfs
+    };
     if fs::metadata(root).is_err() {
         println!("[ns] warning: rootfs '{}' not found", root);
     }
 
-    ns = ns.bind(root, "/", false)
+    ns = ns
+        .bind(root, "/", false)
         .bind("/usr/coh/bin", "/bin", true)
         .srv("/srv", true);
 
@@ -206,4 +211,3 @@ mod tests {
         assert_eq!(ns.actions(), parsed.actions());
     }
 }
-

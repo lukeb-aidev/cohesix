@@ -3,9 +3,9 @@
 // Author: Lukas Bower
 // Date Modified: 2025-06-25
 
-use rand::seq::SliceRandom;
-use rand::Rng;
 use cohesix::CohError;
+use rand::Rng;
+use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;

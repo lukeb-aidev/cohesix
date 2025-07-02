@@ -16,7 +16,9 @@ fn gpu_and_sim_integration() {
     std::env::set_current_dir(&dir).unwrap();
     // Prepare fake kernel file
     let srv_dir = std::env::temp_dir();
-    let log_dir = std::env::var("COHESIX_LOG_DIR").map(std::path::PathBuf::from).unwrap_or_else(|_| std::env::temp_dir());
+    let log_dir = std::env::var("COHESIX_LOG_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::env::temp_dir());
     std::fs::create_dir_all(&srv_dir).unwrap();
     std::fs::create_dir_all(&log_dir).unwrap();
     std::fs::write(srv_dir.join("kernel.ptx"), "fake").unwrap();

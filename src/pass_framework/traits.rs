@@ -1,4 +1,3 @@
-
 use crate::prelude::*;
 
 // CLASSIFICATION: COMMUNITY
@@ -7,7 +6,6 @@ use crate::prelude::*;
 // Author: Lukas Bower
 
 /// Defines the core traits for IR passes in the Cohesix compiler.
-
 use crate::ir::IRContext;
 
 /// Trait for any IR pass that transforms or analyzes the IR.

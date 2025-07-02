@@ -3,15 +3,14 @@
 // Author: Lukas Bower
 // Date Modified: 2026-10-28
 
-use crate::prelude::*;
 /// Dynamic Plan 9 namespace loader for Cohesix.
 //
 /// Parses namespace descriptions from the `BOOT_NS` environment variable or
 /// `/boot/plan9.cfg`. Supported operations are `bind`, `mount`, `srv` and
 /// `unmount`. During tests, namespace actions are emulated by creating files
 /// under `/srv`.
-
 use crate::cohesix_types::{Role, RoleManifest};
+use crate::prelude::*;
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{self, Write};
@@ -76,9 +75,15 @@ impl std::fmt::Display for Namespace {
             match op {
                 NsOp::Bind { src, dst, flags } => {
                     let mut flag = String::new();
-                    if flags.before { flag.push('b'); }
-                    if flags.after { flag.push('a'); }
-                    if flags.create { flag.push('c'); }
+                    if flags.before {
+                        flag.push('b');
+                    }
+                    if flags.after {
+                        flag.push('a');
+                    }
+                    if flags.create {
+                        flag.push('c');
+                    }
                     if flag.is_empty() {
                         write!(f, "bind {} {}", src, dst)?;
                     } else {
@@ -103,7 +108,6 @@ impl Namespace {
 
 /// Loader handling boot-time and runtime namespace files.
 pub struct NamespaceLoader;
-
 
 impl NamespaceLoader {
     /// Load namespace from `BOOT_NS` env var or `/boot/plan9.cfg`.
@@ -262,7 +266,6 @@ impl Namespace {
             }
         }
     }
-
 
     /// Resolve a path through the namespace and return the first mount target.
     pub fn resolve(&self, path: &str) -> Option<String> {

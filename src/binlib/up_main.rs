@@ -3,10 +3,10 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-22
 
-use crate::prelude::*;
-use clap::{Parser, Subcommand};
-use crate::CohError;
 use crate::cli::federation;
+use crate::prelude::*;
+use crate::CohError;
+use clap::{Parser, Subcommand};
 
 /// CLI wrapper for `cohup`.
 #[derive(Parser)]
@@ -19,7 +19,10 @@ pub struct Cli {
 /// Federation commands.
 #[derive(Subcommand)]
 pub enum Commands {
-    Join { #[arg(long)] peer: String },
+    Join {
+        #[arg(long)]
+        peer: String,
+    },
     ListPeers,
 }
 

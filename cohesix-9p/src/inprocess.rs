@@ -3,10 +3,10 @@
 // Author: Lukas Bower
 // Date Modified: 2026-12-31
 
-use crossbeam_channel::{unbounded, Receiver, Sender};
+use crossbeam_channel::{Receiver, Sender, unbounded};
+use ninep::Stream;
 use std::io::{self, Read, Write};
 use std::sync::Arc;
-use ninep::Stream;
 
 /// In-process byte stream implemented with crossbeam channels.
 #[derive(Clone)]
@@ -22,8 +22,16 @@ impl InProcessStream {
         let (a_tx, a_rx) = unbounded();
         let (b_tx, b_rx) = unbounded();
         (
-            Self { rx: a_rx, tx: b_tx.clone(), buffer: Arc::new(std::sync::Mutex::new(Vec::new())) },
-            Self { rx: b_rx, tx: a_tx.clone(), buffer: Arc::new(std::sync::Mutex::new(Vec::new())) },
+            Self {
+                rx: a_rx,
+                tx: b_tx.clone(),
+                buffer: Arc::new(std::sync::Mutex::new(Vec::new())),
+            },
+            Self {
+                rx: b_rx,
+                tx: a_tx.clone(),
+                buffer: Arc::new(std::sync::Mutex::new(Vec::new())),
+            },
         )
     }
 }

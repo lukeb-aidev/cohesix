@@ -5,12 +5,11 @@
 
 use crate::prelude::*;
 /// Syscall dispatcher for sandboxed workers.
-
 use log::debug;
 
-use crate::cohesix_types::{RoleManifest, Syscall};
-use super::validator;
 use super::queue::SyscallQueue;
+use super::validator;
+use crate::cohesix_types::{RoleManifest, Syscall};
 
 // === SyscallDispatcher ===
 /// Dispatch validated syscalls to the appropriate handler.
@@ -58,4 +57,3 @@ impl SyscallDispatcher {
         }
     }
 }
-

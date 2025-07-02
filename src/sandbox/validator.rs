@@ -3,12 +3,11 @@
 // Author: Lukas Bower
 // Date Modified: 2026-09-30
 
-use crate::prelude::*;
 /// Runtime syscall validator for sandboxed agents.
 /// Violations are logged to `/srv/violations/<agent>.json` and the
 /// offending syscall is dropped.
-
 use crate::cohesix_types::{Role, Syscall};
+use crate::prelude::*;
 use crate::validator::config::get_config;
 use log::error;
 use serde::Serialize;

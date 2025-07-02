@@ -9,7 +9,6 @@ use crate::prelude::*;
 /// Each registered service is associated with a node id, a TTL and health
 /// status. Remote lookups will attempt a light-weight HTTP fetch from the
 /// requested node, acting as a simple stand-in for 9P federation.
-
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -35,8 +34,7 @@ pub struct ServiceEntry {
     pub healthy: bool,
 }
 
-static MESH: Lazy<Mutex<HashMap<String, ServiceEntry>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
+static MESH: Lazy<Mutex<HashMap<String, ServiceEntry>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
 /// Registry tracking service locations across the swarm.
 pub struct ServiceMeshRegistry;
@@ -84,8 +82,7 @@ impl ServiceMeshRegistry {
     /// List entries visible to a given role.
     pub fn list_for_role(role: &str) -> Vec<ServiceEntry> {
         Self::cleanup();
-        MESH
-            .lock()
+        MESH.lock()
             .unwrap()
             .values()
             .filter(|e| e.role == role || role == "QueenPrimary")
@@ -102,9 +99,7 @@ impl ServiceMeshRegistry {
 
     /// Ping services and drop entries that fail liveness checks.
     pub fn check_liveness() {
-        let entries: Vec<_> = {
-            MESH.lock().unwrap().values().cloned().collect()
-        };
+        let entries: Vec<_> = { MESH.lock().unwrap().values().cloned().collect() };
         for entry in entries {
             if let Ok(resp) = ureq::get(&format!("http://{}/health", entry.node)).call() {
                 Self::update_health(&entry.node, &entry.name, resp.status() == 200);
@@ -153,5 +148,3 @@ impl ServiceMeshRegistry {
         None
     }
 }
-
-

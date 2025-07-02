@@ -13,15 +13,15 @@ use crate::prelude::*;
 pub mod const_eval;
 /// Formatting helpers.
 pub mod format;
-/// Miscellaneous helper utilities.
-pub mod helpers;
-/// Simple deterministic RNG.
-pub mod tiny_rng;
-/// Lightweight Ed25519 implementation.
-pub mod tiny_ed25519;
 /// GPU runtime helpers.
 #[cfg(feature = "cuda")]
 pub mod gpu;
+/// Miscellaneous helper utilities.
+pub mod helpers;
+/// Lightweight Ed25519 implementation.
+pub mod tiny_ed25519;
+/// Simple deterministic RNG.
+pub mod tiny_rng;
 
 /// Initializes any global utilities that require boot-time setup.
 pub fn init_utils() {

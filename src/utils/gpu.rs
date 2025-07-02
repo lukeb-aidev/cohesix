@@ -3,10 +3,9 @@
 // Author: Lukas Bower
 // Date Modified: 2026-07-23
 
-use crate::prelude::*;
 #[cfg(feature = "cuda")]
-
 use crate::cuda::runtime::{CudaExecutor, CudaRuntime};
+use crate::prelude::*;
 use std::fs::OpenOptions;
 
 /// Validate CUDA runtime availability by opening `/srv/nvidia0` and

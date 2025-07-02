@@ -9,8 +9,7 @@ use crate::prelude::*;
 /// Keeps track of participating nodes and elects a primary orchestrator. The
 /// election algorithm is intentionally naive: the lexicographically smallest
 /// node id becomes primary. Decisions are appended to `/srv/orchestration.log`.
-
-use std::fs::{OpenOptions, create_dir_all};
+use std::fs::{create_dir_all, OpenOptions};
 use std::io::Write;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -30,13 +29,20 @@ pub struct QueenCluster {
 impl QueenCluster {
     /// Create an empty cluster record.
     pub fn new() -> Self {
-        Self { nodes: Vec::new(), primary: None }
+        Self {
+            nodes: Vec::new(),
+            primary: None,
+        }
     }
 
     /// Register a Queen node by id.
     pub fn register(&mut self, id: &str, boot_ts: u64) {
         if !self.nodes.iter().any(|n| n.id == id) {
-            self.nodes.push(NodeRecord { id: id.into(), boot_ts, healthy: true });
+            self.nodes.push(NodeRecord {
+                id: id.into(),
+                boot_ts,
+                healthy: true,
+            });
             Self::log(&format!("register {id}"));
         }
     }
@@ -73,7 +79,13 @@ impl QueenCluster {
         }
         self.nodes.sort_by_key(|n| n.boot_ts);
         Self::log(&format!("quorum {:?}", self.nodes));
-        if let Some(node) = self.nodes.iter().filter(|n| n.healthy).min_by_key(|n| n.boot_ts).cloned() {
+        if let Some(node) = self
+            .nodes
+            .iter()
+            .filter(|n| n.healthy)
+            .min_by_key(|n| n.boot_ts)
+            .cloned()
+        {
             if self.primary.as_ref() != Some(&node.id) {
                 self.primary = Some(node.id.clone());
                 Self::log(&format!("primary_elected {}", node.id));
@@ -99,4 +111,3 @@ impl QueenCluster {
         }
     }
 }
-

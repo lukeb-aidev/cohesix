@@ -3,13 +3,12 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-15
 
+use crate::CohError;
 /// Agent transport helpers for migration.
 //
 /// Provides filesystem-based transfer of agent snapshots
 /// and abstract trait for pluggable transport mechanisms.
-
 use std::fs;
-use crate::CohError;
 
 /// Interface for sending agent state to a remote peer.
 pub trait AgentTransport {

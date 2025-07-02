@@ -5,13 +5,11 @@
 
 use crate::prelude::*;
 #[cfg(feature = "kernel_bin")]
-
-
 use cohesix::kernel::config;
 
 fn main() {
     println!("Cohesix kernel stub");
-    
+
     if let Some(cfg) = config::load_config("/etc/init.conf") {
         println!("[kernel] init config:\n{}", cfg);
     }

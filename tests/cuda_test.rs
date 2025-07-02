@@ -13,12 +13,18 @@ use tempfile::tempdir;
 fn cuda_runtime_reports_availability() {
     let dir = tempdir().unwrap();
     std::env::set_current_dir(&dir).unwrap();
-    let log_dir = std::env::var("COHESIX_LOG_DIR").map(std::path::PathBuf::from).unwrap_or_else(|_| std::env::temp_dir());
+    let log_dir = std::env::var("COHESIX_LOG_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::env::temp_dir());
     std::fs::create_dir_all(&log_dir).unwrap();
 
     let rt = CudaRuntime::try_new().unwrap();
     validator::log_violation(RuleViolation {
-        type_: if rt.is_present() { "cuda_available" } else { "cuda_unavailable" },
+        type_: if rt.is_present() {
+            "cuda_available"
+        } else {
+            "cuda_unavailable"
+        },
         file: "cuda_test.rs".into(),
         agent: "cuda_test".into(),
         time: validator::timestamp(),

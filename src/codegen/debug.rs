@@ -3,11 +3,9 @@
 // Date Modified: 2025-05-26
 // Author: Lukas Bower
 
-use crate::prelude::*;
 /// Debug backend for the Coh_CC compiler. Emits human-readable IR dumps.
-
-
 use crate::ir::Module;
+use crate::prelude::*;
 
 /// Generates a debug string representation of the entire IR `Module`.
 pub fn generate_debug(module: &Module) -> String {

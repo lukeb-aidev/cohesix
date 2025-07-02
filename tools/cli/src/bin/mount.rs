@@ -4,8 +4,8 @@
 // Date Modified: 2026-01-27
 
 use clap::Parser;
-use cohesix::{coh_bail, CohError};
 use cohesix::trace::recorder::event;
+use cohesix::{CohError, coh_bail};
 use ninep::client::{TcpClient, UnixClient};
 
 /// Mount a 9P service and list files.
@@ -32,11 +32,8 @@ fn main() -> Result<(), CohError> {
             println!("{}", stat.fm.name);
         }
     } else if let Some(path) = addr.strip_prefix("unix:") {
-        let mut client = UnixClient::new_unix_with_explicit_path(
-            "cli".to_string(),
-            path.to_string(),
-            "/",
-        )?;
+        let mut client =
+            UnixClient::new_unix_with_explicit_path("cli".to_string(), path.to_string(), "/")?;
         for stat in client.read_dir("/")? {
             println!("{}", stat.fm.name);
         }

@@ -5,7 +5,6 @@
 
 use crate::prelude::*;
 /// Cooperative ensemble agents with shared memory.
-
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -23,10 +22,15 @@ pub struct SharedMemory {
 impl SharedMemory {
     pub fn new(id: &str) -> Self {
         let base_tmp = std::env::var("TMPDIR").unwrap_or_else(|_| "/srv".to_string());
-        let root = std::env::var("COHESIX_ENS_TMP").unwrap_or_else(|_| format!("{}/ensemble", base_tmp));
-        Self { path: format!("{root}/{id}/mem") }
+        let root =
+            std::env::var("COHESIX_ENS_TMP").unwrap_or_else(|_| format!("{}/ensemble", base_tmp));
+        Self {
+            path: format!("{root}/{id}/mem"),
+        }
     }
-    pub fn read(&self) -> Option<String> { fs::read_to_string(&self.path).ok() }
+    pub fn read(&self) -> Option<String> {
+        fs::read_to_string(&self.path).ok()
+    }
     pub fn write(&self, data: &str) {
         if let Some(base) = std::path::Path::new(&self.path).parent() {
             fs::create_dir_all(base).ok();
@@ -46,8 +50,8 @@ pub struct EnsembleAgent {
     pub strategy: Arbitration,
 }
 
-use crate::agent_transport::AgentTransport;
 use crate::agent_migration::{Migrateable, MigrationStatus};
+use crate::agent_transport::AgentTransport;
 use serde_json;
 
 impl Migrateable for EnsembleAgent {
@@ -63,23 +67,41 @@ impl Migrateable for EnsembleAgent {
 
 impl EnsembleAgent {
     pub fn new(id: &str, strategy: Arbitration) -> Self {
-        Self { id: id.into(), members: Vec::new(), memory: SharedMemory::new(id), strategy }
+        Self {
+            id: id.into(),
+            members: Vec::new(),
+            memory: SharedMemory::new(id),
+            strategy,
+        }
     }
 
-    pub fn add_agent(&mut self, a: Box<dyn DecisionAgent>) { self.members.push(a); }
+    pub fn add_agent(&mut self, a: Box<dyn DecisionAgent>) {
+        self.members.push(a);
+    }
 
     pub fn tick(&mut self) -> String {
         let mut proposals = Vec::new();
-        for a in self.members.iter_mut() { proposals.push(a.propose(&self.memory)); }
+        for a in self.members.iter_mut() {
+            proposals.push(a.propose(&self.memory));
+        }
         let action = match self.strategy {
             Arbitration::Voting => {
                 let mut counts: HashMap<String, usize> = HashMap::new();
-                for (act, _) in &proposals { *counts.entry(act.clone()).or_default() += 1; }
-                counts.into_iter().max_by_key(|e| e.1).map(|(a, _)| a).unwrap_or_default()
+                for (act, _) in &proposals {
+                    *counts.entry(act.clone()).or_default() += 1;
+                }
+                counts
+                    .into_iter()
+                    .max_by_key(|e| e.1)
+                    .map(|(a, _)| a)
+                    .unwrap_or_default()
             }
-            Arbitration::Weighted => {
-                proposals.iter().cloned().max_by(|a, b| a.1.partial_cmp(&b.1).unwrap()).map(|p| p.0).unwrap_or_default()
-            }
+            Arbitration::Weighted => proposals
+                .iter()
+                .cloned()
+                .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
+                .map(|p| p.0)
+                .unwrap_or_default(),
             Arbitration::Fallback => proposals.first().map(|p| p.0.clone()).unwrap_or_default(),
         };
         let _ = self.log_scores(&proposals);
@@ -88,12 +110,16 @@ impl EnsembleAgent {
 
     fn log_scores(&self, scores: &[(String, f32)]) -> std::io::Result<()> {
         let base_tmp = std::env::var("TMPDIR").unwrap_or_else(|_| "/srv".to_string());
-        let root = std::env::var("COHESIX_ENS_TMP").unwrap_or_else(|_| format!("{}/ensemble", base_tmp));
+        let root =
+            std::env::var("COHESIX_ENS_TMP").unwrap_or_else(|_| format!("{}/ensemble", base_tmp));
         fs::create_dir_all(format!("{root}/{}/", self.id))?;
         let goals = serde_json::to_string(scores).unwrap_or_else(|_| "[]".into());
         fs::write(format!("{root}/{}/goals.json", self.id), goals)?;
-        let trace_root = std::env::var("COHESIX_TRACE_TMP").unwrap_or_else(|_| format!("{}/trace", base_tmp));
-        let mut f = OpenOptions::new().create(true).append(true)
+        let trace_root =
+            std::env::var("COHESIX_TRACE_TMP").unwrap_or_else(|_| format!("{}/trace", base_tmp));
+        let mut f = OpenOptions::new()
+            .create(true)
+            .append(true)
             .open(format!("{trace_root}/ensemble_{}.log", self.id))?;
         writeln!(f, "tick")?;
         Ok(())

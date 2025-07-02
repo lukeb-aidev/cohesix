@@ -20,7 +20,6 @@
 use crate::prelude::*;
 #[forbid(unsafe_code)]
 #[warn(missing_docs)]
-
 use crate::{coh_error, CohError};
 use log::info;
 

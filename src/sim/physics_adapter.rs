@@ -6,7 +6,6 @@
 use crate::prelude::*;
 
 /// Adapter for running Rapier-based physics simulations.
-
 use rapier3d::prelude::*;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -65,10 +64,13 @@ impl PhysicsAdapter {
 
     /// Add a BalanceBot model to the world.
     pub fn add_balance_bot(&mut self) -> RigidBodyHandle {
-        let body = RigidBodyBuilder::dynamic().translation(vector![0.0, 1.0, 0.0]).build();
+        let body = RigidBodyBuilder::dynamic()
+            .translation(vector![0.0, 1.0, 0.0])
+            .build();
         let handle = self.bodies.insert(body);
         let collider = ColliderBuilder::cuboid(0.2, 1.0, 0.2).build();
-        self.colliders.insert_with_parent(collider, handle, &mut self.bodies);
+        self.colliders
+            .insert_with_parent(collider, handle, &mut self.bodies);
         handle
     }
 

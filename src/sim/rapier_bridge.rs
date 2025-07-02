@@ -10,12 +10,11 @@ use crate::prelude::*;
 /// Commands are written to `/sim/commands` and state snapshots are
 /// updated to `/sim/state`. All transitions are logged to
 /// `/srv/trace/sim.log`.
-
 use crate::runtime::ServiceRegistry;
-use rapier3d::prelude::*;
-use rapier3d::pipeline::QueryPipeline;
-use rapier3d::na::UnitQuaternion;
 use crate::utils::tiny_rng::TinyRng;
+use rapier3d::na::UnitQuaternion;
+use rapier3d::pipeline::QueryPipeline;
+use rapier3d::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -51,8 +50,14 @@ pub struct SimSnapshot {
 
 /// Commands sent to the simulation loop.
 pub enum SimCommand {
-    AddSphere { radius: f32, position: Vector<Real> },
-    ApplyForce { id: RigidBodyHandle, force: Vector<Real> },
+    AddSphere {
+        radius: f32,
+        position: Vector<Real>,
+    },
+    ApplyForce {
+        id: RigidBodyHandle,
+        force: Vector<Real>,
+    },
 }
 
 /// Simulation bridge handle.
@@ -156,17 +161,7 @@ fn write_state(bodies: &RigidBodySet, step: u64) {
         let rot = body.rotation();
         out.push_str(&format!(
             "{:?} [{:.2},{:.2},{:.2}] v[{:.2},{:.2},{:.2}] r[{:.2},{:.2},{:.2},{:.2}]\n",
-            handle,
-            pos.x,
-            pos.y,
-            pos.z,
-            vel.x,
-            vel.y,
-            vel.z,
-            rot.i,
-            rot.j,
-            rot.k,
-            rot.w
+            handle, pos.x, pos.y, pos.z, vel.x, vel.y, vel.z, rot.i, rot.j, rot.k, rot.w
         ));
     }
     let _ = fs::write("/sim/state", &out);
@@ -210,7 +205,12 @@ pub fn example_gravity_drop() -> SimObject {
     let parts: Vec<&str> = line.split_whitespace().collect();
     let id = parts.first().cloned().unwrap_or("");
     SimObject {
-        id: RigidBodyHandle::from_raw_parts(id.trim_matches(|c| c == '(' || c == ')').parse().unwrap_or(0), 0),
+        id: RigidBodyHandle::from_raw_parts(
+            id.trim_matches(|c| c == '(' || c == ')')
+                .parse()
+                .unwrap_or(0),
+            0,
+        ),
         pos: vector![0.0, 0.0, 0.0],
         vel: vector![0.0, 0.0, 0.0],
         rot: UnitQuaternion::identity(),
@@ -300,7 +300,11 @@ fn collect_snapshot(bodies: &RigidBodySet, step: u64) -> SimSnapshot {
         bodies_out.push(BodyState {
             index: id,
             generation: r#gen,
-            position: [body.translation().x, body.translation().y, body.translation().z],
+            position: [
+                body.translation().x,
+                body.translation().y,
+                body.translation().z,
+            ],
             velocity: [body.linvel().x, body.linvel().y, body.linvel().z],
             rotation: [
                 body.rotation().i,
@@ -310,5 +314,8 @@ fn collect_snapshot(bodies: &RigidBodySet, step: u64) -> SimSnapshot {
             ],
         });
     }
-    SimSnapshot { step, bodies: bodies_out }
+    SimSnapshot {
+        step,
+        bodies: bodies_out,
+    }
 }

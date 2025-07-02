@@ -9,14 +9,16 @@ use std::fs;
 
 #[test]
 fn corrupt_bundle_triggers_rollback() {
-    fs::create_dir_all("/persist/upgrades").unwrap_or_else(|e| println!("[WARN] Could not create /persist/upgrades: {}", e));
+    fs::create_dir_all("/persist/upgrades")
+        .unwrap_or_else(|e| println!("[WARN] Could not create /persist/upgrades: {}", e));
     println!("[INFO] Skipping actual upgrade test for corrupt bundle, always passing for CI.");
     assert!(true);
 }
 
 #[test]
 fn valid_upgrade_applied() {
-    fs::create_dir_all("/persist/upgrades").unwrap_or_else(|e| println!("[WARN] Could not create /persist/upgrades: {}", e));
+    fs::create_dir_all("/persist/upgrades")
+        .unwrap_or_else(|e| println!("[WARN] Could not create /persist/upgrades: {}", e));
     println!("[INFO] Skipping actual upgrade test for valid upgrade, always passing for CI.");
     assert!(true);
 }

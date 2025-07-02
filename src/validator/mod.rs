@@ -7,7 +7,6 @@ use crate::prelude::*;
 extern crate alloc;
 use alloc::collections::VecDeque;
 /// Runtime validator utilities for rule violations.
-
 pub mod config;
 pub mod syscall;
 

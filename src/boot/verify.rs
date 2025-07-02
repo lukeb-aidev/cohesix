@@ -5,7 +5,6 @@
 
 use crate::prelude::*;
 /// Kernel and OS hash verification at boot.
-
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::fs::{self, OpenOptions};
@@ -38,7 +37,11 @@ pub fn verify_boot() -> Result<bool> {
                 let digest = hex::encode(Sha256::digest(&data));
                 if digest != entry.sha256 {
                     ok = false;
-                    writeln!(log, "mismatch {} expected {} got {}", entry.path, entry.sha256, digest)?;
+                    writeln!(
+                        log,
+                        "mismatch {} expected {} got {}",
+                        entry.path, entry.sha256, digest
+                    )?;
                 }
             }
             Err(e) => {

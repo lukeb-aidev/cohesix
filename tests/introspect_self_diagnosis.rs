@@ -4,7 +4,7 @@
 // Author: Cohesix Codex
 
 use cohesix::agents::base::BaseAgent;
-use cohesix::sim::introspect::{IntrospectionData};
+use cohesix::sim::introspect::IntrospectionData;
 use std::fs;
 use std::io::ErrorKind;
 
@@ -29,7 +29,9 @@ fn detects_policy_failure() {
     let log = match fs::read_to_string(trace_root.join("introspect_test.log")) {
         Ok(v) => v,
         Err(e) if e.kind() == ErrorKind::PermissionDenied => {
-            eprintln!("\u{1F512} Skipping test: insufficient permissions to run detects_policy_failure");
+            eprintln!(
+                "\u{1F512} Skipping test: insufficient permissions to run detects_policy_failure"
+            );
             return;
         }
         Err(e) => panic!("failed to read introspect_test.log: {}", e),

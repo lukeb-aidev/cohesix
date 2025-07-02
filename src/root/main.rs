@@ -7,7 +7,6 @@ use crate::prelude::*;
 /// Cohesix root task for seL4.
 /// Initializes runtime, loads Plan9 namespace, and launches shell.
 
-
 fn real_main() {
     println!("[root] booting...");
     cohesix::runtime::env::init::initialize_runtime_env();

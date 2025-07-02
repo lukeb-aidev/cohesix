@@ -5,5 +5,4 @@
 
 use crate::prelude::*;
 /// Kernel upgrade utilities.
-
 pub mod upgrade_manager;

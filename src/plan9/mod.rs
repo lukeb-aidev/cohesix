@@ -5,7 +5,6 @@
 
 use crate::prelude::*;
 /// Plan 9 userland utilities.
-
 pub mod fs;
 pub mod namespace;
 pub mod shell;

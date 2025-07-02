@@ -12,10 +12,7 @@ fn secure9p_roles_match_manifest() {
     for line in cfg.lines() {
         if line.starts_with("agent = ") {
             if let Some(agent) = line.split('=').nth(1) {
-                let cleaned = agent
-                    .trim_matches(' ')
-                    .trim_matches('"')
-                    .to_string();
+                let cleaned = agent.trim_matches(' ').trim_matches('"').to_string();
                 roles_in_cfg.push(cleaned);
             }
         }

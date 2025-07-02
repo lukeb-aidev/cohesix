@@ -5,7 +5,6 @@
 
 use crate::prelude::*;
 /// Merge trace logs from peer queens and ensure consensus.
-
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
 use std::io::Write;

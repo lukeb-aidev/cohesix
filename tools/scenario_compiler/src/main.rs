@@ -3,9 +3,9 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-21
 
-use scenario_compiler::compiler::ScenarioCompiler;
-use cohesix::CohError;
 use clap::Parser;
+use cohesix::CohError;
+use scenario_compiler::compiler::ScenarioCompiler;
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -21,4 +21,3 @@ fn main() -> Result<(), CohError> {
     ScenarioCompiler::compile(&args.input, &args.output)?;
     Ok(())
 }
-

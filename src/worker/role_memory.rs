@@ -5,7 +5,6 @@
 
 use crate::prelude::*;
 /// Persist and replay worker role context for failover recovery.
-
 use std::fs;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -36,7 +35,11 @@ impl RoleMemory {
         let base = Path::new("/history/failover/traces");
         if let Ok(entries) = fs::read_dir(base) {
             let mut files: Vec<_> = entries.flatten().collect();
-            files.sort_by_key(|e| e.metadata().and_then(|m| m.modified()).unwrap_or(UNIX_EPOCH));
+            files.sort_by_key(|e| {
+                e.metadata()
+                    .and_then(|m| m.modified())
+                    .unwrap_or(UNIX_EPOCH)
+            });
             files.reverse();
             for f in files.into_iter().take(limit) {
                 if let Some(p) = f.path().to_str() {
@@ -53,7 +56,11 @@ impl RoleMemory {
             if files.len() <= keep {
                 return;
             }
-            files.sort_by_key(|e| e.metadata().and_then(|m| m.modified()).unwrap_or(UNIX_EPOCH));
+            files.sort_by_key(|e| {
+                e.metadata()
+                    .and_then(|m| m.modified())
+                    .unwrap_or(UNIX_EPOCH)
+            });
             let excess = files.len() - keep;
             for e in files.iter().take(excess) {
                 let _ = fs::remove_file(e.path());

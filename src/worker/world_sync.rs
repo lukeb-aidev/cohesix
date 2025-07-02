@@ -5,7 +5,6 @@
 
 use crate::prelude::*;
 /// Worker side world model integration.
-
 use crate::world_model::WorldModelSnapshot;
 use std::fs;
 
@@ -21,4 +20,3 @@ impl WorkerWorldSync {
         Ok(())
     }
 }
-

@@ -10,4 +10,3 @@ use std::fs;
 pub fn load_config(path: &str) -> Option<String> {
     fs::read_to_string(path).ok()
 }
-

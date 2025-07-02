@@ -10,7 +10,6 @@ use crate::{coh_error, CohError};
 /// Reads a scenario configuration from `/boot/scenario.json`, spawns agents
 /// using `AgentRuntime`, applies mock environmental inputs and writes a score
 /// file under `/srv/scenario_result/<id>`.
-
 use std::fs;
 use std::path::Path;
 
@@ -18,9 +17,9 @@ use serde::Deserialize;
 
 use crate::agents::runtime::AgentRuntime;
 use crate::cohesix_types::Role;
-use crate::physical::sensors;
 #[cfg(feature = "joystick")]
 use crate::physical::joystick;
+use crate::physical::sensors;
 use crate::trace::recorder;
 
 #[derive(Deserialize)]
@@ -72,10 +71,7 @@ impl ScenarioEngine {
             #[cfg(feature = "joystick")]
             let _ = joystick::read_state(&agent.id);
         }
-        fs::write(
-            format!("/srv/scenario_result/{}", cfg.id),
-            "ok",
-        )?;
+        fs::write(format!("/srv/scenario_result/{}", cfg.id), "ok")?;
         recorder::event("scenario", "end", &cfg.id);
         Ok(())
     }

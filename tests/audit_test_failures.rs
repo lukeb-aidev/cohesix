@@ -25,4 +25,3 @@ fn audit_test_failures() {
         }
     }
 }
-

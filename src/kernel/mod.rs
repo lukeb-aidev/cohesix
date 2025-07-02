@@ -6,22 +6,22 @@
 use crate::prelude::*;
 pub mod boot {
     pub mod bootloader;
-    pub mod secure_boot;
     pub mod role_hooks;
+    pub mod secure_boot;
 }
 
 pub mod drivers {
-    pub mod net;
     pub mod gpu;
+    pub mod net;
 }
 
 pub mod fs {
     #[cfg(feature = "busybox_client")]
     pub mod busybox;
-    pub mod initfs;
-    pub mod plan9;
     #[cfg(feature = "minimal_uefi")]
     pub mod fat;
+    pub mod initfs;
+    pub mod plan9;
 }
 
 pub mod physics {
@@ -40,9 +40,9 @@ pub mod syscalls {
 }
 pub mod upgrade;
 
-pub mod proc_mgr;
 pub mod loader;
-pub mod userland_bootstrap;
+pub mod proc_mgr;
 pub mod user_api;
+pub mod userland_bootstrap;
 
 pub mod config;

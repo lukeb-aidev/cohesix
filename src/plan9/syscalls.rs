@@ -5,7 +5,6 @@
 
 use crate::prelude::*;
 /// Minimal Plan 9 style syscall wrappers for Cohesix.
-
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 
@@ -15,7 +14,10 @@ pub fn open(ns: &Namespace, path: &str) -> io::Result<File> {
     if let Some(real) = ns.resolve(path) {
         OpenOptions::new().read(true).write(true).open(real)
     } else {
-        Err(io::Error::new(io::ErrorKind::NotFound, "path not in namespace"))
+        Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "path not in namespace",
+        ))
     }
 }
 
@@ -27,7 +29,10 @@ pub fn create(ns: &Namespace, path: &str) -> io::Result<File> {
             .truncate(true)
             .open(real)
     } else {
-        Err(io::Error::new(io::ErrorKind::NotFound, "path not in namespace"))
+        Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "path not in namespace",
+        ))
     }
 }
 
@@ -43,7 +48,10 @@ pub fn remove(ns: &Namespace, path: &str) -> io::Result<()> {
     if let Some(real) = ns.resolve(path) {
         fs::remove_file(real)
     } else {
-        Err(io::Error::new(io::ErrorKind::NotFound, "path not in namespace"))
+        Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "path not in namespace",
+        ))
     }
 }
 
@@ -64,6 +72,9 @@ pub fn walk(ns: &Namespace, dir: &str) -> io::Result<Vec<String>> {
         }
         Ok(v)
     } else {
-        Err(io::Error::new(io::ErrorKind::NotFound, "path not in namespace"))
+        Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "path not in namespace",
+        ))
     }
 }

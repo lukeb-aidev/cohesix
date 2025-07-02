@@ -30,7 +30,12 @@ impl Plan9Shim for DefaultShim {
             #[cfg(feature = "busybox_client")]
             "/busybox" => {
                 let args: Vec<&str> = data
-                    .map(|d| std::str::from_utf8(d).unwrap_or("").split_whitespace().collect())
+                    .map(|d| {
+                        std::str::from_utf8(d)
+                            .unwrap_or("")
+                            .split_whitespace()
+                            .collect()
+                    })
                     .unwrap_or_default();
                 crate::kernel::fs::busybox::run_command(op, &args);
                 Ok(Vec::new())

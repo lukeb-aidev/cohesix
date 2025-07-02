@@ -5,7 +5,6 @@
 
 use crate::prelude::*;
 /// Instruction representation for the Cohesix IR.
-
 use std::fmt;
 
 /// Low-level operation codes supported by the IR.
