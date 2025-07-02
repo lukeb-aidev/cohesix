@@ -5,7 +5,7 @@
 
 //! Minimal in-memory filesystem for Cohesix-9P.
 
-use alloc::{collections::BTreeMap, boxed::Box, sync::Arc, vec::Vec, string::{String, ToString}, format};
+use alloc::{collections::BTreeMap, sync::Arc, vec::Vec, string::{String, ToString}, format};
 use crate::policy::{Access, SandboxPolicy};
 use core::sync::atomic::{AtomicU64, Ordering};
 use spin::RwLock;

@@ -7,7 +7,28 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
 extern crate alloc;
-use crate::CohError;
+
+/// Cohesix runtime error type.
+pub type CohError = alloc::boxed::Box<dyn core::error::Error + Send + Sync>;
+
+/// Helper to create a boxed error from a string.
+pub(crate) fn new_err(msg: impl Into<String>) -> CohError {
+    alloc::boxed::Box::new(StringError(msg.into()))
+}
+
+#[macro_export]
+macro_rules! coh_bail {
+    ($($arg:tt)+) => {
+        return Err($crate::new_err(format!($($arg)+)));
+    };
+}
+
+#[macro_export]
+macro_rules! coh_error {
+    ($($arg:tt)+) => {
+        $crate::new_err(format!($($arg)+))
+    };
+}
 
 pub mod printk;
 
@@ -202,37 +223,17 @@ pub fn compile_from_file_with_target(
     Ok(())
 }
 
-/// Cohesix runtime error type.
-pub type CohError = alloc::boxed::Box<dyn core::error::Error + Send + Sync>;
-
+/// Simple string error type for boxed errors.
 #[derive(Debug)]
-struct StringError(String);
+pub struct StringError(String);
 
 impl core::fmt::Display for StringError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str(&self.0)
+        write!(f, "{}", self.0)
     }
 }
 
 impl core::error::Error for StringError {}
-
-pub(crate) fn new_err(msg: impl Into<String>) -> CohError {
-    alloc::boxed::Box::new(StringError(msg.into()))
-}
-
-#[macro_export]
-macro_rules! coh_bail {
-    ($($arg:tt)+) => {
-        return Err($crate::new_err(format!($($arg)+)));
-    };
-}
-
-#[macro_export]
-macro_rules! coh_error {
-    ($($arg:tt)+) => {
-        $crate::new_err(format!($($arg)+))
-    };
-}
 
 /// Trait implemented by runtime components that can boot themselves.
 pub trait BootableRuntime {
