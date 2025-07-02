@@ -1,37 +1,8 @@
-# CLASSIFICATION: COMMUNITY
-# Filename: config.toml v0.10
-# Author: Lukas Bower
-# Date Modified: 2026-12-31
-
-
-[build]
-target = "aarch64-unknown-linux-gnu"
-
-[env]
-CUDA_HOME = "/usr"
-
-[target.aarch64-unknown-linux-gnu]
-linker = "aarch64-linux-gnu-gcc"
-
-[target.x86_64-unknown-uefi]
-linker = "ld.lld"
-rustflags = [
-  "-C", "link-arg=-mno-red-zone",
-  "-C", "link-arg=-ffreestanding",
-  "-C", "link-arg=-fPIC",
-  "-C", "link-arg=-Wl,--subsystem,10",
-  "-C", "link-arg=-Tlinker.ld",
-  "-C", "target-feature=+sse2,+sse"
-]
-
-[target.aarch64-unknown-uefi]
-linker = "ld.lld"
-
-[net]
-git-fetch-with-cli = true
-
 [source.crates-io]
 replace-with = "vendored-sources"
 
 [source.vendored-sources]
 directory = "vendor"
+
+[net]
+offline = true
