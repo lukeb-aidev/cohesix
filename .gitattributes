@@ -2,3 +2,5 @@
 *.rs text eol=lf
 *.md text eol=lf
 *.sh text eol=lf
+# Vendor crates must retain original line endings for cargo checksums
+vendor/** -text
