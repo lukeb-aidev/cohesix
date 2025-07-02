@@ -142,7 +142,6 @@
 | cohesix_fetch_build.sh | v0.78 | 2026-12-31 | COMMUNITY | | |
 | CONTRIBUTING.md | v1.1 | 2025-07-23 | COMMUNITY | | |
 | config/secure9p.toml | v0.6 | 2026-10-29 | COMMUNITY | | |
-| config/plan9.ns | v0.2 | 2026-12-31 | COMMUNITY | | |
 | src/secure9p/mod.rs | v0.2 | 2025-07-25 | COMMUNITY | | |
 | src/secure9p/auth_handler.rs | v0.4 | 2025-07-31 | COMMUNITY | | |
 | src/secure9p/cap_fid.rs | v0.2 | 2025-07-25 | COMMUNITY | | |
@@ -246,7 +245,7 @@
 | src/cloud/orchestrator.rs | v0.8 | 2026-12-31 | COMMUNITY | | |
 | src/lib.rs | v1.12 | 2026-12-31 | COMMUNITY | | |
 | src/printk.rs | v0.1 | 2026-12-31 | COMMUNITY | | |
-| src/runtime/loader.rs | v0.2 | 2026-10-07 | COMMUNITY | | |
+| src/runtime/loader.rs | v0.3 | 2026-12-31 | COMMUNITY | | |
 | src/plan9/namespace.rs | v0.6 | 2026-10-28 | COMMUNITY | | |
 | src/validator/syscall.rs | v0.5 | 2026-11-11 | COMMUNITY | | |
 | tests/test_loader.rs | v0.1 | 2025-09-26 | COMMUNITY | | |
@@ -289,7 +288,7 @@
 | src/demos/sensor_world/main.py | v0.1 | 2026-02-11 | COMMUNITY | | |
 | src/demos/multi_duel/main.py | v0.1 | 2026-02-11 | COMMUNITY | | |
 | cloud-init.yaml | v0.1 | 2026-02-19 | COMMUNITY | | |
-| plan9.ns | v0.4 | 2026-12-31 | COMMUNITY | | |
+| plan9.ns | v0.5 | 2026-12-31 | COMMUNITY | | |
 | bin/cohcli | v0.1 | 2026-02-21 | COMMUNITY | | |
 | bin/cohrun | v0.1 | 2026-02-21 | COMMUNITY | | |
 | bin/cohbuild | v0.1 | 2026-02-21 | COMMUNITY | | |

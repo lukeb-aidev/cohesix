@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: router.rs v1.1
+// Filename: router.rs v1.2
 // Author: Lukas Bower
-// Date Modified: 2026-12-30
+// Date Modified: 2026-12-31
 
 use crate::prelude::*;
 /// Telemetry routing and collection utilities.
@@ -45,7 +45,7 @@ impl Default for BasicTelemetryRouter {
 
 impl BasicTelemetryRouter {
     fn read_temperature() -> Option<f32> {
-        let candidates = ["/srv/ina226_mock", "/sys/class/hwmon/hwmon0/temp1_input"];
+        let candidates = ["/srv/ina226_mock"];
         for path in candidates.iter() {
             if let Ok(contents) = std::fs::read_to_string(path) {
                 if let Ok(milli) = contents.trim().parse::<f32>() {
