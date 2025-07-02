@@ -24,7 +24,7 @@ aes-gcm = { version = "0.10", features = ["aes"] }
 aead = "0.5"
 aes = "0.8"
 # Use the dummy RNG implementation for unsupported targets like UEFI
-getrandom = { version = "0.2", features = ["dummy"] }
+getrandom = { version = "0.2", default-features = false, features = ["dummy"] }
 env_logger = "0.11.7"
 thiserror = "1"
 clap = { version = "4.5.4", features = ["derive"] }
@@ -44,6 +44,7 @@ toml = { version = "0.8" }
 version = "3.2.1"
 default-features = false
 features = ["fiat_u64_backend"]
+
 
 [build-dependencies]
 which = "5.0"
@@ -133,6 +134,9 @@ getrandom = { path = "third_party/getrandom_dummy" }
 rand_core = { path = "third_party/rand_core_patch" }
 ninep = { path = "third_party/ninep_portable" }
 memchr = { path = "third_party/memchr_simple" }
+
+[patch."https://github.com/rust-lang/crates.io-index"]
+getrandom = { path = "third_party/getrandom_dummy" }
 
 [target.'cfg(not(target_os = "uefi"))'.dependencies]
 libloading = "0.7"
