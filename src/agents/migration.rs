@@ -57,14 +57,12 @@ pub fn serialize(agent_id: &str) -> Result<AgentState, CohError> {
 
 /// Restore a serialized agent on the current worker.
 pub fn restore(agent_id: &str, state: &AgentState) -> Result<(), CohError> {
-    fs::create_dir_all(format!("/srv/agents/{agent_id}")).ok();
-    fs::write(format!("/srv/agent_trace/{agent_id}"), &state.trace).ok();
+    fs::create_dir_all(format!("/srv/agents/{agent_id}"))?;
+    fs::write(format!("/srv/agent_trace/{agent_id}"), &state.trace)?;
     ServiceRegistry::unregister_service(agent_id)?;
     ServiceRegistry::register_service(agent_id, &format!("/srv/agents/{agent_id}"))?;
     for (k, v) in &state.env {
-        unsafe {
-            std::env::set_var(k, v);
-        }
+        std::env::set_var(k, v);
     }
     Ok(())
 }
@@ -79,7 +77,7 @@ pub fn migrate(
     let state = fetch(agent_id)?;
     push(agent_id)?;
     stop(agent_id)?;
-    fs::remove_dir_all(format!("/srv/agents/{agent_id}")).ok();
+    fs::remove_dir_all(format!("/srv/agents/{agent_id}"))?;
     ServiceRegistry::unregister_service(agent_id)?;
     Ok(())
 }
