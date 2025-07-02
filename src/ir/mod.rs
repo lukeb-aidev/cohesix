@@ -3,7 +3,6 @@
 // Author: Lukas Bower
 // Date Modified: 2025-05-31
 
-use crate::prelude::*;
 /// IR root module. Declares and organizes all IR submodules.
 pub mod block;
 pub mod builder;

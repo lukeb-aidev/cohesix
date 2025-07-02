@@ -4,7 +4,6 @@
 // Date Modified: 2026-11-11
 
 use crate::cohesix_types::{Role, Syscall};
-use crate::prelude::*;
 use crate::syscall::guard::check_permission;
 use crate::validator::record_syscall;
 

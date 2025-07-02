@@ -12,4 +12,3 @@
 pub use crate::ir::context::IRContext;
 pub use crate::ir::function::Function;
 pub use crate::ir::module::Module;
-use crate::prelude::*;

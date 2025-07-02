@@ -3,7 +3,6 @@
 // Author: Lukas Bower
 // Date Modified: 2026-09-30
 
-use crate::prelude::*;
 use crate::runtime::env::init::detect_cohrole;
 use crate::runtime::ServiceRegistry;
 /// Initialization routines for the SensorRelay role.

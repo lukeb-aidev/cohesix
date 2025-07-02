@@ -3,7 +3,6 @@
 // Date Modified: 2025-05-26
 // Author: Lukas Bower
 
-use crate::prelude::*;
 /// Entry point for all IR passes in the Cohesix compiler.
 pub mod const_fold;
 pub mod deadcode;

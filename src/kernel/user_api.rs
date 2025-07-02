@@ -7,7 +7,6 @@
 /// Kernel-exported userland API shims.
 /// Provides simple logging and exit hooks for minimal user programs.
 use crate::kernel::proc_mgr;
-use crate::prelude::*;
 
 pub type SysLogFn = extern "C" fn(*const u8, usize);
 pub type SysExitFn = extern "C" fn(u32);

@@ -19,7 +19,6 @@
 // * `metrics` – Prometheus (or OpenTelemetry) exporter
 // ─────────────────────────────────────────────────────────────
 
-use crate::prelude::*;
 #[forbid(unsafe_code)]
 #[warn(missing_docs)]
 

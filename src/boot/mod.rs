@@ -18,7 +18,6 @@
 // * `init`    – early hardware initialisation (UART, watchdog).
 // ─────────────────────────────────────────────────────────────
 
-use crate::prelude::*;
 #[forbid(unsafe_code)]
 #[warn(missing_docs)]
 

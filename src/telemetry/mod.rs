@@ -3,7 +3,6 @@
 // Author: Lukas Bower
 // Date Modified: 2025-06-19
 
-use crate::prelude::*;
 pub mod core;
 /// Telemetry subsystem modules.
 pub mod diagnostics;

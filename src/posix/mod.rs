@@ -3,7 +3,6 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-11
 
-use crate::prelude::*;
 /// Minimal POSIX compatibility helpers for Cohesix.
 /// Provides simple syscall name translations to allow
 /// refactoring legacy code.
