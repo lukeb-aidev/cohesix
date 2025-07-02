@@ -15,7 +15,6 @@ bitflags = "2"
 fatfs = "0.3.6"
 cust = { version = "0.3.2", optional = true }
 xmas-elf = "0.10"
-cohesix-9p = { path = "cohesix-9p" }
 sha2 = "0.10"
 hkdf = "0.12"
 ed25519-dalek = { version = "2", default-features = false }
@@ -49,7 +48,6 @@ features = ["fiat_u64_backend"]
 
 [build-dependencies]
 which = "5.0"
-cohesix-9p = { path = "cohesix-9p" }
 [workspace]
 members = [
     "cohesix-9p",

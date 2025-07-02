@@ -80,16 +80,16 @@ impl Default for FsConfig {
 }
 
 /// Convenience helper: build a server with [`FsConfig::default`] and start it.
-pub fn start_server() -> Result<FsServer> {
+pub fn start_server() -> Result<FsServer, CohError> {
     let mut srv = FsServer::new(FsConfig::default());
     srv.start()?;
     Ok(srv)
 }
 
 /// Parse a 9P version negotiation frame and return the version string.
-pub fn parse_version_message(buf: &[u8]) -> Result<String> {
+pub fn parse_version_message(buf: &[u8]) -> Result<String, CohError> {
     if buf.is_empty() {
-        bail!("empty message");
+        coh_bail!("empty message");
     }
     let s = std::str::from_utf8(buf)?.trim_end_matches('\0').to_string();
     Ok(s)
