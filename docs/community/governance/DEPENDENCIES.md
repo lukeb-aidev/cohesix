@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: DEPENDENCIES.md v0.5
+// Filename: DEPENDENCIES.md v0.6
 // Author: Lukas Bower
-// Date Modified: 2025-06-15
+// Date Modified: 2025-07-02
 
 # System Dependencies
 
@@ -21,7 +21,6 @@
 
 | Crate            | Version  | Source / License  | Purpose                                   |
 |------------------|----------|-------------------|-------------------------------------------|
-| anyhow           | **1.0.82** | crates.io (MIT)   | Ergonomic error handling                  |
 | clap             | **4.5.4**  | crates.io (MIT)   | Command-line argument parsing             |
 | log              | 0.4       | crates.io (MIT)   | Structured logging facade                 |
 | sha2             | 0.10      | crates.io (MIT)   | SHA-2 hashing (boot measure)              |
