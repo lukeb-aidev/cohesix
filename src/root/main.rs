@@ -3,7 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2026-11-27
 
-use crate::prelude::*;
+use cohesix::prelude::*;
 /// Cohesix root task for seL4.
 /// Initializes runtime, loads Plan9 namespace, and launches shell.
 

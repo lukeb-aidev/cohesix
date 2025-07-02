@@ -3,11 +3,11 @@
 // Date Modified: 2025-07-22
 // Author: Lukas Bower
 
-use crate::prelude::*;
+use cohesix::prelude::*;
 use clap::Parser;
 use cohesix::binlib::agent_main::{run, Cli};
 use cohesix::telemetry::trace::init_panic_hook;
-use crate::CohError;
+use cohesix::CohError;
 
 fn main() -> Result<(), CohError> {
     init_panic_hook();
