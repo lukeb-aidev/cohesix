@@ -29,7 +29,7 @@ impl SLMDecryptor {
         let nonce = Nonce::from_slice(&data[0..12]);
         let cipher = &data[12..];
         let aead = Aes256Gcm::new_from_slice(key)?;
-        let plain = aead.decrypt(nonce, cipher).map_err(|e| coh_error!(e))?;
+        let plain = aead.decrypt(nonce, cipher).map_err(|e| coh_error!("{}", e))?;
         let mut rng = TinyRng::new(0xDEC0DE);
         Ok((plain, MemoryToken(rng.next_u64())))
     }

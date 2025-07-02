@@ -4,6 +4,7 @@
 // Date Modified: 2025-06-25
 
 use crate::prelude::*;
+use crate::CohError;
 /// Scenario runner executing compiled scenarios tick-by-tick.
 
 use crate::agents::runtime::AgentRuntime;

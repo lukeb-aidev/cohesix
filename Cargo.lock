@@ -361,6 +361,7 @@ dependencies = [
  "bitflags 2.9.1",
  "chrono",
  "clap",
+ "cohesix-9p",
  "criterion",
  "curve25519-dalek 3.2.1",
  "cust",
@@ -397,7 +398,6 @@ dependencies = [
 name = "cohesix-9p"
 version = "0.1.0"
 dependencies = [
- "cohesix",
  "crossbeam-channel",
  "log",
  "ninep",

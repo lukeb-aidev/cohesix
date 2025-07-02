@@ -4,6 +4,7 @@
 // Date Modified: 2025-07-22
 
 use crate::queen::trust;
+use crate::CohError;
 /// Simple simulation trace validator run on the Queen.
 use serde::{Deserialize, Serialize};
 use std::fs;
