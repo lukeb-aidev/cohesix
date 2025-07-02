@@ -23,7 +23,6 @@ Cohesix combines a micro‑kernel architecture (seL4‑derived) with Plan 9‑
 - **Queen–Worker protocol** for secure lifecycle modules (SLMs)
 - **Multi‑language tool‑chain** (Rust, Go, Codex shell)
 - **Modular boot & sandboxing** with trace validation
-- **Joystick input** via SDL2 for interactive demos
 
   - **Trace-first validation** with CI-enforced snapshots and syscall replay
 
