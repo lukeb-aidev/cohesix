@@ -14,7 +14,7 @@ pub struct LivePatcher;
 
 impl LivePatcher {
     /// Apply a binary patch to the given target path.
-    pub fn apply(target: &str, binary: &[u8]) -> Result<()> {
+    pub fn apply(target: &str, binary: &[u8]) -> Result<(), CohError> {
         let hash = Sha256::digest(binary);
         fs::create_dir_all("/srv/updates")?;
         let mut log = OpenOptions::new()

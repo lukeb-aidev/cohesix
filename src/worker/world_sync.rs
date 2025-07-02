@@ -13,7 +13,7 @@ pub struct WorkerWorldSync;
 
 impl WorkerWorldSync {
     /// Apply a snapshot received from the queen.
-    pub fn apply(path: &str) -> Result<()> {
+    pub fn apply(path: &str) -> Result<(), CohError> {
         let snap = WorldModelSnapshot::load(path)?;
         fs::create_dir_all("/sim").ok();
         snap.save("/sim/world.json")?;

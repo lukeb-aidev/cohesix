@@ -11,7 +11,7 @@ use std::path::Path;
 
 /// Perform a basic TPM attestation if hardware is present.
 /// Logs the outcome to `/srv/boot/attestation.log`.
-pub fn attest() -> Result<()> {
+pub fn attest() -> Result<(), CohError> {
     std::fs::create_dir_all("/srv/boot")?;
     let mut log = OpenOptions::new()
         .create(true)
