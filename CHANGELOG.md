@@ -2512,3 +2512,8 @@
 ## [v0.380] - 2026-12-31
 ### Added
 - UEFI + Plan9 readiness audit document.
+
+## [v0.381] - 2026-12-31
+### Changed
+- Removed POSIX namespace mounts and cleaned sensor telemetry paths.
+- Stubbed POSIX functions in `root_task.c` for `MINIMAL_UEFI` builds.
