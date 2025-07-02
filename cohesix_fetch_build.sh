@@ -51,19 +51,10 @@ cd "$HOME"
 log "📦 Cloning repository..."
 rm -rf cohesix
 for i in {1..3}; do
-  git clone git@github.com:lukeb-aidev/cohesix.git && break || sleep 2
+  git clone git@github.com:lukeb-aidev/cohesix.git && break || sleep 3
 done
-log "✅ Clone complete, ensuring all vendor files appear..."
-EXPECTED_FILES=15853
-for i in {1..10}; do
-    ACTUAL=$(find cohesix/vendor -type f | wc -l)
-    if [ "$ACTUAL" -ge "$EXPECTED_FILES" ]; then
-        log "✅ All $ACTUAL vendor files visible"
-        break
-    fi
-    log "⌛ Found only $ACTUAL vendor files, sleeping 2s to wait for filesystem..."
-    sleep 2
-done
+log "✅ Clone complete ..."
+
 cd cohesix
 ROOT="$(pwd)"
 if [ -f "$ROOT/scripts/load_arch_config.sh" ]; then
