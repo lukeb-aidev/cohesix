@@ -22,6 +22,19 @@
 
 A simple, safe HTTP client.
 
+> [!NOTE]
+> * 2.12.x is MSRV 1.71
+> * 2.11.x is MSRV 1.67
+>
+> For both these lines, we will release patch version pinning dependencies as needed to
+> retain the MSRV. If we are bumping MSRV, that will require a minor version bump.
+
+> [!NOTE]
+> ureq version 2.11.0 was forced to bump MSRV from 1.63 -> 1.67. The problem is that the
+> `time` crate 0.3.20, the last 1.63 compatible version, stopped compiling with Rust
+> [1.80 and above](https://github.com/algesten/ureq/pull/878#issuecomment-2503176155).
+> To release a 2.x version that is possible to compile on the latest Rust we were
+> forced to bump MSRV.
 
 Ureq's first priority is being easy for you to use. It's great for
 anyone who wants a low-overhead HTTP client that just gets the job done. Works
@@ -82,7 +95,7 @@ Ureq supports sending and receiving json, if you enable the "json" feature:
 
 ```rust
   // Requires the `json` feature enabled.
-  let resp: String = ureq::post("http://myapi.example.com/ingest")
+  let resp: String = ureq::post("http://myapi.example.com/post/ingest")
       .set("X-My-Header", "Secret")
       .send_json(ureq::json!({
           "name": "martin",
@@ -134,7 +147,8 @@ You can control them when including ureq as a dependency.
   does nothing for `native-tls`.
 * `gzip` enables requests of gzip-compressed responses and decompresses them. This is enabled by default.
 * `brotli` enables requests brotli-compressed responses and decompresses them.
-* `http-interop` enables conversion methods to and from `http::Response` and `http::request::Builder`.
+* `http-interop` enables conversion methods to and from `http::Response` and `http::request::Builder` (v0.2).
+* `http` enables conversion methods to and from `http::Response` and `http::request::Builder` (v1.0).
 
 ## Plain requests
 
@@ -319,6 +333,7 @@ If ureq is not what you're looking for, check out these other Rust HTTP clients:
 [std::sync::Arc]: https://doc.rust-lang.org/stable/alloc/sync/struct.Arc.html
 [std::io::Read]: https://doc.rust-lang.org/stable/std/io/trait.Read.html
 [Agent]: https://docs.rs/ureq/latest/ureq/struct.Agent.html
+[AgentBuilder]: https://docs.rs/ureq/latest/ureq/struct.AgentBuilder.html
 [get()]: https://docs.rs/ureq/latest/ureq/fn.get.html
 [post()]: https://docs.rs/ureq/latest/ureq/fn.post.html
 [put()]: https://docs.rs/ureq/latest/ureq/fn.put.html

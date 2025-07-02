@@ -93,11 +93,11 @@ pub(crate) struct AgentConfig {
 /// let mut agent = ureq::agent();
 ///
 /// agent
-///     .post("http://example.com/login")
+///     .post("http://example.com/post/login")
 ///     .call()?;
 ///
 /// let secret = agent
-///     .get("http://example.com/my-protected-page")
+///     .get("http://example.com/get/my-protected-page")
 ///     .call()?
 ///     .into_string()?;
 ///
@@ -173,7 +173,7 @@ impl Agent {
     /// let agent = ureq::agent();
     ///
     /// let mut url: Url = "http://example.com/some-page".parse()?;
-    /// url.set_path("/robots.txt");
+    /// url.set_path("/get/robots.txt");
     /// let resp: Response = agent
     ///     .request_url("GET", &url)
     ///     .call()?;
@@ -595,17 +595,11 @@ impl AgentBuilder {
     /// # fn main() -> Result<(), ureq::Error> {
     /// # ureq::is_test(true);
     /// use std::sync::Arc;
-    /// let mut root_store = rustls::RootCertStore::empty();
-    /// root_store.add_trust_anchors(webpki_roots::TLS_SERVER_ROOTS.iter().map(|ta| {
-    ///     rustls::OwnedTrustAnchor::from_subject_spki_name_constraints(
-    ///         ta.subject,
-    ///         ta.spki,
-    ///         ta.name_constraints,
-    ///     )
-    /// }));
+    /// let mut root_store = rustls::RootCertStore {
+    ///   roots: webpki_roots::TLS_SERVER_ROOTS.iter().cloned().collect(),
+    /// };
     ///
     /// let tls_config = rustls::ClientConfig::builder()
-    ///     .with_safe_defaults()
     ///     .with_root_certificates(root_store)
     ///     .with_no_client_auth();
     /// let agent = ureq::builder()
@@ -683,17 +677,6 @@ impl AgentBuilder {
     pub fn middleware(mut self, m: impl Middleware) -> Self {
         self.middleware.push(Box::new(m));
         self
-    }
-}
-
-#[cfg(feature = "tls")]
-#[derive(Clone)]
-pub(crate) struct TLSClientConfig(pub(crate) Arc<rustls::ClientConfig>);
-
-#[cfg(feature = "tls")]
-impl fmt::Debug for TLSClientConfig {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("TLSClientConfig").finish()
     }
 }
 
