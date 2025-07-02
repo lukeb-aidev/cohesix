@@ -70,16 +70,6 @@ export COHESIX_TARGET COHESIX_ARCH
 COH_ARCH="$COHESIX_ARCH"
 log "Architecture: $COH_ARCH (target $COHESIX_TARGET)"
 
-ensure_vendor() {
-  if [ ! -d "$ROOT/vendor" ]; then
-    log "❌ vendor directory missing. Clone your repository with vendor committed."
-    exit 1
-  else
-    log "✅ vendor directory present, using pre-vendored crates."
-  fi
-}
-
-ensure_vendor
 
 # Toolchain sanity checks
 if ! command -v rustup >/dev/null 2>&1; then
