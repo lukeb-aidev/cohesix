@@ -4,6 +4,7 @@
 // Date Modified: 2025-07-15
 
 use crate::agent_transport::AgentTransport;
+use crate::CohError;
 /// High level agent migration helpers used by the orchestrator.
 //
 /// Wraps the lower-level snapshot routines and federation

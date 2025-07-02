@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use crate::fs::ValidatorHook;
 use crate::ninep_adapter::{read_slice, verify_open};
 use crate::policy::{Access, SandboxPolicy};
-use cohesix::{CohError, coh_error};
+use crate::{CohError, coh_error};
 use log::{info, warn};
 use ninep::{
     client::TcpClient,
@@ -505,7 +505,7 @@ impl FsServer {
         }
         let server = Server::new(fs);
         info!("[Plan9] cohesix-9p serving /usr, /etc, /srv");
-        let handle = server.serve_stream(stream.try_clone().map_err(|e| coh_error!(e))?);
+        let handle = server.serve_stream(stream.try_clone().map_err(|e| coh_error!("{}", e))?);
         self.handle = Some(handle);
         Ok(stream)
     }

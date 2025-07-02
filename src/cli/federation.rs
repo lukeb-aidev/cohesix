@@ -4,6 +4,7 @@
 // Date Modified: 2025-07-07
 
 use crate::prelude::*;
+use crate::CohError;
 /// Federation CLI helpers for `cohup`.
 use clap::{Arg, Command};
 use std::fs;

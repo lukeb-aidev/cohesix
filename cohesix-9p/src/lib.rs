@@ -30,7 +30,39 @@
 
 use std::path::PathBuf;
 
-use cohesix::{CohError, coh_bail};
+extern crate alloc;
+use alloc::boxed::Box;
+
+pub type CohError = Box<dyn core::error::Error + Send + Sync>;
+
+#[derive(Debug)]
+struct StringError(String);
+
+impl core::fmt::Display for StringError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl core::error::Error for StringError {}
+
+pub(crate) fn new_err(msg: impl Into<String>) -> CohError {
+    Box::new(StringError(msg.into()))
+}
+
+#[macro_export]
+macro_rules! coh_bail {
+    ($($arg:tt)+) => {
+        return Err($crate::new_err(format!($($arg)+)));
+    };
+}
+
+#[macro_export]
+macro_rules! coh_error {
+    ($($arg:tt)+) => {
+        $crate::new_err(format!($($arg)+))
+    };
+}
 // Note: we avoid using private modules from the `p9` crate for now.
 
 pub mod fs;
