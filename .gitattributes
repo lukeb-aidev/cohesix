@@ -2,5 +2,6 @@
 *.rs text eol=lf
 *.md text eol=lf
 *.sh text eol=lf
-# Vendor crates must retain original line endings for cargo checksums
-vendor/** -text
+
+# Vendor crates must be treated as binary to prevent line ending normalization
+vendor/** -text diff merge
