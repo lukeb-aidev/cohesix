@@ -4,6 +4,7 @@
 // Date Modified: 2025-08-16
 
 use crate::prelude::*;
+use crate::CohError;
 use serde::{Deserialize, Serialize};
 /// Agent state serialization and migration support.
 //
@@ -72,11 +73,11 @@ pub fn restore(agent_id: &str, state: &AgentState) -> Result<(), CohError> {
 pub fn migrate(
     agent_id: &str,
     fetch: impl Fn(&str) -> Result<AgentState, CohError>,
-    push: impl Fn(&str, &AgentState) -> Result<(), CohError>,
+    push: impl Fn(&str) -> Result<(), CohError>,
     stop: impl Fn(&str) -> Result<(), CohError>,
 ) -> Result<(), CohError> {
     let state = fetch(agent_id)?;
-    push(agent_id, &state)?;
+    push(agent_id)?;
     stop(agent_id)?;
     fs::remove_dir_all(format!("/srv/agents/{agent_id}")).ok();
     ServiceRegistry::unregister_service(agent_id)?;

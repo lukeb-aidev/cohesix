@@ -7,12 +7,12 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
 extern crate alloc;
+use crate::CohError;
 
 pub mod printk;
 
 /// Prelude re-exporting common `alloc` types for no_std modules
 pub mod prelude {
-    pub use alloc::prelude::v1::*;
     pub use alloc::{boxed::Box, string::String, vec::Vec};
 }
 

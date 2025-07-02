@@ -7,6 +7,7 @@
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::Path;
+use crate::CohError;
 
 /// Perform a basic TPM attestation if hardware is present.
 /// Logs the outcome to `/srv/boot/attestation.log`.

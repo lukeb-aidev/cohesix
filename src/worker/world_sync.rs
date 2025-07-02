@@ -5,6 +5,7 @@
 
 /// Worker side world model integration.
 use crate::world_model::WorldModelSnapshot;
+use crate::CohError;
 use std::fs;
 
 /// Synchronise world model state from the Queen.
