@@ -1,24 +1,21 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: fs.rs v0.3
-// Date Modified: 2025-07-23
+// Filename: fs.rs v0.4
 // Author: Lukas Bower
+// Date Modified: 2026-12-31
 
 //! Minimal in-memory filesystem for Cohesix-9P.
-//! Supports a few synthetic nodes and dynamic service registration
-//! under `/srv` to mirror Plan 9 semantics.
 
-/// Dummy filesystem handle.
-use std::collections::HashMap;
-
+use alloc::{collections::BTreeMap, boxed::Box, vec::Vec, string::{String, ToString}, format};
 use crate::policy::{Access, SandboxPolicy};
+use core::sync::atomic::{AtomicU64, Ordering};
 
-/// Shared validator hook signature used by [`InMemoryFs`] and related modules.
+/// Shared validator hook signature.
 pub type ValidatorHook = dyn Fn(&'static str, String, String, u64) + Send + Sync;
 
 /// Simple in-memory filesystem tree.
 #[derive(Default)]
 pub struct InMemoryFs {
-    nodes: HashMap<String, Vec<u8>>, // path -> contents
+    nodes: BTreeMap<String, Vec<u8>>, // path -> contents
     validator_hook: Option<Box<ValidatorHook>>,
     policy: Option<SandboxPolicy>,
 }
@@ -29,15 +26,11 @@ impl InMemoryFs {
         let mut fs = Self::default();
         fs.nodes.insert("/srv/cohrole".into(), b"Unknown".to_vec());
         fs.nodes.insert("/srv/telemetry".into(), Vec::new());
-        fs.validator_hook = None;
-        fs.policy = None;
         fs
     }
 
-    /// Mount the filesystem at the provided path. This is a no-op stub.
-    pub fn mount(&self, mountpoint: &str) {
-        println!("[fs] mounting at {} (stub)", mountpoint);
-    }
+    /// Mount the filesystem at the provided path. No-op for inprocess builds.
+    pub fn mount(&self, _mountpoint: &str) {}
 
     /// Register a new service under `/srv`.
     pub fn register_service(&mut self, name: &str, info: &[u8]) {
@@ -63,12 +56,7 @@ impl InMemoryFs {
         if let Some(pol) = &self.policy {
             if !pol.allows(path, Access::Read) {
                 if let Some(hook) = &self.validator_hook {
-                    hook(
-                        "9p_access",
-                        path.to_string(),
-                        agent.to_string(),
-                        current_ts(),
-                    );
+                    hook("9p_access", path.to_string(), agent.to_string(), current_ts());
                 }
                 return None;
             }
@@ -81,24 +69,14 @@ impl InMemoryFs {
         if let Some(pol) = &self.policy {
             if !pol.allows(path, Access::Write) {
                 if let Some(hook) = &self.validator_hook {
-                    hook(
-                        "9p_access",
-                        path.to_string(),
-                        agent.to_string(),
-                        current_ts(),
-                    );
+                    hook("9p_access", path.to_string(), agent.to_string(), current_ts());
                 }
                 return;
             }
         }
         if path.starts_with("/persist") || path.starts_with("/srv/secure") {
             if let Some(hook) = &self.validator_hook {
-                hook(
-                    "9p_access",
-                    path.to_string(),
-                    agent.to_string(),
-                    current_ts(),
-                );
+                hook("9p_access", path.to_string(), agent.to_string(), current_ts());
             }
             return;
         }
@@ -106,10 +84,7 @@ impl InMemoryFs {
     }
 }
 
+static TS_COUNTER: AtomicU64 = AtomicU64::new(0);
 fn current_ts() -> u64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
+    TS_COUNTER.fetch_add(1, Ordering::Relaxed)
 }
