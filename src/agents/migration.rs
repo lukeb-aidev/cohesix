@@ -29,7 +29,11 @@ use crate::agent_transport::AgentTransport;
 use serde_json;
 
 impl Migrateable for AgentState {
-    fn migrate<T: AgentTransport>(&self, peer: &str, transport: &T) -> Result<MigrationStatus, CohError> {
+    fn migrate<T: AgentTransport>(
+        &self,
+        peer: &str,
+        transport: &T,
+    ) -> Result<MigrationStatus, CohError> {
         let tmpdir = std::env::var("TMPDIR").unwrap_or("/srv".to_string());
         let path = format!("{}/agent_state.json", tmpdir);
         std::fs::write(&path, serde_json::to_vec(self)?)?;
@@ -74,7 +78,7 @@ pub fn migrate(
     push: impl Fn(&str) -> Result<(), CohError>,
     stop: impl Fn(&str) -> Result<(), CohError>,
 ) -> Result<(), CohError> {
-    let state = fetch(agent_id)?;
+    let _state = fetch(agent_id)?;
     push(agent_id)?;
     stop(agent_id)?;
     fs::remove_dir_all(format!("/srv/agents/{agent_id}"))?;

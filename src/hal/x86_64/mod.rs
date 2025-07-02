@@ -18,10 +18,11 @@
 // Functions log actions and return `Ok(())` on success.
 // ─────────────────────────────────────────────────────────────
 
-use crate::prelude::*;
 #[allow(unsafe_code)]
 #[warn(missing_docs)]
-use log::{debug, info};
+use log::debug;
+#[cfg(target_os = "none")]
+use log::info;
 
 /// Allocate page tables and enable paging.
 ///
