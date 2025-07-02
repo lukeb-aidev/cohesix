@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v1.00
 // Author: Lukas Bower
-// Date Modified: 2026-12-31
+// Date Modified: 2025-07-02
 
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
@@ -2506,7 +2506,7 @@
 
 ## [v0.379] - 2026-12-31
 ### Changed
-- Removed `anyhow` crate and replaced with `CohError` across workspace.
+- Error handling standardized on `CohError` across workspace.
 
 
 ## [v0.380] - 2026-12-31
@@ -2520,8 +2520,12 @@
 
 ## [v0.382] - 2026-12-31
 ### Changed
-- Replaced `anyhow::Context` usage in `src/runtime/loader.rs` with manual `CohError` mapping.
+- Manual error mapping for loader to remove context dependencies.
 
 ## [v0.383] - 2026-12-31
 ### Removed
 - SDL2 joystick module and related feature flags.
+
+## [v0.384] - 2025-07-02
+### Removed
+- Purged obsolete error handling references from documentation and SBOMs.
