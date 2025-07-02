@@ -24,7 +24,7 @@ struct ValidationReport {
 }
 
 /// Validate a worker simulation trace and store a report.
-pub fn validate_trace(path: &str, worker: &str) -> anyhow::Result<()> {
+pub fn validate_trace(path: &str, worker: &str) -> Result<()> {
     let data = fs::read_to_string(path)?;
     let trace: TiltTrace = serde_json::from_str(&data)?;
     println!("[validator] Loaded trace: offset={} angle={}", trace._offset, trace.angle);

@@ -4,6 +4,7 @@
 // Date Modified: 2026-01-27
 
 use clap::Parser;
+use cohesix::{CohError};
 use cohesix::trace::recorder::event;
 use cohesix_9p::{FsConfig, FsServer};
 
@@ -21,7 +22,7 @@ struct Args {
     port: u16,
 }
 
-fn main() -> anyhow::Result<()> {
+fn main() -> Result<(), CohError> {
     let args = Args::parse();
     let cfg = FsConfig {
         root: args.root.clone().into(),

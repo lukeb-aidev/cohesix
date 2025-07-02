@@ -4,6 +4,7 @@
 // Author: Lukas Bower
 
 use crate::prelude::*;
+use crate::{coh_bail, coh_error, CohError};
 /// CLI module for Coh_CC compiler. Exports argument parser and main entry.
 
 pub mod args;
@@ -20,7 +21,7 @@ use std::env;
 use crate::coh_cc::ir::schema::load_ir_from_file;
 
 /// Entry point for the CLI. Parses arguments, reads IR, dispatches codegen, and writes output.
-pub fn run() -> anyhow::Result<()> {
+pub fn run() -> Result<(), CohError> {
     let mut args: Vec<String> = env::args().collect();
     let exe = Path::new(&args[0])
         .file_name()
@@ -53,12 +54,12 @@ pub fn run() -> anyhow::Result<()> {
             println!("Generated {} (timeout: {} ms)", output_path, timeout);
         }
         "cohtrace" => {
-            cohtrace::run_cohtrace(&remaining).map_err(anyhow::Error::msg)?;
+            cohtrace::run_cohtrace(&remaining).map_err(|e| coh_error!("{e}"))?;
         }
         "cohcap" => {
             let status = Command::new("/usr/bin/cohcap").args(&remaining).status()?;
             if !status.success() {
-                anyhow::bail!("cohcap exited with {:?}", status.code());
+                coh_bail!("cohcap exited with {:?}", status.code());
             }
         }
         other => {

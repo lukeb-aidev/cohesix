@@ -4,6 +4,7 @@
 // Date Modified: 2025-07-21
 
 use crate::prelude::*;
+use crate::CohError;
 use clap::Parser;
 use cohesix::coh_cc::{
     backend::registry::get_backend,
@@ -17,7 +18,7 @@ use cohesix::telemetry::trace::init_panic_hook;
 use std::path::Path;
 
 /// Entry point for the cohcc binary.
-pub fn main_entry() -> anyhow::Result<()> {
+pub fn main_entry() -> Result<(), CohError> {
     let cli = Cli::parse();
     if cli.sandbox_info {
         println!(

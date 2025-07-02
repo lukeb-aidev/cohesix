@@ -4,6 +4,7 @@
 // Date Modified: 2025-07-18
 
 use crate::prelude::*;
+use crate::CohError;
 use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
@@ -40,7 +41,7 @@ fn append_log(line: &str) -> std::io::Result<()> {
     Ok(())
 }
 
-pub fn load_ir_from_file(path: &Path) -> anyhow::Result<IRFunction> {
+pub fn load_ir_from_file(path: &Path) -> Result<IRFunction, CohError> {
     let mut data = String::new();
     fs::File::open(path)?.read_to_string(&mut data)?;
     let ir: IRFunction = serde_json::from_str(&data)?;

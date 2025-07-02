@@ -4,6 +4,7 @@
 // Date Modified: 2025-07-21
 
 use cohfuzz::fuzzer::TraceFuzzer;
+use cohesix::CohError;
 use std::path::PathBuf;
 use clap::Parser;
 
@@ -17,7 +18,7 @@ struct Args {
     iterations: usize,
 }
 
-fn main() -> anyhow::Result<()> {
+fn main() -> Result<(), CohError> {
     let args = Args::parse();
     let fuzzer = TraceFuzzer::new(args.role);
     fuzzer.run(&args.input, args.iterations)?;

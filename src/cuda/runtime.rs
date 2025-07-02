@@ -6,6 +6,7 @@
 // Cohesix now always builds for UEFI, so CUDA runtime is unconditional.
 
 use crate::prelude::*;
+use crate::{coh_error, CohError};
 /// Runtime CUDA integration using dynamic loading of `libcuda.so`.
 /// Falls back gracefully if no CUDA driver is present.
 
@@ -108,11 +109,11 @@ impl CudaRuntime {
 
     /// Load a verified symbol from the CUDA library.
     #[cfg(not(target_os = "uefi"))]
-    pub fn get_symbol<T>(&self, name: &[u8]) -> anyhow::Result<Symbol<T>> {
+    pub fn get_symbol<T>(&self, name: &[u8]) -> Result<Symbol<T>, CohError> {
         let lib = self
             .lib
             .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("cuda library not loaded"))?;
+            .ok_or_else(|| coh_error!("cuda library not loaded"))?;
         let name_str = std::str::from_utf8(name).unwrap_or("");
         if !VALID_SYMBOLS.contains(&name_str) {
             validator::log_violation(RuleViolation {
@@ -121,14 +122,14 @@ impl CudaRuntime {
                 agent: "cuda".into(),
                 time: validator::timestamp(),
             });
-            return Err(anyhow::anyhow!("symbol not allowed"));
+            return Err(coh_error!("symbol not allowed"));
         }
-        unsafe { lib.get::<T>(name).map_err(|e| anyhow::anyhow!(e.to_string())) }
+        unsafe { lib.get::<T>(name).map_err(|e| coh_error!(e.to_string())) }
     }
 
     #[cfg(target_os = "uefi")]
-    pub fn get_symbol<T>(&self, _name: &[u8]) -> anyhow::Result<Symbol<T>> {
-        Err(anyhow::anyhow!("libloading disabled"))
+    pub fn get_symbol<T>(&self, _name: &[u8]) -> Result<Symbol<T>, CohError> {
+        Err(coh_error!("libloading disabled"))
     }
 
     /// Initialize the CUDA driver via verified FFI entry.

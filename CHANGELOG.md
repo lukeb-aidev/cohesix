@@ -2504,3 +2504,7 @@
 - Added `printk` module providing log-based stubs for `println!`, `eprintln!`,
   `print!`, and `dbg!` macros to support no_std builds.
 
+## [v0.379] - 2026-12-31
+### Changed
+- Removed `anyhow` crate and replaced with `CohError` across workspace.
+

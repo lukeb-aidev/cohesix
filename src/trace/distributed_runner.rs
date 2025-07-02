@@ -4,6 +4,7 @@
 // Date Modified: 2025-08-17
 
 use crate::prelude::*;
+use crate::CohError;
 /// Execute trace scenarios across multiple worker nodes and verify consistency.
 
 use std::collections::HashMap;
@@ -20,7 +21,7 @@ pub struct NodeCfg {
     pub url: String,
 }
 
-pub fn run(trace_file: &str, cfg: &[NodeCfg]) -> anyhow::Result<()> {
+pub fn run(trace_file: &str, cfg: &[NodeCfg]) -> Result<(), CohError> {
     let trace = fs::read_to_string(trace_file)?;
     let mut hashes: HashMap<String, Vec<u8>> = HashMap::new();
     for node in cfg {

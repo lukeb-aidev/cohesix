@@ -4,6 +4,7 @@
 // Date Modified: 2025-07-18
 
 use crate::prelude::*;
+use crate::{coh_bail, CohError};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -39,7 +40,7 @@ fn append_log(line: &str) -> std::io::Result<()> {
     Ok(())
 }
 
-fn hash_output(path: &Path) -> anyhow::Result<String> {
+fn hash_output(path: &Path) -> Result<String, CohError> {
     use sha2::{Digest, Sha256};
     let mut f = fs::File::open(path)?;
     let mut hasher = Sha256::new();
@@ -52,7 +53,7 @@ fn hash_output(path: &Path) -> anyhow::Result<String> {
     Ok(hex::encode(hasher.finalize()))
 }
 
-fn build_crate(dir: &Path, target: &str, release: bool, sysroot: &Path) -> anyhow::Result<PathBuf> {
+fn build_crate(dir: &Path, target: &str, release: bool, sysroot: &Path) -> Result<PathBuf, CohError> {
     let mut cmd = Command::new("cargo");
     cmd.arg("build");
     cmd.arg("--offline");
@@ -72,28 +73,28 @@ fn build_crate(dir: &Path, target: &str, release: bool, sysroot: &Path) -> anyho
     cmd.env("SYSROOT", sysroot);
     let status = cmd.status()?;
     if !status.success() {
-        anyhow::bail!("cargo build failed");
+        coh_bail!("cargo build failed");
     }
     let profile = if release { "release" } else { "debug" };
     let crate_name = dir.file_name().unwrap_or_else(|| std::ffi::OsStr::new("bin"));
     let out = dir.join("target").join(target).join(profile).join(crate_name);
     if out.with_extension("so").exists() || out.with_extension("dylib").exists() {
-        anyhow::bail!("dynamic libraries detected");
+        coh_bail!("dynamic libraries detected");
     }
     Ok(out)
 }
 
-pub fn main_entry() -> anyhow::Result<()> {
+pub fn main_entry() -> Result<(), CohError> {
     let cli = RustCli::parse();
     match cli.command {
         RustCommand::Build { crate_dir, target, release, sysroot } => {
             let dir = Path::new(&crate_dir);
             if !dir.join("Cargo.toml").exists() {
-                anyhow::bail!("Cargo.toml not found in crate directory");
+                coh_bail!("Cargo.toml not found in crate directory");
             }
             let sysroot_p = Path::new(&sysroot).canonicalize()?;
             if !sysroot_p.starts_with("/mnt/data") {
-                anyhow::bail!("sysroot must be under /mnt/data");
+                coh_bail!("sysroot must be under /mnt/data");
             }
             let out = build_crate(dir, &target, release, &sysroot_p)?;
             let hash = hash_output(&out)?;

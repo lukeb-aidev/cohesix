@@ -4,6 +4,7 @@
 // Date Modified: 2025-07-12
 
 use crate::prelude::*;
+use crate::{coh_error, CohError};
 /// Queen-to-Queen handshake and capability negotiation.
 //
 /// Each queen exposes its handshake files under
@@ -31,7 +32,7 @@ pub fn initiate(
     peer: &str,
     caps: &[String],
     kr: &Keyring,
-) -> anyhow::Result<()> {
+) -> Result<(), CohError> {
     fs::create_dir_all(format!("/srv/federation/state/{peer}"))?;
     let payload = Handshake {
         queen_id: me.into(),
@@ -51,14 +52,14 @@ pub fn initiate(
 }
 
 /// Verify an inbound handshake and return its contents.
-pub fn verify(peer: &str, _kr: &Keyring) -> anyhow::Result<Handshake> {
+pub fn verify(peer: &str, _kr: &Keyring) -> Result<Handshake, CohError> {
     let data = fs::read(format!("/srv/federation/state/{peer}/handshake.bin"))?;
     let sig = fs::read(format!("/srv/federation/state/{peer}/handshake.sig"))?;
     if Keyring::verify_peer(peer, &data, &sig)? {
         let payload: Handshake = serde_json::from_slice(&data)?;
         Ok(payload)
     } else {
-        Err(anyhow::anyhow!("signature mismatch"))
+        Err(coh_error!("signature mismatch"))
     }
 }
 

@@ -9,19 +9,19 @@
 /// and abstract trait for pluggable transport mechanisms.
 
 use std::fs;
-use anyhow::Result;
+use crate::CohError;
 
 /// Interface for sending agent state to a remote peer.
 pub trait AgentTransport {
     /// Send the given snapshot file to the named peer.
-    fn send_state(&self, agent_id: &str, peer: &str, path: &str) -> Result<()>;
+    fn send_state(&self, agent_id: &str, peer: &str, path: &str) -> Result<(), CohError>;
 }
 
 /// Simple filesystem transport used for local federation directories.
 pub struct FilesystemTransport;
 
 impl AgentTransport for FilesystemTransport {
-    fn send_state(&self, agent_id: &str, peer: &str, path: &str) -> Result<()> {
+    fn send_state(&self, agent_id: &str, peer: &str, path: &str) -> Result<(), CohError> {
         let data = fs::read(path)?;
         let dest_dir = format!("/srv/federation/state/{peer}/incoming");
         fs::create_dir_all(&dest_dir)?;

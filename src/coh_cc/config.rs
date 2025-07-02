@@ -4,6 +4,7 @@
 // Date Modified: 2025-07-18
 
 use crate::prelude::*;
+use crate::{coh_bail, CohError};
 use std::path::{Path, PathBuf};
 use clap::{Parser, Subcommand};
 
@@ -48,20 +49,20 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn from_cli(cli: &Cli) -> anyhow::Result<Self> {
+    pub fn from_cli(cli: &Cli) -> Result<Self, CohError> {
         let (target, sysroot) = match &cli.command {
             Command::Build { target, sysroot, .. } => (target.clone(), PathBuf::from(sysroot)),
         };
         let sysroot_canon = sysroot.canonicalize().unwrap_or(sysroot);
         if !sysroot_canon.starts_with("/mnt/data") {
-            anyhow::bail!("sysroot must be under /mnt/data");
+            coh_bail!("sysroot must be under /mnt/data");
         }
         let tc_canon = PathBuf::from(&cli.toolchain_dir).canonicalize().unwrap_or(PathBuf::from(&cli.toolchain_dir));
         if !tc_canon.starts_with("/mnt/data") {
-            anyhow::bail!("toolchain-dir must be under /mnt/data");
+            coh_bail!("toolchain-dir must be under /mnt/data");
         }
         if target.is_empty() {
-            anyhow::bail!("target must not be empty");
+            coh_bail!("target must not be empty");
         }
         Ok(Config { backend: cli.backend.clone(), trace: cli.trace, target, sysroot: sysroot_canon, toolchain_dir: tc_canon })
     }

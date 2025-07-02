@@ -4,6 +4,7 @@
 // Date Modified: 2025-07-21
 
 use clap::{Parser, Subcommand};
+use cohesix::CohError;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -35,7 +36,7 @@ fn append_summary(entry: &str) {
     }
 }
 
-fn cmd_list() -> anyhow::Result<()> {
+fn cmd_list() -> Result<(), CohError> {
     let base = Path::new("/srv/workers");
     if base.exists() {
         for ent in fs::read_dir(base)? {
@@ -49,7 +50,7 @@ fn cmd_list() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn cmd_push(worker_id: String, path: PathBuf) -> anyhow::Result<()> {
+fn cmd_push(worker_id: String, path: PathBuf) -> Result<(), CohError> {
     let dest = Path::new("/trace").join(&worker_id);
     fs::create_dir_all(&dest)?;
     fs::copy(&path, dest.join("sim.json"))?;
@@ -58,7 +59,7 @@ fn cmd_push(worker_id: String, path: PathBuf) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn main() -> anyhow::Result<()> {
+fn main() -> Result<(), CohError> {
     let cli = Cli::parse();
     match cli.cmd {
         Cmd::List => cmd_list()?,

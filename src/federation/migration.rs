@@ -12,7 +12,7 @@ use crate::prelude::*;
 use std::fs;
 
 /// Migrate an agent snapshot to the specified peer queen.
-pub fn migrate_agent(agent_id: &str, peer: &str) -> anyhow::Result<()> {
+pub fn migrate_agent(agent_id: &str, peer: &str) -> Result<()> {
     let src = format!("/mnt/snapshots/agent_{agent_id}.json");
     let data = fs::read(&src)?;
     let dest_dir = format!("/srv/federation/state/{peer}/incoming");
