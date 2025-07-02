@@ -2524,7 +2524,6 @@
 
 ## [v0.383] - 2026-12-31
 ### Removed
-- SDL2 joystick module and related feature flags.
 
 ## [v0.384] - 2025-07-02
 ### Removed
