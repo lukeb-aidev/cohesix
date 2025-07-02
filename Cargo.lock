@@ -361,7 +361,6 @@ dependencies = [
  "bitflags 2.9.1",
  "chrono",
  "clap",
- "cohesix-9p",
  "criterion",
  "curve25519-dalek 3.2.1",
  "cust",
@@ -398,6 +397,7 @@ dependencies = [
 name = "cohesix-9p"
 version = "0.1.0"
 dependencies = [
+ "cohesix",
  "crossbeam-channel",
  "log",
  "ninep",
@@ -415,6 +415,7 @@ name = "cohfuzz"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "cohesix",
  "rand 0.8.5",
  "serde",
  "serde_json",
@@ -794,6 +795,8 @@ checksum = "28dea519a9695b9977216879a3ebfddf92f1c08c05d984f8996aecd6ecdc811d"
 [[package]]
 name = "find_cuda_helper"
 version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f9f9e65c593dd01ac77daad909ea4ad17f0d6d1776193fc8ea766356177abdad"
 dependencies = [
  "glob",
 ]
@@ -1334,6 +1337,8 @@ dependencies = [
 [[package]]
 name = "memchr"
 version = "2.7.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32a282da65faaf38286cf3be983213fcf1d2e2a58700e808f83f4ea9a4804bc0"
 
 [[package]]
 name = "mint"
@@ -1371,6 +1376,8 @@ dependencies = [
 [[package]]
 name = "ninep"
 version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c9d2cbf39c99718aa533c924295a796847b5f30befc6f3c015fa4965cce4c8a0"
 dependencies = [
  "bitflags 2.9.1",
 ]
@@ -1700,6 +1707,8 @@ checksum = "90bde5296fc891b0cef12a6d03ddccc162ce7b2aff54160af9338f8d40df6d19"
 [[package]]
 name = "rand_core"
 version = "0.6.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ec0be4795e2f6a28069bec0b5ff3e2ac9bafc99e6a9a7dc3547996c5c816922c"
 dependencies = [
  "getrandom 0.2.16",
 ]
@@ -1922,6 +1931,7 @@ name = "scenario_compiler"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "cohesix",
  "serde",
  "serde_json",
  "toml",
@@ -1932,7 +1942,6 @@ name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
-
 
 [[package]]
 name = "semver"
@@ -2316,12 +2325,6 @@ dependencies = [
  "num-traits",
  "rustc_version",
 ]
-
-[[package]]
-name = "version-compare"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "579a42fc0b8e0c63b76519a339be31bed574929511fa53c1a3acae26eb258f29"
 
 [[package]]
 name = "version_check"
