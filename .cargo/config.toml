@@ -1,6 +1,8 @@
 [source.crates-io]
-replace-with = "vendored-sources"
+# Use crates.io directly during CI builds. Vendor directory may be
+# incomplete in some environments.
 
+# vendor support remains optional; path retained for local offline builds
 [source.vendored-sources]
 directory = "vendor"
 

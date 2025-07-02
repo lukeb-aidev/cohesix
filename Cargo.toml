@@ -53,6 +53,7 @@ which = "5.0"
 members = [
     "cohesix-9p",
     "cohesix-secure9p",
+    "third_party/ninep_portable",
     "tools/cohfuzz",
     "tools/scenario_compiler",
     "tools/cli",

@@ -7,7 +7,6 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
 extern crate alloc;
-use crate::CohError;
 
 pub mod printk;
 
@@ -216,7 +215,7 @@ impl core::fmt::Display for StringError {
 
 impl core::error::Error for StringError {}
 
-pub(crate) fn new_err(msg: impl Into<String>) -> CohError {
+pub fn new_err(msg: impl Into<String>) -> CohError {
     alloc::boxed::Box::new(StringError(msg.into()))
 }
 
