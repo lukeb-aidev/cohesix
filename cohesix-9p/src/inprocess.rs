@@ -1,73 +1,41 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: inprocess.rs v0.1
+// Filename: inprocess.rs v0.2
 // Author: Lukas Bower
 // Date Modified: 2026-12-31
 
-use crossbeam_channel::{Receiver, Sender, unbounded};
-use ninep::Stream;
-use std::io::{self, Read, Write};
-use std::sync::Arc;
+#![cfg(feature = "inprocess")]
 
-/// In-process byte stream implemented with crossbeam channels.
+use alloc::{collections::VecDeque, sync::Arc, vec::Vec};
+use core::cell::RefCell;
+
+/// In-process byte stream for `no_std` targets.
 #[derive(Clone)]
 pub struct InProcessStream {
-    rx: Receiver<Vec<u8>>,
-    tx: Sender<Vec<u8>>,
-    buffer: Arc<std::sync::Mutex<Vec<u8>>>,
+    rx: Arc<RefCell<VecDeque<u8>>>,
+    tx: Arc<RefCell<VecDeque<u8>>>,
 }
 
 impl InProcessStream {
     /// Create paired streams for bidirectional communication.
     pub fn pair() -> (Self, Self) {
-        let (a_tx, a_rx) = unbounded();
-        let (b_tx, b_rx) = unbounded();
+        let a_rx = Arc::new(RefCell::new(VecDeque::new()));
+        let b_rx = Arc::new(RefCell::new(VecDeque::new()));
         (
-            Self {
-                rx: a_rx,
-                tx: b_tx.clone(),
-                buffer: Arc::new(std::sync::Mutex::new(Vec::new())),
-            },
-            Self {
-                rx: b_rx,
-                tx: a_tx.clone(),
-                buffer: Arc::new(std::sync::Mutex::new(Vec::new())),
-            },
+            Self { rx: a_rx.clone(), tx: b_rx.clone() },
+            Self { rx: b_rx, tx: a_rx },
         )
     }
-}
 
-impl Read for InProcessStream {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let mut local = self.buffer.lock().unwrap();
-        if local.is_empty() {
-            match self.rx.recv() {
-                Ok(data) => *local = data,
-                Err(_) => return Ok(0),
-            }
-        }
-        let n = buf.len().min(local.len());
-        buf[..n].copy_from_slice(&local[..n]);
-        local.drain(..n);
-        Ok(n)
-    }
-}
-
-impl Write for InProcessStream {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let data = buf.to_vec();
-        self.tx
-            .send(data)
-            .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "closed"))?;
-        Ok(buf.len())
+    /// Send bytes to the remote end.
+    pub fn send(&self, data: &[u8]) {
+        self.tx.borrow_mut().extend(data);
     }
 
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
-impl Stream for InProcessStream {
-    fn try_clone(&self) -> ninep::Result<Self> {
-        Ok(self.clone())
+    /// Receive bytes from the remote end, returning number of bytes read.
+    pub fn recv(&self, out: &mut Vec<u8>) -> usize {
+        let mut buf = self.rx.borrow_mut();
+        let n = buf.len();
+        out.extend(buf.drain(..));
+        n
     }
 }

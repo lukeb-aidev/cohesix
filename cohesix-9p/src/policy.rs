@@ -1,8 +1,10 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: policy.rs v0.1
+// Filename: policy.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-07-23
+// Date Modified: 2026-12-31
 
+use alloc::vec::Vec;
+use alloc::string::String;
 use serde::Deserialize;
 
 /// Access type for sandbox policy checks.
@@ -25,10 +27,15 @@ pub struct SandboxPolicy {
 
 impl SandboxPolicy {
     /// Load policy from a JSON file containing `read` and `write` arrays.
+    #[cfg(feature = "posix")]
     pub fn from_file(path: &std::path::Path) -> std::io::Result<Self> {
         let txt = std::fs::read_to_string(path)?;
-        serde_json::from_str(&txt)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+        Self::from_str(&txt).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+    }
+
+    /// Parse policy from a JSON string.
+    pub fn from_str(data: &str) -> Result<Self, serde_json::Error> {
+        serde_json::from_str(data)
     }
 
     /// Determine if the given access is allowed on `path`.

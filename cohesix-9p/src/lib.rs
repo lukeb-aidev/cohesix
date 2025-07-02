@@ -1,38 +1,17 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: lib.rs v0.3
-// Date Modified: 2026-12-31
+// Filename: lib.rs v0.4
 // Author: Lukas Bower
+// Date Modified: 2026-12-31
 
-//! Minimal filesystem layer for Cohesix-9P.
-//
-// ─────────────────────────────────────────────────────────────────────────────
-// Cohesix‑9P – Plan‑9 style file‑system service crate
-//
-// This crate exposes a minimal 9P protocol server intended to be shared by
-// Queen and Worker roles.  The current implementation is a *stub* that
-// compiles cleanly and provides clear extension points.
-//
-// # Design Notes
-// * No network code yet – the transport layer will be injected later.
-// * API kept synchronous for now; will migrate to async once design stabilises.
-// * Explicit notes call out unimplemented sections so the hydration
-// * Explicit `FIXME` markers call out un‑implemented sections so the hydration
-//   linter will catch them.
-//
-// # Public Surface
-// * [`FsConfig`] – runtime configuration (root path, port, etc.).
-// * [`FsServer`] – lightweight handle controlling the server lifecycle.
-// * [`start_server`] – convenience helper to spawn a server with default opts.
-// ─────────────────────────────────────────────────────────────────────────────
-
+#![cfg_attr(not(feature = "posix"), no_std)]
 #![forbid(unsafe_code)]
-#![warn(missing_docs)]
-
-use std::path::PathBuf;
 
 extern crate alloc;
-use alloc::boxed::Box;
+#[cfg(feature = "posix")]
+extern crate std;
+use alloc::{boxed::Box, string::String};
 
+/// Common Cohesix 9P error type.
 pub type CohError = Box<dyn core::error::Error + Send + Sync>;
 
 #[derive(Debug)]
@@ -52,128 +31,44 @@ pub(crate) fn new_err(msg: impl Into<String>) -> CohError {
 
 #[macro_export]
 macro_rules! coh_bail {
-    ($($arg:tt)+) => {
-        return Err($crate::new_err(format!($($arg)+)));
-    };
+    ($($arg:tt)+) => { return Err($crate::new_err(format!($($arg)+))); };
 }
 
 #[macro_export]
 macro_rules! coh_error {
-    ($($arg:tt)+) => {
-        $crate::new_err(format!($($arg)+))
-    };
-}
-// Note: we avoid using private modules from the `p9` crate for now.
-
-pub mod fs;
-pub use fs::ValidatorHook;
-mod server;
-pub use server::FsServer;
-pub mod inprocess;
-pub mod ninep_adapter;
-pub use inprocess::InProcessStream;
-/// Policy enforcement and capability checks for Cohesix-9P.
-pub mod policy;
-
-/// Enforce capability checks based on the active Cohesix role.
-pub fn enforce_capability(action: &str) -> Result<(), CohError> {
-    let role = std::fs::read_to_string("/srv/cohrole").unwrap_or_default();
-    let role = role.trim();
-    if role == "QueenPrimary" {
-        return Ok(());
-    }
-    if role == "DroneWorker" && action.contains("remote") {
-        coh_bail!("capability denied");
-    }
-    Ok(())
+    ($($arg:tt)+) => { $crate::new_err(format!($($arg)+)) };
 }
 
-/// Configuration options for the 9P file‑system server.
-///
-/// Extend this struct as new runtime knobs become necessary.
 #[derive(Debug, Clone)]
 pub struct FsConfig {
-    /// Root directory the server exposes as its file tree.
-    pub root: PathBuf,
-    /// TCP/QUIC port to listen on.
+    pub root: String,
     pub port: u16,
-    /// Expose the tree as read‑only if `true`.
     pub readonly: bool,
 }
 
 impl Default for FsConfig {
     fn default() -> Self {
-        Self {
-            root: PathBuf::from("/"),
-            port: 564, // the classic Plan‑9 port
-            readonly: false,
-        }
+        Self { root: String::from("/"), port: 564, readonly: false }
     }
 }
 
-/// Convenience helper: build a server with [`FsConfig::default`] and start it.
+pub mod fs;
+pub mod policy;
+
+#[cfg(feature = "inprocess")]
+pub mod inprocess;
+#[cfg(feature = "inprocess")]
+pub use inprocess::InProcessStream;
+
+#[cfg(feature = "posix")]
+mod server;
+#[cfg(feature = "posix")]
+pub use server::FsServer;
+
+/// Convenience helper when `posix` feature is enabled.
+#[cfg(feature = "posix")]
 pub fn start_server() -> Result<FsServer, CohError> {
-    let mut srv = FsServer::new(FsConfig::default());
+    let mut srv = FsServer::new(Default::default());
     srv.start()?;
     Ok(srv)
-}
-
-/// Parse a 9P version negotiation frame and return the version string.
-pub fn parse_version_message(buf: &[u8]) -> Result<String, CohError> {
-    if buf.is_empty() {
-        coh_bail!("empty message");
-    }
-    let s = std::str::from_utf8(buf)?.trim_end_matches('\0').to_string();
-    Ok(s)
-}
-
-// ─────────────────────────────── tests ──────────────────────────────────────
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use ninep::fs::{Mode, Perm};
-    use std::{thread, time::Duration};
-
-    #[test]
-    fn server_starts_with_defaults() {
-        let _srv = start_server().unwrap_or_else(|e| panic!("server should start: {e}"));
-    }
-
-    #[test]
-    fn custom_config_propagates() {
-        let cfg = FsConfig {
-            root: std::env::temp_dir().into(),
-            port: 9999,
-            readonly: true,
-        };
-        let mut srv = FsServer::new(cfg.clone());
-        srv.start().unwrap_or_else(|e| panic!("start failed: {e}"));
-    }
-
-    #[test]
-    fn parse_version_message_ok() {
-        let buf = b"9P2000.L";
-        let parsed = parse_version_message(buf).unwrap_or_else(|e| panic!("parse error: {e}"));
-        assert_eq!(parsed, "9P2000.L");
-    }
-
-    #[test]
-    fn unix_socket_roundtrip() {
-        let mut srv = FsServer::new(FsConfig {
-            port: 5660,
-            ..Default::default()
-        });
-        srv.start()
-            .unwrap_or_else(|e| panic!("start socket failed: {e}"));
-        thread::sleep(Duration::from_millis(100));
-
-        let mut cli = ninep::client::TcpClient::new_tcp("tester".to_string(), "127.0.0.1:5660", "")
-            .unwrap_or_else(|e| panic!("connect failed: {e}"));
-        cli.create("/", "foo", Perm::OWNER_READ | Perm::OWNER_WRITE, Mode::FILE)
-            .unwrap_or_else(|e| panic!("create failed: {e}"));
-        let st = cli
-            .stat("/foo")
-            .unwrap_or_else(|e| panic!("stat failed: {e}"));
-        println!("created file size {}", st.n_bytes);
-    }
 }

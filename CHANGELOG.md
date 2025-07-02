@@ -2534,3 +2534,7 @@
 - Restored CRLF line endings for `vendor/generic-array/build.rs` and
   updated `.gitattributes` to treat vendor files as binary to prevent
   checksum mismatches during `cargo build --locked`.
+
+## [v0.386] - 2026-12-31
+### Changed
+- Reworked `cohesix-9p` crate for UEFI. POSIX networking now behind the `posix` feature.

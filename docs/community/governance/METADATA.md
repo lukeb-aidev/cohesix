@@ -177,8 +177,8 @@
 | scripts/load_arch_config.sh | v0.1 | 2026-07-25 | COMMUNITY | | |
 | scripts/build_busybox.sh | v0.7 | 2026-11-17 | COMMUNITY | | |
 | metadata.json | v0.1 | 2025-07-24 | COMMUNITY | | |
-| Cargo.toml | v0.40 | 2026-12-31 | COMMUNITY | | |
-| cohesix-9p/Cargo.toml | v0.3 | 2026-12-31 | COMMUNITY | | |
+| Cargo.toml | v0.41 | 2026-12-31 | COMMUNITY | | |
+| cohesix-9p/Cargo.toml | v0.4 | 2026-12-31 | COMMUNITY | | |
 | cohesix-secure9p/Cargo.toml | v0.2 | 2026-12-31 | COMMUNITY | | |
 | cohesix-secure9p/src/secure_stream.rs | v0.1 | 2026-12-31 | COMMUNITY | | |
 | tools/cli/Cargo.toml | v0.2 | 2025-08-16 | COMMUNITY | | |
