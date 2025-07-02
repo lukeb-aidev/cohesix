@@ -38,7 +38,6 @@ rmp-serde = "1"
 chrono = "0.4"
 serde_yaml = { version = "0.9" }
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
-sdl2 = { version = "0.37", optional = true }
 toml = { version = "0.8" }
 
 [dependencies.curve25519-dalek]
@@ -75,7 +74,6 @@ busybox_client = []
 busybox_build = []
 busybox = ["busybox_client", "busybox_build"]
 no-cuda = []
-joystick = ["sdl2"]
 kernel_bin = []
 uefi = []
 # minimal_uefi: ensures only firmware-safe crates are compiled

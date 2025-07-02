@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: agent_scenario.rs v0.2
+// Filename: agent_scenario.rs v0.3
 // Author: Lukas Bower
-// Date Modified: 2026-09-22
+// Date Modified: 2026-12-31
 
 use crate::prelude::*;
 use crate::{coh_error, CohError};
@@ -17,8 +17,6 @@ use serde::Deserialize;
 
 use crate::agents::runtime::AgentRuntime;
 use crate::cohesix_types::Role;
-#[cfg(feature = "joystick")]
-use crate::physical::joystick;
 use crate::physical::sensors;
 use crate::trace::recorder;
 
@@ -68,8 +66,6 @@ impl ScenarioEngine {
             };
             runtime.spawn(&agent.id, role, &args)?;
             let _ = sensors::read_temperature(&agent.id);
-            #[cfg(feature = "joystick")]
-            let _ = joystick::read_state(&agent.id);
         }
         fs::write(format!("/srv/scenario_result/{}", cfg.id), "ok")?;
         recorder::event("scenario", "end", &cfg.id);
