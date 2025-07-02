@@ -17,7 +17,7 @@ use crate::agent_migration::{Migrateable, MigrationStatus};
 use crate::agent_transport::AgentTransport;
 
 impl Migrateable for BaseAgent {
-    fn migrate<T: AgentTransport>(&self, peer: &str, transport: &T) -> Result<MigrationStatus> {
+    fn migrate<T: AgentTransport>(&self, peer: &str, transport: &T) -> Result<MigrationStatus, CohError> {
         let base_tmp = std::env::var("TMPDIR").unwrap_or_else(|_| "/srv".to_string());
         let tmp = format!("{}/{}_base.json", base_tmp, self.id);
         let data = serde_json::json!({"id": self.id});

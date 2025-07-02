@@ -23,7 +23,7 @@ struct ValidationReport {
 }
 
 /// Validate a worker simulation trace and store a report.
-pub fn validate_trace(path: &str, worker: &str) -> Result<()> {
+pub fn validate_trace(path: &str, worker: &str) -> Result<(), CohError> {
     let data = fs::read_to_string(path)?;
     let trace: TiltTrace = serde_json::from_str(&data)?;
     println!(

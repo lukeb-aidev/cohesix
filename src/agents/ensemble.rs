@@ -55,7 +55,7 @@ use crate::agent_transport::AgentTransport;
 use serde_json;
 
 impl Migrateable for EnsembleAgent {
-    fn migrate<T: AgentTransport>(&self, peer: &str, transport: &T) -> Result<MigrationStatus> {
+    fn migrate<T: AgentTransport>(&self, peer: &str, transport: &T) -> Result<MigrationStatus, CohError> {
         let base_tmp = std::env::var("TMPDIR").unwrap_or_else(|_| "/srv".to_string());
         let tmp = format!("{}/{}_ensemble.json", base_tmp, self.id);
         let data = serde_json::to_string(&self.members.len()).unwrap_or_default();
