@@ -358,7 +358,7 @@ else
 fi
 
 log "🧱 Building all Rust binaries in workspace (CLI, tools, validator, shell, etc)..."
-FEATURES="cuda,std,rapier,physics,busybox,no-cuda,joystick,secure9p,entropy"
+FEATURES="cuda,std,rapier,physics,busybox,no-cuda,secure9p,entropy"
 if [ "$SEL4_ENTRY" = 1 ]; then
   FEATURES+=",sel4,kernel_bin,minimal_uefi"
 fi

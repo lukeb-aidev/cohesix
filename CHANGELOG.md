@@ -2521,3 +2521,7 @@
 ## [v0.382] - 2026-12-31
 ### Changed
 - Replaced `anyhow::Context` usage in `src/runtime/loader.rs` with manual `CohError` mapping.
+
+## [v0.383] - 2026-12-31
+### Removed
+- SDL2 joystick module and related feature flags.
