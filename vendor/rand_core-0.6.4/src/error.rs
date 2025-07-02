@@ -10,6 +10,7 @@
 
 use core::fmt;
 use core::num::NonZeroU32;
+use core::convert::TryInto; // ensure explicit usize/i32 conversions
 
 #[cfg(feature = "std")] use std::boxed::Box;
 
@@ -88,11 +89,13 @@ impl Error {
         #[cfg(feature = "std")]
         {
             if let Some(e) = self.inner.downcast_ref::<std::io::Error>() {
-                return e.raw_os_error();
+                // raw_os_error may yield usize on some targets
+                return e.raw_os_error().map(|c| c.try_into().unwrap());
             }
         }
         match self.code() {
-            Some(code) if u32::from(code) < Self::INTERNAL_START => Some(u32::from(code) as i32),
+            // convert NonZeroU32 code to i32 when safe
+            Some(code) if u32::from(code) < Self::INTERNAL_START => Some(u32::from(code).try_into().unwrap()),
             _ => None,
         }
     }
@@ -195,7 +198,17 @@ impl From<Error> for std::io::Error {
     #[inline]
     fn from(error: Error) -> Self {
         if let Some(code) = error.raw_os_error() {
-            std::io::Error::from_raw_os_error(code)
+            // UEFI expects usize for from_raw_os_error, others use i32
+            #[cfg(target_os = "uefi")]
+            {
+                // i32 -> usize conversion for UEFI
+                std::io::Error::from_raw_os_error(usize::try_from(code).unwrap())
+            }
+            #[cfg(not(target_os = "uefi"))]
+            {
+                // non-UEFI platforms accept i32 directly
+                std::io::Error::from_raw_os_error(code)
+            }
         } else {
             std::io::Error::new(std::io::ErrorKind::Other, error)
         }
