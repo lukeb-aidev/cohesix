@@ -245,7 +245,7 @@
 | src/cloud/orchestrator.rs | v0.8 | 2026-12-31 | COMMUNITY | | |
 | src/lib.rs | v1.12 | 2026-12-31 | COMMUNITY | | |
 | src/printk.rs | v0.1 | 2026-12-31 | COMMUNITY | | |
-| src/runtime/loader.rs | v0.3 | 2026-12-31 | COMMUNITY | | |
+| src/runtime/loader.rs | v0.4 | 2026-12-31 | COMMUNITY | | |
 | src/plan9/namespace.rs | v0.6 | 2026-10-28 | COMMUNITY | | |
 | src/validator/syscall.rs | v0.5 | 2026-11-11 | COMMUNITY | | |
 | tests/test_loader.rs | v0.1 | 2025-09-26 | COMMUNITY | | |

@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: loader.rs v0.3
+// Filename: loader.rs v0.4
 // Author: Lukas Bower
 // Date Modified: 2026-12-31
 
@@ -31,7 +31,8 @@ pub fn load_and_run(path: &str) -> Result<(), CohError> {
 
     let exe_bytes = &data[5..];
     let tmp_path = "/srv/coh_exec.bin";
-    fs::write(tmp_path, exe_bytes).context("write temp exe")?;
+    fs::write(tmp_path, exe_bytes)
+        .map_err(|e| coh_error!("write temp exe: {e}"))?;
 
     let status = Command::new(tmp_path)
         .status()
