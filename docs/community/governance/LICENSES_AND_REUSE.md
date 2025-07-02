@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: LICENSES_AND_REUSE.md v1.3
+// Filename: LICENSES_AND_REUSE.md v1.4
 // Author: Lukas Bower
-// Date Modified: 2026-12-31
+// Date Modified: 2025-07-02
 
 # Licensing and OSS Reuse
 
@@ -25,7 +25,6 @@ The table below lists current third-party packages used by Cohesix.
 
 |------|---------|--------------|---------|---------|
 | sha2 | 0.10 | MIT OR Apache-2.0 | Hashing for integrity checks | https://crates.io/crates/sha2 |
-| anyhow | 1.0 | MIT OR Apache-2.0 | Error handling in Rust | https://crates.io/crates/anyhow |
 | env_logger | 0.11.7 | MIT OR Apache-2.0 | Structured logging | https://crates.io/crates/env_logger |
 | log | 0.4 | MIT OR Apache-2.0 | Logging facade | https://crates.io/crates/log |
 | clap | 4.5.4 | MIT OR Apache-2.0 | CLI argument parsing | https://crates.io/crates/clap |
@@ -51,7 +50,6 @@ The table below lists current third-party packages used by Cohesix.
 | Name | Version | SPDX | License File | CVEs |
 |------|---------|------|-------------|------|
 | sha2 | 0.10 | MIT OR Apache-2.0 | LICENSES/sha2-0.10.txt |  |
-| anyhow | 1.0 | MIT OR Apache-2.0 | LICENSES/anyhow-1.0.txt |  |
 | tokio | 1 | MIT | N/A |  |
 | toybox | 0.9.6 | 0BSD | N/A |  |
 | sbase | 0.6 | MIT | N/A |  |
