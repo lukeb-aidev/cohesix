@@ -4,6 +4,7 @@
 // Date Modified: 2025-12-09
 
 use crate::prelude::*;
+use crate::{coh_bail, CohError};
 use std::path::{Path, PathBuf};
 
 use crate::coh_cc::logging;
@@ -14,10 +15,10 @@ pub struct Toolchain {
 }
 
 impl Toolchain {
-    pub fn new<P: Into<PathBuf>>(base: P) -> anyhow::Result<Self> {
+    pub fn new<P: Into<PathBuf>>(base: P) -> Result<Self, CohError> {
         let base = base.into();
         if base.as_os_str().is_empty() {
-            anyhow::bail!("toolchain directory cannot be empty");
+            coh_bail!("toolchain directory cannot be empty");
         }
         let canon = base.canonicalize().unwrap_or(base.clone());
         let allowed_root =
@@ -26,7 +27,7 @@ impl Toolchain {
             .canonicalize()
             .unwrap_or_else(|_| PathBuf::from(allowed_root));
         if !canon.starts_with(&allowed_root) {
-            anyhow::bail!(
+            coh_bail!(
                 "toolchain directory must be under {}",
                 allowed_root.display()
             );
@@ -34,12 +35,12 @@ impl Toolchain {
         Ok(Toolchain { base: canon })
     }
 
-    pub fn get_tool_path(&self, tool_name: &str) -> anyhow::Result<PathBuf> {
+    pub fn get_tool_path(&self, tool_name: &str) -> Result<PathBuf, CohError> {
         if tool_name.trim().is_empty() {
-            anyhow::bail!("tool name cannot be empty");
+            coh_bail!("tool name cannot be empty");
         }
         if tool_name.contains('/') || tool_name.contains("..") {
-            anyhow::bail!("invalid tool name");
+            coh_bail!("invalid tool name");
         }
         let path = self.base.join(tool_name);
         logging::log(
@@ -54,10 +55,10 @@ impl Toolchain {
     }
 
     /// Return the path to `cargo` ensuring it exists and resides in the toolchain.
-    pub fn get_cargo(&self) -> anyhow::Result<PathBuf> {
+    pub fn get_cargo(&self) -> Result<PathBuf, CohError> {
         let path = self.get_tool_path("cargo")?;
         if !path.exists() {
-            anyhow::bail!("cargo not found in toolchain");
+            coh_bail!("cargo not found in toolchain");
         }
         Ok(path)
     }

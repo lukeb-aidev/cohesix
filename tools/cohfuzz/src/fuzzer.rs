@@ -5,6 +5,7 @@
 
 use rand::seq::SliceRandom;
 use rand::Rng;
+use cohesix::CohError;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
@@ -24,7 +25,7 @@ impl TraceFuzzer {
         Self { role }
     }
 
-    pub fn run(&self, input: &Path, iterations: usize) -> anyhow::Result<()> {
+    pub fn run(&self, input: &Path, iterations: usize) -> Result<(), CohError> {
         let data = fs::read_to_string(input)?;
         let orig: Vec<TraceEvent> = serde_json::from_str(&data)?;
         for i in 0..iterations {

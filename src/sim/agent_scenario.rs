@@ -4,6 +4,7 @@
 // Date Modified: 2026-09-22
 
 use crate::prelude::*;
+use crate::{coh_error, CohError};
 /// Scenario engine for automated agent tests.
 //
 /// Reads a scenario configuration from `/boot/scenario.json`, spawns agents
@@ -38,14 +39,14 @@ struct AgentSpec {
 pub struct ScenarioEngine;
 
 impl ScenarioEngine {
-    pub fn run(path: &Path) -> anyhow::Result<()> {
+    pub fn run(path: &Path) -> Result<(), CohError> {
         let iso = if Path::new("out/cohesix_grub.iso").exists() {
             Path::new("out/cohesix_grub.iso")
         } else {
             Path::new("out/cohesix.iso")
         };
         if !iso.exists() {
-            return Err(anyhow::anyhow!(
+            return Err(coh_error!(
                 "boot ISO not found; expected {} or out/cohesix.iso",
                 iso.display()
             ));

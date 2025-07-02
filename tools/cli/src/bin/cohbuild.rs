@@ -4,6 +4,7 @@
 // Date Modified: 2025-07-21
 
 use clap::Parser;
+use cohesix::CohError;
 use std::fs;
 use std::path::PathBuf;
 
@@ -18,7 +19,7 @@ struct Args {
     output: PathBuf,
 }
 
-fn main() -> anyhow::Result<()> {
+fn main() -> Result<(), CohError> {
     let args = Args::parse();
     let mode = std::env::var("COH_MODE").unwrap_or_else(|_| "prod".into());
     let src = fs::read(&args.input)?;

@@ -30,7 +30,7 @@
 
 use std::path::PathBuf;
 
-use anyhow::{Result, bail};
+use cohesix::{coh_bail, CohError};
 // Note: we avoid using private modules from the `p9` crate for now.
 
 pub mod fs;
@@ -44,14 +44,14 @@ pub use inprocess::InProcessStream;
 pub mod policy;
 
 /// Enforce capability checks based on the active Cohesix role.
-pub fn enforce_capability(action: &str) -> Result<()> {
+pub fn enforce_capability(action: &str) -> Result<(), CohError> {
     let role = std::fs::read_to_string("/srv/cohrole").unwrap_or_default();
     let role = role.trim();
     if role == "QueenPrimary" {
         return Ok(());
     }
     if role == "DroneWorker" && action.contains("remote") {
-        bail!("capability denied");
+        coh_bail!("capability denied");
     }
     Ok(())
 }

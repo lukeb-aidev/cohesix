@@ -5,6 +5,7 @@
 // Renamed to avoid collision with main cohrun binary.
 
 use clap::Parser;
+use cohesix::CohError;
 use std::fs;
 use std::path::PathBuf;
 
@@ -16,7 +17,7 @@ struct Args {
     scenario: PathBuf,
 }
 
-fn main() -> anyhow::Result<()> {
+fn main() -> Result<(), CohError> {
     let args = Args::parse();
     let mode = std::env::var("COH_MODE").unwrap_or_else(|_| "prod".into());
     let data = fs::read_to_string(&args.scenario)?;

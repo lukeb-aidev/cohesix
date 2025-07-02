@@ -4,6 +4,7 @@
 // Date Modified: 2026-01-27
 
 use clap::Parser;
+use cohesix::{CohError};
 use cohesix::trace::recorder::event;
 use ninep::client::TcpClient;
 
@@ -17,7 +18,7 @@ struct Args {
     name: String,
 }
 
-fn main() -> anyhow::Result<()> {
+fn main() -> Result<(), CohError> {
     let args = Args::parse();
     let _ = TcpClient::new_tcp("import".to_string(), &args.address, "/")?;
     std::fs::create_dir_all("/srv")?;
