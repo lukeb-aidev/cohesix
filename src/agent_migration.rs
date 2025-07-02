@@ -27,7 +27,7 @@ pub fn migrate<T: AgentTransport>(
     agent_id: &str,
     peer: &str,
     transport: &T,
-) -> anyhow::Result<MigrationStatus> {
+) -> Result<MigrationStatus> {
     let state = snap::serialize(agent_id)?;
     let path = format!("/mnt/snapshots/agent_{agent_id}.json");
     std::fs::create_dir_all("/mnt/snapshots").ok();
@@ -39,5 +39,5 @@ pub fn migrate<T: AgentTransport>(
 /// Trait for structures that can initiate migration.
 pub trait Migrateable {
     /// Migrate this agent to a peer via the given transport.
-    fn migrate<T: AgentTransport>(&self, peer: &str, transport: &T) -> anyhow::Result<MigrationStatus>;
+    fn migrate<T: AgentTransport>(&self, peer: &str, transport: &T) -> Result<MigrationStatus>;
 }

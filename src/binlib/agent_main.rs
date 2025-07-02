@@ -7,7 +7,7 @@ use crate::prelude::*;
 use clap::{Parser, Subcommand};
 use crate::agents::{runtime::AgentRuntime, migration};
 use crate::cohesix_types::Role;
-use anyhow::Result;
+use crate::{coh_error, CohError};
 
 /// CLI arguments for `cohagent`.
 #[derive(Parser)]
@@ -26,7 +26,7 @@ pub enum Command {
 }
 
 /// Execute the cohagent CLI commands.
-pub fn run(cli: Cli) -> Result<()> {
+pub fn run(cli: Cli) -> Result<(), CohError> {
     let mut rt = AgentRuntime::new();
     match cli.cmd {
         Command::Start { id, role, program } => {
@@ -41,7 +41,7 @@ pub fn run(cli: Cli) -> Result<()> {
             rt.pause(&id)?;
         }
         Command::Migrate { id, to } => {
-            migration::migrate(&id, |_| Err(anyhow::anyhow!("fetch")), |_id, _| Ok(()), |_| Ok(()))?;
+            migration::migrate(&id, |_| Err(coh_error!("fetch")), |_id, _| Ok(()), |_| Ok(()))?;
             println!("migrated {} to {}", id, to);
         }
     }

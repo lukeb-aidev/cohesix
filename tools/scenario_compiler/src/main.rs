@@ -4,6 +4,7 @@
 // Date Modified: 2025-07-21
 
 use scenario_compiler::compiler::ScenarioCompiler;
+use cohesix::CohError;
 use clap::Parser;
 use std::path::PathBuf;
 
@@ -15,7 +16,7 @@ struct Args {
     output: PathBuf,
 }
 
-fn main() -> anyhow::Result<()> {
+fn main() -> Result<(), CohError> {
     let args = Args::parse();
     ScenarioCompiler::compile(&args.input, &args.output)?;
     Ok(())

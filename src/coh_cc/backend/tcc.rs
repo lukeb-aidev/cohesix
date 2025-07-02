@@ -4,6 +4,7 @@
 // Date Modified: 2025-12-09
 
 use crate::prelude::*;
+use crate::{coh_bail, CohError};
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::Path;
@@ -22,16 +23,16 @@ impl CompilerBackend for TccBackend {
         target: &str,
         sysroot: &Path,
         toolchain: &Toolchain,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), CohError> {
         guard::check_static_flags(&input.flags)?;
         let _ = toolchain.get_tool_path("tcc")?;
         if !["x86_64-linux-musl", "aarch64-linux-musl"].contains(&target) {
-            anyhow::bail!("unsupported target {target}");
+            coh_bail!("unsupported target {target}");
         }
         let allowed_root =
             std::env::var("COHESIX_TOOLCHAIN_ROOT").unwrap_or_else(|_| "/mnt/data".into());
         if !sysroot.starts_with(&allowed_root) || !sysroot.exists() {
-            anyhow::bail!("invalid sysroot");
+            coh_bail!("invalid sysroot");
         }
         if let Some(parent) = out_path.parent() {
             fs::create_dir_all(parent)?;

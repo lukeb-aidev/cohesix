@@ -5,6 +5,7 @@
 // Uses TinyEd25519 with deterministic seeding for UEFI builds.
 
 use crate::prelude::*;
+use crate::{coh_error, CohError};
 /// Cryptographic keyring for trusted queen federation.
 //
 /// Generates an Ed25519 keypair on first boot and stores the
@@ -24,13 +25,13 @@ pub struct Keyring {
 
 impl Keyring {
     /// Load an existing keypair or generate a new one.
-    pub fn load_or_generate(queen_id: &str) -> anyhow::Result<Self> {
+    pub fn load_or_generate(queen_id: &str) -> Result<Self, CohError> {
         fs::create_dir_all("/srv/federation/known_hosts")?;
         let priv_path = format!("/srv/federation/{}_key.pk8", queen_id);
         let pub_path = format!("/srv/federation/known_hosts/{}.pub", queen_id);
         if let Ok(buf) = fs::read(&priv_path) {
             if buf.len() != 32 {
-                return Err(anyhow::anyhow!("invalid seed length"));
+                return Err(coh_error!("invalid seed length"));
             }
             let mut seed = [0u8; 32];
             seed.copy_from_slice(&buf);
@@ -53,7 +54,7 @@ impl Keyring {
     }
 
     /// Verify a peer's signature using its published public key.
-    pub fn verify_peer(peer_id: &str, msg: &[u8], sig: &[u8]) -> anyhow::Result<bool> {
+    pub fn verify_peer(peer_id: &str, msg: &[u8], sig: &[u8]) -> Result<bool, CohError> {
         let path = format!("/srv/federation/known_hosts/{}.pub", peer_id);
         let pk = fs::read(path)?;
         Ok(TinyEd25519::verify(&pk, msg, sig))

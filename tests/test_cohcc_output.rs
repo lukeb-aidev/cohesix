@@ -6,9 +6,10 @@
 use std::fs::{self, Permissions};
 use std::os::unix::fs::PermissionsExt;
 use tempfile::tempdir;
+use cohesix::CohError;
 
 #[test]
-fn compile_creates_binary() -> anyhow::Result<()> {
+fn compile_creates_binary() -> Result<(), CohError> {
     let dir = tempdir()?;
     let src = dir.path().join("example.coh");
     let out = dir.path().join("out.bin");

@@ -4,6 +4,7 @@
 // Date Modified: 2025-07-18
 
 use crate::prelude::*;
+use crate::{coh_bail, CohError};
 use std::path::Path;
 use std::process::Command;
 
@@ -20,7 +21,7 @@ impl ZigBackend {
         out: &Path,
         flags: &[String],
         tc: &Toolchain,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), CohError> {
         let zig = tc.get_tool_path("zig")?;
         guard::check_static_flags(flags)?;
         let mut cmd = Command::new(zig);
@@ -38,7 +39,7 @@ impl ZigBackend {
         let status = cmd.status()?;
         if !status.success() {
             logging::log("ERROR", "zig", source, out, flags, "zig failed");
-            anyhow::bail!("zig cc failed");
+            coh_bail!("zig cc failed");
         }
         Ok(())
     }
@@ -52,7 +53,7 @@ impl CompilerBackend for ZigBackend {
         _target: &str,
         _sysroot: &Path,
         toolchain: &Toolchain,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), CohError> {
         self.compile_and_link(&input.path, out_path, &input.flags, toolchain)
     }
 }

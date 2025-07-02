@@ -21,7 +21,7 @@ use crate::prelude::*;
 #[forbid(unsafe_code)]
 #[warn(missing_docs)]
 
-use anyhow::Result;
+use crate::{coh_error, CohError};
 use log::info;
 
 use crate::{
@@ -46,22 +46,22 @@ pub struct BootContext {
 /// so it can run with a limited runtime.
 ///
 /// * `cmdline` – raw ASCII cmdline string passed by firmware.
-pub fn early_init(cmdline: &str) -> Result<BootContext> {
+pub fn early_init(cmdline: &str) -> Result<BootContext, CohError> {
     // 1. Parse cmd‑line
-    let args = parse_cmdline(cmdline).map_err(|e| anyhow::anyhow!(e))?;
+    let args = parse_cmdline(cmdline).map_err(|e| coh_error!(e))?;
     let role = args.get("cohrole").unwrap_or("Unknown").to_string();
 
     // 2. Basic HAL bring‑up
     //    — Page‑tables + IRQ controller stubs (real impl later)
     #[cfg(target_arch = "aarch64")]
     {
-        hal::arm64::init_paging().map_err(|e| anyhow::anyhow!(e))?;
-        hal::arm64::init_interrupts().map_err(|e| anyhow::anyhow!(e))?;
+        hal::arm64::init_paging().map_err(|e| coh_error!(e))?;
+        hal::arm64::init_interrupts().map_err(|e| coh_error!(e))?;
     }
     #[cfg(target_arch = "x86_64")]
     {
-        hal::x86_64::init_paging().map_err(|e| anyhow::anyhow!(e))?;
-        hal::x86_64::init_interrupts().map_err(|e| anyhow::anyhow!(e))?;
+        hal::x86_64::init_paging().map_err(|e| coh_error!(e))?;
+        hal::x86_64::init_interrupts().map_err(|e| coh_error!(e))?;
     }
 
     std::fs::create_dir_all("/srv").ok();

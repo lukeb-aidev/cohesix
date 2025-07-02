@@ -11,9 +11,10 @@ use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use tempfile::Builder;
+use cohesix::CohError;
 
 #[test]
-fn compile_reproducible() -> anyhow::Result<()> {
+fn compile_reproducible() -> Result<(), CohError> {
     let work = tempfile::tempdir()?;
     let dir = Builder::new().prefix("cohcc").tempdir_in(work.path())?;
     std::env::set_current_dir(&dir)?;
