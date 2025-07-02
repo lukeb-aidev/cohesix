@@ -53,7 +53,7 @@ pub fn run(cli: Cli) -> Result<(), CohError> {
             migration::migrate(
                 &id,
                 |_| Err(coh_error!("fetch")),
-                |_id, _| Ok(()),
+                |_id| Ok(()),
                 |_| Ok(()),
             )?;
             println!("migrated {} to {}", id, to);

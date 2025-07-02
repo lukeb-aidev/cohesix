@@ -46,10 +46,7 @@ impl TinyEd25519 {
             Ok(b) => b,
             Err(_) => return false,
         };
-        let sig = match Signature::from_bytes(&sig_bytes) {
-            Ok(s) => s,
-            Err(_) => return false,
-        };
+        let sig = Signature::from_bytes(&sig_bytes);
         public.verify(msg, &sig).is_ok()
     }
 }

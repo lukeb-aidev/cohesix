@@ -3,8 +3,8 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-21
 
-use crate::prelude::*;
-use crate::CohError;
+use cohesix::prelude::*;
+use cohesix::CohError;
 use clap::Parser;
 use cohesix::coh_cc::{
     backend::registry::get_backend,
