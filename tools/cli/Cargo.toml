@@ -13,4 +13,4 @@ clap = { version = "4", features = ["derive"] }
 chrono = "0.4"
 cohesix = { path = "../.." }
 ninep = "0.3"
-cohesix-9p = { path = "../../cohesix-9p" }
+cohesix-9p = { path = "../../cohesix-9p", features = ["posix"] }

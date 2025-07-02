@@ -6,10 +6,7 @@
 use crate::prelude::*;
 use log::info;
 use thiserror::Error;
-use xmas_elf::{
-    program::Type,
-    ElfFile,
-};
+use xmas_elf::{program::Type, ElfFile};
 
 /// Execution context for a loaded ELF binary.
 pub struct ProcessContext {
@@ -24,6 +21,7 @@ pub struct MappedSegment {
     pub vaddr: usize,
     pub paddr: usize,
     pub size: usize,
+    #[allow(dead_code)]
     data: Box<[u8]>,
 }
 

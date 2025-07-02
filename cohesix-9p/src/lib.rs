@@ -9,35 +9,10 @@
 extern crate alloc;
 #[cfg(feature = "posix")]
 extern crate std;
-use alloc::{boxed::Box, string::String};
+use alloc::boxed::Box;
 
 /// Common Cohesix 9P error type.
 pub type CohError = Box<dyn core::error::Error + Send + Sync>;
-
-#[derive(Debug)]
-struct StringError(String);
-
-impl core::fmt::Display for StringError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-impl core::error::Error for StringError {}
-
-pub(crate) fn new_err(msg: impl Into<String>) -> CohError {
-    Box::new(StringError(msg.into()))
-}
-
-#[macro_export]
-macro_rules! coh_bail {
-    ($($arg:tt)+) => { return Err($crate::new_err(format!($($arg)+))); };
-}
-
-#[macro_export]
-macro_rules! coh_error {
-    ($($arg:tt)+) => { $crate::new_err(format!($($arg)+)) };
-}
 
 #[derive(Debug, Clone)]
 pub struct FsConfig {
@@ -48,7 +23,11 @@ pub struct FsConfig {
 
 impl Default for FsConfig {
     fn default() -> Self {
-        Self { root: String::from("/"), port: 564, readonly: false }
+        Self {
+            root: String::from("/"),
+            port: 564,
+            readonly: false,
+        }
     }
 }
 
