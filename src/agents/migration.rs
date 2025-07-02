@@ -28,7 +28,7 @@ use crate::agent_transport::AgentTransport;
 use serde_json;
 
 impl Migrateable for AgentState {
-    fn migrate<T: AgentTransport>(&self, peer: &str, transport: &T) -> Result<MigrationStatus> {
+    fn migrate<T: AgentTransport>(&self, peer: &str, transport: &T) -> Result<MigrationStatus, CohError> {
         let tmpdir = std::env::var("TMPDIR").unwrap_or("/srv".to_string());
         let path = format!("{}/agent_state.json", tmpdir);
         std::fs::write(&path, serde_json::to_vec(self)?)?;
@@ -38,7 +38,7 @@ impl Migrateable for AgentState {
 }
 
 /// Serialize agent state from the local worker.
-pub fn serialize(agent_id: &str) -> Result<AgentState> {
+pub fn serialize(agent_id: &str) -> Result<AgentState, CohError> {
     let mut env = HashMap::new();
     for (k, v) in std::env::vars() {
         env.insert(k, v);
@@ -55,7 +55,7 @@ pub fn serialize(agent_id: &str) -> Result<AgentState> {
 }
 
 /// Restore a serialized agent on the current worker.
-pub fn restore(agent_id: &str, state: &AgentState) -> Result<()> {
+pub fn restore(agent_id: &str, state: &AgentState) -> Result<(), CohError> {
     fs::create_dir_all(format!("/srv/agents/{agent_id}")).ok();
     fs::write(format!("/srv/agent_trace/{agent_id}"), &state.trace).ok();
     ServiceRegistry::unregister_service(agent_id)?;
@@ -71,10 +71,10 @@ pub fn restore(agent_id: &str, state: &AgentState) -> Result<()> {
 /// Migrate an agent between workers using the provided copy functions.
 pub fn migrate(
     agent_id: &str,
-    fetch: impl Fn(&str) -> Result<AgentState>,
-    push: impl Fn(&str, &AgentState) -> Result<()>,
-    stop: impl Fn(&str) -> Result<()>,
-) -> Result<()> {
+    fetch: impl Fn(&str) -> Result<AgentState, CohError>,
+    push: impl Fn(&str, &AgentState) -> Result<(), CohError>,
+    stop: impl Fn(&str) -> Result<(), CohError>,
+) -> Result<(), CohError> {
     let state = fetch(agent_id)?;
     push(agent_id, &state)?;
     stop(agent_id)?;

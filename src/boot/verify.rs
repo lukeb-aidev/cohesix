@@ -23,7 +23,7 @@ struct Manifest {
 
 /// Validate system files against the manifest located at `/srv/boot/hashes.json`.
 /// Returns `true` if all hashes match.
-pub fn verify_boot() -> Result<bool> {
+pub fn verify_boot() -> Result<bool, CohError> {
     let manifest: Manifest = serde_json::from_str(&fs::read_to_string("/srv/boot/hashes.json")?)?;
     fs::create_dir_all("/srv/boot")?;
     let mut log = OpenOptions::new()
