@@ -72,8 +72,10 @@ log "Architecture: $COH_ARCH (target $COHESIX_TARGET)"
 
 ensure_vendor() {
   if [ ! -d "$ROOT/vendor" ]; then
-    log "📦 Running cargo vendor with locked resolution..."
-    cargo vendor --locked > /dev/null
+    log "❌ vendor directory missing. Clone your repository with vendor committed."
+    exit 1
+  else
+    log "✅ vendor directory present, using pre-vendored crates."
   fi
 }
 
