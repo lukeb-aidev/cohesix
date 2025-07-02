@@ -12,7 +12,7 @@ extern crate alloc;
 pub type CohError = alloc::boxed::Box<dyn core::error::Error + Send + Sync>;
 
 /// Helper to create a boxed error from a string.
-pub(crate) fn new_err(msg: impl Into<String>) -> CohError {
+pub fn new_err(msg: impl Into<String>) -> CohError {
     alloc::boxed::Box::new(StringError(msg.into()))
 }
 
