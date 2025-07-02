@@ -3,7 +3,6 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-09
 
-use crate::prelude::*;
 /// Agent introspection utilities.
 use std::fs::{self, OpenOptions};
 use std::io::Write;

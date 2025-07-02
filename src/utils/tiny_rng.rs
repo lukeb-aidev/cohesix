@@ -3,7 +3,6 @@
 // Author: Lukas Bower
 // Date Modified: 2026-12-31
 
-use crate::prelude::*;
 /// Minimal deterministic RNG used for UEFI builds.
 /// Implements a simple Xorshift64* generator.
 

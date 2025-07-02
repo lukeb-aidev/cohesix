@@ -7,6 +7,5 @@
 
 #[cfg(feature = "minimal_uefi")]
 pub use crate::kernel::fs::fat::open_bin;
-use crate::prelude::*;
 
 pub mod overlay;

@@ -3,6 +3,5 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-10
 
-use crate::prelude::*;
 /// Kernel upgrade utilities.
 pub mod upgrade_manager;

@@ -25,7 +25,6 @@
 // without caring about the underlying CPU family.
 // ─────────────────────────────────────────────────────────────
 
-use crate::prelude::*;
 #[allow(unsafe_code)]
 #[warn(missing_docs)]
 

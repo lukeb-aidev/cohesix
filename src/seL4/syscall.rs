@@ -3,7 +3,6 @@
 // Author: Lukas Bower
 // Date Modified: 2026-09-30
 
-use crate::prelude::*;
 /// seL4 syscall glue translating Plan 9 style calls into Cohesix runtime actions.
 /// Provides minimal capability enforcement based on `ROLE_MANIFEST.md`.
 use std::fs::{self, File, OpenOptions};

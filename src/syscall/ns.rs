@@ -3,7 +3,6 @@
 // Author: Lukas Bower
 // Date Modified: 2026-09-30
 
-use crate::prelude::*;
 use std::io::{self, ErrorKind};
 
 use crate::cohesix_types::{RoleManifest, Syscall};

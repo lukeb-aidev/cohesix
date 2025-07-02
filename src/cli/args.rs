@@ -3,7 +3,6 @@
 // Date Modified: 2025-07-11
 // Author: Lukas Bower
 
-use crate::prelude::*;
 use clap::{Arg, Command};
 
 /// Builds and returns the CLI argument parser for the Coh_CC compiler.

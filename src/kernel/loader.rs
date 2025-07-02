@@ -7,7 +7,7 @@ use crate::prelude::*;
 use log::info;
 use thiserror::Error;
 use xmas_elf::{
-    program::{ProgramHeader, Type},
+    program::Type,
     ElfFile,
 };
 

@@ -3,7 +3,6 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-22
 
-use crate::prelude::*;
 /// Kernel boot tracing utilities.
 use chrono::Utc;
 use std::fs::{self, OpenOptions};
