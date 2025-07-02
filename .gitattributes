@@ -4,4 +4,4 @@
 *.sh text eol=lf
 
 # Vendor crates must be treated as binary to prevent line ending normalization or merging
-vendor/** -text diff=false merge=false
+vendor/** -text eol=unset diff=false merge=false
