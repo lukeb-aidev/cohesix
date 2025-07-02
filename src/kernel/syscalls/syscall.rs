@@ -3,12 +3,11 @@
 // Author: Lukas Bower
 // Date Modified: 2026-11-23
 
-use crate::prelude::*;
 /// Kernel syscall interface layer for Cohesix.
 /// Provides syscall entry point, argument validation, and dispatch wiring.
-
 use super::syscall_table::dispatch;
 use crate::kernel::security::l4_verified::{enforce_capability, CapabilityResult};
+use crate::prelude::*;
 use std::fs::OpenOptions;
 use std::io::Write;
 

@@ -4,12 +4,11 @@
 // Date Modified: 2025-07-05
 
 use crate::prelude::*;
+use crate::CohError;
 /// Queen failover manager promoting a candidate when the primary is unresponsive.
-
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use crate::CohError;
 
 /// Failover manager checking heartbeat files.
 pub struct FailoverManager {
@@ -19,7 +18,9 @@ pub struct FailoverManager {
 impl FailoverManager {
     /// Create a new manager with the given timeout in seconds.
     pub fn new(timeout_secs: u64) -> Self {
-        Self { timeout: Duration::from_secs(timeout_secs) }
+        Self {
+            timeout: Duration::from_secs(timeout_secs),
+        }
     }
 
     /// Check primary heartbeat and promote the candidate if necessary.

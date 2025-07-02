@@ -23,7 +23,6 @@
 use crate::prelude::*;
 #[forbid(unsafe_code)]
 #[warn(missing_docs)]
-
 use std::collections::HashMap;
 
 /// Key/value map of boot parameters.
@@ -81,7 +80,6 @@ pub fn parse_cmdline(cmdline: &str) -> Result<BootArgs, &'static str> {
 
     Ok(BootArgs { map })
 }
-
 
 // ───────────────────────────── tests ─────────────────────────────────────────
 #[cfg(test)]

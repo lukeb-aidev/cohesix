@@ -45,7 +45,10 @@ fn queen_worker_cloud_flow() {
     std::env::set_var("COHESIX_SRV_ROOT", tmp_dir.path());
     std::fs::create_dir_all(tmp_dir.path()).unwrap();
     std::env::set_var("CLOUD_HOOK_URL", format!("http://127.0.0.1:{port}"));
-    println!("CLOUD_HOOK_URL={}", std::env::var("CLOUD_HOOK_URL").unwrap());
+    println!(
+        "CLOUD_HOOK_URL={}",
+        std::env::var("CLOUD_HOOK_URL").unwrap()
+    );
     std::io::stdout().flush().unwrap();
     let id = register_queen(&format!("http://127.0.0.1:{port}")).unwrap();
     send_heartbeat(id).unwrap();

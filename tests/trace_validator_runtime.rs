@@ -6,12 +6,12 @@
 use std::fs;
 use std::io::{self, ErrorKind};
 
+use cohesix::cohesix_types::{RoleManifest, Syscall};
 use cohesix::plan9::namespace::Namespace;
 use cohesix::syscall::apply_ns;
-use tempfile;
-use cohesix::cohesix_types::{RoleManifest, Syscall};
 use cohesix::validator::syscall::validate_syscall;
 use serial_test::serial;
+use tempfile;
 
 fn attempt_apply_namespace() -> io::Result<()> {
     let mut ns = Namespace::default();
@@ -36,7 +36,12 @@ fn attempt_mount() -> io::Result<()> {
 
 fn attempt_exec() -> io::Result<()> {
     let role = RoleManifest::current_role();
-    let allowed = validate_syscall(role, &Syscall::Exec { path: "dummy".into() });
+    let allowed = validate_syscall(
+        role,
+        &Syscall::Exec {
+            path: "dummy".into(),
+        },
+    );
     if allowed {
         Ok(())
     } else {
@@ -45,14 +50,28 @@ fn attempt_exec() -> io::Result<()> {
 }
 
 fn attempt_overlay_apply() -> io::Result<()> {
-    use cohesix::plan9::namespace::{NsOp, BindFlags};
+    use cohesix::plan9::namespace::{BindFlags, NsOp};
     let tmp = tempfile::tempdir()?;
     let src = tmp.path().join("src");
     fs::create_dir_all(&src)?;
-    let mut ns = Namespace { ops: vec![], private: true, root: Default::default() };
-    ns.add_op(NsOp::Mount { srv: src.to_string_lossy().into(), dst: "/a".into() });
-    let flags = BindFlags { after: true, ..Default::default() };
-    ns.add_op(NsOp::Bind { src: "/a".into(), dst: "/b".into(), flags });
+    let mut ns = Namespace {
+        ops: vec![],
+        private: true,
+        root: Default::default(),
+    };
+    ns.add_op(NsOp::Mount {
+        srv: src.to_string_lossy().into(),
+        dst: "/a".into(),
+    });
+    let flags = BindFlags {
+        after: true,
+        ..Default::default()
+    };
+    ns.add_op(NsOp::Bind {
+        src: "/a".into(),
+        dst: "/b".into(),
+        flags,
+    });
     apply_ns(&mut ns)
 }
 

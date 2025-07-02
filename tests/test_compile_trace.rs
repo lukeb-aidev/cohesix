@@ -6,12 +6,12 @@
 use cohesix::coh_cc::{
     backend::registry::get_backend, guard, parser::input_type::CohInput, toolchain::Toolchain,
 };
+use cohesix::CohError;
 use std::fs::{self, File};
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use tempfile::Builder;
-use cohesix::CohError;
 
 #[test]
 fn compile_reproducible() -> Result<(), CohError> {

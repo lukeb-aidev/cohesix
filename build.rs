@@ -4,7 +4,7 @@
 // Date Modified: 2026-08-21
 
 fn main() {
-    use std::{env, process::Command, path::Path};
+    use std::{env, path::Path, process::Command};
 
     println!("cargo:rerun-if-changed=tests/gpu_demos/add.cu");
 
@@ -18,7 +18,10 @@ fn main() {
     };
 
     if !sel4_kernel.exists() && env::var_os("SKIP_SEL4_KERNEL_CHECK").is_none() {
-        println!("cargo:warning=sel4 kernel.elf not found at {}", sel4_kernel.display());
+        println!(
+            "cargo:warning=sel4 kernel.elf not found at {}",
+            sel4_kernel.display()
+        );
         println!("cargo:warning=Try running `ninja` in ~/sel4_workspace/");
     }
 
@@ -46,7 +49,12 @@ fn main() {
 
         if which::which("nvcc").is_ok() {
             let status = Command::new("nvcc")
-                .args(["-ptx", "tests/gpu_demos/add.cu", "-o", "tests/gpu_demos/add.ptx"])
+                .args([
+                    "-ptx",
+                    "tests/gpu_demos/add.cu",
+                    "-o",
+                    "tests/gpu_demos/add.ptx",
+                ])
                 .status();
             match status {
                 Ok(s) if s.success() => println!("cargo:warning=PTX built"),

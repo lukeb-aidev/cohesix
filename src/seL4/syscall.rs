@@ -6,15 +6,14 @@
 use crate::prelude::*;
 /// seL4 syscall glue translating Plan 9 style calls into Cohesix runtime actions.
 /// Provides minimal capability enforcement based on `ROLE_MANIFEST.md`.
-
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::process;
 use std::process::Command;
 
-use crate::security::capabilities;
-use crate::sandbox::validator;
 use crate::cohesix_types::{RoleManifest, Syscall};
+use crate::sandbox::validator;
+use crate::security::capabilities;
 
 use crate::runtime::env::init::detect_cohrole;
 
@@ -24,7 +23,11 @@ fn role_allows_exec(role: &str) -> bool {
 
 fn log_block(action: &str, path: &str, role: &str) {
     fs::create_dir_all("/log").ok();
-    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open("/log/sandbox.log") {
+    if let Ok(mut f) = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/log/sandbox.log")
+    {
         let _ = writeln!(
             f,
             "blocked action={action} path={path} pid={} role={role}",
@@ -33,17 +36,22 @@ fn log_block(action: &str, path: &str, role: &str) {
     }
 }
 
-
 /// Open a file and return the handle.
 pub fn open(path: &str, flags: u32) -> Result<File, std::io::Error> {
     let role = detect_cohrole();
     if std::env::var("LD_PRELOAD").is_ok() {
         log_block("open_preload", path, &role);
-        return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "preload blocked"));
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "preload blocked",
+        ));
     }
     if !capabilities::role_allows(&role, "open", path) {
         log_block("open", path, &role);
-        return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "capability denied"));
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "capability denied",
+        ));
     }
     println!("[sel4:{role}] open {path} flags={flags}");
     File::options().read(true).write(flags & 1 != 0).open(path)
@@ -64,7 +72,9 @@ pub fn exec(cmd: &str, args: &[&str]) -> Result<(), std::io::Error> {
     let role = detect_cohrole();
     let role_enum = RoleManifest::current_role();
     println!("[sel4] exec attempt role={:?}", role_enum);
-    let sc = Syscall::Exec { path: cmd.to_string() };
+    let sc = Syscall::Exec {
+        path: cmd.to_string(),
+    };
     let allowed = validator::validate("sel4", role_enum.clone(), &sc);
     println!("[sel4] validator result for {:?}: {}", role_enum, allowed);
     if !allowed {

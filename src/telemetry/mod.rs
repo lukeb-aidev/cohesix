@@ -4,11 +4,10 @@
 // Date Modified: 2025-06-19
 
 use crate::prelude::*;
+pub mod core;
 /// Telemetry subsystem modules.
-
 pub mod diagnostics;
 /// Telemetry sync loop polling simulation state.
 pub mod r#loop;
 pub mod router;
-pub mod core;
 pub mod trace;

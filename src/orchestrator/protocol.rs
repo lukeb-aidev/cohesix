@@ -7,7 +7,6 @@ use crate::prelude::*;
 /// Orchestration protocol message types.
 //
 /// Structures are serialized using MessagePack via `rmp-serde`.
-
 use serde::{Deserialize, Serialize};
 
 /// Join request sent from a Worker to a Queen.

@@ -4,8 +4,8 @@
 // Author: Cohesix Codex
 
 use cohesix::agent::policy_memory::PolicyMemory;
-use tempfile::tempdir;
 use std::env;
+use tempfile::tempdir;
 
 #[test]
 fn policy_persistence_roundtrip() {

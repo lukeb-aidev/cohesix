@@ -6,10 +6,10 @@
 use cohesix_9p::{policy::SandboxPolicy, FsConfig, FsServer};
 use ninep::client::TcpClient;
 use serial_test::serial;
-use tempfile::tempdir;
 use std::fs;
 use std::sync::Arc;
 use std::time::Duration;
+use tempfile::tempdir;
 
 #[test]
 #[serial]

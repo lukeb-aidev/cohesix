@@ -5,7 +5,6 @@
 // Status: 🟢 Hydrated
 
 /// Entry point for the Coh_CC compiler binary.
-
 use cohesix::binlib::compiler_main;
 
 fn main() {

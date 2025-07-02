@@ -4,7 +4,6 @@
 // Date Modified: 2025-07-12
 
 /// Background watchdog daemon monitoring worker health.
-
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::process::Command;
@@ -78,10 +77,7 @@ impl WatchdogDaemon {
             return;
         }
         self.log(&format!("restarting {svc}"));
-        let _ = Command::new("systemctl")
-            .arg("restart")
-            .arg(svc)
-            .status();
+        let _ = Command::new("systemctl").arg("restart").arg(svc).status();
         self.last_restart = Some(now);
     }
 

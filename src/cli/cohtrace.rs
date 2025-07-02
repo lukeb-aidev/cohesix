@@ -4,10 +4,9 @@
 // Date Modified: 2026-10-28
 
 use crate::prelude::*;
-/// Minimal debug CLI for runtime trace inspection.
-
-use std::fs;
 use serde_json;
+/// Minimal debug CLI for runtime trace inspection.
+use std::fs;
 
 use crate::cohesix_types::{Role, RoleManifest};
 use crate::validator::{recent_syscalls, validator_running};
@@ -58,10 +57,7 @@ pub fn run_cohtrace(args: &[String]) -> Result<(), String> {
                     .and_then(|v| v.as_str())
                     .unwrap_or("unknown");
                 let ts = v.get("ts").and_then(|v| v.as_u64()).unwrap_or(0);
-                let workers = v
-                    .get("worker_count")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0);
+                let workers = v.get("worker_count").and_then(|v| v.as_u64()).unwrap_or(0);
                 println!("Queen ID: {}", queen);
                 println!("Last heartbeat: {}", ts);
                 println!("Connected Workers: {}", workers);

@@ -46,4 +46,3 @@ pub fn launch_physics_kernel() -> Result<(), String> {
         CudaStatus::Error(e) => Err(e),
     }
 }
-

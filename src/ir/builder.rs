@@ -3,10 +3,9 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-11
 
-use crate::prelude::*;
 /// IRBuilder for constructing Modules and Functions.
-
 use crate::ir::{Function, Instruction, Module, Opcode};
+use crate::prelude::*;
 
 /// Helper for incrementally building IR modules.
 pub struct IRBuilder {
@@ -17,7 +16,10 @@ pub struct IRBuilder {
 impl IRBuilder {
     /// Create a new builder for a module with the given name.
     pub fn new(name: impl Into<String>) -> Self {
-        IRBuilder { module: Module::new(name), current: None }
+        IRBuilder {
+            module: Module::new(name),
+            current: None,
+        }
     }
 
     /// Begin emitting a new function. Any existing function will be finalized.

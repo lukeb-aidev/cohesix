@@ -5,8 +5,8 @@
 
 use cohesix::seL4::syscall::exec;
 use cohesix::validator::{self, config::ValidatorConfig};
-use tempfile::tempdir;
 use env_logger;
+use tempfile::tempdir;
 
 #[test]
 fn exec_denied_for_worker() {

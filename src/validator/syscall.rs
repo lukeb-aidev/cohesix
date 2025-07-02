@@ -3,8 +3,8 @@
 // Author: Lukas Bower
 // Date Modified: 2026-11-11
 
-use crate::prelude::*;
 use crate::cohesix_types::{Role, Syscall};
+use crate::prelude::*;
 use crate::syscall::guard::check_permission;
 use crate::validator::record_syscall;
 
@@ -16,43 +16,22 @@ pub fn validate_syscall(role: Role, sc: &Syscall) -> bool {
     println!("Validator received syscall: {:?}", sc);
 
     let allowed = match (role.clone(), sc) {
+        (QueenPrimary | RegionalQueen | BareMetalQueen, ApplyNamespace) => true,
         (
-            QueenPrimary
-            | RegionalQueen
-            | BareMetalQueen,
-            ApplyNamespace,
-        ) => true,
-        (
-            DroneWorker
-            | InteractiveAiBooth
-            | KioskInteractive
-            | GlassesAgent
-            | SensorRelay
+            DroneWorker | InteractiveAiBooth | KioskInteractive | GlassesAgent | SensorRelay
             | SimulatorTest,
             ApplyNamespace,
         ) => false,
 
         (
-            QueenPrimary
-            | RegionalQueen
-            | BareMetalQueen
-            | DroneWorker
-            | InteractiveAiBooth
-            | KioskInteractive
-            | GlassesAgent
-            | SimulatorTest,
+            QueenPrimary | RegionalQueen | BareMetalQueen | DroneWorker | InteractiveAiBooth
+            | KioskInteractive | GlassesAgent | SimulatorTest,
             Mount { .. },
         ) => true,
 
         (
-            QueenPrimary
-            | RegionalQueen
-            | BareMetalQueen
-            | DroneWorker
-            | InteractiveAiBooth
-            | KioskInteractive
-            | GlassesAgent
-            | SimulatorTest,
+            QueenPrimary | RegionalQueen | BareMetalQueen | DroneWorker | InteractiveAiBooth
+            | KioskInteractive | GlassesAgent | SimulatorTest,
             Exec { .. },
         ) => true,
         (SensorRelay, Exec { .. }) => false,

@@ -38,8 +38,7 @@ fn queue_dequeue_dispatch_order() {
         let mut results = Vec::new();
         while let Some(sc) = q.dequeue() {
             let role_cur = cohesix::cohesix_types::RoleManifest::current_role();
-            let allowed =
-                cohesix::sandbox::validator::validate("runtime", role_cur, &sc);
+            let allowed = cohesix::sandbox::validator::validate("runtime", role_cur, &sc);
             SyscallDispatcher::dispatch(sc);
             results.push(allowed);
         }

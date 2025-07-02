@@ -8,9 +8,14 @@ use serde_json::Value;
 use std::fs;
 use std::io::Write;
 
-struct FixedAgent { action: &'static str, score: f32 }
+struct FixedAgent {
+    action: &'static str,
+    score: f32,
+}
 impl DecisionAgent for FixedAgent {
-    fn propose(&mut self, _m: &SharedMemory) -> (String, f32) { (self.action.into(), self.score) }
+    fn propose(&mut self, _m: &SharedMemory) -> (String, f32) {
+        (self.action.into(), self.score)
+    }
 }
 
 #[test]
@@ -35,18 +40,21 @@ fn ensemble_weighted_selects_best() {
     std::fs::create_dir_all(&dir).unwrap();
 
     // Pre-create goals log expected by the agent
-    let mut f = fs::File::create(dir.join("goals.json"))
-        .expect("failed to create goals log");
-    writeln!(f, "{{\"goal\": \"balance\", \"score\": 1.0}}")
-        .expect("failed to write mock goals");
+    let mut f = fs::File::create(dir.join("goals.json")).expect("failed to create goals log");
+    writeln!(f, "{{\"goal\": \"balance\", \"score\": 1.0}}").expect("failed to write mock goals");
 
     let mut ens = EnsembleAgent::new("e1", Arbitration::Weighted);
-    ens.add_agent(Box::new(FixedAgent { action: "A", score: 0.2 }));
-    ens.add_agent(Box::new(FixedAgent { action: "B", score: 0.8 }));
+    ens.add_agent(Box::new(FixedAgent {
+        action: "A",
+        score: 0.2,
+    }));
+    ens.add_agent(Box::new(FixedAgent {
+        action: "B",
+        score: 0.8,
+    }));
     let act = ens.tick();
     assert_eq!(act, "B");
-    let data = std::fs::read_to_string(dir.join("goals.json"))
-        .expect("missing goals log");
+    let data = std::fs::read_to_string(dir.join("goals.json")).expect("missing goals log");
     assert!(data.contains("B"));
 
     // Clean up mock files

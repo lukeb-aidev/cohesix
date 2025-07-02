@@ -3,11 +3,10 @@
 // Author: Lukas Bower
 // Date Modified: 2026-02-20
 
-use crate::prelude::*;
 /// 9P file server implementation for Cohesix.
 /// Handles incoming 9P requests and routes them to appropriate virtual filesystem backends.
-
 use super::protocol::{parse_message, serialize_message, P9Message};
+use crate::prelude::*;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::fs;
@@ -49,9 +48,7 @@ fn can_write(role: &str, path: &str) -> bool {
     match role {
         "QueenPrimary" => true,
         "DroneWorker" => !path.starts_with("/history"),
-        _ => {
-            !path.starts_with("/history") && !path.starts_with("/srv")
-        }
+        _ => !path.starts_with("/history") && !path.starts_with("/srv"),
     }
 }
 

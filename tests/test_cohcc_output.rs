@@ -3,10 +3,10 @@
 // Author: Lukas Bower
 // Date Modified: 2025-12-08
 
+use cohesix::CohError;
 use std::fs::{self, Permissions};
 use std::os::unix::fs::PermissionsExt;
 use tempfile::tempdir;
-use cohesix::CohError;
 
 #[test]
 fn compile_creates_binary() -> Result<(), CohError> {

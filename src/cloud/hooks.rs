@@ -5,7 +5,6 @@
 
 use crate::prelude::*;
 /// Cloud initialization hooks for Queen nodes.
-
 use std::fs;
 use ureq::Agent;
 

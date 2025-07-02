@@ -3,10 +3,9 @@
 // Date Modified: 2025-07-28
 // Author: Lukas Bower
 
-use crate::prelude::*;
 /// Defines the IR Module and associated utilities for the Cohesix compiler.
-
 use crate::ir::Function;
+use crate::prelude::*;
 use std::fmt;
 
 /// A compilation unit containing multiple functions.
@@ -45,7 +44,6 @@ impl Module {
     pub fn functions(&self) -> impl Iterator<Item = &Function> {
         self.functions.iter()
     }
-
 
     /// Validate structural integrity. Currently a stub that always returns `true`.
     /// FIXME: Validate structural integrity, uniqueness of function names, etc.

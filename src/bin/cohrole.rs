@@ -4,10 +4,9 @@
 // Author: Lukas Bower
 
 use crate::prelude::*;
-/// Display the current Cohesix runtime role.
-
-use cohesix::telemetry::trace::init_panic_hook;
 use cohesix::binlib::role_main::current_role;
+/// Display the current Cohesix runtime role.
+use cohesix::telemetry::trace::init_panic_hook;
 
 fn main() {
     init_panic_hook();

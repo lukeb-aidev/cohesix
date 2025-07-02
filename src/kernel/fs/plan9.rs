@@ -50,4 +50,3 @@ pub fn mount_count() -> usize {
 pub fn reset_mounts() {
     MOUNT_TABLE.lock().unwrap().clear();
 }
-

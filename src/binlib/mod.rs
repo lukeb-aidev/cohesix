@@ -5,9 +5,8 @@
 
 use crate::prelude::*;
 /// Library wrappers for Cohesix binaries.
-
 pub mod agent_main;
+pub mod compiler_main;
+pub mod role_main;
 pub mod run_main;
 pub mod up_main;
-pub mod role_main;
-pub mod compiler_main;

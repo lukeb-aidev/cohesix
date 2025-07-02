@@ -5,11 +5,11 @@
 
 use crate::prelude::*;
 use crate::CohError;
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use std::path::Path;
-use chrono::Utc;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct IRArg {
@@ -35,7 +35,10 @@ pub struct IRFunction {
 
 fn append_log(line: &str) -> std::io::Result<()> {
     fs::create_dir_all("/log")?;
-    let mut f = OpenOptions::new().create(true).append(true).open("/log/cohcc_ir.log")?;
+    let mut f = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/log/cohcc_ir.log")?;
     writeln!(f, "{} {}", Utc::now().to_rfc3339(), line)?;
     f.flush()?;
     Ok(())
@@ -48,4 +51,3 @@ pub fn load_ir_from_file(path: &Path) -> Result<IRFunction, CohError> {
     append_log(&format!("parsed {}", path.display()))?;
     Ok(ir)
 }
-

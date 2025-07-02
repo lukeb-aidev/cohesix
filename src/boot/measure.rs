@@ -18,7 +18,6 @@
 use crate::prelude::*;
 #[forbid(unsafe_code)]
 #[warn(missing_docs)]
-
 use sha2::{Digest, Sha256};
 
 /// Extend a 32‑byte Platform Configuration Register **in place**.

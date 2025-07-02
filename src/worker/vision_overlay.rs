@@ -5,7 +5,6 @@
 
 use crate::prelude::*;
 /// Live vision overlay utility.
-
 use std::time::{Duration, Instant};
 
 /// Simple frame counter and overlay tool.
@@ -44,4 +43,3 @@ impl VisionOverlay {
         self.frames
     }
 }
-

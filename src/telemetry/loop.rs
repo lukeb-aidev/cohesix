@@ -5,7 +5,6 @@
 
 use crate::prelude::*;
 /// Telemetry loops coordinating metric exposure and simulation state.
-
 use log::trace;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -51,4 +50,3 @@ impl TelemetrySyncLoop {
         }
     }
 }
-

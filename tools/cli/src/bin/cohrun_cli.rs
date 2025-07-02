@@ -10,7 +10,7 @@ use std::fs;
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(about = "Run Cohesix demo scenarios")] 
+#[command(about = "Run Cohesix demo scenarios")]
 struct Args {
     /// Scenario file to execute
     #[arg(long)]
@@ -32,4 +32,3 @@ fn main() -> Result<(), CohError> {
     }
     Ok(())
 }
-

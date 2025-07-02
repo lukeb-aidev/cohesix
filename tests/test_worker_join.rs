@@ -40,7 +40,11 @@ fn worker_join_succeeds_for_queen() {
     std::env::set_var("COHROLE", "QueenPrimary");
     let result = spawn_worker();
     println!("Result under QueenPrimary: {:?}", result);
-    assert!(result.is_ok(), "Expected join to succeed for QueenPrimary, got {:?}", result);
+    assert!(
+        result.is_ok(),
+        "Expected join to succeed for QueenPrimary, got {:?}",
+        result
+    );
     match prev {
         Some(v) => std::env::set_var("COHROLE", v),
         None => std::env::remove_var("COHROLE"),

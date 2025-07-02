@@ -11,11 +11,11 @@ use std::sync::{Arc, Mutex};
 use crate::fs::ValidatorHook;
 use crate::ninep_adapter::{read_slice, verify_open};
 use crate::policy::{Access, SandboxPolicy};
-use cohesix::{coh_error, CohError};
+use cohesix::{CohError, coh_error};
 use log::{info, warn};
 use ninep::{
     client::TcpClient,
-    fs::{FileMeta, IoUnit, Mode, Perm, Stat, QID_ROOT},
+    fs::{FileMeta, IoUnit, Mode, Perm, QID_ROOT, Stat},
     server::{ClientId, ReadOutcome, Serve9p, Server},
 };
 
@@ -492,7 +492,10 @@ impl FsServer {
     }
 
     /// Start serving over an arbitrary in-process stream.
-    pub fn start_on_stream<U: ninep::Stream + Send + 'static>(&mut self, stream: U) -> Result<U, CohError> {
+    pub fn start_on_stream<U: ninep::Stream + Send + 'static>(
+        &mut self,
+        stream: U,
+    ) -> Result<U, CohError> {
         let mut fs = CohesixFs::new(self.cfg.root.clone());
         for (u, p) in &self.policies {
             fs.set_policy(u.clone(), p.clone());

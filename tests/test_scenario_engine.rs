@@ -29,8 +29,7 @@ fn run_scenario() {
         ]
     }"#;
     fs::write("boot/scenario.json", scenario).unwrap();
-    ScenarioEngine::run(std::path::Path::new("boot/scenario.json"))
-        .expect("scenario run failed");
+    ScenarioEngine::run(std::path::Path::new("boot/scenario.json")).expect("scenario run failed");
     assert!(std::path::Path::new("/srv/scenario_result/scn1").exists());
 }
 

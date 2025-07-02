@@ -3,15 +3,14 @@
 // Author: Lukas Bower
 // Date Modified: 2026-10-28
 
-use crate::prelude::*;
-/// Initialization routines for the InteractiveAiBooth role.
-
-use std::fs::{self, OpenOptions};
-use std::io::Write;
-use crate::runtime::env::init::detect_cohrole;
 #[cfg(all(feature = "cuda", not(feature = "no-cuda")))]
 use crate::cuda::runtime::CudaRuntime;
+use crate::prelude::*;
+use crate::runtime::env::init::detect_cohrole;
 use crate::runtime::ServiceRegistry;
+/// Initialization routines for the InteractiveAiBooth role.
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 
 fn log(msg: &str) {
     match OpenOptions::new().append(true).open("/srv/devlog") {
@@ -30,7 +29,13 @@ pub fn start() {
     }
 
     // Ensure Secure9P namespaces are mounted
-    for p in ["/input/mic", "/input/cam", "/mnt/ui_in", "/mnt/speak", "/mnt/face_match"] {
+    for p in [
+        "/input/mic",
+        "/input/cam",
+        "/mnt/ui_in",
+        "/mnt/speak",
+        "/mnt/face_match",
+    ] {
         fs::create_dir_all(p).ok();
     }
 
@@ -53,4 +58,3 @@ pub fn start() {
     let _ = ServiceRegistry::register_service("aibooth", "/srv/aibooth");
     log("[aibooth] startup complete");
 }
-

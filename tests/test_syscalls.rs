@@ -4,11 +4,11 @@
 // Author: Cohesix Codex
 
 use cohesix::cohesix_types::RoleManifest;
-use cohesix::plan9::namespace::{Namespace, NsOp};
-use cohesix::syscall::ns::apply_ns;
-use cohesix::plan9::syscalls;
-use cohesix::validator::syscall::validate_syscall;
 use cohesix::cohesix_types::{Role, Syscall};
+use cohesix::plan9::namespace::{Namespace, NsOp};
+use cohesix::plan9::syscalls;
+use cohesix::syscall::ns::apply_ns;
+use cohesix::validator::syscall::validate_syscall;
 use serial_test::serial;
 use std::io::ErrorKind;
 use tempfile::tempdir;
@@ -108,13 +108,23 @@ fn clean_env(prev: Option<String>, srv_root: &std::path::Path) {
 #[test]
 #[serial]
 fn exec_allowed_for_worker() {
-    let allowed = validate_syscall(Role::DroneWorker, &Syscall::Exec { path: "/bin/busybox".into() });
+    let allowed = validate_syscall(
+        Role::DroneWorker,
+        &Syscall::Exec {
+            path: "/bin/busybox".into(),
+        },
+    );
     assert!(allowed, "DroneWorker exec should be allowed");
 }
 
 #[test]
 #[serial]
 fn exec_allowed_for_simtest() {
-    let allowed = validate_syscall(Role::SimulatorTest, &Syscall::Exec { path: "/bin/busybox".into() });
+    let allowed = validate_syscall(
+        Role::SimulatorTest,
+        &Syscall::Exec {
+            path: "/bin/busybox".into(),
+        },
+    );
     assert!(allowed, "SimulatorTest should be allowed to exec");
 }

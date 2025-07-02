@@ -4,9 +4,9 @@
 // Author: Cohesix Codex
 
 use cohesix::seL4::syscall::exec;
+use env_logger;
 use std::fs::File;
 use std::path::Path;
-use env_logger;
 
 #[test]
 fn plan9_mount_read_write() -> std::io::Result<()> {

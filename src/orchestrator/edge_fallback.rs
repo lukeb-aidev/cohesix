@@ -5,7 +5,6 @@
 
 use crate::prelude::*;
 /// Edge-only fallback coordinator for temporary queen loss.
-
 use std::fs;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -17,7 +16,11 @@ pub struct EdgeFallback {
 
 impl EdgeFallback {
     pub fn new(threshold: u32) -> Self {
-        Self { miss: 0, threshold, in_fallback: false }
+        Self {
+            miss: 0,
+            threshold,
+            in_fallback: false,
+        }
     }
 
     pub fn check(&mut self) {

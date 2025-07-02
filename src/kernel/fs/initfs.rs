@@ -40,4 +40,3 @@ pub fn get_file(name: &str) -> Option<&'static InitFile> {
 pub fn list_files() -> impl Iterator<Item = &'static str> {
     INIT_FILES.iter().map(|f| f.name)
 }
-

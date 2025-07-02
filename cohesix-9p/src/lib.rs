@@ -30,15 +30,15 @@
 
 use std::path::PathBuf;
 
-use cohesix::{coh_bail, CohError};
+use cohesix::{CohError, coh_bail};
 // Note: we avoid using private modules from the `p9` crate for now.
 
 pub mod fs;
 pub use fs::ValidatorHook;
 mod server;
 pub use server::FsServer;
-pub mod ninep_adapter;
 pub mod inprocess;
+pub mod ninep_adapter;
 pub use inprocess::InProcessStream;
 /// Policy enforcement and capability checks for Cohesix-9P.
 pub mod policy;

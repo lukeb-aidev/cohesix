@@ -3,14 +3,14 @@
 // Date Modified: 2025-07-22
 // Author: Cohesix Codex
 
-use cohesix::runtime::ServiceRegistry;
-use serial_test::serial;
-use std::fs;
 use cohesix::agents::runtime::AgentRuntime;
 use cohesix::cohesix_types::Role;
+use cohesix::runtime::ServiceRegistry;
+use libc::geteuid;
+use serial_test::serial;
+use std::fs;
 use std::io::ErrorKind;
 use std::net::TcpListener;
-use libc::geteuid;
 
 fn can_run_privileged_tests() -> bool {
     if unsafe { geteuid() } == 0 {
@@ -54,7 +54,8 @@ fn trace_format_contract() {
         return;
     }
     fs::create_dir_all("/srv/trace").unwrap();
-    let data = "{\"ts\":0,\"agent\":\"a\",\"event\":\"spawn\",\"detail\":\"/bin/true\",\"ok\":true}";
+    let data =
+        "{\"ts\":0,\"agent\":\"a\",\"event\":\"spawn\",\"detail\":\"/bin/true\",\"ok\":true}";
     fs::write("/srv/trace/live.log", data).unwrap();
     let v: serde_json::Value = serde_json::from_str(data).unwrap();
     assert!(v.get("ts").is_some());
@@ -74,4 +75,3 @@ fn agent_termination_contract() {
     rt.terminate("c1").unwrap();
     assert!(!std::path::Path::new("/srv/agents/c1").exists());
 }
-
