@@ -13,7 +13,7 @@
 | RELEASE_AND_BATCH_PLAN.md  | v1.0    | 2025-06-20    | COMMUNITY      |     |              |
 | BUILD_PLAN.md              | v0.5    | 2026-02-05    | COMMUNITY      |            |              |
 | COMMERCIAL_PLAN.md         | v1.5    | 2025-06-08    | PRIVATE        |            |              |
-| DEPENDENCIES.md            | v0.6    | 2025-07-02    | COMMUNITY      |            |              |
+| DEPENDENCIES.md            | v0.7    | 2026-12-31    | COMMUNITY      |            |              |
 | METADATA.md                | v3.34   | 2026-02-12    | COMMUNITY      | | |
 | Q_DAY.md                   | v1.1    | 2025-06-15    | PRIVATE        |            |              |
 | README.md                  | v0.21   | 2026-12-31   | COMMUNITY        | | |
@@ -34,7 +34,7 @@
 | SECURITY_REVIEW.md         | v0.2    | 2025-07-13    | COMMUNITY      |     |              |
 | COMPILER_REVIEW.md         | v0.1    | 2025-07-11    | COMMUNITY      |          |              
 | AGENTS_AND_CLI.md          | v1.2    | 2025-07-26    | COMMUNITY      |     |              |
-| LICENSES_AND_REUSE.md     | v1.4    | 2025-07-02    | COMMUNITY      |     |              |
+| LICENSES_AND_REUSE.md     | v1.5    | 2026-12-31    | COMMUNITY      |     |              |
 | ROLE_POLICY.md            | v1.1    | 2026-09-30    | COMMUNITY      |     |              |
 | cli/README.md             | v1.0    | 2025-07-31    | COMMUNITY      |     |              |
 | AGENTS.md                 | v2.2    | 2025-07-22    | COMMUNITY      |     |              |
@@ -178,7 +178,7 @@
 | scripts/build_busybox.sh | v0.7 | 2026-11-17 | COMMUNITY | | |
 | metadata.json | v0.1 | 2025-07-24 | COMMUNITY | | |
 | Cargo.toml | v0.41 | 2026-12-31 | COMMUNITY | | |
-| cohesix-9p/Cargo.toml | v0.4 | 2026-12-31 | COMMUNITY | | |
+| cohesix-9p/Cargo.toml | v0.5 | 2026-12-31 | COMMUNITY | | |
 | cohesix-secure9p/Cargo.toml | v0.2 | 2026-12-31 | COMMUNITY | | |
 | cohesix-secure9p/src/secure_stream.rs | v0.1 | 2026-12-31 | COMMUNITY | | |
 | tools/cli/Cargo.toml | v0.2 | 2025-08-16 | COMMUNITY | | |

@@ -2538,3 +2538,9 @@
 ## [v0.386] - 2026-12-31
 ### Changed
 - Reworked `cohesix-9p` crate for UEFI. POSIX networking now behind the `posix` feature.
+
+## [v0.387] - 2026-12-31
+### Added
+- Concurrency protection for `InMemoryFs` using `spin::RwLock`.
+- Validator hook now triggers on service registration.
+- Documented new `spin` dependency in governance files.
