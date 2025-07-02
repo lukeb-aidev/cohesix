@@ -2508,3 +2508,7 @@
 ### Changed
 - Removed `anyhow` crate and replaced with `CohError` across workspace.
 
+
+## [v0.380] - 2026-12-31
+### Added
+- UEFI + Plan9 readiness audit document.
