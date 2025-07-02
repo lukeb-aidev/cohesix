@@ -8,9 +8,9 @@ use crate::{header::HeaderLine, response::ResponseStatusIndex, Request, Response
 /// Converts an [`http::Response`] into a [`Response`].
 ///
 /// As an [`http::Response`] does not contain a URL, `"https://example.com/"` is used as a
-/// placeholder. Additionally, if the response has a header which cannot be converted into a valid
-/// [`Header`](crate::Header), it will be skipped rather than having the conversion fail. The remote
-/// address property will also always be `127.0.0.1:80` for similar reasons to the URL.
+/// placeholder. Additionally, if the response has a header which cannot be converted to ureq's
+/// internal header representation, it will be skipped rather than having the conversion fail.
+/// The remote address property will also always be `127.0.0.1:80` for similar reasons to the URL.
 ///
 /// ```
 /// # fn main() -> Result<(), http::Error> {
@@ -122,13 +122,16 @@ impl From<Response> for http::Response<String> {
 /// ```
 impl From<Response> for http::Response<Vec<u8>> {
     fn from(value: Response) -> Self {
-        create_builder(&value)
-            .body(value.into_string().unwrap().into_bytes())
-            .unwrap()
+        let respone_builder = create_builder(&value);
+        let mut body_buf: Vec<u8> = vec![];
+        value.into_reader().read_to_end(&mut body_buf).unwrap();
+        respone_builder.body(body_buf).unwrap()
     }
 }
 
 /// Converts an [`http::request::Builder`] into a [`Request`].
+///
+/// For incomplete builders, see the [`http::request::Builder`] documentation for defaults.
 ///
 /// ```
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -141,7 +144,6 @@ impl From<Response> for http::Response<Vec<u8>> {
 /// # Ok(())
 /// # }
 /// ```
-///
 ///
 /// # Converting from [`http::Request`]
 ///
@@ -163,7 +165,7 @@ impl From<Response> for http::Response<Vec<u8>> {
 impl core::convert::TryFrom<http::request::Builder> for Request {
     type Error = http::Error;
 
-    fn try_from(value: http::request::Builder) -> Result<Self, http::Error> {
+    fn try_from(value: http::request::Builder) -> Result<Self, Self::Error> {
         let (parts, ()) = value.body(())?.into_parts();
         Ok(parts.into())
     }
@@ -328,15 +330,18 @@ mod tests {
     #[test]
     fn convert_to_http_response_bytes() {
         use http::Response;
-        use std::io::{Cursor, Read};
+        use std::io::Cursor;
 
         let mut response = super::Response::new(200, "OK", "tbr").unwrap();
-        response.reader = Box::new(Cursor::new(vec![0xde, 0xad, 0xbe, 0xef]));
-        let http_response: Response<Box<dyn Read + Send + Sync + 'static>> = response.into();
+        // b'\xFF' as invalid UTF-8 character
+        response.reader = Box::new(Cursor::new(vec![b'\xFF', 0xde, 0xad, 0xbe, 0xef]));
+        let http_response: Response<Vec<u8>> = response.into();
 
-        let mut buf = vec![];
-        http_response.into_body().read_to_end(&mut buf).unwrap();
-        assert_eq!(buf, vec![0xde, 0xad, 0xbe, 0xef]);
+        assert_eq!(
+            http_response.body().to_vec(),
+            // non UTF-8 byte is preserved
+            vec![b'\xFF', 0xde, 0xad, 0xbe, 0xef]
+        );
     }
 
     #[test]
@@ -398,7 +403,7 @@ mod tests {
         let request = crate::agent()
             .head("http://some-website.com")
             .set("Some-Key", "some value");
-        let http_request_builder: Builder = request.try_into().unwrap();
+        let http_request_builder: Builder = request.into();
         let http_request = http_request_builder.body(()).unwrap();
 
         assert_eq!(
@@ -442,7 +447,7 @@ mod tests {
                 .unwrap(),
         );
         dbg!(&request);
-        let http_request_builder: Builder = request.try_into().unwrap();
+        let http_request_builder: Builder = request.into();
         let http_request = http_request_builder.body(()).unwrap();
 
         assert_eq!(

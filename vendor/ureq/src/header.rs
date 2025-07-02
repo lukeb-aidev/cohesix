@@ -65,7 +65,7 @@ impl fmt::Display for HeaderLine {
 #[derive(Clone, PartialEq, Eq)]
 /// Wrapper type for a header field.
 /// <https://tools.ietf.org/html/rfc7230#section-3.2>
-pub struct Header {
+pub(crate) struct Header {
     // Line contains the unmodified bytes of single header field.
     // It does not contain the final CRLF.
     line: HeaderLine,
@@ -115,6 +115,7 @@ impl Header {
     ///
     /// ureq can't know what encoding the header is in, but this function provides
     /// an escape hatch for users that need to handle such headers.
+    #[allow(unused)]
     pub fn value_raw(&self) -> &[u8] {
         let mut bytes = &self.line.as_bytes()[self.index + 1..];
 
@@ -151,22 +152,22 @@ impl Header {
 }
 
 /// For non-utf8 headers this returns [`None`] (use [`get_header_raw()`]).
-pub fn get_header<'h>(headers: &'h [Header], name: &str) -> Option<&'h str> {
+pub(crate) fn get_header<'h>(headers: &'h [Header], name: &str) -> Option<&'h str> {
     headers
         .iter()
         .find(|h| h.is_name(name))
         .and_then(|h| h.value())
 }
 
-#[cfg(any(doc, all(test, any(feature = "http-interop", feature = "http-crate"))))]
-pub fn get_header_raw<'h>(headers: &'h [Header], name: &str) -> Option<&'h [u8]> {
+#[allow(unused)]
+pub(crate) fn get_header_raw<'h>(headers: &'h [Header], name: &str) -> Option<&'h [u8]> {
     headers
         .iter()
         .find(|h| h.is_name(name))
         .map(|h| h.value_raw())
 }
 
-pub fn get_all_headers<'h>(headers: &'h [Header], name: &str) -> Vec<&'h str> {
+pub(crate) fn get_all_headers<'h>(headers: &'h [Header], name: &str) -> Vec<&'h str> {
     headers
         .iter()
         .filter(|h| h.is_name(name))
@@ -174,11 +175,11 @@ pub fn get_all_headers<'h>(headers: &'h [Header], name: &str) -> Vec<&'h str> {
         .collect()
 }
 
-pub fn has_header(headers: &[Header], name: &str) -> bool {
+pub(crate) fn has_header(headers: &[Header], name: &str) -> bool {
     get_header(headers, name).is_some()
 }
 
-pub fn add_header(headers: &mut Vec<Header>, header: Header) {
+pub(crate) fn add_header(headers: &mut Vec<Header>, header: Header) {
     let name = header.name();
     if !name.starts_with("x-") && !name.starts_with("X-") {
         headers.retain(|h| h.name() != name);

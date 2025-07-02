@@ -36,6 +36,19 @@
 //!
 //! A simple, safe HTTP client.
 //!
+//! > [!NOTE]
+//! > * 2.12.x is MSRV 1.71
+//! > * 2.11.x is MSRV 1.67
+//! >
+//! > For both these lines, we will release patch version pinning dependencies as needed to
+//! > retain the MSRV. If we are bumping MSRV, that will require a minor version bump.
+//!
+//! > [!NOTE]
+//! > ureq version 2.11.0 was forced to bump MSRV from 1.63 -> 1.67. The problem is that the
+//! > `time` crate 0.3.20, the last 1.63 compatible version, stopped compiling with Rust
+//! > [1.80 and above](https://github.com/algesten/ureq/pull/878#issuecomment-2503176155).
+//! > To release a 2.x version that is possible to compile on the latest Rust we were
+//! > forced to bump MSRV.
 //!
 //! Ureq's first priority is being easy for you to use. It's great for
 //! anyone who wants a low-overhead HTTP client that just gets the job done. Works
@@ -104,7 +117,7 @@
 //! # fn main() -> std::result::Result<(), ureq::Error> {
 //! # ureq::is_test(true);
 //!   // Requires the `json` feature enabled.
-//!   let resp: String = ureq::post("http://myapi.example.com/ingest")
+//!   let resp: String = ureq::post("http://myapi.example.com/post/ingest")
 //!       .set("X-My-Header", "Secret")
 //!       .send_json(ureq::json!({
 //!           "name": "martin",
@@ -354,6 +367,18 @@
 //! [actix-web](https://crates.io/crates/actix-web), and [hyper](https://crates.io/crates/hyper).
 //!
 
+/// Re-exported rustls crate
+///
+/// Use this re-export to always get a compatible version of `ClientConfig`.
+#[cfg(feature = "tls")]
+pub use rustls;
+
+/// Re-exported native-tls crate
+///
+/// Use this re-export to always get a compatible version of `TlsConnector`.
+#[cfg(feature = "native-tls")]
+pub use native_tls;
+
 mod agent;
 mod body;
 mod chunked;
@@ -430,7 +455,6 @@ pub use crate::agent::Agent;
 pub use crate::agent::AgentBuilder;
 pub use crate::agent::RedirectAuthHeaders;
 pub use crate::error::{Error, ErrorKind, OrAnyStatus, Transport};
-pub use crate::header::Header;
 pub use crate::middleware::{Middleware, MiddlewareNext};
 pub use crate::proxy::Proxy;
 pub use crate::request::{Request, RequestUrl};
@@ -528,7 +552,7 @@ pub fn request(method: &str, path: &str) -> Request {
 /// let agent = ureq::agent();
 ///
 /// let mut url: Url = "http://example.com/some-page".parse()?;
-/// url.set_path("/robots.txt");
+/// url.set_path("/get/robots.txt");
 /// let resp: ureq::Response = ureq::request_url("GET", &url)
 ///     .call()?;
 /// # Ok(())
