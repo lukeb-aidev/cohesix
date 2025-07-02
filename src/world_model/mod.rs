@@ -30,14 +30,14 @@ pub struct WorldModelSnapshot {
 
 impl WorldModelSnapshot {
     /// Save snapshot to a JSON file.
-    pub fn save(&self, path: &str) -> Result<()> {
+    pub fn save(&self, path: &str) -> Result<(), CohError> {
         let data = serde_json::to_vec_pretty(self)?;
         fs::write(path, data)?;
         Ok(())
     }
 
     /// Load snapshot from a JSON file.
-    pub fn load(path: &str) -> Result<Self> {
+    pub fn load(path: &str) -> Result<Self, CohError> {
         let data = fs::read(path)?;
         let snap = serde_json::from_slice(&data)?;
         Ok(snap)
