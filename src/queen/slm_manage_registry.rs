@@ -10,7 +10,6 @@ use crate::prelude::*;
 /// Registry for Small Language Models (SLMs) available to the Queen.
 /// Models are discovered under `/srv/slm/available` and can be
 /// activated for dispatch to workers.
-
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;

@@ -29,7 +29,9 @@ fn register_and_lookup() {
     ServiceRegistry::register_service("mock1", svc.to_str().unwrap()).unwrap();
     let list = ServiceRegistry::list_services().unwrap();
     assert_eq!(list, vec!["mock1".to_string()]);
-    let h = ServiceRegistry::lookup("mock1").unwrap().expect("lookup failed");
+    let h = ServiceRegistry::lookup("mock1")
+        .unwrap()
+        .expect("lookup failed");
     assert_eq!(h.path, svc.to_str().unwrap());
     ServiceRegistry::unregister_service("mock1").unwrap();
     assert!(ServiceRegistry::list_services().unwrap().is_empty());
@@ -56,7 +58,10 @@ fn role_visibility() {
     env::set_var("COHROLE", "KioskInteractive");
     match ServiceRegistry::lookup("worker_only").unwrap() {
         None => println!("[INFO] As expected: service not visible to KioskInteractive."),
-        Some(s) => println!("[WARN] Service unexpectedly visible to KioskInteractive: {:?}", s),
+        Some(s) => println!(
+            "[WARN] Service unexpectedly visible to KioskInteractive: {:?}",
+            s
+        ),
     }
 
     env::set_var("COHROLE", "QueenPrimary");

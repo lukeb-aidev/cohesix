@@ -3,8 +3,8 @@
 // Author: Lukas Bower
 // Date Modified: 2025-06-25
 
-use serde::Deserialize;
 use cohesix::CohError;
+use serde::Deserialize;
 use std::fs;
 use std::path::Path;
 

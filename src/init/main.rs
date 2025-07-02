@@ -44,4 +44,3 @@ fn main() {
     }
     cohesix::sh_loop::run();
 }
-

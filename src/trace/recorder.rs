@@ -10,7 +10,6 @@ use crate::CohError;
 /// Logs spawn, exec, capability grants and read/write operations into
 /// `/srv/trace/live.log` with simple JSON lines. Supports replay of a
 /// trace file to re-execute scenarios.
-
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::process::{Command, Stdio};
@@ -74,13 +73,23 @@ pub fn spawn(agent: &str, cmd: &str, args: &[&str]) -> std::io::Result<()> {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status();
-    record(agent, "spawn", cmd, result.as_ref().map(|s| s.success()).unwrap_or(false));
+    record(
+        agent,
+        "spawn",
+        cmd,
+        result.as_ref().map(|s| s.success()).unwrap_or(false),
+    );
     result.map(|_| ())
 }
 
 pub fn exec(agent: &str, cmd: &str) -> std::io::Result<()> {
     let result = Command::new(cmd).status();
-    record(agent, "exec", cmd, result.as_ref().map(|s| s.success()).unwrap_or(false));
+    record(
+        agent,
+        "exec",
+        cmd,
+        result.as_ref().map(|s| s.success()).unwrap_or(false),
+    );
     result.map(|_| ())
 }
 

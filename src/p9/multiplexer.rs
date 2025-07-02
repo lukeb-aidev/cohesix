@@ -10,10 +10,9 @@ use crate::prelude::*;
 /// looked up by prefix when handling incoming requests. The
 /// multiplexer supports both synchronous and asynchronous handling
 /// and is used by the Go helper via a channel.
-
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
 use std::sync::mpsc::Receiver;
+use std::sync::{Arc, Mutex};
 
 use crate::runtime::ipc::p9::{P9Request, P9Response, P9Server};
 
@@ -42,7 +41,11 @@ impl Multiplexer {
         *self.rx.lock().unwrap() = Some(rx);
     }
 
-    fn dispatch(&self, path: &str, f: impl FnOnce(&dyn P9Server, &str) -> P9Response) -> P9Response {
+    fn dispatch(
+        &self,
+        path: &str,
+        f: impl FnOnce(&dyn P9Server, &str) -> P9Response,
+    ) -> P9Response {
         let parts: Vec<&str> = path.trim_start_matches('/').splitn(2, '/').collect();
         if parts.len() < 2 {
             return P9Response::RError("invalid path".into());
@@ -60,19 +63,24 @@ impl Multiplexer {
     /// Handle a 9P request synchronously.
     pub fn handle(&self, req: P9Request) -> P9Response {
         match req {
-            P9Request::TRead(p) => self.dispatch(&p, |svc, sub| svc.handle(P9Request::TRead(sub.to_string()))),
-            P9Request::TWrite(p, data) => {
-                self.dispatch(&p, |svc, sub| svc.handle(P9Request::TWrite(sub.to_string(), data)))
+            P9Request::TRead(p) => {
+                self.dispatch(&p, |svc, sub| svc.handle(P9Request::TRead(sub.to_string())))
             }
-            P9Request::TOpen(p) => self.dispatch(&p, |svc, sub| svc.handle(P9Request::TOpen(sub.to_string()))),
-            P9Request::TStat(p) => self.dispatch(&p, |svc, sub| svc.handle(P9Request::TStat(sub.to_string()))),
+            P9Request::TWrite(p, data) => self.dispatch(&p, |svc, sub| {
+                svc.handle(P9Request::TWrite(sub.to_string(), data))
+            }),
+            P9Request::TOpen(p) => {
+                self.dispatch(&p, |svc, sub| svc.handle(P9Request::TOpen(sub.to_string())))
+            }
+            P9Request::TStat(p) => {
+                self.dispatch(&p, |svc, sub| svc.handle(P9Request::TStat(sub.to_string())))
+            }
         }
     }
 
     /// Serve incoming requests on the attached channel.
     pub fn serve(&self) {
-        let mut rx_opt: Option<Receiver<P9Request>> =
-            self.rx.lock().unwrap().take();
+        let mut rx_opt: Option<Receiver<P9Request>> = self.rx.lock().unwrap().take();
         if let Some(rx) = rx_opt {
             for req in rx {
                 let _ = self.handle(req);

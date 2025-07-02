@@ -61,10 +61,8 @@ impl Shell {
                     #[cfg(feature = "busybox_client")]
                     "busybox" => {
                         if let Some(sub) = cmd.args.first() {
-                            let rest: Vec<&str> = cmd.args[1..]
-                                .iter()
-                                .map(|s| s.as_str())
-                                .collect();
+                            let rest: Vec<&str> =
+                                cmd.args[1..].iter().map(|s| s.as_str()).collect();
                             crate::kernel::fs::busybox::run_command(sub, &rest);
                         } else {
                             println!("[shell] usage: busybox <command>");

@@ -5,7 +5,6 @@
 
 use crate::prelude::*;
 /// Agent introspection utilities.
-
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::time::{SystemTime, UNIX_EPOCH};

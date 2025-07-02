@@ -6,15 +6,14 @@
 // Cohesix now always builds for UEFI, so CUDA runtime is unconditional.
 
 use crate::prelude::*;
-use crate::{coh_error, CohError};
 /// Runtime CUDA integration using dynamic loading of `libcuda.so`.
 /// Falls back gracefully if no CUDA driver is present.
-
 use crate::runtime::ServiceRegistry;
-#[cfg(not(target_os = "uefi"))]
-use libloading::{Library, Symbol};
+use crate::{coh_error, CohError};
 #[cfg(target_os = "uefi")]
 use core::marker::PhantomData as Symbol;
+#[cfg(not(target_os = "uefi"))]
+use libloading::{Library, Symbol};
 #[cfg(target_os = "uefi")]
 type Library = ();
 use crate::validator::{self, RuleViolation};
@@ -41,11 +40,7 @@ pub struct CudaRuntime {
     present: bool,
 }
 
-static VALID_SYMBOLS: &[&str] = &[
-    "cuInit",
-    "cuDeviceGetCount",
-    "cuDeviceGet",
-];
+static VALID_SYMBOLS: &[&str] = &["cuInit", "cuDeviceGetCount", "cuDeviceGet"];
 
 impl CudaRuntime {
     /// Attempt to load `libcuda.so` if the `cuda` feature is enabled.
@@ -326,4 +321,3 @@ impl CudaExecutor {
         }
     }
 }
-

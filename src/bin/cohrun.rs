@@ -5,8 +5,8 @@
 
 use crate::prelude::*;
 use clap::Parser;
+use cohesix::binlib::run_main::{run, Cli};
 use cohesix::telemetry::trace::init_panic_hook;
-use cohesix::binlib::run_main::{Cli, run};
 
 fn main() {
     init_panic_hook();

@@ -6,8 +6,8 @@
 // Author: Cohesix Codex
 
 use cohesix::shell::busybox_runner::spawn_shell;
-use std::io::Write;
 use std::fs;
+use std::io::Write;
 use tempfile::tempdir;
 
 #[test]

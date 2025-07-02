@@ -3,12 +3,12 @@
 // Author: Cohesix Codex
 // Date Modified: 2025-07-11
 
+use cohesix::runtime::ServiceRegistry;
 use cohesix::services::webcam::WebcamService;
 use cohesix::services::Service;
-use cohesix::runtime::ServiceRegistry;
+use serial_test::serial;
 use std::fs;
 use std::path::Path;
-use serial_test::serial;
 
 #[test]
 #[serial]

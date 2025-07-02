@@ -30,7 +30,8 @@ impl Default for ValidatorConfig {
     }
 }
 
-static CONFIG: Lazy<RwLock<ValidatorConfig>> = Lazy::new(|| RwLock::new(ValidatorConfig::default()));
+static CONFIG: Lazy<RwLock<ValidatorConfig>> =
+    Lazy::new(|| RwLock::new(ValidatorConfig::default()));
 
 /// Errors produced by validator config operations.
 #[derive(Debug, Error)]
@@ -41,9 +42,7 @@ pub enum ConfigError {
 
 /// Replace the global validator configuration.
 pub fn set_config(cfg: ValidatorConfig) -> Result<(), ConfigError> {
-    let mut guard = CONFIG
-        .write()
-        .map_err(|_| ConfigError::LockPoisoned)?;
+    let mut guard = CONFIG.write().map_err(|_| ConfigError::LockPoisoned)?;
     *guard = cfg;
     Ok(())
 }

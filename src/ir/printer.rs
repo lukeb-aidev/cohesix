@@ -3,10 +3,9 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-11
 
-use crate::prelude::*;
 /// Textual IR printer producing a simple textual representation.
-
 use crate::ir::{Function, Module};
+use crate::prelude::*;
 use std::fmt::Write;
 
 /// Print a single function to a string.

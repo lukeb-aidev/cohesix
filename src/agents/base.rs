@@ -5,7 +5,6 @@
 
 use crate::prelude::*;
 /// Minimal base agent with introspection logging and self-diagnosis.
-
 use crate::sim::introspect::{self, IntrospectionData};
 use serde_json;
 
@@ -14,8 +13,8 @@ pub struct BaseAgent {
     error_history: Vec<f32>,
 }
 
-use crate::agent_transport::AgentTransport;
 use crate::agent_migration::{Migrateable, MigrationStatus};
+use crate::agent_transport::AgentTransport;
 
 impl Migrateable for BaseAgent {
     fn migrate<T: AgentTransport>(&self, peer: &str, transport: &T) -> Result<MigrationStatus> {
@@ -31,7 +30,10 @@ impl Migrateable for BaseAgent {
 impl BaseAgent {
     /// Create a new agent handle.
     pub fn new(id: &str) -> Self {
-        Self { id: id.into(), error_history: Vec::new() }
+        Self {
+            id: id.into(),
+            error_history: Vec::new(),
+        }
     }
 
     /// Run one tick with the provided action error and introspection data.
@@ -42,7 +44,8 @@ impl BaseAgent {
         if self.error_history.len() > 10 {
             self.error_history.remove(0);
         }
-        let avg: f32 = self.error_history.iter().copied().sum::<f32>() / self.error_history.len() as f32;
+        let avg: f32 =
+            self.error_history.iter().copied().sum::<f32>() / self.error_history.len() as f32;
         avg > 1.0
     }
 }

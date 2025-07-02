@@ -3,10 +3,9 @@
 // Date Modified: 2025-06-19
 // Author: Lukas Bower
 
-use crate::prelude::*;
 /// Telemetry service
-
 use super::Service;
+use crate::prelude::*;
 use crate::runtime::ServiceRegistry;
 use crate::telemetry::r#loop::TelemetrySyncLoop;
 

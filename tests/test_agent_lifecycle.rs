@@ -27,7 +27,8 @@ fn agent_lifecycle() {
 
     let mut rt = AgentRuntime::new();
     let args = vec!["true".to_string()];
-    rt.spawn("a1", Role::DroneWorker, &args).expect("spawn agent");
+    rt.spawn("a1", Role::DroneWorker, &args)
+        .expect("spawn agent");
     assert!(agents.join("a1").exists());
 
     sensors::read_temperature("a1");

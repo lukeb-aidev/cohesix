@@ -24,12 +24,20 @@ fn run_exec_as(role: &str) -> io::Result<()> {
     };
     const EXEC_PATH: &str = "/bin/busybox";
     println!("Validating exec: role={}, path={}", role, EXEC_PATH);
-    if validate_syscall(role_enum, &Syscall::Exec { path: EXEC_PATH.into() }) {
+    if validate_syscall(
+        role_enum,
+        &Syscall::Exec {
+            path: EXEC_PATH.into(),
+        },
+    ) {
         println!("✅ Validator approved exec for role={}", role);
         Ok(())
     } else {
         println!("❌ Validator denied exec for role={}", role);
-        Err(io::Error::new(io::ErrorKind::PermissionDenied, format!("exec denied for {}", role)))
+        Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("exec denied for {}", role),
+        ))
     }
 }
 

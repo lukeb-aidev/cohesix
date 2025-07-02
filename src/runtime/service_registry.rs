@@ -9,7 +9,6 @@ use crate::prelude::*;
 /// Allows services under `/srv/` to be dynamically registered and
 /// looked up by name. Lookups are filtered by the caller's role
 /// as exposed via `/srv/cohrole`.
-
 use std::collections::HashMap;
 use std::sync::Mutex;
 

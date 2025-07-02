@@ -5,7 +5,6 @@
 
 use crate::prelude::*;
 /// Entry point for IR pass framework.
-
 pub mod ir_pass_framework;
 pub mod manager;
 pub mod traits;

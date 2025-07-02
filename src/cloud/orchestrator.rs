@@ -7,7 +7,6 @@ use crate::prelude::*;
 /// Cloud orchestration hooks for the Queen role.
 /// Provides registration and heartbeat routines for
 /// interacting with a remote orchestrator service.
-
 use crate::{coh_error, CohError};
 use serde::Serialize;
 use std::fs;
@@ -17,7 +16,6 @@ use tiny_http::{Method, Response, Server};
 use ureq::Agent;
 
 pub type QueenId = String;
-
 
 /// Cloud orchestrator runtime handle.
 pub struct CloudOrchestrator {
@@ -54,7 +52,10 @@ pub fn register_queen(cloud_url: &str) -> Result<QueenId, CohError> {
     let id = resp.into_string().unwrap_or_else(|_| "queen".into());
     println!("Opening file: {:?}", crate::with_srv_root!("cloud"));
     fs::create_dir_all(crate::with_srv_root!("cloud")).ok();
-    println!("Opening file: {:?}", crate::with_srv_root!("cloud/queen_id"));
+    println!(
+        "Opening file: {:?}",
+        crate::with_srv_root!("cloud/queen_id")
+    );
     fs::write(crate::with_srv_root!("cloud/queen_id"), &id).ok();
     println!("Opening file: {:?}", crate::with_srv_root!("cloud/url"));
     fs::write(crate::with_srv_root!("cloud/url"), cloud_url).ok();
@@ -116,10 +117,20 @@ pub fn send_heartbeat(id: QueenId) -> Result<(), CohError> {
     }
     println!("Opening file: {:?}", crate::with_srv_root!("cloud"));
     fs::create_dir_all(crate::with_srv_root!("cloud")).ok();
-    println!("Opening file: {:?}", crate::with_srv_root!("cloud/state.json"));
+    println!(
+        "Opening file: {:?}",
+        crate::with_srv_root!("cloud/state.json")
+    );
     fs::write(crate::with_srv_root!("cloud/state.json"), &data).ok();
-    println!("Opening file: {:?}", crate::with_srv_root!("cloud/last_heartbeat"));
-    fs::write(crate::with_srv_root!("cloud/last_heartbeat"), ts.to_string()).ok();
+    println!(
+        "Opening file: {:?}",
+        crate::with_srv_root!("cloud/last_heartbeat")
+    );
+    fs::write(
+        crate::with_srv_root!("cloud/last_heartbeat"),
+        ts.to_string(),
+    )
+    .ok();
     let url = url.trim_end_matches('/');
     println!("POST /heartbeat sent to {}", url);
     std::io::stdout().flush().unwrap();
@@ -127,7 +138,10 @@ pub fn send_heartbeat(id: QueenId) -> Result<(), CohError> {
 }
 
 fn count_workers() -> usize {
-    println!("Opening file: {:?}", crate::with_srv_root!("agents/active.json"));
+    println!(
+        "Opening file: {:?}",
+        crate::with_srv_root!("agents/active.json")
+    );
     if let Ok(data) = fs::read_to_string(crate::with_srv_root!("agents/active.json")) {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&data) {
             return v.as_array().map(|a| a.len()).unwrap_or(0);
@@ -139,7 +153,10 @@ fn count_workers() -> usize {
 fn spawn_command_listener() {
     std::thread::spawn(|| {
         if let Ok(server) = Server::http("0.0.0.0:4070") {
-            println!("Opening file: {:?}", crate::with_srv_root!("cloud/commands"));
+            println!(
+                "Opening file: {:?}",
+                crate::with_srv_root!("cloud/commands")
+            );
             fs::create_dir_all(crate::with_srv_root!("cloud/commands")).ok();
             for mut req in server.incoming_requests() {
                 if req.method() == &Method::Post && req.url() == "/command" {
@@ -164,7 +181,10 @@ fn spawn_command_listener() {
 
 /// Placeholder for receiving orchestration commands from the cloud.
 pub fn receive_commands() -> Vec<String> {
-    println!("Opening file: {:?}", crate::with_srv_root!("cloud/commands"));
+    println!(
+        "Opening file: {:?}",
+        crate::with_srv_root!("cloud/commands")
+    );
     if let Ok(entries) = fs::read_dir(crate::with_srv_root!("cloud/commands")) {
         let mut cmds = Vec::new();
         for e in entries.flatten() {

@@ -53,7 +53,10 @@ pub static PERMISSIONS: Lazy<HashMap<Role, HashSet<SyscallOp>>> = Lazy::new(|| {
             .into_iter()
             .collect(),
     );
-    m.insert(DroneWorker, [Spawn, CapGrant, Mount, Exec].into_iter().collect());
+    m.insert(
+        DroneWorker,
+        [Spawn, CapGrant, Mount, Exec].into_iter().collect(),
+    );
     m.insert(
         InteractiveAiBooth,
         [Spawn, CapGrant, Mount, Exec].into_iter().collect(),

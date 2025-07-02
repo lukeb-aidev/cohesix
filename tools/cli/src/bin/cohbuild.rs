@@ -27,7 +27,10 @@ fn main() -> Result<(), CohError> {
         println!("[cohbuild/dev] reading {} bytes", src.len());
     }
     fs::write(&args.output, src)?;
-    println!("Built {} -> {}", args.input.display(), args.output.display());
+    println!(
+        "Built {} -> {}",
+        args.input.display(),
+        args.output.display()
+    );
     Ok(())
 }
-

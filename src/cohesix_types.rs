@@ -3,10 +3,9 @@
 // Author: Lukas Bower
 // Date Modified: 2026-10-28
 
-/// Shared types for Cohesix modules.
-
-use std::fs;
 use std::env;
+/// Shared types for Cohesix modules.
+use std::fs;
 
 /// Enumeration of sandbox-mediated syscalls used by userland services.
 #[derive(Debug, Clone)]
@@ -84,4 +83,3 @@ impl RoleManifest {
         VALID_ROLES.contains(&role)
     }
 }
-

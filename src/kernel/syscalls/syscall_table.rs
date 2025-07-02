@@ -51,9 +51,11 @@ pub fn dispatch(syscall_id: u32, args: &[u64]) -> i64 {
             -1 // stub: not implemented
         }
         Syscall::Unknown => {
-            println!("[syscall] unknown syscall_id={} args={:?}", syscall_id, args);
+            println!(
+                "[syscall] unknown syscall_id={} args={:?}",
+                syscall_id, args
+            );
             -1
         }
     }
 }
-

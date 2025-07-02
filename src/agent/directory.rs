@@ -5,7 +5,6 @@
 
 use crate::prelude::*;
 /// Agent directory table maintained under `/srv/agents/agent_table.json`.
-
 use serde::{Deserialize, Serialize};
 use serde_json;
 use std::fs;
@@ -21,12 +20,16 @@ pub struct AgentRecord {
     pub last_heartbeat: u64,
 }
 
-use crate::agent_transport::AgentTransport;
 use crate::agent_migration::{Migrateable, MigrationStatus};
-use crate::{CohError};
+use crate::agent_transport::AgentTransport;
+use crate::CohError;
 
 impl Migrateable for AgentRecord {
-    fn migrate<T: AgentTransport>(&self, peer: &str, transport: &T) -> Result<MigrationStatus, CohError> {
+    fn migrate<T: AgentTransport>(
+        &self,
+        peer: &str,
+        transport: &T,
+    ) -> Result<MigrationStatus, CohError> {
         let tmpdir = std::env::var("TMPDIR").unwrap_or("/srv".to_string());
         let tmp = format!("{}/record_{}.json", tmpdir, self.id);
         let data = serde_json::to_vec(self)?;

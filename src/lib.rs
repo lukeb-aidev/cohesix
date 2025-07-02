@@ -30,158 +30,124 @@ pub mod passes;
 pub mod codegen;
 
 /// CLI interface for compiler invocation
-
 pub mod cli;
 
 /// Minimal sandbox-safe compiler wrapper
-
 pub mod coh_cc;
 
 /// Core dependencies validation and management
-
 pub mod dependencies;
 
-/// Utilities and common helpers used across modules
-pub mod utils;
 /// Low-level logging and debugging helpers
 pub mod util;
+/// Utilities and common helpers used across modules
+pub mod utils;
 
-/// Runtime subsystem modules
-pub mod runtime;
-/// Telemetry subsystem utilities
-
-pub mod telemetry;
-/// Agent runtime modules
-
-pub mod agents;
 /// Standalone agent helpers
-
 pub mod agent;
 /// Migration control-plane helpers
-
 pub mod agent_migration;
 /// Transport implementation for migrations
-
 pub mod agent_transport;
-/// Queen orchestrator modules
-
-pub mod queen;
-/// Trace recording modules
-
-pub mod trace;
-/// Swarm runtime modules for distributed deployments
-
-pub mod swarm;
+/// Agent runtime modules
+pub mod agents;
 /// Physical sensor modules
-
 pub mod physical;
+/// Queen orchestrator modules
+pub mod queen;
+/// Runtime subsystem modules
+pub mod runtime;
+/// Swarm runtime modules for distributed deployments
+pub mod swarm;
+/// Telemetry subsystem utilities
+pub mod telemetry;
+/// Trace recording modules
+pub mod trace;
 
 /// Boot helper modules
-
 pub mod boot;
 
 /// Security modules (capabilities, sandbox enforcement)
-
 pub mod security;
 
 /// Runtime services (telemetry, sandbox, health, ipc)
-
 pub mod services;
 
 /// Common cross-module types.
 pub mod cohesix_types;
 
 /// Worker role modules
-
 pub mod worker;
 
 /// Sandbox helpers (profiles, syscall queueing).
-
 pub mod sandbox;
 
 /// Syscall permission guard helpers
-
 pub mod syscall;
 
 /// Kernel modules and drivers
-
 pub mod kernel;
 
 /// CUDA runtime helpers
 #[cfg(feature = "cuda")]
 pub mod cuda;
 /// Secure launch module helpers
-
 pub mod slm;
 
 /// Physics simulation bridge
-
 pub mod sim;
 
-/// 9P multiplexer utilities
-
-pub mod p9;
 /// Cloud integration helpers
-
 pub mod cloud;
+/// 9P multiplexer utilities
+pub mod p9;
 
-/// Shell helpers
-pub mod shell;
 /// Interactive shell loop
 pub mod sh_loop;
+/// Shell helpers
+pub mod shell;
 
 /// Plan 9 userland helpers
 pub mod plan9;
 
 /// POSIX compatibility helpers
-
 pub mod posix;
 
 /// Filesystem overlay helpers
 pub mod fs;
 
 /// Shared world model structures
-
 pub mod world_model;
 
-/// Distributed orchestration modules
-
-pub mod orchestrator;
 /// Federation utilities
-
 pub mod federation;
+/// Distributed orchestration modules
+pub mod orchestrator;
 /// Runtime rule validator
-
 pub mod validator;
 /// Watchdog daemon module
-
 pub mod watchdogd;
 
 /// Role modules
-
 pub mod roles;
 
 /// Bootloader subcrate utilities
-
 pub mod bootloader;
 
 /// Hardware abstraction layer
-
 pub mod hal;
 
 /// rc style init parser
 pub mod rc {
-/// Parser for rc-style init scripts
+    /// Parser for rc-style init scripts
     pub mod init;
 }
 
 #[allow(non_snake_case)]
 /// seL4 kernel bindings
-
 pub mod seL4;
 
 /// Role-specific initialization hooks
-
 pub mod init;
 
 /// Compile from an input IR file to the specified output path.
@@ -275,6 +241,4 @@ pub trait BootableRuntime {
 }
 
 /// Binary helper modules
-
 pub mod binlib;
-

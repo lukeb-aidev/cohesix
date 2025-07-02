@@ -8,7 +8,6 @@ use crate::prelude::*;
 //
 /// Defines basic runtime services for Cohesix including telemetry reporting,
 /// sandbox enforcement, health monitoring and IPC via the 9P protocol.
-
 pub mod gpuinfo;
 pub mod health;
 pub mod ipc;

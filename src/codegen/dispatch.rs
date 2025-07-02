@@ -3,10 +3,9 @@
 // Date Modified: 2025-05-27
 // Author: Lukas Bower
 
-use crate::prelude::*;
 /// Codegen dispatcher chooses the appropriate backend (C or WASM) to emit code.
-
 use crate::ir::Module;
+use crate::prelude::*;
 
 /// Supported code generation backends.
 #[derive(Clone, Copy, Debug)]

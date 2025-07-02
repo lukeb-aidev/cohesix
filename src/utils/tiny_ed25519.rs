@@ -7,8 +7,7 @@ use crate::prelude::*;
 /// Minimal Ed25519 wrapper using `ed25519-dalek`.
 /// This is `no_std` compatible and relies on `TinyRng` for
 /// deterministic key seeding on UEFI builds.
-
-use ed25519_dalek::{Signer, Verifier, SigningKey, VerifyingKey, Signature};
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 
 /// Lightweight Ed25519 keypair.
 #[derive(Clone)]
@@ -55,4 +54,3 @@ impl TinyEd25519 {
         public.verify(msg, &sig).is_ok()
     }
 }
-

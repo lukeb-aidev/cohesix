@@ -5,14 +5,13 @@
 
 use crate::prelude::*;
 use crate::CohError;
+use hex;
+use serde::Deserialize;
+use sha2::{Digest, Sha256};
 /// Execute trace scenarios across multiple worker nodes and verify consistency.
-
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use serde::Deserialize;
-use sha2::{Digest, Sha256};
-use hex;
 
 /// Run a scenario distributed across the supplied workers.
 #[derive(Deserialize)]
@@ -56,4 +55,3 @@ fn log_audit(msg: &str) {
         let _ = writeln!(f, "{}", msg);
     }
 }
-

@@ -34,7 +34,12 @@ fn shell_runs_binary() {
         }
     };
     let out_path = dir.path().join("test.out");
-    writeln!(console, "cohcc /usr/src/example.coh -o {}", out_path.display()).unwrap();
+    writeln!(
+        console,
+        "cohcc /usr/src/example.coh -o {}",
+        out_path.display()
+    )
+    .unwrap();
     writeln!(console, "run {}", out_path.display()).unwrap();
     writeln!(console, "exit").unwrap();
     spawn_shell();

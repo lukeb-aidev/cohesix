@@ -9,7 +9,6 @@ use crate::prelude::*;
 /// Chains are executed in FIFO order using the [`SyscallQueue`] and
 /// [`SyscallDispatcher`]. Role permissions are verified via
 /// `/srv/cohrole` before any syscalls are dispatched.
-
 use log::debug;
 
 use super::{dispatcher::SyscallDispatcher, queue::SyscallQueue};

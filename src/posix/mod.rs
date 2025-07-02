@@ -7,7 +7,6 @@ use crate::prelude::*;
 /// Minimal POSIX compatibility helpers for Cohesix.
 /// Provides simple syscall name translations to allow
 /// refactoring legacy code.
-
 use std::collections::HashMap;
 
 /// Translate a POSIX syscall name to a Cohesix shim.

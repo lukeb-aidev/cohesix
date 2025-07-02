@@ -5,7 +5,6 @@
 
 use crate::prelude::*;
 /// Queen<->Worker world model sync daemon.
-
 use crate::world_model::WorldModelSnapshot;
 use std::fs;
 use std::thread;
@@ -25,7 +24,10 @@ impl Default for QueenSyncDaemon {
 impl QueenSyncDaemon {
     /// Create a new sync daemon.
     pub fn new() -> Self {
-        Self { workers: Vec::new(), last_snapshot: None }
+        Self {
+            workers: Vec::new(),
+            last_snapshot: None,
+        }
     }
 
     /// Register a worker node for updates.
@@ -55,5 +57,3 @@ impl QueenSyncDaemon {
         }
     }
 }
-
-

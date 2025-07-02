@@ -56,4 +56,3 @@ impl TinyRng {
         low + (high - low) * self.next_f32()
     }
 }
-

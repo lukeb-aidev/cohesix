@@ -13,8 +13,8 @@ use cohesix::coh_cc::{
     parser::input_type::CohInput,
     toolchain::Toolchain,
 };
-use cohesix::{cohcc_error, cohcc_info};
 use cohesix::telemetry::trace::init_panic_hook;
+use cohesix::{cohcc_error, cohcc_info};
 use std::path::Path;
 
 /// Entry point for the cohcc binary.
@@ -35,7 +35,9 @@ pub fn main_entry() -> Result<(), CohError> {
     };
     let backend = get_backend(backend_name)?;
     match cli.command {
-        Command::Build { source, out, flags, .. } => {
+        Command::Build {
+            source, out, flags, ..
+        } => {
             guard::validate_output_path(Path::new(&out))?;
             let input = CohInput::new(Path::new(&source).to_path_buf(), flags);
             let tc = Toolchain::new(cfg.toolchain_dir.clone())?;

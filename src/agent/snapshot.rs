@@ -9,7 +9,6 @@ use crate::prelude::*;
 /// Serializes an agent's policy, memory snapshot, and metrics
 /// to a MessagePack blob which can be transferred to another
 /// worker node.
-
 use serde::{Deserialize, Serialize};
 use std::fs;
 
@@ -24,12 +23,16 @@ pub struct AgentSnapshot {
     pub metrics: String,
 }
 
-use crate::agent_transport::AgentTransport;
 use crate::agent_migration::{Migrateable, MigrationStatus};
+use crate::agent_transport::AgentTransport;
 use crate::CohError;
 
 impl Migrateable for AgentSnapshot {
-    fn migrate<T: AgentTransport>(&self, peer: &str, transport: &T) -> Result<MigrationStatus, CohError> {
+    fn migrate<T: AgentTransport>(
+        &self,
+        peer: &str,
+        transport: &T,
+    ) -> Result<MigrationStatus, CohError> {
         let tmpdir = std::env::var("TMPDIR").unwrap_or("/srv".to_string());
         let tmp = format!("{}/agent_snapshot.msgpack", tmpdir);
         SnapshotWriter::write(&tmp, self)?;

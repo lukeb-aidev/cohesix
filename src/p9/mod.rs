@@ -5,6 +5,4 @@
 
 use crate::prelude::*;
 /// 9P utilities.
-
 pub mod multiplexer;
-

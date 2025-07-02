@@ -6,7 +6,6 @@
 use crate::prelude::*;
 /// Runtime capability map loaded from `/etc/cohcap.json`.
 /// Maps roles to allowed syscall verbs and path prefixes.
-
 use once_cell::sync::Lazy;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -33,15 +32,24 @@ fn default_caps() -> HashMap<String, RoleCaps> {
     HashMap::from_iter([
         (
             "QueenPrimary".into(),
-            RoleCaps { verbs: vec!["open".into(), "exec".into()], paths: vec!["/".into()] },
+            RoleCaps {
+                verbs: vec!["open".into(), "exec".into()],
+                paths: vec!["/".into()],
+            },
         ),
         (
             "RegionalQueen".into(),
-            RoleCaps { verbs: vec!["open".into(), "exec".into()], paths: vec!["/".into()] },
+            RoleCaps {
+                verbs: vec!["open".into(), "exec".into()],
+                paths: vec!["/".into()],
+            },
         ),
         (
             "BareMetalQueen".into(),
-            RoleCaps { verbs: vec!["open".into(), "exec".into()], paths: vec!["/".into()] },
+            RoleCaps {
+                verbs: vec!["open".into(), "exec".into()],
+                paths: vec!["/".into()],
+            },
         ),
         (
             "DroneWorker".into(),
@@ -52,23 +60,38 @@ fn default_caps() -> HashMap<String, RoleCaps> {
         ),
         (
             "InteractiveAiBooth".into(),
-            RoleCaps { verbs: vec!["open".into()], paths: vec!["/input".into(), "/mnt".into(), "/srv/cuda".into()] },
+            RoleCaps {
+                verbs: vec!["open".into()],
+                paths: vec!["/input".into(), "/mnt".into(), "/srv/cuda".into()],
+            },
         ),
         (
             "KioskInteractive".into(),
-            RoleCaps { verbs: vec!["open".into()], paths: vec!["/srv/console".into()] },
+            RoleCaps {
+                verbs: vec!["open".into()],
+                paths: vec!["/srv/console".into()],
+            },
         ),
         (
             "GlassesAgent".into(),
-            RoleCaps { verbs: vec!["open".into()], paths: vec!["/input".into(), "/srv/cuda".into()] },
+            RoleCaps {
+                verbs: vec!["open".into()],
+                paths: vec!["/input".into(), "/srv/cuda".into()],
+            },
         ),
         (
             "SensorRelay".into(),
-            RoleCaps { verbs: vec!["open".into()], paths: vec!["/input".into(), "/srv/telemetry".into()] },
+            RoleCaps {
+                verbs: vec!["open".into()],
+                paths: vec!["/input".into(), "/srv/telemetry".into()],
+            },
         ),
         (
             "SimulatorTest".into(),
-            RoleCaps { verbs: vec!["open".into()], paths: vec!["/sim/data".into(), "/srv/testlog".into()] },
+            RoleCaps {
+                verbs: vec!["open".into()],
+                paths: vec!["/sim/data".into(), "/srv/testlog".into()],
+            },
         ),
     ])
 }
@@ -84,4 +107,3 @@ pub fn role_allows(role: &str, verb: &str, path: &str) -> bool {
         false
     }
 }
-

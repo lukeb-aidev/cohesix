@@ -7,7 +7,6 @@ use crate::prelude::*;
 extern crate alloc;
 use alloc::collections::VecDeque;
 /// Syscall queue for sandbox mediation.
-
 use log::{debug, info};
 
 use crate::cohesix_types::{Role, RoleManifest, Syscall};
@@ -27,7 +26,9 @@ impl Default for SyscallQueue {
 impl SyscallQueue {
     /// Create an empty queue.
     pub fn new() -> Self {
-        Self { buffer: VecDeque::new() }
+        Self {
+            buffer: VecDeque::new(),
+        }
     }
 
     /// Enqueue a syscall for later dispatch.
@@ -51,4 +52,3 @@ impl SyscallQueue {
         }
     }
 }
-

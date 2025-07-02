@@ -4,15 +4,14 @@
 // Date Modified: 2025-08-16
 
 use crate::prelude::*;
+use serde::{Deserialize, Serialize};
 /// Agent state serialization and migration support.
 //
 /// This is a best-effort implementation that snapshots basic runtime state so a
 /// worker can restore an agent on a different node. Complex namespaces and
 /// process state are outside the scope of this helper.
-
 use std::collections::HashMap;
 use std::fs;
-use serde::{Serialize, Deserialize};
 
 use crate::runtime::ServiceRegistry;
 
@@ -24,8 +23,8 @@ pub struct AgentState {
     pub mounts: Vec<(String, String)>,
 }
 
-use crate::agent_transport::AgentTransport;
 use crate::agent_migration::{Migrateable, MigrationStatus};
+use crate::agent_transport::AgentTransport;
 use serde_json;
 
 impl Migrateable for AgentState {
@@ -83,4 +82,3 @@ pub fn migrate(
     ServiceRegistry::unregister_service(agent_id)?;
     Ok(())
 }
-

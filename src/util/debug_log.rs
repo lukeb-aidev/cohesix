@@ -8,9 +8,9 @@ use crate::prelude::*;
 use core::fmt;
 
 #[cfg(not(feature = "std"))]
-use core::sync::atomic::{AtomicUsize, Ordering};
-#[cfg(not(feature = "std"))]
 use core::cell::UnsafeCell;
+#[cfg(not(feature = "std"))]
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 #[cfg(feature = "std")]
 use std::io::{self, Write as IoWrite};

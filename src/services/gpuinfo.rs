@@ -3,12 +3,10 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-11
 
+use super::Service;
 use crate::prelude::*;
 /// GPU information service.
-
-
 use crate::runtime::ServiceRegistry;
-use super::Service;
 use std::process::Command;
 
 #[derive(Default)]
@@ -17,7 +15,9 @@ pub struct GpuInfoService {
 }
 
 impl Service for GpuInfoService {
-    fn name(&self) -> &'static str { "GpuInfoService" }
+    fn name(&self) -> &'static str {
+        "GpuInfoService"
+    }
 
     fn init(&mut self) {
         let info = Command::new("nvidia-smi")

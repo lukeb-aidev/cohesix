@@ -5,12 +5,12 @@
 
 use crate::prelude::*;
 use crate::{coh_bail, CohError};
+use chrono::Utc;
+use clap::{Parser, Subcommand};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use chrono::Utc;
-use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
 #[command(author, version, about)]
@@ -34,7 +34,10 @@ pub enum RustCommand {
 
 fn append_log(line: &str) -> std::io::Result<()> {
     fs::create_dir_all("/log")?;
-    let mut f = OpenOptions::new().create(true).append(true).open("/log/cohcc_rust.log")?;
+    let mut f = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/log/cohcc_rust.log")?;
     writeln!(f, "{} {}", Utc::now().to_rfc3339(), line)?;
     f.flush()?;
     Ok(())
@@ -47,13 +50,20 @@ fn hash_output(path: &Path) -> Result<String, CohError> {
     let mut buf = [0u8; 4096];
     loop {
         let n = std::io::Read::read(&mut f, &mut buf)?;
-        if n == 0 { break; }
+        if n == 0 {
+            break;
+        }
         hasher.update(&buf[..n]);
     }
     Ok(hex::encode(hasher.finalize()))
 }
 
-fn build_crate(dir: &Path, target: &str, release: bool, sysroot: &Path) -> Result<PathBuf, CohError> {
+fn build_crate(
+    dir: &Path,
+    target: &str,
+    release: bool,
+    sysroot: &Path,
+) -> Result<PathBuf, CohError> {
     let mut cmd = Command::new("cargo");
     cmd.arg("build");
     cmd.arg("--offline");
@@ -62,9 +72,14 @@ fn build_crate(dir: &Path, target: &str, release: bool, sysroot: &Path) -> Resul
         cmd.arg("--release");
     }
     cmd.current_dir(dir);
-    let rustc_ver = String::from_utf8_lossy(&Command::new("rustc").arg("--version").output()?.stdout).trim().to_string();
+    let rustc_ver =
+        String::from_utf8_lossy(&Command::new("rustc").arg("--version").output()?.stdout)
+            .trim()
+            .to_string();
     let mut rustflags = std::env::var("RUSTFLAGS").unwrap_or_default();
-    if !rustflags.is_empty() { rustflags.push(' '); }
+    if !rustflags.is_empty() {
+        rustflags.push(' ');
+    }
     rustflags.push_str("-C target-feature=+crt-static");
     if rustc_ver.contains("nightly") {
         rustflags.push_str(" -Zbuild-std=core,alloc");
@@ -76,8 +91,14 @@ fn build_crate(dir: &Path, target: &str, release: bool, sysroot: &Path) -> Resul
         coh_bail!("cargo build failed");
     }
     let profile = if release { "release" } else { "debug" };
-    let crate_name = dir.file_name().unwrap_or_else(|| std::ffi::OsStr::new("bin"));
-    let out = dir.join("target").join(target).join(profile).join(crate_name);
+    let crate_name = dir
+        .file_name()
+        .unwrap_or_else(|| std::ffi::OsStr::new("bin"));
+    let out = dir
+        .join("target")
+        .join(target)
+        .join(profile)
+        .join(crate_name);
     if out.with_extension("so").exists() || out.with_extension("dylib").exists() {
         coh_bail!("dynamic libraries detected");
     }
@@ -87,7 +108,12 @@ fn build_crate(dir: &Path, target: &str, release: bool, sysroot: &Path) -> Resul
 pub fn main_entry() -> Result<(), CohError> {
     let cli = RustCli::parse();
     match cli.command {
-        RustCommand::Build { crate_dir, target, release, sysroot } => {
+        RustCommand::Build {
+            crate_dir,
+            target,
+            release,
+            sysroot,
+        } => {
             let dir = Path::new(&crate_dir);
             if !dir.join("Cargo.toml").exists() {
                 coh_bail!("Cargo.toml not found in crate directory");
@@ -98,10 +124,18 @@ pub fn main_entry() -> Result<(), CohError> {
             }
             let out = build_crate(dir, &target, release, &sysroot_p)?;
             let hash = hash_output(&out)?;
-            let rustc_ver = String::from_utf8_lossy(&Command::new("rustc").arg("--version").output()?.stdout).trim().to_string();
-            append_log(&format!("crate={} out={} rustc={} hash={}", dir.display(), out.display(), rustc_ver, hash))?;
+            let rustc_ver =
+                String::from_utf8_lossy(&Command::new("rustc").arg("--version").output()?.stdout)
+                    .trim()
+                    .to_string();
+            append_log(&format!(
+                "crate={} out={} rustc={} hash={}",
+                dir.display(),
+                out.display(),
+                rustc_ver,
+                hash
+            ))?;
         }
     }
     Ok(())
 }
-

@@ -3,11 +3,10 @@
 // Date Modified: 2025-05-26
 // Author: Lukas Bower
 
-use crate::prelude::*;
 /// A pass that converts IR into Static Single Assignment (SSA) form by renaming variables.
-
 use crate::ir::IRContext;
 use crate::pass_framework::traits::IRPass;
+use crate::prelude::*;
 use std::collections::HashMap;
 
 /// SSA renaming pass implementation.

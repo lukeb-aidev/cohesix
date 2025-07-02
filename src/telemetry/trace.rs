@@ -9,7 +9,6 @@ use crate::prelude::*;
 /// The trace module provides structured and timestamped logging support for
 /// system events, service behavior, and rule validation results.
 /// This supports validation agents, debugging, and runtime observability.
-
 use alloc::boxed::Box;
 
 /// Enum representing the level of a trace event.
@@ -46,7 +45,11 @@ pub fn emit(entry: TraceEntry) {
         let _ = writeln!(f, "[{}][{:?}] {}", entry.source, entry.level, entry.message);
     }
     fs::create_dir_all("/log").ok();
-    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open("/log/trace.log") {
+    if let Ok(mut f) = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/log/trace.log")
+    {
         let _ = writeln!(f, "[{}][{:?}] {}", entry.source, entry.level, entry.message);
     }
 }

@@ -5,7 +5,6 @@
 
 use crate::prelude::*;
 /// Worker-side watchdog monitoring queen heartbeat.
-
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -23,7 +22,10 @@ pub struct QueenWatchdog {
 impl QueenWatchdog {
     /// Create a new watchdog with allowed missed heartbeats.
     pub fn new(threshold: u32) -> Self {
-        Self { miss_count: 0, threshold }
+        Self {
+            miss_count: 0,
+            threshold,
+        }
     }
 
     /// Check queen heartbeat and elect self if needed.
@@ -46,11 +48,19 @@ impl QueenWatchdog {
     fn promote(&self) {
         let qdir = queen_dir();
         fs::create_dir_all(&qdir).ok();
-        if let Ok(mut f) = OpenOptions::new().create(true).write(true).open(format!("{}/role", qdir)) {
+        if let Ok(mut f) = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .open(format!("{}/role", qdir))
+        {
             let _ = write!(f, "QueenPrimary");
         }
         fs::create_dir_all("/log").ok();
-        if let Ok(mut l) = OpenOptions::new().create(true).append(true).open("/log/mesh_reconfig.log") {
+        if let Ok(mut l) = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("/log/mesh_reconfig.log")
+        {
             let _ = writeln!(l, "promoted to QueenPrimary");
         }
     }

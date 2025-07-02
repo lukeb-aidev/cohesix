@@ -5,7 +5,6 @@
 
 use crate::prelude::*;
 /// World model snapshot and sync helpers.
-
 use serde::{Deserialize, Serialize};
 use std::fs;
 
@@ -44,5 +43,3 @@ impl WorldModelSnapshot {
         Ok(snap)
     }
 }
-
-

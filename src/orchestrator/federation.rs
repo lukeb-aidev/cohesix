@@ -4,18 +4,17 @@
 // Date Modified: 2026-12-31
 
 use crate::prelude::*;
+use crate::{coh_error, CohError};
+use hkdf::Hkdf;
+use sha2::Sha256;
 /// Queen federation utilities.
 //
 /// Queens announce themselves via `/srv/federation/beacon` and
 /// exchange state with mutual authentication derived from a
 /// shared federation key.
-
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::time::{SystemTime, UNIX_EPOCH};
-use sha2::Sha256;
-use hkdf::Hkdf;
-use crate::{coh_error, CohError};
 
 /// Summary: federation helper
 pub struct Federation {
@@ -25,7 +24,9 @@ pub struct Federation {
 impl Federation {
     /// Create a new federation helper.
     pub fn new(queen_id: &str) -> Self {
-        Self { queen_id: queen_id.into() }
+        Self {
+            queen_id: queen_id.into(),
+        }
     }
 
     /// Announce this Queen to peers.

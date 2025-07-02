@@ -25,7 +25,9 @@ fn promotes_on_missed_heartbeats() {
     wd.check();
     sleep(Duration::from_millis(600));
     fs::remove_file(&hb).expect("Failed to remove heartbeat");
-    for _ in 0..3 { wd.check(); }
+    for _ in 0..3 {
+        wd.check();
+    }
     let role = fs::read_to_string(qdir.join("role"))
         .expect("Failed to bind or promote: check test permissions or replace with temp socket");
     assert_eq!(role, "QueenPrimary");

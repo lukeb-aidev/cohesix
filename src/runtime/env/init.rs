@@ -62,10 +62,7 @@ pub fn initialize_runtime_env() {
         fs::write("/srv/cohrole", role).ok();
     }
     println!("[env] boot args: {:?}", boot);
-    let role = boot
-        .cohrole
-        .clone()
-        .unwrap_or_else(|| detect_cohrole());
+    let role = boot.cohrole.clone().unwrap_or_else(|| detect_cohrole());
     println!("[env] running as role: {}", role);
     // In the future this will also seed entropy and launch telemetry threads.
 }
@@ -88,4 +85,3 @@ pub fn detect_cohrole() -> String {
         r => format!("{:?}", r),
     }
 }
-

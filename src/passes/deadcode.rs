@@ -3,12 +3,11 @@
 // Date Modified: 2025-05-26
 // Author: Lukas Bower
 
-use crate::prelude::*;
 /// A pass that removes dead (unreachable or unused) instructions from the IR.
-
 use crate::ir::IRContext;
 use crate::ir::{Instruction, Opcode};
 use crate::pass_framework::traits::IRPass;
+use crate::prelude::*;
 
 /// Dead Code Elimination pass implementation.
 pub struct DeadCode;

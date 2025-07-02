@@ -3,16 +3,15 @@
 // Author: Codex
 // Date Modified: 2025-07-12
 
-use crate::prelude::*;
-use crate::{coh_error, CohError};
 /// Queen-to-Queen handshake and capability negotiation.
 //
 /// Each queen exposes its handshake files under
 /// `/srv/federation/state/<peer>/`. The handshake payload is
 /// JSON encoded and signed with the sender's keypair.
-
 use crate::federation::keyring::Keyring;
+use crate::prelude::*;
 use crate::queen::trust;
+use crate::{coh_error, CohError};
 use serde::{Deserialize, Serialize};
 use std::fs;
 
@@ -27,12 +26,7 @@ pub struct Handshake {
 }
 
 /// Initiate a handshake with a peer queen.
-pub fn initiate(
-    me: &str,
-    peer: &str,
-    caps: &[String],
-    kr: &Keyring,
-) -> Result<(), CohError> {
+pub fn initiate(me: &str, peer: &str, caps: &[String], kr: &Keyring) -> Result<(), CohError> {
     fs::create_dir_all(format!("/srv/federation/state/{peer}"))?;
     let payload = Handshake {
         queen_id: me.into(),

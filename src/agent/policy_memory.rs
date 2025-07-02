@@ -4,12 +4,11 @@
 // Date Modified: 2025-08-16
 
 use crate::prelude::*;
+use crate::CohError;
 /// Persistent policy memory utilities.
-
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
-use crate::CohError;
 
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
 pub struct PolicyMemory {
@@ -40,8 +39,8 @@ impl PolicyMemory {
         let data = serde_json::to_vec_pretty(self)?;
         let primary_path = format!("/persist/policy/agent_{agent_id}.policy.json");
         // Try to write to the standard location first
-        let primary_res = fs::create_dir_all("/persist/policy")
-            .and_then(|_| fs::write(&primary_path, &data));
+        let primary_res =
+            fs::create_dir_all("/persist/policy").and_then(|_| fs::write(&primary_path, &data));
 
         if primary_res.is_err() {
             // Fallback for tests or sandboxed envs: write relative to cwd
@@ -57,9 +56,7 @@ impl PolicyMemory {
 
     /// Determine the shared policy path respecting environment overrides.
     fn shared_path() -> PathBuf {
-        if let Ok(base) = std::env::var("COHESIX_POLICY_TMP")
-            .or_else(|_| std::env::var("TMPDIR"))
-        {
+        if let Ok(base) = std::env::var("COHESIX_POLICY_TMP").or_else(|_| std::env::var("TMPDIR")) {
             Path::new(&base).join("policy_shared.json")
         } else {
             Path::new("/srv").join("policy_shared.json")
@@ -88,4 +85,3 @@ impl PolicyMemory {
         }
     }
 }
-
