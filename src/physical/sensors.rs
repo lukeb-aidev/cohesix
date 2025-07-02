@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: sensors.rs v0.5
+// Filename: sensors.rs v0.6
 // Author: Lukas Bower
-// Date Modified: 2025-08-17
+// Date Modified: 2026-12-31
 
 use crate::prelude::*;
 /// Physical sensor interface.
@@ -118,7 +118,8 @@ fn read_hw_temperature() -> Option<f32> {
     if env.is_some() {
         return env;
     }
-    let paths = ["/sys/class/thermal/thermal_zone0/temp", "/srv/ina226_mock"];
+    // Read from a Plan9 srv path exposing temperature.
+    let paths = ["/srv/ina226_temp", "/srv/ina226_mock"];
     for p in paths.iter() {
         if let Ok(contents) = std::fs::read_to_string(p) {
             if let Ok(v) = contents.trim().parse::<f32>() {
@@ -136,10 +137,8 @@ fn read_hw_accel() -> Option<f32> {
     if env.is_some() {
         return env;
     }
-    let paths = [
-        "/sys/bus/iio/devices/iio:device0/in_accel_x_raw",
-        "/srv/accel_mock",
-    ];
+    // Acceleration from Plan9 srv path or mock file.
+    let paths = ["/srv/accel_raw", "/srv/accel_mock"];
     for p in paths.iter() {
         if let Ok(contents) = std::fs::read_to_string(p) {
             if let Ok(v) = contents.trim().parse::<f32>() {

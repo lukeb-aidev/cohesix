@@ -1,20 +1,23 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: root_task.c v0.2
+// Filename: root_task.c v0.3
 // Author: Lukas Bower
-// Date Modified: 2025-06-20
+// Date Modified: 2026-12-31
 
 /*
  * Simplified seL4 root task stub for Cohesix.
  * Creates /srv/cohrole based on boot parameters and environment.
  */
 
+#ifndef MINIMAL_UEFI
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
+#endif
 
 static void write_role(void) {
+#ifndef MINIMAL_UEFI
     const char *role = getenv("COH_ROLE");
     if (!role) role = "Unknown";
     mkdir("/srv", 0755);
@@ -23,6 +26,9 @@ static void write_role(void) {
         fprintf(f, "%s", role);
         fclose(f);
     }
+#else
+    (void)0; /* TODO: implement role exposure via seL4 RPC */
+#endif
 }
 
 int main(int argc, char **argv) {
