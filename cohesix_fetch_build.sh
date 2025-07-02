@@ -72,9 +72,8 @@ log "Architecture: $COH_ARCH (target $COHESIX_TARGET)"
 
 ensure_vendor() {
   if [ ! -d "$ROOT/vendor" ]; then
-    log "📦 Running cargo vendor..."
-    cargo vendor -h >/dev/null 2>&1 || cargo install cargo-vendor
-    (cd "$ROOT" && cargo vendor > /dev/null)
+    log "📦 Running cargo vendor with locked resolution..."
+    cargo vendor --locked > /dev/null
   fi
 }
 
