@@ -50,7 +50,7 @@ log "🛠️ [Build Start] $(date)"
 cd "$HOME"
 log "📦 Cloning repository..."
 rm -rf cohesix
-git clone git@github.com:lukeb-aidev/cohesix.git
+git clone git@github.com:lukeb-aidev/cohesix.git && break || sleep 3
 cd cohesix
 ROOT="$(pwd)"
 if [ -f "$ROOT/scripts/load_arch_config.sh" ]; then
