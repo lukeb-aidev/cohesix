@@ -2517,3 +2517,7 @@
 ### Changed
 - Removed POSIX namespace mounts and cleaned sensor telemetry paths.
 - Stubbed POSIX functions in `root_task.c` for `MINIMAL_UEFI` builds.
+
+## [v0.382] - 2026-12-31
+### Changed
+- Replaced `anyhow::Context` usage in `src/runtime/loader.rs` with manual `CohError` mapping.
