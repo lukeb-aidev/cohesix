@@ -4,6 +4,7 @@
 // Date Modified: 2026-01-27
 
 use clap::Parser;
+use cohesix::{CohError};
 use cohesix::trace::recorder::event;
 
 /// Register a service address under /srv
@@ -16,7 +17,7 @@ struct Args {
     address: String,
 }
 
-fn main() -> anyhow::Result<()> {
+fn main() -> Result<(), CohError> {
     let args = Args::parse();
     std::fs::create_dir_all("/srv")?;
     std::fs::write(format!("/srv/{}", args.name), &args.address)?;

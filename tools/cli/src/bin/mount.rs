@@ -4,6 +4,7 @@
 // Date Modified: 2026-01-27
 
 use clap::Parser;
+use cohesix::{coh_bail, CohError};
 use cohesix::trace::recorder::event;
 use ninep::client::{TcpClient, UnixClient};
 
@@ -17,7 +18,7 @@ struct Args {
     mount: String,
 }
 
-fn main() -> anyhow::Result<()> {
+fn main() -> Result<(), CohError> {
     let args = Args::parse();
     let entry = std::fs::read_to_string(format!("/srv/{}", args.name))?;
     let addr = entry.trim();
@@ -40,7 +41,7 @@ fn main() -> anyhow::Result<()> {
             println!("{}", stat.fm.name);
         }
     } else {
-        anyhow::bail!("unknown address: {}", addr);
+        coh_bail!("unknown address: {}", addr);
     }
     Ok(())
 }

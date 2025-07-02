@@ -23,7 +23,7 @@ struct CompiledScenario {
 pub struct ScenarioRunner;
 
 impl ScenarioRunner {
-    pub fn run_all(base: &Path) -> anyhow::Result<()> {
+    pub fn run_all(base: &Path) -> Result<()> {
         if !base.exists() {
             return Ok(());
         }
@@ -36,7 +36,7 @@ impl ScenarioRunner {
         Ok(())
     }
 
-    pub fn run(path: &Path) -> anyhow::Result<()> {
+    pub fn run(path: &Path) -> Result<()> {
         let data = fs::read_to_string(path)?;
         let scn: CompiledScenario = serde_json::from_str(&data)?;
         let mut runtime = AgentRuntime::new();

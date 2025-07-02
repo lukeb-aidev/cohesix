@@ -5,7 +5,7 @@
 
 use crate::prelude::*;
 use clap::{Parser, Subcommand};
-use anyhow::Result;
+use crate::CohError;
 use crate::cli::federation;
 
 /// CLI wrapper for `cohup`.
@@ -24,7 +24,7 @@ pub enum Commands {
 }
 
 /// Execute the command logic.
-pub fn run(cli: Cli) -> Result<()> {
+pub fn run(cli: Cli) -> Result<(), CohError> {
     match cli.command {
         Commands::Join { peer } => {
             let app = federation::build();

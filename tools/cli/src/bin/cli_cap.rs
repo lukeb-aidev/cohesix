@@ -4,6 +4,7 @@
 // Date Modified: 2026-09-10
 
 use clap::{Parser, Subcommand};
+use cohesix::CohError;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
@@ -40,7 +41,7 @@ fn ensure_admin() {
     }
 }
 
-fn list_caps(worker: String) -> anyhow::Result<()> {
+fn list_caps(worker: String) -> Result<(), CohError> {
     let base = std::env::var("CAP_BASE").unwrap_or_else(|_| "/srv/caps".into());
     let path = PathBuf::from(base).join(worker);
     if path.exists() {
@@ -52,7 +53,7 @@ fn list_caps(worker: String) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn modify(worker: String, cap: String, add: bool) -> anyhow::Result<()> {
+fn modify(worker: String, cap: String, add: bool) -> Result<(), CohError> {
     ensure_admin();
     let base = std::env::var("CAP_BASE").unwrap_or_else(|_| "/srv/caps".into());
     let path = PathBuf::from(base).join(worker);
@@ -73,7 +74,7 @@ fn modify(worker: String, cap: String, add: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn main() -> anyhow::Result<()> {
+fn main() -> Result<(), CohError> {
     let cli = Cli::parse();
     match cli.cmd {
         Cmd::List { worker } => list_caps(worker)?,

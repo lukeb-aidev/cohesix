@@ -4,6 +4,7 @@
 // Date Modified: 2025-06-25
 
 use serde::Deserialize;
+use cohesix::CohError;
 use std::fs;
 use std::path::Path;
 
@@ -49,7 +50,7 @@ struct PhysObj {
 pub struct ScenarioCompiler;
 
 impl ScenarioCompiler {
-    pub fn compile(input: &Path, out_dir: &Path) -> anyhow::Result<()> {
+    pub fn compile(input: &Path, out_dir: &Path) -> Result<(), CohError> {
         let data = fs::read_to_string(input)?;
         let scenario: Scenario = if input.extension().and_then(|e| e.to_str()) == Some("toml") {
             toml::from_str(&data)?
@@ -63,7 +64,7 @@ impl ScenarioCompiler {
         Ok(())
     }
 
-    fn write_trace(out_dir: &Path, scenario: &Scenario) -> anyhow::Result<()> {
+    fn write_trace(out_dir: &Path, scenario: &Scenario) -> Result<(), CohError> {
         let mut trace = Vec::new();
         for agent in &scenario.agents {
             trace.push(format!("spawn {}", agent.id));
@@ -76,13 +77,13 @@ impl ScenarioCompiler {
         Ok(())
     }
 
-    fn write_plan9(out_dir: &Path) -> anyhow::Result<()> {
+    fn write_plan9(out_dir: &Path) -> Result<(), CohError> {
         let cfg = "srv * /srv\n";
         fs::write(out_dir.join("plan9.cfg"), cfg)?;
         Ok(())
     }
 
-    fn write_rc(out_dir: &Path) -> anyhow::Result<()> {
+    fn write_rc(out_dir: &Path) -> Result<(), CohError> {
         let rc = "echo start";
         fs::write(out_dir.join("rc.local"), rc)?;
         Ok(())

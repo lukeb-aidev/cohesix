@@ -5,6 +5,7 @@
 // Random token generation uses rand; this is skipped for UEFI builds.
 
 use crate::prelude::*;
+use crate::{coh_error, CohError};
 /// AES-GCM encrypted SLM container loader.
 
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
@@ -21,13 +22,13 @@ pub struct SLMDecryptor;
 
 impl SLMDecryptor {
     /// Decrypt a `.slmcoh` container with the provided key.
-    pub fn decrypt_model(path: &str, key: &[u8]) -> anyhow::Result<(Vec<u8>, MemoryToken)> {
+    pub fn decrypt_model(path: &str, key: &[u8]) -> Result<(Vec<u8>, MemoryToken), CohError> {
         let data = fs::read(path)?;
-        if data.len() < 28 { return Err(anyhow::anyhow!("container too small")); }
+        if data.len() < 28 { return Err(coh_error!("container too small")); }
         let nonce = Nonce::from_slice(&data[0..12]);
         let cipher = &data[12..];
         let aead = Aes256Gcm::new_from_slice(key)?;
-        let plain = aead.decrypt(nonce, cipher).map_err(|e| anyhow::anyhow!(e))?;
+        let plain = aead.decrypt(nonce, cipher).map_err(|e| coh_error!(e))?;
         let mut rng = TinyRng::new(0xDEC0DE);
         Ok((plain, MemoryToken(rng.next_u64())))
     }
@@ -44,7 +45,7 @@ impl SLMDecryptor {
     }
 
     /// Preload all models from the given directory.
-    pub fn preload_from_dir(dir: &str, key: &[u8]) -> anyhow::Result<()> {
+    pub fn preload_from_dir(dir: &str, key: &[u8]) -> Result<(), CohError> {
         if let Ok(entries) = fs::read_dir(dir) {
             for e in entries.flatten() {
                 if e.path().extension().map(|s| s == "slmcoh").unwrap_or(false) {

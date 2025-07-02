@@ -4,6 +4,7 @@
 // Date Modified: 2025-07-18
 
 use crate::prelude::*;
+use crate::{coh_error, CohError};
 use alloc::boxed::Box;
 use std::path::Path;
 
@@ -18,7 +19,7 @@ pub trait CompilerBackend {
         target: &str,
         sysroot: &Path,
         toolchain: &Toolchain,
-    ) -> anyhow::Result<()>;
+    ) -> Result<(), CohError>;
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -29,11 +30,11 @@ pub enum BackendType {
     // Future backends may include LLVM or WASM implementations.
 }
 
-pub fn get_backend(name: &str) -> anyhow::Result<Box<dyn CompilerBackend>> {
+pub fn get_backend(name: &str) -> Result<Box<dyn CompilerBackend>, CohError> {
     match name {
         "" | "tcc" => Ok(Box::new(crate::coh_cc::backend::tcc::TccBackend)),
         "zig" => Ok(Box::new(crate::coh_cc::backend::zig::ZigBackend)),
-        "cranelift" => Err(anyhow::anyhow!("Cranelift backend not implemented")),
-        other => Err(anyhow::anyhow!("Unknown backend {other}")),
+        "cranelift" => Err(coh_error!("Cranelift backend not implemented")),
+        other => Err(coh_error!("Unknown backend {other}")),
     }
 }

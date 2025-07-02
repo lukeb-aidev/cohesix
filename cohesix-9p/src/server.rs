@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use crate::fs::ValidatorHook;
 use crate::ninep_adapter::{read_slice, verify_open};
 use crate::policy::{Access, SandboxPolicy};
-use anyhow::{anyhow, Result as AnyResult};
+use cohesix::{coh_error, CohError};
 use log::{info, warn};
 use ninep::{
     client::TcpClient,
@@ -19,15 +19,15 @@ use ninep::{
     server::{ClientId, ReadOutcome, Serve9p, Server},
 };
 
-fn check_perm(path: &str, access: Access) -> AnyResult<()> {
+fn check_perm(path: &str, access: Access) -> Result<(), CohError> {
     crate::enforce_capability(path)?;
     if (path.starts_with("/proc") || path.starts_with("/history")) && access == Access::Write {
         warn!("deny write to restricted path: {}", path);
-        return Err(anyhow!("permission denied"));
+        return Err(coh_error!("permission denied"));
     }
     if path.starts_with("/mnt") && access == Access::Write {
         warn!("deny write to /mnt: {}", path);
-        return Err(anyhow!("permission denied"));
+        return Err(coh_error!("permission denied"));
     }
     Ok(())
 }
@@ -104,7 +104,7 @@ impl CohesixFs {
     #[allow(dead_code)]
     // This function will be made public once remote mounts are supported
     // FIXME: expose once remote mount functionality is used by runtime
-    pub fn _mount_remote(&self, mountpoint: &str, addr: &str) -> AnyResult<()> {
+    pub fn _mount_remote(&self, mountpoint: &str, addr: &str) -> Result<(), CohError> {
         let client = TcpClient::new_tcp("cohesix".to_string(), addr, "/")?;
         match self.remotes.lock() {
             Ok(mut map) => {
@@ -156,7 +156,7 @@ impl CohesixFs {
         map.get(uname).cloned()
     }
 
-    fn check_access(&self, path: &str, access: Access, uname: &str) -> AnyResult<()> {
+    fn check_access(&self, path: &str, access: Access, uname: &str) -> Result<(), CohError> {
         check_perm(path, access)?;
         if self
             .policy_for(uname)
@@ -171,7 +171,7 @@ impl CohesixFs {
                 );
             }
             warn!("deny {:?} to {} by {}", access, path, uname);
-            return Err(anyhow!("permission denied"));
+            return Err(coh_error!("permission denied"));
         }
         Ok(())
     }
@@ -459,7 +459,7 @@ impl FsServer {
     }
 
     /// Start serving over TCP.
-    pub fn start(&mut self) -> AnyResult<()> {
+    pub fn start(&mut self) -> Result<(), CohError> {
         let mut fs = CohesixFs::new(self.cfg.root.clone());
         for (u, p) in &self.policies {
             fs.set_policy(u.clone(), p.clone());
@@ -475,7 +475,7 @@ impl FsServer {
     }
 
     /// Start serving over a Unix domain socket path.
-    pub fn start_socket(&mut self, socket: impl Into<String>) -> AnyResult<()> {
+    pub fn start_socket(&mut self, socket: impl Into<String>) -> Result<(), CohError> {
         let path = socket.into();
         let mut fs = CohesixFs::new(self.cfg.root.clone());
         for (u, p) in &self.policies {
@@ -492,7 +492,7 @@ impl FsServer {
     }
 
     /// Start serving over an arbitrary in-process stream.
-    pub fn start_on_stream<U: ninep::Stream + Send + 'static>(&mut self, stream: U) -> AnyResult<U> {
+    pub fn start_on_stream<U: ninep::Stream + Send + 'static>(&mut self, stream: U) -> Result<U, CohError> {
         let mut fs = CohesixFs::new(self.cfg.root.clone());
         for (u, p) in &self.policies {
             fs.set_policy(u.clone(), p.clone());
@@ -502,7 +502,7 @@ impl FsServer {
         }
         let server = Server::new(fs);
         info!("[Plan9] cohesix-9p serving /usr, /etc, /srv");
-        let handle = server.serve_stream(stream.try_clone().map_err(|e| anyhow!(e))?);
+        let handle = server.serve_stream(stream.try_clone().map_err(|e| coh_error!(e))?);
         self.handle = Some(handle);
         Ok(stream)
     }

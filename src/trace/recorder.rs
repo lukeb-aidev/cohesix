@@ -4,6 +4,7 @@
 // Date Modified: 2026-12-30
 
 use crate::prelude::*;
+use crate::CohError;
 /// Syscall and agent event recorder.
 //
 /// Logs spawn, exec, capability grants and read/write operations into
@@ -105,7 +106,7 @@ pub fn event(agent: &str, event: &str, detail: &str) {
 }
 
 /// Replay events from a trace file.
-pub fn replay(file: &str) -> anyhow::Result<()> {
+pub fn replay(file: &str) -> Result<(), CohError> {
     let data = fs::read_to_string(file)?;
     for line in data.lines() {
         let ev: TraceEvent = serde_json::from_str(line)?;

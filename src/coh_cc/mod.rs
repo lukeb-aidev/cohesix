@@ -4,6 +4,7 @@
 // Date Modified: 2025-12-08
 
 use crate::prelude::*;
+use crate::{coh_error, CohError};
 pub mod backend;
 pub mod config;
 pub mod guard;
@@ -15,11 +16,11 @@ pub mod toolchain;
 
 /// Compile a source file using the default shell configuration.
 /// Returns the path to the generated output on success.
-pub fn compile(source: &str) -> anyhow::Result<Vec<u8>> {
+pub fn compile(source: &str) -> Result<Vec<u8>, CohError> {
     let out = std::env::temp_dir().join("cohcc_shell.out");
     let out_str = out
         .to_str()
-        .ok_or_else(|| anyhow::anyhow!("non-UTF8 temp path"))?;
+        .ok_or_else(|| coh_error!("non-UTF8 temp path"))?;
     crate::compile_from_file(source, out_str)?;
     let mut bytes = Vec::new();
     bytes.extend_from_slice(b"COHB");

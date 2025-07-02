@@ -10,7 +10,7 @@ use crate::prelude::*;
 /// registered under `/srv/agents/<id>` and a trace log is kept in
 /// `/srv/agent_trace/<id>`.
 
-use anyhow::Context;
+use crate::{coh_bail, coh_error, CohError};
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -44,7 +44,7 @@ impl Migrateable for AgentRuntime {
         &self,
         peer: &str,
         transport: &T,
-    ) -> anyhow::Result<MigrationStatus> {
+    ) -> Result<MigrationStatus, CohError> {
         let tmpdir = std::env::var("TMPDIR").unwrap_or("/srv".to_string());
         let path = format!("{}/runtime_state.json", tmpdir);
         std::fs::write(&path, "runtime")?;
@@ -62,26 +62,27 @@ impl AgentRuntime {
     }
 
     /// Spawn a new agent process with the given role and arguments.
-    pub fn spawn(&mut self, agent_id: &str, role: Role, args: &[String]) -> anyhow::Result<()> {
+    pub fn spawn(&mut self, agent_id: &str, role: Role, args: &[String]) -> Result<(), CohError> {
         if let Role::Other(_) = role {
-            return Err(anyhow::anyhow!("invalid role"));
+            return Err(coh_error!("invalid role"));
         }
         let agents_dir = agents_dir();
         fs::create_dir_all(&agents_dir)
-            .with_context(|| format!("failed to create agents dir {agents_dir}"))?;
+            .map_err(|e| coh_error!("failed to create agents dir {agents_dir}: {e}"))?;
         let path = format!("{}/{}", agents_dir, agent_id);
-        fs::create_dir_all(&path).with_context(|| format!("failed to create agent path {path}"))?;
-        ServiceRegistry::register_service(agent_id, &path).context("service registry failed")?;
+        fs::create_dir_all(&path).map_err(|e| coh_error!("failed to create agent path {path}: {e}"))?;
+        ServiceRegistry::register_service(agent_id, &path)
+            .map_err(|e| coh_error!("service registry failed: {e}"))?;
 
         let trace_dir = agent_trace_dir();
         fs::create_dir_all(&trace_dir)
-            .with_context(|| format!("failed to create trace dir {trace_dir}"))?;
+            .map_err(|e| coh_error!("failed to create trace dir {trace_dir}: {e}"))?;
         let trace_path = format!("{}/{}", trace_dir, agent_id);
         let mut trace = OpenOptions::new()
             .create(true)
             .append(true)
             .open(&trace_path)
-            .with_context(|| format!("open trace file {trace_path}"))?;
+            .map_err(|e| coh_error!("open trace file {trace_path}: {e}"))?;
         writeln!(trace, "spawn {} {:?}", timestamp(), args)?;
         let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
         let _ = recorder::spawn(agent_id, &args[0], &arg_refs);
@@ -92,7 +93,7 @@ impl AgentRuntime {
         }
         let child = cmd
             .spawn()
-            .with_context(|| format!("failed to spawn agent {} command {}", agent_id, args[0]))?;
+            .map_err(|e| coh_error!("failed to spawn agent {} command {}: {e}", agent_id, args[0]))?;
         self.procs.insert(agent_id.to_string(), child);
         AgentDirectory::update(AgentRecord {
             id: agent_id.into(),
@@ -105,7 +106,7 @@ impl AgentRuntime {
     }
 
     /// Pause a running agent process.
-    pub fn pause(&mut self, agent_id: &str) -> anyhow::Result<()> {
+    pub fn pause(&mut self, agent_id: &str) -> Result<(), CohError> {
         if let Some(child) = self.procs.get_mut(agent_id) {
             // Removed nix::sys::signal dependency for UEFI
             let _ = child.kill();
@@ -114,7 +115,7 @@ impl AgentRuntime {
     }
 
     /// Terminate an existing agent and remove its record.
-    pub fn terminate(&mut self, agent_id: &str) -> anyhow::Result<()> {
+    pub fn terminate(&mut self, agent_id: &str) -> Result<(), CohError> {
         if let Some(mut child) = self.procs.remove(agent_id) {
             let _ = child.kill();
             let _ = child.wait();

@@ -124,12 +124,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "anyhow"
-version = "1.0.98"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e16d2d3311acee920a9eb8d33b8cbc1787ce4a264e85f964c2404b969bdcd487"
-
-[[package]]
 name = "approx"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -350,7 +344,6 @@ checksum = "b94f61472cee1439c0b966b47e3aca9ae07e45d070759512cd390ea2bebc6675"
 name = "cohcli_tools"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "chrono",
  "clap",
  "cohesix",
@@ -365,7 +358,6 @@ dependencies = [
  "aead",
  "aes",
  "aes-gcm",
- "anyhow",
  "bitflags 2.9.1",
  "chrono",
  "clap",
@@ -407,7 +399,6 @@ dependencies = [
 name = "cohesix-9p"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "crossbeam-channel",
  "log",
  "ninep",
@@ -424,7 +415,6 @@ version = "0.2.0"
 name = "cohfuzz"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "clap",
  "rand 0.8.5",
  "serde",
@@ -1932,7 +1922,6 @@ dependencies = [
 name = "scenario_compiler"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "clap",
  "serde",
  "serde_json",

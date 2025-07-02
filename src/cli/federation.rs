@@ -28,7 +28,7 @@ pub fn build() -> Command {
 }
 
 /// Execute the federation command.
-pub fn exec(matches: &clap::ArgMatches) -> anyhow::Result<()> {
+pub fn exec(matches: &clap::ArgMatches) -> Result<()> {
     match matches.subcommand() {
         Some(("connect", sub)) => {
             if let Some(peer) = sub.get_one::<String>("peer") {
