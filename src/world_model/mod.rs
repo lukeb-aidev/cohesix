@@ -4,6 +4,7 @@
 // Date Modified: 2025-07-08
 
 use crate::prelude::*;
+use crate::CohError;
 /// World model snapshot and sync helpers.
 use serde::{Deserialize, Serialize};
 use std::fs;

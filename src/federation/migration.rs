@@ -8,6 +8,7 @@
 /// replicates them to peer queens via the federation state
 /// directory.
 use std::fs;
+use crate::CohError;
 
 /// Migrate an agent snapshot to the specified peer queen.
 pub fn migrate_agent(agent_id: &str, peer: &str) -> Result<(), CohError> {
