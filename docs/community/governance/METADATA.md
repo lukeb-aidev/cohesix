@@ -8,7 +8,7 @@
 | Filename                   | Version | Last Modified | Classification | BATCH_SIZE | BATCH_ORIGIN |
 |----------------------------|---------|---------------|----------------|------------|--------------|
 | ARCHITECTURE.md            | v0.3    | 2025-05-31    | PRIVATE        |            |              |
-| IMPLEMENTATION_AND_TOOLING.md | v1.0    | 2025-06-20    | COMMUNITY      |     |              |
+| IMPLEMENTATION_AND_TOOLING.md | v1.1    | 2026-12-31    | COMMUNITY      | |              |
 | MISSION_AND_ARCHITECTURE.md | v1.1    | 2025-07-20    | COMMUNITY      |     |              |
 | RELEASE_AND_BATCH_PLAN.md  | v1.0    | 2025-06-20    | COMMUNITY      |     |              |
 | BUILD_PLAN.md              | v0.5    | 2026-02-05    | COMMUNITY      |            |              |
@@ -34,7 +34,7 @@
 | SECURITY_REVIEW.md         | v0.2    | 2025-07-13    | COMMUNITY      |     |              |
 | COMPILER_REVIEW.md         | v0.1    | 2025-07-11    | COMMUNITY      |          |              
 | AGENTS_AND_CLI.md          | v1.2    | 2025-07-26    | COMMUNITY      |     |              |
-| LICENSES_AND_REUSE.md     | v1.2    | 2026-02-20    | COMMUNITY      |     |              |
+| LICENSES_AND_REUSE.md     | v1.3    | 2026-12-31    | COMMUNITY      |     |              |
 | ROLE_POLICY.md            | v1.1    | 2026-09-30    | COMMUNITY      |     |              |
 | cli/README.md             | v1.0    | 2025-07-31    | COMMUNITY      |     |              |
 | AGENTS.md                 | v2.2    | 2025-07-22    | COMMUNITY      |     |              |
@@ -99,7 +99,7 @@
 | SIM_TESTS.md               | v0.1    | 2025-07-13    | COMMUNITY      |     |             |
 | devices/HOTPLUG.md | v0.1 | 2025-07-14 | COMMUNITY | | |
 | INSTRUCTION_BLOCK.md | v4.1 | 2025-07-31 | COMMUNITY | | |
-| PROJECT_MANIFEST.md | v0.1 | 2025-07-22 | COMMUNITY | | |
+| PROJECT_MANIFEST.md | v0.2 | 2026-12-31 | COMMUNITY | | |
 | tests/gpu_demos/add.cu           | v0.2    | 2025-07-22    | COMMUNITY      |     |              |
 | CodexCheck.md | v0.1 | 2025-07-22 | COMMUNITY | | |
 | CMakeLists.txt | v0.1 | 2025-07-22 | COMMUNITY | | |

@@ -1,9 +1,8 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: mod.rs v0.1
+// Filename: mod.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-06-21
+// Date Modified: 2026-12-31
 
 use crate::prelude::*;
-pub mod joystick;
 /// Physical environment modules.
 pub mod sensors;
