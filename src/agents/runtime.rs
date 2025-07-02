@@ -9,7 +9,7 @@ use crate::prelude::*;
 /// Spawns, traces and terminates agents in sandboxed namespaces. Each agent is
 /// registered under `/srv/agents/<id>` and a trace log is kept in
 /// `/srv/agent_trace/<id>`.
-use crate::{coh_bail, coh_error, CohError};
+use crate::{coh_error, CohError};
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
 use std::io::Write;

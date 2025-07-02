@@ -3,7 +3,6 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-05
 
-use crate::prelude::*;
 pub mod edge_fallback;
 pub mod failover;
 pub mod federation;

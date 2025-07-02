@@ -3,7 +3,6 @@
 // Author: Lukas Bower
 // Date Modified: 2025-05-31
 
-use crate::prelude::*;
 /// Kernel syscall table for Cohesix.
 /// Maps syscall numbers to handler functions and enforces validation and dispatch.
 

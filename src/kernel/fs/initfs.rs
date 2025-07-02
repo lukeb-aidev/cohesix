@@ -3,7 +3,6 @@
 // Author: Lukas Bower
 // Date Modified: 2025-05-31
 
-use crate::prelude::*;
 /// InitFS — a static, read-only filesystem embedded into the Cohesix kernel.
 /// Used for boot-time resources such as init scripts, config files, and fallback binaries.
 

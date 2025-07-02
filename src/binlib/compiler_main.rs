@@ -4,7 +4,6 @@
 // Date Modified: 2025-07-22
 
 use crate::cli;
-use crate::prelude::*;
 use crate::telemetry::trace::init_panic_hook;
 use env_logger;
 use std::fs::{self, OpenOptions};

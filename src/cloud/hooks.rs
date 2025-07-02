@@ -3,7 +3,6 @@
 // Author: Lukas Bower
 // Date Modified: 2025-08-17
 
-use crate::prelude::*;
 /// Cloud initialization hooks for Queen nodes.
 use std::fs;
 use ureq::Agent;

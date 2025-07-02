@@ -3,7 +3,6 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-11
 
-use crate::prelude::*;
 /// Simple pass framework for transforming IR modules.
 use alloc::{boxed::Box, vec::Vec};
 

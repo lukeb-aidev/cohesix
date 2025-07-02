@@ -7,7 +7,6 @@
 use crate::ir::IRContext;
 use crate::ir::Instruction;
 use crate::pass_framework::traits::IRPass;
-use crate::prelude::*;
 
 /// NOP elimination pass implementation.
 pub struct NopPass;

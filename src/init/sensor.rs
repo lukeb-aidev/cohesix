@@ -3,7 +3,6 @@
 // Author: Lukas Bower
 // Date Modified: 2025-06-17
 
-use crate::prelude::*;
 /// SensorRelay role initialisation.
 
 use std::fs::{self, OpenOptions};
