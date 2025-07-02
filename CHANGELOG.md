@@ -2528,3 +2528,9 @@
 ## [v0.384] - 2025-07-02
 ### Removed
 - Purged obsolete error handling references from documentation and SBOMs.
+
+## [v0.385] - 2026-12-31
+### Fixed
+- Restored CRLF line endings for `vendor/generic-array/build.rs` and
+  updated `.gitattributes` to treat vendor files as binary to prevent
+  checksum mismatches during `cargo build --locked`.
