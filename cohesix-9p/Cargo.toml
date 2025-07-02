@@ -13,6 +13,7 @@ ninep = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 crossbeam-channel = "0.5"
+cohesix = { path = "../", default-features = false, features = ["minimal_uefi"] }
 
 [dev-dependencies]
 serial_test = "2.0"
