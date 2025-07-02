@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: loader.rs v0.2
+// Filename: loader.rs v0.3
 // Author: Lukas Bower
-// Date Modified: 2026-12-30
+// Date Modified: 2026-12-31
 
 use crate::prelude::*;
 use crate::{coh_bail, coh_error, CohError};
@@ -31,13 +31,7 @@ pub fn load_and_run(path: &str) -> Result<(), CohError> {
     let exe_bytes = &data[5..];
     let tmp_path = "/srv/coh_exec.bin";
     fs::write(tmp_path, exe_bytes).context("write temp exe")?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perm = fs::metadata(tmp_path)?.permissions();
-        perm.set_mode(0o755);
-        fs::set_permissions(tmp_path, perm)?;
-    }
+
     let status = Command::new(tmp_path).status().map_err(|e| coh_error!("exec: {e}"))?;
     fs::remove_file(tmp_path).ok();
     if !status.success() {
