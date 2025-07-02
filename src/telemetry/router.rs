@@ -5,7 +5,6 @@
 
 use crate::prelude::*;
 /// Telemetry routing and collection utilities.
-
 use log::debug;
 
 use crate::cohesix_types::{Role, RoleManifest};
@@ -61,7 +60,10 @@ impl TelemetryRouter for BasicTelemetryRouter {
     fn gather_metrics(&mut self) -> TelemetryMetrics {
         let cpu_usage = 0.0;
         let temperature = Self::read_temperature();
-        TelemetryMetrics { cpu_usage, temperature }
+        TelemetryMetrics {
+            cpu_usage,
+            temperature,
+        }
     }
 
     fn expose_metrics(&self, metrics: &TelemetryMetrics) {

@@ -5,7 +5,6 @@
 
 use crate::prelude::*;
 /// Role-specific boot hooks enabling demo services.
-
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 

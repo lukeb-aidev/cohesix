@@ -21,7 +21,6 @@
 use crate::prelude::*;
 #[allow(unsafe_code)]
 #[warn(missing_docs)]
-
 use log::{debug, info};
 
 /// Allocate page tables and enable paging.

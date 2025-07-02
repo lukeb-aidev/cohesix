@@ -11,7 +11,10 @@ use std::path::Path;
 
 fn append(line: &str) -> std::io::Result<()> {
     create_dir_all("/log")?;
-    let mut f = OpenOptions::new().create(true).append(true).open("/log/cohcc_invocations.log")?;
+    let mut f = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/log/cohcc_invocations.log")?;
     writeln!(f, "{} {}", Utc::now().to_rfc3339(), line)?;
     f.flush()?;
     Ok(())

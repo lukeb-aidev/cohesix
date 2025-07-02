@@ -5,13 +5,12 @@
 // Random token generation uses rand; this is skipped for UEFI builds.
 
 use crate::prelude::*;
-use crate::{coh_error, CohError};
-/// AES-GCM encrypted SLM container loader.
-
-use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
-use aead::Aead;
 use crate::utils::tiny_ed25519::TinyEd25519;
 use crate::utils::tiny_rng::TinyRng;
+use crate::{coh_error, CohError};
+use aead::Aead;
+/// AES-GCM encrypted SLM container loader.
+use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
 use std::fs;
 
 /// Memory token representing access to a decrypted SLM payload.
@@ -24,7 +23,9 @@ impl SLMDecryptor {
     /// Decrypt a `.slmcoh` container with the provided key.
     pub fn decrypt_model(path: &str, key: &[u8]) -> Result<(Vec<u8>, MemoryToken), CohError> {
         let data = fs::read(path)?;
-        if data.len() < 28 { return Err(coh_error!("container too small")); }
+        if data.len() < 28 {
+            return Err(coh_error!("container too small"));
+        }
         let nonce = Nonce::from_slice(&data[0..12]);
         let cipher = &data[12..];
         let aead = Aes256Gcm::new_from_slice(key)?;

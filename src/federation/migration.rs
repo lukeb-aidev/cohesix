@@ -8,7 +8,6 @@ use crate::prelude::*;
 /// Uses snapshot files stored under `/mnt/snapshots/` and
 /// replicates them to peer queens via the federation state
 /// directory.
-
 use std::fs;
 
 /// Migrate an agent snapshot to the specified peer queen.

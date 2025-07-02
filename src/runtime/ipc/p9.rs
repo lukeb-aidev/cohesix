@@ -41,4 +41,3 @@ impl P9Server for StubP9Server {
         P9Response::RError("Stub server: not implemented".into())
     }
 }
-

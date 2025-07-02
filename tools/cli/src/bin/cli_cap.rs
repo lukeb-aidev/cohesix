@@ -58,7 +58,10 @@ fn modify(worker: String, cap: String, add: bool) -> Result<(), CohError> {
     let base = std::env::var("CAP_BASE").unwrap_or_else(|_| "/srv/caps".into());
     let path = PathBuf::from(base).join(worker);
     let mut caps = if path.exists() {
-        fs::read_to_string(&path)?.split(',').map(|s| s.to_string()).collect::<Vec<_>>()
+        fs::read_to_string(&path)?
+            .split(',')
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>()
     } else {
         Vec::new()
     };
@@ -69,7 +72,11 @@ fn modify(worker: String, cap: String, add: bool) -> Result<(), CohError> {
     } else {
         caps.retain(|c| c != &cap);
     }
-    let mut f = OpenOptions::new().create(true).write(true).truncate(true).open(&path)?;
+    let mut f = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&path)?;
     writeln!(f, "{}", caps.join(","))?;
     Ok(())
 }
@@ -83,4 +90,3 @@ fn main() -> Result<(), CohError> {
     }
     Ok(())
 }
-

@@ -92,4 +92,3 @@ pub fn serialize_message(msg: &P9Message) -> Vec<u8> {
     };
     vec![tag]
 }
-

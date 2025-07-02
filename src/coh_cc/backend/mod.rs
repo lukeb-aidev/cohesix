@@ -4,7 +4,7 @@
 // Date Modified: 2025-07-17
 
 use crate::prelude::*;
-pub mod registry;
-pub mod zig;
-pub mod tcc;
 pub mod cranelift;
+pub mod registry;
+pub mod tcc;
+pub mod zig;

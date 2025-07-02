@@ -8,7 +8,6 @@ use crate::prelude::*;
 //
 /// The Cohesix telemetry system collects runtime metrics, service health data, diagnostic events,
 /// and trace information. This module provides APIs for components to report and retrieve telemetry records.
-
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
 use std::io::Write;

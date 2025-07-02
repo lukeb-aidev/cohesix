@@ -6,7 +6,6 @@
 use crate::prelude::*;
 #[forbid(unsafe_code)]
 #[warn(missing_docs)]
-
 //
 // ─────────────────────────────────────────────────────────────
 // Cohesix · Miscellaneous Utility Helpers
@@ -22,7 +21,6 @@ use crate::prelude::*;
 // All code is `unsafe`‑free and works in a `std` context; if we
 // need `no_std`, we’ll add conditional compilation.
 // ─────────────────────────────────────────────────────────────
-
 use std::{fmt::Write, thread, time::Duration};
 
 /// Sleep `ms` milliseconds (wrapper over `std::thread::sleep`).

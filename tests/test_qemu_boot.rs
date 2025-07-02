@@ -11,7 +11,10 @@ use std::process::Command;
 fn dump_log_tail(path: &str, lines: usize) {
     if let Ok(data) = fs::read_to_string(path) {
         let tail: Vec<&str> = data.lines().rev().take(lines).collect();
-        eprintln!("QEMU log tail:\n{}", tail.into_iter().rev().collect::<Vec<_>>().join("\n"));
+        eprintln!(
+            "QEMU log tail:\n{}",
+            tail.into_iter().rev().collect::<Vec<_>>().join("\n")
+        );
     }
 }
 

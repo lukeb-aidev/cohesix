@@ -3,20 +3,27 @@
 // Date Modified: 2025-07-16
 // Author: Cohesix Codex
 
-use cohesix_9p::fs::InMemoryFs;
 use cohesix::validator::{log_violation, RuleViolation};
+use cohesix_9p::fs::InMemoryFs;
 use std::fs;
 
 #[test]
 fn triggers_violations() {
-    let log_dir = std::env::var("COHESIX_LOG_DIR").map(std::path::PathBuf::from).unwrap_or_else(|_| std::env::temp_dir());
+    let log_dir = std::env::var("COHESIX_LOG_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::env::temp_dir());
     if let Err(e) = fs::create_dir_all(&log_dir) {
         eprintln!("skipping triggers_violations: {e}");
         return;
     }
     let mut fs = InMemoryFs::new();
     fn hook(ty: &'static str, file: String, agent: String, time: u64) {
-        log_violation(RuleViolation { type_: ty, file, agent, time });
+        log_violation(RuleViolation {
+            type_: ty,
+            file,
+            agent,
+            time,
+        });
     }
     fs.set_validator_hook(hook);
     fs.write("/persist/secret", b"bad", "agent1");
@@ -43,7 +50,9 @@ fn unauthorized_capability_error() {
 #[test]
 fn validator_hook_timeout() {
     use std::time::{Duration, Instant};
-    let log_dir = std::env::var("COHESIX_LOG_DIR").map(std::path::PathBuf::from).unwrap_or_else(|_| std::env::temp_dir());
+    let log_dir = std::env::var("COHESIX_LOG_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::env::temp_dir());
     if let Err(e) = fs::create_dir_all(&log_dir) {
         eprintln!("skipping validator_hook_timeout: {e}");
         return;
@@ -51,7 +60,12 @@ fn validator_hook_timeout() {
     let mut fs = InMemoryFs::new();
     fn slow_hook(ty: &'static str, file: String, agent: String, time: u64) {
         std::thread::sleep(Duration::from_millis(50));
-        log_violation(RuleViolation { type_: ty, file, agent, time });
+        log_violation(RuleViolation {
+            type_: ty,
+            file,
+            agent,
+            time,
+        });
     }
     fs.set_validator_hook(slow_hook);
     let start = Instant::now();
@@ -62,7 +76,9 @@ fn validator_hook_timeout() {
 #[test]
 fn replay_violation_detected() {
     use std::sync::{Arc, Mutex};
-    let log_dir = std::env::var("COHESIX_LOG_DIR").map(std::path::PathBuf::from).unwrap_or_else(|_| std::env::temp_dir());
+    let log_dir = std::env::var("COHESIX_LOG_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::env::temp_dir());
     if let Err(e) = fs::create_dir_all(&log_dir) {
         eprintln!("skipping replay_violation_detected: {e}");
         return;
@@ -74,7 +90,12 @@ fn replay_violation_detected() {
         let mut guard = seen_clone.lock().unwrap();
         if let Some(prev) = &*guard {
             if prev != &file {
-                log_violation(RuleViolation { type_: "replay_violation", file, agent, time });
+                log_violation(RuleViolation {
+                    type_: "replay_violation",
+                    file,
+                    agent,
+                    time,
+                });
             }
         } else {
             *guard = Some(file);

@@ -5,7 +5,6 @@
 
 use crate::prelude::*;
 /// Map webcam input to a beam balance simulation.
-
 use rapier3d::prelude::*;
 use serde::Serialize;
 use std::fs;
@@ -40,7 +39,11 @@ pub fn run(image: Option<&str>) {
 
     let beam = RigidBodyBuilder::dynamic().build();
     let beam_handle = bodies.insert(beam);
-    colliders.insert_with_parent(ColliderBuilder::cuboid(1.0, 0.1, 0.1).build(), beam_handle, &mut bodies);
+    colliders.insert_with_parent(
+        ColliderBuilder::cuboid(1.0, 0.1, 0.1).build(),
+        beam_handle,
+        &mut bodies,
+    );
     joints.insert(
         beam_handle,
         ground_handle,

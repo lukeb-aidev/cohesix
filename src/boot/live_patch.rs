@@ -5,7 +5,6 @@
 
 use crate::prelude::*;
 /// Live patching utilities for on-the-fly updates.
-
 use sha2::{Digest, Sha256};
 use std::fs::{self, OpenOptions};
 use std::io::Write;

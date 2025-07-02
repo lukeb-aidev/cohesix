@@ -4,12 +4,11 @@
 // Date Modified: 2026-10-25
 
 use crate::prelude::*;
-/// Initialization routines for the KioskInteractive role.
-
-use std::fs::{self, OpenOptions};
-use std::io::Write;
 use crate::runtime::env::init::detect_cohrole;
 use crate::runtime::ServiceRegistry;
+/// Initialization routines for the KioskInteractive role.
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use ureq::Agent;
 
 fn log(msg: &str) {
@@ -46,4 +45,3 @@ pub fn start() {
     }
     log("[kiosk_interactive] startup complete");
 }
-

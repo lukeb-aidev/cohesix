@@ -4,16 +4,15 @@
 // Date Modified: 2025-07-12
 
 use crate::prelude::*;
+use crate::CohError;
 /// Queen-to-Queen federation manager.
 //
 /// Handles handshake, trust negotiation and heartbeat exchange between
 /// peer QueenPrimary nodes. Uses the shared `federation` module for
 /// cryptographic primitives and snapshot transfer.
-
 use std::collections::HashMap;
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
-use crate::CohError;
 
 use crate::federation::{handshake, keyring::Keyring};
 
@@ -45,7 +44,11 @@ impl FederationManager {
         let kr = Keyring::load_or_generate(id)?;
         let dir = format!("/srv/{id}");
         fs::create_dir_all(&dir).ok();
-        Ok(Self { id: id.into(), kr, registry: FederationRegistry::default() })
+        Ok(Self {
+            id: id.into(),
+            kr,
+            registry: FederationRegistry::default(),
+        })
     }
 
     /// Connect to a peer queen by initiating a signed handshake.

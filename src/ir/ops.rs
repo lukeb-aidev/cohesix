@@ -3,10 +3,9 @@
 // Date Modified: 2025-07-24
 // Author: Lukas Bower
 
-use crate::prelude::*;
 /// Utility functions and constants for IR opcodes in the Cohesix compiler.
-
 use crate::ir::Opcode;
+use crate::prelude::*;
 
 /// A slice containing every supported Opcode.
 pub const ALL_OPCODES: &[Opcode] = &[

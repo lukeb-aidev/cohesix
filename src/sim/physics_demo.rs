@@ -6,7 +6,6 @@
 use crate::prelude::*;
 
 /// Simple Rapier physics demo used by `cohrun physics_demo`.
-
 use rapier3d::prelude::*;
 use serde::Serialize;
 use std::fs;
@@ -32,17 +31,41 @@ pub fn run_demo() {
     let mut multi = MultibodyJointSet::new();
     let mut ccd = CCDSolver::new();
 
-    let handle = bodies.insert(RigidBodyBuilder::dynamic().translation(vector![0.0, 2.0, 0.0]).build());
-    colliders.insert_with_parent(ColliderBuilder::cuboid(0.5, 0.5, 0.5).build(), handle, &mut bodies);
+    let handle = bodies.insert(
+        RigidBodyBuilder::dynamic()
+            .translation(vector![0.0, 2.0, 0.0])
+            .build(),
+    );
+    colliders.insert_with_parent(
+        ColliderBuilder::cuboid(0.5, 0.5, 0.5).build(),
+        handle,
+        &mut bodies,
+    );
 
     let mut query = QueryPipeline::new();
     for _ in 0..10 {
-        pipeline.step(&gravity, &params, &mut island_manager, &mut broad, &mut narrow, &mut bodies, &mut colliders, &mut joints, &mut multi, &mut ccd, Some(&mut query), &(), &());
+        pipeline.step(
+            &gravity,
+            &params,
+            &mut island_manager,
+            &mut broad,
+            &mut narrow,
+            &mut bodies,
+            &mut colliders,
+            &mut joints,
+            &mut multi,
+            &mut ccd,
+            Some(&mut query),
+            &(),
+            &(),
+        );
     }
 
     if let Some(body) = bodies.get(handle) {
         let pos = body.translation();
-        let state = BodyState { pos: [pos.x, pos.y, pos.z] };
+        let state = BodyState {
+            pos: [pos.x, pos.y, pos.z],
+        };
         let json = serde_json::to_string(&state).unwrap();
         fs::write("/trace/last_sim.json", json).ok();
     }

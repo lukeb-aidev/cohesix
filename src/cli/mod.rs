@@ -6,19 +6,18 @@
 use crate::prelude::*;
 use crate::{coh_bail, coh_error, CohError};
 /// CLI module for Coh_CC compiler. Exports argument parser and main entry.
-
 pub mod args;
-pub mod federation;
 pub mod cohtrace;
+pub mod federation;
 
 use crate::cli::args::build_cli;
 use crate::codegen::dispatch::{dispatch, infer_backend_from_path, Backend};
+use crate::coh_cc::ir::schema::load_ir_from_file;
 use crate::pass_framework::ir_pass_framework::Module;
+use std::env;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
-use std::env;
-use crate::coh_cc::ir::schema::load_ir_from_file;
 
 /// Entry point for the CLI. Parses arguments, reads IR, dispatches codegen, and writes output.
 pub fn run() -> Result<(), CohError> {
@@ -33,7 +32,11 @@ pub fn run() -> Result<(), CohError> {
     } else {
         exe.clone()
     };
-    let remaining = if exe == "cohesix" { args.split_off(2) } else { args.split_off(1) };
+    let remaining = if exe == "cohesix" {
+        args.split_off(2)
+    } else {
+        args.split_off(1)
+    };
 
     match cmd.as_str() {
         "cohcc" => {

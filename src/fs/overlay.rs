@@ -9,7 +9,6 @@ use crate::prelude::*;
 /// This is a lightweight shadow-mount implementation used by the
 /// Queen and Worker nodes to expose remote namespaces under
 /// `/srv/worker/<id>` or `/srv/queen`.
-
 use std::collections::HashMap;
 use std::fs;
 
@@ -22,7 +21,9 @@ pub struct OverlayFS {
 impl OverlayFS {
     /// Create a new overlay manager.
     pub fn new() -> Self {
-        Self { mounts: HashMap::new() }
+        Self {
+            mounts: HashMap::new(),
+        }
     }
 
     /// Mount a remote path over a local prefix.
@@ -35,7 +36,7 @@ impl OverlayFS {
     pub fn resolve(&self, local_path: &str) -> Option<String> {
         for (local, remote) in &self.mounts {
             if local_path.starts_with(local) {
-                let suffix = local_path.trim_start_matches(local).trim_start_matches('/') ;
+                let suffix = local_path.trim_start_matches(local).trim_start_matches('/');
                 return Some(format!("{}/{}", remote.trim_end_matches('/'), suffix));
             }
         }

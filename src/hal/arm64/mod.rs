@@ -23,7 +23,6 @@
 use crate::prelude::*;
 #[allow(unsafe_code)]
 #[warn(missing_docs)]
-
 use log::{debug, info};
 
 /// Build a simple page table and enable the MMU.

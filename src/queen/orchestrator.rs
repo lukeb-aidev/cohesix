@@ -9,7 +9,6 @@ use crate::prelude::*;
 /// Tracks workers via `/srv/netinit/<worker_id>` and issues spawn commands
 /// through `/srv/agents/<worker_id>/spawn`. Stale workers are restarted if no
 /// heartbeat is detected within a timeout.
-
 use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
@@ -80,28 +79,30 @@ impl QueenOrchestrator {
         if let Ok(entries) = fs::read_dir("/srv/netinit") {
             for ent in entries.flatten() {
                 let path = ent.path().join("ip");
-                if let (Ok(wid), Ok(ip)) = (ent.file_name().into_string(), fs::read_to_string(&path)) {
+                if let (Ok(wid), Ok(ip)) =
+                    (ent.file_name().into_string(), fs::read_to_string(&path))
+                {
                     let rec = self
-                            .workers
-                            .entry(wid.clone())
-                            .or_insert_with(|| WorkerRecord {
-                                id: wid.clone(),
-                                ip: ip.trim().to_string(),
-                                status: "booting".into(),
-                                boot_ts: timestamp(),
-                                last_seen: timestamp(),
-                                role: fs::read_to_string(ent.path().join("role"))
-                                    .unwrap_or_else(|_| "unknown".into())
-                                    .trim()
-                                    .into(),
-                                trust: fs::read_to_string(ent.path().join("trust"))
-                                    .unwrap_or_else(|_| "normal".into())
-                                    .trim()
-                                    .into(),
-                                capabilities: fs::read_to_string(ent.path().join("caps"))
-                                    .map(|c| c.lines().map(|s| s.to_string()).collect())
-                                    .unwrap_or_else(|_| Vec::new()),
-                            });
+                        .workers
+                        .entry(wid.clone())
+                        .or_insert_with(|| WorkerRecord {
+                            id: wid.clone(),
+                            ip: ip.trim().to_string(),
+                            status: "booting".into(),
+                            boot_ts: timestamp(),
+                            last_seen: timestamp(),
+                            role: fs::read_to_string(ent.path().join("role"))
+                                .unwrap_or_else(|_| "unknown".into())
+                                .trim()
+                                .into(),
+                            trust: fs::read_to_string(ent.path().join("trust"))
+                                .unwrap_or_else(|_| "normal".into())
+                                .trim()
+                                .into(),
+                            capabilities: fs::read_to_string(ent.path().join("caps"))
+                                .map(|c| c.lines().map(|s| s.to_string()).collect())
+                                .unwrap_or_else(|_| Vec::new()),
+                        });
                     rec.last_seen = timestamp();
                     rec.ip = ip.trim().into();
                 }

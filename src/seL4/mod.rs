@@ -5,7 +5,6 @@
 
 use crate::prelude::*;
 /// seL4 integration module root.
-
 pub mod syscall;
 
 #[cfg(target_os = "none")]

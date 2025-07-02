@@ -4,7 +4,7 @@
 // Date Modified: 2026-01-27
 
 use clap::Parser;
-use cohesix::{CohError};
+use cohesix::CohError;
 use cohesix::trace::recorder::event;
 use ninep::client::TcpClient;
 

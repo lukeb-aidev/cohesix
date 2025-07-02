@@ -4,16 +4,15 @@
 // Date Modified: 2026-12-31
 
 use crate::prelude::*;
+use crate::CohError;
 /// Queen-side orchestration for Workers.
 //
 /// Handles worker join requests, monitors health, and
 /// exposes the registry under `/srv/registry`.
-
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use crate::CohError;
 
 use crate::orchestrator::protocol::{HealthPing, JoinAck, JoinRequest};
 use rmp_serde::decode::from_read;

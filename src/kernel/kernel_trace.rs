@@ -5,7 +5,6 @@
 
 use crate::prelude::*;
 /// Kernel boot tracing utilities.
-
 use chrono::Utc;
 use std::fs::{self, OpenOptions};
 use std::io::Write;

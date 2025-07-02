@@ -4,8 +4,8 @@
 // Date Modified: 2025-08-18
 
 use cohesix::sandbox::validator::boot_must_succeed;
-use std::fs;
 use serial_test::serial;
+use std::fs;
 use tempfile::tempdir;
 
 #[test]
@@ -13,8 +13,11 @@ use tempfile::tempdir;
 fn boot_trace_success() {
     let dir = tempdir().expect("tempdir creation failed");
     std::env::set_var("COHESIX_TRACE_TMP", dir.path());
-    fs::write(dir.path().join("boot_trace.json"), "[{\"event\":\"boot_success\"}]")
-        .expect("unable to write boot trace file");
+    fs::write(
+        dir.path().join("boot_trace.json"),
+        "[{\"event\":\"boot_success\"}]",
+    )
+    .expect("unable to write boot trace file");
     assert!(boot_must_succeed());
     std::env::remove_var("COHESIX_TRACE_TMP");
 }

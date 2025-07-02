@@ -3,10 +3,10 @@
 // Date Modified: 2026-11-12
 // Author: Cohesix Codex
 
-use cohesix::plan9::namespace::{NsOp, BindFlags};
 use cohesix::plan9::namespace::Namespace;
+use cohesix::plan9::namespace::{BindFlags, NsOp};
+use cohesix::plan9::srv_registry::{lookup_srv, register_srv};
 use cohesix::syscall::apply_ns;
-use cohesix::plan9::srv_registry::{register_srv, lookup_srv};
 use serial_test::serial;
 
 #[test]
@@ -45,13 +45,24 @@ fn bind_overlay_order() {
     let src = dir.path().join("src");
     fs::create_dir_all(&src).expect("create src dir");
 
-    let mut ns = Namespace { ops: vec![], private: true, root: Default::default() };
+    let mut ns = Namespace {
+        ops: vec![],
+        private: true,
+        root: Default::default(),
+    };
     ns.add_op(NsOp::Mount {
         srv: src.to_str().expect("utf8 path").into(),
         dst: "/a".into(),
     });
-    let f = BindFlags { after: true, ..Default::default() };
-    ns.add_op(NsOp::Bind { src: "/a".into(), dst: "/b".into(), flags: f });
+    let f = BindFlags {
+        after: true,
+        ..Default::default()
+    };
+    ns.add_op(NsOp::Bind {
+        src: "/a".into(),
+        dst: "/b".into(),
+        flags: f,
+    });
 
     // set role to QueenPrimary and expect success
     let prev = env::var("COHROLE").ok();

@@ -3,7 +3,6 @@
 // Date Modified: 2025-05-26
 // Author: Lukas Bower
 /// PassManager orchestrates the registration and execution of IR passes in Coh_CC.
-
 use crate::prelude::*;
 use alloc::{boxed::Box, vec::Vec};
 

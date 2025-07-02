@@ -7,7 +7,6 @@ use crate::prelude::*;
 /// Cohesix in-kernel BusyBox implementation.
 /// Provides minimal command handlers for embedded shell and diagnostics.
 
-
 /// Available BusyBox commands.
 #[derive(Debug)]
 pub enum BusyBoxCommand {

@@ -3,10 +3,10 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-21
 
-use cohfuzz::fuzzer::TraceFuzzer;
-use cohesix::CohError;
-use std::path::PathBuf;
 use clap::Parser;
+use cohesix::CohError;
+use cohfuzz::fuzzer::TraceFuzzer;
+use std::path::PathBuf;
 
 #[derive(Parser)]
 struct Args {
@@ -24,4 +24,3 @@ fn main() -> Result<(), CohError> {
     fuzzer.run(&args.input, args.iterations)?;
     Ok(())
 }
-

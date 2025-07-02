@@ -9,7 +9,6 @@ use crate::prelude::*;
 /// Spawns, traces and terminates agents in sandboxed namespaces. Each agent is
 /// registered under `/srv/agents/<id>` and a trace log is kept in
 /// `/srv/agent_trace/<id>`.
-
 use crate::{coh_bail, coh_error, CohError};
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
@@ -70,7 +69,8 @@ impl AgentRuntime {
         fs::create_dir_all(&agents_dir)
             .map_err(|e| coh_error!("failed to create agents dir {agents_dir}: {e}"))?;
         let path = format!("{}/{}", agents_dir, agent_id);
-        fs::create_dir_all(&path).map_err(|e| coh_error!("failed to create agent path {path}: {e}"))?;
+        fs::create_dir_all(&path)
+            .map_err(|e| coh_error!("failed to create agent path {path}: {e}"))?;
         ServiceRegistry::register_service(agent_id, &path)
             .map_err(|e| coh_error!("service registry failed: {e}"))?;
 
@@ -91,9 +91,13 @@ impl AgentRuntime {
         if args.len() > 1 {
             cmd.args(&args[1..]);
         }
-        let child = cmd
-            .spawn()
-            .map_err(|e| coh_error!("failed to spawn agent {} command {}: {e}", agent_id, args[0]))?;
+        let child = cmd.spawn().map_err(|e| {
+            coh_error!(
+                "failed to spawn agent {} command {}: {e}",
+                agent_id,
+                args[0]
+            )
+        })?;
         self.procs.insert(agent_id.to_string(), child);
         AgentDirectory::update(AgentRecord {
             id: agent_id.into(),

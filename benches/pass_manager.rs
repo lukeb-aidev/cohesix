@@ -1,15 +1,17 @@
-use criterion::{criterion_group, criterion_main, Criterion};
-use cohesix::ir::{IRContext, Module, Instruction, Opcode, Function};
-use cohesix::passes::{NopPass, ConstFold, DeadCode};
+use cohesix::ir::{Function, IRContext, Instruction, Module, Opcode};
 use cohesix::pass_framework::PassManager;
+use cohesix::passes::{ConstFold, DeadCode, NopPass};
+use criterion::{criterion_group, criterion_main, Criterion};
 
 fn make_test_context() -> IRContext {
     let mut module = Module::new("bench");
     let mut func = Function::new("f");
     for _ in 0..100 {
         func.body.push(Instruction::new(Opcode::Nop, vec![]));
-        func.body.push(Instruction::new(Opcode::Add, vec!["2".into(), "3".into()]));
-        func.body.push(Instruction::new(Opcode::Sub, vec!["5".into(), "2".into()]));
+        func.body
+            .push(Instruction::new(Opcode::Add, vec!["2".into(), "3".into()]));
+        func.body
+            .push(Instruction::new(Opcode::Sub, vec!["5".into(), "2".into()]));
     }
     module.add_function(func);
     let mut ctx = IRContext::default();

@@ -15,7 +15,8 @@ const VERSION: u8 = 1;
 pub fn load_and_run(path: &str) -> Result<(), CohError> {
     let mut f = File::open(path).map_err(|e| coh_error!("open {path}: {e}"))?;
     let mut data = Vec::new();
-    f.read_to_end(&mut data).map_err(|e| coh_error!("read file: {e}"))?;
+    f.read_to_end(&mut data)
+        .map_err(|e| coh_error!("read file: {e}"))?;
     if data.len() < 5 {
         coh_bail!("file too small");
     }
@@ -32,7 +33,9 @@ pub fn load_and_run(path: &str) -> Result<(), CohError> {
     let tmp_path = "/srv/coh_exec.bin";
     fs::write(tmp_path, exe_bytes).context("write temp exe")?;
 
-    let status = Command::new(tmp_path).status().map_err(|e| coh_error!("exec: {e}"))?;
+    let status = Command::new(tmp_path)
+        .status()
+        .map_err(|e| coh_error!("exec: {e}"))?;
     fs::remove_file(tmp_path).ok();
     if !status.success() {
         coh_bail!("program exited with {:?}", status.code());

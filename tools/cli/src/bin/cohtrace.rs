@@ -3,12 +3,12 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-21
 
+use chrono::Utc;
 use clap::{Parser, Subcommand};
 use cohesix::CohError;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use chrono::Utc;
 
 #[derive(Parser)]
 #[command(about = "Trace inspection utilities")]
@@ -55,7 +55,11 @@ fn cmd_push(worker_id: String, path: PathBuf) -> Result<(), CohError> {
     fs::create_dir_all(&dest)?;
     fs::copy(&path, dest.join("sim.json"))?;
     println!("trace stored for {}", worker_id);
-    append_summary(&format!("cohtrace push_trace {} {}", worker_id, path.display()));
+    append_summary(&format!(
+        "cohtrace push_trace {} {}",
+        worker_id,
+        path.display()
+    ));
     Ok(())
 }
 
@@ -67,4 +71,3 @@ fn main() -> Result<(), CohError> {
     }
     Ok(())
 }
-

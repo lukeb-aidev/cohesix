@@ -5,7 +5,6 @@
 
 use crate::prelude::*;
 /// Entry point for all IR passes in the Cohesix compiler.
-
 pub mod const_fold;
 pub mod deadcode;
 pub mod nop;

@@ -8,7 +8,6 @@ use crate::prelude::*;
 //
 /// Reads normalized sensor data from `/srv/sensors/` and logs values both to
 /// `/srv/telemetry` and per-agent traces in `/srv/agent_trace/<id>`.
-
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::Path;
