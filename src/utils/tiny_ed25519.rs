@@ -40,9 +40,15 @@ impl TinyEd25519 {
             return false;
         }
 
-        // Attempt to convert slices into fixed-size arrays
-        let pk_bytes: [u8; 32] = pk.try_into().unwrap_or_else(|_| return false);
-        let sig_bytes: [u8; 64] = sig.try_into().unwrap_or_else(|_| return false);
+        // Attempt to convert slices into fixed-size arrays using match
+        let pk_bytes: [u8; 32] = match pk.try_into() {
+            Ok(bytes) => bytes,
+            Err(_) => return false,
+        };
+        let sig_bytes: [u8; 64] = match sig.try_into() {
+            Ok(bytes) => bytes,
+            Err(_) => return false,
+        };
 
         // Parse the public key bytes into a VerifyingKey
         let public = match VerifyingKey::from_bytes(&pk_bytes) {
