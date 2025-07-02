@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: lib.rs v0.4
+// Filename: lib.rs v0.5
 // Author: Lukas Bower
 // Date Modified: 2026-12-31
 

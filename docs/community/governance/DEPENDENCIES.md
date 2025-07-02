@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: DEPENDENCIES.md v0.6
+// Filename: DEPENDENCIES.md v0.7
 // Author: Lukas Bower
-// Date Modified: 2025-07-02
+// Date Modified: 2026-12-31
 
 # System Dependencies
 
@@ -30,6 +30,7 @@
 | rapier3d         | 0.14      | crates.io (MIT)   | Physics simulation engine                 |
 | ureq             | 2.9       | crates.io (MIT)   | HTTP client for cloud init                |
 | regex-automata   | 0.4       | crates.io (MIT)   | Deterministic regex engine (utils)        |
+| spin             | 0.9       | crates.io (MIT)   | `no_std` synchronization primitives |
 | bytes            | 1.5       | crates.io (MIT)   | Zero‑copy byte buffers (async 9P helper) |
 | p9               | 0.3.2     | crates.io (BSD-3-Clause) | 9P protocol server implementation |
 | tempdir / tempfile | latest  | crates.io (MIT)              | Writable test directories for agent validation & boot tests |

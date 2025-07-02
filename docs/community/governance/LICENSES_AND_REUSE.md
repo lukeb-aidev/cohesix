@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: LICENSES_AND_REUSE.md v1.4
+// Filename: LICENSES_AND_REUSE.md v1.5
 // Author: Lukas Bower
-// Date Modified: 2025-07-02
+// Date Modified: 2026-12-31
 
 # Licensing and OSS Reuse
 
@@ -36,6 +36,7 @@ The table below lists current third-party packages used by Cohesix.
 | ureq | 2.9 | MIT OR Apache-2.0 | HTTP client | https://crates.io/crates/ureq |
 | serde | 1 | MIT OR Apache-2.0 | Serialization | https://crates.io/crates/serde |
 | serde_json | 1 | MIT OR Apache-2.0 | JSON serialization | https://crates.io/crates/serde_json |
+| spin | 0.9 | MIT OR Apache-2.0 | `no_std` synchronization primitives | https://crates.io/crates/spin |
 | xmas-elf | 0.10 | MIT OR Apache-2.0 | ELF parsing for loader | https://crates.io/crates/xmas-elf |
 | cobra | 1.8.0 | Apache-2.0 | Go CLI framework | https://github.com/spf13/cobra |
 | chi | v5 | MIT | HTTP router for GUI orchestrator | https://github.com/go-chi/chi |
