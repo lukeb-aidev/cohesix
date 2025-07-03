@@ -122,7 +122,6 @@
 | src/kernel/proc_mgr.rs | v0.2 | 2025-08-27 | COMMUNITY | | |
 | tests/test_traceflow.py | v0.4 | 2025-12-20 | COMMUNITY | | |
 | tests/test_invalid_cli.py | v0.1 | 2025-07-23 | COMMUNITY | | |
-| tests/test_9p_read_write.rs | v0.1 | 2025-07-23 | COMMUNITY | | |
 | tests/test_cuda_presence.rs | v0.2 | 2025-12-10 | COMMUNITY | | |
 | tests/test_cuda_exec.rs | v0.6 | 2026-08-23 | COMMUNITY | | |
 | tests/test_cuda_kernel.rs | v0.4 | 2025-12-12 | COMMUNITY | | |
@@ -303,4 +302,5 @@
 | hooks/watch_multiagent_validator.rc | v0.1 | 2026-12-31 | COMMUNITY | | |
 | examples/linux_alert_watcher.sh | v0.1 | 2026-12-31 | COMMUNITY | | |
 | docs/community/architecture/K8S_ORCHESTRATION.md | v0.1 | 2026-12-31 | COMMUNITY | | |
+| docs/community/TEST_REFACTOR_GUIDE.md | v0.1 | 2026-12-31 | COMMUNITY | | |
 Removed: introspect_self_diagnosis (Plan9 migration - file-based introspection replaced by validator-driven policy checks)
