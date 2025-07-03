@@ -6,7 +6,9 @@
 use clap::Parser;
 use cohesix::trace::recorder::event;
 use cohesix::{CohError, coh_bail};
-use ninep::client::{TcpClient, UnixClient};
+use ninep::client::TcpClient;
+#[cfg(unix)]
+use ninep::client::UnixClient;
 
 /// Mount a 9P service and list files.
 #[derive(Parser)]
@@ -32,10 +34,18 @@ fn main() -> Result<(), CohError> {
             println!("{}", stat.fm.name);
         }
     } else if let Some(path) = addr.strip_prefix("unix:") {
-        let mut client =
-            UnixClient::new_unix_with_explicit_path("cli".to_string(), path.to_string(), "/")?;
-        for stat in client.read_dir("/")? {
-            println!("{}", stat.fm.name);
+        #[cfg(unix)]
+        {
+            let mut client =
+                UnixClient::new_unix_with_explicit_path("cli".to_string(), path.to_string(), "/")?;
+            for stat in client.read_dir("/")? {
+                println!("{}", stat.fm.name);
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = path;
+            coh_bail!("unix sockets unsupported on this platform");
         }
     } else {
         coh_bail!("unknown address: {}", addr);

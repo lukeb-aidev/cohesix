@@ -14,7 +14,7 @@
 
 use core::fmt;
 use core::num::NonZeroU32;
-use core::convert::TryInto; // explicit conversions
+use core::convert::{TryFrom, TryInto}; // explicit conversions
 
 #[cfg(feature = "std")] use std::boxed::Box;
 
