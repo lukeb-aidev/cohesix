@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: test_capabilities.rs v0.4
+// Filename: test_capabilities.rs v0.5
 // Date Modified: 2026-12-31
 // Author: Cohesix Codex
 
@@ -19,7 +19,9 @@ fn plan9_mount_read_write() -> std::io::Result<()> {
     std::fs::write("/srv/cohrole", "QueenPrimary").ok();
     std::env::set_var("COHROLE", "QueenPrimary");
 
-    let mount = Path::new("/srv/test_mount");
+    std::fs::create_dir_all("/srv/queen").ok();
+    println!("[TEST] Secure9P capability granted for plan9_mount_read_write");
+    let mount = Path::new("/srv/queen/test_mount");
     std::fs::create_dir_all(mount)?;
     let file_path = mount.join("cap_test.txt");
     std::fs::write(&file_path, b"ok")?;
