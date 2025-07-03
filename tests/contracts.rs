@@ -1,27 +1,27 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: contracts.rs v0.3
-// Date Modified: 2025-07-22
+// Filename: contracts.rs v0.4
+// Date Modified: 2026-12-31
 // Author: Cohesix Codex
 
 use cohesix::agents::runtime::AgentRuntime;
 use cohesix::cohesix_types::Role;
 use cohesix::runtime::ServiceRegistry;
-use libc::geteuid;
+use cohesix::cohesix_types::RoleManifest;
 use serial_test::serial;
 use std::fs;
 use std::io::ErrorKind;
 use std::net::TcpListener;
 
 fn can_run_privileged_tests() -> bool {
-    if unsafe { geteuid() } == 0 {
-        return true;
-    }
-    match TcpListener::bind("127.0.0.1:1") {
-        Ok(listener) => {
-            drop(listener);
-            true
-        }
-        Err(e) => e.kind() != ErrorKind::PermissionDenied,
+    match RoleManifest::current_role() {
+        Role::QueenPrimary | Role::BareMetalQueen => true,
+        _ => match TcpListener::bind("127.0.0.1:1") {
+            Ok(listener) => {
+                drop(listener);
+                true
+            }
+            Err(e) => e.kind() != ErrorKind::PermissionDenied,
+        },
     }
 }
 

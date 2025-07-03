@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: test_compile_trace.rs v0.3
+// Filename: test_compile_trace.rs v0.4
 // Author: Lukas Bower
-// Date Modified: 2025-12-09
+// Date Modified: 2026-12-31
 
 use cohesix::coh_cc::{
     backend::registry::get_backend, guard, parser::input_type::CohInput, toolchain::Toolchain,
@@ -9,7 +9,6 @@ use cohesix::coh_cc::{
 use cohesix::CohError;
 use std::fs::{self, File};
 use std::io::Write;
-use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use tempfile::Builder;
 
@@ -30,10 +29,8 @@ fn compile_reproducible() -> Result<(), CohError> {
     std::env::set_var("COHESIX_TOOLCHAIN_ROOT", dir.path());
     let tc_dir = dir.path().join("toolchain");
     fs::create_dir_all(&tc_dir)?;
-    fs::set_permissions(&tc_dir, fs::Permissions::from_mode(0o755))?;
     let sysroot = dir.path().join("sysroot");
     fs::create_dir_all(&sysroot)?;
-    fs::set_permissions(&sysroot, fs::Permissions::from_mode(0o755))?;
     let tc = Toolchain::new(&tc_dir)?;
     backend.compile(&input, &out, "x86_64-linux-musl", &sysroot, &tc)?;
     let h1 = guard::hash_output(&out)?;

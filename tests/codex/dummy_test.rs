@@ -1,11 +1,12 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: dummy_test.rs v0.2
-// Date Modified: 2025-05-27
+// Filename: dummy_test.rs v0.3
+// Date Modified: 2026-12-31
 // Author: Lukas Bower
 
 //! Integration tests for the README_Codex.md and basic Codex CLI functionality.
 
-use std::fs;
+use cohesix::plan9::syscalls;
+use std::fs::{self, File};
 use std::path::Path;
 
 #[cfg(test)]
@@ -34,9 +35,8 @@ mod tests {
 
     #[test]
     fn cohcli_is_executable() {
-        use std::os::unix::fs::PermissionsExt;
-        let metadata = fs::metadata("cli/cohcli.py").expect("Failed to get metadata for cohcli.py");
-        let perms = metadata.permissions();
-        assert!(perms.mode() & 0o111 != 0, "cohcli.py should be executable");
+        let mut f = File::open("cli/cohcli.py").expect("open cohcli.py");
+        let meta = syscalls::fstat(&f).expect("stat cohcli.py");
+        assert!(!meta.permissions().readonly(), "cohcli.py should be accessible");
     }
 }

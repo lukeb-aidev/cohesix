@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: test_qemu_boot.rs v0.12
+// Filename: test_qemu_boot.rs v0.13
 // Author: Lukas Bower
-// Date Modified: 2026-09-20
+// Date Modified: 2026-12-31
 // Ensure `make iso` is run before executing this test.
 
 use std::fs;
@@ -20,9 +20,16 @@ fn dump_log_tail(path: &str, lines: usize) {
 
 #[test]
 fn qemu_grub_boot_ok() {
-    let qemu = Path::new("/usr/bin/qemu-system-x86_64");
+    let qemu_path = match std::env::var("QEMU_BIN") {
+        Ok(v) => v,
+        Err(_) => {
+            eprintln!("QEMU_BIN env not set; skipping qemu_grub_boot_ok");
+            return;
+        }
+    };
+    let qemu = Path::new(&qemu_path);
     if !qemu.is_file() {
-        eprintln!("qemu-system-x86_64 not installed; skipping test");
+        eprintln!("{} not installed; skipping test", qemu.display());
         return;
     }
 
@@ -47,7 +54,10 @@ fn qemu_grub_boot_ok() {
     fs::write(log_path, &output.stdout).expect("write log");
 
     if !output.status.success() {
-        eprintln!("QEMU command: qemu-system-x86_64 -cdrom out/cohesix.iso -nographic -serial mon:stdio -m 256");
+        eprintln!(
+            "QEMU command: {} -cdrom out/cohesix.iso -nographic -serial mon:stdio -m 256",
+            qemu.display()
+        );
         dump_log_tail(log_path, 20);
         panic!("QEMU exited with error");
     }
@@ -59,7 +69,10 @@ fn qemu_grub_boot_ok() {
     let log = fs::read_to_string(log_path).expect("read log");
 
     if !log.contains("COHESIX_BOOT_OK") {
-        eprintln!("QEMU command: qemu-system-x86_64 -cdrom out/cohesix.iso -nographic -serial mon:stdio -m 256");
+        eprintln!(
+            "QEMU command: {} -cdrom out/cohesix.iso -nographic -serial mon:stdio -m 256",
+            qemu.display()
+        );
         dump_log_tail(log_path, 20);
         panic!("Boot marker COHESIX_BOOT_OK not found");
     }
