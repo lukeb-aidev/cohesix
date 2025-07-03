@@ -1,0 +1,20 @@
+#!/bin/rc
+# CLASSIFICATION: COMMUNITY
+# Filename: attest_commit.rc v0.1
+# Author: Lukas Bower
+# Date Modified: 2026-12-31
+
+# Monitor completed traces and generate an attestation record for each.
+
+if(! test -d /srv/attest){
+    mkdir /srv/attest
+}
+if(! test -d /srv/trace/completed){
+    echo 'trace directory missing' >[1=2]
+    exit ''
+}
+
+for(t in `{ls /srv/trace/completed}){
+    h=`{sha1sum /srv/trace/completed/$t | awk '{print $1}'}
+    echo $h > /srv/attest/$t
+}

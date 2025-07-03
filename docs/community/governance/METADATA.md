@@ -322,4 +322,7 @@
 | src/cleanup/prelude_remove.md | v0.1 | 2026-12-31 | COMMUNITY | | |
 | hooks/watch_validator.rc | v0.1 | 2026-12-31 | COMMUNITY | | |
 | hooks/upload_trace.rc | v0.1 | 2026-12-31 | COMMUNITY | | |
-| docs/community/architecture/PLAN9_HOOKS.md | v0.1 | 2026-12-31 | COMMUNITY | | |
+| docs/community/architecture/PLAN9_HOOKS.md | v0.2 | 2026-12-31 | COMMUNITY | | |
+| hooks/attest_commit.rc | v0.1 | 2026-12-31 | COMMUNITY | | |
+| hooks/watch_multiagent_validator.rc | v0.1 | 2026-12-31 | COMMUNITY | | |
+| examples/linux_alert_watcher.sh | v0.1 | 2026-12-31 | COMMUNITY | | |
