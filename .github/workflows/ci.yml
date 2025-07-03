@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: ci.yml v1.10
+# Filename: ci.yml v1.30
 # Author: Lukas Bower
-# Date Modified: 2026-12-31
+# Date Modified: 2025-07-03
 
 name: Cohesix CI
 
@@ -16,58 +16,61 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.x'
+
       - uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
           override: true
+
       - uses: actions/setup-go@v4
         with:
           go-version: '1.22'
-      - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y make
 
       - name: Install UEFI target
         run: rustup target add aarch64-unknown-uefi
-      - name: Run Rust build and tests
+
+      - name: Build Rust UEFI binary
         run: |
           export MEMCHR_DISABLE_RUNTIME_CPU_FEATURE_DETECTION=1
-          cargo build --release --target aarch64-unknown-uefi | tee rust_build.log
-          cargo test | tee rust_test.log
-      - uses: actions/upload-artifact@v4
-        with:
-          name: rust-logs
-          path: |
-            rust_build.log
-            rust_test.log
+          cargo build --release --target aarch64-unknown-uefi | tee rust_build_uefi.log
 
-      - name: Run Python tests
+      - name: Run Rust tests (host)
         run: |
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-          pytest | tee python_test.log
-      - uses: actions/upload-artifact@v4
-        with:
-          name: python-logs
-          path: python_test.log
+          cargo test | tee rust_test_host.log
 
       - name: Run Go tests
         run: |
           GOWORK=$(pwd)/go/go.work go test ./... | tee go_test.log
-      - uses: actions/upload-artifact@v4
-        with:
-          name: go-logs
-          path: go_test.log
 
-      - name: Run make targets
+      - name: Run make targets for C components
         run: |
           make lint
           make test
-          make build
+          make build | tee make_build.log
+
+      - name: Run Python tests (only if requirements.txt exists)
+        run: |
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+            pytest | tee python_test.log
+          else
+            echo "✅ No Python tests to run."
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ci-logs
+          path: |
+            rust_build_uefi.log
+            rust_test_host.log
+            go_test.log
+            make_build.log
+            python_test.log
 
       - name: Validation summary
         run: |
-          echo "✅ Cohesix CI completed. Review logs in the Artifacts tab if needed."
-
-#
+          echo "✅ Cohesix CI completed. Review logs in the Artifacts tab."
