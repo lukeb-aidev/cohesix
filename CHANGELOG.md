@@ -2630,3 +2630,7 @@
 ## [v0.402] - 2026-12-31
 ### Improved
 - Verified and documented EFI kernel build process; added checks to confirm kernel.efi is correctly produced and staged into ISO.
+
+## [v0.403] - 2026-12-31
+### Improved
+- seL4 build pipeline uses explicit UEFI commands and validates resulting kernel.efi as PE32+.

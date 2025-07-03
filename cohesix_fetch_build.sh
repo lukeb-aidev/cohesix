@@ -1,5 +1,5 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.81
+# Filename: cohesix_fetch_build.sh v0.82
 # Author: Lukas Bower
 # Date Modified: 2026-12-31
 #!/bin/bash
@@ -431,33 +431,23 @@ fi
 cp "$SRC_KERNEL" "$OUT_KERNEL"
 log "kernel.elf staged to $OUT_KERNEL"
 
-# Build UEFI variant of the seL4 kernel without clobbering the ELF build
-UEFI_BUILD_DIR="$SEL4_WORKSPACE/build_uefi"
-UEFI_KERNEL="$UEFI_BUILD_DIR/kernel/kernel.efi"
-if [ ! -d "$UEFI_BUILD_DIR" ]; then
-  log "Initializing UEFI kernel build at $UEFI_BUILD_DIR"
-  if (cd "$SEL4_WORKSPACE" && ./init-build.sh -DKernelUEFI=TRUE "$UEFI_BUILD_DIR"); then
-    log "UEFI build directory created"
+# Build UEFI variant of the seL4 kernel
+log "🏗️ Building UEFI kernel"
+(cd "$SEL4_WORKSPACE" && \
+  ../init-build.sh -DPLATFORM=qemu-arm-virt -DAARCH64=TRUE -DKernelUEFI=TRUE && \
+  ninja)
+UEFI_KERNEL="$SEL4_WORKSPACE/build/kernel/kernel.efi"
+if [ -f "$UEFI_KERNEL" ]; then
+  cp "$UEFI_KERNEL" "$ROOT/out/bin/kernel.efi"
+  if file "$ROOT/out/bin/kernel.efi" | grep -q "PE32+ executable (EFI application)"; then
+    log "[CHECK] kernel.efi identified as PE32+ EFI executable"
   else
-    log "⚠️ init-build.sh failed for UEFI kernel"
+    echo "❌ kernel.efi not found or invalid UEFI binary" >&2
+    exit 1
   fi
-fi
-if [ -d "$UEFI_BUILD_DIR" ]; then
-  if (cd "$UEFI_BUILD_DIR" && ninja); then
-    if [ -f "$UEFI_KERNEL" ]; then
-      cp "$UEFI_KERNEL" "$ROOT/out/bin/kernel.efi"
-      log "[INFO] UEFI kernel built and staged: $ROOT/out/bin/kernel.efi"
-      if file "$ROOT/out/bin/kernel.efi" | grep -q "PE32+"; then
-        log "[CHECK] Verified kernel.efi is a PE32+ UEFI binary"
-      else
-        echo "❌ kernel.efi verification failed" >&2; exit 1
-      fi
-    else
-      log "⚠️ UEFI kernel output missing: $UEFI_KERNEL"
-    fi
-  else
-    log "⚠️ UEFI kernel ninja build failed"
-  fi
+else
+  echo "❌ kernel.efi not found or invalid UEFI binary" >&2
+  exit 1
 fi
 
 
