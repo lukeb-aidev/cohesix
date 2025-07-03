@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v1.00
+// Filename: CHANGELOG.md v1.01
 // Author: Lukas Bower
-// Date Modified: 2025-07-02
+// Date Modified: 2025-07-03
 
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
@@ -2615,4 +2615,8 @@
 ## [v0.400] - 2026-12-31
 ### Removed
 - Removed legacy Python tests and lint steps; project is now purely Plan9 + Rust.
+
+## [v0.401] - 2025-07-03
+### Added
+- `cohesix_fetch_build.sh` builds the seL4 UEFI kernel in `build_uefi` and stages `kernel.efi` to out/bin and the ISO.
 
