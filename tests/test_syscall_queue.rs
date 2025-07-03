@@ -1,11 +1,10 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: test_syscall_queue.rs v1.3
+// Filename: test_syscall_queue.rs v1.4
 // Author: Lukas Bower
-// Date Modified: 2026-11-12
+// Date Modified: 2026-12-31
 
-use cohesix::cohesix_types::Syscall;
+use cohesix::cohesix_types::{Role, RoleManifest, Syscall};
 use cohesix::sandbox::{dispatcher::SyscallDispatcher, queue::SyscallQueue};
-use libc::geteuid;
 use serial_test::serial;
 
 #[test]
@@ -71,7 +70,8 @@ fn dequeue_blocked_for_non_worker() {
     unsafe {
         std::env::set_var("COHROLE", "QueenPrimary");
     }
-    if unsafe { geteuid() } != 0 {
+    let role_cur = RoleManifest::current_role();
+    if !matches!(role_cur, Role::QueenPrimary | Role::BareMetalQueen) {
         match std::fs::write("/srv/cohrole", "QueenPrimary") {
             Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
                 println!("[INFO] Permission denied on /srv/cohrole as expected.")
@@ -81,7 +81,7 @@ fn dequeue_blocked_for_non_worker() {
         }
     } else {
         let _ = std::fs::write("/srv/cohrole", "QueenPrimary");
-        println!("[INFO] Running as root, wrote /srv/cohrole directly.");
+        println!("[INFO] Running as privileged role, wrote /srv/cohrole directly.");
     }
     let mut q = SyscallQueue::new();
     q.enqueue(Syscall::Exec {
