@@ -320,3 +320,6 @@
 | src/hal/x86_64/mod.rs | v0.7 | 2026-11-23 | PRIVATE | | |
 | docs/community/UEFI_PLAN9_READINESS_AUDIT.md | v0.1 | 2026-12-31 | COMMUNITY | | |
 | src/cleanup/prelude_remove.md | v0.1 | 2026-12-31 | COMMUNITY | | |
+| hooks/watch_validator.rc | v0.1 | 2026-12-31 | COMMUNITY | | |
+| hooks/upload_trace.rc | v0.1 | 2026-12-31 | COMMUNITY | | |
+| docs/community/architecture/PLAN9_HOOKS.md | v0.1 | 2026-12-31 | COMMUNITY | | |

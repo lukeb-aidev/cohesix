@@ -1,0 +1,19 @@
+#!/bin/rc
+# CLASSIFICATION: COMMUNITY
+# Filename: watch_validator.rc v0.1
+# Author: Lukas Bower
+# Date Modified: 2026-12-31
+
+# Watch validator log for violations and queue alerts.
+if(! test -e /srv/validator/log){
+    echo 'validator log missing' >[1=2]
+    exit ''
+}
+if(! test -e /srv/alerts){
+    mkdir /srv/alerts
+}
+if(! test -e /srv/alerts/validator){
+    > /srv/alerts/validator
+}
+
+tail -f /srv/validator/log | awk '/violation/ { print $0 >> "/srv/alerts/validator" }'

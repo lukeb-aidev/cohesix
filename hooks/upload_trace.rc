@@ -1,0 +1,15 @@
+#!/bin/rc
+# CLASSIFICATION: COMMUNITY
+# Filename: upload_trace.rc v0.1
+# Author: Lukas Bower
+# Date Modified: 2026-12-31
+
+# Upload completed trace files via 9P.
+if(! test -d /srv/upload){
+    echo 'upload mount missing' >[1=2]
+    exit ''
+}
+for(t in `{ls /srv/trace/completed}){
+    cp /srv/trace/completed/$t /srv/upload/$t
+    rm /srv/trace/completed/$t
+}
