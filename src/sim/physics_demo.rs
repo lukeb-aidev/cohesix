@@ -3,8 +3,6 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-22
 
-use crate::prelude::*;
-
 /// Simple Rapier physics demo used by `cohrun physics_demo`.
 use rapier3d::prelude::*;
 use serde::Serialize;

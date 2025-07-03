@@ -8,6 +8,7 @@ use crate::{
     protocol::{Data, Format9p, RawStat, Rdata, Rmessage, Tdata, Tmessage},
     Stream,
 };
+#[allow(unused_imports)]
 use std::{
     cmp::min,
     collections::HashMap,
