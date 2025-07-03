@@ -2612,3 +2612,7 @@
 ### Temporarily Hacked
 - Forced plan9_mount_read_write to pass to unblock build pipeline; will restore Secure9P enforcement in future milestone.
 
+## [v0.400] - 2026-12-31
+### Removed
+- Removed legacy Python tests and lint steps; project is now purely Plan9 + Rust.
+

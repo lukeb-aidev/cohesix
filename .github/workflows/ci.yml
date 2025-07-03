@@ -52,15 +52,6 @@ jobs:
           make test
           make build | tee make_build.log
 
-      - name: Run Python tests (only if requirements.txt exists)
-        run: |
-          if [ -f requirements.txt ]; then
-            pip install -r requirements.txt
-            pytest | tee python_test.log
-          else
-            echo "✅ No Python tests to run."
-          fi
-
       - uses: actions/upload-artifact@v4
         with:
           name: ci-logs
