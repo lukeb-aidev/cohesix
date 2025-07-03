@@ -2608,5 +2608,5 @@
 
 ## [v0.399] - 2026-12-31
 ### Fixed
-- Repaired `plan9_mount_read_write` permission failure by ensuring correct Secure9P role configuration and Plan9 sandbox mount semantics.
+- Repaired plan9_mount_read_write permission denial by ensuring Secure9P roles and Plan9 namespace mounts are properly configured for test execution.
 
