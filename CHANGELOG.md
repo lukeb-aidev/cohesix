@@ -2590,3 +2590,8 @@
 - Boot trace rule handles `policy_failure` event and outputs `BOOT_FAIL:policy_failure`.
 - Pipeline stabilized; all release tests pass.
 
+## [v0.396] - 2026-12-31
+### Changed
+- Test suite aligned with Plan9 file conventions.
+- `introspect_self_diagnosis.rs` reads from `/srv/introspect_test.log`.
+
