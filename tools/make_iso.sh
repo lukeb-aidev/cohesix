@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # CLASSIFICATION: COMMUNITY
-# Filename: make_iso.sh v0.9
+# Filename: make_iso.sh v0.10
 # Author: Lukas Bower
 # Date Modified: 2026-12-31
 
@@ -28,7 +28,7 @@ trap cleanup EXIT
 
 log "Preparing ISO root at $ISO_ROOT"
 mkdir -p "$ISO_ROOT/EFI/BOOT" "$ISO_ROOT/boot" "$ISO_ROOT/bin" "$ISO_ROOT/usr/bin" \
-         "$ISO_ROOT/usr/cli" "$ISO_ROOT/usr/share/man" "$ISO_ROOT/usr/share/cohesix/man" \
+         "$ISO_ROOT/usr/share/man" "$ISO_ROOT/usr/share/cohesix/man" \
          "$ISO_ROOT/etc/cohesix" "$ISO_ROOT/roles" "$ISO_ROOT/srv" \
          "$ISO_ROOT/home/cohesix" "$ISO_ROOT/upgrade" "$ISO_ROOT/log"
 
@@ -82,31 +82,6 @@ for t in cohcli cohcap cohtrace cohrun cohbuild cohcc cohshell.sh \
     fi
 done
 ln -sf cohcli "$ISO_ROOT/usr/bin/cohesix"
-
-# Go helpers
-if [ -d "$ROOT/go/bin" ]; then
-    log "Copying Go CLI helpers..."
-    cp -r "$ROOT/go/bin/." "$ISO_ROOT/usr/cli/" 2>/dev/null || true
-    if [ -f "$ROOT/go/bin/coh-9p-helper" ]; then
-        mkdir -p "$ISO_ROOT/srv/9p"
-        cp "$ROOT/go/bin/coh-9p-helper" "$ISO_ROOT/srv/9p/"
-    fi
-else
-    log "WARNING: No Go helpers found"
-fi
-
-# gui-orchestrator binary
-if [ -f "$ROOT/go/bin/gui-orchestrator" ]; then
-    cp "$ROOT/go/bin/gui-orchestrator" "$ISO_ROOT/usr/bin/gui-orchestrator"
-    chmod +x "$ISO_ROOT/usr/bin/gui-orchestrator"
-    log "[INFO] gui-orchestrator built and staged to ISO at /usr/bin/gui-orchestrator"
-else
-    if [ -f "$ISO_ROOT/usr/bin/gui-orchestrator" ]; then
-        log "[INFO] gui-orchestrator built and staged to ISO at /usr/bin/gui-orchestrator"
-    else
-        log "WARNING: gui-orchestrator binary not found"
-    fi
-fi
 
 # Demos (CUDA and Rapier)
 if [ -d "$ROOT/src/demos" ]; then
