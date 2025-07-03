@@ -2564,3 +2564,8 @@
 - `make_iso.sh` no longer packages `demo_physics_webcam`.
 - Documentation updated for Plan9 9P webcam model.
 - Removed prelude wildcard imports; added explicit alloc imports.
+
+## [v0.391] - 2026-12-31
+### Added
+- Plan9 hook architecture with rc scripts `watch_validator.rc` and `upload_trace.rc`.
+- `PLAN9_HOOKS.md` describing 9P hook model.
