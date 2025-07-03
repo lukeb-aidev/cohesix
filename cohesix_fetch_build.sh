@@ -581,13 +581,20 @@ if command -v go &> /dev/null; then
       log "  ensuring modules for $name"
       (cd "$dir" && go mod tidy)
       log "  compiling $name for $COH_ARCH as GOARCH=$GOARCH"
-      if GOOS=linux GOARCH="$GOARCH" go build -tags unix -C "$dir" -o "$STAGE_DIR/bin/$name"; then
-        log "  built $name"
-        cp "$STAGE_DIR/bin/$name" "$STAGE_DIR/usr/bin/$name"
+      if [ "$name" = "gui-orchestrator" ]; then
+        GOWORK="$ROOT/go/go.work" GOOS=plan9 GOARCH="$GOARCH" CGO_ENABLED=0 \
+          go build -o "$STAGE_DIR/usr/bin/$name" "./$dir" && \
+          chmod +x "$STAGE_DIR/usr/bin/$name" && \
+          log "[INFO] gui-orchestrator built and staged to ISO at /usr/bin/$name"
       else
-        log "  cross build failed for $name; trying native"
-        (cd "$dir" && go build -tags unix -o "$STAGE_DIR/bin/$name") || log "  build failed for $name"
-        cp "$STAGE_DIR/bin/$name" "$STAGE_DIR/usr/bin/$name" 2>/dev/null || true
+        if GOOS=linux GOARCH="$GOARCH" go build -tags unix -C "$dir" -o "$STAGE_DIR/bin/$name"; then
+          log "  built $name"
+          cp "$STAGE_DIR/bin/$name" "$STAGE_DIR/usr/bin/$name"
+        else
+          log "  cross build failed for $name; trying native"
+          (cd "$dir" && go build -tags unix -o "$STAGE_DIR/bin/$name") || log "  build failed for $name"
+          cp "$STAGE_DIR/bin/$name" "$STAGE_DIR/usr/bin/$name" 2>/dev/null || true
+        fi
       fi
     fi
   done

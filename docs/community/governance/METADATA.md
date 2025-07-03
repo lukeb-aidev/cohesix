@@ -275,7 +275,8 @@
 | bin/cohman.sh | v0.1 | 2026-02-21 | COMMUNITY | | |
 | bin/man | v0.2 | 2025-06-22 | COMMUNITY | | |
 | bin/mandoc | v0.2 | 2025-06-22 | COMMUNITY | | |
-| go/cmd/gui-orchestrator/signal.go | v0.4 | 2026-07-30 | COMMUNITY | | |
+| go/cmd/gui-orchestrator/signal_plan9.go | v0.1 | 2026-12-31 | COMMUNITY | | |
+| go/cmd/gui-orchestrator/signal_unix.go | v0.1 | 2026-12-31 | COMMUNITY | | |
 | go/cmd/coh-9p-helper/main.go | v0.4 | 2025-06-24 | COMMUNITY | | |
 | go/cmd/coh-9p-helper/main_test.go | v0.1 | 2025-06-01 | COMMUNITY | | |
 | go/cmd/gui-orchestrator/main.go | v0.4 | 2026-07-27 | COMMUNITY | | |
