@@ -2580,3 +2580,7 @@
 ### Added
 - `K8S_ORCHESTRATION.md` for Kubernetes and serverless deployment.
 
+## [v0.394] - 2026-12-31
+### Removed
+- Legacy Python CLI scripts and Plan9 demo modules.
+
