@@ -1,22 +1,28 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: worker_inference.py v0.1
+# Filename: worker_inference.py v0.2
 # Author: Cohesix Codex
 # Date Modified: 2025-07-08
-"""Webcam-based inference loop."""
+"""9P camera inference loop."""
 
 import os
 import cv2
+import numpy as np
 
 
 def run():
     task = os.environ.get("INFER_CONF", "motion")
-    cap = cv2.VideoCapture("/srv/cam0/raw")
     face_cascade = cv2.CascadeClassifier(
         cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
     )
+    frame_path = "/srv/camera/frame.jpg"
     while True:
-        ret, frame = cap.read()
-        if not ret:
+        try:
+            data = open(frame_path, "rb").read()
+        except OSError:
+            break
+        arr = np.frombuffer(data, dtype=np.uint8)
+        frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        if frame is None:
             break
         if task == "count faces":
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)

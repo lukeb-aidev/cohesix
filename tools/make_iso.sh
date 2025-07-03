@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # CLASSIFICATION: COMMUNITY
-# Filename: make_iso.sh v0.8
+# Filename: make_iso.sh v0.9
 # Author: Lukas Bower
 # Date Modified: 2026-12-31
 
@@ -71,7 +71,7 @@ log "Staging CLI tools..."
 for t in cohcli cohcap cohtrace cohrun cohbuild cohcc cohshell.sh \
          demo_bee_learns demo_cloud_queen demo_cuda_edge \
          demo_secure_relay demo_sensor_world demo_multi_duel \
-         demo_physics_webcam demo_trace_validation; do
+         demo_trace_validation; do
     if [ -f "$ROOT/bin/$t" ]; then
         dest="$t"
         [ "$t" = "cohshell.sh" ] && dest="cohesix-shell"
