@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: test_namespace_semantics.rs v0.4
-// Date Modified: 2026-11-12
+// Filename: test_namespace_semantics.rs v0.5
+// Date Modified: 2026-12-31
 // Author: Cohesix Codex
 
 use cohesix::plan9::namespace::Namespace;
@@ -15,14 +15,13 @@ fn bind_overlay_order() {
     use std::fs::{self, File};
     use std::path::Path;
     use std::{env, io::ErrorKind};
-    let uid = unsafe { libc::geteuid() };
 
     let srv_path = Path::new("/srv");
     if !srv_path.exists() {
         if let Err(e) = fs::create_dir_all(srv_path) {
             eprintln!(
-                "[bind_overlay_order] skipping: cannot create /srv for uid {}: {}",
-                uid, e
+                "[bind_overlay_order] skipping: cannot create /srv: {}",
+                e
             );
             return;
         }
@@ -34,8 +33,8 @@ fn bind_overlay_order() {
         }
         Err(e) => {
             eprintln!(
-                "[bind_overlay_order] skipping: /srv not writable for uid {}: {}",
-                uid, e
+                "[bind_overlay_order] skipping: /srv not writable: {}",
+                e
             );
             return;
         }
@@ -70,7 +69,7 @@ fn bind_overlay_order() {
     fs::write("/srv/cohrole", "QueenPrimary").ok();
     match apply_ns(&mut ns) {
         Ok(_) => assert_eq!(ns.root.get_or_create("/b").mounts.len(), 1),
-        Err(e) => panic!("apply_ns failed for uid {} on {:?}: {}", uid, srv_path, e),
+        Err(e) => panic!("apply_ns failed on {:?}: {}", srv_path, e),
     }
 
     // subtest: DroneWorker should be denied
