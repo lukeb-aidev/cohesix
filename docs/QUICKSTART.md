@@ -39,4 +39,4 @@ All commands emit validator-compatible trace logs to `./log/trace/` and snapshot
    ./target/debug/cohtrace diff --from last --to previous
    ```
 
-For more CLI examples see `docs/community/AGENTS_AND_CLI.md`.
+For more CLI examples see `docs/community/cli_tools.md`.

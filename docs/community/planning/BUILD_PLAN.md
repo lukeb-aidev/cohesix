@@ -1,130 +1,80 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: BUILD_PLAN.md v0.5
-// Date Modified: 2026-02-05
+// Filename: BUILD_PLAN.md v0.6
+// Date Modified: 2026-12-31
 // Author: Lukas Bower
 
 # Build Plan
 
-This document outlines the step-by-step build strategy for Cohesix, covering native builds, cross-compilation, container images, and reproducible artifacts. The preferred approach is to use `cohesix_fetch_build.sh`, which downloads prerequisites and assembles `cohesix_root.elf` and the GRUB-ready boot image in one step.
+This document outlines the step-by-step build strategy for Cohesix, covering
+native builds, cross-compilation, container images, and reproducible artifacts.
+The preferred approach is to run `cohesix_fetch_build.sh`, which downloads
+prerequisites and assembles `cohesix_root.elf` and the UEFI boot image in a
+single step.
 
 ## 1. Prerequisites
-- **Rust Toolchain**: Install via `rustup` (stable channel, version ≥ 1.76 for the 2024 edition) with targets:
-  - `x86_64-unknown-linux-gnu`
-  - `aarch64-unknown-linux-gnu`
-- **Go**: Version ≥ 1.21 for Plan 9 services
-- **Python**: Version ≥ 3.10 (for CLI and Codex scripts)
-- **Docker**: Version ≥ 24.0 (for containerized builds)
-- **C Compiler**: `gcc` or `clang` for BusyBox and C backend testing
+- **Rust Toolchain**: install via `rustup` with targets:
+  - `x86_64-unknown-uefi`
+  - `aarch64-unknown-uefi`
+- **Go**: version ≥ 1.21 for Plan9 services
+- **Python**: version ≥ 3.10 (CLI helpers)
+- **Docker**: version ≥ 24 for containerized builds
+- **C Compiler**: `gcc` or `clang` for BusyBox and C shims
 
 ## 2. Native Build (x86_64)
-
 1. Fetch dependencies:
    ```bash
    cargo fetch
    go mod download
-   pip install -r requirements.txt  # if any
+   pip install -r requirements.txt
    ```
 2. Build the compiler and CLI:
    ```bash
-   cargo build --release
+   cargo build --release --target x86_64-unknown-uefi
    ```
 3. Run tests:
    ```bash
    ./test_all_arch.sh
    ```
-4. Generate cross-arch artifacts and the boot image:
+4. Assemble the boot image:
    ```bash
-   cargo build --release --target aarch64-unknown-linux-gnu
-   cohesix_fetch_build.sh --target aarch64
-   # Optionally emit snapshot and trace log
+   cohesix_fetch_build.sh --target x86_64
    cohtrace snapshot --tag local_build
    ```
 
 ## 3. Dockerized Multi-Arch Builds
-
-We use Docker Buildx to create reproducible, multi-arch images.
-
-1. **Set up Buildx builder**:
-   ```bash
-   docker buildx create --name cohesix-builder --use
-   docker buildx inspect --bootstrap
-   ```
-2. **Build and push images**:
-   ```bash
-   docker buildx build \
-     --platform linux/amd64,linux/arm64 \
-     --tag lukeb-aidev/cohesix:latest \
-     --push \
-     -f Dockerfile .
-   ```
-3. **Dockerfile Outline**:
-   ```dockerfile
-   FROM rust:1.76-buster AS builder
-   WORKDIR /workspace
-   COPY . .
-   RUN rustup target add aarch64-unknown-linux-gnu && \
-       cargo build --release --target aarch64-unknown-linux-gnu
-
-   FROM debian:bookworm-slim
-   COPY --from=builder /workspace/target/aarch64-unknown-linux-gnu/release/cohcc /usr/local/bin/cohcc
-   ENTRYPOINT ["/usr/local/bin/cohcc"]
-   ```
+Use Docker Buildx to produce reproducible images:
+```bash
+docker buildx create --name cohesix-builder --use
+docker buildx build \
+  --platform linux/amd64,linux/arm64 \
+  --tag cohesix:latest \
+  -f Dockerfile .
+```
+The Dockerfile installs the Rust toolchain and outputs `cohesix_root.elf` and
+`kernel.efi` for each architecture.
 
 ## 4. BusyBox & Tooling Build
-
-1. Clone BusyBox:
-   ```bash
-   git clone https://www.busybox.net/git/busybox.git
-   cd busybox
-   ```
-2. Configure and build for aarch64:
-   ```bash
-   make defconfig
-   make CROSS_COMPILE=aarch64-linux-gnu- -j$(nproc)
-   ```
-3. Install to staging:
-   ```bash
-   make CONFIG_PREFIX=/usr/local/busybox install
-   ```
+```bash
+git clone https://www.busybox.net/git/busybox.git
+cd busybox
+make defconfig
+make CROSS_COMPILE=aarch64-none-elf- -j$(nproc)
+make CONFIG_PREFIX=/usr/local/busybox install
+```
 
 ## 5. Reproducible Builds
-- Pin all crate and module versions in `Cargo.lock` and `DEPENDENCIES.md`.
-- Use `SOURCE_DATE_EPOCH` environment variable for deterministic timestamps:
-  ```bash
-  export SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)
-  ```
-- Validate reproducibility:
-  ```bash
-  docker run --rm \
-    -e SOURCE_DATE_EPOCH \
-    -v $(pwd):/workspace \
-    buildpack/docker \
-    /workspace/scripts/build-reproducible.sh
-  ```
+- Pin crate versions in `Cargo.lock` and `DEPENDENCIES.md`.
+- Set `SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)`.
+- Verify deterministic output via CI scripts.
 
 ## 6. Cross-Compilation for OS Images
-
-1. **seL4 Bootloader**:
-   - Use `cargo build --release` targeting `riscv64imac-unknown-none-elf` or `aarch64-none-elf`.
-2. **Plan 9 Services**:
-   - Compile with Go’s `GOOS=plan9 GOARCH=amd64` for Plan 9 userland.
-   - Cross-compile BusyBox as above for service bundling.
-3. **Image Assembly**:
-   ```bash
-   scripts/assemble_image.sh \
-     --bootloader target/aarch64-none-elf/release/bootloader.bin \
-     --kernel target/aarch64-unknown-linux-gnu/release/cohesix.img \
-     --services /usr/local/busybox/bin
-   ```
+```bash
+scripts/assemble_image.sh \
+  --bootloader target/aarch64-none-elf/release/bootloader.bin \
+  --kernel target/aarch64-unknown-uefi/release/cohesix.img \
+  --services /usr/local/busybox/bin
+```
 
 ## 7. CI Integration
-- Integrate steps into `.github/workflows/ci.yml`:
-  - Matrix job for x86_64 & aarch64 builds
-  - Docker multi-arch build and push
-  - BusyBox build and test
-  - Reproducibility check
-  - Ensure `validate_metadata_sync.py` and `cohtrace list --scope ci` are run at the end of each job to validate trace emission and metadata alignment
-
----
-
-*This build plan ensures Cohesix artifacts are consistent, multi-arch, and production-ready.*
+The `.github/workflows/ci.yml` file builds for both architectures, runs tests,
+validates SBOMs, and ensures metadata sync via `validate_metadata_sync.py`.

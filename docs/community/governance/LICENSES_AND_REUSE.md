@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: LICENSES_AND_REUSE.md v1.5
+// Filename: LICENSES_AND_REUSE.md v1.6
 // Author: Lukas Bower
 // Date Modified: 2026-12-31
 
@@ -44,7 +44,7 @@ The table below lists current third-party packages used by Cohesix.
 | sbase | 0.6 | MIT | POSIX utilities (grep, sed, etc.) | https://git.suckless.org/sbase/ |
 
 | tempfile | 3.10 | MIT OR Apache-2.0 | Temporary directory and file handling in tests | https://crates.io/crates/tempfile |
-| qemu | system | GPL-2.0-only | Emulator used for GRUB/Multiboot2 boot testing | https://www.qemu.org/ |
+| qemu | system | GPL-2.0-only | Emulator used for UEFI boot testing via OVMF | https://www.qemu.org/ |
 | cuda-sys | 0.3 | Apache-2.0 | Rust FFI bindings for NVIDIA CUDA | https://crates.io/crates/cuda-sys |
 \n## 4 · License Matrix
 

@@ -2635,3 +2635,9 @@
 ### Improved
 - seL4 build pipeline uses explicit UEFI commands and validates resulting kernel.efi as PE32+.
 - UEFI kernel build now explicitly validated for architecture ($EXPECTED) using file signatures.
+
+## [v0.404] - 2026-12-31
+### Changed
+- Consolidated CLI documentation into `cli_tools.md` and removed older CLI_HELP files.
+- Updated boot documentation to reflect pure UEFI flow.
+- Updated build plan and dependency notes for OVMF-based testing.
