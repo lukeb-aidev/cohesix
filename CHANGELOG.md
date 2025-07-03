@@ -2576,3 +2576,7 @@
 - `watch_multiagent_validator.rc` for per-agent violation logs.
 - Example `linux_alert_watcher.sh` demonstrating 9pfuse monitoring.
 - Updated `PLAN9_HOOKS.md` to cover new hooks and Linux integration.
+## [v0.393] - 2026-12-31
+### Added
+- `K8S_ORCHESTRATION.md` for Kubernetes and serverless deployment.
+
