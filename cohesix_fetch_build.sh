@@ -31,6 +31,7 @@ fi
 # Fetch and fully build the Cohesix project using SSH Git auth.
 
 set -euxo pipefail
+export PYTHONPATH=/home/ubuntu/sel4_workspace/kernel:$PYTHONPATH
 export MEMCHR_DISABLE_RUNTIME_CPU_FEATURE_DETECTION=1
 export CUDA_HOME="${CUDA_HOME:-/usr}"
 export CUDA_INCLUDE_DIR="${CUDA_INCLUDE_DIR:-$CUDA_HOME/include}"
