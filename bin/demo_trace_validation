@@ -1,7 +1,0 @@
-#!/usr/bin/env bash
-# CLASSIFICATION: COMMUNITY
-# Filename: demo_trace_validation v0.1
-# Author: Lukas Bower
-# Date Modified: 2026-02-21
-HERE="$(cd \"$(dirname \"$0\")/../src/demos/trace_validation\" && pwd)"
-exec /usr/bin/env python3 "$HERE/main.py" "$@"

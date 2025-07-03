@@ -1,7 +1,0 @@
-#!/usr/bin/env bash
-# CLASSIFICATION: COMMUNITY
-# Filename: cohtrace v0.1
-# Author: Lukas Bower
-# Date Modified: 2026-02-21
-HERE="$(dirname "$(realpath "$0")")/../cli"
-exec /usr/bin/env python3 "$HERE/cohtrace.py" "$@"

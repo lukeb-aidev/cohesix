@@ -97,29 +97,16 @@ fi
 
 # Demos (CUDA and Rapier)
 if [ -d "$ROOT/src/demos" ]; then
-    log "Copying demo assets..."
-    mkdir -p "$ISO_ROOT/usr/cli/demos"
-    cp -r "$ROOT/src/demos" "$ISO_ROOT/usr/cli/" 2>/dev/null || true
+    log "Ignoring legacy Python demo assets"
 else
     log "WARNING: demo sources not found"
 fi
 
 # Python CLI modules
-if [ -d "$ROOT/cli" ]; then
-    log "Copying Python CLI modules..."
-    cp -r "$ROOT/cli" "$ISO_ROOT/usr/cli" 2>/dev/null || true
-else
-    log "WARNING: cli directory missing"
-fi
+log "Skipping deprecated Python CLI modules"
 
 # Python modules
-if [ -d "$ROOT/python" ]; then
-    log "Copying Python modules..."
-    cp -r "$ROOT/python" "$ISO_ROOT/home/cohesix" 2>/dev/null || true
-    cp "$ROOT/python/validator.py" "$ISO_ROOT/usr/cli/" 2>/dev/null || true
-else
-    log "WARNING: No Python modules directory found"
-fi
+log "Skipping deprecated Python runtime"
 
 # Man pages
 if [ -d "$ROOT/docs/man" ]; then
