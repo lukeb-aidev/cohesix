@@ -256,7 +256,7 @@
 | tests/test_syscalls.rs | v0.9 | 2026-11-17 | COMMUNITY | | |
 | tests/test_syscall_queue.rs | v1.3 | 2026-11-12 | COMMUNITY | | |
 | tests/test_worker_join.rs | v0.7 | 2026-10-31 | COMMUNITY | | |
-| tests/introspect_self_diagnosis.rs | v0.2 | 2026-09-15 | COMMUNITY | | |
+| tests/introspect_self_diagnosis.rs | v0.3 | 2026-12-31 | COMMUNITY | | |
 | src/bootstrap/sel4_entry.rs | v0.4 | 2026-08-21 | COMMUNITY | | |
 | src/seL4/mod.rs | v0.3 | 2026-11-23 | COMMUNITY | | |
 | src/seL4/sel4_start.S | v0.3 | 2026-11-21 | COMMUNITY | | |

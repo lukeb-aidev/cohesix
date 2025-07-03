@@ -1,6 +1,6 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: introspect_self_diagnosis.rs v0.2
-// Date Modified: 2026-09-15
+// Filename: introspect_self_diagnosis.rs v0.3
+// Date Modified: 2026-12-31
 // Author: Cohesix Codex
 
 use cohesix::agents::base::BaseAgent;
@@ -26,7 +26,7 @@ fn detects_policy_failure() {
     }
     assert!(triggered);
 
-    let log = match fs::read_to_string("/trace/introspect_test.log") {
+    let log = match fs::read_to_string("/srv/introspect_test.log") {
         Ok(v) => v,
         Err(e) if e.kind() == ErrorKind::PermissionDenied => {
             eprintln!(
