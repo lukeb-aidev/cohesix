@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: validator.rs v0.6
+// Filename: validator.rs v0.7
 // Author: Lukas Bower
-// Date Modified: 2026-09-30
+// Date Modified: 2026-12-31
 
 /// Runtime syscall validator for sandboxed agents.
 /// Violations are logged to `/srv/violations/<agent>.json` and the
@@ -83,6 +83,10 @@ pub fn boot_must_succeed() -> bool {
         for ev in arr {
             if ev.get("event") == Some(&serde_json::Value::String("boot_success".into())) {
                 return true;
+            }
+            if ev.get("event") == Some(&serde_json::Value::String("policy_failure".into())) {
+                println!("BOOT_FAIL:policy_failure");
+                return false;
             }
         }
     }
