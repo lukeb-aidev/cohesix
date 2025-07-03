@@ -2597,3 +2597,6 @@
 ### Removed
 - Removed introspect_self_diagnosis test which depended on legacy Linux file logging; policy failures are now validated through Plan9 Secure9P traces and integrated validator checks.
 
+## [v0.397] - 2026-12-31
+### Removed
+- Removed dead tests that relied on legacy Linux filesystem or deleted modules after Plan9 migration.
