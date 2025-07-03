@@ -216,26 +216,28 @@ impl CudaExecutor {
             fs::write("/srv/cuda_result", b"cuda disabled").map_err(|e| e.to_string())?;
             return Ok(());
         }
-        #[cfg(not(target_os = "uefi"))]
-        if self.rt.lib.is_none() || !self.rt.present {
-            warn!("CUDA unavailable; stub launch");
-            OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open("/log/gpu_runtime.log")
-                .and_then(|mut f| writeln!(f, "cuda disabled"))
-                .ok();
-            self.fallback_reason = "cuda disabled".into();
-            self.last_exec_ns = 0;
-            fs::write("/srv/cuda_result", b"cuda disabled").map_err(|e| e.to_string())?;
-            return Ok(());
-        }
 
-        #[cfg(all(feature = "cuda", not(target_os = "uefi")))]
+        #[cfg(not(target_os = "uefi"))]
         {
-            let len = self.kernel.as_ref().map(|k| k.len()).unwrap_or(0);
-            info!("launching CUDA kernel size {}", len);
-            let start = Instant::now();
+            if self.rt.lib.is_none() || !self.rt.present {
+                warn!("CUDA unavailable; stub launch");
+                OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open("/log/gpu_runtime.log")
+                    .and_then(|mut f| writeln!(f, "cuda disabled"))
+                    .ok();
+                self.fallback_reason = "cuda disabled".into();
+                self.last_exec_ns = 0;
+                fs::write("/srv/cuda_result", b"cuda disabled").map_err(|e| e.to_string())?;
+                return Ok(());
+            }
+
+            #[cfg(feature = "cuda")]
+            {
+                let len = self.kernel.as_ref().map(|k| k.len()).unwrap_or(0);
+                info!("launching CUDA kernel size {}", len);
+                let start = Instant::now();
 
             crate::validator::log_violation(crate::validator::RuleViolation {
                 type_: "unsafe_cuda_launch",
@@ -269,10 +271,11 @@ impl CudaExecutor {
                 .open("/log/gpu_runtime.log")
                 .and_then(|mut f| writeln!(f, "kernel executed in {runtime}ns"))
                 .ok();
-            fs::write("/srv/cuda_result", b"kernel executed").map_err(|e| e.to_string())?;
-        }
+                fs::write("/srv/cuda_result", b"kernel executed").map_err(|e| e.to_string())?;
+            }
 
-        Ok(())
+            Ok(())
+        }
     }
 
     /// Gather telemetry about the CUDA environment.
