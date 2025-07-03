@@ -49,6 +49,9 @@
 ### Improved
 - Added Plan9-native build of gui_orchestrator, staged as /usr/bin/gui-orchestrator in the ISO.
 
+### Changed
+- Go helpers (including gui_orchestrator) now built to $ROOT/out/go_helpers, no longer packaged into the ISO.
+
 ## [v0.91] - 2025-08-26
 ### Added
 - Kernel `proc_mgr` module providing a minimal userspace process model.
