@@ -2569,3 +2569,10 @@
 ### Added
 - Plan9 hook architecture with rc scripts `watch_validator.rc` and `upload_trace.rc`.
 - `PLAN9_HOOKS.md` describing 9P hook model.
+
+## [v0.392] - 2026-12-31
+### Added
+- `attest_commit.rc` for generating per-trace attest records.
+- `watch_multiagent_validator.rc` for per-agent violation logs.
+- Example `linux_alert_watcher.sh` demonstrating 9pfuse monitoring.
+- Updated `PLAN9_HOOKS.md` to cover new hooks and Linux integration.
