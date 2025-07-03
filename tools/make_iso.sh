@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # CLASSIFICATION: COMMUNITY
-# Filename: make_iso.sh v0.10
+# Filename: make_iso.sh v0.11
 # Author: Lukas Bower
 # Date Modified: 2026-12-31
 
@@ -40,6 +40,11 @@ ROOT_SRC="$ROOT/out/cohesix_root.elf"
 
 log "Copying kernel and userland binaries..."
 cp "$KERNEL_SRC" "$ISO_ROOT/boot/kernel.efi"
+if file "$ISO_ROOT/boot/kernel.efi" | grep -q "PE32+"; then
+    log "[CHECK] kernel.efi staged to /boot and verified"
+else
+    log "ERROR: kernel.efi not valid"; exit 1
+fi
 cp "$ROOT_SRC" "$ISO_ROOT/boot/userland.elf"
 sha256sum "$ISO_ROOT/boot/kernel.efi" | tee -a "$LOG_FILE" >&3
 sha256sum "$ISO_ROOT/boot/userland.elf" | tee -a "$LOG_FILE" >&3
@@ -139,6 +144,11 @@ esac
 
 log "Staging EFI binary as $BOOT_EFI"
 cp "$KERNEL_SRC" "$UEFI_DIR/$BOOT_EFI"
+if file "$UEFI_DIR/$BOOT_EFI" | grep -q "PE32+"; then
+    log "[CHECK] EFI binary verified"
+else
+    log "ERROR: EFI binary invalid"; exit 1
+fi
 
 command -v xorriso >/dev/null 2>&1 || { log "xorriso not found"; exit 1; }
 
