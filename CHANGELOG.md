@@ -46,6 +46,9 @@
 - test_all_arch.sh v1.1, run-smoke-tests.sh v0.4 now output logs and summaries
 - make_iso.sh script creates bootable ISO under out/cohesix.iso
 
+### Improved
+- Added Plan9-native build of gui_orchestrator, staged as /usr/bin/gui-orchestrator in the ISO.
+
 ## [v0.91] - 2025-08-26
 ### Added
 - Kernel `proc_mgr` module providing a minimal userspace process model.
