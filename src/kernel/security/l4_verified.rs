@@ -3,7 +3,8 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-20
 
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 /// seL4-verified capability enforcement layer.
 /// This module validates capability derivations and access rights against the static kernel proof model.
 

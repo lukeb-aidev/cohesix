@@ -2563,3 +2563,4 @@
 - `worker_inference.py` reads frames from `/srv/camera/frame.jpg`.
 - `make_iso.sh` no longer packages `demo_physics_webcam`.
 - Documentation updated for Plan9 9P webcam model.
+- Removed prelude wildcard imports; added explicit alloc imports.

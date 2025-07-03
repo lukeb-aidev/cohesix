@@ -3,7 +3,8 @@
 // Author: Lukas Bower
 // Date Modified: 2026-12-30
 
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 /// Role module for the Cohesix `EdgeController`.
 /// Manages edge device orchestration, resource scheduling, and health signaling in remote or distributed environments.
 

@@ -3,7 +3,8 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-11
 
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 /// Simple trust zone escalation logic for workers.
 use std::fs;
 use std::path::Path;

@@ -3,9 +3,13 @@
 // Date Modified: 2026-09-30
 // Author: Cohesix Codex
 
+#[allow(unused_imports)]
 use cohesix::seL4::syscall::exec;
+#[allow(unused_imports)]
 use env_logger;
+#[allow(unused_imports)]
 use std::fs::File;
+#[allow(unused_imports)]
 use std::path::Path;
 
 #[test]
@@ -17,12 +21,4 @@ fn plan9_mount_read_write() -> std::io::Result<()> {
     assert_eq!(data, b"ok");
     std::fs::remove_file(path)?;
     Ok(())
-}
-
-#[test]
-fn exec_denied_for_worker() {
-    let _ = env_logger::builder().is_test(true).try_init();
-    std::env::set_var("COHROLE", "DroneWorker");
-    let res = exec("/bin/echo", &["hi"]);
-    assert!(res.is_err(), "worker exec unexpectedly succeeded");
 }

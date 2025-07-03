@@ -1,6 +1,7 @@
 // Minimal in-memory transport implementation for tests and examples.
 
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 // CLASSIFICATION: COMMUNITY
 // Filename: transport.rs v1.0
 // Author: Lukas Bower

@@ -3,7 +3,8 @@
 // Author: Lukas Bower
 // Date Modified: 2026-07-23
 
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 /// CUDA physics integration module for Cohesix kernel-space.
 /// Provides CUDA dispatch scaffolding and GPU acceleration hooks for physics kernels.
 

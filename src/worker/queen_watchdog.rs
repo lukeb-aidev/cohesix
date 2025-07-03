@@ -3,7 +3,8 @@
 // Author: Lukas Bower
 // Date Modified: 2025-08-01
 
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 /// Worker-side watchdog monitoring queen heartbeat.
 use std::fs::{self, OpenOptions};
 use std::io::Write;

@@ -3,7 +3,8 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-12
 
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 /// KioskInteractive role initialisation.
 
 use std::fs::{self, OpenOptions};

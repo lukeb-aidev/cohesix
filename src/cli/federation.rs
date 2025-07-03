@@ -3,7 +3,8 @@
 // Author: Codex
 // Date Modified: 2025-07-07
 
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 use crate::CohError;
 /// Federation CLI helpers for `cohup`.
 use clap::{Arg, Command};

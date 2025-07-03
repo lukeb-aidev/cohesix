@@ -4,7 +4,8 @@
 // Date Modified: 2025-08-27
 // SPDX-License-Identifier: MIT
 
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 use cohesix::kernel::user_api::{SYS_EXIT, SYS_LOG};
 
 fn main() {

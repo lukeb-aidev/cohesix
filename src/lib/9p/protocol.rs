@@ -3,7 +3,8 @@
 // Author: Lukas Bower
 // Date Modified: 2025-05-31
 
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 /// Core 9P protocol definitions for Cohesix.
 /// Defines message types, tags, and stub handlers for 9P wire operations.
 

@@ -5,7 +5,8 @@
 
 /// Utility functions and constants for IR opcodes in the Cohesix compiler.
 use crate::ir::Opcode;
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 
 /// A slice containing every supported Opcode.
 pub const ALL_OPCODES: &[Opcode] = &[

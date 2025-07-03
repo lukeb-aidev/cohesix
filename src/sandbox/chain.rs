@@ -3,7 +3,8 @@
 // Author: Lukas Bower
 // Date Modified: 2026-10-28
 
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 /// Execute syscall chains within the sandbox environment.
 //
 /// Chains are executed in FIFO order using the [`SyscallQueue`] and

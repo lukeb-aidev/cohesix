@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2025-06-18
 
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 /// CUDA runtime support for Cohesix.
 pub mod runtime;

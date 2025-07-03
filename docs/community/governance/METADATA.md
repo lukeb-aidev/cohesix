@@ -319,3 +319,4 @@
 | src/hal/arm64/mod.rs | v0.7 | 2026-11-23 | PRIVATE | | |
 | src/hal/x86_64/mod.rs | v0.7 | 2026-11-23 | PRIVATE | | |
 | docs/community/UEFI_PLAN9_READINESS_AUDIT.md | v0.1 | 2026-12-31 | COMMUNITY | | |
+| src/cleanup/prelude_remove.md | v0.1 | 2026-12-31 | COMMUNITY | | |

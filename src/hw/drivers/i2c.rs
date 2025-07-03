@@ -3,7 +3,8 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-24
 
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 /// I2C driver module for Cohesix hardware abstraction layer.
 /// Provides interfaces for initializing and interacting with I2C devices.
 

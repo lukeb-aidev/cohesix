@@ -3,7 +3,8 @@
 // Author: Lukas Bower
 // Date Modified: 2026-10-28
 
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 /// Execute BusyBox as the interactive shell with role-based command filtering.
 use chrono::Utc;
 use std::fs::{self, OpenOptions};

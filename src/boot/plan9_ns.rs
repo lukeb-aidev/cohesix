@@ -3,7 +3,8 @@
 // Author: Lukas Bower
 // Date Modified: 2026-07-08
 
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 /// Plan 9 style namespace builder for early boot.
 /// Parses boot arguments and produces a textual namespace description
 /// compatible with Plan 9 bind and mount rules.

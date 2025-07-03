@@ -3,7 +3,8 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-18
 
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 use crate::{coh_bail, CohError};
 use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
