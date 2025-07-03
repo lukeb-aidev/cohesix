@@ -3,7 +3,8 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-05
 
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 /// Merge trace logs from peer queens and ensure consensus.
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};

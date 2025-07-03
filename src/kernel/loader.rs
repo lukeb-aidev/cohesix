@@ -3,7 +3,8 @@
 // Author: Lukas Bower
 // Date Modified: 2026-11-21
 
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 use log::info;
 use thiserror::Error;
 use xmas_elf::{program::Type, ElfFile};

@@ -5,7 +5,8 @@
 
 /// Function IR node: owns instructions and metadata.
 use crate::ir::instruction::Instruction;
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 use std::fmt;
 
 #[derive(Clone, Debug, Default)]

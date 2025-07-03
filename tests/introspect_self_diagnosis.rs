@@ -26,7 +26,7 @@ fn detects_policy_failure() {
     }
     assert!(triggered);
 
-    let log = match fs::read_to_string(trace_root.join("introspect_test.log")) {
+    let log = match fs::read_to_string("/trace/introspect_test.log") {
         Ok(v) => v,
         Err(e) if e.kind() == ErrorKind::PermissionDenied => {
             eprintln!(

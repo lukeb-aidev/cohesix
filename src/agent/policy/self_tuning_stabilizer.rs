@@ -5,7 +5,8 @@
 
 /// Adaptive stabilizer that learns optimal actions over time.
 use super::{EnsemblePolicy, ReinforcementPolicy};
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 
 pub struct SelfTuningStabilizer {
     policy: ReinforcementPolicy,

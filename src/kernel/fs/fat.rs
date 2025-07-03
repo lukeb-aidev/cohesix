@@ -3,7 +3,8 @@
 // Author: Lukas Bower
 // Date Modified: 2025-08-27
 
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 /// Minimal FAT filesystem glue for the UEFI boot path.
 /// This is a temporary shim that relies on the host-provided
 /// FAT image supplied via QEMU `-drive format=raw,file=fat:rw:<dir>`.

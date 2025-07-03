@@ -5,7 +5,8 @@
 
 /// IRContext provides stateful context for IR construction and analysis.
 use crate::ir::module::Module;
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 
 #[derive(Default)]
 pub struct IRContext {

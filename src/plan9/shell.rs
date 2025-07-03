@@ -3,7 +3,8 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-22
 
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 extern crate alloc;
 use alloc::collections::VecDeque;
 /// Plan 9–style shell interface for Cohesix.

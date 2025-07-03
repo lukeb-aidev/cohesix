@@ -4,7 +4,8 @@
 // Date Modified: 2025-05-31
 /// Tests for IR pass framework
 
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 #[cfg(test)]
 mod tests {
     use super::*;

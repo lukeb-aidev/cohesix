@@ -5,7 +5,8 @@
 
 /// IRBuilder for constructing Modules and Functions.
 use crate::ir::{Function, Instruction, Module, Opcode};
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 
 /// Helper for incrementally building IR modules.
 pub struct IRBuilder {

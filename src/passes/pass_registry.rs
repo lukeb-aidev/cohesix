@@ -3,7 +3,8 @@
 // Author: Lukas Bower
 // Date Modified: 2025-05-31
 
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 /// IR pass registry for Coh_CC
 /// Manages registration and dispatch of IR passes across the compiler pipeline.
 

@@ -3,7 +3,8 @@
 // Date Modified: 2026-10-08
 // Author: Lukas Bower
 
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 use crate::{coh_bail, coh_error, CohError};
 /// CLI module for Coh_CC compiler. Exports argument parser and main entry.
 pub mod args;

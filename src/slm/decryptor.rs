@@ -4,7 +4,8 @@
 // Date Modified: 2025-08-17
 // Random token generation uses rand; this is skipped for UEFI builds.
 
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 use crate::utils::tiny_ed25519::TinyEd25519;
 use crate::utils::tiny_rng::TinyRng;
 use crate::{coh_error, CohError};

@@ -3,8 +3,9 @@
 // Date Modified: 2025-07-10
 // Author: Cohesix Codex
 
-use cohesix::kernel::upgrade::upgrade_manager::{UpgradeManager, UpgradeManifest};
+#[allow(unused_imports)]
 use sha2::{Digest, Sha256};
+#[allow(unused_imports)]
 use std::fs;
 
 #[test]

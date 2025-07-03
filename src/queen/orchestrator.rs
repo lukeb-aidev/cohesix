@@ -3,7 +3,8 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-11
 
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 /// Queen orchestrator for managing worker nodes.
 //
 /// Tracks workers via `/srv/netinit/<worker_id>` and issues spawn commands

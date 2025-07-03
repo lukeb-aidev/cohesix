@@ -7,7 +7,8 @@
 /// Violations are logged to `/srv/violations/<agent>.json` and the
 /// offending syscall is dropped.
 use crate::cohesix_types::{Role, Syscall};
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 use crate::validator::config::get_config;
 use log::error;
 use serde::Serialize;

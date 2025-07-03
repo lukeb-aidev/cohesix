@@ -3,7 +3,8 @@
 // Author: Lukas Bower
 // Date Modified: 2025-05-31
 
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 /// Plan 9 shim for Cohesix kernel-to-userspace bridging.
 /// This module provides an adapter layer between kernel subsystems and 9P-style userland services.
 

@@ -4,7 +4,8 @@
 // Date Modified: 2026-10-07
 // UEFI-specific stub removed; full init runs on UEFI by default.
 
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 fn main() {
     use cohesix::runtime::env::init::{initialize_runtime_env, parse_boot_args};
     use cohesix::runtime::role_config::load_active;

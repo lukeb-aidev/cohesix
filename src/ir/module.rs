@@ -5,7 +5,8 @@
 
 /// Defines the IR Module and associated utilities for the Cohesix compiler.
 use crate::ir::Function;
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 use std::fmt;
 
 /// A compilation unit containing multiple functions.

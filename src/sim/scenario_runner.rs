@@ -3,7 +3,8 @@
 // Author: Lukas Bower
 // Date Modified: 2025-06-25
 
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 use crate::CohError;
 /// Scenario runner executing compiled scenarios tick-by-tick.
 

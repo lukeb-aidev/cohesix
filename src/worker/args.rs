@@ -14,7 +14,8 @@
 // while new code should depend on `WorkerOpts` directly.
 // ─────────────────────────────────────────────────────────────
 
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 #[forbid(unsafe_code)]
 #[warn(missing_docs)]
 use clap::Parser;

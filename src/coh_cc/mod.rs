@@ -3,7 +3,8 @@
 // Author: Lukas Bower
 // Date Modified: 2025-12-08
 
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 use crate::{coh_error, CohError};
 pub mod backend;
 pub mod config;
