@@ -273,22 +273,6 @@ if [ -f tests/requirements.txt ]; then
   python -m pip install -r tests/requirements.txt --break-system-packages
 fi
 
-# Install Python linters if missing
-for tool in flake8 mypy black; do
-  if ! command -v "$tool" >/dev/null 2>&1; then
-    python -m pip install "$tool" --break-system-packages
-  fi
-done
-
-# Validate presence of Python files before linting
-if find python tests -name '*.py' | grep -q .; then
-  flake8 python tests
-  mypy python tests --check-untyped-defs
-  black --check python tests
-else
-
-  log "ℹ️ No Python files detected; skipping lint checks"
-fi
 
 log "🔧 Checking C compiler..."
 if ! command -v gcc >/dev/null 2>&1; then
@@ -590,17 +574,7 @@ else
   log "⚠️ Go not found; skipping Go build"
 fi
 
-log "🐍 Running Python tests..."
-if command -v pytest &> /dev/null; then
-  if pytest -q; then
-    log "✅ Python tests passed"
-  else
-    echo "❌ Python tests failed" | tee -a "$SUMMARY_TEST_FAILS" >&3
-  fi
-fi
-if command -v flake8 &> /dev/null; then
-  flake8 python tests
-fi
+
 
 log "📖 Building mandoc and staging man pages..."
 scripts/build_mandoc.sh

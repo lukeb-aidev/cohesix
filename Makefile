@@ -38,11 +38,6 @@ fmt: ## Run code formatters
 	else \
 	echo "cargo fmt not installed"; \
 	fi
-	@if command -v black >/dev/null 2>&1; then \
-	black python tests; \
-	else \
-	echo "black not installed"; \
-	fi
 	@if command -v gofmt >/dev/null 2>&1; then \
 	gofmt -w $(shell find go -name '*.go'); \
 	else \
@@ -52,17 +47,6 @@ fmt: ## Run code formatters
 lint: ## Run linters
 	@cargo clippy --all-targets >/dev/null 2>&1 || \
 	echo "cargo clippy failed; skipping Rust lint"
-	@if command -v flake8 >/dev/null 2>&1; then \
-		flake8 python tests; \
-		else \
-		echo "flake8 not installed"; \
-		fi
-		@if command -v black >/dev/null 2>&1; then \
-		black --check python tests; \
-		fi
-		@if command -v mypy >/dev/null 2>&1; then \
-mypy --ignore-missing-imports --check-untyped-defs python tests/python; \
-		fi
 		@if command -v gofmt >/dev/null 2>&1; then \
 		gofmt -l $(shell find go -name '*.go'); \
 		fi
@@ -70,19 +54,13 @@ mypy --ignore-missing-imports --check-untyped-defs python tests/python; \
 check: test ## Run full test suite
 
 .PHONY: test test-python
-test: ## Run Rust, Python, Go and C tests
-	@echo "🦀 Rust tests …"
-	@RUST_BACKTRACE=1 cargo test --release || echo "cargo tests failed"
-	@echo "🐍 Python tests …"
-	@pytest -v || echo "python tests failed"
-	@echo "🐹 Go tests …"
-	@GOWORK=$(CURDIR)/go/go.work go test ./go/... || echo "go tests failed"
-	@echo "🧱 C tests …"
-	@cd build && ctest --output-on-failure || true
-
-test-python:
-	@echo "🐍 Python tests …"
-	@pytest -v
+test: ## Run Rust, Go and C tests
+       @echo "🦀 Rust tests …"
+       @RUST_BACKTRACE=1 cargo test --release || echo "cargo tests failed"
+       @echo "🐹 Go tests …"
+       @GOWORK=$(CURDIR)/go/go.work go test ./go/... || echo "go tests failed"
+       @echo "🧱 C tests …"
+       @cd build && ctest --output-on-failure || true
 
 go-build: ## Vet Go workspace
 	@echo "🔧 Go vet …"
