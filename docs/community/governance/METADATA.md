@@ -304,5 +304,6 @@
 | examples/linux_alert_watcher.sh | v0.1 | 2026-12-31 | COMMUNITY | | |
 | docs/community/architecture/K8S_ORCHESTRATION.md | v0.1 | 2026-12-31 | COMMUNITY | | |
 | docs/community/TEST_REFACTOR_GUIDE.md | v0.1 | 2026-12-31 | COMMUNITY | | |
+| docs/community/BUILD_NOTES.md | v0.1 | 2026-12-31 | COMMUNITY | | |
 Removed: introspect_self_diagnosis (Plan9 migration - file-based introspection replaced by validator-driven policy checks)
 Removed: legacy Python tests and lint steps; project now purely Plan9 + Rust
