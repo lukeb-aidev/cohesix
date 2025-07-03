@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.78
+# Filename: cohesix_fetch_build.sh v0.79
 # Author: Lukas Bower
-# Date Modified: 2026-12-31
+# Date Modified: 2025-07-03
 #!/bin/bash
 
 HOST_ARCH="$(uname -m)"
@@ -423,11 +423,38 @@ fi
 cp "$SRC_KERNEL" "$OUT_KERNEL"
 log "kernel.elf staged to $OUT_KERNEL"
 
+# Build UEFI variant of the seL4 kernel without clobbering the ELF build
+UEFI_BUILD_DIR="$SEL4_WORKSPACE/build_uefi"
+UEFI_KERNEL="$UEFI_BUILD_DIR/kernel/kernel.efi"
+if [ ! -d "$UEFI_BUILD_DIR" ]; then
+  log "Initializing UEFI kernel build at $UEFI_BUILD_DIR"
+  if (cd "$SEL4_WORKSPACE" && ./init-build.sh -DKernelUEFI=TRUE "$UEFI_BUILD_DIR"); then
+    log "UEFI build directory created"
+  else
+    log "⚠️ init-build.sh failed for UEFI kernel"
+  fi
+fi
+if [ -d "$UEFI_BUILD_DIR" ]; then
+  if (cd "$UEFI_BUILD_DIR" && ninja); then
+    if [ -f "$UEFI_KERNEL" ]; then
+      cp "$UEFI_KERNEL" "$ROOT/out/bin/kernel.efi"
+      log "[INFO] UEFI kernel built and staged: $ROOT/out/bin/kernel.efi"
+    else
+      log "⚠️ UEFI kernel output missing: $UEFI_KERNEL"
+    fi
+  else
+    log "⚠️ UEFI kernel ninja build failed"
+  fi
+fi
+
 
 
 log "📂 Staging boot files..."
 mkdir -p "$STAGE_DIR/boot"
 cp "$OUT_KERNEL" "$STAGE_DIR/boot/kernel.elf"
+if [ -f "$ROOT/out/bin/kernel.efi" ]; then
+  cp "$ROOT/out/bin/kernel.efi" "$STAGE_DIR/boot/kernel.efi"
+fi
 log "kernel build complete"
 cp out/cohesix_root.elf "$STAGE_DIR/boot/userland.elf"
 for f in initfs.img bootargs.txt boot_trace.json; do
