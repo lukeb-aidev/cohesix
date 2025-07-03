@@ -1376,8 +1376,6 @@ dependencies = [
 [[package]]
 name = "ninep"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c9d2cbf39c99718aa533c924295a796847b5f30befc6f3c015fa4965cce4c8a0"
 dependencies = [
  "bitflags 2.9.1",
 ]
@@ -1707,8 +1705,6 @@ checksum = "90bde5296fc891b0cef12a6d03ddccc162ce7b2aff54160af9338f8d40df6d19"
 [[package]]
 name = "rand_core"
 version = "0.6.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ec0be4795e2f6a28069bec0b5ff3e2ac9bafc99e6a9a7dc3547996c5c816922c"
 dependencies = [
  "getrandom 0.2.16",
 ]
