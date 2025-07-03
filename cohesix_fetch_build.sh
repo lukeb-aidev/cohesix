@@ -1,5 +1,5 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.82
+# Filename: cohesix_fetch_build.sh v0.83
 # Author: Lukas Bower
 # Date Modified: 2026-12-31
 #!/bin/bash
@@ -433,22 +433,35 @@ log "kernel.elf staged to $OUT_KERNEL"
 
 # Build UEFI variant of the seL4 kernel
 log "🏗️ Building UEFI kernel"
-(cd "$SEL4_WORKSPACE" && \
-  ../init-build.sh -DPLATFORM=qemu-arm-virt -DAARCH64=TRUE -DKernelUEFI=TRUE && \
-  ninja)
-UEFI_KERNEL="$SEL4_WORKSPACE/build/kernel/kernel.efi"
-if [ -f "$UEFI_KERNEL" ]; then
-  cp "$UEFI_KERNEL" "$ROOT/out/bin/kernel.efi"
-  if file "$ROOT/out/bin/kernel.efi" | grep -q "PE32+ executable (EFI application)"; then
-    log "[CHECK] kernel.efi identified as PE32+ EFI executable"
-  else
-    echo "❌ kernel.efi not found or invalid UEFI binary" >&2
+cd "$SEL4_WORKSPACE"
+./init-build.sh -DPLATFORM=qemu-arm-virt -DAARCH64=TRUE -DKernelUEFI=TRUE -B build_qemu_arm_uefi
+cd build_qemu_arm_uefi
+ninja
+cp kernel/kernel.efi "$ROOT/out/bin/kernel.efi"
+
+ARCH="$(uname -m)"
+EXPECTED=""
+case "$ARCH" in
+  x86_64|amd64)
+    EXPECTED="x86-64"
+    ;;
+  aarch64|arm64)
+    EXPECTED="AArch64"
+    ;;
+  *)
+    echo "❌ Unknown arch for EFI validation: $ARCH" >&2
     exit 1
-  fi
+    ;;
+esac
+EFI_INFO="$(file "$ROOT/out/bin/kernel.efi")"
+if echo "$EFI_INFO" | grep -q "PE32+ executable (EFI application)" && echo "$EFI_INFO" | grep -q "$EXPECTED"; then
+  log "✅ kernel.efi validated: $EFI_INFO"
 else
-  echo "❌ kernel.efi not found or invalid UEFI binary" >&2
+  echo "❌ kernel.efi validation failed: $EFI_INFO" >&2
   exit 1
 fi
+log "[INFO] kernel.efi built and staged to $ROOT/out/bin/kernel.efi, validated for $EXPECTED."
+cd "$ROOT"
 
 
 
