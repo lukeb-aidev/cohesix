@@ -1,15 +1,14 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: runtime.rs v0.14
+// Filename: runtime.rs v0.15
 // Author: Lukas Bower
 // Date Modified: 2026-12-31
 // Previously gated behind `#![cfg(not(target_os = "uefi"))]`.
 // Cohesix now always builds for UEFI, so CUDA runtime is unconditional.
 
-use crate::prelude::*;
 /// Runtime CUDA integration using dynamic loading of `libcuda.so`.
 /// Falls back gracefully if no CUDA driver is present.
 use crate::runtime::ServiceRegistry;
-#[cfg(target_os = "uefi")]
+#[cfg(not(target_os = "uefi"))]
 use crate::validator::{self, RuleViolation};
 use crate::{coh_error, CohError};
 #[cfg(target_os = "uefi")]
@@ -19,10 +18,10 @@ use libloading::{Library, Symbol};
 #[cfg(all(feature = "cuda", not(target_os = "uefi")))]
 use log::info;
 use log::warn;
-#[cfg(not(target_os = "uefi"))]
-use std::fs::{self, OpenOptions};
-#[cfg(not(target_os = "uefi"))]
-use std::io::{self, Write};
+use std::{
+    fs::{self, OpenOptions},
+    io::{self, Write},
+};
 #[cfg(all(feature = "cuda", not(target_os = "uefi")))]
 use std::time::Instant;
 

@@ -2550,3 +2550,8 @@
 - Workspace `cargo check` for UEFI target by patching `rand_core` and `ninep`
   crates with local sources.
 - `mount` CLI now compiles on non-Unix targets.
+
+## [v0.389] - 2026-12-31
+### Fixed
+- Added missing standard library imports in `src/cuda/runtime.rs` to resolve
+  compilation errors and removed an unused prelude import.
