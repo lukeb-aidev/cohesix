@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.79
+# Filename: cohesix_fetch_build.sh v0.80
 # Author: Lukas Bower
-# Date Modified: 2025-07-03
+# Date Modified: 2026-12-31
 #!/bin/bash
 
 HOST_ARCH="$(uname -m)"
@@ -217,7 +217,8 @@ fi
 
 cd "$ROOT"
 STAGE_DIR="$ROOT/out/iso"
-mkdir -p "$ROOT/out/bin"
+GO_HELPERS_DIR="$ROOT/out/go_helpers"
+mkdir -p "$ROOT/out/bin" "$GO_HELPERS_DIR"
 # Clean up artifacts from previous builds
 rm -f "$ROOT/out/bin/init.efi" "$ROOT/out/boot/kernel.elf" 2>/dev/null || true
 
@@ -573,28 +574,18 @@ if command -v go &> /dev/null; then
     GOARCH="$COH_ARCH"
   fi
 
-  mkdir -p "$STAGE_DIR/bin" "$STAGE_DIR/usr/bin"
+  mkdir -p "$GO_HELPERS_DIR"
 
   for dir in go/cmd/*; do
     if [ -f "$dir/main.go" ]; then
       name="$(basename "$dir")"
       log "  ensuring modules for $name"
       (cd "$dir" && go mod tidy)
-      log "  compiling $name for $COH_ARCH as GOARCH=$GOARCH"
-      if [ "$name" = "gui-orchestrator" ]; then
-        GOWORK="$ROOT/go/go.work" GOOS=plan9 GOARCH="$GOARCH" CGO_ENABLED=0 \
-          go build -o "$STAGE_DIR/usr/bin/$name" "./$dir" && \
-          chmod +x "$STAGE_DIR/usr/bin/$name" && \
-          log "[INFO] gui-orchestrator built and staged to ISO at /usr/bin/$name"
+      log "  compiling $name for Linux as GOARCH=$GOARCH"
+      if GOOS=linux GOARCH="$GOARCH" go build -tags unix -C "$dir" -o "$GO_HELPERS_DIR/$name"; then
+        chmod +x "$GO_HELPERS_DIR/$name"
       else
-        if GOOS=linux GOARCH="$GOARCH" go build -tags unix -C "$dir" -o "$STAGE_DIR/bin/$name"; then
-          log "  built $name"
-          cp "$STAGE_DIR/bin/$name" "$STAGE_DIR/usr/bin/$name"
-        else
-          log "  cross build failed for $name; trying native"
-          (cd "$dir" && go build -tags unix -o "$STAGE_DIR/bin/$name") || log "  build failed for $name"
-          cp "$STAGE_DIR/bin/$name" "$STAGE_DIR/usr/bin/$name" 2>/dev/null || true
-        fi
+        log "  build failed for $name"
       fi
     fi
   done
@@ -604,6 +595,7 @@ if command -v go &> /dev/null; then
   else
     echo "❌ Go tests failed" | tee -a "$SUMMARY_TEST_FAILS" >&3
   fi
+  log "[INFO] Go helpers built and staged in $GO_HELPERS_DIR (excluded from ISO)"
 else
   log "⚠️ Go not found; skipping Go build"
 fi
