@@ -95,6 +95,19 @@ else
     log "WARNING: No Go helpers found"
 fi
 
+# gui-orchestrator binary
+if [ -f "$ROOT/go/bin/gui-orchestrator" ]; then
+    cp "$ROOT/go/bin/gui-orchestrator" "$ISO_ROOT/usr/bin/gui-orchestrator"
+    chmod +x "$ISO_ROOT/usr/bin/gui-orchestrator"
+    log "[INFO] gui-orchestrator built and staged to ISO at /usr/bin/gui-orchestrator"
+else
+    if [ -f "$ISO_ROOT/usr/bin/gui-orchestrator" ]; then
+        log "[INFO] gui-orchestrator built and staged to ISO at /usr/bin/gui-orchestrator"
+    else
+        log "WARNING: gui-orchestrator binary not found"
+    fi
+fi
+
 # Demos (CUDA and Rapier)
 if [ -d "$ROOT/src/demos" ]; then
     log "Ignoring legacy Python demo assets"
