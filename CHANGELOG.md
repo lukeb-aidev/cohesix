@@ -2626,3 +2626,7 @@
 ### Added
 - `cohesix_fetch_build.sh` builds the seL4 UEFI kernel in `build_uefi` and stages `kernel.efi` to out/bin and the ISO.
 
+
+## [v0.402] - 2026-12-31
+### Improved
+- Verified and documented EFI kernel build process; added checks to confirm kernel.efi is correctly produced and staged into ISO.
