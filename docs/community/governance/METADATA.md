@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: METADATA.md v3.46
+// Filename: METADATA.md v3.47
 // Author: Lukas Bower
 // Date Modified: 2026-12-31
 
@@ -120,14 +120,11 @@
 | src/kernel/main.c | v0.2 | 2025-07-22 | COMMUNITY | | |
 | src/kernel/main.rs | v0.2 | 2025-08-02 | COMMUNITY | | |
 | src/kernel/proc_mgr.rs | v0.2 | 2025-08-27 | COMMUNITY | | |
-| tests/test_traceflow.py | v0.4 | 2025-12-20 | COMMUNITY | | |
-| tests/test_invalid_cli.py | v0.1 | 2025-07-23 | COMMUNITY | | |
 | tests/test_cuda_presence.rs | v0.2 | 2025-12-10 | COMMUNITY | | |
 | tests/test_cuda_exec.rs | v0.6 | 2026-08-23 | COMMUNITY | | |
 | tests/test_cuda_kernel.rs | v0.4 | 2025-12-12 | COMMUNITY | | |
 | tests/test_namespace_rule.rs | v0.1 | 2025-07-23 | COMMUNITY | | |
 | tests/test_namespace_semantics.rs | v0.5 | 2026-12-31 | COMMUNITY | | |
-| tests/test_trace_compare.py | v0.1 | 2025-07-23 | COMMUNITY | | |
 | tests/test_qemu_boot.rs | v0.13 | 2026-12-31 | COMMUNITY | | |
 | tests/test_boot_build_chain.rs | v0.1 | 2025-12-24 | COMMUNITY | | |
 | tests/boot_trace_rule.rs | v0.4 | 2026-12-31 | COMMUNITY | | |
@@ -271,7 +268,6 @@
 | src/utils/tiny_ed25519.rs | v0.3 | 2026-12-31 | COMMUNITY | | |
 
 | requirements.txt | v0.2 | 2026-01-27 | COMMUNITY | | |
-| tests/requirements.txt | v0.1 | 2026-07-12 | COMMUNITY | | |
 | cloud-init.yaml | v0.1 | 2026-02-19 | COMMUNITY | | |
 | plan9.ns | v0.5 | 2026-12-31 | COMMUNITY | | |
 | bin/cohpkg | v0.1 | 2026-02-21 | COMMUNITY | | |
@@ -293,7 +289,6 @@
 | tests/test_secure9p_config.rs | v0.1 | 2026-09-30 | COMMUNITY | | |
 | docs/community/PATH_SELF_INTERSECTION.md | v0.1 | 2026-11-19 | COMMUNITY | | |
 | src/geometry/sweep_line_intersection.py | v0.1 | 2026-11-19 | COMMUNITY | | |
-| tests/test_sweep_line_intersection.py | v0.1 | 2026-11-19 | COMMUNITY | | |
 | log/simulated_boot_pipeline.md | v0.1 | 2026-11-20 | COMMUNITY | | |
 | tools/make_iso.sh | v0.9 | 2026-12-31 | COMMUNITY | | |
 | src/hal/arm64/mod.rs | v0.7 | 2026-11-23 | PRIVATE | | |
@@ -309,3 +304,4 @@
 | docs/community/architecture/K8S_ORCHESTRATION.md | v0.1 | 2026-12-31 | COMMUNITY | | |
 | docs/community/TEST_REFACTOR_GUIDE.md | v0.1 | 2026-12-31 | COMMUNITY | | |
 Removed: introspect_self_diagnosis (Plan9 migration - file-based introspection replaced by validator-driven policy checks)
+Removed: legacy Python tests and lint steps; project now purely Plan9 + Rust
