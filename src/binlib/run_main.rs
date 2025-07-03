@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: run_main.rs v0.2
+// Filename: run_main.rs v0.3
 // Author: Lukas Bower
 // Date Modified: 2026-12-31
 
@@ -7,8 +7,6 @@ use crate::prelude::*;
 use crate::queen::orchestrator::{QueenOrchestrator, SchedulePolicy};
 #[cfg(feature = "rapier")]
 use crate::sim::physics_demo;
-#[cfg(feature = "rapier")]
-use crate::sim::webcam_tilt;
 use clap::{Parser, Subcommand};
 
 /// CLI wrapper for `cohrun` utility.
@@ -24,8 +22,6 @@ pub struct Cli {
 pub enum Commands {
     #[cfg(feature = "rapier")]
     PhysicsDemo,
-    #[cfg(feature = "rapier")]
-    WebcamTilt,
     KioskStart,
     KioskEvent {
         #[arg(long)]
@@ -84,8 +80,6 @@ pub fn run(cli: Cli) {
     match cli.command {
         #[cfg(feature = "rapier")]
         Commands::PhysicsDemo => physics_demo::run_demo(),
-        #[cfg(feature = "rapier")]
-        Commands::WebcamTilt => webcam_tilt::run(None),
         Commands::KioskStart => {
             crate::init::kiosk::start();
             println!("kiosk started");

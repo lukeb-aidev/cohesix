@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: role_hooks.rs v0.1
+// Filename: role_hooks.rs v0.2
 // Author: Lukas Bower
 // Date Modified: 2025-07-11
 
@@ -22,7 +22,7 @@ pub fn setup(role: &str) {
     fs::write("/srv/telemetry", "").ok();
     match role {
         "DroneWorker" | "SensorRelay" => {
-            fs::write("/srv/webcam", "").ok();
+            fs::write("/srv/camera", "").ok();
             fs::write("/srv/gpuinfo", "").ok();
         }
         _ => {}

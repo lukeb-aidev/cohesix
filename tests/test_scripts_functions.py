@@ -1,5 +1,5 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: test_scripts_functions.py v0.1
+# Filename: test_scripts_functions.py v0.2
 # Author: Lukas Bower
 # Date Modified: 2025-07-22
 """Unit tests for Python helper scripts."""
@@ -93,24 +93,23 @@ def test_full_trace_audit(tmp_path, capsys, monkeypatch):
 
 @pytest.mark.skipif(worker_inference is None, reason="worker_inference unavailable")
 def test_worker_inference_run(monkeypatch, tmp_path):
-    class DummyCap:
-        def read(self):
-            return False, None
-
-    cap = DummyCap()
     dummy_cv2 = types.SimpleNamespace(
-        VideoCapture=lambda p: cap,
         CascadeClassifier=lambda p: types.SimpleNamespace(
             detectMultiScale=lambda *a, **kw: []
         ),
+        imdecode=lambda arr, flag: "frame",
+        COLOR_BGR2GRAY=0,
+        cvtColor=lambda img, flag: img,
     )
     assert worker_inference is not None
     monkeypatch.setattr(worker_inference, "cv2", dummy_cv2)
     out_file = tmp_path / "out.txt"
 
     def fake_open(path, mode="r"):
-        assert path == "/srv/infer/out"
-        return open(out_file, "w")
+        if path == "/srv/infer/out":
+            return open(out_file, "w")
+        assert path == "/srv/camera/frame.jpg"
+        return types.SimpleNamespace(read=lambda: b"\xff\xd8\xff")
 
     monkeypatch.setattr(worker_inference, "open", fake_open)
     worker_inference.run()

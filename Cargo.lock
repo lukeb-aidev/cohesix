@@ -372,6 +372,7 @@ dependencies = [
  "hex",
  "hkdf",
  "image",
+ "libc",
  "libloading",
  "log",
  "ninep",

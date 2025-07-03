@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: DEMO_SCENARIOS.md v1.1
+// Filename: DEMO_SCENARIOS.md v1.2
 // Author: Lukas Bower
 // Date Modified: 2026-02-11
 
@@ -51,7 +51,7 @@ Trace: `/log/trace/scenario_10.log`
 
 ### Additional Services
 - **Kiosk Federation:** UI bundles served from `/srv/ui_bundle/kiosk_v1/` and triggered by `cohtrace kiosk_ping`.
-- **Webcam Tilt:** Capture from `/dev/video0` feeds force values to a Rapier beam simulation.
+ - **Webcam Tilt:** Frames streamed via `/srv/camera` drive a Rapier beam simulation.
 - **GPU Swarm Registry:** Workers publish `gpu_capacity` and `latency_score` for scheduling; stored under `/srv/gpu_registry.json`.
 
 All services emit trace logs to `/log/trace/` and snapshots to `/history/snapshots/` for replay and validator inspection.
