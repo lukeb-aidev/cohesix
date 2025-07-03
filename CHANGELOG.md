@@ -2584,3 +2584,9 @@
 ### Removed
 - Legacy Python CLI scripts and Plan9 demo modules.
 
+## [v0.395] - 2026-12-31
+### Fixed
+- `detects_policy_failure` test in `boot_trace_rule.rs` no longer panics.
+- Boot trace rule handles `policy_failure` event and outputs `BOOT_FAIL:policy_failure`.
+- Pipeline stabilized; all release tests pass.
+
