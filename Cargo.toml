@@ -139,6 +139,8 @@ memchr = { path = "third_party/memchr_simple" }
 
 [patch."https://github.com/rust-lang/crates.io-index"]
 getrandom = { path = "third_party/getrandom_dummy" }
+rand_core = { path = "third_party/rand_core_patch" }
+ninep = { path = "third_party/ninep_portable" }
 
 [target.'cfg(not(target_os = "uefi"))'.dependencies]
 libloading = "0.7"

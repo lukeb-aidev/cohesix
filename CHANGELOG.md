@@ -2544,3 +2544,9 @@
 - Concurrency protection for `InMemoryFs` using `spin::RwLock`.
 - Validator hook now triggers on service registration.
 - Documented new `spin` dependency in governance files.
+
+## [v0.388] - 2026-12-31
+### Fixed
+- Workspace `cargo check` for UEFI target by patching `rand_core` and `ninep`
+  crates with local sources.
+- `mount` CLI now compiles on non-Unix targets.
