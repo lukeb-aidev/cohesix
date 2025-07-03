@@ -15,7 +15,6 @@ use core::marker::PhantomData as Symbol;
 #[cfg(not(target_os = "uefi"))]
 use libloading::{Library, Symbol};
 #[cfg(target_os = "uefi")]
-type Library = ();
 use crate::validator::{self, RuleViolation};
 #[cfg(feature = "cuda")]
 use log::info;
@@ -283,14 +282,16 @@ impl CudaExecutor {
     /// Gather telemetry about the CUDA environment.
     pub fn telemetry(&self) -> Result<crate::telemetry::core::GpuTelemetry, String> {
         use crate::telemetry::core::GpuTelemetry;
-        if !self.rt.present {
+        let cuda_present = cfg!(feature = "cuda") && self.rt.present;
+        if !cuda_present {
             return Ok(GpuTelemetry {
                 cuda_present: false,
-                fallback_reason: "not present".into(),
+                fallback_reason: "simulated fallback".into(),
                 exec_time_ns: self.last_exec_ns,
                 ..Default::default()
             });
         }
+
         #[cfg(feature = "cuda")]
         {
             let version = CudaApiVersion::get()
@@ -310,14 +311,12 @@ impl CudaExecutor {
                 gpu_utilization: util,
             });
         }
-        #[cfg(any(target_os = "uefi", not(feature = "cuda")))]
-        {
-            return Ok(GpuTelemetry {
-                cuda_present: false,
-                fallback_reason: "feature disabled".into(),
-                exec_time_ns: self.last_exec_ns,
-                ..Default::default()
-            });
-        }
+
+        Ok(GpuTelemetry {
+            cuda_present: false,
+            fallback_reason: "simulated fallback".into(),
+            exec_time_ns: self.last_exec_ns,
+            ..Default::default()
+        })
     }
 }
