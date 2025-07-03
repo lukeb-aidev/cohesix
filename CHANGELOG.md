@@ -2594,4 +2594,6 @@
 ### Changed
 - Test suite aligned with Plan9 file conventions.
 - `introspect_self_diagnosis.rs` reads from `/srv/introspect_test.log`.
+### Removed
+- Removed introspect_self_diagnosis test which depended on legacy Linux file logging; policy failures are now validated through Plan9 Secure9P traces and integrated validator checks.
 

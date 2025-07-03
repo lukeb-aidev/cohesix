@@ -10,7 +10,7 @@ This document summarizes filesystem and environment sensitive operations found i
 ## Observed Patterns
 
 - **File::open**: `tests/test_capabilities.rs` demonstrates direct file opening with panic on success when permission should be denied.
-- **fs::metadata** usages appear in several tests including `9p_validator_hook.rs`, `world_model_sync.rs`, `introspect_self_diagnosis.rs`, `test_cohcc_output.rs`, `test_capabilities.rs`, and the `codex` test set.
+- **fs::metadata** usages appear in several tests including `9p_validator_hook.rs`, `world_model_sync.rs`, `test_cohcc_output.rs`, `test_capabilities.rs`, and the `codex` test set.
 - **fs::read_dir** is called with `unwrap()` in `runtime_safety.rs`.
 - Several tests create or use paths under `/dev`, `/srv`, or `/proc` which may not be writable in cloud CI runners.
 - `unwrap()` or `expect()` is commonly used after these operations, leading to hard failures on permission denied.
