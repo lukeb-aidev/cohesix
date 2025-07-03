@@ -6,6 +6,10 @@ use std::{
 };
 
 pub fn include_cuda() {
+    if cfg!(target_os = "uefi") || env::var("NO_CUDA_LIB").is_ok() {
+        println!("cargo:warning=Skipping CUDA link");
+        return;
+    }
     if env::var("DOCS_RS").is_err() && !cfg!(doc) {
         let paths = find_cuda_lib_dirs();
         if paths.is_empty() {

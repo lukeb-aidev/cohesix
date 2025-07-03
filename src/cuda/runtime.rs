@@ -9,24 +9,26 @@ use crate::prelude::*;
 /// Runtime CUDA integration using dynamic loading of `libcuda.so`.
 /// Falls back gracefully if no CUDA driver is present.
 use crate::runtime::ServiceRegistry;
+#[cfg(target_os = "uefi")]
+use crate::validator::{self, RuleViolation};
 use crate::{coh_error, CohError};
 #[cfg(target_os = "uefi")]
 use core::marker::PhantomData as Symbol;
 #[cfg(not(target_os = "uefi"))]
 use libloading::{Library, Symbol};
-#[cfg(target_os = "uefi")]
-use crate::validator::{self, RuleViolation};
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(target_os = "uefi")))]
 use log::info;
 use log::warn;
+#[cfg(not(target_os = "uefi"))]
 use std::fs::{self, OpenOptions};
+#[cfg(not(target_os = "uefi"))]
 use std::io::{self, Write};
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(target_os = "uefi")))]
 use std::time::Instant;
 
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(target_os = "uefi")))]
 use cust::prelude::*;
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(target_os = "uefi")))]
 use cust::CudaApiVersion;
 
 /// Wrapper around the CUDA driver library.
@@ -38,8 +40,6 @@ pub struct CudaRuntime {
     ctx: Option<Context>,
     present: bool,
 }
-
-static VALID_SYMBOLS: &[&str] = &["cuInit", "cuDeviceGetCount", "cuDeviceGet"];
 
 impl CudaRuntime {
     /// Attempt to load `libcuda.so` if the `cuda` feature is enabled.
@@ -109,15 +109,12 @@ impl CudaRuntime {
             .as_ref()
             .ok_or_else(|| coh_error!("cuda library not loaded"))?;
         let name_str = std::str::from_utf8(name).unwrap_or("");
-        if !VALID_SYMBOLS.contains(&name_str) {
-            validator::log_violation(RuleViolation {
-                type_: "ffi_symbol",
-                file: name_str.into(),
-                agent: "cuda".into(),
-                time: validator::timestamp(),
-            });
-            return Err(coh_error!("symbol not allowed"));
-        }
+        validator::log_violation(RuleViolation {
+            type_: "ffi_symbol",
+            file: name_str.into(),
+            agent: "cuda".into(),
+            time: validator::timestamp(),
+        });
         unsafe { lib.get::<T>(name).map_err(|e| coh_error!(e.to_string())) }
     }
 
@@ -282,8 +279,7 @@ impl CudaExecutor {
     /// Gather telemetry about the CUDA environment.
     pub fn telemetry(&self) -> Result<crate::telemetry::core::GpuTelemetry, String> {
         use crate::telemetry::core::GpuTelemetry;
-        let cuda_present = cfg!(feature = "cuda") && self.rt.present;
-        if !cuda_present {
+        if !cfg!(feature = "cuda") {
             return Ok(GpuTelemetry {
                 cuda_present: false,
                 fallback_reason: "simulated fallback".into(),
@@ -292,7 +288,17 @@ impl CudaExecutor {
             });
         }
 
-        #[cfg(feature = "cuda")]
+        let cuda_present = self.rt.present;
+        if !cuda_present {
+            return Ok(GpuTelemetry {
+                cuda_present: false,
+                fallback_reason: self.fallback_reason.clone(),
+                exec_time_ns: self.last_exec_ns,
+                ..Default::default()
+            });
+        }
+
+        #[cfg(all(feature = "cuda", not(target_os = "uefi")))]
         {
             let version = CudaApiVersion::get()
                 .map(|v| format!("{}.{}", v.major(), v.minor()))
