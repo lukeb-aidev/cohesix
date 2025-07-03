@@ -162,8 +162,7 @@
 | tests/secure9p/namespace_traversal.rs | v0.1 | 2025-07-24 | COMMUNITY | | |
 | tests/secure9p/policy_denial.rs | v0.3 | 2025-07-26 | COMMUNITY | | |
 | tests/secure9p/agent_identifier.rs | v0.2 | 2025-07-26 | COMMUNITY | | |
-| cli/cohcli.py | v1.1 | 2025-08-01 | COMMUNITY | | |
-| validator.pyi | v0.1 | 2025-12-10 | COMMUNITY | | |
+
 | scripts/setup_build_env.sh | v0.5 | 2026-07-25 | COMMUNITY | | |
 | scripts/check-qemu-deps.sh | v0.1 | 2025-07-28 | COMMUNITY | | |
 | scripts/collect_boot_logs.sh | v0.1 | 2025-07-12 | COMMUNITY | | |
@@ -270,30 +269,8 @@
 
 | requirements.txt | v0.2 | 2026-01-27 | COMMUNITY | | |
 | tests/requirements.txt | v0.1 | 2026-07-12 | COMMUNITY | | |
-| bin/demo_bee_learns | v0.1 | 2026-02-11 | COMMUNITY | | |
-| bin/demo_cloud_queen | v0.1 | 2026-02-11 | COMMUNITY | | |
-| bin/demo_cuda_edge | v0.1 | 2026-02-11 | COMMUNITY | | |
-| bin/demo_trace_validation | v0.1 | 2026-02-11 | COMMUNITY | | |
-| bin/demo_secure_relay | v0.1 | 2026-02-11 | COMMUNITY | | |
-| bin/demo_sensor_world | v0.1 | 2026-02-11 | COMMUNITY | | |
-| bin/demo_multi_duel | v0.1 | 2026-02-11 | COMMUNITY | | |
-| src/demos/common.py | v0.1 | 2026-02-11 | COMMUNITY | | |
-| src/demos/bee_learns/main.py | v0.1 | 2026-02-11 | COMMUNITY | | |
-| src/demos/cloud_queen/main.py | v0.1 | 2026-02-11 | COMMUNITY | | |
-| src/demos/cuda_edge/main.py | v0.1 | 2026-02-11 | COMMUNITY | | |
-| src/demos/trace_validation/main.py | v0.1 | 2026-02-11 | COMMUNITY | | |
-| src/demos/secure_relay/main.py | v0.1 | 2026-02-11 | COMMUNITY | | |
-| src/demos/sensor_world/main.py | v0.1 | 2026-02-11 | COMMUNITY | | |
-| src/demos/multi_duel/main.py | v0.1 | 2026-02-11 | COMMUNITY | | |
 | cloud-init.yaml | v0.1 | 2026-02-19 | COMMUNITY | | |
 | plan9.ns | v0.5 | 2026-12-31 | COMMUNITY | | |
-| bin/cohcli | v0.1 | 2026-02-21 | COMMUNITY | | |
-| bin/cohrun | v0.1 | 2026-02-21 | COMMUNITY | | |
-| bin/cohbuild | v0.1 | 2026-02-21 | COMMUNITY | | |
-| bin/cohcc | v0.1 | 2026-02-21 | COMMUNITY | | |
-| bin/cohtrace | v0.1 | 2026-02-21 | COMMUNITY | | |
-| bin/cohcap | v0.1 | 2026-02-21 | COMMUNITY | | |
-| bin/cohup | v0.1 | 2026-02-21 | COMMUNITY | | |
 | bin/cohpkg | v0.1 | 2026-02-21 | COMMUNITY | | |
 | bin/cohshell.sh | v0.1 | 2026-02-21 | COMMUNITY | | |
 | bin/cohman.sh | v0.1 | 2026-02-21 | COMMUNITY | | |
