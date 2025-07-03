@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: METADATA.md v3.47
+// Filename: METADATA.md v3.48
 // Author: Lukas Bower
 // Date Modified: 2026-12-31
 
@@ -25,7 +25,6 @@
 | THREAT_MODEL.md            | v1.1    | 2025-06-15    | PRIVATE        |            |              |
 | TECHNICAL_RISK.md         | v1.1    | 2025-06-08    | PRIVATE        |     |              |
 | WATCHDOG_POLICY.md         | v1.4    | 2025-06-05    | COMMUNITY      |            |              |
-| CLI.md                     | v0.5    | 2026-07-27    | COMMUNITY      | | |
 | GUI_ORCHESTRATOR.md        | v1.3    | 2026-02-05    | COMMUNITY      |        |              |
 | FEDERATION.md              | v1.0    | 2025-06-07    | PRIVATE        |            |              |
 | SECURE_BOOT.md             | v1.0    | 2025-06-07    | PRIVATE        |            |              |
@@ -34,18 +33,13 @@
 | SECURITY_REVIEW.md         | v0.2    | 2025-07-13    | COMMUNITY      |     |              |
 | COMPILER_REVIEW.md         | v0.1    | 2025-07-11    | COMMUNITY      |          |              
 | AGENTS_AND_CLI.md          | v1.2    | 2025-07-26    | COMMUNITY      |     |              |
+| cli_tools.md              | v1.0    | 2026-12-31    | COMMUNITY      |     |
 | LICENSES_AND_REUSE.md     | v1.5    | 2026-12-31    | COMMUNITY      |     |              |
 | ROLE_POLICY.md            | v1.1    | 2026-09-30    | COMMUNITY      |     |              |
-| cli/README.md             | v1.0    | 2025-07-31    | COMMUNITY      |     |              |
 | AGENTS.md                 | v2.2    | 2025-07-22    | COMMUNITY      |     |              |
 | DEMO_SCENARIOS.md          | v1.2    | 2026-02-11    | COMMUNITY      |     |              |
 | VALIDATION_AND_TESTING.md  | v1.5    | 2025-07-25    | COMMUNITY      |     |              |
 | VALIDATION_SUMMARY.md       | v0.3    | 2025-08-18    | COMMUNITY      |     |              |
-| CLI_HELP_COHCLI.md         | v0.1    | 2025-06-15    | COMMUNITY      |     |              |
-| CLI_HELP_COHRUN.md         | v0.2    | 2025-06-15    | COMMUNITY      |     |              |
-| CLI_HELP_COHTRACE.md       | v0.1    | 2025-06-15    | COMMUNITY      |     |              |
-| CLI_HELP_COHCC.md          | v0.1    | 2025-06-15    | COMMUNITY      |     |              |
-| CLI_HELP_COHCAP.md         | v0.1    | 2025-06-15    | COMMUNITY      |     |              |
 | MANIFEST.md               | v0.2    | 2025-06-29    | COMMUNITY      |     |              |
 | awk.1                     | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
 | cat.1                     | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
@@ -94,7 +88,6 @@
 | ifconfig.8                | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
 | ip.8                      | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
 | preview_man.sh            | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
-| UTILS_README.md            | v0.1    | 2025-07-13    | COMMUNITY      |     |              |
 | cohpkg.1                   | v0.1    | 2025-07-13    | COMMUNITY      |     |              |
 | SIM_TESTS.md               | v0.1    | 2025-07-13    | COMMUNITY      |     |             |
 | devices/HOTPLUG.md | v0.1 | 2025-07-14 | COMMUNITY | | |
