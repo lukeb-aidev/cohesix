@@ -1,0 +1,19 @@
+#!/bin/rc
+# CLASSIFICATION: COMMUNITY
+# Filename: watch_multiagent_validator.rc v0.1
+# Author: Lukas Bower
+# Date Modified: 2026-12-31
+
+# Watch validator log and route violations to per-agent alert files.
+
+if(! test -e /srv/validator/log){
+    echo 'validator log missing' >[1=2]
+    exit ''
+}
+if(! test -d /srv/alerts){
+    mkdir /srv/alerts
+}
+
+awk '/violation/ { agent=$1; dir="/srv/alerts/" agent; system("mkdir -p " dir); file=dir"/log"; print $0 >> file; close(file) }' < /srv/validator/log &
+
+tail -f /srv/validator/log | awk '/violation/ { agent=$1; dir="/srv/alerts/" agent; system("mkdir -p " dir); file=dir"/log"; print $0 >> file; close(file) }'
