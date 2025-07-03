@@ -2606,3 +2606,7 @@
 - Refactored remaining tests for Plan9 compatibility replacing UNIX permissions and geteuid checks.
 - QEMU path now sourced from `QEMU_BIN` environment variable.
 
+## [v0.399] - 2026-12-31
+### Fixed
+- Repaired `plan9_mount_read_write` permission failure by ensuring correct Secure9P role configuration and Plan9 sandbox mount semantics.
+
