@@ -2600,3 +2600,9 @@
 ## [v0.397] - 2026-12-31
 ### Removed
 - Removed dead tests that relied on legacy Linux filesystem or deleted modules after Plan9 migration.
+
+## [v0.398] - 2026-12-31
+### Changed
+- Refactored remaining tests for Plan9 compatibility replacing UNIX permissions and geteuid checks.
+- QEMU path now sourced from `QEMU_BIN` environment variable.
+
