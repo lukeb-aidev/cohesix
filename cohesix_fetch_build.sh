@@ -268,8 +268,10 @@ log "🐍 Setting up Python environment..."
 command -v python3 >/dev/null || { echo "❌ python3 not found" >&2; exit 1; }
 VENV_DIR=".venv_${COHESIX_ARCH}"
 python3 -m venv "$VENV_DIR"
+# Activate Python venv and install required packages
 source "$VENV_DIR/bin/activate"
-# Ensure \$HOME/.local/bin is included for user installs
+pip install ply lxml --break-system-packages
+# Ensure $HOME/.local/bin is included for user installs
 export PATH="$HOME/.local/bin:$PATH"
 # Upgrade pip and base tooling; fall back to ensurepip if needed
 python -m pip install --upgrade pip setuptools wheel --break-system-packages \
