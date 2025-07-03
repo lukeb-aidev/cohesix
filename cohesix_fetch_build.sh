@@ -1,8 +1,15 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.80
+# Filename: cohesix_fetch_build.sh v0.81
 # Author: Lukas Bower
 # Date Modified: 2026-12-31
 #!/bin/bash
+#
+# EFI kernel generation flow:
+# 1. Run init-build.sh with -DKernelUEFI=TRUE under the seL4 workspace to create build_uefi.
+# 2. Build with ninja to produce kernel.efi.
+# 3. Copy kernel.efi to $ROOT/out/bin/kernel.efi.
+# 4. tools/make_iso.sh stages kernel.efi into /boot and /EFI/BOOT on the ISO.
+
 
 HOST_ARCH="$(uname -m)"
 if [[ "$HOST_ARCH" = "aarch64" ]] && ! command -v aarch64-linux-musl-gcc >/dev/null 2>&1; then
@@ -440,6 +447,11 @@ if [ -d "$UEFI_BUILD_DIR" ]; then
     if [ -f "$UEFI_KERNEL" ]; then
       cp "$UEFI_KERNEL" "$ROOT/out/bin/kernel.efi"
       log "[INFO] UEFI kernel built and staged: $ROOT/out/bin/kernel.efi"
+      if file "$ROOT/out/bin/kernel.efi" | grep -q "PE32+"; then
+        log "[CHECK] Verified kernel.efi is a PE32+ UEFI binary"
+      else
+        echo "❌ kernel.efi verification failed" >&2; exit 1
+      fi
     else
       log "⚠️ UEFI kernel output missing: $UEFI_KERNEL"
     fi
