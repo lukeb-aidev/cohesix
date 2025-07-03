@@ -6,7 +6,9 @@
 use cohesix::queen::sync_daemon::QueenSyncDaemon;
 use cohesix::worker::world_sync::WorkerWorldSync;
 use cohesix::world_model::{Entity, WorldModelSnapshot};
+#[allow(unused_imports)]
 use std::fs;
+#[allow(unused_imports)]
 use tempfile::tempdir;
 
 #[test]

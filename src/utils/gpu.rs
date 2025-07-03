@@ -5,7 +5,8 @@
 
 #[cfg(feature = "cuda")]
 use crate::cuda::runtime::{CudaExecutor, CudaRuntime};
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 use std::fs::OpenOptions;
 
 /// Validate CUDA runtime availability by opening `/srv/nvidia0` and

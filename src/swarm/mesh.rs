@@ -3,7 +3,8 @@
 // Author: Lukas Bower
 // Date Modified: 2025-08-17
 
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 /// Distributed service mesh registry tracking services across nodes.
 //
 /// Each registered service is associated with a node id, a TTL and health

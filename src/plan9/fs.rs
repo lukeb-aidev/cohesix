@@ -3,7 +3,8 @@
 // Author: Lukas Bower
 // Date Modified: 2025-05-31
 
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 /// Plan 9 filesystem abstraction for Cohesix.
 /// Provides in-memory structures and trait scaffolding for 9P-like filesystem operations.
 

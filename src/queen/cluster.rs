@@ -3,7 +3,8 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-03
 
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 /// Simple cluster coordination for multiple Queen nodes.
 //
 /// Keeps track of participating nodes and elects a primary orchestrator. The

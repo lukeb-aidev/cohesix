@@ -5,7 +5,8 @@
 
 /// WASM backend for the Coh_CC compiler. Translates IR into WebAssembly text (WAT) format.
 use crate::ir::Module;
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 
 /// Generates a WebAssembly text (WAT) representation from an IR `Module`.
 pub fn generate_wasm(module: &Module) -> String {

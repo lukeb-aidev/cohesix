@@ -3,7 +3,8 @@
 // Author: Lukas Bower
 // Date Modified: 2025-08-27
 
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 use std::fs;
 
 /// Load a text configuration file and return its contents if readable.

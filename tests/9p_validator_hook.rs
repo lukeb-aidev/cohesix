@@ -16,6 +16,7 @@ fn triggers_violations() {
         eprintln!("skipping triggers_violations: {e}");
         return;
     }
+#[allow(unused_mut)]
     let mut fs = InMemoryFs::new();
     fn hook(ty: &'static str, file: String, agent: String, time: u64) {
         log_violation(RuleViolation {
@@ -57,8 +58,9 @@ fn validator_hook_timeout() {
         eprintln!("skipping validator_hook_timeout: {e}");
         return;
     }
+#[allow(unused_mut)]
     let mut fs = InMemoryFs::new();
-    fn slow_hook(ty: &'static str, file: String, agent: String, time: u64) {
+fn slow_hook(ty: &'static str, file: String, agent: String, time: u64) {
         std::thread::sleep(Duration::from_millis(50));
         log_violation(RuleViolation {
             type_: ty,
@@ -83,7 +85,8 @@ fn replay_violation_detected() {
         eprintln!("skipping replay_violation_detected: {e}");
         return;
     }
-    let mut fs = InMemoryFs::new();
+#[allow(unused_mut)]
+let mut fs = InMemoryFs::new();
     let seen: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
     let seen_clone = seen.clone();
     fs.set_validator_hook(move |_ty, file: String, agent: String, time: u64| {

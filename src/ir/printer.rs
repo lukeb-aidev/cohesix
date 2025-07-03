@@ -5,7 +5,8 @@
 
 /// Textual IR printer producing a simple textual representation.
 use crate::ir::{Function, Module};
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 use std::fmt::Write;
 
 /// Print a single function to a string.

@@ -3,7 +3,8 @@
 // Author: Lukas Bower
 // Date Modified: 2026-12-31
 
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 use crate::queen::orchestrator::{QueenOrchestrator, SchedulePolicy};
 #[cfg(feature = "rapier")]
 use crate::sim::physics_demo;

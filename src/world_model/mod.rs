@@ -3,7 +3,8 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-08
 
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 use crate::CohError;
 /// World model snapshot and sync helpers.
 use serde::{Deserialize, Serialize};

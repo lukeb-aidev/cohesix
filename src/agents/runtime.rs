@@ -3,7 +3,8 @@
 // Author: Lukas Bower
 // Date Modified: 2026-12-30
 
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 /// Agent runtime management.
 //
 /// Spawns, traces and terminates agents in sandboxed namespaces. Each agent is

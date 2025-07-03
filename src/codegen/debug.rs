@@ -5,7 +5,8 @@
 
 /// Debug backend for the Coh_CC compiler. Emits human-readable IR dumps.
 use crate::ir::Module;
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 
 /// Generates a debug string representation of the entire IR `Module`.
 pub fn generate_debug(module: &Module) -> String {

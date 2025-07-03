@@ -3,7 +3,8 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-22
 
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 use crate::CohError;
 /// Minimal base agent with introspection logging and self-diagnosis.
 use crate::sim::introspect::{self, IntrospectionData};

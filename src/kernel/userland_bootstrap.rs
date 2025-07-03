@@ -6,7 +6,8 @@
 use crate::kernel::syscalls::syscall::init_syscall_trap;
 /// Lightweight userland dispatcher.
 use crate::kernel::{loader, proc_mgr};
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 use crate::seL4::switch_to_user;
 
 /// Load `/bin/init` via the ELF loader and prepare for user-mode transition.

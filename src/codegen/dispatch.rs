@@ -5,7 +5,8 @@
 
 /// Codegen dispatcher chooses the appropriate backend (C or WASM) to emit code.
 use crate::ir::Module;
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 
 /// Supported code generation backends.
 #[derive(Clone, Copy, Debug)]

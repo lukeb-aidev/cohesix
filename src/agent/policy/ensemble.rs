@@ -5,7 +5,8 @@
 
 /// Ensemble policy combining rule based and reinforcement policies.
 use super::{ReinforcementPolicy, RuleBasedPolicy};
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 
 pub struct EnsemblePolicy;
 

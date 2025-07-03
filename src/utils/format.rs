@@ -16,7 +16,8 @@
 // reused in early‑boot code if desired.
 // ─────────────────────────────────────────────────────────────
 
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 #[forbid(unsafe_code)]
 #[warn(missing_docs)]
 

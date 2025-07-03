@@ -3,13 +3,13 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-21
 
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 /// Trace Logging for Cohesix
 //
 /// The trace module provides structured and timestamped logging support for
 /// system events, service behavior, and rule validation results.
 /// This supports validation agents, debugging, and runtime observability.
-use alloc::boxed::Box;
 
 /// Enum representing the level of a trace event.
 #[derive(Debug)]
