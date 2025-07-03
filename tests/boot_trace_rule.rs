@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: boot_trace_rule.rs v0.3
+// Filename: boot_trace_rule.rs v0.4
 // Author: Cohesix Codex
-// Date Modified: 2025-08-18
+// Date Modified: 2026-12-31
 
 use cohesix::sandbox::validator::boot_must_succeed;
 use serial_test::serial;
@@ -38,6 +38,20 @@ fn boot_trace_invalid_json() {
     std::env::set_var("COHESIX_TRACE_TMP", dir.path());
     fs::write(dir.path().join("boot_trace.json"), "not-json")
         .expect("unable to write boot trace file");
+    assert!(!boot_must_succeed());
+    std::env::remove_var("COHESIX_TRACE_TMP");
+}
+
+#[test]
+#[serial]
+fn detects_policy_failure() {
+    let dir = tempdir().expect("tempdir creation failed");
+    std::env::set_var("COHESIX_TRACE_TMP", dir.path());
+    fs::write(
+        dir.path().join("boot_trace.json"),
+        "[{\"event\":\"policy_failure\"}]",
+    )
+    .expect("unable to write boot trace file");
     assert!(!boot_must_succeed());
     std::env::remove_var("COHESIX_TRACE_TMP");
 }
