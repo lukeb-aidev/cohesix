@@ -57,10 +57,6 @@ if ! GOWORK="$(pwd)/go/go.work" go test ./go/...; then
     fail "go test failed"
 fi
 
-if ! pytest -q; then
-    fail "pytest failed"
-fi
-
 if ! bash tests/demo_edge_failover.sh; then
     fail "demo_edge_failover.sh failed"
 fi

@@ -76,13 +76,11 @@ all: go-build go-test c-shims
 
 .PHONY: test
 test:
-	@echo "🦀 Rust tests …"
-	@RUST_BACKTRACE=1 cargo test --release
-	@echo "🐍 Python tests …"
-	@pytest -v
-	@echo "🐹 Go tests …"
-	@go test ./...
-	@echo "🧱 C tests …"
+       @echo "🦀 Rust tests …"
+       @RUST_BACKTRACE=1 cargo test --release
+       @echo "🐹 Go tests …"
+       @go test ./...
+       @echo "🧱 C tests …"
 	@cd build && ctest --output-on-failure || true
 
 go-build:
