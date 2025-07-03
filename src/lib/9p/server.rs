@@ -6,7 +6,8 @@
 /// 9P file server implementation for Cohesix.
 /// Handles incoming 9P requests and routes them to appropriate virtual filesystem backends.
 use super::protocol::{parse_message, serialize_message, P9Message};
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::fs;

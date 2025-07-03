@@ -3,7 +3,8 @@
 // Author: Lukas Bower
 // Date Modified: 2025-06-22
 
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 /// Minimal Plan 9 style syscall wrappers for Cohesix.
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};

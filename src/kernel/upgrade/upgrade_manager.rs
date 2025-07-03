@@ -3,7 +3,8 @@
 // Author: Lukas Bower
 // Date Modified: 2025-08-17
 
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 use crate::CohError;
 /// Handles atomic upgrades and rollbacks of Cohesix bundles.
 use serde::Deserialize;

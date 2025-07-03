@@ -4,7 +4,8 @@
 // Date Modified: 2025-07-22
 
 use crate::cli::federation;
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 use crate::CohError;
 use clap::{Parser, Subcommand};
 

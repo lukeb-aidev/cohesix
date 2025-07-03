@@ -3,7 +3,8 @@
 // Author: Lukas Bower
 // Date Modified: 2026-10-28
 
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 use serde_json;
 /// Minimal debug CLI for runtime trace inspection.
 use std::fs;

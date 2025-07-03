@@ -87,6 +87,7 @@ const ROLES: &[&str] = &[
     "SimulatorTest",
 ];
 
+#[allow(dead_code)]
 fn is_queen(role: &str) -> bool {
     matches!(role, "QueenPrimary" | "RegionalQueen" | "BareMetalQueen")
 }

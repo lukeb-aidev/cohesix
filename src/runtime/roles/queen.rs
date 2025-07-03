@@ -3,7 +3,8 @@
 // Author: Lukas Bower
 // Date Modified: 2025-06-08
 
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 /// Role module for the Cohesix `QueenPrimary`.
 /// The queen node governs distributed orchestration, manages metadata, dispatches workloads, and performs sandbox validation.
 

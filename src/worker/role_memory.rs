@@ -3,7 +3,8 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-12
 
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 /// Persist and replay worker role context for failover recovery.
 use std::fs;
 use std::path::Path;

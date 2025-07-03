@@ -4,7 +4,8 @@
 // Date Modified: 2025-07-11
 
 use super::Service;
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 /// GPU information service.
 use crate::runtime::ServiceRegistry;
 use std::process::Command;

@@ -3,7 +3,8 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-24
 
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 /// SSA Utilities
 //
 /// This module provides helpers for Static Single Assignment (SSA) processing,

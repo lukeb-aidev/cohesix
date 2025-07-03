@@ -3,7 +3,8 @@
 // Author: Lukas Bower
 // Date Modified: 2025-05-31
 
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 /// Sandbox Profile Module
 //
 /// Represents and enforces the execution constraints of sandboxed processes in Cohesix.

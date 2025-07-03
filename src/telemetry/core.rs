@@ -3,7 +3,8 @@
 // Author: Lukas Bower
 // Date Modified: 2026-09-14
 
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 /// Telemetry Core Module
 //
 /// The Cohesix telemetry system collects runtime metrics, service health data, diagnostic events,

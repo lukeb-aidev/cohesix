@@ -5,7 +5,8 @@
 
 /// C backend for the Coh_CC compiler. Translates IR into C code.
 use crate::ir::{Module, Opcode};
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 
 /// Generates a C source file from an IR `Module`.
 pub fn generate_c(module: &Module) -> String {

@@ -3,7 +3,8 @@
 // Author: Lukas Bower
 // Date Modified: 2025-06-08
 
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 /// OSS manifest module for Cohesix.
 /// Tracks open-source components and license metadata included in the kernel and userland builds.
 

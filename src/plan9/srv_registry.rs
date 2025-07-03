@@ -3,7 +3,8 @@
 // Author: Lukas Bower
 // Date Modified: 2025-06-22
 
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 /// Registry for Plan 9 style services mounted under `/srv`.
 use std::collections::HashMap;
 use std::sync::Mutex;

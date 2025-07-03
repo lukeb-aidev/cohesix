@@ -3,7 +3,8 @@
 // Author: Lukas Bower
 // Date Modified: 2025-05-31
 
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 /// Trait definition for IR passes in Coh_CC
 /// Each IR pass must implement a name and run method.
 /// Additional metadata or diagnostics may be added in future versions.

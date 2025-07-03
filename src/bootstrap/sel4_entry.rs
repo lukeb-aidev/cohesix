@@ -6,7 +6,8 @@
 #![no_main]
 #![cfg(all(feature = "sel4", feature = "kernel_bin", feature = "minimal_uefi"))]
 
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {

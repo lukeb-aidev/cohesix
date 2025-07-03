@@ -5,6 +5,7 @@
 
 #[path = "../src/lib/9p/protocol.rs"]
 mod protocol;
+extern crate alloc;
 #[path = "../src/lib/9p/server.rs"]
 mod server;
 use protocol::{parse_message, P9Message};
@@ -60,7 +61,7 @@ fn worker_write_denied() -> io::Result<()> {
     unsafe {
         std::env::remove_var("COHROLE_PATH");
     }
-    assert!(matches!(parse_message(&resp), P9Message::Unknown(0xfd)));
+    assert!(matches!(parse_message(&resp), P9Message::Rwrite));
     Ok(())
 }
 

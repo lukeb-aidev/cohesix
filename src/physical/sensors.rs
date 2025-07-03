@@ -3,7 +3,8 @@
 // Author: Lukas Bower
 // Date Modified: 2026-12-31
 
-use crate::prelude::*;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 /// Physical sensor interface.
 //
 /// Reads normalized sensor data from `/srv/sensors/` and logs values both to
