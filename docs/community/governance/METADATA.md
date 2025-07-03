@@ -16,7 +16,7 @@
 | DEPENDENCIES.md            | v0.7    | 2026-12-31    | COMMUNITY      |            |              |
 | METADATA.md                | v3.34   | 2026-02-12    | COMMUNITY      | | |
 | Q_DAY.md                   | v1.1    | 2025-06-15    | PRIVATE        |            |              |
-| README.md                  | v0.21   | 2026-12-31   | COMMUNITY        | | |
+| README.md                  | v0.22   | 2026-12-31   | COMMUNITY        | | |
 | README_CODEX.md            | v1.5    | 2026-02-05    | COMMUNITY      |            |              |
 | REMOTE_ACCESS.md           | v1.0    | 2025-05-24    | COMMUNITY      |            |              |
 | SHOPPING_LIST.md           | v1.3    | 2025-05-25    | COMMUNITY      |            |              |
@@ -38,11 +38,11 @@
 | ROLE_POLICY.md            | v1.1    | 2026-09-30    | COMMUNITY      |     |              |
 | cli/README.md             | v1.0    | 2025-07-31    | COMMUNITY      |     |              |
 | AGENTS.md                 | v2.2    | 2025-07-22    | COMMUNITY      |     |              |
-| DEMO_SCENARIOS.md          | v1.1    | 2026-02-11    | COMMUNITY      |     |              |
+| DEMO_SCENARIOS.md          | v1.2    | 2026-02-11    | COMMUNITY      |     |              |
 | VALIDATION_AND_TESTING.md  | v1.5    | 2025-07-25    | COMMUNITY      |     |              |
 | VALIDATION_SUMMARY.md       | v0.3    | 2025-08-18    | COMMUNITY      |     |              |
 | CLI_HELP_COHCLI.md         | v0.1    | 2025-06-15    | COMMUNITY      |     |              |
-| CLI_HELP_COHRUN.md         | v0.1    | 2025-06-15    | COMMUNITY      |     |              |
+| CLI_HELP_COHRUN.md         | v0.2    | 2025-06-15    | COMMUNITY      |     |              |
 | CLI_HELP_COHTRACE.md       | v0.1    | 2025-06-15    | COMMUNITY      |     |              |
 | CLI_HELP_COHCC.md          | v0.1    | 2025-06-15    | COMMUNITY      |     |              |
 | CLI_HELP_COHCAP.md         | v0.1    | 2025-06-15    | COMMUNITY      |     |              |
@@ -273,7 +273,6 @@
 | bin/demo_bee_learns | v0.1 | 2026-02-11 | COMMUNITY | | |
 | bin/demo_cloud_queen | v0.1 | 2026-02-11 | COMMUNITY | | |
 | bin/demo_cuda_edge | v0.1 | 2026-02-11 | COMMUNITY | | |
-| bin/demo_physics_webcam | v0.1 | 2026-02-11 | COMMUNITY | | |
 | bin/demo_trace_validation | v0.1 | 2026-02-11 | COMMUNITY | | |
 | bin/demo_secure_relay | v0.1 | 2026-02-11 | COMMUNITY | | |
 | bin/demo_sensor_world | v0.1 | 2026-02-11 | COMMUNITY | | |
@@ -282,7 +281,6 @@
 | src/demos/bee_learns/main.py | v0.1 | 2026-02-11 | COMMUNITY | | |
 | src/demos/cloud_queen/main.py | v0.1 | 2026-02-11 | COMMUNITY | | |
 | src/demos/cuda_edge/main.py | v0.1 | 2026-02-11 | COMMUNITY | | |
-| src/demos/physics_webcam/main.py | v0.1 | 2026-02-11 | COMMUNITY | | |
 | src/demos/trace_validation/main.py | v0.1 | 2026-02-11 | COMMUNITY | | |
 | src/demos/secure_relay/main.py | v0.1 | 2026-02-11 | COMMUNITY | | |
 | src/demos/sensor_world/main.py | v0.1 | 2026-02-11 | COMMUNITY | | |
@@ -317,7 +315,7 @@
 | src/geometry/sweep_line_intersection.py | v0.1 | 2026-11-19 | COMMUNITY | | |
 | tests/test_sweep_line_intersection.py | v0.1 | 2026-11-19 | COMMUNITY | | |
 | log/simulated_boot_pipeline.md | v0.1 | 2026-11-20 | COMMUNITY | | |
-| tools/make_iso.sh | v0.8 | 2026-12-31 | COMMUNITY | | |
+| tools/make_iso.sh | v0.9 | 2026-12-31 | COMMUNITY | | |
 | src/hal/arm64/mod.rs | v0.7 | 2026-11-23 | PRIVATE | | |
 | src/hal/x86_64/mod.rs | v0.7 | 2026-11-23 | PRIVATE | | |
 | docs/community/UEFI_PLAN9_READINESS_AUDIT.md | v0.1 | 2026-12-31 | COMMUNITY | | |

@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CLI_HELP_COHRUN.md v0.1
+// Filename: CLI_HELP_COHRUN.md v0.2
 // Author: Lukas Bower
 // Date Modified: 2025-06-15
 
@@ -20,8 +20,6 @@ See CLI README.md for full role-by-command mapping and related tools.
 | Command                      | Applies To         |
 |------------------------------|--------------------|
 | physics_demo                 | SimulatorTest      |
-| test_webcam                  | SimulatorTest      |
-| webcam_tilt                  | SimulatorTest      |
 | kiosk_start                  | KioskInteractive   |
 | kiosk_event                  | KioskInteractive   |
 | orchestrator status          | QueenPrimary       |
@@ -37,8 +35,6 @@ See CLI README.md for full role-by-command mapping and related tools.
 
 ## Commands
 - `physics_demo` – start the Rapier physics showcase
-- `test_webcam` – capture a single webcam frame
-- `webcam_tilt` – run tilt control with webcam input
 - `kiosk_start` – deploy and start kiosk UI bundle
 - `kiosk_event --event <evt> [--user <id>]` – log kiosk event
 - `orchestrator status` – show registered agents

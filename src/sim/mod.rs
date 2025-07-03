@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: mod.rs v0.3
+// Filename: mod.rs v0.4
 // Author: Lukas Bower
 // Date Modified: 2025-07-22
 
@@ -13,5 +13,3 @@ pub mod physics_demo;
 
 #[cfg(feature = "rapier")]
 pub mod rapier_bridge;
-#[cfg(feature = "rapier")]
-pub mod webcam_tilt;

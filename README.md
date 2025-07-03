@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: README.md v0.21
+// Filename: README.md v0.22
 // Author: Lukas Bower
 // Date Modified: 2026-12-31
 
@@ -84,7 +84,7 @@ cohbuild, cohrun, cohtrace, cohcap — see cli/README.md for usage by role
 
 Initial demo services are enabled:
 
-* `/srv/webcam` and `/srv/gpuinfo` for workers
+* `/srv/camera` (9P stream) and `/srv/gpuinfo` for workers
 * `cohrun physics_demo` to run a Rapier simulation
 * `cohtrace list` to view joined workers
 * Optional Secure 9P server with TLS via `--features secure9p` (see `config/secure9p.toml`)

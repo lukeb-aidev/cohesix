@@ -2555,3 +2555,11 @@
 ### Fixed
 - Added missing standard library imports in `src/cuda/runtime.rs` to resolve
   compilation errors and removed an unused prelude import.
+
+## [v0.390] - 2026-12-31
+### Removed
+- Legacy webcam driver demos, services, and tests replaced by Plan9 streaming.
+### Changed
+- `worker_inference.py` reads frames from `/srv/camera/frame.jpg`.
+- `make_iso.sh` no longer packages `demo_physics_webcam`.
+- Documentation updated for Plan9 9P webcam model.
