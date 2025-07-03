@@ -99,7 +99,7 @@ if [ -n "$CUDA_HOME" ] && command -v nvcc >/dev/null 2>&1; then
 else
     echo "⚠️ CUDA toolkit not detected. Building without GPU support." >&2
     FEATURES="rapier,no-cuda"
-    CARGO_ARGS=(--no-default-features)
+    CARGO_ARGS=()
 fi
 
 # Using linker from .cargo/config.toml for ld.lld
@@ -111,6 +111,9 @@ do_build() {
 
 copy_output() {
     local built="target/$TARGET/release/cohesix_root"
+    if [ ! -s "$built" ]; then
+        built="${built}.efi"
+    fi
     if [ ! -s "$built" ]; then
         echo "ERROR: expected ELF not found: $built" >&2
         return 1
