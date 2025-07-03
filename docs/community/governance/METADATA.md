@@ -137,7 +137,7 @@
 | tests/codex/dummy_test.rs | v0.3 | 2026-12-31 | COMMUNITY | | |
 | tests/test_compile_trace.rs | v0.4 | 2026-12-31 | COMMUNITY | | |
 | tests/contracts.rs | v0.4 | 2026-12-31 | COMMUNITY | | |
-| tests/test_capabilities.rs | v0.5 | 2026-12-31 | COMMUNITY | | |
+| tests/test_capabilities.rs | v0.6 | 2026-12-31 | COMMUNITY | | |
 | tests/test_cohcc_output.rs | v0.3 | 2026-12-31 | COMMUNITY | | |
 | docs/QUICKSTART.md | v0.1 | 2025-07-23 | COMMUNITY | | |
 | docs/community/architecture/BOOT_KERNEL_FLOW.md | v0.3 | 2026-10-16 | COMMUNITY | | |
