@@ -9,7 +9,7 @@
 extern crate alloc;
 #[cfg(feature = "posix")]
 extern crate std;
-use alloc::boxed::Box;
+use alloc::{boxed::Box, string::String};
 
 /// Common Cohesix 9P error type.
 pub type CohError = Box<dyn core::error::Error + Send + Sync>;
