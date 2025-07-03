@@ -8,6 +8,7 @@ use crate::{
     protocol::{Data, Format9p, Qid, RawStat, Rdata, Tdata, Tmessage, MAX_DATA_LEN},
     Result, Stream,
 };
+#[allow(unused_imports)]
 use std::{
     cmp::min,
     collections::btree_map::{BTreeMap, Entry},

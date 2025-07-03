@@ -38,7 +38,6 @@ repository = "https://github.com/rust-random/rand"
 all-features = true
 rustdoc-args = [
     "--cfg",
-    "doc_cfg",
 ]
 
 [package.metadata.playground]
