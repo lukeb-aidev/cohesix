@@ -429,8 +429,10 @@ cd "$SEL4_WORKSPACE"
 repo init -u https://github.com/seL4/sel4test-manifest.git
 repo sync
 
-# Configure kernel and elfloader for QEMU AARCH64 bare metal flow
-./init-build.sh -DPLATFORM=qemu-arm-virt -DAARCH64=TRUE -DRELEASE=TRUE
+#
+# Configure kernel and elfloader for QEMU AARCH64 bare metal flow with debug
+./init-build.sh -DPLATFORM=qemu-arm-virt -DAARCH64=TRUE -DRELEASE=FALSE \
+  -DKernelPrinting=ON -DKernelDebugBuild=TRUE -DKernelLogBuffer=ON
 
 # Build everything including elfloader
 ninja
@@ -450,7 +452,7 @@ cd "$ROOT"
 # -----------------------------------------------------------
 log "🧪 Booting in QEMU (bare metal elfloader)..."
 qemu-system-aarch64 -M virt -cpu cortex-a53 -kernel "$COHESIX_OUT/bin/elfloader" \
-  -serial mon:stdio -nographic
+  -serial mon:stdio -nographic -d int,cpu_reset,guest_errors
 
 
 log "📂 Staging boot files..."
