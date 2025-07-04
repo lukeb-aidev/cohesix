@@ -431,16 +431,15 @@ repo init -u https://github.com/seL4/sel4test-manifest.git
 repo sync
 
 # Configure kernel and elfloader for QEMU AARCH64 bare metal flow with debug, explicit memory map
-# Updated config: bump VSpace, CNode, and Log buffer sizes
 ./init-build.sh \
   -DPLATFORM=qemu-arm-virt -DAARCH64=TRUE -DRELEASE=FALSE \
   -DKernelPrinting=ON -DKernelDebugBuild=TRUE -DKernelLogBuffer=ON \
-  -DKernelLogBufferSizeBits=21 \
+  -DKernelLogBufferSizeBits=24 \
   -DKernelPhysicalBase=0x40000000 \
   -DKernelVirtualBase=0xffffff8040000000 \
   -DKernelVirtualEnd=0xffffff80c0000000 \
-  -DKernelElfVSpaceSizeBits=42 \
-  -DKernelRootCNodeSizeBits=19 \
+  -DKernelElfVSpaceSizeBits=46 \
+  -DKernelRootCNodeSizeBits=24 \
   -DKernelArmGICV2=ON -DKernelArmPL011=ON
 
 # Add kernel-level boot prints
