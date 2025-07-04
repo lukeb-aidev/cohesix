@@ -2649,3 +2649,12 @@
   `out/bin/` for bare metal QEMU boot.
 - `scripts/boot_qemu.sh` v0.2 now boots `elfloader` directly with verbose QEMU
   tracing to `qemu_debug_TIMESTAMP.log`.
+
+## [v0.406] - 2026-12-31
+### Added
+- Userland prints `COHESIX_BOOT_OK` immediately on startup for unified boot
+  verification.
+- Root Go workspace now uses `go.work` at repo root and `go.mod` shim so `go test ./...` runs.
+### Fixed
+- Rust `cohesix_root` entry prints `COHESIX_BOOT_OK` before initializing
+  runtime.
