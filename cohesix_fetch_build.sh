@@ -414,53 +414,29 @@ fi
 
 #
 # -----------------------------------------------------------
-# seL4 kernel build directly under existing /home/ubuntu/kernel
+# seL4 kernel build using standard sel4_workspace layout
 # -----------------------------------------------------------
-log "🧱 Building seL4 kernel using existing /home/ubuntu/kernel workspace..."
+log "🧱 Building seL4 kernel using existing /home/ubuntu/sel4_workspace workspace..."
 
-KERNEL_DIR="/home/ubuntu/kernel"
+KERNEL_DIR="/home/ubuntu/sel4_workspace"
 COHESIX_OUT="${COHESIX_OUT:-$ROOT/out}"
 
 cd "$KERNEL_DIR"
-mkdir -p build
-cd build
 
-if [ "$COH_ARCH" = "aarch64" ]; then
-  PLATFORM="qemu-arm-virt"
-  KERNEL_ARCH="aarch64"
-elif [ "$COH_ARCH" = "x86_64" ]; then
-  PLATFORM="pc99"
-  KERNEL_ARCH="x86_64"
-else
-  echo "❌ Unsupported architecture: $COH_ARCH" >&2
-  exit 1
-fi
-
-cmake .. -DPLATFORM="$PLATFORM" \
-  -DKernelArch="$KERNEL_ARCH" \
-  -DKernelWordSize=64 \
-  -DKernelPrinting=ON \
-  -DKernelDebugBuild=TRUE \
-  -DKernelLogBuffer=ON \
-  -DKernelLogBufferSizeBits=24 \
-  -DKernelElfVSpaceSizeBits=46 \
-  -DKernelRootCNodeSizeBits=18 \
+# Always build with seL4 recommended method: use init-build.sh
+./init-build.sh -DPLATFORM=qemu-arm-virt -DAARCH64=TRUE \
+  -DKernelPrinting=ON -DKernelDebugBuild=TRUE \
   -DROOT_SERVER="$ROOT/out/cohesix_root.elf"
 
+# Now run ninja in the workspace root
 ninja
 
-cp kernel.elf "$COHESIX_OUT/bin/kernel.elf"
-echo "✅ Kernel ELF size: $(stat -c%s "$COHESIX_OUT/bin/kernel.elf") bytes"
-log "✅ Kernel ELF staged to $COHESIX_OUT/bin/kernel.elf"
+# Copy kernel.elf and elfloader
+cp "$KERNEL_DIR/kernel/kernel.elf" "$COHESIX_OUT/bin/kernel.elf"
+log "✅ Kernel ELF staged to $COHESIX_OUT/bin/kernel.elf, size: $(stat -c%s "$COHESIX_OUT/bin/kernel.elf") bytes"
 
-# Copy and confirm elfloader binary
-if [ -f "../elfloader/elfloader" ]; then
-  cp ../elfloader/elfloader "$COHESIX_OUT/bin/elfloader"
-  echo "✅ Elfloader size: $(stat -c%s "$COHESIX_OUT/bin/elfloader") bytes"
-  log "✅ Elfloader staged to $COHESIX_OUT/bin/elfloader"
-else
-  echo "⚠️ Elfloader binary not found at ../elfloader/elfloader" >&2
-fi
+cp "$KERNEL_DIR/elfloader/elfloader" "$COHESIX_OUT/bin/elfloader"
+log "✅ Elfloader staged to $COHESIX_OUT/bin/elfloader, size: $(stat -c%s "$COHESIX_OUT/bin/elfloader") bytes"
 
 cd "$ROOT"
 
