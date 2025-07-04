@@ -405,8 +405,10 @@ fi
 # -----------------------------------------------------------
 # ARCHITECTURE-AWARE KERNEL ELF STAGING
 # -----------------------------------------------------------
-log "Detecting architecture for kernel staging..."
-tee -a "$LOG_FILE"
+log "Ensuring variables for kernel staging..."
+COH_ARCH="${COH_ARCH:-aarch64}"
+SEL4_WORKSPACE="${SEL4_WORKSPACE:-$HOME/sel4_workspace}"
+COHESIX_OUT="${COHESIX_OUT:-$ROOT/out}"
 
 case "$COH_ARCH" in
     aarch64)
@@ -424,21 +426,14 @@ esac
 KERNEL_SRC="$KERNEL_BUILD_DIR/kernel/kernel.elf"
 KERNEL_OUT="$COHESIX_OUT/bin/kernel.elf"
 
-log "Looking for kernel ELF at: $KERNEL_SRC"
-tee -a "$LOG_FILE"
-
-if [ ! -f "$KERNEL_SRC" ]; then
+log "Expecting kernel ELF at: $KERNEL_SRC"
+if [ -f "$KERNEL_SRC" ]; then
+    cp "$KERNEL_SRC" "$KERNEL_OUT"
+    log "✅ Kernel ELF staged to $KERNEL_OUT"
+else
     echo "❌ Kernel ELF not found at $KERNEL_SRC" | tee -a "$LOG_FILE"
-    echo "   Make sure seL4 kernel built correctly for $COH_ARCH." | tee -a "$LOG_FILE"
     exit 1
 fi
-
-# Copy to out/bin for ISO assembly
-cp "$KERNEL_SRC" "$KERNEL_OUT"
-OUT_KERNEL="$KERNEL_OUT"
-log "✅ Kernel ELF staged to $KERNEL_OUT"
-tee -a "$LOG_FILE"
-
 
 
 log "📂 Staging boot files..."
