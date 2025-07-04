@@ -22,6 +22,7 @@ cleanup() {
 }
 
 log "Preparing ISO root at $ISO_ROOT"
+log "Note: skipping legacy out/roles staging; roles are now staged by cohesix_fetch_build.sh"
 mkdir -p "$ISO_ROOT/EFI/BOOT" "$ISO_ROOT/boot" "$ISO_ROOT/bin" \
          "$ISO_ROOT/usr/bin" "$ISO_ROOT/usr/share/man" "$ISO_ROOT/usr/share/cohesix/man" \
          "$ISO_ROOT/etc/cohesix" "$ISO_ROOT/roles" "$ISO_ROOT/srv" \
@@ -76,7 +77,7 @@ for demo in $demos; do
 done
 
 cp -r "$ROOT/userland/miniroot" "$ISO_ROOT/miniroot"
-cp -r "$ROOT/out/roles" "$ISO_ROOT/roles"
+# Legacy out/roles copying removed; roles are now expected to be staged by the build script.
 cp "$ROOT/config/plan9.ns" "$ISO_ROOT/etc/plan9.ns"
 cp "$ROOT/out/etc/cohesix/config.yaml" "$ISO_ROOT/etc/cohesix/config.yaml"
 
