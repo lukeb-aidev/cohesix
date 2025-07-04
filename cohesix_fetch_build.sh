@@ -428,9 +428,29 @@ cd "$SEL4_WORKSPACE"
 repo init -u https://github.com/seL4/sel4test-manifest.git
 repo sync
 
-# Configure build with your actual cohesix_root.elf as the ROOT_SERVER
-"$SEL4_WORKSPACE"/init-build.sh \
-  -DPLATFORM=qemu-arm-virt -DAARCH64=TRUE \
+# Robustly find init-build.sh and set flags per architecture
+cd "$SEL4_WORKSPACE"
+if [ -f "./init-build.sh" ]; then
+  INIT_BUILD="./init-build.sh"
+elif [ -f "./kernel/init-build.sh" ]; then
+  INIT_BUILD="./kernel/init-build.sh"
+else
+  echo "❌ Could not find init-build.sh in sel4_workspace" >&2
+  exit 1
+fi
+
+if [ "$COH_ARCH" = "aarch64" ]; then
+  PLATFORM="qemu-arm-virt"
+  EXTRA="-DAARCH64=TRUE"
+elif [ "$COH_ARCH" = "x86_64" ]; then
+  PLATFORM="pc99"
+  EXTRA="-DX86_64=TRUE"
+else
+  echo "❌ Unsupported architecture: $COH_ARCH" >&2
+  exit 1
+fi
+
+$INIT_BUILD -DPLATFORM="$PLATFORM" $EXTRA \
   -DKernelPrinting=ON \
   -DKernelDebugBuild=TRUE \
   -DKernelLogBuffer=ON \
