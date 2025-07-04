@@ -442,6 +442,25 @@ else
     exit 1
 fi
 
+# -----------------------------------------------------------
+# seL4 elfloader.efi build and staging for UEFI (aarch64)
+# -----------------------------------------------------------
+log "📦 Building seL4 elfloader.efi for UEFI..."
+ELFLOADER_DIR="$SEL4_WORKSPACE/elfloader"
+ELFLOADER_BUILD="$ELFLOADER_DIR/build_efi"
+mkdir -p "$ELFLOADER_DIR"
+if [ ! -d "$ELFLOADER_DIR/elfloader-tool" ]; then
+  git clone https://github.com/seL4/seL4_tools.git "$ELFLOADER_DIR/elfloader-tool"
+fi
+mkdir -p "$ELFLOADER_BUILD"
+cd "$ELFLOADER_BUILD"
+cmake -G Ninja -DElfloaderImageType=efi -DKernelSel4Arch=aarch64 \
+  -DCROSS_COMPILER_PREFIX=aarch64-linux-gnu- ../elfloader-tool
+ninja
+cp elfloader.efi "$COHESIX_OUT/bin/BOOTAA64.EFI"
+log "✅ elfloader.efi built and staged as BOOTAA64.EFI"
+cd "$ROOT"
+
 
 log "📂 Staging boot files..."
 mkdir -p "$STAGE_DIR/boot"
@@ -449,6 +468,9 @@ cp "$KERNEL_OUT" "$STAGE_DIR/boot/kernel.elf"
 if [ -f "$ROOT/out/bin/kernel.efi" ]; then
   cp "$ROOT/out/bin/kernel.efi" "$STAGE_DIR/boot/kernel.efi"
 fi
+# Stage BOOTAA64.EFI for UEFI boot (always copy, even if not used on x86_64)
+mkdir -p "$STAGE_DIR/EFI/BOOT"
+cp "$COHESIX_OUT/bin/BOOTAA64.EFI" "$STAGE_DIR/EFI/BOOT/BOOTAA64.EFI"
 log "kernel build complete"
 cp out/cohesix_root.elf "$STAGE_DIR/boot/userland.elf"
 for f in initfs.img bootargs.txt boot_trace.json; do

@@ -85,7 +85,12 @@ mkdir -p "$ISO_ROOT/usr/share/cohesix/man"
 cp $ROOT/docs/man/* "$ISO_ROOT/usr/share/cohesix/man/"
 cp $ROOT/docs/man/* "$ISO_ROOT/usr/share/man/"
 
-cp "$ROOT/out/bin/kernel.elf" "$ISO_ROOT/EFI/BOOT/BOOTAA64.EFI"
+if [ -f "$ROOT/out/bin/elfloader.efi" ]; then
+  cp "$ROOT/out/bin/elfloader.efi" "$ISO_ROOT/EFI/BOOT/BOOTAA64.EFI"
+  log "Staged elfloader as BOOTAA64.EFI"
+else
+  log "WARNING: elfloader.efi not found, EFI boot may fail"
+fi
 
 log "Creating ISO image at $ISO_OUT..."
 xorriso -as mkisofs -R -J -joliet -V Cohesix \
