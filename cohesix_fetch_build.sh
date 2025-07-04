@@ -84,15 +84,8 @@ else
   exit 1
 fi
 
-case "$COHESIX_ARCH" in
-  x86_64) COHESIX_TARGET="x86_64-unknown-uefi" ;;
-  aarch64) COHESIX_TARGET="aarch64-unknown-uefi" ;;
-  *) echo "Unsupported architecture: $COHESIX_ARCH" >&2; exit 1 ;;
-esac
-
-export COHESIX_TARGET COHESIX_ARCH
 COH_ARCH="$COHESIX_ARCH"
-log "Architecture: $COH_ARCH (target $COHESIX_TARGET)"
+log "Architecture: $COH_ARCH (seL4+ELF only, no UEFI/PE32 build)"
 
 
 # Toolchain sanity checks
@@ -100,18 +93,11 @@ if ! command -v rustup >/dev/null 2>&1; then
   echo "❌ rustup not found. Install Rust toolchains before running" >&2
   exit 1
 fi
-if ! rustup target list --installed | grep -q "^${COHESIX_TARGET}$"; then
-  echo "🔧 Installing missing Rust target ${COHESIX_TARGET}" >&2
-  rustup target add "${COHESIX_TARGET}"
+if ! rustup target list --installed | grep -q "^aarch64-unknown-linux-musl$"; then
+  echo "🔧 Installing missing Rust target aarch64-unknown-linux-musl" >&2
+  rustup target add aarch64-unknown-linux-musl
 fi
-case "$COH_ARCH" in
-  aarch64)
-    command -v aarch64-linux-musl-gcc >/dev/null 2>&1 || { echo "❌ aarch64-linux-musl-gcc missing" >&2; exit 1; }
-    ;;
-  x86_64)
-    command -v x86_64-linux-gnu-gcc >/dev/null 2>&1 || { echo "❌ x86_64-linux-gnu-gcc missing" >&2; exit 1; }
-    ;;
-esac
+command -v aarch64-linux-musl-gcc >/dev/null 2>&1 || { echo "❌ aarch64-linux-musl-gcc missing" >&2; exit 1; }
 command -v ld.lld >/dev/null 2>&1 || { echo "❌ ld.lld not found" >&2; exit 1; }
 ld.lld --version >&3
 
@@ -339,39 +325,20 @@ else
   exit 1
 fi
 
-log "🧱 Building Rust components..."
-# Removed legacy Linux target override - using UEFI target from config
-log "Using UEFI target $COHESIX_TARGET"
-
-
-# Install the target if rustup is available and it's not already installed
-if command -v rustup >/dev/null 2>&1; then
-  if ! rustup target list --installed | grep -q "^${COHESIX_TARGET}$"; then
-    log "🔧 Installing Rust target ${COHESIX_TARGET}"
-    rustup target add "${COHESIX_TARGET}"
-  fi
-else
-  log "⚠️ rustup not found; assuming ${COHESIX_TARGET} toolchain is installed"
-fi
-
-log "🧱 Building all Rust binaries in workspace (CLI, tools, validator, shell, etc)..."
+log "🧱 Building Rust components for seL4 rootserver ELF..."
 FEATURES="cuda,std,rapier,physics,busybox,no-cuda,secure9p,entropy"
 if [ "$SEL4_ENTRY" = 1 ]; then
   FEATURES+=",sel4,kernel_bin,minimal_uefi"
 fi
-cargo build --release --workspace --all-targets --no-default-features --features "$FEATURES" --target "$COHESIX_TARGET" || true
-if grep -q "sel4_entry" "$SUMMARY_ERRORS"; then
-  echo "⚠️ sel4_entry build failed or skipped — this is expected unless sel4,kernel_bin,minimal_uefi are all set" >&2
-fi
+cargo build --release --workspace --all-targets --no-default-features --features "$FEATURES" --target aarch64-unknown-linux-musl || true
 grep -Ei 'error|fail|panic|permission denied|warning' "$LOG_FILE" > "$SUMMARY_ERRORS" || true
 
 # Ensure output directory exists before copying Rust binaries
 mkdir -p "$STAGE_DIR/bin" "$STAGE_DIR/usr/bin" "$STAGE_DIR/usr/cli" "$STAGE_DIR/home/cohesix"
 
 # Copy Rust CLI binaries into out/bin for ISO staging (copy only, skip build)
-# The workspace build above already built all binaries, so just copy them if present.
 for bin in cohcc cohesix_build cohesix_cap cohesix_trace cohrun_cli cohagent cohrole cohrun cohup cohesix_root kernel logdemo init sel4_entry; do
-  BIN_PATH="target/${COHESIX_TARGET}/release/$bin"
+  BIN_PATH="target/aarch64-unknown-linux-musl/release/$bin"
   if [ -f "$BIN_PATH" ]; then
     cp "$BIN_PATH" "$STAGE_DIR/bin/$bin"
     cp "$BIN_PATH" "$ROOT/out/bin/$bin"
@@ -392,15 +359,16 @@ for script in cohcli cohcap cohtrace cohrun cohbuild cohup cohpkg; do
 done
 
 
-# -----------------------------------------------------------
-# Simpler kernel and elfloader staging block for QEMU bare metal
-# -----------------------------------------------------------
 cd "$ROOT"
-log "🧱 Building root ELF..."
-log "CUDA_HOME=${CUDA_HOME:-}" 
-log "nvcc path: $(command -v nvcc || echo 'not found')"
-log "LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-}"
-bash scripts/build_root_elf.sh || { echo "❌ root ELF build failed" >&2; exit 1; }
+log "🧱 Staging root ELF for seL4..."
+# Copy root ELF from cargo build output to out/cohesix_root.elf
+ROOT_ELF_SRC="target/aarch64-unknown-linux-musl/release/cohesix_root"
+if [ -f "$ROOT_ELF_SRC" ]; then
+  cp "$ROOT_ELF_SRC" out/cohesix_root.elf
+else
+  echo "❌ $ROOT_ELF_SRC missing" >&2
+  exit 1
+fi
 [ -f out/cohesix_root.elf ] || { echo "❌ out/cohesix_root.elf missing" >&2; exit 1; }
 
 # Ensure staging directories exist for config and roles
@@ -443,24 +411,17 @@ cd "$ROOT"
 # -----------------------------------------------------------
 # QEMU bare metal boot test (aarch64, kernel ELF)
 # -----------------------------------------------------------
-log "🧪 Booting in QEMU (bare metal kernel ELF)..."
-qemu-system-aarch64 -M virt,gic-version=2 -cpu cortex-a57 -m 2048M \
-  -kernel "$COHESIX_OUT/bin/kernel.elf" \
-  -serial mon:stdio -nographic \
-  -d "int,mmu,guest_errors,exec" \
-  -D "$HOME/cohesix_logs/qemu_debug.log"
+# log "🧪 Booting in QEMU (bare metal kernel ELF)..."
+# qemu-system-aarch64 -M virt,gic-version=2 -cpu cortex-a57 -m 2048M \
+#   -kernel "$COHESIX_OUT/bin/kernel.elf" \
+#   -serial mon:stdio -nographic \
+#   -d "int,mmu,guest_errors,exec" \
+#   -D "$HOME/cohesix_logs/qemu_debug.log"
 
 
 log "📂 Staging boot files..."
 mkdir -p "$STAGE_DIR/boot"
-cp "$KERNEL_OUT" "$STAGE_DIR/boot/kernel.elf"
-if [ -f "$ROOT/out/bin/kernel.efi" ]; then
-  cp "$ROOT/out/bin/kernel.efi" "$STAGE_DIR/boot/kernel.efi"
-fi
-# Stage BOOTAA64.EFI for UEFI boot (always copy, even if not used on x86_64)
-mkdir -p "$STAGE_DIR/EFI/BOOT"
-cp "$COHESIX_OUT/bin/BOOTAA64.EFI" "$STAGE_DIR/EFI/BOOT/BOOTAA64.EFI"
-log "kernel build complete"
+cp "$COHESIX_OUT/bin/kernel.elf" "$STAGE_DIR/boot/kernel.elf"
 cp out/cohesix_root.elf "$STAGE_DIR/boot/userland.elf"
 for f in initfs.img bootargs.txt boot_trace.json; do
   [ -f "$f" ] && cp "$f" "$STAGE_DIR/boot/"
