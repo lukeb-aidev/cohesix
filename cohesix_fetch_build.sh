@@ -391,6 +391,10 @@ for script in cohcli cohcap cohtrace cohrun cohbuild cohup cohpkg; do
   fi
 done
 
+
+# -----------------------------------------------------------
+# Simpler kernel and elfloader staging block for QEMU bare metal
+# -----------------------------------------------------------
 cd "$ROOT"
 log "🧱 Building root ELF..."
 log "CUDA_HOME=${CUDA_HOME:-}" 
@@ -408,58 +412,45 @@ if [ -d python ]; then
   cp -r python "$ROOT/out/home/cohesix" 2>/dev/null || true
 fi
 
-#
 # -----------------------------------------------------------
-# ARCHITECTURE-AWARE KERNEL ELF STAGING
+# seL4 kernel and elfloader build (bare metal, QEMU aarch64)
 # -----------------------------------------------------------
-log "Ensuring variables for kernel staging..."
-COH_ARCH="${COH_ARCH:-aarch64}"
+log "🧱 Building seL4 kernel and elfloader with known good config..."
+
 SEL4_WORKSPACE="${SEL4_WORKSPACE:-$HOME/sel4_workspace}"
 COHESIX_OUT="${COHESIX_OUT:-$ROOT/out}"
 
-case "$COH_ARCH" in
-    aarch64)
-        KERNEL_BUILD_DIR="$SEL4_WORKSPACE/build_qemu_arm"
-        ;;
-    x86_64)
-        KERNEL_BUILD_DIR="$SEL4_WORKSPACE/build_qemu_x86"
-        ;;
-    *)
-        echo "❌ Unknown COH_ARCH: $COH_ARCH" | tee -a "$LOG_FILE"
-        exit 1
-        ;;
-esac
+# Clean previous builds
+rm -rf "$SEL4_WORKSPACE"
+mkdir -p "$SEL4_WORKSPACE"
+cd "$SEL4_WORKSPACE"
 
-KERNEL_SRC="$KERNEL_BUILD_DIR/kernel/kernel.elf"
-KERNEL_OUT="$COHESIX_OUT/bin/kernel.elf"
+# Clone seL4 test manifest
+repo init -u https://github.com/seL4/sel4test-manifest.git
+repo sync
 
-log "Expecting kernel ELF at: $KERNEL_SRC"
-if [ -f "$KERNEL_SRC" ]; then
-    cp "$KERNEL_SRC" "$KERNEL_OUT"
-    log "✅ Kernel ELF staged to $KERNEL_OUT"
-else
-    echo "❌ Kernel ELF not found at $KERNEL_SRC" | tee -a "$LOG_FILE"
-    exit 1
-fi
+# Configure kernel and elfloader for QEMU AARCH64 bare metal flow
+./init-build.sh -DPLATFORM=qemu-arm-virt -DAARCH64=TRUE -DRELEASE=TRUE
 
-# -----------------------------------------------------------
-# seL4 elfloader.efi build and staging for UEFI (aarch64)
-# -----------------------------------------------------------
-log "📦 Building seL4 elfloader.efi for UEFI..."
-ELFLOADER_DIR="$SEL4_WORKSPACE/elfloader"
-ELFLOADER_BUILD="$ELFLOADER_DIR/build_efi"
-mkdir -p "$ELFLOADER_DIR"
-if [ ! -d "$ELFLOADER_DIR/elfloader-tool" ]; then
-  git clone https://github.com/seL4/seL4_tools.git "$ELFLOADER_DIR/elfloader-tool"
-fi
-mkdir -p "$ELFLOADER_BUILD"
-cd "$ELFLOADER_BUILD"
-cmake -G Ninja -DElfloaderImageType=efi -DKernelSel4Arch=aarch64 \
-  -DCROSS_COMPILER_PREFIX=aarch64-linux-gnu- ../elfloader-tool
+# Build everything including elfloader
 ninja
-cp elfloader.efi "$COHESIX_OUT/bin/BOOTAA64.EFI"
-log "✅ elfloader.efi built and staged as BOOTAA64.EFI"
+
+# Stage kernel.elf
+cp kernel/kernel.elf "$COHESIX_OUT/bin/kernel.elf"
+log "✅ Kernel ELF staged to $COHESIX_OUT/bin/kernel.elf"
+
+# Stage elfloader (bare metal elf, not EFI)
+cp elfloader/elfloader "$COHESIX_OUT/bin/elfloader"
+log "✅ Elfloader staged to $COHESIX_OUT/bin/elfloader"
+
 cd "$ROOT"
+
+# -----------------------------------------------------------
+# QEMU bare metal boot test (aarch64, elfloader ELF)
+# -----------------------------------------------------------
+log "🧪 Booting in QEMU (bare metal elfloader)..."
+qemu-system-aarch64 -M virt -cpu cortex-a53 -kernel "$COHESIX_OUT/bin/elfloader" \
+  -serial mon:stdio -nographic
 
 
 log "📂 Staging boot files..."

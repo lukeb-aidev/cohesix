@@ -85,11 +85,14 @@ mkdir -p "$ISO_ROOT/usr/share/cohesix/man"
 cp $ROOT/docs/man/* "$ISO_ROOT/usr/share/cohesix/man/"
 cp $ROOT/docs/man/* "$ISO_ROOT/usr/share/man/"
 
-if [ -f "$ROOT/out/bin/elfloader.efi" ]; then
+if [ -f "$ROOT/out/bin/elfloader" ]; then
+  cp "$ROOT/out/bin/elfloader" "$ISO_ROOT/EFI/BOOT/BOOTAA64.EFI"
+  log "Staged bare metal elfloader as BOOTAA64.EFI"
+elif [ -f "$ROOT/out/bin/elfloader.efi" ]; then
   cp "$ROOT/out/bin/elfloader.efi" "$ISO_ROOT/EFI/BOOT/BOOTAA64.EFI"
-  log "Staged elfloader as BOOTAA64.EFI"
+  log "Staged EFI elfloader as BOOTAA64.EFI"
 else
-  log "WARNING: elfloader.efi not found, EFI boot may fail"
+  log "WARNING: elfloader not found, QEMU bare metal boot may fail"
 fi
 
 log "Creating ISO image at $ISO_OUT..."
