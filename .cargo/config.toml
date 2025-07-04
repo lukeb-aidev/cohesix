@@ -6,3 +6,6 @@ directory = "vendor"
 
 [net]
 offline = true
+
+[target.aarch64-unknown-linux-musl]
+linker = "rust-lld"
