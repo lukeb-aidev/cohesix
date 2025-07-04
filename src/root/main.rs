@@ -1,12 +1,13 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: main.rs v0.2
+// Filename: main.rs v0.3
 // Author: Lukas Bower
-// Date Modified: 2026-11-27
+// Date Modified: 2026-12-31
 
 /// Cohesix root task for seL4.
 /// Initializes runtime, loads Plan9 namespace, and launches shell.
 
 fn real_main() {
+    println!("COHESIX_BOOT_OK");
     println!("[root] booting...");
     cohesix::runtime::env::init::initialize_runtime_env();
     println!("[root] runtime initialized");
