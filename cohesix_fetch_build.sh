@@ -326,7 +326,7 @@ else
 fi
 
 log "🧱 Building Rust components for seL4 rootserver ELF..."
-FEATURES="cuda,std,rapier,physics,busybox,no-cuda,secure9p,entropy"
+FEATURES="cuda,std,rapier,physics,busybox,no-cuda"
 if [ "$SEL4_ENTRY" = 1 ]; then
   FEATURES+=",sel4,kernel_bin,minimal_uefi"
 fi
