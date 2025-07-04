@@ -43,7 +43,7 @@ if [ -z "${VIRTUAL_ENV:-}" ] || [[ "$VIRTUAL_ENV" != *"/${VENV_DIR}" ]]; then
     source "$VENV_DIR/bin/activate"
   fi
 fi
-export PYTHONPATH=/home/ubuntu/sel4_workspace/kernel:/usr/local/lib/python3.12/dist-packages:$PYTHONPATH
+export PYTHONPATH="/home/ubuntu/sel4_workspace/kernel:/usr/local/lib/python3.12/dist-packages:${PYTHONPATH:-}"
 export MEMCHR_DISABLE_RUNTIME_CPU_FEATURE_DETECTION=1
 export CUDA_HOME="${CUDA_HOME:-/usr}"
 export CUDA_INCLUDE_DIR="${CUDA_INCLUDE_DIR:-$CUDA_HOME/include}"
