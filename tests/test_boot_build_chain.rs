@@ -9,9 +9,9 @@ use std::fs;
 fn build_script_messages_present() {
     let script = fs::read_to_string("cohesix_fetch_build.sh").expect("read build script");
     for msg in [
-        "kernel build complete",
-        "config.yaml staged",
-        "ISO build complete",
+        "Kernel ELF staged",
+        "Elfloader staged",
+        "Booting in QEMU",
     ] {
         assert!(script.contains(msg), "missing log marker: {msg}");
     }
