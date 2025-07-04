@@ -1,14 +1,13 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.83
+# Filename: cohesix_fetch_build.sh v0.84
 # Author: Lukas Bower
 # Date Modified: 2026-12-31
 #!/bin/bash
 #
-# EFI kernel generation flow:
-# 1. Run init-build.sh with -DKernelUEFI=TRUE under the seL4 workspace to create build_uefi.
-# 2. Build with ninja to produce kernel.efi.
-# 3. Copy kernel.efi to $ROOT/out/bin/kernel.efi.
-# 4. tools/make_iso.sh stages kernel.efi into /boot and /EFI/BOOT on the ISO.
+# Bare metal seL4 build flow (no UEFI):
+# 1. Run init-build.sh with debug flags to configure seL4 for qemu-arm-virt.
+# 2. Build kernel.elf and elfloader via ninja.
+# 3. Stage kernel.elf, elfloader, and root ELF under $ROOT/out/bin/ for QEMU.
 
 
 HOST_ARCH="$(uname -m)"
@@ -330,7 +329,10 @@ FEATURES="cuda,std,rapier,physics,busybox,no-cuda"
 if [ "$SEL4_ENTRY" = 1 ]; then
   FEATURES+=",sel4,kernel_bin,minimal_uefi"
 fi
-cargo build --release --workspace --all-targets --no-default-features --features "$FEATURES" --target aarch64-unknown-linux-musl || true
+RUSTFLAGS="-C debuginfo=2" \
+  cargo build --release --workspace --all-targets \
+  --no-default-features --features "$FEATURES" \
+  --target aarch64-unknown-linux-musl || true
 grep -Ei 'error|fail|panic|permission denied|warning' "$LOG_FILE" > "$SUMMARY_ERRORS" || true
 
 # Ensure output directory exists before copying Rust binaries
@@ -365,6 +367,9 @@ log "🧱 Staging root ELF for seL4..."
 ROOT_ELF_SRC="target/aarch64-unknown-linux-musl/release/cohesix_root"
 if [ -f "$ROOT_ELF_SRC" ]; then
   cp "$ROOT_ELF_SRC" out/cohesix_root.elf
+  mkdir -p "$ROOT/out/bin"
+  cp "$ROOT_ELF_SRC" "$ROOT/out/bin/cohesix_root.elf"
+  log "Root ELF size: $(stat -c%s "$ROOT/out/bin/cohesix_root.elf") bytes"
 else
   echo "❌ $ROOT_ELF_SRC missing" >&2
   exit 1
@@ -392,12 +397,29 @@ COHESIX_OUT="${COHESIX_OUT:-$ROOT/out}"
 cd "$KERNEL_DIR"
 
 # Always build with seL4 recommended method: use init-build.sh
-./init-build.sh -DPLATFORM=qemu-arm-virt -DAARCH64=TRUE \
-  -DKernelPrinting=ON -DKernelDebugBuild=TRUE \
+./init-build.sh \
+  -DPLATFORM=qemu-arm-virt \
+  -DAARCH64=TRUE \
+  -DKernelPrinting=ON \
+  -DKernelDebugBuild=TRUE \
+  -DKernelLogBuffer=ON \
+  -DKernelElfVSpaceSizeBits=41 \
+  -DKernelRootCNodeSizeBits=18 \
+  -DKernelVirtualEnd=0xffffff80c0000000 \
+  -DKernelArmGICV2=ON \
+  -DKernelArmPL011=ON \
+  -DKernelVerificationBuild=ON \
   -DROOT_SERVER="$ROOT/out/cohesix_root.elf"
 
 # Now run ninja in the workspace root
 ninja
+
+# Log kernel configuration for debugging
+CACHE_FILE=$(find . -name CMakeCache.txt | head -n1)
+if [ -f "$CACHE_FILE" ]; then
+  log "Kernel configuration summary:" && \
+  grep -E 'KernelPrinting|KernelDebugBuild|KernelLogBuffer|KernelVerificationBuild|KernelElfVSpaceSizeBits|KernelRootCNodeSizeBits|KernelVirtualEnd|KernelArmGICV2|KernelArmPL011' "$CACHE_FILE" || true
+fi
 
 # Copy kernel.elf and elfloader
 cp "$KERNEL_DIR/kernel/kernel.elf" "$COHESIX_OUT/bin/kernel.elf"
@@ -409,14 +431,16 @@ log "✅ Elfloader staged to $COHESIX_OUT/bin/elfloader, size: $(stat -c%s "$COH
 cd "$ROOT"
 
 # -----------------------------------------------------------
-# QEMU bare metal boot test (aarch64, kernel ELF)
+# QEMU bare metal boot test (aarch64)
 # -----------------------------------------------------------
-# log "🧪 Booting in QEMU (bare metal kernel ELF)..."
-# qemu-system-aarch64 -M virt,gic-version=2 -cpu cortex-a57 -m 2048M \
-#   -kernel "$COHESIX_OUT/bin/kernel.elf" \
-#   -serial mon:stdio -nographic \
-#   -d "int,mmu,guest_errors,exec" \
-#   -D "$HOME/cohesix_logs/qemu_debug.log"
+log "🧪 Booting elfloader + kernel in QEMU..."
+QEMU_LOG="$LOG_DIR/qemu_debug_$(date +%Y%m%d_%H%M%S).log"
+qemu-system-aarch64 -M virt,gic-version=2 -cpu cortex-a57 -m 512M \
+  -kernel "$COHESIX_OUT/bin/elfloader" \
+  -serial mon:stdio -nographic \
+  -d int,mmu,guest_errors,unimp,cpu_reset \
+  -D "$QEMU_LOG" || true
+log "QEMU log saved to $QEMU_LOG"
 
 
 log "📂 Staging boot files..."
