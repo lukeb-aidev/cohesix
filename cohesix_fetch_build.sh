@@ -267,9 +267,18 @@ git submodule update --init --recursive
 log "🐍 Setting up Python environment..."
 command -v python3 >/dev/null || { echo "❌ python3 not found" >&2; exit 1; }
 VENV_DIR=".venv_${COHESIX_ARCH}"
-python3 -m venv "$VENV_DIR"
-# Activate Python venv and install required packages
-source "$VENV_DIR/bin/activate"
+if [ -z "${VIRTUAL_ENV:-}" ] || [[ "$VIRTUAL_ENV" != *"/${VENV_DIR}" ]]; then
+  if [ -d "$VENV_DIR" ]; then
+    log "🔄 Activating existing virtualenv for ${COHESIX_ARCH}"
+    source "$VENV_DIR/bin/activate"
+  else
+    log "⚙️ Creating new virtualenv for ${COHESIX_ARCH}"
+    python3 -m venv "$VENV_DIR"
+    source "$VENV_DIR/bin/activate"
+  fi
+else
+  log "✅ Virtualenv already active: $VIRTUAL_ENV"
+fi
 pip install ply lxml --break-system-packages
 # Ensure $HOME/.local/bin is included for user installs
 export PATH="$HOME/.local/bin:$PATH"
