@@ -414,64 +414,47 @@ fi
 
 #
 # -----------------------------------------------------------
-# seL4 kernel and elfloader build (bare metal, QEMU aarch64)
+# Minimal seL4 kernel build (bare metal, QEMU aarch64)
 # -----------------------------------------------------------
-log "🧱 Building seL4 kernel and elfloader with known good config..."
+log "🧱 Building minimal seL4 kernel with cohesix_root.elf as rootserver..."
 
 SEL4_WORKSPACE="${SEL4_WORKSPACE:-$HOME/sel4_workspace}"
 COHESIX_OUT="${COHESIX_OUT:-$ROOT/out}"
 
-# Clean previous builds
 rm -rf "$SEL4_WORKSPACE"
 mkdir -p "$SEL4_WORKSPACE"
 cd "$SEL4_WORKSPACE"
 
-# Clone seL4 test manifest
-repo init -u https://github.com/seL4/sel4test-manifest.git
-repo sync
+git clone https://github.com/seL4/seL4.git kernel
+cd kernel
+mkdir build && cd build
 
-#
-# Configure kernel and elfloader for QEMU AARCH64 bare metal flow with debug, explicit memory map
-# Aggressively reduced configuration to lower CNode drastically for guaranteed fit:
-./init-build.sh \
-  -DPLATFORM=qemu-arm-virt -DAARCH64=TRUE -DRELEASE=FALSE \
-  -DKernelPrinting=ON -DKernelDebugBuild=TRUE -DKernelLogBuffer=ON \
+cmake .. \
+  -DCROSS_COMPILER_PREFIX=aarch64-linux-gnu- \
+  -DKernelPlatform=qemu-arm-virt \
+  -DKernelSel4Arch=aarch64 \
+  -DKernelPrinting=ON \
+  -DKernelDebugBuild=TRUE \
+  -DKernelLogBuffer=ON \
   -DKernelLogBufferSizeBits=24 \
-  -DKernelPhysicalBase=0x40000000 \
-  -DKernelVirtualBase=0xffffff8040000000 \
-  -DKernelVirtualEnd=0xffffff80c0000000 \
   -DKernelElfVSpaceSizeBits=46 \
   -DKernelRootCNodeSizeBits=18 \
-  -DKernelArmGICV2=ON -DKernelArmPL011=ON
+  -DROOT_SERVER="$ROOT/out/cohesix_root.elf"
 
-# Add kernel-level boot prints
-echo "⚙️ Building with verbose kernel tracing..."
-
-# Integrate actual root server ELF before ninja build
-cp "$ROOT/out/cohesix_root.elf" "$SEL4_WORKSPACE/apps/sel4test-driver/images/arm/rootserver.elf"
-log "✅ Rootserver switched to cohesix_root.elf"
-
-# Build everything including elfloader
 ninja
 
-# Stage kernel.elf
-cp kernel/kernel.elf "$COHESIX_OUT/bin/kernel.elf"
+cp kernel.elf "$COHESIX_OUT/bin/kernel.elf"
 echo "✅ Kernel ELF size: $(stat -c%s "$COHESIX_OUT/bin/kernel.elf") bytes"
 log "✅ Kernel ELF staged to $COHESIX_OUT/bin/kernel.elf"
-
-# Stage elfloader (bare metal elf, not EFI)
-cp elfloader/elfloader "$COHESIX_OUT/bin/elfloader"
-echo "✅ Elfloader size: $(stat -c%s "$COHESIX_OUT/bin/elfloader") bytes"
-log "✅ Elfloader staged to $COHESIX_OUT/bin/elfloader"
 
 cd "$ROOT"
 
 # -----------------------------------------------------------
-# QEMU bare metal boot test (aarch64, elfloader ELF)
+# QEMU bare metal boot test (aarch64, kernel ELF)
 # -----------------------------------------------------------
-log "🧪 Booting in QEMU (bare metal elfloader)..."
+log "🧪 Booting in QEMU (bare metal kernel ELF)..."
 qemu-system-aarch64 -M virt,gic-version=2 -cpu cortex-a57 -m 2048M \
-  -kernel "$COHESIX_OUT/bin/elfloader" \
+  -kernel "$COHESIX_OUT/bin/kernel.elf" \
   -serial mon:stdio -nographic \
   -d "int,mmu,guest_errors,exec" \
   -D "$HOME/cohesix_logs/qemu_debug.log"
