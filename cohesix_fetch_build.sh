@@ -433,7 +433,9 @@ repo sync
 # Configure kernel and elfloader for QEMU AARCH64 bare metal flow with debug, explicit memory map
 ./init-build.sh -DPLATFORM=qemu-arm-virt -DAARCH64=TRUE -DRELEASE=FALSE \
   -DKernelPrinting=ON -DKernelDebugBuild=TRUE -DKernelLogBuffer=ON \
-  -DKernelPhysicalBase=0x40000000 -DKernelVirtualBase=0xffffff8040000000
+  -DKernelPhysicalBase=0x40000000 -DKernelVirtualBase=0xffffff8040000000 \
+  -DKernelVirtualEnd=0xffffff8080000000 \
+  -DKernelArmGICV2=ON -DKernelArmPL011=ON
 
 # Add kernel-level boot prints
 echo "⚙️ Building with verbose kernel tracing..."
