@@ -412,6 +412,7 @@ if [ -d python ]; then
   cp -r python "$ROOT/out/home/cohesix" 2>/dev/null || true
 fi
 
+#
 # -----------------------------------------------------------
 # seL4 kernel and elfloader build (bare metal, QEMU aarch64)
 # -----------------------------------------------------------
@@ -429,20 +430,24 @@ cd "$SEL4_WORKSPACE"
 repo init -u https://github.com/seL4/sel4test-manifest.git
 repo sync
 
-#
-# Configure kernel and elfloader for QEMU AARCH64 bare metal flow with debug
+# Configure kernel and elfloader for QEMU AARCH64 bare metal flow with debug, explicit memory map
 ./init-build.sh -DPLATFORM=qemu-arm-virt -DAARCH64=TRUE -DRELEASE=FALSE \
-  -DKernelPrinting=ON -DKernelDebugBuild=TRUE -DKernelLogBuffer=ON
+  -DKernelPrinting=ON -DKernelDebugBuild=TRUE -DKernelLogBuffer=ON \
+  -DKernelPhysicalBase=0x40000000 -DKernelVirtualBase=0xffffff8040000000
 
+# Add kernel-level boot prints
+echo "⚙️ Building with verbose kernel tracing..."
 # Build everything including elfloader
 ninja
 
 # Stage kernel.elf
 cp kernel/kernel.elf "$COHESIX_OUT/bin/kernel.elf"
+echo "✅ Kernel ELF size: $(stat -c%s "$COHESIX_OUT/bin/kernel.elf") bytes"
 log "✅ Kernel ELF staged to $COHESIX_OUT/bin/kernel.elf"
 
 # Stage elfloader (bare metal elf, not EFI)
 cp elfloader/elfloader "$COHESIX_OUT/bin/elfloader"
+echo "✅ Elfloader size: $(stat -c%s "$COHESIX_OUT/bin/elfloader") bytes"
 log "✅ Elfloader staged to $COHESIX_OUT/bin/elfloader"
 
 cd "$ROOT"
@@ -451,8 +456,10 @@ cd "$ROOT"
 # QEMU bare metal boot test (aarch64, elfloader ELF)
 # -----------------------------------------------------------
 log "🧪 Booting in QEMU (bare metal elfloader)..."
-qemu-system-aarch64 -M virt -cpu cortex-a53 -kernel "$COHESIX_OUT/bin/elfloader" \
-  -serial mon:stdio -nographic -d int,cpu_reset,guest_errors
+qemu-system-aarch64 -M virt -cpu cortex-a57 -m 512M \
+  -kernel "$COHESIX_OUT/bin/elfloader" \
+  -serial mon:stdio -nographic \
+  -d int,cpu_reset,guest_errors,mmu,unimp,pgtrace
 
 
 log "📂 Staging boot files..."
