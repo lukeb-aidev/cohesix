@@ -48,6 +48,6 @@ fn cuda_presence_and_telemetry() -> Result<(), Box<dyn std::error::Error>> {
 
     let exec = CudaExecutor::new();
     let telem = exec.telemetry();
-    assert_eq!(telem.cuda_present, rt.is_present());
+    assert_eq!(telem.unwrap().cuda_present, rt.is_present());
     Ok(())
 }
