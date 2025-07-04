@@ -431,10 +431,14 @@ repo init -u https://github.com/seL4/sel4test-manifest.git
 repo sync
 
 # Configure kernel and elfloader for QEMU AARCH64 bare metal flow with debug, explicit memory map
-./init-build.sh -DPLATFORM=qemu-arm-virt -DAARCH64=TRUE -DRELEASE=FALSE \
+./init-build.sh \
+  -DPLATFORM=qemu-arm-virt -DAARCH64=TRUE -DRELEASE=FALSE \
   -DKernelPrinting=ON -DKernelDebugBuild=TRUE -DKernelLogBuffer=ON \
-  -DKernelPhysicalBase=0x40000000 -DKernelVirtualBase=0xffffff8040000000 \
-  -DKernelVirtualEnd=0xffffff8080000000 -DKernelElfVSpaceSizeBits=40 \
+  -DKernelLogBufferSizeBits=20 \
+  -DKernelPhysicalBase=0x40000000 \
+  -DKernelVirtualBase=0xffffff8040000000 \
+  -DKernelVirtualEnd=0xffffff80c0000000 \
+  -DKernelElfVSpaceSizeBits=40 \
   -DKernelArmGICV2=ON -DKernelArmPL011=ON
 
 # Add kernel-level boot prints
@@ -458,7 +462,7 @@ cd "$ROOT"
 # QEMU bare metal boot test (aarch64, elfloader ELF)
 # -----------------------------------------------------------
 log "🧪 Booting in QEMU (bare metal elfloader)..."
-qemu-system-aarch64 -M virt -cpu cortex-a57 -m 512M \
+qemu-system-aarch64 -M virt,gic-version=2 -cpu cortex-a57 -m 512M \
   -kernel "$COHESIX_OUT/bin/elfloader" \
   -serial mon:stdio -nographic \
   -d "int,mmu,guest_errors" \
