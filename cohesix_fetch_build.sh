@@ -31,6 +31,18 @@ fi
 # Fetch and fully build the Cohesix project using SSH Git auth.
 
 set -euxo pipefail
+# Early virtualenv setup
+VENV_DIR=".venv_${HOST_ARCH}"
+if [ -z "${VIRTUAL_ENV:-}" ] || [[ "$VIRTUAL_ENV" != *"/${VENV_DIR}" ]]; then
+  if [ -d "$VENV_DIR" ]; then
+    echo "🔄 Activating existing virtualenv: $VENV_DIR"
+    source "$VENV_DIR/bin/activate"
+  else
+    echo "⚙️ Creating new virtualenv: $VENV_DIR"
+    python3 -m venv "$VENV_DIR"
+    source "$VENV_DIR/bin/activate"
+  fi
+fi
 export PYTHONPATH=/home/ubuntu/sel4_workspace/kernel:/usr/local/lib/python3.12/dist-packages:$PYTHONPATH
 export MEMCHR_DISABLE_RUNTIME_CPU_FEATURE_DETECTION=1
 export CUDA_HOME="${CUDA_HOME:-/usr}"
@@ -265,20 +277,6 @@ log "📦 Updating submodules (if any)..."
 git submodule update --init --recursive
 
 log "🐍 Setting up Python environment..."
-command -v python3 >/dev/null || { echo "❌ python3 not found" >&2; exit 1; }
-VENV_DIR=".venv_${COHESIX_ARCH}"
-if [ -z "${VIRTUAL_ENV:-}" ] || [[ "$VIRTUAL_ENV" != *"/${VENV_DIR}" ]]; then
-  if [ -d "$VENV_DIR" ]; then
-    log "🔄 Activating existing virtualenv for ${COHESIX_ARCH}"
-    source "$VENV_DIR/bin/activate"
-  else
-    log "⚙️ Creating new virtualenv for ${COHESIX_ARCH}"
-    python3 -m venv "$VENV_DIR"
-    source "$VENV_DIR/bin/activate"
-  fi
-else
-  log "✅ Virtualenv already active: $VIRTUAL_ENV"
-fi
 pip install ply lxml --break-system-packages
 # Ensure $HOME/.local/bin is included for user installs
 export PATH="$HOME/.local/bin:$PATH"
@@ -642,6 +640,8 @@ log "📀 Creating ISO..."
 #   out/iso/home/cohesix   - Python libraries
 #   out/iso/etc            - configuration files
 #   out/iso/roles          - role definitions
+# Already ensured and activated the Python venv at the top of the script.
+# No redundant venv creation or activation here.
 if [[ "${VIRTUAL_ENV:-}" != *"/${VENV_DIR}" ]]; then
   echo "❌ Python venv not active before ISO build" >&2
   exit 1
