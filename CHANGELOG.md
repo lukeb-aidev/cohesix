@@ -2641,3 +2641,11 @@
 - Consolidated CLI documentation into `cli_tools.md` and removed older CLI_HELP files.
 - Updated boot documentation to reflect pure UEFI flow.
 - Updated build plan and dependency notes for OVMF-based testing.
+
+## [v0.405] - 2026-12-31
+### Changed
+- `cohesix_fetch_build.sh` v0.84 enables full kernel debug flags and logs
+  configuration parameters. Kernel, elfloader, and root ELF are staged under
+  `out/bin/` for bare metal QEMU boot.
+- `scripts/boot_qemu.sh` v0.2 now boots `elfloader` directly with verbose QEMU
+  tracing to `qemu_debug_TIMESTAMP.log`.
