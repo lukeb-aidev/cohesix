@@ -308,7 +308,7 @@ impl CudaExecutor {
             let (free, total) = cust::memory::mem_get_info().unwrap_or((0, 0));
             let temp = None;
             let util = None;
-            return Ok(GpuTelemetry {
+            Ok(GpuTelemetry {
                 cuda_present: true,
                 driver_version: version,
                 mem_total: total as u64,
@@ -317,7 +317,7 @@ impl CudaExecutor {
                 exec_time_ns: self.last_exec_ns,
                 temperature: temp,
                 gpu_utilization: util,
-            });
+            })
         }
 
         Ok(GpuTelemetry {
