@@ -436,7 +436,9 @@ else
   exit 1
 fi
 
-cmake .. -DPLATFORM="$PLATFORM" -DKernelArch="$KERNEL_ARCH" \
+cmake .. -DPLATFORM="$PLATFORM" \
+  -DKernelArch="$KERNEL_ARCH" \
+  -DKernelWordSize=64 \
   -DKernelPrinting=ON \
   -DKernelDebugBuild=TRUE \
   -DKernelLogBuffer=ON \
@@ -450,6 +452,15 @@ ninja
 cp kernel.elf "$COHESIX_OUT/bin/kernel.elf"
 echo "✅ Kernel ELF size: $(stat -c%s "$COHESIX_OUT/bin/kernel.elf") bytes"
 log "✅ Kernel ELF staged to $COHESIX_OUT/bin/kernel.elf"
+
+# Copy and confirm elfloader binary
+if [ -f "../elfloader/elfloader" ]; then
+  cp ../elfloader/elfloader "$COHESIX_OUT/bin/elfloader"
+  echo "✅ Elfloader size: $(stat -c%s "$COHESIX_OUT/bin/elfloader") bytes"
+  log "✅ Elfloader staged to $COHESIX_OUT/bin/elfloader"
+else
+  echo "⚠️ Elfloader binary not found at ../elfloader/elfloader" >&2
+fi
 
 cd "$ROOT"
 
