@@ -154,7 +154,7 @@ command -v xorriso >/dev/null 2>&1 || { log "xorriso not found"; exit 1; }
 
 log "Creating ISO image at $ISO_OUT..."
 xorriso -as mkisofs -R -J -joliet -V Cohesix -o "$ISO_OUT" \
-    -efi-boot "EFI/BOOT/$BOOT_EFI" -no-emul-boot "$ISO_ROOT" || {
+    -eltorito-alt-boot -e "EFI/BOOT/$BOOT_EFI" -no-emul-boot "$ISO_ROOT" || {
     log "xorriso failed"; exit 1;
 }
 
