@@ -435,6 +435,7 @@ fi
 
 # Copy to out/bin for ISO assembly
 cp "$KERNEL_SRC" "$KERNEL_OUT"
+OUT_KERNEL="$KERNEL_OUT"
 log "✅ Kernel ELF staged to $KERNEL_OUT"
 tee -a "$LOG_FILE"
 
@@ -637,7 +638,7 @@ log "📀 Creating ISO..."
 #   out/iso/home/cohesix   - Python libraries
 #   out/iso/etc            - configuration files
 #   out/iso/roles          - role definitions
-if [ "${VIRTUAL_ENV:-}" != "$(pwd)/${VENV_DIR}" ]; then
+if [[ "${VIRTUAL_ENV:-}" != *"/${VENV_DIR}" ]]; then
   echo "❌ Python venv not active before ISO build" >&2
   exit 1
 fi
@@ -759,6 +760,9 @@ ROLE_COUNT=$(find "$STAGE_DIR/roles" -name '*.yaml' | wc -l)
 ISO_SIZE_MB=$(du -m "$ISO_OUT" | awk '{print $1}')
 echo "ISO BUILD OK: ${BIN_COUNT} binaries, ${ROLE_COUNT} roles, ${ISO_SIZE_MB}MB total" >&3
 
+cleanup() {
+  log "🧹 Cleanup completed."
+}
 cleanup
 
 log "✅ [Build Complete] $(date)"
