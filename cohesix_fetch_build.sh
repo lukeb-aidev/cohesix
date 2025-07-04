@@ -414,9 +414,9 @@ fi
 
 #
 # -----------------------------------------------------------
-# Minimal seL4 kernel build (bare metal, QEMU aarch64)
+# seL4 kernel build via sel4test-manifest (best practice)
 # -----------------------------------------------------------
-log "🧱 Building minimal seL4 kernel with cohesix_root.elf as rootserver..."
+log "🧱 Cloning sel4test-manifest for robust kernel+ELF build..."
 
 SEL4_WORKSPACE="${SEL4_WORKSPACE:-$HOME/sel4_workspace}"
 COHESIX_OUT="${COHESIX_OUT:-$ROOT/out}"
@@ -425,14 +425,12 @@ rm -rf "$SEL4_WORKSPACE"
 mkdir -p "$SEL4_WORKSPACE"
 cd "$SEL4_WORKSPACE"
 
-git clone https://github.com/seL4/seL4.git kernel
-cd kernel
-mkdir build && cd build
+repo init -u https://github.com/seL4/sel4test-manifest.git
+repo sync
 
-cmake .. \
-  -DCROSS_COMPILER_PREFIX=aarch64-linux-gnu- \
-  -DKernelPlatform=qemu-arm-virt \
-  -DKernelSel4Arch=aarch64 \
+# Configure build with your actual cohesix_root.elf as the ROOT_SERVER
+"$SEL4_WORKSPACE"/init-build.sh \
+  -DPLATFORM=qemu-arm-virt -DAARCH64=TRUE \
   -DKernelPrinting=ON \
   -DKernelDebugBuild=TRUE \
   -DKernelLogBuffer=ON \
@@ -443,7 +441,7 @@ cmake .. \
 
 ninja
 
-cp kernel.elf "$COHESIX_OUT/bin/kernel.elf"
+cp kernel/kernel.elf "$COHESIX_OUT/bin/kernel.elf"
 echo "✅ Kernel ELF size: $(stat -c%s "$COHESIX_OUT/bin/kernel.elf") bytes"
 log "✅ Kernel ELF staged to $COHESIX_OUT/bin/kernel.elf"
 
