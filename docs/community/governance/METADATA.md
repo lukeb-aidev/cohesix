@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: METADATA.md v3.48
+// Filename: METADATA.md v3.49
 // Author: Lukas Bower
 // Date Modified: 2026-12-31
 
@@ -107,7 +107,7 @@
 | CohesixBoot.inf | v0.1 | 2025-07-22 | COMMUNITY | | |
 | linker.ld | v0.1 | 2025-07-22 | COMMUNITY | | |
 | .bashrc | v0.1 | 2026-08-09 | COMMUNITY | | |
-| .cargo/config.toml | v0.11 | 2026-12-31 | COMMUNITY | | |
+| .cargo/config.toml | v0.12 | 2026-12-31 | COMMUNITY | | |
 | build.rs | v0.8 | 2026-08-21 | COMMUNITY | | |
 | Makefile | v0.50 | 2026-10-16 | COMMUNITY | | |
 | src/kernel/main.c | v0.2 | 2025-07-22 | COMMUNITY | | |
@@ -302,3 +302,4 @@
 | docs/community/BUILD_NOTES.md | v0.1 | 2026-12-31 | COMMUNITY | | |
 Removed: introspect_self_diagnosis (Plan9 migration - file-based introspection replaced by validator-driven policy checks)
 Removed: legacy Python tests and lint steps; project now purely Plan9 + Rust
+Changed: `.cargo/config.toml` v0.12 switches musl targets to system GCC linkers
