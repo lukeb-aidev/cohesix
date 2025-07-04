@@ -114,7 +114,7 @@ impl CudaRuntime {
             agent: "cuda".into(),
             time: validator::timestamp(),
         });
-        unsafe { lib.get::<T>(name).map_err(|e| coh_error!(e.to_string())) }
+        unsafe { lib.get::<T>(name).map_err(|e| coh_error!("{}", e.to_string())) }
     }
 
     #[cfg(target_os = "uefi")]
