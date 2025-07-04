@@ -438,7 +438,7 @@ fi
 
 log "📂 Staging boot files..."
 mkdir -p "$STAGE_DIR/boot"
-cp "$OUT_KERNEL" "$STAGE_DIR/boot/kernel.elf"
+cp "$KERNEL_OUT" "$STAGE_DIR/boot/kernel.elf"
 if [ -f "$ROOT/out/bin/kernel.efi" ]; then
   cp "$ROOT/out/bin/kernel.efi" "$STAGE_DIR/boot/kernel.efi"
 fi
