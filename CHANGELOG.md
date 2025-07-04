@@ -29,6 +29,7 @@
 - src/lib/init.rs placeholder module to satisfy module resolution
 - sensors.rs respects COHESIX_TELEMETRY_PATH for tests
 - `.cargo/config.toml` v0.11 adds `aarch64-unknown-linux-musl` linker config
+- `.cargo/config.toml` v0.12 switches musl linkers to system GCC to fix -ldl errors
 - test_agent_lifecycle uses temp directories only
 - boot_trace_rule tests use tempfile::tempdir to avoid PermissionDenied errors
 - Classification headers added for all bin scripts; files registered in METADATA
