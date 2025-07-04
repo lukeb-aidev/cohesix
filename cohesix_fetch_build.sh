@@ -430,6 +430,7 @@ cd "$SEL4_WORKSPACE"
 repo init -u https://github.com/seL4/sel4test-manifest.git
 repo sync
 
+#
 # Configure kernel and elfloader for QEMU AARCH64 bare metal flow with debug, explicit memory map
 # Aggressively reduced configuration to lower CNode drastically for guaranteed fit:
 ./init-build.sh \
@@ -445,6 +446,11 @@ repo sync
 
 # Add kernel-level boot prints
 echo "⚙️ Building with verbose kernel tracing..."
+
+# Integrate actual root server ELF before ninja build
+cp "$ROOT/out/cohesix_root.elf" "$SEL4_WORKSPACE/apps/sel4test-driver/images/arm/rootserver.elf"
+log "✅ Rootserver switched to cohesix_root.elf"
+
 # Build everything including elfloader
 ninja
 
