@@ -47,7 +47,7 @@ fn cuda_executor_launches() -> Result<(), Box<dyn std::error::Error>> {
     let log = std::fs::read_to_string("/log/gpu_runtime.log")?;
     assert!(log.contains("kernel executed") || log.contains("cuda disabled"));
 
-    let telem = exec.telemetry();
+    let telem = exec.telemetry().unwrap();
     assert!(telem.exec_time_ns > 0 || !telem.fallback_reason.is_empty());
     drop(rt);
     Ok(())
