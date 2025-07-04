@@ -1,5 +1,5 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.84
+# Filename: cohesix_fetch_build.sh v0.85
 # Author: Lukas Bower
 # Date Modified: 2026-12-31
 #!/bin/bash
@@ -403,9 +403,9 @@ cd "$KERNEL_DIR"
   -DKernelPrinting=ON \
   -DKernelDebugBuild=TRUE \
   -DKernelLogBuffer=ON \
-  -DKernelElfVSpaceSizeBits=41 \
+  -DKernelElfVSpaceSizeBits=42 \
   -DKernelRootCNodeSizeBits=18 \
-  -DKernelVirtualEnd=0xffffff80c0000000 \
+  -DKernelVirtualEnd=0xffffff80e0000000 \
   -DKernelArmGICV2=ON \
   -DKernelArmPL011=ON \
   -DKernelVerificationBuild=ON \
@@ -438,7 +438,7 @@ QEMU_LOG="$LOG_DIR/qemu_debug_$(date +%Y%m%d_%H%M%S).log"
 qemu-system-aarch64 -M virt,gic-version=2 -cpu cortex-a57 -m 512M \
   -kernel "$COHESIX_OUT/bin/elfloader" \
   -serial mon:stdio -nographic \
-  -d int,mmu,guest_errors,unimp,cpu_reset \
+  -d int,mmu,page,guest_errors,unimp,cpu_reset \
   -D "$QEMU_LOG" || true
 log "QEMU log saved to $QEMU_LOG"
 

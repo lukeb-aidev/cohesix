@@ -2658,3 +2658,10 @@
 ### Fixed
 - Rust `cohesix_root` entry prints `COHESIX_BOOT_OK` before initializing
   runtime.
+
+## [v0.407] - 2026-12-31
+### Changed
+- `cohesix_fetch_build.sh` v0.85 increases `KernelElfVSpaceSizeBits` to 42 and `KernelVirtualEnd` to `0xffffff80e0000000`. Kernel debug/verification builds remain enabled and configuration parameters are logged.
+- `scripts/boot_qemu.sh` v0.3 adds `page` tracing to QEMU debug output.
+### Added
+- QEMU boot logs now capture `COHESIX_BOOT_OK` using semihosting for direct elfloader boots.
