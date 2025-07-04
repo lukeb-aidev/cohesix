@@ -414,30 +414,16 @@ fi
 
 #
 # -----------------------------------------------------------
-# seL4 kernel build via sel4test-manifest (best practice)
+# seL4 kernel build directly under existing /home/ubuntu/kernel
 # -----------------------------------------------------------
-log "🧱 Cloning sel4test-manifest for robust kernel+ELF build..."
+log "🧱 Building seL4 kernel using existing /home/ubuntu/kernel workspace..."
 
-SEL4_WORKSPACE="${SEL4_WORKSPACE:-$HOME/sel4_workspace}"
+KERNEL_DIR="/home/ubuntu/kernel"
 COHESIX_OUT="${COHESIX_OUT:-$ROOT/out}"
 
-rm -rf "$SEL4_WORKSPACE"
-mkdir -p "$SEL4_WORKSPACE"
-cd "$SEL4_WORKSPACE"
-
-repo init -u https://github.com/seL4/sel4test-manifest.git
-repo sync
-
-# Robustly find init-build.sh and set flags per architecture
-cd "$SEL4_WORKSPACE"
-if [ -f "./init-build.sh" ]; then
-  INIT_BUILD="./init-build.sh"
-elif [ -f "./kernel/init-build.sh" ]; then
-  INIT_BUILD="./kernel/init-build.sh"
-else
-  echo "❌ Could not find init-build.sh in sel4_workspace" >&2
-  exit 1
-fi
+cd "$KERNEL_DIR"
+mkdir -p build
+cd build
 
 if [ "$COH_ARCH" = "aarch64" ]; then
   PLATFORM="qemu-arm-virt"
@@ -450,7 +436,7 @@ else
   exit 1
 fi
 
-$INIT_BUILD -DPLATFORM="$PLATFORM" $EXTRA \
+cmake .. -DPLATFORM="$PLATFORM" $EXTRA \
   -DKernelPrinting=ON \
   -DKernelDebugBuild=TRUE \
   -DKernelLogBuffer=ON \
@@ -461,7 +447,7 @@ $INIT_BUILD -DPLATFORM="$PLATFORM" $EXTRA \
 
 ninja
 
-cp kernel/kernel.elf "$COHESIX_OUT/bin/kernel.elf"
+cp kernel.elf "$COHESIX_OUT/bin/kernel.elf"
 echo "✅ Kernel ELF size: $(stat -c%s "$COHESIX_OUT/bin/kernel.elf") bytes"
 log "✅ Kernel ELF staged to $COHESIX_OUT/bin/kernel.elf"
 
