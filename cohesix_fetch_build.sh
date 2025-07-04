@@ -434,7 +434,7 @@ repo sync
 ./init-build.sh -DPLATFORM=qemu-arm-virt -DAARCH64=TRUE -DRELEASE=FALSE \
   -DKernelPrinting=ON -DKernelDebugBuild=TRUE -DKernelLogBuffer=ON \
   -DKernelPhysicalBase=0x40000000 -DKernelVirtualBase=0xffffff8040000000 \
-  -DKernelVirtualEnd=0xffffff8080000000 \
+  -DKernelVirtualEnd=0xffffff8080000000 -DKernelElfVSpaceSizeBits=40 \
   -DKernelArmGICV2=ON -DKernelArmPL011=ON
 
 # Add kernel-level boot prints
@@ -461,7 +461,7 @@ log "🧪 Booting in QEMU (bare metal elfloader)..."
 qemu-system-aarch64 -M virt -cpu cortex-a57 -m 512M \
   -kernel "$COHESIX_OUT/bin/elfloader" \
   -serial mon:stdio -nographic \
-  -d "int,cpu_reset,guest_errors,mmu,unimp,pgtrace" \
+  -d "int,mmu,guest_errors" \
   -D "$HOME/cohesix_logs/qemu_debug.log"
 
 
