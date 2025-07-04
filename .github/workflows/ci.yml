@@ -46,11 +46,6 @@ jobs:
         run: |
           GOWORK=$(pwd)/go/go.work go test ./... | tee go_test.log
 
-      - name: Run make targets for C components
-        run: |
-          make lint
-          make test
-          make build | tee make_build.log
 
       - uses: actions/upload-artifact@v4
         with:

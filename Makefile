@@ -79,13 +79,13 @@ c/sel4/bootloader.o: c/sel4/bootloader.c
 c-shims: c/sel4/shim/boot_trampoline.o c/sel4/bootloader.o ## Build C shims
 	@echo "🔧 Building C shims …"
 
-boot-x86_64: ## Build boot image for x86_64
-	@echo "🏁 Building boot image for x86_64"
-	cargo build --release --target x86_64-unknown-linux-gnu
+boot-x86_64: ## Build UEFI image for x86_64 # Updated for pure UEFI targets, no linux-gnu
+	@echo "🏁 Building UEFI image for x86_64" # Updated for pure UEFI targets, no linux-gnu
+	cargo build --release --target x86_64-unknown-uefi # Updated for pure UEFI targets, no linux-gnu
 
-boot-aarch64: ## Build boot image for aarch64
-	@echo "🏁 Building boot image for aarch64"
-	cargo build --release --target aarch64-unknown-linux-gnu
+boot-aarch64: ## Build UEFI image for aarch64 # Updated for pure UEFI targets, no linux-gnu
+	@echo "🏁 Building UEFI image for aarch64" # Updated for pure UEFI targets, no linux-gnu
+	cargo build --release --target aarch64-unknown-uefi # Updated for pure UEFI targets, no linux-gnu
 
 
 
@@ -122,9 +122,9 @@ gui-orchestrator: ## Build gui-orchestrator binary
 	@mkdir -p out/bin
 	@GOWORK=$(CURDIR)/go/go.work go build -o out/bin/gui-orchestrator ./go/cmd/gui-orchestrator
 
-iso:
-	@echo "Creating GRUB-based ISO (non-EFI)..."
-	./tools/make_iso.sh
+iso: # Updated to clarify legacy status
+	@echo "Creating legacy GRUB-based ISO (likely unused for UEFI)..." # Updated to clarify legacy status
+	./tools/make_iso.sh # Updated to clarify legacy status
 
 boot-grub: iso
 	qemu-system-aarch64 -M virt -cpu cortex-a57 -m 1024 -bios none -serial mon:stdio -cdrom out/cohesix.iso -nographic
