@@ -459,7 +459,8 @@ log "🧪 Booting in QEMU (bare metal elfloader)..."
 qemu-system-aarch64 -M virt -cpu cortex-a57 -m 512M \
   -kernel "$COHESIX_OUT/bin/elfloader" \
   -serial mon:stdio -nographic \
-  -d int,cpu_reset,guest_errors,mmu,unimp,pgtrace
+  -d "int,cpu_reset,guest_errors,mmu,unimp,pgtrace" \
+  -D "$HOME/cohesix_logs/qemu_debug.log"
 
 
 log "📂 Staging boot files..."
