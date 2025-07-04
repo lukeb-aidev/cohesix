@@ -427,16 +427,16 @@ cd build
 
 if [ "$COH_ARCH" = "aarch64" ]; then
   PLATFORM="qemu-arm-virt"
-  EXTRA="-DAARCH64=TRUE"
+  KERNEL_ARCH="aarch64"
 elif [ "$COH_ARCH" = "x86_64" ]; then
   PLATFORM="pc99"
-  EXTRA="-DX86_64=TRUE"
+  KERNEL_ARCH="x86_64"
 else
   echo "❌ Unsupported architecture: $COH_ARCH" >&2
   exit 1
 fi
 
-cmake .. -DPLATFORM="$PLATFORM" $EXTRA \
+cmake .. -DPLATFORM="$PLATFORM" -DKernelArch="$KERNEL_ARCH" \
   -DKernelPrinting=ON \
   -DKernelDebugBuild=TRUE \
   -DKernelLogBuffer=ON \
