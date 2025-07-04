@@ -119,7 +119,7 @@
 | tests/test_namespace_rule.rs | v0.1 | 2025-07-23 | COMMUNITY | | |
 | tests/test_namespace_semantics.rs | v0.5 | 2026-12-31 | COMMUNITY | | |
 | tests/test_qemu_boot.rs | v0.13 | 2026-12-31 | COMMUNITY | | |
-| tests/test_boot_build_chain.rs | v0.1 | 2025-12-24 | COMMUNITY | | |
+| tests/test_boot_build_chain.rs | v0.3 | 2026-12-31 | COMMUNITY | | |
 | tests/boot_trace_rule.rs | v0.4 | 2026-12-31 | COMMUNITY | | |
 | tests/kernel_proc_mgr.rs | v0.1 | 2025-08-26 | COMMUNITY | | |
 | tests/test_cohcc_shell.rs | v0.2 | 2025-09-25 | COMMUNITY | | |
@@ -225,11 +225,11 @@
 | userland/miniroot/bin/echo | v0.1 | 2025-09-23 | COMMUNITY | | |
 | userland/miniroot/bin/help | v0.1 | 2025-09-23 | COMMUNITY | | |
 | userland/miniroot/bin/ls | v0.1 | 2025-09-23 | COMMUNITY | | |
-| userland/miniroot/bin/init | v0.1 | 2026-01-20 | COMMUNITY | | |
+| userland/miniroot/bin/init | v0.2 | 2026-12-31 | COMMUNITY | | |
 | userland/miniroot/bin/rc | v0.1 | 2026-01-20 | COMMUNITY | | |
 | usr/src/example.coh | v0.1 | 2025-09-24 | COMMUNITY | | |
 | src/sh_loop.rs | v0.1 | 2025-09-23 | COMMUNITY | | |
-| src/root/main.rs | v0.2 | 2026-11-27 | COMMUNITY | | |
+| src/root/main.rs | v0.3 | 2026-12-31 | COMMUNITY | | |
 | src/utils/gpu.rs | v0.1 | 2025-12-12 | COMMUNITY | | |
 | src/cuda/runtime.rs | v0.15 | 2026-12-31 | COMMUNITY | | |
 | src/cli/mod.rs | v1.3 | 2026-10-08 | COMMUNITY | | |
@@ -268,6 +268,8 @@
 | bin/cohman.sh | v0.1 | 2026-02-21 | COMMUNITY | | |
 | bin/man | v0.2 | 2025-06-22 | COMMUNITY | | |
 | bin/mandoc | v0.2 | 2025-06-22 | COMMUNITY | | |
+| go.mod | v0.1 | 2026-12-31 | COMMUNITY | | |
+| go.work | v0.1 | 2026-12-31 | COMMUNITY | | |
 | go/cmd/gui-orchestrator/signal_plan9.go | v0.1 | 2026-12-31 | COMMUNITY | | |
 | go/cmd/gui-orchestrator/signal_unix.go | v0.1 | 2026-12-31 | COMMUNITY | | |
 | go/cmd/coh-9p-helper/main.go | v0.4 | 2025-06-24 | COMMUNITY | | |

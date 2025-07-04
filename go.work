@@ -1,0 +1,11 @@
+// CLASSIFICATION: COMMUNITY
+// Filename: go.work v0.1
+// Author: Lukas Bower
+// Date Modified: 2026-12-31
+
+go 1.23.0
+
+use (
+	.
+	./go
+)
