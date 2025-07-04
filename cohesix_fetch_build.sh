@@ -463,7 +463,7 @@ cd "$ROOT"
 # QEMU bare metal boot test (aarch64, elfloader ELF)
 # -----------------------------------------------------------
 log "🧪 Booting in QEMU (bare metal elfloader)..."
-qemu-system-aarch64 -M virt,gic-version=2 -cpu cortex-a57 -m 512M \
+qemu-system-aarch64 -M virt,gic-version=2 -cpu cortex-a57 -m 2048M \
   -kernel "$COHESIX_OUT/bin/elfloader" \
   -serial mon:stdio -nographic \
   -d "int,mmu,guest_errors,exec" \
