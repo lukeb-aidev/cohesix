@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: test_boot_build_chain.rs v0.2
+// Filename: test_boot_build_chain.rs v0.3
 // Author: Lukas Bower
-// Date Modified: 2026-07-08
+// Date Modified: 2026-12-31
 
 use std::fs;
 
@@ -11,7 +11,7 @@ fn build_script_messages_present() {
     for msg in [
         "Kernel ELF staged",
         "Elfloader staged",
-        "Booting in QEMU",
+        "Booting elfloader + kernel in QEMU",
     ] {
         assert!(script.contains(msg), "missing log marker: {msg}");
     }
