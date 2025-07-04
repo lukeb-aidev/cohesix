@@ -401,70 +401,42 @@ if [ -d python ]; then
   cp -r python "$ROOT/out/home/cohesix" 2>/dev/null || true
 fi
 
-# Build or update seL4 kernel from external workspace
-SEL4_WORKSPACE="${SEL4_WORKSPACE:-/home/ubuntu/sel4_workspace}"
-echo "Using kernel from: $SEL4_WORKSPACE"
-if [ ! -d "$SEL4_WORKSPACE" ]; then
-  echo "seL4 not found in $SEL4_WORKSPACE. Please build it using the official sel4test-manifest flow before continuing." >&2
-  exit 1
-fi
+#
+# -----------------------------------------------------------
+# ARCHITECTURE-AWARE KERNEL ELF STAGING
+# -----------------------------------------------------------
+log "Detecting architecture for kernel staging..."
+tee -a "$LOG_FILE"
+
 case "$COH_ARCH" in
-  x86_64) KERNEL_SRC="$SEL4_WORKSPACE/build_pc99/kernel/kernel.elf" ;;
-  aarch64) KERNEL_SRC="$SEL4_WORKSPACE/build_qemu_arm/kernel/kernel.elf" ;;
-  *) echo "Unknown arch $COH_ARCH" >&2; exit 1 ;;
+    aarch64)
+        KERNEL_BUILD_DIR="$SEL4_WORKSPACE/build_qemu_arm"
+        ;;
+    x86_64)
+        KERNEL_BUILD_DIR="$SEL4_WORKSPACE/build_qemu_x86"
+        ;;
+    *)
+        echo "❌ Unknown COH_ARCH: $COH_ARCH" | tee -a "$LOG_FILE"
+        exit 1
+        ;;
 esac
-log "Checking kernel path: $KERNEL_SRC"
+
+KERNEL_SRC="$KERNEL_BUILD_DIR/kernel/kernel.elf"
+KERNEL_OUT="$COHESIX_OUT/bin/kernel.elf"
+
+log "Looking for kernel ELF at: $KERNEL_SRC"
+tee -a "$LOG_FILE"
+
 if [ ! -f "$KERNEL_SRC" ]; then
-  echo "❌ Kernel ELF not found at $KERNEL_SRC. Did you run init-build.sh + ninja?" >&2
-  ls -l "$SEL4_WORKSPACE"/build_* 2>/dev/null || true
-  exit 1
-fi
-SEL4_BUILD_DIR="${SEL4_BUILD_DIR:-"$(find "$SEL4_WORKSPACE" -maxdepth 1 -type d -name 'build_*' | head -n1)"}"
-if [ -z "$SEL4_BUILD_DIR" ] || [ ! -d "$SEL4_BUILD_DIR" ]; then
-  echo "No build_* directory found under $SEL4_WORKSPACE" >&2
-  exit 1
-fi
-SRC_KERNEL="$SEL4_BUILD_DIR/kernel/kernel.elf"
-OUT_KERNEL="$ROOT/out/bin/kernel.elf"
-if [ ! -f "$OUT_KERNEL" ] || [ "$SRC_KERNEL" -nt "$OUT_KERNEL" ]; then
-  log "🏗️ Building seL4 kernel via ninja"
-  (cd "$SEL4_BUILD_DIR" && ninja)
-fi
-[ -f "$SRC_KERNEL" ] || { echo "Kernel build failed: $SRC_KERNEL missing" >&2; exit 1; }
-cp "$SRC_KERNEL" "$OUT_KERNEL"
-log "kernel.elf staged to $OUT_KERNEL"
-
-# Build UEFI variant of the seL4 kernel
-log "🏗️ Building UEFI kernel"
-cd "$SEL4_WORKSPACE"
-./init-build.sh -DPLATFORM=qemu-arm-virt -DAARCH64=TRUE -DKernelUEFI=TRUE -B build_qemu_arm_uefi
-cd build_qemu_arm_uefi
-ninja
-cp kernel/kernel.efi "$ROOT/out/bin/kernel.efi"
-
-ARCH="$(uname -m)"
-EXPECTED=""
-case "$ARCH" in
-  x86_64|amd64)
-    EXPECTED="x86-64"
-    ;;
-  aarch64|arm64)
-    EXPECTED="AArch64"
-    ;;
-  *)
-    echo "❌ Unknown arch for EFI validation: $ARCH" >&2
+    echo "❌ Kernel ELF not found at $KERNEL_SRC" | tee -a "$LOG_FILE"
+    echo "   Make sure seL4 kernel built correctly for $COH_ARCH." | tee -a "$LOG_FILE"
     exit 1
-    ;;
-esac
-EFI_INFO="$(file "$ROOT/out/bin/kernel.efi")"
-if echo "$EFI_INFO" | grep -q "PE32+ executable (EFI application)" && echo "$EFI_INFO" | grep -q "$EXPECTED"; then
-  log "✅ kernel.efi validated: $EFI_INFO"
-else
-  echo "❌ kernel.efi validation failed: $EFI_INFO" >&2
-  exit 1
 fi
-log "[INFO] kernel.efi built and staged to $ROOT/out/bin/kernel.efi, validated for $EXPECTED."
-cd "$ROOT"
+
+# Copy to out/bin for ISO assembly
+cp "$KERNEL_SRC" "$KERNEL_OUT"
+log "✅ Kernel ELF staged to $KERNEL_OUT"
+tee -a "$LOG_FILE"
 
 
 
