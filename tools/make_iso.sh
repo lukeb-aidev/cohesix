@@ -32,21 +32,21 @@ mkdir -p "$ISO_ROOT/EFI/BOOT" "$ISO_ROOT/boot" "$ISO_ROOT/bin" "$ISO_ROOT/usr/bi
          "$ISO_ROOT/etc/cohesix" "$ISO_ROOT/roles" "$ISO_ROOT/srv" \
          "$ISO_ROOT/home/cohesix" "$ISO_ROOT/upgrade" "$ISO_ROOT/log"
 
-KERNEL_SRC="$ROOT/out/bin/kernel.efi"
+KERNEL_SRC="$ROOT/out/bin/kernel.elf"
 ROOT_SRC="$ROOT/out/cohesix_root.elf"
 
-[ -f "$KERNEL_SRC" ] || { log "kernel.efi missing at $KERNEL_SRC"; exit 1; }
+[ -f "$KERNEL_SRC" ] || { log "kernel.elf missing at $KERNEL_SRC"; exit 1; }
 [ -f "$ROOT_SRC" ] || { log "userland.elf missing at $ROOT_SRC"; exit 1; }
 
 log "Copying kernel and userland binaries..."
-cp "$KERNEL_SRC" "$ISO_ROOT/boot/kernel.efi"
-if file "$ISO_ROOT/boot/kernel.efi" | grep -q "PE32+"; then
-    log "[CHECK] kernel.efi staged to /boot and verified"
+cp "$KERNEL_SRC" "$ISO_ROOT/boot/kernel.elf"
+if file "$ISO_ROOT/boot/kernel.elf" | grep -E -q "PE32+|ELF 64-bit"; then
+    log "[CHECK] kernel.elf staged to /boot and verified"
 else
-    log "ERROR: kernel.efi not valid"; exit 1
+    log "ERROR: kernel.elf not valid"; exit 1
 fi
 cp "$ROOT_SRC" "$ISO_ROOT/boot/userland.elf"
-sha256sum "$ISO_ROOT/boot/kernel.efi" | tee -a "$LOG_FILE" >&3
+sha256sum "$ISO_ROOT/boot/kernel.elf" | tee -a "$LOG_FILE" >&3
 sha256sum "$ISO_ROOT/boot/userland.elf" | tee -a "$LOG_FILE" >&3
 ls -lh "$ISO_ROOT/boot" | tee -a "$LOG_FILE" >&3
 
@@ -54,7 +54,7 @@ log "Ensuring config.yaml exists..."
 if [ -f "$ROOT/out/etc/cohesix/config.yaml" ]; then
     cp "$ROOT/out/etc/cohesix/config.yaml" "$ISO_ROOT/etc/cohesix/config.yaml"
     log "Creating default role.conf..."
-    echo "CohRole=DroneWorker" > "$ISO_ROOT/etc/role.conf"
+    echo "CohRole=$ROLE" > "$ISO_ROOT/etc/role.conf"
 else
     log "ERROR: config.yaml missing in build output"
     exit 1
@@ -144,7 +144,7 @@ esac
 
 log "Staging EFI binary as $BOOT_EFI"
 cp "$KERNEL_SRC" "$UEFI_DIR/$BOOT_EFI"
-if file "$UEFI_DIR/$BOOT_EFI" | grep -q "PE32+"; then
+if file "$UEFI_DIR/$BOOT_EFI" | grep -E -q "PE32+|ELF 64-bit"; then
     log "[CHECK] EFI binary verified"
 else
     log "ERROR: EFI binary invalid"; exit 1
