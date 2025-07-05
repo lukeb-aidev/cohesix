@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Cargo.toml v0.43
+# Filename: Cargo.toml v0.44
 # Author: Lukas Bower
-# Date Modified: 2027-01-15
+# Date Modified: 2027-01-23
 [package]
 name    = "cohesix"
 version = "0.1.0"
@@ -23,6 +23,8 @@ aes-gcm = { version = "0.10", features = ["aes"] }
 aead = "0.5"
 aes = "0.8"
 cohesix_9p = { package = "cohesix-9p", path = "./cohesix-9p" }
+# ninep crate required for CUDA remote dispatch
+ninep = "0.3"
 # Use the dummy RNG implementation for unsupported targets like UEFI
 getrandom = { version = "0.2", default-features = false, features = ["dummy"] }
 env_logger = "0.11.7"

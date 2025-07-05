@@ -2694,4 +2694,18 @@
 - Metrics now only record Secure9P session counts.
 - CUDA tests and features were deleted; build scripts no longer reference them.
 - README clarifies that `/srv/cuda` points to the remote CUDA server.
-\n## [v0.412] - 2027-01-15\n### Added\n- seL4-specific linker script `link.ld` and cross target `target-sel4.json`.\n- Build script uses the new target for `cohesix_root`.\n- Removed legacy `cuda` feature gates.\n- README documents cross-building the root task.\n
+
+## [v0.412] - 2027-01-15
+### Added
+- seL4-specific linker script `link.ld` and cross target `target-sel4.json`.
+- Build script uses the new target for `cohesix_root`.
+- Removed legacy `cuda` feature gates.
+- README documents cross-building the root task.
+
+
+## [v0.413] - 2027-01-23
+### Fixed
+- Added `ninep` crate to primary dependencies to satisfy CUDA remote dispatch.
+- Cargo build and tests now resolve `ninep` correctly across the workspace.
+
+
