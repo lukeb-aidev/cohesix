@@ -3,7 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2025-09-25
 
-#![cfg(feature = "busybox")]
+#![cfg(all(feature = "busybox", feature = "busybox_client"))]
 
 use cohesix::shell::busybox_runner::spawn_shell;
 use std::fs::{self, File};
