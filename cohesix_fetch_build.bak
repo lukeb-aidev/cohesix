@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.92
+# Filename: cohesix_fetch_build.sh v0.91
 # Author: Lukas Bower
-# Date Modified: 2027-08-06
+# Date Modified: 2027-08-05
 #!/usr/bin/env bash
 #
 # Merged old script v0.89 features into current script.
@@ -73,7 +73,6 @@ trap 'echo "❌ Build failed. Last 40 log lines:" >&3; tail -n 40 "$LOG_FILE" >&
 log(){ echo "[$(date +%H:%M:%S)] $1" | tee -a "$LOG_FILE" >&3; }
 
 log "🛠️ [Build Start] $(date)"
-log "🚀 Starting repository clone..."
 
   log "📦 Cloning repository..."
   rm -rf cohesix
@@ -121,7 +120,6 @@ fi
 
 
 # CUDA detection and environment setup
-log "🚀 Starting CUDA check..."
 CUDA_HOME="${CUDA_HOME:-}"
 if [ -z "$CUDA_HOME" ]; then
   if command -v nvcc >/dev/null 2>&1; then
@@ -186,7 +184,6 @@ if [ -n "$CUDA_HOME" ] && [ -f "$CUDA_HOME/bin/nvcc" ]; then
   else
     log "⚠️ nvidia-smi not found"
   fi
-  log "✅ CUDA OK"
 else
   log "⚠️ CUDA toolkit not detected. nvcc not found or invalid CUDA_HOME: $CUDA_HOME"
 fi
@@ -204,7 +201,7 @@ else
   CROSS_X86=""
 fi
 
-log "🚀 Starting dependency install..."
+log "📦 Installing build dependencies..."
 if command -v sudo >/dev/null 2>&1; then
   SUDO="sudo"
 else
@@ -213,7 +210,6 @@ fi
 $SUDO apt-get update -y
 $SUDO apt-get install -y build-essential ninja-build git wget \
   python3 python3-pip cmake gcc-aarch64-linux-gnu
-log "✅ Dependencies installed"
 
 CMAKE_VER=$(cmake --version 2>/dev/null | head -n1 | awk '{print $3}')
 if ! dpkg --compare-versions "$CMAKE_VER" ge 3.20; then
@@ -261,6 +257,8 @@ EOF
 else
   log "✅ Existing init.conf found"
 fi
+cp "$INIT_CONF" "$STAGE_DIR/etc/init.conf"
+log "✅ Staged /etc/init.conf"
 
 # Stage rc script if available
 if [ -f "userland/miniroot/bin/rc" ]; then
@@ -372,12 +370,12 @@ if [ -f CMakeLists.txt ]; then
   (cd build && cmake .. && make -j$(nproc))
 fi
 
-log "🔧 Building BusyBox..."
+log "📦 Building BusyBox..."
 scripts/build_busybox.sh "$COH_ARCH"
 BUSYBOX_BIN="out/busybox/$COH_ARCH/bin/busybox"
 if [ -x "$BUSYBOX_BIN" ]; then
   cp "$BUSYBOX_BIN" "$STAGE_DIR/bin/busybox"
-  log "✅ BusyBox built"
+  log "✅ Built minimal BusyBox for Cohesix"
   for app in sh ls cat echo mount umount vi cp mv rm grep head tail printf test mkdir rmdir; do
     ln -sf busybox "$STAGE_DIR/bin/$app"
   done
@@ -395,7 +393,7 @@ else
   exit 1
 fi
 
-log "🔧 Building Rust components..."
+log "🧱 Building Rust components..."
 echo "== Rust build =="
 
 # Build cohesix_root for seL4 root server
@@ -441,7 +439,6 @@ for bin in cohcc cohesix_build cohesix_cap cohesix_trace; do
     --target aarch64-unknown-linux-musl
   echo "✅ Finished building: $bin"
 done
-log "✅ Rust components built"
 
 # Copy built binaries to staging
 mkdir -p "$STAGE_DIR/bin"
