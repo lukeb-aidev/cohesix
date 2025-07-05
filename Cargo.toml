@@ -78,6 +78,9 @@ minimal_uefi = []
 kernel_bin = []
 sel4_entry_bin = []
 posix = ["cohesix_9p/posix"]
+tls = []
+with_test_case = []
+inprocess = []
 
 [profile.release]
 panic = "abort"
