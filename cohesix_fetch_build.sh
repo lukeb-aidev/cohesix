@@ -336,35 +336,47 @@ fi
 log "🧱 Building Rust components..."
 
 # Build cohesix_root for seL4 root server
+echo "🔧 Building Rust binary: cohesix_root"
 RUSTFLAGS="-C debuginfo=2" \
   cargo build --release --bin cohesix_root \
   --no-default-features --features "std,busybox,sel4" \
   --target aarch64-unknown-linux-musl
+echo "✅ Finished building: cohesix_root"
 
 # Build kernel with its required features
+echo "🔧 Building Rust binary: kernel"
 cargo build --release --bin kernel \
   --features "kernel_bin,minimal_uefi" \
   --target aarch64-unknown-linux-musl
+echo "✅ Finished building: kernel"
 
 # Build sel4_entry with its required features
+echo "🔧 Building Rust binary: sel4_entry"
 cargo build --release --bin sel4_entry \
   --features "sel4,kernel_bin,minimal_uefi" \
   --target aarch64-unknown-linux-musl
+echo "✅ Finished building: sel4_entry"
 
 # Build logdemo with its required features
+echo "🔧 Building Rust binary: logdemo"
 cargo build --release --bin logdemo \
   --features "minimal_uefi" \
   --target aarch64-unknown-linux-musl
+echo "✅ Finished building: logdemo"
 
 # Build init with its required features
+echo "🔧 Building Rust binary: init"
 cargo build --release --bin init \
   --features "minimal_uefi" \
   --target aarch64-unknown-linux-musl
+echo "✅ Finished building: init"
 
 # Build other CLI tools without special features
 for bin in cohcc cohesix_build cohesix_cap cohesix_trace; do
+  echo "🔧 Building Rust binary: $bin"
   cargo build --release --bin "$bin" \
     --target aarch64-unknown-linux-musl
+  echo "✅ Finished building: $bin"
 done
 
 # Copy built binaries to staging
