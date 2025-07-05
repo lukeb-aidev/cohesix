@@ -91,7 +91,18 @@ Initial demo services are enabled:
   TLS certificates are pinned and client auth can be enforced.
 * Copy `etc/init.conf.example` to `/etc/init.conf` and adjust values to control startup behavior
 
+### Plan9 Physics Server
+
+Use `scripts/mount_secure9p.rc` to mount the job directory with mutual TLS. Then run:
+
+```rc
+physics-server &
+```
+
+Drop `physics_job_*.json` files into `/mnt/physics_jobs` and inspect `/sim/world.json` for results. `/srv/physics/status` reports server progress.
+
 ### Running the GUI Orchestrator
+
 
 Start the lightweight web UI to inspect orchestration state:
 
