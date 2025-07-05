@@ -2667,3 +2667,12 @@
 - `scripts/boot_qemu.sh` v0.3 adds `page` tracing to QEMU debug output.
 ### Added
 - QEMU boot logs now capture `COHESIX_BOOT_OK` using semihosting for direct elfloader boots.
+
+
+## [v0.408] - 2026-12-31
+### Added
+- TLS-enabled Secure9P server with optional client authentication.
+- Concurrent CUDA job manager for isolated kernel launches.
+- `config/secure9p.toml` updated with `ca_cert` and `require_client_auth` options.
+### Changed
+- README mentions certificate pinning for Secure9P transport.
