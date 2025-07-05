@@ -52,9 +52,10 @@ export CUDA_INCLUDE_DIR="${CUDA_INCLUDE_DIR:-$CUDA_HOME/include}"
 export CUDA_LIBRARY_PATH="${CUDA_LIBRARY_PATH:-/usr/lib/x86_64-linux-gnu}"
 export PATH="$CUDA_HOME/bin:$PATH"
 export LD_LIBRARY_PATH="$CUDA_LIBRARY_PATH:${LD_LIBRARY_PATH:-}"
-mkdir -p "$HOME/cohesix_logs"
-LOG_DIR="$HOME/cohesix_logs"
+export LOG_DIR="${HOME:-/cohesix_logs}"
+
 mkdir -p "$LOG_DIR"
+
 LOG_FILE="$LOG_DIR/build_$(date +%Y%m%d_%H%M%S).log"
 SUMMARY_ERRORS="$LOG_DIR/summary_errors.log"
 SUMMARY_TEST_FAILS="$LOG_DIR/summary_test_failures.log"
