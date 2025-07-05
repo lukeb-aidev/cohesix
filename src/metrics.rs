@@ -1,20 +1,16 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: metrics.rs v0.1
+// Filename: metrics.rs v0.2
 // Author: Lukas Bower
 // Date Modified: 2026-12-31
 
-use crate::telemetry::core::GpuTelemetry;
 use cohesix_9p::fs::global_fs;
-use std::fs;
 use serde_json::json;
+use std::fs;
 
-pub fn update(gpu: &GpuTelemetry, queue_depth: usize, active_jobs: usize) {
-    let used = gpu.mem_total.saturating_sub(gpu.mem_free);
+/// Update metrics with the current secure9p session count.
+pub fn update(secure_sessions: usize) {
     let payload = json!({
-        "gpu_memory_used": used,
-        "active_jobs": active_jobs,
-        "secure9p_sessions": 0,
-        "last_error": gpu.fallback_reason,
+        "secure9p_sessions": secure_sessions,
     });
     let data = payload.to_string();
     global_fs().update_metrics(data.as_bytes());

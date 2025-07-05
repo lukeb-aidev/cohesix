@@ -7,4 +7,3 @@
 use alloc::{boxed::Box, string::String, vec::Vec};
 /// CUDA runtime support for Cohesix.
 pub mod runtime;
-pub mod job_manager;

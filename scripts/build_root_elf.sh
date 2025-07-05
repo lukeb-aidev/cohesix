@@ -1,5 +1,5 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: build_root_elf.sh v0.17
+# Filename: build_root_elf.sh v0.18
 # Author: Lukas Bower
 # Date Modified: 2026-12-31
 #!/usr/bin/env bash
@@ -92,15 +92,8 @@ echo "nvcc path: $(command -v nvcc || echo 'not found')"
 
 mkdir -p "$OUT_DIR"
 
-if [ -n "$CUDA_HOME" ] && command -v nvcc >/dev/null 2>&1; then
-    echo "CUDA detected; building with GPU support"
-    FEATURES="rapier,cuda"
-    CARGO_ARGS=()
-else
-    echo "⚠️ CUDA toolkit not detected. Building without GPU support." >&2
-    FEATURES="rapier,no-cuda"
-    CARGO_ARGS=()
-fi
+FEATURES="rapier"
+CARGO_ARGS=()
 
 # Using linker from .cargo/config.toml for ld.lld
 

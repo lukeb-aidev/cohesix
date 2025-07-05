@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: README.md v0.23
+// Filename: README.md v0.24
 // Author: Lukas Bower
 // Date Modified: 2026-12-31
 
@@ -59,8 +59,8 @@ cd cohesix
 ./scripts/run-smoke-tests.sh   # quick health check
 make all                       # Go vet + C shims
 cargo check --workspace        # Rust build
-cargo build --release --features=cuda \ 
-  # CUDA 12.4 required; set CUDA_HOME to override detection if installed in a non-standard path
+cargo build --release \
+  # CUDA workloads run remotely via secure9p; ensure /srv/cuda points to a remote server
 make go-test                  # Go unit tests (cd go && go test ./...)
 ./test_all_arch.sh             # run Rust, Go, and Python tests
 
@@ -128,9 +128,9 @@ Run `cohtrace diff` to compare validator snapshots between runs:
 The helper script `cohesix_fetch_build.sh` sets two variables after cloning:
 
 * `COH_PLATFORM` – the host architecture from `uname -m`
-* `COH_GPU` – `1` if an NVIDIA device is accessible, else `0`
+* `/srv/cuda` – contains the remote Secure9P address for CUDA jobs
 
-CUDA tests and builds skip when `COH_GPU=0`; runtime features disable gracefully.
+All CUDA execution occurs on the remote server referenced by `/srv/cuda`.
 
 ### UEFI SSE Requirements
 

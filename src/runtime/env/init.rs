@@ -16,7 +16,6 @@ pub struct BootArgs {
     pub cohrole: Option<String>,
     pub secure9p: bool,
     pub busybox: bool,
-    pub no_cuda: bool,
 }
 
 /// Load the Cohesix role from `CohRole` environment variable or `/etc/role.conf`.
@@ -50,7 +49,6 @@ pub fn parse_boot_args() -> BootArgs {
     }
     args.secure9p = std::env::var("secure9p").ok().as_deref() == Some("1");
     args.busybox = std::env::var("busybox").map(|v| v != "0").unwrap_or(true);
-    args.no_cuda = std::env::var("no-cuda").ok().as_deref() == Some("1");
     args
 }
 
