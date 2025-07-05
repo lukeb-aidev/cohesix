@@ -74,8 +74,9 @@ sel4 = ["kernel_bin", "sel4_entry_bin"]
 rapier = ["rapier3d"]
 busybox = []
 busybox_client = []
-minimal_uefi = []
 kernel_bin = []
+kernel_uart = []
+minimal_uefi = []
 sel4_entry_bin = []
 posix = ["cohesix_9p/posix"]
 tls = []
@@ -142,4 +143,3 @@ ninep = { path = "third_party/ninep_portable" }
 
 [target.'cfg(not(target_os = "uefi"))'.dependencies]
 libloading = "0.7"
-
