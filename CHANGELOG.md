@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v1.01
+// Filename: CHANGELOG.md v1.02
 // Author: Lukas Bower
-// Date Modified: 2025-07-03
+// Date Modified: 2027-07-05
 
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
@@ -2748,4 +2748,10 @@
 ### Fixed
 - Replaced `println!` calls in `src/kernel/main.rs` with `coherr!` for `no_std` compatibility.
 
+
+## [v0.421] - 2027-07-05
+### Added
+- Root server now loads `/etc/plan9.ns` with a built-in fallback.
+- Namespace bindings for `/bin`, `/usr/plan9/bin`, and `/srv` are logged.
+- `/bin/init` launches automatically after namespace setup.
 
