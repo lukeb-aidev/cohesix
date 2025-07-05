@@ -6,7 +6,7 @@
 [ -n "$BASH_VERSION" ] && set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 cd "$ROOT"
-mkdir -p obj/init_efi out/iso/init
+mkdir -p obj/init_efi out/init
 LOG_FILE="init_efi_link.log"
 {
   aarch64-linux-gnu-gcc -fno-stack-protector -nostdlib \
@@ -17,7 +17,7 @@ LOG_FILE="init_efi_link.log"
     "$HOME/gnu-efi/gnuefi/crt0-efi-aarch64.o" \
     obj/init_efi/main.o \
     -L"$HOME/gnu-efi/aarch64/lib" -lefi -lgnuefi \
-    -o out/iso/init/init.efi
+    -o out/init/init.efi
 } &> "$LOG_FILE"
 
 if grep -qi "rwx" "$LOG_FILE"; then
@@ -26,7 +26,7 @@ if grep -qi "rwx" "$LOG_FILE"; then
     "$HOME/gnu-efi/gnuefi/crt0-efi-aarch64.o" \
     obj/init_efi/main.o \
     -L"$HOME/gnu-efi/aarch64/lib" -lefi -lgnuefi \
-    -o out/iso/init/init.efi >> "$LOG_FILE" 2>&1
+    -o out/init/init.efi >> "$LOG_FILE" 2>&1
 fi
 
-file out/iso/init/init.efi >> "$LOG_FILE"
+file out/init/init.efi >> "$LOG_FILE"

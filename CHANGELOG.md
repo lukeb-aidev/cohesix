@@ -2760,3 +2760,11 @@
 - GUI orchestrator now loads credentials from `/srv/orch_user.json` when not in
   developer mode.
 
+## [v0.423] - 2027-08-05
+### Added
+- `cohesix_fetch_build.sh` now stages man pages under `/usr/share/man` and
+  installs a statically built `mandoc` binary to `/usr/bin`.
+- Quick Start notes are generated to `/etc/README.txt` during the build.
+- ISO creation steps removed; build now targets the direct ELF filesystem at
+  `out/`.
+
