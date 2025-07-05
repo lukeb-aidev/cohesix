@@ -1,12 +1,13 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: secure_stream.rs v0.1
+// Filename: secure_stream.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2026-12-31
+// Date Modified: 2027-01-31
 
 extern crate alloc;
 use alloc::vec::Vec;
 
 /// Minimal trait representing readable and writable streams without `std`.
+#[allow(clippy::result_unit_err)]
 pub trait SimpleStream {
     /// Read bytes into `buf`, returning number of bytes read or an error.
     fn read(&mut self, buf: &mut [u8]) -> Result<usize, ()>;
@@ -59,6 +60,12 @@ impl VecStream {
             data: Vec::new(),
             pos: 0,
         }
+    }
+}
+
+impl Default for VecStream {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

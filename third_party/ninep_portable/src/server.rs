@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: server.rs v0.3
+// Filename: server.rs v0.4
 // Author: Lukas Bower
-// Date Modified: 2026-12-30
+// Date Modified: 2027-01-31
 //! Traits for implementing a 9p fileserver
 use crate::{
     fs::{FileMeta, FileType, IoUnit, Mode, Perm, Stat, QID_ROOT},
@@ -21,9 +21,7 @@ use std::{
 
 #[cfg(unix)]
 use std::os::unix::net::UnixListener;
-
 #[cfg(unix)]
-
 /// Marker afid to denode that auth is not required for establishing connections
 pub const AFID_NO_AUTH: u32 = u32::MAX;
 
