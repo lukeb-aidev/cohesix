@@ -54,6 +54,12 @@ export PATH="$CUDA_HOME/bin:$PATH"
 export LD_LIBRARY_PATH="$CUDA_LIBRARY_PATH:${LD_LIBRARY_PATH:-}"
 export LOG_DIR="$HOME/cohesix_logs"
 export ROOT="$HOME/cohesix"
+
+# Clone repository before sourcing any configuration so a fresh checkout
+# is available even when $HOME is empty.
+cd "$HOME"
+
+LOG_DIR="$HOME/cohesix_logs"
 mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/build_$(date +%Y%m%d_%H%M%S).log"
 SUMMARY_ERRORS="$LOG_DIR/summary_errors.log"
@@ -67,10 +73,6 @@ trap 'echo "❌ Build failed. Last 40 log lines:" >&3; tail -n 40 "$LOG_FILE" >&
 log(){ echo "[$(date +%H:%M:%S)] $1" | tee -a "$LOG_FILE" >&3; }
 
 log "🛠️ [Build Start] $(date)"
-
-# Clone repository before sourcing any configuration so a fresh checkout
-# is available even when $HOME is empty.
-cd "$HOME"
 
   log "📦 Cloning repository..."
   rm -rf cohesix
