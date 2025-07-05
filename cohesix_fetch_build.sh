@@ -4,7 +4,7 @@
 # Date Modified: 2027-02-01
 #!/bin/bash
 set -euo pipefail
-LOG=/srv/upload/fix-log.txt
+LOG="$HOME/cohesix/srv/upload/fix-log.txt"
 mkdir -p "$(dirname "$LOG")"
 exec > >(tee -a "$LOG") 2>&1
 
