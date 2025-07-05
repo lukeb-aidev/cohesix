@@ -122,7 +122,7 @@
 | tests/test_namespace_rule.rs | v0.1 | 2025-07-23 | COMMUNITY | | |
 | tests/test_namespace_semantics.rs | v0.5 | 2026-12-31 | COMMUNITY | | |
 | tests/test_qemu_boot.rs | v0.13 | 2026-12-31 | COMMUNITY | | |
-| tests/test_boot_build_chain.rs | v0.3 | 2026-12-31 | COMMUNITY | | |
+| tests/test_boot_build_chain.rs | v0.4 | 2027-02-01 | COMMUNITY | | |
 | tests/boot_trace_rule.rs | v0.4 | 2026-12-31 | COMMUNITY | | |
 | tests/kernel_proc_mgr.rs | v0.1 | 2025-08-26 | COMMUNITY | | |
 | tests/test_cohcc_shell.rs | v0.2 | 2025-09-25 | COMMUNITY | | |
@@ -195,7 +195,7 @@
 | src/kernel/user_api.rs | v0.1 | 2025-08-27 | COMMUNITY | | |
 | src/kernel/config.rs | v0.1 | 2025-08-27 | COMMUNITY | | |
 | src/userbin/logdemo.rs | v0.1 | 2025-08-27 | COMMUNITY | | |
-| src/init/main.rs | v0.2 | 2026-10-07 | COMMUNITY | | |
+| src/init/main.rs | v0.4 | 2027-02-01 | COMMUNITY | | |
 | src/init_efi/main.c | v0.5 | 2026-09-08 | COMMUNITY | | |
 | src/init_efi/efistubs.c | v0.1 | 2026-09-07 | COMMUNITY | | |
 | src/init_efi/linker.ld | v0.3 | 2026-08-29 | COMMUNITY | | |
