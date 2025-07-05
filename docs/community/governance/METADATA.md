@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: METADATA.md v3.49
+// Filename: METADATA.md v3.50
 // Author: Lukas Bower
-// Date Modified: 2026-12-31
+// Date Modified: 2027-01-23
 
 ## Canonical Documents
 
@@ -172,7 +172,7 @@
 | scripts/load_arch_config.sh | v0.1 | 2026-07-25 | COMMUNITY | | |
 | scripts/build_busybox.sh | v0.7 | 2026-11-17 | COMMUNITY | | |
 | metadata.json | v0.1 | 2025-07-24 | COMMUNITY | | |
-| Cargo.toml | v0.43 | 2027-01-15 | COMMUNITY | | |
+| Cargo.toml | v0.44 | 2027-01-23 | COMMUNITY | | |
 | cohesix-9p/Cargo.toml | v0.5 | 2026-12-31 | COMMUNITY | | |
 | cohesix-secure9p/Cargo.toml | v0.3 | 2026-12-31 | COMMUNITY | | |
 | cohesix-secure9p/src/secure_stream.rs | v0.1 | 2026-12-31 | COMMUNITY | | |
