@@ -37,5 +37,3 @@ path = "src/lib.rs"
 [dependencies.bitflags]
 version = "2.6"
 
-[dev-dependencies.simple_test_case]
-version = "1"

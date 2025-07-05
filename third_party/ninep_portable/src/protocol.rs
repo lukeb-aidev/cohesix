@@ -778,7 +778,7 @@ impl_rmessages! {
     Wstat => Rwstat {}
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "with_test_case"))]
 mod tests {
     use super::*;
     use simple_test_case::test_case;

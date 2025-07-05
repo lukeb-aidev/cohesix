@@ -15,7 +15,7 @@ pub struct CudaJob {
 }
 
 pub struct CudaJobManager {
-    jobs: Mutex<Vec<CudaJob>>, 
+    jobs: Mutex<Vec<CudaJob>>,
     next_id: Mutex<usize>,
 }
 
@@ -41,5 +41,12 @@ impl CudaJobManager {
             }
             jobs.lock().retain(|j| j.id != job_id);
         });
+    }
+
+    /// Return (queue_depth, job_count).
+    pub fn metrics(&self) -> (usize, usize) {
+        let jobs = self.jobs.lock();
+        let count = jobs.len();
+        (count, count)
     }
 }

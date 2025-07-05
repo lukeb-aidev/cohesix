@@ -7,11 +7,10 @@ name = "cohesix-secure9p"
 version = "0.2.0"
 edition = "2024"
 
+
 [dependencies]
-rustls = { version = "0.21", features = ["std"] }
-rustls-pemfile = "1.0"
-webpki-roots = "0.26"
 ninep = { path = "../third_party/ninep_portable" }
+
 
 [features]
 default = ["std"]
