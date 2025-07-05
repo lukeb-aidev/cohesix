@@ -2768,3 +2768,10 @@
 - ISO creation steps removed; build now targets the direct ELF filesystem at
   `out/`.
 
+## [v0.424] - 2027-08-06
+### Added
+- Backup script `cohesix_fetch_build.bak` created.
+### Fixed
+- `cohesix_fetch_build.sh` avoids copying `init.conf` onto itself and logs each
+  build step clearly.
+
