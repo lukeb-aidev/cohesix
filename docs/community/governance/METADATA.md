@@ -306,6 +306,10 @@
 | docs/community/architecture/K8S_ORCHESTRATION.md | v0.1 | 2026-12-31 | COMMUNITY | | |
 | docs/community/TEST_REFACTOR_GUIDE.md | v0.1 | 2026-12-31 | COMMUNITY | | |
 | docs/community/BUILD_NOTES.md | v0.1 | 2026-12-31 | COMMUNITY | | |
+| go/cmd/physics-server/main.go | v0.1 | 2027-01-30 | COMMUNITY | | |
+| scripts/mount_secure9p.rc | v0.1 | 2027-01-30 | COMMUNITY | | |
+| docs/community/guides/PLAN9_PHYSICS_SERVER.md | v0.1 | 2027-01-30 | COMMUNITY | | |
+| examples/physics_server_log.txt | v0.1 | 2027-01-30 | COMMUNITY | | |
 Removed: introspect_self_diagnosis (Plan9 migration - file-based introspection replaced by validator-driven policy checks)
 Removed: legacy Python tests and lint steps; project now purely Plan9 + Rust
 Changed: `.cargo/config.toml` v0.12 switches musl targets to system GCC linkers

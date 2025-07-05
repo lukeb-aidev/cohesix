@@ -1,0 +1,26 @@
+#!/bin/rc
+# CLASSIFICATION: COMMUNITY
+# Filename: mount_secure9p.rc v0.1
+# Author: Lukas Bower
+# Date Modified: 2027-01-30
+
+if(! test -e /srv/trace){
+    mkdir -p /srv/trace
+}
+
+echo `{date} 'session start' >> /srv/trace/secure9p.log
+
+# Mount remote physics job directory using pinned TLS certificates.
+# Replace 'physics.example.com' with orchestrator hostname.
+# The secure9p client enforces mutual authentication.
+
+secure9p -C /usr/ssl/client_cert.pem \
+    -K /usr/ssl/client_key.pem \
+    -A /usr/ssl/ca_cert.pem \
+    -m physics.example.com \
+    /mnt/physics_jobs >[2]/srv/trace/secure9p.log
+
+status=$status
+
+echo `{date} 'session stop' >> /srv/trace/secure9p.log
+exit $status
