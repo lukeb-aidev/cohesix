@@ -9,6 +9,7 @@ use alloc::{collections::BTreeMap, sync::Arc, vec::Vec, string::{String, ToStrin
 use crate::policy::{Access, SandboxPolicy};
 use core::sync::atomic::{AtomicU64, Ordering};
 use spin::RwLock;
+use once_cell::sync::OnceCell;
 
 /// Shared validator hook signature.
 pub type ValidatorHook = dyn Fn(&'static str, String, String, u64) + Send + Sync;
@@ -18,6 +19,13 @@ pub struct InMemoryFs {
     nodes: RwLock<BTreeMap<String, Vec<u8>>>, // path -> contents
     validator_hook: RwLock<Option<Arc<ValidatorHook>>>,
     policy: RwLock<Option<SandboxPolicy>>,
+}
+
+static GLOBAL_FS: OnceCell<InMemoryFs> = OnceCell::new();
+
+/// Access the shared filesystem instance.
+pub fn global_fs() -> &'static InMemoryFs {
+    GLOBAL_FS.get_or_init(InMemoryFs::new)
 }
 
 impl Default for InMemoryFs {
@@ -32,6 +40,7 @@ impl InMemoryFs {
         let mut nodes = BTreeMap::new();
         nodes.insert("/srv/cohrole".into(), b"Unknown".to_vec());
         nodes.insert("/srv/telemetry".into(), Vec::new());
+        nodes.insert("/metrics".into(), b"{}".to_vec());
         Self {
             nodes: RwLock::new(nodes),
             validator_hook: RwLock::new(None),
@@ -62,6 +71,11 @@ impl InMemoryFs {
     /// Apply a sandbox policy controlling allowed paths.
     pub fn set_policy(&self, policy: SandboxPolicy) {
         *self.policy.write() = Some(policy);
+    }
+
+    /// Update metrics JSON exposed at `/metrics`.
+    pub fn update_metrics(&self, metrics: &[u8]) {
+        self.nodes.write().insert("/metrics".into(), metrics.to_vec());
     }
 
     /// Retrieve contents of a file if present.

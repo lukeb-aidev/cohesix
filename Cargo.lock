@@ -401,6 +401,7 @@ version = "0.1.0"
 dependencies = [
  "log",
  "ninep",
+ "once_cell",
  "serde",
  "serde_json",
  "serial_test",
@@ -410,6 +411,9 @@ dependencies = [
 [[package]]
 name = "cohesix-secure9p"
 version = "0.2.0"
+dependencies = [
+ "ninep",
+]
 
 [[package]]
 name = "cohfuzz"
