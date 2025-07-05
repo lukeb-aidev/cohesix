@@ -2742,4 +2742,10 @@
 - Updated `test_boot_build_chain.rs` to check current build log markers.
 - Added `extern crate alloc` declaration so `init` builds under `minimal_uefi`.
 
+## [v0.420] - 2027-02-02
+### Added
+- New `coherr!` macro and `uart_write_fmt` stub in `src/kernel/log.rs`.
+### Fixed
+- Replaced `println!` calls in `src/kernel/main.rs` with `coherr!` for `no_std` compatibility.
+
 
