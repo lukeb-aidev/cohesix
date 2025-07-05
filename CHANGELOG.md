@@ -2755,3 +2755,8 @@
 - Namespace bindings for `/bin`, `/usr/plan9/bin`, and `/srv` are logged.
 - `/bin/init` launches automatically after namespace setup.
 
+## [v0.422] - 2027-08-04
+### Added
+- GUI orchestrator now loads credentials from `/srv/orch_user.json` when not in
+  developer mode.
+
