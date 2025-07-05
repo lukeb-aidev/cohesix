@@ -20,10 +20,6 @@ else
   echo "CUDA compiler nvcc not found, skipping CUDA build"
 fi
 
-echo "== BusyBox version check =="
-BUSYBOX_VERSION=$(busybox | head -n 1)
-echo "BusyBox version: $BUSYBOX_VERSION"
-
 echo "== CMake version check =="
 CMAKE_VERSION=$(cmake --version | head -n 1)
 echo "CMake version: $CMAKE_VERSION"
