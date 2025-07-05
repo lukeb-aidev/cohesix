@@ -1,9 +1,10 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: main.rs v0.3
+// Filename: main.rs v0.4
 // Author: Lukas Bower
-// Date Modified: 2026-12-31
+// Date Modified: 2027-02-01
 // UEFI-specific stub removed; full init runs on UEFI by default.
 
+extern crate alloc;
 #[allow(unused_imports)]
 use alloc::{boxed::Box, string::String, vec::Vec};
 fn main() {
