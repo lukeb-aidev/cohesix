@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
 # Filename: .cargo/config.toml v0.13
 # Author: Lukas Bower
-# Date Modified: 2025-07-05
+# Date Modified: 2027-01-31
 
 [source.crates-io]
 replace-with = "vendored-sources"
