@@ -1,0 +1,17 @@
+// CLASSIFICATION: COMMUNITY
+// Filename: plan9_enhancements_usage.txt v0.1
+// Author: Lukas Bower
+// Date Modified: 2027-01-31
+
+srvctl announce -name mysvc -version 1.0 /mnt/mysvc
+
+echo 'gpu' > /srv/index/query
+cat /srv/index/results
+
+echo /tmp/test.txt > /dev/watch/ctl
+cat /dev/watch/events
+
+newns-e rc
+
+echo '{"task":"render"}' > /srv/cuda/jobs/job1
+cat /srv/cuda/results/job1
