@@ -329,21 +329,42 @@ else
   exit 1
 fi
 
-log "🧱 Building Rust components for seL4 rootserver ELF..."
-FEATURES="std,busybox"
-if [ "$SEL4_ENTRY" = 1 ]; then
-  FEATURES+=",sel4,kernel_bin,minimal_uefi"
-fi
+log "🧱 Building Rust components..."
+
+# Build cohesix_root for seL4 root server
 RUSTFLAGS="-C debuginfo=2" \
   cargo build --release --bin cohesix_root \
-  --no-default-features --features "$FEATURES" \
+  --no-default-features --features "std,busybox,sel4" \
   --target aarch64-unknown-linux-musl
-grep -Ei 'error|fail|panic|permission denied|warning' "$LOG_FILE" > "$SUMMARY_ERRORS" || true
 
-# Ensure output directory exists before copying Rust binaries
-mkdir -p "$STAGE_DIR/bin" "$STAGE_DIR/usr/bin" "$STAGE_DIR/usr/cli" "$STAGE_DIR/home/cohesix"
+# Build kernel with its required features
+cargo build --release --bin kernel \
+  --features "kernel_bin,minimal_uefi" \
+  --target aarch64-unknown-linux-musl
 
-# Copy Rust CLI binaries into out/bin for ISO staging (copy only, skip build)
+# Build sel4_entry with its required features
+cargo build --release --bin sel4_entry \
+  --features "sel4,kernel_bin,minimal_uefi" \
+  --target aarch64-unknown-linux-musl
+
+# Build logdemo with its required features
+cargo build --release --bin logdemo \
+  --features "minimal_uefi" \
+  --target aarch64-unknown-linux-musl
+
+# Build init with its required features
+cargo build --release --bin init \
+  --features "minimal_uefi" \
+  --target aarch64-unknown-linux-musl
+
+# Build other CLI tools without special features
+for bin in cohcc cohesix_build cohesix_cap cohesix_trace; do
+  cargo build --release --bin "$bin" \
+    --target aarch64-unknown-linux-musl
+done
+
+# Copy built binaries to staging
+mkdir -p "$STAGE_DIR/bin"
 for bin in cohcc cohesix_build cohesix_cap cohesix_trace cohrun_cli cohagent cohrole cohrun cohup cohesix_root kernel logdemo init sel4_entry; do
   BIN_PATH="target/aarch64-unknown-linux-musl/release/$bin"
   if [ -f "$BIN_PATH" ]; then
@@ -578,10 +599,10 @@ if [ $TEST_EXIT_CODE -ne 0 ]; then
 fi
 grep -Ei 'error|fail|panic|permission denied|warning' "$LOG_FILE" > "$SUMMARY_ERRORS" || true
 
+# --- Go build and staging section ---
 if command -v go &> /dev/null; then
   log "🐹 Building Go components..."
 
-  # Ensure GOARCH maps correctly
   if [ "$COH_ARCH" = "aarch64" ]; then
     GOARCH="arm64"
   elif [ "$COH_ARCH" = "x86_64" ]; then
@@ -615,6 +636,7 @@ if command -v go &> /dev/null; then
 else
   log "⚠️ Go not found; skipping Go build"
 fi
+# --- End Go build and staging section ---
 
 
 
