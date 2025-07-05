@@ -35,15 +35,19 @@ fi
 
 # == Clone repo fresh ==
 cd "$HOME"
-log "📦 Cloning repository..."
-rm -rf cohesix
-rm -rf cohesix_logs
-for i in {1..3}; do
-  git clone git@github.com:lukeb-aidev/cohesix.git && break || sleep 1
-done
-log "✅ Clone complete ..."
-cd cohesix
+log "📦 Preparing repository..."
+if [ -d cohesix ]; then
+  log "🔄 Existing cohesix directory found, pulling latest..."
+  cd cohesix
+  git pull
+else
+  for i in {1..3}; do
+    git clone git@github.com:lukeb-aidev/cohesix.git && break || sleep 1
+  done
+  cd cohesix
+fi
 ROOT="$(pwd)"
+log "✅ Repository ready at $ROOT"
 
 # == Architecture config ==
 if [ -f "$ROOT/scripts/load_arch_config.sh" ]; then
