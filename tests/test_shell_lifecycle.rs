@@ -2,7 +2,7 @@
 // Filename: test_shell_lifecycle.rs v0.2
 // Date Modified: 2025-07-22
 
-#![cfg(feature = "busybox")]
+#![cfg(all(feature = "busybox", feature = "busybox_client"))]
 // Author: Cohesix Codex
 
 use cohesix::shell::busybox_runner::spawn_shell;
