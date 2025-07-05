@@ -2721,4 +2721,8 @@
 - CUDA namespace binder `bind_cuda.rc`.
 - Example usage in `plan9_enhancements_usage.txt`.
 
+## [v0.416] - 2025-07-05
+### Fixed
+- `cohesix_fetch_build.sh` now skips cloning when an existing repository is found.
+
 
