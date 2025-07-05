@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: build_root_elf.sh v0.18
+# Filename: build_root_elf.sh v0.19
 # Author: Lukas Bower
-# Date Modified: 2026-12-31
+# Date Modified: 2027-01-15
 #!/usr/bin/env bash
 set -euo pipefail
 export MEMCHR_DISABLE_RUNTIME_CPU_FEATURE_DETECTION=1
@@ -47,19 +47,6 @@ ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 OUT_DIR="$ROOT/out"
 OUT_ELF="$OUT_DIR/cohesix_root.elf"
 
-ARCH="$COHESIX_ARCH"
-case "$ARCH" in
-    aarch64|arm64)
-        TARGET="aarch64-unknown-uefi"
-        ;;
-    x86_64|amd64)
-        TARGET="x86_64-unknown-uefi"
-        ;;
-    *)
-        echo "Unsupported architecture: $ARCH" >&2
-        exit 1
-        ;;
-esac
 
 
 # Detect CUDA installation
@@ -87,34 +74,14 @@ else
     echo "⚠️ CUDA toolkit not detected." >&2
 fi
 
-echo "Using Rust target: $TARGET"
-echo "nvcc path: $(command -v nvcc || echo 'not found')"
-
 mkdir -p "$OUT_DIR"
 
-FEATURES="rapier"
-CARGO_ARGS=()
+cargo build --release --target=target-sel4.json --bin cohesix_root
 
-# Using linker from .cargo/config.toml for ld.lld
-
-do_build() {
-    cargo build --release "${CARGO_ARGS[@]}" --bin cohesix_root \
-        --target "$TARGET" --features "$FEATURES"
-}
-
-copy_output() {
-    local built="target/$TARGET/release/cohesix_root"
-    if [ ! -s "$built" ]; then
-        built="${built}.efi"
-    fi
-    if [ ! -s "$built" ]; then
-        echo "ERROR: expected ELF not found: $built" >&2
-        return 1
-    fi
-    cp "$built" "$OUT_ELF"
-}
-
-do_build
-copy_output
+local_target="target/target-sel4/release/cohesix_root"
+if [ ! -s "$local_target" ]; then
+    local_target="${local_target}.elf"
+fi
+cp "$local_target" "$OUT_ELF"
 
 [ -s "$OUT_ELF" ] && echo "ROOT TASK BUILD OK: $OUT_ELF"

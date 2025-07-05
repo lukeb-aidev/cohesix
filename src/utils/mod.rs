@@ -13,7 +13,6 @@ pub mod const_eval;
 /// Formatting helpers.
 pub mod format;
 /// GPU runtime helpers.
-#[cfg(feature = "cuda")]
 pub mod gpu;
 /// Miscellaneous helper utilities.
 pub mod helpers;

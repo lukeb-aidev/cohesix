@@ -31,16 +31,9 @@ pub fn check_cuda_status() -> CudaStatus {
 pub fn launch_physics_kernel() -> Result<(), String> {
     match check_cuda_status() {
         CudaStatus::Available => {
-            #[cfg(feature = "cuda")]
-            {
-                let mut exec = crate::cuda::runtime::CudaExecutor::new();
-                exec.load_kernel(None)?;
-                return exec.launch();
-            }
-            #[cfg(not(feature = "cuda"))]
-            {
-                Err("cuda feature disabled".into())
-            }
+            let mut exec = crate::cuda::runtime::CudaExecutor::new();
+            exec.load_kernel(None)?;
+            exec.launch()
         }
         CudaStatus::NotDetected => Err("cuda not detected".into()),
         CudaStatus::UnsupportedDriver => Err("cuda driver unsupported".into()),
