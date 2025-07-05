@@ -1,0 +1,24 @@
+#!/bin/rc
+# CLASSIFICATION: COMMUNITY
+# Filename: newns-e.rc v0.1
+# Author: Lukas Bower
+# Date Modified: 2027-01-31
+
+if(~ $#* 0){
+    echo 'usage: newns-e command...' >[1=2]
+    exit ''
+}
+
+ns=`{mktemp -d /tmp/newnsXXXX}
+mkdir -p $ns/tmp $ns/srv
+
+def cleanup {
+    rm -rf $ns
+}
+trap cleanup onexit
+
+newns
+bind -b $ns/tmp /tmp
+bind -b $ns/srv /srv
+
+$*

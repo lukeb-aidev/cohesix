@@ -2714,4 +2714,11 @@
 - `cohesix_fetch_build.sh` passes only valid features when building `cohesix_root`.
 - `Cargo.toml` feature list reduced to `std` and `busybox` for rootserver builds.
 
+## [v0.415] - 2027-01-31
+### Added
+- Plan9 microservice utilities: `srvctl`, `indexserver`, `devwatcher`.
+- Ephemeral namespace script `newns-e.rc`.
+- CUDA namespace binder `bind_cuda.rc`.
+- Example usage in `plan9_enhancements_usage.txt`.
+
 

@@ -1,0 +1,14 @@
+#!/bin/rc
+# CLASSIFICATION: COMMUNITY
+# Filename: bind_cuda.rc v0.1
+# Author: Lukas Bower
+# Date Modified: 2027-01-31
+
+if(! test -d /srv/cuda_server){
+    echo 'cuda server namespace missing' >[1=2]
+    exit ''
+}
+if(! test -d /srv/cuda){
+    mkdir /srv/cuda
+}
+bind -a /srv/cuda_server /srv/cuda
