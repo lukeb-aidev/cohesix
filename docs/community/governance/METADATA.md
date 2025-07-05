@@ -16,7 +16,7 @@
 | DEPENDENCIES.md            | v0.7    | 2026-12-31    | COMMUNITY      |            |              |
 | METADATA.md                | v3.34   | 2026-02-12    | COMMUNITY      | | |
 | Q_DAY.md                   | v1.1    | 2025-06-15    | PRIVATE        |            |              |
-| README.md                  | v0.24   | 2026-12-31   | COMMUNITY        | | |
+| README.md                  | v0.25   | 2027-01-15   | COMMUNITY        | | |
 | README_CODEX.md            | v1.5    | 2026-02-05    | COMMUNITY      |            |              |
 | REMOTE_ACCESS.md           | v1.0    | 2025-05-24    | COMMUNITY      |            |              |
 | SHOPPING_LIST.md           | v1.3    | 2025-05-25    | COMMUNITY      |            |              |
@@ -106,6 +106,8 @@
 | bootloader.lds | v0.1 | 2025-07-22 | COMMUNITY | | |
 | CohesixBoot.inf | v0.1 | 2025-07-22 | COMMUNITY | | |
 | linker.ld | v0.1 | 2025-07-22 | COMMUNITY | | |
+| link.ld | v0.1 | 2027-01-15 | COMMUNITY | | |
+| target-sel4.json | v0.1 | 2027-01-15 | COMMUNITY | | |
 | .bashrc | v0.1 | 2026-08-09 | COMMUNITY | | |
 | .cargo/config.toml | v0.12 | 2026-12-31 | COMMUNITY | | |
 | build.rs | v0.8 | 2026-08-21 | COMMUNITY | | |
@@ -166,11 +168,11 @@
 | scripts/debug_qemu_boot.sh | v0.4 | 2026-11-24 | COMMUNITY | | |
 | scripts/boot_qemu.sh | v0.3 | 2026-12-31 | COMMUNITY | | |
 | scripts/validate_iso_build.sh | v0.3 | 2026-12-31 | COMMUNITY | | |
-| scripts/build_root_elf.sh | v0.18 | 2026-12-31 | COMMUNITY | | |
+| scripts/build_root_elf.sh | v0.19 | 2027-01-15 | COMMUNITY | | |
 | scripts/load_arch_config.sh | v0.1 | 2026-07-25 | COMMUNITY | | |
 | scripts/build_busybox.sh | v0.7 | 2026-11-17 | COMMUNITY | | |
 | metadata.json | v0.1 | 2025-07-24 | COMMUNITY | | |
-| Cargo.toml | v0.42 | 2026-12-31 | COMMUNITY | | |
+| Cargo.toml | v0.43 | 2027-01-15 | COMMUNITY | | |
 | cohesix-9p/Cargo.toml | v0.5 | 2026-12-31 | COMMUNITY | | |
 | cohesix-secure9p/Cargo.toml | v0.3 | 2026-12-31 | COMMUNITY | | |
 | cohesix-secure9p/src/secure_stream.rs | v0.1 | 2026-12-31 | COMMUNITY | | |

@@ -111,7 +111,6 @@ pub mod syscall;
 pub mod kernel;
 
 /// CUDA runtime helpers
-#[cfg(feature = "cuda")]
 pub mod cuda;
 /// Secure launch module helpers
 pub mod slm;
