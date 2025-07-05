@@ -1,0 +1,395 @@
+// CLASSIFICATION: COMMUNITY
+// Filename: test-validation.log v0.1
+// Author: Lukas Bower
+// Date Modified: 2027-01-31
+
+TEST LOG FOR PLAN9 ENHANCEMENTS VALIDATION
+
+\n### Build and Lint Checks
+Running: cargo build --workspace --release
+   Compiling proc-macro2 v1.0.95
+   Compiling unicode-ident v1.0.18
+   Compiling typenum v1.18.0
+   Compiling version_check v0.9.5
+   Compiling libc v0.2.174
+   Compiling generic-array v0.14.7
+   Compiling cfg-if v1.0.1
+   Compiling stable_deref_trait v1.2.0
+   Compiling autocfg v1.5.0
+   Compiling quote v1.0.40
+   Compiling subtle v2.6.1
+   Compiling syn v2.0.104
+   Compiling serde v1.0.219
+   Compiling getrandom v0.2.16 (/workspace/cohesix/third_party/getrandom_dummy)
+   Compiling rand_core v0.6.4 (/workspace/cohesix/third_party/rand_core_patch)
+   Compiling writeable v0.6.1
+warning: unused import: `TryFrom`
+  --> third_party/rand_core_patch/src/error.rs:17:21
+   |
+17 | use core::convert::{TryFrom, TryInto}; // explicit conversions
+   |                     ^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` on by default
+
+   Compiling crypto-common v0.1.6
+warning: `rand_core` (lib) generated 1 warning
+   Compiling litemap v0.8.0
+   Compiling num-traits v0.2.19
+   Compiling semver v1.0.26
+   Compiling cpufeatures v0.2.17
+   Compiling icu_normalizer_data v2.0.0
+   Compiling memchr v2.7.5
+   Compiling icu_properties_data v2.0.1
+   Compiling block-buffer v0.10.4
+   Compiling log v0.4.27
+   Compiling digest v0.10.7
+   Compiling smallvec v1.15.1
+   Compiling utf8parse v0.2.2
+   Compiling rustix v0.38.44
+   Compiling zerocopy v0.8.26
+   Compiling anstyle-parse v0.2.7
+   Compiling rustc_version v0.4.1
+   Compiling aho-corasick v1.1.3
+   Compiling inout v0.1.4
+   Compiling lock_api v0.4.13
+   Compiling anstyle-query v1.1.3
+   Compiling byteorder v1.5.0
+   Compiling bitflags v2.9.1
+   Compiling paste v1.0.15
+   Compiling colorchoice v1.0.4
+   Compiling anstyle v1.0.11
+   Compiling is_terminal_polyfill v1.70.1
+   Compiling linux-raw-sys v0.4.15
+   Compiling equivalent v1.0.2
+   Compiling hashbrown v0.15.4
+   Compiling regex-syntax v0.8.5
+   Compiling synstructure v0.13.2
+   Compiling indexmap v2.10.0
+   Compiling regex-automata v0.4.9
+   Compiling zerofrom-derive v0.1.6
+   Compiling zerofrom v0.1.6
+   Compiling yoke-derive v0.8.0
+   Compiling yoke v0.8.0
+   Compiling zerovec-derive v0.11.1
+   Compiling zerovec v0.11.2
+   Compiling displaydoc v0.2.5
+   Compiling serde_derive v1.0.219
+   Compiling tinystr v0.8.1
+   Compiling potential_utf v0.1.2
+   Compiling icu_locale_core v2.0.0
+   Compiling zerotrie v0.2.2
+   Compiling icu_collections v2.0.0
+   Compiling icu_provider v2.0.0
+   Compiling icu_properties v2.0.1
+   Compiling icu_normalizer v2.0.0
+   Compiling idna_adapter v1.2.1
+   Compiling anstream v0.6.19
+   Compiling cipher v0.4.4
+   Compiling curve25519-dalek v4.1.3
+   Compiling universal-hash v0.5.1
+   Compiling serde_json v1.0.140
+   Compiling utf8_iter v1.0.4
+   Compiling either v1.15.0
+   Compiling itoa v1.0.15
+   Compiling home v0.5.11
+   Compiling opaque-debug v0.3.1
+   Compiling percent-encoding v2.3.1
+   Compiling ryu v1.0.20
+   Compiling scopeguard v1.2.0
+   Compiling ninep v0.3.0 (/workspace/cohesix/third_party/ninep_portable)
+warning: unexpected `cfg` condition value: `with_test_case`
+   --> third_party/ninep_portable/src/protocol.rs:781:17
+    |
+781 | #[cfg(all(test, feature = "with_test_case"))]
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^ help: remove the condition
+    |
+    = note: no expected values for `feature`
+    = help: consider adding `with_test_case` as a feature in `Cargo.toml`
+    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+    = note: `#[warn(unexpected_cfgs)]` on by default
+
+   Compiling form_urlencoded v1.2.1
+   Compiling which v5.0.0
+   Compiling polyval v0.6.2
+   Compiling idna v1.0.3
+   Compiling ppv-lite86 v0.2.21
+   Compiling toml_datetime v0.6.11
+warning: `ninep` (lib) generated 1 warning
+   Compiling serde_spanned v0.6.9
+   Compiling regex v1.11.1
+   Compiling curve25519-dalek-derive v0.1.1
+   Compiling signature v2.2.0
+   Compiling zune-core v0.4.12
+   Compiling winnow v0.7.11
+   Compiling iana-time-zone v0.1.63
+   Compiling thiserror v1.0.69
+   Compiling toml_write v0.1.2
+   Compiling clap_lex v0.7.5
+   Compiling heck v0.5.0
+   Compiling once_cell v1.21.3
+   Compiling strsim v0.11.1
+   Compiling clap_derive v4.5.40
+   Compiling chrono v0.4.41
+   Compiling clap_builder v4.5.40
+   Compiling toml_edit v0.22.27
+   Compiling zune-jpeg v0.4.18
+   Compiling ed25519 v2.2.3
+   Compiling rmp v0.8.14
+   Compiling env_filter v0.1.3
+   Compiling rand_chacha v0.3.1
+   Compiling url v2.5.4
+   Compiling ghash v0.5.1
+   Compiling cohesix v0.1.0 (/workspace/cohesix)
+   Compiling spin v0.9.8
+   Compiling aes v0.8.4
+   Compiling ctr v0.9.2
+   Compiling thiserror-impl v1.0.69
+   Compiling sha2 v0.10.9
+   Compiling hmac v0.12.1
+   Compiling aead v0.5.2
+   Compiling digest v0.9.0
+   Compiling zero v0.1.3
+   Compiling byteorder-lite v0.1.0
+   Compiling unsafe-libyaml v0.2.11
+   Compiling chunked_transfer v1.5.0
+   Compiling httpdate v1.0.3
+   Compiling jiff v0.2.15
+   Compiling bytemuck v1.23.1
+   Compiling base64 v0.22.1
+   Compiling bitflags v1.3.2
+   Compiling zeroize v1.3.0
+   Compiling fiat-crypto v0.1.20
+   Compiling rand_core v0.5.1
+   Compiling ascii v1.1.0
+   Compiling tiny_http v0.12.0
+   Compiling fatfs v0.3.6
+   Compiling ureq v2.12.1
+   Compiling curve25519-dalek v3.2.1
+   Compiling env_logger v0.11.8
+   Compiling image v0.25.6
+   Compiling serde_yaml v0.9.34+deprecated
+   Compiling xmas-elf v0.10.0
+   Compiling aes-gcm v0.10.3
+   Compiling hkdf v0.12.4
+   Compiling ed25519-dalek v2.1.1
+   Compiling cohesix-9p v0.1.0 (/workspace/cohesix/cohesix-9p)
+   Compiling rand v0.8.5
+   Compiling rmp-serde v1.3.0
+   Compiling toml v0.8.23
+   Compiling clap v4.5.40
+   Compiling libloading v0.7.4
+   Compiling hex v0.4.3
+   Compiling cohesix-secure9p v0.2.0 (/workspace/cohesix/cohesix-secure9p)
+warning: unexpected `cfg` condition value: `tls`
+  --> cohesix-secure9p/src/lib.rs:11:28
+   |
+11 | #[cfg(all(feature = "std", feature = "tls"))]
+   |                            ^^^^^^^^^^^^^^^
+   |
+   = note: expected values for `feature` are: `default` and `std`
+   = help: consider adding `tls` as a feature in `Cargo.toml`
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+   = note: `#[warn(unexpected_cfgs)]` on by default
+
+warning: `cohesix-secure9p` (lib) generated 1 warning
+   Compiling cohcli_tools v0.1.0 (/workspace/cohesix/tools/cli)
+   Compiling cohfuzz v0.1.0 (/workspace/cohesix/tools/cohfuzz)
+   Compiling scenario_compiler v0.1.0 (/workspace/cohesix/tools/scenario_compiler)
+    Finished `release` profile [optimized] target(s) in 1m 07s
+TEST: cargo build --workspace --release PASSED
+\nRunning: cargo clippy -- -D warnings
+warning: unused import: `TryFrom`
+  --> third_party/rand_core_patch/src/error.rs:17:21
+   |
+17 | use core::convert::{TryFrom, TryInto}; // explicit conversions
+   |                     ^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` on by default
+
+warning: `rand_core` (lib) generated 1 warning
+    Checking curve25519-dalek v3.2.1
+    Checking xmas-elf v0.10.0
+    Checking ureq v2.12.1
+    Checking serde_yaml v0.9.34+deprecated
+    Checking fatfs v0.3.6
+    Checking env_logger v0.11.8
+    Checking ninep v0.3.0 (/workspace/cohesix/third_party/ninep_portable)
+error: unexpected `cfg` condition value: `with_test_case`
+   --> third_party/ninep_portable/src/protocol.rs:781:17
+    |
+781 | #[cfg(all(test, feature = "with_test_case"))]
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^ help: remove the condition
+    |
+    = note: no expected values for `feature`
+    = help: consider adding `with_test_case` as a feature in `Cargo.toml`
+    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+    = note: `-D unexpected-cfgs` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(unexpected_cfgs)]`
+
+error: empty line after outer attribute
+  --> third_party/ninep_portable/src/server.rs:25:1
+   |
+25 | / #[cfg(unix)]
+26 | |
+   | |_^
+27 |   /// Marker afid to denode that auth is not required for establishing connections
+28 |   pub const AFID_NO_AUTH: u32 = u32::MAX;
+   |   ---------------------- the attribute applies to this constant item
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#empty_line_after_outer_attr
+   = note: `-D clippy::empty-line-after-outer-attr` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::empty_line_after_outer_attr)]`
+   = help: if the empty line is unintentional, remove it
+
+    Checking thiserror v1.0.69
+    Checking aes-gcm v0.10.3
+    Checking ed25519-dalek v2.1.1
+    Checking cohesix-9p v0.1.0 (/workspace/cohesix/cohesix-9p)
+error: duplicated attribute
+  --> cohesix-9p/src/inprocess.rs:6:8
+   |
+6  | #![cfg(feature = "inprocess")]
+   |        ^^^^^^^^^^^^^^^^^^^^^
+   |
+note: first defined here
+  --> cohesix-9p/src/lib.rs:37:7
+   |
+37 | #[cfg(feature = "inprocess")]
+   |       ^^^^^^^^^^^^^^^^^^^^^
+help: remove this attribute
+  --> cohesix-9p/src/inprocess.rs:6:8
+   |
+6  | #![cfg(feature = "inprocess")]
+   |        ^^^^^^^^^^^^^^^^^^^^^
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#duplicated_attributes
+   = note: `-D clippy::duplicated-attributes` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::duplicated_attributes)]`
+
+    Checking hkdf v0.12.4
+   Compiling cohesix v0.1.0 (/workspace/cohesix)
+    Checking rand v0.8.5
+    Checking rmp-serde v1.3.0
+error: method `from_str` can be confused for the standard trait method `std::str::FromStr::from_str`
+  --> cohesix-9p/src/policy.rs:37:5
+   |
+37 | /     pub fn from_str(data: &str) -> Result<Self, serde_json::Error> {
+38 | |         serde_json::from_str(data)
+39 | |     }
+   | |_____^
+   |
+   = help: consider implementing the trait `std::str::FromStr` or choosing a less ambiguous method name
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#should_implement_trait
+   = note: `-D clippy::should-implement-trait` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::should_implement_trait)]`
+
+error: usage of an `Arc` that is not `Send` and `Sync`
+  --> cohesix-9p/src/inprocess.rs:21:20
+   |
+21 |         let a_rx = Arc::new(RefCell::new(VecDeque::new()));
+   |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `Arc<RefCell<VecDeque<u8>>>` is not `Send` and `Sync` as `RefCell<VecDeque<u8>>` is not `Sync`
+   = help: if the `Arc` will not used be across threads replace it with an `Rc`
+   = help: otherwise make `RefCell<VecDeque<u8>>` `Send` and `Sync` or consider a wrapper type such as `Mutex`
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#arc_with_non_send_sync
+   = note: `-D clippy::arc-with-non-send-sync` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::arc_with_non_send_sync)]`
+
+error: usage of an `Arc` that is not `Send` and `Sync`
+  --> cohesix-9p/src/inprocess.rs:22:20
+   |
+22 |         let b_rx = Arc::new(RefCell::new(VecDeque::new()));
+   |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `Arc<RefCell<VecDeque<u8>>>` is not `Send` and `Sync` as `RefCell<VecDeque<u8>>` is not `Sync`
+   = help: if the `Arc` will not used be across threads replace it with an `Rc`
+   = help: otherwise make `RefCell<VecDeque<u8>>` `Send` and `Sync` or consider a wrapper type such as `Mutex`
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#arc_with_non_send_sync
+
+error: could not compile `cohesix-9p` (lib) due to 4 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: this can be `std::io::Error::other(_)`
+  --> third_party/ninep_portable/src/client.rs:55:9
+   |
+55 |     Err(io::Error::new(io::ErrorKind::Other, e))
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#io_other_error
+   = note: `-D clippy::io-other-error` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(clippy::io_other_error)]`
+help: use `std::io::Error::other`
+   |
+55 -     Err(io::Error::new(io::ErrorKind::Other, e))
+55 +     Err(io::Error::other(e))
+   |
+
+error: could not compile `ninep` (lib) due to 3 previous errors
+TEST: cargo clippy -- -D warnings FAILED
+\nRunning: go build ./...
+go: warning: "./..." matched no packages
+go: downloading github.com/spf13/cobra v1.8.0
+go: downloading github.com/go-chi/chi/v5 v5.0.10
+go: downloading github.com/fsnotify/fsnotify v1.9.0
+go: downloading golang.org/x/time v0.12.0
+go: downloading github.com/spf13/pflag v1.0.5
+go: downloading golang.org/x/sys v0.13.0
+TEST: go build ./... FAILED
+\nRunning: golint ./...
+bash: golint: command not found
+TEST: golint ./... FAILED
+\nRunning: pytest
+============================= test session starts ==============================
+platform linux -- Python 3.11.12, pytest-8.4.0, pluggy-1.6.0
+rootdir: /workspace/cohesix
+configfile: pytest.ini
+plugins: anyio-4.9.0
+collected 0 items
+
+============================ no tests ran in 3.19s =============================
+TEST: pytest SKIPPED - no tests found
+\n### Plan9 Feature Tests
+TEST: srvctl announce PASSED (SKIPPED - Plan9 rc not available)
+TEST: /srv/index search SKIPPED - Plan9 rc not available
+TEST: /dev/watch events SKIPPED - Plan9 rc not available
+TEST: newns -e ephemeral SKIPPED - Plan9 rc not available
+TEST: /srv/cuda job processing SKIPPED - Plan9 rc not available
+\nRunning: cargo build --workspace --release (post-modification)
+warning: unused import: `TryFrom`
+  --> third_party/rand_core_patch/src/error.rs:17:21
+   |
+17 | use core::convert::{TryFrom, TryInto}; // explicit conversions
+   |                     ^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` on by default
+
+warning: `rand_core` (lib) generated 1 warning
+warning: unexpected `cfg` condition value: `with_test_case`
+   --> third_party/ninep_portable/src/protocol.rs:781:17
+    |
+781 | #[cfg(all(test, feature = "with_test_case"))]
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^ help: remove the condition
+    |
+    = note: no expected values for `feature`
+    = help: consider adding `with_test_case` as a feature in `Cargo.toml`
+    = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+    = note: `#[warn(unexpected_cfgs)]` on by default
+
+warning: `ninep` (lib) generated 1 warning
+   Compiling cohesix v0.1.0 (/workspace/cohesix)
+warning: unexpected `cfg` condition value: `tls`
+  --> cohesix-secure9p/src/lib.rs:11:28
+   |
+11 | #[cfg(all(feature = "std", feature = "tls"))]
+   |                            ^^^^^^^^^^^^^^^
+   |
+   = note: expected values for `feature` are: `default` and `std`
+   = help: consider adding `tls` as a feature in `Cargo.toml`
+   = note: see <https://doc.rust-lang.org/nightly/rustc/check-cfg/cargo-specifics.html> for more information about checking conditional configuration
+   = note: `#[warn(unexpected_cfgs)]` on by default
+
+warning: `cohesix-secure9p` (lib) generated 1 warning
+   Compiling cohcli_tools v0.1.0 (/workspace/cohesix/tools/cli)
+   Compiling scenario_compiler v0.1.0 (/workspace/cohesix/tools/scenario_compiler)
+   Compiling cohfuzz v0.1.0 (/workspace/cohesix/tools/cohfuzz)
+    Finished `release` profile [optimized] target(s) in 17.81s
+TEST: cargo build --workspace --release (post-modification) PASSED
