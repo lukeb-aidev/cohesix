@@ -1,5 +1,6 @@
 # Logs and artifacts
 *.log
+!srv/upload/test-validation.log
 codex_logs/
 logs/
 
