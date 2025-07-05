@@ -376,6 +376,23 @@ else
 fi
 [ -f out/cohesix_root.elf ] || { echo "❌ out/cohesix_root.elf missing" >&2; exit 1; }
 
+# Bulletproof ELF validation
+log "🔍 Validating cohesix_root ELF memory layout..."
+readelf -l out/cohesix_root.elf | tee -a "$LOG_FILE" >&3
+if readelf -l out/cohesix_root.elf | grep -q 'LOAD' && \
+   ! readelf -l out/cohesix_root.elf | awk '/LOAD/ {print $3}' | grep -q -E '^0xffffff80[0-9a-fA-F]{8}$'; then
+  echo "❌ cohesix_root ELF LOAD segments not aligned with expected seL4 virtual space" >&2
+  exit 1
+fi
+
+ROOT_SIZE=$(stat -c%s out/cohesix_root.elf)
+if [ "$ROOT_SIZE" -gt $((100*1024*1024)) ]; then
+  echo "❌ cohesix_root ELF exceeds 100MB. Increase KernelElfVSpaceSizeBits or reduce binary size." >&2
+  exit 1
+fi
+
+log "✅ cohesix_root ELF memory layout and size validated"
+
 # Ensure staging directories exist for config and roles
 mkdir -p "$STAGE_DIR/etc" "$STAGE_DIR/roles" "$STAGE_DIR/init" \
          "$STAGE_DIR/usr/bin" "$STAGE_DIR/usr/cli" "$STAGE_DIR/home/cohesix"
@@ -385,6 +402,7 @@ if [ -d python ]; then
   cp -r python "$ROOT/out/home/cohesix" 2>/dev/null || true
 fi
 
+#
 #
 # -----------------------------------------------------------
 # seL4 kernel build using standard sel4_workspace layout
@@ -396,14 +414,18 @@ COHESIX_OUT="${COHESIX_OUT:-$ROOT/out}"
 
 cd "$KERNEL_DIR"
 
-# Always build with seL4 recommended method: use init-build.sh
+# Dynamically adjust KernelElfVSpaceSizeBits if ELF is large
+KERNEL_VSPACE_BITS=42
+if [ "$ROOT_SIZE" -gt $((50*1024*1024)) ]; then
+  KERNEL_VSPACE_BITS=43
+fi
 ./init-build.sh \
   -DPLATFORM=qemu-arm-virt \
   -DAARCH64=TRUE \
   -DKernelPrinting=ON \
   -DKernelDebugBuild=TRUE \
   -DKernelLogBuffer=ON \
-  -DKernelElfVSpaceSizeBits=42 \
+  -DKernelElfVSpaceSizeBits="$KERNEL_VSPACE_BITS" \
   -DKernelRootCNodeSizeBits=18 \
   -DKernelVirtualEnd=0xffffff80e0000000 \
   -DKernelArmGICV2=ON \
