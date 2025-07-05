@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: .cargo/config.toml v0.12
+# Filename: .cargo/config.toml v0.13
 # Author: Lukas Bower
-# Date Modified: 2025-07-04
+# Date Modified: 2025-07-05
 
 [source.crates-io]
 replace-with = "vendored-sources"
@@ -14,6 +14,8 @@ offline = true
 
 [target.aarch64-unknown-linux-musl]
 linker = "aarch64-linux-gnu-gcc"
+rustflags = ["-C", "link-arg=-Tlink.ld"]
 
 [target.x86_64-unknown-linux-musl]
 linker = "x86_64-linux-gnu-gcc"
+rustflags = ["-C", "link-arg=-Tlink.ld"]

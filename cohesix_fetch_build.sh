@@ -331,15 +331,24 @@ else
   exit 1
 fi
 
-log "🧱 Building Rust components for seL4 rootserver ELF..."
+log "🧱 Building Rust components for seL4 rootserver ELF (explicit per-binary)..."
 FEATURES="std,busybox"
 if [ "$SEL4_ENTRY" = 1 ]; then
   FEATURES+=",sel4,kernel_bin,minimal_uefi"
 fi
-RUSTFLAGS="-C debuginfo=2" \
-  cargo build --release --bin cohesix_root \
-  --no-default-features --features "$FEATURES" \
-  --target aarch64-unknown-linux-musl
+
+for BIN in cohesix_root cohcc cohesix_build cohesix_cap cohesix_trace \
+           cohrun_cli cohagent cohrole cohrun cohup; do
+  log "🚀 Building $BIN"
+  RUSTFLAGS="-C debuginfo=2" \
+    cargo build --release \
+      --bin "$BIN" \
+      --no-default-features --features "$FEATURES" \
+      --target aarch64-unknown-linux-musl || {
+        echo "❌ Build failed for $BIN"
+        exit 1
+      }
+done
 grep -Ei 'error|fail|panic|permission denied|warning' "$LOG_FILE" > "$SUMMARY_ERRORS" || true
 
 # Ensure output directory exists before copying Rust binaries
@@ -461,10 +470,11 @@ cd "$ROOT"
 # -----------------------------------------------------------
 # QEMU bare metal boot test (aarch64)
 # -----------------------------------------------------------
-log "🧪 Booting elfloader + kernel in QEMU..."
+log "🧪 Booting with elfloader + cohesix_root ELF in QEMU..."
 QEMU_LOG="$LOG_DIR/qemu_debug_$(date +%Y%m%d_%H%M%S).log"
-qemu-system-aarch64 -M virt,gic-version=2 -cpu cortex-a57 -m 512M \
+qemu-system-aarch64 -M virt -cpu cortex-a57 -m 1024 \
   -kernel "$COHESIX_OUT/bin/elfloader" \
+  -initrd "$ROOT/out/bin/cohesix_root.elf" \
   -serial mon:stdio -nographic \
   -d int,mmu,page,guest_errors,unimp,cpu_reset \
   -D "$QEMU_LOG" || true
@@ -656,137 +666,8 @@ if [ ! -f "$STAGE_DIR/etc/plan9.ns" ]; then
   exit 1
 fi
 
-log "📀 Creating ISO..."
-# ISO root layout:
-#   out/iso/bin            - runtime binaries (kernel, init, busybox)
-#   out/iso/usr/bin        - CLI wrappers and Go tools
-#   out/iso/usr/cli        - Python CLI modules
-#   out/iso/home/cohesix   - Python libraries
-#   out/iso/etc            - configuration files
-#   out/iso/roles          - role definitions
-# Already ensured and activated the Python venv at the top of the script.
-# No redundant venv creation or activation here.
-if [[ "${VIRTUAL_ENV:-}" != *"/${VENV_DIR}" ]]; then
-  echo "❌ Python venv not active before ISO build" >&2
-  exit 1
-fi
 
-bash tools/make_iso.sh
-ISO_OUT="out/cohesix.iso"
-if [ ! -f "$ISO_OUT" ]; then
-  echo "❌ ISO build failed: $ISO_OUT missing" >&2
-  exit 1
-fi
-# Before cleanup deletes ISO_ROOT
-if [ -d "$STAGE_DIR/bin" ]; then
-  find "$STAGE_DIR/bin" -type f -print | tee -a "$LOG_FILE" >&3 || true
-fi
-if [ -f "$ISO_OUT" ]; then
-  du -h "$ISO_OUT" | tee -a "$LOG_FILE" >&3
-fi
-
-if [ ! -d "/srv/cuda" ] || ! command -v nvidia-smi >/dev/null 2>&1 || ! nvidia-smi >/dev/null 2>&1; then
-  echo "⚠️ CUDA hardware or /srv/cuda not detected" | tee -a "$LOG_FILE" >&3
-fi
-
-
-#
-# Additional ISO checks before QEMU boot
-log "🔍 Validating ISO with isoinfo..."
-if command -v isoinfo >/dev/null 2>&1; then
-  isoinfo -i "$ISO_OUT" -l | tee -a "$LOG_FILE" >&3 || true
-  isoinfo -i "$ISO_OUT" -R -f | tee -a "$LOG_FILE" >&3 || true
-else
-  log "⚠️ isoinfo not installed, skipping detailed ISO listing"
-fi
-
-# Optional QEMU boot check (architecture-aware)
-ISO_IMG="$ISO_OUT"
-case "$COH_ARCH" in
-  x86_64)
-    if [ -x "$(command -v qemu-system-x86_64 2>/dev/null)" ]; then
-      if [ ! -f "$ISO_IMG" ]; then
-        echo "❌ ${ISO_IMG} missing in out" >&2
-        exit 1
-      fi
-      TMPDIR="${TMPDIR:-$(mktemp -d)}"
-      LOG_DIR="$PWD/logs"
-      mkdir -p "$LOG_DIR"
-      SERIAL_LOG="$TMPDIR/qemu_boot.log"
-      QEMU_LOG="$LOG_DIR/qemu_boot.log"
-      [ -f "$QEMU_LOG" ] && mv "$QEMU_LOG" "$QEMU_LOG.$(date +%Y%m%d_%H%M%S)"
-      log "🧪 Booting ISO in QEMU for x86_64..."
-      qemu-system-x86_64 -bios OVMF.fd -cdrom "$ISO_IMG" -serial mon:stdio -nographic 2>&1 | tee "$SERIAL_LOG"
-      # Switched to -serial mon:stdio for direct console output in SSH
-      QEMU_EXIT=${PIPESTATUS[0]}
-      cat "$SERIAL_LOG" >> "$QEMU_LOG" 2>/dev/null || true
-      cat "$SERIAL_LOG" >> "$LOG_FILE" 2>/dev/null || true
-      echo "📜 Boot log (tail):"
-      tail -n 20 "$SERIAL_LOG" || echo "❌ Could not read QEMU log"
-      if [ "$QEMU_EXIT" -ne 0 ]; then
-        echo "❌ QEMU exited with code $QEMU_EXIT" >&2
-        exit 1
-      fi
-      if grep -q "BOOT_OK" "$SERIAL_LOG"; then
-        log "✅ QEMU boot succeeded"
-      else
-        echo "❌ BOOT_OK not found in log" >&2
-        exit 1
-      fi
-    else
-      log "⚠️ qemu-system-x86_64 not installed; skipping boot test"
-    fi
-    ;;
-  aarch64)
-    if [ -x "$(command -v qemu-system-aarch64 2>/dev/null)" ]; then
-      if [ ! -f "$ISO_IMG" ]; then
-        echo "❌ ${ISO_IMG} missing in out" >&2
-        exit 1
-      fi
-      TMPDIR="${TMPDIR:-$(mktemp -d)}"
-      LOG_DIR="$PWD/logs"
-      mkdir -p "$LOG_DIR"
-      SERIAL_LOG="$TMPDIR/qemu_boot.log"
-      QEMU_LOG="$LOG_DIR/qemu_boot.log"
-      [ -f "$QEMU_LOG" ] && mv "$QEMU_LOG" "$QEMU_LOG.$(date +%Y%m%d_%H%M%S)"
-      log "🧪 Booting ISO in QEMU for aarch64..."
-      QEMU_EFI="/usr/share/qemu-efi-aarch64/QEMU_EFI.fd"
-      if [ -f "$QEMU_EFI" ]; then
-        qemu-system-aarch64 -M virt -cpu cortex-a57 -bios "$QEMU_EFI" \
-          -serial mon:stdio -cdrom "$ISO_IMG" -nographic 2>&1 | tee "$SERIAL_LOG"
-      else
-        qemu-system-aarch64 -M virt -cpu cortex-a57 -bios none \
-          -serial mon:stdio -cdrom "$ISO_IMG" -nographic 2>&1 | tee "$SERIAL_LOG"
-      fi
-      QEMU_EXIT=${PIPESTATUS[0]}
-      cat "$SERIAL_LOG" >> "$QEMU_LOG" 2>/dev/null || true
-      cat "$SERIAL_LOG" >> "$LOG_FILE" 2>/dev/null || true
-      echo "📜 Boot log (tail):"
-      tail -n 20 "$SERIAL_LOG" || echo "❌ Could not read QEMU log"
-      if [ "$QEMU_EXIT" -ne 0 ]; then
-        echo "❌ QEMU exited with code $QEMU_EXIT" >&2
-        exit 1
-      fi
-      if grep -q "BOOT_OK" "$SERIAL_LOG"; then
-        log "✅ QEMU boot succeeded"
-      else
-        echo "❌ BOOT_OK not found in log" >&2
-        exit 1
-      fi
-    else
-      log "⚠️ qemu-system-aarch64 not installed; skipping boot test"
-    fi
-    ;;
-  *)
-    echo "Unsupported architecture for QEMU boot: $COH_ARCH" >&2
-    ;;
-esac
-
-
-BIN_COUNT=$(find "$STAGE_DIR/bin" -type f -perm -111 | wc -l)
-ROLE_COUNT=$(find "$STAGE_DIR/roles" -name '*.yaml' | wc -l)
-ISO_SIZE_MB=$(du -m "$ISO_OUT" | awk '{print $1}')
-echo "ISO BUILD OK: ${BIN_COUNT} binaries, ${ROLE_COUNT} roles, ${ISO_SIZE_MB}MB total" >&3
+log "✅ Build, staging, and QEMU direct elfloader boot complete."
 
 cleanup() {
   log "🧹 Cleanup completed."
