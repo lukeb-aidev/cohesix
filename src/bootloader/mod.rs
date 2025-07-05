@@ -21,8 +21,8 @@
 // * `handoff` – trampoline to kernel entry
 // ─────────────────────────────────────────────────────────────
 
-#[forbid(unsafe_code)]
-#[warn(missing_docs)]
+#![forbid(unsafe_code)]
+#![warn(missing_docs)]
 
 /// Command‑line parser used by the bootloader.
 pub mod args;

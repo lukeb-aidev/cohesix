@@ -20,10 +20,11 @@
 // * [`parse_cmdline`] – convert raw string → [`BootArgs`]
 // ─────────────────────────────────────────────────────────────
 
+#![forbid(unsafe_code)]
+#![warn(missing_docs)]
 #[allow(unused_imports)]
 use alloc::{boxed::Box, string::String, vec::Vec};
-#[forbid(unsafe_code)]
-#[warn(missing_docs)]
+
 use std::collections::HashMap;
 
 /// Key/value map of boot parameters.

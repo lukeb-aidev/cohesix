@@ -15,8 +15,9 @@
 // * [`extend_pcr`] – in‑place SHA‑256 extension of a 32‑byte PCR.
 // ─────────────────────────────────────────────────────────────
 
-#[forbid(unsafe_code)]
-#[warn(missing_docs)]
+#![forbid(unsafe_code)]
+#![warn(missing_docs)]
+
 use sha2::{Digest, Sha256};
 
 /// Extend a 32‑byte Platform Configuration Register **in place**.
