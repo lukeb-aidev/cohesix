@@ -2676,3 +2676,7 @@
 - `config/secure9p.toml` updated with `ca_cert` and `require_client_auth` options.
 ### Changed
 - README mentions certificate pinning for Secure9P transport.
+
+## [v0.409] - 2026-12-31
+### Added
+- `option.h` implements a generic Option type in C and updates the placeholder example.
