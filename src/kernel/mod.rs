@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: mod.rs v0.3
+// Filename: mod.rs v0.4
 // Author: Lukas Bower
-// Date Modified: 2025-08-27
+// Date Modified: 2027-02-02
 
 pub mod boot {
     pub mod bootloader;
@@ -45,3 +45,4 @@ pub mod user_api;
 pub mod userland_bootstrap;
 
 pub mod config;
+pub mod log;

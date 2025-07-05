@@ -114,7 +114,8 @@
 | build.rs | v0.8 | 2026-08-21 | COMMUNITY | | |
 | Makefile | v0.50 | 2026-10-16 | COMMUNITY | | |
 | src/kernel/main.c | v0.2 | 2025-07-22 | COMMUNITY | | |
-| src/kernel/main.rs | v0.2 | 2025-08-02 | COMMUNITY | | |
+| src/kernel/main.rs | v0.3 | 2027-02-02 | COMMUNITY | | |
+| src/kernel/log.rs | v0.1 | 2027-02-02 | COMMUNITY | | |
 | src/kernel/proc_mgr.rs | v0.2 | 2025-08-27 | COMMUNITY | | |
 | tests/test_cuda_presence.rs | v0.2 | 2025-12-10 | COMMUNITY | | |
 | tests/test_cuda_exec.rs | v0.6 | 2026-08-23 | COMMUNITY | | |
@@ -125,6 +126,7 @@
 | tests/test_boot_build_chain.rs | v0.4 | 2027-02-01 | COMMUNITY | | |
 | tests/boot_trace_rule.rs | v0.4 | 2026-12-31 | COMMUNITY | | |
 | tests/kernel_proc_mgr.rs | v0.1 | 2025-08-26 | COMMUNITY | | |
+| tests/test_coherr_macro.rs | v0.1 | 2027-02-02 | COMMUNITY | | |
 | tests/test_cohcc_shell.rs | v0.2 | 2025-09-25 | COMMUNITY | | |
 | tests/codex/cli_tools_test.rs | v0.2 | 2026-12-31 | COMMUNITY | | |
 | tests/codex/dummy_test.rs | v0.3 | 2026-12-31 | COMMUNITY | | |
