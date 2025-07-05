@@ -1,5 +1,5 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix-secure9p/Cargo.toml v0.2
+# Filename: cohesix-secure9p/Cargo.toml v0.3
 # Author: Lukas Bower
 # Date Modified: 2026-12-31
 [package]
@@ -8,3 +8,11 @@ version = "0.2.0"
 edition = "2024"
 
 [dependencies]
+rustls = { version = "0.21", features = ["std"] }
+rustls-pemfile = "1.0"
+webpki-roots = "0.26"
+ninep = { path = "../third_party/ninep_portable" }
+
+[features]
+default = ["std"]
+std = []

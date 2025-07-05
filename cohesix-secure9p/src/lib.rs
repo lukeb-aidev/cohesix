@@ -1,10 +1,12 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: lib.rs v0.2
+// Filename: lib.rs v0.3
 // Author: Lukas Bower
 // Date Modified: 2026-12-31
 
-#![no_std]
+#![cfg_attr(not(feature = "std"), no_std)]
 
 extern crate alloc;
 
 pub mod secure_stream;
+#[cfg(feature = "std")]
+pub mod tls_server;

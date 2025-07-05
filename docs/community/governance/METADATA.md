@@ -16,7 +16,7 @@
 | DEPENDENCIES.md            | v0.7    | 2026-12-31    | COMMUNITY      |            |              |
 | METADATA.md                | v3.34   | 2026-02-12    | COMMUNITY      | | |
 | Q_DAY.md                   | v1.1    | 2025-06-15    | PRIVATE        |            |              |
-| README.md                  | v0.22   | 2026-12-31   | COMMUNITY        | | |
+| README.md                  | v0.23   | 2026-12-31   | COMMUNITY        | | |
 | README_CODEX.md            | v1.5    | 2026-02-05    | COMMUNITY      |            |              |
 | REMOTE_ACCESS.md           | v1.0    | 2025-05-24    | COMMUNITY      |            |              |
 | SHOPPING_LIST.md           | v1.3    | 2025-05-25    | COMMUNITY      |            |              |
@@ -135,7 +135,7 @@
 | .cohesix_env | v0.3 | 2026-07-25 | COMMUNITY | | |
 | cohesix_fetch_build.sh | v0.85 | 2026-12-31 | COMMUNITY | | |
 | CONTRIBUTING.md | v1.1 | 2025-07-23 | COMMUNITY | | |
-| config/secure9p.toml | v0.6 | 2026-10-29 | COMMUNITY | | |
+| config/secure9p.toml | v0.7 | 2026-12-31 | COMMUNITY | | |
 | src/secure9p/mod.rs | v0.2 | 2025-07-25 | COMMUNITY | | |
 | src/secure9p/auth_handler.rs | v0.4 | 2025-07-31 | COMMUNITY | | |
 | src/secure9p/cap_fid.rs | v0.2 | 2025-07-25 | COMMUNITY | | |
@@ -172,8 +172,9 @@
 | metadata.json | v0.1 | 2025-07-24 | COMMUNITY | | |
 | Cargo.toml | v0.41 | 2026-12-31 | COMMUNITY | | |
 | cohesix-9p/Cargo.toml | v0.5 | 2026-12-31 | COMMUNITY | | |
-| cohesix-secure9p/Cargo.toml | v0.2 | 2026-12-31 | COMMUNITY | | |
+| cohesix-secure9p/Cargo.toml | v0.3 | 2026-12-31 | COMMUNITY | | |
 | cohesix-secure9p/src/secure_stream.rs | v0.1 | 2026-12-31 | COMMUNITY | | |
+| cohesix-secure9p/src/tls_server.rs | v0.1 | 2026-12-31 | COMMUNITY | | |
 | tools/cli/Cargo.toml | v0.2 | 2025-08-16 | COMMUNITY | | |
 | justfile | v0.2 | 2026-12-31 | COMMUNITY | | |
 | src/roles/mod.rs | v0.2 | 2026-09-30 | COMMUNITY | | |
@@ -232,6 +233,7 @@
 | src/root/main.rs | v0.3 | 2026-12-31 | COMMUNITY | | |
 | src/utils/gpu.rs | v0.1 | 2025-12-12 | COMMUNITY | | |
 | src/cuda/runtime.rs | v0.15 | 2026-12-31 | COMMUNITY | | |
+| src/cuda/job_manager.rs | v0.1 | 2026-12-31 | COMMUNITY | | |
 | src/cli/mod.rs | v1.3 | 2026-10-08 | COMMUNITY | | |
 | src/cli/cohtrace.rs | v0.4 | 2026-10-13 | COMMUNITY | | |
 | src/cloud/mod.rs | v0.2 | 2026-10-10 | COMMUNITY | | |
