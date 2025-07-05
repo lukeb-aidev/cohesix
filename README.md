@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: README.md v0.24
+// Filename: README.md v0.25
 // Author: Lukas Bower
-// Date Modified: 2026-12-31
+// Date Modified: 2027-01-15
 
 
 # Cohesix
@@ -154,6 +154,15 @@ To produce the seL4 entry binary, enable the feature explicitly:
 ```bash
 cargo build --workspace --all-targets --all-features --features sel4_entry_bin
 ```
+
+### Cross-building the root task
+
+Use the custom target file to compile the seL4 userland ELF:
+
+```bash
+cargo build --release --target=target-sel4.json --bin cohesix_root
+```
+The resulting binary appears at `out/cohesix_root.elf`.
 
 ### Building initfs.img
 

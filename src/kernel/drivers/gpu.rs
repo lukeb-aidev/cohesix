@@ -45,15 +45,10 @@ impl GpuDriver {
     pub fn launch_task(&self) {
         match self.backend {
             GpuBackend::NvidiaCuda => {
-                #[cfg(feature = "cuda")]
-                {
-                    let mut exec = crate::cuda::runtime::CudaExecutor::new();
-                    if let Err(e) = exec.load_kernel(None).and_then(|_| exec.launch()) {
-                        println!("[GPU] CUDA task failed: {e}");
-                    }
+                let mut exec = crate::cuda::runtime::CudaExecutor::new();
+                if let Err(e) = exec.load_kernel(None).and_then(|_| exec.launch()) {
+                    println!("[GPU] CUDA task failed: {e}");
                 }
-                #[cfg(not(feature = "cuda"))]
-                println!("[GPU] CUDA support disabled at compile time");
             }
             GpuBackend::SoftwareFallback => println!("[GPU] Running software fallback"),
             GpuBackend::None => println!("[GPU] No GPU backend available"),

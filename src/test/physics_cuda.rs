@@ -5,7 +5,7 @@
 
 #[allow(unused_imports)]
 use alloc::{boxed::Box, string::String, vec::Vec};
-#[cfg(all(feature = "cuda", feature = "rapier"))]
+#[cfg(feature = "rapier")]
 
 use crate::cuda::runtime::CudaExecutor;
 use crate::sim::rapier_bridge::{SimBridge, SimCommand};
