@@ -2720,5 +2720,6 @@
 - Ephemeral namespace script `newns-e.rc`.
 - CUDA namespace binder `bind_cuda.rc`.
 - Example usage in `plan9_enhancements_usage.txt`.
+- Test validation output `test-validation.log`.
 
 
