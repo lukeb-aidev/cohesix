@@ -393,3 +393,18 @@ warning: `cohesix-secure9p` (lib) generated 1 warning
    Compiling cohfuzz v0.1.0 (/workspace/cohesix/tools/cohfuzz)
     Finished `release` profile [optimized] target(s) in 17.81s
 TEST: cargo build --workspace --release (post-modification) PASSED
+### SimulateCohesixRustGoBuild-080 Results
+BIN RESULTS:
+cohesix_root: FAIL - linker `aarch64-linux-musl-gcc` not found
+cohcc: FAIL - linker `aarch64-linux-musl-gcc` not found
+cohesix_build: FAIL - linker `aarch64-linux-musl-gcc` not found
+cohesix_cap: FAIL - linker `aarch64-linux-musl-gcc` not found
+cohesix_trace: FAIL - linker `aarch64-linux-musl-gcc` not found
+init: FAIL - unresolved crate `alloc`
+logdemo: FAIL - unresolved crate `alloc`
+kernel: FAIL - unresolved crate `alloc`
+sel4_entry: FAIL - unresolved crate `alloc`
+clippy: FAIL - see /tmp/clippy.log
+Go build: PASS - helpers in out/go_helpers
+PyTest: SKIPPED - no tests found
+{"rust_bins":{"cohesix_root":"FAIL","cohcc":"FAIL","cohesix_build":"FAIL","cohesix_cap":"FAIL","cohesix_trace":"FAIL","init":"FAIL","logdemo":"FAIL","kernel":"FAIL","sel4_entry":"FAIL"},"go_build":"PASS","clippy":"FAIL","pytest":"SKIPPED"}
