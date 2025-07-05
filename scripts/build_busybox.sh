@@ -12,7 +12,7 @@ LOCAL_SRC="$ROOT/third_party/busybox"
 WORK_DIR="$ROOT/build/busybox"
 OUT_DIR="$ROOT/out/busybox"
 OUT_BIN="$ROOT/out/bin"
-ISO_BIN="$ROOT/out/iso/bin"
+ISO_BIN="$ROOT/out/bin"
 SUPPORTED_ARCHS=("x86_64" "aarch64")
 
 msg()  { printf "\e[32m==>\e[0m %s\n" "$*"; }

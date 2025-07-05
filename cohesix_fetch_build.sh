@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.90
+# Filename: cohesix_fetch_build.sh v0.91
 # Author: Lukas Bower
-# Date Modified: 2027-02-01
+# Date Modified: 2027-08-05
 #!/usr/bin/env bash
 #
 # Merged old script v0.89 features into current script.
@@ -231,7 +231,7 @@ if ! dpkg --compare-versions "$CMAKE_VER" ge 3.20; then
 fi
 
 cd "$ROOT"
-STAGE_DIR="$ROOT/out/iso"
+STAGE_DIR="$ROOT/out"
 GO_HELPERS_DIR="$ROOT/out/go_helpers"
 mkdir -p "$ROOT/out/bin" "$GO_HELPERS_DIR"
 mkdir -p "$STAGE_DIR" "$ROOT/out/etc"
@@ -730,14 +730,34 @@ if [ -x "$MANDOC_BIN" ]; then
   cp "$MANDOC_BIN" "$STAGE_DIR/prebuilt/mandoc/"
   chmod +x "$STAGE_DIR/prebuilt/mandoc/mandoc.$COH_ARCH"
   cp bin/mandoc "$STAGE_DIR/bin/mandoc"
-  chmod +x "$STAGE_DIR/bin/mandoc"
+  cp bin/mandoc "$STAGE_DIR/usr/bin/mandoc"
+  chmod +x "$STAGE_DIR/bin/mandoc" "$STAGE_DIR/usr/bin/mandoc"
   cp bin/man "$STAGE_DIR/bin/man"
-  chmod +x "$STAGE_DIR/bin/man"
+  cp bin/man "$STAGE_DIR/usr/bin/man"
+  chmod +x "$STAGE_DIR/bin/man" "$STAGE_DIR/usr/bin/man"
+  log "✅ Built mandoc" 
   if [ -d docs/man ]; then
-    mkdir -p "$STAGE_DIR/usr/share/cohesix/man"
-    cp docs/man/*.1 "$STAGE_DIR/usr/share/cohesix/man/" 2>/dev/null || true
-    cp docs/man/*.8 "$STAGE_DIR/usr/share/cohesix/man/" 2>/dev/null || true
+    mkdir -p "$STAGE_DIR/usr/share/man/man1" "$STAGE_DIR/usr/share/man/man8"
+    cp docs/man/*.1 "$STAGE_DIR/usr/share/man/man1/" 2>/dev/null || true
+    cp docs/man/*.8 "$STAGE_DIR/usr/share/man/man8/" 2>/dev/null || true
+    log "✅ Updated man pages"
   fi
+  log "✅ Staged mandoc to /usr/bin"
+  cat > "$STAGE_DIR/etc/README.txt" <<'EOF'
+Cohesix OS Quick Start
+
+Tools: cohcli, cohrun, cohtrace, cohcc, cohcap, cohesix-shell, mandoc
+
+Usage:
+  cohcli status --verbose
+  cohrun kiosk_start
+  cohtrace list
+
+Logs: /log/
+Traces: /log/trace/
+Manual pages: mandoc -Tascii /usr/share/man/man1/<tool>.1
+EOF
+  log "✅ Created /etc/README.txt"
 else
   echo "❌ mandoc build failed" >&2
   exit 1
@@ -759,137 +779,10 @@ if [ ! -f "$STAGE_DIR/etc/plan9.ns" ]; then
   exit 1
 fi
 
-log "📀 Creating ISO..."
-# ISO root layout:
-#   out/iso/bin            - runtime binaries (kernel, init, busybox)
-#   out/iso/usr/bin        - CLI wrappers and Go tools
-#   out/iso/usr/cli        - Python CLI modules
-#   out/iso/home/cohesix   - Python libraries
-#   out/iso/etc            - configuration files
-#   out/iso/roles          - role definitions
-# Already ensured and activated the Python venv at the top of the script.
-# No redundant venv creation or activation here.
-if [[ "${VIRTUAL_ENV:-}" != *"/${VENV_DIR}" ]]; then
-  echo "❌ Python venv not active before ISO build" >&2
-  exit 1
-fi
-
-bash tools/make_iso.sh
-ISO_OUT="out/cohesix.iso"
-if [ ! -f "$ISO_OUT" ]; then
-  echo "❌ ISO build failed: $ISO_OUT missing" >&2
-  exit 1
-fi
-# Before cleanup deletes ISO_ROOT
-if [ -d "$STAGE_DIR/bin" ]; then
-  find "$STAGE_DIR/bin" -type f -print | tee -a "$LOG_FILE" >&3 || true
-fi
-if [ -f "$ISO_OUT" ]; then
-  du -h "$ISO_OUT" | tee -a "$LOG_FILE" >&3
-fi
-
-if [ ! -d "/srv/cuda" ] || ! command -v nvidia-smi >/dev/null 2>&1 || ! nvidia-smi >/dev/null 2>&1; then
-  echo "⚠️ CUDA hardware or /srv/cuda not detected" | tee -a "$LOG_FILE" >&3
-fi
-
-
-#
-# Additional ISO checks before QEMU boot
-log "🔍 Validating ISO with isoinfo..."
-if command -v isoinfo >/dev/null 2>&1; then
-  isoinfo -i "$ISO_OUT" -l | tee -a "$LOG_FILE" >&3 || true
-  isoinfo -i "$ISO_OUT" -R -f | tee -a "$LOG_FILE" >&3 || true
-else
-  log "⚠️ isoinfo not installed, skipping detailed ISO listing"
-fi
-
-# Optional QEMU boot check (architecture-aware)
-ISO_IMG="$ISO_OUT"
-case "$COH_ARCH" in
-  x86_64)
-    if [ -x "$(command -v qemu-system-x86_64 2>/dev/null)" ]; then
-      if [ ! -f "$ISO_IMG" ]; then
-        echo "❌ ${ISO_IMG} missing in out" >&2
-        exit 1
-      fi
-      TMPDIR="${TMPDIR:-$(mktemp -d)}"
-      LOG_DIR="$PWD/logs"
-      mkdir -p "$LOG_DIR"
-      SERIAL_LOG="$TMPDIR/qemu_boot.log"
-      QEMU_LOG="$LOG_DIR/qemu_boot.log"
-      [ -f "$QEMU_LOG" ] && mv "$QEMU_LOG" "$QEMU_LOG.$(date +%Y%m%d_%H%M%S)"
-      log "🧪 Booting ISO in QEMU for x86_64..."
-      qemu-system-x86_64 -bios OVMF.fd -cdrom "$ISO_IMG" -serial mon:stdio -nographic 2>&1 | tee "$SERIAL_LOG"
-      # Switched to -serial mon:stdio for direct console output in SSH
-      QEMU_EXIT=${PIPESTATUS[0]}
-      cat "$SERIAL_LOG" >> "$QEMU_LOG" 2>/dev/null || true
-      cat "$SERIAL_LOG" >> "$LOG_FILE" 2>/dev/null || true
-      echo "📜 Boot log (tail):"
-      tail -n 20 "$SERIAL_LOG" || echo "❌ Could not read QEMU log"
-      if [ "$QEMU_EXIT" -ne 0 ]; then
-        echo "❌ QEMU exited with code $QEMU_EXIT" >&2
-        exit 1
-      fi
-      if grep -q "BOOT_OK" "$SERIAL_LOG"; then
-        log "✅ QEMU boot succeeded"
-      else
-        echo "❌ BOOT_OK not found in log" >&2
-        exit 1
-      fi
-    else
-      log "⚠️ qemu-system-x86_64 not installed; skipping boot test"
-    fi
-    ;;
-  aarch64)
-    if [ -x "$(command -v qemu-system-aarch64 2>/dev/null)" ]; then
-      if [ ! -f "$ISO_IMG" ]; then
-        echo "❌ ${ISO_IMG} missing in out" >&2
-        exit 1
-      fi
-      TMPDIR="${TMPDIR:-$(mktemp -d)}"
-      LOG_DIR="$PWD/logs"
-      mkdir -p "$LOG_DIR"
-      SERIAL_LOG="$TMPDIR/qemu_boot.log"
-      QEMU_LOG="$LOG_DIR/qemu_boot.log"
-      [ -f "$QEMU_LOG" ] && mv "$QEMU_LOG" "$QEMU_LOG.$(date +%Y%m%d_%H%M%S)"
-      log "🧪 Booting ISO in QEMU for aarch64..."
-      QEMU_EFI="/usr/share/qemu-efi-aarch64/QEMU_EFI.fd"
-      if [ -f "$QEMU_EFI" ]; then
-        qemu-system-aarch64 -M virt -cpu cortex-a57 -bios "$QEMU_EFI" \
-          -serial mon:stdio -cdrom "$ISO_IMG" -nographic 2>&1 | tee "$SERIAL_LOG"
-      else
-        qemu-system-aarch64 -M virt -cpu cortex-a57 -bios none \
-          -serial mon:stdio -cdrom "$ISO_IMG" -nographic 2>&1 | tee "$SERIAL_LOG"
-      fi
-      QEMU_EXIT=${PIPESTATUS[0]}
-      cat "$SERIAL_LOG" >> "$QEMU_LOG" 2>/dev/null || true
-      cat "$SERIAL_LOG" >> "$LOG_FILE" 2>/dev/null || true
-      echo "📜 Boot log (tail):"
-      tail -n 20 "$SERIAL_LOG" || echo "❌ Could not read QEMU log"
-      if [ "$QEMU_EXIT" -ne 0 ]; then
-        echo "❌ QEMU exited with code $QEMU_EXIT" >&2
-        exit 1
-      fi
-      if grep -q "BOOT_OK" "$SERIAL_LOG"; then
-        log "✅ QEMU boot succeeded"
-      else
-        echo "❌ BOOT_OK not found in log" >&2
-        exit 1
-      fi
-    else
-      log "⚠️ qemu-system-aarch64 not installed; skipping boot test"
-    fi
-    ;;
-  *)
-    echo "Unsupported architecture for QEMU boot: $COH_ARCH" >&2
-    ;;
-esac
-
-
+log "🏗️  Staging complete filesystem..."
 BIN_COUNT=$(find "$STAGE_DIR/bin" -type f -perm -111 | wc -l)
 ROLE_COUNT=$(find "$STAGE_DIR/roles" -name '*.yaml' | wc -l)
-ISO_SIZE_MB=$(du -m "$ISO_OUT" | awk '{print $1}')
-echo "ISO BUILD OK: ${BIN_COUNT} binaries, ${ROLE_COUNT} roles, ${ISO_SIZE_MB}MB total" >&3
+log "FS BUILD OK: ${BIN_COUNT} binaries, ${ROLE_COUNT} roles staged" >&3
 
 cleanup() {
   log "🧹 Cleanup completed."
