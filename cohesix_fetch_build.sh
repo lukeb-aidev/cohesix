@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.87
+# Filename: cohesix_fetch_build.sh v0.88
 # Author: Lukas Bower
-# Date Modified: 2026-12-31
+# Date Modified: 2027-01-24
 #!/bin/bash
 #
 # Bare metal seL4 build flow (no UEFI):
@@ -325,7 +325,7 @@ else
 fi
 
 log "🧱 Building Rust components for seL4 rootserver ELF..."
-FEATURES="std,rapier,physics,busybox"
+FEATURES="std,busybox"
 if [ "$SEL4_ENTRY" = 1 ]; then
   FEATURES+=",sel4,kernel_bin,minimal_uefi"
 fi

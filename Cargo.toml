@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Cargo.toml v0.44
+# Filename: Cargo.toml v0.45
 # Author: Lukas Bower
-# Date Modified: 2027-01-23
+# Date Modified: 2027-01-24
 [package]
 name    = "cohesix"
 version = "0.1.0"
