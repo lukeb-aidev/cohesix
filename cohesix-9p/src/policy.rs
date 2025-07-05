@@ -1,11 +1,12 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: policy.rs v0.2
+// Filename: policy.rs v0.3
 // Author: Lukas Bower
-// Date Modified: 2026-12-31
+// Date Modified: 2027-01-31
 
 use alloc::vec::Vec;
 use alloc::string::String;
 use serde::Deserialize;
+use core::str::FromStr;
 
 /// Access type for sandbox policy checks.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -33,10 +34,7 @@ impl SandboxPolicy {
         Self::from_str(&txt).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
     }
 
-    /// Parse policy from a JSON string.
-    pub fn from_str(data: &str) -> Result<Self, serde_json::Error> {
-        serde_json::from_str(data)
-    }
+
 
     /// Determine if the given access is allowed on `path`.
     pub fn allows(&self, path: &str, access: Access) -> bool {
@@ -44,5 +42,12 @@ impl SandboxPolicy {
             Access::Read => self.read.iter().any(|p| path.starts_with(p)),
             Access::Write => self.write.iter().any(|p| path.starts_with(p)),
         }
+    }
+}
+
+impl FromStr for SandboxPolicy {
+    type Err = serde_json::Error;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        serde_json::from_str(s)
     }
 }

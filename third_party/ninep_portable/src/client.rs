@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: client.rs v0.3
+// Filename: client.rs v0.4
 // Author: Lukas Bower
-// Date Modified: 2026-12-30
+// Date Modified: 2027-01-31
 //! A simple 9p client for building out application specific client applications.
 use crate::{
     fs::{Mode, Perm, Stat},
@@ -52,7 +52,7 @@ fn err<T, E>(e: E) -> io::Result<T>
 where
     E: Into<Box<dyn std::error::Error + Send + Sync>>,
 {
-    Err(io::Error::new(io::ErrorKind::Other, e))
+    Err(io::Error::other(e))
 }
 
 /// A client that operates over an underlying [UnixStream].
