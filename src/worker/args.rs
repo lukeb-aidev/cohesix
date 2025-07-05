@@ -14,10 +14,11 @@
 // while new code should depend on `WorkerOpts` directly.
 // ─────────────────────────────────────────────────────────────
 
+#![forbid(unsafe_code)]
+#![warn(missing_docs)]
 #[allow(unused_imports)]
 use alloc::{boxed::Box, string::String, vec::Vec};
-#[forbid(unsafe_code)]
-#[warn(missing_docs)]
+
 use clap::Parser;
 
 /// Command-line flags recognised by a Cohesix Worker process.

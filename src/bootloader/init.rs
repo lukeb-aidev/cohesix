@@ -17,10 +17,11 @@
 // deferred to later stages.
 // ─────────────────────────────────────────────────────────────
 
+#![forbid(unsafe_code)]
+#![warn(missing_docs)]
 #[allow(unused_imports)]
 use alloc::{boxed::Box, string::String, vec::Vec};
-#[forbid(unsafe_code)]
-#[warn(missing_docs)]
+
 use crate::{coh_error, CohError};
 use log::info;
 
