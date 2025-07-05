@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: lib.rs v0.3
+// Filename: lib.rs v0.4
 // Author: Lukas Bower
-// Date Modified: 2026-12-31
+// Date Modified: 2027-01-31
 
 #![cfg_attr(not(feature = "std"), no_std)]
 

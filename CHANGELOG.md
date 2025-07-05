@@ -2726,4 +2726,10 @@
 ### Fixed
 - `cohesix_fetch_build.sh` now skips cloning when an existing repository is found.
 
+## [v0.417] - 2027-01-31
+### Fixed
+- Addressed Clippy warnings across `ninep_portable`, `cohesix-9p`, and `cohesix-secure9p` crates.
+- Replaced `Arc<RefCell>` with `Arc<Mutex>` in `inprocess.rs` for thread safety.
+- Implemented `FromStr` for `SandboxPolicy` and cleaned conditional attributes.
+
 
