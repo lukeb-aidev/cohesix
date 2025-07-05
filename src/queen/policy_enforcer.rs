@@ -7,7 +7,6 @@
 use alloc::{boxed::Box, string::String, vec::Vec};
 /// Policy enforcement module for the Queen role in Cohesix.
 /// Validates namespace rules, runtime invariants, and worker compliance.
-
 /// Represents the result of a policy check.
 #[derive(Debug)]
 pub enum PolicyResult {

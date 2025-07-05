@@ -3,8 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2025-06-17
 
-/// SensorRelay role initialisation.
-
+//! SensorRelay role initialisation.
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 

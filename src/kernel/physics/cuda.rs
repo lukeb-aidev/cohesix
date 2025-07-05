@@ -7,7 +7,6 @@
 use alloc::{boxed::Box, string::String, vec::Vec};
 /// CUDA physics integration module for Cohesix kernel-space.
 /// Provides CUDA dispatch scaffolding and GPU acceleration hooks for physics kernels.
-
 /// Describes the status of CUDA support at runtime.
 #[derive(Debug)]
 pub enum CudaStatus {

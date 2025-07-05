@@ -25,10 +25,15 @@
 /// Legacy argument parser wrapper. Prefer `cli::WorkerOpts`.
 pub mod args;
 
+/// TODO: document this
 pub mod hotplug;
+/// TODO: document this
 pub mod queen_watchdog;
+/// TODO: document this
 pub mod role_memory;
+/// TODO: document this
 pub mod vision_overlay;
+/// TODO: document this
 pub mod world_sync;
 
 use crate::runtime::ServiceRegistry;

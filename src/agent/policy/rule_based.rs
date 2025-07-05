@@ -6,7 +6,6 @@
 #[allow(unused_imports)]
 use alloc::{boxed::Box, string::String, vec::Vec};
 /// Simple rule based policy.
-
 pub struct RuleBasedPolicy;
 
 impl RuleBasedPolicy {

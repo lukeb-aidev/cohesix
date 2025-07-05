@@ -7,7 +7,6 @@
 use alloc::{boxed::Box, string::String, vec::Vec};
 /// seL4-verified capability enforcement layer.
 /// This module validates capability derivations and access rights against the static kernel proof model.
-
 /// Enumeration of capability check outcomes.
 #[derive(Debug, PartialEq)]
 pub enum CapabilityResult {

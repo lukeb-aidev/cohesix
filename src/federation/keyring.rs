@@ -42,8 +42,8 @@ impl Keyring {
             let mut seed = [0u8; 32];
             rng.fill_bytes(&mut seed);
             let keypair = TinyEd25519::from_seed(&seed);
-            fs::write(&priv_path, &seed)?;
-            fs::write(&pub_path, &keypair.public_key_bytes())?;
+            fs::write(&priv_path, seed)?;
+            fs::write(&pub_path, keypair.public_key_bytes())?;
             Ok(Self { keypair })
         }
     }

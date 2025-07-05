@@ -6,10 +6,9 @@
 #[allow(unused_imports)]
 use alloc::{boxed::Box, string::String, vec::Vec};
 /// Constant Expression Evaluator
-//
+///
 /// Provides utility support for parsing and evaluating constant expressions at compile time
 /// or runtime as needed. Intended for use in macros, config parsers, or unit test expressions.
-
 /// Evaluates a simple constant arithmetic expression string and returns the result as i64.
 /// Supports `+`, `-`, `*`, and `/` operators with integer literals.
 pub fn eval(expr: &str) -> Result<i64, String> {

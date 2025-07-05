@@ -61,7 +61,7 @@ impl Federation {
         hk.expand(b"cohesix-federation", &mut digest)
             .map_err(|_| coh_error!("hkdf expand"))?;
         let path = format!("/srv/federation/{}.auth", peer_id);
-        fs::write(&path, &digest)?;
+        fs::write(&path, digest)?;
         self.log_event("secure_link")?;
         Ok(())
     }
