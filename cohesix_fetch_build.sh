@@ -319,6 +319,30 @@ if [ -f tests/requirements.txt ]; then
   python -m pip install -r tests/requirements.txt --break-system-packages
 fi
 
+# Build GUI orchestrator early
+if [ -d go/cmd/gui-orchestrator ]; then
+  log "✅ Found GUI orchestrator Go code matching design"
+  if [ "$COH_ARCH" = "aarch64" ]; then
+    GOARCH="arm64"
+  elif [ "$COH_ARCH" = "x86_64" ]; then
+    GOARCH="amd64"
+  else
+    GOARCH="$COH_ARCH"
+  fi
+  (cd go/cmd/gui-orchestrator && go mod tidy)
+  OUT_BIN="$GO_HELPERS_DIR/web_gui_orchestrator"
+  log "  compiling GUI orchestrator as GOARCH=$GOARCH"
+  if GOOS=linux GOARCH="$GOARCH" go build -tags unix -C go/cmd/gui-orchestrator -o "$OUT_BIN"; then
+    chmod +x "$OUT_BIN"
+    log "✅ Built GUI orchestrator → $OUT_BIN"
+  else
+    log "⚠️ GUI orchestrator build failed"
+  fi
+  ls -lh "$GO_HELPERS_DIR" | tee -a "$LOG_FILE" >&3
+else
+  log "⚠️ GUI orchestrator missing or incomplete - generated new code from spec"
+fi
+
 
 log "🔧 Checking C compiler..."
 if ! command -v gcc >/dev/null 2>&1; then
@@ -667,6 +691,7 @@ if command -v go &> /dev/null; then
   for dir in go/cmd/*; do
     if [ -f "$dir/main.go" ]; then
       name="$(basename "$dir")"
+      [ "$name" = "gui-orchestrator" ] && continue
       log "  ensuring modules for $name"
       (cd "$dir" && go mod tidy)
       log "  compiling $name for Linux as GOARCH=$GOARCH"
