@@ -70,6 +70,7 @@ cd "$HOME"
 
   log "📦 Cloning repository..."
   rm -rf cohesix
+  rm -rf cohesix_logs
   for i in {1..3}; do
     git clone git@github.com:lukeb-aidev/cohesix.git && break || sleep 1
   done
