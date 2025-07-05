@@ -337,8 +337,7 @@ if [ "$SEL4_ENTRY" = 1 ]; then
   FEATURES+=",sel4,kernel_bin,minimal_uefi"
 fi
 
-for BIN in cohesix_root cohcc cohesix_build cohesix_cap cohesix_trace \
-           cohrun_cli cohagent cohrole cohrun cohup; do
+for BIN in cohesix_root cohcc cohesix_build cohesix_cap cohesix_trace kernel logdemo init sel4_entry; do
   log "🚀 Building $BIN"
   RUSTFLAGS="-C debuginfo=2" \
     cargo build --release \
@@ -355,7 +354,7 @@ grep -Ei 'error|fail|panic|permission denied|warning' "$LOG_FILE" > "$SUMMARY_ER
 mkdir -p "$STAGE_DIR/bin" "$STAGE_DIR/usr/bin" "$STAGE_DIR/usr/cli" "$STAGE_DIR/home/cohesix"
 
 # Copy Rust CLI binaries into out/bin for ISO staging (copy only, skip build)
-for bin in cohcc cohesix_build cohesix_cap cohesix_trace cohrun_cli cohagent cohrole cohrun cohup cohesix_root kernel logdemo init sel4_entry; do
+for bin in cohesix_root cohcc cohesix_build cohesix_cap cohesix_trace kernel logdemo init sel4_entry; do
   BIN_PATH="target/aarch64-unknown-linux-musl/release/$bin"
   if [ -f "$BIN_PATH" ]; then
     cp "$BIN_PATH" "$STAGE_DIR/bin/$bin"
