@@ -48,10 +48,10 @@ for ARCH in "${ARCHES[@]}"; do
   esac
 
   make mrproper || true
-  make defconfig
-  sed -i 's/# CONFIG_STATIC is not set/CONFIG_STATIC=y/' .config
+  cp "$SRC_DIR/.config.coh" .config
+  # Preconfigured minimal config; no update needed
   echo "BusyBox config summary:"
-  grep -E '^(CONFIG_STATIC|CONFIG_ASH|CONFIG_SH_IS_ASH|CONFIG_LS|CONFIG_CP|CONFIG_MV|CONFIG_ECHO|CONFIG_MOUNT|CONFIG_CAT|CONFIG_PS|CONFIG_KILL)' .config
+  grep -E '^(CONFIG_STATIC|CONFIG_ASH|CONFIG_SH_IS_ASH|CONFIG_LS|CONFIG_CP|CONFIG_MV|CONFIG_ECHO|CONFIG_MOUNT|CONFIG_CAT|CONFIG_GREP|CONFIG_HEAD|CONFIG_TAIL|CONFIG_PRINTF|CONFIG_TEST|CONFIG_MKDIR|CONFIG_RMDIR|CONFIG_VI)' .config
 
   make -j"$(nproc)"
   make CONFIG_PREFIX="$INSTALL_DIR" install

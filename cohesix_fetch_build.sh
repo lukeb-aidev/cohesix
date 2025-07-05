@@ -375,9 +375,11 @@ scripts/build_busybox.sh "$COH_ARCH"
 BUSYBOX_BIN="out/busybox/$COH_ARCH/bin/busybox"
 if [ -x "$BUSYBOX_BIN" ]; then
   cp "$BUSYBOX_BIN" "$STAGE_DIR/bin/busybox"
-  for app in sh ls cat echo mount umount; do
+  log "✅ Built minimal BusyBox for Cohesix"
+  for app in sh ls cat echo mount umount vi cp mv rm grep head tail printf test mkdir rmdir; do
     ln -sf busybox "$STAGE_DIR/bin/$app"
   done
+  log "✅ Staged BusyBox applets to /bin"
   if [ -f "userland/miniroot/bin/init" ]; then
     cp "userland/miniroot/bin/init" "$STAGE_DIR/bin/init"
     chmod +x "$STAGE_DIR/bin/init"
