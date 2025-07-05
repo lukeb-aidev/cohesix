@@ -40,14 +40,14 @@ Documents archived in `/canvas/archive/` are read-only and excluded from Codex w
 
 - Kernel: seL4 microkernel with Cohesix-specific patches
 - Userland: Plan 9 (9P namespace, rc shell) in a pure UEFI environment (no POSIX layer)
-- Boot Target: ≤200 ms cold start (Jetson Orin Nano)
+- Boot Target: ≤200 ms cold start (pure UEFI systems)
 - Boot Flow: UEFI → seL4 → Cohesix root task
 - Rust cross-targets: `x86_64-unknown-uefi`, `aarch64-unknown-uefi` using LLVM/LLD
 - Security: seL4 proofs enforced; Plan 9 srv sandboxed
 - Role Exposure: Immutable `CohRole`, visible at `/srv/cohrole`  
 - Roles: QueenPrimary, KioskInteractive, DroneWorker, GlassesAgent, SensorRelay, SimulatorTest  
 - Physics: `/sim/` (Rapier) active on Worker nodes  
-- GPU: `/srv/cuda` for CUDA-enabled agents; fallback must log gracefully  
+- GPU: /srv/cuda for CUDA-enabled agents; may proxy to external secure9p CUDA microserver; fallback logs gracefully
 - Licensing: Only Apache 2.0, MIT, or BSD allowed (see `LICENSES_AND_REUSE.md`)
 
 ---
@@ -55,10 +55,9 @@ Documents archived in `/canvas/archive/` are read-only and excluded from Codex w
 ## 3 · Hardware + CI Matrix
 
 Target Hardware:
-1. Jetson Orin Nano (8 GB) – Primary worker with CUDA
-2. Raspberry Pi 5 (8 GB) – Fast boot fallback
-3. AWS EC2 Graviton/x86 – Queen orchestration
-4. Intel NUC – Optional fallback/dev
+1. Dell or equivalent x86_64 UEFI systems with NVIDIA GPU – Primary platform for Cohesix with CUDA
+2. AWS EC2 x86_64 – Queen orchestration and scalable simulation
+3. Raspberry Pi 5 (8 GB) – Optional fallback test node (no primary CUDA role)
 
 Codex must auto-detect supported hardware and pass tests accordingly.
 
@@ -74,6 +73,8 @@ Codex must auto-detect supported hardware and pass tests accordingly.
 | Tooling & Testing | Python        | CLI, validator, DSL, glue           |
 | CUDA Models       | C++ / CUDA    | Jetson inference & deployment       |
 | Shell Scripts (Bash) | Bash       | Used for build orchestration in the UEFI execution environment (LLVM/LLD, Rust UEFI targets) |
+
+- Plan 9 shell + CLI tools orchestrate all agent and CUDA workloads; no POSIX runtime expected
 
 ---
 
@@ -177,6 +178,8 @@ Codex must auto-detect supported hardware and pass tests accordingly.
 
 - Ensemble agents must test under `$COHESIX_ENS_TMP`, and validate safe cleanup afterward.
 - QEMU boot scripts must support the UEFI → seL4 → Cohesix boot flow and gracefully skip if `qemu-system-x86_64` is missing or not installed.
+
+- Secure9p integration tests for remote CUDA (Plan 9 to Alpine or Jetson) must validate fallback and graceful logging if unavailable
 
 ---
 

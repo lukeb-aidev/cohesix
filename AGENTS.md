@@ -21,7 +21,7 @@ Cohesix is a secure OS platform built on seL4 + Plan9 principles with:
 - Pure UEFI execution environment using LLVM/LLD (no Linux syscalls, no `/proc` or `/sys`)
 - Rust cross-targets: `x86_64-unknown-uefi`, `aarch64-unknown-uefi`
 - Pre-installed tools: `rustc`, `cargo`, `llvm`, `lld`, `clang`, `python3` (with `flake8`, `mypy`, `black`), `go`, `gcc`
-Agents run in CI (GitHub Actions) and locally, ensuring consistency, security, and sandbox guarantees across all roles and deployments.
+Agents run in CI (GitHub Actions) and locally, ensuring consistency, security, and sandbox guarantees across all roles and deployments, with CUDA processing handled by dedicated Linux microservers where applicable.
 
 ---
 
@@ -99,7 +99,7 @@ Agents always respect TMPDIR, COHESIX_TRACE_TMP, or COHESIX_ENS_TMP — never ha
 ## ✨ Goal of This Agent System
 
 To ensure every build of Cohesix:
-- Boots cleanly via QEMU or Jetson into a validator-protected shell
+- Boots cleanly via QEMU into a validator-protected shell
 - Includes the full userland toolchain (CLI, cohcc, BusyBox, mandoc)
 - Enforces role trust + Secure9P policy
 - Logs watchdog + validator output for audits
