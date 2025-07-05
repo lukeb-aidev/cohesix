@@ -337,17 +337,37 @@ if [ "$SEL4_ENTRY" = 1 ]; then
   FEATURES+=",sel4,kernel_bin,minimal_uefi"
 fi
 
-for BIN in cohesix_root cohcc cohesix_build cohesix_cap cohesix_trace kernel logdemo init sel4_entry; do
+for BIN in cohesix_root cohcc cohesix_build cohesix_cap cohesix_trace logdemo init; do
   log "🚀 Building $BIN"
   RUSTFLAGS="-C debuginfo=2" \
     cargo build --release \
       --bin "$BIN" \
-      --no-default-features --features "$FEATURES" \
+      --no-default-features --features "std,busybox" \
       --target aarch64-unknown-linux-musl || {
         echo "❌ Build failed for $BIN"
         exit 1
       }
 done
+
+log "🚀 Building kernel (kernel_bin,minimal_uefi)"
+RUSTFLAGS="-C debuginfo=2" \
+  cargo build --release \
+    --bin kernel \
+    --no-default-features --features "std,busybox,kernel_bin,minimal_uefi" \
+    --target aarch64-unknown-linux-musl || {
+      echo "❌ Build failed for kernel"
+      exit 1
+    }
+
+log "🚀 Building sel4_entry (kernel_bin,minimal_uefi)"
+RUSTFLAGS="-C debuginfo=2" \
+  cargo build --release \
+    --bin sel4_entry \
+    --no-default-features --features "std,busybox,kernel_bin,minimal_uefi" \
+    --target aarch64-unknown-linux-musl || {
+      echo "❌ Build failed for sel4_entry"
+      exit 1
+    }
 grep -Ei 'error|fail|panic|permission denied|warning' "$LOG_FILE" > "$SUMMARY_ERRORS" || true
 
 # Ensure output directory exists before copying Rust binaries
