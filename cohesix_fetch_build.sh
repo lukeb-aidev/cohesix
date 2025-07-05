@@ -82,7 +82,6 @@ done
 cd cohesix
 log "✅ Clone complete and switched to cohesix directory ..."
 
-cd cohesix
 ROOT="$(pwd)"
 if [ -f "$ROOT/scripts/load_arch_config.sh" ]; then
   source "$ROOT/scripts/load_arch_config.sh"
