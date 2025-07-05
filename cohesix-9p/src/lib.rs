@@ -5,6 +5,7 @@
 
 #![cfg_attr(not(feature = "posix"), no_std)]
 #![forbid(unsafe_code)]
+//! Cohesix 9P filesystem library.
 
 extern crate alloc;
 #[cfg(feature = "posix")]

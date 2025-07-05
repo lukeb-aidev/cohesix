@@ -7,8 +7,6 @@
 use alloc::{boxed::Box, string::String, vec::Vec};
 /// Runtime environment initialization for Cohesix.
 /// Sets up runtime globals, telemetry, role configuration, and system entropy.
-
-/// Initialize the runtime environment at startup.
 use std::fs;
 
 #[derive(Debug, Default, Clone)]
@@ -52,6 +50,7 @@ pub fn parse_boot_args() -> BootArgs {
     args
 }
 
+/// Initialize the runtime environment at startup.
 pub fn initialize_runtime_env() {
     println!("[env] Initializing runtime environment...");
     load_config();
@@ -61,7 +60,7 @@ pub fn initialize_runtime_env() {
         fs::write("/srv/cohrole", role).ok();
     }
     println!("[env] boot args: {:?}", boot);
-    let role = boot.cohrole.clone().unwrap_or_else(|| detect_cohrole());
+    let role = boot.cohrole.clone().unwrap_or_else(detect_cohrole);
     println!("[env] running as role: {}", role);
     // In the future this will also seed entropy and launch telemetry threads.
 }

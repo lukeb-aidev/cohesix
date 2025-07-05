@@ -2,7 +2,6 @@
 // Filename: server.rs v0.4
 // Author: Lukas Bower
 // Date Modified: 2026-12-31
-#![cfg(feature = "posix")]
 
 use crate::{fs::InMemoryFs, CohError, FsConfig};
 

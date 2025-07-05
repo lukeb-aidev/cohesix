@@ -65,3 +65,4 @@ echo "== Build complete =="
 echo "== Stage contents =="
 find "$STAGE_DIR/bin" -type f -maxdepth 1
 echo "BUILD AND STAGING COMPLETE: All binaries present and documented."
+cargo clippy -- -D warnings

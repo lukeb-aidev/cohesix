@@ -3,11 +3,10 @@
 // Author: Lukas Bower
 // Date Modified: 2025-05-31
 
-/// Cohesix Utility Module
-//
-/// This module serves as a namespace for reusable utility functions and helpers
-/// used across the Cohesix platform. Submodules include constants, evaluators, formatters, and common traits.
-
+//! Cohesix Utility Module
+//!
+//! This module serves as a namespace for reusable utility functions and helpers
+//! used across the Cohesix platform. Submodules include constants, evaluators, formatters, and common traits.
 /// Constant expression evaluation helpers.
 pub mod const_eval;
 /// Formatting helpers.

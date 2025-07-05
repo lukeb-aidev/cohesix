@@ -134,6 +134,10 @@ pub unsafe fn init_syscall_trap() {
 }
 
 /// Compiles only on bare-metal (target_os = "none"), safe stub otherwise.
+///
+/// # Safety
+/// This function should only be called during kernel initialization on
+/// bare-metal targets. Calling it on unsupported targets may cause undefined behavior.
 #[cfg(not(target_os = "none"))]
 pub unsafe fn init_syscall_trap() {
     panic!("init_syscall_trap attempted on non-bare-metal target");

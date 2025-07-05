@@ -6,7 +6,6 @@
 #[allow(unused_imports)]
 use alloc::{boxed::Box, string::String, vec::Vec};
 /// Operand enum: arguments to instructions (values, constants, etc.)
-
 pub enum Operand {
     ValueRef(u32),
     Constant(i64),

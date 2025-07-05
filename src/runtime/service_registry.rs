@@ -129,6 +129,12 @@ impl TestRegistryGuard {
     }
 }
 
+impl Default for TestRegistryGuard {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Drop for TestRegistryGuard {
     fn drop(&mut self) {
         // Ignore any errors so test teardown remains quiet.

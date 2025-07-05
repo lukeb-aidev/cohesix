@@ -3,10 +3,9 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-12
 
+//! KioskInteractive role initialisation.
 #[allow(unused_imports)]
 use alloc::{boxed::Box, string::String, vec::Vec};
-/// KioskInteractive role initialisation.
-
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::Path;

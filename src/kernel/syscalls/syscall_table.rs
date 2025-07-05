@@ -5,7 +5,6 @@
 
 /// Kernel syscall table for Cohesix.
 /// Maps syscall numbers to handler functions and enforces validation and dispatch.
-
 /// Enumeration of supported syscalls.
 #[derive(Debug)]
 pub enum Syscall {

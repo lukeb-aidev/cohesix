@@ -7,7 +7,6 @@
 use alloc::{boxed::Box, string::String, vec::Vec};
 /// Plan 9 file protocol integration layer for Cohesix kernel-space.
 /// Provides abstraction and mount logic for exposing namespaces via 9P.
-
 /// Placeholder for a 9P mount entry.
 #[derive(Copy, Clone)]
 pub struct Plan9Mount {

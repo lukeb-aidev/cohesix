@@ -5,7 +5,6 @@
 
 /// Secure boot logic for Cohesix platform.
 /// Verifies boot integrity, firmware authenticity, and cryptographic signatures.
-
 /// Entry point for secure boot validation.
 pub fn validate_secure_boot() -> bool {
     load_trusted_keys();
