@@ -1,4 +1,8 @@
 #!/bin/bash
+# CLASSIFICATION: COMMUNITY
+# Filename: make_iso.sh v0.10
+# Author: Lukas Bower
+# Date Modified: 2025-07-05
 set -euxo pipefail
 
 ROOT=$(git rev-parse --show-toplevel)
