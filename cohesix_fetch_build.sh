@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.88
+# Filename: cohesix_fetch_build.sh v0.89
 # Author: Lukas Bower
-# Date Modified: 2027-01-24
+# Date Modified: 2025-07-05
 #!/bin/bash
 #
 # Bare metal seL4 build flow (no UEFI):
@@ -67,12 +67,16 @@ log "🛠️ [Build Start] $(date)"
 # Clone repository before sourcing any configuration so a fresh checkout
 # is available even when $HOME is empty.
 cd "$HOME"
-log "📦 Cloning repository..."
-rm -rf cohesix
-for i in {1..3}; do
-  git clone git@github.com:lukeb-aidev/cohesix.git && break || sleep 3
-done
-log "✅ Clone complete ..."
+if [ -d cohesix/.git ]; then
+  log "📦 Using existing repository at $HOME/cohesix"
+else
+  log "📦 Cloning repository..."
+  rm -rf cohesix
+  for i in {1..3}; do
+    git clone git@github.com:lukeb-aidev/cohesix.git && break || sleep 3
+  done
+  log "✅ Clone complete ..."
+fi
 
 cd cohesix
 ROOT="$(pwd)"
