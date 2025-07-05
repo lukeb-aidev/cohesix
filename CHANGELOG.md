@@ -2708,4 +2708,9 @@
 - Added `ninep` crate to primary dependencies to satisfy CUDA remote dispatch.
 - Cargo build and tests now resolve `ninep` correctly across the workspace.
 
+## [v0.414] - 2027-01-24
+### Fixed
+- `cohesix_fetch_build.sh` passes only valid features when building `cohesix_root`.
+- `Cargo.toml` feature list reduced to `std` and `busybox` for rootserver builds.
+
 
