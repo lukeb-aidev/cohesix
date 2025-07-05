@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: main.rs v0.2
+// Filename: main.rs v0.3
 // Author: Lukas Bower
-// Date Modified: 2026-10-07
+// Date Modified: 2026-12-31
 // UEFI-specific stub removed; full init runs on UEFI by default.
 
 #[allow(unused_imports)]
@@ -15,7 +15,6 @@ fn main() {
     initialize_runtime_env();
     let boot = parse_boot_args();
     println!("[init] secure9p: {}", boot.secure9p);
-    println!("[init] cuda_disabled: {}", boot.no_cuda);
     println!("[init] busybox: {}", boot.busybox);
     let role = std::env::var("cohrole").unwrap_or_else(|_| "unknown".into());
     let cfg = load_active();

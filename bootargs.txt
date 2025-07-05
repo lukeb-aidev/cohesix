@@ -1,6 +1,6 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: bootargs.txt v0.1
+# Filename: bootargs.txt v0.2
 # Author: Lukas Bower
-# Date Modified: 2026-10-07
+# Date Modified: 2026-12-31
 
-COHROLE=QueenPrimary secure9p=1 busybox=1 no-cuda=1
+COHROLE=QueenPrimary secure9p=1 busybox=1
