@@ -8,6 +8,8 @@
 use alloc::{boxed::Box, string::String, vec::Vec};
 use cohesix::kernel::user_api::{SYS_EXIT, SYS_LOG};
 
+extern crate alloc;
+
 fn main() {
     unsafe {
         if let Some(log) = SYS_LOG {

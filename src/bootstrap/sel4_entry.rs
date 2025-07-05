@@ -6,6 +6,8 @@
 #![no_main]
 #![cfg(all(feature = "sel4", feature = "kernel_bin", feature = "minimal_uefi"))]
 
+extern crate alloc;
+
 #[allow(unused_imports)]
 use alloc::{boxed::Box, string::String, vec::Vec};
 
