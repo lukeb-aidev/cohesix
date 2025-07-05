@@ -38,7 +38,6 @@ pub mod prelude {
 }
 
 /// Root library for the Coh_CC compiler and platform integrations.
-
 /// Intermediate Representation (IR) core types and utilities
 pub mod ir;
 
@@ -46,16 +45,12 @@ pub mod ir;
 pub mod pass_framework;
 /// Individual optimization passes
 pub mod passes;
-
 /// Code generation backends (C, WASM) and dispatch logic
 pub mod codegen;
-
 /// CLI interface for compiler invocation
 pub mod cli;
-
 /// Minimal sandbox-safe compiler wrapper
 pub mod coh_cc;
-
 /// Core dependencies validation and management
 pub mod dependencies;
 

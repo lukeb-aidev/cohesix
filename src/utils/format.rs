@@ -16,10 +16,10 @@
 // reused in early‑boot code if desired.
 // ─────────────────────────────────────────────────────────────
 
+#![forbid(unsafe_code)]
+#![warn(missing_docs)]
 #[allow(unused_imports)]
 use alloc::{boxed::Box, string::String, vec::Vec};
-#[forbid(unsafe_code)]
-#[warn(missing_docs)]
 
 /// Return a human‑readable string for a byte count using IEC (MiB) units.
 ///
