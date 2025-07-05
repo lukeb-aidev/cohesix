@@ -52,14 +52,13 @@ export CUDA_INCLUDE_DIR="${CUDA_INCLUDE_DIR:-$CUDA_HOME/include}"
 export CUDA_LIBRARY_PATH="${CUDA_LIBRARY_PATH:-/usr/lib/x86_64-linux-gnu}"
 export PATH="$CUDA_HOME/bin:$PATH"
 export LD_LIBRARY_PATH="$CUDA_LIBRARY_PATH:${LD_LIBRARY_PATH:-}"
-export LOG_DIR="$HOME/cohesix_logs"
 export ROOT="$HOME/cohesix"
+export LOG_DIR="$ROOT/logs"
 
 # Clone repository before sourcing any configuration so a fresh checkout
 # is available even when $HOME is empty.
 cd "$HOME"
 
-LOG_DIR="$HOME/cohesix_logs"
 mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/build_$(date +%Y%m%d_%H%M%S).log"
 SUMMARY_ERRORS="$LOG_DIR/summary_errors.log"
@@ -83,6 +82,7 @@ log "🛠️ [Build Start] $(date)"
   log "✅ Clone complete ..."
 
 cd cohesix
+mkdir -p "$LOG_DIR"
 
 
 if [ -f "$ROOT/scripts/load_arch_config.sh" ]; then
