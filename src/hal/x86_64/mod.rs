@@ -18,8 +18,9 @@
 // Functions log actions and return `Ok(())` on success.
 // ─────────────────────────────────────────────────────────────
 
-#[allow(unsafe_code)]
-#[warn(missing_docs)]
+#![allow(unsafe_code)]
+#![warn(missing_docs)]
+
 use log::debug;
 #[cfg(target_os = "none")]
 use log::info;

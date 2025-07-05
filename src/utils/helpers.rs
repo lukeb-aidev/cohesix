@@ -3,10 +3,10 @@
 // Date Modified: 2025-06-01
 // Author: Lukas Bower
 
+#![forbid(unsafe_code)]
+#![warn(missing_docs)]
 #[allow(unused_imports)]
 use alloc::{boxed::Box, string::String, vec::Vec};
-#[forbid(unsafe_code)]
-#[warn(missing_docs)]
 //
 // ─────────────────────────────────────────────────────────────
 // Cohesix · Miscellaneous Utility Helpers

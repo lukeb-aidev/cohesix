@@ -18,8 +18,8 @@
 // * `init`    – early hardware initialisation (UART, watchdog).
 // ─────────────────────────────────────────────────────────────
 
-#[forbid(unsafe_code)]
-#[warn(missing_docs)]
+#![forbid(unsafe_code)]
+#![warn(missing_docs)]
 
 /// PCR extension helpers based on SHA‑256.
 /// Re‑export [`measure::extend_pcr`] for convenience.
