@@ -10,6 +10,7 @@ extern crate alloc;
 use alloc::{boxed::Box, string::String, vec::Vec};
 #[cfg(feature = "kernel_bin")]
 use cohesix::kernel::config;
+use cohesix::coherr;
 
 fn main() {
     coherr!("Cohesix kernel stub");
