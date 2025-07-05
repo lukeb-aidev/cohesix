@@ -1,11 +1,12 @@
-#!/bin/bash
+# CLASSIFICATION: COMMUNITY
+# Filename: cohesix_fetch_build.sh v0.90
+# Author: Lukas Bower
+# Date Modified: 2027-02-01
+#!/usr/bin/env bash
 #
 # Merged old script v0.89 features into current script.
-# Preserved CUDA checks, BusyBox build, CMake upgrade, Go helpers, mandoc staging, 
+# Preserved CUDA checks, BusyBox build, CMake upgrade, Go helpers, mandoc staging,
 # but removed ISO building and related QEMU -cdrom logic for pure bare-metal seL4.
-# Author: Lukas Bower
-# Date Modified: 2025-07-05
-#!/bin/bash
 #
 # Bare metal seL4 build flow (no UEFI):
 # 1. Run init-build.sh with debug flags to configure seL4 for qemu-arm-virt.
@@ -233,6 +234,39 @@ cd "$ROOT"
 STAGE_DIR="$ROOT/out/iso"
 GO_HELPERS_DIR="$ROOT/out/go_helpers"
 mkdir -p "$ROOT/out/bin" "$GO_HELPERS_DIR"
+mkdir -p "$STAGE_DIR" "$ROOT/out/etc"
+# Create minimal Cohesix filesystem structure
+for dir in bin usr/cli srv mnt etc tmp proc dev; do
+  mkdir -p "$STAGE_DIR/$dir"
+done
+log "✅ Created Cohesix FS structure"
+
+# Ensure init.conf exists with defaults
+INIT_CONF="$ROOT/out/etc/init.conf"
+if [ ! -f "$INIT_CONF" ]; then
+  cat > "$INIT_CONF" <<EOF
+# CLASSIFICATION: COMMUNITY
+# Filename: init.conf v0.1
+# Author: Lukas Bower
+# Date Modified: $(date +%Y-%m-%d)
+ROLE=DroneWorker
+GPU=1
+TRACE=on
+EOF
+  log "✅ Created default init.conf"
+else
+  log "✅ Existing init.conf found"
+fi
+cp "$INIT_CONF" "$STAGE_DIR/etc/init.conf"
+log "✅ Staged /etc/init.conf"
+
+# Stage rc script if available
+if [ -f "userland/miniroot/bin/rc" ]; then
+  cp "userland/miniroot/bin/rc" "$STAGE_DIR/etc/rc"
+  cp "userland/miniroot/bin/rc" "$ROOT/out/etc/rc"
+  chmod +x "$STAGE_DIR/etc/rc" "$ROOT/out/etc/rc"
+  log "✅ Staged /etc/rc"
+fi
 # Clean up artifacts from previous builds
 rm -f "$ROOT/out/bin/init.efi" "$ROOT/out/boot/kernel.elf" 2>/dev/null || true
 
