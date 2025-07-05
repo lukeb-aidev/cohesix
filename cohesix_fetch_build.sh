@@ -81,6 +81,7 @@ cd "$HOME"
 
 cd cohesix
 ROOT="$(pwd)"
+echo "$ROOT"
 if [ -f "$ROOT/scripts/load_arch_config.sh" ]; then
   source "$ROOT/scripts/load_arch_config.sh"
 else
