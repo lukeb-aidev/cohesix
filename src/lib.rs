@@ -5,6 +5,7 @@
 // The library now always compiles all modules for UEFI.
 // Author: Lukas Bower
 #![cfg_attr(not(feature = "std"), no_std)]
+//! Core Cohesix runtime library.
 
 extern crate alloc;
 

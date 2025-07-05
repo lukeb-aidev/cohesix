@@ -46,3 +46,9 @@ impl CudaExecutor {
         })
     }
 }
+
+impl Default for CudaExecutor {
+    fn default() -> Self {
+        Self::new()
+    }
+}

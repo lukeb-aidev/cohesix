@@ -5,7 +5,6 @@
 
 /// GPU driver interface for Cohesix kernel-space runtime.
 /// This module provides initialization hooks and runtime checks for GPU availability and basic interaction.
-
 /// Enumeration of supported GPU backends.
 #[derive(Debug, Clone, Copy)]
 pub enum GpuBackend {

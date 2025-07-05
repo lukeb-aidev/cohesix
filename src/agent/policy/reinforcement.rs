@@ -4,7 +4,6 @@
 // Date Modified: 2025-07-05
 
 /// Reinforcement learning style policy tracker.
-
 pub struct ReinforcementPolicy {
     reward: f32,
 }

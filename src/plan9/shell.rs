@@ -9,14 +9,12 @@ extern crate alloc;
 use alloc::collections::VecDeque;
 /// Plan 9–style shell interface for Cohesix.
 /// Provides command execution, input dispatch, and basic parsing.
-
 /// Represents a parsed shell command and arguments.
 #[derive(Debug)]
 pub struct Command {
     pub name: String,
     pub args: Vec<String>,
 }
-
 /// A simple shell interface.
 pub struct Shell {
     pub history: VecDeque<String>,

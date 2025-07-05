@@ -6,7 +6,6 @@
 #[allow(unused_imports)]
 use alloc::{boxed::Box, string::String, vec::Vec};
 /// IR type system: integer, pointer, function types, etc.
-
 pub enum IRType {
     Int32,
     Ptr(Box<IRType>),
