@@ -7,7 +7,6 @@
 use alloc::{boxed::Box, string::String, vec::Vec};
 /// Plan 9 shim for Cohesix kernel-to-userspace bridging.
 /// This module provides an adapter layer between kernel subsystems and 9P-style userland services.
-
 /// Trait defining a basic Plan 9 shim interface.
 pub trait Plan9Shim {
     /// Dispatch a request from kernel space into the 9P userland domain.

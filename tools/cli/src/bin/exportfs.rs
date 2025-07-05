@@ -25,7 +25,7 @@ struct Args {
 fn main() -> Result<(), CohError> {
     let args = Args::parse();
     let cfg = FsConfig {
-        root: args.root.clone().into(),
+        root: args.root.clone(),
         port: args.port,
         readonly: false,
     };

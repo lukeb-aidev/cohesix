@@ -6,7 +6,6 @@
 #[allow(unused_imports)]
 use alloc::{boxed::Box, string::String, vec::Vec};
 /// Value represents a SSA result or named constant in the IR.
-
 pub struct Value {
     pub id: usize,
     pub ty: crate::ir::ty::IRType,

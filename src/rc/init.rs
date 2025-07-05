@@ -4,10 +4,9 @@
 // Date Modified: 2026-12-30
 // Formerly limited to non-UEFI builds; now always compiled for UEFI.
 
+//! Minimal Plan 9 style init parser for Cohesix.
 #[allow(unused_imports)]
 use alloc::{boxed::Box, string::String, vec::Vec};
-/// Minimal Plan 9 style init parser for Cohesix.
-
 use crate::plan9::namespace::NamespaceLoader;
 use std::fs;
 use std::io::{self, BufRead, Write};

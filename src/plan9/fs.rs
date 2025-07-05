@@ -7,7 +7,6 @@
 use alloc::{boxed::Box, string::String, vec::Vec};
 /// Plan 9 filesystem abstraction for Cohesix.
 /// Provides in-memory structures and trait scaffolding for 9P-like filesystem operations.
-
 /// Represents a file or directory node in the Plan 9 FS tree.
 #[derive(Debug)]
 pub struct FsNode {

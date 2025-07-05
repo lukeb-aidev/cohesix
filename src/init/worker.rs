@@ -4,8 +4,7 @@
 // Date Modified: 2026-02-21
 // Uses rand for trace IDs; disabled for UEFI builds where getrandom isn't available.
 
-/// DroneWorker role initialisation.
-
+//! DroneWorker role initialisation.
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use crate::plan9::namespace::NamespaceLoader;

@@ -6,7 +6,6 @@
 #[allow(unused_imports)]
 use alloc::{boxed::Box, string::String, vec::Vec};
 /// Block: sequence of instructions with single entry and terminator.
-
 pub struct Block {
     pub label: String,
     pub instructions: Vec<crate::ir::instruction::Instruction>,

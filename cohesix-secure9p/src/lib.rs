@@ -4,6 +4,7 @@
 // Date Modified: 2027-01-31
 
 #![cfg_attr(not(feature = "std"), no_std)]
+//! Secure 9P extensions for Cohesix.
 
 extern crate alloc;
 

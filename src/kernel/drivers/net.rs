@@ -9,7 +9,6 @@ use alloc::collections::VecDeque;
 
 /// Network driver interface for Cohesix kernel runtime.
 /// Provides initialization and basic transmit/receive capabilities, to be extended for real NICs.
-
 /// Enumeration of supported network interfaces.
 #[derive(Debug, Clone, Copy)]
 pub enum NetInterfaceType {
