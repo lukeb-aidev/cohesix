@@ -392,6 +392,7 @@ else
 fi
 
 log "🧱 Building Rust components..."
+echo "== Rust build =="
 
 # Build cohesix_root for seL4 root server
 echo "🔧 Building Rust binary: cohesix_root"
@@ -408,12 +409,12 @@ cargo build --release --bin kernel \
   --target aarch64-unknown-linux-musl
 echo "✅ Finished building: kernel"
 
-# Build sel4_entry with its required features
-echo "🔧 Building Rust binary: sel4_entry"
-cargo build --release --bin sel4_entry \
-  --features "sel4,kernel_bin,minimal_uefi" \
-  --target aarch64-unknown-linux-musl
-echo "✅ Finished building: sel4_entry"
+# Build sel4_entry with its required features (temporarily disabled)
+# echo "🔧 Building Rust binary: sel4_entry"
+# cargo build --release --bin sel4_entry \
+#   --features "sel4,kernel_bin,minimal_uefi" \
+#   --target aarch64-unknown-linux-musl
+# echo "✅ Finished building: sel4_entry"
 
 # Build logdemo with its required features
 echo "🔧 Building Rust binary: logdemo"
@@ -439,7 +440,7 @@ done
 
 # Copy built binaries to staging
 mkdir -p "$STAGE_DIR/bin"
-for bin in cohcc cohesix_build cohesix_cap cohesix_trace cohrun_cli cohagent cohrole cohrun cohup cohesix_root kernel logdemo init sel4_entry; do
+for bin in cohcc cohesix_build cohesix_cap cohesix_trace cohrun_cli cohagent cohrole cohrun cohup cohesix_root kernel logdemo init; do
   BIN_PATH="target/aarch64-unknown-linux-musl/release/$bin"
   if [ -f "$BIN_PATH" ]; then
     cp "$BIN_PATH" "$STAGE_DIR/bin/$bin"
@@ -674,6 +675,7 @@ fi
 grep -Ei 'error|fail|panic|permission denied|warning' "$LOG_FILE" > "$SUMMARY_ERRORS" || true
 
 # --- Go build and staging section ---
+echo "== Go build =="
 if command -v go &> /dev/null; then
   log "🐹 Building Go components..."
 
@@ -780,6 +782,7 @@ if [ ! -f "$STAGE_DIR/etc/plan9.ns" ]; then
 fi
 
 log "🏗️  Staging complete filesystem..."
+echo "BUILD AND STAGING COMPLETE"
 BIN_COUNT=$(find "$STAGE_DIR/bin" -type f -perm -111 | wc -l)
 ROLE_COUNT=$(find "$STAGE_DIR/roles" -name '*.yaml' | wc -l)
 log "FS BUILD OK: ${BIN_COUNT} binaries, ${ROLE_COUNT} roles staged" >&3
