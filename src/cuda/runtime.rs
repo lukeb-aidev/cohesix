@@ -233,13 +233,12 @@ impl CudaExecutor {
                 self.last_exec_ns = 0;
                 fs::write("/srv/cuda_result", b"cuda disabled").map_err(|e| e.to_string())?;
                 return Ok(());
-            }
-
-            #[cfg(feature = "cuda")]
-            {
-                let len = self.kernel.as_ref().map(|k| k.len()).unwrap_or(0);
-                info!("launching CUDA kernel size {}", len);
-                let start = Instant::now();
+            } else {
+                #[cfg(feature = "cuda")]
+                {
+                    let len = self.kernel.as_ref().map(|k| k.len()).unwrap_or(0);
+                    info!("launching CUDA kernel size {}", len);
+                    let start = Instant::now();
 
             crate::validator::log_violation(crate::validator::RuleViolation {
                 type_: "unsafe_cuda_launch",
@@ -274,18 +273,21 @@ impl CudaExecutor {
                 fs::write("/srv/cuda_result", b"kernel executed").map_err(|e| e.to_string())?;
                 Ok(())
             })();
-            if let Err(ref e) = res {
-                warn!("cuda launch error: {}", e);
-                Self::reset_cuda_context();
+                if let Err(ref e) = res {
+                    warn!("cuda launch error: {}", e);
+                    Self::reset_cuda_context();
+                }
+                let telem = self.telemetry().unwrap_or_default();
+                let (q, j) = (0, 0);
+                #[allow(unused)]
+                metrics::update(&telem, q, j);
+                res
+                }
+                #[cfg(not(feature = "cuda"))]
+                {
+                    Ok(())
+                }
             }
-            let telem = self.telemetry().unwrap_or_default();
-            let (q, j) = (0, 0);
-            #[allow(unused)]
-            metrics::update(&telem, q, j);
-            res
-            }
-
-            Ok(())
         }
     }
 
@@ -347,8 +349,24 @@ impl CudaExecutor {
                 let _ = Context::reset(&dev);
             }
         }
+        Self::cuda_device_reset();
     }
 
     #[cfg(not(all(feature = "cuda", not(target_os = "uefi"))))]
     fn reset_cuda_context() {}
+
+    #[cfg(all(feature = "cuda", not(target_os = "uefi")))]
+    fn cuda_device_reset() {
+        use libloading::Library;
+        unsafe {
+            if let Ok(lib) = Library::new("libcudart.so") {
+                if let Ok(sym) = lib.get::<unsafe extern "C" fn() -> i32>(b"cudaDeviceReset\0") {
+                    let _ = sym();
+                }
+            }
+        }
+    }
+
+    #[cfg(not(all(feature = "cuda", not(target_os = "uefi"))))]
+    fn cuda_device_reset() {}
 }
