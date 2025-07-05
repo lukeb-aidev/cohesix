@@ -1,19 +1,39 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: main.go v0.4
+// Filename: main.go v0.5
 // Author: Lukas Bower
-// Date Modified: 2026-07-27
+// Date Modified: 2027-08-04
 // License: SPDX-License-Identifier: MIT OR Apache-2.0
 
 package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"log"
 	"net/http"
+	"os"
 
 	orchestrator "cohesix/internal/orchestrator/http"
 )
+
+type credentials struct {
+	User string `json:"user"`
+	Pass string `json:"pass"`
+}
+
+func loadCreds(path string) (string, string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", "", err
+	}
+	defer f.Close()
+	var c credentials
+	if err := json.NewDecoder(f).Decode(&c); err != nil {
+		return "", "", err
+	}
+	return c.User, c.Pass, nil
+}
 
 func main() {
 	bind := flag.String("bind", "127.0.0.1", "bind address")
@@ -29,6 +49,15 @@ func main() {
 		StaticDir: *staticDir,
 		LogFile:   *logFile,
 		Dev:       *dev,
+	}
+
+	if !cfg.Dev {
+		if u, p, err := loadCreds("/srv/orch_user.json"); err == nil {
+			cfg.AuthUser = u
+			cfg.AuthPass = p
+		} else {
+			log.Printf("warning: could not load creds: %v", err)
+		}
 	}
 
 	if *dev {
