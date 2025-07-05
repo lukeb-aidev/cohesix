@@ -1,5 +1,5 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.85
+# Filename: cohesix_fetch_build.sh v0.86
 # Author: Lukas Bower
 # Date Modified: 2026-12-31
 #!/bin/bash
@@ -330,9 +330,9 @@ if [ "$SEL4_ENTRY" = 1 ]; then
   FEATURES+=",sel4,kernel_bin,minimal_uefi"
 fi
 RUSTFLAGS="-C debuginfo=2" \
-  cargo build --release --workspace --all-targets \
+  cargo build --release --bin cohesix_root \
   --no-default-features --features "$FEATURES" \
-  --target aarch64-unknown-linux-musl || true
+  --target aarch64-unknown-linux-musl
 grep -Ei 'error|fail|panic|permission denied|warning' "$LOG_FILE" > "$SUMMARY_ERRORS" || true
 
 # Ensure output directory exists before copying Rust binaries

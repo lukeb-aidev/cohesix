@@ -133,7 +133,7 @@
 | docs/community/architecture/BOOT_KERNEL_FLOW.md | v0.3 | 2026-10-16 | COMMUNITY | | |
 | docs/community/archive/EXAMPLES_README.md | v0.3 | 2026-02-05 | COMMUNITY | | |
 | .cohesix_env | v0.3 | 2026-07-25 | COMMUNITY | | |
-| cohesix_fetch_build.sh | v0.85 | 2026-12-31 | COMMUNITY | | |
+| cohesix_fetch_build.sh | v0.86 | 2026-12-31 | COMMUNITY | | |
 | CONTRIBUTING.md | v1.1 | 2025-07-23 | COMMUNITY | | |
 | config/secure9p.toml | v0.7 | 2026-12-31 | COMMUNITY | | |
 | src/secure9p/mod.rs | v0.2 | 2025-07-25 | COMMUNITY | | |
@@ -170,7 +170,7 @@
 | scripts/load_arch_config.sh | v0.1 | 2026-07-25 | COMMUNITY | | |
 | scripts/build_busybox.sh | v0.7 | 2026-11-17 | COMMUNITY | | |
 | metadata.json | v0.1 | 2025-07-24 | COMMUNITY | | |
-| Cargo.toml | v0.41 | 2026-12-31 | COMMUNITY | | |
+| Cargo.toml | v0.42 | 2026-12-31 | COMMUNITY | | |
 | cohesix-9p/Cargo.toml | v0.5 | 2026-12-31 | COMMUNITY | | |
 | cohesix-secure9p/Cargo.toml | v0.3 | 2026-12-31 | COMMUNITY | | |
 | cohesix-secure9p/src/secure_stream.rs | v0.1 | 2026-12-31 | COMMUNITY | | |
@@ -231,6 +231,7 @@
 | usr/src/example.coh | v0.1 | 2025-09-24 | COMMUNITY | | |
 | src/sh_loop.rs | v0.1 | 2025-09-23 | COMMUNITY | | |
 | src/root/main.rs | v0.3 | 2026-12-31 | COMMUNITY | | |
+| src/bin/cohesix_root.rs | v0.1 | 2026-12-31 | COMMUNITY | | |
 | src/utils/gpu.rs | v0.1 | 2025-12-12 | COMMUNITY | | |
 | src/cuda/runtime.rs | v0.15 | 2026-12-31 | COMMUNITY | | |
 | src/cuda/job_manager.rs | v0.1 | 2026-12-31 | COMMUNITY | | |
