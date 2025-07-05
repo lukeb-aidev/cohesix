@@ -24,7 +24,7 @@ impl CudaJobManager {
         Self { jobs: Mutex::new(Vec::new()), next_id: Mutex::new(0) }
     }
 
-    pub fn submit(&self, ptx: Vec<u8>) {
+    pub fn submit(&self, ptx: Vec<u8>) -> Result<(), String> {
         let mut id_lock = self.next_id.lock();
         let job_id = *id_lock;
         *id_lock += 1;
@@ -35,12 +35,13 @@ impl CudaJobManager {
         thread::spawn(move || {
             if let Some(mut job) = jobs.lock().iter_mut().find(|j| j.id == job_id) {
                 let mut exec = CudaExecutor::new();
-                if exec.load_kernel(Some(&job.ptx)).is_ok() {
-                    let _ = exec.launch();
+                if let Err(e) = exec.load_kernel(Some(&job.ptx)).and_then(|_| exec.launch()) {
+                    log::warn!("cuda job {} failed: {}", job_id, e);
                 }
             }
             jobs.lock().retain(|j| j.id != job_id);
         });
+        Ok(())
     }
 
     /// Return (queue_depth, job_count).
