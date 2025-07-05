@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Cargo.toml v0.42
+# Filename: Cargo.toml v0.43
 # Author: Lukas Bower
-# Date Modified: 2026-12-31
+# Date Modified: 2027-01-15
 [package]
 name    = "cohesix"
 version = "0.1.0"
@@ -70,7 +70,6 @@ default = ["std"]
 std = []
 sel4 = ["kernel_bin", "sel4_entry_bin"]
 rapier = ["rapier3d"]
-physics = ["rapier3d"]
 busybox = []
 busybox_client = []
 minimal_uefi = []
