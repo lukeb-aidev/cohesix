@@ -1,10 +1,8 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: interactive_aibooth.rs v0.2
+// Filename: interactive_aibooth.rs v0.3
 // Author: Lukas Bower
-// Date Modified: 2026-10-28
+// Date Modified: 2026-12-31
 
-#[cfg(all(feature = "cuda", not(feature = "no-cuda")))]
-use crate::cuda::runtime::CudaRuntime;
 use crate::runtime::env::init::detect_cohrole;
 use crate::runtime::ServiceRegistry;
 /// Initialization routines for the InteractiveAiBooth role.
@@ -39,21 +37,7 @@ pub fn start() {
     }
 
     // Initialize CUDA runtime if available
-    #[cfg(all(feature = "cuda", not(feature = "no-cuda")))]
-    match CudaRuntime::try_new() {
-        Ok(rt) => {
-            if rt.is_present() {
-                log("[aibooth] CUDA available");
-            } else {
-                log("[aibooth] CUDA unavailable");
-            }
-        }
-        Err(e) => log(&format!("cuda init error: {e}")),
-    }
-    #[cfg(any(not(feature = "cuda"), feature = "no-cuda"))]
-    {
-        log("[aibooth] CUDA pipeline disabled");
-    }
+    log("[aibooth] CUDA pipeline uses remote dispatch");
     let _ = ServiceRegistry::register_service("aibooth", "/srv/aibooth");
     log("[aibooth] startup complete");
 }

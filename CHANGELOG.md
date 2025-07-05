@@ -2687,3 +2687,10 @@
 ### Changed
 - `cohesix_fetch_build.sh` now builds `cohesix_root` explicitly and fails on build errors.
 - Cargo.toml `[[bin]]` updated to use `src/bin/cohesix_root.rs`.
+
+## [v0.411] - 2026-12-31
+### Changed
+- Removed local CUDA runtime and job manager. All CUDA workloads dispatch over Secure9P.
+- Metrics now only record Secure9P session counts.
+- CUDA tests and features were deleted; build scripts no longer reference them.
+- README clarifies that `/srv/cuda` points to the remote CUDA server.

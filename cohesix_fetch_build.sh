@@ -1,5 +1,5 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.86
+# Filename: cohesix_fetch_build.sh v0.87
 # Author: Lukas Bower
 # Date Modified: 2026-12-31
 #!/bin/bash
@@ -325,7 +325,7 @@ else
 fi
 
 log "🧱 Building Rust components for seL4 rootserver ELF..."
-FEATURES="cuda,std,rapier,physics,busybox,no-cuda"
+FEATURES="std,rapier,physics,busybox"
 if [ "$SEL4_ENTRY" = 1 ]; then
   FEATURES+=",sel4,kernel_bin,minimal_uefi"
 fi
