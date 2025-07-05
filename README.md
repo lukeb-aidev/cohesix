@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: README.md v0.22
+// Filename: README.md v0.23
 // Author: Lukas Bower
 // Date Modified: 2026-12-31
 
@@ -87,7 +87,8 @@ Initial demo services are enabled:
 * `/srv/camera` (9P stream) and `/srv/gpuinfo` for workers
 * `cohrun physics_demo` to run a Rapier simulation
 * `cohtrace list` to view joined workers
-* Optional Secure 9P server with TLS via `--features secure9p` (see `config/secure9p.toml`)
+* Optional Secure 9P server with TLS via `--features secure9p` (see `config/secure9p.toml`).
+  TLS certificates are pinned and client auth can be enforced.
 * Copy `etc/init.conf.example` to `/etc/init.conf` and adjust values to control startup behavior
 
 ### Running the GUI Orchestrator

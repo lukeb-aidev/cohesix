@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: secure9p.toml v0.6
+// Filename: secure9p.toml v0.7
 // Author: Lukas Bower
-// Date Modified: 2026-10-29
+// Date Modified: 2026-12-31
 
 [[namespace]]
 agent = "lukas"
@@ -15,6 +15,8 @@ allow = ["read:/mnt/agents/lukas/input", "write:/mnt/agents/lukas/output"]
 port = 5645
 cert = "cert.pem"
 key = "key.pem"
+ca_cert = "ca.pem"
+require_client_auth = true
 
 [[namespace]]
 agent = "queen_primary"
