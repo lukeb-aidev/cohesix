@@ -24,6 +24,8 @@ aes-gcm = { version = "0.10", features = ["aes"] }
 aead = "0.5"
 aes = "0.8"
 cohesix_9p = { package = "cohesix-9p", path = "./cohesix-9p" }
+# Added for thread-safe job manager locking
+spin = "0.9"
 # Use the dummy RNG implementation for unsupported targets like UEFI
 getrandom = { version = "0.2", default-features = false, features = ["dummy"] }
 env_logger = "0.11.7"
