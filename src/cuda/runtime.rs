@@ -8,6 +8,8 @@
 /// Runtime CUDA integration using dynamic loading of `libcuda.so`.
 /// Falls back gracefully if no CUDA driver is present.
 use crate::runtime::ServiceRegistry;
+#[cfg(feature = "cuda")]
+use crate::metrics;
 #[cfg(not(target_os = "uefi"))]
 use crate::validator::{self, RuleViolation};
 use crate::{coh_error, CohError};
@@ -246,32 +248,41 @@ impl CudaExecutor {
                 time: crate::validator::timestamp(),
             });
 
-            // simple vector addition using embedded PTX
-            const PTX: &str = include_str!("../../tests/gpu_demos/add.ptx");
-            let module = Module::from_ptx(PTX, &[]).map_err(|e| e.to_string())?;
-            let stream = Stream::new(StreamFlags::NON_BLOCKING, None).map_err(|e| e.to_string())?;
-            let a = DeviceBuffer::from_slice(&[1.0f32, 2.0, 3.0]).map_err(|e| e.to_string())?;
-            let b = DeviceBuffer::from_slice(&[4.0f32, 5.0, 6.0]).map_err(|e| e.to_string())?;
-            let out = DeviceBuffer::from_slice(&[0.0f32; 3]).map_err(|e| e.to_string())?;
-            unsafe {
-                launch!(module.sum<<<1, 3, 0, stream>>>(a.as_device_ptr(), b.as_device_ptr(), out.as_device_ptr(), 3))
-                    .map_err(|e| e.to_string())?;
-            }
-            stream.synchronize().map_err(|e| e.to_string())?;
-            let mut host = [0.0f32; 3];
-            out.copy_to(&mut host).map_err(|e| e.to_string())?;
-            let runtime = start.elapsed().as_nanos() as u64;
-
-            self.last_exec_ns = runtime;
-            self.fallback_reason.clear();
-
-            OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open("/log/gpu_runtime.log")
-                .and_then(|mut f| writeln!(f, "kernel executed in {runtime}ns"))
-                .ok();
+            let res: Result<(), String> = (|| {
+                const PTX: &str = include_str!("../../tests/gpu_demos/add.ptx");
+                let module = Module::from_ptx(PTX, &[]).map_err(|e| e.to_string())?;
+                let stream = Stream::new(StreamFlags::NON_BLOCKING, None).map_err(|e| e.to_string())?;
+                let a = DeviceBuffer::from_slice(&[1.0f32, 2.0, 3.0]).map_err(|e| e.to_string())?;
+                let b = DeviceBuffer::from_slice(&[4.0f32, 5.0, 6.0]).map_err(|e| e.to_string())?;
+                let out = DeviceBuffer::from_slice(&[0.0f32; 3]).map_err(|e| e.to_string())?;
+                unsafe {
+                    launch!(module.sum<<<1, 3, 0, stream>>>(a.as_device_ptr(), b.as_device_ptr(), out.as_device_ptr(), 3))
+                        .map_err(|e| e.to_string())?;
+                }
+                stream.synchronize().map_err(|e| e.to_string())?;
+                let mut host = [0.0f32; 3];
+                out.copy_to(&mut host).map_err(|e| e.to_string())?;
+                let runtime = start.elapsed().as_nanos() as u64;
+                self.last_exec_ns = runtime;
+                self.fallback_reason.clear();
+                OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open("/log/gpu_runtime.log")
+                    .and_then(|mut f| writeln!(f, "kernel executed in {runtime}ns"))
+                    .ok();
                 fs::write("/srv/cuda_result", b"kernel executed").map_err(|e| e.to_string())?;
+                Ok(())
+            })();
+            if let Err(ref e) = res {
+                warn!("cuda launch error: {}", e);
+                Self::reset_cuda_context();
+            }
+            let telem = self.telemetry().unwrap_or_default();
+            let (q, j) = (0, 0);
+            #[allow(unused)]
+            metrics::update(&telem, q, j);
+            res
             }
 
             Ok(())
@@ -327,4 +338,17 @@ impl CudaExecutor {
             ..Default::default()
         })
     }
+
+    #[cfg(all(feature = "cuda", not(target_os = "uefi")))]
+    fn reset_cuda_context() {
+        use cust::{context::Context, device::Device};
+        if let Ok(dev) = Device::get_device(0) {
+            unsafe {
+                let _ = Context::reset(&dev);
+            }
+        }
+    }
+
+    #[cfg(not(all(feature = "cuda", not(target_os = "uefi"))))]
+    fn reset_cuda_context() {}
 }

@@ -8,5 +8,5 @@
 extern crate alloc;
 
 pub mod secure_stream;
-#[cfg(feature = "std")]
+#[cfg(all(feature = "std", feature = "tls"))]
 pub mod tls_server;

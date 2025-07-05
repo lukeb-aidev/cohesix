@@ -82,6 +82,7 @@ pub mod runtime;
 pub mod swarm;
 /// Telemetry subsystem utilities
 pub mod telemetry;
+pub mod metrics;
 /// Trace recording modules
 pub mod trace;
 
