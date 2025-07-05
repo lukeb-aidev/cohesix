@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: cli_tools.md v1.0
+// Filename: cli_tools.md v1.1
 // Author: Lukas Bower
-// Date Modified: 2026-12-31
+// Date Modified: 2027-02-01
 
 # CLI Tools Reference
 
@@ -70,3 +70,23 @@ go run ./go/cmd/gui-orchestrator --port 8888 --bind 0.0.0.0
 
 For agent schemas and Codex interaction see
 [AGENTS_AND_CLI.md](guides/AGENTS_AND_CLI.md).
+
+## srvctl (Plan9 service helper)
+Registers a service in the Plan9 */srv/services* directory.
+```rc
+srvctl announce -name demo -version 0.1 /mnt/test
+```
+
+## indexserver (Plan9 helper)
+Creates an index of file paths and exposes query/result files under */srv/index*.
+```rc
+echo "gpu" > /srv/index/query
+cat /srv/index/results
+```
+
+## devwatcher (Plan9 helper)
+Watches files and logs events under */dev/watch*.
+```rc
+echo /tmp/foo.txt > /dev/watch/ctl
+cat /dev/watch/events
+```

@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: METADATA.md v3.50
+// Filename: METADATA.md v3.51
 // Author: Lukas Bower
-// Date Modified: 2027-01-23
+// Date Modified: 2027-02-01
 
 ## Canonical Documents
 
@@ -33,7 +33,8 @@
 | SECURITY_REVIEW.md         | v0.2    | 2025-07-13    | COMMUNITY      |     |              |
 | COMPILER_REVIEW.md         | v0.1    | 2025-07-11    | COMMUNITY      |          |              
 | AGENTS_AND_CLI.md          | v1.2    | 2025-07-26    | COMMUNITY      |     |              |
-| cli_tools.md              | v1.0    | 2026-12-31    | COMMUNITY      |     |
+| cli_tools.md              | v1.1    | 2027-02-01    | COMMUNITY      |     |
+| guides/PLAN9_SERVICE_TOOLS.md | v0.1    | 2027-02-01    | COMMUNITY      |     |
 | LICENSES_AND_REUSE.md     | v1.5    | 2026-12-31    | COMMUNITY      |     |              |
 | ROLE_POLICY.md            | v1.1    | 2026-09-30    | COMMUNITY      |     |              |
 | AGENTS.md                 | v2.2    | 2025-07-22    | COMMUNITY      |     |              |
@@ -135,7 +136,7 @@
 | docs/community/architecture/BOOT_KERNEL_FLOW.md | v0.3 | 2026-10-16 | COMMUNITY | | |
 | docs/community/archive/EXAMPLES_README.md | v0.3 | 2026-02-05 | COMMUNITY | | |
 | .cohesix_env | v0.3 | 2026-07-25 | COMMUNITY | | |
-| cohesix_fetch_build.sh | v0.89 | 2025-07-05 | COMMUNITY | | |
+| cohesix_fetch_build.sh | v0.90 | 2027-02-01 | COMMUNITY | | |
 | CONTRIBUTING.md | v1.1 | 2025-07-23 | COMMUNITY | | |
 | config/secure9p.toml | v0.7 | 2026-12-31 | COMMUNITY | | |
 | src/secure9p/mod.rs | v0.2 | 2025-07-25 | COMMUNITY | | |

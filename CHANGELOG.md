@@ -2732,4 +2732,9 @@
 - Replaced `Arc<RefCell>` with `Arc<Mutex>` in `inprocess.rs` for thread safety.
 - Implemented `FromStr` for `SandboxPolicy` and cleaned conditional attributes.
 
+## [v0.418] - 2027-02-01
+### Added
+- `cohesix_fetch_build.sh` stages Plan9 Go binaries into `$STAGE_DIR` and lists contents.
+- Documentation for `srvctl`, `indexserver`, and `devwatcher`.
+
 

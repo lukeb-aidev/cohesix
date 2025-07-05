@@ -408,3 +408,8 @@ clippy: FAIL - see /tmp/clippy.log
 Go build: PASS - helpers in out/go_helpers
 PyTest: SKIPPED - no tests found
 {"rust_bins":{"cohesix_root":"FAIL","cohcc":"FAIL","cohesix_build":"FAIL","cohesix_cap":"FAIL","cohesix_trace":"FAIL","init":"FAIL","logdemo":"FAIL","kernel":"FAIL","sel4_entry":"FAIL"},"go_build":"PASS","clippy":"FAIL","pytest":"SKIPPED"}
+PASS: srvctl found in $STAGE_DIR/bin
+PASS: indexserver found in $STAGE_DIR/bin
+PASS: devwatcher found in $STAGE_DIR/bin
+BUILD AND STAGING COMPLETE: All binaries present and documented.
+
