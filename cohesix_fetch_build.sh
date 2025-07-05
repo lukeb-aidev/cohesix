@@ -71,13 +71,14 @@ log "🛠️ [Build Start] $(date)"
 # is available even when $HOME is empty.
 cd "$HOME"
 
-  log "📦 Cloning repository..."
-  rm -rf cohesix
-  rm -rf cohesix_logs
-  for i in {1..3}; do
-    git clone git@github.com:lukeb-aidev/cohesix.git && break || sleep 1
-  done
-  log "✅ Clone complete ..."
+log "📦 Cloning repository..."
+rm -rf cohesix
+rm -rf cohesix_logs
+for i in {1..3}; do
+  git clone --depth 1 git@github.com:lukeb-aidev/cohesix.git && break || sleep 1
+done
+cd cohesix
+log "✅ Clone complete and switched to cohesix directory ..."
 
 cd cohesix
 ROOT="$(pwd)"
