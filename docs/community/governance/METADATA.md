@@ -310,6 +310,12 @@
 | scripts/mount_secure9p.rc | v0.1 | 2027-01-30 | COMMUNITY | | |
 | docs/community/guides/PLAN9_PHYSICS_SERVER.md | v0.1 | 2027-01-30 | COMMUNITY | | |
 | examples/physics_server_log.txt | v0.1 | 2027-01-30 | COMMUNITY | | |
+| go/cmd/srvctl/main.go | v0.1 | 2027-01-31 | COMMUNITY | | |
+| go/cmd/indexserver/main.go | v0.1 | 2027-01-31 | COMMUNITY | | |
+| go/cmd/devwatcher/main.go | v0.1 | 2027-01-31 | COMMUNITY | | |
+| scripts/newns-e.rc | v0.1 | 2027-01-31 | COMMUNITY | | |
+| scripts/bind_cuda.rc | v0.1 | 2027-01-31 | COMMUNITY | | |
+| examples/plan9_enhancements_usage.txt | v0.1 | 2027-01-31 | COMMUNITY | | |
 Removed: introspect_self_diagnosis (Plan9 migration - file-based introspection replaced by validator-driven policy checks)
 Removed: legacy Python tests and lint steps; project now purely Plan9 + Rust
 Changed: `.cargo/config.toml` v0.12 switches musl targets to system GCC linkers
