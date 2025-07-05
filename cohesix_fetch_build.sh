@@ -67,16 +67,13 @@ log "🛠️ [Build Start] $(date)"
 # Clone repository before sourcing any configuration so a fresh checkout
 # is available even when $HOME is empty.
 cd "$HOME"
-if [ -d cohesix/.git ]; then
-  log "📦 Using existing repository at $HOME/cohesix"
-else
+
   log "📦 Cloning repository..."
   rm -rf cohesix
   for i in {1..3}; do
-    git clone git@github.com:lukeb-aidev/cohesix.git && break || sleep 3
+    git clone git@github.com:lukeb-aidev/cohesix.git && break || sleep 1
   done
   log "✅ Clone complete ..."
-fi
 
 cd cohesix
 ROOT="$(pwd)"
