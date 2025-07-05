@@ -2737,4 +2737,9 @@
 - `cohesix_fetch_build.sh` stages Plan9 Go binaries into `$STAGE_DIR` and lists contents.
 - Documentation for `srvctl`, `indexserver`, and `devwatcher`.
 
+## [v0.419] - 2027-02-01
+### Fixed
+- Updated `test_boot_build_chain.rs` to check current build log markers.
+- Added `extern crate alloc` declaration so `init` builds under `minimal_uefi`.
+
 
