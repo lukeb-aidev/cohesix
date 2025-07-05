@@ -2680,3 +2680,10 @@
 ## [v0.409] - 2026-12-31
 ### Added
 - `option.h` implements a generic Option type in C and updates the placeholder example.
+
+## [v0.410] - 2026-12-31
+### Added
+- `src/bin/cohesix_root.rs` minimal main for root ELF build.
+### Changed
+- `cohesix_fetch_build.sh` now builds `cohesix_root` explicitly and fails on build errors.
+- Cargo.toml `[[bin]]` updated to use `src/bin/cohesix_root.rs`.

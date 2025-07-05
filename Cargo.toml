@@ -1,5 +1,5 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Cargo.toml v0.41
+# Filename: Cargo.toml v0.42
 # Author: Lukas Bower
 # Date Modified: 2026-12-31
 [package]
@@ -109,7 +109,7 @@ required-features = ["minimal_uefi"]
 
 [[bin]]
 name = "cohesix_root"
-path = "src/root/main.rs"
+path = "src/bin/cohesix_root.rs"
 
 [[bin]]
 name = "sel4_entry"
