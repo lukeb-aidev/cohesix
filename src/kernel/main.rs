@@ -3,6 +3,9 @@
 // Author: Lukas Bower
 // Date Modified: 2025-08-02
 
+#![no_std]
+extern crate alloc;
+
 #[allow(unused_imports)]
 use alloc::{boxed::Box, string::String, vec::Vec};
 #[cfg(feature = "kernel_bin")]
