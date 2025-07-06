@@ -2781,3 +2781,7 @@
 ### Changed
 - `scripts/build_busybox.sh` logs configuration success and minimal applet installation.
 
+## [v0.426] - 2027-08-07
+### Changed
+- `.cargo/config.toml` uses relative path `./link.ld` for the aarch64 musl target.
+

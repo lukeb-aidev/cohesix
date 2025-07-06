@@ -110,7 +110,7 @@
 | link.ld | v0.1 | 2027-01-15 | COMMUNITY | | |
 | target-sel4.json | v0.1 | 2027-01-15 | COMMUNITY | | |
 | .bashrc | v0.1 | 2026-08-09 | COMMUNITY | | |
-| .cargo/config.toml | v0.12 | 2026-12-31 | COMMUNITY | | |
+| .cargo/config.toml | v0.14 | 2027-08-07 | COMMUNITY | | |
 | build.rs | v0.8 | 2026-08-21 | COMMUNITY | | |
 | Makefile | v0.50 | 2026-10-16 | COMMUNITY | | |
 | src/kernel/main.c | v0.2 | 2025-07-22 | COMMUNITY | | |
@@ -324,4 +324,4 @@
 | srv/upload/test-validation.log | v0.1 | 2027-01-31 | COMMUNITY | | |
 Removed: introspect_self_diagnosis (Plan9 migration - file-based introspection replaced by validator-driven policy checks)
 Removed: legacy Python tests and lint steps; project now purely Plan9 + Rust
-Changed: `.cargo/config.toml` v0.12 switches musl targets to system GCC linkers
+Changed: `.cargo/config.toml` v0.14 uses project-relative linker script path
