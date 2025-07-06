@@ -1,0 +1,986 @@
+# CLASSIFICATION: COMMUNITY
+# Filename: std_usage_report.log v1.0
+# Author: Codex Bot
+# Date Modified: 2025-07-06
+
+src/sh_loop.rs:19: [Macro] println!("[sh_loop] busybox feature disabled");
+src/printk.rs:7: [Macro] // Provides stand-ins for println!, eprintln!, print!, and dbg!.
+src/agent_transport.rs:11: [Import] use std::fs;
+src/agent_transport.rs:25: [Macro] let dest_dir = format!("/srv/federation/state/{peer}/incoming");
+src/agent_transport.rs:27: [Macro] fs::write(format!("{dest_dir}/{agent_id}.json"), data)?;
+src/dependencies.rs:10: [Import] use std::collections::HashMap;
+src/dependencies.rs:46: [Macro] println!("[dependencies] Summary of registered dependencies:");
+src/dependencies.rs:48: [Macro] println!(
+src/agent_migration.rs:32: [Macro] let path = format!("/mnt/snapshots/agent_{agent_id}.json");
+src/agent_migration.rs:33: [Other] std::fs::create_dir_all("/mnt/snapshots").ok();
+src/agent_migration.rs:34: [Other] std::fs::write(&path, serde_json::to_vec(&state)?)?;
+src/lib.rs:25: [Macro] return Err($crate::new_err(format!($($arg)+)));
+src/lib.rs:32: [Macro] $crate::new_err(format!($($arg)+))
+src/lib.rs:178: [Import] use std::fs;
+src/lib.rs:203: [Import] use std::process::Command;
+src/lib.rs:208: [Other] let compiler = std::env::var("CC").unwrap_or_else(|_| "clang".into());
+src/lib.rs:211: [Macro] .arg(format!("{}-unknown-linux-gnu", target))
+src/lib.rs:218: [Macro] eprintln!("Warning: cross compile step failed");
+src/metrics.rs:8: [Import] use std::fs;
+src/cohesix_types.rs:6: [Import] use std::env;
+src/cohesix_types.rs:8: [Import] use std::fs;
+src/watchdogd.rs:7: [Import] use std::fs::{self, OpenOptions};
+src/watchdogd.rs:8: [Import] use std::io::Write;
+src/watchdogd.rs:9: [Import] use std::process::Command;
+src/watchdogd.rs:10: [Import] use std::time::{Duration, SystemTime};
+src/watchdogd.rs:45: [Other] std::thread::sleep(Duration::from_secs(30));
+src/watchdogd.rs:76: [Macro] self.log(&format!("backoff active, skipping restart for {svc}"));
+src/watchdogd.rs:79: [Macro] self.log(&format!("restarting {svc}"));
+src/runtime/role_config.rs:9: [Import] use std::fs;
+src/runtime/role_config.rs:10: [Import] use std::path::{Path, PathBuf};
+src/runtime/role_config.rs:29: [Other] fn load_config_file(path: &Path) -> std::io::Result<RoleConfig> {
+src/runtime/role_config.rs:31: [Other] serde_yaml::from_str(&data).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+src/runtime/role_config.rs:34: [Other] pub fn load_for_role(dir: &Path, role: &str) -> std::io::Result<RoleConfig> {
+src/runtime/role_config.rs:35: [Macro] load_config_file(&dir.join(format!("{role}.yaml")))
+src/runtime/role_config.rs:39: [Other] let cohrole_path = std::env::var("COHROLE_PATH").unwrap_or_else(|_| "/srv/cohrole".into());
+src/runtime/role_config.rs:40: [Other] let roles_dir: PathBuf = std::env::var("ROLE_CONFIG_DIR")
+src/runtime/role_config.rs:49: [Macro] eprintln!("[init] using default role config: {}", e);
+src/runtime/service_registry.rs:13: [Import] use std::collections::HashMap;
+src/runtime/service_registry.rs:14: [Import] use std::sync::Mutex;
+src/runtime/loader.rs:9: [Import] use std::fs::File;
+src/runtime/loader.rs:10: [Import] use std::io::Read;
+src/runtime/loader.rs:30: [Import] use std::fs;
+src/runtime/loader.rs:31: [Import] use std::process::Command;
+src/runtime/tools/busybox_shim.rs:26: [Macro] println!("[busybox_shim] running command: {} {:?}", cmd, args);
+src/runtime/tools/busybox_shim.rs:29: [Macro] Ok(format!("stubbed output for '{}'", cmd))
+src/runtime/tools/busybox_shim.rs:33: [Macro] println!("[busybox_shim] checking support for: {}", cmd);
+src/runtime/ipc/p9.rs:40: [Macro] println!("[9P Stub] Received request: {:?}", request);
+src/runtime/roles/debugger.rs:36: [Macro] println!("[debugger] dumping trace...");
+src/runtime/roles/debugger.rs:37: [Import] use std::fs;
+src/runtime/roles/debugger.rs:38: [Import] use std::path::Path;
+src/runtime/roles/debugger.rs:40: [Macro] let dst = Path::new("/history").join(format!(
+src/runtime/roles/debugger.rs:57: [Macro] println!("[debugger] inspecting system state...");
+src/runtime/roles/debugger.rs:58: [Other] std::fs::read_to_string("/srv/state.json").unwrap_or_else(|_| "unknown".to_string())
+src/runtime/roles/debugger.rs:63: [Macro] println!("[debugger] debug mode set to {}", enabled);
+src/runtime/roles/custodian.rs:11: [Import] use std::fs;
+src/runtime/roles/custodian.rs:12: [Import] use std::path::Path;
+src/runtime/roles/custodian.rs:27: [Macro] println!("[custodian] validating system state...");
+src/runtime/roles/custodian.rs:28: [Other] std::path::Path::new("/srv/sanity.ok").exists()
+src/runtime/roles/custodian.rs:32: [Macro] println!("[custodian] sanitizing node...");
+src/runtime/roles/custodian.rs:33: [Other] let tmpdir = std::env::var("TMPDIR").unwrap_or("/srv".to_string());
+src/runtime/roles/custodian.rs:34: [Macro,Other] let tmp = std::path::Path::new(&format!("{}/cohesix", tmpdir));
+src/runtime/roles/custodian.rs:36: [Other] std::fs::remove_dir_all(tmp).map_err(|e| e.to_string())?;
+src/runtime/roles/custodian.rs:42: [Macro] println!("[custodian] enforcing policies...");
+src/runtime/roles/custodian.rs:43: [Other] let path = std::path::Path::new("/etc/cohesix/local_policy.json");
+src/runtime/roles/custodian.rs:45: [Other] let txt = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+src/runtime/roles/observer.rs:33: [Macro] println!("[observer] monitoring event: {}", event);
+src/runtime/roles/observer.rs:38: [Macro] println!("[observer] emitting summary...");
+src/runtime/roles/observer.rs:39: [Macro] format!("{} events recorded", self.event_log.len())
+src/runtime/roles/observer.rs:43: [Macro] println!("[observer] resetting log...");
+src/runtime/roles/orchestrator.rs:19: [Import] use std::collections::HashMap;
+src/runtime/roles/orchestrator.rs:20: [Import] use std::fs;
+src/runtime/roles/orchestrator.rs:21: [Import] use std::path::Path;
+src/runtime/roles/orchestrator.rs:27: [Macro] println!("[orchestrator] deploying service '{}'", service_name);
+src/runtime/roles/orchestrator.rs:34: [Macro] println!("[orchestrator] assigning role '{}' to node '{}'", role, node_id);
+src/runtime/roles/orchestrator.rs:41: [Macro] println!("[orchestrator] resolving service dependencies...");
+src/runtime/roles/worker.rs:24: [Macro] println!("[worker] executing task '{}'", task);
+src/runtime/roles/worker.rs:28: [Macro] println!("[worker] result: {}", v);
+src/runtime/roles/worker.rs:34: [Macro] println!("[worker] no-op task");
+src/runtime/roles/worker.rs:40: [Macro] println!("[worker] reporting telemetry...");
+src/runtime/roles/worker.rs:45: [Macro] println!("[worker] received command '{}'", cmd);
+src/runtime/roles/worker.rs:50: [Macro] println!("[worker] telemetry: {}", t);
+src/runtime/roles/worker.rs:53: [Macro] Err(format!("unknown command '{}'", cmd))
+src/runtime/roles/router.rs:18: [Import] use std::collections::HashMap;
+src/runtime/roles/router.rs:35: [Macro] println!(
+src/runtime/roles/router.rs:42: [Macro] println!(
+src/runtime/roles/router.rs:49: [Macro] println!("[router] no route for '{}'; dropping payload", dest);
+src/runtime/roles/router.rs:55: [Macro] println!("[router] resolving namespace for '{}'", path);
+src/runtime/roles/router.rs:59: [Macro] Some(format!("/srv/{}", path))
+src/runtime/roles/router.rs:64: [Macro] println!("[router] registering service '{}' at '{}'", name, endpoint);
+src/runtime/roles/edge_controller.rs:19: [Import] use std::fs::{self, OpenOptions};
+src/runtime/roles/edge_controller.rs:20: [Import] use std::io::Write;
+src/runtime/roles/edge_controller.rs:21: [Import] use std::path::Path;
+src/runtime/roles/edge_controller.rs:27: [Macro] println!("[edge_controller] scheduling workload '{}'", workload_id);
+src/runtime/roles/edge_controller.rs:34: [Macro] println!("[edge_controller] reporting health...");
+src/runtime/roles/edge_controller.rs:39: [Macro] println!(
+src/runtime/roles/queen.rs:18: [Import] use std::collections::HashSet;
+src/runtime/roles/queen.rs:37: [Macro] println!("[queen] initializing governance protocols...");
+src/runtime/roles/queen.rs:43: [Macro] println!(
+src/runtime/roles/queen.rs:51: [Macro] println!("[queen] queued '{}' for node '{}'", workload, node_id);
+src/runtime/roles/queen.rs:56: [Macro] println!(
+src/runtime/accel/cuda_device.rs:22: [Import] use std::env;
+src/runtime/accel/cuda_device.rs:23: [Macro] println!("[cuda_device] probing device...");
+src/runtime/accel/cuda_device.rs:27: [Macro] Ok(v) => CudaDeviceStatus::ProbeFailed(format!("unknown flag {}", v)),
+src/runtime/accel/cuda_device.rs:36: [Macro] println!("[cuda_device] launching test kernel...");
+src/runtime/accel/cuda_device.rs:39: [Macro] other => Err(format!("CUDA unavailable: {:?}", other)),
+src/runtime/env/init.rs:10: [Import] use std::fs;
+src/runtime/env/init.rs:22: [Other] if let Ok(env_role) = std::env::var("CohRole") {
+src/runtime/env/init.rs:23: [Macro] println!("[BOOT] Loaded role: {env_role} from environment");
+src/runtime/env/init.rs:26: [Other] let path = std::env::var("ROLE_CONF_PATH").unwrap_or_else(|_| "/etc/role.conf".into());
+src/runtime/env/init.rs:31: [Macro] println!("[BOOT] Loaded role: {} from {}", role, path);
+src/runtime/env/init.rs:43: [Other] } else if let Ok(role) = std::env::var("COHROLE") {
+src/runtime/env/init.rs:48: [Other] args.secure9p = std::env::var("secure9p").ok().as_deref() == Some("1");
+src/runtime/env/init.rs:49: [Other] args.busybox = std::env::var("busybox").map(|v| v != "0").unwrap_or(true);
+src/runtime/env/init.rs:55: [Macro] println!("[env] Initializing runtime environment...");
+src/runtime/env/init.rs:59: [Other] std::env::set_var("cohrole", role);
+src/runtime/env/init.rs:62: [Macro] println!("[env] boot args: {:?}", boot);
+src/runtime/env/init.rs:64: [Macro] println!("[env] running as role: {}", role);
+src/runtime/env/init.rs:70: [Macro] println!("[env] Loading configuration...");
+src/runtime/env/init.rs:72: [Other] match std::fs::read_to_string(path) {
+src/runtime/env/init.rs:73: [Macro] Ok(cfg) => println!("[env] loaded {} bytes of config", cfg.len()),
+src/runtime/env/init.rs:74: [Macro] Err(_) => println!("[env] using default configuration"),
+src/runtime/env/init.rs:80: [Macro] println!("[env] Detecting Cohesix role...");
+src/runtime/env/init.rs:83: [Macro] r => format!("{:?}", r),
+src/meta/oss_manifest.rs:43: [Macro] println!("Cohesix OSS Manifest:");
+src/meta/oss_manifest.rs:45: [Macro] println!(
+src/boot/tpm.rs:7: [Import] use std::fs::OpenOptions;
+src/boot/tpm.rs:8: [Import] use std::io::Write;
+src/boot/tpm.rs:9: [Import] use std::path::Path;
+src/boot/tpm.rs:15: [Other] std::fs::create_dir_all("/srv/boot")?;
+src/boot/live_patch.rs:9: [Import] use std::fs::{self, OpenOptions};
+src/boot/live_patch.rs:10: [Import] use std::io::Write;
+src/boot/plan9_ns.rs:11: [Import] use std::fs;
+src/boot/plan9_ns.rs:12: [Import] use std::io;
+src/boot/plan9_ns.rs:90: [Other] impl std::fmt::Display for Namespace {
+src/boot/plan9_ns.rs:91: [Other] fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+src/boot/plan9_ns.rs:154: [Macro] println!("[ns] warning: rootfs '{}' not found", root);
+src/boot/plan9_ns.rs:192: [Macro] _ => println!("[ns] ignoring malformed line: {}", line),
+src/boot/verify.rs:12: [Import] use std::fs::{self, OpenOptions};
+src/boot/verify.rs:13: [Import] use std::io::Write;
+src/fs/overlay.rs:13: [Import] use std::collections::HashMap;
+src/fs/overlay.rs:14: [Import] use std::fs;
+src/fs/overlay.rs:41: [Macro] return Some(format!("{}/{}", remote.trim_end_matches('/'), suffix));
+src/physical/sensors.rs:12: [Import] use std::fs::{self, OpenOptions};
+src/physical/sensors.rs:13: [Import] use std::io::Write;
+src/physical/sensors.rs:14: [Import] use std::path::Path;
+src/physical/sensors.rs:15: [Import] use std::time::{SystemTime, UNIX_EPOCH};
+src/physical/sensors.rs:34: [Other] std::env::var("COHESIX_TELEMETRY_PATH").unwrap_or_else(|_| "/srv/telemetry".into())
+src/physical/sensors.rs:39: [Other] std::env::var("COHESIX_AGENT_TRACE_DIR").unwrap_or_else(|_| "/srv/agent_trace".into());
+src/physical/sensors.rs:40: [Macro] format!("{}/{}", base, agent)
+src/physical/sensors.rs:51: [Macro] log(&telem, &format!("{} temp {}", ts(), value));
+src/physical/sensors.rs:54: [Other] std::path::Path::new(&trace)
+src/physical/sensors.rs:59: [Macro] log(&trace, &format!("temp {}", value));
+src/physical/sensors.rs:60: [Macro] recorder::event(agent, "sensor-triggered-action", &format!("temp:{}", value));
+src/physical/sensors.rs:72: [Macro] log(&telem, &format!("{} tilt {}", ts(), value));
+src/physical/sensors.rs:80: [Macro] log(&trace, &format!("tilt {}", value));
+src/physical/sensors.rs:81: [Macro] recorder::event(agent, "sensor-triggered-action", &format!("tilt:{}", value));
+src/physical/sensors.rs:91: [Macro] log(&telem, &format!("{} motion {}", ts(), value));
+src/physical/sensors.rs:99: [Macro] log(&trace, &format!("motion {}", value));
+src/physical/sensors.rs:103: [Macro] &format!("motion:{}", value),
+src/physical/sensors.rs:109: [Other] std::fs::read_to_string(path)
+src/physical/sensors.rs:117: [Other] let env = std::env::var("MOCK_TEMP").ok().and_then(|v| v.parse().ok());
+src/physical/sensors.rs:124: [Other] if let Ok(contents) = std::fs::read_to_string(p) {
+src/physical/sensors.rs:134: [Other] let env = std::env::var("MOCK_ACCEL")
+src/physical/sensors.rs:143: [Other] if let Ok(contents) = std::fs::read_to_string(p) {
+src/physical/sensors.rs:153: [Other] let env = std::env::var("MOCK_MOTION")
+src/physical/sensors.rs:160: [Other] if let Ok(contents) = std::fs::read_to_string(path) {
+src/slm/decryptor.rs:15: [Import] use std::fs;
+src/slm/decryptor.rs:40: [Macro] let sig_path = format!("{path}.sig");
+src/agent/policy_memory.rs:11: [Import] use std::fs;
+src/agent/policy_memory.rs:12: [Import] use std::path::{Path, PathBuf};
+src/agent/policy_memory.rs:23: [Macro] let primary = format!("/persist/policy/agent_{agent_id}.policy.json");
+src/agent/policy_memory.rs:29: [Macro] let fallback = format!("persist/policy/agent_{agent_id}.policy.json");
+src/agent/policy_memory.rs:41: [Macro] let primary_path = format!("/persist/policy/agent_{agent_id}.policy.json");
+src/agent/policy_memory.rs:48: [Other] let local_dir = std::path::PathBuf::from("persist/policy");
+src/agent/policy_memory.rs:50: [Macro] let fallback_path = local_dir.join(format!("agent_{agent_id}.policy.json"));
+src/agent/policy_memory.rs:60: [Other] if let Ok(base) = std::env::var("COHESIX_POLICY_TMP").or_else(|_| std::env::var("TMPDIR")) {
+src/agent/directory.rs:11: [Import] use std::fs;
+src/agent/directory.rs:12: [Import] use std::time::{SystemTime, UNIX_EPOCH};
+src/agent/directory.rs:34: [Other] let tmpdir = std::env::var("TMPDIR").unwrap_or("/srv".to_string());
+src/agent/directory.rs:35: [Macro] let tmp = format!("{}/record_{}.json", tmpdir, self.id);
+src/agent/directory.rs:37: [Other] std::fs::write(&tmp, data)?;
+src/agent/snapshot.rs:14: [Import] use std::fs;
+src/agent/snapshot.rs:37: [Other] let tmpdir = std::env::var("TMPDIR").unwrap_or("/srv".to_string());
+src/agent/snapshot.rs:38: [Macro] let tmp = format!("{}/agent_snapshot.msgpack", tmpdir);
+src/federation/migration.rs:10: [Import] use std::fs;
+src/federation/migration.rs:15: [Macro] let src = format!("/mnt/snapshots/agent_{agent_id}.json");
+src/federation/migration.rs:17: [Macro] let dest_dir = format!("/srv/federation/state/{peer}/incoming");
+src/federation/migration.rs:19: [Macro] let dest = format!("{dest_dir}/{agent_id}.json");
+src/federation/handshake.rs:17: [Import] use std::fs;
+src/federation/handshake.rs:31: [Macro] fs::create_dir_all(format!("/srv/federation/state/{peer}"))?;
+src/federation/handshake.rs:35: [Other] parent_role: std::env::var("COH_ROLE").ok(),
+src/federation/handshake.rs:38: [Macro] .map(|(w, l)| format!("{w}:{l}"))
+src/federation/handshake.rs:44: [Macro] fs::write(format!("/srv/federation/state/{peer}/handshake.bin"), &data)?;
+src/federation/handshake.rs:45: [Macro] fs::write(format!("/srv/federation/state/{peer}/handshake.sig"), &sig)?;
+src/federation/handshake.rs:51: [Macro] let data = fs::read(format!("/srv/federation/state/{peer}/handshake.bin"))?;
+src/federation/handshake.rs:52: [Macro] let sig = fs::read(format!("/srv/federation/state/{peer}/handshake.sig"))?;
+src/federation/handshake.rs:62: [Import] use std::time::{SystemTime, UNIX_EPOCH};
+src/federation/keyring.rs:19: [Import] use std::fs;
+src/federation/keyring.rs:30: [Macro] let priv_path = format!("/srv/federation/{}_key.pk8", queen_id);
+src/federation/keyring.rs:31: [Macro] let pub_path = format!("/srv/federation/known_hosts/{}.pub", queen_id);
+src/federation/keyring.rs:58: [Macro] let path = format!("/srv/federation/known_hosts/{}.pub", peer_id);
+src/telemetry/core.rs:12: [Import] use std::collections::HashMap;
+src/telemetry/core.rs:13: [Import] use std::fs::{self, OpenOptions};
+src/telemetry/core.rs:14: [Import] use std::io::Write;
+src/telemetry/core.rs:15: [Import] use std::time::{SystemTime, UNIX_EPOCH};
+src/telemetry/core.rs:31: [Macro] println!(
+src/telemetry/loop.rs:10: [Import] use std::fs::{self, OpenOptions};
+src/telemetry/loop.rs:11: [Import] use std::io::Write;
+src/telemetry/loop.rs:12: [Import] use std::thread;
+src/telemetry/loop.rs:13: [Import] use std::time::Duration;
+src/telemetry/diagnostics.rs:12: [Import] use std::fs::{self, OpenOptions};
+src/telemetry/diagnostics.rs:13: [Import] use std::io::Write;
+src/telemetry/diagnostics.rs:14: [Import] use std::time::{SystemTime, UNIX_EPOCH};
+src/telemetry/diagnostics.rs:35: [Macro] println!(
+src/telemetry/trace.rs:32: [Macro] println!(
+src/telemetry/trace.rs:36: [Import] use std::fs::{self, OpenOptions};
+src/telemetry/trace.rs:37: [Import] use std::io::Write;
+src/telemetry/trace.rs:67: [Import] use std::time::{SystemTime, UNIX_EPOCH};
+src/telemetry/trace.rs:78: [Other] std::panic::set_hook(Box::new(|info| {
+src/telemetry/trace.rs:79: [Macro] trace(TraceLevel::Error, "panic", &format!("{}", info));
+src/telemetry/router.rs:48: [Other] if let Ok(contents) = std::fs::read_to_string(path) {
+src/cloud/hooks.rs:7: [Import] use std::fs;
+src/cloud/orchestrator.rs:13: [Import] use std::fs;
+src/cloud/orchestrator.rs:14: [Import] use std::io::{self, Write};
+src/cloud/orchestrator.rs:15: [Import] use std::time::{Duration, SystemTime, UNIX_EPOCH};
+src/cloud/orchestrator.rs:31: [Other] std::thread::spawn(move || loop {
+src/cloud/orchestrator.rs:33: [Other] let _ = writeln!(std::io::stderr(), "heartbeat error: {e}");
+src/cloud/orchestrator.rs:35: [Other] std::thread::sleep(Duration::from_secs(10));
+src/cloud/orchestrator.rs:47: [Macro] let url = format!("{}/register", cloud_url.trim_end_matches('/'));
+src/cloud/orchestrator.rs:54: [Macro] println!("Opening file: {:?}", crate::with_srv_root!("cloud"));
+src/cloud/orchestrator.rs:56: [Macro] println!(
+src/cloud/orchestrator.rs:61: [Macro] println!("Opening file: {:?}", crate::with_srv_root!("cloud/url"));
+src/cloud/orchestrator.rs:63: [Macro] println!("POST /register sent to {}", url);
+src/cloud/orchestrator.rs:65: [Other] std::io::stdout().flush().unwrap();
+src/cloud/orchestrator.rs:81: [Macro] println!("Opening file: {:?}", crate::with_srv_root!("cloud/url"));
+src/cloud/orchestrator.rs:114: [Macro] .post(&format!("{}/heartbeat", url.trim_end_matches('/')))
+src/cloud/orchestrator.rs:119: [Macro] println!("Opening file: {:?}", crate::with_srv_root!("cloud"));
+src/cloud/orchestrator.rs:121: [Macro] println!(
+src/cloud/orchestrator.rs:126: [Macro] println!(
+src/cloud/orchestrator.rs:136: [Macro] println!("POST /heartbeat sent to {}", url);
+src/cloud/orchestrator.rs:137: [Other] std::io::stdout().flush().unwrap();
+src/cloud/orchestrator.rs:142: [Macro] println!(
+src/cloud/orchestrator.rs:155: [Other] std::thread::spawn(|| {
+src/cloud/orchestrator.rs:157: [Macro] println!(
+src/cloud/orchestrator.rs:170: [Macro] let path = crate::with_srv_root!(&format!("cloud/commands/{ts}"));
+src/cloud/orchestrator.rs:171: [Macro] println!("Opening file: {:?}", path);
+src/cloud/orchestrator.rs:185: [Macro] println!(
+src/cloud/orchestrator.rs:192: [Macro] println!("Opening file: {:?}", e.path());
+src/utils/format.rs:40: [Macro] format!("{} {}", bytes, UNITS[idx])
+src/utils/format.rs:42: [Macro] format!("{:.1} {}", value, UNITS[idx])
+src/utils/format.rs:64: [Macro] format!("{}…{}", start, end)
+src/utils/ssa_utils.rs:32: [Macro] format!("{}#{}", self.name, self.version)
+src/utils/ssa_utils.rs:57: [Macro] println!("[ssa] parse_ssa called with input: {}", input);
+src/utils/const_eval.rs:86: [Macro] return Err(format!("invalid character '{}'", ch));
+src/utils/helpers.rs:25: [Import] use std::{fmt::Write, thread, time::Duration};
+src/utils/helpers.rs:27: [Other] /// Sleep `ms` milliseconds (wrapper over `std::thread::sleep`).
+src/utils/mod.rs:25: [Macro] println!("[utils] initializing utility submodules...");
+src/services/health.rs:21: [Macro] println!("[health] service ready");
+src/services/health.rs:26: [Macro] println!("[health] service stopped");
+src/services/ipc.rs:22: [Macro] println!("[ipc] starting stub 9P server");
+src/services/ipc.rs:26: [Macro] println!("[ipc] shutting down stub 9P server");
+src/services/sandbox.rs:10: [Import] use std::fs::{self, OpenOptions};
+src/services/sandbox.rs:11: [Import] use std::io::Write;
+src/services/sandbox.rs:12: [Import] use std::process;
+src/services/sandbox.rs:26: [Macro] println!("[sandbox] enforcement active");
+src/services/sandbox.rs:31: [Macro] println!("[sandbox] enforcement stopped");
+src/services/gpuinfo.rs:11: [Import] use std::process::Command;
+src/services/gpuinfo.rs:31: [Other] std::fs::write("/srv/gpuinfo", info.trim()).ok();
+src/services/gpuinfo.rs:34: [Macro] println!("[gpuinfo] initialized");
+src/services/gpuinfo.rs:39: [Macro] println!("[gpuinfo] shutting down");
+src/services/telemetry.rs:24: [Macro] println!("[telemetry] initialized");
+src/services/telemetry.rs:31: [Macro] println!("[telemetry] shutting down");
+src/services/telemetry.rs:41: [Macro] println!("[telemetry] {}", msg);
+src/services/mod.rs:30: [Macro] println!("[services] initializing telemetry, sandbox, health, IPC, GPU info ...");
+src/services/mod.rs:39: [Macro] println!("[services] starting {}", svc.name());
+src/syscall/ns.rs:6: [Import] use std::io::{self, ErrorKind};
+src/syscall/ns.rs:15: [Macro] println!("[syscall] apply_ns role: {:?}", role);
+src/syscall/guard.rs:7: [Import] use std::collections::{HashMap, HashSet};
+src/seL4/syscall.rs:8: [Import] use std::fs::{self, File, OpenOptions};
+src/seL4/syscall.rs:9: [Import] use std::io::{Read, Write};
+src/seL4/syscall.rs:10: [Import] use std::process;
+src/seL4/syscall.rs:11: [Import] use std::process::Command;
+src/seL4/syscall.rs:39: [Other] pub fn open(path: &str, flags: u32) -> Result<File, std::io::Error> {
+src/seL4/syscall.rs:41: [Other] if std::env::var("LD_PRELOAD").is_ok() {
+src/seL4/syscall.rs:43: [Other] return Err(std::io::Error::new(
+src/seL4/syscall.rs:44: [Other] std::io::ErrorKind::PermissionDenied,
+src/seL4/syscall.rs:50: [Other] return Err(std::io::Error::new(
+src/seL4/syscall.rs:51: [Other] std::io::ErrorKind::PermissionDenied,
+src/seL4/syscall.rs:55: [Macro] println!("[sel4:{role}] open {path} flags={flags}");
+src/seL4/syscall.rs:60: [Other] pub fn read(file: &mut File, buf: &mut [u8]) -> Result<usize, std::io::Error> {
+src/seL4/syscall.rs:65: [Other] pub fn write(file: &mut File, buf: &[u8]) -> Result<usize, std::io::Error> {
+src/seL4/syscall.rs:70: [Other] pub fn exec(cmd: &str, args: &[&str]) -> Result<(), std::io::Error> {
+src/seL4/syscall.rs:73: [Macro] println!("[sel4] exec attempt role={:?}", role_enum);
+src/seL4/syscall.rs:78: [Macro] println!("[sel4] validator result for {:?}: {}", role_enum, allowed);
+src/seL4/syscall.rs:81: [Other] return Err(std::io::Error::new(
+src/seL4/syscall.rs:82: [Other] std::io::ErrorKind::PermissionDenied,
+src/seL4/syscall.rs:86: [Other] if std::env::var("LD_PRELOAD").is_ok() {
+src/seL4/syscall.rs:88: [Other] return Err(std::io::Error::new(
+src/seL4/syscall.rs:89: [Other] std::io::ErrorKind::PermissionDenied,
+src/seL4/syscall.rs:95: [Other] return Err(std::io::Error::new(
+src/seL4/syscall.rs:96: [Other] std::io::ErrorKind::PermissionDenied,
+src/seL4/syscall.rs:100: [Macro] println!("[sel4:{role}] exec {cmd} {:?}", args);
+src/seL4/mod.rs:22: [Macro] panic!("switch_to_user attempted on non-bare-metal target");
+src/sandbox/profile.rs:38: [Macro] format!(
+src/sandbox/validator.rs:15: [Import] use std::fs::{self, OpenOptions};
+src/sandbox/validator.rs:16: [Import] use std::io::Write;
+src/sandbox/validator.rs:17: [Import] use std::path::Path;
+src/sandbox/validator.rs:18: [Import] use std::thread::sleep;
+src/sandbox/validator.rs:19: [Import] use std::time::{Duration, Instant};
+src/sandbox/validator.rs:46: [Macro] let path = cfg.violations_dir.join(format!("{agent}.json"));
+src/sandbox/validator.rs:48: [Macro] syscall: format!("{:?}", sc),
+src/sandbox/validator.rs:49: [Macro] role: format!("{:?}", role),
+src/sandbox/validator.rs:62: [Other] let base = std::env::var("COHESIX_TRACE_TMP")
+src/sandbox/validator.rs:63: [Other] .or_else(|_| std::env::var("TMPDIR"))
+src/sandbox/validator.rs:71: [Macro] println!("BOOT_FAIL:missing_trace");
+src/sandbox/validator.rs:88: [Macro] println!("BOOT_FAIL:policy_failure");
+src/sandbox/mod.rs:13: [Import] use std::fs::OpenOptions;
+src/sandbox/mod.rs:14: [Import] use std::io::Write;
+src/sandbox/mod.rs:19: [Other] std::fs::create_dir_all("/log").ok();
+src/roles/glasses_agent.rs:9: [Import] use std::fs::OpenOptions;
+src/roles/glasses_agent.rs:10: [Import] use std::io::Write;
+src/roles/glasses_agent.rs:16: [Macro] println!("{msg}");
+src/roles/kiosk_interactive.rs:9: [Import] use std::fs::{self, OpenOptions};
+src/roles/kiosk_interactive.rs:10: [Import] use std::io::Write;
+src/roles/kiosk_interactive.rs:17: [Macro] println!("{msg}");
+src/roles/kiosk_interactive.rs:29: [Other] let mut url = std::env::var("CLOUD_HOOK_URL").unwrap_or_default();
+src/roles/kiosk_interactive.rs:36: [Macro] let endpoint = format!("{}/worker_ping", url.trim_end_matches('/'));
+src/roles/kiosk_interactive.rs:37: [Macro] println!("Worker sending status=ready to {}", endpoint);
+src/roles/kiosk_interactive.rs:38: [Other] std::io::stdout().flush().ok();
+src/roles/kiosk_interactive.rs:40: [Macro] log(&format!(
+src/roles/drone_worker.rs:9: [Import] use std::fs::{self, OpenOptions};
+src/roles/drone_worker.rs:10: [Import] use std::io::Write;
+src/roles/drone_worker.rs:17: [Macro] println!("{msg}");
+src/roles/drone_worker.rs:29: [Other] let mut url = std::env::var("CLOUD_HOOK_URL").unwrap_or_default();
+src/roles/drone_worker.rs:36: [Macro] let endpoint = format!("{}/worker_ping", url.trim_end_matches('/'));
+src/roles/drone_worker.rs:37: [Macro] println!("Worker sending status=ready to {}", endpoint);
+src/roles/drone_worker.rs:38: [Other] std::io::stdout().flush().ok();
+src/roles/drone_worker.rs:40: [Macro] log(&format!(
+src/roles/sensor_relay.rs:9: [Import] use std::fs::OpenOptions;
+src/roles/sensor_relay.rs:10: [Import] use std::io::Write;
+src/roles/sensor_relay.rs:16: [Macro] println!("{msg}");
+src/roles/simulator_test.rs:9: [Import] use std::fs::OpenOptions;
+src/roles/simulator_test.rs:10: [Import] use std::io::Write;
+src/roles/simulator_test.rs:16: [Macro] println!("{msg}");
+src/roles/mod.rs:23: [Macro] other => println!("[roles] unknown role: {}", other),
+src/roles/interactive_aibooth.rs:9: [Import] use std::fs::{self, OpenOptions};
+src/roles/interactive_aibooth.rs:10: [Import] use std::io::Write;
+src/roles/interactive_aibooth.rs:17: [Macro] Err(_) => println!("{msg}"),
+src/sim/physics_adapter.rs:8: [Import] use std::fs::{self, OpenOptions};
+src/sim/physics_adapter.rs:9: [Import] use std::io::Write;
+src/sim/physics_adapter.rs:10: [Import] use std::thread;
+src/sim/physics_adapter.rs:11: [Import] use std::time::Duration;
+src/sim/physics_adapter.rs:83: [Macro] let line = format!("{} {:.3} {:.3} {:.3}\n", step, pos.x, pos.y, pos.z);
+src/sim/physics_demo.rs:9: [Import] use std::fs;
+src/sim/scenario_runner.rs:15: [Import] use std::fs;
+src/sim/scenario_runner.rs:16: [Import] use std::path::Path;
+src/sim/scenario_runner.rs:17: [Import] use std::time::Duration;
+src/sim/scenario_runner.rs:55: [Other] std::thread::sleep(Duration::from_millis(10));
+src/sim/scenario_runner.rs:58: [Macro] fs::write(format!("/srv/scenario_result/{}", scn.id), "done")?;
+src/sim/introspect.rs:7: [Import] use std::fs::{self, OpenOptions};
+src/sim/introspect.rs:8: [Import] use std::io::Write;
+src/sim/introspect.rs:9: [Import] use std::time::{SystemTime, UNIX_EPOCH};
+src/sim/introspect.rs:34: [Macro] let path = format!("/trace/introspect_{}.log", agent);
+src/sim/agent_scenario.rs:14: [Import] use std::fs;
+src/sim/agent_scenario.rs:15: [Import] use std::path::Path;
+src/sim/agent_scenario.rs:71: [Macro] fs::write(format!("/srv/scenario_result/{}", cfg.id), "ok")?;
+src/sim/rapier_bridge.rs:20: [Import] use std::fs::{self, OpenOptions};
+src/sim/rapier_bridge.rs:21: [Import] use std::io::Write;
+src/sim/rapier_bridge.rs:22: [Import] use std::sync::mpsc::{self, Receiver, Sender};
+src/sim/rapier_bridge.rs:23: [Import] use std::thread;
+src/sim/rapier_bridge.rs:24: [Import] use std::time::Duration;
+src/sim/rapier_bridge.rs:123: [Macro] log_transition(format!("added {:?}\n", handle));
+src/sim/rapier_bridge.rs:128: [Macro] log_transition(format!("force {:?} -> {:?}\n", force, id));
+src/sim/rapier_bridge.rs:163: [Macro] out.push_str(&format!(
+src/sim/rapier_bridge.rs:271: [Macro] log_transition(format!("force {:?} -> {:?}\n", force, handle));
+src/posix/mod.rs:9: [Import] use std::collections::HashMap;
+src/agents/migration.rs:15: [Import] use std::collections::HashMap;
+src/agents/migration.rs:16: [Import] use std::fs;
+src/agents/migration.rs:38: [Other] let tmpdir = std::env::var("TMPDIR").unwrap_or("/srv".to_string());
+src/agents/migration.rs:39: [Macro] let path = format!("{}/agent_state.json", tmpdir);
+src/agents/migration.rs:40: [Other] std::fs::write(&path, serde_json::to_vec(self)?)?;
+src/agents/migration.rs:49: [Other] for (k, v) in std::env::vars() {
+src/agents/migration.rs:52: [Macro] let trace = fs::read_to_string(format!("/srv/agent_trace/{agent_id}")).unwrap_or_default();
+src/agents/migration.rs:65: [Macro] fs::create_dir_all(format!("/srv/agents/{agent_id}"))?;
+src/agents/migration.rs:66: [Macro] fs::write(format!("/srv/agent_trace/{agent_id}"), &state.trace)?;
+src/agents/migration.rs:68: [Macro] ServiceRegistry::register_service(agent_id, &format!("/srv/agents/{agent_id}"))?;
+src/agents/migration.rs:70: [Other] std::env::set_var(k, v);
+src/agents/migration.rs:85: [Macro] fs::remove_dir_all(format!("/srv/agents/{agent_id}"))?;
+src/agents/ensemble.rs:10: [Import] use std::collections::HashMap;
+src/agents/ensemble.rs:11: [Import] use std::fs::{self, OpenOptions};
+src/agents/ensemble.rs:12: [Import] use std::io::Write;
+src/agents/ensemble.rs:26: [Other] let base_tmp = std::env::var("TMPDIR").unwrap_or_else(|_| "/srv".to_string());
+src/agents/ensemble.rs:28: [Macro,Other] std::env::var("COHESIX_ENS_TMP").unwrap_or_else(|_| format!("{}/ensemble", base_tmp));
+src/agents/ensemble.rs:30: [Macro] path: format!("{root}/{id}/mem"),
+src/agents/ensemble.rs:37: [Other] if let Some(base) = std::path::Path::new(&self.path).parent() {
+src/agents/ensemble.rs:61: [Other] let base_tmp = std::env::var("TMPDIR").unwrap_or_else(|_| "/srv".to_string());
+src/agents/ensemble.rs:62: [Macro] let tmp = format!("{}/{}_ensemble.json", base_tmp, self.id);
+src/agents/ensemble.rs:113: [Other] fn log_scores(&self, scores: &[(String, f32)]) -> std::io::Result<()> {
+src/agents/ensemble.rs:114: [Other] let base_tmp = std::env::var("TMPDIR").unwrap_or_else(|_| "/srv".to_string());
+src/agents/ensemble.rs:116: [Macro,Other] std::env::var("COHESIX_ENS_TMP").unwrap_or_else(|_| format!("{}/ensemble", base_tmp));
+src/agents/ensemble.rs:117: [Macro] fs::create_dir_all(format!("{root}/{}/", self.id))?;
+src/agents/ensemble.rs:119: [Macro] fs::write(format!("{root}/{}/goals.json", self.id), goals)?;
+src/agents/ensemble.rs:121: [Macro,Other] std::env::var("COHESIX_TRACE_TMP").unwrap_or_else(|_| format!("{}/trace", base_tmp));
+src/agents/ensemble.rs:125: [Macro] .open(format!("{trace_root}/ensemble_{}.log", self.id))?;
+src/agents/runtime.rs:14: [Import] use std::collections::HashMap;
+src/agents/runtime.rs:15: [Import] use std::fs::{self, OpenOptions};
+src/agents/runtime.rs:16: [Import] use std::io::Write;
+src/agents/runtime.rs:17: [Import] use std::path::PathBuf;
+src/agents/runtime.rs:18: [Import] use std::process::{Child, Command};
+src/agents/runtime.rs:19: [Import] use std::time::{SystemTime, UNIX_EPOCH};
+src/agents/runtime.rs:35: [Other] std::env::var("COHESIX_AGENTS_DIR").unwrap_or_else(|_| "/srv/agents".into())
+src/agents/runtime.rs:39: [Other] std::env::var("COHESIX_AGENT_TRACE_DIR").unwrap_or_else(|_| "/srv/agent_trace".into())
+src/agents/runtime.rs:48: [Other] let tmpdir = std::env::var("TMPDIR").unwrap_or("/srv".to_string());
+src/agents/runtime.rs:49: [Macro] let path = format!("{}/runtime_state.json", tmpdir);
+src/agents/runtime.rs:50: [Other] std::fs::write(&path, "runtime")?;
+src/agents/runtime.rs:72: [Macro] let path = format!("{}/{}", agents_dir, agent_id);
+src/agents/runtime.rs:81: [Macro] let trace_path = format!("{}/{}", trace_dir, agent_id);
+src/agents/runtime.rs:106: [Macro] role: format!("{:?}", role),
+src/agents/runtime.rs:131: [Macro] .open(format!("{}/{}", trace_dir, agent_id))?;
+src/agents/runtime.rs:136: [Macro,Other] std::fs::remove_dir_all(format!("{}/{}", agents_dir, agent_id)).ok();
+src/agents/runtime.rs:143: [Macro] PathBuf::from(format!("{}/{}", agent_trace_dir(), agent_id))
+src/agents/base.rs:23: [Other] let base_tmp = std::env::var("TMPDIR").unwrap_or_else(|_| "/srv".to_string());
+src/agents/base.rs:24: [Macro] let tmp = format!("{}/{}_base.json", base_tmp, self.id);
+src/agents/base.rs:26: [Other] std::fs::write(&tmp, data.to_string())?;
+src/passes/pass_registry.rs:26: [Macro] println!("[PassRegistry] Registered pass: {}", pass.name());
+src/passes/pass_registry.rs:33: [Macro] println!("[PassRegistry] Running pass: {}", pass.name());
+src/passes/passes_test.rs:24: [Macro] println!("[DummyPass] running...");
+src/passes/ssa.rs:11: [Import] use std::collections::HashMap;
+src/passes/ssa.rs:43: [Macro] format!("{}_{}", op, count)
+src/init/kiosk.rs:9: [Import] use std::fs::{self, OpenOptions};
+src/init/kiosk.rs:10: [Import] use std::io::Write;
+src/init/kiosk.rs:11: [Import] use std::path::Path;
+src/init/kiosk.rs:21: [Macro] Err(_) => println!("{msg}"),
+src/init/kiosk.rs:33: [Macro] log(&format!("bundle deploy failed: {e}"));
+src/init/kiosk.rs:74: [Other] fn deploy_bundle(src: &str, dst: &str) -> std::io::Result<()> {
+src/init/main.rs:14: [Import] use std::process::Command;
+src/init/main.rs:15: [Macro] println!("[init] starting user init");
+src/init/main.rs:18: [Macro] println!("[init] secure9p: {}", boot.secure9p);
+src/init/main.rs:19: [Macro] println!("[init] busybox: {}", boot.busybox);
+src/init/main.rs:20: [Other] let role = std::env::var("cohrole").unwrap_or_else(|_| "unknown".into());
+src/init/main.rs:25: [Macro] println!("[init] coh-9p-helper started");
+src/init/main.rs:27: [Macro] Err(e) => eprintln!("[init] coh-9p-helper start failed: {e}"),
+src/init/main.rs:30: [Macro] Ok(_) => println!("[init] cohtrace service started"),
+src/init/main.rs:31: [Macro] Err(e) => eprintln!("[init] cohtrace start failed: {e}"),
+src/init/main.rs:34: [Other] match std::process::Command::new("python3")
+src/init/main.rs:39: [Macro] Ok(_) => println!("Validator initialized for role: {}", role),
+src/init/main.rs:40: [Macro] Err(e) => eprintln!("[init] validator failed to start: {e}"),
+src/init/main.rs:44: [Macro] eprintln!("[init] cli error: {e}");
+src/init/worker.rs:8: [Import] use std::fs::{self, OpenOptions};
+src/init/worker.rs:9: [Import] use std::io::Write;
+src/init/worker.rs:12: [Import] use std::sync::atomic::{AtomicU32, Ordering};
+src/init/worker.rs:19: [Macro] Err(_) => println!("{msg}"),
+src/init/worker.rs:68: [Other] if std::env::var("COH_GPU").unwrap_or_default() == "0" {
+src/init/worker.rs:73: [Other] if std::path::Path::new(demo).is_file() {
+src/init/worker.rs:74: [Other] match std::process::Command::new(demo).output() {
+src/init/worker.rs:109: [Other] let role = std::env::var("COH_ROLE").unwrap_or_else(|_| "unknown".into());
+src/init/worker.rs:116: [Macro] let trace_id = format!("{:08x}", id);
+src/init/queen.rs:8: [Import] use std::fs::{self, OpenOptions};
+src/init/queen.rs:9: [Import] use std::io::Write;
+src/init/queen.rs:24: [Macro] Err(_) => println!("{msg}"),
+src/init/queen.rs:33: [Macro] log(&format!("[queen] loaded {} namespace ops", ns.ops.len()));
+src/init/queen.rs:35: [Macro] Err(e) => log(&format!("[queen] failed to load namespace: {e}")),
+src/init/queen.rs:43: [Macro] Ok(ns) => log(&format!(
+src/init/queen.rs:47: [Macro] Err(e) => log(&format!("[queen] failed to load namespace: {e}")),
+src/init/queen.rs:72: [Other] if let Ok(url) = std::env::var("CLOUD_HOOK_URL") {
+src/init/queen.rs:75: [Macro] Err(e) => log(&format!("cloud orchestration failed: {e}")),
+src/init/sensor.rs:7: [Import] use std::fs::{self, OpenOptions};
+src/init/sensor.rs:8: [Import] use std::io::Write;
+src/init/sensor.rs:15: [Macro] Err(_) => println!("{msg}"),
+src/coh_cc/config.rs:10: [Import] use std::path::{Path, PathBuf};
+src/coh_cc/config.rs:83: [Other] let cur = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+src/coh_cc/logging.rs:9: [Import] use std::fs::{create_dir_all, OpenOptions};
+src/coh_cc/logging.rs:10: [Import] use std::io::Write;
+src/coh_cc/logging.rs:11: [Import] use std::path::Path;
+src/coh_cc/logging.rs:13: [Other] fn append(line: &str) -> std::io::Result<()> {
+src/coh_cc/logging.rs:25: [Macro] let record = format!(
+src/coh_cc/toolchain.rs:7: [Import] use std::path::{Path, PathBuf};
+src/coh_cc/toolchain.rs:24: [Other] std::env::var("COHESIX_TOOLCHAIN_ROOT").unwrap_or_else(|_| "/mnt/data".into());
+src/coh_cc/main.rs:17: [Import] use std::path::Path;
+src/coh_cc/main.rs:23: [Macro] println!(
+src/coh_cc/main.rs:25: [Other] std::env::var("COHROLE").unwrap_or_default()
+src/coh_cc/main.rs:48: [Macro] &format!("detected {:?}", input.ty)
+src/coh_cc/main.rs:61: [Import] use std::fs::{self, OpenOptions};
+src/coh_cc/main.rs:62: [Import] use std::io::Write;
+src/coh_cc/main.rs:78: [Macro] cohcc_error!("tcc", Path::new(""), Path::new(""), &[], &format!("{e}"));
+src/coh_cc/main.rs:79: [Macro] eprintln!("cohcc: {e}");
+src/coh_cc/main.rs:80: [Other] std::process::exit(1);
+src/coh_cc/guard.rs:11: [Import] use std::fs::{self, File, OpenOptions};
+src/coh_cc/guard.rs:12: [Import] use std::io::{Read, Write};
+src/coh_cc/guard.rs:13: [Import] use std::path::Path;
+src/coh_cc/guard.rs:15: [Other] fn append_log(line: &str) -> std::io::Result<()> {
+src/coh_cc/guard.rs:26: [Other] fn append_fail_log(line: &str) -> std::io::Result<()> {
+src/coh_cc/guard.rs:64: [Macro] append_fail_log(&format!("forbidden output path {}", canon.display()))?;
+src/coh_cc/guard.rs:69: [Macro] append_fail_log(&format!("output outside /mnt/data {}", canon.display()))?;
+src/coh_cc/guard.rs:76: [Import] use std::process::Command;
+src/coh_cc/guard.rs:79: [Macro] append_fail_log(&format!("readelf failed for {}", output.display()))?;
+src/coh_cc/guard.rs:84: [Macro] append_fail_log(&format!("dynamic binary {}", output.display()))?;
+src/coh_cc/guard.rs:96: [Other] ) -> std::io::Result<()> {
+src/coh_cc/guard.rs:97: [Macro] append_log(&format!(
+src/coh_cc/rust_wrapper.rs:11: [Import] use std::fs::{self, OpenOptions};
+src/coh_cc/rust_wrapper.rs:12: [Import] use std::io::Write;
+src/coh_cc/rust_wrapper.rs:13: [Import] use std::path::{Path, PathBuf};
+src/coh_cc/rust_wrapper.rs:14: [Import] use std::process::Command;
+src/coh_cc/rust_wrapper.rs:36: [Other] fn append_log(line: &str) -> std::io::Result<()> {
+src/coh_cc/rust_wrapper.rs:53: [Other] let n = std::io::Read::read(&mut f, &mut buf)?;
+src/coh_cc/rust_wrapper.rs:80: [Other] let mut rustflags = std::env::var("RUSTFLAGS").unwrap_or_default();
+src/coh_cc/rust_wrapper.rs:97: [Other] .unwrap_or_else(|| std::ffi::OsStr::new("bin"));
+src/coh_cc/rust_wrapper.rs:132: [Macro] append_log(&format!(
+src/coh_cc/mod.rs:21: [Other] let out = std::env::temp_dir().join("cohcc_shell.out");
+src/coh_cc/mod.rs:29: [Other] bytes.extend_from_slice(&std::fs::read(&out)?);
+src/coh_cc/parser/input_type.rs:8: [Import] use std::path::{Path, PathBuf};
+src/coh_cc/backend/zig.rs:9: [Import] use std::path::Path;
+src/coh_cc/backend/zig.rs:10: [Import] use std::process::Command;
+src/coh_cc/backend/registry.rs:8: [Import] use std::path::Path;
+src/coh_cc/backend/tcc.rs:7: [Import] use std::fs::{self, File};
+src/coh_cc/backend/tcc.rs:8: [Import] use std::io::Write;
+src/coh_cc/backend/tcc.rs:9: [Import] use std::path::Path;
+src/coh_cc/backend/tcc.rs:32: [Other] std::env::var("COHESIX_TOOLCHAIN_ROOT").unwrap_or_else(|_| "/mnt/data".into());
+src/coh_cc/backend/tcc.rs:40: [Macro] f.write_all(format!("dummy binary for {target}").as_bytes())?;
+src/coh_cc/backend/tcc.rs:47: [Macro] &format!("target_triple={target}"),
+src/coh_cc/ir/emit.rs:7: [Import] use std::fs::{self, File};
+src/coh_cc/ir/emit.rs:8: [Import] use std::io::Write;
+src/coh_cc/ir/emit.rs:9: [Import] use std::path::Path;
+src/coh_cc/ir/schema.rs:11: [Import] use std::fs::{self, OpenOptions};
+src/coh_cc/ir/schema.rs:12: [Import] use std::io::{Read, Write};
+src/coh_cc/ir/schema.rs:13: [Import] use std::path::Path;
+src/coh_cc/ir/schema.rs:37: [Other] fn append_log(line: &str) -> std::io::Result<()> {
+src/coh_cc/ir/schema.rs:52: [Macro] append_log(&format!("parsed {}", path.display()))?;
+src/cuda/runtime.rs:8: [Import] use std::fs;
+src/cuda/runtime.rs:19: [Other] let addr = std::env::var("CUDA_SERVER")
+src/queen/slm_manage_registry.rs:14: [Import] use std::collections::HashMap;
+src/queen/slm_manage_registry.rs:15: [Import] use std::fs;
+src/queen/slm_manage_registry.rs:16: [Import] use std::path::Path;
+src/queen/sync_daemon.rs:10: [Import] use std::fs;
+src/queen/sync_daemon.rs:11: [Import] use std::thread;
+src/queen/sync_daemon.rs:12: [Import] use std::time::Duration;
+src/queen/sync_daemon.rs:55: [Macro] let path = format!("/srv/world_sync/{}.json", w);
+src/queen/orchestrator.rs:13: [Import] use std::collections::HashMap;
+src/queen/orchestrator.rs:14: [Import] use std::fs;
+src/queen/orchestrator.rs:15: [Import] use std::io::Write;
+src/queen/orchestrator.rs:16: [Import] use std::time::{Duration, SystemTime, UNIX_EPOCH};
+src/queen/orchestrator.rs:121: [Macro] let tpath = format!("/srv/telemetry/{}/gpu.json", rec.id);
+src/queen/orchestrator.rs:164: [Macro] let path = format!("/srv/agents/{worker_id}/spawn");
+src/queen/orchestrator.rs:175: [Macro] let url = format!("http://{}/reboot", rec.ip);
+src/queen/orchestrator.rs:221: [Macro] let dir = format!("/srv/agents/{worker_id}");
+src/queen/orchestrator.rs:223: [Macro] fs::write(format!("{}/role", dir), role).ok();
+src/queen/orchestrator.rs:227: [Macro] &format!("{} -> {}", worker_id, role),
+src/queen/orchestrator.rs:266: [Macro] &format!("{} -> {}", agent_id, id),
+src/queen/policy_enforcer.rs:28: [Macro] println!("[policy] checking namespace '{}'", namespace);
+src/queen/policy_enforcer.rs:35: [Macro] println!("[policy] checking runtime invariants...");
+src/queen/trust.rs:9: [Import] use std::fs;
+src/queen/trust.rs:10: [Import] use std::path::Path;
+src/queen/trust.rs:15: [Macro] let cnt_path = base.join(format!("{worker}.fails"));
+src/queen/trust.rs:34: [Macro] fs::read_to_string(format!("/srv/trust_zones/{worker}"))
+src/queen/cluster.rs:13: [Import] use std::fs::{create_dir_all, OpenOptions};
+src/queen/cluster.rs:14: [Import] use std::io::Write;
+src/queen/cluster.rs:15: [Import] use std::time::{SystemTime, UNIX_EPOCH};
+src/queen/cluster.rs:47: [Macro] Self::log(&format!("register {id}"));
+src/queen/cluster.rs:55: [Macro] Self::log(&format!("health {id} {healthy}"));
+src/queen/cluster.rs:71: [Macro] Self::log(&format!("primary_rotated {}", id));
+src/queen/cluster.rs:82: [Macro] Self::log(&format!("quorum {:?}", self.nodes));
+src/queen/cluster.rs:92: [Macro] Self::log(&format!("primary_elected {}", node.id));
+src/queen/federation.rs:14: [Import] use std::collections::HashMap;
+src/queen/federation.rs:15: [Import] use std::fs;
+src/queen/federation.rs:16: [Import] use std::time::{SystemTime, UNIX_EPOCH};
+src/queen/federation.rs:46: [Macro] let dir = format!("/srv/{id}");
+src/queen/federation.rs:73: [Macro] let dir = format!("/srv/federation/state/{peer_id}");
+src/queen/federation.rs:83: [Macro] let path = format!("/srv/federation/state/{}/heartbeat", peer.id);
+src/trace/recorder.rs:14: [Import] use std::fs::{self, OpenOptions};
+src/trace/recorder.rs:15: [Import] use std::io::Write;
+src/trace/recorder.rs:16: [Import] use std::process::{Command, Stdio};
+src/trace/recorder.rs:17: [Import] use std::time::{SystemTime, UNIX_EPOCH};
+src/trace/recorder.rs:33: [Other] let base = std::env::var("TRACE_OUT").unwrap_or_else(|_| "/srv/trace".into());
+src/trace/recorder.rs:34: [Other] let mut dir = std::path::PathBuf::from(base);
+src/trace/recorder.rs:36: [Other] dir = std::env::temp_dir().join("cohesix_trace");
+src/trace/recorder.rs:45: [Other] let tmp_dir = std::env::temp_dir().join("cohesix_trace");
+src/trace/recorder.rs:52: [Macro] .unwrap_or_else(|e| panic!("trace record failed: {}", e))
+src/trace/recorder.rs:66: [Other] pub fn spawn(agent: &str, cmd: &str, args: &[&str]) -> std::io::Result<()> {
+src/trace/recorder.rs:67: [Other] if let Ok(dir) = std::env::var("TRACE_OUT") {
+src/trace/recorder.rs:86: [Other] pub fn exec(agent: &str, cmd: &str) -> std::io::Result<()> {
+src/trace/recorder.rs:98: [Macro] record(agent, "cap_grant", &format!("{} -> {}", cap, target), true);
+src/trace/recorder.rs:101: [Other] pub fn read(agent: &str, path: &str) -> std::io::Result<String> {
+src/trace/recorder.rs:107: [Other] pub fn write(agent: &str, path: &str, data: &str) -> std::io::Result<()> {
+src/trace/recorder.rs:133: [Macro] event(&ev.agent, "replay", &format!("{} {}", ev.event, ev.detail));
+src/trace/trace_consensus.rs:9: [Import] use std::collections::HashMap;
+src/trace/trace_consensus.rs:10: [Import] use std::fs::{self, OpenOptions};
+src/trace/trace_consensus.rs:11: [Import] use std::io::Write;
+src/trace/trace_consensus.rs:40: [Macro] let _ = fs::write(format!("/srv/trace/consensus/{}", id), data);
+src/trace/distributed_runner.rs:13: [Import] use std::collections::HashMap;
+src/trace/distributed_runner.rs:14: [Import] use std::fs::{self, OpenOptions};
+src/trace/distributed_runner.rs:15: [Import] use std::io::Write;
+src/trace/distributed_runner.rs:28: [Macro] let _ = ureq::post(&format!("{}/run_trace", node.url)).send_string(&trace);
+src/trace/distributed_runner.rs:29: [Macro] if let Ok(resp) = ureq::get(&format!("{}/trace_hash", node.url)).call() {
+src/trace/validator.rs:10: [Import] use std::fs;
+src/trace/validator.rs:29: [Macro] println!(
+src/trace/validator.rs:35: [Macro] println!(
+src/trace/validator.rs:45: [Other] let base = std::env::var("COHESIX_TRACE_REPORT_DIR")
+src/trace/validator.rs:46: [Other] .or_else(|_| std::env::var("TMPDIR"))
+src/trace/validator.rs:48: [Macro] fs::create_dir_all(format!("{}/trace/reports", base)).ok();
+src/trace/validator.rs:49: [Macro] let out = format!("{}/trace/reports/{worker}.report.json", base);
+src/trace/validator.rs:51: [Macro] println!(
+src/trace/validator.rs:55: [Macro] println!("[validator] report stored at {out}");
+src/codegen/debug.rs:14: [Macro] output.push_str(&format!("Debug IR Dump: Module '{}'\n", module.name));
+src/codegen/debug.rs:16: [Macro] output.push_str(&format!("Function '{}':\n", func.name));
+src/codegen/debug.rs:18: [Macro] output.push_str(&format!("  {:?} {:?}\n", instr.opcode, instr.operands));
+src/codegen/c.rs:19: [Macro] output.push_str(&format!("void {}();\n", func.name));
+src/codegen/c.rs:25: [Macro] output.push_str(&format!("void {}() {{\n", func.name));
+src/codegen/c.rs:28: [Macro] Opcode::Add => output.push_str(&format!("    // ADD {:?}\n", instr.operands)),
+src/codegen/c.rs:29: [Macro] Opcode::Sub => output.push_str(&format!("    // SUB {:?}\n", instr.operands)),
+src/codegen/c.rs:30: [Macro] Opcode::Mul => output.push_str(&format!("    // MUL {:?}\n", instr.operands)),
+src/codegen/c.rs:31: [Macro] Opcode::Div => output.push_str(&format!("    // DIV {:?}\n", instr.operands)),
+src/codegen/c.rs:32: [Macro] Opcode::Call { function } => output.push_str(&format!("    {}();\n", function)),
+src/codegen/c.rs:34: [Macro] _ => output.push_str(&format!("    // Unhandled opcode: {:?}\n", instr.opcode)),
+src/codegen/c.rs:43: [Macro] output.push_str(&format!("    {}();\n", first.name));
+src/codegen/wasm.rs:21: [Macro] output.push_str(&format!(
+src/codegen/wasm.rs:34: [Macro] output.push_str(&format!("  (start ${})\n", first.name));
+src/validator/config.rs:7: [Import] use std::path::PathBuf;
+src/validator/config.rs:8: [Import] use std::sync::RwLock;
+src/validator/config.rs:20: [Other] let tmp = std::env::temp_dir();
+src/validator/config.rs:22: [Other] log_dir: std::env::var("COHESIX_LOG_DIR")
+src/validator/config.rs:25: [Other] violations_dir: std::env::var("COHESIX_VIOLATIONS_DIR")
+src/validator/syscall.rs:15: [Macro] println!("Validator received syscall: {:?}", sc);
+src/validator/syscall.rs:42: [Macro] println!(
+src/validator/syscall.rs:48: [Macro] println!(
+src/validator/mod.rs:15: [Import] use std::sync::Mutex;
+src/validator/mod.rs:38: [Other] std::path::Path::new("/srv/validator/live.sock").exists()
+src/validator/mod.rs:41: [Import] use std::fs::{self, OpenOptions};
+src/validator/mod.rs:42: [Import] use std::io::Write;
+src/validator/mod.rs:43: [Import] use std::time::{SystemTime, UNIX_EPOCH};
+src/kernel/config.rs:8: [Import] use std::fs;
+src/kernel/proc_mgr.rs:10: [Import] use std::sync::Mutex;
+src/kernel/proc_mgr.rs:29: [Import] use std::sync::atomic::{AtomicU32, Ordering};
+src/kernel/proc_mgr.rs:84: [Macro] .map(|p| format!("{}:{}", p.pid, p.name))
+src/kernel/loader.rs:51: [Other] std::fs::read(path).map_err(|_| LoaderError::ReadError(path.into()))?
+src/kernel/loader.rs:78: [Other] std::mem::forget(stack);
+src/kernel/loader.rs:94: [Import] use std::{env, fs::File, io::Write};
+src/kernel/loader.rs:95: [Import] use std::path::PathBuf;
+src/kernel/loader.rs:110: [Other] std::fs::remove_file(path).ok();
+src/kernel/userland_bootstrap.rs:15: [Macro] let path = format!("/bin/{}", name);
+src/kernel/userland_bootstrap.rs:25: [Macro] println!("Entry point: 0x{:x}", ctx.entry_point);
+src/kernel/userland_bootstrap.rs:26: [Macro] println!("User stack allocated at 0x{:x}", ctx.stack_top);
+src/kernel/userland_bootstrap.rs:27: [Macro] println!(
+src/kernel/userland_bootstrap.rs:37: [Macro] eprintln!("[userland_bootstrap] failed to load {}: {}", path, e);
+src/kernel/user_api.rs:27: [Other] if let Ok(msg) = unsafe { std::str::from_utf8(std::slice::from_raw_parts(ptr, len)) } {
+src/kernel/user_api.rs:28: [Macro] println!("{msg}");
+src/kernel/user_api.rs:35: [Macro] println!("EXIT pid={} code={}", pid, code);
+src/kernel/kernel_trace.rs:8: [Import] use std::fs::{self, OpenOptions};
+src/kernel/kernel_trace.rs:9: [Import] use std::io::Write;
+src/kernel/boot/role_hooks.rs:7: [Import] use std::fs::{self, OpenOptions};
+src/kernel/boot/role_hooks.rs:8: [Import] use std::io::Write;
+src/kernel/boot/bootloader.rs:26: [Macro] println!("[BootAgent] Starting bootloader initialization...");
+src/kernel/boot/bootloader.rs:31: [Other] let cmdline = std::fs::read_to_string("/boot/cmdline").unwrap_or_default();
+src/kernel/boot/bootloader.rs:52: [Macro] println!("[BootAgent] Running preflight checks...");
+src/kernel/boot/bootloader.rs:55: [Macro] println!("[BootAgent] secure boot validation failed");
+src/kernel/boot/bootloader.rs:63: [Macro] println!("[BootAgent] platform state OK");
+src/kernel/boot/bootloader.rs:64: [Macro] println!("[BootAgent] I/O ready");
+src/kernel/boot/bootloader.rs:68: [Macro] println!("[BootAgent] Configuring memory zones...");
+src/kernel/boot/bootloader.rs:69: [Macro] println!("[BootAgent] kernel text at 0x100000..0x200000");
+src/kernel/boot/bootloader.rs:70: [Macro] println!("[BootAgent] user space starts at 0x8000000");
+src/kernel/boot/bootloader.rs:74: [Macro] println!("[BootAgent] Enumerating early devices...");
+src/kernel/boot/bootloader.rs:75: [Other] if let Ok(entries) = std::fs::read_dir("/srv/dev") {
+src/kernel/boot/bootloader.rs:77: [Macro] println!("[BootAgent] device {}", e.path().display());
+src/kernel/boot/bootloader.rs:83: [Macro] println!("[BootAgent] Launching seL4 with role {}", ctx.role);
+src/kernel/boot/secure_boot.rs:12: [Macro] println!("[SecureBoot] measurement mismatch");
+src/kernel/boot/secure_boot.rs:15: [Macro] println!("[SecureBoot] Validation complete");
+src/kernel/boot/secure_boot.rs:21: [Other] if std::path::Path::new("/srv/keys/boot.pub").exists() {
+src/kernel/boot/secure_boot.rs:22: [Macro] println!("[SecureBoot] Loading trusted platform keys from /srv/keys/boot.pub");
+src/kernel/boot/secure_boot.rs:24: [Macro] println!("[SecureBoot] No platform keys found, assuming dev mode");
+src/kernel/boot/secure_boot.rs:30: [Macro] println!("[SecureBoot] Checking boot measurements...");
+src/kernel/boot/secure_boot.rs:31: [Other] if let Ok(expected) = std::fs::read_to_string("/srv/boot.hash") {
+src/kernel/fs/fat.rs:15: [Import] use std::fs;
+src/kernel/fs/fat.rs:20: [Macro] println!("[fat] mounted FAT partition as /");
+src/kernel/fs/fat.rs:29: [Macro] eprintln!("[fat] failed to open {}: {}", path, e);
+src/kernel/fs/plan9.rs:18: [Import] use std::sync::Mutex;
+src/kernel/fs/plan9.rs:28: [Macro] println!("[9P] Mount table full");
+src/kernel/fs/plan9.rs:32: [Macro] println!("[9P] Mounted {} → {}", path, target);
+src/kernel/fs/plan9.rs:40: [Macro] println!("[9P] {} → {}", mount.path, mount.target);
+src/kernel/fs/busybox.rs:55: [Macro] println!("{}", args.join(" "));
+src/kernel/fs/busybox.rs:61: [Macro] println!("[busybox] (empty)");
+src/kernel/fs/busybox.rs:64: [Macro] println!("{}", f);
+src/kernel/fs/busybox.rs:69: [Macro] println!("Cohesix Kernel v0.1");
+src/kernel/fs/busybox.rs:73: [Other] match std::fs::read_to_string(path) {
+src/kernel/fs/busybox.rs:74: [Macro] Ok(content) => print!("{}", content),
+src/kernel/fs/busybox.rs:75: [Macro] Err(_) => println!("cat: {}: not found", path),
+src/kernel/fs/busybox.rs:81: [Other] let _ = std::fs::OpenOptions::new()
+src/kernel/fs/busybox.rs:90: [Other] let _ = std::fs::rename(args[0], args[1]);
+src/kernel/fs/busybox.rs:92: [Macro] println!("mv: missing operand");
+src/kernel/fs/busybox.rs:97: [Other] let _ = std::fs::copy(args[0], args[1]);
+src/kernel/fs/busybox.rs:99: [Macro] println!("cp: missing operand");
+src/kernel/fs/busybox.rs:103: [Macro] println!("  PID CMD");
+src/kernel/fs/busybox.rs:104: [Macro] println!("    1 shell");
+src/kernel/fs/busybox.rs:108: [Macro] println!("killed {}", pid);
+src/kernel/fs/busybox.rs:110: [Macro] println!("kill: missing pid");
+src/kernel/fs/busybox.rs:114: [Macro] println!("chmod unsupported on UEFI");
+src/kernel/fs/busybox.rs:118: [Macro] println!("mounted {} on {}", args[0], args[1]);
+src/kernel/fs/busybox.rs:120: [Macro] println!("mount: missing args");
+src/kernel/fs/busybox.rs:124: [Macro] println!("Filesystem     1K-blocks  Used Available Use% Mounted on");
+src/kernel/fs/busybox.rs:125: [Macro] println!("/srv/root            2048  1024      1024 50% /");
+src/kernel/fs/busybox.rs:128: [Macro] println!("uptime: 0 days, 0:00");
+src/kernel/fs/busybox.rs:131: [Macro] println!("root console");
+src/kernel/fs/busybox.rs:134: [Macro] println!("[busybox] rebooting...");
+src/kernel/fs/busybox.rs:139: [Macro] println!("Unknown command: {}", cmd);
+src/kernel/physics/cuda.rs:21: [Macro] println!("[CUDA] Probing CUDA support...");
+src/kernel/physics/cuda.rs:22: [Other] if std::path::Path::new("/srv/nvhost").exists() {
+src/kernel/security/l4_verified.rs:19: [Import] use std::collections::HashMap;
+src/kernel/security/l4_verified.rs:20: [Import] use std::sync::Mutex;
+src/kernel/syscalls/syscall.rs:10: [Import] use std::fs::OpenOptions;
+src/kernel/syscalls/syscall.rs:11: [Import] use std::io::Write;
+src/kernel/syscalls/syscall.rs:59: [Macro] println!(
+src/kernel/syscalls/syscall.rs:63: [Macro] crate::kernel::kernel_trace::log_syscall(&format!("{}", syscall_id));
+src/kernel/syscalls/syscall.rs:64: [Other] std::fs::create_dir_all("/log").ok();
+src/kernel/syscalls/syscall.rs:90: [Macro] println!("Trap: syscall num={} returned to kernel", syscall_id);
+src/kernel/syscalls/syscall.rs:143: [Macro] panic!("init_syscall_trap attempted on non-bare-metal target");
+src/kernel/syscalls/syscall_table.rs:32: [Macro] println!("[syscall] read({:?})", args);
+src/kernel/syscalls/syscall_table.rs:36: [Macro] println!("[syscall] write({:?})", args);
+src/kernel/syscalls/syscall_table.rs:40: [Macro] println!("[syscall] open({:?})", args);
+src/kernel/syscalls/syscall_table.rs:44: [Macro] println!("[syscall] close({:?})", args);
+src/kernel/syscalls/syscall_table.rs:48: [Macro] println!("[syscall] exec({:?})", args);
+src/kernel/syscalls/syscall_table.rs:52: [Macro] println!(
+src/kernel/upgrade/upgrade_manager.rs:12: [Import] use std::fs::{self, OpenOptions};
+src/kernel/upgrade/upgrade_manager.rs:13: [Import] use std::io::Read;
+src/kernel/upgrade/upgrade_manager.rs:14: [Import] use std::io::Write;
+src/kernel/upgrade/upgrade_manager.rs:35: [Macro] let manifest_url = format!("{url}.manifest");
+src/kernel/upgrade/upgrade_manager.rs:47: [Macro] let hash = format!("sha256:{:x}", hasher.finalize());
+src/kernel/upgrade/upgrade_manager.rs:59: [Macro] Self::log(&format!("upgrade {} applied", manifest.version));
+src/kernel/drivers/gpu.rs:25: [Import] use std::env;
+src/kernel/drivers/gpu.rs:26: [Macro] println!("[GPU] Initializing GPU driver...");
+src/kernel/drivers/gpu.rs:49: [Macro] println!("[GPU] CUDA task failed: {e}");
+src/kernel/drivers/gpu.rs:52: [Macro] GpuBackend::SoftwareFallback => println!("[GPU] Running software fallback"),
+src/kernel/drivers/gpu.rs:53: [Macro] GpuBackend::None => println!("[GPU] No GPU backend available"),
+src/kernel/drivers/net.rs:30: [Import] use std::env;
+src/kernel/drivers/net.rs:31: [Macro] println!("[Net] Initializing network driver...");
+src/kernel/drivers/net.rs:47: [Macro] println!("[Net] driver not initialized");
+src/kernel/drivers/net.rs:50: [Macro] println!("[Net] Transmitting {} bytes", packet.len());
+src/kernel/drivers/net.rs:59: [Macro] println!("[Net] driver not initialized");
+src/kernel/drivers/net.rs:63: [Macro] println!("[Net] Received {} bytes", pkt.len());
+src/kernel/drivers/net.rs:66: [Macro] println!("[Net] no packet available");
+src/bootloader/init.rs:68: [Other] std::fs::create_dir_all("/srv").ok();
+src/bootloader/init.rs:69: [Other] if let Ok(mut f) = std::fs::OpenOptions::new()
+src/bootloader/init.rs:74: [Import] use std::io::Write;
+src/bootloader/init.rs:77: [Other] std::fs::write("/srv/cohrole", &role).ok();
+src/bootloader/args.rs:28: [Import] use std::collections::HashMap;
+src/security/sbom.rs:13: [Import] use std::collections::HashMap;
+src/security/sbom.rs:36: [Macro] println!("[sbom] adding entry for '{}'", entry.name);
+src/security/sbom.rs:44: [Macro] summary.push_str(&format!(
+src/security/capabilities.rs:12: [Import] use std::collections::HashMap;
+src/security/capabilities.rs:13: [Import] use std::fs;
+src/security/capabilities.rs:32: [Import] use std::iter::FromIterator;
+src/swarm/mesh.rs:13: [Import] use std::collections::HashMap;
+src/swarm/mesh.rs:14: [Import] use std::sync::Mutex;
+src/swarm/mesh.rs:15: [Import] use std::time::{Duration, Instant};
+src/swarm/mesh.rs:55: [Macro] MESH.lock().unwrap().insert(format!("{node}:{name}"), entry);
+src/swarm/mesh.rs:60: [Macro] MESH.lock().unwrap().remove(&format!("{node}:{name}"));
+src/swarm/mesh.rs:65: [Macro] if let Some(entry) = MESH.lock().unwrap().get_mut(&format!("{node}:{name}")) {
+src/swarm/mesh.rs:74: [Macro] MESH.lock().unwrap().get(&format!("{node}:{name}")).cloned()
+src/swarm/mesh.rs:105: [Macro] if let Ok(resp) = ureq::get(&format!("http://{}/health", entry.node)).call() {
+src/swarm/mesh.rs:117: [Macro] let local = format!("/srv/remote/{}_{}", node, name);
+src/swarm/mesh.rs:118: [Other] std::fs::create_dir_all("/srv/remote").ok();
+src/swarm/mesh.rs:119: [Other] std::fs::write(&local, &entry.path).ok();
+src/swarm/mesh.rs:131: [Macro] let url = format!("http://{node}/srv_lookup/{name}");
+src/swarm/mesh.rs:145: [Macro] .insert(format!("{node}:{name}"), entry.clone());
+src/worker/world_sync.rs:9: [Import] use std::fs;
+src/worker/hotplug.rs:13: [Import] use std::fs;
+src/worker/hotplug.rs:14: [Import] use std::io::Write;
+src/worker/hotplug.rs:23: [Macro] let url = format!("http://{node_id}/sync_bootns");
+src/worker/hotplug.rs:33: [Macro] &format!("/srv/{svc}"),
+src/worker/queen_watchdog.rs:9: [Import] use std::fs::{self, OpenOptions};
+src/worker/queen_watchdog.rs:10: [Import] use std::io::Write;
+src/worker/queen_watchdog.rs:11: [Import] use std::time::{Duration, SystemTime, UNIX_EPOCH};
+src/worker/queen_watchdog.rs:14: [Other] std::env::var("COHESIX_QUEEN_DIR").unwrap_or_else(|_| "/srv/queen".into())
+src/worker/queen_watchdog.rs:34: [Macro] let hb_path = format!("{}/heartbeat", queen_dir());
+src/worker/queen_watchdog.rs:55: [Macro] .open(format!("{}/role", qdir))
+src/worker/args.rs:43: [Other] /// Parse `std::env::args()` into a [`WorkerArgs`] struct.
+src/worker/role_memory.rs:9: [Import] use std::fs;
+src/worker/role_memory.rs:10: [Import] use std::path::Path;
+src/worker/role_memory.rs:11: [Import] use std::time::{SystemTime, UNIX_EPOCH};
+src/worker/role_memory.rs:29: [Macro] let trace_path = base.join("traces").join(format!("{ts}.log"));
+src/worker/vision_overlay.rs:7: [Import] use std::time::{Duration, Instant};
+src/worker/vision_overlay.rs:31: [Other] std::thread::sleep(Duration::from_millis(100));
+src/binlib/agent_main.rs:60: [Macro] println!("migrated {} to {}", id, to);
+src/binlib/agent_main.rs:75: [Macro] _ => panic!("unexpected variant"),
+src/binlib/run_main.rs:86: [Macro] println!("kiosk started");
+src/binlib/run_main.rs:90: [Macro] println!("event logged");
+src/binlib/run_main.rs:94: [Other] if let Ok(data) = std::fs::read_to_string("/srv/agents/active.json") {
+src/binlib/run_main.rs:95: [Macro] println!("{data}");
+src/binlib/run_main.rs:97: [Macro] println!("no agents registered");
+src/binlib/run_main.rs:104: [Macro] println!("assigned {role} to {worker_id}");
+src/binlib/run_main.rs:108: [Other] if let Ok(data) = std::fs::read_to_string("/srv/gpu_registry.json") {
+src/binlib/run_main.rs:109: [Macro] println!("{data}");
+src/binlib/run_main.rs:111: [Macro] println!("no gpu registry");
+src/binlib/run_main.rs:119: [Macro] println!("dispatched {task} to {wid}");
+src/binlib/run_main.rs:122: [Macro] println!("no gpu nodes available");
+src/binlib/run_main.rs:128: [Import] use std::fs;
+src/binlib/run_main.rs:134: [Macro] let id = format!("g{}", goals.len() + 1);
+src/binlib/run_main.rs:145: [Macro] println!("goal {id} added");
+src/binlib/run_main.rs:148: [Other] if let Ok(data) = std::fs::read_to_string("/srv/goals/active_goals.json") {
+src/binlib/run_main.rs:149: [Macro] println!("{data}");
+src/binlib/run_main.rs:151: [Macro] println!("no goals");
+src/binlib/run_main.rs:156: [Import] use std::fs;
+src/binlib/run_main.rs:171: [Macro] println!("goal {goal_id} assigned to {worker_id}");
+src/binlib/run_main.rs:176: [Macro] println!("{worker_id} escalated to red");
+src/binlib/run_main.rs:180: [Macro] println!("{}: {}", w, lvl);
+src/binlib/run_main.rs:187: [Macro] println!("federation failed: {e}");
+src/binlib/run_main.rs:189: [Macro] println!("handshake sent to {queen_url}");
+src/binlib/run_main.rs:194: [Other] if let Ok(log) = std::fs::read_to_string("/srv/logs/watchdog.log") {
+src/binlib/run_main.rs:195: [Macro] println!("{log}");
+src/binlib/run_main.rs:197: [Macro] println!("no watchdog log");
+src/binlib/run_main.rs:204: [Macro] println!("unknown context");
+src/binlib/run_main.rs:208: [Other] if let Ok(data) = std::fs::read_to_string(&from) {
+src/binlib/run_main.rs:209: [Other] std::fs::create_dir_all("/srv/validator").ok();
+src/binlib/run_main.rs:210: [Other] std::fs::write("/srv/validator/inject_rule", data).ok();
+src/binlib/run_main.rs:211: [Macro] println!("rule injected from {from}");
+src/binlib/run_main.rs:213: [Macro] println!("failed to read rule file");
+src/binlib/run_main.rs:228: [Macro] _ => panic!("unexpected parse"),
+src/binlib/compiler_main.rs:9: [Import] use std::fs::{self, OpenOptions};
+src/binlib/compiler_main.rs:10: [Import] use std::io::Write;
+src/binlib/compiler_main.rs:11: [Import] use std::time::Instant;
+src/binlib/compiler_main.rs:18: [Other] let result = std::panic::catch_unwind(|| {
+src/binlib/compiler_main.rs:20: [Macro] eprintln!("Error: {}", err);
+src/binlib/compiler_main.rs:21: [Other] std::process::exit(1);
+src/binlib/compiler_main.rs:58: [Macro] eprintln!("Error: {}", err);
+src/binlib/compiler_main.rs:59: [Other] std::process::exit(1);
+src/binlib/role_main.rs:8: [Import] use std::env;
+src/binlib/role_main.rs:9: [Import] use std::fs;
+src/binlib/up_main.rs:56: [Macro] _ => panic!("bad parse"),
+src/util/debug_log.rs:15: [Import] use std::io::{self, Write as IoWrite};
+src/util/srv_root.rs:9: [Other] let root = std::env::var("COHESIX_SRV_ROOT").unwrap_or("/srv".to_string());
+src/util/srv_root.rs:10: [Macro] format!(
+src/bin/cohrole.rs:13: [Macro] println!("{}", role.trim());
+src/orchestrator/edge_fallback.rs:7: [Import] use std::fs;
+src/orchestrator/edge_fallback.rs:8: [Import] use std::time::{Duration, SystemTime, UNIX_EPOCH};
+src/orchestrator/failover.rs:8: [Import] use std::fs::{self, OpenOptions};
+src/orchestrator/failover.rs:9: [Import] use std::io::Write;
+src/orchestrator/failover.rs:10: [Import] use std::time::{Duration, SystemTime, UNIX_EPOCH};
+src/orchestrator/failover.rs:40: [Macro] let dst = format!("/srv/worker/backup/{}", e.file_name().to_string_lossy());
+src/orchestrator/failover.rs:50: [Other] fn log_event(msg: &str) -> std::io::Result<()> {
+src/orchestrator/worker.rs:13: [Import] use std::fs;
+src/orchestrator/worker.rs:14: [Import] use std::time::{SystemTime, UNIX_EPOCH};
+src/orchestrator/worker.rs:37: [Macro] fs::create_dir_all(format!("{}/join", self.queen_path))?;
+src/orchestrator/worker.rs:43: [Macro] fs::write(format!("{}/join/{}.msg", self.queen_path, self.id), data)?;
+src/orchestrator/worker.rs:49: [Macro] let ping_path = format!("{}/ping/{}.req", self.queen_path, self.id);
+src/orchestrator/worker.rs:57: [Macro] let _ = fs::create_dir_all(format!("{}/ping", self.queen_path));
+src/orchestrator/worker.rs:58: [Macro] let _ = fs::write(format!("{}/ping/{}.res", self.queen_path, self.id), data);
+src/orchestrator/worker.rs:65: [Macro] let path = format!("{}/ack/{}.msg", self.queen_path, self.id);
+src/orchestrator/queen.rs:13: [Import] use std::collections::HashMap;
+src/orchestrator/queen.rs:14: [Import] use std::fs::{self, OpenOptions};
+src/orchestrator/queen.rs:15: [Import] use std::io::Write;
+src/orchestrator/queen.rs:16: [Import] use std::time::{Duration, SystemTime, UNIX_EPOCH};
+src/orchestrator/queen.rs:53: [Other] from_read::<_, JoinRequest>(&mut f).map_err(std::io::Error::other)
+src/orchestrator/queen.rs:63: [Macro] fs::create_dir_all(format!("/srv/worker/{}", req.worker_id)).ok();
+src/orchestrator/queen.rs:70: [Macro] let path = format!("/srv/registry/ack/{}.msg", req.worker_id);
+src/orchestrator/queen.rs:84: [Other] from_read::<_, HealthPing>(&mut f).map_err(std::io::Error::other)
+src/orchestrator/federation.rs:16: [Import] use std::fs::{self, OpenOptions};
+src/orchestrator/federation.rs:17: [Import] use std::io::Write;
+src/orchestrator/federation.rs:18: [Import] use std::time::{SystemTime, UNIX_EPOCH};
+src/orchestrator/federation.rs:43: [Macro] let tgt = format!("/srv/federation/shared/{}", self.queen_id);
+src/orchestrator/federation.rs:47: [Macro] let dest = format!("{}/{}", tgt, entry.file_name().to_string_lossy());
+src/orchestrator/federation.rs:63: [Macro] let path = format!("/srv/federation/{}.auth", peer_id);
+src/plan9/shell.rs:55: [Macro] println!("[shell] executing: {} {:?}", cmd.name, cmd.args);
+src/plan9/shell.rs:67: [Macro] println!("[shell] usage: busybox <command>");
+src/plan9/shell.rs:80: [Macro] println!("[shell] empty input");
+src/plan9/shim.rs:21: [Macro] println!("[shim] dispatching op='{}' on path='{}'", op, path);
+src/plan9/shim.rs:23: [Macro] println!("[shim] with data: {:?}", d);
+src/plan9/shim.rs:34: [Other] std::str::from_utf8(d)
+src/plan9/srv_registry.rs:9: [Import] use std::collections::HashMap;
+src/plan9/srv_registry.rs:10: [Import] use std::sync::Mutex;
+src/plan9/namespace.rs:15: [Import] use std::collections::HashMap;
+src/plan9/namespace.rs:16: [Import] use std::fs::{self, File};
+src/plan9/namespace.rs:17: [Import] use std::io::{self, Write};
+src/plan9/namespace.rs:70: [Other] impl std::fmt::Display for Namespace {
+src/plan9/namespace.rs:71: [Other] fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+src/plan9/namespace.rs:116: [Other] let text = if let Ok(cfg) = std::env::var("BOOT_NS") {
+src/plan9/namespace.rs:127: [Other] if std::env::var("NS_PRIVATE").as_deref() == Ok("1") {
+src/plan9/namespace.rs:170: [Macro] _ => println!("[namespace] ignoring malformed line: {}", line),
+src/plan9/namespace.rs:189: [Other] let file = std::path::Path::new(&srv_dir).join(name.replace('/', "_"));
+src/plan9/namespace.rs:217: [Other] let agent = std::env::var("AGENT_ID").unwrap_or_else(|_| "default".into());
+src/plan9/namespace.rs:258: [Other] let dir = std::path::PathBuf::from(crate::with_srv_root!("bootns"));
+src/plan9/namespace.rs:265: [Macro] eprintln!("[namespace] persist failed for {}: {}", path.display(), e);
+src/plan9/namespace.rs:287: [Macro] _ => format!("{:?}", role),
+src/plan9/namespace.rs:290: [Macro] let path = format!("/srv/nsmap/{}", role_name);
+src/plan9/fs.rs:31: [Macro] println!("[fs] Cannot add child to non-directory: {}", self.name);
+src/plan9/syscalls.rs:9: [Import] use std::fs::{self, File, OpenOptions};
+src/plan9/syscalls.rs:10: [Import] use std::io::{self, Read, Write};
+src/p9/multiplexer.rs:14: [Import] use std::collections::HashMap;
+src/p9/multiplexer.rs:15: [Import] use std::sync::mpsc::Receiver;
+src/p9/multiplexer.rs:16: [Import] use std::sync::{Arc, Mutex};
+src/p9/multiplexer.rs:60: [Macro] P9Response::RError(format!("service {} not found", svc_name))
+src/p9/multiplexer.rs:93: [Other] pub fn handle_async(self: Arc<Self>, req: P9Request) -> std::thread::JoinHandle<P9Response> {
+src/p9/multiplexer.rs:94: [Other] std::thread::spawn(move || self.handle(req))
+src/lib/9p/transport.rs:36: [Macro] println!("[9P] Sent: {:?}", message);
+src/lib/9p/transport.rs:43: [Macro] println!("[9P] Received: {:?}", msg);
+src/lib/9p/server.rs:12: [Import] use std::collections::HashMap;
+src/lib/9p/server.rs:13: [Import] use std::fs;
+src/lib/9p/server.rs:14: [Import] use std::sync::Mutex;
+src/lib/9p/server.rs:41: [Other] let path = std::env::var("COHROLE_PATH").unwrap_or_else(|_| "/srv/cohrole".into());
+src/lib/9p/server.rs:43: [Macro] eprintln!("[9P] failed to read cohrole {}: {}", path, e);
+src/lib/9p/server.rs:68: [Other] let rest = std::str::from_utf8(&stream[1..]).unwrap_or("");
+src/lib/9p/server.rs:69: [Macro] println!("[9P] Received message: {:?} path={}", request, rest);
+src/root/main.rs:10: [Macro] println!("COHESIX_BOOT_OK");
+src/root/main.rs:11: [Macro] println!("[root] booting...");
+src/root/main.rs:13: [Macro] println!("[root] runtime initialized");
+src/root/main.rs:15: [Macro] eprintln!("[root] init failed: {e}");
+src/root/main.rs:18: [Other] match std::fs::read_dir(dir) {
+src/root/main.rs:21: [Macro] println!("[root] {dir} contains {count} entries");
+src/root/main.rs:23: [Macro] Err(_) => eprintln!("[root] {dir} missing"),
+src/root/main.rs:26: [Macro] println!("[root] launching shell loop");
+src/cli/cohtrace.rs:10: [Import] use std::fs;
+src/cli/cohtrace.rs:34: [Macro] let ns_map = fs::read_to_string(format!("/srv/nsmap/{role_name}")).unwrap_or_default();
+src/cli/cohtrace.rs:35: [Macro] println!("Validator: {}", if running { "active" } else { "inactive" });
+src/cli/cohtrace.rs:36: [Macro] println!("Role: {}", role_name);
+src/cli/cohtrace.rs:38: [Macro] println!("Mount: {}", m);
+src/cli/cohtrace.rs:45: [Macro] println!("no recent syscalls");
+src/cli/cohtrace.rs:48: [Macro] println!("syscall: {:?}", sc);
+src/cli/cohtrace.rs:62: [Macro] println!("Queen ID: {}", queen);
+src/cli/cohtrace.rs:63: [Macro] println!("Last heartbeat: {}", ts);
+src/cli/cohtrace.rs:64: [Macro] println!("Connected Workers: {}", workers);
+src/cli/cohtrace.rs:66: [Macro] println!("cloud state unavailable");
+src/cli/cohtrace.rs:81: [Macro] println!("Worker {id}: {role}");
+src/cli/cohtrace.rs:88: [Macro] other => Err(format!("unknown cohtrace command: {other}")),
+src/cli/args.rs:45: [Other] .default_value(std::env::consts::ARCH),
+src/cli/federation.rs:11: [Import] use std::fs;
+src/cli/federation.rs:37: [Macro] fs::write(format!("/srv/federation/requests/{peer}.connect"), b"1")?;
+src/cli/federation.rs:43: [Macro] fs::write(format!("/srv/federation/requests/{peer}.disconnect"), b"1")?;
+src/cli/federation.rs:49: [Macro] println!("{}", e.file_name().to_string_lossy());
+src/cli/federation.rs:55: [Macro] println!("{}", data);
+src/cli/mod.rs:18: [Import] use std::env;
+src/cli/mod.rs:19: [Import] use std::fs;
+src/cli/mod.rs:20: [Import] use std::path::Path;
+src/cli/mod.rs:21: [Import] use std::process::Command;
+src/cli/mod.rs:58: [Macro] println!("Generated {} (timeout: {} ms)", output_path, timeout);
+src/cli/mod.rs:70: [Macro] eprintln!("unknown cli command: {}", other);
+src/world_model/mod.rs:11: [Import] use std::fs;
+src/rc/init.rs:11: [Import] use std::fs;
+src/rc/init.rs:12: [Import] use std::io::{self, BufRead, Write};
+src/rc/init.rs:13: [Import] use std::time::Instant;
+src/rc/init.rs:29: [Other] std::fs::read_to_string("/etc/init.conf")
+src/rc/init.rs:43: [Macro] println!("{}", BANNER);
+src/rc/init.rs:44: [Macro] println!("C O H E S I X   R U N T I M E   🐝");
+src/rc/init.rs:50: [Macro] println!("[rc] init_mode: {}", mode);
+src/rc/init.rs:53: [Macro] println!("[rc] would start services: {}", services.join(", "));
+src/rc/init.rs:61: [Other] if std::path::Path::new("/miniroot").exists() {
+src/rc/init.rs:86: [Macro] ["run", cmd] => println!("[rc] run {cmd}"),
+src/rc/init.rs:93: [Other] if let Ok(mut f) = std::fs::OpenOptions::new()
+src/ir/ops.rs:50: [Macro] format!("{:?}", op)
+src/shell/busybox_runner.rs:10: [Import] use std::fs::{self, OpenOptions};
+src/shell/busybox_runner.rs:11: [Import] use std::io::{BufRead, BufReader, Write};
+src/shell/busybox_runner.rs:12: [Import] use std::path::{Path, PathBuf};
+src/shell/busybox_runner.rs:13: [Import] use std::process;
+src/shell/busybox_runner.rs:14: [Import] use std::process::{Command, Stdio};
+src/shell/busybox_runner.rs:29: [Other] fn log_event(log: &mut std::fs::File, event: &str) {
+src/shell/busybox_runner.rs:38: [Macro] println!("[shell] starting BusyBox shell");
+src/shell/busybox_runner.rs:39: [Other] std::fs::write("/log/shell_start", role.as_bytes()).ok();
+src/shell/busybox_runner.rs:62: [Macro] &format!("spawn failed: {e}"),
+src/shell/busybox_runner.rs:84: [Macro] log_event(&mut log, &format!("SESSION START {}", role));
+src/shell/busybox_runner.rs:86: [Other] if std::path::Path::new("/etc/test_boot.sh").exists() {
+src/shell/busybox_runner.rs:106: [Macro] log_event(&mut log, &format!("CMD {}", line.trim_end()));
+src/shell/busybox_runner.rs:127: [Macro] let msg = format!("compiled {}\n", out_path.display());
+src/shell/busybox_runner.rs:137: [Macro] let msg = format!("compile failed: {}\n", e);
+src/shell/busybox_runner.rs:156: [Macro] let msg = format!("ran {}\n", bin);
+src/shell/busybox_runner.rs:161: [Macro] let msg = format!("run failed: {}\n", e);
+src/shell/busybox_runner.rs:178: [Macro] let msg = format!("command {cmd} not allowed for role {role}\n");
+src/shell/busybox_runner.rs:183: [Macro] log_event(&mut log, &format!("SESSION STOP {}", role));
+src/hal/arm64/mod.rs:82: [Macro] panic!("init_paging attempted on non-bare-metal target");
+src/hal/x86_64/mod.rs:82: [Macro] panic!("init_paging attempted on non-bare-metal target");
+cohesix-9p/src/policy.rs:32: [Other] pub fn from_file(path: &std::path::Path) -> std::io::Result<Self> {
+cohesix-9p/src/policy.rs:33: [Other] let txt = std::fs::read_to_string(path)?;
+cohesix-9p/src/policy.rs:34: [Other] Self::from_str(&txt).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+cohesix-9p/src/ninep_adapter.rs:13: [Import] use std::io;
+cohesix-9p/src/ninep_adapter.rs:51: [Macro] .unwrap_or_else(|e| panic!("server start failed: {e}"));
+cohesix-9p/src/ninep_adapter.rs:52: [Other] std::thread::sleep(std::time::Duration::from_millis(100));
+cohesix-9p/src/ninep_adapter.rs:54: [Macro] .unwrap_or_else(|e| panic!("client connect failed: {e}"));
+cohesix-9p/src/ninep_adapter.rs:68: [Macro] .unwrap_or_else(|e| panic!("create failed: {e}"));
+cohesix-9p/src/ninep_adapter.rs:70: [Macro] .unwrap_or_else(|e| panic!("write failed: {e}"));
+cohesix-9p/src/ninep_adapter.rs:72: [Macro] .unwrap_or_else(|e| panic!("read slice failed: {e}"));
+cohesix-9p/src/fs.rs:56: [Macro] let path = format!("/srv/{}", name);
+cohesix-9p/tests/9p_fs_concurrency.rs:7: [Import] use std::sync::Arc;
+cohesix-9p/tests/9p_fs_concurrency.rs:8: [Import] use std::thread;
+cohesix-9p/tests/9p_fs_concurrency.rs:19: [Macro] let path = format!("/file{}_{}", i, j);
+Cargo.toml:57: [Other] serde = { version = "1", features = ["std"] }
+Cargo.toml:60: [Other] default = ["std"]
+Cargo.toml:61: [Other] std = []
