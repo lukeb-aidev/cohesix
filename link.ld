@@ -1,25 +1,39 @@
 /* CLASSIFICATION: COMMUNITY */
-/* Filename: link.ld v0.2 */
+/* Filename: link.ld v0.4 */
 /* Author: Lukas Bower */
 /* Date Modified: 2027-01-15 */
 /* SPDX-License-Identifier: BSD-2-Clause */
+
+ENTRY(_start)
+
+/*
+ * Explicit program header mapping with clear flags:
+ * text: R+X (5), data: R+W (6)
+ * BSS marked NOLOAD since it's zero-initialized at runtime.
+ */
+
+PHDRS {
+    text PT_LOAD FLAGS(5); /* R+X */
+    data PT_LOAD FLAGS(6); /* R+W */
+}
+
 SECTIONS {
     . = 0xffffff8040000000;
 
-    .text : ALIGN(0x1000) {
+    .text : ALIGN(0x1000) :text {
         KEEP(*(.text*))
-    }
+    } :text
 
-    .rodata : ALIGN(0x1000) {
+    .rodata : ALIGN(0x1000) :text {
         KEEP(*(.rodata*))
-    }
+    } :text
 
-    .data : ALIGN(0x1000) {
+    .data : ALIGN(0x1000) :data {
         KEEP(*(.data*))
-    }
+    } :data
 
-    .bss : ALIGN(0x1000) {
+    .bss : ALIGN(0x1000) (NOLOAD) :data {
         KEEP(*(.bss*))
         *(COMMON)
-    }
+    } :data
 }
