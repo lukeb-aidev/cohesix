@@ -2,9 +2,14 @@
 # Filename: .cargo/config.toml v0.15
 # Author: Lukas Bower
 # Date Modified: 2027-08-07
+cargo-features = ["build-std"]
 
 [source.vendored-sources]
 directory = "vendor"
+
+[build]
+build-std = ["core", "alloc", "compiler_builtins"]
+build-std-features = ["compiler-builtins-mem"]
 
 
 [target.aarch64-unknown-linux-musl]
@@ -20,3 +25,13 @@ rustflags = [
   "-C", "link-arg=-nostdlib",
   "-C", "link-arg=-Tlink.ld",
 ]
+
+[target.sel4-aarch64]
+linker = "ld.lld"
+
+[unstable]
+build-std = ["core", "alloc", "compiler_builtins"]
+build-std-features = ["compiler-builtins-mem"]
+
+[env]
+RUSTC_BOOTSTRAP = "1"
