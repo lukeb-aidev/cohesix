@@ -2,6 +2,7 @@
 // Filename: snapshot.rs v0.1
 // Author: Lukas Bower
 // Date Modified: 2025-07-04
+#![cfg(feature = "std")]
 
 #[allow(unused_imports)]
 use alloc::{boxed::Box, string::String, vec::Vec};
