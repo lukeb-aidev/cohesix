@@ -34,6 +34,7 @@
 - boot_trace_rule tests use tempfile::tempdir to avoid PermissionDenied errors
 - Classification headers added for all bin scripts; files registered in METADATA
 - make_iso.sh and cohesix_fetch_build.sh verify seL4 kernel ELF paths before staging
+- ROOT_SPLIT_PLAN_V1.md updated to v1.1 with detailed viability review and implementation steps
 ### Added
 - FAT partition mount under `minimal_uefi` with `/bin/init.efi` bootstrap
 - Makefile builds `init-efi` target and copies binary to FAT directory
