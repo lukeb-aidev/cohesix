@@ -306,11 +306,14 @@ log "Detected platform: $COH_ARCH, GPU=$COH_GPU"
 
 # Set musl cross compiler for aarch64 if available
 if [ "$COH_ARCH" = "aarch64" ]; then
-  if [ -x "/opt/aarch64-linux-musl/bin/aarch64-linux-musl-gcc" ]; then
+  if command -v aarch64-linux-musl-gcc >/dev/null 2>&1; then
+    export CC_aarch64_unknown_linux_musl="$(command -v aarch64-linux-musl-gcc)"
+    log "✅ Using musl cross compiler at $CC_aarch64_unknown_linux_musl"
+  elif [ -x "/opt/aarch64-linux-musl/bin/aarch64-linux-musl-gcc" ]; then
     export CC_aarch64_unknown_linux_musl="/opt/aarch64-linux-musl/bin/aarch64-linux-musl-gcc"
     log "✅ Using musl cross compiler at /opt/aarch64-linux-musl/bin/aarch64-linux-musl-gcc"
   else
-    log "⚠️ Musl cross compiler not found at /opt/aarch64-linux-musl/bin/aarch64-linux-musl-gcc"
+    log "⚠️ Musl cross compiler not found in PATH or /opt/aarch64-linux-musl/bin"
   fi
 fi
 
