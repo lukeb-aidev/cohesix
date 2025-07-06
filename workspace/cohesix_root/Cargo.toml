@@ -1,0 +1,17 @@
+# CLASSIFICATION: COMMUNITY
+# Filename: Cargo.toml v0.1
+# Author: Lukas Bower
+# Date Modified: 2027-08-15
+
+[package]
+name = "cohesix_root"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+cohesix = { path = "../cohesix", default-features = false }
+libm = "0.2"
+
+[profile.release]
+panic = "abort"
+strip = "debuginfo"
