@@ -3,12 +3,16 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-04
 
+#![cfg(feature = "std")]
+
 #[allow(unused_imports)]
 use alloc::{boxed::Box, string::String, vec::Vec};
 /// Agent directory table maintained under `/srv/agents/agent_table.json`.
 use serde::{Deserialize, Serialize};
 use serde_json;
+#[cfg(feature = "std")]
 use std::fs;
+#[cfg(feature = "std")]
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Record for a running agent.
