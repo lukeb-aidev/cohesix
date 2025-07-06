@@ -8,6 +8,8 @@
 //! Core Cohesix runtime library.
 
 extern crate alloc;
+#[cfg(test)]
+extern crate std;
 
 /// Cohesix runtime error type.
 pub type CohError = alloc::boxed::Box<dyn core::error::Error + Send + Sync>;

@@ -7,6 +7,8 @@
 //! Secure 9P extensions for Cohesix.
 
 extern crate alloc;
+#[cfg(test)]
+extern crate std;
 
 pub mod secure_stream;
 #[cfg(all(feature = "std", feature = "tls"))]
