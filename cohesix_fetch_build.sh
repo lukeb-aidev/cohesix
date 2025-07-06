@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.93
+# Filename: cohesix_fetch_build.sh v0.94
 # Author: Lukas Bower
-# Date Modified: 2027-08-08
+# Date Modified: 2027-08-13
 #!/usr/bin/env bash
 #
 # Merged old script v0.89 features into current script.
@@ -421,9 +421,8 @@ echo "== Rust build =="
 # Build cohesix_root for seL4 root server
 echo "🔧 Building Rust binary: cohesix_root"
 RUSTFLAGS="-C linker=ld.lld -C link-arg=-Tlink.ld" \
-  cargo build --release --bin cohesix_root \
-  --no-default-features \
-  --target sel4-aarch64.json
+  cargo +nightly build -Z build-std=core,alloc --release --no-default-features \
+  -Z avoid-dev-deps --target sel4-aarch64.json --bin cohesix_root
 echo "✅ Finished building: cohesix_root"
 
 # Build kernel with its required features
@@ -494,7 +493,7 @@ done
 cd "$ROOT"
 log "🧱 Staging root ELF for seL4..."
 # Copy root ELF from cargo build output to out/cohesix_root.elf
-ROOT_ELF_SRC="target/aarch64-unknown-linux-musl/release/cohesix_root"
+ROOT_ELF_SRC="target/sel4-aarch64/release/cohesix_root"
 if [ -f "$ROOT_ELF_SRC" ]; then
   cp "$ROOT_ELF_SRC" out/cohesix_root.elf
   mkdir -p "$ROOT/out/bin"
