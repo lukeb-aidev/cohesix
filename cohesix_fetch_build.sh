@@ -116,6 +116,7 @@ command -v ld.lld >/dev/null 2>&1 || { echo "❌ ld.lld not found" >&2; exit 1; 
 ld.lld --version >&3
 
 log "\ud83d\udcc5 Fetching Cargo dependencies..."
+cd "$ROOT/workspace"
 cargo fetch
 log "\u2705 Cargo dependencies fetched"
 
