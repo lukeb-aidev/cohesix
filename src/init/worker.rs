@@ -1,15 +1,15 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: worker.rs v0.6
+// Filename: worker.rs v0.7
 // Author: Lukas Bower
-// Date Modified: 2026-02-21
-// Uses rand for trace IDs; disabled for UEFI builds where getrandom isn't available.
+// Date Modified: 2027-08-09
+// Uses a monotonic counter for trace IDs; no RNG required.
 
 //! DroneWorker role initialisation.
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use crate::plan9::namespace::NamespaceLoader;
 use cohesix_9p::fs::InMemoryFs;
-use crate::utils::tiny_rng::TinyRng;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 fn log(msg: &str) {
     match OpenOptions::new().append(true).open("/srv/devlog") {
@@ -111,8 +111,9 @@ pub fn start() {
     fs::write("/srv/agent_meta/role.txt", &role).ok();
     fs::write("/srv/agent_meta/uptime.txt", "0").ok();
     fs::write("/srv/agent_meta/last_goal.json", "null").ok();
-    let mut rng = TinyRng::new(0xFACEFEED);
-    let trace_id = format!("{:08x}", rng.next_u32());
+    static TRACE_COUNTER: AtomicU32 = AtomicU32::new(1);
+    let id = TRACE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let trace_id = format!("{:08x}", id);
     fs::write("/srv/agent_meta/trace_id.txt", trace_id).ok();
 
     log("[worker] services ready");
