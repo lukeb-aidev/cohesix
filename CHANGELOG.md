@@ -2792,3 +2792,9 @@
 - `cohesix_root` rewritten as `no_std`/`no_main` entrypoint.
 - `cohesix_fetch_build.sh` builds root ELF using the new target.
 
+## [v0.428] - 2027-08-09
+### Removed
+- `rand` and `getrandom` crates to ensure deterministic builds.
+### Changed
+- `src/init/worker.rs` now uses a static counter for trace IDs.
+- Proptest fuzz test removed and `cohfuzz` uses deterministic mutation.
