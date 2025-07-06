@@ -344,8 +344,8 @@ if [ -f tests/requirements.txt ]; then
   python -m pip install -r tests/requirements.txt --break-system-packages
 fi
 
-# Build GUI orchestrator early
-if [ -d go/cmd/gui-orchestrator ]; then
+ # Build GUI orchestrator early
+if [ -d "$ROOT/go/cmd/gui-orchestrator" ]; then
   log "✅ Found GUI orchestrator Go code matching design"
   if [ "$COH_ARCH" = "aarch64" ]; then
     GOARCH="arm64"
@@ -354,10 +354,10 @@ if [ -d go/cmd/gui-orchestrator ]; then
   else
     GOARCH="$COH_ARCH"
   fi
-  (cd go/cmd/gui-orchestrator && go mod tidy)
+  (cd "$ROOT/go/cmd/gui-orchestrator" && go mod tidy)
   OUT_BIN="$GO_HELPERS_DIR/web_gui_orchestrator"
   log "  compiling GUI orchestrator as GOARCH=$GOARCH"
-  if (cd go/cmd/gui-orchestrator && GOOS=linux GOARCH="$GOARCH" go build -tags unix -o "$OUT_BIN"); then
+  if (cd "$ROOT/go/cmd/gui-orchestrator" && GOOS=linux GOARCH="$GOARCH" go build -tags unix -o "$OUT_BIN"); then
     chmod +x "$OUT_BIN"
     log "✅ Built GUI orchestrator → $OUT_BIN"
   else
@@ -390,18 +390,19 @@ else
 fi
 
 log "🧱 Building C components..."
-if [ -f "$ROOT/workspace/CMakeLists.txt" ]; then
+if [ -f "$ROOT/CMakeLists.txt" ]; then
   cd "$ROOT/workspace"
-  mkdir -p build && cd build
-  cmake .. && make -j$(nproc)
+  mkdir -p build
+  cd "$ROOT/workspace/build"
+  cmake "$ROOT/workspace" && make -j$(nproc)
 else
-  log "⚠️ No CMakeLists.txt found in workspace, skipping C build"
+  echo "⚠️ No CMakeLists.txt found at $ROOT, skipping C build"
 fi
 
 log "🔧 Building BusyBox..."
 cd "$ROOT/workspace"
-workspace/scripts/build_busybox.sh "$COH_ARCH"
-BUSYBOX_BIN="out/busybox/$COH_ARCH/bin/busybox"
+"$ROOT/workspace/scripts/build_busybox.sh" "$COH_ARCH"
+BUSYBOX_BIN="$ROOT/out/busybox/$COH_ARCH/bin/busybox"
 if [ -x "$BUSYBOX_BIN" ]; then
   cp "$BUSYBOX_BIN" "$STAGE_DIR/bin/busybox"
   log "✅ BusyBox built"
@@ -409,12 +410,12 @@ if [ -x "$BUSYBOX_BIN" ]; then
     ln -sf busybox "$STAGE_DIR/bin/$app"
   done
   log "✅ Staged BusyBox applets to /bin"
-  if [ -f "userland/miniroot/bin/init" ]; then
-    cp "userland/miniroot/bin/init" "$STAGE_DIR/bin/init"
+  if [ -f "$ROOT/userland/miniroot/bin/init" ]; then
+    cp "$ROOT/userland/miniroot/bin/init" "$STAGE_DIR/bin/init"
     chmod +x "$STAGE_DIR/bin/init"
   fi
-  if [ -f "userland/miniroot/bin/rc" ]; then
-    cp "userland/miniroot/bin/rc" "$STAGE_DIR/bin/rc"
+  if [ -f "$ROOT/userland/miniroot/bin/rc" ]; then
+    cp "$ROOT/userland/miniroot/bin/rc" "$STAGE_DIR/bin/rc"
     chmod +x "$STAGE_DIR/bin/rc"
   fi
 else
@@ -434,14 +435,14 @@ echo "== Rust build =="
  # Build cohesix_root for seL4 root server
 echo "🔧 Building Rust binary: cohesix_root"
 cd "$ROOT/workspace/cohesix_root"
-RUSTFLAGS="-C linker=ld.lld -C link-arg=-Tlink.ld" cargo +nightly build -Z build-std=core,alloc --no-default-features --release --target sel4-aarch64.json --bin cohesix_root --target-dir target_root
+RUSTFLAGS="-C linker=ld.lld -C link-arg=-Tlink.ld" cargo +nightly build -Z build-std=core,alloc --no-default-features --release --target sel4-aarch64.json --bin cohesix_root --target-dir "$ROOT/workspace/target_root"
 cd "$ROOT"
 echo "✅ Finished building: cohesix_root"
 
-# Build kernel with its required features
+ # Build kernel with its required features
 echo "🔧 Building Rust binary: kernel"
 cd "$ROOT/workspace"
-RUSTFLAGS="-C link-arg=-T./link.ld" \
+RUSTFLAGS="-C link-arg=-T$ROOT/workspace/link.ld" \
   cargo build --release --bin kernel \
   --features "kernel_bin,minimal_uefi" \
   --target aarch64-unknown-linux-musl
@@ -449,7 +450,7 @@ echo "✅ Finished building: kernel"
 
 # Build logdemo with its required features
 echo "🔧 Building Rust binary: logdemo"
-RUSTFLAGS="-C link-arg=-T./link.ld" \
+RUSTFLAGS="-C link-arg=-T$ROOT/workspace/link.ld" \
   cargo build --release --bin logdemo \
   --features "minimal_uefi" \
   --target aarch64-unknown-linux-musl
@@ -461,7 +462,7 @@ RUSTFLAGS="-C target-feature=+crt-static" \
   cargo build --release --bin init \
   --features "minimal_uefi" \
   --target aarch64-unknown-linux-musl \
-  --target-dir target_static
+  --target-dir "$ROOT/workspace/target_static"
 echo "✅ Finished building: init"
 
  # Build other CLI tools without special features (GNU target, separate target_cli dir)
@@ -469,16 +470,16 @@ for bin in cohcc cohesix_build cohesix_cap cohesix_trace; do
   echo "🔧 Building Rust binary: $bin"
   cargo build --release --bin "$bin" \
     --target aarch64-unknown-linux-gnu \
-    --target-dir target_cli
+    --target-dir "$ROOT/workspace/target_cli"
   echo "✅ Finished building: $bin"
 done
 log "✅ Rust components built"
 
-# Copy built binaries to staging, searching both musl and gnu targets
+ # Copy built binaries to staging, searching both musl and gnu targets
 mkdir -p "$STAGE_DIR/bin"
 for bin in cohcc cohesix_build cohesix_cap cohesix_trace cohrun_cli cohagent cohrole cohrun cohup cohesix_root kernel logdemo init; do
   BIN_PATH=""
-  for dir in "target/aarch64-unknown-linux-gnu/release" "target/aarch64-unknown-linux-musl/release"; do
+  for dir in "$ROOT/workspace/target/aarch64-unknown-linux-gnu/release" "$ROOT/workspace/target/aarch64-unknown-linux-musl/release"; do
     if [ -f "$dir/$bin" ]; then
       BIN_PATH="$dir/$bin"
       break
@@ -494,9 +495,9 @@ done
 
 # Stage shell wrappers for Python CLI tools
 for script in cohcli cohcap cohtrace cohrun cohbuild cohup cohpkg; do
-  if [ -f "bin/$script" ]; then
-    cp "bin/$script" "$STAGE_DIR/bin/$script"
-    cp "bin/$script" "$STAGE_DIR/usr/bin/$script"
+  if [ -f "$ROOT/bin/$script" ]; then
+    cp "$ROOT/bin/$script" "$STAGE_DIR/bin/$script"
+    cp "$ROOT/bin/$script" "$STAGE_DIR/usr/bin/$script"
     sed -i '1c #!/usr/bin/env python3' "$STAGE_DIR/bin/$script"
     sed -i '1c #!/usr/bin/env python3' "$STAGE_DIR/usr/bin/$script"
     chmod +x "$STAGE_DIR/bin/$script" "$STAGE_DIR/usr/bin/$script"
@@ -507,9 +508,9 @@ done
 cd "$ROOT"
 log "🧱 Staging root ELF for seL4..."
 # Copy root ELF from cargo build output to out/cohesix_root.elf
-ROOT_ELF_SRC="target/sel4-aarch64/release/cohesix_root"
+ROOT_ELF_SRC="$ROOT/workspace/target/sel4-aarch64/release/cohesix_root"
 if [ -f "$ROOT_ELF_SRC" ]; then
-  cp "$ROOT_ELF_SRC" out/cohesix_root.elf
+  cp "$ROOT_ELF_SRC" "$ROOT/out/cohesix_root.elf"
   mkdir -p "$ROOT/out/bin"
   cp "$ROOT_ELF_SRC" "$ROOT/out/bin/cohesix_root.elf"
   log "Root ELF size: $(stat -c%s "$ROOT/out/bin/cohesix_root.elf") bytes"
@@ -517,20 +518,20 @@ else
   echo "❌ $ROOT_ELF_SRC missing" >&2
   exit 1
 fi
-[ -f out/cohesix_root.elf ] || { echo "❌ out/cohesix_root.elf missing" >&2; exit 1; }
+[ -f "$ROOT/out/cohesix_root.elf" ] || { echo "❌ $ROOT/out/cohesix_root.elf missing" >&2; exit 1; }
 
 # Bulletproof ELF validation
 log "🔍 Validating cohesix_root ELF memory layout..."
 READLOG="$LOG_DIR/cohesix_root_readelf_$(date +%Y%m%d_%H%M%S).log"
-readelf -l out/cohesix_root.elf | tee -a "$LOG_FILE" | tee "$READLOG" >&3
-sha256sum out/cohesix_root.elf > "$LOG_DIR/cohesix_root_$(date +%Y%m%d_%H%M%S).sha256"
-if readelf -l out/cohesix_root.elf | grep -q 'LOAD' && \
-   ! readelf -l out/cohesix_root.elf | awk '/LOAD/ {print $3}' | grep -q -E '^0xffffff80[0-9a-fA-F]{8}$'; then
+readelf -l "$ROOT/out/cohesix_root.elf" | tee -a "$LOG_FILE" | tee "$READLOG" >&3
+sha256sum "$ROOT/out/cohesix_root.elf" > "$LOG_DIR/cohesix_root_$(date +%Y%m%d_%H%M%S).sha256"
+if readelf -l "$ROOT/out/cohesix_root.elf" | grep -q 'LOAD' && \
+   ! readelf -l "$ROOT/out/cohesix_root.elf" | awk '/LOAD/ {print $3}' | grep -q -E '^0xffffff80[0-9a-fA-F]{8}$'; then
   echo "❌ cohesix_root ELF LOAD segments not aligned with expected seL4 virtual space" >&2
   exit 1
 fi
 
-ROOT_SIZE=$(stat -c%s out/cohesix_root.elf)
+ROOT_SIZE=$(stat -c%s "$ROOT/out/cohesix_root.elf")
 if [ "$ROOT_SIZE" -gt $((100*1024*1024)) ]; then
   echo "❌ cohesix_root ELF exceeds 100MB. Increase KernelElfVSpaceSizeBits or reduce binary size." >&2
   exit 1
@@ -541,10 +542,10 @@ log "✅ cohesix_root ELF memory layout and size validated"
 # Ensure staging directories exist for config and roles
 mkdir -p "$STAGE_DIR/etc" "$STAGE_DIR/roles" "$STAGE_DIR/init" \
          "$STAGE_DIR/usr/bin" "$STAGE_DIR/usr/cli" "$STAGE_DIR/home/cohesix"
-if [ -d python ]; then
-  cp -r python "$STAGE_DIR/home/cohesix" 2>/dev/null || true
+if [ -d "$ROOT/python" ]; then
+  cp -r "$ROOT/python" "$STAGE_DIR/home/cohesix" 2>/dev/null || true
   mkdir -p "$ROOT/out/home"
-  cp -r python "$ROOT/out/home/cohesix" 2>/dev/null || true
+  cp -r "$ROOT/python" "$ROOT/out/home/cohesix" 2>/dev/null || true
 fi
 
 #
@@ -769,7 +770,7 @@ fi
 
 
 log "📖 Building mandoc and staging man pages..."
-workspace/scripts/build_mandoc.sh
+./workspace/scripts/build_mandoc.sh
 MANDOC_BIN="prebuilt/mandoc/mandoc.$COH_ARCH"
 if [ -x "$MANDOC_BIN" ]; then
   mkdir -p "$STAGE_DIR/prebuilt/mandoc"
@@ -782,10 +783,10 @@ if [ -x "$MANDOC_BIN" ]; then
   cp bin/man "$STAGE_DIR/usr/bin/man"
   chmod +x "$STAGE_DIR/bin/man" "$STAGE_DIR/usr/bin/man"
   log "✅ Built mandoc" 
-  if [ -d docs/man ]; then
+  if [ -d "$ROOT/docs/man" ]; then
     mkdir -p "$STAGE_DIR/usr/share/man/man1" "$STAGE_DIR/usr/share/man/man8"
-    cp docs/man/*.1 "$STAGE_DIR/usr/share/man/man1/" 2>/dev/null || true
-    cp docs/man/*.8 "$STAGE_DIR/usr/share/man/man8/" 2>/dev/null || true
+    cp "$ROOT/docs/man/"*.1 "$STAGE_DIR/usr/share/man/man1/" 2>/dev/null || true
+    cp "$ROOT/docs/man/"*.8 "$STAGE_DIR/usr/share/man/man8/" 2>/dev/null || true
     log "✅ Updated man pages"
   fi
   log "✅ Staged mandoc to /usr/bin"
@@ -833,11 +834,11 @@ log "FS BUILD OK: ${BIN_COUNT} binaries, ${ROLE_COUNT} roles staged" >&3
 
 VERIFY_LOG="$LOG_DIR/root_split_target_dir_verify_$(date +%Y%m%d_%H%M%S).log"
 {
-  echo "root build path: target_root"
-  echo "cli build path: target_cli"
-  sha256sum target_root/sel4-aarch64/release/cohesix_root 2>/dev/null || true
-  sha256sum target_cli/aarch64-unknown-linux-gnu/release/cohcc 2>/dev/null || true
-  readelf -h out/cohesix_root.elf 2>/dev/null || echo "readelf missing"
+  echo "root build path: $ROOT/workspace/target_root"
+  echo "cli build path: $ROOT/workspace/target_cli"
+  sha256sum "$ROOT/workspace/target_root/sel4-aarch64/release/cohesix_root" 2>/dev/null || true
+  sha256sum "$ROOT/workspace/target_cli/aarch64-unknown-linux-gnu/release/cohcc" 2>/dev/null || true
+  readelf -h "$ROOT/out/cohesix_root.elf" 2>/dev/null || echo "readelf missing"
 } > "$VERIFY_LOG"
 
 cleanup() {
@@ -858,3 +859,4 @@ echo "=== AUDIT SUMMARY ==="
 echo "Old script included ISO creation and QEMU -cdrom tests."
 echo "New script uses only elfloader + kernel ELF direct boot."
 echo "All other environment checks, CUDA, BusyBox, Go, mandoc logic have been preserved."
+
