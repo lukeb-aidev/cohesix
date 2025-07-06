@@ -3,12 +3,14 @@
 // Author: Lukas Bower
 // Date Modified: 2026-12-31
 
-#![cfg_attr(not(feature = "posix"), no_std)]
+#![cfg_attr(not(feature = "std"), no_std)]
 #![forbid(unsafe_code)]
 //! Cohesix 9P filesystem library.
 
 extern crate alloc;
 #[cfg(feature = "posix")]
+extern crate std;
+#[cfg(test)]
 extern crate std;
 use alloc::{boxed::Box, string::String};
 
