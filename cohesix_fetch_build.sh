@@ -421,7 +421,7 @@ echo "✅ Finished building: cohesix_root"
 echo "🔧 Building Rust binary: kernel"
 cargo build --release --bin kernel \
   --features "kernel_bin,minimal_uefi" \
-  --target aarch64-unknown-linux-musl
+  --target aarch64-unknown-linux-gnu
 echo "✅ Finished building: kernel"
 
 # Build sel4_entry with its required features (temporarily disabled)
