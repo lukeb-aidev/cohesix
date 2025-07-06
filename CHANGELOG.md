@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v1.02
+// Filename: CHANGELOG.md v1.03
 // Author: Lukas Bower
-// Date Modified: 2027-07-05
+// Date Modified: 2027-08-11
 
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
@@ -2802,3 +2802,7 @@
 ## [v0.429] - 2027-08-10
 ### Changed
 - `src/init/mod.rs` updated to reflect RNG removal and always-on worker init.
+
+## [v0.430] - 2027-08-11
+### Fixed
+- Configured serde_json and related crates for alloc-only mode to support sel4 no_std builds.

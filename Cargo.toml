@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Cargo.toml v0.47
+# Filename: Cargo.toml v0.48
 # Author: Lukas Bower
-# Date Modified: 2027-08-09
+# Date Modified: 2027-08-11
 [package]
 name    = "cohesix"
 version = "0.1.0"
@@ -17,7 +17,7 @@ xmas-elf = "0.10"
 sha2 = "0.10"
 hkdf = "0.12"
 ed25519-dalek = { version = "2", default-features = false }
-serde_json = { version = "1", default-features = false }
+serde_json = { version = "1", default-features = false, features = ["alloc"] }
 aes-gcm = { version = "0.10", default-features = false, features = ["aes"] }
 aead = "0.5"
 aes = "0.8"
@@ -33,7 +33,7 @@ tiny_http = "0.12"
 once_cell = "1"
 serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
 hex = "0.4"
-rmp-serde = "1"
+rmp-serde = { version = "1", default-features = false }
 chrono = "0.4"
 serde_yaml = { version = "0.9", default-features = false }
 image = { version = "0.25", default-features = false, features = ["jpeg"] }

@@ -1,13 +1,13 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: function.rs v1.0
+// Filename: function.rs v1.1
 // Author: Lukas Bower
-// Date Modified: 2025-05-31
+// Date Modified: 2027-08-11
 
 /// Function IR node: owns instructions and metadata.
 use crate::ir::instruction::Instruction;
 #[allow(unused_imports)]
 use alloc::{boxed::Box, string::String, vec::Vec};
-use std::fmt;
+use core::fmt;
 
 #[derive(Clone, Debug, Default)]
 pub struct Function {
