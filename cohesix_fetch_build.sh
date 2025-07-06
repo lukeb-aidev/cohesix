@@ -435,21 +435,21 @@ echo "✅ Finished building: kernel"
 echo "🔧 Building Rust binary: logdemo"
 cargo build --release --bin logdemo \
   --features "minimal_uefi" \
-  --target aarch64-unknown-linux-musl
+  --target aarch64-unknown-linux-gnu
 echo "✅ Finished building: logdemo"
 
 # Build init with its required features
 echo "🔧 Building Rust binary: init"
 cargo build --release --bin init \
   --features "minimal_uefi" \
-  --target aarch64-unknown-linux-musl
+  --target aarch64-unknown-linux-gnu
 echo "✅ Finished building: init"
 
 # Build other CLI tools without special features
 for bin in cohcc cohesix_build cohesix_cap cohesix_trace; do
   echo "🔧 Building Rust binary: $bin"
   cargo build --release --bin "$bin" \
-    --target aarch64-unknown-linux-musl
+    --target aarch64-unknown-linux-gnu
   echo "✅ Finished building: $bin"
 done
 log "✅ Rust components built"
