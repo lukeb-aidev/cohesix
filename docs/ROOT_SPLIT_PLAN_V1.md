@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: ROOT_SPLIT_PLAN_V1.md v1.3
+// Filename: ROOT_SPLIT_PLAN_V1.md v1.2
 // Author: Lukas Bower
 // Date Modified: 2025-07-06
 
@@ -50,7 +50,7 @@ To build the seL4 `no_std` root server:
 
 ```bash
 cargo +nightly build -Z build-std=core,alloc --release --no-default-features \
-    --target sel4-aarch64.json --package cohesix_root
+    --target sel4-aarch64.json --target-dir target_root --package cohesix_root
 ```
 
 To build all standard binaries (CLI, CUDA, agents):
@@ -67,7 +67,7 @@ cargo build --release
 - `cargo check --package cohesix_root` validates `no_std` compilation on the seL4 target.
 - `readelf` is used on `cohesix_root.elf` to check segment alignment and size.
 - QEMU plus seL4 boots `cohesix_root.elf` as the root server.
-- `cohesix_root` builds must validate `coherr!` macro expansion to confirm structured error paths.
+- The root must still emit minimal validator trace hooks for capability and namespace operations.
 
 ---
 
@@ -76,6 +76,7 @@ cargo build --release
 - Separates the trusted `no_std` TCB from the larger `std` ecosystem code.
 - Allows the validator, orchestrators, and CUDA services to run unchanged on the host, while the root server remains minimal.
 - Creates a clean, maintainable workspace with clear ownership of `std` vs `no_std` code.
+- Each build step should also record hydration logs and build hashes to maintain CI trace integrity.
 
 ---
 
@@ -84,8 +85,9 @@ cargo build --release
 The approach is viable. seL4 officially supports `no_std` Rust components and
 the `elfloader` can boot our root server on both x86_64 and aarch64. The split
 keeps the minimal trusted computing base small while letting the rest of the
-system use standard libraries. 
- Running `cargo fetch` also ensures reproducible splits and simplifies future proofs of correct separation.
+system use standard libraries.  Alternatives such as merging everything under a
+single Cargo target complicate dependency management and would risk linking
+unwanted `std` code into the root server.
 
 ---
 
@@ -94,18 +96,18 @@ system use standard libraries.
 1. **Prepare the seL4 build environment** using the upstream
    `sel4-sys` tooling. Install `rustup`, `cargo` and the seL4 targets
    `aarch64-unknown-none` and `x86_64-unknown-none`.
-2. **Run `cargo fetch`** for the workspace to ensure all `no_std` and `std` dependencies are resolved.
-3. **Build the root server** with `cargo +nightly build -Z build-std=core,alloc
+2. **Build the root server** with `cargo +nightly build -Z build-std=core,alloc
    --release --no-default-features --target sel4-aarch64.json` (repeat for the
    x86 target). The `cohesix_root.elf` produced will be loaded by the seL4
    `elfloader`.
-4. **Compile userland binaries** via `cargo build --release` and stage them into
+3. **Compile userland binaries** via `cargo build --release` and stage them into
    the Plan9 filesystem image used by QEMU.
-5. **Create a UEFI image** that bundles the seL4 `elfloader`, kernel image, and
+4. **Create a UEFI image** that bundles the seL4 `elfloader`, kernel image, and
    `cohesix_root.elf`. Scripts in `tools/` handle this process and place the
    result under `out/efi-image/`.
-6. **Boot in QEMU** using `qemu-system-x86_64` or `qemu-system-aarch64` with the
+5. **Boot in QEMU** using `qemu-system-x86_64` or `qemu-system-aarch64` with the
    UEFI image. Verify that the validator and shell start correctly.
+6. **CI hydration logging** must capture artifacts, build hashes, and segment data to preserve trace validation.
 
 Testing after each step should run `cargo test`, `go test`, and the
 integration scripts in `tests/`. Boot logs captured from QEMU must be stored in
@@ -122,15 +124,14 @@ described in `VALIDATION_AND_TESTING.md`.
   userland principles we follow.
 - [seL4 Rust Quickstart](https://github.com/sel4/sel4-rust) shows minimal Rust
   root servers and is a useful template for our build scripts.
-- Our `VALIDATION_AND_TESTING.md` details CI fallback behavior when QEMU is not available.
 
 ---
 
 ## 🔗 Future References
 
-This document is **ROOT_SPLIT_PLAN_V1** and will be referenced in all future pull requests and Codex tasks. Example citation:
+This document is **ROOT_SPLIT_PLAN_V1** (v1.2) and will be referenced in all future pull requests and Codex tasks.
 
-> Task WriteRootSplitDoc-001 implements ROOT_SPLIT_PLAN_V1
+Future versions (ROOT_SPLIT_V2) may explore embedding ephemeral orchestration or validator probe points directly in the root server.
 
 ---
 
