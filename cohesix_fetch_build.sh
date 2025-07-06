@@ -426,9 +426,11 @@ echo "== Rust build =="
 # - CLI tools: aarch64-unknown-linux-gnu, no custom linker
 #
 
-# Build cohesix_root for seL4 root server
+ # Build cohesix_root for seL4 root server
 echo "🔧 Building Rust binary: cohesix_root"
+cd "$ROOT/workspace/cohesix_root"
 RUSTFLAGS="-C linker=ld.lld -C link-arg=-Tlink.ld" cargo +nightly build -Z build-std=core,alloc --no-default-features --release --target sel4-aarch64.json --bin cohesix_root --target-dir target_root
+cd "$ROOT"
 echo "✅ Finished building: cohesix_root"
 
 # Build kernel with its required features
