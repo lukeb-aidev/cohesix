@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Cargo.toml v0.46
+# Filename: Cargo.toml v0.47
 # Author: Lukas Bower
-# Date Modified: 2027-08-08
+# Date Modified: 2027-08-09
 [package]
 name    = "cohesix"
 version = "0.1.0"
@@ -18,15 +18,12 @@ sha2 = "0.10"
 hkdf = "0.12"
 ed25519-dalek = { version = "2", default-features = false }
 serde_json = "1"
-rand = "0.8"
-aes-gcm = { version = "0.10", features = ["aes"] }
+aes-gcm = { version = "0.10", default-features = false, features = ["aes"] }
 aead = "0.5"
 aes = "0.8"
 cohesix_9p = { package = "cohesix-9p", path = "./cohesix-9p" }
 # ninep crate required for CUDA remote dispatch
 ninep = "0.3"
-# Use the dummy RNG implementation for unsupported targets like UEFI
-getrandom = { version = "0.2", default-features = false, features = ["dummy"] }
 env_logger = "0.11.7"
 thiserror = "1"
 clap = { version = "4.5.4", features = ["derive"] }
@@ -62,8 +59,6 @@ members = [
 [dev-dependencies]
 criterion = "0.5"
 serial_test = "2.0"
-tempfile = "3"
-proptest = "1"
 ninep = "0.3"
 libc = "0.2"
 
@@ -135,8 +130,6 @@ path = "tools/cli/src/bin/cohbuild.rs"
 
 
 [patch.crates-io]
-getrandom = { path = "third_party/getrandom_dummy" }
-rand_core = { path = "third_party/rand_core_patch" }
 ninep = { path = "third_party/ninep_portable" }
 memchr = { path = "third_party/memchr_simple" }
 
@@ -144,8 +137,6 @@ memchr = { path = "third_party/memchr_simple" }
 root-task = true
 
 [patch."https://github.com/rust-lang/crates.io-index"]
-getrandom = { path = "third_party/getrandom_dummy" }
-rand_core = { path = "third_party/rand_core_patch" }
 ninep = { path = "third_party/ninep_portable" }
 
 [target.'cfg(not(target_os = "uefi"))'.dependencies]
