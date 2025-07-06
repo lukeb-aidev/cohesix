@@ -24,20 +24,13 @@ aes = "0.8"
 cohesix_9p = { package = "cohesix-9p", path = "./cohesix-9p" }
 # ninep crate required for CUDA remote dispatch
 ninep = "0.3"
-env_logger = "0.11.7"
+env_logger = { version = "0.11.7", optional = true }
 thiserror = "1"
-clap = { version = "4.5.4", features = ["derive"] }
 rapier3d = { version = "0.17.2", optional = true }
-ureq = { version = "2.9", default-features = false }
-tiny_http = "0.12"
 once_cell = "1"
 serde = { version = "1", default-features = false, features = ["derive", "alloc"], optional = true }
 hex = "0.4"
 rmp-serde = { version = "1", default-features = false }
-chrono = "0.4"
-serde_yaml = { version = "0.9", default-features = false }
-image = { version = "0.25", default-features = false, features = ["jpeg"] }
-toml = { version = "0.8" }
 
 [dependencies.curve25519-dalek]
 version = "3.2.1"
@@ -140,3 +133,13 @@ root-task = true
 
 [target.'cfg(not(target_os = "uefi"))'.dependencies]
 libloading = "0.7"
+
+[target.'cfg(not(target_os = "none"))'.dependencies]
+env_logger = { version = "0.11.7" }
+clap = { version = "4.5.4", features = ["derive"] }
+ureq = { version = "2.9", default-features = false }
+tiny_http = "0.12"
+chrono = "0.4"
+serde_yaml = { version = "0.9", default-features = false }
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
+toml = { version = "0.8" }
