@@ -2,10 +2,12 @@
 // Filename: worker.rs v0.7
 // Author: Lukas Bower
 // Date Modified: 2027-08-09
+#![cfg_attr(not(feature = "std"), no_std)]
 #![cfg(feature = "std")]
 // Uses a monotonic counter for trace IDs; no RNG required.
 
 //! DroneWorker role initialisation.
+use cohesix::coherr;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use crate::plan9::namespace::NamespaceLoader;
@@ -17,7 +19,7 @@ fn log(msg: &str) {
         Ok(mut f) => {
             let _ = writeln!(f, "{}", msg);
         }
-        Err(_) => println!("{msg}"),
+        Err(_) => coherr!("{msg}"),
     }
 }
 

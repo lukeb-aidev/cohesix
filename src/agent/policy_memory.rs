@@ -3,12 +3,16 @@
 // Author: Lukas Bower
 // Date Modified: 2025-08-16
 
+#![cfg(feature = "std")]
+
 #[allow(unused_imports)]
 use alloc::{boxed::Box, string::String, vec::Vec};
 use crate::CohError;
 /// Persistent policy memory utilities.
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "std")]
 use std::fs;
+#[cfg(feature = "std")]
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
