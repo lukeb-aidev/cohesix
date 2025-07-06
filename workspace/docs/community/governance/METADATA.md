@@ -329,6 +329,7 @@
 | srv/upload/test-validation.log | v0.1 | 2027-01-31 | COMMUNITY | | |
 | logs/rust_fix_build_verified_20250706_115245.log | v0.1 | 2025-07-06 | COMMUNITY | | |
 | logs/root_split_no_std_patch_20250706_220917.log | v0.1 | 2027-08-15 | COMMUNITY | | |
+| logs/root_split_full_boot_validation_20250706_223559.log | v0.1 | 2027-08-15 | COMMUNITY | | |
 Removed: introspect_self_diagnosis (Plan9 migration - file-based introspection replaced by validator-driven policy checks)
 Removed: legacy Python tests and lint steps; project now purely Plan9 + Rust
 Changed: `.cargo/config.toml` v0.14 uses project-relative linker script path
