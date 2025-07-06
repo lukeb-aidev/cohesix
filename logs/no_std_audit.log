@@ -1,0 +1,1640 @@
+# CLASSIFICATION: COMMUNITY
+# Filename: no_std_audit.log v1.0
+# Author: Codex Bot
+# Date Modified: 2025-07-06
+
+File: src/cohesix_types.rs
+Line 6: uses env
+Suggest: use (no core/alloc replacement)
+
+Line 8: uses fs
+Suggest: use (no core/alloc replacement)
+
+File: src/metrics.rs
+Line 8: uses fs
+Suggest: use (no core/alloc replacement)
+
+File: src/watchdogd.rs
+Line 7: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 8: uses io::Write
+Suggest: use (no core/alloc replacement)
+
+Line 9: uses process::Command
+Suggest: use (no core/alloc replacement)
+
+Line 10: uses time
+Suggest: use core::time
+
+Line 45: uses thread::sleep
+Suggest: use (no core/alloc replacement)
+
+File: src/agent_migration.rs
+Line 33: uses fs::create_dir_all
+Suggest: use (no core/alloc replacement)
+
+Line 34: uses fs::write
+Suggest: use (no core/alloc replacement)
+
+File: src/dependencies.rs
+Line 10: uses collections::HashMap
+Suggest: use alloc::collections::HashMap
+
+File: src/agent_transport.rs
+Line 11: uses fs
+Suggest: use (no core/alloc replacement)
+
+File: src/lib.rs
+Line 178: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 203: uses process::Command
+Suggest: use (no core/alloc replacement)
+
+Line 208: uses env::var
+Suggest: use (no core/alloc replacement)
+
+File: src/swarm/mesh.rs
+Line 13: uses collections::HashMap
+Suggest: use alloc::collections::HashMap
+
+Line 14: uses sync::Mutex
+Suggest: use core::sync (partial)::Mutex
+
+Line 15: uses time
+Suggest: use core::time
+
+Line 118: uses fs::create_dir_all
+Suggest: use (no core/alloc replacement)
+
+Line 119: uses fs::write
+Suggest: use (no core/alloc replacement)
+
+File: src/orchestrator/federation.rs
+Line 16: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 17: uses io::Write
+Suggest: use (no core/alloc replacement)
+
+Line 18: uses time
+Suggest: use core::time
+
+File: src/orchestrator/failover.rs
+Line 8: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 9: uses io::Write
+Suggest: use (no core/alloc replacement)
+
+Line 10: uses time
+Suggest: use core::time
+
+Line 50: uses io::Result
+Suggest: use (no core/alloc replacement)
+
+File: src/orchestrator/queen.rs
+Line 13: uses collections::HashMap
+Suggest: use alloc::collections::HashMap
+
+Line 14: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 15: uses io::Write
+Suggest: use (no core/alloc replacement)
+
+Line 16: uses time
+Suggest: use core::time
+
+Line 53: uses io::Error::other
+Suggest: use (no core/alloc replacement)
+
+Line 84: uses io::Error::other
+Suggest: use (no core/alloc replacement)
+
+File: src/orchestrator/worker.rs
+Line 13: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 14: uses time
+Suggest: use core::time
+
+File: src/orchestrator/edge_fallback.rs
+Line 7: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 8: uses time
+Suggest: use core::time
+
+File: src/syscall/guard.rs
+Line 7: uses collections
+Suggest: use alloc::collections
+
+File: src/syscall/ns.rs
+Line 6: uses io
+Suggest: use (no core/alloc replacement)
+
+File: src/agents/migration.rs
+Line 15: uses collections::HashMap
+Suggest: use alloc::collections::HashMap
+
+Line 16: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 38: uses env::var
+Suggest: use (no core/alloc replacement)
+
+Line 40: uses fs::write
+Suggest: use (no core/alloc replacement)
+
+Line 49: uses env::vars
+Suggest: use (no core/alloc replacement)
+
+Line 70: uses env::set_var
+Suggest: use (no core/alloc replacement)
+
+File: src/agents/ensemble.rs
+Line 10: uses collections::HashMap
+Suggest: use alloc::collections::HashMap
+
+Line 11: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 12: uses io::Write
+Suggest: use (no core/alloc replacement)
+
+Line 26: uses env::var
+Suggest: use (no core/alloc replacement)
+
+Line 28: uses env::var
+Suggest: use (no core/alloc replacement)
+
+Line 37: uses path::Path::new
+Suggest: use (no core/alloc replacement)
+
+Line 61: uses env::var
+Suggest: use (no core/alloc replacement)
+
+Line 113: uses io::Result
+Suggest: use (no core/alloc replacement)
+
+Line 114: uses env::var
+Suggest: use (no core/alloc replacement)
+
+Line 116: uses env::var
+Suggest: use (no core/alloc replacement)
+
+Line 121: uses env::var
+Suggest: use (no core/alloc replacement)
+
+File: src/agents/runtime.rs
+Line 14: uses collections::HashMap
+Suggest: use alloc::collections::HashMap
+
+Line 15: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 16: uses io::Write
+Suggest: use (no core/alloc replacement)
+
+Line 17: uses path::PathBuf
+Suggest: use (no core/alloc replacement)
+
+Line 18: uses process
+Suggest: use (no core/alloc replacement)
+
+Line 19: uses time
+Suggest: use core::time
+
+Line 35: uses env::var
+Suggest: use (no core/alloc replacement)
+
+Line 39: uses env::var
+Suggest: use (no core/alloc replacement)
+
+Line 48: uses env::var
+Suggest: use (no core/alloc replacement)
+
+Line 50: uses fs::write
+Suggest: use (no core/alloc replacement)
+
+Line 136: uses fs::remove_dir_all
+Suggest: use (no core/alloc replacement)
+
+File: src/agents/base.rs
+Line 23: uses env::var
+Suggest: use (no core/alloc replacement)
+
+Line 26: uses fs::write
+Suggest: use (no core/alloc replacement)
+
+File: src/plan9/namespace.rs
+Line 15: uses collections::HashMap
+Suggest: use alloc::collections::HashMap
+
+Line 16: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 17: uses io
+Suggest: use (no core/alloc replacement)
+
+Line 70: uses fmt::Display
+Suggest: use core::fmt::Display
+
+Line 71: uses fmt::Formatter
+Suggest: use core::fmt::Formatter
+
+Line 116: uses env::var
+Suggest: use (no core/alloc replacement)
+
+Line 127: uses env::var
+Suggest: use (no core/alloc replacement)
+
+Line 189: uses path::Path::new
+Suggest: use (no core/alloc replacement)
+
+Line 217: uses env::var
+Suggest: use (no core/alloc replacement)
+
+Line 258: uses path::PathBuf::from
+Suggest: use (no core/alloc replacement)
+
+File: src/plan9/srv_registry.rs
+Line 9: uses collections::HashMap
+Suggest: use alloc::collections::HashMap
+
+Line 10: uses sync::Mutex
+Suggest: use core::sync (partial)::Mutex
+
+File: src/plan9/syscalls.rs
+Line 9: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 10: uses io
+Suggest: use (no core/alloc replacement)
+
+File: src/plan9/shim.rs
+Line 34: uses str::from_utf8
+Suggest: use core::str::from_utf8
+
+File: src/bootloader/init.rs
+Line 68: uses fs::create_dir_all
+Suggest: use (no core/alloc replacement)
+
+Line 69: uses fs::OpenOptions::new
+Suggest: use (no core/alloc replacement)
+
+Line 74: uses io::Write
+Suggest: use (no core/alloc replacement)
+
+Line 77: uses fs::write
+Suggest: use (no core/alloc replacement)
+
+File: src/bootloader/args.rs
+Line 28: uses collections::HashMap
+Suggest: use alloc::collections::HashMap
+
+File: src/sandbox/mod.rs
+Line 13: uses fs::OpenOptions
+Suggest: use (no core/alloc replacement)
+
+Line 14: uses io::Write
+Suggest: use (no core/alloc replacement)
+
+Line 19: uses fs::create_dir_all
+Suggest: use (no core/alloc replacement)
+
+File: src/sandbox/validator.rs
+Line 15: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 16: uses io::Write
+Suggest: use (no core/alloc replacement)
+
+Line 17: uses path::Path
+Suggest: use (no core/alloc replacement)
+
+Line 18: uses thread::sleep
+Suggest: use (no core/alloc replacement)
+
+Line 19: uses time
+Suggest: use core::time
+
+Line 62: uses env::var
+Suggest: use (no core/alloc replacement)
+
+Line 63: uses env::var
+Suggest: use (no core/alloc replacement)
+
+File: src/boot/tpm.rs
+Line 7: uses fs::OpenOptions
+Suggest: use (no core/alloc replacement)
+
+Line 8: uses io::Write
+Suggest: use (no core/alloc replacement)
+
+Line 9: uses path::Path
+Suggest: use (no core/alloc replacement)
+
+Line 15: uses fs::create_dir_all
+Suggest: use (no core/alloc replacement)
+
+File: src/boot/plan9_ns.rs
+Line 11: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 12: uses io
+Suggest: use (no core/alloc replacement)
+
+Line 90: uses fmt::Display
+Suggest: use core::fmt::Display
+
+Line 91: uses fmt::Formatter
+Suggest: use core::fmt::Formatter
+
+File: src/boot/live_patch.rs
+Line 9: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 10: uses io::Write
+Suggest: use (no core/alloc replacement)
+
+File: src/boot/verify.rs
+Line 12: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 13: uses io::Write
+Suggest: use (no core/alloc replacement)
+
+File: src/utils/helpers.rs
+Line 25: uses {fmt::Write, thread, time::Duration};
+Suggest: use (no core/alloc replacement)
+
+File: src/agent/snapshot.rs
+Line 14: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 37: uses env::var
+Suggest: use (no core/alloc replacement)
+
+File: src/agent/policy_memory.rs
+Line 11: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 12: uses path
+Suggest: use (no core/alloc replacement)
+
+Line 48: uses path::PathBuf::from
+Suggest: use (no core/alloc replacement)
+
+Line 60: uses env::var
+Suggest: use (no core/alloc replacement)
+
+File: src/agent/directory.rs
+Line 11: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 12: uses time
+Suggest: use core::time
+
+Line 34: uses env::var
+Suggest: use (no core/alloc replacement)
+
+Line 37: uses fs::write
+Suggest: use (no core/alloc replacement)
+
+File: src/coh_cc/guard.rs
+Line 11: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 12: uses io
+Suggest: use (no core/alloc replacement)
+
+Line 13: uses path::Path
+Suggest: use (no core/alloc replacement)
+
+Line 15: uses io::Result
+Suggest: use (no core/alloc replacement)
+
+Line 26: uses io::Result
+Suggest: use (no core/alloc replacement)
+
+Line 76: uses process::Command
+Suggest: use (no core/alloc replacement)
+
+Line 96: uses io::Result
+Suggest: use (no core/alloc replacement)
+
+File: src/coh_cc/mod.rs
+Line 21: uses env::temp_dir
+Suggest: use (no core/alloc replacement)
+
+Line 29: uses fs::read
+Suggest: use (no core/alloc replacement)
+
+File: src/coh_cc/toolchain.rs
+Line 7: uses path
+Suggest: use (no core/alloc replacement)
+
+Line 24: uses env::var
+Suggest: use (no core/alloc replacement)
+
+File: src/coh_cc/config.rs
+Line 10: uses path
+Suggest: use (no core/alloc replacement)
+
+Line 83: uses env::current_dir
+Suggest: use (no core/alloc replacement)
+
+File: src/coh_cc/main.rs
+Line 17: uses path::Path
+Suggest: use (no core/alloc replacement)
+
+Line 25: uses env::var
+Suggest: use (no core/alloc replacement)
+
+Line 61: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 62: uses io::Write
+Suggest: use (no core/alloc replacement)
+
+Line 80: uses process::exit
+Suggest: use (no core/alloc replacement)
+
+File: src/coh_cc/rust_wrapper.rs
+Line 11: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 12: uses io::Write
+Suggest: use (no core/alloc replacement)
+
+Line 13: uses path
+Suggest: use (no core/alloc replacement)
+
+Line 14: uses process::Command
+Suggest: use (no core/alloc replacement)
+
+Line 36: uses io::Result
+Suggest: use (no core/alloc replacement)
+
+Line 53: uses io::Read::read
+Suggest: use (no core/alloc replacement)
+
+Line 80: uses env::var
+Suggest: use (no core/alloc replacement)
+
+Line 97: uses ffi::OsStr::new
+Suggest: use (no core/alloc replacement)
+
+File: src/coh_cc/logging.rs
+Line 9: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 10: uses io::Write
+Suggest: use (no core/alloc replacement)
+
+Line 11: uses path::Path
+Suggest: use (no core/alloc replacement)
+
+Line 13: uses io::Result
+Suggest: use (no core/alloc replacement)
+
+File: src/coh_cc/parser/input_type.rs
+Line 8: uses path
+Suggest: use (no core/alloc replacement)
+
+File: src/coh_cc/ir/schema.rs
+Line 11: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 12: uses io
+Suggest: use (no core/alloc replacement)
+
+Line 13: uses path::Path
+Suggest: use (no core/alloc replacement)
+
+Line 37: uses io::Result
+Suggest: use (no core/alloc replacement)
+
+File: src/coh_cc/ir/emit.rs
+Line 7: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 8: uses io::Write
+Suggest: use (no core/alloc replacement)
+
+Line 9: uses path::Path
+Suggest: use (no core/alloc replacement)
+
+File: src/coh_cc/backend/registry.rs
+Line 8: uses path::Path
+Suggest: use (no core/alloc replacement)
+
+File: src/coh_cc/backend/zig.rs
+Line 9: uses path::Path
+Suggest: use (no core/alloc replacement)
+
+Line 10: uses process::Command
+Suggest: use (no core/alloc replacement)
+
+File: src/coh_cc/backend/tcc.rs
+Line 7: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 8: uses io::Write
+Suggest: use (no core/alloc replacement)
+
+Line 9: uses path::Path
+Suggest: use (no core/alloc replacement)
+
+Line 32: uses env::var
+Suggest: use (no core/alloc replacement)
+
+File: src/world_model/mod.rs
+Line 11: uses fs
+Suggest: use (no core/alloc replacement)
+
+File: src/passes/ssa.rs
+Line 11: uses collections::HashMap
+Suggest: use alloc::collections::HashMap
+
+File: src/cuda/runtime.rs
+Line 8: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 19: uses env::var
+Suggest: use (no core/alloc replacement)
+
+File: src/init/kiosk.rs
+Line 9: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 10: uses io::Write
+Suggest: use (no core/alloc replacement)
+
+Line 11: uses path::Path
+Suggest: use (no core/alloc replacement)
+
+Line 74: uses io::Result
+Suggest: use (no core/alloc replacement)
+
+File: src/init/sensor.rs
+Line 7: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 8: uses io::Write
+Suggest: use (no core/alloc replacement)
+
+File: src/init/queen.rs
+Line 8: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 9: uses io::Write
+Suggest: use (no core/alloc replacement)
+
+Line 72: uses env::var
+Suggest: use (no core/alloc replacement)
+
+File: src/init/worker.rs
+Line 8: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 9: uses io::Write
+Suggest: use (no core/alloc replacement)
+
+Line 12: uses sync::atomic
+Suggest: use core::sync::atomic
+
+Line 68: uses env::var
+Suggest: use (no core/alloc replacement)
+
+Line 73: uses path::Path::new
+Suggest: use (no core/alloc replacement)
+
+Line 74: uses process::Command::new
+Suggest: use (no core/alloc replacement)
+
+Line 109: uses env::var
+Suggest: use (no core/alloc replacement)
+
+File: src/init/main.rs
+Line 14: uses process::Command
+Suggest: use (no core/alloc replacement)
+
+Line 20: uses env::var
+Suggest: use (no core/alloc replacement)
+
+Line 34: uses process::Command::new
+Suggest: use (no core/alloc replacement)
+
+File: src/sim/agent_scenario.rs
+Line 14: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 15: uses path::Path
+Suggest: use (no core/alloc replacement)
+
+File: src/sim/physics_adapter.rs
+Line 8: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 9: uses io::Write
+Suggest: use (no core/alloc replacement)
+
+Line 10: uses thread
+Suggest: use (no core/alloc replacement)
+
+Line 11: uses time::Duration
+Suggest: use core::time::Duration
+
+File: src/sim/introspect.rs
+Line 7: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 8: uses io::Write
+Suggest: use (no core/alloc replacement)
+
+Line 9: uses time
+Suggest: use core::time
+
+File: src/sim/physics_demo.rs
+Line 9: uses fs
+Suggest: use (no core/alloc replacement)
+
+File: src/sim/rapier_bridge.rs
+Line 20: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 21: uses io::Write
+Suggest: use (no core/alloc replacement)
+
+Line 22: uses sync::mpsc
+Suggest: use core::sync (partial)::mpsc
+
+Line 23: uses thread
+Suggest: use (no core/alloc replacement)
+
+Line 24: uses time::Duration
+Suggest: use core::time::Duration
+
+File: src/sim/scenario_runner.rs
+Line 15: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 16: uses path::Path
+Suggest: use (no core/alloc replacement)
+
+Line 17: uses time::Duration
+Suggest: use core::time::Duration
+
+Line 55: uses thread::sleep
+Suggest: use (no core/alloc replacement)
+
+File: src/physical/sensors.rs
+Line 12: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 13: uses io::Write
+Suggest: use (no core/alloc replacement)
+
+Line 14: uses path::Path
+Suggest: use (no core/alloc replacement)
+
+Line 15: uses time
+Suggest: use core::time
+
+Line 34: uses env::var
+Suggest: use (no core/alloc replacement)
+
+Line 39: uses env::var
+Suggest: use (no core/alloc replacement)
+
+Line 54: uses path::Path::new
+Suggest: use (no core/alloc replacement)
+
+Line 109: uses fs::read_to_string
+Suggest: use (no core/alloc replacement)
+
+Line 117: uses env::var
+Suggest: use (no core/alloc replacement)
+
+Line 124: uses fs::read_to_string
+Suggest: use (no core/alloc replacement)
+
+Line 134: uses env::var
+Suggest: use (no core/alloc replacement)
+
+Line 143: uses fs::read_to_string
+Suggest: use (no core/alloc replacement)
+
+Line 153: uses env::var
+Suggest: use (no core/alloc replacement)
+
+Line 160: uses fs::read_to_string
+Suggest: use (no core/alloc replacement)
+
+File: src/seL4/syscall.rs
+Line 8: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 9: uses io
+Suggest: use (no core/alloc replacement)
+
+Line 10: uses process
+Suggest: use (no core/alloc replacement)
+
+Line 11: uses process::Command
+Suggest: use (no core/alloc replacement)
+
+Line 39: uses io::Error
+Suggest: use (no core/alloc replacement)
+
+Line 41: uses env::var
+Suggest: use (no core/alloc replacement)
+
+Line 43: uses io::Error::new
+Suggest: use (no core/alloc replacement)
+
+Line 44: uses io::ErrorKind::PermissionDenied
+Suggest: use (no core/alloc replacement)
+
+Line 50: uses io::Error::new
+Suggest: use (no core/alloc replacement)
+
+Line 51: uses io::ErrorKind::PermissionDenied
+Suggest: use (no core/alloc replacement)
+
+Line 60: uses io::Error
+Suggest: use (no core/alloc replacement)
+
+Line 65: uses io::Error
+Suggest: use (no core/alloc replacement)
+
+Line 70: uses io::Error
+Suggest: use (no core/alloc replacement)
+
+Line 81: uses io::Error::new
+Suggest: use (no core/alloc replacement)
+
+Line 82: uses io::ErrorKind::PermissionDenied
+Suggest: use (no core/alloc replacement)
+
+Line 86: uses env::var
+Suggest: use (no core/alloc replacement)
+
+Line 88: uses io::Error::new
+Suggest: use (no core/alloc replacement)
+
+Line 89: uses io::ErrorKind::PermissionDenied
+Suggest: use (no core/alloc replacement)
+
+Line 95: uses io::Error::new
+Suggest: use (no core/alloc replacement)
+
+Line 96: uses io::ErrorKind::PermissionDenied
+Suggest: use (no core/alloc replacement)
+
+File: src/cli/federation.rs
+Line 11: uses fs
+Suggest: use (no core/alloc replacement)
+
+File: src/cli/cohtrace.rs
+Line 10: uses fs
+Suggest: use (no core/alloc replacement)
+
+File: src/cli/mod.rs
+Line 18: uses env
+Suggest: use (no core/alloc replacement)
+
+Line 19: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 20: uses path::Path
+Suggest: use (no core/alloc replacement)
+
+Line 21: uses process::Command
+Suggest: use (no core/alloc replacement)
+
+File: src/cli/args.rs
+Line 45: uses env::consts::ARCH
+Suggest: use (no core/alloc replacement)
+
+File: src/kernel/kernel_trace.rs
+Line 8: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 9: uses io::Write
+Suggest: use (no core/alloc replacement)
+
+File: src/kernel/user_api.rs
+Line 27: uses str::from_utf8
+Suggest: use core::str::from_utf8
+
+File: src/kernel/proc_mgr.rs
+Line 10: uses sync::Mutex
+Suggest: use core::sync (partial)::Mutex
+
+Line 29: uses sync::atomic
+Suggest: use core::sync::atomic
+
+File: src/kernel/loader.rs
+Line 51: uses fs::read
+Suggest: use (no core/alloc replacement)
+
+Line 78: uses mem::forget
+Suggest: use core::mem::forget
+
+Line 94: uses {env, fs::File, io::Write};
+Suggest: use (no core/alloc replacement)
+
+Line 95: uses path::PathBuf
+Suggest: use (no core/alloc replacement)
+
+Line 110: uses fs::remove_file
+Suggest: use (no core/alloc replacement)
+
+File: src/kernel/config.rs
+Line 8: uses fs
+Suggest: use (no core/alloc replacement)
+
+File: src/kernel/physics/cuda.rs
+Line 22: uses path::Path::new
+Suggest: use (no core/alloc replacement)
+
+File: src/kernel/boot/bootloader.rs
+Line 31: uses fs::read_to_string
+Suggest: use (no core/alloc replacement)
+
+Line 75: uses fs::read_dir
+Suggest: use (no core/alloc replacement)
+
+File: src/kernel/boot/secure_boot.rs
+Line 21: uses path::Path::new
+Suggest: use (no core/alloc replacement)
+
+Line 31: uses fs::read_to_string
+Suggest: use (no core/alloc replacement)
+
+File: src/kernel/boot/role_hooks.rs
+Line 7: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 8: uses io::Write
+Suggest: use (no core/alloc replacement)
+
+File: src/kernel/upgrade/upgrade_manager.rs
+Line 12: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 13: uses io::Read
+Suggest: use (no core/alloc replacement)
+
+Line 14: uses io::Write
+Suggest: use (no core/alloc replacement)
+
+File: src/kernel/syscalls/syscall.rs
+Line 10: uses fs::OpenOptions
+Suggest: use (no core/alloc replacement)
+
+Line 11: uses io::Write
+Suggest: use (no core/alloc replacement)
+
+Line 64: uses fs::create_dir_all
+Suggest: use (no core/alloc replacement)
+
+File: src/kernel/drivers/gpu.rs
+Line 25: uses env
+Suggest: use (no core/alloc replacement)
+
+File: src/kernel/drivers/net.rs
+Line 30: uses env
+Suggest: use (no core/alloc replacement)
+
+File: src/kernel/security/l4_verified.rs
+Line 19: uses collections::HashMap
+Suggest: use alloc::collections::HashMap
+
+Line 20: uses sync::Mutex
+Suggest: use core::sync (partial)::Mutex
+
+File: src/kernel/fs/plan9.rs
+Line 18: uses sync::Mutex
+Suggest: use core::sync (partial)::Mutex
+
+File: src/kernel/fs/fat.rs
+Line 15: uses fs
+Suggest: use (no core/alloc replacement)
+
+File: src/kernel/fs/busybox.rs
+Line 73: uses fs::read_to_string
+Suggest: use (no core/alloc replacement)
+
+Line 81: uses fs::OpenOptions::new
+Suggest: use (no core/alloc replacement)
+
+Line 90: uses fs::rename
+Suggest: use (no core/alloc replacement)
+
+Line 97: uses fs::copy
+Suggest: use (no core/alloc replacement)
+
+File: src/worker/world_sync.rs
+Line 9: uses fs
+Suggest: use (no core/alloc replacement)
+
+File: src/worker/vision_overlay.rs
+Line 7: uses time
+Suggest: use core::time
+
+Line 31: uses thread::sleep
+Suggest: use (no core/alloc replacement)
+
+File: src/worker/hotplug.rs
+Line 13: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 14: uses io::Write
+Suggest: use (no core/alloc replacement)
+
+File: src/worker/queen_watchdog.rs
+Line 9: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 10: uses io::Write
+Suggest: use (no core/alloc replacement)
+
+Line 11: uses time
+Suggest: use core::time
+
+Line 14: uses env::var
+Suggest: use (no core/alloc replacement)
+
+File: src/worker/role_memory.rs
+Line 9: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 10: uses path::Path
+Suggest: use (no core/alloc replacement)
+
+Line 11: uses time
+Suggest: use core::time
+
+File: src/posix/mod.rs
+Line 9: uses collections::HashMap
+Suggest: use alloc::collections::HashMap
+
+File: src/slm/decryptor.rs
+Line 15: uses fs
+Suggest: use (no core/alloc replacement)
+
+File: src/util/debug_log.rs
+Line 15: uses io
+Suggest: use (no core/alloc replacement)
+
+File: src/util/srv_root.rs
+Line 9: uses env::var
+Suggest: use (no core/alloc replacement)
+
+File: src/trace/recorder.rs
+Line 14: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 15: uses io::Write
+Suggest: use (no core/alloc replacement)
+
+Line 16: uses process
+Suggest: use (no core/alloc replacement)
+
+Line 17: uses time
+Suggest: use core::time
+
+Line 33: uses env::var
+Suggest: use (no core/alloc replacement)
+
+Line 34: uses path::PathBuf::from
+Suggest: use (no core/alloc replacement)
+
+Line 36: uses env::temp_dir
+Suggest: use (no core/alloc replacement)
+
+Line 45: uses env::temp_dir
+Suggest: use (no core/alloc replacement)
+
+Line 66: uses io::Result
+Suggest: use (no core/alloc replacement)
+
+Line 67: uses env::var
+Suggest: use (no core/alloc replacement)
+
+Line 86: uses io::Result
+Suggest: use (no core/alloc replacement)
+
+Line 101: uses io::Result
+Suggest: use (no core/alloc replacement)
+
+Line 107: uses io::Result
+Suggest: use (no core/alloc replacement)
+
+File: src/trace/validator.rs
+Line 10: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 45: uses env::var
+Suggest: use (no core/alloc replacement)
+
+Line 46: uses env::var
+Suggest: use (no core/alloc replacement)
+
+File: src/trace/trace_consensus.rs
+Line 9: uses collections::HashMap
+Suggest: use alloc::collections::HashMap
+
+Line 10: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 11: uses io::Write
+Suggest: use (no core/alloc replacement)
+
+File: src/trace/distributed_runner.rs
+Line 13: uses collections::HashMap
+Suggest: use alloc::collections::HashMap
+
+Line 14: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 15: uses io::Write
+Suggest: use (no core/alloc replacement)
+
+File: src/validator/mod.rs
+Line 15: uses sync::Mutex
+Suggest: use core::sync (partial)::Mutex
+
+Line 38: uses path::Path::new
+Suggest: use (no core/alloc replacement)
+
+Line 41: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 42: uses io::Write
+Suggest: use (no core/alloc replacement)
+
+Line 43: uses time
+Suggest: use core::time
+
+File: src/validator/config.rs
+Line 7: uses path::PathBuf
+Suggest: use (no core/alloc replacement)
+
+Line 8: uses sync::RwLock
+Suggest: use core::sync (partial)::RwLock
+
+Line 20: uses env::temp_dir
+Suggest: use (no core/alloc replacement)
+
+Line 22: uses env::var
+Suggest: use (no core/alloc replacement)
+
+Line 25: uses env::var
+Suggest: use (no core/alloc replacement)
+
+File: src/lib/9p/server.rs
+Line 12: uses collections::HashMap
+Suggest: use alloc::collections::HashMap
+
+Line 13: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 14: uses sync::Mutex
+Suggest: use core::sync (partial)::Mutex
+
+Line 41: uses env::var
+Suggest: use (no core/alloc replacement)
+
+Line 68: uses str::from_utf8
+Suggest: use core::str::from_utf8
+
+File: src/federation/migration.rs
+Line 10: uses fs
+Suggest: use (no core/alloc replacement)
+
+File: src/federation/keyring.rs
+Line 19: uses fs
+Suggest: use (no core/alloc replacement)
+
+File: src/federation/handshake.rs
+Line 17: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 35: uses env::var
+Suggest: use (no core/alloc replacement)
+
+Line 62: uses time
+Suggest: use core::time
+
+File: src/p9/multiplexer.rs
+Line 14: uses collections::HashMap
+Suggest: use alloc::collections::HashMap
+
+Line 15: uses sync::mpsc::Receiver
+Suggest: use core::sync (partial)::mpsc::Receiver
+
+Line 16: uses sync
+Suggest: use core::sync (partial)
+
+Line 93: uses thread::JoinHandle
+Suggest: use (no core/alloc replacement)
+
+Line 94: uses thread::spawn
+Suggest: use (no core/alloc replacement)
+
+File: src/security/sbom.rs
+Line 13: uses collections::HashMap
+Suggest: use alloc::collections::HashMap
+
+File: src/security/capabilities.rs
+Line 12: uses collections::HashMap
+Suggest: use alloc::collections::HashMap
+
+Line 13: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 32: uses iter::FromIterator
+Suggest: use (no core/alloc replacement)
+
+File: src/runtime/loader.rs
+Line 9: uses fs::File
+Suggest: use (no core/alloc replacement)
+
+Line 10: uses io::Read
+Suggest: use (no core/alloc replacement)
+
+Line 30: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 31: uses process::Command
+Suggest: use (no core/alloc replacement)
+
+File: src/runtime/role_config.rs
+Line 9: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 10: uses path
+Suggest: use (no core/alloc replacement)
+
+Line 29: uses io::Result
+Suggest: use (no core/alloc replacement)
+
+Line 31: uses io::Error::new
+Suggest: use (no core/alloc replacement)
+
+Line 34: uses io::Result
+Suggest: use (no core/alloc replacement)
+
+Line 39: uses env::var
+Suggest: use (no core/alloc replacement)
+
+Line 40: uses env::var
+Suggest: use (no core/alloc replacement)
+
+File: src/runtime/service_registry.rs
+Line 13: uses collections::HashMap
+Suggest: use alloc::collections::HashMap
+
+Line 14: uses sync::Mutex
+Suggest: use core::sync (partial)::Mutex
+
+File: src/runtime/env/init.rs
+Line 10: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 22: uses env::var
+Suggest: use (no core/alloc replacement)
+
+Line 26: uses env::var
+Suggest: use (no core/alloc replacement)
+
+Line 43: uses env::var
+Suggest: use (no core/alloc replacement)
+
+Line 48: uses env::var
+Suggest: use (no core/alloc replacement)
+
+Line 49: uses env::var
+Suggest: use (no core/alloc replacement)
+
+Line 59: uses env::set_var
+Suggest: use (no core/alloc replacement)
+
+Line 72: uses fs::read_to_string
+Suggest: use (no core/alloc replacement)
+
+File: src/runtime/accel/cuda_device.rs
+Line 22: uses env
+Suggest: use (no core/alloc replacement)
+
+File: src/runtime/roles/debugger.rs
+Line 37: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 38: uses path::Path
+Suggest: use (no core/alloc replacement)
+
+Line 58: uses fs::read_to_string
+Suggest: use (no core/alloc replacement)
+
+File: src/runtime/roles/orchestrator.rs
+Line 19: uses collections::HashMap
+Suggest: use alloc::collections::HashMap
+
+Line 20: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 21: uses path::Path
+Suggest: use (no core/alloc replacement)
+
+File: src/runtime/roles/queen.rs
+Line 18: uses collections::HashSet
+Suggest: use alloc::collections::HashSet
+
+File: src/runtime/roles/router.rs
+Line 18: uses collections::HashMap
+Suggest: use alloc::collections::HashMap
+
+File: src/runtime/roles/custodian.rs
+Line 11: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 12: uses path::Path
+Suggest: use (no core/alloc replacement)
+
+Line 28: uses path::Path::new
+Suggest: use (no core/alloc replacement)
+
+Line 33: uses env::var
+Suggest: use (no core/alloc replacement)
+
+Line 34: uses path::Path::new
+Suggest: use (no core/alloc replacement)
+
+Line 36: uses fs::remove_dir_all
+Suggest: use (no core/alloc replacement)
+
+Line 43: uses path::Path::new
+Suggest: use (no core/alloc replacement)
+
+Line 45: uses fs::read_to_string
+Suggest: use (no core/alloc replacement)
+
+File: src/runtime/roles/edge_controller.rs
+Line 19: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 20: uses io::Write
+Suggest: use (no core/alloc replacement)
+
+Line 21: uses path::Path
+Suggest: use (no core/alloc replacement)
+
+File: src/binlib/run_main.rs
+Line 94: uses fs::read_to_string
+Suggest: use (no core/alloc replacement)
+
+Line 108: uses fs::read_to_string
+Suggest: use (no core/alloc replacement)
+
+Line 128: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 148: uses fs::read_to_string
+Suggest: use (no core/alloc replacement)
+
+Line 156: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 194: uses fs::read_to_string
+Suggest: use (no core/alloc replacement)
+
+Line 208: uses fs::read_to_string
+Suggest: use (no core/alloc replacement)
+
+Line 209: uses fs::create_dir_all
+Suggest: use (no core/alloc replacement)
+
+Line 210: uses fs::write
+Suggest: use (no core/alloc replacement)
+
+File: src/binlib/compiler_main.rs
+Line 9: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 10: uses io::Write
+Suggest: use (no core/alloc replacement)
+
+Line 11: uses time::Instant
+Suggest: use core::time::Instant
+
+Line 18: uses panic::catch_unwind
+Suggest: use (no core/alloc replacement)
+
+Line 21: uses process::exit
+Suggest: use (no core/alloc replacement)
+
+Line 59: uses process::exit
+Suggest: use (no core/alloc replacement)
+
+File: src/binlib/role_main.rs
+Line 8: uses env
+Suggest: use (no core/alloc replacement)
+
+Line 9: uses fs
+Suggest: use (no core/alloc replacement)
+
+File: src/root/main.rs
+Line 18: uses fs::read_dir
+Suggest: use (no core/alloc replacement)
+
+File: src/shell/busybox_runner.rs
+Line 10: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 11: uses io
+Suggest: use (no core/alloc replacement)
+
+Line 12: uses path
+Suggest: use (no core/alloc replacement)
+
+Line 13: uses process
+Suggest: use (no core/alloc replacement)
+
+Line 14: uses process
+Suggest: use (no core/alloc replacement)
+
+Line 29: uses fs::File
+Suggest: use (no core/alloc replacement)
+
+Line 39: uses fs::write
+Suggest: use (no core/alloc replacement)
+
+Line 86: uses path::Path::new
+Suggest: use (no core/alloc replacement)
+
+File: src/services/gpuinfo.rs
+Line 11: uses process::Command
+Suggest: use (no core/alloc replacement)
+
+Line 31: uses fs::write
+Suggest: use (no core/alloc replacement)
+
+File: src/services/sandbox.rs
+Line 10: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 11: uses io::Write
+Suggest: use (no core/alloc replacement)
+
+Line 12: uses process
+Suggest: use (no core/alloc replacement)
+
+File: src/telemetry/router.rs
+Line 48: uses fs::read_to_string
+Suggest: use (no core/alloc replacement)
+
+File: src/telemetry/diagnostics.rs
+Line 12: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 13: uses io::Write
+Suggest: use (no core/alloc replacement)
+
+Line 14: uses time
+Suggest: use core::time
+
+File: src/telemetry/trace.rs
+Line 36: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 37: uses io::Write
+Suggest: use (no core/alloc replacement)
+
+Line 67: uses time
+Suggest: use core::time
+
+Line 78: uses panic::set_hook
+Suggest: use (no core/alloc replacement)
+
+File: src/telemetry/loop.rs
+Line 10: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 11: uses io::Write
+Suggest: use (no core/alloc replacement)
+
+Line 12: uses thread
+Suggest: use (no core/alloc replacement)
+
+Line 13: uses time::Duration
+Suggest: use core::time::Duration
+
+File: src/telemetry/core.rs
+Line 12: uses collections::HashMap
+Suggest: use alloc::collections::HashMap
+
+Line 13: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 14: uses io::Write
+Suggest: use (no core/alloc replacement)
+
+Line 15: uses time
+Suggest: use core::time
+
+File: src/queen/federation.rs
+Line 14: uses collections::HashMap
+Suggest: use alloc::collections::HashMap
+
+Line 15: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 16: uses time
+Suggest: use core::time
+
+File: src/queen/cluster.rs
+Line 13: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 14: uses io::Write
+Suggest: use (no core/alloc replacement)
+
+Line 15: uses time
+Suggest: use core::time
+
+File: src/queen/slm_manage_registry.rs
+Line 14: uses collections::HashMap
+Suggest: use alloc::collections::HashMap
+
+Line 15: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 16: uses path::Path
+Suggest: use (no core/alloc replacement)
+
+File: src/queen/trust.rs
+Line 9: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 10: uses path::Path
+Suggest: use (no core/alloc replacement)
+
+File: src/queen/orchestrator.rs
+Line 13: uses collections::HashMap
+Suggest: use alloc::collections::HashMap
+
+Line 14: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 15: uses io::Write
+Suggest: use (no core/alloc replacement)
+
+Line 16: uses time
+Suggest: use core::time
+
+File: src/queen/sync_daemon.rs
+Line 10: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 11: uses thread
+Suggest: use (no core/alloc replacement)
+
+Line 12: uses time::Duration
+Suggest: use core::time::Duration
+
+File: src/roles/simulator_test.rs
+Line 9: uses fs::OpenOptions
+Suggest: use (no core/alloc replacement)
+
+Line 10: uses io::Write
+Suggest: use (no core/alloc replacement)
+
+File: src/roles/glasses_agent.rs
+Line 9: uses fs::OpenOptions
+Suggest: use (no core/alloc replacement)
+
+Line 10: uses io::Write
+Suggest: use (no core/alloc replacement)
+
+File: src/roles/sensor_relay.rs
+Line 9: uses fs::OpenOptions
+Suggest: use (no core/alloc replacement)
+
+Line 10: uses io::Write
+Suggest: use (no core/alloc replacement)
+
+File: src/roles/interactive_aibooth.rs
+Line 9: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 10: uses io::Write
+Suggest: use (no core/alloc replacement)
+
+File: src/roles/drone_worker.rs
+Line 9: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 10: uses io::Write
+Suggest: use (no core/alloc replacement)
+
+Line 29: uses env::var
+Suggest: use (no core/alloc replacement)
+
+Line 38: uses io::stdout
+Suggest: use (no core/alloc replacement)
+
+File: src/roles/kiosk_interactive.rs
+Line 9: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 10: uses io::Write
+Suggest: use (no core/alloc replacement)
+
+Line 29: uses env::var
+Suggest: use (no core/alloc replacement)
+
+Line 38: uses io::stdout
+Suggest: use (no core/alloc replacement)
+
+File: src/cloud/hooks.rs
+Line 7: uses fs
+Suggest: use (no core/alloc replacement)
+
+File: src/cloud/orchestrator.rs
+Line 13: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 14: uses io
+Suggest: use (no core/alloc replacement)
+
+Line 15: uses time
+Suggest: use core::time
+
+Line 31: uses thread::spawn
+Suggest: use (no core/alloc replacement)
+
+Line 33: uses io::stderr
+Suggest: use (no core/alloc replacement)
+
+Line 35: uses thread::sleep
+Suggest: use (no core/alloc replacement)
+
+Line 65: uses io::stdout
+Suggest: use (no core/alloc replacement)
+
+Line 137: uses io::stdout
+Suggest: use (no core/alloc replacement)
+
+Line 155: uses thread::spawn
+Suggest: use (no core/alloc replacement)
+
+File: src/fs/overlay.rs
+Line 13: uses collections::HashMap
+Suggest: use alloc::collections::HashMap
+
+Line 14: uses fs
+Suggest: use (no core/alloc replacement)
+
+File: src/rc/init.rs
+Line 11: uses fs
+Suggest: use (no core/alloc replacement)
+
+Line 12: uses io
+Suggest: use (no core/alloc replacement)
+
+Line 13: uses time::Instant
+Suggest: use core::time::Instant
+
+Line 29: uses fs::read_to_string
+Suggest: use (no core/alloc replacement)
+
+Line 61: uses path::Path::new
+Suggest: use (no core/alloc replacement)
+
+Line 93: uses fs::OpenOptions::new
+Suggest: use (no core/alloc replacement)
+
+File: cohesix-9p/src/policy.rs
+Line 32: uses path::Path
+Suggest: use (no core/alloc replacement)
+
+Line 33: uses fs::read_to_string
+Suggest: use (no core/alloc replacement)
+
+Line 34: uses io::Error::new
+Suggest: use (no core/alloc replacement)
+
+File: cohesix-9p/src/ninep_adapter.rs
+Line 13: uses io
+Suggest: use (no core/alloc replacement)
+
+Line 52: uses thread::sleep
+Suggest: use (no core/alloc replacement)
