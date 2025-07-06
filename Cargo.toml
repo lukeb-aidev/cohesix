@@ -136,8 +136,6 @@ memchr = { path = "third_party/memchr_simple" }
 [package.metadata.cohesix]
 root-task = true
 
-[patch."https://github.com/rust-lang/crates.io-index"]
-ninep = { path = "third_party/ninep_portable" }
 
 [target.'cfg(not(target_os = "uefi"))'.dependencies]
 libloading = "0.7"
