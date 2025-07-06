@@ -1,0 +1,15 @@
+# CLASSIFICATION: COMMUNITY
+# Filename: Cargo.toml v0.1
+# Author: Lukas Bower
+# Date Modified: 2027-08-15
+
+[workspace]
+members = [
+    "cohesix_root",
+    "cohesix",
+    "cohesix-9p"
+]
+
+[patch.crates-io]
+ninep = { path = "../third_party/ninep_portable" }
+memchr = { path = "../third_party/memchr_simple" }
