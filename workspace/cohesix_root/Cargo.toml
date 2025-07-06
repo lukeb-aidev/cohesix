@@ -1,5 +1,5 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Cargo.toml v0.1
+# Filename: Cargo.toml v0.2
 # Author: Lukas Bower
 # Date Modified: 2027-08-15
 
@@ -11,6 +11,9 @@ edition = "2021"
 [dependencies]
 cohesix = { path = "../cohesix", default-features = false }
 libm = "0.2"
+
+[features]
+default = []
 
 [profile.release]
 panic = "abort"

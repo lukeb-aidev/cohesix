@@ -2820,3 +2820,8 @@
 - Cargo.toml disables std for log, once_cell, hex; added libm.
 - cohesix_fetch_build.sh builds root with build-std=core,alloc.
 
+## [v0.433] - 2027-08-15
+### Changed
+- cohesix_root Cargo.toml no_std features explicitly disabled.
+- main.rs uses extern crate alloc with no_std header.
+- Build logs stored in logs/root_split_no_std_patch_${logdate}.log.

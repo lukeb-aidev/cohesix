@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: ROOT_SPLIT_PLAN_V1.md v1.1
+// Filename: ROOT_SPLIT_PLAN_V1.md v1.2
 // Author: Lukas Bower
 // Date Modified: 2027-08-15
 
