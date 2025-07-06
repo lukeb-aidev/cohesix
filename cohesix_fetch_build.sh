@@ -409,9 +409,15 @@ fi
 log "🔧 Building Rust components..."
 echo "== Rust build =="
 
+#
+# Build Rust binaries with correct targets and flags:
+# - kernel, logdemo, init, cohesix_root: aarch64-unknown-linux-musl + custom link.ld
+# - CLI tools: aarch64-unknown-linux-gnu, no custom linker
+#
+
 # Build cohesix_root for seL4 root server
 echo "🔧 Building Rust binary: cohesix_root"
-RUSTFLAGS="-C debuginfo=2" \
+RUSTFLAGS="-C link-arg=-T./link.ld" \
   cargo build --release --bin cohesix_root \
   --no-default-features --features "std,busybox,sel4" \
   --target aarch64-unknown-linux-musl
@@ -419,30 +425,26 @@ echo "✅ Finished building: cohesix_root"
 
 # Build kernel with its required features
 echo "🔧 Building Rust binary: kernel"
-cargo build --release --bin kernel \
+RUSTFLAGS="-C link-arg=-T./link.ld" \
+  cargo build --release --bin kernel \
   --features "kernel_bin,minimal_uefi" \
-  --target aarch64-unknown-linux-gnu
+  --target aarch64-unknown-linux-musl
 echo "✅ Finished building: kernel"
-
-# Build sel4_entry with its required features (temporarily disabled)
-# echo "🔧 Building Rust binary: sel4_entry"
-# cargo build --release --bin sel4_entry \
-#   --features "sel4,kernel_bin,minimal_uefi" \
-#   --target aarch64-unknown-linux-musl
-# echo "✅ Finished building: sel4_entry"
 
 # Build logdemo with its required features
 echo "🔧 Building Rust binary: logdemo"
-cargo build --release --bin logdemo \
+RUSTFLAGS="-C link-arg=-T./link.ld" \
+  cargo build --release --bin logdemo \
   --features "minimal_uefi" \
-  --target aarch64-unknown-linux-gnu
+  --target aarch64-unknown-linux-musl
 echo "✅ Finished building: logdemo"
 
 # Build init with its required features
 echo "🔧 Building Rust binary: init"
-cargo build --release --bin init \
+RUSTFLAGS="-C link-arg=-T./link.ld" \
+  cargo build --release --bin init \
   --features "minimal_uefi" \
-  --target aarch64-unknown-linux-gnu
+  --target aarch64-unknown-linux-musl
 echo "✅ Finished building: init"
 
 # Build other CLI tools without special features
@@ -454,15 +456,21 @@ for bin in cohcc cohesix_build cohesix_cap cohesix_trace; do
 done
 log "✅ Rust components built"
 
-# Copy built binaries to staging
+# Copy built binaries to staging, searching both musl and gnu targets
 mkdir -p "$STAGE_DIR/bin"
 for bin in cohcc cohesix_build cohesix_cap cohesix_trace cohrun_cli cohagent cohrole cohrun cohup cohesix_root kernel logdemo init; do
-  BIN_PATH="target/aarch64-unknown-linux-musl/release/$bin"
-  if [ -f "$BIN_PATH" ]; then
+  BIN_PATH=""
+  for dir in "target/aarch64-unknown-linux-gnu/release" "target/aarch64-unknown-linux-musl/release"; do
+    if [ -f "$dir/$bin" ]; then
+      BIN_PATH="$dir/$bin"
+      break
+    fi
+  done
+  if [ -n "$BIN_PATH" ]; then
     cp "$BIN_PATH" "$STAGE_DIR/bin/$bin"
     cp "$BIN_PATH" "$ROOT/out/bin/$bin"
   else
-    echo "⚠️ $bin not found at $BIN_PATH" >&2
+    echo "⚠️ $bin not found in target dirs" >&2
   fi
 done
 
