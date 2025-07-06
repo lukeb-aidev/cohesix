@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.92
+# Filename: cohesix_fetch_build.sh v0.93
 # Author: Lukas Bower
-# Date Modified: 2027-08-06
+# Date Modified: 2027-08-08
 #!/usr/bin/env bash
 #
 # Merged old script v0.89 features into current script.
@@ -420,10 +420,10 @@ echo "== Rust build =="
 
 # Build cohesix_root for seL4 root server
 echo "🔧 Building Rust binary: cohesix_root"
-RUSTFLAGS="-C link-arg=-T./link.ld" \
+RUSTFLAGS="-C linker=ld.lld -C link-arg=-Tlink.ld" \
   cargo build --release --bin cohesix_root \
-  --no-default-features --features "std,busybox,sel4" \
-  --target aarch64-unknown-linux-musl
+  --no-default-features \
+  --target sel4-aarch64.json
 echo "✅ Finished building: cohesix_root"
 
 # Build kernel with its required features
