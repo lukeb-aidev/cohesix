@@ -37,7 +37,7 @@ Each agent task specifies:
 
 Agents always respect TMPDIR, COHESIX_TRACE_TMP, or COHESIX_ENS_TMP — never hardcoded /tmp or /dev/shm.
 
-* Pull Requests must NEVER include binay files. This is prohibited.
+* Pull Requests must NEVER include binary files. This is prohibited.
 
 ---
 
