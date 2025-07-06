@@ -1,6 +1,6 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: build_busybox.sh v0.7
-# Date Modified: 2026-11-17
+# Filename: build_busybox.sh v0.8
+# Date Modified: 2025-07-06
 # Author: Lukas Bower
 
 #!/usr/bin/env bash
@@ -50,6 +50,7 @@ for ARCH in "${ARCHES[@]}"; do
   make mrproper || true
   cp "$SRC_DIR/.config.coh" .config
   # Preconfigured minimal config; no update needed
+  msg "✅ BusyBox configured for Cohesix (no prompts)"
   echo "BusyBox config summary:"
   grep -E '^(CONFIG_STATIC|CONFIG_ASH|CONFIG_SH_IS_ASH|CONFIG_LS|CONFIG_CP|CONFIG_MV|CONFIG_ECHO|CONFIG_MOUNT|CONFIG_CAT|CONFIG_GREP|CONFIG_HEAD|CONFIG_TAIL|CONFIG_PRINTF|CONFIG_TEST|CONFIG_MKDIR|CONFIG_RMDIR|CONFIG_VI)' .config
 
@@ -59,7 +60,7 @@ for ARCH in "${ARCHES[@]}"; do
   cp "$INSTALL_DIR/bin/busybox" "$OUT_BIN/busybox"
   cp "$INSTALL_DIR/bin/busybox" "$ISO_BIN/busybox"
   popd > /dev/null
-  msg "✅ BusyBox built → $INSTALL_DIR/bin/busybox (also staged to ISO)"
+  msg "✅ BusyBox built and installed with minimal applets"
 done
 
 msg "All requested BusyBox builds complete."
