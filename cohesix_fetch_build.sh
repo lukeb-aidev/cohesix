@@ -299,9 +299,20 @@ elif [ -c /dev/nvidia0 ]; then
 elif command -v lspci >/dev/null 2>&1 && lspci | grep -qi nvidia; then
   COH_GPU=1
 fi
+
 export COH_ARCH COH_GPU
 export COH_PLATFORM="$COH_ARCH"
 log "Detected platform: $COH_ARCH, GPU=$COH_GPU"
+
+# Set musl cross compiler for aarch64 if available
+if [ "$COH_ARCH" = "aarch64" ]; then
+  if [ -x "/opt/aarch64-linux-musl/bin/aarch64-linux-musl-gcc" ]; then
+    export CC_aarch64_unknown_linux_musl="/opt/aarch64-linux-musl/bin/aarch64-linux-musl-gcc"
+    log "✅ Using musl cross compiler at /opt/aarch64-linux-musl/bin/aarch64-linux-musl-gcc"
+  else
+    log "⚠️ Musl cross compiler not found at /opt/aarch64-linux-musl/bin/aarch64-linux-musl-gcc"
+  fi
+fi
 
 log "📦 Updating submodules (if any)..."
 git submodule update --init --recursive
