@@ -32,8 +32,8 @@ SECTIONS {
         KEEP(*(.data*))
     } :data
 
-    .bss : ALIGN(0x1000) {
+    .bss (NOLOAD) :data {
         KEEP(*(.bss*))
         *(COMMON)
-    } (NOLOAD) :data
+    }
 }
