@@ -439,19 +439,21 @@ RUSTFLAGS="-C link-arg=-T./link.ld" \
   --target aarch64-unknown-linux-musl
 echo "✅ Finished building: logdemo"
 
-# Build init with its required features
+ # Build init with its required features (static musl, explicit crt-static, separate target dir)
 echo "🔧 Building Rust binary: init"
-RUSTFLAGS="-C link-arg=-T./link.ld" \
+RUSTFLAGS="-C target-feature=+crt-static" \
   cargo build --release --bin init \
   --features "minimal_uefi" \
-  --target aarch64-unknown-linux-musl
+  --target aarch64-unknown-linux-musl \
+  --target-dir target_static
 echo "✅ Finished building: init"
 
-# Build other CLI tools without special features
+ # Build other CLI tools without special features (GNU target, separate target_cli dir)
 for bin in cohcc cohesix_build cohesix_cap cohesix_trace; do
   echo "🔧 Building Rust binary: $bin"
   cargo build --release --bin "$bin" \
-    --target aarch64-unknown-linux-gnu
+    --target aarch64-unknown-linux-gnu \
+    --target-dir target_cli
   echo "✅ Finished building: $bin"
 done
 log "✅ Rust components built"
