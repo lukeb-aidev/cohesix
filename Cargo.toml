@@ -70,7 +70,9 @@ with_test_case = []
 inprocess = []
 
 [lib]
-crate-type = ["staticlib"]
+name = "cohesix"
+path = "src/lib.rs"
+crate-type = ["rlib", "staticlib"]
 
 [profile.release]
 panic = "abort"

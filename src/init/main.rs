@@ -3,32 +3,34 @@
 // Author: Lukas Bower
 // Date Modified: 2027-02-01
 // UEFI-specific stub removed; full init runs on UEFI by default.
+#![cfg_attr(not(feature = "std"), no_std)]
 
 extern crate alloc;
 #[allow(unused_imports)]
 use alloc::{boxed::Box, string::String, vec::Vec};
+use cohesix::coherr;
 fn main() {
     use cohesix::runtime::env::init::{initialize_runtime_env, parse_boot_args};
     use cohesix::runtime::role_config::load_active;
     use cohesix::runtime::ServiceRegistry;
     use std::process::Command;
-    println!("[init] starting user init");
+    coherr!("[init] starting user init");
     initialize_runtime_env();
     let boot = parse_boot_args();
-    println!("[init] secure9p: {}", boot.secure9p);
-    println!("[init] busybox: {}", boot.busybox);
+    coherr!("[init] secure9p: {}", boot.secure9p);
+    coherr!("[init] busybox: {}", boot.busybox);
     let role = std::env::var("cohrole").unwrap_or_else(|_| "unknown".into());
     let cfg = load_active();
     match Command::new("coh-9p-helper").spawn() {
         Ok(_) => {
             let _ = ServiceRegistry::register_service("coh9p", "/srv/coh9p");
-            println!("[init] coh-9p-helper started");
+            coherr!("[init] coh-9p-helper started");
         }
-        Err(e) => eprintln!("[init] coh-9p-helper start failed: {e}"),
+        Err(e) => coherr!("[init] coh-9p-helper start failed: {e}"),
     }
     match Command::new("cohtrace").arg("status").spawn() {
-        Ok(_) => println!("[init] cohtrace service started"),
-        Err(e) => eprintln!("[init] cohtrace start failed: {e}"),
+        Ok(_) => coherr!("[init] cohtrace service started"),
+        Err(e) => coherr!("[init] cohtrace start failed: {e}"),
     }
     if cfg.validator.unwrap_or(true) {
         match std::process::Command::new("python3")
@@ -36,12 +38,12 @@ fn main() {
             .arg("--live")
             .spawn()
         {
-            Ok(_) => println!("Validator initialized for role: {}", role),
-            Err(e) => eprintln!("[init] validator failed to start: {e}"),
+            Ok(_) => coherr!("Validator initialized for role: {}", role),
+            Err(e) => coherr!("[init] validator failed to start: {e}"),
         }
     }
     if let Err(e) = cohesix::cli::run() {
-        eprintln!("[init] cli error: {e}");
+        coherr!("[init] cli error: {e}");
     }
     cohesix::sh_loop::run();
 }
