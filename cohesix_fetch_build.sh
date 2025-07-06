@@ -103,6 +103,10 @@ if ! command -v rustup >/dev/null 2>&1; then
   echo "❌ rustup not found. Install Rust toolchains before running" >&2
   exit 1
 fi
+if ! rustup component list --toolchain nightly | grep -q 'rust-src (installed)'; then
+  echo "🔧 Installing missing rust-src component for nightly" >&2
+  rustup component add rust-src --toolchain nightly
+fi
 if ! rustup target list --installed | grep -q "^aarch64-unknown-linux-musl$"; then
   echo "🔧 Installing missing Rust target aarch64-unknown-linux-musl" >&2
   rustup target add aarch64-unknown-linux-musl

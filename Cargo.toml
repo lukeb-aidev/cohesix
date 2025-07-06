@@ -29,7 +29,7 @@ rapier3d = { version = "0.17.2", optional = true }
 once_cell = { version = "1", default-features = false, features = ["alloc"] }
 serde = { version = "1", default-features = false, features = ["derive", "alloc"], optional = true }
 hex = { version = "0.4", default-features = false }
-rmp-serde = { version = "1", default-features = false }
+rmp-serde = { version = "1", default-features = false, optional = true }
 num-traits = { version = "0.2", default-features = false, features = ["libm"] }
 rmp = { version = "0.8", default-features = false }
 libm = "0.2"
@@ -60,7 +60,7 @@ serde = { version = "1", features = ["std"] }
 
 [features]
 default = ["std"]
-std = ["cohesix_9p/std"]
+std = ["cohesix_9p/std", "rmp-serde"]
 sel4 = ["kernel_bin", "sel4_entry_bin"]
 rapier = ["rapier3d"]
 busybox = []

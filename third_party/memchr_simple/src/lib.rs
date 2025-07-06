@@ -2,6 +2,10 @@
 // Filename: lib.rs v0.1
 // Author: Lukas Bower
 // Date Modified: 2026-12-31
+#![cfg_attr(not(feature = "std"), no_std)]
+#[cfg(not(feature = "std"))]
+extern crate alloc;
+use core::prelude::v1::*;
 
 /// Naive implementations of memchr-style searches using safe loops.
 /// These are used in place of the upstream memchr crate to avoid

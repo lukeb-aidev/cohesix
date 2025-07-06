@@ -324,6 +324,7 @@
 | scripts/bind_cuda.rc | v0.1 | 2027-01-31 | COMMUNITY | | |
 | examples/plan9_enhancements_usage.txt | v0.1 | 2027-01-31 | COMMUNITY | | |
 | srv/upload/test-validation.log | v0.1 | 2027-01-31 | COMMUNITY | | |
+| logs/rust_fix_build_verified_20250706_115245.log | v0.1 | 2025-07-06 | COMMUNITY | | |
 Removed: introspect_self_diagnosis (Plan9 migration - file-based introspection replaced by validator-driven policy checks)
 Removed: legacy Python tests and lint steps; project now purely Plan9 + Rust
 Changed: `.cargo/config.toml` v0.14 uses project-relative linker script path

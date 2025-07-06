@@ -2,6 +2,7 @@
 // Filename: edge_fallback.rs v0.1
 // Author: Lukas Bower
 // Date Modified: 2025-07-12
+#![cfg(feature = "std")]
 
 /// Edge-only fallback coordinator for temporary queen loss.
 use std::fs;
