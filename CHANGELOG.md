@@ -49,6 +49,7 @@
 - test_all_arch.sh v1.1, run-smoke-tests.sh v0.4 now output logs and summaries
 - make_iso.sh script creates bootable ISO under out/cohesix.iso
 - Plan9 physics server and secure9p mount script added with docs and example log
+- Added no_std_audit.log summarizing std crate usage across src/ and cohesix-9p
 
 ### Improved
 - Added Plan9-native build of gui_orchestrator, staged as /usr/bin/gui-orchestrator in the ISO.
