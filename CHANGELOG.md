@@ -2775,3 +2775,9 @@
 - `cohesix_fetch_build.sh` avoids copying `init.conf` onto itself and logs each
   build step clearly.
 
+## [v0.425] - 2025-07-06
+### Added
+- Non-interactive BusyBox configuration `.config.coh` enumerating required applets.
+### Changed
+- `scripts/build_busybox.sh` logs configuration success and minimal applet installation.
+
