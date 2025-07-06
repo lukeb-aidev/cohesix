@@ -356,6 +356,7 @@ dependencies = [
  "image",
  "libc",
  "libloading",
+ "libm",
  "log",
  "ninep",
  "num-traits",

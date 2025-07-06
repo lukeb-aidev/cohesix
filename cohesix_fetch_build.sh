@@ -421,8 +421,15 @@ echo "== Rust build =="
 # Build cohesix_root for seL4 root server
 echo "🔧 Building Rust binary: cohesix_root"
 RUSTFLAGS="-C linker=ld.lld -C link-arg=-Tlink.ld" \
+<<<<<<< HEAD
   cargo +nightly build -Z build-std=core,alloc --release --no-default-features \
   -Z avoid-dev-deps --target sel4-aarch64.json --bin cohesix_root
+=======
+  cargo +nightly build -Z build-std=core,alloc \
+  --release \
+  --no-default-features \
+  --target sel4-aarch64.json
+>>>>>>> 4df41a98 (Cargo command update)
 echo "✅ Finished building: cohesix_root"
 
 # Build kernel with its required features
