@@ -109,6 +109,7 @@
 | linker.ld | v0.1 | 2025-07-22 | COMMUNITY | | |
 | link.ld | v0.1 | 2027-01-15 | COMMUNITY | | |
 | target-sel4.json | v0.1 | 2027-01-15 | COMMUNITY | | |
+| sel4-aarch64.json | v0.1 | 2027-08-08 | COMMUNITY | | |
 | .bashrc | v0.1 | 2026-08-09 | COMMUNITY | | |
 | .cargo/config.toml | v0.14 | 2027-08-07 | COMMUNITY | | |
 | build.rs | v0.8 | 2026-08-21 | COMMUNITY | | |
@@ -138,7 +139,7 @@
 | docs/community/architecture/BOOT_KERNEL_FLOW.md | v0.3 | 2026-10-16 | COMMUNITY | | |
 | docs/community/archive/EXAMPLES_README.md | v0.3 | 2026-02-05 | COMMUNITY | | |
 | .cohesix_env | v0.3 | 2026-07-25 | COMMUNITY | | |
-| cohesix_fetch_build.sh | v0.92 | 2027-08-06 | COMMUNITY | | |
+| cohesix_fetch_build.sh | v0.93 | 2027-08-08 | COMMUNITY | | |
 | cohesix_fetch_build.bak | v0.91 | 2027-08-05 | COMMUNITY | | |
 | CONTRIBUTING.md | v1.1 | 2025-07-23 | COMMUNITY | | |
 | config/secure9p.toml | v0.7 | 2026-12-31 | COMMUNITY | | |
@@ -177,7 +178,7 @@
 | scripts/build_busybox.sh | v0.8 | 2025-07-06 | COMMUNITY | | |
 | third_party/busybox/.config.coh | v1.0 | 2025-07-06 | COMMUNITY | | |
 | metadata.json | v0.1 | 2025-07-24 | COMMUNITY | | |
-| Cargo.toml | v0.45 | 2027-01-24 | COMMUNITY | | |
+| Cargo.toml | v0.46 | 2027-08-08 | COMMUNITY | | |
 | cohesix-9p/Cargo.toml | v0.5 | 2026-12-31 | COMMUNITY | | |
 | cohesix-secure9p/Cargo.toml | v0.3 | 2026-12-31 | COMMUNITY | | |
 | cohesix-secure9p/src/secure_stream.rs | v0.1 | 2026-12-31 | COMMUNITY | | |
@@ -239,7 +240,7 @@
 | usr/src/example.coh | v0.1 | 2025-09-24 | COMMUNITY | | |
 | src/sh_loop.rs | v0.1 | 2025-09-23 | COMMUNITY | | |
 | src/root/main.rs | v0.3 | 2026-12-31 | COMMUNITY | | |
-| src/bin/cohesix_root.rs | v0.2 | 2027-07-05 | COMMUNITY | | |
+| src/bin/cohesix_root.rs | v0.3 | 2027-08-08 | COMMUNITY | | |
 | src/utils/gpu.rs | v0.2 | 2026-12-31 | COMMUNITY | | |
 | src/cuda/runtime.rs | v0.16 | 2026-12-31 | COMMUNITY | | |
 | src/cli/mod.rs | v1.3 | 2026-10-08 | COMMUNITY | | |

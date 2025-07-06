@@ -2785,3 +2785,10 @@
 ### Changed
 - `.cargo/config.toml` uses relative path `./link.ld` for the aarch64 musl target.
 
+## [v0.427] - 2027-08-08
+### Added
+- `sel4-aarch64.json` target for building freestanding root ELF.
+- `Cargo.toml` disables `std` by default and sets staticlib output.
+- `cohesix_root` rewritten as `no_std`/`no_main` entrypoint.
+- `cohesix_fetch_build.sh` builds root ELF using the new target.
+
