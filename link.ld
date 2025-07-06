@@ -20,19 +20,19 @@ PHDRS {
 SECTIONS {
     . = 0xffffff8040000000;
 
-    .text : ALIGN(0x1000) :text {
+    .text : ALIGN(0x1000) {
         KEEP(*(.text*))
     } :text
 
-    .rodata : ALIGN(0x1000) :text {
+    .rodata : ALIGN(0x1000) {
         KEEP(*(.rodata*))
     } :text
 
-    .data : ALIGN(0x1000) :data {
+    .data : ALIGN(0x1000) {
         KEEP(*(.data*))
     } :data
 
-    .bss : ALIGN(0x1000) (NOLOAD) :data {
+    .bss : ALIGN(0x1000) (NOLOAD) {
         KEEP(*(.bss*))
         *(COMMON)
     } :data
