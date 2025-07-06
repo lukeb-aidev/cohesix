@@ -2,6 +2,7 @@
 // Filename: mod.rs v0.3
 // Author: Lukas Bower
 // Date Modified: 2026-09-30
+#![cfg(feature = "std")]
 
 #[allow(unused_imports)]
 use alloc::{boxed::Box, string::String, vec::Vec};

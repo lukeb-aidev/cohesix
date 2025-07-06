@@ -2,6 +2,7 @@
 // Filename: capabilities.rs v0.4
 // Author: Lukas Bower
 // Date Modified: 2026-10-29
+#![cfg(feature = "std")]
 
 #[allow(unused_imports)]
 use alloc::{boxed::Box, string::String, vec::Vec};
