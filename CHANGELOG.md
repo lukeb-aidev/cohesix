@@ -2798,3 +2798,7 @@
 ### Changed
 - `src/init/worker.rs` now uses a static counter for trace IDs.
 - Proptest fuzz test removed and `cohfuzz` uses deterministic mutation.
+
+## [v0.429] - 2027-08-10
+### Changed
+- `src/init/mod.rs` updated to reflect RNG removal and always-on worker init.
