@@ -7,4 +7,5 @@ pub mod directory;
 pub mod policy;
 pub mod policy_memory;
 /// Standalone agent utilities.
+#[cfg(feature = "std")]
 pub mod snapshot;

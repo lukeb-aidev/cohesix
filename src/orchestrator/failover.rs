@@ -2,6 +2,7 @@
 // Filename: failover.rs v0.1
 // Author: Lukas Bower
 // Date Modified: 2025-07-05
+#![cfg(feature = "std")]
 
 use crate::CohError;
 /// Queen failover manager promoting a candidate when the primary is unresponsive.
