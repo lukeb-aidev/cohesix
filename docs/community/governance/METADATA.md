@@ -179,7 +179,7 @@
 | scripts/build_busybox.sh | v0.8 | 2025-07-06 | COMMUNITY | | |
 | third_party/busybox/.config.coh | v1.0 | 2025-07-06 | COMMUNITY | | |
 | metadata.json | v0.1 | 2025-07-24 | COMMUNITY | | |
-| Cargo.toml | v0.48 | 2027-08-11 | COMMUNITY | | |
+| Cargo.toml | v0.49 | 2027-08-12 | COMMUNITY | | |
 | cohesix-9p/Cargo.toml | v0.6 | 2027-08-11 | COMMUNITY | | |
 | cohesix-secure9p/Cargo.toml | v0.3 | 2026-12-31 | COMMUNITY | | |
 | cohesix-secure9p/src/secure_stream.rs | v0.1 | 2026-12-31 | COMMUNITY | | |
