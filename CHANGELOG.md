@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v1.03
+// Filename: CHANGELOG.md v1.04
 // Author: Lukas Bower
-// Date Modified: 2027-08-11
+// Date Modified: 2027-08-13
 
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
@@ -2811,3 +2811,10 @@
 ### Changed
 - Cargo.toml dependencies now build under no_std by default for cohesix_root.
 - num-traits switched to libm backend; sha2, hkdf, rmp now disable std.
+
+## [v0.432] - 2027-08-13
+### Changed
+- cohesix_root now uses pure no_std with libm.
+- Cargo.toml disables std for log, once_cell, hex; added libm.
+- cohesix_fetch_build.sh builds root with build-std=core,alloc.
+

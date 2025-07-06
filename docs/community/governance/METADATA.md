@@ -241,7 +241,7 @@
 | usr/src/example.coh | v0.1 | 2025-09-24 | COMMUNITY | | |
 | src/sh_loop.rs | v0.1 | 2025-09-23 | COMMUNITY | | |
 | src/root/main.rs | v0.3 | 2026-12-31 | COMMUNITY | | |
-| src/bin/cohesix_root.rs | v0.3 | 2027-08-08 | COMMUNITY | | |
+| src/bin/cohesix_root.rs | v0.4 | 2027-08-13 | COMMUNITY | | |
 | src/utils/gpu.rs | v0.2 | 2026-12-31 | COMMUNITY | | |
 | src/cuda/runtime.rs | v0.16 | 2026-12-31 | COMMUNITY | | |
 | src/cli/mod.rs | v1.3 | 2026-10-08 | COMMUNITY | | |
