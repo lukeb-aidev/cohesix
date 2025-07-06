@@ -87,10 +87,10 @@ cd cohesix
 mkdir -p "$LOG_DIR"
 
 
-if [ -f "$ROOT/scripts/load_arch_config.sh" ]; then
-  source "$ROOT/scripts/load_arch_config.sh"
+if [ -f "$ROOT/workspace/scripts/load_arch_config.sh" ]; then
+  source "$ROOT/workspace/scripts/load_arch_config.sh"
 else
-  echo "❌ Missing: $ROOT/scripts/load_arch_config.sh" >&2
+  echo "❌ Missing: $ROOT/workspace/scripts/load_arch_config.sh" >&2
   exit 1
 fi
 
@@ -395,7 +395,7 @@ if [ -f CMakeLists.txt ]; then
 fi
 
 log "🔧 Building BusyBox..."
-scripts/build_busybox.sh "$COH_ARCH"
+workspace/scripts/build_busybox.sh "$COH_ARCH"
 BUSYBOX_BIN="out/busybox/$COH_ARCH/bin/busybox"
 if [ -x "$BUSYBOX_BIN" ]; then
   cp "$BUSYBOX_BIN" "$STAGE_DIR/bin/busybox"
@@ -763,7 +763,7 @@ fi
 
 
 log "📖 Building mandoc and staging man pages..."
-scripts/build_mandoc.sh
+workspace/scripts/build_mandoc.sh
 MANDOC_BIN="prebuilt/mandoc/mandoc.$COH_ARCH"
 if [ -x "$MANDOC_BIN" ]; then
   mkdir -p "$STAGE_DIR/prebuilt/mandoc"
