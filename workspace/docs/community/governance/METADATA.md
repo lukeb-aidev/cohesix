@@ -243,6 +243,8 @@
 | src/root/main.rs | v0.3 | 2026-12-31 | COMMUNITY | | |
 | src/bin/cohesix_root.rs | v0.4 | 2027-08-13 | COMMUNITY | | |
 | src/utils/gpu.rs | v0.2 | 2026-12-31 | COMMUNITY | | |
+| workspace/cohesix_root/Cargo.toml | v0.2 | 2027-08-15 | COMMUNITY | | |
+| workspace/cohesix_root/src/main.rs | v0.5 | 2027-08-15 | COMMUNITY | | |
 | src/cuda/runtime.rs | v0.16 | 2026-12-31 | COMMUNITY | | |
 | src/cli/mod.rs | v1.3 | 2026-10-08 | COMMUNITY | | |
 | src/cli/cohtrace.rs | v0.4 | 2026-10-13 | COMMUNITY | | |
@@ -293,7 +295,7 @@
 | docs/community/guides/test_portability_guidelines.md | v0.1 | 2025-06-26 | COMMUNITY | | |
 | tools/setup_test_targets.sh | v0.1 | 2026-09-30 | COMMUNITY | | |
 | docs/FEATURE_FLAGS.md | v0.1 | 2026-09-30 | COMMUNITY | | |
-| docs/ROOT_SPLIT_PLAN_V1.md | v1.1 | 2027-08-15 | COMMUNITY | | |
+| docs/ROOT_SPLIT_PLAN_V1.md | v1.2 | 2027-08-15 | COMMUNITY | | |
 | tests/test_validator_matrix.rs | v0.2 | 2026-11-02 | COMMUNITY | | |
 | tests/test_validator.rs | v0.6 | 2026-11-15 | COMMUNITY | | |
 | tests/test_secure9p_config.rs | v0.1 | 2026-09-30 | COMMUNITY | | |
@@ -326,6 +328,7 @@
 | examples/plan9_enhancements_usage.txt | v0.1 | 2027-01-31 | COMMUNITY | | |
 | srv/upload/test-validation.log | v0.1 | 2027-01-31 | COMMUNITY | | |
 | logs/rust_fix_build_verified_20250706_115245.log | v0.1 | 2025-07-06 | COMMUNITY | | |
+| logs/root_split_no_std_patch_20250706_220917.log | v0.1 | 2027-08-15 | COMMUNITY | | |
 Removed: introspect_self_diagnosis (Plan9 migration - file-based introspection replaced by validator-driven policy checks)
 Removed: legacy Python tests and lint steps; project now purely Plan9 + Rust
 Changed: `.cargo/config.toml` v0.14 uses project-relative linker script path
