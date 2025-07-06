@@ -435,7 +435,7 @@ echo "== Rust build =="
 # Build cohesix_root for seL4 root server
 echo "🔧 Building Rust binary: cohesix_root"
 cd "$ROOT/workspace/cohesix_root"
-RUSTFLAGS="-C linker=ld.lld -C link-arg=-Tlink.ld" cargo +nightly build -Z build-std=core,alloc --no-default-features --release --target "$ROOT/workspace/sel4-aarch64.json" --bin cohesix_root --target-dir "$ROOT/workspace/target_root"
+RUSTFLAGS="-C linker=ld.lld -C link-arg=-Tlink.ld" cargo +nightly build -Z build-std=core,alloc --no-default-features --release --target "$ROOT/workspace/cohesix_root/sel4-aarch64.json" --bin cohesix_root --target-dir "$ROOT/workspace/target_root"
 cd "$ROOT"
 echo "✅ Finished building: cohesix_root"
 
@@ -711,7 +711,7 @@ echo "DroneWorker" | sudo tee /srv/cohrole
 
 
 log "🔍 Running Rust tests with detailed output..."
-RUST_BACKTRACE=1 cargo test --release --target "$ROOT/workspace/sel4-aarch64.json" -- --nocapture
+RUST_BACKTRACE=1 cargo test --release --target "$ROOT/workspace/cohesix_root/sel4-aarch64.json" -- --nocapture
 TEST_EXIT_CODE=$?
 grep -A 5 -E '^failures:|thread .* panicked at' "$LOG_FILE" > "$SUMMARY_TEST_FAILS" || true
 if [ $TEST_EXIT_CODE -ne 0 ]; then
