@@ -7,11 +7,6 @@ cargo-features = ["build-std"]
 [source.vendored-sources]
 directory = "vendor"
 
-[build]
-build-std = ["core", "alloc", "compiler_builtins"]
-build-std-features = ["compiler-builtins-mem"]
-
-
 [target.aarch64-unknown-linux-musl]
 linker = "ld.lld"
 rustflags = [
