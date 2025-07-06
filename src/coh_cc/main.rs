@@ -4,6 +4,7 @@
 // Date Modified: 2025-07-21
 
 use clap::Parser;
+extern crate cohesix;
 use cohesix::coh_cc::{
     backend::registry::get_backend,
     config::{Cli, Command, Config},

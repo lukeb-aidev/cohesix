@@ -3,6 +3,7 @@
 // Date Modified: 2025-07-22
 // Author: Lukas Bower
 
+extern crate cohesix;
 use cohesix::binlib::role_main::current_role;
 /// Display the current Cohesix runtime role.
 use cohesix::telemetry::trace::init_panic_hook;
