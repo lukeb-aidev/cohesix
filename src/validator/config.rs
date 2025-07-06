@@ -2,6 +2,7 @@
 // Filename: config.rs v0.2
 // Author: Lukas Bower
 // Date Modified: 2025-08-17
+#![cfg(feature = "std")]
 
 use once_cell::sync::Lazy;
 use std::path::PathBuf;

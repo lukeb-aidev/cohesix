@@ -2,6 +2,7 @@
 // Filename: proc_mgr.rs v0.2
 // Author: Lukas Bower
 // Date Modified: 2025-08-27
+#![cfg(feature = "std")]
 
 #[allow(unused_imports)]
 use alloc::{boxed::Box, string::String, vec::Vec};

@@ -2,6 +2,7 @@
 // Filename: guard.rs v0.6
 // Author: Lukas Bower
 // Date Modified: 2026-11-12
+#![cfg(feature = "std")]
 
 use once_cell::sync::Lazy;
 use std::collections::{HashMap, HashSet};
