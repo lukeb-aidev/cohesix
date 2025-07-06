@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Cargo.toml v0.45
+# Filename: Cargo.toml v0.46
 # Author: Lukas Bower
-# Date Modified: 2027-01-24
+# Date Modified: 2027-08-08
 [package]
 name    = "cohesix"
 version = "0.1.0"
@@ -68,7 +68,7 @@ ninep = "0.3"
 libc = "0.2"
 
 [features]
-default = ["std"]
+default = []
 std = []
 sel4 = ["kernel_bin", "sel4_entry_bin"]
 rapier = ["rapier3d"]
@@ -83,8 +83,12 @@ tls = []
 with_test_case = []
 inprocess = []
 
+[lib]
+crate-type = ["staticlib"]
+
 [profile.release]
 panic = "abort"
+strip = "debuginfo"
 
 [[bin]]
 name = "cohcc"
@@ -135,6 +139,9 @@ getrandom = { path = "third_party/getrandom_dummy" }
 rand_core = { path = "third_party/rand_core_patch" }
 ninep = { path = "third_party/ninep_portable" }
 memchr = { path = "third_party/memchr_simple" }
+
+[package.metadata.cohesix]
+root-task = true
 
 [patch."https://github.com/rust-lang/crates.io-index"]
 getrandom = { path = "third_party/getrandom_dummy" }
