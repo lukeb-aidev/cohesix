@@ -36,6 +36,7 @@ Each agent task specifies:
 - **Checks:** Explicit pass/fail conditions
 
 Agents always respect TMPDIR, COHESIX_TRACE_TMP, or COHESIX_ENS_TMP — never hardcoded /tmp or /dev/shm.
+Pull request must NEVER include binay files. This is prohibited.
 
 ---
 
