@@ -1,12 +1,12 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: instruction.rs v1.0
+// Filename: instruction.rs v1.1
 // Author: Lukas Bower
-// Date Modified: 2025-05-31
+// Date Modified: 2027-08-11
 
 #[allow(unused_imports)]
 use alloc::{boxed::Box, string::String, vec::Vec};
 /// Instruction representation for the Cohesix IR.
-use std::fmt;
+use core::fmt;
 
 /// Low-level operation codes supported by the IR.
 #[derive(Clone, Debug, PartialEq)]

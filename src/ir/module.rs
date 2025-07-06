@@ -1,13 +1,13 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: module.rs v1.2
-// Date Modified: 2025-07-28
+// Filename: module.rs v1.3
+// Date Modified: 2027-08-11
 // Author: Lukas Bower
 
 /// Defines the IR Module and associated utilities for the Cohesix compiler.
 use crate::ir::Function;
 #[allow(unused_imports)]
 use alloc::{boxed::Box, string::String, vec::Vec};
-use std::fmt;
+use core::fmt;
 
 /// A compilation unit containing multiple functions.
 #[derive(Clone, Debug)]
