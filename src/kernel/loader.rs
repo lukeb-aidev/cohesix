@@ -91,19 +91,22 @@ fn log_segment_map(vaddr: usize, paddr: usize, size: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
+    use std::{env, fs::File, io::Write};
+    use std::path::PathBuf;
 
     #[test]
     fn load_minimal_elf() {
-        let mut file = NamedTempFile::new().unwrap();
+        let mut path = env::temp_dir();
+        path.push("load_minimal_elf.tmp");
+        let mut file = File::create(&path).unwrap();
         let header = [
             0x7f, b'E', b'L', b'F', 2, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 1, 0, 0, 0, 0,
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         ];
         file.write_all(&header).unwrap();
-        let ctx = load_user_elf(file.path().to_str().unwrap());
+        let ctx = load_user_elf(path.to_str().unwrap());
         assert!(ctx.is_ok());
+        std::fs::remove_file(path).ok();
     }
 }

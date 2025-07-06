@@ -1,11 +1,9 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: fuzzer.rs v0.1
+// Filename: fuzzer.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-06-25
+// Date Modified: 2027-08-09
 
 use cohesix::CohError;
-use rand::Rng;
-use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
@@ -39,22 +37,29 @@ impl TraceFuzzer {
     }
 
     fn mutate(&self, events: &mut Vec<TraceEvent>) {
-        let mut rng = rand::thread_rng();
-        // reorder some events
-        events.shuffle(&mut rng);
-        // occasionally inject invalid args
-        if let Some(ev) = events.choose_mut(&mut rng) {
+        if events.is_empty() {
+            return;
+        }
+
+        // rotate order deterministically
+        let first = events.remove(0);
+        events.push(first);
+
+        // append marker to first entry
+        if let Some(ev) = events.first_mut() {
             ev.detail.push_str("_invalid");
         }
-        // remove a random event to simulate missing binding
-        if events.len() > 1 && rng.gen_bool(0.3) {
-            let idx = rng.gen_range(0..events.len());
-            events.remove(idx);
+
+        // remove last event if more than one
+        if events.len() > 1 {
+            events.pop();
         }
-        // overlap namespace or unauthorized path
-        if let Some(ev) = events.choose_mut(&mut rng) {
+
+        // override path on first "open" event
+        for ev in events.iter_mut() {
             if ev.event == "open" {
                 ev.detail = format!("/unauth/{}", self.role);
+                break;
             }
         }
     }
