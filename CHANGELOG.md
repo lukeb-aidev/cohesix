@@ -2825,3 +2825,7 @@
 - cohesix_root Cargo.toml no_std features explicitly disabled.
 - main.rs uses extern crate alloc with no_std header.
 - Build logs stored in logs/root_split_no_std_patch_${logdate}.log.
+## [v0.434] - 2027-08-15
+### Added
+- logs/root_split_full_boot_validation_20250706_223559.log capturing simulated full boot validation.
+
