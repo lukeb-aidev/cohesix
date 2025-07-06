@@ -7,7 +7,7 @@
 //
 /// This module tracks runtime and build-time dependencies for key Cohesix services,
 /// allowing introspection, SBOM generation, and dependency auditing.
-use std::collections::HashMap;
+use alloc::{collections::BTreeMap, string::String};
 
 /// Represents a single dependency with metadata.
 #[derive(Debug, Clone)]
@@ -20,14 +20,14 @@ pub struct Dependency {
 
 /// Registry to hold known dependencies.
 pub struct DependencyRegistry {
-    pub entries: HashMap<String, Dependency>,
+    pub entries: BTreeMap<String, Dependency>,
 }
 
 impl DependencyRegistry {
     /// Create a new, empty registry.
     pub fn new() -> Self {
         DependencyRegistry {
-            entries: HashMap::new(),
+            entries: BTreeMap::new(),
         }
     }
 
