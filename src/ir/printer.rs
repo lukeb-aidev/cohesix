@@ -1,13 +1,13 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: printer.rs v1.0
+// Filename: printer.rs v1.1
 // Author: Lukas Bower
-// Date Modified: 2025-07-11
+// Date Modified: 2027-08-11
 
 /// Textual IR printer producing a simple textual representation.
 use crate::ir::{Function, Module};
 #[allow(unused_imports)]
 use alloc::{boxed::Box, string::String, vec::Vec};
-use std::fmt::Write;
+use core::fmt::Write;
 
 /// Print a single function to a string.
 pub fn print_function(func: &Function) -> String {
