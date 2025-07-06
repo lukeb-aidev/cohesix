@@ -391,16 +391,16 @@ fi
 
 log "🧱 Building C components..."
 if [ -f "$ROOT/CMakeLists.txt" ]; then
-  cd "$ROOT/workspace"
+  cd "$ROOT"
   mkdir -p build
-  cd "$ROOT/workspace/build"
-  cmake "$ROOT/workspace" && make -j$(nproc)
+  cd "$ROOT/build"
+  cmake "$ROOT" && make -j$(nproc)
 else
   echo "⚠️ No CMakeLists.txt found at $ROOT, skipping C build"
 fi
 
 log "🔧 Building BusyBox..."
-cd "$ROOT/workspace"
+cd "$ROOT"
 "$ROOT/workspace/scripts/build_busybox.sh" "$COH_ARCH"
 BUSYBOX_BIN="$ROOT/out/busybox/$COH_ARCH/bin/busybox"
 if [ -x "$BUSYBOX_BIN" ]; then
