@@ -20,7 +20,7 @@ serde_json = { version = "1", default-features = false, features = ["alloc"] }
 aes-gcm = { version = "0.10", default-features = false, features = ["aes"] }
 aead = { version = "0.5", default-features = false }
 aes = { version = "0.8", default-features = false }
-cohesix_9p = { package = "cohesix-9p", path = "./cohesix-9p", default-features = false, optional = true }
+cohesix_9p = { package = "cohesix-9p", path = "../cohesix-9p", default-features = false, optional = true }
 # ninep crate required for CUDA remote dispatch
 ninep = { version = "0.3", optional = true }
 env_logger = { version = "0.11.7", optional = true }
@@ -37,14 +37,6 @@ libm = "0.2"
 
 [build-dependencies]
 which = "5.0"
-[workspace]
-members = [
-    "cohesix-9p",
-    "cohesix-secure9p",
-    "tools/cohfuzz",
-    "tools/scenario_compiler",
-    "tools/cli",
-]
 
 [dev-dependencies]
 criterion = "0.5"
@@ -100,10 +92,6 @@ required-features = ["minimal_uefi"]
 
 
 [[bin]]
-name = "cohesix_root"
-path = "src/bin/cohesix_root.rs"
-
-[[bin]]
 name = "sel4_entry"
 path = "src/bootstrap/sel4_entry.rs"
 test = false
@@ -122,9 +110,6 @@ name = "cohesix_build"
 path = "tools/cli/src/bin/cohbuild.rs"
 
 
-[patch.crates-io]
-ninep = { path = "third_party/ninep_portable" }
-memchr = { path = "third_party/memchr_simple" }
 
 [package.metadata.cohesix]
 root-task = true
