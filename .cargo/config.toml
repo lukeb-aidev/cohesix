@@ -1,16 +1,10 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: .cargo/config.toml v0.14
+# Filename: .cargo/config.toml v0.15
 # Author: Lukas Bower
 # Date Modified: 2027-08-07
 
-[source.crates-io]
-replace-with = "vendored-sources"
-
 [source.vendored-sources]
 directory = "vendor"
-
-[net]
-offline = true
 
 
 [target.aarch64-unknown-linux-musl]
