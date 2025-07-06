@@ -115,6 +115,10 @@ command -v aarch64-linux-musl-gcc >/dev/null 2>&1 || { echo "❌ aarch64-linux-m
 command -v ld.lld >/dev/null 2>&1 || { echo "❌ ld.lld not found" >&2; exit 1; }
 ld.lld --version >&3
 
+log "\ud83d\udcc5 Fetching Cargo dependencies..."
+cargo fetch
+log "\u2705 Cargo dependencies fetched"
+
 
 # Optional seL4 entry build flag
 SEL4_ENTRY=0
@@ -424,7 +428,7 @@ echo "== Rust build =="
 
 # Build cohesix_root for seL4 root server
 echo "🔧 Building Rust binary: cohesix_root"
-RUSTFLAGS="-C linker=ld.lld -C link-arg=-Tlink.ld" cargo +nightly build -Z build-std=core,alloc --no-default-features --release --target sel4-aarch64.json --bin cohesix_root
+RUSTFLAGS="-C linker=ld.lld -C link-arg=-Tlink.ld" cargo +nightly build -Z build-std=core,alloc --no-default-features --release --target sel4-aarch64.json --bin cohesix_root --target-dir target_root
 echo "✅ Finished building: cohesix_root"
 
 # Build kernel with its required features
@@ -509,7 +513,9 @@ fi
 
 # Bulletproof ELF validation
 log "🔍 Validating cohesix_root ELF memory layout..."
-readelf -l out/cohesix_root.elf | tee -a "$LOG_FILE" >&3
+READLOG="$LOG_DIR/cohesix_root_readelf_$(date +%Y%m%d_%H%M%S).log"
+readelf -l out/cohesix_root.elf | tee -a "$LOG_FILE" | tee "$READLOG" >&3
+sha256sum out/cohesix_root.elf > "$LOG_DIR/cohesix_root_$(date +%Y%m%d_%H%M%S).sha256"
 if readelf -l out/cohesix_root.elf | grep -q 'LOAD' && \
    ! readelf -l out/cohesix_root.elf | awk '/LOAD/ {print $3}' | grep -q -E '^0xffffff80[0-9a-fA-F]{8}$'; then
   echo "❌ cohesix_root ELF LOAD segments not aligned with expected seL4 virtual space" >&2
@@ -816,6 +822,15 @@ echo "BUILD AND STAGING COMPLETE"
 BIN_COUNT=$(find "$STAGE_DIR/bin" -type f -perm -111 | wc -l)
 ROLE_COUNT=$(find "$STAGE_DIR/roles" -name '*.yaml' | wc -l)
 log "FS BUILD OK: ${BIN_COUNT} binaries, ${ROLE_COUNT} roles staged" >&3
+
+VERIFY_LOG="$LOG_DIR/root_split_target_dir_verify_$(date +%Y%m%d_%H%M%S).log"
+{
+  echo "root build path: target_root"
+  echo "cli build path: target_cli"
+  sha256sum target_root/sel4-aarch64/release/cohesix_root 2>/dev/null || true
+  sha256sum target_cli/aarch64-unknown-linux-gnu/release/cohcc 2>/dev/null || true
+  readelf -h out/cohesix_root.elf 2>/dev/null || echo "readelf missing"
+} > "$VERIFY_LOG"
 
 cleanup() {
   log "🧹 Cleanup completed."
