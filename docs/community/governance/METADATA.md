@@ -14,6 +14,7 @@
 | BUILD_PLAN.md              | v0.5    | 2026-02-05    | COMMUNITY      |            |              |
 | COMMERCIAL_PLAN.md         | v1.5    | 2025-06-08    | PRIVATE        |            |              |
 | DEPENDENCIES.md            | v0.7    | 2026-12-31    | COMMUNITY      |            |              |
+| DYNAMIC_ORCHESTRATION_DESIGN.md | v0.1    | 2025-07-06    | PRIVATE        |     |              |
 | METADATA.md                | v3.34   | 2026-02-12    | COMMUNITY      | | |
 | Q_DAY.md                   | v1.1    | 2025-06-15    | PRIVATE        |            |              |
 | README.md                  | v0.25   | 2027-01-15   | COMMUNITY        | | |
