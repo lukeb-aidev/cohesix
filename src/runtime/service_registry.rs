@@ -2,6 +2,7 @@
 // Filename: service_registry.rs v0.7
 // Author: Lukas Bower
 // Date Modified: 2026-11-17
+#![cfg(feature = "std")]
 
 #[allow(unused_imports)]
 use alloc::{boxed::Box, string::String, vec::Vec};

@@ -2,6 +2,7 @@
 // Filename: worker.rs v0.7
 // Author: Lukas Bower
 // Date Modified: 2027-08-09
+#![cfg(feature = "std")]
 // Uses a monotonic counter for trace IDs; no RNG required.
 
 //! DroneWorker role initialisation.
