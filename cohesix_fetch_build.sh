@@ -357,7 +357,7 @@ if [ -d go/cmd/gui-orchestrator ]; then
   (cd go/cmd/gui-orchestrator && go mod tidy)
   OUT_BIN="$GO_HELPERS_DIR/web_gui_orchestrator"
   log "  compiling GUI orchestrator as GOARCH=$GOARCH"
-  if GOOS=linux GOARCH="$GOARCH" go build -tags unix -C go/cmd/gui-orchestrator -o "$OUT_BIN"; then
+  if (cd go/cmd/gui-orchestrator && GOOS=linux GOARCH="$GOARCH" go build -tags unix -o "$OUT_BIN"); then
     chmod +x "$OUT_BIN"
     log "✅ Built GUI orchestrator → $OUT_BIN"
   else
@@ -390,12 +390,16 @@ else
 fi
 
 log "🧱 Building C components..."
-if [ -f CMakeLists.txt ]; then
-  mkdir -p build
-  (cd build && cmake .. && make -j$(nproc))
+if [ -f "$ROOT/workspace/CMakeLists.txt" ]; then
+  cd "$ROOT/workspace"
+  mkdir -p build && cd build
+  cmake .. && make -j$(nproc)
+else
+  log "⚠️ No CMakeLists.txt found in workspace, skipping C build"
 fi
 
 log "🔧 Building BusyBox..."
+cd "$ROOT/workspace"
 workspace/scripts/build_busybox.sh "$COH_ARCH"
 BUSYBOX_BIN="out/busybox/$COH_ARCH/bin/busybox"
 if [ -x "$BUSYBOX_BIN" ]; then
@@ -436,6 +440,7 @@ echo "✅ Finished building: cohesix_root"
 
 # Build kernel with its required features
 echo "🔧 Building Rust binary: kernel"
+cd "$ROOT/workspace"
 RUSTFLAGS="-C link-arg=-T./link.ld" \
   cargo build --release --bin kernel \
   --features "kernel_bin,minimal_uefi" \
