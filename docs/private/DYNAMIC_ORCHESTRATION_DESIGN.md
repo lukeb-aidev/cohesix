@@ -1,35 +1,55 @@
 // CLASSIFICATION: PRIVATE
-// Filename: DYNAMIC_ORCHESTRATION_DESIGN.md v0.1
+// Filename: DYNAMIC_ORCHESTRATION_DESIGN.md v0.2
 // Author: Lukas Bower
 // Date Modified: 2025-07-06
 
 # Dynamic Orchestration Design
 
-This document outlines the planned orchestration stack for Cohesix. Three new modules provide adaptive coordination across heterogeneous nodes:
+This document details the next evolution of Cohesix orchestration. The architecture leverages ephemeral circuits, validator-driven adaptability, and optional web-native hooks for remote orchestrators.
 
-- **orch_agent** – runtime agent supervising ephemeral mounts, Secure9P sessions and role transitions.
-- **orch_metrics** – metrics exporter summarizing validator traces and hardware counters.
-- **orch_learn** – reinforcement layer that tunes mount strategies using historical metrics.
+## New Modules
+
+Three core modules enable dynamic coordination:
+
+- **orch_agent**  
+  Supervises ephemeral mounts, Secure9P sessions, role transitions, and triggers fallback on failures.
+
+- **orch_metrics**  
+  Exports runtime metrics from validator traces, hardware counters (CPU, GPU, memory), and ephemeral circuit health.
+
+- **orch_learn**  
+  A lightweight reinforcement loop that adjusts orchestration policies based on historical trace outcomes and real-time metrics.
 
 ## Ephemeral Bind/Mount Circuits
 
-Each worker maintains short lived bind and mount circuits. When a service requests a new namespace, `orch_agent` issues a Secure9P capability grant then attempts the mount. Failed mounts trigger a retry with exponential backoff. After three failures, the node marks the target as degraded and schedules handoff.
+Workers establish transient bind and mount circuits. When a service requires a namespace, `orch_agent` issues a Secure9P capability, attempts the mount, and validates. Failure triggers exponential backoff retries. After three failed attempts, the node marks the target degraded and escalates to standby remount.
 
-## Multi‑Queen Negotiation
+Ephemeral circuits automatically tear down post-task, freeing namespaces and minimizing stale mounts.
 
-Inspired by the Spanning Tree Protocol, Queens elect a temporary root when establishing cross‑site mounts. The first Queen to advertise a capability becomes the root for that circuit. Others defer unless the root fails health checks. Negotiation messages travel over the validator trace channel and are persisted for replay.
+## Multi-Queen Negotiation
 
-## Integration Details
+Taking inspiration from Spanning Tree Protocol, multiple Queens negotiate to elect a temporary root for orchestration. The first Queen advertising capability becomes the root for that specific circuit. Others monitor via validator health checks, deferring unless the root fails. All negotiation uses validator-traced channels, preserving replayability for auditing and learning.
 
-- **Secure9P** – all orchestration RPCs use the existing Secure9P transport. Capabilities are scoped per role and stored in `/srv/orch`.
-- **Plan9 Namespace** – orchestration bind points live under `/n/orch`. Workers mount CUDA services from `/srv/cuda` when available and gracefully disable GPU acceleration otherwise.
-- **CUDA srv + Rapier** – physics nodes expose `/srv/cuda`; Rapier state lives under `/sim/`. Metrics are exported to `orch_metrics` and included in validator traces.
-- **Validator Traces** – every negotiation step emits a trace record so failures can be replayed and verified.
+## Integration Points
 
-## Fallback Logic and Health Checks
+- **Secure9P**  
+  All orchestration RPCs and ephemeral circuit handshakes travel over existing Secure9P. Capability scopes are dynamically issued per role and stored under `/srv/orch`.
 
-Nodes run periodic health probes via `orch_agent check`. If a mount or node fails, the agent
-tries to remount on a standby. Persistent failures result in role demotion and notification to all Queens. Health reports aggregate into `orch_metrics` and feed back into `orch_learn`.
+- **Plan9 Namespace**  
+  Ephemeral orchestration mounts live under `/n/orch`. GPU workloads mount `/srv/cuda` opportunistically; Rapier physics states integrate from `/sim/`.
+
+- **Validator Traces**  
+  Every orchestration action emits a validator trace. This ensures all ephemeral circuits can be replayed, analyzed, and optimized by `orch_learn`.
+
+## Fallback Logic & Health Checks
+
+Each node continuously runs health probes via `orch_agent check`. Failed mounts or node outages trigger local remount attempts. Persistent issues demote the role and notify all Queens. Aggregated health is fed into `orch_metrics` and directly shapes `orch_learn` decisions.
+
+## Optional Web-Native Hooks
+
+Where deployment includes HTTP-friendly edge devices or hybrid cloud controllers, Cohesix’s web-native hooks can coordinate ephemeral orchestration via lightweight POST/GET APIs. These hooks mount under `/srv/webhooks` and mirror Secure9P flows, preserving trace-based accountability while enabling broader edge compatibility.
+
+This feature is optional and only integrated when it enhances orchestration reach without compromising Plan9 semantics.
 
 ## Implementation Prompt
 
@@ -37,11 +57,12 @@ tries to remount on a standby. Persistent failures result in role demotion and n
 BuildDynamicOrchestration-074
 Goal: implement dynamic orchestration modules and validation.
 
-1. Create directories:
+1. Create:
    - src/orch_agent/
    - src/orch_metrics/
    - src/orch_learn/
-2. Add rc scripts to `/rc/orch/` for mount negotiation and health probes.
-3. Update build scripts to compile the new modules and install the rc helpers.
-4. Validate using `cohtrace` and replay through the runtime validator.
+2. Add rc scripts under /rc/orch/ for ephemeral circuit setup, negotiation, and health probes.
+3. Update scripts/cohesix_fetch_build.sh to build these modules and install rc helpers.
+4. Ensure ephemeral orchestration is staged into cohesix_boot.elf.
+5. Validate with cohtrace and replay through runtime validator.
 ```
