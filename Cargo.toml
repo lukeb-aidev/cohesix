@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Cargo.toml v0.48
+# Filename: Cargo.toml v0.49
 # Author: Lukas Bower
-# Date Modified: 2027-08-11
+# Date Modified: 2027-08-12
 [package]
 name    = "cohesix"
 version = "0.1.0"
@@ -12,16 +12,15 @@ build = "build.rs"
 [dependencies]
 log = "0.4"
 bitflags = "2"
-fatfs = "0.3.6"
 xmas-elf = "0.10"
-sha2 = "0.10"
-hkdf = "0.12"
+sha2 = { version = "0.10", default-features = false }
+hkdf = { version = "0.12", default-features = false }
 ed25519-dalek = { version = "2", default-features = false }
 serde_json = { version = "1", default-features = false, features = ["alloc"] }
 aes-gcm = { version = "0.10", default-features = false, features = ["aes"] }
-aead = "0.5"
-aes = "0.8"
-cohesix_9p = { package = "cohesix-9p", path = "./cohesix-9p" }
+aead = { version = "0.5", default-features = false }
+aes = { version = "0.8", default-features = false }
+cohesix_9p = { package = "cohesix-9p", path = "./cohesix-9p", default-features = false }
 # ninep crate required for CUDA remote dispatch
 ninep = "0.3"
 env_logger = { version = "0.11.7", optional = true }
@@ -31,6 +30,8 @@ once_cell = "1"
 serde = { version = "1", default-features = false, features = ["derive", "alloc"], optional = true }
 hex = "0.4"
 rmp-serde = { version = "1", default-features = false }
+num-traits = { version = "0.2", default-features = false, features = ["libm"] }
+rmp = { version = "0.8", default-features = false }
 
 [dependencies.curve25519-dalek]
 version = "3.2.1"
@@ -58,7 +59,7 @@ serde = { version = "1", features = ["std"] }
 
 [features]
 default = ["std"]
-std = []
+std = ["cohesix_9p/std"]
 sel4 = ["kernel_bin", "sel4_entry_bin"]
 rapier = ["rapier3d"]
 busybox = []

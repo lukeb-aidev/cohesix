@@ -2807,3 +2807,7 @@
 ## [v0.430] - 2027-08-11
 ### Fixed
 - Configured serde_json and related crates for alloc-only mode to support sel4 no_std builds.
+## [v0.431] - 2027-08-12
+### Changed
+- Cargo.toml dependencies now build under no_std by default for cohesix_root.
+- num-traits switched to libm backend; sha2, hkdf, rmp now disable std.
