@@ -1,0 +1,68 @@
+// CLASSIFICATION: COMMUNITY
+// Filename: rust_build_matrix_fix_plan_20250706_113727.log v1.0
+// Author: Codex Bot
+// Date Modified: 2025-07-06
+
+# Rust Build Matrix Fix Plan
+
+The log `logs/rust_build_matrix_20250706_111342.log` highlights several categories of build failures. Below are the key issues with references and proposed fixes.
+
+## 1. Unused cargo config keys
+- Warnings like `unused config key build.build-std` appear at lines 6-53 and again near the end of the log【a4e142†L1-L17】.
+- These occur because `.cargo/config.toml` defines `[build] build-std` and `build-std-features` which are ignored by stable cargo.
+
+**Proposed fix**
+- Move these keys under `[unstable]` and invoke cargo with `+nightly`.
+- Alternatively remove them and rely on explicit `-Z build-std` flags in build scripts.
+
+## 2. Missing rust-src when using build-std
+- Early in the build cargo fails with missing rust-src and suggests installing it【623489†L1-L5】.
+
+**Proposed fix**
+- Ensure `rustup component add rust-src --toolchain nightly-x86_64-unknown-linux-gnu` runs before invoking any build.
+- Update `scripts/cohesix_fetch_build.sh` to verify rust-src availability.
+
+## 3. Crates requiring std
+- `serde` and `byteorder` trigger `can't find crate for std` errors for the sel4 target【b28a5d†L1-L12】.
+- Notes also mention the sel4 target may not support the standard library【259e9d†L1-L12】.
+- `rmp-serde` depends on std and causes `serde` to enable its std feature.
+
+**Proposed fix**
+- Replace `rmp-serde` with a no_std-friendly alternative or rewrite serialization code.
+- Confirm all dependencies set `default-features = false` and enable `alloc` if needed.
+- If some components still require std, add `-Z build-std` with `std` and `panic_abort` to the build command.
+
+## 4. Missing core macros and imports
+- Errors show `cannot find macro \`assert\``【62966a†L1-L11】, `panic`【673be9†L1-L5】 and `cfg`【6b768d†L1-L12】.
+- Unresolved imports from `self::core::*` appear around lines 901–1607【4a99e5†L1-L13】.
+
+**Proposed fix**
+- Ensure crates import macros from `core` using `use core::{panic, assert, cfg, ...};` or enable the core prelude.
+- Patch dependencies like `byteorder` to rely solely on core when no_std.
+
+## 5. Undefined Ok/Err symbols
+- Errors `not found in this scope` for `Ok` start near line 920【59e65b†L1-L32】.
+- Caused by missing imports of `core::result::Result::{Ok, Err}` in no_std builds.
+
+**Proposed fix**
+- Update affected code (byteorder and others) to import these symbols explicitly.
+
+## 6. Build target configuration
+- Repeated notes show the sel4-aarch64 target lacks standard library support【259e9d†L1-L12】.
+
+**Proposed fix**
+- Keep SEL4 binaries no_std and build with `-Z build-std=core,alloc`.
+- If std usage remains, add `-Z build-std=std,panic_abort` and update the target JSON accordingly.
+
+## Summary
+1. Install rust-src and clean `.cargo/config.toml`.
+2. Remove or replace std-dependent crates like rmp-serde.
+3. Patch byteorder and others for core macros.
+4. Ensure build scripts use appropriate `-Z build-std` flags.
+
+After implementing these steps, run `scripts/cohesix_fetch_build.sh` and verify all binaries compile.
+
+=== GENERATED SUB-TASKS ===
+- **Patch no_std dependencies:** Refactor or replace rmp-serde and fix byteorder macros.
+- **Update build scripts:** Ensure rust-src is installed and pass `-Z build-std` as required.
+- **Clean cargo config:** Move build-std keys under `[unstable]` or remove them.
