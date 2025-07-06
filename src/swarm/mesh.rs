@@ -2,6 +2,7 @@
 // Filename: mesh.rs v0.3
 // Author: Lukas Bower
 // Date Modified: 2025-08-17
+#![cfg(feature = "std")]
 
 #[allow(unused_imports)]
 use alloc::{boxed::Box, string::String, vec::Vec};

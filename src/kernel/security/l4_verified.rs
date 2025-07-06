@@ -2,6 +2,7 @@
 // Filename: l4_verified.rs v1.1
 // Author: Lukas Bower
 // Date Modified: 2025-07-20
+#![cfg(feature = "std")]
 
 #[allow(unused_imports)]
 use alloc::{boxed::Box, string::String, vec::Vec};

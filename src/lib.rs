@@ -127,6 +127,7 @@ pub mod sh_loop;
 pub mod shell;
 
 /// Plan 9 userland helpers
+#[cfg(feature = "std")]
 pub mod plan9;
 
 /// POSIX compatibility helpers

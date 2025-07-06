@@ -2,6 +2,7 @@
 // Filename: router.rs v1.2
 // Author: Lukas Bower
 // Date Modified: 2026-12-31
+#![cfg(feature = "std")]
 
 /// Telemetry routing and collection utilities.
 use log::debug;

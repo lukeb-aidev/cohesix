@@ -2,6 +2,7 @@
 // Filename: metrics.rs v0.2
 // Author: Lukas Bower
 // Date Modified: 2026-12-31
+#![cfg(feature = "std")]
 
 use cohesix_9p::fs::global_fs;
 use serde_json::json;
