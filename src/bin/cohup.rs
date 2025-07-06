@@ -4,6 +4,7 @@
 // Date Modified: 2025-07-22
 
 use clap::Parser;
+extern crate cohesix;
 use cohesix::binlib::up_main::{run, Cli};
 use cohesix::telemetry::trace::init_panic_hook;
 use cohesix::CohError;
