@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Cargo.toml v0.50
+# Filename: Cargo.toml v0.51
 # Author: Lukas Bower
-# Date Modified: 2027-08-13
+# Date Modified: 2027-08-18
 [package]
 name    = "cohesix"
 version = "0.1.0"
@@ -125,7 +125,6 @@ ureq = { version = "3.0.12", default-features = false }
 tiny_http = "0.12"
 chrono = "0.4"
 serde_yaml = { version = "0.9.34-deprecated", default-features = false }
-image = { version = "0.25", default-features = false, features = ["jpeg"] }
 toml = { version = "0.8" }
 
 [target.'cfg(not(no_std))'.dependencies]
