@@ -14,34 +14,33 @@ help:
 	@echo "  make dev         - Build with std for Linux dev"
 	@echo "  make sel4        - Build for seL4 (no_std)"
 	@echo "  make uefi        - Build minimal UEFI target (no_std)"
+	@echo "  make full        - Build all binaries for seL4 (full pipeline)"
+	@echo "  make stage       - Stage Python CLI scripts"
 	@echo "  make clean       - Clean target directory"
 	@echo ""
 
 dev:
 	@echo "$(GREEN)==> Building Cohesix with default features (std for Linux dev)...$(RESET)"
-	cargo build --bin cohesix_root
+	cargo build --bins
 
 sel4:
 	@echo "$(GREEN)==> Building Cohesix for seL4 (no_std, using sel4-aarch64.json)...$(RESET)"
 	cargo build --no-default-features --features "sel4" \
-		--target cohesix_root/sel4-aarch64.json --bin cohesix_root
+		--target cohesix_root/sel4-aarch64.json --bins
 
 uefi:
 	@echo "$(GREEN)==> Building Cohesix for minimal UEFI (no_std, aarch64-unknown-uefi)...$(RESET)"
 	cargo build --no-default-features --features "kernel_bin minimal_uefi" \
-		--target aarch64-unknown-uefi --bin kernel
-
-clean:
-	@echo "$(GREEN)==> Cleaning workspace...$(RESET)"
-	cargo clean
+		--target aarch64-unknown-uefi --bins
 
 full:
 	@echo "$(GREEN)==> Building all Cohesix Rust binaries for seL4 (full pipeline)...$(RESET)"
 	RUSTFLAGS="-C debuginfo=2" \
-	cargo build --release --no-default-features --features "std,busybox,sel4,kernel_bin,minimal_uefi" \
-		--target aarch64-unknown-linux-musl --bin cohesix_root
+	cargo build --release --no-default-features \
+		--features "std,busybox,sel4,kernel_bin,minimal_uefi" \
+		--target aarch64-unknown-linux-musl --bins
 
-	@for bin in cohcc cohesix_build cohesix_cap cohesix_trace cohrun_cli cohagent cohrole cohrun cohup cohesix_root kernel logdemo init sel4_entry; do \
+	@for bin in cohcc cohesix_build cohesix_cap cohesix_trace cohrun_cli cohagent cohrole cohrun cohup cohesix kernel logdemo init sel4_entry; do \
 		BIN_PATH="target/aarch64-unknown-linux-musl/release/$$bin"; \
 		if [ -f "$$BIN_PATH" ]; then \
 			cp "$$BIN_PATH" out/bin/$$bin; \
@@ -65,3 +64,7 @@ stage:
 			echo "⚠️ $$script not found"; \
 		fi \
 	done
+
+clean:
+	@echo "$(GREEN)==> Cleaning workspace...$(RESET)"
+	cargo clean
