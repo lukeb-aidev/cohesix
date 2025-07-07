@@ -36,4 +36,11 @@ SECTIONS {
         KEEP(*(.bss*))
         *(COMMON)
     } :data :NONE
+
+    /* dedicated heap region mapped inside the ELF image */
+    .heap (NOLOAD) : ALIGN(0x1000) {
+        _heap_start = .;
+        KEEP(*(.heap*))
+        _heap_end = .;
+    } :data
 }

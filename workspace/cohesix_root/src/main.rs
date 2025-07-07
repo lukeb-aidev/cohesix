@@ -46,6 +46,7 @@ unsafe extern "C" fn setenv(_name: *const c_char, _val: *const c_char, _overwrit
 }
 
 struct BumpAllocator;
+#[link_section = ".heap"]
 static mut HEAP: [u8; 64 * 1024] = [0; 64 * 1024];
 static mut OFFSET: usize = 0;
 
@@ -54,11 +55,14 @@ unsafe impl GlobalAlloc for BumpAllocator {
         let align_mask = layout.align() - 1;
         let mut off = (OFFSET + align_mask) & !align_mask;
         if off + layout.size() > HEAP.len() {
+            putstr("alloc fail");
             return ptr::null_mut();
         }
         let ptr = HEAP.as_mut_ptr().add(off);
         off += layout.size();
         OFFSET = off;
+        putstr("alloc ptr:");
+        put_hex(ptr as usize);
         ptr
     }
     unsafe fn dealloc(&self, _ptr: *mut u8, _layout: Layout) {}
@@ -77,6 +81,24 @@ pub extern "C" fn _start() -> ! {
 
 fn putstr(s: &str) {
     for &b in s.as_bytes() {
+        unsafe { seL4_DebugPutChar(b) };
+    }
+    unsafe { seL4_DebugPutChar(b'\n') };
+}
+
+fn put_hex(mut val: usize) {
+    let mut buf = [0u8; 18];
+    buf[0] = b'0';
+    buf[1] = b'x';
+    for i in 0..16 {
+        let digit = (val & 0xf) as u8;
+        buf[17 - i] = match digit {
+            0..=9 => b'0' + digit,
+            _ => b'A' + (digit - 10),
+        };
+        val >>= 4;
+    }
+    for &b in &buf {
         unsafe { seL4_DebugPutChar(b) };
     }
     unsafe { seL4_DebugPutChar(b'\n') };
@@ -175,6 +197,10 @@ fn exec_init(role: &str) -> ! {
 
 fn main() {
     putstr("COHESIX_BOOT_OK");
+    putstr("heap start:");
+    unsafe { put_hex(HEAP.as_ptr() as usize); }
+    putstr("heap end:");
+    unsafe { put_hex(HEAP.as_ptr() as usize + HEAP.len()); }
     load_bootargs();
     let role_cstr = env_var("COHROLE");
     let role = role_cstr
