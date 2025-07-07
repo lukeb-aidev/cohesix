@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: main.rs v0.7
+// Filename: main.rs v0.8
 // Author: Lukas Bower
-// Date Modified: 2025-07-07
+// Date Modified: 2027-10-02
 #![no_std]
 #![no_main]
 #![feature(alloc_error_handler)]
@@ -35,6 +35,13 @@ fn put_hex(val: usize) {
         putchar(*c);
     }
     putchar(b'\n');
+}
+
+fn print_heap_bounds(start: usize, end: usize) {
+    putstr("heap_start");
+    put_hex(start);
+    putstr("heap_end");
+    put_hex(end);
 }
 
 #[no_mangle]
@@ -76,14 +83,17 @@ unsafe impl GlobalAlloc for BumpAllocator {
         let align_mask = layout.align() - 1;
         let heap_start = &__heap_start as *const u8 as usize;
         let heap_end = &__heap_end as *const u8 as usize;
-        let mut off = (OFFSET + align_mask) & !align_mask;
-        if heap_start + off + layout.size() > heap_end {
-            putstr("alloc fail");
-            return ptr::null_mut();
+        let off = (OFFSET + align_mask) & !align_mask;
+        let end_ptr = heap_start + off + layout.size();
+        if end_ptr > heap_end {
+            putstr("Allocation past heap end!");
+            put_hex(end_ptr);
+            loop {
+                core::hint::spin_loop();
+            }
         }
         let ptr = (heap_start + off) as *mut u8;
-        off += layout.size();
-        OFFSET = off;
+        OFFSET = off + layout.size();
         putstr("alloc ptr:");
         put_hex(ptr as usize);
         ptr
@@ -204,14 +214,7 @@ fn main() {
     putstr("COHESIX_BOOT_OK");
     let heap_start = unsafe { &__heap_start as *const u8 as usize };
     let heap_end = unsafe { &__heap_end as *const u8 as usize };
-    putchar(b'H');
-    putchar(b'e');
-    putchar(b'a');
-    putchar(b'p');
-    putchar(b':');
-    putchar(b'\n');
-    put_hex(heap_start);
-    put_hex(heap_end);
+    print_heap_bounds(heap_start, heap_end);
     assert!(heap_start >= 0xffffff8040000000 && heap_start < 0xffffff8040633000, "Heap start out of range");
     load_bootargs();
     let role_cstr = env_var("COHROLE");
