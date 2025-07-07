@@ -4,14 +4,14 @@
 // Date Modified: 2025-08-17
 // Random token generation uses rand; this is skipped for UEFI builds.
 
-#[allow(unused_imports)]
-use alloc::{boxed::Box, string::String, vec::Vec};
 use crate::utils::tiny_ed25519::TinyEd25519;
 use crate::utils::tiny_rng::TinyRng;
 use crate::{coh_error, CohError};
 use aead::Aead;
 /// AES-GCM encrypted SLM container loader.
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 use std::fs;
 
 /// Memory token representing access to a decrypted SLM payload.
@@ -29,8 +29,10 @@ impl SLMDecryptor {
         }
         let nonce = Nonce::from_slice(&data[0..12]);
         let cipher = &data[12..];
-        let aead = Aes256Gcm::new_from_slice(key)?;
-        let plain = aead.decrypt(nonce, cipher).map_err(|e| coh_error!("{}", e))?;
+        let aead = Aes256Gcm::new_from_slice(key).map_err(|e| coh_error!("{}", e))?;
+        let plain = aead
+            .decrypt(nonce, cipher)
+            .map_err(|e| coh_error!("{}", e))?;
         let mut rng = TinyRng::new(0xDEC0DE);
         Ok((plain, MemoryToken(rng.next_u64())))
     }

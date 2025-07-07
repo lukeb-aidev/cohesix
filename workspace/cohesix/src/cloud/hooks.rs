@@ -11,7 +11,7 @@ use ureq::Agent;
 pub fn run_cloud_hooks() {
     if let Ok(url) = fs::read_to_string("/srv/cloudinit") {
         if let Ok(resp) = Agent::new_with_defaults().get(url.trim()).call() {
-            if let Ok(body) = resp.into_string() {
+            if let Ok(body) = resp.into_body().read_to_string() {
                 fs::create_dir_all("/srv/agents").ok();
                 let _ = fs::write("/srv/agents/config.json", body);
             }

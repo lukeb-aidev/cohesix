@@ -38,7 +38,7 @@ pub fn start() {
         std::io::stdout().flush().ok();
         let _ = Agent::new_with_defaults()
             .post(&endpoint)
-            .send_string("status=ready");
+            .send("status=ready");
         log(&format!(
             "Worker registered to Queen cloud endpoint at {} (source: {})",
             url, source

@@ -17,19 +17,33 @@ use core::ptr;
 #[no_mangle]
 unsafe extern "C" fn seL4_DebugPutChar(_c: u8) {}
 #[no_mangle]
-unsafe extern "C" fn open(_path: *const c_char, _flags: i32, _mode: i32) -> i32 { -1 }
+unsafe extern "C" fn open(_path: *const c_char, _flags: i32, _mode: i32) -> i32 {
+    -1
+}
 #[no_mangle]
-unsafe extern "C" fn read(_fd: i32, _buf: *mut u8, _len: usize) -> isize { 0 }
+unsafe extern "C" fn read(_fd: i32, _buf: *mut u8, _len: usize) -> isize {
+    0
+}
 #[no_mangle]
-unsafe extern "C" fn close(_fd: i32) -> i32 { 0 }
+unsafe extern "C" fn close(_fd: i32) -> i32 {
+    0
+}
 #[no_mangle]
-unsafe extern "C" fn write(_fd: i32, _buf: *const u8, _len: usize) -> isize { 0 }
+unsafe extern "C" fn write(_fd: i32, _buf: *const u8, _len: usize) -> isize {
+    0
+}
 #[no_mangle]
-unsafe extern "C" fn execv(_path: *const c_char, _argv: *const *const c_char) -> i32 { 0 }
+unsafe extern "C" fn execv(_path: *const c_char, _argv: *const *const c_char) -> i32 {
+    0
+}
 #[no_mangle]
-unsafe extern "C" fn getenv(_name: *const c_char) -> *const c_char { core::ptr::null() }
+unsafe extern "C" fn getenv(_name: *const c_char) -> *const c_char {
+    core::ptr::null()
+}
 #[no_mangle]
-unsafe extern "C" fn setenv(_name: *const c_char, _val: *const c_char, _overwrite: i32) -> i32 { 0 }
+unsafe extern "C" fn setenv(_name: *const c_char, _val: *const c_char, _overwrite: i32) -> i32 {
+    0
+}
 
 struct BumpAllocator;
 static mut HEAP: [u8; 64 * 1024] = [0; 64 * 1024];
@@ -99,7 +113,11 @@ fn load_bootargs() {
                 kb.push(0);
                 let mut vb = Vec::from(v.as_bytes());
                 vb.push(0);
-                setenv(kb.as_ptr() as *const c_char, vb.as_ptr() as *const c_char, 1);
+                setenv(
+                    kb.as_ptr() as *const c_char,
+                    vb.as_ptr() as *const c_char,
+                    1,
+                );
             }
         }
     }
@@ -142,7 +160,11 @@ fn role_script(role: &str) -> &'static [u8] {
 
 fn exec_init(role: &str) -> ! {
     let script = role_script(role);
-    let argv = [BIN_RC.as_ptr() as *const c_char, script.as_ptr() as *const c_char, ptr::null()];
+    let argv = [
+        BIN_RC.as_ptr() as *const c_char,
+        script.as_ptr() as *const c_char,
+        ptr::null(),
+    ];
     unsafe {
         execv(BIN_RC.as_ptr() as *const c_char, argv.as_ptr());
     }
@@ -155,7 +177,9 @@ fn main() {
     putstr("COHESIX_BOOT_OK");
     load_bootargs();
     let role_cstr = env_var("COHROLE");
-    let role = role_cstr.map(|c| c.to_str().unwrap()).unwrap_or("DroneWorker");
+    let role = role_cstr
+        .map(|c| c.to_str().unwrap())
+        .unwrap_or("DroneWorker");
     write_role(role);
     putstr("[root] launching userland...");
     exec_init(role);
@@ -176,4 +200,3 @@ fn alloc_error(_layout: core::alloc::Layout) -> ! {
         core::hint::spin_loop();
     }
 }
-
