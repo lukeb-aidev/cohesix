@@ -5,7 +5,11 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 #[cfg(not(feature = "std"))]
 extern crate alloc;
-use core::prelude::v1::*;
+use core::option::Option;
+use core::option::Option::{Some, None};
+use core::iter::Iterator;
+use core::marker::Sized;
+use core::convert::AsRef;
 
 /// Naive implementations of memchr-style searches using safe loops.
 /// These are used in place of the upstream memchr crate to avoid
