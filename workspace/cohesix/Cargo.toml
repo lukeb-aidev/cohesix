@@ -129,8 +129,5 @@ image = { version = "0.25", default-features = false, features = ["jpeg"] }
 toml = { version = "0.8" }
 
 [target.'cfg(not(no_std))'.dependencies]
-once_cell = { version = "1", default-features = false, features = ["alloc"] }
 curve25519-dalek = { version = "3.2.1", default-features = false, features = ["fiat_u64_backend"] }
 
-[target.'cfg(no_std)'.dependencies]
-curve25519-dalek = { version = "3.2.1", default-features = false, features = ["u64_backend"] }
