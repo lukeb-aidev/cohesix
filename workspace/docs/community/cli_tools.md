@@ -1,13 +1,13 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: cli_tools.md v1.1
+// Filename: cli_tools.md v1.2
 // Author: Lukas Bower
-// Date Modified: 2027-02-01
+// Date Modified: 2027-09-01
 
 # CLI Tools Reference
 
 This document provides a concise reference for all Cohesix command line tools.
 Each tool runs in the Plan9 userland unless noted otherwise.  Examples assume
-execution from a shell environment with trace logging enabled.
+execution from a shell environment with trace logging enabled. For a high level list see [go_tools_overview.md](go_tools_overview.md).
 
 ## Index
 - [cohcli](#cohcli)
@@ -59,7 +59,7 @@ cohcap grant camera --to worker03
 A TCP-to-Unix-socket proxy for 9P testing. Runs on Linux hosts during build or
 simulation.
 ```bash
-coh-9p-helper --listen :5640 --socket /tmp/coh9p.sock
+coh-9p-helper --listen :5640 --socket /srv/coh9p.sock
 ```
 
 ## gui-orchestrator (Go helper)

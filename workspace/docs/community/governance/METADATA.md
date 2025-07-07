@@ -34,8 +34,10 @@
 | SECURITY_REVIEW.md         | v0.2    | 2025-07-13    | COMMUNITY      |     |              |
 | COMPILER_REVIEW.md         | v0.1    | 2025-07-11    | COMMUNITY      |          |              
 | AGENTS_AND_CLI.md          | v1.2    | 2025-07-26    | COMMUNITY      |     |              |
-| cli_tools.md              | v1.1    | 2027-02-01    | COMMUNITY      |     |
-| guides/PLAN9_SERVICE_TOOLS.md | v0.1    | 2027-02-01    | COMMUNITY      |     |
+| cli_tools.md              | v1.2    | 2027-09-01    | COMMUNITY      |
+| go_tools_overview.md      | v0.1    | 2027-09-01    | COMMUNITY      |
+| guides/COH_9P_HELPER.md   | v0.1    | 2027-09-01    | COMMUNITY      |     |
+| guides/PLAN9_SERVICE_TOOLS.md | v0.2    | 2027-09-01    | COMMUNITY      |     |
 | LICENSES_AND_REUSE.md     | v1.5    | 2026-12-31    | COMMUNITY      |     |              |
 | ROLE_POLICY.md            | v1.1    | 2026-09-30    | COMMUNITY      |     |              |
 | AGENTS.md                 | v2.2    | 2025-07-22    | COMMUNITY      |     |              |
