@@ -243,8 +243,8 @@
 | src/root/main.rs | v0.3 | 2026-12-31 | COMMUNITY | | |
 | src/bin/cohesix_root.rs | v0.4 | 2027-08-13 | COMMUNITY | | |
 | src/utils/gpu.rs | v0.2 | 2026-12-31 | COMMUNITY | | |
-| workspace/cohesix_root/Cargo.toml | v0.2 | 2027-08-16 | COMMUNITY | | |
-| workspace/cohesix_root/src/main.rs | v0.5 | 2027-08-16 | COMMUNITY | | |
+| workspace/cohesix_root/Cargo.toml | v0.3 | 2027-08-17 | COMMUNITY | | |
+| workspace/cohesix_root/src/main.rs | v0.6 | 2027-08-17 | COMMUNITY | | |
 | src/cuda/runtime.rs | v0.16 | 2026-12-31 | COMMUNITY | | |
 | src/cli/mod.rs | v1.3 | 2026-10-08 | COMMUNITY | | |
 | src/cli/cohtrace.rs | v0.4 | 2026-10-13 | COMMUNITY | | |
