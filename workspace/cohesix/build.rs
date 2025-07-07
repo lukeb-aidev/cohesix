@@ -3,6 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2026-08-21
 
+#[cfg(feature = "sel4")]
 fn main() {
     use std::{env, path::Path, process::Command};
 
@@ -24,3 +25,6 @@ fn main() {
 
     let _ = Command::new("true");
 }
+
+#[cfg(not(feature = "sel4"))]
+fn main() {}
