@@ -3,7 +3,7 @@
 # Author: Lukas Bower
 # Date Modified: 2026-12-31
 .PHONY: build cuda-build all go-build go-test c-shims help fmt lint check \
-	boot boot-x86_64 boot-aarch64 cohrun cohbuild cohtrace cli_cap gui-orchestrator test test-python check-tab-safety iso boot-grub qemu qemu-check
+        boot boot-x86_64 boot-aarch64 cohrun cohbuild cohtrace cli_cap gui-orchestrator cloud test test-python check-tab-safety iso boot-grub qemu qemu-check
 
 PLATFORM ?= $(shell uname -m)
 TARGET ?= $(PLATFORM)
@@ -118,9 +118,12 @@ cli_cap: ## Run cohcap CLI
 	cargo run -p cohcli_tools --bin cli_cap -- $(ARGS)
 
 gui-orchestrator: ## Build gui-orchestrator binary
-	@echo "Building gui-orchestrator"
-	@mkdir -p out/bin
-	@GOWORK=$(CURDIR)/go/go.work go build -o out/bin/gui-orchestrator ./go/cmd/gui-orchestrator
+        @echo "Building gui-orchestrator"
+        @mkdir -p out/bin
+        @GOWORK=$(CURDIR)/go/go.work go build -o out/bin/gui-orchestrator ./go/cmd/gui-orchestrator
+
+cloud: ## Build cloud service binary
+        cargo build --bin cloud
 
 iso: # Updated to clarify legacy status
 	@echo "Creating legacy GRUB-based ISO (likely unused for UEFI)..." # Updated to clarify legacy status
