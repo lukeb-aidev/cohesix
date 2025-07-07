@@ -5,11 +5,11 @@
 
 #[allow(unused_imports)]
 use alloc::{boxed::Box, string::String, vec::Vec};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Deserialize, PartialEq)]
+#[derive(Debug, Deserialize, Serialize, PartialEq)]
 pub struct RoleConfig {
     pub telemetry_interval: Option<u64>,
     pub trace_policy: Option<String>,

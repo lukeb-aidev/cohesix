@@ -9,11 +9,11 @@ use alloc::{boxed::Box, string::String, vec::Vec};
 /// Runtime capability map loaded from `/etc/cohcap.json`.
 /// Maps roles to allowed syscall verbs and path prefixes.
 use once_cell::sync::Lazy;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 
-#[derive(Deserialize, Default)]
+#[derive(Deserialize, Serialize, Default)]
 struct RoleCaps {
     verbs: Vec<String>,
     paths: Vec<String>,

@@ -7,13 +7,13 @@
 use alloc::{boxed::Box, string::String, vec::Vec};
 use crate::CohError;
 /// Handles atomic upgrades and rollbacks of Cohesix bundles.
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs::{self, OpenOptions};
 use std::io::Read;
 use std::io::Write;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct UpgradeManifest {
     pub version: String,
     pub hash: String,

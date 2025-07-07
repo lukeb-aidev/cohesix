@@ -14,20 +14,20 @@ use crate::{coh_error, CohError};
 use std::fs;
 use std::path::Path;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::agents::runtime::AgentRuntime;
 use crate::cohesix_types::Role;
 use crate::physical::sensors;
 use crate::trace::recorder;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 struct ScenarioConfig {
     id: String,
     agents: Vec<AgentSpec>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 struct AgentSpec {
     id: String,
     role: String,

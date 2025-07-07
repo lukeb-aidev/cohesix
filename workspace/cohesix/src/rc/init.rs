@@ -14,11 +14,11 @@ use std::time::Instant;
 use log::warn;
 
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use toml;
 
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct InitConf {
     init_mode: Option<String>,
     start_services: Option<Vec<String>>,
