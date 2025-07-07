@@ -7,5 +7,6 @@
 members = [
     "cohesix",
     "cohesix-9p"
+    "cohesix_root"
 ]
-exclude = ["cohesix_root"]
+
