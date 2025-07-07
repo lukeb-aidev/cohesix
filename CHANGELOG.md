@@ -2871,3 +2871,8 @@
 - Rootserver vs userland build split documented in sel4_userland_split.md.
 - New `make` targets: `rootserver`, `userland`, `full`.
 
+## [v0.442] - 2027-10-01
+### Fixed
+- Kernel heap now mapped inside ELF data segment for seL4 aarch64.
+- Linker script adds `.heap` region and root task prints heap bounds.
+
