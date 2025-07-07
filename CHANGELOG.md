@@ -2841,3 +2841,8 @@
 - main.rs now loads boot args, exposes role, and execs role init script.
 - Cargo.toml trimmed to serde dependency only.
 
+
+## [v0.437] - 2027-08-17
+### Changed
+- Updated ureq client initialization using Agent::new_with_defaults.
+- Enabled once_cell dependency and alloc features for hex and aead.

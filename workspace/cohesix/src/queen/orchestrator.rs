@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: orchestrator.rs v0.4
+// Filename: orchestrator.rs v0.5
 // Author: Lukas Bower
-// Date Modified: 2025-07-11
+// Date Modified: 2027-08-17
 
 #[allow(unused_imports)]
 use alloc::{boxed::Box, string::String, vec::Vec};
@@ -173,7 +173,7 @@ impl QueenOrchestrator {
         for rec in self.workers.values_mut() {
             if now.saturating_sub(rec.last_seen) > self.timeout.as_secs() {
                 let url = format!("http://{}/reboot", rec.ip);
-                let _ = HttpAgent::new().post(&url).call();
+                let _ = HttpAgent::new_with_defaults().post(&url).call();
                 rec.status = "restarting".into();
                 rec.last_seen = now;
             }
