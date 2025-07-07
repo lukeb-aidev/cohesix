@@ -2846,3 +2846,7 @@
 ### Changed
 - Updated ureq client initialization using Agent::new_with_defaults.
 - Enabled once_cell dependency and alloc features for hex and aead.
+## [v0.438] - 2027-08-18
+### Changed
+- Removed unused image crate from workspace/cohesix Cargo.toml.
+
