@@ -109,6 +109,10 @@ path = "../../tools/cli/src/bin/cli_cap.rs"
 name = "cohesix_build"
 path = "../../tools/cli/src/bin/cohbuild.rs"
 
+[[bin]]
+name = "cloud"
+path = "src/bin/cloud.rs"
+
 
 
 [package.metadata.cohesix]
