@@ -19,10 +19,12 @@ __pycache__/
 # VS Code
 .vscode/
 
-# Ignored scripts
-scripts/*.bak
+# macOS
 .DS_Store
 __MACOSX/
+
+# Ignored scripts
+scripts/*.bak
 *.orig.*.bak
 *.tar.gz
 cohesix_backup_*.tar.gz
