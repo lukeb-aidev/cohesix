@@ -11,36 +11,33 @@ RESET := \033[0m
 help:
 	@echo ""
 	@echo "Cohesix build targets:"
-	@echo "  make dev         - Build with std for Linux dev"
-	@echo "  make sel4        - Build for seL4 (no_std)"
-	@echo "  make uefi        - Build minimal UEFI target (no_std)"
-	@echo "  make full        - Build all binaries for seL4 (full pipeline)"
+	@echo "  make sel4_root   - Build seL4 rootserver binaries (no_std, custom target)"
+	@echo "  make cli_tools   - Build CLI tools and services with musl (std)"
+	@echo "  make full        - Build everything (rootserver + CLI tools)"
 	@echo "  make stage       - Stage Python CLI scripts"
 	@echo "  make clean       - Clean target directory"
 	@echo ""
 
-dev:
-	@echo "$(GREEN)==> Building Cohesix with default features (std for Linux dev)...$(RESET)"
-	cargo build --bins
-
-sel4:
-	@echo "$(GREEN)==> Building Cohesix for seL4 (no_std, using sel4-aarch64.json)...$(RESET)"
-	cargo build --no-default-features --features "sel4" \
-		--target cohesix_root/sel4-aarch64.json --bins
-
-uefi:
-	@echo "$(GREEN)==> Building Cohesix for minimal UEFI (no_std, aarch64-unknown-uefi)...$(RESET)"
-	cargo build --no-default-features --features "kernel_bin minimal_uefi" \
-		--target aarch64-unknown-uefi --bins
-
-full:
-	@echo "$(GREEN)==> Building all Cohesix Rust binaries for seL4 (full pipeline)...$(RESET)"
+sel4_root:
+	@echo "$(GREEN)==> Building Cohesix seL4 rootserver and sel4_entry (no_std)...$(RESET)"
 	RUSTFLAGS="-C debuginfo=2" \
-	cargo build --release --no-default-features \
-		--features "std,busybox,sel4,kernel_bin,minimal_uefi" \
-		--target aarch64-unknown-linux-musl --bins
+	cargo build --release --no-default-features --features "sel4,kernel_bin,minimal_uefi" \
+		--target cohesix_root/sel4-aarch64.json --bin cohesix_root --bin sel4_entry
+	@for bin in cohesix_root sel4_entry; do \
+		BIN_PATH="target/$(shell basename cohesix_root/sel4-aarch64.json)/release/$$bin"; \
+		if [ -f "$$BIN_PATH" ]; then \
+			cp "$$BIN_PATH" out/bin/$$bin; \
+			echo "✅ Copied $$bin to out/bin"; \
+		else \
+			echo "⚠️ $$bin not found at $$BIN_PATH"; \
+		fi \
+	done
 
-	@for bin in cohcc cohesix_build cohesix_cap cohesix_trace cohrun_cli cohagent cohrole cohrun cohup cohesix kernel logdemo init sel4_entry; do \
+cli_tools:
+	@echo "$(GREEN)==> Building Cohesix CLI tools and services (musl)...$(RESET)"
+	RUSTFLAGS="-C debuginfo=2" \
+	cargo build --release --target aarch64-unknown-linux-musl --bins
+	@for bin in cohcc cohesix_build cohesix_cap cohesix_trace cohrun_cli cohagent cohrole cohrun cohup cohesix kernel logdemo init; do \
 		BIN_PATH="target/aarch64-unknown-linux-musl/release/$$bin"; \
 		if [ -f "$$BIN_PATH" ]; then \
 			cp "$$BIN_PATH" out/bin/$$bin; \
@@ -49,6 +46,8 @@ full:
 			echo "⚠️ $$bin not found at $$BIN_PATH"; \
 		fi \
 	done
+
+full: sel4_root cli_tools
 
 stage:
 	@echo "$(GREEN)==> Staging Python CLI scripts...$(RESET)"
