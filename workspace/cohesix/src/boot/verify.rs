@@ -7,18 +7,18 @@
 use alloc::{boxed::Box, string::String, vec::Vec};
 use crate::CohError;
 /// Kernel and OS hash verification at boot.
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 struct ManifestEntry {
     path: String,
     sha256: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 struct Manifest {
     files: Vec<ManifestEntry>,
 }
