@@ -2865,3 +2865,9 @@
 - Workspace now includes `cohesix-secure9p` and CLI tools crates.
 - Updated Cargo manifests and metadata versions for all workspace crates.
 
+
+## [v0.441] - 2027-09-30
+### Added
+- Rootserver vs userland build split documented in sel4_userland_split.md.
+- New `make` targets: `rootserver`, `userland`, `full`.
+
