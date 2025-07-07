@@ -1,11 +1,13 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: main.rs v0.5
 // Author: Lukas Bower
-// Date Modified: 2027-08-15
+// Date Modified: 2027-08-16
 #![no_std]
 #![no_main]
 
 extern crate alloc;
+use core::{result::Result, marker::Sized};
+use core::result::Result::{Ok, Err};
 
 use core::panic::PanicInfo;
 use alloc::{string::String, vec::Vec};
