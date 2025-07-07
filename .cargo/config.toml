@@ -9,20 +9,15 @@ directory = "vendor"
 
 [target.aarch64-unknown-linux-musl]
 linker = "ld.lld"
-rustflags = [
-  "-C", "link-arg=-T./link.ld",
-]
-
 
 [target.x86_64-unknown-linux-musl]
 linker = "ld.lld"
-rustflags = [
-  "-C", "link-arg=-nostdlib",
-  "-C", "link-arg=-Tlink.ld",
-]
 
 [target.sel4-aarch64]
 linker = "ld.lld"
+rustflags = [
+  "-C", "link-arg=-T/workspace/cohesix/link.ld",
+]
 
 [unstable]
 build-std = ["core", "alloc", "compiler_builtins"]
