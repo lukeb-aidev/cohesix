@@ -450,6 +450,7 @@ echo "🔧 Building Rust binary: kernel"
 cd "$ROOT/workspace"
 RUSTFLAGS="-C linker=ld.lld -C link-arg=-T$ROOT/link.ld" \
   cargo +nightly build -Z build-std=core,alloc --release --bin kernel \
+  --features "kernel_bin minimal_uefi" \
   --target "$ROOT/workspace/cohesix_root/sel4-aarch64.json"
 echo "✅ Finished building: kernel"
 
