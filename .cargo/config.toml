@@ -23,4 +23,3 @@ build-std-features = ["compiler-builtins-mem"]
 [env]
 RUSTC_BOOTSTRAP = "1"
 
-cargo-features = ["build-std"]
