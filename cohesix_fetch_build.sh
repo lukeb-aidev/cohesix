@@ -445,13 +445,12 @@ readelf -l "$ROOT/workspace/target_root/sel4-aarch64/release/cohesix_root" \
   > "$LOG_DIR/ld_verbose_$(date +%Y%m%d_%H%M%S).log" 2>&1
 echo "✅ ELF program headers written to log"
 
- # Build kernel with its required features
+# Build kernel with its required features
 echo "🔧 Building Rust binary: kernel"
 cd "$ROOT/workspace"
-RUSTFLAGS="-C link-arg=-T$ROOT/link.ld" \
-  cargo build --release --bin kernel \
-  --features "kernel_bin,minimal_uefi" \
-  --target aarch64-unknown-linux-musl
+RUSTFLAGS="-C linker=ld.lld -C link-arg=-T$ROOT/link.ld" \
+  cargo +nightly build -Z build-std=core,alloc --release --bin kernel \
+  --target "$ROOT/workspace/cohesix_root/sel4-aarch64.json"
 echo "✅ Finished building: kernel"
 
 # Build logdemo with its required features
@@ -861,8 +860,15 @@ echo "⚠️  Summary of Errors and Warnings:" | tee -a "$LOG_FILE" >&3
 tail -n 10 "$SUMMARY_ERRORS" || echo "✅ No critical issues found" | tee -a "$LOG_FILE" >&3
 
 echo "🪵 Full log saved to $LOG_FILE" >&3
-echo "=== AUDIT SUMMARY ==="
-echo "Old script included ISO creation and QEMU -cdrom tests."
-echo "New script uses only elfloader + kernel ELF direct boot."
-echo "All other environment checks, CUDA, BusyBox, Go, mandoc logic have been preserved."
+
+# QEMU bare metal launch command (final boot test)
+log "🧪 Running final QEMU bare metal boot test..."
+qemu-system-aarch64 -M virt,gic-version=2 -cpu cortex-a57 -m 512M \
+  -kernel "$ROOT/out/bin/elfloader" \
+  -initrd "$ROOT/out/bin/cohesix_root.elf" \
+  -serial mon:stdio -nographic \
+  -d int,mmu,page,guest_errors,unimp,cpu_reset \
+  -D "$LOG_DIR/qemu_baremetal_$(date +%Y%m%d_%H%M%S).log" || true
+log "✅ QEMU bare metal boot test complete."
+
 
