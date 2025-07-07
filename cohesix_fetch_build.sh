@@ -448,7 +448,7 @@ echo "✅ ELF program headers written to log"
  # Build kernel with its required features
 echo "🔧 Building Rust binary: kernel"
 cd "$ROOT/workspace"
-RUSTFLAGS="-C link-arg=-T$ROOT/workspace/link.ld" \
+RUSTFLAGS="-C link-arg=-T$ROOT/link.ld" \
   cargo build --release --bin kernel \
   --features "kernel_bin,minimal_uefi" \
   --target aarch64-unknown-linux-musl
@@ -456,7 +456,7 @@ echo "✅ Finished building: kernel"
 
 # Build logdemo with its required features
 echo "🔧 Building Rust binary: logdemo"
-RUSTFLAGS="-C link-arg=-T$ROOT/workspace/link.ld" \
+RUSTFLAGS="-C link-arg=-T$ROOT/link.ld" \
   cargo build --release --bin logdemo \
   --features "minimal_uefi" \
   --target aarch64-unknown-linux-musl
@@ -464,7 +464,7 @@ echo "✅ Finished building: logdemo"
 
  # Build init with its required features (static musl, explicit crt-static, separate target dir)
 echo "🔧 Building Rust binary: init"
-RUSTFLAGS="-C target-feature=+crt-static" \
+RUSTFLAGS="-C target-feature=+crt-static -C link-arg=-T$ROOT/link.ld" \
   cargo build --release --bin init \
   --features "minimal_uefi" \
   --target aarch64-unknown-linux-musl \
