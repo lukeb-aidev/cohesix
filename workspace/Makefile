@@ -25,10 +25,10 @@ sel4_root:
 	@set -e; \
 	echo "$(GREEN)==> Building sel4_root...$(RESET)"; \
 	mkdir -p out/bin; \
-	cargo +nightly build -Z build-std=core,alloc --release \
-	        --manifest-path cohesix_root/Cargo.toml \
-	        --target cohesix_root/sel4-aarch64.json; \
-        BIN_PATH="cohesix_root/target/sel4-aarch64/release/cohesix_root"; \
+	RUSTFLAGS="-C link-arg=-Tlink.ld" cargo +nightly build -Z build-std=core,alloc --release \
+		--manifest-path cohesix_root/Cargo.toml \
+		--target cohesix_root/sel4-aarch64.json; \
+	BIN_PATH="cohesix_root/target/sel4-aarch64/release/cohesix_root"; \
 	[ -f "$$BIN_PATH" ] && cp "$$BIN_PATH" out/bin/sel4_root || echo "⚠️ sel4_root not found"
 
 
