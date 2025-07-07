@@ -1,0 +1,2 @@
+   text	   data	    bss	    dec	    hex	filename
+ 320644	1048608	      8	1369260	 14e4ac	/home/ubuntu/cohesix/out/bin/cohesix_root.elf
