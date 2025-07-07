@@ -2876,3 +2876,8 @@
 - Kernel heap now mapped inside ELF data segment for seL4 aarch64.
 - Linker script adds `.heap` region and root task prints heap bounds.
 
+## [v0.443] - 2027-10-02
+### Fixed
+- Bump allocator bounds checked against `__heap_end` with logging.
+- Root task prints each allocation and halts on overflow.
+
