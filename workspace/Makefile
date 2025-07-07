@@ -21,7 +21,7 @@ help:
 sel4_root:
 	@echo "$(GREEN)==> Building Cohesix seL4 rootserver and sel4_entry (no_std)...$(RESET)"
 	RUSTFLAGS="-C debuginfo=2" \
-	cargo build -Z build-std=core,alloc --release --no-default-features --features "sel4,kernel_bin,minimal_uefi" \
+	cargo +nightly build -Z build-std=core,alloc --release --no-default-features --features "sel4,kernel_bin,minimal_uefi" \
 		--target cohesix_root/sel4-aarch64.json --bin sel4_entry --bin kernel
 	@for bin in sel4_entry kernel; do \
 		BIN_PATH="target/$(shell basename cohesix_root/sel4-aarch64.json)/release/$$bin"; \
