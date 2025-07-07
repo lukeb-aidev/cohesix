@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: orchestrator.rs v0.8
+// Filename: orchestrator.rs v0.9
 // Author: Lukas Bower
-// Date Modified: 2026-12-31
+// Date Modified: 2027-08-17
 
 #[allow(unused_imports)]
 use alloc::{boxed::Box, string::String, vec::Vec};
@@ -46,7 +46,9 @@ pub fn register_queen(cloud_url: &str) -> Result<QueenId, CohError> {
     let host = hostname.to_string();
     let url = format!("{}/register", cloud_url.trim_end_matches('/'));
     let body = serde_json::json!({ "hostname": host });
-    let resp = Agent::new().post(&url).send_string(&body.to_string())?;
+    let resp = Agent::new_with_defaults()
+        .post(&url)
+        .send_string(&body.to_string())?;
     if !(200..300).contains(&resp.status()) {
         return Err(coh_error!("registration failed: {}", resp.status()));
     }
@@ -110,7 +112,7 @@ pub fn send_heartbeat(id: QueenId) -> Result<(), CohError> {
         worker_count,
     };
     let data = serde_json::to_string(&hb)?;
-    let resp = Agent::new()
+    let resp = Agent::new_with_defaults()
         .post(&format!("{}/heartbeat", url.trim_end_matches('/')))
         .send_string(&data)?;
     if !(200..300).contains(&resp.status()) {

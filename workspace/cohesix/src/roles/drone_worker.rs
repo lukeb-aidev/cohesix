@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: drone_worker.rs v0.4
+// Filename: drone_worker.rs v0.5
 // Author: Lukas Bower
-// Date Modified: 2026-10-25
+// Date Modified: 2027-08-17
 
 use crate::runtime::env::init::detect_cohrole;
 use crate::runtime::ServiceRegistry;
@@ -36,7 +36,9 @@ pub fn start() {
         let endpoint = format!("{}/worker_ping", url.trim_end_matches('/'));
         println!("Worker sending status=ready to {}", endpoint);
         std::io::stdout().flush().ok();
-        let _ = Agent::new().post(&endpoint).send_string("status=ready");
+        let _ = Agent::new_with_defaults()
+            .post(&endpoint)
+            .send_string("status=ready");
         log(&format!(
             "Worker registered to Queen cloud endpoint at {} (source: {})",
             url, source
