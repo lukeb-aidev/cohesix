@@ -1,8 +1,9 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Makefile v0.51
+# Filename: Makefile v0.52
 # Author: Lukas Bower
-# Date Modified: 2026-12-31
+# Date Modified: 2027-09-30
 .PHONY: build cuda-build all go-build go-test c-shims help fmt lint check \
+        rootserver userland full \
         boot boot-x86_64 boot-aarch64 cohrun cohbuild cohtrace cli_cap gui-orchestrator cloud test test-python check-tab-safety iso boot-grub qemu qemu-check
 
 PLATFORM ?= $(shell uname -m)
@@ -55,12 +56,12 @@ check: test ## Run full test suite
 
 .PHONY: test test-python
 test: ## Run Rust, Go and C tests
-       @echo "🦀 Rust tests …"
-       @RUST_BACKTRACE=1 cargo test --release || echo "cargo tests failed"
-       @echo "🐹 Go tests …"
-       @GOWORK=$(CURDIR)/go/go.work go test ./go/... || echo "go tests failed"
-       @echo "🧱 C tests …"
-       @cd build && ctest --output-on-failure || true
+	@echo "🦀 Rust tests …"
+	@RUST_BACKTRACE=1 cargo test --release || echo "cargo tests failed"
+	@echo "🐹 Go tests …"
+	@GOWORK=$(CURDIR)/go/go.work go test ./go/... || echo "go tests failed"
+	@echo "🧱 C tests …"
+	@cd build && ctest --output-on-failure || true
 
 go-build: ## Vet Go workspace
 	@echo "🔧 Go vet …"
@@ -99,6 +100,12 @@ boot: ## Build boot image for current PLATFORM
 print-env: ## Display compiler information
 	@echo "Toolchain: $(TOOLCHAIN)"
 	@echo "Compiler: $(CC)"
+rootserver: ## Build seL4 rootserver (sel4_entry + kernel)
+	@$(MAKE) -C workspace sel4_root
+userland: ## Build userland binaries and services
+	@$(MAKE) -C workspace cli_tools
+full: ## Build rootserver and userland
+	@$(MAKE) -C workspace full
 	help: ## List available make targets
 	@grep -E '^[a-zA-Z_-]+:.*##' Makefile \
 	| awk 'BEGIN{FS=":.*##"; printf "Cohesix top-level build targets:\n"} {printf "  %-12s %s\n", $$1, $$2}'
