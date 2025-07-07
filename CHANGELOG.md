@@ -2834,3 +2834,10 @@
 - cohesix_root now depends on serde with no_std alloc features.
 - main.rs imports Result, Ok, Err, and Sized from core for no_std compliance.
 
+## [v0.436] - 2027-08-17
+### Changed
+- cohesix_root rewritten as standalone seL4 root server without cohesix crate.
+- libm removed; only core, alloc and serde used.
+- main.rs now loads boot args, exposes role, and execs role init script.
+- Cargo.toml trimmed to serde dependency only.
+

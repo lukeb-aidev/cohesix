@@ -6,6 +6,8 @@ logs/
 
 # Rust
 /target/
+workspace/target/
+workspace/Cargo.lock
 **/*.rs.bk
 *.bak
 
