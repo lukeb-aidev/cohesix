@@ -1,7 +1,7 @@
 /* CLASSIFICATION: COMMUNITY */
-/* Filename: link.ld v0.4 */
+/* Filename: link.ld v0.5 */
 /* Author: Lukas Bower */
-/* Date Modified: 2027-01-15 */
+/* Date Modified: 2025-07-07 */
 /* SPDX-License-Identifier: BSD-2-Clause */
 
 ENTRY(_start)
@@ -38,9 +38,9 @@ SECTIONS {
     } :data :NONE
 
     /* dedicated heap region mapped inside the ELF image */
-    .heap (NOLOAD) : ALIGN(0x1000) {
-        _heap_start = .;
-        KEEP(*(.heap*))
-        _heap_end = .;
+    .heap : ALIGN(0x1000) {
+        __heap_start = .;
+        . = . + 0x100000; /* 1MB heap */
+        __heap_end = .;
     } :data
 }
