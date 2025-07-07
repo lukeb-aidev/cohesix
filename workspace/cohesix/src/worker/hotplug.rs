@@ -21,7 +21,7 @@ impl WorkerHotplug {
     pub fn join(node_id: &str) {
         if let Ok(ns) = fs::read_to_string("/srv/bootns") {
             let url = format!("http://{node_id}/sync_bootns");
-            let _ = ureq::post(&url).send_string(&ns);
+            let _ = ureq::post(&url).send(&ns);
         }
         ServiceMeshRegistry::register(node_id, "bootns", "/srv/bootns", "QueenPrimary", 60);
         let _ = ServiceMeshRegistry::mount_remote_service(node_id, "bootns");

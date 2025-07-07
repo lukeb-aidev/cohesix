@@ -8,9 +8,9 @@ extern crate alloc;
 
 #[allow(unused_imports)]
 use alloc::{boxed::Box, string::String, vec::Vec};
+use cohesix::coherr;
 #[cfg(feature = "kernel_bin")]
 use cohesix::kernel::config;
-use cohesix::coherr;
 
 fn main() {
     coherr!("Cohesix kernel stub");

@@ -3,14 +3,13 @@
 // Author: Lukas Bower
 // Date Modified: 2025-08-17
 
+use crate::CohError;
 #[allow(unused_imports)]
 use alloc::{boxed::Box, string::String, vec::Vec};
-use crate::CohError;
 /// Handles atomic upgrades and rollbacks of Cohesix bundles.
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs::{self, OpenOptions};
-use std::io::Read;
 use std::io::Write;
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -27,13 +26,12 @@ pub struct UpgradeManager;
 impl UpgradeManager {
     /// Apply an upgrade from the given URL.
     pub fn apply_from_url(url: &str) -> Result<(), CohError> {
-        let mut bytes = Vec::new();
-        ureq::get(url)
-            .call()?
-            .into_reader()
-            .read_to_end(&mut bytes)?;
+        let bytes = ureq::get(url).call()?.into_body().read_to_vec()?;
         let manifest_url = format!("{url}.manifest");
-        let manifest_text = ureq::get(&manifest_url).call()?.into_string()?;
+        let manifest_text = ureq::get(&manifest_url)
+            .call()?
+            .into_body()
+            .read_to_string()?;
         let manifest: UpgradeManifest = serde_json::from_str(&manifest_text)?;
         Self::apply_bundle(&bytes, &manifest)
     }
