@@ -2881,3 +2881,8 @@
 - Bump allocator bounds checked against `__heap_end` with logging.
 - Root task prints each allocation and halts on overflow.
 
+## [v0.444] - 2027-10-03
+### Fixed
+- Added dedicated `.stack` section and moved stack pointer to `__stack_end` on start.
+- Printed stack bounds at boot to trace runtime memory regions.
+

@@ -247,8 +247,8 @@
 | src/bin/cloud.rs | v0.1 | 2027-09-01 | COMMUNITY | | |
 | src/utils/gpu.rs | v0.2 | 2026-12-31 | COMMUNITY | | |
 | workspace/cohesix_root/Cargo.toml | v0.3 | 2027-08-17 | COMMUNITY | | |
-| workspace/cohesix_root/link.ld | v0.6 | 2027-10-02 | COMMUNITY | | |
-| workspace/cohesix_root/src/main.rs | v0.8 | 2027-10-02 | COMMUNITY | | |
+| workspace/cohesix_root/link.ld | v0.7 | 2027-10-03 | COMMUNITY | | |
+| workspace/cohesix_root/src/main.rs | v0.9 | 2027-10-03 | COMMUNITY | | |
 | src/cuda/runtime.rs | v0.16 | 2026-12-31 | COMMUNITY | | |
 | src/cli/mod.rs | v1.3 | 2026-10-08 | COMMUNITY | | |
 | src/cli/cohtrace.rs | v0.4 | 2026-10-13 | COMMUNITY | | |

@@ -1,7 +1,7 @@
 /* CLASSIFICATION: COMMUNITY */
-/* Filename: link.ld v0.6 */
+/* Filename: link.ld v0.7 */
 /* Author: Lukas Bower */
-/* Date Modified: 2027-10-02 */
+/* Date Modified: 2027-10-03 */
 /* SPDX-License-Identifier: BSD-2-Clause */
 
 ENTRY(_start)
@@ -43,4 +43,11 @@ SECTIONS {
         . = . + 0x100000; /* 1MB heap */
         __heap_end = .;
     } :data
+
+    /* reserved stack for root task */
+    .stack (NOLOAD) : ALIGN(0x1000) {
+        __stack_start = .;
+        . = . + 0x4000; /* 16KB stack */
+        __stack_end = .;
+    } :data :NONE
 }
