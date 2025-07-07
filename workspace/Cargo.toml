@@ -5,7 +5,7 @@
 
 [workspace]
 members = [
-    "cohesix",
+    "cohesix"
     "cohesix-9p"
     "cohesix_root"
 ]
