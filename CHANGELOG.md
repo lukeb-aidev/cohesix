@@ -2829,3 +2829,8 @@
 ### Added
 - logs/root_split_full_boot_validation_20250706_223559.log capturing simulated full boot validation.
 
+## [v0.435] - 2027-08-16
+### Changed
+- cohesix_root now depends on serde with no_std alloc features.
+- main.rs imports Result, Ok, Err, and Sized from core for no_std compliance.
+
