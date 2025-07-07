@@ -22,7 +22,7 @@ sel4_root:
 	@echo "$(GREEN)==> Building Cohesix seL4 rootserver and sel4_entry (no_std)...$(RESET)"
 	RUSTFLAGS="-C debuginfo=2" \
 	cargo build --release --no-default-features --features "sel4,kernel_bin,minimal_uefi" \
-		--target cohesix_root/sel4-aarch64.json --bin cohesix_root --bin sel4_entry
+		--target cohesix_root/sel4-aarch64.json --bin sel4_entry --bin kernel
 	@for bin in cohesix_root sel4_entry; do \
 		BIN_PATH="target/$(shell basename cohesix_root/sel4-aarch64.json)/release/$$bin"; \
 		if [ -f "$$BIN_PATH" ]; then \
