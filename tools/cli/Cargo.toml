@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: tools/cli/Cargo.toml v0.2
+# Filename: tools/cli/Cargo.toml v0.3
 # Author: Lukas Bower
-# Date Modified: 2025-08-16
+# Date Modified: 2027-09-30
 
 [package]
 name = "cohcli_tools"
@@ -11,9 +11,9 @@ edition = "2021"
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 chrono = "0.4"
-cohesix = { path = "../.." }
+cohesix = { path = "../../workspace/cohesix" }
 ninep = "0.3"
-cohesix-9p = { path = "../../cohesix-9p", features = ["posix"] }
+cohesix-9p = { path = "../../workspace/cohesix-9p", features = ["posix"] }
 
 [features]
 default = []
