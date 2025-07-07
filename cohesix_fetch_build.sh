@@ -423,14 +423,11 @@ else
   exit 1
 fi
 
-log "🔧 Building Rust components via Makefile..."
+log "🔧 Building Rust components via new Makefile..."
 cd "$ROOT/workspace"
-make cohesix_root
-make kernel
-make logdemo
-make init
-make cli
-log "✅ Rust components built"
+make clean
+make full
+log "✅ Rust components built with new Makefile"
 
  # Copy built binaries to staging, searching both musl and gnu targets
 mkdir -p "$STAGE_DIR/bin"
