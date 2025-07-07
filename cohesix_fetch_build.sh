@@ -439,15 +439,11 @@ RUSTFLAGS="-C linker=ld.lld -C link-arg=-T$ROOT/link.ld" cargo +nightly build -Z
 cd "$ROOT"
 echo "✅ Finished building: cohesix_root"
 
-# --- Verbose linker dry-run for ELF and link.ld layout check ---
-echo "🔍 Running ld.lld verbose dry-run..."
-ld.lld --verbose \
-  -T "$ROOT/link.ld" \
-  -o /dev/null \
-  "$ROOT/workspace/target_root/sel4-aarch64/release/deps/"*.o \
-  -nostdlib -z noexecstack -O1 \
+# --- Inspect final cohesix_root ELF with readelf ---
+echo "🔍 Inspecting final cohesix_root ELF with readelf..."
+readelf -l "$ROOT/workspace/target_root/sel4-aarch64/release/cohesix_root" \
   > "$LOG_DIR/ld_verbose_$(date +%Y%m%d_%H%M%S).log" 2>&1
-echo "✅ ld.lld verbose output written to $LOG_DIR"
+echo "✅ ELF program headers written to log"
 
  # Build kernel with its required features
 echo "🔧 Building Rust binary: kernel"
