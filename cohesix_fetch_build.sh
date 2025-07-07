@@ -67,7 +67,7 @@ SUMMARY_TEST_FAILS="$LOG_DIR/summary_test_failures.log"
 : > "$SUMMARY_ERRORS"
 : > "$SUMMARY_TEST_FAILS"
 exec 3>&1  # Save original stdout
-exec > >(tee -a "$LOG_FILE") 2>&1
+exec > >(tee -a "$LOG_FILE" >&3) 2>&1
 trap 'echo "❌ Build failed. Last 40 log lines:" >&3; tail -n 40 "$LOG_FILE" >&3' ERR
 
 log(){ echo "[$(date +%H:%M:%S)] $1" | tee -a "$LOG_FILE" >&3; }
@@ -423,62 +423,13 @@ else
   exit 1
 fi
 
-log "🔧 Building Rust components..."
-echo "== Rust build =="
-
-#
-# Build Rust binaries with correct targets and flags:
-# - kernel, logdemo, init, cohesix_root: aarch64-unknown-linux-musl + custom link.ld
-# - CLI tools: aarch64-unknown-linux-gnu, no custom linker
-#
-
-# Build cohesix_root for seL4 root server
-echo "🔧 Building Rust binary: cohesix_root"
-cd "$ROOT/workspace/cohesix_root"
-RUSTFLAGS="-C linker=ld.lld -C link-arg=-T$ROOT/link.ld" cargo +nightly build -Z build-std=core,alloc --release --target "$ROOT/workspace/cohesix_root/sel4-aarch64.json" --target-dir "$ROOT/workspace/target_root"
-cd "$ROOT"
-echo "✅ Finished building: cohesix_root"
-
-# --- Inspect final cohesix_root ELF with readelf ---
-echo "🔍 Inspecting final cohesix_root ELF with readelf..."
-readelf -l "$ROOT/workspace/target_root/sel4-aarch64/release/cohesix_root" \
-  > "$LOG_DIR/ld_verbose_$(date +%Y%m%d_%H%M%S).log" 2>&1
-echo "✅ ELF program headers written to log"
-
-# Build kernel with its required features
-echo "🔧 Building Rust binary: kernel"
+log "🔧 Building Rust components via Makefile..."
 cd "$ROOT/workspace"
-RUSTFLAGS="-C linker=ld.lld -C link-arg=-T$ROOT/link.ld" \
-  cargo +nightly build -Z build-std=core,alloc --release --bin kernel \
-  --features "kernel_bin minimal_uefi" \
-  --target "$ROOT/workspace/cohesix_root/sel4-aarch64.json"
-echo "✅ Finished building: kernel"
-
-# Build logdemo with its required features
-echo "🔧 Building Rust binary: logdemo"
-RUSTFLAGS="-C link-arg=-T/home/ubuntu/cohesix/link.ld" \
-  cargo build --release --bin logdemo \
-  --features "minimal_uefi" \
-  --target aarch64-unknown-linux-musl
-echo "✅ Finished building: logdemo"
-
- # Build init with its required features (static musl, explicit crt-static, separate target dir)
-echo "🔧 Building Rust binary: init"
-RUSTFLAGS="-C target-feature=+crt-static -C link-arg=-T/home/ubuntu/cohesix/link.ld" \
-  cargo build --release --bin init \
-  --features "minimal_uefi" \
-  --target aarch64-unknown-linux-musl \
-  --target-dir "$ROOT/workspace/target_static"
-echo "✅ Finished building: init"
-
- # Build other CLI tools without special features (GNU target, separate target_cli dir)
-for bin in cohcc cohesix_build cohesix_cap cohesix_trace; do
-  echo "🔧 Building Rust binary: $bin"
-  cargo build --release --bin "$bin" \
-    --target aarch64-unknown-linux-gnu \
-    --target-dir "$ROOT/workspace/target_cli"
-  echo "✅ Finished building: $bin"
-done
+make cohesix_root
+make kernel
+make logdemo
+make init
+make cli
 log "✅ Rust components built"
 
  # Copy built binaries to staging, searching both musl and gnu targets
