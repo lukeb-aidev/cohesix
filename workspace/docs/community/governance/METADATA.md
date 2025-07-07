@@ -242,6 +242,7 @@
 | src/sh_loop.rs | v0.1 | 2025-09-23 | COMMUNITY | | |
 | src/root/main.rs | v0.3 | 2026-12-31 | COMMUNITY | | |
 | src/bin/cohesix_root.rs | v0.4 | 2027-08-13 | COMMUNITY | | |
+| src/bin/cloud.rs | v0.1 | 2027-09-01 | COMMUNITY | | |
 | src/utils/gpu.rs | v0.2 | 2026-12-31 | COMMUNITY | | |
 | workspace/cohesix_root/Cargo.toml | v0.3 | 2027-08-17 | COMMUNITY | | |
 | workspace/cohesix_root/src/main.rs | v0.6 | 2027-08-17 | COMMUNITY | | |

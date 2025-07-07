@@ -2850,3 +2850,9 @@
 ### Changed
 - Removed unused image crate from workspace/cohesix Cargo.toml.
 
+## [v0.439] - 2027-09-01
+### Added
+- New `cloud` service binary with launcher in `src/bin/cloud.rs`.
+- Makefile target `cloud` builds the service.
+- Metadata updated for new file entry.
+
