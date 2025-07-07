@@ -8,6 +8,7 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -39,16 +40,21 @@ type Result struct {
 	Logs     []string `json:"logs"`
 }
 
+var jobDir = flag.String("job-dir", "/mnt/physics_jobs", "directory with physics jobs")
+var simDir = flag.String("sim-dir", "/sim", "simulation output directory")
+var logPath = flag.String("log-file", "/srv/trace/sim.log", "log file path")
+
 func writeStatus(processed int, lastErr, lastJob string) {
 	status := fmt.Sprintf("jobs_processed=%d\nlast_error=\"%s\"\nlast_job=\"%s\"\n", processed, lastErr, lastJob)
 	os.WriteFile("/srv/physics/status", []byte(status), 0644)
 }
 
 func main() {
+	flag.Parse()
 	os.MkdirAll("/srv/trace", 0755)
 	os.MkdirAll("/srv/physics", 0755)
-	os.MkdirAll("/sim", 0755)
-	logFile, err := os.OpenFile("/srv/trace/sim.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	os.MkdirAll(*simDir, 0755)
+	logFile, err := os.OpenFile(*logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		log.Fatalf("log open: %v", err)
 	}
@@ -59,7 +65,7 @@ func main() {
 	lastJob := ""
 
 	for {
-		matches, _ := filepath.Glob("/mnt/physics_jobs/physics_job_*.json")
+		matches, _ := filepath.Glob(filepath.Join(*jobDir, "physics_job_*.json"))
 		for _, jobPath := range matches {
 			data, err := os.ReadFile(jobPath)
 			if err != nil {
@@ -84,12 +90,12 @@ func main() {
 			}
 			world := World{FinalPosition: finalPos, FinalVelocity: job.InitialVelocity, Collided: false, EnergyRemaining: 0.95}
 			wdata, _ := json.MarshalIndent(world, "", "  ")
-			os.WriteFile("/sim/world.json", wdata, 0644)
+			os.WriteFile(filepath.Join(*simDir, "world.json"), wdata, 0644)
 
 			result := Result{JobID: job.JobID, Status: "completed", Steps: steps, Duration: float64(steps) / 100.0,
 				Logs: []string{"t=0.1 pos=[0.1,0,0]", "t=0.2 pos=[0.2,0,0]"}}
 			rdata, _ := json.MarshalIndent(result, "", "  ")
-			os.WriteFile("/sim/result.json", rdata, 0644)
+			os.WriteFile(filepath.Join(*simDir, "result.json"), rdata, 0644)
 
 			logger.Printf("completed %s", job.JobID)
 			lastErr = ""

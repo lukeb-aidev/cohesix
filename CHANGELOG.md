@@ -2856,8 +2856,11 @@
 - Makefile target `cloud` builds the service.
 - Metadata updated for new file entry.
 
-## [v0.440] - 2027-09-30
+## [v0.440] - 2027-09-01
 ### Changed
+- Added Plan9 Go tool overview and new COH_9P_HELPER guide.
+- Updated Plan9 service docs and CLI reference.
+- Unified Go binaries with consistent flags and /srv paths.
 - Revised top-level `Makefile` with `sel4_root`, `userland`, and `full` targets.
 - Workspace now includes `cohesix-secure9p` and CLI tools crates.
 - Updated Cargo manifests and metadata versions for all workspace crates.
