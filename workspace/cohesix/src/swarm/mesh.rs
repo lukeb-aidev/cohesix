@@ -131,7 +131,7 @@ impl ServiceMeshRegistry {
         }
         let url = format!("http://{node}/srv_lookup/{name}");
         if let Ok(resp) = ureq::get(&url).call() {
-            if let Ok(path) = resp.into_string() {
+            if let Ok(path) = resp.into_body().read_to_string() {
                 let entry = ServiceEntry {
                     node: node.into(),
                     name: name.into(),

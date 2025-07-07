@@ -5,7 +5,7 @@
 
 [workspace]
 members = [
-    "cohesix_root",
     "cohesix",
     "cohesix-9p"
 ]
+exclude = ["cohesix_root"]

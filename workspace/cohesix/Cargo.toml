@@ -47,7 +47,7 @@ serde = { version = "1", features = ["std"] }
 
 [features]
 default = ["std"]
-std = ["cohesix_9p", "cohesix_9p/std", "rmp-serde"]
+std = ["cohesix_9p", "cohesix_9p/std", "rmp-serde", "serde", "ninep"]
 sel4 = ["kernel_bin", "sel4_entry_bin"]
 rapier = ["rapier3d"]
 busybox = []
@@ -99,15 +99,15 @@ required-features = ["sel4", "kernel_bin", "minimal_uefi"]
 
 [[bin]]
 name = "cohesix_trace"
-path = "tools/cli/src/bin/cohtrace.rs"
+path = "../../tools/cli/src/bin/cohtrace.rs"
 
 [[bin]]
 name = "cohesix_cap"
-path = "tools/cli/src/bin/cli_cap.rs"
+path = "../../tools/cli/src/bin/cli_cap.rs"
 
 [[bin]]
 name = "cohesix_build"
-path = "tools/cli/src/bin/cohbuild.rs"
+path = "../../tools/cli/src/bin/cohbuild.rs"
 
 
 

@@ -22,3 +22,8 @@ strip = "debuginfo"
 # Ensures we keep this crate minimal and no_std compatible
 [package.metadata]
 no_std = true
+
+[[bin]]
+name = "cohesix_root"
+path = "src/main.rs"
+test = false

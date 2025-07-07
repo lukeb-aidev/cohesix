@@ -4,6 +4,7 @@
 // Author: Lukas Bower
 // Status: 🟢 Hydrated
 
+extern crate cohesix;
 /// Entry point for the Coh_CC compiler binary.
 use cohesix::binlib::compiler_main;
 

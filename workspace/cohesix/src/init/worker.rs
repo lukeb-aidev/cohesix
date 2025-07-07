@@ -7,11 +7,11 @@
 // Uses a monotonic counter for trace IDs; no RNG required.
 
 //! DroneWorker role initialisation.
-use cohesix::coherr;
-use std::fs::{self, OpenOptions};
-use std::io::Write;
+use crate::coherr;
 use crate::plan9::namespace::NamespaceLoader;
 use cohesix_9p::fs::InMemoryFs;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 fn log(msg: &str) {

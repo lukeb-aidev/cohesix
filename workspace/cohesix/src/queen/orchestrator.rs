@@ -173,7 +173,7 @@ impl QueenOrchestrator {
         for rec in self.workers.values_mut() {
             if now.saturating_sub(rec.last_seen) > self.timeout.as_secs() {
                 let url = format!("http://{}/reboot", rec.ip);
-                let _ = HttpAgent::new_with_defaults().post(&url).call();
+                let _ = HttpAgent::new_with_defaults().post(&url).send_empty();
                 rec.status = "restarting".into();
                 rec.last_seen = now;
             }
