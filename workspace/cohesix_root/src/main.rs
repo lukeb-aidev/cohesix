@@ -8,6 +8,8 @@
 extern crate alloc;
 use core::{result::Result, marker::Sized};
 use core::result::Result::{Ok, Err};
+use core::option::Option::{self, Some, None};
+use core::iter::Iterator;
 
 use core::panic::PanicInfo;
 use alloc::{string::String, vec::Vec};
