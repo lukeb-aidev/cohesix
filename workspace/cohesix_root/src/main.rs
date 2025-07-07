@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: main.rs v0.6
+// Filename: main.rs v0.7
 // Author: Lukas Bower
-// Date Modified: 2027-08-17
+// Date Modified: 2025-07-07
 #![no_std]
 #![no_main]
 #![feature(alloc_error_handler)]
@@ -13,6 +13,29 @@ use core::alloc::{GlobalAlloc, Layout};
 use core::ffi::{c_char, CStr};
 use core::panic::PanicInfo;
 use core::ptr;
+
+extern "C" {
+    static __heap_start: u8;
+    static __heap_end: u8;
+}
+
+fn putchar(c: u8) {
+    unsafe { seL4_DebugPutChar(c) };
+}
+
+fn put_hex(val: usize) {
+    let hex = b"0123456789abcdef";
+    let mut buf = [0u8; 18];
+    buf[0] = b'0';
+    buf[1] = b'x';
+    for i in 0..16 {
+        buf[17 - i] = hex[(val >> (i * 4)) & 0xf];
+    }
+    for c in &buf {
+        putchar(*c);
+    }
+    putchar(b'\n');
+}
 
 #[no_mangle]
 unsafe extern "C" fn seL4_DebugPutChar(_c: u8) {}
@@ -46,19 +69,19 @@ unsafe extern "C" fn setenv(_name: *const c_char, _val: *const c_char, _overwrit
 }
 
 struct BumpAllocator;
-#[link_section = ".heap"]
-static mut HEAP: [u8; 64 * 1024] = [0; 64 * 1024];
 static mut OFFSET: usize = 0;
 
 unsafe impl GlobalAlloc for BumpAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let align_mask = layout.align() - 1;
+        let heap_start = &__heap_start as *const u8 as usize;
+        let heap_end = &__heap_end as *const u8 as usize;
         let mut off = (OFFSET + align_mask) & !align_mask;
-        if off + layout.size() > HEAP.len() {
+        if heap_start + off + layout.size() > heap_end {
             putstr("alloc fail");
             return ptr::null_mut();
         }
-        let ptr = HEAP.as_mut_ptr().add(off);
+        let ptr = (heap_start + off) as *mut u8;
         off += layout.size();
         OFFSET = off;
         putstr("alloc ptr:");
@@ -81,27 +104,9 @@ pub extern "C" fn _start() -> ! {
 
 fn putstr(s: &str) {
     for &b in s.as_bytes() {
-        unsafe { seL4_DebugPutChar(b) };
+        putchar(b);
     }
-    unsafe { seL4_DebugPutChar(b'\n') };
-}
-
-fn put_hex(mut val: usize) {
-    let mut buf = [0u8; 18];
-    buf[0] = b'0';
-    buf[1] = b'x';
-    for i in 0..16 {
-        let digit = (val & 0xf) as u8;
-        buf[17 - i] = match digit {
-            0..=9 => b'0' + digit,
-            _ => b'A' + (digit - 10),
-        };
-        val >>= 4;
-    }
-    for &b in &buf {
-        unsafe { seL4_DebugPutChar(b) };
-    }
-    unsafe { seL4_DebugPutChar(b'\n') };
+    putchar(b'\n');
 }
 
 fn cstr(bytes: &[u8]) -> *const c_char {
@@ -197,10 +202,17 @@ fn exec_init(role: &str) -> ! {
 
 fn main() {
     putstr("COHESIX_BOOT_OK");
-    putstr("heap start:");
-    unsafe { put_hex(HEAP.as_ptr() as usize); }
-    putstr("heap end:");
-    unsafe { put_hex(HEAP.as_ptr() as usize + HEAP.len()); }
+    let heap_start = unsafe { &__heap_start as *const u8 as usize };
+    let heap_end = unsafe { &__heap_end as *const u8 as usize };
+    putchar(b'H');
+    putchar(b'e');
+    putchar(b'a');
+    putchar(b'p');
+    putchar(b':');
+    putchar(b'\n');
+    put_hex(heap_start);
+    put_hex(heap_end);
+    assert!(heap_start >= 0xffffff8040000000 && heap_start < 0xffffff8040633000, "Heap start out of range");
     load_bootargs();
     let role_cstr = env_var("COHROLE");
     let role = role_cstr
