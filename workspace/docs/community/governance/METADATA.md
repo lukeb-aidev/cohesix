@@ -188,8 +188,8 @@
 | justfile | v0.2 | 2026-12-31 | COMMUNITY | | |
 | src/roles/mod.rs | v0.2 | 2026-09-30 | COMMUNITY | | |
 | src/roles/interactive_aibooth.rs | v0.3 | 2026-12-31 | COMMUNITY | | |
-| src/roles/drone_worker.rs | v0.4 | 2026-10-25 | COMMUNITY | | |
-| src/roles/kiosk_interactive.rs | v0.4 | 2026-10-25 | COMMUNITY | | |
+| src/roles/drone_worker.rs | v0.5 | 2027-08-17 | COMMUNITY | | |
+| src/roles/kiosk_interactive.rs | v0.5 | 2027-08-17 | COMMUNITY | | |
 | src/roles/glasses_agent.rs | v0.1 | 2026-09-30 | COMMUNITY | | |
 | src/roles/sensor_relay.rs | v0.1 | 2026-09-30 | COMMUNITY | | |
 | src/roles/simulator_test.rs | v0.1 | 2026-09-30 | COMMUNITY | | |
@@ -249,7 +249,7 @@
 | src/cli/mod.rs | v1.3 | 2026-10-08 | COMMUNITY | | |
 | src/cli/cohtrace.rs | v0.4 | 2026-10-13 | COMMUNITY | | |
 | src/cloud/mod.rs | v0.2 | 2026-10-10 | COMMUNITY | | |
-| src/cloud/orchestrator.rs | v0.8 | 2026-12-31 | COMMUNITY | | |
+| src/cloud/orchestrator.rs | v0.9 | 2027-08-17 | COMMUNITY | | |
 | src/lib.rs | v1.12 | 2026-12-31 | COMMUNITY | | |
 | src/metrics.rs | v0.2 | 2026-12-31 | COMMUNITY | | |
 | src/printk.rs | v0.1 | 2026-12-31 | COMMUNITY | | |
