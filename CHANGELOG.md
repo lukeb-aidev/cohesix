@@ -2856,3 +2856,9 @@
 - Makefile target `cloud` builds the service.
 - Metadata updated for new file entry.
 
+## [v0.440] - 2027-09-30
+### Changed
+- Revised top-level `Makefile` with `sel4_root`, `userland`, and `full` targets.
+- Workspace now includes `cohesix-secure9p` and CLI tools crates.
+- Updated Cargo manifests and metadata versions for all workspace crates.
+

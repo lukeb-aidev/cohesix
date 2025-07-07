@@ -114,7 +114,7 @@
 | .bashrc | v0.1 | 2026-08-09 | COMMUNITY | | |
 | .cargo/config.toml | v0.14 | 2027-08-07 | COMMUNITY | | |
 | build.rs | v0.8 | 2026-08-21 | COMMUNITY | | |
-| Makefile | v0.50 | 2026-10-16 | COMMUNITY | | |
+| Makefile | v0.52 | 2027-09-30 | COMMUNITY | | |
 | src/kernel/main.c | v0.2 | 2025-07-22 | COMMUNITY | | |
 | src/kernel/main.rs | v0.3 | 2027-02-02 | COMMUNITY | | |
 | src/kernel/log.rs | v0.1 | 2027-02-02 | COMMUNITY | | |
@@ -179,12 +179,12 @@
 | scripts/build_busybox.sh | v0.8 | 2025-07-06 | COMMUNITY | | |
 | third_party/busybox/.config.coh | v1.0 | 2025-07-06 | COMMUNITY | | |
 | metadata.json | v0.1 | 2025-07-24 | COMMUNITY | | |
-| Cargo.toml | v0.51 | 2027-08-18 | COMMUNITY | | |
-| cohesix-9p/Cargo.toml | v0.6 | 2027-08-11 | COMMUNITY | | |
-| cohesix-secure9p/Cargo.toml | v0.3 | 2026-12-31 | COMMUNITY | | |
+| Cargo.toml | v0.52 | 2027-09-30 | COMMUNITY | | |
+| cohesix-9p/Cargo.toml | v0.7 | 2027-09-30 | COMMUNITY | | |
+| cohesix-secure9p/Cargo.toml | v0.5 | 2027-09-30 | COMMUNITY | | |
 | cohesix-secure9p/src/secure_stream.rs | v0.1 | 2026-12-31 | COMMUNITY | | |
 | cohesix-secure9p/src/tls_server.rs | v0.1 | 2026-12-31 | COMMUNITY | | |
-| tools/cli/Cargo.toml | v0.2 | 2025-08-16 | COMMUNITY | | |
+| tools/cli/Cargo.toml | v0.3 | 2027-09-30 | COMMUNITY | | |
 | justfile | v0.2 | 2026-12-31 | COMMUNITY | | |
 | src/roles/mod.rs | v0.2 | 2026-09-30 | COMMUNITY | | |
 | src/roles/interactive_aibooth.rs | v0.3 | 2026-12-31 | COMMUNITY | | |
