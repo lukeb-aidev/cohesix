@@ -15,8 +15,8 @@
 //
 //	go run ./go/cmd/coh-9p-helper --listen :5640 [--socket /path/to.sock]
 //
-// The socket path defaults to filepath.Join(os.TempDir(), "coh9p.sock") or the
-// value of the COH9P_SOCKET environment variable.
+// The socket path defaults to /srv/coh9p.sock or the value of the
+// COH9P_SOCKET environment variable.
 //
 // ─────────────────────────────────────────────────────────────
 package main
@@ -27,7 +27,6 @@ import (
 	"log"
 	"net"
 	"os"
-	"path/filepath"
 )
 
 var listenAddr = flag.String("listen", ":5640", "TCP address to listen on")
@@ -54,7 +53,7 @@ func main() {
 	if unixSocket == "" {
 		unixSocket = os.Getenv("COH9P_SOCKET")
 		if unixSocket == "" {
-			unixSocket = filepath.Join(os.TempDir(), "coh9p.sock")
+			unixSocket = "/srv/coh9p.sock"
 		}
 	}
 
