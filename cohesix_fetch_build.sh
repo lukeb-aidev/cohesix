@@ -435,7 +435,7 @@ echo "== Rust build =="
 # Build cohesix_root for seL4 root server
 echo "🔧 Building Rust binary: cohesix_root"
 cd "$ROOT/workspace/cohesix_root"
-RUSTFLAGS="-C linker=ld.lld -C link-arg=-Tlink.ld" cargo +nightly build -Z build-std=core,alloc --no-default-features --release --target "$ROOT/workspace/cohesix_root/sel4-aarch64.json" --bin cohesix_root --target-dir "$ROOT/workspace/target_root"
+RUSTFLAGS="-C linker=ld.lld -C link-arg=-Tlink.ld" cargo +nightly build -Z build-std=core,alloc --release --target "$ROOT/workspace/cohesix_root/sel4-aarch64.json" --target-dir "$ROOT/workspace/target_root"
 cd "$ROOT"
 echo "✅ Finished building: cohesix_root"
 

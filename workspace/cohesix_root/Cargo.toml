@@ -14,3 +14,7 @@ serde = { version = "1.0", default-features = false, features = ["derive", "allo
 [profile.release]
 panic = "abort"
 strip = "debuginfo"
+
+# Ensures we keep this crate minimal and no_std compatible
+[package.metadata]
+no_std = true
