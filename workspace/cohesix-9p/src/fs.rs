@@ -9,7 +9,7 @@ use alloc::{collections::BTreeMap, sync::Arc, vec::Vec, string::{String, ToStrin
 use crate::policy::{Access, SandboxPolicy};
 use core::sync::atomic::{AtomicU64, Ordering};
 use spin::RwLock;
-use once_cell::sync::OnceCell;
+use once_cell::sync::Lazy;
 
 /// Shared validator hook signature.
 pub type ValidatorHook = dyn Fn(&'static str, String, String, u64) + Send + Sync;
@@ -21,11 +21,11 @@ pub struct InMemoryFs {
     policy: RwLock<Option<SandboxPolicy>>,
 }
 
-static GLOBAL_FS: OnceCell<InMemoryFs> = OnceCell::new();
+static GLOBAL_FS: Lazy<InMemoryFs> = Lazy::new(|| InMemoryFs::new());
 
 /// Access the shared filesystem instance.
 pub fn global_fs() -> &'static InMemoryFs {
-    GLOBAL_FS.get_or_init(InMemoryFs::new)
+    &GLOBAL_FS
 }
 
 impl Default for InMemoryFs {
