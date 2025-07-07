@@ -9,8 +9,3 @@ members = [
     "cohesix",
     "cohesix-9p"
 ]
-
-[patch.crates-io]
-ninep = { path = "../third_party/ninep_portable" }
-memchr = { path = "../third_party/memchr_simple" }
-curve25519-dalek = { version = "3.2.1", default-features = false, features = ["u64_backend"] }
