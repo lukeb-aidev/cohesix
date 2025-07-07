@@ -50,6 +50,19 @@ Documents archived in `/canvas/archive/` are read-only and excluded from Codex w
 - GPU: /srv/cuda for CUDA-enabled agents; may proxy to external secure9p CUDA microserver; fallback logs gracefully
 - Licensing: Only Apache 2.0, MIT, or BSD allowed (see `LICENSES_AND_REUSE.md`)
 
+**Goal:** Achieve fully functional bare metal or QEMU boot into Cohesix userland with complete Plan 9 namespace, runtime validator, Rapier physics, and CUDA services operational.
+
+Boot Flow:
+
+```
++-------------+       +---------+       +------------+       +---------------+
+|    UEFI     |  -->  |  seL4   |  -->  | Cohesix Root|  --> | Plan9 Userland|
++-------------+       +---------+       +------------+       +---------------+
+                                |
+                        (Rust services, Go agents,
+                         CUDA via /srv/cuda, Rapier)
+```
+
 ---
 
 ## 3 · Hardware + CI Matrix
@@ -80,105 +93,122 @@ Codex must auto-detect supported hardware and pass tests accordingly.
 
 ## 5 · Bulletproof Workflow Rules
 
-1. Single-Step Hydration  
-   Every file must be hydrated to `/mnt/data/cohesix_active/` in the *same execution frame* as creation.  
-   Hydration and file creation must occur together — batching or deferred writes are not allowed.
+### 1. Single-Step Hydration  
+Every file must be hydrated to `/mnt/data/cohesix_active/` in the *same execution frame* as creation.  
+Hydration and file creation must occur together — batching or deferred writes are not allowed.
 
-2. Atomic Write Only  
-   Use temp-write + rename. Hydration is valid only if:
-   - File > 0 B  
-   - Contains valid headers  
-   - Structurally complete
+### 2. Atomic Write Only  
+Use temp-write + rename. Hydration is valid only if:
+- File > 0 B  
+- Contains valid headers  
+- Structurally complete
 
-3. No Placeholder Code  
-   CI fails on:
-   - Empty `fn` or `impl` blocks  
-   - `unimplemented!()`, `todo!()`, or stub comments
+### 3. No Placeholder Code  
+CI fails on:
+- Empty `fn` or `impl` blocks  
+- `unimplemented!()`, `todo!()`, or stub comments
 
-4. Mandatory Headers
-   Every canonical **source** file must include:
-   - A correctly formatted `CLASSIFICATION:` line for the file type (`//` for source, `#` for shell/config)
-   - `// Filename vX.Y`
-   - `// Author: Lukas Bower`
-   - `// Date Modified: YYYY-MM-DD`
-   - Registration in `METADATA.md`
-   - Entry in `CHANGELOG.md`
+### 4. Mandatory Headers
+Every canonical **source** file must include:
+- A correctly formatted `CLASSIFICATION:` line for the file type (`//` for source, `#` for shell/config)
+- `// Filename vX.Y`
+- `// Author: Lukas Bower`
+- `// Date Modified: YYYY-MM-DD`
+- Registration in `METADATA.md`
+- Entry in `CHANGELOG.md`
 
-   Shell scripts, YAML/TOML config files, and other plain-text assets may adjust header syntax to match their format. Manual validation is acceptable when CI time is constrained.
+Shell scripts, YAML/TOML config files, and other plain-text assets may adjust header syntax to match their format. Manual validation is acceptable when CI time is constrained.
 
-5. Watchdog Heartbeat (Live)  
-   Codex must:
-   - Check progress every 5 min  
-   - Auto-restart stalled tasks at 30 min  
-   - Log recovery attempts
+### 5. Watchdog Heartbeat (Live)  
+Codex must:
+- Check progress every 5 min  
+- Auto-restart stalled tasks at 30 min  
+- Log recovery attempts
 
-6. Directory Auto-Recovery  
-   Recreate `/mnt/data/cohesix_active/` if missing, wiped, or corrupt.
+### 6. Directory Auto-Recovery  
+Recreate `/mnt/data/cohesix_active/` if missing, wiped, or corrupt.
 
-7. Metadata Enforcement  
-   CI must validate:
-   - Every file in `METADATA.md` exists, is non-empty, and correctly versioned  
-   - No missing headers or version mismatches
+### 7. Metadata Enforcement  
+CI must validate:
+- Every file in `METADATA.md` exists, is non-empty, and correctly versioned  
+- No missing headers or version mismatches
 
-8. No Phantom Docs  
-   If a document isn’t in `METADATA.md`, it doesn’t exist.
+### 8. No Phantom Docs  
+If a document isn’t in `METADATA.md`, it doesn’t exist.
 
-9. Build Must Pass CI Matrix  
-   All Cohesix components must build and test successfully on both target architectures:
-   - `aarch64` (Jetson Orin Nano, Raspberry Pi 5)
-   - `x86_64` (AWS EC2, Intel NUC fallback)
+### 9. Build Must Pass CI Matrix  
+All Cohesix components must build and test successfully on both target architectures:
+- `aarch64` (Jetson Orin Nano, Raspberry Pi 5)
+- `x86_64` (AWS EC2, Intel NUC fallback)
 
-   Required tests:
-   - Kernel build (seL4 with Cohesix patches)
-   - Userland and shell init
-   - Python and Go runtime verification
-   - CLI and compiler tools (`cohesix`, `cohcc`)
-   - CUDA + Rapier support if applicable
-   - ISO image boot in QEMU to working shell
+Required tests:
+- Kernel build (seL4 with Cohesix patches)
+- Userland and shell init
+- Python and Go runtime verification
+- CLI and compiler tools (`cohesix`, `cohcc`)
+- CUDA + Rapier support if applicable
+- ISO image boot in QEMU to working shell
 
-   CI must gracefully skip unavailable targets (e.g., QEMU missing) but must log the skip.
+CI must gracefully skip unavailable targets (e.g., QEMU missing) but must log the skip.
 
-10. Physics + CUDA Checks  
-    - `/sim/` required if Rapier enabled  
-    - `/srv/cuda` must expose valid CUDA workload  
-    - Log + disable gracefully if unsupported  
-    - No GPL libraries allowed in CUDA stack
+### 10. Physics + CUDA Checks  
+- `/sim/` required if Rapier enabled  
+- `/srv/cuda` must expose valid CUDA workload  
+- Log + disable gracefully if unsupported  
+- No GPL libraries allowed in CUDA stack
 
-11. Upstream Sync Policy  
-    Rebase monthly from:
-    - seL4 master  
-    - 9front Plan9
+### 11. Upstream Sync Policy  
+Rebase monthly from:
+- seL4 master  
+- 9front Plan9
 
-12. OSS License Compliance  
-    All imported code must:
-    - Be Apache 2.0, MIT, or BSD  
-    - Include SPDX license header  
-    - Be logged in `LICENSES_AND_REUSE.md`
+### 12. OSS License Compliance  
+All imported code must:
+- Be Apache 2.0, MIT, or BSD  
+- Include SPDX license header  
+- Be logged in `LICENSES_AND_REUSE.md`
 
-13. Documentation Consolidation Guard  
-    Related technical docs must be merged (e.g., TOOLING_PLAN.md → IMPLEMENTATION_GUIDE.md).  
-    CI must reject duplication or drift.
+### 13. Documentation Consolidation Guard  
+Related technical docs must be merged (e.g., TOOLING_PLAN.md → IMPLEMENTATION_GUIDE.md).  
+CI must reject duplication or drift.
 
-14. TMPDIR + Writable Path Enforcement  
-    - All code must write to paths under `$TMPDIR`, `$COHESIX_ENS_TMP`, or `$COHESIX_TRACE_TMP` if applicable.  
-    - Hardcoded paths like `/tmp/foo.log` or `/var/...` are forbidden unless explicitly marked writable in container or CI.  
-    - Codex must enforce writable path compliance in test and runtime artifacts.
+### 14. TMPDIR + Writable Path Enforcement  
+- All code must write to paths under `$TMPDIR`, `$COHESIX_ENS_TMP`, or `$COHESIX_TRACE_TMP` if applicable.  
+- Hardcoded paths like `/tmp/foo.log` or `/var/...` are forbidden unless explicitly marked writable in container or CI.  
+- Codex must enforce writable path compliance in test and runtime artifacts.
 
 ---
 
 ## 6 · Testing Requirements
 
+### Unit Testing
 - Unit Testing: `cargo test`, `go test`, `pytest`  
+
+### Property Testing
 - Property Testing: Rust `proptest`, Haskell-style QuickCheck  
+
+### Boot & CI Validation
 - Boot & CI Validation: Full boot traces on Jetson/Pi  
+
+### Fuzzing
 - Fuzzing: 9P protocol + syscall surface  
+
+### Trace Replay
 - Trace Replay: Valid snapshots from `/history/` or `SimMount`  
+
+### Validator
 - Validator: Every syscall checked live by the runtime validator  
+
+### Role Override
 - Role Override: Simulate using `COHROLE=` env/bootarg
 
+### Ensemble Agent Cleanup
 - Ensemble agents must test under `$COHESIX_ENS_TMP`, and validate safe cleanup afterward.
+
+### QEMU Boot Scripts
 - QEMU boot scripts must support the UEFI → seL4 → Cohesix boot flow and gracefully skip if `qemu-system-x86_64` is missing or not installed.
 
+### Secure9p Integration
 - Secure9p integration tests for remote CUDA (Plan 9 to Alpine or Jetson) must validate fallback and graceful logging if unavailable
 
 ---
