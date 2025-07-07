@@ -14,7 +14,7 @@ serde = { version = "1", default-features = false, features = ["derive", "alloc"
 serde_json = { version = "1", default-features = false, features = ["alloc"] }
 spin = "0.10"
 once_cell = "1"
-curve25519-dalek = { version = "4.1.3", default-features = false, features = ["u64"] }
+curve25519-dalek = { version = "4.1.3", default-features = false }
 ninep = { version = "0.3", optional = true, default-features = false }
 
 [dev-dependencies]
