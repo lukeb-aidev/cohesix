@@ -3,9 +3,9 @@
 // Author: Lukas Bower
 // Date Modified: 2025-08-17
 
+use crate::CohError;
 #[allow(unused_imports)]
 use alloc::{boxed::Box, string::String, vec::Vec};
-use crate::CohError;
 use hex;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -25,9 +25,9 @@ pub fn run(trace_file: &str, cfg: &[NodeCfg]) -> Result<(), CohError> {
     let trace = fs::read_to_string(trace_file)?;
     let mut hashes: HashMap<String, Vec<u8>> = HashMap::new();
     for node in cfg {
-        let _ = ureq::post(&format!("{}/run_trace", node.url)).send_string(&trace);
+        let _ = ureq::post(&format!("{}/run_trace", node.url)).send(&trace);
         if let Ok(resp) = ureq::get(&format!("{}/trace_hash", node.url)).call() {
-            if let Ok(txt) = resp.into_string() {
+            if let Ok(txt) = resp.into_body().read_to_string() {
                 if let Ok(bytes) = hex::decode(txt.trim()) {
                     hashes.insert(node.id.clone(), bytes);
                     continue;

@@ -3,12 +3,12 @@
 // Author: Lukas Bower
 // Date Modified: 2027-08-17
 
-#[allow(unused_imports)]
-use alloc::{boxed::Box, string::String, vec::Vec};
 /// Cloud orchestration hooks for the Queen role.
 /// Provides registration and heartbeat routines for
 /// interacting with a remote orchestrator service.
 use crate::{coh_error, CohError};
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 use serde::Serialize;
 use std::fs;
 use std::io::{self, Write};
@@ -48,11 +48,14 @@ pub fn register_queen(cloud_url: &str) -> Result<QueenId, CohError> {
     let body = serde_json::json!({ "hostname": host });
     let resp = Agent::new_with_defaults()
         .post(&url)
-        .send_string(&body.to_string())?;
-    if !(200..300).contains(&resp.status()) {
+        .send(body.to_string())?;
+    if !(200..300).contains(&resp.status().as_u16()) {
         return Err(coh_error!("registration failed: {}", resp.status()));
     }
-    let id = resp.into_string().unwrap_or_else(|_| "queen".into());
+    let id = resp
+        .into_body()
+        .read_to_string()
+        .unwrap_or_else(|_| "queen".into());
     println!("Opening file: {:?}", crate::with_srv_root!("cloud"));
     fs::create_dir_all(crate::with_srv_root!("cloud")).ok();
     println!(
@@ -114,8 +117,8 @@ pub fn send_heartbeat(id: QueenId) -> Result<(), CohError> {
     let data = serde_json::to_string(&hb)?;
     let resp = Agent::new_with_defaults()
         .post(&format!("{}/heartbeat", url.trim_end_matches('/')))
-        .send_string(&data)?;
-    if !(200..300).contains(&resp.status()) {
+        .send(&data)?;
+    if !(200..300).contains(&resp.status().as_u16()) {
         return Err(coh_error!("heartbeat failed: {}", resp.status()));
     }
     println!("Opening file: {:?}", crate::with_srv_root!("cloud"));
