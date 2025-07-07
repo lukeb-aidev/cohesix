@@ -7,7 +7,7 @@
 use alloc::{boxed::Box, string::String, vec::Vec};
 use crate::CohError;
 use hex;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 /// Execute trace scenarios across multiple worker nodes and verify consistency.
 use std::collections::HashMap;
@@ -15,7 +15,7 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 
 /// Run a scenario distributed across the supplied workers.
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 pub struct NodeCfg {
     pub id: String,
     pub url: String,

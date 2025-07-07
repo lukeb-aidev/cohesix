@@ -11,12 +11,12 @@ use crate::CohError;
 use crate::agents::runtime::AgentRuntime;
 use crate::trace::recorder;
 use rapier3d::prelude::*;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 use std::time::Duration;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 struct CompiledScenario {
     id: String,
     trace: Vec<String>,

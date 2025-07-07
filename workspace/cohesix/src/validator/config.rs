@@ -5,12 +5,13 @@
 #![cfg(feature = "std")]
 
 use once_cell::sync::Lazy;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::RwLock;
 use thiserror::Error;
 
 /// Runtime configurable validator paths.
-#[derive(Clone)]
+#[derive(Clone, Deserialize, Serialize)]
 pub struct ValidatorConfig {
     pub log_dir: PathBuf,
     pub violations_dir: PathBuf,
