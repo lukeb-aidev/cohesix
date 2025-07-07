@@ -3,7 +3,10 @@
 // Author: Lukas Bower
 // Date Modified: 2027-02-02
 
-use core::fmt::{self, Write};
+use core::fmt;
+
+#[cfg(feature = "kernel_uart")]
+use core::fmt::Write;
 
 #[cfg(feature = "kernel_uart")]
 extern "C" {
@@ -16,7 +19,9 @@ struct UartWriter;
 #[cfg(feature = "kernel_uart")]
 impl Write for UartWriter {
     fn write_str(&mut self, s: &str) -> fmt::Result {
-        unsafe { uart_write(s.as_ptr(), s.len()); }
+        unsafe {
+            uart_write(s.as_ptr(), s.len());
+        }
         Ok(())
     }
 }
