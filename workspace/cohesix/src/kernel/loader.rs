@@ -92,7 +92,6 @@ fn log_segment_map(vaddr: usize, paddr: usize, size: usize) {
 mod tests {
     use super::*;
     use std::{env, fs::File, io::Write};
-    use std::path::PathBuf;
 
     #[test]
     fn load_minimal_elf() {
