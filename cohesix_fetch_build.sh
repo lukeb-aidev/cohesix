@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.94
+# Filename: cohesix_fetch_build.sh v0.95
 # Author: Lukas Bower
-# Date Modified: 2027-08-13
+# Date Modified: 2025-07-08
 #!/usr/bin/env bash
 #
 # Merged old script v0.89 features into current script.
@@ -532,6 +532,13 @@ fi
   -DKernelArmPL011=ON \
   -DKernelVerificationBuild=ON \
   -DROOT_SERVER="$ROOT/out/cohesix_root.elf"
+
+# Ensure debug flags are explicitly set in CMake cache
+cmake \
+  -DKernelPrinting=ON \
+  -DKernelDebugBuild=ON \
+  -DKernelVerificationBuild=ON \
+  .
 
 # Now run ninja in the workspace root
 ninja

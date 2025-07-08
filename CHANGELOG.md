@@ -3013,3 +3013,7 @@
 - **ExpandAIElFDebugAndPatch-078**: Watch table and integrity hash for tracked pointers.
 - **ExpandAIElFDebugAndPatch-078**: Reduced root heap to 512KB and enabled deterministic debug builds.
 
+## [v0.470] - 2025-07-08
+### Changed
+- **EnhanceKernelDebug-079**: coh  script now forces KernelPrinting, KernelDebugBuild, and KernelVerificationBuild via cmake.
+
