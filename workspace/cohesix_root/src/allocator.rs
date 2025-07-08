@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: allocator.rs v0.3
+// Filename: allocator.rs v0.4
 // Author: Lukas Bower
-// Date Modified: 2027-10-13
+// Date Modified: 2027-10-17
 
 use core::alloc::{GlobalAlloc, Layout};
 use crate::check_heap_ptr;
@@ -70,7 +70,7 @@ unsafe impl GlobalAlloc for BumpAllocator {
         if end_ptr > heap_end {
             putstr("alloc overflow");
             put_hex(end_ptr);
-            panic!("heap overflow");
+            crate::abort("heap overflow");
         }
         let ptr = (heap_start + off) as *mut u8;
         OFFSET = off + layout.size();
