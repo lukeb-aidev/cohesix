@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: .cargo/config.toml v0.16
+# Filename: .cargo/config.toml v0.17
 # Author: Lukas Bower
-# Date Modified: 2027-08-07
+# Date Modified: 2027-10-18
 
 [source.vendored-sources]
 directory = "vendor"
@@ -14,7 +14,7 @@ linker = "x86_64-linux-musl-gcc"
 
 [target.sel4-aarch64]
 linker = "ld.lld"
-rustflags = ["-C", "link-arg=-Tlink.ld"]
+rustflags = ["-C", "link-arg=-Tlink.ld", "-C", "link-arg=--gc-sections"]
 
 [unstable]
 build-std = ["core", "alloc", "compiler_builtins"]
