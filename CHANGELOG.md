@@ -2978,3 +2978,6 @@
 - **FullRootSourceFinalAuditFix-099**: switched to `dsb sy` barrier, zeroed all
   registers, and reasserted the stack pointer before calling `main`.
 - Enabled LTO for `cohesix_root` to strip unused formatting symbols.
+## [v0.462] - 2027-10-23
+### Fixed
+- **InvestigateAndFix-084**: Added overflow checks in BumpAllocator to prevent invalid heap pointers.
