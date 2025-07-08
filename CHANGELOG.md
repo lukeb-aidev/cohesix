@@ -2989,3 +2989,7 @@
 ### Fixed
 - **CorrelateDiagnostics-317**: cleared argument registers before entering `main` to prevent stray pointer faults.
 
+## [v0.465] - 2027-10-31
+### Fixed
+- **FinalRootCauseAnalysis-087**: zeroed all general-purpose registers in `entry.S` before Rust startup, preventing stray pointers at 0xffffff807f000000.
+
