@@ -1,10 +1,11 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: main.rs v0.21
+// Filename: main.rs v0.22
 // Author: Lukas Bower
-// Date Modified: 2027-10-19
+// Date Modified: 2027-10-22
 #![no_std]
 #![no_main]
 #![feature(alloc_error_handler, asm_experimental_arch, lang_items)]
+#![allow(internal_features)]
 
 extern crate alloc;
 
@@ -92,7 +93,7 @@ pub fn check_heap_ptr(ptr: usize) {
 
 pub fn check_rodata_ptr(ptr: usize) {
     let text_start: usize = 0xffffff8040000000;
-    let ro_end = unsafe { &__bss_start as *const u8 as usize };
+    let ro_end = core::ptr::addr_of!(__bss_start) as usize;
     if ptr < text_start || ptr >= ro_end {
         putstr("RODATA POINTER OUT OF RANGE");
         put_hex(ptr);

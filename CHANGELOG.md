@@ -2972,3 +2972,9 @@
 - **ZeroRegsAndSafeStart-092**: zero all general-purpose registers on entry,
   reset SP and FP, and enforce `dsb ish` and `isb` barriers after BSS clearing.
 - Updated `entry.S` to wipe registers again before `main`.
+
+## [v0.461] - 2027-10-22
+### Fixed
+- **FullRootSourceFinalAuditFix-099**: switched to `dsb sy` barrier, zeroed all
+  registers, and reasserted the stack pointer before calling `main`.
+- Enabled LTO for `cohesix_root` to strip unused formatting symbols.
