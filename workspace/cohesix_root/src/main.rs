@@ -1,18 +1,21 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: main.rs v0.15
+// Filename: main.rs v0.16
 // Author: Lukas Bower
-// Date Modified: 2027-10-11
+// Date Modified: 2027-10-12
 #![no_std]
 #![no_main]
-#![feature(alloc_error_handler, asm_experimental_arch)]
+#![feature(alloc_error_handler, asm_experimental_arch, lang_items)]
 
 extern crate alloc;
 
 mod allocator;
+mod lang_items;
+
+use core::arch::global_asm;
+global_asm!(include_str!("entry.S"));
 
 use alloc::vec::Vec;
 use core::ffi::{c_char, CStr};
-use core::panic::PanicInfo;
 use core::ptr;
 
 extern "C" {
@@ -120,7 +123,7 @@ unsafe extern "C" fn setenv(name: *const c_char, val: *const c_char, _overwrite:
 
 
 
-fn putstr(s: &str) {
+pub fn putstr(s: &str) {
     for &b in s.as_bytes() {
         putchar(b);
     }
@@ -220,7 +223,8 @@ fn exec_init(role: &str) -> ! {
     }
 }
 
-fn main() {
+#[no_mangle]
+pub extern "C" fn main() {
     putstr("COHESIX_BOOT_OK");
     let mut sp: usize;
     let mut fp: usize;
@@ -259,18 +263,3 @@ fn main() {
     exec_init(role);
 }
 
-#[panic_handler]
-fn panic(_info: &PanicInfo) -> ! {
-    putstr("[root] panic");
-    loop {
-        core::hint::spin_loop();
-    }
-}
-
-#[alloc_error_handler]
-fn alloc_error(_layout: core::alloc::Layout) -> ! {
-    putstr("[root] alloc_error");
-    loop {
-        core::hint::spin_loop();
-    }
-}
