@@ -2896,3 +2896,9 @@
 - Added missing `__stack_start` declaration for root task.
 - Bumped linker script version; heap and stack remain within RW segment.
 
+## [v0.447] - 2027-10-06
+### Fixed
+- Separated bump allocator into allocator.rs with overflow panic.
+- Stack pointer set via sel4_start.S and validated at runtime.
+- Linker script v0.7 maps .heap and .stack in RW segment.
+
