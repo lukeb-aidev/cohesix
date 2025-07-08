@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: loader.rs v0.2
+// Filename: loader.rs v0.3
 // Author: Lukas Bower
-// Date Modified: 2026-11-21
+// Date Modified: 2027-02-03
 
 #[allow(unused_imports)]
 use alloc::{boxed::Box, string::String, vec::Vec};
@@ -35,6 +35,7 @@ pub enum LoaderError {
 }
 
 const STACK_SIZE: usize = 0x4000;
+const MAX_USER_VADDR: usize = 0x800000;
 
 /// Load a user ELF from disk and return a prepared `ProcessContext`.
 pub fn load_user_elf(path: &str) -> Result<ProcessContext, LoaderError> {
@@ -60,6 +61,9 @@ pub fn load_user_elf(path: &str) -> Result<ProcessContext, LoaderError> {
             let file_size = ph.file_size() as usize;
             let vaddr = ph.virtual_addr() as usize;
             let offset = ph.offset() as usize;
+            if vaddr + mem_size > MAX_USER_VADDR {
+                return Err(LoaderError::ParseError);
+            }
             let mut mem = vec![0u8; mem_size];
             mem[..file_size].copy_from_slice(&data[offset..offset + file_size]);
             let paddr = mem.as_ptr() as usize;
@@ -75,6 +79,9 @@ pub fn load_user_elf(path: &str) -> Result<ProcessContext, LoaderError> {
     let entry = elf.header.pt2.entry_point() as usize;
     let stack = vec![0u8; STACK_SIZE];
     let stack_top = stack.as_ptr() as usize + stack.len();
+    if stack_top > MAX_USER_VADDR {
+        return Err(LoaderError::ParseError);
+    }
     std::mem::forget(stack);
     Ok(ProcessContext {
         entry_point: entry,
@@ -105,7 +112,7 @@ mod tests {
         ];
         file.write_all(&header).unwrap();
         let ctx = load_user_elf(path.to_str().unwrap());
-        assert!(ctx.is_ok());
+        assert!(ctx.is_err());
         std::fs::remove_file(path).ok();
     }
 }
