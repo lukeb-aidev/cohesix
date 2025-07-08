@@ -37,7 +37,7 @@ impl PhysicsAdapter {
         let gravity = vector![0.0, -9.81, 0.0];
         let params = IntegrationParameters::default();
         let mut island_manager = IslandManager::new();
-        let mut broad = BroadPhase::new();
+        let mut broad = DefaultBroadPhase::new();
         let mut narrow = NarrowPhase::new();
         let mut joints = ImpulseJointSet::new();
         let mut multibody = MultibodyJointSet::new();

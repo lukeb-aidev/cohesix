@@ -23,7 +23,7 @@ pub fn run_demo() {
     let mut bodies = RigidBodySet::new();
     let mut colliders = ColliderSet::new();
     let mut island_manager = IslandManager::new();
-    let mut broad = BroadPhase::new();
+    let mut broad = DefaultBroadPhase::new();
     let mut narrow = NarrowPhase::new();
     let mut joints = ImpulseJointSet::new();
     let mut multi = MultibodyJointSet::new();
