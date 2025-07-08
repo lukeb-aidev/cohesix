@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Cargo.toml v0.3
+# Filename: Cargo.toml v0.4
 # Author: Lukas Bower
-# Date Modified: 2027-08-17
+# Date Modified: 2027-10-19
 
 [package]
 name = "cohesix_root"
@@ -9,9 +9,7 @@ version = "0.2.0"
 edition = "2021"
 
 [dependencies]
-serde = { version = "1.0", default-features = false, features = ["derive", "alloc"] }
-serde_derive = { version = "1.0" }
-curve25519-dalek = { version = "4.1.3", default-features = false }
+
 
 [features]
 default = []
@@ -20,6 +18,10 @@ alloc_only = []
 [profile.release]
 panic = "abort"
 strip = "debuginfo"
+
+[profile.dev]
+panic = "abort"
+strip = "symbols"
 
 # Ensures we keep this crate minimal and no_std compatible
 [package.metadata]
