@@ -71,20 +71,20 @@ go run ./go/cmd/gui-orchestrator --port 8888 --bind 0.0.0.0
 For agent schemas and Codex interaction see
 [AGENTS_AND_CLI.md](guides/AGENTS_AND_CLI.md).
 
-## srvctl (Plan9 service helper)
+## srvctl (Plan9 service helper in Rust)
 Registers a service in the Plan9 */srv/services* directory.
 ```rc
 srvctl announce -name demo -version 0.1 /mnt/test
 ```
 
-## indexserver (Plan9 helper)
+## indexserver (Plan9 helper in Rust)
 Creates an index of file paths and exposes query/result files under */srv/index*.
 ```rc
 echo "gpu" > /srv/index/query
 cat /srv/index/results
 ```
 
-## devwatcher (Plan9 helper)
+## devwatcher (Plan9 helper in Rust)
 Watches files and logs events under */dev/watch*.
 ```rc
 echo /tmp/foo.txt > /dev/watch/ctl

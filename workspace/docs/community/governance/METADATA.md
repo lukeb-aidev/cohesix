@@ -323,13 +323,13 @@
 | docs/community/architecture/K8S_ORCHESTRATION.md | v0.1 | 2026-12-31 | COMMUNITY | | |
 | docs/community/TEST_REFACTOR_GUIDE.md | v0.1 | 2026-12-31 | COMMUNITY | | |
 | docs/community/BUILD_NOTES.md | v0.1 | 2026-12-31 | COMMUNITY | | |
-| go/cmd/physics-server/main.go | v0.1 | 2027-01-30 | COMMUNITY | | |
+| tools/cli/src/bin/physics_server.rs | v0.1 | 2025-07-08 | COMMUNITY | | |
 | scripts/mount_secure9p.rc | v0.1 | 2027-01-30 | COMMUNITY | | |
 | docs/community/guides/PLAN9_PHYSICS_SERVER.md | v0.1 | 2027-01-30 | COMMUNITY | | |
 | examples/physics_server_log.txt | v0.1 | 2027-01-30 | COMMUNITY | | |
-| go/cmd/srvctl/main.go | v0.1 | 2027-01-31 | COMMUNITY | | |
-| go/cmd/indexserver/main.go | v0.1 | 2027-01-31 | COMMUNITY | | |
-| go/cmd/devwatcher/main.go | v0.1 | 2027-01-31 | COMMUNITY | | |
+| tools/cli/src/bin/srvctl.rs | v0.1 | 2025-07-08 | COMMUNITY | | |
+| tools/cli/src/bin/indexserver.rs | v0.1 | 2025-07-08 | COMMUNITY | | |
+| tools/cli/src/bin/devwatcher.rs | v0.1 | 2025-07-08 | COMMUNITY | | |
 | scripts/newns-e.rc | v0.1 | 2027-01-31 | COMMUNITY | | |
 | scripts/bind_cuda.rc | v0.1 | 2027-01-31 | COMMUNITY | | |
 | examples/plan9_enhancements_usage.txt | v0.1 | 2027-01-31 | COMMUNITY | | |
