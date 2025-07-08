@@ -2959,3 +2959,9 @@
 ### Fixed
 - Replaced `split_whitespace` in `cohesix_root` boot arg parser with ASCII-only
   parsing to eliminate Unicode tables.
+## [v0.459] - 2027-10-19
+### Fixed
+- Removed serde and curve25519-dalek dependencies from `cohesix_root`.
+- Enforced panic abort and symbol stripping for dev builds via workspace profiles.
+- Updated headers for `main.rs` and Cargo manifest.
+

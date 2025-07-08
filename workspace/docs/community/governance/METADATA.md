@@ -181,7 +181,7 @@
 | scripts/build_busybox.sh | v0.8 | 2025-07-06 | COMMUNITY | | |
 | third_party/busybox/.config.coh | v1.0 | 2025-07-06 | COMMUNITY | | |
 | metadata.json | v0.1 | 2025-07-24 | COMMUNITY | | |
-| Cargo.toml | v0.52 | 2027-09-30 | COMMUNITY | | |
+| Cargo.toml | v0.53 | 2027-10-19 | COMMUNITY | | |
 | cohesix-9p/Cargo.toml | v0.7 | 2027-09-30 | COMMUNITY | | |
 | cohesix-secure9p/Cargo.toml | v0.5 | 2027-09-30 | COMMUNITY | | |
 | cohesix-secure9p/src/secure_stream.rs | v0.1 | 2026-12-31 | COMMUNITY | | |
@@ -246,9 +246,9 @@
 | src/bin/cohesix_root.rs | v0.4 | 2027-08-13 | COMMUNITY | | |
 | src/bin/cloud.rs | v0.1 | 2027-09-01 | COMMUNITY | | |
 | src/utils/gpu.rs | v0.2 | 2026-12-31 | COMMUNITY | | |
-| workspace/cohesix_root/Cargo.toml | v0.3 | 2027-08-17 | COMMUNITY | | |
+| workspace/cohesix_root/Cargo.toml | v0.4 | 2027-10-19 | COMMUNITY | | |
 | workspace/cohesix_root/link.ld | v0.10 | 2027-10-11 | COMMUNITY | | |
-| workspace/cohesix_root/src/main.rs | v0.20 | 2027-10-18 | COMMUNITY | | |
+| workspace/cohesix_root/src/main.rs | v0.21 | 2027-10-19 | COMMUNITY | | |
 | workspace/cohesix_root/src/lang_items.rs | v0.1 | 2027-10-12 | COMMUNITY | | |
 | workspace/cohesix_root/src/entry.S | v0.10 | 2027-10-16 | COMMUNITY | | |
 | workspace/cohesix_root/src/allocator.rs | v0.4 | 2027-10-17 | COMMUNITY | | |
