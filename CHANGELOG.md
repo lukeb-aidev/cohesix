@@ -2886,3 +2886,8 @@
 - Added dedicated `.stack` section and moved stack pointer to `__stack_end` on start.
 - Printed stack bounds at boot to trace runtime memory regions.
 
+## [v0.445] - 2027-10-04
+### Fixed
+- Expanded root task stack to 64KB and updated linker script.
+- `_start` now accepts BootInfo pointer and prints stack using `__stack_start` and `__stack_end`.
+

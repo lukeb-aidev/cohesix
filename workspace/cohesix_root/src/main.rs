@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: main.rs v0.9
+// Filename: main.rs v0.10
 // Author: Lukas Bower
-// Date Modified: 2027-10-03
+// Date Modified: 2027-10-04
 #![no_std]
 #![no_main]
 #![feature(alloc_error_handler, asm_experimental_arch)]
@@ -113,7 +113,7 @@ unsafe impl GlobalAlloc for BumpAllocator {
 static GLOBAL_ALLOC: BumpAllocator = BumpAllocator;
 
 #[no_mangle]
-pub unsafe extern "C" fn _start() -> ! {
+pub unsafe extern "C" fn _start(_bootinfo: usize) -> ! {
     core::arch::asm!("mov sp, {}", in(reg) &__stack_end);
     main();
     loop {
@@ -224,8 +224,8 @@ fn main() {
     let heap_start = unsafe { &__heap_start as *const u8 as usize };
     let heap_end = unsafe { &__heap_end as *const u8 as usize };
     print_heap_bounds(heap_start, heap_end);
+    let stack_start = unsafe { &__stack_start as *const u8 as usize };
     let stack_end = unsafe { &__stack_end as *const u8 as usize };
-    let stack_start = stack_end - 0x4000;
     print_stack_bounds(stack_start, stack_end);
     assert!(heap_start >= 0xffffff8040000000 && heap_start < 0xffffff8040633000, "Heap start out of range");
     load_bootargs();
