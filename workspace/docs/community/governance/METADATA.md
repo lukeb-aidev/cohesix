@@ -247,8 +247,9 @@
 | src/bin/cloud.rs | v0.1 | 2027-09-01 | COMMUNITY | | |
 | src/utils/gpu.rs | v0.2 | 2026-12-31 | COMMUNITY | | |
 | workspace/cohesix_root/Cargo.toml | v0.3 | 2027-08-17 | COMMUNITY | | |
-| workspace/cohesix_root/link.ld | v0.9 | 2027-10-05 | COMMUNITY | | |
+| workspace/cohesix_root/link.ld | v0.7 | 2027-10-06 | COMMUNITY | | |
 | workspace/cohesix_root/src/main.rs | v0.11 | 2027-10-05 | COMMUNITY | | |
+| workspace/cohesix_root/src/allocator.rs | v0.1 | 2027-10-06 | COMMUNITY | | |
 | src/cuda/runtime.rs | v0.16 | 2026-12-31 | COMMUNITY | | |
 | src/cli/mod.rs | v1.3 | 2026-10-08 | COMMUNITY | | |
 | src/cli/cohtrace.rs | v0.4 | 2026-10-13 | COMMUNITY | | |
@@ -271,7 +272,7 @@
 | tests/test_worker_join.rs | v0.7 | 2026-10-31 | COMMUNITY | | |
 | src/bootstrap/sel4_entry.rs | v0.4 | 2026-08-21 | COMMUNITY | | |
 | src/seL4/mod.rs | v0.3 | 2026-11-23 | COMMUNITY | | |
-| src/seL4/sel4_start.S | v0.3 | 2026-11-21 | COMMUNITY | | |
+| src/seL4/sel4_start.S | v0.4 | 2027-10-06 | COMMUNITY | | |
 | src/kernel/syscalls/syscall.rs | v1.5 | 2026-11-23 | COMMUNITY | | |
 | src/util/mod.rs | v0.2 | 2026-10-28 | COMMUNITY | | |
 | src/util/debug_log.rs | v0.3 | 2026-08-06 | COMMUNITY | | |
