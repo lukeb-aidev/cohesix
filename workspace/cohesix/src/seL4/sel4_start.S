@@ -1,13 +1,24 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: sel4_start.S v0.4
+// Filename: sel4_start.S v0.5
 // Author: Lukas Bower
-// Date Modified: 2027-10-06
+// Date Modified: 2027-10-07
 
     .global _sel4_start
     .extern __stack_end
+    .extern __bss_start
+    .extern __bss_end
 _sel4_start:
     ldr x0, =__stack_end
     mov sp, x0
+    // Zero BSS before jumping into Rust
+    ldr x0, =__bss_start
+    ldr x1, =__bss_end
+1:
+    cmp x0, x1
+    b.ge 2f
+    str xzr, [x0], #8
+    b   1b
+2:
     call main
     jmp .
 
