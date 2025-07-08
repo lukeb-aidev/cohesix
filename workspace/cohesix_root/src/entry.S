@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: entry.S v0.8
 // Author: Lukas Bower
-// Date Modified: 2027-10-13
+// Date Modified: 2027-10-14
 
     .global _sel4_start
     .extern __stack_end
@@ -24,5 +24,7 @@ _sel4_start:
     str xzr, [x0], #8
     b   1b
 2:
+    dsb sy
+    isb
     bl main
     b   .
