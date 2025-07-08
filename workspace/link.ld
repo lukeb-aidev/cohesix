@@ -1,7 +1,7 @@
 /* CLASSIFICATION: COMMUNITY */
-/* Filename: link.ld v0.7 */
+/* Filename: link.ld v0.8 */
 /* Author: Lukas Bower */
-/* Date Modified: 2027-10-06 */
+/* Date Modified: 2027-10-07 */
 /* SPDX-License-Identifier: BSD-2-Clause */
 
 ENTRY(_start)
@@ -33,8 +33,10 @@ SECTIONS {
     } :data
 
     .bss : ALIGN(0x1000) {
+        __bss_start = .;
         KEEP(*(.bss*))
         *(COMMON)
+        __bss_end = .;
     } :data :NONE
 
     /* dedicated heap region mapped inside the ELF image */
