@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Cargo.toml v0.3
+# Filename: Cargo.toml v0.4
 # Author: Lukas Bower
-# Date Modified: 2027-10-19
+# Date Modified: 2027-11-05
 
 [workspace]
 members = [
@@ -12,7 +12,9 @@ members = [
 
 [profile.release]
 panic = "abort"
-strip = "debuginfo"
+strip = false
+codegen-units = 1
+debug = true
 
 [profile.dev]
 panic = "abort"

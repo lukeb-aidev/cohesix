@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Cargo.toml v0.5
+# Filename: Cargo.toml v0.6
 # Author: Lukas Bower
-# Date Modified: 2027-10-22
+# Date Modified: 2027-11-05
 
 [package]
 name = "cohesix_root"
@@ -17,10 +17,11 @@ alloc_only = []
 
 [profile.release]
 panic = "abort"
-strip = "symbols"
+strip = false
 lto = false
 codegen-units = 1
 opt-level = 1
+debug = true
 
 [profile.dev]
 panic = "abort"

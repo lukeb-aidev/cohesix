@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: main.rs v0.25
+// Filename: main.rs v0.26
 // Author: Lukas Bower
 // Date Modified: 2027-11-05
 #![no_std]
@@ -33,6 +33,9 @@ static mut VALIDATOR_HANDLE: *const u8 = core::ptr::null();
 static mut SRV_HANDLE: *const u8 = core::ptr::null();
 #[no_mangle]
 static mut CUDA_HANDLE: *const u8 = core::ptr::null();
+
+static mut WATCHED_PTRS: [usize; 64] = [0; 64];
+static mut WATCHED_IDX: usize = 0;
 
 fn putchar(c: u8) {
     unsafe { seL4_DebugPutChar(c) };
@@ -106,6 +109,25 @@ fn log_global_ptrs() {
     }
 }
 
+fn watch_ptr(ptr: usize) {
+    unsafe {
+        if WATCHED_IDX < WATCHED_PTRS.len() {
+            WATCHED_PTRS[WATCHED_IDX] = ptr;
+            WATCHED_IDX += 1;
+        }
+    }
+}
+
+fn ptr_hash() -> usize {
+    unsafe {
+        let mut h = 0usize;
+        for p in &WATCHED_PTRS[..WATCHED_IDX] {
+            h ^= *p;
+        }
+        h
+    }
+}
+
 pub fn check_heap_ptr(ptr: usize) {
     log_regs();
     putstr("check_heap_ptr");
@@ -146,6 +168,7 @@ unsafe extern "C" fn open(path: *const c_char, _flags: i32, _mode: i32) -> i32 {
     putstr("open ptr");
     put_hex(path as usize);
     validate_ptr(path as usize);
+    watch_ptr(path as usize);
     -1
 }
 #[no_mangle]
@@ -153,6 +176,7 @@ unsafe extern "C" fn read(_fd: i32, buf: *mut u8, _len: usize) -> isize {
     putstr("read buf");
     put_hex(buf as usize);
     validate_ptr(buf as usize);
+    watch_ptr(buf as usize);
     check_heap_ptr(buf as usize);
     0
 }
@@ -165,6 +189,7 @@ unsafe extern "C" fn write(_fd: i32, buf: *const u8, _len: usize) -> isize {
     putstr("write buf");
     put_hex(buf as usize);
     validate_ptr(buf as usize);
+    watch_ptr(buf as usize);
     check_heap_ptr(buf as usize);
     0
 }
@@ -173,6 +198,7 @@ unsafe extern "C" fn execv(path: *const c_char, _argv: *const *const c_char) -> 
     putstr("execv path");
     put_hex(path as usize);
     validate_ptr(path as usize);
+    watch_ptr(path as usize);
     -1
 }
 #[no_mangle]
@@ -180,6 +206,7 @@ unsafe extern "C" fn getenv(name: *const c_char) -> *const c_char {
     putstr("getenv name");
     put_hex(name as usize);
     validate_ptr(name as usize);
+    watch_ptr(name as usize);
     core::ptr::null()
 }
 #[no_mangle]
@@ -187,9 +214,11 @@ unsafe extern "C" fn setenv(name: *const c_char, val: *const c_char, _overwrite:
     putstr("setenv name");
     put_hex(name as usize);
     validate_ptr(name as usize);
+    watch_ptr(name as usize);
     putstr("setenv val");
     put_hex(val as usize);
     validate_ptr(val as usize);
+    watch_ptr(val as usize);
     0
 }
 
@@ -332,6 +361,9 @@ pub extern "C" fn main() {
     put_hex(fp);
     dump_stack(sp);
     log_global_ptrs();
+    let ph = ptr_hash();
+    putstr("ptr_hash");
+    put_hex(ph);
     let bss_start = unsafe { &__bss_start as *const u8 as usize };
     let bss_end = unsafe { &__bss_end as *const u8 as usize };
     putstr("bss_start");
