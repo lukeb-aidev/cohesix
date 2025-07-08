@@ -1,9 +1,10 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: allocator.rs v0.1
+// Filename: allocator.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2027-10-06
+// Date Modified: 2027-10-09
 
 use core::alloc::{GlobalAlloc, Layout};
+use crate::check_heap_ptr;
 
 extern "C" {
     static __heap_start: u8;
@@ -44,8 +45,14 @@ unsafe impl GlobalAlloc for BumpAllocator {
         let align_mask = layout.align() - 1;
         let heap_start = &__heap_start as *const u8 as usize;
         let heap_end = &__heap_end as *const u8 as usize;
+        putstr("alloc offset");
+        put_hex(OFFSET);
         let off = (OFFSET + align_mask) & !align_mask;
+        putstr("alloc aligned");
+        put_hex(off);
         let end_ptr = heap_start + off + layout.size();
+        putstr("alloc endptr");
+        put_hex(end_ptr);
         if end_ptr > heap_end {
             putstr("alloc overflow");
             put_hex(end_ptr);
@@ -55,6 +62,7 @@ unsafe impl GlobalAlloc for BumpAllocator {
         OFFSET = off + layout.size();
         putstr("alloc ptr");
         put_hex(ptr as usize);
+        check_heap_ptr(ptr as usize);
         ptr
     }
 
