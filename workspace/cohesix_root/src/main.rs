@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: main.rs v0.16
+// Filename: main.rs v0.17
 // Author: Lukas Bower
-// Date Modified: 2027-10-12
+// Date Modified: 2027-10-13
 #![no_std]
 #![no_main]
 #![feature(alloc_error_handler, asm_experimental_arch, lang_items)]
@@ -50,6 +50,19 @@ pub extern "C" fn boot_log_hex(val: usize) {
     put_hex(val);
 }
 
+fn log_regs() {
+    let mut sp: usize;
+    let mut fp: usize;
+    unsafe {
+        core::arch::asm!("mov {0}, sp", out(reg) sp);
+        core::arch::asm!("mov {0}, x29", out(reg) fp);
+    }
+    putstr("log_sp");
+    put_hex(sp);
+    putstr("log_fp");
+    put_hex(fp);
+}
+
 fn print_heap_bounds(start: usize, end: usize) {
     putstr("heap_start");
     put_hex(start);
@@ -65,9 +78,12 @@ fn print_stack_bounds(start: usize, end: usize) {
 }
 
 pub fn check_heap_ptr(ptr: usize) {
+    log_regs();
+    putstr("check_heap_ptr");
+    put_hex(ptr);
     let start = unsafe { &__heap_start as *const u8 as usize };
     let end = unsafe { &__heap_end as *const u8 as usize };
-    if ptr < start || ptr > end {
+    if ptr < start || ptr >= end {
         putstr("HEAP POINTER OUT OF RANGE");
         put_hex(ptr);
         panic!("heap pointer out of range");

@@ -2927,3 +2927,9 @@
 ### Fixed
 - Resolved duplicate lang item errors by centralizing panic and alloc handlers.
 - Added entry.S with _sel4_start to set stack and call main.
+
+## [v0.453] - 2027-10-13
+### Fixed
+- Added early register logging in `entry.S` to dump SP and FP.
+- Extended `check_heap_ptr` with register dumps and stricter bounds.
+- Bump allocator now logs registers on each allocation and validates end pointer.
