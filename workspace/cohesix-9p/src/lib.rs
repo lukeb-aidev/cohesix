@@ -8,9 +8,7 @@
 //! Cohesix 9P filesystem library.
 
 extern crate alloc;
-#[cfg(feature = "posix")]
-extern crate std;
-#[cfg(test)]
+#[cfg(any(feature = "posix", test))]
 extern crate std;
 use alloc::{boxed::Box, string::String};
 

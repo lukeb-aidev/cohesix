@@ -4,11 +4,11 @@
 // Date Modified: 2025-07-08
 
 use clap::Parser;
-use notify::{RecommendedWatcher, RecursiveMode, Watcher, Event};
+use notify::{RecommendedWatcher, RecursiveMode, Watcher, Event, Config};
 use std::collections::HashSet;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::channel;
 use std::time::Duration;
 
@@ -26,7 +26,7 @@ fn main() -> notify::Result<()> {
     OpenOptions::new().create(true).write(true).truncate(true).open("/dev/watch/events")?;
 
     let (tx, rx) = channel::<Result<Event, notify::Error>>();
-    let mut watcher: RecommendedWatcher = Watcher::new(tx, Duration::from(args.interval))?;
+    let mut watcher: RecommendedWatcher = Watcher::new(tx, Config::default())?;
     let mut watched = HashSet::new();
 
     loop {
@@ -35,14 +35,19 @@ fn main() -> notify::Result<()> {
                 let p = line.trim();
                 if p.is_empty() { continue; }
                 if watched.insert(p.to_string()) {
-                    watcher.watch(PathBuf::from(p), RecursiveMode::NonRecursive)?;
+                    watcher.watch(Path::new(p), RecursiveMode::NonRecursive)?;
                 }
             }
         }
         while let Ok(res) = rx.try_recv() {
             if let Ok(event) = res {
                 let mut f = OpenOptions::new().append(true).open("/dev/watch/events")?;
-                writeln!(f, "{} {:?}", event.paths.get(0).map(|p| p.display()).unwrap_or_default(), event.kind)?;
+                let path = event
+                    .paths
+                    .get(0)
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default();
+                writeln!(f, "{} {:?}", path, event.kind)?;
             }
         }
         std::thread::sleep(Duration::from(args.interval));

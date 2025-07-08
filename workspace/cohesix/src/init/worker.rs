@@ -33,7 +33,7 @@ fn init_physics() {
         let gravity = vector![0.0, -9.81, 0.0];
         let params = IntegrationParameters::default();
         let mut islands = IslandManager::new();
-        let mut broad = BroadPhase::new();
+        let mut broad = DefaultBroadPhase::new();
         let mut narrow = NarrowPhase::new();
         let mut bodies = RigidBodySet::new();
         let mut colliders = ColliderSet::new();
