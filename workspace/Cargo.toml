@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Cargo.toml v0.2
+# Filename: Cargo.toml v0.3
 # Author: Lukas Bower
-# Date Modified: 2027-09-30
+# Date Modified: 2027-10-19
 
 [workspace]
 members = [
@@ -9,3 +9,11 @@ members = [
     "cohesix-9p",
     "cohesix_root"
 ]
+
+[profile.release]
+panic = "abort"
+strip = "debuginfo"
+
+[profile.dev]
+panic = "abort"
+strip = "symbols"
