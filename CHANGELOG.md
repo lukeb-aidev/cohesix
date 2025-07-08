@@ -2891,3 +2891,8 @@
 - Expanded root task stack to 64KB and updated linker script.
 - `_start` now accepts BootInfo pointer and prints stack using `__stack_start` and `__stack_end`.
 
+## [v0.446] - 2027-10-05
+### Fixed
+- Added missing `__stack_start` declaration for root task.
+- Bumped linker script version; heap and stack remain within RW segment.
+
