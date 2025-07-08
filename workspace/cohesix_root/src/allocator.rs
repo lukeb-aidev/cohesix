@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: allocator.rs v0.4
+// Filename: allocator.rs v0.5
 // Author: Lukas Bower
-// Date Modified: 2027-10-17
+// Date Modified: 2027-10-23
 
 use core::alloc::{GlobalAlloc, Layout};
 use crate::check_heap_ptr;
@@ -61,10 +61,22 @@ unsafe impl GlobalAlloc for BumpAllocator {
         log_regs();
         putstr("alloc offset");
         put_hex(OFFSET);
-        let off = (OFFSET + align_mask) & !align_mask;
+        let off = OFFSET
+            .checked_add(align_mask)
+            .unwrap_or_else(|| {
+                putstr("alloc off ovf");
+                crate::abort("heap overflow");
+            })
+            & !align_mask;
         putstr("alloc aligned");
         put_hex(off);
-        let end_ptr = heap_start + off + layout.size();
+        let end_ptr = heap_start
+            .checked_add(off)
+            .and_then(|v| v.checked_add(layout.size()))
+            .unwrap_or_else(|| {
+                putstr("alloc end ovf");
+                crate::abort("heap overflow");
+            });
         putstr("alloc endptr");
         put_hex(end_ptr);
         if end_ptr > heap_end {
