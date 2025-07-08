@@ -129,18 +129,30 @@ pub fn check_rodata_ptr(ptr: usize) {
     }
 }
 
+pub fn validate_ptr(ptr: usize) {
+    const BASE: usize = 0xffffff8040000000;
+    const MAX: usize = BASE + 0x800000; // limit to first 8MB
+    if ptr == 0 || ptr < BASE || ptr >= MAX {
+        putstr("PTR OUT OF RANGE");
+        put_hex(ptr);
+        abort("invalid pointer");
+    }
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn seL4_DebugPutChar(_c: u8) {}
 #[no_mangle]
 unsafe extern "C" fn open(path: *const c_char, _flags: i32, _mode: i32) -> i32 {
     putstr("open ptr");
     put_hex(path as usize);
+    validate_ptr(path as usize);
     -1
 }
 #[no_mangle]
 unsafe extern "C" fn read(_fd: i32, buf: *mut u8, _len: usize) -> isize {
     putstr("read buf");
     put_hex(buf as usize);
+    validate_ptr(buf as usize);
     check_heap_ptr(buf as usize);
     0
 }
@@ -152,6 +164,7 @@ unsafe extern "C" fn close(_fd: i32) -> i32 {
 unsafe extern "C" fn write(_fd: i32, buf: *const u8, _len: usize) -> isize {
     putstr("write buf");
     put_hex(buf as usize);
+    validate_ptr(buf as usize);
     check_heap_ptr(buf as usize);
     0
 }
@@ -159,20 +172,24 @@ unsafe extern "C" fn write(_fd: i32, buf: *const u8, _len: usize) -> isize {
 unsafe extern "C" fn execv(path: *const c_char, _argv: *const *const c_char) -> i32 {
     putstr("execv path");
     put_hex(path as usize);
+    validate_ptr(path as usize);
     -1
 }
 #[no_mangle]
 unsafe extern "C" fn getenv(name: *const c_char) -> *const c_char {
     putstr("getenv name");
     put_hex(name as usize);
+    validate_ptr(name as usize);
     core::ptr::null()
 }
 #[no_mangle]
 unsafe extern "C" fn setenv(name: *const c_char, val: *const c_char, _overwrite: i32) -> i32 {
     putstr("setenv name");
     put_hex(name as usize);
+    validate_ptr(name as usize);
     putstr("setenv val");
     put_hex(val as usize);
+    validate_ptr(val as usize);
     0
 }
 
