@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: entry.S v0.10
+// Filename: entry.S v0.11
 // Author: Lukas Bower
-// Date Modified: 2027-10-16
+// Date Modified: 2027-10-19
 
     .global _sel4_start
     .extern __stack_end
@@ -90,6 +90,10 @@ _sel4_start:
     mov x27, xzr
     mov x28, xzr
     mov x30, xzr
+    // Re-establish stack pointer after register wipe
+    ldr x0, =__stack_end
+    mov sp, x0
+    mov x29, sp
     // DEBUG: manual read of .rodata string to validate mapping
     ldr x1, =rodata_check_str
     bl boot_log_hex       // log address
