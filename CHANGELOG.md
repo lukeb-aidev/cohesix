@@ -2965,3 +2965,9 @@
 - Enforced panic abort and symbol stripping for dev builds via workspace profiles.
 - Updated headers for `main.rs` and Cargo manifest.
 
+## [v0.460] - 2027-10-20
+### Added
+- ZeroRegsAndSafeStart-092: zeroed all registers on entry and before jumping to `main`.
+- Added `dsb ish` and `isb` barriers after clearing BSS.
+- Documented new version in `METADATA.md`.
+
