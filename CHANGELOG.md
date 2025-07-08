@@ -2985,3 +2985,7 @@
 ### Fixed
 - **DisasmAndPatchStartup-093**: preserved BootInfo in x0, zeroed callee-saved registers explicitly, and reloaded sp in entry.S.
 
+## [v0.464] - 2027-10-25
+### Fixed
+- **CorrelateDiagnostics-317**: cleared argument registers before entering `main` to prevent stray pointer faults.
+
