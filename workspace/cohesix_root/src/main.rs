@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: main.rs v0.19
+// Filename: main.rs v0.20
 // Author: Lukas Bower
-// Date Modified: 2027-10-17
+// Date Modified: 2027-10-18
 #![no_std]
 #![no_main]
 #![feature(alloc_error_handler, asm_experimental_arch, lang_items)]
@@ -63,14 +63,14 @@ fn log_regs() {
     put_hex(fp);
 }
 
-fn print_heap_bounds(start: usize, end: usize) {
+fn log_heap_bounds(start: usize, end: usize) {
     putstr("heap_start");
     put_hex(start);
     putstr("heap_end");
     put_hex(end);
 }
 
-fn print_stack_bounds(start: usize, end: usize) {
+fn log_stack_bounds(start: usize, end: usize) {
     putstr("stack_start");
     put_hex(start);
     putstr("stack_end");
@@ -188,7 +188,20 @@ fn load_bootargs() {
         let n = read(fd, buf.as_mut_ptr(), buf.len()) as usize;
         close(fd);
         let text = core::str::from_utf8_unchecked(&buf[..n]);
-        for token in text.split_whitespace() {
+        let bytes = text.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+                i += 1;
+            }
+            if i >= bytes.len() {
+                break;
+            }
+            let start = i;
+            while i < bytes.len() && !bytes[i].is_ascii_whitespace() {
+                i += 1;
+            }
+            let token = core::str::from_utf8_unchecked(&bytes[start..i]);
             if let Some(eq) = token.find('=') {
                 let (k, v) = token.split_at(eq);
                 let v = &v[1..];
@@ -276,10 +289,10 @@ pub extern "C" fn main() {
     put_hex(&local as *const _ as usize);
     let heap_start = unsafe { &__heap_start as *const u8 as usize };
     let heap_end = unsafe { &__heap_end as *const u8 as usize };
-    print_heap_bounds(heap_start, heap_end);
+    log_heap_bounds(heap_start, heap_end);
     let stack_start = unsafe { &__stack_start as *const u8 as usize };
     let stack_end = unsafe { &__stack_end as *const u8 as usize };
-    print_stack_bounds(stack_start, stack_end);
+    log_stack_bounds(stack_start, stack_end);
     if sp < stack_start || sp > stack_end {
         putstr("STACK CORRUPTION");
         abort("sp out of range");
