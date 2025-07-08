@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: allocator.rs v0.2
+// Filename: allocator.rs v0.3
 // Author: Lukas Bower
-// Date Modified: 2027-10-09
+// Date Modified: 2027-10-13
 
 use core::alloc::{GlobalAlloc, Layout};
 use crate::check_heap_ptr;
@@ -37,6 +37,19 @@ fn put_hex(mut val: usize) {
     putchar(b'\n');
 }
 
+fn log_regs() {
+    let mut sp: usize;
+    let mut fp: usize;
+    unsafe {
+        core::arch::asm!("mov {0}, sp", out(reg) sp);
+        core::arch::asm!("mov {0}, x29", out(reg) fp);
+    }
+    putstr("reg_sp");
+    put_hex(sp);
+    putstr("reg_fp");
+    put_hex(fp);
+}
+
 pub struct BumpAllocator;
 static mut OFFSET: usize = 0;
 
@@ -45,6 +58,7 @@ unsafe impl GlobalAlloc for BumpAllocator {
         let align_mask = layout.align() - 1;
         let heap_start = &__heap_start as *const u8 as usize;
         let heap_end = &__heap_end as *const u8 as usize;
+        log_regs();
         putstr("alloc offset");
         put_hex(OFFSET);
         let off = (OFFSET + align_mask) & !align_mask;
@@ -62,6 +76,7 @@ unsafe impl GlobalAlloc for BumpAllocator {
         OFFSET = off + layout.size();
         putstr("alloc ptr");
         put_hex(ptr as usize);
+        check_heap_ptr(end_ptr - 1);
         check_heap_ptr(ptr as usize);
         ptr
     }
