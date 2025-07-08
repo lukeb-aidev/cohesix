@@ -2965,3 +2965,4 @@
 - Enforced panic abort and symbol stripping for dev builds via workspace profiles.
 - Updated headers for `main.rs` and Cargo manifest.
 
+- Reassert stack pointer after register wipe in entry.S (v0.11).
