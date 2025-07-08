@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: entry.S v0.15
+// Filename: entry.S v0.16
 // Author: Lukas Bower
-// Date Modified: 2027-10-24
+// Date Modified: 2027-10-25
 
     .global _sel4_start
     .extern __stack_end
@@ -43,6 +43,12 @@ _sel4_start:
     ldr x1, =__stack_end
     mov sp, x1
     mov x29, sp
+
+    // Clear potential boot arg residue from argument registers
+    mov x0, xzr
+    mov x1, xzr
+    mov x2, xzr
+    mov x3, xzr
 
     bl main
     b .
