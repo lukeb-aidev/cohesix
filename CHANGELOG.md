@@ -3002,3 +3002,8 @@
 ### Added
 - **MergeFeatureRestoreWithNewBoot-074**: Restored full "cohesix_root" features (Plan9 namespace, Secure9P hooks, CUDA/Rapier detection) while preserving minimal boot sequence.
 
+## [v0.468] - 2027-11-05
+### Added
+- **DebugDataAbort-075**: Added early stack/heap/bss logging and global pointer dumps in `cohesix_root`.
+- **DebugDataAbort-075**: `boot_qemu.sh` now logs exec and instruction traces for page table analysis.
+
