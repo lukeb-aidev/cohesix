@@ -2917,3 +2917,9 @@
 ### Fixed
 - Zeroed BSS in _start to prevent MMU fault.
 
+## [v0.451] - 2027-10-11
+### Fixed
+- Switched entrypoint to `_sel4_start` to set stack before Rust code.
+- Updated linker script to reference `_sel4_start`.
+- Removed obsolete `_start` implementation.
+
