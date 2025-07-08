@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: main.rs v0.22
+// Filename: main.rs v0.23
 // Author: Lukas Bower
-// Date Modified: 2027-10-22
+// Date Modified: 2027-10-31
 #![no_std]
 #![no_main]
 #![feature(alloc_error_handler, asm_experimental_arch, lang_items)]
@@ -15,7 +15,6 @@ mod lang_items;
 use core::arch::global_asm;
 global_asm!(include_str!("entry.S"));
 
-use alloc::vec::Vec;
 use core::ffi::{c_char, CStr};
 use core::ptr;
 
@@ -88,6 +87,9 @@ pub fn check_heap_ptr(ptr: usize) {
         putstr("HEAP POINTER OUT OF RANGE");
         put_hex(ptr);
         abort("heap pointer out of range");
+    }
+    unsafe {
+        core::ptr::read_volatile(ptr as *const u8);
     }
 }
 
@@ -206,25 +208,30 @@ fn load_bootargs() {
             if let Some(eq) = token.find('=') {
                 let (k, v) = token.split_at(eq);
                 let v = &v[1..];
-                let mut kb = Vec::from(k.as_bytes());
-                kb.push(0);
-                let mut vb = Vec::from(v.as_bytes());
-                vb.push(0);
-                setenv(
-                    kb.as_ptr() as *const c_char,
-                    vb.as_ptr() as *const c_char,
-                    1,
-                );
+                let mut kb_buf = [0u8; 64];
+                let mut vb_buf = [0u8; 128];
+                if k.len() >= kb_buf.len() || v.len() >= vb_buf.len() {
+                    abort("env var too long");
+                }
+                kb_buf[..k.len()].copy_from_slice(k.as_bytes());
+                kb_buf[k.len()] = 0;
+                vb_buf[..v.len()].copy_from_slice(v.as_bytes());
+                vb_buf[v.len()] = 0;
+                setenv(kb_buf.as_ptr() as *const c_char, vb_buf.as_ptr() as *const c_char, 1);
             }
         }
     }
 }
 
 fn env_var(name: &str) -> Option<&'static CStr> {
-    let mut nb = Vec::from(name.as_bytes());
-    nb.push(0);
+    let mut nb_buf = [0u8; 64];
+    if name.len() >= nb_buf.len() {
+        abort("env name too long");
+    }
+    nb_buf[..name.len()].copy_from_slice(name.as_bytes());
+    nb_buf[name.len()] = 0;
     unsafe {
-        let ptr = getenv(nb.as_ptr() as *const c_char);
+        let ptr = getenv(nb_buf.as_ptr() as *const c_char);
         putstr("getenv return");
         put_hex(ptr as usize);
         if ptr.is_null() {
@@ -237,11 +244,15 @@ fn env_var(name: &str) -> Option<&'static CStr> {
 
 fn write_role(role: &str) {
     unsafe {
-        let mut rb = Vec::from(role.as_bytes());
-        rb.push(0);
+        let mut rb_buf = [0u8; 64];
+        if role.len() >= rb_buf.len() {
+            abort("role too long");
+        }
+        rb_buf[..role.len()].copy_from_slice(role.as_bytes());
+        rb_buf[role.len()] = 0;
         let fd = open(cstr(PATH_COHROLE), 0x601, 0o644);
         if fd >= 0 {
-            let _ = write(fd, rb.as_ptr(), role.len());
+            let _ = write(fd, rb_buf.as_ptr(), role.len());
             close(fd);
         }
     }
