@@ -199,7 +199,7 @@
 | src/rc/init.rs | v0.5 | 2026-02-20 | COMMUNITY | | |
 | src/lib/init.rs | v0.1 | 2025-08-17 | COMMUNITY | | |
 | src/kernel/userland_bootstrap.rs | v0.7 | 2026-11-20 | COMMUNITY | | |
-| src/kernel/loader.rs | v0.2 | 2026-11-21 | COMMUNITY | | |
+| src/kernel/loader.rs | v0.3 | 2027-02-03 | COMMUNITY | | |
 | src/kernel/user_api.rs | v0.2 | 2027-11-05 | COMMUNITY | | |
 | src/kernel/config.rs | v0.1 | 2025-08-27 | COMMUNITY | | |
 | src/userbin/logdemo.rs | v0.1 | 2025-08-27 | COMMUNITY | | |
