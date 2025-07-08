@@ -2902,3 +2902,8 @@
 - Stack pointer set via sel4_start.S and validated at runtime.
 - Linker script v0.7 maps .heap and .stack in RW segment.
 
+## [v0.448] - 2027-10-07
+### Fixed
+- Zeroed BSS in sel4_start.S before calling main.
+- Added __bss_start/__bss_end symbols in linker script and bumped to v0.8.
+
