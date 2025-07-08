@@ -2947,3 +2947,10 @@
 ### Fixed
 - Added extensive boot register dump and rodata validation in `entry.S`.
 - Logged rodata address and contents in `main` with range checks.
+
+## [v0.457] - 2027-10-17
+### Fixed
+- Replaced all `panic!` and `assert!` calls in `cohesix_root` with static-message
+  aborts.
+- Added a crate-level `abort` helper printing static strings only.
+- Updated allocator overflow handling to avoid formatting machinery.
