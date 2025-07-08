@@ -2938,3 +2938,7 @@
 ### Fixed
 - Inserted `dsb` and `isb` barriers after BSS zeroing in `entry.S`.
 - Added `docs/community/diagnostics/MMU_FAULT_AUDIT.md` capturing MMU fault analysis.
+
+## [v0.455] - 2027-10-15
+### Fixed
+- Cleared all general-purpose registers before jumping to Rust `main` in `entry.S` to avoid stale values.
