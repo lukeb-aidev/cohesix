@@ -22,6 +22,9 @@ strip = "debuginfo"
 [profile.dev]
 panic = "abort"
 strip = "symbols"
+opt-level = "z"
+debug = false
+debug-assertions = false
 
 # Ensures we keep this crate minimal and no_std compatible
 [package.metadata]
