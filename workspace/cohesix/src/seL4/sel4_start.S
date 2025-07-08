@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: sel4_start.S v0.5
+// Filename: sel4_start.S v0.6
 // Author: Lukas Bower
-// Date Modified: 2027-10-07
+// Date Modified: 2027-10-09
 
     .global _sel4_start
     .extern __stack_end
@@ -10,6 +10,10 @@
 _sel4_start:
     ldr x0, =__stack_end
     mov sp, x0
+    mov x0, sp
+    call boot_log_hex
+    mov x0, x29
+    call boot_log_hex
     // Zero BSS before jumping into Rust
     ldr x0, =__bss_start
     ldr x1, =__bss_end

@@ -2907,3 +2907,9 @@
 - Zeroed BSS in sel4_start.S before calling main.
 - Added __bss_start/__bss_end symbols in linker script and bumped to v0.8.
 
+## [v0.449] - 2027-10-09
+### Added
+- Runtime guards for heap pointer bounds and stack pointer checks.
+- Printed SP/FP and local variable addresses on boot.
+- Added allocator debug prints for offset, aligned, endptr, and returned pointer.
+

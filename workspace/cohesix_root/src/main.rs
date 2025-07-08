@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: main.rs v0.12
+// Filename: main.rs v0.13
 // Author: Lukas Bower
-// Date Modified: 2027-10-06
+// Date Modified: 2027-10-09
 #![no_std]
 #![no_main]
 #![feature(alloc_error_handler, asm_experimental_arch)]
@@ -40,6 +40,11 @@ fn put_hex(val: usize) {
     putchar(b'\n');
 }
 
+#[no_mangle]
+pub extern "C" fn boot_log_hex(val: usize) {
+    put_hex(val);
+}
+
 fn print_heap_bounds(start: usize, end: usize) {
     putstr("heap_start");
     put_hex(start);
@@ -54,14 +59,29 @@ fn print_stack_bounds(start: usize, end: usize) {
     put_hex(end);
 }
 
+pub fn check_heap_ptr(ptr: usize) {
+    let start = unsafe { &__heap_start as *const u8 as usize };
+    let end = unsafe { &__heap_end as *const u8 as usize };
+    if ptr < start || ptr > end {
+        putstr("HEAP POINTER OUT OF RANGE");
+        put_hex(ptr);
+        panic!("heap pointer out of range");
+    }
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn seL4_DebugPutChar(_c: u8) {}
 #[no_mangle]
-unsafe extern "C" fn open(_path: *const c_char, _flags: i32, _mode: i32) -> i32 {
+unsafe extern "C" fn open(path: *const c_char, _flags: i32, _mode: i32) -> i32 {
+    putstr("open ptr");
+    put_hex(path as usize);
     -1
 }
 #[no_mangle]
-unsafe extern "C" fn read(_fd: i32, _buf: *mut u8, _len: usize) -> isize {
+unsafe extern "C" fn read(_fd: i32, buf: *mut u8, _len: usize) -> isize {
+    putstr("read buf");
+    put_hex(buf as usize);
+    check_heap_ptr(buf as usize);
     0
 }
 #[no_mangle]
@@ -69,25 +89,38 @@ unsafe extern "C" fn close(_fd: i32) -> i32 {
     0
 }
 #[no_mangle]
-unsafe extern "C" fn write(_fd: i32, _buf: *const u8, _len: usize) -> isize {
+unsafe extern "C" fn write(_fd: i32, buf: *const u8, _len: usize) -> isize {
+    putstr("write buf");
+    put_hex(buf as usize);
+    check_heap_ptr(buf as usize);
     0
 }
 #[no_mangle]
-unsafe extern "C" fn execv(_path: *const c_char, _argv: *const *const c_char) -> i32 {
-    0
+unsafe extern "C" fn execv(path: *const c_char, _argv: *const *const c_char) -> i32 {
+    putstr("execv path");
+    put_hex(path as usize);
+    -1
 }
 #[no_mangle]
-unsafe extern "C" fn getenv(_name: *const c_char) -> *const c_char {
+unsafe extern "C" fn getenv(name: *const c_char) -> *const c_char {
+    putstr("getenv name");
+    put_hex(name as usize);
     core::ptr::null()
 }
 #[no_mangle]
-unsafe extern "C" fn setenv(_name: *const c_char, _val: *const c_char, _overwrite: i32) -> i32 {
+unsafe extern "C" fn setenv(name: *const c_char, val: *const c_char, _overwrite: i32) -> i32 {
+    putstr("setenv name");
+    put_hex(name as usize);
+    putstr("setenv val");
+    put_hex(val as usize);
     0
 }
 
 
 #[no_mangle]
-pub unsafe extern "C" fn _start(_bootinfo: usize) -> ! {
+pub unsafe extern "C" fn _start(bootinfo: usize) -> ! {
+    putstr("bootinfo ptr");
+    put_hex(bootinfo);
     core::arch::asm!("mov sp, {}", in(reg) &__stack_end);
     main();
     loop {
@@ -148,6 +181,8 @@ fn env_var(name: &str) -> Option<&'static CStr> {
     nb.push(0);
     unsafe {
         let ptr = getenv(nb.as_ptr() as *const c_char);
+        putstr("getenv return");
+        put_hex(ptr as usize);
         if ptr.is_null() {
             None
         } else {
@@ -195,12 +230,31 @@ fn exec_init(role: &str) -> ! {
 
 fn main() {
     putstr("COHESIX_BOOT_OK");
+    let mut sp: usize;
+    let mut fp: usize;
+    unsafe {
+        core::arch::asm!("mov {0}, sp", out(reg) sp);
+        core::arch::asm!("mov {0}, x29", out(reg) fp);
+    }
+    putstr("SP");
+    put_hex(sp);
+    putstr("FP");
+    put_hex(fp);
+    let local = 0u8;
+    putstr("local");
+    put_hex(&local as *const _ as usize);
     let heap_start = unsafe { &__heap_start as *const u8 as usize };
     let heap_end = unsafe { &__heap_end as *const u8 as usize };
     print_heap_bounds(heap_start, heap_end);
     let stack_start = unsafe { &__stack_start as *const u8 as usize };
     let stack_end = unsafe { &__stack_end as *const u8 as usize };
     print_stack_bounds(stack_start, stack_end);
+    if sp < stack_start || sp > stack_end {
+        putstr("STACK CORRUPTION");
+        panic!("sp out of range");
+    }
+    let local_addr = &local as *const _ as usize;
+    assert!(local_addr >= stack_start && local_addr <= stack_end, "local var outside stack");
     assert!(heap_start >= 0xffffff8040000000 && heap_start < 0xffffff8040633000, "Heap start out of range");
     assert!(stack_end > stack_start && stack_end - stack_start == 0x10000, "Stack bounds invalid");
     load_bootargs();
