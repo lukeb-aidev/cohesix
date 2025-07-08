@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: main.rs v0.13
+// Filename: main.rs v0.14
 // Author: Lukas Bower
-// Date Modified: 2027-10-09
+// Date Modified: 2027-10-10
 #![no_std]
 #![no_main]
 #![feature(alloc_error_handler, asm_experimental_arch)]
@@ -20,6 +20,8 @@ extern "C" {
     static __heap_end: u8;
     static __stack_start: u8;
     static __stack_end: u8;
+    static mut __bss_start: u8;
+    static mut __bss_end: u8;
 }
 
 fn putchar(c: u8) {
@@ -122,6 +124,13 @@ pub unsafe extern "C" fn _start(bootinfo: usize) -> ! {
     putstr("bootinfo ptr");
     put_hex(bootinfo);
     core::arch::asm!("mov sp, {}", in(reg) &__stack_end);
+    // Clear BSS so global variables start initialized
+    let mut ptr = &mut __bss_start as *mut u8;
+    let end = &mut __bss_end as *mut u8;
+    while ptr < end {
+        core::ptr::write_volatile(ptr, 0);
+        ptr = ptr.add(8);
+    }
     main();
     loop {
         core::hint::spin_loop();
