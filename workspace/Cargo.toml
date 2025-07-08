@@ -17,3 +17,6 @@ strip = "debuginfo"
 [profile.dev]
 panic = "abort"
 strip = "symbols"
+opt-level = "z"
+debug = false
+debug-assertions = false
