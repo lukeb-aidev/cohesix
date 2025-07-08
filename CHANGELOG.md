@@ -2913,3 +2913,7 @@
 - Printed SP/FP and local variable addresses on boot.
 - Added allocator debug prints for offset, aligned, endptr, and returned pointer.
 
+## [v0.450] - 2027-10-10
+### Fixed
+- Zeroed BSS in _start to prevent MMU fault.
+
