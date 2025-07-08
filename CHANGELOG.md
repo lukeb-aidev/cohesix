@@ -3007,3 +3007,9 @@
 - **DebugDataAbort-075**: Added early stack/heap/bss logging and global pointer dumps in `cohesix_root`.
 - **DebugDataAbort-075**: `boot_qemu.sh` now logs exec and instruction traces for page table analysis.
 
+## [v0.469] - 2027-11-05
+### Added
+- **ExpandAIElFDebugAndPatch-078**: Hardened pointer validation across user API and root FFI.
+- **ExpandAIElFDebugAndPatch-078**: Watch table and integrity hash for tracked pointers.
+- **ExpandAIElFDebugAndPatch-078**: Reduced root heap to 512KB and enabled deterministic debug builds.
+
