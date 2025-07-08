@@ -3017,3 +3017,7 @@
 ### Changed
 - **EnhanceKernelDebug-079**: coh  script now forces KernelPrinting, KernelDebugBuild, and KernelVerificationBuild via cmake.
 
+## [v0.471] - 2027-02-03
+### Changed
+- **KernelCapFaultDeepAnalysis-080**: Added user segment bounds checks in `src/kernel/loader.rs` and updated metadata.
+
