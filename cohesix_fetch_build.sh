@@ -705,12 +705,7 @@ if command -v go &> /dev/null; then
       log "  compiling $name for Linux as GOARCH=$GOARCH"
       if GOOS=linux GOARCH="$GOARCH" go build -tags unix -C "$dir" -o "$GO_HELPERS_DIR/$name"; then
         chmod +x "$GO_HELPERS_DIR/$name"
-        if [[ "$name" == "srvctl" || "$name" == "indexserver" || "$name" == "devwatcher" ]]; then
-          cp "$GO_HELPERS_DIR/$name" "$STAGE_DIR/usr/plan9/bin/"
-          log "📦 Staged Plan9 binary: $name -> $STAGE_DIR/usr/plan9/bin/"
-        else
-          log "📦 Staged Linux helper: $name -> $GO_HELPERS_DIR"
-        fi
+        log "📦 Staged Linux helper: $name -> $GO_HELPERS_DIR"
       else
         log "  build failed for $name"
       fi

@@ -1,0 +1,14 @@
+Go Tool Map (2025-07-08)
+========================
+
+Platform categorization of Go binaries under go/cmd/:
+
+- Linux helpers (remain in Go)
+  - `coh-9p-helper`
+  - `gui-orchestrator`
+
+- Plan9 services (ported to Rust)
+  - `srvctl`
+  - `indexserver`
+  - `devwatcher`
+  - `physics-server`

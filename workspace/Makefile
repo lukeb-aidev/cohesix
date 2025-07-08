@@ -8,7 +8,7 @@
 GREEN := \033[0;32m
 RESET := \033[0m
 
-.PHONY: help sel4_root cli_tools cohcc cohesix_build cohesix_cap cohesix_trace cohagent cohrole cohrun cohup cohesix kernel_musl logdemo init full stage clean
+.PHONY: help sel4_root cli_tools cohcc cohesix_build cohesix_cap cohesix_trace cohagent cohrole cohrun cohup cohesix kernel_musl logdemo init srvctl indexserver devwatcher physics_server full stage clean
 
 help:
 	@echo ""
@@ -122,14 +122,46 @@ logdemo:
 	[ -f "$$BIN_PATH" ] && cp "$$BIN_PATH" out/bin/logdemo || echo "⚠️ logdemo not found"
 
 init:
-	@set -e; \
-	echo "$(GREEN)==> Building init...$(RESET)"; \
-	mkdir -p out/bin; \
+        @set -e; \
+        echo "$(GREEN)==> Building init...$(RESET)"; \
+        mkdir -p out/bin; \
         cargo build --release --target aarch64-unknown-linux-musl --bin init --features "minimal_uefi"; \
-	BIN_PATH="target/aarch64-unknown-linux-musl/release/init"; \
-	[ -f "$$BIN_PATH" ] && cp "$$BIN_PATH" out/bin/init || echo "⚠️ init not found"
+        BIN_PATH="target/aarch64-unknown-linux-musl/release/init"; \
+        [ -f "$$BIN_PATH" ] && cp "$$BIN_PATH" out/bin/init || echo "⚠️ init not found"
 
-cli_tools: cohcc cohesix_build cohesix_cap cohesix_trace cohagent cohrole cohrun cohup cohesix kernel_musl logdemo init
+srvctl:
+        @set -e; \
+        echo "$(GREEN)==> Building srvctl...$(RESET)"; \
+        mkdir -p out/bin; \
+        cargo build --release --target aarch64-unknown-linux-musl --package cohcli_tools --bin srvctl; \
+        BIN_PATH="target/aarch64-unknown-linux-musl/release/srvctl"; \
+        [ -f "$$BIN_PATH" ] && cp "$$BIN_PATH" out/bin/srvctl || echo "⚠️ srvctl not found"
+
+indexserver:
+        @set -e; \
+        echo "$(GREEN)==> Building indexserver...$(RESET)"; \
+        mkdir -p out/bin; \
+        cargo build --release --target aarch64-unknown-linux-musl --package cohcli_tools --bin indexserver; \
+        BIN_PATH="target/aarch64-unknown-linux-musl/release/indexserver"; \
+        [ -f "$$BIN_PATH" ] && cp "$$BIN_PATH" out/bin/indexserver || echo "⚠️ indexserver not found"
+
+devwatcher:
+        @set -e; \
+        echo "$(GREEN)==> Building devwatcher...$(RESET)"; \
+        mkdir -p out/bin; \
+        cargo build --release --target aarch64-unknown-linux-musl --package cohcli_tools --bin devwatcher; \
+        BIN_PATH="target/aarch64-unknown-linux-musl/release/devwatcher"; \
+        [ -f "$$BIN_PATH" ] && cp "$$BIN_PATH" out/bin/devwatcher || echo "⚠️ devwatcher not found"
+
+physics_server:
+        @set -e; \
+        echo "$(GREEN)==> Building physics_server...$(RESET)"; \
+        mkdir -p out/bin; \
+        cargo build --release --target aarch64-unknown-linux-musl --package cohcli_tools --bin physics-server; \
+        BIN_PATH="target/aarch64-unknown-linux-musl/release/physics-server"; \
+        [ -f "$$BIN_PATH" ] && cp "$$BIN_PATH" out/bin/physics-server || echo "⚠️ physics_server not found"
+
+cli_tools: cohcc cohesix_build cohesix_cap cohesix_trace cohagent cohrole cohrun cohup cohesix kernel_musl logdemo init srvctl indexserver devwatcher physics_server
 
 full: sel4_root cli_tools
 
@@ -152,5 +184,4 @@ stage:
 
 clean:
 	@set -e; \
-	echo "$(GREEN)==> Cleaning workspace...$(RESET)"; \
-	cargo clean
+	echo "$(GREEN)==> Cleaning workspace...$(RESET)"; \	cargo clean
