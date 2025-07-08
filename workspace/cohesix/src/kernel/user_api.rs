@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: user_api.rs v0.1
+// Filename: user_api.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-08-27
+// Date Modified: 2027-11-05
 // SPDX-License-Identifier: MIT
 
 /// Kernel-exported userland API shims.
@@ -23,7 +23,18 @@ pub fn init_user_api() {
     }
 }
 
+fn validate_slice(ptr: *const u8, len: usize) {
+    const BASE: usize = 0xffffff8040000000;
+    const MAX: usize = BASE + 0x800000;
+    let start = ptr as usize;
+    let end = start.saturating_add(len);
+    if ptr.is_null() || start < BASE || end > MAX {
+        panic!("user_api ptr out of range: {start:x}");
+    }
+}
+
 extern "C" fn sys_log_impl(ptr: *const u8, len: usize) {
+    validate_slice(ptr, len);
     if let Ok(msg) = unsafe { std::str::from_utf8(std::slice::from_raw_parts(ptr, len)) } {
         println!("{msg}");
     }
