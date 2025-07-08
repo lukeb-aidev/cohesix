@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: main.rs v0.10
+// Filename: main.rs v0.11
 // Author: Lukas Bower
-// Date Modified: 2027-10-04
+// Date Modified: 2027-10-05
 #![no_std]
 #![no_main]
 #![feature(alloc_error_handler, asm_experimental_arch)]
@@ -17,6 +17,7 @@ use core::ptr;
 extern "C" {
     static __heap_start: u8;
     static __heap_end: u8;
+    static __stack_start: u8;
     static __stack_end: u8;
 }
 
