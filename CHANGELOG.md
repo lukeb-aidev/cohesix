@@ -2954,3 +2954,8 @@
   aborts.
 - Added a crate-level `abort` helper printing static strings only.
 - Updated allocator overflow handling to avoid formatting machinery.
+
+## [v0.458] - 2027-10-18
+### Fixed
+- Replaced `split_whitespace` in `cohesix_root` boot arg parser with ASCII-only
+  parsing to eliminate Unicode tables.
