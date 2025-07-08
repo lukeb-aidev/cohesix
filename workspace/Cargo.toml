@@ -9,6 +9,10 @@ members = [
     "cohesix-9p",
     "cohesix_root"
 ]
+default-members = [
+    "cohesix",
+    "cohesix-9p"
+]
 
 [profile.release]
 panic = "abort"

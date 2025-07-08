@@ -87,7 +87,7 @@ fn simulation_loop(rx: Receiver<SimCommand>) {
     let mut pipeline = PhysicsPipeline::new();
     let gravity = vector![0.0, -9.81, 0.0];
     let integration_parameters = IntegrationParameters::default();
-    let mut broad_phase = BroadPhase::new();
+    let mut broad_phase = DefaultBroadPhase::new();
     let mut narrow_phase = NarrowPhase::new();
     let mut bodies = RigidBodySet::new();
     let mut colliders = ColliderSet::new();
@@ -241,7 +241,7 @@ pub fn deterministic_harness(seed: u64, steps: u32) -> Vec<SimSnapshot> {
     let mut pipeline = PhysicsPipeline::new();
     let gravity = vector![0.0, -9.81, 0.0];
     let params = IntegrationParameters::default();
-    let mut broad = BroadPhase::new();
+    let mut broad = DefaultBroadPhase::new();
     let mut narrow = NarrowPhase::new();
     let mut bodies = RigidBodySet::new();
     let mut colliders = ColliderSet::new();
