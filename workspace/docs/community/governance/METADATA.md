@@ -174,7 +174,7 @@
 | scripts/manpage_scan.sh | v0.1 | 2025-06-08 | COMMUNITY | | |
 | scripts/verify-macos-setup.sh | v0.1 | 2025-06-05 | COMMUNITY | | |
 | scripts/debug_qemu_boot.sh | v0.4 | 2026-11-24 | COMMUNITY | | |
-| scripts/boot_qemu.sh | v0.3 | 2026-12-31 | COMMUNITY | | |
+| scripts/boot_qemu.sh | v0.4 | 2027-11-05 | COMMUNITY | | |
 | scripts/validate_iso_build.sh | v0.3 | 2026-12-31 | COMMUNITY | | |
 | scripts/build_root_elf.sh | v0.19 | 2027-01-15 | COMMUNITY | | |
 | scripts/load_arch_config.sh | v0.1 | 2026-07-25 | COMMUNITY | | |
@@ -248,7 +248,7 @@
 | src/utils/gpu.rs | v0.2 | 2026-12-31 | COMMUNITY | | |
 | workspace/cohesix_root/Cargo.toml | v0.5 | 2027-10-22 | COMMUNITY | | |
 | workspace/cohesix_root/link.ld | v0.10 | 2027-10-11 | COMMUNITY | | |
-| workspace/cohesix_root/src/main.rs | v0.24 | 2027-11-01 | COMMUNITY | | |
+| workspace/cohesix_root/src/main.rs | v0.25 | 2027-11-05 | COMMUNITY | | |
 | workspace/cohesix_root/src/lang_items.rs | v0.1 | 2027-10-12 | COMMUNITY | | |
 | workspace/cohesix_root/src/entry.S | v0.19 | 2027-11-01 | COMMUNITY | | |
 | workspace/cohesix_root/src/allocator.rs | v0.5 | 2027-10-23 | COMMUNITY | | |

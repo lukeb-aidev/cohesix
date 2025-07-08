@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: main.rs v0.24
+// Filename: main.rs v0.25
 // Author: Lukas Bower
-// Date Modified: 2027-11-01
+// Date Modified: 2027-11-05
 #![no_std]
 #![no_main]
 #![feature(alloc_error_handler, asm_experimental_arch, lang_items)]
@@ -27,6 +27,13 @@ extern "C" {
     static mut __bss_end: u8;
 }
 
+#[no_mangle]
+static mut VALIDATOR_HANDLE: *const u8 = core::ptr::null();
+#[no_mangle]
+static mut SRV_HANDLE: *const u8 = core::ptr::null();
+#[no_mangle]
+static mut CUDA_HANDLE: *const u8 = core::ptr::null();
+
 fn putchar(c: u8) {
     unsafe { seL4_DebugPutChar(c) };
 }
@@ -43,6 +50,17 @@ fn put_hex(val: usize) {
         putchar(*c);
     }
     putchar(b'\n');
+}
+
+fn dump_stack(sp: usize) {
+    putstr("stack_dump_start");
+    for i in 0..4 {
+        let addr = sp.wrapping_add(i * core::mem::size_of::<usize>());
+        put_hex(addr);
+        let val = unsafe { (addr as *const usize).read_volatile() };
+        put_hex(val);
+    }
+    putstr("stack_dump_end");
 }
 
 #[no_mangle]
@@ -75,6 +93,17 @@ fn log_stack_bounds(start: usize, end: usize) {
     put_hex(start);
     putstr("stack_end");
     put_hex(end);
+}
+
+fn log_global_ptrs() {
+    unsafe {
+        putstr("validator_ptr");
+        put_hex(VALIDATOR_HANDLE as usize);
+        putstr("srv_ptr");
+        put_hex(SRV_HANDLE as usize);
+        putstr("cuda_ptr");
+        put_hex(CUDA_HANDLE as usize);
+    }
 }
 
 pub fn check_heap_ptr(ptr: usize) {
@@ -284,6 +313,20 @@ pub extern "C" fn main() {
     put_hex(sp);
     putstr("FP");
     put_hex(fp);
+    dump_stack(sp);
+    log_global_ptrs();
+    let bss_start = unsafe { &__bss_start as *const u8 as usize };
+    let bss_end = unsafe { &__bss_end as *const u8 as usize };
+    putstr("bss_start");
+    put_hex(bss_start);
+    putstr("bss_end");
+    put_hex(bss_end);
+    putstr("bootargs_ptr");
+    put_hex(PATH_BOOTARGS.as_ptr() as usize);
+    putstr("cohrole_ptr");
+    put_hex(PATH_COHROLE.as_ptr() as usize);
+    putstr("rc_bin_ptr");
+    put_hex(BIN_RC.as_ptr() as usize);
     let local = 0u8;
     putstr("local");
     put_hex(&local as *const _ as usize);
