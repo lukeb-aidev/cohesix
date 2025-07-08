@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v1.04
 // Author: Lukas Bower
-// Date Modified: 2027-08-13
+// Date Modified: 2027-10-16
 
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
@@ -2942,3 +2942,8 @@
 ## [v0.455] - 2027-10-15
 ### Fixed
 - Cleared all general-purpose registers before jumping to Rust `main` in `entry.S` to avoid stale values.
+
+## [v0.456] - 2027-10-16
+### Fixed
+- Added extensive boot register dump and rodata validation in `entry.S`.
+- Logged rodata address and contents in `main` with range checks.

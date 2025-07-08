@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: main.rs v0.17
+// Filename: main.rs v0.18
 // Author: Lukas Bower
-// Date Modified: 2027-10-13
+// Date Modified: 2027-10-16
 #![no_std]
 #![no_main]
 #![feature(alloc_error_handler, asm_experimental_arch, lang_items)]
@@ -90,6 +90,16 @@ pub fn check_heap_ptr(ptr: usize) {
     }
 }
 
+pub fn check_rodata_ptr(ptr: usize) {
+    let text_start: usize = 0xffffff8040000000;
+    let ro_end = unsafe { &__bss_start as *const u8 as usize };
+    if ptr < text_start || ptr >= ro_end {
+        putstr("RODATA POINTER OUT OF RANGE");
+        put_hex(ptr);
+        panic!("rodata pointer out of range");
+    }
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn seL4_DebugPutChar(_c: u8) {}
 #[no_mangle]
@@ -158,6 +168,8 @@ const SCRIPT_KIOSK: &[u8] = b"/init/kiosk.rc\0";
 const SCRIPT_SENSOR: &[u8] = b"/init/sensor.rc\0";
 const SCRIPT_SIMTEST: &[u8] = b"/init/simtest.rc\0";
 const SCRIPT_QUEEN: &[u8] = b"/init/queen.rc\0";
+// DEBUG: rodata audit string
+static RODATA_CHECK: &str = "RODATA_OK";
 
 fn load_bootargs() {
     unsafe {
@@ -265,6 +277,12 @@ pub extern "C" fn main() {
         putstr("STACK CORRUPTION");
         panic!("sp out of range");
     }
+    let ro_ptr = RODATA_CHECK.as_ptr() as usize;
+    putstr("rodata_addr");
+    put_hex(ro_ptr);
+    check_rodata_ptr(ro_ptr);
+    putstr("rodata_val");
+    putstr(RODATA_CHECK);
     let local_addr = &local as *const _ as usize;
     assert!(local_addr >= stack_start && local_addr <= stack_end, "local var outside stack");
     assert!(heap_start >= 0xffffff8040000000 && heap_start < 0xffffff8040633000, "Heap start out of range");
