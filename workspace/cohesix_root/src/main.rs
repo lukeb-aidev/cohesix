@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: main.rs v0.18
+// Filename: main.rs v0.19
 // Author: Lukas Bower
-// Date Modified: 2027-10-16
+// Date Modified: 2027-10-17
 #![no_std]
 #![no_main]
 #![feature(alloc_error_handler, asm_experimental_arch, lang_items)]
@@ -86,7 +86,7 @@ pub fn check_heap_ptr(ptr: usize) {
     if ptr < start || ptr >= end {
         putstr("HEAP POINTER OUT OF RANGE");
         put_hex(ptr);
-        panic!("heap pointer out of range");
+        abort("heap pointer out of range");
     }
 }
 
@@ -96,7 +96,7 @@ pub fn check_rodata_ptr(ptr: usize) {
     if ptr < text_start || ptr >= ro_end {
         putstr("RODATA POINTER OUT OF RANGE");
         put_hex(ptr);
-        panic!("rodata pointer out of range");
+        abort("rodata pointer out of range");
     }
 }
 
@@ -154,6 +154,13 @@ pub fn putstr(s: &str) {
         putchar(b);
     }
     putchar(b'\n');
+}
+
+pub fn abort(msg: &str) -> ! {
+    putstr(msg);
+    loop {
+        core::hint::spin_loop();
+    }
 }
 
 fn cstr(bytes: &[u8]) -> *const c_char {
@@ -275,7 +282,7 @@ pub extern "C" fn main() {
     print_stack_bounds(stack_start, stack_end);
     if sp < stack_start || sp > stack_end {
         putstr("STACK CORRUPTION");
-        panic!("sp out of range");
+        abort("sp out of range");
     }
     let ro_ptr = RODATA_CHECK.as_ptr() as usize;
     putstr("rodata_addr");
@@ -284,13 +291,19 @@ pub extern "C" fn main() {
     putstr("rodata_val");
     putstr(RODATA_CHECK);
     let local_addr = &local as *const _ as usize;
-    assert!(local_addr >= stack_start && local_addr <= stack_end, "local var outside stack");
-    assert!(heap_start >= 0xffffff8040000000 && heap_start < 0xffffff8040633000, "Heap start out of range");
-    assert!(stack_end > stack_start && stack_end - stack_start == 0x10000, "Stack bounds invalid");
+    if !(local_addr >= stack_start && local_addr <= stack_end) {
+        abort("local var outside stack");
+    }
+    if !(heap_start >= 0xffffff8040000000 && heap_start < 0xffffff8040633000) {
+        abort("heap start out of range");
+    }
+    if !(stack_end > stack_start && stack_end - stack_start == 0x10000) {
+        abort("stack bounds invalid");
+    }
     load_bootargs();
     let role_cstr = env_var("COHROLE");
     let role = role_cstr
-        .map(|c| c.to_str().unwrap())
+        .and_then(|c| c.to_str().ok())
         .unwrap_or("DroneWorker");
     write_role(role);
     putstr("[root] launching userland...");
