@@ -2933,3 +2933,8 @@
 - Added early register logging in `entry.S` to dump SP and FP.
 - Extended `check_heap_ptr` with register dumps and stricter bounds.
 - Bump allocator now logs registers on each allocation and validates end pointer.
+
+## [v0.454] - 2027-10-14
+### Fixed
+- Inserted `dsb` and `isb` barriers after BSS zeroing in `entry.S`.
+- Added `docs/community/diagnostics/MMU_FAULT_AUDIT.md` capturing MMU fault analysis.
