@@ -1,13 +1,47 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: entry.S v0.11
+// Filename: entry.S v0.12
 // Author: Lukas Bower
-// Date Modified: 2027-10-19
+// Date Modified: 2027-10-20
 
     .global _sel4_start
     .extern __stack_end
     .extern __bss_start
     .extern __bss_end
 _sel4_start:
+    // zero all registers on entry
+    mov x0, xzr
+    mov x1, xzr
+    mov x2, xzr
+    mov x3, xzr
+    mov x4, xzr
+    mov x5, xzr
+    mov x6, xzr
+    mov x7, xzr
+    mov x8, xzr
+    mov x9, xzr
+    mov x10, xzr
+    mov x11, xzr
+    mov x12, xzr
+    mov x13, xzr
+    mov x14, xzr
+    mov x15, xzr
+    mov x16, xzr
+    mov x17, xzr
+    mov x18, xzr
+    mov x19, xzr
+    mov x20, xzr
+    mov x21, xzr
+    mov x22, xzr
+    mov x23, xzr
+    mov x24, xzr
+    mov x25, xzr
+    mov x26, xzr
+    mov x27, xzr
+    mov x28, xzr
+    mov x29, xzr
+    mov x30, xzr
+    mov sp, x0
+    // establish stack after wipe
     ldr x0, =__stack_end
     mov sp, x0
     mov x29, sp
@@ -57,7 +91,7 @@ _sel4_start:
     str xzr, [x0], #8
     b   1b
 2:
-    dsb sy
+    dsb ish
     isb
     // clear general-purpose registers before jumping to Rust
     mov x0, #0
