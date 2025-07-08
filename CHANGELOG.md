@@ -2923,3 +2923,7 @@
 - Updated linker script to reference `_sel4_start`.
 - Removed obsolete `_start` implementation.
 
+## [v0.452] - 2027-10-12
+### Fixed
+- Resolved duplicate lang item errors by centralizing panic and alloc handlers.
+- Added entry.S with _sel4_start to set stack and call main.
