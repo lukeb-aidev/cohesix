@@ -1,10 +1,13 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: sel4_start.S v0.3
+// Filename: sel4_start.S v0.4
 // Author: Lukas Bower
-// Date Modified: 2026-11-21
+// Date Modified: 2027-10-06
 
     .global _sel4_start
+    .extern __stack_end
 _sel4_start:
+    ldr x0, =__stack_end
+    mov sp, x0
     call main
     jmp .
 

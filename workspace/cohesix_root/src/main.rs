@@ -1,15 +1,16 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: main.rs v0.11
+// Filename: main.rs v0.12
 // Author: Lukas Bower
-// Date Modified: 2027-10-05
+// Date Modified: 2027-10-06
 #![no_std]
 #![no_main]
 #![feature(alloc_error_handler, asm_experimental_arch)]
 
 extern crate alloc;
 
+mod allocator;
+
 use alloc::vec::Vec;
-use core::alloc::{GlobalAlloc, Layout};
 use core::ffi::{c_char, CStr};
 use core::panic::PanicInfo;
 use core::ptr;
@@ -54,7 +55,7 @@ fn print_stack_bounds(start: usize, end: usize) {
 }
 
 #[no_mangle]
-unsafe extern "C" fn seL4_DebugPutChar(_c: u8) {}
+pub unsafe extern "C" fn seL4_DebugPutChar(_c: u8) {}
 #[no_mangle]
 unsafe extern "C" fn open(_path: *const c_char, _flags: i32, _mode: i32) -> i32 {
     -1
@@ -84,34 +85,6 @@ unsafe extern "C" fn setenv(_name: *const c_char, _val: *const c_char, _overwrit
     0
 }
 
-struct BumpAllocator;
-static mut OFFSET: usize = 0;
-
-unsafe impl GlobalAlloc for BumpAllocator {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        let align_mask = layout.align() - 1;
-        let heap_start = &__heap_start as *const u8 as usize;
-        let heap_end = &__heap_end as *const u8 as usize;
-        let off = (OFFSET + align_mask) & !align_mask;
-        let end_ptr = heap_start + off + layout.size();
-        if end_ptr > heap_end {
-            putstr("Allocation past heap end!");
-            put_hex(end_ptr);
-            loop {
-                core::hint::spin_loop();
-            }
-        }
-        let ptr = (heap_start + off) as *mut u8;
-        OFFSET = off + layout.size();
-        putstr("alloc ptr:");
-        put_hex(ptr as usize);
-        ptr
-    }
-    unsafe fn dealloc(&self, _ptr: *mut u8, _layout: Layout) {}
-}
-
-#[global_allocator]
-static GLOBAL_ALLOC: BumpAllocator = BumpAllocator;
 
 #[no_mangle]
 pub unsafe extern "C" fn _start(_bootinfo: usize) -> ! {
@@ -229,6 +202,7 @@ fn main() {
     let stack_end = unsafe { &__stack_end as *const u8 as usize };
     print_stack_bounds(stack_start, stack_end);
     assert!(heap_start >= 0xffffff8040000000 && heap_start < 0xffffff8040633000, "Heap start out of range");
+    assert!(stack_end > stack_start && stack_end - stack_start == 0x10000, "Stack bounds invalid");
     load_bootargs();
     let role_cstr = env_var("COHROLE");
     let role = role_cstr
