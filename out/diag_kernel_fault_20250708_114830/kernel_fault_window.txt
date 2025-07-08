@@ -1,0 +1,75 @@
+
+/home/ubuntu/sel4_workspace/kernel/kernel.elf:     file format elf64-littleaarch64
+
+
+Disassembly of section .text:
+
+ffffff8040012600 <strlcat+0x6c>:
+ffffff8040012600:	35ffff41 	cbnz	w1, ffffff80400125e8 <strlcat+0x54>
+ffffff8040012604:	d1000440 	sub	x0, x2, #0x1
+ffffff8040012608:	3820689f 	strb	wzr, [x4, x0]
+ffffff804001260c:	17fffff6 	b	ffffff80400125e4 <strlcat+0x50>
+ffffff8040012610:	aa0203e0 	mov	x0, x2
+ffffff8040012614:	3820689f 	strb	wzr, [x4, x0]
+ffffff8040012618:	17fffff3 	b	ffffff80400125e4 <strlcat+0x50>
+ffffff804001261c:	aa0303e0 	mov	x0, x3
+ffffff8040012620:	d65f03c0 	ret
+
+ffffff8040012624 <memzero>:
+ffffff8040012624:	a9bf7bfd 	stp	x29, x30, [sp, #-16]!
+ffffff8040012628:	910003fd 	mov	x29, sp
+ffffff804001262c:	f240081f 	tst	x0, #0x7
+ffffff8040012630:	54000161 	b.ne	ffffff804001265c <memzero+0x38>  // b.any
+ffffff8040012634:	f240083f 	tst	x1, #0x7
+ffffff8040012638:	54000241 	b.ne	ffffff8040012680 <memzero+0x5c>  // b.any
+ffffff804001263c:	8b010002 	add	x2, x0, x1
+ffffff8040012640:	b40000a1 	cbz	x1, ffffff8040012654 <memzero+0x30>
+ffffff8040012644:	d503201f 	nop
+ffffff8040012648:	f800841f 	str	xzr, [x0], #8
+ffffff804001264c:	eb02001f 	cmp	x0, x2
+ffffff8040012650:	54ffffc1 	b.ne	ffffff8040012648 <memzero+0x24>  // b.any
+ffffff8040012654:	a8c17bfd 	ldp	x29, x30, [sp], #16
+ffffff8040012658:	d65f03c0 	ret
+ffffff804001265c:	f0000063 	adrp	x3, ffffff8040021000 <obj_tcb_print_slots+0x190>
+ffffff8040012660:	91396063 	add	x3, x3, #0xe58
+ffffff8040012664:	b0000081 	adrp	x1, ffffff8040023000 <__func__.76>
+ffffff8040012668:	b0000080 	adrp	x0, ffffff8040023000 <__func__.76>
+ffffff804001266c:	91008063 	add	x3, x3, #0x20
+ffffff8040012670:	91138021 	add	x1, x1, #0x4e0
+ffffff8040012674:	91144000 	add	x0, x0, #0x510
+ffffff8040012678:	52800362 	mov	w2, #0x1b                  	// #27
+ffffff804001267c:	94000476 	bl	ffffff8040013854 <_assert_fail>
+ffffff8040012680:	f0000063 	adrp	x3, ffffff8040021000 <obj_tcb_print_slots+0x190>
+ffffff8040012684:	91396063 	add	x3, x3, #0xe58
+ffffff8040012688:	b0000081 	adrp	x1, ffffff8040023000 <__func__.76>
+ffffff804001268c:	b0000080 	adrp	x0, ffffff8040023000 <__func__.76>
+ffffff8040012690:	91008063 	add	x3, x3, #0x20
+ffffff8040012694:	91138021 	add	x1, x1, #0x4e0
+ffffff8040012698:	91150000 	add	x0, x0, #0x540
+ffffff804001269c:	52800382 	mov	w2, #0x1c                  	// #28
+ffffff80400126a0:	9400046d 	bl	ffffff8040013854 <_assert_fail>
+
+ffffff80400126a4 <pad.part.0>:
+ffffff80400126a4:	a9bb7bfd 	stp	x29, x30, [sp, #-80]!
+ffffff80400126a8:	12001c21 	and	w1, w1, #0xff
+ffffff80400126ac:	910003fd 	mov	x29, sp
+ffffff80400126b0:	f90013f5 	str	x21, [sp, #32]
+ffffff80400126b4:	4b030055 	sub	w21, w2, w3
+ffffff80400126b8:	52800402 	mov	w2, #0x20                  	// #32
+ffffff80400126bc:	6b0202bf 	cmp	w21, w2
+ffffff80400126c0:	1a82d2a2 	csel	w2, w21, w2, le
+ffffff80400126c4:	a90153f3 	stp	x19, x20, [sp, #16]
+ffffff80400126c8:	aa0003f4 	mov	x20, x0
+ffffff80400126cc:	9100c3e0 	add	x0, sp, #0x30
+ffffff80400126d0:	8b22c002 	add	x2, x0, w2, sxtw
+ffffff80400126d4:	38001401 	strb	w1, [x0], #1
+ffffff80400126d8:	eb00005f 	cmp	x2, x0
+ffffff80400126dc:	54ffffc1 	b.ne	ffffff80400126d4 <pad.part.0+0x30>  // b.any
+ffffff80400126e0:	71007ebf 	cmp	w21, #0x1f
+ffffff80400126e4:	540002ad 	b.le	ffffff8040012738 <pad.part.0+0x94>
+ffffff80400126e8:	b4000214 	cbz	x20, ffffff8040012728 <pad.part.0+0x84>
+ffffff80400126ec:	2a1503f3 	mov	w19, w21
+ffffff80400126f0:	f9400284 	ldr	x4, [x20]
+ffffff80400126f4:	51008273 	sub	w19, w19, #0x20
+ffffff80400126f8:	9100c3e1 	add	x1, sp, #0x30
+ffffff80400126fc:	aa1403e0 	mov	x0, x20

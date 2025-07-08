@@ -1,0 +1,17 @@
+
+Elf file type is EXEC (Executable file)
+Entry point 0xffffff8040000000
+There are 2 program headers, starting at offset 64
+
+Program Headers:
+  Type           Offset             VirtAddr           PhysAddr
+                 FileSiz            MemSiz              Flags  Align
+  LOAD           0x0000000000002000 0xffffff8040000000 0x0000000040000000
+                 0x000000000002f190 0x000000000023b000  RWE    0x2000
+  GNU_STACK      0x0000000000000000 0x0000000000000000 0x0000000000000000
+                 0x0000000000000000 0x0000000000000000  RW     0x10
+
+ Section to Segment mapping:
+  Segment Sections...
+   00     .boot .text .rodata .eh_frame .data ._idle_thread .boot.bss .bss 
+   01     
