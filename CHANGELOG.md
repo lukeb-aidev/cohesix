@@ -2998,3 +2998,7 @@
 - **BootFlowHardening-067**: used `adrp/add` for stack setup, saved callee registers, and re-zeroed arguments before calling `main`.
 - **BootFlowHardening-067**: removed `Vec` allocations in `main.rs` and added explicit stack buffers with overflow checks.
 
+## [v0.467] - 2027-11-01
+### Added
+- **MergeFeatureRestoreWithNewBoot-074**: Restored full "cohesix_root" features (Plan9 namespace, Secure9P hooks, CUDA/Rapier detection) while preserving minimal boot sequence.
+
