@@ -3021,3 +3021,7 @@
 ### Changed
 - **KernelCapFaultDeepAnalysis-080**: Added user segment bounds checks in `src/kernel/loader.rs` and updated metadata.
 
+## [v0.472] - 2027-11-05
+### Fixed
+- **FixRustPlan9Integration-100**: Resolved build failures for Plan9 Rust tools and adjusted workspace defaults.
+
