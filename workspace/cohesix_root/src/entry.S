@@ -1,21 +1,32 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: entry.S v0.17
+// Filename: entry.S v0.18
 // Author: Lukas Bower
-// Date Modified: 2027-10-25
+// Date Modified: 2027-10-31
 
     .global _sel4_start
     .extern __stack_end
     .extern __bss_start
     .extern __bss_end
 _sel4_start:
-    // BootInfo arrives in x0 but is unused.
-    ldr x1, =__stack_end
+    // BootInfo arrives in x0 but is unused. Load stack end reliably.
+    adrp x1, __stack_end
+    add x1, x1, :lo12:__stack_end
     mov sp, x1
     mov x29, sp
 
+    // Preserve callee-saved registers to ensure clean state
+    stp x29, x30, [sp, #-16]!
+    stp x27, x28, [sp, #-16]!
+    stp x25, x26, [sp, #-16]!
+    stp x23, x24, [sp, #-16]!
+    stp x21, x22, [sp, #-16]!
+    stp x19, x20, [sp, #-16]!
+
     // Zero BSS using x1-x2 so x0 stays intact
-    ldr x1, =__bss_start
-    ldr x2, =__bss_end
+    adrp x1, __bss_start
+    add x1, x1, :lo12:__bss_start
+    adrp x2, __bss_end
+    add x2, x2, :lo12:__bss_end
 1:
     cmp x1, x2
     b.ge 2f
@@ -59,7 +70,8 @@ _sel4_start:
     mov x30, xzr
 
     // Reassert stack pointer after wiping registers
-    ldr x1, =__stack_end
+    adrp x1, __stack_end
+    add x1, x1, :lo12:__stack_end
     mov sp, x1
     mov x29, sp
 
@@ -69,7 +81,21 @@ _sel4_start:
     mov x2, xzr
     mov x3, xzr
 
+    // Zero argument registers once more for safety
+    mov x0, xzr
+    mov x1, xzr
+    mov x2, xzr
+    mov x3, xzr
+
     bl main
+
+    // Restore registers in case main ever returns (should not happen)
+    ldp x19, x20, [sp], #16
+    ldp x21, x22, [sp], #16
+    ldp x23, x24, [sp], #16
+    ldp x25, x26, [sp], #16
+    ldp x27, x28, [sp], #16
+    ldp x29, x30, [sp], #16
     b .
 
     .section .rodata

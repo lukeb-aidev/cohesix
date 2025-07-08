@@ -2993,3 +2993,8 @@
 ### Fixed
 - **FinalRootCauseAnalysis-087**: zeroed all general-purpose registers in `entry.S` before Rust startup, preventing stray pointers at 0xffffff807f000000.
 
+## [v0.466] - 2027-10-31
+### Fixed
+- **BootFlowHardening-067**: used `adrp/add` for stack setup, saved callee registers, and re-zeroed arguments before calling `main`.
+- **BootFlowHardening-067**: removed `Vec` allocations in `main.rs` and added explicit stack buffers with overflow checks.
+
