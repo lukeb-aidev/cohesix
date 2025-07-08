@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: boot_qemu.sh v0.3
+# Filename: boot_qemu.sh v0.4
 # Author: Lukas Bower
-# Date Modified: 2026-12-31
+# Date Modified: 2027-11-05
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
@@ -17,5 +17,5 @@ QEMU_LOG="$LOG_DIR/qemu_debug_$(date +%Y%m%d_%H%M%S).log"
 exec "$QEMU" -M virt,gic-version=2 -cpu cortex-a57 -m 512M \
   -kernel out/bin/elfloader \
   -serial mon:stdio -nographic \
-  -d int,mmu,page,guest_errors,unimp,cpu_reset \
+  -d in_asm,exec,int,mmu,page,guest_errors,unimp,cpu_reset \
   -D "$QEMU_LOG"
