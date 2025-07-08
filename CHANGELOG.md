@@ -2966,3 +2966,9 @@
 - Updated headers for `main.rs` and Cargo manifest.
 
 - Reassert stack pointer after register wipe in entry.S (v0.11).
+
+## [v0.460] - 2027-10-20
+### Fixed
+- **ZeroRegsAndSafeStart-092**: zero all general-purpose registers on entry,
+  reset SP and FP, and enforce `dsb ish` and `isb` barriers after BSS clearing.
+- Updated `entry.S` to wipe registers again before `main`.
