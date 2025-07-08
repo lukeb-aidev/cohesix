@@ -2981,3 +2981,7 @@
 ## [v0.462] - 2027-10-23
 ### Fixed
 - **InvestigateAndFix-084**: Added overflow checks in BumpAllocator to prevent invalid heap pointers.
+## [v0.463] - 2027-10-24
+### Fixed
+- **DisasmAndPatchStartup-093**: preserved BootInfo in x0, zeroed callee-saved registers explicitly, and reloaded sp in entry.S.
+
