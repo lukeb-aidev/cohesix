@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: main.rs v0.14
+// Filename: main.rs v0.15
 // Author: Lukas Bower
-// Date Modified: 2027-10-10
+// Date Modified: 2027-10-11
 #![no_std]
 #![no_main]
 #![feature(alloc_error_handler, asm_experimental_arch)]
@@ -119,23 +119,6 @@ unsafe extern "C" fn setenv(name: *const c_char, val: *const c_char, _overwrite:
 }
 
 
-#[no_mangle]
-pub unsafe extern "C" fn _start(bootinfo: usize) -> ! {
-    putstr("bootinfo ptr");
-    put_hex(bootinfo);
-    core::arch::asm!("mov sp, {}", in(reg) &__stack_end);
-    // Clear BSS so global variables start initialized
-    let mut ptr = &mut __bss_start as *mut u8;
-    let end = &mut __bss_end as *mut u8;
-    while ptr < end {
-        core::ptr::write_volatile(ptr, 0);
-        ptr = ptr.add(8);
-    }
-    main();
-    loop {
-        core::hint::spin_loop();
-    }
-}
 
 fn putstr(s: &str) {
     for &b in s.as_bytes() {
