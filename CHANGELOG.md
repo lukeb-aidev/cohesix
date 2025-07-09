@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v1.09
+// Filename: CHANGELOG.md v1.10
 // Author: Lukas Bower
-// Date Modified: 2027-11-23
+// Date Modified: 2027-12-01
 
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
@@ -3065,3 +3065,9 @@
 ## [v0.481] - 2027-11-30
 ### Changed
 - **ExpandUserlandShell-212**: replaced placeholder init.sh with a namespace-aware shell launcher, updated plan9.ns and role configs, and improved config logging.
+
+## [v0.482] - 2027-12-01
+### Changed
+- **HardenPlan9Userland-104**: enforced service mounts in `plan9.ns`,
+  added telemetry/env controls in `init.sh`, updated `QueenPrimary.yaml`, and
+  made `qemu_boot_check.sh` skip gracefully when OVMF is missing.
