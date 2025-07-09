@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v1.08
+// Filename: CHANGELOG.md v1.09
 // Author: Lukas Bower
-// Date Modified: 2027-11-22
+// Date Modified: 2027-11-23
 
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
@@ -3057,3 +3057,7 @@
 ## [v0.479] - 2027-11-22
 ### Added
 - **RootServerUartBssAudit-098**: Early boot now logs BSS validation results, heap state, and memory map via `coherr!`. Diagnostics panic on corruption.
+
+## [v0.480] - 2027-11-23
+### Changed
+- **AlignRootELFVirtuals-099**: Aligned rootserver ELF LOAD segments to `0xffffff8040000000` to match seL4 high address space. Linker script updated.
