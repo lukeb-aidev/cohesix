@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.97
+# Filename: cohesix_fetch_build.sh v0.98
 # Author: Lukas Bower
-# Date Modified: 2027-11-07
+# Date Modified: 2027-12-08
 #!/usr/bin/env bash
 #
 # Merged old script v0.89 features into current script.
@@ -751,11 +751,17 @@ if [ -x "$MANDOC_BIN" ]; then
   cp bin/man "$STAGE_DIR/bin/man"
   cp bin/man "$STAGE_DIR/usr/bin/man"
   chmod +x "$STAGE_DIR/bin/man" "$STAGE_DIR/usr/bin/man"
+  mkdir -p "$STAGE_DIR/mnt/data/bin"
+  cp "$MANDOC_BIN" "$STAGE_DIR/mnt/data/bin/cohman"
+  chmod +x "$STAGE_DIR/mnt/data/bin/cohman"
+  cp bin/cohman.sh "$STAGE_DIR/bin/cohman"
+  cp bin/cohman.sh "$STAGE_DIR/usr/bin/cohman"
+  chmod +x "$STAGE_DIR/bin/cohman" "$STAGE_DIR/usr/bin/cohman"
   log "✅ Built mandoc" 
-  if [ -d "$ROOT/docs/man" ]; then
+  if [ -d "$ROOT/workspace/docs/man" ]; then
     mkdir -p "$STAGE_DIR/usr/share/man/man1" "$STAGE_DIR/usr/share/man/man8"
-    cp "$ROOT/docs/man/"*.1 "$STAGE_DIR/usr/share/man/man1/" 2>/dev/null || true
-    cp "$ROOT/docs/man/"*.8 "$STAGE_DIR/usr/share/man/man8/" 2>/dev/null || true
+    cp "$ROOT/workspace/docs/man/"*.1 "$STAGE_DIR/usr/share/man/man1/" 2>/dev/null || true
+    cp "$ROOT/workspace/docs/man/"*.8 "$STAGE_DIR/usr/share/man/man8/" 2>/dev/null || true
     log "✅ Updated man pages"
   fi
   log "✅ Staged mandoc to /usr/bin"
