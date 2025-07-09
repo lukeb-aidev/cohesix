@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v1.05
 // Author: Lukas Bower
-// Date Modified: 2027-11-06
+// Date Modified: 2027-11-08
 
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
@@ -3033,3 +3033,7 @@
 ## [v0.474] - 2027-11-07
 ### Fixed
 - **DebugMMUFault-093**: Updated QEMU run memory to 1GB to match kernel expectations, preventing early data abort.
+
+## [v0.475] - 2027-11-08
+### Fixed
+- **DeepMMUDebug-094**: Adjusted rootserver base address to 0x400000 and updated pointer checks for seL4 compatibility.
