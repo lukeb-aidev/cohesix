@@ -3037,3 +3037,8 @@
 ## [v0.475] - 2027-11-08
 ### Fixed
 - **DeepMMUDebug-094**: Adjusted rootserver base address to 0x400000 and updated pointer checks for seL4 compatibility.
+
+## [v0.476] - 2027-11-09
+### Added
+- **RootServerBaseAlign-095**: Hardened pointer validation and explicitly placed
+  rootserver globals in `.bss` for clean initialization.
