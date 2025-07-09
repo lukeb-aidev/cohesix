@@ -1,0 +1,50 @@
+#!/bin/rc
+# CLASSIFICATION: COMMUNITY
+# Filename: run_all_tests.rc v0.1
+# Author: Lukas Bower
+# Date Modified: 2027-12-07
+
+# Orchestrates all Plan9 rc tests under /bin/tests
+
+logdir=/srv/testlogs
+if(! test -d $logdir){
+    logdir=/tmp/testruns
+}
+mkdir -p $logdir
+summary=$logdir/plan9_test_summary
+> $summary
+
+passed=()
+failed=()
+
+for(t in /bin/tests/*.rc){
+    if(~ $t /bin/tests/run_all_tests.rc){
+        continue
+    }
+    name=`{basename $t}
+    outfile=$logdir/^$name^'.log'
+    echo running $name >>$summary
+    { $t >[2=1] } >$outfile
+    if(~ $#status 0){
+        echo $name 'PASS' >>$summary
+        passed=($passed $name)
+    }else{
+        echo $name 'FAIL' >>$summary
+        failed=($failed $name)
+    }
+}
+
+npass=$#passed
+nfail=$#failed
+
+echo 'Summary:' >>$summary
+echo $npass 'passed,' $nfail 'failed' >>$summary
+
+if(~ $nfail 0){
+    cat $summary
+    exit ''
+}else{
+    echo Failed tests: $failed
+    cat $summary
+    exit 'FAIL'
+}

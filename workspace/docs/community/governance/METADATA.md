@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: METADATA.md v3.52
+// Filename: METADATA.md v3.53
 // Author: Lukas Bower
-// Date Modified: 2027-11-21
+// Date Modified: 2027-12-07
 
 ## Canonical Documents
 
@@ -362,6 +362,7 @@
 | tests/Cohesix/test_srv.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
 | tests/Cohesix/test_srvctl.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
 | tests/Cohesix/test_userland_health.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
+| tests/Cohesix/run_all_tests.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
 Removed: introspect_self_diagnosis (Plan9 migration - file-based introspection replaced by validator-driven policy checks)
 Removed: legacy Python tests and lint steps; project now purely Plan9 + Rust
 Changed: `.cargo/config.toml` v0.14 uses project-relative linker script path

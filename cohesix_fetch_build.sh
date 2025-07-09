@@ -782,6 +782,7 @@ fi
 # Stage Plan9 rc tests
 mkdir -p "$STAGE_DIR/bin/tests"
 cp tests/Cohesix/*.rc "$STAGE_DIR/bin/tests/"
+cp tests/Cohesix/run_all_tests.rc "$STAGE_DIR/bin/tests/"
 chmod +x "$STAGE_DIR/bin/tests"/*.rc
 log "✅ Staged Plan9 rc tests to /bin/tests"
 
