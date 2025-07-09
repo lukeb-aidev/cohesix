@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: main.rs v0.29
+// Filename: main.rs v0.30
 // Author: Lukas Bower
-// Date Modified: 2027-11-20
+// Date Modified: 2027-11-21
 #![no_std]
 #![no_main]
 #![feature(alloc_error_handler, asm_experimental_arch, lang_items)]
@@ -148,17 +148,52 @@ fn check_bss_zero() {
     let start = unsafe { &__bss_start as *const u8 };
     let end = unsafe { &__bss_end as *const u8 };
     let mut ptr = start;
+    let mut first_nonzero: usize = 0;
+    let mut count = 0usize;
     while ptr < end {
         unsafe {
-            if ptr.read() != 0 {
-                putstr("bss_not_zero");
-                put_hex(ptr as usize);
-                abort("bss not zero");
+            let val = ptr.read();
+            if val != 0 {
+                if count == 0 {
+                    first_nonzero = ptr as usize;
+                }
+                count += 1;
             }
         }
         ptr = unsafe { ptr.add(1) };
     }
-    putstr("bss_zero_ok");
+    if count > 0 {
+        coherr!("bss_not_zero first={:#x} count={}", first_nonzero, count);
+        panic!("bss not zero");
+    } else {
+        coherr!("bss_zero_ok");
+    }
+}
+
+fn check_heap_bounds() {
+    let start = unsafe { &__heap_start as *const u8 as usize };
+    let end = unsafe { &__heap_end as *const u8 as usize };
+    if start >= end {
+        coherr!("heap_invalid start={:#x} end={:#x}", start, end);
+        panic!("heap bounds invalid");
+    }
+}
+
+fn check_globals_zero() {
+    unsafe {
+        if !VALIDATOR_HANDLE.is_null()
+            || !SRV_HANDLE.is_null()
+            || !CUDA_HANDLE.is_null()
+        {
+            coherr!(
+                "globals_nonzero v={:#x} s={:#x} c={:#x}",
+                VALIDATOR_HANDLE as usize,
+                SRV_HANDLE as usize,
+                CUDA_HANDLE as usize
+            );
+            panic!("globals not zero");
+        }
+    }
 }
 
 fn watch_ptr(ptr: usize) {
@@ -408,6 +443,10 @@ pub extern "C" fn main() {
             panic!("Fence failed.");
         }
     }
+    check_bss_zero();
+    check_heap_bounds();
+    check_globals_zero();
+    coherr!("boot_ok: bss, heap, globals validated");
     crate::allocator::allocator_init_log();
     coherr!("main_start bss_start={:#x} bss_end={:#x} heap_start={:#x} heap_ptr={:#x} heap_end={:#x} img_end={:#x}",
         unsafe { &__bss_start as *const u8 as usize },
@@ -439,7 +478,6 @@ pub extern "C" fn main() {
     put_hex(bss_start);
     putstr("bss_end");
     put_hex(bss_end);
-    check_bss_zero();
     putstr("bootargs_ptr");
     put_hex(PATH_BOOTARGS.as_ptr() as usize);
     putstr("cohrole_ptr");
