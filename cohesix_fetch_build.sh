@@ -425,7 +425,6 @@ fi
 
 log "🔧 Building Rust components with explicit cross targets..."
 cd "$ROOT/workspace"
-make clean
 cargo build --release --target=aarch64-unknown-linux-gnu --workspace
 cargo build --release --target=sel4-aarch64.json -p cohesix_root
 log "✅ Rust components built with explicit --target"
