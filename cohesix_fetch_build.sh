@@ -423,13 +423,17 @@ else
   exit 1
 fi
 
-log "🔧 Building Rust components with explicit cross targets..."
+log "🔧 Building Rust workspace binaries..."
+
 cd "$ROOT/workspace"
-# Build all workspace packages except cohesix_root for the standard target
-cargo build --release --workspace --exclude cohesix_root --target=aarch64-unknown-linux-gnu
-# Build cohesix_root alone for the custom seL4 JSON target
-cargo build --release -p cohesix_root --target=sel4-aarch64.json
-log "✅ Rust components built with explicit --target"
+
+# Build all workspace crates except cohesix_root with standard musl userland target
+cargo +nightly build --release --workspace --exclude cohesix_root --target=aarch64-unknown-linux-musl
+
+# Build bare metal cohesix_root with explicit build-std for core+alloc only
+cargo +nightly build -p cohesix_root --release --target=sel4-aarch64.json -Z build-std=core,alloc
+
+log "✅ Rust components built with proper split targets"
 
 # Copy built binaries to staging and verify presence
 mkdir -p "$STAGE_DIR/bin"
