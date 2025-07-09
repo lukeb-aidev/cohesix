@@ -438,10 +438,10 @@ cargo +nightly build -p cohesix_root --release \
 
 log "✅ Rust components built with proper split targets"
 
-# Copy built binaries to staging and verify presence
 mkdir -p "$STAGE_DIR/bin"
 TARGET_DIR="$ROOT/workspace/target/aarch64-unknown-linux-musl/release"
-for bin in cohcc cohesix_build cohesix_cap cohesix_trace cohrun_cli cohagent cohrole cohrun cohup srvctl indexserver devwatcher physics-server cohesix_root kernel logdemo init; do
+# Stage all main binaries
+for bin in cohcc cohbuild cohcap cohtrace cohrun_cli cohagent cohrole cohrun cohup srvctl indexserver devwatcher physics-server exportfs import mount srv scenario_compiler; do
   BIN_PATH="$TARGET_DIR/$bin"
   if [ -f "$BIN_PATH" ]; then
     cp "$BIN_PATH" "$STAGE_DIR/bin/$bin"
@@ -452,6 +452,13 @@ for bin in cohcc cohesix_build cohesix_cap cohesix_trace cohrun_cli cohagent coh
   fi
   [ -f "$STAGE_DIR/bin/$bin" ] || { echo "❌ $bin missing after staging" >&2; exit 1; }
 done
+
+# Ensure physics-server and srv exist after staging
+[ -f "$STAGE_DIR/bin/physics-server" ] || { echo "❌ physics-server missing after staging" >&2; exit 1; }
+[ -f "$STAGE_DIR/bin/srv" ] || { echo "❌ srv missing after staging" >&2; exit 1; }
+
+# Ensure all staged binaries are executable
+chmod +x "$STAGE_DIR/bin"/*
 
 # Stage shell wrappers for Python CLI tools
 for script in cohcli cohcap cohtrace cohrun cohbuild cohup cohpkg; do
