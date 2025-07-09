@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: plan9.ns v0.7
+// Filename: plan9.ns v0.8
 // Author: Lukas Bower
-// Date Modified: 2027-12-01
+// Date Modified: 2027-12-02
 
 # Cohesix default namespace
 bind -a /usr/coh/bin /bin
@@ -9,6 +9,6 @@ bind -a /usr /usr
 bind -a /tmp /tmp
 bind -a /srv /srv
 bind -a /mnt /mnt
-srv cuda /srv/cuda
-srv telemetry /srv/telemetry
-srv cohrole /srv/cohrole
+srv? cuda /srv/cuda
+srv? telemetry /srv/telemetry
+srv? cohrole /srv/cohrole
