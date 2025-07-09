@@ -1,0 +1,18 @@
+#!/bin/rc
+# CLASSIFICATION: COMMUNITY
+# Filename: test_srvctl.rc v0.1
+# Author: Lukas Bower
+# Date Modified: 2027-12-07
+
+bin=/bin/srvctl
+if(! test -x $bin){
+    echo 'srvctl missing or not executable' >[1=2]
+    exit 'FAIL'
+}
+$bin -h >/dev/null >[2]/dev/null
+if(~ $#status 0){
+    echo 'srvctl ok'
+}else{
+    echo 'srvctl invocation failed' >[1=2]
+    exit 'FAIL'
+}
