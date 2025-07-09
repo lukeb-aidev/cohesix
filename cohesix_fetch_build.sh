@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.96
+# Filename: cohesix_fetch_build.sh v0.97
 # Author: Lukas Bower
-# Date Modified: 2027-11-05
+# Date Modified: 2027-11-07
 #!/usr/bin/env bash
 #
 # Merged old script v0.89 features into current script.
@@ -577,7 +577,7 @@ cd "$ROOT"
 # -----------------------------------------------------------
 log "🧪 Booting elfloader + kernel in QEMU..."
 QEMU_LOG="$LOG_DIR/qemu_debug_$(date +%Y%m%d_%H%M%S).log"
-qemu-system-aarch64 -M virt,gic-version=2 -cpu cortex-a57 -m 512M \
+qemu-system-aarch64 -M virt,gic-version=2 -cpu cortex-a57 -m 1024M \
   -kernel "$COHESIX_OUT/bin/elfloader" \
   -serial mon:stdio -nographic \
   -d int,mmu,page,guest_errors,unimp,cpu_reset \
@@ -827,7 +827,7 @@ echo "🪵 Full log saved to $LOG_FILE" >&3
 
 # QEMU bare metal launch command (final boot test)
 log "🧪 Running final QEMU bare metal boot test..."
-qemu-system-aarch64 -M virt,gic-version=2 -cpu cortex-a57 -m 512M \
+qemu-system-aarch64 -M virt,gic-version=2 -cpu cortex-a57 -m 1024M \
   -kernel "$ROOT/out/bin/elfloader" \
   -initrd "$ROOT/out/bin/cohesix_root.elf" \
   -serial mon:stdio -nographic \
