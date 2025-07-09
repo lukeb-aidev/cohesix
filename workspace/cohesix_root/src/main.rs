@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: main.rs v0.27
+// Filename: main.rs v0.28
 // Author: Lukas Bower
-// Date Modified: 2027-11-08
+// Date Modified: 2027-11-09
 #![no_std]
 #![no_main]
 #![feature(alloc_error_handler, asm_experimental_arch, lang_items)]
@@ -28,13 +28,18 @@ extern "C" {
 }
 
 #[no_mangle]
+#[link_section = ".bss"]
 static mut VALIDATOR_HANDLE: *const u8 = core::ptr::null();
 #[no_mangle]
+#[link_section = ".bss"]
 static mut SRV_HANDLE: *const u8 = core::ptr::null();
 #[no_mangle]
+#[link_section = ".bss"]
 static mut CUDA_HANDLE: *const u8 = core::ptr::null();
 
+#[link_section = ".bss"]
 static mut WATCHED_PTRS: [usize; 64] = [0; 64];
+#[link_section = ".bss"]
 static mut WATCHED_IDX: usize = 0;
 
 fn putchar(c: u8) {
@@ -109,6 +114,10 @@ fn log_global_ptrs() {
     }
 }
 
+fn image_end() -> usize {
+    unsafe { &__stack_end as *const u8 as usize }
+}
+
 fn watch_ptr(ptr: usize) {
     unsafe {
         if WATCHED_IDX < WATCHED_PTRS.len() {
@@ -134,7 +143,7 @@ pub fn check_heap_ptr(ptr: usize) {
     put_hex(ptr);
     let start = unsafe { &__heap_start as *const u8 as usize };
     let end = unsafe { &__heap_end as *const u8 as usize };
-    if ptr < start || ptr >= end {
+    if ptr < start || ptr >= end || ptr < 0x400000 {
         putstr("HEAP POINTER OUT OF RANGE");
         put_hex(ptr);
         abort("heap pointer out of range");
@@ -153,8 +162,8 @@ pub fn check_rodata_ptr(ptr: usize) {
 
 pub fn validate_ptr(ptr: usize) {
     const BASE: usize = 0x400000;
-    const MAX: usize = BASE + 0x800000; // limit to first 8MB
-    if ptr == 0 || ptr < BASE || ptr >= MAX {
+    let max = image_end();
+    if ptr == 0 || ptr < BASE || ptr >= max {
         putstr("PTR OUT OF RANGE");
         put_hex(ptr);
         abort("invalid pointer");
