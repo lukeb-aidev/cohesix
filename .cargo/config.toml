@@ -18,7 +18,7 @@ rustflags = ["-C", "link-arg=-Tlink.ld", "-C", "link-arg=--gc-sections"]
 
 [target.sel4-aarch64.unstable]
 build-std = "core,alloc,compiler_builtins"
-build-std-features = ["compiler-builtins-mem"]
+build-std-features = "compiler-builtins-mem"
 
 [env]
 RUSTC_BOOTSTRAP = "1"
