@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v1.11
 // Author: Lukas Bower
-// Date Modified: 2027-12-05
+// Date Modified: 2027-12-06
 
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
@@ -3084,3 +3084,10 @@
   bypassing seL4 self-tests. `plan9.ns` gained optional `secure9p` mount.
   `setup/init.sh` now timestamps logs, snapshots `/srv` and `/mnt` to
   `/tmp/BOOT_ENV.json`, and monitors CUDA/telemetry services every 30s.
+
+## [v0.485] - 2027-12-06
+### Changed
+- **UserlandPivot-Prep-163**: added fallback CUDA mount in `plan9.ns`,
+  enhanced `init.sh` with debug flags, memory dumps, Secure9P monitoring, and
+  automatic pivot history logging. `cohesix_root` logs new bootargs for test
+  runs.
