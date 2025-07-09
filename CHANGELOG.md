@@ -3029,3 +3029,7 @@
 ## [v0.473] - 2027-11-06
 ### Added
 - **IntegrateSecure9P-087**: Added cohesix-secure9p crate to workspace and Makefile target for secure9p_lib.
+
+## [v0.474] - 2027-11-07
+### Fixed
+- **DebugMMUFault-093**: Updated QEMU run memory to 1GB to match kernel expectations, preventing early data abort.
