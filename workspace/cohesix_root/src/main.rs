@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: main.rs v0.26
+// Filename: main.rs v0.27
 // Author: Lukas Bower
-// Date Modified: 2027-11-05
+// Date Modified: 2027-11-08
 #![no_std]
 #![no_main]
 #![feature(alloc_error_handler, asm_experimental_arch, lang_items)]
@@ -142,7 +142,7 @@ pub fn check_heap_ptr(ptr: usize) {
 }
 
 pub fn check_rodata_ptr(ptr: usize) {
-    let text_start: usize = 0xffffff8040000000;
+    let text_start: usize = 0x400000;
     let ro_end = unsafe { &__bss_start as *const u8 as usize };
     if ptr < text_start || ptr >= ro_end {
         putstr("RODATA POINTER OUT OF RANGE");
@@ -152,7 +152,7 @@ pub fn check_rodata_ptr(ptr: usize) {
 }
 
 pub fn validate_ptr(ptr: usize) {
-    const BASE: usize = 0xffffff8040000000;
+    const BASE: usize = 0x400000;
     const MAX: usize = BASE + 0x800000; // limit to first 8MB
     if ptr == 0 || ptr < BASE || ptr >= MAX {
         putstr("PTR OUT OF RANGE");
@@ -399,7 +399,7 @@ pub extern "C" fn main() {
     if !(local_addr >= stack_start && local_addr <= stack_end) {
         abort("local var outside stack");
     }
-    if !(heap_start >= 0xffffff8040000000 && heap_start < 0xffffff8040633000) {
+    if !(heap_start >= 0x400000 && heap_start < 0xa33000) {
         abort("heap start out of range");
     }
     if !(stack_end > stack_start && stack_end - stack_start == 0x10000) {
