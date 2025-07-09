@@ -122,44 +122,44 @@ logdemo:
 	[ -f "$$BIN_PATH" ] && cp "$$BIN_PATH" out/bin/logdemo || echo "⚠️ logdemo not found"
 
 init:
-        @set -e; \
-        echo "$(GREEN)==> Building init...$(RESET)"; \
-        mkdir -p out/bin; \
-        cargo build --release --target aarch64-unknown-linux-gnu --bin init --features "minimal_uefi"; \
-        BIN_PATH="target/aarch64-unknown-linux-gnu/release/init"; \
-        [ -f "$$BIN_PATH" ] && cp "$$BIN_PATH" out/bin/init || echo "⚠️ init not found"
+	@set -e; \
+	echo "$(GREEN)==> Building init...$(RESET)"; \
+	mkdir -p out/bin; \
+	cargo build --release --target aarch64-unknown-linux-gnu --bin init --features "minimal_uefi"; \
+	BIN_PATH="target/aarch64-unknown-linux-gnu/release/init"; \
+	[ -f "$$BIN_PATH" ] && cp "$$BIN_PATH" out/bin/init || echo "⚠️ init not found"
 
 srvctl:
-        @set -e; \
-        echo "$(GREEN)==> Building srvctl...$(RESET)"; \
-        mkdir -p out/bin; \
-        cargo build --release --target aarch64-unknown-linux-gnu --package cohcli_tools --bin srvctl; \
-        BIN_PATH="target/aarch64-unknown-linux-gnu/release/srvctl"; \
-        [ -f "$$BIN_PATH" ] && cp "$$BIN_PATH" out/bin/srvctl || echo "⚠️ srvctl not found"
+	@set -e; \
+	echo "$(GREEN)==> Building srvctl...$(RESET)"; \
+	mkdir -p out/bin; \
+	cargo build --release --target aarch64-unknown-linux-gnu --package cohcli_tools --bin srvctl; \
+	BIN_PATH="target/aarch64-unknown-linux-gnu/release/srvctl"; \
+	[ -f "$$BIN_PATH" ] && cp "$$BIN_PATH" out/bin/srvctl || echo "⚠️ srvctl not found"
 
 indexserver:
-        @set -e; \
-        echo "$(GREEN)==> Building indexserver...$(RESET)"; \
-        mkdir -p out/bin; \
-        cargo build --release --target aarch64-unknown-linux-gnu --package cohcli_tools --bin indexserver; \
-        BIN_PATH="target/aarch64-unknown-linux-gnu/release/indexserver"; \
-        [ -f "$$BIN_PATH" ] && cp "$$BIN_PATH" out/bin/indexserver || echo "⚠️ indexserver not found"
+	@set -e; \
+	echo "$(GREEN)==> Building indexserver...$(RESET)"; \
+	mkdir -p out/bin; \
+	cargo build --release --target aarch64-unknown-linux-gnu --package cohcli_tools --bin indexserver; \
+	BIN_PATH="target/aarch64-unknown-linux-gnu/release/indexserver"; \
+	[ -f "$$BIN_PATH" ] && cp "$$BIN_PATH" out/bin/indexserver || echo "⚠️ indexserver not found"
 
 devwatcher:
-        @set -e; \
-        echo "$(GREEN)==> Building devwatcher...$(RESET)"; \
-        mkdir -p out/bin; \
-        cargo build --release --target aarch64-unknown-linux-gnu --package cohcli_tools --bin devwatcher; \
-        BIN_PATH="target/aarch64-unknown-linux-gnu/release/devwatcher"; \
-        [ -f "$$BIN_PATH" ] && cp "$$BIN_PATH" out/bin/devwatcher || echo "⚠️ devwatcher not found"
+	@set -e; \
+	echo "$(GREEN)==> Building devwatcher...$(RESET)"; \
+	mkdir -p out/bin; \
+	cargo build --release --target aarch64-unknown-linux-gnu --package cohcli_tools --bin devwatcher; \
+	BIN_PATH="target/aarch64-unknown-linux-gnu/release/devwatcher"; \
+	[ -f "$$BIN_PATH" ] && cp "$$BIN_PATH" out/bin/devwatcher || echo "⚠️ devwatcher not found"
 
 physics_server:
-        @set -e; \
-        echo "$(GREEN)==> Building physics_server...$(RESET)"; \
-        mkdir -p out/bin; \
-        cargo build --release --target aarch64-unknown-linux-gnu --package cohcli_tools --bin physics-server; \
-        BIN_PATH="target/aarch64-unknown-linux-gnu/release/physics-server"; \
-        [ -f "$$BIN_PATH" ] && cp "$$BIN_PATH" out/bin/physics-server || echo "⚠️ physics_server not found"
+	@set -e; \
+	echo "$(GREEN)==> Building physics_server...$(RESET)"; \
+	mkdir -p out/bin; \
+	cargo build --release --target aarch64-unknown-linux-gnu --package cohcli_tools --bin physics-server; \
+	BIN_PATH="target/aarch64-unknown-linux-gnu/release/physics-server"; \
+	[ -f "$$BIN_PATH" ] && cp "$$BIN_PATH" out/bin/physics-server || echo "⚠️ physics_server not found"
 
 cli_tools: cohcc cohesix_build cohesix_cap cohesix_trace cohagent cohrole cohrun cohup cohesix kernel_musl logdemo init srvctl indexserver devwatcher physics_server
 
@@ -191,4 +191,3 @@ clean:
 	      out/bin/kernel out/bin/logdemo out/bin/init out/bin/srvctl \
 	      out/bin/indexserver out/bin/devwatcher out/bin/physics-server \
 	      out/bin/sel4_root
-
