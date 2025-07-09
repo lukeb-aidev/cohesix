@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v1.04
+// Filename: CHANGELOG.md v1.05
 // Author: Lukas Bower
-// Date Modified: 2027-10-16
+// Date Modified: 2027-11-06
 
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
@@ -3025,3 +3025,7 @@
 ### Fixed
 - **FixRustPlan9Integration-100**: Resolved build failures for Plan9 Rust tools and adjusted workspace defaults.
 
+
+## [v0.473] - 2027-11-06
+### Added
+- **IntegrateSecure9P-087**: Added cohesix-secure9p crate to workspace and Makefile target for secure9p_lib.

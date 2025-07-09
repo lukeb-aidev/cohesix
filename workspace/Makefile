@@ -8,7 +8,7 @@
 GREEN := \033[0;32m
 RESET := \033[0m
 
-.PHONY: help sel4_root cli_tools cohcc cohesix_build cohesix_cap cohesix_trace cohagent cohrole cohrun cohup cohesix kernel_musl logdemo init srvctl indexserver devwatcher physics_server full stage clean
+.PHONY: help sel4_root cli_tools cohcc cohesix_build cohesix_cap cohesix_trace cohagent cohrole cohrun cohup cohesix kernel_musl logdemo init srvctl indexserver devwatcher physics_server secure9p_lib full stage clean
 
 help:
 	@echo ""
@@ -154,14 +154,19 @@ devwatcher:
 	[ -f "$$BIN_PATH" ] && cp "$$BIN_PATH" out/bin/devwatcher || echo "⚠️ devwatcher not found"
 
 physics_server:
-	@set -e; \
-	echo "$(GREEN)==> Building physics_server...$(RESET)"; \
-	mkdir -p out/bin; \
-	cargo build --release --target aarch64-unknown-linux-gnu --package cohcli_tools --bin physics-server; \
-	BIN_PATH="target/aarch64-unknown-linux-gnu/release/physics-server"; \
-	[ -f "$$BIN_PATH" ] && cp "$$BIN_PATH" out/bin/physics-server || echo "⚠️ physics_server not found"
+        @set -e; \
+        echo "$(GREEN)==> Building physics_server...$(RESET)"; \
+        mkdir -p out/bin; \
+        cargo build --release --target aarch64-unknown-linux-gnu --package cohcli_tools --bin physics-server; \
+        BIN_PATH="target/aarch64-unknown-linux-gnu/release/physics-server"; \
+        [ -f "$$BIN_PATH" ] && cp "$$BIN_PATH" out/bin/physics-server || echo "⚠️ physics_server not found"
 
-cli_tools: cohcc cohesix_build cohesix_cap cohesix_trace cohagent cohrole cohrun cohup cohesix kernel_musl logdemo init srvctl indexserver devwatcher physics_server
+secure9p_lib:
+        @set -e; \
+        echo "$(GREEN)==> Building cohesix-secure9p...$(RESET)"; \
+        cargo build --release --target aarch64-unknown-linux-gnu --package cohesix-secure9p
+
+cli_tools: cohcc cohesix_build cohesix_cap cohesix_trace cohagent cohrole cohrun cohup cohesix kernel_musl logdemo init srvctl indexserver devwatcher physics_server secure9p_lib
 
 full: sel4_root cli_tools
 
