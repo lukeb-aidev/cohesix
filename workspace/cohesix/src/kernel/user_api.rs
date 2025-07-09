@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: user_api.rs v0.2
+// Filename: user_api.rs v0.3
 // Author: Lukas Bower
-// Date Modified: 2027-11-05
+// Date Modified: 2027-11-08
 // SPDX-License-Identifier: MIT
 
 /// Kernel-exported userland API shims.
@@ -24,7 +24,7 @@ pub fn init_user_api() {
 }
 
 fn validate_slice(ptr: *const u8, len: usize) {
-    const BASE: usize = 0xffffff8040000000;
+    const BASE: usize = 0x400000;
     const MAX: usize = BASE + 0x800000;
     let start = ptr as usize;
     let end = start.saturating_add(len);
