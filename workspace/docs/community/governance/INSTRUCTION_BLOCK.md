@@ -63,6 +63,9 @@ Boot Flow:
                          CUDA via /srv/cuda, Rapier)
 ```
 
+- plan9.ns binds orchestrated via /etc/plan9.ns
+- /init/init.sh ensures final userland launch into Plan9 rc or BusyBox shell
+
 ---
 
 ## 3 · Hardware + CI Matrix
@@ -176,6 +179,9 @@ CI must reject duplication or drift.
 - All code must write to paths under `$TMPDIR`, `$COHESIX_ENS_TMP`, or `$COHESIX_TRACE_TMP` if applicable.  
 - Hardcoded paths like `/tmp/foo.log` or `/var/...` are forbidden unless explicitly marked writable in container or CI.  
 - Codex must enforce writable path compliance in test and runtime artifacts.
+
+### 15. Rootserver Safety
+- BSS zero verification, allocator pointer capping, and early heap audits are mandatory. CI and human reviews must reject code that weakens these checks.
 
 ---
 
