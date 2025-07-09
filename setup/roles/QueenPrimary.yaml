@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: QueenPrimary.yaml v0.2
+// Filename: QueenPrimary.yaml v0.3
 // Author: Lukas Bower
-// Date Modified: 2027-11-30
+// Date Modified: 2027-12-01
 role: QueenPrimary
 max_workers: 8
 orchestration:
@@ -9,4 +9,6 @@ orchestration:
 services:
   - validator
   - secure9p
+  - telemetry
+  - cuda
 telemetry: verbose

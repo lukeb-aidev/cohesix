@@ -1,17 +1,19 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: init.sh v0.2
+# Filename: init.sh v0.3
 # Author: Lukas Bower
-# Date Modified: 2027-11-30
+# Date Modified: 2027-12-01
 
 set -euo pipefail
 log(){ echo "[init] $1"; }
 
 log "starting Cohesix userland init"
 ROLE="$(cat /srv/cohrole 2>/dev/null || echo unknown)"
-log "role=$ROLE"
+TELEMETRY="${COHTELEMETRY:-quiet}"
+log "role=$ROLE telemetry=$TELEMETRY"
 
-if [ -f /etc/plan9.ns ]; then
-  log "loading namespace from /etc/plan9.ns"
+NS_FILE="/etc/plan9.ns"
+if [ -f "$NS_FILE" ]; then
+  log "loading namespace from $NS_FILE"
   while read -r cmd a b; do
     case "$cmd" in
       bind)
@@ -23,14 +25,17 @@ if [ -f /etc/plan9.ns ]; then
           log "srv $a $b failed"
         fi;;
     esac
-  done < /etc/plan9.ns
+  done < "$NS_FILE"
 else
-  log "missing /etc/plan9.ns"
+  log "missing $NS_FILE"
 fi
 
-if [ "$(grep -c /bin /etc/plan9.ns 2>/dev/null)" = 0 ]; then
-  log "warning: /bin not bound"
-fi
+required=(/bin /usr /tmp /srv /mnt /srv/cuda /srv/telemetry /srv/cohrole)
+for p in "${required[@]}"; do
+  if [ ! -e "$p" ]; then
+    log "missing mount: $p"
+  fi
+done
 
 if command -v rc >/dev/null 2>&1; then
   log "launching rc"
