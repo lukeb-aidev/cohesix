@@ -3109,3 +3109,8 @@
 ### Added
 - **RefineMandocDocumentation-081**: new manpages for cli_cap, cohrun_cli, srvctl, indexserver, devwatcher, physics-server, exportfs, import, srv, scenario_compiler, cloud, and cohfuzz.
 - MANIFEST and METADATA updated with these entries.
+
+## [v0.490] - 2027-12-08
+### Changed
+- **AuditMandocCohmanBuild-082**: fixed `cohesix_fetch_build.sh` to stage `cohman`
+  and load man pages from `workspace/docs/man`. Version bumped to v0.98.
