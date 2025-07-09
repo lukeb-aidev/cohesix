@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.98
+# Filename: cohesix_fetch_build.sh v0.99
 # Author: Lukas Bower
-# Date Modified: 2027-12-08
+# Date Modified: 2027-12-09
 #!/usr/bin/env bash
 #
 # Merged old script v0.89 features into current script.
@@ -544,6 +544,9 @@ fi
   -DKernelArmGICV2=ON \
   -DKernelArmPL011=ON \
   -DKernelVerificationBuild=ON \
+  # Disable internal kernel benchmarks and test suite to boot userland
+  -DKernelBenchmarks=OFF \
+  -DKernelTests=OFF \
   -DROOT_SERVER="$ROOT/out/cohesix_root.elf"
 
 # Ensure debug flags are explicitly set in CMake cache
@@ -551,6 +554,9 @@ cmake \
   -DKernelPrinting=ON \
   -DKernelDebugBuild=ON \
   -DKernelVerificationBuild=ON \
+  # Mirror test suite settings in cache
+  -DKernelBenchmarks=OFF \
+  -DKernelTests=OFF \
   .
 
 # Now run ninja in the workspace root
@@ -560,7 +566,7 @@ ninja
 CACHE_FILE=$(find . -name CMakeCache.txt | head -n1)
 if [ -f "$CACHE_FILE" ]; then
   log "Kernel configuration summary:" && \
-  grep -E 'KernelPrinting|KernelDebugBuild|KernelLogBuffer|KernelVerificationBuild|KernelElfVSpaceSizeBits|KernelRootCNodeSizeBits|KernelVirtualEnd|KernelArmGICV2|KernelArmPL011' "$CACHE_FILE" || true
+  grep -E 'KernelPrinting|KernelDebugBuild|KernelLogBuffer|KernelVerificationBuild|KernelElfVSpaceSizeBits|KernelRootCNodeSizeBits|KernelVirtualEnd|KernelArmGICV2|KernelArmPL011|KernelBenchmarks|KernelTests' "$CACHE_FILE" || true
 fi
 
 # Copy kernel.elf and elfloader
@@ -842,7 +848,8 @@ echo "🪵 Full log saved to $LOG_FILE" >&3
 log "🧪 Running final QEMU bare metal boot test..."
 qemu-system-aarch64 -M virt,gic-version=2 -cpu cortex-a57 -m 1024M \
   -kernel "$ROOT/out/bin/elfloader" \
-  -initrd "$ROOT/out/bin/cohesix_root.elf" \
+  # Provide kernel.elf and root server as modules to elfloader
+  -initrd "$ROOT/out/bin/kernel.elf,$ROOT/out/bin/cohesix_root.elf" \
   -serial mon:stdio -nographic \
   -d int,mmu,page,guest_errors,unimp,cpu_reset \
   -D "$LOG_DIR/qemu_baremetal_$(date +%Y%m%d_%H%M%S).log" || true
