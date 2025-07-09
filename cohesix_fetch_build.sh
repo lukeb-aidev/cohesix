@@ -441,7 +441,7 @@ log "✅ Rust components built with proper split targets"
 mkdir -p "$STAGE_DIR/bin"
 TARGET_DIR="$ROOT/workspace/target/aarch64-unknown-linux-musl/release"
 # Stage all main binaries
-for bin in cohcc cohbuild cohcap cohtrace cohrun_cli cohagent cohrole cohrun cohup srvctl indexserver devwatcher physics-server exportfs import mount srv scenario_compiler; do
+for bin in cohcc cohbuild cli_cap cohtrace cohrun_cli cohagent cohrole cohrun cohup srvctl indexserver devwatcher physics-server exportfs import mount srv scenario_compiler cloud cohesix cohfuzz; do
   BIN_PATH="$TARGET_DIR/$bin"
   if [ -f "$BIN_PATH" ]; then
     cp "$BIN_PATH" "$STAGE_DIR/bin/$bin"
