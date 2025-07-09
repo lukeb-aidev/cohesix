@@ -3104,3 +3104,8 @@
 ## [v0.488] - 2027-12-07
 ### Added
 - **Plan9TestRunner-080**: introduced `tests/Cohesix/run_all_tests.rc` to orchestrate all Plan9 test scripts. `cohesix_fetch_build.sh` now stages this runner to `/bin/tests`.
+
+## [v0.489] - 2027-12-07
+### Added
+- **RefineMandocDocumentation-081**: new manpages for cli_cap, cohrun_cli, srvctl, indexserver, devwatcher, physics-server, exportfs, import, srv, scenario_compiler, cloud, and cohfuzz.
+- MANIFEST and METADATA updated with these entries.
