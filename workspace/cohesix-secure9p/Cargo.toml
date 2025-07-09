@@ -9,7 +9,7 @@ edition = "2021"
 
 
 [dependencies]
-ninep = { path = "../third_party/ninep_portable" }
+ninep = { path = "../../third_party/ninep_portable" }
 
 
 [features]
