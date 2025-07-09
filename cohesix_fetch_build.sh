@@ -443,8 +443,10 @@ for bin in cohcc cohesix_build cohesix_cap cohesix_trace cohrun_cli cohagent coh
     cp "$BIN_PATH" "$STAGE_DIR/bin/$bin"
     cp "$BIN_PATH" "$ROOT/out/bin/$bin"
   else
-    echo "⚠️ $bin not found in target dirs" >&2
+    echo "❌ $bin not found in target dirs" >&2
+    exit 1
   fi
+  [ -f "$STAGE_DIR/bin/$bin" ] || { echo "❌ $bin missing after staging" >&2; exit 1; }
 done
 
 # Stage shell wrappers for Python CLI tools
