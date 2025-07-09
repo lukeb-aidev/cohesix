@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: main.rs v0.28
+// Filename: main.rs v0.29
 // Author: Lukas Bower
-// Date Modified: 2027-11-09
+// Date Modified: 2027-11-20
 #![no_std]
 #![no_main]
 #![feature(alloc_error_handler, asm_experimental_arch, lang_items)]
@@ -111,11 +111,30 @@ fn log_global_ptrs() {
         put_hex(SRV_HANDLE as usize);
         putstr("cuda_ptr");
         put_hex(CUDA_HANDLE as usize);
+        putstr("offset_ptr");
+        put_hex(crate::allocator::offset_addr());
     }
 }
 
 fn image_end() -> usize {
     unsafe { &__stack_end as *const u8 as usize }
+}
+
+fn check_bss_zero() {
+    let start = unsafe { &__bss_start as *const u8 };
+    let end = unsafe { &__bss_end as *const u8 };
+    let mut ptr = start;
+    while ptr < end {
+        unsafe {
+            if ptr.read() != 0 {
+                putstr("bss_not_zero");
+                put_hex(ptr as usize);
+                abort("bss not zero");
+            }
+        }
+        ptr = unsafe { ptr.add(1) };
+    }
+    putstr("bss_zero_ok");
 }
 
 fn watch_ptr(ptr: usize) {
@@ -143,7 +162,8 @@ pub fn check_heap_ptr(ptr: usize) {
     put_hex(ptr);
     let start = unsafe { &__heap_start as *const u8 as usize };
     let end = unsafe { &__heap_end as *const u8 as usize };
-    if ptr < start || ptr >= end || ptr < 0x400000 {
+    let img_end = image_end();
+    if ptr < start || ptr >= end || ptr >= img_end || ptr < 0x400000 {
         putstr("HEAP POINTER OUT OF RANGE");
         put_hex(ptr);
         abort("heap pointer out of range");
@@ -379,6 +399,7 @@ pub extern "C" fn main() {
     put_hex(bss_start);
     putstr("bss_end");
     put_hex(bss_end);
+    check_bss_zero();
     putstr("bootargs_ptr");
     put_hex(PATH_BOOTARGS.as_ptr() as usize);
     putstr("cohrole_ptr");
