@@ -14,6 +14,8 @@ mod lang_items;
 use core::arch::global_asm;
 global_asm!(include_str!("entry.S"));
 
+use core::fmt::{self, Write};
+
 use alloc::vec::Vec;
 use core::ffi::{c_char, CStr};
 use core::ptr;
@@ -41,9 +43,31 @@ static mut CUDA_HANDLE: *const u8 = core::ptr::null();
 static mut WATCHED_PTRS: [usize; 64] = [0; 64];
 #[link_section = ".bss"]
 static mut WATCHED_IDX: usize = 0;
+#[link_section = ".bss"]
+static mut ALLOC_CHECK: u64 = 0;
 
 fn putchar(c: u8) {
     unsafe { seL4_DebugPutChar(c) };
+}
+
+pub struct CohLogger;
+
+impl Write for CohLogger {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        for &b in s.as_bytes() {
+            putchar(b);
+        }
+        putchar(b'\n');
+        Ok(())
+    }
+}
+
+#[macro_export]
+macro_rules! coherr {
+    ($($arg:tt)*) => {{
+        use core::fmt::Write;
+        let _ = write!(&mut $crate::CohLogger, $($arg)*);
+    }};
 }
 
 fn put_hex(val: usize) {
@@ -377,6 +401,21 @@ fn exec_init(role: &str) -> ! {
 
 #[no_mangle]
 pub extern "C" fn main() {
+    unsafe {
+        ALLOC_CHECK = 0xdeadbeefdeadbeef;
+        if ALLOC_CHECK != 0xdeadbeefdeadbeef {
+            coherr!("BSS corruption detected.");
+            panic!("Fence failed.");
+        }
+    }
+    crate::allocator::allocator_init_log();
+    coherr!("main_start bss_start={:#x} bss_end={:#x} heap_start={:#x} heap_ptr={:#x} heap_end={:#x} img_end={:#x}",
+        unsafe { &__bss_start as *const u8 as usize },
+        unsafe { &__bss_end as *const u8 as usize },
+        unsafe { &__heap_start as *const u8 as usize },
+        crate::allocator::current_heap_ptr(),
+        unsafe { &__heap_end as *const u8 as usize },
+        image_end());
     putstr("COHESIX_BOOT_OK");
     let mut sp: usize;
     let mut fp: usize;
@@ -395,6 +434,7 @@ pub extern "C" fn main() {
     put_hex(ph);
     let bss_start = unsafe { &__bss_start as *const u8 as usize };
     let bss_end = unsafe { &__bss_end as *const u8 as usize };
+    assert!(bss_start < bss_end, "bss range invalid");
     putstr("bss_start");
     put_hex(bss_start);
     putstr("bss_end");
@@ -412,6 +452,8 @@ pub extern "C" fn main() {
     let heap_start = unsafe { &__heap_start as *const u8 as usize };
     let heap_end = unsafe { &__heap_end as *const u8 as usize };
     log_heap_bounds(heap_start, heap_end);
+    let heap_ptr = crate::allocator::current_heap_ptr();
+    assert!(heap_ptr < image_end(), "heap ptr beyond image end");
     let stack_start = unsafe { &__stack_start as *const u8 as usize };
     let stack_end = unsafe { &__stack_end as *const u8 as usize };
     log_stack_bounds(stack_start, stack_end);
