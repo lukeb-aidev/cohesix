@@ -25,10 +25,10 @@ sel4_root:
 	@set -e; \
 	echo "$(GREEN)==> Building sel4_root...$(RESET)"; \
 	mkdir -p out/bin; \
-	RUSTFLAGS="-C link-arg=-Tlink.ld" cargo +nightly build -Z build-std=core,alloc --release \
-		--manifest-path cohesix_root/Cargo.toml \
-		--target cohesix_root/sel4-aarch64.json; \
-	BIN_PATH="target/sel4-aarch64/release/cohesix_root"; \
+        RUSTFLAGS="-C link-arg=-Tlink.ld" cargo +nightly build -Z build-std=core,alloc --release \
+                --package cohesix_root \
+                --target sel4-aarch64.json; \
+        BIN_PATH="target/sel4-aarch64/release/cohesix_root"; \
 	[ -f "$$BIN_PATH" ] && cp "$$BIN_PATH" out/bin/sel4_root || echo "⚠️ sel4_root not found"
 
 
@@ -36,32 +36,32 @@ cohcc:
 	@set -e; \
 	echo "$(GREEN)==> Building cohcc...$(RESET)"; \
 	mkdir -p out/bin; \
-	cargo build --release --target aarch64-unknown-linux-musl --bin cohcc; \
-	BIN_PATH="target/aarch64-unknown-linux-musl/release/cohcc"; \
+	cargo build --release --target aarch64-unknown-linux-gnu --bin cohcc; \
+	BIN_PATH="target/aarch64-unknown-linux-gnu/release/cohcc"; \
 	[ -f "$$BIN_PATH" ] && cp "$$BIN_PATH" out/bin/cohcc || echo "⚠️ cohcc not found"
 
 cohesix_build:
 	@set -e; \
 	echo "$(GREEN)==> Building cohesix_build...$(RESET)"; \
 	mkdir -p out/bin; \
-	cargo build --release --target aarch64-unknown-linux-musl --bin cohesix_build; \
-	BIN_PATH="target/aarch64-unknown-linux-musl/release/cohesix_build"; \
+	cargo build --release --target aarch64-unknown-linux-gnu --bin cohesix_build; \
+	BIN_PATH="target/aarch64-unknown-linux-gnu/release/cohesix_build"; \
 	[ -f "$$BIN_PATH" ] && cp "$$BIN_PATH" out/bin/cohesix_build || echo "⚠️ cohesix_build not found"
 
 cohesix_cap:
 	@set -e; \
 	echo "$(GREEN)==> Building cohesix_cap...$(RESET)"; \
 	mkdir -p out/bin; \
-	cargo build --release --target aarch64-unknown-linux-musl --bin cohesix_cap; \
-	BIN_PATH="target/aarch64-unknown-linux-musl/release/cohesix_cap"; \
+	cargo build --release --target aarch64-unknown-linux-gnu --bin cohesix_cap; \
+	BIN_PATH="target/aarch64-unknown-linux-gnu/release/cohesix_cap"; \
 	[ -f "$$BIN_PATH" ] && cp "$$BIN_PATH" out/bin/cohesix_cap || echo "⚠️ cohesix_cap not found"
 
 cohesix_trace:
 	@set -e; \
 	echo "$(GREEN)==> Building cohesix_trace...$(RESET)"; \
 	mkdir -p out/bin; \
-	cargo build --release --target aarch64-unknown-linux-musl --bin cohesix_trace; \
-	BIN_PATH="target/aarch64-unknown-linux-musl/release/cohesix_trace"; \
+	cargo build --release --target aarch64-unknown-linux-gnu --bin cohesix_trace; \
+	BIN_PATH="target/aarch64-unknown-linux-gnu/release/cohesix_trace"; \
 	[ -f "$$BIN_PATH" ] && cp "$$BIN_PATH" out/bin/cohesix_trace || echo "⚠️ cohesix_trace not found"
 
 
@@ -69,119 +69,126 @@ cohagent:
 	@set -e; \
 	echo "$(GREEN)==> Building cohagent...$(RESET)"; \
 	mkdir -p out/bin; \
-	cargo build --release --target aarch64-unknown-linux-musl --bin cohagent; \
-	BIN_PATH="target/aarch64-unknown-linux-musl/release/cohagent"; \
+	cargo build --release --target aarch64-unknown-linux-gnu --bin cohagent; \
+	BIN_PATH="target/aarch64-unknown-linux-gnu/release/cohagent"; \
 	[ -f "$$BIN_PATH" ] && cp "$$BIN_PATH" out/bin/cohagent || echo "⚠️ cohagent not found"
 
 cohrole:
 	@set -e; \
 	echo "$(GREEN)==> Building cohrole...$(RESET)"; \
 	mkdir -p out/bin; \
-	cargo build --release --target aarch64-unknown-linux-musl --bin cohrole; \
-	BIN_PATH="target/aarch64-unknown-linux-musl/release/cohrole"; \
+	cargo build --release --target aarch64-unknown-linux-gnu --bin cohrole; \
+	BIN_PATH="target/aarch64-unknown-linux-gnu/release/cohrole"; \
 	[ -f "$$BIN_PATH" ] && cp "$$BIN_PATH" out/bin/cohrole || echo "⚠️ cohrole not found"
 
 cohrun:
 	@set -e; \
 	echo "$(GREEN)==> Building cohrun...$(RESET)"; \
 	mkdir -p out/bin; \
-	cargo build --release --target aarch64-unknown-linux-musl --bin cohrun; \
-	BIN_PATH="target/aarch64-unknown-linux-musl/release/cohrun"; \
+	cargo build --release --target aarch64-unknown-linux-gnu --bin cohrun; \
+	BIN_PATH="target/aarch64-unknown-linux-gnu/release/cohrun"; \
 	[ -f "$$BIN_PATH" ] && cp "$$BIN_PATH" out/bin/cohrun || echo "⚠️ cohrun not found"
 
 cohup:
 	@set -e; \
 	echo "$(GREEN)==> Building cohup...$(RESET)"; \
 	mkdir -p out/bin; \
-	cargo build --release --target aarch64-unknown-linux-musl --bin cohup; \
-	BIN_PATH="target/aarch64-unknown-linux-musl/release/cohup"; \
+	cargo build --release --target aarch64-unknown-linux-gnu --bin cohup; \
+	BIN_PATH="target/aarch64-unknown-linux-gnu/release/cohup"; \
 	[ -f "$$BIN_PATH" ] && cp "$$BIN_PATH" out/bin/cohup || echo "⚠️ cohup not found"
 
 cohesix:
 	@set -e; \
 	echo "$(GREEN)==> Building cohesix...$(RESET)"; \
 	mkdir -p out/bin; \
-	cargo build --release --target aarch64-unknown-linux-musl --bin cohesix; \
-	BIN_PATH="target/aarch64-unknown-linux-musl/release/cohesix"; \
+	cargo build --release --target aarch64-unknown-linux-gnu --bin cohesix; \
+	BIN_PATH="target/aarch64-unknown-linux-gnu/release/cohesix"; \
 	[ -f "$$BIN_PATH" ] && cp "$$BIN_PATH" out/bin/cohesix || echo "⚠️ cohesix not found"
 
 kernel_musl:
 	@set -e; \
 	echo "$(GREEN)==> Building kernel (musl)...$(RESET)"; \
 	mkdir -p out/bin; \
-        cargo build --release --target aarch64-unknown-linux-musl --bin kernel --features "kernel_bin minimal_uefi"; \
-	BIN_PATH="target/aarch64-unknown-linux-musl/release/kernel"; \
+        cargo build --release --target aarch64-unknown-linux-gnu --bin kernel --features "kernel_bin minimal_uefi"; \
+	BIN_PATH="target/aarch64-unknown-linux-gnu/release/kernel"; \
 	[ -f "$$BIN_PATH" ] && cp "$$BIN_PATH" out/bin/kernel || echo "⚠️ kernel (musl) not found"
 
 logdemo:
 	@set -e; \
 	echo "$(GREEN)==> Building logdemo...$(RESET)"; \
 	mkdir -p out/bin; \
-        cargo build --release --target aarch64-unknown-linux-musl --bin logdemo --features "minimal_uefi"; \
-	BIN_PATH="target/aarch64-unknown-linux-musl/release/logdemo"; \
+        cargo build --release --target aarch64-unknown-linux-gnu --bin logdemo --features "minimal_uefi"; \
+	BIN_PATH="target/aarch64-unknown-linux-gnu/release/logdemo"; \
 	[ -f "$$BIN_PATH" ] && cp "$$BIN_PATH" out/bin/logdemo || echo "⚠️ logdemo not found"
 
 init:
-	@set -e; \
-	echo "$(GREEN)==> Building init...$(RESET)"; \
-	mkdir -p out/bin; \
-	cargo build --release --target aarch64-unknown-linux-musl --bin init --features "minimal_uefi"; \
-	BIN_PATH="target/aarch64-unknown-linux-musl/release/init"; \
-	[ -f "$$BIN_PATH" ] && cp "$$BIN_PATH" out/bin/init || echo "⚠️ init not found"
+        @set -e; \
+        echo "$(GREEN)==> Building init...$(RESET)"; \
+        mkdir -p out/bin; \
+        cargo build --release --target aarch64-unknown-linux-gnu --bin init --features "minimal_uefi"; \
+        BIN_PATH="target/aarch64-unknown-linux-gnu/release/init"; \
+        [ -f "$$BIN_PATH" ] && cp "$$BIN_PATH" out/bin/init || echo "⚠️ init not found"
 
 srvctl:
-	@set -e; \
-	echo "$(GREEN)==> Building srvctl...$(RESET)"; \
-	mkdir -p out/bin; \
-	cargo build --release --target aarch64-unknown-linux-musl --package cohcli_tools --bin srvctl; \
-	BIN_PATH="target/aarch64-unknown-linux-musl/release/srvctl"; \
-	[ -f "$$BIN_PATH" ] && cp "$$BIN_PATH" out/bin/srvctl || echo "⚠️ srvctl not found"
+        @set -e; \
+        echo "$(GREEN)==> Building srvctl...$(RESET)"; \
+        mkdir -p out/bin; \
+        cargo build --release --target aarch64-unknown-linux-gnu --package cohcli_tools --bin srvctl; \
+        BIN_PATH="target/aarch64-unknown-linux-gnu/release/srvctl"; \
+        [ -f "$$BIN_PATH" ] && cp "$$BIN_PATH" out/bin/srvctl || echo "⚠️ srvctl not found"
 
 indexserver:
-	@set -e; \
-	echo "$(GREEN)==> Building indexserver...$(RESET)"; \
-	mkdir -p out/bin; \
-	cargo build --release --target aarch64-unknown-linux-musl --package cohcli_tools --bin indexserver; \
-	BIN_PATH="target/aarch64-unknown-linux-musl/release/indexserver"; \
-	[ -f "$$BIN_PATH" ] && cp "$$BIN_PATH" out/bin/indexserver || echo "⚠️ indexserver not found"
-	
-	devwatcher:
-	@set -e; \
-	echo "$(GREEN)==> Building devwatcher...$(RESET)"; \
-	mkdir -p out/bin; \
-	cargo build --release --target aarch64-unknown-linux-musl --package cohcli_tools --bin devwatcher; \
-	BIN_PATH="target/aarch64-unknown-linux-musl/release/devwatcher"; \
-	[ -f "$$BIN_PATH" ] && cp "$$BIN_PATH" out/bin/devwatcher || echo "⚠️ devwatcher not found"
-	
-	physics_server:
-	@set -e; \
-	echo "$(GREEN)==> Building physics_server...$(RESET)"; \
-	mkdir -p out/bin; \
-	cargo build --release --target aarch64-unknown-linux-musl --package cohcli_tools --bin physics-server; \
-	BIN_PATH="target/aarch64-unknown-linux-musl/release/physics-server"; \
-	[ -f "$$BIN_PATH" ] && cp "$$BIN_PATH" out/bin/physics-server || echo "⚠️ physics_server not found"
-	
-	cli_tools: cohcc cohesix_build cohesix_cap cohesix_trace cohagent cohrole cohrun cohup cohesix kernel_musl logdemo init srvctl indexserver devwatcher physics_server
-	
-	full: sel4_root cli_tools
+        @set -e; \
+        echo "$(GREEN)==> Building indexserver...$(RESET)"; \
+        mkdir -p out/bin; \
+        cargo build --release --target aarch64-unknown-linux-gnu --package cohcli_tools --bin indexserver; \
+        BIN_PATH="target/aarch64-unknown-linux-gnu/release/indexserver"; \
+        [ -f "$$BIN_PATH" ] && cp "$$BIN_PATH" out/bin/indexserver || echo "⚠️ indexserver not found"
+
+devwatcher:
+        @set -e; \
+        echo "$(GREEN)==> Building devwatcher...$(RESET)"; \
+        mkdir -p out/bin; \
+        cargo build --release --target aarch64-unknown-linux-gnu --package cohcli_tools --bin devwatcher; \
+        BIN_PATH="target/aarch64-unknown-linux-gnu/release/devwatcher"; \
+        [ -f "$$BIN_PATH" ] && cp "$$BIN_PATH" out/bin/devwatcher || echo "⚠️ devwatcher not found"
+
+physics_server:
+        @set -e; \
+        echo "$(GREEN)==> Building physics_server...$(RESET)"; \
+        mkdir -p out/bin; \
+        cargo build --release --target aarch64-unknown-linux-gnu --package cohcli_tools --bin physics-server; \
+        BIN_PATH="target/aarch64-unknown-linux-gnu/release/physics-server"; \
+        [ -f "$$BIN_PATH" ] && cp "$$BIN_PATH" out/bin/physics-server || echo "⚠️ physics_server not found"
+
+cli_tools: cohcc cohesix_build cohesix_cap cohesix_trace cohagent cohrole cohrun cohup cohesix kernel_musl logdemo init srvctl indexserver devwatcher physics_server
+
+full: sel4_root cli_tools
 
 stage:
 	@set -e; \
 	echo "$(GREEN)==> Staging Python CLI scripts...$(RESET)"; \
 	mkdir -p out/bin out/usr/bin; \
 	for script in cohcli cohcap cohtrace cohrun cohbuild cohup cohpkg; do \
-	if [ -f "bin/$$script" ]; then \
-	cp "bin/$$script" out/bin/$$script; \
-	cp "bin/$$script" out/usr/bin/$$script; \
-	sed -i '1c #!/usr/bin/env python3' out/bin/$$script; \
-	sed -i '1c #!/usr/bin/env python3' out/usr/bin/$$script; \
-	chmod +x out/bin/$$script out/usr/bin/$$script; \
-	echo "✅ Staged $$script"; \
-	else \
-	echo "⚠️ $$script not found"; \
-	fi; \
+		if [ -f "bin/$$script" ]; then \
+			cp "bin/$$script" out/bin/$$script; \
+			cp "bin/$$script" out/usr/bin/$$script; \
+			sed -i '1c #!/usr/bin/env python3' out/bin/$$script; \
+			sed -i '1c #!/usr/bin/env python3' out/usr/bin/$$script; \
+			chmod +x out/bin/$$script out/usr/bin/$$script; \
+			echo "✅ Staged $$script"; \
+		else \
+			echo "⚠️ $$script not found"; \
+		fi; \
 	done
+clean:
+	@set -e; \
+	echo "$(GREEN)==> Cleaning workspace...$(RESET)"; \
+	cargo clean; \
+	rm -f out/bin/cohcc out/bin/cohesix_build out/bin/cohesix_cap \
+	      out/bin/cohesix_trace out/bin/cohrun_cli out/bin/cohagent \
+	      out/bin/cohrole out/bin/cohrun out/bin/cohup out/bin/cohesix \
+	      out/bin/kernel out/bin/logdemo out/bin/init out/bin/srvctl \
+	      out/bin/indexserver out/bin/devwatcher out/bin/physics-server \
+	      out/bin/sel4_root
 
-	clean:
-	@set -e; \	echo "$(GREEN)==> Cleaning workspace...$(RESET)"; \
-	cargo clean
