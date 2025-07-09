@@ -41,7 +41,7 @@ pub fn run() -> io::Result<()> {
                                     ";
 
     println!("{}", BANNER);
-    println!("C O H E S I X   R U N T I M E   🐝");
+    println!("C O H E S I X   R U N T I M E");
 
     
     match load_init_conf() {
