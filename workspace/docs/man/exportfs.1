@@ -1,0 +1,33 @@
+.\" CLASSIFICATION: COMMUNITY
+.\" Filename: exportfs.1 v0.1
+.\" Author: Lukas Bower
+.\" Date Modified: 2027-12-07
+.TH EXPORTFS 1 "2027-12-07" "Cohesix" "User Commands"
+.SH NAME
+exportfs \- serve a directory via 9P
+.SH SYNOPSIS
+.B exportfs
+.RI [--root " dir"]
+.RI [--port " num"]
+.I name
+.SH DESCRIPTION
+.B exportfs
+starts a 9P server for the given directory and writes a service
+file in
+.BR /srv/
+with the provided service name.
+.SH OPTIONS
+.TP
+.B --root
+Directory to export (default current directory).
+.TP
+.B --port
+TCP port to listen on (default 5640).
+.TP
+.I name
+Service name under /srv.
+.SH EXAMPLES
+.B exportfs --root /tmp logs
+.SH SEE ALSO
+.BR import (1),
+.BR srvctl (1)

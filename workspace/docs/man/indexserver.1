@@ -1,0 +1,28 @@
+.\" CLASSIFICATION: COMMUNITY
+.\" Filename: indexserver.1 v0.1
+.\" Author: Lukas Bower
+.\" Date Modified: 2027-12-07
+.TH INDEXSERVER 1 "2027-12-07" "Cohesix" "User Commands"
+.SH NAME
+indexserver \- build and query a file index
+.SH SYNOPSIS
+.B indexserver
+.RI [--root " dir"]
+.RI [--interval " dur"]
+.SH DESCRIPTION
+.B indexserver
+indexes a directory tree and exposes query and result files
+under
+.B /srv/index
+for lightweight filename searches.
+.SH OPTIONS
+.TP
+.B --root
+Directory to index (default "/").
+.TP
+.B --interval
+Polling interval for query checks (default "1s").
+.SH EXAMPLES
+.B indexserver --root /usr --interval 5s &
+.SH SEE ALSO
+.BR devwatcher (1)
