@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v1.07
+// Filename: CHANGELOG.md v1.08
 // Author: Lukas Bower
-// Date Modified: 2027-11-21
+// Date Modified: 2027-11-22
 
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
@@ -3053,3 +3053,7 @@
 ### Added
 - **RootServerBssHeapCheck-097**: Hardened boot by validating BSS zeroing counts,
   heap bounds, and global pointers before allocator setup. Logs "boot_ok: bss, heap, globals validated" on success.
+
+## [v0.479] - 2027-11-22
+### Added
+- **RootServerUartBssAudit-098**: Early boot now logs BSS validation results, heap state, and memory map via `coherr!`. Diagnostics panic on corruption.
