@@ -110,7 +110,7 @@
 | bootloader.lds | v0.1 | 2025-07-22 | COMMUNITY | | |
 | CohesixBoot.inf | v0.1 | 2025-07-22 | COMMUNITY | | |
 | linker.ld | v0.1 | 2025-07-22 | COMMUNITY | | |
-| link.ld | v0.8 | 2027-10-04 | COMMUNITY | | |
+| link.ld | v0.12 | 2027-11-08 | COMMUNITY | | |
 | target-sel4.json | v0.1 | 2027-01-15 | COMMUNITY | | |
 | sel4-aarch64.json | v0.1 | 2027-08-08 | COMMUNITY | | |
 | .bashrc | v0.1 | 2026-08-09 | COMMUNITY | | |
@@ -200,7 +200,7 @@
 | src/lib/init.rs | v0.1 | 2025-08-17 | COMMUNITY | | |
 | src/kernel/userland_bootstrap.rs | v0.7 | 2026-11-20 | COMMUNITY | | |
 | src/kernel/loader.rs | v0.3 | 2027-02-03 | COMMUNITY | | |
-| src/kernel/user_api.rs | v0.2 | 2027-11-05 | COMMUNITY | | |
+| src/kernel/user_api.rs | v0.3 | 2027-11-08 | COMMUNITY | | |
 | src/kernel/config.rs | v0.1 | 2025-08-27 | COMMUNITY | | |
 | src/userbin/logdemo.rs | v0.1 | 2025-08-27 | COMMUNITY | | |
 | src/init/main.rs | v0.4 | 2027-02-01 | COMMUNITY | | |
@@ -247,8 +247,8 @@
 | src/bin/cloud.rs | v0.1 | 2027-09-01 | COMMUNITY | | |
 | src/utils/gpu.rs | v0.2 | 2026-12-31 | COMMUNITY | | |
 | workspace/cohesix_root/Cargo.toml | v0.6 | 2027-11-05 | COMMUNITY | | |
-| workspace/cohesix_root/link.ld | v0.11 | 2027-11-05 | COMMUNITY | | |
-| workspace/cohesix_root/src/main.rs | v0.26 | 2027-11-05 | COMMUNITY | | |
+| workspace/cohesix_root/link.ld | v0.12 | 2027-11-08 | COMMUNITY | | |
+| workspace/cohesix_root/src/main.rs | v0.27 | 2027-11-08 | COMMUNITY | | |
 | workspace/cohesix_root/src/lang_items.rs | v0.1 | 2027-10-12 | COMMUNITY | | |
 | workspace/cohesix_root/src/entry.S | v0.19 | 2027-11-01 | COMMUNITY | | |
 | workspace/cohesix_root/src/allocator.rs | v0.5 | 2027-10-23 | COMMUNITY | | |
