@@ -301,6 +301,7 @@
 
 | docs/community/guides/test_portability_guidelines.md | v0.1 | 2025-06-26 | COMMUNITY | | |
 | tools/setup_test_targets.sh | v0.1 | 2026-09-30 | COMMUNITY | | |
+| scripts/validate_manpages.py | v0.1 | 2027-12-07 | COMMUNITY | | |
 | docs/FEATURE_FLAGS.md | v0.1 | 2026-09-30 | COMMUNITY | | |
 | docs/ROOT_SPLIT_PLAN_V1.md | v1.2 | 2027-08-15 | COMMUNITY | | |
 | tests/test_validator_matrix.rs | v0.2 | 2026-11-02 | COMMUNITY | | |
