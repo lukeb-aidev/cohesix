@@ -428,10 +428,13 @@ log "🔧 Building Rust workspace binaries..."
 cd "$ROOT/workspace"
 
 # Build all workspace crates except cohesix_root with standard musl userland target
-cargo +nightly build --release --workspace --exclude cohesix_root --target=aarch64-unknown-linux-musl
+cargo build --release --workspace --exclude cohesix_root --target=aarch64-unknown-linux-musl
 
 # Build bare metal cohesix_root with explicit build-std for core+alloc only
-cargo +nightly build -p cohesix_root --release --target=sel4-aarch64.json -Z build-std=core,alloc
+cargo +nightly build -p cohesix_root --release \
+  --target=cohesix_root/sel4-aarch64.json \
+  -Z build-std=core,alloc,compiler_builtins \
+  -Z build-std-features=compiler-builtins-mem
 
 log "✅ Rust components built with proper split targets"
 
