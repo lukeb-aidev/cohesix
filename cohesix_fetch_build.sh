@@ -423,11 +423,12 @@ else
   exit 1
 fi
 
-log "🔧 Building Rust components via new Makefile..."
+log "🔧 Building Rust components with explicit cross targets..."
 cd "$ROOT/workspace"
 make clean
-make full
-log "✅ Rust components built with new Makefile"
+cargo build --release --target=aarch64-unknown-linux-gnu --workspace
+cargo build --release --target=sel4-aarch64.json -p cohesix_root
+log "✅ Rust components built with explicit --target"
 
 # Copy built binaries to staging and verify presence
 mkdir -p "$STAGE_DIR/bin"
