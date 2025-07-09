@@ -3097,3 +3097,6 @@
 - **Plan9UserlandTestSuite-078**: new Plan9 `rc` test suite under `tests/Cohesix/`
   covering staged binaries and overall userland health. `cohesix_fetch_build.sh`
   now stages these tests to `/bin/tests` for runtime validation.
+## [v0.487] - 2027-12-07
+### Added
+- **ValidateManpagesAndMandoc-079**: new script `scripts/validate_manpages.py` checks staged binaries and their manual pages.
