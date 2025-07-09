@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v1.05
+// Filename: CHANGELOG.md v1.06
 // Author: Lukas Bower
-// Date Modified: 2027-11-08
+// Date Modified: 2027-11-20
 
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
@@ -3042,3 +3042,9 @@
 ### Added
 - **RootServerBaseAlign-095**: Hardened pointer validation and explicitly placed
   rootserver globals in `.bss` for clean initialization.
+
+## [v0.477] - 2027-11-20
+### Added
+- **RootServerBssHarden-096**: Verified explicit BSS zeroing with a runtime fence,
+  capped heap pointers against `image_end()` and logged all globals for
+  pointer audits.

@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: allocator.rs v0.6
+// Filename: allocator.rs v0.7
 // Author: Lukas Bower
-// Date Modified: 2027-11-09
+// Date Modified: 2027-11-20
 
 use core::alloc::{GlobalAlloc, Layout};
 use crate::check_heap_ptr;
@@ -54,6 +54,11 @@ pub struct BumpAllocator;
 #[link_section = ".bss"]
 static mut OFFSET: usize = 0;
 
+/// Return the current heap offset pointer for auditing
+pub fn offset_addr() -> usize {
+    unsafe { &OFFSET as *const usize as usize }
+}
+
 unsafe impl GlobalAlloc for BumpAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let align_mask = layout.align() - 1;
@@ -83,6 +88,13 @@ unsafe impl GlobalAlloc for BumpAllocator {
         if end_ptr > heap_end {
             putstr("alloc overflow");
             put_hex(end_ptr);
+            crate::abort("heap overflow");
+        }
+        let img_end = crate::image_end();
+        if end_ptr > img_end {
+            putstr("alloc past image_end");
+            put_hex(end_ptr);
+            put_hex(img_end);
             crate::abort("heap overflow");
         }
         let ptr = (heap_start + off) as *mut u8;
