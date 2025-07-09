@@ -7,8 +7,12 @@
 members = [
     "cohesix",
     "cohesix-9p",
-    "cohesix_root"
+    "cohesix_root",
+    "tools/cli",
+    "tools/scenario_compiler",
+    "tools/cohfuzz"
 ]
+resolver = "2"
 
 [profile.release]
 panic = "abort"
