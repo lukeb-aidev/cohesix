@@ -3071,3 +3071,9 @@
 - **HardenPlan9Userland-104**: enforced service mounts in `plan9.ns`,
   added telemetry/env controls in `init.sh`, updated `QueenPrimary.yaml`, and
   made `qemu_boot_check.sh` skip gracefully when OVMF is missing.
+
+## [v0.483] - 2027-12-02
+### Changed
+- **UserlandHarden-158**: `plan9.ns` now marks optional srv mounts with `srv?`,
+  and `setup/init.sh` validates services, logs to `/tmp/USERLAND_REPORT`,
+  writes `/tmp/BOOT_OK` or `/tmp/BOOT_FAIL`, and always launches a shell for recovery.
