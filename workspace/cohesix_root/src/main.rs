@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: main.rs v0.31
+// Filename: main.rs v0.32
 // Author: Lukas Bower
-// Date Modified: 2027-11-22
+// Date Modified: 2027-12-05
 #![no_std]
 #![no_main]
 #![feature(alloc_error_handler, asm_experimental_arch, lang_items)]
@@ -351,12 +351,7 @@ fn cstr(bytes: &[u8]) -> *const c_char {
 
 const PATH_BOOTARGS: &[u8] = b"/boot/bootargs.txt\0";
 const PATH_COHROLE: &[u8] = b"/srv/cohrole\0";
-const BIN_RC: &[u8] = b"/bin/rc\0";
-const SCRIPT_WORKER: &[u8] = b"/init/worker.rc\0";
-const SCRIPT_KIOSK: &[u8] = b"/init/kiosk.rc\0";
-const SCRIPT_SENSOR: &[u8] = b"/init/sensor.rc\0";
-const SCRIPT_SIMTEST: &[u8] = b"/init/simtest.rc\0";
-const SCRIPT_QUEEN: &[u8] = b"/init/queen.rc\0";
+const INIT_SH: &[u8] = b"/bin/init.sh\0";
 // DEBUG: rodata audit string
 static RODATA_CHECK: &str = "RODATA_OK";
 
@@ -428,25 +423,10 @@ fn write_role(role: &str) {
     }
 }
 
-fn role_script(role: &str) -> &'static [u8] {
-    match role {
-        "DroneWorker" => SCRIPT_WORKER,
-        "KioskInteractive" | "InteractiveAiBooth" => SCRIPT_KIOSK,
-        "SensorRelay" => SCRIPT_SENSOR,
-        "SimulatorTest" => SCRIPT_SIMTEST,
-        _ => SCRIPT_QUEEN,
-    }
-}
-
-fn exec_init(role: &str) -> ! {
-    let script = role_script(role);
-    let argv = [
-        BIN_RC.as_ptr() as *const c_char,
-        script.as_ptr() as *const c_char,
-        ptr::null(),
-    ];
+fn exec_init() -> ! {
+    let argv = [INIT_SH.as_ptr() as *const c_char, ptr::null()];
     unsafe {
-        execv(BIN_RC.as_ptr() as *const c_char, argv.as_ptr());
+        execv(INIT_SH.as_ptr() as *const c_char, argv.as_ptr());
     }
     loop {
         core::hint::spin_loop();
@@ -508,8 +488,8 @@ pub extern "C" fn main() {
     put_hex(PATH_BOOTARGS.as_ptr() as usize);
     putstr("cohrole_ptr");
     put_hex(PATH_COHROLE.as_ptr() as usize);
-    putstr("rc_bin_ptr");
-    put_hex(BIN_RC.as_ptr() as usize);
+    putstr("init_sh_ptr");
+    put_hex(INIT_SH.as_ptr() as usize);
     let local = 0u8;
     putstr("local");
     put_hex(&local as *const _ as usize);
@@ -548,6 +528,6 @@ pub extern "C" fn main() {
         .unwrap_or("DroneWorker");
     write_role(role);
     putstr("[root] launching userland...");
-    exec_init(role);
+    exec_init();
 }
 

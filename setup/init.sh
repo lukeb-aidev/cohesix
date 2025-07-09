@@ -1,12 +1,14 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: init.sh v0.4
+# Filename: init.sh v0.5
 # Author: Lukas Bower
-# Date Modified: 2027-12-02
+# Date Modified: 2027-12-05
 
 set -euo pipefail
 log(){ echo "[init] $1"; }
 
-REPORT="/tmp/USERLAND_REPORT"
+TS="$(date +%Y%m%d_%H%M%S)"
+REPORT="/tmp/USERLAND_REPORT_$TS"
+ln -sf "$REPORT" /tmp/USERLAND_REPORT
 : > "$REPORT"
 
 log "starting Cohesix userland init"
@@ -83,6 +85,11 @@ else
   echo "telemetry_srv=missing" >> "$REPORT"
 fi
 
+# snapshot current srv and mnt state for trace replay
+srv_list=$(ls /srv 2>/dev/null | tr '\n' ' ')
+mnt_list=$(ls /mnt 2>/dev/null | tr '\n' ' ')
+printf '{"srv":"%s","mnt":"%s"}' "$srv_list" "$mnt_list" > /tmp/BOOT_ENV.json
+
 if [ "$BOOT_OK" -eq 1 ]; then
   touch /tmp/BOOT_OK
   echo "status=ok" >> "$REPORT"
@@ -90,6 +97,17 @@ else
   echo "boot failed" > /tmp/BOOT_FAIL
   echo "status=fail" >> "$REPORT"
 fi
+
+# periodic check for critical services
+( while true; do
+  sleep 30
+  if [ ! -e /srv/cuda ]; then
+    echo "warn:cuda_missing" >> "$REPORT"
+  fi
+  if [ ! -e /srv/telemetry ]; then
+    echo "warn:telemetry_missing" >> "$REPORT"
+  fi
+done ) &
 
 if command -v rc >/dev/null 2>&1; then
   log "launching rc"

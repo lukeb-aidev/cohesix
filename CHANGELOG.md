@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v1.10
+// Filename: CHANGELOG.md v1.11
 // Author: Lukas Bower
-// Date Modified: 2027-12-01
+// Date Modified: 2027-12-05
 
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
@@ -3077,3 +3077,10 @@
 - **UserlandHarden-158**: `plan9.ns` now marks optional srv mounts with `srv?`,
   and `setup/init.sh` validates services, logs to `/tmp/USERLAND_REPORT`,
   writes `/tmp/BOOT_OK` or `/tmp/BOOT_FAIL`, and always launches a shell for recovery.
+
+## [v0.484] - 2027-12-05
+### Changed
+- **UserlandBootPivot-162**: rootserver launches `/bin/init.sh` directly,
+  bypassing seL4 self-tests. `plan9.ns` gained optional `secure9p` mount.
+  `setup/init.sh` now timestamps logs, snapshots `/srv` and `/mnt` to
+  `/tmp/BOOT_ENV.json`, and monitors CUDA/telemetry services every 30s.
