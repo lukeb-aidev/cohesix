@@ -1,0 +1,24 @@
+.\" CLASSIFICATION: COMMUNITY
+.\" Filename: import.1 v0.1
+.\" Author: Lukas Bower
+.\" Date Modified: 2027-12-07
+.TH IMPORT 1 "2027-12-07" "Cohesix" "User Commands"
+.SH NAME
+import \- mount a remote 9P service
+.SH SYNOPSIS
+.B import
+.I address name
+.SH DESCRIPTION
+.B import
+connects to a remote 9P service at
+.I address
+and registers it under
+.BR /srv/
+with the specified service name.
+.SH OPTIONS
+Address must be in host:port format.
+.SH EXAMPLES
+.B import 10.0.0.2:5640 logs
+.SH SEE ALSO
+.BR exportfs (1),
+.BR srv (1)
