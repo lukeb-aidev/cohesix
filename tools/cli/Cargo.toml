@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: tools/cli/Cargo.toml v0.3
+# Filename: tools/cli/Cargo.toml v0.4
 # Author: Lukas Bower
-# Date Modified: 2027-09-30
+# Date Modified: 2027-11-05
 
 [package]
 name = "cohcli_tools"
@@ -19,6 +19,7 @@ serde_json = "1"
 walkdir = "2"
 humantime = "2"
 notify = "6"
+glob = "0.3"
 
 [features]
 default = []

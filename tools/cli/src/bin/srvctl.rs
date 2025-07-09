@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: srvctl.rs v0.1
+// Filename: srvctl.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-07-08
+// Date Modified: 2027-11-05
 
 use clap::{Parser, Subcommand};
 use std::fs;

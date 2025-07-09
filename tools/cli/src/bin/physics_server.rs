@@ -1,9 +1,10 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: physics_server.rs v0.1
+// Filename: physics_server.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-07-08
+// Date Modified: 2027-11-05
 
 use clap::Parser;
+use glob::glob;
 use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -93,7 +94,7 @@ fn main() -> std::io::Result<()> {
     let mut last_job = String::new();
 
     loop {
-        for entry in glob::glob(&format!("{}/physics_job_*.json", args.job_dir.display())).unwrap() {
+        for entry in glob(&format!("{}/physics_job_*.json", args.job_dir.display())).unwrap() {
             match entry {
                 Ok(path) => {
                     match process_job(&path, &args) {

@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.95
+# Filename: cohesix_fetch_build.sh v0.96
 # Author: Lukas Bower
-# Date Modified: 2025-07-08
+# Date Modified: 2027-11-05
 #!/usr/bin/env bash
 #
 # Merged old script v0.89 features into current script.
@@ -431,7 +431,7 @@ log "✅ Rust components built with new Makefile"
 
  # Copy built binaries to staging, searching both musl and gnu targets
 mkdir -p "$STAGE_DIR/bin"
-for bin in cohcc cohesix_build cohesix_cap cohesix_trace cohrun_cli cohagent cohrole cohrun cohup cohesix_root kernel logdemo init; do
+for bin in cohcc cohesix_build cohesix_cap cohesix_trace cohrun_cli cohagent cohrole cohrun cohup srvctl indexserver devwatcher physics-server cohesix_root kernel logdemo init; do
   BIN_PATH=""
   for dir in "$ROOT/workspace/target/aarch64-unknown-linux-gnu/release" "$ROOT/workspace/target/aarch64-unknown-linux-musl/release"; do
     if [ -f "$dir/$bin" ]; then
