@@ -181,11 +181,11 @@
 | scripts/build_busybox.sh | v0.8 | 2025-07-06 | COMMUNITY | | |
 | third_party/busybox/.config.coh | v1.0 | 2025-07-06 | COMMUNITY | | |
 | metadata.json | v0.1 | 2025-07-24 | COMMUNITY | | |
-| Cargo.toml | v0.54 | 2027-11-05 | COMMUNITY | | |
+| Cargo.toml | v0.54 | 2027-11-06 | COMMUNITY | | |
 | cohesix-9p/Cargo.toml | v0.7 | 2027-09-30 | COMMUNITY | | |
-| cohesix-secure9p/Cargo.toml | v0.5 | 2027-09-30 | COMMUNITY | | |
-| cohesix-secure9p/src/secure_stream.rs | v0.1 | 2026-12-31 | COMMUNITY | | |
-| cohesix-secure9p/src/tls_server.rs | v0.1 | 2026-12-31 | COMMUNITY | | |
+| workspace/cohesix-secure9p/Cargo.toml | v0.5 | 2027-09-30 | COMMUNITY | | |
+| workspace/cohesix-secure9p/src/secure_stream.rs | v0.2 | 2027-01-31 | COMMUNITY | | |
+| workspace/cohesix-secure9p/src/tls_server.rs | v0.1 | 2026-12-31 | COMMUNITY | | |
 | tools/cli/Cargo.toml | v0.4 | 2027-11-05 | COMMUNITY | | |
 | justfile | v0.2 | 2026-12-31 | COMMUNITY | | |
 | src/roles/mod.rs | v0.2 | 2026-09-30 | COMMUNITY | | |
