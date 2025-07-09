@@ -1,0 +1,39 @@
+
+workspace/target/sel4-aarch64/release/cohesix_root:     file format elf64-littleaarch64
+
+Sections:
+Idx Name          Size      VMA               LMA               File off  Algn
+  0 .text         00037afc  ffffff8040000000  ffffff8040000000  00010000  2**12
+                  CONTENTS, ALLOC, LOAD, READONLY, CODE
+  1 .rodata       00012e70  ffffff8040038000  ffffff8040038000  00048000  2**12
+                  CONTENTS, ALLOC, LOAD, READONLY, DATA
+  2 .eh_frame_hdr 00000024  ffffff804004ae70  ffffff804004ae70  0005ae70  2**2
+                  CONTENTS, ALLOC, LOAD, READONLY, DATA
+  3 .eh_frame     00000054  ffffff804004ae98  ffffff804004ae98  0005ae98  2**3
+                  CONTENTS, ALLOC, LOAD, READONLY, DATA
+  4 .data         00000020  ffffff804004b000  ffffff804004b000  0005b000  2**12
+                  CONTENTS, ALLOC, LOAD, DATA
+  5 .bss          00000028  ffffff804004c000  ffffff804004c000  0005b020  2**12
+                  ALLOC
+  6 .heap         00080000  ffffff804004d000  ffffff804004d000  0005d000  2**12
+                  CONTENTS, ALLOC, LOAD, DATA
+  7 .stack        00010000  ffffff80400cd000  ffffff80400cd000  000dd000  2**12
+                  CONTENTS, ALLOC, LOAD, DATA
+  8 .debug_loc    0011a5d1  0000000000000000  0000000000000000  000ed000  2**0
+                  CONTENTS, READONLY, DEBUGGING, OCTETS
+  9 .debug_abbrev 000016ad  0000000000000000  0000000000000000  002075d1  2**0
+                  CONTENTS, READONLY, DEBUGGING, OCTETS
+ 10 .debug_info   000d9da8  0000000000000000  0000000000000000  00208c7e  2**0
+                  CONTENTS, READONLY, DEBUGGING, OCTETS
+ 11 .debug_aranges 00004a70  0000000000000000  0000000000000000  002e2a26  2**0
+                  CONTENTS, READONLY, DEBUGGING, OCTETS
+ 12 .debug_ranges 0005fd90  0000000000000000  0000000000000000  002e7496  2**0
+                  CONTENTS, READONLY, DEBUGGING, OCTETS
+ 13 .debug_str    0007c88d  0000000000000000  0000000000000000  00347226  2**0
+                  CONTENTS, READONLY, DEBUGGING, OCTETS
+ 14 .comment      0000004f  0000000000000000  0000000000000000  003c3ab3  2**0
+                  CONTENTS, READONLY
+ 15 .debug_frame  00008180  0000000000000000  0000000000000000  003c3b08  2**3
+                  CONTENTS, READONLY, DEBUGGING, OCTETS
+ 16 .debug_line   00036cc8  0000000000000000  0000000000000000  003cbc88  2**0
+                  CONTENTS, READONLY, DEBUGGING, OCTETS
