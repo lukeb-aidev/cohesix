@@ -49,3 +49,15 @@
 | mount | 8 | mount filesystems | docs/man/mount.8 |
 | netstat | 8 | network statistics | docs/man/netstat.8 |
 | umount | 8 | unmount filesystems | docs/man/umount.8 |
+| cli_cap | 1 | manage worker capabilities | docs/man/cli_cap.1 |
+| cohrun_cli | 1 | execute scenario files | docs/man/cohrun_cli.1 |
+| srvctl | 1 | register services in /srv | docs/man/srvctl.1 |
+| indexserver | 1 | Plan9 file index server | docs/man/indexserver.1 |
+| devwatcher | 1 | monitor filesystem events | docs/man/devwatcher.1 |
+| physics-server | 1 | process physics job files | docs/man/physics-server.1 |
+| exportfs | 1 | export directory via 9P | docs/man/exportfs.1 |
+| import | 1 | import remote 9P service | docs/man/import.1 |
+| srv | 1 | create /srv entry | docs/man/srv.1 |
+| scenario_compiler | 1 | compile scenario DSL | docs/man/scenario_compiler.1 |
+| cloud | 1 | start cloud orchestrator | docs/man/cloud.1 |
+| cohfuzz | 1 | fuzz test traces | docs/man/cohfuzz.1 |
