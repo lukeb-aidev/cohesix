@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v1.11
+// Filename: CHANGELOG.md v1.12
 // Author: Lukas Bower
-// Date Modified: 2027-12-07
+// Date Modified: 2027-12-09
 
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
@@ -3114,3 +3114,10 @@
 ### Changed
 - **AuditMandocCohmanBuild-082**: fixed `cohesix_fetch_build.sh` to stage `cohman`
   and load man pages from `workspace/docs/man`. Version bumped to v0.98.
+
+## [v0.491] - 2027-12-09
+### Fixed
+- **DebugUserlandBootBlock-083**: disabled `KernelBenchmarks` and `KernelTests` in
+  `cohesix_fetch_build.sh`, ensuring the elfloader boots `cohesix_root.elf` after
+  the seL4 kernel. Final QEMU command now loads both `kernel.elf` and the root
+  server.
