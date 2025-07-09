@@ -15,19 +15,19 @@
 
 
 HOST_ARCH="$(uname -m)"
-if [[ "$HOST_ARCH" = "aarch64" ]] && ! command -v aarch64-linux-musl-gcc >/dev/null 2>&1; then
+if [[ "$HOST_ARCH" = "aarch64" ]] && ! command -v aarch64-linux-gnu-gcc >/dev/null 2>&1; then
   if command -v sudo >/dev/null 2>&1; then
     SUDO=sudo
   else
     SUDO=""
   fi
-  echo "Missing aarch64-linux-musl-gcc. Attempting install via apt" >&2
-  if ! $SUDO apt update && ! $SUDO apt install -y musl-tools gcc-aarch64-linux-musl; then
-    echo "ERROR: Missing aarch64-linux-musl-gcc. Install with:\nsudo apt update && sudo apt install musl-tools gcc-aarch64-linux-musl" >&2
+  echo "Missing aarch64-linux-gnu-gcc. Attempting install via apt" >&2
+  if ! $SUDO apt update && ! $SUDO apt install -y gcc-aarch64-linux-gnu; then
+    echo "ERROR: Missing aarch64-linux-gnu-gcc. Install with:\nsudo apt update && sudo apt install gcc-aarch64-linux-gnu" >&2
     exit 1
   fi
-  if ! command -v aarch64-linux-musl-gcc >/dev/null 2>&1; then
-    echo "ERROR: Missing aarch64-linux-musl-gcc. Install with:\nsudo apt update && sudo apt install musl-tools gcc-aarch64-linux-musl" >&2
+  if ! command -v aarch64-linux-gnu-gcc >/dev/null 2>&1; then
+    echo "ERROR: Missing aarch64-linux-gnu-gcc. Install with:\nsudo apt update && sudo apt install gcc-aarch64-linux-gnu" >&2
     exit 1
   fi
 fi
@@ -107,11 +107,11 @@ if ! rustup component list --toolchain nightly | grep -q 'rust-src (installed)';
   echo "🔧 Installing missing rust-src component for nightly" >&2
   rustup component add rust-src --toolchain nightly
 fi
-if ! rustup target list --installed | grep -q "^aarch64-unknown-linux-musl$"; then
-  echo "🔧 Installing missing Rust target aarch64-unknown-linux-musl" >&2
-  rustup target add aarch64-unknown-linux-musl
+if ! rustup target list --installed | grep -q "^aarch64-unknown-linux-gnu$"; then
+  echo "🔧 Installing missing Rust target aarch64-unknown-linux-gnu" >&2
+  rustup target add aarch64-unknown-linux-gnu
 fi
-command -v aarch64-linux-musl-gcc >/dev/null 2>&1 || { echo "❌ aarch64-linux-musl-gcc missing" >&2; exit 1; }
+command -v aarch64-linux-gnu-gcc >/dev/null 2>&1 || { echo "❌ aarch64-linux-gnu-gcc missing" >&2; exit 1; }
 command -v ld.lld >/dev/null 2>&1 || { echo "❌ ld.lld not found" >&2; exit 1; }
 ld.lld --version >&3
 
@@ -201,9 +201,9 @@ else
 fi
 
 if [ "$COH_ARCH" = "aarch64" ] && command -v rustup >/dev/null 2>&1; then
-  if ! rustup target list --installed | grep -q '^aarch64-unknown-linux-musl$'; then
-    rustup target add aarch64-unknown-linux-musl
-    log "✅ Rust target aarch64-unknown-linux-musl installed"
+  if ! rustup target list --installed | grep -q '^aarch64-unknown-linux-gnu$'; then
+    rustup target add aarch64-unknown-linux-gnu
+    log "✅ Rust target aarch64-unknown-linux-gnu installed"
   fi
 fi
 
@@ -313,16 +313,16 @@ export COH_ARCH COH_GPU
 export COH_PLATFORM="$COH_ARCH"
 log "Detected platform: $COH_ARCH, GPU=$COH_GPU"
 
-# Set musl cross compiler for aarch64 if available
+# Set cross compiler for aarch64 if available
 if [ "$COH_ARCH" = "aarch64" ]; then
-  if command -v aarch64-linux-musl-gcc >/dev/null 2>&1; then
-    export CC_aarch64_unknown_linux_musl="$(command -v aarch64-linux-musl-gcc)"
-    log "✅ Using musl cross compiler at $CC_aarch64_unknown_linux_musl"
-  elif [ -x "/opt/aarch64-linux-musl/bin/aarch64-linux-musl-gcc" ]; then
-    export CC_aarch64_unknown_linux_musl="/opt/aarch64-linux-musl/bin/aarch64-linux-musl-gcc"
-    log "✅ Using musl cross compiler at /opt/aarch64-linux-musl/bin/aarch64-linux-musl-gcc"
+  if command -v aarch64-linux-gnu-gcc >/dev/null 2>&1; then
+    export CC_aarch64_unknown_linux_gnu="$(command -v aarch64-linux-gnu-gcc)"
+    log "✅ Using GNU cross compiler at $CC_aarch64_unknown_linux_gnu"
+  elif [ -x "/opt/aarch64-linux-gnu/bin/aarch64-linux-gnu-gcc" ]; then
+    export CC_aarch64_unknown_linux_gnu="/opt/aarch64-linux-gnu/bin/aarch64-linux-gnu-gcc"
+    log "✅ Using GNU cross compiler at /opt/aarch64-linux-gnu/bin/aarch64-linux-gnu-gcc"
   else
-    log "⚠️ Musl cross compiler not found in PATH or /opt/aarch64-linux-musl/bin"
+    log "⚠️ aarch64-linux-gnu-gcc not found in PATH or /opt/aarch64-linux-gnu/bin"
   fi
 fi
 
@@ -429,21 +429,16 @@ make clean
 make full
 log "✅ Rust components built with new Makefile"
 
- # Copy built binaries to staging, searching both musl and gnu targets
+# Copy built binaries to staging and verify presence
 mkdir -p "$STAGE_DIR/bin"
+TARGET_DIR="$ROOT/workspace/target/aarch64-unknown-linux-gnu/release"
 for bin in cohcc cohesix_build cohesix_cap cohesix_trace cohrun_cli cohagent cohrole cohrun cohup srvctl indexserver devwatcher physics-server cohesix_root kernel logdemo init; do
-  BIN_PATH=""
-  for dir in "$ROOT/workspace/target/aarch64-unknown-linux-gnu/release" "$ROOT/workspace/target/aarch64-unknown-linux-musl/release"; do
-    if [ -f "$dir/$bin" ]; then
-      BIN_PATH="$dir/$bin"
-      break
-    fi
-  done
-  if [ -n "$BIN_PATH" ]; then
+  BIN_PATH="$TARGET_DIR/$bin"
+  if [ -f "$BIN_PATH" ]; then
     cp "$BIN_PATH" "$STAGE_DIR/bin/$bin"
     cp "$BIN_PATH" "$ROOT/out/bin/$bin"
   else
-    echo "❌ $bin not found in target dirs" >&2
+    echo "❌ $bin not found in $TARGET_DIR" >&2
     exit 1
   fi
   [ -f "$STAGE_DIR/bin/$bin" ] || { echo "❌ $bin missing after staging" >&2; exit 1; }
