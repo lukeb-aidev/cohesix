@@ -226,7 +226,7 @@
 | src/runtime/env/init.rs | v1.2 | 2026-12-02 | COMMUNITY | | |
 | tests/boot_role.rs | v0.1 | 2026-12-02 | COMMUNITY | | |
 | setup/config.yaml | v0.2 | 2027-11-30 | COMMUNITY | | |
-| setup/init.sh | v0.3 | 2027-12-01 | COMMUNITY | | |
+| setup/init.sh | v0.4 | 2027-12-02 | COMMUNITY | | |
 | setup/roles/QueenPrimary.yaml | v0.3 | 2027-12-01 | COMMUNITY | | |
 | setup/roles/KioskInteractive.yaml | v0.2 | 2027-11-30 | COMMUNITY | | |
 | setup/roles/DroneWorker.yaml | v0.2 | 2027-11-30 | COMMUNITY | | |
@@ -284,7 +284,7 @@
 
 | requirements.txt | v0.2 | 2026-01-27 | COMMUNITY | | |
 | cloud-init.yaml | v0.1 | 2026-02-19 | COMMUNITY | | |
-| plan9.ns | v0.7 | 2027-12-01 | COMMUNITY | | |
+| plan9.ns | v0.8 | 2027-12-02 | COMMUNITY | | |
 | bin/cohpkg | v0.1 | 2026-02-21 | COMMUNITY | | |
 | bin/cohshell.sh | v0.1 | 2026-02-21 | COMMUNITY | | |
 | bin/cohman.sh | v0.1 | 2026-02-21 | COMMUNITY | | |
