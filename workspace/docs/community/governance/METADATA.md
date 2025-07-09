@@ -226,7 +226,7 @@
 | src/runtime/env/init.rs | v1.2 | 2026-12-02 | COMMUNITY | | |
 | tests/boot_role.rs | v0.1 | 2026-12-02 | COMMUNITY | | |
 | setup/config.yaml | v0.2 | 2027-11-30 | COMMUNITY | | |
-| setup/init.sh | v0.5 | 2027-12-05 | COMMUNITY | | |
+| setup/init.sh | v0.6 | 2027-12-06 | COMMUNITY | | |
 | setup/roles/QueenPrimary.yaml | v0.3 | 2027-12-01 | COMMUNITY | | |
 | setup/roles/KioskInteractive.yaml | v0.2 | 2027-11-30 | COMMUNITY | | |
 | setup/roles/DroneWorker.yaml | v0.2 | 2027-11-30 | COMMUNITY | | |
@@ -248,7 +248,7 @@
 | src/utils/gpu.rs | v0.2 | 2026-12-31 | COMMUNITY | | |
 | workspace/cohesix_root/Cargo.toml | v0.6 | 2027-11-05 | COMMUNITY | | |
 | workspace/cohesix_root/link.ld | v0.13 | 2027-11-23 | COMMUNITY | | |
-| workspace/cohesix_root/src/main.rs | v0.32 | 2027-12-05 | COMMUNITY | | |
+| workspace/cohesix_root/src/main.rs | v0.33 | 2027-12-06 | COMMUNITY | | |
 | workspace/cohesix_root/src/lang_items.rs | v0.1 | 2027-10-12 | COMMUNITY | | |
 | workspace/cohesix_root/src/entry.S | v0.19 | 2027-11-01 | COMMUNITY | | |
 | workspace/cohesix_root/src/allocator.rs | v0.7 | 2027-11-20 | COMMUNITY | | |
@@ -284,7 +284,7 @@
 
 | requirements.txt | v0.2 | 2026-01-27 | COMMUNITY | | |
 | cloud-init.yaml | v0.1 | 2026-02-19 | COMMUNITY | | |
-| plan9.ns | v0.9 | 2027-12-05 | COMMUNITY | | |
+| plan9.ns | v0.10 | 2027-12-06 | COMMUNITY | | |
 | bin/cohpkg | v0.1 | 2026-02-21 | COMMUNITY | | |
 | bin/cohshell.sh | v0.1 | 2026-02-21 | COMMUNITY | | |
 | bin/cohman.sh | v0.1 | 2026-02-21 | COMMUNITY | | |

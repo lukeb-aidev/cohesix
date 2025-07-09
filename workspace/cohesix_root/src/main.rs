@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: main.rs v0.32
+// Filename: main.rs v0.33
 // Author: Lukas Bower
-// Date Modified: 2027-12-05
+// Date Modified: 2027-12-06
 #![no_std]
 #![no_main]
 #![feature(alloc_error_handler, asm_experimental_arch, lang_items)]
@@ -522,6 +522,12 @@ pub extern "C" fn main() {
         abort("stack bounds invalid");
     }
     load_bootargs();
+    if env_var("INIT_SH_DEBUG").is_some() {
+        coherr!("bootarg_init_debug");
+    }
+    if env_var("INIT_SKIP_CUDA").is_some() {
+        coherr!("bootarg_skip_cuda");
+    }
     let role_cstr = env_var("COHROLE");
     let role = role_cstr
         .and_then(|c| c.to_str().ok())
