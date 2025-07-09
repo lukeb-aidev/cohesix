@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v1.11
 // Author: Lukas Bower
-// Date Modified: 2027-12-06
+// Date Modified: 2027-12-07
 
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
@@ -3100,3 +3100,7 @@
 ## [v0.487] - 2027-12-07
 ### Added
 - **ValidateManpagesAndMandoc-079**: new script `scripts/validate_manpages.py` checks staged binaries and their manual pages.
+
+## [v0.488] - 2027-12-07
+### Added
+- **Plan9TestRunner-080**: introduced `tests/Cohesix/run_all_tests.rc` to orchestrate all Plan9 test scripts. `cohesix_fetch_build.sh` now stages this runner to `/bin/tests`.
