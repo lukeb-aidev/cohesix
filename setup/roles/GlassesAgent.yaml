@@ -1,8 +1,12 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: GlassesAgent.yaml v0.1
+// Filename: GlassesAgent.yaml v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-09-05
+// Date Modified: 2027-11-30
 role: GlassesAgent
 input:
   camera: enabled
   mic: enabled
+services:
+  - voice_assist
+  - scene_capture
+telemetry: minimal

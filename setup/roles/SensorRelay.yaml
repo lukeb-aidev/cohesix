@@ -1,7 +1,10 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: SensorRelay.yaml v0.1
+// Filename: SensorRelay.yaml v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-09-05
+// Date Modified: 2027-11-30
 role: SensorRelay
 sampling_rate_hz: 100
 persist_data: false
+services:
+  - relay_daemon
+telemetry: minimal

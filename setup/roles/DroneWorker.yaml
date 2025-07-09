@@ -1,7 +1,11 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: DroneWorker.yaml v0.1
+// Filename: DroneWorker.yaml v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-09-05
+// Date Modified: 2027-11-30
 role: DroneWorker
 task_queue_size: 16
 realtime: true
+telemetry: verbose
+services:
+  - worker_daemon
+  - physics
