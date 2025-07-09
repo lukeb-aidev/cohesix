@@ -1,7 +1,11 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: KioskInteractive.yaml v0.1
+// Filename: KioskInteractive.yaml v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-09-05
+// Date Modified: 2027-11-30
 role: KioskInteractive
 ui_enabled: true
 gpu_acceleration: false
+services:
+  - display_mgr
+  - input_daemon
+trace_actions: true
