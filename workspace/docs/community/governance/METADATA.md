@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: METADATA.md v3.51
+// Filename: METADATA.md v3.52
 // Author: Lukas Bower
-// Date Modified: 2027-02-01
+// Date Modified: 2027-11-21
 
 ## Canonical Documents
 
@@ -248,7 +248,7 @@
 | src/utils/gpu.rs | v0.2 | 2026-12-31 | COMMUNITY | | |
 | workspace/cohesix_root/Cargo.toml | v0.6 | 2027-11-05 | COMMUNITY | | |
 | workspace/cohesix_root/link.ld | v0.12 | 2027-11-08 | COMMUNITY | | |
-| workspace/cohesix_root/src/main.rs | v0.29 | 2027-11-20 | COMMUNITY | | |
+| workspace/cohesix_root/src/main.rs | v0.30 | 2027-11-21 | COMMUNITY | | |
 | workspace/cohesix_root/src/lang_items.rs | v0.1 | 2027-10-12 | COMMUNITY | | |
 | workspace/cohesix_root/src/entry.S | v0.19 | 2027-11-01 | COMMUNITY | | |
 | workspace/cohesix_root/src/allocator.rs | v0.7 | 2027-11-20 | COMMUNITY | | |

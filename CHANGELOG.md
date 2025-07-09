@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v1.06
+// Filename: CHANGELOG.md v1.07
 // Author: Lukas Bower
-// Date Modified: 2027-11-20
+// Date Modified: 2027-11-21
 
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
@@ -3048,3 +3048,8 @@
 - **RootServerBssHarden-096**: Verified explicit BSS zeroing with a runtime fence,
   capped heap pointers against `image_end()` and logged all globals for
   pointer audits.
+
+## [v0.478] - 2027-11-21
+### Added
+- **RootServerBssHeapCheck-097**: Hardened boot by validating BSS zeroing counts,
+  heap bounds, and global pointers before allocator setup. Logs "boot_ok: bss, heap, globals validated" on success.
