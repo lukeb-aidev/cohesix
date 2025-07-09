@@ -1,14 +1,14 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: devwatcher.rs v0.1
+// Filename: devwatcher.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-07-08
+// Date Modified: 2027-11-05
 
 use clap::Parser;
 use notify::{RecommendedWatcher, RecursiveMode, Watcher, Event, Config};
 use std::collections::HashSet;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::mpsc::channel;
 use std::time::Duration;
 
