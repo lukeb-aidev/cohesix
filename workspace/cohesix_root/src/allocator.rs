@@ -59,6 +59,22 @@ pub fn offset_addr() -> usize {
     unsafe { &OFFSET as *const usize as usize }
 }
 
+/// Return the current heap pointer (heap_start + OFFSET)
+pub fn current_heap_ptr() -> usize {
+    unsafe { (&__heap_start as *const u8 as usize).wrapping_add(OFFSET) }
+}
+
+/// Log allocator state during initialization
+pub fn allocator_init_log() {
+    coherr!(
+        "allocator_init heap_start={:#x} heap_ptr={:#x} heap_end={:#x} img_end={:#x}",
+        unsafe { &__heap_start as *const u8 as usize },
+        current_heap_ptr(),
+        unsafe { &__heap_end as *const u8 as usize },
+        crate::image_end()
+    );
+}
+
 unsafe impl GlobalAlloc for BumpAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let align_mask = layout.align() - 1;
