@@ -339,6 +339,28 @@
 | logs/root_split_full_boot_validation_20250706_223559.log | v0.1 | 2027-08-15 | COMMUNITY | | |
 | logs/sel4_userland_split.md | v0.1 | 2027-09-30 | COMMUNITY | | |
 | docs/community/diagnostics/MMU_FAULT_AUDIT.md | v0.1 | 2027-10-14 | COMMUNITY | | |
+| tests/Cohesix/test_cli_cap.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
+| tests/Cohesix/test_cloud.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
+| tests/Cohesix/test_cohagent.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
+| tests/Cohesix/test_cohbuild.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
+| tests/Cohesix/test_cohcc.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
+| tests/Cohesix/test_cohesix.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
+| tests/Cohesix/test_cohfuzz.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
+| tests/Cohesix/test_cohrole.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
+| tests/Cohesix/test_cohrun.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
+| tests/Cohesix/test_cohrun_cli.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
+| tests/Cohesix/test_cohtrace.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
+| tests/Cohesix/test_cohup.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
+| tests/Cohesix/test_devwatcher.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
+| tests/Cohesix/test_exportfs.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
+| tests/Cohesix/test_import.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
+| tests/Cohesix/test_indexserver.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
+| tests/Cohesix/test_mount.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
+| tests/Cohesix/test_physics-server.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
+| tests/Cohesix/test_scenario_compiler.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
+| tests/Cohesix/test_srv.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
+| tests/Cohesix/test_srvctl.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
+| tests/Cohesix/test_userland_health.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
 Removed: introspect_self_diagnosis (Plan9 migration - file-based introspection replaced by validator-driven policy checks)
 Removed: legacy Python tests and lint steps; project now purely Plan9 + Rust
 Changed: `.cargo/config.toml` v0.14 uses project-relative linker script path

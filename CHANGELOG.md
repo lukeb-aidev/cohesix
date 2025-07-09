@@ -3091,3 +3091,9 @@
   enhanced `init.sh` with debug flags, memory dumps, Secure9P monitoring, and
   automatic pivot history logging. `cohesix_root` logs new bootargs for test
   runs.
+
+## [v0.486] - 2027-12-07
+### Added
+- **Plan9UserlandTestSuite-078**: new Plan9 `rc` test suite under `tests/Cohesix/`
+  covering staged binaries and overall userland health. `cohesix_fetch_build.sh`
+  now stages these tests to `/bin/tests` for runtime validation.
