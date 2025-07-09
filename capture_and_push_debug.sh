@@ -28,8 +28,19 @@ readelf -s "$COHESIX_ELF" > "$DIAG_DIR/cohesix_root_symbols.txt"
 echo "👉 Dumping full nm symbols..."
 nm -n "$COHESIX_ELF" > "$DIAG_DIR/cohesix_root_nm.txt"
 
+
 echo "👉 Dumping disassembly..."
 objdump -d "$COHESIX_ELF" > "$DIAG_DIR/cohesix_root_disasm.txt"
+
+echo "👉 Dumping full readelf..."
+readelf -a "$COHESIX_ELF" > "$DIAG_DIR/cohesix_root_full_readelf.txt"
+
+echo "👉 Dumping objdump sections..."
+objdump -h "$COHESIX_ELF" > "$DIAG_DIR/cohesix_root_objdump_sections.txt"
+
+echo "👉 Copying sel4 target JSON and linker script if available..."
+cp cohesix_root/sel4-aarch64.json "$DIAG_DIR/" 2>/dev/null || true
+cp cohesix_root/link.ld "$DIAG_DIR/" 2>/dev/null || true
 
 echo "👉 Copying latest QEMU log..."
 LATEST_QEMU_LOG=$(ls -t /home/ubuntu/cohesix/logs/qemu_debug_*.log | head -n1 || true)

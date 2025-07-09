@@ -1,8 +1,0 @@
-# CLASSIFICATION: COMMUNITY
-# Filename: root_split_target_dir_verify_20250706_221834.log v1.0
-# Author: Codex Bot
-# Date Modified: 2025-07-06
-
-root build path: target_root
-cli build path: target_cli
-cargo fetch simulated
