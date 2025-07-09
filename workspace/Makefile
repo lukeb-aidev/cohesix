@@ -28,7 +28,7 @@ sel4_root:
 	RUSTFLAGS="-C link-arg=-Tlink.ld" cargo +nightly build -Z build-std=core,alloc --release \
 		--manifest-path cohesix_root/Cargo.toml \
 		--target cohesix_root/sel4-aarch64.json; \
-	BIN_PATH="cohesix_root/target/sel4-aarch64/release/cohesix_root"; \
+	BIN_PATH="target/sel4-aarch64/release/cohesix_root"; \
 	[ -f "$$BIN_PATH" ] && cp "$$BIN_PATH" out/bin/sel4_root || echo "⚠️ sel4_root not found"
 
 
@@ -122,66 +122,66 @@ logdemo:
 	[ -f "$$BIN_PATH" ] && cp "$$BIN_PATH" out/bin/logdemo || echo "⚠️ logdemo not found"
 
 init:
-        @set -e; \
-        echo "$(GREEN)==> Building init...$(RESET)"; \
-        mkdir -p out/bin; \
-        cargo build --release --target aarch64-unknown-linux-musl --bin init --features "minimal_uefi"; \
-        BIN_PATH="target/aarch64-unknown-linux-musl/release/init"; \
-        [ -f "$$BIN_PATH" ] && cp "$$BIN_PATH" out/bin/init || echo "⚠️ init not found"
+	@set -e; \
+	echo "$(GREEN)==> Building init...$(RESET)"; \
+	mkdir -p out/bin; \
+	cargo build --release --target aarch64-unknown-linux-musl --bin init --features "minimal_uefi"; \
+	BIN_PATH="target/aarch64-unknown-linux-musl/release/init"; \
+	[ -f "$$BIN_PATH" ] && cp "$$BIN_PATH" out/bin/init || echo "⚠️ init not found"
 
 srvctl:
-        @set -e; \
-        echo "$(GREEN)==> Building srvctl...$(RESET)"; \
-        mkdir -p out/bin; \
-        cargo build --release --target aarch64-unknown-linux-musl --package cohcli_tools --bin srvctl; \
-        BIN_PATH="target/aarch64-unknown-linux-musl/release/srvctl"; \
-        [ -f "$$BIN_PATH" ] && cp "$$BIN_PATH" out/bin/srvctl || echo "⚠️ srvctl not found"
+	@set -e; \
+	echo "$(GREEN)==> Building srvctl...$(RESET)"; \
+	mkdir -p out/bin; \
+	cargo build --release --target aarch64-unknown-linux-musl --package cohcli_tools --bin srvctl; \
+	BIN_PATH="target/aarch64-unknown-linux-musl/release/srvctl"; \
+	[ -f "$$BIN_PATH" ] && cp "$$BIN_PATH" out/bin/srvctl || echo "⚠️ srvctl not found"
 
 indexserver:
-        @set -e; \
-        echo "$(GREEN)==> Building indexserver...$(RESET)"; \
-        mkdir -p out/bin; \
-        cargo build --release --target aarch64-unknown-linux-musl --package cohcli_tools --bin indexserver; \
-        BIN_PATH="target/aarch64-unknown-linux-musl/release/indexserver"; \
-        [ -f "$$BIN_PATH" ] && cp "$$BIN_PATH" out/bin/indexserver || echo "⚠️ indexserver not found"
-
-devwatcher:
-        @set -e; \
-        echo "$(GREEN)==> Building devwatcher...$(RESET)"; \
-        mkdir -p out/bin; \
-        cargo build --release --target aarch64-unknown-linux-musl --package cohcli_tools --bin devwatcher; \
-        BIN_PATH="target/aarch64-unknown-linux-musl/release/devwatcher"; \
-        [ -f "$$BIN_PATH" ] && cp "$$BIN_PATH" out/bin/devwatcher || echo "⚠️ devwatcher not found"
-
-physics_server:
-        @set -e; \
-        echo "$(GREEN)==> Building physics_server...$(RESET)"; \
-        mkdir -p out/bin; \
-        cargo build --release --target aarch64-unknown-linux-musl --package cohcli_tools --bin physics-server; \
-        BIN_PATH="target/aarch64-unknown-linux-musl/release/physics-server"; \
-        [ -f "$$BIN_PATH" ] && cp "$$BIN_PATH" out/bin/physics-server || echo "⚠️ physics_server not found"
-
-cli_tools: cohcc cohesix_build cohesix_cap cohesix_trace cohagent cohrole cohrun cohup cohesix kernel_musl logdemo init srvctl indexserver devwatcher physics_server
-
-full: sel4_root cli_tools
+	@set -e; \
+	echo "$(GREEN)==> Building indexserver...$(RESET)"; \
+	mkdir -p out/bin; \
+	cargo build --release --target aarch64-unknown-linux-musl --package cohcli_tools --bin indexserver; \
+	BIN_PATH="target/aarch64-unknown-linux-musl/release/indexserver"; \
+	[ -f "$$BIN_PATH" ] && cp "$$BIN_PATH" out/bin/indexserver || echo "⚠️ indexserver not found"
+	
+	devwatcher:
+	@set -e; \
+	echo "$(GREEN)==> Building devwatcher...$(RESET)"; \
+	mkdir -p out/bin; \
+	cargo build --release --target aarch64-unknown-linux-musl --package cohcli_tools --bin devwatcher; \
+	BIN_PATH="target/aarch64-unknown-linux-musl/release/devwatcher"; \
+	[ -f "$$BIN_PATH" ] && cp "$$BIN_PATH" out/bin/devwatcher || echo "⚠️ devwatcher not found"
+	
+	physics_server:
+	@set -e; \
+	echo "$(GREEN)==> Building physics_server...$(RESET)"; \
+	mkdir -p out/bin; \
+	cargo build --release --target aarch64-unknown-linux-musl --package cohcli_tools --bin physics-server; \
+	BIN_PATH="target/aarch64-unknown-linux-musl/release/physics-server"; \
+	[ -f "$$BIN_PATH" ] && cp "$$BIN_PATH" out/bin/physics-server || echo "⚠️ physics_server not found"
+	
+	cli_tools: cohcc cohesix_build cohesix_cap cohesix_trace cohagent cohrole cohrun cohup cohesix kernel_musl logdemo init srvctl indexserver devwatcher physics_server
+	
+	full: sel4_root cli_tools
 
 stage:
 	@set -e; \
 	echo "$(GREEN)==> Staging Python CLI scripts...$(RESET)"; \
 	mkdir -p out/bin out/usr/bin; \
 	for script in cohcli cohcap cohtrace cohrun cohbuild cohup cohpkg; do \
-		if [ -f "bin/$$script" ]; then \
-			cp "bin/$$script" out/bin/$$script; \
-			cp "bin/$$script" out/usr/bin/$$script; \
-			sed -i '1c #!/usr/bin/env python3' out/bin/$$script; \
-			sed -i '1c #!/usr/bin/env python3' out/usr/bin/$$script; \
-			chmod +x out/bin/$$script out/usr/bin/$$script; \
-			echo "✅ Staged $$script"; \
-		else \
-			echo "⚠️ $$script not found"; \
-		fi; \
+	if [ -f "bin/$$script" ]; then \
+	cp "bin/$$script" out/bin/$$script; \
+	cp "bin/$$script" out/usr/bin/$$script; \
+	sed -i '1c #!/usr/bin/env python3' out/bin/$$script; \
+	sed -i '1c #!/usr/bin/env python3' out/usr/bin/$$script; \
+	chmod +x out/bin/$$script out/usr/bin/$$script; \
+	echo "✅ Staged $$script"; \
+	else \
+	echo "⚠️ $$script not found"; \
+	fi; \
 	done
 
-clean:
-	@set -e; \
-	echo "$(GREEN)==> Cleaning workspace...$(RESET)"; \	cargo clean
+	clean:
+	@set -e; \	echo "$(GREEN)==> Cleaning workspace...$(RESET)"; \
+	cargo clean
