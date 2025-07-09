@@ -425,8 +425,10 @@ fi
 
 log "🔧 Building Rust components with explicit cross targets..."
 cd "$ROOT/workspace"
-cargo build --release --target=aarch64-unknown-linux-gnu --workspace
-cargo build --release --target=sel4-aarch64.json -p cohesix_root
+# Build all workspace packages except cohesix_root for the standard target
+cargo build --release --workspace --exclude cohesix_root --target=aarch64-unknown-linux-gnu
+# Build cohesix_root alone for the custom seL4 JSON target
+cargo build --release -p cohesix_root --target=sel4-aarch64.json
 log "✅ Rust components built with explicit --target"
 
 # Copy built binaries to staging and verify presence
