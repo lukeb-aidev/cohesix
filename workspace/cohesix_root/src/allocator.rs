@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: allocator.rs v0.5
+// Filename: allocator.rs v0.6
 // Author: Lukas Bower
-// Date Modified: 2027-10-23
+// Date Modified: 2027-11-09
 
 use core::alloc::{GlobalAlloc, Layout};
 use crate::check_heap_ptr;
@@ -51,6 +51,7 @@ fn log_regs() {
 }
 
 pub struct BumpAllocator;
+#[link_section = ".bss"]
 static mut OFFSET: usize = 0;
 
 unsafe impl GlobalAlloc for BumpAllocator {
@@ -90,6 +91,7 @@ unsafe impl GlobalAlloc for BumpAllocator {
         put_hex(ptr as usize);
         check_heap_ptr(end_ptr - 1);
         check_heap_ptr(ptr as usize);
+        crate::validate_ptr(ptr as usize);
         ptr
     }
 
