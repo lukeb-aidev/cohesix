@@ -5,6 +5,7 @@
 
 use core::alloc::{GlobalAlloc, Layout};
 use crate::check_heap_ptr;
+use crate::coherr;
 
 extern "C" {
     static __heap_start: u8;

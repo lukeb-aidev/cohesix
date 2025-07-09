@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: main.rs v0.30
+// Filename: main.rs v0.31
 // Author: Lukas Bower
-// Date Modified: 2027-11-21
+// Date Modified: 2027-11-22
 #![no_std]
 #![no_main]
 #![feature(alloc_error_handler, asm_experimental_arch, lang_items)]
@@ -15,6 +15,7 @@ use core::arch::global_asm;
 global_asm!(include_str!("entry.S"));
 
 use core::fmt::{self, Write};
+use core::sync::atomic::{compiler_fence, Ordering};
 
 use alloc::vec::Vec;
 use core::ffi::{c_char, CStr};
@@ -50,6 +51,10 @@ fn putchar(c: u8) {
     unsafe { seL4_DebugPutChar(c) };
 }
 
+fn uart_flush() {
+    compiler_fence(Ordering::SeqCst);
+}
+
 pub struct CohLogger;
 
 impl Write for CohLogger {
@@ -58,6 +63,7 @@ impl Write for CohLogger {
             putchar(b);
         }
         putchar(b'\n');
+        uart_flush();
         Ok(())
     }
 }
@@ -67,6 +73,7 @@ macro_rules! coherr {
     ($($arg:tt)*) => {{
         use core::fmt::Write;
         let _ = write!(&mut $crate::CohLogger, $($arg)*);
+        $crate::uart_flush();
     }};
 }
 
@@ -138,6 +145,18 @@ fn log_global_ptrs() {
         putstr("offset_ptr");
         put_hex(crate::allocator::offset_addr());
     }
+}
+
+fn log_mem_map() {
+    coherr!(
+        "mem_map bss_start={:#x} bss_end={:#x} heap_start={:#x} heap_end={:#x} stack_start={:#x} stack_end={:#x}",
+        unsafe { &__bss_start as *const u8 as usize },
+        unsafe { &__bss_end as *const u8 as usize },
+        unsafe { &__heap_start as *const u8 as usize },
+        unsafe { &__heap_end as *const u8 as usize },
+        unsafe { &__stack_start as *const u8 as usize },
+        unsafe { &__stack_end as *const u8 as usize },
+    );
 }
 
 fn image_end() -> usize {
@@ -444,6 +463,13 @@ pub extern "C" fn main() {
         }
     }
     check_bss_zero();
+    log_mem_map();
+    coherr!(
+        "heap_state start={:#x} end={:#x} offset_ptr={:#x}",
+        unsafe { &__heap_start as *const u8 as usize },
+        unsafe { &__heap_end as *const u8 as usize },
+        crate::allocator::offset_addr(),
+    );
     check_heap_bounds();
     check_globals_zero();
     coherr!("boot_ok: bss, heap, globals validated");
