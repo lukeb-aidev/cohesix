@@ -142,7 +142,7 @@
 | docs/community/architecture/BOOT_KERNEL_FLOW.md | v0.3 | 2026-10-16 | COMMUNITY | | |
 | docs/community/archive/EXAMPLES_README.md | v0.3 | 2026-02-05 | COMMUNITY | | |
 | .cohesix_env | v0.3 | 2026-07-25 | COMMUNITY | | |
-| cohesix_fetch_build.sh | v0.95 | 2025-07-08 | COMMUNITY | | |
+| cohesix_fetch_build.sh | v0.96 | 2027-11-05 | COMMUNITY | | |
 | cohesix_fetch_build.bak | v0.91 | 2027-08-05 | COMMUNITY | | |
 | CONTRIBUTING.md | v1.1 | 2025-07-23 | COMMUNITY | | |
 | config/secure9p.toml | v0.7 | 2026-12-31 | COMMUNITY | | |
@@ -186,7 +186,7 @@
 | cohesix-secure9p/Cargo.toml | v0.5 | 2027-09-30 | COMMUNITY | | |
 | cohesix-secure9p/src/secure_stream.rs | v0.1 | 2026-12-31 | COMMUNITY | | |
 | cohesix-secure9p/src/tls_server.rs | v0.1 | 2026-12-31 | COMMUNITY | | |
-| tools/cli/Cargo.toml | v0.3 | 2027-09-30 | COMMUNITY | | |
+| tools/cli/Cargo.toml | v0.4 | 2027-11-05 | COMMUNITY | | |
 | justfile | v0.2 | 2026-12-31 | COMMUNITY | | |
 | src/roles/mod.rs | v0.2 | 2026-09-30 | COMMUNITY | | |
 | src/roles/interactive_aibooth.rs | v0.3 | 2026-12-31 | COMMUNITY | | |
@@ -323,13 +323,13 @@
 | docs/community/architecture/K8S_ORCHESTRATION.md | v0.1 | 2026-12-31 | COMMUNITY | | |
 | docs/community/TEST_REFACTOR_GUIDE.md | v0.1 | 2026-12-31 | COMMUNITY | | |
 | docs/community/BUILD_NOTES.md | v0.1 | 2026-12-31 | COMMUNITY | | |
-| tools/cli/src/bin/physics_server.rs | v0.1 | 2025-07-08 | COMMUNITY | | |
+| tools/cli/src/bin/physics_server.rs | v0.2 | 2027-11-05 | COMMUNITY | | |
 | scripts/mount_secure9p.rc | v0.1 | 2027-01-30 | COMMUNITY | | |
 | docs/community/guides/PLAN9_PHYSICS_SERVER.md | v0.1 | 2027-01-30 | COMMUNITY | | |
 | examples/physics_server_log.txt | v0.1 | 2027-01-30 | COMMUNITY | | |
-| tools/cli/src/bin/srvctl.rs | v0.1 | 2025-07-08 | COMMUNITY | | |
-| tools/cli/src/bin/indexserver.rs | v0.1 | 2025-07-08 | COMMUNITY | | |
-| tools/cli/src/bin/devwatcher.rs | v0.1 | 2025-07-08 | COMMUNITY | | |
+| tools/cli/src/bin/srvctl.rs | v0.2 | 2027-11-05 | COMMUNITY | | |
+| tools/cli/src/bin/indexserver.rs | v0.2 | 2027-11-05 | COMMUNITY | | |
+| tools/cli/src/bin/devwatcher.rs | v0.2 | 2027-11-05 | COMMUNITY | | |
 | scripts/newns-e.rc | v0.1 | 2027-01-31 | COMMUNITY | | |
 | scripts/bind_cuda.rc | v0.1 | 2027-01-31 | COMMUNITY | | |
 | examples/plan9_enhancements_usage.txt | v0.1 | 2027-01-31 | COMMUNITY | | |
