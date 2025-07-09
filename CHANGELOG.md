@@ -3061,3 +3061,7 @@
 ## [v0.480] - 2027-11-23
 ### Changed
 - **AlignRootELFVirtuals-099**: Aligned rootserver ELF LOAD segments to `0xffffff8040000000` to match seL4 high address space. Linker script updated.
+
+## [v0.481] - 2027-11-30
+### Changed
+- **ExpandUserlandShell-212**: replaced placeholder init.sh with a namespace-aware shell launcher, updated plan9.ns and role configs, and improved config logging.

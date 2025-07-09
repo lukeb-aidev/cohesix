@@ -225,14 +225,14 @@
 | tests/role_config.rs | v0.2 | 2025-09-06 | COMMUNITY | | |
 | src/runtime/env/init.rs | v1.2 | 2026-12-02 | COMMUNITY | | |
 | tests/boot_role.rs | v0.1 | 2026-12-02 | COMMUNITY | | |
-| setup/config.yaml | v0.1 | 2025-09-05 | COMMUNITY | | |
-| setup/init.sh | v0.1 | 2026-09-21 | COMMUNITY | | |
-| setup/roles/QueenPrimary.yaml | v0.1 | 2025-09-05 | COMMUNITY | | |
-| setup/roles/KioskInteractive.yaml | v0.1 | 2025-09-05 | COMMUNITY | | |
-| setup/roles/DroneWorker.yaml | v0.1 | 2025-09-05 | COMMUNITY | | |
-| setup/roles/GlassesAgent.yaml | v0.1 | 2025-09-05 | COMMUNITY | | |
-| setup/roles/SensorRelay.yaml | v0.1 | 2025-09-05 | COMMUNITY | | |
-| setup/roles/SimulatorTest.yaml | v0.1 | 2025-09-05 | COMMUNITY | | |
+| setup/config.yaml | v0.2 | 2027-11-30 | COMMUNITY | | |
+| setup/init.sh | v0.2 | 2027-11-30 | COMMUNITY | | |
+| setup/roles/QueenPrimary.yaml | v0.2 | 2027-11-30 | COMMUNITY | | |
+| setup/roles/KioskInteractive.yaml | v0.2 | 2027-11-30 | COMMUNITY | | |
+| setup/roles/DroneWorker.yaml | v0.2 | 2027-11-30 | COMMUNITY | | |
+| setup/roles/GlassesAgent.yaml | v0.2 | 2027-11-30 | COMMUNITY | | |
+| setup/roles/SensorRelay.yaml | v0.2 | 2027-11-30 | COMMUNITY | | |
+| setup/roles/SimulatorTest.yaml | v0.2 | 2027-11-30 | COMMUNITY | | |
 | ci/qemu_boot_check.sh | v0.4 | 2026-11-24 | COMMUNITY | | |
 | userland/miniroot/README.md | v0.2 | 2026-01-20 | COMMUNITY | | |
 | userland/miniroot/bin/echo | v0.1 | 2025-09-23 | COMMUNITY | | |
@@ -284,7 +284,7 @@
 
 | requirements.txt | v0.2 | 2026-01-27 | COMMUNITY | | |
 | cloud-init.yaml | v0.1 | 2026-02-19 | COMMUNITY | | |
-| plan9.ns | v0.5 | 2026-12-31 | COMMUNITY | | |
+| plan9.ns | v0.6 | 2027-11-30 | COMMUNITY | | |
 | bin/cohpkg | v0.1 | 2026-02-21 | COMMUNITY | | |
 | bin/cohshell.sh | v0.1 | 2026-02-21 | COMMUNITY | | |
 | bin/cohman.sh | v0.1 | 2026-02-21 | COMMUNITY | | |
