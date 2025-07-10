@@ -619,20 +619,8 @@ done
 ensure_plan9_ns() {
   local ns_path="$ROOT/config/plan9.ns"
   if [ ! -f "$ns_path" ]; then
-    log "⚠️ config/plan9.ns missing. Generating default..."
-    mkdir -p "$ROOT/config"
-  cat > "$ns_path" <<'EOF'
-// CLASSIFICATION: COMMUNITY
-// Filename: config/plan9.ns v0.1
-// Author: Lukas Bower
-// Date Modified: 2026-08-04
-# mount -b /dev /dev  # Removed legacy Linux mount - not needed for UEFI
-# mount -b /proc /proc  # Removed legacy Linux mount - not needed for UEFI
-bind -a /bin /bin
-bind -a /usr/py /usr/py
-bind -a /srv /srv
-bind -a /mnt/9root /
-EOF
+    echo "❌ Missing namespace file: $ns_path" >&2
+    return 1
   fi
   mkdir -p "$STAGE_DIR/etc"
   if cp "$ns_path" "$STAGE_DIR/etc/plan9.ns"; then

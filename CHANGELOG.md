@@ -3161,3 +3161,7 @@
 ## [v0.499] - 2027-12-19
 ### Fixed
 - **EnforceProductionKernelHandoff-098**: `cohesix_fetch_build.sh` forces production kernel flags and verifies them after configuration, preventing the seL4 test suite from running instead of the Plan9 root server.
+
+## [v0.500] - 2027-12-20
+### Added
+- Canonical `plan9.ns` now lives at `config/plan9.ns` and is staged without fallback.

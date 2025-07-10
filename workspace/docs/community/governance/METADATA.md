@@ -296,7 +296,7 @@
 
 | requirements.txt | v0.2 | 2026-01-27 | COMMUNITY | | |
 | cloud-init.yaml | v0.1 | 2026-02-19 | COMMUNITY | | |
-| plan9.ns | v0.10 | 2027-12-06 | COMMUNITY | | |
+| config/plan9.ns | v0.11 | 2027-12-20 | COMMUNITY | | |
 | bin/cohpkg | v0.1 | 2026-02-21 | COMMUNITY | | |
 | bin/cohshell.sh | v0.1 | 2026-02-21 | COMMUNITY | | |
 | bin/cohman.sh | v0.1 | 2026-02-21 | COMMUNITY | | |
