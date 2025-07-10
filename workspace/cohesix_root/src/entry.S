@@ -1,13 +1,13 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: entry.S v0.19
+// Filename: entry.S v0.20
 // Author: Lukas Bower
-// Date Modified: 2027-11-01
+// Date Modified: 2027-12-26
 
-    .global _sel4_start
+    .global _start
     .extern __stack_end
     .extern __bss_start
     .extern __bss_end
-_sel4_start:
+_start:
     // Load stack pointer and clear BSS
     adrp x0, __stack_end
     add  x0, x0, :lo12:__stack_end
