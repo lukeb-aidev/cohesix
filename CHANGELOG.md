@@ -3171,3 +3171,9 @@
 - **EnforceExplicitKernelTestsOff-100**: `cohesix_fetch_build.sh` clears the kernel
   build directory and passes `-DKernelTests=OFF` to `init-build.sh` and `cmake`,
   ensuring the CMake cache records `KernelTests:BOOL=OFF` for production builds.
+
+## [v0.502] - 2027-12-21
+### Fixed
+- **FixKernelBuildPaths-196**: Updated `cohesix_fetch_build.sh` to use the correct
+  seL4 build directory layout and copy artifacts from `kernel/` and `elfloader/`
+  directly, removing the obsolete `build_qemu_arm` subdirectory.

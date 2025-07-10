@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v1.4
+# Filename: cohesix_fetch_build.sh v1.5
 # Author: Lukas Bower
-# Date Modified: 2027-12-20
+# Date Modified: 2027-12-21
 #!/usr/bin/env bash
 #
 # Merged old script v0.89 features into current script.
@@ -529,9 +529,9 @@ log "🧱 Building seL4 kernel using existing /home/ubuntu/sel4_workspace worksp
 KERNEL_DIR="/home/ubuntu/sel4_workspace"
 COHESIX_OUT="${COHESIX_OUT:-$ROOT/out}"
 
-cd "$KERNEL_DIR/build_qemu_arm"
+cd "$KERNEL_DIR"
 
-cmake .. -DPLATFORM=qemu-arm-virt -DAARCH64=1 -DRELEASE=1 \
+cmake . -DPLATFORM=qemu-arm-virt -DAARCH64=1 -DRELEASE=1 \
   -DROOT_SERVER="/home/ubuntu/cohesix/out/cohesix_root.elf"
 
 
@@ -546,10 +546,10 @@ if [ -f "$CACHE_FILE" ]; then
 fi
 
 # Copy kernel.elf and elfloader
-cp "$KERNEL_DIR/build_qemu_arm/kernel/kernel.elf" "$COHESIX_OUT/bin/kernel.elf"
+cp "$KERNEL_DIR/kernel/kernel.elf" "$COHESIX_OUT/bin/kernel.elf"
 log "✅ Kernel ELF staged to $COHESIX_OUT/bin/kernel.elf, size: $(stat -c%s "$COHESIX_OUT/bin/kernel.elf") bytes"
 
-cp "$KERNEL_DIR/build_qemu_arm/elfloader/elfloader" "$COHESIX_OUT/bin/elfloader"
+cp "$KERNEL_DIR/elfloader/elfloader" "$COHESIX_OUT/bin/elfloader"
 log "✅ Elfloader staged to $COHESIX_OUT/bin/elfloader, size: $(stat -c%s "$COHESIX_OUT/bin/elfloader") bytes"
 
 cd "$ROOT"
