@@ -3121,3 +3121,8 @@
   `cohesix_fetch_build.sh`, ensuring the elfloader boots `cohesix_root.elf` after
   the seL4 kernel. Final QEMU command now loads both `kernel.elf` and the root
   server.
+
+## [v0.492] - 2027-12-10
+### Added
+- **UserlandInitBanner-086**: `userland/miniroot/bin/init` now emits
+  `COHESIX USERLAND BOOT OK` immediately before launching the Plan9 shell.

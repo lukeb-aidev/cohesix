@@ -250,7 +250,7 @@
 | userland/miniroot/bin/echo | v0.1 | 2025-09-23 | COMMUNITY | | |
 | userland/miniroot/bin/help | v0.1 | 2025-09-23 | COMMUNITY | | |
 | userland/miniroot/bin/ls | v0.1 | 2025-09-23 | COMMUNITY | | |
-| userland/miniroot/bin/init | v0.2 | 2026-12-31 | COMMUNITY | | |
+| userland/miniroot/bin/init | v0.3 | 2027-12-10 | COMMUNITY | | |
 | userland/miniroot/bin/rc | v0.1 | 2026-01-20 | COMMUNITY | | |
 | usr/src/example.coh | v0.1 | 2025-09-24 | COMMUNITY | | |
 | src/sh_loop.rs | v0.1 | 2025-09-23 | COMMUNITY | | |
