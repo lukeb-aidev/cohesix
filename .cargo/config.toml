@@ -14,7 +14,12 @@ linker = "x86_64-linux-musl-gcc"
 
 [target.sel4-aarch64]
 linker = "ld.lld"
-rustflags = ["-C", "link-arg=-Tlink.ld", "-C", "link-arg=--gc-sections"]
+# Ensure ELF segments use 4KiB file offset alignment for seL4 elfloader
+rustflags = [
+    "-C", "link-arg=-Tlink.ld",
+    "-C", "link-arg=-zmax-page-size=0x1000",
+    "-C", "link-arg=--gc-sections",
+]
 
 [target.sel4-aarch64.unstable]
 build-std = "core,alloc,compiler_builtins"
