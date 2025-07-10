@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: main.rs v0.37
+// Filename: main.rs v0.38
 // Author: Lukas Bower
-// Date Modified: 2027-12-25
+// Date Modified: 2027-12-26
 #![no_std]
 #![no_main]
 #![feature(alloc_error_handler, asm_experimental_arch, lang_items)]
@@ -31,6 +31,8 @@ extern "C" {
     static mut __bss_end: u8;
 }
 
+use crate::sys::seL4_DebugPutChar;
+
 #[no_mangle]
 #[link_section = ".bss"]
 static mut VALIDATOR_HANDLE: *const u8 = core::ptr::null();
@@ -47,6 +49,10 @@ static mut WATCHED_PTRS: [usize; 64] = [0; 64];
 static mut WATCHED_IDX: usize = 0;
 #[link_section = ".bss"]
 static mut ALLOC_CHECK: u64 = 0;
+
+#[link_section = ".rodata"]
+#[used]
+static ROOTSERVER_ONLINE: &[u8] = b"ROOTSERVER ONLINE";
 
 fn putchar(c: u8) {
     unsafe { seL4_DebugPutChar(c) };
@@ -269,10 +275,6 @@ pub fn validate_ptr(ptr: usize) {
     }
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn seL4_DebugPutChar(_c: u8) {}
-
-
 pub fn putstr(s: &str) {
     for &b in s.as_bytes() {
         putchar(b);
@@ -450,6 +452,7 @@ fn exec_init() -> ! {
 
 #[no_mangle]
 pub extern "C" fn main() {
+    sys::coh_log("ROOTSERVER ONLINE");
     unsafe {
         ALLOC_CHECK = 0xdeadbeefdeadbeef;
         if ALLOC_CHECK != 0xdeadbeefdeadbeef {
