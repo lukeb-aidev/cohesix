@@ -1,0 +1,8 @@
+ffffff8040000000 T main
+ffffff8040000004 t _RNvCs9km79j5joxb_7___rustc17rust_begin_unwind
+ffffff8040001000 B __bss_end
+ffffff8040001000 B __bss_start
+ffffff8040001000 D __heap_start
+ffffff8040101000 D __heap_end
+ffffff8040101000 D __stack_start
+ffffff8040111000 D __stack_end

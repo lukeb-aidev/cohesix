@@ -1,0 +1,32 @@
+.\" CLASSIFICATION: COMMUNITY
+.\" Filename: srvctl.1 v0.1
+.\" Author: Lukas Bower
+.\" Date Modified: 2027-12-07
+.TH SRVCTL 1 "2027-12-07" "Cohesix" "User Commands"
+.SH NAME
+srvctl \- register services in /srv
+.SH SYNOPSIS
+.B srvctl announce
+.RI --name " <service> [--version <ver>]" 
+.I path
+.SH DESCRIPTION
+.B srvctl
+creates service entries under
+.B /srv/services
+for Plan9-style service discovery.
+.SH OPTIONS
+.TP
+.B --name
+Service name to register.
+.TP
+.B --version
+Optional version string.
+.TP
+.I path
+Filesystem path representing the service root.
+.SH EXAMPLES
+.B srvctl announce --name mysvc /mnt/mysvc
+.SH SEE ALSO
+.BR srv (1),
+.BR exportfs (1),
+.BR import (1)

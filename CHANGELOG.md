@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v1.10
+// Filename: CHANGELOG.md v1.14
 // Author: Lukas Bower
-// Date Modified: 2027-12-01
+// Date Modified: 2027-12-12
 
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
@@ -34,6 +34,7 @@
 - boot_trace_rule tests use tempfile::tempdir to avoid PermissionDenied errors
 - Classification headers added for all bin scripts; files registered in METADATA
 - make_iso.sh and cohesix_fetch_build.sh verify seL4 kernel ELF paths before staging
+- workspace/cohesix_root/src/main.rs v0.36 removes duplicate `use crate::sys;` import to fix E0255
 - ROOT_SPLIT_PLAN_V1.md updated to v1.1 with detailed viability review and implementation steps
 ### Added
 - FAT partition mount under `minimal_uefi` with `/bin/init.efi` bootstrap
@@ -3071,3 +3072,133 @@
 - **HardenPlan9Userland-104**: enforced service mounts in `plan9.ns`,
   added telemetry/env controls in `init.sh`, updated `QueenPrimary.yaml`, and
   made `qemu_boot_check.sh` skip gracefully when OVMF is missing.
+
+## [v0.483] - 2027-12-02
+### Changed
+- **UserlandHarden-158**: `plan9.ns` now marks optional srv mounts with `srv?`,
+  and `setup/init.sh` validates services, logs to `/tmp/USERLAND_REPORT`,
+  writes `/tmp/BOOT_OK` or `/tmp/BOOT_FAIL`, and always launches a shell for recovery.
+
+## [v0.484] - 2027-12-05
+### Changed
+- **UserlandBootPivot-162**: rootserver launches `/bin/init.sh` directly,
+  bypassing seL4 self-tests. `plan9.ns` gained optional `secure9p` mount.
+  `setup/init.sh` now timestamps logs, snapshots `/srv` and `/mnt` to
+  `/tmp/BOOT_ENV.json`, and monitors CUDA/telemetry services every 30s.
+
+## [v0.485] - 2027-12-06
+### Changed
+- **UserlandPivot-Prep-163**: added fallback CUDA mount in `plan9.ns`,
+  enhanced `init.sh` with debug flags, memory dumps, Secure9P monitoring, and
+  automatic pivot history logging. `cohesix_root` logs new bootargs for test
+  runs.
+
+## [v0.486] - 2027-12-07
+### Added
+- **Plan9UserlandTestSuite-078**: new Plan9 `rc` test suite under `tests/Cohesix/`
+  covering staged binaries and overall userland health. `cohesix_fetch_build.sh`
+  now stages these tests to `/bin/tests` for runtime validation.
+## [v0.487] - 2027-12-07
+### Added
+- **ValidateManpagesAndMandoc-079**: new script `scripts/validate_manpages.py` checks staged binaries and their manual pages.
+
+## [v0.488] - 2027-12-07
+### Added
+- **Plan9TestRunner-080**: introduced `tests/Cohesix/run_all_tests.rc` to orchestrate all Plan9 test scripts. `cohesix_fetch_build.sh` now stages this runner to `/bin/tests`.
+
+## [v0.489] - 2027-12-07
+### Added
+- **RefineMandocDocumentation-081**: new manpages for cli_cap, cohrun_cli, srvctl, indexserver, devwatcher, physics-server, exportfs, import, srv, scenario_compiler, cloud, and cohfuzz.
+- MANIFEST and METADATA updated with these entries.
+
+## [v0.490] - 2027-12-08
+### Changed
+- **AuditMandocCohmanBuild-082**: fixed `cohesix_fetch_build.sh` to stage `cohman`
+  and load man pages from `workspace/docs/man`. Version bumped to v0.98.
+
+## [v0.491] - 2027-12-09
+### Fixed
+- **DebugUserlandBootBlock-083**: disabled `KernelBenchmarks` and `KernelTests` in
+  `cohesix_fetch_build.sh`, ensuring the elfloader boots `cohesix_root.elf` after
+  the seL4 kernel. Final QEMU command now loads both `kernel.elf` and the root
+  server.
+
+## [v0.492] - 2027-12-10
+### Added
+- **UserlandInitBanner-086**: `userland/miniroot/bin/init` now emits
+  `COHESIX USERLAND BOOT OK` immediately before launching the Plan9 shell.
+
+## [v0.493] - 2027-12-11
+### Added
+- **PreserveKernelTestCI-085**: optional KERNEL_TEST_MODE flag enables CONFIG_BUILD_KERNEL_TESTS=y in cohesix_fetch_build.sh for CI kernel test runs.
+
+## [v0.494] - 2027-12-11
+### Fixed
+- **FixLinkerPageAlignment-090**: replaced unsupported `--max-page-size` linker flag with
+  `-z max-page-size=0x1000` in `.cargo/config.toml`, `target-sel4.json`, and `sel4-aarch64.json`.
+  Ensures 4 KiB ELF segment alignment for LLD and seL4.
+
+## [v0.495] - 2027-12-11
+### Fixed
+- **RestoreHeadlessQemu-093**: `cohesix_fetch_build.sh` debug mode adds `-nographic`
+  when `DEBUG_QEMU=1`. Prevents CI hang and restores log capture.
+
+## [v0.496] - 2027-12-16
+### Fixed
+- **FixHeapSectionOverlap-094**: linker script for `cohesix_root` now aligns
+  `.text`, `.rodata`, `.heap`, and `.stack` on 4 KiB boundaries and pads
+  between segments to avoid overlap when `-z max-page-size=0x1000` is used.
+
+## [v0.497] - 2027-12-17
+### Fixed
+- **FixHeapOverlapAndMissingIntrinsics-096**: reordered `.rodata` before
+  `__image_end` and moved heap/stack allocation after that marker to avoid
+  overlapping segments. Build pipeline now enables `compiler-builtins-mem`
+  so functions like `memset` and `memcpy` resolve correctly.
+## [v0.498] - 2027-12-18
+### Fixed
+- **FixKernelRootServerCmakeArgs-097**: `cohesix_fetch_build.sh` now passes all required CMake flags, including `-DROOT_SERVER`, in the `init-build.sh` invocation to guarantee the Plan9 root server boots.
+
+## [v0.499] - 2027-12-19
+### Fixed
+- **EnforceProductionKernelHandoff-098**: `cohesix_fetch_build.sh` forces production kernel flags and verifies them after configuration, preventing the seL4 test suite from running instead of the Plan9 root server.
+
+## [v0.500] - 2027-12-20
+### Added
+- Canonical `plan9.ns` now lives at `config/plan9.ns` and is staged without fallback.
+
+## [v0.501] - 2027-12-20
+### Fixed
+- **EnforceExplicitKernelTestsOff-100**: `cohesix_fetch_build.sh` clears the kernel
+  build directory and passes `-DKernelTests=OFF` to `init-build.sh` and `cmake`,
+  ensuring the CMake cache records `KernelTests:BOOL=OFF` for production builds.
+
+## [v0.502] - 2027-12-21
+### Fixed
+- **FixKernelBuildPaths-196**: Updated `cohesix_fetch_build.sh` to use the correct
+  seL4 build directory layout and copy artifacts from `kernel/` and `elfloader/`
+  directly, removing the obsolete `build_qemu_arm` subdirectory.
+
+## [v0.503] - 2027-12-22
+### Fixed
+- **FixUserlandExecInit-198**: `cohesix_root.elf` now parses `/etc/plan9.ns`,
+  executes bind operations, verifies `/bin/init` is present, and explicitly
+  `exec`s it. Failures log `fatal_missing_init` and spin for debugging.
+
+## [v0.504] - 2027-12-23
+### Fixed
+- **FixRootServerExecPlan9-200**: root server replaces libc calls with
+  explicit `coh_*` syscalls, verifies `/bin/init`, and loops with
+  `coh_log` after failed `exec`.
+
+## [v0.505] - 2027-12-25
+### Fixed
+- **RewriteRootServerInitForPlan9-203**: refreshed root initialization to use
+  dedicated `coh_*` syscalls, parse `/etc/plan9.ns`, verify `/bin/init`, and
+  spin with `coh_log` on exec failure.
+
+## [v0.506] - 2027-12-26
+### Fixed
+- **AuditAndRewriteRootLoggingAndLink-204**: `coh_log` now writes directly via
+  `seL4_DebugPutChar`, the linker entry uses `_start`, and `main` logs
+  `ROOTSERVER ONLINE` before other initialization.
