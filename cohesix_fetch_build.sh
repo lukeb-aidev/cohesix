@@ -823,9 +823,9 @@ if [ "${DEBUG_QEMU:-0}" = "1" ]; then
   # WHY: keep -nographic to avoid CI display issues
   QEMU_FLAGS="-nographic -d cpu_reset,int,guest_errors,mmu -serial mon:stdio"
 fi
+# Provide kernel.elf and root server as modules to elfloader
 qemu-system-aarch64 -M virt,gic-version=2 -cpu cortex-a57 -m 1024M \
   -kernel "$ROOT/out/bin/elfloader" \
-  # Provide kernel.elf and root server as modules to elfloader
   -initrd "$ROOT/out/bin/kernel.elf,$ROOT/out/bin/cohesix_root.elf" \
   $QEMU_FLAGS \
   -D "$LOG_DIR/qemu_baremetal_$(date +%Y%m%d_%H%M%S).log" | tee "$QEMU_CONSOLE" || true
