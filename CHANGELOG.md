@@ -3130,3 +3130,9 @@
 ## [v0.493] - 2027-12-11
 ### Added
 - **PreserveKernelTestCI-085**: optional KERNEL_TEST_MODE flag enables CONFIG_BUILD_KERNEL_TESTS=y in cohesix_fetch_build.sh for CI kernel test runs.
+
+## [v0.494] - 2027-12-11
+### Fixed
+- **FixLinkerPageAlignment-090**: replaced unsupported `--max-page-size` linker flag with
+  `-z max-page-size=0x1000` in `.cargo/config.toml`, `target-sel4.json`, and `sel4-aarch64.json`.
+  Ensures 4 KiB ELF segment alignment for LLD and seL4.
