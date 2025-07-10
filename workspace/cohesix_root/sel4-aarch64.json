@@ -11,5 +11,8 @@
   "disable-redzone": true,
   "panic-strategy": "abort",
   "relocation-model": "static",
-  "features": "+neon"
+  "features": "+neon",
+  "pre-link-args": {
+    "ld.lld": ["-Tlink.ld", "-z", "max-page-size=0x1000"]
+  }
 }
