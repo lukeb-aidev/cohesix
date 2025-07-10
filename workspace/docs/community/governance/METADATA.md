@@ -122,7 +122,7 @@
 | bootloader.lds | v0.1 | 2025-07-22 | COMMUNITY | | |
 | CohesixBoot.inf | v0.1 | 2025-07-22 | COMMUNITY | | |
 | linker.ld | v0.1 | 2025-07-22 | COMMUNITY | | |
-| link.ld | v0.14 | 2027-12-16 | COMMUNITY | | |
+| link.ld | v0.16 | 2027-12-27 | COMMUNITY | | |
 | target-sel4.json | v0.2 | 2027-12-11 | COMMUNITY | | |
 | sel4-aarch64.json | v0.2 | 2027-12-11 | COMMUNITY | | |
 | .bashrc | v0.1 | 2026-08-09 | COMMUNITY | | |
@@ -259,12 +259,12 @@
 | src/bin/cloud.rs | v0.1 | 2027-09-01 | COMMUNITY | | |
 | src/utils/gpu.rs | v0.2 | 2026-12-31 | COMMUNITY | | |
 | workspace/cohesix_root/Cargo.toml | v0.6 | 2027-11-05 | COMMUNITY | | |
-| workspace/cohesix_root/link.ld | v0.16 | 2027-12-26 | COMMUNITY | | |
+| workspace/cohesix_root/link.ld | v0.17 | 2027-12-27 | COMMUNITY | | |
 | workspace/cohesix_root/src/main.rs | v0.38 | 2027-12-26 | COMMUNITY | | |
 | workspace/cohesix_root/src/lang_items.rs | v0.1 | 2027-10-12 | COMMUNITY | | |
 | workspace/cohesix_root/src/entry.S | v0.20 | 2027-12-26 | COMMUNITY | | |
 | workspace/cohesix_root/src/allocator.rs | v0.7 | 2027-11-20 | COMMUNITY | | |
-| workspace/cohesix_root/src/sys.rs | v0.3 | 2027-12-26 | COMMUNITY | | |
+| workspace/cohesix_root/src/sys.rs | v0.4 | 2027-12-27 | COMMUNITY | | |
 | src/cuda/runtime.rs | v0.16 | 2026-12-31 | COMMUNITY | | |
 | src/cli/mod.rs | v1.3 | 2026-10-08 | COMMUNITY | | |
 | src/cli/cohtrace.rs | v0.4 | 2026-10-13 | COMMUNITY | | |
@@ -353,6 +353,7 @@
 | logs/root_split_full_boot_validation_20250706_223559.log | v0.1 | 2027-08-15 | COMMUNITY | | |
 | logs/sel4_userland_split.md | v0.1 | 2027-09-30 | COMMUNITY | | |
 | docs/community/diagnostics/MMU_FAULT_AUDIT.md | v0.1 | 2027-10-14 | COMMUNITY | | |
+| docs/community/diagnostics/COHESIX_ROOT_ELF_DIAG.md | v0.1 | 2027-12-27 | COMMUNITY | | |
 | tests/Cohesix/test_cli_cap.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
 | tests/Cohesix/test_cloud.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
 | tests/Cohesix/test_cohagent.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
