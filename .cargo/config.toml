@@ -16,7 +16,6 @@ linker = "x86_64-linux-musl-gcc"
 linker = "ld.lld"
 # Ensure ELF segments use 4KiB file offset alignment for seL4 elfloader
 rustflags = [
-    "-C", "link-arg=-Tlink.ld",
     # LLD requires '-z max-page-size=0x1000' instead of the GNU ld
     # style '--max-page-size=0x1000' to maintain 4KiB ELF segment alignment
     # for the seL4 ELF-loader.
