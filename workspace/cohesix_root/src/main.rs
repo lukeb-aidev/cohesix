@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: main.rs v0.33
+// Filename: main.rs v0.34
 // Author: Lukas Bower
-// Date Modified: 2027-12-06
+// Date Modified: 2027-12-22
 #![no_std]
 #![no_main]
 #![feature(alloc_error_handler, asm_experimental_arch, lang_items)]
@@ -270,63 +270,16 @@ pub fn validate_ptr(ptr: usize) {
 
 #[no_mangle]
 pub unsafe extern "C" fn seL4_DebugPutChar(_c: u8) {}
-#[no_mangle]
-unsafe extern "C" fn open(path: *const c_char, _flags: i32, _mode: i32) -> i32 {
-    putstr("open ptr");
-    put_hex(path as usize);
-    validate_ptr(path as usize);
-    watch_ptr(path as usize);
-    -1
-}
-#[no_mangle]
-unsafe extern "C" fn read(_fd: i32, buf: *mut u8, _len: usize) -> isize {
-    putstr("read buf");
-    put_hex(buf as usize);
-    validate_ptr(buf as usize);
-    watch_ptr(buf as usize);
-    check_heap_ptr(buf as usize);
-    0
-}
-#[no_mangle]
-unsafe extern "C" fn close(_fd: i32) -> i32 {
-    0
-}
-#[no_mangle]
-unsafe extern "C" fn write(_fd: i32, buf: *const u8, _len: usize) -> isize {
-    putstr("write buf");
-    put_hex(buf as usize);
-    validate_ptr(buf as usize);
-    watch_ptr(buf as usize);
-    check_heap_ptr(buf as usize);
-    0
-}
-#[no_mangle]
-unsafe extern "C" fn execv(path: *const c_char, _argv: *const *const c_char) -> i32 {
-    putstr("execv path");
-    put_hex(path as usize);
-    validate_ptr(path as usize);
-    watch_ptr(path as usize);
-    -1
-}
-#[no_mangle]
-unsafe extern "C" fn getenv(name: *const c_char) -> *const c_char {
-    putstr("getenv name");
-    put_hex(name as usize);
-    validate_ptr(name as usize);
-    watch_ptr(name as usize);
-    core::ptr::null()
-}
-#[no_mangle]
-unsafe extern "C" fn setenv(name: *const c_char, val: *const c_char, _overwrite: i32) -> i32 {
-    putstr("setenv name");
-    put_hex(name as usize);
-    validate_ptr(name as usize);
-    watch_ptr(name as usize);
-    putstr("setenv val");
-    put_hex(val as usize);
-    validate_ptr(val as usize);
-    watch_ptr(val as usize);
-    0
+
+extern "C" {
+    fn open(path: *const c_char, flags: i32, mode: i32) -> i32;
+    fn read(fd: i32, buf: *mut u8, len: usize) -> isize;
+    fn close(fd: i32) -> i32;
+    fn write(fd: i32, buf: *const u8, len: usize) -> isize;
+    fn execv(path: *const c_char, argv: *const *const c_char) -> i32;
+    fn getenv(name: *const c_char) -> *const c_char;
+    fn setenv(name: *const c_char, val: *const c_char, overwrite: i32) -> i32;
+    fn bind(name: *const c_char, old: *const c_char, flags: i32) -> i32;
 }
 
 
@@ -351,7 +304,8 @@ fn cstr(bytes: &[u8]) -> *const c_char {
 
 const PATH_BOOTARGS: &[u8] = b"/boot/bootargs.txt\0";
 const PATH_COHROLE: &[u8] = b"/srv/cohrole\0";
-const INIT_SH: &[u8] = b"/bin/init.sh\0";
+const PATH_PLAN9_NS: &[u8] = b"/etc/plan9.ns\0";
+const INIT_BIN: &[u8] = b"/bin/init\0";
 // DEBUG: rodata audit string
 static RODATA_CHECK: &str = "RODATA_OK";
 
@@ -423,10 +377,79 @@ fn write_role(role: &str) {
     }
 }
 
-fn exec_init() -> ! {
-    let argv = [INIT_SH.as_ptr() as *const c_char, ptr::null()];
+const MAFTER: i32 = 2;
+
+fn read_file(path: &[u8]) -> Option<Vec<u8>> {
     unsafe {
-        execv(INIT_SH.as_ptr() as *const c_char, argv.as_ptr());
+        let fd = open(cstr(path), 0, 0);
+        if fd < 0 {
+            coherr!("open_failed {}", core::str::from_utf8_unchecked(path));
+            return None;
+        }
+        let mut data = Vec::new();
+        let mut buf = [0u8; 256];
+        loop {
+            let n = read(fd, buf.as_mut_ptr(), buf.len()) as isize;
+            if n <= 0 {
+                break;
+            }
+            data.extend_from_slice(&buf[..n as usize]);
+        }
+        close(fd);
+        Some(data)
+    }
+}
+
+fn apply_namespace() {
+    if let Some(data) = read_file(PATH_PLAN9_NS) {
+        if let Ok(text) = core::str::from_utf8(&data) {
+            for line in text.lines() {
+                let line = line.split('#').next().unwrap_or("").trim();
+                if line.is_empty() {
+                    continue;
+                }
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                match parts.as_slice() {
+                    ["bind", "-a", src, dst] => unsafe {
+                        coherr!("bind -a {} {}", src, dst);
+                        let mut sb = Vec::from(src.as_bytes());
+                        sb.push(0);
+                        let mut db = Vec::from(dst.as_bytes());
+                        db.push(0);
+                        bind(sb.as_ptr() as *const c_char, db.as_ptr() as *const c_char, MAFTER);
+                    },
+                    ["bind", src, dst] => unsafe {
+                        coherr!("bind {} {}", src, dst);
+                        let mut sb = Vec::from(src.as_bytes());
+                        sb.push(0);
+                        let mut db = Vec::from(dst.as_bytes());
+                        db.push(0);
+                        bind(sb.as_ptr() as *const c_char, db.as_ptr() as *const c_char, 0);
+                    },
+                    _ => coherr!("ignore_line {}", line),
+                }
+            }
+        }
+    }
+}
+
+fn check_init_exists() -> bool {
+    unsafe {
+        let fd = open(cstr(INIT_BIN), 0, 0);
+        if fd < 0 {
+            coherr!("missing_init_bin");
+            false
+        } else {
+            close(fd);
+            true
+        }
+    }
+}
+
+fn exec_init() -> ! {
+    let argv = [INIT_BIN.as_ptr() as *const c_char, ptr::null()];
+    unsafe {
+        execv(INIT_BIN.as_ptr() as *const c_char, argv.as_ptr());
     }
     loop {
         core::hint::spin_loop();
@@ -488,8 +511,8 @@ pub extern "C" fn main() {
     put_hex(PATH_BOOTARGS.as_ptr() as usize);
     putstr("cohrole_ptr");
     put_hex(PATH_COHROLE.as_ptr() as usize);
-    putstr("init_sh_ptr");
-    put_hex(INIT_SH.as_ptr() as usize);
+    putstr("init_bin_ptr");
+    put_hex(INIT_BIN.as_ptr() as usize);
     let local = 0u8;
     putstr("local");
     put_hex(&local as *const _ as usize);
@@ -533,6 +556,10 @@ pub extern "C" fn main() {
         .and_then(|c| c.to_str().ok())
         .unwrap_or("DroneWorker");
     write_role(role);
+    apply_namespace();
+    if !check_init_exists() {
+        coherr!("fatal_missing_init");
+    }
     putstr("[root] launching userland...");
     exec_init();
 }
