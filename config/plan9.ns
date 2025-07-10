@@ -1,7 +1,7 @@
-// CLASSIFICATION: COMMUNITY
-// Filename: config/plan9.ns v0.11
-// Author: Lukas Bower
-// Date Modified: 2027-12-20
+# CLASSIFICATION: COMMUNITY
+# Filename: config/plan9.ns v0.11
+# Author: Lukas Bower
+# Date Modified: 2027-12-20
 
 # Cohesix canonical namespace
 bind -a /usr/coh/bin /bin          # WHY: Cohesix utilities in default PATH
