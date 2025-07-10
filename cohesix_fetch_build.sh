@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v1.7
+# Filename: cohesix_fetch_build.sh v1.8
 # Author: Lukas Bower
-# Date Modified: 2027-12-28
+# Date Modified: 2027-12-30
 #!/usr/bin/env bash
 #
 # Merged old script v0.89 features into current script.
@@ -84,8 +84,13 @@ log "🚀 Starting repository clone..."
   log "✅ Clone complete ..."
 
 cd cohesix
+if [ ! -f "third_party/seL4/lib/libsel4.a" ]; then
+  echo "❌ third_party/seL4/lib/libsel4.a missing. Run third_party/seL4/fetch_sel4.sh and build seL4." >&2
+  exit 1
+fi
 if [ ! -d "$HOME/sel4_workspace" ]; then
-  ./third_party/seL4/fetch_sel4.sh
+  echo "⚠️  sel4_workspace missing at $HOME/sel4_workspace. Create it using third_party/seL4/fetch_sel4.sh" >&2
+  exit 1
 fi
 mkdir -p "$LOG_DIR"
 
