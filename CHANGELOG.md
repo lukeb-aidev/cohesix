@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v1.12
+// Filename: CHANGELOG.md v1.13
 // Author: Lukas Bower
-// Date Modified: 2027-12-09
+// Date Modified: 2027-12-11
 
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
@@ -3126,3 +3126,7 @@
 ### Added
 - **UserlandInitBanner-086**: `userland/miniroot/bin/init` now emits
   `COHESIX USERLAND BOOT OK` immediately before launching the Plan9 shell.
+
+## [v0.493] - 2027-12-11
+### Added
+- **PreserveKernelTestCI-085**: optional KERNEL_TEST_MODE flag enables CONFIG_BUILD_KERNEL_TESTS=y in cohesix_fetch_build.sh for CI kernel test runs.
