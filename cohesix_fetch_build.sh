@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v1.1
+# Filename: cohesix_fetch_build.sh v1.2
 # Author: Lukas Bower
-# Date Modified: 2027-12-11
+# Date Modified: 2027-12-12
 #!/usr/bin/env bash
 #
 # Merged old script v0.89 features into current script.
@@ -543,6 +543,8 @@ KERNEL_VSPACE_BITS=42
 if [ "$ROOT_SIZE" -gt $((50*1024*1024)) ]; then
   KERNEL_VSPACE_BITS=43
 fi
+
+# WHY: Without ROOT_SERVER, seL4 completes tests but never launches our Plan9 root server
 ./init-build.sh \
   -DPLATFORM=qemu-arm-virt \
   -DAARCH64=TRUE \
@@ -555,9 +557,8 @@ fi
   -DKernelArmGICV2=ON \
   -DKernelArmPL011=ON \
   -DKernelVerificationBuild=ON \
-  # Disable internal kernel benchmarks and test suite to boot userland
   -DKernelBenchmarks=OFF \
-  -DKernelTests=$KERNEL_TEST_FLAG \
+  -DKernelTests="$KERNEL_TEST_FLAG" \
   -DROOT_SERVER="$ROOT/out/cohesix_root.elf"
 
 # Ensure debug flags are explicitly set in CMake cache
@@ -565,9 +566,8 @@ cmake \
   -DKernelPrinting=ON \
   -DKernelDebugBuild=ON \
   -DKernelVerificationBuild=ON \
-  # Mirror test suite settings in cache
   -DKernelBenchmarks=OFF \
-  -DKernelTests=$KERNEL_TEST_FLAG \
+  -DKernelTests="$KERNEL_TEST_FLAG" \
   .
 
 # Now run ninja in the workspace root
