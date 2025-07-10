@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: main.rs v0.35
+// Filename: main.rs v0.36
 // Author: Lukas Bower
-// Date Modified: 2027-12-23
+// Date Modified: 2027-12-24
 #![no_std]
 #![no_main]
 #![feature(alloc_error_handler, asm_experimental_arch, lang_items)]
@@ -21,7 +21,6 @@ use core::sync::atomic::{compiler_fence, Ordering};
 use alloc::vec::Vec;
 use core::ffi::{c_char, CStr};
 use core::ptr;
-use crate::sys;
 
 extern "C" {
     static __heap_start: u8;
