@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v1.5
+# Filename: cohesix_fetch_build.sh v1.6
 # Author: Lukas Bower
-# Date Modified: 2027-12-21
+# Date Modified: 2027-12-28
 #!/usr/bin/env bash
 #
 # Merged old script v0.89 features into current script.
@@ -84,6 +84,9 @@ log "🚀 Starting repository clone..."
   log "✅ Clone complete ..."
 
 cd cohesix
+if [ ! -d "$HOME/sel4_workspace" ]; then
+  ./third_party/seL4/fetch_sel4.sh
+fi
 mkdir -p "$LOG_DIR"
 
 
