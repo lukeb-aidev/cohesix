@@ -3141,3 +3141,9 @@
 ### Fixed
 - **RestoreHeadlessQemu-093**: `cohesix_fetch_build.sh` debug mode adds `-nographic`
   when `DEBUG_QEMU=1`. Prevents CI hang and restores log capture.
+
+## [v0.496] - 2027-12-16
+### Fixed
+- **FixHeapSectionOverlap-094**: linker script for `cohesix_root` now aligns
+  `.text`, `.rodata`, `.heap`, and `.stack` on 4 KiB boundaries and pads
+  between segments to avoid overlap when `-z max-page-size=0x1000` is used.
