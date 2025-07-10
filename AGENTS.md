@@ -15,12 +15,12 @@ Cohesix is a secure OS platform built on seL4 + Plan9 principles with:
 - Role-based trust zones (QueenPrimary, DroneWorker, KioskInteractive, etc.)
 - Secure9P for policy and capability enforcement
 - Namespace and validator control
-- CUDA + Rapier physics modules
+- CUDA + Rapier physics modules (CUDA processing handled only via dedicated Linux microservers; no CUDA in Plan9 roles)
 - CLI tools in Rust, Go, Python
 - The custom compiler `cohcc`
 - Pure Plan9 style namespace bindings, avoiding any POSIX/Linux syscall dependencies
 - Pre-installed tools: `rustc`, `cargo`, `llvm`, `lld`, `clang`, `python3` (with `flake8`, `mypy`, `black`), `go`, `gcc`
-- Validates ELF entry points and seL4 symbol presence for rootserver (using nm, readelf, objdump), following COHESIX_AARCH64_BUILD.md and COHESIX_ROOT_ELF_DIAG.md.
+- Validates ELF entry points and seL4 symbol presence for rootserver (using nm, readelf, objdump), following COHESIX_AARCH64_BUILD.md, COHESIX_ROOT_ELF_DIAG.md, and INSTRUCTION_BLOCK.md.
 Agents run in CI (GitHub Actions) and locally, ensuring consistency, security, and sandbox guarantees across all roles and deployments, with CUDA processing handled by dedicated Linux microservers where applicable.
 
 ---
@@ -59,6 +59,8 @@ Agents always respect TMPDIR, COHESIX_TRACE_TMP, or COHESIX_ENS_TMP — never ha
 - `docs/community/governance/ROLE_POLICY.md` — trust zones, Secure9P role definitions
 - `docs/community/planning/DEMO_SCENARIOS.md` — validator + namespace scenario references
 - `docs/private/COMMERCIAL_PLAN.md` — milestones linked to agent enforcement
+- `docs/private/COHESIX_AARCH64_BUILD.md` — cross-build and linking requirements for Plan9 ELF
+- `docs/private/COHESIX_ROOT_ELF_DIAG.md` — ELF entry point and seL4 syscall verification procedures
 
 ---
 
@@ -72,6 +74,8 @@ Agents always respect TMPDIR, COHESIX_TRACE_TMP, or COHESIX_ENS_TMP — never ha
 - Any agent failing its check fails the entire build, with logs captured for review.
 - No absolute system paths, no persistent background tasks.
 - ELF inspections leverage OpenAI's documented best practices for Codex Agent.md, ensuring object file + image correctness beyond normal CI.
+- QEMU executions must use the `virt` platform (`-M virt -cpu cortex-a57 -m 1024`) with elfloader CPIO images and console output on `-serial mon:stdio`.
+- All agent checks and validations tie back explicitly to INSTRUCTION_BLOCK.md, COHESIX_AARCH64_BUILD.md to ensure canonical compliance.
 
 ---
 
@@ -84,6 +88,6 @@ To ensure every build of Cohesix:
 - Includes the full userland toolchain (CLI, cohcc, BusyBox, mandoc)
 - Enforces role trust + Secure9P policy
 - Logs watchdog + validator output for audits
-- Aligns 100% with INSTRUCTION_BLOCK.md and the evolving architecture.
+- Aligns 100% with INSTRUCTION_BLOCK.md, COHESIX_AARCH64_BUILD.md, and COHESIX_ROOT_ELF_DIAG.md and the evolving architecture.
 
 ✅ With these agents, each build is provably secure, fully testable, and production-grade.
