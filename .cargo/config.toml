@@ -17,7 +17,7 @@ linker = "ld.lld"
 # Ensure ELF segments use 4KiB file offset alignment for seL4 elfloader
 rustflags = [
     "-C", "link-arg=-Tlink.ld",
-    "-C", "link-arg=-zmax-page-size=0x1000",
+    "-C", "link-arg=--max-page-size=0x1000",
     "-C", "link-arg=--gc-sections",
 ]
 
