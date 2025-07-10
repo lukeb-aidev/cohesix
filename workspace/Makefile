@@ -25,7 +25,7 @@ sel4_root:
 	@set -e; \
 	echo "$(GREEN)==> Building sel4_root...$(RESET)"; \
 	mkdir -p out/bin; \
-        RUSTFLAGS="-C link-arg=-Tlink.ld" cargo +nightly build -Z build-std=core,alloc --release \
+        RUSTFLAGS="-C link-arg=-Tlink.ld" cargo +nightly build -Z build-std=core,alloc,compiler_builtins -Z build-std-features=compiler-builtins-mem --release \
                 --package cohesix_root \
                 --target sel4-aarch64.json; \
         BIN_PATH="target/sel4-aarch64/release/cohesix_root"; \

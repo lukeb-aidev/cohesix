@@ -3147,3 +3147,10 @@
 - **FixHeapSectionOverlap-094**: linker script for `cohesix_root` now aligns
   `.text`, `.rodata`, `.heap`, and `.stack` on 4 KiB boundaries and pads
   between segments to avoid overlap when `-z max-page-size=0x1000` is used.
+
+## [v0.497] - 2027-12-17
+### Fixed
+- **FixHeapOverlapAndMissingIntrinsics-096**: reordered `.rodata` before
+  `__image_end` and moved heap/stack allocation after that marker to avoid
+  overlapping segments. Build pipeline now enables `compiler-builtins-mem`
+  so functions like `memset` and `memcpy` resolve correctly.
