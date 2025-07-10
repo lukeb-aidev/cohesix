@@ -1,51 +1,48 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: sys.rs v0.1
+// Filename: sys.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2027-12-23
+// Date Modified: 2027-12-25
 
 use core::ffi::c_char;
 
-extern "C" {
-    fn open(path: *const c_char, flags: i32, mode: i32) -> i32;
-    fn read(fd: i32, buf: *mut u8, len: usize) -> isize;
-    fn close(fd: i32) -> i32;
-    fn write(fd: i32, buf: *const u8, len: usize) -> isize;
-    fn execv(path: *const c_char, argv: *const *const c_char) -> i32;
-    fn getenv(name: *const c_char) -> *const c_char;
-    fn setenv(name: *const c_char, val: *const c_char, overwrite: i32) -> i32;
-    fn bind(name: *const c_char, old: *const c_char, flags: i32) -> i32;
+#[no_mangle]
+pub unsafe extern "C" fn coh_open(_path: *const c_char, _flags: i32, _mode: i32) -> i32 {
+    -1
 }
 
-pub unsafe fn coh_open(path: *const c_char, flags: i32, mode: i32) -> i32 {
-    open(path, flags, mode)
+#[no_mangle]
+pub unsafe extern "C" fn coh_read(_fd: i32, _buf: *mut u8, _len: usize) -> isize {
+    -1
 }
 
-pub unsafe fn coh_read(fd: i32, buf: *mut u8, len: usize) -> isize {
-    read(fd, buf, len)
+#[no_mangle]
+pub unsafe extern "C" fn coh_close(_fd: i32) -> i32 {
+    -1
 }
 
-pub unsafe fn coh_close(fd: i32) -> i32 {
-    close(fd)
+#[no_mangle]
+pub unsafe extern "C" fn coh_write(_fd: i32, _buf: *const u8, _len: usize) -> isize {
+    -1
 }
 
-pub unsafe fn coh_write(fd: i32, buf: *const u8, len: usize) -> isize {
-    write(fd, buf, len)
+#[no_mangle]
+pub unsafe extern "C" fn coh_exec(_path: *const c_char, _argv: *const *const c_char) -> i32 {
+    -1
 }
 
-pub unsafe fn coh_exec(path: *const c_char, argv: *const *const c_char) -> i32 {
-    execv(path, argv)
+#[no_mangle]
+pub unsafe extern "C" fn coh_getenv(_name: *const c_char) -> *const c_char {
+    core::ptr::null()
 }
 
-pub unsafe fn coh_getenv(name: *const c_char) -> *const c_char {
-    getenv(name)
+#[no_mangle]
+pub unsafe extern "C" fn coh_setenv(_name: *const c_char, _val: *const c_char, _overwrite: i32) -> i32 {
+    -1
 }
 
-pub unsafe fn coh_setenv(name: *const c_char, val: *const c_char) -> i32 {
-    setenv(name, val, 1)
-}
-
-pub unsafe fn coh_bind(name: *const c_char, old: *const c_char, flags: i32) -> i32 {
-    bind(name, old, flags)
+#[no_mangle]
+pub unsafe extern "C" fn coh_bind(_name: *const c_char, _old: *const c_char, _flags: i32) -> i32 {
+    -1
 }
 
 pub fn coh_log(msg: &str) {
