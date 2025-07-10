@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.97
+# Filename: cohesix_fetch_build.sh v1.5
 # Author: Lukas Bower
-# Date Modified: 2027-11-07
+# Date Modified: 2027-12-21
 #!/usr/bin/env bash
 #
 # Merged old script v0.89 features into current script.
@@ -127,6 +127,10 @@ if [[ ${1:-} == --sel4-entry ]]; then
   SEL4_ENTRY=1
   shift
 fi
+
+# Kernel must run in production mode; disable seL4 self-tests
+export CONFIG_BUILD_KERNEL_TESTS=n
+KERNEL_TEST_FLAG=OFF
 
 
 # CUDA detection and environment setup
@@ -527,31 +531,9 @@ COHESIX_OUT="${COHESIX_OUT:-$ROOT/out}"
 
 cd "$KERNEL_DIR"
 
-# Dynamically adjust KernelElfVSpaceSizeBits if ELF is large
-KERNEL_VSPACE_BITS=42
-if [ "$ROOT_SIZE" -gt $((50*1024*1024)) ]; then
-  KERNEL_VSPACE_BITS=43
-fi
-./init-build.sh \
-  -DPLATFORM=qemu-arm-virt \
-  -DAARCH64=TRUE \
-  -DKernelPrinting=ON \
-  -DKernelDebugBuild=TRUE \
-  -DKernelLogBuffer=ON \
-  -DKernelElfVSpaceSizeBits="$KERNEL_VSPACE_BITS" \
-  -DKernelRootCNodeSizeBits=18 \
-  -DKernelVirtualEnd=0xffffff80e0000000 \
-  -DKernelArmGICV2=ON \
-  -DKernelArmPL011=ON \
-  -DKernelVerificationBuild=ON \
-  -DROOT_SERVER="$ROOT/out/cohesix_root.elf"
+cmake . -DPLATFORM=qemu-arm-virt -DAARCH64=1 -DRELEASE=1 \
+  -DROOT_SERVER="/home/ubuntu/cohesix/out/cohesix_root.elf"
 
-# Ensure debug flags are explicitly set in CMake cache
-cmake \
-  -DKernelPrinting=ON \
-  -DKernelDebugBuild=ON \
-  -DKernelVerificationBuild=ON \
-  .
 
 # Now run ninja in the workspace root
 ninja
@@ -560,7 +542,7 @@ ninja
 CACHE_FILE=$(find . -name CMakeCache.txt | head -n1)
 if [ -f "$CACHE_FILE" ]; then
   log "Kernel configuration summary:" && \
-  grep -E 'KernelPrinting|KernelDebugBuild|KernelLogBuffer|KernelVerificationBuild|KernelElfVSpaceSizeBits|KernelRootCNodeSizeBits|KernelVirtualEnd|KernelArmGICV2|KernelArmPL011' "$CACHE_FILE" || true
+  grep -E 'KernelPrinting|KernelDebugBuild|KernelLogBuffer|KernelVerificationBuild|KernelElfVSpaceSizeBits|KernelRootCNodeSizeBits|KernelVirtualEnd|KernelArmGICV2|KernelArmPL011|KernelBenchmarks|KernelTests' "$CACHE_FILE" || true
 fi
 
 # Copy kernel.elf and elfloader
@@ -577,10 +559,16 @@ cd "$ROOT"
 # -----------------------------------------------------------
 log "🧪 Booting elfloader + kernel in QEMU..."
 QEMU_LOG="$LOG_DIR/qemu_debug_$(date +%Y%m%d_%H%M%S).log"
+QEMU_FLAGS="-nographic"
+if [ "${DEBUG_QEMU:-0}" = "1" ]; then
+  # Deep trace for MMU and CPU faults when DEBUG_QEMU=1
+  # WHY: keep -nographic to avoid CI display issues
+  QEMU_FLAGS="-nographic -d cpu_reset,int,guest_errors,mmu -serial mon:stdio"
+fi
 qemu-system-aarch64 -M virt,gic-version=2 -cpu cortex-a57 -m 1024M \
   -kernel "$COHESIX_OUT/bin/elfloader" \
-  -serial mon:stdio -nographic \
-  -d int,mmu,page,guest_errors,unimp,cpu_reset \
+  -initrd "$COHESIX_OUT/bin/kernel.elf,$COHESIX_OUT/bin/cohesix_root.elf" \
+  $QEMU_FLAGS \
   -D "$QEMU_LOG" || true
 log "QEMU log saved to $QEMU_LOG"
 
@@ -596,20 +584,8 @@ done
 ensure_plan9_ns() {
   local ns_path="$ROOT/config/plan9.ns"
   if [ ! -f "$ns_path" ]; then
-    log "⚠️ config/plan9.ns missing. Generating default..."
-    mkdir -p "$ROOT/config"
-  cat > "$ns_path" <<'EOF'
-// CLASSIFICATION: COMMUNITY
-// Filename: config/plan9.ns v0.1
-// Author: Lukas Bower
-// Date Modified: 2026-08-04
-# mount -b /dev /dev  # Removed legacy Linux mount - not needed for UEFI
-# mount -b /proc /proc  # Removed legacy Linux mount - not needed for UEFI
-bind -a /bin /bin
-bind -a /usr/py /usr/py
-bind -a /srv /srv
-bind -a /mnt/9root /
-EOF
+    echo "❌ Missing namespace file: $ns_path" >&2
+    return 1
   fi
   mkdir -p "$STAGE_DIR/etc"
   if cp "$ns_path" "$STAGE_DIR/etc/plan9.ns"; then
@@ -751,11 +727,17 @@ if [ -x "$MANDOC_BIN" ]; then
   cp bin/man "$STAGE_DIR/bin/man"
   cp bin/man "$STAGE_DIR/usr/bin/man"
   chmod +x "$STAGE_DIR/bin/man" "$STAGE_DIR/usr/bin/man"
+  mkdir -p "$STAGE_DIR/mnt/data/bin"
+  cp "$MANDOC_BIN" "$STAGE_DIR/mnt/data/bin/cohman"
+  chmod +x "$STAGE_DIR/mnt/data/bin/cohman"
+  cp bin/cohman.sh "$STAGE_DIR/bin/cohman"
+  cp bin/cohman.sh "$STAGE_DIR/usr/bin/cohman"
+  chmod +x "$STAGE_DIR/bin/cohman" "$STAGE_DIR/usr/bin/cohman"
   log "✅ Built mandoc" 
-  if [ -d "$ROOT/docs/man" ]; then
+  if [ -d "$ROOT/workspace/docs/man" ]; then
     mkdir -p "$STAGE_DIR/usr/share/man/man1" "$STAGE_DIR/usr/share/man/man8"
-    cp "$ROOT/docs/man/"*.1 "$STAGE_DIR/usr/share/man/man1/" 2>/dev/null || true
-    cp "$ROOT/docs/man/"*.8 "$STAGE_DIR/usr/share/man/man8/" 2>/dev/null || true
+    cp "$ROOT/workspace/docs/man/"*.1 "$STAGE_DIR/usr/share/man/man1/" 2>/dev/null || true
+    cp "$ROOT/workspace/docs/man/"*.8 "$STAGE_DIR/usr/share/man/man8/" 2>/dev/null || true
     log "✅ Updated man pages"
   fi
   log "✅ Staged mandoc to /usr/bin"
@@ -778,6 +760,13 @@ else
   echo "❌ mandoc build failed" >&2
   exit 1
 fi
+
+# Stage Plan9 rc tests
+mkdir -p "$STAGE_DIR/bin/tests"
+cp tests/Cohesix/*.rc "$STAGE_DIR/bin/tests/"
+cp tests/Cohesix/run_all_tests.rc "$STAGE_DIR/bin/tests/"
+chmod +x "$STAGE_DIR/bin/tests"/*.rc
+log "✅ Staged Plan9 rc tests to /bin/tests"
 
 echo "✅ All builds complete."
 
@@ -827,12 +816,20 @@ echo "🪵 Full log saved to $LOG_FILE" >&3
 
 # QEMU bare metal launch command (final boot test)
 log "🧪 Running final QEMU bare metal boot test..."
+QEMU_CONSOLE="$LOG_DIR/qemu_console_$(date +%Y%m%d_%H%M%S).log"
+QEMU_FLAGS="-nographic"
+if [ "${DEBUG_QEMU:-0}" = "1" ]; then
+  # Deep trace for MMU and CPU faults when DEBUG_QEMU=1
+  # WHY: keep -nographic to avoid CI display issues
+  QEMU_FLAGS="-nographic -d cpu_reset,int,guest_errors,mmu -serial mon:stdio"
+fi
+# Provide kernel.elf and root server as modules to elfloader
 qemu-system-aarch64 -M virt,gic-version=2 -cpu cortex-a57 -m 1024M \
   -kernel "$ROOT/out/bin/elfloader" \
-  -initrd "$ROOT/out/bin/cohesix_root.elf" \
-  -serial mon:stdio -nographic \
-  -d int,mmu,page,guest_errors,unimp,cpu_reset \
-  -D "$LOG_DIR/qemu_baremetal_$(date +%Y%m%d_%H%M%S).log" || true
+  -initrd "$ROOT/out/bin/kernel.elf,$ROOT/out/bin/cohesix_root.elf" \
+  $QEMU_FLAGS \
+  -D "$LOG_DIR/qemu_baremetal_$(date +%Y%m%d_%H%M%S).log" | tee "$QEMU_CONSOLE" || true
+log "QEMU console saved to $QEMU_CONSOLE"
 log "✅ QEMU bare metal boot test complete."
 
 

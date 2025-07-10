@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: METADATA.md v3.52
+// Filename: METADATA.md v3.53
 // Author: Lukas Bower
-// Date Modified: 2027-11-21
+// Date Modified: 2027-12-07
 
 ## Canonical Documents
 
@@ -93,6 +93,18 @@
 | ip.8                      | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
 | preview_man.sh            | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
 | cohpkg.1                   | v0.1    | 2025-07-13    | COMMUNITY      |     |              |
+| cli_cap.1                 | v0.1    | 2027-12-07    | COMMUNITY      |     | |
+| cohrun_cli.1              | v0.1    | 2027-12-07    | COMMUNITY      |     | |
+| srvctl.1                  | v0.1    | 2027-12-07    | COMMUNITY      |     | |
+| indexserver.1             | v0.1    | 2027-12-07    | COMMUNITY      |     | |
+| devwatcher.1              | v0.1    | 2027-12-07    | COMMUNITY      |     | |
+| physics-server.1          | v0.1    | 2027-12-07    | COMMUNITY      |     | |
+| exportfs.1                | v0.1    | 2027-12-07    | COMMUNITY      |     | |
+| import.1                  | v0.1    | 2027-12-07    | COMMUNITY      |     | |
+| srv.1                     | v0.1    | 2027-12-07    | COMMUNITY      |     | |
+| scenario_compiler.1       | v0.1    | 2027-12-07    | COMMUNITY      |     | |
+| cloud.1                   | v0.1    | 2027-12-07    | COMMUNITY      |     | |
+| cohfuzz.1                 | v0.1    | 2027-12-07    | COMMUNITY      |     | |
 | SIM_TESTS.md               | v0.1    | 2025-07-13    | COMMUNITY      |     |             |
 | devices/HOTPLUG.md | v0.1 | 2025-07-14 | COMMUNITY | | |
 | INSTRUCTION_BLOCK.md | v4.1 | 2025-07-31 | COMMUNITY | | |
@@ -110,11 +122,11 @@
 | bootloader.lds | v0.1 | 2025-07-22 | COMMUNITY | | |
 | CohesixBoot.inf | v0.1 | 2025-07-22 | COMMUNITY | | |
 | linker.ld | v0.1 | 2025-07-22 | COMMUNITY | | |
-| link.ld | v0.13 | 2027-11-23 | COMMUNITY | | |
-| target-sel4.json | v0.1 | 2027-01-15 | COMMUNITY | | |
-| sel4-aarch64.json | v0.1 | 2027-08-08 | COMMUNITY | | |
+| link.ld | v0.14 | 2027-12-16 | COMMUNITY | | |
+| target-sel4.json | v0.2 | 2027-12-11 | COMMUNITY | | |
+| sel4-aarch64.json | v0.2 | 2027-12-11 | COMMUNITY | | |
 | .bashrc | v0.1 | 2026-08-09 | COMMUNITY | | |
-| .cargo/config.toml | v0.17 | 2027-10-18 | COMMUNITY | | |
+| .cargo/config.toml | v0.19 | 2027-12-11 | COMMUNITY | | |
 | build.rs | v0.8 | 2026-08-21 | COMMUNITY | | |
 | Makefile | v0.52 | 2027-09-30 | COMMUNITY | | |
 | src/kernel/main.c | v0.2 | 2025-07-22 | COMMUNITY | | |
@@ -142,7 +154,7 @@
 | docs/community/architecture/BOOT_KERNEL_FLOW.md | v0.3 | 2026-10-16 | COMMUNITY | | |
 | docs/community/archive/EXAMPLES_README.md | v0.3 | 2026-02-05 | COMMUNITY | | |
 | .cohesix_env | v0.3 | 2026-07-25 | COMMUNITY | | |
-| cohesix_fetch_build.sh | v0.97 | 2027-11-07 | COMMUNITY | | |
+| cohesix_fetch_build.sh | v1.5 | 2027-12-21 | COMMUNITY | | |
 | cohesix_fetch_build.bak | v0.92 | 2027-11-07 | COMMUNITY | | |
 | CONTRIBUTING.md | v1.1 | 2025-07-23 | COMMUNITY | | |
 | config/secure9p.toml | v0.7 | 2026-12-31 | COMMUNITY | | |
@@ -226,7 +238,7 @@
 | src/runtime/env/init.rs | v1.2 | 2026-12-02 | COMMUNITY | | |
 | tests/boot_role.rs | v0.1 | 2026-12-02 | COMMUNITY | | |
 | setup/config.yaml | v0.2 | 2027-11-30 | COMMUNITY | | |
-| setup/init.sh | v0.3 | 2027-12-01 | COMMUNITY | | |
+| setup/init.sh | v0.6 | 2027-12-06 | COMMUNITY | | |
 | setup/roles/QueenPrimary.yaml | v0.3 | 2027-12-01 | COMMUNITY | | |
 | setup/roles/KioskInteractive.yaml | v0.2 | 2027-11-30 | COMMUNITY | | |
 | setup/roles/DroneWorker.yaml | v0.2 | 2027-11-30 | COMMUNITY | | |
@@ -238,7 +250,7 @@
 | userland/miniroot/bin/echo | v0.1 | 2025-09-23 | COMMUNITY | | |
 | userland/miniroot/bin/help | v0.1 | 2025-09-23 | COMMUNITY | | |
 | userland/miniroot/bin/ls | v0.1 | 2025-09-23 | COMMUNITY | | |
-| userland/miniroot/bin/init | v0.2 | 2026-12-31 | COMMUNITY | | |
+| userland/miniroot/bin/init | v0.3 | 2027-12-10 | COMMUNITY | | |
 | userland/miniroot/bin/rc | v0.1 | 2026-01-20 | COMMUNITY | | |
 | usr/src/example.coh | v0.1 | 2025-09-24 | COMMUNITY | | |
 | src/sh_loop.rs | v0.1 | 2025-09-23 | COMMUNITY | | |
@@ -247,11 +259,12 @@
 | src/bin/cloud.rs | v0.1 | 2027-09-01 | COMMUNITY | | |
 | src/utils/gpu.rs | v0.2 | 2026-12-31 | COMMUNITY | | |
 | workspace/cohesix_root/Cargo.toml | v0.6 | 2027-11-05 | COMMUNITY | | |
-| workspace/cohesix_root/link.ld | v0.13 | 2027-11-23 | COMMUNITY | | |
-| workspace/cohesix_root/src/main.rs | v0.31 | 2027-11-22 | COMMUNITY | | |
+| workspace/cohesix_root/link.ld | v0.16 | 2027-12-26 | COMMUNITY | | |
+| workspace/cohesix_root/src/main.rs | v0.38 | 2027-12-26 | COMMUNITY | | |
 | workspace/cohesix_root/src/lang_items.rs | v0.1 | 2027-10-12 | COMMUNITY | | |
-| workspace/cohesix_root/src/entry.S | v0.19 | 2027-11-01 | COMMUNITY | | |
+| workspace/cohesix_root/src/entry.S | v0.20 | 2027-12-26 | COMMUNITY | | |
 | workspace/cohesix_root/src/allocator.rs | v0.7 | 2027-11-20 | COMMUNITY | | |
+| workspace/cohesix_root/src/sys.rs | v0.3 | 2027-12-26 | COMMUNITY | | |
 | src/cuda/runtime.rs | v0.16 | 2026-12-31 | COMMUNITY | | |
 | src/cli/mod.rs | v1.3 | 2026-10-08 | COMMUNITY | | |
 | src/cli/cohtrace.rs | v0.4 | 2026-10-13 | COMMUNITY | | |
@@ -284,7 +297,7 @@
 
 | requirements.txt | v0.2 | 2026-01-27 | COMMUNITY | | |
 | cloud-init.yaml | v0.1 | 2026-02-19 | COMMUNITY | | |
-| plan9.ns | v0.7 | 2027-12-01 | COMMUNITY | | |
+| config/plan9.ns | v0.11 | 2027-12-20 | COMMUNITY | | |
 | bin/cohpkg | v0.1 | 2026-02-21 | COMMUNITY | | |
 | bin/cohshell.sh | v0.1 | 2026-02-21 | COMMUNITY | | |
 | bin/cohman.sh | v0.1 | 2026-02-21 | COMMUNITY | | |
@@ -301,6 +314,7 @@
 
 | docs/community/guides/test_portability_guidelines.md | v0.1 | 2025-06-26 | COMMUNITY | | |
 | tools/setup_test_targets.sh | v0.1 | 2026-09-30 | COMMUNITY | | |
+| scripts/validate_manpages.py | v0.1 | 2027-12-07 | COMMUNITY | | |
 | docs/FEATURE_FLAGS.md | v0.1 | 2026-09-30 | COMMUNITY | | |
 | docs/ROOT_SPLIT_PLAN_V1.md | v1.2 | 2027-08-15 | COMMUNITY | | |
 | tests/test_validator_matrix.rs | v0.2 | 2026-11-02 | COMMUNITY | | |
@@ -339,6 +353,29 @@
 | logs/root_split_full_boot_validation_20250706_223559.log | v0.1 | 2027-08-15 | COMMUNITY | | |
 | logs/sel4_userland_split.md | v0.1 | 2027-09-30 | COMMUNITY | | |
 | docs/community/diagnostics/MMU_FAULT_AUDIT.md | v0.1 | 2027-10-14 | COMMUNITY | | |
+| tests/Cohesix/test_cli_cap.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
+| tests/Cohesix/test_cloud.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
+| tests/Cohesix/test_cohagent.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
+| tests/Cohesix/test_cohbuild.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
+| tests/Cohesix/test_cohcc.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
+| tests/Cohesix/test_cohesix.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
+| tests/Cohesix/test_cohfuzz.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
+| tests/Cohesix/test_cohrole.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
+| tests/Cohesix/test_cohrun.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
+| tests/Cohesix/test_cohrun_cli.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
+| tests/Cohesix/test_cohtrace.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
+| tests/Cohesix/test_cohup.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
+| tests/Cohesix/test_devwatcher.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
+| tests/Cohesix/test_exportfs.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
+| tests/Cohesix/test_import.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
+| tests/Cohesix/test_indexserver.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
+| tests/Cohesix/test_mount.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
+| tests/Cohesix/test_physics-server.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
+| tests/Cohesix/test_scenario_compiler.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
+| tests/Cohesix/test_srv.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
+| tests/Cohesix/test_srvctl.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
+| tests/Cohesix/test_userland_health.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
+| tests/Cohesix/run_all_tests.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
 Removed: introspect_self_diagnosis (Plan9 migration - file-based introspection replaced by validator-driven policy checks)
 Removed: legacy Python tests and lint steps; project now purely Plan9 + Rust
 Changed: `.cargo/config.toml` v0.14 uses project-relative linker script path

@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: .cargo/config.toml v0.18
+# Filename: .cargo/config.toml v0.19
 # Author: Lukas Bower
-# Date Modified: 2027-10-18
+# Date Modified: 2027-12-11
 
 [source.vendored-sources]
 directory = "vendor"
@@ -14,7 +14,15 @@ linker = "x86_64-linux-musl-gcc"
 
 [target.sel4-aarch64]
 linker = "ld.lld"
-rustflags = ["-C", "link-arg=-Tlink.ld", "-C", "link-arg=--gc-sections"]
+# Ensure ELF segments use 4KiB file offset alignment for seL4 elfloader
+rustflags = [
+    # LLD requires '-z max-page-size=0x1000' instead of the GNU ld
+    # style '--max-page-size=0x1000' to maintain 4KiB ELF segment alignment
+    # for the seL4 ELF-loader.
+    "-C", "link-arg=-z",
+    "-C", "link-arg=max-page-size=0x1000",
+    "-C", "link-arg=--gc-sections",
+]
 
 [target.sel4-aarch64.unstable]
 build-std = "core,alloc,compiler_builtins"

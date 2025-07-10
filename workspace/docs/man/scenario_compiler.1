@@ -1,0 +1,27 @@
+.\" CLASSIFICATION: COMMUNITY
+.\" Filename: scenario_compiler.1 v0.1
+.\" Author: Lukas Bower
+.\" Date Modified: 2027-12-07
+.TH SCENARIO_COMPILER 1 "2027-12-07" "Cohesix" "User Commands"
+.SH NAME
+scenario_compiler \- compile scenario DSL files
+.SH SYNOPSIS
+.B scenario_compiler
+.RI --input " <file> --output <file>"
+.SH DESCRIPTION
+.B scenario_compiler
+translates a high-level scenario description into a JSON format
+used by
+.B cohrun_cli
+and other tools.
+.SH OPTIONS
+.TP
+.B --input
+Source scenario file.
+.TP
+.B --output
+Destination JSON file.
+.SH EXAMPLES
+.B scenario_compiler --input demo.sc --output demo.json
+.SH SEE ALSO
+.BR cohrun_cli (1)

@@ -1,0 +1,34 @@
+.\" CLASSIFICATION: COMMUNITY
+.\" Filename: cli_cap.1 v0.1
+.\" Author: Lukas Bower
+.\" Date Modified: 2027-12-07
+.TH CLI_CAP 1 "2027-12-07" "Cohesix" "User Commands"
+.SH NAME
+cli_cap \- manage worker capabilities
+.SH SYNOPSIS
+.B cli_cap
+.RI <command> " [options]"
+.SH DESCRIPTION
+.B cli_cap
+manages capability lists for Cohesix workers. It supports listing,
+granting, and revoking named capabilities stored under
+.BR /srv/caps .
+.SH OPTIONS
+.TP
+.B list
+.RI <worker>
+Show capabilities for the specified worker.
+.TP
+.B grant
+.RI <cap> " --to " <worker>
+Add a capability for the worker. Requires QueenPrimary role.
+.TP
+.B revoke
+.RI <cap> " --from " <worker>
+Remove a capability from the worker.
+.SH EXAMPLES
+.B cli_cap list worker01
+.br
+.B cli_cap grant deploy --to worker01
+.SH SEE ALSO
+.BR cohrole (1)

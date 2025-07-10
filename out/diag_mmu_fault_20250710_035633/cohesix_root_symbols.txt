@@ -1,0 +1,16 @@
+
+Symbol table '.symtab' contains 13 entries:
+   Num:    Value          Size Type    Bind   Vis      Ndx Name
+     0: 0000000000000000     0 NOTYPE  LOCAL  DEFAULT  UND 
+     1: 0000000000000000     0 FILE    LOCAL  DEFAULT  ABS cohesix_root.4d2[...]
+     2: ffffff8040000000     0 NOTYPE  LOCAL  DEFAULT    1 $x
+     3: ffffff8040000004     0 NOTYPE  LOCAL  DEFAULT    1 $x
+     4: 0000000000000000     0 NOTYPE  LOCAL  DEFAULT    5 $d
+     5: ffffff8040000004     4 FUNC    LOCAL  HIDDEN     1 _RNvCs9km79j5jox[...]
+     6: ffffff8040000000     4 FUNC    GLOBAL DEFAULT    1 main
+     7: ffffff8040001000     0 NOTYPE  GLOBAL DEFAULT    2 __bss_start
+     8: ffffff8040001000     0 NOTYPE  GLOBAL DEFAULT    2 __bss_end
+     9: ffffff8040001000     0 NOTYPE  GLOBAL DEFAULT    3 __heap_start
+    10: ffffff8040101000     0 NOTYPE  GLOBAL DEFAULT    3 __heap_end
+    11: ffffff8040101000     0 NOTYPE  GLOBAL DEFAULT    4 __stack_start
+    12: ffffff8040111000     0 NOTYPE  GLOBAL DEFAULT    4 __stack_end

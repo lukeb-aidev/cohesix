@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: main.rs v0.31
+// Filename: main.rs v0.38
 // Author: Lukas Bower
-// Date Modified: 2027-11-22
+// Date Modified: 2027-12-26
 #![no_std]
 #![no_main]
 #![feature(alloc_error_handler, asm_experimental_arch, lang_items)]
@@ -10,6 +10,7 @@ extern crate alloc;
 
 mod allocator;
 mod lang_items;
+mod sys;
 
 use core::arch::global_asm;
 global_asm!(include_str!("entry.S"));
@@ -30,6 +31,8 @@ extern "C" {
     static mut __bss_end: u8;
 }
 
+use crate::sys::seL4_DebugPutChar;
+
 #[no_mangle]
 #[link_section = ".bss"]
 static mut VALIDATOR_HANDLE: *const u8 = core::ptr::null();
@@ -46,6 +49,10 @@ static mut WATCHED_PTRS: [usize; 64] = [0; 64];
 static mut WATCHED_IDX: usize = 0;
 #[link_section = ".bss"]
 static mut ALLOC_CHECK: u64 = 0;
+
+#[link_section = ".rodata"]
+#[used]
+static ROOTSERVER_ONLINE: &[u8] = b"ROOTSERVER ONLINE";
 
 fn putchar(c: u8) {
     unsafe { seL4_DebugPutChar(c) };
@@ -268,69 +275,6 @@ pub fn validate_ptr(ptr: usize) {
     }
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn seL4_DebugPutChar(_c: u8) {}
-#[no_mangle]
-unsafe extern "C" fn open(path: *const c_char, _flags: i32, _mode: i32) -> i32 {
-    putstr("open ptr");
-    put_hex(path as usize);
-    validate_ptr(path as usize);
-    watch_ptr(path as usize);
-    -1
-}
-#[no_mangle]
-unsafe extern "C" fn read(_fd: i32, buf: *mut u8, _len: usize) -> isize {
-    putstr("read buf");
-    put_hex(buf as usize);
-    validate_ptr(buf as usize);
-    watch_ptr(buf as usize);
-    check_heap_ptr(buf as usize);
-    0
-}
-#[no_mangle]
-unsafe extern "C" fn close(_fd: i32) -> i32 {
-    0
-}
-#[no_mangle]
-unsafe extern "C" fn write(_fd: i32, buf: *const u8, _len: usize) -> isize {
-    putstr("write buf");
-    put_hex(buf as usize);
-    validate_ptr(buf as usize);
-    watch_ptr(buf as usize);
-    check_heap_ptr(buf as usize);
-    0
-}
-#[no_mangle]
-unsafe extern "C" fn execv(path: *const c_char, _argv: *const *const c_char) -> i32 {
-    putstr("execv path");
-    put_hex(path as usize);
-    validate_ptr(path as usize);
-    watch_ptr(path as usize);
-    -1
-}
-#[no_mangle]
-unsafe extern "C" fn getenv(name: *const c_char) -> *const c_char {
-    putstr("getenv name");
-    put_hex(name as usize);
-    validate_ptr(name as usize);
-    watch_ptr(name as usize);
-    core::ptr::null()
-}
-#[no_mangle]
-unsafe extern "C" fn setenv(name: *const c_char, val: *const c_char, _overwrite: i32) -> i32 {
-    putstr("setenv name");
-    put_hex(name as usize);
-    validate_ptr(name as usize);
-    watch_ptr(name as usize);
-    putstr("setenv val");
-    put_hex(val as usize);
-    validate_ptr(val as usize);
-    watch_ptr(val as usize);
-    0
-}
-
-
-
 pub fn putstr(s: &str) {
     for &b in s.as_bytes() {
         putchar(b);
@@ -351,24 +295,20 @@ fn cstr(bytes: &[u8]) -> *const c_char {
 
 const PATH_BOOTARGS: &[u8] = b"/boot/bootargs.txt\0";
 const PATH_COHROLE: &[u8] = b"/srv/cohrole\0";
-const BIN_RC: &[u8] = b"/bin/rc\0";
-const SCRIPT_WORKER: &[u8] = b"/init/worker.rc\0";
-const SCRIPT_KIOSK: &[u8] = b"/init/kiosk.rc\0";
-const SCRIPT_SENSOR: &[u8] = b"/init/sensor.rc\0";
-const SCRIPT_SIMTEST: &[u8] = b"/init/simtest.rc\0";
-const SCRIPT_QUEEN: &[u8] = b"/init/queen.rc\0";
+const PATH_PLAN9_NS: &[u8] = b"/etc/plan9.ns\0";
+const INIT_BIN: &[u8] = b"/bin/init\0";
 // DEBUG: rodata audit string
 static RODATA_CHECK: &str = "RODATA_OK";
 
 fn load_bootargs() {
     unsafe {
-        let fd = open(cstr(PATH_BOOTARGS), 0, 0);
+        let fd = sys::coh_open(cstr(PATH_BOOTARGS), 0, 0);
         if fd < 0 {
             return;
         }
         let mut buf = [0u8; 256];
-        let n = read(fd, buf.as_mut_ptr(), buf.len()) as usize;
-        close(fd);
+        let n = sys::coh_read(fd, buf.as_mut_ptr(), buf.len()) as usize;
+        sys::coh_close(fd);
         let text = core::str::from_utf8_unchecked(&buf[..n]);
         let bytes = text.as_bytes();
         let mut i = 0;
@@ -391,7 +331,7 @@ fn load_bootargs() {
                 kb.push(0);
                 let mut vb = Vec::from(v.as_bytes());
                 vb.push(0);
-                setenv(
+                sys::coh_setenv(
                     kb.as_ptr() as *const c_char,
                     vb.as_ptr() as *const c_char,
                     1,
@@ -405,7 +345,7 @@ fn env_var(name: &str) -> Option<&'static CStr> {
     let mut nb = Vec::from(name.as_bytes());
     nb.push(0);
     unsafe {
-        let ptr = getenv(nb.as_ptr() as *const c_char);
+        let ptr = sys::coh_getenv(nb.as_ptr() as *const c_char);
         putstr("getenv return");
         put_hex(ptr as usize);
         if ptr.is_null() {
@@ -420,41 +360,99 @@ fn write_role(role: &str) {
     unsafe {
         let mut rb = Vec::from(role.as_bytes());
         rb.push(0);
-        let fd = open(cstr(PATH_COHROLE), 0x601, 0o644);
+        let fd = sys::coh_open(cstr(PATH_COHROLE), 0x601, 0o644);
         if fd >= 0 {
-            let _ = write(fd, rb.as_ptr(), role.len());
-            close(fd);
+            let _ = sys::coh_write(fd, rb.as_ptr(), role.len());
+            sys::coh_close(fd);
         }
     }
 }
 
-fn role_script(role: &str) -> &'static [u8] {
-    match role {
-        "DroneWorker" => SCRIPT_WORKER,
-        "KioskInteractive" | "InteractiveAiBooth" => SCRIPT_KIOSK,
-        "SensorRelay" => SCRIPT_SENSOR,
-        "SimulatorTest" => SCRIPT_SIMTEST,
-        _ => SCRIPT_QUEEN,
+const MAFTER: i32 = 2;
+
+fn read_file(path: &[u8]) -> Option<Vec<u8>> {
+    unsafe {
+        let fd = sys::coh_open(cstr(path), 0, 0);
+        if fd < 0 {
+            coherr!("open_failed {}", core::str::from_utf8_unchecked(path));
+            return None;
+        }
+        let mut data = Vec::new();
+        let mut buf = [0u8; 256];
+        loop {
+            let n = sys::coh_read(fd, buf.as_mut_ptr(), buf.len()) as isize;
+            if n <= 0 {
+                break;
+            }
+            data.extend_from_slice(&buf[..n as usize]);
+        }
+        sys::coh_close(fd);
+        Some(data)
     }
 }
 
-fn exec_init(role: &str) -> ! {
-    let script = role_script(role);
-    let argv = [
-        BIN_RC.as_ptr() as *const c_char,
-        script.as_ptr() as *const c_char,
-        ptr::null(),
-    ];
+fn apply_namespace() {
+    if let Some(data) = read_file(PATH_PLAN9_NS) {
+        if let Ok(text) = core::str::from_utf8(&data) {
+            for line in text.lines() {
+                let line = line.split('#').next().unwrap_or("").trim();
+                if line.is_empty() {
+                    continue;
+                }
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                match parts.as_slice() {
+                    ["bind", "-a", src, dst] => unsafe {
+                        coherr!("bind -a {} {}", src, dst);
+                        let mut sb = Vec::from(src.as_bytes());
+                        sb.push(0);
+                        let mut db = Vec::from(dst.as_bytes());
+                        db.push(0);
+                        sys::coh_bind(sb.as_ptr() as *const c_char, db.as_ptr() as *const c_char, MAFTER);
+                    },
+                    ["bind", src, dst] => unsafe {
+                        coherr!("bind {} {}", src, dst);
+                        let mut sb = Vec::from(src.as_bytes());
+                        sb.push(0);
+                        let mut db = Vec::from(dst.as_bytes());
+                        db.push(0);
+                        sys::coh_bind(sb.as_ptr() as *const c_char, db.as_ptr() as *const c_char, 0);
+                    },
+                    _ => coherr!("ignore_line {}", line),
+                }
+            }
+        }
+    }
+}
+
+fn check_init_exists() -> bool {
     unsafe {
-        execv(BIN_RC.as_ptr() as *const c_char, argv.as_ptr());
+        let fd = sys::coh_open(cstr(INIT_BIN), 0, 0);
+        if fd < 0 {
+            coherr!("missing_init_bin");
+            false
+        } else {
+            sys::coh_close(fd);
+            true
+        }
+    }
+}
+
+fn exec_init() -> ! {
+    let argv = [INIT_BIN.as_ptr() as *const c_char, ptr::null()];
+    unsafe {
+        if sys::coh_exec(INIT_BIN.as_ptr() as *const c_char, argv.as_ptr()) != 0 {
+            sys::coh_log("fatal: exec failed");
+        }
     }
     loop {
+        sys::coh_log("fatal: exec failed");
         core::hint::spin_loop();
     }
 }
 
 #[no_mangle]
 pub extern "C" fn main() {
+    sys::coh_log("ROOTSERVER ONLINE");
     unsafe {
         ALLOC_CHECK = 0xdeadbeefdeadbeef;
         if ALLOC_CHECK != 0xdeadbeefdeadbeef {
@@ -508,8 +506,8 @@ pub extern "C" fn main() {
     put_hex(PATH_BOOTARGS.as_ptr() as usize);
     putstr("cohrole_ptr");
     put_hex(PATH_COHROLE.as_ptr() as usize);
-    putstr("rc_bin_ptr");
-    put_hex(BIN_RC.as_ptr() as usize);
+    putstr("init_bin_ptr");
+    put_hex(INIT_BIN.as_ptr() as usize);
     let local = 0u8;
     putstr("local");
     put_hex(&local as *const _ as usize);
@@ -542,12 +540,22 @@ pub extern "C" fn main() {
         abort("stack bounds invalid");
     }
     load_bootargs();
+    if env_var("INIT_SH_DEBUG").is_some() {
+        coherr!("bootarg_init_debug");
+    }
+    if env_var("INIT_SKIP_CUDA").is_some() {
+        coherr!("bootarg_skip_cuda");
+    }
     let role_cstr = env_var("COHROLE");
     let role = role_cstr
         .and_then(|c| c.to_str().ok())
         .unwrap_or("DroneWorker");
     write_role(role);
+    apply_namespace();
+    if !check_init_exists() {
+        coherr!("fatal_missing_init");
+    }
     putstr("[root] launching userland...");
-    exec_init(role);
+    exec_init();
 }
 
