@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: METADATA.md v3.53
+// Filename: METADATA.md v3.54
 // Author: Lukas Bower
 // Date Modified: 2027-12-07
 
@@ -124,7 +124,7 @@
 | linker.ld | v0.1 | 2025-07-22 | COMMUNITY | | |
 | link.ld | v0.16 | 2027-12-27 | COMMUNITY | | |
 | target-sel4.json | v0.2 | 2027-12-11 | COMMUNITY | | |
-| sel4-aarch64.json | v0.3 | 2027-12-28 | COMMUNITY | | |
+| sel4-aarch64.json | v0.4 | 2027-12-28 | COMMUNITY | | |
 | .bashrc | v0.1 | 2026-08-09 | COMMUNITY | | |
 | .cargo/config.toml | v0.19 | 2027-12-11 | COMMUNITY | | |
 | build.rs | v0.8 | 2026-08-21 | COMMUNITY | | |
@@ -154,7 +154,7 @@
 | docs/community/architecture/BOOT_KERNEL_FLOW.md | v0.3 | 2026-10-16 | COMMUNITY | | |
 | docs/community/archive/EXAMPLES_README.md | v0.3 | 2026-02-05 | COMMUNITY | | |
 | .cohesix_env | v0.3 | 2026-07-25 | COMMUNITY | | |
-| cohesix_fetch_build.sh | v1.6 | 2027-12-28 | COMMUNITY | | |
+| cohesix_fetch_build.sh | v1.7 | 2027-12-28 | COMMUNITY | | |
 | cohesix_fetch_build.bak | v0.92 | 2027-11-07 | COMMUNITY | | |
 | CONTRIBUTING.md | v1.1 | 2025-07-23 | COMMUNITY | | |
 | config/secure9p.toml | v0.7 | 2026-12-31 | COMMUNITY | | |
@@ -195,6 +195,8 @@
 | third_party/seL4/README.md | v0.1 | 2027-12-28 | COMMUNITY | | |
 | third_party/seL4/COMMIT | v0.1 | 2027-12-28 | COMMUNITY | | |
 | third_party/seL4/fetch_sel4.sh | v0.1 | 2027-12-28 | COMMUNITY | | |
+| third_party/seL4/include/README.md | v0.1 | 2027-12-28 | COMMUNITY | | |
+| third_party/seL4/lib/README.md | v0.1 | 2027-12-28 | COMMUNITY | | |
 | metadata.json | v0.1 | 2025-07-24 | COMMUNITY | | |
 | Cargo.toml | v0.54 | 2027-11-06 | COMMUNITY | | |
 | cohesix-9p/Cargo.toml | v0.7 | 2027-09-30 | COMMUNITY | | |
