@@ -1,5 +1,5 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v1.0
+# Filename: cohesix_fetch_build.sh v1.1
 # Author: Lukas Bower
 # Date Modified: 2027-12-11
 #!/usr/bin/env bash
@@ -597,7 +597,8 @@ QEMU_LOG="$LOG_DIR/qemu_debug_$(date +%Y%m%d_%H%M%S).log"
 QEMU_FLAGS="-nographic"
 if [ "${DEBUG_QEMU:-0}" = "1" ]; then
   # Deep trace for MMU and CPU faults when DEBUG_QEMU=1
-  QEMU_FLAGS="-d cpu_reset,int,guest_errors,mmu -serial mon:stdio"
+  # WHY: keep -nographic to avoid CI display issues
+  QEMU_FLAGS="-nographic -d cpu_reset,int,guest_errors,mmu -serial mon:stdio"
 fi
 qemu-system-aarch64 -M virt,gic-version=2 -cpu cortex-a57 -m 1024M \
   -kernel "$COHESIX_OUT/bin/elfloader" \
@@ -866,7 +867,8 @@ QEMU_CONSOLE="$LOG_DIR/qemu_console_$(date +%Y%m%d_%H%M%S).log"
 QEMU_FLAGS="-nographic"
 if [ "${DEBUG_QEMU:-0}" = "1" ]; then
   # Deep trace for MMU and CPU faults when DEBUG_QEMU=1
-  QEMU_FLAGS="-d cpu_reset,int,guest_errors,mmu -serial mon:stdio"
+  # WHY: keep -nographic to avoid CI display issues
+  QEMU_FLAGS="-nographic -d cpu_reset,int,guest_errors,mmu -serial mon:stdio"
 fi
 qemu-system-aarch64 -M virt,gic-version=2 -cpu cortex-a57 -m 1024M \
   -kernel "$ROOT/out/bin/elfloader" \
