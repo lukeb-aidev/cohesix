@@ -3202,3 +3202,9 @@
 - **AuditAndRewriteRootLoggingAndLink-204**: `coh_log` now writes directly via
   `seL4_DebugPutChar`, the linker entry uses `_start`, and `main` logs
   `ROOTSERVER ONLINE` before other initialization.
+
+
+## [v0.507] - 2027-12-27
+### Fixed
+- **FixSel4RootEntrypoint-205**: root linker scripts now use `ENTRY(_start)` and syscalls `seL4_Send`, `seL4_Recv`, `seL4_Yield` are provided.
+- Investigation report `COHESIX_ROOT_ELF_DIAG.md` documents the zero entry point issue.
