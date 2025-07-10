@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v1.2
+# Filename: cohesix_fetch_build.sh v1.3
 # Author: Lukas Bower
-# Date Modified: 2027-12-12
+# Date Modified: 2027-12-19
 #!/usr/bin/env bash
 #
 # Merged old script v0.89 features into current script.
@@ -128,16 +128,9 @@ if [[ ${1:-} == --sel4-entry ]]; then
   shift
 fi
 
-# Optional kernel test mode flag
-KERNEL_TEST_MODE="${KERNEL_TEST_MODE:-0}"
-if [ "$KERNEL_TEST_MODE" = "1" ]; then
-  export CONFIG_BUILD_KERNEL_TESTS=y
-  KERNEL_TEST_FLAG=ON
-  log "⚙️ Kernel test mode enabled (CONFIG_BUILD_KERNEL_TESTS=y)"
-else
-  export CONFIG_BUILD_KERNEL_TESTS=n
-  KERNEL_TEST_FLAG=OFF
-fi
+# Kernel must run in production mode; disable seL4 self-tests
+export CONFIG_BUILD_KERNEL_TESTS=n
+KERNEL_TEST_FLAG=OFF
 
 
 # CUDA detection and environment setup
@@ -556,18 +549,19 @@ fi
   -DKernelVirtualEnd=0xffffff80e0000000 \
   -DKernelArmGICV2=ON \
   -DKernelArmPL011=ON \
-  -DKernelVerificationBuild=ON \
+  -DKernelVerificationBuild=OFF \
   -DKernelBenchmarks=OFF \
-  -DKernelTests="$KERNEL_TEST_FLAG" \
-  -DROOT_SERVER="$ROOT/out/cohesix_root.elf"
+  -DKernelTests=OFF \
+  -DROOT_SERVER="/home/ubuntu/cohesix/out/cohesix_root.elf"
+  # WHY: Must disable KernelTests/Benchmarks so ELF-loader runs, ROOT_SERVER mandatory for userland boot
 
 # Ensure debug flags are explicitly set in CMake cache
 cmake \
   -DKernelPrinting=ON \
   -DKernelDebugBuild=ON \
-  -DKernelVerificationBuild=ON \
+  -DKernelVerificationBuild=OFF \
   -DKernelBenchmarks=OFF \
-  -DKernelTests="$KERNEL_TEST_FLAG" \
+  -DKernelTests=OFF \
   .
 
 # Now run ninja in the workspace root
@@ -578,6 +572,12 @@ CACHE_FILE=$(find . -name CMakeCache.txt | head -n1)
 if [ -f "$CACHE_FILE" ]; then
   log "Kernel configuration summary:" && \
   grep -E 'KernelPrinting|KernelDebugBuild|KernelLogBuffer|KernelVerificationBuild|KernelElfVSpaceSizeBits|KernelRootCNodeSizeBits|KernelVirtualEnd|KernelArmGICV2|KernelArmPL011|KernelBenchmarks|KernelTests' "$CACHE_FILE" || true
+  for req in "KernelTests:BOOL=OFF" "KernelBenchmarks:BOOL=OFF" \
+             "KernelVerificationBuild:BOOL=OFF" \
+             "ROOT_SERVER:FILEPATH=/home/ubuntu/cohesix/out/cohesix_root.elf" \
+             "KernelPrinting:BOOL=ON"; do
+    grep -q "$req" "$CACHE_FILE" || { echo "❌ Kernel config mismatch: $req" >&2; exit 1; }
+  done
 fi
 
 # Copy kernel.elf and elfloader
