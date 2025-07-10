@@ -3136,3 +3136,8 @@
 - **FixLinkerPageAlignment-090**: replaced unsupported `--max-page-size` linker flag with
   `-z max-page-size=0x1000` in `.cargo/config.toml`, `target-sel4.json`, and `sel4-aarch64.json`.
   Ensures 4 KiB ELF segment alignment for LLD and seL4.
+
+## [v0.495] - 2027-12-11
+### Fixed
+- **RestoreHeadlessQemu-093**: `cohesix_fetch_build.sh` debug mode adds `-nographic`
+  when `DEBUG_QEMU=1`. Prevents CI hang and restores log capture.
