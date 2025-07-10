@@ -259,7 +259,7 @@
 | src/bin/cloud.rs | v0.1 | 2027-09-01 | COMMUNITY | | |
 | src/utils/gpu.rs | v0.2 | 2026-12-31 | COMMUNITY | | |
 | workspace/cohesix_root/Cargo.toml | v0.6 | 2027-11-05 | COMMUNITY | | |
-| workspace/cohesix_root/link.ld | v0.14 | 2027-12-16 | COMMUNITY | | |
+| workspace/cohesix_root/link.ld | v0.15 | 2027-12-17 | COMMUNITY | | |
 | workspace/cohesix_root/src/main.rs | v0.33 | 2027-12-06 | COMMUNITY | | |
 | workspace/cohesix_root/src/lang_items.rs | v0.1 | 2027-10-12 | COMMUNITY | | |
 | workspace/cohesix_root/src/entry.S | v0.19 | 2027-11-01 | COMMUNITY | | |

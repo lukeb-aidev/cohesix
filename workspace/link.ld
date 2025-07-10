@@ -1,7 +1,7 @@
 /* CLASSIFICATION: COMMUNITY */
-/* Filename: link.ld v0.14 */
+/* Filename: link.ld v0.15 */
 /* Author: Lukas Bower */
-/* Date Modified: 2027-12-16 */
+/* Date Modified: 2027-12-17 */
 /* SPDX-License-Identifier: BSD-2-Clause */
 
 ENTRY(_sel4_start)
@@ -34,7 +34,11 @@ SECTIONS {
     } :text
     __rodata_end = .;
 
-    /* WHY: keep .data on its own aligned page following .rodata */
+    /* WHY: compute end of loaded image before starting the heap */
+    . = ALIGN(0x1000);
+    __image_end = .;
+
+    /* WHY: keep .data on its own aligned page following __image_end */
     . = ALIGN(0x1000);
     . += 0x1000;
     .data : {
@@ -52,8 +56,6 @@ SECTIONS {
         __bss_end = .;
     } :data
 
-    /* record end of loaded image for runtime */
-    __image_end = .;
 
     /* dedicated heap region mapped inside the ELF image */
     /*
