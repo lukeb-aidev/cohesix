@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: INSTRUCTION_BLOCK.md v3.6
 // Author: Lukas Bower
-// Date Modified: 2025-06-15
+// Date Modified: 2025-07-11
 
 ## 0 · Classification Header — Mandatory
 
@@ -51,6 +51,8 @@ Documents archived in `/canvas/archive/` are read-only and excluded from Codex w
 - Licensing: Only Apache 2.0, MIT, or BSD allowed (see `LICENSES_AND_REUSE.md`)
 
 **Goal:** Achieve fully functional bare metal or QEMU boot into Cohesix userland with complete Plan 9 namespace, runtime validator, Rapier physics, and CUDA services operational.
+
+Also ensure seL4 ELF user images (root tasks) are built with valid non-zero entry points and linked against libsel4 statically, to avoid runtime bootloader failures.
 
 Boot Flow:
 
@@ -182,6 +184,7 @@ CI must reject duplication or drift.
 
 ### 15. Rootserver Safety
 - BSS zero verification, allocator pointer capping, and early heap audits are mandatory. CI and human reviews must reject code that weakens these checks.
+- Validate ELF headers: must have a non-zero entry point (_start) and include symbols for seL4 core syscalls (e.g., seL4_Send, seL4_Recv, seL4_DebugPutChar). Builds lacking these must fail.
 
 ---
 
@@ -195,6 +198,7 @@ CI must reject duplication or drift.
 
 ### Boot & CI Validation
 - Boot & CI Validation: Full boot traces on Jetson/Pi  
+- Validate ELF integrity using readelf, nm, and objdump to ensure proper AArch64 EXEC formation, presence of core seL4 symbols, and static linking.
 
 ### Fuzzing
 - Fuzzing: 9P protocol + syscall surface  
@@ -286,3 +290,4 @@ the header, with verification performed manually or during deferred checks.
   - No hydration or permission errors are present  
   - It can read + write to `/mnt/data/cohesix_active/` cleanly
   - If `qemu-system-x86_64` is not present, Codex must log and skip boot tests instead of failing the entire pipeline.
+  - For ELF validations, Codex must explicitly confirm the user image is an AArch64 EXEC with proper sections, symbols, and non-zero entry.

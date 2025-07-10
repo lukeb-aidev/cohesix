@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: AGENTS.md v3.1
+// Filename: AGENTS.md v3.2
 // Author: Lukas Bower
-// Date Modified: 2025-06-28
+// Date Modified: 2025-06-29
 
 # Cohesix Codex Agents
 
@@ -18,9 +18,9 @@ Cohesix is a secure OS platform built on seL4 + Plan9 principles with:
 - CUDA + Rapier physics modules
 - CLI tools in Rust, Go, Python
 - The custom compiler `cohcc`
-- Pure UEFI execution environment using LLVM/LLD (no Linux syscalls, no `/proc` or `/sys`)
-- Rust cross-targets: `x86_64-unknown-uefi`, `aarch64-unknown-uefi`
+- Pure Plan9 style namespace bindings, avoiding any POSIX/Linux syscall dependencies
 - Pre-installed tools: `rustc`, `cargo`, `llvm`, `lld`, `clang`, `python3` (with `flake8`, `mypy`, `black`), `go`, `gcc`
+- Validates ELF entry points and seL4 symbol presence for rootserver (using nm, readelf, objdump), following COHESIX_AARCH64_BUILD.md and COHESIX_ROOT_ELF_DIAG.md.
 Agents run in CI (GitHub Actions) and locally, ensuring consistency, security, and sandbox guarantees across all roles and deployments, with CUDA processing handled by dedicated Linux microservers where applicable.
 
 ---
@@ -51,32 +51,6 @@ Agents always respect TMPDIR, COHESIX_TRACE_TMP, or COHESIX_ENS_TMP — never ha
 - Example log:  
   `✅ Validator hook found in src/kernel/init.rs`
 
-### Task Title: QEMU Boot ISO Sanity (AGENT:BOOT_ISO_SANITY)
-- **Goal:** Validate `make_iso.sh` produces a bootable ISO that starts validator + shell.
-- **Input:** tools/make_iso.sh, tests/test_bootflow.py
-- **Output:** log/iso_boot_check.md
-- **Checks:** ISO mounts, boots via QEMU, shell launches as QueenPrimary.
-- Example log:  
-  `✅ ISO booted via QEMU. Validator active. Shell running.`
-
-### Task Title: Complete Userland Tool Staging (AGENT:USERLAND_TOOLS)
-- **Goal:** Ensure ISO contains cohesix-shell, CLI tools, cohcc, cohtrace, mandoc, BusyBox.
-- **Input:** tools/make_iso.sh, /out/iso/
-- **Output:** log/userland_tool_check.md
-- **Checks:** All binaries staged under /usr/bin or /bin. Shell responds to CLI commands.
-
-### Task Title: Secure9P + Role Policy Audit (AGENT:ROLE_POLICY_CHECK)
-- **Goal:** Confirm runtime role + validator matches ROLE_POLICY.md and secure9p.toml.
-- **Input:** docs/community/governance/ROLE_POLICY.md, config/secure9p.toml, /srv/cohrole
-- **Output:** log/secure9p_policy_check.md
-- **Checks:** Roles aligned, Secure9P validated.
-
-### Task Title: Watchdog Heartbeat + Recovery (AGENT:WATCHDOG_RECOVERY)
-- **Goal:** Check watchdog heartbeats ≤ 5 min, document restarts.
-- **Input:** log/watchdog/
-- **Output:** log/watchdog_check.md
-- **Checks:** No stale tasks; recovery attempts logged.
-
 ---
 
 ## 🔍 Supporting Documents
@@ -91,17 +65,22 @@ Agents always respect TMPDIR, COHESIX_TRACE_TMP, or COHESIX_ENS_TMP — never ha
 ## ⚙️ Execution & Environment Notes
 
 - Agents run under GitHub Actions workflows (x86_64 and aarch64 runners with CUDA fallback) and local CI.
-- All builds target pure UEFI binaries using LLVM/LLD.
+- All builds use LLVM/LLD for linking.
+- Cross-builds enforce `cargo build --target cohesix_aarch64.json` with explicit `-C linker=lld` to guarantee Plan9 no-syscall ELF.
+- Removing or stubbing features to pass tests is explicitly prohibited. Tests must validate full, uncut functionality.
 - Output always written to TMPDIR, COHESIX_TRACE_TMP, or COHESIX_ENS_TMP.
 - Any agent failing its check fails the entire build, with logs captured for review.
 - No absolute system paths, no persistent background tasks.
+- ELF inspections leverage OpenAI's documented best practices for Codex Agent.md, ensuring object file + image correctness beyond normal CI.
 
 ---
 
 ## ✨ Goal of This Agent System
 
 To ensure every build of Cohesix:
-- Boots cleanly via QEMU into a validator-protected shell
+- Boots cleanly via QEMU into a Plan9-style validator-protected shell with fully mounted namespaces, no POSIX mounts, demonstrating isolated roles and Secure9P policy enforcement
+- Verifies rootserver ELF with `readelf -h`, `readelf -S`, `nm` to ensure non-zero _start entry and linked seL4 syscalls (e.g. seL4_Send, seL4_Recv).
+- Executes QEMU on `virt` platform (`-M virt -cpu cortex-a57 -m 1024`) using elfloader CPIO, console via `-serial mon:stdio`.
 - Includes the full userland toolchain (CLI, cohcc, BusyBox, mandoc)
 - Enforces role trust + Secure9P policy
 - Logs watchdog + validator output for audits
