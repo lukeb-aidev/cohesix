@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v0.99
+# Filename: cohesix_fetch_build.sh v1.0
 # Author: Lukas Bower
-# Date Modified: 2027-12-09
+# Date Modified: 2027-12-11
 #!/usr/bin/env bash
 #
 # Merged old script v0.89 features into current script.
@@ -126,6 +126,17 @@ SEL4_ENTRY=0
 if [[ ${1:-} == --sel4-entry ]]; then
   SEL4_ENTRY=1
   shift
+fi
+
+# Optional kernel test mode flag
+KERNEL_TEST_MODE="${KERNEL_TEST_MODE:-0}"
+if [ "$KERNEL_TEST_MODE" = "1" ]; then
+  export CONFIG_BUILD_KERNEL_TESTS=y
+  KERNEL_TEST_FLAG=ON
+  log "⚙️ Kernel test mode enabled (CONFIG_BUILD_KERNEL_TESTS=y)"
+else
+  export CONFIG_BUILD_KERNEL_TESTS=n
+  KERNEL_TEST_FLAG=OFF
 fi
 
 
@@ -546,7 +557,7 @@ fi
   -DKernelVerificationBuild=ON \
   # Disable internal kernel benchmarks and test suite to boot userland
   -DKernelBenchmarks=OFF \
-  -DKernelTests=OFF \
+  -DKernelTests=$KERNEL_TEST_FLAG \
   -DROOT_SERVER="$ROOT/out/cohesix_root.elf"
 
 # Ensure debug flags are explicitly set in CMake cache
@@ -556,7 +567,7 @@ cmake \
   -DKernelVerificationBuild=ON \
   # Mirror test suite settings in cache
   -DKernelBenchmarks=OFF \
-  -DKernelTests=OFF \
+  -DKernelTests=$KERNEL_TEST_FLAG \
   .
 
 # Now run ninja in the workspace root
