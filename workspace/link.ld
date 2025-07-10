@@ -20,34 +20,53 @@ PHDRS {
 SECTIONS {
     . = 0xffffff8040000000;
 
-    .text : ALIGN(0x1000) {
+    . = ALIGN(0x1000);
+    .text : {
         KEEP(*(.text*))
     } :text
 
-    .rodata : ALIGN(0x1000) {
+    . = ALIGN(0x1000);
+    .rodata : {
         KEEP(*(.rodata*))
     } :text
 
-    .data : ALIGN(0x1000) {
+    . = ALIGN(0x1000);
+    .data : {
         KEEP(*(.data*))
     } :data
 
-    .bss : ALIGN(0x1000) {
+    . = ALIGN(0x1000);
+    .bss (NOLOAD) : {
         __bss_start = .;
         KEEP(*(.bss*))
         *(COMMON)
         __bss_end = .;
-    } :data :NONE
+    } :data
+
+    /* record end of loaded image for runtime */
+    __image_end = .;
 
     /* dedicated heap region mapped inside the ELF image */
-    .heap : ALIGN(0x1000) {
+    /*
+     * Heap is reserved only at runtime, not stored in the image. Mark as
+     * NOLOAD so the section occupies virtual memory without consuming file
+     * bytes, ensuring no overlap when max-page-size is enforced.
+     */
+    . = ALIGN(0x1000);
+    .heap (NOLOAD) : {
         __heap_start = .;
         . = . + 0x80000; /* 512KB heap */
         __heap_end = .;
     } :data
 
     /* reserved stack for root task, mapped in RW segment */
-    .stack : ALIGN(0x1000) {
+    /*
+     * Similar to the heap, the stack region is reserved in memory only. Using
+     * NOLOAD keeps the ELF image compact and prevents file offset overlap with
+     * debug sections when page alignment is strictly enforced.
+     */
+    . = ALIGN(0x1000);
+    .stack (NOLOAD) : {
         __stack_start = .;
         . = . + 0x10000; /* 64KB stack */
         __stack_end = .;
