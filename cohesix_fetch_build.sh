@@ -594,11 +594,15 @@ cd "$ROOT"
 # -----------------------------------------------------------
 log "🧪 Booting elfloader + kernel in QEMU..."
 QEMU_LOG="$LOG_DIR/qemu_debug_$(date +%Y%m%d_%H%M%S).log"
+QEMU_FLAGS="-nographic"
+if [ "${DEBUG_QEMU:-0}" = "1" ]; then
+  # Deep trace for MMU and CPU faults when DEBUG_QEMU=1
+  QEMU_FLAGS="-d cpu_reset,int,guest_errors,mmu -serial mon:stdio"
+fi
 qemu-system-aarch64 -M virt,gic-version=2 -cpu cortex-a57 -m 1024M \
   -kernel "$COHESIX_OUT/bin/elfloader" \
   -initrd "$COHESIX_OUT/bin/kernel.elf,$COHESIX_OUT/bin/cohesix_root.elf" \
-  -serial mon:stdio -nographic \
-  -d int,mmu,page,guest_errors,unimp,cpu_reset \
+  $QEMU_FLAGS \
   -D "$QEMU_LOG" || true
 log "QEMU log saved to $QEMU_LOG"
 
@@ -859,12 +863,16 @@ echo "🪵 Full log saved to $LOG_FILE" >&3
 # QEMU bare metal launch command (final boot test)
 log "🧪 Running final QEMU bare metal boot test..."
 QEMU_CONSOLE="$LOG_DIR/qemu_console_$(date +%Y%m%d_%H%M%S).log"
+QEMU_FLAGS="-nographic"
+if [ "${DEBUG_QEMU:-0}" = "1" ]; then
+  # Deep trace for MMU and CPU faults when DEBUG_QEMU=1
+  QEMU_FLAGS="-d cpu_reset,int,guest_errors,mmu -serial mon:stdio"
+fi
 qemu-system-aarch64 -M virt,gic-version=2 -cpu cortex-a57 -m 1024M \
   -kernel "$ROOT/out/bin/elfloader" \
   # Provide kernel.elf and root server as modules to elfloader
   -initrd "$ROOT/out/bin/kernel.elf,$ROOT/out/bin/cohesix_root.elf" \
-  -serial mon:stdio -nographic \
-  -d int,mmu,page,guest_errors,unimp,cpu_reset \
+  $QEMU_FLAGS \
   -D "$LOG_DIR/qemu_baremetal_$(date +%Y%m%d_%H%M%S).log" | tee "$QEMU_CONSOLE" || true
 log "QEMU console saved to $QEMU_CONSOLE"
 log "✅ QEMU bare metal boot test complete."
