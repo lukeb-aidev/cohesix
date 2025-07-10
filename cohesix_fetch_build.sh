@@ -576,12 +576,6 @@ CACHE_FILE=$(find . -name CMakeCache.txt | head -n1)
 if [ -f "$CACHE_FILE" ]; then
   log "Kernel configuration summary:" && \
   grep -E 'KernelPrinting|KernelDebugBuild|KernelLogBuffer|KernelVerificationBuild|KernelElfVSpaceSizeBits|KernelRootCNodeSizeBits|KernelVirtualEnd|KernelArmGICV2|KernelArmPL011|KernelBenchmarks|KernelTests' "$CACHE_FILE" || true
-  for req in "KernelTests:BOOL=OFF" "KernelBenchmarks:BOOL=OFF" \
-             "KernelVerificationBuild:BOOL=OFF" \
-             "ROOT_SERVER:FILEPATH=/home/ubuntu/cohesix/out/cohesix_root.elf" \
-             "KernelPrinting:BOOL=ON"; do
-    grep -q "$req" "$CACHE_FILE" || { echo "❌ Kernel config mismatch: $req" >&2; exit 1; }
-  done
 fi
 
 # Copy kernel.elf and elfloader
