@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: sys.rs v0.3
+// Filename: sys.rs v0.4
 // Author: Lukas Bower
-// Date Modified: 2027-12-26
+// Date Modified: 2027-12-27
 
 use core::ffi::c_char;
 use core::sync::atomic::{compiler_fence, Ordering};
@@ -16,6 +16,44 @@ pub extern "C" fn seL4_DebugPutChar(c: u8) {
 #[cfg(not(target_arch = "aarch64"))]
 #[no_mangle]
 pub extern "C" fn seL4_DebugPutChar(_c: u8) {}
+
+#[cfg(target_arch = "aarch64")]
+#[no_mangle]
+pub unsafe extern "C" fn seL4_Send(dest: u64, msg: *const u64) {
+    core::arch::asm!(
+        "mov x0, {0}",
+        "mov x1, {1}",
+        "mov x16, #1",
+        "svc #0",
+        in(reg) dest,
+        in(reg) msg,
+        options(nostack)
+    );
+}
+
+#[cfg(target_arch = "aarch64")]
+#[no_mangle]
+pub unsafe extern "C" fn seL4_Recv(src: u64, msg: *mut u64) {
+    core::arch::asm!(
+        "mov x0, {0}",
+        "mov x1, {1}",
+        "mov x16, #8",
+        "svc #0",
+        in(reg) src,
+        in(reg) msg,
+        options(nostack)
+    );
+}
+
+#[cfg(target_arch = "aarch64")]
+#[no_mangle]
+pub unsafe extern "C" fn seL4_Yield() {
+    core::arch::asm!(
+        "mov x16, #6",
+        "svc #0",
+        options(nostack)
+    );
+}
 
 #[no_mangle]
 pub unsafe extern "C" fn coh_open(_path: *const c_char, _flags: i32, _mode: i32) -> i32 {
