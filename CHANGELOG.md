@@ -3196,3 +3196,9 @@
 - **RewriteRootServerInitForPlan9-203**: refreshed root initialization to use
   dedicated `coh_*` syscalls, parse `/etc/plan9.ns`, verify `/bin/init`, and
   spin with `coh_log` on exec failure.
+
+## [v0.506] - 2027-12-26
+### Fixed
+- **AuditAndRewriteRootLoggingAndLink-204**: `coh_log` now writes directly via
+  `seL4_DebugPutChar`, the linker entry uses `_start`, and `main` logs
+  `ROOTSERVER ONLINE` before other initialization.
