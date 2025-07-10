@@ -1,10 +1,10 @@
 /* CLASSIFICATION: COMMUNITY */
-/* Filename: link.ld v0.15 */
+/* Filename: link.ld v0.17 */
 /* Author: Lukas Bower */
-/* Date Modified: 2027-12-17 */
+/* Date Modified: 2027-12-27 */
 /* SPDX-License-Identifier: BSD-2-Clause */
 
-ENTRY(_sel4_start)
+ENTRY(_start)
 
 /*
  * Explicit program header mapping with clear flags:
