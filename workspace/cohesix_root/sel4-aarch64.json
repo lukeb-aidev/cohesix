@@ -13,6 +13,6 @@
   "relocation-model": "static",
   "features": "+neon",
   "pre-link-args": {
-    "ld.lld": ["-Tlink.ld", "--max-page-size=0x1000"]
+    "ld.lld": ["-Tlink.ld", "-z", "max-page-size=0x1000"]
   }
 }
