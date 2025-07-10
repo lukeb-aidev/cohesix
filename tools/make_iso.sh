@@ -82,6 +82,10 @@ done
 
 cp -r "$ROOT/userland/miniroot" "$ISO_ROOT/miniroot"
 # Legacy out/roles copying removed; roles are now expected to be staged by the build script.
+if [ ! -f "$ROOT/config/plan9.ns" ]; then
+  echo "Missing $ROOT/config/plan9.ns" >&2
+  exit 1
+fi
 cp "$ROOT/config/plan9.ns" "$ISO_ROOT/etc/plan9.ns"
 cp "$ROOT/out/etc/cohesix/config.yaml" "$ISO_ROOT/etc/cohesix/config.yaml"
 
