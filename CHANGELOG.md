@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v1.13
+// Filename: CHANGELOG.md v1.14
 // Author: Lukas Bower
-// Date Modified: 2027-12-11
+// Date Modified: 2027-12-12
 
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
@@ -3154,3 +3154,6 @@
   `__image_end` and moved heap/stack allocation after that marker to avoid
   overlapping segments. Build pipeline now enables `compiler-builtins-mem`
   so functions like `memset` and `memcpy` resolve correctly.
+## [v0.498] - 2027-12-18
+### Fixed
+- **FixKernelRootServerCmakeArgs-097**: `cohesix_fetch_build.sh` now passes all required CMake flags, including `-DROOT_SERVER`, in the `init-build.sh` invocation to guarantee the Plan9 root server boots.
