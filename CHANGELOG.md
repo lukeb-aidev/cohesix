@@ -3183,3 +3183,9 @@
 - **FixUserlandExecInit-198**: `cohesix_root.elf` now parses `/etc/plan9.ns`,
   executes bind operations, verifies `/bin/init` is present, and explicitly
   `exec`s it. Failures log `fatal_missing_init` and spin for debugging.
+
+## [v0.504] - 2027-12-23
+### Fixed
+- **FixRootServerExecPlan9-200**: root server replaces libc calls with
+  explicit `coh_*` syscalls, verifies `/bin/init`, and loops with
+  `coh_log` after failed `exec`.
