@@ -3217,3 +3217,6 @@
 ## [v0.509] - 2027-12-28
 ### Fixed
 - **IntegratePinnedSeL4Build-073**: `cohesix_fetch_build.sh` now stages `libsel4.a` and headers under `third_party/seL4` for offline builds. `sel4-aarch64.json` links against these paths. Build guide updated with `sel4` target steps.
+## [v0.510] - 2027-12-30
+### Fixed
+- **FixAndValidateCohesixELF-074**: `cohesix_fetch_build.sh` now aborts if `libsel4.a` is missing instead of fetching automatically. `fetch_sel4.sh` updated to use `sel4test-manifest` via `repo` for deterministic builds.
