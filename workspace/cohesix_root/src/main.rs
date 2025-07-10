@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: main.rs v0.34
+// Filename: main.rs v0.35
 // Author: Lukas Bower
-// Date Modified: 2027-12-22
+// Date Modified: 2027-12-23
 #![no_std]
 #![no_main]
 #![feature(alloc_error_handler, asm_experimental_arch, lang_items)]
@@ -10,6 +10,7 @@ extern crate alloc;
 
 mod allocator;
 mod lang_items;
+mod sys;
 
 use core::arch::global_asm;
 global_asm!(include_str!("entry.S"));
@@ -20,6 +21,7 @@ use core::sync::atomic::{compiler_fence, Ordering};
 use alloc::vec::Vec;
 use core::ffi::{c_char, CStr};
 use core::ptr;
+use crate::sys;
 
 extern "C" {
     static __heap_start: u8;
@@ -271,18 +273,6 @@ pub fn validate_ptr(ptr: usize) {
 #[no_mangle]
 pub unsafe extern "C" fn seL4_DebugPutChar(_c: u8) {}
 
-extern "C" {
-    fn open(path: *const c_char, flags: i32, mode: i32) -> i32;
-    fn read(fd: i32, buf: *mut u8, len: usize) -> isize;
-    fn close(fd: i32) -> i32;
-    fn write(fd: i32, buf: *const u8, len: usize) -> isize;
-    fn execv(path: *const c_char, argv: *const *const c_char) -> i32;
-    fn getenv(name: *const c_char) -> *const c_char;
-    fn setenv(name: *const c_char, val: *const c_char, overwrite: i32) -> i32;
-    fn bind(name: *const c_char, old: *const c_char, flags: i32) -> i32;
-}
-
-
 
 pub fn putstr(s: &str) {
     for &b in s.as_bytes() {
@@ -311,13 +301,13 @@ static RODATA_CHECK: &str = "RODATA_OK";
 
 fn load_bootargs() {
     unsafe {
-        let fd = open(cstr(PATH_BOOTARGS), 0, 0);
+        let fd = sys::coh_open(cstr(PATH_BOOTARGS), 0, 0);
         if fd < 0 {
             return;
         }
         let mut buf = [0u8; 256];
-        let n = read(fd, buf.as_mut_ptr(), buf.len()) as usize;
-        close(fd);
+        let n = sys::coh_read(fd, buf.as_mut_ptr(), buf.len()) as usize;
+        sys::coh_close(fd);
         let text = core::str::from_utf8_unchecked(&buf[..n]);
         let bytes = text.as_bytes();
         let mut i = 0;
@@ -340,10 +330,9 @@ fn load_bootargs() {
                 kb.push(0);
                 let mut vb = Vec::from(v.as_bytes());
                 vb.push(0);
-                setenv(
+                sys::coh_setenv(
                     kb.as_ptr() as *const c_char,
                     vb.as_ptr() as *const c_char,
-                    1,
                 );
             }
         }
@@ -354,7 +343,7 @@ fn env_var(name: &str) -> Option<&'static CStr> {
     let mut nb = Vec::from(name.as_bytes());
     nb.push(0);
     unsafe {
-        let ptr = getenv(nb.as_ptr() as *const c_char);
+        let ptr = sys::coh_getenv(nb.as_ptr() as *const c_char);
         putstr("getenv return");
         put_hex(ptr as usize);
         if ptr.is_null() {
@@ -369,10 +358,10 @@ fn write_role(role: &str) {
     unsafe {
         let mut rb = Vec::from(role.as_bytes());
         rb.push(0);
-        let fd = open(cstr(PATH_COHROLE), 0x601, 0o644);
+        let fd = sys::coh_open(cstr(PATH_COHROLE), 0x601, 0o644);
         if fd >= 0 {
-            let _ = write(fd, rb.as_ptr(), role.len());
-            close(fd);
+            let _ = sys::coh_write(fd, rb.as_ptr(), role.len());
+            sys::coh_close(fd);
         }
     }
 }
@@ -381,7 +370,7 @@ const MAFTER: i32 = 2;
 
 fn read_file(path: &[u8]) -> Option<Vec<u8>> {
     unsafe {
-        let fd = open(cstr(path), 0, 0);
+        let fd = sys::coh_open(cstr(path), 0, 0);
         if fd < 0 {
             coherr!("open_failed {}", core::str::from_utf8_unchecked(path));
             return None;
@@ -389,13 +378,13 @@ fn read_file(path: &[u8]) -> Option<Vec<u8>> {
         let mut data = Vec::new();
         let mut buf = [0u8; 256];
         loop {
-            let n = read(fd, buf.as_mut_ptr(), buf.len()) as isize;
+            let n = sys::coh_read(fd, buf.as_mut_ptr(), buf.len()) as isize;
             if n <= 0 {
                 break;
             }
             data.extend_from_slice(&buf[..n as usize]);
         }
-        close(fd);
+        sys::coh_close(fd);
         Some(data)
     }
 }
@@ -416,7 +405,7 @@ fn apply_namespace() {
                         sb.push(0);
                         let mut db = Vec::from(dst.as_bytes());
                         db.push(0);
-                        bind(sb.as_ptr() as *const c_char, db.as_ptr() as *const c_char, MAFTER);
+                        sys::coh_bind(sb.as_ptr() as *const c_char, db.as_ptr() as *const c_char, MAFTER);
                     },
                     ["bind", src, dst] => unsafe {
                         coherr!("bind {} {}", src, dst);
@@ -424,7 +413,7 @@ fn apply_namespace() {
                         sb.push(0);
                         let mut db = Vec::from(dst.as_bytes());
                         db.push(0);
-                        bind(sb.as_ptr() as *const c_char, db.as_ptr() as *const c_char, 0);
+                        sys::coh_bind(sb.as_ptr() as *const c_char, db.as_ptr() as *const c_char, 0);
                     },
                     _ => coherr!("ignore_line {}", line),
                 }
@@ -435,12 +424,12 @@ fn apply_namespace() {
 
 fn check_init_exists() -> bool {
     unsafe {
-        let fd = open(cstr(INIT_BIN), 0, 0);
+        let fd = sys::coh_open(cstr(INIT_BIN), 0, 0);
         if fd < 0 {
             coherr!("missing_init_bin");
             false
         } else {
-            close(fd);
+            sys::coh_close(fd);
             true
         }
     }
@@ -449,9 +438,12 @@ fn check_init_exists() -> bool {
 fn exec_init() -> ! {
     let argv = [INIT_BIN.as_ptr() as *const c_char, ptr::null()];
     unsafe {
-        execv(INIT_BIN.as_ptr() as *const c_char, argv.as_ptr());
+        if sys::coh_exec(INIT_BIN.as_ptr() as *const c_char, argv.as_ptr()) != 0 {
+            sys::coh_log("fatal: exec failed");
+        }
     }
     loop {
+        sys::coh_log("fatal: exec failed");
         core::hint::spin_loop();
     }
 }
