@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: main.rs v0.36
+// Filename: main.rs v0.37
 // Author: Lukas Bower
-// Date Modified: 2027-12-24
+// Date Modified: 2027-12-25
 #![no_std]
 #![no_main]
 #![feature(alloc_error_handler, asm_experimental_arch, lang_items)]
@@ -332,6 +332,7 @@ fn load_bootargs() {
                 sys::coh_setenv(
                     kb.as_ptr() as *const c_char,
                     vb.as_ptr() as *const c_char,
+                    1,
                 );
             }
         }

@@ -3190,3 +3190,9 @@
 - **FixRootServerExecPlan9-200**: root server replaces libc calls with
   explicit `coh_*` syscalls, verifies `/bin/init`, and loops with
   `coh_log` after failed `exec`.
+
+## [v0.505] - 2027-12-25
+### Fixed
+- **RewriteRootServerInitForPlan9-203**: refreshed root initialization to use
+  dedicated `coh_*` syscalls, parse `/etc/plan9.ns`, verify `/bin/init`, and
+  spin with `coh_log` on exec failure.
