@@ -3208,3 +3208,8 @@
 ### Fixed
 - **FixSel4RootEntrypoint-205**: root linker scripts now use `ENTRY(_start)` and syscalls `seL4_Send`, `seL4_Recv`, `seL4_Yield` are provided.
 - Investigation report `COHESIX_ROOT_ELF_DIAG.md` documents the zero entry point issue.
+
+## [v0.508] - 2027-12-28
+### Fixed
+- **FixCohesixRootELF-071**: Added `-lsel4` in sel4-aarch64 target to ensure rootserver links against libsel4.
+- **PinThirdPartySeL4-072**: Introduced `third_party/seL4` with pinned commit and fetch script. Updated `cohesix_fetch_build.sh` to clone this revision if needed.

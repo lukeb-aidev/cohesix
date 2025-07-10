@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: COHESIX_AARCH64_BUILD.md v1.0
+// Filename: COHESIX_AARCH64_BUILD.md v1.1
 // Author: Lukas Bower
-// Date Modified: 2025-07-11
+// Date Modified: 2027-12-28
 
 # 📜 Canonical Build Guide for Cohesix on seL4 AArch64
 
@@ -49,13 +49,16 @@ We’ll use the following structure:
 
 ## ✅ Step 1: Clone the official seL4 repo
 
-Use the standard multi-arch seL4 with QEMU platform support:
+Use the standard multi-arch seL4 with QEMU platform support.
+Clone the pinned commit listed in `third_party/seL4/COMMIT` to ensure
+deterministic builds:
 
 ```bash
 mkdir -p ~/cohesix-seL4
 cd ~/cohesix-seL4
 repo init -u https://github.com/seL4/sel4test-manifest.git
 repo sync
+git checkout $(cat ../third_party/seL4/COMMIT)
 ```
 
 > Even though this uses `sel4test-manifest` for fetching complete sources (plat/arch overlays), we will override to **skip all test harnesses**.
