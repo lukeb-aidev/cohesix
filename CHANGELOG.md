@@ -3177,3 +3177,9 @@
 - **FixKernelBuildPaths-196**: Updated `cohesix_fetch_build.sh` to use the correct
   seL4 build directory layout and copy artifacts from `kernel/` and `elfloader/`
   directly, removing the obsolete `build_qemu_arm` subdirectory.
+
+## [v0.503] - 2027-12-22
+### Fixed
+- **FixUserlandExecInit-198**: `cohesix_root.elf` now parses `/etc/plan9.ns`,
+  executes bind operations, verifies `/bin/init` is present, and explicitly
+  `exec`s it. Failures log `fatal_missing_init` and spin for debugging.
