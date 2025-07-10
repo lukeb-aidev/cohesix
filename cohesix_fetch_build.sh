@@ -529,44 +529,11 @@ log "🧱 Building seL4 kernel using existing /home/ubuntu/sel4_workspace worksp
 KERNEL_DIR="/home/ubuntu/sel4_workspace"
 COHESIX_OUT="${COHESIX_OUT:-$ROOT/out}"
 
-cd "$KERNEL_DIR"
+cd "$KERNEL_DIR/build_qemu_arm"
 
-# Clear old kernel build directory to avoid stale cache influencing flags
-rm -rf ./build/*
-
-# Dynamically adjust KernelElfVSpaceSizeBits if ELF is large
-KERNEL_VSPACE_BITS=42
-if [ "$ROOT_SIZE" -gt $((50*1024*1024)) ]; then
-  KERNEL_VSPACE_BITS=43
-fi
-
-# WHY: Without ROOT_SERVER, seL4 completes tests but never launches our Plan9 root server
-./init-build.sh \
-  -DPLATFORM=qemu-arm-virt \
-  -DAARCH64=TRUE \
-  -DKernelPrinting=ON \
-  -DKernelDebugBuild=TRUE \
-  -DKernelLogBuffer=ON \
-  -DKernelElfVSpaceSizeBits="$KERNEL_VSPACE_BITS" \
-  -DKernelRootCNodeSizeBits=18 \
-  -DKernelVirtualEnd=0xffffff80e0000000 \
-  -DKernelArmGICV2=ON \
-  -DKernelArmPL011=ON \
-  -DKernelVerificationBuild=OFF \
-  -DKernelBenchmarks=OFF \
-  -DKernelTests=OFF \
+cmake .. -DPLATFORM=qemu-arm-virt -DAARCH64=1 -DRELEASE=1 \
   -DROOT_SERVER="/home/ubuntu/cohesix/out/cohesix_root.elf"
-  # WHY: Must force KernelTests=OFF so kernel builds in production loader mode.
-  # ROOT_SERVER mandatory for userland boot
 
-# Ensure debug flags are explicitly set in CMake cache
-cmake \
-  -DKernelPrinting=ON \
-  -DKernelDebugBuild=ON \
-  -DKernelVerificationBuild=OFF \
-  -DKernelBenchmarks=OFF \
-  -DKernelTests=OFF \
-  .
 
 # Now run ninja in the workspace root
 ninja
@@ -579,10 +546,10 @@ if [ -f "$CACHE_FILE" ]; then
 fi
 
 # Copy kernel.elf and elfloader
-cp "$KERNEL_DIR/kernel/kernel.elf" "$COHESIX_OUT/bin/kernel.elf"
+cp "$KERNEL_DIR/build_qemu_arm/kernel/kernel.elf" "$COHESIX_OUT/bin/kernel.elf"
 log "✅ Kernel ELF staged to $COHESIX_OUT/bin/kernel.elf, size: $(stat -c%s "$COHESIX_OUT/bin/kernel.elf") bytes"
 
-cp "$KERNEL_DIR/elfloader/elfloader" "$COHESIX_OUT/bin/elfloader"
+cp "$KERNEL_DIR/build_qemu_arm/elfloader/elfloader" "$COHESIX_OUT/bin/elfloader"
 log "✅ Elfloader staged to $COHESIX_OUT/bin/elfloader, size: $(stat -c%s "$COHESIX_OUT/bin/elfloader") bytes"
 
 cd "$ROOT"
