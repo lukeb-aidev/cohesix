@@ -34,6 +34,7 @@
 - boot_trace_rule tests use tempfile::tempdir to avoid PermissionDenied errors
 - Classification headers added for all bin scripts; files registered in METADATA
 - make_iso.sh and cohesix_fetch_build.sh verify seL4 kernel ELF paths before staging
+- workspace/cohesix_root/src/main.rs v0.36 removes duplicate `use crate::sys;` import to fix E0255
 - ROOT_SPLIT_PLAN_V1.md updated to v1.1 with detailed viability review and implementation steps
 ### Added
 - FAT partition mount under `minimal_uefi` with `/bin/init.efi` bootstrap
