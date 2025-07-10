@@ -3157,3 +3157,7 @@
 ## [v0.498] - 2027-12-18
 ### Fixed
 - **FixKernelRootServerCmakeArgs-097**: `cohesix_fetch_build.sh` now passes all required CMake flags, including `-DROOT_SERVER`, in the `init-build.sh` invocation to guarantee the Plan9 root server boots.
+
+## [v0.499] - 2027-12-19
+### Fixed
+- **EnforceProductionKernelHandoff-098**: `cohesix_fetch_build.sh` forces production kernel flags and verifies them after configuration, preventing the seL4 test suite from running instead of the Plan9 root server.
