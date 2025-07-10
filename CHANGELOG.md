@@ -3165,3 +3165,9 @@
 ## [v0.500] - 2027-12-20
 ### Added
 - Canonical `plan9.ns` now lives at `config/plan9.ns` and is staged without fallback.
+
+## [v0.501] - 2027-12-20
+### Fixed
+- **EnforceExplicitKernelTestsOff-100**: `cohesix_fetch_build.sh` clears the kernel
+  build directory and passes `-DKernelTests=OFF` to `init-build.sh` and `cmake`,
+  ensuring the CMake cache records `KernelTests:BOOL=OFF` for production builds.

@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v1.3
+# Filename: cohesix_fetch_build.sh v1.4
 # Author: Lukas Bower
-# Date Modified: 2027-12-19
+# Date Modified: 2027-12-20
 #!/usr/bin/env bash
 #
 # Merged old script v0.89 features into current script.
@@ -531,6 +531,9 @@ COHESIX_OUT="${COHESIX_OUT:-$ROOT/out}"
 
 cd "$KERNEL_DIR"
 
+# Clear old kernel build directory to avoid stale cache influencing flags
+rm -rf ./build/*
+
 # Dynamically adjust KernelElfVSpaceSizeBits if ELF is large
 KERNEL_VSPACE_BITS=42
 if [ "$ROOT_SIZE" -gt $((50*1024*1024)) ]; then
@@ -553,7 +556,8 @@ fi
   -DKernelBenchmarks=OFF \
   -DKernelTests=OFF \
   -DROOT_SERVER="/home/ubuntu/cohesix/out/cohesix_root.elf"
-  # WHY: Must disable KernelTests/Benchmarks so ELF-loader runs, ROOT_SERVER mandatory for userland boot
+  # WHY: Must force KernelTests=OFF so kernel builds in production loader mode.
+  # ROOT_SERVER mandatory for userland boot
 
 # Ensure debug flags are explicitly set in CMake cache
 cmake \
