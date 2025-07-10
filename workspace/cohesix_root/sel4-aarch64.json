@@ -13,6 +13,12 @@
   "relocation-model": "static",
   "features": "+neon",
   "pre-link-args": {
-    "ld.lld": ["-Tcohesix_root/link.ld", "-z", "max-page-size=0x1000", "-lsel4"]
+    "ld.lld": [
+      "-Tcohesix_root/link.ld",
+      "-z",
+      "max-page-size=0x1000",
+      "-Lthird_party/seL4/lib",
+      "-lsel4"
+    ]
   }
 }

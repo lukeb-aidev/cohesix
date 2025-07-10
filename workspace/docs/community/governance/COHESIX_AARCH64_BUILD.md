@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: COHESIX_AARCH64_BUILD.md v1.1
+// Filename: COHESIX_AARCH64_BUILD.md v1.2
 // Author: Lukas Bower
 // Date Modified: 2027-12-28
 
@@ -88,7 +88,15 @@ This configures:
 ## 🛠️ Step 3: Build kernel & elfloader
 
 ```bash
-ninja kernel.elf elfloader
+ninja kernel.elf elfloader sel4
+```
+
+After the build completes, copy `libsel4.a` and generated headers
+into the repository for deterministic linkage:
+
+```bash
+cp build/libsel4/libsel4.a ~/cohesix/third_party/seL4/lib/
+cp -r build/libsel4/include/* ~/cohesix/third_party/seL4/include/
 ```
 
 This produces:

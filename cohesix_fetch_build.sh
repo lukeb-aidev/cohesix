@@ -1,5 +1,5 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v1.6
+# Filename: cohesix_fetch_build.sh v1.7
 # Author: Lukas Bower
 # Date Modified: 2027-12-28
 #!/usr/bin/env bash
@@ -553,6 +553,15 @@ cp "$KERNEL_DIR/kernel/kernel.elf" "$COHESIX_OUT/bin/kernel.elf"
 log "✅ Kernel ELF staged to $COHESIX_OUT/bin/kernel.elf, size: $(stat -c%s "$COHESIX_OUT/bin/kernel.elf") bytes"
 
 cp "$KERNEL_DIR/elfloader/elfloader" "$COHESIX_OUT/bin/elfloader"
+# Stage libsel4 and headers for deterministic builds
+if [ -f "$KERNEL_DIR/libsel4/libsel4.a" ]; then
+  mkdir -p "$ROOT/third_party/seL4/lib"
+  cp "$KERNEL_DIR/libsel4/libsel4.a" "$ROOT/third_party/seL4/lib/"
+fi
+if [ -d "$KERNEL_DIR/libsel4/include" ]; then
+  mkdir -p "$ROOT/third_party/seL4/include"
+  cp -r "$KERNEL_DIR/libsel4/include"/* "$ROOT/third_party/seL4/include/"
+fi
 log "✅ Elfloader staged to $COHESIX_OUT/bin/elfloader, size: $(stat -c%s "$COHESIX_OUT/bin/elfloader") bytes"
 
 cd "$ROOT"

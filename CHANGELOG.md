@@ -3213,3 +3213,7 @@
 ### Fixed
 - **FixCohesixRootELF-071**: Added `-lsel4` in sel4-aarch64 target to ensure rootserver links against libsel4.
 - **PinThirdPartySeL4-072**: Introduced `third_party/seL4` with pinned commit and fetch script. Updated `cohesix_fetch_build.sh` to clone this revision if needed.
+
+## [v0.509] - 2027-12-28
+### Fixed
+- **IntegratePinnedSeL4Build-073**: `cohesix_fetch_build.sh` now stages `libsel4.a` and headers under `third_party/seL4` for offline builds. `sel4-aarch64.json` links against these paths. Build guide updated with `sel4` target steps.
