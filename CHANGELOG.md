@@ -3224,3 +3224,7 @@
 ## [v0.511] - 2027-12-31
 ### Fixed
 - **FixSel4InlineBuild-077**: Inline seL4 build in `cohesix_fetch_build.sh` now runs `init-build.sh` and stages `libsel4.a` and headers deterministically, aborting if the archive is still missing.
+
+## [v0.512] - 2027-12-31
+### Fixed
+- **BuildSel4AndRootFromThirdParty-080**: `cohesix_fetch_build.sh` now builds seL4 entirely from `third_party/seL4` without external clones, logs build outputs to `logs/libsel4_link_and_boot_trace.md`, and records artifact paths in `logs/artifact_locations.json`.
