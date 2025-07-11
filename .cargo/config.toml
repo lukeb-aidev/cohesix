@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: .cargo/config.toml v0.19
+# Filename: .cargo/config.toml v0.20
 # Author: Lukas Bower
-# Date Modified: 2027-12-11
+# Date Modified: 2027-12-31
 
 [source.vendored-sources]
 directory = "vendor"
@@ -22,6 +22,10 @@ rustflags = [
     "-C", "link-arg=-z",
     "-C", "link-arg=max-page-size=0x1000",
     "-C", "link-arg=--gc-sections",
+    "-C", "link-arg=-static",
+    "-C", "link-arg=-no-pie",
+    "-C", "link-arg=-z",
+    "-C", "link-arg=norelro",
     "-C", "link-arg=-L../third_party/seL4/lib",
 ]
 

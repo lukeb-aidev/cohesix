@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v1.15
+// Filename: CHANGELOG.md v1.16
 // Author: Lukas Bower
 // Date Modified: 2027-12-31
 
@@ -3240,3 +3240,7 @@
 ## [v0.515] - 2025-07-11
 ### Added
 - **EnableQemuDeepDebugAndRustAudit-207**: Enhanced `cohesix_fetch_build.sh` with persistent `-serial mon:stdio` logging and deeper QEMU trace flags when `DEBUG_QEMU=1`. Added structured QEMU logs. Hardened boot path Rust by validating UTF-8 parsing and defining `EINVAL` in `sys.rs`.
+
+## [v0.516] - 2027-12-31
+### Fixed
+- **FixDeterministicLink-074**: Added build script and config flags to enforce static linkage with `libsel4.a`. Updated linker script addresses and included seL4 headers via a dummy C compile. Validation logs recorded in `STATIC_LINK_FIX_VALIDATION.md`.
