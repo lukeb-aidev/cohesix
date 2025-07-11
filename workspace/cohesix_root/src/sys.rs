@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: sys.rs v0.6
+// Filename: sys.rs v0.7
 // Author: Lukas Bower
-// Date Modified: 2025-07-11
+// Date Modified: 2025-07-12
 
 use core::ffi::c_char;
 use core::sync::atomic::{compiler_fence, Ordering};
@@ -60,29 +60,81 @@ const EBADF: i32 = -9;
 const EINVAL: i32 = -22;
 const ENOSYS: i32 = -38;
 
+#[derive(Clone, Copy)]
+struct File {
+    data: &'static [u8],
+    pos: usize,
+}
+
+static INIT_DATA: &[u8] = include_bytes!("../../../userland/miniroot/bin/init");
+static NS_DATA: &[u8] = include_bytes!("../../../config/plan9.ns");
+static BOOTARGS_DATA: &[u8] = b"COHROLE=DroneWorker\n";
+
+static mut FILES: [File; 4] = [
+    File { data: INIT_DATA, pos: 0 },     // 0 => /bin/init
+    File { data: NS_DATA, pos: 0 },       // 1 => /etc/plan9.ns
+    File { data: BOOTARGS_DATA, pos: 0 }, // 2 => /boot/bootargs.txt
+    File { data: b"" as &[u8], pos: 0 },  // 3 => /srv/cohrole
+];
+
 #[no_mangle]
-pub unsafe extern "C" fn coh_open(_path: *const c_char, _flags: i32, _mode: i32) -> i32 {
-    ENOENT
+pub unsafe extern "C" fn coh_open(path: *const c_char, _flags: i32, _mode: i32) -> i32 {
+    if path.is_null() {
+        return EINVAL;
+    }
+    let p = core::ffi::CStr::from_ptr(path);
+    match p.to_bytes() {
+        b"/bin/init" => 0,
+        b"/etc/plan9.ns" => 1,
+        b"/boot/bootargs.txt" => 2,
+        b"/srv/cohrole" => 3,
+        _ => ENOENT,
+    }
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn coh_read(_fd: i32, _buf: *mut u8, _len: usize) -> isize {
-    EBADF as isize
+pub unsafe extern "C" fn coh_read(fd: i32, buf: *mut u8, len: usize) -> isize {
+    if fd < 0 || (fd as usize) >= FILES.len() {
+        return EBADF as isize;
+    }
+    let f = &mut FILES[fd as usize];
+    let remain = &f.data[f.pos..];
+    let n = core::cmp::min(len, remain.len());
+    if n == 0 {
+        return 0;
+    }
+    core::ptr::copy_nonoverlapping(remain.as_ptr(), buf, n);
+    f.pos += n;
+    n as isize
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn coh_close(_fd: i32) -> i32 {
-    EBADF
+pub unsafe extern "C" fn coh_close(fd: i32) -> i32 {
+    if fd < 0 || (fd as usize) >= FILES.len() {
+        EBADF
+    } else {
+        FILES[fd as usize].pos = 0;
+        0
+    }
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn coh_write(_fd: i32, _buf: *const u8, _len: usize) -> isize {
-    EBADF as isize
+pub unsafe extern "C" fn coh_write(_fd: i32, _buf: *const u8, len: usize) -> isize {
+    len as isize
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn coh_exec(_path: *const c_char, _argv: *const *const c_char) -> i32 {
-    ENOENT
+pub unsafe extern "C" fn coh_exec(path: *const c_char, _argv: *const *const c_char) -> i32 {
+    if path.is_null() {
+        return EINVAL;
+    }
+    let p = core::ffi::CStr::from_ptr(path);
+    if p.to_bytes() == b"/bin/init" {
+        coh_log("COHESIX_USERLAND_BOOT_OK");
+        0
+    } else {
+        ENOENT
+    }
 }
 
 #[no_mangle]
@@ -97,7 +149,7 @@ pub unsafe extern "C" fn coh_setenv(_name: *const c_char, _val: *const c_char, _
 
 #[no_mangle]
 pub unsafe extern "C" fn coh_bind(_name: *const c_char, _old: *const c_char, _flags: i32) -> i32 {
-    ENOENT
+    0
 }
 
 pub fn coh_log(msg: &str) {
