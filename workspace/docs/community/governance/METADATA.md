@@ -362,6 +362,9 @@
 | logs/artifact_locations.json | v0.1 | 2027-12-31 | COMMUNITY | | |
 | docs/community/diagnostics/MMU_FAULT_AUDIT.md | v0.1 | 2027-10-14 | COMMUNITY | | |
 | docs/community/diagnostics/COHESIX_ROOT_ELF_DIAG.md | v0.1 | 2027-12-27 | COMMUNITY | | |
+| docs/community/diagnostics/BOOT_BLOCKERS_FULL_ANALYSIS.md | v0.1 | 2027-12-31 | COMMUNITY | | |
+| docs/community/diagnostics/POTENTIAL_BOOT_BLOCKERS.txt | v0.1 | 2027-12-31 | COMMUNITY | | |
+| docs/community/diagnostics/FOOLPROOF_FIX_PLAN.txt | v0.1 | 2027-12-31 | COMMUNITY | | |
 | docs/community/governance/COHESIX_AARCH64_BUILD.md | v1.1 | 2027-12-28 | COMMUNITY | | |
 | tests/Cohesix/test_cli_cap.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
 | tests/Cohesix/test_cloud.rc | v0.1 | 2027-12-07 | COMMUNITY | | |

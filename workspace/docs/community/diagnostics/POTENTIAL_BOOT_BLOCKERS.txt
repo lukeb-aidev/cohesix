@@ -1,0 +1,14 @@
+// CLASSIFICATION: COMMUNITY
+// Filename: POTENTIAL_BOOT_BLOCKERS.txt v0.1
+// Author: Lukas Bower
+// Date Modified: 2027-12-31
+
+Possible causes preventing Cohesix from reaching userland:
+- Data abort inside `core::unicode::printable::is_printable` at `0xffffff8040012648`.
+- Pointer corruption before namespace application.
+- Syscall stubs in `sys.rs` returning `-1` for open/read/exec.
+- `/bin/init` missing from the staged filesystem.
+- Plan9 namespace not bound due to failed `ensure_plan9_ns`.
+- Kernel built in debug mode instead of release.
+- Heap allocator writing beyond `__heap_end`.
+- Role files under `setup/roles/` missing or not staged.
