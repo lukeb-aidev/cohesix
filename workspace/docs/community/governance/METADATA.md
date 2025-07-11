@@ -154,7 +154,7 @@
 | docs/community/architecture/BOOT_KERNEL_FLOW.md | v0.3 | 2026-10-16 | COMMUNITY | | |
 | docs/community/archive/EXAMPLES_README.md | v0.3 | 2026-02-05 | COMMUNITY | | |
 | .cohesix_env | v0.3 | 2026-07-25 | COMMUNITY | | |
-| cohesix_fetch_build.sh | v1.9 | 2027-12-31 | COMMUNITY | | |
+| cohesix_fetch_build.sh | v1.10 | 2027-12-31 | COMMUNITY | | |
 | cohesix_fetch_build.bak | v0.92 | 2027-11-07 | COMMUNITY | | |
 | CONTRIBUTING.md | v1.1 | 2025-07-23 | COMMUNITY | | |
 | config/secure9p.toml | v0.7 | 2026-12-31 | COMMUNITY | | |
@@ -358,6 +358,8 @@
 | logs/root_split_no_std_patch_20250706_220917.log | v0.1 | 2027-08-15 | COMMUNITY | | |
 | logs/root_split_full_boot_validation_20250706_223559.log | v0.1 | 2027-08-15 | COMMUNITY | | |
 | logs/sel4_userland_split.md | v0.1 | 2027-09-30 | COMMUNITY | | |
+| logs/libsel4_link_and_boot_trace.md | v0.1 | 2027-12-31 | COMMUNITY | | |
+| logs/artifact_locations.json | v0.1 | 2027-12-31 | COMMUNITY | | |
 | docs/community/diagnostics/MMU_FAULT_AUDIT.md | v0.1 | 2027-10-14 | COMMUNITY | | |
 | docs/community/diagnostics/COHESIX_ROOT_ELF_DIAG.md | v0.1 | 2027-12-27 | COMMUNITY | | |
 | docs/community/governance/COHESIX_AARCH64_BUILD.md | v1.1 | 2027-12-28 | COMMUNITY | | |
