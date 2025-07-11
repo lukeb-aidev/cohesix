@@ -58,9 +58,7 @@ Agents always respect TMPDIR, COHESIX_TRACE_TMP, or COHESIX_ENS_TMP — never ha
 - `docs/community/governance/INSTRUCTION_BLOCK.md` — canonical build + hydration rules
 - `docs/community/governance/ROLE_POLICY.md` — trust zones, Secure9P role definitions
 - `docs/community/planning/DEMO_SCENARIOS.md` — validator + namespace scenario references
-- `docs/private/COMMERCIAL_PLAN.md` — milestones linked to agent enforcement
 - `docs/private/COHESIX_AARCH64_BUILD.md` — cross-build and linking requirements for Plan9 ELF
-- `docs/private/COHESIX_ROOT_ELF_DIAG.md` — ELF entry point and seL4 syscall verification procedures
 
 ---
 
@@ -76,6 +74,7 @@ Agents always respect TMPDIR, COHESIX_TRACE_TMP, or COHESIX_ENS_TMP — never ha
 - ELF inspections leverage OpenAI's documented best practices for Codex Agent.md, ensuring object file + image correctness beyond normal CI.
 - QEMU executions must use the `virt` platform (`-M virt -cpu cortex-a57 -m 1024`) with elfloader CPIO images and console output on `-serial mon:stdio`.
 - All agent checks and validations tie back explicitly to INSTRUCTION_BLOCK.md, COHESIX_AARCH64_BUILD.md to ensure canonical compliance.
+- Pull requests must NEVER include biary files.
 
 ---
 
