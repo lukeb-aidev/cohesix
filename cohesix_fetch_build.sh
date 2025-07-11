@@ -110,8 +110,10 @@ if [ ! -f "$LIB_PATH" ]; then
   cd "$ROOT"
   log "✅ libsel4.a staged at $LIB_PATH"
   [ -f "$LIB_PATH" ] || { echo "❌ libsel4.a not found after build" >&2; exit 1; }
-  [ -f "$KERNEL_ELF" ] && cp "$KERNEL_ELF" out/bin/kernel.elf
-  [ -f "$ELFLOADER" ] && cp "$ELFLOADER" out/bin/elfloader
+  # Explicitly stage kernel.elf and elfloader using absolute build paths
+  mkdir -p "$ROOT/out/bin"
+  cp "$ROOT/third_party/seL4/projects/sel4test/build_qemu_arm/kernel/kernel.elf" "$ROOT/out/bin/kernel.elf"
+  cp "$ROOT/third_party/seL4/projects/sel4test/build_qemu_arm/elfloader/elfloader" "$ROOT/out/bin/elfloader"
 fi
 mkdir -p "$LOG_DIR"
 
@@ -554,6 +556,14 @@ fi
 # -----------------------------------------------------------
 # QEMU bare metal boot test (aarch64)
 # -----------------------------------------------------------
+# Build CPIO archive for elfloader
+log "📦 Building CPIO archive with kernel.elf and cohesix_root.elf..."
+CPIO_IMAGE="$ROOT/out/boot/image.cpio"
+cd "$ROOT/out/bin"
+find kernel.elf cohesix_root.elf | cpio -o -H newc > "$CPIO_IMAGE"
+log "✅ Created CPIO archive at $CPIO_IMAGE"
+cd "$ROOT"
+
 log "🧪 Booting elfloader + kernel in QEMU..."
 QEMU_LOG="$LOG_DIR/qemu_debug_$(date +%Y%m%d_%H%M%S).log"
 QEMU_FLAGS="-nographic"
@@ -564,7 +574,7 @@ if [ "${DEBUG_QEMU:-0}" = "1" ]; then
 fi
 qemu-system-aarch64 -M virt,gic-version=2 -cpu cortex-a57 -m 1024M \
   -kernel "$ROOT/out/bin/elfloader" \
-  -initrd "$ROOT/out/bin/kernel.elf,$ROOT/out/bin/cohesix_root.elf" \
+  -initrd "$CPIO_IMAGE" \
   $QEMU_FLAGS \
   -D "$QEMU_LOG" || true
 log "QEMU log saved to $QEMU_LOG"
@@ -832,10 +842,10 @@ if [ "${DEBUG_QEMU:-0}" = "1" ]; then
   # WHY: keep -nographic to avoid CI display issues
   QEMU_FLAGS="-nographic -d cpu_reset,int,guest_errors,mmu -serial mon:stdio"
 fi
-# Provide kernel.elf and root server as modules to elfloader
+# Provide CPIO archive as initrd to elfloader
 qemu-system-aarch64 -M virt,gic-version=2 -cpu cortex-a57 -m 1024M \
   -kernel "$ROOT/out/bin/elfloader" \
-  -initrd "$ROOT/out/bin/kernel.elf,$ROOT/out/bin/cohesix_root.elf" \
+  -initrd "$CPIO_IMAGE" \
   $QEMU_FLAGS \
   -D "$LOG_DIR/qemu_baremetal_$(date +%Y%m%d_%H%M%S).log" | tee "$QEMU_CONSOLE" || true
 log "QEMU console saved to $QEMU_CONSOLE"
