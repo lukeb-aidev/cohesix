@@ -1,5 +1,5 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v1.9
+# Filename: cohesix_fetch_build.sh v1.10
 # Author: Lukas Bower
 # Date Modified: 2027-12-31
 #!/usr/bin/env bash
@@ -46,24 +46,31 @@ if [ -z "${VIRTUAL_ENV:-}" ] || [[ "$VIRTUAL_ENV" != *"/${VENV_DIR}" ]]; then
     source "$VENV_DIR/bin/activate"
   fi
 fi
-export PYTHONPATH="/home/ubuntu/sel4_workspace/kernel:/usr/local/lib/python3.12/dist-packages:${PYTHONPATH:-}"
+export PYTHONPATH="$ROOT/third_party/seL4/kernel:/usr/local/lib/python3.12/dist-packages:${PYTHONPATH:-}"
 export MEMCHR_DISABLE_RUNTIME_CPU_FEATURE_DETECTION=1
 export CUDA_HOME="${CUDA_HOME:-/usr}"
 export CUDA_INCLUDE_DIR="${CUDA_INCLUDE_DIR:-$CUDA_HOME/include}"
 export CUDA_LIBRARY_PATH="${CUDA_LIBRARY_PATH:-/usr/lib/x86_64-linux-gnu}"
 export PATH="$CUDA_HOME/bin:$PATH"
 export LD_LIBRARY_PATH="$CUDA_LIBRARY_PATH:${LD_LIBRARY_PATH:-}"
-export ROOT="$HOME/cohesix"
+export ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 export LOG_DIR="$ROOT/logs"
 
-# Clone repository before sourcing any configuration so a fresh checkout
-# is available even when $HOME is empty.
-cd "$HOME"
+cd "$ROOT"
 
 mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/build_$(date +%Y%m%d_%H%M%S).log"
 SUMMARY_ERRORS="$LOG_DIR/summary_errors.log"
 SUMMARY_TEST_FAILS="$LOG_DIR/summary_test_failures.log"
+: > "$LOG_DIR/libsel4_link_and_boot_trace.md"
+TRACE_LOG="$LOG_DIR/libsel4_link_and_boot_trace.md"
+{
+  echo "// CLASSIFICATION: COMMUNITY"
+  echo "// Filename: libsel4_link_and_boot_trace.md v0.1"
+  echo "// Author: Lukas Bower"
+  echo "// Date Modified: $(date +%Y-%m-%d)"
+  echo
+} > "$TRACE_LOG"
 : > "$SUMMARY_ERRORS"
 : > "$SUMMARY_TEST_FAILS"
 exec 3>&1  # Save original stdout
@@ -73,36 +80,33 @@ trap 'echo "❌ Build failed. Last 40 log lines:" >&3; tail -n 40 "$LOG_FILE" >&
 log(){ echo "[$(date +%H:%M:%S)] $1" | tee -a "$LOG_FILE" >&3; }
 
 log "🛠️ [Build Start] $(date)"
-log "🚀 Starting repository clone..."
+log "🚀 Using existing repository at $ROOT"
 
-  log "📦 Cloning repository..."
-  rm -rf cohesix
-  rm -rf cohesix_logs
-  for i in {1..3}; do
-    git clone git@github.com:lukeb-aidev/cohesix.git && break || sleep 1
-  done
-  log "✅ Clone complete ..."
-
-cd cohesix
-if [ ! -f "third_party/seL4/lib/libsel4.a" ]; then
+LIB_PATH="$ROOT/third_party/seL4/lib/libsel4.a"
+if [ ! -f "$LIB_PATH" ]; then
   log "⚠️ libsel4.a missing, building in-place under third_party/seL4..."
   cd "$ROOT/third_party/seL4"
-  ./init-build.sh -DPLATFORM=qemu-arm-virt -DAARCH64=1 -DRELEASE=1
+  ./init-build.sh -DPLATFORM=qemu-arm-virt -DAARCH64=1 -DRELEASE=1 \
+    -DCROSS_COMPILER_PREFIX=aarch64-linux-gnu- | tee -a "$TRACE_LOG"
   BUILD_DIR="$(find . -maxdepth 1 -type d -name 'build_*' | head -n 1)"
   if [ -z "$BUILD_DIR" ]; then
     echo "❌ Could not locate seL4 build directory" >&2
     exit 1
   fi
   cd "$BUILD_DIR"
-  ninja libsel4.a
-  mkdir -p "$ROOT/third_party/seL4/lib"
-  cp libsel4/libsel4.a "$ROOT/third_party/seL4/lib/"
-  mkdir -p "$ROOT/third_party/seL4/include"
-  cp -r libsel4/include/* "$ROOT/third_party/seL4/include/"
+  ninja kernel.elf elfloader libsel4.a | tee -a "$TRACE_LOG"
+  mkdir -p "$ROOT/third_party/seL4/lib" "$ROOT/third_party/seL4/include"
+  cp libsel4/libsel4.a "$ROOT/third_party/seL4/lib/" | tee -a "$TRACE_LOG" || {
+    echo "❌ Failed to stage libsel4.a" >&2; exit 1; }
+  cp -r libsel4/include/* "$ROOT/third_party/seL4/include/" | tee -a "$TRACE_LOG" || {
+    echo "❌ Failed to stage headers" >&2; exit 1; }
+  KERNEL_ELF="$PWD/kernel/kernel.elf"
+  ELFLOADER="$PWD/elfloader/elfloader"
   cd "$ROOT"
-  SEL4_PATH="$(find third_party/seL4 -name libsel4.a | head -n 1)"
-  log "✅ libsel4.a staged at $SEL4_PATH"
-  [ -f "$SEL4_PATH" ] || { echo "❌ libsel4.a not found after build" >&2; exit 1; }
+  log "✅ libsel4.a staged at $LIB_PATH"
+  [ -f "$LIB_PATH" ] || { echo "❌ libsel4.a not found after build" >&2; exit 1; }
+  [ -f "$KERNEL_ELF" ] && cp "$KERNEL_ELF" out/bin/kernel.elf
+  [ -f "$ELFLOADER" ] && cp "$ELFLOADER" out/bin/elfloader
 fi
 mkdir -p "$LOG_DIR"
 
@@ -515,6 +519,8 @@ fi
 log "🔍 Validating cohesix_root ELF memory layout..."
 READLOG="$LOG_DIR/cohesix_root_readelf_$(date +%Y%m%d_%H%M%S).log"
 readelf -l "$ROOT/out/cohesix_root.elf" | tee -a "$LOG_FILE" | tee "$READLOG" >&3
+readelf -h "$ROOT/out/cohesix_root.elf" >> "$TRACE_LOG"
+nm "$ROOT/out/cohesix_root.elf" | grep -E 'seL4_Send|seL4_Recv|seL4_DebugPutChar' >> "$TRACE_LOG"
 sha256sum "$ROOT/out/cohesix_root.elf" > "$LOG_DIR/cohesix_root_$(date +%Y%m%d_%H%M%S).sha256"
 if readelf -l "$ROOT/out/cohesix_root.elf" | grep -q 'LOAD' && \
    ! readelf -l "$ROOT/out/cohesix_root.elf" | awk '/LOAD/ {print $3}' | grep -q -E '^0xffffff80[0-9a-fA-F]{8}$'; then
@@ -540,49 +546,6 @@ if [ -d "$ROOT/python" ]; then
 fi
 
 #
-#
-# -----------------------------------------------------------
-# seL4 kernel build using standard sel4_workspace layout
-# -----------------------------------------------------------
-log "🧱 Building seL4 kernel using existing /home/ubuntu/sel4_workspace workspace..."
-
-KERNEL_DIR="/home/ubuntu/sel4_workspace"
-COHESIX_OUT="${COHESIX_OUT:-$ROOT/out}"
-
-cd "$KERNEL_DIR"
-
-cmake . -DPLATFORM=qemu-arm-virt -DAARCH64=1 -DRELEASE=1 \
-  -DROOT_SERVER="/home/ubuntu/cohesix/out/cohesix_root.elf"
-
-
-# Now run ninja in the workspace root
-ninja
-
-# Log kernel configuration for debugging
-CACHE_FILE=$(find . -name CMakeCache.txt | head -n1)
-if [ -f "$CACHE_FILE" ]; then
-  log "Kernel configuration summary:" && \
-  grep -E 'KernelPrinting|KernelDebugBuild|KernelLogBuffer|KernelVerificationBuild|KernelElfVSpaceSizeBits|KernelRootCNodeSizeBits|KernelVirtualEnd|KernelArmGICV2|KernelArmPL011|KernelBenchmarks|KernelTests' "$CACHE_FILE" || true
-fi
-
-# Copy kernel.elf and elfloader
-cp "$KERNEL_DIR/kernel/kernel.elf" "$COHESIX_OUT/bin/kernel.elf"
-log "✅ Kernel ELF staged to $COHESIX_OUT/bin/kernel.elf, size: $(stat -c%s "$COHESIX_OUT/bin/kernel.elf") bytes"
-
-cp "$KERNEL_DIR/elfloader/elfloader" "$COHESIX_OUT/bin/elfloader"
-# Stage libsel4 and headers for deterministic builds
-if [ -f "$KERNEL_DIR/libsel4/libsel4.a" ]; then
-  mkdir -p "$ROOT/third_party/seL4/lib"
-  cp "$KERNEL_DIR/libsel4/libsel4.a" "$ROOT/third_party/seL4/lib/"
-fi
-if [ -d "$KERNEL_DIR/libsel4/include" ]; then
-  mkdir -p "$ROOT/third_party/seL4/include"
-  cp -r "$KERNEL_DIR/libsel4/include"/* "$ROOT/third_party/seL4/include/"
-fi
-log "✅ Elfloader staged to $COHESIX_OUT/bin/elfloader, size: $(stat -c%s "$COHESIX_OUT/bin/elfloader") bytes"
-
-cd "$ROOT"
-
 # -----------------------------------------------------------
 # QEMU bare metal boot test (aarch64)
 # -----------------------------------------------------------
@@ -595,17 +558,18 @@ if [ "${DEBUG_QEMU:-0}" = "1" ]; then
   QEMU_FLAGS="-nographic -d cpu_reset,int,guest_errors,mmu -serial mon:stdio"
 fi
 qemu-system-aarch64 -M virt,gic-version=2 -cpu cortex-a57 -m 1024M \
-  -kernel "$COHESIX_OUT/bin/elfloader" \
-  -initrd "$COHESIX_OUT/bin/kernel.elf,$COHESIX_OUT/bin/cohesix_root.elf" \
+  -kernel "$ROOT/out/bin/elfloader" \
+  -initrd "$ROOT/out/bin/kernel.elf,$ROOT/out/bin/cohesix_root.elf" \
   $QEMU_FLAGS \
   -D "$QEMU_LOG" || true
 log "QEMU log saved to $QEMU_LOG"
+echo "QEMU log: $QEMU_LOG" >> "$TRACE_LOG"
 
 
 log "📂 Staging boot files..."
 mkdir -p "$STAGE_DIR/boot"
-cp "$COHESIX_OUT/bin/kernel.elf" "$STAGE_DIR/boot/kernel.elf"
-cp out/cohesix_root.elf "$STAGE_DIR/boot/userland.elf"
+cp "$ROOT/out/bin/kernel.elf" "$STAGE_DIR/boot/kernel.elf"
+cp "$ROOT/out/bin/cohesix_root.elf" "$STAGE_DIR/boot/userland.elf"
 for f in initfs.img bootargs.txt boot_trace.json; do
   [ -f "$f" ] && cp "$f" "$STAGE_DIR/boot/"
 done
@@ -680,6 +644,17 @@ for bin in $(find "$STAGE_DIR/bin" -type f -perm -111); do
   printf '{"file":"%s","hash":"%s","version":"%s"}' "${bin#$STAGE_DIR/}" "$hash" "$ver" >> "$MANIFEST"
 done
 echo ']}' >> "$MANIFEST"
+
+ART_JSON="$LOG_DIR/artifact_locations.json"
+cat > "$ART_JSON" <<EOF
+{
+  "libsel4.a": "$(realpath "$LIB_PATH")",
+  "headers": "$(realpath "$ROOT/third_party/seL4/include")",
+  "cohesix_root.elf": "$(realpath "$ROOT/out/bin/cohesix_root.elf")",
+  "kernel.elf": "$(realpath "$ROOT/out/bin/kernel.elf")"
+}
+EOF
+cat "$ART_JSON" >> "$TRACE_LOG"
 
 
 # 🗂 Prepare /srv namespace for tests (clean and set role)
