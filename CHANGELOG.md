@@ -3253,3 +3253,7 @@
 ## [v0.518] - 2025-07-11
 ### Added
 - **InvestigateCohesixRootBootFail-274**: Documented the MMU fault analysis in `WHY_COHESIX_ROOT_FAILS_TO_BOOT_20250711.md` and verified allocator bounds and syscall stubs.
+
+## [v0.519] - 2025-07-12
+### Fixed
+- **FixCohesixSyscallsAndBootUserland-080**: Implemented minimal syscall handlers in `sys.rs` that load `/bin/init` directly and print `COHESIX_USERLAND_BOOT_OK`. Boot fix trace recorded in `workspace/logs/boot_fix_trace.md`.

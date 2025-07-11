@@ -271,7 +271,7 @@
 | workspace/cohesix_root/src/lang_items.rs | v0.1 | 2027-10-12 | COMMUNITY | | |
 | workspace/cohesix_root/src/entry.S | v0.20 | 2027-12-26 | COMMUNITY | | |
 | workspace/cohesix_root/src/allocator.rs | v0.7 | 2027-11-20 | COMMUNITY | | |
-| workspace/cohesix_root/src/sys.rs | v0.6 | 2025-07-11 | COMMUNITY | | |
+| workspace/cohesix_root/src/sys.rs | v0.7 | 2025-07-12 | COMMUNITY | | |
 | src/cuda/runtime.rs | v0.16 | 2026-12-31 | COMMUNITY | | |
 | src/cli/mod.rs | v1.3 | 2026-10-08 | COMMUNITY | | |
 | src/cli/cohtrace.rs | v0.4 | 2026-10-13 | COMMUNITY | | |
@@ -361,6 +361,7 @@
 | logs/sel4_userland_split.md | v0.1 | 2027-09-30 | COMMUNITY | | |
 | logs/libsel4_link_and_boot_trace.md | v0.1 | 2027-12-31 | COMMUNITY | | |
 | logs/artifact_locations.json | v0.1 | 2027-12-31 | COMMUNITY | | |
+| workspace/logs/boot_fix_trace.md | v0.1 | 2025-07-12 | COMMUNITY | | |
 | docs/community/diagnostics/MMU_FAULT_AUDIT.md | v0.1 | 2027-10-14 | COMMUNITY | | |
 | docs/community/diagnostics/COHESIX_ROOT_ELF_DIAG.md | v0.1 | 2027-12-27 | COMMUNITY | | |
 | docs/community/diagnostics/BOOT_BLOCKERS_FULL_ANALYSIS.md | v0.1 | 2027-12-31 | COMMUNITY | | |
