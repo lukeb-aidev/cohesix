@@ -102,3 +102,43 @@ pub fn coh_log(msg: &str) {
     unsafe { seL4_DebugPutChar(b'\n') };
     compiler_fence(Ordering::SeqCst);
 }
+
+#[no_mangle]
+pub unsafe extern "C" fn memcpy(dest: *mut u8, src: *const u8, n: usize) -> *mut u8 {
+    core::ptr::copy_nonoverlapping(src, dest, n);
+    dest
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn memmove(dest: *mut u8, src: *const u8, n: usize) -> *mut u8 {
+    core::ptr::copy(src, dest, n);
+    dest
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn memset(dest: *mut u8, c: i32, n: usize) -> *mut u8 {
+    core::ptr::write_bytes(dest, c as u8, n);
+    dest
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn memcmp(a: *const u8, b: *const u8, n: usize) -> i32 {
+    for i in 0..n {
+        let ca = core::ptr::read(a.add(i));
+        let cb = core::ptr::read(b.add(i));
+        if ca != cb {
+            return ca as i32 - cb as i32;
+        }
+    }
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn strlen(mut s: *const u8) -> usize {
+    let mut len = 0;
+    while core::ptr::read(s) != 0 {
+        len += 1;
+        s = s.add(1);
+    }
+    len
+}
