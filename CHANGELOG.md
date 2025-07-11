@@ -3243,4 +3243,9 @@
 
 ## [v0.516] - 2027-12-31
 ### Fixed
+
 - **FixDeterministicLink-074**: Added build script and config flags to enforce static linkage with `libsel4.a`. Updated linker script addresses and included seL4 headers via a dummy C compile. Validation logs recorded in `STATIC_LINK_FIX_VALIDATION.md`.
+
+## [v0.517] - 2027-12-31
+### Added
+- capture_and_push_debug.sh v0.3 adds ELF symbol checks and disassembly audit.
