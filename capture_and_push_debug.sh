@@ -1,9 +1,14 @@
+# CLASSIFICATION: COMMUNITY
+# Filename: capture_and_push_debug.sh v0.3
+# Author: Lukas Bower
+# Date Modified: 2027-12-31
 #!/usr/bin/env bash
 set -euo pipefail
 
 NOW=$(date +%Y%m%d_%H%M%S)
 DIAG_DIR="out/diag_mmu_fault_${NOW}"
 mkdir -p "$DIAG_DIR"
+warnings_found=0
 
 echo "📂 Locating cohesix_root ELF..."
 COHESIX_ELF=$(find workspace -type f -name cohesix_root -printf "%T@ %p\n" | sort -n | tail -1 | cut -d' ' -f2 || true)
@@ -28,9 +33,41 @@ readelf -s "$COHESIX_ELF" > "$DIAG_DIR/cohesix_root_symbols.txt"
 echo "👉 Dumping full nm symbols..."
 nm -n "$COHESIX_ELF" > "$DIAG_DIR/cohesix_root_nm.txt"
 
+echo "👉 Checking for undefined symbols..."
+nm -A -n "$COHESIX_ELF" | grep ' U ' > "$DIAG_DIR/cohesix_root_undefined_symbols.txt" || true
+if [ -s "$DIAG_DIR/cohesix_root_undefined_symbols.txt" ]; then
+  echo "⚠️ Undefined symbols detected:"
+  cat "$DIAG_DIR/cohesix_root_undefined_symbols.txt"
+  warnings_found=1
+else
+  echo "✅ No undefined symbols"
+fi
+
+echo "👉 Dumping verbose symbol table..."
+readelf -Ws "$COHESIX_ELF" > "$DIAG_DIR/cohesix_root_symbols_verbose.txt"
+grep -E ' printf| malloc| free| strcmp| strcpy| memcpy' "$DIAG_DIR/cohesix_root_symbols_verbose.txt" > "$DIAG_DIR/cohesix_root_libc_symbols.txt" || true
+if [ -s "$DIAG_DIR/cohesix_root_libc_symbols.txt" ]; then
+  echo "⚠️ Potential libc/musl symbols detected:" 
+  cat "$DIAG_DIR/cohesix_root_libc_symbols.txt"
+  warnings_found=1
+else
+  echo "✅ No libc/musl symbols found"
+fi
+
 
 echo "👉 Dumping disassembly..."
 objdump -d "$COHESIX_ELF" > "$DIAG_DIR/cohesix_root_disasm.txt"
+
+echo "👉 Dumping full disassembly..."
+objdump -D "$COHESIX_ELF" > "$DIAG_DIR/cohesix_root_full_disasm.txt"
+grep -nE '\b(call|bl)\b' "$DIAG_DIR/cohesix_root_full_disasm.txt" | grep -vE '(seL4_|coh_)' > "$DIAG_DIR/cohesix_root_suspicious_calls.txt" || true
+if [ -s "$DIAG_DIR/cohesix_root_suspicious_calls.txt" ]; then
+  echo "⚠️ Suspicious external calls detected:"
+  cat "$DIAG_DIR/cohesix_root_suspicious_calls.txt" | head -n 20
+  warnings_found=1
+else
+  echo "✅ No suspicious external calls found"
+fi
 
 echo "👉 Dumping full readelf..."
 readelf -a "$COHESIX_ELF" > "$DIAG_DIR/cohesix_root_full_readelf.txt"
@@ -62,4 +99,10 @@ echo "🚀 Pushing to remote..."
 git push
 
 echo "✅ Done."
+
+if [ "$warnings_found" -eq 0 ]; then
+  echo "✅ ELF checks passed."
+else
+  echo "❌ Warnings detected during ELF analysis."
+fi
 
