@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v1.14
+// Filename: CHANGELOG.md v1.15
 // Author: Lukas Bower
-// Date Modified: 2027-12-12
+// Date Modified: 2027-12-31
 
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
@@ -3220,3 +3220,7 @@
 ## [v0.510] - 2027-12-30
 ### Fixed
 - **FixAndValidateCohesixELF-074**: `cohesix_fetch_build.sh` now aborts if `libsel4.a` is missing instead of fetching automatically. `fetch_sel4.sh` updated to use `sel4test-manifest` via `repo` for deterministic builds.
+
+## [v0.511] - 2027-12-31
+### Fixed
+- **FixSel4InlineBuild-077**: Inline seL4 build in `cohesix_fetch_build.sh` now runs `init-build.sh` and stages `libsel4.a` and headers deterministically, aborting if the archive is still missing.
