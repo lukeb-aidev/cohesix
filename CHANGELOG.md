@@ -3232,3 +3232,7 @@
 ## [v0.513] - 2027-12-31
 ### Added
 - Boot diagnostics: `BOOT_BLOCKERS_FULL_ANALYSIS.md`, `POTENTIAL_BOOT_BLOCKERS.txt`, and `FOOLPROOF_FIX_PLAN.txt` document current boot failure analysis and recovery plan.
+
+## [v0.514] - 2027-12-31
+### Fixed
+- **FixCohesixUserlandBoot-206**: Updated syscall stubs with errno values, ensured `plan9.ns` is reliably staged, and `init` prints `COHESIX_USERLAND_BOOT_OK`. Added boot fix summary under diagnostics.
