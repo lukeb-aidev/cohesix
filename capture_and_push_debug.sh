@@ -33,6 +33,9 @@ readelf -s "$COHESIX_ELF" > "$DIAG_DIR/cohesix_root_symbols.txt"
 echo "👉 Dumping full nm symbols..."
 nm -n "$COHESIX_ELF" > "$DIAG_DIR/cohesix_root_nm.txt"
 
+echo "👉 Dumping demangled nm symbols..."
+nm -n --demangle "$COHESIX_ELF" > "$DIAG_DIR/cohesix_root_nm_demangled.txt"
+
 echo "👉 Checking for undefined symbols..."
 nm -A -n "$COHESIX_ELF" | grep ' U ' > "$DIAG_DIR/cohesix_root_undefined_symbols.txt" || true
 if [ -s "$DIAG_DIR/cohesix_root_undefined_symbols.txt" ]; then
@@ -56,11 +59,14 @@ fi
 
 
 echo "👉 Dumping disassembly..."
-objdump -d "$COHESIX_ELF" > "$DIAG_DIR/cohesix_root_disasm.txt"
-
-echo "👉 Dumping full disassembly..."
-objdump -D "$COHESIX_ELF" > "$DIAG_DIR/cohesix_root_full_disasm.txt"
-grep -nE '\b(call|bl)\b' "$DIAG_DIR/cohesix_root_full_disasm.txt" | grep -vE '(seL4_|coh_)' > "$DIAG_DIR/cohesix_root_suspicious_calls.txt" || true
+if command -v llvm-objdump &>/dev/null; then
+  llvm-objdump -d "$COHESIX_ELF" > "$DIAG_DIR/cohesix_root_disasm.txt"
+  llvm-objdump -D "$COHESIX_ELF" > "$DIAG_DIR/cohesix_root_full_disasm.txt"
+else
+  objdump -d "$COHESIX_ELF" > "$DIAG_DIR/cohesix_root_disasm.txt"
+  objdump -D "$COHESIX_ELF" > "$DIAG_DIR/cohesix_root_full_disasm.txt"
+fi
+grep -nE '\b(call|bl)\b' "$DIAG_DIR/cohesix_root_full_disasm.txt" | grep -vE '(seL4_|coh_|core::|alloc::|rust_begin_unwind)' > "$DIAG_DIR/cohesix_root_suspicious_calls.txt" || true
 if [ -s "$DIAG_DIR/cohesix_root_suspicious_calls.txt" ]; then
   echo "⚠️ Suspicious external calls detected:"
   cat "$DIAG_DIR/cohesix_root_suspicious_calls.txt" | head -n 20
@@ -99,6 +105,8 @@ echo "🚀 Pushing to remote..."
 git push
 
 echo "✅ Done."
+
+echo "📂 All diagnostics are in $DIAG_DIR"
 
 if [ "$warnings_found" -eq 0 ]; then
   echo "✅ ELF checks passed."
