@@ -1,0 +1,16 @@
+// CLASSIFICATION: COMMUNITY
+// Filename: FOOLPROOF_FIX_PLAN.txt v0.1
+// Author: Lukas Bower
+// Date Modified: 2027-12-31
+
+1. Rebuild `third_party/seL4` in release mode; verify `kernel.elf` and `libsel4.a`.
+2. Confirm `cohesix_root.elf` LOAD segments begin at `0xffffff8040000000`.
+3. Validate BSS clearing in `_start` and rerun `entry.S` barriers if needed.
+4. Ensure `userland/miniroot/bin/init` is copied into the CPIO image.
+5. Review `plan9.ns` for all expected binds and test with QEMU.
+6. Add logging around `apply_namespace()` to detect failures.
+7. Reboot under QEMU with DEBUG_QEMU=1 and capture monitor output.
+8. If the abort persists, instrument `is_printable` call sites to track
+   arguments and stack state.
+Rollback: revert to previous kernel and rootserver artifacts if new
+builds introduce regressions.

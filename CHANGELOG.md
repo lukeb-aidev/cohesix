@@ -3228,3 +3228,7 @@
 ## [v0.512] - 2027-12-31
 ### Fixed
 - **BuildSel4AndRootFromThirdParty-080**: `cohesix_fetch_build.sh` now builds seL4 entirely from `third_party/seL4` without external clones, logs build outputs to `logs/libsel4_link_and_boot_trace.md`, and records artifact paths in `logs/artifact_locations.json`.
+
+## [v0.513] - 2027-12-31
+### Added
+- Boot diagnostics: `BOOT_BLOCKERS_FULL_ANALYSIS.md`, `POTENTIAL_BOOT_BLOCKERS.txt`, and `FOOLPROOF_FIX_PLAN.txt` document current boot failure analysis and recovery plan.
