@@ -36,6 +36,10 @@ fi
 # Ensure ROOT is always set
 ROOT="${ROOT:-$HOME/cohesix}"
 export ROOT
+
+# Allow SEL4_WORKSPACE override for kernel.elf/elfloader staging
+SEL4_WORKSPACE="${SEL4_WORKSPACE:-$ROOT/third_party/seL4}"
+export SEL4_WORKSPACE
 LOG_DIR="$ROOT/logs"
 mkdir -p "$LOG_DIR"
 set -euxo pipefail
@@ -113,8 +117,8 @@ if [ ! -f "$LIB_PATH" ]; then
 fi
 # Always stage kernel.elf and elfloader after libsel4.a check
 mkdir -p "$ROOT/out/bin"
-cp "$ROOT/third_party/seL4/projects/sel4test/build_qemu_arm/kernel/kernel.elf" "$ROOT/out/bin/kernel.elf"
-cp "$ROOT/third_party/seL4/projects/sel4test/build_qemu_arm/elfloader/elfloader" "$ROOT/out/bin/elfloader"
+cp "$SEL4_WORKSPACE/projects/sel4test/build_qemu_arm/kernel/kernel.elf" "$ROOT/out/bin/kernel.elf"
+cp "$SEL4_WORKSPACE/projects/sel4test/build_qemu_arm/elfloader/elfloader" "$ROOT/out/bin/elfloader"
 mkdir -p "$LOG_DIR"
 
 
