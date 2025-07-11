@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v1.10
+# Filename: cohesix_fetch_build.sh v1.11
 # Author: Lukas Bower
-# Date Modified: 2027-12-31
+# Date Modified: 2025-07-11
 #!/usr/bin/env bash
 #
 # Merged old script v0.89 features into current script.
@@ -582,18 +582,19 @@ cd "$ROOT"
 
 log "🧪 Booting elfloader + kernel in QEMU..."
 QEMU_LOG="$LOG_DIR/qemu_debug_$(date +%Y%m%d_%H%M%S).log"
-QEMU_FLAGS="-nographic"
+QEMU_SERIAL_LOG="$LOG_DIR/qemu_serial_$(date +%Y%m%d_%H%M%S).log"
+QEMU_FLAGS="-nographic -serial mon:stdio"
 if [ "${DEBUG_QEMU:-0}" = "1" ]; then
   # Deep trace for MMU and CPU faults when DEBUG_QEMU=1
-  # WHY: keep -nographic to avoid CI display issues
-  QEMU_FLAGS="-nographic -d cpu_reset,int,guest_errors,mmu -serial mon:stdio"
+  QEMU_FLAGS="-nographic -serial mon:stdio -d cpu_reset,int,guest_errors,mmu"
 fi
 qemu-system-aarch64 -M virt,gic-version=2 -cpu cortex-a57 -m 1024M \
   -kernel "$ROOT/out/bin/elfloader" \
   -initrd "$CPIO_IMAGE" \
   $QEMU_FLAGS \
-  -D "$QEMU_LOG" || true
+  -D "$QEMU_LOG" |& tee "$QEMU_SERIAL_LOG" || true
 log "QEMU log saved to $QEMU_LOG"
+log "QEMU serial saved to $QEMU_SERIAL_LOG"
 echo "QEMU log: $QEMU_LOG" >> "$TRACE_LOG"
 
 
@@ -854,19 +855,18 @@ echo "🪵 Full log saved to $LOG_FILE" >&3
 
 # QEMU bare metal launch command (final boot test)
 log "🧪 Running final QEMU bare metal boot test..."
+# Provide final boot test log locations
 QEMU_CONSOLE="$LOG_DIR/qemu_console_$(date +%Y%m%d_%H%M%S).log"
-QEMU_FLAGS="-nographic"
+QEMU_FLAGS="-nographic -serial mon:stdio"
 if [ "${DEBUG_QEMU:-0}" = "1" ]; then
-  # Deep trace for MMU and CPU faults when DEBUG_QEMU=1
-  # WHY: keep -nographic to avoid CI display issues
-  QEMU_FLAGS="-nographic -d cpu_reset,int,guest_errors,mmu -serial mon:stdio"
+  QEMU_FLAGS="-nographic -serial mon:stdio -d cpu_reset,int,guest_errors,mmu"
 fi
 # Provide CPIO archive as initrd to elfloader
 qemu-system-aarch64 -M virt,gic-version=2 -cpu cortex-a57 -m 1024M \
   -kernel "$ROOT/out/bin/elfloader" \
   -initrd "$CPIO_IMAGE" \
   $QEMU_FLAGS \
-  -D "$LOG_DIR/qemu_baremetal_$(date +%Y%m%d_%H%M%S).log" | tee "$QEMU_CONSOLE" || true
+  -D "$LOG_DIR/qemu_baremetal_$(date +%Y%m%d_%H%M%S).log" |& tee "$QEMU_CONSOLE" || true
 log "QEMU console saved to $QEMU_CONSOLE"
 log "✅ QEMU bare metal boot test complete."
 
