@@ -58,7 +58,7 @@ export CUDA_INCLUDE_DIR="${CUDA_INCLUDE_DIR:-$CUDA_HOME/include}"
 export CUDA_LIBRARY_PATH="${CUDA_LIBRARY_PATH:-/usr/lib/x86_64-linux-gnu}"
 export PATH="$CUDA_HOME/bin:$PATH"
 export LD_LIBRARY_PATH="$CUDA_LIBRARY_PATH:${LD_LIBRARY_PATH:-}"
-export ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+export ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export LOG_DIR="$ROOT/logs"
 
 cd "$ROOT"
