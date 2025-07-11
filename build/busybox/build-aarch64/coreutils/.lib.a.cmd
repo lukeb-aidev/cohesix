@@ -1,0 +1,1 @@
+cmd_coreutils/lib.a := rm -f coreutils/lib.a; aarch64-linux-gnu-ar  rcs coreutils/lib.a coreutils/cat.o coreutils/cp.o coreutils/echo.o coreutils/head.o coreutils/ls.o coreutils/mkdir.o coreutils/mv.o coreutils/printf.o coreutils/rm.o coreutils/rmdir.o coreutils/tail.o coreutils/test.o coreutils/test_ptr_hack.o

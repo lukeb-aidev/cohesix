@@ -1,0 +1,134 @@
+cmd_scripts/basic/fixdep := gcc -Wp,-MD,scripts/basic/.fixdep.d -Wall -Wstrict-prototypes -O2 -fomit-frame-pointer       -o scripts/basic/fixdep scripts/basic/fixdep.c  
+
+deps_scripts/basic/fixdep := \
+  scripts/basic/fixdep.c \
+    $(wildcard include/config/his/driver.h) \
+    $(wildcard include/config/my/option.h) \
+    $(wildcard include/config/foo.h) \
+    $(wildcard include/config/boom.h) \
+    $(wildcard include/config/not.h) \
+  /usr/aarch64-linux-gnu/include/stdc-predef.h \
+  /usr/aarch64-linux-gnu/include/sys/types.h \
+  /usr/aarch64-linux-gnu/include/features.h \
+  /usr/aarch64-linux-gnu/include/features-time64.h \
+  /usr/aarch64-linux-gnu/include/bits/wordsize.h \
+  /usr/aarch64-linux-gnu/include/bits/timesize.h \
+  /usr/aarch64-linux-gnu/include/sys/cdefs.h \
+  /usr/aarch64-linux-gnu/include/bits/long-double.h \
+  /usr/aarch64-linux-gnu/include/gnu/stubs.h \
+  /usr/aarch64-linux-gnu/include/gnu/stubs-lp64.h \
+  /usr/aarch64-linux-gnu/include/bits/types.h \
+  /usr/aarch64-linux-gnu/include/bits/typesizes.h \
+  /usr/aarch64-linux-gnu/include/bits/time64.h \
+  /usr/aarch64-linux-gnu/include/bits/types/clock_t.h \
+  /usr/aarch64-linux-gnu/include/bits/types/clockid_t.h \
+  /usr/aarch64-linux-gnu/include/bits/types/time_t.h \
+  /usr/aarch64-linux-gnu/include/bits/types/timer_t.h \
+  /usr/lib/gcc/aarch64-linux-gnu/13/include/stddef.h \
+  /usr/aarch64-linux-gnu/include/bits/stdint-intn.h \
+  /usr/aarch64-linux-gnu/include/endian.h \
+  /usr/aarch64-linux-gnu/include/bits/endian.h \
+  /usr/aarch64-linux-gnu/include/bits/endianness.h \
+  /usr/aarch64-linux-gnu/include/bits/byteswap.h \
+  /usr/aarch64-linux-gnu/include/bits/uintn-identity.h \
+  /usr/aarch64-linux-gnu/include/sys/select.h \
+  /usr/aarch64-linux-gnu/include/bits/select.h \
+  /usr/aarch64-linux-gnu/include/bits/types/sigset_t.h \
+  /usr/aarch64-linux-gnu/include/bits/types/__sigset_t.h \
+  /usr/aarch64-linux-gnu/include/bits/types/struct_timeval.h \
+  /usr/aarch64-linux-gnu/include/bits/types/struct_timespec.h \
+  /usr/aarch64-linux-gnu/include/bits/select2.h \
+  /usr/aarch64-linux-gnu/include/bits/select-decl.h \
+  /usr/aarch64-linux-gnu/include/bits/pthreadtypes.h \
+  /usr/aarch64-linux-gnu/include/bits/thread-shared-types.h \
+  /usr/aarch64-linux-gnu/include/bits/pthreadtypes-arch.h \
+  /usr/aarch64-linux-gnu/include/bits/atomic_wide_counter.h \
+  /usr/aarch64-linux-gnu/include/bits/struct_mutex.h \
+  /usr/aarch64-linux-gnu/include/bits/struct_rwlock.h \
+  /usr/aarch64-linux-gnu/include/sys/stat.h \
+  /usr/aarch64-linux-gnu/include/bits/stat.h \
+  /usr/aarch64-linux-gnu/include/bits/struct_stat.h \
+  /usr/aarch64-linux-gnu/include/sys/mman.h \
+  /usr/aarch64-linux-gnu/include/bits/mman.h \
+  /usr/aarch64-linux-gnu/include/bits/mman-map-flags-generic.h \
+  /usr/aarch64-linux-gnu/include/bits/mman-linux.h \
+  /usr/aarch64-linux-gnu/include/bits/mman-shared.h \
+  /usr/aarch64-linux-gnu/include/bits/mman_ext.h \
+  /usr/aarch64-linux-gnu/include/unistd.h \
+  /usr/aarch64-linux-gnu/include/bits/posix_opt.h \
+  /usr/aarch64-linux-gnu/include/bits/environments.h \
+  /usr/aarch64-linux-gnu/include/bits/confname.h \
+  /usr/aarch64-linux-gnu/include/bits/getopt_posix.h \
+  /usr/aarch64-linux-gnu/include/bits/getopt_core.h \
+  /usr/aarch64-linux-gnu/include/bits/unistd.h \
+  /usr/aarch64-linux-gnu/include/bits/unistd-decl.h \
+  /usr/aarch64-linux-gnu/include/bits/unistd_ext.h \
+  /usr/aarch64-linux-gnu/include/fcntl.h \
+  /usr/aarch64-linux-gnu/include/bits/fcntl.h \
+  /usr/aarch64-linux-gnu/include/bits/fcntl-linux.h \
+  /usr/aarch64-linux-gnu/include/bits/fcntl2.h \
+  /usr/aarch64-linux-gnu/include/string.h \
+  /usr/aarch64-linux-gnu/include/bits/libc-header-start.h \
+  /usr/aarch64-linux-gnu/include/bits/types/locale_t.h \
+  /usr/aarch64-linux-gnu/include/bits/types/__locale_t.h \
+  /usr/aarch64-linux-gnu/include/strings.h \
+  /usr/aarch64-linux-gnu/include/bits/strings_fortified.h \
+  /usr/aarch64-linux-gnu/include/bits/string_fortified.h \
+  /usr/aarch64-linux-gnu/include/stdlib.h \
+  /usr/aarch64-linux-gnu/include/bits/waitflags.h \
+  /usr/aarch64-linux-gnu/include/bits/waitstatus.h \
+  /usr/aarch64-linux-gnu/include/bits/floatn.h \
+  /usr/aarch64-linux-gnu/include/bits/floatn-common.h \
+  /usr/aarch64-linux-gnu/include/alloca.h \
+  /usr/aarch64-linux-gnu/include/bits/stdlib-bsearch.h \
+  /usr/aarch64-linux-gnu/include/bits/stdlib-float.h \
+  /usr/aarch64-linux-gnu/include/bits/stdlib.h \
+  /usr/aarch64-linux-gnu/include/stdio.h \
+  /usr/lib/gcc/aarch64-linux-gnu/13/include/stdarg.h \
+  /usr/aarch64-linux-gnu/include/bits/types/__fpos_t.h \
+  /usr/aarch64-linux-gnu/include/bits/types/__mbstate_t.h \
+  /usr/aarch64-linux-gnu/include/bits/types/__fpos64_t.h \
+  /usr/aarch64-linux-gnu/include/bits/types/__FILE.h \
+  /usr/aarch64-linux-gnu/include/bits/types/FILE.h \
+  /usr/aarch64-linux-gnu/include/bits/types/struct_FILE.h \
+  /usr/aarch64-linux-gnu/include/bits/types/cookie_io_functions_t.h \
+  /usr/aarch64-linux-gnu/include/bits/stdio_lim.h \
+  /usr/aarch64-linux-gnu/include/bits/stdio2-decl.h \
+  /usr/aarch64-linux-gnu/include/bits/stdio.h \
+  /usr/aarch64-linux-gnu/include/bits/stdio2.h \
+  /usr/lib/gcc/aarch64-linux-gnu/13/include/limits.h \
+  /usr/lib/gcc/aarch64-linux-gnu/13/include/syslimits.h \
+  /usr/aarch64-linux-gnu/include/limits.h \
+  /usr/aarch64-linux-gnu/include/bits/posix1_lim.h \
+  /usr/aarch64-linux-gnu/include/bits/local_lim.h \
+  /usr/aarch64-linux-gnu/include/linux/limits.h \
+  /usr/aarch64-linux-gnu/include/bits/pthread_stack_min-dynamic.h \
+  /usr/aarch64-linux-gnu/include/bits/pthread_stack_min.h \
+  /usr/aarch64-linux-gnu/include/bits/posix2_lim.h \
+  /usr/aarch64-linux-gnu/include/ctype.h \
+  /usr/aarch64-linux-gnu/include/arpa/inet.h \
+  /usr/aarch64-linux-gnu/include/netinet/in.h \
+  /usr/aarch64-linux-gnu/include/bits/stdint-uintn.h \
+  /usr/aarch64-linux-gnu/include/sys/socket.h \
+  /usr/aarch64-linux-gnu/include/bits/types/struct_iovec.h \
+  /usr/aarch64-linux-gnu/include/bits/socket.h \
+  /usr/aarch64-linux-gnu/include/bits/socket_type.h \
+  /usr/aarch64-linux-gnu/include/bits/sockaddr.h \
+  /usr/aarch64-linux-gnu/include/asm/socket.h \
+  /usr/aarch64-linux-gnu/include/asm-generic/socket.h \
+  /usr/aarch64-linux-gnu/include/linux/posix_types.h \
+  /usr/aarch64-linux-gnu/include/linux/stddef.h \
+  /usr/aarch64-linux-gnu/include/asm/posix_types.h \
+  /usr/aarch64-linux-gnu/include/asm-generic/posix_types.h \
+  /usr/aarch64-linux-gnu/include/asm/bitsperlong.h \
+  /usr/aarch64-linux-gnu/include/asm-generic/bitsperlong.h \
+    $(wildcard include/config/64bit.h) \
+  /usr/aarch64-linux-gnu/include/asm/sockios.h \
+  /usr/aarch64-linux-gnu/include/asm-generic/sockios.h \
+  /usr/aarch64-linux-gnu/include/bits/types/struct_osockaddr.h \
+  /usr/aarch64-linux-gnu/include/bits/socket2.h \
+  /usr/aarch64-linux-gnu/include/bits/in.h \
+
+scripts/basic/fixdep: $(deps_scripts/basic/fixdep)
+
+$(deps_scripts/basic/fixdep):

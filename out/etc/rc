@@ -1,0 +1,10 @@
+#!/bin/sh
+# CLASSIFICATION: COMMUNITY
+# Filename: rc v0.1
+# Author: Lukas Bower
+# Date Modified: 2026-01-20
+
+# Minimal placeholder for Plan9 rc.
+script="${1:-/boot/rc.local}"
+[ -f "$script" ] && . "$script"
+exec /bin/sh
