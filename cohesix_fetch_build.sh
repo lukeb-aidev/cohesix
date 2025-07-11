@@ -613,9 +613,12 @@ ensure_plan9_ns() {
   fi
   mkdir -p "$STAGE_DIR/etc"
   if cp "$ns_path" "$STAGE_DIR/etc/plan9.ns"; then
+    mkdir -p "$ROOT/out/etc"
+    cp "$ns_path" "$ROOT/out/etc/plan9.ns"
     log "✅ plan9.ns staged"
   else
-    log "⚠️ plan9.ns staging failed"
+    echo "❌ plan9.ns staging failed" >&2
+    return 1
   fi
 }
 

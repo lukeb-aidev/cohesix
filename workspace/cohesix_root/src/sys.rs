@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: sys.rs v0.4
+// Filename: sys.rs v0.5
 // Author: Lukas Bower
-// Date Modified: 2027-12-27
+// Date Modified: 2027-12-31
 
 use core::ffi::c_char;
 use core::sync::atomic::{compiler_fence, Ordering};
@@ -55,29 +55,33 @@ pub unsafe extern "C" fn seL4_Yield() {
     );
 }
 
+const ENOENT: i32 = -2;
+const EBADF: i32 = -9;
+const ENOSYS: i32 = -38;
+
 #[no_mangle]
 pub unsafe extern "C" fn coh_open(_path: *const c_char, _flags: i32, _mode: i32) -> i32 {
-    -1
+    ENOENT
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn coh_read(_fd: i32, _buf: *mut u8, _len: usize) -> isize {
-    -1
+    EBADF as isize
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn coh_close(_fd: i32) -> i32 {
-    -1
+    EBADF
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn coh_write(_fd: i32, _buf: *const u8, _len: usize) -> isize {
-    -1
+    EBADF as isize
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn coh_exec(_path: *const c_char, _argv: *const *const c_char) -> i32 {
-    -1
+    ENOENT
 }
 
 #[no_mangle]
@@ -87,12 +91,12 @@ pub unsafe extern "C" fn coh_getenv(_name: *const c_char) -> *const c_char {
 
 #[no_mangle]
 pub unsafe extern "C" fn coh_setenv(_name: *const c_char, _val: *const c_char, _overwrite: i32) -> i32 {
-    -1
+    ENOSYS
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn coh_bind(_name: *const c_char, _old: *const c_char, _flags: i32) -> i32 {
-    -1
+    ENOENT
 }
 
 pub fn coh_log(msg: &str) {

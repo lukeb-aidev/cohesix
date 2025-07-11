@@ -1,12 +1,11 @@
 #!/bin/sh
 # CLASSIFICATION: COMMUNITY
-# Filename: init v0.3
+# Filename: init v0.4
 # Author: Lukas Bower
-# Date Modified: 2027-12-10
+# Date Modified: 2027-12-31
 
 # Launch Plan9 rc if available, otherwise fallback to sh
-echo COHESIX_BOOT_OK
-echo "COHESIX USERLAND BOOT OK"
+echo COHESIX_USERLAND_BOOT_OK
 if [ -x /bin/rc ]; then
     exec /bin/rc "$@"
 fi
