@@ -22,6 +22,7 @@ rustflags = [
     "-C", "link-arg=-z",
     "-C", "link-arg=max-page-size=0x1000",
     "-C", "link-arg=--gc-sections",
+    "-C", "link-arg=-L../third_party/seL4/lib",
 ]
 
 [target.sel4-aarch64.unstable]
