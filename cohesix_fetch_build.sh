@@ -33,6 +33,11 @@ if [[ "$HOST_ARCH" = "aarch64" ]] && ! command -v aarch64-linux-gnu-gcc >/dev/nu
 fi
 # Fetch and fully build the Cohesix project using SSH Git auth.
 
+# Ensure ROOT is always set
+ROOT="${ROOT:-$HOME/cohesix}"
+export ROOT
+LOG_DIR="$ROOT/logs"
+mkdir -p "$LOG_DIR"
 set -euxo pipefail
 # Early virtualenv setup
 VENV_DIR=".venv_${HOST_ARCH}"
