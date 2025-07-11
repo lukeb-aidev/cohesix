@@ -124,9 +124,9 @@
 | linker.ld | v0.1 | 2025-07-22 | COMMUNITY | | |
 | link.ld | v0.16 | 2027-12-27 | COMMUNITY | | |
 | target-sel4.json | v0.2 | 2027-12-11 | COMMUNITY | | |
-| sel4-aarch64.json | v0.4 | 2027-12-28 | COMMUNITY | | |
+| sel4-aarch64.json | v0.5 | 2027-12-31 | COMMUNITY | | |
 | .bashrc | v0.1 | 2026-08-09 | COMMUNITY | | |
-| .cargo/config.toml | v0.19 | 2027-12-11 | COMMUNITY | | |
+| .cargo/config.toml | v0.20 | 2027-12-31 | COMMUNITY | | |
 | build.rs | v0.8 | 2026-08-21 | COMMUNITY | | |
 | Makefile | v0.52 | 2027-09-30 | COMMUNITY | | |
 | src/kernel/main.c | v0.2 | 2025-07-22 | COMMUNITY | | |
@@ -264,8 +264,9 @@
 | src/bin/cohesix_root.rs | v0.4 | 2027-08-13 | COMMUNITY | | |
 | src/bin/cloud.rs | v0.1 | 2027-09-01 | COMMUNITY | | |
 | src/utils/gpu.rs | v0.2 | 2026-12-31 | COMMUNITY | | |
-| workspace/cohesix_root/Cargo.toml | v0.6 | 2027-11-05 | COMMUNITY | | |
-| workspace/cohesix_root/link.ld | v0.17 | 2027-12-27 | COMMUNITY | | |
+| workspace/cohesix_root/Cargo.toml | v0.7 | 2027-12-31 | COMMUNITY | | |
+| workspace/cohesix_root/link.ld | v0.18 | 2027-12-31 | COMMUNITY | | |
+| workspace/cohesix_root/build.rs | v0.1 | 2027-12-31 | COMMUNITY | | |
 | workspace/cohesix_root/src/main.rs | v0.39 | 2025-07-11 | COMMUNITY | | |
 | workspace/cohesix_root/src/lang_items.rs | v0.1 | 2027-10-12 | COMMUNITY | | |
 | workspace/cohesix_root/src/entry.S | v0.20 | 2027-12-26 | COMMUNITY | | |
@@ -366,6 +367,8 @@
 | docs/community/diagnostics/POTENTIAL_BOOT_BLOCKERS.txt | v0.1 | 2027-12-31 | COMMUNITY | | |
 | docs/community/diagnostics/FOOLPROOF_FIX_PLAN.txt | v0.1 | 2027-12-31 | COMMUNITY | | |
 | docs/community/diagnostics/FIX_QEMU_AND_RUST_207.md | v0.1 | 2025-07-11 | COMMUNITY | | |
+| docs/community/diagnostics/STATIC_LINK_FIX_REPORT.md | v0.1 | 2027-12-31 | COMMUNITY | | |
+| docs/community/diagnostics/STATIC_LINK_FIX_VALIDATION.md | v0.1 | 2027-12-31 | COMMUNITY | | |
 | docs/community/governance/COHESIX_AARCH64_BUILD.md | v1.1 | 2027-12-28 | COMMUNITY | | |
 | tests/Cohesix/test_cli_cap.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
 | tests/Cohesix/test_cloud.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
