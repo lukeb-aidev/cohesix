@@ -110,11 +110,11 @@ if [ ! -f "$LIB_PATH" ]; then
   cd "$ROOT"
   log "✅ libsel4.a staged at $LIB_PATH"
   [ -f "$LIB_PATH" ] || { echo "❌ libsel4.a not found after build" >&2; exit 1; }
-  # Explicitly stage kernel.elf and elfloader using absolute build paths
-  mkdir -p "$ROOT/out/bin"
-  cp "$ROOT/third_party/seL4/projects/sel4test/build_qemu_arm/kernel/kernel.elf" "$ROOT/out/bin/kernel.elf"
-  cp "$ROOT/third_party/seL4/projects/sel4test/build_qemu_arm/elfloader/elfloader" "$ROOT/out/bin/elfloader"
 fi
+# Always stage kernel.elf and elfloader after libsel4.a check
+mkdir -p "$ROOT/out/bin"
+cp "$ROOT/third_party/seL4/projects/sel4test/build_qemu_arm/kernel/kernel.elf" "$ROOT/out/bin/kernel.elf"
+cp "$ROOT/third_party/seL4/projects/sel4test/build_qemu_arm/elfloader/elfloader" "$ROOT/out/bin/elfloader"
 mkdir -p "$LOG_DIR"
 
 
@@ -558,6 +558,7 @@ fi
 # -----------------------------------------------------------
 # Build CPIO archive for elfloader
 log "📦 Building CPIO archive with kernel.elf and cohesix_root.elf..."
+mkdir -p "$ROOT/out/boot"
 CPIO_IMAGE="$ROOT/out/boot/image.cpio"
 cd "$ROOT/out/bin"
 find kernel.elf cohesix_root.elf | cpio -o -H newc > "$CPIO_IMAGE"
