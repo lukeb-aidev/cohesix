@@ -85,12 +85,20 @@ log "🚀 Starting repository clone..."
 
 cd cohesix
 if [ ! -f "third_party/seL4/lib/libsel4.a" ]; then
-  echo "❌ third_party/seL4/lib/libsel4.a missing. Run third_party/seL4/fetch_sel4.sh and build seL4." >&2
-  exit 1
-fi
-if [ ! -d "$HOME/sel4_workspace" ]; then
-  echo "⚠️  sel4_workspace missing at $HOME/sel4_workspace. Create it using third_party/seL4/fetch_sel4.sh" >&2
-  exit 1
+  log "⚠️ libsel4.a missing, attempting local build in sel4_workspace..."
+  if [ ! -d "$HOME/sel4_workspace" ]; then
+    echo "❌ sel4_workspace missing at $HOME/sel4_workspace. Create it using third_party/seL4/fetch_sel4.sh" >&2
+    exit 1
+  fi
+  cd "$HOME/sel4_workspace"
+  cmake . -DPLATFORM=qemu-arm-virt -DAARCH64=1 -DRELEASE=1
+  ninja libsel4.a
+  mkdir -p "$ROOT/third_party/seL4/lib"
+  cp "$HOME/sel4_workspace/libsel4/libsel4.a" "$ROOT/third_party/seL4/lib/"
+  mkdir -p "$ROOT/third_party/seL4/include"
+  cp -r "$HOME/sel4_workspace/libsel4/include"/* "$ROOT/third_party/seL4/include/"
+  cd "$ROOT"
+  log "✅ libsel4.a built and staged under third_party/seL4/"
 fi
 mkdir -p "$LOG_DIR"
 
