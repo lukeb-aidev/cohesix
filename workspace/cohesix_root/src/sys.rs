@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: sys.rs v0.5
+// Filename: sys.rs v0.6
 // Author: Lukas Bower
-// Date Modified: 2027-12-31
+// Date Modified: 2025-07-11
 
 use core::ffi::c_char;
 use core::sync::atomic::{compiler_fence, Ordering};
@@ -57,6 +57,7 @@ pub unsafe extern "C" fn seL4_Yield() {
 
 const ENOENT: i32 = -2;
 const EBADF: i32 = -9;
+const EINVAL: i32 = -22;
 const ENOSYS: i32 = -38;
 
 #[no_mangle]

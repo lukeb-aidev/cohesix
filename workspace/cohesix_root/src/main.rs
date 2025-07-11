@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: main.rs v0.38
+// Filename: main.rs v0.39
 // Author: Lukas Bower
-// Date Modified: 2027-12-26
+// Date Modified: 2025-07-11
 #![no_std]
 #![no_main]
 #![feature(alloc_error_handler, asm_experimental_arch, lang_items)]
@@ -309,7 +309,10 @@ fn load_bootargs() {
         let mut buf = [0u8; 256];
         let n = sys::coh_read(fd, buf.as_mut_ptr(), buf.len()) as usize;
         sys::coh_close(fd);
-        let text = core::str::from_utf8_unchecked(&buf[..n]);
+        let text = match core::str::from_utf8(&buf[..n]) {
+            Ok(t) => t,
+            Err(_) => return,
+        };
         let bytes = text.as_bytes();
         let mut i = 0;
         while i < bytes.len() {
@@ -323,7 +326,10 @@ fn load_bootargs() {
             while i < bytes.len() && !bytes[i].is_ascii_whitespace() {
                 i += 1;
             }
-            let token = core::str::from_utf8_unchecked(&bytes[start..i]);
+            let token = match core::str::from_utf8(&bytes[start..i]) {
+                Ok(t) => t,
+                Err(_) => { continue; }
+            };
             if let Some(eq) = token.find('=') {
                 let (k, v) = token.split_at(eq);
                 let v = &v[1..];
