@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v1.8
+# Filename: cohesix_fetch_build.sh v1.9
 # Author: Lukas Bower
-# Date Modified: 2027-12-30
+# Date Modified: 2027-12-31
 #!/usr/bin/env bash
 #
 # Merged old script v0.89 features into current script.
@@ -91,14 +91,22 @@ if [ ! -f "third_party/seL4/lib/libsel4.a" ]; then
     exit 1
   fi
   cd "$HOME/sel4_workspace"
-  cmake . -DPLATFORM=qemu-arm-virt -DAARCH64=1 -DRELEASE=1
+  ./init-build.sh -DPLATFORM=qemu-arm-virt -DAARCH64=1 -DRELEASE=1
+  BUILD_DIR="$(find . -maxdepth 1 -type d -name 'build_*' | head -n 1)"
+  if [ -z "$BUILD_DIR" ]; then
+    echo "❌ Could not locate seL4 build directory" >&2
+    exit 1
+  fi
+  cd "$BUILD_DIR"
   ninja libsel4.a
   mkdir -p "$ROOT/third_party/seL4/lib"
-  cp "$HOME/sel4_workspace/libsel4/libsel4.a" "$ROOT/third_party/seL4/lib/"
+  cp libsel4/libsel4.a "$ROOT/third_party/seL4/lib/"
   mkdir -p "$ROOT/third_party/seL4/include"
-  cp -r "$HOME/sel4_workspace/libsel4/include"/* "$ROOT/third_party/seL4/include/"
+  cp -r libsel4/include/* "$ROOT/third_party/seL4/include/"
   cd "$ROOT"
-  log "✅ libsel4.a built and staged under third_party/seL4/"
+  SEL4_PATH="$(find third_party/seL4 -name libsel4.a | head -n 1)"
+  log "✅ libsel4.a staged at $SEL4_PATH"
+  [ -f "$SEL4_PATH" ] || { echo "❌ libsel4.a not found after build" >&2; exit 1; }
 fi
 mkdir -p "$LOG_DIR"
 
