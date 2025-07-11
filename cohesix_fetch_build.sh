@@ -95,8 +95,8 @@ LIB_PATH="$ROOT/third_party/seL4/lib/libsel4.a"
 if [ ! -f "$LIB_PATH" ]; then
   log "⚠️ libsel4.a missing, building in-place under third_party/seL4..."
   cd "$ROOT/third_party/seL4"
-  ./init-build.sh -DPLATFORM=qemu-arm-virt -DAARCH64=1 -DRELEASE=1 \
-    -DCROSS_COMPILER_PREFIX=aarch64-linux-gnu- | tee -a "$TRACE_LOG"
+  
+  ls | tee -a "$TRACE_LOG"
   BUILD_DIR="$(find . -maxdepth 1 -type d -name 'build_*' | head -n 1)"
   if [ -z "$BUILD_DIR" ]; then
     echo "❌ Could not locate seL4 build directory" >&2
@@ -115,10 +115,21 @@ if [ ! -f "$LIB_PATH" ]; then
   log "✅ libsel4.a staged at $LIB_PATH"
   [ -f "$LIB_PATH" ] || { echo "❌ libsel4.a not found after build" >&2; exit 1; }
 fi
-# Always stage kernel.elf and elfloader after libsel4.a check
+
+# Build and stage seL4 kernel in release mode
+log "🚀 Building seL4 kernel in release mode..."
+cd ~/sel4_workspace
+rm -rf build_release
+mkdir build_release
+cd build_release
+
+../init-build.sh -C ../easy-settings.cmake -GNinja
+ninja kernel.elf
+
 mkdir -p "$ROOT/out/bin"
-cp "$SEL4_WORKSPACE/projects/sel4test/build_qemu_arm/kernel/kernel.elf" "$ROOT/out/bin/kernel.elf"
+cp kernel/kernel.elf "$ROOT/out/bin/kernel.elf"
 cp "$SEL4_WORKSPACE/projects/sel4test/build_qemu_arm/elfloader/elfloader" "$ROOT/out/bin/elfloader"
+log "✅ kernel.elf staged at $ROOT/out/bin/kernel.elf"
 mkdir -p "$LOG_DIR"
 
 
