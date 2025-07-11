@@ -85,12 +85,8 @@ log "🚀 Starting repository clone..."
 
 cd cohesix
 if [ ! -f "third_party/seL4/lib/libsel4.a" ]; then
-  log "⚠️ libsel4.a missing, attempting local build in sel4_workspace..."
-  if [ ! -d "$HOME/sel4_workspace" ]; then
-    echo "❌ sel4_workspace missing at $HOME/sel4_workspace. Create it using third_party/seL4/fetch_sel4.sh" >&2
-    exit 1
-  fi
-  cd "$HOME/sel4_workspace"
+  log "⚠️ libsel4.a missing, building in-place under third_party/seL4..."
+  cd "$ROOT/third_party/seL4"
   ./init-build.sh -DPLATFORM=qemu-arm-virt -DAARCH64=1 -DRELEASE=1
   BUILD_DIR="$(find . -maxdepth 1 -type d -name 'build_*' | head -n 1)"
   if [ -z "$BUILD_DIR" ]; then
