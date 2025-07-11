@@ -3249,3 +3249,7 @@
 ## [v0.517] - 2027-12-31
 ### Added
 - capture_and_push_debug.sh v0.3 adds ELF symbol checks and disassembly audit.
+
+## [v0.518] - 2025-07-11
+### Added
+- **InvestigateCohesixRootBootFail-274**: Documented the MMU fault analysis in `WHY_COHESIX_ROOT_FAILS_TO_BOOT_20250711.md` and verified allocator bounds and syscall stubs.
