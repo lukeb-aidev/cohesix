@@ -3236,3 +3236,7 @@
 ## [v0.514] - 2027-12-31
 ### Fixed
 - **FixCohesixUserlandBoot-206**: Updated syscall stubs with errno values, ensured `plan9.ns` is reliably staged, and `init` prints `COHESIX_USERLAND_BOOT_OK`. Added boot fix summary under diagnostics.
+
+## [v0.515] - 2025-07-11
+### Added
+- **EnableQemuDeepDebugAndRustAudit-207**: Enhanced `cohesix_fetch_build.sh` with persistent `-serial mon:stdio` logging and deeper QEMU trace flags when `DEBUG_QEMU=1`. Added structured QEMU logs. Hardened boot path Rust by validating UTF-8 parsing and defining `EINVAL` in `sys.rs`.
