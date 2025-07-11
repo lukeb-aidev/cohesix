@@ -57,15 +57,14 @@ else
   echo "✅ No libc/musl symbols found"
 fi
 
-
-echo "👉 Dumping disassembly..."
-if command -v llvm-objdump &>/dev/null; then
-  llvm-objdump -d "$COHESIX_ELF" > "$DIAG_DIR/cohesix_root_disasm.txt"
-  llvm-objdump -D "$COHESIX_ELF" > "$DIAG_DIR/cohesix_root_full_disasm.txt"
+echo "👉 Dumping full disassembly with llvm-objdump..."
+if command -v llvm-objdump &> /dev/null; then
+  llvm-objdump -d "$COHESIX_ELF" > "$DIAG_DIR/cohesix_root_full_disasm_llvm.txt"
+  echo "✅ llvm-objdump completed."
 else
-  objdump -d "$COHESIX_ELF" > "$DIAG_DIR/cohesix_root_disasm.txt"
-  objdump -D "$COHESIX_ELF" > "$DIAG_DIR/cohesix_root_full_disasm.txt"
+  echo "⚠️ llvm-objdump not found. Skipping."
 fi
+
 grep -nE '\b(call|bl)\b' "$DIAG_DIR/cohesix_root_full_disasm.txt" | grep -vE '(seL4_|coh_|core::|alloc::|rust_begin_unwind)' > "$DIAG_DIR/cohesix_root_suspicious_calls.txt" || true
 if [ -s "$DIAG_DIR/cohesix_root_suspicious_calls.txt" ]; then
   echo "⚠️ Suspicious external calls detected:"
