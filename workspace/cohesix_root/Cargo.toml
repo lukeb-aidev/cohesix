@@ -1,12 +1,14 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Cargo.toml v0.6
+# Filename: Cargo.toml v0.7
 # Author: Lukas Bower
-# Date Modified: 2027-11-05
+# Date Modified: 2027-12-31
 
 [package]
 name = "cohesix_root"
 version = "0.2.0"
 edition = "2021"
+build = "build.rs"
+links = "sel4"
 
 
 [dependencies]
@@ -31,6 +33,9 @@ strip = "symbols"
 opt-level = 0
 debug = false
 debug-assertions = false
+
+[build-dependencies]
+cc = "1"
 
 # Ensures we keep this crate minimal and no_std compatible
 [package.metadata]
