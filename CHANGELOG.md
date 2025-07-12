@@ -3315,3 +3315,7 @@
 ## [v0.519] - 2025-07-12
 ### Fixed
 - **FixCohesixSyscallsAndBootUserland-080**: Implemented minimal syscall handlers in `sys.rs` that load `/bin/init` directly and print `COHESIX_USERLAND_BOOT_OK`. Boot fix trace recorded in `workspace/logs/boot_fix_trace.md`.
+
+## [v0.528] - 2027-12-31
+### Changed
+- **FixSel4EnvScriptHeader-080**: Updated `scripts/setup_cohesix_sel4_env.sh` to use valid Bash comments, place the shebang first, and exit cleanly.

@@ -1,8 +1,8 @@
-// CLASSIFICATION: COMMUNITY
-// Filename: setup_cohesix_sel4_env.sh v0.6
-// Author: Lukas Bower
-// Date Modified: 2027-12-31
 #!/usr/bin/env bash
+# CLASSIFICATION: COMMUNITY
+# Filename: setup_cohesix_sel4_env.sh v0.7
+# Author: Lukas Bower
+# Date Modified: 2027-12-31
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -43,3 +43,4 @@ for d in kernel projects tools; do
 done
 
 msg "✅ Cohesix seL4 environment is ready."
+exit 0
