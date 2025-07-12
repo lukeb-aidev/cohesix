@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: main.rs v0.39
+// Filename: main.rs v0.40
 // Author: Lukas Bower
-// Date Modified: 2025-07-11
+// Date Modified: 2027-12-31
 #![no_std]
 #![no_main]
 #![feature(alloc_error_handler, asm_experimental_arch, lang_items)]
@@ -11,6 +11,7 @@ extern crate alloc;
 mod allocator;
 mod lang_items;
 mod sys;
+mod bootinfo;
 
 use core::arch::global_asm;
 global_asm!(include_str!("entry.S"));
@@ -478,6 +479,7 @@ pub extern "C" fn main() {
     check_globals_zero();
     coherr!("boot_ok: bss, heap, globals validated");
     crate::allocator::allocator_init_log();
+    unsafe { bootinfo::dump_bootinfo(); }
     coherr!("main_start bss_start={:#x} bss_end={:#x} heap_start={:#x} heap_ptr={:#x} heap_end={:#x} img_end={:#x}",
         unsafe { &__bss_start as *const u8 as usize },
         unsafe { &__bss_end as *const u8 as usize },
