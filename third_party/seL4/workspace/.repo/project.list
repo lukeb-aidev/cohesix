@@ -1,0 +1,10 @@
+kernel
+projects/musllibc
+projects/seL4_libs
+projects/sel4_projects_libs
+projects/sel4runtime
+projects/sel4test
+projects/util_libs
+tools/nanopb
+tools/opensbi
+tools/seL4

@@ -1,0 +1,47 @@
+[core]
+	repositoryFormatVersion = 1
+	filemode = true
+[filter "lfs"]
+	smudge = git-lfs smudge --skip -- %f
+	process = git-lfs filter-process --skip
+[repo]
+	depth = 1
+	existingprojectcount = 0
+	newprojectcount = 10
+[remote "origin"]
+	url = https://github.com/seL4/sel4test-manifest.git
+	fetch = +refs/heads/*:refs/remotes/origin/*
+[manifest]
+	platform = auto
+[extensions]
+	preciousObjects = true
+[branch "default"]
+	remote = origin
+	merge = refs/heads/master
+[repo "syncstate.main"]
+	synctime = 2025-07-12T12:00:18.598576+00:00
+	version = 1
+[repo "syncstate.sys"]
+	argv = ['/home/ubuntu/cohesix/third_party/seL4/workspace/.repo/repo/main.py', '--repo-dir=/home/ubuntu/cohesix/third_party/seL4/workspace/.repo', '--wrapper-version=2.36', '--wrapper-path=/usr/bin/repo', '--', 'sync']
+[repo "syncstate.options"]
+	jobs = 4
+	outermanifest = true
+	jobsnetwork = 1
+	jobscheckout = 4
+	mpupdate = true
+	clonebundle = true
+	retryfetches = 0
+	prune = true
+	repoverify = true
+	quiet = false
+	verbose = false
+[repo "syncstate.repo"]
+	depth = 1
+	existingprojectcount = 0
+	newprojectcount = 10
+[repo "syncstate.remote.origin"]
+	url = https://github.com/seL4/sel4test-manifest.git
+	fetch = +refs/heads/*:refs/remotes/origin/*
+[repo "syncstate.branch.default"]
+	remote = origin
+	merge = refs/heads/master
