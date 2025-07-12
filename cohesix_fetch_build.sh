@@ -37,7 +37,7 @@ fi
 ROOT="${ROOT:-$HOME/cohesix}"
 export ROOT
 
-SEL4_WORKSPACE="${SEL4_WORKSPACE:-$ROOT/third_party/seL4}"
+SEL4_WORKSPACE="${SEL4_WORKSPACE:-$ROOT/third_party/seL4/workspace}"
 export SEL4_WORKSPACE
 LOG_DIR="$ROOT/logs"
 mkdir -p "$LOG_DIR"
