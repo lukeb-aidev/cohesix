@@ -3275,6 +3275,10 @@
   create a deterministic seL4 build environment, cloning the pinned commit,
   installing toolchains, and building `kernel.elf` and `elfloader` for
   `cohesix_fetch_build.sh`.
+### Changed
+- **TestImproveSeL4EnvScript-054**: Enhanced `setup_cohesix_sel4_env.sh` for
+  idempotent workspace setup, robust commit handling, and improved
+  toolchain checks. Logs now write to `~/cohesix/logs`.
 
 ## [v0.518] - 2025-07-11
 ### Added

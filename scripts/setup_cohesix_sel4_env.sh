@@ -1,31 +1,51 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: setup_cohesix_sel4_env.sh v0.1
+# Filename: setup_cohesix_sel4_env.sh v0.2
 # Author: Lukas Bower
 # Date Modified: 2027-12-31
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LOG_DIR="$ROOT/logs"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null || cd "$SCRIPT_DIR/.." && pwd)"
+LOG_DIR="$HOME/cohesix/logs"
 mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/setup_sel4_$(date +%Y%m%d_%H%M%S).log"
 exec > >(tee -a "$LOG_FILE") 2>&1
 
+if command -v sudo >/dev/null 2>&1; then
+    SUDO=sudo
+else
+    SUDO=""
+fi
+
 echo "🔧 Cohesix seL4 environment setup starting..."
 
 SEL4_DIR="$ROOT/third_party/seL4"
-SEL4_COMMIT="$(cat "$SEL4_DIR/COMMIT")"
+SEL4_COMMIT_FILE="$SEL4_DIR/COMMIT"
+if [ -f "$SEL4_COMMIT_FILE" ]; then
+    SEL4_COMMIT="$(cat "$SEL4_COMMIT_FILE")"
+else
+    SEL4_COMMIT="c8ee04268800a5b14dd565032dc969d7a2f621cc"
+    echo "⚠️ COMMIT file missing. Falling back to $SEL4_COMMIT" >&2
+fi
 WORKSPACE="$SEL4_DIR/workspace"
 BUILD_DIR="$WORKSPACE/build_release"
 
-echo "🌐 Removing old workspaces..."
-rm -rf "$HOME/sel4_workspace" "$ROOT/sel4_workspace" "$WORKSPACE"
-
-echo "📥 Cloning seL4 workspace..."
-mkdir -p "$WORKSPACE"
-cd "$WORKSPACE"
-repo init -u https://github.com/seL4/sel4test-manifest.git --depth=1
-repo sync
+if [ ! -d "$WORKSPACE/sel4" ]; then
+    echo "📥 Cloning seL4 workspace..."
+    mkdir -p "$WORKSPACE"
+    cd "$WORKSPACE"
+    if ! command -v repo >/dev/null 2>&1; then
+        echo "🔧 Installing repo tool..."
+        $SUDO apt-get update -y && $SUDO apt-get install -y repo
+    fi
+    repo init -u https://github.com/seL4/sel4test-manifest.git --depth=1
+    repo sync
+else
+    echo "🔄 Updating existing seL4 workspace..."
+    cd "$WORKSPACE"
+    repo sync
+fi
 cd "$WORKSPACE/sel4"
 git fetch origin "$SEL4_COMMIT" --depth 1
 git checkout -q "$SEL4_COMMIT"
@@ -34,10 +54,16 @@ ln -sfn "$WORKSPACE" "$HOME/sel4_workspace"
 ln -sfn "$WORKSPACE" "$ROOT/sel4_workspace"
 
 echo "🔧 Installing toolchains..."
-DEPS=(cmake ninja-build gcc-aarch64-linux-gnu g++-aarch64-linux-gnu python3-venv repo)
-if command -v sudo >/dev/null 2>&1; then SUDO=sudo; else SUDO=""; fi
+DEPS=(cmake ninja-build gcc-aarch64-linux-gnu g++-aarch64-linux-gnu python3-venv repo dtc)
 $SUDO apt-get update -y
 $SUDO apt-get install -y "${DEPS[@]}"
+
+CMAKE_MAJOR="$(cmake --version | head -n1 | awk '{print $3}' | cut -d. -f1)"
+CMAKE_MINOR="$(cmake --version | head -n1 | awk '{print $3}' | cut -d. -f2)"
+if [ "$CMAKE_MAJOR" -lt 3 ] || { [ "$CMAKE_MAJOR" -eq 3 ] && [ "$CMAKE_MINOR" -lt 20 ]; }; then
+    echo "❌ CMake >= 3.20 required" >&2
+    exit 1
+fi
 
 if ! command -v rustup >/dev/null 2>&1; then
     curl https://sh.rustup.rs -sSf | sh -s -- -y
@@ -45,6 +71,7 @@ if ! command -v rustup >/dev/null 2>&1; then
 fi
 rustup target add aarch64-unknown-linux-gnu
 rustup component add rust-src
+command -v aarch64-linux-gnu-gcc >/dev/null 2>&1 || { echo "❌ aarch64 toolchain missing" >&2; exit 1; }
 
 cd "$ROOT"
 VENV_DIR=".venv_sel4"
@@ -56,18 +83,23 @@ pip install --upgrade pip
 
 echo "🏗️ Building seL4 kernel and elfloader..."
 cd "$WORKSPACE"
-rm -rf build_release
-mkdir build_release
-cd build_release
-../init-build.sh -C ../easy-settings.cmake -GNinja
-ninja kernel.elf elfloader libsel4.a
+if [ ! -f "$BUILD_DIR/kernel/kernel.elf" ] || [ ! -f "$BUILD_DIR/elfloader/elfloader" ] || [ ! -f "$BUILD_DIR/libsel4/libsel4.a" ]; then
+    rm -rf "$BUILD_DIR"
+    mkdir -p "$BUILD_DIR"
+    cd "$BUILD_DIR"
+    ../init-build.sh -C ../easy-settings.cmake -GNinja
+    ninja kernel.elf elfloader libsel4.a
+else
+    echo "✅ Existing build artifacts found; skipping rebuild"
+    cd "$BUILD_DIR"
+fi
 
-file kernel/kernel.elf | grep -q "AArch64"
-file elfloader/elfloader | grep -q "AArch64"
-readelf -h kernel/kernel.elf | grep -q "AArch64"
+file "$BUILD_DIR/kernel/kernel.elf" | grep -q "AArch64"
+file "$BUILD_DIR/elfloader/elfloader" | grep -q "AArch64"
+readelf -h "$BUILD_DIR/kernel/kernel.elf" | grep -q "AArch64"
 
 mkdir -p "$SEL4_DIR/lib" "$SEL4_DIR/include"
-cp libsel4/libsel4.a "$SEL4_DIR/lib/"
-cp -r libsel4/include/* "$SEL4_DIR/include/"
+cp "$BUILD_DIR/libsel4/libsel4.a" "$SEL4_DIR/lib/"
+cp -r "$BUILD_DIR/libsel4/include"/* "$SEL4_DIR/include/"
 
 echo "✅ seL4 environment ready"
