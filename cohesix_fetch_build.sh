@@ -918,3 +918,4 @@ log "QEMU console saved to $QEMU_CONSOLE"
 log "✅ QEMU bare metal boot test complete."
 
 
+

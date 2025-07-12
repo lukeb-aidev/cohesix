@@ -6,7 +6,7 @@
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 COMMIT="$(cat "$SCRIPT_DIR/COMMIT")"
-DEST="${SEL4_WORKSPACE:-$HOME/sel4_workspace}"
+DEST="${SEL4_WORKSPACE:-$HOME/cohesix/third_party/seL4/workspace}"
 
 if [ -d "$DEST" ]; then
     echo "seL4 workspace already exists at $DEST"
@@ -20,9 +20,9 @@ fi
 
 mkdir -p "$DEST"
 cd "$DEST"
-repo init -u https://github.com/seL4/sel4test-manifest.git --depth=1
+repo init -u https://github.com/seL4/sel4-manifest.git --depth=1
 repo sync
-cd "$DEST/sel4"
+cd "$DEST/kernel"
 git fetch origin "$COMMIT" --depth 1
 git checkout -q "$COMMIT"
 echo "✅ seL4 workspace ready at $DEST"
