@@ -3263,6 +3263,12 @@
   clean AArch64 rebuilds, kernel orchestration via `build_sel4.sh`, strict ELF
   validation, and BootInfo-based logging in `cohesix_root`.
 
+## [v0.522] - 2027-12-31
+### Changed
+- **AlignCohesixBuildPipeline-006**: Updated `build_root_elf.sh` to use the
+  `sel4-aarch64.json` target for explicit `libsel4` linkage and static build
+  flags, ensuring coherence with `COHESIX_AARCH64_BUILD.md`.
+
 ## [v0.518] - 2025-07-11
 ### Added
 - **InvestigateCohesixRootBootFail-274**: Documented the MMU fault analysis in `WHY_COHESIX_ROOT_FAILS_TO_BOOT_20250711.md` and verified allocator bounds and syscall stubs.

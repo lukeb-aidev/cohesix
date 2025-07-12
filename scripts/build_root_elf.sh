@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: build_root_elf.sh v0.19
+# Filename: build_root_elf.sh v0.20
 # Author: Lukas Bower
-# Date Modified: 2027-01-15
+# Date Modified: 2027-12-31
 #!/usr/bin/env bash
 set -euo pipefail
 export MEMCHR_DISABLE_RUNTIME_CPU_FEATURE_DETECTION=1
@@ -76,9 +76,12 @@ fi
 
 mkdir -p "$OUT_DIR"
 
-cargo build --release --target=target-sel4.json --bin cohesix_root
+cargo +nightly build -p cohesix_root --release \
+  --target=workspace/cohesix_root/sel4-aarch64.json \
+  -Z build-std=core,alloc,compiler_builtins \
+  -Z build-std-features=compiler-builtins-mem
 
-local_target="target/target-sel4/release/cohesix_root"
+local_target="target/sel4-aarch64/release/cohesix_root"
 if [ ! -s "$local_target" ]; then
     local_target="${local_target}.elf"
 fi
