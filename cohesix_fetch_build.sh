@@ -1,5 +1,5 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v1.13
+# Filename: cohesix_fetch_build.sh v1.14
 # Author: Lukas Bower
 # Date Modified: 2027-12-31
 #!/usr/bin/env bash
@@ -119,11 +119,25 @@ fi
 # Build and stage seL4 kernel in release mode
 log "🚀 Building seL4 kernel in release mode..."
 cd "$SEL4_WORKSPACE/workspace"
+
+# Verify seL4 workspace contents
+INIT_BUILD="$PWD/init-build.sh"
+for item in "$INIT_BUILD" "$PWD/kernel" "$PWD/projects" "$PWD/tools"; do
+  if [ ! -e "$item" ]; then
+    echo "❌ Missing seL4 component: $item" >&2
+    exit 1
+  fi
+done
+if [ ! -x "$INIT_BUILD" ]; then
+  echo "❌ init-build.sh not executable: $INIT_BUILD" >&2
+  exit 1
+fi
+
 rm -rf build_release
 mkdir build_release
 cd build_release
 
-../init-build.sh -DPLATFORM=qemu_arm_virt -DAARCH64=TRUE \
+"$INIT_BUILD" -DPLATFORM=qemu_arm_virt -DAARCH64=TRUE \
   -DCROSS_COMPILER_PREFIX=aarch64-linux-gnu- -GNinja
 ninja kernel.elf elfloader
 
