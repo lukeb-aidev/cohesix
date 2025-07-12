@@ -3294,6 +3294,13 @@
   `tools`, and `projects/sel4test` exist after repo sync. The script now checks
   out the kernel commit and logs successful workspace validation.
 
+## [v0.526] - 2027-12-31
+### Changed
+- **FixSeL4RepoGitValidation-063**: Revised `setup_cohesix_sel4_env.sh` to skip
+  standalone git remote checks when the workspace is managed by `repo`. The
+  script now logs `✅ seL4 workspace is under repo management. No standalone git
+  remote checks required.` and relies on `repo sync` for updates.
+
 ## [v0.518] - 2025-07-11
 ### Added
 - **InvestigateCohesixRootBootFail-274**: Documented the MMU fault analysis in `WHY_COHESIX_ROOT_FAILS_TO_BOOT_20250711.md` and verified allocator bounds and syscall stubs.
