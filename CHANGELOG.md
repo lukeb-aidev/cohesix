@@ -3280,6 +3280,13 @@
   idempotent workspace setup, robust commit handling, and improved
   toolchain checks. Logs now write to `~/cohesix/logs`.
 
+## [v0.524] - 2027-12-31
+### Changed
+- **FixSeL4RepoEnvScript-061**: Updated `setup_cohesix_sel4_env.sh` to validate
+  the workspace path, initialize repo under `third_party/seL4/workspace`, and
+  fail if `sel4`, `musllibc`, or `util_libs` are missing. Logs now reside under
+  `$ROOT/logs` and `cd` commands use full quoting for reliability.
+
 ## [v0.518] - 2025-07-11
 ### Added
 - **InvestigateCohesixRootBootFail-274**: Documented the MMU fault analysis in `WHY_COHESIX_ROOT_FAILS_TO_BOOT_20250711.md` and verified allocator bounds and syscall stubs.
