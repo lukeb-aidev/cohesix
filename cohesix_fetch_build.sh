@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v1.11
+# Filename: cohesix_fetch_build.sh v1.12
 # Author: Lukas Bower
-# Date Modified: 2025-07-11
+# Date Modified: 2027-12-31
 #!/usr/bin/env bash
 #
 # Merged old script v0.89 features into current script.
@@ -476,6 +476,7 @@ fi
 log "🔧 Building Rust workspace binaries..."
 
 cd "$ROOT/workspace"
+cargo clean
 
 # Build all workspace crates except cohesix_root with standard musl userland target
 cargo build --release --workspace --exclude cohesix_root --target=aarch64-unknown-linux-musl
@@ -537,6 +538,10 @@ else
 fi
 [ -f "$ROOT/out/cohesix_root.elf" ] || { echo "❌ $ROOT/out/cohesix_root.elf missing" >&2; exit 1; }
 
+log "🏗️  Rebuilding kernel via build_sel4.sh..."
+bash "$ROOT/third_party/seL4/build_sel4.sh" | tee -a "$LOG_FILE" >&3
+
+
 # Bulletproof ELF validation
 log "🔍 Validating cohesix_root ELF memory layout..."
 READLOG="$LOG_DIR/cohesix_root_readelf_$(date +%Y%m%d_%H%M%S).log"
@@ -579,6 +584,18 @@ cd "$ROOT/out/bin"
 find kernel.elf cohesix_root.elf | cpio -o -H newc > "$CPIO_IMAGE"
 log "✅ Created CPIO archive at $CPIO_IMAGE"
 cd "$ROOT"
+
+log "🔍 Running ELF checks..."
+KREAD="$LOG_DIR/kernel_readelf_$(date +%Y%m%d_%H%M%S).log"
+RREAD="$LOG_DIR/cohesix_root_readelf_$(date +%Y%m%d_%H%M%S).log"
+NMLOG="$LOG_DIR/nm_$(date +%Y%m%d_%H%M%S).log"
+objdump -x "$ROOT/out/bin/cohesix_root.elf" > "$LOG_DIR/objdump_$(date +%Y%m%d_%H%M%S).log"
+readelf -h "$ROOT/out/bin/cohesix_root.elf" | tee "$RREAD" | tee -a "$LOG_FILE" >&3
+readelf -h "$ROOT/out/bin/kernel.elf" | tee "$KREAD" | tee -a "$LOG_FILE" >&3
+grep -q 'AArch64' "$RREAD" || { echo "❌ cohesix_root.elf not AArch64" >&2; exit 1; }
+grep -q 'AArch64' "$KREAD" || { echo "❌ kernel.elf not AArch64" >&2; exit 1; }
+nm -u "$ROOT/out/bin/cohesix_root.elf" | tee "$NMLOG" | tee -a "$LOG_FILE" >&3
+if grep -q " U " "$NMLOG"; then echo "❌ Undefined symbols" >&2; exit 1; fi
 
 log "🧪 Booting elfloader + kernel in QEMU..."
 QEMU_LOG="$LOG_DIR/qemu_debug_$(date +%Y%m%d_%H%M%S).log"
