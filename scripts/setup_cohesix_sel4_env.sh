@@ -1,5 +1,5 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: setup_cohesix_sel4_env.sh v0.4
+# Filename: setup_cohesix_sel4_env.sh v0.5
 # Author: Lukas Bower
 # Date Modified: 2027-12-31
 #!/usr/bin/env bash
@@ -59,8 +59,13 @@ for d in "${REQUIRED[@]}"; do
 done
 echo "✅ Validated seL4 workspace: kernel, projects, tools present."
 cd -- "$WORKSPACE/kernel"
-git fetch origin "$SEL4_COMMIT" --depth 1
-git checkout -q "$SEL4_COMMIT"
+if git remote get-url origin >/dev/null 2>&1; then
+    git fetch origin "$SEL4_COMMIT" --depth 1
+    git checkout -q "$SEL4_COMMIT"
+else
+    echo "✅ seL4 workspace is under repo management. No standalone git remote checks required."
+    git checkout -q "$SEL4_COMMIT" || true
+fi
 
 ln -sfn "$WORKSPACE" "$HOME/sel4_workspace"
 ln -sfn "$WORKSPACE" "$ROOT/sel4_workspace"
