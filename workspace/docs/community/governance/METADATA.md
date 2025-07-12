@@ -154,7 +154,7 @@
 | docs/community/architecture/BOOT_KERNEL_FLOW.md | v0.3 | 2026-10-16 | COMMUNITY | | |
 | docs/community/archive/EXAMPLES_README.md | v0.3 | 2026-02-05 | COMMUNITY | | |
 | .cohesix_env | v0.3 | 2026-07-25 | COMMUNITY | | |
-| cohesix_fetch_build.sh | v1.11 | 2025-07-11 | COMMUNITY | | |
+| cohesix_fetch_build.sh | v1.12 | 2027-12-31 | COMMUNITY | | |
 | cohesix_fetch_build.bak | v0.92 | 2027-11-07 | COMMUNITY | | |
 | CONTRIBUTING.md | v1.1 | 2025-07-23 | COMMUNITY | | |
 | config/secure9p.toml | v0.7 | 2026-12-31 | COMMUNITY | | |
@@ -270,7 +270,8 @@
 | workspace/cohesix_root/Cargo.toml | v0.7 | 2027-12-31 | COMMUNITY | | |
 | workspace/cohesix_root/link.ld | v0.18 | 2027-12-31 | COMMUNITY | | |
 | workspace/cohesix_root/build.rs | v0.1 | 2027-12-31 | COMMUNITY | | |
-| workspace/cohesix_root/src/main.rs | v0.39 | 2025-07-11 | COMMUNITY | | |
+| workspace/cohesix_root/src/main.rs | v0.40 | 2027-12-31 | COMMUNITY | | |
+| workspace/cohesix_root/src/bootinfo.rs | v0.1 | 2027-12-31 | COMMUNITY | | |
 | workspace/cohesix_root/src/lang_items.rs | v0.1 | 2027-10-12 | COMMUNITY | | |
 | workspace/cohesix_root/src/entry.S | v0.20 | 2027-12-26 | COMMUNITY | | |
 | workspace/cohesix_root/src/allocator.rs | v0.7 | 2027-11-20 | COMMUNITY | | |

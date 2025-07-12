@@ -3257,6 +3257,12 @@
   `build_config.cmake`, and `README_BUILD.md` to automate kernel and userland
   builds, producing `kernel.elf`, `cohesix_root.elf`, and a CPIO image with DTB.
 
+## [v0.521] - 2027-12-31
+### Added
+- **FinalizeAarch64CohesixPipeline-005**: Enhanced `cohesix_fetch_build.sh` with
+  clean AArch64 rebuilds, kernel orchestration via `build_sel4.sh`, strict ELF
+  validation, and BootInfo-based logging in `cohesix_root`.
+
 ## [v0.518] - 2025-07-11
 ### Added
 - **InvestigateCohesixRootBootFail-274**: Documented the MMU fault analysis in `WHY_COHESIX_ROOT_FAILS_TO_BOOT_20250711.md` and verified allocator bounds and syscall stubs.
