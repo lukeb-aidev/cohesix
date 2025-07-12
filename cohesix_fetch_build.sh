@@ -125,7 +125,7 @@ fi
 
 
 # Verify seL4 workspace contents with robust symlink resolution
-INIT_BUILD="$(readlink -f "$PWD/init-build.sh")"
+INIT_BUILD="$PWD/init-build.sh"
 REAL_INIT_DIR="$(dirname "$INIT_BUILD")"
 cd "$REAL_INIT_DIR"
 INIT_BUILD="./$(basename "$INIT_BUILD")"
