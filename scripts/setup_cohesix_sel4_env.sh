@@ -1,122 +1,45 @@
-# CLASSIFICATION: COMMUNITY
-# Filename: setup_cohesix_sel4_env.sh v0.5
-# Author: Lukas Bower
-# Date Modified: 2027-12-31
+// CLASSIFICATION: COMMUNITY
+// Filename: setup_cohesix_sel4_env.sh v0.6
+// Author: Lukas Bower
+// Date Modified: 2027-12-31
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT="$(cd "$SCRIPT_DIR/.." && git rev-parse --show-toplevel 2>/dev/null || pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+WORKSPACE="$ROOT/third_party/seL4/workspace"
 LOG_DIR="$ROOT/logs"
-mkdir -p "$LOG_DIR"
-LOG_FILE="$LOG_DIR/setup_sel4_$(date +%Y%m%d_%H%M%S).log"
-exec > >(tee -a "$LOG_FILE") 2>&1
+mkdir -p "$LOG_DIR" "$WORKSPACE"
 
 if command -v sudo >/dev/null 2>&1; then
-    SUDO=sudo
+    SUDO="sudo"
 else
     SUDO=""
 fi
 
-echo "🔧 Cohesix seL4 environment setup starting..."
+msg(){ printf "\e[32m==>\e[0m %s\n" "$*"; }
+fail(){ printf "\e[31m[ERR]\e[0m %s\n" "$*" >&2; exit 1; }
 
-SEL4_DIR="$ROOT/third_party/seL4"
-SEL4_COMMIT_FILE="$SEL4_DIR/COMMIT"
-if [ -f "$SEL4_COMMIT_FILE" ]; then
-    SEL4_COMMIT="$(cat "$SEL4_COMMIT_FILE")"
-else
-    SEL4_COMMIT="c8ee04268800a5b14dd565032dc969d7a2f621cc"
-    echo "⚠️ COMMIT file missing. Falling back to $SEL4_COMMIT" >&2
-fi
-WORKSPACE="$SEL4_DIR/workspace"
-if [ -z "$WORKSPACE" ]; then
-    echo "❌ WORKSPACE path could not be determined" >&2
-    exit 1
-fi
-BUILD_DIR="$WORKSPACE/build_release"
+msg "Installing seL4 prerequisites"
+$SUDO apt-get update -y >/dev/null
+$SUDO DEBIAN_FRONTEND=noninteractive apt-get install -y \
+    dtc cmake ninja-build gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
+    python3 python3-pip curl git repo >/dev/null
 
-if [ ! -d "$WORKSPACE/kernel" ]; then
-    echo "📥 Cloning seL4 workspace..."
-    mkdir -p "$WORKSPACE"
-    cd "$WORKSPACE"
-    if ! command -v repo >/dev/null 2>&1; then
-        echo "🔧 Installing repo tool..."
-        $SUDO apt-get update -y && $SUDO apt-get install -y repo
-    fi
-    repo init -u https://github.com/seL4/sel4test-manifest.git --depth=1
-    repo sync
-else
-    echo "🔄 Updating existing seL4 workspace..."
-    cd "$WORKSPACE"
-    repo sync
-fi
-REQUIRED=(kernel projects tools projects/sel4test)
-for d in "${REQUIRED[@]}"; do
-    if [ ! -d "$WORKSPACE/$d" ]; then
-        echo "❌ Missing $d after repo sync in $WORKSPACE" >&2
-        exit 1
-    fi
+[ -x /usr/bin/repo ] || fail "repo not installed at /usr/bin/repo"
+
+for cmd in dtc cmake ninja aarch64-linux-gnu-gcc aarch64-linux-gnu-g++ python3 repo curl git; do
+    command -v "$cmd" >/dev/null 2>&1 || fail "$cmd not found in PATH"
 done
-echo "✅ Validated seL4 workspace: kernel, projects, tools present."
-cd -- "$WORKSPACE/kernel"
-if git remote get-url origin >/dev/null 2>&1; then
-    git fetch origin "$SEL4_COMMIT" --depth 1
-    git checkout -q "$SEL4_COMMIT"
-else
-    echo "✅ seL4 workspace is under repo management. No standalone git remote checks required."
-    git checkout -q "$SEL4_COMMIT" || true
-fi
 
-ln -sfn "$WORKSPACE" "$HOME/sel4_workspace"
-ln -sfn "$WORKSPACE" "$ROOT/sel4_workspace"
-
-echo "🔧 Installing toolchains..."
-DEPS=(cmake ninja-build gcc-aarch64-linux-gnu g++-aarch64-linux-gnu python3-venv repo dtc)
-$SUDO apt-get update -y
-$SUDO apt-get install -y "${DEPS[@]}"
-
-CMAKE_MAJOR="$(cmake --version | head -n1 | awk '{print $3}' | cut -d. -f1)"
-CMAKE_MINOR="$(cmake --version | head -n1 | awk '{print $3}' | cut -d. -f2)"
-if [ "$CMAKE_MAJOR" -lt 3 ] || { [ "$CMAKE_MAJOR" -eq 3 ] && [ "$CMAKE_MINOR" -lt 20 ]; }; then
-    echo "❌ CMake >= 3.20 required" >&2
-    exit 1
-fi
-
-if ! command -v rustup >/dev/null 2>&1; then
-    curl https://sh.rustup.rs -sSf | sh -s -- -y
-    source "$HOME/.cargo/env"
-fi
-rustup target add aarch64-unknown-linux-gnu
-rustup component add rust-src
-command -v aarch64-linux-gnu-gcc >/dev/null 2>&1 || { echo "❌ aarch64 toolchain missing" >&2; exit 1; }
-
-cd "$ROOT"
-VENV_DIR=".venv_sel4"
-if [ ! -d "$VENV_DIR" ]; then
-    python3 -m venv "$VENV_DIR"
-fi
-source "$VENV_DIR/bin/activate"
-pip install --upgrade pip
-
-echo "🏗️ Building seL4 kernel and elfloader..."
+msg "Syncing seL4 workspace at $WORKSPACE"
 cd "$WORKSPACE"
-if [ ! -f "$BUILD_DIR/kernel/kernel.elf" ] || [ ! -f "$BUILD_DIR/elfloader/elfloader" ] || [ ! -f "$BUILD_DIR/libsel4/libsel4.a" ]; then
-    rm -rf "$BUILD_DIR"
-    mkdir -p "$BUILD_DIR"
-    cd "$BUILD_DIR"
-    ../init-build.sh -C ../easy-settings.cmake -GNinja
-    ninja kernel.elf elfloader libsel4.a
-else
-    echo "✅ Existing build artifacts found; skipping rebuild"
-    cd "$BUILD_DIR"
+if [ ! -d .repo ]; then
+    repo init -u https://github.com/seL4/sel4test-manifest.git --depth=1
 fi
+repo sync
 
-file "$BUILD_DIR/kernel/kernel.elf" | grep -q "AArch64"
-file "$BUILD_DIR/elfloader/elfloader" | grep -q "AArch64"
-readelf -h "$BUILD_DIR/kernel/kernel.elf" | grep -q "AArch64"
+for d in kernel projects tools; do
+    [ -d "$WORKSPACE/$d" ] || fail "Missing $d after repo sync"
+done
 
-mkdir -p "$SEL4_DIR/lib" "$SEL4_DIR/include"
-cp "$BUILD_DIR/libsel4/libsel4.a" "$SEL4_DIR/lib/"
-cp -r "$BUILD_DIR/libsel4/include"/* "$SEL4_DIR/include/"
-
-echo "✅ seL4 environment ready"
+msg "✅ Cohesix seL4 environment is ready."
