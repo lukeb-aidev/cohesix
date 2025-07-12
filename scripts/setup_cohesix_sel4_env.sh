@@ -1,5 +1,5 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: setup_cohesix_sel4_env.sh v0.3
+# Filename: setup_cohesix_sel4_env.sh v0.4
 # Author: Lukas Bower
 # Date Modified: 2027-12-31
 #!/usr/bin/env bash
@@ -35,7 +35,7 @@ if [ -z "$WORKSPACE" ]; then
 fi
 BUILD_DIR="$WORKSPACE/build_release"
 
-if [ ! -d "$WORKSPACE/sel4" ]; then
+if [ ! -d "$WORKSPACE/kernel" ]; then
     echo "📥 Cloning seL4 workspace..."
     mkdir -p "$WORKSPACE"
     cd "$WORKSPACE"
@@ -50,14 +50,15 @@ else
     cd "$WORKSPACE"
     repo sync
 fi
-
-for d in sel4 musllibc util_libs; do
+REQUIRED=(kernel projects tools projects/sel4test)
+for d in "${REQUIRED[@]}"; do
     if [ ! -d "$WORKSPACE/$d" ]; then
         echo "❌ Missing $d after repo sync in $WORKSPACE" >&2
         exit 1
     fi
 done
-cd -- "$WORKSPACE/sel4"
+echo "✅ Validated seL4 workspace: kernel, projects, tools present."
+cd -- "$WORKSPACE/kernel"
 git fetch origin "$SEL4_COMMIT" --depth 1
 git checkout -q "$SEL4_COMMIT"
 
