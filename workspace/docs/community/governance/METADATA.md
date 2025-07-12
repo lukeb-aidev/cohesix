@@ -180,7 +180,7 @@
 | tests/secure9p/agent_identifier.rs | v0.2 | 2025-07-26 | COMMUNITY | | |
 
 | scripts/setup_build_env.sh | v0.5 | 2026-07-25 | COMMUNITY | | |
-| scripts/setup_cohesix_sel4_env.sh | v0.1 | 2027-12-31 | COMMUNITY | | |
+| scripts/setup_cohesix_sel4_env.sh | v0.2 | 2027-12-31 | COMMUNITY | | |
 | scripts/check-qemu-deps.sh | v0.1 | 2025-07-28 | COMMUNITY | | |
 | scripts/collect_boot_logs.sh | v0.1 | 2025-07-12 | COMMUNITY | | |
 | scripts/generate_busybox_man.sh | v0.1 | 2025-06-08 | COMMUNITY | | |
