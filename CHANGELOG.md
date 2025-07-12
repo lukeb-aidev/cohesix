@@ -3327,3 +3327,7 @@
 ## [v0.530] - 2027-12-31
 ### Changed
 - **FixSel4BuildPath-074**: Updated `cohesix_fetch_build.sh` to build the seL4 kernel from `third_party/seL4`, configure for `qemu-arm-virt`, and validate `kernel.elf` presence.
+
+## [v0.531] - 2027-12-31
+### Fixed
+- **FixSel4PathAudit-075**: Ensured `cohesix_fetch_build.sh` validates the seL4 workspace paths, uses the correct `init-build.sh` location, and logs missing components before running CMake.
