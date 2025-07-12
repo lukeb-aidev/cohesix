@@ -38,7 +38,7 @@ ROOT="${ROOT:-$HOME/cohesix}"
 export ROOT
 
 # Allow SEL4_WORKSPACE override for kernel.elf/elfloader staging
-SEL4_WORKSPACE="${SEL4_WORKSPACE:-$ROOT/third_party/seL4}"
+SEL4_WORKSPACE="${SEL4_WORKSPACE:-$ROOT/third_party_seL4}"
 export SEL4_WORKSPACE
 LOG_DIR="$ROOT/logs"
 mkdir -p "$LOG_DIR"
@@ -55,7 +55,7 @@ if [ -z "${VIRTUAL_ENV:-}" ] || [[ "$VIRTUAL_ENV" != *"/${VENV_DIR}" ]]; then
     source "$VENV_DIR/bin/activate"
   fi
 fi
-export PYTHONPATH="$ROOT/third_party/seL4/kernel:/usr/local/lib/python3.12/dist-packages:${PYTHONPATH:-}"
+export PYTHONPATH="$ROOT/third_party_seL4/kernel:/usr/local/lib/python3.12/dist-packages:${PYTHONPATH:-}"
 export MEMCHR_DISABLE_RUNTIME_CPU_FEATURE_DETECTION=1
 export CUDA_HOME="${CUDA_HOME:-/usr}"
 export CUDA_INCLUDE_DIR="${CUDA_INCLUDE_DIR:-$CUDA_HOME/include}"
@@ -91,10 +91,10 @@ log(){ echo "[$(date +%H:%M:%S)] $1" | tee -a "$LOG_FILE" >&3; }
 log "🛠️ [Build Start] $(date)"
 log "🚀 Using existing repository at $ROOT"
 
-LIB_PATH="$ROOT/third_party/seL4/lib/libsel4.a"
+LIB_PATH="$ROOT/third_party_seL4/lib/libsel4.a"
 if [ ! -f "$LIB_PATH" ]; then
-  log "⚠️ libsel4.a missing, building in-place under third_party/seL4..."
-  cd "$ROOT/third_party/seL4"
+  log "⚠️ libsel4.a missing, building in-place under third_party_seL4..."
+  cd "$ROOT/third_party_seL4"
   
   ls | tee -a "$TRACE_LOG"
   BUILD_DIR="$(find . -maxdepth 1 -type d -name 'build_*' | head -n 1)"
@@ -104,10 +104,10 @@ if [ ! -f "$LIB_PATH" ]; then
   fi
   cd "$BUILD_DIR"
   ninja kernel.elf elfloader libsel4.a | tee -a "$TRACE_LOG"
-  mkdir -p "$ROOT/third_party/seL4/lib" "$ROOT/third_party/seL4/include"
-  cp libsel4/libsel4.a "$ROOT/third_party/seL4/lib/" | tee -a "$TRACE_LOG" || {
+  mkdir -p "$ROOT/third_party_seL4/lib" "$ROOT/third_party_seL4/include"
+  cp libsel4/libsel4.a "$ROOT/third_party_seL4/lib/" | tee -a "$TRACE_LOG" || {
     echo "❌ Failed to stage libsel4.a" >&2; exit 1; }
-  cp -r libsel4/include/* "$ROOT/third_party/seL4/include/" | tee -a "$TRACE_LOG" || {
+  cp -r libsel4/include/* "$ROOT/third_party_seL4/include/" | tee -a "$TRACE_LOG" || {
     echo "❌ Failed to stage headers" >&2; exit 1; }
   KERNEL_ELF="$PWD/kernel/kernel.elf"
   ELFLOADER="$PWD/elfloader/elfloader"
@@ -337,6 +337,25 @@ else
   log "✅ Existing init.conf found"
 fi
 
+# Ensure plan9.ns is staged early, fail fast if missing
+ensure_plan9_ns() {
+  local ns_path="$ROOT/config/plan9.ns"
+  if [ ! -f "$ns_path" ]; then
+    echo "❌ Missing namespace file: $ns_path" >&2
+    return 1
+  fi
+  mkdir -p "$STAGE_DIR/etc"
+  if cp "$ns_path" "$STAGE_DIR/etc/plan9.ns"; then
+    mkdir -p "$ROOT/out/etc"
+    cp "$ns_path" "$ROOT/out/etc/plan9.ns"
+    log "✅ plan9.ns staged"
+  else
+    echo "❌ plan9.ns staging failed" >&2
+    return 1
+  fi
+}
+ensure_plan9_ns
+
 # Stage rc script if available
 if [ -f "userland/miniroot/bin/rc" ]; then
   cp "userland/miniroot/bin/rc" "$STAGE_DIR/etc/rc"
@@ -555,7 +574,7 @@ fi
 [ -f "$ROOT/out/cohesix_root.elf" ] || { echo "❌ $ROOT/out/cohesix_root.elf missing" >&2; exit 1; }
 
 log "🏗️  Rebuilding kernel via build_sel4.sh..."
-bash "$ROOT/third_party/seL4/build_sel4.sh" | tee -a "$LOG_FILE" >&3
+bash "$ROOT/third_party_seL4/build_sel4.sh" | tee -a "$LOG_FILE" >&3
 
 
 # Bulletproof ELF validation
@@ -639,24 +658,6 @@ for f in initfs.img bootargs.txt boot_trace.json; do
   [ -f "$f" ] && cp "$f" "$STAGE_DIR/boot/"
 done
 
-ensure_plan9_ns() {
-  local ns_path="$ROOT/config/plan9.ns"
-  if [ ! -f "$ns_path" ]; then
-    echo "❌ Missing namespace file: $ns_path" >&2
-    return 1
-  fi
-  mkdir -p "$STAGE_DIR/etc"
-  if cp "$ns_path" "$STAGE_DIR/etc/plan9.ns"; then
-    mkdir -p "$ROOT/out/etc"
-    cp "$ns_path" "$ROOT/out/etc/plan9.ns"
-    log "✅ plan9.ns staged"
-  else
-    echo "❌ plan9.ns staging failed" >&2
-    return 1
-  fi
-}
-
-ensure_plan9_ns
 
 # Always create a robust config/config.yaml and stage it
 log "📂 Ensuring configuration file exists..."
@@ -717,7 +718,7 @@ ART_JSON="$LOG_DIR/artifact_locations.json"
 cat > "$ART_JSON" <<EOF
 {
   "libsel4.a": "$(realpath "$LIB_PATH")",
-  "headers": "$(realpath "$ROOT/third_party/seL4/include")",
+  "headers": "$(realpath "$ROOT/third_party_seL4/include")",
   "cohesix_root.elf": "$(realpath "$ROOT/out/bin/cohesix_root.elf")",
   "kernel.elf": "$(realpath "$ROOT/out/bin/kernel.elf")"
 }
