@@ -3301,6 +3301,13 @@
   script now logs `✅ seL4 workspace is under repo management. No standalone git
   remote checks required.` and relies on `repo sync` for updates.
 
+## [v0.527] - 2027-12-31
+### Changed
+- **FixSel4EnvSetupPR-079**: Rewrote `scripts/setup_cohesix_sel4_env.sh` to
+  install all required packages, validate `/usr/bin/repo`, verify needed
+  binaries, sync the workspace, ensure `kernel`, `projects`, and `tools` exist,
+  and print `✅ Cohesix seL4 environment is ready.` on success.
+
 ## [v0.518] - 2025-07-11
 ### Added
 - **InvestigateCohesixRootBootFail-274**: Documented the MMU fault analysis in `WHY_COHESIX_ROOT_FAILS_TO_BOOT_20250711.md` and verified allocator bounds and syscall stubs.
