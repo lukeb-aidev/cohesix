@@ -125,16 +125,12 @@ fi
 
 
 # Verify seL4 workspace contents with robust symlink resolution
-INIT_BUILD="$PWD/init-build.sh"
-if [ -L "$INIT_BUILD" ]; then
-  REAL_INIT_DIR="$(dirname "$(readlink -f "$INIT_BUILD")")"
-  cd "$REAL_INIT_DIR"
-  INIT_BUILD="./init-build.sh"
-else
-  cd "$PWD"
-fi
+INIT_BUILD="$(readlink -f "$PWD/init-build.sh")"
+REAL_INIT_DIR="$(dirname "$INIT_BUILD")"
+cd "$REAL_INIT_DIR"
+INIT_BUILD="./$(basename "$INIT_BUILD")"
 
-for item in "$INIT_BUILD" "../kernel" "../projects" "../tools"; do
+for item in "$INIT_BUILD" "$SEL4_WORKSPACE/kernel" "$SEL4_WORKSPACE/projects" "$SEL4_WORKSPACE/tools"; do
   if [ ! -e "$item" ]; then
     echo "❌ Missing seL4 component: $item" >&2
     exit 1
