@@ -188,7 +188,7 @@
 | scripts/debug_qemu_boot.sh | v0.4 | 2026-11-24 | COMMUNITY | | |
 | scripts/boot_qemu.sh | v0.4 | 2027-11-05 | COMMUNITY | | |
 | scripts/validate_iso_build.sh | v0.3 | 2026-12-31 | COMMUNITY | | |
-| scripts/build_root_elf.sh | v0.19 | 2027-01-15 | COMMUNITY | | |
+| scripts/build_root_elf.sh | v0.20 | 2027-12-31 | COMMUNITY | | |
 | scripts/load_arch_config.sh | v0.1 | 2026-07-25 | COMMUNITY | | |
 | scripts/build_busybox.sh | v0.8 | 2025-07-06 | COMMUNITY | | |
 | third_party/busybox/.config.coh | v1.0 | 2025-07-06 | COMMUNITY | | |
