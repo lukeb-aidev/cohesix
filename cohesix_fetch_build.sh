@@ -1,5 +1,5 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v1.12
+# Filename: cohesix_fetch_build.sh v1.13
 # Author: Lukas Bower
 # Date Modified: 2027-12-31
 #!/usr/bin/env bash
@@ -118,18 +118,20 @@ fi
 
 # Build and stage seL4 kernel in release mode
 log "🚀 Building seL4 kernel in release mode..."
-cd ~/sel4_workspace
+cd "$SEL4_WORKSPACE/workspace"
 rm -rf build_release
 mkdir build_release
 cd build_release
 
-../init-build.sh -C ../easy-settings.cmake -GNinja
-ninja kernel.elf
+../init-build.sh -DPLATFORM=qemu_arm_virt -DAARCH64=TRUE \
+  -DCROSS_COMPILER_PREFIX=aarch64-linux-gnu- -GNinja
+ninja kernel.elf elfloader
 
 mkdir -p "$ROOT/out/bin"
 cp kernel/kernel.elf "$ROOT/out/bin/kernel.elf"
-cp "$SEL4_WORKSPACE/projects/sel4test/build_qemu_arm/elfloader/elfloader" "$ROOT/out/bin/elfloader"
+cp elfloader/elfloader "$ROOT/out/bin/elfloader"
 log "✅ kernel.elf staged at $ROOT/out/bin/kernel.elf"
+[ -f "$ROOT/out/bin/kernel.elf" ] || { echo "❌ kernel.elf missing" >&2; exit 1; }
 mkdir -p "$LOG_DIR"
 
 
