@@ -37,7 +37,6 @@ fi
 ROOT="${ROOT:-$HOME/cohesix}"
 export ROOT
 
-# Allow SEL4_WORKSPACE override for kernel.elf/elfloader staging
 SEL4_WORKSPACE="${SEL4_WORKSPACE:-$ROOT/third_party/seL4}"
 export SEL4_WORKSPACE
 LOG_DIR="$ROOT/logs"
