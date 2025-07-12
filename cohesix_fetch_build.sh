@@ -118,7 +118,11 @@ fi
 
 # Build and stage seL4 kernel in release mode
 log "🚀 Building seL4 kernel in release mode..."
-cd "$SEL4_WORKSPACE/workspace"
+cd "$SEL4_WORKSPACE"
+if [ ! -d "$SEL4_WORKSPACE" ]; then
+  echo "❌ SEL4_WORKSPACE directory not found: $SEL4_WORKSPACE" >&2
+  exit 1
+fi
 
 # Verify seL4 workspace contents
 INIT_BUILD="$PWD/init-build.sh"
