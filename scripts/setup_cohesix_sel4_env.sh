@@ -1,13 +1,13 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: setup_cohesix_sel4_env.sh v0.2
+# Filename: setup_cohesix_sel4_env.sh v0.3
 # Author: Lukas Bower
 # Date Modified: 2027-12-31
 #!/usr/bin/env bash
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null || cd "$SCRIPT_DIR/.." && pwd)"
-LOG_DIR="$HOME/cohesix/logs"
+ROOT="$(cd "$SCRIPT_DIR/.." && git rev-parse --show-toplevel 2>/dev/null || pwd)"
+LOG_DIR="$ROOT/logs"
 mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/setup_sel4_$(date +%Y%m%d_%H%M%S).log"
 exec > >(tee -a "$LOG_FILE") 2>&1
@@ -29,6 +29,10 @@ else
     echo "⚠️ COMMIT file missing. Falling back to $SEL4_COMMIT" >&2
 fi
 WORKSPACE="$SEL4_DIR/workspace"
+if [ -z "$WORKSPACE" ]; then
+    echo "❌ WORKSPACE path could not be determined" >&2
+    exit 1
+fi
 BUILD_DIR="$WORKSPACE/build_release"
 
 if [ ! -d "$WORKSPACE/sel4" ]; then
@@ -46,7 +50,14 @@ else
     cd "$WORKSPACE"
     repo sync
 fi
-cd "$WORKSPACE/sel4"
+
+for d in sel4 musllibc util_libs; do
+    if [ ! -d "$WORKSPACE/$d" ]; then
+        echo "❌ Missing $d after repo sync in $WORKSPACE" >&2
+        exit 1
+    fi
+done
+cd -- "$WORKSPACE/sel4"
 git fetch origin "$SEL4_COMMIT" --depth 1
 git checkout -q "$SEL4_COMMIT"
 
