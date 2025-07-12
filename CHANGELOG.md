@@ -3287,6 +3287,13 @@
   fail if `sel4`, `musllibc`, or `util_libs` are missing. Logs now reside under
   `$ROOT/logs` and `cd` commands use full quoting for reliability.
 
+## [v0.525] - 2027-12-31
+### Changed
+- **FixRepoWorkspaceValidation-062**: Improved `setup_cohesix_sel4_env.sh` to
+  recognize the kernel-based workspace layout, verifying `kernel`, `projects`,
+  `tools`, and `projects/sel4test` exist after repo sync. The script now checks
+  out the kernel commit and logs successful workspace validation.
+
 ## [v0.518] - 2025-07-11
 ### Added
 - **InvestigateCohesixRootBootFail-274**: Documented the MMU fault analysis in `WHY_COHESIX_ROOT_FAILS_TO_BOOT_20250711.md` and verified allocator bounds and syscall stubs.
