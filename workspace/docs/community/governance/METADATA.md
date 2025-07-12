@@ -197,6 +197,9 @@
 | third_party/seL4/fetch_sel4.sh | v0.2 | 2027-12-30 | COMMUNITY | | |
 | third_party/seL4/include/README.md | v0.1 | 2027-12-28 | COMMUNITY | | |
 | third_party/seL4/lib/README.md | v0.1 | 2027-12-28 | COMMUNITY | | |
+| third_party/seL4/build_sel4.sh | v0.1 | 2027-12-31 | COMMUNITY | | |
+| third_party/seL4/build_config.cmake | v0.1 | 2027-12-31 | COMMUNITY | | |
+| third_party/seL4/README_BUILD.md | v0.1 | 2027-12-31 | COMMUNITY | | |
 | metadata.json | v0.1 | 2025-07-24 | COMMUNITY | | |
 | Cargo.toml | v0.54 | 2027-11-06 | COMMUNITY | | |
 | cohesix-9p/Cargo.toml | v0.7 | 2027-09-30 | COMMUNITY | | |
