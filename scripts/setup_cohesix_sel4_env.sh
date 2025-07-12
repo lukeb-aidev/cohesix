@@ -21,10 +21,28 @@ fail(){ printf "\e[31m[ERR]\e[0m %s\n" "$*" >&2; exit 1; }
 
 command -v apt-get >/dev/null 2>&1 || fail "apt-get not found"
 msg "Installing seL4 prerequisites"
-$SUDO apt-get update -y >/dev/null
-$SUDO DEBIAN_FRONTEND=noninteractive apt-get install -y \
-    dtc cmake ninja-build gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
-    python3 python3-pip curl git repo >/dev/null
+
+for tool in dtc cmake ninja aarch64-linux-gnu-gcc aarch64-linux-gnu-g++ pip3; do
+  case $tool in
+    dtc) pkg="device-tree-compiler" ;;
+    cmake) pkg="cmake" ;;
+    ninja) pkg="ninja-build" ;;
+    aarch64-linux-gnu-gcc) pkg="gcc-aarch64-linux-gnu" ;;
+    aarch64-linux-gnu-g++) pkg="g++-aarch64-linux-gnu" ;;
+    pip3) pkg="python3-pip" ;;
+  esac
+
+  if command -v "$tool" >/dev/null 2>&1; then
+    echo "✅ $tool already installed"
+  else
+    echo "📦 Installing $pkg..."
+    $SUDO apt update
+    $SUDO apt install -y "$pkg" || { echo "❌ Failed to install $pkg"; exit 1; }
+  fi
+done
+
+echo "dtc version: $(dtc --version)"
+echo "✅ All required packages are installed."
 
 [ -x /usr/bin/repo ] || fail "repo not installed at /usr/bin/repo"
 
