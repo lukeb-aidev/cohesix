@@ -3323,3 +3323,7 @@
 ## [v0.529] - 2027-12-31
 ### Changed
 - **FixSel4EnvRepo-082**: Ensured `scripts/setup_cohesix_sel4_env.sh` installs all required packages, verifies binaries, uses repo to sync, and validates workspace structure. Fails if `apt-get` is missing.
+
+## [v0.530] - 2027-12-31
+### Changed
+- **FixSel4BuildPath-074**: Updated `cohesix_fetch_build.sh` to build the seL4 kernel from `third_party/seL4`, configure for `qemu-arm-virt`, and validate `kernel.elf` presence.
