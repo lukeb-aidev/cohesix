@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: COHESIX_AARCH64_BUILD.md v1.2
+// Filename: COHESIX_AARCH64_BUILD.md
 // Author: Lukas Bower
 // Date Modified: 2027-12-28
 
