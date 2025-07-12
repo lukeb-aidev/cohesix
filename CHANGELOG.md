@@ -3251,6 +3251,12 @@
 ### Added
 - capture_and_push_debug.sh v0.3 adds ELF symbol checks and disassembly audit.
 
+## [v0.520] - 2027-12-31
+### Added
+- **BuildFullCohesixRootAarch64-003**: Added `third_party/seL4/build_sel4.sh`,
+  `build_config.cmake`, and `README_BUILD.md` to automate kernel and userland
+  builds, producing `kernel.elf`, `cohesix_root.elf`, and a CPIO image with DTB.
+
 ## [v0.518] - 2025-07-11
 ### Added
 - **InvestigateCohesixRootBootFail-274**: Documented the MMU fault analysis in `WHY_COHESIX_ROOT_FAILS_TO_BOOT_20250711.md` and verified allocator bounds and syscall stubs.
