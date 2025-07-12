@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v1.16
+// Filename: CHANGELOG.md v1.17
 // Author: Lukas Bower
 // Date Modified: 2027-12-31
 
@@ -3268,6 +3268,13 @@
 - **AlignCohesixBuildPipeline-006**: Updated `build_root_elf.sh` to use the
   `sel4-aarch64.json` target for explicit `libsel4` linkage and static build
   flags, ensuring coherence with `COHESIX_AARCH64_BUILD.md`.
+
+## [v0.523] - 2027-12-31
+### Added
+- **SetupCohesixSeL4Env-053**: Added `scripts/setup_cohesix_sel4_env.sh` to
+  create a deterministic seL4 build environment, cloning the pinned commit,
+  installing toolchains, and building `kernel.elf` and `elfloader` for
+  `cohesix_fetch_build.sh`.
 
 ## [v0.518] - 2025-07-11
 ### Added
