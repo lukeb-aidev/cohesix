@@ -395,6 +395,7 @@
 | tests/Cohesix/test_srvctl.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
 | tests/Cohesix/test_userland_health.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
 | tests/Cohesix/run_all_tests.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
+| out/diag_mmu_fault_20250712_013506/holistic_analysis.md | v0.1 | 2025-07-12 | COMMUNITY | | |
 Removed: introspect_self_diagnosis (Plan9 migration - file-based introspection replaced by validator-driven policy checks)
 Removed: legacy Python tests and lint steps; project now purely Plan9 + Rust
 Changed: `.cargo/config.toml` v0.14 uses project-relative linker script path
