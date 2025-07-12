@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # CLASSIFICATION: COMMUNITY
-# Filename: setup_cohesix_sel4_env.sh v0.7
+# Filename: setup_cohesix_sel4_env.sh v0.8
 # Author: Lukas Bower
 # Date Modified: 2027-12-31
 set -euo pipefail
@@ -19,6 +19,7 @@ fi
 msg(){ printf "\e[32m==>\e[0m %s\n" "$*"; }
 fail(){ printf "\e[31m[ERR]\e[0m %s\n" "$*" >&2; exit 1; }
 
+command -v apt-get >/dev/null 2>&1 || fail "apt-get not found"
 msg "Installing seL4 prerequisites"
 $SUDO apt-get update -y >/dev/null
 $SUDO DEBIAN_FRONTEND=noninteractive apt-get install -y \
@@ -44,3 +45,4 @@ done
 
 msg "✅ Cohesix seL4 environment is ready."
 exit 0
+
