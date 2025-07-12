@@ -3319,3 +3319,7 @@
 ## [v0.528] - 2027-12-31
 ### Changed
 - **FixSel4EnvScriptHeader-080**: Updated `scripts/setup_cohesix_sel4_env.sh` to use valid Bash comments, place the shebang first, and exit cleanly.
+
+## [v0.529] - 2027-12-31
+### Changed
+- **FixSel4EnvRepo-082**: Ensured `scripts/setup_cohesix_sel4_env.sh` installs all required packages, verifies binaries, uses repo to sync, and validates workspace structure. Fails if `apt-get` is missing.
