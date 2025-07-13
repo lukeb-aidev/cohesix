@@ -9,9 +9,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 COMMIT="$(cat "$SCRIPT_DIR/COMMIT")"
 DEST="workspace"
 
-if [ -d "$DEST/seL4/.git" ]; then
-    echo "✅ seL4 workspace already exists at $DEST"
-    exit 0
+if [ -d "$DEST" ]; then
+    echo "🧹 Cleaning existing $DEST"
+    rm -rf "$DEST"
 fi
 
 echo "📥 Syncing seL4 repos into $DEST..."
@@ -23,10 +23,11 @@ git fetch --tags
 git checkout 13.0.0
 
 # Now add tools and projects inside workspace
-git clone https://github.com/seL4/seL4_tools.git tools
+#git clone https://github.com/seL4/seL4_tools.git tools
 git clone https://github.com/seL4/seL4_libs.git projects/seL4_libs
 git clone https://github.com/seL4/musllibc.git projects/musllibc
 git clone https://github.com/seL4/util_libs.git projects/util_libs
 git clone https://github.com/seL4/sel4runtime.git projects/sel4runtime
+git clone https://github.com/seL4/sel4test.git projects/sel4test
 
 echo "✅ seL4 workspace ready at $DEST"
