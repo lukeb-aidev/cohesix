@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v1.15
+# Filename: cohesix_fetch_build.sh v1.16
 # Author: Lukas Bower
-# Date Modified: 2027-12-31
+# Date Modified: 2025-07-13
 #!/usr/bin/env bash
 # This script fetches and builds the Cohesix project, including seL4 and other dependencies.
 
@@ -541,7 +541,18 @@ cmake -G Ninja \
 ninja kernel.elf
 
 cp "$BUILD_DIR/kernel.elf" "$ROOT/out/bin/kernel.elf"
-cp "$BUILD_DIR/elfloader" "$ROOT/out/bin/elfloader"
+
+log "\ud83d\ude80 Building seL4 elfloader..."
+ELFLOADER_SRC="$ROOT/third_party/seL4/elfloader"
+if [ -d "$ELFLOADER_SRC" ]; then
+  pushd "$ELFLOADER_SRC"
+  make CROSS_COMPILE=aarch64-linux-gnu- >/dev/null
+  popd
+  cp "$ELFLOADER_SRC/elfloader" "$ROOT/out/bin/elfloader"
+else
+  echo "❌ elfloader source not found at $ELFLOADER_SRC" >&2
+  exit 1
+fi
 
  mkdir -p "$ROOT/out/boot"
  cd "$ROOT/out/bin"
@@ -553,7 +564,7 @@ fi
 
 [ -f kernel.elf ] || { echo "Missing kernel.elf" >&2; exit 1; }
 [ -f cohesix_root.elf ] || { echo "Missing cohesix_root.elf" >&2; exit 1; }
-find kernel.elf cohesix_root.elf $( [ -f "$DTB" ] && echo "$DTB" ) | cpio -o -H newc > ../boot/cohesix.cpio
+find kernel.elf cohesix_root.elf elfloader $( [ -f "$DTB" ] && echo "$DTB" ) | cpio -o -H newc > ../boot/cohesix.cpio
 CPIO_IMAGE="$ROOT/out/boot/cohesix.cpio"
 cd "$ROOT"
 
@@ -621,6 +632,7 @@ echo "QEMU log: $QEMU_LOG" >> "$TRACE_LOG"
 log "📂 Staging boot files..."
 cp "$ROOT/out/bin/kernel.elf" "$STAGE_DIR/boot/kernel.elf"
 cp "$ROOT/out/bin/cohesix_root.elf" "$STAGE_DIR/boot/userland.elf"
+cp "$ROOT/out/bin/elfloader" "$STAGE_DIR/boot/elfloader"
 for f in initfs.img bootargs.txt boot_trace.json; do
   [ -f "$f" ] && cp "$f" "$STAGE_DIR/boot/"
 done
