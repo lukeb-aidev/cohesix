@@ -8,11 +8,16 @@ set -euxo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 ROOT="${ROOT//\/\//\/}"
 
-echo "Fetching seL4 sources ..." >&2
-bash "$ROOT/third_party/seL4/fetch_sel4.sh"
 
+echo "Fetching seL4 sources ..." >&2
 SEL4_SRC="${SEL4_SRC:-$ROOT/third_party/seL4/workspace}"
-BUILD_DIR="$ROOT/third_party/seL4/build"
+if [ ! -d "$SEL4_SRC/.git" ]; then
+    bash "$ROOT/third_party/seL4/fetch_sel4.sh"
+else
+    echo "✅ seL4 sources already present at $SEL4_SRC, skipping fetch."
+fi
+
+BUILD_DIR="$ROOT/third_party/seL4/workspace/build"
 
 for cmd in cmake ninja aarch64-linux-gnu-gcc aarch64-linux-gnu-g++ rustup cargo readelf nm objdump dtc; do
     command -v "$cmd" >/dev/null 2>&1 || { echo "Missing $cmd" >&2; exit 1; }
@@ -20,14 +25,16 @@ done
 
 mkdir -p "$SEL4_SRC" "$BUILD_DIR"
 
-
+ninja kernel.elf
 cd "$BUILD_DIR"
-cmake -G Ninja -C "$ROOT/build_config.cmake" "$SEL4_SRC"
+cmake -G Ninja \
+  -C "$ROOT/third_party/seL4/workspace/configs/AARCH64_verified.cmake" \
+  -DSIMULATION=TRUE \
+  -DCROSS_COMPILER_PREFIX=aarch64-linux-gnu- \
+  "$SEL4_SRC"
+ninja kernel.elf
 ninja kernel.elf
 cp kernel.elf "$ROOT/out/bin/kernel.elf"
-
-cd "$ROOT"
-"$ROOT/scripts/build_root_elf.sh"
 
  mkdir -p out/boot
  cd out/bin
@@ -43,8 +50,7 @@ readelf -h out/bin/cohesix_root.elf | grep -q 'AArch64'
 readelf -h out/bin/kernel.elf | grep -q 'AArch64'
 
 if nm -u out/bin/cohesix_root.elf | grep -q " U "; then
-    echo "Unresolved symbols in cohesix_root.elf" >&2
-     exit 1
+    echo "Unresolved symbols in cohesix_root.elf" >&2     exit 1
 fi
 
 objdump -x out/bin/cohesix_root.elf | grep -q "_start"

@@ -4,8 +4,7 @@
 # Date Modified: 2027-12-31
 
 set(PLATFORM "qemu-arm-virt" CACHE STRING "")
-set(KernelArch "ARM" CACHE STRING "")
-set(KernelArchArmV8a ON CACHE BOOL "")
+set(KernelArch "arm" CACHE STRING "")
 set(KernelSel4Arch "aarch64" CACHE STRING "")
 set(KernelSel4ArchAarch64 ON CACHE BOOL "")
 set(KernelSel4ArchArmHyp OFF CACHE BOOL "")
