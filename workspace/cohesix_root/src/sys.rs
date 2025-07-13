@@ -1,16 +1,16 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: sys.rs v0.7
+// Filename: sys.rs v0.8
 // Author: Lukas Bower
 // Date Modified: 2025-07-12
 
 use core::ffi::c_char;
 use core::sync::atomic::{compiler_fence, Ordering};
+use crate::dt::UART_BASE;
 
 #[cfg(target_arch = "aarch64")]
 #[no_mangle]
 pub extern "C" fn seL4_DebugPutChar(c: u8) {
-    const UART: *mut u8 = 0x0900_0000 as *mut u8;
-    unsafe { core::ptr::write_volatile(UART, c) };
+    unsafe { core::ptr::write_volatile(UART_BASE as *mut u8, c) };
 }
 
 #[cfg(not(target_arch = "aarch64"))]
