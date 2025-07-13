@@ -25,9 +25,9 @@ sel4_root:
 	@set -e; \
 	echo "$(GREEN)==> Building sel4_root...$(RESET)"; \
 	mkdir -p out/bin; \
-        RUSTFLAGS="-C link-arg=-Tlink.ld" cargo +nightly build -Z build-std=core,alloc,compiler_builtins -Z build-std-features=compiler-builtins-mem --release \
-                --package cohesix_root \
-                --target sel4-aarch64.json; \
+       RUSTFLAGS="-C link-arg=-Tlink.ld" cargo +nightly build -Z build-std=core,alloc,compiler_builtins -Z build-std-features=compiler-builtins-mem --release \
+               --package cohesix_root \
+               --target cohesix_root/sel4-aarch64.json; \
         BIN_PATH="target/sel4-aarch64/release/cohesix_root"; \
 	[ -f "$$BIN_PATH" ] && cp "$$BIN_PATH" out/bin/sel4_root || echo "⚠️ sel4_root not found"
 
