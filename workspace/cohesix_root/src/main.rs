@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: main.rs v0.40
+// Filename: main.rs v0.41
 // Author: Lukas Bower
 // Date Modified: 2027-12-31
 #![no_std]
@@ -12,6 +12,7 @@ mod allocator;
 mod lang_items;
 mod sys;
 mod bootinfo;
+mod dt;
 
 use core::arch::global_asm;
 global_asm!(include_str!("entry.S"));
