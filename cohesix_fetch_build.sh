@@ -501,7 +501,6 @@ echo "Fetching seL4 sources ..." >&2
 SEL4_SRC="${SEL4_SRC:-$ROOT/third_party/seL4/workspace}"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-COMMIT="$(cat "$SCRIPT_DIR/COMMIT")"
 DEST="workspace"
 
 if [ -d "$DEST" ]; then
@@ -522,7 +521,7 @@ git clone https://github.com/seL4/seL4_libs.git projects/seL4_libs
 git clone https://github.com/seL4/musllibc.git projects/musllibc
 git clone https://github.com/seL4/util_libs.git projects/util_libs
 git clone https://github.com/seL4/sel4runtime.git projects/sel4runtime
-git clone https://github.com/seL4/sel4test.git projects/sel4testß
+git clone https://github.com/seL4/sel4test.git projects/sel4test
 
 echo "✅ seL4 workspace ready at $DEST"
 
@@ -543,6 +542,7 @@ cmake -G Ninja \
 ninja kernel.elf
 
 cp "$BUILD_DIR/kernel.elf" "$ROOT/out/bin/kernel.elf"
+cp "$BUILD_DIR/elfloader" "$ROOT/out/bin/elfloader"
 
  mkdir -p "$ROOT/out/boot"
  cd "$ROOT/out/bin"
@@ -555,6 +555,7 @@ fi
 [ -f kernel.elf ] || { echo "Missing kernel.elf" >&2; exit 1; }
 [ -f cohesix_root.elf ] || { echo "Missing cohesix_root.elf" >&2; exit 1; }
 find kernel.elf cohesix_root.elf $( [ -f "$DTB" ] && echo "$DTB" ) | cpio -o -H newc > ../boot/cohesix.cpio
+CPIO_IMAGE="$ROOT/out/boot/cohesix.cpio"
 cd "$ROOT"
 
 echo "✅ seL4 build complete"  >&2
@@ -806,6 +807,3 @@ qemu-system-aarch64 -M virt,gic-version=2 -cpu cortex-a57 -m 1024M \
   -D "$LOG_DIR/qemu_baremetal_$(date +%Y%m%d_%H%M%S).log" |& tee "$QEMU_CONSOLE" || true
 log "QEMU console saved to $QEMU_CONSOLE"
 log "✅ QEMU bare metal boot test complete."
-
-
-
