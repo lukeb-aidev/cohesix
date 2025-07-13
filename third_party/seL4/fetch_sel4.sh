@@ -1,35 +1,32 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: fetch_sel4.sh v0.2
+# Filename: fetch_sel4.sh v0.4
 # Author: Lukas Bower
 # Date Modified: 2027-12-30
 
 set -euo pipefail
-# Preconfigure git identity to avoid interactive prompts
-if ! git config --get user.name >/dev/null; then
-    git config --global user.name "Cohesix Builder"
-fi
-if ! git config --get user.email >/dev/null; then
-    git config --global user.email "builder@cohesix.local"
-fi
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 COMMIT="$(cat "$SCRIPT_DIR/COMMIT")"
-DEST="${SEL4_WORKSPACE:-$HOME/cohesix/third_party/seL4/workspace}"
+DEST="workspace"
 
-if [ -d "$DEST" ]; then
-    echo "seL4 workspace already exists at $DEST"
+if [ -d "$DEST/seL4/.git" ]; then
+    echo "✅ seL4 workspace already exists at $DEST"
     exit 0
 fi
 
-if ! command -v repo >/dev/null 2>&1; then
-    echo "ERROR: repo tool not found. Install with: sudo apt install repo" >&2
-    exit 1
-fi
+echo "📥 Syncing seL4 repos into $DEST..."
 
-mkdir -p "$DEST"
-cd "$DEST"
-repo init -u https://github.com/seL4/sel4-manifest.git --depth=1
-repo sync
-cd "$DEST/kernel"
-git fetch origin "$COMMIT" --depth 1
-git checkout -q "$COMMIT"
+# Clone seL4 into workspace directly
+git clone https://github.com/seL4/seL4.git $DEST
+cd $DEST
+git fetch --tags
+git checkout 13.0.0
+
+# Now add tools and projects inside workspace
+git clone https://github.com/seL4/seL4_tools.git tools
+git clone https://github.com/seL4/seL4_libs.git projects/seL4_libs
+git clone https://github.com/seL4/musllibc.git projects/musllibc
+git clone https://github.com/seL4/util_libs.git projects/util_libs
+git clone https://github.com/seL4/sel4runtime.git projects/sel4runtime
+
 echo "✅ seL4 workspace ready at $DEST"

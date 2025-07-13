@@ -5,7 +5,8 @@
 #!/usr/bin/env bash
 set -euxo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
+ROOT="${ROOT//\/\//\/}"
 
 echo "Fetching seL4 sources ..." >&2
 bash "$ROOT/third_party/seL4/fetch_sel4.sh"
@@ -19,10 +20,11 @@ done
 
 mkdir -p "$SEL4_SRC" "$BUILD_DIR"
 
+
 cd "$BUILD_DIR"
-cmake -C "$ROOT/third_party/seL4/build_config.cmake" -GNinja "$SEL4_SRC/kernel"
+cmake -G Ninja -C "$ROOT/build_config.cmake" "$SEL4_SRC"
 ninja kernel.elf
-cp kernel/kernel.elf "$ROOT/out/bin/kernel.elf"
+cp kernel.elf "$ROOT/out/bin/kernel.elf"
 
 cd "$ROOT"
 "$ROOT/scripts/build_root_elf.sh"
