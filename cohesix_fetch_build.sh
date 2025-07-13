@@ -3,16 +3,7 @@
 # Author: Lukas Bower
 # Date Modified: 2027-12-31
 #!/usr/bin/env bash
-#
-# Merged old script v0.89 features into current script.
-# Preserved CUDA checks, BusyBox build, CMake upgrade, Go helpers, mandoc staging,
-# but removed ISO building and related QEMU -cdrom logic for pure bare-metal seL4.
-#
-# Bare metal seL4 build flow (no UEFI):
-# 1. Run init-build.sh with debug flags to configure seL4 for qemu-arm-virt.
-# 2. Build kernel.elf and elfloader via ninja.
-# 3. Stage kernel.elf, elfloader, and root ELF under $ROOT/out/bin/ for QEMU.
-
+# This script fetches and builds the Cohesix project, including seL4 and other dependencies.
 
 HOST_ARCH="$(uname -m)"
 if [[ "$HOST_ARCH" = "aarch64" ]] && ! command -v aarch64-linux-gnu-gcc >/dev/null 2>&1; then
@@ -64,7 +55,29 @@ export LOG_DIR="$ROOT/logs"
 
 cd "$ROOT"
 
-cd "$ROOT"
+mkdir -p "$LOG_DIR"
+LOG_FILE="$LOG_DIR/build_$(date +%Y%m%d_%H%M%S).log"
+SUMMARY_ERRORS="$LOG_DIR/summary_errors.log"
+SUMMARY_TEST_FAILS="$LOG_DIR/summary_test_failures.log"
+: > "$LOG_DIR/libsel4_link_and_boot_trace.md"
+TRACE_LOG="$LOG_DIR/libsel4_link_and_boot_trace.md"
+{
+  echo "// CLASSIFICATION: COMMUNITY"
+  echo "// Filename: libsel4_link_and_boot_trace.md v0.1"
+  echo "// Author: Lukas Bower"
+  echo "// Date Modified: $(date +%Y-%m-%d)"
+  echo
+} > "$TRACE_LOG"
+: > "$SUMMARY_ERRORS"
+: > "$SUMMARY_TEST_FAILS"
+exec 3>&1  # Save original stdout
+exec > >(tee -a "$LOG_FILE" >&3) 2>&1
+trap 'echo "❌ Build failed. Last 40 log lines:" >&3; tail -n 40 "$LOG_FILE" >&3' ERR
+
+log(){ echo "[$(date +%H:%M:%S)] $1" | tee -a "$LOG_FILE" >&3; }
+
+log "🛠️ [Build Start] $(date)"
+log "🚀 Using existing repository at $ROOT"
 
 STAGE_DIR="$ROOT/out"
 GO_HELPERS_DIR="$ROOT/out/go_helpers"
@@ -93,30 +106,6 @@ logging:
   level: info
 EOF
 log "✅ config.yaml created at $CONFIG_PATH"
-
-mkdir -p "$LOG_DIR"
-LOG_FILE="$LOG_DIR/build_$(date +%Y%m%d_%H%M%S).log"
-SUMMARY_ERRORS="$LOG_DIR/summary_errors.log"
-SUMMARY_TEST_FAILS="$LOG_DIR/summary_test_failures.log"
-: > "$LOG_DIR/libsel4_link_and_boot_trace.md"
-TRACE_LOG="$LOG_DIR/libsel4_link_and_boot_trace.md"
-{
-  echo "// CLASSIFICATION: COMMUNITY"
-  echo "// Filename: libsel4_link_and_boot_trace.md v0.1"
-  echo "// Author: Lukas Bower"
-  echo "// Date Modified: $(date +%Y-%m-%d)"
-  echo
-} > "$TRACE_LOG"
-: > "$SUMMARY_ERRORS"
-: > "$SUMMARY_TEST_FAILS"
-exec 3>&1  # Save original stdout
-exec > >(tee -a "$LOG_FILE" >&3) 2>&1
-trap 'echo "❌ Build failed. Last 40 log lines:" >&3; tail -n 40 "$LOG_FILE" >&3' ERR
-
-log(){ echo "[$(date +%H:%M:%S)] $1" | tee -a "$LOG_FILE" >&3; }
-
-log "🛠️ [Build Start] $(date)"
-log "🚀 Using existing repository at $ROOT"
 
 LIB_PATH="$ROOT/third_party/seL4/lib/libsel4.a"
 
