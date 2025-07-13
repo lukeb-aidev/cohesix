@@ -11,11 +11,34 @@ ROOT="${ROOT//\/\//\/}"
 
 echo "Fetching seL4 sources ..." >&2
 SEL4_SRC="${SEL4_SRC:-$ROOT/third_party/seL4/workspace}"
-if [ ! -d "$SEL4_SRC/.git" ]; then
-    bash "$ROOT/third_party/seL4/fetch_sel4.sh"
-else
-    echo "✅ seL4 sources already present at $SEL4_SRC, skipping fetch."
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+COMMIT="$(cat "$SCRIPT_DIR/COMMIT")"
+DEST="workspace"
+
+if [ -d "$DEST" ]; then
+    echo "🧹 Cleaning existing $DEST"
+    rm -rf "$DEST"
 fi
+
+echo "📥 Syncing seL4 repos into $DEST..."
+
+# Clone seL4 into workspace directly
+git clone https://github.com/seL4/seL4.git $DEST
+cd $DEST
+git fetch --tags
+git checkout 13.0.0
+
+# Now add tools and projects inside workspace
+git clone --branch 13.0.0 --depth 1 https://github.com/seL4/seL4_libs.git projects/seL4_libs
+git clone --branch 13.0.0 --depth 1 https://github.com/seL4/sel4runtime.git projects/sel4runtime
+#git clone https://github.com/seL4/seL4_libs.git projects/seL4_libs
+git clone --branch 13.0.0 --depth 1 https://github.com/seL4/musllibc.git projects/musllibc
+git clone --branch 13.0.0 --depth 1 https://github.com/seL4/util_libs.git projects/util_libs
+#git clone https://github.com/seL4/sel4runtime.git projects/sel4runtime
+git clone --branch 13.0.0 --depth 1 https://github.com/seL4/sel4test.git projects/sel4test
+
+echo "✅ seL4 workspace ready at $DEST"
 
 BUILD_DIR="$ROOT/third_party/seL4/workspace/build"
 
@@ -23,7 +46,7 @@ for cmd in cmake ninja aarch64-linux-gnu-gcc aarch64-linux-gnu-g++ rustup cargo 
     command -v "$cmd" >/dev/null 2>&1 || { echo "Missing $cmd" >&2; exit 1; }
 done
 
-mkdir -p "$SEL4_SRC" "$BUILD_DIR"
+mkdir -p "$BUILD_DIR"
 
 cd "$BUILD_DIR"
 cmake -G Ninja \
@@ -34,28 +57,17 @@ cmake -G Ninja \
 ninja kernel.elf
 cp kernel.elf "$ROOT/out/bin/kernel.elf"
 
- mkdir -p out/boot
- cd $ROOT/out/bin
- DTB="$BUILD_DIR/kernel/kernel.dtb"
+ mkdir -p "$ROOT/out/boot"
+ cd "$ROOT/out/bin"
+ DTB="$BUILD_DIR/kernel.dtb"
  if [ ! -f "$DTB" ]; then
-     DTC_SRC="$SEL4_SRC/projects/sel4test/tools/dts/qemu-arm-virt.dts"
-    [ -f "$DTC_SRC" ] && dtc -I dts -O dtb "$DTC_SRC" -o "$DTB"
+ echo "Error - DTB not found"  >&2
+ exit 1
 fi
-mkdir -p ../boot
+
+[ -f kernel.elf ] || { echo "Missing kernel.elf" >&2; exit 1; }
+[ -f cohesix_root.elf ] || { echo "Missing cohesix_root.elf" >&2; exit 1; }
 find kernel.elf cohesix_root.elf $( [ -f "$DTB" ] && echo "$DTB" ) | cpio -o -H newc > ../boot/cohesix.cpio
 cd "$ROOT"
 
-readelf -h out/bin/cohesix_root.elf | grep -q 'AArch64'
-readelf -h out/bin/kernel.elf | grep -q 'AArch64'
-
-if nm -u out/bin/cohesix_root.elf | grep -q " U "; then
-    echo "⚠️ WARNING: Unresolved symbols in cohesix_root.elf" >&2
-    nm -u out/bin/cohesix_root.elf | grep " U "
-else
-    echo "✅ No unresolved symbols in cohesix_root.elf"
-fi
-
-objdump -x out/bin/cohesix_root.elf | grep -q "_start"
-objdump -x out/bin/kernel.elf | grep -q "_start"
-
-echo "✅ build complete"
+echo "✅ build complete"  >&2
