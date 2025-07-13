@@ -3335,3 +3335,7 @@
 ## [v0.532] - 2027-12-31
 ### Fixed
 - **FixCohesixBuildPaths-093**: Adjusted `cohesix_fetch_build.sh` to mirror `third_party/seL4/build_sel4.sh` and run correctly from the repository root. Added `pushd`/`popd` for workspace operations and fixed relative paths.
+
+## [v0.533] - 2027-12-31
+### Added
+- **AuditCohesixFetchBuild-148**: Introduced `scripts/cohesix_fetch_build.sh` to sync the seL4 workspace via `repo`, verify build dependencies, initialize submodules, build with `cargo --target aarch64-unknown-none`, and exit on success.
