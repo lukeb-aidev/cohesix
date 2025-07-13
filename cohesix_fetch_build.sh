@@ -31,7 +31,6 @@ if [[ "$HOST_ARCH" = "aarch64" ]] && ! command -v aarch64-linux-gnu-gcc >/dev/nu
     exit 1
   fi
 fi
-# Fetch and fully build the Cohesix project using SSH Git auth.
 
 # Ensure ROOT is always set
 ROOT="${ROOT:-$HOME/cohesix}"
@@ -64,6 +63,36 @@ export ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export LOG_DIR="$ROOT/logs"
 
 cd "$ROOT"
+
+cd "$ROOT"
+
+STAGE_DIR="$ROOT/out"
+GO_HELPERS_DIR="$ROOT/out/go_helpers"
+cd "$STAGE_DIR"
+mkdir -p bin usr/bin usr/cli usr/share/man/man1 usr/share/man/man8 \
+         etc/cohesix srv mnt/data tmp dev proc roles home/cohesix boot init
+log "✅ Created Cohesix FS structure"
+# 🗂 Prepare /srv namespace for tests (clean and set role)
+log "🗂 Preparing /srv namespace for tests..."
+echo "DroneWorker" | sudo tee /srv/cohrole
+# Always create a robust config/config.yaml and stage it
+log "📂 Ensuring configuration file exists..."
+CONFIG_PATH="$ROOT/config/config.yaml"
+mkdir -p "$(dirname "$CONFIG_PATH")"
+cat > "$CONFIG_PATH" <<EOF
+# CLASSIFICATION: COMMUNITY
+# Filename: config.yaml
+# Author: Lukas Bower
+# Date Modified: $(date +%Y-%m-%d)
+role: QueenPrimary
+network:
+  enabled: true
+  interfaces:
+    - eth0
+logging:
+  level: info
+EOF
+log "✅ config.yaml created at $CONFIG_PATH"
 
 mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/build_$(date +%Y%m%d_%H%M%S).log"
@@ -126,7 +155,6 @@ log "\ud83d\udcc5 Fetching Cargo dependencies..."
 cd "$ROOT/workspace"
 cargo fetch
 log "\u2705 Cargo dependencies fetched"
-
 
 # Optional seL4 entry build flag
 SEL4_ENTRY=0
@@ -224,17 +252,6 @@ else
   CROSS_X86=""
 fi
 
-log "🚀 Starting dependency install..."
-if command -v sudo >/dev/null 2>&1; then
-  SUDO="sudo"
-else
-  SUDO=""
-fi
-$SUDO apt-get update -y
-$SUDO apt-get install -y build-essential ninja-build git wget \
-  python3 python3-pip cmake gcc-aarch64-linux-gnu
-log "✅ Dependencies installed"
-
 CMAKE_VER=$(cmake --version 2>/dev/null | head -n1 | awk '{print $3}')
 if ! dpkg --compare-versions "$CMAKE_VER" ge 3.20; then
   log "cmake $CMAKE_VER too old; installing newer release binary"
@@ -254,19 +271,10 @@ if ! dpkg --compare-versions "$CMAKE_VER" ge 3.20; then
   hash -r
 fi
 
-cd "$ROOT"
-STAGE_DIR="$ROOT/out"
-GO_HELPERS_DIR="$ROOT/out/go_helpers"
-mkdir -p "$ROOT/out/bin" "$GO_HELPERS_DIR"
-mkdir -p "$STAGE_DIR" "$ROOT/out/etc"
-# Create minimal Cohesix filesystem structure
-for dir in bin usr/cli srv mnt etc tmp proc dev; do
-  mkdir -p "$STAGE_DIR/$dir"
-done
-log "✅ Created Cohesix FS structure"
+
 
 # Ensure init.conf exists with defaults
-INIT_CONF="$ROOT/out/etc/init.conf"
+INIT_CONF="$STAGE_DIR/etc/init.conf"
 if [ ! -f "$INIT_CONF" ]; then
   cat > "$INIT_CONF" <<EOF
 # CLASSIFICATION: COMMUNITY
@@ -289,9 +297,7 @@ ensure_plan9_ns() {
     echo "❌ Missing namespace file: $ns_path" >&2
     return 1
   fi
-  mkdir -p "$STAGE_DIR/etc"
   if cp "$ns_path" "$STAGE_DIR/etc/plan9.ns"; then
-    mkdir -p "$ROOT/out/etc"
     cp "$ns_path" "$ROOT/out/etc/plan9.ns"
     log "✅ plan9.ns staged"
   else
@@ -304,12 +310,9 @@ ensure_plan9_ns
 # Stage rc script if available
 if [ -f "userland/miniroot/bin/rc" ]; then
   cp "userland/miniroot/bin/rc" "$STAGE_DIR/etc/rc"
-  cp "userland/miniroot/bin/rc" "$ROOT/out/etc/rc"
-  chmod +x "$STAGE_DIR/etc/rc" "$ROOT/out/etc/rc"
+  chmod +x "$STAGE_DIR/etc/rc"
   log "✅ Staged /etc/rc"
 fi
-# Clean up artifacts from previous builds
-rm -f "$ROOT/out/bin/init.efi" "$ROOT/out/boot/kernel.elf" 2>/dev/null || true
 
 # Detect platform and GPU availability
 COH_PLATFORM="$(uname -m)"
@@ -469,7 +472,6 @@ cargo +nightly build -p cohesix_root --release \
 
 log "✅ Rust components built with proper split targets"
 
-mkdir -p "$STAGE_DIR/bin"
 TARGET_DIR="$ROOT/workspace/target/aarch64-unknown-linux-musl/release"
 # Stage all main binaries
 for bin in cohcc cohbuild cli_cap cohtrace cohrun_cli cohagent cohrole cohrun cohup srvctl indexserver devwatcher physics-server exportfs import mount srv scenario_compiler cloud cohesix cohfuzz; do
@@ -509,7 +511,6 @@ log "🧱 Staging root ELF for seL4..."
 ROOT_ELF_SRC="$ROOT/workspace/target/sel4-aarch64/release/cohesix_root"
 if [ -f "$ROOT_ELF_SRC" ]; then
   cp "$ROOT_ELF_SRC" "$ROOT/out/cohesix_root.elf"
-  mkdir -p "$ROOT/out/bin"
   cp "$ROOT_ELF_SRC" "$ROOT/out/bin/cohesix_root.elf"
   log "Root ELF size: $(stat -c%s "$ROOT/out/bin/cohesix_root.elf") bytes"
 else
@@ -544,15 +545,6 @@ if [ "$ROOT_SIZE" -gt $((100*1024*1024)) ]; then
 fi
 
 log "✅ cohesix_root ELF memory layout and size validated"
-
-# Ensure staging directories exist for config and roles
-mkdir -p "$STAGE_DIR/etc" "$STAGE_DIR/roles" "$STAGE_DIR/init" \
-         "$STAGE_DIR/usr/bin" "$STAGE_DIR/usr/cli" "$STAGE_DIR/home/cohesix"
-if [ -d "$ROOT/python" ]; then
-  cp -r "$ROOT/python" "$STAGE_DIR/home/cohesix" 2>/dev/null || true
-  mkdir -p "$ROOT/out/home"
-  cp -r "$ROOT/python" "$ROOT/out/home/cohesix" 2>/dev/null || true
-fi
 
 #
 # -----------------------------------------------------------
@@ -592,54 +584,10 @@ echo "QEMU log: $QEMU_LOG" >> "$TRACE_LOG"
 
 
 log "📂 Staging boot files..."
-mkdir -p "$STAGE_DIR/boot"
 cp "$ROOT/out/bin/kernel.elf" "$STAGE_DIR/boot/kernel.elf"
 cp "$ROOT/out/bin/cohesix_root.elf" "$STAGE_DIR/boot/userland.elf"
 for f in initfs.img bootargs.txt boot_trace.json; do
   [ -f "$f" ] && cp "$f" "$STAGE_DIR/boot/"
-done
-
-
-# Always create a robust config/config.yaml and stage it
-log "📂 Ensuring configuration file exists..."
-CONFIG_PATH="$ROOT/config/config.yaml"
-mkdir -p "$(dirname "$CONFIG_PATH")"
-cat > "$CONFIG_PATH" <<EOF
-# CLASSIFICATION: COMMUNITY
-# Filename: config.yaml
-# Author: Lukas Bower
-# Date Modified: $(date +%Y-%m-%d)
-role: QueenPrimary
-network:
-  enabled: true
-  interfaces:
-    - eth0
-logging:
-  level: info
-EOF
-log "✅ config.yaml created at $CONFIG_PATH"
-
-# Also stage config.yaml into out for ISO build
-mkdir -p "$ROOT/out/etc/cohesix"
-cp "$CONFIG_PATH" "$ROOT/out/etc/cohesix/config.yaml"
-log "✅ config.yaml staged to $ROOT/out/etc/cohesix/config.yaml"
-
-# Stage config.yaml to ISO
-mkdir -p "$STAGE_DIR/etc/cohesix"
-cp "$CONFIG_PATH" "$STAGE_DIR/etc/cohesix/config.yaml"
-log "✅ config.yaml staged to ISO"
-if ls setup/roles/*.yaml >/dev/null 2>&1; then
-  for cfg in setup/roles/*.yaml; do
-    role="$(basename "$cfg" .yaml)"
-    mkdir -p "$STAGE_DIR/roles/$role"
-    cp "$cfg" "$STAGE_DIR/roles/$role/config.yaml"
-  done
-else
-  echo "❌ No role configs found in setup/roles" >&2
-  exit 1
-fi
-for shf in setup/init.sh setup/*.sh; do
-  [ -f "$shf" ] && cp "$shf" "$STAGE_DIR/init/"
 done
 
 # Generate manifest of staged binaries
@@ -665,13 +613,6 @@ cat > "$ART_JSON" <<EOF
 }
 EOF
 cat "$ART_JSON" >> "$TRACE_LOG"
-
-
-# 🗂 Prepare /srv namespace for tests (clean and set role)
-log "🗂 Preparing /srv namespace for tests..."
-sudo rm -rf /srv
-sudo mkdir -p /srv
-echo "DroneWorker" | sudo tee /srv/cohrole
 
 
 log "🔍 Running Rust tests with detailed output..."
@@ -804,19 +745,6 @@ BIN_COUNT=$(find "$STAGE_DIR/bin" -type f -perm -111 | wc -l)
 ROLE_COUNT=$(find "$STAGE_DIR/roles" -name '*.yaml' | wc -l)
 log "FS BUILD OK: ${BIN_COUNT} binaries, ${ROLE_COUNT} roles staged" >&3
 
-VERIFY_LOG="$LOG_DIR/root_split_target_dir_verify_$(date +%Y%m%d_%H%M%S).log"
-{
-  echo "root build path: $ROOT/workspace/target_root"
-  echo "cli build path: $ROOT/workspace/target_cli"
-  sha256sum "$ROOT/workspace/target_root/sel4-aarch64/release/cohesix_root" 2>/dev/null || true
-  sha256sum "$ROOT/workspace/target_cli/aarch64-unknown-linux-gnu/release/cohcc" 2>/dev/null || true
-  readelf -h "$ROOT/out/cohesix_root.elf" 2>/dev/null || echo "readelf missing"
-} > "$VERIFY_LOG"
-
-cleanup() {
-  log "🧹 Cleanup completed."
-}
-cleanup
 
 log "✅ [Build Complete] $(date)"
 
