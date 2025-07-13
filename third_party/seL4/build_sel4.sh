@@ -30,13 +30,13 @@ git fetch --tags
 git checkout 13.0.0
 
 # Now add tools and projects inside workspace
-git clone --branch 13.0.0 --depth 1 https://github.com/seL4/seL4_libs.git projects/seL4_libs
-git clone --branch 13.0.0 --depth 1 https://github.com/seL4/sel4runtime.git projects/sel4runtime
+git clone https://github.com/seL4/seL4_libs.git projects/seL4_libs
+git clone https://github.com/seL4/sel4runtime.git projects/sel4runtime
 #git clone https://github.com/seL4/seL4_libs.git projects/seL4_libs
-git clone --branch 13.0.0 --depth 1 https://github.com/seL4/musllibc.git projects/musllibc
-git clone --branch 13.0.0 --depth 1 https://github.com/seL4/util_libs.git projects/util_libs
+git clone https://github.com/seL4/musllibc.git projects/musllibc
+git clone 1 https://github.com/seL4/util_libs.git projects/util_libs
 #git clone https://github.com/seL4/sel4runtime.git projects/sel4runtime
-git clone --branch 13.0.0 --depth 1 https://github.com/seL4/sel4test.git projects/sel4test
+git clone https://github.com/seL4/sel4test.git projects/sel4test
 
 echo "✅ seL4 workspace ready at $DEST"
 
