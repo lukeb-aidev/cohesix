@@ -479,7 +479,6 @@ for script in cohcli cohcap cohtrace cohrun cohbuild cohup cohpkg; do
   fi
 done
 
-
 cd "$ROOT"
 log "🧱 Staging root ELF for seL4..."
 # Copy root ELF from cargo build output to out/cohesix_root.elf
@@ -500,7 +499,7 @@ log "🏗️  Building seL4 kernel and CPIO via build_sel4.sh..."
 echo "Fetching seL4 sources ..." >&2
 SEL4_SRC="${SEL4_SRC:-$ROOT/third_party/seL4/workspace}"
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+#SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 DEST="workspace"
 
 if [ -d "$DEST" ]; then
