@@ -12,7 +12,7 @@ if [[ "$HOST_ARCH" = "aarch64" ]] && ! command -v aarch64-linux-gnu-gcc >/dev/nu
   else
     SUDO=""
   fi
-
+fi
 # Ensure ROOT is always set
 ROOT="${ROOT:-$HOME/cohesix}"
 export ROOT
