@@ -4,6 +4,13 @@
 # Date Modified: 2027-12-30
 
 set -euo pipefail
+# Preconfigure git identity to avoid interactive prompts
+if ! git config --get user.name >/dev/null; then
+    git config --global user.name "Cohesix Builder"
+fi
+if ! git config --get user.email >/dev/null; then
+    git config --global user.email "builder@cohesix.local"
+fi
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 COMMIT="$(cat "$SCRIPT_DIR/COMMIT")"
 DEST="${SEL4_WORKSPACE:-$HOME/cohesix/third_party/seL4/workspace}"
