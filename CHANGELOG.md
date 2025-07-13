@@ -3343,3 +3343,7 @@
 ## [v0.534] - 2027-12-31
 ### Fixed
 - **FixCohesixRootBuild-151**: corrected custom target path in `workspace/Makefile` for the rootserver build and updated `METADATA.md` accordingly.
+
+## [v0.535] - 2025-07-13
+### Added
+- **AddSel4ElfloaderBuildStage-153**: `cohesix_fetch_build.sh` now builds the seL4 elfloader, stages it into the CPIO archive, and cleans up old staging logic. `METADATA.md` updated.
