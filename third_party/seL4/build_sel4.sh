@@ -69,4 +69,4 @@ fi
 find kernel.elf cohesix_root.elf $( [ -f "$DTB" ] && echo "$DTB" ) | cpio -o -H newc > ../boot/cohesix.cpio
 cd "$ROOT"
 
-echo "✅ build complete"  >&2
+echo "✅ seL4 build complete"  >&2
