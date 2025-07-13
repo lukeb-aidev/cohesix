@@ -37,8 +37,7 @@ fi
 ROOT="${ROOT:-$HOME/cohesix}"
 export ROOT
 
-SEL4_WORKSPACE="${SEL4_WORKSPACE:-$ROOT/third_party/seL4/workspace}"
-export SEL4_WORKSPACE
+## SEL4_WORKSPACE is now managed by build_sel4.sh; no longer used here
 LOG_DIR="$ROOT/logs"
 mkdir -p "$LOG_DIR"
 set -euxo pipefail
@@ -91,75 +90,8 @@ log "🛠️ [Build Start] $(date)"
 log "🚀 Using existing repository at $ROOT"
 
 LIB_PATH="$ROOT/third_party/seL4/lib/libsel4.a"
-if [ ! -f "$LIB_PATH" ]; then
-  log "⚠️ libsel4.a missing, building in-place under third_party/seL4..."
-  cd "$ROOT/third_party/seL4"
-  
-  ls | tee -a "$TRACE_LOG"
-  BUILD_DIR="$(find . -maxdepth 1 -type d -name 'build_*' | head -n 1)"
-  if [ -z "$BUILD_DIR" ]; then
-    echo "❌ Could not locate seL4 build directory" >&2
-    exit 1
-  fi
-  cd "$BUILD_DIR"
-  ninja kernel.elf elfloader libsel4.a | tee -a "$TRACE_LOG"
-  mkdir -p "$ROOT/third_party/seL4/lib" "$ROOT/third_party/seL4/include"
-  cp libsel4/libsel4.a "$ROOT/third_party/seL4/lib/" | tee -a "$TRACE_LOG" || {
-    echo "❌ Failed to stage libsel4.a" >&2; exit 1; }
-  cp -r libsel4/include/* "$ROOT/third_party/seL4/include/" | tee -a "$TRACE_LOG" || {
-    echo "❌ Failed to stage headers" >&2; exit 1; }
-  KERNEL_ELF="$PWD/kernel/kernel.elf"
-  ELFLOADER="$PWD/elfloader/elfloader"
-  cd "$ROOT"
-  log "✅ libsel4.a staged at $LIB_PATH"
-  [ -f "$LIB_PATH" ] || { echo "❌ libsel4.a not found after build" >&2; exit 1; }
-fi
 
-# Build and stage seL4 kernel in release mode
-log "🚀 Building seL4 kernel in release mode..."
-cd "$SEL4_WORKSPACE"
-if [ ! -d "$SEL4_WORKSPACE" ]; then
-  echo "❌ SEL4_WORKSPACE directory not found: $SEL4_WORKSPACE" >&2
-  exit 1
-fi
-
-
- # Verify seL4 workspace contents with robust symlink resolution
-INIT_BUILD="$PWD/init-build.sh"
-if [ -L "$INIT_BUILD" ]; then
-  REAL_INIT_DIR="$(dirname "$(readlink "$INIT_BUILD")")"
-  cd "$PWD/$REAL_INIT_DIR"
-  INIT_BUILD="./init-build.sh"
-else
-  cd "$PWD"
-fi
-
-for item in "$INIT_BUILD" "$SEL4_WORKSPACE/kernel" "$SEL4_WORKSPACE/projects" "$SEL4_WORKSPACE/tools"; do
-  if [ ! -e "$item" ]; then
-    echo "❌ Missing seL4 component: $item" >&2
-    exit 1
-  fi
-done
-
-if [ ! -x "$INIT_BUILD" ]; then
-  echo "❌ init-build.sh not executable: $INIT_BUILD" >&2
-  exit 1
-fi
-
-rm -rf build_release
-mkdir build_release
-cd build_release
-
-"$INIT_BUILD" -DPLATFORM=qemu_arm_virt -DAARCH64=TRUE \
-  -DCROSS_COMPILER_PREFIX=aarch64-linux-gnu- -GNinja
-ninja kernel.elf elfloader
-
-mkdir -p "$ROOT/out/bin"
-cp kernel/kernel.elf "$ROOT/out/bin/kernel.elf"
-cp elfloader/elfloader "$ROOT/out/bin/elfloader"
-log "✅ kernel.elf staged at $ROOT/out/bin/kernel.elf"
-[ -f "$ROOT/out/bin/kernel.elf" ] || { echo "❌ kernel.elf missing" >&2; exit 1; }
-mkdir -p "$LOG_DIR"
+## seL4 build and kernel/elfloader/cpio are now handled by build_sel4.sh
 
 
 if [ -f "$ROOT/scripts/load_arch_config.sh" ]; then
@@ -586,7 +518,9 @@ else
 fi
 [ -f "$ROOT/out/cohesix_root.elf" ] || { echo "❌ $ROOT/out/cohesix_root.elf missing" >&2; exit 1; }
 
-log "🏗️  Rebuilding kernel via build_sel4.sh..."
+
+# Build seL4 kernel, elfloader, and CPIO via build_sel4.sh after Rust build
+log "🏗️  Building seL4 kernel and CPIO via build_sel4.sh..."
 bash "$ROOT/third_party/seL4/build_sel4.sh" | tee -a "$LOG_FILE" >&3
 
 
@@ -624,14 +558,8 @@ fi
 # -----------------------------------------------------------
 # QEMU bare metal boot test (aarch64)
 # -----------------------------------------------------------
-# Build CPIO archive for elfloader
-log "📦 Building CPIO archive with kernel.elf and cohesix_root.elf..."
-mkdir -p "$ROOT/out/boot"
+## CPIO archive is now built by build_sel4.sh; any checks below should use the output from that script
 CPIO_IMAGE="$ROOT/out/boot/image.cpio"
-cd "$ROOT/out/bin"
-find kernel.elf cohesix_root.elf | cpio -o -H newc > "$CPIO_IMAGE"
-log "✅ Created CPIO archive at $CPIO_IMAGE"
-cd "$ROOT"
 
 log "🔍 Running ELF checks..."
 KREAD="$LOG_DIR/kernel_readelf_$(date +%Y%m%d_%H%M%S).log"

@@ -6,6 +6,10 @@
 set -euxo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+
+echo "Fetching seL4 sources ..." >&2
+bash "$ROOT/third_party/seL4/fetch_sel4.sh"
+
 SEL4_SRC="${SEL4_SRC:-$ROOT/third_party/seL4/workspace}"
 BUILD_DIR="$ROOT/third_party/seL4/build"
 
@@ -15,11 +19,6 @@ done
 
 mkdir -p "$SEL4_SRC" "$BUILD_DIR"
 
-if [ ! -d "$SEL4_SRC/kernel" ]; then
-    echo "Fetching seL4 sources into $SEL4_SRC" >&2
-    bash "$ROOT/third_party/seL4/fetch_sel4.sh"
-fi
-
 cd "$BUILD_DIR"
 cmake -C "$ROOT/third_party/seL4/build_config.cmake" -GNinja "$SEL4_SRC/kernel"
 ninja kernel.elf
@@ -28,11 +27,11 @@ cp kernel/kernel.elf "$ROOT/out/bin/kernel.elf"
 cd "$ROOT"
 "$ROOT/scripts/build_root_elf.sh"
 
-mkdir -p out/boot
-cd out/bin
-DTB="$BUILD_DIR/kernel/kernel.dtb"
-if [ ! -f "$DTB" ]; then
-    DTC_SRC="$SEL4_SRC/projects/sel4test/tools/dts/qemu-arm-virt.dts"
+ mkdir -p out/boot
+ cd out/bin
+ DTB="$BUILD_DIR/kernel/kernel.dtb"
+ if [ ! -f "$DTB" ]; then
+     DTC_SRC="$SEL4_SRC/projects/sel4test/tools/dts/qemu-arm-virt.dts"
     [ -f "$DTC_SRC" ] && dtc -I dts -O dtb "$DTC_SRC" -o "$DTB"
 fi
 find kernel.elf cohesix_root.elf $( [ -f "$DTB" ] && echo "$DTB" ) | cpio -o -H newc > ../boot/cohesix.cpio
@@ -43,7 +42,7 @@ readelf -h out/bin/kernel.elf | grep -q 'AArch64'
 
 if nm -u out/bin/cohesix_root.elf | grep -q " U "; then
     echo "Unresolved symbols in cohesix_root.elf" >&2
-    exit 1
+     exit 1
 fi
 
 objdump -x out/bin/cohesix_root.elf | grep -q "_start"
