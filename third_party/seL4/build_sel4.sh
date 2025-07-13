@@ -53,7 +53,7 @@ cmake -G Ninja \
   -DCROSS_COMPILER_PREFIX=aarch64-linux-gnu- \
   "$SEL4_SRC"
 ninja kernel.elf
-cp kernel.elf "$ROOT/out/bin/kernel.elf"
+cp "$BUILD_DIR/kernel.elf" "$ROOT/out/bin/kernel.elf"
 
  mkdir -p "$ROOT/out/boot"
  cd "$ROOT/out/bin"
