@@ -3347,3 +3347,7 @@
 ## [v0.535] - 2025-07-13
 ### Added
 - **AddSel4ElfloaderBuildStage-153**: `cohesix_fetch_build.sh` now builds the seL4 elfloader, stages it into the CPIO archive, and cleans up old staging logic. `METADATA.md` updated.
+
+## [v0.536] - 2025-07-14
+### Fixed
+- **AddSel4ElfloaderBuildStage-154**: Updated `cohesix_fetch_build.sh` to build the seL4 elfloader from `workspace/projects/sel4test/tools/elfloader` and stage it into the CPIO archive. Removed legacy elfloader paths. `METADATA.md` updated.
