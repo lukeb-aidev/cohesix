@@ -1,5 +1,5 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v1.14
+# Filename: cohesix_fetch_build.sh v1.15
 # Author: Lukas Bower
 # Date Modified: 2027-12-31
 #!/usr/bin/env bash
@@ -496,10 +496,10 @@ fi
 
 # Build seL4 kernel, elfloader, and CPIO via build_sel4.sh after Rust build
 log "🏗️  Building seL4 kernel and CPIO via build_sel4.sh..."
+pushd "$ROOT/third_party/seL4"
 echo "Fetching seL4 sources ..." >&2
 SEL4_SRC="${SEL4_SRC:-$ROOT/third_party/seL4/workspace}"
 
-#SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 DEST="workspace"
 
 if [ -d "$DEST" ]; then
@@ -510,8 +510,8 @@ fi
 echo "📥 Syncing seL4 repos into $DEST..."
 
 # Clone seL4 into workspace directly
-git clone https://github.com/seL4/seL4.git $DEST
-cd $DEST
+git clone https://github.com/seL4/seL4.git "$DEST"
+cd "$DEST"
 git fetch --tags
 git checkout 13.0.0
 
@@ -558,6 +558,7 @@ CPIO_IMAGE="$ROOT/out/boot/cohesix.cpio"
 cd "$ROOT"
 
 echo "✅ seL4 build complete"  >&2
+popd
 
 # Bulletproof ELF validation
 log "🔍 Validating cohesix_root ELF memory layout..."
