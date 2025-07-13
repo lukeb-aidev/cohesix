@@ -3331,3 +3331,7 @@
 ## [v0.531] - 2027-12-31
 ### Fixed
 - **FixSel4PathAudit-075**: Ensured `cohesix_fetch_build.sh` validates the seL4 workspace paths, uses the correct `init-build.sh` location, and logs missing components before running CMake.
+
+## [v0.532] - 2027-12-31
+### Fixed
+- **FixCohesixBuildPaths-093**: Adjusted `cohesix_fetch_build.sh` to mirror `third_party/seL4/build_sel4.sh` and run correctly from the repository root. Added `pushd`/`popd` for workspace operations and fixed relative paths.
