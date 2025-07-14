@@ -549,6 +549,11 @@ echo "📦 Generating kernel ABI flags…"
 cd "$ROOT/third_party/seL4/workspace"
 cmake -P tools/flags.cmake
 
+echo "📚 Setting SEL4_LIB_DIR for linker…"
+export SEL4_LIB_DIR="$ROOT/third_party/seL4/lib"
+echo "🦀 Configuring Rust linker path…"
+export RUSTFLAGS="-L${SEL4_LIB_DIR}"
+
 echo "📥 Cloning seL4_tools…"
 if [ ! -d projects/seL4_tools ]; then
   git clone https://github.com/seL4/seL4_tools.git projects/seL4_tools
@@ -564,6 +569,7 @@ cmake -G Ninja \
   -DCROSS_COMPILER_PREFIX=aarch64-linux-gnu- \
   -DCMAKE_TOOLCHAIN_FILE=../../configs/AARCH64_verified.cmake \
   -DKERNEL_FLAGS_PATH=../../build/kernel_flags.cmake \
+  -DCMAKE_PREFIX_PATH="$SEL4_LIB_DIR" \
   ../../projects/seL4_tools/elfloader-tool
 ninja elfloader
 cp elfloader "$ROOT/out/bin/elfloader"
