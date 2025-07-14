@@ -1,5 +1,5 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v1.20
+# Filename: cohesix_fetch_build.sh v1.21
 # Author: Lukas Bower
 # Date Modified: 2027-12-31
 #!/usr/bin/env bash
@@ -545,29 +545,22 @@ ninja kernel.elf
 
 cp "$BUILD_DIR/kernel.elf" "$ROOT/out/bin/kernel.elf"
 
-pushd ..
 echo "📦 Generating kernel ABI flags…"
-cmake -P tools/flags.cmake -DOUTPUT_FILE=build/kernel_flags.cmake \
-  -DPLATFORM_CONFIG=configs/AARCH64_verified.cmake \
-  -DCROSS_COMPILER_PREFIX=aarch64-linux-gnu-
+cd "$ROOT/third_party/seL4/workspace"
+cmake -P tools/flags.cmake -DOUTPUT_FILE=build/kernel_flags.cmake -DPLATFORM_CONFIG=configs/AARCH64_verified.cmake -DCROSS_COMPILER_PREFIX=aarch64-linux-gnu-
 
 echo "📥 Ensuring seL4_tools is present…"
-if [ ! -d projects/seL4_tools ]; then
-  git clone https://github.com/seL4/seL4_tools.git projects/seL4_tools
-fi
+cd projects
+test -d seL4_tools || git clone https://github.com/seL4/seL4_tools.git seL4_tools
+cd ..
 
 echo "🚀 Building elfloader from seL4_tools…"
-ELFLOADER_BUILD="elfloader/build"
-mkdir -p "$ELFLOADER_BUILD"
-pushd "$ELFLOADER_BUILD"
-cmake -G Ninja -DCROSS_COMPILER_PREFIX=aarch64-linux-gnu- \
-  -DCMAKE_TOOLCHAIN_FILE=../../configs/AARCH64_verified.cmake \
-  -DKERNEL_FLAGS_PATH=../build/kernel_flags.cmake \
-  ../../../projects/seL4_tools/elfloader-tool
+mkdir -p elfloader/build
+cd elfloader/build
+cmake -G Ninja -DCROSS_COMPILER_PREFIX=aarch64-linux-gnu- -DCMAKE_TOOLCHAIN_FILE=../../configs/AARCH64_verified.cmake -DKERNEL_FLAGS_PATH=../../build/kernel_flags.cmake ../../projects/seL4_tools/elfloader-tool
 ninja elfloader
-popd
-cp "$ELFLOADER_BUILD/elfloader" "$ROOT/out/bin/elfloader"
-popd
+cp elfloader ../../../out/bin/elfloader
+cd ../../../..
 
  mkdir -p "$ROOT/out/boot"
  cd "$ROOT/out/bin"
