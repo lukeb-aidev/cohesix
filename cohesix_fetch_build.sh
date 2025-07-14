@@ -524,8 +524,6 @@ git clone https://github.com/seL4/musllibc.git projects/musllibc
 git clone https://github.com/seL4/util_libs.git projects/util_libs
 git clone https://github.com/seL4/sel4runtime.git projects/sel4runtime
 git clone https://github.com/seL4/sel4test.git projects/sel4test
-echo "\ud83d\udce5 Cloning seL4_tools..."
-git clone https://github.com/seL4/seL4_tools.git projects/seL4_tools
 
 echo "✅ seL4 workspace ready at $DEST"
 
@@ -549,20 +547,28 @@ cp "$BUILD_DIR/kernel.elf" "$ROOT/out/bin/kernel.elf"
 
 echo "📦 Generating kernel ABI flags…"
 cd "$ROOT/third_party/seL4/workspace"
-cmake -P tools/flags.cmake -DOUTPUT_FILE=build/kernel_flags.cmake -DPLATFORM_CONFIG=configs/AARCH64_verified.cmake -DCROSS_COMPILER_PREFIX=aarch64-linux-gnu-
+cmake -P tools/flags.cmake
 
-echo "📥 Ensuring seL4_tools is present…"
-cd projects
-test -d seL4_tools || git clone https://github.com/seL4/seL4_tools.git seL4_tools
-cd ..
+echo "📥 Cloning seL4_tools…"
+if [ ! -d projects/seL4_tools ]; then
+  git clone https://github.com/seL4/seL4_tools.git projects/seL4_tools
+fi
+test -d projects/seL4_tools/elfloader-tool || { echo "Missing elfloader-tool" >&2; exit 1; }
 
 echo "🚀 Building elfloader from seL4_tools…"
 mkdir -p elfloader/build
 cd elfloader/build
-cmake -G Ninja -DCROSS_COMPILER_PREFIX=aarch64-linux-gnu- -DCMAKE_TOOLCHAIN_FILE=../../configs/AARCH64_verified.cmake -DKERNEL_FLAGS_PATH=../../build/kernel_flags.cmake ../../projects/seL4_tools/elfloader-tool
+[ -d ../../tools ] || { echo "Missing CMake modules" >&2; exit 1; }
+cmake -G Ninja \
+  -DCMAKE_MODULE_PATH=../../tools \
+  -DCROSS_COMPILER_PREFIX=aarch64-linux-gnu- \
+  -DCMAKE_TOOLCHAIN_FILE=../../configs/AARCH64_verified.cmake \
+  -DKERNEL_FLAGS_PATH=../../build/kernel_flags.cmake \
+  ../../projects/seL4_tools/elfloader-tool
 ninja elfloader
-cp elfloader ../../../out/bin/elfloader
-cd ../../../..
+cp elfloader "$ROOT/out/bin/elfloader"
+[ -f "$ROOT/out/bin/elfloader" ] || { echo "elfloader build failed" >&2; exit 1; }
+cd "$ROOT"
 
  mkdir -p "$ROOT/out/boot"
  cd "$ROOT/out/bin"
