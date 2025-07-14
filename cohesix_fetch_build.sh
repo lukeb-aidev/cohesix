@@ -1,5 +1,5 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v1.18
+# Filename: cohesix_fetch_build.sh v1.19
 # Author: Lukas Bower
 # Date Modified: 2027-12-31
 #!/usr/bin/env bash
@@ -522,6 +522,8 @@ git clone https://github.com/seL4/musllibc.git projects/musllibc
 git clone https://github.com/seL4/util_libs.git projects/util_libs
 git clone https://github.com/seL4/sel4runtime.git projects/sel4runtime
 git clone https://github.com/seL4/sel4test.git projects/sel4test
+echo "\ud83d\udce5 Cloning seL4_tools..."
+git clone https://github.com/seL4/seL4_tools.git projects/seL4_tools
 
 echo "✅ seL4 workspace ready at $DEST"
 
@@ -543,11 +545,15 @@ ninja kernel.elf
 
 cp "$BUILD_DIR/kernel.elf" "$ROOT/out/bin/kernel.elf"
 
-log "\ud83d\ude80 Building seL4 elfloader..."
-ELFLOADER_DIR="${WORKSPACE}/workspace/projects/sel4test/tools/elfloader"
+echo "\ud83d\ude80 Building elfloader from seL4_tools..."
+ELFLOADER_DIR="${WORKSPACE}/workspace/projects/seL4_tools/elfloader-tool"
 if [ -d "$ELFLOADER_DIR" ]; then
-  make -C "$ELFLOADER_DIR"
-  cp "$ELFLOADER_DIR/elfloader" "$ROOT/out/bin/elfloader"
+  mkdir -p "$ELFLOADER_DIR/build"
+  pushd "$ELFLOADER_DIR/build"
+  cmake -G Ninja ..
+  ninja
+  popd
+  cp "$ELFLOADER_DIR/build/elfloader" "$ROOT/out/bin/elfloader"
 else
   echo "❌ elfloader source not found at $ELFLOADER_DIR" >&2
   exit 1

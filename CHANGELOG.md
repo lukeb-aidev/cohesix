@@ -3355,3 +3355,7 @@
 ## [v0.537] - 2027-12-31
 ### Fixed
 - **ReorderElfloaderBuildPostKernel-155**: Adjusted `cohesix_fetch_build.sh` so the elfloader is built immediately after the seL4 kernel using `ELFLOADER_DIR="${WORKSPACE}/workspace/projects/sel4test/tools/elfloader"`.
+
+## [v0.538] - 2027-12-31
+### Changed
+- **UpdateCohesixFetchBuildSel4-003**: `cohesix_fetch_build.sh` clones `seL4_tools` and builds the elfloader from `projects/seL4_tools/elfloader-tool`. `METADATA.md` updated.
