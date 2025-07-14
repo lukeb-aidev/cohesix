@@ -545,19 +545,25 @@ ninja kernel.elf
 
 cp "$BUILD_DIR/kernel.elf" "$ROOT/out/bin/kernel.elf"
 
-echo "\ud83d\ude80 Building elfloader from seL4_tools..."
-ELFLOADER_DIR="${WORKSPACE}/workspace/projects/seL4_tools/elfloader-tool"
-if [ -d "$ELFLOADER_DIR" ]; then
-  mkdir -p "$ELFLOADER_DIR/build"
-  pushd "$ELFLOADER_DIR/build"
-  cmake -G Ninja ..
-  ninja
-  popd
-  cp "$ELFLOADER_DIR/build/elfloader" "$ROOT/out/bin/elfloader"
-else
-  echo "❌ elfloader source not found at $ELFLOADER_DIR" >&2
-  exit 1
+echo "📦 Generating kernel ABI flags…"
+ninja kernel_abi_flags
+
+echo "📥 Cloning seL4_tools…"
+if [ ! -d ../projects/seL4_tools ]; then
+  git clone https://github.com/seL4/seL4_tools.git ../projects/seL4_tools
 fi
+
+echo "🚀 Building elfloader from seL4_tools…"
+ELFLOADER_BUILD="../elfloader/build"
+mkdir -p "$ELFLOADER_BUILD"
+pushd "$ELFLOADER_BUILD"
+cmake -G Ninja -DCROSS_COMPILER_PREFIX=aarch64-linux-gnu- \
+  -DCMAKE_TOOLCHAIN_FILE=../../configs/AARCH64_verified.cmake \
+  -DKERNEL_FLAGS_PATH=../build/kernel_flags.cmake \
+  ../../../projects/seL4_tools/elfloader-tool
+ninja elfloader
+popd
+cp "$ELFLOADER_BUILD/elfloader" "$ROOT/out/bin/elfloader"
 
  mkdir -p "$ROOT/out/boot"
  cd "$ROOT/out/bin"
