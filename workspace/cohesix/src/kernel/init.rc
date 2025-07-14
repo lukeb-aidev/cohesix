@@ -11,9 +11,10 @@ mount 9p -c /srv/boot /boot
 bind -a /boot/bin /bin
 bind -a /boot/usr/bin /usr/bin
 
-applets='echo ls cp mv cat grep head tail printf test mkdir rmdir vi mount sh ash'
+applets='sh ls cat echo mount umount vi cp mv rm grep head tail printf test mkdir rmdir'
 for(app in $applets){
     ln /bin/busybox /bin/$ap
 }
 
 echo Cohesix init.rc executed
+
