@@ -1,5 +1,5 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v1.22
+# Filename: cohesix_fetch_build.sh v1.23
 # Author: Lukas Bower
 # Date Modified: 2027-12-31
 #!/usr/bin/env bash
@@ -549,40 +549,41 @@ echo "📦 Generating kernel ABI flags…"
 cd "$ROOT/third_party/seL4/workspace"
 cmake -P tools/flags.cmake
 
-echo "🔍 Locating seL4 workspace…"
-SEL4_WS=$(find "$(pwd)" -type d -path "*/third_party/seL4/workspace" -print -quit)
-test -d "$SEL4_WS" || { echo "❌ seL4 workspace not found" >&2; exit 1; }
+echo "🔍 Locating seL4 workspace root…"
+SEL4_WS=$(find third_party/seL4 -type d -name workspace -print -quit)
+test -d "$SEL4_WS" || { echo "❌ seL4 workspace not found"; exit 1; }
+
+echo "🔍 Locating kernel_flags.cmake…"
+KFLAGS=$(find "$SEL4_WS/build" -type f -name kernel_flags.cmake -print -quit)
+test -f "$KFLAGS" || { echo "❌ kernel_flags.cmake not found"; exit 1; }
+
+echo "🔍 Locating cpio module…"
+CPIO_DIR=$(find "$SEL4_WS/tools" -type f -name cpio.cmake -exec dirname {} \; -print -quit)
+test -d "$CPIO_DIR" || { echo "❌ cpio module not found"; exit 1; }
 
 echo "🔍 Locating libsel4.a…"
-SEL4_LIB=$(find "$SEL4_WS/../lib" -name libsel4.a -print -quit)
-test -f "$SEL4_LIB" || { echo "❌ libsel4.a not found" >&2; exit 1; }
-export SEL4_LIB_DIR=$(dirname "$SEL4_LIB")
+LIBSEL4=$(find third_party/seL4/lib -type f -name libsel4.a -print -quit)
+test -f "$LIBSEL4" || { echo "❌ libsel4.a not found"; exit 1; }
+SEL4_LIB_DIR=$(dirname "$LIBSEL4")
 
-echo "🦀 Configuring Rust linker path…"
-export RUSTFLAGS="-L${SEL4_LIB_DIR}"
+echo "🔍 Locating seL4_tools elfloader source…"
+ELF_SRC=$(find "$SEL4_WS/projects" -type d -path "*/seL4_tools/elfloader-tool" -print -quit)
+test -d "$ELF_SRC" || { echo "❌ elfloader source not found"; exit 1; }
 
-echo "📥 Checking seL4_tools…"
-if [ ! -d "$SEL4_WS/projects/seL4_tools" ]; then
-  git clone https://github.com/seL4/seL4_tools.git "$SEL4_WS/projects/seL4_tools"
-fi
-test -d "$SEL4_WS/projects/seL4_tools/elfloader-tool" || { echo "Missing elfloader-tool" >&2; exit 1; }
-
-mkdir -p elfloader/build
-cd elfloader/build
-CPIO_MODULE="../../projects/seL4_tools/cmake-tool/helpers/cpio.cmake"
-[ -f "$CPIO_MODULE" ] || { echo "❌ cpio module not found" >&2; exit 1; }
-[ -d ../../third_party/seL4/workspace/tools ] || { echo "Missing seL4 workspace tools" >&2; exit 1; }
+echo "🚀 Building elfloader…"
+mkdir -p "$SEL4_WS/elfloader/build"
+cd "$SEL4_WS/elfloader/build"
 cmake -G Ninja \
-  -DCMAKE_MODULE_PATH="../../third_party/seL4/workspace/tools;../../projects/seL4_tools/cmake-tool/helpers" \
+  -DCMAKE_MODULE_PATH="$CPIO_DIR" \
   -DCROSS_COMPILER_PREFIX=aarch64-linux-gnu- \
-  -DCMAKE_TOOLCHAIN_FILE=../../configs/AARCH64_verified.cmake \
-  -DKERNEL_FLAGS_PATH="$SEL4_WS/build/kernel_flags.cmake" \
+  -DCMAKE_TOOLCHAIN_FILE="$SEL4_WS/configs/AARCH64_verified.cmake" \
+  -DKERNEL_FLAGS_PATH="$KFLAGS" \
   -DCMAKE_PREFIX_PATH="$SEL4_LIB_DIR" \
-  ../../projects/seL4_tools/elfloader-tool
+  "$ELF_SRC"
 ninja elfloader
-cp elfloader "$ROOT/out/bin/elfloader"
-[ -f "$ROOT/out/bin/elfloader" ] || { echo "elfloader build failed" >&2; exit 1; }
-cd "$ROOT"
+cp elfloader "$(pwd)/../../out/bin/elfloader"
+test -f "$(pwd)/../../out/bin/elfloader" || { echo "❌ elfloader staging failed"; exit 1; }
+cd "$(git rev-parse --show-toplevel)"
 
  mkdir -p "$ROOT/out/boot"
  cd "$ROOT/out/bin"

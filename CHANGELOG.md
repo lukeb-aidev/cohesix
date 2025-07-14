@@ -3375,3 +3375,7 @@
 ## [v0.542] - 2027-12-31
 ### Fixed
 - **AuditAndStageInitRc-085**: Resolved BusyBox loop variable issue in `init.rc` and staged the script into `out/srv/init.rc` in `cohesix_fetch_build.sh`. `METADATA.md` updated.
+
+## [v0.543] - 2027-12-31
+### Changed
+- **UpdateCohesixElfloaderFindFiles-013**: `cohesix_fetch_build.sh` now locates elfloader inputs under `third_party/seL4` dynamically and stages the binary using relative paths. `METADATA.md` updated.
