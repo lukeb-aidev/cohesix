@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v1.17
+# Filename: cohesix_fetch_build.sh v1.18
 # Author: Lukas Bower
-# Date Modified: 2025-07-14
+# Date Modified: 2027-12-31
 #!/usr/bin/env bash
 # This script fetches and builds the Cohesix project, including seL4 and other dependencies.
 
@@ -41,6 +41,7 @@ export PATH="$CUDA_HOME/bin:$PATH"
 export LD_LIBRARY_PATH="$CUDA_LIBRARY_PATH:${LD_LIBRARY_PATH:-}"
 export ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export LOG_DIR="$ROOT/logs"
+WORKSPACE="${WORKSPACE:-$ROOT/third_party/seL4}"
 
 cd "$ROOT"
 
@@ -543,9 +544,9 @@ ninja kernel.elf
 cp "$BUILD_DIR/kernel.elf" "$ROOT/out/bin/kernel.elf"
 
 log "\ud83d\ude80 Building seL4 elfloader..."
-ELFLOADER_DIR="$ROOT/third_party/seL4/workspace/projects/sel4test/tools/elfloader"
+ELFLOADER_DIR="${WORKSPACE}/workspace/projects/sel4test/tools/elfloader"
 if [ -d "$ELFLOADER_DIR" ]; then
-  make -C "$ELFLOADER_DIR" CROSS_COMPILE=aarch64-linux-gnu-
+  make -C "$ELFLOADER_DIR"
   cp "$ELFLOADER_DIR/elfloader" "$ROOT/out/bin/elfloader"
 else
   echo "❌ elfloader source not found at $ELFLOADER_DIR" >&2
