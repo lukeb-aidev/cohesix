@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: nightly.yml v0.4
+# Filename: nightly.yml v0.6
 # Author: Lukas Bower
-# Date Modified: 2025-07-13
+# Date Modified: 2025-07-14
 
 name: Nightly Determinism Check
 
@@ -12,6 +12,10 @@ on:
 jobs:
   determinism:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: workspace
+
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
@@ -22,23 +26,24 @@ jobs:
           toolchain: stable
           override: true
 
-      - name: Cache cargo registry
+      - name: Cache cargo registry and build artifacts
         uses: actions/cache@v3
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+            workspace/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('workspace/**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-
 
-      - name: Run tests
-        run: cargo test --release | tee sim_test.log
+      - name: Run tests and capture logs
+        run: |
+          cargo test --release | tee sim_test.log
         shell: bash
 
       - name: Upload logs
         uses: actions/upload-artifact@v4
         with:
           name: sim-logs
-          path: sim_test.log
+          path: workspace/sim_test.log
