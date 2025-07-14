@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: init.rs v0.5
+// Filename: init.rs v0.6
 // Author: Lukas Bower
-// Date Modified: 2026-12-30
+// Date Modified: 2027-12-31
 // Formerly limited to non-UEFI builds; now always compiled for UEFI.
 
 //! Minimal Plan 9 style init parser for Cohesix.
@@ -66,7 +66,7 @@ pub fn run() -> io::Result<()> {
         });
     }
     NamespaceLoader::apply(&mut ns)?;
-    if let Ok(file) = fs::File::open("/boot/rc.local") {
+    if let Ok(file) = fs::File::open("/boot/init.rc") {
         for line in io::BufReader::new(file).lines() {
             let l = line?;
             let tokens: Vec<&str> = l.split_whitespace().collect();

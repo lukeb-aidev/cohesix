@@ -3359,3 +3359,7 @@
 ## [v0.538] - 2027-12-31
 ### Changed
 - **UpdateCohesixFetchBuildSel4-003**: `cohesix_fetch_build.sh` clones `seL4_tools` and builds the elfloader from `projects/seL4_tools/elfloader-tool`. `METADATA.md` updated.
+
+## [v0.539] - 2027-12-31
+### Added
+- **ImplementInitRcInvocation-084**: Kernel build now packages `init.rc`, boot RC reads it from `/boot/init.rc`, and BusyBox applets are wired via Plan 9 `bind`. `METADATA.md` updated.
