@@ -523,7 +523,8 @@ git clone https://github.com/seL4/seL4_libs.git projects/seL4_libs
 git clone https://github.com/seL4/musllibc.git projects/musllibc
 git clone https://github.com/seL4/util_libs.git projects/util_libs
 git clone https://github.com/seL4/sel4runtime.git projects/sel4runtime
-git clone https://github.com/seL4/sel4test.git projects/sel4test
+#git clone https://github.com/seL4/sel4test.git projects/sel4test
+git clone https://github.com/seL4/seL4_tools.git projects/seL4_tools
 
 echo "✅ seL4 workspace ready at $DEST"
 
