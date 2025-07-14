@@ -1,18 +1,19 @@
-// CLASSIFICATION: COMMUNITY
-// Filename: init.rc v0.1
-// Author: Lukas Bower
-// Date Modified: 2027-12-31
+#!/bin/rc
+# CLASSIFICATION: COMMUNITY
+# Filename: init.rc v0.1
+# Author: Lukas Bower
+# Date Modified: 2027-12-31
 
 # Cohesix kernel boot script
 # Mount the boot volume and wire BusyBox applets
 
-mount /srv/boot /boot
+mount 9p -c /srv/boot /boot
 bind -a /boot/bin /bin
 bind -a /boot/usr/bin /usr/bin
 
 applets='echo ls cp mv cat grep head tail printf test mkdir rmdir vi mount sh ash'
 for(app in $applets){
-    bind -c /bin/busybox /bin/$app
+    ln /bin/busybox /bin/$ap
 }
 
 echo Cohesix init.rc executed
