@@ -3379,3 +3379,7 @@
 ## [v0.543] - 2027-12-31
 ### Changed
 - **UpdateCohesixElfloaderFindFiles-013**: `cohesix_fetch_build.sh` now locates elfloader inputs under `third_party/seL4` dynamically and stages the binary using relative paths. `METADATA.md` updated.
+
+## [v0.544] - 2027-12-31
+### Fixed
+- **FixCohesixElfloaderFindPath-014**: Corrected elfloader section to set `SEL4_WS` directly from the workspace, remove unnecessary `find` calls, and stage the built elfloader correctly.

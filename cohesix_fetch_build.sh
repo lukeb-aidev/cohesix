@@ -1,5 +1,5 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v1.23
+# Filename: cohesix_fetch_build.sh v1.24
 # Author: Lukas Bower
 # Date Modified: 2027-12-31
 #!/usr/bin/env bash
@@ -543,32 +543,31 @@ cmake -G Ninja \
   "$SEL4_SRC"
 ninja kernel.elf
 
+
 cp "$BUILD_DIR/kernel.elf" "$ROOT/out/bin/kernel.elf"
 
 echo "📦 Generating kernel ABI flags…"
 cd "$ROOT/third_party/seL4/workspace"
 cmake -P tools/flags.cmake
 
-echo "🔍 Locating seL4 workspace root…"
-SEL4_WS=$(find third_party/seL4 -type d -name workspace -print -quit)
-test -d "$SEL4_WS" || { echo "❌ seL4 workspace not found"; exit 1; }
+echo "🔍 Setting SEL4_WS to workspace root…"
+SEL4_WS=$(pwd)
 
 echo "🔍 Locating kernel_flags.cmake…"
-KFLAGS=$(find "$SEL4_WS/build" -type f -name kernel_flags.cmake -print -quit)
+KFLAGS="$SEL4_WS/build/kernel_flags.cmake"
 test -f "$KFLAGS" || { echo "❌ kernel_flags.cmake not found"; exit 1; }
 
 echo "🔍 Locating cpio module…"
-CPIO_DIR=$(find "$SEL4_WS/tools" -type f -name cpio.cmake -exec dirname {} \; -print -quit)
-test -d "$CPIO_DIR" || { echo "❌ cpio module not found"; exit 1; }
+CPIO_DIR="$SEL4_WS/tools"
+test -f "$CPIO_DIR/cpio.cmake" || { echo "❌ cpio.cmake not found in $CPIO_DIR"; exit 1; }
 
 echo "🔍 Locating libsel4.a…"
-LIBSEL4=$(find third_party/seL4/lib -type f -name libsel4.a -print -quit)
-test -f "$LIBSEL4" || { echo "❌ libsel4.a not found"; exit 1; }
-SEL4_LIB_DIR=$(dirname "$LIBSEL4")
+SEL4_LIB_DIR="$SEL4_WS/../lib"
+test -f "$SEL4_LIB_DIR/libsel4.a" || { echo "❌ libsel4.a not found in $SEL4_LIB_DIR"; exit 1; }
 
-echo "🔍 Locating seL4_tools elfloader source…"
-ELF_SRC=$(find "$SEL4_WS/projects" -type d -path "*/seL4_tools/elfloader-tool" -print -quit)
-test -d "$ELF_SRC" || { echo "❌ elfloader source not found"; exit 1; }
+echo "🔍 Locating elfloader source…"
+ELF_SRC="$SEL4_WS/projects/seL4_tools/elfloader-tool"
+test -d "$ELF_SRC" || { echo "❌ elfloader-tool not found in $SEL4_WS/projects/seL4_tools"; exit 1; }
 
 echo "🚀 Building elfloader…"
 mkdir -p "$SEL4_WS/elfloader/build"
@@ -581,8 +580,8 @@ cmake -G Ninja \
   -DCMAKE_PREFIX_PATH="$SEL4_LIB_DIR" \
   "$ELF_SRC"
 ninja elfloader
-cp elfloader "$(pwd)/../../out/bin/elfloader"
-test -f "$(pwd)/../../out/bin/elfloader" || { echo "❌ elfloader staging failed"; exit 1; }
+cp elfloader "$(pwd)/../../../out/bin/elfloader"
+test -f "$(pwd)/../../../out/bin/elfloader" || { echo "❌ elfloader staging failed"; exit 1; }
 cd "$(git rev-parse --show-toplevel)"
 
  mkdir -p "$ROOT/out/boot"
