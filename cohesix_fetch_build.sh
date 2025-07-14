@@ -415,9 +415,9 @@ BUSYBOX_BIN="$ROOT/out/busybox/$COH_ARCH/bin/busybox"
 if [ -x "$BUSYBOX_BIN" ]; then
   cp "$BUSYBOX_BIN" "$STAGE_DIR/bin/busybox"
   log "✅ BusyBox built"
-  for app in sh ls cat echo mount umount vi cp mv rm grep head tail printf test mkdir rmdir; do
-    ln -sf busybox "$STAGE_DIR/bin/$app"
-  done
+#  for app in sh ls cat echo mount umount vi cp mv rm grep head tail printf test mkdir rmdir; do
+#    ln -sf busybox "$STAGE_DIR/bin/$app"
+#  done
   log "✅ Staged BusyBox applets to /bin"
   if [ -f "$ROOT/userland/miniroot/bin/init" ]; then
     cp "$ROOT/userland/miniroot/bin/init" "$STAGE_DIR/bin/init"
