@@ -3363,3 +3363,7 @@
 ## [v0.539] - 2027-12-31
 ### Added
 - **ImplementInitRcInvocation-084**: Kernel build now packages `init.rc`, boot RC reads it from `/boot/init.rc`, and BusyBox applets are wired via Plan 9 `bind`. `METADATA.md` updated.
+
+## [v0.540] - 2027-12-31
+### Changed
+- **UpdateCohesixElfloaderBuild-007**: Updated `cohesix_fetch_build.sh` elfloader logic to use `tools/flags.cmake`, ensure `seL4_tools` exists, and build in `workspace/elfloader`.

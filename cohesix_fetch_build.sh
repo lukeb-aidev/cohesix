@@ -1,5 +1,5 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v1.19
+# Filename: cohesix_fetch_build.sh v1.20
 # Author: Lukas Bower
 # Date Modified: 2027-12-31
 #!/usr/bin/env bash
@@ -545,16 +545,19 @@ ninja kernel.elf
 
 cp "$BUILD_DIR/kernel.elf" "$ROOT/out/bin/kernel.elf"
 
+pushd ..
 echo "📦 Generating kernel ABI flags…"
-ninja kernel_abi_flags
+cmake -P tools/flags.cmake -DOUTPUT_FILE=build/kernel_flags.cmake \
+  -DPLATFORM_CONFIG=configs/AARCH64_verified.cmake \
+  -DCROSS_COMPILER_PREFIX=aarch64-linux-gnu-
 
-echo "📥 Cloning seL4_tools…"
-if [ ! -d ../projects/seL4_tools ]; then
-  git clone https://github.com/seL4/seL4_tools.git ../projects/seL4_tools
+echo "📥 Ensuring seL4_tools is present…"
+if [ ! -d projects/seL4_tools ]; then
+  git clone https://github.com/seL4/seL4_tools.git projects/seL4_tools
 fi
 
 echo "🚀 Building elfloader from seL4_tools…"
-ELFLOADER_BUILD="../elfloader/build"
+ELFLOADER_BUILD="elfloader/build"
 mkdir -p "$ELFLOADER_BUILD"
 pushd "$ELFLOADER_BUILD"
 cmake -G Ninja -DCROSS_COMPILER_PREFIX=aarch64-linux-gnu- \
@@ -564,6 +567,7 @@ cmake -G Ninja -DCROSS_COMPILER_PREFIX=aarch64-linux-gnu- \
 ninja elfloader
 popd
 cp "$ELFLOADER_BUILD/elfloader" "$ROOT/out/bin/elfloader"
+popd
 
  mkdir -p "$ROOT/out/boot"
  cd "$ROOT/out/bin"
