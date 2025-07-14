@@ -3371,3 +3371,7 @@
 ## [v0.541] - 2027-12-31
 ### Fixed
 - **FixCohesixElfloaderPaths-008**: Corrected elfloader build directory paths so CMake locates the elfloader source and kernel flags within `workspace`.
+
+## [v0.542] - 2027-12-31
+### Fixed
+- **AuditAndStageInitRc-085**: Resolved BusyBox loop variable issue in `init.rc` and staged the script into `out/srv/init.rc` in `cohesix_fetch_build.sh`. `METADATA.md` updated.
