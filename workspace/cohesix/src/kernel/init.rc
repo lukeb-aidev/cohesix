@@ -1,6 +1,6 @@
 #!/bin/rc
 # CLASSIFICATION: COMMUNITY
-# Filename: init.rc v0.1
+# Filename: init.rc v0.2
 # Author: Lukas Bower
 # Date Modified: 2027-12-31
 
@@ -13,7 +13,7 @@ bind -a /boot/usr/bin /usr/bin
 
 applets='sh ls cat echo mount umount vi cp mv rm grep head tail printf test mkdir rmdir'
 for(app in $applets){
-    ln /bin/busybox /bin/$ap
+    ln /bin/busybox /bin/$app
 }
 
 echo Cohesix init.rc executed

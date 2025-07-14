@@ -1,5 +1,5 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v1.21
+# Filename: cohesix_fetch_build.sh v1.22
 # Author: Lukas Bower
 # Date Modified: 2027-12-31
 #!/usr/bin/env bash
@@ -74,6 +74,8 @@ GO_HELPERS_DIR="$ROOT/out/go_helpers"
 cd "$STAGE_DIR"
 mkdir -p bin usr/bin usr/cli usr/share/man/man1 usr/share/man/man8 \
          etc/cohesix srv mnt/data tmp dev proc roles home/cohesix boot init
+cp "$ROOT/workspace/cohesix/src/kernel/init.rc" "$STAGE_DIR/srv/init.rc"
+chmod +x "$STAGE_DIR/srv/init.rc"
 log "✅ Created Cohesix FS structure"
 # 🗂 Prepare /srv namespace for tests (clean and set role)
 log "🗂 Preparing /srv namespace for tests..."
