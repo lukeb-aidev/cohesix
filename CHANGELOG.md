@@ -3367,3 +3367,7 @@
 ## [v0.540] - 2027-12-31
 ### Changed
 - **UpdateCohesixElfloaderBuild-007**: Updated `cohesix_fetch_build.sh` elfloader logic to use `tools/flags.cmake`, ensure `seL4_tools` exists, and build in `workspace/elfloader`.
+
+## [v0.541] - 2027-12-31
+### Fixed
+- **FixCohesixElfloaderPaths-008**: Corrected elfloader build directory paths so CMake locates the elfloader source and kernel flags within `workspace`.
