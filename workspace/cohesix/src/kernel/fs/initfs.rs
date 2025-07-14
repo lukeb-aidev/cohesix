@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: initfs.rs v1.0
+// Filename: initfs.rs v1.1
 // Author: Lukas Bower
-// Date Modified: 2025-05-31
+// Date Modified: 2027-12-31
 
 /// InitFS — a static, read-only filesystem embedded into the Cohesix kernel.
 /// Used for boot-time resources such as init scripts, config files, and fallback binaries.
@@ -17,7 +17,7 @@ pub struct InitFile {
 static INIT_FILES: &[InitFile] = &[
     InitFile {
         name: "init.rc",
-        contents: b"echo booting Cohesix\n",
+        contents: include_bytes!("../init.rc"),
     },
     InitFile {
         name: "config.txt",
