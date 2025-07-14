@@ -563,9 +563,17 @@ test -d projects/seL4_tools/elfloader-tool || { echo "Missing elfloader-tool" >&
 echo "🚀 Building elfloader from seL4_tools…"
 mkdir -p elfloader/build
 cd elfloader/build
-[ -d ../../tools ] || { echo "Missing CMake modules" >&2; exit 1; }
+echo "🔍 Locating cpio module…"
+CPIO_MODULE="../../projects/seL4_tools/cmake-tool/helpers/cpio.cmake"
+if [ -f "$CPIO_MODULE" ]; then
+  echo "✅ cpio module found at $CPIO_MODULE"
+else
+  echo "❌ cpio module not found" >&2
+  exit 1
+fi
+[ -d ../../third_party/seL4/workspace/tools ] || { echo "Missing seL4 workspace tools" >&2; exit 1; }
 cmake -G Ninja \
-  -DCMAKE_MODULE_PATH=../../tools \
+  -DCMAKE_MODULE_PATH="../../third_party/seL4/workspace/tools;../../projects/seL4_tools/cmake-tool/helpers" \
   -DCROSS_COMPILER_PREFIX=aarch64-linux-gnu- \
   -DCMAKE_TOOLCHAIN_FILE=../../configs/AARCH64_verified.cmake \
   -DKERNEL_FLAGS_PATH=../../build/kernel_flags.cmake \
