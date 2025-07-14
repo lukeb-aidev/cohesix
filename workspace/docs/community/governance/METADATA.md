@@ -219,12 +219,14 @@
 | src/roles/sensor_relay.rs | v0.1 | 2026-09-30 | COMMUNITY | | |
 | src/roles/simulator_test.rs | v0.1 | 2026-09-30 | COMMUNITY | | |
 | src/security/capabilities.rs | v0.4 | 2026-10-29 | COMMUNITY | | |
-| src/rc/init.rs | v0.5 | 2026-02-20 | COMMUNITY | | |
+| src/rc/init.rs | v0.6 | 2027-12-31 | COMMUNITY | | |
 | src/lib/init.rs | v0.1 | 2025-08-17 | COMMUNITY | | |
 | src/kernel/userland_bootstrap.rs | v0.7 | 2026-11-20 | COMMUNITY | | |
 | src/kernel/loader.rs | v0.3 | 2027-02-03 | COMMUNITY | | |
 | src/kernel/user_api.rs | v0.3 | 2027-11-08 | COMMUNITY | | |
 | src/kernel/config.rs | v0.1 | 2025-08-27 | COMMUNITY | | |
+| src/kernel/fs/initfs.rs | v1.1 | 2027-12-31 | COMMUNITY | | |
+| src/kernel/init.rc | v0.1 | 2027-12-31 | COMMUNITY | | |
 | src/userbin/logdemo.rs | v0.1 | 2025-08-27 | COMMUNITY | | |
 | src/init/main.rs | v0.4 | 2027-02-01 | COMMUNITY | | |
 | src/init_efi/main.c | v0.5 | 2026-09-08 | COMMUNITY | | |
@@ -262,7 +264,7 @@
 | userland/miniroot/bin/help | v0.1 | 2025-09-23 | COMMUNITY | | |
 | userland/miniroot/bin/ls | v0.1 | 2025-09-23 | COMMUNITY | | |
 | userland/miniroot/bin/init | v0.3 | 2027-12-10 | COMMUNITY | | |
-| userland/miniroot/bin/rc | v0.1 | 2026-01-20 | COMMUNITY | | |
+| userland/miniroot/bin/rc | v0.2 | 2027-12-31 | COMMUNITY | | |
 | usr/src/example.coh | v0.1 | 2025-09-24 | COMMUNITY | | |
 | src/sh_loop.rs | v0.1 | 2025-09-23 | COMMUNITY | | |
 | src/root/main.rs | v0.3 | 2026-12-31 | COMMUNITY | | |
