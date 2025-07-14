@@ -549,34 +549,34 @@ echo "📦 Generating kernel ABI flags…"
 cd "$ROOT/third_party/seL4/workspace"
 cmake -P tools/flags.cmake
 
-echo "📚 Setting SEL4_LIB_DIR for linker…"
-export SEL4_LIB_DIR="$ROOT/third_party/seL4/lib"
+echo "🔍 Locating seL4 workspace…"
+SEL4_WS=$(find "$(pwd)" -type d -path "*/third_party/seL4/workspace" -print -quit)
+test -d "$SEL4_WS" || { echo "❌ seL4 workspace not found" >&2; exit 1; }
+
+echo "🔍 Locating libsel4.a…"
+SEL4_LIB=$(find "$SEL4_WS/../lib" -name libsel4.a -print -quit)
+test -f "$SEL4_LIB" || { echo "❌ libsel4.a not found" >&2; exit 1; }
+export SEL4_LIB_DIR=$(dirname "$SEL4_LIB")
+
 echo "🦀 Configuring Rust linker path…"
 export RUSTFLAGS="-L${SEL4_LIB_DIR}"
 
-echo "📥 Cloning seL4_tools…"
-if [ ! -d projects/seL4_tools ]; then
-  git clone https://github.com/seL4/seL4_tools.git projects/seL4_tools
+echo "📥 Checking seL4_tools…"
+if [ ! -d "$SEL4_WS/projects/seL4_tools" ]; then
+  git clone https://github.com/seL4/seL4_tools.git "$SEL4_WS/projects/seL4_tools"
 fi
-test -d projects/seL4_tools/elfloader-tool || { echo "Missing elfloader-tool" >&2; exit 1; }
+test -d "$SEL4_WS/projects/seL4_tools/elfloader-tool" || { echo "Missing elfloader-tool" >&2; exit 1; }
 
-echo "🚀 Building elfloader from seL4_tools…"
 mkdir -p elfloader/build
 cd elfloader/build
-echo "🔍 Locating cpio module…"
 CPIO_MODULE="../../projects/seL4_tools/cmake-tool/helpers/cpio.cmake"
-if [ -f "$CPIO_MODULE" ]; then
-  echo "✅ cpio module found at $CPIO_MODULE"
-else
-  echo "❌ cpio module not found" >&2
-  exit 1
-fi
+[ -f "$CPIO_MODULE" ] || { echo "❌ cpio module not found" >&2; exit 1; }
 [ -d ../../third_party/seL4/workspace/tools ] || { echo "Missing seL4 workspace tools" >&2; exit 1; }
 cmake -G Ninja \
   -DCMAKE_MODULE_PATH="../../third_party/seL4/workspace/tools;../../projects/seL4_tools/cmake-tool/helpers" \
   -DCROSS_COMPILER_PREFIX=aarch64-linux-gnu- \
   -DCMAKE_TOOLCHAIN_FILE=../../configs/AARCH64_verified.cmake \
-  -DKERNEL_FLAGS_PATH=../../build/kernel_flags.cmake \
+  -DKERNEL_FLAGS_PATH="$SEL4_WS/build/kernel_flags.cmake" \
   -DCMAKE_PREFIX_PATH="$SEL4_LIB_DIR" \
   ../../projects/seL4_tools/elfloader-tool
 ninja elfloader
