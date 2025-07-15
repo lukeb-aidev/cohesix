@@ -548,48 +548,28 @@ ninja kernel.elf
 cp "$BUILD_DIR/kernel.elf" "$ROOT/out/bin/kernel.elf"
 echo "seL4 Kernel built and staged successfully"
 
-echo "🔍 Generating kernel_flags.cmake using seL4_tools helper..."
+echo "📦 Generating kernel ABI flags…"
 cd "$ROOT/third_party/seL4/workspace"
 cmake -P projects/seL4_tools/cmake-tool/flags.cmake \
   -DOUTPUT_FILE=build/kernel_flags.cmake \
   -DPLATFORM_CONFIG=configs/AARCH64_verified.cmake \
-  -DCROSS_COMPILER_PREFIX=aarch64-linux-gnu- || { echo "❌ flags generator failed"; exit 1; }
-test -f build/kernel_flags.cmake || { echo "❌ kernel_flags.cmake still missing"; exit 1; }
-
-
-echo "🔍 Setting SEL4_WS to workspace root…"
-cd "$ROOT/third_party/seL4/workspace"
-SEL4_WS=$(pwd)
-
-echo "🔍 Locating kernel_flags.cmake…"
-KFLAGS="$SEL4_WS/build/kernel_flags.cmake"
-test -f "$KFLAGS" || { echo "❌ kernel_flags.cmake not found"; exit 1; }
-
-echo "🔍 Locating cpio module…"
-CPIO_DIR="$SEL4_WS/tools"
-test -f "$CPIO_DIR/cpio.cmake" || { echo "❌ cpio.cmake not found in $CPIO_DIR"; exit 1; }
-
-echo "🔍 Locating libsel4.a…"
-SEL4_LIB_DIR="$SEL4_WS/../lib"
-test -f "$SEL4_LIB_DIR/libsel4.a" || { echo "❌ libsel4.a not found in $SEL4_LIB_DIR"; exit 1; }
-
-echo "🔍 Locating elfloader source…"
-ELF_SRC="$SEL4_WS/projects/seL4_tools/elfloader-tool"
-test -d "$ELF_SRC" || { echo "❌ elfloader-tool not found in $SEL4_WS/projects/seL4_tools"; exit 1; }
-
-echo "🚀 Building elfloader…"
-mkdir -p "$SEL4_WS/elfloader/build"
-cd "$SEL4_WS/elfloader/build"
-cmake -G Ninja \
-  -DCMAKE_MODULE_PATH="$CPIO_DIR" \
   -DCROSS_COMPILER_PREFIX=aarch64-linux-gnu- \
-  -DCMAKE_TOOLCHAIN_FILE="$SEL4_WS/configs/AARCH64_verified.cmake" \
-  -DKERNEL_FLAGS_PATH="$KFLAGS" \
-  -DCMAKE_PREFIX_PATH="$SEL4_LIB_DIR" \
-  "$ELF_SRC"
-ninja elfloader
-cp elfloader "$(pwd)/../../../out/bin/elfloader"
-test -f "$(pwd)/../../../out/bin/elfloader" || { echo "❌ elfloader staging failed"; exit 1; }
+  || { echo "❌ flags generation failed"; exit 1; }
+test -f build/kernel_flags.cmake || { echo "❌ kernel_flags.cmake missing"; exit 1; }
+
+echo "🚀 Building elfloader from seL4_tools…"
+mkdir -p "$ROOT/third_party/seL4/workspace/elfloader/build"
+cd "$ROOT/third_party/seL4/workspace/elfloader/build"
+cmake -G Ninja \
+  -DCMAKE_MODULE_PATH=../../projects/seL4_tools/cmake-tool/helpers \
+  -DCROSS_COMPILER_PREFIX=aarch64-linux-gnu- \
+  -DCMAKE_TOOLCHAIN_FILE=../../configs/AARCH64_verified.cmake \
+  -DKERNEL_FLAGS_PATH=../../build/kernel_flags.cmake \
+  ../../projects/seL4_tools/elfloader-tool \
+  || { echo "❌ elfloader cmake failed"; exit 1; }
+ninja elfloader || { echo "❌ elfloader build failed"; exit 1; }
+cp elfloader ../../../out/bin/elfloader || { echo "❌ elfloader staging failed"; exit 1; }
+test -f ../../../out/bin/elfloader || { echo "❌ elfloader not found after staging"; exit 1; }
 cd "$(git rev-parse --show-toplevel)"
 
  mkdir -p "$ROOT/out/boot"
