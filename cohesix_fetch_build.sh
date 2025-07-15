@@ -506,26 +506,19 @@ SEL4_SRC="${SEL4_SRC:-$ROOT/third_party/seL4/workspace}"
 DEST="workspace"
 
 echo "📥 Syncing seL4 repos into $DEST..."
-# Clone seL4 kernel at 13.0.0
 git clone https://github.com/seL4/seL4.git "$DEST"
 cd "$DEST"
-git fetch --tags
-git checkout 13.0.0
-
-# Clone all the matching 13.0.0 tool repos under workspace/projects
-mkdir -p projects
-cd projects
+git fetch --tags && git checkout 13.0.0
+mkdir -p projects && cd projects
 git clone https://github.com/seL4/seL4_libs.git
 git clone https://github.com/seL4/musllibc.git
 git clone https://github.com/seL4/util_libs.git
 git clone https://github.com/seL4/sel4runtime.git
 git clone https://github.com/seL4/seL4_tools.git
-
-# Checkout the 13.0.0 tag in seL4_tools
 for repo in seL4_libs musllibc util_libs sel4runtime seL4_tools; do
-  cd $repo
-  git fetch --tags
-  git checkout 13.0.0
+    cd $repo
+    git fetch --tags
+    git checkout 13.0.0
 done
 cd "$DEST"
 
