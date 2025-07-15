@@ -526,13 +526,6 @@ git clone https://github.com/seL4/sel4runtime.git projects/sel4runtime
 #git clone https://github.com/seL4/sel4test.git projects/sel4test
 git clone https://github.com/seL4/seL4_tools.git projects/seL4_tools
 
-echo "🔍 Generating kernel_flags.cmake using seL4_tools helper..."
-cd "$ROOT/third_party/seL4/workspace"
-cmake -P projects/seL4_tools/cmake-tool/flags.cmake \
-  -DOUTPUT_FILE=build/kernel_flags.cmake \
-  -DPLATFORM_CONFIG=configs/AARCH64_verified.cmake \
-  -DCROSS_COMPILER_PREFIX=aarch64-linux-gnu- || { echo "❌ flags generator failed"; exit 1; }
-test -f build/kernel_flags.cmake || { echo "❌ kernel_flags.cmake still missing"; exit 1; }
 
 echo "✅ seL4 workspace ready at $DEST"
 
@@ -552,8 +545,17 @@ cmake -G Ninja \
   "$SEL4_SRC"
 ninja kernel.elf
 
-
 cp "$BUILD_DIR/kernel.elf" "$ROOT/out/bin/kernel.elf"
+echo "seL4 Kernel built and staged successfully"
+
+echo "🔍 Generating kernel_flags.cmake using seL4_tools helper..."
+cd "$ROOT/third_party/seL4/workspace"
+cmake -P projects/seL4_tools/cmake-tool/flags.cmake \
+  -DOUTPUT_FILE=build/kernel_flags.cmake \
+  -DPLATFORM_CONFIG=configs/AARCH64_verified.cmake \
+  -DCROSS_COMPILER_PREFIX=aarch64-linux-gnu- || { echo "❌ flags generator failed"; exit 1; }
+test -f build/kernel_flags.cmake || { echo "❌ kernel_flags.cmake still missing"; exit 1; }
+
 
 echo "🔍 Setting SEL4_WS to workspace root…"
 cd "$ROOT/third_party/seL4/workspace"
