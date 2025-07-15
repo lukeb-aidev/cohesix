@@ -548,12 +548,12 @@ ninja kernel.elf
 cp "$BUILD_DIR/kernel.elf" "$ROOT/out/bin/kernel.elf"
 echo "seL4 Kernel built and staged successfully"
 
-echo "🔍 Generating kernel_flags.cmake using seL4_tools helper..."
+echo "📦 Generating kernel ABI flags per CMAKE-README…"
 cd "$ROOT/third_party/seL4/workspace"
-cmake -P projects/seL4_tools/cmake-tool/flags.cmake \
+cmake -P tools/flags.cmake \
   -DOUTPUT_FILE=build/kernel_flags.cmake \
   -DPLATFORM_CONFIG=configs/AARCH64_verified.cmake \
-  -DCROSS_COMPILER_PREFIX=aarch64-linux-gnu- || { echo "❌ flags generator failed"; exit 1; }
+  -DCROSS_COMPILER_PREFIX=aarch64-linux-gnu- || { echo "❌ kernel_flags.cmake generation failed"; exit 1; }
 test -f build/kernel_flags.cmake || { echo "❌ kernel_flags.cmake still missing"; exit 1; }
 
 
@@ -577,7 +577,7 @@ echo "🔍 Locating elfloader source…"
 ELF_SRC="$SEL4_WS/projects/seL4_tools/elfloader-tool"
 test -d "$ELF_SRC" || { echo "❌ elfloader-tool not found in $SEL4_WS/projects/seL4_tools"; exit 1; }
 
-echo "🚀 Building elfloader…"
+echo "🚀 Building elfloader with kernel_flags…"
 mkdir -p "$SEL4_WS/elfloader/build"
 cd "$SEL4_WS/elfloader/build"
 cmake -G Ninja \
@@ -588,8 +588,8 @@ cmake -G Ninja \
   -DCMAKE_PREFIX_PATH="$SEL4_LIB_DIR" \
   "$ELF_SRC"
 ninja elfloader
-cp elfloader "$(pwd)/../../../out/bin/elfloader"
-test -f "$(pwd)/../../../out/bin/elfloader" || { echo "❌ elfloader staging failed"; exit 1; }
+cp elfloader "$ROOT/out/bin/elfloader"
+test -f "$ROOT/out/bin/elfloader" || { echo "❌ elfloader staging failed"; exit 1; }
 cd "$(git rev-parse --show-toplevel)"
 
  mkdir -p "$ROOT/out/boot"
