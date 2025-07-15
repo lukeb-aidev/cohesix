@@ -532,10 +532,6 @@ for repo in seL4 seL4_tools; do
   )
 done
 
-# 4. Return to workspace root
-cd "$DEST"
-
-BUILD_DIR="$DEST/build"
 echo "✅ seL4 workspace ready at $DEST; build dir is $BUILD_DIR"
 
 BUILD_DIR="$ROOT/third_party/seL4/workspace/build"
