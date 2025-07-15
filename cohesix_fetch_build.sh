@@ -506,23 +506,37 @@ SEL4_SRC="${SEL4_SRC:-$ROOT/third_party/seL4/workspace}"
 DEST="workspace"
 
 echo "📥 Syncing seL4 repos into $DEST..."
+
+# 1. Clone and tag‐pin the kernel
 git clone https://github.com/seL4/seL4.git "$DEST"
 cd "$DEST"
-git fetch --tags && git checkout 13.0.0
+git fetch --tags
+git checkout 13.0.0
+
+# 2. Clone all projects
 mkdir -p projects && cd projects
-git clone https://github.com/seL4/seL4_libs.git
-git clone https://github.com/seL4/musllibc.git
-git clone https://github.com/seL4/util_libs.git
-git clone https://github.com/seL4/sel4runtime.git
-git clone https://github.com/seL4/seL4_tools.git
 for repo in seL4_libs musllibc util_libs sel4runtime seL4_tools; do
-    cd $repo
-    git fetch --tags
-    git checkout 13.0.0
+  git clone https://github.com/seL4/$repo.git
 done
+
+# 3. Only tag‐pin repos that define 13.0.0
+for repo in seL4 seL4_tools; do
+  (
+    cd "$DEST/projects/$repo" 2>/dev/null || continue
+    if git rev-parse --verify --quiet "refs/tags/13.0.0" >/dev/null; then
+      git fetch --tags
+      git checkout 13.0.0
+    else
+      echo "ℹ️  Skipping tag checkout in $repo (no 13.0.0 tag)"
+    fi
+  )
+done
+
+# 4. Return to workspace root
 cd "$DEST"
 
-echo "✅ seL4 workspace ready at $DEST"
+BUILD_DIR="$DEST/build"
+echo "✅ seL4 workspace ready at $DEST; build dir is $BUILD_DIR"
 
 BUILD_DIR="$ROOT/third_party/seL4/workspace/build"
 
