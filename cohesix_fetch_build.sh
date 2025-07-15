@@ -505,27 +505,29 @@ SEL4_SRC="${SEL4_SRC:-$ROOT/third_party/seL4/workspace}"
 
 DEST="workspace"
 
-if [ -d "$DEST" ]; then
-    echo "🧹 Cleaning existing $DEST"
-    rm -rf "$DEST"
-fi
-
 echo "📥 Syncing seL4 repos into $DEST..."
-
-# Clone seL4 into workspace directly
+# Clone seL4 kernel at 13.0.0
 git clone https://github.com/seL4/seL4.git "$DEST"
 cd "$DEST"
 git fetch --tags
 git checkout 13.0.0
 
-# Now add tools and projects inside workspace
-git clone https://github.com/seL4/seL4_libs.git projects/seL4_libs
-git clone https://github.com/seL4/musllibc.git projects/musllibc
-git clone https://github.com/seL4/util_libs.git projects/util_libs
-git clone https://github.com/seL4/sel4runtime.git projects/sel4runtime
-#git clone https://github.com/seL4/sel4test.git projects/sel4test
-git clone https://github.com/seL4/seL4_tools.git projects/seL4_tools
+# Clone all the matching 13.0.0 tool repos under workspace/projects
+mkdir -p projects
+cd projects
+git clone https://github.com/seL4/seL4_libs.git
+git clone https://github.com/seL4/musllibc.git
+git clone https://github.com/seL4/util_libs.git
+git clone https://github.com/seL4/sel4runtime.git
+git clone https://github.com/seL4/seL4_tools.git
 
+# Checkout the 13.0.0 tag in seL4_tools
+for repo in seL4_libs musllibc util_libs sel4runtime seL4_tools; do
+  cd $repo
+  git fetch --tags
+  git checkout 13.0.0
+done
+cd "$DEST"
 
 echo "✅ seL4 workspace ready at $DEST"
 
