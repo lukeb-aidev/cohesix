@@ -1,4 +1,4 @@
-# CLASSIFICATION: COMMUNITY
+h# CLASSIFICATION: COMMUNITY
 # Filename: cohesix_fetch_build.sh v1.24
 # Author: Lukas Bower
 # Date Modified: 2027-12-31
@@ -532,9 +532,9 @@ for repo in seL4 seL4_tools; do
   )
 done
 
-echo "✅ seL4 workspace ready at $DEST; build dir is $BUILD_DIR"
-
 BUILD_DIR="$ROOT/third_party/seL4/workspace/build"
+
+echo "✅ seL4 workspace ready at $DEST; build dir is $BUILD_DIR"
 
 for cmd in cmake ninja aarch64-linux-gnu-gcc aarch64-linux-gnu-g++ rustup cargo readelf nm objdump dtc; do
     command -v "$cmd" >/dev/null 2>&1 || { echo "Missing $cmd" >&2; exit 1; }
