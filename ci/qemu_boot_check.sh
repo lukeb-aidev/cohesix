@@ -1,8 +1,8 @@
 # CLASSIFICATION: COMMUNITY
 #!/usr/bin/env bash
-# Filename: qemu_boot_check.sh v0.5
+# Filename: qemu_boot_check.sh v0.6
 # Author: Lukas Bower
-# Date Modified: 2027-12-01
+# Date Modified: 2027-12-31
 # This script boots Cohesix under QEMU for CI. Firmware assumptions:
 # - x86_64 uses OVMF for UEFI.
 # - aarch64 requires QEMU_EFI.fd provided by system packages
@@ -88,6 +88,13 @@ done
 
 kill "$QEMU_PID" 2>/dev/null || true
 wait "$QEMU_PID" 2>/dev/null || true
+
+# detect MMU faults or data aborts in the serial log
+if grep -qiE "(data abort|mmu fault|prefetch abort)" "$LOG_PATH"; then
+  echo "❌ MMU fault detected. Log tail:" >&2
+  tail -n 20 "$LOG_PATH" >&2 || true
+  exit 1
+fi
 
 if [ "$BOOT_OK" -eq 1 ]; then
   if [ "$ARCH" = "aarch64" ]; then
