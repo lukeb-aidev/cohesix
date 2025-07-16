@@ -549,7 +549,7 @@ log "FS BUILD OK: ${BIN_COUNT} binaries, ${ROLE_COUNT} roles staged" >&3
 # Ensure all staged binaries are executable
 chmod +x "$STAGE_DIR/bin"/*
 
-e# 1) Create boot directory
+# 1) Create boot directory
 mkdir -p "$ROOT/boot"
 
 # 2) Stage cohesix_root
