@@ -258,7 +258,7 @@
 | setup/roles/GlassesAgent.yaml | v0.2 | 2027-11-30 | COMMUNITY | | |
 | setup/roles/SensorRelay.yaml | v0.2 | 2027-11-30 | COMMUNITY | | |
 | setup/roles/SimulatorTest.yaml | v0.2 | 2027-11-30 | COMMUNITY | | |
-| ci/qemu_boot_check.sh | v0.5 | 2027-12-01 | COMMUNITY | | |
+| ci/qemu_boot_check.sh | v0.6 | 2027-12-31 | COMMUNITY | | |
 | userland/miniroot/README.md | v0.2 | 2026-01-20 | COMMUNITY | | |
 | userland/miniroot/bin/echo | v0.1 | 2025-09-23 | COMMUNITY | | |
 | userland/miniroot/bin/help | v0.1 | 2025-09-23 | COMMUNITY | | |
@@ -272,7 +272,7 @@
 | src/bin/cloud.rs | v0.1 | 2027-09-01 | COMMUNITY | | |
 | src/utils/gpu.rs | v0.2 | 2026-12-31 | COMMUNITY | | |
 | workspace/cohesix_root/Cargo.toml | v0.7 | 2027-12-31 | COMMUNITY | | |
-| workspace/cohesix_root/link.ld | v0.18 | 2027-12-31 | COMMUNITY | | |
+| workspace/cohesix_root/link.ld | v0.19 | 2027-12-31 | COMMUNITY | | |
 | workspace/cohesix_root/build.rs | v0.2 | 2027-12-31 | COMMUNITY | | |
 | workspace/cohesix_root/src/main.rs | v0.41 | 2027-12-31 | COMMUNITY | | |
 | workspace/cohesix_root/src/bootinfo.rs | v0.1 | 2027-12-31 | COMMUNITY | | |

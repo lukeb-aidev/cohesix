@@ -3383,3 +3383,7 @@
 ## [v0.544] - 2027-12-31
 ### Fixed
 - **FixCohesixElfloaderFindPath-014**: Corrected elfloader section to set `SEL4_WS` directly from the workspace, remove unnecessary `find` calls, and stage the built elfloader correctly.
+
+## [v0.545] - 2027-12-31
+### Fixed
+- **FixRootBaseAlignment-030**: Updated rootserver linker scripts to load at `0x400000`, matching kernel expectations. Added MMU fault detection in `ci/qemu_boot_check.sh` and updated metadata.
