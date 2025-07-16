@@ -464,6 +464,9 @@ for bin in cohcc cohbuild cli_cap cohtrace cohrun_cli cohagent cohrole cohrun co
   [ -f "$STAGE_DIR/bin/$bin" ] || { echo "❌ $bin missing after staging" >&2; exit 1; }
 done
 
+# Stage cohesix_root
+cp "$ROOT/workspace/target/sel4-aarch64/release/cohesix_root" "$STAGE_DIR/bin/cohesix_root.elf"
+
 # Ensure physics-server and srv exist after staging
 [ -f "$STAGE_DIR/bin/physics-server" ] || { echo "❌ physics-server missing after staging" >&2; exit 1; }
 [ -f "$STAGE_DIR/bin/srv" ] || { echo "❌ srv missing after staging" >&2; exit 1; }
@@ -493,8 +496,21 @@ log "📖 Building mandoc and staging man pages..."
 bash "$ROOT/scripts/build_mandoc.sh"
 MANDOC_BIN="$ROOT/prebuilt/mandoc/mandoc.$COH_ARCH"
 if [ -f "$MANDOC_BIN" ]; then
-  cp "$MANDOC_BIN" "$STAGE_DIR/bin/mandoc"
-  cp "$MANDOC_BIN" "$STAGE_DIR/bin/man"
+  mkdir -p "$STAGE_DIR/prebuilt/mandoc"
+  cp "$MANDOC_BIN" "$STAGE_DIR/prebuilt/mandoc/"
+  chmod +x "$STAGE_DIR/prebuilt/mandoc/mandoc.$COH_ARCH"
+  cp bin/mandoc "$STAGE_DIR/bin/mandoc"
+  cp bin/mandoc "$STAGE_DIR/usr/bin/mandoc"
+  chmod +x "$STAGE_DIR/bin/mandoc" "$STAGE_DIR/usr/bin/mandoc"
+  cp bin/man "$STAGE_DIR/bin/man"
+  cp bin/man "$STAGE_DIR/usr/bin/man"
+  chmod +x "$STAGE_DIR/bin/man" "$STAGE_DIR/usr/bin/man"
+  mkdir -p "$STAGE_DIR/mnt/data/bin"
+  cp "$MANDOC_BIN" "$STAGE_DIR/mnt/data/bin/cohman"
+  chmod +x "$STAGE_DIR/mnt/data/bin/cohman"
+  cp bin/cohman.sh "$STAGE_DIR/bin/cohman"
+  cp bin/cohman.sh "$STAGE_DIR/usr/bin/cohman"
+  chmod +x "$STAGE_DIR/bin/cohman" "$STAGE_DIR/usr/bin/cohman"
   log "✅ Built mandoc" 
   if [ -d "$ROOT/workspace/docs/man" ]; then
     mkdir -p "$STAGE_DIR/usr/share/man/man1" "$STAGE_DIR/usr/share/man/man8"
@@ -525,7 +541,7 @@ fi
 
 # Stage Plan9 rc tests
 mkdir -p "$STAGE_DIR/bin/tests"
-cp "$ROOT/tests/Cohesix/"*.rc "$STAGE_DIR/bin/tests/"
+cp "$ROOT/tests/Cohesix/*.rc" "$STAGE_DIR/bin/tests/"
 chmod +x "$STAGE_DIR/bin/tests"/*.rc
 log "✅ Staged Plan9 rc tests to /bin/tests"
 
