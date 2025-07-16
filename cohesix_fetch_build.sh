@@ -344,30 +344,43 @@ if [ -f tests/requirements.txt ]; then
   python -m pip install -r tests/requirements.txt --break-system-packages
 fi
 
- # Build GUI orchestrator early
-if [ -d "$ROOT/go/cmd/gui-orchestrator" ]; then
-  log "✅ Found GUI orchestrator Go code matching design"
-  if [ "$COH_ARCH" = "aarch64" ]; then
-    GOARCH="arm64"
-  elif [ "$COH_ARCH" = "x86_64" ]; then
-    GOARCH="amd64"
-  else
-    GOARCH="$COH_ARCH"
-  fi
-  (cd "$ROOT/go/cmd/gui-orchestrator" && go mod tidy)
-  OUT_BIN="$GO_HELPERS_DIR/web_gui_orchestrator"
-  log "  compiling GUI orchestrator as GOARCH=$GOARCH"
-  if (cd "$ROOT/go/cmd/gui-orchestrator" && GOOS=linux GOARCH="$GOARCH" go build -tags unix -o "$OUT_BIN"); then
-    chmod +x "$OUT_BIN"
-    log "✅ Built GUI orchestrator → $OUT_BIN"
-  else
-    log "⚠️ GUI orchestrator build failed"
-  fi
-  ls -lh "$GO_HELPERS_DIR" | tee -a "$LOG_FILE" >&3
-else
-  log "⚠️ GUI orchestrator missing or incomplete - generated new code from spec"
-fi
+# --- GUI orchestrator -----------------------------------------------------
+GUI_DIR="$ROOT/go/cmd/gui-orchestrator"
+if [ -d "$GUI_DIR" ]; then
+    log "👁️  Building GUI orchestrator"
 
+    case "$COH_ARCH" in
+        aarch64) GOARCH=arm64  ;;
+        x86_64)  GOARCH=amd64 ;;
+        *)       GOARCH=$COH_ARCH ;;
+    esac
+
+    pushd "$GUI_DIR" >/dev/null
+
+    # One tidy is enough; harmless if already tidy
+    go mod tidy
+
+    log "  running go test"
+    if ! go test ./...; then
+        echo "❌ GUI orchestrator tests failed" | tee -a "$SUMMARY_TEST_FAILS" >&3
+        exit 1
+    fi
+
+    OUT_BIN="$GO_HELPERS_DIR/gui-orchestrator"
+    log "  compiling (GOOS=linux GOARCH=$GOARCH)"
+    if GOOS=linux GOARCH=$GOARCH go build -tags unix -o "$OUT_BIN" .; then
+        chmod +x "$OUT_BIN"
+        log "✅ GUI orchestrator built → $OUT_BIN"
+    else
+        echo "❌ GUI orchestrator build failed" | tee -a "$SUMMARY_ERRORS" >&3
+        exit 1
+    fi
+
+    popd >/dev/null
+else
+    log "⚠️  GUI orchestrator source not found – skipping"
+fi
+# -------------------------------------------------------------------------
 
 log "🔧 Checking C compiler..."
 if ! command -v gcc >/dev/null 2>&1; then
@@ -475,49 +488,6 @@ if [ $TEST_EXIT_CODE -ne 0 ]; then
 else
   log "✅ Rust tests passed"
 fi
-
-# --- Go build and staging section ---
-echo "== Go build =="
-if command -v go &> /dev/null; then
-  log "🐹 Building Go components..."
-
-  if [ "$COH_ARCH" = "aarch64" ]; then
-    GOARCH="arm64"
-  elif [ "$COH_ARCH" = "x86_64" ]; then
-    GOARCH="amd64"
-  else
-    GOARCH="$COH_ARCH"
-  fi
-
-  mkdir -p "$GO_HELPERS_DIR"
-  mkdir -p "$STAGE_DIR/usr/plan9/bin"
-
-  for dir in go/cmd/*; do
-    if [ -f "$dir/main.go" ]; then
-      name="$(basename "$dir")"
-      [ "$name" = "gui-orchestrator" ] && continue
-      log "  ensuring modules for $name"
-      (cd "$dir" && go mod tidy)
-      log "  compiling $name for Linux as GOARCH=$GOARCH"
-      if GOOS=linux GOARCH="$GOARCH" go build -tags unix -C "$dir" -o "$GO_HELPERS_DIR/$name"; then
-        chmod +x "$GO_HELPERS_DIR/$name"
-        log "📦 Staged Linux helper: $name -> $GO_HELPERS_DIR"
-      else
-        log "  build failed for $name"
-      fi
-    fi
-  done
-
-  if (cd go && go test ./...); then
-    log "✅ Go tests passed"
-  else
-    echo "❌ Go tests failed" | tee -a "$SUMMARY_TEST_FAILS" >&3
-  fi
-  log "[INFO] Go helpers built and staged in $GO_HELPERS_DIR (excluded from ISO)"
-else
-  log "⚠️ Go not found; skipping Go build"
-fi
-# --- End Go build and staging section ---
 
 log "📖 Building mandoc and staging man pages..."
 ./scripts/build_mandoc.sh
