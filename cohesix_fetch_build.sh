@@ -482,78 +482,10 @@ for script in cohcli cohcap cohtrace cohrun cohbuild cohup cohpkg; do
   fi
 done
 
-cd "$ROOT"
-log "🧱 Staging root ELF for seL4..."
-# Copy root ELF from cargo build output to out/cohesix_root.elf
-ROOT_ELF_SRC="$ROOT/workspace/target/sel4-aarch64/release/cohesix_root"
-if [ -f "$ROOT_ELF_SRC" ]; then
-  cp "$ROOT_ELF_SRC" "$ROOT/out/cohesix_root.elf"
-  cp "$ROOT_ELF_SRC" "$ROOT/out/bin/cohesix_root.elf"
-  log "Root ELF size: $(stat -c%s "$ROOT/out/bin/cohesix_root.elf") bytes"
-else
-  echo "❌ $ROOT_ELF_SRC missing" >&2
-  exit 1
-fi
-[ -f "$ROOT/out/cohesix_root.elf" ] || { echo "❌ $ROOT/out/cohesix_root.elf missing" >&2; exit 1; }
+cp "$ROOT/third_party/seL4/artefacts/kernel.elf" "$ROOT/out/bin/kernel.elf"
+cp "$ROOT/third_party/seL4/artefacts/" "$ROOT/out/bin/elfloader"
 
-SEL4_VER="13.0.0"                         # kernel tag only
-WORKSPACE="$ROOT/third_party/seL4/workspace"
-BUILD_DIR="$WORKSPACE/build"
-CROSS_PREFIX="aarch64-linux-gnu-"
-
-log "🏗️  Building seL4 $SEL4_VER kernel, elfloader and Cohesix root task …"
-mkdir -p "$WORKSPACE"
-cd        "$WORKSPACE"
-
-clone_repo() {
-    local repo="$1" dest="$2"
-    local url="https://github.com/seL4/$repo.git"
-
-    if [ ! -d "$dest" ]; then
-        git clone --depth 1 "$url" "$dest"
-    fi
-
-    pushd "$dest" >/dev/null
-      if git rev-parse --verify --quiet "refs/tags/$SEL4_VER" ; then
-          git fetch --tags
-          git checkout "$SEL4_VER"
-      fi
-    popd >/dev/null
-}
-
-# ─────────── kernel (has the tag) ───────────
-clone_repo  seL4            seL4
-
-# ─────────── tools + libs (no tag, use master) ───────────
-for r in seL4_tools seL4_libs musllibc util_libs sel4runtime; do
-    clone_repo "$r" "$r"
-done
-
-log "✅  Workspace ready"
-
-# sanity-check tool-chain
-for t in cmake ninja "${CROSS_PREFIX}gcc" "${CROSS_PREFIX}g++"; do
-    command -v "$t" >/dev/null || { echo "❌  Missing $t"; exit 1; }
-done
-
-rm -rf "$BUILD_DIR" && mkdir "$BUILD_DIR"
-cd "$BUILD_DIR"
-
-# one level up from build/ → helper script lives in seL4_tools/cmake-tool/
-../seL4_tools/cmake-tool/init-build.sh \
-  -DPLATFORM=qemu-arm-virt \
-  -DKernelArch=aarch64 \
-  -DCROSS_COMPILER_PREFIX="$CROSS_PREFIX" \
-  -G Ninja ..
-
-ninja kernel.elf elfloader      # add your root-task target if needed
-
-log "🎉  Build done — artefacts in $BUILD_DIR"
-
-cp "$BUILD_DIR/kernel.elf" "$ROOT/out/bin/kernel.elf"
-cp "$BUILD_DIR/elfloader" "$ROOT/out/bin/elfloader"
-
-echo "seL4 Kernel and Elfloaderbuilt and staged successfully"
+echo "seL4 Kernel and Elfloader staged successfully"
 
 echo "🔍 Setting SEL4_WS to workspace root…"
 cd "$ROOT/third_party/seL4/workspace"
@@ -561,7 +493,7 @@ SEL4_WS=$(pwd)
 
  mkdir -p "$ROOT/out/boot"
  cd "$ROOT/out/bin"
- DTB="$BUILD_DIR/kernel.dtb"
+ DTB="$ROOT/third_party/seL4/artefacts/kernel.dtb"
  if [ ! -f "$DTB" ]; then
  echo "Error - DTB not found"  >&2
  exit 1
@@ -573,8 +505,6 @@ find kernel.elf cohesix_root.elf elfloader $( [ -f "$DTB" ] && echo "$DTB" ) | c
 CPIO_IMAGE="$ROOT/out/boot/cohesix.cpio"
 cd "$ROOT"
 
-echo "✅ seL4 build complete"  >&2
-popd
 
 # Bulletproof ELF validation
 log "🔍 Validating cohesix_root ELF memory layout..."
