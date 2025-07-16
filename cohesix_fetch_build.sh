@@ -552,19 +552,21 @@ chmod +x "$STAGE_DIR/bin"/*
 # 1) Create boot directory
 mkdir -p "$ROOT/boot"
 
-# 2) Stage cohesix_root
+# 2) Stage cohesix_root and elfloader
 cp -- "$ROOT/workspace/target/sel4-aarch64/release/cohesix_root" \
       "$ROOT/third_party/seL4/artefacts/cohesix_root.elf"
+
+cp -- "$ROOT/third_party/seL4/artefacts/elfloader" \
+      "$ROOT/boot/elfloader"
 
 # 3) Verify artefacts exist
 cd "$ROOT/third_party/seL4/artefacts"
 [ -f kernel.elf ] || { echo "❌ Missing kernel.elf" >&2; exit 1; }
 [ -f cohesix_root.elf ] || { echo "❌ Missing cohesix_root.elf" >&2; exit 1; }
-[ -f elfloader ] || { echo "❌ Missing elfloader" >&2; exit 1; }
 [ -f kernel.dtb ] || { echo "❌ Missing kernel.dtb" >&2; exit 1; }
 
 # 4) Pack into a newc cpio archive
-find kernel.elf cohesix_root.elf elfloader kernel.dtb | \
+find kernel.elf cohesix_root.elf kernel.dtb | \
   cpio -o -H newc > "$ROOT/boot/cohesix.cpio"
 
 # 5) Export the path
@@ -595,7 +597,7 @@ qemu-system-aarch64 \
   -M virt,gic-version=2 \
   -cpu cortex-a57 \
   -m 1024M \
-  -kernel "$ROOT/third_party/seL4/artefacts/elfloader" \
+  -kernel "$ROOT/boot/elfloader" \
   -initrd "$CPIO_IMAGE" \
   "${QEMU_FLAGS[@]}" \
   -D "$QEMU_LOG" |& tee "$QEMU_SERIAL_LOG"
