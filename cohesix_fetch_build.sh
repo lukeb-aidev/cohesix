@@ -483,7 +483,7 @@ for script in cohcli cohcap cohtrace cohrun cohbuild cohup cohpkg; do
 done
 
 cp "$ROOT/third_party/seL4/artefacts/kernel.elf" "$ROOT/out/bin/kernel.elf"
-cp "$ROOT/third_party/seL4/artefacts/" "$ROOT/out/bin/elfloader"
+cp "$ROOT/third_party/seL4/artefacts/elfloader" "$ROOT/out/bin/elfloader"
 
 echo "seL4 Kernel and Elfloader staged successfully"
 
