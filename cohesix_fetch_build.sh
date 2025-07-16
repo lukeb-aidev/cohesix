@@ -496,63 +496,59 @@ else
 fi
 [ -f "$ROOT/out/cohesix_root.elf" ] || { echo "❌ $ROOT/out/cohesix_root.elf missing" >&2; exit 1; }
 
-SEL4_VER="13.0.0"
+SEL4_VER="13.0.0"                         # kernel tag only
 WORKSPACE="$ROOT/third_party/seL4/workspace"
 BUILD_DIR="$WORKSPACE/build"
 CROSS_PREFIX="aarch64-linux-gnu-"
 
-log "🏗️  Building seL4 ${SEL4_VER} kernel, elfloader and Cohesix root task..."
-pushd "$ROOT/third_party" >/dev/null
-
-# ─────────────────────── Clone / tag-pin repos ─────────────────────────────
+log "🏗️  Building seL4 $SEL4_VER kernel, elfloader and Cohesix root task …"
 mkdir -p "$WORKSPACE"
 cd        "$WORKSPACE"
 
-clone_tag() {
-  local repo="$1"
-  local url="https://github.com/seL4/$repo.git"
-  local dest="$2"
+clone_repo() {
+    local repo="$1" dest="$2"
+    local url="https://github.com/seL4/$repo.git"
 
-  if [ ! -d "$dest" ]; then
-    git clone --depth 1 --branch "$SEL4_VER" "$url" "$dest"  # shallow, already on tag
-  fi
+    if [ ! -d "$dest" ]; then
+        git clone --depth 1 "$url" "$dest"
+    fi
+
+    pushd "$dest" >/dev/null
+      if git rev-parse --verify --quiet "refs/tags/$SEL4_VER" ; then
+          git fetch --tags
+          git checkout "$SEL4_VER"
+      fi
+    popd >/dev/null
 }
 
-# Kernel
-clone_tag "seL4"       "seL4"
+# ─────────── kernel (has the tag) ───────────
+clone_repo  seL4            seL4
 
-# Aux repos
-for repo in seL4_tools seL4_libs musllibc util_libs sel4runtime; do
-  clone_tag "$repo" "$repo"
+# ─────────── tools + libs (no tag, use master) ───────────
+for r in seL4_tools seL4_libs musllibc util_libs sel4runtime; do
+    clone_repo "$r" "$r"
 done
 
-log "✅  seL4 workspace ready at $WORKSPACE"
+log "✅  Workspace ready"
 
-# ─────────────────────── Toolchain sanity check ────────────────────────────
-for tool in cmake ninja "${CROSS_PREFIX}gcc" "${CROSS_PREFIX}g++" \
-            rustup cargo readelf nm objdump dtc; do
-  command -v "$tool" >/dev/null || { echo "❌  Missing $tool"; exit 1; }
+# sanity-check tool-chain
+for t in cmake ninja "${CROSS_PREFIX}gcc" "${CROSS_PREFIX}g++"; do
+    command -v "$t" >/dev/null || { echo "❌  Missing $t"; exit 1; }
 done
 
-# ───────────────────────── Configure + build ───────────────────────────────
-rm -rf "$BUILD_DIR"
-mkdir  "$BUILD_DIR"
-pushd  "$BUILD_DIR" >/dev/null
+rm -rf "$BUILD_DIR" && mkdir "$BUILD_DIR"
+cd "$BUILD_DIR"
 
-## FIX 1: correct script path; FIX 2: drop stray quote
+# one level up from build/ → helper script lives in seL4_tools/cmake-tool/
 ../seL4_tools/cmake-tool/init-build.sh \
   -DPLATFORM=qemu-arm-virt \
   -DKernelArch=aarch64 \
   -DCROSS_COMPILER_PREFIX="$CROSS_PREFIX" \
   -G Ninja ..
 
-# ➊ build kernel + elfloader
-ninja kernel.elf elfloader
+ninja kernel.elf elfloader      # add your root-task target if needed
 
-popd >/dev/null   # build
-popd >/dev/null   # third_party
-
-log "🎉  seL4 build finished – artefacts in $BUILD_DIR"
+log "🎉  Build done — artefacts in $BUILD_DIR"
 
 cp "$BUILD_DIR/kernel.elf" "$ROOT/out/bin/kernel.elf"
 cp "$BUILD_DIR/elfloader" "$ROOT/out/bin/elfloader"
