@@ -498,14 +498,13 @@ fi
 
 SEL4_VER="13.0.0"
 WORKSPACE="$ROOT/third_party/seL4/workspace"
-PROJECTS="$WORKSPACE/projects"
 BUILD_DIR="$WORKSPACE/build"
 CROSS_PREFIX="aarch64-linux-gnu-"
 
 log "🏗️  Building seL4 ${SEL4_VER} kernel, elfloader and Cohesix root task..."
 pushd "$ROOT/third_party" >/dev/null
 
-# ─────────────────────── Clone / tag-pin repos ──────────────────────────────
+# ─────────────────────── Clone / tag-pin repos ─────────────────────────────
 mkdir -p "$WORKSPACE"
 cd        "$WORKSPACE"
 
@@ -515,42 +514,33 @@ clone_tag() {
   local dest="$2"
 
   if [ ! -d "$dest" ]; then
-    git clone "$url" "$dest"
+    git clone --depth 1 --branch "$SEL4_VER" "$url" "$dest"  # shallow, already on tag
   fi
-
-  pushd "$dest" >/dev/null
-    if git rev-parse --verify --quiet "refs/tags/$SEL4_VER" >/dev/null; then
-      git fetch --tags
-      git checkout "$SEL4_VER"
-    else
-      log "⚠️  $repo: no $SEL4_VER tag – staying on $(git rev-parse --abbrev-ref HEAD)"
-    fi
-  popd >/dev/null
 }
 
-# Kernel (top-level)
+# Kernel
 clone_tag "seL4"       "seL4"
 
-# Aux repos under projects/
-mkdir -p "$PROJECTS"
+# Aux repos
 for repo in seL4_tools seL4_libs musllibc util_libs sel4runtime; do
-  clone_tag "$repo"     "$PROJECTS/$repo"
+  clone_tag "$repo" "$repo"
 done
 
 log "✅  seL4 workspace ready at $WORKSPACE"
 
-# ─────────────────────── Toolchain sanity check ─────────────────────────────
+# ─────────────────────── Toolchain sanity check ────────────────────────────
 for tool in cmake ninja "${CROSS_PREFIX}gcc" "${CROSS_PREFIX}g++" \
             rustup cargo readelf nm objdump dtc; do
   command -v "$tool" >/dev/null || { echo "❌  Missing $tool"; exit 1; }
 done
 
-# ───────────────────────── Configure + build ────────────────────────────────
+# ───────────────────────── Configure + build ───────────────────────────────
 rm -rf "$BUILD_DIR"
 mkdir  "$BUILD_DIR"
 pushd  "$BUILD_DIR" >/dev/null
 
-"$PROJECTS/seL4_tools/cmake-tool/init-build.sh" \
+## FIX 1: correct script path; FIX 2: drop stray quote
+../seL4_tools/cmake-tool/init-build.sh \
   -DPLATFORM=qemu-arm-virt \
   -DKernelArch=aarch64 \
   -DCROSS_COMPILER_PREFIX="$CROSS_PREFIX" \
@@ -559,72 +549,19 @@ pushd  "$BUILD_DIR" >/dev/null
 # ➊ build kernel + elfloader
 ninja kernel.elf elfloader
 
-# ➋ (optional) build your root task – assumes CMake target "cohesix_root.elf"
-if ninja -t targets | grep -q '^cohesix_root\.elf:' ; then
-  ninja cohesix_root.elf
-fi
-
-# ➌ (optional) pack root + DTB into CPIO for U-Boot/QEMU
-if [ -f "kernel/kernel.dtb" ] && [ -f "projects/cohesix_root/cohesix_root.elf" ]; then
-  IMG_DIR="$BUILD_DIR/_cpio"
-  rm -rf "$IMG_DIR" && mkdir "$IMG_DIR"
-  cp kernel/kernel.dtb                     "$IMG_DIR/"
-  cp projects/cohesix_root/cohesix_root.elf "$IMG_DIR/"
-  ( cd "$IMG_DIR" && find . | cpio -o -H newc --quiet ) > "$BUILD_DIR/image.cpio"
-  log "📦  CPIO image produced at $BUILD_DIR/image.cpio"
-fi
-
 popd >/dev/null   # build
 popd >/dev/null   # third_party
 
 log "🎉  seL4 build finished – artefacts in $BUILD_DIR"
 
 cp "$BUILD_DIR/kernel.elf" "$ROOT/out/bin/kernel.elf"
-echo "seL4 Kernel built and staged successfully"
+cp "$BUILD_DIR/elfloader" "$ROOT/out/bin/elfloader"
 
-echo "📦 Generating kernel ABI flags per CMAKE-README…"
-cd "$ROOT/third_party/seL4/workspace"
-cmake -P tools/flags.cmake \
-  -DOUTPUT_FILE=build/kernel_flags.cmake \
-  -DPLATFORM_CONFIG=configs/AARCH64_verified.cmake \
-  -DCROSS_COMPILER_PREFIX=aarch64-linux-gnu- || { echo "❌ kernel_flags.cmake generation failed"; exit 1; }
-test -f build/kernel_flags.cmake || { echo "❌ kernel_flags.cmake still missing"; exit 1; }
-
+echo "seL4 Kernel and Elfloaderbuilt and staged successfully"
 
 echo "🔍 Setting SEL4_WS to workspace root…"
 cd "$ROOT/third_party/seL4/workspace"
 SEL4_WS=$(pwd)
-
-echo "🔍 Locating kernel_flags.cmake…"
-KFLAGS="$SEL4_WS/build/kernel_flags.cmake"
-test -f "$KFLAGS" || { echo "❌ kernel_flags.cmake not found"; exit 1; }
-
-echo "🔍 Locating cpio module…"
-CPIO_DIR="$SEL4_WS/tools"
-test -f "$CPIO_DIR/cpio.cmake" || { echo "❌ cpio.cmake not found in $CPIO_DIR"; exit 1; }
-
-echo "🔍 Locating libsel4.a…"
-SEL4_LIB_DIR="$SEL4_WS/../lib"
-test -f "$SEL4_LIB_DIR/libsel4.a" || { echo "❌ libsel4.a not found in $SEL4_LIB_DIR"; exit 1; }
-
-echo "🔍 Locating elfloader source…"
-ELF_SRC="$SEL4_WS/projects/seL4_tools/elfloader-tool"
-test -d "$ELF_SRC" || { echo "❌ elfloader-tool not found in $SEL4_WS/projects/seL4_tools"; exit 1; }
-
-echo "🚀 Building elfloader with kernel_flags…"
-mkdir -p "$SEL4_WS/elfloader/build"
-cd "$SEL4_WS/elfloader/build"
-cmake -G Ninja \
-  -DCMAKE_MODULE_PATH="$CPIO_DIR" \
-  -DCROSS_COMPILER_PREFIX=aarch64-linux-gnu- \
-  -DCMAKE_TOOLCHAIN_FILE="$SEL4_WS/configs/AARCH64_verified.cmake" \
-  -DKERNEL_FLAGS_PATH="$KFLAGS" \
-  -DCMAKE_PREFIX_PATH="$SEL4_LIB_DIR" \
-  "$ELF_SRC"
-ninja elfloader
-cp elfloader "$ROOT/out/bin/elfloader"
-test -f "$ROOT/out/bin/elfloader" || { echo "❌ elfloader staging failed"; exit 1; }
-cd "$(git rev-parse --show-toplevel)"
 
  mkdir -p "$ROOT/out/boot"
  cd "$ROOT/out/bin"
