@@ -496,59 +496,88 @@ else
 fi
 [ -f "$ROOT/out/cohesix_root.elf" ] || { echo "❌ $ROOT/out/cohesix_root.elf missing" >&2; exit 1; }
 
+SEL4_VER="13.0.0"
+WORKSPACE="$ROOT/third_party/seL4/workspace"
+PROJECTS="$WORKSPACE/projects"
+BUILD_DIR="$WORKSPACE/build"
+CROSS_PREFIX="aarch64-linux-gnu-"
 
-# Build seL4 kernel, elfloader, and CPIO via build_sel4.sh after Rust build
-log "🏗️  Building seL4 kernel and CPIO via build_sel4.sh..."
-pushd "$ROOT/third_party/seL4"
-echo "Fetching seL4 sources ..." >&2
-SEL4_SRC="${SEL4_SRC:-$ROOT/third_party/seL4/workspace}"
+log "🏗️  Building seL4 ${SEL4_VER} kernel, elfloader and Cohesix root task..."
+pushd "$ROOT/third_party" >/dev/null
 
-DEST="workspace"
+# ─────────────────────── Clone / tag-pin repos ──────────────────────────────
+mkdir -p "$WORKSPACE"
+cd        "$WORKSPACE"
 
-echo "📥 Syncing seL4 repos into $DEST..."
+clone_tag() {
+  local repo="$1"
+  local url="https://github.com/seL4/$repo.git"
+  local dest="$2"
 
-# 1. Clone and tag‐pin the kernel
-git clone https://github.com/seL4/seL4.git "$DEST"
-cd "$DEST"
-git fetch --tags
-git checkout 13.0.0
+  if [ ! -d "$dest" ]; then
+    git clone "$url" "$dest"
+  fi
 
-# 2. Clone all projects
-mkdir -p projects && cd projects
-for repo in seL4_libs musllibc util_libs sel4runtime seL4_tools; do
-  git clone https://github.com/seL4/$repo.git
-done
-
-# 3. Only tag‐pin repos that define 13.0.0
-for repo in seL4 seL4_tools; do
-  (
-    cd "$DEST/projects/$repo" 2>/dev/null || continue
-    if git rev-parse --verify --quiet "refs/tags/13.0.0" >/dev/null; then
+  pushd "$dest" >/dev/null
+    if git rev-parse --verify --quiet "refs/tags/$SEL4_VER" >/dev/null; then
       git fetch --tags
-      git checkout 13.0.0
+      git checkout "$SEL4_VER"
     else
-      echo "ℹ️  Skipping tag checkout in $repo (no 13.0.0 tag)"
+      log "⚠️  $repo: no $SEL4_VER tag – staying on $(git rev-parse --abbrev-ref HEAD)"
     fi
-  )
+  popd >/dev/null
+}
+
+# Kernel (top-level)
+clone_tag "seL4"       "seL4"
+
+# Aux repos under projects/
+mkdir -p "$PROJECTS"
+for repo in seL4_tools seL4_libs musllibc util_libs sel4runtime; do
+  clone_tag "$repo"     "$PROJECTS/$repo"
 done
 
-BUILD_DIR="$ROOT/third_party/seL4/workspace/build"
+log "✅  seL4 workspace ready at $WORKSPACE"
 
-echo "✅ seL4 workspace ready at $DEST; build dir is $BUILD_DIR"
-
-for cmd in cmake ninja aarch64-linux-gnu-gcc aarch64-linux-gnu-g++ rustup cargo readelf nm objdump dtc; do
-    command -v "$cmd" >/dev/null 2>&1 || { echo "Missing $cmd" >&2; exit 1; }
+# ─────────────────────── Toolchain sanity check ─────────────────────────────
+for tool in cmake ninja "${CROSS_PREFIX}gcc" "${CROSS_PREFIX}g++" \
+            rustup cargo readelf nm objdump dtc; do
+  command -v "$tool" >/dev/null || { echo "❌  Missing $tool"; exit 1; }
 done
 
-mkdir -p "$BUILD_DIR"
+# ───────────────────────── Configure + build ────────────────────────────────
+rm -rf "$BUILD_DIR"
+mkdir  "$BUILD_DIR"
+pushd  "$BUILD_DIR" >/dev/null
 
-cd "$BUILD_DIR"
-cmake -G Ninja \
-  -C "$ROOT/third_party/seL4/workspace/configs/AARCH64_verified.cmake" \
-  -DSIMULATION=TRUE \
-  -DCROSS_COMPILER_PREFIX=aarch64-linux-gnu- \
-  "$SEL4_SRC"
-ninja kernel.elf
+"$PROJECTS/seL4_tools/cmake-tool/init-build.sh" \
+  -DPLATFORM=qemu-arm-virt \
+  -DKernelArch=aarch64 \
+  -DCROSS_COMPILER_PREFIX="$CROSS_PREFIX" \
+  -G Ninja ..
+
+# ➊ build kernel + elfloader
+ninja kernel.elf elfloader
+
+# ➋ (optional) build your root task – assumes CMake target "cohesix_root.elf"
+if ninja -t targets | grep -q '^cohesix_root\.elf:' ; then
+  ninja cohesix_root.elf
+fi
+
+# ➌ (optional) pack root + DTB into CPIO for U-Boot/QEMU
+if [ -f "kernel/kernel.dtb" ] && [ -f "projects/cohesix_root/cohesix_root.elf" ]; then
+  IMG_DIR="$BUILD_DIR/_cpio"
+  rm -rf "$IMG_DIR" && mkdir "$IMG_DIR"
+  cp kernel/kernel.dtb                     "$IMG_DIR/"
+  cp projects/cohesix_root/cohesix_root.elf "$IMG_DIR/"
+  ( cd "$IMG_DIR" && find . | cpio -o -H newc --quiet ) > "$BUILD_DIR/image.cpio"
+  log "📦  CPIO image produced at $BUILD_DIR/image.cpio"
+fi
+
+popd >/dev/null   # build
+popd >/dev/null   # third_party
+
+log "🎉  seL4 build finished – artefacts in $BUILD_DIR"
 
 cp "$BUILD_DIR/kernel.elf" "$ROOT/out/bin/kernel.elf"
 echo "seL4 Kernel built and staged successfully"
