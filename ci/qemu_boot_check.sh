@@ -96,6 +96,13 @@ if grep -qiE "(data abort|mmu fault|prefetch abort)" "$LOG_PATH"; then
   exit 1
 fi
 
+# catch capability copy failures from sel4utils
+if grep -qi "Failed to copy cap" "$LOG_PATH"; then
+  echo "❌ Capability copy failed. Log tail:" >&2
+  tail -n 20 "$LOG_PATH" >&2 || true
+  exit 1
+fi
+
 if [ "$BOOT_OK" -eq 1 ]; then
   if [ "$ARCH" = "aarch64" ]; then
     echo "✅ aarch64 boot success"

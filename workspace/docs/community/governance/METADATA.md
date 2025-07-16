@@ -118,7 +118,7 @@
 | README_NATIVE.md | v0.1 | 2025-07-22 | COMMUNITY | | |
 
 | src/bootloader/main.c | v0.2 | 2025-07-22 | COMMUNITY | | |
-| c/sel4/bootloader.c | v0.7 | 2026-10-29 | COMMUNITY | | |
+| c/sel4/bootloader.c | v0.8 | 2027-12-31 | COMMUNITY | | |
 | bootloader.lds | v0.1 | 2025-07-22 | COMMUNITY | | |
 | CohesixBoot.inf | v0.1 | 2025-07-22 | COMMUNITY | | |
 | linker.ld | v0.1 | 2025-07-22 | COMMUNITY | | |
