@@ -132,13 +132,6 @@ cd "$ROOT/workspace"
 cargo fetch
 log "\u2705 Cargo dependencies fetched"
 
-# Optional seL4 entry build flag
-SEL4_ENTRY=0
-if [[ ${1:-} == --sel4-entry ]]; then
-  SEL4_ENTRY=1
-  shift
-fi
-
 # Kernel must run in production mode; disable seL4 self-tests
 export CONFIG_BUILD_KERNEL_TESTS=n
 KERNEL_TEST_FLAG=OFF
@@ -462,14 +455,26 @@ done
 [ -f "$STAGE_DIR/bin/physics-server" ] || { echo "❌ physics-server missing after staging" >&2; exit 1; }
 [ -f "$STAGE_DIR/bin/srv" ] || { echo "❌ srv missing after staging" >&2; exit 1; }
 
-log "🔍 Running Rust tests with detailed output..."
-RUST_BACKTRACE=1 cargo test --release --target "$ROOT/workspace/cohesix_root/sel4-aarch64.json" -- --nocapture
+log "🔍 Running Rust tests (user‑land target)…"
+# We can only run unit tests for crates that build against the musl user‑land
+# environment.  The bare‑metal cohesix_root target has no std and therefore
+# no runnable tests here.
+RUST_BACKTRACE=1 \
+cargo test --release --workspace --exclude cohesix_root \
+  --target=aarch64-unknown-linux-musl \
+  -- --nocapture
 TEST_EXIT_CODE=$?
-grep -A 5 -E '^failures:|thread .* panicked at' "$LOG_FILE" > "$SUMMARY_TEST_FAILS" || true
+
+# Capture failures and surface them in the summary
+grep -A5 -E '^failures:|thread .* panicked at' "$LOG_FILE" \
+    > "$SUMMARY_TEST_FAILS" || true
+
 if [ $TEST_EXIT_CODE -ne 0 ]; then
-  echo "❌ Rust tests failed." | tee -a "$LOG_FILE" >&3
+  echo "❌ Rust tests failed." | tee -a "$SUMMARY_TEST_FAILS" >&3
+  exit $TEST_EXIT_CODE
+else
+  log "✅ Rust tests passed"
 fi
-grep -Ei 'error|fail|panic|permission denied|warning' "$LOG_FILE" > "$SUMMARY_ERRORS" || true
 
 # --- Go build and staging section ---
 echo "== Go build =="
