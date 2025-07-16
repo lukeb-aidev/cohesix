@@ -464,9 +464,6 @@ for bin in cohcc cohbuild cli_cap cohtrace cohrun_cli cohagent cohrole cohrun co
   [ -f "$STAGE_DIR/bin/$bin" ] || { echo "❌ $bin missing after staging" >&2; exit 1; }
 done
 
-# Stage cohesix_root
-cp "$ROOT/workspace/target/sel4-aarch64/release/cohesix_root" "$STAGE_DIR/bin/cohesix_root.elf"
-
 # Ensure physics-server and srv exist after staging
 [ -f "$STAGE_DIR/bin/physics-server" ] || { echo "❌ physics-server missing after staging" >&2; exit 1; }
 [ -f "$STAGE_DIR/bin/srv" ] || { echo "❌ srv missing after staging" >&2; exit 1; }
@@ -569,7 +566,8 @@ chmod +x "$STAGE_DIR/bin"/*
 echo "Creating boot directory and CPIO image"
 
  mkdir -p "$ROOT/boot"
- cp "$ROOT/out/bin/cohesix_root.elf" "$ROOT/third_party/seL4/artefacts/cohesix_root.elf"
+ # Stage cohesix_root
+ cp "$ROOT/workspace/target/sel4-aarch64/release/cohesix_root" "$ROOT/third_party/seL4/artefacts/cohesix_root.elf"
  cd "$ROOT/third_party/seL4/artefacts"
 
 [ -f kernel.elf ] || { echo "Missing kernel.elf" >&2; exit 1; }
