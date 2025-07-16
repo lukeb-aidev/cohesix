@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: bootloader.c v0.7
+// Filename: bootloader.c v0.8
 // Author: Lukas Bower
-// Date Modified: 2026-06-28
+// Date Modified: 2027-12-31
 // SPDX-License-Identifier: MIT
 //
 // Cohesix OS bootloader (seL4 root task)
@@ -68,10 +68,29 @@ static const char *detect_role(void) {
     return "DroneWorker";
 }
 
-static void assign_caps(const char *role) {
+#include <sel4/sel4.h>
+
+/*
+ * Provision the init process with a basic capability layout.
+ * We copy the init thread's TCB capability into slot 1 of its CSpace
+ * so sel4utils_copy_path_to_process can succeed when new threads are
+ * created from the loader.
+ */
+static void assign_caps(const char *role)
+{
     (void)role;
-    // Stub: in real build this would configure seL4 cspace slots.
-    printf("[bootloader] assign caps for %s\n", role);
+    seL4_Error err = seL4_CNode_Copy(seL4_CapInitThreadCNode,
+                                     1,
+                                     seL4_WordBits,
+                                     seL4_CapInitThreadCNode,
+                                     seL4_CapInitThreadTCB,
+                                     seL4_WordBits,
+                                     seL4_AllRights);
+    if (err != seL4_NoError) {
+        printf("[bootloader] cap copy failed: %d\n", err);
+    } else {
+        printf("[bootloader] caps assigned\n");
+    }
 }
 
 static void emit_console(const char *msg)
