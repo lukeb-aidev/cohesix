@@ -1,8 +1,9 @@
-h# CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v1.24
+#!/usr/bin/env bash
+# CLASSIFICATION: COMMUNITY
+# Filename: cohesix_fetch_build.sh v1.25
 # Author: Lukas Bower
 # Date Modified: 2027-12-31
-#!/usr/bin/env bash
+
 # This script fetches and builds the Cohesix project, including seL4 and other dependencies.
 
 HOST_ARCH="$(uname -m)"
@@ -39,13 +40,10 @@ export CUDA_INCLUDE_DIR="${CUDA_INCLUDE_DIR:-$CUDA_HOME/include}"
 export CUDA_LIBRARY_PATH="${CUDA_LIBRARY_PATH:-/usr/lib/x86_64-linux-gnu}"
 export PATH="$CUDA_HOME/bin:$PATH"
 export LD_LIBRARY_PATH="$CUDA_LIBRARY_PATH:${LD_LIBRARY_PATH:-}"
-export ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-export LOG_DIR="$ROOT/logs"
 WORKSPACE="${WORKSPACE:-$ROOT/third_party/seL4}"
 
 cd "$ROOT"
 
-mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/build_$(date +%Y%m%d_%H%M%S).log"
 SUMMARY_ERRORS="$LOG_DIR/summary_errors.log"
 SUMMARY_TEST_FAILS="$LOG_DIR/summary_test_failures.log"
@@ -62,7 +60,7 @@ TRACE_LOG="$LOG_DIR/libsel4_link_and_boot_trace.md"
 : > "$SUMMARY_TEST_FAILS"
 exec 3>&1  # Save original stdout
 exec > >(tee -a "$LOG_FILE" >&3) 2>&1
-trap 'echo "❌ Build failed. Last 40 log lines:" >&3; tail -n 40 "$LOG_FILE" >&3' ERR
+trap 'echo "❌ Build failed." >&3; [[ -f "$LOG_FILE" ]] && { echo "Last 40 log lines:" >&3; tail -n 40 "$LOG_FILE" >&3; }' ERR
 
 log(){ echo "[$(date +%H:%M:%S)] $1" | tee -a "$LOG_FILE" >&3; }
 
@@ -73,7 +71,7 @@ STAGE_DIR="$ROOT/out"
 GO_HELPERS_DIR="$ROOT/out/go_helpers"
 cd "$STAGE_DIR"
 mkdir -p bin usr/bin usr/cli usr/share/man/man1 usr/share/man/man8 \
-         etc/cohesix srv mnt/data tmp dev proc roles home/cohesix boot init
+         etc srv mnt/data tmp dev proc roles home/cohesix boot init
 cp "$ROOT/workspace/cohesix/src/kernel/init.rc" "$STAGE_DIR/srv/init.rc"
 chmod +x "$STAGE_DIR/srv/init.rc"
 log "✅ Created Cohesix FS structure"
@@ -249,8 +247,6 @@ if ! dpkg --compare-versions "$CMAKE_VER" ge 3.20; then
   hash -r
 fi
 
-
-
 # Ensure init.conf exists with defaults
 INIT_CONF="$STAGE_DIR/etc/init.conf"
 if [ ! -f "$INIT_CONF" ]; then
@@ -417,9 +413,7 @@ BUSYBOX_BIN="$ROOT/out/busybox/$COH_ARCH/bin/busybox"
 if [ -x "$BUSYBOX_BIN" ]; then
   cp "$BUSYBOX_BIN" "$STAGE_DIR/bin/busybox"
   log "✅ BusyBox built"
-#  for app in sh ls cat echo mount umount vi cp mv rm grep head tail printf test mkdir rmdir; do
-#    ln -sf busybox "$STAGE_DIR/bin/$app"
-#  done
+
   log "✅ Staged BusyBox applets to /bin"
   if [ -f "$ROOT/userland/miniroot/bin/init" ]; then
     cp "$ROOT/userland/miniroot/bin/init" "$STAGE_DIR/bin/init"
@@ -467,135 +461,6 @@ done
 # Ensure physics-server and srv exist after staging
 [ -f "$STAGE_DIR/bin/physics-server" ] || { echo "❌ physics-server missing after staging" >&2; exit 1; }
 [ -f "$STAGE_DIR/bin/srv" ] || { echo "❌ srv missing after staging" >&2; exit 1; }
-
-# Ensure all staged binaries are executable
-chmod +x "$STAGE_DIR/bin"/*
-
-# Stage shell wrappers for Python CLI tools
-for script in cohcli cohcap cohtrace cohrun cohbuild cohup cohpkg; do
-  if [ -f "$ROOT/bin/$script" ]; then
-    cp "$ROOT/bin/$script" "$STAGE_DIR/bin/$script"
-    cp "$ROOT/bin/$script" "$STAGE_DIR/usr/bin/$script"
-    sed -i '1c #!/usr/bin/env python3' "$STAGE_DIR/bin/$script"
-    sed -i '1c #!/usr/bin/env python3' "$STAGE_DIR/usr/bin/$script"
-    chmod +x "$STAGE_DIR/bin/$script" "$STAGE_DIR/usr/bin/$script"
-  fi
-done
-
-cp "$ROOT/third_party/seL4/artefacts/kernel.elf" "$ROOT/out/bin/kernel.elf"
-cp "$ROOT/third_party/seL4/artefacts/elfloader" "$ROOT/out/bin/elfloader"
-
-echo "seL4 Kernel and Elfloader staged successfully"
-
-echo "🔍 Setting SEL4_WS to workspace root…"
-cd "$ROOT/third_party/seL4/workspace"
-SEL4_WS=$(pwd)
-
- mkdir -p "$ROOT/out/boot"
- cd "$ROOT/out/bin"
- DTB="$ROOT/third_party/seL4/artefacts/kernel.dtb"
- if [ ! -f "$DTB" ]; then
- echo "Error - DTB not found"  >&2
- exit 1
-fi
-
-[ -f kernel.elf ] || { echo "Missing kernel.elf" >&2; exit 1; }
-[ -f cohesix_root.elf ] || { echo "Missing cohesix_root.elf" >&2; exit 1; }
-find kernel.elf cohesix_root.elf elfloader $( [ -f "$DTB" ] && echo "$DTB" ) | cpio -o -H newc > ../boot/cohesix.cpio
-CPIO_IMAGE="$ROOT/out/boot/cohesix.cpio"
-cd "$ROOT"
-
-
-# Bulletproof ELF validation
-log "🔍 Validating cohesix_root ELF memory layout..."
-READLOG="$LOG_DIR/cohesix_root_readelf_$(date +%Y%m%d_%H%M%S).log"
-readelf -l "$ROOT/out/cohesix_root.elf" | tee -a "$LOG_FILE" | tee "$READLOG" >&3
-readelf -h "$ROOT/out/cohesix_root.elf" >> "$TRACE_LOG"
-nm "$ROOT/out/cohesix_root.elf" | grep -E 'seL4_Send|seL4_Recv|seL4_DebugPutChar' >> "$TRACE_LOG"
-sha256sum "$ROOT/out/cohesix_root.elf" > "$LOG_DIR/cohesix_root_$(date +%Y%m%d_%H%M%S).sha256"
-if readelf -l "$ROOT/out/cohesix_root.elf" | grep -q 'LOAD' && \
-   ! readelf -l "$ROOT/out/cohesix_root.elf" | awk '/LOAD/ {print $3}' | grep -q -E '^0xffffff80[0-9a-fA-F]{8}$'; then
-  echo "❌ cohesix_root ELF LOAD segments not aligned with expected seL4 virtual space" >&2
-  exit 1
-fi
-
-ROOT_SIZE=$(stat -c%s "$ROOT/out/cohesix_root.elf")
-if [ "$ROOT_SIZE" -gt $((100*1024*1024)) ]; then
-  echo "❌ cohesix_root ELF exceeds 100MB. Increase KernelElfVSpaceSizeBits or reduce binary size." >&2
-  exit 1
-fi
-
-log "✅ cohesix_root ELF memory layout and size validated"
-
-#
-# -----------------------------------------------------------
-# QEMU bare metal boot test (aarch64)
-# -----------------------------------------------------------
-## CPIO archive is now built by build_sel4.sh; any checks below should use the output from that script
-CPIO_IMAGE="$ROOT/out/boot/image.cpio"
-
-log "🔍 Running ELF checks..."
-KREAD="$LOG_DIR/kernel_readelf_$(date +%Y%m%d_%H%M%S).log"
-RREAD="$LOG_DIR/cohesix_root_readelf_$(date +%Y%m%d_%H%M%S).log"
-NMLOG="$LOG_DIR/nm_$(date +%Y%m%d_%H%M%S).log"
-objdump -x "$ROOT/out/bin/cohesix_root.elf" > "$LOG_DIR/objdump_$(date +%Y%m%d_%H%M%S).log"
-readelf -h "$ROOT/out/bin/cohesix_root.elf" | tee "$RREAD" | tee -a "$LOG_FILE" >&3
-readelf -h "$ROOT/out/bin/kernel.elf" | tee "$KREAD" | tee -a "$LOG_FILE" >&3
-grep -q 'AArch64' "$RREAD" || { echo "❌ cohesix_root.elf not AArch64" >&2; exit 1; }
-grep -q 'AArch64' "$KREAD" || { echo "❌ kernel.elf not AArch64" >&2; exit 1; }
-nm -u "$ROOT/out/bin/cohesix_root.elf" | tee "$NMLOG" | tee -a "$LOG_FILE" >&3
-if grep -q " U " "$NMLOG"; then echo "❌ Undefined symbols" >&2; exit 1; fi
-
-log "🧪 Booting elfloader + kernel in QEMU..."
-QEMU_LOG="$LOG_DIR/qemu_debug_$(date +%Y%m%d_%H%M%S).log"
-QEMU_SERIAL_LOG="$LOG_DIR/qemu_serial_$(date +%Y%m%d_%H%M%S).log"
-QEMU_FLAGS="-nographic -serial mon:stdio"
-if [ "${DEBUG_QEMU:-0}" = "1" ]; then
-  # Deep trace for MMU and CPU faults when DEBUG_QEMU=1
-  QEMU_FLAGS="-nographic -serial mon:stdio -d cpu_reset,int,guest_errors,mmu"
-fi
-qemu-system-aarch64 -M virt,gic-version=2 -cpu cortex-a57 -m 1024M \
-  -kernel "$ROOT/out/bin/elfloader" \
-  -initrd "$CPIO_IMAGE" \
-  $QEMU_FLAGS \
-  -D "$QEMU_LOG" |& tee "$QEMU_SERIAL_LOG" || true
-log "QEMU log saved to $QEMU_LOG"
-log "QEMU serial saved to $QEMU_SERIAL_LOG"
-echo "QEMU log: $QEMU_LOG" >> "$TRACE_LOG"
-
-
-log "📂 Staging boot files..."
-cp "$ROOT/out/bin/kernel.elf" "$STAGE_DIR/boot/kernel.elf"
-cp "$ROOT/out/bin/cohesix_root.elf" "$STAGE_DIR/boot/userland.elf"
-cp "$ROOT/out/bin/elfloader" "$STAGE_DIR/boot/elfloader"
-for f in initfs.img bootargs.txt boot_trace.json; do
-  [ -f "$f" ] && cp "$f" "$STAGE_DIR/boot/"
-done
-
-# Generate manifest of staged binaries
-MANIFEST="$STAGE_DIR/manifest.json"
-echo '{"binaries":[' > "$MANIFEST"
-first=1
-for bin in $(find "$STAGE_DIR/bin" -type f -perm -111); do
-  hash=$(sha256sum "$bin" | awk '{print $1}')
-  ver=$(git rev-parse --short HEAD)
-  if [ $first -eq 0 ]; then echo ',' >> "$MANIFEST"; fi
-  first=0
-  printf '{"file":"%s","hash":"%s","version":"%s"}' "${bin#$STAGE_DIR/}" "$hash" "$ver" >> "$MANIFEST"
-done
-echo ']}' >> "$MANIFEST"
-
-ART_JSON="$LOG_DIR/artifact_locations.json"
-cat > "$ART_JSON" <<EOF
-{
-  "libsel4.a": "$(realpath "$LIB_PATH")",
-  "headers": "$(realpath "$ROOT/third_party/seL4/include")",
-  "cohesix_root.elf": "$(realpath "$ROOT/out/bin/cohesix_root.elf")",
-  "kernel.elf": "$(realpath "$ROOT/out/bin/kernel.elf")"
-}
-EOF
-cat "$ART_JSON" >> "$TRACE_LOG"
-
 
 log "🔍 Running Rust tests with detailed output..."
 RUST_BACKTRACE=1 cargo test --release --target "$ROOT/workspace/cohesix_root/sel4-aarch64.json" -- --nocapture
@@ -648,8 +513,6 @@ else
   log "⚠️ Go not found; skipping Go build"
 fi
 # --- End Go build and staging section ---
-
-
 
 log "📖 Building mandoc and staging man pages..."
 ./scripts/build_mandoc.sh
@@ -727,6 +590,58 @@ BIN_COUNT=$(find "$STAGE_DIR/bin" -type f -perm -111 | wc -l)
 ROLE_COUNT=$(find "$STAGE_DIR/roles" -name '*.yaml' | wc -l)
 log "FS BUILD OK: ${BIN_COUNT} binaries, ${ROLE_COUNT} roles staged" >&3
 
+# Ensure all staged binaries are executable
+chmod +x "$STAGE_DIR/bin"/*
+
+
+echo "Creating boot directory and CPIO image"
+
+ mkdir -p "$ROOT/boot"
+ cp "$ROOT/out/bin/cohesix_root.elf" "$ROOT/third_party/seL4/artefacts/cohesix_root.elf"
+ cd "$ROOT/third_party/seL4/artefacts"
+
+[ -f kernel.elf ] || { echo "Missing kernel.elf" >&2; exit 1; }
+[ -f cohesix_root.elf ] || { echo "Missing cohesix_root.elf" >&2; exit 1; }
+find kernel.elf cohesix_root.elf elfloader kernel.dtb | cpio -o -H newc > ../boot/cohesix.cpio
+CPIO_IMAGE="$ROOT/boot/cohesix.cpio"
+cd "$ROOT"
+
+#
+# -----------------------------------------------------------
+# QEMU bare metal boot test (aarch64)
+# -----------------------------------------------------------
+## CPIO archive is now built by build_sel4.sh; any checks below should use the output from that script
+CPIO_IMAGE="$ROOT/boot/cohesix.cpio"
+
+log "🧪 Booting elfloader + kernel in QEMU..."
+QEMU_LOG="$LOG_DIR/qemu_debug_$(date +%Y%m%d_%H%M%S).log"
+QEMU_SERIAL_LOG="$LOG_DIR/qemu_serial_$(date +%Y%m%d_%H%M%S).log"
+QEMU_FLAGS="-nographic -serial mon:stdio"
+if [ "${DEBUG_QEMU:-0}" = "1" ]; then
+  # Deep trace for MMU and CPU faults when DEBUG_QEMU=1
+  QEMU_FLAGS="-nographic -serial mon:stdio -d cpu_reset,int,guest_errors,mmu"
+fi
+qemu-system-aarch64 -M virt,gic-version=2 -cpu cortex-a57 -m 1024M \
+  -kernel "$ROOT/out/bin/elfloader" \
+  -initrd "$CPIO_IMAGE" \
+  $QEMU_FLAGS \
+  -D "$QEMU_LOG" |& tee "$QEMU_SERIAL_LOG"
+log "QEMU log saved to $QEMU_LOG"
+log "QEMU serial saved to $QEMU_SERIAL_LOG"
+echo "QEMU log: $QEMU_LOG" >> "$TRACE_LOG"
+
+# Generate manifest of staged binaries
+MANIFEST="$STAGE_DIR/manifest.json"
+echo '{"binaries":[' > "$MANIFEST"
+first=1
+for bin in $(find "$STAGE_DIR/bin" -type f -perm -111); do
+  hash=$(sha256sum "$bin" | awk '{print $1}')
+  ver=$(git rev-parse --short HEAD)
+  if [ $first -eq 0 ]; then echo ',' >> "$MANIFEST"; fi
+  first=0
+  printf '{"file":"%s","hash":"%s","version":"%s"}' "${bin#$STAGE_DIR/}" "$hash" "$ver" >> "$MANIFEST"
+done
+echo ']}' >> "$MANIFEST"
 
 log "✅ [Build Complete] $(date)"
 
@@ -737,20 +652,3 @@ echo "⚠️  Summary of Errors and Warnings:" | tee -a "$LOG_FILE" >&3
 tail -n 10 "$SUMMARY_ERRORS" || echo "✅ No critical issues found" | tee -a "$LOG_FILE" >&3
 
 echo "🪵 Full log saved to $LOG_FILE" >&3
-
-# QEMU bare metal launch command (final boot test)
-log "🧪 Running final QEMU bare metal boot test..."
-# Provide final boot test log locations
-QEMU_CONSOLE="$LOG_DIR/qemu_console_$(date +%Y%m%d_%H%M%S).log"
-QEMU_FLAGS="-nographic -serial mon:stdio"
-if [ "${DEBUG_QEMU:-0}" = "1" ]; then
-  QEMU_FLAGS="-nographic -serial mon:stdio -d cpu_reset,int,guest_errors,mmu"
-fi
-# Provide CPIO archive as initrd to elfloader
-qemu-system-aarch64 -M virt,gic-version=2 -cpu cortex-a57 -m 1024M \
-  -kernel "$ROOT/out/bin/elfloader" \
-  -initrd "$CPIO_IMAGE" \
-  $QEMU_FLAGS \
-  -D "$LOG_DIR/qemu_baremetal_$(date +%Y%m%d_%H%M%S).log" |& tee "$QEMU_CONSOLE" || true
-log "QEMU console saved to $QEMU_CONSOLE"
-log "✅ QEMU bare metal boot test complete."
