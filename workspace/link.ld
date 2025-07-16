@@ -1,5 +1,5 @@
 /* CLASSIFICATION: COMMUNITY */
-/* Filename: link.ld v0.18 */
+/* Filename: link.ld v0.19 */
 /* Author: Lukas Bower */
 /* Date Modified: 2027-12-31 */
 /* SPDX-License-Identifier: BSD-2-Clause */
@@ -18,7 +18,7 @@ PHDRS {
 }
 
 SECTIONS {
-    . = 0xffffff8040000000;
+    . = 0x400000;
 
     . = ALIGN(0x1000);
     .text : {
