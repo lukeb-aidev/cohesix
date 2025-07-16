@@ -525,7 +525,7 @@ fi
 
 # Stage Plan9 rc tests
 mkdir -p "$STAGE_DIR/bin/tests"
-cp "$ROOT/tests/Cohesix/*.rc" "$STAGE_DIR/bin/tests/"
+cp "$ROOT/tests/Cohesix/"*.rc "$STAGE_DIR/bin/tests/"
 chmod +x "$STAGE_DIR/bin/tests"/*.rc
 log "✅ Staged Plan9 rc tests to /bin/tests"
 
