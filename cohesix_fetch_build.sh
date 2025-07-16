@@ -493,21 +493,7 @@ log "📖 Building mandoc and staging man pages..."
 bash "$ROOT/scripts/build_mandoc.sh"
 MANDOC_BIN="$ROOT/prebuilt/mandoc/mandoc.$COH_ARCH"
 if [ -f "$MANDOC_BIN" ]; then
-  mkdir -p "$STAGE_DIR/prebuilt/mandoc"
-  cp "$MANDOC_BIN" "$STAGE_DIR/prebuilt/mandoc/"
-  chmod +x "$STAGE_DIR/prebuilt/mandoc/mandoc.$COH_ARCH"
-  cp bin/mandoc "$STAGE_DIR/bin/mandoc"
-  cp bin/mandoc "$STAGE_DIR/usr/bin/mandoc"
-  chmod +x "$STAGE_DIR/bin/mandoc" "$STAGE_DIR/usr/bin/mandoc"
-  cp bin/man "$STAGE_DIR/bin/man"
-  cp bin/man "$STAGE_DIR/usr/bin/man"
-  chmod +x "$STAGE_DIR/bin/man" "$STAGE_DIR/usr/bin/man"
-  mkdir -p "$STAGE_DIR/mnt/data/bin"
-  cp "$MANDOC_BIN" "$STAGE_DIR/mnt/data/bin/cohman"
-  chmod +x "$STAGE_DIR/mnt/data/bin/cohman"
-  cp bin/cohman.sh "$STAGE_DIR/bin/cohman"
-  cp bin/cohman.sh "$STAGE_DIR/usr/bin/cohman"
-  chmod +x "$STAGE_DIR/bin/cohman" "$STAGE_DIR/usr/bin/cohman"
+  cp "$MANDOC_BIN" "$STAGE_DIR/bin/man"
   log "✅ Built mandoc" 
   if [ -d "$ROOT/workspace/docs/man" ]; then
     mkdir -p "$STAGE_DIR/usr/share/man/man1" "$STAGE_DIR/usr/share/man/man8"
@@ -538,8 +524,8 @@ fi
 
 # Stage Plan9 rc tests
 mkdir -p "$STAGE_DIR/bin/tests"
-cp "$ROOT/tests/Cohesix/*.rc" "$STAGE_DIR/bin/tests/"
-chmod +x "$STAGE_DIR/bin/tests"/*.rc
+cp -- "$ROOT/tests/Cohesix/"*.rc "$STAGE_DIR/bin/tests/" 2>/dev/null || true
+chmod +x "$STAGE_DIR/bin/tests/"*.rc
 log "✅ Staged Plan9 rc tests to /bin/tests"
 
 echo "✅ All builds complete."
@@ -563,16 +549,25 @@ log "FS BUILD OK: ${BIN_COUNT} binaries, ${ROLE_COUNT} roles staged" >&3
 # Ensure all staged binaries are executable
 chmod +x "$STAGE_DIR/bin"/*
 
-echo "Creating boot directory and CPIO image"
+e# 1) Create boot directory
+mkdir -p "$ROOT/boot"
 
- mkdir -p "$ROOT/boot"
- # Stage cohesix_root
- cp "$ROOT/workspace/target/sel4-aarch64/release/cohesix_root" "$ROOT/third_party/seL4/artefacts/cohesix_root.elf"
- cd "$ROOT/third_party/seL4/artefacts"
+# 2) Stage cohesix_root
+cp -- "$ROOT/workspace/target/sel4-aarch64/release/cohesix_root" \
+      "$ROOT/third_party/seL4/artefacts/cohesix_root.elf"
 
-[ -f kernel.elf ] || { echo "Missing kernel.elf" >&2; exit 1; }
-[ -f cohesix_root.elf ] || { echo "Missing cohesix_root.elf" >&2; exit 1; }
-find kernel.elf cohesix_root.elf elfloader kernel.dtb | cpio -o -H newc > ../boot/cohesix.cpio
+# 3) Verify artefacts exist
+cd "$ROOT/third_party/seL4/artefacts"
+[ -f kernel.elf ] || { echo "❌ Missing kernel.elf" >&2; exit 1; }
+[ -f cohesix_root.elf ] || { echo "❌ Missing cohesix_root.elf" >&2; exit 1; }
+[ -f elfloader ] || { echo "❌ Missing elfloader" >&2; exit 1; }
+[ -f kernel.dtb ] || { echo "❌ Missing kernel.dtb" >&2; exit 1; }
+
+# 4) Pack into a newc cpio archive
+find kernel.elf cohesix_root.elf elfloader kernel.dtb | \
+  cpio -o -H newc > "$ROOT/boot/cohesix.cpio"
+
+# 5) Export the path
 CPIO_IMAGE="$ROOT/boot/cohesix.cpio"
 cd "$ROOT"
 
@@ -580,25 +575,38 @@ cd "$ROOT"
 # -----------------------------------------------------------
 # QEMU bare metal boot test (aarch64)
 # -----------------------------------------------------------
-## CPIO archive is now built by build_sel4.sh; any checks below should use the output from that script
-CPIO_IMAGE="$ROOT/boot/cohesix.cpio"
 
 log "🧪 Booting elfloader + kernel in QEMU..."
+
+# Timestamped log files
 QEMU_LOG="$LOG_DIR/qemu_debug_$(date +%Y%m%d_%H%M%S).log"
 QEMU_SERIAL_LOG="$LOG_DIR/qemu_serial_$(date +%Y%m%d_%H%M%S).log"
-QEMU_FLAGS="-nographic -serial mon:stdio"
+
+# Base QEMU flags
+QEMU_FLAGS=(-nographic -serial mon:stdio)
+
+# Enable deep tracing when requested
 if [ "${DEBUG_QEMU:-0}" = "1" ]; then
-  # Deep trace for MMU and CPU faults when DEBUG_QEMU=1
-  QEMU_FLAGS="-nographic -serial mon:stdio -d cpu_reset,int,guest_errors,mmu"
+  QEMU_FLAGS+=(-d cpu_reset,int,guest_errors,mmu)
 fi
-qemu-system-aarch64 -M virt,gic-version=2 -cpu cortex-a57 -m 1024M \
-  -kernel "$ROOT/out/bin/elfloader" \
+
+# Launch QEMU
+qemu-system-aarch64 \
+  -M virt,gic-version=2 \
+  -cpu cortex-a57 \
+  -m 1024M \
+  -kernel "$ROOT/third_party/seL4/artefacts/elfloader" \
   -initrd "$CPIO_IMAGE" \
-  $QEMU_FLAGS \
+  "${QEMU_FLAGS[@]}" \
   -D "$QEMU_LOG" |& tee "$QEMU_SERIAL_LOG"
-log "QEMU log saved to $QEMU_LOG"
-log "QEMU serial saved to $QEMU_SERIAL_LOG"
-echo "QEMU log: $QEMU_LOG" >> "$TRACE_LOG"
+
+# Report where logs went
+log "✅ QEMU debug log saved to $QEMU_LOG"
+log "✅ QEMU serial log saved to $QEMU_SERIAL_LOG"
+
+# Append to trace log for CI
+echo "QEMU debug log: $QEMU_LOG" >> "$TRACE_LOG"
+echo "QEMU serial log: $QEMU_SERIAL_LOG" >> "$TRACE_LOG"
 
 # Generate manifest of staged binaries
 MANIFEST="$STAGE_DIR/manifest.json"
