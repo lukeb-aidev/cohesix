@@ -491,8 +491,8 @@ fi
 
 log "📖 Building mandoc and staging man pages..."
 bash "$ROOT/scripts/build_mandoc.sh"
-MANDOC_BIN="prebuilt/mandoc/mandoc.$COH_ARCH"
-if [ -x "$MANDOC_BIN" ]; then
+MANDOC_BIN="$ROOT/prebuilt/mandoc/mandoc.$COH_ARCH"
+if [ -f "$MANDOC_BIN" ]; then
   mkdir -p "$STAGE_DIR/prebuilt/mandoc"
   cp "$MANDOC_BIN" "$STAGE_DIR/prebuilt/mandoc/"
   chmod +x "$STAGE_DIR/prebuilt/mandoc/mandoc.$COH_ARCH"
