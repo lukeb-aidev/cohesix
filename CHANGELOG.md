@@ -3387,3 +3387,7 @@
 ## [v0.545] - 2027-12-31
 ### Fixed
 - **FixRootBaseAlignment-030**: Updated rootserver linker scripts to load at `0x400000`, matching kernel expectations. Added MMU fault detection in `ci/qemu_boot_check.sh` and updated metadata.
+
+## [v0.546] - 2027-12-31
+### Fixed
+- **InvestigateAndFixBootFailure-031**: Implemented capability assignment in `c/sel4/bootloader.c` so `sel4utils_copy_path_to_process` succeeds. Updated metadata and added check in `ci/qemu_boot_check.sh` for copy failures.
