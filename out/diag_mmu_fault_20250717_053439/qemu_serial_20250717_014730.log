@@ -1,0 +1,16 @@
+
+ELF-loader started on CPU: ARM Ltd. Cortex-A57 r1p0
+  paddr=[40a25000..40eea0d7]
+No DTB passed in from boot loader.
+Looking for DTB in CPIO archive...found at 40bf1030.
+Loaded DTB from 40bf1030.
+   paddr=[4023d000..4023efff]
+ELF-loading image 'kernel' to 40000000
+  paddr=[40000000..4023cfff]
+  vaddr=[ffffff8040000000..ffffff804023cfff]
+  virt_entry=ffffff8040000000
+ERROR: Kernel DTB not second image in archive
+ERROR: image loading failed
+abort() called.
+QEMU: Terminated
+
