@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: sys.rs v0.12
+// Filename: sys.rs v0.13
 // Author: Lukas Bower
 // Date Modified: 2027-12-31
 
@@ -23,15 +23,22 @@ pub fn init_uart() {
 }
 
 
+const SYS_DEBUG_PUTCHAR: i64 = -9;
+const SYS_SEND: i64 = -3;
+const SYS_RECV: i64 = -5;
+const SYS_YIELD: i64 = -7;
+const SYS_DEBUG_HALT: i64 = -11;
+
 #[cfg(target_arch = "aarch64")]
 #[no_mangle]
 pub extern "C" fn seL4_DebugPutChar(c: u8) {
     unsafe {
         core::arch::asm!(
-            "mov x0, {0}",
-            "mov x16, #-9",
+            "mov x0, {char_reg}",
+            "mov x16, {sys_num}",
             "svc #0",
-            in(reg) c as u64,
+            char_reg = in(reg) c as u64,
+            sys_num = const SYS_DEBUG_PUTCHAR,
             options(nostack)
         );
     }
@@ -47,10 +54,11 @@ pub unsafe extern "C" fn seL4_Send(dest: u64, msg: *const u64) {
     core::arch::asm!(
         "mov x0, {0}",
         "mov x1, {1}",
-        "mov x16, #-3",
+        "mov x16, {sys_num}",
         "svc #0",
         in(reg) dest,
         in(reg) msg,
+        sys_num = const SYS_SEND,
         options(nostack)
     );
 }
@@ -61,10 +69,11 @@ pub unsafe extern "C" fn seL4_Recv(src: u64, msg: *mut u64) {
     core::arch::asm!(
         "mov x0, {0}",
         "mov x1, {1}",
-        "mov x16, #-5",
+        "mov x16, {sys_num}",
         "svc #0",
         in(reg) src,
         in(reg) msg,
+        sys_num = const SYS_RECV,
         options(nostack)
     );
 }
@@ -73,8 +82,9 @@ pub unsafe extern "C" fn seL4_Recv(src: u64, msg: *mut u64) {
 #[no_mangle]
 pub unsafe extern "C" fn seL4_Yield() {
     core::arch::asm!(
-        "mov x16, #-7",
+        "mov x16, {sys_num}",
         "svc #0",
+        sys_num = const SYS_YIELD,
         options(nostack)
     );
 }
@@ -83,8 +93,9 @@ pub unsafe extern "C" fn seL4_Yield() {
 #[no_mangle]
 pub unsafe extern "C" fn seL4_DebugHalt() {
     core::arch::asm!(
-        "mov x16, #-11",
+        "mov x16, {sys_num}",
         "svc #0",
+        sys_num = const SYS_DEBUG_HALT,
         options(nostack)
     );
 }
