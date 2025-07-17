@@ -156,7 +156,7 @@
 | docs/community/architecture/BOOT_KERNEL_FLOW.md | v0.3 | 2026-10-16 | COMMUNITY | | |
 | docs/community/archive/EXAMPLES_README.md | v0.3 | 2026-02-05 | COMMUNITY | | |
 | .cohesix_env | v0.3 | 2026-07-25 | COMMUNITY | | |
-| cohesix_fetch_build.sh | v1.28 | 2027-12-31 | COMMUNITY | | |
+| cohesix_fetch_build.sh | v1.31 | 2027-12-31 | COMMUNITY | | |
 | cohesix_fetch_build.bak | v0.92 | 2027-11-07 | COMMUNITY | | |
 | CONTRIBUTING.md | v1.1 | 2025-07-23 | COMMUNITY | | |
 | config/secure9p.toml | v0.7 | 2026-12-31 | COMMUNITY | | |
@@ -282,8 +282,8 @@
 | workspace/cohesix_root/src/allocator.rs | v0.7 | 2027-11-20 | COMMUNITY | | |
 | workspace/cohesix_root/src/sys.rs | v0.12 | 2027-12-31 | COMMUNITY | | |
 | workspace/cohesix_root/src/dt.rs | v0.1 | 2027-12-31 | COMMUNITY | | |
-| workspace/sel4-sys/Cargo.toml | v0.1 | 2027-12-31 | COMMUNITY | | |
-| workspace/sel4-sys/build.rs | v0.1 | 2027-12-31 | COMMUNITY | | |
+| workspace/sel4-sys/Cargo.toml | v0.2 | 2027-12-31 | COMMUNITY | | |
+| workspace/sel4-sys/build.rs | v0.2 | 2027-12-31 | COMMUNITY | | |
 | workspace/sel4-sys/src/lib.rs | v0.1 | 2027-12-31 | COMMUNITY | | |
 | src/cuda/runtime.rs | v0.16 | 2026-12-31 | COMMUNITY | | |
 | src/cli/mod.rs | v1.3 | 2026-10-08 | COMMUNITY | | |
@@ -387,7 +387,7 @@
 | docs/community/diagnostics/BOOT_FLOW_DIAGNOSTIC_20250717.md | v0.1 | 2027-12-31 | COMMUNITY | | |
 | docs/community/diagnostics/BOOT_FLOW_DIAGNOSTIC_20250717B.md | v0.1 | 2027-12-31 | COMMUNITY | | |
 | docs/community/diagnostics/HOLISTIC_BOOT_FLOW_20250717.md | v0.1 | 2027-12-31 | COMMUNITY | | |
-| docs/community/diagnostics/boot_workflow_rust.md | v0.3 | 2027-12-31 | COMMUNITY | | |
+| docs/community/diagnostics/boot_workflow_rust.md | v0.4 | 2027-12-31 | COMMUNITY | | |
 | docs/community/governance/COHESIX_AARCH64_BUILD.md | v1.1 | 2027-12-28 | COMMUNITY | | |
 | tests/Cohesix/test_cli_cap.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
 | tests/Cohesix/test_cloud.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
