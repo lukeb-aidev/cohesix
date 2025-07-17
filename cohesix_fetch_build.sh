@@ -552,9 +552,13 @@ chmod +x "$STAGE_DIR/bin"/*
 # 1) Create boot directory
 mkdir -p "$ROOT/boot"
 
+
 # 2) Stage cohesix_root and elfloader
-cp -- "$ROOT/workspace/target/sel4-aarch64/release/cohesix_root" \
-      "$ROOT/third_party/seL4/artefacts/cohesix_root.elf"
+ROOT_ELF_SRC="$ROOT/workspace/target/sel4-aarch64/release/cohesix_root"
+ROOT_ELF_DST="$ROOT/third_party/seL4/artefacts/cohesix_root.elf"
+mkdir -p "$ROOT/out/bin"
+cp -- "$ROOT_ELF_SRC" "$ROOT/out/bin/cohesix_root.elf"
+cp -- "$ROOT_ELF_SRC" "$ROOT_ELF_DST"
 
 cp -- "$ROOT/third_party/seL4/artefacts/elfloader" \
       "$ROOT/boot/elfloader"
