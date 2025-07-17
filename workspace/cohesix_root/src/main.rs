@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: main.rs v0.43
+// Filename: main.rs v0.44
 // Author: Lukas Bower
 // Date Modified: 2027-12-31
 #![no_std]
@@ -567,5 +567,14 @@ pub extern "C" fn main() {
     }
     putstr("[root] launching userland...");
     exec_init();
+    putstr("✅ rootserver main loop entered");
+    main_loop();
+    unsafe { sys::seL4_DebugHalt(); }
+}
+
+fn main_loop() -> ! {
+    loop {
+        unsafe { sys::seL4_Yield(); }
+    }
 }
 
