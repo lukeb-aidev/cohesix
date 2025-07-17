@@ -3428,3 +3428,7 @@
 ## [v0.556] - 2027-12-31
 ### Fixed
 - **FixRustBootFlow-043**: Updated `build.rs` to embed the seL4 target specification and MMU vector table, adjusted the rootserver entry stubs in `startup.rs`, and documented the complete Rust boot flow.
+
+## [v0.557] - 2027-12-31
+### Added
+- **WebCodexHolisticBootAnalysis-044**: Expanded `boot_workflow_rust.md` with a complete build-to-boot checklist referencing the latest diagnostics.
