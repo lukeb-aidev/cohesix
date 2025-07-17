@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: main.rs v0.41
+// Filename: main.rs v0.42
 // Author: Lukas Bower
 // Date Modified: 2027-12-31
 #![no_std]
@@ -460,6 +460,8 @@ fn exec_init() -> ! {
 
 #[no_mangle]
 pub extern "C" fn main() {
+    sys::init_uart();
+    sys::validate_uart_ptr();
     sys::coh_log("ROOTSERVER ONLINE");
     unsafe {
         ALLOC_CHECK = 0xdeadbeefdeadbeef;

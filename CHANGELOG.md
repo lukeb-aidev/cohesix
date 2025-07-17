@@ -3400,3 +3400,7 @@
 ## [v0.548] - 2027-12-31
 ### Fixed
 - **FixElfloaderDTBOrderAndBootFlow-038**: `cohesix_fetch_build.sh` stages `kernel.dtb` as the second image in the CPIO archive and logs the first entries before boot. QEMU boot now proceeds into userland without DTB order errors.
+
+## [v0.549] - 2027-12-31
+### Fixed
+- **FixRootserverCapFault-039**: Added UART device segment at `0x09000000` and runtime validation to ensure the address is mapped before use. Updated linker script and boot metadata.
