@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v1.28
+# Filename: cohesix_fetch_build.sh v1.29
 # Author: Lukas Bower
 # Date Modified: 2027-12-31
 
@@ -570,7 +570,7 @@ cd "$ROOT/third_party/seL4/artefacts"
 [ -f kernel.dtb ] || { echo "❌ Missing kernel.dtb" >&2; exit 1; }
 
 # 4) Pack into a newc cpio archive
-printf '%s\n' kernel.elf kernel.dtb cohesix_root.elf | \
+printf '%s\n' kernel.elf cohesix_root.elf kernel.dtb | \
   cpio -o -H newc > "$ROOT/boot/cohesix.cpio"
 
 # Verify archive order
@@ -626,6 +626,10 @@ qemu-system-aarch64 \
 # Report where logs went
 log "✅ QEMU debug log saved to $QEMU_LOG"
 log "✅ QEMU serial log saved to $QEMU_SERIAL_LOG"
+
+# Pre-handoff reserved region dump
+echo "Reserved regions:" | tee -a "$TRACE_LOG"
+grep -i "reserved" "$QEMU_SERIAL_LOG" | tee -a "$TRACE_LOG"
 
 # Append to trace log for CI
 echo "QEMU debug log: $QEMU_LOG" >> "$TRACE_LOG"
