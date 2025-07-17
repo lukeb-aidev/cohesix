@@ -3,7 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2027-12-31
 
-use std::{env, fs};
+use std::{env, fs, path::Path};
 use std::io::Write;
 
 fn generate_dtb_constants(out_dir: &str, manifest_dir: &str) {
@@ -33,6 +33,22 @@ fn generate_dtb_constants(out_dir: &str, manifest_dir: &str) {
     writeln!(file, "pub const UART_BASE: usize = 0x{uart_base:x};").unwrap();
 }
 
+fn embed_sel4_spec(out_dir: &str, manifest_dir: &str) {
+    let spec_path = format!("{}/sel4-aarch64.json", manifest_dir);
+    let dest = format!("{}/sel4_spec.json", out_dir);
+    fs::copy(&spec_path, &dest).expect("copy sel4 spec");
+    println!("cargo:rerun-if-changed={spec_path}");
+}
+
+fn embed_vectors(out_dir: &str, manifest_dir: &str) {
+    let vec_path = format!("{}/mmu_vectors.bin", manifest_dir);
+    if Path::new(&vec_path).exists() {
+        let dest = format!("{}/mmu_vectors.bin", out_dir);
+        fs::copy(&vec_path, &dest).expect("copy mmu vectors");
+        println!("cargo:rerun-if-changed={vec_path}");
+    }
+}
+
 fn main() {
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
     let header_dir = format!("{}/../../third_party/seL4/include", manifest_dir);
@@ -41,6 +57,8 @@ fn main() {
     }
     let out_dir = env::var("OUT_DIR").unwrap();
     generate_dtb_constants(&out_dir, &manifest_dir);
+    embed_sel4_spec(&out_dir, &manifest_dir);
+    embed_vectors(&out_dir, &manifest_dir);
     println!("cargo:rerun-if-changed=../../third_party/seL4/lib/libsel4.a");
     println!("cargo:rerun-if-changed=../../third_party/seL4/kernel.dts");
     println!("cargo:rustc-link-search=../../third_party/seL4/lib");
