@@ -1,0 +1,50 @@
+
+ELF-loader started on CPU: ARM Ltd. Cortex-A57 r1p0
+  paddr=[40a25000..40eea0d7]
+No DTB passed in from boot loader.
+Looking for DTB in CPIO archive...found at 40b64288.
+Loaded DTB from 40b64288.
+   paddr=[4023d000..4023efff]
+ELF-loading image 'kernel' to 40000000
+  paddr=[40000000..4023cfff]
+  vaddr=[ffffff8040000000..ffffff804023cfff]
+  virt_entry=ffffff8040000000
+ELF-loading image 'cohesix_root.elf' to 4023f000
+  paddr=[4023f000..402defff]
+  vaddr=[400000..49ffff]
+  virt_entry=400000
+Enabling MMU and paging
+Jumping to kernel-image entry point...
+
+Bootstrapping kernel
+Warning: Could not infer GIC interrupt target ID, assuming 0.
+available phys memory regions: 1
+  [40000000..80000000]
+reserved virt address space regions: 3
+  [ffffff8040000000..ffffff804023d000]
+  [ffffff804023d000..ffffff804023ed15]
+  [ffffff804023f000..ffffff80402df000]
+Booting all finished, dropped to user space
+Caught cap fault in send phase at address 0
+while trying to handle:
+vm fault on data at address 0x9000000 with status 0x92000046
+in thread 0xffffff807ffc9400 "rootserver" at address 0x4021f8
+With stack:
+0x49fdc0: 0x0
+0x49fdc8: 0x0
+0x49fdd0: 0x0
+0x49fdd8: 0x0
+0x49fde0: 0x0
+0x49fde8: 0x0
+0x49fdf0: 0x0
+0x49fdf8: 0x0
+0x49fe00: 0x0
+0x49fe08: 0x0
+0x49fe10: 0x0
+0x49fe18: 0x0
+0x49fe20: 0x0
+0x49fe28: 0x0
+0x49fe30: 0x0
+0x49fe38: 0x0
+QEMU: Terminated
+
