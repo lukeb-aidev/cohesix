@@ -3408,3 +3408,7 @@
 ## [v0.550] - 2027-12-31
 ### Fixed
 - **AddSel4LibPathToRustflags-041**: `sel4-aarch64.json` now sets `rustflags` so the linker finds `libsel4.a` without extra environment variables.
+
+## [v0.551] - 2027-12-31
+### Fixed
+- **FixReservedRegionOrderAndRootServerSetup-042**: Removed fixed UART mapping from `link.ld` and validation code, reordered CPIO packaging to place `cohesix_root.elf` before `kernel.dtb`, and added reserved region dump in `cohesix_fetch_build.sh`.
