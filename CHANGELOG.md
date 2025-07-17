@@ -3396,3 +3396,7 @@
 ## [v0.547] - 2027-12-31
 ### Fixed
 - **FixBootLoaderCSpaceCapCopyAndEnhanceQemuDebug-034**: Installed init thread CSpace root before copying caps and enhanced `cohesix_fetch_build.sh` debug flags. Kernel DTB now passed explicitly to QEMU.
+
+## [v0.548] - 2027-12-31
+### Fixed
+- **FixElfloaderDTBOrderAndBootFlow-038**: `cohesix_fetch_build.sh` stages `kernel.dtb` as the second image in the CPIO archive and logs the first entries before boot. QEMU boot now proceeds into userland without DTB order errors.
