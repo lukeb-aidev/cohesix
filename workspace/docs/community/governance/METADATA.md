@@ -279,7 +279,7 @@
 | workspace/cohesix_root/src/lang_items.rs | v0.1 | 2027-10-12 | COMMUNITY | | |
 | workspace/cohesix_root/src/entry.S | v0.20 | 2027-12-26 | COMMUNITY | | |
 | workspace/cohesix_root/src/allocator.rs | v0.7 | 2027-11-20 | COMMUNITY | | |
-| workspace/cohesix_root/src/sys.rs | v0.10 | 2027-12-31 | COMMUNITY | | |
+| workspace/cohesix_root/src/sys.rs | v0.11 | 2027-12-31 | COMMUNITY | | |
 | workspace/cohesix_root/src/dt.rs | v0.1 | 2027-12-31 | COMMUNITY | | |
 | src/cuda/runtime.rs | v0.16 | 2026-12-31 | COMMUNITY | | |
 | src/cli/mod.rs | v1.3 | 2026-10-08 | COMMUNITY | | |
@@ -380,6 +380,7 @@
 | docs/community/diagnostics/STATIC_LINK_FIX_REPORT.md | v0.1 | 2027-12-31 | COMMUNITY | | |
 | docs/community/diagnostics/STATIC_LINK_FIX_VALIDATION.md | v0.1 | 2027-12-31 | COMMUNITY | | |
 | docs/community/diagnostics/WHY_COHESIX_ROOT_FAILS_TO_BOOT_20250711.md | v0.1 | 2025-07-11 | COMMUNITY | | |
+| docs/community/diagnostics/BOOT_FLOW_DIAGNOSTIC_20250717.md | v0.1 | 2027-12-31 | COMMUNITY | | |
 | docs/community/governance/COHESIX_AARCH64_BUILD.md | v1.1 | 2027-12-28 | COMMUNITY | | |
 | tests/Cohesix/test_cli_cap.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
 | tests/Cohesix/test_cloud.rc | v0.1 | 2027-12-07 | COMMUNITY | | |

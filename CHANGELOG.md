@@ -3416,3 +3416,7 @@
 ## [v0.552] - 2027-12-31
 ### Fixed
 - **InvestigateAndFixRootserverHang-043**: Rewrote `seL4_DebugPutChar` as a syscall and added a persistent main loop after userland launch. Rootserver now logs "✅ rootserver main loop entered" and no longer falls off the end of `main`.
+
+## [v0.553] - 2027-12-31
+### Fixed
+- **HolisticBootFlowDiagnosticAndFix-044**: Adjusted `init_uart` to avoid touching unmapped MMIO, resolving an early cap fault at address `0x9000000`. Added corresponding diagnostics report and updated metadata.

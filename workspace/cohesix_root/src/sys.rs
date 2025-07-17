@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: sys.rs v0.10
+// Filename: sys.rs v0.11
 // Author: Lukas Bower
 // Date Modified: 2027-12-31
 
@@ -12,11 +12,14 @@ use crate::coherr;
 #[used]
 static mut UART_FRAME: [u8; 0x1000] = [0; 0x1000];
 
-/// Ensure the UART frame is mapped before use
+/// Initialize UART support.
+///
+/// The seL4 kernel already maps the debug console.  We simply ensure the
+/// symbol is referenced so the linker keeps the `.uart` section but we avoid
+/// touching the MMIO frame directly which caused an early fault when the
+/// region was not yet mapped.
 pub fn init_uart() {
-    unsafe {
-        core::ptr::write_volatile(UART_BASE as *mut u8, 0);
-    }
+    let _ = unsafe { &UART_FRAME as *const _ };
 }
 
 
