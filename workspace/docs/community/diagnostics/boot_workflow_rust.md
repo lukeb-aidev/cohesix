@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: boot_workflow_rust.md v0.3
+// Filename: boot_workflow_rust.md v0.4
 // Author: Lukas Bower
 // Date Modified: 2027-12-31
 
@@ -14,6 +14,7 @@ with Cargo for the seL4 13.0.0 kernel. It consolidates the findings from the
    custom target JSON (`sel4-aarch64.json`) and `build-std` features produces the
    ELF `cohesix_root`. The workspace now includes the `sel4-sys` crate providing
    raw FFI bindings. `link.ld` is passed via `-C link-arg=-Tlink.ld`.
+   All workspace crates build with `panic="abort"` to prevent unwinding.
 2. **Image Packaging** – `cohesix_fetch_build.sh` gathers `kernel.elf`,
    `kernel.dtb` and `cohesix_root.elf` into `cohesix.cpio` in that order.
 3. **Elfloader Phase** – QEMU boots the `elfloader` which extracts the DTB and

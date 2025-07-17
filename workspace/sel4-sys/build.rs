@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: build.rs v0.1
+// Filename: build.rs v0.2
 // Author: Lukas Bower
 // Date Modified: 2027-12-31
 
@@ -10,6 +10,7 @@ fn main() {
     let out_path = PathBuf::from(env::var("OUT_DIR").unwrap());
     let header = PathBuf::from(&manifest_dir).join("wrapper.h");
     println!("cargo:rerun-if-changed={}", header.display());
+    println!("cargo:rustc-cfg=panic=\"abort\"");
 
     fs::create_dir_all(&out_path).unwrap();
 
