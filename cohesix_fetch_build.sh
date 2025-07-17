@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v1.30
+# Filename: cohesix_fetch_build.sh v1.31
 # Author: Lukas Bower
 # Date Modified: 2027-12-31
 
@@ -440,7 +440,12 @@ cd "$ROOT/workspace"
 cargo clean
 
 # Build all workspace crates except cohesix_root with standard musl userland target
-cargo build --release --workspace --exclude cohesix_root --target=aarch64-unknown-linux-musl
+cargo +nightly build --release --workspace \
+  --exclude cohesix_root \
+  --target aarch64-unknown-linux-musl \
+  -Z build-std=core,alloc,compiler_builtins \
+  -Z build-std-features=compiler-builtins-mem \
+  -Z build-std-panic=abort
 
 # Build bare metal cohesix_root with explicit build-std for core+alloc only
 cargo +nightly build -p cohesix_root --release \

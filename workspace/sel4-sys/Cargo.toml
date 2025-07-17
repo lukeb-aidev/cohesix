@@ -1,5 +1,5 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Cargo.toml v0.1
+# Filename: Cargo.toml v0.2
 # Author: Lukas Bower
 # Date Modified: 2027-12-31
 [package]
@@ -17,3 +17,8 @@ bindgen = "0.65"
 
 [lib]
 crate-type = ["staticlib", "rlib"]
+# Allow non-CamelCase seL4 types
+allow = ["non_camel_case_types"]
+
+[profile.release]
+panic = "abort"
