@@ -3404,3 +3404,7 @@
 ## [v0.549] - 2027-12-31
 ### Fixed
 - **FixRootserverCapFault-039**: Added UART device segment at `0x09000000` and runtime validation to ensure the address is mapped before use. Updated linker script and boot metadata.
+
+## [v0.550] - 2027-12-31
+### Fixed
+- **AddSel4LibPathToRustflags-041**: `sel4-aarch64.json` now sets `rustflags` so the linker finds `libsel4.a` without extra environment variables.

@@ -6,6 +6,7 @@
 use core::ffi::c_char;
 use core::sync::atomic::{compiler_fence, Ordering};
 use crate::dt::UART_BASE;
+use crate::coherr;
 
 #[link_section = ".uart"]
 #[used]
