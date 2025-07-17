@@ -1,5 +1,5 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Cargo.toml v0.7
+# Filename: Cargo.toml v0.8
 # Author: Lukas Bower
 # Date Modified: 2027-12-31
 
@@ -13,6 +13,7 @@ links = "sel4-root"
 
 [dependencies]
 serde = { version = "1.0", default-features = false, features = ["derive", "alloc"] }
+sel4-sys = { workspace = true }
 
 
 [features]
