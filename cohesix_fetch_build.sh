@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v1.25
+# Filename: cohesix_fetch_build.sh v1.26
 # Author: Lukas Bower
 # Date Modified: 2027-12-31
 
@@ -587,9 +587,10 @@ QEMU_SERIAL_LOG="$LOG_DIR/qemu_serial_$(date +%Y%m%d_%H%M%S).log"
 # Base QEMU flags
 QEMU_FLAGS=(-nographic -serial mon:stdio)
 
-# Enable deep tracing when requested
 if [ "${DEBUG_QEMU:-0}" = "1" ]; then
-  QEMU_FLAGS+=(-d cpu_reset,int,guest_errors,mmu)
+  echo "🔍 QEMU debug mode enabled: GDB stub on :1234, tracing CPU and MMU events"
+  # Connect using: gdb -ex 'target remote :1234' <vmlinux>
+  QEMU_FLAGS+=(-S -s -d cpu_reset,int,mmu,page,unimp)
 fi
 
 # Launch QEMU
@@ -599,6 +600,7 @@ qemu-system-aarch64 \
   -m 1024M \
   -kernel "$ROOT/boot/elfloader" \
   -initrd "$CPIO_IMAGE" \
+  -dtb "$ROOT/third_party/seL4/artefacts/kernel.dtb" \
   "${QEMU_FLAGS[@]}" \
   -D "$QEMU_LOG" |& tee "$QEMU_SERIAL_LOG"
 

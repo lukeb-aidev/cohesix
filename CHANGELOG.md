@@ -3391,3 +3391,7 @@
 ## [v0.546] - 2027-12-31
 ### Fixed
 - **InvestigateAndFixBootFailure-031**: Implemented capability assignment in `c/sel4/bootloader.c` so `sel4utils_copy_path_to_process` succeeds. Updated metadata and added check in `ci/qemu_boot_check.sh` for copy failures.
+
+## [v0.547] - 2027-12-31
+### Fixed
+- **FixBootLoaderCSpaceCapCopyAndEnhanceQemuDebug-034**: Installed init thread CSpace root before copying caps and enhanced `cohesix_fetch_build.sh` debug flags. Kernel DTB now passed explicitly to QEMU.
