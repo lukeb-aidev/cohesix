@@ -3432,3 +3432,7 @@
 ## [v0.557] - 2027-12-31
 ### Added
 - **WebCodexHolisticBootAnalysis-044**: Expanded `boot_workflow_rust.md` with a complete build-to-boot checklist referencing the latest diagnostics.
+
+## [v0.558] - 2027-12-31
+### Added
+- **WebCodexAddSel4SysCrate-045**: Introduced `sel4-sys` crate with bindgen-based seL4 bindings, updated workspace membership, hooked into `cohesix_root`, and documented the new build verification steps.
