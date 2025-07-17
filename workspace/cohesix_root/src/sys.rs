@@ -7,6 +7,30 @@ use core::ffi::c_char;
 use core::sync::atomic::{compiler_fence, Ordering};
 use crate::dt::UART_BASE;
 
+#[link_section = ".uart"]
+#[used]
+static mut UART_FRAME: [u8; 0x1000] = [0; 0x1000];
+
+extern "C" {
+    static __uart_start: u8;
+    static __uart_end: u8;
+}
+
+/// Ensure the UART frame is mapped before use
+pub fn init_uart() {
+    unsafe {
+        core::ptr::write_volatile(UART_BASE as *mut u8, 0);
+    }
+}
+
+pub fn validate_uart_ptr() {
+    let start = unsafe { &__uart_start as *const u8 as usize };
+    let end = unsafe { &__uart_end as *const u8 as usize };
+    if UART_BASE < start || UART_BASE >= end {
+        coherr!("uart_base_out_of_range start={:#x} end={:#x} base={:#x}", start, end, UART_BASE);
+    }
+}
+
 #[cfg(target_arch = "aarch64")]
 #[no_mangle]
 pub extern "C" fn seL4_DebugPutChar(c: u8) {
