@@ -3412,3 +3412,7 @@
 ## [v0.551] - 2027-12-31
 ### Fixed
 - **FixReservedRegionOrderAndRootServerSetup-042**: Removed fixed UART mapping from `link.ld` and validation code, reordered CPIO packaging to place `cohesix_root.elf` before `kernel.dtb`, and added reserved region dump in `cohesix_fetch_build.sh`.
+
+## [v0.552] - 2027-12-31
+### Fixed
+- **InvestigateAndFixRootserverHang-043**: Rewrote `seL4_DebugPutChar` as a syscall and added a persistent main loop after userland launch. Rootserver now logs "✅ rootserver main loop entered" and no longer falls off the end of `main`.

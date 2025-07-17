@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: sys.rs v0.9
+// Filename: sys.rs v0.10
 // Author: Lukas Bower
 // Date Modified: 2027-12-31
 
@@ -23,7 +23,15 @@ pub fn init_uart() {
 #[cfg(target_arch = "aarch64")]
 #[no_mangle]
 pub extern "C" fn seL4_DebugPutChar(c: u8) {
-    unsafe { core::ptr::write_volatile(UART_BASE as *mut u8, c) };
+    unsafe {
+        core::arch::asm!(
+            "mov x0, {0}",
+            "mov x16, #7",
+            "svc #0",
+            in(reg) c as u64,
+            options(nostack)
+        );
+    }
 }
 
 #[cfg(not(target_arch = "aarch64"))]
@@ -63,6 +71,16 @@ pub unsafe extern "C" fn seL4_Recv(src: u64, msg: *mut u64) {
 pub unsafe extern "C" fn seL4_Yield() {
     core::arch::asm!(
         "mov x16, #6",
+        "svc #0",
+        options(nostack)
+    );
+}
+
+#[cfg(target_arch = "aarch64")]
+#[no_mangle]
+pub unsafe extern "C" fn seL4_DebugHalt() {
+    core::arch::asm!(
+        "mov x16, #11",
         "svc #0",
         options(nostack)
     );
