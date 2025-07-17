@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: sys.rs v0.11
+// Filename: sys.rs v0.12
 // Author: Lukas Bower
 // Date Modified: 2027-12-31
 
@@ -29,7 +29,7 @@ pub extern "C" fn seL4_DebugPutChar(c: u8) {
     unsafe {
         core::arch::asm!(
             "mov x0, {0}",
-            "mov x16, #7",
+            "mov x16, #-9",
             "svc #0",
             in(reg) c as u64,
             options(nostack)
@@ -47,7 +47,7 @@ pub unsafe extern "C" fn seL4_Send(dest: u64, msg: *const u64) {
     core::arch::asm!(
         "mov x0, {0}",
         "mov x1, {1}",
-        "mov x16, #1",
+        "mov x16, #-3",
         "svc #0",
         in(reg) dest,
         in(reg) msg,
@@ -61,7 +61,7 @@ pub unsafe extern "C" fn seL4_Recv(src: u64, msg: *mut u64) {
     core::arch::asm!(
         "mov x0, {0}",
         "mov x1, {1}",
-        "mov x16, #8",
+        "mov x16, #-5",
         "svc #0",
         in(reg) src,
         in(reg) msg,
@@ -73,7 +73,7 @@ pub unsafe extern "C" fn seL4_Recv(src: u64, msg: *mut u64) {
 #[no_mangle]
 pub unsafe extern "C" fn seL4_Yield() {
     core::arch::asm!(
-        "mov x16, #6",
+        "mov x16, #-7",
         "svc #0",
         options(nostack)
     );
@@ -83,7 +83,7 @@ pub unsafe extern "C" fn seL4_Yield() {
 #[no_mangle]
 pub unsafe extern "C" fn seL4_DebugHalt() {
     core::arch::asm!(
-        "mov x16, #11",
+        "mov x16, #-11",
         "svc #0",
         options(nostack)
     );
