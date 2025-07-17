@@ -27,7 +27,7 @@ _start:
     dsb  sy
     isb
 
-    bl   main
+    bl   rust_entry
     b    .
 
     .section .rodata
