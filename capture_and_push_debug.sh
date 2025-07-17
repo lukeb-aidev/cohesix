@@ -86,10 +86,12 @@ cp cohesix_root/link.ld "$DIAG_DIR/" 2>/dev/null || true
 
 echo "👉 Copying latest QEMU log..."
 LATEST_QEMU_LOG=$(ls -t /home/ubuntu/cohesix/logs/qemu_debug_*.log | head -n1 || true)
+LATEST_QEMU_SERLOG=$(ls -t /home/ubuntu/cohesix/logs/qemu_serial_*.log | head -n1 || true)
 if [ -f "$LATEST_QEMU_LOG" ]; then
   cp "$LATEST_QEMU_LOG" "$DIAG_DIR/"
+  cp "$LATEST_QEMU_SERLOG" "$DIAG_DIR/"
 else
-  echo "⚠️ No QEMU log found."
+  echo "⚠️ No QEMU logs found."
 fi
 
 echo "✅ Diagnostics saved."
