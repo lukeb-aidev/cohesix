@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: boot_workflow_rust.md v0.2
+// Filename: boot_workflow_rust.md v0.3
 // Author: Lukas Bower
 // Date Modified: 2027-12-31
 
@@ -12,7 +12,8 @@ with Cargo for the seL4 13.0.0 kernel. It consolidates the findings from the
 
 1. **Cargo Build** – `cargo +nightly build -p cohesix_root --release` with the
    custom target JSON (`sel4-aarch64.json`) and `build-std` features produces the
-   ELF `cohesix_root`. `link.ld` is passed via `-C link-arg=-Tlink.ld`.
+   ELF `cohesix_root`. The workspace now includes the `sel4-sys` crate providing
+   raw FFI bindings. `link.ld` is passed via `-C link-arg=-Tlink.ld`.
 2. **Image Packaging** – `cohesix_fetch_build.sh` gathers `kernel.elf`,
    `kernel.dtb` and `cohesix_root.elf` into `cohesix.cpio` in that order.
 3. **Elfloader Phase** – QEMU boots the `elfloader` which extracts the DTB and
@@ -36,9 +37,15 @@ cargo +nightly build -p cohesix_root --release \
   --target=cohesix_root/sel4-aarch64.json \ 
   -Z build-std=core,alloc,compiler_builtins \ 
   -Z build-std-features=compiler-builtins-mem && \
-qemu-system-aarch64 -M virt -nographic \ 
+qemu-system-aarch64 -M virt -nographic \
   -kernel target/cohesix_root/release/cohesix_root && \
 bash capture_and_push_debug.sh
+```
+
+Verify that the `sel4-sys` crate is linked with:
+
+```bash
+cargo +nightly tree -p cohesix_root | grep sel4-sys
 ```
 
 If the serial log shows `✅ rootserver main loop entered` the boot path is
