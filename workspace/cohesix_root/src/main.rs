@@ -13,6 +13,7 @@ mod lang_items;
 mod sys;
 mod bootinfo;
 mod dt;
+mod startup;
 
 use core::arch::global_asm;
 global_asm!(include_str!("entry.S"));

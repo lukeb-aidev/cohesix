@@ -3424,3 +3424,7 @@
 ## [v0.555] - 2027-12-31
 ### Fixed
 - **HolisticBootFlowDiagnosticAndFix-045**: Corrected syscall constants in `sys.rs` to use negative values as required by seL4. Added new diagnostic report covering the unknown syscall fault and updated metadata.
+
+## [v0.556] - 2027-12-31
+### Fixed
+- **FixRustBootFlow-043**: Updated `build.rs` to embed the seL4 target specification and MMU vector table, adjusted the rootserver entry stubs in `startup.rs`, and documented the complete Rust boot flow.
