@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: boot_workflow_rust.md v0.1
+// Filename: boot_workflow_rust.md v0.2
 // Author: Lukas Bower
 // Date Modified: 2027-12-31
 
@@ -7,17 +7,39 @@
 
 This note summarises the full boot path for the `cohesix_root` binary when built
 with Cargo for the seL4 13.0.0 kernel. It consolidates the findings from the
-`HOLISTIC_BOOT_FLOW_20250717.md` and related diagnostic files.
+`HOLISTIC_BOOT_FLOW_20250717.md` diagnostics and the latest logs in
+`out/diag_mmu_fault_20250717_212342/`.
 
-1. **Image Packaging** – `cohesix_fetch_build.sh` gathers `kernel.elf`,
-   `cohesix_root.elf` and `kernel.dtb` into `cohesix.cpio`.
-2. **Elfloader Phase** – QEMU boots the `elfloader` which extracts the DTB and
-   loads both ELF images using addresses from `kernel.lds`.
-3. **MMU Setup** – The rootserver exception vectors are placed in `.vectors` and
-   linked at the offset specified in `kernel.lds`. The build script embeds the
-   table using `global_asm!` so the addresses match the seL4 spec.
-4. **Rust Entry** – `startup::rust_start` clears `.bss`, sets the vector base
-   register, and jumps to `main()`.
+1. **Cargo Build** – `cargo +nightly build -p cohesix_root --release` with the
+   custom target JSON (`sel4-aarch64.json`) and `build-std` features produces the
+   ELF `cohesix_root`. `link.ld` is passed via `-C link-arg=-Tlink.ld`.
+2. **Image Packaging** – `cohesix_fetch_build.sh` gathers `kernel.elf`,
+   `kernel.dtb` and `cohesix_root.elf` into `cohesix.cpio` in that order.
+3. **Elfloader Phase** – QEMU boots the `elfloader` which extracts the DTB and
+   loads both ELF images. Program headers from
+   `cohesix_root_program_headers.txt` confirm the text segment at `0x400000`.
+4. **Kernel Handoff** – The kernel enables paging and logs the reserved regions
+   before jumping to user mode. The serial log shows
+   `Booting all finished, dropped to user space`.
+5. **MMU Setup** – `startup::VECTORS` is linked into `.vectors` and mapped by
+   the kernel. `startup::rust_start` sets `VBAR_EL1` to this address, clears the
+   `.bss`, and calls `main()`.
+6. **Rootserver Init** – `main` initialises UART via `seL4_DebugPutChar` and
+   mounts the minimal Plan9 namespace. Diagnostic logs verify the message
+   `ROOTSERVER ONLINE` is printed and no MMU faults occur.
 
-With these pieces aligned, QEMU boots without triggering the previous MMU fault
-at startup and enters the rootserver loop cleanly.
+To validate the build chain run:
+
+```bash
+cargo +nightly clean && \
+cargo +nightly build -p cohesix_root --release \ 
+  --target=cohesix_root/sel4-aarch64.json \ 
+  -Z build-std=core,alloc,compiler_builtins \ 
+  -Z build-std-features=compiler-builtins-mem && \
+qemu-system-aarch64 -M virt -nographic \ 
+  -kernel target/cohesix_root/release/cohesix_root && \
+bash capture_and_push_debug.sh
+```
+
+If the serial log shows `✅ rootserver main loop entered` the boot path is
+healthy.
