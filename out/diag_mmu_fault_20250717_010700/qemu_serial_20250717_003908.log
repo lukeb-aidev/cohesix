@@ -1,0 +1,1576 @@
+
+ELF-loader started on CPU: ARM Ltd. Cortex-A57 r1p0
+  paddr=[40a25000..40eea0d7]
+No DTB passed in from boot loader.
+Looking for DTB in CPIO archive...found at 40b64288.
+Loaded DTB from 40b64288.
+   paddr=[4023d000..4023efff]
+ELF-loading image 'kernel' to 40000000
+  paddr=[40000000..4023cfff]
+  vaddr=[ffffff8040000000..ffffff804023cfff]
+  virt_entry=ffffff8040000000
+ELF-loading image 'sel4test-driver' to 4023f000
+  paddr=[4023f000..40624fff]
+  vaddr=[400000..7e5fff]
+  virt_entry=40e538
+Enabling MMU and paging
+Jumping to kernel-image entry point...
+
+Bootstrapping kernel
+Warning: Could not infer GIC interrupt target ID, assuming 0.
+available phys memory regions: 1
+  [40000000..80000000]
+reserved virt address space regions: 3
+  [ffffff8040000000..ffffff804023d000]
+  [ffffff804023d000..ffffff804023ed15]
+  [ffffff804023f000..ffffff8040625000]
+Booting all finished, dropped to user space
+Node 0 of 1
+IOPT levels:     0
+IPC buffer:      0x7e6000
+Empty slots:     [1083 --> 8192)
+sharedFrames:    [0 --> 0)
+userImageFrames: [22 --> 1020)
+userImagePaging: [16 --> 20)
+untypeds:        [1020 --> 1083)
+Initial thread domain: 0
+Initial thread cnode size: 13
+List of untypeds
+------------------
+Paddr    | Size   | Device
+0 | 27 | 1
+0x8001000 | 12 | 1
+0x8002000 | 13 | 1
+0x8004000 | 14 | 1
+0x8008000 | 15 | 1
+0x8011000 | 12 | 1
+0x8012000 | 13 | 1
+0x8014000 | 14 | 1
+0x8018000 | 15 | 1
+0x8020000 | 17 | 1
+0x8040000 | 18 | 1
+0x8080000 | 19 | 1
+0x8100000 | 20 | 1
+0x8200000 | 21 | 1
+0x8400000 | 22 | 1
+0x8800000 | 23 | 1
+0x9000000 | 24 | 1
+0xa000000 | 25 | 1
+0xc000000 | 26 | 1
+0x10000000 | 28 | 1
+0x20000000 | 29 | 1
+0x80000000 | 31 | 1
+0x100000000 | 32 | 1
+0x200000000 | 33 | 1
+0x400000000 | 34 | 1
+0x800000000 | 35 | 1
+0x1000000000 | 36 | 1
+0x2000000000 | 37 | 1
+0x4000000000 | 38 | 1
+0x8000000000 | 39 | 1
+0x40000000 | 16 | 0
+0x4023ed20 | 5 | 0
+0x4023ed40 | 6 | 0
+0x4023ed80 | 7 | 0
+0x4023ee00 | 9 | 0
+0x40625000 | 12 | 0
+0x40626000 | 13 | 0
+0x40628000 | 15 | 0
+0x40630000 | 16 | 0
+0x40640000 | 18 | 0
+0x40680000 | 19 | 0
+0x40700000 | 20 | 0
+0x40800000 | 23 | 0
+0x41000000 | 24 | 0
+0x42000000 | 25 | 0
+0x44000000 | 26 | 0
+0x48000000 | 27 | 0
+0x50000000 | 28 | 0
+0x60000000 | 28 | 0
+0x70000000 | 27 | 0
+0x78000000 | 26 | 0
+0x7c000000 | 25 | 0
+0x7e000000 | 24 | 0
+0x7f000000 | 23 | 0
+0x7f800000 | 22 | 0
+0x7fc00000 | 21 | 0
+0x7fe00000 | 20 | 0
+0x7ff00000 | 19 | 0
+0x7ffca800 | 11 | 0
+0x7ffcb000 | 12 | 0
+0x7ffcc000 | 14 | 0
+0x7ffd0000 | 16 | 0
+0x7ffe0000 | 17 | 0
+Untyped summary
+1 untypeds of size 5
+1 untypeds of size 6
+1 untypeds of size 7
+1 untypeds of size 9
+1 untypeds of size 11
+4 untypeds of size 12
+3 untypeds of size 13
+3 untypeds of size 14
+3 untypeds of size 15
+3 untypeds of size 16
+2 untypeds of size 17
+2 untypeds of size 18
+3 untypeds of size 19
+3 untypeds of size 20
+2 untypeds of size 21
+2 untypeds of size 22
+3 untypeds of size 23
+3 untypeds of size 24
+3 untypeds of size 25
+3 untypeds of size 26
+3 untypeds of size 27
+3 untypeds of size 28
+1 untypeds of size 29
+1 untypeds of size 31
+1 untypeds of size 32
+1 untypeds of size 33
+1 untypeds of size 34
+1 untypeds of size 35
+1 untypeds of size 36
+1 untypeds of size 37
+1 untypeds of size 38
+1 untypeds of size 39
+Switching to a safer, bigger stack... 
+seL4 Test
+=========
+
+vka_alloc_object_at_maybe_dev@object.h:57 Failed to allocate object of size 2147483648, error 1
+vka_alloc_object_at_maybe_dev@object.h:57 Failed to allocate object of size 1073741824, error 1
+vka_alloc_object_at_maybe_dev@object.h:57 Failed to allocate object of size 536870912, error 1
+vka_alloc_object_at_maybe_dev@object.h:57 Failed to allocate object of size 268435456, error 1
+vka_alloc_object_at_maybe_dev@object.h:57 Failed to allocate object of size 134217728, error 1
+vka_alloc_object_at_maybe_dev@object.h:57 Failed to allocate object of size 67108864, error 1
+vka_alloc_object_at_maybe_dev@object.h:57 Failed to allocate object of size 33554432, error 1
+vka_alloc_object_at_maybe_dev@object.h:57 Failed to allocate object of size 16777216, error 1
+vka_alloc_object_at_maybe_dev@object.h:57 Failed to allocate object of size 8388608, error 1
+vka_alloc_object_at_maybe_dev@object.h:57 Failed to allocate object of size 4194304, error 1
+vka_alloc_object_at_maybe_dev@object.h:57 Failed to allocate object of size 2097152, error 1
+vka_alloc_object_at_maybe_dev@object.h:57 Failed to allocate object of size 1048576, error 1
+vka_alloc_object_at_maybe_dev@object.h:57 Failed to allocate object of size 524288, error 1
+vka_alloc_object_at_maybe_dev@object.h:57 Failed to allocate object of size 262144, error 1
+vka_alloc_object_at_maybe_dev@object.h:57 Failed to allocate object of size 131072, error 1
+vka_alloc_object_at_maybe_dev@object.h:57 Failed to allocate object of size 65536, error 1
+vka_alloc_object_at_maybe_dev@object.h:57 Failed to allocate object of size 32768, error 1
+vka_alloc_object_at_maybe_dev@object.h:57 Failed to allocate object of size 16384, error 1
+vka_alloc_object_at_maybe_dev@object.h:57 Failed to allocate object of size 8192, error 1
+vspace_reserve_range_at@vspace.h:738 vspace is NULL
+create_reservations@elf.c:245 Failed to make reservation: 0x400000, 876544
+elf_reserve_regions_in_vspace@elf.c:438 Failed to create reservations
+sel4utils_elf_reserve@elf.c:465 Failed to reserve regions
+Starting test suite sel4test
+Starting test 0: Test that there are tests
+Starting test 1: SYSCALL0000
+Starting test 2: SYSCALL0001
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @40484c]: CNodeCap: Illegal Operation attempted.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @40484c]: CNodeCap: Illegal Operation attempted.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @40484c]: CNodeCap: Illegal Operation attempted.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @40484c]: CNodeCap: Illegal Operation attempted.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @40484c]: CNodeCap: Illegal Operation attempted.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @40484c]: CNodeCap: Illegal Operation attempted.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @40484c]: CNodeCap: Illegal Operation attempted.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @40484c]: CNodeCap: Illegal Operation attempted.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @40484c]: CNodeCap: Illegal Operation attempted.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @40484c]: CNodeCap: Illegal Operation attempted.>>[0m
+Starting test 3: SYSCALL0002
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @40484c]: CNodeCap: Illegal Operation attempted.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @40484c]: CNodeCap: Illegal Operation attempted.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @40484c]: CNodeCap: Illegal Operation attempted.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @40484c]: CNodeCap: Illegal Operation attempted.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @40484c]: CNodeCap: Illegal Operation attempted.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @40484c]: CNodeCap: Illegal Operation attempted.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @40484c]: CNodeCap: Illegal Operation attempted.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @40484c]: CNodeCap: Illegal Operation attempted.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @40484c]: CNodeCap: Illegal Operation attempted.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @40484c]: CNodeCap: Illegal Operation attempted.>>[0m
+Starting test 4: SYSCALL0003
+Starting test 5: SYSCALL0004
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @4048bc]: CNodeCap: Illegal Operation attempted.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @4048bc]: CNodeCap: Illegal Operation attempted.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @4048bc]: CNodeCap: Illegal Operation attempted.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @4048bc]: CNodeCap: Illegal Operation attempted.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @4048bc]: CNodeCap: Illegal Operation attempted.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @4048bc]: CNodeCap: Illegal Operation attempted.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @4048bc]: CNodeCap: Illegal Operation attempted.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @4048bc]: CNodeCap: Illegal Operation attempted.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @4048bc]: CNodeCap: Illegal Operation attempted.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @4048bc]: CNodeCap: Illegal Operation attempted.>>[0m
+Starting test 6: SYSCALL0005
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @40499c]: CNodeCap: Illegal Operation attempted.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @40499c]: CNodeCap: Illegal Operation attempted.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @40499c]: CNodeCap: Illegal Operation attempted.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @40499c]: CNodeCap: Illegal Operation attempted.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @40499c]: CNodeCap: Illegal Operation attempted.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @40499c]: CNodeCap: Illegal Operation attempted.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @40499c]: CNodeCap: Illegal Operation attempted.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @40499c]: CNodeCap: Illegal Operation attempted.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @40499c]: CNodeCap: Illegal Operation attempted.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @40499c]: CNodeCap: Illegal Operation attempted.>>[0m
+Starting test 7: SYSCALL0006
+          Starting test 8: SYSCALL0010
+Starting test 9: SYSCALL0011
+Starting test 10: SYSCALL0012
+Starting test 11: SYSCALL0013
+Starting test 12: SYSCALL0014
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @40484c]: CNodeCap: Illegal Operation attempted.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @40484c]: CNodeCap: Illegal Operation attempted.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @40484c]: CNodeCap: Illegal Operation attempted.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @40484c]: CNodeCap: Illegal Operation attempted.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @40484c]: CNodeCap: Illegal Operation attempted.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @40484c]: CNodeCap: Illegal Operation attempted.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @40484c]: CNodeCap: Illegal Operation attempted.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @40484c]: CNodeCap: Illegal Operation attempted.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @40484c]: CNodeCap: Illegal Operation attempted.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @40484c]: CNodeCap: Illegal Operation attempted.>>[0m
+Starting test 13: SYSCALL0015
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @40484c]: CNodeCap: Illegal Operation attempted.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @40484c]: CNodeCap: Illegal Operation attempted.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @40484c]: CNodeCap: Illegal Operation attempted.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @40484c]: CNodeCap: Illegal Operation attempted.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @40484c]: CNodeCap: Illegal Operation attempted.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @40484c]: CNodeCap: Illegal Operation attempted.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @40484c]: CNodeCap: Illegal Operation attempted.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @40484c]: CNodeCap: Illegal Operation attempted.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @40484c]: CNodeCap: Illegal Operation attempted.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @40484c]: CNodeCap: Illegal Operation attempted.>>[0m
+Starting test 14: SYSCALL0016
+Starting test 15: SYSCALL0017
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @40499c]: CNodeCap: Illegal Operation attempted.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @40499c]: CNodeCap: Illegal Operation attempted.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @40499c]: CNodeCap: Illegal Operation attempted.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @40499c]: CNodeCap: Illegal Operation attempted.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @40499c]: CNodeCap: Illegal Operation attempted.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @40499c]: CNodeCap: Illegal Operation attempted.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @40499c]: CNodeCap: Illegal Operation attempted.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @40499c]: CNodeCap: Illegal Operation attempted.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @40499c]: CNodeCap: Illegal Operation attempted.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/54 T0xffffff807ffca400 "sel4test-driver" @40499c]: CNodeCap: Illegal Operation attempted.>>[0m
+Starting test 16: BIND0001
+Running test BIND0001 (Test that a bound tcb waiting on a sync endpoint receives normal sync ipc and notification notifications.)
+Test BIND0001 passed
+Starting test 17: BIND0002
+Running test BIND0002 (Test that a bound tcb waiting on its bound notification recieves notifications)
+Test BIND0002 passed
+Starting test 18: BIND0003
+Running test BIND0003 (Test IPC ordering 1) bound tcb waits on bound notification 2, true) another tcb sends a message)
+Test BIND0003 passed
+Starting test 19: BIND0004
+Running test BIND0004 (Test IPC ordering 2) bound tcb waits on bound notification 1, true) another tcb sends a message)
+Test BIND0004 passed
+Starting test 20: CANCEL_BADGED_SENDS_0001
+Running test CANCEL_BADGED_SENDS_0001 (Basic endpoint cancelBadgedSends testing.)
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ffebc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #214.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040640400 "child of: '34'" @411d78]: Attempted to invoke a null cap #287.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040640c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #342.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040666400 "child of: '34'" @411d78]: Attempted to invoke a null cap #412.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040666c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #473.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804068e400 "child of: '34'" @411d78]: Attempted to invoke a null cap #533.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804068ec00 "child of: '34'" @411d78]: Attempted to invoke a null cap #590.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406b4400 "child of: '34'" @411d78]: Attempted to invoke a null cap #664.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406b4c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #721.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406da400 "child of: '34'" @411d78]: Attempted to invoke a null cap #790.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406dac00 "child of: '34'" @411d78]: Attempted to invoke a null cap #852.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406ff400 "child of: '34'" @411d78]: Attempted to invoke a null cap #926.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406ffc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #981.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff24400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1052.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff24c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1116.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff4a400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1182.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff4ac00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1241.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff6f400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1312.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff6fc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1364.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040715400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1436.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040715c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1501.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804073b400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1570.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804073bc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1630.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040760400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1575.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040760c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1758.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040786400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1822.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040786c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1885.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80407ab400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1828.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80407abc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1893.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80407d0400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1962.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80407d0c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #2021.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80407f6400 "child of: '34'" @411d78]: Attempted to invoke a null cap #2092.>>[0m
+Test CANCEL_BADGED_SENDS_0001 passed
+Starting test 21: CANCEL_BADGED_SENDS_0002
+Running test CANCEL_BADGED_SENDS_0002 (cancelBadgedSends deletes caps)
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040640400 "child of: '34'" @411d78]: Attempted to invoke a null cap #289.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040640400 "child of: '34'" @411d78]: Attempted to invoke a null cap #289.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040640c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #343.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040640400 "child of: '34'" @411d78]: Attempted to invoke a null cap #289.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040640c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #343.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040666400 "child of: '34'" @411d78]: Attempted to invoke a null cap #408.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040640400 "child of: '34'" @411d78]: Attempted to invoke a null cap #289.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040640c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #343.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040666400 "child of: '34'" @411d78]: Attempted to invoke a null cap #408.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040666c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #470.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040640400 "child of: '34'" @411d78]: Attempted to invoke a null cap #289.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040640c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #343.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040666400 "child of: '34'" @411d78]: Attempted to invoke a null cap #408.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040666c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #470.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804068f400 "child of: '34'" @411d78]: Attempted to invoke a null cap #519.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040640400 "child of: '34'" @411d78]: Attempted to invoke a null cap #289.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040640c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #343.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040666400 "child of: '34'" @411d78]: Attempted to invoke a null cap #408.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040666c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #470.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804068f400 "child of: '34'" @411d78]: Attempted to invoke a null cap #519.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804068fc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #579.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040640400 "child of: '34'" @411d78]: Attempted to invoke a null cap #289.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040640c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #343.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040666400 "child of: '34'" @411d78]: Attempted to invoke a null cap #408.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040666c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #470.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804068f400 "child of: '34'" @411d78]: Attempted to invoke a null cap #519.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804068fc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #579.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406b4400 "child of: '34'" @411d78]: Attempted to invoke a null cap #648.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040640400 "child of: '34'" @411d78]: Attempted to invoke a null cap #289.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040640c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #343.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040666400 "child of: '34'" @411d78]: Attempted to invoke a null cap #408.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040666c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #470.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804068f400 "child of: '34'" @411d78]: Attempted to invoke a null cap #519.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804068fc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #579.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406b4400 "child of: '34'" @411d78]: Attempted to invoke a null cap #648.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406b4c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #706.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040640400 "child of: '34'" @411d78]: Attempted to invoke a null cap #289.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040640c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #343.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040666400 "child of: '34'" @411d78]: Attempted to invoke a null cap #408.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040666c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #470.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804068f400 "child of: '34'" @411d78]: Attempted to invoke a null cap #519.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804068fc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #579.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406b4400 "child of: '34'" @411d78]: Attempted to invoke a null cap #648.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406b4c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #706.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406da400 "child of: '34'" @411d78]: Attempted to invoke a null cap #766.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040640400 "child of: '34'" @411d78]: Attempted to invoke a null cap #289.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040640c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #343.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040666400 "child of: '34'" @411d78]: Attempted to invoke a null cap #408.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040666c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #470.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804068f400 "child of: '34'" @411d78]: Attempted to invoke a null cap #519.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804068fc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #579.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406b4400 "child of: '34'" @411d78]: Attempted to invoke a null cap #648.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406b4c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #706.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406da400 "child of: '34'" @411d78]: Attempted to invoke a null cap #766.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406dac00 "child of: '34'" @411d78]: Attempted to invoke a null cap #829.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040640400 "child of: '34'" @411d78]: Attempted to invoke a null cap #289.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040640c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #343.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040666400 "child of: '34'" @411d78]: Attempted to invoke a null cap #408.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040666c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #470.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804068f400 "child of: '34'" @411d78]: Attempted to invoke a null cap #519.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804068fc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #579.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406b4400 "child of: '34'" @411d78]: Attempted to invoke a null cap #648.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406b4c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #706.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406da400 "child of: '34'" @411d78]: Attempted to invoke a null cap #766.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406dac00 "child of: '34'" @411d78]: Attempted to invoke a null cap #829.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406ff400 "child of: '34'" @411d78]: Attempted to invoke a null cap #898.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040640400 "child of: '34'" @411d78]: Attempted to invoke a null cap #289.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040640c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #343.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040666400 "child of: '34'" @411d78]: Attempted to invoke a null cap #408.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040666c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #470.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804068f400 "child of: '34'" @411d78]: Attempted to invoke a null cap #519.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804068fc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #579.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406b4400 "child of: '34'" @411d78]: Attempted to invoke a null cap #648.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406b4c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #706.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406da400 "child of: '34'" @411d78]: Attempted to invoke a null cap #766.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406dac00 "child of: '34'" @411d78]: Attempted to invoke a null cap #829.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406ff400 "child of: '34'" @411d78]: Attempted to invoke a null cap #898.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406ffc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #950.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040640400 "child of: '34'" @411d78]: Attempted to invoke a null cap #289.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040640c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #343.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040666400 "child of: '34'" @411d78]: Attempted to invoke a null cap #408.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040666c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #470.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804068f400 "child of: '34'" @411d78]: Attempted to invoke a null cap #519.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804068fc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #579.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406b4400 "child of: '34'" @411d78]: Attempted to invoke a null cap #648.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406b4c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #706.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406da400 "child of: '34'" @411d78]: Attempted to invoke a null cap #766.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406dac00 "child of: '34'" @411d78]: Attempted to invoke a null cap #829.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406ff400 "child of: '34'" @411d78]: Attempted to invoke a null cap #898.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406ffc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #950.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff25400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1012.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040640400 "child of: '34'" @411d78]: Attempted to invoke a null cap #289.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040640c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #343.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040666400 "child of: '34'" @411d78]: Attempted to invoke a null cap #408.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040666c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #470.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804068f400 "child of: '34'" @411d78]: Attempted to invoke a null cap #519.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804068fc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #579.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406b4400 "child of: '34'" @411d78]: Attempted to invoke a null cap #648.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406b4c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #706.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406da400 "child of: '34'" @411d78]: Attempted to invoke a null cap #766.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406dac00 "child of: '34'" @411d78]: Attempted to invoke a null cap #829.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406ff400 "child of: '34'" @411d78]: Attempted to invoke a null cap #898.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406ffc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #950.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff25400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1012.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff25c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1081.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040640400 "child of: '34'" @411d78]: Attempted to invoke a null cap #289.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040640c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #343.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040666400 "child of: '34'" @411d78]: Attempted to invoke a null cap #408.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040666c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #470.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804068f400 "child of: '34'" @411d78]: Attempted to invoke a null cap #519.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804068fc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #579.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406b4400 "child of: '34'" @411d78]: Attempted to invoke a null cap #648.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406b4c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #706.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406da400 "child of: '34'" @411d78]: Attempted to invoke a null cap #766.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406dac00 "child of: '34'" @411d78]: Attempted to invoke a null cap #829.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406ff400 "child of: '34'" @411d78]: Attempted to invoke a null cap #898.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406ffc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #950.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff25400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1012.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff25c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1081.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff4b400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1138.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040640400 "child of: '34'" @411d78]: Attempted to invoke a null cap #289.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040640c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #343.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040666400 "child of: '34'" @411d78]: Attempted to invoke a null cap #408.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040666c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #470.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804068f400 "child of: '34'" @411d78]: Attempted to invoke a null cap #519.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804068fc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #579.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406b4400 "child of: '34'" @411d78]: Attempted to invoke a null cap #648.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406b4c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #706.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406da400 "child of: '34'" @411d78]: Attempted to invoke a null cap #766.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406dac00 "child of: '34'" @411d78]: Attempted to invoke a null cap #829.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406ff400 "child of: '34'" @411d78]: Attempted to invoke a null cap #898.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406ffc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #950.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff25400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1012.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff25c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1081.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff4b400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1138.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff4bc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1204.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040640400 "child of: '34'" @411d78]: Attempted to invoke a null cap #289.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040640c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #343.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040666400 "child of: '34'" @411d78]: Attempted to invoke a null cap #408.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040666c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #470.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804068f400 "child of: '34'" @411d78]: Attempted to invoke a null cap #519.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804068fc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #579.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406b4400 "child of: '34'" @411d78]: Attempted to invoke a null cap #648.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406b4c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #706.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406da400 "child of: '34'" @411d78]: Attempted to invoke a null cap #766.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406dac00 "child of: '34'" @411d78]: Attempted to invoke a null cap #829.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406ff400 "child of: '34'" @411d78]: Attempted to invoke a null cap #898.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406ffc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #950.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff25400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1012.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff25c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1081.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff4b400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1138.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff4bc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1204.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff70400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1264.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040640400 "child of: '34'" @411d78]: Attempted to invoke a null cap #289.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040640c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #343.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040666400 "child of: '34'" @411d78]: Attempted to invoke a null cap #408.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040666c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #470.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804068f400 "child of: '34'" @411d78]: Attempted to invoke a null cap #519.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804068fc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #579.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406b4400 "child of: '34'" @411d78]: Attempted to invoke a null cap #648.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406b4c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #706.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406da400 "child of: '34'" @411d78]: Attempted to invoke a null cap #766.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406dac00 "child of: '34'" @411d78]: Attempted to invoke a null cap #829.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406ff400 "child of: '34'" @411d78]: Attempted to invoke a null cap #898.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406ffc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #950.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff25400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1012.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff25c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1081.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff4b400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1138.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff4bc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1204.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff70400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1264.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff70c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1316.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040640400 "child of: '34'" @411d78]: Attempted to invoke a null cap #289.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040640c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #343.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040666400 "child of: '34'" @411d78]: Attempted to invoke a null cap #408.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040666c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #470.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804068f400 "child of: '34'" @411d78]: Attempted to invoke a null cap #519.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804068fc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #579.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406b4400 "child of: '34'" @411d78]: Attempted to invoke a null cap #648.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406b4c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #706.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406da400 "child of: '34'" @411d78]: Attempted to invoke a null cap #766.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406dac00 "child of: '34'" @411d78]: Attempted to invoke a null cap #829.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406ff400 "child of: '34'" @411d78]: Attempted to invoke a null cap #898.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406ffc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #950.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff25400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1012.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff25c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1081.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff4b400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1138.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff4bc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1204.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff70400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1264.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff70c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1316.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040716400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1382.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040640400 "child of: '34'" @411d78]: Attempted to invoke a null cap #289.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040640c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #343.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040666400 "child of: '34'" @411d78]: Attempted to invoke a null cap #408.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040666c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #470.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804068f400 "child of: '34'" @411d78]: Attempted to invoke a null cap #519.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804068fc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #579.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406b4400 "child of: '34'" @411d78]: Attempted to invoke a null cap #648.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406b4c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #706.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406da400 "child of: '34'" @411d78]: Attempted to invoke a null cap #766.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406dac00 "child of: '34'" @411d78]: Attempted to invoke a null cap #829.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406ff400 "child of: '34'" @411d78]: Attempted to invoke a null cap #898.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406ffc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #950.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff25400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1012.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff25c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1081.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff4b400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1138.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff4bc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1204.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff70400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1264.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff70c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1316.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040716400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1382.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040716c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1569.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040640400 "child of: '34'" @411d78]: Attempted to invoke a null cap #289.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040640c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #343.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040666400 "child of: '34'" @411d78]: Attempted to invoke a null cap #408.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040666c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #470.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804068f400 "child of: '34'" @411d78]: Attempted to invoke a null cap #519.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804068fc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #579.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406b4400 "child of: '34'" @411d78]: Attempted to invoke a null cap #648.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406b4c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #706.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406da400 "child of: '34'" @411d78]: Attempted to invoke a null cap #766.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406dac00 "child of: '34'" @411d78]: Attempted to invoke a null cap #829.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406ff400 "child of: '34'" @411d78]: Attempted to invoke a null cap #898.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406ffc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #950.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff25400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1012.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff25c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1081.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff4b400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1138.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff4bc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1204.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff70400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1264.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff70c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1316.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040716400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1382.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040716c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1569.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804073c400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1507.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040640400 "child of: '34'" @411d78]: Attempted to invoke a null cap #289.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040640c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #343.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040666400 "child of: '34'" @411d78]: Attempted to invoke a null cap #408.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040666c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #470.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804068f400 "child of: '34'" @411d78]: Attempted to invoke a null cap #519.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804068fc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #579.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406b4400 "child of: '34'" @411d78]: Attempted to invoke a null cap #648.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406b4c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #706.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406da400 "child of: '34'" @411d78]: Attempted to invoke a null cap #766.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406dac00 "child of: '34'" @411d78]: Attempted to invoke a null cap #829.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406ff400 "child of: '34'" @411d78]: Attempted to invoke a null cap #898.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406ffc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #950.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff25400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1012.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff25c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1081.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff4b400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1138.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff4bc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1204.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff70400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1264.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff70c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1316.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040716400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1382.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040716c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1569.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804073c400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1507.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804073cc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1695.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040640400 "child of: '34'" @411d78]: Attempted to invoke a null cap #289.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040640c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #343.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040666400 "child of: '34'" @411d78]: Attempted to invoke a null cap #408.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040666c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #470.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804068f400 "child of: '34'" @411d78]: Attempted to invoke a null cap #519.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804068fc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #579.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406b4400 "child of: '34'" @411d78]: Attempted to invoke a null cap #648.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406b4c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #706.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406da400 "child of: '34'" @411d78]: Attempted to invoke a null cap #766.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406dac00 "child of: '34'" @411d78]: Attempted to invoke a null cap #829.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406ff400 "child of: '34'" @411d78]: Attempted to invoke a null cap #898.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406ffc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #950.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff25400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1012.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff25c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1081.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff4b400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1138.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff4bc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1204.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff70400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1264.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff70c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1316.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040716400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1382.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040716c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1569.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804073c400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1507.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804073cc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1695.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040762400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1753.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040640400 "child of: '34'" @411d78]: Attempted to invoke a null cap #289.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040640c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #343.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040666400 "child of: '34'" @411d78]: Attempted to invoke a null cap #408.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040666c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #470.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804068f400 "child of: '34'" @411d78]: Attempted to invoke a null cap #519.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804068fc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #579.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406b4400 "child of: '34'" @411d78]: Attempted to invoke a null cap #648.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406b4c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #706.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406da400 "child of: '34'" @411d78]: Attempted to invoke a null cap #766.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406dac00 "child of: '34'" @411d78]: Attempted to invoke a null cap #829.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406ff400 "child of: '34'" @411d78]: Attempted to invoke a null cap #898.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406ffc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #950.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff25400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1012.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff25c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1081.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff4b400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1138.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff4bc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1204.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff70400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1264.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff70c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1316.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040716400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1382.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040716c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1569.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804073c400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1507.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804073cc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1695.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040762400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1753.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040762c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1818.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040640400 "child of: '34'" @411d78]: Attempted to invoke a null cap #289.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040640c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #343.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040666400 "child of: '34'" @411d78]: Attempted to invoke a null cap #408.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040666c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #470.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804068f400 "child of: '34'" @411d78]: Attempted to invoke a null cap #519.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804068fc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #579.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406b4400 "child of: '34'" @411d78]: Attempted to invoke a null cap #648.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406b4c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #706.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406da400 "child of: '34'" @411d78]: Attempted to invoke a null cap #766.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406dac00 "child of: '34'" @411d78]: Attempted to invoke a null cap #829.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406ff400 "child of: '34'" @411d78]: Attempted to invoke a null cap #898.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406ffc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #950.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff25400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1012.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff25c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1081.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff4b400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1138.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff4bc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1204.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff70400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1264.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff70c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1316.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040716400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1382.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040716c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1569.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804073c400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1507.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804073cc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1695.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040762400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1753.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040762c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1818.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040787400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1876.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040640400 "child of: '34'" @411d78]: Attempted to invoke a null cap #289.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040640c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #343.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040666400 "child of: '34'" @411d78]: Attempted to invoke a null cap #408.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040666c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #470.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804068f400 "child of: '34'" @411d78]: Attempted to invoke a null cap #519.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804068fc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #579.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406b4400 "child of: '34'" @411d78]: Attempted to invoke a null cap #648.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406b4c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #706.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406da400 "child of: '34'" @411d78]: Attempted to invoke a null cap #766.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406dac00 "child of: '34'" @411d78]: Attempted to invoke a null cap #829.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406ff400 "child of: '34'" @411d78]: Attempted to invoke a null cap #898.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406ffc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #950.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff25400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1012.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff25c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1081.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff4b400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1138.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff4bc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1204.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff70400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1264.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff70c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1316.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040716400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1382.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040716c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1569.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804073c400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1507.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804073cc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1695.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040762400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1753.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040762c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1818.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040787400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1876.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040787c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1940.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040640400 "child of: '34'" @411d78]: Attempted to invoke a null cap #289.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040640c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #343.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040666400 "child of: '34'" @411d78]: Attempted to invoke a null cap #408.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040666c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #470.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804068f400 "child of: '34'" @411d78]: Attempted to invoke a null cap #519.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804068fc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #579.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406b4400 "child of: '34'" @411d78]: Attempted to invoke a null cap #648.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406b4c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #706.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406da400 "child of: '34'" @411d78]: Attempted to invoke a null cap #766.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406dac00 "child of: '34'" @411d78]: Attempted to invoke a null cap #829.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406ff400 "child of: '34'" @411d78]: Attempted to invoke a null cap #898.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406ffc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #950.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff25400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1012.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff25c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1081.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff4b400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1138.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff4bc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1204.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff70400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1264.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff70c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1316.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040716400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1382.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040716c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1569.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804073c400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1507.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804073cc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1695.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040762400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1753.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040762c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1818.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040787400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1876.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040787c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1940.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80407ad400 "child of: '34'" @411d78]: Attempted to invoke a null cap #2000.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040640400 "child of: '34'" @411d78]: Attempted to invoke a null cap #289.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040640c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #343.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040666400 "child of: '34'" @411d78]: Attempted to invoke a null cap #408.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040666c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #470.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804068f400 "child of: '34'" @411d78]: Attempted to invoke a null cap #519.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804068fc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #579.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406b4400 "child of: '34'" @411d78]: Attempted to invoke a null cap #648.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406b4c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #706.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406da400 "child of: '34'" @411d78]: Attempted to invoke a null cap #766.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406dac00 "child of: '34'" @411d78]: Attempted to invoke a null cap #829.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406ff400 "child of: '34'" @411d78]: Attempted to invoke a null cap #898.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406ffc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #950.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff25400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1012.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff25c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1081.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff4b400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1138.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff4bc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1204.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff70400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1264.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff70c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1316.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040716400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1382.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040716c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1569.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804073c400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1507.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804073cc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1695.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040762400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1753.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040762c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1818.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040787400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1876.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040787c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1940.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80407ad400 "child of: '34'" @411d78]: Attempted to invoke a null cap #2000.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80407adc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #2069.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040640400 "child of: '34'" @411d78]: Attempted to invoke a null cap #289.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040640c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #343.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040666400 "child of: '34'" @411d78]: Attempted to invoke a null cap #408.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040666c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #470.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804068f400 "child of: '34'" @411d78]: Attempted to invoke a null cap #519.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804068fc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #579.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406b4400 "child of: '34'" @411d78]: Attempted to invoke a null cap #648.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406b4c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #706.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406da400 "child of: '34'" @411d78]: Attempted to invoke a null cap #766.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406dac00 "child of: '34'" @411d78]: Attempted to invoke a null cap #829.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406ff400 "child of: '34'" @411d78]: Attempted to invoke a null cap #898.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406ffc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #950.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff25400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1012.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff25c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1081.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff4b400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1138.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff4bc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1204.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff70400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1264.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff70c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1316.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040716400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1382.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040716c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1569.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804073c400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1507.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804073cc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1695.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040762400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1753.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040762c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1818.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040787400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1876.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040787c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1940.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80407ad400 "child of: '34'" @411d78]: Attempted to invoke a null cap #2000.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80407adc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #2069.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80407d2400 "child of: '34'" @411d78]: Attempted to invoke a null cap #2125.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040640400 "child of: '34'" @411d78]: Attempted to invoke a null cap #289.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040640c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #343.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040666400 "child of: '34'" @411d78]: Attempted to invoke a null cap #408.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040666c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #470.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804068f400 "child of: '34'" @411d78]: Attempted to invoke a null cap #519.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804068fc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #579.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406b4400 "child of: '34'" @411d78]: Attempted to invoke a null cap #648.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406b4c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #706.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406da400 "child of: '34'" @411d78]: Attempted to invoke a null cap #766.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406dac00 "child of: '34'" @411d78]: Attempted to invoke a null cap #829.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406ff400 "child of: '34'" @411d78]: Attempted to invoke a null cap #898.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406ffc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #950.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff25400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1012.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff25c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1081.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff4b400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1138.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff4bc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1204.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff70400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1264.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff70c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1316.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040716400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1382.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040716c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1569.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804073c400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1507.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804073cc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1695.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040762400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1753.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040762c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1818.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040787400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1876.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040787c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1940.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80407ad400 "child of: '34'" @411d78]: Attempted to invoke a null cap #2000.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80407adc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #2069.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80407d2400 "child of: '34'" @411d78]: Attempted to invoke a null cap #2125.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80407d2c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #2185.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040640400 "child of: '34'" @411d78]: Attempted to invoke a null cap #289.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040640c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #343.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040666400 "child of: '34'" @411d78]: Attempted to invoke a null cap #408.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040666c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #470.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804068f400 "child of: '34'" @411d78]: Attempted to invoke a null cap #519.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804068fc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #579.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406b4400 "child of: '34'" @411d78]: Attempted to invoke a null cap #648.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406b4c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #706.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406da400 "child of: '34'" @411d78]: Attempted to invoke a null cap #766.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406dac00 "child of: '34'" @411d78]: Attempted to invoke a null cap #829.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406ff400 "child of: '34'" @411d78]: Attempted to invoke a null cap #898.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406ffc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #950.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff25400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1012.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff25c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1081.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff4b400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1138.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff4bc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1204.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff70400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1264.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff70c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1316.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040716400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1382.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040716c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1569.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804073c400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1507.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804073cc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1695.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040762400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1753.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040762c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1818.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040787400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1876.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040787c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1940.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80407ad400 "child of: '34'" @411d78]: Attempted to invoke a null cap #2000.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80407adc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #2069.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80407d2400 "child of: '34'" @411d78]: Attempted to invoke a null cap #2125.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80407d2c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #2185.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80407f8400 "child of: '34'" @411d78]: Attempted to invoke a null cap #2253.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040640400 "child of: '34'" @411d78]: Attempted to invoke a null cap #289.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040640c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #343.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040666400 "child of: '34'" @411d78]: Attempted to invoke a null cap #408.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040666c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #470.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804068f400 "child of: '34'" @411d78]: Attempted to invoke a null cap #519.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804068fc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #579.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406b4400 "child of: '34'" @411d78]: Attempted to invoke a null cap #648.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406b4c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #706.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406da400 "child of: '34'" @411d78]: Attempted to invoke a null cap #766.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406dac00 "child of: '34'" @411d78]: Attempted to invoke a null cap #829.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406ff400 "child of: '34'" @411d78]: Attempted to invoke a null cap #898.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80406ffc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #950.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff25400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1012.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff25c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1081.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff4b400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1138.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff4bc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1204.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff70400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1264.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807ff70c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1316.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040716400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1382.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040716c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1569.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804073c400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1507.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff804073cc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1695.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040762400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1753.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040762c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1818.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040787400 "child of: '34'" @411d78]: Attempted to invoke a null cap #1876.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff8040787c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #1940.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80407ad400 "child of: '34'" @411d78]: Attempted to invoke a null cap #2000.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80407adc00 "child of: '34'" @411d78]: Attempted to invoke a null cap #2069.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80407d2400 "child of: '34'" @411d78]: Attempted to invoke a null cap #2125.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80407d2c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #2185.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80407f8400 "child of: '34'" @411d78]: Attempted to invoke a null cap #2253.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff80407f8c00 "child of: '34'" @411d78]: Attempted to invoke a null cap #2308.>>[0m
+Test CANCEL_BADGED_SENDS_0002 passed
+Starting test 22: CNODEOP0001
+Running test CNODEOP0001 (Basic seL4_CNode_Copy() testing)
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @4007c0]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/95 T0xffffff807ffcac00 "34" @4007c0]: CNode Copy/Mint/Move/Mutate: Destination not empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @4007c0]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/95 T0xffffff807ffcac00 "34" @4007c0]: CNode Copy/Mint/Move/Mutate: Destination not empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @4007c0]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @4007c0]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @4007c0]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+Test CNODEOP0001 passed
+Starting test 23: CNODEOP0002
+Running test CNODEOP0002 (Basic seL4_CNode_Delete() testing)
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @4007c0]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @4007c0]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+Test CNODEOP0002 passed
+Starting test 24: CNODEOP0003
+Running test CNODEOP0003 (Basic seL4_CNode_Mint() testing)
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/95 T0xffffff807ffcac00 "34" @4007c0]: CNode Copy/Mint/Move/Mutate: Destination not empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @4007c0]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+Test CNODEOP0003 passed
+Starting test 25: CNODEOP0004
+Running test CNODEOP0004 (Basic seL4_CNode_Move() testing)
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @4007c0]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/95 T0xffffff807ffcac00 "34" @4007c0]: CNode Copy/Mint/Move/Mutate: Destination not empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @4007c0]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @4007c0]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/95 T0xffffff807ffcac00 "34" @4007c0]: CNode Copy/Mint/Move/Mutate: Destination not empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/95 T0xffffff807ffcac00 "34" @4007c0]: CNode Copy/Mint/Move/Mutate: Destination not empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/95 T0xffffff807ffcac00 "34" @4007c0]: CNode Copy/Mint/Move/Mutate: Destination not empty.>>[0m
+Test CNODEOP0004 passed
+Starting test 26: CNODEOP0005
+Running test CNODEOP0005 (Basic seL4_CNode_Mutate() testing)
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @4007c0]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/95 T0xffffff807ffcac00 "34" @4007c0]: CNode Copy/Mint/Move/Mutate: Destination not empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/95 T0xffffff807ffcac00 "34" @4007c0]: CNode Copy/Mint/Move/Mutate: Destination not empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/95 T0xffffff807ffcac00 "34" @4007c0]: CNode Copy/Mint/Move/Mutate: Destination not empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/95 T0xffffff807ffcac00 "34" @4007c0]: CNode Copy/Mint/Move/Mutate: Destination not empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @4007c0]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @4007c0]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @4007c0]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+Test CNODEOP0005 passed
+Starting test 27: CNODEOP0006
+Running test CNODEOP0006 (Basic seL4_CNode_CancelBadgedSends() testing)
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/95 T0xffffff807ffcac00 "34" @4007c0]: CNode Copy/Mint/Move/Mutate: Destination not empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/224 T0xffffff807ffcac00 "34" @4007c0]: CNode CancelBadgedSends: Target cap invalid.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @4007c0]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+Test CNODEOP0006 passed
+Starting test 28: CNODEOP0007
+Running test CNODEOP0007 (Basic seL4_CNode_Revoke() testing)
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/95 T0xffffff807ffcac00 "34" @4007c0]: CNode Copy/Mint/Move/Mutate: Destination not empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @4007c0]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+Test CNODEOP0007 passed
+Starting test 29: CNODEOP0008
+Running test CNODEOP0008 (Basic seL4_CNode_Rotate() testing)
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @4007c0]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/95 T0xffffff807ffcac00 "34" @4007c0]: CNode Copy/Mint/Move/Mutate: Destination not empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/95 T0xffffff807ffcac00 "34" @4007c0]: CNode Copy/Mint/Move/Mutate: Destination not empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/95 T0xffffff807ffcac00 "34" @4007c0]: CNode Copy/Mint/Move/Mutate: Destination not empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/95 T0xffffff807ffcac00 "34" @4007c0]: CNode Copy/Mint/Move/Mutate: Destination not empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/95 T0xffffff807ffcac00 "34" @4007c0]: CNode Copy/Mint/Move/Mutate: Destination not empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/95 T0xffffff807ffcac00 "34" @4007c0]: CNode Copy/Mint/Move/Mutate: Destination not empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/266 T0xffffff807ffcac00 "34" @4007c0]: CNode Rotate: Pivot slot the same as source or dest slot.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/95 T0xffffff807ffcac00 "34" @4007c0]: CNode Copy/Mint/Move/Mutate: Destination not empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @4007c0]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @4007c0]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @4007c0]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @4007c0]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+Test CNODEOP0008 passed
+Starting test 30: CNODEOP0009
+Running test CNODEOP0009 (Basic seL4_CNode_SaveCaller() testing)
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [invokeCNodeSaveCaller/374 T0xffffff807ffcac00 "34" @4007c0]: CNode SaveCaller: Reply cap not present.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/209 T0xffffff807ffcac00 "34" @4007c0]: CNode SaveCaller: Destination slot not empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/95 T0xffffff807ffcac00 "34" @4007c0]: CNode Copy/Mint/Move/Mutate: Destination not empty.>>[0m
+Test CNODEOP0009 passed
+Starting test 31: CSPACE0001
+Running test CSPACE0001 (Test full cspace resolution)
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #0.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #1.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #2.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #3.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #4.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #5.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #6.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #7.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #8.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #9.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #10.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #11.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #12.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #13.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #14.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #15.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #16.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #17.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #18.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #19.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #20.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #21.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #22.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #23.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #24.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #25.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #26.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #27.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #28.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #29.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #30.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #31.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #32.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #33.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #34.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #35.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #36.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #37.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #38.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #39.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #40.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #41.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #42.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #43.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #44.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #45.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #46.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #47.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #48.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #49.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #50.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #51.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #52.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #53.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #54.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #55.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #56.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #57.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #58.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #59.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #60.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #61.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #62.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #63.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #6148914691236517204.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #6148914691236517207.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #6148914691236517201.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #6148914691236517213.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #6148914691236517189.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #6148914691236517237.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #6148914691236517141.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #6148914691236517333.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #6148914691236516949.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #6148914691236517717.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #6148914691236516181.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #6148914691236519253.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #6148914691236513109.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #6148914691236525397.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #6148914691236500821.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #6148914691236549973.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #6148914691236451669.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #6148914691236648277.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #6148914691236255061.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #6148914691237041493.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #6148914691235468629.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #6148914691238614357.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #6148914691232322901.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #6148914691244905813.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #6148914691219739989.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #6148914691270071637.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #6148914691169408341.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #6148914691370734933.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #6148914690968081749.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #6148914691773388117.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #6148914690162775381.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #6148914693384000853.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #6148914686941549909.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #6148914699826451797.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #6148914674056648021.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #6148914725596255573.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #6148914622517040469.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #6148914828675470677.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #6148914416358610261.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #6148915240992331093.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #6148913591724889429.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #6148916890259772757.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #6148910293190006101.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #6148923487329539413.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #6148897099050472789.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #6148949875608606037.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #6148844322492339541.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #6149055428724872533.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #6148633216259806549.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #6149477641189938517.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #6147788791329674581.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #6151166491050202453.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #6144411091609146709.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #6157921890491258197.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #6130900292727035221.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #6184943488255481173.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #6076857097198589269.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #6293029879312373077.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #5860684315084805461.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #6725375443539940693.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #4995993186629670229.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #8454757700450211157.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #1537228672809129301.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/646 T0xffffff807fff1c00 "child of: '34'" @40f7e4]: Attempted to invoke a null cap #15372286728091293013.>>[0m
+Test CSPACE0001 passed
+Starting test 32: DOMAINS0001
+Running test DOMAINS0001 (Change domain successfully())
+Test DOMAINS0001 passed
+Starting test 33: DOMAINS0002
+Running test DOMAINS0002 (Try non-existant domain())
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeDomainInvocation/1595 T0xffffff807ffcac00 "34" @4110dc]: Domain Configure: invalid domain (11 >= 1).>>[0m
+Test DOMAINS0002 passed
+Starting test 34: DOMAINS0003
+Running test DOMAINS0003 (Invoke non-domain cap())
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeTCBInvocation/899 T0xffffff807ffcac00 "34" @4110dc]: TCB: Illegal operation.>>[0m
+Test DOMAINS0003 passed
+Starting test 35: FPU0000
+Running test FPU0000 (Ensure that simple FPU operations work)
+Test FPU0000 passed
+Starting test 36: FPU0001
+Running test FPU0001 (Ensure multiple threads can use FPU simultaneously)
+Test FPU0001 passed
+Starting test 37: FRAMEDIPC0001
+Running test FRAMEDIPC0001 (Test that we cannot create a thread with an IPC buffer that is a frame)
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @41a64c]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [checkValidIPCBuffer/640 T0xffffff807ffcac00 "34" @41a64c]: IPC Buffer is an invalid cap.>>[0m
+Test FRAMEDIPC0001 passed
+Starting test 38: FRAMEDIPC0002
+Running test FRAMEDIPC0002 (Test that we cannot switch a threads IPC buffer to a device frame)
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @41a64c]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [checkValidIPCBuffer/640 T0xffffff807ffcac00 "34" @41a64c]: IPC Buffer is an invalid cap.>>[0m
+Test FRAMEDIPC0002 passed
+Starting test 39: FRAMEDIPC0003
+Running test FRAMEDIPC0003 (Test that deleting a frame cap unmaps the frame)
+Test FRAMEDIPC0003 passed
+Starting test 40: FRAMEEXPORTS0001
+Running test FRAMEEXPORTS0001 (Test that we can access all exported frames)
+vka_alloc_object_at_maybe_dev@object.h:57 Failed to allocate object of size 2097152, error 1
+vka_alloc_object_at_maybe_dev@object.h:57 Failed to allocate object of size 4096, error 1
+Test FRAMEEXPORTS0001 passed
+Starting test 41: FRAMEXN0001
+Running test FRAMEXN0001 (Test that we can map a small frame XN)
+Test FRAMEXN0001 passed
+Starting test 42: FRAMEXN0002
+Running test FRAMEXN0002 (Test that we can map a large frame XN)
+Test FRAMEXN0002 passed
+Starting test 43: IPC0001
+Running test IPC0001 (Test SMP seL4_Send + seL4_Recv)
+Test IPC0001 passed
+Starting test 44: IPC0002
+Running test IPC0002 (Test SMP seL4_Call + seL4_ReplyRecv)
+Test IPC0002 passed
+Starting test 45: IPC0003
+Running test IPC0003 (Test SMP seL4_Send + seL4_Reply + seL4_Recv)
+Test IPC0003 passed
+Starting test 46: IPC0004
+Running test IPC0004 (Test seL4_NBSend + seL4_Recv)
+Test IPC0004 passed
+Starting test 47: IPC0010
+Running test IPC0010 (Test suspending an IPC mid-Call())
+Test IPC0010 passed
+Starting test 48: IPC1001
+Running test IPC1001 (Test SMP inter-AS seL4_Send + seL4_Recv)
+Test IPC1001 passed
+Starting test 49: IPC1002
+Running test IPC1002 (Test SMP inter-AS seL4_Call + seL4_ReplyRecv)
+Test IPC1002 passed
+Starting test 50: IPC1003
+Running test IPC1003 (Test SMP inter-AS seL4_Send + seL4_Reply + seL4_Recv)
+Test IPC1003 passed
+Starting test 51: IPC1004
+Running test IPC1004 (Test inter-AS seL4_NBSend + seL4_Recv)
+Test IPC1004 passed
+Starting test 52: IPCRIGHTS0001
+Running test IPCRIGHTS0001 (seL4_Send needs write)
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/659 T0xffffff807ffcac00 "34" @4267b4]: Attempted to invoke a read-only endpoint cap #215.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeInvocation/659 T0xffffff807ffcac00 "34" @4267b4]: Attempted to invoke a read-only endpoint cap #215.>>[0m
+Test IPCRIGHTS0001 passed
+Starting test 53: IPCRIGHTS0002
+Running test IPCRIGHTS0002 (seL4_Recv needs read)
+Test IPCRIGHTS0002 passed
+Starting test 54: IPCRIGHTS0003
+Running test IPCRIGHTS0003 (seL4_Send with caps needs grant)
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffebc00 "child of: '34'" @4007c0]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffebc00 "child of: '34'" @4007c0]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+Test IPCRIGHTS0003 passed
+Starting test 55: IPCRIGHTS0004
+Running test IPCRIGHTS0004 (seL4_Call needs grant or grant-reply)
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [invokeCNodeSaveCaller/374 T0xffffff807ffcac00 "34" @4007c0]: CNode SaveCaller: Reply cap not present.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @4007c0]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/95 T0xffffff807ffcac00 "34" @4007c0]: CNode Copy/Mint/Move/Mutate: Destination not empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @4007c0]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [invokeCNodeSaveCaller/374 T0xffffff807ffcac00 "34" @4007c0]: CNode SaveCaller: Reply cap not present.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @4007c0]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/95 T0xffffff807ffcac00 "34" @4007c0]: CNode Copy/Mint/Move/Mutate: Destination not empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @4007c0]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [invokeCNodeSaveCaller/374 T0xffffff807ffcac00 "34" @4007c0]: CNode SaveCaller: Reply cap not present.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @4007c0]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/95 T0xffffff807ffcac00 "34" @4007c0]: CNode Copy/Mint/Move/Mutate: Destination not empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @4007c0]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [invokeCNodeSaveCaller/374 T0xffffff807ffcac00 "34" @4007c0]: CNode SaveCaller: Reply cap not present.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @4007c0]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/95 T0xffffff807ffcac00 "34" @4007c0]: CNode Copy/Mint/Move/Mutate: Destination not empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @4007c0]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [invokeCNodeSaveCaller/374 T0xffffff807ffcac00 "34" @4007c0]: CNode SaveCaller: Reply cap not present.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @4007c0]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/95 T0xffffff807ffcac00 "34" @4007c0]: CNode Copy/Mint/Move/Mutate: Destination not empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @4007c0]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [invokeCNodeSaveCaller/374 T0xffffff807ffcac00 "34" @4007c0]: CNode SaveCaller: Reply cap not present.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @4007c0]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/95 T0xffffff807ffcac00 "34" @4007c0]: CNode Copy/Mint/Move/Mutate: Destination not empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @4007c0]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+Test IPCRIGHTS0004 passed
+Starting test 56: IPCRIGHTS0005
+Running test IPCRIGHTS0005 (seL4_Reply grant depends of the grant of previous seL4_Recv)
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffebc00 "child of: '34'" @4007c0]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffebc00 "child of: '34'" @4007c0]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/95 T0xffffff807ffcac00 "34" @4007c0]: CNode Copy/Mint/Move/Mutate: Destination not empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @4007c0]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffebc00 "child of: '34'" @4007c0]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/95 T0xffffff807ffcac00 "34" @4007c0]: CNode Copy/Mint/Move/Mutate: Destination not empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @4007c0]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffebc00 "child of: '34'" @4007c0]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffebc00 "child of: '34'" @4007c0]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffebc00 "child of: '34'" @4007c0]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+Test IPCRIGHTS0005 passed
+Starting test 57: NBWAIT0001
+Running test NBWAIT0001 (Test seL4_NBRecv)
+Test NBWAIT0001 passed
+Starting test 58: PAGEFAULT0001
+Running test PAGEFAULT0001 (Test read page fault)
+Test PAGEFAULT0001 passed
+Starting test 59: PAGEFAULT0002
+Running test PAGEFAULT0002 (Test write page fault)
+Test PAGEFAULT0002 passed
+Starting test 60: PAGEFAULT0003
+Running test PAGEFAULT0003 (Test execute page fault)
+Test PAGEFAULT0003 passed
+Starting test 61: PAGEFAULT0004
+Running test PAGEFAULT0004 (Test unknown system call)
+Test PAGEFAULT0004 passed
+Starting test 62: PAGEFAULT0005
+Running test PAGEFAULT0005 (Test undefined instruction)
+Test PAGEFAULT0005 passed
+Starting test 63: PAGEFAULT1001
+Running test PAGEFAULT1001 (Test read page fault (inter-AS))
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @464988]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+sel4utils_copy_path_to_process@process.c:131 Failed to copy cap
+
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @464988]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+sel4utils_copy_path_to_process@process.c:131 Failed to copy cap
+
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @464988]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+sel4utils_copy_path_to_process@process.c:131 Failed to copy cap
+
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @464988]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+sel4utils_copy_path_to_process@process.c:131 Failed to copy cap
+
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @464988]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+sel4utils_copy_path_to_process@process.c:131 Failed to copy cap
+
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @464988]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+sel4utils_copy_path_to_process@process.c:131 Failed to copy cap
+
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @464988]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+sel4utils_copy_path_to_process@process.c:131 Failed to copy cap
+
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @464988]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+sel4utils_copy_path_to_process@process.c:131 Failed to copy cap
+
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @464988]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+sel4utils_copy_path_to_process@process.c:131 Failed to copy cap
+
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @464988]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+sel4utils_copy_path_to_process@process.c:131 Failed to copy cap
+
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @464988]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+sel4utils_copy_path_to_process@process.c:131 Failed to copy cap
+
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @464988]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+sel4utils_copy_path_to_process@process.c:131 Failed to copy cap
+
+Test PAGEFAULT1001 passed
+Starting test 64: PAGEFAULT1002
+Running test PAGEFAULT1002 (Test write page fault (inter-AS))
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @464988]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+sel4utils_copy_path_to_process@process.c:131 Failed to copy cap
+
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @464988]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+sel4utils_copy_path_to_process@process.c:131 Failed to copy cap
+
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @464988]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+sel4utils_copy_path_to_process@process.c:131 Failed to copy cap
+
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @464988]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+sel4utils_copy_path_to_process@process.c:131 Failed to copy cap
+
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @464988]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+sel4utils_copy_path_to_process@process.c:131 Failed to copy cap
+
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @464988]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+sel4utils_copy_path_to_process@process.c:131 Failed to copy cap
+
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @464988]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+sel4utils_copy_path_to_process@process.c:131 Failed to copy cap
+
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @464988]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+sel4utils_copy_path_to_process@process.c:131 Failed to copy cap
+
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @464988]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+sel4utils_copy_path_to_process@process.c:131 Failed to copy cap
+
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @464988]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+sel4utils_copy_path_to_process@process.c:131 Failed to copy cap
+
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @464988]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+sel4utils_copy_path_to_process@process.c:131 Failed to copy cap
+
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @464988]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+sel4utils_copy_path_to_process@process.c:131 Failed to copy cap
+
+Test PAGEFAULT1002 passed
+Starting test 65: PAGEFAULT1003
+Running test PAGEFAULT1003 (Test execute page fault (inter-AS))
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @464988]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+sel4utils_copy_path_to_process@process.c:131 Failed to copy cap
+
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @464988]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+sel4utils_copy_path_to_process@process.c:131 Failed to copy cap
+
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @464988]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+sel4utils_copy_path_to_process@process.c:131 Failed to copy cap
+
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @464988]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+sel4utils_copy_path_to_process@process.c:131 Failed to copy cap
+
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @464988]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+sel4utils_copy_path_to_process@process.c:131 Failed to copy cap
+
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @464988]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+sel4utils_copy_path_to_process@process.c:131 Failed to copy cap
+
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @464988]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+sel4utils_copy_path_to_process@process.c:131 Failed to copy cap
+
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @464988]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+sel4utils_copy_path_to_process@process.c:131 Failed to copy cap
+
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @464988]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+sel4utils_copy_path_to_process@process.c:131 Failed to copy cap
+
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @464988]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+sel4utils_copy_path_to_process@process.c:131 Failed to copy cap
+
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @464988]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+sel4utils_copy_path_to_process@process.c:131 Failed to copy cap
+
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @464988]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+sel4utils_copy_path_to_process@process.c:131 Failed to copy cap
+
+Test PAGEFAULT1003 passed
+Starting test 66: PAGEFAULT1004
+Running test PAGEFAULT1004 (Test unknown system call (inter-AS))
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @464988]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+sel4utils_copy_path_to_process@process.c:131 Failed to copy cap
+
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @464988]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+sel4utils_copy_path_to_process@process.c:131 Failed to copy cap
+
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @464988]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+sel4utils_copy_path_to_process@process.c:131 Failed to copy cap
+
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @464988]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+sel4utils_copy_path_to_process@process.c:131 Failed to copy cap
+
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @464988]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+sel4utils_copy_path_to_process@process.c:131 Failed to copy cap
+
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @464988]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+sel4utils_copy_path_to_process@process.c:131 Failed to copy cap
+
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @464988]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+sel4utils_copy_path_to_process@process.c:131 Failed to copy cap
+
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @464988]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+sel4utils_copy_path_to_process@process.c:131 Failed to copy cap
+
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @464988]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+sel4utils_copy_path_to_process@process.c:131 Failed to copy cap
+
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @464988]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+sel4utils_copy_path_to_process@process.c:131 Failed to copy cap
+
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @464988]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+sel4utils_copy_path_to_process@process.c:131 Failed to copy cap
+
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeCNodeInvocation/107 T0xffffff807ffcac00 "34" @464988]: CNode Copy/Mint/Move/Mutate: Source slot invalid or empty.>>[0m
+sel4utils_copy_path_to_process@process.c:131 Failed to copy cap
+
+Test PAGEFAULT1004 passed
+Starting test 67: PT0001
+Running test PT0001 (Fun with page tables on ARM)
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeARMFrameInvocation/1570 T0xffffff807ffcac00 "34" @42e97c]: ARMPageMap: Attempting to map frame into multiple addresses>>[0m
+clear_entries_mid@vspace_internal.h:169 Cannot clear reserved entries mid level
+Test PT0001 passed
+Starting test 68: REGRESSIONS0001
+Running test REGRESSIONS0001 (Ensure WriteRegisters functions correctly)
+Test REGRESSIONS0001 passed
+Starting test 69: REGRESSIONS0002
+Running test REGRESSIONS0002 (Test the load-exclusive monitor is cleared on context switch)
+Test REGRESSIONS0002 passed
+Starting test 70: RETYPE0000
+Running test RETYPE0000 (Retype test)
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeUntypedInvocation/146 T0xffffff807ffcac00 "34" @41df28]: Untyped Retype: Number of requested objects (0) too small or large.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeUntypedInvocation/154 T0xffffff807ffcac00 "34" @41df28]: Untyped Retype: Requested destination window overruns size of node.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeUntypedInvocation/138 T0xffffff807ffcac00 "34" @41df28]: Untyped Retype: Destination node offset #4 too large.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeUntypedInvocation/166 T0xffffff807ffcac00 "34" @41df28]: Untyped Retype: Slot #0 in destination window non-empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeUntypedInvocation/166 T0xffffff807ffcac00 "34" @41df28]: Untyped Retype: Slot #1 in destination window non-empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeUntypedInvocation/166 T0xffffff807ffcac00 "34" @41df28]: Untyped Retype: Slot #2 in destination window non-empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeUntypedInvocation/166 T0xffffff807ffcac00 "34" @41df28]: Untyped Retype: Slot #3 in destination window non-empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeUntypedInvocation/146 T0xffffff807ffcac00 "34" @41df28]: Untyped Retype: Number of requested objects (18446744071562067968) too small or large.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeUntypedInvocation/154 T0xffffff807ffcac00 "34" @41df28]: Untyped Retype: Requested destination window overruns size of node.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeUntypedInvocation/166 T0xffffff807ffcac00 "34" @41df28]: Untyped Retype: Slot #0 in destination window non-empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeUntypedInvocation/166 T0xffffff807ffcac00 "34" @41df28]: Untyped Retype: Slot #1 in destination window non-empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeUntypedInvocation/166 T0xffffff807ffcac00 "34" @41df28]: Untyped Retype: Slot #2 in destination window non-empty.>>[0m
+Test RETYPE0000 passed
+Starting test 71: RETYPE0001
+Running test RETYPE0001 (Incremental retype test)
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeUntypedInvocation/81 T0xffffff807ffcac00 "34" @41df28]: Untyped Retype: Invalid object size.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeUntypedInvocation/81 T0xffffff807ffcac00 "34" @41df28]: Untyped Retype: Invalid object size.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeUntypedInvocation/81 T0xffffff807ffcac00 "34" @41df28]: Untyped Retype: Invalid object size.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeUntypedInvocation/81 T0xffffff807ffcac00 "34" @41df28]: Untyped Retype: Invalid object size.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeUntypedInvocation/81 T0xffffff807ffcac00 "34" @41df28]: Untyped Retype: Invalid object size.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeUntypedInvocation/81 T0xffffff807ffcac00 "34" @41df28]: Untyped Retype: Invalid object size.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeUntypedInvocation/205 T0xffffff807ffcac00 "34" @41df28]: Untyped Retype: Insufficient memory (1 * 140737488355328 bytes needed, 8192 bytes available).>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeUntypedInvocation/205 T0xffffff807ffcac00 "34" @41df28]: Untyped Retype: Insufficient memory (1 * 70368744177664 bytes needed, 8192 bytes available).>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeUntypedInvocation/205 T0xffffff807ffcac00 "34" @41df28]: Untyped Retype: Insufficient memory (1 * 35184372088832 bytes needed, 8192 bytes available).>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeUntypedInvocation/205 T0xffffff807ffcac00 "34" @41df28]: Untyped Retype: Insufficient memory (1 * 17592186044416 bytes needed, 8192 bytes available).>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeUntypedInvocation/205 T0xffffff807ffcac00 "34" @41df28]: Untyped Retype: Insufficient memory (1 * 8796093022208 bytes needed, 8192 bytes available).>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeUntypedInvocation/205 T0xffffff807ffcac00 "34" @41df28]: Untyped Retype: Insufficient memory (1 * 4398046511104 bytes needed, 8192 bytes available).>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeUntypedInvocation/205 T0xffffff807ffcac00 "34" @41df28]: Untyped Retype: Insufficient memory (1 * 2199023255552 bytes needed, 8192 bytes available).>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeUntypedInvocation/205 T0xffffff807ffcac00 "34" @41df28]: Untyped Retype: Insufficient memory (1 * 1099511627776 bytes needed, 8192 bytes available).>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeUntypedInvocation/205 T0xffffff807ffcac00 "34" @41df28]: Untyped Retype: Insufficient memory (1 * 549755813888 bytes needed, 8192 bytes available).>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeUntypedInvocation/205 T0xffffff807ffcac00 "34" @41df28]: Untyped Retype: Insufficient memory (1 * 274877906944 bytes needed, 8192 bytes available).>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeUntypedInvocation/205 T0xffffff807ffcac00 "34" @41df28]: Untyped Retype: Insufficient memory (1 * 137438953472 bytes needed, 8192 bytes available).>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeUntypedInvocation/205 T0xffffff807ffcac00 "34" @41df28]: Untyped Retype: Insufficient memory (1 * 68719476736 bytes needed, 8192 bytes available).>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeUntypedInvocation/205 T0xffffff807ffcac00 "34" @41df28]: Untyped Retype: Insufficient memory (1 * 34359738368 bytes needed, 8192 bytes available).>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeUntypedInvocation/205 T0xffffff807ffcac00 "34" @41df28]: Untyped Retype: Insufficient memory (1 * 17179869184 bytes needed, 8192 bytes available).>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeUntypedInvocation/205 T0xffffff807ffcac00 "34" @41df28]: Untyped Retype: Insufficient memory (1 * 8589934592 bytes needed, 8192 bytes available).>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeUntypedInvocation/205 T0xffffff807ffcac00 "34" @41df28]: Untyped Retype: Insufficient memory (1 * 4294967296 bytes needed, 8192 bytes available).>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeUntypedInvocation/205 T0xffffff807ffcac00 "34" @41df28]: Untyped Retype: Insufficient memory (1 * 2147483648 bytes needed, 8192 bytes available).>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeUntypedInvocation/205 T0xffffff807ffcac00 "34" @41df28]: Untyped Retype: Insufficient memory (1 * 1073741824 bytes needed, 8192 bytes available).>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeUntypedInvocation/205 T0xffffff807ffcac00 "34" @41df28]: Untyped Retype: Insufficient memory (1 * 536870912 bytes needed, 8192 bytes available).>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeUntypedInvocation/205 T0xffffff807ffcac00 "34" @41df28]: Untyped Retype: Insufficient memory (1 * 268435456 bytes needed, 8192 bytes available).>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeUntypedInvocation/205 T0xffffff807ffcac00 "34" @41df28]: Untyped Retype: Insufficient memory (1 * 134217728 bytes needed, 8192 bytes available).>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeUntypedInvocation/205 T0xffffff807ffcac00 "34" @41df28]: Untyped Retype: Insufficient memory (1 * 67108864 bytes needed, 8192 bytes available).>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeUntypedInvocation/205 T0xffffff807ffcac00 "34" @41df28]: Untyped Retype: Insufficient memory (1 * 33554432 bytes needed, 8192 bytes available).>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeUntypedInvocation/205 T0xffffff807ffcac00 "34" @41df28]: Untyped Retype: Insufficient memory (1 * 16777216 bytes needed, 8192 bytes available).>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeUntypedInvocation/205 T0xffffff807ffcac00 "34" @41df28]: Untyped Retype: Insufficient memory (1 * 8388608 bytes needed, 8192 bytes available).>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeUntypedInvocation/205 T0xffffff807ffcac00 "34" @41df28]: Untyped Retype: Insufficient memory (1 * 4194304 bytes needed, 8192 bytes available).>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeUntypedInvocation/205 T0xffffff807ffcac00 "34" @41df28]: Untyped Retype: Insufficient memory (1 * 2097152 bytes needed, 8192 bytes available).>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeUntypedInvocation/205 T0xffffff807ffcac00 "34" @41df28]: Untyped Retype: Insufficient memory (1 * 1048576 bytes needed, 8192 bytes available).>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeUntypedInvocation/205 T0xffffff807ffcac00 "34" @41df28]: Untyped Retype: Insufficient memory (1 * 524288 bytes needed, 8192 bytes available).>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeUntypedInvocation/205 T0xffffff807ffcac00 "34" @41df28]: Untyped Retype: Insufficient memory (1 * 262144 bytes needed, 8192 bytes available).>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeUntypedInvocation/205 T0xffffff807ffcac00 "34" @41df28]: Untyped Retype: Insufficient memory (1 * 131072 bytes needed, 8192 bytes available).>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeUntypedInvocation/205 T0xffffff807ffcac00 "34" @41df28]: Untyped Retype: Insufficient memory (1 * 65536 bytes needed, 8192 bytes available).>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeUntypedInvocation/205 T0xffffff807ffcac00 "34" @41df28]: Untyped Retype: Insufficient memory (1 * 32768 bytes needed, 8192 bytes available).>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeUntypedInvocation/205 T0xffffff807ffcac00 "34" @41df28]: Untyped Retype: Insufficient memory (1 * 16384 bytes needed, 8192 bytes available).>>[0m
+Test RETYPE0001 passed
+Starting test 72: RETYPE0002
+Running test RETYPE0002 (Incremental retype test #2)
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeUntypedInvocation/146 T0xffffff807ffcac00 "34" @41df28]: Untyped Retype: Number of requested objects (1048576) too small or large.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeUntypedInvocation/166 T0xffffff807ffcac00 "34" @41df28]: Untyped Retype: Slot #109 in destination window non-empty.>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeUntypedInvocation/205 T0xffffff807ffcac00 "34" @41df28]: Untyped Retype: Insufficient memory (1 * 4096 bytes needed, 0 bytes available).>>[0m
+Test RETYPE0002 passed
+Starting test 73: SCHED0002
+Running test SCHED0002 (Test resuming ourselves)
+Test SCHED0002 passed
+Starting test 74: SCHED0003
+Running test SCHED0003 (Test TCB suspend/resume)
+Test SCHED0003 passed
+Starting test 75: SCHED0004
+Running test SCHED0004 (Test threads at all priorities)
+Test SCHED0004 passed
+Starting test 76: SCHED0005
+Running test SCHED0005 (Test set priority)
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeSetPriority/1196 T0xffffff8040640400 "child of: '34'" @43ce88]: TCB SetPriority: Requested priority 253 too high (max 251).>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeSetPriority/1196 T0xffffff807ffebc00 "child of: '34'" @43ce88]: TCB SetPriority: Requested priority 250 too high (max 249).>>[0m
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeSetMCPriority/1240 T0xffffff807ffebc00 "child of: '34'" @43ce88]: TCB SetMCPriority: Requested maximum controlled priority 253 too high (max 249).>>[0m
+Test SCHED0005 passed
+Starting test 77: SCHED0006
+Running test SCHED0006 (Test IPC priorities for Send)
+Test SCHED0006 passed
+Starting test 78: SCHED0020
+Running test SCHED0020 (test set prio to a higher prio runs higher prio thread)
+Test SCHED0020 passed
+Starting test 79: SERSERV_CLIENT_001
+Running test SERSERV_CLIENT_001 (Connect from client threads)
+Test SERSERV_CLIENT_001 passed
+Starting test 80: SERSERV_CLIENT_002
+Running test SERSERV_CLIENT_002 (Printf from client threads)
+[0m[33mHello, world!
+[0mTest SERSERV_CLIENT_002 passed
+Starting test 81: SERSERV_CLIENT_003
+Running test SERSERV_CLIENT_003 (Write from client threads)
+[0m[33mHello, world!
+[0mTest SERSERV_CLIENT_003 passed
+Starting test 82: SERSERV_CLIENT_004
+Running test SERSERV_CLIENT_004 (Printf, then write, then reset connection, and Printf, then write again, from client threads)
+[0m[33mHello, world!
+[0m[0m[33mHello, world!
+[0m[0m[34mHello, world!
+[0m[0m[34mHello, world!
+[0mTest SERSERV_CLIENT_004 passed
+Starting test 83: SERSERV_CLIENT_005
+Running test SERSERV_CLIENT_005 (Connect, then disconnect from server on all threads, then kill server from parent thread)
+Test SERSERV_CLIENT_005 passed
+Starting test 84: SERSERV_CLI_PROC_001
+Running test SERSERV_CLI_PROC_001 (Connect to server from a client in another VSpace and CSpace)
+Test SERSERV_CLI_PROC_001 passed
+Starting test 85: SERSERV_CLI_PROC_002
+Running test SERSERV_CLI_PROC_002 (Connect to server and printf(, true), from a client in another VSpace and CSpace)
+[0m[33mHello, world!
+[0mTest SERSERV_CLI_PROC_002 passed
+Starting test 86: SERSERV_CLI_PROC_003
+Running test SERSERV_CLI_PROC_003 (Connect to server and write(, true), from a client in another VSpace and CSpace)
+[0m[33mHello, world!
+[0mTest SERSERV_CLI_PROC_003 passed
+Starting test 87: SERSERV_CLI_PROC_004
+Running test SERSERV_CLI_PROC_004 (Connect to server, printf(), write(, true), then disconnect, then reconnect and printf() and write() again, from clients in other VSpaces and CSpaces)
+[0m[33mHello, world!
+[0m[0m[33mHello, world!
+[0m[0m[34mHello, world!
+[0m[0m[34mHello, world!
+[0mTest SERSERV_CLI_PROC_004 passed
+Starting test 88: SERSERV_CLI_PROC_005
+Running test SERSERV_CLI_PROC_005 (Connect to server then disconnect on all clients (in different VSpace/CSpace containers), and finally kill the server from the parent)
+Test SERSERV_CLI_PROC_005 passed
+Starting test 89: SERSERV_PARENT_001
+Running test SERSERV_PARENT_001 (Serial server spawn test)
+Test SERSERV_PARENT_001 passed
+Starting test 90: SERSERV_PARENT_002
+Running test SERSERV_PARENT_002 (Test connecting to the server from a parent thread)
+Test SERSERV_PARENT_002 passed
+Starting test 91: SERSERV_PARENT_003
+Running test SERSERV_PARENT_003 (Printf() from a connected parent thread)
+[0m[33mHello, world!
+[0mTest SERSERV_PARENT_003 passed
+Starting test 92: SERSERV_PARENT_004
+Running test SERSERV_PARENT_004 (Write() from a connected parent thread)
+[0m[33mHello, world!
+[0mTest SERSERV_PARENT_004 passed
+Starting test 93: SERSERV_PARENT_005
+Running test SERSERV_PARENT_005 (Test printf() and write() from a parent thread when after a connection reset (disconnect/reconnect))
+[0m[33mHello, world!
+[0m[0m[33mHello, world!
+[0m[0m[33mHello, world!
+[0m[0m[33mHello, world!
+[0mTest SERSERV_PARENT_005 passed
+Starting test 94: SERSERV_PARENT_006
+Running test SERSERV_PARENT_006 (Kill the Server from the Parent thread)
+Test SERSERV_PARENT_006 passed
+Starting test 95: SERSERV_PARENT_007
+Running test SERSERV_PARENT_007 (Test a series of unexpected input values to spawn_thread)
+Test SERSERV_PARENT_007 passed
+Starting test 96: SERSERV_PARENT_008
+Running test SERSERV_PARENT_008 (Test a series of unexpected input values to connect())
+Test SERSERV_PARENT_008 passed
+Starting test 97: SERSERV_PARENT_009
+Running test SERSERV_PARENT_009 (Test a series of unexpected input values to printf())
+serial_server_printf@clientapi.c:178 Serserv Client: printf: NULL passed for required arguments.
+	Is connection handle valid?
+serial_server_printf@clientapi.c:178 Serserv Client: printf: NULL passed for required arguments.
+	Is connection handle valid?
+Test SERSERV_PARENT_009 passed
+Starting test 98: SERSERV_PARENT_010
+Running test SERSERV_PARENT_010 (Test a series of unexpected input values to write())
+serial_server_write@clientapi.c:221 Serserv Client: printf: NULL passed for required arguments.
+	Is connection handle valid?
+serial_server_write@clientapi.c:221 Serserv Client: printf: NULL passed for required arguments.
+	Is connection handle valid?
+Test SERSERV_PARENT_010 passed
+Starting test 99: SYNC001
+Running test SYNC001 (libsel4sync Test binary semaphores)
+Test SYNC001 passed
+Starting test 100: SYNC002
+Running test SYNC002 (libsel4sync Test semaphores)
+Test SYNC002 passed
+Starting test 101: SYNC003
+Running test SYNC003 (libsel4sync Test monitors)
+Test SYNC003 passed
+Starting test 102: SYNC004
+Running test SYNC004 (libsel4sync Test monitors - broadcast)
+Test SYNC004 passed
+Starting test 103: THREADS0004
+Running test THREADS0004 (seL4_TCB_Configure with a NULL CSpace should fail)
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeTCBConfigure/1131 T0xffffff807ffcac00 "34" @44d828]: TCB Configure: CSpace cap is invalid.>>[0m
+Test THREADS0004 passed
+Starting test 104: THREADS0005
+Running test THREADS0005 (seL4_TCB_SetSpace with a NULL CSpace should fail)
+[0m[1m<<[0m[32mseL4(CPU 0)[0m[1m [decodeSetSpace/1527 T0xffffff807ffcac00 "34" @44d828]: TCB SetSpace: Invalid CNode cap.>>[0m
+Test THREADS0005 passed
+Starting test 105: TLS0001
+Running test TLS0001 (Test root thread accessing __thread variables)
+Test TLS0001 passed
+Starting test 106: TLS0002
+Running test TLS0002 (Test multiple threads using __thread variables)
+Test TLS0002 passed
+Starting test 107: TLS0006
+Running test TLS0006 (sel4utils_thread with distinct TLS should not interfere)
+Test TLS0006 passed
+Starting test 108: TRIVIAL0000
+Running test TRIVIAL0000 (Ensure the test framework functions)
+Test TRIVIAL0000 passed
+Starting test 109: TRIVIAL0001
+Running test TRIVIAL0001 (Ensure the allocator works)
+Test TRIVIAL0001 passed
+Starting test 110: TRIVIAL0002
+Running test TRIVIAL0002 (Ensure the allocator works more than once)
+Test TRIVIAL0002 passed
+Starting test 111: VSPACE0000
+Running test VSPACE0000 (Test threads in different cspace/vspace)
+Test VSPACE0000 passed
+Starting test 112: VSPACE0001
+Running test VSPACE0001 (Test unmapping a page after deleting the PD)
+Test VSPACE0001 passed
+Starting test 113: VSPACE0002
+Running test VSPACE0002 (Test create ASID pool)
+Test VSPACE0002 passed
+Starting test 114: VSPACE0003
+Running test VSPACE0003 (Test create multiple ASID pools)
+Test VSPACE0003 passed
+Starting test 115: VSPACE0004
+Running test VSPACE0004 (Test running out of ASID pools)
+Test VSPACE0004 passed
+Starting test 116: VSPACE0005
+Running test VSPACE0005 (Test overassigning ASID pool)
+Test VSPACE0005 passed
+Starting test 117: VSPACE0006
+Running test VSPACE0006 (Test touching all available ASID pools)
+Test VSPACE0006 passed
+Starting test 119: Test all tests ran
+Test suite passed. 119 tests passed. 52 tests disabled.
+All is well in the universe
+
+
+QEMU: Terminated
+
