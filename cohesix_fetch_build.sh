@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v1.26
+# Filename: cohesix_fetch_build.sh v1.27
 # Author: Lukas Bower
 # Date Modified: 2027-12-31
 
@@ -572,6 +572,17 @@ cd "$ROOT/third_party/seL4/artefacts"
 # 4) Pack into a newc cpio archive
 find kernel.elf cohesix_root.elf kernel.dtb | \
   cpio -o -H newc > "$ROOT/boot/cohesix.cpio"
+
+# Replace the embedded CPIO archive in the elfloader
+aarch64-linux-gnu-objcopy \
+  --update-section ._archive_cpio="$ROOT/boot/cohesix.cpio" \
+  "$ROOT/third_party/seL4/artefacts/elfloader" "$ROOT/boot/elfloader"
+
+# Sanity check - ensure sel4test-driver is not present
+if cpio -it < "$ROOT/boot/cohesix.cpio" | grep -q sel4test-driver; then
+  echo "❌ CPIO archive still contains sel4test-driver" >&2
+  exit 1
+fi
 
 # 5) Export the path
 CPIO_IMAGE="$ROOT/boot/cohesix.cpio"

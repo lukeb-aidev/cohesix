@@ -28,6 +28,7 @@
 - cohesix_fetch_build.sh clones via SSH without credentials
 - src/lib/init.rs placeholder module to satisfy module resolution
 - sensors.rs respects COHESIX_TELEMETRY_PATH for tests
+- cohesix_fetch_build.sh v1.27 patches elfloader CPIO to use cohesix_root.elf and fails if sel4test-driver remains
 - `.cargo/config.toml` v0.11 adds `aarch64-unknown-linux-musl` linker config
 - `.cargo/config.toml` v0.12 switches musl linkers to system GCC to fix -ldl errors
 - test_agent_lifecycle uses temp directories only
