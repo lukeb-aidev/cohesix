@@ -1,5 +1,5 @@
 /* CLASSIFICATION: COMMUNITY */
-/* Filename: link.ld v0.19 */
+/* Filename: link.ld v0.20 */
 /* Author: Lukas Bower */
 /* Date Modified: 2027-12-31 */
 /* SPDX-License-Identifier: BSD-2-Clause */
@@ -15,6 +15,7 @@ ENTRY(_start)
 PHDRS {
     text PT_LOAD FLAGS(5); /* R+X */
     data PT_LOAD FLAGS(6); /* R+W */
+    dev  PT_LOAD FLAGS(6); /* R+W device */
 }
 
 SECTIONS {
@@ -85,4 +86,12 @@ SECTIONS {
         . = . + 0x10000; /* 64KB stack */
         __stack_end = .;
     } :data
+
+    /* UART MMIO region mapped for early debug output */
+    . = 0x09000000;
+    .uart (NOLOAD) : {
+        __uart_start = .;
+        . = . + 0x1000; /* 4KB UART frame */
+        __uart_end = .;
+    } :dev
 }
