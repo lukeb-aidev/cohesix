@@ -1,0 +1,54 @@
+There are 22 section headers, starting at offset 0x8d930:
+
+Section Headers:
+  [Nr] Name              Type             Address           Offset
+       Size              EntSize          Flags  Link  Info  Align
+  [ 0]                   NULL             0000000000000000  00000000
+       0000000000000000  0000000000000000           0     0     0
+  [ 1] .text             PROGBITS         0000000000400000  00001000
+       000000000000664c  0000000000000000  AX       0     0     16
+  [ 2] .rodata           PROGBITS         0000000000408000  00009000
+       000000000000109c  0000000000000000 AMSo       0     0     256
+  [ 3] .eh_frame_hdr     PROGBITS         000000000040909c  0000a09c
+       000000000000001c  0000000000000000   A       0     0     4
+  [ 4] .eh_frame         PROGBITS         00000000004090b8  0000a0b8
+       0000000000000044  0000000000000000   A       0     0     8
+  [ 5] .data             PROGBITS         000000000040b000  0000b000
+       0000000000000060  0000000000000000  WA       0     0     8
+  [ 6] .bss              NOBITS           000000000040d000  0000b060
+       0000000000000028  0000000000000000  WA       0     0     8
+  [ 7] .heap             NOBITS           000000000040f000  0000b060
+       0000000000080000  0000000000000000  WA       0     0     1
+  [ 8] .stack            NOBITS           0000000000490000  0000b060
+       0000000000010000  0000000000000000  WA       0     0     1
+  [ 9] .uart             NOBITS           00000000004a1000  0000c000
+       0000000000002000  0000000000000000 WAo       0     0     1
+  [10] .debug_loc        PROGBITS         0000000000000000  0000c000
+       0000000000041231  0000000000000000           0     0     1
+  [11] .debug_abbrev     PROGBITS         0000000000000000  0004d231
+       000000000000096f  0000000000000000           0     0     1
+  [12] .debug_info       PROGBITS         0000000000000000  0004dba0
+       000000000001ce57  0000000000000000           0     0     1
+  [13] .debug_aranges    PROGBITS         0000000000000000  0006a9f7
+       0000000000000420  0000000000000000           0     0     1
+  [14] .debug_ranges     PROGBITS         0000000000000000  0006ae17
+       000000000000a140  0000000000000000           0     0     1
+  [15] .debug_str        PROGBITS         0000000000000000  00074f57
+       0000000000010376  0000000000000001  MS       0     0     1
+  [16] .comment          PROGBITS         0000000000000000  000852cd
+       000000000000007a  0000000000000001  MS       0     0     1
+  [17] .debug_frame      PROGBITS         0000000000000000  00085348
+       0000000000000680  0000000000000000           0     0     8
+  [18] .debug_line       PROGBITS         0000000000000000  000859c8
+       0000000000005cf8  0000000000000000           0     0     1
+  [19] .symtab           SYMTAB           0000000000000000  0008b6c0
+       0000000000001410  0000000000000018          21   176     8
+  [20] .shstrtab         STRTAB           0000000000000000  0008cad0
+       00000000000000ce  0000000000000000           0     0     1
+  [21] .strtab           STRTAB           0000000000000000  0008cb9e
+       0000000000000d90  0000000000000000           0     0     1
+Key to Flags:
+  W (write), A (alloc), X (execute), M (merge), S (strings), I (info),
+  L (link order), O (extra OS processing required), G (group), T (TLS),
+  C (compressed), x (unknown), o (OS specific), E (exclude),
+  D (mbind), p (processor specific)
