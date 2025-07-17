@@ -1,5 +1,5 @@
 /* CLASSIFICATION: COMMUNITY */
-/* Filename: link.ld v0.20 */
+/* Filename: link.ld v0.21 */
 /* Author: Lukas Bower */
 /* Date Modified: 2027-12-31 */
 /* SPDX-License-Identifier: BSD-2-Clause */
@@ -87,8 +87,9 @@ SECTIONS {
         __stack_end = .;
     } :data
 
-    /* UART MMIO region mapped for early debug output */
-    . = 0x09000000;
+    /* UART MMIO placeholder reserved for runtime mapping */
+    . = ALIGN(0x1000);
+    . += 0x1000;
     .uart (NOLOAD) : {
         __uart_start = .;
         . = . + 0x1000; /* 4KB UART frame */

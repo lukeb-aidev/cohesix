@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: sys.rs v0.8
+// Filename: sys.rs v0.9
 // Author: Lukas Bower
-// Date Modified: 2025-07-12
+// Date Modified: 2027-12-31
 
 use core::ffi::c_char;
 use core::sync::atomic::{compiler_fence, Ordering};
@@ -12,11 +12,6 @@ use crate::coherr;
 #[used]
 static mut UART_FRAME: [u8; 0x1000] = [0; 0x1000];
 
-extern "C" {
-    static __uart_start: u8;
-    static __uart_end: u8;
-}
-
 /// Ensure the UART frame is mapped before use
 pub fn init_uart() {
     unsafe {
@@ -24,13 +19,6 @@ pub fn init_uart() {
     }
 }
 
-pub fn validate_uart_ptr() {
-    let start = unsafe { &__uart_start as *const u8 as usize };
-    let end = unsafe { &__uart_end as *const u8 as usize };
-    if UART_BASE < start || UART_BASE >= end {
-        coherr!("uart_base_out_of_range start={:#x} end={:#x} base={:#x}", start, end, UART_BASE);
-    }
-}
 
 #[cfg(target_arch = "aarch64")]
 #[no_mangle]
