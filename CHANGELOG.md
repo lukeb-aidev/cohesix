@@ -3421,6 +3421,6 @@
 ### Fixed
 - **HolisticBootFlowDiagnosticAndFix-044**: Adjusted `init_uart` to avoid touching unmapped MMIO, resolving an early cap fault at address `0x9000000`. Added corresponding diagnostics report and updated metadata.
 
-## [v0.554] - 2027-12-31
+## [v0.555] - 2027-12-31
 ### Fixed
 - **HolisticBootFlowDiagnosticAndFix-045**: Corrected syscall constants in `sys.rs` to use negative values as required by seL4. Added new diagnostic report covering the unknown syscall fault and updated metadata.

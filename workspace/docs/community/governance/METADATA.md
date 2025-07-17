@@ -382,6 +382,7 @@
 | docs/community/diagnostics/WHY_COHESIX_ROOT_FAILS_TO_BOOT_20250711.md | v0.1 | 2025-07-11 | COMMUNITY | | |
 | docs/community/diagnostics/BOOT_FLOW_DIAGNOSTIC_20250717.md | v0.1 | 2027-12-31 | COMMUNITY | | |
 | docs/community/diagnostics/BOOT_FLOW_DIAGNOSTIC_20250717B.md | v0.1 | 2027-12-31 | COMMUNITY | | |
+| docs/community/diagnostics/HOLISTIC_BOOT_FLOW_20250717.md | v0.1 | 2027-12-31 | COMMUNITY | | |
 | docs/community/governance/COHESIX_AARCH64_BUILD.md | v1.1 | 2027-12-28 | COMMUNITY | | |
 | tests/Cohesix/test_cli_cap.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
 | tests/Cohesix/test_cloud.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
