@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v1.29
+# Filename: cohesix_fetch_build.sh v1.30
 # Author: Lukas Bower
 # Date Modified: 2027-12-31
 
@@ -570,12 +570,19 @@ cd "$ROOT/third_party/seL4/artefacts"
 [ -f kernel.dtb ] || { echo "❌ Missing kernel.dtb" >&2; exit 1; }
 
 # 4) Pack into a newc cpio archive
-printf '%s\n' kernel.elf cohesix_root.elf kernel.dtb | \
+printf '%s\n' kernel.elf kernel.dtb cohesix_root.elf | \
   cpio -o -H newc > "$ROOT/boot/cohesix.cpio"
 
 # Verify archive order
 log "📦 CPIO first entries:"
-cpio -it < "$ROOT/boot/cohesix.cpio" | head -n 3 >&3
+mapfile -t _cpio_entries < <(cpio -it < "$ROOT/boot/cohesix.cpio" | head -n 3)
+printf '%s\n' "${_cpio_entries[@]}" >&3
+if [ "${_cpio_entries[0]}" != "kernel.elf" ] || \
+   [ "${_cpio_entries[1]}" != "kernel.dtb" ] || \
+   [ "${_cpio_entries[2]}" != "cohesix_root.elf" ]; then
+  echo "❌ Unexpected CPIO order: ${_cpio_entries[*]}" >&2
+  exit 1
+fi
 
 # Replace the embedded CPIO archive in the elfloader
 aarch64-linux-gnu-objcopy \
