@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: bootloader.c v0.8
+// Filename: bootloader.c v0.9
 // Author: Lukas Bower
 // Date Modified: 2027-12-31
 // SPDX-License-Identifier: MIT
@@ -79,13 +79,25 @@ static const char *detect_role(void) {
 static void assign_caps(const char *role)
 {
     (void)role;
-    seL4_Error err = seL4_CNode_Copy(seL4_CapInitThreadCNode,
-                                     1,
-                                     seL4_WordBits,
-                                     seL4_CapInitThreadCNode,
-                                     seL4_CapInitThreadTCB,
-                                     seL4_WordBits,
-                                     seL4_AllRights);
+    seL4_Error err;
+
+    err = seL4_TCB_SetSpace(seL4_CapInitThreadTCB,
+                            seL4_CapNull,
+                            seL4_CapInitThreadCNode, 0,
+                            seL4_CapInitThreadVSpace, 0);
+    if (err != seL4_NoError) {
+        printf("[bootloader] TCB_SetSpace failed: %d\n", err);
+    } else {
+        printf("[bootloader] init CSpace root installed\n");
+    }
+
+    err = seL4_CNode_Copy(seL4_CapInitThreadCNode,
+                          1,
+                          seL4_WordBits,
+                          seL4_CapInitThreadCNode,
+                          seL4_CapInitThreadTCB,
+                          seL4_WordBits,
+                          seL4_AllRights);
     if (err != seL4_NoError) {
         printf("[bootloader] cap copy failed: %d\n", err);
     } else {
