@@ -3448,3 +3448,7 @@
 ## [v0.561] - 2028-01-11
 ### Fixed
 - **WebCodexFixSel4SysBuildPath-051**: `sel4-sys` build script derives `third_party/seL4/lib` from `CARGO_WORKSPACE_DIR` (falling back to `CARGO_MANIFEST_DIR`) and panics with a clear message if missing.
+
+## [v0.562] - 2028-01-12
+### Fixed
+- **FixSel4SysBuildPathCorrection-052**: `sel4-sys` build script now locates `third_party/seL4/lib` by ascending two directories from `CARGO_MANIFEST_DIR`, matching the project root layout.
