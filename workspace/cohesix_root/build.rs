@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: build.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2027-12-31
+// Date Modified: 2028-01-21
 
 use std::{env, fs, path::Path};
 use std::io::Write;
@@ -59,8 +59,24 @@ fn main() {
     generate_dtb_constants(&out_dir, &manifest_dir);
     embed_sel4_spec(&out_dir, &manifest_dir);
     embed_vectors(&out_dir, &manifest_dir);
-    println!("cargo:rerun-if-changed=../../third_party/seL4/lib/libsel4.a");
-    println!("cargo:rerun-if-changed=../../third_party/seL4/kernel.dts");
-    println!("cargo:rustc-link-search=../../third_party/seL4/lib");
+    let project_root = Path::new(&manifest_dir)
+        .parent()
+        .and_then(|p| p.parent())
+        .expect("Unexpected manifest directory structure");
+
+    let sel4_lib_dir = project_root.join("third_party/seL4/lib");
+
+    println!(
+        "cargo:rerun-if-changed={}",
+        sel4_lib_dir.join("libsel4.a").display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
+        project_root.join("third_party/seL4/kernel.dts").display()
+    );
+    println!(
+        "cargo:rustc-link-search=native={}",
+        sel4_lib_dir.display()
+    );
     println!("cargo:rustc-link-lib=static=sel4");
 }

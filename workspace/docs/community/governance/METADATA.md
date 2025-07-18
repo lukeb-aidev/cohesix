@@ -343,6 +343,7 @@
 | tests/test_validator_matrix.rs | v0.2 | 2026-11-02 | COMMUNITY | | |
 | tests/test_validator.rs | v0.6 | 2026-11-15 | COMMUNITY | | |
 | tests/test_secure9p_config.rs | v0.1 | 2026-09-30 | COMMUNITY | | |
+| tests/test_program_headers.py | v0.1 | 2028-01-21 | COMMUNITY | | |
 | docs/community/PATH_SELF_INTERSECTION.md | v0.1 | 2026-11-19 | COMMUNITY | | |
 | src/geometry/sweep_line_intersection.py | v0.1 | 2026-11-19 | COMMUNITY | | |
 | log/simulated_boot_pipeline.md | v0.1 | 2026-11-20 | COMMUNITY | | |
