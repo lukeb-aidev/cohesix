@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: boot_workflow_rust.md v0.5
+// Filename: boot_workflow_rust.md v0.6
 // Author: Lukas Bower
 // Date Modified: 2027-12-31
 
@@ -52,3 +52,9 @@ cargo +nightly tree -p cohesix_root | grep sel4-sys
 
 If the serial log shows `✅ rootserver main loop entered` the boot path is
 healthy.
+
+## Linker Configuration
+
+seL4 Library: We link in `libsel4.a` from `third_party/seL4/lib` by passing
+`-Lthird_party/seL4/lib -lsel4` to the Rust linker via our JSON target or
+`RUSTFLAGS`.
