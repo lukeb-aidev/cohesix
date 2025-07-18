@@ -282,7 +282,7 @@
 | workspace/cohesix_root/src/allocator.rs | v0.8 | 2028-01-21 | COMMUNITY | | |
 | workspace/cohesix_root/src/sys.rs | v0.12 | 2027-12-31 | COMMUNITY | | |
 | workspace/cohesix_root/src/dt.rs | v0.1 | 2027-12-31 | COMMUNITY | | |
-| workspace/cohesix_root/src/startup.rs | v0.2 | 2028-01-21 | COMMUNITY | | |
+| workspace/cohesix_root/src/startup.rs | v0.3 | 2028-01-22 | COMMUNITY | | |
 | workspace/cohesix_root/src/exception.rs | v0.2 | 2028-01-21 | COMMUNITY | | |
 | workspace/cohesix_root/src/mmu.rs | v0.1 | 2028-01-21 | COMMUNITY | | |
 | workspace/sel4-sys/Cargo.toml | v0.3 | 2027-12-31 | COMMUNITY | | |
@@ -392,7 +392,7 @@
 | docs/community/diagnostics/BOOT_FLOW_DIAGNOSTIC_20250717B.md | v0.1 | 2027-12-31 | COMMUNITY | | |
 | docs/community/diagnostics/HOLISTIC_BOOT_FLOW_20250717.md | v0.1 | 2027-12-31 | COMMUNITY | | |
 | docs/community/diagnostics/boot_workflow_rust.md | v0.8 | 2028-01-11 | COMMUNITY | | |
-| docs/community/diagnostics/USERLAND_BOOT.md | v0.1 | 2028-01-21 | COMMUNITY | | |
+| docs/community/diagnostics/USERLAND_BOOT.md | v0.2 | 2028-01-22 | COMMUNITY | | |
 | docs/community/governance/COHESIX_AARCH64_BUILD.md | v1.1 | 2027-12-28 | COMMUNITY | | |
 | tests/Cohesix/test_cli_cap.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
 | tests/Cohesix/test_cloud.rc | v0.1 | 2027-12-07 | COMMUNITY | | |

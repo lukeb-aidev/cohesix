@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: USERLAND_BOOT.md v0.1
+// Filename: USERLAND_BOOT.md v0.2
 // Author: Lukas Bower
-// Date Modified: 2028-01-21
+// Date Modified: 2028-01-22
 
 # Userland Boot Verification
 
@@ -14,6 +14,21 @@ Running `capture_and_push_debug.sh` after these changes no longer triggers
 "unknown syscall 0" in the serial log. The test syscall issued from `main`
 returns the expected constant and the rootserver drops into the Plan9
 shell.
+
+## Fault Diagnostics 2028-01-21
+
+QEMU dropped to user mode but immediately printed:
+
+```
+Caught cap fault in send phase at address 0
+user exception 0x2000000 code 0 in thread "rootserver" at address 0x402a74
+```
+
+Disassembly shows 0x402a74 is the `msr VBAR_EL1, x8` instruction inside
+`rust_start`. This instruction is privileged, so the kernel raised a user
+exception before `main` executed. No fault handler was present, leading to a
+capability error when the kernel delivered the fault IPC. Removing the
+privileged `msr` lets the rootserver enter `main` without a fault.
 
 ## Static ELF Checks (f22778e2)
 
