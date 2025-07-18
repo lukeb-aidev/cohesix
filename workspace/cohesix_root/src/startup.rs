@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: startup.rs v0.2
+// Filename: startup.rs v0.3
 // Author: Lukas Bower
-// Date Modified: 2028-01-21
+// Date Modified: 2028-01-22
 
 use core::arch::global_asm;
 
@@ -24,19 +24,7 @@ pub extern "C" fn rust_start() -> ! {
         fn main();
     }
     unsafe {
-        // Set up the exception vector base for SVC handling. The address is
-        // defined by `vectors_start` in `vec.S`.
-        use core::ptr::addr_of;
-        extern "C" {
-            static vectors_start: u8;
-        }
-        let vectors_ptr = addr_of!(vectors_start) as usize;
-        core::arch::asm!(
-            "msr VBAR_EL1, {0}",
-            "isb", // ensure the new vector base is used before continuing
-            in(reg) vectors_ptr,
-            options(nostack, preserves_flags)
-        );
+        // The kernel installs the user exception vectors. Jump straight to `main`.
         main();
     }
     loop {
