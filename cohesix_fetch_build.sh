@@ -443,9 +443,8 @@ cargo clean
 cargo +nightly build --release --workspace \
   --exclude cohesix_root \
   --target aarch64-unknown-linux-musl \
-  -Z build-std=core,alloc,compiler_builtins \
-  -Z build-std-features=compiler-builtins-mem \
-  -Z build-std-panic=abort
+  -Z build-std=core,alloc,compiler_builtins,panic_abort \
+  -Z build-std-features=compiler-builtins-mem
 
 # Build bare metal cohesix_root with explicit build-std for core+alloc only
 cargo +nightly build -p cohesix_root --release \
