@@ -283,7 +283,7 @@
 | workspace/cohesix_root/src/sys.rs | v0.12 | 2027-12-31 | COMMUNITY | | |
 | workspace/cohesix_root/src/dt.rs | v0.1 | 2027-12-31 | COMMUNITY | | |
 | workspace/sel4-sys/Cargo.toml | v0.3 | 2027-12-31 | COMMUNITY | | |
-| workspace/sel4-sys/build.rs | v0.5 | 2028-01-10 | COMMUNITY | | |
+| workspace/sel4-sys/build.rs | v0.6 | 2028-01-11 | COMMUNITY | | |
 | workspace/sel4-sys/src/lib.rs | v0.1 | 2027-12-31 | COMMUNITY | | |
 | src/cuda/runtime.rs | v0.16 | 2026-12-31 | COMMUNITY | | |
 | src/cli/mod.rs | v1.3 | 2026-10-08 | COMMUNITY | | |
@@ -387,7 +387,7 @@
 | docs/community/diagnostics/BOOT_FLOW_DIAGNOSTIC_20250717.md | v0.1 | 2027-12-31 | COMMUNITY | | |
 | docs/community/diagnostics/BOOT_FLOW_DIAGNOSTIC_20250717B.md | v0.1 | 2027-12-31 | COMMUNITY | | |
 | docs/community/diagnostics/HOLISTIC_BOOT_FLOW_20250717.md | v0.1 | 2027-12-31 | COMMUNITY | | |
-| docs/community/diagnostics/boot_workflow_rust.md | v0.7 | 2027-12-31 | COMMUNITY | | |
+| docs/community/diagnostics/boot_workflow_rust.md | v0.8 | 2028-01-11 | COMMUNITY | | |
 | docs/community/governance/COHESIX_AARCH64_BUILD.md | v1.1 | 2027-12-28 | COMMUNITY | | |
 | tests/Cohesix/test_cli_cap.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
 | tests/Cohesix/test_cloud.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
