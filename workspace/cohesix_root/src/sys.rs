@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: sys.rs v0.13
 // Author: Lukas Bower
-// Date Modified: 2027-12-31
+// Date Modified: 2028-01-25
 
 use core::ffi::c_char;
 use core::sync::atomic::{compiler_fence, Ordering};
@@ -22,12 +22,23 @@ pub fn init_uart() {
     let _ = unsafe { &UART_FRAME as *const _ };
 }
 
+/// Set the TLS pointer for seL4 syscalls.
+#[cfg(target_arch = "aarch64")]
+#[no_mangle]
+pub unsafe extern "C" fn sel4_set_tls(ptr: *const u8) {
+    core::arch::asm!(
+        "msr tpidr_el1, {0}",
+        in(reg) ptr,
+        options(nostack, preserves_flags)
+    );
+}
 
-const SYS_DEBUG_PUTCHAR: i64 = -9;
-const SYS_SEND: i64 = -3;
-const SYS_RECV: i64 = -5;
-const SYS_YIELD: i64 = -7;
-const SYS_DEBUG_HALT: i64 = -11;
+
+const SYS_DEBUG_PUTCHAR: i64 = 9;
+const SYS_SEND: i64 = 3;
+const SYS_RECV: i64 = 5;
+const SYS_YIELD: i64 = 7;
+const SYS_DEBUG_HALT: i64 = 11;
 
 #[cfg(target_arch = "aarch64")]
 #[no_mangle]

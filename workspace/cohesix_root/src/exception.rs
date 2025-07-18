@@ -1,17 +1,17 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: exception.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2028-01-21
+// Date Modified: 2028-01-25
 
 use crate::{coherr, abort};
 
 fn svc_dispatch(num: u16) {
     match num as i64 {
-        -9 => coherr!("svc_debug_putchar"),
-        -3 => coherr!("svc_send"),
-        -5 => coherr!("svc_recv"),
-        -7 => coherr!("svc_yield"),
-        -11 => coherr!("svc_debug_halt"),
+        9 => coherr!("svc_debug_putchar"),
+        3 => coherr!("svc_send"),
+        5 => coherr!("svc_recv"),
+        7 => coherr!("svc_yield"),
+        11 => coherr!("svc_debug_halt"),
         _ => coherr!("unknown_svc {num}"),
     }
 }
