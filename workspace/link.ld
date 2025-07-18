@@ -1,7 +1,7 @@
 /* CLASSIFICATION: COMMUNITY */
 /* Filename: link.ld v0.22 */
 /* Author: Lukas Bower */
-/* Date Modified: 2027-12-31 */
+/* Date Modified: 2028-01-20 */
 /* SPDX-License-Identifier: BSD-2-Clause */
 
 SEARCH_DIR("../third_party/seL4/lib");
@@ -22,6 +22,12 @@ PHDRS {
 
 SECTIONS {
     . = 0x400000;
+
+    /* Early exception vectors mapped executable so svc traps work */
+    . = ALIGN(0x1000);
+    .vectors : {
+        KEEP(*(.vectors))
+    } :text
 
     . = ALIGN(0x1000);
     .text : {
