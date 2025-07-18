@@ -39,6 +39,17 @@ fn main() {
         .and_then(|p| p.parent())
         .expect("Unexpected manifest directory structure");
 
+    // Verify workspace dir points to the same project root
+    if let Ok(workspace) = env::var("CARGO_WORKSPACE_DIR") {
+        let expected = Path::new(&workspace).join("third_party/seL4/lib/libsel4.a");
+        if !expected.is_file() {
+            panic!(
+                "CARGO_WORKSPACE_DIR set to {} but libsel4.a not found",
+                expected.display()
+            );
+        }
+    }
+
     // Compose the seL4 lib directory path
     let sel4_lib_dir = project_root.join("third_party/seL4/lib");
     if !sel4_lib_dir.is_dir() {

@@ -417,6 +417,13 @@
 | tests/Cohesix/test_srvctl.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
 | tests/Cohesix/test_userland_health.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
 | tests/Cohesix/run_all_tests.rc | v0.1 | 2027-12-07 | COMMUNITY | | |
+| tools/check_elf_layout.py | v0.1 | 2028-01-21 | COMMUNITY | | |
+| tests/test_elf_layout.py | v0.1 | 2028-01-21 | COMMUNITY | | |
+| cohesix_root/tests/mmu_map.rs | v0.1 | 2028-01-21 | COMMUNITY | | |
+| cohesix_root/tests/vector_table.rs | v0.1 | 2028-01-21 | COMMUNITY | | |
+| cohesix_root/tests/syscall_dispatch.rs | v0.1 | 2028-01-21 | COMMUNITY | | |
+| cohesix_root/tests/golden/mmu_map.json | v0.1 | 2028-01-21 | COMMUNITY | | |
+| cohesix_root/sel4-aarch64.canonical.json | v0.1 | 2028-01-21 | COMMUNITY | | |
 | out/diag_mmu_fault_20250712_013506/holistic_analysis.md | v0.1 | 2025-07-12 | COMMUNITY | | |
 Removed: introspect_self_diagnosis (Plan9 migration - file-based introspection replaced by validator-driven policy checks)
 Removed: legacy Python tests and lint steps; project now purely Plan9 + Rust

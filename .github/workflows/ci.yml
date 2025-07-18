@@ -46,6 +46,26 @@ jobs:
         run: |
           GOWORK=$(pwd)/go/go.work go test ./... | tee go_test.log
 
+      - name: Run Python tests
+        run: |
+          pip install -r requirements.txt
+          pytest -q | tee python_test.log
+
+      - name: Cargo test compile
+        run: |
+          cargo test --workspace --no-run | tee rust_test_compile.log
+
+      - name: Verify ELF layout
+        run: |
+          python tools/check_elf_layout.py target/sel4-aarch64/release/cohesix_root
+
+      - name: Verify sel4-sys link path
+        run: |
+          if grep -R "cargo:rustc-link-search" target/*/build/sel4-sys/output | grep -v "^cargo:rustc-link-search=native=/"; then exit 1; fi
+
+      - name: Verify sel4 spec template
+        run: diff workspace/cohesix_root/sel4-aarch64.json workspace/cohesix_root/sel4-aarch64.canonical.json
+
 
       - uses: actions/upload-artifact@v4
         with:

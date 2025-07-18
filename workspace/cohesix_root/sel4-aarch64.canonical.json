@@ -1,0 +1,30 @@
+{
+  "llvm-target": "aarch64-none-elf",
+  "data-layout": "e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32",
+  "arch": "aarch64",
+  "os": "none",
+  "vendor": "unknown",
+  "linker-flavor": "ld.lld",
+  "linker": "ld.lld",
+  "target-endian": "little",
+  "target-pointer-width": "64",
+  "executables": true,
+  "disable-redzone": true,
+  "panic-strategy": "abort",
+  "relocation-model": "static",
+  "features": "+neon",
+  "pre-link-args": {
+    "ld.lld": [
+      "-Tcohesix_root/link.ld",
+      "-static",
+      "-z",
+      "max-page-size=0x1000",
+      "-z",
+      "norelro",
+      "-no-pie",
+      "-L",
+      "../../third_party/seL4/lib",
+      "-lsel4"
+    ]
+  }
+}
