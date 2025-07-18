@@ -3,8 +3,13 @@
 # Author: Lukas Bower
 # Date Modified: 2027-12-31
 
+
+
+[source.crates-io]
+replace-with = "vendored-sources"
+
 [source.vendored-sources]
-directory = "vendor"
+directory = "workspace/vendor"
 
 [target.aarch64-unknown-linux-musl]
 linker = "aarch64-linux-musl-gcc"
