@@ -1,0 +1,106 @@
+0000000000400000 T vectors_start
+0000000000401000 T rust_entry
+0000000000401008 T _start
+0000000000401048 t <&T as core::fmt::Display>::fmt
+000000000040105c t <&T as core::fmt::Display>::fmt
+000000000040106c t core::fmt::Write::write_char
+000000000040115c t core::fmt::Write::write_fmt
+0000000000401160 t alloc::raw_vec::finish_grow
+0000000000401204 t alloc::raw_vec::RawVecInner<A>::reserve::do_reserve_and_handle
+00000000004012d0 t <&mut W as core::fmt::Write::write_fmt::SpecWriteFmt>::spec_write_fmt
+00000000004012d4 t <core::str::pattern::CharSearcher as core::str::pattern::Searcher>::next_match
+0000000000401690 t <cohesix_root::allocator::BumpAllocator as core::alloc::global::GlobalAlloc>::alloc
+00000000004022b4 t __rustc::rust_begin_unwind
+00000000004023bc t rust_eh_personality
+00000000004023c0 T seL4_DebugPutChar
+00000000004023d8 T seL4_Send
+00000000004023f0 T seL4_Recv
+0000000000402408 T seL4_Yield
+0000000000402418 T seL4_DebugHalt
+0000000000402428 T coh_open
+0000000000402700 T coh_read
+0000000000402784 T coh_close
+00000000004027b0 T coh_write
+00000000004027b8 T coh_exec
+00000000004029f4 T coh_getenv
+00000000004029fc T coh_setenv
+0000000000402a04 T coh_bind
+0000000000402a0c T memcpy
+0000000000402a10 T memmove
+0000000000402a14 T memset
+0000000000402a18 T memcmp
+0000000000402a40 T strlen
+0000000000402a6c T rust_start
+0000000000402a80 t cohesix_root::exception::svc_dispatch
+0000000000402ad0 T handle_el1_sync
+0000000000402b10 T handle_el1_irq
+0000000000402b50 T handle_el1_fiq
+0000000000402b90 T handle_el1_serror
+0000000000402bd0 T handle_el1_sync_sp0
+0000000000402c10 T handle_el1_irq_sp0
+0000000000402c50 T handle_el1_fiq_sp0
+0000000000402c90 T handle_el1_serror_sp0
+0000000000402cd0 T handle_el0_sync
+0000000000402d38 T handle_el0_irq
+0000000000402d78 T handle_el0_fiq
+0000000000402db8 T handle_el0_serror
+0000000000402df8 T handle_el0_32_sync
+0000000000402e38 T handle_el0_32_irq
+0000000000402e78 T handle_el0_32_fiq
+0000000000402eb8 T handle_el0_32_serror
+0000000000402ef8 t <cohesix_root::CohLogger as core::fmt::Write>::write_str
+0000000000402f34 t cohesix_root::put_hex
+00000000004030fc T boot_log_hex
+0000000000403100 t cohesix_root::check_heap_ptr
+0000000000403584 t cohesix_root::abort
+00000000004035bc t cohesix_root::env_var
+0000000000403854 t cohesix_root::exec_init
+0000000000403b30 T main
+0000000000406f10 t cohesix_root::lang_items::alloc_error
+0000000000407078 t alloc::raw_vec::RawVec<T,A>::grow_one
+00000000004070fc t alloc::raw_vec::finish_grow
+000000000040717c t alloc::raw_vec::handle_error
+0000000000407188 t core::fmt::num::imp::<impl core::fmt::Display for usize>::fmt
+00000000004072b8 t core::panicking::panic_fmt
+00000000004072bc t core::fmt::Formatter::pad_integral
+0000000000407538 t core::fmt::Formatter::pad_integral::write_prefix
+00000000004075bc t core::slice::index::slice_end_index_len_fail
+00000000004075c0 t core::fmt::Formatter::pad
+0000000000407bf4 t core::panicking::panic
+0000000000407bf8 t core::fmt::write
+0000000000407e24 t core::slice::index::slice_index_order_fail
+0000000000407e28 t core::option::unwrap_failed
+0000000000407e2c t core::fmt::num::<impl core::fmt::LowerHex for u16>::fmt
+0000000000407eac t core::str::converts::from_utf8
+000000000040811c t core::fmt::num::imp::<impl core::fmt::Display for u8>::fmt
+00000000004081b0 t core::fmt::num::imp::<impl core::fmt::Display for u16>::fmt
+00000000004082a0 t core::str::slice_error_fail
+00000000004082a4 t core::str::slice_error_fail_rt
+0000000000408420 t core::fmt::num::<impl core::fmt::LowerHex for usize>::fmt
+00000000004084a0 t core::slice::memchr::memchr_aligned
+0000000000408580 T seL4_InitBootInfo
+0000000000408590 T seL4_GetBootInfo
+000000000040859c T __text_end
+000000000040a000 r rodata_check_str
+000000000040abd8 r cohesix_root::ROOTSERVER_ONLINE
+000000000040b213 r core::unicode::unicode_data::white_space::WHITESPACE_MAP
+000000000040b4dd R __rodata_end
+000000000040c000 R __image_end
+000000000040d000 d cohesix_root::sys::FILES
+000000000040d060 D __data_end
+000000000040f000 b cohesix_root::allocator::OFFSET
+000000000040f000 B __bss_start
+000000000040f008 B VALIDATOR_HANDLE
+000000000040f010 B SRV_HANDLE
+000000000040f018 B CUDA_HANDLE
+0000000000410000 b cohesix_root::mmu::L1_TABLE
+0000000000411000 b cohesix_root::mmu::L2_TABLE
+0000000000412000 B bootinfo
+0000000000412008 B __bss_end
+0000000000414000 B __heap_start
+0000000000494000 B __heap_end
+0000000000495000 B __stack_start
+00000000004a5000 B __stack_end
+00000000004a6000 B __uart_start
+00000000004a7000 b cohesix_root::sys::UART_FRAME
+00000000004a7000 B __uart_end
