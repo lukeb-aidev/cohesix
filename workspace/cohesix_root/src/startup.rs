@@ -5,11 +5,8 @@
 
 use core::arch::global_asm;
 
-// Minimal exception vector table placed in its own section so the kernel can
-// map it at a fixed address defined by `link.ld`.
-#[link_section = ".vectors"]
-#[no_mangle]
-pub static VECTORS: [u32; 64] = [0; 64];
+// Exception vector base is provided by `vec.S` and linked into `.vectors`.
+// The kernel maps this region at the address configured in `link.ld`.
 
 global_asm!(
     r#"
@@ -27,11 +24,13 @@ pub extern "C" fn rust_start() -> ! {
         fn main();
     }
     unsafe {
-        // Set up the exception vector base for SVC handling.
+        // Set up the exception vector base for SVC handling. The address is
+        // defined by `vectors_start` in `vec.S`.
+        use core::ptr::addr_of;
         extern "C" {
-            static VECTORS: [u32; 64];
+            static vectors_start: u8;
         }
-        let vectors_ptr = &VECTORS as *const _ as usize;
+        let vectors_ptr = addr_of!(vectors_start) as usize;
         core::arch::asm!(
             "msr VBAR_EL1, {0}",
             "isb", // ensure the new vector base is used before continuing
