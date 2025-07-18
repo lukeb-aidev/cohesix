@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: build.rs v0.6
+// Filename: build.rs v0.7
 // Author: Lukas Bower
-// Date Modified: 2028-01-11
+// Date Modified: 2028-01-12
 
 use std::{env, fs, path::{Path, PathBuf}};
 
@@ -29,13 +29,18 @@ fn main() {
         .write_to_file(out_path.join("bindings.rs"))
         .expect("Couldn't write bindings!");
 
-    // Determine workspace root
-    let workspace_dir = env::var("CARGO_WORKSPACE_DIR")
-        .or_else(|_| env::var("CARGO_MANIFEST_DIR"))
-        .expect("CARGO_WORKSPACE_DIR or CARGO_MANIFEST_DIR must be set");
+    // Determine this crate's manifest dir (workspace/sel4-sys)
+    let manifest_dir = env::var("CARGO_MANIFEST_DIR")
+        .expect("CARGO_MANIFEST_DIR must be set");
+
+    // Project root is two levels up: project_root/third_party/seL4/lib
+    let project_root = Path::new(&manifest_dir)
+        .parent()
+        .and_then(|p| p.parent())
+        .expect("Unexpected manifest directory structure");
 
     // Compose the seL4 lib directory path
-    let sel4_lib_dir = Path::new(&workspace_dir).join("third_party/seL4/lib");
+    let sel4_lib_dir = project_root.join("third_party/seL4/lib");
     if !sel4_lib_dir.is_dir() {
         panic!(
             "seL4 lib directory not found at {}. \n\
