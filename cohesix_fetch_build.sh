@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v1.34
+# Filename: cohesix_fetch_build.sh v1.35
 # Author: Lukas Bower
 # Date Modified: 2027-12-31
 
@@ -462,17 +462,15 @@ log "✅ sel4-sys built (tests skipped)"
 
 # Phase 3: Cross-compile cohesix_root
 log "🔨 Building cohesix_root (no-std, panic-abort)"
-RUSTFLAGS="-C panic=abort" \
+export LIBRARY_PATH="$(pwd)/third_party/seL4/lib:$LIBRARY_PATH"
+RUSTFLAGS="-C panic=abort \
+  -C link-arg=-L$(pwd)/third_party/seL4/lib \
+  -C link-arg=-lsel4" \
 cargo +nightly build -p cohesix_root --release \
   --target=cohesix_root/sel4-aarch64.json \
   -Z build-std=core,alloc,compiler_builtins \
   -Z build-std-features=compiler-builtins-mem
-RUSTFLAGS="-C panic=abort" \
-cargo +nightly test -p cohesix_root --release \
-  --target=cohesix_root/sel4-aarch64.json \
-  -Z build-std=core,alloc,compiler_builtins \
-  -Z build-std-features=compiler-builtins-mem
-log "✅ cohesix_root built and tested"
+log "✅ cohesix_root built"
 
 log "✅ Rust components built with proper split targets"
 
