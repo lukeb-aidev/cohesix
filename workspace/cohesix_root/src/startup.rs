@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: startup.rs v0.1
+// Filename: startup.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2028-01-20
+// Date Modified: 2028-01-21
 
 use core::arch::global_asm;
 

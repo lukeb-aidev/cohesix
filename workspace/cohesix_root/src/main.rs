@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: main.rs v0.44
+// Filename: main.rs v0.45
 // Author: Lukas Bower
-// Date Modified: 2027-12-31
+// Date Modified: 2028-01-21
 #![no_std]
 #![no_main]
 #![feature(alloc_error_handler, asm_experimental_arch, lang_items)]
@@ -15,6 +15,7 @@ mod bootinfo;
 mod dt;
 mod startup;
 mod exception;
+mod mmu;
 
 use core::arch::global_asm;
 global_asm!(include_str!("entry.S"));
@@ -485,6 +486,9 @@ pub extern "C" fn main() {
     coherr!("boot_ok: bss, heap, globals validated");
     crate::allocator::allocator_init_log();
     unsafe { bootinfo::dump_bootinfo(); }
+    unsafe {
+        mmu::init(0x400000, image_end(), dt::UART_BASE, dt::UART_BASE + 0x1000);
+    }
     coherr!("main_start bss_start={:#x} bss_end={:#x} heap_start={:#x} heap_ptr={:#x} heap_end={:#x} img_end={:#x}",
         unsafe { addr_of!(__bss_start) as usize },
         unsafe { addr_of!(__bss_end) as usize },

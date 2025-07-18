@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: allocator.rs v0.7
+// Filename: allocator.rs v0.8
 // Author: Lukas Bower
-// Date Modified: 2027-11-20
+// Date Modified: 2028-01-21
 
 use core::alloc::{GlobalAlloc, Layout};
 use crate::check_heap_ptr;
@@ -62,16 +62,19 @@ pub fn offset_addr() -> usize {
 
 /// Return the current heap pointer (heap_start + OFFSET)
 pub fn current_heap_ptr() -> usize {
-    unsafe { (&__heap_start as *const u8 as usize).wrapping_add(OFFSET) }
+    unsafe {
+        let start = core::ptr::addr_of!(__heap_start) as usize;
+        start.wrapping_add(OFFSET)
+    }
 }
 
 /// Log allocator state during initialization
 pub fn allocator_init_log() {
     coherr!(
         "allocator_init heap_start={:#x} heap_ptr={:#x} heap_end={:#x} img_end={:#x}",
-        unsafe { &__heap_start as *const u8 as usize },
+        unsafe { core::ptr::addr_of!(__heap_start) as usize },
         current_heap_ptr(),
-        unsafe { &__heap_end as *const u8 as usize },
+        unsafe { core::ptr::addr_of!(__heap_end) as usize },
         crate::image_end()
     );
 }
@@ -79,8 +82,8 @@ pub fn allocator_init_log() {
 unsafe impl GlobalAlloc for BumpAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let align_mask = layout.align() - 1;
-        let heap_start = &__heap_start as *const u8 as usize;
-        let heap_end = &__heap_end as *const u8 as usize;
+        let heap_start = core::ptr::addr_of!(__heap_start) as usize;
+        let heap_end = core::ptr::addr_of!(__heap_end) as usize;
         log_regs();
         putstr("alloc offset");
         put_hex(OFFSET);
