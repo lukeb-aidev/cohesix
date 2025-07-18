@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v1.17
+// Filename: CHANGELOG.md v1.18
 // Author: Lukas Bower
 // Date Modified: 2027-12-31
 
@@ -3436,3 +3436,7 @@
 ## [v0.558] - 2027-12-31
 ### Added
 - **WebCodexAddSel4SysCrate-045**: Introduced `sel4-sys` crate with bindgen-based seL4 bindings, updated workspace membership, hooked into `cohesix_root`, and documented the new build verification steps.
+
+## [v0.559] - 2027-12-31
+### Fixed
+- **WebCodexCleanSel4JsonAndBuildScript-047**: Removed `rustflags` from `sel4-aarch64.json`, set panic strategy via workspace profiles, updated `cohesix_fetch_build.sh` to build all crates with `RUSTFLAGS="-C panic=abort"`, and documented the change in `boot_workflow_rust.md`.

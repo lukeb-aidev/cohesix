@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v1.31
+# Filename: cohesix_fetch_build.sh v1.32
 # Author: Lukas Bower
 # Date Modified: 2027-12-31
 
@@ -439,14 +439,16 @@ log "🔧 Building Rust workspace binaries..."
 cd "$ROOT/workspace"
 cargo clean
 
-# Build all workspace crates except cohesix_root with standard musl userland target
+# Build all workspace crates (excluding cohesix_root) for the seL4 target
+RUSTFLAGS="-C panic=abort" \
 cargo +nightly build --release --workspace \
   --exclude cohesix_root \
-  --target aarch64-unknown-linux-musl \
-  -Z build-std=core,alloc,compiler_builtins,panic_abort \
+  --target=cohesix_root/sel4-aarch64.json \
+  -Z build-std=core,alloc,compiler_builtins \
   -Z build-std-features=compiler-builtins-mem
 
-# Build bare metal cohesix_root with explicit build-std for core+alloc only
+# Build the bare-metal cohesix_root crate
+RUSTFLAGS="-C panic=abort" \
 cargo +nightly build -p cohesix_root --release \
   --target=cohesix_root/sel4-aarch64.json \
   -Z build-std=core,alloc,compiler_builtins \
@@ -454,7 +456,7 @@ cargo +nightly build -p cohesix_root --release \
 
 log "✅ Rust components built with proper split targets"
 
-TARGET_DIR="$ROOT/workspace/target/aarch64-unknown-linux-musl/release"
+TARGET_DIR="$ROOT/workspace/target/sel4-aarch64/release"
 # Stage all main binaries
 for bin in cohcc cohbuild cli_cap cohtrace cohrun_cli cohagent cohrole cohrun cohup srvctl indexserver devwatcher physics-server exportfs import mount srv scenario_compiler cloud cohesix cohfuzz; do
   BIN_PATH="$TARGET_DIR/$bin"
