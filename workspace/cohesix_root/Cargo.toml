@@ -1,5 +1,5 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Cargo.toml v0.8
+# Filename: Cargo.toml v0.9
 # Author: Lukas Bower
 # Date Modified: 2027-12-31
 
@@ -19,21 +19,6 @@ sel4-sys = { workspace = true }
 [features]
 default = []
 alloc_only = []
-
-[profile.release]
-panic = "abort"
-strip = false
-lto = true
-codegen-units = 1
-opt-level = 1
-debug = true
-
-[profile.dev]
-panic = "abort"
-strip = "symbols"
-opt-level = 0
-debug = false
-debug-assertions = false
 
 [build-dependencies]
 cc = "1"
