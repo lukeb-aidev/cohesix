@@ -21,7 +21,8 @@
       "-z",
       "norelro",
       "-no-pie",
-      "-Lthird_party/seL4/lib",
+      "-L",
+      "third_party/seL4/lib",
       "-lsel4"
     ]
   }
