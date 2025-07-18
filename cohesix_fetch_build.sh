@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v1.33
+# Filename: cohesix_fetch_build.sh v1.34
 # Author: Lukas Bower
 # Date Modified: 2027-12-31
 
@@ -40,6 +40,8 @@ export CUDA_INCLUDE_DIR="${CUDA_INCLUDE_DIR:-$CUDA_HOME/include}"
 export CUDA_LIBRARY_PATH="${CUDA_LIBRARY_PATH:-/usr/lib/x86_64-linux-gnu}"
 export PATH="$CUDA_HOME/bin:$PATH"
 export LD_LIBRARY_PATH="$CUDA_LIBRARY_PATH:${LD_LIBRARY_PATH:-}"
+export LIBRARY_PATH="$(pwd)/third_party/seL4/lib:${LIBRARY_PATH:-}"
+export LD_LIBRARY_PATH="$(pwd)/third_party/seL4/lib:$CUDA_LIBRARY_PATH:${LD_LIBRARY_PATH:-}"
 WORKSPACE="${WORKSPACE:-$ROOT/third_party/seL4}"
 
 cd "$ROOT"
