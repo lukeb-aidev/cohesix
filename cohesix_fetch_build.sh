@@ -474,7 +474,7 @@ log "✅ cohesix_root built"
 
 log "✅ Rust components built with proper split targets"
 
-TARGET_DIR="$ROOT/workspace/target/sel4-aarch64/release"
+TARGET_DIR="$ROOT/workspace/target/release"
 # Stage all main binaries
 for bin in cohcc cohbuild cli_cap cohtrace cohrun_cli cohagent cohrole cohrun cohup srvctl indexserver devwatcher physics-server exportfs import mount srv scenario_compiler cloud cohesix cohfuzz; do
   BIN_PATH="$TARGET_DIR/$bin"
