@@ -23,7 +23,7 @@
       "norelro",
       "-no-pie",
       "-L",
-      "../third_party/seL4/lib",
+      "../../third_party/seL4/lib",
       "-lsel4"
     ]
   }
