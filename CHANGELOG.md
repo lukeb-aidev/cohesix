@@ -3440,3 +3440,7 @@
 ## [v0.559] - 2027-12-31
 ### Fixed
 - **WebCodexCleanSel4JsonAndBuildScript-047**: Removed `rustflags` from `sel4-aarch64.json`, set panic strategy via workspace profiles, updated `cohesix_fetch_build.sh` to build all crates with `RUSTFLAGS="-C panic=abort"`, and documented the change in `boot_workflow_rust.md`.
+
+## [v0.560] - 2028-01-10
+### Fixed
+- **FixSel4SysBuildScriptLibPath-056**: `sel4-sys` build script now resolves the absolute `third_party/seL4/lib` directory so `libsel4.a` links correctly in Phase 2.
