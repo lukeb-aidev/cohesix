@@ -3,11 +3,6 @@
 # Author: Lukas Bower
 # Date Modified: 2027-12-31
 
-
-
-[source.crates-io]
-replace-with = "vendored-sources"
-
 [source.vendored-sources]
 directory = "vendor"
 
