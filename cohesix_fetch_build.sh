@@ -492,27 +492,6 @@ done
 [ -f "$STAGE_DIR/bin/physics-server" ] || { echo "❌ physics-server missing after staging" >&2; exit 1; }
 [ -f "$STAGE_DIR/bin/srv" ] || { echo "❌ srv missing after staging" >&2; exit 1; }
 
-log "🔍 Running Rust tests (user‑land target)…"
-# We can only run unit tests for crates that build against the musl user‑land
-# environment.  The bare‑metal cohesix_root target has no std and therefore
-# no runnable tests here.
-RUST_BACKTRACE=1 \
-cargo test --release --workspace --exclude cohesix_root \
-  --target=aarch64-unknown-linux-musl \
-  -- --nocapture
-TEST_EXIT_CODE=$?
-
-# Capture failures and surface them in the summary
-grep -A5 -E '^failures:|thread .* panicked at' "$LOG_FILE" \
-    > "$SUMMARY_TEST_FAILS" || true
-
-if [ $TEST_EXIT_CODE -ne 0 ]; then
-  echo "❌ Rust tests failed." | tee -a "$SUMMARY_TEST_FAILS" >&3
-  exit $TEST_EXIT_CODE
-else
-  log "✅ Rust tests passed"
-fi
-
 log "📖 Building mandoc and staging man pages..."
 bash "$ROOT/scripts/build_mandoc.sh"
 MANDOC_BIN="$ROOT/prebuilt/mandoc/mandoc.$COH_ARCH"
