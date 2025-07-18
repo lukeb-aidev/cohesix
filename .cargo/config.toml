@@ -9,7 +9,7 @@
 replace-with = "vendored-sources"
 
 [source.vendored-sources]
-directory = "workspace/vendor"
+directory = "vendor"
 
 [target.aarch64-unknown-linux-musl]
 linker = "aarch64-linux-musl-gcc"
