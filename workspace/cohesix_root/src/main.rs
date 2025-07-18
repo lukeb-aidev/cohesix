@@ -14,16 +14,18 @@ mod sys;
 mod bootinfo;
 mod dt;
 mod startup;
+mod exception;
 
 use core::arch::global_asm;
 global_asm!(include_str!("entry.S"));
+global_asm!(include_str!("vec.S"));
 
 use core::fmt::{self, Write};
 use core::sync::atomic::{compiler_fence, Ordering};
 
 use alloc::vec::Vec;
 use core::ffi::{c_char, CStr};
-use core::ptr;
+use core::ptr::{self, addr_of};
 
 extern "C" {
     static __heap_start: u8;
@@ -160,22 +162,22 @@ fn log_global_ptrs() {
 fn log_mem_map() {
     coherr!(
         "mem_map bss_start={:#x} bss_end={:#x} heap_start={:#x} heap_end={:#x} stack_start={:#x} stack_end={:#x}",
-        unsafe { &__bss_start as *const u8 as usize },
-        unsafe { &__bss_end as *const u8 as usize },
-        unsafe { &__heap_start as *const u8 as usize },
-        unsafe { &__heap_end as *const u8 as usize },
-        unsafe { &__stack_start as *const u8 as usize },
-        unsafe { &__stack_end as *const u8 as usize },
+        unsafe { addr_of!(__bss_start) as usize },
+        unsafe { addr_of!(__bss_end) as usize },
+        unsafe { addr_of!(__heap_start) as usize },
+        unsafe { addr_of!(__heap_end) as usize },
+        unsafe { addr_of!(__stack_start) as usize },
+        unsafe { addr_of!(__stack_end) as usize },
     );
 }
 
 fn image_end() -> usize {
-    unsafe { &__stack_end as *const u8 as usize }
+    unsafe { addr_of!(__stack_end) as usize }
 }
 
 fn check_bss_zero() {
-    let start = unsafe { &__bss_start as *const u8 };
-    let end = unsafe { &__bss_end as *const u8 };
+    let start = unsafe { addr_of!(__bss_start) as *const u8 };
+    let end = unsafe { addr_of!(__bss_end) as *const u8 };
     let mut ptr = start;
     let mut first_nonzero: usize = 0;
     let mut count = 0usize;
@@ -200,8 +202,8 @@ fn check_bss_zero() {
 }
 
 fn check_heap_bounds() {
-    let start = unsafe { &__heap_start as *const u8 as usize };
-    let end = unsafe { &__heap_end as *const u8 as usize };
+    let start = unsafe { addr_of!(__heap_start) as usize };
+    let end = unsafe { addr_of!(__heap_end) as usize };
     if start >= end {
         coherr!("heap_invalid start={:#x} end={:#x}", start, end);
         panic!("heap bounds invalid");
@@ -248,8 +250,8 @@ pub fn check_heap_ptr(ptr: usize) {
     log_regs();
     putstr("check_heap_ptr");
     put_hex(ptr);
-    let start = unsafe { &__heap_start as *const u8 as usize };
-    let end = unsafe { &__heap_end as *const u8 as usize };
+    let start = unsafe { addr_of!(__heap_start) as usize };
+    let end = unsafe { addr_of!(__heap_end) as usize };
     let img_end = image_end();
     if ptr < start || ptr >= end || ptr >= img_end || ptr < 0x400000 {
         putstr("HEAP POINTER OUT OF RANGE");
@@ -260,7 +262,7 @@ pub fn check_heap_ptr(ptr: usize) {
 
 pub fn check_rodata_ptr(ptr: usize) {
     let text_start: usize = 0x400000;
-    let ro_end = unsafe { &__bss_start as *const u8 as usize };
+    let ro_end = unsafe { addr_of!(__bss_start) as usize };
     if ptr < text_start || ptr >= ro_end {
         putstr("RODATA POINTER OUT OF RANGE");
         put_hex(ptr);
@@ -474,8 +476,8 @@ pub extern "C" fn main() {
     log_mem_map();
     coherr!(
         "heap_state start={:#x} end={:#x} offset_ptr={:#x}",
-        unsafe { &__heap_start as *const u8 as usize },
-        unsafe { &__heap_end as *const u8 as usize },
+        unsafe { addr_of!(__heap_start) as usize },
+        unsafe { addr_of!(__heap_end) as usize },
         crate::allocator::offset_addr(),
     );
     check_heap_bounds();
@@ -484,11 +486,11 @@ pub extern "C" fn main() {
     crate::allocator::allocator_init_log();
     unsafe { bootinfo::dump_bootinfo(); }
     coherr!("main_start bss_start={:#x} bss_end={:#x} heap_start={:#x} heap_ptr={:#x} heap_end={:#x} img_end={:#x}",
-        unsafe { &__bss_start as *const u8 as usize },
-        unsafe { &__bss_end as *const u8 as usize },
-        unsafe { &__heap_start as *const u8 as usize },
+        unsafe { addr_of!(__bss_start) as usize },
+        unsafe { addr_of!(__bss_end) as usize },
+        unsafe { addr_of!(__heap_start) as usize },
         crate::allocator::current_heap_ptr(),
-        unsafe { &__heap_end as *const u8 as usize },
+        unsafe { addr_of!(__heap_end) as usize },
         image_end());
     putstr("COHESIX_BOOT_OK");
     let mut sp: usize;
@@ -506,8 +508,8 @@ pub extern "C" fn main() {
     let ph = ptr_hash();
     putstr("ptr_hash");
     put_hex(ph);
-    let bss_start = unsafe { &__bss_start as *const u8 as usize };
-    let bss_end = unsafe { &__bss_end as *const u8 as usize };
+    let bss_start = unsafe { addr_of!(__bss_start) as usize };
+    let bss_end = unsafe { addr_of!(__bss_end) as usize };
     assert!(bss_start < bss_end, "bss range invalid");
     putstr("bss_start");
     put_hex(bss_start);
@@ -522,13 +524,13 @@ pub extern "C" fn main() {
     let local = 0u8;
     putstr("local");
     put_hex(&local as *const _ as usize);
-    let heap_start = unsafe { &__heap_start as *const u8 as usize };
-    let heap_end = unsafe { &__heap_end as *const u8 as usize };
+    let heap_start = unsafe { addr_of!(__heap_start) as usize };
+    let heap_end = unsafe { addr_of!(__heap_end) as usize };
     log_heap_bounds(heap_start, heap_end);
     let heap_ptr = crate::allocator::current_heap_ptr();
     assert!(heap_ptr < image_end(), "heap ptr beyond image end");
-    let stack_start = unsafe { &__stack_start as *const u8 as usize };
-    let stack_end = unsafe { &__stack_end as *const u8 as usize };
+    let stack_start = unsafe { addr_of!(__stack_start) as usize };
+    let stack_end = unsafe { addr_of!(__stack_end) as usize };
     log_stack_bounds(stack_start, stack_end);
     if sp < stack_start || sp > stack_end {
         putstr("STACK CORRUPTION");
