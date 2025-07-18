@@ -5,6 +5,7 @@
   "os": "none",
   "vendor": "unknown",
   "linker-flavor": "ld.lld",
+  "linker": "ld.lld",
   "target-endian": "little",
   "target-pointer-width": "64",
   "executables": true,
@@ -22,7 +23,7 @@
       "norelro",
       "-no-pie",
       "-L",
-      "third_party/seL4/lib",
+      "../third_party/seL4/lib",
       "-lsel4"
     ]
   }

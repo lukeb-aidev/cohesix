@@ -1,5 +1,5 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: .cargo/config.toml v0.20
+# Filename: .cargo/config.toml v0.21
 # Author: Lukas Bower
 # Date Modified: 2027-12-31
 
@@ -26,7 +26,6 @@ rustflags = [
     "-C", "link-arg=-no-pie",
     "-C", "link-arg=-z",
     "-C", "link-arg=norelro",
-    "-C", "link-arg=-L../third_party/seL4/lib",
 ]
 
 [target.sel4-aarch64.unstable]
