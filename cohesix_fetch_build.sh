@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v1.32
+# Filename: cohesix_fetch_build.sh v1.33
 # Author: Lukas Bower
 # Date Modified: 2027-12-31
 
@@ -439,20 +439,43 @@ log "🔧 Building Rust workspace binaries..."
 cd "$ROOT/workspace"
 cargo clean
 
-# Build all workspace crates (excluding cohesix_root) for the seL4 target
-RUSTFLAGS="-C panic=abort" \
+# Phase 1: Build all host crates except sel4-sys and cohesix_root
+log "🔨 Building host crates"
 cargo +nightly build --release --workspace \
-  --exclude cohesix_root \
-  --target=cohesix_root/sel4-aarch64.json \
-  -Z build-std=core,alloc,compiler_builtins \
-  -Z build-std-features=compiler-builtins-mem
+  --exclude sel4-sys \
+  --exclude cohesix_root
+cargo +nightly test --release --workspace \
+  --exclude sel4-sys \
+  --exclude cohesix_root
+log "✅ Host crates built and tested"
 
-# Build the bare-metal cohesix_root crate
+# Phase 2: Cross-compile sel4-sys (no-std, panic-abort)
+log "🔨 Building sel4-sys (no-std, panic-abort)"
+RUSTFLAGS="-C panic=abort" \
+cargo +nightly build -p sel4-sys --release \
+  --target=cohesix_root/sel4-aarch64.json \
+  -Z build-std=core,alloc,compiler_builtins,panic_abort \
+  -Z build-std-features=compiler-builtins-mem
+RUSTFLAGS="-C panic=abort" \
+cargo +nightly test -p sel4-sys --release \
+  --target=cohesix_root/sel4-aarch64.json \
+  -Z build-std=core,alloc,compiler_builtins,panic_abort \
+  -Z build-std-features=compiler-builtins-mem
+log "✅ sel4-sys built and tested"
+
+# Phase 3: Cross-compile cohesix_root
+log "🔨 Building cohesix_root (no-std, panic-abort)"
 RUSTFLAGS="-C panic=abort" \
 cargo +nightly build -p cohesix_root --release \
   --target=cohesix_root/sel4-aarch64.json \
   -Z build-std=core,alloc,compiler_builtins \
   -Z build-std-features=compiler-builtins-mem
+RUSTFLAGS="-C panic=abort" \
+cargo +nightly test -p cohesix_root --release \
+  --target=cohesix_root/sel4-aarch64.json \
+  -Z build-std=core,alloc,compiler_builtins \
+  -Z build-std-features=compiler-builtins-mem
+log "✅ cohesix_root built and tested"
 
 log "✅ Rust components built with proper split targets"
 
