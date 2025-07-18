@@ -1,9 +1,11 @@
 /* CLASSIFICATION: COMMUNITY */
-/* Filename: link.ld v0.21 */
+/* Filename: link.ld v0.22 */
 /* Author: Lukas Bower */
 /* Date Modified: 2027-12-31 */
 /* SPDX-License-Identifier: BSD-2-Clause */
 
+SEARCH_DIR("../third_party/seL4/lib");
+INPUT(libsel4.a);
 ENTRY(_start)
 
 /*

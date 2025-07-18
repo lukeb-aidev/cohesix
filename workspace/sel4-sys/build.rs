@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: build.rs v0.3
+// Filename: build.rs v0.4
 // Author: Lukas Bower
 // Date Modified: 2027-12-31
 
@@ -29,4 +29,10 @@ fn main() {
     bindings
         .write_to_file(out_path.join("bindings.rs"))
         .expect("Couldn't write bindings!");
+
+    println!(
+        "cargo:rustc-link-search=native={}/third_party/seL4/lib",
+        env!("CARGO_WORKSPACE_DIR")
+    );
+    println!("cargo:rustc-link-lib=static=sel4");
 }
