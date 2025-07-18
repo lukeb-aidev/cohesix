@@ -95,7 +95,7 @@ else
 fi
 
 echo "👉 Copying latest filesystem tree..."
-tree > "$DIAG_DIR/"tree.txt" 2>/dev/null || true
+tree > "$DIAG_DIR/tree.txt" 2>/dev/null || true
 
 echo "✅ Diagnostics saved."
 
