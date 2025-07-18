@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: build.rs v0.4
+// Filename: build.rs v0.5
 // Author: Lukas Bower
-// Date Modified: 2027-12-31
+// Date Modified: 2028-01-10
 
 use std::{env, fs, path::PathBuf};
 
@@ -30,20 +30,28 @@ fn main() {
         .write_to_file(out_path.join("bindings.rs"))
         .expect("Couldn't write bindings!");
 
-    let workspace_dir = std::env::var("CARGO_WORKSPACE_DIR")
-        .or_else(|_| {
-            std::env::var("CARGO_MANIFEST_DIR").map(|m| {
-                std::path::Path::new(&m)
+    let workspace_root = env::current_dir()
+        .ok()
+        .and_then(|d| d.parent().map(|p| p.to_path_buf()))
+        .or_else(|| {
+            env::var("CARGO_MANIFEST_DIR").ok().and_then(|m| {
+                PathBuf::from(m)
                     .parent()
-                    .expect("CARGO_MANIFEST_DIR has no parent")
-                    .to_string_lossy()
-                    .into_owned()
+                    .map(|p| p.to_path_buf())
             })
         })
-        .expect("CARGO_WORKSPACE_DIR or CARGO_MANIFEST_DIR must be set");
+        .expect("workspace root discovery failed");
+
+    let sel4_lib_dir = workspace_root
+        .join("third_party")
+        .join("seL4")
+        .join("lib")
+        .canonicalize()
+        .expect("canonicalize seL4 lib directory");
+
     println!(
-        "cargo:rustc-link-search=native={}/third_party/seL4/lib",
-        workspace_dir
+        "cargo:rustc-link-search=native={}",
+        sel4_lib_dir.display()
     );
     println!("cargo:rustc-link-lib=static=sel4");
 }
