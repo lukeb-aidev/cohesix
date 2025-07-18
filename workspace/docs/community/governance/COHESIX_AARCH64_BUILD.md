@@ -3,46 +3,15 @@
 // Author: Lukas Bower
 // Date Modified: 2027-12-28
 
+_Step 1: Environment setup assumed complete (details managed elsewhere)._
+
 Cohesix Githib Repository Notes
 - seL4 source files sould be stored in "third_party/seL4"
 - Web Codex cannot push binary files, so complete and tested build scripts must be provided in the "third_party/seL4" directory.
 
 Specific Steps to Building a Custom Rust Root Server on seL4 (AArch64 on QEMU)
 
-Step 1: Set Up the seL4 Build Environment and Project
-	1.	Obtain seL4 source and tool repositories: Use the official manifest (or clone the necessary repos) to get the seL4 kernel, libraries, and build system. For example, using repo you might fetch the kernel, seL4_tools (for CMake scripts), and any needed libraries (like seL4 runtime and utils). Ensure your directory structure places the kernel in a known location (e.g. kernel/ or specify with -DKERNEL_PATH) and has a CMakeLists.txt in the top-level that includes the buildsystem ￼ ￼. A typical layout is:
-
-myproject/
-  kernel/               # seL4 kernel source
-  projects/
-    myproject/          # your root server project
-      CMakeLists.txt
-      src/ ...
-  tools/cmake-tool/     # seL4 build system (from seL4_tools)
-  CMakeLists.txt -> tools/cmake-tool/default-CMakeLists.txt  (symlink)
-
-This matches the structure the build system expects ￼ ￼.
-
-	2.	Initialize the build with CMake: Create a build directory and run ../init-build.sh with appropriate options. For QEMU’s ARM Virt platform on AArch64, for example:
-
-mkdir build && cd build  
-../init-build.sh -DPLATFORM=qemu_arm_virt -DAARCH64=TRUE -DCROSS_COMPILER_PREFIX=aarch64-linux-gnu-
-
-This script sets up the CMake cache for the given platform. Use -DMCS=ON if you want the kernel in mixed-criticality (MCS) mode (ensure your user code is built for the same) ￼. Do not include sel4test in this configuration – using the sel4test manifest as-is can cause your settings to be overridden by its defaults ￼. In particular, avoid using the sel4test project’s easy-settings.cmake unless you know how to override it. The sel4test build will default the root server to its test harness unless explicitly changed, so start with a clean project configuration to prevent the system from “falling back” to running sel4test.
-
-	3.	Create your root server application folder: In the projects/myproject directory, set up your Rust application. Write a CMakeLists.txt for it that will build your Rust code and mark it as the initial task. For example, you can use the CMake helper to declare an executable and designate it as the root task:
-
-add_executable(myrootserver EXCLUDE_FROM_ALL)  # no C files, will add Rust objects later
-# (You can leave source empty here if using Cargo to build, or use a dummy c file if needed)
-target_link_libraries(myrootserver sel4runtime sel4)   # link against seL4 user libraries
-include(rootserver)
-DeclareRootserver(myrootserver)  # mark this target as the system's root task [oai_citation:6‡docs.sel4.systems](https://docs.sel4.systems/Tutorials/hello-world.html#:~:text=,world)
-
-This uses the build system’s DeclareRootserver() macro to register myrootserver as the process that the kernel should start first ￼. The sel4runtime and sel4 libraries are linked to provide the startup routine and seL4 API symbols, respectively ￼. (We will integrate the Rust build artifacts into this target in the next steps.)
-
-	4.	Configure initial build options (if needed): The seL4 build will generate default settings. If using ccmake or camkes tools, ensure that variables like RootTaskImage or KernelElfName are correctly set – normally the build system handles this when you use DeclareRootserver. You should avoid manually setting legacy variables like ROOT_SERVER or editing easy-settings.cmake in upstream projects – instead, use the CMake API as above to specify your root server. This ensures the build knows to include your ELF in the final image and doesn’t accidentally include a default (like sel4test). In summary, after Step 1 your build system is prepared to compile the kernel and an empty placeholder for your root server.
-
-Step 2: Create the Rust Root Server Application
+Step 1: Create the Rust Root Server Application
 	1.	Set up a Rust crate for no-std: Your root task will run without an OS, so configure your Rust crate accordingly. In Cargo.toml, disable the standard library and choose an appropriate crate type. For example:
 
 [package]
@@ -108,7 +77,7 @@ target = "aarch64-unknown-none.json"  # custom target with "os": "none" and appr
 
 The Colias seL4 Rust training provides an example target spec and config that you can adapt ￼. Ensure the target architecture and pointer width match your seL4 kernel (64-bit ARM). Compile the Rust crate with cargo build --release --target aarch64-unknown-none (the build system can do this for you in the next step). This should produce either a static library (libmyrootserver.a) or a binary ELF, depending on your crate type. We will integrate that into the final image next.
 
-Step 3: Link the Root Server with seL4 Libraries
+Step 2: Link the Root Server with seL4 Libraries
 	1.	Integrate Rust build into CMake: Rather than building the Rust code entirely standalone, it’s best to invoke it as part of the CMake build to ensure proper ordering and linking. You have a few options:
 	•	Use a CMake external project or custom command to call Cargo. For example, you can add in your CMakeLists.txt:
 
@@ -134,7 +103,7 @@ In the Hello World tutorial, the root task links against sel4runtime, sel4, a C 
 
 At this stage, your build system should produce the myrootserver executable (an ELF) and the kernel.elf. Next, we’ll package them into a bootable image.
 
-Step 4: Package the Kernel, Root Server, and DTB into a Boot Image
+Step 3: Package the Kernel, Root Server, and DTB into a Boot Image
 	1.	Combine binaries into a CPIO archive: seL4 uses a simple archive (CPIO) as the boot image, containing the kernel and userland ELF(s) and optionally a device tree. The build system’s DeclareRootserver automatically creates a target for this archive. After a successful build (ninja in the build directory), you should find an image named something like myrootserver-image-arm-qemu-arm-virt (the exact name may vary). This is typically an ELF file that actually contains the embedded archive and the elfloader. For example, in sel4test, the final image sel4test-driver-image-arm-qemu-arm-virt contains the ELF-loader and an embedded CPIO with files kernel and sel4test-driver ￼. You can list sections of the image or use cpio to inspect it if needed.
 	2.	Understand the boot sequence: On ARM platforms (including QEMU virt), the boot flow is:
 	•	QEMU (or U-Boot/UEFI) loads the elfloader (if using the combined image approach). This elfloader is a small program that runs at a very early stage.
@@ -153,7 +122,7 @@ and then instruct elfloader to use that archive (this is usually abstracted by r
 	4.	Verify the archive content names: By convention, the kernel is stored under the name “kernel” in the CPIO, and the root server ELF is stored under a name matching your target (e.g. “myrootserver”). The elfloader will look for the file named "kernel" and load it at the correct physical address for seL4, and will load the file corresponding to the root task and any other modules. The DeclareRootserver macro ensures these names are set correctly (it uses the target name for the rootserver file). If you were to manually craft or modify the archive, maintain these names. (In the sel4test example, the root server was named “sel4test-driver” in the archive ￼, and elfloader accordingly loaded sel4test-driver as the user program.)
 	5.	Avoid sel4test fallback: If you see sel4test output or behavior when booting, it means the wrong image is running. Double-check that the image you run is the one containing your root server, not a pre-built sel4test image. Also ensure that SEL4_DEFAULT_IMAGE or similar CMake cache isn’t pointing to sel4test. Ideally, start the build directory fresh after removing sel4test references. Setting the root server via CMake as we did will prevent any default fallback. (In older setups, one might accidentally run sel4test-image because it was last built – be mindful when using the simulate script or QEMU to point to the correct file under images/.)
 
-Step 5: Run and Verify on QEMU
+Step 4: Run and Verify on QEMU
 	1.	Run the image using QEMU: The build should have produced a convenience script called simulate in your build directory if you used GenerateSimulateScript. You can run ./simulate to launch QEMU with the correct parameters ￼. Alternatively, run QEMU manually, for example:
 
 qemu-system-aarch64 -machine virt -cpu cortex-a53 -nographic -m 512M \
@@ -183,7 +152,7 @@ This indicates the kernel was loaded and started the user space. After that, any
 
 At this point, you have a running custom root server on seL4! The remaining steps cover proper system setup and future expansion (like memory management and UEFI boot).
 
-Step 6: Implement Root Server Memory Management and Object Allocation
+Step 5: Implement Root Server Memory Management and Object Allocation
 
 Once your root server is running, it’s responsible for setting up the user-level environment. Here are best practices for managing memory and kernel objects in the root task:
 	1.	Understand seL4_BootInfo: The BootInfo structure (accessible via seL4_GetBootInfo()) contains crucial information: it has an array of untyped memory caps (i.e., chunks of physical memory you can allocate from), initial CSpace and VSpace setup, an initial thread TCB cap, and other capabilities (IRQ control, etc.) ￼. Your root server should use this BootInfo to guide memory allocation. For instance, bootinfo->untyped.start and .end tell you the CSpace slots where untyped caps reside, and the untypedSizeList gives the size of each untyped. A typical strategy is to iterate over these untypeds to build a memory allocator.
@@ -220,7 +189,7 @@ This demonstrates the flow: find appropriate untyped, call Retype to an endpoint
 
 In summary, the root server should use the BootInfo to take control of memory and capabilities. Allocate what you need, and establish any fundamental services (threads, communication endpoints) your system will use. By following these practices, you ensure your root task can reliably create and manage objects without running out of resources unexpectedly.
 
-Step 7: Prepare for UEFI Boot and Hardware Deployment
+Step 6: Prepare for UEFI Boot and Hardware Deployment
 
 Eventually, you may want to run your system on real hardware with UEFI firmware (or via a UEFI bootloader like GRUB on x86). Ensuring compatibility involves a few considerations:
 	1.	Use the ELF-loader’s UEFI support (on ARM): The seL4 elfloader we used in QEMU can be built as an EFI application. The elfloader already contains code to interface with UEFI – it has an entry point _gnuefi_start and will relocate itself as needed for UEFI environments ￼ ￼. To take advantage of this, you would build the image in EFI mode. In the CMake build system, this might be as simple as enabling an EFI target for elfloader (for example, some projects provide an EFI configuration option or a separate target like elfloader-image-efi). Check the seL4 documentation or elfloader repo for how to build it as *.efi. When built, you will get a .efi binary that you can directly execute from a UEFI shell or boot manager. The elfloader will handle loading the kernel and rootserver just as it did under QEMU, and it can even take a DTB from the UEFI if provided (it looks for a configuration table entry for DTB) ￼ ￼.
