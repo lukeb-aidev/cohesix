@@ -3444,3 +3444,7 @@
 ## [v0.560] - 2028-01-10
 ### Fixed
 - **FixSel4SysBuildScriptLibPath-056**: `sel4-sys` build script now resolves the absolute `third_party/seL4/lib` directory so `libsel4.a` links correctly in Phase 2.
+
+## [v0.561] - 2028-01-11
+### Fixed
+- **WebCodexFixSel4SysBuildPath-051**: `sel4-sys` build script derives `third_party/seL4/lib` from `CARGO_WORKSPACE_DIR` (falling back to `CARGO_MANIFEST_DIR`) and panics with a clear message if missing.
