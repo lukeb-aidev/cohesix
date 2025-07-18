@@ -12,7 +12,6 @@
   "panic-strategy": "abort",
   "relocation-model": "static",
   "features": "+neon",
-  "rustflags": ["-L${CARGO_MANIFEST_DIR}/../../third_party/seL4/lib"],
   "pre-link-args": {
     "ld.lld": [
       "-Tcohesix_root/link.ld",
