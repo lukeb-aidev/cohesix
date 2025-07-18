@@ -3456,3 +3456,7 @@
 ## [v0.563] - 2028-01-21
 ### Added
 - **WebCodexDeepUserlandBootFix-059**: Verified program headers for commit f22778e2, updated `cohesix_root` build script to use absolute libsel4 paths, and introduced offline PyTest `test_program_headers.py` for CI validation.
+
+## [v0.564] - 2028-01-21
+### Added
+- **WebCodexHolisticBootDeepDiagnostics-060**: Introduced ELF layout validator, vector table and syscall coverage tests, MMU mapping snapshot, and CI checks for absolute link paths and target template consistency.

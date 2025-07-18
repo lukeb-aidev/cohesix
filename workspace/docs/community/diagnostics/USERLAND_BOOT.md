@@ -22,3 +22,20 @@ Using the program headers dump `out/diag_mmu_fault_20250718_212435/cohesix_root_
 The `sel4-sys` build script now emits an absolute `cargo:rustc-link-search` pointing to `third_party/seL4/lib` and `cohesix_root` build.rs uses the same absolute path. The cross build wrapper exports `RUSTFLAGS` and `LIBRARY_PATH` relative to the project root so libsel4.a is always found.
 
 A new PyTest test `tests/test_program_headers.py` verifies these program header addresses offline so CI can assert the image layout without running QEMU.
+
+## Validation Roadmap
+
+The offline CI now runs the following checks:
+
+1. `python tools/check_elf_layout.py target/sel4-aarch64/release/cohesix_root` – verifies LOAD segment mappings.
+2. `pytest -q` – includes `test_program_headers.py` and `test_elf_layout.py`.
+3. `cargo test --workspace --no-run` – builds all unit tests including the new `cohesix_root` tests (`mmu_map`, `vector_table`, `syscall_dispatch`).
+
+To run these manually:
+
+```bash
+pip install -r requirements.txt
+pytest -q
+cargo test --workspace --no-run
+python tools/check_elf_layout.py target/sel4-aarch64/release/cohesix_root
+```
