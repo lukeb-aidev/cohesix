@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: boot_workflow_rust.md v0.7
+// Filename: boot_workflow_rust.md v0.8
 // Author: Lukas Bower
-// Date Modified: 2027-12-31
+// Date Modified: 2028-01-11
 
 # Rust Boot Workflow
 
@@ -59,3 +59,7 @@ seL4 Library: We link in `libsel4.a` from `third_party/seL4/lib` by passing
 `-Lthird_party/seL4/lib -lsel4` to the Rust linker via our JSON target or
 `RUSTFLAGS`.
 Linker Configuration Audit: Updated JSON target, build.rs, .cargo/config.toml, link.ld, and env vars to ensure libsel4.a in third_party/seL4/lib is found.
+
+## sel4-sys integration
+
+Path Resolution: build.rs now derives the `third_party/seL4/lib` directory from `CARGO_WORKSPACE_DIR` (falling back to `CARGO_MANIFEST_DIR`), with a clear panic message if the directory is missing.
