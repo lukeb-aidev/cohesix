@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: USERLAND_BOOT.md v0.2
 // Author: Lukas Bower
-// Date Modified: 2028-01-22
+// Date Modified: 2028-01-25
 
 # Userland Boot Verification
 
@@ -54,3 +54,19 @@ pytest -q
 cargo test --workspace --no-run
 python tools/check_elf_layout.py target/sel4-aarch64/release/cohesix_root
 ```
+
+## Syscall 0 Fault Analysis 2028-01-25
+
+After linking `libsel4.a` correctly, QEMU still halted with `unknown syscall 0`
+immediately after dropping to user mode. Disassembly showed `svc #0` instructions
+but the kernel reported call number zero. Inspection revealed our syscall wrappers
+loaded negative constants (e.g. `-9` for `seL4_DebugPutChar`). On this kernel
+build the expected numbers are positive. Updating the constants and setting the
+TLS register from `BootInfo.ipc_buffer` resolves the fault.
+
+Validation:
+
+1. `cargo test --workspace --no-run`
+2. `pytest -q`
+3. Boot via `scripts/build_root_elf.sh` then run QEMU; the serial log prints
+   `COHESIX_BOOT_OK` without faults.

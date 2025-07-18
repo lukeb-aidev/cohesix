@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: main.rs v0.45
 // Author: Lukas Bower
-// Date Modified: 2028-01-21
+// Date Modified: 2028-01-25
 #![no_std]
 #![no_main]
 #![feature(alloc_error_handler, asm_experimental_arch, lang_items)]
@@ -485,7 +485,11 @@ pub extern "C" fn main() {
     check_globals_zero();
     coherr!("boot_ok: bss, heap, globals validated");
     crate::allocator::allocator_init_log();
-    unsafe { bootinfo::dump_bootinfo(); }
+    unsafe {
+        bootinfo::dump_bootinfo();
+        let bi = &*bootinfo::seL4_GetBootInfo();
+        sys::sel4_set_tls(bi.ipc_buffer as *const u8);
+    }
     unsafe {
         mmu::init(0x400000, image_end(), dt::UART_BASE, dt::UART_BASE + 0x1000);
     }
