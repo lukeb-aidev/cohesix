@@ -1,9 +1,20 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: exception.rs v0.1
+// Filename: exception.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2028-01-20
+// Date Modified: 2028-01-21
 
 use crate::{coherr, abort};
+
+fn svc_dispatch(num: u16) {
+    match num as i64 {
+        -9 => coherr!("svc_debug_putchar"),
+        -3 => coherr!("svc_send"),
+        -5 => coherr!("svc_recv"),
+        -7 => coherr!("svc_yield"),
+        -11 => coherr!("svc_debug_halt"),
+        _ => coherr!("unknown_svc {num}"),
+    }
+}
 
 #[no_mangle]
 pub extern "C" fn handle_el1_sync() -> ! {
@@ -55,7 +66,11 @@ pub extern "C" fn handle_el1_serror_sp0() -> ! {
 
 #[no_mangle]
 pub extern "C" fn handle_el0_sync() -> ! {
-    coherr!("exc_el0_sync");
+    let esr: u64;
+    unsafe { core::arch::asm!("mrs {0}, esr_el1", out(reg) esr); }
+    let svc_num = (esr & 0xffff) as u16;
+    coherr!("exc_el0_sync svc={:#x}", svc_num);
+    svc_dispatch(svc_num);
     abort("exc el0 sync")
 }
 
