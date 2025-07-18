@@ -30,9 +30,20 @@ fn main() {
         .write_to_file(out_path.join("bindings.rs"))
         .expect("Couldn't write bindings!");
 
+    let workspace_dir = std::env::var("CARGO_WORKSPACE_DIR")
+        .or_else(|_| {
+            std::env::var("CARGO_MANIFEST_DIR").map(|m| {
+                std::path::Path::new(&m)
+                    .parent()
+                    .expect("CARGO_MANIFEST_DIR has no parent")
+                    .to_string_lossy()
+                    .into_owned()
+            })
+        })
+        .expect("CARGO_WORKSPACE_DIR or CARGO_MANIFEST_DIR must be set");
     println!(
         "cargo:rustc-link-search=native={}/third_party/seL4/lib",
-        env!("CARGO_WORKSPACE_DIR")
+        workspace_dir
     );
     println!("cargo:rustc-link-lib=static=sel4");
 }
