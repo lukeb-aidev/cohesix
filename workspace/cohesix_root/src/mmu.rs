@@ -3,7 +3,6 @@
 // Author: Lukas Bower
 // Date Modified: 2028-01-21
 
-use core::ptr::write_volatile;
 
 #[repr(align(4096))]
 struct Table([u64; 512]);
@@ -14,7 +13,7 @@ static mut L2_TABLE: Table = Table([0; 512]);
 const BLOCK_FLAGS: u64 = 0b11; // AF=1 | SH=0 | AP=00 | AttrIdx=0
 const DEVICE_FLAGS: u64 = 0b11 | (1 << 2); // device memory attr index 1
 
-pub unsafe fn init(_text_start: usize, _image_end: usize, _dtb: usize, _dtb_end: usize) {
+pub unsafe fn init(_text_start: usize, _image_end: usize, dtb: usize, dtb_end: usize) {
     for entry in L1_TABLE.0.iter_mut() { *entry = 0; }
     for entry in L2_TABLE.0.iter_mut() { *entry = 0; }
 
