@@ -6,7 +6,7 @@
 set -euo pipefail
 
 NOW=$(date +%Y%m%d_%H%M%S)
-DIAG_DIR="out/diag_mmu_fault_${NOW}"
+DIAG_DIR="diagnostics/diag_mmu_fault_${NOW}"
 mkdir -p "$DIAG_DIR"
 warnings_found=0
 
