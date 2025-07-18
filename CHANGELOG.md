@@ -3452,3 +3452,7 @@
 ## [v0.562] - 2028-01-12
 ### Fixed
 - **FixSel4SysBuildPathCorrection-052**: `sel4-sys` build script now locates `third_party/seL4/lib` by ascending two directories from `CARGO_MANIFEST_DIR`, matching the project root layout.
+
+## [v0.563] - 2028-01-21
+### Added
+- **WebCodexDeepUserlandBootFix-059**: Verified program headers for commit f22778e2, updated `cohesix_root` build script to use absolute libsel4 paths, and introduced offline PyTest `test_program_headers.py` for CI validation.
