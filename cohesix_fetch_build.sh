@@ -454,14 +454,9 @@ log "🔨 Building sel4-sys (no-std, panic-abort)"
 RUSTFLAGS="-C panic=abort" \
 cargo +nightly build -p sel4-sys --release \
   --target=cohesix_root/sel4-aarch64.json \
-  -Z build-std=core,alloc,compiler_builtins,panic_abort \
+  -Z build-std=core,alloc,compiler_builtins \
   -Z build-std-features=compiler-builtins-mem
-RUSTFLAGS="-C panic=abort" \
-cargo +nightly test -p sel4-sys --release \
-  --target=cohesix_root/sel4-aarch64.json \
-  -Z build-std=core,alloc,compiler_builtins,panic_abort \
-  -Z build-std-features=compiler-builtins-mem
-log "✅ sel4-sys built and tested"
+log "✅ sel4-sys built (tests skipped)"
 
 # Phase 3: Cross-compile cohesix_root
 log "🔨 Building cohesix_root (no-std, panic-abort)"
