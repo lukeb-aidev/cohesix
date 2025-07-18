@@ -35,6 +35,7 @@ pub extern "C" fn seL4_DebugPutChar(c: u8) {
     unsafe {
         core::arch::asm!(
             "mov x0, {char_reg}",
+            "mov x8, {sys_num}",
             "mov x16, {sys_num}",
             "svc #0",
             char_reg = in(reg) c as u64,
@@ -54,6 +55,7 @@ pub unsafe extern "C" fn seL4_Send(dest: u64, msg: *const u64) {
     core::arch::asm!(
         "mov x0, {0}",
         "mov x1, {1}",
+        "mov x8, {sys_num}",
         "mov x16, {sys_num}",
         "svc #0",
         in(reg) dest,
@@ -69,6 +71,7 @@ pub unsafe extern "C" fn seL4_Recv(src: u64, msg: *mut u64) {
     core::arch::asm!(
         "mov x0, {0}",
         "mov x1, {1}",
+        "mov x8, {sys_num}",
         "mov x16, {sys_num}",
         "svc #0",
         in(reg) src,
@@ -82,6 +85,7 @@ pub unsafe extern "C" fn seL4_Recv(src: u64, msg: *mut u64) {
 #[no_mangle]
 pub unsafe extern "C" fn seL4_Yield() {
     core::arch::asm!(
+        "mov x8, {sys_num}",
         "mov x16, {sys_num}",
         "svc #0",
         sys_num = const SYS_YIELD,
@@ -93,6 +97,7 @@ pub unsafe extern "C" fn seL4_Yield() {
 #[no_mangle]
 pub unsafe extern "C" fn seL4_DebugHalt() {
     core::arch::asm!(
+        "mov x8, {sys_num}",
         "mov x16, {sys_num}",
         "svc #0",
         sys_num = const SYS_DEBUG_HALT,
