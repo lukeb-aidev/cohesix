@@ -94,6 +94,10 @@ else
   echo "⚠️ No QEMU logs found."
 fi
 
+echo "👉 Copying latest filesystem tree..."
+tree > tree.txt
+cp tree.txt "$DIAG_DIR/" 2>/dev/null || true
+
 echo "✅ Diagnostics saved."
 
 echo "📂 Staging diagnostics and this script for git..."
