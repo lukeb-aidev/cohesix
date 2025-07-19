@@ -1,7 +1,7 @@
 /* CLASSIFICATION: COMMUNITY */
 /* Filename: link.ld v0.23 */
 /* Author: Lukas Bower */
-/* Date Modified: 2028-07-19 */
+/* Date Modified: 2028-08-30 */
 /* SPDX-License-Identifier: BSD-2-Clause */
 
 ENTRY(_start)
