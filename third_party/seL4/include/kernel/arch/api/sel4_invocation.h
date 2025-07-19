@@ -13,9 +13,10 @@
 #include <api/invocation.h>
 
 enum sel4_arch_invocation_label {
-    ARMPDClean_Data = nInvocationLabels,
-    ARMPDInvalidate_Data,
-    ARMPDCleanInvalidate_Data,
-    ARMPDUnify_Instruction,
+    ARMVSpaceClean_Data = nInvocationLabels,
+    ARMVSpaceInvalidate_Data,
+    ARMVSpaceCleanInvalidate_Data,
+    ARMVSpaceUnify_Instruction,
+    ARMSMCCall,
     nSeL4ArchInvocationLabels
 };
