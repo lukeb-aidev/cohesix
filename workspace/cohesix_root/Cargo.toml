@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
 # Filename: Cargo.toml v0.10
 # Author: Lukas Bower
-# Date Modified: 2028-02-15
+# Date Modified: 2028-08-30
 
 [package]
 name = "cohesix_root"
@@ -13,7 +13,6 @@ links = "sel4-root"
 
 [dependencies]
 serde = { version = "1.0", default-features = false, features = ["derive", "alloc"] }
-sel4-sys = { workspace = true }
 cty = "0.2"
 
 
