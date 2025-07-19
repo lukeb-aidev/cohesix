@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v1.35
+# Filename: cohesix_fetch_build.sh v1.36
 # Author: Lukas Bower
-# Date Modified: 2027-12-31
+# Date Modified: 2028-08-31
 
 # This script fetches and builds the Cohesix project, including seL4 and other dependencies.
 
@@ -40,8 +40,6 @@ export CUDA_INCLUDE_DIR="${CUDA_INCLUDE_DIR:-$CUDA_HOME/include}"
 export CUDA_LIBRARY_PATH="${CUDA_LIBRARY_PATH:-/usr/lib/x86_64-linux-gnu}"
 export PATH="$CUDA_HOME/bin:$PATH"
 export LD_LIBRARY_PATH="$CUDA_LIBRARY_PATH:${LD_LIBRARY_PATH:-}"
-export LIBRARY_PATH="$(pwd)/third_party/seL4/lib:${LIBRARY_PATH:-}"
-export LD_LIBRARY_PATH="$(pwd)/third_party/seL4/lib:$CUDA_LIBRARY_PATH:${LD_LIBRARY_PATH:-}"
 WORKSPACE="${WORKSPACE:-$ROOT/third_party/seL4}"
 
 cd "$ROOT"
@@ -462,10 +460,7 @@ log "✅ sel4-sys built (tests skipped)"
 
 # Phase 3: Cross-compile cohesix_root
 log "🔨 Building cohesix_root (no-std, panic-abort)"
-export LIBRARY_PATH="$(pwd)/third_party/seL4/lib:$LIBRARY_PATH"
-RUSTFLAGS="-C panic=abort \
-  -C link-arg=-L$(pwd)/third_party/seL4/lib \
-  -C link-arg=-lsel4" \
+RUSTFLAGS="-C panic=abort" \
 cargo +nightly build -p cohesix_root --release \
   --target=cohesix_root/sel4-aarch64.json \
   -Z build-std=core,alloc,compiler_builtins \
