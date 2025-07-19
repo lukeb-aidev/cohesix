@@ -62,10 +62,7 @@ jobs:
       - name: Build cohesix_root
         run: |
           echo "🔨 Building cohesix_root (no-std, panic-abort)"
-          export LIBRARY_PATH="$(pwd)/third_party/seL4/lib:$LIBRARY_PATH"
-          RUSTFLAGS="-C panic=abort \
-            -C link-arg=-L$(pwd)/third_party/seL4/lib \
-            -C link-arg=-lsel4" \
+          RUSTFLAGS="-C panic=abort" \
           cargo +nightly build -p cohesix_root --release \
             --target=cohesix_root/sel4-aarch64.json \
             -Z build-std=core,alloc,compiler_builtins \
