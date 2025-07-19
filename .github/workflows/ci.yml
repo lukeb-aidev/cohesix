@@ -1,5 +1,5 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: ci.yml v1.31
+# Filename: ci.yml v1.32
 # Author: Lukas Bower
 # Date Modified: 2028-08-31
 
@@ -79,6 +79,15 @@ jobs:
       - name: Cargo test compile
         run: |
           cargo test --workspace --no-run | tee rust_test_compile.log
+
+      - name: QEMU aarch64 boot test
+        run: |
+          BOOT_ARCH=aarch64 ci/qemu_boot_check.sh | tee qemu_boot.log
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qemu-boot-log
+          path: qemu_boot.log
 
 
       - uses: actions/upload-artifact@v4

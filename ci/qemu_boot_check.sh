@@ -1,8 +1,8 @@
 # CLASSIFICATION: COMMUNITY
 #!/usr/bin/env bash
-# Filename: qemu_boot_check.sh v0.6
+# Filename: qemu_boot_check.sh v0.7
 # Author: Lukas Bower
-# Date Modified: 2027-12-31
+# Date Modified: 2028-08-31
 # This script boots Cohesix under QEMU for CI. Firmware assumptions:
 # - x86_64 uses OVMF for UEFI.
 # - aarch64 requires QEMU_EFI.fd provided by system packages
@@ -12,7 +12,7 @@ set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 cd "$ROOT"
 
-ARCH="$(uname -m)"
+ARCH="${BOOT_ARCH:-$(uname -m)}"
 LOG_DIR="${TMPDIR:-$(mktemp -d)}"
 LOG_FILE="$LOG_DIR/qemu_serial.log"
 SUCCESS_MARKER="Cohesix shell started"
