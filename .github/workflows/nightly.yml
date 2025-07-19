@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: nightly.yml v0.6
+# Filename: nightly.yml v0.7
 # Author: Lukas Bower
-# Date Modified: 2025-07-14
+# Date Modified: 2025-07-19
 
 name: Nightly Determinism Check
 
@@ -23,7 +23,7 @@ jobs:
       - name: Set up Rust toolchain
         uses: actions-rs/toolchain@v1
         with:
-          toolchain: stable
+          toolchain: nightly
           override: true
 
       - name: Cache cargo registry and build artifacts
@@ -37,13 +37,37 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
-      - name: Run tests and capture logs
-        run: |
-          cargo test --release | tee sim_test.log
-        shell: bash
 
-      - name: Upload logs
-        uses: actions/upload-artifact@v4
-        with:
-          name: sim-logs
-          path: workspace/sim_test.log
+      - name: Build host crates
+        run: |
+          echo "🔨 Building host crates"
+          cargo +nightly build --release --workspace \
+            --exclude sel4-sys \
+            --exclude cohesix_root
+          cargo +nightly test --release --workspace \
+            --exclude sel4-sys \
+            --exclude cohesix_root
+          echo "✅ Host crates built and tested"
+
+      - name: Build sel4-sys
+        run: |
+          echo "🔨 Building sel4-sys (no-std, panic-abort)"
+          RUSTFLAGS="-C panic=abort" \
+          cargo +nightly build -p sel4-sys --release \
+            --target=cohesix_root/sel4-aarch64.json \
+            -Z build-std=core,alloc,compiler_builtins \
+            -Z build-std-features=compiler-builtins-mem
+          echo "✅ sel4-sys built (tests skipped)"
+
+      - name: Build cohesix_root
+        run: |
+          echo "🔨 Building cohesix_root (no-std, panic-abort)"
+          export LIBRARY_PATH="$(pwd)/third_party/seL4/lib:$LIBRARY_PATH"
+          RUSTFLAGS="-C panic=abort \
+            -C link-arg=-L$(pwd)/third_party/seL4/lib \
+            -C link-arg=-lsel4" \
+          cargo +nightly build -p cohesix_root --release \
+            --target=cohesix_root/sel4-aarch64.json \
+            -Z build-std=core,alloc,compiler_builtins \
+            -Z build-std-features=compiler-builtins-mem
+          echo "✅ cohesix_root built"
