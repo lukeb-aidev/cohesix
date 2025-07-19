@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: USERLAND_BOOT.md v0.5
+// Filename: USERLAND_BOOT.md v0.6
 // Author: Lukas Bower
-// Date Modified: 2028-07-19
+// Date Modified: 2028-09-04
 
 # Userland Boot Verification
 
@@ -128,3 +128,7 @@ reporting incompatible object files. The fix was to remove the library from
 Rust to return the saved pointer from `_start`. Rebuilding now produces a
 64-bit ELF that links cleanly.
 \n## HeaderIntegrationAudit 2028-08-30\n\nseL4 headers under third_party/seL4/include are now used directly by cohesix_root. build.rs defines a local sel4/config.h to satisfy the includes and bindgen regenerates bindings.rs from sel4/syscall.h. libsel4.a and the sel4-sys crate were removed from the rootserver build.
+
+## seL4 Path Audit 2028-09-04
+
+All artefact paths in the codebase were cross-checked against `third_party/seL4/sel4_tree.txt`. No references to 32-bit builds remain. The build scripts reference `third_party/seL4/artefacts/elfloader` and `kernel.dtb` for AArch64. `libsel4.a` is linked from `third_party/seL4/lib` in `sel4-sys` and `cohesix_fetch_build.sh`. The only mismatch found was `sel4-sys/wrapper.h` including `sel4/bootinfo_types.h`, which is absent under `include/`; a local replacement exists in `cohesix_root`.
