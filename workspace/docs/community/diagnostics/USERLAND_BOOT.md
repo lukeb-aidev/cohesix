@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: USERLAND_BOOT.md v0.3
+// Filename: USERLAND_BOOT.md v0.4
 // Author: Lukas Bower
-// Date Modified: 2028-01-30
+// Date Modified: 2028-02-15
 
 # Userland Boot Verification
 
@@ -80,3 +80,18 @@ the syscall label from address zero and rejected it. Moving the TLS
 initialisation ahead of the first log resolves the issue. The boot log
 now prints `ROOTSERVER ONLINE` and `COHESIX_BOOT_OK` before spawning
 `/bin/init`.
+
+## VM Fault 0x20 2028-02-15
+
+Booting the February image revealed a data fault at address `0x20` as soon as
+the rootserver entered user mode. Analysis of the stack dump showed a null
+BootInfo pointer; the first load from `x0` at offset `0x20` corresponded to the
+`ipc_buffer` field.
+
+The entry stub in `entry.S` failed to preserve the pointer provided by the
+kernel. The updated code stores `x0` into `BOOTINFO_PTR` before clearing `.bss`
+and sets up Rust helpers (`set_bootinfo_ptr`, `bootinfo`) to read it.
+
+`mmu::init` now identity maps this BootInfo frame alongside the device tree and
+UART regions. `main` retrieves the pointer, configures TLS with
+`BootInfo.ipc_buffer`, and proceeds into the Plan9 init sequence without faults.

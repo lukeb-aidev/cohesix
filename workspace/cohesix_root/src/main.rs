@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: main.rs v0.46
+// Filename: main.rs v0.47
 // Author: Lukas Bower
-// Date Modified: 2028-01-30
+// Date Modified: 2028-02-15
 #![no_std]
 #![no_main]
 #![feature(alloc_error_handler, asm_experimental_arch, lang_items)]
@@ -466,8 +466,13 @@ fn exec_init() -> ! {
 pub extern "C" fn main() {
     sys::init_uart();
     unsafe {
-        let bi = &*bootinfo::seL4_GetBootInfo();
-        sys::sel4_set_tls(bi.ipc_buffer as *const u8);
+        let bi_ptr = bootinfo::get_bootinfo_ptr();
+        if !bi_ptr.is_null() {
+            let bi = &*bi_ptr;
+            sys::sel4_set_tls(bi.ipc_buffer as *const u8);
+        } else {
+            coherr!("bootinfo_ptr_null");
+        }
     }
     sys::coh_log("ROOTSERVER ONLINE");
     unsafe {
@@ -493,7 +498,17 @@ pub extern "C" fn main() {
         bootinfo::dump_bootinfo();
     }
     unsafe {
-        mmu::init(0x400000, image_end(), dt::UART_BASE, dt::UART_BASE + 0x1000);
+        let bi = bootinfo::bootinfo();
+        let bi_start = bi as *const _ as usize;
+        let bi_end = bi_start + core::mem::size_of::<bootinfo::BootInfo>();
+        mmu::init(
+            0x400000,
+            image_end(),
+            dt::UART_BASE,
+            dt::UART_BASE + 0x1000,
+            bi_start,
+            bi_end,
+        );
     }
     coherr!("main_start bss_start={:#x} bss_end={:#x} heap_start={:#x} heap_ptr={:#x} heap_end={:#x} img_end={:#x}",
         unsafe { addr_of!(__bss_start) as usize },
