@@ -1,12 +1,13 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: sys.rs v0.13
 // Author: Lukas Bower
-// Date Modified: 2028-01-25
+// Date Modified: 2025-07-19
 
 use core::ffi::c_char;
 use core::sync::atomic::{compiler_fence, Ordering};
 use crate::dt::UART_BASE;
 use crate::coherr;
+use sel4_sys::{seL4_DebugPutChar, seL4_Send, seL4_Recv, seL4_Yield, seL4_DebugHalt};
 
 #[link_section = ".uart"]
 #[used]
@@ -45,81 +46,6 @@ pub const fn debug_putchar_const() -> i64 {
     SYS_DEBUG_PUTCHAR
 }
 
-#[cfg(target_arch = "aarch64")]
-#[no_mangle]
-pub extern "C" fn seL4_DebugPutChar(c: u8) {
-    unsafe {
-        core::arch::asm!(
-            "mov x0, {char_reg}",
-            "mov x8, {sys_num}",
-            "mov x16, {sys_num}",
-            "svc #0",
-            char_reg = in(reg) c as u64,
-            sys_num = const SYS_DEBUG_PUTCHAR,
-            options(nostack)
-        );
-    }
-}
-
-#[cfg(not(target_arch = "aarch64"))]
-#[no_mangle]
-pub extern "C" fn seL4_DebugPutChar(_c: u8) {}
-
-#[cfg(target_arch = "aarch64")]
-#[no_mangle]
-pub unsafe extern "C" fn seL4_Send(dest: u64, msg: *const u64) {
-    core::arch::asm!(
-        "mov x0, {0}",
-        "mov x1, {1}",
-        "mov x8, {sys_num}",
-        "mov x16, {sys_num}",
-        "svc #0",
-        in(reg) dest,
-        in(reg) msg,
-        sys_num = const SYS_SEND,
-        options(nostack)
-    );
-}
-
-#[cfg(target_arch = "aarch64")]
-#[no_mangle]
-pub unsafe extern "C" fn seL4_Recv(src: u64, msg: *mut u64) {
-    core::arch::asm!(
-        "mov x0, {0}",
-        "mov x1, {1}",
-        "mov x8, {sys_num}",
-        "mov x16, {sys_num}",
-        "svc #0",
-        in(reg) src,
-        in(reg) msg,
-        sys_num = const SYS_RECV,
-        options(nostack)
-    );
-}
-
-#[cfg(target_arch = "aarch64")]
-#[no_mangle]
-pub unsafe extern "C" fn seL4_Yield() {
-    core::arch::asm!(
-        "mov x8, {sys_num}",
-        "mov x16, {sys_num}",
-        "svc #0",
-        sys_num = const SYS_YIELD,
-        options(nostack)
-    );
-}
-
-#[cfg(target_arch = "aarch64")]
-#[no_mangle]
-pub unsafe extern "C" fn seL4_DebugHalt() {
-    core::arch::asm!(
-        "mov x8, {sys_num}",
-        "mov x16, {sys_num}",
-        "svc #0",
-        sys_num = const SYS_DEBUG_HALT,
-        options(nostack)
-    );
-}
 
 const ENOENT: i32 = -2;
 const EBADF: i32 = -9;

@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: main.rs v0.48
 // Author: Lukas Bower
-// Date Modified: 2028-08-30
+// Date Modified: 2025-07-19
 #![no_std]
 #![no_main]
 #![feature(alloc_error_handler, asm_experimental_arch, lang_items)]
@@ -17,7 +17,7 @@ mod startup;
 mod exception;
 mod mmu;
 
-include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
+use sel4_sys::*;
 
 use core::arch::global_asm;
 global_asm!(include_str!("entry.S"));
@@ -39,7 +39,7 @@ extern "C" {
     static mut __bss_end: u8;
 }
 
-use crate::sys::seL4_DebugPutChar;
+use sel4_sys::seL4_DebugPutChar;
 
 #[no_mangle]
 #[link_section = ".bss"]
@@ -594,12 +594,12 @@ pub extern "C" fn main() {
     exec_init();
     putstr("✅ rootserver main loop entered");
     main_loop();
-    unsafe { sys::seL4_DebugHalt(); }
+    unsafe { sel4_sys::seL4_DebugHalt(); }
 }
 
 fn main_loop() -> ! {
     loop {
-        unsafe { sys::seL4_Yield(); }
+        unsafe { sel4_sys::seL4_Yield(); }
     }
 }
 

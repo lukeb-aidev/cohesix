@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: build.rs v0.8
 // Author: Lukas Bower
-// Date Modified: 2028-08-31
+// Date Modified: 2025-07-19
 
 use std::{env, fs, path::{Path, PathBuf}};
 
@@ -14,18 +14,11 @@ fn main() {
 
     fs::create_dir_all(&out_path).unwrap();
 
-    let include_root = Path::new(&manifest_dir).join("../../third_party/seL4/include");
+    let sel4_include = Path::new(&manifest_dir)
+        .join("../../third_party/seL4/include");
     let include_dirs = [
-        include_root.clone(),
-        Path::new(&manifest_dir).join("../cohesix_root"),
-        include_root.join("libsel4"),
-        include_root.join("libsel4/sel4"),
-        include_root.join("libsel4/interfaces"),
-        include_root.join("kernel"),
-        include_root.join("kernel/arch"),
-        include_root.join("kernel/api"),
-        include_root.join("kernel/plat"),
-        Path::new(&manifest_dir).to_path_buf(),
+        sel4_include.join("libsel4/sel4"),
+        sel4_include,
     ];
 
     let mut builder = bindgen::Builder::default();
