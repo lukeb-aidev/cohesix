@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: build.rs v0.7
+// Filename: build.rs v0.8
 // Author: Lukas Bower
-// Date Modified: 2028-01-12
+// Date Modified: 2028-08-31
 
 use std::{env, fs, path::{Path, PathBuf}};
 
@@ -14,11 +14,31 @@ fn main() {
 
     fs::create_dir_all(&out_path).unwrap();
 
-    let bindings = bindgen::Builder::default()
+    let include_root = Path::new(&manifest_dir).join("../../third_party/seL4/include");
+    let include_dirs = [
+        include_root.clone(),
+        Path::new(&manifest_dir).join("../cohesix_root"),
+        include_root.join("libsel4"),
+        include_root.join("libsel4/sel4"),
+        include_root.join("libsel4/interfaces"),
+        include_root.join("kernel"),
+        include_root.join("kernel/arch"),
+        include_root.join("kernel/api"),
+        include_root.join("kernel/plat"),
+        Path::new(&manifest_dir).to_path_buf(),
+    ];
+
+    let mut builder = bindgen::Builder::default();
+    builder = builder
+        .clang_arg("--target=aarch64-unknown-none")
         .clang_arg(format!("-I{}", out_path.display()))
         .header(header.to_string_lossy())
         .use_core()
-        .ctypes_prefix("cty")
+        .ctypes_prefix("cty");
+    for dir in &include_dirs {
+        builder = builder.clang_arg(format!("-I{}", dir.display()));
+    }
+    let bindings = builder
         .allowlist_function("seL4_.*")
         .allowlist_type("seL4_.*")
         .allowlist_var("seL4_.*")
