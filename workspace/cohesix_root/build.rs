@@ -1,10 +1,28 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: build.rs v0.2
+// Filename: build.rs v0.3
 // Author: Lukas Bower
-// Date Modified: 2028-01-21
+// Date Modified: 2028-02-15
 
 use std::{env, fs, path::Path};
 use std::io::Write;
+
+fn generate_bindings(out_dir: &str, manifest_dir: &str) {
+    let wrapper = Path::new(manifest_dir).join("wrapper.h");
+    let bindings = bindgen::Builder::default()
+        .use_core()
+        .ctypes_prefix("cty")
+        .header(wrapper.to_string_lossy())
+        .clang_arg(format!("-I{}/../../third_party/seL4/include", manifest_dir))
+        .allowlist_function("seL4_.*")
+        .allowlist_type("seL4_.*")
+        .allowlist_var("seL4_.*")
+        .generate()
+        .expect("bindgen generate");
+    bindings
+        .write_to_file(Path::new(out_dir).join("bindings.rs"))
+        .expect("write bindings");
+    println!("cargo:rerun-if-changed={}", wrapper.display());
+}
 
 fn generate_dtb_constants(out_dir: &str, manifest_dir: &str) {
     let dts_path = format!("{}/../../third_party/seL4/kernel.dts", manifest_dir);
@@ -59,6 +77,7 @@ fn main() {
     generate_dtb_constants(&out_dir, &manifest_dir);
     embed_sel4_spec(&out_dir, &manifest_dir);
     embed_vectors(&out_dir, &manifest_dir);
+    generate_bindings(&out_dir, &manifest_dir);
     let project_root = Path::new(&manifest_dir)
         .parent()
         .and_then(|p| p.parent())
