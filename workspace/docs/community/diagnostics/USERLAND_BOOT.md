@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: USERLAND_BOOT.md v0.2
+// Filename: USERLAND_BOOT.md v0.3
 // Author: Lukas Bower
-// Date Modified: 2028-01-25
+// Date Modified: 2028-01-30
 
 # Userland Boot Verification
 
@@ -70,3 +70,13 @@ Validation:
 2. `pytest -q`
 3. Boot via `scripts/build_root_elf.sh` then run QEMU; the serial log prints
    `COHESIX_BOOT_OK` without faults.
+
+## Syscall 0 Fault Regression 2028-01-30
+
+QEMU again halted with `unknown syscall 0` at the first `svc` in `main`.
+The syscall wrappers were correct, but the TLS register still held zero
+because logging occurred before calling `sel4_set_tls`. The kernel read
+the syscall label from address zero and rejected it. Moving the TLS
+initialisation ahead of the first log resolves the issue. The boot log
+now prints `ROOTSERVER ONLINE` and `COHESIX_BOOT_OK` before spawning
+`/bin/init`.
