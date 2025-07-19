@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: main.rs v0.45
+// Filename: main.rs v0.46
 // Author: Lukas Bower
-// Date Modified: 2028-01-25
+// Date Modified: 2028-01-30
 #![no_std]
 #![no_main]
 #![feature(alloc_error_handler, asm_experimental_arch, lang_items)]
@@ -465,6 +465,10 @@ fn exec_init() -> ! {
 #[no_mangle]
 pub extern "C" fn main() {
     sys::init_uart();
+    unsafe {
+        let bi = &*bootinfo::seL4_GetBootInfo();
+        sys::sel4_set_tls(bi.ipc_buffer as *const u8);
+    }
     sys::coh_log("ROOTSERVER ONLINE");
     unsafe {
         ALLOC_CHECK = 0xdeadbeefdeadbeef;
@@ -487,8 +491,6 @@ pub extern "C" fn main() {
     crate::allocator::allocator_init_log();
     unsafe {
         bootinfo::dump_bootinfo();
-        let bi = &*bootinfo::seL4_GetBootInfo();
-        sys::sel4_set_tls(bi.ipc_buffer as *const u8);
     }
     unsafe {
         mmu::init(0x400000, image_end(), dt::UART_BASE, dt::UART_BASE + 0x1000);
