@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: bootinfo.rs v0.2
+// Filename: bootinfo.rs v0.3
 // Author: Lukas Bower
-// Date Modified: 2028-07-19
+// Date Modified: 2028-08-30
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -40,27 +40,45 @@ pub struct BootInfo {
     pub untyped_list: [UntypedDesc; MAX_BOOTINFO_UNTYPED_CAPS],
 }
 
-#[link_section = ".bss"]
+const EMPTY_UNTYPED: UntypedDesc = UntypedDesc {
+    paddr: 0,
+    size_bits: 0,
+    is_device: 0,
+    padding: [0; core::mem::size_of::<usize>() - 2],
+};
+
+#[link_section = ".bss.bootinfo"]
 #[no_mangle]
-pub static mut BOOTINFO_PTR: *const BootInfo = core::ptr::null();
+pub static mut BOOTINFO: BootInfo = BootInfo {
+    extra_len: 0,
+    node_id: 0,
+    num_nodes: 0,
+    num_io_pt_levels: 0,
+    ipc_buffer: 0,
+    empty: SlotRegion { start: 0, end: 0 },
+    shared_frames: SlotRegion { start: 0, end: 0 },
+    user_image_frames: SlotRegion { start: 0, end: 0 },
+    user_image_paging: SlotRegion { start: 0, end: 0 },
+    io_space_caps: SlotRegion { start: 0, end: 0 },
+    extra_bi_pages: SlotRegion { start: 0, end: 0 },
+    init_thread_cnode_size_bits: 0,
+    init_thread_domain: 0,
+    untyped: SlotRegion { start: 0, end: 0 },
+    untyped_list: [EMPTY_UNTYPED; MAX_BOOTINFO_UNTYPED_CAPS],
+};
 
 #[no_mangle]
-pub unsafe extern "C" fn set_bootinfo_ptr(ptr: *const BootInfo) {
-    BOOTINFO_PTR = ptr;
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn get_bootinfo_ptr() -> *const BootInfo {
-    BOOTINFO_PTR
+pub unsafe extern "C" fn copy_bootinfo(ptr: *const BootInfo) {
+    BOOTINFO = ptr.read();
 }
 
 pub unsafe fn bootinfo() -> &'static BootInfo {
-    &*BOOTINFO_PTR
+    &BOOTINFO
 }
 
 #[no_mangle]
-pub extern "C" fn seL4_GetBootInfo() -> *const BootInfo {
-    unsafe { get_bootinfo_ptr() }
+pub extern "C" fn seL4_GetBootInfo(_: u32) -> *const BootInfo {
+    unsafe { &BOOTINFO as *const _ }
 }
 
 pub unsafe fn dump_bootinfo() {
