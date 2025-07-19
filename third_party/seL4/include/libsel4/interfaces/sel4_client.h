@@ -21,39 +21,41 @@
                 (sizeof(type) == expected_bytes) ? 1 : -1]
 
 assert_size_correct(int, 4);
-assert_size_correct(long, 4);
+assert_size_correct(long, 8);
 assert_size_correct(seL4_Uint8, 1);
 assert_size_correct(seL4_Uint16, 2);
 assert_size_correct(seL4_Uint32, 4);
 assert_size_correct(seL4_Uint64, 8);
 assert_size_correct(seL4_Time, 8);
-assert_size_correct(seL4_Word, 4);
+assert_size_correct(seL4_Word, 8);
 assert_size_correct(seL4_Bool, 1);
-assert_size_correct(seL4_CapRights_t, 4);
-assert_size_correct(seL4_CPtr, 4);
-assert_size_correct(seL4_CNode, 4);
-assert_size_correct(seL4_IRQHandler, 4);
-assert_size_correct(seL4_IRQControl, 4);
-assert_size_correct(seL4_TCB, 4);
-assert_size_correct(seL4_Untyped, 4);
-assert_size_correct(seL4_DomainSet, 4);
-assert_size_correct(seL4_SchedContext, 4);
-assert_size_correct(seL4_SchedControl, 4);
-assert_size_correct(seL4_ARM_VMAttributes, 4);
-assert_size_correct(seL4_ARM_Page, 4);
-assert_size_correct(seL4_ARM_PageTable, 4);
-assert_size_correct(seL4_ARM_PageDirectory, 4);
-assert_size_correct(seL4_ARM_ASIDControl, 4);
-assert_size_correct(seL4_ARM_ASIDPool, 4);
-assert_size_correct(seL4_ARM_VCPU, 4);
-assert_size_correct(seL4_ARM_IOSpace, 4);
-assert_size_correct(seL4_ARM_IOPageTable, 4);
-assert_size_correct(seL4_UserContext, 76);
-assert_size_correct(seL4_VCPUReg, 4);
-assert_size_correct(seL4_ARM_SIDControl, 4);
-assert_size_correct(seL4_ARM_SID, 4);
-assert_size_correct(seL4_ARM_CBControl, 4);
-assert_size_correct(seL4_ARM_CB, 4);
+assert_size_correct(seL4_CapRights_t, 8);
+assert_size_correct(seL4_CPtr, 8);
+assert_size_correct(seL4_CNode, 8);
+assert_size_correct(seL4_IRQHandler, 8);
+assert_size_correct(seL4_IRQControl, 8);
+assert_size_correct(seL4_TCB, 8);
+assert_size_correct(seL4_Untyped, 8);
+assert_size_correct(seL4_DomainSet, 8);
+assert_size_correct(seL4_SchedContext, 8);
+assert_size_correct(seL4_SchedControl, 8);
+assert_size_correct(seL4_ARM_VMAttributes, 8);
+assert_size_correct(seL4_ARM_Page, 8);
+assert_size_correct(seL4_ARM_PageTable, 8);
+assert_size_correct(seL4_ARM_VSpace, 8);
+assert_size_correct(seL4_ARM_ASIDControl, 8);
+assert_size_correct(seL4_ARM_ASIDPool, 8);
+assert_size_correct(seL4_ARM_VCPU, 8);
+assert_size_correct(seL4_ARM_IOSpace, 8);
+assert_size_correct(seL4_ARM_IOPageTable, 8);
+assert_size_correct(seL4_ARM_SMC, 8);
+assert_size_correct(seL4_UserContext, 288);
+assert_size_correct(seL4_ARM_SMCContext, 64);
+assert_size_correct(seL4_VCPUReg, 8);
+assert_size_correct(seL4_ARM_SIDControl, 8);
+assert_size_correct(seL4_ARM_SID, 8);
+assert_size_correct(seL4_ARM_CBControl, 8);
+assert_size_correct(seL4_ARM_CB, 8);
 
 /*
  * Return types for generated methods.
@@ -117,30 +119,30 @@ typedef struct seL4_SchedContext_YieldTo seL4_SchedContext_YieldTo_t;
  * Generated stubs.
  */
 /**
- * @xmlonly <manual name="Clean Data" label="aarch32_pd_clean"/> @endxmlonly
- * @brief @xmlonly Clean cached pages within a page directory @endxmlonly
+ * @xmlonly <manual name="Clean Data" label="aarch64_vspace_clean"/> @endxmlonly
+ * @brief @xmlonly Clean cached pages within a top level translation table @endxmlonly
  * 
  * @xmlonly
  * <docref>See <autoref label="ch:vspace"/>.</docref>
  * @endxmlonly
  * 
- * @param[in] _service Capability to the page directory being operated on.
+ * @param[in] _service Capability to the top level translation table being operated on.
  * @param[in] start Start address 
  * @param[in] end End address 
  * @return @xmlonly <errorenumdesc/> @endxmlonly
  * @retval seL4_FailedLookup The  @xmlonly <texttt text="_service"/> @endxmlonly  is not assigned to an ASID pool. 
  * @retval seL4_IllegalOperation The  @xmlonly <texttt text="_service"/> @endxmlonly  is a CPtr to a capability of the wrong type.
- * Or,  @xmlonly <texttt text="start"/> @endxmlonly  or  @xmlonly <texttt text="end"/> @endxmlonly  is in the kernel virtual address range. 
+ * Or,  @xmlonly <texttt text="end"/> @endxmlonly  is in the kernel virtual address range. 
  * @retval seL4_InvalidArgument The  @xmlonly <texttt text="start"/> @endxmlonly  is greater than or equal to  @xmlonly <texttt text="end"/> @endxmlonly . 
  * @retval seL4_InvalidCapability The  @xmlonly <texttt text="_service"/> @endxmlonly  is a CPtr to a capability of the wrong type.
  * Or,  @xmlonly <texttt text="_service"/> @endxmlonly  is not assigned to an ASID pool. 
  * @retval seL4_RangeError The specified range crosses a page boundary. 
  */
 LIBSEL4_INLINE seL4_Error
-seL4_ARM_PageDirectory_Clean_Data(seL4_ARM_PageDirectory _service, seL4_Word start, seL4_Word end)
+seL4_ARM_VSpace_Clean_Data(seL4_ARM_VSpace _service, seL4_Word start, seL4_Word end)
 {
 	seL4_Error result;
-	seL4_MessageInfo_t tag = seL4_MessageInfo_new(ARMPDClean_Data, 0, 0, 2);
+	seL4_MessageInfo_t tag = seL4_MessageInfo_new(ARMVSpaceClean_Data, 0, 0, 2);
 	seL4_MessageInfo_t output_tag;
 	seL4_Word mr0;
 	seL4_Word mr1;
@@ -175,30 +177,30 @@ seL4_ARM_PageDirectory_Clean_Data(seL4_ARM_PageDirectory _service, seL4_Word sta
 }
 
 /**
- * @xmlonly <manual name="Invalidate Data" label="aarch32_pd_invalidate"/> @endxmlonly
- * @brief @xmlonly Invalidate cached pages within a page directory @endxmlonly
+ * @xmlonly <manual name="Invalidate Data" label="aarch64_vspace_invalidate"/> @endxmlonly
+ * @brief @xmlonly Invalidate cached pages within a top level translation table @endxmlonly
  * 
  * @xmlonly
  * <docref>See <autoref label="ch:vspace"/>.</docref>
  * @endxmlonly
  * 
- * @param[in] _service Capability to the page directory being operated on.
+ * @param[in] _service Capability to the top level translation table being operated on.
  * @param[in] start Start address 
  * @param[in] end End address 
  * @return @xmlonly <errorenumdesc/> @endxmlonly
  * @retval seL4_FailedLookup The  @xmlonly <texttt text="_service"/> @endxmlonly  is not assigned to an ASID pool. 
  * @retval seL4_IllegalOperation The  @xmlonly <texttt text="_service"/> @endxmlonly  is a CPtr to a capability of the wrong type.
- * Or,  @xmlonly <texttt text="start"/> @endxmlonly  or  @xmlonly <texttt text="end"/> @endxmlonly  is in the kernel virtual address range. 
+ * Or,  @xmlonly <texttt text="end"/> @endxmlonly  is in the kernel virtual address range. 
  * @retval seL4_InvalidArgument The  @xmlonly <texttt text="start"/> @endxmlonly  is greater than or equal to  @xmlonly <texttt text="end"/> @endxmlonly . 
  * @retval seL4_InvalidCapability The  @xmlonly <texttt text="_service"/> @endxmlonly  is a CPtr to a capability of the wrong type.
  * Or,  @xmlonly <texttt text="_service"/> @endxmlonly  is not assigned to an ASID pool. 
  * @retval seL4_RangeError The specified range crosses a page boundary. 
  */
 LIBSEL4_INLINE seL4_Error
-seL4_ARM_PageDirectory_Invalidate_Data(seL4_ARM_PageDirectory _service, seL4_Word start, seL4_Word end)
+seL4_ARM_VSpace_Invalidate_Data(seL4_ARM_VSpace _service, seL4_Word start, seL4_Word end)
 {
 	seL4_Error result;
-	seL4_MessageInfo_t tag = seL4_MessageInfo_new(ARMPDInvalidate_Data, 0, 0, 2);
+	seL4_MessageInfo_t tag = seL4_MessageInfo_new(ARMVSpaceInvalidate_Data, 0, 0, 2);
 	seL4_MessageInfo_t output_tag;
 	seL4_Word mr0;
 	seL4_Word mr1;
@@ -233,30 +235,30 @@ seL4_ARM_PageDirectory_Invalidate_Data(seL4_ARM_PageDirectory _service, seL4_Wor
 }
 
 /**
- * @xmlonly <manual name="Clean and Invalidate Data" label="aarch32_pd_clean_invalidate"/> @endxmlonly
- * @brief @xmlonly Clean and invalidate cached pages within a page directory @endxmlonly
+ * @xmlonly <manual name="Clean and Invalidate Data" label="aarch64_vspace_clean_invalidate"/> @endxmlonly
+ * @brief @xmlonly Clean and invalidate cached pages within a top level translation table @endxmlonly
  * 
  * @xmlonly
  * <docref>See <autoref label="ch:vspace"/>.</docref>
  * @endxmlonly
  * 
- * @param[in] _service Capability to the page directory being operated on.
+ * @param[in] _service Capability to the top level translation table being operated on.
  * @param[in] start Start address 
  * @param[in] end End address 
  * @return @xmlonly <errorenumdesc/> @endxmlonly
  * @retval seL4_FailedLookup The  @xmlonly <texttt text="_service"/> @endxmlonly  is not assigned to an ASID pool. 
  * @retval seL4_IllegalOperation The  @xmlonly <texttt text="_service"/> @endxmlonly  is a CPtr to a capability of the wrong type.
- * Or,  @xmlonly <texttt text="start"/> @endxmlonly  or  @xmlonly <texttt text="end"/> @endxmlonly  is in the kernel virtual address range. 
+ * Or,  @xmlonly <texttt text="end"/> @endxmlonly  is in the kernel virtual address range. 
  * @retval seL4_InvalidArgument The  @xmlonly <texttt text="start"/> @endxmlonly  is greater than or equal to  @xmlonly <texttt text="end"/> @endxmlonly . 
  * @retval seL4_InvalidCapability The  @xmlonly <texttt text="_service"/> @endxmlonly  is a CPtr to a capability of the wrong type.
  * Or,  @xmlonly <texttt text="_service"/> @endxmlonly  is not assigned to an ASID pool. 
  * @retval seL4_RangeError The specified range crosses a page boundary. 
  */
 LIBSEL4_INLINE seL4_Error
-seL4_ARM_PageDirectory_CleanInvalidate_Data(seL4_ARM_PageDirectory _service, seL4_Word start, seL4_Word end)
+seL4_ARM_VSpace_CleanInvalidate_Data(seL4_ARM_VSpace _service, seL4_Word start, seL4_Word end)
 {
 	seL4_Error result;
-	seL4_MessageInfo_t tag = seL4_MessageInfo_new(ARMPDCleanInvalidate_Data, 0, 0, 2);
+	seL4_MessageInfo_t tag = seL4_MessageInfo_new(ARMVSpaceCleanInvalidate_Data, 0, 0, 2);
 	seL4_MessageInfo_t output_tag;
 	seL4_Word mr0;
 	seL4_Word mr1;
@@ -291,30 +293,30 @@ seL4_ARM_PageDirectory_CleanInvalidate_Data(seL4_ARM_PageDirectory _service, seL
 }
 
 /**
- * @xmlonly <manual name="Unify Instruction" label="aarch32_pd_unify_instruction"/> @endxmlonly
+ * @xmlonly <manual name="Unify Instruction" label="aarch64_vspace_unify_instruction"/> @endxmlonly
  * @brief @xmlonly Clean and invalidate cached instruction pages to point of unification @endxmlonly
  * 
  * @xmlonly
  * <docref>See <autoref label="ch:vspace"/>.</docref>
  * @endxmlonly
  * 
- * @param[in] _service Capability to the page directory being operated on.
+ * @param[in] _service Capability to the top level translation table being operated on.
  * @param[in] start Start address 
  * @param[in] end End address 
  * @return @xmlonly <errorenumdesc/> @endxmlonly
  * @retval seL4_FailedLookup The  @xmlonly <texttt text="_service"/> @endxmlonly  is not assigned to an ASID pool. 
  * @retval seL4_IllegalOperation The  @xmlonly <texttt text="_service"/> @endxmlonly  is a CPtr to a capability of the wrong type.
- * Or,  @xmlonly <texttt text="start"/> @endxmlonly  or  @xmlonly <texttt text="end"/> @endxmlonly  is in the kernel virtual address range. 
+ * Or,  @xmlonly <texttt text="end"/> @endxmlonly  is in the kernel virtual address range. 
  * @retval seL4_InvalidArgument The  @xmlonly <texttt text="start"/> @endxmlonly  is greater than or equal to  @xmlonly <texttt text="end"/> @endxmlonly . 
  * @retval seL4_InvalidCapability The  @xmlonly <texttt text="_service"/> @endxmlonly  is a CPtr to a capability of the wrong type.
  * Or,  @xmlonly <texttt text="_service"/> @endxmlonly  is not assigned to an ASID pool. 
  * @retval seL4_RangeError The specified range crosses a page boundary. 
  */
 LIBSEL4_INLINE seL4_Error
-seL4_ARM_PageDirectory_Unify_Instruction(seL4_ARM_PageDirectory _service, seL4_Word start, seL4_Word end)
+seL4_ARM_VSpace_Unify_Instruction(seL4_ARM_VSpace _service, seL4_Word start, seL4_Word end)
 {
 	seL4_Error result;
-	seL4_MessageInfo_t tag = seL4_MessageInfo_new(ARMPDUnify_Instruction, 0, 0, 2);
+	seL4_MessageInfo_t tag = seL4_MessageInfo_new(ARMVSpaceUnify_Instruction, 0, 0, 2);
 	seL4_MessageInfo_t output_tag;
 	seL4_Word mr0;
 	seL4_Word mr1;
@@ -345,6 +347,72 @@ seL4_ARM_PageDirectory_Unify_Instruction(seL4_ARM_PageDirectory _service, seL4_W
 #endif
 	}
 
+	return result;
+}
+
+/**
+ * @xmlonly <manual name="SMC Call" label="aarch64_smc_call"/> @endxmlonly
+ * @brief @xmlonly Tell the kernel to make the real SMC call. @endxmlonly
+ * 
+ * @xmlonly
+ * Takes x0-x7 as arguments to an SMC call which are defined as a seL4_ARM_SMCContext
+ * struct. The kernel makes the SMC call and then returns the results as a
+ * new seL4_ARM_SMCContext.
+ * @endxmlonly
+ * 
+ * @param[in] _service Capability to allow threads to make Secure Monitor Calls.
+ * @param[in] smc_args The structure that has the provided arguments. 
+ * @param[out] smc_response The structure to capture the responses. 
+ * @return @xmlonly <errorenumdesc/> @endxmlonly
+ */
+LIBSEL4_INLINE seL4_Error
+seL4_ARM_SMC_Call(seL4_ARM_SMC _service, seL4_ARM_SMCContext *smc_args, seL4_ARM_SMCContext *smc_response)
+{
+	seL4_Error result;
+	seL4_MessageInfo_t tag = seL4_MessageInfo_new(ARMSMCCall, 0, 0, 8);
+	seL4_MessageInfo_t output_tag;
+	seL4_Word mr0;
+	seL4_Word mr1;
+	seL4_Word mr2;
+	seL4_Word mr3;
+
+	/* Marshal and initialise parameters. */
+	mr0 = smc_args->x0;
+	mr1 = smc_args->x1;
+	mr2 = smc_args->x2;
+	mr3 = smc_args->x3;
+	seL4_SetMR(4, smc_args->x4);
+	seL4_SetMR(5, smc_args->x5);
+	seL4_SetMR(6, smc_args->x6);
+	seL4_SetMR(7, smc_args->x7);
+
+	/* Perform the call, passing in-register arguments directly. */
+	output_tag = seL4_CallWithMRs(_service, tag,
+		&mr0, &mr1, &mr2, &mr3);
+	result = (seL4_Error) seL4_MessageInfo_get_label(output_tag);
+
+	/* Unmarshal registers into IPC buffer on error. */
+	if (result != seL4_NoError) {
+		seL4_SetMR(0, mr0);
+		seL4_SetMR(1, mr1);
+		seL4_SetMR(2, mr2);
+		seL4_SetMR(3, mr3);
+#ifdef CONFIG_KERNEL_INVOCATION_REPORT_ERROR_IPC
+		if (seL4_CanPrintError()) {
+			seL4_DebugPutString(seL4_GetDebugError());
+		}
+#endif
+	}
+
+	/* Unmarshal result. */
+	smc_response->x0 = mr0;
+	smc_response->x1 = mr1;
+	smc_response->x2 = mr2;
+	smc_response->x3 = mr3;
+	smc_response->x4 = seL4_GetMR(4);
+	smc_response->x5 = seL4_GetMR(5);
+	smc_response->x6 = seL4_GetMR(6);
+	smc_response->x7 = seL4_GetMR(7);
 	return result;
 }
 
@@ -1109,7 +1177,7 @@ seL4_ARM_ASIDControl_MakePool(seL4_ARM_ASIDControl _service, seL4_Untyped untype
 
 	/* Marshal and initialise parameters. */
 	mr0 = index;
-	mr1 = (depth & 0xfful);
+	mr1 = (depth & 0xffull);
 	mr2 = 0;
 	mr3 = 0;
 
@@ -1279,7 +1347,7 @@ LIBSEL4_INLINE seL4_Error
 seL4_ARM_VCPU_InjectIRQ(seL4_ARM_VCPU _service, seL4_Uint16 virq, seL4_Uint8 priority, seL4_Uint8 group, seL4_Uint8 index)
 {
 	seL4_Error result;
-	seL4_MessageInfo_t tag = seL4_MessageInfo_new(ARMVCPUInjectIRQ, 0, 0, 2);
+	seL4_MessageInfo_t tag = seL4_MessageInfo_new(ARMVCPUInjectIRQ, 0, 0, 1);
 	seL4_MessageInfo_t output_tag;
 	seL4_Word mr0;
 	seL4_Word mr1;
@@ -1287,8 +1355,8 @@ seL4_ARM_VCPU_InjectIRQ(seL4_ARM_VCPU _service, seL4_Uint16 virq, seL4_Uint8 pri
 	seL4_Word mr3;
 
 	/* Marshal and initialise parameters. */
-	mr0 = (virq & 0xfffful) | ((priority & 0xfful) << 16) | ((group & 0xfful) << 24);
-	mr1 = (index & 0xfful);
+	mr0 = (virq & 0xffffull) | ((priority & 0xffull) << 16) | ((group & 0xffull) << 24) | ((index & 0xffull) << 32);
+	mr1 = 0;
 	mr2 = 0;
 	mr3 = 0;
 
@@ -1533,7 +1601,7 @@ seL4_IRQControl_GetTrigger(seL4_IRQControl _service, seL4_Word irq, seL4_Word tr
 	mr0 = irq;
 	mr1 = trigger;
 	mr2 = index;
-	mr3 = (depth & 0xfful);
+	mr3 = (depth & 0xffull);
 
 	/* Perform the call, passing in-register arguments directly. */
 	output_tag = seL4_CallWithMRs(_service, tag,
@@ -1601,7 +1669,7 @@ seL4_IRQControl_GetTriggerCore(seL4_IRQControl _service, seL4_Word irq, seL4_Wor
 	mr0 = irq;
 	mr1 = trigger;
 	mr2 = index;
-	mr3 = (depth & 0xfful);
+	mr3 = (depth & 0xffull);
 	seL4_SetMR(4, target);
 
 	/* Perform the call, passing in-register arguments directly. */
@@ -1675,7 +1743,7 @@ seL4_IRQControl_IssueSGISignal(seL4_IRQControl _service, seL4_Word irq, seL4_Wor
 	mr0 = irq;
 	mr1 = target;
 	mr2 = index;
-	mr3 = (depth & 0xfful);
+	mr3 = (depth & 0xffull);
 
 	/* Perform the call, passing in-register arguments directly. */
 	output_tag = seL4_CallWithMRs(_service, tag,
@@ -1740,7 +1808,7 @@ seL4_ARM_SIDControl_GetSID(seL4_ARM_SIDControl _service, seL4_Word sid, seL4_CNo
 	/* Marshal and initialise parameters. */
 	mr0 = sid;
 	mr1 = index;
-	mr2 = (depth & 0xfful);
+	mr2 = (depth & 0xffull);
 	mr3 = 0;
 
 	/* Perform the call, passing in-register arguments directly. */
@@ -2037,7 +2105,7 @@ seL4_ARM_CBControl_GetCB(seL4_ARM_CBControl _service, seL4_Word cb, seL4_CNode r
 	/* Marshal and initialise parameters. */
 	mr0 = cb;
 	mr1 = index;
-	mr2 = (depth & 0xfful);
+	mr2 = (depth & 0xffull);
 	mr3 = 0;
 
 	/* Perform the call, passing in-register arguments directly. */
@@ -2520,7 +2588,7 @@ seL4_TCB_ReadRegisters(seL4_TCB _service, seL4_Bool suspend_source, seL4_Uint8 a
 	seL4_Word mr3;
 
 	/* Marshal and initialise parameters. */
-	mr0 = (suspend_source & 0x1ul) | ((arch_flags & 0xfful) << 8);
+	mr0 = (suspend_source & 0x1ull) | ((arch_flags & 0xffull) << 8);
 	mr1 = count;
 	mr2 = 0;
 	mr3 = 0;
@@ -2546,23 +2614,40 @@ seL4_TCB_ReadRegisters(seL4_TCB _service, seL4_Bool suspend_source, seL4_Uint8 a
 	/* Unmarshal result. */
 	regs->pc = mr0;
 	regs->sp = mr1;
-	regs->cpsr = mr2;
-	regs->r0 = mr3;
-	regs->r1 = seL4_GetMR(4);
-	regs->r8 = seL4_GetMR(5);
-	regs->r9 = seL4_GetMR(6);
-	regs->r10 = seL4_GetMR(7);
-	regs->r11 = seL4_GetMR(8);
-	regs->r12 = seL4_GetMR(9);
-	regs->r2 = seL4_GetMR(10);
-	regs->r3 = seL4_GetMR(11);
-	regs->r4 = seL4_GetMR(12);
-	regs->r5 = seL4_GetMR(13);
-	regs->r6 = seL4_GetMR(14);
-	regs->r7 = seL4_GetMR(15);
-	regs->r14 = seL4_GetMR(16);
-	regs->tpidrurw = seL4_GetMR(17);
-	regs->tpidruro = seL4_GetMR(18);
+	regs->spsr = mr2;
+	regs->x0 = mr3;
+	regs->x1 = seL4_GetMR(4);
+	regs->x2 = seL4_GetMR(5);
+	regs->x3 = seL4_GetMR(6);
+	regs->x4 = seL4_GetMR(7);
+	regs->x5 = seL4_GetMR(8);
+	regs->x6 = seL4_GetMR(9);
+	regs->x7 = seL4_GetMR(10);
+	regs->x8 = seL4_GetMR(11);
+	regs->x16 = seL4_GetMR(12);
+	regs->x17 = seL4_GetMR(13);
+	regs->x18 = seL4_GetMR(14);
+	regs->x29 = seL4_GetMR(15);
+	regs->x30 = seL4_GetMR(16);
+	regs->x9 = seL4_GetMR(17);
+	regs->x10 = seL4_GetMR(18);
+	regs->x11 = seL4_GetMR(19);
+	regs->x12 = seL4_GetMR(20);
+	regs->x13 = seL4_GetMR(21);
+	regs->x14 = seL4_GetMR(22);
+	regs->x15 = seL4_GetMR(23);
+	regs->x19 = seL4_GetMR(24);
+	regs->x20 = seL4_GetMR(25);
+	regs->x21 = seL4_GetMR(26);
+	regs->x22 = seL4_GetMR(27);
+	regs->x23 = seL4_GetMR(28);
+	regs->x24 = seL4_GetMR(29);
+	regs->x25 = seL4_GetMR(30);
+	regs->x26 = seL4_GetMR(31);
+	regs->x27 = seL4_GetMR(32);
+	regs->x28 = seL4_GetMR(33);
+	regs->tpidr_el0 = seL4_GetMR(34);
+	regs->tpidrro_el0 = seL4_GetMR(35);
 	return result;
 }
 
@@ -2588,7 +2673,7 @@ LIBSEL4_INLINE seL4_Error
 seL4_TCB_WriteRegisters(seL4_TCB _service, seL4_Bool resume_target, seL4_Uint8 arch_flags, seL4_Word count, seL4_UserContext *regs)
 {
 	seL4_Error result;
-	seL4_MessageInfo_t tag = seL4_MessageInfo_new(TCBWriteRegisters, 0, 0, 21);
+	seL4_MessageInfo_t tag = seL4_MessageInfo_new(TCBWriteRegisters, 0, 0, 38);
 	seL4_MessageInfo_t output_tag;
 	seL4_Word mr0;
 	seL4_Word mr1;
@@ -2596,27 +2681,44 @@ seL4_TCB_WriteRegisters(seL4_TCB _service, seL4_Bool resume_target, seL4_Uint8 a
 	seL4_Word mr3;
 
 	/* Marshal and initialise parameters. */
-	mr0 = (resume_target & 0x1ul) | ((arch_flags & 0xfful) << 8);
+	mr0 = (resume_target & 0x1ull) | ((arch_flags & 0xffull) << 8);
 	mr1 = count;
 	mr2 = regs->pc;
 	mr3 = regs->sp;
-	seL4_SetMR(4, regs->cpsr);
-	seL4_SetMR(5, regs->r0);
-	seL4_SetMR(6, regs->r1);
-	seL4_SetMR(7, regs->r8);
-	seL4_SetMR(8, regs->r9);
-	seL4_SetMR(9, regs->r10);
-	seL4_SetMR(10, regs->r11);
-	seL4_SetMR(11, regs->r12);
-	seL4_SetMR(12, regs->r2);
-	seL4_SetMR(13, regs->r3);
-	seL4_SetMR(14, regs->r4);
-	seL4_SetMR(15, regs->r5);
-	seL4_SetMR(16, regs->r6);
-	seL4_SetMR(17, regs->r7);
-	seL4_SetMR(18, regs->r14);
-	seL4_SetMR(19, regs->tpidrurw);
-	seL4_SetMR(20, regs->tpidruro);
+	seL4_SetMR(4, regs->spsr);
+	seL4_SetMR(5, regs->x0);
+	seL4_SetMR(6, regs->x1);
+	seL4_SetMR(7, regs->x2);
+	seL4_SetMR(8, regs->x3);
+	seL4_SetMR(9, regs->x4);
+	seL4_SetMR(10, regs->x5);
+	seL4_SetMR(11, regs->x6);
+	seL4_SetMR(12, regs->x7);
+	seL4_SetMR(13, regs->x8);
+	seL4_SetMR(14, regs->x16);
+	seL4_SetMR(15, regs->x17);
+	seL4_SetMR(16, regs->x18);
+	seL4_SetMR(17, regs->x29);
+	seL4_SetMR(18, regs->x30);
+	seL4_SetMR(19, regs->x9);
+	seL4_SetMR(20, regs->x10);
+	seL4_SetMR(21, regs->x11);
+	seL4_SetMR(22, regs->x12);
+	seL4_SetMR(23, regs->x13);
+	seL4_SetMR(24, regs->x14);
+	seL4_SetMR(25, regs->x15);
+	seL4_SetMR(26, regs->x19);
+	seL4_SetMR(27, regs->x20);
+	seL4_SetMR(28, regs->x21);
+	seL4_SetMR(29, regs->x22);
+	seL4_SetMR(30, regs->x23);
+	seL4_SetMR(31, regs->x24);
+	seL4_SetMR(32, regs->x25);
+	seL4_SetMR(33, regs->x26);
+	seL4_SetMR(34, regs->x27);
+	seL4_SetMR(35, regs->x28);
+	seL4_SetMR(36, regs->tpidr_el0);
+	seL4_SetMR(37, regs->tpidrro_el0);
 
 	/* Perform the call, passing in-register arguments directly. */
 	output_tag = seL4_CallWithMRs(_service, tag,
@@ -2675,7 +2777,7 @@ seL4_TCB_CopyRegisters(seL4_TCB _service, seL4_TCB source, seL4_Bool suspend_sou
 	seL4_SetCap(0, source);
 
 	/* Marshal and initialise parameters. */
-	mr0 = (suspend_source & 0x1ul) | ((resume_target & 0x1ul) << 1) | ((transfer_frame & 0x1ul) << 2) | ((transfer_integer & 0x1ul) << 3) | ((arch_flags & 0xfful) << 8);
+	mr0 = (suspend_source & 0x1ull) | ((resume_target & 0x1ull) << 1) | ((transfer_frame & 0x1ull) << 2) | ((transfer_integer & 0x1ull) << 3) | ((arch_flags & 0xffull) << 8);
 	mr1 = 0;
 	mr2 = 0;
 	mr3 = 0;
@@ -3639,7 +3741,7 @@ seL4_TCB_SetBreakpoint(seL4_TCB _service, seL4_Uint16 bp_num, seL4_Word vaddr, s
 	seL4_Word mr3;
 
 	/* Marshal and initialise parameters. */
-	mr0 = (bp_num & 0xfffful);
+	mr0 = (bp_num & 0xffffull);
 	mr1 = vaddr;
 	mr2 = type;
 	mr3 = size;
@@ -3708,7 +3810,7 @@ seL4_TCB_GetBreakpoint(seL4_TCB _service, seL4_Uint16 bp_num)
 	seL4_Word mr3;
 
 	/* Marshal and initialise parameters. */
-	mr0 = (bp_num & 0xfffful);
+	mr0 = (bp_num & 0xffffull);
 	mr1 = 0;
 	mr2 = 0;
 	mr3 = 0;
@@ -3775,7 +3877,7 @@ seL4_TCB_UnsetBreakpoint(seL4_TCB _service, seL4_Uint16 bp_num)
 	seL4_Word mr3;
 
 	/* Marshal and initialise parameters. */
-	mr0 = (bp_num & 0xfffful);
+	mr0 = (bp_num & 0xffffull);
 	mr1 = 0;
 	mr2 = 0;
 	mr3 = 0;
@@ -3842,7 +3944,7 @@ seL4_TCB_ConfigureSingleStepping(seL4_TCB _service, seL4_Uint16 bp_num, seL4_Wor
 	seL4_Word mr3;
 
 	/* Marshal and initialise parameters. */
-	mr0 = (bp_num & 0xfffful);
+	mr0 = (bp_num & 0xffffull);
 	mr1 = num_instructions;
 	mr2 = 0;
 	mr3 = 0;
@@ -3954,7 +4056,7 @@ seL4_CNode_Revoke(seL4_CNode _service, seL4_Word index, seL4_Uint8 depth)
 
 	/* Marshal and initialise parameters. */
 	mr0 = index;
-	mr1 = (depth & 0xfful);
+	mr1 = (depth & 0xffull);
 	mr2 = 0;
 	mr3 = 0;
 
@@ -4009,7 +4111,7 @@ seL4_CNode_Delete(seL4_CNode _service, seL4_Word index, seL4_Uint8 depth)
 
 	/* Marshal and initialise parameters. */
 	mr0 = index;
-	mr1 = (depth & 0xfful);
+	mr1 = (depth & 0xffull);
 	mr2 = 0;
 	mr3 = 0;
 
@@ -4068,7 +4170,7 @@ seL4_CNode_CancelBadgedSends(seL4_CNode _service, seL4_Word index, seL4_Uint8 de
 
 	/* Marshal and initialise parameters. */
 	mr0 = index;
-	mr1 = (depth & 0xfful);
+	mr1 = (depth & 0xffull);
 	mr2 = 0;
 	mr3 = 0;
 
@@ -4135,9 +4237,9 @@ seL4_CNode_Copy(seL4_CNode _service, seL4_Word dest_index, seL4_Uint8 dest_depth
 
 	/* Marshal and initialise parameters. */
 	mr0 = dest_index;
-	mr1 = (dest_depth & 0xfful);
+	mr1 = (dest_depth & 0xffull);
 	mr2 = src_index;
-	mr3 = (src_depth & 0xfful);
+	mr3 = (src_depth & 0xffull);
 	seL4_SetMR(4, rights.words[0]);
 
 	/* Perform the call, passing in-register arguments directly. */
@@ -4205,9 +4307,9 @@ seL4_CNode_Mint(seL4_CNode _service, seL4_Word dest_index, seL4_Uint8 dest_depth
 
 	/* Marshal and initialise parameters. */
 	mr0 = dest_index;
-	mr1 = (dest_depth & 0xfful);
+	mr1 = (dest_depth & 0xffull);
 	mr2 = src_index;
-	mr3 = (src_depth & 0xfful);
+	mr3 = (src_depth & 0xffull);
 	seL4_SetMR(4, rights.words[0]);
 	seL4_SetMR(5, badge);
 
@@ -4271,9 +4373,9 @@ seL4_CNode_Move(seL4_CNode _service, seL4_Word dest_index, seL4_Uint8 dest_depth
 
 	/* Marshal and initialise parameters. */
 	mr0 = dest_index;
-	mr1 = (dest_depth & 0xfful);
+	mr1 = (dest_depth & 0xffull);
 	mr2 = src_index;
-	mr3 = (src_depth & 0xfful);
+	mr3 = (src_depth & 0xffull);
 
 	/* Perform the call, passing in-register arguments directly. */
 	output_tag = seL4_CallWithMRs(_service, tag,
@@ -4341,9 +4443,9 @@ seL4_CNode_Mutate(seL4_CNode _service, seL4_Word dest_index, seL4_Uint8 dest_dep
 
 	/* Marshal and initialise parameters. */
 	mr0 = dest_index;
-	mr1 = (dest_depth & 0xfful);
+	mr1 = (dest_depth & 0xffull);
 	mr2 = src_index;
-	mr3 = (src_depth & 0xfful);
+	mr3 = (src_depth & 0xffull);
 	seL4_SetMR(4, badge);
 
 	/* Perform the call, passing in-register arguments directly. */
@@ -4415,13 +4517,13 @@ seL4_CNode_Rotate(seL4_CNode _service, seL4_Word dest_index, seL4_Uint8 dest_dep
 
 	/* Marshal and initialise parameters. */
 	mr0 = dest_index;
-	mr1 = (dest_depth & 0xfful);
+	mr1 = (dest_depth & 0xffull);
 	mr2 = dest_badge;
 	mr3 = pivot_index;
-	seL4_SetMR(4, (pivot_depth & 0xfful));
+	seL4_SetMR(4, (pivot_depth & 0xffull));
 	seL4_SetMR(5, pivot_badge);
 	seL4_SetMR(6, src_index);
-	seL4_SetMR(7, (src_depth & 0xfful));
+	seL4_SetMR(7, (src_depth & 0xffull));
 
 	/* Perform the call, passing in-register arguments directly. */
 	output_tag = seL4_CallWithMRs(_service, tag,
@@ -4476,7 +4578,7 @@ seL4_CNode_SaveCaller(seL4_CNode _service, seL4_Word index, seL4_Uint8 depth)
 
 	/* Marshal and initialise parameters. */
 	mr0 = index;
-	mr1 = (depth & 0xfful);
+	mr1 = (depth & 0xffull);
 	mr2 = 0;
 	mr3 = 0;
 
@@ -4543,7 +4645,7 @@ seL4_IRQControl_Get(seL4_IRQControl _service, seL4_Word irq, seL4_CNode root, se
 	/* Marshal and initialise parameters. */
 	mr0 = irq;
 	mr1 = index;
-	mr2 = (depth & 0xfful);
+	mr2 = (depth & 0xffull);
 	mr3 = 0;
 
 	/* Perform the call, passing in-register arguments directly. */
@@ -4758,7 +4860,7 @@ seL4_DomainSet_Set(seL4_DomainSet _service, seL4_Uint8 domain, seL4_TCB thread)
 	seL4_SetCap(0, thread);
 
 	/* Marshal and initialise parameters. */
-	mr0 = (domain & 0xfful);
+	mr0 = (domain & 0xffull);
 	mr1 = 0;
 	mr2 = 0;
 	mr3 = 0;
@@ -4810,7 +4912,7 @@ LIBSEL4_INLINE seL4_Error
 seL4_SchedControl_ConfigureFlags(seL4_SchedControl _service, seL4_SchedContext schedcontext, seL4_Time budget, seL4_Time period, seL4_Word extra_refills, seL4_Word badge, seL4_Word flags)
 {
 	seL4_Error result;
-	seL4_MessageInfo_t tag = seL4_MessageInfo_new(SchedControlConfigureFlags, 0, 1, 7);
+	seL4_MessageInfo_t tag = seL4_MessageInfo_new(SchedControlConfigureFlags, 0, 1, 5);
 	seL4_MessageInfo_t output_tag;
 	seL4_Word mr0;
 	seL4_Word mr1;
@@ -4821,13 +4923,11 @@ seL4_SchedControl_ConfigureFlags(seL4_SchedControl _service, seL4_SchedContext s
 	seL4_SetCap(0, schedcontext);
 
 	/* Marshal and initialise parameters. */
-	mr0 = (seL4_Uint64) budget;
-	mr1 = (seL4_Uint64) (budget >> 32);
-	mr2 = (seL4_Uint64) period;
-	mr3 = (seL4_Uint64) (period >> 32);
-	seL4_SetMR(4, extra_refills);
-	seL4_SetMR(5, badge);
-	seL4_SetMR(6, flags);
+	mr0 = budget;
+	mr1 = period;
+	mr2 = extra_refills;
+	mr3 = badge;
+	seL4_SetMR(4, flags);
 
 	/* Perform the call, passing in-register arguments directly. */
 	output_tag = seL4_CallWithMRs(_service, tag,
@@ -5095,7 +5195,7 @@ seL4_SchedContext_Consumed(seL4_SchedContext _service)
 	}
 
 	/* Unmarshal result. */
-	result.consumed = ((seL4_Uint64)mr0 + ((seL4_Uint64)mr1 << 32));
+	result.consumed = mr0;
 	return result;
 }
 
@@ -5158,7 +5258,7 @@ seL4_SchedContext_YieldTo(seL4_SchedContext _service)
 	}
 
 	/* Unmarshal result. */
-	result.consumed = ((seL4_Uint64)mr0 + ((seL4_Uint64)mr1 << 32));
+	result.consumed = mr0;
 	return result;
 }
 

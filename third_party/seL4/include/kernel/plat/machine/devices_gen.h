@@ -10,7 +10,7 @@
 
 #pragma once
 
-#define PHYS_BASE_RAW 0x60000000
+#define PHYS_BASE_RAW 0x40000000
 
 #ifndef __ASSEMBLER__
 
@@ -29,8 +29,6 @@ static inline CONST word_t physBase(void)
 }
 
 /* INTERRUPTS */
-/* INTERRUPT_VGIC_MAINTENANCE generated from /intc@8000000 */
-#define INTERRUPT_VGIC_MAINTENANCE 25
 /* INTERRUPT_VTIMER_EVENT generated from /timer */
 #define INTERRUPT_VTIMER_EVENT 27
 /* KERNEL_TIMER_IRQ generated from /timer */
@@ -43,7 +41,6 @@ static inline CONST word_t physBase(void)
 #define UART_PPTR (KDEV_BASE + 0x0)
 #define GIC_V2_DISTRIBUTOR_PPTR (KDEV_BASE + 0x1000)
 #define GIC_V2_CONTROLLER_PPTR (KDEV_BASE + 0x2000)
-#define GIC_V2_VCPUCTRL_PPTR (KDEV_BASE + 0x3000)
 
 static const kernel_frame_t BOOT_RODATA kernel_device_frames[] = {
     #ifdef CONFIG_PRINTING
@@ -69,15 +66,6 @@ static const kernel_frame_t BOOT_RODATA kernel_device_frames[] = {
         .armExecuteNever = true,
         .userAvailable = false
     },
-    #ifdef CONFIG_ARM_HYPERVISOR_SUPPORT
-    /* /intc@8000000 */
-    {
-        .paddr = 0x8030000,
-        .pptr = GIC_V2_VCPUCTRL_PPTR,
-        .armExecuteNever = true,
-        .userAvailable = false
-    },
-    #endif /* CONFIG_ARM_HYPERVISOR_SUPPORT */
 };
 
 /* Elements in kernel_device_frames may be enabled in specific configurations
@@ -93,7 +81,7 @@ static const kernel_frame_t BOOT_RODATA kernel_device_frames[] = {
 static const p_region_t BOOT_RODATA avail_p_regs[] = {
     /* /memory@40000000 */
     {
-        .start = 0x60000000,
+        .start = 0x40000000,
         .end   = 0x80000000
     },
 };
