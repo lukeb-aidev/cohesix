@@ -3,7 +3,7 @@
 // Author: Cohesix Codex
 // Date Modified: 2028-01-25
 
-const DEFINED_SYSCALLS: &[i64] = &[9, 3, 5, 7, 11];
+const DEFINED_SYSCALLS: &[i64] = &[-9, -3, -5, -7, -11];
 
 #[test]
 fn syscall_coverage() {
