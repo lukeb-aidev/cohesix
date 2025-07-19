@@ -1,11 +1,9 @@
 /* CLASSIFICATION: COMMUNITY */
 /* Filename: link.ld v0.23 */
 /* Author: Lukas Bower */
-/* Date Modified: 2028-01-21 */
+/* Date Modified: 2028-07-19 */
 /* SPDX-License-Identifier: BSD-2-Clause */
 
-SEARCH_DIR("../third_party/seL4/lib");
-INPUT(libsel4.a);
 ENTRY(_start)
 
 /*

@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: USERLAND_BOOT.md v0.5
 // Author: Lukas Bower
-// Date Modified: 2028-02-16
+// Date Modified: 2028-07-19
 
 # Userland Boot Verification
 
@@ -118,3 +118,12 @@ correct.
 0x0900_0000  UART MMIO
 BootInfo frame mapped at runtime
 ```
+
+## libsel4 Mismatch 2028-07-19
+
+Updating the seL4 sources replaced `libsel4.a` with a 32-bit ARM build.
+Linking the aarch64 rootserver against this archive failed with `ld.lld`
+reporting incompatible object files. The fix was to remove the library from
+`link.ld` and the build script, then implement `seL4_GetBootInfo` directly in
+Rust to return the saved pointer from `_start`. Rebuilding now produces a
+64-bit ELF that links cleanly.

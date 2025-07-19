@@ -21,10 +21,8 @@
       "max-page-size=0x1000",
       "-z",
       "norelro",
-      "-no-pie",
-      "-L",
-      "../../third_party/seL4/lib",
-      "-lsel4"
+      "-no-pie"
+      
     ]
   }
 }
