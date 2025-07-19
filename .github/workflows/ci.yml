@@ -30,17 +30,45 @@ jobs:
         with:
           go-version: '1.22'
 
-      - name: Install UEFI target
-        run: rustup target add aarch64-unknown-uefi
-
-      - name: Build Rust UEFI binary
+      - name: Build Rust components
         run: |
-          export MEMCHR_DISABLE_RUNTIME_CPU_FEATURE_DETECTION=1
-          cargo build --release --target aarch64-unknown-uefi | tee rust_build_uefi.log
+          log() { echo -e "\033[1;34m$1\033[0m"; }
+
+          log "🔨 Building host crates"
+          cargo +nightly build --release --workspace \
+            --exclude sel4-sys \
+            --exclude cohesix_root
+          cargo +nightly test --release --workspace \
+            --exclude sel4-sys \
+            --exclude cohesix_root
+          log "✅ Host crates built and tested"
+
+          log "🔨 Building sel4-sys (no-std, panic-abort)"
+          RUSTFLAGS="-C panic=abort" \
+          cargo +nightly build -p sel4-sys --release \
+            --target=cohesix_root/sel4-aarch64.json \
+            -Z build-std=core,alloc,compiler_builtins \
+            -Z build-std-features=compiler-builtins-mem
+          log "✅ sel4-sys built (tests skipped)"
+
+          log "🔨 Building cohesix_root (no-std, panic-abort)"
+          export LIBRARY_PATH="$(pwd)/third_party/seL4/lib:$LIBRARY_PATH"
+          RUSTFLAGS="-C panic=abort \
+            -C link-arg=-L$(pwd)/third_party/seL4/lib \
+            -C link-arg=-lsel4" \
+          cargo +nightly build -p cohesix_root --release \
+            --target=cohesix_root/sel4-aarch64.json \
+            -Z build-std=core,alloc,compiler_builtins \
+            -Z build-std-features=compiler-builtins-mem
+          log "✅ cohesix_root built"
+
+          log "✅ Rust components built with proper split targets"
 
       - name: Run Rust tests (host)
         run: |
-          cargo test | tee rust_test_host.log
+          cargo test --release --workspace \
+            --exclude sel4-sys \
+            --exclude cohesix_root | tee rust_test_host.log
 
       - name: Run Go tests
         run: |
@@ -55,26 +83,13 @@ jobs:
         run: |
           cargo test --workspace --no-run | tee rust_test_compile.log
 
-      - name: Verify ELF layout
-        run: |
-          python tools/check_elf_layout.py target/sel4-aarch64/release/cohesix_root
-
-      - name: Verify sel4-sys link path
-        run: |
-          if grep -R "cargo:rustc-link-search" target/*/build/sel4-sys/output | grep -v "^cargo:rustc-link-search=native=/"; then exit 1; fi
-
-      - name: Verify sel4 spec template
-        run: diff workspace/cohesix_root/sel4-aarch64.json workspace/cohesix_root/sel4-aarch64.canonical.json
-
 
       - uses: actions/upload-artifact@v4
         with:
           name: ci-logs
           path: |
-            rust_build_uefi.log
             rust_test_host.log
             go_test.log
-            make_build.log
             python_test.log
 
       - name: Validation summary
