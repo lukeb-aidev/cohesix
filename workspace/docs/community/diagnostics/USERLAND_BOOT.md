@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: USERLAND_BOOT.md v0.4
+// Filename: USERLAND_BOOT.md v0.5
 // Author: Lukas Bower
-// Date Modified: 2028-02-15
+// Date Modified: 2028-02-16
 
 # Userland Boot Verification
 
@@ -95,3 +95,26 @@ and sets up Rust helpers (`set_bootinfo_ptr`, `bootinfo`) to read it.
 `mmu::init` now identity maps this BootInfo frame alongside the device tree and
 UART regions. `main` retrieves the pointer, configures TLS with
 `BootInfo.ipc_buffer`, and proceeds into the Plan9 init sequence without faults.
+
+## Syscall Constant Correction 2028-02-16
+
+The rootserver still halted with `unknown syscall 0` once the BootInfo pointer
+was valid.  Investigation confirmed the syscall wrapper constants were
+positive even though the seL4 ABI expects negative numbers. The constants in
+`src/sys.rs` now use `-9`, `-3`, `-5`, `-7` and `-11`. The new test
+`debug_putchar_const` ensures the value for `SYS_DEBUG_PUTCHAR` remains
+correct.
+
+### Rootserver VSpace Layout
+
+```
+0x0040_0000  .vectors
+0x0040_1000  .text
+0x0040_2000  .rodata
+0x0040_4000  .data
+0x0040_6000  .bss
+0x0040_8000-0x0048_8000  heap
+0x0048_9000-0x0049_9000  stack
+0x0900_0000  UART MMIO
+BootInfo frame mapped at runtime
+```
