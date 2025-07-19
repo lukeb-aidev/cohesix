@@ -3459,4 +3459,7 @@
 
 ## [v0.564] - 2028-01-21
 ### Added
-- **WebCodexHolisticBootDeepDiagnostics-060**: Introduced ELF layout validator, vector table and syscall coverage tests, MMU mapping snapshot, and CI checks for absolute link paths and target template consistency.
+
+## [v0.565] - 2028-08-31
+### Fixed
+- **FixPhase3Linking-083**: Phase 3 builds now rely solely on header-based seL4 linkage. Removed libsel4.a path references from build scripts and CI.
