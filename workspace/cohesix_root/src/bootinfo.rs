@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: bootinfo.rs v0.3
 // Author: Lukas Bower
-// Date Modified: 2028-08-30
+// Date Modified: 2028-08-31
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -77,7 +77,7 @@ pub unsafe fn bootinfo() -> &'static BootInfo {
 }
 
 #[no_mangle]
-pub extern "C" fn seL4_GetBootInfo(_: u32) -> *const BootInfo {
+pub extern "C" fn seL4_GetBootInfo(_: usize) -> *const BootInfo {
     unsafe { &BOOTINFO as *const _ }
 }
 
