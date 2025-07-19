@@ -1,8 +1,8 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: wrapper.h v0.1
 // Author: Lukas Bower
-// Date Modified: 2028-02-15
+// Date Modified: 2028-02-16
 
-#include <sel4/types.h>
-#include <sel4/bootinfo_types.h>
-#include <sel4/constants.h>
+typedef unsigned long long seL4_Word;
+typedef seL4_Word seL4_CPtr;
+typedef seL4_Word seL4_MessageInfo_t;
