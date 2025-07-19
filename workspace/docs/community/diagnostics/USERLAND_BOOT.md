@@ -127,3 +127,4 @@ reporting incompatible object files. The fix was to remove the library from
 `link.ld` and the build script, then implement `seL4_GetBootInfo` directly in
 Rust to return the saved pointer from `_start`. Rebuilding now produces a
 64-bit ELF that links cleanly.
+\n## HeaderIntegrationAudit 2028-08-30\n\nseL4 headers under third_party/seL4/include are now used directly by cohesix_root. build.rs defines a local sel4/config.h to satisfy the includes and bindgen regenerates bindings.rs from sel4/syscall.h. libsel4.a and the sel4-sys crate were removed from the rootserver build.
