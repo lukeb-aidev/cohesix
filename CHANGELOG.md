@@ -3463,3 +3463,7 @@
 ## [v0.565] - 2028-08-31
 ### Fixed
 - **FixPhase3Linking-083**: Phase 3 builds now rely solely on header-based seL4 linkage. Removed libsel4.a path references from build scripts and CI.
+
+## [v0.566] - 2028-08-31
+### Fixed
+- **WebCodexFix32to64-010**: Updated bootinfo binding for 64-bit word size and enabled architecture override in `qemu_boot_check.sh` for AArch64 CI boot.
