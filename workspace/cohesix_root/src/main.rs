@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: main.rs v0.48
 // Author: Lukas Bower
-// Date Modified: 2028-02-15
+// Date Modified: 2028-08-30
 #![no_std]
 #![no_main]
 #![feature(alloc_error_handler, asm_experimental_arch, lang_items)]
@@ -468,13 +468,8 @@ fn exec_init() -> ! {
 pub extern "C" fn main() {
     sys::init_uart();
     unsafe {
-        let bi_ptr = bootinfo::get_bootinfo_ptr();
-        if !bi_ptr.is_null() {
-            let bi = &*bi_ptr;
-            sys::sel4_set_tls(bi.ipc_buffer as *const u8);
-        } else {
-            coherr!("bootinfo_ptr_null");
-        }
+        let bi = bootinfo::bootinfo();
+        sys::sel4_set_tls(bi.ipc_buffer as *const u8);
     }
     sys::coh_log("ROOTSERVER ONLINE");
     unsafe {
