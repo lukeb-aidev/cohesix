@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: build.rs v0.3
 // Author: Lukas Bower
-// Date Modified: 2028-02-15
+// Date Modified: 2028-02-16
 
 use std::{env, fs, path::Path};
 use std::io::Write;
@@ -13,6 +13,14 @@ fn generate_bindings(out_dir: &str, manifest_dir: &str) {
         .ctypes_prefix("cty")
         .header(wrapper.to_string_lossy())
         .clang_arg(format!("-I{}/../../third_party/seL4/include", manifest_dir))
+        .clang_arg(format!(
+            "-I{}/../../third_party/seL4/arch_include/arm",
+            manifest_dir
+        ))
+        .clang_arg(format!(
+            "-I{}/../../third_party/seL4/sel4_arch_include/aarch64",
+            manifest_dir
+        ))
         .allowlist_function("seL4_.*")
         .allowlist_type("seL4_.*")
         .allowlist_var("seL4_.*")
