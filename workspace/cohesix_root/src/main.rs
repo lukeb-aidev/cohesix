@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: main.rs v0.47
+// Filename: main.rs v0.48
 // Author: Lukas Bower
 // Date Modified: 2028-02-15
 #![no_std]
@@ -16,6 +16,8 @@ mod dt;
 mod startup;
 mod exception;
 mod mmu;
+
+include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 
 use core::arch::global_asm;
 global_asm!(include_str!("entry.S"));
