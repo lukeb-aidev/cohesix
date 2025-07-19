@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v1.36
+# Filename: cohesix_fetch_build.sh v1.37
 # Author: Lukas Bower
-# Date Modified: 2028-08-31
+# Date Modified: 2028-09-01
 
 # This script fetches and builds the Cohesix project, including seL4 and other dependencies.
 
@@ -97,7 +97,8 @@ logging:
 EOF
 log "✅ config.yaml created at $CONFIG_PATH"
 
-LIB_PATH="$ROOT/third_party/seL4/lib/libsel4.a"
+SEL4_LIB_DIR="$ROOT/third_party/seL4/lib"
+export SEL4_LIB_DIR
 
 if [ -f "$ROOT/scripts/load_arch_config.sh" ]; then
   source "$ROOT/scripts/load_arch_config.sh"
@@ -449,9 +450,11 @@ cargo +nightly test --release --workspace \
   --exclude cohesix_root
 log "✅ Host crates built and tested"
 
+
 # Phase 2: Cross-compile sel4-sys (no-std, panic-abort)
 log "🔨 Building sel4-sys (no-std, panic-abort)"
-RUSTFLAGS="-C panic=abort" \
+export LIBRARY_PATH="$SEL4_LIB_DIR:${LIBRARY_PATH:-}"
+RUSTFLAGS="-C panic=abort -L $SEL4_LIB_DIR" \
 cargo +nightly build -p sel4-sys --release \
   --target=cohesix_root/sel4-aarch64.json \
   -Z build-std=core,alloc,compiler_builtins \
@@ -460,7 +463,7 @@ log "✅ sel4-sys built (tests skipped)"
 
 # Phase 3: Cross-compile cohesix_root
 log "🔨 Building cohesix_root (no-std, panic-abort)"
-RUSTFLAGS="-C panic=abort" \
+RUSTFLAGS="-C panic=abort -L $SEL4_LIB_DIR" \
 cargo +nightly build -p cohesix_root --release \
   --target=cohesix_root/sel4-aarch64.json \
   -Z build-std=core,alloc,compiler_builtins \
@@ -583,8 +586,13 @@ if [ "${_cpio_entries[0]}" != "kernel.elf" ] || \
 fi
 
 # Replace or inject the embedded CPIO archive into elfloader
+if aarch64-linux-gnu-readelf -S "$ROOT/third_party/seL4/artefacts/elfloader" | grep -q '._archive_cpio'; then
+  OBJCOPY_OP="--update-section"
+else
+  OBJCOPY_OP="--add-section"
+fi
 aarch64-linux-gnu-objcopy \
-  --add-section ._archive_cpio="$ROOT/boot/cohesix.cpio" \
+  "$OBJCOPY_OP" ._archive_cpio="$ROOT/boot/cohesix.cpio" \
   --set-section-flags ._archive_cpio=contents,alloc,load,readonly,data \
   "$ROOT/third_party/seL4/artefacts/elfloader" "$ROOT/boot/elfloader"
 
