@@ -2,7 +2,7 @@
 # CLASSIFICATION: COMMUNITY
 # Filename: cohesix_fetch_build.sh v1.37
 # Author: Lukas Bower
-# Date Modified: 2028-09-01
+# Date Modified: 2025-07-19
 
 # This script fetches and builds the Cohesix project, including seL4 and other dependencies.
 
