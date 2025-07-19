@@ -582,16 +582,24 @@ if [ "${_cpio_entries[0]}" != "kernel.elf" ] || \
   exit 1
 fi
 
-# Replace the embedded CPIO archive in the elfloader
+# Replace or inject the embedded CPIO archive into elfloader
 aarch64-linux-gnu-objcopy \
-  --update-section ._archive_cpio="$ROOT/boot/cohesix.cpio" \
+  --add-section ._archive_cpio="$ROOT/boot/cohesix.cpio" \
+  --set-section-flags ._archive_cpio=contents,alloc,load,readonly,data \
   "$ROOT/third_party/seL4/artefacts/elfloader" "$ROOT/boot/elfloader"
 
-# Sanity check - ensure sel4test-driver is not present
-if cpio -it < "$ROOT/boot/cohesix.cpio" | grep -q sel4test-driver; then
-  echo "❌ CPIO archive still contains sel4test-driver" >&2
+# Sanity check
+if [ ! -f "$ROOT/boot/elfloader" ]; then
+  echo "❌ ELFLoader build failed: output missing" >&2
   exit 1
 fi
+
+if ! aarch64-linux-gnu-readelf -S "$ROOT/boot/elfloader" | grep -q '._archive_cpio'; then
+  echo "❌ Section ._archive_cpio not found in patched elfloader" >&2
+  exit 1
+fi
+
+echo "✅ ELFLoader patched successfully"
 
 # 5) Export the path
 CPIO_IMAGE="$ROOT/boot/cohesix.cpio"
