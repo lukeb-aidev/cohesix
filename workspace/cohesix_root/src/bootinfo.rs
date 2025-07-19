@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: bootinfo.rs v0.1
+// Filename: bootinfo.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2027-12-31
+// Date Modified: 2028-02-15
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -40,12 +40,30 @@ pub struct BootInfo {
     pub untyped_list: [UntypedDesc; MAX_BOOTINFO_UNTYPED_CAPS],
 }
 
+#[link_section = ".bss"]
+#[no_mangle]
+pub static mut BOOTINFO_PTR: *const BootInfo = core::ptr::null();
+
+#[no_mangle]
+pub unsafe extern "C" fn set_bootinfo_ptr(ptr: *const BootInfo) {
+    BOOTINFO_PTR = ptr;
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn get_bootinfo_ptr() -> *const BootInfo {
+    BOOTINFO_PTR
+}
+
+pub unsafe fn bootinfo() -> &'static BootInfo {
+    &*BOOTINFO_PTR
+}
+
 extern "C" {
     pub fn seL4_GetBootInfo() -> *const BootInfo;
 }
 
 pub unsafe fn dump_bootinfo() {
-    let bi = &*seL4_GetBootInfo();
+    let bi = bootinfo();
     crate::coherr!(
         "bootinfo node_id={} untyped={} first_ut_size={}",
         bi.node_id,
