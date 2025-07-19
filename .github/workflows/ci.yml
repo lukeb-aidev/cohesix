@@ -13,24 +13,53 @@ on:
 
 jobs:
   ci:
-    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: workspace
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-${{ hashFiles('workspace/Cargo.lock') }}
 
       - uses: actions/setup-python@v5
         with:
           python-version: '3.x'
+
+      - uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
 
       - uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
           override: true
 
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: nightly
+          override: false
+
       - uses: actions/setup-go@v4
         with:
           go-version: '1.22'
 
+      - uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/.modcache
+          key: ${{ runner.os }}-go-${{ hashFiles('go/go.mod', 'go/go.sum') }}
+
       - name: Build Rust components
+        working-directory: workspace
         run: |
           log() { echo -e "\033[1;34m$1\033[0m"; }
 
@@ -62,6 +91,7 @@ jobs:
           log "✅ Rust components built with proper split targets"
 
       - name: Run Rust tests (host)
+        working-directory: workspace
         run: |
           cargo test --release --workspace \
             --exclude sel4-sys \
@@ -73,12 +103,20 @@ jobs:
 
       - name: Run Python tests
         run: |
+          python -m venv .venv
+          source .venv/bin/activate
           pip install -r requirements.txt
           pytest -q | tee python_test.log
 
       - name: Cargo test compile
+        working-directory: workspace
         run: |
           cargo test --workspace --no-run | tee rust_test_compile.log
+
+      - name: Install QEMU for aarch64
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-aarch64
 
       - name: QEMU aarch64 boot test
         run: |

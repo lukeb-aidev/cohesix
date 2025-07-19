@@ -11,9 +11,13 @@ on:
 
 jobs:
   determinism:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
+    concurrency:
+      group: nightly-determinism
+      cancel-in-progress: true
     defaults:
       run:
+        shell: bash
         working-directory: workspace
 
     steps:
@@ -25,6 +29,7 @@ jobs:
         with:
           toolchain: nightly
           override: true
+          profile: minimal
 
       - name: Cache cargo registry and build artifacts
         uses: actions/cache@v3
@@ -36,9 +41,9 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('workspace/**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-
+            ${{ runner.os }}-
 
-
-      - name: Build host crates
+      - name: Build and test host crates
         run: |
           echo "🔨 Building host crates"
           cargo +nightly build --release --workspace \
@@ -68,3 +73,9 @@ jobs:
             -Z build-std=core,alloc,compiler_builtins \
             -Z build-std-features=compiler-builtins-mem
           echo "✅ cohesix_root built"
+
+      - name: Upload build logs
+        uses: actions/upload-artifact@v3
+        with:
+          name: determinism-logs
+          path: workspace/target
