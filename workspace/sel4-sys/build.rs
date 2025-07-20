@@ -17,21 +17,8 @@ fn main() {
             .to_string_lossy()
             .into_owned()
     });
-    let sel4_arch = env::var("SEL4_ARCH").ok();
-
-    let mut include_dirs = vec![
-        format!("{}/libsel4/interfaces", sel4_include),
-        format!("{}/libsel4/sel4", sel4_include),
-        format!("{}/kernel/api", sel4_include),
-        format!("{}/kernel/arch/api", sel4_include),
-        format!("{}/generated", sel4_include),
-    ];
-    if let Some(ref arch) = sel4_arch {
-        include_dirs.push(format!(
-            "{}/libsel4/sel4_arch/sel4/sel4_arch/{}",
-            sel4_include, arch
-        ));
-    }
+    let header_dirs = sel4_paths::header_dirs_from_tree(PathBuf::from(&sel4_include).as_path())
+        .expect("Failed to collect seL4 header directories");
 
     let cflags = env::var("SEL4_SYS_CFLAGS").unwrap_or_default();
 
@@ -41,13 +28,11 @@ fn main() {
         .ctypes_prefix("cty")
         .clang_args(cflags.split_whitespace());
 
-    for dir in include_dirs {
-        builder = builder.clang_arg(format!("-I{}", dir));
+    for dir in &header_dirs {
+        builder = builder.clang_arg(format!("-I{}", dir.display()));
     }
 
-    let bindings = builder
-        .generate()
-        .expect("Unable to generate bindings");
+    let bindings = builder.generate().expect("Unable to generate bindings");
 
     bindings
         .write_to_file(out_dir.join("bindings.rs"))

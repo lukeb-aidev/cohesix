@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: config.toml v0.1
+# Filename: config.toml v0.2
 # Author: Codex
-# Date Modified: 2028-09-10
+# Date Modified: 2028-11-05
 
 [build]
 target = "cohesix_root/sel4-aarch64.json"
@@ -14,8 +14,5 @@ build-std-features = ["compiler-builtins-mem"]
 rustflags = [
   "-Z", "build-std=core,compiler_builtins,alloc",
   "-Z", "build-std-features=compiler-builtins-mem",
-  "--sysroot", "/root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu",
-  "-I", "../third_party/seL4/include",
-  "-I", "../third_party/seL4/include/generated",
-  "-I", "../third_party/seL4/include/libsel4/sel4"
+  "--sysroot", "/root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu"
 ]

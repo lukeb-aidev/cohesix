@@ -1,14 +1,13 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: build.rs v1.41
+// Filename: build.rs v1.42
 // Author: Lukas Bower
-// Date Modified: 2028-09-10
+// Date Modified: 2028-11-05
 
 use std::{env, fs, path::Path};
 #[path = "../sel4_paths.rs"]
 mod sel4_paths;
-use sel4_paths::{project_root, sel4_generated};
+use sel4_paths::{header_dirs_from_tree, project_root, sel4_generated};
 use std::io::Write;
-
 
 fn generate_dtb_constants(out_dir: &str, manifest_dir: &str) {
     let dts_path = format!("{}/../../third_party/seL4/kernel.dts", manifest_dir);
@@ -20,11 +19,15 @@ fn generate_dtb_constants(out_dir: &str, manifest_dir: &str) {
             let node = path.trim_start_matches('/');
             if let Some(idx) = dts.find(&format!("{} {{", node)) {
                 if let Some(reg_line) = dts[idx..].lines().find(|l| l.contains("reg =")) {
-                    if let Some(values) = reg_line.split('<').nth(1).and_then(|p| p.split('>').next()) {
+                    if let Some(values) =
+                        reg_line.split('<').nth(1).and_then(|p| p.split('>').next())
+                    {
                         let parts: Vec<&str> = values.split_whitespace().collect();
                         if parts.len() >= 2 {
-                            let hi = u64::from_str_radix(parts[0].trim_start_matches("0x"), 16).unwrap_or(0);
-                            let lo = u64::from_str_radix(parts[1].trim_start_matches("0x"), 16).unwrap_or(0);
+                            let hi = u64::from_str_radix(parts[0].trim_start_matches("0x"), 16)
+                                .unwrap_or(0);
+                            let lo = u64::from_str_radix(parts[1].trim_start_matches("0x"), 16)
+                                .unwrap_or(0);
                             uart_base = (hi << 32) | lo;
                         }
                     }
@@ -33,7 +36,8 @@ fn generate_dtb_constants(out_dir: &str, manifest_dir: &str) {
         }
     }
 
-    let mut file = fs::File::create(format!("{}/dt_generated.rs", out_dir)).expect("create dt_generated.rs");
+    let mut file =
+        fs::File::create(format!("{}/dt_generated.rs", out_dir)).expect("create dt_generated.rs");
     writeln!(file, "pub const UART_BASE: usize = 0x{uart_base:x};").unwrap();
 }
 
@@ -71,20 +75,19 @@ fn main() {
     embed_vectors(&out_dir, &manifest_dir);
     let project_root = project_root(&manifest_dir);
 
-    let sel4_lib = project_root.join("third_party/seL4/lib");
-
     let cflags = env::var("SEL4_SYS_CFLAGS").unwrap_or_else(|_| {
-        let sel4_include = project_root.join("third_party/seL4/include/libsel4");
-        let generated = sel4_generated(&project_root);
-        format!(
-            "--target=aarch64-unknown-none -I{} -I{} -I{} -I{}",
-            sel4_include.display(),
-            sel4_include.join("sel4").display(),
-            generated.display(),
-            generated.join("sel4").display()
-        )
+        let include_root = sel4_paths::sel4_include(&project_root);
+        let dirs = header_dirs_from_tree(&include_root).expect("collect seL4 header dirs");
+        let mut args = String::from("--target=aarch64-unknown-none");
+        for d in &dirs {
+            args.push_str(&format!(" -I{}", d.display()));
+        }
+        args
     });
-    println!("cargo:rustc-env=SEL4_GEN_HDR={}", sel4_generated(&project_root).display());
+    println!(
+        "cargo:rustc-env=SEL4_GEN_HDR={}",
+        sel4_generated(&project_root).display()
+    );
     println!("cargo:rustc-env=SEL4_SYS_CFLAGS={}", cflags);
 
     println!(

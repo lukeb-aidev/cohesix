@@ -3492,3 +3492,7 @@
 ## [v1.41] - 2028-09-10
 ### Fixed
 - **WebCodex-BuildFix-105**: Added workspace target config and updated aarch64 target JSON for sel4 builds.
+
+## [v1.42] - 2028-11-05
+### Changed
+- **HolisticSel4IncludeAudit-309**: Build scripts now parse `sel4_tree.txt` to automatically discover seL4 header directories.
