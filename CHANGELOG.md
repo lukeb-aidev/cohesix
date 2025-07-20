@@ -3486,3 +3486,5 @@
 ### Changed
 - Removed `scripts/validate_metadata_sync.py` and all invocations. CI build failures now surface metadata mismatches.
 - Added `[workspace.metadata.release]` to `Cargo.toml` so `cargo release patch` updates versions and tags automatically.
+### Fixed
+- **FixSel4SysBuild-104**: Corrected bindgen clang_args and wrapper.h includes for aarch64 target.
