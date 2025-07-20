@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v1.41
+# Filename: cohesix_fetch_build.sh v1.42
 # Author: Lukas Bower
-# Date Modified: 2028-09-09
+# Date Modified: 2028-09-10
 
 # This script fetches and builds the Cohesix project, including seL4 and other dependencies.
 
@@ -97,8 +97,17 @@ logging:
 EOF
 log "✅ config.yaml created at $CONFIG_PATH"
 
-SEL4_LIB_DIR="$ROOT/third_party/seL4/lib"
-export SEL4_LIB_DIR
+export SEL4_LIB_DIR="$ROOT/third_party/seL4/output"
+export SEL4_SYS_CFLAGS="\
+  -I$SEL4_LIB_DIR/include/libsel4 \
+  -I$SEL4_LIB_DIR/include/libsel4/sel4 \
+  -I$SEL4_LIB_DIR/include/libsel4/sel4_arch\
+"
+export RUSTFLAGS="\
+  -Z build-std=core,alloc,compiler_builtins \
+  -Z build-std-features=compiler-builtins-mem \
+  $RUSTFLAGS\
+"
 
 if [ -f "$ROOT/scripts/load_arch_config.sh" ]; then
   source "$ROOT/scripts/load_arch_config.sh"
@@ -467,29 +476,17 @@ export CFLAGS="--target=aarch64-unknown-none \
 export SEL4_SYS_CFLAGS="$CFLAGS"
 
 export LDFLAGS="-L$SEL4_LIB_DIR"
-
-# Export RUSTFLAGS once for both crates
-export RUSTFLAGS="-C panic=abort -C link-arg=-L$SEL4_LIB_DIR -C link-arg=-lsel4"
-
 # Now run cargo
 cargo +nightly build -p sel4-sys --release \
-  --target=cohesix_root/sel4-aarch64.json \
-  -Z build-std=core,alloc,compiler_builtins \
-  -Z build-std-features=compiler-builtins-mem
+  --target=cohesix_root/sel4-aarch64.json
 
 log "✅ sel4-sys built (tests skipped)"
 
 # Phase 3: Cross-compile cohesix_root
 log "🔨 Building cohesix_root (no-std, panic-abort)"
-export RUSTFLAGS="-C panic=abort \
-  -L$SEL4_LIB_DIR \
-  -C link-arg=-L$SEL4_LIB_DIR \
-  -C link-arg=-lsel4"
 export CFLAGS="$SEL4_SYS_CFLAGS"
 cargo +nightly build -p cohesix_root --release \
-  --target=cohesix_root/sel4-aarch64.json \
-  -Z build-std=core,alloc,compiler_builtins \
-  -Z build-std-features=compiler-builtins-mem
+  --target=cohesix_root/sel4-aarch64.json
 log "✅ cohesix_root built"
 
 log "✅ Rust components built with proper split targets"

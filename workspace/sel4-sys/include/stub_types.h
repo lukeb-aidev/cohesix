@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: stub_types.h v0.1
 // Author: OpenAI
-// Date Modified: 2028-09-08
+// Date Modified: 2028-09-10
 
 #pragma once
 #ifndef seL4_Word

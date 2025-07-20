@@ -5,7 +5,7 @@
   "os": "none",
   "vendor": "unknown",
   "linker-flavor": "ld.lld",
-  "linker": "ld.lld",
+  "linker": "aarch64-linux-gnu-gcc",
   "target-endian": "little",
   "target-pointer-width": "64",
   "executables": true,
@@ -13,6 +13,7 @@
   "panic-strategy": "abort",
   "relocation-model": "static",
   "features": "+neon",
+  "no_std": true,
   "pre-link-args": {
     "ld.lld": [
       "-Tcohesix_root/link.ld",
@@ -21,8 +22,8 @@
       "max-page-size=0x1000",
       "-z",
       "norelro",
-      "-no-pie"
-      
+      "-no-pie",
+      "-nostartfiles"
     ]
   }
 }
