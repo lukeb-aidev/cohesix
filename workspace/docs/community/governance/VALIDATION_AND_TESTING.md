@@ -18,7 +18,6 @@ Cohesix uses layered tests and continuous validation to guarantee reliability ac
   - `Ensemble Agent Tests:` use `COHESIX_ENS_TMP` or `$TMPDIR` to isolate environments. Validate cleanup, trace replay integrity, and temp path safety.
 
 -## CI Hooks
-- `scripts/validate_metadata_sync.py` ensures document headers match `METADATA.md`
 - `tools/validate_batch.sh` checks file structure after each checkpoint
 - `scripts/collect_boot_logs.sh` uploads logs from Jetson Orin Nano and Raspberry Pi 5
 
@@ -55,6 +54,4 @@ The validator will reject any rule missing metadata and log violations to `/log/
 ## Batch Hydration Test Plan
 1. Run `tools/simulate_batch.sh` to create a 15-file batch and force a crash after file 7.
 2. Replay the hydration log with `tools/replay_batch.sh` and verify all files hydrate correctly.
-3. Execute `validate_metadata_sync.py` after replay.
-4. Run `test_all_arch.sh` to ensure cross-arch success.
 5. Confirm `CODEX_BATCH: YES` appears in logs and prior batches replay identically from `/history/`.
