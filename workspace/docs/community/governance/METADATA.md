@@ -124,7 +124,7 @@
 | linker.ld | v0.1 | 2025-07-22 | COMMUNITY | | |
 | link.ld | v0.23 | 2028-01-21 | COMMUNITY | | |
 | target-sel4.json | v0.2 | 2027-12-11 | COMMUNITY | | |
-| workspace/cohesix_root/sel4-aarch64.json | v0.8 | 2027-12-31 | COMMUNITY | | |
+| workspace/cohesix_root/sel4-aarch64.json | v0.9 | 2028-09-10 | COMMUNITY | | |
 | .bashrc | v0.1 | 2026-08-09 | COMMUNITY | | |
 | .cargo/config.toml | v0.21 | 2027-12-31 | COMMUNITY | | |
 | build.rs | v0.8 | 2026-08-21 | COMMUNITY | | |
@@ -156,7 +156,7 @@
 | docs/community/architecture/BOOT_KERNEL_FLOW.md | v0.3 | 2026-10-16 | COMMUNITY | | |
 | docs/community/archive/EXAMPLES_README.md | v0.3 | 2026-02-05 | COMMUNITY | | |
 | .cohesix_env | v0.3 | 2026-07-25 | COMMUNITY | | |
-| cohesix_fetch_build.sh | v1.41 | 2028-09-09 | COMMUNITY | | |
+| cohesix_fetch_build.sh | v1.42 | 2028-09-10 | COMMUNITY | | |
 | cohesix_fetch_build.bak | v0.92 | 2027-11-07 | COMMUNITY | | |
 | CONTRIBUTING.md | v1.1 | 2025-07-23 | COMMUNITY | | |
 | config/secure9p.toml | v0.7 | 2026-12-31 | COMMUNITY | | |
@@ -274,7 +274,7 @@
 | src/utils/gpu.rs | v0.2 | 2026-12-31 | COMMUNITY | | |
 | workspace/cohesix_root/Cargo.toml | v0.9 | 2027-12-31 | COMMUNITY | | |
 | workspace/cohesix_root/link.ld | v0.23 | 2028-01-21 | COMMUNITY | | |
-| workspace/cohesix_root/build.rs | v1.40 | 2028-09-09 | COMMUNITY | | |
+| workspace/cohesix_root/build.rs | v1.41 | 2028-09-10 | COMMUNITY | | |
 | workspace/cohesix_root/src/main.rs | v0.47 | 2028-02-15 | COMMUNITY | | |
 | workspace/cohesix_root/src/bootinfo.rs | v0.3 | 2028-08-31 | COMMUNITY | | |
 | workspace/cohesix_root/src/lang_items.rs | v0.1 | 2027-10-12 | COMMUNITY | | |
@@ -285,8 +285,8 @@
 | workspace/cohesix_root/src/startup.rs | v0.3 | 2028-01-22 | COMMUNITY | | |
 | workspace/cohesix_root/src/exception.rs | v0.2 | 2028-01-21 | COMMUNITY | | |
 | workspace/cohesix_root/src/mmu.rs | v0.2 | 2028-02-15 | COMMUNITY | | |
-| workspace/sel4-sys/Cargo.toml | v0.3 | 2027-12-31 | COMMUNITY | | |
-| workspace/sel4-sys/build.rs | v1.39 | 2028-09-07 | COMMUNITY | | |
+| workspace/sel4-sys/Cargo.toml | v0.5 | 2028-09-10 | COMMUNITY | | |
+| workspace/sel4-sys/build.rs | v1.41 | 2028-09-10 | COMMUNITY | | |
 | workspace/sel4-sys/src/lib.rs | v0.1 | 2027-12-31 | COMMUNITY | | |
 | src/cuda/runtime.rs | v0.16 | 2026-12-31 | COMMUNITY | | |
 | src/cli/mod.rs | v1.3 | 2026-10-08 | COMMUNITY | | |
@@ -428,3 +428,4 @@
 Removed: introspect_self_diagnosis (Plan9 migration - file-based introspection replaced by validator-driven policy checks)
 Removed: legacy Python tests and lint steps; project now purely Plan9 + Rust
 Changed: `.cargo/config.toml` v0.14 uses project-relative linker script path
+Task PropagateSel4FlagsToCohesix-108 v0.2 | 2028-09-10 | Cargo ✅ | Pytest ✅

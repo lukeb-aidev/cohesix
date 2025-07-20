@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: build.rs v1.40
+// Filename: build.rs v1.41
 // Author: Lukas Bower
-// Date Modified: 2028-09-09
+// Date Modified: 2028-09-10
 
 use std::{env, fs, path::Path};
 use std::io::Write;
@@ -51,6 +51,12 @@ fn embed_vectors(out_dir: &str, manifest_dir: &str) {
 }
 
 fn main() {
+    println!("cargo:rustc-link-lib=static=sel4");
+    println!(
+        "cargo:rustc-link-search=native={}",
+        std::env::var("SEL4_LIB_DIR").unwrap()
+    );
+
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
     let header_dir = format!("{}/../../third_party/seL4/include", manifest_dir);
     if fs::metadata(&header_dir).is_err() {
@@ -66,8 +72,6 @@ fn main() {
         .expect("Unexpected manifest directory structure");
 
     let sel4_lib = project_root.join("third_party/seL4/lib");
-    println!("cargo:rustc-link-search=native={}", sel4_lib.display());
-    println!("cargo:rustc-link-lib=static=sel4");
 
     let cflags = env::var("SEL4_SYS_CFLAGS").unwrap_or_else(|_| {
         let sel4_include = project_root.join("third_party/seL4/include/libsel4");
