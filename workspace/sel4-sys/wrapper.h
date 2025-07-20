@@ -3,8 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2028-09-08
 
-#include <sel4/sel4.h>
-#include <sel4/syscalls.h>
-#include <kernel/api/invocation.h>
-#include <kernel/arch/api/invocation.h>
+#include "stub_types.h"
+#include <sel4/sel4/macros.h>
+#include <sel4/syscall.h>
 
