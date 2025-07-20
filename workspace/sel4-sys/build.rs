@@ -130,12 +130,16 @@ fn main() {
         .join("../../third_party/seL4/include");
     let sel4_libsel4 = sel4_include_root.join("libsel4");
     let sel4_arch_sel4 = sel4_libsel4.join("sel4_arch");
+    let kernel_api = sel4_include_root.join("kernel/api");
+    let kernel_arch_api = sel4_include_root.join("kernel/arch/api");
     // Export CFLAGS for dependents such as cohesix_root
     let cflags = format!(
-        "--target=aarch64-unknown-none -I{} -I{} -I{} -I{} -I{}",
+        "--target=aarch64-unknown-none -I{} -I{} -I{} -I{} -I{} -I{} -I{}",
         sel4_include_root.display(),
         sel4_libsel4.display(),
         sel4_libsel4.join("sel4").display(),
+        kernel_api.display(),
+        kernel_arch_api.display(),
         sel4_include_root.join("sel4/sel4_arch").display(),
         sel4_arch_sel4.display(),
     );
@@ -147,6 +151,8 @@ fn main() {
         .clang_arg(format!("-I{}", out_path.display()))
         .clang_arg(format!("-I{}", sel4_libsel4.display()))
         .clang_arg(format!("-I{}", sel4_libsel4.join("sel4").display()))
+        .clang_arg(format!("-I{}", kernel_api.display()))
+        .clang_arg(format!("-I{}", kernel_arch_api.display()))
         .clang_arg(format!("-I{}", sel4_include_root.join("sel4/sel4_arch").display()))
         .clang_arg(format!("-I{}", sel4_arch_sel4.display()))
         .clang_arg(format!("-I{}", sel4_include_root.display()))

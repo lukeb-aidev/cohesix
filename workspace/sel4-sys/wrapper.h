@@ -5,5 +5,6 @@
 
 #include <sel4/sel4.h>
 #include <sel4/syscalls.h>
-#include <sel4/sel4_arch/constants.h>
+#include <kernel/api/invocation.h>
+#include <kernel/arch/api/invocation.h>
 

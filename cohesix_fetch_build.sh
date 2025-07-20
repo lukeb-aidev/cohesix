@@ -454,10 +454,18 @@ log "🔨 Building sel4-sys (no-std, panic-abort)"
 
 export LIBRARY_PATH="$SEL4_LIB_DIR:${LIBRARY_PATH:-}"
 
+export CFLAGS="\
+  --target=aarch64-unknown-none \
+  -I$ROOT/third_party/seL4/include/libsel4 \
+  -I$ROOT/third_party/seL4/include/libsel4/sel4 \
+  -I$ROOT/third_party/seL4/include/kernel/api \
+  -I$ROOT/third_party/seL4/include/kernel/arch/api \
+  "
+
 export LDFLAGS="-L$SEL4_LIB_DIR"
 
 # Export RUSTFLAGS once for both crates
-export RUSTFLAGS="-C link-arg=-L$SEL4_LIB_DIR -C link-arg=-lsel4"
+export RUSTFLAGS="-C panic=abort -C link-arg=-L$SEL4_LIB_DIR -C link-arg=-lsel4"
 
 # Now run cargo
 cargo +nightly build -p sel4-sys --release \
