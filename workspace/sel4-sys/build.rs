@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: build.rs v1.42
+// Filename: build.rs v1.43
 // Author: Lukas Bower
-// Date Modified: 2028-11-05
+// Date Modified: 2028-11-06
 
 use std::{env, path::PathBuf};
 #[path = "../sel4_paths.rs"]
@@ -12,12 +12,16 @@ fn main() {
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
     let project_root = sel4_paths::project_root(&manifest_dir);
 
-    let sel4_include = env::var("SEL4_INCLUDE").unwrap_or_else(|_| {
-        sel4_paths::sel4_include(&project_root)
-            .to_string_lossy()
-            .into_owned()
-    });
-    let header_dirs = sel4_paths::header_dirs_from_tree(PathBuf::from(&sel4_include).as_path())
+    let sel4_include = env::var("SEL4_INCLUDE")
+        .ok()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| sel4_paths::sel4_include(&project_root));
+
+    if !sel4_include.exists() {
+        panic!("SEL4_INCLUDE path {} not found", sel4_include.display());
+    }
+
+    let header_dirs = sel4_paths::header_dirs_from_tree(&sel4_include)
         .expect("Failed to collect seL4 header directories");
 
     let cflags = env::var("SEL4_SYS_CFLAGS").unwrap_or_default();
