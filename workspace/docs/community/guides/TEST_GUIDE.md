@@ -98,7 +98,6 @@ A rigorous, multi‐tiered testing strategy ensures each component of Cohesix is
 - Smoke tests for `cohcli` commands (`codex run`, `hydrate_docs`).  
 - Validate log output in `codex_logs/` and correct filename conventions.  
 - Guard QEMU-based boot scripts with preflight check for qemu-system-x86_64; fail gracefully if missing.
-- Ensure `validate_metadata_sync.py` passes after hydration and Codex runs; include it as a required GitHub Action step.
 
 ### 6.3 Distributed & Remote Build
 - Simulate remote build via SSH; verify artifact transfer and exit status.

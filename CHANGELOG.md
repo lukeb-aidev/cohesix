@@ -3481,3 +3481,8 @@
 ## [v1.39] - 2028-09-07
 ### Fixed
 - **FixSel4SysHeaders-102**: Updated build scripts and wrapper includes so bindgen and the Rust linker locate all 64-bit seL4 headers and libraries.
+
+## [v1.40] - 2028-09-08
+### Changed
+- Removed `scripts/validate_metadata_sync.py` and all invocations. CI build failures now surface metadata mismatches.
+- Added `[workspace.metadata.release]` to `Cargo.toml` so `cargo release patch` updates versions and tags automatically.

@@ -69,6 +69,10 @@ Execute the full architecture test suite with:
 
 Unit tests can also be run individually via `cargo test`, `go test`, and `pytest`.
 
+### Releases
+
+Run `cargo release patch` to automatically bump versions, update `CHANGELOG.md`, and tag the commit. Avoid manual version edits.
+
 ### Codex Integration
 
 Use `cohcli codex init` to configure API keys, then `cohcli codex run <agent_id>` to generate scaffolds. See [README_Codex.md](docs/community/guides/README_Codex.md) for details.

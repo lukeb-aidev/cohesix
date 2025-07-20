@@ -19,6 +19,11 @@ resolver = "2"
 [workspace.dependencies]
 sel4-sys = { path = "sel4-sys" }
 
+[workspace.metadata.release]
+tag-name = "v{{version}}"
+push = false
+allow-branch = ["main"]
+
 [profile.release]
 panic = "abort"
 strip = false

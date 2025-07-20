@@ -214,6 +214,16 @@ Run the QEMU boot check to verify the GRUB → seL4 → Cohesix flow:
 ```bash
 ci/qemu_boot_check.sh
 ```
+## 📦 Release Process
+
+Use the cargo-release tool to tag and publish new versions:
+
+```bash
+cargo release patch
+```
+
+This command updates crate versions, the changelog, and creates the Git tag `v<version>`.
+
 ---
 
 ## 🧠 Learn More
