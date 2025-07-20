@@ -14,6 +14,21 @@ fn main() {
 
     fs::create_dir_all(&out_path).unwrap();
 
+    // Provide minimal autoconf.h so the seL4 headers compile without the
+    // full kernel build system. The real seL4 build generates this file with
+    // numerous configuration options. For binding generation we only need a
+    // handful of definitions, so create a lightweight version in OUT_DIR.
+    let autoconf_path = out_path.join("autoconf.h");
+    fs::write(
+        &autoconf_path,
+        "#pragma once\n\
+         #define CONFIG_KERNEL_MCS 0\n\
+         #define CONFIG_BENCHMARK_TRACEPOINTS 0\n\
+         #define CONFIG_BENCHMARK_TRACK_UTILISATION 0\n\
+         #define CONFIG_MAX_NUM_BOOTINFO_UNTYPED_CAPS 256\n",
+    )
+    .expect("write autoconf.h");
+
     let sel4_include = Path::new(&manifest_dir)
         .join("../../third_party/seL4/include");
     let include_dirs = [
