@@ -1,9 +1,8 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: wrapper.h v1.41
+// Filename: wrapper.h v1.42
 // Author: Lukas Bower
-// Date Modified: 2028-09-10
+// Date Modified: 2028-11-07
 
-#include "stub_types.h"
 #include <sel4/sel4.h>
 #include <sel4/gen_config.h>
-#include <sel4_arch/sel4_arch.h>
+#include <sel4/sel4_arch/constants.h>
