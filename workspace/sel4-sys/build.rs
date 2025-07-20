@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: build.rs v0.8
+// Filename: build.rs v0.9
 // Author: Lukas Bower
-// Date Modified: 2025-07-19
+// Date Modified: 2028-09-05
 
 use std::{env, fs, path::{Path, PathBuf}};
 
@@ -52,13 +52,10 @@ fn main() {
     .expect("write types.h");
 
     let sel4_include = Path::new(&manifest_dir)
-        .join("../../third_party/seL4/include");
-    let libsel4 = sel4_include.join("libsel4");
+        .join("../../third_party/seL4/include/libsel4");
     let include_dirs = [
         sel4_include.clone(),
-        libsel4.join("sel4"),
-        libsel4.join("sel4/sel4"),
-        libsel4,
+        sel4_include.join("sel4"),
     ];
 
     let mut builder = bindgen::Builder::default();
