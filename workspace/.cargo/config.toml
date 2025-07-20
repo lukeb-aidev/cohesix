@@ -1,0 +1,18 @@
+# CLASSIFICATION: COMMUNITY
+# Filename: config.toml v0.1
+# Author: Codex
+# Date Modified: 2028-09-10
+
+[build]
+target = "cohesix_root/sel4-aarch64.json"
+
+[unstable]
+build-std = ["core", "compiler_builtins", "alloc"]
+build-std-features = ["compiler-builtins-mem"]
+
+[rustflags]
+rustflags = [
+  "-Z", "build-std=core,compiler_builtins,alloc",
+  "-Z", "build-std-features=compiler-builtins-mem",
+  "--sysroot", "/root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu"
+]

@@ -3488,3 +3488,7 @@
 - Added `[workspace.metadata.release]` to `Cargo.toml` so `cargo release patch` updates versions and tags automatically.
 ### Fixed
 - **FixSel4SysBuild-104**: Corrected bindgen clang_args and wrapper.h includes for aarch64 target.
+
+## [v1.41] - 2028-09-10
+### Fixed
+- **WebCodex-BuildFix-105**: Added workspace target config and updated aarch64 target JSON for sel4 builds.
