@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: build.rs v1.44
+// Filename: build.rs v1.45
 // Author: Lukas Bower
-// Date Modified: 2028-11-07
+// Date Modified: 2028-11-08
 
 use std::{env, path::PathBuf};
 #[path = "../sel4_paths.rs"]
@@ -23,8 +23,20 @@ fn main() {
 
     let mut header_dirs = sel4_paths::header_dirs_from_tree(&sel4_include)
         .expect("Failed to collect seL4 header directories");
+    header_dirs.push(sel4_include.join("libsel4"));
+    header_dirs.push(sel4_include.join("libsel4/sel4"));
+    header_dirs.push(sel4_include.join("libsel4/sel4_arch"));
 
     if let Ok(arch) = env::var("SEL4_ARCH") {
+        let arch_dir = sel4_include
+            .join("libsel4")
+            .join("sel4_arch")
+            .join("sel4")
+            .join("sel4_arch")
+            .join(&arch);
+        if arch_dir.exists() {
+            header_dirs.push(arch_dir);
+        }
         if let Ok(alias_root) = sel4_paths::create_arch_alias(&sel4_include, &arch, &out_dir) {
             header_dirs.push(alias_root);
         }
@@ -50,8 +62,11 @@ fn main() {
 
     println!("cargo:rerun-if-changed=include/wrapper.h");
     println!("cargo:rustc-link-lib=static=sel4");
-    println!(
-        "cargo:rustc-link-search=native={}",
-        env::var("SEL4_LIB_DIR").unwrap()
-    );
+    let lib_dir = env::var("SEL4_LIB_DIR").unwrap_or_else(|_| {
+        project_root
+            .join("third_party/seL4/lib")
+            .to_string_lossy()
+            .into_owned()
+    });
+    println!("cargo:rustc-link-search=native={}", lib_dir);
 }

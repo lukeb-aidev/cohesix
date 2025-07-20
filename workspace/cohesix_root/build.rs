@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: build.rs v1.43
+// Filename: build.rs v1.44
 // Author: Lukas Bower
-// Date Modified: 2028-11-07
+// Date Modified: 2028-11-08
 
 use std::{env, fs, path::Path};
 #[path = "../sel4_paths.rs"]
@@ -59,12 +59,14 @@ fn embed_vectors(out_dir: &str, manifest_dir: &str) {
 
 fn main() {
     println!("cargo:rustc-link-lib=static=sel4");
-    println!(
-        "cargo:rustc-link-search=native={}",
-        std::env::var("SEL4_LIB_DIR").unwrap()
-    );
-
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
+    let lib_dir = std::env::var("SEL4_LIB_DIR").unwrap_or_else(|_| {
+        project_root(&manifest_dir)
+            .join("third_party/seL4/lib")
+            .to_string_lossy()
+            .into_owned()
+    });
+    println!("cargo:rustc-link-search=native={}", lib_dir);
     let header_dir = format!("{}/../../third_party/seL4/include", manifest_dir);
     if fs::metadata(&header_dir).is_err() {
         panic!("seL4 headers not found at {}", header_dir);
@@ -78,7 +80,19 @@ fn main() {
     let cflags = env::var("SEL4_SYS_CFLAGS").unwrap_or_else(|_| {
         let include_root = sel4_paths::sel4_include(&project_root);
         let mut dirs = header_dirs_from_tree(&include_root).expect("collect seL4 header dirs");
+        dirs.push(include_root.join("libsel4"));
+        dirs.push(include_root.join("libsel4/sel4"));
+        dirs.push(include_root.join("libsel4/sel4_arch"));
         if let Ok(arch) = env::var("SEL4_ARCH") {
+            let arch_dir = include_root
+                .join("libsel4")
+                .join("sel4_arch")
+                .join("sel4")
+                .join("sel4_arch")
+                .join(&arch);
+            if arch_dir.exists() {
+                dirs.push(arch_dir);
+            }
             if let Ok(alias_root) = sel4_paths::create_arch_alias(&include_root, &arch, Path::new(&out_dir)) {
                 dirs.push(alias_root);
             }

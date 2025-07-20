@@ -11,6 +11,7 @@ include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 
 use core::panic::PanicInfo;
 
+#[cfg(feature = "panic-handler")]
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
     loop {}
