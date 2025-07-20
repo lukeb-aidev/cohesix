@@ -463,8 +463,9 @@ log "🔨 Building sel4-sys (no-std, panic-abort)"
 
 export LIBRARY_PATH="$SEL4_LIB_DIR:${LIBRARY_PATH:-}"
 
-export CFLAGS="--target=aarch64-unknown-none \
+export CFLAGS="\
   -I$ROOT/third_party/seL4/include \
+  -I$ROOT/third_party/seL4/include/generated \
   -I$ROOT/third_party/seL4/include/libsel4 \
   -I$ROOT/third_party/seL4/include/libsel4/sel4 \
   -I$ROOT/third_party/seL4/include/libsel4/sel4_arch \
@@ -475,6 +476,12 @@ export CFLAGS="--target=aarch64-unknown-none \
   -I$ROOT/third_party/seL4/include/sel4/sel4_arch"
 export SEL4_SYS_CFLAGS="$CFLAGS"
 
+export RUSTFLAGS="\
+  -Z build-std=core,alloc,compiler_builtins \
+  -Z build-std-features=compiler-builtins-mem \
+  -C link-arg=-L${SEL4_LIB_DIR} \
+  $RUSTFLAGS"
+
 export LDFLAGS="-L$SEL4_LIB_DIR"
 # Now run cargo
 cargo +nightly build -p sel4-sys --release \
@@ -484,7 +491,7 @@ log "✅ sel4-sys built (tests skipped)"
 
 # Phase 3: Cross-compile cohesix_root
 log "🔨 Building cohesix_root (no-std, panic-abort)"
-export CFLAGS="$SEL4_SYS_CFLAGS"
+# No need to set CFLAGS="$SEL4_SYS_CFLAGS"; CFLAGS already carries correct includes
 cargo +nightly build -p cohesix_root --release \
   --target=cohesix_root/sel4-aarch64.json
 log "✅ cohesix_root built"
