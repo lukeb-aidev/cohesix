@@ -29,16 +29,43 @@ fn main() {
     )
     .expect("write autoconf.h");
 
+    // Provide minimal arch/simple_types.h for 64-bit builds
+    let arch_dir = out_path.join("sel4/arch");
+    fs::create_dir_all(&arch_dir).unwrap();
+    fs::write(
+        arch_dir.join("simple_types.h"),
+        "#pragma once\n\
+         #define SEL4_INT64_IS_LONG_LONG 1\n\
+         #define SEL4_WORD_IS_UINT64 1\n",
+    )
+    .expect("write simple_types.h");
+
+    fs::write(
+        arch_dir.join("types.h"),
+        "#pragma once\n\
+         typedef unsigned long long seL4_Word;\n\
+         typedef seL4_Word seL4_CPtr;\n\
+         typedef seL4_Word seL4_PAddr;\n\
+         typedef seL4_Word seL4_NodeId;\n\
+         typedef seL4_Word seL4_Domain;\n",
+    )
+    .expect("write types.h");
+
     let sel4_include = Path::new(&manifest_dir)
         .join("../../third_party/seL4/include");
+    let libsel4 = sel4_include.join("libsel4");
     let include_dirs = [
-        sel4_include.join("libsel4/sel4"),
-        sel4_include,
+        sel4_include.clone(),
+        libsel4.join("sel4"),
+        libsel4.join("sel4/sel4"),
+        libsel4,
     ];
 
     let mut builder = bindgen::Builder::default();
     builder = builder
         .clang_arg("--target=aarch64-unknown-none")
+        .clang_arg("-DSEL4_INT64_IS_LONG_LONG")
+        .clang_arg("-DSEL4_WORD_IS_UINT64")
         .clang_arg(format!("-I{}", out_path.display()))
         .header(header.to_string_lossy())
         .use_core()
