@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: build.rs v1.39
+// Filename: build.rs v1.40
 // Author: Lukas Bower
-// Date Modified: 2028-09-07
+// Date Modified: 2028-09-09
 
 use std::{env, fs, path::Path};
 use std::io::Write;
@@ -69,12 +69,14 @@ fn main() {
     println!("cargo:rustc-link-search=native={}", sel4_lib.display());
     println!("cargo:rustc-link-lib=static=sel4");
 
-    let sel4_include = project_root.join("third_party/seL4/include/libsel4");
-    let cflags = format!(
-        "--target=aarch64-unknown-none -I{} -I{}",
-        sel4_include.display(),
-        sel4_include.join("sel4").display()
-    );
+    let cflags = env::var("SEL4_SYS_CFLAGS").unwrap_or_else(|_| {
+        let sel4_include = project_root.join("third_party/seL4/include/libsel4");
+        format!(
+            "--target=aarch64-unknown-none -I{} -I{}",
+            sel4_include.display(),
+            sel4_include.join("sel4").display()
+        )
+    });
     println!("cargo:rustc-env=SEL4_SYS_CFLAGS={}", cflags);
 
     println!(
