@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: build.rs v1.39
+// Filename: build.rs v1.40
 // Author: Lukas Bower
-// Date Modified: 2028-09-07
+// Date Modified: 2028-09-08
 
 use std::{env, fs, path::{Path, PathBuf}};
 
@@ -65,6 +65,11 @@ fn main() {
         "#pragma once\n",
     )
     .expect("write arch syscalls.h");
+    fs::write(
+        arch_dir.join("invocation.h"),
+        "#pragma once\n",
+    )
+    .expect("write arch invocation.h");
 
     let sel4_arch_dir = out_path.join("sel4/sel4_arch");
     fs::create_dir_all(&sel4_arch_dir).unwrap();
@@ -79,6 +84,31 @@ fn main() {
         "#pragma once\n",
     )
     .expect("write sel4_arch syscalls.h");
+    fs::write(
+        sel4_arch_dir.join("invocation.h"),
+        "#pragma once\n",
+    )
+    .expect("write sel4_arch invocation.h");
+
+    fs::write(
+        sel4_arch_dir.join("constants.h"),
+        "#pragma once\n\
+         #define seL4_WordSizeBits 3\n\
+         #define seL4_WordBits 64\n",
+    )
+    .expect("write sel4_arch constants.h");
+
+    fs::write(
+        sel4_arch_dir.join("types_gen.h"),
+        "#pragma once\n",
+    )
+    .expect("write sel4_arch types_gen.h");
+
+    fs::write(
+        sel4_arch_dir.join("types.h"),
+        "#pragma once\n",
+    )
+    .expect("write sel4_arch types.h");
 
     let mode_dir = out_path.join("sel4/mode");
     fs::create_dir_all(&mode_dir).unwrap();
@@ -98,38 +128,33 @@ fn main() {
 
     let sel4_include_root = Path::new(&manifest_dir)
         .join("../../third_party/seL4/include");
-    let sel4_include = sel4_include_root.join("libsel4");
-    let include_dirs = [
-        sel4_include_root.clone(),
-        sel4_include.clone(),
-        sel4_include.join("sel4"),
-        sel4_include.join("sel4_arch"),
-        sel4_include.join("sel4_arch/sel4"),
-    ];
-
+    let sel4_libsel4 = sel4_include_root.join("libsel4");
+    let sel4_arch_sel4 = sel4_libsel4.join("sel4_arch");
     // Export CFLAGS for dependents such as cohesix_root
     let cflags = format!(
         "--target=aarch64-unknown-none -I{} -I{} -I{} -I{} -I{}",
         sel4_include_root.display(),
-        sel4_include.display(),
-        sel4_include.join("sel4").display(),
-        sel4_include.join("sel4_arch").display(),
-        sel4_include.join("sel4_arch/sel4").display()
+        sel4_libsel4.display(),
+        sel4_libsel4.join("sel4").display(),
+        sel4_include_root.join("sel4/sel4_arch").display(),
+        sel4_arch_sel4.display(),
     );
     println!("cargo:rustc-env=SEL4_SYS_CFLAGS={}", cflags);
 
     let mut builder = bindgen::Builder::default();
     builder = builder
         .clang_arg("--target=aarch64-unknown-none")
+        .clang_arg(format!("-I{}", out_path.display()))
+        .clang_arg(format!("-I{}", sel4_libsel4.display()))
+        .clang_arg(format!("-I{}", sel4_libsel4.join("sel4").display()))
+        .clang_arg(format!("-I{}", sel4_include_root.join("sel4/sel4_arch").display()))
+        .clang_arg(format!("-I{}", sel4_arch_sel4.display()))
+        .clang_arg(format!("-I{}", sel4_include_root.display()))
         .clang_arg("-DSEL4_INT64_IS_LONG_LONG")
         .clang_arg("-DSEL4_WORD_IS_UINT64")
-        .clang_arg(format!("-I{}", out_path.display()))
         .header(header.to_string_lossy())
         .use_core()
         .ctypes_prefix("cty");
-    for dir in &include_dirs {
-        builder = builder.clang_arg(format!("-I{}", dir.display()));
-    }
     let bindings = builder
         .allowlist_function("seL4_.*")
         .allowlist_type("seL4_.*")
