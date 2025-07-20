@@ -3477,3 +3477,7 @@
 ## [v0.567] - 2028-09-06
 ### Fixed
 - **FixSel4LibLinking-101**: Phase 2 and Phase 3 builds link against libsel4 with explicit `-lsel4` and correct header search paths.
+
+## [v1.39] - 2028-09-07
+### Fixed
+- **FixSel4SysHeaders-102**: Updated build scripts and wrapper includes so bindgen and the Rust linker locate all 64-bit seL4 headers and libraries.
