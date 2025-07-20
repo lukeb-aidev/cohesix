@@ -82,6 +82,16 @@
 │   │   └── sel4_arch
 │   │       └── sel4
 │   │           └── sel4_arch
+│   │               ├── aarch64
+│   │               │   ├── constants.h
+│   │               │   ├── deprecated.h
+│   │               │   ├── faults.h
+│   │               │   ├── mapping.h
+│   │               │   ├── objecttype.h
+│   │               │   ├── simple_types.h
+│   │               │   ├── syscalls.h
+│   │               │   ├── types.bf
+│   │               │   └── types.h
 │   │               ├── invocation.h
 │   │               ├── types.pbf
 │   │               └── types_gen.h
@@ -94,4 +104,4 @@
 │   └── libsel4.a
 └── sel4_tree.txt
 
-26 directories, 69 files
+27 directories, 78 files
