@@ -18,6 +18,9 @@
     "../third_party/seL4/include/generated",
     "../third_party/seL4/include/generated/sel4"
   ],
+  "clang-args": [
+    "-Ithird_party/seL4/include/libsel4/sel4"
+  ],
   "pre-link-args": {
     "ld": ["--sysroot=/root/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu"],
     "ld.lld": [
