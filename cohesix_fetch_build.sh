@@ -454,6 +454,11 @@ log "✅ Host crates built and tested"
 # Phase 2: Cross-compile sel4-sys (no-std, panic-abort)
 log "🔨 Building sel4-sys (no-std, panic-abort)"
 export LIBRARY_PATH="$SEL4_LIB_DIR:${LIBRARY_PATH:-}"
+export CFLAGS="--target=aarch64-unknown-none \"
+  -I$ROOT/third_party/seL4/include/libsel4 \
+  -I$ROOT/third_party/seL4/include/libsel4/sel4 \
+  -I$ROOT/third_party/seL4/include/libsel4/sel4/sel4"
+export LDFLAGS="-L$SEL4_LIB_DIR"
 RUSTFLAGS="-C panic=abort -L $SEL4_LIB_DIR" \
 cargo +nightly build -p sel4-sys --release \
   --target=cohesix_root/sel4-aarch64.json \
