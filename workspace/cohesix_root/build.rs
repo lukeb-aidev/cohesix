@@ -4,6 +4,9 @@
 // Date Modified: 2028-09-10
 
 use std::{env, fs, path::Path};
+#[path = "../sel4_paths.rs"]
+mod sel4_paths;
+use sel4_paths::{project_root, sel4_generated};
 use std::io::Write;
 
 
@@ -66,21 +69,22 @@ fn main() {
     generate_dtb_constants(&out_dir, &manifest_dir);
     embed_sel4_spec(&out_dir, &manifest_dir);
     embed_vectors(&out_dir, &manifest_dir);
-    let project_root = Path::new(&manifest_dir)
-        .parent()
-        .and_then(|p| p.parent())
-        .expect("Unexpected manifest directory structure");
+    let project_root = project_root(&manifest_dir);
 
     let sel4_lib = project_root.join("third_party/seL4/lib");
 
     let cflags = env::var("SEL4_SYS_CFLAGS").unwrap_or_else(|_| {
         let sel4_include = project_root.join("third_party/seL4/include/libsel4");
+        let generated = sel4_generated(&project_root);
         format!(
-            "--target=aarch64-unknown-none -I{} -I{}",
+            "--target=aarch64-unknown-none -I{} -I{} -I{} -I{}",
             sel4_include.display(),
-            sel4_include.join("sel4").display()
+            sel4_include.join("sel4").display(),
+            generated.display(),
+            generated.join("sel4").display()
         )
     });
+    println!("cargo:rustc-env=SEL4_GEN_HDR={}", sel4_generated(&project_root).display());
     println!("cargo:rustc-env=SEL4_SYS_CFLAGS={}", cflags);
 
     println!(

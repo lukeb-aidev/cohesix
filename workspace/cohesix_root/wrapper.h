@@ -4,4 +4,5 @@
 // Date Modified: 2025-07-19
 
 #include "sel4/config.h"
+#include <sel4/gen_config.h>
 #include <sel4/syscall.h>
