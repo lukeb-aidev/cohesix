@@ -134,12 +134,12 @@ fn main() {
     let kernel_arch_api = sel4_include_root.join("kernel/arch/api");
     // Export CFLAGS for dependents such as cohesix_root
     let cflags = format!(
-        "--target=aarch64-unknown-none -I{} -I{} -I{} -I{} -I{} -I{} -I{} -I{}",
+        "--target=aarch64-unknown-none -I{} -I{} -I{} -I{} -I{} -I{} -I{} -I{} -I{}",
         sel4_include_root.display(),
         sel4_libsel4.display(),
         sel4_libsel4.join("sel4").display(),
         sel4_libsel4.join("sel4_arch").display(),
-        sel4_libsel4.join("sel4_arch/sel4_arch").display(),
+        sel4_libsel4.join("sel4_arch/sel4/sel4_arch").display(),
         sel4_interfaces.display(),
         kernel_api.display(),
         kernel_arch_api.display(),
