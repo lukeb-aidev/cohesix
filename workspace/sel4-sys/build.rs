@@ -139,6 +139,7 @@ fn main() {
         sel4_libsel4.display(),
         sel4_libsel4.join("sel4").display(),
         sel4_libsel4.join("sel4_arch").display(),
+        sel4_libsel4.join("sel4_arch/sel4_arch").display(),
         sel4_interfaces.display(),
         kernel_api.display(),
         kernel_arch_api.display(),
@@ -154,6 +155,7 @@ fn main() {
         .clang_arg(format!("-I{}", sel4_libsel4.display()))
         .clang_arg(format!("-I{}", sel4_libsel4.join("sel4").display()))
         .clang_arg(format!("-I{}", sel4_libsel4.join("sel4_arch").display()))
+        .clang_arg(format!("-I{}", sel4_libsel4.join("sel4_arch/sel4_arch").display()))
         .clang_arg(format!("-I{}", sel4_interfaces.display()))
         .clang_arg(format!("-I{}", kernel_api.display()))
         .clang_arg(format!("-I{}", kernel_arch_api.display()))
