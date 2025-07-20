@@ -9,16 +9,30 @@ mod sel4_paths;
 
 fn main() {
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
+    let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
+    let project_root = sel4_paths::project_root(&manifest_dir);
+    let sel4_root = env::var("SEL4_ROOT").unwrap_or_else(|_| {
+        project_root
+            .join("third_party/seL4")
+            .to_string_lossy()
+            .into_owned()
+    });
+
     let cflags = env::var("SEL4_SYS_CFLAGS").unwrap_or_default();
     let mut clang_args: Vec<String> = cflags.split_whitespace().map(|s| s.to_string()).collect();
 
-    if let Ok(gen_hdr) = env::var("SEL4_GEN_HDR") {
-        clang_args.push(format!("-I{}", gen_hdr));
-        clang_args.push(format!("-I{}/sel4", gen_hdr));
-    }
+    let gen_hdr = env::var("SEL4_GEN_HDR").unwrap_or_else(|_| {
+        project_root
+            .join("third_party/seL4/include/generated")
+            .to_string_lossy()
+            .into_owned()
+    });
+    clang_args.push(format!("-I{}", gen_hdr));
+    clang_args.push(format!("-I{}/sel4", gen_hdr));
 
     let bindings = bindgen::Builder::default()
         .header("include/wrapper.h")
+        .clang_arg(format!("-I{}/include/libsel4/sel4", sel4_root))
         .clang_args(&clang_args)
         .use_core()
         .ctypes_prefix("cty")
