@@ -12,6 +12,27 @@
 ├── build_sel4.sh
 ├── fetch_sel4.sh
 ├── include
+│   ├── generated
+│   │   ├── arch
+│   │   │   └── api
+│   │   │       ├── invocation.h
+│   │   │       ├── sel4_invocation.h
+│   │   │       └── syscall.h
+│   │   ├── autoconf.h
+│   │   ├── invocation.h
+│   │   ├── kernel
+│   │   │   └── gen_config.h
+│   │   ├── libsel4_autoconf.h
+│   │   ├── plat
+│   │   │   ├── machine
+│   │   │   │   ├── devices_gen.h
+│   │   │   │   ├── platform_gen.json
+│   │   │   │   └── platform_gen.yaml
+│   │   │   └── platform_gen.h
+│   │   ├── sel4
+│   │   │   └── gen_config.h
+│   │   ├── shared_types.pbf
+│   │   └── shared_types_gen.h
 │   ├── kernel
 │   │   ├── api
 │   │   │   └── invocation.h
@@ -26,24 +47,51 @@
 │   │       │   ├── platform_gen.json
 │   │       │   └── platform_gen.yaml
 │   │       └── platform_gen.h
-│   └── libsel4
-│       ├── interfaces
-│       │   └── sel4_client.h
-│       ├── sel4
-│       │   ├── invocation.h
-│       │   ├── shared_types.pbf
-│       │   ├── shared_types_gen.h
-│       │   └── syscall.h
+│   ├── libsel4
+│   │   ├── interfaces
+│   │   │   └── sel4_client.h
+│   │   ├── sel4
+│   │   │   ├── invocation.h
+│   │   │   ├── sel4
+│   │   │   │   ├── assert.h
+│   │   │   │   ├── benchmark_tracepoints_types.h
+│   │   │   │   ├── benchmark_track_types.h
+│   │   │   │   ├── benchmark_utilisation_types.h
+│   │   │   │   ├── bootinfo.h
+│   │   │   │   ├── bootinfo_types.h
+│   │   │   │   ├── config.h
+│   │   │   │   ├── constants.h
+│   │   │   │   ├── debug_assert.h
+│   │   │   │   ├── deprecated.h
+│   │   │   │   ├── errors.h
+│   │   │   │   ├── faults.h
+│   │   │   │   ├── functions.h
+│   │   │   │   ├── macros.h
+│   │   │   │   ├── objecttype.h
+│   │   │   │   ├── sel4.h
+│   │   │   │   ├── shared_types.h
+│   │   │   │   ├── simple_types.h
+│   │   │   │   ├── syscalls.h
+│   │   │   │   ├── syscalls_master.h
+│   │   │   │   ├── syscalls_mcs.h
+│   │   │   │   ├── types.h
+│   │   │   │   └── virtual_client.h
+│   │   │   ├── shared_types.pbf
+│   │   │   ├── shared_types_gen.h
+│   │   │   └── syscall.h
+│   │   └── sel4_arch
+│   │       └── sel4
+│   │           └── sel4_arch
+│   │               ├── invocation.h
+│   │               ├── types.pbf
+│   │               └── types_gen.h
+│   └── sel4
 │       └── sel4_arch
-│           └── sel4
-│               └── sel4_arch
-│                   ├── invocation.h
-│                   ├── types.pbf
-│                   └── types_gen.h
+│           └── constants.h
 ├── kernel.dtb
 ├── kernel.dts
 ├── lib
 │   └── libsel4.a
 └── sel4_tree.txt
 
-16 directories, 31 files
+26 directories, 69 files
