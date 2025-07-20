@@ -29,6 +29,7 @@ jobs:
         with:
           toolchain: nightly
           override: true
+          components: rust-src
           profile: minimal
 
       - name: Cache cargo registry and build artifacts
