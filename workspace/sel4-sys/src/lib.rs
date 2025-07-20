@@ -4,6 +4,7 @@
 // Date Modified: 2027-12-31
 
 #![no_std]
+#![cfg_attr(not(test), no_main)]
 extern crate cty;
 
 include!(concat!(env!("OUT_DIR"), "/bindings.rs"));

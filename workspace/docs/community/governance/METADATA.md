@@ -124,13 +124,14 @@
 | linker.ld | v0.1 | 2025-07-22 | COMMUNITY | | |
 | link.ld | v0.23 | 2028-01-21 | COMMUNITY | | |
 | target-sel4.json | v0.2 | 2027-12-11 | COMMUNITY | | |
-| workspace/cohesix_root/sel4-aarch64.json | v0.9 | 2028-09-10 | COMMUNITY | | |
+| workspace/cohesix_root/sel4-aarch64.json | v0.10 | 2028-09-10 | COMMUNITY | | |
 | .bashrc | v0.1 | 2026-08-09 | COMMUNITY | | |
 | .cargo/config.toml | v0.21 | 2027-12-31 | COMMUNITY | | |
 | build.rs | v0.8 | 2026-08-21 | COMMUNITY | | |
 | Makefile | v0.52 | 2027-09-30 | COMMUNITY | | |
 | workspace/Makefile | v0.1 | 2027-12-31 | COMMUNITY | | |
 | workspace/Cargo.toml | v0.6 | 2027-12-31 | COMMUNITY | | |
+| workspace/.cargo/config.toml | v0.1 | 2028-09-10 | COMMUNITY | | |
 | src/kernel/main.c | v0.2 | 2025-07-22 | COMMUNITY | | |
 | src/kernel/main.rs | v0.3 | 2027-02-02 | COMMUNITY | | |
 | src/kernel/log.rs | v0.1 | 2027-02-02 | COMMUNITY | | |
