@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: sel4_paths.rs v0.2
+// Filename: sel4_paths.rs v0.3
 // Author: OpenAI
-// Date Modified: 2028-11-05
+// Date Modified: 2028-11-06
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -29,25 +29,60 @@ pub fn header_dirs_from_tree(sel4_include: &Path) -> Result<Vec<PathBuf>, String
         return Err(format!("{} not found", tree_file.display()));
     }
 
-    fn collect(dir: &Path, out: &mut BTreeSet<PathBuf>) -> std::io::Result<()> {
-        for entry in std::fs::read_dir(dir)? {
-            let entry = entry?;
-            let path = entry.path();
-            if path.is_dir() {
-                collect(&path, out)?;
-            } else if path.extension().and_then(|e| e.to_str()) == Some("h") {
-                if let Some(parent) = path.parent() {
-                    out.insert(parent.to_path_buf());
-                }
-            }
+    let content = std::fs::read_to_string(&tree_file)
+        .map_err(|e| format!("failed to read {}: {}", tree_file.display(), e))?;
+
+    let lines: Vec<&str> = content.lines().collect();
+    let mut stack: Vec<String> = Vec::new();
+    let mut dirs = BTreeSet::new();
+
+    for (idx, raw) in lines.iter().enumerate() {
+        let mut clean = raw
+            .replace('│', " ")
+            .replace('├', " ")
+            .replace('└', " ")
+            .replace('─', " ")
+            .replace('\u{00a0}', " ");
+
+        let indent = clean.chars().take_while(|c| *c == ' ').count();
+        let mut depth = indent / 4;
+        if depth > 0 {
+            depth -= 1;
         }
-        Ok(())
+        let name = clean.trim();
+        if name.is_empty() || name == "." {
+            continue;
+        }
+        while stack.len() > depth {
+            stack.pop();
+        }
+
+        let next_indent = lines.get(idx + 1).map(|next| {
+            next.replace('│', " ")
+                .replace('├', " ")
+                .replace('└', " ")
+                .replace('─', " ")
+                .replace('\u{00a0}', " ")
+                .chars()
+                .take_while(|c| *c == ' ')
+                .count()
+        });
+        let is_dir = next_indent.map(|ni| ni > indent).unwrap_or(false);
+
+        if is_dir {
+            stack.push(name.to_string());
+        } else if name.ends_with(".h") {
+            let mut path = root.to_path_buf();
+            for part in &stack {
+                path.push(part);
+            }
+            dirs.insert(path);
+        }
     }
 
-    let mut dirs = BTreeSet::new();
-    collect(sel4_include, &mut dirs).map_err(|e| e.to_string())?;
     if dirs.is_empty() {
         return Err("No header directories found".into());
     }
+
     Ok(dirs.into_iter().collect())
 }
