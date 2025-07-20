@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: build.rs v1.43
+// Filename: build.rs v1.44
 // Author: Lukas Bower
-// Date Modified: 2028-11-06
+// Date Modified: 2028-11-07
 
 use std::{env, path::PathBuf};
 #[path = "../sel4_paths.rs"]
@@ -21,8 +21,14 @@ fn main() {
         panic!("SEL4_INCLUDE path {} not found", sel4_include.display());
     }
 
-    let header_dirs = sel4_paths::header_dirs_from_tree(&sel4_include)
+    let mut header_dirs = sel4_paths::header_dirs_from_tree(&sel4_include)
         .expect("Failed to collect seL4 header directories");
+
+    if let Ok(arch) = env::var("SEL4_ARCH") {
+        if let Ok(alias_root) = sel4_paths::create_arch_alias(&sel4_include, &arch, &out_dir) {
+            header_dirs.push(alias_root);
+        }
+    }
 
     let cflags = env::var("SEL4_SYS_CFLAGS").unwrap_or_default();
 
