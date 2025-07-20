@@ -63,7 +63,6 @@ cohrun physics_demo
 cohtrace list
 ```
 
-Validators run automatically via `validate_metadata_sync.py` and CI hooks to ensure all generated files match `METADATA.md`.
 
 For a role-by-role breakdown of tool usage, see the CLI matrix above.
 
