@@ -72,10 +72,8 @@ msg "Using $PYTHON_BIN ($PY_VER)"
 export PYTHON_BIN
 
 msg "Checking git …"
+# Metadata validation handled by CI
 command -v git >/dev/null 2>&1 || fail "git not found"
 
-msg "Running metadata sync validation …"
-"$PYTHON_BIN" scripts/validate_metadata_sync.py
-# Future scripts can now access $PYTHON_BIN to ensure consistent interpreter usage
 
 msg "✅ macOS setup verified."
