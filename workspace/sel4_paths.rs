@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: sel4_paths.rs v0.3
+// Filename: sel4_paths.rs v0.4
 // Author: OpenAI
-// Date Modified: 2028-11-06
+// Date Modified: 2028-11-07
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -35,6 +35,7 @@ pub fn header_dirs_from_tree(sel4_include: &Path) -> Result<Vec<PathBuf>, String
     let lines: Vec<&str> = content.lines().collect();
     let mut stack: Vec<String> = Vec::new();
     let mut dirs = BTreeSet::new();
+    dirs.insert(sel4_include.to_path_buf());
 
     for (idx, raw) in lines.iter().enumerate() {
         let mut clean = raw
@@ -85,4 +86,41 @@ pub fn header_dirs_from_tree(sel4_include: &Path) -> Result<Vec<PathBuf>, String
     }
 
     Ok(dirs.into_iter().collect())
+}
+
+use std::fs;
+use std::io;
+
+pub fn create_arch_alias(sel4_include: &Path, sel4_arch: &str, out_dir: &Path) -> io::Result<PathBuf> {
+    let src = sel4_include
+        .join("libsel4")
+        .join("sel4_arch")
+        .join("sel4")
+        .join("sel4_arch")
+        .join(sel4_arch);
+
+    let alias_root = out_dir.join("sel4_arch_alias");
+    let target_arch = alias_root.join("sel4/arch");
+    let target_sel4_arch = alias_root.join("sel4/sel4_arch");
+    if target_arch.exists() {
+        fs::remove_dir_all(&target_arch)?;
+    }
+    if target_sel4_arch.exists() {
+        fs::remove_dir_all(&target_sel4_arch)?;
+    }
+    fs::create_dir_all(&target_arch)?;
+    fs::create_dir_all(&target_sel4_arch)?;
+
+    for entry in fs::read_dir(&src)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().map(|e| e == "h").unwrap_or(false) {
+            let fname = entry.file_name();
+            fs::copy(&path, target_arch.join(&fname))?;
+            let wrapper = target_sel4_arch.join(&fname);
+            fs::write(&wrapper, format!("#pragma once\n#include \"../arch/{}\"\n", fname.to_string_lossy()))?;
+        }
+    }
+
+    Ok(alias_root)
 }

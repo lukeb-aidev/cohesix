@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: build.rs v1.42
+// Filename: build.rs v1.43
 // Author: Lukas Bower
-// Date Modified: 2028-11-05
+// Date Modified: 2028-11-07
 
 use std::{env, fs, path::Path};
 #[path = "../sel4_paths.rs"]
@@ -77,7 +77,12 @@ fn main() {
 
     let cflags = env::var("SEL4_SYS_CFLAGS").unwrap_or_else(|_| {
         let include_root = sel4_paths::sel4_include(&project_root);
-        let dirs = header_dirs_from_tree(&include_root).expect("collect seL4 header dirs");
+        let mut dirs = header_dirs_from_tree(&include_root).expect("collect seL4 header dirs");
+        if let Ok(arch) = env::var("SEL4_ARCH") {
+            if let Ok(alias_root) = sel4_paths::create_arch_alias(&include_root, &arch, Path::new(&out_dir)) {
+                dirs.push(alias_root);
+            }
+        }
         let mut args = String::from("--target=aarch64-unknown-none");
         for d in &dirs {
             args.push_str(&format!(" -I{}", d.display()));
