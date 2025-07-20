@@ -14,7 +14,7 @@ links = "sel4-root"
 [dependencies]
 serde = { version = "1.0", default-features = false, features = ["derive", "alloc"] }
 cty = "0.2"
-sel4-sys = { path = "../sel4-sys" }
+sel4-sys = { path = "../sel4-sys", default-features = false }
 
 
 [features]
