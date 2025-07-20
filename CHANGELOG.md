@@ -3473,3 +3473,7 @@
 ## [v0.566] - 2028-08-31
 ### Fixed
 - **WebCodexFix32to64-010**: Updated bootinfo binding for 64-bit word size and enabled architecture override in `qemu_boot_check.sh` for AArch64 CI boot.
+
+## [v0.567] - 2028-09-06
+### Fixed
+- **FixSel4LibLinking-101**: Phase 2 and Phase 3 builds link against libsel4 with explicit `-lsel4` and correct header search paths.
