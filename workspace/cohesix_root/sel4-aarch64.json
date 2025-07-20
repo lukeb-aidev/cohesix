@@ -14,6 +14,10 @@
   "relocation-model": "static",
   "features": "+neon",
   "no_std": true,
+  "include-paths": [
+    "../third_party/seL4/include/generated",
+    "../third_party/seL4/include/generated/sel4"
+  ],
   "pre-link-args": {
     "ld.lld": [
       "-Tcohesix_root/link.ld",
