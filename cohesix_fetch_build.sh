@@ -137,7 +137,6 @@ log "\u2705 Cargo dependencies fetched"
 export CONFIG_BUILD_KERNEL_TESTS=n
 KERNEL_TEST_FLAG=OFF
 
-
 # CUDA detection and environment setup
 log "🚀 Starting CUDA check..."
 CUDA_HOME="${CUDA_HOME:-}"
@@ -450,19 +449,29 @@ cargo +nightly test --release --workspace \
   --exclude cohesix_root
 log "✅ Host crates built and tested"
 
-
 # Phase 2: Cross-compile sel4-sys (no-std, panic-abort)
 log "🔨 Building sel4-sys (no-std, panic-abort)"
+
 export LIBRARY_PATH="$SEL4_LIB_DIR:${LIBRARY_PATH:-}"
-export CFLAGS="--target=aarch64-unknown-none \"
-  -I$ROOT/third_party/seL4/include/libsel4 \
-  -I$ROOT/third_party/seL4/include/libsel4/sel4 \
+
+# Combine all flags into one properly quoted multi-line string:
+export CFLAGS="\
+--target=aarch64-unknown-none \
+-I$ROOT/third_party/seL4/include/libsel4 \
+-I$ROOT/third_party/seL4/include/libsel4/sel4 \
+"
+
 export LDFLAGS="-L$SEL4_LIB_DIR"
-RUSTFLAGS="-C panic=abort -L $SEL4_LIB_DIR" \
+
+# Export RUSTFLAGS or set inline; here we export:
+export RUSTFLAGS="-C panic=abort -L $SEL4_LIB_DIR"
+
+# Now run cargo
 cargo +nightly build -p sel4-sys --release \
   --target=cohesix_root/sel4-aarch64.json \
   -Z build-std=core,alloc,compiler_builtins \
   -Z build-std-features=compiler-builtins-mem
+
 log "✅ sel4-sys built (tests skipped)"
 
 # Phase 3: Cross-compile cohesix_root
