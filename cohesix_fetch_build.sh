@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v1.40
+# Filename: cohesix_fetch_build.sh v1.41
 # Author: Lukas Bower
-# Date Modified: 2028-09-08
+# Date Modified: 2028-09-09
 
 # This script fetches and builds the Cohesix project, including seL4 and other dependencies.
 
@@ -454,13 +454,12 @@ log "🔨 Building sel4-sys (no-std, panic-abort)"
 
 export LIBRARY_PATH="$SEL4_LIB_DIR:${LIBRARY_PATH:-}"
 
-export CFLAGS="\
-  --target=aarch64-unknown-none \
+export CFLAGS="--target=aarch64-unknown-none \
   -I$ROOT/third_party/seL4/include/libsel4 \
   -I$ROOT/third_party/seL4/include/libsel4/sel4 \
-  -I$ROOT/third_party/seL4/include/kernel/api \
-  -I$ROOT/third_party/seL4/include/kernel/arch/api \
-  "
+  -I$ROOT/third_party/seL4/include/libsel4/sel4_arch \
+  -I$ROOT/third_party/seL4/include/libsel4/interfaces"
+export SEL4_SYS_CFLAGS="$CFLAGS"
 
 export LDFLAGS="-L$SEL4_LIB_DIR"
 
