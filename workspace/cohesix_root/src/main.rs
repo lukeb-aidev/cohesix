@@ -3,7 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-19
 #![no_std]
-#![no_main]
+#![cfg_attr(not(test), no_main)]
 #![feature(alloc_error_handler, asm_experimental_arch, lang_items)]
 
 extern crate alloc;
