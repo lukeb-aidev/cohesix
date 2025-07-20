@@ -21,6 +21,18 @@ pub struct UntypedDesc {
 
 pub const MAX_BOOTINFO_UNTYPED_CAPS: usize = 256;
 
+/// Size of the bootinfo frame in bytes.
+pub const BOOTINFO_FRAME_SIZE: usize = 1 << 12;
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct BootInfoHeader {
+    pub id: usize,
+    pub len: usize,
+}
+
+pub const SEL4_BOOTINFO_HEADER_FDT: usize = 6;
+
 #[repr(C)]
 pub struct BootInfo {
     pub extra_len: usize,
@@ -89,4 +101,23 @@ pub unsafe fn dump_bootinfo() {
         bi.untyped.end - bi.untyped.start,
         bi.untyped_list[0].size_bits
     );
+}
+
+pub unsafe fn dtb_slice() -> Option<&'static [u8]> {
+    let bi_ptr = &BOOTINFO as *const BootInfo as usize;
+    if BOOTINFO.extra_len == 0 {
+        return None;
+    }
+    let mut cur = bi_ptr + BOOTINFO_FRAME_SIZE;
+    let end = cur + BOOTINFO.extra_len;
+    while cur < end {
+        let hdr = &*(cur as *const BootInfoHeader);
+        if hdr.id == SEL4_BOOTINFO_HEADER_FDT {
+            let data = cur + core::mem::size_of::<BootInfoHeader>();
+            let len = hdr.len - core::mem::size_of::<BootInfoHeader>();
+            return Some(core::slice::from_raw_parts(data as *const u8, len));
+        }
+        cur += hdr.len;
+    }
+    None
 }

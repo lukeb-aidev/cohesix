@@ -498,11 +498,15 @@ pub extern "C" fn main() {
         let bi = bootinfo::bootinfo();
         let bi_start = bi as *const _ as usize;
         let bi_end = bi_start + core::mem::size_of::<bootinfo::BootInfo>();
+        let (dtb_start, dtb_end) = match bootinfo::dtb_slice() {
+            Some(dtb) => (dtb.as_ptr() as usize, dtb.as_ptr() as usize + dtb.len()),
+            None => (dt::UART_BASE, dt::UART_BASE + 0x1000),
+        };
         mmu::init(
             0x400000,
             image_end(),
-            dt::UART_BASE,
-            dt::UART_BASE + 0x1000,
+            dtb_start,
+            dtb_end,
             bi_start,
             bi_end,
         );
