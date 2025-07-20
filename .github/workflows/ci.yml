@@ -46,6 +46,7 @@ jobs:
         with:
           toolchain: nightly
           override: false
+          components: rust-src
 
       - uses: actions/setup-go@v4
         with:
