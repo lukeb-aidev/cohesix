@@ -131,7 +131,7 @@
 | Makefile | v0.52 | 2027-09-30 | COMMUNITY | | |
 | workspace/Makefile | v0.1 | 2027-12-31 | COMMUNITY | | |
 | workspace/Cargo.toml | v0.6 | 2027-12-31 | COMMUNITY | | |
-| workspace/.cargo/config.toml | v0.2 | 2028-11-05 | COMMUNITY | | |
+| workspace/.cargo/config.toml | v0.3 | 2028-11-06 | COMMUNITY | | |
 | src/kernel/main.c | v0.2 | 2025-07-22 | COMMUNITY | | |
 | src/kernel/main.rs | v0.3 | 2027-02-02 | COMMUNITY | | |
 | src/kernel/log.rs | v0.1 | 2027-02-02 | COMMUNITY | | |
@@ -287,7 +287,7 @@
 | workspace/cohesix_root/src/exception.rs | v0.2 | 2028-01-21 | COMMUNITY | | |
 | workspace/cohesix_root/src/mmu.rs | v0.2 | 2028-02-15 | COMMUNITY | | |
 | workspace/sel4-sys/Cargo.toml | v0.5 | 2028-09-10 | COMMUNITY | | |
-| workspace/sel4-sys/build.rs | v1.42 | 2028-11-05 | COMMUNITY | | |
+| workspace/sel4-sys/build.rs | v1.43 | 2028-11-06 | COMMUNITY | | |
 | workspace/sel4-sys/src/lib.rs | v0.1 | 2027-12-31 | COMMUNITY | | |
 | src/cuda/runtime.rs | v0.16 | 2026-12-31 | COMMUNITY | | |
 | src/cli/mod.rs | v1.3 | 2026-10-08 | COMMUNITY | | |
@@ -430,4 +430,5 @@ Removed: introspect_self_diagnosis (Plan9 migration - file-based introspection r
 Removed: legacy Python tests and lint steps; project now purely Plan9 + Rust
 Changed: `.cargo/config.toml` v0.14 uses project-relative linker script path
 Changed: `.cargo/config.toml` v0.22 and workspace/.cargo/config.toml v0.2 include sel4_tree.txt discovery
+Changed: workspace/.cargo/config.toml v0.3 simplifies rustflags; build.rs v1.43 parses sel4_tree.txt directories
 Task PropagateSel4FlagsToCohesix-108 v0.2 | 2028-09-10 | Cargo ✅ | Pytest ✅

@@ -3496,3 +3496,7 @@
 ## [v1.42] - 2028-11-05
 ### Changed
 - **HolisticSel4IncludeAudit-309**: Build scripts now parse `sel4_tree.txt` to automatically discover seL4 header directories.
+
+## [v1.43] - 2028-11-06
+### Changed
+- **HolisticSel4IncludeAudit-310**: Refined parsing of `sel4_tree.txt` and simplified cargo configuration for header inclusion.
