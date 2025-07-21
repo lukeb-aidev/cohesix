@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: build.rs v1.48
 // Author: Lukas Bower
-// Date Modified: 2025-07-21
+// Date Modified: 2028-11-08
 
 use std::{env, path::PathBuf};
 #[path = "../sel4_paths.rs"]
@@ -21,47 +21,17 @@ fn main() {
         panic!("SEL4_INCLUDE path {} not found", sel4_include.display());
     }
 
-    let mut header_dirs = Vec::new();
-
-    if let Ok(arch) = env::var("SEL4_ARCH") {
-        if let Ok(alias_root) = sel4_paths::create_arch_alias(&sel4_include, &arch, &out_dir) {
-            header_dirs.push(alias_root);
-        }
-        let arch_dir = sel4_include
-            .join("libsel4")
-            .join("sel4_arch")
-            .join("sel4")
-            .join("sel4_arch")
-            .join(&arch);
-        if arch_dir.exists() {
-            header_dirs.push(arch_dir);
-        }
-    }
-
-    header_dirs.extend(
-        sel4_paths::header_dirs_from_tree(&sel4_include)
-            .expect("Failed to collect seL4 header directories"),
-    );
-    header_dirs.push(sel4_include.join("libsel4"));
-    header_dirs.push(sel4_include.join("libsel4/sel4"));
-    header_dirs.push(sel4_include.join("libsel4/sel4_arch"));
-
     let cflags = env::var("SEL4_SYS_CFLAGS").unwrap_or_default();
-
     let sel4 = std::env::var("SEL4_INCLUDE").unwrap();
 
     let mut builder = bindgen::Builder::default()
         .header("include/wrapper.h")
         .use_core()
         .ctypes_prefix("cty")
+        .clang_arg(format!("-I{}", sel4))
         .clang_arg(format!("-I{}/generated", sel4))
-        .clang_arg(format!("-I{}/libsel4/sel4/sel4", sel4))
         .clang_arg("-Iinclude")
         .clang_args(cflags.split_whitespace());
-
-    for dir in &header_dirs {
-        builder = builder.clang_arg(format!("-I{}", dir.display()));
-    }
 
     let bindings = builder.generate().expect("Unable to generate bindings");
 
