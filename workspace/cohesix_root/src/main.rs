@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: main.rs v0.48
+// Filename: main.rs v0.49
 // Author: Lukas Bower
-// Date Modified: 2025-07-19
+// Date Modified: 2028-11-21
 #![no_std]
 #![cfg_attr(not(test), no_main)]
 #![feature(alloc_error_handler, asm_experimental_arch, lang_items)]
@@ -491,6 +491,9 @@ pub extern "C" fn main() {
     check_heap_bounds();
     check_globals_zero();
     coherr!("boot_ok: bss, heap, globals validated");
+    let _ = drivers::fs::StubFs::mount_root();
+    let _ = drivers::irq_controller::IrqController::register_irq(32);
+    let _ = drivers::irq_controller::IrqController::enable_irq(32);
     crate::allocator::allocator_init_log();
     unsafe {
         bootinfo::dump_bootinfo();
