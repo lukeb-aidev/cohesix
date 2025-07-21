@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: build.rs v1.46
+// Filename: build.rs v1.48
 // Author: Lukas Bower
-// Date Modified: 2028-11-08
+// Date Modified: 2025-07-21
 
 use std::{env, path::PathBuf};
 #[path = "../sel4_paths.rs"]
@@ -48,10 +48,15 @@ fn main() {
 
     let cflags = env::var("SEL4_SYS_CFLAGS").unwrap_or_default();
 
+    let sel4 = std::env::var("SEL4_INCLUDE").unwrap();
+
     let mut builder = bindgen::Builder::default()
         .header("include/wrapper.h")
         .use_core()
         .ctypes_prefix("cty")
+        .clang_arg(format!("-I{}/generated", sel4))
+        .clang_arg(format!("-I{}/libsel4/sel4/sel4", sel4))
+        .clang_arg("-Iinclude")
         .clang_args(cflags.split_whitespace());
 
     for dir in &header_dirs {
