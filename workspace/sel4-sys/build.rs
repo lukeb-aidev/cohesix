@@ -22,16 +22,32 @@ fn main() {
     }
 
     let cflags = env::var("SEL4_SYS_CFLAGS").unwrap_or_default();
-    let sel4 = std::env::var("SEL4_INCLUDE").unwrap();
 
     let mut builder = bindgen::Builder::default()
         .header("include/wrapper.h")
         .use_core()
         .ctypes_prefix("cty")
-        .clang_arg(format!("-I{}", sel4))
-        .clang_arg(format!("-I{}/generated", sel4))
         .clang_arg("-Iinclude")
         .clang_args(cflags.split_whitespace());
+
+    if let Ok(arch) = env::var("SEL4_ARCH") {
+        if let Ok(alias_root) = sel4_paths::create_arch_alias(&sel4_include, &arch, &out_dir) {
+            builder = builder.clang_arg(format!("-I{}", alias_root.display()));
+            for dir in sel4_paths::get_all_subdirectories(&alias_root).unwrap() {
+                builder = builder.clang_arg(format!("-I{}", dir.display()));
+            }
+        }
+    }
+
+    for dir in sel4_paths::get_all_subdirectories(&sel4_include).unwrap() {
+        builder = builder.clang_arg(format!("-I{}", dir.display()));
+    }
+    let generated = sel4_include.join("generated");
+    if generated.exists() {
+        for dir in sel4_paths::get_all_subdirectories(&generated).unwrap() {
+            builder = builder.clang_arg(format!("-I{}", dir.display()));
+        }
+    }
 
     let bindings = builder.generate().expect("Unable to generate bindings");
 

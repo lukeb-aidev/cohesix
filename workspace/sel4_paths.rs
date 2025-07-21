@@ -3,7 +3,8 @@
 // Author: OpenAI
 // Date Modified: 2025-07-21
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
+use std::fs;
 use std::path::{Path, PathBuf};
 
 pub fn project_root(manifest_dir: &str) -> PathBuf {
@@ -88,10 +89,13 @@ pub fn header_dirs_from_tree(sel4_include: &Path) -> Result<Vec<PathBuf>, String
     Ok(dirs.into_iter().collect())
 }
 
-use std::fs;
 use std::io;
 
-pub fn create_arch_alias(sel4_include: &Path, sel4_arch: &str, out_dir: &Path) -> io::Result<PathBuf> {
+pub fn create_arch_alias(
+    sel4_include: &Path,
+    sel4_arch: &str,
+    out_dir: &Path,
+) -> io::Result<PathBuf> {
     let src = sel4_include
         .join("libsel4")
         .join("sel4_arch")
@@ -120,7 +124,13 @@ pub fn create_arch_alias(sel4_include: &Path, sel4_arch: &str, out_dir: &Path) -
             let fname = entry.file_name();
             fs::copy(&path, target_arch.join(&fname))?;
             let wrapper = target_sel4_arch.join(&fname);
-            fs::write(&wrapper, format!("#pragma once\n#include \"../arch/{}\"\n", fname.to_string_lossy()))?;
+            fs::write(
+                &wrapper,
+                format!(
+                    "#pragma once\n#include \"../arch/{}\"\n",
+                    fname.to_string_lossy()
+                ),
+            )?;
         }
     }
 
@@ -132,11 +142,61 @@ pub fn create_arch_alias(sel4_include: &Path, sel4_arch: &str, out_dir: &Path) -
     if invocation.exists() {
         fs::copy(&invocation, target_arch.join("invocation.h"))?;
         let wrapper = target_sel4_arch.join("invocation.h");
-        fs::write(&wrapper, "#pragma once\n#include \"../arch/invocation.h\"\n")?;
+        fs::write(
+            &wrapper,
+            "#pragma once\n#include \"../arch/invocation.h\"\n",
+        )?;
+    }
+
+    let types_gen = src
+        .parent()
+        .expect("sel4_arch path missing parent")
+        .join("types_gen.h");
+    if types_gen.exists() {
+        fs::copy(&types_gen, target_arch.join("types_gen.h"))?;
+        let wrapper = target_sel4_arch.join("types_gen.h");
+        fs::write(&wrapper, "#pragma once\n#include \"../arch/types_gen.h\"\n")?;
     }
 
     let mode_wrapper = target_mode.join("types.h");
-    fs::write(&mode_wrapper, "#pragma once\n#include \"../sel4_arch/types.h\"\n")?;
+    fs::write(
+        &mode_wrapper,
+        "#pragma once\n#include \"../sel4_arch/types.h\"\n",
+    )?;
 
     Ok(alias_root)
+}
+
+pub fn get_all_subdirectories(root: &Path) -> std::io::Result<Vec<PathBuf>> {
+    fn walk(dir: &Path, root: &Path, set: &mut HashSet<PathBuf>) -> std::io::Result<()> {
+        for entry in fs::read_dir(dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, root, set)?;
+            } else if path.extension().map(|e| e == "h").unwrap_or(false) {
+                if let Some(mut current) = path.parent() {
+                    loop {
+                        if current.starts_with(root) {
+                            set.insert(current.to_path_buf());
+                        }
+                        if current == root {
+                            break;
+                        }
+                        match current.parent() {
+                            Some(next) => current = next,
+                            None => break,
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    let mut set = HashSet::new();
+    walk(root, root, &mut set)?;
+    let mut dirs: Vec<PathBuf> = set.into_iter().collect();
+    dirs.sort();
+    Ok(dirs)
 }
