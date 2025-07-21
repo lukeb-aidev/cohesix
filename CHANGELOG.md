@@ -3520,3 +3520,7 @@
 ## [v1.48] - 2028-11-11
 ### Fixed
 - **AddSel4ClientPaths-951**: Prepend interface and arch include paths so sel4_client.h resolves ARM-specific symbols.
+
+## [v1.49] - 2028-11-12
+### Fixed
+- **IncludeLibsel4AutoconfInWrapper-958**: wrapper.h now includes libsel4_autoconf before API headers, and build scripts include generated directories so CONFIG_* macros resolve.
