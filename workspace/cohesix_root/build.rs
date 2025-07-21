@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: build.rs v1.47
+// Filename: build.rs v1.48
 // Author: Lukas Bower
-// Date Modified: 2028-11-11
+// Date Modified: 2028-11-21
 
 use std::{env, fs, path::Path};
 #[path = "../sel4_paths.rs"]
@@ -80,6 +80,9 @@ fn main() {
     });
     let sel4_include = Path::new(&sel4);
     let mut flags = sel4_paths::default_cflags(sel4_include, &project_root);
+    if env::var("SEL4_SYS_CFLAGS").is_ok() {
+        println!("cargo:warning=SEL4_SYS_CFLAGS no longer used");
+    }
     if let Ok(extra) = env::var("CFLAGS") {
         if !extra.is_empty() {
             flags.push(extra);
