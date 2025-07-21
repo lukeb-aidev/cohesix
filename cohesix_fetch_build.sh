@@ -98,11 +98,7 @@ EOF
 log "✅ config.yaml created at $CONFIG_PATH"
 
 export SEL4_LIB_DIR="$ROOT/third_party/seL4/output"
-export SEL4_SYS_CFLAGS="\
-  -I$SEL4_LIB_DIR/include/libsel4 \
-  -I$SEL4_LIB_DIR/include/libsel4/sel4 \
-  -I$SEL4_LIB_DIR/include/libsel4/sel4_arch\
-"
+export SEL4_INCLUDE="$(realpath "$ROOT/third_party/seL4/include")"
 export RUSTFLAGS="-C link-arg=-L${SEL4_LIB_DIR} ${RUSTFLAGS}"
 
 if [ -f "$ROOT/scripts/load_arch_config.sh" ]; then
@@ -458,20 +454,7 @@ log "✅ Host crates built and tested"
 log "🔨 Building sel4-sys (no-std, panic-abort)"
 
 export LIBRARY_PATH="$SEL4_LIB_DIR:${LIBRARY_PATH:-}"
-
-export CFLAGS="\
-  -I$ROOT/third_party/seL4/include \
-  -I$ROOT/third_party/seL4/include/generated \
-  -I$ROOT/third_party/seL4/include/libsel4 \
-  -I$ROOT/third_party/seL4/include/libsel4/sel4 \
-  -I$ROOT/third_party/seL4/include/libsel4/sel4_arch \
-  -I$ROOT/third_party/seL4/include/libsel4/sel4_arch/sel4/sel4_arch \
-  -I$ROOT/third_party/seL4/include/libsel4/interfaces \
-  -I$ROOT/third_party/seL4/include/kernel/api \
-  -I$ROOT/third_party/seL4/include/kernel/arch/api \
-  -I$ROOT/third_party/seL4/include/sel4/sel4_arch"
-export SEL4_SYS_CFLAGS="$CFLAGS"
-
+export SEL4_INCLUDE="$(realpath "$ROOT/third_party/seL4/include")"
 export RUSTFLAGS="-C link-arg=-L${SEL4_LIB_DIR} ${RUSTFLAGS}"
 
 export LDFLAGS="-L$SEL4_LIB_DIR"
@@ -486,7 +469,6 @@ log "✅ sel4-sys built (tests skipped)"
 
 # Phase 3: Cross-compile cohesix_root
 log "🔨 Building cohesix_root (no-std, panic-abort)"
-# No need to set CFLAGS="$SEL4_SYS_CFLAGS"; CFLAGS already carries correct includes
 cargo +nightly build \
   -Z build-std=core,alloc,compiler_builtins \
   -Z build-std-features=compiler-builtins-mem \
