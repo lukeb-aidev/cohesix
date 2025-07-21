@@ -97,9 +97,11 @@ logging:
 EOF
 log "✅ config.yaml created at $CONFIG_PATH"
 
-export SEL4_LIB_DIR="$ROOT/third_party/seL4/output"
-export SEL4_INCLUDE="$(realpath "$ROOT/third_party/seL4/include")"
+export SEL4_LIB_DIR="${SEL4_LIB_DIR:-$ROOT/third_party/seL4/output}"
+export SEL4_INCLUDE="${SEL4_INCLUDE:-$(realpath "$ROOT/third_party/seL4/include")}"
+export SEL4_SYS_CFLAGS="-I${SEL4_INCLUDE}/libsel4/interfaces -I${SEL4_INCLUDE}/libsel4/sel4_arch/sel4/sel4_arch/aarch64"
 export RUSTFLAGS="-C link-arg=-L${SEL4_LIB_DIR} ${RUSTFLAGS}"
+export SEL4_ARCH="${SEL4_ARCH:-aarch64}"
 
 if [ -f "$ROOT/scripts/load_arch_config.sh" ]; then
   source "$ROOT/scripts/load_arch_config.sh"
@@ -440,32 +442,30 @@ log "🔧 Building Rust workspace binaries..."
 cd "$ROOT/workspace"
 cargo clean
 
-# Phase 1: Build all host crates except sel4-sys and cohesix_root
+# Phase 1: Build all host crates except sel4-sys-extern-wrapper and cohesix_root
 log "🔨 Building host crates"
 cargo +nightly build --release --workspace \
-  --exclude sel4-sys \
+  --exclude sel4-sys-extern-wrapper \
   --exclude cohesix_root
 cargo +nightly test --release --workspace \
-  --exclude sel4-sys \
+  --exclude sel4-sys-extern-wrapper \
   --exclude cohesix_root
 log "✅ Host crates built and tested"
 
-# Phase 2: Cross-compile sel4-sys (no-std, panic-abort)
-log "🔨 Building sel4-sys (no-std, panic-abort)"
+# Phase 2: Cross-compile sel4-sys-extern-wrapper (no-std, panic-abort)
+log "🔨 Building sel4-sys-extern-wrapper (no-std, panic-abort)"
 
 export LIBRARY_PATH="$SEL4_LIB_DIR:${LIBRARY_PATH:-}"
-export SEL4_INCLUDE="$(realpath "$ROOT/third_party/seL4/include")"
-export RUSTFLAGS="-C link-arg=-L${SEL4_LIB_DIR} ${RUSTFLAGS}"
 
 export LDFLAGS="-L$SEL4_LIB_DIR"
 # Now run cargo
 cargo +nightly build \
   -Z build-std=core,alloc,compiler_builtins \
   -Z build-std-features=compiler-builtins-mem \
-  -p sel4-sys --release \
+  -p sel4-sys-extern-wrapper --release \
   --target=cohesix_root/sel4-aarch64.json
 
-log "✅ sel4-sys built (tests skipped)"
+log "✅ sel4-sys-extern-wrapper built (tests skipped)"
 
 # Phase 3: Cross-compile cohesix_root
 log "🔨 Building cohesix_root (no-std, panic-abort)"

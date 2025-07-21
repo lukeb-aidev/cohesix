@@ -5,6 +5,7 @@
 
 [workspace]
 members = [
+    "sel4-sys-extern-wrapper",
     "cohesix",
     "cohesix-9p",
     "cohesix-secure9p",
@@ -12,12 +13,11 @@ members = [
     "tools/cli",
     "tools/scenario_compiler",
     "tools/cohfuzz",
-    "sel4-sys"
 ]
 resolver = "2"
 
 [workspace.dependencies]
-sel4-sys = { path = "sel4-sys" }
+sel4-sys-extern-wrapper = { path = "sel4-sys-extern-wrapper" }
 
 [workspace.metadata.release]
 tag-name = "v{{version}}"

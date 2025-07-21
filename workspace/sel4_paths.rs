@@ -218,3 +218,22 @@ pub fn get_all_subdirectories(root: &Path) -> std::io::Result<Vec<PathBuf>> {
 pub fn header_dirs_recursive(root: &Path) -> std::io::Result<Vec<PathBuf>> {
     get_all_subdirectories(root)
 }
+
+/// Compute standard seL4 include flags.
+pub fn default_cflags(sel4_include: &Path, project_root: &Path) -> Vec<String> {
+    let mut flags = Vec::new();
+    flags.push(format!("-I{}", sel4_include.display()));
+    flags.push(format!("-I{}/libsel4/interfaces", sel4_include.display()));
+    flags.push(format!("-I{}/libsel4/sel4_arch/sel4/sel4_arch/aarch64", sel4_include.display()));
+    if let Ok(dirs) = header_dirs_recursive(sel4_include) {
+        for d in dirs {
+            flags.push(format!("-I{}", d.display()));
+        }
+    }
+    if let Ok(gen_dirs) = header_dirs_recursive(&sel4_generated(project_root)) {
+        for d in gen_dirs {
+            flags.push(format!("-I{}", d.display()));
+        }
+    }
+    flags
+}
