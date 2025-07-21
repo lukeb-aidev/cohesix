@@ -99,7 +99,11 @@ log "✅ config.yaml created at $CONFIG_PATH"
 
 export SEL4_LIB_DIR="${SEL4_LIB_DIR:-$ROOT/third_party/seL4/output}"
 export SEL4_INCLUDE="${SEL4_INCLUDE:-$(realpath "$ROOT/third_party/seL4/include")}"
-export SEL4_SYS_CFLAGS="-I${SEL4_INCLUDE}/libsel4/interfaces -I${SEL4_INCLUDE}/libsel4/sel4_arch/sel4/sel4_arch/aarch64"
+if grep -q "SEL4_SYS_CFLAGS" "$ROOT/workspace/sel4-sys/build.rs"; then
+  echo "❌ sel4-sys still references SEL4_SYS_CFLAGS" >&2
+  exit 1
+fi
+unset SEL4_SYS_CFLAGS
 export RUSTFLAGS="-C link-arg=-L${SEL4_LIB_DIR} ${RUSTFLAGS}"
 export SEL4_ARCH="${SEL4_ARCH:-aarch64}"
 
