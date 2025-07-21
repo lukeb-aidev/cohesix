@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: build.rs v1.50
+// Filename: build.rs v1.51
 // Author: Lukas Bower
-// Date Modified: 2028-11-10
+// Date Modified: 2028-11-11
 
 use std::{env, path::PathBuf};
 #[path = "../sel4_paths.rs"]
@@ -16,6 +16,11 @@ fn main() {
         .ok()
         .map(PathBuf::from)
         .unwrap_or_else(|| sel4_paths::sel4_include(&project_root));
+    let sel4_root = sel4_include
+        .to_str()
+        .expect("SEL4_INCLUDE invalid utf8");
+    let interfaces = format!("{}/libsel4/interfaces", sel4_root);
+    let arch = format!("{}/libsel4/sel4_arch/sel4/sel4_arch/aarch64", sel4_root);
 
     if !sel4_include.exists() {
         panic!("SEL4_INCLUDE path {} not found", sel4_include.display());
@@ -28,6 +33,8 @@ fn main() {
         .use_core()
         .ctypes_prefix("cty")
         .clang_args(cflags.split_whitespace());
+    builder = builder.clang_arg(format!("-I{}", interfaces));
+    builder = builder.clang_arg(format!("-I{}", arch));
 
     if let Ok(arch) = env::var("SEL4_ARCH") {
         if let Ok(alias_root) = sel4_paths::create_arch_alias(&sel4_include, &arch, &out_dir) {

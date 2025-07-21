@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: build.rs v1.46
+// Filename: build.rs v1.47
 // Author: Lukas Bower
-// Date Modified: 2028-11-09
+// Date Modified: 2028-11-11
 
 use std::{env, fs, path::Path};
 #[path = "../sel4_paths.rs"]
@@ -79,6 +79,8 @@ fn main() {
             .into_owned()
     });
     let mut flags = Vec::new();
+    flags.push(format!("-I{}/libsel4/interfaces", sel4));
+    flags.push(format!("-I{}/libsel4/sel4_arch/sel4/sel4_arch/aarch64", sel4));
     let sel4_include = Path::new(&sel4);
     for dir in header_dirs_recursive(sel4_include).unwrap() {
         flags.push(format!("-I{}", dir.display()));

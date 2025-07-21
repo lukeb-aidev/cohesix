@@ -3516,3 +3516,7 @@
 ## [v1.47] - 2028-11-10
 ### Changed
 - **ReintroduceWrapperAndBindings-948**: Restored wrapper.h for bindgen entry and streamlined include dir scanning in sel4-sys build script.
+
+## [v1.48] - 2028-11-11
+### Fixed
+- **AddSel4ClientPaths-951**: Prepend interface and arch include paths so sel4_client.h resolves ARM-specific symbols.
