@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: sel4_paths.rs v0.5
+// Filename: sel4_paths.rs v0.6
 // Author: OpenAI
-// Date Modified: 2028-11-07
+// Date Modified: 2025-07-21
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -122,6 +122,17 @@ pub fn create_arch_alias(sel4_include: &Path, sel4_arch: &str, out_dir: &Path) -
             let wrapper = target_sel4_arch.join(&fname);
             fs::write(&wrapper, format!("#pragma once\n#include \"../arch/{}\"\n", fname.to_string_lossy()))?;
         }
+    }
+
+    // include architecture-generic invocation header
+    let invocation = src
+        .parent()
+        .expect("sel4_arch path missing parent")
+        .join("invocation.h");
+    if invocation.exists() {
+        fs::copy(&invocation, target_arch.join("invocation.h"))?;
+        let wrapper = target_sel4_arch.join("invocation.h");
+        fs::write(&wrapper, "#pragma once\n#include \"../arch/invocation.h\"\n")?;
     }
 
     let mode_wrapper = target_mode.join("types.h");
