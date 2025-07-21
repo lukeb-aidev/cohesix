@@ -6,7 +6,7 @@
 use std::{env, fs, path::Path};
 #[path = "../sel4_paths.rs"]
 mod sel4_paths;
-use sel4_paths::{header_dirs_from_tree, project_root, sel4_generated};
+use sel4_paths::{get_all_subdirectories, project_root, sel4_generated};
 use std::io::Write;
 
 fn generate_dtb_constants(out_dir: &str, manifest_dir: &str) {
@@ -77,18 +77,32 @@ fn main() {
     embed_vectors(&out_dir, &manifest_dir);
     let project_root = project_root(&manifest_dir);
 
-    let cflags = env::var("SEL4_SYS_CFLAGS").unwrap_or_else(|_| {
-        let include_root = sel4_paths::sel4_include(&project_root);
-        let mut args = String::from("--target=aarch64-unknown-none");
-        args.push_str(&format!(" -I{}", include_root.display()));
-        args.push_str(&format!(" -I{}", include_root.join("generated").display()));
-        args
+    let sel4 = env::var("SEL4_INCLUDE").unwrap_or_else(|_| {
+        sel4_paths::sel4_include(&project_root)
+            .to_string_lossy()
+            .into_owned()
     });
+    let mut flags = Vec::new();
+    for dir in get_all_subdirectories(Path::new(&sel4)).unwrap() {
+        flags.push(format!("-I{}", dir.display()));
+    }
+    let generated = format!("{}/generated", sel4);
+    if Path::new(&generated).exists() {
+        for dir in get_all_subdirectories(Path::new(&generated)).unwrap() {
+            flags.push(format!("-I{}", dir.display()));
+        }
+    }
+    if let Ok(extra) = env::var("CFLAGS") {
+        if !extra.is_empty() {
+            flags.push(extra);
+        }
+    }
+    let cflags = flags.join(" ");
+    println!("cargo:rustc-env=CFLAGS={}", cflags);
     println!(
         "cargo:rustc-env=SEL4_GEN_HDR={}",
         sel4_generated(&project_root).display()
     );
-    println!("cargo:rustc-env=SEL4_SYS_CFLAGS={}", cflags);
 
     println!(
         "cargo:rerun-if-changed={}",
