@@ -6,7 +6,7 @@
 use std::{env, fs, path::Path};
 #[path = "../sel4_paths.rs"]
 mod sel4_paths;
-use sel4_paths::{get_all_subdirectories, project_root, sel4_generated};
+use sel4_paths::{project_root, sel4_generated, header_dirs_from_tree};
 use std::io::Write;
 
 fn generate_dtb_constants(out_dir: &str, manifest_dir: &str) {
@@ -83,14 +83,11 @@ fn main() {
             .into_owned()
     });
     let mut flags = Vec::new();
-    for dir in get_all_subdirectories(Path::new(&sel4)).unwrap() {
+    let sel4_include = Path::new(&sel4);
+    let header_dirs = sel4_paths::header_dirs_from_tree(sel4_include)
+        .expect("parse sel4_tree.txt");
+    for dir in header_dirs {
         flags.push(format!("-I{}", dir.display()));
-    }
-    let generated = format!("{}/generated", sel4);
-    if Path::new(&generated).exists() {
-        for dir in get_all_subdirectories(Path::new(&generated)).unwrap() {
-            flags.push(format!("-I{}", dir.display()));
-        }
     }
     if let Ok(extra) = env::var("CFLAGS") {
         if !extra.is_empty() {

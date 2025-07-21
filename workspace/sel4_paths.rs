@@ -78,7 +78,19 @@ pub fn header_dirs_from_tree(sel4_include: &Path) -> Result<Vec<PathBuf>, String
             for part in &stack {
                 path.push(part);
             }
-            dirs.insert(path);
+            let mut current = path.clone();
+            loop {
+                if current.starts_with(sel4_include) {
+                    dirs.insert(current.clone());
+                }
+                if current == sel4_include {
+                    break;
+                }
+                match current.parent() {
+                    Some(parent) => current = parent.to_path_buf(),
+                    None => break,
+                }
+            }
         }
     }
 
