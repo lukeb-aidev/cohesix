@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: sel4_paths.rs v0.6
+// Filename: sel4_paths.rs v0.7
 // Author: OpenAI
-// Date Modified: 2025-07-21
+// Date Modified: 2028-11-09
 
 use std::collections::{BTreeSet, HashSet};
 use std::fs;
@@ -211,4 +211,10 @@ pub fn get_all_subdirectories(root: &Path) -> std::io::Result<Vec<PathBuf>> {
     let mut dirs: Vec<PathBuf> = set.into_iter().collect();
     dirs.sort();
     Ok(dirs)
+}
+
+/// Recursively collect all header directories under `root`.
+/// Returns a sorted vector of unique parent directories containing `.h` files.
+pub fn header_dirs_recursive(root: &Path) -> std::io::Result<Vec<PathBuf>> {
+    get_all_subdirectories(root)
 }
