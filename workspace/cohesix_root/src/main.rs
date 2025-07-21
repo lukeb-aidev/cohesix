@@ -16,8 +16,9 @@ mod dt;
 mod startup;
 mod exception;
 mod mmu;
+mod drivers;
 
-use sel4_sys::*;
+use sel4_sys_extern_wrapper::*;
 
 use core::arch::global_asm;
 global_asm!(include_str!("entry.S"));
@@ -39,7 +40,7 @@ extern "C" {
     static mut __bss_end: u8;
 }
 
-use sel4_sys::seL4_DebugPutChar;
+use sel4_sys_extern_wrapper::seL4_DebugPutChar;
 
 #[no_mangle]
 #[link_section = ".bss"]
@@ -596,14 +597,15 @@ pub extern "C" fn main() {
     }
     putstr("[root] launching userland...");
     exec_init();
+    sys::coh_log("Cohesix init complete");
     putstr("✅ rootserver main loop entered");
     main_loop();
-    unsafe { sel4_sys::seL4_DebugHalt(); }
+    unsafe { sel4_sys_extern_wrapper::seL4_DebugHalt(); }
 }
 
 fn main_loop() -> ! {
     loop {
-        unsafe { sel4_sys::seL4_Yield(); }
+        unsafe { sel4_sys_extern_wrapper::seL4_Yield(); }
     }
 }
 

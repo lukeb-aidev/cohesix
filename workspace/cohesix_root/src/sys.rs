@@ -7,7 +7,7 @@ use core::ffi::c_char;
 use core::sync::atomic::{compiler_fence, Ordering};
 use crate::dt::UART_BASE;
 use crate::coherr;
-use sel4_sys::{seL4_DebugPutChar, seL4_Send, seL4_Recv, seL4_Yield, seL4_DebugHalt};
+use sel4_sys_extern_wrapper::{seL4_DebugPutChar, seL4_Send, seL4_Recv, seL4_Yield, seL4_DebugHalt};
 
 #[link_section = ".uart"]
 #[used]
