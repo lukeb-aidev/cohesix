@@ -1,9 +1,10 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: stub_types.h v0.1
+// Filename: stub_types.h v0.2
 // Author: OpenAI
 // Date Modified: 2028-09-10
 
 #pragma once
+#include "fallback_types.h"
 #ifndef seL4_Word
 typedef unsigned long long seL4_Word;
 #endif
