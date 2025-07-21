@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: build.rs v1.49
+// Filename: build.rs v1.50
 // Author: Lukas Bower
-// Date Modified: 2028-11-09
+// Date Modified: 2028-11-10
 
 use std::{env, path::PathBuf};
 #[path = "../sel4_paths.rs"]
@@ -31,8 +31,7 @@ fn main() {
 
     if let Ok(arch) = env::var("SEL4_ARCH") {
         if let Ok(alias_root) = sel4_paths::create_arch_alias(&sel4_include, &arch, &out_dir) {
-            builder = builder.clang_arg(format!("-I{}", alias_root.display()));
-            for dir in sel4_paths::get_all_subdirectories(&alias_root).unwrap() {
+            for dir in sel4_paths::header_dirs_recursive(&alias_root).unwrap() {
                 builder = builder.clang_arg(format!("-I{}", dir.display()));
             }
         }

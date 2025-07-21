@@ -3512,3 +3512,7 @@
 ## [v1.46] - 2028-11-09
 ### Changed
 - **RecursiveIncludeDirScanner-947**: Build scripts now walk seL4 header trees recursively, removing manual include paths and stale headers.
+
+## [v1.47] - 2028-11-10
+### Changed
+- **ReintroduceWrapperAndBindings-948**: Restored wrapper.h for bindgen entry and streamlined include dir scanning in sel4-sys build script.
