@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: build.rs v1.48
+// Filename: build.rs v1.49
 // Author: Lukas Bower
-// Date Modified: 2028-11-08
+// Date Modified: 2028-11-09
 
 use std::{env, path::PathBuf};
 #[path = "../sel4_paths.rs"]
@@ -27,7 +27,6 @@ fn main() {
         .header("include/wrapper.h")
         .use_core()
         .ctypes_prefix("cty")
-        .clang_arg("-Iinclude")
         .clang_args(cflags.split_whitespace());
 
     if let Ok(arch) = env::var("SEL4_ARCH") {
@@ -39,9 +38,11 @@ fn main() {
         }
     }
 
-    let header_dirs = sel4_paths::header_dirs_from_tree(&sel4_include)
-        .expect("parse sel4_tree.txt");
-    for dir in header_dirs {
+    for dir in sel4_paths::header_dirs_recursive(&sel4_include).unwrap() {
+        builder = builder.clang_arg(format!("-I{}", dir.display()));
+    }
+
+    for dir in sel4_paths::header_dirs_recursive(&sel4_paths::sel4_generated(&project_root)).unwrap() {
         builder = builder.clang_arg(format!("-I{}", dir.display()));
     }
 

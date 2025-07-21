@@ -3508,3 +3508,7 @@
 ## [v1.45] - 2028-11-09
 ### Fixed
 - **IncludeWordSizeBitsInCohesixRoot-802**: Added generated and sel4 include directories to CFLAGS to expose `seL4_WordSizeBits`.
+
+## [v1.46] - 2028-11-09
+### Changed
+- **RecursiveIncludeDirScanner-947**: Build scripts now walk seL4 header trees recursively, removing manual include paths and stale headers.
