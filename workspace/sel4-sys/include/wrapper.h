@@ -1,15 +1,19 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: wrapper.h v1.45
+// Filename: wrapper.h v1.46
 // Author: Lukas Bower
-// Date Modified: 2028-11-08
+// Date Modified: 2028-11-10
 
 #pragma once
 
-// Bring in generated CONFIG_ macros:
+// 1) Configuration macros (CONFIG_WORD_SIZE, etc.)
 #include <autoconf.h>
 #ifndef seL4_WordSizeBits
 #define seL4_WordSizeBits CONFIG_WORD_SIZE
 #endif
 
-// Core seL4 API:
+// 2) Core seL4 API
 #include <sel4/sel4.h>
+
+
+#include <sel4/sel4_client.h>
+// 3) Additional top-level headers if needed...
