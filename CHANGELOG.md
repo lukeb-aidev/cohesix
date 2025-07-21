@@ -3500,3 +3500,7 @@
 ## [v1.43] - 2028-11-06
 ### Changed
 - **HolisticSel4IncludeAudit-310**: Refined parsing of `sel4_tree.txt` and simplified cargo configuration for header inclusion.
+
+## [v1.44] - 2028-11-08
+### Fixed
+- **AuditAndFixRustBuilds-109**: Corrected cross-compile flags and header ordering for sel4-sys and cohesix_root.
