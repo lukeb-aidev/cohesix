@@ -6,7 +6,7 @@
 use std::{env, fs, path::Path};
 #[path = "../sel4_paths.rs"]
 mod sel4_paths;
-use sel4_paths::{project_root, sel4_generated, header_dirs_recursive};
+use sel4_paths::{project_root, sel4_generated};
 use std::io::Write;
 
 fn generate_dtb_constants(out_dir: &str, manifest_dir: &str) {
@@ -78,16 +78,8 @@ fn main() {
             .to_string_lossy()
             .into_owned()
     });
-    let mut flags = Vec::new();
-    flags.push(format!("-I{}/libsel4/interfaces", sel4));
-    flags.push(format!("-I{}/libsel4/sel4_arch/sel4/sel4_arch/aarch64", sel4));
     let sel4_include = Path::new(&sel4);
-    for dir in header_dirs_recursive(sel4_include).unwrap() {
-        flags.push(format!("-I{}", dir.display()));
-    }
-    for dir in header_dirs_recursive(&sel4_generated(&project_root)).unwrap() {
-        flags.push(format!("-I{}", dir.display()));
-    }
+    let mut flags = sel4_paths::default_cflags(sel4_include, &project_root);
     if let Ok(extra) = env::var("CFLAGS") {
         if !extra.is_empty() {
             flags.push(extra);
