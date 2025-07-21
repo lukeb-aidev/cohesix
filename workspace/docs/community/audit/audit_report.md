@@ -1,68 +1,42 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: audit_report.md v0.1
+// Filename: audit_report.md v0.2
 // Author: Lukas Bower
-// Date Modified: 2028-11-20
+// Date Modified: 2028-11-21
 
-# Cohesix Core OS Audit Report
+# Cohesix Boot Plumbing Audit
 
-This report summarizes the review of core Cohesix subsystems. The audit covers correctness, safety, concurrency, documentation alignment with [INSTRUCTION_BLOCK.md](../governance/INSTRUCTION_BLOCK.md), and available tests. Severity levels reflect potential impact.
+This report reviews boot viability and kernel-to-root plumbing for Cohesix. Findings are grouped by severity per [INSTRUCTION_BLOCK.md](../governance/INSTRUCTION_BLOCK.md).
 
-## Scheduler
-- **Observation:** No explicit scheduler module found under `workspace/cohesix_root/src` or `workspace/cohesix/src/kernel`.
-- **Impact:** Cohesix appears to rely on seL4's built‑in scheduler. No code to audit.
-- **Severity:** Low
+## Boot Viability
+- **UEFI stub present:** `CohesixBoot.inf` declares a `UEFI_APPLICATION` entry point `efi_main`【F:CohesixBoot.inf†L7-L14】.
+- **Linker script:** `link.ld` defines `ENTRY(_start)` and maps text, rodata, data, heap and stack sections with 4 KiB alignment【F:workspace/cohesix_root/link.ld†L1-L39】【F:workspace/cohesix_root/link.ld†L80-L126】.
+- **Early init:** `bootloader/init.rs` parses cmdline and passes a `BootContext` to Rust code【F:workspace/cohesix/src/bootloader/init.rs†L8-L18】【F:workspace/cohesix/src/bootloader/init.rs†L19-L32】.
+- **Page tables:** `mmu.rs` creates L1/L2 tables and writes `TTBR0_EL1` during boot【F:workspace/cohesix_root/src/mmu.rs†L1-L33】【F:workspace/cohesix_root/src/mmu.rs†L34-L61】.
+- **Interrupt vectors:** `vec.S` provides a minimal EL1 vector table for exceptions and IRQs【F:workspace/cohesix_root/src/vec.S†L1-L18】.
+- **Serial output:** `sys.rs` keeps a UART frame and exposes `init_uart()` as the console hook【F:workspace/cohesix_root/src/sys.rs†L14-L25】.
+- **Root filesystem mount:** `kernel/init.rc` mounts the 9P boot volume and links BusyBox applets【F:workspace/cohesix/src/kernel/init.rc†L7-L18】.
 
-## Memory Management
-- **File:** `workspace/cohesix_root/src/mmu.rs`
-- **Findings:**
-  - Uses static mutable tables for L1/L2 page management.
-  - `init` function correctly sets up translation tables and enables them via `TTBR0_EL1`.
-  - Unit test `tables_init_match_snapshot` verifies initial mapping logic.
-  - No explicit bounds checks on index arithmetic; however, loops guard against overrun.
-- **Severity:** Medium (due to potential unsafe pointer arithmetic)
+**Severity:** Low – Boot path components exist but are basic.
 
-## Filesystem
-- **Files:** `workspace/cohesix/src/kernel/fs/`
-- **Findings:**
-  - `plan9.rs` maintains a mount table protected by a `Mutex`, enforcing simple synchronization.
-  - FS functions primarily wrap Plan9 concepts; no journaling hooks present.
-  - Limited testing; only mount counting assertions.
-- **Severity:** Medium (lack of journaling and extended tests)
+## Subsystem Gaps
+- No dedicated filesystem driver; `sys.rs` embeds binaries via `include_bytes!` and stubs file I/O【F:workspace/cohesix_root/src/sys.rs†L94-L135】.
+- Interrupt handlers in `vec.S` jump to undefined routines; no real IRQ controller driver【F:workspace/cohesix_root/src/vec.S†L1-L18】.
+- Scheduler relies entirely on seL4 with no custom hooks (noted previously). 
+- Missing network and storage drivers restrict reaching userland on real hardware.
 
-## Networking
-- **File:** `workspace/cohesix/src/kernel/drivers/net.rs`
-- **Findings:**
-  - Implements a basic loopback driver using `VecDeque` for buffering.
-  - Initializes interface based on environment variable; supports VirtIO and loopback.
-  - Missing checksum validation and concurrency handling for real NICs.
-- **Severity:** Medium
+**Severity:** Medium – Stubs could block hardware boot if not replaced.
 
-## IPC
-- **Files:** `workspace/cohesix/src/runtime/ipc/`
-- **Findings:**
-  - Provides a 9P request/response model with trait `P9Server` and a stub implementation.
-  - Minimal logic; `StubP9Server` logs unhandled requests.
-- **Severity:** Medium (core interface exists but lacks robust implementation)
+## Plumbing Architecture
+- `sel4-sys` uses `bindgen` to generate Rust FFI bindings with extensive include scanning【F:workspace/sel4-sys/build.rs†L28-L66】.
+- `cohesix_root/build.rs` copies the target spec and vectors, injecting include paths via `CFLAGS`【F:workspace/cohesix_root/build.rs†L8-L35】【F:workspace/cohesix_root/build.rs†L80-L109】.
+- This coupling requires environment variables (`SEL4_INCLUDE`, `SEL4_LIB_DIR`) and duplicate logic across build scripts. Directly binding a trimmed `sel4.h` plus manual extern definitions would simplify compilation and reduce rebuilds.
 
-## Drivers
-- **Location:** `workspace/cohesix/src/kernel/drivers/`
-- **Findings:**
-  - Only network driver implemented. No direct hardware interaction beyond logging.
-  - No concurrency primitives or IRQ handling.
-- **Severity:** Medium
+**Severity:** Low – Build complexity but functional.
 
-## Boot and Init
-- **Files:** `workspace/cohesix/src/kernel/boot/`, `workspace/cohesix/src/init/`
-- **Findings:**
-  - `bootloader.rs` sets up early environment, verifies secure boot, configures memory zones, and hands off to userland.
-  - `init` modules define role‑specific start functions (e.g., `kiosk::start`).
-  - Boot flow aligns with INSTRUCTION_BLOCK.md requirement of UEFI → seL4 → userland.
-- **Severity:** Low
+## Recommendations
+1. Consolidate build-time configuration into a single script or `build.rs` helper to avoid repeated environment checks.
+2. Replace the `sel4-sys` crate with a small `extern "C"` wrapper generated from one header to minimize compile time.
+3. Implement minimal filesystem and IRQ controller drivers to progress past the embedded initfs.
+4. Add QEMU boot tests for the provided `sel4-aarch64.json` target ensuring the ELF image runs without manual patching.
 
-## Documentation & Tests
-- Documentation headers and metadata comply with INSTRUCTION_BLOCK guidelines.
-- Rust unit tests exist for some modules (e.g., MMU). Go and Python tests pass (`pytest` and `go test`). Rust tests fail without the `sel4-aarch64` target.
-
-## Summary
-Cohesix core subsystems largely adhere to project guidelines, but many modules are simplified or stub-like. Absence of a dedicated scheduler and limited filesystem/network implementations restricts full verification. The memory manager and boot sequence are the most complete areas. Test coverage is uneven: Python and Go tests run successfully, while Rust tests require additional toolchain setup.
-
+Overall the project contains the core pieces to boot under QEMU but lacks several drivers and cleanup of build tooling to streamline seL4 integration.
