@@ -39,14 +39,10 @@ fn main() {
         }
     }
 
-    for dir in sel4_paths::get_all_subdirectories(&sel4_include).unwrap() {
+    let header_dirs = sel4_paths::header_dirs_from_tree(&sel4_include)
+        .expect("parse sel4_tree.txt");
+    for dir in header_dirs {
         builder = builder.clang_arg(format!("-I{}", dir.display()));
-    }
-    let generated = sel4_include.join("generated");
-    if generated.exists() {
-        for dir in sel4_paths::get_all_subdirectories(&generated).unwrap() {
-            builder = builder.clang_arg(format!("-I{}", dir.display()));
-        }
     }
 
     let bindings = builder.generate().expect("Unable to generate bindings");
