@@ -1,12 +1,12 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: build.rs v1.45
+// Filename: build.rs v1.46
 // Author: Lukas Bower
-// Date Modified: 2028-11-08
+// Date Modified: 2028-11-09
 
 use std::{env, fs, path::Path};
 #[path = "../sel4_paths.rs"]
 mod sel4_paths;
-use sel4_paths::{project_root, sel4_generated, header_dirs_from_tree};
+use sel4_paths::{project_root, sel4_generated, header_dirs_recursive};
 use std::io::Write;
 
 fn generate_dtb_constants(out_dir: &str, manifest_dir: &str) {
@@ -67,10 +67,6 @@ fn main() {
             .into_owned()
     });
     println!("cargo:rustc-link-search=native={}", lib_dir);
-    let header_dir = format!("{}/../../third_party/seL4/include", manifest_dir);
-    if fs::metadata(&header_dir).is_err() {
-        panic!("seL4 headers not found at {}", header_dir);
-    }
     let out_dir = env::var("OUT_DIR").unwrap();
     generate_dtb_constants(&out_dir, &manifest_dir);
     embed_sel4_spec(&out_dir, &manifest_dir);
@@ -84,9 +80,10 @@ fn main() {
     });
     let mut flags = Vec::new();
     let sel4_include = Path::new(&sel4);
-    let header_dirs = sel4_paths::header_dirs_from_tree(sel4_include)
-        .expect("parse sel4_tree.txt");
-    for dir in header_dirs {
+    for dir in header_dirs_recursive(sel4_include).unwrap() {
+        flags.push(format!("-I{}", dir.display()));
+    }
+    for dir in header_dirs_recursive(&sel4_generated(&project_root)).unwrap() {
         flags.push(format!("-I{}", dir.display()));
     }
     if let Ok(extra) = env::var("CFLAGS") {
