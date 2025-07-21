@@ -79,6 +79,8 @@ fn main() {
 
     let cflags = env::var("SEL4_SYS_CFLAGS").unwrap_or_else(|_| {
         let include_root = sel4_paths::sel4_include(&project_root);
+        let generated_dir = include_root.join("generated");
+        let sel4_sel4_dir = include_root.join("libsel4/sel4/sel4");
         let mut dirs = Vec::new();
         if let Ok(arch) = env::var("SEL4_ARCH") {
             if let Ok(alias_root) = sel4_paths::create_arch_alias(&include_root, &arch, Path::new(&out_dir)) {
@@ -99,6 +101,8 @@ fn main() {
         dirs.push(include_root.join("libsel4/sel4"));
         dirs.push(include_root.join("libsel4/sel4_arch"));
         let mut args = String::from("--target=aarch64-unknown-none");
+        args.push_str(&format!(" -I{}", generated_dir.display()));
+        args.push_str(&format!(" -I{}", sel4_sel4_dir.display()));
         for d in &dirs {
             args.push_str(&format!(" -I{}", d.display()));
         }
