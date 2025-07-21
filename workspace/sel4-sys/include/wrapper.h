@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: wrapper.h v1.46
+// Filename: wrapper.h v1.47
 // Author: Lukas Bower
-// Date Modified: 2028-11-10
+// Date Modified: 2028-11-11
 
 #pragma once
 
@@ -15,5 +15,5 @@
 #include <sel4/sel4.h>
 
 
-#include <sel4/sel4_client.h>
+#include <sel4_client.h>
 // 3) Additional top-level headers if needed...
