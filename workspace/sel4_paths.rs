@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: sel4_paths.rs v0.4
+// Filename: sel4_paths.rs v0.5
 // Author: OpenAI
 // Date Modified: 2028-11-07
 
@@ -102,6 +102,7 @@ pub fn create_arch_alias(sel4_include: &Path, sel4_arch: &str, out_dir: &Path) -
     let alias_root = out_dir.join("sel4_arch_alias");
     let target_arch = alias_root.join("sel4/arch");
     let target_sel4_arch = alias_root.join("sel4/sel4_arch");
+    let target_mode = alias_root.join("sel4/mode");
     if target_arch.exists() {
         fs::remove_dir_all(&target_arch)?;
     }
@@ -110,6 +111,7 @@ pub fn create_arch_alias(sel4_include: &Path, sel4_arch: &str, out_dir: &Path) -
     }
     fs::create_dir_all(&target_arch)?;
     fs::create_dir_all(&target_sel4_arch)?;
+    fs::create_dir_all(&target_mode)?;
 
     for entry in fs::read_dir(&src)? {
         let entry = entry?;
@@ -121,6 +123,9 @@ pub fn create_arch_alias(sel4_include: &Path, sel4_arch: &str, out_dir: &Path) -
             fs::write(&wrapper, format!("#pragma once\n#include \"../arch/{}\"\n", fname.to_string_lossy()))?;
         }
     }
+
+    let mode_wrapper = target_mode.join("types.h");
+    fs::write(&mode_wrapper, "#pragma once\n#include \"../sel4_arch/types.h\"\n")?;
 
     Ok(alias_root)
 }
