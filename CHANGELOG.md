@@ -3524,3 +3524,7 @@
 ## [v1.49] - 2028-11-12
 ### Fixed
 - **IncludeLibsel4AutoconfInWrapper-958**: wrapper.h now includes libsel4_autoconf before API headers, and build scripts include generated directories so CONFIG_* macros resolve.
+
+## [v1.50] - 2028-11-20
+### Added
+- **AuditCoreSubsystems-109**: Generated core subsystem audit report.
