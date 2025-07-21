@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: README.md v0.25
 // Author: Lukas Bower
-// Date Modified: 2027-01-15
+// Date Modified: 2028-11-08
 
 
 # Cohesix
@@ -168,12 +168,20 @@ cargo build --workspace --all-targets --all-features --features sel4_entry_bin
 
 ### Cross-building the root task
 
-Use the custom target file to compile the seL4 userland ELF:
+Build the sel4-sys crate and root ELF from the workspace root:
 
 ```bash
-cargo build --release --target=target-sel4.json --bin cohesix_root
+cd ~/cohesix/workspace
+cargo clean
+SEL4_INCLUDE=$(realpath ../third_party/seL4/include) SEL4_ARCH=aarch64 \
+  cargo +nightly build -p sel4-sys --release \
+    --target=cohesix_root/sel4-aarch64.json
+
+cd ~/cohesix/workspace
+cargo +nightly build -p cohesix_root --release \
+  --target=cohesix_root/sel4-aarch64.json
 ```
-The resulting binary appears at `out/cohesix_root.elf`.
+The resulting binary appears under `target/sel4-aarch64/release/`.
 
 ### Building initfs.img
 
