@@ -3504,3 +3504,7 @@
 ## [v1.44] - 2028-11-08
 ### Fixed
 - **AuditAndFixRustBuilds-109**: Corrected cross-compile flags and header ordering for sel4-sys and cohesix_root.
+
+## [v1.45] - 2028-11-09
+### Fixed
+- **IncludeWordSizeBitsInCohesixRoot-802**: Added generated and sel4 include directories to CFLAGS to expose `seL4_WordSizeBits`.
