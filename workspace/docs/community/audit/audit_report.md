@@ -40,3 +40,12 @@ This report reviews boot viability and kernel-to-root plumbing for Cohesix. Find
 4. Add QEMU boot tests for the provided `sel4-aarch64.json` target ensuring the ELF image runs without manual patching.
 
 Overall the project contains the core pieces to boot under QEMU but lacks several drivers and cleanup of build tooling to streamline seL4 integration.
+
+### Cleanup Verification
+The deprecated `sel4-sys` crate no longer participates in builds or CI. `cohesix_root`
+relies solely on `sel4-sys-extern-wrapper` and `cohesix_fetch_build.sh` checks for
+any lingering `SEL4_SYS_CFLAGS` usage.
+
+### Driver Implementation
+Stub filesystem and IRQ controller drivers expose `mount_root` and `enable_irq`.
+`main.rs` exercises both to validate userland expectations.

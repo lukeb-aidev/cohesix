@@ -1,5 +1,5 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: build.rs v0.1
+// Filename: build.rs v0.2
 // Author: Lukas Bower
 // Date Modified: 2028-11-21
 
@@ -37,10 +37,8 @@ fn main() {
         }
     }
 
-    if let Ok(extra) = env::var("SEL4_SYS_CFLAGS") {
-        for arg in extra.split_whitespace() {
-            builder = builder.clang_arg(arg);
-        }
+    if env::var("SEL4_SYS_CFLAGS").is_ok() {
+        println!("cargo:warning=SEL4_SYS_CFLAGS ignored (sel4-sys removed)");
     }
 
     let bindings = builder.generate().expect("Unable to generate bindings");
