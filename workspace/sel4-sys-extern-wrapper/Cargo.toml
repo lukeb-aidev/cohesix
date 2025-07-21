@@ -1,0 +1,23 @@
+# CLASSIFICATION: COMMUNITY
+# Filename: Cargo.toml v0.1
+# Author: Lukas Bower
+# Date Modified: 2028-11-21
+
+[package]
+name = "sel4-sys-extern-wrapper"
+version = "0.1.0"
+edition = "2021"
+build = "build.rs"
+
+[dependencies]
+cty = { version = "0.2", default-features = false }
+
+[features]
+panic-handler = []
+default = ["panic-handler"]
+
+[build-dependencies]
+bindgen = "0.69"
+
+[lib]
+crate-type = ["rlib"]
