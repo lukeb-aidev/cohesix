@@ -12,13 +12,12 @@ Register each file in `METADATA.md` and record versions in `CHANGELOG.md`.
 Always refer to `METADATA.md` for version numbers, classification, and last-modified dates. Do not hardcode metadata in multiple places.
 
 ## 1 · Architecture & Boot Flow
-Cohesix runs on seL4 with Plan 9 userland in a pure UEFI environment. Source layers: C (kernel patches), Rust (low-level drivers & root task), Go (services), Python (tools), C++/CUDA, Bash.  
-Boot sequence: UEFI → seL4 → `cohesix_root` (Rust) → Plan 9 userland.  
-Link `cohesix_root` statically against `libsel4.a` and validate ELF entry points.
+Cohesix runs on seL4 with Plan 9 inspired userland in a bare meta QEMU environment.   
+QEMU boot sequence: elfloader → CPIO (seL4 → `cohesix_root` = Plan 9 inspired userland).  
 
 ## 2 · Hardware & CI Matrix
-- Primary: x86_64 UEFI systems with NVIDIA GPU (CUDA & QEMU tests).
-- Secondary: aarch64 UEFI targets via QEMU emulation.
+- Primary: aarch64 systems on bare metal QEMU.
+- Secondary: x86_64 via QEMU emulation.
 
 ## 3 · Language Boundaries by Layer
 
@@ -26,9 +25,7 @@ Link `cohesix_root` statically against `libsel4.a` and validate ELF entry points
 |------------------|---------------|-------------------------------------|
 | Kernel Patches    | C             | Required by seL4 upstream           |
 | Low-Level Drivers | Rust          | Safety + cross-arch + 9P-friendly   |
-| Userland/Services | Go            | CSP-style concurrency               |
 | Tooling & Testing | Python        | CLI, validator, DSL, glue           |
-| CUDA Models       | C++ / CUDA    | Jetson inference & deployment       |
 | Shell Scripts (Bash) | Bash       | Used for build orchestration in the UEFI execution environment (LLVM/LLD, Rust UEFI targets) |
 
 - Plan 9 shell + CLI tools orchestrate all agent and CUDA workloads; no POSIX runtime expected
@@ -37,12 +34,12 @@ Link `cohesix_root` statically against `libsel4.a` and validate ELF entry points
 1. Atomic, single-step hydration and temp-write+rename for all files.
 2. No placeholder code (`todo!()`, `unimplemented!()`); CI rejects stubs.
 3. Metadata enforcement: headers in every file, `METADATA.md` & `CHANGELOG.md` synchronization.
-4. CI matrix: build & test on x86_64 + aarch64 targets; QEMU boot validation.
+4. CI matrix: build & test on aarch64 and x86_64 targets; QEMU boot validation.
 5. License compliance: only Apache 2.0, MIT, BSD; SPDX headers required.
 
 ## 5 · Testing Requirements
-- Unit & integration: `cargo test`, `go test`, `pytest`.
-- Boot & CI Validation: QEMU UEFI → seL4 → Cohesix_root → Plan9 shell.
+- Unit & integration: `cargo test`, `pytest`.
+- Boot & CI Validation: QEMU → elfloader → CPIO (seL4 → `cohesix_root`)
 - Fuzzing: 9P protocol + syscall surface.
 - Trace Replay: use `/history/` or `SimMount`.
 
