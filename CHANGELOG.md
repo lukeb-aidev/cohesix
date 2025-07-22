@@ -3545,3 +3545,7 @@
 ## [v1.54] - 2028-12-09
 ### Fixed
 - **CopyFullSeL4IncludeTreeToWrapperOutDir-119**: build.rs now mirrors the entire seL4 include directory into OUT_DIR, placing autoconf headers at the root so bindgen resolves all includes.
+
+## [v1.55] - 2028-12-10
+### Changed
+- **RemoveSubfolderCopiesFromWrapperBuild-120**: sel4-sys-extern-wrapper build script relies solely on the full-tree include copy, removing libsel4 subfolder copies.
