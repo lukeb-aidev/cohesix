@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: build.rs v0.5
 // Author: Lukas Bower
-// Date Modified: 2028-12-05
+// Date Modified: 2028-12-07
 
 use std::{env, fs, path::{Path, PathBuf}};
 
@@ -63,8 +63,21 @@ fn main() {
         .join("seL4")
         .join("include");
     copy_recursive(&include_root, &out_dir).expect("copy seL4 headers");
-    let sel4_generated = sel4_paths::sel4_generated(&project_root);
-    copy_recursive(&sel4_generated, &out_dir).expect("copy generated headers");
+    // Flatten select libsel4 paths after copying the tree
+    let libsel4_sel4 = out_dir.join("libsel4").join("sel4");
+    let target_sel4 = out_dir.join("sel4");
+    copy_recursive(&libsel4_sel4.join("sel4"), &target_sel4)
+        .expect("flatten sel4 subdir");
+    for extra in ["invocation.h", "syscall.h", "shared_types.pbf", "shared_types_gen.h"] {
+        let src = libsel4_sel4.join(extra);
+        if src.exists() {
+            fs::copy(&src, target_sel4.join(extra)).expect("copy extra header");
+        }
+    }
+
+    let libsel4_if = out_dir.join("libsel4").join("interfaces");
+    let target_if = out_dir.join("interfaces");
+    copy_recursive(&libsel4_if, &target_if).expect("flatten libsel4 interfaces");
     if let Ok(arch) = env::var("SEL4_ARCH") {
         let alias_root = sel4_paths::create_arch_alias(&include_root, &arch, &out_dir)
             .expect("create arch alias");
@@ -72,6 +85,7 @@ fn main() {
     }
     let stub_src = Path::new(&manifest_dir).join("include");
     copy_recursive(&stub_src, &out_dir).expect("copy stub headers");
+
 
 
     let wrapper_header = generate_wrapper_header(&out_dir);
