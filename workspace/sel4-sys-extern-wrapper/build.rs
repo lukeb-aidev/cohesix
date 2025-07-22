@@ -1,9 +1,26 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: build.rs v0.4
+// Filename: build.rs v0.5
 // Author: Lukas Bower
-// Date Modified: 2025-07-22
+// Date Modified: 2028-12-03
 
 use std::{env, fs, path::{Path, PathBuf}};
+
+fn copy_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
+    if !dst.exists() {
+        fs::create_dir_all(dst)?;
+    }
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let path = entry.path();
+        let target = dst.join(entry.file_name());
+        if path.is_dir() {
+            copy_recursive(&path, &target)?;
+        } else {
+            fs::copy(&path, &target)?;
+        }
+    }
+    Ok(())
+}
 #[path = "../sel4_paths.rs"]
 mod sel4_paths;
 
@@ -41,10 +58,24 @@ fn main() {
     let project_root = sel4_paths::project_root(&manifest_dir);
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
 
-    let sel4_include = env::var("SEL4_INCLUDE")
-        .expect("SEL4_INCLUDE environment variable not set");
-    let _lib_dir = env::var("SEL4_LIB_DIR")
-        .expect("SEL4_LIB_DIR environment variable not set");
+    let sel4_root = sel4_paths::sel4_include(&project_root);
+    copy_recursive(&sel4_root, &out_dir).expect("copy seL4 headers");
+    let sel4_generated = sel4_paths::sel4_generated(&project_root);
+    copy_recursive(&sel4_generated, &out_dir).expect("copy generated headers");
+    let libsel4_sel4 = sel4_root.join("libsel4/sel4");
+    let target_sel4 = out_dir.join("sel4");
+    copy_recursive(&libsel4_sel4, &target_sel4).expect("flatten sel4 headers");
+    let libsel4_if = sel4_root.join("libsel4/interfaces");
+    let target_if = out_dir.join("interfaces");
+    copy_recursive(&libsel4_if, &target_if).expect("flatten interfaces headers");
+    if let Ok(arch) = env::var("SEL4_ARCH") {
+        let alias_root = sel4_paths::create_arch_alias(&sel4_root, &arch, &out_dir)
+            .expect("create arch alias");
+        copy_recursive(&alias_root, &out_dir).expect("merge arch alias");
+    }
+    let stub_src = Path::new(&manifest_dir).join("include");
+    copy_recursive(&stub_src, &out_dir).expect("copy stub headers");
+
 
     let wrapper_header = generate_wrapper_header(&out_dir);
 
@@ -54,17 +85,6 @@ fn main() {
         .clang_arg(format!("-I{}", out_dir.display()))
         .ctypes_prefix("cty");
 
-    let include_path = PathBuf::from(&sel4_include);
-    builder = builder.clang_arg(format!("-I{}", include_path.display()));
-    builder = builder.clang_arg(format!("-I{}/libsel4", include_path.display()));
-    builder = builder.clang_arg(format!("-I{}/libsel4/sel4", include_path.display()));
-    builder = builder.clang_arg(format!("-I{}/libsel4/interfaces", include_path.display()));
-    builder = builder.clang_arg(format!("-I{}/generated", include_path.display()));
-    if let Ok(arch) = env::var("SEL4_ARCH") {
-        let alias_root = sel4_paths::create_arch_alias(&include_path, &arch, &out_dir)
-            .expect("create arch alias");
-        builder = builder.clang_arg(format!("-I{}", alias_root.display()));
-    }
     println!("cargo:rerun-if-env-changed=SEL4_ARCH");
 
     if env::var("SEL4_SYS_CFLAGS").is_ok() {

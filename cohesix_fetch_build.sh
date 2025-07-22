@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v1.47
+# Filename: cohesix_fetch_build.sh v1.48
 # Author: Lukas Bower
-# Date Modified: 2028-11-28
+# Date Modified: 2028-12-03
 
 # This script fetches and builds the Cohesix project, including seL4 and other dependencies.
 
@@ -520,18 +520,15 @@ export LDFLAGS="-L${SEL4_LIB_DIR}"
 
 # Phase 2: sel4-sys-extern-wrapper under nightly
 log "🔨 Phase 2: Building sel4-sys-extern-wrapper"
+export CFLAGS="-I${ROOT}/workspace/sel4-sys-extern-wrapper/out"
+export LDFLAGS="-L${SEL4_LIB_DIR}"
 RUSTFLAGS="-C panic=abort -L${SEL4_LIB_DIR}" \
-  cargo +nightly build \
-    -p sel4-sys-extern-wrapper \
-    --release \
+  cargo +nightly build -p sel4-sys-extern-wrapper --release \
     --target=cohesix_root/sel4-aarch64.json \
     -Z build-std=core,alloc,compiler_builtins \
     -Z build-std-features=compiler-builtins-mem
 [ -f "target/sel4-aarch64/release/libsel4_sys_extern_wrapper.rlib" ] || { echo "❌ wrapper build failed"; exit 1; }
 log "✅ sel4-sys-extern-wrapper built"
-
-WRAP_OUT=$(find target/sel4-aarch64 -path "*/build/sel4-sys-extern-wrapper*/out" -type d | head -n 1)
-export CFLAGS="-I${WRAP_OUT}"
 
 # Phase 3: cohesix_root under nightly
 log "🔨 Phase 3: Building cohesix_root"
