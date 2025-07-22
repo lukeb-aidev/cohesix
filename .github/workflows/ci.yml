@@ -66,6 +66,10 @@ jobs:
           echo "SEL4_INCLUDE=$(pwd)/../third_party/seL4/include" >> $GITHUB_ENV
           echo "SEL4_LIB_DIR=$(pwd)/../third_party/seL4/lib" >> $GITHUB_ENV
 
+      - name: Validate Rust workspace
+        working-directory: ..
+        run: bash scripts/validate-crates.sh
+
       - name: Smoke build sel4-sys-extern-wrapper
         working-directory: workspace
         run: |

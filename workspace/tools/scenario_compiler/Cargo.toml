@@ -1,3 +1,7 @@
+# CLASSIFICATION: COMMUNITY
+# Filename: tools/scenario_compiler/Cargo.toml v0.1
+# Author: Lukas Bower
+# Date Modified: 2028-11-26
 [package]
 name = "scenario_compiler"
 version = "0.1.0"

@@ -1,3 +1,8 @@
+# CLASSIFICATION: COMMUNITY
+# Filename: tools/cohfuzz/Cargo.toml v0.1
+# Author: Lukas Bower
+# Date Modified: 2028-11-26
+
 [package]
 name = "cohfuzz"
 version = "0.1.0"
