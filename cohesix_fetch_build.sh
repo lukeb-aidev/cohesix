@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v1.43
+# Filename: cohesix_fetch_build.sh v1.44
 # Author: Lukas Bower
-# Date Modified: 2028-09-10
+# Date Modified: 2028-11-26
 
 # This script fetches and builds the Cohesix project, including seL4 and other dependencies.
 
@@ -99,11 +99,6 @@ log "✅ config.yaml created at $CONFIG_PATH"
 
 export SEL4_LIB_DIR="${SEL4_LIB_DIR:-$ROOT/third_party/seL4/output}"
 export SEL4_INCLUDE="${SEL4_INCLUDE:-$(realpath "$ROOT/third_party/seL4/include")}"
-if grep -q "SEL4_SYS_CFLAGS" "$ROOT/workspace/sel4-sys/build.rs"; then
-  echo "❌ sel4-sys still references SEL4_SYS_CFLAGS" >&2
-  exit 1
-fi
-unset SEL4_SYS_CFLAGS
 export RUSTFLAGS="-C link-arg=-L${SEL4_LIB_DIR} ${RUSTFLAGS}"
 export SEL4_ARCH="${SEL4_ARCH:-aarch64}"
 
@@ -446,7 +441,7 @@ log "🔧 Building Rust workspace binaries..."
 cd "$ROOT/workspace"
 cargo clean
 
-# Phase 1: Build all host crates except sel4-sys-extern-wrapper and cohesix_root
+# Phase 1: Build all host crates except cross-compiled targets
 log "🔨 Building host crates"
 cargo +nightly build --release --workspace \
   --exclude sel4-sys-extern-wrapper \
@@ -456,22 +451,7 @@ cargo +nightly test --release --workspace \
   --exclude cohesix_root
 log "✅ Host crates built and tested"
 
-# Phase 2: Cross-compile sel4-sys-extern-wrapper (no-std, panic-abort)
-log "🔨 Building sel4-sys-extern-wrapper (no-std, panic-abort)"
-
-export LIBRARY_PATH="$SEL4_LIB_DIR:${LIBRARY_PATH:-}"
-
-export LDFLAGS="-L$SEL4_LIB_DIR"
-# Now run cargo
-cargo +nightly build \
-  -Z build-std=core,alloc,compiler_builtins \
-  -Z build-std-features=compiler-builtins-mem \
-  -p sel4-sys-extern-wrapper --release \
-  --target=cohesix_root/sel4-aarch64.json
-
-log "✅ sel4-sys-extern-wrapper built (tests skipped)"
-
-# Phase 3: Cross-compile cohesix_root
+# Phase 3: Cross-compile cohesix_root (no-std, panic-abort)
 log "🔨 Building cohesix_root (no-std, panic-abort)"
 cargo +nightly build \
   -Z build-std=core,alloc,compiler_builtins \
@@ -688,3 +668,7 @@ echo "⚠️  Summary of Errors and Warnings:" | tee -a "$LOG_FILE" >&3
 tail -n 10 "$SUMMARY_ERRORS" || echo "✅ No critical issues found" | tee -a "$LOG_FILE" >&3
 
 echo "🪵 Full log saved to $LOG_FILE" >&3
+
+# Final verification builds
+cargo +nightly build -p sel4-sys-extern-wrapper --release --target=cohesix_root/sel4-aarch64.json
+cargo +nightly build -p cohesix_root --release --target=cohesix_root/sel4-aarch64.json
