@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v1.18
 // Author: Lukas Bower
-// Date Modified: 2028-12-09
+// Date Modified: 2028-12-11
 
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
@@ -3549,3 +3549,7 @@
 ## [v1.55] - 2028-12-10
 ### Changed
 - **RemoveSubfolderCopiesFromWrapperBuild-120**: sel4-sys-extern-wrapper build script relies solely on the full-tree include copy, removing libsel4 subfolder copies.
+
+## [v1.56] - 2028-12-11
+### Fixed
+- **UpdatePhase3LinkFlagsAndArtifactCheck-121**: Phase 3 exports link flags for libsel4 and validates the cohesix_root artifact.
