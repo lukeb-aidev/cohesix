@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: build.rs v0.2
+// Filename: build.rs v0.3
 // Author: Lukas Bower
-// Date Modified: 2028-11-21
+// Date Modified: 2028-11-28
 
 use std::{env, path::PathBuf};
 #[path = "../sel4_paths.rs"]
@@ -16,10 +16,35 @@ fn main() {
         .expect("SEL4_INCLUDE environment variable not set");
     let lib_dir = env::var("SEL4_LIB_DIR")
         .expect("SEL4_LIB_DIR environment variable not set");
+    let wrapper_include = PathBuf::from("include");
+
+    let required = [
+        "autoconf.h",
+        "libsel4_autoconf.h",
+        "invocation.h",
+        "sel4/macros.h",
+        "sel4/syscalls.h",
+        "sel4/syscalls_master.h",
+        "sel4/simple_types.h",
+        "sel4/shared_types.h",
+        "sel4/bootinfo_types.h",
+        "sel4/errors.h",
+        "sel4/faults.h",
+        "sel4/objecttype.h",
+        "sel4/config.h",
+        "sel4/arch/vspace.h",
+    ];
+    for f in &required {
+        let path = wrapper_include.join(f);
+        if !path.exists() {
+            panic!("Required header {} missing at {}", f, path.display());
+        }
+    }
 
     let mut builder = bindgen::Builder::default()
         .header("include/sel4_wrapper.h")
         .use_core()
+        .clang_arg(format!("-I{}", wrapper_include.display()))
         .ctypes_prefix("cty");
 
     let include_path = PathBuf::from(&sel4_include);
