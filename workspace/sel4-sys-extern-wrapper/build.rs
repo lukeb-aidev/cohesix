@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: build.rs v0.5
+// Filename: build.rs v0.6
 // Author: Lukas Bower
-// Date Modified: 2028-12-09
+// Date Modified: 2028-12-10
 
 use std::{env, fs, path::{Path, PathBuf}};
 
@@ -82,44 +82,15 @@ fn main() {
         .join("seL4")
         .join("include");
     copy_recursive(&include_root, &out_dir).expect("copy seL4 headers");
-    let generated = out_dir.join("generated");
-    if generated.exists() {
-        for entry in fs::read_dir(&generated).expect("read generated dir") {
-            let entry = entry.expect("entry");
-            let path = entry.path();
-            let target = out_dir.join(entry.file_name());
-            if path.is_dir() {
-                copy_recursive(&path, &target).expect("copy generated dir");
-            } else {
-                fs::copy(&path, &target).expect("copy generated file");
-            }
-        }
-    }
-    for header in ["autoconf.h", "libsel4_autoconf.h"] {
-        let src = out_dir.join("generated").join(header);
-        if src.exists() {
-            fs::copy(&src, out_dir.join(header)).expect("copy autoconf header");
-        }
-    }
-    // Flatten select libsel4 paths after copying the tree
-    let libsel4_sel4 = out_dir.join("libsel4").join("sel4");
-    let target_sel4 = out_dir.join("sel4");
-    copy_recursive(&libsel4_sel4.join("sel4"), &target_sel4)
-        .expect("flatten sel4 subdir");
-    for extra in ["invocation.h", "syscall.h", "shared_types.pbf", "shared_types_gen.h"] {
-        let src = libsel4_sel4.join(extra);
-        if src.exists() {
-            fs::copy(&src, target_sel4.join(extra)).expect("copy extra header");
-        }
-    }
-
-    let libsel4_if = out_dir.join("libsel4").join("interfaces");
-    let target_if = out_dir.join("interfaces");
-    copy_recursive(&libsel4_if, &target_if).expect("flatten libsel4 interfaces");
     if let Ok(arch) = env::var("SEL4_ARCH") {
         let alias_root = sel4_paths::create_arch_alias(&include_root, &arch, &out_dir)
             .expect("create arch alias");
         copy_recursive(&alias_root, &out_dir).expect("merge arch alias");
+    }
+
+    let mut include_dirs = Vec::new();
+    if let Ok(dirs) = sel4_paths::header_dirs_recursive(&out_dir) {
+        include_dirs.extend(dirs);
     }
 
     let plat_api = out_dir.join("sel4").join("plat").join("api");
@@ -136,6 +107,9 @@ fn main() {
         .use_core()
         .clang_arg(format!("-I{}", out_dir.display()))
         .ctypes_prefix("cty");
+    for dir in &include_dirs {
+        builder = builder.clang_arg(format!("-I{}", dir.display()));
+    }
 
     println!("cargo:rerun-if-env-changed=SEL4_ARCH");
 
