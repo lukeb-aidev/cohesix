@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v1.46
+# Filename: cohesix_fetch_build.sh v1.47
 # Author: Lukas Bower
-# Date Modified: 2028-11-27
+# Date Modified: 2028-11-28
 
 # This script fetches and builds the Cohesix project, including seL4 and other dependencies.
 
@@ -101,11 +101,12 @@ if [[ -n "$PHASE" ]]; then
       --target aarch64-unknown-linux-musl
     log "✅ Phase 1 build succeeded"
   elif [[ "$PHASE" == "2" ]]; then
-    log "🔨 Phase 2: Building cohesix_root under nightly"
-    cargo +nightly build -p cohesix_root --release \
-      --target=cohesix_root/sel4-aarch64.json \
-      -Z build-std=core,alloc,compiler_builtins \
-      -Z build-std-features=compiler-builtins-mem
+    log "🔨 Phase 2: Cross-compiling cohesix_root under nightly"
+    RUSTFLAGS="-C panic=abort -L $SEL4_LIB_DIR $CROSS_RUSTFLAGS" \
+      cargo +nightly build -p cohesix_root --release \
+        --target=cohesix_root/sel4-aarch64.json \
+        -Z build-std=core,alloc,compiler_builtins \
+        -Z build-std-features=compiler-builtins-mem
     log "✅ Phase 2 build succeeded"
   else
     echo "❌ Invalid phase: $PHASE" >&2
