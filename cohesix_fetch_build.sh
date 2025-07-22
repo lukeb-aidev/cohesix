@@ -90,6 +90,8 @@ setup_stub_headers() {
   fi
 }
 
+SEL4_LIB_DIR="${SEL4_LIB_DIR:-$ROOT/third_party/seL4/lib}"
+
 if [[ -n "$PHASE" ]]; then
   cd "$ROOT/workspace"
   setup_stub_headers
