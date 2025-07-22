@@ -9,7 +9,7 @@ use std::fs;
 #[test]
 fn compile_with_target_runs() {
     fs::write("tiny.ir", "dummy").unwrap();
-    let res = compile_from_file_with_target("tiny.ir", "tiny.c", "x86_64");
+    let res = compile_from_file_with_target("tiny.ir", "tiny.c", "aarch64");
     fs::remove_file("tiny.ir").ok();
     fs::remove_file("tiny.c").ok();
     assert!(res.is_ok());
