@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v1.18
 // Author: Lukas Bower
-// Date Modified: 2027-12-31
+// Date Modified: 2028-12-05
 
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
@@ -3532,3 +3532,7 @@
 ## [v1.51] - 2028-11-21
 ### Added
 - **BootPlumbingAudit-110**: Documented boot viability and seL4 plumbing status.
+
+## [v1.52] - 2028-12-05
+### Fixed
+- **FixSEL4IncludeCopyInWrapperBuild-116**: build script now copies the full seL4 include tree so wrapper generation resolves <sel4/sel4.h>.

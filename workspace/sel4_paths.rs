@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: sel4_paths.rs v0.7
 // Author: OpenAI
-// Date Modified: 2028-11-09
+// Date Modified: 2028-12-05
 
 use std::collections::{BTreeSet, HashSet};
 use std::fs;
@@ -16,7 +16,10 @@ pub fn project_root(manifest_dir: &str) -> PathBuf {
 }
 
 pub fn sel4_include(project_root: &Path) -> PathBuf {
-    project_root.join("third_party/seL4/include")
+    project_root
+        .join("third_party")
+        .join("seL4")
+        .join("include")
 }
 
 pub fn sel4_generated(project_root: &Path) -> PathBuf {
