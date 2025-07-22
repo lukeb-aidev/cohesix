@@ -451,7 +451,7 @@ cargo +nightly test --release --workspace \
   --exclude cohesix_root
 log "✅ Host crates built and tested"
 
-# Phase 3: Cross-compile cohesix_root (no-std, panic-abort)
+# Phase 2: Cross-compile cohesix_root (no-std, panic-abort)
 log "🔨 Building cohesix_root (no-std, panic-abort)"
 cargo +nightly build \
   -Z build-std=core,alloc,compiler_builtins \
