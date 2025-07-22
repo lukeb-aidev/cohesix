@@ -515,7 +515,7 @@ log "✅ Phase 1 build & tests succeeded"
 SEL4_LIB_DIR="${ROOT}/third_party/seL4/lib"
 : "${SEL4_LIB_DIR:?SEL4_LIB_DIR must be set}"
 export LIBRARY_PATH="$SEL4_LIB_DIR:${LIBRARY_PATH:-}"
-export CFLAGS="-I${ROOT}/third_party/seL4/include -I${ROOT}/third_party/seL4/include/generated"
+export CFLAGS=""
 export LDFLAGS="-L${SEL4_LIB_DIR}"
 
 # Phase 2: sel4-sys-extern-wrapper under nightly
@@ -529,6 +529,9 @@ RUSTFLAGS="-C panic=abort -L${SEL4_LIB_DIR}" \
     -Z build-std-features=compiler-builtins-mem
 [ -f "target/sel4-aarch64/release/libsel4_sys_extern_wrapper.rlib" ] || { echo "❌ wrapper build failed"; exit 1; }
 log "✅ sel4-sys-extern-wrapper built"
+
+WRAP_OUT=$(find target/sel4-aarch64 -path "*/build/sel4-sys-extern-wrapper*/out" -type d | head -n 1)
+export CFLAGS="-I${WRAP_OUT}"
 
 # Phase 3: cohesix_root under nightly
 log "🔨 Phase 3: Building cohesix_root"
