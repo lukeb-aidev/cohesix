@@ -494,31 +494,55 @@ if ! grep -q "\[workspace\]" "$ROOT/workspace/Cargo.toml"; then
   exit 1
 fi
 
-echo "🔨 Running Rust build section"
-(
-  cd "$ROOT/workspace"
-  cargo clean
+log "🔨 Running Rust build section"
+cd "$ROOT/workspace"
+cargo clean
 
-  # Phase 1: Build host crates and run tests
-  HOST_TRIPLE="$(rustc -vV | awk '/host/ {print $2}')"
-  log "🔨 Building host crates and tests for $HOST_TRIPLE"
-  RUSTFLAGS="" cargo +nightly build --release --workspace \
-    --exclude sel4-sys-extern-wrapper \
-    --exclude cohesix_root \
-    --target="$HOST_TRIPLE"
-  RUSTFLAGS="" cargo +nightly test --release --workspace \
-    --exclude sel4-sys-extern-wrapper \
-    --exclude cohesix_root \
-    --target="$HOST_TRIPLE"
-  log "✅ Host crates built and tested"
+# Phase 1: host crates under musl
+log "🔨 Phase 1: Building & testing host crates (musl userland)"
+rustup target add aarch64-unknown-linux-musl || true
+cargo build --release --workspace \
+  --exclude cohesix_root \
+  --exclude sel4-sys-extern-wrapper \
+  --target=aarch64-unknown-linux-musl
+cargo test --release --workspace \
+  --exclude cohesix_root \
+  --exclude sel4-sys-extern-wrapper \
+  --target=aarch64-unknown-linux-musl
+log "✅ Phase 1 build & tests succeeded"
 
-) 
-if [ $? -ne 0 ]; then
-  echo "ERROR: Rust build section failed"
-  exit 1
-fi
+# Common stub-header setup
+SEL4_LIB_DIR="${ROOT}/third_party/seL4/lib"
+: "${SEL4_LIB_DIR:?SEL4_LIB_DIR must be set}"
+export LIBRARY_PATH="$SEL4_LIB_DIR:${LIBRARY_PATH:-}"
+export CFLAGS="-I${ROOT}/third_party/seL4/include -I${ROOT}/third_party/seL4/include/generated"
+export LDFLAGS="-L${SEL4_LIB_DIR}"
 
-log "✅ Rust components built with proper split targets"
+# Phase 2: sel4-sys-extern-wrapper under nightly
+log "🔨 Phase 2: Building sel4-sys-extern-wrapper"
+RUSTFLAGS="-C panic=abort -L${SEL4_LIB_DIR}" \
+  cargo +nightly build \
+    -p sel4-sys-extern-wrapper \
+    --release \
+    --target=cohesix_root/sel4-aarch64.json \
+    -Z build-std=core,alloc,compiler_builtins \
+    -Z build-std-features=compiler-builtins-mem
+[ -f "target/sel4-aarch64/release/libsel4_sys_extern_wrapper.rlib" ] || { echo "❌ wrapper build failed"; exit 1; }
+log "✅ sel4-sys-extern-wrapper built"
+
+# Phase 3: cohesix_root under nightly
+log "🔨 Phase 3: Building cohesix_root"
+RUSTFLAGS="-C panic=abort -L${SEL4_LIB_DIR} ${CROSS_RUSTFLAGS:-}" \
+  cargo +nightly build \
+    -p cohesix_root \
+    --release \
+    --target=cohesix_root/sel4-aarch64.json \
+    -Z build-std=core,alloc,compiler_builtins \
+    -Z build-std-features=compiler-builtins-mem
+[ -f "target/sel4-aarch64/release/libcohesix_root.rlib" ] || { echo "❌ cohesix_root build failed"; exit 1; }
+log "✅ cohesix_root built"
+
+log "✅ All Rust components built with proper split targets"
 
 TARGET_DIR="$ROOT/workspace/target/release"
 # Stage all main binaries
