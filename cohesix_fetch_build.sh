@@ -122,9 +122,9 @@ if ! rustup component list --toolchain nightly | grep -q 'rust-src (installed)';
   echo "🔧 Installing missing rust-src component for nightly" >&2
   rustup component add rust-src --toolchain nightly
 fi
-if ! rustup target list --installed | grep -q "^aarch64-unknown-linux-gnu$"; then
-  echo "🔧 Installing missing Rust target aarch64-unknown-linux-gnu" >&2
-  rustup target add aarch64-unknown-linux-gnu
+if ! rustup target list --installed | grep -q "^aarch64-unknown-none$"; then
+  echo "🔧 Installing missing Rust target aarch64-unknown-none" >&2
+  rustup target add aarch64-unknown-none
 fi
 command -v aarch64-linux-gnu-gcc >/dev/null 2>&1 || { echo "❌ aarch64-linux-gnu-gcc missing" >&2; exit 1; }
 command -v ld.lld >/dev/null 2>&1 || { echo "❌ ld.lld not found" >&2; exit 1; }
@@ -211,9 +211,9 @@ else
 fi
 
 if [ "$COH_ARCH" = "aarch64" ] && command -v rustup >/dev/null 2>&1; then
-  if ! rustup target list --installed | grep -q '^aarch64-unknown-linux-gnu$'; then
-    rustup target add aarch64-unknown-linux-gnu
-    log "✅ Rust target aarch64-unknown-linux-gnu installed"
+  if ! rustup target list --installed | grep -q '^aarch64-unknown-none$'; then
+    rustup target add aarch64-unknown-none
+    log "✅ Rust target aarch64-unknown-none installed"
   fi
 fi
 
@@ -445,12 +445,10 @@ cargo clean
 log "🔨 Building host crates"
 cargo +nightly build --release --workspace \
   --exclude sel4-sys-extern-wrapper \
-  --exclude cohesix_root \
-  --target x86_64-unknown-linux-gnu
+  --exclude cohesix_root
 cargo +nightly test --release --workspace \
   --exclude sel4-sys-extern-wrapper \
-  --exclude cohesix_root \
-  --target x86_64-unknown-linux-gnu
+  --exclude cohesix_root
 log "✅ Host crates built and tested"
 
 # Phase 2: Cross-compile cohesix_root (no-std, panic-abort)

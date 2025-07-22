@@ -32,6 +32,9 @@ jobs:
           components: rust-src
           profile: minimal
 
+      - name: Install aarch64 target
+        run: rustup target add aarch64-unknown-none
+
       - name: Cache cargo registry and build artifacts
         uses: actions/cache@v3
         with:
@@ -49,12 +52,10 @@ jobs:
           echo "🔨 Building host crates"
           cargo +nightly build --release --workspace \
             --exclude sel4-sys-extern-wrapper \
-            --exclude cohesix_root \
-            --target x86_64-unknown-linux-gnu
+            --exclude cohesix_root
           cargo +nightly test --release --workspace \
             --exclude sel4-sys-extern-wrapper \
-            --exclude cohesix_root \
-            --target x86_64-unknown-linux-gnu
+            --exclude cohesix_root
           echo "✅ Host crates built and tested"
 
 

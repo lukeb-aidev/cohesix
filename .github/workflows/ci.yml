@@ -55,6 +55,9 @@ jobs:
           override: false
           components: rust-src
 
+      - name: Install aarch64 target
+        run: rustup target add aarch64-unknown-none
+
       - uses: actions/setup-go@v4
         with:
           go-version: '1.22'
@@ -74,12 +77,10 @@ jobs:
           log "🔨 Building host crates"
           cargo +nightly build --release --workspace \
             --exclude sel4-sys-extern-wrapper \
-            --exclude cohesix_root \
-            --target x86_64-unknown-linux-gnu
+            --exclude cohesix_root
           cargo +nightly test --release --workspace \
             --exclude sel4-sys-extern-wrapper \
-            --exclude cohesix_root \
-            --target x86_64-unknown-linux-gnu
+            --exclude cohesix_root
           log "✅ Host crates built and tested"
 
           log "🔨 Building sel4-sys-extern-wrapper (no-std, panic-abort)"
@@ -102,8 +103,7 @@ jobs:
         working-directory: workspace
         run: |
           cargo +nightly test --release --workspace \
-            --exclude cohesix_root \
-            --target x86_64-unknown-linux-gnu | tee rust_test_host.log
+            --exclude cohesix_root | tee rust_test_host.log
 
       - name: Run Go tests
         run: |
