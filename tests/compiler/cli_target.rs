@@ -10,7 +10,7 @@ fn parse_target_option() {
     let matches = build_cli().try_get_matches_from([
         "cohcc",
         "--input", "foo.ir",
-        "--target", "x86_64",
+        "--target", "aarch64",
     ]).expect("cli args parse");
-    assert_eq!(matches.get_one::<String>("target").unwrap(), "x86_64");
+    assert_eq!(matches.get_one::<String>("target").unwrap(), "aarch64");
 }
