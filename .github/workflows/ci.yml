@@ -74,10 +74,12 @@ jobs:
           log "🔨 Building host crates"
           cargo +nightly build --release --workspace \
             --exclude sel4-sys-extern-wrapper \
-            --exclude cohesix_root
+            --exclude cohesix_root \
+            --target x86_64-unknown-linux-gnu
           cargo +nightly test --release --workspace \
             --exclude sel4-sys-extern-wrapper \
-            --exclude cohesix_root
+            --exclude cohesix_root \
+            --target x86_64-unknown-linux-gnu
           log "✅ Host crates built and tested"
 
           log "🔨 Building sel4-sys-extern-wrapper (no-std, panic-abort)"
@@ -99,8 +101,9 @@ jobs:
       - name: Run Rust tests (host)
         working-directory: workspace
         run: |
-          cargo test --release --workspace \
-            --exclude cohesix_root | tee rust_test_host.log
+          cargo +nightly test --release --workspace \
+            --exclude cohesix_root \
+            --target x86_64-unknown-linux-gnu | tee rust_test_host.log
 
       - name: Run Go tests
         run: |
@@ -110,7 +113,7 @@ jobs:
         run: |
           python -m venv .venv
           source .venv/bin/activate
-          pip install -r requirements.txt
+          pip install -r ../requirements.txt
           pytest -q | tee python_test.log
 
       - name: Cargo test compile
