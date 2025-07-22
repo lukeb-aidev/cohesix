@@ -10,7 +10,10 @@ fn parse_target_option() {
     let matches = build_cli().try_get_matches_from([
         "cohcc",
         "--input", "foo.ir",
-        "--target", "aarch64",
+        "--target", "cohesix_root/sel4-aarch64.json",
     ]).expect("cli args parse");
-    assert_eq!(matches.get_one::<String>("target").unwrap(), "aarch64");
+    assert_eq!(
+        matches.get_one::<String>("target").unwrap(),
+        "cohesix_root/sel4-aarch64.json"
+    );
 }
