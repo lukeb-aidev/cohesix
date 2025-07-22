@@ -47,16 +47,20 @@ jobs:
             ${{ runner.os }}-cargo-
             ${{ runner.os }}-
 
-      - name: Build and test host crates
+      - name: Build and test aarch64 crates
         run: |
-          echo "🔨 Building host crates"
+          echo "🔨 Building crates for aarch64"
           cargo +nightly build --release --workspace \
             --exclude sel4-sys-extern-wrapper \
-            --exclude cohesix_root
+            --exclude cohesix_root \
+            --target=cohesix_root/sel4-aarch64.json \
+            -Z build-std=std,panic_abort
           cargo +nightly test --release --workspace \
             --exclude sel4-sys-extern-wrapper \
-            --exclude cohesix_root
-          echo "✅ Host crates built and tested"
+            --exclude cohesix_root \
+            --target=cohesix_root/sel4-aarch64.json \
+            -Z build-std=std,panic_abort
+          echo "✅ aarch64 crates built and tested"
 
 
       - name: Build sel4-sys-extern-wrapper
@@ -76,6 +80,13 @@ jobs:
             -Z build-std=core,alloc,compiler_builtins \
             -Z build-std-features=compiler-builtins-mem
           echo "✅ cohesix_root built"
+
+      - name: Run aarch64 Rust tests
+        run: |
+          cargo +nightly test --release --workspace \
+            --target=cohesix_root/sel4-aarch64.json \
+            -Z build-std=core,alloc,compiler_builtins \
+            -Z build-std-features=compiler-builtins-mem
 
       - name: Run Python tests
         run: |
