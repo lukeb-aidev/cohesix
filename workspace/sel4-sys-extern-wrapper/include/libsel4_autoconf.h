@@ -1,10 +1,10 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: libsel4_autoconf.h v0.1
 // Author: Lukas Bower
-// Date Modified: 2028-11-28
+// Date Modified: 2028-12-07
 
 
 #pragma once
 
-#include <kernel/gen_config.h>
-#include <sel4/gen_config.h>
+#include <generated/kernel/gen_config.h>
+#include <generated/sel4/gen_config.h>
