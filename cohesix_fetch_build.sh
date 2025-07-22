@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v1.45
+# Filename: cohesix_fetch_build.sh v1.46
 # Author: Lukas Bower
-# Date Modified: 2028-11-26
+# Date Modified: 2028-11-27
 
 # This script fetches and builds the Cohesix project, including seL4 and other dependencies.
 
@@ -122,7 +122,8 @@ log "✅ config.yaml created at $CONFIG_PATH"
 
 export SEL4_LIB_DIR="${SEL4_LIB_DIR:-$ROOT/third_party/seL4/output}"
 export SEL4_INCLUDE="${SEL4_INCLUDE:-$(realpath "$ROOT/third_party/seL4/include")}"
-export RUSTFLAGS="-C link-arg=-L${SEL4_LIB_DIR} ${RUSTFLAGS}"
+# Delay use of seL4-specific RUSTFLAGS until cross compilation phase
+CROSS_RUSTFLAGS="-C link-arg=-L${SEL4_LIB_DIR} ${RUSTFLAGS:-}"
 export SEL4_ARCH="${SEL4_ARCH:-aarch64}"
 
 if [ -f "$ROOT/scripts/load_arch_config.sh" ]; then
@@ -471,30 +472,32 @@ echo "🔨 Running Rust build section"
   cd "$ROOT/workspace"
   cargo clean
 
-  # Phase 1: Build all host crates except cross-compiled targets
-  log "🔨 Building host crates"
-  cargo +nightly build --release --workspace \
+  # Phase 1: Build host crates and run tests
+  HOST_TRIPLE="$(rustc -vV | awk '/host/ {print $2}')"
+  log "🔨 Building host crates and tests for $HOST_TRIPLE"
+  RUSTFLAGS="" cargo +nightly build --release --workspace \
     --exclude sel4-sys-extern-wrapper \
     --exclude cohesix_root \
-    --target=cohesix_root/sel4-aarch64.json \
-    -Z build-std=std,panic_abort
-  cargo +nightly test --release --workspace \
+    --target="$HOST_TRIPLE"
+  RUSTFLAGS="" cargo +nightly test --release --workspace \
     --exclude sel4-sys-extern-wrapper \
     --exclude cohesix_root \
-    --target=cohesix_root/sel4-aarch64.json \
-    -Z build-std=std,panic_abort
+    --target="$HOST_TRIPLE"
   log "✅ Host crates built and tested"
 
-  # Phase 2: Cross-compile cohesix_root (no-std, panic-abort)
-  log "🔨 Building cohesix_root (no-std, panic-abort)"
-  export SEL4_INCLUDE
-  export SEL4_LIB_DIR
-  cargo +nightly build \
-    -Z build-std=core,alloc,compiler_builtins \
-    -Z build-std-features=compiler-builtins-mem \
-    -p cohesix_root --release \
-    --target=cohesix_root/sel4-aarch64.json
-  log "✅ cohesix_root built"
+  # Phase 2: Cross-compile sel4-sys (no-std, panic-abort)
+  log "🔨 Building sel4-sys (no-std, panic-abort)"
+  export LIBRARY_PATH="$SEL4_LIB_DIR:${LIBRARY_PATH:-}"
+  export CFLAGS="-I$ROOT/third_party/seL4/include -I$ROOT/third_party/seL4/include/generated ${CFLAGS:-}"
+  export LDFLAGS="-L$SEL4_LIB_DIR"
+  RUSTFLAGS="-C panic=abort -L $SEL4_LIB_DIR $CROSS_RUSTFLAGS" \
+    cargo +nightly build -p sel4-sys --release \
+      --target=cohesix_root/sel4-aarch64.json \
+      -Z build-std=core,alloc,compiler_builtins \
+      -Z build-std-features=compiler-builtins-mem
+  SEL4_SYS_RLIB="$ROOT/workspace/target/sel4-aarch64/release/libsel4_sys.rlib"
+  [ -f "$SEL4_SYS_RLIB" ] || { echo "❌ sel4-sys build failed" >&2; exit 1; }
+  log "✅ sel4-sys built: $SEL4_SYS_RLIB"
 ) 
 if [ $? -ne 0 ]; then
   echo "ERROR: Rust build section failed"
@@ -713,6 +716,9 @@ echo "🪵 Full log saved to $LOG_FILE" >&3
 # Final verification builds
 export SEL4_INCLUDE
 export SEL4_LIB_DIR
-cargo build -p sel4-sys-extern-wrapper --release --target=cohesix_root/sel4-aarch64.json
-cargo build -p cohesix_root --release --target=cohesix_root/sel4-aarch64.json
-cargo test --release --target=cohesix_root/sel4-aarch64.json --workspace
+RUSTFLAGS="-C panic=abort -L $SEL4_LIB_DIR $CROSS_RUSTFLAGS" \
+  cargo build -p sel4-sys-extern-wrapper --release --target=cohesix_root/sel4-aarch64.json
+RUSTFLAGS="-C panic=abort -L $SEL4_LIB_DIR $CROSS_RUSTFLAGS" \
+  cargo build -p cohesix_root --release --target=cohesix_root/sel4-aarch64.json
+RUSTFLAGS="-C panic=abort -L $SEL4_LIB_DIR $CROSS_RUSTFLAGS" \
+  cargo test --release --target=cohesix_root/sel4-aarch64.json --workspace
