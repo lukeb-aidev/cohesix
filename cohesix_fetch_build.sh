@@ -445,10 +445,14 @@ cargo clean
 log "🔨 Building host crates"
 cargo +nightly build --release --workspace \
   --exclude sel4-sys-extern-wrapper \
-  --exclude cohesix_root
+  --exclude cohesix_root \
+  --target=cohesix_root/sel4-aarch64.json \
+  -Z build-std=std,panic_abort
 cargo +nightly test --release --workspace \
   --exclude sel4-sys-extern-wrapper \
-  --exclude cohesix_root
+  --exclude cohesix_root \
+  --target=cohesix_root/sel4-aarch64.json \
+  -Z build-std=std,panic_abort
 log "✅ Host crates built and tested"
 
 # Phase 2: Cross-compile cohesix_root (no-std, panic-abort)
@@ -672,3 +676,4 @@ echo "🪵 Full log saved to $LOG_FILE" >&3
 # Final verification builds
 cargo +nightly build -p sel4-sys-extern-wrapper --release --target=cohesix_root/sel4-aarch64.json
 cargo +nightly build -p cohesix_root --release --target=cohesix_root/sel4-aarch64.json
+cargo +nightly test --release --target=cohesix_root/sel4-aarch64.json --workspace
