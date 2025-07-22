@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v1.49
+# Filename: cohesix_fetch_build.sh v1.50
 # Author: Lukas Bower
-# Date Modified: 2028-12-09
+# Date Modified: 2028-12-11
 
 # This script fetches and builds the Cohesix project, including seL4 and other dependencies.
 
@@ -120,12 +120,18 @@ if [[ -n "$PHASE" ]]; then
   elif [[ "$PHASE" == "3" ]]; then
     log "🔨 Phase 3: Building cohesix_root under nightly"
     export LDFLAGS="-L${SEL4_LIB_DIR}"
-    export RUSTFLAGS="-C panic=abort -L${SEL4_LIB_DIR} ${CROSS_RUSTFLAGS}"
+    export RUSTFLAGS="-C panic=abort -L${SEL4_LIB_DIR} ${CROSS_RUSTFLAGS:-}"
     cargo +nightly build -p cohesix_root --release \
       --target=cohesix_root/sel4-aarch64.json \
       -Z build-std=core,alloc,compiler_builtins \
       -Z build-std-features=compiler-builtins-mem
-    log "✅ Phase 3 build succeeded"
+    ROOT_ARTIFACT=$(find target/sel4-aarch64/release/deps -maxdepth 1 -name 'libcohesix_root*.rlib' -print -quit 2>/dev/null)
+    if [[ -n "$ROOT_ARTIFACT" ]]; then
+      log "✅ Phase 3 build succeeded: $(basename "$ROOT_ARTIFACT")"
+    else
+      echo "❌ cohesix_root artifact missing" >&2
+      exit 1
+    fi
   else
     echo "❌ Invalid phase: $PHASE" >&2
     exit 1
@@ -561,11 +567,13 @@ cargo +nightly build \
   --target=cohesix_root/sel4-aarch64.json \
   -Z build-std=core,alloc,compiler_builtins \
   -Z build-std-features=compiler-builtins-mem
-if [[ $? -ne 0 ]]; then
-  echo "❌ cohesix_root build failed" >&2
+ROOT_ARTIFACT=$(find target/sel4-aarch64/release/deps -maxdepth 1 -name 'libcohesix_root*.rlib' -print -quit 2>/dev/null)
+if [[ -n "$ROOT_ARTIFACT" ]]; then
+  log "✅ cohesix_root built: $(basename "$ROOT_ARTIFACT")"
+else
+  echo "❌ cohesix_root build failed: artifact missing" >&2
   exit 1
 fi
-log "✅ cohesix_root built"
 
 log "✅ All Rust components built with proper split targets"
 
