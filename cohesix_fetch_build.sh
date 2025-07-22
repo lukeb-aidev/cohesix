@@ -457,6 +457,8 @@ log "✅ Host crates built and tested"
 
 # Phase 2: Cross-compile cohesix_root (no-std, panic-abort)
 log "🔨 Building cohesix_root (no-std, panic-abort)"
+export SEL4_INCLUDE
+export SEL4_LIB_DIR
 cargo +nightly build \
   -Z build-std=core,alloc,compiler_builtins \
   -Z build-std-features=compiler-builtins-mem \
@@ -674,6 +676,8 @@ tail -n 10 "$SUMMARY_ERRORS" || echo "✅ No critical issues found" | tee -a "$L
 echo "🪵 Full log saved to $LOG_FILE" >&3
 
 # Final verification builds
-cargo +nightly build -p sel4-sys-extern-wrapper --release --target=cohesix_root/sel4-aarch64.json
-cargo +nightly build -p cohesix_root --release --target=cohesix_root/sel4-aarch64.json
-cargo +nightly test --release --target=cohesix_root/sel4-aarch64.json --workspace
+export SEL4_INCLUDE
+export SEL4_LIB_DIR
+cargo build -p sel4-sys-extern-wrapper --release --target=cohesix_root/sel4-aarch64.json
+cargo build -p cohesix_root --release --target=cohesix_root/sel4-aarch64.json
+cargo test --release --target=cohesix_root/sel4-aarch64.json --workspace

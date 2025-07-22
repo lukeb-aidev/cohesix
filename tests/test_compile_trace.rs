@@ -32,9 +32,21 @@ fn compile_reproducible() -> Result<(), CohError> {
     let sysroot = dir.path().join("sysroot");
     fs::create_dir_all(&sysroot)?;
     let tc = Toolchain::new(&tc_dir)?;
-    backend.compile(&input, &out, "aarch64-linux-musl", &sysroot, &tc)?;
+    backend.compile(
+        &input,
+        &out,
+        "cohesix_root/sel4-aarch64.json",
+        &sysroot,
+        &tc,
+    )?;
     let h1 = guard::hash_output(&out)?;
-    backend.compile(&input, &out, "aarch64-linux-musl", &sysroot, &tc)?;
+    backend.compile(
+        &input,
+        &out,
+        "cohesix_root/sel4-aarch64.json",
+        &sysroot,
+        &tc,
+    )?;
     let h2 = guard::hash_output(&out)?;
     assert_eq!(h1, h2);
     fs::write(log_dir.join("cohcc_ci_trace.log"), h2.as_bytes())?;

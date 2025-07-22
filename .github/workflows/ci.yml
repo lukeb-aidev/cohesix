@@ -55,8 +55,16 @@ jobs:
           override: false
           components: rust-src
 
+      - name: Install nightly toolchain
+        run: rustup toolchain install nightly
+
       - name: Install aarch64 target
         run: rustup target add aarch64-unknown-none
+
+      - name: Set seL4 env vars
+        run: |
+          echo "SEL4_INCLUDE=$(pwd)/../third_party/seL4/include" >> $GITHUB_ENV
+          echo "SEL4_LIB_DIR=$(pwd)/../third_party/seL4/lib" >> $GITHUB_ENV
 
       - uses: actions/setup-go@v4
         with:
@@ -125,7 +133,7 @@ jobs:
       - name: Cargo test compile
         working-directory: workspace
         run: |
-          cargo test --workspace --no-run \
+          cargo +nightly test --workspace --no-run \
             --target=cohesix_root/sel4-aarch64.json \
             -Z build-std=std,panic_abort | tee rust_test_compile.log
 
