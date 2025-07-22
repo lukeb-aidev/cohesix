@@ -14,6 +14,8 @@ fn main() {
 
     let sel4_include = env::var("SEL4_INCLUDE")
         .expect("SEL4_INCLUDE environment variable not set");
+    let lib_dir = env::var("SEL4_LIB_DIR")
+        .expect("SEL4_LIB_DIR environment variable not set");
 
     let mut builder = bindgen::Builder::default()
         .header("include/sel4_wrapper.h")
@@ -44,12 +46,21 @@ fn main() {
         .expect("Couldn't write bindings!");
 
     println!("cargo:rerun-if-changed=include/sel4_wrapper.h");
-    println!("cargo:rustc-link-lib=static=sel4");
-    let lib_dir = env::var("SEL4_LIB_DIR").unwrap_or_else(|_| {
-        project_root
-            .join("third_party/seL4/lib")
-            .to_string_lossy()
-            .into_owned()
-    });
     println!("cargo:rustc-link-search=native={}", lib_dir);
+    println!("cargo:rustc-link-lib=static=sel4");
+    if let Ok(entries) = std::fs::read_dir(&lib_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if let Some(ext) = path.extension() {
+                if ext == "a" {
+                    if let Some(name) = path.file_stem().and_then(|n| n.to_str()) {
+                        if name.starts_with("lib") {
+                            let lib = &name[3..];
+                            println!("cargo:rustc-link-lib=static={}", lib);
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
