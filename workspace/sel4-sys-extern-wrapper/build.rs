@@ -12,11 +12,8 @@ fn main() {
     let project_root = sel4_paths::project_root(&manifest_dir);
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
 
-    let sel4_include = env::var("SEL4_INCLUDE").unwrap_or_else(|_| {
-        sel4_paths::sel4_include(&project_root)
-            .to_string_lossy()
-            .into_owned()
-    });
+    let sel4_include = env::var("SEL4_INCLUDE")
+        .expect("SEL4_INCLUDE environment variable not set");
 
     let mut builder = bindgen::Builder::default()
         .header("include/sel4_wrapper.h")
