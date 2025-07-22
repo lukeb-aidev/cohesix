@@ -438,33 +438,45 @@ fi
 
 log "🔧 Building Rust workspace binaries..."
 
-cd "$ROOT/workspace"
-cargo clean
+if ! grep -q "\[workspace\]" "$ROOT/workspace/Cargo.toml"; then
+  echo "ERROR: top-level Cargo.toml is not a workspace"
+  exit 1
+fi
 
-# Phase 1: Build all host crates except cross-compiled targets
-log "🔨 Building host crates"
-cargo +nightly build --release --workspace \
-  --exclude sel4-sys-extern-wrapper \
-  --exclude cohesix_root \
-  --target=cohesix_root/sel4-aarch64.json \
-  -Z build-std=std,panic_abort
-cargo +nightly test --release --workspace \
-  --exclude sel4-sys-extern-wrapper \
-  --exclude cohesix_root \
-  --target=cohesix_root/sel4-aarch64.json \
-  -Z build-std=std,panic_abort
-log "✅ Host crates built and tested"
+echo "🔨 Running Rust build section"
+(
+  cd "$ROOT/workspace"
+  cargo clean
 
-# Phase 2: Cross-compile cohesix_root (no-std, panic-abort)
-log "🔨 Building cohesix_root (no-std, panic-abort)"
-export SEL4_INCLUDE
-export SEL4_LIB_DIR
-cargo +nightly build \
-  -Z build-std=core,alloc,compiler_builtins \
-  -Z build-std-features=compiler-builtins-mem \
-  -p cohesix_root --release \
-  --target=cohesix_root/sel4-aarch64.json
-log "✅ cohesix_root built"
+  # Phase 1: Build all host crates except cross-compiled targets
+  log "🔨 Building host crates"
+  cargo +nightly build --release --workspace \
+    --exclude sel4-sys-extern-wrapper \
+    --exclude cohesix_root \
+    --target=cohesix_root/sel4-aarch64.json \
+    -Z build-std=std,panic_abort
+  cargo +nightly test --release --workspace \
+    --exclude sel4-sys-extern-wrapper \
+    --exclude cohesix_root \
+    --target=cohesix_root/sel4-aarch64.json \
+    -Z build-std=std,panic_abort
+  log "✅ Host crates built and tested"
+
+  # Phase 2: Cross-compile cohesix_root (no-std, panic-abort)
+  log "🔨 Building cohesix_root (no-std, panic-abort)"
+  export SEL4_INCLUDE
+  export SEL4_LIB_DIR
+  cargo +nightly build \
+    -Z build-std=core,alloc,compiler_builtins \
+    -Z build-std-features=compiler-builtins-mem \
+    -p cohesix_root --release \
+    --target=cohesix_root/sel4-aarch64.json
+  log "✅ cohesix_root built"
+) 
+if [ $? -ne 0 ]; then
+  echo "ERROR: Rust build section failed"
+  exit 1
+fi
 
 log "✅ Rust components built with proper split targets"
 
