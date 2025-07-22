@@ -6,7 +6,6 @@
 [workspace]
 members = [
     "sel4-sys-extern-wrapper",
-    "sel4-sys",
     "cohesix",
     "cohesix-9p",
     "cohesix-secure9p",
