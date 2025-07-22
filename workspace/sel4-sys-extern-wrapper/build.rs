@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: build.rs v0.5
 // Author: Lukas Bower
-// Date Modified: 2028-12-07
+// Date Modified: 2028-12-08
 
 use std::{env, fs, path::{Path, PathBuf}};
 
@@ -32,6 +32,8 @@ fn generate_wrapper_header(out_dir: &Path) -> PathBuf {
     content.push_str("// Author: Lukas Bower\n");
     content.push_str("// Date Modified: 2025-07-22\n\n");
     content.push_str("#pragma once\n");
+    content.push_str("#include <generated/kernel/gen_config.h>\n");
+    content.push_str("#include <generated/sel4/gen_config.h>\n");
     content.push_str("#include <sel4/config.h>\n");
     content.push_str("#include <sel4/sel4_arch/constants.h>\n\n");
     content.push_str("typedef unsigned long seL4_ARM_VMAttributes;\n");
@@ -48,6 +50,23 @@ fn generate_wrapper_header(out_dir: &Path) -> PathBuf {
     content.push_str("typedef unsigned long seL4_ARM_SID;\n");
     content.push_str("typedef unsigned long seL4_ARM_CBControl;\n");
     content.push_str("typedef unsigned long seL4_ARM_CB;\n\n");
+    content.push_str("typedef struct seL4_MessageInfo seL4_MessageInfo_t;\n");
+    content.push_str("typedef unsigned long seL4_CPtr;\n");
+    content.push_str("typedef unsigned long seL4_Word;\n");
+    content.push_str("#define ARMPageTableMap 0\n");
+    content.push_str("#define ARMPageTableUnmap 0\n");
+    content.push_str("#define ARMPageMap 0\n");
+    content.push_str("#define ARMPageUnmap 0\n");
+    content.push_str("#define ARMPageClean_Data 0\n");
+    content.push_str("#define ARMPageInvalidate_Data 0\n");
+    content.push_str("#define ARMPageCleanInvalidate_Data 0\n");
+    content.push_str("#define ARMPageUnify_Instruction 0\n");
+    content.push_str("#define ARMPageGetAddress 0\n");
+    content.push_str("#define ARMASIDControlMakePool 0\n");
+    content.push_str("#define ARMASIDPoolAssign 0\n");
+    content.push_str("#define ARMIRQIssueIRQHandlerTrigger 0\n");
+    content.push_str("#define ARMIRQIssueSGISignal 0\n");
+    content.push_str("seL4_MessageInfo_t seL4_CallWithMRs(seL4_CPtr dest, seL4_MessageInfo_t info, seL4_Word* mr0, seL4_Word* mr1, seL4_Word* mr2, seL4_Word* mr3);\n\n");
     content.push_str("#include <sel4/sel4.h>\n");
     fs::write(&header_path, content).expect("write sel4_wrapper.h");
     header_path
@@ -83,8 +102,11 @@ fn main() {
             .expect("create arch alias");
         copy_recursive(&alias_root, &out_dir).expect("merge arch alias");
     }
-    let stub_src = Path::new(&manifest_dir).join("include");
-    copy_recursive(&stub_src, &out_dir).expect("copy stub headers");
+
+    let plat_api = out_dir.join("sel4").join("plat").join("api");
+    fs::create_dir_all(&plat_api).expect("create plat/api dir");
+    fs::write(plat_api.join("constants.h"), "#pragma once\n").expect("stub constants.h");
+
 
 
 
