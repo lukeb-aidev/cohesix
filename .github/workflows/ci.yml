@@ -66,6 +66,16 @@ jobs:
           echo "SEL4_INCLUDE=$(pwd)/../third_party/seL4/include" >> $GITHUB_ENV
           echo "SEL4_LIB_DIR=$(pwd)/../third_party/seL4/lib" >> $GITHUB_ENV
 
+      - name: Smoke build sel4-sys-extern-wrapper
+        working-directory: workspace
+        run: |
+          cargo +nightly build \
+            -p sel4-sys-extern-wrapper \
+            --release \
+            -Z build-std=core,alloc,compiler_builtins \
+            -Z build-std-features=compiler-builtins-mem \
+            --target=cohesix_root/sel4-aarch64.json
+
       - uses: actions/setup-go@v4
         with:
           go-version: '1.22'

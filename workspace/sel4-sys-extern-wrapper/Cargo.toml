@@ -17,7 +17,7 @@ panic-handler = []
 default = ["panic-handler"]
 
 [build-dependencies]
-bindgen = "0.69"
+bindgen = { version = "0.69", default-features = false }
 
 [lib]
 crate-type = ["rlib"]
