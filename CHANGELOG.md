@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v1.18
 // Author: Lukas Bower
-// Date Modified: 2028-12-05
+// Date Modified: 2028-12-09
 
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
@@ -3541,3 +3541,7 @@
 ### Fixed
 - **FixWrapperArtifactDetection-117**: Phase 2 correctly locates wrapper rlib under the deps directory.
 - **PropagateSel4FlagsToCohesixRoot-118**: Phase 3 re-exports link flags so `-lsel4` resolves during build.
+
+## [v1.54] - 2028-12-09
+### Fixed
+- **CopyFullSeL4IncludeTreeToWrapperOutDir-119**: build.rs now mirrors the entire seL4 include directory into OUT_DIR, placing autoconf headers at the root so bindgen resolves all includes.

@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: build.rs v0.5
 // Author: Lukas Bower
-// Date Modified: 2028-12-08
+// Date Modified: 2028-12-09
 
 use std::{env, fs, path::{Path, PathBuf}};
 
@@ -82,6 +82,25 @@ fn main() {
         .join("seL4")
         .join("include");
     copy_recursive(&include_root, &out_dir).expect("copy seL4 headers");
+    let generated = out_dir.join("generated");
+    if generated.exists() {
+        for entry in fs::read_dir(&generated).expect("read generated dir") {
+            let entry = entry.expect("entry");
+            let path = entry.path();
+            let target = out_dir.join(entry.file_name());
+            if path.is_dir() {
+                copy_recursive(&path, &target).expect("copy generated dir");
+            } else {
+                fs::copy(&path, &target).expect("copy generated file");
+            }
+        }
+    }
+    for header in ["autoconf.h", "libsel4_autoconf.h"] {
+        let src = out_dir.join("generated").join(header);
+        if src.exists() {
+            fs::copy(&src, out_dir.join(header)).expect("copy autoconf header");
+        }
+    }
     // Flatten select libsel4 paths after copying the tree
     let libsel4_sel4 = out_dir.join("libsel4").join("sel4");
     let target_sel4 = out_dir.join("sel4");
