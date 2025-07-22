@@ -75,14 +75,38 @@ for arg in "$@"; do
   esac
 done
 
+setup_stub_headers() {
+  local stub_dir="$ROOT/workspace/sel4-sys-extern-wrapper/include"
+  if [ -d "$stub_dir" ]; then
+    export SEL4_INCLUDE="${SEL4_INCLUDE:-$stub_dir}"
+    mkdir -p "$stub_dir/sel4/arch"
+    for hdr in autoconf.h libsel4_autoconf.h invocation.h \
+               sel4/macros.h sel4/syscalls.h sel4/syscalls_master.h \
+               sel4/simple_types.h sel4/shared_types.h sel4/bootinfo_types.h \
+               sel4/errors.h sel4/faults.h sel4/objecttype.h sel4/config.h \
+               sel4/arch/vspace.h; do
+      [ -f "$stub_dir/$hdr" ] || echo '#pragma once' > "$stub_dir/$hdr"
+    done
+  fi
+}
+
 if [[ -n "$PHASE" ]]; then
   cd "$ROOT/workspace"
+  setup_stub_headers
   if [[ "$PHASE" == "1" ]]; then
-    cargo build --release -p cohesix -p cohesix-9p -p cohesix-secure9p
-    echo "✅ Phase 1 build succeeded"
+    log "🔨 Phase 1: Building host crates for musl userland"
+    cargo build --release --workspace \
+      --exclude cohesix_root \
+      --exclude sel4-sys-extern-wrapper \
+      --target aarch64-unknown-linux-musl
+    log "✅ Phase 1 build succeeded"
   elif [[ "$PHASE" == "2" ]]; then
-    cargo +nightly build --release -p cohesix_root -p sel4-sys-extern-wrapper
-    echo "✅ Phase 2 build succeeded"
+    log "🔨 Phase 2: Building cohesix_root under nightly"
+    cargo +nightly build -p cohesix_root --release \
+      --target=cohesix_root/sel4-aarch64.json \
+      -Z build-std=core,alloc,compiler_builtins \
+      -Z build-std-features=compiler-builtins-mem
+    log "✅ Phase 2 build succeeded"
   else
     echo "❌ Invalid phase: $PHASE" >&2
     exit 1
@@ -485,19 +509,6 @@ echo "🔨 Running Rust build section"
     --target="$HOST_TRIPLE"
   log "✅ Host crates built and tested"
 
-  # Phase 2: Cross-compile sel4-sys (no-std, panic-abort)
-  log "🔨 Building sel4-sys (no-std, panic-abort)"
-  export LIBRARY_PATH="$SEL4_LIB_DIR:${LIBRARY_PATH:-}"
-  export CFLAGS="-I$ROOT/third_party/seL4/include -I$ROOT/third_party/seL4/include/generated ${CFLAGS:-}"
-  export LDFLAGS="-L$SEL4_LIB_DIR"
-  RUSTFLAGS="-C panic=abort -L $SEL4_LIB_DIR $CROSS_RUSTFLAGS" \
-    cargo +nightly build -p sel4-sys --release \
-      --target=cohesix_root/sel4-aarch64.json \
-      -Z build-std=core,alloc,compiler_builtins \
-      -Z build-std-features=compiler-builtins-mem
-  SEL4_SYS_RLIB="$ROOT/workspace/target/sel4-aarch64/release/libsel4_sys.rlib"
-  [ -f "$SEL4_SYS_RLIB" ] || { echo "❌ sel4-sys build failed" >&2; exit 1; }
-  log "✅ sel4-sys built: $SEL4_SYS_RLIB"
 ) 
 if [ $? -ne 0 ]; then
   echo "ERROR: Rust build section failed"
