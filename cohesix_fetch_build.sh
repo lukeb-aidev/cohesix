@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v1.44
+# Filename: cohesix_fetch_build.sh v1.45
 # Author: Lukas Bower
 # Date Modified: 2028-11-26
 
@@ -66,6 +66,29 @@ log(){ echo "[$(date +%H:%M:%S)] $1" | tee -a "$LOG_FILE" >&3; }
 
 log "🛠️ [Build Start] $(date)"
 log "🚀 Using existing repository at $ROOT"
+
+# Phase-specific minimal builds
+PHASE=""
+for arg in "$@"; do
+  case $arg in
+    --phase=*) PHASE="${arg#*=}" ;;
+  esac
+done
+
+if [[ -n "$PHASE" ]]; then
+  cd "$ROOT/workspace"
+  if [[ "$PHASE" == "1" ]]; then
+    cargo build --release -p cohesix -p cohesix-9p -p cohesix-secure9p
+    echo "✅ Phase 1 build succeeded"
+  elif [[ "$PHASE" == "2" ]]; then
+    cargo +nightly build --release -p cohesix_root -p sel4-sys-extern-wrapper
+    echo "✅ Phase 2 build succeeded"
+  else
+    echo "❌ Invalid phase: $PHASE" >&2
+    exit 1
+  fi
+  exit 0
+fi
 
 STAGE_DIR="$ROOT/out"
 GO_HELPERS_DIR="$ROOT/out/go_helpers"
