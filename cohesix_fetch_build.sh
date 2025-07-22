@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v1.48
+# Filename: cohesix_fetch_build.sh v1.49
 # Author: Lukas Bower
-# Date Modified: 2028-12-07
+# Date Modified: 2028-12-09
 
 # This script fetches and builds the Cohesix project, including seL4 and other dependencies.
 
@@ -103,13 +103,29 @@ if [[ -n "$PHASE" ]]; then
       --target aarch64-unknown-linux-musl
     log "✅ Phase 1 build succeeded"
   elif [[ "$PHASE" == "2" ]]; then
-    log "🔨 Phase 2: Cross-compiling cohesix_root under nightly"
-    RUSTFLAGS="-C panic=abort -L $SEL4_LIB_DIR $CROSS_RUSTFLAGS" \
-      cargo +nightly build -p cohesix_root --release \
-        --target=cohesix_root/sel4-aarch64.json \
-        -Z build-std=core,alloc,compiler_builtins \
-        -Z build-std-features=compiler-builtins-mem
-    log "✅ Phase 2 build succeeded"
+    log "🔨 Phase 2: Building sel4-sys-extern-wrapper"
+    export LDFLAGS="-L${SEL4_LIB_DIR}"
+    export RUSTFLAGS="-C panic=abort -L${SEL4_LIB_DIR} ${CROSS_RUSTFLAGS}"
+    cargo +nightly build -p sel4-sys-extern-wrapper --release \
+      --target=cohesix_root/sel4-aarch64.json \
+      -Z build-std=core,alloc,compiler_builtins \
+      -Z build-std-features=compiler-builtins-mem
+    WRAPPER_RLIB=$(find target/sel4-aarch64/release/deps -maxdepth 1 -name 'libsel4_sys_extern_wrapper*.rlib' -print -quit 2>/dev/null)
+    if [[ -n "$WRAPPER_RLIB" ]]; then
+      log "✅ Phase 2 build succeeded: $(basename "$WRAPPER_RLIB")"
+    else
+      echo "❌ wrapper artifact missing" >&2
+      exit 1
+    fi
+  elif [[ "$PHASE" == "3" ]]; then
+    log "🔨 Phase 3: Building cohesix_root under nightly"
+    export LDFLAGS="-L${SEL4_LIB_DIR}"
+    export RUSTFLAGS="-C panic=abort -L${SEL4_LIB_DIR} ${CROSS_RUSTFLAGS}"
+    cargo +nightly build -p cohesix_root --release \
+      --target=cohesix_root/sel4-aarch64.json \
+      -Z build-std=core,alloc,compiler_builtins \
+      -Z build-std-features=compiler-builtins-mem
+    log "✅ Phase 3 build succeeded"
   else
     echo "❌ Invalid phase: $PHASE" >&2
     exit 1
@@ -521,24 +537,34 @@ export LDFLAGS="-L${SEL4_LIB_DIR}"
 # Phase 2: sel4-sys-extern-wrapper under nightly
 log "🔨 Phase 2: Building sel4-sys-extern-wrapper"
 export CFLAGS="-I${ROOT}/workspace/sel4-sys-extern-wrapper/out"
-RUSTFLAGS="-C panic=abort -L${SEL4_LIB_DIR}" \
-  cargo +nightly build -p sel4-sys-extern-wrapper --release \
-    --target=cohesix_root/sel4-aarch64.json \
-    -Z build-std=core,alloc,compiler_builtins \
-    -Z build-std-features=compiler-builtins-mem
-[ -f "target/sel4-aarch64/release/libsel4_sys_extern_wrapper.rlib" ] || { echo "❌ wrapper build failed"; exit 1; }
-log "✅ sel4-sys-extern-wrapper built"
+export LDFLAGS="-L${SEL4_LIB_DIR}"
+export RUSTFLAGS="-C panic=abort -L${SEL4_LIB_DIR}"
+cargo +nightly build -p sel4-sys-extern-wrapper --release \
+  --target=cohesix_root/sel4-aarch64.json \
+  -Z build-std=core,alloc,compiler_builtins \
+  -Z build-std-features=compiler-builtins-mem
+WRAPPER_RLIB=$(find target/sel4-aarch64/release/deps -maxdepth 1 -name 'libsel4_sys_extern_wrapper*.rlib' -print -quit 2>/dev/null)
+if [[ -n "$WRAPPER_RLIB" ]]; then
+  log "✅ sel4-sys-extern-wrapper built: $(basename "$WRAPPER_RLIB")"
+else
+  echo "❌ wrapper build failed: artifact missing" >&2
+  exit 1
+fi
 
 # Phase 3: cohesix_root under nightly
 log "🔨 Phase 3: Building cohesix_root"
-RUSTFLAGS="-C panic=abort -L${SEL4_LIB_DIR} ${CROSS_RUSTFLAGS:-}" \
-  cargo +nightly build \
-    -p cohesix_root \
-    --release \
-    --target=cohesix_root/sel4-aarch64.json \
-    -Z build-std=core,alloc,compiler_builtins \
-    -Z build-std-features=compiler-builtins-mem
-[ -f "target/sel4-aarch64/release/libcohesix_root.rlib" ] || { echo "❌ cohesix_root build failed"; exit 1; }
+export LDFLAGS="-L${SEL4_LIB_DIR}"
+export RUSTFLAGS="-C panic=abort -L${SEL4_LIB_DIR} ${CROSS_RUSTFLAGS:-}"
+cargo +nightly build \
+  -p cohesix_root \
+  --release \
+  --target=cohesix_root/sel4-aarch64.json \
+  -Z build-std=core,alloc,compiler_builtins \
+  -Z build-std-features=compiler-builtins-mem
+if [[ $? -ne 0 ]]; then
+  echo "❌ cohesix_root build failed" >&2
+  exit 1
+fi
 log "✅ cohesix_root built"
 
 log "✅ All Rust components built with proper split targets"

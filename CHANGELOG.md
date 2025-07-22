@@ -3536,3 +3536,8 @@
 ## [v1.52] - 2028-12-05
 ### Fixed
 - **FixSEL4IncludeCopyInWrapperBuild-116**: build script now copies the full seL4 include tree so wrapper generation resolves <sel4/sel4.h>.
+
+## [v1.53] - 2028-12-09
+### Fixed
+- **FixWrapperArtifactDetection-117**: Phase 2 correctly locates wrapper rlib under the deps directory.
+- **PropagateSel4FlagsToCohesixRoot-118**: Phase 3 re-exports link flags so `-lsel4` resolves during build.
