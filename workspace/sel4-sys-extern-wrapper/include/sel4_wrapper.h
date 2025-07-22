@@ -10,5 +10,6 @@
 #include <sel4/sel4_arch/constants.h>
 #include <sel4/types.h>
 #include <sel4/sel4_arch/types.h>
+#include <sel4/arch/types.h>
 #include <sel4/bootinfo.h>
 #include <sel4/bootinfo_types.h>
