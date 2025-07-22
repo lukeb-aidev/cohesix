@@ -445,10 +445,12 @@ cargo clean
 log "🔨 Building host crates"
 cargo +nightly build --release --workspace \
   --exclude sel4-sys-extern-wrapper \
-  --exclude cohesix_root
+  --exclude cohesix_root \
+  --target x86_64-unknown-linux-gnu
 cargo +nightly test --release --workspace \
   --exclude sel4-sys-extern-wrapper \
-  --exclude cohesix_root
+  --exclude cohesix_root \
+  --target x86_64-unknown-linux-gnu
 log "✅ Host crates built and tested"
 
 # Phase 2: Cross-compile cohesix_root (no-std, panic-abort)
