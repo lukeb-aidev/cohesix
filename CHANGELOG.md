@@ -3571,3 +3571,7 @@
 ## [v1.60] - 2028-12-15
 ### Fixed
 - **CorrectWorkspaceExcludes-131**: Phase 1 musl builds now exclude `cohesix_root` and `sel4-sys-extern-wrapper` using the precise package names.
+
+## [v1.61] - 2028-12-16
+### Fixed
+- **EmbedLinkerScriptInTargetJSON-132**: AArch64 target spec now passes the seL4 linker script so runtime symbols resolve during link.
