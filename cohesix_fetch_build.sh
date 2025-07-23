@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v1.55
+# Filename: cohesix_fetch_build.sh v1.56
 # Author: Lukas Bower
-# Date Modified: 2028-12-17
+# Date Modified: 2028-12-18
 
 # This script fetches and builds the Cohesix project, including seL4 and other dependencies.
 
@@ -77,6 +77,10 @@ done
 
 
 SEL4_LIB_DIR="${SEL4_LIB_DIR:-$ROOT/third_party/seL4/lib}"
+# Skip interactive fetch if seL4 library already exists
+if [[ ! -f "$SEL4_LIB_DIR/libsel4.a" ]]; then
+  bash "$ROOT/third_party/seL4/fetch_sel4.sh" --non-interactive
+fi
 
 if [[ -n "$PHASE" ]]; then
   cd "$ROOT/workspace"
@@ -93,6 +97,8 @@ if [[ -n "$PHASE" ]]; then
     export CFLAGS="-I${ROOT}/workspace/sel4-sys-extern-wrapper/out"
     export LDFLAGS="-L${SEL4_LIB_DIR}"
     export RUSTFLAGS="-C panic=abort -L${SEL4_LIB_DIR} ${CROSS_RUSTFLAGS}"
+    # Ensure Rust source is available for build-std
+    rustup component add rust-src --toolchain nightly || true
     cargo +nightly build -p sel4-sys-extern-wrapper --release \
       --target=cohesix_root/sel4-aarch64.json \
       -Z build-std=core,alloc,compiler_builtins \
@@ -108,6 +114,8 @@ if [[ -n "$PHASE" ]]; then
     log "🔨 Phase 3: Building cohesix_root under nightly"
     export LDFLAGS="-L${SEL4_LIB_DIR}"
     export RUSTFLAGS="-C panic=abort -C linker=ld.lld -C link-arg=--gc-sections -C link-arg=--eh-frame-hdr -L${SEL4_LIB_DIR} ${CROSS_RUSTFLAGS:-}"
+    # Ensure Rust source is available for build-std
+    rustup component add rust-src --toolchain nightly || true
     cargo +nightly build -p cohesix_root --release \
       --target=cohesix_root/sel4-aarch64.json \
       -Z build-std=core,alloc,compiler_builtins \
@@ -531,6 +539,7 @@ log "🔨 Phase 2: Building sel4-sys-extern-wrapper"
 export CFLAGS="-I${ROOT}/workspace/sel4-sys-extern-wrapper/out"
 export LDFLAGS="-L${SEL4_LIB_DIR}"
 export RUSTFLAGS="-C panic=abort -L${SEL4_LIB_DIR}"
+rustup component add rust-src --toolchain nightly || true
 cargo +nightly build -p sel4-sys-extern-wrapper --release \
   --target=cohesix_root/sel4-aarch64.json \
   -Z build-std=core,alloc,compiler_builtins \
@@ -547,6 +556,7 @@ fi
 log "🔨 Phase 3: Building cohesix_root"
 export LDFLAGS="-L${SEL4_LIB_DIR}"
 export RUSTFLAGS="-C panic=abort -C linker=ld.lld -C link-arg=--gc-sections -C link-arg=--eh-frame-hdr -L${SEL4_LIB_DIR} ${CROSS_RUSTFLAGS:-}"
+rustup component add rust-src --toolchain nightly || true
 cargo +nightly build \
   -p cohesix_root \
   --release \
