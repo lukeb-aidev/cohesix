@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: main.rs v0.49
 // Author: Lukas Bower
-// Date Modified: 2028-11-21
+// Date Modified: 2028-12-11
 #![no_std]
 #![cfg_attr(not(test), no_main)]
 #![feature(alloc_error_handler, asm_experimental_arch, lang_items)]
@@ -600,12 +600,6 @@ pub extern "C" fn main() {
     }
     putstr("[root] launching userland...");
     exec_init();
-    sys::coh_log("Cohesix init complete");
-    putstr("✅ rootserver main loop entered");
-    main_loop();
-    unsafe {
-        sel4_sys_extern_wrapper::seL4_DebugHalt();
-    }
 }
 
 fn main_loop() -> ! {
