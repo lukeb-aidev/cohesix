@@ -1,13 +1,13 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: sys.rs v0.14
 // Author: Lukas Bower
-// Date Modified: 2028-12-12
+// Date Modified: 2028-12-13
 
 use core::ffi::c_char;
 use core::sync::atomic::{compiler_fence, Ordering};
 use crate::dt::UART_BASE;
 use crate::coherr;
-use sel4_sys_extern_wrapper::{seL4_DebugPutChar, seL4_Send, seL4_Recv, seL4_Yield, seL4_DebugHalt};
+use sel4_sys_extern_wrapper::{seL4_DebugPutChar, seL4_DebugHalt};
 
 #[link_section = ".uart"]
 #[used]
