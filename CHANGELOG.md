@@ -3583,3 +3583,7 @@
 ## [v1.63] - 2028-12-18
 ### Fixed
 - **AddRustSrcAndNonInteractiveSeL4Skip-134**: Phase builds add rust-src before build-std and skip seL4 fetching when libsel4.a is present, ensuring non-interactive CI.
+
+## [v1.64] - 2028-12-19
+### Fixed
+- **LinkSeL4RuntimeSymbols-135**: AArch64 target spec now links libsel4.a with `--whole-archive` so startup symbols like `__stack_start` resolve.

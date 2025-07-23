@@ -1,5 +1,5 @@
 {
-  "__comment": "Use seL4 linker script so runtime symbols resolve",
+  "__comment": "Use seL4 linker script and link libsel4.a with --whole-archive so runtime symbols resolve",
   "llvm-target": "aarch64-unknown-none",
   "data-layout": "e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32",
   "arch": "aarch64",
@@ -21,6 +21,9 @@
       "-Tcohesix_root/link.ld",
       "-T",
       "../third_party/seL4/lib/sel4.ld",
+      "--whole-archive",
+      "../third_party/seL4/lib/libsel4.a",
+      "--no-whole-archive",
       "-static",
       "-z",
       "max-page-size=0x1000",
