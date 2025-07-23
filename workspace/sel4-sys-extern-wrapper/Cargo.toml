@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
 # Filename: Cargo.toml v0.1
 # Author: Lukas Bower
-# Date Modified: 2028-11-21
+# Date Modified: 2028-12-12
 
 [package]
 name = "sel4-sys-extern-wrapper"

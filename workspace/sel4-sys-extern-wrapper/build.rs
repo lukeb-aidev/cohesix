@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: build.rs v0.6
+// Filename: build.rs v0.7
 // Author: Lukas Bower
-// Date Modified: 2028-12-10
+// Date Modified: 2028-12-12
 
 use std::{
     env, fs,
@@ -91,6 +91,10 @@ fn main() {
         let alias_root = sel4_paths::create_arch_alias(&include_root, &arch, &out_dir)
             .expect("create arch alias");
         copy_recursive(&alias_root, &out_dir).expect("merge arch alias");
+    }
+    let simple_types = out_dir.join("sel4").join("arch").join("simple_types.h");
+    if !simple_types.exists() {
+        panic!("missing {}", simple_types.display());
     }
 
     let mut include_dirs = Vec::new();
