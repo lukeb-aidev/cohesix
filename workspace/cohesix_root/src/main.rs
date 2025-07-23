@@ -9,14 +9,14 @@
 extern crate alloc;
 
 mod allocator;
-mod lang_items;
-mod sys;
 mod bootinfo;
-mod dt;
-mod startup;
-mod exception;
-mod mmu;
 mod drivers;
+mod dt;
+mod exception;
+mod lang_items;
+mod mmu;
+mod startup;
+mod sys;
 
 use sel4_sys_extern_wrapper::*;
 
@@ -40,7 +40,7 @@ extern "C" {
     static mut __bss_end: u8;
 }
 
-use sel4_sys_extern_wrapper::seL4_DebugPutChar;
+use sel4_sys_extern_wrapper::{seL4_DebugHalt, seL4_DebugPutChar};
 
 #[no_mangle]
 #[link_section = ".bss"]
@@ -166,22 +166,22 @@ fn log_global_ptrs() {
 fn log_mem_map() {
     coherr!(
         "mem_map bss_start={:#x} bss_end={:#x} heap_start={:#x} heap_end={:#x} stack_start={:#x} stack_end={:#x}",
-        unsafe { addr_of!(__bss_start) as usize },
-        unsafe { addr_of!(__bss_end) as usize },
-        unsafe { addr_of!(__heap_start) as usize },
-        unsafe { addr_of!(__heap_end) as usize },
-        unsafe { addr_of!(__stack_start) as usize },
-        unsafe { addr_of!(__stack_end) as usize },
+        addr_of!(__bss_start) as usize,
+        addr_of!(__bss_end) as usize,
+        addr_of!(__heap_start) as usize,
+        addr_of!(__heap_end) as usize,
+        addr_of!(__stack_start) as usize,
+        addr_of!(__stack_end) as usize,
     );
 }
 
 fn image_end() -> usize {
-    unsafe { addr_of!(__stack_end) as usize }
+    addr_of!(__stack_end) as usize
 }
 
 fn check_bss_zero() {
-    let start = unsafe { addr_of!(__bss_start) as *const u8 };
-    let end = unsafe { addr_of!(__bss_end) as *const u8 };
+    let start = addr_of!(__bss_start) as *const u8;
+    let end = addr_of!(__bss_end) as *const u8;
     let mut ptr = start;
     let mut first_nonzero: usize = 0;
     let mut count = 0usize;
@@ -206,8 +206,8 @@ fn check_bss_zero() {
 }
 
 fn check_heap_bounds() {
-    let start = unsafe { addr_of!(__heap_start) as usize };
-    let end = unsafe { addr_of!(__heap_end) as usize };
+    let start = addr_of!(__heap_start) as usize;
+    let end = addr_of!(__heap_end) as usize;
     if start >= end {
         coherr!("heap_invalid start={:#x} end={:#x}", start, end);
         panic!("heap bounds invalid");
@@ -216,10 +216,7 @@ fn check_heap_bounds() {
 
 fn check_globals_zero() {
     unsafe {
-        if !VALIDATOR_HANDLE.is_null()
-            || !SRV_HANDLE.is_null()
-            || !CUDA_HANDLE.is_null()
-        {
+        if !VALIDATOR_HANDLE.is_null() || !SRV_HANDLE.is_null() || !CUDA_HANDLE.is_null() {
             coherr!(
                 "globals_nonzero v={:#x} s={:#x} c={:#x}",
                 VALIDATOR_HANDLE as usize,
@@ -254,8 +251,8 @@ pub fn check_heap_ptr(ptr: usize) {
     log_regs();
     putstr("check_heap_ptr");
     put_hex(ptr);
-    let start = unsafe { addr_of!(__heap_start) as usize };
-    let end = unsafe { addr_of!(__heap_end) as usize };
+    let start = addr_of!(__heap_start) as usize;
+    let end = addr_of!(__heap_end) as usize;
     let img_end = image_end();
     if ptr < start || ptr >= end || ptr >= img_end || ptr < 0x400000 {
         putstr("HEAP POINTER OUT OF RANGE");
@@ -266,7 +263,7 @@ pub fn check_heap_ptr(ptr: usize) {
 
 pub fn check_rodata_ptr(ptr: usize) {
     let text_start: usize = 0x400000;
-    let ro_end = unsafe { addr_of!(__bss_start) as usize };
+    let ro_end = addr_of!(__bss_start) as usize;
     if ptr < text_start || ptr >= ro_end {
         putstr("RODATA POINTER OUT OF RANGE");
         put_hex(ptr);
@@ -337,7 +334,9 @@ fn load_bootargs() {
             }
             let token = match core::str::from_utf8(&bytes[start..i]) {
                 Ok(t) => t,
-                Err(_) => { continue; }
+                Err(_) => {
+                    continue;
+                }
             };
             if let Some(eq) = token.find('=') {
                 let (k, v) = token.split_at(eq);
@@ -422,7 +421,11 @@ fn apply_namespace() {
                         sb.push(0);
                         let mut db = Vec::from(dst.as_bytes());
                         db.push(0);
-                        sys::coh_bind(sb.as_ptr() as *const c_char, db.as_ptr() as *const c_char, MAFTER);
+                        sys::coh_bind(
+                            sb.as_ptr() as *const c_char,
+                            db.as_ptr() as *const c_char,
+                            MAFTER,
+                        );
                     },
                     ["bind", src, dst] => unsafe {
                         coherr!("bind {} {}", src, dst);
@@ -430,7 +433,11 @@ fn apply_namespace() {
                         sb.push(0);
                         let mut db = Vec::from(dst.as_bytes());
                         db.push(0);
-                        sys::coh_bind(sb.as_ptr() as *const c_char, db.as_ptr() as *const c_char, 0);
+                        sys::coh_bind(
+                            sb.as_ptr() as *const c_char,
+                            db.as_ptr() as *const c_char,
+                            0,
+                        );
                     },
                     _ => coherr!("ignore_line {}", line),
                 }
@@ -484,8 +491,8 @@ pub extern "C" fn main() {
     log_mem_map();
     coherr!(
         "heap_state start={:#x} end={:#x} offset_ptr={:#x}",
-        unsafe { addr_of!(__heap_start) as usize },
-        unsafe { addr_of!(__heap_end) as usize },
+        addr_of!(__heap_start) as usize,
+        addr_of!(__heap_end) as usize,
         crate::allocator::offset_addr(),
     );
     check_heap_bounds();
@@ -506,21 +513,14 @@ pub extern "C" fn main() {
             Some(dtb) => (dtb.as_ptr() as usize, dtb.as_ptr() as usize + dtb.len()),
             None => (dt::UART_BASE, dt::UART_BASE + 0x1000),
         };
-        mmu::init(
-            0x400000,
-            image_end(),
-            dtb_start,
-            dtb_end,
-            bi_start,
-            bi_end,
-        );
+        mmu::init(0x400000, image_end(), dtb_start, dtb_end, bi_start, bi_end);
     }
     coherr!("main_start bss_start={:#x} bss_end={:#x} heap_start={:#x} heap_ptr={:#x} heap_end={:#x} img_end={:#x}",
-        unsafe { addr_of!(__bss_start) as usize },
-        unsafe { addr_of!(__bss_end) as usize },
-        unsafe { addr_of!(__heap_start) as usize },
+        addr_of!(__bss_start) as usize,
+        addr_of!(__bss_end) as usize,
+        addr_of!(__heap_start) as usize,
         crate::allocator::current_heap_ptr(),
-        unsafe { addr_of!(__heap_end) as usize },
+        addr_of!(__heap_end) as usize,
         image_end());
     putstr("COHESIX_BOOT_OK");
     let mut sp: usize;
@@ -538,8 +538,8 @@ pub extern "C" fn main() {
     let ph = ptr_hash();
     putstr("ptr_hash");
     put_hex(ph);
-    let bss_start = unsafe { addr_of!(__bss_start) as usize };
-    let bss_end = unsafe { addr_of!(__bss_end) as usize };
+    let bss_start = addr_of!(__bss_start) as usize;
+    let bss_end = addr_of!(__bss_end) as usize;
     assert!(bss_start < bss_end, "bss range invalid");
     putstr("bss_start");
     put_hex(bss_start);
@@ -554,13 +554,13 @@ pub extern "C" fn main() {
     let local = 0u8;
     putstr("local");
     put_hex(&local as *const _ as usize);
-    let heap_start = unsafe { addr_of!(__heap_start) as usize };
-    let heap_end = unsafe { addr_of!(__heap_end) as usize };
+    let heap_start = addr_of!(__heap_start) as usize;
+    let heap_end = addr_of!(__heap_end) as usize;
     log_heap_bounds(heap_start, heap_end);
     let heap_ptr = crate::allocator::current_heap_ptr();
     assert!(heap_ptr < image_end(), "heap ptr beyond image end");
-    let stack_start = unsafe { addr_of!(__stack_start) as usize };
-    let stack_end = unsafe { addr_of!(__stack_end) as usize };
+    let stack_start = addr_of!(__stack_start) as usize;
+    let stack_end = addr_of!(__stack_end) as usize;
     log_stack_bounds(stack_start, stack_end);
     if sp < stack_start || sp > stack_end {
         putstr("STACK CORRUPTION");
@@ -603,12 +603,15 @@ pub extern "C" fn main() {
     sys::coh_log("Cohesix init complete");
     putstr("✅ rootserver main loop entered");
     main_loop();
-    unsafe { sel4_sys_extern_wrapper::seL4_DebugHalt(); }
+    unsafe {
+        sel4_sys_extern_wrapper::seL4_DebugHalt();
+    }
 }
 
 fn main_loop() -> ! {
     loop {
-        unsafe { sel4_sys_extern_wrapper::seL4_Yield(); }
+        unsafe {
+            sel4_sys_extern_wrapper::seL4_Yield();
+        }
     }
 }
-
