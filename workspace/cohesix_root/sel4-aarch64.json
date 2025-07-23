@@ -5,7 +5,7 @@
   "os": "none",
   "vendor": "unknown",
   "linker-flavor": "ld.lld",
-  "linker": "aarch64-linux-gnu-gcc",
+  "linker": "ld.lld",
   "target-endian": "little",
   "target-pointer-width": "64",
   "executables": true,
@@ -24,7 +24,9 @@
       "-z",
       "norelro",
       "-no-pie",
-      "-nostartfiles"
+      "-nostartfiles",
+      "--gc-sections",
+      "--eh-frame-hdr"
     ]
   }
 }
