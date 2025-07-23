@@ -3553,3 +3553,7 @@
 ## [v1.56] - 2028-12-11
 ### Fixed
 - **UpdatePhase3LinkFlagsAndArtifactCheck-121**: Phase 3 exports link flags for libsel4 and validates the cohesix_root artifact.
+
+## [v1.57] - 2028-12-12
+### Fixed
+- **EnsureFullIncludeTreeInWrapperBuild-124**: wrapper build now ensures the sel4/arch directory is copied into OUT_DIR so bindgen finds simple_types.h.
