@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v1.18
+// Filename: CHANGELOG.md v1.19
 // Author: Lukas Bower
-// Date Modified: 2028-12-12
+// Date Modified: 2028-12-13
 
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
@@ -3559,3 +3559,7 @@
 ## [v1.57] - 2028-12-12
 ### Fixed
 - **EnsureFullIncludeTreeInWrapperBuild-124**: wrapper build now ensures the sel4/arch directory is copied into OUT_DIR so bindgen finds simple_types.h.
+
+## [v1.58] - 2028-12-13
+### Fixed
+- **FixPhase3LinkFlagsInFullBuild-129**: Full build path now exports linker and Rust flags for cohesix_root so libsel4 links correctly.
