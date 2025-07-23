@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: main.rs v0.49
 // Author: Lukas Bower
-// Date Modified: 2028-12-11
+// Date Modified: 2028-12-12
 #![no_std]
 #![cfg_attr(not(test), no_main)]
 #![feature(alloc_error_handler, asm_experimental_arch, lang_items)]
@@ -64,7 +64,7 @@ static mut ALLOC_CHECK: u64 = 0;
 static ROOTSERVER_ONLINE: &[u8] = b"ROOTSERVER ONLINE";
 
 fn putchar(c: u8) {
-    unsafe { seL4_DebugPutChar(c) };
+    unsafe { seL4_DebugPutChar(c as i32) };
 }
 
 fn uart_flush() {

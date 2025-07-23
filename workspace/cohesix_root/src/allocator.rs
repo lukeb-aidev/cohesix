@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: allocator.rs v0.8
 // Author: Lukas Bower
-// Date Modified: 2028-01-21
+// Date Modified: 2028-12-12
 
 use core::alloc::{GlobalAlloc, Layout};
 use crate::check_heap_ptr;
@@ -13,7 +13,7 @@ extern "C" {
 }
 
 fn putchar(c: u8) {
-    unsafe { crate::seL4_DebugPutChar(c) };
+    unsafe { crate::seL4_DebugPutChar(c as i32) };
 }
 
 fn putstr(s: &str) {
