@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v1.54
+# Filename: cohesix_fetch_build.sh v1.55
 # Author: Lukas Bower
-# Date Modified: 2028-12-15
+# Date Modified: 2028-12-17
 
 # This script fetches and builds the Cohesix project, including seL4 and other dependencies.
 
@@ -75,26 +75,12 @@ for arg in "$@"; do
   esac
 done
 
-setup_stub_headers() {
-  local stub_dir="$ROOT/workspace/sel4-sys-extern-wrapper/include"
-  if [ -d "$stub_dir" ]; then
-    export SEL4_INCLUDE="${SEL4_INCLUDE:-$stub_dir}"
-    mkdir -p "$stub_dir/sel4/arch"
-    for hdr in autoconf.h libsel4_autoconf.h invocation.h \
-               sel4/macros.h sel4/syscalls.h sel4/syscalls_master.h \
-               sel4/simple_types.h sel4/shared_types.h sel4/bootinfo_types.h \
-               sel4/errors.h sel4/faults.h sel4/objecttype.h sel4/config.h \
-               sel4/arch/vspace.h; do
-      [ -f "$stub_dir/$hdr" ] || echo '#pragma once' > "$stub_dir/$hdr"
-    done
-  fi
-}
 
 SEL4_LIB_DIR="${SEL4_LIB_DIR:-$ROOT/third_party/seL4/lib}"
 
 if [[ -n "$PHASE" ]]; then
   cd "$ROOT/workspace"
-  setup_stub_headers
+  CROSS_RUSTFLAGS="-C link-arg=-L${SEL4_LIB_DIR} ${RUSTFLAGS:-}"
   if [[ "$PHASE" == "1" ]]; then
     log "🔨 Phase 1: Building host crates for musl userland"
     cargo build --release --workspace \
@@ -104,6 +90,7 @@ if [[ -n "$PHASE" ]]; then
     log "✅ Phase 1 build succeeded"
   elif [[ "$PHASE" == "2" ]]; then
     log "🔨 Phase 2: Building sel4-sys-extern-wrapper"
+    export CFLAGS="-I${ROOT}/workspace/sel4-sys-extern-wrapper/out"
     export LDFLAGS="-L${SEL4_LIB_DIR}"
     export RUSTFLAGS="-C panic=abort -L${SEL4_LIB_DIR} ${CROSS_RUSTFLAGS}"
     cargo +nightly build -p sel4-sys-extern-wrapper --release \
@@ -138,8 +125,6 @@ if [[ -n "$PHASE" ]]; then
   fi
   exit 0
 fi
-
-setup_stub_headers
 STAGE_DIR="$ROOT/out"
 GO_HELPERS_DIR="$ROOT/out/go_helpers"
 cd "$STAGE_DIR"
