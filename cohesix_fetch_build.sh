@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v1.52
+# Filename: cohesix_fetch_build.sh v1.53
 # Author: Lukas Bower
-# Date Modified: 2028-12-13
+# Date Modified: 2028-12-14
 
 # This script fetches and builds the Cohesix project, including seL4 and other dependencies.
 
@@ -120,7 +120,7 @@ if [[ -n "$PHASE" ]]; then
   elif [[ "$PHASE" == "3" ]]; then
     log "🔨 Phase 3: Building cohesix_root under nightly"
     export LDFLAGS="-L${SEL4_LIB_DIR}"
-    export RUSTFLAGS="-C panic=abort -L${SEL4_LIB_DIR} ${CROSS_RUSTFLAGS:-}"
+    export RUSTFLAGS="-C panic=abort -C linker=ld.lld -C link-arg=--gc-sections -C link-arg=--eh-frame-hdr -L${SEL4_LIB_DIR} ${CROSS_RUSTFLAGS:-}"
     cargo +nightly build -p cohesix_root --release \
       --target=cohesix_root/sel4-aarch64.json \
       -Z build-std=core,alloc,compiler_builtins \
@@ -561,7 +561,7 @@ fi
 # Phase 3: cohesix_root under nightly
 log "🔨 Phase 3: Building cohesix_root"
 export LDFLAGS="-L${SEL4_LIB_DIR}"
-export RUSTFLAGS="-C panic=abort -L${SEL4_LIB_DIR} ${CROSS_RUSTFLAGS:-}"
+export RUSTFLAGS="-C panic=abort -C linker=ld.lld -C link-arg=--gc-sections -C link-arg=--eh-frame-hdr -L${SEL4_LIB_DIR} ${CROSS_RUSTFLAGS:-}"
 cargo +nightly build \
   -p cohesix_root \
   --release \
@@ -788,9 +788,9 @@ echo "🪵 Full log saved to $LOG_FILE" >&3
 # Final verification builds
 export SEL4_INCLUDE
 export SEL4_LIB_DIR
-RUSTFLAGS="-C panic=abort -L $SEL4_LIB_DIR $CROSS_RUSTFLAGS" \
+RUSTFLAGS="-C panic=abort -C linker=ld.lld -C link-arg=--gc-sections -C link-arg=--eh-frame-hdr -L $SEL4_LIB_DIR $CROSS_RUSTFLAGS" \
   cargo build -p sel4-sys-extern-wrapper --release --target=cohesix_root/sel4-aarch64.json
-RUSTFLAGS="-C panic=abort -L $SEL4_LIB_DIR $CROSS_RUSTFLAGS" \
+RUSTFLAGS="-C panic=abort -C linker=ld.lld -C link-arg=--gc-sections -C link-arg=--eh-frame-hdr -L $SEL4_LIB_DIR $CROSS_RUSTFLAGS" \
   cargo build -p cohesix_root --release --target=cohesix_root/sel4-aarch64.json
-RUSTFLAGS="-C panic=abort -L $SEL4_LIB_DIR $CROSS_RUSTFLAGS" \
+RUSTFLAGS="-C panic=abort -C linker=ld.lld -C link-arg=--gc-sections -C link-arg=--eh-frame-hdr -L $SEL4_LIB_DIR $CROSS_RUSTFLAGS" \
   cargo test --release --target=cohesix_root/sel4-aarch64.json --workspace

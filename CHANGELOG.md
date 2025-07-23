@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v1.19
+// Filename: CHANGELOG.md v1.20
 // Author: Lukas Bower
-// Date Modified: 2028-12-13
+// Date Modified: 2028-12-14
 
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
@@ -3563,3 +3563,7 @@
 ## [v1.58] - 2028-12-13
 ### Fixed
 - **FixPhase3LinkFlagsInFullBuild-129**: Full build path now exports linker and Rust flags for cohesix_root so libsel4 links correctly.
+
+## [v1.59] - 2028-12-14
+### Changed
+- **ConfigureAArch64LinkerAndLinkArgs-130**: Phase 3 builds now force `ld.lld` as the linker with `--gc-sections` and `--eh-frame-hdr` to ensure all Cargo link args are honored.

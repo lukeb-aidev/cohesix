@@ -124,7 +124,7 @@
 | linker.ld | v0.1 | 2025-07-22 | COMMUNITY | | |
 | link.ld | v0.23 | 2028-01-21 | COMMUNITY | | |
 | target-sel4.json | v0.2 | 2027-12-11 | COMMUNITY | | |
-| workspace/cohesix_root/sel4-aarch64.json | v0.10 | 2028-09-10 | COMMUNITY | | |
+| workspace/cohesix_root/sel4-aarch64.json | v0.11 | 2028-12-14 | COMMUNITY | | |
 | .bashrc | v0.1 | 2026-08-09 | COMMUNITY | | |
 | .cargo/config.toml | v0.22 | 2028-11-05 | COMMUNITY | | |
 | build.rs | v0.8 | 2026-08-21 | COMMUNITY | | |
@@ -157,7 +157,7 @@
 | docs/community/architecture/BOOT_KERNEL_FLOW.md | v0.3 | 2026-10-16 | COMMUNITY | | |
 | docs/community/archive/EXAMPLES_README.md | v0.3 | 2026-02-05 | COMMUNITY | | |
 | .cohesix_env | v0.3 | 2026-07-25 | COMMUNITY | | |
-| cohesix_fetch_build.sh | v1.52 | 2028-12-13 | COMMUNITY | | |
+| cohesix_fetch_build.sh | v1.53 | 2028-12-14 | COMMUNITY | | |
 | cohesix_fetch_build.bak | v0.92 | 2027-11-07 | COMMUNITY | | |
 | CONTRIBUTING.md | v1.1 | 2025-07-23 | COMMUNITY | | |
 | config/secure9p.toml | v0.7 | 2026-12-31 | COMMUNITY | | |
