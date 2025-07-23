@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v1.50
+# Filename: cohesix_fetch_build.sh v1.51
 # Author: Lukas Bower
-# Date Modified: 2028-12-11
+# Date Modified: 2028-12-12
 
 # This script fetches and builds the Cohesix project, including seL4 and other dependencies.
 
@@ -139,6 +139,7 @@ if [[ -n "$PHASE" ]]; then
   exit 0
 fi
 
+setup_stub_headers
 STAGE_DIR="$ROOT/out"
 GO_HELPERS_DIR="$ROOT/out/go_helpers"
 cd "$STAGE_DIR"
@@ -531,7 +532,7 @@ cargo test --release --workspace \
   --exclude cohesix_root \
   --exclude sel4-sys-extern-wrapper \
   --target=aarch64-unknown-linux-musl
-log "✅ Phase 1 build & tests succeeded"
+log "✅ Phase 1 build succeeded"
 
 # Common stub-header setup
 SEL4_LIB_DIR="${ROOT}/third_party/seL4/lib"
@@ -560,7 +561,7 @@ fi
 # Phase 3: cohesix_root under nightly
 log "🔨 Phase 3: Building cohesix_root"
 export LDFLAGS="-L${SEL4_LIB_DIR}"
-export RUSTFLAGS="-C panic=abort -L${SEL4_LIB_DIR} ${CROSS_RUSTFLAGS:-}"
+export RUSTFLAGS="-C panic=abort -L${SEL4_LIB_DIR}"
 cargo +nightly build \
   -p cohesix_root \
   --release \
