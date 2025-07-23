@@ -3,7 +3,10 @@
 // Author: Lukas Bower
 // Date Modified: 2028-12-10
 
-use std::{env, fs, path::{Path, PathBuf}};
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+};
 
 fn copy_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
     if !dst.exists() {
@@ -67,6 +70,8 @@ fn generate_wrapper_header(out_dir: &Path) -> PathBuf {
     content.push_str("#define ARMIRQIssueIRQHandlerTrigger 0\n");
     content.push_str("#define ARMIRQIssueSGISignal 0\n");
     content.push_str("seL4_MessageInfo_t seL4_CallWithMRs(seL4_CPtr dest, seL4_MessageInfo_t info, seL4_Word* mr0, seL4_Word* mr1, seL4_Word* mr2, seL4_Word* mr3);\n\n");
+    content.push_str("void seL4_DebugPutChar(int c);\n");
+    content.push_str("void seL4_DebugHalt(void);\n");
     content.push_str("#include <sel4/sel4.h>\n");
     fs::write(&header_path, content).expect("write sel4_wrapper.h");
     header_path
@@ -96,9 +101,6 @@ fn main() {
     let plat_api = out_dir.join("sel4").join("plat").join("api");
     fs::create_dir_all(&plat_api).expect("create plat/api dir");
     fs::write(plat_api.join("constants.h"), "#pragma once\n").expect("stub constants.h");
-
-
-
 
     let wrapper_header = generate_wrapper_header(&out_dir);
 
