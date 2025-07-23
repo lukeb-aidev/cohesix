@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v1.18
 // Author: Lukas Bower
-// Date Modified: 2028-12-11
+// Date Modified: 2028-12-12
 
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
@@ -28,6 +28,8 @@
 - cohesix_fetch_build.sh clones via SSH without credentials
 - src/lib/init.rs placeholder module to satisfy module resolution
 - sensors.rs respects COHESIX_TELEMETRY_PATH for tests
+- cohesix_fetch_build.sh v1.51 triggers stub headers, uses CFLAGS, and logs phase success
+- qemu_smoke_x86.sh added for CI QEMU smoke step
 
 ## [vNext] - 2025-07-19
 ### Changed

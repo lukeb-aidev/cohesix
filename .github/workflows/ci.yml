@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: ci.yml v1.32
+# Filename: ci.yml v1.33
 # Author: Lukas Bower
-# Date Modified: 2028-11-26
+# Date Modified: 2028-12-12
 
 name: Cohesix CI
 
@@ -150,6 +150,14 @@ jobs:
           cargo +nightly test --workspace --no-run \
             --target=cohesix_root/sel4-aarch64.json \
             -Z build-std=std,panic_abort | tee rust_test_compile.log
+
+      - name: Full Cohesix Build
+        working-directory: ..
+        run: bash cohesix_fetch_build.sh
+
+      - name: QEMU x86 smoke test
+        working-directory: ..
+        run: bash scripts/qemu_smoke_x86.sh
 
       - name: Install QEMU for aarch64
         run: |
