@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: CHANGELOG.md v1.20
 // Author: Lukas Bower
-// Date Modified: 2028-12-14
+// Date Modified: 2028-12-17
 
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
@@ -3575,3 +3575,7 @@
 ## [v1.61] - 2028-12-16
 ### Fixed
 - **EmbedLinkerScriptInTargetJSON-132**: AArch64 target spec now passes the seL4 linker script so runtime symbols resolve during link.
+
+## [v1.62] - 2028-12-17
+### Changed
+- **RemoveStubHeadersAndConsolidateHeaderProvision-133**: Stub header generation deleted; build.rs now copies the full seL4 include tree for deterministic builds.
