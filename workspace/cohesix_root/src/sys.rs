@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: sys.rs v0.13
+// Filename: sys.rs v0.14
 // Author: Lukas Bower
-// Date Modified: 2025-07-19
+// Date Modified: 2028-12-12
 
 use core::ffi::c_char;
 use core::sync::atomic::{compiler_fence, Ordering};
@@ -146,9 +146,9 @@ pub unsafe extern "C" fn coh_bind(_name: *const c_char, _old: *const c_char, _fl
 
 pub fn coh_log(msg: &str) {
     for &b in msg.as_bytes() {
-        unsafe { seL4_DebugPutChar(b) };
+        unsafe { seL4_DebugPutChar(b as i32) };
     }
-    unsafe { seL4_DebugPutChar(b'\n') };
+    unsafe { seL4_DebugPutChar(b'\n' as i32) };
     compiler_fence(Ordering::SeqCst);
 }
 
