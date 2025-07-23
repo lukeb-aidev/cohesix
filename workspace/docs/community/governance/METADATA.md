@@ -157,7 +157,7 @@
 | docs/community/architecture/BOOT_KERNEL_FLOW.md | v0.3 | 2026-10-16 | COMMUNITY | | |
 | docs/community/archive/EXAMPLES_README.md | v0.3 | 2026-02-05 | COMMUNITY | | |
 | .cohesix_env | v0.3 | 2026-07-25 | COMMUNITY | | |
-| cohesix_fetch_build.sh | v1.50 | 2028-12-11 | COMMUNITY | | |
+| cohesix_fetch_build.sh | v1.51 | 2028-12-12 | COMMUNITY | | |
 | cohesix_fetch_build.bak | v0.92 | 2027-11-07 | COMMUNITY | | |
 | CONTRIBUTING.md | v1.1 | 2025-07-23 | COMMUNITY | | |
 | config/secure9p.toml | v0.7 | 2026-12-31 | COMMUNITY | | |
@@ -191,6 +191,7 @@
 | scripts/verify-macos-setup.sh | v0.1 | 2025-06-05 | COMMUNITY | | |
 | scripts/debug_qemu_boot.sh | v0.4 | 2026-11-24 | COMMUNITY | | |
 | scripts/boot_qemu.sh | v0.4 | 2027-11-05 | COMMUNITY | | |
+| scripts/qemu_smoke_x86.sh | v0.1 | 2028-12-12 | COMMUNITY | | |
 | scripts/validate_iso_build.sh | v0.3 | 2026-12-31 | COMMUNITY | | |
 | scripts/build_root_elf.sh | v0.20 | 2027-12-31 | COMMUNITY | | |
 | scripts/load_arch_config.sh | v0.1 | 2026-07-25 | COMMUNITY | | |
