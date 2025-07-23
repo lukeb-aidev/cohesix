@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v1.53
+# Filename: cohesix_fetch_build.sh v1.54
 # Author: Lukas Bower
-# Date Modified: 2028-12-14
+# Date Modified: 2028-12-15
 
 # This script fetches and builds the Cohesix project, including seL4 and other dependencies.
 
@@ -98,8 +98,8 @@ if [[ -n "$PHASE" ]]; then
   if [[ "$PHASE" == "1" ]]; then
     log "🔨 Phase 1: Building host crates for musl userland"
     cargo build --release --workspace \
-      --exclude cohesix_root \
-      --exclude sel4-sys-extern-wrapper \
+      --exclude 'cohesix_root' \
+      --exclude 'sel4-sys-extern-wrapper' \
       --target aarch64-unknown-linux-musl
     log "✅ Phase 1 build succeeded"
   elif [[ "$PHASE" == "2" ]]; then
@@ -525,12 +525,12 @@ cargo clean
 log "🔨 Phase 1: Building & testing host crates (musl userland)"
 rustup target add aarch64-unknown-linux-musl || true
 cargo build --release --workspace \
-  --exclude cohesix_root \
-  --exclude sel4-sys-extern-wrapper \
+  --exclude 'cohesix_root' \
+  --exclude 'sel4-sys-extern-wrapper' \
   --target=aarch64-unknown-linux-musl
 cargo test --release --workspace \
-  --exclude cohesix_root \
-  --exclude sel4-sys-extern-wrapper \
+  --exclude 'cohesix_root' \
+  --exclude 'sel4-sys-extern-wrapper' \
   --target=aarch64-unknown-linux-musl
 log "✅ Phase 1 build succeeded"
 

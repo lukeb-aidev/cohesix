@@ -3567,3 +3567,7 @@
 ## [v1.59] - 2028-12-14
 ### Changed
 - **ConfigureAArch64LinkerAndLinkArgs-130**: Phase 3 builds now force `ld.lld` as the linker with `--gc-sections` and `--eh-frame-hdr` to ensure all Cargo link args are honored.
+
+## [v1.60] - 2028-12-15
+### Fixed
+- **CorrectWorkspaceExcludes-131**: Phase 1 musl builds now exclude `cohesix_root` and `sel4-sys-extern-wrapper` using the precise package names.
