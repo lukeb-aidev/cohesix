@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v1.51
+# Filename: cohesix_fetch_build.sh v1.52
 # Author: Lukas Bower
-# Date Modified: 2028-12-12
+# Date Modified: 2028-12-13
 
 # This script fetches and builds the Cohesix project, including seL4 and other dependencies.
 
@@ -561,7 +561,7 @@ fi
 # Phase 3: cohesix_root under nightly
 log "🔨 Phase 3: Building cohesix_root"
 export LDFLAGS="-L${SEL4_LIB_DIR}"
-export RUSTFLAGS="-C panic=abort -L${SEL4_LIB_DIR}"
+export RUSTFLAGS="-C panic=abort -L${SEL4_LIB_DIR} ${CROSS_RUSTFLAGS:-}"
 cargo +nightly build \
   -p cohesix_root \
   --release \
