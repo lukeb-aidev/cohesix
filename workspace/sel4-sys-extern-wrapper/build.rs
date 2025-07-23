@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: build.rs v0.7
 // Author: Lukas Bower
-// Date Modified: 2028-12-12
+// Date Modified: 2028-12-13
 
 use std::{
     env, fs,
@@ -86,7 +86,9 @@ fn main() {
         .join("third_party")
         .join("seL4")
         .join("include");
-    copy_recursive(&include_root, &out_dir).expect("copy seL4 headers");
+    // Perform a single recursive copy of the entire seL4 include tree so that
+    // all nested headers are available during bindgen and build steps.
+    copy_recursive(&include_root, &out_dir).expect("copy seL4 include tree");
     if let Ok(arch) = env::var("SEL4_ARCH") {
         let alias_root = sel4_paths::create_arch_alias(&include_root, &arch, &out_dir)
             .expect("create arch alias");
@@ -112,7 +114,8 @@ fn main() {
         .header(wrapper_header.to_str().unwrap())
         .use_core()
         .clang_arg(format!("-I{}", out_dir.display()))
-        .ctypes_prefix("cty");
+        .ctypes_prefix("cty")
+        .generate_inline_functions(true);
     for dir in &include_dirs {
         builder = builder.clang_arg(format!("-I{}", dir.display()));
     }

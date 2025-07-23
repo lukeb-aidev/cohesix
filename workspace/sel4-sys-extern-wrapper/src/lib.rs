@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: lib.rs v0.1
 // Author: Lukas Bower
-// Date Modified: 2028-12-12
+// Date Modified: 2028-12-13
 
 #![no_std]
 #![cfg_attr(not(test), no_main)]
@@ -12,7 +12,21 @@ pub mod bindings {
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 }
 
+pub use bindings::{
+    seL4_DebugPutChar,
+    seL4_DebugHalt,
+    seL4_CallWithMRs,
+    seL4_InitBootInfo,
+    seL4_GetBootInfo,
+};
 pub use bindings::*;
+
+#[cfg(target_arch = "aarch64")]
+#[no_mangle]
+pub unsafe extern "C" fn seL4_Yield() {
+    const SYSCALL: usize = (-7i32) as usize;
+    core::arch::asm!("mov x7, {syscall}", "svc 0", syscall = in(reg) SYSCALL, options(nostack, preserves_flags));
+}
 
 use core::panic::PanicInfo;
 
