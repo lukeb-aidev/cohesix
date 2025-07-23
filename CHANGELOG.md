@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v1.20
+// Filename: CHANGELOG.md v1.21
 // Author: Lukas Bower
-// Date Modified: 2028-12-17
+// Date Modified: 2028-12-18
 
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
@@ -3579,3 +3579,7 @@
 ## [v1.62] - 2028-12-17
 ### Changed
 - **RemoveStubHeadersAndConsolidateHeaderProvision-133**: Stub header generation deleted; build.rs now copies the full seL4 include tree for deterministic builds.
+
+## [v1.63] - 2028-12-18
+### Fixed
+- **AddRustSrcAndNonInteractiveSeL4Skip-134**: Phase builds add rust-src before build-std and skip seL4 fetching when libsel4.a is present, ensuring non-interactive CI.
