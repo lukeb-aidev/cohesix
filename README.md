@@ -129,9 +129,14 @@ GOWORK=$(pwd)/go/go.work go test ./go/...
 ./tools/setup_test_targets.sh    # install cross targets if missing
 ```
 
-Run `cohtrace diff` to compare validator snapshots between runs:
+Run `cohtrace diff` to compare the two most recent validator snapshots:
 ```bash
-./target/debug/cohtrace diff --from last --to previous
+./target/debug/cohtrace diff
+```
+
+Inspect orchestration state and worker health with `cohtrace cloud`:
+```bash
+./target/debug/cohtrace cloud
 ```
 
 ## Environment Flags
