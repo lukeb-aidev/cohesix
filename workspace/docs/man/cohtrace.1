@@ -1,33 +1,53 @@
 .\" CLASSIFICATION: COMMUNITY
-.\" Filename: cohtrace.1 v0.2
+.\" Filename: cohtrace.1 v0.3
 .\" Author: Lukas Bower
-.\" Date Modified: 2025-07-15
-.TH COHTRACE 1 "2025-07-15" "Cohesix v1.0" "Cohesix Project"
+.\" Date Modified: 2028-12-01
+.TH COHTRACE 1 "2028-12-01" "Cohesix v1.0" "Cohesix Project"
 .SH NAME
 cohtrace \- trace inspection utilities
 .SH SYNOPSIS
 .B cohtrace
-.RI [command] " [options]"
+.I command
+.RI [ options ]
 .SH DESCRIPTION
-Inspect and manipulate worker traces for debugging and federation.
-.SH OPTIONS
+Inspect and manipulate validator traces, snapshots, and orchestration state. The
+utility provides subcommands for listing workers, comparing snapshots, pushing
+trace files, and reading queen/worker status from the active registry.
+.SH COMMANDS
 .TP
-.B --force
-Overwrite existing trace data. \fBUse with care.\fR
-.SH EXIT STATUS
+.B list
+List connected workers discovered under \fI/srv/workers\fR.
 .TP
-.B 0
-Success.
+.BI "push-trace " worker_id " " path
+Copy a trace file at \fIpath\fR into \fI/trace/worker_id/sim.json\fR.
 .TP
-.B 1
-Invalid trace file.
+.B diff
+Compare the two most recent snapshot JSON files under \fI/history/snapshots\fR
+and print a human-readable diff.
 .TP
-.B 2
-Connection failure.
+.B cloud
+Display queen identity, validator state, and active workers using
+\fI/srv/cloud/state.json\fR and \fI/srv/agents/active.json\fR.
 .SH FILES
-
+.TP
+.B /history/snapshots
+Stores the most recent validator snapshots.
+.TP
+.B /srv/agents/active.json
+Active worker registry written by the queen orchestrator.
+.TP
+.B /srv/cloud/state.json
+Last reported queen heartbeat and worker summary.
 .SH EXAMPLES
-.P
-cohtrace pull worker01 > log.json
+.TP
+.B cohtrace list
+List all discovered workers.
+.TP
+.B cohtrace diff
+Show the differences between the two most recent snapshots.
+.TP
+.B cohtrace cloud
+Summarize queen status, worker roles, and heartbeat health.
 .SH SEE ALSO
-
+.BR cohrun (1),
+.BR cohcli (1)

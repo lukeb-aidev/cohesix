@@ -37,4 +37,4 @@ Trace files corresponding to snapshot runs are saved under `/log/trace/sim_<time
 
 Logs for each run are stored under `/srv/trace/sim.log` and should be identical across architectures when using the same seed.
 
-Snapshot and trace consistency is validated automatically by the CI harness using `cohtrace diff`.
+Snapshot and trace consistency is validated automatically by the CI harness using `cohtrace diff` on the most recent snapshots.
