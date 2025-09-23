@@ -3,7 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2028-11-21
 
-use std::{env, fs, path::Path};
+use std::{env, fs, path::Path, process::Command};
 #[path = "../sel4_paths.rs"]
 mod sel4_paths;
 use sel4_paths::{project_root, sel4_generated};
@@ -57,9 +57,36 @@ fn embed_vectors(out_dir: &str, manifest_dir: &str) {
     }
 }
 
+fn rust_sysroot() -> String {
+    let rustc = env::var("RUSTC").unwrap_or_else(|_| "rustc".to_owned());
+    let output = Command::new(&rustc)
+        .arg("--print")
+        .arg("sysroot")
+        .output()
+        .expect("invoke rustc to determine sysroot");
+    if !output.status.success() {
+        panic!(
+            "failed to compute rustc sysroot using `{rustc}`: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let sysroot = String::from_utf8(output.stdout)
+        .expect("rustc sysroot output should be valid UTF-8")
+        .trim()
+        .to_owned();
+    if sysroot.is_empty() {
+        panic!("rustc reported an empty sysroot path");
+    }
+    sysroot
+}
+
 fn main() {
     println!("cargo:rustc-link-lib=static=sel4");
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
+    let sysroot = rust_sysroot();
+    println!("cargo:rustc-link-arg=--sysroot={}", sysroot);
+    println!("cargo:rustc-env=COHESIX_RUST_SYSROOT={}", sysroot);
+    println!("cargo:rerun-if-env-changed=RUSTC");
     let lib_dir = std::env::var("SEL4_LIB_DIR").unwrap_or_else(|_| {
         project_root(&manifest_dir)
             .join("third_party/seL4/lib")
