@@ -39,6 +39,8 @@ cohrun physics_demo
 Trace inspection and federation utilities.
 ```bash
 cohtrace list
+cohtrace diff
+cohtrace cloud
 cohtrace push_trace worker01 examples/trace.json
 ```
 

@@ -36,7 +36,12 @@ All commands emit validator-compatible trace logs to `./log/trace/` and snapshot
 
    You can diff traces between runs using:
    ```bash
-   ./target/debug/cohtrace diff --from last --to previous
+   ./target/debug/cohtrace diff
+   ```
+
+   To verify worker connectivity in a cloud deployment run:
+   ```bash
+   ./target/debug/cohtrace cloud
    ```
 
 For more CLI examples see `docs/community/cli_tools.md`.
