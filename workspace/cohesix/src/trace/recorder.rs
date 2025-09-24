@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: recorder.rs v0.1
 // Author: Lukas Bower
-// Date Modified: 2026-12-30
+// Date Modified: 2029-02-15
 
 use crate::CohError;
 #[allow(unused_imports)]
@@ -9,10 +9,11 @@ use alloc::{boxed::Box, string::String, vec::Vec};
 /// Syscall and agent event recorder.
 //
 /// Logs spawn, exec, capability grants and read/write operations into
-/// `/srv/trace/live.log` with simple JSON lines. Supports replay of a
+/// `/log/trace/live.log` with simple JSON lines. Supports replay of a
 /// trace file to re-execute scenarios.
 use std::fs::{self, OpenOptions};
 use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -29,13 +30,7 @@ struct TraceEvent {
 
 /// Record a syscall-like event.
 fn record(agent: &str, event: &str, detail: &str, ok: bool) {
-    // Determine trace directory from TRACE_OUT or default to /srv/trace
-    let base = std::env::var("TRACE_OUT").unwrap_or_else(|_| "/srv/trace".into());
-    let mut dir = std::path::PathBuf::from(base);
-    if fs::create_dir_all(&dir).is_err() {
-        dir = std::env::temp_dir().join("cohesix_trace");
-        fs::create_dir_all(&dir).ok();
-    }
+    let dir = trace_directory();
     let path = dir.join("live.log");
     let mut f = OpenOptions::new()
         .create(true)
@@ -64,11 +59,8 @@ fn record(agent: &str, event: &str, detail: &str, ok: bool) {
 
 /// Spawn a process while recording the event.
 pub fn spawn(agent: &str, cmd: &str, args: &[&str]) -> std::io::Result<()> {
-    if let Ok(dir) = std::env::var("TRACE_OUT") {
-        fs::create_dir_all(&dir).ok();
-    } else {
-        fs::create_dir_all("/srv/trace").ok();
-    }
+    let dir = trace_directory();
+    fs::create_dir_all(&dir).ok();
     let result = Command::new(cmd)
         .args(args)
         .stdout(Stdio::null())
@@ -134,6 +126,58 @@ pub fn replay(file: &str) -> Result<(), CohError> {
     }
     Ok(())
 }
+
+fn trace_directory() -> PathBuf {
+    if let Ok(dir) = std::env::var("TRACE_OUT") {
+        let custom = PathBuf::from(dir);
+        fs::create_dir_all(&custom).ok();
+        return custom;
+    }
+
+    let primary = PathBuf::from("/log/trace");
+    if fs::create_dir_all(&primary).is_ok() {
+        ensure_compat_symlink(&primary);
+        return primary;
+    }
+
+    let legacy = PathBuf::from("/srv/trace");
+    if fs::create_dir_all(&legacy).is_ok() {
+        return legacy;
+    }
+
+    let fallback = std::env::temp_dir().join("cohesix_trace");
+    fs::create_dir_all(&fallback).ok();
+    fallback
+}
+
+fn ensure_compat_symlink(primary: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::symlink;
+        let link = Path::new("/srv/trace");
+        match fs::symlink_metadata(link) {
+            Ok(meta) if meta.file_type().is_symlink() => {
+                if let Ok(existing) = fs::read_link(link) {
+                    if existing == primary {
+                        return;
+                    }
+                }
+                let _ = fs::remove_file(link);
+            }
+            Ok(meta) if meta.is_dir() => {
+                return;
+            }
+            Ok(_) => {
+                return;
+            }
+            Err(_) => {}
+        }
+        let _ = symlink(primary, link);
+    }
+}
+
+#[cfg(not(unix))]
+fn ensure_compat_symlink(_primary: &Path) {}
 
 fn now() -> u64 {
     SystemTime::now()

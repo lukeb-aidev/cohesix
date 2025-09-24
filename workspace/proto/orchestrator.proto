@@ -1,8 +1,10 @@
 // Author: Lukas Bower
-// Date Modified: 2029-01-15
+// Date Modified: 2029-02-15
 syntax = "proto3";
 
 package cohesix.orchestrator;
+
+option go_package = "cohesix/internal/orchestrator/rpc;rpc";
 
 message JoinRequest {
   string worker_id = 1;
