@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: AGENTS_AND_CLI.md v1.2
+// Filename: AGENTS_AND_CLI.md v1.3
 // Author: Lukas Bower
-// Date Modified: 2025-07-31
+// Date Modified: 2026-12-01
 
 # Agents and CLI
 
@@ -36,7 +36,7 @@ All CLI commands are invoked via small wrapper scripts that call the Python sour
 - **cohtrace** – trace inspection and federation utilities
 - **cohcc** – compiler front-end for Cohesix IR
 - **cohcap** – capability management for demo scenarios
-- **cohshell** – wrapper for Cohesix BusyBox; symlink to `/bin/sh` for minimal rootfs
+- **cohesix-shell** – Rust wrapper around BusyBox `sh`; forwards arguments and supports `COHESIX_BUSYBOX_PATH`
 - **cohmeta** – displays current metadata version and role bindings
 
 ### CLI by Role
@@ -46,7 +46,7 @@ All CLI commands are invoked via small wrapper scripts that call the Python sour
 | QueenPrimary   | cohcli, cohrun, cohtrace         |
 | DroneWorker    | cohrun, cohtrace, cohcc          |
 | KioskInteractive | cohcap, cohcli                 |
-| SensorRelay    | cohshell, cohtrace               |
+| SensorRelay    | cohesix-shell, cohtrace          |
 | SimulatorTest  | cohcli, cohrun, cohcc, cohtrace  |
 
 For detailed command breakdowns by tool, see CLI_HELP_*.md.
