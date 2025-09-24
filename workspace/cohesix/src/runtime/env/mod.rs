@@ -5,3 +5,4 @@
 
 /// Runtime environment setup helpers
 pub mod init;
+pub mod secure9p;

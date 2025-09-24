@@ -4,9 +4,9 @@
 // Date Modified: 2028-12-13
 
 use crate::coherr;
+use crate::dt::UART_BASE;
 use crate::monotonic_ticks;
 use crate::trace;
-use crate::dt::UART_BASE;
 use core::ffi::c_char;
 use core::sync::atomic::{compiler_fence, Ordering};
 use sel4_sys_extern_wrapper::{seL4_DebugHalt, seL4_DebugPutChar};
@@ -161,11 +161,7 @@ pub unsafe extern "C" fn coh_bind(_name: *const c_char, _old: *const c_char, _fl
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn coh_mount(
-    srv: *const c_char,
-    dst: *const c_char,
-    _flags: i32,
-) -> i32 {
+pub unsafe extern "C" fn coh_mount(srv: *const c_char, dst: *const c_char, _flags: i32) -> i32 {
     if srv.is_null() || dst.is_null() {
         return EINVAL;
     }
