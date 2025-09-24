@@ -7,68 +7,72 @@
 // Cohesix OS bootloader (seL4 root task)
 // Assigns capability slots per role and launches role-specific init script.
 
-#include <stdio.h>
-#include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
-#include <unistd.h>
-#include <time.h>
-#include <signal.h>
-#include <fcntl.h>
-#include <sys/stat.h>
+#include <sel4/sel4.h>
 #include "boot_trampoline.h"
 
 #define COH_BOOT_ROLE_BUF       32
-#define COH_BOOT_WATCHDOG_SECS  15
-#define COH_PATH_COHROLE        "/srv/cohrole"
-#define COH_PATH_BOOT_LOG       "/log/bootloader_init.log"
-#define COH_PATH_BOOT_ERROR     "/state/boot_error"
-#define COH_BOOTARGS_PATH       "/boot/bootargs.txt"
+#define COH_BOOT_STATUS_TAG     "[bootloader] "
+
+static volatile uint8_t *const UART0 =
+    (volatile uint8_t *)COH_BOOT_TRAMPOLINE_UART_BASE;
 
 extern int boot_trampoline_crc_ok;
 
-static void watchdog_handler(int sig)
+static void console_putc(char c)
 {
-    (void)sig;
-    FILE *f = fopen(COH_PATH_BOOT_ERROR, "a");
-    if (f) {
-        fprintf(f, "%ld watchdog timeout\n", (long)time(NULL));
-        fclose(f);
+    *UART0 = (uint8_t)c;
+}
+
+static void console_write(const char *msg)
+{
+    while (*msg) {
+        console_putc(*msg++);
     }
-    _exit(1);
+}
+
+static void console_write_line(const char *msg)
+{
+    console_write(msg);
+    console_putc('\n');
+}
+
+static void console_log(const char *msg)
+{
+    console_write(COH_BOOT_STATUS_TAG);
+    console_write_line(msg);
+}
+
+static void console_write_hex(unsigned int value)
+{
+    char buf[2 + sizeof(unsigned int) * 2 + 1];
+    static const char hex[] = "0123456789abcdef";
+    buf[0] = '0';
+    buf[1] = 'x';
+    for (size_t i = 0; i < sizeof(unsigned int) * 2; ++i) {
+        size_t shift = (sizeof(unsigned int) * 2 - 1 - i) * 4;
+        buf[2 + i] = hex[(value >> shift) & 0xFu];
+    }
+    buf[2 + sizeof(unsigned int) * 2] = '\0';
+    console_write(buf);
 }
 
 static const char *detect_role(void) {
-    const char *role = getenv("COHROLE");
+    extern trampoline_hdr_t __trampoline_hdr;
     static char buf[COH_BOOT_ROLE_BUF];
-    FILE *f = NULL;
-
-    if (role && *role)
-        return role;
-
-    f = fopen(COH_PATH_COHROLE, "r");
-    if (f) {
-        if (fgets(buf, sizeof(buf), f)) {
-            buf[strcspn(buf, "\r\n")] = '\0';
-            fclose(f);
-            if (strcmp(buf, "QueenPrimary") == 0 ||
-                strcmp(buf, "RegionalQueen") == 0 ||
-                strcmp(buf, "BareMetalQueen") == 0 ||
-                strcmp(buf, "KioskInteractive") == 0 ||
-                strcmp(buf, "InteractiveAiBooth") == 0 ||
-                strcmp(buf, "DroneWorker") == 0 ||
-                strcmp(buf, "GlassesAgent") == 0 ||
-                strcmp(buf, "SensorRelay") == 0 ||
-                strcmp(buf, "SimulatorTest") == 0)
-                return buf;
-        } else {
-            fclose(f);
-        }
+    size_t len = strnlen(__trampoline_hdr.role_hint,
+                         sizeof(__trampoline_hdr.role_hint));
+    if (len > 0) {
+        if (len >= sizeof(buf))
+            len = sizeof(buf) - 1;
+        memcpy(buf, __trampoline_hdr.role_hint, len);
+        buf[len] = '\0';
+        return buf;
     }
 
     return "DroneWorker";
 }
-
-#include <sel4/sel4.h>
 
 /*
  * Provision the init process with a basic capability layout.
@@ -86,9 +90,12 @@ static void assign_caps(const char *role)
                             seL4_CapInitThreadCNode, 0,
                             seL4_CapInitThreadVSpace, 0);
     if (err != seL4_NoError) {
-        printf("[bootloader] TCB_SetSpace failed: %d\n", err);
+        console_write(COH_BOOT_STATUS_TAG);
+        console_write("TCB_SetSpace failed err=");
+        console_write_hex((unsigned int)err);
+        console_putc('\n');
     } else {
-        printf("[bootloader] init CSpace root installed\n");
+        console_log("init CSpace root installed");
     }
 
     err = seL4_CNode_Copy(seL4_CapInitThreadCNode,
@@ -99,121 +106,63 @@ static void assign_caps(const char *role)
                           seL4_WordBits,
                           seL4_AllRights);
     if (err != seL4_NoError) {
-        printf("[bootloader] cap copy failed: %d\n", err);
+        console_write(COH_BOOT_STATUS_TAG);
+        console_write("cap copy failed err=");
+        console_write_hex((unsigned int)err);
+        console_putc('\n');
     } else {
-        printf("[bootloader] caps assigned\n");
-    }
-}
-
-static void emit_console(const char *msg)
-{
-    int fd = open("/dev/console", O_WRONLY);
-    if (fd >= 0) {
-        write(fd, msg, strlen(msg));
-        write(fd, "\n", 1);
-        close(fd);
+        console_log("caps assigned");
     }
 }
 
 static void boot_success(void)
 {
-    emit_console("BOOT_OK");
-    int fd = open(COH_BOOT_SUCCESS_PATH, O_WRONLY | O_CREAT, 0644);
-    if (fd >= 0) {
-        write(fd, "ok\n", 3);
-        close(fd);
-    }
+    console_write_line("BOOT_OK");
 }
 
 static void boot_fail(const char *reason)
 {
-    char buf[64];
-    snprintf(buf, sizeof(buf), "BOOT_FAIL:%s", reason);
-    emit_console(buf);
+    console_write("BOOT_FAIL:");
+    console_write(reason);
+    console_putc('\n');
 }
 
-static void load_bootargs(void)
+static void handoff_to_kernel(void)
 {
-    FILE *f = fopen(COH_BOOTARGS_PATH, "r");
-    if (!f)
-        return;
-    char buf[256];
-    size_t n = fread(buf, 1, sizeof(buf) - 1, f);
-    fclose(f);
-    buf[n] = '\0';
-    char *tok = strtok(buf, " \n\r\t");
-    while (tok) {
-        char *eq = strchr(tok, '=');
-        if (eq) {
-            *eq = '\0';
-            char *val = eq + 1;
-            setenv(tok, val, 1);
-            if (strcmp(tok, "COHROLE") == 0) {
-                FILE *srv = fopen(COH_PATH_COHROLE, "w");
-                if (srv) {
-                    fprintf(srv, "%s", val);
-                    fclose(srv);
-                }
-            }
-        }
-        tok = strtok(NULL, " \n\r\t");
+    console_log("handoff to seL4");
+    /* The actual hand-off is performed by the trampoline and Rust loader. */
+    for (;;) {
+        /* Busy wait to avoid returning to firmware. */
+#if defined(__aarch64__)
+        __asm__ volatile("wfe" ::: "memory");
+#else
+        __asm__ volatile("hlt");
+#endif
     }
-}
-
-static const char *script_for_role(const char *role) {
-    if (strcmp(role, "DroneWorker") == 0)
-        return "/init/worker.rc";
-    if (strcmp(role, "KioskInteractive") == 0)
-        return "/init/kiosk.rc";
-    if (strcmp(role, "InteractiveAiBooth") == 0)
-        return "/init/kiosk.rc";
-    if (strcmp(role, "SensorRelay") == 0)
-        return "/init/sensor.rc";
-    if (strcmp(role, "SimulatorTest") == 0)
-        return "/init/simtest.rc";
-    return "/init/queen.rc";
 }
 
 /*
  * Boot phases:
  * 1) detect_role() determines CohRole.
- * 2) Write role to /srv/cohrole and log boot information.
+ * 2) Log boot role information for diagnostics.
  * 3) assign_caps() sets capability slots per role.
- * 4) Execute role-specific init script via rc.
+ * 4) Emit boot status and hand off to the Rust trampoline.
  */
 int main(void) {
-    signal(SIGALRM, watchdog_handler);
-    alarm(COH_BOOT_WATCHDOG_SECS);
-
-    load_bootargs();
-
     const char *role = detect_role();
-    FILE *f;
-    char srv_path[] = COH_PATH_COHROLE;
-    f = fopen(srv_path, "w");
-    if (f) {
-        fprintf(f, "%s", role);
-        fclose(f);
-    }
 
-    f = fopen(COH_PATH_BOOT_LOG, "a");
-    if (f) {
-        fprintf(f, "%ld, %s, %d\n", (long)time(NULL), role,
-                boot_trampoline_crc_ok);
-        fclose(f);
-    }
-
+    console_log("bootloader start");
+    console_log("assign capabilities");
     assign_caps(role);
 
-    if (access("/srv/validator/live.sock", F_OK) == 0)
+    if (boot_trampoline_crc_ok)
         boot_success();
     else
-        boot_fail("validator_missing");
+        boot_fail("trampoline_crc");
 
-    const char *script = script_for_role(role);
-    alarm(0); /* boot init succeeded */
-    const char *argv[] = {"/bin/rc", script, NULL};
-    execv(argv[0], (char *const *)argv);
-    perror("execv rc");
-    return 1;
+    console_log("role detected");
+    console_write_line(role);
+
+    handoff_to_kernel();
+    return 0;
 }

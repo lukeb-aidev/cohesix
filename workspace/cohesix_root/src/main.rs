@@ -17,6 +17,7 @@ mod lang_items;
 mod mmu;
 mod startup;
 mod sys;
+mod trace;
 
 use sel4_sys_extern_wrapper::*;
 
@@ -161,6 +162,52 @@ fn log_global_ptrs() {
         putstr("offset_ptr");
         put_hex(crate::allocator::offset_addr());
     }
+}
+
+pub(crate) fn monotonic_ticks() -> u64 {
+    let value: u64;
+    unsafe {
+        core::arch::asm!("mrs {0}, cntpct_el0", out(reg) value);
+    }
+    value
+}
+
+fn timer_frequency() -> u64 {
+    let value: u64;
+    unsafe {
+        core::arch::asm!("mrs {0}, cntfrq_el0", out(reg) value);
+    }
+    value
+}
+
+fn ticks_to_us(delta: u64, freq: u64) -> u64 {
+    if freq == 0 {
+        return 0;
+    }
+    (delta.saturating_mul(1_000_000)) / freq
+}
+
+fn log_trace_summary() {
+    let events = trace::events();
+    if events.is_empty() {
+        return;
+    }
+    let start = events[0].ticks();
+    let freq = timer_frequency();
+    for ev in events {
+        let delta = ev.ticks().saturating_sub(start);
+        let micros = ticks_to_us(delta, freq);
+        coherr!("trace:{} +{}us", ev.label(), micros);
+    }
+}
+
+fn start_validator() {
+    static mut VALIDATOR_COOKIE: u8 = 1;
+    unsafe {
+        VALIDATOR_HANDLE = &VALIDATOR_COOKIE;
+    }
+    trace::record("validator:online", monotonic_ticks());
+    sys::coh_log("validator_online");
 }
 
 fn log_mem_map() {
@@ -439,9 +486,29 @@ fn apply_namespace() {
                             0,
                         );
                     },
+                    ["mount", srv, dst] => unsafe {
+                        coherr!("mount {} {}", srv, dst);
+                        let mut sb = Vec::from(srv.as_bytes());
+                        sb.push(0);
+                        let mut db = Vec::from(dst.as_bytes());
+                        db.push(0);
+                        sys::coh_mount(
+                            sb.as_ptr() as *const c_char,
+                            db.as_ptr() as *const c_char,
+                            0,
+                        );
+                    },
+                    ["srv", path] => unsafe {
+                        coherr!("srv {}", path);
+                        let mut pb = Vec::from(path.as_bytes());
+                        pb.push(0);
+                        sys::coh_srv(pb.as_ptr() as *const c_char);
+                    },
                     _ => coherr!("ignore_line {}", line),
                 }
             }
+            trace::record("ns:mounted", monotonic_ticks());
+            sys::coh_log("namespace_ready");
         }
     }
 }
@@ -475,6 +542,8 @@ fn exec_init() -> ! {
 #[no_mangle]
 pub extern "C" fn main() {
     sys::init_uart();
+    let boot_start_ticks = monotonic_ticks();
+    trace::record("boot:start", boot_start_ticks);
     unsafe {
         let bi = bootinfo::bootinfo();
         sys::sel4_set_tls(bi.ipc_buffer as *const u8);
@@ -489,6 +558,7 @@ pub extern "C" fn main() {
     }
     check_bss_zero();
     log_mem_map();
+    trace::record("boot:mem", monotonic_ticks());
     coherr!(
         "heap_state start={:#x} end={:#x} offset_ptr={:#x}",
         addr_of!(__heap_start) as usize,
@@ -583,6 +653,7 @@ pub extern "C" fn main() {
         abort("stack bounds invalid");
     }
     load_bootargs();
+    trace::record("boot:args", monotonic_ticks());
     if env_var("INIT_SH_DEBUG").is_some() {
         coherr!("bootarg_init_debug");
     }
@@ -595,10 +666,13 @@ pub extern "C" fn main() {
         .unwrap_or("DroneWorker");
     write_role(role);
     apply_namespace();
+    start_validator();
     if !check_init_exists() {
         coherr!("fatal_missing_init");
     }
     putstr("[root] launching userland...");
+    trace::record("userland:exec", monotonic_ticks());
+    log_trace_summary();
     exec_init();
 }
 
