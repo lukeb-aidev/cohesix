@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CLOUD_DEPLOYMENT.md
+// Filename: CLOUD_DEPLOYMENT.md v1.1
 // Author: Lukas Bower
-// Date Modified: 2025-06-28
+// Date Modified: 2026-12-01
 
 # Cohesix Cloud Deployment Guide
 
@@ -37,6 +37,7 @@ This guide describes how to deploy Cohesix in a cloud-native setup where the Que
 | `CLOUD_HOOK_URL`      | `https://queen-coordinator`    | Where Workers register & report.       |
 | `COHESIX_SRV_ROOT`    | `/tmp/srv`                     | Redirects /srv in non-root setups.      |
 | `NO_CUDA`             | `1`                            | Disables CUDA initialization.           |
+| `COHESIX_BUSYBOX_PATH`| `/mnt/data/bin/cohbox`         | Override BusyBox path used by `cohesix-shell`. |
 
 If `CLOUD_HOOK_URL` is not set, place the hook URL in `/etc/cloud.toml` so `make_iso.sh` can embed it during ISO creation.
 
@@ -44,6 +45,7 @@ If `CLOUD_HOOK_URL` is not set, place the hook URL in `/etc/cloud.toml` so `make
 ```bash
 export COHROLE=QueenPrimary
 export CLOUD_HOOK_URL=https://my-cohesix-orchestrator
+cargo build --release --bin cohesix-shell
 ./target/release/cohesix-shell
 ```
 
@@ -51,6 +53,7 @@ export CLOUD_HOOK_URL=https://my-cohesix-orchestrator
 ```bash
 export COHROLE=DroneWorker
 export CLOUD_HOOK_URL=https://my-cohesix-orchestrator
+cargo build --release --bin cohesix-shell
 ./target/release/cohesix-shell
 ```
 
@@ -123,4 +126,4 @@ COHROLE=DroneWorker CLOUD_HOOK_URL=http://localhost:8080 ./target/release/cohesi
 ---
 
 ## 🎯 Summary
-With this guide, you can deploy QueenPrimary in the cloud, scale Workers dynamically, enforce validator & Secure9P rules, and debug via `cohtrace cloud` — achieving a robust cloud-edge Cohesix orchestration model.
+With this guide, you can deploy QueenPrimary in the cloud, scale Workers dynamically, enforce validator & Secure9P rules, and debug via `cohtrace cloud` — achieving a robust cloud-edge Cohesix orchestration model. Use the compiled `cohesix-shell` binary (or set `COHESIX_BUSYBOX_PATH` when packaging) so cloud nodes launch the BusyBox runtime reliably.
