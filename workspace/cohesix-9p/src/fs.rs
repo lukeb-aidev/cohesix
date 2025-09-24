@@ -135,6 +135,6 @@ impl InMemoryFs {
 }
 
 static TS_COUNTER: AtomicU64 = AtomicU64::new(0);
-fn current_ts() -> u64 {
+pub(crate) fn current_ts() -> u64 {
     TS_COUNTER.fetch_add(1, Ordering::Relaxed)
 }

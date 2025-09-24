@@ -43,7 +43,7 @@ pub use inprocess::InProcessStream;
 #[cfg(feature = "posix")]
 mod server;
 #[cfg(feature = "posix")]
-pub use server::FsServer;
+pub use server::{FsServer, NinepBackend};
 
 /// Convenience helper when `posix` feature is enabled.
 #[cfg(feature = "posix")]

@@ -62,6 +62,12 @@ pub fn initialize_runtime_env() {
     println!("[env] boot args: {:?}", boot);
     let role = boot.cohrole.clone().unwrap_or_else(detect_cohrole);
     println!("[env] running as role: {}", role);
+    if boot.secure9p {
+        match crate::runtime::env::secure9p::initialize_from_boot() {
+            Ok(()) => println!("[env] Secure9P initialized"),
+            Err(e) => println!("[env] Secure9P initialization failed: {e}"),
+        }
+    }
     // In the future this will also seed entropy and launch telemetry threads.
 }
 
