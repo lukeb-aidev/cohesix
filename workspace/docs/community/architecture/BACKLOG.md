@@ -1,97 +1,223 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: BACKLOG.md v1.0
+// Filename: BACKLOG.md v2.0
 // Author: Lukas Bower
-// Date Modified: 2029-03-15
+// Date Modified: 2029-09-21
 
-# Cohesix SAFe Backlog
+# Cohesix SAFe Backlog (Portfolio & Solution)
 
-## Epic 1 – Secure9P End-to-End Hardening
-- **Description**: Deliver authenticated, auditable namespace services with TLS, capability tokens, and validator-aligned logging across queen and worker roles.【F:workspace/docs/community/architecture/9P_README.md†L44-L92】【F:workspace/docs/community/governance/ROLE_POLICY.md†L39-L86】
-- **Business Value**: Protects trace pipelines and automation hooks from spoofing while enabling remote orchestration for regulated deployments.【F:workspace/docs/community/architecture/PLAN9_HOOKS.md†L8-L44】
-- **Leading Indicators**: 100% Secure9P adoption in role manifests, zero unauthorized write attempts in `/log/net_trace_secure9p.log`, TLS certificate rotation coverage.
-- **Enabler Features**:
-  1. Capability policy loader validation
-  2. Mutual TLS client onboarding automation
-  3. Trace replay assertions for Secure9P events
-- **User Stories**:
-  - *As a QueenPrimary operator, I want Secure9P connections to require mutual TLS so that only registered workers can mount orchestration namespaces.*【F:workspace/docs/community/governance/ROLE_POLICY.md†L39-L86】
-  - *As a DroneWorker maintainer, I need capability errors surfaced with trace IDs so I can reconcile sandbox policy violations quickly.*【F:workspace/docs/community/architecture/9P_README.md†L8-L92】
-  - *As an auditor, I need Secure9P write denials logged to `/log/net_trace_secure9p.log` with actor identity to satisfy compliance reporting.*【F:workspace/docs/community/architecture/9P_README.md†L68-L92】
+## 0. Overview
+- This backlog is structured according to the latest SAFe® 6.0 guidance, linking Portfolio, Solution, and Agile Release Train (ART) levels so architecture intent and delivery cadence remain synchronized.
+- Portfolio Epics include Lean Business Cases with Weighted Shortest Job First (WSJF) scoring, guardrails, and explicit MVP scope. Features and enablers cascade into Program Increment (PI) objectives and sprint-ready stories.
+- Flow metrics (throughput, predictability, load) and compliance KPIs (trace coverage, boot timing, Secure9P adoption) are tracked at PI boundaries for Inspect & Adapt workshops.
 
-## Epic 2 – Remote CUDA Annex Reliability
-- **Description**: Provide graceful fallback, telemetry, and orchestration visibility for CUDA workloads routed through Cohesix-managed microservers.【F:workspace/docs/community/architecture/MISSION_AND_ARCHITECTURE.md†L16-L43】【F:workspace/docs/community/audit/codebase_alignment_audit_2029.md†L1-L84】
-- **Business Value**: Ensures AI kiosk and AR roles maintain deterministic behavior even when GPU annex capacity fluctuates.
-- **Leading Indicators**: GPU fallback success ratio ≥ 95%, telemetry events for annex outages, zero silent drops in CUDA executor logs.
-- **Enabler Features**:
+## 1. Portfolio Kanban Summary
+| Epic | Stage | Business Value | Time Criticality | Risk Reduction / Opportunity | Job Size | WSJF | Target PI |
+|------|-------|----------------|------------------|------------------------------|----------|------|-----------|
+| E1 Secure9P Hardening | Implementing | 34 | 21 | 20 | 8 | 9.4 | PI-2029.4 |
+| E2 CUDA Annex Reliability | Analyzing | 29 | 18 | 16 | 9 | 7.0 | PI-2029.4 |
+| E3 Trace Observability | Implementing | 31 | 19 | 22 | 7 | 10.3 | PI-2029.3 |
+| E4 GUI Control Plane Integrity | Implementing | 26 | 16 | 15 | 6 | 9.3 | PI-2029.3 |
+| E5 Boot Performance Validation | Implementing | 28 | 23 | 17 | 8 | 8.5 | PI-2029.3 |
+| E6 Cloud Federation Scaling | Funnel | 30 | 17 | 18 | 11 | 5.9 | PI-2029.5 |
+| E7 Governance & Security Posture | Implementing | 33 | 20 | 21 | 6 | 12.3 | PI-2029.3 |
+
+## 2. Portfolio Epics — Lean Business Cases
+Each epic includes hypothesis statement, MVP scope, measurable leading indicators, architectural runway implications, and compliance guardrails.
+
+### Epic E1 — Secure9P End-to-End Hardening
+- **Problem Statement**: Namespace spoofing and capability drift threaten trace fidelity and queen/worker orchestration.【F:workspace/docs/community/architecture/9P_README.md†L43-L79】
+- **Hypothesis**: If we enforce mutual TLS, capability policy validation, and trace replay assertions, we will eliminate unauthorized write attempts while preserving automation velocity.
+- **MVP Scope**: Deploy Secure9P policy loader validation, automated certificate enrollment, and trace replay assertions for queen/worker roles.
+- **Leading Indicators**: 100% Secure9P adoption, zero unauthorized writes in `/log/net_trace_secure9p.log`, successful policy checksum verification during boot.
+- **Guardrails**: Maintain seL4 proof integrity; no expansion of trusted base; adhere to metadata header requirements.【F:workspace/docs/community/governance/INSTRUCTION_BLOCK.md†L1-L52】
+- **WSJF Detail**: BV 34, TC 21, RR/OE 20, JS 8 → WSJF 9.4.
+- **Architectural Runway Impact**: Requires validator hook coverage and updated Secure9P bootstrap flags; ensures alignment with TOGAF Security & Technology architectures.
+- **Key Enabler Features**:
+  1. Capability policy loader validation service
+  2. Mutual TLS enrollment automation
+  3. Trace replay assertion harness
+- **Acceptance Criteria (Feature Level)**:
+  - Policy loader fails fast with signed manifest mismatch.
+  - Clients without valid mTLS cert receive 401 with trace entry.
+  - Validator replay catches Secure9P drift within one cycle.
+
+### Epic E2 — Remote CUDA Annex Reliability
+- **Problem Statement**: Remote GPU annex outages reduce determinism for kiosk and wearable roles.【F:workspace/docs/community/architecture/MISSION_AND_ARCHITECTURE.md†L16-L41】
+- **Hypothesis**: Adding fallback execution paths, telemetry, and GUI visibility will keep service levels ≥ 95% during annex volatility.
+- **MVP Scope**: CPU fallback executor, annex telemetry export, GUI annex status widget, and Secure9P annex heartbeat metrics.
+- **Leading Indicators**: ≥ 95% successful fallback ratio, telemetry alerts <5 minutes latency, no silent drops in CUDA logs.
+- **Guardrails**: Preserve cold boot timing, ensure traces captured for all fallback events.【F:workspace/docs/community/audit/codebase_alignment_audit_2029.md†L47-L99】
+- **WSJF Detail**: BV 29, TC 18, RR/OE 16, JS 9 → WSJF 7.0.
+- **Key Enabler Features**:
   1. CUDA executor fallback path & telemetry
-  2. GUI orchestrator GPU status surface
+  2. GUI annex status visualization【F:workspace/docs/community/architecture/GUI_ORCHESTRATOR.md†L12-L83】
   3. Secure9P annex health probes
-- **User Stories**:
-  - *As an InteractiveAiBooth engineer, I need CUDA job failures to trigger CPU fallback or explicit alerts so kiosk UX remains responsive.*【F:workspace/docs/community/audit/codebase_alignment_audit_2029.md†L71-L99】
-  - *As a QueenPrimary operator, I want `/api/status` to expose per-worker GPU load and annex health so scheduling decisions are data-driven.*【F:workspace/docs/community/architecture/GUI_ORCHESTRATOR.md†L24-L83】
-  - *As a GlassesAgent maintainer, I need Secure9P annex mounts to emit heartbeat metrics so I can detect drift between Plan 9 roles and remote GPU services.*【F:workspace/docs/community/architecture/MISSION_AND_ARCHITECTURE.md†L16-L43】
+- **Acceptance Criteria**:
+  - Fallback execution emits trace entries with annex ID.
+  - `/api/status` exposes annex state with timestamps.【F:workspace/docs/community/architecture/GUI_ORCHESTRATOR.md†L12-L48】
+  - Secure9P annex mounts publish heartbeat metrics every 30 seconds.
 
-## Epic 3 – Trace Observability & Compliance
-- **Description**: Align all trace generation, consensus, and tooling outputs with `/log/trace/` contracts and distributed reconciliation protocols.【F:workspace/docs/community/architecture/MISSION_AND_ARCHITECTURE.md†L16-L43】【F:workspace/docs/community/architecture/TRACE_CONSENSUS.md†L1-L47】
-- **Business Value**: Guarantees replayable evidence for audits, federation, and incident response.
-- **Leading Indicators**: 100% trace artifacts under `/log/trace/`, successful consensus quorum per sync cycle, trace diff CI coverage.
-- **Enabler Features**:
-  1. Runtime trace path normalization
+### Epic E3 — Trace Observability & Compliance
+- **Problem Statement**: Trace artifacts must align with `/log/trace/` contracts for audits and replay.【F:workspace/docs/community/architecture/TRACE_CONSENSUS.md†L1-L47】
+- **Hypothesis**: Standardizing trace paths, consensus regression, and diff automation will deliver 100% replay-ready evidence.
+- **MVP Scope**: Runtime path normalization, consensus replay regression suite, automated trace diffs in CI.
+- **Leading Indicators**: All trace artefacts under `/log/trace/`, consensus quorum met each cycle, diff job success ≥ 95%.
+- **Guardrails**: Ensure validator performance remains within SLA; maintain metadata headers on generated docs.【F:workspace/docs/community/architecture/IMPLEMENTATION_AND_TOOLING.md†L6-L96】
+- **WSJF Detail**: BV 31, TC 19, RR/OE 22, JS 7 → WSJF 10.3.
+- **Key Enabler Features**:
+  1. Trace path normalization middleware
   2. Consensus replay regression suite
   3. Trace diff automation in CI
-- **User Stories**:
-  - *As a Validator engineer, I need runtime recorders to honor the `/log/trace/` target so replay tooling remains consistent across roles and CI.*【F:workspace/docs/community/audit/codebase_alignment_audit_2029.md†L33-L63】
-  - *As a RegionalQueen operator, I want consensus failures to raise actionable errors and fallback snapshots so distributed traces remain trustworthy.*【F:workspace/docs/community/architecture/TRACE_CONSENSUS.md†L1-L47】
-  - *As a compliance analyst, I need automated trace diffs to flag deviations between snapshots so manual log review is minimized.*【F:workspace/docs/community/architecture/IMPLEMENTATION_AND_TOOLING.md†L96-L152】
+- **Acceptance Criteria**:
+  - Validator fails build on trace outside `/log/trace/`.
+  - Regression suite replays consensus snapshots nightly.
+  - CI posts diff summary artifacts for audits.
 
-## Epic 4 – GUI Orchestrator & Control Plane Integrity
-- **Description**: Connect the Go-based GUI to the gRPC control plane with authenticated operations, live metrics, and rate-limited APIs.【F:workspace/docs/community/architecture/GUI_ORCHESTRATOR.md†L1-L83】【F:workspace/docs/community/audit/codebase_alignment_audit_2029.md†L13-L47】
-- **Business Value**: Empowers operators with accurate cluster state and control while preserving security posture.
-- **Leading Indicators**: GUI API backed 100% by gRPC responses, successful command execution telemetry, rate limit alerts in `/log/gui_access.log`.
-- **Enabler Features**:
-  1. gRPC client integration tests
-  2. Authenticated command dispatch
+### Epic E4 — GUI Orchestrator & Control Plane Integrity
+- **Problem Statement**: GUI must reflect live gRPC control plane to support operators securely.【F:workspace/docs/community/architecture/GUI_ORCHESTRATOR.md†L12-L91】
+- **Hypothesis**: Aligning GUI commands with gRPC operations and enforcing auth will improve operator efficiency while maintaining security posture.
+- **MVP Scope**: gRPC client integration tests, authenticated command dispatch, Prometheus exporter validation.
+- **Leading Indicators**: GUI command success rate ≥ 99%, access log rate-limit hit ratio <5%, zero unauthorized control attempts.
+- **Guardrails**: Maintain secure defaults (auth enabled, rate limits active); ensure documentation updates for operator workflows.【F:workspace/docs/community/audit/codebase_alignment_audit_2029.md†L13-L63】
+- **WSJF Detail**: BV 26, TC 16, RR/OE 15, JS 6 → WSJF 9.3.
+- **Key Enabler Features**:
+  1. gRPC client integration suite
+  2. Authenticated command dispatcher
   3. Prometheus metrics exporter validation
-- **User Stories**:
-  - *As a QueenPrimary operator, I need `/api/control` to invoke gRPC commands so orchestrator actions affect live workers.*【F:workspace/docs/community/audit/codebase_alignment_audit_2029.md†L13-L47】
-  - *As a security engineer, I require GUI endpoints to enforce basic auth or mTLS so only authorized staff can modify cluster state.*【F:workspace/docs/community/architecture/GUI_ORCHESTRATOR.md†L48-L120】
-  - *As a DevOps analyst, I need GUI metrics exposed via `/api/metrics` so dashboards track worker health and trust levels.*【F:workspace/docs/community/architecture/GUI_ORCHESTRATOR.md†L18-L83】
+- **Acceptance Criteria**:
+  - `/api/control` commands propagate via gRPC with trace IDs.【F:workspace/docs/community/architecture/GUI_ORCHESTRATOR.md†L12-L80】
+  - Basic auth + mTLS enforced by default.
+  - Metrics endpoint publishes worker GPU load and annex health.【F:workspace/docs/community/architecture/GUI_ORCHESTRATOR.md†L24-L69】
 
-## Epic 5 – Boot Performance & Platform Validation
-- **Description**: Instrument boot pipeline, enforce sub-200 ms cold-start target, and maintain seL4/Plan 9 diagnostics with automated regression coverage.【F:workspace/docs/community/architecture/BOOT_KERNEL_FLOW.md†L1-L34】【F:workspace/docs/community/audit/codebase_alignment_audit_2029.md†L47-L68】
-- **Business Value**: Preserves Cohesix differentiation on secure fast boot and ensures hardware readiness.
-- **Leading Indicators**: Boot timing telemetry in CI, zero regressions in validator smoke tests, sustained pass of ELF layout checks.
-- **Enabler Features**:
-  1. QEMU boot timer instrumentation
-  2. MMU/IRQ diagnostic regression tests
-  3. ELF layout validation automation
-- **User Stories**:
-  - *As a release engineer, I need CI to fail if cold boot exceeds 200 ms so performance promises remain credible.*【F:workspace/docs/community/audit/codebase_alignment_audit_2029.md†L47-L68】
-  - *As a kernel engineer, I want regression tests for MMU, syscall numbers, and BootInfo handling so prior faults never recur.*【F:workspace/docs/community/diagnostics/USERLAND_BOOT.md†L1-L167】
-  - *As a hardware integrator, I need boot artifacts signed and verified during UEFI load so tampering is detectable before runtime.*【F:workspace/docs/community/audit/audit_report.md†L7-L55】
+### Epic E5 — Boot Performance & Platform Validation
+- **Problem Statement**: Need sustained sub-200 ms cold boot with regression coverage.【F:workspace/docs/community/architecture/BOOT_KERNEL_FLOW.md†L1-L34】
+- **Hypothesis**: Instrumented boot pipeline plus ELF validation will prevent performance regressions and ensure tamper evidence.
+- **MVP Scope**: QEMU boot timer instrumentation, MMU/IRQ regression tests, ELF layout validation automation.
+- **Leading Indicators**: Boot telemetry in CI, zero validator regression failures, sustained pass of ELF layout checks.
+- **Guardrails**: Preserve seL4 proofs, maintain signed boot artefacts, keep telemetry storage under retention policy.【F:workspace/docs/community/audit/codebase_alignment_audit_2029.md†L47-L84】
+- **WSJF Detail**: BV 28, TC 23, RR/OE 17, JS 8 → WSJF 8.5.
+- **Key Enabler Features**:
+  1. Boot timing instrumentation harness
+  2. MMU/IRQ diagnostic regression tests【F:workspace/docs/community/diagnostics/USERLAND_BOOT.md†L1-L167】
+  3. Automated ELF layout validation
+- **Acceptance Criteria**:
+  - CI fails when boot exceeds 200 ms threshold.
+  - Regression suite covers prior MMU/syscall incidents.
+  - ELF validator signs report artifacts for audits.【F:workspace/docs/community/audit/audit_report.md†L7-L55】
 
-## Epic 6 – Cloud Federation & Automation Scaling
-- **Description**: Extend federation policies, Kubernetes orchestration, and serverless automation to manage multi-region clusters and trace logistics.【F:workspace/docs/private/FEDERATION.md†L1-L160】【F:workspace/docs/community/architecture/K8S_ORCHESTRATION.md†L1-L176】
-- **Business Value**: Enables elastic deployment with centralized governance and minimal guest footprint.
-- **Leading Indicators**: Federation handshake success across regions, Terraform drift detection, automated trace uploads via serverless hooks.
-- **Enabler Features**:
-  1. Federation policy reconciliation tests
-  2. Terraform module CI validation
-  3. Serverless trace uploader hardening
-- **User Stories**:
-  - *As a RegionalQueen operator, I need federation overrides to resolve deterministically so hierarchical policy conflicts are eliminated.*【F:workspace/docs/community/governance/ROLE_POLICY.md†L87-L112】
-  - *As a cloud engineer, I need Terraform modules and DaemonSets tested in CI so Cohesix pods boot reliably on EKS/GKE.*【F:workspace/docs/community/architecture/K8S_ORCHESTRATION.md†L82-L176】
-  - *As an automation developer, I want Lambda trace uploaders to mount Secure9P and publish to S3 so audit artifacts remain current without manual effort.*【F:workspace/docs/community/architecture/K8S_ORCHESTRATION.md†L118-L176】
+### Epic E6 — Cloud Federation & Automation Scaling
+- **Problem Statement**: Multi-region federation and automation scaling require hardened policies and observability.【F:workspace/docs/private/FEDERATION.md†L1-L160】
+- **Hypothesis**: Strengthening federation reconciliation, Terraform validation, and serverless trace uploaders will unlock elastic deployments without compliance drift.
+- **MVP Scope**: Federation policy reconciliation tests, Terraform module CI validation, serverless trace uploader hardening.
+- **Leading Indicators**: Federation handshake success ≥ 99%, Terraform drift detection <24 hours, automated trace uploads meeting SLA.
+- **Guardrails**: Maintain Secure9P policies, adhere to trace retention, ensure remote automation logs to `/log/trace/`.
+- **WSJF Detail**: BV 30, TC 17, RR/OE 18, JS 11 → WSJF 5.9.
+- **Key Enabler Features**:
+  1. Federation policy reconciliation tests【F:workspace/docs/community/governance/ROLE_POLICY.md†L87-L112】
+  2. Terraform module CI validation pipeline【F:workspace/docs/community/architecture/K8S_ORCHESTRATION.md†L82-L176】
+  3. Serverless Secure9P trace uploader hardening
+- **Acceptance Criteria**:
+  - Federation overrides resolve deterministically with audit trail.
+  - Terraform CI blocks drift beyond agreed guardrails.
+  - Lambda trace uploader publishes signed artefacts to storage within SLA.
 
-## Epic 7 – Governance, Metadata & Security Posture
-- **Description**: Enforce metadata hygiene, security disclosure SLAs, and threat model reviews across all repos and documentation.【F:workspace/docs/community/governance/INSTRUCTION_BLOCK.md†L1-L52】【F:workspace/docs/security/SECURITY_POLICY.md†L1-L116】
-- **Business Value**: Maintains regulatory compliance and operational integrity as documentation and code evolve.
-- **Leading Indicators**: 100% metadata compliance, quarterly threat model updates, mean time to remediate security issues ≤ 14 days.
-- **Enabler Features**:
-  1. Metadata validation automation in CI
+### Epic E7 — Governance, Metadata & Security Posture
+- **Problem Statement**: Documentation and code must maintain governance hygiene and proactive security posture.【F:workspace/docs/community/governance/INSTRUCTION_BLOCK.md†L1-L52】【F:workspace/docs/security/SECURITY_POLICY.md†L1-L116】
+- **Hypothesis**: Automating metadata validation, integrating disclosure workflows, and scheduling threat model reviews will reduce compliance debt.
+- **MVP Scope**: Metadata validation automation, security advisory workflow integration, quarterly threat model review playbooks.
+- **Leading Indicators**: 100% metadata compliance, threat model updates every quarter, mean time to remediate security issues ≤ 14 days.【F:workspace/docs/security/SECURITY_POLICY.md†L27-L116】
+- **Guardrails**: No bypass of disclosure SLAs; maintain architecture documentation parity; enforce ADR capture.
+- **WSJF Detail**: BV 33, TC 20, RR/OE 21, JS 6 → WSJF 12.3.
+- **Key Enabler Features**:
+  1. Metadata validation automation in CI【F:workspace/docs/community/architecture/IMPLEMENTATION_AND_TOOLING.md†L6-L96】
   2. Security advisory workflow integration
-  3. Threat model review playbooks
-- **User Stories**:
-  - *As a documentation maintainer, I need automated checks for headers and METADATA registration so governance stays consistent.*【F:workspace/docs/community/architecture/IMPLEMENTATION_AND_TOOLING.md†L6-L96】
-  - *As a security responder, I need disclosure workflows with SLA tracking so incidents are resolved within policy windows.*【F:workspace/docs/security/SECURITY_POLICY.md†L27-L94】
-  - *As an architect, I want quarterly threat model updates recorded in the repository so mitigation priorities remain aligned with emerging risks.*【F:workspace/docs/security/THREAT_MODEL.md†L99-L109】
+  3. Threat model review playbooks【F:workspace/docs/security/THREAT_MODEL.md†L99-L109】
+- **Acceptance Criteria**:
+  - CI fails when metadata headers missing or stale.
+  - Disclosure workflow captures SLA metrics and alerts.
+  - Threat model delta recorded with mitigation tracking.
+
+## 3. Solution & Program Backlog
+### Feature Streams
+- **Secure9P Hardening Features**
+  - F1: Capability manifest signer — Acceptance: manifests signed with SHA-512; validator rejects unsigned manifests.
+  - F2: mTLS onboarding CLI — Acceptance: onboarding generates SPIFFE-compatible certificates with trace entries.
+  - F3: Replay diff visualizer — Acceptance: diff CLI surfaces anomalies with exit code taxonomy.
+- **CUDA Reliability Features**
+  - F4: Annex telemetry exporter — Acceptance: Prometheus metrics include annex uptime, queue depth, GPU load.【F:workspace/docs/community/architecture/GUI_ORCHESTRATOR.md†L24-L69】
+  - F5: CPU fallback executor — Acceptance: fallback success ratio logged; CLI toggles available for PI test.
+  - F6: Secure9P heartbeat probes — Acceptance: 30 s heartbeat, auto-alert on 2 missed intervals.
+- **Trace Observability Features**
+  - F7: Trace path normalizer — Acceptance: path rule set stored under `/etc/cohtrace_rules.json` with schema validation.【F:workspace/docs/community/architecture/TRACE_CONSENSUS.md†L1-L47】
+  - F8: Consensus regression suite — Acceptance: nightly job replays last 7 snapshots; failure triggers PI dashboard alert.
+  - F9: CI diff pipeline — Acceptance: pipeline publishes HTML/JSON diff artifacts to `/log/trace/diff/`.
+- **GUI Control Plane Features**
+  - F10: Command parity tests — Acceptance: 100% of supported gRPC commands have GUI parity tests.
+  - F11: AuthN/Z middleware — Acceptance: Basic auth + optional mTLS; `/api/control` returns 403 for unauthorized roles.【F:workspace/docs/community/architecture/GUI_ORCHESTRATOR.md†L12-L91】
+  - F12: Rate limiting telemetry — Acceptance: `/api/metrics` exposes rate-limit counters.
+- **Boot Performance Features**
+  - F13: Boot timer instrumentation — Acceptance: telemetry log includes boot stage durations with thresholds.【F:workspace/docs/community/architecture/BOOT_KERNEL_FLOW.md†L1-L34】
+  - F14: MMU regression harness — Acceptance: reproduces prior incident scenarios documented in diagnostics.【F:workspace/docs/community/diagnostics/USERLAND_BOOT.md†L1-L167】
+  - F15: ELF validator automation — Acceptance: reports stored under `/log/boot/elf_checks/` with signature.
+- **Federation Scaling Features**
+  - F16: Policy reconciliation engine — Acceptance: resolves conflicts with deterministic ordering and trace IDs.【F:workspace/docs/community/governance/ROLE_POLICY.md†L87-L112】
+  - F17: Terraform validation CI — Acceptance: plan/apply drift reported with severity mapping.【F:workspace/docs/community/architecture/K8S_ORCHESTRATION.md†L82-L176】
+  - F18: Serverless uploader hardening — Acceptance: Lambda integration uses Secure9P tokens and writes to trace log.
+- **Governance & Security Features**
+  - F19: Metadata lint — Acceptance: fails missing headers across docs, code, assets.【F:workspace/docs/community/architecture/IMPLEMENTATION_AND_TOOLING.md†L6-L96】
+  - F20: Security advisory workflow — Acceptance: integrates with incident metrics; SLA dashboard tracked.【F:workspace/docs/security/SECURITY_POLICY.md†L27-L116】
+  - F21: Threat model cadence — Acceptance: calendar automation and ADR capture for every review.【F:workspace/docs/security/THREAT_MODEL.md†L99-L109】
+
+### Enabler Stories & Architectural Runway
+- **Telemetry Schema Harmonization** to align trace, GUI, and annex metrics.
+- **ADR Repository Initialization** to support architecture change management.
+- **Secure9P Sandbox Enhancements** enabling dynamic namespace policies.
+
+## 4. Program Increment Objectives
+### PI-2029.3 (Committed Objectives)
+1. Achieve 100% trace path normalization with nightly consensus replay (Stretch: integrate diff visualizer into GUI).
+2. Deliver GUI gRPC parity with authenticated command execution and metrics visibility.【F:workspace/docs/community/architecture/GUI_ORCHESTRATOR.md†L12-L91】
+3. Instrument boot pipeline with timing telemetry and ELF validation gating release.【F:workspace/docs/community/architecture/BOOT_KERNEL_FLOW.md†L1-L34】
+4. Enforce metadata validation in CI to preserve governance posture.【F:workspace/docs/community/architecture/IMPLEMENTATION_AND_TOOLING.md†L6-L96】
+
+### PI-2029.4 (Uncommitted/Forecast Objectives)
+1. Deploy Secure9P policy loader validation with automated cert onboarding.
+2. Launch CUDA annex fallback executor with telemetry integration.【F:workspace/docs/community/architecture/MISSION_AND_ARCHITECTURE.md†L16-L41】
+3. Harden serverless trace uploader for federation scaling.
+
+### PI Success Metrics
+- Predictability Measure ≥ 0.85 (sum of accepted business value / planned business value).
+- Flow Time median < 2 sprints for feature completion.
+- Security SLA adherence ≥ 98% (no overdue disclosures).
+
+## 5. Dependency, Risk & ROAM Tracking
+- **Critical Dependencies**: Secure9P features depend on certificate authority readiness; GUI parity depends on gRPC schema stability; federation scaling depends on Terraform provider updates.
+- **ROAM Board Snapshot**:
+  - **Resolved**: Legacy filesystem mirror dependency removed via gRPC adapter.【F:workspace/docs/community/architecture/GUI_ORCHESTRATOR.md†L12-L48】
+  - **Owned**: Remote CUDA telemetry scaling managed by annex team lead.
+  - **Accepted**: Temporary reliance on test CA for Secure9P until production PKI ready.
+  - **Mitigated**: Boot regression risk mitigated through instrumentation harness and diagnostics replay.【F:workspace/docs/community/diagnostics/USERLAND_BOOT.md†L1-L167】
+- **Compliance Risks**: Missing metadata headers; traced by automation in F19.
+
+## 6. Definition of Ready (DoR)
+- User story aligned to epic capability and PI objective.
+- Acceptance criteria and trace IDs documented.
+- Dependencies identified with mitigation plan.
+- Security, trace, and performance implications reviewed with architecture team.
+
+## 7. Definition of Done (DoD)
+- Code merged with automated tests (unit, integration, fuzzing where applicable) and documentation updates.
+- Telemetry, trace, and security logging validated in staging.
+- Metadata headers present; METADATA registry updated.
+- Release notes drafted; compliance artifacts (trace diffs, ELF reports) archived.
+
+## 8. Metrics & Inspect & Adapt Cadence
+- **Flow Metrics**: Throughput, WIP, flow efficiency captured weekly; anomalies discussed in ART sync.
+- **Quality Metrics**: Defect escape rate, trace replay success, boot timing trends extracted from diagnostics.【F:workspace/docs/community/diagnostics/USERLAND_BOOT.md†L1-L167】
+- **Security Metrics**: Time-to-remediate, threat model updates, Secure9P audit findings.【F:workspace/docs/security/SECURITY_POLICY.md†L27-L116】
+- **Inspect & Adapt Workshop Inputs**: PI System Demo evidence, quantitative metrics above, qualitative feedback from operators and auditors, improvement backlog prioritized with WSJF scoring.
+
+## 9. Governance Alignment & Communication
+- Architecture board reviews epic progress bi-weekly; deviations require corrective action plan within one sprint.
+- Portfolio sync aligns TOGAF roadmap (SOLUTION_ARCHITECTURE.md) with SAFe value delivery, ensuring architecture compliance and backlog health.
+- Communication cadence: weekly ART sync, monthly portfolio review, quarterly architecture compliance audit.
