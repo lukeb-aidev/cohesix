@@ -15,7 +15,8 @@ global_asm!(
 rust_entry:
     bl rust_start
     b .
-"#);
+"#
+);
 
 /// Rust entry point invoked from `entry.S`.
 #[no_mangle]

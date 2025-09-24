@@ -3,11 +3,14 @@
 // Author: Lukas Bower
 // Date Modified: 2026-10-28
 
+use crate::orchestrator::protocol::ClusterStateRequest;
+use crate::queen::orchestrator::QueenOrchestrator;
 #[allow(unused_imports)]
 use alloc::{boxed::Box, string::String, vec::Vec};
-use serde_json;
 /// Minimal debug CLI for runtime trace inspection.
 use std::fs;
+use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::runtime::Runtime;
 
 use crate::cohesix_types::{Role, RoleManifest};
 use crate::validator::{recent_syscalls, validator_running};
@@ -51,37 +54,45 @@ pub fn run_cohtrace(args: &[String]) -> Result<(), String> {
             Ok(())
         }
         "cloud" => {
-            let data = fs::read_to_string("/srv/cloud/state.json").unwrap_or_default();
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&data) {
-                let queen = v
-                    .get("queen_id")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("unknown");
-                let ts = v.get("ts").and_then(|v| v.as_u64()).unwrap_or(0);
-                let workers = v.get("worker_count").and_then(|v| v.as_u64()).unwrap_or(0);
-                println!("Queen ID: {}", queen);
-                println!("Last heartbeat: {}", ts);
-                println!("Connected Workers: {}", workers);
-            } else {
-                println!("cloud state unavailable");
-            }
-
-            if let Ok(active) = fs::read_to_string("/srv/agents/active.json") {
-                if let Ok(entries) = serde_json::from_str::<serde_json::Value>(&active) {
-                    if let Some(arr) = entries.as_array() {
-                        for entry in arr {
-                            let id = entry
-                                .get("worker_id")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("unknown");
-                            let role = entry
-                                .get("role")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("unknown");
-                            println!("Worker {id}: {role}");
+            match fetch_cluster_state() {
+                Ok(state) => {
+                    println!("Queen ID: {}", state.queen_id);
+                    println!("Connected Workers: {}", state.workers.len());
+                    println!("Heartbeat Timeout: {}s", state.timeout_seconds);
+                    let now = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0);
+                    for worker in state.workers {
+                        let age = now.saturating_sub(worker.last_seen);
+                        let trust = if worker.trust.is_empty() {
+                            "green"
+                        } else {
+                            worker.trust.as_str()
+                        };
+                        let gpu_info = worker.gpu.map(|gpu| {
+                            format!(
+                                "GPU perf={} load={}/{} latency={}",
+                                gpu.perf_watt,
+                                gpu.current_load,
+                                gpu.gpu_capacity,
+                                gpu.latency_score
+                            )
+                        });
+                        if let Some(info) = gpu_info {
+                            println!(
+                                "{} ({}) - {} - trust {} - last seen {}s - {}",
+                                worker.worker_id, worker.role, worker.status, trust, age, info
+                            );
+                        } else {
+                            println!(
+                                "{} ({}) - {} - trust {} - last seen {}s",
+                                worker.worker_id, worker.role, worker.status, trust, age
+                            );
                         }
                     }
                 }
+                Err(err) => println!("cloud state unavailable: {err}"),
             }
             Ok(())
         }
@@ -92,4 +103,18 @@ pub fn run_cohtrace(args: &[String]) -> Result<(), String> {
 /// Backwards compatibility shim for tests.
 pub fn status() {
     let _ = run_cohtrace(&["status".into()]);
+}
+
+fn fetch_cluster_state() -> Result<crate::orchestrator::protocol::ClusterStateResponse, String> {
+    let runtime = Runtime::new().map_err(|e| format!("failed to start tokio runtime: {e}"))?;
+    runtime.block_on(async {
+        let mut client = QueenOrchestrator::connect_default_client()
+            .await
+            .map_err(|e| format!("failed to connect orchestrator: {e}"))?;
+        client
+            .get_cluster_state(ClusterStateRequest {})
+            .await
+            .map_err(|e| format!("cluster state request failed: {e}"))
+            .map(|resp| resp.into_inner())
+    })
 }

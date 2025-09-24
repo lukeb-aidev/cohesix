@@ -3,9 +3,9 @@
 // Author: Codex
 // Date Modified: 2025-06-07
 
+use crate::CohError;
 #[allow(unused_imports)]
 use alloc::{boxed::Box, string::String, vec::Vec};
-use crate::CohError;
 /// Kernel and OS hash verification at boot.
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};

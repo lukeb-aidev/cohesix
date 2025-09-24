@@ -5,6 +5,8 @@
 
 use chrono::{TimeZone, Utc};
 use clap::{Parser, Subcommand};
+use cohesix::orchestrator::protocol::ClusterStateRequest;
+use cohesix::queen::orchestrator::QueenOrchestrator;
 use cohesix::CohError;
 use humantime::format_duration;
 use serde::Deserialize;
@@ -15,6 +17,7 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tokio::runtime::Runtime;
 use walkdir::WalkDir;
 
 #[derive(Parser)]
@@ -455,6 +458,39 @@ fn heartbeat_from_file(path: &Path) -> Option<u64> {
 }
 
 fn cloud_report(root: &Path) -> CloudReport {
+    if let Some(cluster) = fetch_cluster_state_via_grpc() {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let mut workers = Vec::new();
+        for worker in cluster.workers {
+            let age = now.saturating_sub(worker.last_seen);
+            workers.push(WorkerInfo {
+                id: worker.worker_id.clone(),
+                role: worker.role,
+                status: worker.status,
+                ip: worker.ip,
+                last_heartbeat: Some(worker.last_seen),
+                age: Some(age),
+                healthy: Some(age <= cluster.timeout_seconds as u64),
+            });
+        }
+        workers.sort_by(|a, b| a.id.cmp(&b.id));
+        let queen = Some(QueenInfo {
+            queen_id: if cluster.queen_id.is_empty() {
+                None
+            } else {
+                Some(cluster.queen_id)
+            },
+            role: None,
+            validator_active: None,
+            last_heartbeat: Some(cluster.generated_at),
+            worker_count: Some(workers.len()),
+        });
+        return CloudReport { queen, workers };
+    }
+
     let queen = read_cloud_state(root);
     let agent_table = read_agent_table(root);
     let active_workers = read_active_workers(root);
@@ -490,6 +526,18 @@ fn cloud_report(root: &Path) -> CloudReport {
     workers.sort_by(|a, b| a.id.cmp(&b.id));
 
     CloudReport { queen, workers }
+}
+
+fn fetch_cluster_state_via_grpc() -> Option<cohesix::orchestrator::protocol::ClusterStateResponse> {
+    let runtime = Runtime::new().ok()?;
+    runtime.block_on(async {
+        let mut client = QueenOrchestrator::connect_default_client().await.ok()?;
+        client
+            .get_cluster_state(ClusterStateRequest {})
+            .await
+            .ok()
+            .map(|resp| resp.into_inner())
+    })
 }
 
 fn cmd_cloud() -> Result<(), CohError> {

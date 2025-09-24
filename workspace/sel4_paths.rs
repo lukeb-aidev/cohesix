@@ -227,7 +227,10 @@ pub fn default_cflags(sel4_include: &Path, project_root: &Path) -> Vec<String> {
     let mut flags = Vec::new();
     flags.push(format!("-I{}", sel4_include.display()));
     flags.push(format!("-I{}/libsel4/interfaces", sel4_include.display()));
-    flags.push(format!("-I{}/libsel4/sel4_arch/sel4/sel4_arch/aarch64", sel4_include.display()));
+    flags.push(format!(
+        "-I{}/libsel4/sel4_arch/sel4/sel4_arch/aarch64",
+        sel4_include.display()
+    ));
     if let Ok(dirs) = header_dirs_recursive(sel4_include) {
         for d in dirs {
             flags.push(format!("-I{}", d.display()));

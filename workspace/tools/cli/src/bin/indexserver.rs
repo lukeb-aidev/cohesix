@@ -44,7 +44,9 @@ fn main() -> std::io::Result<()> {
     std::fs::write("/srv/index/results", b"")?;
     let mut last = String::new();
     loop {
-        let query = std::fs::read_to_string("/srv/index/query")?.trim().to_string();
+        let query = std::fs::read_to_string("/srv/index/query")?
+            .trim()
+            .to_string();
         if !query.is_empty() && query != last {
             let res = search(&index, &query).join("\n");
             std::fs::write("/srv/index/results", res)?;

@@ -11,11 +11,15 @@ by a Go service using the chi router with JSON APIs.
 
 ## Overview
 
-The orchestrator queries the `/srv` namespace and the worker registry at
-`/srv/agents/active.json` to display agent status, role assignments,
-federation peers, and boot logs. The GUI is secured by default and exposes only authenticated and rate-limited endpoints unless explicitly run in developer mode. Static content under `gui/` or `static/` is
-served directly over HTTP. WebSocket support remains available for live
-updates.
+The orchestrator now queries the gRPC control plane
+(`cohesix.orchestrator.OrchestratorService`) via the `GetClusterState`
+RPC to display agent status, role assignments, federation peers, and
+boot logs. Legacy filesystem mirrors such as `/srv/agents/active.json`
+are read only when the gRPC endpoint is unreachable. The GUI is secured
+by default and exposes only authenticated and rate-limited endpoints
+unless explicitly run in developer mode. Static content under `gui/` or
+`static/` is served directly over HTTP. WebSocket support remains
+available for live updates.
 
 ## Features
 

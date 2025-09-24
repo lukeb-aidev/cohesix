@@ -30,6 +30,30 @@ Typical contents of /srv/cohrole might be:
   KioskInteractive
 This string is matched directly against the RoleManifest.
 
+## Orchestrator Control Plane
+
+QueenPrimary and RegionalQueen nodes expose the `cohesix.orchestrator.OrchestratorService`
+gRPC API on the management interface. The default endpoint is
+`http://127.0.0.1:50051`, and can be overridden via the
+`COHESIX_ORCH_ADDR` environment variable when running clients.
+
+The service defines the following RPCs:
+
+* `Join` — worker registration with role, trust level, and capabilities.
+* `Heartbeat` — periodic health reports including optional GPU telemetry.
+* `RequestSchedule` — agent placement queries with GPU-aware scheduling.
+* `AssignRole` — administrative reassignment of worker roles.
+* `UpdateTrust` — trust escalation or de-escalation for workers.
+* `GetClusterState` — consolidated view of queen and worker health.
+
+All RPCs require callers to originate from a trusted control network
+segment. Deployments must terminate TLS at the ingress proxy and
+authenticate requests using existing service-mesh credentials or mTLS
+certificates issued to queen and worker nodes. Legacy filesystem drops
+(`/srv/agents/active.json`, `/srv/trust_zones`) are maintained for
+backwards compatibility but should be treated as read-only audit
+mirrors of the gRPC source of truth.
+
 <!-- New hybrid AI kiosk role combining Jetson GPU features with interactive booth UI -->
 
 | Role             | Description                                   | Interface                  |

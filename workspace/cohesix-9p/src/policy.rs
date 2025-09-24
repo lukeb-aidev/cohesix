@@ -3,10 +3,10 @@
 // Author: Lukas Bower
 // Date Modified: 2027-01-31
 
-use alloc::vec::Vec;
 use alloc::string::String;
-use serde::Deserialize;
+use alloc::vec::Vec;
 use core::str::FromStr;
+use serde::Deserialize;
 
 /// Access type for sandbox policy checks.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -33,8 +33,6 @@ impl SandboxPolicy {
         let txt = std::fs::read_to_string(path)?;
         Self::from_str(&txt).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
     }
-
-
 
     /// Determine if the given access is allowed on `path`.
     pub fn allows(&self, path: &str, access: Access) -> bool {

@@ -3,9 +3,9 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-22
 
+use crate::CohError;
 #[allow(unused_imports)]
 use alloc::{boxed::Box, string::String, vec::Vec};
-use crate::CohError;
 /// Cooperative ensemble agents with shared memory.
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
@@ -57,7 +57,11 @@ use crate::agent_transport::AgentTransport;
 use serde_json;
 
 impl Migrateable for EnsembleAgent {
-    fn migrate<T: AgentTransport>(&self, peer: &str, transport: &T) -> Result<MigrationStatus, CohError> {
+    fn migrate<T: AgentTransport>(
+        &self,
+        peer: &str,
+        transport: &T,
+    ) -> Result<MigrationStatus, CohError> {
         let base_tmp = std::env::var("TMPDIR").unwrap_or_else(|_| "/srv".to_string());
         let tmp = format!("{}/{}_ensemble.json", base_tmp, self.id);
         let data = serde_json::to_string(&self.members.len()).unwrap_or_default();
