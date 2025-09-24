@@ -1,13 +1,43 @@
 # CLASSIFICATION: COMMUNITY
 #!/usr/bin/env bash
-# Filename: qemu_boot_check.sh v0.7
+# Filename: qemu_boot_check.sh v0.8
 # Author: Lukas Bower
-# Date Modified: 2028-08-31
+# Date Modified: 2029-02-14
 # This script boots Cohesix under QEMU for CI. Firmware assumptions:
 # - x86_64 uses OVMF for UEFI.
 # - aarch64 requires QEMU_EFI.fd provided by system packages
 #   (often from qemu-efi-aarch64) and is passed via -bios.
 set -euo pipefail
+
+OS_NAME="$(uname -s)"
+homebrew_roots=()
+
+if [ "$OS_NAME" = "Darwin" ]; then
+  if [ -n "${HOMEBREW_PREFIX:-}" ]; then
+    homebrew_roots+=("$HOMEBREW_PREFIX")
+  fi
+  if command -v brew >/dev/null 2>&1; then
+    brew_prefix="$(brew --prefix 2>/dev/null || true)"
+    if [ -n "$brew_prefix" ]; then
+      homebrew_roots+=("$brew_prefix")
+    fi
+    brew_qemu_prefix="$(brew --prefix qemu 2>/dev/null || true)"
+    if [ -n "$brew_qemu_prefix" ]; then
+      homebrew_roots+=("$brew_qemu_prefix")
+    fi
+  fi
+  homebrew_roots+=("/opt/homebrew" "/usr/local")
+fi
+
+find_first_file() {
+  for candidate in "$@"; do
+    if [ -f "$candidate" ]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
 
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 cd "$ROOT"
@@ -22,16 +52,34 @@ if [ "$ARCH" = "aarch64" ]; then
     echo "⚠️ qemu-system-aarch64 not installed; skipping ARM boot" >&2
     exit 0
   fi
-  QEMU_EFI="/usr/share/qemu-efi-aarch64/QEMU_EFI.fd"
-  if [ ! -f "$QEMU_EFI" ]; then
-    for p in /usr/share/qemu-efi/QEMU_EFI.fd /usr/share/edk2/aarch64/QEMU_EFI.fd; do
-      if [ -f "$p" ]; then
-        QEMU_EFI="$p"
-        break
-      fi
-    done
+  if [ -n "${QEMU_EFI:-}" ] && [ ! -f "$QEMU_EFI" ]; then
+    echo "⚠️ QEMU_EFI override '$QEMU_EFI' not found; probing default firmware paths" >&2
   fi
-  [ -f "$QEMU_EFI" ] || { echo "QEMU_EFI.fd not found" >&2; exit 1; }
+  declare -a qemu_efi_candidates=()
+  if [ -n "${QEMU_EFI:-}" ]; then
+    qemu_efi_candidates+=("$QEMU_EFI")
+  fi
+  qemu_efi_candidates+=(
+    /usr/share/qemu-efi-aarch64/QEMU_EFI.fd
+    /usr/share/qemu-efi/QEMU_EFI.fd
+    /usr/share/edk2/aarch64/QEMU_EFI.fd
+    /usr/share/AAVMF/AAVMF_CODE.fd
+    /usr/share/edk2-ovmf/AAVMF_CODE.fd
+  )
+  for root in "${homebrew_roots[@]}"; do
+    qemu_efi_candidates+=(
+      "$root/share/qemu/QEMU_EFI.fd"
+      "$root/share/qemu/edk2-aarch64-code.fd"
+      "$root/share/qemu/edk2-arm-code.fd"
+      "$root/share/AAVMF/AAVMF_CODE.fd"
+    )
+  done
+  if QEMU_EFI_PATH="$(find_first_file "${qemu_efi_candidates[@]}")"; then
+    QEMU_EFI="$QEMU_EFI_PATH"
+  else
+    echo "QEMU_EFI.fd not found" >&2
+    exit 1
+  fi
   ARM_LOG="$LOG_DIR/qemu_arm.log"
   (
     timeout 30s qemu-system-aarch64 \
@@ -44,24 +92,46 @@ if [ "$ARCH" = "aarch64" ]; then
   QEMU_PID=$!
   LOG_PATH="$ARM_LOG"
 else
-  OVMF_CODE="/usr/share/qemu/OVMF.fd"
-  if [ ! -f "$OVMF_CODE" ]; then
-    for p in /usr/share/OVMF/OVMF_CODE.fd /usr/share/OVMF/OVMF.fd /usr/share/edk2/ovmf/OVMF_CODE.fd; do
-      if [ -f "$p" ]; then
-        OVMF_CODE="$p"
-        break
-      fi
-    done
-  fi
-  OVMF_VARS=""
-  for p in /usr/share/OVMF/OVMF_VARS.fd /usr/share/edk2/ovmf/OVMF_VARS.fd; do
-    if [ -f "$p" ]; then
-      OVMF_VARS="$p"
-      break
-    fi
+  declare -a ovmf_code_candidates=(
+    /usr/share/qemu/OVMF.fd
+    /usr/share/OVMF/OVMF_CODE.fd
+    /usr/share/OVMF/OVMF.fd
+    /usr/share/edk2/ovmf/OVMF_CODE.fd
+    /usr/share/edk2/x64/OVMF_CODE.fd
+    /usr/share/OVMF/OVMF_CODE.fd
+  )
+  declare -a ovmf_vars_candidates=(
+    /usr/share/OVMF/OVMF_VARS.fd
+    /usr/share/edk2/ovmf/OVMF_VARS.fd
+    /usr/share/edk2/x64/OVMF_VARS.fd
+  )
+  for root in "${homebrew_roots[@]}"; do
+    ovmf_code_candidates+=(
+      "$root/share/qemu/OVMF.fd"
+      "$root/share/qemu/OVMF_CODE.fd"
+      "$root/share/qemu/edk2-x86_64-code.fd"
+      "$root/share/OVMF/OVMF_CODE.fd"
+      "$root/share/edk2-ovmf/OVMF_CODE.fd"
+    )
+    ovmf_vars_candidates+=(
+      "$root/share/qemu/OVMF_VARS.fd"
+      "$root/share/qemu/edk2-x86_64-vars.fd"
+      "$root/share/OVMF/OVMF_VARS.fd"
+      "$root/share/edk2-ovmf/OVMF_VARS.fd"
+    )
   done
-  [ -f "$OVMF_CODE" ] || { echo "⚠️ OVMF firmware not found; skipping x86_64 boot" >&2; exit 0; }
-  [ -n "$OVMF_VARS" ] || { echo "⚠️ OVMF_VARS.fd not found; skipping x86_64 boot" >&2; exit 0; }
+  if OVMF_CODE_PATH="$(find_first_file "${ovmf_code_candidates[@]}")"; then
+    OVMF_CODE="$OVMF_CODE_PATH"
+  else
+    echo "⚠️ OVMF firmware not found; skipping x86_64 boot" >&2
+    exit 0
+  fi
+  if OVMF_VARS_PATH="$(find_first_file "${ovmf_vars_candidates[@]}")"; then
+    OVMF_VARS="$OVMF_VARS_PATH"
+  else
+    echo "⚠️ OVMF_VARS firmware not found; skipping x86_64 boot" >&2
+    exit 0
+  fi
   cp "$OVMF_VARS" "$LOG_DIR/OVMF_VARS.fd"
   (
     timeout 30s qemu-system-x86_64 \
