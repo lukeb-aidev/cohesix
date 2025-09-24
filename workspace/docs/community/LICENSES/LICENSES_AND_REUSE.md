@@ -24,7 +24,7 @@ All imported code, libraries, microkernel modules, userland tools, and orchestra
 ---
 
 ## Explicit Prohibitions
-- **No GPL** in any CUDA, GPU, driver, kernel, or telemetry pipeline. This includes CUDA build chains, device drivers, and Secure9P stack integrations.
+- **No GPL** in any CUDA, GPU, driver, kernel, or telemetry pipeline. This includes CUDA build chains, device drivers, and Secure9P stack integrations, even on the external Linux CUDA microservers that Cohesix manages.
 - **No LGPL**, AGPL, or non-permissive copyleft licenses.
 
 ---
@@ -36,12 +36,12 @@ All imported code, libraries, microkernel modules, userland tools, and orchestra
 | Plan9 enhancements & 9P modules | BSD-2-Clause    |
 | Secure9P + Rust TLS transport   | Apache 2.0      |
 | Rapier physics integrations     | MIT             |
-| CUDA device interfaces          | Apache 2.0 wrappers only, no GPL linkage |
+| CUDA device interfaces          | Apache 2.0 wrappers only, no GPL linkage (applies to Linux CUDA microservers as well) |
 
 ---
 
 ## Notes on CUDA reuse
-While NVIDIA’s CUDA userland binaries remain under NVIDIA’s proprietary terms, all Cohesix integrations use Apache 2.0 / MIT licensed wrappers and no GPL driver modules. The kernel space UEFI environment explicitly avoids Linux GPL taint.
+While NVIDIA’s CUDA userland binaries remain under NVIDIA’s proprietary terms, all Cohesix integrations use Apache 2.0 / MIT licensed wrappers and no GPL driver modules. CUDA execution is confined to dedicated Linux microservers governed by Cohesix, and the kernel space UEFI environment explicitly avoids Linux GPL taint.
 
 ---
 

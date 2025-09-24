@@ -15,7 +15,7 @@ Every contribution must align with these pillars:
 
 - **Security by Design**: All logic must default to safe, capability-scoped behavior.
 - **Performance Matters**: Fast boot, efficient execution, and real-time determinism are priorities.
-- **Hardware-Aware**: NVIDIA CUDA, Jetson/Orin targets, and 9P integration are first-class concerns.
+- **Hardware-Aware**: Cohesix governs external CUDA microservers via Secure9P while keeping Plan 9 roles Linux-free; contributions must respect that execution boundary.
 - **Robust Engineering**: No placeholders, no stubs, no broken windows. Ship only what works.
 - **Quality > Quantity**: Every line of code must demonstrate care, clarity, and purpose.
 
@@ -83,13 +83,13 @@ Use `cohcli codex init` to configure API keys, then `cohcli codex run <agent_id>
 - Include SPDX license headers where appropriate.
 - Avoid GPL-derived content unless pre-cleared and sandboxed.
 - Any security-relevant code changes will undergo additional scrutiny.
-- All CUDA and 9P modules must pass role-based validation and must not expose unsafe defaults.
+- All CUDA annex interfaces and 9P modules must pass role-based validation and must not expose unsafe defaults.
 
 ## 🧪 Testing Expectations
 
 - Include or update unit tests for all new logic.
 - Use deterministic simulations where applicable (`/sim/`, `cohfuzz`, etc.).
-- Validate GPU runtime and 9P handler behavior using real-device or emulated test cases.
+- Validate remote GPU runtime behavior by exercising Cohesix CUDA Server integrations alongside 9P handler test cases.
 - Include trace files or examples if modifying agent behavior or validation logic.
 - Add to `VALIDATION_SUMMARY.md` when contributing core validation rules.
 

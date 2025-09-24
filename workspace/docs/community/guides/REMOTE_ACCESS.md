@@ -8,7 +8,7 @@
 This document provides a bulletproof, step-by-step guide for a typical community member to connect a Cohesix Queen (in the cloud) to a Worker device on a home Wi‑Fi network behind a broadband router. It covers prerequisites, configuration steps, and common pitfalls.
 
 ## Assumptions & Prerequisites
-1. **Worker Hardware**: Raspberry Pi, Jetson Nano, or similar edge device running Cohesix Worker image.
+1. **Worker Hardware**: Raspberry Pi or x86_64 micro-PC running the Cohesix Worker image (CUDA jobs are proxied to separate Cohesix CUDA Servers).
 2. **Queen Service**: Cohesix Queen endpoint deployed in a public cloud with a static IP or DNS name.
 3. **Network**: Home router providing NAT; internet uplink via ISP.  
 4. **Credentials**: SSH key pair for secure access; admin privileges on router and devices.
