@@ -11,7 +11,7 @@ This document describes the core 9P server provided by Cohesix, as well as Secur
 
 ## 1. Standard 9P Server
 
-The base 9P service is implemented in Rust using the `ninep` crate. It supports standard operations required by the runtime and agent communication layer.
+The base 9P service is implemented in Rust using the `ninep` crate. It now runs as a TCP server backed by the host filesystem with capability-aware path checks and validator hooks. All `walk`, `open`, `read`, `write`, `clunk`, and `stat` operations are executed over the network layer while preserving the in-memory policy enforcement described below.
 
 ### Supported Operations
 
@@ -42,7 +42,7 @@ Reads are allowed everywhere by default. Write operations to restricted paths wi
 
 ## 2. Secure9P (Hardened Variant)
 
-Secure9P adds encryption, authentication, and fine-grained namespace enforcement to the base protocol.
+Secure9P adds encryption, authentication, and fine-grained namespace enforcement to the base protocol. The TLS transport is handled by `cohesix-secure9p`, which performs mutual authentication (when configured), resolves per-agent namespaces from `secure9p.toml`, and applies sandbox policies during the handshake. Boot-time initialization loads the same policy file and starts the TLS listener automatically when the `secure9p` boot flag is set.
 
 ### Features
 
