@@ -17,7 +17,7 @@ All choices comply with the bulletproof rules in INSTRUCTION_BLOCK.md:
 - **Pure UEFI Boot:** All Cohesix nodes boot via UEFI firmware, enabling direct load of our microkernel and userland without POSIX layers.
 - **Plan9 & 9P Everywhere:** All file operations, telemetry, and validator integrations use the 9P protocol.
 - **Secure Enclaves & SeL4 foundation:** Hardware selected must support clean MMU + IOMMU for secure microkernel operations.
-- **GPU strategy:** CUDA is only utilized under controlled conditions on PCIe NVIDIA GPUs in x86_64 or ARM64 servers, rejecting Jetson / L4T.
+- **GPU strategy:** CUDA executes on dedicated Linux microservers (x86_64 + NVIDIA or Jetson Orin NX) managed as a Cohesix annex via Secure9P; Plan9 roles remain Linux-free.
 
 ---
 
@@ -30,14 +30,15 @@ All choices comply with the bulletproof rules in INSTRUCTION_BLOCK.md:
 | **KioskInteractive / GlassesAgent** | x86_64 micro PCs (Dell OptiPlex Micro, Supermicro E300) | Direct UEFI, runs Plan9 GUI / AR workloads |
 | **SensorRelay / SimulatorTest** | ARM64 UEFI (SolidRun LX2) or Intel NUC | Lightweight, sensors + scenario replay validation |
 | **AWS Testing / CI burst** | AWS g4dn.xlarge / g5.xlarge (UEFI x86 + NVIDIA GPU), AWS m6i/c6i for standard tests | Mirrors edge hardware, runs validator scenarios |
+| **Cohesix CUDA Server (annex)** | Jetson Orin NX (Linux) or x86_64 with NVIDIA T4/A10G | Runs CUDA workloads under Cohesix control, outside Plan9 roles |
 
 ---
 
 ## Hardware examples and shopping notes
 
 ### x86_64 UEFI options
-- **Dell OptiPlex Micro + NVIDIA T600/T1000:** Small edge boxes, PCIe GPUs, robust UEFI.
-- **Supermicro E300-9D:** Compact Xeon D platform, PCIe slots for NVIDIA cards.
+- **Dell OptiPlex Micro + NVIDIA T600/T1000:** Small edge boxes, PCIe GPUs, robust UEFI for Plan9 nodes; GPUs mount as remote CUDA annex resources when paired with Linux microservers.
+- **Supermicro E300-9D:** Compact Xeon D platform, PCIe slots for NVIDIA cards; pair with a minimal Linux annex image for CUDA hosting.
 - **Intel NUC:** Useful for developer benches and quick scenario test beds.
 
 ### ARM64 UEFI options
@@ -45,8 +46,9 @@ All choices comply with the bulletproof rules in INSTRUCTION_BLOCK.md:
 - **Ampere Altra dev boards:** Larger, supports PCIe GPUs, for heavy ARM workloads.
 
 ### Cloud mirrors
-- **AWS g4dn.xlarge (NVIDIA T4 GPU) or g5.xlarge (A10G):** Fully UEFI, mirrors PCIe CUDA setups.
+- **AWS g4dn.xlarge (NVIDIA T4 GPU) or g5.xlarge (A10G):** Fully UEFI, mirrors PCIe CUDA setups with Cohesix Queens orchestrating Linux GPU instances as annexes.
 - **AWS Graviton instances (for non-GPU tests):** Runs pure ARM64, aligned with DroneWorker logic.
+- **Jetson Orin NX / AGX (Linux annex)**: Used strictly as managed CUDA servers connected through Secure9P tunnels.
 
 ---
 

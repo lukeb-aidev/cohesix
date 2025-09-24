@@ -8,23 +8,22 @@
 
 Cohesix is a self‑contained, formally verified operating‑system and compiler suite designed for secure, scalable execution on edge and wearable devices.
 
-Why Cohesix? seL4 proofs guarantee strong isolation, cold boot completes in under 200 ms with GPU offload latency below 5 ms, dynamic 9P namespaces expose services like `/sim/` and `/srv/cuda`, and the BusyBox userland keeps the toolchain familiar.
+Why Cohesix? seL4 proofs guarantee strong isolation, cold boot completes in under 200 ms, dynamic 9P namespaces expose services like `/sim/` and `/srv/cuda`, and the BusyBox userland keeps the toolchain familiar. Cohesix now positions itself as the verifiable control plane that orchestrates external CUDA farms through tamper-evident Secure9P workflows instead of promising on-device GPU execution.
 
 ---
 
 ## 🔍 Overview
 
-Cohesix combines a micro‑kernel architecture (seL4‑derived) with Plan 9‑style namespaces, a distributed compiler tool‑chain, and a cloud‑edge orchestration model. Built‑in telemetry, simulation via Rapier, and a role‑based trust model make it ideal for mission‑critical, privacy‑sensitive deployments.
+Cohesix combines a micro‑kernel architecture (seL4‑derived) with Plan 9‑style namespaces, a distributed compiler tool‑chain, and a cloud‑edge orchestration model. Built‑in telemetry, simulation via Rapier, and a role‑based trust model make it ideal for mission‑critical, privacy‑sensitive deployments. The operating system now acts as a zero-trust GPU control plane that fronts dedicated Linux CUDA microservers, ensuring every remote GPU job is scheduled, validated, and archived through trace-first governance.
 
 ### Key Features
 - **Formally verified kernel** with provable isolation
 - **9P namespace** for uniform resource access
+- **Remote CUDA governance** via Cohesix CUDA Servers managed as a zero-trust annex
 - **Physics‑aware simulation** (Rapier) for Worker nodes
 - **Queen–Worker protocol** for secure lifecycle modules (SLMs)
 - **Multi‑language tool‑chain** (Rust, Go, Codex shell)
-- **Modular boot & sandboxing** with trace validation
-
-  - **Trace-first validation** with CI-enforced snapshots and syscall replay
+- **Modular boot & sandboxing** with trace validation and replayable audit trails
 
 ---
 
@@ -60,7 +59,7 @@ cd cohesix
 make all                       # Go vet + C shims
 cargo check --workspace        # Rust build
 cargo build --release \
-  # CUDA workloads run remotely via secure9p; ensure /srv/cuda points to a remote server
+  # CUDA workloads run remotely via Secure9P; ensure /srv/cuda points at a Cohesix-managed microserver
 make go-test                  # Go unit tests (cd go && go test ./...)
 ./test_all_arch.sh             # run Rust, Go, and Python tests
 
@@ -84,11 +83,11 @@ cohbuild, cohrun, cohtrace, cohcap — see cli/README.md for usage by role
 
 Initial demo services are enabled:
 
-* `/srv/camera` (9P stream) and `/srv/gpuinfo` for workers
+* `/srv/camera` (9P stream) and `/srv/gpuinfo` sourced from Cohesix CUDA Servers
 * `cohrun physics_demo` to run a Rapier simulation
 * `cohtrace list` to view joined workers
 * Optional Secure 9P server with TLS via `--features secure9p` (see `config/secure9p.toml`).
-  TLS certificates are pinned and client auth can be enforced.
+  TLS certificates are pinned and client auth can be enforced across the Queen-to-microserver boundary.
 * Copy `etc/init.conf.example` to `/etc/init.conf` and adjust values to control startup behavior
 
 ### Plan9 Physics Server

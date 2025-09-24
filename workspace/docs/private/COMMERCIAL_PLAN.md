@@ -6,7 +6,7 @@
 # Cohesix Commercial Plan
 
 ## 1. Executive Summary
-Cohesix delivers a formally verified, micro‑kernel–based edge compute platform combining seL4 security guarantees with Plan 9 simplicity. Targeting mission‑critical robotics, IoT, and next‑gen AR deployments, the platform enables deterministic, secure workloads at scale. Revenue stems from device licensing, enterprise support, and cloud‑managed services.
+Cohesix delivers a formally verified, micro‑kernel–based edge compute platform combining seL4 security guarantees with Plan 9 simplicity. Targeting mission‑critical robotics, IoT, and next‑gen AR deployments, the platform now positions itself as the zero-trust GPU control plane that fronts Cohesix-managed Linux CUDA microservers. Revenue stems from device licensing, enterprise support, and cloud‑managed services that package the annexed GPU infrastructure.
 
 ## 2. Problem Statement
 - **Security & Compliance Gaps** – Linux edge stacks expose large attack surfaces and inconsistent patching.
@@ -16,7 +16,8 @@ Cohesix delivers a formally verified, micro‑kernel–based edge compute platfo
 ## 3. Solution Overview
 - **Core Platform** – seL4 micro‑kernel with formal proofs and a Plan 9 userland served via 9P namespaces.
 - **Modular Roles** – QueenPrimary, DroneWorker, KioskInteractive, GlassesAgent, and SensorRelay profiles ship pre‑configured.
-- **Integrated Toolchain** – Coh‑CLI and Coh‑SDK in Go, Node.js, and Python for virtualization, SBOM generation, and CI automation.
+- **Integrated Toolchain** – Coh‑CLI and Coh‑SDK in Go, Node.js, and Python for virtualization, SBOM generation, CI automation, and Cohesix CUDA Server orchestration.
+- **GPU Annex Services** – Managed Linux CUDA microservers with signed job telemetry exposed through Secure9P.
 - **Ecosystem Services** – Managed updates over TLS, remote attestation, and telemetry dashboards.
 
 ## 4. Market Analysis
@@ -57,7 +58,7 @@ Additional channel acceleration will include:
 | **Gross Margin**    | 65%       | 68%        | 70%        | 72%        |
 
 ## 7. Key Partnerships & Channels
-- **Hardware OEMs** – NVIDIA (Jetson), Raspberry Pi Foundation
+- **Hardware OEMs** – NVIDIA (Jetson annex), Raspberry Pi Foundation, Supermicro microservers
 - **Cloud Providers** – AWS and Microsoft Azure channel listings
 - **Systems Integrators** – Robotics and industrial automation VARs
 - **Standards Bodies** – seL4 Foundation and IEC working groups

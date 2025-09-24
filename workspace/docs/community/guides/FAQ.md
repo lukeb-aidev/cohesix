@@ -15,7 +15,7 @@ Cohesix is a minimal, role-aware operating system built for a world where AI, se
 
 Unlike general-purpose Linux distros, Cohesix is:
 - **Cold-boot fast** (<200ms)
-- **GPU-aware** (it can use NVIDIA CUDA where available to accelerate agents)
+- **GPU-governed** (it orchestrates NVIDIA CUDA annexes through Secure9P without running CUDA inside Plan9 roles)
 - **Physically grounded** (agents can reason about movement, space, and time via a built-in physics engine)
 - **Trace-validating** (every syscall and event can be audited in real time)
 
@@ -27,7 +27,7 @@ It’s built on a **Beehive paradigm**:
 
 Each role in the manifest — from `QueenPrimary` to `SensorRelay` — represents a real-world deployment need:
 - Cloud-scale AI tasking
-- On-device inference
+- Annexed GPU inference with tamper-evident telemetry
 - Physical world interaction
 - Secure sandbox execution
 
@@ -88,9 +88,9 @@ We don’t overhype — we ship.
 
 **A:**  
 Yes. Cohesix includes:
-- `/srv/cuda` interface for on-board NVIDIA Jetson-class acceleration.
+- `/srv/cuda` interface that proxies to Cohesix-managed Linux CUDA Servers (Jetson Orin NX, x86_64 + NVIDIA) over Secure9P.
 - `/sim/` interface backed by Rapier physics engine for real-world grounding.
-- Graceful fallback with logging if CUDA or Rapier is unavailable. All failures are trace-captured.
+- Graceful fallback with logging if CUDA annexes are unreachable or if Rapier is unavailable. All failures are trace-captured.
 
 This means **edge agents can reason about space, time, force — and offload heavy math to GPU** where available.
 
@@ -100,10 +100,10 @@ This means **edge agents can reason about space, time, force — and offload hea
 
 **A:**  
 It’s alpha-grade, but already boots and runs tasks on:
-- Jetson Orin Nano (CUDA + Rapier)
 - Raspberry Pi 5
 - AWS Graviton / x86_64 EC2 (Queen orchestration)
 - QEMU virtual environments (test harness)
+- Cohesix-managed CUDA annexes (Jetson Orin NX, x86_64 + NVIDIA) for GPU workloads governed externally
 
 **Tests are running. Traces are captured.** This isn’t a concept — it’s a functioning prototype. A production track is underway with watchdogs, hydration checks, and zero-stub policies.
 

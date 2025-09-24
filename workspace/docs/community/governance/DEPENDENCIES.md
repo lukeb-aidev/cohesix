@@ -15,7 +15,7 @@
 | musl libc             | 1.2.3        | <https://musl.libc.org> (MIT)          | POSIX-compat layer for Plan 9 ports & BusyBox       |
 | Go                    | **1.22**     | <https://go.dev> (BSD-style)           | CSP-based 9P services & auxiliary tooling           |
 | Python                | 3.10+        | <https://python.org> (PSF)             | DSL, testing harnesses, runtime validators. Ensemble agents and tests now respect TMPDIR/COHESIX_ENS_TMP for writable paths Snapshot and validator traces now explicitly support TMPDIR and override guards. |
-| C++17 & CUDA Toolkit  | 11.8 / 11.8  | <https://developer.nvidia.com> (NVIDIA EULA) | Torch/TensorRT GPU deploy; Rapier physics in Rust |
+| C++17 & CUDA Toolkit  | 11.8 / 11.8  | <https://developer.nvidia.com> (NVIDIA EULA) | Torch/TensorRT GPU deploy on Cohesix-managed Linux CUDA microservers; Rapier physics remains Plan 9-native |
 
 # Rust Crate Dependencies
 

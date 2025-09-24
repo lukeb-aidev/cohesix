@@ -506,7 +506,7 @@
 - Removed prebuilt mandoc binaries and added build script.
 ### Added
 - Initial manpages for Cohesix CLI tools and BusyBox utilities.
-- CI hardware validation collects Jetson and Pi boot logs.
+- CI hardware validation collects Raspberry Pi boot logs and Cohesix CUDA Server annex telemetry.
 - Example trace replay executed in CI.
 - VALIDATION_AND_TESTING.md updated to v0
 
@@ -1351,7 +1351,7 @@
 ## [v0.166] - 2026-01-10
 ### Fixed
 - `build_sel4_kernel.sh` forces `KernelWordSize` in CMake cache and adds
-  classification headers. Compatible with Jetson Orin Nano (aarch64).
+  classification headers. Compatible with Raspberry Pi 5 Plan9 targets; GPU annex support validated separately on Cohesix CUDA Servers.
 
 ## [v0.167] - 2026-01-20
 ### Added
