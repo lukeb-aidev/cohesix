@@ -1,59 +1,19 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: protocol.rs v0.2
+// Filename: protocol.rs v1.0
 // Author: Lukas Bower
-// Date Modified: 2025-07-04
+// Date Modified: 2029-01-15
 #![cfg(feature = "std")]
 
-#[allow(unused_imports)]
-use alloc::{boxed::Box, string::String, vec::Vec};
-/// Orchestration protocol message types.
-//
-/// Structures are serialized using MessagePack via `rmp-serde`.
-use serde::{Deserialize, Serialize};
-
-/// Join request sent from a Worker to a Queen.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct JoinRequest {
-    /// Unique worker identifier.
-    pub worker_id: String,
-    /// Advertised IP address.
-    pub ip: String,
+/// Generated gRPC bindings for the orchestrator service.
+#[allow(clippy::all)]
+pub mod generated {
+    tonic::include_proto!("cohesix.orchestrator");
 }
 
-/// Acknowledgement from Queen to Worker confirming join.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct JoinAck {
-    /// Accepted worker identifier.
-    pub worker_id: String,
-    /// Queen hostname or ID.
-    pub queen_id: String,
-}
+pub use generated::orchestrator_service_client::OrchestratorServiceClient;
+pub use generated::orchestrator_service_server::OrchestratorService;
+pub use generated::orchestrator_service_server::OrchestratorServiceServer;
+pub use generated::*;
 
-/// Worker role report after joining.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct RoleReport {
-    /// Worker identifier.
-    pub worker_id: String,
-    /// Current role string.
-    pub role: String,
-}
-
-/// Ping packet to validate liveness.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct HealthPing {
-    /// Worker identifier.
-    pub worker_id: String,
-    /// Unix timestamp of the ping.
-    pub ts: u64,
-}
-
-/// Agent scheduling directive.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct AgentSchedule {
-    /// Agent identifier to spawn or migrate.
-    pub agent_id: String,
-    /// Target worker identifier.
-    pub worker_id: String,
-    /// Desired role for the agent.
-    pub role: String,
-}
+/// Default endpoint used when no explicit orchestrator address is provided.
+pub const DEFAULT_ENDPOINT: &str = "http://127.0.0.1:50051";

@@ -27,4 +27,13 @@ fn main() {
 }
 
 #[cfg(not(feature = "sel4"))]
-fn main() {}
+fn main() {
+    println!("cargo:rerun-if-changed=../proto/orchestrator.proto");
+    if let Err(err) = tonic_build::configure()
+        .build_server(true)
+        .build_client(true)
+        .compile(&["../proto/orchestrator.proto"], &["../proto"])
+    {
+        panic!("failed to compile orchestrator proto: {err}");
+    }
+}

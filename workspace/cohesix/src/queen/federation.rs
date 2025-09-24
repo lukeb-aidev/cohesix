@@ -3,9 +3,9 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-12
 
+use crate::CohError;
 #[allow(unused_imports)]
 use alloc::{boxed::Box, string::String, vec::Vec};
-use crate::CohError;
 /// Queen-to-Queen federation manager.
 //
 /// Handles handshake, trust negotiation and heartbeat exchange between

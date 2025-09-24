@@ -5,9 +5,9 @@
 
 use crate::agents::{migration, runtime::AgentRuntime};
 use crate::cohesix_types::Role;
+use crate::{coh_error, CohError};
 #[allow(unused_imports)]
 use alloc::{boxed::Box, string::String, vec::Vec};
-use crate::{coh_error, CohError};
 use clap::{Parser, Subcommand};
 
 /// CLI arguments for `cohagent`.
@@ -51,12 +51,7 @@ pub fn run(cli: Cli) -> Result<(), CohError> {
             rt.pause(&id)?;
         }
         Command::Migrate { id, to } => {
-            migration::migrate(
-                &id,
-                |_| Err(coh_error!("fetch")),
-                |_| Ok(()),
-                |_| Ok(()),
-            )?;
+            migration::migrate(&id, |_| Err(coh_error!("fetch")), |_| Ok(()), |_| Ok(()))?;
             println!("migrated {} to {}", id, to);
         }
     }

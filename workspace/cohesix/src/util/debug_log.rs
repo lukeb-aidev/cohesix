@@ -3,7 +3,6 @@
 // Author: Lukas Bower
 // Date Modified: 2026-08-06
 
-
 use core::fmt;
 
 #[cfg(not(feature = "std"))]

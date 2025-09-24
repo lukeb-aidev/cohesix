@@ -3,9 +3,9 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-18
 
+use crate::{coh_bail, CohError};
 #[allow(unused_imports)]
 use alloc::{boxed::Box, string::String, vec::Vec};
-use crate::{coh_bail, CohError};
 use chrono::Utc;
 use clap::{Parser, Subcommand};
 use std::fs::{self, OpenOptions};

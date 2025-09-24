@@ -5,11 +5,17 @@
 
 //! Minimal in-memory filesystem for Cohesix-9P.
 
-use alloc::{collections::BTreeMap, sync::Arc, vec::Vec, string::{String, ToString}, format};
 use crate::policy::{Access, SandboxPolicy};
+use alloc::{
+    collections::BTreeMap,
+    format,
+    string::{String, ToString},
+    sync::Arc,
+    vec::Vec,
+};
 use core::sync::atomic::{AtomicU64, Ordering};
-use spin::RwLock;
 use once_cell::sync::Lazy;
+use spin::RwLock;
 
 /// Shared validator hook signature.
 pub type ValidatorHook = dyn Fn(&'static str, String, String, u64) + Send + Sync;
@@ -75,7 +81,9 @@ impl InMemoryFs {
 
     /// Update metrics JSON exposed at `/metrics`.
     pub fn update_metrics(&self, metrics: &[u8]) {
-        self.nodes.write().insert("/metrics".into(), metrics.to_vec());
+        self.nodes
+            .write()
+            .insert("/metrics".into(), metrics.to_vec());
     }
 
     /// Retrieve contents of a file if present.
@@ -83,7 +91,12 @@ impl InMemoryFs {
         if let Some(pol) = &*self.policy.read() {
             if !pol.allows(path, Access::Read) {
                 if let Some(hook) = &*self.validator_hook.read() {
-                    hook("9p_access", path.to_string(), agent.to_string(), current_ts());
+                    hook(
+                        "9p_access",
+                        path.to_string(),
+                        agent.to_string(),
+                        current_ts(),
+                    );
                 }
                 return None;
             }
@@ -96,14 +109,24 @@ impl InMemoryFs {
         if let Some(pol) = &*self.policy.read() {
             if !pol.allows(path, Access::Write) {
                 if let Some(hook) = &*self.validator_hook.read() {
-                    hook("9p_access", path.to_string(), agent.to_string(), current_ts());
+                    hook(
+                        "9p_access",
+                        path.to_string(),
+                        agent.to_string(),
+                        current_ts(),
+                    );
                 }
                 return;
             }
         }
         if path.starts_with("/persist") || path.starts_with("/srv/secure") {
             if let Some(hook) = &*self.validator_hook.read() {
-                hook("9p_access", path.to_string(), agent.to_string(), current_ts());
+                hook(
+                    "9p_access",
+                    path.to_string(),
+                    agent.to_string(),
+                    current_ts(),
+                );
             }
             return;
         }

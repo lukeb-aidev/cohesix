@@ -3,9 +3,9 @@
 // Author: Lukas Bower
 // Date Modified: 2025-08-16
 
+use crate::CohError;
 #[allow(unused_imports)]
 use alloc::{boxed::Box, string::String, vec::Vec};
-use crate::CohError;
 use serde::{Deserialize, Serialize};
 /// Agent state serialization and migration support.
 //

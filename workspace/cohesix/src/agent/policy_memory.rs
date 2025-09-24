@@ -5,9 +5,9 @@
 
 #![cfg(feature = "std")]
 
+use crate::CohError;
 #[allow(unused_imports)]
 use alloc::{boxed::Box, string::String, vec::Vec};
-use crate::CohError;
 /// Persistent policy memory utilities.
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "std")]

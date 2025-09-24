@@ -4,12 +4,12 @@
 // Date Modified: 2025-07-15
 
 use crate::agent_transport::AgentTransport;
-use crate::CohError;
 /// High level agent migration helpers used by the orchestrator.
 //
 /// Wraps the lower-level snapshot routines and federation
 /// transfer helpers to move agents between workers.
 use crate::agents::migration as snap;
+use crate::CohError;
 use serde_json;
 
 /// Status states for migration control.
@@ -39,5 +39,9 @@ pub fn migrate<T: AgentTransport>(
 /// Trait for structures that can initiate migration.
 pub trait Migrateable {
     /// Migrate this agent to a peer via the given transport.
-    fn migrate<T: AgentTransport>(&self, peer: &str, transport: &T) -> Result<MigrationStatus, CohError>;
+    fn migrate<T: AgentTransport>(
+        &self,
+        peer: &str,
+        transport: &T,
+    ) -> Result<MigrationStatus, CohError>;
 }

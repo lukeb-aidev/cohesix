@@ -3,14 +3,14 @@
 // Author: Lukas Bower
 // Date Modified: 2026-12-30
 
-#[allow(unused_imports)]
-use alloc::{boxed::Box, string::String, vec::Vec};
 /// Agent runtime management.
 //
 /// Spawns, traces and terminates agents in sandboxed namespaces. Each agent is
 /// registered under `/srv/agents/<id>` and a trace log is kept in
 /// `/srv/agent_trace/<id>`.
 use crate::{coh_error, CohError};
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
 use std::io::Write;

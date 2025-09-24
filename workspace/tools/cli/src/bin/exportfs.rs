@@ -4,8 +4,8 @@
 // Date Modified: 2026-01-27
 
 use clap::Parser;
-use cohesix::CohError;
 use cohesix::trace::recorder::event;
+use cohesix::CohError;
 use cohesix_9p::{FsConfig, FsServer};
 
 /// Serve a directory over 9P and register in /srv.

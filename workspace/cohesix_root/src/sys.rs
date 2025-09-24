@@ -3,11 +3,11 @@
 // Author: Lukas Bower
 // Date Modified: 2028-12-13
 
+use crate::coherr;
+use crate::dt::UART_BASE;
 use core::ffi::c_char;
 use core::sync::atomic::{compiler_fence, Ordering};
-use crate::dt::UART_BASE;
-use crate::coherr;
-use sel4_sys_extern_wrapper::{seL4_DebugPutChar, seL4_DebugHalt};
+use sel4_sys_extern_wrapper::{seL4_DebugHalt, seL4_DebugPutChar};
 
 #[link_section = ".uart"]
 #[used]
@@ -34,7 +34,6 @@ pub unsafe extern "C" fn sel4_set_tls(ptr: *const u8) {
     );
 }
 
-
 const SYS_DEBUG_PUTCHAR: i64 = -9;
 const SYS_SEND: i64 = -3;
 const SYS_RECV: i64 = -5;
@@ -45,7 +44,6 @@ const SYS_DEBUG_HALT: i64 = -11;
 pub const fn debug_putchar_const() -> i64 {
     SYS_DEBUG_PUTCHAR
 }
-
 
 const ENOENT: i32 = -2;
 const EBADF: i32 = -9;
@@ -63,10 +61,22 @@ static NS_DATA: &[u8] = include_bytes!("../../../config/plan9.ns");
 static BOOTARGS_DATA: &[u8] = b"COHROLE=DroneWorker\n";
 
 static mut FILES: [File; 4] = [
-    File { data: INIT_DATA, pos: 0 },     // 0 => /bin/init
-    File { data: NS_DATA, pos: 0 },       // 1 => /etc/plan9.ns
-    File { data: BOOTARGS_DATA, pos: 0 }, // 2 => /boot/bootargs.txt
-    File { data: b"" as &[u8], pos: 0 },  // 3 => /srv/cohrole
+    File {
+        data: INIT_DATA,
+        pos: 0,
+    }, // 0 => /bin/init
+    File {
+        data: NS_DATA,
+        pos: 0,
+    }, // 1 => /etc/plan9.ns
+    File {
+        data: BOOTARGS_DATA,
+        pos: 0,
+    }, // 2 => /boot/bootargs.txt
+    File {
+        data: b"" as &[u8],
+        pos: 0,
+    }, // 3 => /srv/cohrole
 ];
 
 #[no_mangle]
@@ -135,7 +145,11 @@ pub unsafe extern "C" fn coh_getenv(_name: *const c_char) -> *const c_char {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn coh_setenv(_name: *const c_char, _val: *const c_char, _overwrite: i32) -> i32 {
+pub unsafe extern "C" fn coh_setenv(
+    _name: *const c_char,
+    _val: *const c_char,
+    _overwrite: i32,
+) -> i32 {
     ENOSYS
 }
 

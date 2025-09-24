@@ -3,11 +3,11 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-22
 
-#[allow(unused_imports)]
-use alloc::{boxed::Box, string::String, vec::Vec};
-use crate::CohError;
 /// Minimal base agent with introspection logging and self-diagnosis.
 use crate::sim::introspect::{self, IntrospectionData};
+use crate::CohError;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 use serde_json;
 
 pub struct BaseAgent {
@@ -19,7 +19,11 @@ use crate::agent_migration::{Migrateable, MigrationStatus};
 use crate::agent_transport::AgentTransport;
 
 impl Migrateable for BaseAgent {
-    fn migrate<T: AgentTransport>(&self, peer: &str, transport: &T) -> Result<MigrationStatus, CohError> {
+    fn migrate<T: AgentTransport>(
+        &self,
+        peer: &str,
+        transport: &T,
+    ) -> Result<MigrationStatus, CohError> {
         let base_tmp = std::env::var("TMPDIR").unwrap_or_else(|_| "/srv".to_string());
         let tmp = format!("{}/{}_base.json", base_tmp, self.id);
         let data = serde_json::json!({"id": self.id});

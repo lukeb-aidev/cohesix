@@ -19,7 +19,9 @@ impl CudaExecutor {
         let addr = std::env::var("CUDA_SERVER")
             .or_else(|_| fs::read_to_string("/srv/cuda"))
             .unwrap_or_default();
-        Self { addr: addr.trim().to_string() }
+        Self {
+            addr: addr.trim().to_string(),
+        }
     }
 
     /// Loading a kernel is a no-op for remote dispatch.

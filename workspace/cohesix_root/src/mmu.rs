@@ -3,7 +3,6 @@
 // Author: Lukas Bower
 // Date Modified: 2028-02-15
 
-
 #[repr(align(4096))]
 struct Table([u64; 512]);
 
@@ -21,8 +20,12 @@ fn init_tables(
     bootinfo: usize,
     bootinfo_end: usize,
 ) {
-    for entry in l1.iter_mut() { *entry = 0; }
-    for entry in l2.iter_mut() { *entry = 0; }
+    for entry in l1.iter_mut() {
+        *entry = 0;
+    }
+    for entry in l2.iter_mut() {
+        *entry = 0;
+    }
 
     l1[0] = (l2.as_ptr() as u64) | 0b11;
 
