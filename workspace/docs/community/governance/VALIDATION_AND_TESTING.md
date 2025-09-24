@@ -19,7 +19,7 @@ Cohesix uses layered tests and continuous validation to guarantee reliability ac
 
 -## CI Hooks
 - `tools/validate_batch.sh` checks file structure after each checkpoint
-- `scripts/collect_boot_logs.sh` uploads logs from Jetson Orin Nano and Raspberry Pi 5
+- `scripts/collect_boot_logs.sh` uploads logs from Raspberry Pi 5 Plan9 nodes and the Cohesix CUDA Server annex hosts
 
 ## Batch Testing
 `tools/simulate_batch.sh` can create a mock batch. Replay with `tools/replay_batch.sh` to verify recovery. Confirm `CODEX_BATCH: YES` appears in generated metadata.
@@ -47,7 +47,7 @@ The validator will reject any rule missing metadata and log violations to `/log/
 - All TODO markers have been removed from `src/cohcc/ir/mod.rs`, satisfying the no-stub policy.
 
 - FIXME markers remain in `src/cohcc/ir/mod.rs`, violating the no-stub policy.
-- Boot and hardware validation logs missing for Jetson and Pi targets.
+- Boot and hardware validation logs missing for Raspberry Pi Plan9 targets and for the Cohesix CUDA Server annex.
   - Ensemble agent tests previously failed due to hardcoded temp paths; now fixed via env-based temp directory configuration.
   - Boot script `test_boot_efi` failed without QEMU installed—validation updated to check for `qemu-system-x86_64`.
 

@@ -10,7 +10,7 @@
 ## Purpose
 This document defines the canonical architecture for Cohesix orchestration, covering how Queen roles and Worker roles coordinate across local QEMU, edge hardware, and cloud resources.
 
-It ensures consistency with our UEFI + Plan9 + 9P design, removing all Linux dependencies and rejecting earlier Jetson plans.
+It ensures consistency with our UEFI + Plan9 + 9P design across Cohesix roles while acknowledging that CUDA execution now lives on dedicated Linux microservers operated as a managed annex.
 
 ---
 
@@ -33,9 +33,9 @@ It ensures consistency with our UEFI + Plan9 + 9P design, removing all Linux dep
 
 ---
 
-## GPU orchestration fallback
-- While Cohesix itself is purely UEFI + Plan9, CUDA workloads can be offloaded under tightly controlled conditions to secure PCIe NVIDIA nodes.
-- Orchestrators validate workload assignments and ensure telemetry streams into the Plan9 validator before acceptance.
+## GPU orchestration annex
+- Cohesix roles remain purely UEFI + Plan9, while CUDA workloads execute on Cohesix-managed Linux microservers reachable via Secure9P.
+- Orchestrators validate workload assignments, enforce zero-trust policy, and ensure telemetry streams into the Plan9 validator before acceptance.
 
 ---
 

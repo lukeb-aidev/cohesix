@@ -15,7 +15,7 @@ This document merges `ROLE_MANIFEST.md` and the private `QUEEN_POLICY.md` into a
 | RegionalQueen    | Multi-node cloud federation lead    |
 | BareMetalQueen   | On-premise orchestration node       |
 | DroneWorker      | Physical simulation + sensors       |
-| InteractiveAiBooth | AI kiosk with Jetson + UI stack  |
+| InteractiveAiBooth | AI kiosk bridging remote CUDA annex results with local UI |
 | KioskInteractive | Standalone human interface terminal |
 | GlassesAgent     | AR rendering for glasses            |
 | SensorRelay      | Sensor aggregator + forwarder       |
@@ -40,8 +40,8 @@ gRPC API on the management interface. The default endpoint is
 The service defines the following RPCs:
 
 * `Join` — worker registration with role, trust level, and capabilities.
-* `Heartbeat` — periodic health reports including optional GPU telemetry.
-* `RequestSchedule` — agent placement queries with GPU-aware scheduling.
+* `Heartbeat` — periodic health reports including optional telemetry from Cohesix-managed CUDA microservers.
+* `RequestSchedule` — agent placement queries with GPU-aware scheduling against the remote CUDA annex.
 * `AssignRole` — administrative reassignment of worker roles.
 * `UpdateTrust` — trust escalation or de-escalation for workers.
 * `GetClusterState` — consolidated view of queen and worker health.
@@ -54,7 +54,7 @@ certificates issued to queen and worker nodes. Legacy filesystem drops
 backwards compatibility but should be treated as read-only audit
 mirrors of the gRPC source of truth.
 
-<!-- New hybrid AI kiosk role combining Jetson GPU features with interactive booth UI -->
+<!-- Hybrid AI kiosk role consuming Cohesix CUDA Server outputs via Secure9P -->
 
 | Role             | Description                                   | Interface                  |
 |------------------|-----------------------------------------------|----------------------------|
@@ -62,9 +62,9 @@ mirrors of the gRPC source of truth.
 | RegionalQueen    | Cloud-native cluster orchestrator: handles dynamic resource allocation, auto-scaling, and failover across multiple nodes, leveraging cloud hooks at boot. | gRPC control plane         |
 | BareMetalQueen   | Bare-metal orchestrator for isolated or private networks, bootstrapping directly on hardware with minimal dependencies and direct device management. | Proprietary hardware interface |
 | DroneWorker      | Physics & sensor processing: runs Rapier-based simulations and aggregates sensor inputs. | `/sim/` namespace          |
-| InteractiveAiBooth | Hybrid AI kiosk booth with Jetson acceleration and UI services. | `/srv/cuda` + Secure9P |
+| InteractiveAiBooth | Hybrid AI kiosk booth that streams inference results from Cohesix CUDA Servers into local UI services. | `/srv/cuda` + Secure9P |
 | KioskInteractive | Local human–machine interface: handles AR user interactions on kiosk displays. | WebSocket + 9P namespace   |
-| GlassesAgent     | Vision pipeline & UI renderer for AR glasses: processes camera feeds and renders overlays via CUDA. | `/srv/cuda` + 9P streams   |
+| GlassesAgent     | Vision pipeline & UI renderer for AR glasses: processes camera feeds locally and requests CUDA overlays from the remote annex. | `/srv/cuda` + 9P streams   |
 | SensorRelay      | Sensor data aggregator: collects and forwards sensor streams to other roles. | 9P file streams            |
 | SimulatorTest    | Scenario replay & integration testing: uses SimMount to replay recorded traces and validate system behavior. | SimMount + trace logs      |
 ```
@@ -75,7 +75,7 @@ This manifest guides both the OS initialization sequence and the Codex automatio
 
 * **KioskInteractive** – offers a local UI terminal with restricted command set.
 * **DroneWorker** – runs physics and sensor pipelines for autonomous drones.
-* **GlassesAgent** – provides AR overlays using CUDA when available.
+* **GlassesAgent** – provides AR overlays by requesting GPU rendering from Cohesix CUDA Servers when available.
 * **SensorRelay** – forwards raw sensor data to other agents.
 * **SimulatorTest** – replays recorded traces to validate system behavior.
 

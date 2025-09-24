@@ -16,7 +16,7 @@ A rigorous, multi‐tiered testing strategy ensures each component of Cohesix is
 - Mock device trees to ensure correct memory layout computation.
 
 ### 1.2 Smoke Tests
-- Flash minimal boot image to reference SBC (Jetson Orin Nano) and verify kernel load stage begins.  
+- Flash minimal boot image to reference SBC (Raspberry Pi 5 or x86_64 micro-PC) and verify kernel load stage begins.
 - Check serial console output for expected boot messages.
 
 ### 1.3 Regression Tests
@@ -48,7 +48,7 @@ A rigorous, multi‐tiered testing strategy ensures each component of Cohesix is
 - 9P server mounts: mock clients to validate read/write semantics.
 
 ### 3.2 End‐to‐End Smoke Tests
-- Boot image → run `rc` scripts → mount `/srv/cuda` and `/sim/` → invoke sample workloads.  
+- Boot image → run `rc` scripts → mount `/srv/cuda` (proxying to a Cohesix CUDA Server) and `/sim/` → invoke sample workloads.
 - Validate correct teardown and resource cleanup.
 
 ### 3.3 Security & Regression Tests
@@ -102,6 +102,7 @@ A rigorous, multi‐tiered testing strategy ensures each component of Cohesix is
 ### 6.3 Distributed & Remote Build
 - Simulate remote build via SSH; verify artifact transfer and exit status.
 - Healthcheck service endpoint returns OK within 100 ms.
+- Exercise the Cohesix CUDA Server annex using integration tests that submit workloads through `/srv/cuda` and verify signed telemetry returns.
 
 ### 6.4 Go Unit Tests
 - From repository root:

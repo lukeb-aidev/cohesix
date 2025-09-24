@@ -7,7 +7,7 @@
 
 ## Overview
 
-This guide describes how to deploy Cohesix in a cloud-native setup where the QueenPrimary role runs on a cloud platform (e.g., AWS EC2, EKS, GCP Compute) and orchestrates DroneWorker, KioskInteractive, or other roles either in the cloud or on edge devices (like Jetson).
+This guide describes how to deploy Cohesix in a cloud-native setup where the QueenPrimary role runs on a cloud platform (e.g., AWS EC2, EKS, GCP Compute) and orchestrates DroneWorker, KioskInteractive, or other roles either in the cloud or on edge devices, while brokering GPU workloads through dedicated Linux CUDA microservers.
 
 ---
 
@@ -21,7 +21,7 @@ This guide describes how to deploy Cohesix in a cloud-native setup where the Que
 
 ## ⚙️ Deployment Scenarios
 ### Queen in the cloud + edge workers
-- QueenPrimary on EC2/EKS managing Jetson DroneWorkers connected via Secure9P.
+- QueenPrimary on EC2/EKS managing Plan9 DroneWorkers and Cohesix CUDA Servers connected via Secure9P.
 ### Full cloud cluster
 - QueenPrimary and multiple DroneWorkers on EKS or GKE, automatically scaling up with workloads.
 ### Hybrid testing
@@ -37,7 +37,7 @@ This guide describes how to deploy Cohesix in a cloud-native setup where the Que
 | `CLOUD_HOOK_URL`      | `https://queen-coordinator`    | Where Workers register & report.       |
 | `COHESIX_SRV_ROOT`    | `/tmp/srv`                     | Redirects /srv in non-root setups.      |
 | `COHESIX_ORCH_ADDR`   | `http://queen-primary:50051`   | Override gRPC orchestrator endpoint.    |
-| `NO_CUDA`             | `1`                            | Disables CUDA initialization.           |
+| `NO_CUDA`             | `1`                            | Disables Cohesix CUDA Server integration for this node.           |
 | `COHESIX_BUSYBOX_PATH`| `/mnt/data/bin/cohbox`         | Override BusyBox path used by `cohesix-shell`. |
 
 If `CLOUD_HOOK_URL` is not set, place the hook URL in `/etc/cloud.toml` so `make_iso.sh` can embed it during ISO creation.
@@ -130,7 +130,7 @@ COHROLE=DroneWorker CLOUD_HOOK_URL=http://localhost:8080 ./target/release/cohesi
 
 ## ⚠️ Security & Feature Flags
 - `secure9p` should be enabled in cloud production. Use build flags or secure configuration.
-- `NO_CUDA` disables GPU modules if cloud nodes don’t have CUDA.
+- `NO_CUDA` disables the remote CUDA annex integration if a node should never schedule GPU workloads.
 - Always validate Secure9P policy files align with `RoleManifest`.
 
 ---
