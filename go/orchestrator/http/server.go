@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: server.go v0.3
 // Author: Lukas Bower
-// Date Modified: 2025-07-21
+// Date Modified: 2029-02-15
 // License: SPDX-License-Identifier: MIT OR Apache-2.0
 
 package http
@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -26,13 +27,17 @@ import (
 
 // Config holds server configuration.
 type Config struct {
-	Bind      string
-	Port      int
-	StaticDir string
-	AuthUser  string
-	AuthPass  string
-	LogFile   string
-	Dev       bool
+	Bind          string
+	Port          int
+	StaticDir     string
+	AuthUser      string
+	AuthPass      string
+	LogFile       string
+	Dev           bool
+	GRPCEndpoint  string
+	RPCTimeout    time.Duration
+	Controller    api.Controller
+	ClusterClient api.ClusterStateClient
 }
 
 // Server wraps the HTTP server and router.
@@ -45,23 +50,50 @@ type Server struct {
 	controlLimiter *rate.Limiter
 	logger         Logger
 	controller     api.Controller
+	clusterClient  api.ClusterStateClient
+	closers        []io.Closer
 }
 
 // New returns an initialized server.
-func New(cfg Config) *Server {
+func New(cfg Config) (*Server, error) {
 	s := &Server{
 		cfg:            cfg,
 		router:         chi.NewRouter(),
 		start:          time.Now(),
 		controlLimiter: rate.NewLimiter(rate.Every(time.Minute/60), 60),
 		logger:         log.Default(),
-		controller:     api.DefaultController(),
+	}
+	if cfg.Controller != nil {
+		s.controller = cfg.Controller
+	}
+	if cfg.ClusterClient != nil {
+		s.clusterClient = cfg.ClusterClient
+	}
+
+	if s.controller == nil || s.clusterClient == nil {
+		var (
+			gateway *api.GRPCGateway
+			err     error
+		)
+		ctx := context.Background()
+		timeout := cfg.RPCTimeout
+		if cfg.GRPCEndpoint != "" {
+			gateway, err = api.NewGRPCGateway(ctx, cfg.GRPCEndpoint, timeout)
+		} else {
+			gateway, err = api.NewGRPCGatewayFromEnv(ctx, timeout)
+		}
+		if err != nil {
+			return nil, err
+		}
+		s.controller = gateway
+		s.clusterClient = gateway
+		s.closers = append(s.closers, gateway)
 	}
 	if cfg.LogFile != "" {
 		s.router.Use(accessLogger(cfg.LogFile))
 	}
 	s.initRoutes()
-	return s
+	return s, nil
 }
 
 // Router returns the underlying router, useful for tests.
@@ -103,6 +135,11 @@ func (s *Server) Start(ctx context.Context) error {
 	}
 	go func() {
 		<-ctx.Done()
+		for _, closer := range s.closers {
+			if err := closer.Close(); err != nil {
+				s.logger.Printf("close error: %v", err)
+			}
+		}
 		ctxTo, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
 		srv.Shutdown(ctxTo)
