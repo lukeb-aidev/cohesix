@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: server_test.go v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-07-20
+// Date Modified: 2029-02-15
 // License: SPDX-License-Identifier: MIT OR Apache-2.0
 
 package http_test
@@ -16,18 +16,74 @@ import (
 	"testing"
 	"time"
 
+	"cohesix/internal/orchestrator/api"
 	orch "cohesix/internal/orchestrator/http"
+	"cohesix/internal/orchestrator/rpc"
 	"github.com/go-chi/chi/v5"
 )
 
-func newRouter(logPath string) http.Handler {
+type testGateway struct {
+	state       *rpc.ClusterStateResponse
+	executeErr  error
+	lastRequest api.ControlRequest
+}
+
+func newTestGateway() *testGateway {
+	return &testGateway{
+		state: &rpc.ClusterStateResponse{
+			QueenId:        "queen-primary",
+			GeneratedAt:    42,
+			TimeoutSeconds: 5,
+			Workers: []*rpc.WorkerStatus{
+				{
+					WorkerId:     "worker-a",
+					Role:         "DroneWorker",
+					Status:       "ready",
+					Ip:           "10.0.0.10",
+					Trust:        "green",
+					BootTs:       1,
+					LastSeen:     2,
+					Capabilities: []string{"cuda"},
+					Gpu: &rpc.GpuTelemetry{
+						PerfWatt:     12.5,
+						MemTotal:     1024,
+						MemFree:      512,
+						LastTemp:     50,
+						GpuCapacity:  100,
+						CurrentLoad:  80,
+						LatencyScore: 3,
+					},
+				},
+			},
+		},
+	}
+}
+
+func (g *testGateway) Execute(ctx context.Context, req api.ControlRequest) error {
+	g.lastRequest = req
+	return g.executeErr
+}
+
+func (g *testGateway) FetchClusterState(ctx context.Context) (*rpc.ClusterStateResponse, error) {
+	return g.state, nil
+}
+
+func newRouter(t *testing.T, logPath string) (http.Handler, *testGateway) {
+	t.Helper()
 	cfg := orch.Config{StaticDir: "../../../static", LogFile: logPath}
-	srv := orch.New(cfg)
-	return srv.Router()
+	gateway := newTestGateway()
+	cfg.Controller = gateway
+	cfg.ClusterClient = gateway
+	srv, err := orch.New(cfg)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	return srv.Router(), gateway
 }
 
 func TestBootServesRoot(t *testing.T) {
-	ts := httptest.NewServer(newRouter(""))
+	router, _ := newRouter(t, "")
+	ts := httptest.NewServer(router)
 	defer ts.Close()
 	resp, err := http.Get(ts.URL + "/")
 	if err != nil {
@@ -39,7 +95,8 @@ func TestBootServesRoot(t *testing.T) {
 }
 
 func TestStatusEndpoint(t *testing.T) {
-	ts := httptest.NewServer(newRouter(""))
+	router, gateway := newRouter(t, "")
+	ts := httptest.NewServer(router)
 	defer ts.Close()
 	resp, err := http.Get(ts.URL + "/api/status")
 	if err != nil {
@@ -52,12 +109,16 @@ func TestStatusEndpoint(t *testing.T) {
 	if m["status"] != "ok" || m["role"] == nil || m["uptime"] == nil || m["workers"] == nil {
 		t.Fatalf("missing fields: %v", m)
 	}
+	if got := m["queen_id"]; got != gateway.state.GetQueenId() {
+		t.Fatalf("unexpected queen_id: %v", got)
+	}
 }
 
 func TestControlEndpoint(t *testing.T) {
-	ts := httptest.NewServer(newRouter(""))
+	router, gateway := newRouter(t, "")
+	ts := httptest.NewServer(router)
 	defer ts.Close()
-	buf := bytes.NewBufferString(`{"command":"restart"}`)
+	buf := bytes.NewBufferString(`{"command":"assign-role","worker_id":"worker-a","role":"QueenPrimary"}`)
 	resp, err := http.Post(ts.URL+"/api/control", "application/json", buf)
 	if err != nil {
 		t.Fatalf("post control: %v", err)
@@ -72,10 +133,14 @@ func TestControlEndpoint(t *testing.T) {
 	if ack["status"] != "ack" {
 		t.Fatalf("unexpected response: %v", ack)
 	}
+	if gateway.lastRequest.Command != "assign-role" || gateway.lastRequest.Role != "QueenPrimary" {
+		t.Fatalf("unexpected gateway request: %+v", gateway.lastRequest)
+	}
 }
 
 func TestControlEndpoint_BadJSON(t *testing.T) {
-	ts := httptest.NewServer(newRouter(""))
+	router, _ := newRouter(t, "")
+	ts := httptest.NewServer(router)
 	defer ts.Close()
 	buf := bytes.NewBufferString(`{"command":}`)
 	resp, err := http.Post(ts.URL+"/api/control", "application/json", buf)
@@ -88,7 +153,8 @@ func TestControlEndpoint_BadJSON(t *testing.T) {
 }
 
 func TestStaticFileServed(t *testing.T) {
-	ts := httptest.NewServer(newRouter(""))
+	router, _ := newRouter(t, "")
+	ts := httptest.NewServer(router)
 	defer ts.Close()
 	resp, err := http.Get(ts.URL + "/static/index.html")
 	if err != nil {
@@ -107,7 +173,8 @@ func TestStaticFileServed(t *testing.T) {
 }
 
 func TestMetricsEndpoint(t *testing.T) {
-	ts := httptest.NewServer(newRouter(""))
+	router, _ := newRouter(t, "")
+	ts := httptest.NewServer(router)
 	defer ts.Close()
 	resp, err := http.Get(ts.URL + "/api/metrics")
 	if err != nil {
@@ -127,7 +194,13 @@ func TestMetricsEndpoint(t *testing.T) {
 
 func TestServerStart(t *testing.T) {
 	cfg := orch.Config{Port: 0, StaticDir: "../../../static"}
-	srv := orch.New(cfg)
+	gateway := newTestGateway()
+	cfg.Controller = gateway
+	cfg.ClusterClient = gateway
+	srv, err := orch.New(cfg)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
 		time.Sleep(100 * time.Millisecond)
@@ -141,7 +214,8 @@ func TestServerStart(t *testing.T) {
 func TestAccessLogging(t *testing.T) {
 	dir := t.TempDir()
 	logPath := dir + "/access.log"
-	ts := httptest.NewServer(newRouter(logPath))
+	router, _ := newRouter(t, logPath)
+	ts := httptest.NewServer(router)
 	defer ts.Close()
 	if _, err := http.Get(ts.URL + "/api/status"); err != nil {
 		t.Fatalf("get status: %v", err)
@@ -157,7 +231,13 @@ func TestAccessLogging(t *testing.T) {
 
 func TestDevModeDisablesAuth(t *testing.T) {
 	cfg := orch.Config{StaticDir: "../../../static", Dev: true, AuthUser: "a", AuthPass: "b"}
-	srv := orch.New(cfg)
+	gateway := newTestGateway()
+	cfg.Controller = gateway
+	cfg.ClusterClient = gateway
+	srv, err := orch.New(cfg)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
 	ts := httptest.NewServer(srv.Router())
 	defer ts.Close()
 	buf := bytes.NewBufferString(`{"command":"noop"}`)
@@ -172,7 +252,13 @@ func TestDevModeDisablesAuth(t *testing.T) {
 
 func TestRecoverMiddleware(t *testing.T) {
 	cfg := orch.Config{StaticDir: "../../../static"}
-	srv := orch.New(cfg)
+	gateway := newTestGateway()
+	cfg.Controller = gateway
+	cfg.ClusterClient = gateway
+	srv, err := orch.New(cfg)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
 	srv.Router().(*chi.Mux).Get("/panic", func(w http.ResponseWriter, r *http.Request) { panic("boom") })
 	ts := httptest.NewServer(srv.Router())
 	defer ts.Close()

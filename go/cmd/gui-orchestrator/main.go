@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: main.go v0.5
 // Author: Lukas Bower
-// Date Modified: 2027-08-04
+// Date Modified: 2029-02-15
 // License: SPDX-License-Identifier: MIT OR Apache-2.0
 
 package main
@@ -13,6 +13,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	orchestrator "cohesix/internal/orchestrator/http"
 )
@@ -50,6 +51,7 @@ func main() {
 		LogFile:   *logFile,
 		Dev:       *dev,
 	}
+	cfg.RPCTimeout = 5 * time.Second
 
 	if !cfg.Dev {
 		if u, p, err := loadCreds("/srv/orch_user.json"); err == nil {
@@ -64,7 +66,10 @@ func main() {
 		log.SetFlags(log.LstdFlags | log.Lshortfile)
 	}
 
-	srv := orchestrator.New(cfg)
+	srv, err := orchestrator.New(cfg)
+	if err != nil {
+		log.Fatalf("initialise orchestrator: %v", err)
+	}
 	ctx, cancel := newSignalContext(context.Background())
 	defer cancel()
 	if err := srv.Start(ctx); err != nil && err != http.ErrServerClosed {

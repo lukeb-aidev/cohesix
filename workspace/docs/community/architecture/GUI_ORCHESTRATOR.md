@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: GUI_ORCHESTRATOR.md v1.3
 // Author: Lukas Bower
-// Date Modified: 2026-02-05
+// Date Modified: 2029-02-15
 
 # Web GUI Orchestrator
 
@@ -44,8 +44,40 @@ served directly by Plan 9's webfs or the embedded server.
 
 | Method | Path | Request | Response |
 |-------|------|---------|----------|
-| GET | `/api/status` | none | `{"uptime":string,"status":"ok","role":string,"workers":int}` |
-| POST | `/api/control` | `{ "command": string }` | `{ "status": "ack" }` |
+| GET | `/api/status` | none | `{"uptime":string,"status":string,"role":string,"queen_id":string,"workers":int,"generated_at":int,"timeout_seconds":int,"worker_statuses":WorkerStatus[]}` |
+| POST | `/api/control` | `{ "command": string, "worker_id"?: string, "role"?: string, "trust_level"?: string, "agent_id"?: string, "require_gpu"?: bool }` | `{ "status": "ack" }` |
+
+`WorkerStatus` mirrors the gRPC shape:
+
+```json
+{
+  "worker_id": "worker-a",
+  "role": "DroneWorker",
+  "status": "ready",
+  "ip": "10.0.0.10",
+  "trust": "green",
+  "boot_ts": 1700000000,
+  "last_seen": 1700000300,
+  "capabilities": ["cuda"],
+  "gpu": {
+    "perf_watt": 12.5,
+    "mem_total": 1024,
+    "mem_free": 512,
+    "last_temp": 50,
+    "gpu_capacity": 100,
+    "current_load": 80,
+    "latency_score": 3
+  }
+}
+```
+
+Supported `command` values:
+
+- `assign-role` — requires `worker_id` and `role`; forwards to `AssignRole`.
+- `update-trust` — requires `worker_id` and `trust_level`; forwards to `UpdateTrust`.
+- `schedule` — requires `agent_id` and optional `require_gpu`; forwards to `RequestSchedule`.
+
+Other commands yield HTTP `502` with an explanatory error.
 | GET | `/static/*` | none | static file contents |
 
 ### CLI Options

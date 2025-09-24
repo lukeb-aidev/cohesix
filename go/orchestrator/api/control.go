@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: control.go v0.1
 // Author: Lukas Bower
-// Date Modified: 2025-07-21
+// Date Modified: 2029-02-15
 // License: SPDX-License-Identifier: MIT OR Apache-2.0
 
 package api
@@ -9,12 +9,19 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
+	"strings"
 )
 
 // ControlRequest is a command sent to the orchestrator.
 type ControlRequest struct {
-	Command string `json:"command"`
+	Command    string `json:"command"`
+	WorkerID   string `json:"worker_id,omitempty"`
+	Role       string `json:"role,omitempty"`
+	TrustLevel string `json:"trust_level,omitempty"`
+	AgentID    string `json:"agent_id,omitempty"`
+	RequireGPU *bool  `json:"require_gpu,omitempty"`
 }
 
 // AckResponse is returned on successful control execution.
@@ -27,27 +34,32 @@ type Controller interface {
 	Execute(ctx context.Context, cmd ControlRequest) error
 }
 
-// defaultController is a no-op implementation.
-type defaultController struct{}
-
-func (defaultController) Execute(ctx context.Context, cmd ControlRequest) error { return nil }
-
-// DefaultController returns a controller that does nothing.
-func DefaultController() Controller { return defaultController{} }
-
 // Control handles POST /api/control requests.
 func Control(ctrl Controller) http.HandlerFunc {
-	if ctrl == nil {
-		ctrl = DefaultController()
-	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req ControlRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "invalid json", http.StatusBadRequest)
 			return
 		}
+		if ctrl == nil {
+			http.Error(w, "control unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		req.Command = strings.TrimSpace(req.Command)
+		if req.Command == "" {
+			http.Error(w, "command required", http.StatusBadRequest)
+			return
+		}
 		if err := ctrl.Execute(r.Context(), req); err != nil {
-			http.Error(w, "control error", http.StatusInternalServerError)
+			var status int
+			switch {
+			case errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded):
+				status = http.StatusGatewayTimeout
+			default:
+				status = http.StatusBadGateway
+			}
+			http.Error(w, err.Error(), status)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
