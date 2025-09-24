@@ -40,7 +40,7 @@ for app in ash sh ls cp mv echo mount cat ps kill; do
   ln -sf busybox "$ISO_ROOT/bin/$app"
 done
 
-cli_tools="cohesix cohcap cohtrace cohrun cohbuild cohcc"
+cli_tools="cohesix cohcap cohtrace cohrun cohbuild cohcc cohesix-shell"
 missing_tools=()
 for tool in $cli_tools; do
   if [ ! -f "$ROOT/bin/$tool" ]; then
@@ -63,11 +63,14 @@ for tool in $cli_tools; do
   fi
 done
 
-if [ -f "$ROOT/bin/cohshell.sh" ]; then
-  cp "$ROOT/bin/cohshell.sh" "$ISO_ROOT/usr/bin/cohesix-shell"
-  chmod +x "$ISO_ROOT/usr/bin/cohesix-shell"
-else
-  log "Missing cohshell.sh"
+if [ ! -f "$ISO_ROOT/usr/bin/cohesix-shell" ]; then
+  if [ -f "$ROOT/bin/cohshell.sh" ]; then
+    log "Falling back to legacy cohshell.sh wrapper"
+    cp "$ROOT/bin/cohshell.sh" "$ISO_ROOT/usr/bin/cohesix-shell"
+    chmod +x "$ISO_ROOT/usr/bin/cohesix-shell"
+  else
+    log "Missing cohesix-shell binary and cohshell.sh fallback"
+  fi
 fi
 
 demos="demo_bee_learns demo_cloud_queen demo_cuda_edge demo_secure_relay demo_sensor_world demo_multi_duel demo_trace_validation"

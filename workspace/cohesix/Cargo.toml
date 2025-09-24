@@ -71,10 +71,18 @@ name = "cohcc"
 path = "src/coh_cc/main.rs"
 
 [[bin]]
+name = "cohesix-shell"
+path = "src/bin/cohesix_shell.rs"
+
+[[bin]]
 name = "kernel"
 path = "src/kernel/main.rs"
 test = false
 required-features = ["kernel_bin", "minimal_uefi"]
+
+[[test]]
+name = "test_cohesix_shell"
+path = "../../tests/test_cohesix_shell.rs"
 
 [[bin]]
 name = "logdemo"

@@ -33,7 +33,7 @@
 | TRACE_CONSENSUS.md         | v0.1    | 2025-07-05    | COMMUNITY      |            |              |
 | SECURITY_REVIEW.md         | v0.2    | 2025-07-13    | COMMUNITY      |     |              |
 | COMPILER_REVIEW.md         | v0.1    | 2025-07-11    | COMMUNITY      |          |              
-| AGENTS_AND_CLI.md          | v1.2    | 2025-07-26    | COMMUNITY      |     |              |
+| AGENTS_AND_CLI.md          | v1.3    | 2026-12-01    | COMMUNITY      |     |              |
 | cli_tools.md              | v1.2    | 2027-09-01    | COMMUNITY      |
 | go_tools_overview.md      | v0.1    | 2027-09-01    | COMMUNITY      |
 | guides/COH_9P_HELPER.md   | v0.1    | 2027-09-01    | COMMUNITY      |     |
@@ -55,7 +55,7 @@
 | cohcc.1                   | v0.3    | 2025-07-17    | COMMUNITY      |     |              |
 | cohcli.1                  | v0.2    | 2025-07-14    | COMMUNITY      |     |              |
 | cohesix.1                | v0.1    | 2025-06-29    | COMMUNITY      |     |            |
-| cohesix-shell.1         | v0.1    | 2025-06-29    | COMMUNITY      |     |            |
+| cohesix-shell.1         | v0.2    | 2026-12-01    | COMMUNITY      |     |            |
 | cohman.1                 | v0.1    | 2025-07-15    | COMMUNITY      |     |
             |
 | cohrole.1                 | v0.1    | 2025-07-12    | COMMUNITY      |     |              |
@@ -295,12 +295,14 @@
 | src/lib.rs | v1.12 | 2026-12-31 | COMMUNITY | | |
 | src/metrics.rs | v0.2 | 2026-12-31 | COMMUNITY | | |
 | src/printk.rs | v0.1 | 2026-12-31 | COMMUNITY | | |
+| src/bin/cohesix_shell.rs | v0.1 | 2026-12-01 | COMMUNITY | | |
 | src/runtime/loader.rs | v0.4 | 2026-12-31 | COMMUNITY | | |
 | src/plan9/namespace.rs | v0.6 | 2026-10-28 | COMMUNITY | | |
 | src/validator/syscall.rs | v0.5 | 2026-11-11 | COMMUNITY | | |
 | tests/test_loader.rs | v0.1 | 2025-09-26 | COMMUNITY | | |
 | tests/test_run_shell.rs | v0.1 | 2025-09-26 | COMMUNITY | | |
 | tests/test_runtime_cli.rs | v0.3 | 2026-10-09 | COMMUNITY | | |
+| tests/test_cohesix_shell.rs | v0.1 | 2026-12-01 | COMMUNITY | | |
 | tests/test_cloud_hooks.rs | v0.4 | 2026-10-28 | COMMUNITY | | |
 | tests/test_cloud_threads.rs | v0.3 | 2026-10-28 | COMMUNITY | | |
 | tests/trace_validator_runtime.rs | v0.9 | 2026-11-12 | COMMUNITY | | |
@@ -346,7 +348,7 @@
 | docs/community/PATH_SELF_INTERSECTION.md | v0.1 | 2026-11-19 | COMMUNITY | | |
 | src/geometry/sweep_line_intersection.py | v0.1 | 2026-11-19 | COMMUNITY | | |
 | log/simulated_boot_pipeline.md | v0.1 | 2026-11-20 | COMMUNITY | | |
-| tools/make_iso.sh | v0.10 | 2026-12-31 | COMMUNITY | | |
+| tools/make_iso.sh | v0.11 | 2026-12-01 | COMMUNITY | | |
 | src/hal/arm64/mod.rs | v0.7 | 2026-11-23 | PRIVATE | | |
 | src/hal/x86_64/mod.rs | v0.7 | 2026-11-23 | PRIVATE | | |
 | docs/community/UEFI_PLAN9_READINESS_AUDIT.md | v0.1 | 2026-12-31 | COMMUNITY | | |
