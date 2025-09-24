@@ -4,6 +4,8 @@
 // Date Modified: 2028-12-13
 
 use crate::coherr;
+use crate::monotonic_ticks;
+use crate::trace;
 use crate::dt::UART_BASE;
 use core::ffi::c_char;
 use core::sync::atomic::{compiler_fence, Ordering};
@@ -155,6 +157,28 @@ pub unsafe extern "C" fn coh_setenv(
 
 #[no_mangle]
 pub unsafe extern "C" fn coh_bind(_name: *const c_char, _old: *const c_char, _flags: i32) -> i32 {
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn coh_mount(
+    srv: *const c_char,
+    dst: *const c_char,
+    _flags: i32,
+) -> i32 {
+    if srv.is_null() || dst.is_null() {
+        return EINVAL;
+    }
+    trace::record("ns:mount_call", monotonic_ticks());
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn coh_srv(path: *const c_char) -> i32 {
+    if path.is_null() {
+        return EINVAL;
+    }
+    trace::record("ns:srv_call", monotonic_ticks());
     0
 }
 
