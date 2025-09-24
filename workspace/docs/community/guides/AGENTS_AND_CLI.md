@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: AGENTS_AND_CLI.md v1.3
+// Filename: AGENTS_AND_CLI.md v1.4
 // Author: Lukas Bower
-// Date Modified: 2026-12-01
+// Date Modified: 2029-01-26
 
 # Agents and CLI
 
@@ -26,6 +26,23 @@ Cohesix relies on Codex-driven agents and a small set of CLI tools for automatio
     BATCH_SIZE: <int>
 ```
 Agents checkpoint every 10 files and log to `codex_logs/`. Recovery uses `tools/replay_batch.sh`.
+
+Batch metadata is now maintained automatically:
+
+- `tools/validate_batch.sh` enforces the header requirements above before a batch is accepted.
+- `tools/annotate_batch.py` writes `BATCH_ORIGIN` and `BATCH_SIZE` values into `workspace/docs/community/governance/METADATA.md`.
+- `tools/simulate_batch.sh` generates synthetic manifests for rehearsal, and `tools/replay_batch.sh` replays the resulting hydration log.
+
+Example batch rehearsal:
+
+```bash
+SIM_DIR=$(mktemp -d)
+tools/simulate_batch.sh --size 4 --origin codex://dev --outdir "$SIM_DIR"
+tools/validate_batch.sh "$SIM_DIR/docs"
+python3 tools/annotate_batch.py --metadata "$SIM_DIR/METADATA.md" --origin codex://dev \
+  $(ls "$SIM_DIR"/docs/*.md | xargs -n1 basename)
+tools/replay_batch.sh "$SIM_DIR/hydration.log"
+```
 
 Agents now respect environment variables such as COHESIX_ENS_TMP and COHESIX_TRACE_TMP to ensure all generated output is written to writable temp directories, especially when executing in restricted or sandboxed environments.
 
