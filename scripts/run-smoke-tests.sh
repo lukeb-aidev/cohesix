@@ -44,6 +44,7 @@ LOG_FILE="$LOG_DIR/run_smoke_tests_${TS}.log"
 SUMMARY_FILE="$LOG_DIR/test_summary.txt"
 START_TIME="$(date +%s)"
 FATAL_ERROR=""
+BATCH_TMP=""
 
 exec > >(tee "$LOG_FILE") 2>&1
 
@@ -59,7 +60,7 @@ Fatal Error: ${FATAL_ERROR:-none}
 EOF
 }
 
-trap 'c=$?; verdict=PASS; [ $c -ne 0 ] && verdict=FAIL; write_summary "$verdict"' EXIT
+trap 'c=$?; verdict=PASS; [ $c -ne 0 ] && verdict=FAIL; write_summary "$verdict"; if [[ -n "$BATCH_TMP" && -d "$BATCH_TMP" ]]; then rm -rf "$BATCH_TMP"; fi' EXIT
 
 # --------------------------------------------------------------------------- #
 # 1. Cargo sanity
@@ -114,5 +115,40 @@ sleep 2; touch "$HB_FILE"
 sleep 2
 kill "$WATCH_PID" || true  # allow missing process
 rm -f "$HB_FILE" "$HB_FILE.recovered" /tmp/cohesix_smoke.log
+
+# --------------------------------------------------------------------------- #
+# 5. Batch tooling rehearsal + lint
+# --------------------------------------------------------------------------- #
+if command -v shellcheck >/dev/null 2>&1; then
+  msg "Running shellcheck on batch utilities …"
+  shellcheck tools/validate_batch.sh tools/replay_batch.sh tools/simulate_batch.sh tools/perf_log.sh || fail "shellcheck failed"
+else
+  warn "shellcheck not found – skipping batch tooling lint"
+fi
+
+if command -v pytest >/dev/null 2>&1; then
+  msg "Simulating batch hydration …"
+  BATCH_TMP="$(mktemp -d)"
+  tools/simulate_batch.sh --size 2 --origin smoke://local --outdir "$BATCH_TMP" >/dev/null
+  msg "Validating generated documentation …"
+  tools/validate_batch.sh "$BATCH_TMP/docs" >/dev/null
+  BATCH_ENTRIES=()
+  for doc_path in "$BATCH_TMP"/docs/*.md; do
+    BATCH_ENTRIES+=("$(basename "$doc_path")")
+  done
+  if [[ ${#BATCH_ENTRIES[@]} -gt 0 ]]; then
+    IFS=$'\n' BATCH_ENTRIES=($(printf '%s\n' "${BATCH_ENTRIES[@]}" | sort))
+    unset IFS
+    python3 tools/annotate_batch.py --metadata "$BATCH_TMP/METADATA.md" --origin smoke://local "${BATCH_ENTRIES[@]}" >/dev/null
+  fi
+  msg "Replaying hydration log …"
+  tools/replay_batch.sh "$BATCH_TMP/hydration.log" >/dev/null
+  msg "Profiling commands …"
+  tools/perf_log.sh --build-cmd "echo build" --boot-cmd "echo boot" --log-file "$BATCH_TMP/perf.json" --tag smoke >/dev/null
+  msg "Running pytest for batch tools …"
+  pytest tests/test_batch_tools.py -q
+else
+  warn "pytest not found – skipping batch tooling rehearsal"
+fi
 
 msg "✅  Smoke tests completed successfully."
