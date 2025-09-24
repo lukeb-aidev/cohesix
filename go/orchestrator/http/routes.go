@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: routes.go v0.1
 // Author: Lukas Bower
-// Date Modified: 2025-07-21
+// Date Modified: 2029-02-15
 // License: SPDX-License-Identifier: MIT OR Apache-2.0
 
 package http
@@ -19,7 +19,7 @@ func (s *Server) initRoutes() {
 	r.Use(recoverMiddleware())
 	r.Use(s.requestCounter)
 
-	r.Get("/api/status", api.Status(s.start))
+	r.Get("/api/status", api.Status(s.start, s.clusterClient))
 
 	handler := http.Handler(api.Control(s.controller))
 	if !s.cfg.Dev {

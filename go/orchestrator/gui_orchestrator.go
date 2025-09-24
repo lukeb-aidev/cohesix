@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: gui_orchestrator.go v0.1
 // Author: Lukas Bower
-// Date Modified: 2025-07-21
+// Date Modified: 2029-02-15
 // License: SPDX-License-Identifier: MIT OR Apache-2.0
 
 package orchestrator
@@ -19,8 +19,12 @@ type Orchestrator struct {
 }
 
 // New returns an orchestrator using the given config.
-func New(cfg httpserver.Config) *Orchestrator {
-	return &Orchestrator{srv: httpserver.New(cfg)}
+func New(cfg httpserver.Config) (*Orchestrator, error) {
+	srv, err := httpserver.New(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return &Orchestrator{srv: srv}, nil
 }
 
 // Start delegates to the underlying HTTP server.
