@@ -1,8 +1,8 @@
 # CLASSIFICATION: COMMUNITY
 #!/usr/bin/env bash
-# Filename: qemu_boot_check.sh v0.9
+# Filename: qemu_boot_check.sh v1.0
 # Author: Lukas Bower
-# Date Modified: 2029-02-20
+# Date Modified: 2029-02-21
 # This script boots Cohesix under QEMU for CI. Firmware assumptions:
 # - x86_64 uses OVMF for UEFI.
 # - aarch64 requires QEMU_EFI.fd provided by system packages
@@ -163,20 +163,72 @@ else
   LOG_PATH="$LOG_FILE"
 fi
 
-BOOT_OK=0
-for _ in {1..30}; do
-  if grep -q "$SUCCESS_MARKER" "$LOG_PATH" 2>/dev/null; then
-    BOOT_OK=1
-    break
-  fi
-  if ! ps -p "$QEMU_PID" >/dev/null 2>&1; then
-    break
-  fi
-  sleep 1
-done
+BOOT_TIMEOUT_S=30
+BOOT_BUDGET_MS=200
+
+BOOT_ELAPSED_MS=""
+if ! BOOT_ELAPSED_MS="$(
+  BOOT_TIMEOUT_S="$BOOT_TIMEOUT_S" \
+  SUCCESS_MARKER="$SUCCESS_MARKER" \
+  LOG_PATH="$LOG_PATH" \
+  QEMU_PID="$QEMU_PID" \
+  python3 <<'PY'
+import os
+import sys
+import time
+
+timeout_s = float(os.environ.get("BOOT_TIMEOUT_S", "30"))
+marker = os.environ["SUCCESS_MARKER"]
+log_path = os.environ["LOG_PATH"]
+pid = int(os.environ["QEMU_PID"])
+
+start = time.perf_counter()
+deadline = start + timeout_s
+last_pos = 0
+
+def qemu_alive() -> bool:
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+while time.perf_counter() < deadline:
+    exists = os.path.exists(log_path)
+    if exists:
+        with open(log_path, "r", encoding="utf-8", errors="ignore") as handle:
+            handle.seek(last_pos)
+            chunk = handle.read()
+            last_pos = handle.tell()
+        if marker in chunk:
+            elapsed_ms = int((time.perf_counter() - start) * 1000)
+            print(elapsed_ms)
+            sys.exit(0)
+    if not qemu_alive():
+        break
+    time.sleep(0.01)
+
+sys.stderr.write("Boot marker not observed before timeout or QEMU exit\n")
+sys.exit(1)
+PY
+)"; then
+  kill "$QEMU_PID" 2>/dev/null || true
+  wait "$QEMU_PID" 2>/dev/null || true
+  echo "❌ boot failed. Log tail:" >&2
+  tail -n 20 "$LOG_PATH" >&2 || true
+  exit 1
+fi
 
 kill "$QEMU_PID" 2>/dev/null || true
 wait "$QEMU_PID" 2>/dev/null || true
+
+BOOT_OK=1
+
+if [ "$BOOT_ELAPSED_MS" -gt "$BOOT_BUDGET_MS" ]; then
+  echo "❌ boot exceeded latency budget: ${BOOT_ELAPSED_MS}ms (budget ${BOOT_BUDGET_MS}ms)" >&2
+  tail -n 20 "$LOG_PATH" >&2 || true
+  exit 1
+fi
 
 # detect MMU faults or data aborts in the serial log
 if grep -qiE "(data abort|mmu fault|prefetch abort)" "$LOG_PATH"; then
@@ -194,9 +246,9 @@ fi
 
 if [ "$BOOT_OK" -eq 1 ]; then
   if [ "$ARCH" = "aarch64" ]; then
-    echo "✅ aarch64 boot success"
+    echo "✅ aarch64 boot success (${BOOT_ELAPSED_MS}ms)"
   else
-    echo "✅ x86_64 boot success"
+    echo "✅ x86_64 boot success (${BOOT_ELAPSED_MS}ms)"
   fi
 else
   echo "❌ boot failed. Log tail:" >&2

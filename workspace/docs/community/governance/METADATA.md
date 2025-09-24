@@ -261,7 +261,7 @@
 | setup/roles/GlassesAgent.yaml | v0.2 | 2027-11-30 | COMMUNITY | | |
 | setup/roles/SensorRelay.yaml | v0.2 | 2027-11-30 | COMMUNITY | | |
 | setup/roles/SimulatorTest.yaml | v0.2 | 2027-11-30 | COMMUNITY | | |
-| ci/qemu_boot_check.sh | v0.9 | 2029-02-20 | COMMUNITY | | |
+| ci/qemu_boot_check.sh | v1.0 | 2029-02-21 | COMMUNITY | | |
 | userland/miniroot/README.md | v0.2 | 2026-01-20 | COMMUNITY | | |
 | userland/miniroot/bin/echo | v0.1 | 2025-09-23 | COMMUNITY | | |
 | userland/miniroot/bin/help | v0.1 | 2025-09-23 | COMMUNITY | | |
@@ -287,11 +287,12 @@
 | workspace/cohesix_root/src/startup.rs | v0.3 | 2028-01-22 | COMMUNITY | | |
 | workspace/cohesix_root/src/exception.rs | v0.2 | 2028-01-21 | COMMUNITY | | |
 | workspace/cohesix_root/src/mmu.rs | v0.2 | 2028-02-15 | COMMUNITY | | |
-| src/cuda/runtime.rs | v0.16 | 2026-12-31 | COMMUNITY | | |
+| src/cuda/runtime.rs | v0.17 | 2029-02-21 | COMMUNITY | | |
 | src/cli/mod.rs | v1.3 | 2026-10-08 | COMMUNITY | | |
 | src/cli/cohtrace.rs | v0.4 | 2026-10-13 | COMMUNITY | | |
 | src/cloud/mod.rs | v0.2 | 2026-10-10 | COMMUNITY | | |
 | src/cloud/orchestrator.rs | v0.9 | 2027-08-17 | COMMUNITY | | |
+| workspace/cohesix/src/queen/orchestrator.rs | v1.0 | 2029-01-15 | COMMUNITY | | |
 | src/lib.rs | v1.12 | 2026-12-31 | COMMUNITY | | |
 | src/metrics.rs | v0.2 | 2026-12-31 | COMMUNITY | | |
 | src/printk.rs | v0.1 | 2026-12-31 | COMMUNITY | | |
