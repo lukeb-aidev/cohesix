@@ -1,13 +1,21 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: load_arch_config.sh v0.1
+# Filename: load_arch_config.sh v0.2
 # Author: Lukas Bower
-# Date Modified: 2026-07-25
+# Date Modified: 2029-02-20
 #!/usr/bin/env bash
 # Load persistent architecture configuration.
 # If --prompt is given and config is missing, ask user and save.
 set -euo pipefail
 CONFIG_FILE="${COHESIX_CONFIG:-$HOME/.cohesix_config}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+normalize_arch() {
+    case "$1" in
+        arm64) echo "aarch64" ;;
+        amd64) echo "x86_64" ;;
+        *) echo "$1" ;;
+    esac
+}
 if [ -f "$CONFIG_FILE" ]; then
     source "$CONFIG_FILE"
 else
@@ -46,6 +54,13 @@ EOF_CFG
             echo "❌ setup_build_env.sh not found in $SCRIPT_DIR" >&2
             exit 1
         fi
+    fi
+fi
+RAW_ARCH="${COHESIX_ARCH:-}"
+if [ -n "$RAW_ARCH" ]; then
+    COHESIX_ARCH="$(normalize_arch "$RAW_ARCH")"
+    if [ "$COHESIX_ARCH" != "$RAW_ARCH" ]; then
+        echo "ℹ️ Normalized COHESIX_ARCH from $RAW_ARCH to $COHESIX_ARCH" >&2
     fi
 fi
 if [ -z "${COHESIX_ARCH:-}" ]; then

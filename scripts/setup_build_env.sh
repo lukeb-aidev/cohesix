@@ -1,18 +1,26 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: setup_build_env.sh v0.5
+# Filename: setup_build_env.sh v0.6
 # Author: Lukas Bower
-# Date Modified: 2026-07-25
+# Date Modified: 2029-02-20
 #!/usr/bin/env bash
 set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 ARCH="$(uname -m)"
 # Load or prompt for persistent architecture configuration
+normalize_arch() {
+    case "$1" in
+        arm64) echo "aarch64" ;;
+        amd64) echo "x86_64" ;;
+        *) echo "$1" ;;
+    esac
+}
+
 if [ -f "$ROOT/scripts/load_arch_config.sh" ]; then
     source "$ROOT/scripts/load_arch_config.sh" --prompt
 else
     echo "⚠️  load_arch_config.sh not found. Skipping architecture config."
-    COHESIX_ARCH="$(uname -m)"
+    COHESIX_ARCH="$(normalize_arch "$(uname -m)")"
     export COHESIX_ARCH
     echo "🔧 Fallback: setting COHESIX_ARCH to $COHESIX_ARCH"
     CONFIG_FILE="$HOME/.cohesix_config"
@@ -78,7 +86,7 @@ if [ ! -f "$CONFIG_FILE" ]; then
     echo "🔧 Creating default Cohesix config at $CONFIG_FILE"
     cat > "$CONFIG_FILE" <<EOF
 # Cohesix Architecture Configuration
-COHESIX_ARCH=$(uname -m)
+COHESIX_ARCH=$(normalize_arch "$(uname -m)")
 EOF
 fi
 

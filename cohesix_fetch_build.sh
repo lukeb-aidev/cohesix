@@ -1,13 +1,24 @@
 #!/usr/bin/env bash
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v1.56
+# Filename: cohesix_fetch_build.sh v1.57
 # Author: Lukas Bower
-# Date Modified: 2028-12-18
+# Date Modified: 2029-02-20
 
 # This script fetches and builds the Cohesix project, including seL4 and other dependencies.
 
 HOST_ARCH="$(uname -m)"
-if [[ "$HOST_ARCH" = "aarch64" ]] && ! command -v aarch64-linux-gnu-gcc >/dev/null 2>&1; then
+HOST_OS="$(uname -s)"
+SUDO=""
+
+CROSS_GCC=""
+for candidate in aarch64-linux-gnu-gcc aarch64-unknown-linux-gnu-gcc; do
+  if command -v "$candidate" >/dev/null 2>&1; then
+    CROSS_GCC="$candidate"
+    break
+  fi
+done
+
+if [[ "$HOST_ARCH" = "aarch64" || "$HOST_ARCH" = "arm64" ]] && [ -z "$CROSS_GCC" ]; then
   if command -v sudo >/dev/null 2>&1; then
     SUDO=sudo
   else
@@ -37,9 +48,31 @@ export PYTHONPATH="$ROOT/third_party/seL4/kernel:/usr/local/lib/python3.12/dist-
 export MEMCHR_DISABLE_RUNTIME_CPU_FEATURE_DETECTION=1
 export CUDA_HOME="${CUDA_HOME:-/usr}"
 export CUDA_INCLUDE_DIR="${CUDA_INCLUDE_DIR:-$CUDA_HOME/include}"
-export CUDA_LIBRARY_PATH="${CUDA_LIBRARY_PATH:-/usr/lib/x86_64-linux-gnu}"
-export PATH="$CUDA_HOME/bin:$PATH"
-export LD_LIBRARY_PATH="$CUDA_LIBRARY_PATH:${LD_LIBRARY_PATH:-}"
+
+if [ -z "${CUDA_LIBRARY_PATH:-}" ]; then
+  case "$HOST_ARCH" in
+    x86_64|amd64)
+      DEFAULT_CUDA_LIB="/usr/lib/x86_64-linux-gnu"
+      ;;
+    aarch64|arm64)
+      DEFAULT_CUDA_LIB="/usr/lib/aarch64-linux-gnu"
+      ;;
+    *)
+      DEFAULT_CUDA_LIB=""
+      ;;
+  esac
+  if [ -n "$DEFAULT_CUDA_LIB" ] && [ -d "$DEFAULT_CUDA_LIB" ]; then
+    export CUDA_LIBRARY_PATH="$DEFAULT_CUDA_LIB"
+  fi
+fi
+
+if [ -n "${CUDA_LIBRARY_PATH:-}" ]; then
+  export LD_LIBRARY_PATH="$CUDA_LIBRARY_PATH:${LD_LIBRARY_PATH:-}"
+fi
+
+if [ -d "$CUDA_HOME/bin" ]; then
+  export PATH="$CUDA_HOME/bin:$PATH"
+fi
 WORKSPACE="${WORKSPACE:-$ROOT/third_party/seL4}"
 
 cd "$ROOT"
@@ -193,7 +226,11 @@ if ! rustup target list --installed | grep -q "^aarch64-unknown-none$"; then
   echo "🔧 Installing missing Rust target aarch64-unknown-none" >&2
   rustup target add aarch64-unknown-none
 fi
-command -v aarch64-linux-gnu-gcc >/dev/null 2>&1 || { echo "❌ aarch64-linux-gnu-gcc missing" >&2; exit 1; }
+CROSS_GCC_MSG=${CROSS_GCC:-}
+if [ -z "$CROSS_GCC_MSG" ]; then
+  echo "❌ aarch64 cross GCC missing (expected aarch64-linux-gnu-gcc or aarch64-unknown-linux-gnu-gcc)" >&2
+  exit 1
+fi
 command -v ld.lld >/dev/null 2>&1 || { echo "❌ ld.lld not found" >&2; exit 1; }
 ld.lld --version >&3
 
@@ -222,8 +259,21 @@ if [ -z "$CUDA_HOME" ]; then
     # Manual override for environments where cuda.h is in /usr/include but no nvcc exists
     if [ "$CUDA_HOME" = "/usr" ] && [ -f "/usr/include/cuda.h" ]; then
       export CUDA_INCLUDE_DIR="/usr/include"
-      export CUDA_LIBRARY_PATH="/usr/lib/x86_64-linux-gnu"
-      export LD_LIBRARY_PATH="$CUDA_LIBRARY_PATH:$LD_LIBRARY_PATH"
+      case "$HOST_ARCH" in
+        aarch64|arm64)
+          CUDA_FALLBACK_LIB="/usr/lib/aarch64-linux-gnu"
+          ;;
+        x86_64|amd64)
+          CUDA_FALLBACK_LIB="/usr/lib/x86_64-linux-gnu"
+          ;;
+        *)
+          CUDA_FALLBACK_LIB=""
+          ;;
+      esac
+      if [ -n "$CUDA_FALLBACK_LIB" ] && [ -d "$CUDA_FALLBACK_LIB" ]; then
+        export CUDA_LIBRARY_PATH="$CUDA_FALLBACK_LIB"
+        export LD_LIBRARY_PATH="$CUDA_LIBRARY_PATH:$LD_LIBRARY_PATH"
+      fi
       log "✅ Manually set CUDA paths for cust_raw: CUDA_HOME=$CUDA_HOME"
     fi
     shopt -u nullglob
@@ -237,7 +287,9 @@ fi
 log "CUDA fallback paths tried: ${CUDA_MATCHES[*]:-none found}"
 
 export CUDA_HOME
-export PATH="$CUDA_HOME/bin:$PATH"
+if [ -d "$CUDA_HOME/bin" ]; then
+  export PATH="$CUDA_HOME/bin:$PATH"
+fi
 if [ -d "$CUDA_HOME/lib64" ]; then
   export LD_LIBRARY_PATH="$CUDA_HOME/lib64:${LD_LIBRARY_PATH:-}"
 elif [ -d "$CUDA_HOME/lib" ]; then
@@ -251,6 +303,8 @@ export CUDA_LIBRARY_PATH="$LD_LIBRARY_PATH"
 
 if [ -f "$CUDA_HOME/include/cuda.h" ]; then
   log "✅ Found cuda.h in $CUDA_HOME/include"
+elif [ "$HOST_OS" = "Darwin" ]; then
+  log "⚠️ cuda.h not found locally; macOS builds rely on remote CUDA via Secure9P"
 else
   echo "❌ cuda.h not found in $CUDA_HOME/include. Check CUDA installation." >&2
   exit 1
@@ -384,14 +438,14 @@ log "Detected platform: $COH_ARCH, GPU=$COH_GPU"
 
 # Set cross compiler for aarch64 if available
 if [ "$COH_ARCH" = "aarch64" ]; then
-  if command -v aarch64-linux-gnu-gcc >/dev/null 2>&1; then
-    export CC_aarch64_unknown_linux_gnu="$(command -v aarch64-linux-gnu-gcc)"
-    log "✅ Using GNU cross compiler at $CC_aarch64_unknown_linux_gnu"
+  if [ -n "$CROSS_GCC" ]; then
+    export CC_aarch64_unknown_linux_gnu="$CROSS_GCC"
+    log "✅ Using GNU cross compiler at $CROSS_GCC"
   elif [ -x "/opt/aarch64-linux-gnu/bin/aarch64-linux-gnu-gcc" ]; then
     export CC_aarch64_unknown_linux_gnu="/opt/aarch64-linux-gnu/bin/aarch64-linux-gnu-gcc"
     log "✅ Using GNU cross compiler at /opt/aarch64-linux-gnu/bin/aarch64-linux-gnu-gcc"
   else
-    log "⚠️ aarch64-linux-gnu-gcc not found in PATH or /opt/aarch64-linux-gnu/bin"
+    log "⚠️ aarch64 cross GCC not found in PATH or /opt/aarch64-linux-gnu/bin"
   fi
 fi
 
