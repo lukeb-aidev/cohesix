@@ -9,10 +9,10 @@
 /// `/srv/federation/state/<peer>/`. The handshake payload is
 /// JSON encoded and signed with the sender's keypair.
 use crate::federation::keyring::Keyring;
-#[allow(unused_imports)]
-use alloc::{boxed::Box, string::String, vec::Vec};
 use crate::queen::trust;
 use crate::{coh_error, CohError};
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 use serde::{Deserialize, Serialize};
 use std::fs;
 

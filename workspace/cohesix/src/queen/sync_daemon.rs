@@ -3,10 +3,10 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-08
 
-#[allow(unused_imports)]
-use alloc::{boxed::Box, string::String, vec::Vec};
 /// Queen<->Worker world model sync daemon.
 use crate::world_model::WorldModelSnapshot;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 use std::fs;
 use std::thread;
 use std::time::Duration;

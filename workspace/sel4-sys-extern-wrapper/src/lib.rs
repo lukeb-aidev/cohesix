@@ -12,14 +12,10 @@ pub mod bindings {
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 }
 
-pub use bindings::{
-    seL4_DebugPutChar,
-    seL4_DebugHalt,
-    seL4_CallWithMRs,
-    seL4_InitBootInfo,
-    seL4_GetBootInfo,
-};
 pub use bindings::*;
+pub use bindings::{
+    seL4_CallWithMRs, seL4_DebugHalt, seL4_DebugPutChar, seL4_GetBootInfo, seL4_InitBootInfo,
+};
 
 #[cfg(target_arch = "aarch64")]
 #[no_mangle]

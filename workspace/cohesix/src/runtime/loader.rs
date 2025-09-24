@@ -3,9 +3,9 @@
 // Author: Lukas Bower
 // Date Modified: 2026-12-31
 
+use crate::{coh_bail, coh_error, CohError};
 #[allow(unused_imports)]
 use alloc::{boxed::Box, string::String, vec::Vec};
-use crate::{coh_bail, coh_error, CohError};
 use std::fs::File;
 use std::io::Read;
 
@@ -32,8 +32,7 @@ pub fn load_and_run(path: &str) -> Result<(), CohError> {
 
     let exe_bytes = &data[5..];
     let tmp_path = "/srv/coh_exec.bin";
-    fs::write(tmp_path, exe_bytes)
-        .map_err(|e| coh_error!("write temp exe: {e}"))?;
+    fs::write(tmp_path, exe_bytes).map_err(|e| coh_error!("write temp exe: {e}"))?;
 
     let status = Command::new(tmp_path)
         .status()

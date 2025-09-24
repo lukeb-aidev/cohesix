@@ -4,8 +4,8 @@
 // Date Modified: 2026-01-27
 
 use clap::Parser;
-use cohesix::CohError;
 use cohesix::trace::recorder::event;
+use cohesix::CohError;
 
 /// Register a service address under /srv
 #[derive(Parser)]

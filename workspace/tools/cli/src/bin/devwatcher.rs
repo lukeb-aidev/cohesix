@@ -4,7 +4,7 @@
 // Date Modified: 2027-11-05
 
 use clap::Parser;
-use notify::{RecommendedWatcher, RecursiveMode, Watcher, Event, Config};
+use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
 use std::collections::HashSet;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -23,7 +23,11 @@ fn main() -> notify::Result<()> {
     let args = Args::parse();
     fs::create_dir_all("/dev/watch")?;
     fs::write("/dev/watch/ctl", b"")?;
-    OpenOptions::new().create(true).write(true).truncate(true).open("/dev/watch/events")?;
+    OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open("/dev/watch/events")?;
 
     let (tx, rx) = channel::<Result<Event, notify::Error>>();
     let mut watcher: RecommendedWatcher = Watcher::new(tx, Config::default())?;
@@ -33,7 +37,9 @@ fn main() -> notify::Result<()> {
         if let Ok(data) = fs::read_to_string("/dev/watch/ctl") {
             for line in data.lines() {
                 let p = line.trim();
-                if p.is_empty() { continue; }
+                if p.is_empty() {
+                    continue;
+                }
                 if watched.insert(p.to_string()) {
                     watcher.watch(Path::new(p), RecursiveMode::NonRecursive)?;
                 }

@@ -49,13 +49,17 @@ struct Args {
 }
 
 fn write_status(processed: usize, last_err: &str, last_job: &str) -> std::io::Result<()> {
-    let status = format!("jobs_processed={}\nlast_error=\"{}\"\nlast_job=\"{}\"\n", processed, last_err, last_job);
+    let status = format!(
+        "jobs_processed={}\nlast_error=\"{}\"\nlast_job=\"{}\"\n",
+        processed, last_err, last_job
+    );
     fs::write("/srv/physics/status", status)
 }
 
 fn process_job(job_path: &Path, args: &Args) -> std::io::Result<()> {
     let data = fs::read(job_path)?;
-    let job: PhysicsJob = serde_json::from_slice(&data).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    let job: PhysicsJob = serde_json::from_slice(&data)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
     let steps = (job.duration * 100.0) as i32;
     let final_position = [
         job.initial_position[0] + job.initial_velocity[0] * job.duration,
@@ -88,7 +92,10 @@ fn main() -> std::io::Result<()> {
     fs::create_dir_all("/srv/trace")?;
     fs::create_dir_all("/srv/physics")?;
     fs::create_dir_all(&args.sim_dir)?;
-    let mut logf = OpenOptions::new().create(true).append(true).open(&args.log_file)?;
+    let mut logf = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&args.log_file)?;
     let mut processed = 0usize;
     let mut last_err = String::new();
     let mut last_job = String::new();
@@ -96,23 +103,21 @@ fn main() -> std::io::Result<()> {
     loop {
         for entry in glob(&format!("{}/physics_job_*.json", args.job_dir.display())).unwrap() {
             match entry {
-                Ok(path) => {
-                    match process_job(&path, &args) {
-                        Ok(_) => {
-                            writeln!(logf, "completed {}", path.display())?;
-                            last_err.clear();
-                            last_job = path.display().to_string();
-                            processed += 1;
-                            write_status(processed, &last_err, &last_job)?;
-                            fs::remove_file(path)?;
-                        }
-                        Err(e) => {
-                            writeln!(logf, "error {}: {}", path.display(), e)?;
-                            last_err = e.to_string();
-                            write_status(processed, &last_err, &last_job)?;
-                        }
+                Ok(path) => match process_job(&path, &args) {
+                    Ok(_) => {
+                        writeln!(logf, "completed {}", path.display())?;
+                        last_err.clear();
+                        last_job = path.display().to_string();
+                        processed += 1;
+                        write_status(processed, &last_err, &last_job)?;
+                        fs::remove_file(path)?;
                     }
-                }
+                    Err(e) => {
+                        writeln!(logf, "error {}: {}", path.display(), e)?;
+                        last_err = e.to_string();
+                        write_status(processed, &last_err, &last_job)?;
+                    }
+                },
                 Err(_) => {}
             }
         }

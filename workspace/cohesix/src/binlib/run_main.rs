@@ -3,12 +3,15 @@
 // Author: Lukas Bower
 // Date Modified: 2026-12-31
 
-#[allow(unused_imports)]
-use alloc::{boxed::Box, string::String, vec::Vec};
-use crate::queen::orchestrator::{QueenOrchestrator, SchedulePolicy};
+use crate::orchestrator::protocol::{AssignRoleRequest, ClusterStateRequest, ScheduleRequest};
+use crate::queen::orchestrator::QueenOrchestrator;
 #[cfg(feature = "rapier")]
 use crate::sim::physics_demo;
+use crate::{new_err, CohError};
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 use clap::{Parser, Subcommand};
+use std::future::Future;
 
 /// CLI wrapper for `cohrun` utility.
 #[derive(Parser)]
@@ -91,35 +94,103 @@ pub fn run(cli: Cli) {
         }
         Commands::Orchestrator { command: cmd } => match cmd {
             OrchestratorCmd::Status => {
-                if let Ok(data) = std::fs::read_to_string("/srv/agents/active.json") {
-                    println!("{data}");
-                } else {
-                    println!("no agents registered");
+                match with_runtime(async move {
+                    let mut client = QueenOrchestrator::connect_default_client().await?;
+                    client
+                        .get_cluster_state(ClusterStateRequest {})
+                        .await
+                        .map_err(|e| new_err(format!("cluster state request failed: {e}")))
+                        .map(|resp| resp.into_inner())
+                }) {
+                    Ok(state) => {
+                        if state.workers.is_empty() {
+                            println!("no agents registered");
+                        } else {
+                            for worker in state.workers {
+                                println!(
+                                    "{} {} {} {}",
+                                    worker.worker_id, worker.role, worker.status, worker.ip
+                                );
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        println!("failed to query orchestrator: {err}");
+                    }
                 }
             }
             OrchestratorCmd::Assign { role, worker_id } => {
-                let mut orch = QueenOrchestrator::new(5, SchedulePolicy::RoundRobin);
-                orch.sync_workers();
-                orch.assign_role(&worker_id, &role);
-                println!("assigned {role} to {worker_id}");
+                let worker_display = worker_id.clone();
+                let role_display = role.clone();
+                let worker_request = worker_id.clone();
+                let role_request = role.clone();
+                match with_runtime(async move {
+                    let mut client = QueenOrchestrator::connect_default_client().await?;
+                    client
+                        .assign_role(AssignRoleRequest {
+                            worker_id: worker_request,
+                            role: role_request,
+                        })
+                        .await
+                        .map_err(|e| new_err(format!("assign role failed: {e}")))
+                        .map(|resp| resp.into_inner().updated)
+                }) {
+                    Ok(true) => println!("assigned {role_display} to {worker_display}"),
+                    Ok(false) => println!("worker {worker_display} not registered"),
+                    Err(err) => println!("assignment failed: {err}"),
+                }
             }
         },
         Commands::GpuStatus => {
-            if let Ok(data) = std::fs::read_to_string("/srv/gpu_registry.json") {
-                println!("{data}");
-            } else {
-                println!("no gpu registry");
+            match with_runtime(async move {
+                let mut client = QueenOrchestrator::connect_default_client().await?;
+                client
+                    .get_cluster_state(ClusterStateRequest {})
+                    .await
+                    .map_err(|e| new_err(format!("cluster state request failed: {e}")))
+                    .map(|resp| resp.into_inner())
+            }) {
+                Ok(state) => {
+                    let mut printed = false;
+                    for worker in state.workers {
+                        if let Some(gpu) = worker.gpu {
+                            println!(
+                                "{} perf_watt={} load={}/{} latency={}",
+                                worker.worker_id,
+                                gpu.perf_watt,
+                                gpu.current_load,
+                                gpu.gpu_capacity,
+                                gpu.latency_score
+                            );
+                            printed = true;
+                        }
+                    }
+                    if !printed {
+                        println!("no gpu nodes available");
+                    }
+                }
+                Err(err) => println!("failed to query GPU state: {err}"),
             }
         }
         Commands::GpuDispatch { task } => {
-            let mut orch = QueenOrchestrator::new(5, SchedulePolicy::GpuPriority);
-            orch.sync_workers();
-            orch.sync_gpu_telemetry();
-            if let Some(wid) = orch.schedule_gpu(&task) {
-                println!("dispatched {task} to {wid}");
-                orch.export_gpu_registry();
-            } else {
-                println!("no gpu nodes available");
+            let task_display = task.clone();
+            let task_request = task.clone();
+            match with_runtime(async move {
+                let mut client = QueenOrchestrator::connect_default_client().await?;
+                client
+                    .request_schedule(ScheduleRequest {
+                        agent_id: task_request,
+                        require_gpu: true,
+                    })
+                    .await
+                    .map_err(|e| new_err(format!("schedule request failed: {e}")))
+                    .map(|resp| resp.into_inner())
+            }) {
+                Ok(resp) if resp.assigned => {
+                    println!("dispatched {task_display} to {}", resp.worker_id)
+                }
+                Ok(_) => println!("no gpu nodes available"),
+                Err(err) => println!("failed to dispatch {task_display}: {err}"),
             }
         }
         Commands::Goal { command } => match command {
@@ -214,6 +285,16 @@ pub fn run(cli: Cli) {
             }
         }
     }
+}
+
+fn with_runtime<F, T>(future: F) -> Result<T, CohError>
+where
+    F: Future<Output = Result<T, CohError>> + Send + 'static,
+    T: Send + 'static,
+{
+    tokio::runtime::Runtime::new()
+        .map_err(|e| new_err(format!("failed to start tokio runtime: {e}")))?
+        .block_on(future)
 }
 
 #[cfg(test)]

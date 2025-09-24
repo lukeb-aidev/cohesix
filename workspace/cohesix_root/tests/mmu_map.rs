@@ -9,8 +9,12 @@ fn init_tables(l1: &mut [u64; 512], l2: &mut [u64; 512], dtb: usize, dtb_end: us
     const BLOCK_FLAGS: u64 = 0b11;
     const DEVICE_FLAGS: u64 = 0b11 | (1 << 2);
 
-    for e in l1.iter_mut() { *e = 0; }
-    for e in l2.iter_mut() { *e = 0; }
+    for e in l1.iter_mut() {
+        *e = 0;
+    }
+    for e in l2.iter_mut() {
+        *e = 0;
+    }
 
     l1[0] = (l2.as_ptr() as u64) | 0b11;
     for i in 0..16 {
@@ -31,6 +35,7 @@ fn mmu_map_snapshot() {
     let mut l2 = [0u64; 512];
     init_tables(&mut l1, &mut l2, 0x300000, 0x350000);
     let state = json!({"l1": l1, "l2": l2});
-    let golden: serde_json::Value = serde_json::from_str(include_str!("golden/mmu_map.json")).unwrap();
+    let golden: serde_json::Value =
+        serde_json::from_str(include_str!("golden/mmu_map.json")).unwrap();
     assert_eq!(state, golden);
 }

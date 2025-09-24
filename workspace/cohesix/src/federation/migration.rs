@@ -3,12 +3,12 @@
 // Author: Codex
 // Date Modified: 2025-06-07
 
+use crate::CohError;
 /// Agent migration utilities across federated clusters.
 /// Uses snapshot files stored under `/mnt/snapshots/` and
 /// replicates them to peer queens via the federation state
 /// directory.
 use std::fs;
-use crate::CohError;
 
 /// Migrate an agent snapshot to the specified peer queen.
 pub fn migrate_agent(agent_id: &str, peer: &str) -> Result<(), CohError> {

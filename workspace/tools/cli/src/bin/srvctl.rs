@@ -31,7 +31,12 @@ fn announce(name: &str, version: &str, path: &PathBuf) -> std::io::Result<()> {
     fs::create_dir_all(&dir)?;
     fs::write(
         dir.join("info"),
-        format!("name={}\nversion={}\npath={}\n", name, version, path.display()),
+        format!(
+            "name={}\nversion={}\npath={}\n",
+            name,
+            version,
+            path.display()
+        ),
     )?;
     fs::write(dir.join("ctl"), b"")?;
     println!("registered {} => {}", name, path.display());
@@ -41,7 +46,11 @@ fn announce(name: &str, version: &str, path: &PathBuf) -> std::io::Result<()> {
 fn main() -> std::io::Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
-        Command::Announce { name, version, path } => announce(&name, &version, &path)?,
+        Command::Announce {
+            name,
+            version,
+            path,
+        } => announce(&name, &version, &path)?,
     }
     Ok(())
 }

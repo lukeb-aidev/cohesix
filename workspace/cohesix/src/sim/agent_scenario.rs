@@ -3,9 +3,9 @@
 // Author: Lukas Bower
 // Date Modified: 2026-12-31
 
+use crate::{coh_error, CohError};
 #[allow(unused_imports)]
 use alloc::{boxed::Box, string::String, vec::Vec};
-use crate::{coh_error, CohError};
 /// Scenario engine for automated agent tests.
 //
 /// Reads a scenario configuration from `/boot/scenario.json`, spawns agents

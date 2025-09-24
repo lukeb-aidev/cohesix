@@ -19,7 +19,10 @@ impl InProcessStream {
         let a_rx = Arc::new(Mutex::new(VecDeque::new()));
         let b_rx = Arc::new(Mutex::new(VecDeque::new()));
         (
-            Self { rx: a_rx.clone(), tx: b_rx.clone() },
+            Self {
+                rx: a_rx.clone(),
+                tx: b_rx.clone(),
+            },
             Self { rx: b_rx, tx: a_rx },
         )
     }

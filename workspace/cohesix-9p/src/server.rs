@@ -14,7 +14,10 @@ pub struct FsServer {
 impl FsServer {
     /// Create a new server with the provided configuration.
     pub fn new(cfg: FsConfig) -> Self {
-        Self { cfg, fs: InMemoryFs::new() }
+        Self {
+            cfg,
+            fs: InMemoryFs::new(),
+        }
     }
 
     /// Start serving. This stub simply logs the mount point.
