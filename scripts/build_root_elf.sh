@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: build_root_elf.sh v0.20
+# Filename: build_root_elf.sh v0.21
 # Author: Lukas Bower
-# Date Modified: 2027-12-31
+# Date Modified: 2029-02-20
 #!/usr/bin/env bash
 set -euo pipefail
 export MEMCHR_DISABLE_RUNTIME_CPU_FEATURE_DETECTION=1
@@ -26,7 +26,9 @@ command -v ld.lld >/dev/null 2>&1 || {
 ld.lld --version >&2
 
 HOST_ARCH="$(uname -m)"
-if [[ "$HOST_ARCH" = "aarch64" ]] && ! command -v aarch64-linux-musl-gcc >/dev/null 2>&1; then
+if [[ "$HOST_ARCH" = "aarch64" || "$HOST_ARCH" = "arm64" ]] && \
+   ! command -v aarch64-linux-musl-gcc >/dev/null 2>&1 && \
+   ! command -v aarch64-unknown-linux-musl-gcc >/dev/null 2>&1; then
     if command -v sudo >/dev/null 2>&1; then
         SUDO=sudo
     else
@@ -34,11 +36,11 @@ if [[ "$HOST_ARCH" = "aarch64" ]] && ! command -v aarch64-linux-musl-gcc >/dev/n
     fi
     echo "Missing aarch64-linux-musl-gcc. Attempting install via apt" >&2
     if ! $SUDO apt update && ! $SUDO apt install -y musl-tools gcc-aarch64-linux-musl; then
-        echo "ERROR: Missing aarch64-linux-musl-gcc. Install with:\nsudo apt update && sudo apt install musl-tools gcc-aarch64-linux-musl" >&2
+        echo "ERROR: Missing aarch64-musl cross GCC. Install with:\nsudo apt update && sudo apt install musl-tools gcc-aarch64-linux-musl" >&2
         exit 1
     fi
     if ! command -v aarch64-linux-musl-gcc >/dev/null 2>&1; then
-        echo "ERROR: Missing aarch64-linux-musl-gcc. Install with:\nsudo apt update && sudo apt install musl-tools gcc-aarch64-linux-musl" >&2
+        echo "ERROR: Missing aarch64-musl cross GCC. Install with:\nsudo apt update && sudo apt install musl-tools gcc-aarch64-linux-musl" >&2
         exit 1
     fi
 fi

@@ -1,8 +1,8 @@
 # CLASSIFICATION: COMMUNITY
 #!/usr/bin/env bash
-# Filename: qemu_boot_check.sh v0.8
+# Filename: qemu_boot_check.sh v0.9
 # Author: Lukas Bower
-# Date Modified: 2029-02-14
+# Date Modified: 2029-02-20
 # This script boots Cohesix under QEMU for CI. Firmware assumptions:
 # - x86_64 uses OVMF for UEFI.
 # - aarch64 requires QEMU_EFI.fd provided by system packages
@@ -42,16 +42,34 @@ find_first_file() {
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 cd "$ROOT"
 
-ARCH="${BOOT_ARCH:-$(uname -m)}"
+ARCH_RAW="${BOOT_ARCH:-$(uname -m)}"
+case "$ARCH_RAW" in
+  arm64) ARCH="aarch64" ;;
+  amd64) ARCH="x86_64" ;;
+  *)     ARCH="$ARCH_RAW" ;;
+esac
 LOG_DIR="${TMPDIR:-$(mktemp -d)}"
 LOG_FILE="$LOG_DIR/qemu_serial.log"
 SUCCESS_MARKER="Cohesix shell started"
+ACCEL_ARGS=()
+QEMU_CPU_OPTS=()
 
 if [ "$ARCH" = "aarch64" ]; then
   if ! command -v qemu-system-aarch64 >/dev/null 2>&1; then
     echo "⚠️ qemu-system-aarch64 not installed; skipping ARM boot" >&2
     exit 0
   fi
+  QEMU_CPU="cortex-a53"
+  if [ "$OS_NAME" = "Darwin" ]; then
+    if qemu-system-aarch64 -accel help 2>/dev/null | grep -qi hvf; then
+      ACCEL_ARGS=(-accel hvf)
+      QEMU_CPU="host"
+      echo "✅ Using HVF acceleration for qemu-system-aarch64" >&2
+    else
+      echo "⚠️ HVF accelerator unavailable; using TCG" >&2
+    fi
+  fi
+  QEMU_CPU_OPTS=(-cpu "$QEMU_CPU")
   if [ -n "${QEMU_EFI:-}" ] && [ ! -f "$QEMU_EFI" ]; then
     echo "⚠️ QEMU_EFI override '$QEMU_EFI' not found; probing default firmware paths" >&2
   fi
@@ -84,7 +102,8 @@ if [ "$ARCH" = "aarch64" ]; then
   (
     timeout 30s qemu-system-aarch64 \
       -machine virt \
-      -cpu cortex-a53 \
+      "${ACCEL_ARGS[@]}" \
+      "${QEMU_CPU_OPTS[@]}" \
       -bios "$QEMU_EFI" \
       -drive format=raw,file=fat:rw:out/ \
       -m 256M -net none -nographic -serial mon:stdio -no-reboot 2>&1 | tee "$ARM_LOG" &

@@ -1,13 +1,37 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Makefile v0.52
+# Filename: Makefile v0.53
 # Author: Lukas Bower
-# Date Modified: 2027-09-30
+# Date Modified: 2029-02-20
 .PHONY: build cuda-build all go-build go-test c-shims help fmt lint check \
         rootserver userland full \
         boot boot-x86_64 boot-aarch64 cohrun cohbuild cohtrace cli_cap gui-orchestrator cloud test test-python check-tab-safety iso boot-grub qemu qemu-check
 
-PLATFORM ?= $(shell uname -m)
+UNAME_M := $(shell uname -m)
+PLATFORM ?= $(UNAME_M)
 TARGET ?= $(PLATFORM)
+ARCH ?= $(TARGET)
+
+ifeq ($(PLATFORM),arm64)
+PLATFORM := aarch64
+endif
+ifeq ($(PLATFORM),amd64)
+PLATFORM := x86_64
+endif
+
+ifeq ($(TARGET),arm64)
+TARGET := aarch64
+endif
+ifeq ($(TARGET),amd64)
+TARGET := x86_64
+endif
+
+ifeq ($(ARCH),arm64)
+ARCH := aarch64
+endif
+ifeq ($(ARCH),amd64)
+ARCH := x86_64
+endif
+
 JETSON ?= 0
 
 ifeq ($(TARGET),jetson)
@@ -18,6 +42,8 @@ export MEMCHR_DISABLE_RUNTIME_CPU_FEATURE_DETECTION ?= 1
 
 ifeq ($(JETSON),1)
 PLATFORM := aarch64
+TARGET := aarch64
+ARCH := aarch64
 endif
 
 # Detect build host operating system. On Windows, `$(OS)` is set to Windows_NT.

@@ -128,7 +128,7 @@
 | .bashrc | v0.1 | 2026-08-09 | COMMUNITY | | |
 | .cargo/config.toml | v0.22 | 2028-11-05 | COMMUNITY | | |
 | build.rs | v0.8 | 2026-08-21 | COMMUNITY | | |
-| Makefile | v0.52 | 2027-09-30 | COMMUNITY | | |
+| Makefile | v0.53 | 2029-02-20 | COMMUNITY | | |
 | workspace/Makefile | v0.1 | 2027-12-31 | COMMUNITY | | |
 | workspace/Cargo.toml | v0.6 | 2027-12-31 | COMMUNITY | | |
 | workspace/.cargo/config.toml | v0.3 | 2028-11-06 | COMMUNITY | | |
@@ -157,7 +157,7 @@
 | docs/community/architecture/BOOT_KERNEL_FLOW.md | v0.3 | 2026-10-16 | COMMUNITY | | |
 | docs/community/archive/EXAMPLES_README.md | v0.3 | 2026-02-05 | COMMUNITY | | |
 | .cohesix_env | v0.3 | 2026-07-25 | COMMUNITY | | |
-| cohesix_fetch_build.sh | v1.56 | 2028-12-18 | COMMUNITY | | |
+| cohesix_fetch_build.sh | v1.57 | 2029-02-20 | COMMUNITY | | |
 | cohesix_fetch_build.bak | v0.92 | 2027-11-07 | COMMUNITY | | |
 | CONTRIBUTING.md | v1.1 | 2025-07-23 | COMMUNITY | | |
 | config/secure9p.toml | v0.7 | 2026-12-31 | COMMUNITY | | |
@@ -182,7 +182,7 @@
 | tests/secure9p/policy_denial.rs | v0.3 | 2025-07-26 | COMMUNITY | | |
 | tests/secure9p/agent_identifier.rs | v0.2 | 2025-07-26 | COMMUNITY | | |
 
-| scripts/setup_build_env.sh | v0.5 | 2026-07-25 | COMMUNITY | | |
+| scripts/setup_build_env.sh | v0.6 | 2029-02-20 | COMMUNITY | | |
 | scripts/setup_cohesix_sel4_env.sh | v0.8 | 2027-12-31 | COMMUNITY | | |
 | scripts/check-qemu-deps.sh | v0.1 | 2025-07-28 | COMMUNITY | | |
 | scripts/collect_boot_logs.sh | v0.1 | 2025-07-12 | COMMUNITY | | |
@@ -190,11 +190,11 @@
 | scripts/manpage_scan.sh | v0.1 | 2025-06-08 | COMMUNITY | | |
 | scripts/verify-macos-setup.sh | v0.1 | 2025-06-05 | COMMUNITY | | |
 | scripts/debug_qemu_boot.sh | v0.4 | 2026-11-24 | COMMUNITY | | |
-| scripts/boot_qemu.sh | v0.4 | 2027-11-05 | COMMUNITY | | |
+| scripts/boot_qemu.sh | v0.5 | 2029-02-20 | COMMUNITY | | |
 | scripts/qemu_smoke_x86.sh | v0.1 | 2028-12-12 | COMMUNITY | | |
 | scripts/validate_iso_build.sh | v0.3 | 2026-12-31 | COMMUNITY | | |
-| scripts/build_root_elf.sh | v0.20 | 2027-12-31 | COMMUNITY | | |
-| scripts/load_arch_config.sh | v0.1 | 2026-07-25 | COMMUNITY | | |
+| scripts/build_root_elf.sh | v0.21 | 2029-02-20 | COMMUNITY | | |
+| scripts/load_arch_config.sh | v0.2 | 2029-02-20 | COMMUNITY | | |
 | scripts/build_busybox.sh | v0.8 | 2025-07-06 | COMMUNITY | | |
 | third_party/busybox/.config.coh | v1.0 | 2025-07-06 | COMMUNITY | | |
 | third_party/seL4/README.md | v0.1 | 2027-12-28 | COMMUNITY | | |
@@ -261,7 +261,7 @@
 | setup/roles/GlassesAgent.yaml | v0.2 | 2027-11-30 | COMMUNITY | | |
 | setup/roles/SensorRelay.yaml | v0.2 | 2027-11-30 | COMMUNITY | | |
 | setup/roles/SimulatorTest.yaml | v0.2 | 2027-11-30 | COMMUNITY | | |
-| ci/qemu_boot_check.sh | v0.7 | 2028-08-31 | COMMUNITY | | |
+| ci/qemu_boot_check.sh | v0.9 | 2029-02-20 | COMMUNITY | | |
 | userland/miniroot/README.md | v0.2 | 2026-01-20 | COMMUNITY | | |
 | userland/miniroot/bin/echo | v0.1 | 2025-09-23 | COMMUNITY | | |
 | userland/miniroot/bin/help | v0.1 | 2025-09-23 | COMMUNITY | | |
@@ -365,6 +365,7 @@
 | tools/cli/src/bin/physics_server.rs | v0.2 | 2027-11-05 | COMMUNITY | | |
 | scripts/mount_secure9p.rc | v0.1 | 2027-01-30 | COMMUNITY | | |
 | docs/community/guides/PLAN9_PHYSICS_SERVER.md | v0.1 | 2027-01-30 | COMMUNITY | | |
+| docs/community/guides/MAC_M4_QEMU.md | v0.1 | 2029-02-20 | COMMUNITY | | |
 | examples/physics_server_log.txt | v0.1 | 2027-01-30 | COMMUNITY | | |
 | tools/cli/src/bin/srvctl.rs | v0.2 | 2027-11-05 | COMMUNITY | | |
 | tools/cli/src/bin/indexserver.rs | v0.2 | 2027-11-05 | COMMUNITY | | |
