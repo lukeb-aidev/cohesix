@@ -4,10 +4,13 @@
 // Date Modified: 2025-07-22
 
 use crate::queen::trust;
-use crate::CohError;
+use crate::{new_err, CohError};
 /// Simple simulation trace validator run on the Queen.
+use hex;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::fs;
+use std::path::Path;
 
 #[derive(Deserialize)]
 struct TiltTrace {
@@ -54,4 +57,28 @@ pub fn validate_trace(path: &str, worker: &str) -> Result<(), CohError> {
     );
     println!("[validator] report stored at {out}");
     Ok(())
+}
+
+/// Return a SHA-256 digest of the active security policy for audit logs.
+pub fn security_policy_digest() -> Result<String, CohError> {
+    let configured = std::env::var("COHESIX_SECURITY_POLICY").ok();
+    let candidates = if let Some(path) = configured {
+        vec![path]
+    } else {
+        vec![
+            "workspace/docs/security/SECURITY_POLICY.md".into(),
+            "../docs/security/SECURITY_POLICY.md".into(),
+            "docs/security/SECURITY_POLICY.md".into(),
+        ]
+    };
+
+    for candidate in candidates {
+        let path = Path::new(&candidate);
+        if let Ok(data) = fs::read(path) {
+            let digest = Sha256::digest(&data);
+            return Ok(hex::encode(digest));
+        }
+    }
+
+    Err(new_err("security policy digest unavailable"))
 }

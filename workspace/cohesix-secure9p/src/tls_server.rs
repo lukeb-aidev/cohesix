@@ -6,7 +6,14 @@
 use crate::config::Secure9pConfig;
 use cohesix_9p::{policy::SandboxPolicy, NinepBackend};
 use log::{error, info, warn};
-use rustls::{server::AllowAnyAuthenticatedClient, Certificate, PrivateKey, RootCertStore};
+use ninep::Stream;
+use rustls::{
+    server::AllowAnyAuthenticatedClient,
+    Certificate,
+    OwnedTrustAnchor,
+    PrivateKey,
+    RootCertStore,
+};
 use rustls::{ServerConfig, ServerConnection, StreamOwned};
 use rustls_pemfile::{certs, pkcs8_private_keys, rsa_private_keys};
 use std::fs::File;
@@ -43,14 +50,16 @@ impl From<&Secure9pConfig> for SecureConfig {
 
 struct ServerThread {
     running: Arc<AtomicBool>,
-    handle: JoinHandle<()>,
+    handle: Option<JoinHandle<()>>,
 }
 
 impl Drop for ServerThread {
     fn drop(&mut self) {
         self.running.store(false, Ordering::SeqCst);
-        if let Err(e) = self.handle.join() {
-            error!("secure9p thread join error: {:?}", e);
+        if let Some(handle) = self.handle.take() {
+            if let Err(e) = handle.join() {
+                error!("secure9p thread join error: {:?}", e);
+            }
         }
     }
 }
@@ -98,7 +107,10 @@ impl Secure9PServer {
             .name(format!("secure9p-{port}"))
             .spawn(move || accept_loop(listener, backend, tls, thread_running))?;
         info!("Secure9P server listening on 0.0.0.0:{port}");
-        self.thread = Some(ServerThread { running, handle });
+        self.thread = Some(ServerThread {
+            running,
+            handle: Some(handle),
+        });
         Ok(())
     }
 }
@@ -106,11 +118,12 @@ impl Secure9PServer {
 fn build_tls_config(cfg: &SecureConfig) -> io::Result<ServerConfig> {
     let certs = load_certs(&cfg.cert)?;
     let key = load_key(&cfg.key)?;
-    let mut builder = ServerConfig::builder().with_safe_defaults();
+    let builder = ServerConfig::builder().with_safe_defaults();
     let config = if cfg.require_client_auth {
         let store = load_client_store(cfg)?;
+        let verifier = AllowAnyAuthenticatedClient::new(store);
         builder
-            .with_client_cert_verifier(AllowAnyAuthenticatedClient::new(store))
+            .with_client_cert_verifier(Arc::new(verifier))
             .with_single_cert(certs, key)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?
     } else {
@@ -163,7 +176,13 @@ fn load_client_store(cfg: &SecureConfig) -> io::Result<RootCertStore> {
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         }
     } else {
-        store.add_server_trust_anchors(TLS_SERVER_ROOTS.0.iter().cloned());
+        store.add_trust_anchors(TLS_SERVER_ROOTS.iter().map(|anchor| {
+            OwnedTrustAnchor::from_subject_spki_name_constraints(
+                anchor.subject,
+                anchor.spki,
+                anchor.name_constraints,
+            )
+        }));
     }
     Ok(store)
 }
