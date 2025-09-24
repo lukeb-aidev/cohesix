@@ -26,15 +26,18 @@ Compare the two most recent snapshot JSON files under \fI/history/snapshots\fR
 and print a human-readable diff.
 .TP
 .B cloud
-Display queen identity, validator state, and active workers using
-\fI/srv/cloud/state.json\fR and \fI/srv/agents/active.json\fR.
+Display queen identity, validator state, and active workers via the
+\fIcohesix.orchestrator.OrchestratorService\fR gRPC API. Falls back to
+\fI/srv/cloud/state.json\fR and \fI/srv/agents/active.json\fR if the
+service is unavailable.
 .SH FILES
 .TP
 .B /history/snapshots
 Stores the most recent validator snapshots.
 .TP
 .B /srv/agents/active.json
-Active worker registry written by the queen orchestrator.
+Legacy JSON mirror of the active worker registry maintained for
+backwards compatibility.
 .TP
 .B /srv/cloud/state.json
 Last reported queen heartbeat and worker summary.

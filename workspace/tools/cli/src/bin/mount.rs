@@ -5,7 +5,7 @@
 
 use clap::Parser;
 use cohesix::trace::recorder::event;
-use cohesix::{CohError, coh_bail};
+use cohesix::{coh_bail, CohError};
 use ninep::client::TcpClient;
 #[cfg(unix)]
 use ninep::client::UnixClient;

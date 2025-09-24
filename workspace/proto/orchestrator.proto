@@ -1,0 +1,99 @@
+// Author: Lukas Bower
+// Date Modified: 2029-01-15
+syntax = "proto3";
+
+package cohesix.orchestrator;
+
+message JoinRequest {
+  string worker_id = 1;
+  string ip = 2;
+  string role = 3;
+  repeated string capabilities = 4;
+  string trust = 5;
+}
+
+message JoinResponse {
+  string queen_id = 1;
+  uint64 boot_timestamp = 2;
+}
+
+message GpuTelemetry {
+  float perf_watt = 1;
+  uint64 mem_total = 2;
+  uint64 mem_free = 3;
+  uint32 last_temp = 4;
+  uint32 gpu_capacity = 5;
+  uint32 current_load = 6;
+  uint32 latency_score = 7;
+}
+
+message HeartbeatRequest {
+  string worker_id = 1;
+  uint64 timestamp = 2;
+  string status = 3;
+  GpuTelemetry gpu = 4;
+}
+
+message HeartbeatResponse {
+  bool acknowledged = 1;
+  string trust_level = 2;
+}
+
+message ScheduleRequest {
+  string agent_id = 1;
+  bool require_gpu = 2;
+}
+
+message ScheduleResponse {
+  bool assigned = 1;
+  string worker_id = 2;
+  string scheduling_policy = 3;
+}
+
+message TrustUpdateRequest {
+  string worker_id = 1;
+  string level = 2;
+}
+
+message TrustUpdateResponse {
+  string level = 1;
+}
+
+message AssignRoleRequest {
+  string worker_id = 1;
+  string role = 2;
+}
+
+message AssignRoleResponse {
+  bool updated = 1;
+}
+
+message ClusterStateRequest {}
+
+message WorkerStatus {
+  string worker_id = 1;
+  string role = 2;
+  string status = 3;
+  string ip = 4;
+  string trust = 5;
+  uint64 boot_ts = 6;
+  uint64 last_seen = 7;
+  repeated string capabilities = 8;
+  GpuTelemetry gpu = 9;
+}
+
+message ClusterStateResponse {
+  string queen_id = 1;
+  uint64 generated_at = 2;
+  uint32 timeout_seconds = 3;
+  repeated WorkerStatus workers = 4;
+}
+
+service OrchestratorService {
+  rpc Join(JoinRequest) returns (JoinResponse);
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+  rpc RequestSchedule(ScheduleRequest) returns (ScheduleResponse);
+  rpc UpdateTrust(TrustUpdateRequest) returns (TrustUpdateResponse);
+  rpc AssignRole(AssignRoleRequest) returns (AssignRoleResponse);
+  rpc GetClusterState(ClusterStateRequest) returns (ClusterStateResponse);
+}

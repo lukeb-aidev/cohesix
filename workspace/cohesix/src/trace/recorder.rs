@@ -3,9 +3,9 @@
 // Author: Lukas Bower
 // Date Modified: 2026-12-30
 
+use crate::CohError;
 #[allow(unused_imports)]
 use alloc::{boxed::Box, string::String, vec::Vec};
-use crate::CohError;
 /// Syscall and agent event recorder.
 //
 /// Logs spawn, exec, capability grants and read/write operations into

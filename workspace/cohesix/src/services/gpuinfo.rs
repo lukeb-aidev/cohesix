@@ -4,10 +4,10 @@
 // Date Modified: 2025-07-11
 
 use super::Service;
-#[allow(unused_imports)]
-use alloc::{boxed::Box, string::String, vec::Vec};
 /// GPU information service.
 use crate::runtime::ServiceRegistry;
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 use std::process::Command;
 
 #[derive(Default)]

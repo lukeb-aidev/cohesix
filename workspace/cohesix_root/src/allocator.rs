@@ -3,9 +3,9 @@
 // Author: Lukas Bower
 // Date Modified: 2028-12-12
 
-use core::alloc::{GlobalAlloc, Layout};
 use crate::check_heap_ptr;
 use crate::coherr;
+use core::alloc::{GlobalAlloc, Layout};
 
 extern "C" {
     static __heap_start: u8;
@@ -87,13 +87,10 @@ unsafe impl GlobalAlloc for BumpAllocator {
         log_regs();
         putstr("alloc offset");
         put_hex(OFFSET);
-        let off = OFFSET
-            .checked_add(align_mask)
-            .unwrap_or_else(|| {
-                putstr("alloc off ovf");
-                crate::abort("heap overflow");
-            })
-            & !align_mask;
+        let off = OFFSET.checked_add(align_mask).unwrap_or_else(|| {
+            putstr("alloc off ovf");
+            crate::abort("heap overflow");
+        }) & !align_mask;
         putstr("alloc aligned");
         put_hex(off);
         let end_ptr = heap_start

@@ -4,8 +4,6 @@
 // Date Modified: 2025-08-17
 // Uses TinyEd25519 with deterministic seeding for UEFI builds.
 
-#[allow(unused_imports)]
-use alloc::{boxed::Box, string::String, vec::Vec};
 /// Cryptographic keyring for trusted queen federation.
 //
 /// Generates an Ed25519 keypair on first boot and stores the
@@ -16,6 +14,8 @@ use alloc::{boxed::Box, string::String, vec::Vec};
 use crate::utils::tiny_ed25519::TinyEd25519;
 use crate::utils::tiny_rng::TinyRng;
 use crate::{coh_error, CohError};
+#[allow(unused_imports)]
+use alloc::{boxed::Box, string::String, vec::Vec};
 use std::fs;
 
 /// Keyring holding the local queen's Ed25519 key pair.

@@ -3,7 +3,7 @@
 // Author: Lukas Bower
 // Date Modified: 2028-01-25
 
-use crate::{coherr, abort};
+use crate::{abort, coherr};
 
 fn svc_dispatch(num: u16) {
     match num as i64 {
@@ -67,7 +67,9 @@ pub extern "C" fn handle_el1_serror_sp0() -> ! {
 #[no_mangle]
 pub extern "C" fn handle_el0_sync() -> ! {
     let esr: u64;
-    unsafe { core::arch::asm!("mrs {0}, esr_el1", out(reg) esr); }
+    unsafe {
+        core::arch::asm!("mrs {0}, esr_el1", out(reg) esr);
+    }
     let svc_num = (esr & 0xffff) as u16;
     coherr!("exc_el0_sync svc={:#x}", svc_num);
     svc_dispatch(svc_num);
@@ -115,4 +117,3 @@ pub extern "C" fn handle_el0_32_serror() -> ! {
     coherr!("exc_el0_32_serr");
     abort("exc el0 32 serr")
 }
-

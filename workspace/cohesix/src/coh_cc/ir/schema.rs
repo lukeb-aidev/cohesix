@@ -3,9 +3,9 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-18
 
+use crate::CohError;
 #[allow(unused_imports)]
 use alloc::{boxed::Box, string::String, vec::Vec};
-use crate::CohError;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};

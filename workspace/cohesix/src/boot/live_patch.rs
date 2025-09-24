@@ -3,9 +3,9 @@
 // Author: Lukas Bower
 // Date Modified: 2025-07-05
 
+use crate::CohError;
 /// Live patching utilities for on-the-fly updates.
 use sha2::{Digest, Sha256};
-use crate::CohError;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 

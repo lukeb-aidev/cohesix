@@ -44,18 +44,18 @@ pub mod prelude {
 /// Intermediate Representation (IR) core types and utilities
 pub mod ir;
 
-/// IR pass framework
-pub mod pass_framework;
-/// Individual optimization passes
-pub mod passes;
-/// Code generation backends (C, WASM) and dispatch logic
-pub mod codegen;
 /// CLI interface for compiler invocation
 pub mod cli;
+/// Code generation backends (C, WASM) and dispatch logic
+pub mod codegen;
 /// Minimal sandbox-safe compiler wrapper
 pub mod coh_cc;
 /// Core dependencies validation and management
 pub mod dependencies;
+/// IR pass framework
+pub mod pass_framework;
+/// Individual optimization passes
+pub mod passes;
 
 /// Low-level logging and debugging helpers
 pub mod util;
@@ -70,6 +70,7 @@ pub mod agent_migration;
 pub mod agent_transport;
 /// Agent runtime modules
 pub mod agents;
+pub mod metrics;
 /// Physical sensor modules
 pub mod physical;
 /// Queen orchestrator modules
@@ -80,7 +81,6 @@ pub mod runtime;
 pub mod swarm;
 /// Telemetry subsystem utilities
 pub mod telemetry;
-pub mod metrics;
 /// Trace recording modules
 pub mod trace;
 
