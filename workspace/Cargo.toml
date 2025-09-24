@@ -37,3 +37,6 @@ strip = "symbols"
 opt-level = "z"
 debug = false
 debug-assertions = false
+
+[patch.crates-io]
+ninep = { path = "../third_party/ninep_portable" }

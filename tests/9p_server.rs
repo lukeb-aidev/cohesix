@@ -1,128 +1,110 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: 9p_server.rs v0.3
-// Date Modified: 2026-02-20
-// Author: Cohesix Codex
+// Filename: 9p_server.rs v0.4
+// Author: Lukas Bower
+// Date Modified: 2028-12-31
 
-#[path = "../src/lib/9p/protocol.rs"]
-mod protocol;
-extern crate alloc;
-#[path = "../src/lib/9p/server.rs"]
-mod server;
-use protocol::{parse_message, P9Message};
+use cohesix_9p::{FsConfig, FsServer};
+use ninep::client::TcpClient;
 use serial_test::serial;
-use server::handle_9p_session;
 use std::io;
+use std::net::TcpListener;
 use std::path::PathBuf;
+use std::thread;
+use std::time::Duration;
 use tempfile::tempdir;
 
-struct TestEnv {
-    _dir: tempfile::TempDir,
-    cohrole: PathBuf,
+fn next_port() -> u16 {
+    TcpListener::bind("127.0.0.1:0")
+        .expect("bind ephemeral")
+        .local_addr()
+        .expect("local addr")
+        .port()
 }
 
-fn setup(role: &str) -> io::Result<TestEnv> {
-    let dir = tempdir()?;
-    let cohrole = dir.path().join("cohrole");
-    std::fs::write(&cohrole, role)?;
-    Ok(TestEnv { _dir: dir, cohrole })
+fn start_server(root: &PathBuf, port: u16) -> io::Result<FsServer> {
+    let mut srv = FsServer::new(FsConfig {
+        root: root.to_string_lossy().to_string(),
+        port,
+        readonly: false,
+    });
+    srv.start().map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    // allow thread to start accepting
+    thread::sleep(Duration::from_millis(100));
+    Ok(srv)
 }
 
-fn msg(op: u8, path: &str) -> Vec<u8> {
-    let mut v = vec![op];
-    v.extend_from_slice(path.as_bytes());
-    v
+fn client_for(port: u16, user: &str) -> io::Result<TcpClient> {
+    TcpClient::new_tcp(user.to_string(), format!("127.0.0.1:{port}"), "/")
 }
 
 #[test]
 #[serial]
 fn walk_srv() -> io::Result<()> {
-    server::reset_fs();
-    let env = setup("QueenPrimary")?;
-    unsafe {
-        std::env::set_var("COHROLE_PATH", &env.cohrole);
-    }
-    let resp = handle_9p_session(&msg(0x03, "/srv"));
-    unsafe {
-        std::env::remove_var("COHROLE_PATH");
-    }
-    assert!(matches!(parse_message(&resp), P9Message::Rwalk));
+    let tmp = tempdir()?;
+    std::fs::create_dir_all(tmp.path().join("srv"))?;
+    let port = next_port();
+    let _srv = start_server(&tmp.path().to_path_buf(), port)?;
+    let mut client = client_for(port, "QueenPrimary")?;
+    client.walk("/srv".to_string())?;
     Ok(())
 }
 
 #[test]
 #[serial]
-fn worker_write_denied() -> io::Result<()> {
-    server::reset_fs();
-    let env = setup("DroneWorker")?;
-    unsafe {
-        std::env::set_var("COHROLE_PATH", &env.cohrole);
-    }
-    let resp = handle_9p_session(&msg(0x09, "/proc/x"));
-    unsafe {
-        std::env::remove_var("COHROLE_PATH");
-    }
-    assert!(matches!(parse_message(&resp), P9Message::Rwrite));
+fn worker_write_allowed_proc() -> io::Result<()> {
+    let tmp = tempdir()?;
+    std::fs::create_dir_all(tmp.path().join("proc"))?;
+    let port = next_port();
+    let _srv = start_server(&tmp.path().to_path_buf(), port)?;
+    let mut client = client_for(port, "DroneWorker")?;
+    client.write("/proc/x".to_string(), 0, b"data")?;
+    let disk_path = tmp.path().join("proc").join("x");
+    let content = std::fs::read_to_string(disk_path)?;
+    assert_eq!(content, "data");
     Ok(())
 }
 
 #[test]
 #[serial]
 fn queen_write_and_read() -> io::Result<()> {
-    server::reset_fs();
-    let env = setup("QueenPrimary")?;
-    unsafe {
-        std::env::set_var("COHROLE_PATH", &env.cohrole);
-    }
-    let resp = handle_9p_session(&msg(0x09, "/mnt/data|hello"));
-    assert!(matches!(parse_message(&resp), P9Message::Rwrite));
-    let rd = handle_9p_session(&msg(0x07, "/mnt/data"));
-    unsafe {
-        std::env::remove_var("COHROLE_PATH");
-    }
-    assert!(matches!(parse_message(&rd), P9Message::Rread));
-    assert_eq!(&rd[1..], b"hello");
+    let tmp = tempdir()?;
+    std::fs::create_dir_all(tmp.path().join("mnt"))?;
+    let port = next_port();
+    let _srv = start_server(&tmp.path().to_path_buf(), port)?;
+    let mut client = client_for(port, "QueenPrimary")?;
+    client.write("/mnt/data".to_string(), 0, b"hello")?;
+    let data = client.read("/mnt/data".to_string())?;
+    assert_eq!(data, b"hello");
     Ok(())
 }
 
 #[test]
 #[serial]
 fn cross_role_read_access() -> io::Result<()> {
-    server::reset_fs();
-    let env_q = setup("QueenPrimary")?;
-    unsafe {
-        std::env::set_var("COHROLE_PATH", &env_q.cohrole);
-    }
-    let w = handle_9p_session(&msg(0x09, "/srv/shared|data"));
-    assert!(matches!(parse_message(&w), P9Message::Rwrite));
-    unsafe {
-        std::env::remove_var("COHROLE_PATH");
-    }
-
-    let env_k = setup("KioskInteractive")?;
-    unsafe {
-        std::env::set_var("COHROLE_PATH", &env_k.cohrole);
-    }
-    let resp = handle_9p_session(&msg(0x07, "/srv/shared"));
-    unsafe {
-        std::env::remove_var("COHROLE_PATH");
-    }
-    assert!(matches!(parse_message(&resp), P9Message::Rread));
-    assert_eq!(&resp[1..], b"data");
+    let tmp = tempdir()?;
+    std::fs::create_dir_all(tmp.path().join("srv"))?;
+    let port = next_port();
+    let _srv = start_server(&tmp.path().to_path_buf(), port)?;
+    let mut queen = client_for(port, "QueenPrimary")?;
+    queen.write("/srv/shared".to_string(), 0, b"data")?;
+    drop(queen);
+    let mut kiosk = client_for(port, "KioskInteractive")?;
+    let data = kiosk.read("/srv/shared".to_string())?;
+    assert_eq!(data, b"data");
     Ok(())
 }
 
 #[test]
 #[serial]
 fn kiosk_write_denied_srv() -> io::Result<()> {
-    server::reset_fs();
-    let env = setup("KioskInteractive")?;
-    unsafe {
-        std::env::set_var("COHROLE_PATH", &env.cohrole);
-    }
-    let resp = handle_9p_session(&msg(0x09, "/srv/blocked|x"));
-    unsafe {
-        std::env::remove_var("COHROLE_PATH");
-    }
-    assert!(matches!(parse_message(&resp), P9Message::Unknown(0xfd)));
+    let tmp = tempdir()?;
+    std::fs::create_dir_all(tmp.path().join("srv"))?;
+    let port = next_port();
+    let _srv = start_server(&tmp.path().to_path_buf(), port)?;
+    let mut kiosk = client_for(port, "KioskInteractive")?;
+    let err = kiosk.write("/srv/blocked".to_string(), 0, b"x").unwrap_err();
+    assert!(err.kind() == io::ErrorKind::Other || err.kind() == io::ErrorKind::PermissionDenied);
+    assert!(!tmp.path().join("srv/blocked").exists());
     Ok(())
 }
+
