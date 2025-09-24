@@ -23,9 +23,6 @@
 #include "boot_success.h"
 #include <stdint.h>
 #include <stddef.h>
-#include <stdio.h>
-#include <fcntl.h>
-#include <unistd.h>
 
 /*
  * Boot stages:
@@ -43,50 +40,47 @@ static size_t log_pos;
 int boot_trampoline_crc_ok = 0;
 
 /* Write a success marker for Fabric OS/validator */
-static void emit_fail_console(const char *reason)
-{
-    int cfd = open("/dev/console", O_WRONLY);
-    if (cfd >= 0) {
-        char buf[64];
-        int len = snprintf(buf, sizeof(buf), "BOOT_FAIL:%s\n", reason);
-        write(cfd, buf, len);
-        close(cfd);
-    }
-}
-
-static void emit_success_telemetry(void)
-{
-    int cfd = open("/dev/console", O_WRONLY);
-    if (cfd >= 0) {
-        write(cfd, "BOOT_OK\n", 8);
-        close(cfd);
-    }
-
-    int fd = open(COH_BOOT_SUCCESS_PATH, O_WRONLY | O_CREAT, 0644);
-    if (fd >= 0) {
-        write(fd, "BOOT_OK\n", 8);
-        close(fd);
-    } else {
-        emit_fail_console("boot_success_write");
-    }
-}
-
-static void uart_putc(char c)
+static void console_putc(char c)
 {
     *UART0 = (uint8_t)c;
 }
 
-static void uart_write(const char *s)
+static void console_write(const char *msg)
 {
-    while (*s)
-        uart_putc(*s++);
+    while (*msg) {
+        console_putc(*msg++);
+    }
+}
+
+static void console_write_line(const char *msg)
+{
+    console_write(msg);
+    console_putc('\n');
+}
+
+static void emit_fail_console(const char *reason)
+{
+    console_write("BOOT_FAIL:");
+    console_write(reason);
+    console_putc('\n');
+}
+
+static void emit_success_telemetry(void)
+{
+    console_write_line("BOOT_OK");
 }
 
 static void log_write(const char *s)
 {
-    uart_write(s);
-    while (*s && log_pos < sizeof(fallback_log) - 1)
-        fallback_log[log_pos++] = *s++;
+    const char *p = s;
+    while (*p) {
+        *UART0 = (uint8_t)*p;
+        p++;
+    }
+    p = s;
+    while (*p && log_pos < sizeof(fallback_log) - 1) {
+        fallback_log[log_pos++] = *p++;
+    }
     fallback_log[log_pos] = '\0';
 }
 
@@ -109,12 +103,27 @@ static uint32_t crc32_calc(const uint8_t *data, size_t len)
     return ~crc;
 }
 
-static void _trampoline_log(uintptr_t entry, int ok)
+static void write_hex(uintptr_t value)
 {
-    char buf[64];
-    snprintf(buf, sizeof(buf), "trampoline %p crc %s\n", (void *)entry,
-             ok ? "ok" : "fail");
+    char buf[2 + sizeof(uintptr_t) * 2 + 1];
+    static const char hex[] = "0123456789abcdef";
+    buf[0] = '0';
+    buf[1] = 'x';
+    for (size_t i = 0; i < sizeof(uintptr_t) * 2; ++i) {
+        size_t shift = (sizeof(uintptr_t) * 2 - 1 - i) * 4;
+        buf[2 + i] = hex[(value >> shift) & 0xFu];
+    }
+    buf[2 + sizeof(uintptr_t) * 2] = '\0';
     log_write(buf);
+}
+
+static void log_status(uintptr_t entry, int ok)
+{
+    log_write("trampoline ");
+    write_hex(entry);
+    log_write(" crc ");
+    log_write(ok ? "ok" : "fail");
+    log_write("\n");
 }
 
 void boot_trampoline(void)
@@ -123,10 +132,14 @@ void boot_trampoline(void)
     extern trampoline_hdr_t __trampoline_hdr;
 
     /* Phase 1: verify Rust entry and log result */
-    uint32_t calc = crc32_calc((const uint8_t *)&rust_early_init,
-                               __trampoline_hdr.length);
-    boot_trampoline_crc_ok = (calc == __trampoline_hdr.crc);
-    _trampoline_log((uintptr_t)&rust_early_init, boot_trampoline_crc_ok);
+    uint32_t calc = 0;
+    if (__trampoline_hdr.length != 0) {
+        calc = crc32_calc((const uint8_t *)&rust_early_init,
+                          __trampoline_hdr.length);
+    }
+    boot_trampoline_crc_ok = (__trampoline_hdr.length == 0) ||
+                             (calc == __trampoline_hdr.crc);
+    log_status((uintptr_t)&rust_early_init, boot_trampoline_crc_ok);
     if (!boot_trampoline_crc_ok) {
         emit_fail_console("crc_mismatch");
         panic_uart("panic: trampoline CRC mismatch\n");
