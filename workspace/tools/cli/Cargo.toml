@@ -31,6 +31,8 @@ default = []
 [dev-dependencies]
 assert_cmd = "2"
 tempfile = "3"
+rcgen = "0.13"
+serial_test = "3"
 
 [[bin]]
 name = "srvctl"

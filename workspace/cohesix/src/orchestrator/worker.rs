@@ -10,7 +10,7 @@ use crate::orchestrator::protocol::{
     JoinRequest, JoinResponse, OrchestratorServiceClient, ScheduleRequest, ScheduleResponse,
     TrustUpdateRequest, TrustUpdateResponse, DEFAULT_ENDPOINT,
 };
-use crate::queen::orchestrator::endpoint_from_env;
+use crate::queen::orchestrator::{endpoint_from_env, QueenOrchestrator};
 use crate::{new_err, CohError};
 #[allow(unused_imports)]
 use alloc::{boxed::Box, string::String, vec::Vec};
@@ -30,13 +30,7 @@ impl WorkerClient {
         let target = endpoint
             .map(|s| s.to_string())
             .unwrap_or_else(|| endpoint_from_env());
-        let client = OrchestratorServiceClient::connect(target.clone())
-            .await
-            .map_err(|e| {
-                new_err(format!(
-                    "failed to connect to orchestrator at {target}: {e}"
-                ))
-            })?;
+        let client = QueenOrchestrator::connect_client(&target).await?;
         Ok(Self {
             id: id.into(),
             client,

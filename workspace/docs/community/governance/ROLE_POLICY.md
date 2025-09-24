@@ -34,8 +34,15 @@ This string is matched directly against the RoleManifest.
 
 QueenPrimary and RegionalQueen nodes expose the `cohesix.orchestrator.OrchestratorService`
 gRPC API on the management interface. The default endpoint is
-`http://127.0.0.1:50051`, and can be overridden via the
+`https://127.0.0.1:50051`, and can be overridden via the
 `COHESIX_ORCH_ADDR` environment variable when running clients.
+
+Mutual TLS is mandatory on this control plane. Queens expose
+`COHESIX_ORCH_SERVER_CERT`/`COHESIX_ORCH_SERVER_KEY` and trust roots via
+`COHESIX_ORCH_CA_CERT`. Workers and administrative queens present their
+own certificates with `COHESIX_ORCH_CLIENT_CERT`/`COHESIX_ORCH_CLIENT_KEY`
+using role-aligned SPIFFE URIs. Certificates outside the role manifest
+are rejected during RPC authorisation.
 
 The service defines the following RPCs:
 

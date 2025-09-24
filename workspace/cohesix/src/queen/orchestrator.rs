@@ -14,22 +14,32 @@ use crate::trace::recorder;
 use crate::{new_err, CohError};
 #[allow(unused_imports)]
 use alloc::{boxed::Box, string::String, vec::Vec};
+use http::Uri;
+use rustls_pemfile::{certs, ec_private_keys, pkcs8_private_keys, rsa_private_keys};
+use rustls_pki_types::ServerName;
 use serde_json::json;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::convert::TryFrom;
 use std::env;
 use std::fs;
 use std::future::Future;
-use std::io::Write;
+use std::io::{Cursor, Write};
 use std::net::SocketAddr;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::net::TcpListener;
 use tokio::sync::RwLock;
 use tokio::task;
 use tokio_stream::wrappers::TcpListenerStream;
-use tonic::transport::{Channel, Server};
+use tonic::transport::{
+    server::{TcpConnectInfo, TlsConnectInfo},
+    Certificate, Channel, ClientTlsConfig, Endpoint, Identity, Server, ServerTlsConfig,
+};
 use tonic::{Request, Response, Status};
 use ureq::Agent as HttpAgent;
+use x509_parser::extensions::GeneralName;
+use x509_parser::prelude::*;
 
 /// Record of a worker node registered with the queen.
 #[derive(Clone, Debug)]
@@ -68,6 +78,7 @@ struct InnerState {
     state: RwLock<OrchestratorState>,
     timeout: Duration,
     queen_id: String,
+    policy_guard: PolicyGuard,
 }
 
 /// Queen orchestrator state shared between the gRPC server and local helpers.
@@ -88,6 +99,147 @@ pub enum SchedulePolicy {
     LatencyAware,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PeerKind {
+    Worker,
+    Queen,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PeerIdentity {
+    kind: PeerKind,
+    role: String,
+    entity: String,
+}
+
+impl PeerIdentity {
+    fn from_der(der: &[u8]) -> Result<Self, CohError> {
+        let (_, cert) = X509Certificate::from_der(der)
+            .map_err(|e| new_err(format!("failed to parse peer certificate: {e}")))?;
+        let san = cert
+            .subject_alternative_name()
+            .map_err(|_| new_err("peer certificate missing SubjectAlternativeName extension"))?
+            .ok_or_else(|| new_err("peer certificate missing SubjectAlternativeName extension"))?;
+        for general_name in san.value.general_names.iter() {
+            if let GeneralName::URI(uri) = general_name {
+                let uri_value = uri.to_string();
+                if let Some(identity) = Self::parse_role_uri(&uri_value)? {
+                    return Ok(identity);
+                }
+            }
+        }
+        Err(new_err(
+            "peer certificate missing Cohesix role URI (spiffe://cohesix/...)",
+        ))
+    }
+
+    fn parse_role_uri(uri: &str) -> Result<Option<Self>, CohError> {
+        const PREFIX: &str = "spiffe://cohesix/";
+        if !uri.starts_with(PREFIX) {
+            return Ok(None);
+        }
+        let mut parts = uri[PREFIX.len()..].split('/');
+        let category = parts
+            .next()
+            .ok_or_else(|| new_err("role URI missing category segment"))?;
+        let role = parts
+            .next()
+            .ok_or_else(|| new_err("role URI missing role segment"))?;
+        let entity_parts: Vec<&str> = parts.collect();
+        let entity = entity_parts.join("/");
+        if entity.is_empty() {
+            return Err(new_err(
+                "role URI must include an entity identifier segment (e.g. worker ID)",
+            ));
+        }
+        let kind = match category {
+            "worker" => PeerKind::Worker,
+            "queen" => PeerKind::Queen,
+            _ => return Ok(None),
+        };
+        Ok(Some(Self {
+            kind,
+            role: role.to_string(),
+            entity,
+        }))
+    }
+}
+
+#[derive(Clone)]
+struct PolicyGuard {
+    worker_roles: HashSet<String>,
+    queen_roles: HashSet<String>,
+}
+
+impl Default for PolicyGuard {
+    fn default() -> Self {
+        Self {
+            worker_roles: HashSet::from([
+                "DroneWorker".to_string(),
+                "InteractiveAiBooth".to_string(),
+                "KioskInteractive".to_string(),
+                "GlassesAgent".to_string(),
+                "SensorRelay".to_string(),
+                "SimulatorTest".to_string(),
+            ]),
+            queen_roles: HashSet::from([
+                "QueenPrimary".to_string(),
+                "RegionalQueen".to_string(),
+                "BareMetalQueen".to_string(),
+            ]),
+        }
+    }
+}
+
+impl PolicyGuard {
+    fn ensure_worker(&self, identity: &PeerIdentity) -> Result<(), Status> {
+        match identity.kind {
+            PeerKind::Worker => {
+                if self.worker_roles.contains(identity.role.as_str()) {
+                    Ok(())
+                } else {
+                    Err(Status::permission_denied(format!(
+                        "worker role {} is not permitted on the queen control plane",
+                        identity.role
+                    )))
+                }
+            }
+            PeerKind::Queen => Err(Status::permission_denied(
+                "queen identities cannot invoke worker RPCs",
+            )),
+        }
+    }
+
+    fn ensure_worker_for(&self, identity: &PeerIdentity, expected_id: &str) -> Result<(), Status> {
+        self.ensure_worker(identity)?;
+        if identity.entity != expected_id {
+            return Err(Status::permission_denied(format!(
+                "worker certificate identifier '{}' does not match request target '{}'",
+                identity.entity, expected_id
+            )));
+        }
+        Ok(())
+    }
+
+    fn ensure_queen(&self, identity: &PeerIdentity) -> Result<(), Status> {
+        match identity.kind {
+            PeerKind::Queen => {
+                if self.queen_roles.contains(identity.role.as_str()) {
+                    Ok(())
+                } else {
+                    Err(Status::permission_denied(format!(
+                        "queen role {} is not authorised for control operations",
+                        identity.role
+                    )))
+                }
+            }
+            PeerKind::Worker => Err(Status::permission_denied(
+                "worker identities cannot invoke queen RPCs",
+            )),
+        }
+    }
+}
+
 impl QueenOrchestrator {
     /// Initialize the orchestrator with a heartbeat timeout and scheduling policy.
     pub fn new(timeout_secs: u64, policy: SchedulePolicy) -> Self {
@@ -100,6 +252,7 @@ impl QueenOrchestrator {
             }),
             timeout: Duration::from_secs(timeout_secs),
             queen_id: env::var("COHESIX_QUEEN_ID").unwrap_or_else(|_| "cohesix-queen".into()),
+            policy_guard: PolicyGuard::default(),
         };
         Self {
             inner: Arc::new(inner),
@@ -109,6 +262,23 @@ impl QueenOrchestrator {
     /// Return the identifier of the queen instance hosting this orchestrator.
     pub fn queen_id(&self) -> String {
         self.inner.queen_id.clone()
+    }
+
+    fn policy(&self) -> &PolicyGuard {
+        &self.inner.policy_guard
+    }
+
+    fn peer_identity<T>(&self, request: &Request<T>) -> Result<PeerIdentity, Status> {
+        let info = request
+            .extensions()
+            .get::<TlsConnectInfo<TcpConnectInfo>>()
+            .ok_or_else(|| Status::unauthenticated("missing TLS peer identity"))?;
+        let cert = info
+            .peer_certs()
+            .and_then(|certs| certs.as_ref().first().cloned())
+            .ok_or_else(|| Status::unauthenticated("client certificate not provided"))?;
+        PeerIdentity::from_der(cert.as_ref())
+            .map_err(|err| Status::permission_denied(err.to_string()))
     }
 
     /// Return the configured heartbeat timeout.
@@ -139,7 +309,10 @@ impl QueenOrchestrator {
         S: Future<Output = ()> + Send + 'static,
     {
         let service = self.clone().into_service();
+        let tls = build_server_tls_config()?;
         Server::builder()
+            .tls_config(tls)
+            .map_err(|e| new_err(format!("failed to configure orchestrator TLS: {e}")))?
             .add_service(service)
             .serve_with_incoming_shutdown(TcpListenerStream::new(listener), shutdown)
             .await
@@ -155,13 +328,30 @@ impl QueenOrchestrator {
     pub async fn connect_client(
         endpoint: &str,
     ) -> Result<OrchestratorServiceClient<Channel>, CohError> {
-        OrchestratorServiceClient::connect(endpoint.to_string())
+        let uri: Uri = endpoint
+            .parse()
+            .map_err(|e| new_err(format!("invalid orchestrator endpoint {endpoint}: {e}")))?;
+        if uri.scheme_str() != Some("https") {
+            return Err(new_err(format!(
+                "orchestrator endpoint {endpoint} must use the https scheme"
+            )));
+        }
+        let host = uri
+            .host()
+            .ok_or_else(|| new_err(format!("orchestrator endpoint {endpoint} missing host")))?;
+        let tls = build_client_tls_config(host)?;
+        let channel = Endpoint::from_shared(endpoint.to_string())
+            .map_err(|e| new_err(format!("failed to build endpoint for {endpoint}: {e}")))?
+            .tls_config(tls)
+            .map_err(|e| new_err(format!("failed to configure TLS for {endpoint}: {e}")))?
+            .connect()
             .await
             .map_err(|e| {
                 new_err(format!(
                     "failed to connect to orchestrator at {endpoint}: {e}"
                 ))
-            })
+            })?;
+        Ok(OrchestratorServiceClient::new(channel))
     }
 
     async fn handle_join(&self, req: JoinRequest) -> Result<JoinResponse, Status> {
@@ -500,6 +690,11 @@ impl QueenOrchestrator {
 #[tonic::async_trait]
 impl OrchestratorService for GrpcOrchestrator {
     async fn join(&self, request: Request<JoinRequest>) -> Result<Response<JoinResponse>, Status> {
+        let worker_id = request.get_ref().worker_id.clone();
+        let identity = self.orchestrator.peer_identity(&request)?;
+        self.orchestrator
+            .policy()
+            .ensure_worker_for(&identity, &worker_id)?;
         let response = self.orchestrator.handle_join(request.into_inner()).await?;
         Ok(Response::new(response))
     }
@@ -508,6 +703,11 @@ impl OrchestratorService for GrpcOrchestrator {
         &self,
         request: Request<HeartbeatRequest>,
     ) -> Result<Response<HeartbeatResponse>, Status> {
+        let worker_id = request.get_ref().worker_id.clone();
+        let identity = self.orchestrator.peer_identity(&request)?;
+        self.orchestrator
+            .policy()
+            .ensure_worker_for(&identity, &worker_id)?;
         let response = self
             .orchestrator
             .handle_heartbeat(request.into_inner())
@@ -519,6 +719,8 @@ impl OrchestratorService for GrpcOrchestrator {
         &self,
         request: Request<ScheduleRequest>,
     ) -> Result<Response<ScheduleResponse>, Status> {
+        let identity = self.orchestrator.peer_identity(&request)?;
+        self.orchestrator.policy().ensure_worker(&identity)?;
         let response = self
             .orchestrator
             .handle_schedule(request.into_inner())
@@ -530,6 +732,8 @@ impl OrchestratorService for GrpcOrchestrator {
         &self,
         request: Request<TrustUpdateRequest>,
     ) -> Result<Response<TrustUpdateResponse>, Status> {
+        let identity = self.orchestrator.peer_identity(&request)?;
+        self.orchestrator.policy().ensure_queen(&identity)?;
         let response = self
             .orchestrator
             .handle_trust_update(request.into_inner())
@@ -541,6 +745,8 @@ impl OrchestratorService for GrpcOrchestrator {
         &self,
         request: Request<AssignRoleRequest>,
     ) -> Result<Response<AssignRoleResponse>, Status> {
+        let identity = self.orchestrator.peer_identity(&request)?;
+        self.orchestrator.policy().ensure_queen(&identity)?;
         let response = self
             .orchestrator
             .handle_assign_role(request.into_inner())
@@ -550,8 +756,10 @@ impl OrchestratorService for GrpcOrchestrator {
 
     async fn get_cluster_state(
         &self,
-        _request: Request<ClusterStateRequest>,
+        request: Request<ClusterStateRequest>,
     ) -> Result<Response<ClusterStateResponse>, Status> {
+        let identity = self.orchestrator.peer_identity(&request)?;
+        self.orchestrator.policy().ensure_queen(&identity)?;
         let response = self.orchestrator.handle_cluster_state().await?;
         Ok(Response::new(response))
     }
@@ -702,4 +910,117 @@ fn timestamp() -> u64 {
 /// Determine the orchestrator endpoint, prioritising configuration.
 pub fn endpoint_from_env() -> String {
     env::var("COHESIX_ORCH_ADDR").unwrap_or_else(|_| DEFAULT_ENDPOINT.to_string())
+}
+
+fn build_server_tls_config() -> Result<ServerTlsConfig, CohError> {
+    let cert = load_secret_bytes("COHESIX_ORCH_SERVER_CERT")?;
+    let key = load_secret_bytes("COHESIX_ORCH_SERVER_KEY")?;
+    let ca = load_secret_bytes("COHESIX_ORCH_CA_CERT")?;
+
+    ensure_certificate_pem("COHESIX_ORCH_SERVER_CERT", &cert)?;
+    ensure_private_key_pem("COHESIX_ORCH_SERVER_KEY", &key)?;
+    ensure_certificate_pem("COHESIX_ORCH_CA_CERT", &ca)?;
+
+    let identity = Identity::from_pem(cert.clone(), key.clone());
+    let ca_cert = Certificate::from_pem(ca.clone());
+
+    Ok(ServerTlsConfig::new()
+        .identity(identity)
+        .client_ca_root(ca_cert))
+}
+
+fn build_client_tls_config(domain: &str) -> Result<ClientTlsConfig, CohError> {
+    validate_domain_name(domain)?;
+
+    let cert = load_secret_bytes("COHESIX_ORCH_CLIENT_CERT")?;
+    let key = load_secret_bytes("COHESIX_ORCH_CLIENT_KEY")?;
+    let ca = load_secret_bytes("COHESIX_ORCH_CA_CERT")?;
+
+    ensure_certificate_pem("COHESIX_ORCH_CLIENT_CERT", &cert)?;
+    ensure_private_key_pem("COHESIX_ORCH_CLIENT_KEY", &key)?;
+    ensure_certificate_pem("COHESIX_ORCH_CA_CERT", &ca)?;
+
+    let identity = Identity::from_pem(cert.clone(), key.clone());
+    let ca_cert = Certificate::from_pem(ca.clone());
+
+    Ok(ClientTlsConfig::new()
+        .identity(identity)
+        .ca_certificate(ca_cert)
+        .domain_name(domain.to_string()))
+}
+
+fn ensure_certificate_pem(label: &str, pem_bytes: &[u8]) -> Result<(), CohError> {
+    let mut reader = Cursor::new(pem_bytes);
+    let parsed = certs(&mut reader)
+        .map_err(|e| new_err(format!("{label} contains invalid PEM data: {e}")))?;
+
+    if parsed.is_empty() {
+        return Err(new_err(format!("{label} did not contain any certificates")));
+    }
+
+    for cert_der in parsed {
+        X509Certificate::from_der(cert_der.as_slice())
+            .map_err(|e| new_err(format!("{label} contained an invalid certificate: {e}")))?;
+    }
+
+    Ok(())
+}
+
+fn ensure_private_key_pem(label: &str, pem_bytes: &[u8]) -> Result<(), CohError> {
+    let mut reader = Cursor::new(pem_bytes);
+
+    if !pkcs8_private_keys(&mut reader)
+        .map_err(|e| new_err(format!("{label} contains invalid PKCS#8 key data: {e}")))?
+        .is_empty()
+    {
+        return Ok(());
+    }
+
+    reader.set_position(0);
+    if !rsa_private_keys(&mut reader)
+        .map_err(|e| new_err(format!("{label} contains invalid RSA key data: {e}")))?
+        .is_empty()
+    {
+        return Ok(());
+    }
+
+    reader.set_position(0);
+    if !ec_private_keys(&mut reader)
+        .map_err(|e| new_err(format!("{label} contains invalid EC key data: {e}")))?
+        .is_empty()
+    {
+        return Ok(());
+    }
+
+    Err(new_err(format!(
+        "{label} did not contain a supported private key (expected PKCS#8, RSA, or EC)"
+    )))
+}
+
+fn validate_domain_name(domain: &str) -> Result<(), CohError> {
+    ServerName::try_from(domain)
+        .map_err(|e| new_err(format!("invalid orchestrator TLS domain '{domain}': {e}")))?;
+    Ok(())
+}
+
+fn load_secret_bytes(env_key: &str) -> Result<Vec<u8>, CohError> {
+    let value = env::var(env_key)
+        .map_err(|_| new_err(format!("{env_key} environment variable must be set")))?;
+    let trimmed = value.trim_start();
+    let data = if trimmed.starts_with("-----BEGIN") {
+        value.into_bytes()
+    } else {
+        let path = Path::new(trimmed);
+        let bytes = fs::read(path).map_err(|e| {
+            new_err(format!(
+                "failed to read {env_key} from {}: {e}",
+                path.display()
+            ))
+        })?;
+        bytes
+    };
+    if data.is_empty() {
+        return Err(new_err(format!("{env_key} provided no data")));
+    }
+    Ok(data)
 }

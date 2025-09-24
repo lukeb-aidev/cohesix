@@ -16,4 +16,4 @@ pub use generated::orchestrator_service_server::OrchestratorServiceServer;
 pub use generated::*;
 
 /// Default endpoint used when no explicit orchestrator address is provided.
-pub const DEFAULT_ENDPOINT: &str = "http://127.0.0.1:50051";
+pub const DEFAULT_ENDPOINT: &str = "https://127.0.0.1:50051";
