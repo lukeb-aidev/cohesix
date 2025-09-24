@@ -1,12 +1,14 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v1.21
+// Filename: CHANGELOG.md v1.22
 // Author: Lukas Bower
-// Date Modified: 2028-12-18
+// Date Modified: 2029-02-21
 
-[vNext] - 2029-02-20
+[vNext] - 2029-02-21
 ### Added
 - `workspace/docs/community/guides/MAC_M4_QEMU.md` with the full Mac M4 HVF build
   and QEMU workflow.
+- Registered `workspace/cohesix/src/queen/orchestrator.rs` in governance metadata to
+  restore traceability coverage.
 
 ### Changed
 - Makefile v0.53 normalizes `arm64`/`amd64` host identifiers to
@@ -14,7 +16,7 @@
 - `cohesix_fetch_build.sh` v1.57 accepts Homebrew's
   `aarch64-unknown-linux-gnu-gcc`, tolerates missing local CUDA headers on macOS,
   and avoids injecting nonexistent library paths on ARM hosts.
-- `scripts/boot_qemu.sh` v0.5 and `ci/qemu_boot_check.sh` v0.9 detect HVF
+- `scripts/boot_qemu.sh` v0.5 and `ci/qemu_boot_check.sh` v1.0 detect HVF
   support on Mac M4 hardware and switch to `-accel hvf -cpu host`, falling back
   to TCG when unavailable.
 - `scripts/setup_build_env.sh` v0.6 and `scripts/load_arch_config.sh` v0.2
@@ -22,6 +24,10 @@
   the expected architecture identifiers.
 - `scripts/build_root_elf.sh` v0.21 now recognises alternate musl cross
   compilers and declares the community classification header.
+- `ci/qemu_boot_check.sh` v1.0 captures boot latency from the serial log and
+  fails CI when the 200ms cold-boot target is exceeded.
+- `src/cuda/runtime.rs` v0.17 records telemetry-backed CPU fallbacks whenever a
+  remote CUDA endpoint is unavailable or misconfigured.
 
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
