@@ -36,7 +36,7 @@ This guide describes how to deploy Cohesix in a cloud-native setup where the Que
 | `COHROLE`             | `QueenPrimary`                 | Selects the system role.                |
 | `CLOUD_HOOK_URL`      | `https://queen-coordinator`    | Where Workers register & report.       |
 | `COHESIX_SRV_ROOT`    | `/tmp/srv`                     | Redirects /srv in non-root setups.      |
-| `COHESIX_ORCH_ADDR`   | `http://queen-primary:50051`   | Override gRPC orchestrator endpoint.    |
+| `COHESIX_ORCH_ADDR`   | `https://queen-primary:50051`   | Override gRPC orchestrator endpoint.    |
 | `NO_CUDA`             | `1`                            | Disables Cohesix CUDA Server integration for this node.           |
 | `COHESIX_BUSYBOX_PATH`| `/mnt/data/bin/cohbox`         | Override BusyBox path used by `cohesix-shell`. |
 
@@ -45,11 +45,11 @@ If `CLOUD_HOOK_URL` is not set, place the hook URL in `/etc/cloud.toml` so `make
 The orchestrator control plane is exposed via the `cohesix.orchestrator.OrchestratorService`
 gRPC API. Deployments should terminate TLS at the ingress proxy and
 provide mutual authentication for clients connecting to
-`COHESIX_ORCH_ADDR` (defaults to `http://127.0.0.1:50051`). Workers and
+`COHESIX_ORCH_ADDR` (defaults to `https://127.0.0.1:50051`). Workers and
 CLI tools fall back to this address when the environment variable is
-unset, so production environments must supply the correct hostname and
-ensure the channel is protected by service-mesh certificates or other
-trusted credentials.
+unset, so production environments must supply the correct hostname,
+`COHESIX_ORCH_CA_CERT` trust anchors, and
+`COHESIX_ORCH_CLIENT_CERT`/`COHESIX_ORCH_CLIENT_KEY` credentials.
 
 ### Example QueenPrimary start
 ```bash
