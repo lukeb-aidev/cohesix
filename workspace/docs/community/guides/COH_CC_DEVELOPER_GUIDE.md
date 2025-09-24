@@ -15,10 +15,10 @@ Coh_CC supports a streamlined, secure subset of languages, each with a clear rol
 
 | Language | Purpose | Notes |
 |----------|---------|-------|
-| **Rust** | Low-level, secure systems code | For drivers, kernel extensions, trusted agents. Compiled for seL4/Plan9 on Jetson, Pi, NUC. |
+| **Rust** | Low-level, secure systems code | For drivers, kernel extensions, trusted agents. Compiled for seL4/Plan9 on Raspberry Pi, x86_64 micro-PCs, and cloud queens. |
 | **Go**   | Userland services, orchestration | Ideal for CLI tools, APIs, concurrency; builds to static binaries on all nodes. |
 | **C**    | Kernel patches, legacy modules  | Required for seL4, bootloader, and direct kernel IPC. |
-| **C++ (CUDA)** | GPU workloads on Jetson | For inference, vector ops, physics offload via `/srv/cuda`. |
+| **C++ (CUDA)** | GPU workloads on Cohesix-managed Linux microservers | For inference, vector ops, physics offload via `/srv/cuda`. |
 | **Python** | Developer & CI tooling | **Not deployed on Cohesix.** Used for local glue, validator scripts, simulation traces. |
 
 > **Note:**  
@@ -35,7 +35,7 @@ Coh_CC enables development for all Cohesix roles and execution layers:
 
 ### Target Roles
 - **QueenPrimary**: cloud orchestrator, runs CI, agent coordination, policy engines
-- **Worker (Jetson / Pi)**: edge compute agents, simulators, CUDA inference
+- **Worker (Pi / x86 Plan9)**: edge compute agents, simulators; GPU inference is proxied to Cohesix CUDA Servers
 - **KioskInteractive**: minimal input/output clients
 - **GlassesAgent**: wearable interfaces, HUDs
 - **SimulatorTest**: scenario execution, trace validation
@@ -48,7 +48,7 @@ See `ROLE_POLICY.md` for full role descriptions and expected execution behaviors
 - Secure 9P namespace exposure
 - Live validator hooks
 - Trusted boot and attestation flows
-- GPU offload (via `/srv/cuda`)
+- GPU offload (via `/srv/cuda` into remote CUDA annex)
 - Physics runtime (via `/sim/` with Rapier)
 
 ---

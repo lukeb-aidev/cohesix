@@ -15,7 +15,7 @@ This file consolidates the previous `docs/security/THREAT_MODEL.md` and `docs/pr
 | Bootloader binary          | seL4-based boot code                            | Integrity, Availability |
 | IR & Pass Framework        | Compiler intermediate representation logic      | Integrity               |
 | Plan 9 Namespace Service   | 9P server for file/system access                | Confidentiality, Integrity |
-| GPU Offload Service        | CUDA/TensorRT runtime container                  | Integrity, Availability |
+| GPU Offload Service        | Cohesix-managed Linux CUDA Server annex (TensorRT runtime) | Integrity, Availability |
 | Userland Utilities         | BusyBox & POSIX shims                            | Integrity, Availability |
 | Codex Agent Instructions   | AGENTS.md and orchestrator scripts               | Integrity, Confidentiality |
 | Dependency manifest        | DEPENDENCIES.md with version pins                | Integrity               |
@@ -36,7 +36,7 @@ This file consolidates the previous `docs/security/THREAT_MODEL.md` and `docs/pr
 | AV1| Bootloader tampering             | Attacker alters bootloader image in storage                 | Bootloader binary          |
 | AV2| IR manipulation                  | Malicious IR input to subvert compiler behavior             | IR & Pass Framework        |
 | AV3| 9P mount spoofing               | Unauthorized file access via manipulated 9P mounts          | Plan 9 Namespace Service   |
-| AV4| GPU side channel                | Extract sensitive data via CUDA side-channel attacks       | GPU Offload Service        |
+| AV4| GPU side channel                | Extract sensitive data via CUDA side-channel attacks within Linux annex hosts       | GPU Offload Service        |
 | AV5| OCSP/Dependency compromise      | Malicious package or pinned version vulnerability          | Dependency manifest        |
 | AV6| Agent instruction injection     | Malicious AGENTS.md causes Codex to execute harmful tasks  | Codex Agent Instructions   |
 
@@ -47,7 +47,7 @@ This file consolidates the previous `docs/security/THREAT_MODEL.md` and `docs/pr
 | Bootloader tampering| - Sign bootloader images using seL4-verified key                  |
 | IR manipulation     | - Validate IR schema; sandbox compiler front-end                 |
 | 9P spoofing         | - Authenticate 9P clients; use capability-based access controls  |
-| GPU side channel    | - Limit precision; introduce noise; isolate workloads             |
+| GPU side channel    | - Limit precision; introduce noise; isolate workloads and confine secrets to Plan 9 roles with signed annex telemetry |
 | Dependency compromise| - Enforce SCA scanning; pin to known-good hashes in DEPENDENCIES.md |
 | Instruction injection| - Lint AGENTS.md; require well-formed entries; code review      |
 | Trace and replay tampering | - Sign all trace logs and snapshots; verify in CI and replay using validator  |

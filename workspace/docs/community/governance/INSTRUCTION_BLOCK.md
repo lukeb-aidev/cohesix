@@ -28,7 +28,7 @@ QEMU boot sequence: elfloader → CPIO (seL4 → `cohesix_root` = Plan 9 inspi
 | Tooling & Testing | Python        | CLI, validator, DSL, glue           |
 | Shell Scripts (Bash) | Bash       | Used for build orchestration in the UEFI execution environment (LLVM/LLD, Rust UEFI targets) |
 
-- Plan 9 shell + CLI tools orchestrate all agent and CUDA workloads; no POSIX runtime expected
+- Plan 9 shell + CLI tools orchestrate all agent workloads and proxy commands to remote CUDA annexes; no POSIX runtime expected within Cohesix roles
 
 ## 4 · Core Workflow Rules
 1. Atomic, single-step hydration and temp-write+rename for all files.

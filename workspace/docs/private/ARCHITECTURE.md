@@ -64,7 +64,7 @@
   * Additional boot‑time capability slots exposing Rapier DMA buffers.
   * Role‑hint propagation: boot‑loader writes **CohRole** string into `/srv/cohrole` avail­able to userland.
 
-* **Boot target:** <200 ms cold‑start on Raspberry Pi 5 & Jetson Orin.
+* **Boot target:** <200 ms cold‑start on Raspberry Pi 5 and reference x86_64 micro-PCs while attaching to external CUDA annex links.
 
 ---
 
@@ -101,10 +101,14 @@ Every OS object—device, shader, physics body—is surfaced as a 9P file.
 ### 6.2 Worker (variants)  
 | Variant | Hardware | Typical duty |
 |---------|----------|--------------|
-| **DroneWorker** | Jetson Orin Nano | Edge inference + sensor fusion |
+| **DroneWorker** | Raspberry Pi 5 + sensor hat | Edge inference + sensor fusion (GPU jobs forwarded to CUDA annex) |
 | **KioskInteractive** | Raspberry Pi 5 + display | UI, adverts |
-| **GlassesAgent** | Snapdragon XR | AR overlay with 9P mount |
+| **GlassesAgent** | Snapdragon XR | AR overlay with 9P mount (remote GPU rendering) |
 | **SimulatorTest** | GitHub Actions | CI & fuzz harness |
+
+**CUDA Microserver Annex**
+
+While not a Plan 9 role, Cohesix manages dedicated Linux CUDA servers (e.g., Jetson Orin NX, x86_64 + NVIDIA T4) through Secure9P namespaces. The Queen orchestrates them as tamper-evident workers for GPU execution, preserving the pure seL4/Plan 9 environment on Cohesix nodes.
 
 ---
 
@@ -116,7 +120,7 @@ Every OS object—device, shader, physics body—is surfaced as a 9P file.
 | Low‑level / drivers | **Rust** | Memory‑safe, zero‑cost abstractions, fearless concurrency. |
 | 9P services & CLI | **Go** | CSP model, quick cross‑compile, excellent 9P libs. |
 | Trace / tooling | **Python** | Rapid scripting, data science, JIT validation. |
-| CUDA models | **C++ / CUDA** | Torch‑&‑TensorRT deployments on Jetson. |
+| CUDA models | **C++ / CUDA** | Torch‑&‑TensorRT deployments on Cohesix-managed Linux GPU microservers. |
 
 ---
 

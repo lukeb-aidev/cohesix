@@ -7,7 +7,7 @@
 # SECURE9P CUDA WORKFLOWS
 
 ## Overview
-This document outlines how Cohesix leverages secure9p to orchestrate advanced CUDA workflows across heterogeneous environments. It ensures low-overhead Plan9 principles are maintained while providing robust, high-throughput GPU computation.
+This document outlines how Cohesix leverages secure9p to orchestrate advanced CUDA workflows across heterogeneous environments. CUDA now executes exclusively on Cohesix-managed Linux microservers, while Plan9 roles remain Linux-free and act as the zero-trust control plane. The workflows below preserve low-overhead Plan9 principles while providing robust, high-throughput GPU computation with full auditability.
 
 ## Secure9P Map and Workflows
 
@@ -47,12 +47,12 @@ This document outlines how Cohesix leverages secure9p to orchestrate advanced CU
 - **Return:** Alerts or confidence scores streamed back.
 
 ## Security & Isolation
-- All data in transit over secure9p with TLS + certificate pinning.
-- Each CUDA job isolated by stream + context, enforcing strict boundaries.
+- All data in transit over secure9p with TLS + certificate pinning between Plan9 roles and Linux CUDA annexes.
+- Each CUDA job isolated by stream + context, enforcing strict boundaries and recording signed job manifests for trace replay.
 
 ## Observability
-- Per-workflow logs and metrics collected, exposed via secure9p logs endpoint.
-- GPU memory + kernel utilization monitored to prevent starvation.
+- Per-workflow logs and metrics collected, exposed via secure9p logs endpoint, and mirrored into the Cohesix trace ledger.
+- GPU memory + kernel utilization monitored to prevent starvation, with telemetry normalized before re-entry into Plan9 namespaces.
 
 ## Recovery
 - Automatic retries on secure9p disconnects.
