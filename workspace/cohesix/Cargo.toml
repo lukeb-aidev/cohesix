@@ -23,6 +23,7 @@ aes = { version = "0.8", default-features = false }
 cohesix_9p = { package = "cohesix-9p", path = "../cohesix-9p", default-features = false, optional = true }
 # ninep crate required for CUDA remote dispatch
 ninep = { version = "0.3", optional = true }
+cohesix-secure9p = { path = "../cohesix-secure9p", features = ["tls"] }
 env_logger = { version = "0.11.7", optional = true }
 thiserror = { version = "2.0.12", default-features = false }
 rapier3d = { version = "0.26.1", optional = true }
@@ -45,6 +46,7 @@ criterion = "0.6.0"
 serial_test = "3.2.0"
 libc = "0.2"
 serde = { version = "1", default-features = false, features = ["std"] }
+rcgen = "0.13"
 
 [features]
 default = ["std"]
@@ -114,8 +116,8 @@ libloading = "0.8.8"
 [target.'cfg(not(target_os = "none"))'.dependencies]
 env_logger = { version = "0.11.7" }
 clap = { version = "4.5.4", features = ["derive"] }
-ureq = { version = "3.0.12", default-features = false }
-tiny_http = { version = "0.12", default-features = false }
+ureq = { version = "3.1.2", default-features = false, features = ["rustls"] }
+tiny_http = { version = "0.12", default-features = false, features = ["ssl-rustls"] }
 chrono = "0.4"
 serde_yaml = { version = "0.9.34-deprecated", default-features = false }
 toml = { version = "0.9.0", features = ["parse"] }
