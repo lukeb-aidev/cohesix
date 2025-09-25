@@ -28,6 +28,11 @@
   fails CI when the 200ms cold-boot target is exceeded.
 - `src/cuda/runtime.rs` v0.17 records telemetry-backed CPU fallbacks whenever a
   remote CUDA endpoint is unavailable or misconfigured.
+- GUI orchestrator enforces default basic authentication with role-aware 403
+  responses and optional mTLS on `/api/control`, backed by parity tests over
+  every gRPC command.
+- `/api/metrics` now publishes rate-limiter counters, including burst, token
+  availability, and allowed/denied totals for `/api/control` requests.
 
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)

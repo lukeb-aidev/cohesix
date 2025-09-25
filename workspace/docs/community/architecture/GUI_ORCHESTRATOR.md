@@ -98,6 +98,21 @@ go run ./go/cmd/gui-orchestrator --port 8080 --bind 0.0.0.0 --static-dir gui/sta
 
 ### Authentication and Rate Limiting
 
-Basic HTTP auth is enabled unless `--dev` is supplied. Credentials are loaded from `/srv/orch_user.json` containing `{"user":"admin","pass":"secret"}`. Each client is limited to 60 requests per minute via an in-memory token bucket. Excess requests return HTTP `429 Too Many Requests`.
+Basic HTTP auth is enforced whenever the GUI runs outside of developer mode. Credentials are loaded from `/srv/orch_user.json`, which now accepts the following shape:
 
-Future enhancements may include JWT-based session tokens and TLS termination behind a reverse proxy.
+```json
+{
+  "user": "admin",
+  "pass": "secret",
+  "roles": ["QueenPrimary", "RegionalQueen"],
+  "tls_cert": "/srv/certs/gui.pem",
+  "tls_key": "/srv/certs/gui.key",
+  "client_ca": "/srv/certs/orchestrator-ca.pem"
+}
+```
+
+Only roles listed in the `roles` array may be targeted by the `assign-role` command. Requests that attempt to assign an unauthorized role are rejected with HTTP `403 Forbidden` before the underlying gRPC call executes. When `tls_cert`/`tls_key` are provided, the HTTP server terminates TLS with a minimum of TLS 1.3. Supplying `client_ca` enables optional mTLS, requiring dashboard callers to present a certificate signed by the orchestrator CA.
+
+Each client is limited to 60 control requests per minute by default using an in-memory token bucket. The `/api/metrics` endpoint exposes `control_limit_per_minute`, the active burst size, available tokens, and total allowed/denied counts so dashboards and observability tooling can track throttling behaviour. Excess requests continue to return HTTP `429 Too Many Requests`.
+
+Future enhancements may include JWT-based session tokens layered atop the existing mTLS and basic-auth foundations.
