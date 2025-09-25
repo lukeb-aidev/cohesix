@@ -3,9 +3,10 @@
 // Author: Lukas Bower
 // Date Modified: 2028-12-31
 
+use crate::reconcile::PolicyReconciler;
 use cohesix_9p::policy::SandboxPolicy;
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -69,19 +70,18 @@ impl Secure9pConfig {
         }
     }
 
-    pub fn agent_policies(&self) -> HashMap<String, SandboxPolicy> {
-        let mut map = HashMap::new();
-        for entry in &self.policy {
-            if let Some(policy) = entry.to_policy() {
-                map.insert(entry.agent.clone(), policy);
-            }
-        }
-        map
+    pub fn agent_policies(&self) -> BTreeMap<String, SandboxPolicy> {
+        PolicyReconciler::new(self)
+            .reconcile()
+            .policies
+            .into_iter()
+            .map(|resolved| (resolved.agent, resolved.policy))
+            .collect()
     }
 }
 
 impl PolicyEntry {
-    fn to_policy(&self) -> Option<SandboxPolicy> {
+    pub(crate) fn to_policy(&self) -> SandboxPolicy {
         let mut read = Vec::new();
         let mut write = Vec::new();
         for rule in &self.allow {
@@ -97,6 +97,6 @@ impl PolicyEntry {
                 _ => continue,
             }
         }
-        Some(SandboxPolicy { read, write })
+        SandboxPolicy { read, write }
     }
 }
