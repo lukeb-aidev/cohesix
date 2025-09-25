@@ -13,9 +13,14 @@
 ### Changed
 - Makefile v0.53 normalizes `arm64`/`amd64` host identifiers to
   `aarch64`/`x86_64` so QEMU targets resolve correctly on Apple Silicon.
-- `cohesix_fetch_build.sh` v1.57 accepts Homebrew's
+- `cohesix_fetch_build.sh` v1.58 accepts Homebrew's
   `aarch64-unknown-linux-gnu-gcc`, tolerates missing local CUDA headers on macOS,
-  and avoids injecting nonexistent library paths on ARM hosts.
+  avoids injecting nonexistent library paths on ARM hosts, and enforces that
+  `cohesix_root.elf` is the first user module in the seL4 CPIO so the kernel
+  launches the correct rootserver before the device tree.
+- `third_party/seL4/build_sel4.sh` v0.3 copies the generated `kernel.dtb` into the
+  staging directory and packages the CPIO with `cohesix_root.elf` immediately
+  after `kernel.elf` to match seL4's rootserver expectations.
 - `scripts/boot_qemu.sh` v0.5 and `ci/qemu_boot_check.sh` v1.0 detect HVF
   support on Mac M4 hardware and switch to `-accel hvf -cpu host`, falling back
   to TCG when unavailable.

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v1.57
+# Filename: cohesix_fetch_build.sh v1.58
 # Author: Lukas Bower
-# Date Modified: 2029-02-20
+# Date Modified: 2029-02-21
 
 # This script fetches and builds the Cohesix project, including seL4 and other dependencies.
 
@@ -725,8 +725,8 @@ cd "$ROOT/third_party/seL4/artefacts"
 [ -f cohesix_root.elf ] || { echo "❌ Missing cohesix_root.elf" >&2; exit 1; }
 [ -f kernel.dtb ] || { echo "❌ Missing kernel.dtb" >&2; exit 1; }
 
-# 4) Pack into a newc cpio archive
-printf '%s\n' kernel.elf kernel.dtb cohesix_root.elf | \
+# 4) Pack into a newc cpio archive with the rootserver immediately after the kernel
+printf '%s\n' kernel.elf cohesix_root.elf kernel.dtb | \
   cpio -o -H newc > "$ROOT/boot/cohesix.cpio"
 
 # Verify archive order
@@ -734,9 +734,9 @@ log "📦 CPIO first entries:"
 mapfile -t _cpio_entries < <(cpio -it < "$ROOT/boot/cohesix.cpio" | head -n 3)
 printf '%s\n' "${_cpio_entries[@]}" >&3
 if [ "${_cpio_entries[0]}" != "kernel.elf" ] || \
-   [ "${_cpio_entries[1]}" != "kernel.dtb" ] || \
-   [ "${_cpio_entries[2]}" != "cohesix_root.elf" ]; then
-  echo "❌ Unexpected CPIO order: ${_cpio_entries[*]}" >&2
+   [ "${_cpio_entries[1]}" != "cohesix_root.elf" ] || \
+   [ "${_cpio_entries[2]}" != "kernel.dtb" ]; then
+  echo "❌ Unexpected CPIO order (expected kernel.elf cohesix_root.elf kernel.dtb): ${_cpio_entries[*]}" >&2
   exit 1
 fi
 
