@@ -1,92 +1,101 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: AGENTS.md v3.2
+// Filename: AGENTS.md v4.0
 // Author: Lukas Bower
-// Date Modified: 2025-06-29
+// Date Modified: 2029-09-21
 
-# Cohesix Codex Agents
+# Cohesix Codex Agent Charter
 
-This file defines agent tasks for Cohesix. These automated agents support the build, test, and deployment pipeline, enforcing architectural principles, secure OS constraints, and cross-role compliance.
-
----
-
-## 📌 Project Context
-
-Cohesix is a secure OS platform built on seL4 + Plan9 principles with:
-- Role-based trust zones (QueenPrimary, DroneWorker, KioskInteractive, etc.)
-- Secure9P for policy and capability enforcement
-- Namespace and validator control
-- CUDA + Rapier physics modules (CUDA processing handled only via dedicated Linux microservers; no CUDA in Plan9 roles)
-- CLI tools in Rust, Go, Python
-- The custom compiler `cohcc`
-- Pure Plan9 style namespace bindings, avoiding any POSIX/Linux syscall dependencies
-- Pre-installed tools: `rustc`, `cargo`, `llvm`, `lld`, `clang`, `python3` (with `flake8`, `mypy`, `black`), `go`, `gcc`
-- Validates ELF entry points and seL4 symbol presence for rootserver (using nm, readelf, objdump), following COHESIX_AARCH64_BUILD.md, COHESIX_ROOT_ELF_DIAG.md, and INSTRUCTION_BLOCK.md.
-Agents run in CI (GitHub Actions) and locally, ensuring consistency, security, and sandbox guarantees across all roles and deployments, with CUDA processing handled by dedicated Linux microservers where applicable.
+This charter aligns autonomous development agents with the Cohesix Solution Architecture and SAFe backlog, ensuring every automation path preserves the secure seL4 + Plan 9 platform mission, architectural principles, and delivery cadence.
 
 ---
 
-## 🚀 Agent Task Format
+## 1. Mission Hooks
 
-Each agent task specifies:
-
-- **Task Title & ID:** Short label plus a unique ID for log filtering
-- **Goal:** What it guarantees
-- **Input:** Files/directories to scan
-- **Output:** Log files written
-- **Checks:** Explicit pass/fail conditions
-
-Agents always respect TMPDIR, COHESIX_TRACE_TMP, or COHESIX_ENS_TMP — never hardcoded /tmp or /dev/shm.
-
-* Pull Requests must NEVER include binary files. This is prohibited.
+- **Architecture Alignment**: Agents must uphold the Solution Architecture outcomes—sub-200 ms boot, Secure9P governance, deterministic physics/GPU orchestration, and 100% traceability—from preliminary capability to ADM Phase H change management.
+- **Backlog Traceability**: Every automated action maps to SAFe epics, features, or enabler stories. Agents log the epic/feature ID they serve (e.g., `E1-F7 Trace Path Normalizer`).
+- **Metadata Discipline**: Enforce repository-wide metadata headers (`Author`, `Classification`, dates) and reject artefacts without compliant headers or with stale values.
+- **No Binary Artefacts**: Pull requests introducing binaries, large media, or generated blobs outside approved manifests must fail.
 
 ---
 
-## ✅ Example Agent Tasks
+## 2. Architectural Pillars & Guardrails
 
-### Task Title: Kernel Hook Verification (AGENT:KERNEL_TRACE)
-- **Goal:** Ensure kernel + namespace modules include boot + validator trace hooks.
-- **Input:** src/kernel/, src/namespace/
-- **Output:** log/kernel_trace_check.md
-- **Checks:** Trace hooks and validator calls present on boot.
-- Example log:  
-  `✅ Validator hook found in src/kernel/init.rs`
-
----
-
-## 🔍 Supporting Documents
-
-- `docs/community/governance/INSTRUCTION_BLOCK.md` — canonical build + hydration rules
-- `docs/community/governance/ROLE_POLICY.md` — trust zones, Secure9P role definitions
-- `docs/community/planning/DEMO_SCENARIOS.md` — validator + namespace scenario references
-- `docs/private/COHESIX_AARCH64_BUILD.md` — cross-build and linking requirements for Plan9 ELF
+| Pillar | Architecture Reference | Agent Expectations |
+|--------|------------------------|--------------------|
+| **Proof-Preserving Modularity** | ADM Phases A–D; Solution Architecture §4 | Block merges that break seL4 proofs, namespace bindings, or Plan-9 semantics. Require `cargo build --target cohesix_aarch64.json -C linker=lld` success and ELF validation (`readelf`, `nm`) for rootserver outputs. |
+| **Traceability First** | Solution Architecture §§3, 6, 10; Backlog E3 | Validate trace hooks, consensus regression artefacts, and ensure privileged actions emit entries under `/log/trace/`. CI jobs must fail if traces fall outside governed paths. |
+| **Governed Extension** | Solution Architecture §§2, 6.2, 7; Backlog E1/E2 | Ensure Secure9P manifests, capability policies, and GPU annex telemetry follow mutual TLS, capability tokens, and health heartbeat requirements. Reject unauthenticated namespace operations. |
+| **Zero-Trust Operations** | Solution Architecture §§2, 7; Role Policy | Verify authentication (mTLS, auth middleware) remains enabled, rate limits configured, and validator hooks intact for all roles (QueenPrimary, DroneWorker, KioskInteractive, etc.). |
+| **Documentation as Code** | Solution Architecture §§1, 10, 13; Backlog F19 | Require doc/test updates with code changes, enforce metadata headers, and sync diagnostics with implementation updates. |
 
 ---
 
-## ⚙️ Execution & Environment Notes
+## 3. SAFe Delivery Integration
 
-- Agents run under GitHub Actions workflows (x86_64 and aarch64 runners with CUDA fallback) and local CI.
-- All builds use LLVM/LLD for linking.
-- Cross-builds enforce `cargo build --target cohesix_aarch64.json` with explicit `-C linker=lld` to guarantee Plan9 no-syscall ELF.
-- Removing or stubbing features to pass tests is explicitly prohibited. Tests must validate full, uncut functionality.
-- Output always written to TMPDIR, COHESIX_TRACE_TMP, or COHESIX_ENS_TMP.
-- Any agent failing its check fails the entire build, with logs captured for review.
-- No absolute system paths, no persistent background tasks.
-- ELF inspections leverage OpenAI's documented best practices for Codex Agent.md, ensuring object file + image correctness beyond normal CI.
-- QEMU executions must use the `virt` platform (`-M virt -cpu cortex-a57 -m 1024`) with elfloader CPIO images and console output on `-serial mon:stdio`.
-- All agent checks and validations tie back explicitly to INSTRUCTION_BLOCK.md, COHESIX_AARCH64_BUILD.md to ensure canonical compliance.
-- Pull requests must NEVER include biary files.
+- **Epic Enforcement**: Agents monitor portfolio epics E1–E7. Backlog slippage (missing acceptance criteria, absent telemetry, or unimplemented guardrails) must surface as CI failures with WSJF context in logs.
+- **Program Increment Checks**: For each PI, agents confirm committed objectives (e.g., PI-2029.3 boot telemetry, GUI gRPC parity, metadata validation) are gated by automated tests before release.
+- **Definition of Ready/Done**: Stories without documented trace IDs, dependency mitigation, or security review are not actionable; agents should block merges lacking these attributes or references.
 
 ---
 
-## ✨ Goal of This Agent System
+## 4. Agent Task Blueprint
 
-To ensure every build of Cohesix:
-- Boots cleanly via QEMU into a Plan9-style validator-protected shell with fully mounted namespaces, no POSIX mounts, demonstrating isolated roles and Secure9P policy enforcement
-- Verifies rootserver ELF with `readelf -h`, `readelf -S`, `nm` to ensure non-zero _start entry and linked seL4 syscalls (e.g. seL4_Send, seL4_Recv).
-- Executes QEMU on `virt` platform (`-M virt -cpu cortex-a57 -m 1024`) using elfloader CPIO, console via `-serial mon:stdio`.
-- Includes the full userland toolchain (CLI, cohcc, BusyBox, mandoc)
-- Enforces role trust + Secure9P policy
-- Logs watchdog + validator output for audits
-- Aligns 100% with INSTRUCTION_BLOCK.md, COHESIX_AARCH64_BUILD.md, and COHESIX_ROOT_ELF_DIAG.md and the evolving architecture.
+Each agent defines:
 
-✅ With these agents, each build is provably secure, fully testable, and production-grade.
+- **Task Title & ID** (e.g., `AGENT:TRACE_DIFF_PIPELINE`).
+- **Aligned Epic/Feature** (`E3-F9`).
+- **Goal** tied to architecture principle and PI objective.
+- **Inputs** (directories, configuration manifests, telemetry logs).
+- **Outputs** (markdown or JSON logs stored under `$COHESIX_TRACE_TMP` or `$TMPDIR`).
+- **Checks** with explicit pass/fail rules.
+- **Evidence Hooks** linking to validator traces, consensus snapshots, or diagnostics for auditability.
+
+Agents must never write to `/tmp` or `/dev/shm`; they respect `TMPDIR`, `COHESIX_TRACE_TMP`, or `COHESIX_ENS_TMP`. All logs include timestamp, epic/feature tag, and trace ID when available.
+
+---
+
+## 5. Canonical Tasks (Illustrative)
+
+1. **Kernel & Namespace Trace Hooks** (`AGENT:KERNEL_TRACE`, E3-F8)
+   - Goal: Assert validator hook presence across boot stages, fail if any privileged path lacks trace emissions.
+   - Checks: `readelf`/`nm` verification, trace hook diff coverage, PI objective alignment.
+
+2. **Secure9P Policy Validation** (`AGENT:SECURE9P_POLICY`, E1-F1/F6)
+   - Goal: Validate capability manifests, mutual TLS configuration, and heartbeat metrics.
+   - Checks: Schema linting, certificate expiry windows, heartbeat telemetry under `/log/trace/net_secure9p/`.
+
+3. **GUI Control Plane Integrity** (`AGENT:GUI_GPRC_PARITY`, E4-F10/F11)
+   - Goal: Ensure GUI commands mirror gRPC APIs with auth enabled and metrics exported.
+   - Checks: Integration tests, rate-limit telemetry, trace IDs on `/api/control` calls.
+
+4. **Boot Performance Instrumentation** (`AGENT:BOOT_TELEMETRY`, E5-F13/F15)
+   - Goal: Confirm sub-200 ms boot, instrumentation thresholds, and ELF validation artefacts.
+   - Checks: QEMU boot timers, `/log/boot/elf_checks/` signatures, watchdog trace coverage.
+
+5. **Metadata Governance** (`AGENT:METADATA_LINT`, E7-F19)
+   - Goal: Guarantee metadata headers across code, docs, and assets; block missing or stale entries.
+   - Checks: Header presence (`Author: Lukas Bower` or role-specific values), classification consistency, last-modified dates.
+
+---
+
+## 6. Execution & Environment Guidance
+
+- CI runs on x86_64 (GitHub Actions) with optional aarch64 emulation. CUDA workloads execute only on dedicated Linux annex runners—never within Plan 9 roles.
+- Enforce `cargo`, `pytest`, `go test`, `mypy`, and fuzzing gates relevant to modified components; no disabling of existing tests.
+- QEMU executions use `-M virt -cpu cortex-a57 -m 1024` with elfloader CPIO images and console on `-serial mon:stdio`.
+- Long-lived processes, absolute host paths, or stateful dependencies are forbidden.
+- Agents must surface remediation guidance referencing Solution Architecture and Backlog sections when failing.
+
+---
+
+## 7. Audit & Reporting
+
+- Logs are versioned artefacts stored under trace directories and attached to release notes when applicable.
+- Every failure includes: architecture principle impacted, epic/feature, PI objective, remediation steps, and related documentation path.
+- Success criteria aggregate into architecture maturity dashboards and SAFe Inspect & Adapt metrics.
+
+---
+
+## 8. Outcome Statement
+
+When these directives are enforced, Cohesix maintains a secure, traceable, and governable platform: cold boots remain sub-200 ms, Secure9P policies are verifiable, GPU annex orchestration is deterministic, and every backlog commitment is evidenced through automated checks. This keeps the architecture, delivery pipeline, and compliance posture in lockstep.
