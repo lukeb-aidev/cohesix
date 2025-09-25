@@ -62,3 +62,9 @@ This file consolidates the previous `docs/security/THREAT_MODEL.md` and `docs/pr
 ## 6. Review & Updates
 
 This threat model is reviewed quarterly or after any significant incident. Updates are versioned in `docs/security/THREAT_MODEL.md` and recorded in `CHANGELOG.md`.
+
+## 7. Review Cadence Automation
+
+- Run `tools/threat_model_scheduler.py` to generate quarterly review events and ADR templates.
+- The script produces `workspace/docs/security/threat_model_schedule.ics` for calendar import and refreshes ADR stubs beneath `workspace/docs/community/architecture/adr/`.
+- Each entry includes a deterministic trace ID (format `tmr-YYYYMMDD-qN`) linking the calendar invite to its ADR record.
