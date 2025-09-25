@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: build_sel4.sh v0.2
+# Filename: build_sel4.sh v0.3
 # Author: Lukas Bower
-# Date Modified: 2027-12-31
+# Date Modified: 2029-02-21
 #!/usr/bin/env bash
 set -euxo pipefail
 
@@ -58,15 +58,18 @@ cp "$BUILD_DIR/kernel.elf" "$ROOT/out/bin/kernel.elf"
 
  mkdir -p "$ROOT/out/boot"
  cd "$ROOT/out/bin"
- DTB="$BUILD_DIR/kernel.dtb"
- if [ ! -f "$DTB" ]; then
+ DTB_SRC="$BUILD_DIR/kernel.dtb"
+ if [ ! -f "$DTB_SRC" ]; then
  echo "Error - DTB not found"  >&2
  exit 1
 fi
 
+cp "$DTB_SRC" "$ROOT/out/bin/kernel.dtb"
+
 [ -f kernel.elf ] || { echo "Missing kernel.elf" >&2; exit 1; }
 [ -f cohesix_root.elf ] || { echo "Missing cohesix_root.elf" >&2; exit 1; }
-find kernel.elf cohesix_root.elf $( [ -f "$DTB" ] && echo "$DTB" ) | cpio -o -H newc > ../boot/cohesix.cpio
+[ -f kernel.dtb ] || { echo "Missing kernel.dtb" >&2; exit 1; }
+printf '%s\n' kernel.elf cohesix_root.elf kernel.dtb | cpio -o -H newc > ../boot/cohesix.cpio
 cd "$ROOT"
 
 echo "✅ seL4 build complete"  >&2
