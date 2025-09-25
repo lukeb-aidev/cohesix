@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: main.go v0.5
 // Author: Lukas Bower
-// Date Modified: 2029-02-15
+// Date Modified: 2029-02-21
 // License: SPDX-License-Identifier: MIT OR Apache-2.0
 
 package main
@@ -19,21 +19,25 @@ import (
 )
 
 type credentials struct {
-	User string `json:"user"`
-	Pass string `json:"pass"`
+	User     string   `json:"user"`
+	Pass     string   `json:"pass"`
+	Roles    []string `json:"roles"`
+	TLSCert  string   `json:"tls_cert"`
+	TLSKey   string   `json:"tls_key"`
+	ClientCA string   `json:"client_ca"`
 }
 
-func loadCreds(path string) (string, string, error) {
+func loadCreds(path string) (credentials, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return "", "", err
+		return credentials{}, err
 	}
 	defer f.Close()
 	var c credentials
 	if err := json.NewDecoder(f).Decode(&c); err != nil {
-		return "", "", err
+		return credentials{}, err
 	}
-	return c.User, c.Pass, nil
+	return c, nil
 }
 
 func main() {
@@ -54,9 +58,21 @@ func main() {
 	cfg.RPCTimeout = 5 * time.Second
 
 	if !cfg.Dev {
-		if u, p, err := loadCreds("/srv/orch_user.json"); err == nil {
-			cfg.AuthUser = u
-			cfg.AuthPass = p
+		if creds, err := loadCreds("/srv/orch_user.json"); err == nil {
+			cfg.AuthUser = creds.User
+			cfg.AuthPass = creds.Pass
+			if len(creds.Roles) > 0 {
+				cfg.AllowedRoles = append([]string(nil), creds.Roles...)
+			}
+			if creds.TLSCert != "" {
+				cfg.TLSCertFile = creds.TLSCert
+			}
+			if creds.TLSKey != "" {
+				cfg.TLSKeyFile = creds.TLSKey
+			}
+			if creds.ClientCA != "" {
+				cfg.TLSClientCA = creds.ClientCA
+			}
 		} else {
 			log.Printf("warning: could not load creds: %v", err)
 		}

@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: routes.go v0.1
 // Author: Lukas Bower
-// Date Modified: 2029-02-15
+// Date Modified: 2029-02-21
 // License: SPDX-License-Identifier: MIT OR Apache-2.0
 
 package http
@@ -21,12 +21,10 @@ func (s *Server) initRoutes() {
 
 	r.Get("/api/status", api.Status(s.start, s.clusterClient))
 
-	handler := http.Handler(api.Control(s.controller))
+	handler := http.Handler(api.Control(s.controller, s.roleAuthorizer))
 	if !s.cfg.Dev {
-		handler = rateLimitMiddleware(s.controlLimiter)(handler)
-		if s.cfg.AuthUser != "" {
-			handler = basicAuthMiddleware(s.cfg.AuthUser, s.cfg.AuthPass)(handler)
-		}
+		handler = s.rateLimitMiddleware(handler)
+		handler = basicAuthMiddleware(s.cfg.AuthUser, s.cfg.AuthPass)(handler)
 	}
 	r.Post("/api/control", func(w http.ResponseWriter, r *http.Request) { handler.ServeHTTP(w, r) })
 

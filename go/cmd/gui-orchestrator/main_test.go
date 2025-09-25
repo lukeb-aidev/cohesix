@@ -1,12 +1,12 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: main_test.go v0.1
 // Author: Lukas Bower
-// Date Modified: 2025-07-22
+// Date Modified: 2029-02-21
 package main
 
 import (
 	"flag"
-	"io/ioutil"
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -25,15 +25,21 @@ func TestPortFlagDefault(t *testing.T) {
 func TestLoadCreds(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "creds.json")
-	data := []byte(`{"user":"u","pass":"p"}`)
-	if err := ioutil.WriteFile(path, data, 0o600); err != nil {
+	data := []byte(`{"user":"u","pass":"p","roles":["QueenPrimary"],"tls_cert":"cert.pem","tls_key":"key.pem","client_ca":"ca.pem"}`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	u, p, err := loadCreds(path)
+	creds, err := loadCreds(path)
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	if u != "u" || p != "p" {
-		t.Fatalf("unexpected values: %s %s", u, p)
+	if creds.User != "u" || creds.Pass != "p" {
+		t.Fatalf("unexpected values: %s %s", creds.User, creds.Pass)
+	}
+	if len(creds.Roles) != 1 || creds.Roles[0] != "QueenPrimary" {
+		t.Fatalf("unexpected roles: %v", creds.Roles)
+	}
+	if creds.TLSCert != "cert.pem" || creds.TLSKey != "key.pem" || creds.ClientCA != "ca.pem" {
+		t.Fatalf("unexpected tls settings: %+v", creds)
 	}
 }
