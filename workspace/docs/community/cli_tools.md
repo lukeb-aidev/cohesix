@@ -44,6 +44,19 @@ cohtrace cloud
 cohtrace push_trace worker01 examples/trace.json
 ```
 
+The diff command enforces the path rules defined in `/etc/cohtrace_rules.json`
+(or the path provided via `COHTRACE_RULES_PATH`). The rules file must specify an
+`allowed_roots` array and optional prefix rewrites; the schema is validated on
+load. Exit taxonomy for `cohtrace diff`:
+
+* `0` – snapshots match (no drift)
+* `30` – drift detected between the two most recent snapshots
+* `31` – insufficient snapshots available to compute a diff
+* `32` – rule violation or unreadable rule set
+
+Any schema or permission failure within the rule set halts the diff operation
+and surfaces exit code `32` for audit automation.
+
 ## cohcc
 Compiler front end for Cohesix IR.
 ```bash

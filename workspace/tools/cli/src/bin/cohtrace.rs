@@ -7,6 +7,7 @@ use chrono::{TimeZone, Utc};
 use clap::{Parser, Subcommand};
 use cohesix::orchestrator::protocol::ClusterStateRequest;
 use cohesix::queen::orchestrator::QueenOrchestrator;
+use cohesix::trace::path_normalizer::{PathNormalizer, PathRuleError};
 use cohesix::CohError;
 use humantime::format_duration;
 use serde::Deserialize;
@@ -16,6 +17,7 @@ use std::convert::TryFrom;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::process;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::runtime::Runtime;
 use walkdir::WalkDir;
@@ -90,6 +92,48 @@ struct SnapshotDiff {
     lines: Vec<String>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DiffExitKind {
+    Clean,
+    DriftDetected,
+    MissingSnapshots,
+    RuleViolation,
+}
+
+impl DiffExitKind {
+    fn exit_code(self) -> i32 {
+        match self {
+            DiffExitKind::Clean => 0,
+            DiffExitKind::DriftDetected => 30,
+            DiffExitKind::MissingSnapshots => 31,
+            DiffExitKind::RuleViolation => 32,
+        }
+    }
+}
+
+#[derive(Debug)]
+enum DiffCommandError {
+    General(CohError),
+    RuleViolation(String),
+}
+
+impl From<CohError> for DiffCommandError {
+    fn from(err: CohError) -> Self {
+        DiffCommandError::General(err)
+    }
+}
+
+impl From<PathRuleError> for DiffCommandError {
+    fn from(err: PathRuleError) -> Self {
+        match err {
+            PathRuleError::RuleViolation(msg) | PathRuleError::InvalidSchema(msg) => {
+                DiffCommandError::RuleViolation(msg)
+            }
+            PathRuleError::Io(io_err) => DiffCommandError::RuleViolation(format!("{io_err}")),
+        }
+    }
+}
+
 #[derive(Default, Deserialize)]
 struct CloudStateRecord {
     #[serde(default)]
@@ -159,32 +203,37 @@ fn srv_root() -> PathBuf {
         .unwrap_or_else(|_| PathBuf::from("/srv"))
 }
 
-fn diff_latest_snapshots_at(base: &Path) -> Result<Option<SnapshotDiff>, CohError> {
+fn diff_latest_snapshots_at(
+    base: &Path,
+    normalizer: &PathNormalizer,
+) -> Result<Option<SnapshotDiff>, DiffCommandError> {
     if !base.exists() {
         return Ok(None);
     }
-    let mut entries: Vec<(u128, PathBuf)> = WalkDir::new(base)
-        .into_iter()
-        .filter_map(Result::ok)
-        .filter(|e| e.file_type().is_file())
-        .filter(|e| {
-            e.path()
-                .extension()
-                .and_then(|s| s.to_str())
-                .map(|ext| ext.eq_ignore_ascii_case("json"))
-                .unwrap_or(false)
-        })
-        .filter_map(|entry| {
-            let ts = entry
-                .metadata()
-                .ok()
-                .and_then(|m| m.modified().ok())
-                .and_then(|st| st.duration_since(UNIX_EPOCH).ok())
-                .map(|d| d.as_millis())
-                .unwrap_or(0);
-            Some((ts, entry.into_path()))
-        })
-        .collect();
+    let mut entries: Vec<(u128, PathBuf)> = Vec::new();
+    for entry in WalkDir::new(base).into_iter().filter_map(Result::ok) {
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let path = entry.path();
+        let ext = path
+            .extension()
+            .and_then(|s| s.to_str())
+            .map(|ext| ext.eq_ignore_ascii_case("json"))
+            .unwrap_or(false);
+        if !ext {
+            continue;
+        }
+        let checked = normalizer.normalize(path).map_err(DiffCommandError::from)?;
+        let ts = entry
+            .metadata()
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .and_then(|st| st.duration_since(UNIX_EPOCH).ok())
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        entries.push((ts, checked));
+    }
 
     if entries.len() < 2 {
         return Ok(None);
@@ -196,8 +245,30 @@ fn diff_latest_snapshots_at(base: &Path) -> Result<Option<SnapshotDiff>, CohErro
     let newer_path = take.next().unwrap();
     let older_path = take.next().unwrap();
 
-    let newer_value: Value = serde_json::from_str(&fs::read_to_string(&newer_path)?)?;
-    let older_value: Value = serde_json::from_str(&fs::read_to_string(&older_path)?)?;
+    let newer_raw = fs::read_to_string(&newer_path).map_err(|e| {
+        DiffCommandError::from(cohesix::coh_error!(
+            "read snapshot {}: {e}",
+            newer_path.display()
+        ))
+    })?;
+    let newer_value: Value = serde_json::from_str(&newer_raw).map_err(|e| {
+        DiffCommandError::from(cohesix::coh_error!(
+            "parse snapshot {}: {e}",
+            newer_path.display()
+        ))
+    })?;
+    let older_raw = fs::read_to_string(&older_path).map_err(|e| {
+        DiffCommandError::from(cohesix::coh_error!(
+            "read snapshot {}: {e}",
+            older_path.display()
+        ))
+    })?;
+    let older_value: Value = serde_json::from_str(&older_raw).map_err(|e| {
+        DiffCommandError::from(cohesix::coh_error!(
+            "parse snapshot {}: {e}",
+            older_path.display()
+        ))
+    })?;
 
     let newer = SnapshotInfo {
         worker_id: extract_worker_id(&newer_value),
@@ -323,11 +394,16 @@ fn simple_value(value: &Value) -> String {
     }
 }
 
-fn cmd_diff() -> Result<(), CohError> {
+fn cmd_diff() -> Result<DiffExitKind, DiffCommandError> {
+    let normalizer = PathNormalizer::load().map_err(DiffCommandError::from)?;
     let base = snapshot_base();
-    match diff_latest_snapshots_at(&base)? {
+    let normalized_base = normalizer
+        .normalize(&base)
+        .map_err(DiffCommandError::from)?;
+    match diff_latest_snapshots_at(&normalized_base, &normalizer)? {
         None => {
-            println!("no snapshots available under {}", base.display());
+            println!("no snapshots available under {}", normalized_base.display());
+            Ok(DiffExitKind::MissingSnapshots)
         }
         Some(diff) => {
             println!("Comparing snapshots:");
@@ -361,20 +437,21 @@ fn cmd_diff() -> Result<(), CohError> {
             );
             if diff.lines.is_empty() {
                 println!("No differences detected.");
+                Ok(DiffExitKind::Clean)
             } else {
                 println!("Changes:");
                 for line in &diff.lines {
                     println!("  {line}");
                 }
+                append_summary(&format!(
+                    "cohtrace diff {} {}",
+                    diff.newer.path.display(),
+                    diff.older.path.display()
+                ));
+                Ok(DiffExitKind::DriftDetected)
             }
-            append_summary(&format!(
-                "cohtrace diff {} {}",
-                diff.newer.path.display(),
-                diff.older.path.display()
-            ));
         }
     }
-    Ok(())
 }
 
 fn read_cloud_state(root: &Path) -> Option<QueenInfo> {
@@ -630,7 +707,21 @@ fn main() -> Result<(), CohError> {
     match cli.cmd {
         Cmd::List => cmd_list()?,
         Cmd::PushTrace { worker_id, path } => cmd_push(worker_id, path)?,
-        Cmd::Diff => cmd_diff()?,
+        Cmd::Diff => match cmd_diff() {
+            Ok(status) => {
+                let code = status.exit_code();
+                if code == 0 {
+                    return Ok(());
+                } else {
+                    process::exit(code);
+                }
+            }
+            Err(DiffCommandError::RuleViolation(msg)) => {
+                eprintln!("cohtrace diff rule violation: {msg}");
+                process::exit(DiffExitKind::RuleViolation.exit_code());
+            }
+            Err(DiffCommandError::General(err)) => return Err(err),
+        },
         Cmd::Cloud => cmd_cloud()?,
     }
     Ok(())
@@ -639,8 +730,8 @@ fn main() -> Result<(), CohError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    use std::{env, fs};
     use tempfile::tempdir;
 
     #[test]
@@ -648,6 +739,12 @@ mod tests {
         let tmp = tempdir().unwrap();
         let snaps = tmp.path().join("history/snapshots");
         fs::create_dir_all(&snaps).unwrap();
+        let base_abs = fs::canonicalize(&snaps).unwrap();
+        let rules_path = tmp.path().join("rules.json");
+        let rules = format!("{{\"allowed_roots\":[\"{}\"]}}", base_abs.to_string_lossy());
+        fs::write(&rules_path, rules).unwrap();
+        env::set_var("COHTRACE_RULES_PATH", &rules_path);
+        let normalizer = PathNormalizer::load().unwrap();
         let older = snaps.join("worker1.json");
         let newer = snaps.join("worker1_latest.json");
         fs::write(
@@ -662,7 +759,9 @@ mod tests {
         )
         .unwrap();
 
-        let diff = diff_latest_snapshots_at(&snaps).unwrap().unwrap();
+        let diff = diff_latest_snapshots_at(&snaps, &normalizer)
+            .unwrap()
+            .unwrap();
         assert!(diff.lines.iter().any(|l| l.contains("sim.mode")));
         assert!(diff.lines.iter().any(|l| l.contains("timestamp")));
         assert_eq!(
@@ -670,6 +769,7 @@ mod tests {
             Some("w1"),
             "newer worker id detected"
         );
+        env::remove_var("COHTRACE_RULES_PATH");
     }
 
     #[test]

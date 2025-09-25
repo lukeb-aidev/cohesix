@@ -8,24 +8,21 @@ use cohesix_9p::{policy::SandboxPolicy, NinepBackend};
 use log::{error, info, warn};
 use ninep::Stream;
 use rustls::{
-    server::AllowAnyAuthenticatedClient,
-    Certificate,
-    OwnedTrustAnchor,
-    PrivateKey,
-    RootCertStore,
+    server::AllowAnyAuthenticatedClient, Certificate, OwnedTrustAnchor, PrivateKey, RootCertStore,
 };
 use rustls::{ServerConfig, ServerConnection, StreamOwned};
 use rustls_pemfile::{certs, pkcs8_private_keys, rsa_private_keys};
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, BufReader, Read, Seek, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc,
+    atomic::{AtomicBool, AtomicU64, Ordering},
+    Arc, Mutex,
 };
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use webpki_roots::TLS_SERVER_ROOTS;
 
 pub struct SecureConfig {
@@ -64,11 +61,181 @@ impl Drop for ServerThread {
     }
 }
 
+const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
+
+#[derive(Clone)]
+struct HeartbeatTelemetry {
+    inner: Arc<HeartbeatTelemetryInner>,
+}
+
+struct HeartbeatTelemetryInner {
+    entries: Mutex<HashMap<String, HeartbeatEntry>>,
+    counter: AtomicU64,
+}
+
+struct HeartbeatEntry {
+    peer: String,
+    alive: Arc<AtomicBool>,
+    last_activity: Instant,
+    missed: u32,
+}
+
+impl HeartbeatTelemetry {
+    fn new() -> Self {
+        let inner = HeartbeatTelemetryInner {
+            entries: Mutex::new(HashMap::new()),
+            counter: AtomicU64::new(1),
+        };
+        Self {
+            inner: Arc::new(inner),
+        }
+    }
+
+    fn register(&self, peer: String) -> HeartbeatRegistration {
+        let id = format!(
+            "mount-{}",
+            self.inner.counter.fetch_add(1, Ordering::Relaxed)
+        );
+        let alive = Arc::new(AtomicBool::new(true));
+        let mut guard = self.inner.entries.lock().unwrap();
+        guard.insert(
+            id.clone(),
+            HeartbeatEntry {
+                peer: peer.clone(),
+                alive: alive.clone(),
+                last_activity: Instant::now(),
+                missed: 0,
+            },
+        );
+        drop(guard);
+        info!("secure9p mount registered: id={} peer={}", id, peer);
+        HeartbeatRegistration {
+            telemetry: self.clone(),
+            id,
+            alive,
+        }
+    }
+
+    fn mark_activity(&self, id: &str) {
+        if let Some(entry) = self.inner.entries.lock().unwrap().get_mut(id) {
+            entry.last_activity = Instant::now();
+            entry.missed = 0;
+        }
+    }
+
+    fn mark_closed(&self, id: &str) {
+        if let Some(entry) = self.inner.entries.lock().unwrap().get_mut(id) {
+            entry.alive.store(false, Ordering::SeqCst);
+            entry.last_activity = Instant::now();
+        }
+    }
+
+    fn spawn_loop(&self) -> io::Result<HeartbeatThread> {
+        HeartbeatThread::start(self.clone())
+    }
+
+    fn emit_tick(&self) {
+        let mut remove = Vec::new();
+        let mut guard = self.inner.entries.lock().unwrap();
+        let now = Instant::now();
+        for (id, entry) in guard.iter_mut() {
+            if entry.alive.load(Ordering::Relaxed) {
+                let idle = now.duration_since(entry.last_activity).as_secs();
+                info!(
+                    "secure9p heartbeat: id={} peer={} idle={}s",
+                    id, entry.peer, idle
+                );
+                entry.missed = 0;
+            } else {
+                entry.missed += 1;
+                if entry.missed == 1 {
+                    warn!(
+                        "secure9p heartbeat missed once: id={} peer={}",
+                        id, entry.peer
+                    );
+                } else {
+                    error!(
+                        "secure9p heartbeat ALERT: id={} peer={} missed {} intervals",
+                        id, entry.peer, entry.missed
+                    );
+                    remove.push(id.clone());
+                }
+            }
+        }
+        for id in remove {
+            guard.remove(&id);
+        }
+    }
+
+    #[cfg(test)]
+    fn entry_count(&self) -> usize {
+        self.inner.entries.lock().unwrap().len()
+    }
+}
+
+struct HeartbeatRegistration {
+    telemetry: HeartbeatTelemetry,
+    id: String,
+    alive: Arc<AtomicBool>,
+}
+
+impl HeartbeatRegistration {
+    fn touch(&self) {
+        self.telemetry.mark_activity(&self.id);
+    }
+}
+
+impl Drop for HeartbeatRegistration {
+    fn drop(&mut self) {
+        self.alive.store(false, Ordering::SeqCst);
+        self.telemetry.mark_closed(&self.id);
+    }
+}
+
+struct HeartbeatThread {
+    running: Arc<AtomicBool>,
+    handle: Option<JoinHandle<()>>,
+}
+
+impl HeartbeatThread {
+    fn start(telemetry: HeartbeatTelemetry) -> io::Result<Self> {
+        let running = Arc::new(AtomicBool::new(true));
+        let thread_running = running.clone();
+        let handle = thread::Builder::new()
+            .name("secure9p-heartbeat".into())
+            .spawn(move || heartbeat_loop(telemetry, thread_running))?;
+        Ok(Self {
+            running,
+            handle: Some(handle),
+        })
+    }
+}
+
+impl Drop for HeartbeatThread {
+    fn drop(&mut self) {
+        self.running.store(false, Ordering::SeqCst);
+        if let Some(handle) = self.handle.take() {
+            if let Err(err) = handle.join() {
+                error!("secure9p heartbeat join error: {:?}", err);
+            }
+        }
+    }
+}
+
+fn heartbeat_loop(telemetry: HeartbeatTelemetry, running: Arc<AtomicBool>) {
+    while running.load(Ordering::Relaxed) {
+        thread::sleep(HEARTBEAT_INTERVAL);
+        telemetry.emit_tick();
+    }
+}
+
 pub struct Secure9PServer {
     cfg: SecureConfig,
     backend: NinepBackend,
     tls: Arc<ServerConfig>,
+    telemetry: HeartbeatTelemetry,
     thread: Option<ServerThread>,
+    heartbeat: Option<HeartbeatThread>,
 }
 
 impl Secure9PServer {
@@ -78,7 +245,9 @@ impl Secure9PServer {
             cfg,
             backend,
             tls,
+            telemetry: HeartbeatTelemetry::new(),
             thread: None,
+            heartbeat: None,
         })
     }
 
@@ -98,6 +267,7 @@ impl Secure9PServer {
         let thread_running = running.clone();
         let tls = self.tls.clone();
         let backend = self.backend.clone();
+        let telemetry = self.telemetry.clone();
         let port = listener
             .local_addr()
             .map(|a| a.port())
@@ -105,12 +275,15 @@ impl Secure9PServer {
         self.cfg.port = port;
         let handle = thread::Builder::new()
             .name(format!("secure9p-{port}"))
-            .spawn(move || accept_loop(listener, backend, tls, thread_running))?;
+            .spawn(move || accept_loop(listener, backend, tls, thread_running, telemetry))?;
         info!("Secure9P server listening on 0.0.0.0:{port}");
         self.thread = Some(ServerThread {
             running,
             handle: Some(handle),
         });
+        if self.heartbeat.is_none() {
+            self.heartbeat = Some(self.telemetry.spawn_loop()?);
+        }
         Ok(())
     }
 }
@@ -192,11 +365,18 @@ fn accept_loop(
     backend: NinepBackend,
     tls: Arc<ServerConfig>,
     running: Arc<AtomicBool>,
+    telemetry: HeartbeatTelemetry,
 ) {
     while running.load(Ordering::Relaxed) {
         match listener.accept() {
             Ok((stream, addr)) => {
-                handle_client(stream, addr, backend.clone(), tls.clone());
+                handle_client(
+                    stream,
+                    addr,
+                    backend.clone(),
+                    tls.clone(),
+                    telemetry.clone(),
+                );
             }
             Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
                 thread::sleep(Duration::from_millis(50));
@@ -214,6 +394,7 @@ fn handle_client(
     addr: SocketAddr,
     backend: NinepBackend,
     tls: Arc<ServerConfig>,
+    telemetry: HeartbeatTelemetry,
 ) {
     if let Err(e) = stream.set_nodelay(true) {
         warn!("secure9p failed to set TCP_NODELAY for {}: {}", addr, e);
@@ -226,7 +407,8 @@ fn handle_client(
                 return;
             }
             log_peer(&tls_stream.conn, addr);
-            let wrapped = TlsStream { inner: tls_stream };
+            let registration = telemetry.register(addr.to_string());
+            let wrapped = TelemetryStream::new(tls_stream, registration);
             let _ = backend.serve_stream(wrapped);
         }
         Err(e) => warn!("secure9p connection init failed for {}: {}", addr, e),
@@ -249,19 +431,45 @@ fn log_peer(conn: &ServerConnection, addr: SocketAddr) {
     }
 }
 
-struct TlsStream {
+struct TelemetryStream {
     inner: StreamOwned<ServerConnection, TcpStream>,
+    registration: HeartbeatRegistration,
 }
 
-impl Read for TlsStream {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        self.inner.read(buf)
+impl TelemetryStream {
+    fn new(
+        inner: StreamOwned<ServerConnection, TcpStream>,
+        registration: HeartbeatRegistration,
+    ) -> Self {
+        registration.touch();
+        Self {
+            inner,
+            registration,
+        }
     }
 }
 
-impl Write for TlsStream {
+impl Read for TelemetryStream {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let result = self.inner.read(buf);
+        if let Ok(count) = result {
+            if count > 0 {
+                self.registration.touch();
+            }
+        }
+        result
+    }
+}
+
+impl Write for TelemetryStream {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.inner.write(buf)
+        let result = self.inner.write(buf);
+        if let Ok(count) = result {
+            if count > 0 {
+                self.registration.touch();
+            }
+        }
+        result
     }
 
     fn flush(&mut self) -> io::Result<()> {
@@ -269,7 +477,7 @@ impl Write for TlsStream {
     }
 }
 
-impl Stream for TlsStream {
+impl Stream for TelemetryStream {
     fn try_clone(&self) -> ninep::Result<Self> {
         Err("tls streams do not support cloning".to_string())
     }
@@ -281,6 +489,25 @@ pub fn configure_backend_from_policy(backend: &NinepBackend, cfg: &Secure9pConfi
     }
     for entry in cfg.agent_policies() {
         backend.set_agent_policy(&entry.0, entry.1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn heartbeat_entries_removed_after_disconnect() {
+        let telemetry = HeartbeatTelemetry::new();
+        assert_eq!(telemetry.entry_count(), 0);
+        {
+            let registration = telemetry.register("127.0.0.1:1000".into());
+            assert_eq!(telemetry.entry_count(), 1);
+            registration.touch();
+        }
+        telemetry.emit_tick();
+        telemetry.emit_tick();
+        assert_eq!(telemetry.entry_count(), 0);
     }
 }
 
