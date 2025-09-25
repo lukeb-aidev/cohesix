@@ -1,14 +1,12 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: autorun_tests.py v0.1
+# Filename: autorun_tests.py v0.2
 # Author: Lukas Bower
-# Date Modified: 2025-07-14
+# Date Modified: 2029-10-27
 
 #!/usr/bin/env python3  # noqa: E265
-"""Continuous test runner for Cohesix.
+"""Continuous test runner for Cohesix."""
 
-Watches the workspace for file modifications and automatically
-executes `cargo test`, `go test`, and `pytest`.
-"""
+from __future__ import annotations
 
 import argparse
 import subprocess
@@ -25,11 +23,11 @@ def run_tests() -> None:
 
 def snapshot() -> dict[str, float]:
     """Return modification times for all files in the repository."""
-    m = {}
-    for p in Path(".").rglob("*"):
-        if p.is_file():
+    m: dict[str, float] = {}
+    for path in Path(".").rglob("*"):
+        if path.is_file():
             try:
-                m[str(p)] = p.stat().st_mtime
+                m[str(path)] = path.stat().st_mtime
             except OSError:
                 continue
     return m
@@ -37,13 +35,16 @@ def snapshot() -> dict[str, float]:
 
 def watch(interval: float) -> None:
     """Poll for file changes and run tests when modifications occur."""
-    prev = snapshot()
-    while True:
-        time.sleep(interval)
-        cur = snapshot()
-        if any(cur.get(k) != prev.get(k) for k in cur.keys()):
-            run_tests()
-            prev = cur
+    previous = snapshot()
+    try:
+        while True:
+            time.sleep(interval)
+            current = snapshot()
+            if current != previous:
+                run_tests()
+                previous = current
+    except KeyboardInterrupt:
+        pass
 
 
 def main() -> None:

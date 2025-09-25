@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: watchdogd.rs v0.1
+// Filename: watchdogd.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2025-07-12
+// Date Modified: 2029-10-27
 
 /// Background watchdog daemon monitoring worker health.
 use std::fs::{self, OpenOptions};
@@ -46,22 +46,38 @@ impl WatchdogDaemon {
         }
     }
 
-    fn stale(path: &str, max_age: Duration) -> bool {
-        fs::metadata(path)
-            .and_then(|m| m.modified())
-            .map(|t| t.elapsed().unwrap_or(Duration::from_secs(0)) > max_age)
-            .unwrap_or(true)
+    fn is_stale(&self, path: &str, max_age: Duration) -> bool {
+        let now = SystemTime::now();
+        match fs::metadata(path) {
+            Ok(metadata) => match metadata.modified() {
+                Ok(modified) => match now.duration_since(modified) {
+                    Ok(age) => age > max_age,
+                    Err(err) => {
+                        self.log(&format!("clock skew when reading {path}: {err}"));
+                        false
+                    }
+                },
+                Err(err) => {
+                    self.log(&format!("failed to read mtime for {path}: {err}"));
+                    true
+                }
+            },
+            Err(err) => {
+                self.log(&format!("missing or unreadable {path}: {err}"));
+                true
+            }
+        }
     }
 
     /// Check monitored files and trigger restarts as needed.
     pub fn check(&mut self) {
-        if Self::stale(&self.heartbeat_path, Duration::from_secs(300)) {
+        if self.is_stale(&self.heartbeat_path, Duration::from_secs(300)) {
             self.restart("worker_agent");
         }
-        if Self::stale(&self.tasks_path, Duration::from_secs(120)) {
+        if self.is_stale(&self.tasks_path, Duration::from_secs(120)) {
             self.restart("orchestratord");
         }
-        if Self::stale(&self.trace_path, Duration::from_secs(120)) {
+        if self.is_stale(&self.trace_path, Duration::from_secs(120)) {
             self.restart("trace_loop");
         }
     }
@@ -77,7 +93,17 @@ impl WatchdogDaemon {
             return;
         }
         self.log(&format!("restarting {svc}"));
-        let _ = Command::new("systemctl").arg("restart").arg(svc).status();
+        match Command::new("systemctl").arg("restart").arg(svc).status() {
+            Ok(status) if status.success() => {
+                self.log(&format!("restart of {svc} completed successfully"));
+            }
+            Ok(status) => {
+                self.log(&format!("restart of {svc} failed: {status}"));
+            }
+            Err(err) => {
+                self.log(&format!("failed to invoke systemctl for {svc}: {err}"));
+            }
+        }
         self.last_restart = Some(now);
     }
 
