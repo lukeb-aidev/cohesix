@@ -3,7 +3,11 @@
 // Author: Lukas Bower
 // Date Modified: 2028-11-21
 
-use std::{env, fs, path::Path, process::Command};
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+    process::Command,
+};
 #[path = "../sel4_paths.rs"]
 mod sel4_paths;
 use sel4_paths::{project_root, sel4_generated};
@@ -87,26 +91,43 @@ fn main() {
     println!("cargo:rustc-link-arg=--sysroot={}", sysroot);
     println!("cargo:rustc-env=COHESIX_RUST_SYSROOT={}", sysroot);
     println!("cargo:rerun-if-env-changed=RUSTC");
-    let lib_dir = std::env::var("SEL4_LIB_DIR").unwrap_or_else(|_| {
-        project_root(&manifest_dir)
-            .join("third_party/seL4/lib")
-            .to_string_lossy()
-            .into_owned()
-    });
-    println!("cargo:rustc-link-search=native={}", lib_dir);
+    println!("cargo:rerun-if-env-changed=SEL4_LIB_DIR");
+    let repo_root = project_root(&manifest_dir);
+    let lib_dir = env::var("SEL4_LIB_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| repo_root.join("third_party/seL4/lib"));
+    let lib_dir = fs::canonicalize(&lib_dir)
+        .expect("failed to resolve third_party/seL4/lib; run fetch_sel4.sh");
+    println!("cargo:rustc-link-search=native={}", lib_dir.display());
+
+    let root_linker = fs::canonicalize(Path::new(&manifest_dir).join("link.ld"))
+        .expect("missing link.ld in cohesix_root crate");
+    println!("cargo:rustc-link-arg=-T{}", root_linker.display());
+    println!("cargo:rerun-if-changed={}", root_linker.display());
+
+    let sel4_linker = fs::canonicalize(lib_dir.join("sel4.ld"))
+        .expect("missing sel4.ld under third_party/seL4/lib");
+    println!("cargo:rustc-link-arg=-T{}", sel4_linker.display());
+    println!("cargo:rerun-if-changed={}", sel4_linker.display());
+
+    let libsel4 = fs::canonicalize(lib_dir.join("libsel4.a"))
+        .expect("missing libsel4.a under third_party/seL4/lib");
+    println!("cargo:rustc-link-arg=--whole-archive");
+    println!("cargo:rustc-link-arg={}", libsel4.display());
+    println!("cargo:rustc-link-arg=--no-whole-archive");
+    println!("cargo:rerun-if-changed={}", libsel4.display());
     let out_dir = env::var("OUT_DIR").unwrap();
     generate_dtb_constants(&out_dir, &manifest_dir);
     embed_sel4_spec(&out_dir, &manifest_dir);
     embed_vectors(&out_dir, &manifest_dir);
-    let project_root = project_root(&manifest_dir);
 
     let sel4 = env::var("SEL4_INCLUDE").unwrap_or_else(|_| {
-        sel4_paths::sel4_include(&project_root)
+        sel4_paths::sel4_include(&repo_root)
             .to_string_lossy()
             .into_owned()
     });
     let sel4_include = Path::new(&sel4);
-    let mut flags = sel4_paths::default_cflags(sel4_include, &project_root);
+    let mut flags = sel4_paths::default_cflags(sel4_include, &repo_root);
     if env::var("SEL4_SYS_CFLAGS").is_ok() {
         println!("cargo:warning=SEL4_SYS_CFLAGS no longer used");
     }
@@ -119,11 +140,11 @@ fn main() {
     println!("cargo:rustc-env=CFLAGS={}", cflags);
     println!(
         "cargo:rustc-env=SEL4_GEN_HDR={}",
-        sel4_generated(&project_root).display()
+        sel4_generated(&repo_root).display()
     );
 
     println!(
         "cargo:rerun-if-changed={}",
-        project_root.join("third_party/seL4/kernel.dts").display()
+        repo_root.join("third_party/seL4/kernel.dts").display()
     );
 }
