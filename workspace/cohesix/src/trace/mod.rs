@@ -4,6 +4,7 @@
 // Date Modified: 2025-07-05
 
 pub mod distributed_runner;
+pub mod path_normalizer;
 /// Trace subsystem modules.
 pub mod recorder;
 pub mod trace_consensus;
