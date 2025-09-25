@@ -4,6 +4,7 @@
 // Date Modified: 2028-12-31
 
 use crate::config::Secure9pConfig;
+use crate::reconcile::PolicyReconciler;
 use cohesix_9p::{policy::SandboxPolicy, NinepBackend};
 use log::{error, info, warn};
 use ninep::Stream;
@@ -484,11 +485,18 @@ impl Stream for TelemetryStream {
 }
 
 pub fn configure_backend_from_policy(backend: &NinepBackend, cfg: &Secure9pConfig) {
-    for entry in &cfg.namespace {
-        backend.set_namespace(&entry.agent, entry.root.clone(), entry.read_only);
+    let outcome = PolicyReconciler::new(cfg).reconcile();
+    for event in &outcome.events {
+        info!(
+            "secure9p reconcile trace_id={} domain={} agent={} {}",
+            event.trace_id, event.domain, event.agent, event.message
+        );
     }
-    for entry in cfg.agent_policies() {
-        backend.set_agent_policy(&entry.0, entry.1);
+    for namespace in outcome.namespaces {
+        backend.set_namespace(&namespace.agent, namespace.root, namespace.read_only);
+    }
+    for policy in outcome.policies {
+        backend.set_agent_policy(&policy.agent, policy.policy);
     }
 }
 

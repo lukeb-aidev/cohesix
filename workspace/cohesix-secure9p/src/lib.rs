@@ -12,6 +12,8 @@ extern crate std;
 
 #[cfg(feature = "std")]
 pub mod config;
+#[cfg(feature = "std")]
+pub mod reconcile;
 pub mod secure_stream;
 #[cfg(all(feature = "std", feature = "tls"))]
 pub mod tls_server;
