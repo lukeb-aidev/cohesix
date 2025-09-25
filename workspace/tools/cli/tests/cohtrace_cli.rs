@@ -232,6 +232,10 @@ fn diff_command_outputs_changes() {
     let tmp = tempdir().unwrap();
     let base = tmp.path().join("snapshots");
     fs::create_dir_all(&base).unwrap();
+    let base_abs = fs::canonicalize(&base).unwrap();
+    let rules_path = tmp.path().join("rules.json");
+    let rules = format!("{{\"allowed_roots\":[\"{}\"]}}", base_abs.to_string_lossy());
+    fs::write(&rules_path, rules).unwrap();
 
     let older = base.join("worker.json");
     fs::write(
@@ -251,14 +255,80 @@ fn diff_command_outputs_changes() {
     let output = cmd
         .arg("diff")
         .env("SNAPSHOT_BASE", &base)
+        .env("COHTRACE_RULES_PATH", &rules_path)
         .current_dir(tmp.path())
         .output()
         .expect("run cohtrace diff");
 
-    assert!(output.status.success());
+    assert_eq!(output.status.code(), Some(30));
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Comparing snapshots"));
     assert!(stdout.contains("sim.mode"));
+}
+
+#[test]
+fn diff_command_no_drift_returns_success() {
+    let tmp = tempdir().unwrap();
+    let base = tmp.path().join("snapshots");
+    fs::create_dir_all(&base).unwrap();
+    let base_abs = fs::canonicalize(&base).unwrap();
+    let rules_path = tmp.path().join("rules.json");
+    let rules = format!("{{\"allowed_roots\":[\"{}\"]}}", base_abs.to_string_lossy());
+    fs::write(&rules_path, rules).unwrap();
+
+    let snap_a = base.join("a.json");
+    let snap_b = base.join("b.json");
+    let payload = r#"{"worker_id":"alpha","timestamp":1,"sim":{"mode":"idle"}}"#;
+    fs::write(&snap_a, payload).unwrap();
+    thread::sleep(Duration::from_millis(10));
+    fs::write(&snap_b, payload).unwrap();
+
+    let mut cmd = Command::cargo_bin("cohtrace").unwrap();
+    let output = cmd
+        .arg("diff")
+        .env("SNAPSHOT_BASE", &base)
+        .env("COHTRACE_RULES_PATH", &rules_path)
+        .current_dir(tmp.path())
+        .output()
+        .expect("run cohtrace diff clean");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("No differences detected."));
+}
+
+#[test]
+fn diff_command_missing_rules_sets_taxonomy() {
+    let tmp = tempdir().unwrap();
+    let base = tmp.path().join("snapshots");
+    fs::create_dir_all(&base).unwrap();
+    let snap_a = base.join("a.json");
+    let snap_b = base.join("b.json");
+    fs::write(
+        &snap_a,
+        r#"{"worker_id":"alpha","timestamp":1,"sim":{"mode":"idle"}}"#,
+    )
+    .unwrap();
+    thread::sleep(Duration::from_millis(10));
+    fs::write(
+        &snap_b,
+        r#"{"worker_id":"alpha","timestamp":2,"sim":{"mode":"active"}}"#,
+    )
+    .unwrap();
+
+    let missing_rules = tmp.path().join("missing_rules.json");
+    let mut cmd = Command::cargo_bin("cohtrace").unwrap();
+    let output = cmd
+        .arg("diff")
+        .env("SNAPSHOT_BASE", &base)
+        .env("COHTRACE_RULES_PATH", &missing_rules)
+        .current_dir(tmp.path())
+        .output()
+        .expect("run cohtrace diff missing rules");
+
+    assert_eq!(output.status.code(), Some(32));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("cohtrace diff rule violation"));
 }
 
 #[test]
