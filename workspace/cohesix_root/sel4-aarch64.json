@@ -6,12 +6,12 @@
   "vendor": "unknown",
   "metadata": {
     "author": "Lukas Bower",
-    "notes": "Use seL4 linker script and link libsel4.a with --whole-archive so runtime symbols resolve"
+    "notes": "Linker scripts and libsel4 --whole-archive linkage are injected via build.rs"
   },
   "linker-flavor": "ld.lld",
   "linker": "ld.lld",
   "target-endian": "little",
-  "target-pointer-width": 64,
+  "target-pointer-width": "64",
   "executables": true,
   "disable-redzone": true,
   "panic-strategy": "abort",
@@ -19,12 +19,6 @@
   "features": "+neon",
   "pre-link-args": {
     "ld.lld": [
-      "-Tcohesix_root/link.ld",
-      "-T",
-      "../third_party/seL4/lib/sel4.ld",
-      "--whole-archive",
-      "../third_party/seL4/lib/libsel4.a",
-      "--no-whole-archive",
       "-static",
       "-z",
       "max-page-size=0x1000",
