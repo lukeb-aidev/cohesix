@@ -1,8 +1,8 @@
 .\" CLASSIFICATION: COMMUNITY
 .\" Filename: cohtrace.1 v0.3
 .\" Author: Lukas Bower
-.\" Date Modified: 2028-12-01
-.TH COHTRACE 1 "2028-12-01" "Cohesix v1.0" "Cohesix Project"
+.\" Date Modified: 2029-03-08
+.TH COHTRACE 1 "2029-03-08" "Cohesix v1.0" "Cohesix Project"
 .SH NAME
 cohtrace \- trace inspection utilities
 .SH SYNOPSIS
@@ -41,6 +41,28 @@ backwards compatibility.
 .TP
 .B /srv/cloud/state.json
 Last reported queen heartbeat and worker summary.
+.TP
+.B /etc/cohtrace_rules.json
+Path normalization rules enforced by \fBcohtrace diff\fR. The file must provide
+an \fIallowed_roots\fR array and optional \fIrewrites\fR entries. The
+environment variable \fBCOHTRACE_RULES_PATH\fR overrides the default location.
+.SH CONFIGURATION
+\fBcohtrace diff\fR validates trace access against the configured rules file.
+Invalid schemas or paths outside \fIallowed_roots\fR result in a taxonomy exit
+code (see below) and the diff is aborted.
+.SH EXIT STATUS
+.TP
+.B 0
+Snapshots match; no drift detected.
+.TP
+.B 30
+Drift detected between the most recent snapshots.
+.TP
+.B 31
+Insufficient snapshots available to compute a diff.
+.TP
+.B 32
+Rule violation or unreadable rules file encountered while preparing the diff.
 .SH EXAMPLES
 .TP
 .B cohtrace list
