@@ -1,191 +1,106 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: DEMO_SCENARIOS.md v2.0
+// Filename: DEMO_SCENARIOS.md v2.2
 // Author: Lukas Bower
-// Date Modified: 2026-07-05
+// Date Modified: 2029-09-21
 
 # Cohesix Demo Scenarios — "Mother of All Demos"
 
-This document outlines Cohesix's landmark demonstration suite: a set of interlinked, live scenarios designed to **stun the community and captivate investors**, proving Cohesix as the future of secure, physically-aware, GPU-accelerated distributed systems.
-
-Unlike traditional stacks, Cohesix does **not embed CUDA directly**, but instead orchestrates GPU-enabled systems via secure roles, remote telemetry, and the **Cohesix CUDA Server**. This decoupled architecture ensures robust policy control and hardware abstraction.
+Cohesix showcases a zero-trust, physics-aware platform that orchestrates heterogeneous Workers and remote Cohesix CUDA Servers under the command of the QueenPrimary role. Every demonstration proves that secure GPU annexes, policy-governed namespaces, and deterministic replayability are practical today.
 
 ---
 
-## 🌐 Core Narrative: "The Queen Commands the Swarm"
+## 🌐 Alignment Snapshot
 
-At the heart of the demo: a **QueenPrimary** orchestrates a global swarm of heterogeneous Workers — from edge nodes to GPU clusters — using Secure9P and Plan9's powerful namespace. Together, they achieve real-time, physics-validated, policy-enforced AI execution.
+| # | Scenario | Architecture Pillars | Backlog Alignment |
+|---|----------|----------------------|-------------------|
+| 1 | Gesture-Controlled Physics | Rapier physics core, validator telemetry, trace retention | E3 Trace Observability (F7, F8), E7 Governance & Security (F19) |
+| 2 | Distributed GPU Scheduling | Secure9P-governed CUDA annex, remote telemetry, workload migration | E2 CUDA Annex Reliability (F4–F6), E4 GUI Control Plane (F10) |
+| 3 | Policy-Bound Physics Duel | Capability enforcement, Secure9P policy pushes, dynamic role privileges | E1 Secure9P Hardening (F1–F3), E3 Trace Observability (F8) |
+| 4 | Trace Replay with Policy Mutation | Trace diff automation, consensus replay, compliance evidence | E3 Trace Observability (F7–F9), E7 Governance & Security (F21) |
+| 5 | Automated Breach Response | Zero-trust isolation, validator hooks, incident telemetry | E1 Secure9P Hardening (F2), E7 Governance & Security (F20) |
+| 6 | System Topology & Time-Warped Replay | GUI/gRPC parity, boot telemetry context, global orchestration view | E4 GUI Control Plane Integrity (F10–F12), E5 Boot Performance (F13–F15) |
 
-Each scenario builds on the last, culminating in a full spectacle of distributed learning, live rule enforcement, and transparent validation.
-
----
-
-## 🚀 Demo Index
-
-| # | Name | Highlights |
-|---|------|------------|
-| 1 | The Gesture Tamer | Physically-grounded gesture control via webcam + Rapier |
-| 2 | GPU Swarm Scheduler | The Queen dispatches workloads to a fleet of Cohesix CUDA Servers |
-| 3 | Rule-Bound Physics Duel | Multi-agent simulation with real-time policy clamps |
-| 4 | Trace Replay and Mutation | Traces mutate under new policies and replay across swarm |
-| 5 | Live Security Breach Response | Simulated role breach triggers autonomous isolation |
-| 6 | Investor “God View” | Full topological map, live telemetry, and time-warped replays |
-
----
-
-## 🕹️ 1. The Gesture Tamer
-
-- **Goal:** Show a webcam feed processed on a local Worker. Gestures directly tilt a Rapier-based physical beam.  
-- The Cohesix Validator watches for unsafe force vectors (e.g. sudden whips) and flags violations.  
-- Each action is logged to `/log/trace/gesture_tamer.log`, with immediate replay capability.
-
----
-
-## 🚀 2. GPU Swarm Scheduler
-
-- **Goal:** Demonstrate how the Queen uses published `gpu_capacity` and `latency_score` from remote Cohesix CUDA Servers to schedule heavy inference workloads.
-- The Queen migrates a stable diffusion or object detection task to the optimal node.
-- Snapshots captured under `/history/snapshots/gpu_demo/`.
-
----
-
-## ⚖️ 3. Rule-Bound Physics Duel
-
-- **Goal:** Two Workers, each running separate physics agents, try to destabilize a shared Rapier beam.
-- The Queen enforces fairness by adjusting role privileges mid-game.
-- Live rule updates are pushed via Secure9P, tested under temporal conditions (`max_force_window_5s`), and logged.
-
----
-
-## 🔁 4. Trace Replay and Mutation
-
-- **Goal:** Show the power of Cohesix’s trace system.  
-- A captured scenario is replayed under a new rule set — e.g. tightening energy budgets or changing permitted torque.  
-- Deviations are flagged, with mutations stored to `/log/trace/mutated_runs/`.
-
----
-
-## 🛡️ 5. Live Security Breach Response
-
-- **Goal:** Simulate a Worker attempting a forbidden role escalation (from `SensorRelay` to `DroneWorker`).
-- Queen’s validator instantly severs and quarantines the node.
-- The breach and subsequent recovery are streamed to investors on a dedicated UI.
-
----
-
-## 🌍 6. Investor “God View”
-
-- **Goal:** All of the above scenarios merge into a finale:
-  - A full global topology of Workers, CUDA Servers, physics sandboxes, and validators.
-  - Live streams of webcam control, GPU metrics, rule triggers, and historical trace replays.
-  - The Queen executes a controlled time-warp replay of violations to prove deterministic auditability.
-
----
-
-## 🔎 Additional Services
-
-- **Kiosk Federation:** UIs hosted at `/srv/ui_bundle/kiosk_v1/` for public or investor interaction, triggered by `cohtrace kiosk_ping`.
-- **Secure Sensor Relays:** Distributed sensor nodes maintain encrypted streams, proving Cohesix’s multi-role trust enforcement.
-- **GPU Registry:** Every GPU node publishes into `/srv/gpu_registry.json` for live Queen scheduling.
-
----
-
-## 📝 Retired or Consolidated
-
-- Older single-device demos (Jetson local CUDA, direct YOLO inferencing) are deprecated. All CUDA work is now orchestrated via **Cohesix CUDA Servers**, maintaining clean separation of compute roles and GPU policy control.
-
----
-
-✅ **Conclusion:**  
-This demonstration suite is engineered to **shock the market**, proving that secure, physically-validated, distributed GPU orchestration is possible — and only possible — through the novel architecture of Cohesix.
-
-// CLASSIFICATION: COMMUNITY
-// Filename: DEMO_SCENARIOS.md v2.1
-// Author: Lukas Bower
-// Date Modified: 2026-07-05
-
-# Cohesix Demo Scenarios
-
-This document introduces a collection of live demonstrations showcasing how secure, distributed GPU workloads, physics-grounded validation, and dynamic policy enforcement can operate across heterogeneous systems using Plan9 namespaces and Secure9P. These scenarios are designed to be independently verifiable, replayable, and extensible.
-
----
-
-## 🌐 Overview
-
-Each demo highlights a different aspect of the system: from gesture-controlled physical environments to distributed GPU task scheduling and live breach containment. Logs, traces, and replay capabilities are built into every workflow.
+Each scenario reinforces Cohesix solution architecture principles: sub-200 ms boot instrumentation, Secure9P mediation, deterministic trace replay, and governed metadata. Together they form a cohesive investor-ready narrative.
 
 ---
 
 ## 🚀 Demo Index
 
-| # | Name | Description |
-|---|------|-------------|
-| 1 | Gesture-Controlled Physics | Control a physics beam via live webcam gestures |
-| 2 | Distributed GPU Scheduling | Schedule GPU workloads based on capacity and latency metrics |
-| 3 | Policy-Bound Physics Duel | Competing agents constrained by real-time policies |
-| 4 | Trace Replay with Policy Mutation | Apply new rule sets to previous execution traces |
-| 5 | Automated Breach Response | Simulate and contain unauthorized role escalations |
-| 6 | System Topology and Time-Warped Replay | Visualize the global topology with historic rule triggers |
+| # | Name | Highlight |
+|---|------|-----------|
+| 1 | Gesture-Controlled Physics | Local Worker steers a Rapier beam with validator-supervised gestures |
+| 2 | Distributed GPU Scheduling | QueenPrimary dispatches inference to Cohesix CUDA Servers based on live capacity |
+| 3 | Policy-Bound Physics Duel | Competing agents constrained by mid-run policy updates |
+| 4 | Trace Replay with Policy Mutation | Historic traces replay under stricter rule sets |
+| 5 | Automated Breach Response | Unauthorized role escalation detected and quarantined |
+| 6 | System Topology & Time-Warped Replay | Panoramic, replayable view of the swarm and annex health |
 
 ---
 
 ## 🕹️ 1. Gesture-Controlled Physics
 
-- A local Worker processes webcam input to generate force vectors that tilt a Rapier physics beam.
-- The validator monitors these forces, recording any threshold violations.
-- All actions and outcomes are logged to `/log/trace/gesture_tamer.log` and can be replayed under different rule constraints.
+- **Objective:** Demonstrate that Cohesix can convert webcam gestures into physics-safe actuator commands with deterministic logging.
+- A local Worker ingests camera frames, producing force vectors that tilt a Rapier beam while honouring validator thresholds.
+- Trace normalization guarantees all actions land in `/log/trace/gesture_tamer.log`, satisfying E3-F7 requirements and enabling replay under alternative guardrails.
+- Violations trigger governance hooks aligned with E7-F19 metadata enforcement, ensuring every anomaly carries classification headers and trace IDs.
 
 ---
 
 ## 🚀 2. Distributed GPU Scheduling
 
-- Multiple Cohesix CUDA Servers report available GPU resources (`gpu_capacity` and `latency_score`) to the Queen.
-- Heavy inference tasks are scheduled dynamically based on current availability.
-- Snapshots and execution traces are stored under `/history/snapshots/gpu_demo/`.
+- **Objective:** Exhibit remote GPU annex orchestration without embedding CUDA into the trusted base.
+- Cohesix CUDA Servers publish `gpu_capacity`, `latency_score`, and annex health via Secure9P. The QueenPrimary selects optimal targets for diffusion or object detection workloads in real time.
+- Snapshots and telemetry are written to `/history/snapshots/gpu_demo/`, fuelling E2-F4 annex dashboards and E2-F6 heartbeat probes.
+- GUI parity tests (E4-F10) visualize scheduling decisions, confirming investors can observe workload placement with authenticated controls.
 
 ---
 
 ## ⚖️ 3. Policy-Bound Physics Duel
 
-- Two Workers each control agents that attempt to destabilize a shared Rapier beam.
-- Mid-run, the Queen updates fairness rules (like `max_force_window_5s`) and propagates them via Secure9P.
-- Violations are flagged and logged.
+- **Objective:** Show dynamic policy control over competing agents in a shared physical environment.
+- Two Workers attempt to destabilize the shared beam; mid-run the Queen pushes updated fairness constraints (`max_force_window_5s`) via Secure9P manifest loader validation (E1-F1).
+- Capability adjustments are audited and replayed through consensus hooks (E3-F8), proving deterministic enforcement even during rapid privilege changes.
+- Compliance telemetry highlights each policy change with signed entries, supporting governance commitments in E7.
 
 ---
 
 ## 🔁 4. Trace Replay with Policy Mutation
 
-- Execution traces from earlier scenarios are replayed under new or stricter policies.
-- Deviations from the original run are highlighted, and mutated traces are stored under `/log/trace/mutated_runs/`.
+- **Objective:** Highlight replay-first observability and compliance evidence.
+- Previously captured traces are replayed with new policy envelopes—tightened torque budgets, energy ceilings, or annex access limits.
+- Deviations raise diff artefacts stored in `/log/trace/mutated_runs/`, aligning with E3-F9 CI diff automation.
+- Audit teams can compare runs through GUI overlays, reinforcing Solution Architecture mandates for 100% traceability.
 
 ---
 
 ## 🛡️ 5. Automated Breach Response
 
-- A Worker attempts to escalate its role from `SensorRelay` to `DroneWorker`.
-- The system detects the breach and isolates the offending node without disrupting the remaining environment.
-- The process is streamed to a monitoring UI for review.
+- **Objective:** Validate zero-trust containment for unauthorized role escalations.
+- A Worker attempts to pivot from `SensorRelay` to `DroneWorker`. Validator middleware authenticates via mTLS (E1-F2) and severs the rogue namespace binding instantly.
+- Incident response telemetry streams to the operator console, invoking E7-F20 security advisory workflows and capturing SLA metrics for review.
+- Isolation success and recovery sequencing are replayable, emphasizing deterministic remediation consistent with architecture guardrails.
 
 ---
 
-## 🌍 6. System Topology and Time-Warped Replay
+## 🌍 6. System Topology & Time-Warped Replay
 
-- Provides a real-time map of all Workers, CUDA Servers, physics engines, and validators.
-- Enables controlled time-warped replays of past rule violations, illustrating deterministic enforcement and auditability.
-
----
-
-## 🔎 Additional Features
-
-- **Kiosk UIs:** Hosted at `/srv/ui_bundle/kiosk_v1/`, triggered by `cohtrace kiosk_ping`, for local or remote interaction.
-- **Secure Sensor Relays:** Encrypt and forward data streams under strict role validation.
-- **GPU Registry:** Maintains a live JSON file (`/srv/gpu_registry.json`) that tracks all registered GPU nodes for on-demand scheduling.
+- **Objective:** Deliver an investor “god view” that fuses orchestration, telemetry, and replay into a single command surface.
+- The GUI renders live topology of Workers, CUDA annexes, physics sandboxes, and validators with gRPC parity (E4-F10) and rate-limit telemetry (E4-F12).
+- Operators can initiate controlled time-warp replays that interleave boot instrumentation (E5-F13) with trace diffs, demonstrating cold-boot governance and forensic repeatability.
+- This finale positions Cohesix as the only platform providing simultaneous operational control, compliance evidence, and deterministic playback.
 
 ---
 
-### Note on Direct GPU Integration
+## 🔎 Supporting Capabilities
 
-CUDA is not embedded directly within the core system. Instead, GPU workloads are executed via Cohesix CUDA Servers, maintaining clear separation of roles and policy enforcement.
+- **Kiosk Federation:** Investor and public kiosks served from `/srv/ui_bundle/kiosk_v1/`, activated via `cohtrace kiosk_ping`, ensuring managed access paths documented under E4.
+- **Secure Sensor Relays:** Role-validated relays maintain encrypted feeds, fulfilling E1 and E7 commitments while supplying input for scenarios 1 and 5.
+- **GPU Registry:** Cohesix maintains `/srv/gpu_registry.json` as the canonical annex directory supporting F4 telemetry exports and scheduling decisions.
+- **Boot & Trace Instrumentation:** QEMU-derived boot metrics and ELF validation artefacts (E5-F13–F15) are referenced in demos 2 and 6 to contextualize performance during investor walk-throughs.
 
 ---
 
-All scenarios are designed to be independently verified, replayed with alternative policies, and extended into new environments. Logs and traces are retained for forensic or compliance review.
+## ✅ Conclusion
+
+These demonstrations form a single, traceable storyline: the QueenPrimary commands a secure swarm, annexed GPUs extend deterministic physics services, and every action is governed, logged, and replayable. Cohesix’s architecture and backlog commitments—Secure9P hardening, CUDA annex reliability, trace observability, GUI parity, and boot performance—are all showcased live, keeping the demos both spectacular and auditable.
+
