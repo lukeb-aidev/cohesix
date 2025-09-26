@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -73,7 +74,7 @@ func (g *testGateway) FetchClusterState(ctx context.Context) (*rpc.ClusterStateR
 
 func newRouter(t *testing.T, logPath string) (http.Handler, *testGateway) {
 	t.Helper()
-	cfg := orch.Config{StaticDir: "../../../static", LogFile: logPath, Dev: true}
+	cfg := orch.Config{StaticDir: "../../../static", DocsDir: "../../../workspace/docs", LogFile: logPath, Dev: true}
 	gateway := newTestGateway()
 	cfg.Controller = gateway
 	cfg.ClusterClient = gateway
@@ -94,6 +95,44 @@ func TestBootServesRoot(t *testing.T) {
 	}
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status code: %d", resp.StatusCode)
+	}
+}
+
+func TestDocsEndpointServesDemoScenarios(t *testing.T) {
+	router, _ := newRouter(t, "")
+	ts := httptest.NewServer(router)
+	defer ts.Close()
+	resp, err := http.Get(ts.URL + "/docs/community/planning/DEMO_SCENARIOS.md")
+	if err != nil {
+		t.Fatalf("get docs: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Content-Type"); got != "text/markdown; charset=utf-8" {
+		t.Fatalf("unexpected content-type: %s", got)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if !bytes.Contains(body, []byte("# Cohesix Demo Scenarios")) {
+		t.Fatalf("missing demo content")
+	}
+}
+
+func TestDocsEndpointMissingFile(t *testing.T) {
+	router, _ := newRouter(t, "")
+	ts := httptest.NewServer(router)
+	defer ts.Close()
+	resp, err := http.Get(ts.URL + "/docs/community/planning/NOT_REAL.md")
+	if err != nil {
+		t.Fatalf("get docs: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", resp.StatusCode)
 	}
 }
 
