@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: cli_tools.md v1.2
 // Author: Lukas Bower
-// Date Modified: 2027-09-01
+// Date Modified: 2029-09-26
 
 # CLI Tools Reference
 
@@ -14,6 +14,8 @@ execution from a shell environment with trace logging enabled. For a high level 
 - [cohrun](#cohrun)
 - [cohtrace](#cohtrace)
 - [cohcc](#cohcc)
+- [secure9p-sign](#secure9p-sign)
+- [secure9p-onboard](#secure9p-onboard)
 - [cohcap](#cohcap)
 - [coh-9p-helper](#coh-9p-helper-go-helper)
 - [gui-orchestrator](#gui-orchestrator-go-helper)
@@ -105,3 +107,31 @@ Watches files and logs events under */dev/watch*.
 echo /tmp/foo.txt > /dev/watch/ctl
 cat /dev/watch/events
 ```
+## secure9p-sign
+Utility to generate a SHA-512 signature for `secure9p.toml` manifests. The
+output defaults to `secure9p.sha512` alongside the manifest and includes
+metadata headers for audit traceability.
+
+```bash
+secure9p-sign --manifest config/secure9p.toml
+secure9p-sign --manifest policy/queen.toml --output policy/queen.sha512 --no-header
+```
+
+Each invocation records a `secure9p_sign` trace event so validator pipelines can
+verify the manifest digest recorded in `/log/trace/net_secure9p.log`.
+
+## secure9p-onboard
+Automates SPIFFE-aligned mTLS onboarding for Secure9P clients. Provide the CA
+certificate/key pair and desired SPIFFE ID; the command emits a signed client
+certificate and private key along with trace entries confirming issuance.
+
+```bash
+secure9p-onboard --ca-cert ca.pem --ca-key ca.key \
+  --spiffe-id spiffe://cohesix/worker/DroneWorker/worker-01 \
+  --out-cert workers/worker-01.cert --out-key workers/worker-01.key
+```
+
+Certificates default to a 365-day validity window and use client-auth key usage
+constraints. The CLI enforces SPIFFE URI format and logs a
+`secure9p_onboard` trace entry for validator replay.
+

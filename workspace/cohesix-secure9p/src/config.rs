@@ -1,8 +1,9 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: config.rs v0.1
+// Filename: config.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2028-12-31
+// Date Modified: 2029-09-26
 
+use crate::manifest::ManifestSignature;
 use crate::reconcile::PolicyReconciler;
 use cohesix_9p::policy::SandboxPolicy;
 use serde::Deserialize;
@@ -44,6 +45,7 @@ pub struct Secure9pConfig {
 impl Secure9pConfig {
     pub fn load(path: &Path) -> io::Result<Self> {
         let text = fs::read_to_string(path)?;
+        ManifestSignature::verify_manifest(path, text.as_bytes())?;
         let mut cfg: Secure9pConfig =
             toml::from_str(&text).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         cfg.rebase_paths(path);
@@ -98,5 +100,56 @@ impl PolicyEntry {
             }
         }
         SandboxPolicy { read, write }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::tempdir;
+
+    fn signed_manifest(contents: &str) -> (tempfile::TempDir, PathBuf) {
+        let dir = tempdir().expect("tempdir");
+        let manifest_path = dir.path().join("secure9p.toml");
+        fs::write(&manifest_path, contents).expect("write manifest");
+        let signature = ManifestSignature::compute(contents.as_bytes());
+        signature
+            .write(
+                &ManifestSignature::signature_path(&manifest_path),
+                Some("// Generated for test"),
+            )
+            .expect("write signature");
+        (dir, manifest_path)
+    }
+
+    #[test]
+    fn load_requires_signature_file() {
+        let dir = tempdir().expect("tempdir");
+        let manifest_path = dir.path().join("secure9p.toml");
+        fs::write(&manifest_path, "port = 1\ncert = 'a'\nkey = 'b'\n").unwrap();
+        let err = Secure9pConfig::load(&manifest_path).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn load_rejects_mismatched_signature() {
+        let (_dir, manifest_path) =
+            signed_manifest("port = 9\ncert = 'a'\nkey = 'b'\nrequire_client_auth = false\n");
+        fs::write(
+            ManifestSignature::signature_path(&manifest_path),
+            "sha512:0000",
+        )
+        .unwrap();
+        let err = Secure9pConfig::load(&manifest_path).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn load_accepts_valid_signature() {
+        let (_dir, manifest_path) =
+            signed_manifest("port = 10\ncert = 'cert.pem'\nkey = 'key.pem'\n");
+        let cfg = Secure9pConfig::load(&manifest_path).expect("load config");
+        assert_eq!(cfg.port, 10);
     }
 }
