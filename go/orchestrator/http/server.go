@@ -11,12 +11,16 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
+	"mime"
 	"net"
 	"net/http"
 	"os"
+	"path"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -33,6 +37,7 @@ type Config struct {
 	Bind          string
 	Port          int
 	StaticDir     string
+	DocsDir       string
 	AuthUser      string
 	AuthPass      string
 	LogFile       string
@@ -65,6 +70,7 @@ type Server struct {
 	controlAllowed uint64
 	controlDenied  uint64
 	tlsConfig      *tls.Config
+	docsDir        string
 }
 
 // New returns an initialized server.
@@ -97,6 +103,11 @@ func New(cfg Config) (*Server, error) {
 	if cfg.ClusterClient != nil {
 		s.clusterClient = cfg.ClusterClient
 	}
+	docsDir, err := resolveDocsDir(cfg.DocsDir)
+	if err != nil {
+		return nil, err
+	}
+	s.docsDir = docsDir
 
 	roles := cfg.AllowedRoles
 	if len(roles) == 0 {
@@ -138,6 +149,96 @@ func New(cfg Config) (*Server, error) {
 	}
 	s.initRoutes()
 	return s, nil
+}
+
+func resolveDocsDir(dir string) (string, error) {
+	if strings.TrimSpace(dir) == "" {
+		return "", nil
+	}
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return "", fmt.Errorf("resolve docs dir: %w", err)
+	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("docs dir does not exist: %s", abs)
+		}
+		return "", fmt.Errorf("stat docs dir: %w", err)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("docs dir is not a directory: %s", abs)
+	}
+	return abs, nil
+}
+
+func (s *Server) docsHandler(w http.ResponseWriter, r *http.Request) {
+	if s.docsDir == "" {
+		http.NotFound(w, r)
+		return
+	}
+	requestPath := strings.TrimPrefix(r.URL.Path, "/docs/")
+	if requestPath == "" {
+		http.NotFound(w, r)
+		return
+	}
+	clean := path.Clean("/" + requestPath)
+	if clean == "/" {
+		http.NotFound(w, r)
+		return
+	}
+	rel := strings.TrimPrefix(clean, "/")
+	fsPath := filepath.Join(s.docsDir, filepath.FromSlash(rel))
+	if !isWithinBase(s.docsDir, fsPath) {
+		http.Error(w, "invalid document path", http.StatusForbidden)
+		return
+	}
+	f, err := os.Open(fsPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			http.NotFound(w, r)
+			return
+		}
+		s.logger.Printf("open doc: %v", err)
+		http.Error(w, "failed to read document", http.StatusInternalServerError)
+		return
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		s.logger.Printf("stat doc: %v", err)
+		http.Error(w, "failed to read document", http.StatusInternalServerError)
+		return
+	}
+	if info.IsDir() {
+		http.NotFound(w, r)
+		return
+	}
+	ext := strings.ToLower(filepath.Ext(info.Name()))
+	switch ext {
+	case ".md":
+		w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+	default:
+		if ctype := mime.TypeByExtension(ext); ctype != "" {
+			w.Header().Set("Content-Type", ctype)
+		}
+	}
+	http.ServeContent(w, r, info.Name(), info.ModTime(), f)
+}
+
+func isWithinBase(base, target string) bool {
+	rel, err := filepath.Rel(base, target)
+	if err != nil {
+		return false
+	}
+	if rel == "." {
+		return true
+	}
+	rel = filepath.Clean(rel)
+	if rel == ".." {
+		return false
+	}
+	return !strings.HasPrefix(rel, ".."+string(os.PathSeparator))
 }
 
 // Router returns the underlying router, useful for tests.

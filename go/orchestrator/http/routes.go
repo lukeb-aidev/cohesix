@@ -30,6 +30,7 @@ func (s *Server) initRoutes() {
 
 	r.Get("/api/metrics", s.metricsHandler)
 	r.Handle("/static/*", static.FileHandler(s.cfg.StaticDir))
+	r.Get("/docs/*", s.docsHandler)
 	r.NotFound(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, path.Join(s.cfg.StaticDir, "index.html"))
 	}))
