@@ -841,7 +841,7 @@
 - **init/worker.rs**: worker root task service mounts.
 - **cuda/runtime.rs**: kernel loading and launch API.
 - **tests/test_cuda_exec.rs** and **tests/test_integration_boot.py**.
-- **scripts/cohtrace.py**: syscall trace stub.
+- **cohtrace** CLI: Rust-based syscall trace tooling replacing the legacy Python stub.
 - **runtime/service_registry.rs**: global service registration with role filtering.
 - **sandbox/chain.rs**: executes sandboxed syscall chains.
 - **telemetry/loop.rs** and **telemetry/mod.rs**: telemetry sync loop and module.
