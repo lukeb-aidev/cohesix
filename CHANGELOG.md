@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v1.22
+// Filename: CHANGELOG.md v1.23
 // Author: Lukas Bower
-// Date Modified: 2030-03-06
+// Date Modified: 2030-03-07
 
 [vNext] - 2029-02-21
 ### Added
@@ -38,6 +38,10 @@
   every gRPC command.
 - `/api/metrics` now publishes rate-limiter counters, including burst, token
   availability, and allowed/denied totals for `/api/control` requests.
+
+### Removed
+- Removed `workspace/cohesix/src/geometry/sweep_line_intersection.py` and its
+  metadata listing now that the sweep-line prototype has been retired.
 
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)

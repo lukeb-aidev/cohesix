@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: METADATA.md v3.58
+// Filename: METADATA.md v3.59
 // Author: Lukas Bower
-// Date Modified: 2030-03-06
+// Date Modified: 2030-03-07
 
 ## Canonical Documents
 
@@ -350,7 +350,6 @@
 | tests/test_validator.rs | v0.6 | 2026-11-15 | COMMUNITY | | |
 | tests/test_secure9p_config.rs | v0.1 | 2026-09-30 | COMMUNITY | | |
 | docs/community/PATH_SELF_INTERSECTION.md | v0.1 | 2026-11-19 | COMMUNITY | | |
-| src/geometry/sweep_line_intersection.py | v0.1 | 2026-11-19 | COMMUNITY | | |
 | log/simulated_boot_pipeline.md | v0.1 | 2026-11-20 | COMMUNITY | | |
 | tools/make_iso.sh | v0.11 | 2026-12-01 | COMMUNITY | | |
 | src/hal/arm64/mod.rs | v0.7 | 2026-11-23 | PRIVATE | | |
