@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: METADATA.md v3.58
 // Author: Lukas Bower
-// Date Modified: 2028-12-13
+// Date Modified: 2029-05-12
 
 ## Canonical Documents
 
@@ -343,7 +343,7 @@
 
 | docs/community/guides/test_portability_guidelines.md | v0.1 | 2025-06-26 | COMMUNITY | | |
 | tools/setup_test_targets.sh | v0.1 | 2026-09-30 | COMMUNITY | | |
-| scripts/validate_manpages.py | v0.1 | 2027-12-07 | COMMUNITY | | |
+| workspace/docs/man (manpages) | v1.0 | 2029-05-12 | COMMUNITY | | Maintained directly in repository; supersedes scripts/gen_manpages.py and scripts/validate_manpages.py |
 | docs/FEATURE_FLAGS.md | v0.1 | 2026-09-30 | COMMUNITY | | |
 | docs/ROOT_SPLIT_PLAN_V1.md | v1.2 | 2027-08-15 | COMMUNITY | | |
 | tests/test_validator_matrix.rs | v0.2 | 2026-11-02 | COMMUNITY | | |
