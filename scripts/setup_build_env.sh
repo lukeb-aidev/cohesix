@@ -1,13 +1,23 @@
 #!/usr/bin/env bash
 # CLASSIFICATION: COMMUNITY
-# Filename: setup_build_env.sh v0.7
+# Filename: setup_build_env.sh v0.8
 # Author: Lukas Bower
-# Date Modified: 2030-03-22
+# Date Modified: 2030-07-06
 set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 ARCH="$(uname -m)"
 OS_NAME="$(uname -s)"
+
+if [[ "$OS_NAME" != "Darwin" ]]; then
+    printf '\e[31m[ERR]\e[0m This setup only supports macOS (Darwin). Detected %s.\n' "$OS_NAME" >&2
+    exit 1
+fi
+
+if [[ "$ARCH" != "arm64" && "$ARCH" != "aarch64" ]]; then
+    printf '\e[31m[ERR]\e[0m This setup only supports Apple Silicon (arm64/aarch64). Detected %s.\n' "$ARCH" >&2
+    exit 1
+fi
 # Load or prompt for persistent architecture configuration
 normalize_arch() {
     case "$1" in
@@ -89,61 +99,37 @@ ensure_python_bin() {
     printf '%s\n' "$python_bin"
 }
 
-if [[ "$OS_NAME" == "Darwin" ]]; then
-    msg "Detected macOS host (architecture: $ARCH)."
+msg "Detected macOS host (architecture: $ARCH)."
 
-    MACOS_VERSION="$(sw_vers -productVersion 2>/dev/null || echo "0")"
-    MACOS_MAJOR="${MACOS_VERSION%%.*}"
-    if [[ "$MACOS_MAJOR" =~ ^[0-9]+$ && "$MACOS_MAJOR" -lt 26 ]]; then
-        msg "WARNING: macOS $MACOS_VERSION detected. This setup is validated for macOS 26 or newer."
-    fi
+MACOS_VERSION="$(sw_vers -productVersion 2>/dev/null || echo "0")"
+MACOS_MAJOR="${MACOS_VERSION%%.*}"
+if [[ "$MACOS_MAJOR" =~ ^[0-9]+$ && "$MACOS_MAJOR" -lt 26 ]]; then
+    msg "WARNING: macOS $MACOS_VERSION detected. This setup is validated for macOS 26 or newer."
+fi
 
-    ensure_homebrew_shellenv
+ensure_homebrew_shellenv
 
-    brew_pkgs=(cmake ninja python@3.12 pkg-config coreutils gnu-tar)
-    ensure_brew_packages "${brew_pkgs[@]}"
+brew_pkgs=(
+    qemu
+    aarch64-unknown-linux-gnu
+    llvm
+    cmake
+    ninja
+    python@3.12
+    pkg-config
+    coreutils
+    gnu-tar
+)
+ensure_brew_packages "${brew_pkgs[@]}"
 
-    PYTHON_BIN="$(ensure_python_bin)"
-elif command -v apt-get >/dev/null 2>&1; then
-    pkgs=(gcc cmake ninja-build python3-venv python3-pip)
-    if [[ "$ARCH" == "aarch64" || "$ARCH" == "arm64" ]]; then
-        pkgs+=(gcc-aarch64-linux-gnu)
-    fi
+PYTHON_BIN="$(ensure_python_bin)"
 
-    add_cuda_repo() {
-        local dist
-        dist=$(lsb_release -cs)
-        local arch
-        arch=$(dpkg --print-architecture)
-        local numeric_dist
-        case "$dist" in
-            noble) numeric_dist="ubuntu2404" ;;
-            jammy) numeric_dist="ubuntu2204" ;;
-            focal) numeric_dist="ubuntu2004" ;;
-            bionic) numeric_dist="ubuntu1804" ;;
-            *) numeric_dist="$dist" ;;
-        esac
-        local narch="$arch"
-        if [[ "$arch" == "amd64" ]]; then
-            narch="x86_64"
-        fi
-        local keyfile=/usr/share/keyrings/nvidia-cuda-keyring.gpg
-        sudo mkdir -p /usr/share/keyrings
-        if [ ! -f "$keyfile" ]; then
-            curl -fsSL "https://developer.download.nvidia.com/compute/cuda/repos/${numeric_dist}/${narch}/3bf863cc.pub" \
-                | gpg --dearmor | sudo tee "$keyfile" >/dev/null
-        fi
-        echo "deb [signed-by=$keyfile] https://developer.download.nvidia.com/compute/cuda/repos/${numeric_dist}/${narch}/ /" \
-            | sudo tee /etc/apt/sources.list.d/cuda.list >/dev/null
-    }
+if ! command -v aarch64-unknown-linux-gnu-gcc >/dev/null 2>&1; then
+    die "aarch64-unknown-linux-gnu-gcc not found on PATH after installation. Ensure the Homebrew LLVM toolchain is linked."
+fi
 
-    msg "Installing build dependencies"
-    add_cuda_repo
-    sudo apt-get update -y >/dev/null
-    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y "${pkgs[@]}" >/dev/null
-    PYTHON_BIN="python3"
-else
-    die "Unsupported host platform: $OS_NAME"
+if ! command -v qemu-system-aarch64 >/dev/null 2>&1; then
+    die "qemu-system-aarch64 not found on PATH after installation. Confirm Homebrew's qemu package is correctly installed."
 fi
 
 VENV="$ROOT/.venv"
