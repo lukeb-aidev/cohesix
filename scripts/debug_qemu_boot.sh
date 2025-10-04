@@ -1,8 +1,9 @@
 #!/bin/bash
 # CLASSIFICATION: COMMUNITY
-# Filename: scripts/debug_qemu_boot.sh v0.4
+# Filename: scripts/debug_qemu_boot.sh v0.5
 # Author: Lukas Bower
-# Date Modified: 2026-11-24
+# Date Modified: 2029-10-07
+# SAFe Epic: E5-F13 Boot Telemetry | Feature: F15 QEMU Trace Instrumentation
 # Ensures this script runs cleanly under Bash for CI use
 set -euo pipefail
 
@@ -12,45 +13,72 @@ cd "$ROOT"
 LOG_DIR="$ROOT/logs"
 mkdir -p "$LOG_DIR"
 INVOC_LOG="$LOG_DIR/qemu_invocation.log"
+TRACE_LOG="$LOG_DIR/qemu_boot_trace.log"
 
-ISO="$ROOT/out/cohesix.iso"
+ELFLOADER="$ROOT/out/bin/elfloader"
 ROOT_ELF="$ROOT/out/cohesix_root.elf"
-CFG="$ROOT/config/config.yaml"
+CPIO_PAYLOAD="${COHESIX_CPIO_PAYLOAD:-${CPIO_IMAGE:-$ROOT/boot/cohesix.cpio}}"
+
+log() {
+  printf '%s\n' "$*" | tee -a "$INVOC_LOG"
+}
 
 missing=0
 check_file() {
   local f="$1"
   if [[ -f "$f" ]]; then
-    stat -c "CHECK %n size=%s perm=%a" "$f"
+    stat -c "CHECK %n size=%s perm=%a" "$f" | tee -a "$INVOC_LOG"
   else
-    echo "MISSING $f"
+    log "MISSING $f"
     missing=1
   fi
 }
 
-echo "Working directory: $(pwd)"
-check_file "$ISO"
+log "Working directory: $(pwd)"
+log "Using CPIO payload: $CPIO_PAYLOAD"
+check_file "$ELFLOADER"
 check_file "$ROOT_ELF"
-check_file "$CFG"
+check_file "$CPIO_PAYLOAD"
 
-du -sh out 2>/dev/null || true
+du -sh out 2>/dev/null | tee -a "$INVOC_LOG" || true
 if command -v sha256sum >/dev/null; then
-  sha256sum "$ISO" 2>/dev/null || true
+  for artifact in "$ELFLOADER" "$ROOT_ELF" "$CPIO_PAYLOAD"; do
+    if [[ -f "$artifact" ]]; then
+      sha256sum "$artifact" 2>/dev/null | tee -a "$INVOC_LOG" || true
+    fi
+  done
 fi
 
-QEMU=$(command -v qemu-system-x86_64 || true)
+QEMU=$(command -v qemu-system-aarch64 || true)
 if [[ -z "$QEMU" ]]; then
-  echo "QEMU not found"
+  log "QEMU not found"
   exit 1
 fi
-"$QEMU" --version
+"$QEMU" --version | tee -a "$INVOC_LOG"
 
-timeout 2 "$QEMU" -cdrom "$ISO" -nographic -serial mon:stdio -d int -D "$LOG_DIR/bootlog.txt" -S -snapshot 2>&1 | tee -a "$INVOC_LOG" || true
-# Switched to -serial mon:stdio for direct console output in SSH
+TRACE_FLAGS="in_asm,exec,int,mmu,page,guest_errors,unimp,cpu_reset"
+QEMU_CMD=(
+  "$QEMU"
+  -M virt
+  -cpu cortex-a57
+  -m 1024
+  -kernel "$ELFLOADER"
+  -initrd "$CPIO_PAYLOAD"
+  -serial mon:stdio
+  -nographic
+  -d "$TRACE_FLAGS"
+  -D "$TRACE_LOG"
+  -S
+  -snapshot
+)
+
+log "Invoking QEMU: $(printf '%q ' "${QEMU_CMD[@]}")"
+timeout 5 "${QEMU_CMD[@]}" 2>&1 | tee -a "$INVOC_LOG" || true
+# Maintains -serial mon:stdio for direct console output in SSH
 
 if [[ $missing -eq 0 ]]; then
-  echo "DEBUG_BOOT_READY"
+  log "DEBUG_BOOT_READY"
 else
-  echo "DEBUG_BOOT_FAILED"
+  log "DEBUG_BOOT_FAILED"
   exit 1
 fi
