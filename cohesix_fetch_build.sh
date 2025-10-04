@@ -1,10 +1,16 @@
-#!/usr/bin/env bash
+#!/usr/bin/env sh
 # CLASSIFICATION: COMMUNITY
 # Filename: cohesix_fetch_build.sh v1.58
 # Author: Lukas Bower
 # Date Modified: 2029-02-21
 
 # This script fetches and builds the Cohesix project, including seL4 and other dependencies.
+
+# Ensure we have a POSIX-compatible environment even when invoked via zsh
+if [ -n "${ZSH_VERSION:-}" ]; then
+  emulate -L sh
+  setopt sh_word_split
+fi
 
 HOST_ARCH="$(uname -m)"
 HOST_OS="$(uname -s)"
@@ -18,7 +24,7 @@ for candidate in aarch64-linux-gnu-gcc aarch64-unknown-linux-gnu-gcc; do
   fi
 done
 
-if [[ "$HOST_ARCH" = "aarch64" || "$HOST_ARCH" = "arm64" ]] && [ -z "$CROSS_GCC" ]; then
+if { [ "$HOST_ARCH" = "aarch64" ] || [ "$HOST_ARCH" = "arm64" ]; } && [ -z "$CROSS_GCC" ]; then
   if command -v sudo >/dev/null 2>&1; then
     SUDO=sudo
   else
@@ -31,17 +37,28 @@ export ROOT
 
 LOG_DIR="$ROOT/logs"
 mkdir -p "$LOG_DIR"
-set -euxo pipefail
+set -eu
+if (set -o pipefail) 2>/dev/null; then
+  set -o pipefail
+fi
 # Early virtualenv setup
 VENV_DIR=".venv_${HOST_ARCH}"
-if [ -z "${VIRTUAL_ENV:-}" ] || [[ "$VIRTUAL_ENV" != *"/${VENV_DIR}" ]]; then
+if [ -z "${VIRTUAL_ENV:-}" ]; then
+  NEED_VENV=1
+else
+  case "$VIRTUAL_ENV" in
+    *"/${VENV_DIR}") NEED_VENV=0 ;;
+    *) NEED_VENV=1 ;;
+  esac
+fi
+if [ "${NEED_VENV:-0}" -eq 1 ]; then
   if [ -d "$VENV_DIR" ]; then
     echo "🔄 Activating existing virtualenv: $VENV_DIR"
-    source "$VENV_DIR/bin/activate"
+    . "$VENV_DIR/bin/activate"
   else
     echo "⚙️ Creating new virtualenv: $VENV_DIR"
     python3 -m venv "$VENV_DIR"
-    source "$VENV_DIR/bin/activate"
+    . "$VENV_DIR/bin/activate"
   fi
 fi
 export PYTHONPATH="$ROOT/third_party/seL4/kernel:/usr/local/lib/python3.12/dist-packages:${PYTHONPATH:-}"
@@ -92,10 +109,50 @@ TRACE_LOG="$LOG_DIR/libsel4_link_and_boot_trace.md"
 : > "$SUMMARY_ERRORS"
 : > "$SUMMARY_TEST_FAILS"
 exec 3>&1  # Save original stdout
-exec > >(tee -a "$LOG_FILE" >&3) 2>&1
-trap 'echo "❌ Build failed." >&3; [[ -f "$LOG_FILE" ]] && { echo "Last 40 log lines:" >&3; tail -n 40 "$LOG_FILE" >&3; }' ERR
+LOG_PIPE=""
+TEE_PID=""
+if command -v mkfifo >/dev/null 2>&1; then
+  LOG_PIPE="$LOG_DIR/build_pipe_$$"
+  if mkfifo "$LOG_PIPE"; then
+    tee -a "$LOG_FILE" <"$LOG_PIPE" >&3 &
+    TEE_PID=$!
+    exec >"$LOG_PIPE" 2>&1
+  else
+    LOG_PIPE=""
+  fi
+fi
+if [ -z "$LOG_PIPE" ]; then
+  exec >"$LOG_FILE" 2>&1
+fi
 
-log(){ echo "[$(date +%H:%M:%S)] $1" | tee -a "$LOG_FILE" >&3; }
+CLEANED_UP=0
+cleanup_logging() {
+  if [ "$CLEANED_UP" -eq 1 ]; then
+    return
+  fi
+  CLEANED_UP=1
+  exec 1>&3 2>&3
+  if [ -n "$LOG_PIPE" ]; then
+    if [ -n "$TEE_PID" ]; then
+      wait "$TEE_PID" 2>/dev/null || true
+    fi
+    rm -f "$LOG_PIPE"
+  fi
+}
+
+handle_failure() {
+  cleanup_logging
+  echo "❌ Build failed." >&3
+  if [ -f "$LOG_FILE" ]; then
+    echo "Last 40 log lines:" >&3
+    tail -n 40 "$LOG_FILE" >&3
+  fi
+}
+
+trap 'handle_failure' ERR
+trap 'cleanup_logging' EXIT INT TERM
+
+log() { echo "[$(date +%H:%M:%S)] $1" | tee -a "$LOG_FILE" >&3; }
 
 log "🛠️ [Build Start] $(date)"
 log "🚀 Using existing repository at $ROOT"
@@ -111,21 +168,21 @@ done
 
 SEL4_LIB_DIR="${SEL4_LIB_DIR:-$ROOT/third_party/seL4/lib}"
 # Skip interactive fetch if seL4 library already exists
-if [[ ! -f "$SEL4_LIB_DIR/libsel4.a" ]]; then
+if [ ! -f "$SEL4_LIB_DIR/libsel4.a" ]; then
   bash "$ROOT/third_party/seL4/fetch_sel4.sh" --non-interactive
 fi
 
-if [[ -n "$PHASE" ]]; then
+if [ -n "$PHASE" ]; then
   cd "$ROOT/workspace"
   CROSS_RUSTFLAGS="-C link-arg=-L${SEL4_LIB_DIR} ${RUSTFLAGS:-}"
-  if [[ "$PHASE" == "1" ]]; then
+  if [ "$PHASE" = "1" ]; then
     log "🔨 Phase 1: Building host crates for musl userland"
     cargo build --release --workspace \
       --exclude 'cohesix_root' \
       --exclude 'sel4-sys-extern-wrapper' \
       --target aarch64-unknown-linux-musl
     log "✅ Phase 1 build succeeded"
-  elif [[ "$PHASE" == "2" ]]; then
+  elif [ "$PHASE" = "2" ]; then
     log "🔨 Phase 2: Building sel4-sys-extern-wrapper"
     export CFLAGS="-I${ROOT}/workspace/sel4-sys-extern-wrapper/out"
     export LDFLAGS="-L${SEL4_LIB_DIR}"
@@ -137,13 +194,13 @@ if [[ -n "$PHASE" ]]; then
       -Z build-std=core,alloc,compiler_builtins \
       -Z build-std-features=compiler-builtins-mem
     WRAPPER_RLIB=$(find target/sel4-aarch64/release/deps -maxdepth 1 -name 'libsel4_sys_extern_wrapper*.rlib' -print -quit 2>/dev/null)
-    if [[ -n "$WRAPPER_RLIB" ]]; then
+    if [ -n "$WRAPPER_RLIB" ]; then
       log "✅ Phase 2 build succeeded: $(basename "$WRAPPER_RLIB")"
     else
       echo "❌ wrapper artifact missing" >&2
       exit 1
     fi
-  elif [[ "$PHASE" == "3" ]]; then
+  elif [ "$PHASE" = "3" ]; then
     log "🔨 Phase 3: Building cohesix_root under nightly"
     export LDFLAGS="-L${SEL4_LIB_DIR}"
     export RUSTFLAGS="-C panic=abort -C linker=ld.lld -C link-arg=--gc-sections -C link-arg=--eh-frame-hdr -L${SEL4_LIB_DIR} ${CROSS_RUSTFLAGS:-}"
@@ -154,7 +211,7 @@ if [[ -n "$PHASE" ]]; then
       -Z build-std=core,alloc,compiler_builtins \
       -Z build-std-features=compiler-builtins-mem
     ROOT_ARTIFACT=$(find target/sel4-aarch64/release/deps -maxdepth 1 -name 'libcohesix_root*.rlib' -print -quit 2>/dev/null)
-    if [[ -n "$ROOT_ARTIFACT" ]]; then
+    if [ -n "$ROOT_ARTIFACT" ]; then
       log "✅ Phase 3 build succeeded: $(basename "$ROOT_ARTIFACT")"
     else
       echo "❌ cohesix_root artifact missing" >&2
@@ -203,7 +260,7 @@ CROSS_RUSTFLAGS="-C link-arg=-L${SEL4_LIB_DIR} ${RUSTFLAGS:-}"
 export SEL4_ARCH="${SEL4_ARCH:-aarch64}"
 
 if [ -f "$ROOT/scripts/load_arch_config.sh" ]; then
-  source "$ROOT/scripts/load_arch_config.sh"
+  . "$ROOT/scripts/load_arch_config.sh"
 else
   echo "❌ Missing: $ROOT/scripts/load_arch_config.sh" >&2
   exit 1
@@ -253,9 +310,22 @@ if [ -z "$CUDA_HOME" ]; then
   elif [ -d /usr/local/cuda ]; then
     CUDA_HOME="/usr/local/cuda"
   else
-    shopt -s nullglob
-    CUDA_MATCHES=(/usr/local/cuda-*arm64 /usr/local/cuda-*)
-    CUDA_HOME="${CUDA_MATCHES[0]:-}"
+    CUDA_FALLBACK_SCAN=""
+    for candidate in /usr/local/cuda-*arm64 /usr/local/cuda-*; do
+      case "$candidate" in
+        *\**|*\?*) continue ;;
+      esac
+      if [ -d "$candidate" ]; then
+        if [ -z "$CUDA_HOME" ]; then
+          CUDA_HOME="$candidate"
+        fi
+        if [ -n "$CUDA_FALLBACK_SCAN" ]; then
+          CUDA_FALLBACK_SCAN="$CUDA_FALLBACK_SCAN $candidate"
+        else
+          CUDA_FALLBACK_SCAN="$candidate"
+        fi
+      fi
+    done
     # Manual override for environments where cuda.h is in /usr/include but no nvcc exists
     if [ "$CUDA_HOME" = "/usr" ] && [ -f "/usr/include/cuda.h" ]; then
       export CUDA_INCLUDE_DIR="/usr/include"
@@ -276,7 +346,6 @@ if [ -z "$CUDA_HOME" ]; then
       fi
       log "✅ Manually set CUDA paths for cust_raw: CUDA_HOME=$CUDA_HOME"
     fi
-    shopt -u nullglob
     if [ -z "$CUDA_HOME" ] || [ ! -d "$CUDA_HOME" ]; then
       CUDA_HOME="/usr"
     fi
@@ -284,7 +353,11 @@ if [ -z "$CUDA_HOME" ]; then
 fi
 
 # Log CUDA fallback paths
-log "CUDA fallback paths tried: ${CUDA_MATCHES[*]:-none found}"
+if [ -z "${CUDA_FALLBACK_SCAN:-}" ]; then
+  log "CUDA fallback paths tried: none found"
+else
+  log "CUDA fallback paths tried: ${CUDA_FALLBACK_SCAN}"
+fi
 
 export CUDA_HOME
 if [ -d "$CUDA_HOME/bin" ]; then
@@ -382,7 +455,7 @@ fi
 
 # Ensure plan9.ns is staged early, fail fast if missing
 ensure_plan9_ns() {
-  local ns_path="$ROOT/config/plan9.ns"
+  ns_path="$ROOT/config/plan9.ns"
   if [ ! -f "$ns_path" ]; then
     echo "❌ Missing namespace file: $ns_path" >&2
     return 1
@@ -599,7 +672,7 @@ cargo +nightly build -p sel4-sys-extern-wrapper --release \
   -Z build-std=core,alloc,compiler_builtins \
   -Z build-std-features=compiler-builtins-mem
 WRAPPER_RLIB=$(find target/sel4-aarch64/release/deps -maxdepth 1 -name 'libsel4_sys_extern_wrapper*.rlib' -print -quit 2>/dev/null)
-if [[ -n "$WRAPPER_RLIB" ]]; then
+if [ -n "$WRAPPER_RLIB" ]; then
   log "✅ sel4-sys-extern-wrapper built: $(basename "$WRAPPER_RLIB")"
 else
   echo "❌ wrapper build failed: artifact missing" >&2
@@ -618,7 +691,7 @@ cargo +nightly build \
   -Z build-std=core,alloc,compiler_builtins \
   -Z build-std-features=compiler-builtins-mem
 ROOT_ARTIFACT=$(find target/sel4-aarch64/release/deps -maxdepth 1 -name 'libcohesix_root*.rlib' -print -quit 2>/dev/null)
-if [[ -n "$ROOT_ARTIFACT" ]]; then
+if [ -n "$ROOT_ARTIFACT" ]; then
   log "✅ cohesix_root built: $(basename "$ROOT_ARTIFACT")"
 else
   echo "❌ cohesix_root build failed: artifact missing" >&2
@@ -731,12 +804,15 @@ printf '%s\n' kernel.elf cohesix_root.elf kernel.dtb | \
 
 # Verify archive order
 log "📦 CPIO first entries:"
-mapfile -t _cpio_entries < <(cpio -it < "$ROOT/boot/cohesix.cpio" | head -n 3)
-printf '%s\n' "${_cpio_entries[@]}" >&3
-if [ "${_cpio_entries[0]}" != "kernel.elf" ] || \
-   [ "${_cpio_entries[1]}" != "cohesix_root.elf" ] || \
-   [ "${_cpio_entries[2]}" != "kernel.dtb" ]; then
-  echo "❌ Unexpected CPIO order (expected kernel.elf cohesix_root.elf kernel.dtb): ${_cpio_entries[*]}" >&2
+cpio_listing=$(cpio -it < "$ROOT/boot/cohesix.cpio" | head -n 3)
+printf '%s\n' "$cpio_listing" >&3
+cpio_entry_1=$(printf '%s\n' "$cpio_listing" | sed -n '1p')
+cpio_entry_2=$(printf '%s\n' "$cpio_listing" | sed -n '2p')
+cpio_entry_3=$(printf '%s\n' "$cpio_listing" | sed -n '3p')
+if [ "$cpio_entry_1" != "kernel.elf" ] || \
+   [ "$cpio_entry_2" != "cohesix_root.elf" ] || \
+   [ "$cpio_entry_3" != "kernel.dtb" ]; then
+  echo "❌ Unexpected CPIO order (expected kernel.elf cohesix_root.elf kernel.dtb): $cpio_listing" >&2
   exit 1
 fi
 
@@ -780,12 +856,12 @@ QEMU_LOG="$LOG_DIR/qemu_debug_$(date +%Y%m%d_%H%M%S).log"
 QEMU_SERIAL_LOG="$LOG_DIR/qemu_serial_$(date +%Y%m%d_%H%M%S).log"
 
 # Base QEMU flags
-QEMU_FLAGS=(-nographic -serial mon:stdio)
+QEMU_FLAG_LIST="-nographic -serial mon:stdio"
 
 if [ "${DEBUG_QEMU:-0}" = "1" ]; then
   echo "🔍 QEMU debug mode enabled: GDB stub on :1234, tracing CPU and MMU events"
   # Connect using: gdb -ex 'target remote :1234' <vmlinux>
-  QEMU_FLAGS+=(-S -s -d cpu_reset,int,mmu,page,unimp)
+  QEMU_FLAG_LIST="$QEMU_FLAG_LIST -S -s -d cpu_reset,int,mmu,page,unimp"
 fi
 
 # Launch QEMU
@@ -796,8 +872,8 @@ qemu-system-aarch64 \
   -kernel "$ROOT/boot/elfloader" \
   -initrd "$CPIO_IMAGE" \
   -dtb "$ROOT/third_party/seL4/artefacts/kernel.dtb" \
-  "${QEMU_FLAGS[@]}" \
-  -D "$QEMU_LOG" |& tee "$QEMU_SERIAL_LOG"
+  $QEMU_FLAG_LIST \
+  -D "$QEMU_LOG" 2>&1 | tee "$QEMU_SERIAL_LOG"
 
 # Report where logs went
 log "✅ QEMU debug log saved to $QEMU_LOG"
