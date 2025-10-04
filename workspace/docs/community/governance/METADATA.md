@@ -293,6 +293,10 @@
 | src/cloud/mod.rs | v0.2 | 2026-10-10 | COMMUNITY | | |
 | src/cloud/orchestrator.rs | v0.9 | 2027-08-17 | COMMUNITY | | |
 | workspace/cohesix/src/queen/orchestrator.rs | v1.0 | 2029-01-15 | COMMUNITY | | |
+| workspace/cohesix/src/trace/recorder.rs | v0.1 | 2029-02-15 | COMMUNITY | | |
+| workspace/cohesix/src/trace/distributed_runner.rs | v0.3 | 2025-08-17 | COMMUNITY | | |
+| workspace/cohesix/src/agent/snapshot.rs | v0.1 | 2025-07-04 | COMMUNITY | | |
+| workspace/cohesix/src/worker/vision_overlay.rs | v0.1 | 2025-07-08 | COMMUNITY | | |
 | src/lib.rs | v1.12 | 2026-12-31 | COMMUNITY | | |
 | src/metrics.rs | v0.2 | 2026-12-31 | COMMUNITY | | |
 | src/printk.rs | v0.1 | 2026-12-31 | COMMUNITY | | |

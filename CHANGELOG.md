@@ -805,7 +805,7 @@
 - **bootloader.c**: seL4 root task detecting CohRole and launching role init.
 - **cloud hooks**: dynamic agent fetch via `/srv/cloudinit`.
 - **init modules**: worker, kiosk and sensor roles with service registration.
-- **boottrace.py** script and Python bootflow test.
+- **trace::recorder** module and Rust bootflow integration test harness.
 
 ## [v0.14] - 2025-06-06
 ### Added
@@ -993,7 +993,7 @@
 
 ## [v0.56] - 2025-06-08
 ### Added
-- `autorun_tests.py` script for automatic test execution on file changes.
+- Rust `devwatcher` CLI for automatic test execution on file changes.
 
 
 ## [v0.62] - 2025-08-18
@@ -2619,7 +2619,7 @@
 ### Removed
 - Legacy webcam driver demos, services, and tests replaced by Plan9 streaming.
 ### Changed
-- `worker_inference.py` reads frames from `/srv/camera/frame.jpg`.
+- `worker::vision_overlay` processes frames from `/srv/camera/frame.jpg` via Rust.
 - `make_iso.sh` no longer packages `demo_physics_webcam`.
 - Documentation updated for Plan9 9P webcam model.
 - Removed prelude wildcard imports; added explicit alloc imports.
