@@ -31,6 +31,129 @@ if { [ "$HOST_ARCH" = "aarch64" ] || [ "$HOST_ARCH" = "arm64" ]; } && [ -z "$CRO
     SUDO=""
   fi
 fi
+
+if [ -z "$SUDO" ] && [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1; then
+  SUDO=sudo
+fi
+
+version_ge() {
+  ver_a="$1"
+  ver_b="$2"
+  if [ -z "$ver_a" ] || [ -z "$ver_b" ]; then
+    return 1
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$ver_a" "$ver_b" <<'PY'
+import sys
+from itertools import zip_longest
+
+def parse(value):
+    parts = []
+    for token in value.replace('-', '.').split('.'):
+        if not token:
+            continue
+        try:
+            parts.append(int(token))
+        except ValueError:
+            parts.append(0)
+    return parts
+
+a = parse(sys.argv[1])
+b = parse(sys.argv[2])
+for left, right in zip_longest(a, b, fillvalue=0):
+    if left > right:
+        sys.exit(0)
+    if left < right:
+        sys.exit(1)
+sys.exit(0)
+PY
+    return $?
+  fi
+  awk -v a="$ver_a" -v b="$ver_b" 'BEGIN {
+    n = split(a, aa, ".")
+    m = split(b, bb, ".")
+    len = (n > m ? n : m)
+    for (i = 1; i <= len; i++) {
+      x = (i in aa ? aa[i] + 0 : 0)
+      y = (i in bb ? bb[i] + 0 : 0)
+      if (x > y) { exit 0 }
+      if (x < y) { exit 1 }
+    }
+    exit 0
+  }'
+}
+
+resolve_path() {
+  target="$1"
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$target" <<'PY'
+import os
+import sys
+
+print(os.path.realpath(sys.argv[1]))
+PY
+    return
+  fi
+  if command -v readlink >/dev/null 2>&1; then
+    readlink -f "$target" && return
+  fi
+  (
+    cd "$(dirname "$target")" 2>/dev/null || exit 1
+    printf '%s\n' "$(pwd -P)/$(basename "$target")"
+  )
+}
+
+prepend_ld_library_path() {
+  new_path="$1"
+  case "${new_path}" in
+    "") return ;;
+  esac
+  case ":${LD_LIBRARY_PATH:-}:" in
+    *:"${new_path}":*) ;;
+    *)
+      if [ -n "${LD_LIBRARY_PATH:-}" ]; then
+        LD_LIBRARY_PATH="${new_path}:${LD_LIBRARY_PATH}"
+      else
+        LD_LIBRARY_PATH="${new_path}"
+      fi
+      export LD_LIBRARY_PATH
+      ;;
+  esac
+}
+
+add_library_path_list() {
+  list="$1"
+  if [ -z "$list" ]; then
+    return
+  fi
+  old_ifs=$IFS
+  IFS=':'
+  for dir in $list; do
+    prepend_ld_library_path "$dir"
+  done
+  IFS=$old_ifs
+}
+
+create_temp_dir() {
+  template="${1:-cohesix}"
+  if [ "$HOST_OS" = "Darwin" ]; then
+    mktemp -d -t "$template"
+  else
+    mktemp -d -t "${template}.XXXXXX" 2>/dev/null || mktemp -d
+  fi
+}
+
+detect_cpu_count() {
+  if command -v nproc >/dev/null 2>&1; then
+    nproc
+    return
+  fi
+  if [ "$HOST_OS" = "Darwin" ] && command -v sysctl >/dev/null 2>&1; then
+    sysctl -n hw.logicalcpu
+    return
+  fi
+  getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1
+}
 # Ensure ROOT is always set
 ROOT="${ROOT:-$HOME/cohesix}"
 export ROOT
@@ -61,30 +184,69 @@ if [ "${NEED_VENV:-0}" -eq 1 ]; then
     . "$VENV_DIR/bin/activate"
   fi
 fi
-export PYTHONPATH="$ROOT/third_party/seL4/kernel:/usr/local/lib/python3.12/dist-packages:${PYTHONPATH:-}"
+PYTHONPATH_ENTRIES="$ROOT/third_party/seL4/kernel"
+if [ "$HOST_OS" = "Linux" ]; then
+  if [ -d "/usr/local/lib/python3.12/dist-packages" ]; then
+    PYTHONPATH_ENTRIES="$PYTHONPATH_ENTRIES:/usr/local/lib/python3.12/dist-packages"
+  fi
+elif [ "$HOST_OS" = "Darwin" ]; then
+  for candidate in \
+    "/usr/local/lib/python3.12/site-packages" \
+    "/usr/local/lib/python3/site-packages" \
+    "/opt/homebrew/lib/python3.12/site-packages" \
+    "/opt/homebrew/lib/python3/site-packages"; do
+    if [ -d "$candidate" ]; then
+      PYTHONPATH_ENTRIES="$PYTHONPATH_ENTRIES:$candidate"
+      break
+    fi
+  done
+fi
+if [ -n "${PYTHONPATH:-}" ]; then
+  export PYTHONPATH="${PYTHONPATH_ENTRIES}:${PYTHONPATH}"
+else
+  export PYTHONPATH="$PYTHONPATH_ENTRIES"
+fi
 export MEMCHR_DISABLE_RUNTIME_CPU_FEATURE_DETECTION=1
 export CUDA_HOME="${CUDA_HOME:-/usr}"
 export CUDA_INCLUDE_DIR="${CUDA_INCLUDE_DIR:-$CUDA_HOME/include}"
 
 if [ -z "${CUDA_LIBRARY_PATH:-}" ]; then
-  case "$HOST_ARCH" in
-    x86_64|amd64)
-      DEFAULT_CUDA_LIB="/usr/lib/x86_64-linux-gnu"
-      ;;
-    aarch64|arm64)
-      DEFAULT_CUDA_LIB="/usr/lib/aarch64-linux-gnu"
+  case "$HOST_OS" in
+    Darwin)
+      for candidate in \
+        "/usr/local/cuda/lib" \
+        "/usr/local/lib" \
+        "/opt/homebrew/lib"; do
+        if [ -d "$candidate" ]; then
+          CUDA_LIBRARY_PATH="$candidate"
+          break
+        fi
+      done
       ;;
     *)
-      DEFAULT_CUDA_LIB=""
+      case "$HOST_ARCH" in
+        x86_64|amd64)
+          DEFAULT_CUDA_LIB="/usr/lib/x86_64-linux-gnu"
+          ;;
+        aarch64|arm64)
+          DEFAULT_CUDA_LIB="/usr/lib/aarch64-linux-gnu"
+          ;;
+        *)
+          DEFAULT_CUDA_LIB=""
+          ;;
+      esac
+      if [ -n "${DEFAULT_CUDA_LIB:-}" ] && [ -d "$DEFAULT_CUDA_LIB" ]; then
+        CUDA_LIBRARY_PATH="$DEFAULT_CUDA_LIB"
+      fi
       ;;
   esac
-  if [ -n "$DEFAULT_CUDA_LIB" ] && [ -d "$DEFAULT_CUDA_LIB" ]; then
-    export CUDA_LIBRARY_PATH="$DEFAULT_CUDA_LIB"
+  if [ -n "${CUDA_LIBRARY_PATH:-}" ]; then
+    export CUDA_LIBRARY_PATH
   fi
 fi
 
 if [ -n "${CUDA_LIBRARY_PATH:-}" ]; then
-  export LD_LIBRARY_PATH="$CUDA_LIBRARY_PATH:${LD_LIBRARY_PATH:-}"
+  add_library_path_list "$CUDA_LIBRARY_PATH"
 fi
 
 if [ -d "$CUDA_HOME/bin" ]; then
@@ -254,7 +416,10 @@ EOF
 log "✅ config.yaml created at $CONFIG_PATH"
 
 export SEL4_LIB_DIR="${SEL4_LIB_DIR:-$ROOT/third_party/seL4/output}"
-export SEL4_INCLUDE="${SEL4_INCLUDE:-$(realpath "$ROOT/third_party/seL4/include")}"
+SEL4_INCLUDE_PATH="$ROOT/third_party/seL4/include"
+if [ -d "$SEL4_INCLUDE_PATH" ]; then
+  export SEL4_INCLUDE="${SEL4_INCLUDE:-$(resolve_path "$SEL4_INCLUDE_PATH")}"
+fi
 # Delay use of seL4-specific RUSTFLAGS until cross compilation phase
 CROSS_RUSTFLAGS="-C link-arg=-L${SEL4_LIB_DIR} ${RUSTFLAGS:-}"
 export SEL4_ARCH="${SEL4_ARCH:-aarch64}"
@@ -329,20 +494,35 @@ if [ -z "$CUDA_HOME" ]; then
     # Manual override for environments where cuda.h is in /usr/include but no nvcc exists
     if [ "$CUDA_HOME" = "/usr" ] && [ -f "/usr/include/cuda.h" ]; then
       export CUDA_INCLUDE_DIR="/usr/include"
-      case "$HOST_ARCH" in
-        aarch64|arm64)
-          CUDA_FALLBACK_LIB="/usr/lib/aarch64-linux-gnu"
-          ;;
-        x86_64|amd64)
-          CUDA_FALLBACK_LIB="/usr/lib/x86_64-linux-gnu"
-          ;;
-        *)
-          CUDA_FALLBACK_LIB=""
-          ;;
-      esac
+      CUDA_FALLBACK_LIB=""
+      if [ "$HOST_OS" = "Darwin" ]; then
+        for candidate in \
+          "/usr/local/cuda/lib" \
+          "/usr/local/lib" \
+          "/opt/homebrew/lib"; do
+          if [ -d "$candidate" ]; then
+            CUDA_FALLBACK_LIB="$candidate"
+            break
+          fi
+        done
+      else
+        case "$HOST_ARCH" in
+          aarch64|arm64)
+            CUDA_FALLBACK_LIB="/usr/lib/aarch64-linux-gnu"
+            ;;
+          x86_64|amd64)
+            CUDA_FALLBACK_LIB="/usr/lib/x86_64-linux-gnu"
+            ;;
+          *)
+            CUDA_FALLBACK_LIB=""
+            ;;
+        esac
+      fi
       if [ -n "$CUDA_FALLBACK_LIB" ] && [ -d "$CUDA_FALLBACK_LIB" ]; then
-        export CUDA_LIBRARY_PATH="$CUDA_FALLBACK_LIB"
-        export LD_LIBRARY_PATH="$CUDA_LIBRARY_PATH:$LD_LIBRARY_PATH"
+        if [ -z "${CUDA_LIBRARY_PATH:-}" ]; then
+          export CUDA_LIBRARY_PATH="$CUDA_FALLBACK_LIB"
+        fi
+        add_library_path_list "$CUDA_FALLBACK_LIB"
       fi
       log "✅ Manually set CUDA paths for cust_raw: CUDA_HOME=$CUDA_HOME"
     fi
@@ -364,15 +544,22 @@ if [ -d "$CUDA_HOME/bin" ]; then
   export PATH="$CUDA_HOME/bin:$PATH"
 fi
 if [ -d "$CUDA_HOME/lib64" ]; then
-  export LD_LIBRARY_PATH="$CUDA_HOME/lib64:${LD_LIBRARY_PATH:-}"
+  prepend_ld_library_path "$CUDA_HOME/lib64"
 elif [ -d "$CUDA_HOME/lib" ]; then
-  export LD_LIBRARY_PATH="$CUDA_HOME/lib:${LD_LIBRARY_PATH:-}"
+  prepend_ld_library_path "$CUDA_HOME/lib"
 fi
 # Add robust library path fallback for common distros
-if [ -d "/usr/lib/x86_64-linux-gnu" ]; then
-  export LD_LIBRARY_PATH="/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH"
+if [ "$HOST_OS" = "Linux" ] && [ -d "/usr/lib/x86_64-linux-gnu" ]; then
+  prepend_ld_library_path "/usr/lib/x86_64-linux-gnu"
 fi
-export CUDA_LIBRARY_PATH="$LD_LIBRARY_PATH"
+if [ "$HOST_OS" = "Darwin" ]; then
+  for candidate in "/usr/local/lib" "/opt/homebrew/lib"; do
+    if [ -d "$candidate" ]; then
+      prepend_ld_library_path "$candidate"
+    fi
+  done
+fi
+export CUDA_LIBRARY_PATH="${CUDA_LIBRARY_PATH:-${LD_LIBRARY_PATH:-}}"
 
 if [ -f "$CUDA_HOME/include/cuda.h" ]; then
   log "✅ Found cuda.h in $CUDA_HOME/include"
@@ -418,20 +605,40 @@ else
 fi
 
 CMAKE_VER=$(cmake --version 2>/dev/null | head -n1 | awk '{print $3}')
-if ! dpkg --compare-versions "$CMAKE_VER" ge 3.20; then
-  log "cmake $CMAKE_VER too old; installing newer release binary"
-  TMP_CMAKE="$(mktemp -d)"
+if [ -z "$CMAKE_VER" ] || ! version_ge "$CMAKE_VER" "3.20"; then
+  log "cmake ${CMAKE_VER:-not installed} too old; installing newer release binary"
+  TMP_CMAKE="$(create_temp_dir cohesix_cmake)"
   CMAKE_V=3.28.1
   ARCH=$(uname -m)
-  case "$ARCH" in
-    aarch64|arm64)
-      CMAKE_PKG="cmake-${CMAKE_V}-linux-aarch64.tar.gz";;
+  case "$HOST_OS" in
+    Darwin)
+      CMAKE_PKG="cmake-${CMAKE_V}-macos-universal.tar.gz"
+      CMAKE_CONTENT_DIR="cmake-${CMAKE_V}-macos-universal/CMake.app/Contents"
+      ;;
     *)
-      CMAKE_PKG="cmake-${CMAKE_V}-linux-x86_64.tar.gz";;
+      case "$ARCH" in
+        aarch64|arm64)
+          CMAKE_PKG="cmake-${CMAKE_V}-linux-aarch64.tar.gz"
+          ;;
+        *)
+          CMAKE_PKG="cmake-${CMAKE_V}-linux-x86_64.tar.gz"
+          ;;
+      esac
+      CMAKE_CONTENT_DIR="cmake-${CMAKE_V}-linux-*"
+      ;;
   esac
   wget -q "https://github.com/Kitware/CMake/releases/download/v${CMAKE_V}/${CMAKE_PKG}" -O "$TMP_CMAKE/$CMAKE_PKG"
   tar -xf "$TMP_CMAKE/$CMAKE_PKG" -C "$TMP_CMAKE"
-  $SUDO cp -r "$TMP_CMAKE"/cmake-${CMAKE_V}-linux-*/{bin,share} /usr/local/
+  if [ "$HOST_OS" = "Darwin" ]; then
+    if [ -d "$TMP_CMAKE/$CMAKE_CONTENT_DIR/bin" ]; then
+      $SUDO cp -R "$TMP_CMAKE/$CMAKE_CONTENT_DIR/bin" /usr/local/
+    fi
+    if [ -d "$TMP_CMAKE/$CMAKE_CONTENT_DIR/share" ]; then
+      $SUDO cp -R "$TMP_CMAKE/$CMAKE_CONTENT_DIR/share" /usr/local/
+    fi
+  else
+    $SUDO cp -r "$TMP_CMAKE"/${CMAKE_CONTENT_DIR}/{bin,share} /usr/local/
+  fi
   rm -rf "$TMP_CMAKE"
   hash -r
 fi
@@ -583,7 +790,9 @@ if ! command -v gcc >/dev/null 2>&1; then
   echo "❌ gcc not found. Install with: sudo apt install build-essential" >&2
   exit 1
 fi
-CC_TEST_C="$(mktemp --suffix=.c cohesix_cc_test.XXXX)"
+CC_TEST_TMP="$(mktemp)"
+CC_TEST_C="${CC_TEST_TMP}.c"
+mv "$CC_TEST_TMP" "$CC_TEST_C"
 cat <<'EOF' > "$CC_TEST_C"
 #include <stdio.h>
 int main(void){ printf("hello\n"); return 0; }
@@ -603,7 +812,7 @@ if [ -f "$ROOT/CMakeLists.txt" ]; then
   cd "$ROOT"
   mkdir -p build
   cd "$ROOT/build"
-  cmake "$ROOT" && make -j$(nproc)
+  cmake "$ROOT" && make -j"$(detect_cpu_count)"
 else
   echo "⚠️ No CMakeLists.txt found at $ROOT, skipping C build"
 fi
@@ -892,7 +1101,7 @@ MANIFEST="$STAGE_DIR/manifest.json"
 echo '{"binaries":[' > "$MANIFEST"
 first=1
 for bin in $(find "$STAGE_DIR/bin" -type f -perm -111); do
-  hash=$(sha256sum "$bin" | awk '{print $1}')
+  hash=$(shasum -a 256 "$bin" | awk '{print $1}')
   ver=$(git rev-parse --short HEAD)
   if [ $first -eq 0 ]; then echo ',' >> "$MANIFEST"; fi
   first=0
