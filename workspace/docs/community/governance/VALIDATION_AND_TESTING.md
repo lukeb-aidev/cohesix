@@ -13,7 +13,7 @@ Cohesix uses layered tests and continuous validation to guarantee reliability ac
 - **Integration:** boot the OS, mount services, and replay traces
 - **Fuzzing:** 9P protocol and syscall mediation with libFuzzer
 - **Multi-Arch CI:** run `./test_all_arch.sh` for aarch64 and x86_64
-- **Auto-run script:** `scripts/autorun_tests.py` watches for changes and executes tests automatically.
+- **Auto-run tooling:** the Rust `devwatcher` binary watches for changes and executes tests automatically.
 - **Replay Harness:** re-run traces from `/history/` and verify outcomes
   - `Ensemble Agent Tests:` use `COHESIX_ENS_TMP` or `$TMPDIR` to isolate environments. Validate cleanup, trace replay integrity, and temp path safety.
 
