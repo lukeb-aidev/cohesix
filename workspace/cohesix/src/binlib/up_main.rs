@@ -1,10 +1,10 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: up_main.rs v0.1
 // Author: Lukas Bower
-// Date Modified: 2025-07-22
+// Date Modified: 2029-10-05
 
 use crate::cli::federation;
-use crate::CohError;
+use crate::{new_err, CohError};
 #[allow(unused_imports)]
 use alloc::{boxed::Box, string::String, vec::Vec};
 use clap::{Parser, Subcommand};
@@ -32,12 +32,16 @@ pub fn run(cli: Cli) -> Result<(), CohError> {
     match cli.command {
         Commands::Join { peer } => {
             let app = federation::build();
-            let matches = app.get_matches_from(vec!["join", "--peer", &peer]);
+            let matches = app
+                .try_get_matches_from(vec!["cohup", "connect", "--peer", &peer])
+                .map_err(|err| new_err(format!("federation connect invocation invalid: {err}")))?;
             federation::exec(&matches)?;
         }
         Commands::ListPeers => {
             let app = federation::build();
-            let matches = app.get_matches_from(vec!["list-peers"]);
+            let matches = app
+                .try_get_matches_from(vec!["cohup", "list-peers"])
+                .map_err(|err| new_err(format!("federation list-peers invocation invalid: {err}")))?;
             federation::exec(&matches)?;
         }
     }
