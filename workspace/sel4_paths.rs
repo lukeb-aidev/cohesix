@@ -7,6 +7,24 @@ use std::collections::{BTreeSet, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+pub fn copy_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
+    if src.is_dir() {
+        fs::create_dir_all(dst)?;
+        for entry in fs::read_dir(src)? {
+            let entry = entry?;
+            let src_path = entry.path();
+            let dst_path = dst.join(entry.file_name());
+            copy_recursive(&src_path, &dst_path)?;
+        }
+    } else if src.exists() {
+        if let Some(parent) = dst.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::copy(src, dst)?;
+    }
+    Ok(())
+}
+
 pub fn project_root(manifest_dir: &str) -> PathBuf {
     Path::new(manifest_dir)
         .parent()
@@ -128,52 +146,71 @@ pub fn create_arch_alias(
     if target_sel4_arch.exists() {
         fs::remove_dir_all(&target_sel4_arch)?;
     }
+    if target_mode.exists() {
+        fs::remove_dir_all(&target_mode)?;
+    }
     fs::create_dir_all(&target_arch)?;
     fs::create_dir_all(&target_sel4_arch)?;
     fs::create_dir_all(&target_mode)?;
 
-    for entry in fs::read_dir(&src)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.extension().map(|e| e == "h").unwrap_or(false) {
-            let fname = entry.file_name();
-            fs::copy(&path, target_arch.join(&fname))?;
-            let wrapper = target_sel4_arch.join(&fname);
+    crate::sel4_paths::copy_recursive(&src, &target_arch)?;
+
+    fn generate_wrappers(
+        src_base: &Path,
+        dst_base: &Path,
+        rel_base: &str,
+    ) -> io::Result<()> {
+        for entry in fs::read_dir(src_base)? {
+            let entry = entry?;
+            let path = entry.path();
+            let rel = path.strip_prefix(src_base).unwrap();
+            let dst_path = dst_base.join(rel);
+            if path.is_dir() {
+                fs::create_dir_all(&dst_path)?;
+                generate_wrappers(&path, &dst_path, rel_base)?;
+            } else if path.extension().map(|e| e == "h").unwrap_or(false) {
+                if let Some(parent) = dst_path.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                fs::write(
+                    &dst_path,
+                    format!(
+                        "#pragma once\n#include \"{}/{}\"\n",
+                        rel_base,
+                        rel.to_string_lossy()
+                    ),
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    generate_wrappers(&target_arch, &target_sel4_arch, "../arch")?;
+
+    if let Some(parent) = src.parent() {
+        let invocation = parent.join("invocation.h");
+        if invocation.exists() {
+            let arch_invocation = target_arch.join("invocation.h");
+            fs::copy(&invocation, &arch_invocation)?;
             fs::write(
-                &wrapper,
-                format!(
-                    "#pragma once\n#include \"../arch/{}\"\n",
-                    fname.to_string_lossy()
-                ),
+                target_sel4_arch.join("invocation.h"),
+                "#pragma once\n#include \"../arch/invocation.h\"\n",
+            )?;
+        }
+
+        let types_gen = parent.join("types_gen.h");
+        if types_gen.exists() {
+            let arch_types_gen = target_arch.join("types_gen.h");
+            fs::copy(&types_gen, &arch_types_gen)?;
+            fs::write(
+                target_sel4_arch.join("types_gen.h"),
+                "#pragma once\n#include \"../arch/types_gen.h\"\n",
             )?;
         }
     }
 
-    // include architecture-generic invocation header
-    let invocation = src
-        .parent()
-        .expect("sel4_arch path missing parent")
-        .join("invocation.h");
-    if invocation.exists() {
-        fs::copy(&invocation, target_arch.join("invocation.h"))?;
-        let wrapper = target_sel4_arch.join("invocation.h");
-        fs::write(
-            &wrapper,
-            "#pragma once\n#include \"../arch/invocation.h\"\n",
-        )?;
-    }
-
-    let types_gen = src
-        .parent()
-        .expect("sel4_arch path missing parent")
-        .join("types_gen.h");
-    if types_gen.exists() {
-        fs::copy(&types_gen, target_arch.join("types_gen.h"))?;
-        let wrapper = target_sel4_arch.join("types_gen.h");
-        fs::write(&wrapper, "#pragma once\n#include \"../arch/types_gen.h\"\n")?;
-    }
-
     let mode_wrapper = target_mode.join("types.h");
+    fs::create_dir_all(mode_wrapper.parent().unwrap())?;
     fs::write(
         &mode_wrapper,
         "#pragma once\n#include \"../sel4_arch/types.h\"\n",

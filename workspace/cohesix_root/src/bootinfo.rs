@@ -88,11 +88,6 @@ pub unsafe fn bootinfo() -> &'static BootInfo {
     &BOOTINFO
 }
 
-#[no_mangle]
-pub extern "C" fn seL4_GetBootInfo(_: usize) -> *const BootInfo {
-    unsafe { &BOOTINFO as *const _ }
-}
-
 pub unsafe fn dump_bootinfo() {
     let bi = bootinfo();
     crate::coherr!(

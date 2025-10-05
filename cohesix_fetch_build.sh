@@ -389,6 +389,31 @@ log() { echo "[$(date +%H:%M:%S)] $1" | tee -a "$LOG_FILE" >&3; }
 log "🛠️ [Build Start] $(date)"
 log "🚀 Using existing repository at $ROOT"
 
+configure_libclang() {
+  if [ -z "${LIBCLANG_PATH:-}" ]; then
+    for candidate in \
+      "/Library/Developer/CommandLineTools/usr/lib" \
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib"; do
+      if [ -f "$candidate/libclang.dylib" ]; then
+        LIBCLANG_PATH="$candidate"
+        break
+      fi
+    done
+  fi
+  if [ -n "${LIBCLANG_PATH:-}" ] && [ -d "$LIBCLANG_PATH" ]; then
+    export LIBCLANG_PATH
+    case ":${DYLD_LIBRARY_PATH:-}:" in
+      *:"${LIBCLANG_PATH}:"*) ;;
+      *)
+        export DYLD_LIBRARY_PATH="${LIBCLANG_PATH}${DYLD_LIBRARY_PATH:+:${DYLD_LIBRARY_PATH}}"
+        ;;
+    esac
+    log "✅ Using libclang from $LIBCLANG_PATH"
+  else
+    log "⚠️ libclang.dylib not found; bindgen builds may fail"
+  fi
+}
+
 # Phase-specific minimal builds
 PHASE=""
 for arg in "$@"; do
@@ -404,6 +429,7 @@ done
 
 
 SEL4_LIB_DIR="${SEL4_LIB_DIR:-$ROOT/third_party/seL4/lib}"
+export SEL4_ARCH="${SEL4_ARCH:-aarch64}"
 
 validate_sel4_artifacts() {
   sel4_root="$ROOT/third_party/seL4"
@@ -428,6 +454,17 @@ validate_sel4_artifacts() {
   if [ ! -d "$sel4_root/include" ]; then
     log "❌ seL4 headers missing under $sel4_root/include"
     log "➡️ Re-run '$ROOT/third_party/seL4/fetch_sel4.sh --non-interactive' to install required headers."
+    exit 1
+  fi
+
+  arch_header="$sel4_root/include/libsel4/sel4_arch/sel4/sel4_arch/${SEL4_ARCH}/simple_types.h"
+  if [ ! -f "$arch_header" ]; then
+    log "❌ Required header missing: $arch_header"
+    log "➡️ Ensure Cohesix fetch has installed the upstream seL4 headers for ${SEL4_ARCH}."
+    exit 1
+  fi
+  if ! grep -q 'SEL4_WORD_IS_UINT64' "$arch_header" 2>/dev/null; then
+    log "❌ Unexpected contents in $arch_header (expected upstream macros)."
     exit 1
   fi
 
@@ -489,6 +526,7 @@ COHESIX_RUST_LINKER_FLAGS="-C linker=${COHESIX_LINKER} -C linker-flavor=${COHESI
 COHESIX_RUST_GC_FLAGS="-C link-arg=--gc-sections -C link-arg=--eh-frame-hdr"
 
 if [ -n "$PHASE" ]; then
+  configure_libclang
   cd "$ROOT/workspace"
   CROSS_RUSTFLAGS="${COHESIX_RUST_LINKER_FLAGS} ${COHESIX_RUST_GC_FLAGS} -C link-arg=-L${SEL4_LIB_DIR}"
   if [ "$PHASE" = "1" ]; then
@@ -533,8 +571,13 @@ if [ -n "$PHASE" ]; then
       -Z build-std=core,alloc,compiler_builtins \
       -Z build-std-features=compiler-builtins-mem
     ROOT_ARTIFACT=$(find target/sel4-aarch64/release/deps -maxdepth 1 -name 'libcohesix_root*.rlib' -print -quit 2>/dev/null)
-    if [ -n "$ROOT_ARTIFACT" ]; then
-      log "✅ Phase 3 build succeeded: $(basename "$ROOT_ARTIFACT")"
+    if [ -z "$ROOT_ARTIFACT" ]; then
+      BIN_ARTIFACT=$(find target/sel4-aarch64/release -maxdepth 1 -type f -name 'cohesix_root' -print -quit 2>/dev/null)
+    else
+      BIN_ARTIFACT=""
+    fi
+    if [ -n "$ROOT_ARTIFACT" ] || [ -n "$BIN_ARTIFACT" ]; then
+      log "✅ Phase 3 build succeeded: $(basename "${ROOT_ARTIFACT:-$BIN_ARTIFACT}")"
     else
       echo "❌ cohesix_root artifact missing" >&2
       exit 1
@@ -584,8 +627,6 @@ if [ -d "$SEL4_INCLUDE_PATH" ]; then
 fi
 # Delay use of seL4-specific RUSTFLAGS until cross compilation phase
 CROSS_RUSTFLAGS="${COHESIX_RUST_LINKER_FLAGS} ${COHESIX_RUST_GC_FLAGS} -C link-arg=-L${SEL4_LIB_DIR}"
-export SEL4_ARCH="${SEL4_ARCH:-aarch64}"
-
 if [ -f "$ROOT/scripts/load_arch_config.sh" ]; then
   . "$ROOT/scripts/load_arch_config.sh"
 else
@@ -634,27 +675,7 @@ export PROTOC="$PROTOC_BIN"
 log "✅ Using protoc at $PROTOC_BIN"
 "$COHESIX_LINKER" --version >&3 || true
 
-if [ -z "${LIBCLANG_PATH:-}" ]; then
-  for candidate in \
-    "/Library/Developer/CommandLineTools/usr/lib" \
-    "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib"; do
-    if [ -f "$candidate/libclang.dylib" ]; then
-      export LIBCLANG_PATH="$candidate"
-      break
-    fi
-  done
-fi
-if [ -n "${LIBCLANG_PATH:-}" ] && [ -d "$LIBCLANG_PATH" ]; then
-  case ":${DYLD_LIBRARY_PATH:-}:" in
-    *":${LIBCLANG_PATH}:"*) ;;
-    *)
-      export DYLD_LIBRARY_PATH="${LIBCLANG_PATH}${DYLD_LIBRARY_PATH:+:${DYLD_LIBRARY_PATH}}"
-      ;;
-  esac
-  log "✅ Using libclang from $LIBCLANG_PATH"
-else
-  log "⚠️ libclang.dylib not found; bindgen builds may fail"
-fi
+configure_libclang
 
 log "\ud83d\udcc5 Fetching Cargo dependencies..."
 cd "$ROOT/workspace"
@@ -1197,8 +1218,13 @@ cargo +nightly build \
   -Z build-std=core,alloc,compiler_builtins \
   -Z build-std-features=compiler-builtins-mem
 ROOT_ARTIFACT=$(find target/sel4-aarch64/release/deps -maxdepth 1 -name 'libcohesix_root*.rlib' -print -quit 2>/dev/null)
-if [ -n "$ROOT_ARTIFACT" ]; then
-  log "✅ cohesix_root built: $(basename "$ROOT_ARTIFACT")"
+if [ -z "$ROOT_ARTIFACT" ]; then
+  BIN_ARTIFACT=$(find target/sel4-aarch64/release -maxdepth 1 -type f -name 'cohesix_root' -print -quit 2>/dev/null)
+else
+  BIN_ARTIFACT=""
+fi
+if [ -n "$ROOT_ARTIFACT" ] || [ -n "$BIN_ARTIFACT" ]; then
+  log "✅ cohesix_root built: $(basename "${ROOT_ARTIFACT:-$BIN_ARTIFACT}")"
 else
   echo "❌ cohesix_root build failed: artifact missing" >&2
   exit 1

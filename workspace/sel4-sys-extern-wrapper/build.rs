@@ -7,25 +7,9 @@ use std::{
     env, fs,
     path::{Path, PathBuf},
 };
-
-fn copy_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
-    if !dst.exists() {
-        fs::create_dir_all(dst)?;
-    }
-    for entry in fs::read_dir(src)? {
-        let entry = entry?;
-        let path = entry.path();
-        let target = dst.join(entry.file_name());
-        if path.is_dir() {
-            copy_recursive(&path, &target)?;
-        } else {
-            fs::copy(&path, &target)?;
-        }
-    }
-    Ok(())
-}
 #[path = "../sel4_paths.rs"]
 mod sel4_paths;
+use sel4_paths::copy_recursive;
 
 fn generate_wrapper_header(out_dir: &Path) -> PathBuf {
     let header_path = out_dir.join("sel4_wrapper.h");
@@ -96,30 +80,7 @@ fn main() {
     }
     let simple_types = out_dir.join("sel4").join("arch").join("simple_types.h");
     if !simple_types.exists() {
-        let fallback = include_root
-            .join("libsel4")
-            .join("sel4")
-            .join("sel4")
-            .join("simple_types.h");
-        if fallback.exists() {
-            fs::create_dir_all(simple_types.parent().unwrap())
-                .expect("create sel4/arch dir");
-            fs::copy(&fallback, &simple_types)
-                .expect("copy fallback simple_types.h");
-            println!(
-                "cargo:warning=sel4/arch/simple_types.h missing; copied fallback from {}",
-                fallback.display()
-            );
-        } else {
-            println!(
-                "cargo:warning=fallback simple_types.h not found at {}; generating stub",
-                fallback.display()
-            );
-            fs::create_dir_all(simple_types.parent().unwrap())
-                .expect("create sel4/arch dir");
-            fs::write(&simple_types, "#pragma once\n#include <sel4/simple_types.h>\n")
-                .expect("write stub simple_types.h");
-        }
+        panic!("missing {}", simple_types.display());
     }
 
     let mut include_dirs = Vec::new();

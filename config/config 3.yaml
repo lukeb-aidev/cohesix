@@ -1,0 +1,11 @@
+# CLASSIFICATION: COMMUNITY
+# Filename: config.yaml
+# Author: Lukas Bower
+# Date Modified: 2025-10-05
+role: QueenPrimary
+network:
+  enabled: true
+  interfaces:
+    - eth0
+logging:
+  level: info
