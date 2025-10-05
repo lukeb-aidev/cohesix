@@ -2,7 +2,7 @@
 # CLASSIFICATION: COMMUNITY
 # Filename: setup_build_env.sh v0.8
 # Author: Lukas Bower
-# Date Modified: 2030-07-06
+# Date Modified: 2030-07-07
 set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
@@ -122,6 +122,17 @@ ensure_homebrew_shellenv() {
     fi
 }
 
+ensure_brew_tap() {
+    local tap_name="$1"
+    if brew tap | grep -Fxq "$tap_name"; then
+        msg "Homebrew tap $tap_name already configured."
+        return
+    fi
+
+    msg "Adding Homebrew tap $tap_name …"
+    brew tap "$tap_name"
+}
+
 ensure_brew_packages() {
     local manager_script="$ROOT/scripts/manage_homebrew_packages.sh"
     if [ ! -x "$manager_script" ]; then
@@ -160,6 +171,7 @@ if [[ "$MACOS_MAJOR" =~ ^[0-9]+$ && "$MACOS_MAJOR" -lt 26 ]]; then
 fi
 
 ensure_homebrew_shellenv
+ensure_brew_tap "messense/macos-cross-toolchains"
 
 default_shell="${SHELL:-}"
 if [[ "$default_shell" == *"zsh" ]]; then
@@ -239,7 +251,7 @@ fi
 
 brew_pkgs=(
     qemu
-    aarch64-unknown-linux-gnu
+    messense/macos-cross-toolchains/aarch64-unknown-linux-gnu
     llvm
     cmake
     ninja
