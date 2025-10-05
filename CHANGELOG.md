@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v1.23
+// Filename: CHANGELOG.md v1.24
 // Author: Lukas Bower
-// Date Modified: 2030-03-07
+// Date Modified: 2030-03-08
 
 [vNext] - 2029-02-21
 ### Added
@@ -2823,8 +2823,6 @@
   `out/`.
 
 ## [v0.424] - 2027-08-06
-### Added
-- Backup script `cohesix_fetch_build.bak` created.
 ### Fixed
 - `cohesix_fetch_build.sh` avoids copying `init.conf` onto itself and logs each
   build step clearly.
