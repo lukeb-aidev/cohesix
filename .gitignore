@@ -5,6 +5,7 @@ build/
 !srv/upload/test-validation.log
 codex_logs/
 logs/
+out/diag_*/
 
 # Rust
 /target/
