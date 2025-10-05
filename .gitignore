@@ -1,4 +1,7 @@
+# CLASSIFICATION: COMMUNITY
+# Filename: .gitignore v0.2
 # Author: Lukas Bower
+# Date Modified: 2030-07-06
 # Logs and artifacts
 build/
 *.log
@@ -18,7 +21,10 @@ workspace/Cargo.lock
 # Python
 __pycache__/
 *.py[cod]
-.env
+.venv-runtime/
+
+# Tracked environment configuration
+!.env
 
 # VS Code
 .vscode/
