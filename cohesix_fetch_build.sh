@@ -15,6 +15,19 @@ fi
 HOST_ARCH="$(uname -m)"
 HOST_OS="$(uname -s)"
 SUDO=""
+: "${ENABLE_PYTHON:=0}"
+PYTHON_HELPER_NOTICE=0
+
+python_skip_log() {
+  if [ "${PYTHON_HELPER_NOTICE}" -eq 0 ]; then
+    PYTHON_HELPER_NOTICE=1
+    if command -v log >/dev/null 2>&1; then
+      log "⏭️ python3 unavailable; using POSIX fallbacks for helper utilities"
+    else
+      printf '%s\n' "⏭️ python3 unavailable; using POSIX fallbacks for helper utilities" >&2
+    fi
+  fi
+}
 
 CROSS_GCC=""
 for candidate in aarch64-linux-gnu-gcc aarch64-unknown-linux-gnu-gcc; do
@@ -69,6 +82,7 @@ sys.exit(0)
 PY
     return $?
   fi
+  python_skip_log
   awk -v a="$ver_a" -v b="$ver_b" 'BEGIN {
     n = split(a, aa, ".")
     m = split(b, bb, ".")
@@ -94,6 +108,7 @@ print(os.path.realpath(sys.argv[1]))
 PY
     return
   fi
+  python_skip_log
   if command -v readlink >/dev/null 2>&1; then
     readlink -f "$target" && return
   fi
@@ -163,48 +178,6 @@ mkdir -p "$LOG_DIR"
 set -eu
 if (set -o pipefail) 2>/dev/null; then
   set -o pipefail
-fi
-# Early virtualenv setup
-VENV_DIR=".venv_${HOST_ARCH}"
-if [ -z "${VIRTUAL_ENV:-}" ]; then
-  NEED_VENV=1
-else
-  case "$VIRTUAL_ENV" in
-    *"/${VENV_DIR}") NEED_VENV=0 ;;
-    *) NEED_VENV=1 ;;
-  esac
-fi
-if [ "${NEED_VENV:-0}" -eq 1 ]; then
-  if [ -d "$VENV_DIR" ]; then
-    echo "🔄 Activating existing virtualenv: $VENV_DIR"
-    . "$VENV_DIR/bin/activate"
-  else
-    echo "⚙️ Creating new virtualenv: $VENV_DIR"
-    python3 -m venv "$VENV_DIR"
-    . "$VENV_DIR/bin/activate"
-  fi
-fi
-PYTHONPATH_ENTRIES="$ROOT/third_party/seL4/kernel"
-if [ "$HOST_OS" = "Linux" ]; then
-  if [ -d "/usr/local/lib/python3.12/dist-packages" ]; then
-    PYTHONPATH_ENTRIES="$PYTHONPATH_ENTRIES:/usr/local/lib/python3.12/dist-packages"
-  fi
-elif [ "$HOST_OS" = "Darwin" ]; then
-  for candidate in \
-    "/usr/local/lib/python3.12/site-packages" \
-    "/usr/local/lib/python3/site-packages" \
-    "/opt/homebrew/lib/python3.12/site-packages" \
-    "/opt/homebrew/lib/python3/site-packages"; do
-    if [ -d "$candidate" ]; then
-      PYTHONPATH_ENTRIES="$PYTHONPATH_ENTRIES:$candidate"
-      break
-    fi
-  done
-fi
-if [ -n "${PYTHONPATH:-}" ]; then
-  export PYTHONPATH="${PYTHONPATH_ENTRIES}:${PYTHONPATH}"
-else
-  export PYTHONPATH="$PYTHONPATH_ENTRIES"
 fi
 export MEMCHR_DISABLE_RUNTIME_CPU_FEATURE_DETECTION=1
 export CUDA_HOME="${CUDA_HOME:-/usr}"
@@ -323,7 +296,12 @@ log "🚀 Using existing repository at $ROOT"
 PHASE=""
 for arg in "$@"; do
   case $arg in
-    --phase=*) PHASE="${arg#*=}" ;;
+    --phase=*)
+      PHASE="${arg#*=}"
+      ;;
+    --enable-python)
+      ENABLE_PYTHON=1
+      ;;
   esac
 done
 
@@ -732,19 +710,41 @@ fi
 log "📦 Updating submodules (if any)..."
 git submodule update --init --recursive
 
-log "🐍 Setting up Python environment..."
-pip install ply lxml --break-system-packages
-# Ensure $HOME/.local/bin is included for user installs
 export PATH="$HOME/.local/bin:$PATH"
-# Upgrade pip and base tooling; fall back to ensurepip if needed
-python -m pip install --upgrade pip setuptools wheel --break-system-packages \
-  || python -m ensurepip --upgrade
+if [ "$ENABLE_PYTHON" -eq 1 ]; then
+  if command -v python3 >/dev/null 2>&1; then
+    log "🐍 Python tooling enabled (--enable-python)"
+    if python3 -m pip --version >/dev/null 2>&1; then
+      :
+    elif python3 -m ensurepip --upgrade >/dev/null 2>&1; then
+      log "✅ ensurepip provisioned pip"
+    else
+      log "⚠️ python3 detected but pip/ensurepip unavailable; skipping Python dependency installation"
+    fi
 
-if [ -f requirements.txt ]; then
-  python -m pip install -r requirements.txt --break-system-packages
-fi
-if [ -f tests/requirements.txt ]; then
-  python -m pip install -r tests/requirements.txt --break-system-packages
+    if python3 -m pip --version >/dev/null 2>&1; then
+      if ! python3 -m pip install --upgrade --user pip setuptools wheel; then
+        log "⚠️ Failed to upgrade pip tooling; continuing without Python dependency installation"
+      fi
+      if ! python3 -m pip install --user ply lxml; then
+        log "⚠️ Failed to install base Python packages ply/lxml"
+      fi
+      if [ -f requirements.txt ]; then
+        if ! python3 -m pip install --user -r requirements.txt; then
+          log "⚠️ Failed to install requirements.txt dependencies"
+        fi
+      fi
+      if [ -f tests/requirements.txt ]; then
+        if ! python3 -m pip install --user -r tests/requirements.txt; then
+          log "⚠️ Failed to install tests/requirements.txt dependencies"
+        fi
+      fi
+    fi
+  else
+    log "⚠️ --enable-python provided but python3 not found; skipping Python dependency installation"
+  fi
+else
+  log "⏭️ Skipping Python tooling (run with --enable-python to install Python dependencies)"
 fi
 
 # --- GUI orchestrator -----------------------------------------------------
