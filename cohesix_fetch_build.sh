@@ -2,7 +2,7 @@
 # CLASSIFICATION: COMMUNITY
 # Filename: cohesix_fetch_build.sh v1.59
 # Author: Lukas Bower
-# Date Modified: 2029-02-22
+# Date Modified: 2029-11-19
 
 # This script fetches and builds the Cohesix project, including seL4 and other dependencies.
 
@@ -411,8 +411,8 @@ cp "$ROOT/workspace/cohesix/src/kernel/init.rc" "$STAGE_DIR/srv/init.rc"
 chmod +x "$STAGE_DIR/srv/init.rc"
 log "✅ Created Cohesix FS structure"
 # 🗂 Prepare /srv namespace for tests (clean and set role)
-log "🗂 Preparing /srv namespace for tests..."
-echo "DroneWorker" | sudo tee /srv/cohrole
+log "🗂 Preparing staged /srv namespace under $STAGE_DIR for tests..."
+echo "DroneWorker" > "$STAGE_DIR/srv/cohrole"
 # Always create a robust config/config.yaml and stage it
 log "📂 Ensuring configuration file exists..."
 CONFIG_PATH="$ROOT/config/config.yaml"
