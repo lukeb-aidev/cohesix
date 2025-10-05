@@ -105,10 +105,13 @@ fn main() {
     println!("cargo:rustc-link-arg=-T{}", root_linker.display());
     println!("cargo:rerun-if-changed={}", root_linker.display());
 
-    let sel4_linker = fs::canonicalize(lib_dir.join("sel4.ld"))
-        .expect("missing sel4.ld under third_party/seL4/lib");
-    println!("cargo:rustc-link-arg=-T{}", sel4_linker.display());
-    println!("cargo:rerun-if-changed={}", sel4_linker.display());
+    let sel4_linker_path = lib_dir.join("sel4.ld");
+    if let Ok(sel4_linker) = fs::canonicalize(&sel4_linker_path) {
+        println!("cargo:rustc-link-arg=-T{}", sel4_linker.display());
+        println!("cargo:rerun-if-changed={}", sel4_linker.display());
+    } else {
+        println!("cargo:warning=sel4.ld not found under {}; relying on rootserver link.ld only", lib_dir.display());
+    }
 
     let libsel4 = fs::canonicalize(lib_dir.join("libsel4.a"))
         .expect("missing libsel4.a under third_party/seL4/lib");
