@@ -1,0 +1,19 @@
+# CLASSIFICATION: COMMUNITY
+# Filename: config/plan9.ns v0.11
+# Author: Lukas Bower
+# Date Modified: 2027-12-20
+
+# Cohesix canonical namespace
+bind -a /usr/coh/bin /bin          # WHY: Cohesix utilities in default PATH
+bind -a /bin /bin                  # WHY: overlay standard Plan9 commands
+bind -a /usr /usr                  # WHY: standard userland tree
+bind -a /usr/py /usr/py            # WHY: Python environment for orchestration
+bind -a /tmp /tmp                  # WHY: ephemeral workspace overlay
+bind -a /srv /srv                  # WHY: service file namespace
+bind -a /mnt /mnt                  # WHY: maintain mount hierarchy
+bind -a /mnt/9root /               # WHY: root overlay served via 9P
+srv? cuda /srv/cuda                # WHY: remote CUDA service if present
+srv? /mnt/cuda /srv/cuda           # WHY: fallback to local CUDA mount
+srv? telemetry /srv/telemetry      # WHY: microkernel telemetry events
+srv? cohrole /srv/cohrole          # WHY: expose immutable CohRole
+srv? secure9p /srv/secure9p        # WHY: enforce Secure9P policy
