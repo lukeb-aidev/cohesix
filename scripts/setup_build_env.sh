@@ -43,6 +43,58 @@ fi
 msg(){ printf "\e[32m==>\e[0m %s\n" "$*"; }
 die(){ printf "\e[31m[ERR]\e[0m %s\n" "$*" >&2; exit 1; }
 
+install_cohesix_zshrc_snippet() {
+    local repo_path="$1"
+    local workspace_dir="$2"
+    local zshrc="$HOME/.zshrc"
+    local begin_marker="# >>> Cohesix auto-venv >>>"
+    local end_marker="# <<< Cohesix auto-venv <<<"
+    local tmp_file="$workspace_dir/.zshrc.cohesix.tmp"
+
+    mkdir -p "$workspace_dir"
+    if [ ! -f "$zshrc" ]; then
+        : > "$zshrc"
+    fi
+
+    local begin_escaped end_escaped
+    begin_escaped="$(printf '%s\n' "$begin_marker" | sed 's/[\\/&]/\\&/g')"
+    end_escaped="$(printf '%s\n' "$end_marker" | sed 's/[\\/&]/\\&/g')"
+
+    sed "/$begin_escaped/,/$end_escaped/d" "$zshrc" > "$tmp_file"
+
+    cat <<'EOF' >> "$tmp_file"
+
+# >>> Cohesix auto-venv >>>
+[[ $- != *i* ]] && return
+
+COHESIX_AUTO_ENV_ROOT="__COHESIX_REPO__"
+
+if [ -f "$COHESIX_AUTO_ENV_ROOT/.env" ]; then
+    set -a
+    # shellcheck disable=SC1090
+    source "$COHESIX_AUTO_ENV_ROOT/.env"
+    set +a
+    echo "🔹 Loaded Cohesix environment variables."
+fi
+
+if [ -d "$COHESIX_AUTO_ENV_ROOT/.venv" ]; then
+    COHESIX_AUTO_VENV_ROOT="$COHESIX_AUTO_ENV_ROOT"
+    # shellcheck disable=SC1090
+    if source "$COHESIX_AUTO_ENV_ROOT/.venv/bin/activate"; then
+        echo "🔹 Activating Cohesix Python virtual environment..."
+    else
+        echo "⚠️  Cohesix virtual environment activation failed." >&2
+    fi
+fi
+# <<< Cohesix auto-venv <<<
+EOF
+
+    local replaced_file="$workspace_dir/.zshrc.cohesix.replaced"
+    awk -v rp="$repo_path" '{gsub("__COHESIX_REPO__", rp)}1' "$tmp_file" > "$replaced_file"
+    mv "$replaced_file" "$zshrc"
+    rm -f "$tmp_file"
+}
+
 ensure_homebrew_shellenv() {
     if command -v brew >/dev/null 2>&1; then
         eval "$(brew shellenv)"
@@ -142,7 +194,7 @@ cohesix_prepend_path() {
     fi
 }
 
-cohesix_prepend_path "$ROOT/.venv/bin"
+cohesix_prepend_path "$ROOT/.venv-runtime/bin"
 EOF_ZSH
 
     if [[ -n "$brew_prefix" ]]; then
@@ -180,6 +232,8 @@ EOF_ZSH
         } >> "$zprofile"
     fi
 
+    install_cohesix_zshrc_snippet "$ROOT" "$zsh_env_dir"
+
     msg "Zsh environment snippet installed at $zsh_env_file. Restart your shell or run 'source ~/.zprofile' to apply changes."
 fi
 
@@ -206,15 +260,15 @@ if ! command -v qemu-system-aarch64 >/dev/null 2>&1; then
     die "qemu-system-aarch64 not found on PATH after installation. Confirm Homebrew's qemu package is correctly installed."
 fi
 
-VENV="$ROOT/.venv"
-if [ -d "$VENV" ]; then
-    rm -rf "$VENV"
+VENV_RUNTIME="$ROOT/.venv-runtime"
+if [ -d "$VENV_RUNTIME" ]; then
+    rm -rf "$VENV_RUNTIME"
 fi
 
-"$PYTHON_BIN" -m venv "$VENV"
-VENV_PYTHON="$VENV/bin/python3"
+"$PYTHON_BIN" -m venv "$VENV_RUNTIME"
+VENV_PYTHON="$VENV_RUNTIME/bin/python3"
 if [ ! -x "$VENV_PYTHON" ]; then
-    VENV_PYTHON="$VENV/bin/python"
+    VENV_PYTHON="$VENV_RUNTIME/bin/python"
 fi
 
 "$VENV_PYTHON" -m pip install --upgrade pip >/dev/null
