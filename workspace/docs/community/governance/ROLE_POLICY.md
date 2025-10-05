@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: ROLE_POLICY.md v1.1
 // Author: Lukas Bower
-// Date Modified: 2026-09-30
+// Date Modified: 2029-11-28
 
 # Role Policy
 
@@ -89,6 +89,33 @@ This manifest guides both the OS initialization sequence and the Codex automatio
 Each role's interface and privileges are strictly enforced by the Secure9P validator and policy files, ensuring only authorized namespaces and operations are available at runtime.
 
 Federated deployments may declare hierarchical roles. A Queen inheriting from another uses `inherit:<parent_id>` in `/srv/queen_id/role` which is exchanged during federation handshakes. All child queens inherit base policies while applying their own overlays.
+
+
+## Validator Execution Matrix
+
+The runtime validator enforces syscall permissions per role. The static
+`validator_sync.log` has been deleted; use the table below as the source of
+truth and update it alongside policy changes.
+
+| Role                 | Mount | Exec | Apply Namespace |
+|----------------------|:-----:|:----:|:---------------:|
+| QueenPrimary         |  ✅   |  ✅  |       ✅        |
+| RegionalQueen        |  ✅   |  ✅  |       ✅        |
+| BareMetalQueen       |  ✅   |  ✅  |       ✅        |
+| DroneWorker          |  ✅   |  ✅  |       ❌        |
+| InteractiveAiBooth   |  ✅   |  ✅  |       ❌        |
+| KioskInteractive     |  ✅   |  ✅  |       ❌        |
+| GlassesAgent         |  ✅   |  ✅  |       ❌        |
+| SensorRelay          |  ✅   |  ❌  |       ❌        |
+| SimulatorTest        |  ✅   |  ✅  |       ❌        |
+
+- Overlay namespace application is restricted to QueenPrimary nodes; even other
+  queens require explicit overrides during federation sync.
+- DroneWorker exec privileges are validated to ensure physics/telemetry agents
+  can bootstrap without elevated namespace rights.
+
+Run `cohtrace validator matrix` (see validator CLI help) to produce a live
+snapshot and confirm these settings after any policy migration.
 
 
 ## Queen Policy

@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: COH_CC_DEVELOPER_GUIDE.md v1.0
 // Author: Lukas Bower
-// Date Modified: 2025-07-31
+// Date Modified: 2029-11-28
 
 # Coh_CC Developer Guide
 
@@ -26,6 +26,27 @@ Coh_CC supports a streamlined, secure subset of languages, each with a clear rol
 > No Python interpreter is present on Cohesix nodes.
 
 Additional language support under evaluation includes WebAssembly for portable sandboxed agents.
+
+---
+
+### Go Tool Ownership Map
+
+The historical `go_tool_map.log` has been retired in favor of the living table
+below. Refer to it whenever you decide whether a command-line tool should
+remain in Go or graduate to Rust for tighter capability enforcement.
+
+| Tooling Group            | Status | Notes |
+|-------------------------|--------|-------|
+| `coh-9p-helper`         | Go     | Linux helper retained in Go for rapid iteration on 9P service glue. |
+| `gui-orchestrator`      | Go     | GUI orchestration plane stays in Go for web/UI ergonomics. |
+| `srvctl`                | Rust   | Ported to Rust for capability-safe service orchestration. |
+| `indexserver`           | Rust   | Rust rewrite ensures deterministic indexing with validator hooks. |
+| `devwatcher`            | Rust   | Migrated to Rust to harden filesystem event handling. |
+| `physics-server`        | Rust   | Physics server lives in Rust alongside Rapier bindings. |
+
+This matrix mirrors the active toolchain manifest—update it whenever a tool
+changes implementation language so that downstream automation does not rely on
+static log artefacts.
 
 ---
 
