@@ -15,29 +15,34 @@ use std::io::Write;
 
 fn generate_dtb_constants(out_dir: &str, manifest_dir: &str) {
     let dts_path = format!("{}/../../third_party/seL4/kernel.dts", manifest_dir);
-    let dts = fs::read_to_string(&dts_path).expect("read kernel.dts");
-
     let mut uart_base = 0x0900_0000u64;
-    if let Some(stdout_line) = dts.lines().find(|l| l.contains("stdout-path")) {
-        if let Some(path) = stdout_line.split('"').nth(1) {
-            let node = path.trim_start_matches('/');
-            if let Some(idx) = dts.find(&format!("{} {{", node)) {
-                if let Some(reg_line) = dts[idx..].lines().find(|l| l.contains("reg =")) {
-                    if let Some(values) =
-                        reg_line.split('<').nth(1).and_then(|p| p.split('>').next())
-                    {
-                        let parts: Vec<&str> = values.split_whitespace().collect();
-                        if parts.len() >= 2 {
-                            let hi = u64::from_str_radix(parts[0].trim_start_matches("0x"), 16)
-                                .unwrap_or(0);
-                            let lo = u64::from_str_radix(parts[1].trim_start_matches("0x"), 16)
-                                .unwrap_or(0);
-                            uart_base = (hi << 32) | lo;
+    if let Ok(dts) = fs::read_to_string(&dts_path) {
+        if let Some(stdout_line) = dts.lines().find(|l| l.contains("stdout-path")) {
+            if let Some(path) = stdout_line.split('"').nth(1) {
+                let node = path.trim_start_matches('/');
+                if let Some(idx) = dts.find(&format!("{} {{", node)) {
+                    if let Some(reg_line) = dts[idx..].lines().find(|l| l.contains("reg =")) {
+                        if let Some(values) =
+                            reg_line.split('<').nth(1).and_then(|p| p.split('>').next())
+                        {
+                            let parts: Vec<&str> = values.split_whitespace().collect();
+                            if parts.len() >= 2 {
+                                let hi = u64::from_str_radix(parts[0].trim_start_matches("0x"), 16)
+                                    .unwrap_or(0);
+                                let lo = u64::from_str_radix(parts[1].trim_start_matches("0x"), 16)
+                                    .unwrap_or(0);
+                                uart_base = (hi << 32) | lo;
+                            }
                         }
                     }
                 }
             }
         }
+    } else {
+        println!(
+            "cargo:warning=kernel.dts not found at {}; using default UART base 0x{:x}",
+            dts_path, uart_base
+        );
     }
 
     let mut file =
