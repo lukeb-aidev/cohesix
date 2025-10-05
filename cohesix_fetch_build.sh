@@ -414,6 +414,54 @@ configure_libclang() {
   fi
 }
 
+prepare_sel4_target_spec() {
+  if [ -n "${SEL4_TARGET_SPEC_SANITIZED:-}" ] && [ -f "$SEL4_TARGET_SPEC_SANITIZED" ]; then
+    return
+  fi
+  local src="$ROOT/workspace/cohesix_root/sel4-aarch64.json"
+  if [ ! -f "$src" ]; then
+    log "❌ Missing target specification at $src"
+    exit 1
+  fi
+
+  local target_dir
+  target_dir="${COHESIX_TRACE_TMP:-${TMPDIR:-}}"
+  if [ -z "$target_dir" ] || [ ! -d "$target_dir" ]; then
+    target_dir="$(create_temp_dir cohesix-target)"
+  fi
+  mkdir -p "$target_dir"
+  local sanitized="$target_dir/sel4-aarch64.json"
+
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$src" "$sanitized" <<'PY'
+import json
+import sys
+
+src_path, dst_path = sys.argv[1:3]
+with open(src_path, 'r', encoding='utf-8') as src_file:
+    data = json.load(src_file)
+
+value = data.get("target-pointer-width")
+if isinstance(value, str):
+    try:
+        data["target-pointer-width"] = int(value, 0)
+    except ValueError:
+        data["target-pointer-width"] = 64
+
+with open(dst_path, 'w', encoding='utf-8') as dst_file:
+    json.dump(data, dst_file, indent=2)
+    dst_file.write("\n")
+PY
+  else
+    python_skip_log
+    sed 's/"target-pointer-width"[[:space:]]*:[[:space:]]*"\{0,1\}64"/"target-pointer-width": 64/' "$src" >"$sanitized"
+  fi
+
+  export SEL4_TARGET_SPEC_SRC="$src"
+  export SEL4_TARGET_SPEC_SANITIZED="$sanitized"
+  log "✅ Prepared nightly target spec at $SEL4_TARGET_SPEC_SANITIZED"
+}
+
 # Phase-specific minimal builds
 PHASE=""
 for arg in "$@"; do
@@ -472,6 +520,8 @@ validate_sel4_artifacts() {
 }
 
 validate_sel4_artifacts
+
+prepare_sel4_target_spec
 
 configure_musl_toolchain() {
   if [ -z "$MUSL_CC" ]; then
@@ -550,7 +600,7 @@ if [ -n "$PHASE" ]; then
     # Ensure Rust source is available for build-std
     rustup component add rust-src --toolchain nightly || true
     cargo +nightly build -p sel4-sys-extern-wrapper --release \
-      --target=cohesix_root/sel4-aarch64.json \
+      --target="${SEL4_TARGET_SPEC_SANITIZED:-$SEL4_TARGET_SPEC_SRC}" \
       -Z build-std=core,alloc,compiler_builtins \
       -Z build-std-features=compiler-builtins-mem
     WRAPPER_RLIB=$(find target/sel4-aarch64/release/deps -maxdepth 1 -name 'libsel4_sys_extern_wrapper*.rlib' -print -quit 2>/dev/null)
@@ -567,7 +617,7 @@ if [ -n "$PHASE" ]; then
     # Ensure Rust source is available for build-std
     rustup component add rust-src --toolchain nightly || true
     cargo +nightly build -p cohesix_root --release \
-      --target=cohesix_root/sel4-aarch64.json \
+      --target="${SEL4_TARGET_SPEC_SANITIZED:-$SEL4_TARGET_SPEC_SRC}" \
       -Z build-std=core,alloc,compiler_builtins \
       -Z build-std-features=compiler-builtins-mem
     ROOT_ARTIFACT=$(find target/sel4-aarch64/release/deps -maxdepth 1 -name 'libcohesix_root*.rlib' -print -quit 2>/dev/null)
@@ -682,10 +732,10 @@ cd "$ROOT/workspace"
 if [ -z "${CARGO_NET_OFFLINE+x}" ]; then
   export CARGO_NET_OFFLINE=true
 fi
-if ! cargo +nightly fetch; then
+if ! CARGO_BUILD_TARGET="${SEL4_TARGET_SPEC_SANITIZED:-$SEL4_TARGET_SPEC_SRC}" cargo +nightly fetch; then
   if [ "${CARGO_NET_OFFLINE}" = "true" ]; then
     log "⚠️ Offline fetch failed; retrying with network access"
-    CARGO_NET_OFFLINE=false cargo +nightly fetch
+    CARGO_NET_OFFLINE=false CARGO_BUILD_TARGET="${SEL4_TARGET_SPEC_SANITIZED:-$SEL4_TARGET_SPEC_SRC}" cargo +nightly fetch
   else
     false
   fi
@@ -1195,7 +1245,7 @@ export LDFLAGS="-L${SEL4_LIB_DIR}"
 export RUSTFLAGS="-C panic=abort -L${SEL4_LIB_DIR} ${CROSS_RUSTFLAGS}"
 rustup component add rust-src --toolchain nightly || true
 cargo +nightly build -p sel4-sys-extern-wrapper --release \
-  --target=cohesix_root/sel4-aarch64.json \
+  --target="${SEL4_TARGET_SPEC_SANITIZED:-$SEL4_TARGET_SPEC_SRC}" \
   -Z build-std=core,alloc,compiler_builtins \
   -Z build-std-features=compiler-builtins-mem
 WRAPPER_RLIB=$(find target/sel4-aarch64/release/deps -maxdepth 1 -name 'libsel4_sys_extern_wrapper*.rlib' -print -quit 2>/dev/null)
@@ -1214,7 +1264,7 @@ rustup component add rust-src --toolchain nightly || true
 cargo +nightly build \
   -p cohesix_root \
   --release \
-  --target=cohesix_root/sel4-aarch64.json \
+  --target="${SEL4_TARGET_SPEC_SANITIZED:-$SEL4_TARGET_SPEC_SRC}" \
   -Z build-std=core,alloc,compiler_builtins \
   -Z build-std-features=compiler-builtins-mem
 ROOT_ARTIFACT=$(find target/sel4-aarch64/release/deps -maxdepth 1 -name 'libcohesix_root*.rlib' -print -quit 2>/dev/null)
@@ -1446,8 +1496,8 @@ echo "🪵 Full log saved to $LOG_FILE" >&3
 export SEL4_INCLUDE
 export SEL4_LIB_DIR
 RUSTFLAGS="-C panic=abort -L $SEL4_LIB_DIR $CROSS_RUSTFLAGS" \
-  cargo build -p sel4-sys-extern-wrapper --release --target=cohesix_root/sel4-aarch64.json
+  cargo build -p sel4-sys-extern-wrapper --release --target="${SEL4_TARGET_SPEC_SANITIZED:-$SEL4_TARGET_SPEC_SRC}"
 RUSTFLAGS="-C panic=abort -L $SEL4_LIB_DIR $CROSS_RUSTFLAGS" \
-  cargo build -p cohesix_root --release --target=cohesix_root/sel4-aarch64.json
+  cargo build -p cohesix_root --release --target="${SEL4_TARGET_SPEC_SANITIZED:-$SEL4_TARGET_SPEC_SRC}"
 RUSTFLAGS="-C panic=abort -L $SEL4_LIB_DIR $CROSS_RUSTFLAGS" \
-  cargo test --release --target=cohesix_root/sel4-aarch64.json --workspace
+  cargo test --release --target="${SEL4_TARGET_SPEC_SANITIZED:-$SEL4_TARGET_SPEC_SRC}" --workspace
