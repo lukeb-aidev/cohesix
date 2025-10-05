@@ -634,6 +634,28 @@ export PROTOC="$PROTOC_BIN"
 log "✅ Using protoc at $PROTOC_BIN"
 "$COHESIX_LINKER" --version >&3 || true
 
+if [ -z "${LIBCLANG_PATH:-}" ]; then
+  for candidate in \
+    "/Library/Developer/CommandLineTools/usr/lib" \
+    "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib"; do
+    if [ -f "$candidate/libclang.dylib" ]; then
+      export LIBCLANG_PATH="$candidate"
+      break
+    fi
+  done
+fi
+if [ -n "${LIBCLANG_PATH:-}" ] && [ -d "$LIBCLANG_PATH" ]; then
+  case ":${DYLD_LIBRARY_PATH:-}:" in
+    *":${LIBCLANG_PATH}:"*) ;;
+    *)
+      export DYLD_LIBRARY_PATH="${LIBCLANG_PATH}${DYLD_LIBRARY_PATH:+:${DYLD_LIBRARY_PATH}}"
+      ;;
+  esac
+  log "✅ Using libclang from $LIBCLANG_PATH"
+else
+  log "⚠️ libclang.dylib not found; bindgen builds may fail"
+fi
+
 log "\ud83d\udcc5 Fetching Cargo dependencies..."
 cd "$ROOT/workspace"
 if [ -z "${CARGO_NET_OFFLINE+x}" ]; then
