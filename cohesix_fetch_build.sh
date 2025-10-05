@@ -901,6 +901,27 @@ GUI_DIR="$ROOT/go/cmd/gui-orchestrator"
 if [ -d "$GUI_DIR" ]; then
     log "👁️  Building GUI orchestrator"
 
+    GO_CMD="${GO_CMD:-}"
+    if [ -z "$GO_CMD" ]; then
+        if command -v go >/dev/null 2>&1; then
+            GO_CMD="$(command -v go)"
+        elif [ -n "${GOROOT:-}" ] && resolved=$(resolve_tool_path "$GOROOT/bin/go"); then
+            GO_CMD="$resolved"
+        elif resolved=$(resolve_tool_path "$HOME/go/bin/go"); then
+            GO_CMD="$resolved"
+        elif resolved=$(resolve_tool_path "/usr/local/go/bin/go"); then
+            GO_CMD="$resolved"
+        elif resolved=$(resolve_tool_path "/opt/homebrew/bin/go"); then
+            GO_CMD="$resolved"
+        fi
+    fi
+
+    if [ -z "$GO_CMD" ] || [ ! -x "$GO_CMD" ]; then
+        echo "❌ Go toolchain not found. Install Go (e.g. via 'brew install go') or set GO_CMD/GOROOT/GOBIN so the go binary is discoverable." | tee -a "$SUMMARY_ERRORS" >&3
+        echo "➡️ See Solution Architecture §7 and Backlog E4-F10 for GUI control-plane prerequisites." | tee -a "$SUMMARY_ERRORS" >&3
+        exit 1
+    fi
+
     case "$COH_ARCH" in
         aarch64) GOARCH=arm64  ;;
         x86_64)  GOARCH=amd64 ;;
@@ -910,17 +931,17 @@ if [ -d "$GUI_DIR" ]; then
     pushd "$GUI_DIR" >/dev/null
 
     # One tidy is enough; harmless if already tidy
-    go mod tidy
+    "$GO_CMD" mod tidy
 
     log "  running go test"
-    if ! go test ./...; then
+    if ! "$GO_CMD" test ./...; then
         echo "❌ GUI orchestrator tests failed" | tee -a "$SUMMARY_TEST_FAILS" >&3
         exit 1
     fi
 
     OUT_BIN="$GO_HELPERS_DIR/gui-orchestrator"
     log "  compiling (GOOS=linux GOARCH=$GOARCH)"
-    if GOOS=linux GOARCH=$GOARCH go build -tags unix -o "$OUT_BIN" .; then
+    if GOOS=linux GOARCH=$GOARCH "$GO_CMD" build -tags unix -o "$OUT_BIN" .; then
         chmod +x "$OUT_BIN"
         log "✅ GUI orchestrator built → $OUT_BIN"
     else
