@@ -13,9 +13,36 @@ pub mod bindings {
 }
 
 pub use bindings::*;
-pub use bindings::{
-    seL4_CallWithMRs, seL4_DebugHalt, seL4_DebugPutChar, seL4_GetBootInfo, seL4_InitBootInfo,
-};
+pub use bindings::{seL4_CallWithMRs, seL4_GetBootInfo, seL4_InitBootInfo};
+
+#[no_mangle]
+pub extern "C" fn seL4_DebugPutChar(c: cty::c_int) {
+    unsafe {
+        const SYSCALL: usize = (-9i32) as usize;
+        let ch = c as usize;
+        core::arch::asm!(
+            "mov x0, {arg}",
+            "mov x7, {syscall}",
+            "svc 0",
+            arg = in(reg) ch,
+            syscall = in(reg) SYSCALL,
+            options(nostack, preserves_flags)
+        );
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn seL4_DebugHalt() {
+    unsafe {
+        const SYSCALL: usize = (-11i32) as usize;
+        core::arch::asm!(
+            "mov x7, {syscall}",
+            "svc 0",
+            syscall = in(reg) SYSCALL,
+            options(nostack, preserves_flags)
+        );
+    }
+}
 
 #[cfg(target_arch = "aarch64")]
 #[no_mangle]
@@ -24,10 +51,8 @@ pub unsafe extern "C" fn seL4_Yield() {
     core::arch::asm!("mov x7, {syscall}", "svc 0", syscall = in(reg) SYSCALL, options(nostack, preserves_flags));
 }
 
-use core::panic::PanicInfo;
-
 #[cfg(feature = "panic-handler")]
 #[panic_handler]
-fn panic(_info: &PanicInfo) -> ! {
+fn panic(_info: &core::panic::PanicInfo) -> ! {
     loop {}
 }
