@@ -599,7 +599,7 @@ mod tests {
 
         let stream = TcpStream::connect(("127.0.0.1", port)).expect("connect");
         let server_name = ServerName::try_from("localhost").expect("server name");
-        let mut conn =
+        let conn =
             ClientConnection::new(Arc::new(client_config), server_name).expect("client conn");
         let mut tls_stream = StreamOwned::new(conn, stream);
         tls_stream

@@ -14,7 +14,7 @@
 extern crate alloc;
 
 use alloc::{string::String, vec::Vec};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::env;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
@@ -49,14 +49,14 @@ impl core::fmt::Display for PathRuleError {
 
 impl std::error::Error for PathRuleError {}
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 struct RawRules {
     allowed_roots: Vec<String>,
     #[serde(default)]
     rewrites: Vec<RawRewrite>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 struct RawRewrite {
     from: String,
     to: String,
@@ -69,7 +69,7 @@ struct RewriteRule {
 }
 
 /// Normalizes trace paths according to loaded rules.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PathNormalizer {
     allowed_roots: Vec<PathBuf>,
     rewrites: Vec<RewriteRule>,
