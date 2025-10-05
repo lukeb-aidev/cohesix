@@ -42,6 +42,8 @@
 ### Removed
 - Removed `workspace/cohesix/src/geometry/sweep_line_intersection.py` and its
   metadata listing now that the sweep-line prototype has been retired.
+- Dropped the unused `release_logs/` bundle and placeholder `boot_trace.json`
+  artefact to keep the repository free of stale log payloads.
 
 [2025-06-15] Docs Consolidation Pass v1.0
 • Merged duplicate security files (THREAT_MODEL.md, Q_DAY.md)
