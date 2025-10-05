@@ -158,6 +158,57 @@ create_temp_dir() {
   fi
 }
 
+resolve_tool_path() {
+  candidate="$1"
+  if [ -z "$candidate" ]; then
+    return 1
+  fi
+  if [ -x "$candidate" ]; then
+    printf '%s\n' "$candidate"
+    return 0
+  fi
+  command -v "$candidate" 2>/dev/null
+}
+
+select_linker() {
+  # Allow callers to override via LD_LLD or COHESIX_LINKER
+  if [ -n "${COHESIX_LINKER:-}" ] && [ -n "${COHESIX_LINKER_FLAVOR:-}" ]; then
+    return 0
+  fi
+
+  if resolved=$(resolve_tool_path "${LD_LLD:-}"); then
+    COHESIX_LINKER="$resolved"
+    COHESIX_LINKER_FLAVOR="ld.lld"
+    return 0
+  fi
+
+  if resolved=$(resolve_tool_path ld.lld); then
+    COHESIX_LINKER="$resolved"
+    COHESIX_LINKER_FLAVOR="ld.lld"
+    return 0
+  fi
+
+  if resolved=$(resolve_tool_path ld64.lld); then
+    COHESIX_LINKER="$resolved"
+    COHESIX_LINKER_FLAVOR="ld.lld"
+    return 0
+  fi
+
+  if resolved=$(resolve_tool_path aarch64-linux-gnu-ld); then
+    COHESIX_LINKER="$resolved"
+    COHESIX_LINKER_FLAVOR="ld"
+    return 0
+  fi
+
+  if resolved=$(resolve_tool_path aarch64-linux-gnu-gcc); then
+    COHESIX_LINKER="$resolved"
+    COHESIX_LINKER_FLAVOR="gcc"
+    return 0
+  fi
+
+  return 1
+}
+
 detect_cpu_count() {
   if command -v nproc >/dev/null 2>&1; then
     nproc
@@ -350,9 +401,27 @@ validate_sel4_artifacts() {
 
 validate_sel4_artifacts
 
+if ! select_linker; then
+  echo "❌ Unable to locate a suitable linker (expected ld.lld, ld64.lld, aarch64-linux-gnu-ld, or aarch64-linux-gnu-gcc)." >&2
+  echo "➡️ Install LLVM's lld or export LD_LLD=/path/to/ld.lld before rerunning." >&2
+  exit 1
+fi
+
+export COHESIX_LINKER
+export COHESIX_LINKER_FLAVOR
+
+if [ "${COHESIX_LINKER_FLAVOR}" = "ld.lld" ]; then
+  log "🔗 Using ld.lld at ${COHESIX_LINKER}"
+else
+  log "⚠️ ld.lld unavailable; using fallback linker ${COHESIX_LINKER} (flavor: ${COHESIX_LINKER_FLAVOR})"
+fi
+
+COHESIX_RUST_LINKER_FLAGS="-C linker=${COHESIX_LINKER} -C linker-flavor=${COHESIX_LINKER_FLAVOR}"
+COHESIX_RUST_GC_FLAGS="-C link-arg=--gc-sections -C link-arg=--eh-frame-hdr"
+
 if [ -n "$PHASE" ]; then
   cd "$ROOT/workspace"
-  CROSS_RUSTFLAGS="-C link-arg=-L${SEL4_LIB_DIR} ${RUSTFLAGS:-}"
+  CROSS_RUSTFLAGS="${COHESIX_RUST_LINKER_FLAGS} ${COHESIX_RUST_GC_FLAGS} -C link-arg=-L${SEL4_LIB_DIR}"
   if [ "$PHASE" = "1" ]; then
     log "🔨 Phase 1: Building host crates for musl userland"
     cargo build --release --workspace \
@@ -381,7 +450,7 @@ if [ -n "$PHASE" ]; then
   elif [ "$PHASE" = "3" ]; then
     log "🔨 Phase 3: Building cohesix_root under nightly"
     export LDFLAGS="-L${SEL4_LIB_DIR}"
-    export RUSTFLAGS="-C panic=abort -C linker=ld.lld -C link-arg=--gc-sections -C link-arg=--eh-frame-hdr -L${SEL4_LIB_DIR} ${CROSS_RUSTFLAGS:-}"
+    export RUSTFLAGS="-C panic=abort -L${SEL4_LIB_DIR} ${CROSS_RUSTFLAGS}"
     # Ensure Rust source is available for build-std
     rustup component add rust-src --toolchain nightly || true
     cargo +nightly build -p cohesix_root --release \
@@ -439,7 +508,7 @@ if [ -d "$SEL4_INCLUDE_PATH" ]; then
   export SEL4_INCLUDE="${SEL4_INCLUDE:-$(resolve_path "$SEL4_INCLUDE_PATH")}"
 fi
 # Delay use of seL4-specific RUSTFLAGS until cross compilation phase
-CROSS_RUSTFLAGS="-C link-arg=-L${SEL4_LIB_DIR} ${RUSTFLAGS:-}"
+CROSS_RUSTFLAGS="${COHESIX_RUST_LINKER_FLAGS} ${COHESIX_RUST_GC_FLAGS} -C link-arg=-L${SEL4_LIB_DIR}"
 export SEL4_ARCH="${SEL4_ARCH:-aarch64}"
 
 if [ -f "$ROOT/scripts/load_arch_config.sh" ]; then
@@ -462,17 +531,16 @@ if ! rustup component list --toolchain nightly | grep -q 'rust-src (installed)';
   echo "🔧 Installing missing rust-src component for nightly" >&2
   rustup component add rust-src --toolchain nightly
 fi
-if ! rustup target list --installed | grep -q "^aarch64-unknown-none$"; then
+if ! rustup target list --installed --toolchain nightly | grep -q "^aarch64-unknown-none$"; then
   echo "🔧 Installing missing Rust target aarch64-unknown-none" >&2
-  rustup target add aarch64-unknown-none
+  rustup target add --toolchain nightly aarch64-unknown-none
 fi
 CROSS_GCC_MSG=${CROSS_GCC:-}
 if [ -z "$CROSS_GCC_MSG" ]; then
   echo "❌ aarch64 cross GCC missing (expected aarch64-linux-gnu-gcc or aarch64-unknown-linux-gnu-gcc)" >&2
   exit 1
 fi
-command -v ld.lld >/dev/null 2>&1 || { echo "❌ ld.lld not found" >&2; exit 1; }
-ld.lld --version >&3
+"$COHESIX_LINKER" --version >&3 || true
 
 log "\ud83d\udcc5 Fetching Cargo dependencies..."
 cd "$ROOT/workspace"
@@ -610,8 +678,8 @@ else
 fi
 
 if [ "$COH_ARCH" = "aarch64" ] && command -v rustup >/dev/null 2>&1; then
-  if ! rustup target list --installed | grep -q '^aarch64-unknown-none$'; then
-    rustup target add aarch64-unknown-none
+  if ! rustup target list --installed --toolchain nightly | grep -q '^aarch64-unknown-none$'; then
+    rustup target add --toolchain nightly aarch64-unknown-none
     log "✅ Rust target aarch64-unknown-none installed"
   fi
 fi
@@ -955,7 +1023,7 @@ export LDFLAGS="-L${SEL4_LIB_DIR}"
 log "🔨 Phase 2: Building sel4-sys-extern-wrapper"
 export CFLAGS="-I${ROOT}/workspace/sel4-sys-extern-wrapper/out"
 export LDFLAGS="-L${SEL4_LIB_DIR}"
-export RUSTFLAGS="-C panic=abort -L${SEL4_LIB_DIR}"
+export RUSTFLAGS="-C panic=abort -L${SEL4_LIB_DIR} ${CROSS_RUSTFLAGS}"
 rustup component add rust-src --toolchain nightly || true
 cargo +nightly build -p sel4-sys-extern-wrapper --release \
   --target=cohesix_root/sel4-aarch64.json \
@@ -972,7 +1040,7 @@ fi
 # Phase 3: cohesix_root under nightly
 log "🔨 Phase 3: Building cohesix_root"
 export LDFLAGS="-L${SEL4_LIB_DIR}"
-export RUSTFLAGS="-C panic=abort -C linker=ld.lld -C link-arg=--gc-sections -C link-arg=--eh-frame-hdr -L${SEL4_LIB_DIR} ${CROSS_RUSTFLAGS:-}"
+export RUSTFLAGS="-C panic=abort -L${SEL4_LIB_DIR} ${CROSS_RUSTFLAGS}"
 rustup component add rust-src --toolchain nightly || true
 cargo +nightly build \
   -p cohesix_root \
@@ -1203,9 +1271,9 @@ echo "🪵 Full log saved to $LOG_FILE" >&3
 # Final verification builds
 export SEL4_INCLUDE
 export SEL4_LIB_DIR
-RUSTFLAGS="-C panic=abort -C linker=ld.lld -C link-arg=--gc-sections -C link-arg=--eh-frame-hdr -L $SEL4_LIB_DIR $CROSS_RUSTFLAGS" \
+RUSTFLAGS="-C panic=abort -L $SEL4_LIB_DIR $CROSS_RUSTFLAGS" \
   cargo build -p sel4-sys-extern-wrapper --release --target=cohesix_root/sel4-aarch64.json
-RUSTFLAGS="-C panic=abort -C linker=ld.lld -C link-arg=--gc-sections -C link-arg=--eh-frame-hdr -L $SEL4_LIB_DIR $CROSS_RUSTFLAGS" \
+RUSTFLAGS="-C panic=abort -L $SEL4_LIB_DIR $CROSS_RUSTFLAGS" \
   cargo build -p cohesix_root --release --target=cohesix_root/sel4-aarch64.json
-RUSTFLAGS="-C panic=abort -C linker=ld.lld -C link-arg=--gc-sections -C link-arg=--eh-frame-hdr -L $SEL4_LIB_DIR $CROSS_RUSTFLAGS" \
+RUSTFLAGS="-C panic=abort -L $SEL4_LIB_DIR $CROSS_RUSTFLAGS" \
   cargo test --release --target=cohesix_root/sel4-aarch64.json --workspace
