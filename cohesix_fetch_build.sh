@@ -404,6 +404,7 @@ fi
 STAGE_DIR="$ROOT/out"
 GO_HELPERS_DIR="$ROOT/out/go_helpers"
 mkdir -p "$STAGE_DIR"
+mkdir -p "$GO_HELPERS_DIR"
 cd "$STAGE_DIR"
 mkdir -p bin usr/bin usr/cli usr/share/man/man1 usr/share/man/man8 \
          etc srv mnt/data tmp dev proc roles home/cohesix boot init
