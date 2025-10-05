@@ -1,8 +1,8 @@
 #!/usr/bin/env sh
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v1.58
+# Filename: cohesix_fetch_build.sh v1.59
 # Author: Lukas Bower
-# Date Modified: 2029-02-21
+# Date Modified: 2029-02-22
 
 # This script fetches and builds the Cohesix project, including seL4 and other dependencies.
 
@@ -307,10 +307,37 @@ done
 
 
 SEL4_LIB_DIR="${SEL4_LIB_DIR:-$ROOT/third_party/seL4/lib}"
-# Skip interactive fetch if seL4 library already exists
-if [ ! -f "$SEL4_LIB_DIR/libsel4.a" ]; then
-  bash "$ROOT/third_party/seL4/fetch_sel4.sh" --non-interactive
-fi
+
+validate_sel4_artifacts() {
+  sel4_root="$ROOT/third_party/seL4"
+  if [ ! -d "$sel4_root" ]; then
+    log "❌ Missing seL4 workspace at $sel4_root"
+    log "➡️ Run '$ROOT/third_party/seL4/fetch_sel4.sh --non-interactive' before invoking cohesix_fetch_build.sh."
+    exit 1
+  fi
+
+  if [ ! -d "$SEL4_LIB_DIR" ]; then
+    log "❌ Expected seL4 library directory at $SEL4_LIB_DIR"
+    log "➡️ Run '$ROOT/third_party/seL4/fetch_sel4.sh --non-interactive' to populate lib/, include/, and workspace artefacts."
+    exit 1
+  fi
+
+  if [ ! -f "$SEL4_LIB_DIR/libsel4.a" ]; then
+    log "❌ libsel4.a not found under $SEL4_LIB_DIR"
+    log "➡️ Populate third_party/seL4 by running '$ROOT/third_party/seL4/fetch_sel4.sh --non-interactive' prior to rerunning."
+    exit 1
+  fi
+
+  if [ ! -d "$sel4_root/include" ]; then
+    log "❌ seL4 headers missing under $sel4_root/include"
+    log "➡️ Re-run '$ROOT/third_party/seL4/fetch_sel4.sh --non-interactive' to install required headers."
+    exit 1
+  fi
+
+  log "✅ Offline seL4 artefacts detected under third_party/seL4"
+}
+
+validate_sel4_artifacts
 
 if [ -n "$PHASE" ]; then
   cd "$ROOT/workspace"
@@ -707,8 +734,49 @@ if [ "$COH_ARCH" = "aarch64" ]; then
   fi
 fi
 
-log "📦 Updating submodules (if any)..."
-git submodule update --init --recursive
+validate_git_submodules() {
+  if [ ! -f "$ROOT/.gitmodules" ]; then
+    log "ℹ️ No git submodules configured; skipping validation"
+    return
+  fi
+
+  if ! command -v git >/dev/null 2>&1; then
+    log "❌ git not found; unable to validate submodule checkout"
+    log "➡️ Install git and run 'git submodule update --init --recursive' before rerunning."
+    exit 1
+  fi
+
+  submodule_lines=$(git config --file "$ROOT/.gitmodules" --get-regexp '^submodule\\..*\\.path$' 2>/dev/null || true)
+  if [ -z "$submodule_lines" ]; then
+    log "ℹ️ .gitmodules present but no submodule paths defined"
+    return
+  fi
+
+  missing_paths=""
+  while IFS=' ' read -r _ path; do
+    [ -z "$path" ] && continue
+    module_dir="$ROOT/$path"
+    if [ ! -d "$module_dir" ] || [ ! -e "$module_dir/.git" ]; then
+      if [ -n "$missing_paths" ]; then
+        missing_paths="$missing_paths $path"
+      else
+        missing_paths="$path"
+      fi
+    fi
+  done <<EOF
+$submodule_lines
+EOF
+
+  if [ -n "$missing_paths" ]; then
+    log "❌ Missing git submodules: $missing_paths"
+    log "➡️ Run 'git submodule update --init --recursive' from $ROOT to populate required dependencies before rerunning."
+    exit 1
+  fi
+
+  log "✅ All git submodule directories present"
+}
+
+validate_git_submodules
 
 export PATH="$HOME/.local/bin:$PATH"
 if [ "$ENABLE_PYTHON" -eq 1 ]; then

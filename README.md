@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: README.md v0.25
+// Filename: README.md v0.26
 // Author: Lukas Bower
-// Date Modified: 2028-11-08
+// Date Modified: 2029-02-22
 
 
 # Cohesix
@@ -146,6 +146,23 @@ The helper script `cohesix_fetch_build.sh` sets two variables after cloning:
 * `/srv/cuda` – contains the remote Secure9P address for CUDA jobs
 
 All CUDA execution occurs on the remote server referenced by `/srv/cuda`.
+
+### Preparing dependencies for `cohesix_fetch_build.sh`
+
+`cohesix_fetch_build.sh` now assumes the seL4 artefacts and Git submodules are
+populated before execution. This avoids network fetches on macOS and other
+restricted environments. Run the following commands from the repository root
+after cloning:
+
+```bash
+./third_party/seL4/fetch_sel4.sh --non-interactive
+git submodule update --init --recursive  # if .gitmodules exists
+```
+
+Verify that `third_party/seL4/lib/libsel4.a` and the header directory under
+`third_party/seL4/include/` exist before invoking the build script. When these
+artefacts are absent the script will exit with guidance so you can rerun the
+preparation steps.
 
 ### UEFI SSE Requirements
 
