@@ -37,6 +37,41 @@ for candidate in aarch64-linux-gnu-gcc aarch64-unknown-linux-gnu-gcc; do
   fi
 done
 
+MUSL_CC=""
+for candidate in aarch64-linux-musl-gcc aarch64-unknown-linux-musl-gcc; do
+  if command -v "$candidate" >/dev/null 2>&1; then
+    MUSL_CC="$candidate"
+    break
+  fi
+done
+MUSL_CC_FALLBACK=0
+if [ -z "$MUSL_CC" ] && [ -n "$CROSS_GCC" ]; then
+  MUSL_CC="$CROSS_GCC"
+  MUSL_CC_FALLBACK=1
+fi
+
+MUSL_AR=""
+for candidate in aarch64-linux-musl-ar aarch64-unknown-linux-musl-ar; do
+  if command -v "$candidate" >/dev/null 2>&1; then
+    MUSL_AR="$candidate"
+    break
+  fi
+done
+if [ -z "$MUSL_AR" ] && command -v aarch64-linux-gnu-ar >/dev/null 2>&1; then
+  MUSL_AR="aarch64-linux-gnu-ar"
+fi
+
+MUSL_RANLIB=""
+for candidate in aarch64-linux-musl-ranlib aarch64-unknown-linux-musl-ranlib; do
+  if command -v "$candidate" >/dev/null 2>&1; then
+    MUSL_RANLIB="$candidate"
+    break
+  fi
+done
+if [ -z "$MUSL_RANLIB" ] && command -v aarch64-linux-gnu-ranlib >/dev/null 2>&1; then
+  MUSL_RANLIB="aarch64-linux-gnu-ranlib"
+fi
+
 if { [ "$HOST_ARCH" = "aarch64" ] || [ "$HOST_ARCH" = "arm64" ]; } && [ -z "$CROSS_GCC" ]; then
   if command -v sudo >/dev/null 2>&1; then
     SUDO=sudo
@@ -540,6 +575,51 @@ if [ -z "$CROSS_GCC_MSG" ]; then
   echo "❌ aarch64 cross GCC missing (expected aarch64-linux-gnu-gcc or aarch64-unknown-linux-gnu-gcc)" >&2
   exit 1
 fi
+if [ -n "$MUSL_CC" ]; then
+  if resolved_cc=$(resolve_tool_path "$MUSL_CC"); then
+    export CC_aarch64_unknown_linux_musl="$resolved_cc"
+    export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_CC="$resolved_cc"
+    if [ "$MUSL_CC_FALLBACK" -eq 1 ]; then
+      log "⚠️ aarch64-linux-musl-gcc unavailable; reusing ${resolved_cc} for aarch64-unknown-linux-musl C builds"
+    else
+      log "✅ Using musl cross compiler at ${resolved_cc}"
+    fi
+  else
+    echo "❌ Unable to resolve musl cross compiler for target aarch64-unknown-linux-musl" >&2
+    exit 1
+  fi
+else
+  echo "❌ musl cross compiler not detected" >&2
+  exit 1
+fi
+if [ -n "$MUSL_AR" ]; then
+  if resolved_ar=$(resolve_tool_path "$MUSL_AR"); then
+    export AR_aarch64_unknown_linux_musl="$resolved_ar"
+    export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_AR="$resolved_ar"
+  fi
+fi
+if [ -n "$MUSL_RANLIB" ]; then
+  if resolved_ranlib=$(resolve_tool_path "$MUSL_RANLIB"); then
+    export RANLIB_aarch64_unknown_linux_musl="$resolved_ranlib"
+  fi
+fi
+PROTOC_BIN="${PROTOC:-}"
+if [ -n "$PROTOC_BIN" ]; then
+  if [ ! -x "$PROTOC_BIN" ]; then
+    echo "❌ PROTOC environment variable points to non-executable: $PROTOC_BIN" >&2
+    exit 1
+  fi
+else
+  if command -v protoc >/dev/null 2>&1; then
+    PROTOC_BIN="$(command -v protoc)"
+  else
+    echo "❌ protoc not found. Install protobuf compiler (e.g. 'brew install protobuf') or export PROTOC=/path/to/protoc" >&2
+    echo "➡️ Proto compilation required for GUI control-plane gRPC contracts (Solution Architecture §7, Backlog E4-F10)." >&2
+    exit 1
+  fi
+fi
+export PROTOC="$PROTOC_BIN"
+log "✅ Using protoc at $PROTOC_BIN"
 "$COHESIX_LINKER" --version >&3 || true
 
 log "\ud83d\udcc5 Fetching Cargo dependencies..."

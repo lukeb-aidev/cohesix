@@ -4,7 +4,7 @@
 // Date Modified: 2026-12-31
 // SPDX-License-Identifier: MIT
 
-#include "../src/c/placeholder.c"
+#include "placeholder.c"
 #include <assert.h>
 
 int main(void) {
