@@ -169,8 +169,19 @@ detect_cpu_count() {
   fi
   getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1
 }
-# Ensure ROOT is always set
-ROOT="${ROOT:-$HOME/cohesix}"
+# Resolve the repository root relative to this script when ROOT is unset
+if [ -z "${ROOT:-}" ]; then
+  SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
+  for candidate in "$SCRIPT_DIR" "$SCRIPT_DIR/.." "$SCRIPT_DIR/../.."; do
+    if [ -d "$candidate/.git" ] || [ -f "$candidate/.git" ] || [ -d "$candidate/third_party/seL4" ]; then
+      ROOT="$(cd "$candidate" && pwd -P)"
+      break
+    fi
+  done
+  : "${ROOT:=$SCRIPT_DIR}"
+else
+  ROOT="$(cd "$ROOT" && pwd -P)"
+fi
 export ROOT
 
 LOG_DIR="$ROOT/logs"
