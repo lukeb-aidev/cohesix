@@ -1,4 +1,6 @@
+# Author: Lukas Bower
 # Logs and artifacts
+build/
 *.log
 !srv/upload/test-validation.log
 codex_logs/
