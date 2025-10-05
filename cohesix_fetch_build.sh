@@ -968,7 +968,7 @@ cat <<'EOF' > "$CC_TEST_C"
 int main(void){ printf("hello\n"); return 0; }
 EOF
 CC_TEST_BIN="${CC_TEST_C%.c}"
-if gcc "$CC_TEST_C" -o "$CC_TEST_BIN" >/dev/null 2>&1 && "./$CC_TEST_BIN" >/dev/null; then
+if gcc "$CC_TEST_C" -o "$CC_TEST_BIN" >/dev/null 2>&1 && "$CC_TEST_BIN" >/dev/null; then
   log "✅ C compiler operational"
   rm -f "$CC_TEST_C" "$CC_TEST_BIN"
 else
