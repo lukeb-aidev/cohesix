@@ -503,6 +503,14 @@ pub fn configure_backend_from_policy(backend: &NinepBackend, cfg: &Secure9pConfi
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ninep::protocol::{Format9p, Rdata, Rmessage, Tdata, Tmessage};
+    use rcgen::{
+        Certificate as RcCert, CertificateParams, DistinguishedName, DnType, IsCa, SanType,
+    };
+    use rustls::{ClientConfig, ClientConnection, ServerName};
+    use std::net::TcpStream;
+    use std::sync::Arc;
+    use tempfile::tempdir;
 
     #[test]
     fn heartbeat_entries_removed_after_disconnect() {
@@ -517,19 +525,6 @@ mod tests {
         telemetry.emit_tick();
         assert_eq!(telemetry.entry_count(), 0);
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use ninep::protocol::{Rdata, Rmessage, Tdata, Tmessage};
-    use rcgen::{
-        Certificate as RcCert, CertificateParams, DistinguishedName, DnType, IsCa, SanType,
-    };
-    use rustls::{ClientConfig, ClientConnection, ServerName};
-    use std::net::TcpStream;
-    use std::sync::Arc;
-    use tempfile::tempdir;
 
     fn write_file(path: &Path, contents: &[u8]) {
         std::fs::write(path, contents).expect("write file");
@@ -599,7 +594,7 @@ mod tests {
         let client_config = ClientConfig::builder()
             .with_safe_defaults()
             .with_root_certificates(root_store)
-            .with_single_cert(vec![Certificate(client_der)], PrivateKey(client_key))
+            .with_client_auth_cert(vec![Certificate(client_der)], PrivateKey(client_key))
             .expect("client config");
 
         let stream = TcpStream::connect(("127.0.0.1", port)).expect("connect");
