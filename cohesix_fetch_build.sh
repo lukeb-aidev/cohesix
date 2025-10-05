@@ -436,6 +436,40 @@ validate_sel4_artifacts() {
 
 validate_sel4_artifacts
 
+configure_musl_toolchain() {
+  if [ -z "$MUSL_CC" ]; then
+    echo "❌ musl cross compiler not detected" >&2
+    exit 1
+  fi
+  if ! resolved_cc=$(resolve_tool_path "$MUSL_CC"); then
+    echo "❌ Unable to resolve musl cross compiler for target aarch64-unknown-linux-musl" >&2
+    exit 1
+  fi
+  export CC_aarch64_unknown_linux_musl="$resolved_cc"
+  export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_CC="$resolved_cc"
+  export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER="$resolved_cc"
+  if [ "${MUSL_CC_FALLBACK}" -eq 1 ]; then
+    log "⚠️ aarch64-linux-musl-gcc unavailable; reusing ${resolved_cc} for aarch64-unknown-linux-musl C builds"
+  else
+    log "✅ Using musl cross compiler at ${resolved_cc}"
+  fi
+
+  if [ -n "$MUSL_AR" ]; then
+    if resolved_ar=$(resolve_tool_path "$MUSL_AR"); then
+      export AR_aarch64_unknown_linux_musl="$resolved_ar"
+      export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_AR="$resolved_ar"
+    fi
+  fi
+
+  if [ -n "$MUSL_RANLIB" ]; then
+    if resolved_ranlib=$(resolve_tool_path "$MUSL_RANLIB"); then
+      export RANLIB_aarch64_unknown_linux_musl="$resolved_ranlib"
+    fi
+  fi
+}
+
+configure_musl_toolchain
+
 if ! select_linker; then
   echo "❌ Unable to locate a suitable linker (expected ld.lld, ld64.lld, aarch64-linux-gnu-ld, or aarch64-linux-gnu-gcc)." >&2
   echo "➡️ Install LLVM's lld or export LD_LLD=/path/to/ld.lld before rerunning." >&2
@@ -570,38 +604,10 @@ if ! rustup target list --installed --toolchain nightly | grep -q "^aarch64-unkn
   echo "🔧 Installing missing Rust target aarch64-unknown-none" >&2
   rustup target add --toolchain nightly aarch64-unknown-none
 fi
-CROSS_GCC_MSG=${CROSS_GCC:-}
-if [ -z "$CROSS_GCC_MSG" ]; then
+cross_gcc_msg=${CROSS_GCC:-}
+if [ -z "$cross_gcc_msg" ]; then
   echo "❌ aarch64 cross GCC missing (expected aarch64-linux-gnu-gcc or aarch64-unknown-linux-gnu-gcc)" >&2
   exit 1
-fi
-if [ -n "$MUSL_CC" ]; then
-  if resolved_cc=$(resolve_tool_path "$MUSL_CC"); then
-    export CC_aarch64_unknown_linux_musl="$resolved_cc"
-    export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_CC="$resolved_cc"
-    if [ "$MUSL_CC_FALLBACK" -eq 1 ]; then
-      log "⚠️ aarch64-linux-musl-gcc unavailable; reusing ${resolved_cc} for aarch64-unknown-linux-musl C builds"
-    else
-      log "✅ Using musl cross compiler at ${resolved_cc}"
-    fi
-  else
-    echo "❌ Unable to resolve musl cross compiler for target aarch64-unknown-linux-musl" >&2
-    exit 1
-  fi
-else
-  echo "❌ musl cross compiler not detected" >&2
-  exit 1
-fi
-if [ -n "$MUSL_AR" ]; then
-  if resolved_ar=$(resolve_tool_path "$MUSL_AR"); then
-    export AR_aarch64_unknown_linux_musl="$resolved_ar"
-    export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_AR="$resolved_ar"
-  fi
-fi
-if [ -n "$MUSL_RANLIB" ]; then
-  if resolved_ranlib=$(resolve_tool_path "$MUSL_RANLIB"); then
-    export RANLIB_aarch64_unknown_linux_musl="$resolved_ranlib"
-  fi
 fi
 PROTOC_BIN="${PROTOC:-}"
 if [ -n "$PROTOC_BIN" ]; then
