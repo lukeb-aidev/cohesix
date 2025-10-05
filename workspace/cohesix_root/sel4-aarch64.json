@@ -11,7 +11,7 @@
   "linker-flavor": "ld.lld",
   "linker": "ld.lld",
   "target-endian": "little",
-  "target-pointer-width": "64",
+  "target-pointer-width": 64,
   "executables": true,
   "disable-redzone": true,
   "panic-strategy": "abort",
