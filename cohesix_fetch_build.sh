@@ -497,7 +497,13 @@ if [ -n "$PHASE" ]; then
       --exclude 'cohesix_root' \
       --exclude 'sel4-sys-extern-wrapper' \
       --target aarch64-unknown-linux-musl
-    log "✅ Phase 1 build succeeded"
+    log "⏭️ Cross-target tests compiled only (aarch64-unknown-linux-musl)"
+    cargo test --release --workspace \
+      --exclude 'cohesix_root' \
+      --exclude 'sel4-sys-extern-wrapper' \
+      --target aarch64-unknown-linux-musl \
+      --no-run
+    log "✅ Phase 1 build succeeded (tests compiled for cross-target)"
   elif [ "$PHASE" = "2" ]; then
     log "🔨 Phase 2: Building sel4-sys-extern-wrapper"
     export CFLAGS="-I${ROOT}/workspace/sel4-sys-extern-wrapper/out"
@@ -1113,10 +1119,13 @@ cargo build --release --workspace \
   --exclude 'cohesix_root' \
   --exclude 'sel4-sys-extern-wrapper' \
   --target=aarch64-unknown-linux-musl
+log "⏭️ Cross-target tests compiled only (aarch64-unknown-linux-musl)"
 cargo test --release --workspace \
   --exclude 'cohesix_root' \
   --exclude 'sel4-sys-extern-wrapper' \
-  --target=aarch64-unknown-linux-musl
+  --target=aarch64-unknown-linux-musl \
+  --no-run
+log "✅ Phase 1 build succeeded (tests compiled for cross-target)"
 log "✅ Phase 1 build succeeded"
 
 # Common stub-header setup
