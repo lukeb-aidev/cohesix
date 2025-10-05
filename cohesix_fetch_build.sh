@@ -420,7 +420,7 @@ logging:
 EOF
 log "✅ config.yaml created at $CONFIG_PATH"
 
-export SEL4_LIB_DIR="${SEL4_LIB_DIR:-$ROOT/third_party/seL4/output}"
+export SEL4_LIB_DIR="${SEL4_LIB_DIR:-$ROOT/third_party/seL4/lib}"
 SEL4_INCLUDE_PATH="$ROOT/third_party/seL4/include"
 if [ -d "$SEL4_INCLUDE_PATH" ]; then
   export SEL4_INCLUDE="${SEL4_INCLUDE:-$(resolve_path "$SEL4_INCLUDE_PATH")}"
