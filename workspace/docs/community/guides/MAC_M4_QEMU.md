@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: MAC_M4_QEMU.md v0.1
 // Author: Lukas Bower
-// Date Modified: 2029-02-20
+// Date Modified: 2029-10-08
 
 # Mac M4 End-to-End Build + QEMU Validation
 
@@ -16,10 +16,13 @@ Silicon) and mirrors the automation available on Ubuntu hosts.
 1. **Homebrew packages**
    ```bash
    brew update
-   brew install qemu aarch64-unknown-linux-gnu llvm cmake ninja
+   brew tap messense/macos-cross-toolchains
+   brew install qemu messense/macos-cross-toolchains/aarch64-unknown-linux-gnu \
+       llvm cmake ninja
    ```
-   The Homebrew `aarch64-unknown-linux-gnu` formula provides the cross GCC that
-   `cohesix_fetch_build.sh` and Rust expect. LLVM is used for `ld.lld`.
+   Homebrew does not ship `aarch64-unknown-linux-gnu` in the core repository.
+   The `messense/macos-cross-toolchains` tap publishes the cross GCC required by
+   `cohesix_fetch_build.sh` and our Rust targets. LLVM is used for `ld.lld`.
 2. **Rust toolchains**
    ```bash
    rustup toolchain install stable nightly
@@ -79,7 +82,7 @@ Serial output is still captured in `log/qemu_debug_*.log` for audit trails.
 
 | Symptom | Resolution |
 |---------|------------|
-| `aarch64 cross GCC missing` | Run `brew install aarch64-unknown-linux-gnu`. Confirm `which aarch64-unknown-linux-gnu-gcc`. |
+| `aarch64 cross GCC missing` | Run `brew tap messense/macos-cross-toolchains` followed by `brew install messense/macos-cross-toolchains/aarch64-unknown-linux-gnu`. Confirm `which aarch64-unknown-linux-gnu-gcc`. |
 | `ld.lld not found` | Use the Homebrew `llvm` package and ensure `/opt/homebrew/opt/llvm/bin` is on `PATH`. |
 | QEMU reports `hvf` unavailable | Run `qemu-system-aarch64 -accel help` to verify HVF support. If not present, reinstall QEMU (`brew reinstall qemu`) and reboot to reload hypervisor entitlements. |
 | CUDA warning in build logs | Expected: CUDA workloads stay remote via Secure9P. Ensure `/srv/cuda` points at the remote enclave before executing GPU jobs. |
