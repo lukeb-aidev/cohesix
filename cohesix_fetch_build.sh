@@ -636,7 +636,17 @@ log "✅ Using protoc at $PROTOC_BIN"
 
 log "\ud83d\udcc5 Fetching Cargo dependencies..."
 cd "$ROOT/workspace"
-cargo fetch
+if [ -z "${CARGO_NET_OFFLINE+x}" ]; then
+  export CARGO_NET_OFFLINE=true
+fi
+if ! cargo +nightly fetch; then
+  if [ "${CARGO_NET_OFFLINE}" = "true" ]; then
+    log "⚠️ Offline fetch failed; retrying with network access"
+    CARGO_NET_OFFLINE=false cargo +nightly fetch
+  else
+    false
+  fi
+fi
 log "\u2705 Cargo dependencies fetched"
 
 # Kernel must run in production mode; disable seL4 self-tests
