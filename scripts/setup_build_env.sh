@@ -143,23 +143,55 @@ ensure_brew_packages() {
 
 ensure_python_bin() {
     local python_bin=""
-    for candidate in python3.12 python3.11 python3.10 python3; do
-        if command -v "$candidate" >/dev/null 2>&1; then
-            local bin_path
-            bin_path="$(command -v "$candidate")"
-            if [[ "$OS_NAME" == "Darwin" && "$bin_path" == "/usr/bin/python3" ]]; then
-                continue
+    local preferred="/opt/homebrew/opt/python@3.11/bin/python3"
+
+    if [ -x "$preferred" ]; then
+        python_bin="$preferred"
+    else
+        for candidate in python3.11 python3; do
+            if command -v "$candidate" >/dev/null 2>&1; then
+                local bin_path
+                bin_path="$(command -v "$candidate")"
+                if [[ "$OS_NAME" == "Darwin" && "$bin_path" == "/usr/bin/python3" ]]; then
+                    continue
+                fi
+                python_bin="$bin_path"
+                break
             fi
-            python_bin="$bin_path"
-            break
-        fi
-    done
+        done
+    fi
 
     if [[ -z "$python_bin" ]]; then
-        die "Unable to locate a usable python3 interpreter."
+        die "Unable to locate a usable python3 interpreter (expected Python 3.11)."
+    fi
+
+    local version
+    version="$("$python_bin" -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")' 2>/dev/null || true)"
+    if [[ "$version" != "3.11" ]]; then
+        die "Python interpreter $python_bin reports version $version. Install Python 3.11 via Homebrew before retrying."
     fi
 
     printf '%s\n' "$python_bin"
+}
+
+cleanup_python312() {
+    if brew list --versions python@3.12 >/dev/null 2>&1; then
+        msg "Removing Homebrew python@3.12 formula …"
+        if ! brew uninstall --ignore-dependencies python@3.12 >/dev/null; then
+            die "Failed to remove python@3.12. Resolve Homebrew issues and retry."
+        fi
+    fi
+
+    local python312_opt="/opt/homebrew/opt/python@3.12"
+    local python312_cellar="/opt/homebrew/Cellar/python@3.12"
+    if [ -e "$python312_opt" ]; then
+        msg "Pruning stale python@3.12 opt link …"
+        rm -rf "$python312_opt"
+    fi
+    if [ -d "$python312_cellar" ]; then
+        msg "Pruning stale python@3.12 Cellar directory …"
+        rm -rf "$python312_cellar"
+    fi
 }
 
 msg "Detected macOS host (architecture: $ARCH)."
@@ -249,13 +281,15 @@ EOF_ZSH
     msg "Zsh environment snippet installed at $zsh_env_file. Restart your shell or run 'source ~/.zprofile' to apply changes."
 fi
 
+cleanup_python312
+
 brew_pkgs=(
     qemu
     messense/macos-cross-toolchains/aarch64-unknown-linux-gnu
     llvm
     cmake
     ninja
-    python@3.12
+    python@3.11
     pkg-config
     coreutils
     gnu-tar
