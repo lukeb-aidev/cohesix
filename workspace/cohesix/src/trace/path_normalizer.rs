@@ -62,7 +62,7 @@ struct RawRewrite {
     to: String,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct RewriteRule {
     from: PathBuf,
     to: PathBuf,
