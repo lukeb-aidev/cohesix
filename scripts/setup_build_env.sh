@@ -185,11 +185,11 @@ if [[ "$default_shell" == *"zsh" ]]; then
 export COHESIX_ARCH="${COHESIX_ARCH}"
 
 cohesix_prepend_path() {
-    local dir="$1"
-    if [ -d "$dir" ]; then
-        case ":$PATH:" in
-            *:"$dir":*) ;;
-            *) PATH="$dir:$PATH" ;;
+    local dir="\$1"
+    if [ -d "\$dir" ]; then
+        case ":\$PATH:" in
+            *:"\$dir":*) ;;
+            *) PATH="\$dir:\$PATH" ;;
         esac
     fi
 }
