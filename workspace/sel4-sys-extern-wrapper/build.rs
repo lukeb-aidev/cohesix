@@ -96,7 +96,30 @@ fn main() {
     }
     let simple_types = out_dir.join("sel4").join("arch").join("simple_types.h");
     if !simple_types.exists() {
-        panic!("missing {}", simple_types.display());
+        let fallback = include_root
+            .join("libsel4")
+            .join("sel4")
+            .join("sel4")
+            .join("simple_types.h");
+        if fallback.exists() {
+            fs::create_dir_all(simple_types.parent().unwrap())
+                .expect("create sel4/arch dir");
+            fs::copy(&fallback, &simple_types)
+                .expect("copy fallback simple_types.h");
+            println!(
+                "cargo:warning=sel4/arch/simple_types.h missing; copied fallback from {}",
+                fallback.display()
+            );
+        } else {
+            println!(
+                "cargo:warning=fallback simple_types.h not found at {}; generating stub",
+                fallback.display()
+            );
+            fs::create_dir_all(simple_types.parent().unwrap())
+                .expect("create sel4/arch dir");
+            fs::write(&simple_types, "#pragma once\n#include <sel4/simple_types.h>\n")
+                .expect("write stub simple_types.h");
+        }
     }
 
     let mut include_dirs = Vec::new();
