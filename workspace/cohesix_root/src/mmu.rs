@@ -2,6 +2,7 @@
 // Filename: mmu.rs v0.2
 // Author: Lukas Bower
 // Date Modified: 2028-02-15
+#![allow(static_mut_refs)]
 
 #[repr(align(4096))]
 struct Table([u64; 512]);

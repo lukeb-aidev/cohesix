@@ -1,0 +1,35 @@
+.\" CLASSIFICATION: COMMUNITY
+.\" Filename: physics-server.1 v0.1
+.\" Author: Lukas Bower
+.\" Date Modified: 2027-12-07
+.TH PHYSICS-SERVER 1 "2027-12-07" "Cohesix" "User Commands"
+.SH NAME
+physics-server \- process physics job files
+.SH SYNOPSIS
+.B physics-server
+.RI [--job-dir " dir"]
+.RI [--sim-dir " dir"]
+.RI [--log-file " file"]
+.SH DESCRIPTION
+.B physics-server
+watches a directory for
+.B physics_job_*.json
+files, runs simple simulations, and writes results under
+.BR /sim .
+Status is updated in
+.B /srv/physics/status
+and logs append to the specified file.
+.SH OPTIONS
+.TP
+.B --job-dir
+Directory containing job files (default "/mnt/physics_jobs").
+.TP
+.B --sim-dir
+Output directory for world and result JSON (default "/sim").
+.TP
+.B --log-file
+Path to the log file (default "/srv/trace/sim.log").
+.SH EXAMPLES
+.B physics-server --job-dir /mnt/jobs --sim-dir /sim
+.SH SEE ALSO
+.BR cohtrace (1)

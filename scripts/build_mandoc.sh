@@ -6,6 +6,10 @@
 set -e
 VER=1.9.9
 ARCH=$(uname -m)
+case "$ARCH" in
+    arm64) ARCH="aarch64" ;;
+    amd64) ARCH="x86_64" ;;
+esac
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$ROOT/prebuilt/mandoc"
 mkdir -p "$OUT"

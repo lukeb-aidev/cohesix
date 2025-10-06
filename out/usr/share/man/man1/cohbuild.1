@@ -1,0 +1,23 @@
+.\" CLASSIFICATION: COMMUNITY
+.\" Filename: cohbuild.1 v0.1
+.\" Author: Lukas Bower
+.\" Date Modified: 2025-06-29
+.TH COHBUILD 1 "2025-06-29" "Cohesix" "User Commands"
+.SH NAME
+cohbuild \- build orchestrator for Cohesix, compiles all components
+.SH SYNOPSIS
+.B cohbuild
+.RI [options]
+.SH DESCRIPTION
+Coordinates building all Cohesix components.
+.SH OPTIONS
+.TP
+.B --fast
+Skip optional checks to accelerate the build.
+.TP
+.B --clean
+Remove build artifacts before building.
+.TP
+.B --target=ARCH
+Build for the specified architecture such as
+.BR aarch64 .

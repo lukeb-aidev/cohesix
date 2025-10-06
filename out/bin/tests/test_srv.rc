@@ -1,0 +1,18 @@
+#!/bin/rc
+# CLASSIFICATION: COMMUNITY
+# Filename: test_srv.rc v0.1
+# Author: Lukas Bower
+# Date Modified: 2027-12-07
+
+bin=/bin/srv
+if(! test -x $bin){
+    echo 'srv missing or not executable' >[1=2]
+    exit 'FAIL'
+}
+$bin -h >/dev/null >[2]/dev/null
+if(~ $#status 0){
+    echo 'srv ok'
+}else{
+    echo 'srv invocation failed' >[1=2]
+    exit 'FAIL'
+}

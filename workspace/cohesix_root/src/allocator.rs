@@ -13,7 +13,7 @@ extern "C" {
 }
 
 fn putchar(c: u8) {
-    unsafe { crate::seL4_DebugPutChar(c as i32) };
+    crate::seL4_DebugPutChar(c as i32);
 }
 
 fn putstr(s: &str) {
@@ -57,7 +57,7 @@ static mut OFFSET: usize = 0;
 
 /// Return the current heap offset pointer for auditing
 pub fn offset_addr() -> usize {
-    unsafe { &OFFSET as *const usize as usize }
+    core::ptr::addr_of!(OFFSET) as usize
 }
 
 /// Return the current heap pointer (heap_start + OFFSET)
@@ -72,9 +72,9 @@ pub fn current_heap_ptr() -> usize {
 pub fn allocator_init_log() {
     coherr!(
         "allocator_init heap_start={:#x} heap_ptr={:#x} heap_end={:#x} img_end={:#x}",
-        unsafe { core::ptr::addr_of!(__heap_start) as usize },
+        core::ptr::addr_of!(__heap_start) as usize,
         current_heap_ptr(),
-        unsafe { core::ptr::addr_of!(__heap_end) as usize },
+        core::ptr::addr_of!(__heap_end) as usize,
         crate::image_end()
     );
 }
