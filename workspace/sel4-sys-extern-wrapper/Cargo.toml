@@ -18,6 +18,7 @@ default = ["panic-handler"]
 
 [build-dependencies]
 bindgen = { version = "0.69", default-features = false }
+cc = "1"
 
 [lib]
 crate-type = ["rlib"]

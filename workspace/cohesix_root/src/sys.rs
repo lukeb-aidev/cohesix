@@ -4,15 +4,9 @@
 // Date Modified: 2025-10-06
 #![allow(static_mut_refs)]
 
-use crate::monotonic_ticks;
-use crate::trace;
+use crate::{debug_putchar, monotonic_ticks, trace};
 use core::ffi::c_char;
 use core::sync::atomic::{compiler_fence, Ordering};
-use sel4_sys_extern_wrapper::seL4_DebugPutChar;
-
-#[link_section = ".uart"]
-#[used]
-static mut UART_FRAME: [u8; 0x1000] = [0; 0x1000];
 
 /// Initialize UART support.
 ///
@@ -21,7 +15,7 @@ static mut UART_FRAME: [u8; 0x1000] = [0; 0x1000];
 /// touching the MMIO frame directly which caused an early fault when the
 /// region was not yet mapped.
 pub fn init_uart() {
-    let _ = core::ptr::addr_of!(UART_FRAME);
+    crate::drivers::uart::init();
 }
 
 /// Set the TLS pointer for seL4 syscalls.
@@ -184,9 +178,9 @@ pub unsafe extern "C" fn coh_srv(path: *const c_char) -> i32 {
 
 pub fn coh_log(msg: &str) {
     for &b in msg.as_bytes() {
-        seL4_DebugPutChar(b as i32);
+        debug_putchar(b);
     }
-    seL4_DebugPutChar(b'\n' as i32);
+    debug_putchar(b'\n');
     compiler_fence(Ordering::SeqCst);
 }
 

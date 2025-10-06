@@ -4,3 +4,4 @@
 // Date Modified: 2028-11-21
 pub mod fs;
 pub mod irq_controller;
+pub mod uart;
