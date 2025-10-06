@@ -1,13 +1,14 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: entry.S v0.22
 // Author: Lukas Bower
-// Date Modified: 2028-08-30
+// Date Modified: 2025-10-06
 
     .global _start
     .extern __stack_end
     .extern __bss_start
     .extern __bss_end
     .extern copy_bootinfo
+    .extern seL4_DebugPutChar
 _start:
     // Load stack pointer and clear BSS
     mov  x2, x0
@@ -28,8 +29,14 @@ _start:
     dsb  sy
     isb
 
+    mov  w0, #'A'
+    bl   seL4_DebugPutChar
+
     mov  x0, x2
     bl   copy_bootinfo
+
+    mov  w0, #'B'
+    bl   seL4_DebugPutChar
 
     bl   rust_entry
     b    .
