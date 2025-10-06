@@ -2,6 +2,7 @@
 // Filename: bootinfo.rs v0.3
 // Author: Lukas Bower
 // Date Modified: 2028-08-31
+#![allow(static_mut_refs)]
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -85,7 +86,7 @@ pub unsafe extern "C" fn copy_bootinfo(ptr: *const BootInfo) {
 }
 
 pub unsafe fn bootinfo() -> &'static BootInfo {
-    &BOOTINFO
+    &*core::ptr::addr_of!(BOOTINFO)
 }
 
 pub unsafe fn dump_bootinfo() {
@@ -99,12 +100,12 @@ pub unsafe fn dump_bootinfo() {
 }
 
 pub unsafe fn dtb_slice() -> Option<&'static [u8]> {
-    let bi_ptr = &BOOTINFO as *const BootInfo as usize;
-    if BOOTINFO.extra_len == 0 {
+    let bi_ptr = core::ptr::addr_of!(BOOTINFO) as usize;
+    if (*core::ptr::addr_of!(BOOTINFO)).extra_len == 0 {
         return None;
     }
     let mut cur = bi_ptr + BOOTINFO_FRAME_SIZE;
-    let end = cur + BOOTINFO.extra_len;
+    let end = cur + (*core::ptr::addr_of!(BOOTINFO)).extra_len;
     while cur < end {
         let hdr = &*(cur as *const BootInfoHeader);
         if hdr.id == SEL4_BOOTINFO_HEADER_FDT {

@@ -1,0 +1,21 @@
+.\" CLASSIFICATION: COMMUNITY
+.\" Filename: cloud.1 v0.1
+.\" Author: Lukas Bower
+.\" Date Modified: 2027-12-07
+.TH CLOUD 1 "2027-12-07" "Cohesix" "User Commands"
+.SH NAME
+cloud \- launch the cloud orchestrator
+.SH SYNOPSIS
+.B cloud
+.SH DESCRIPTION
+.B cloud
+starts the Cohesix cloud orchestrator service. The
+.B CLOUD_URL
+environment variable defines the endpoint for heartbeats
+and commands.
+.SH OPTIONS
+None.
+.SH EXAMPLES
+.B CLOUD_URL=http://127.0.0.1:4070 cloud &
+.SH SEE ALSO
+.BR cohagent (1)

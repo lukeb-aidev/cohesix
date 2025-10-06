@@ -1,0 +1,25 @@
+.\" CLASSIFICATION: COMMUNITY
+.\" Filename: srv.1 v0.1
+.\" Author: Lukas Bower
+.\" Date Modified: 2027-12-07
+.TH SRV 1 "2027-12-07" "Cohesix" "User Commands"
+.SH NAME
+srv \- register an address under /srv
+.SH SYNOPSIS
+.B srv
+.I name address
+.SH DESCRIPTION
+.B srv
+writes an address string to
+.BR /srv/<name>
+so that other programs can connect via 9P or network protocols.
+.SH OPTIONS
+.I name
+and
+.I address
+are positional arguments.
+.SH EXAMPLES
+.B srv log tcp:127.0.0.1:5640
+.SH SEE ALSO
+.BR srvctl (1),
+.BR import (1)

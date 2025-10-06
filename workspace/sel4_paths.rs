@@ -2,6 +2,7 @@
 // Filename: sel4_paths.rs v0.7
 // Author: OpenAI
 // Date Modified: 2028-12-05
+#![allow(dead_code)]
 
 use std::collections::{BTreeSet, HashSet};
 use std::fs;
@@ -60,7 +61,7 @@ pub fn header_dirs_from_tree(sel4_include: &Path) -> Result<Vec<PathBuf>, String
     dirs.insert(sel4_include.to_path_buf());
 
     for (idx, raw) in lines.iter().enumerate() {
-        let mut clean = raw
+        let clean = raw
             .replace('│', " ")
             .replace('├', " ")
             .replace('└', " ")

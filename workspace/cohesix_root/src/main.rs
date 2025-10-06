@@ -4,6 +4,8 @@
 // Date Modified: 2028-12-12
 #![no_std]
 #![cfg_attr(not(test), no_main)]
+#![allow(internal_features)]
+#![allow(static_mut_refs)]
 #![feature(alloc_error_handler, asm_experimental_arch, lang_items)]
 
 extern crate alloc;
@@ -19,7 +21,6 @@ mod startup;
 mod sys;
 mod trace;
 
-use sel4_sys_extern_wrapper::*;
 
 use core::arch::global_asm;
 global_asm!(include_str!("entry.S"));
@@ -41,7 +42,7 @@ extern "C" {
     static mut __bss_end: u8;
 }
 
-use sel4_sys_extern_wrapper::{seL4_DebugHalt, seL4_DebugPutChar};
+use sel4_sys_extern_wrapper::{seL4_DebugPutChar, seL4_Yield};
 
 #[no_mangle]
 #[link_section = ".bss"]
@@ -65,7 +66,7 @@ static mut ALLOC_CHECK: u64 = 0;
 static ROOTSERVER_ONLINE: &[u8] = b"ROOTSERVER ONLINE";
 
 fn putchar(c: u8) {
-    unsafe { seL4_DebugPutChar(c as i32) };
+    seL4_DebugPutChar(c as i32);
 }
 
 fn uart_flush() {
@@ -204,7 +205,7 @@ fn log_trace_summary() {
 fn start_validator() {
     static mut VALIDATOR_COOKIE: u8 = 1;
     unsafe {
-        VALIDATOR_HANDLE = &VALIDATOR_COOKIE;
+        VALIDATOR_HANDLE = core::ptr::addr_of!(VALIDATOR_COOKIE);
     }
     trace::record("validator:online", monotonic_ticks());
     sys::coh_log("validator_online");
@@ -275,6 +276,7 @@ fn check_globals_zero() {
     }
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn watch_ptr(ptr: usize) {
     unsafe {
         if WATCHED_IDX < WATCHED_PTRS.len() {
@@ -676,10 +678,11 @@ pub extern "C" fn main() {
     exec_init();
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn main_loop() -> ! {
     loop {
         unsafe {
-            sel4_sys_extern_wrapper::seL4_Yield();
+            seL4_Yield();
         }
     }
 }

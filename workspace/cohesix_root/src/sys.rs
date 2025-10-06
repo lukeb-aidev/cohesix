@@ -2,14 +2,13 @@
 // Filename: sys.rs v0.14
 // Author: Lukas Bower
 // Date Modified: 2028-12-13
+#![allow(static_mut_refs)]
 
-use crate::coherr;
-use crate::dt::UART_BASE;
 use crate::monotonic_ticks;
 use crate::trace;
 use core::ffi::c_char;
 use core::sync::atomic::{compiler_fence, Ordering};
-use sel4_sys_extern_wrapper::{seL4_DebugHalt, seL4_DebugPutChar};
+use sel4_sys_extern_wrapper::seL4_DebugPutChar;
 
 #[link_section = ".uart"]
 #[used]
@@ -22,7 +21,7 @@ static mut UART_FRAME: [u8; 0x1000] = [0; 0x1000];
 /// touching the MMIO frame directly which caused an early fault when the
 /// region was not yet mapped.
 pub fn init_uart() {
-    let _ = unsafe { &UART_FRAME as *const _ };
+    let _ = core::ptr::addr_of!(UART_FRAME);
 }
 
 /// Set the TLS pointer for seL4 syscalls.
@@ -36,10 +35,15 @@ pub unsafe extern "C" fn sel4_set_tls(ptr: *const u8) {
     );
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 const SYS_DEBUG_PUTCHAR: i64 = -9;
+#[cfg_attr(not(test), allow(dead_code))]
 const SYS_SEND: i64 = -3;
+#[cfg_attr(not(test), allow(dead_code))]
 const SYS_RECV: i64 = -5;
+#[cfg_attr(not(test), allow(dead_code))]
 const SYS_YIELD: i64 = -7;
+#[cfg_attr(not(test), allow(dead_code))]
 const SYS_DEBUG_HALT: i64 = -11;
 
 #[cfg(test)]
@@ -180,9 +184,9 @@ pub unsafe extern "C" fn coh_srv(path: *const c_char) -> i32 {
 
 pub fn coh_log(msg: &str) {
     for &b in msg.as_bytes() {
-        unsafe { seL4_DebugPutChar(b as i32) };
+        seL4_DebugPutChar(b as i32);
     }
-    unsafe { seL4_DebugPutChar(b'\n' as i32) };
+    seL4_DebugPutChar(b'\n' as i32);
     compiler_fence(Ordering::SeqCst);
 }
 

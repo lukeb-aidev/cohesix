@@ -1,0 +1,46 @@
+.\" CLASSIFICATION: COMMUNITY
+.\" Filename: top.1 v0.1
+.\" Author: Lukas Bower
+.\" Date Modified: 2025-07-12
+.TH "top" 1
+.SH NAME
+top
+.SH SYNOPSIS
+top [OPTIONS]
+.SH DESCRIPTION
+
+Usage:
+ top [options]
+
+Options:
+ -b, --batch-mode                run in non-interactive batch mode
+ -c, --cmdline-toggle            reverse last remembered 'c' state
+ -d, --delay =SECS [\.TENTHS]     iterative delay as SECS [\.TENTHS]
+ -E, --scale-summary-mem =SCALE  set mem as: k,m,g,t,p,e for SCALE
+ -e, --scale-task-mem =SCALE     set mem with: k,m,g,t,p for SCALE
+ -H, --threads-show              show tasks plus all their threads
+ -i, --idle-toggle               reverse last remembered 'i' state
+ -n, --iterations =NUMBER        exit on maximum iterations NUMBER
+ -O, --list-fields               output all field names, then exit
+ -o, --sort-override =FIELD      force sorting on this named FIELD
+ -p, --pid =PIDLIST              monitor only the tasks in PIDLIST
+ -S, --accum-time-toggle         reverse last remembered 'S' state
+ -s, --secure-mode               run with secure mode restrictions
+ -U, --filter-any-user =USER     show only processes owned by USER
+ -u, --filter-only-euser =USER   show only processes owned by USER
+
+.TH TOP 1 "2025-07-12" "Cohesix v1.0" "Cohesix Project"
+.SH NAME
+top \- display running processes
+.SH SYNOPSIS
+.B top
+.SH DESCRIPTION
+top is provided by BusyBox. Use "top --help" for options.
+.SH OPTIONS
+See \fB--help\fR for available options.
+.SH FILES
+
+.SH EXAMPLES
+
+.SH SEE ALSO
+

@@ -1,0 +1,25 @@
+#!/bin/rc
+# CLASSIFICATION: COMMUNITY
+# Filename: test_userland_health.rc v0.1
+# Author: Lukas Bower
+# Date Modified: 2027-12-07
+
+result=0
+if(! test -d /bin){
+    echo '/bin missing' >[1=2]
+    result=1
+}
+for(f in `{ls /bin}){
+    if(! test -x /bin/$f){
+        echo $f 'not executable' >[1=2]
+        result=1
+    }
+}
+for(s in cohrole secure9p cuda telemetry){
+    if(test -e /srv/$s){
+        echo $s 'service ready'
+    }else{
+        echo $s 'service missing' >[1=2]
+    }
+}
+exit $result

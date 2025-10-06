@@ -1,0 +1,29 @@
+.\" CLASSIFICATION: COMMUNITY
+.\" Filename: cohfuzz.1 v0.1
+.\" Author: Lukas Bower
+.\" Date Modified: 2027-12-07
+.TH COHFUZZ 1 "2027-12-07" "Cohesix" "User Commands"
+.SH NAME
+cohfuzz \- fuzz test trace files
+.SH SYNOPSIS
+.B cohfuzz
+.RI --input " <file> --role <name> --iterations <n>"
+.SH DESCRIPTION
+.B cohfuzz
+executes trace fuzzing runs for the specified role using
+.BR cohrun
+and validator hooks.
+.SH OPTIONS
+.TP
+.B --input
+Path to a trace JSON file.
+.TP
+.B --role
+Cohesix role to emulate.
+.TP
+.B --iterations
+Number of fuzzing iterations.
+.SH EXAMPLES
+.B cohfuzz --input trace.json --role QueenPrimary --iterations 50
+.SH SEE ALSO
+.BR cohrun (1)

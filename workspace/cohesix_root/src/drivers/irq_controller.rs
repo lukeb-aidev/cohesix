@@ -2,8 +2,6 @@
 // Filename: irq_controller.rs v0.2
 // Author: Lukas Bower
 // Date Modified: 2028-11-21
-#![no_std]
-
 use crate::coherr;
 
 pub struct IrqController;

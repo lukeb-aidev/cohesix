@@ -1214,6 +1214,7 @@ fi
 log "🔨 Running Rust build section"
 cd "$ROOT/workspace"
 cargo clean
+mkdir -p target/release/deps target/debug/deps
 
 # Phase 1: host crates under musl
 log "🔨 Phase 1: Building & testing host crates (musl userland)"
@@ -1282,7 +1283,12 @@ fi
 
 log "✅ All Rust components built with proper split targets"
 
-TARGET_DIR="$ROOT/workspace/target/release"
+CROSS_RELEASE_DIR="$ROOT/workspace/target/${COHESIX_ARCH}-unknown-linux-musl/release"
+if [ -d "$CROSS_RELEASE_DIR" ]; then
+  TARGET_DIR="$CROSS_RELEASE_DIR"
+else
+  TARGET_DIR="$ROOT/workspace/target/release"
+fi
 # Stage all main binaries
 for bin in cohcc cohbuild cli_cap cohtrace cohrun_cli cohagent cohrole cohrun cohup srvctl indexserver devwatcher physics-server exportfs import mount srv scenario_compiler cloud cohesix cohfuzz; do
   BIN_PATH="$TARGET_DIR/$bin"
@@ -1398,29 +1404,91 @@ if [ "$cpio_entry_1" != "kernel.elf" ] || \
   exit 1
 fi
 
-# Replace or inject the embedded CPIO archive into elfloader
-if aarch64-linux-gnu-readelf -S "$ROOT/third_party/seL4/artefacts/elfloader" | grep -q '._archive_cpio'; then
-  OBJCOPY_OP="--update-section"
-else
-  OBJCOPY_OP="--add-section"
-fi
-aarch64-linux-gnu-objcopy \
-  "$OBJCOPY_OP" ._archive_cpio="$ROOT/boot/cohesix.cpio" \
-  --set-section-flags ._archive_cpio=contents,alloc,load,readonly,data \
-  "$ROOT/third_party/seL4/artefacts/elfloader" "$ROOT/boot/elfloader"
+# Replace the embedded archive inside the elfloader's .rodata section
+patch_elfloader_archive() {
+  local target="$1"
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$target" "$CPIO_IMAGE" <<'PY'
+import pathlib
+import subprocess
+import sys
 
-# Sanity check
-if [ ! -f "$ROOT/boot/elfloader" ]; then
-  echo "❌ ELFLoader build failed: output missing" >&2
+elf_path = pathlib.Path(sys.argv[1])
+cpio_path = pathlib.Path(sys.argv[2])
+
+nm_output = subprocess.check_output([
+    "aarch64-linux-gnu-nm", "-n", str(elf_path)
+], text=True)
+symbols = {}
+for line in nm_output.splitlines():
+    parts = line.split()
+    if len(parts) >= 3:
+        addr_str, _typ, name = parts[:3]
+        if name in {"_archive_start", "_archive_end"}:
+            symbols[name] = int(addr_str, 16)
+
+start = symbols.get("_archive_start")
+end = symbols.get("_archive_end")
+if start is None or end is None:
+    sys.exit("missing archive symbols on {}".format(elf_path))
+if end <= start:
+    sys.exit("archive end precedes start on {}".format(elf_path))
+
+readelf_output = subprocess.check_output([
+    "aarch64-linux-gnu-readelf", "-S", str(elf_path)
+], text=True)
+rodata_addr = rodata_off = rodata_size = None
+lines = readelf_output.splitlines()
+for idx, line in enumerate(lines):
+    parts = line.split()
+    if len(parts) >= 6 and parts[2] == '.rodata':
+        rodata_addr = int(parts[4], 16)
+        rodata_off = int(parts[5], 16)
+        if idx + 1 < len(lines):
+            size_parts = lines[idx + 1].split()
+            if size_parts:
+                rodata_size = int(size_parts[0], 16)
+        break
+if rodata_addr is None:
+    sys.exit("failed to locate .rodata on {}".format(elf_path))
+if rodata_size is None:
+    sys.exit("failed to read .rodata size on {}".format(elf_path))
+
+start_off = rodata_off + (start - rodata_addr)
+end_off = rodata_off + (end - rodata_addr)
+if start_off < rodata_off or end_off > rodata_off + rodata_size:
+    sys.exit("archive slice outside .rodata for {}".format(elf_path))
+
+archive_capacity = end_off - start_off
+cpio_data = pathlib.Path(cpio_path).read_bytes()
+if len(cpio_data) > archive_capacity:
+    sys.exit(
+        f"new archive ({len(cpio_data)}) exceeds available space ({archive_capacity})"
+    )
+
+blob = bytearray(elf_path.read_bytes())
+blob[start_off:start_off + len(cpio_data)] = cpio_data
+pad_start = start_off + len(cpio_data)
+if pad_start < end_off:
+    blob[pad_start:end_off] = b"\x00" * (end_off - pad_start)
+elf_path.write_bytes(blob)
+PY
+  else
+    python_skip_log
+    echo "❌ python3 is required to patch the elfloader archive" >&2
+    exit 1
+  fi
+}
+
+patch_elfloader_archive "$ROOT/third_party/seL4/artefacts/elfloader"
+patch_elfloader_archive "$ROOT/boot/elfloader"
+
+if ! strings -a "$ROOT/boot/elfloader" | grep -q 'ROOTSERVER ONLINE'; then
+  echo "❌ Patched elfloader archive does not contain cohesix_root payload" >&2
   exit 1
 fi
 
-if ! aarch64-linux-gnu-readelf -S "$ROOT/boot/elfloader" | grep -q '._archive_cpio'; then
-  echo "❌ Section ._archive_cpio not found in patched elfloader" >&2
-  exit 1
-fi
-
-echo "✅ ELFLoader patched successfully"
+echo "✅ ELFLoader archive replaced"
 
 # 5) Export the path
 CPIO_IMAGE="$ROOT/boot/cohesix.cpio"

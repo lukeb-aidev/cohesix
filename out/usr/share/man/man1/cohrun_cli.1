@@ -1,0 +1,23 @@
+.\" CLASSIFICATION: COMMUNITY
+.\" Filename: cohrun_cli.1 v0.1
+.\" Author: Lukas Bower
+.\" Date Modified: 2027-12-07
+.TH COHRUN_CLI 1 "2027-12-07" "Cohesix" "User Commands"
+.SH NAME
+cohrun_cli \- execute scenario files
+.SH SYNOPSIS
+.B cohrun_cli
+.RI --scenario " <file>"
+.SH DESCRIPTION
+.B cohrun_cli
+executes a Cohesix scenario JSON file. The
+.B COH_MODE
+environment variable toggles verbose dev output.
+.SH OPTIONS
+.TP
+.B --scenario
+Path to the scenario file to run.
+.SH EXAMPLES
+.B cohrun_cli --scenario kiosk_start.json
+.SH SEE ALSO
+.BR cohrun (1)

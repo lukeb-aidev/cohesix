@@ -1,0 +1,26 @@
+.\" CLASSIFICATION: COMMUNITY
+.\" Filename: devwatcher.1 v0.1
+.\" Author: Lukas Bower
+.\" Date Modified: 2027-12-07
+.TH DEVWATCHER 1 "2027-12-07" "Cohesix" "User Commands"
+.SH NAME
+devwatcher \- monitor filesystem events
+.SH SYNOPSIS
+.B devwatcher
+.RI [--interval " dur"]
+.SH DESCRIPTION
+.B devwatcher
+listens on paths specified in
+.B /dev/watch/ctl
+and appends change events to
+.BR /dev/watch/events .
+.SH OPTIONS
+.TP
+.B --interval
+Polling interval for new events (default "1s").
+.SH EXAMPLES
+echo /tmp >/dev/watch/ctl
+.br
+devwatcher --interval 500ms
+.SH SEE ALSO
+.BR indexserver (1)

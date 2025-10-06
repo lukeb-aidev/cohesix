@@ -1,0 +1,46 @@
+.\" CLASSIFICATION: COMMUNITY
+.\" Filename: ls.1 v0.1
+.\" Author: Lukas Bower
+.\" Date Modified: 2025-07-12
+.TH "ls" 1
+.SH NAME
+ls
+.SH SYNOPSIS
+ls [OPTIONS]
+.SH DESCRIPTION
+Usage: ls [OPTION]\.\.\. [FILE]\.\.\.
+List information about the FILEs (the current directory by default)\.
+Sort entries alphabetically if none of -cftuvSUX nor --sort is specified\.
+
+Mandatory arguments to long options are mandatory for short options too\.
+  -a, --all                  do not ignore entries starting with \.
+  -A, --almost-all           do not list implied \. and \.\.
+      --author               with -l, print the author of each file
+  -b, --escape               print C-style escapes for nongraphic characters
+      --block-size=SIZE      with -l, scale sizes by SIZE when printing them;
+                             e\.g\., '--block-size=M'; see SIZE format below
+
+  -B, --ignore-backups       do not list implied entries ending with ~
+  -c                         with -lt: sort by, and show, ctime (time of last
+                             change of file status information);
+                             with -l: show ctime and sort by name;
+                             otherwise: sort by ctime, newest first
+
+  -C                         list entries by columns
+      --color[=WHEN]         color the output WHEN; more info below
+
+.TH LS 1 "2025-07-12" "Cohesix v1.0" "Cohesix Project"
+.SH NAME
+ls \- list directory contents
+.SH SYNOPSIS
+.B ls
+.SH DESCRIPTION
+ls is provided by BusyBox. Use "ls --help" for options.
+.SH OPTIONS
+See \fB--help\fR for available options.
+.SH FILES
+
+.SH EXAMPLES
+
+.SH SEE ALSO
+
