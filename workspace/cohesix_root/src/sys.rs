@@ -190,21 +190,48 @@ pub fn coh_log(msg: &str) {
     compiler_fence(Ordering::SeqCst);
 }
 
+// Manual mem* shims to avoid LLVM lowering to self-recursive symbols in no_std builds.
 #[no_mangle]
 pub unsafe extern "C" fn memcpy(dest: *mut u8, src: *const u8, n: usize) -> *mut u8 {
-    core::ptr::copy_nonoverlapping(src, dest, n);
+    let mut i = 0;
+    while i < n {
+        *dest.add(i) = *src.add(i);
+        i += 1;
+    }
     dest
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn memmove(dest: *mut u8, src: *const u8, n: usize) -> *mut u8 {
-    core::ptr::copy(src, dest, n);
+    if n == 0 || dest as *const u8 == src {
+        return dest;
+    }
+    let dest_addr = dest as usize;
+    let src_addr = src as usize;
+    if dest_addr < src_addr || dest_addr >= src_addr.wrapping_add(n) {
+        let mut i = 0;
+        while i < n {
+            *dest.add(i) = *src.add(i);
+            i += 1;
+        }
+    } else {
+        let mut i = n;
+        while i != 0 {
+            i -= 1;
+            *dest.add(i) = *src.add(i);
+        }
+    }
     dest
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn memset(dest: *mut u8, c: i32, n: usize) -> *mut u8 {
-    core::ptr::write_bytes(dest, c as u8, n);
+    let byte = c as u8;
+    let mut i = 0;
+    while i < n {
+        *dest.add(i) = byte;
+        i += 1;
+    }
     dest
 }
 
