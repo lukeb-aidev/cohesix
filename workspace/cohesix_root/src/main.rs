@@ -338,6 +338,13 @@ pub fn abort(msg: &str) -> ! {
     }
 }
 
+#[no_mangle]
+pub unsafe extern "C" fn init_tls_early() {
+    let bi = bootinfo::bootinfo();
+    sys::sel4_set_tls(bi.ipc_buffer as *const u8);
+    sys::coh_log("[root] tls_init");
+}
+
 fn cstr(bytes: &[u8]) -> *const c_char {
     bytes.as_ptr() as *const c_char
 }
@@ -537,7 +544,6 @@ fn exec_init() -> ! {
 
 #[no_mangle]
 pub extern "C" fn main() {
-    sys::coh_log("[root] main_enter");
     sys::init_uart();
     let boot_start_ticks = monotonic_ticks();
     trace::record("boot:start", boot_start_ticks);
@@ -545,6 +551,7 @@ pub extern "C" fn main() {
         let bi = bootinfo::bootinfo();
         sys::sel4_set_tls(bi.ipc_buffer as *const u8);
     }
+    sys::coh_log("[root] main_enter");
     sys::coh_log("ROOTSERVER ONLINE");
     unsafe {
         ALLOC_CHECK = 0xdeadbeefdeadbeef;
