@@ -2,7 +2,7 @@
 # CLASSIFICATION: COMMUNITY
 # Filename: cohesix_fetch_build.sh v1.59
 # Author: Lukas Bower
-# Date Modified: 2025-10-06
+# Date Modified: 2029-11-19
 
 # This script fetches and builds the Cohesix project, including seL4 and other dependencies.
 
@@ -1386,11 +1386,11 @@ cd "$ROOT/third_party/seL4/artefacts"
 [ -f cohesix_root.elf ] || { echo "❌ Missing cohesix_root.elf" >&2; exit 1; }
 [ -f kernel.dtb ] || { echo "❌ Missing kernel.dtb" >&2; exit 1; }
 
-# 4) Pack into a newc cpio archive with the DTB immediately after the kernel
-printf '%s\n' kernel.elf kernel.dtb cohesix_root.elf | \
+# 4) Pack into a newc cpio archive with the rootserver immediately after the kernel
+printf '%s\n' kernel.elf cohesix_root.elf kernel.dtb | \
   cpio -o -H newc > "$ROOT/boot/cohesix.cpio"
 
-# Verify archive order (kernel.elf, kernel.dtb, cohesix_root.elf)
+# Verify archive order
 log "📦 CPIO first entries:"
 cpio_listing=$(cpio -it < "$ROOT/boot/cohesix.cpio" | head -n 3)
 printf '%s\n' "$cpio_listing" >&3
@@ -1398,18 +1398,17 @@ cpio_entry_1=$(printf '%s\n' "$cpio_listing" | sed -n '1p')
 cpio_entry_2=$(printf '%s\n' "$cpio_listing" | sed -n '2p')
 cpio_entry_3=$(printf '%s\n' "$cpio_listing" | sed -n '3p')
 if [ "$cpio_entry_1" != "kernel.elf" ] || \
-   [ "$cpio_entry_2" != "kernel.dtb" ] || \
-   [ "$cpio_entry_3" != "cohesix_root.elf" ]; then
-  echo "❌ Unexpected CPIO order (expected kernel.elf kernel.dtb cohesix_root.elf): $cpio_listing" >&2
+   [ "$cpio_entry_2" != "cohesix_root.elf" ] || \
+   [ "$cpio_entry_3" != "kernel.dtb" ]; then
+  echo "❌ Unexpected CPIO order (expected kernel.elf cohesix_root.elf kernel.dtb): $cpio_listing" >&2
   exit 1
 fi
 
 # Replace the embedded archive inside the elfloader's .rodata section
 patch_elfloader_archive() {
   local target="$1"
-  local archive_path="$2"
   if command -v python3 >/dev/null 2>&1; then
-    python3 - "$target" "$archive_path" <<'PY'
+    python3 - "$target" "$CPIO_IMAGE" <<'PY'
 import pathlib
 import subprocess
 import sys
@@ -1452,8 +1451,6 @@ for idx, line in enumerate(lines):
         break
 if rodata_addr is None:
     sys.exit("failed to locate .rodata on {}".format(elf_path))
-if rodata_size is None:
-    sys.exit("failed to read .rodata size on {}".format(elf_path))
 
 start_off = rodata_off + (start - rodata_addr)
 end_off = rodata_off + (end - rodata_addr)
@@ -1481,8 +1478,13 @@ PY
   fi
 }
 
-patch_elfloader_archive "$ROOT/third_party/seL4/artefacts/elfloader" "$ROOT/boot/cohesix.cpio"
-patch_elfloader_archive "$ROOT/boot/elfloader" "$ROOT/boot/cohesix.cpio"
+patch_elfloader_archive "$ROOT/third_party/seL4/artefacts/elfloader"
+patch_elfloader_archive "$ROOT/boot/elfloader"
+
+if ! strings -a "$ROOT/boot/elfloader" | grep -q 'ROOTSERVER ONLINE'; then
+  echo "❌ Patched elfloader archive does not contain cohesix_root payload" >&2
+  exit 1
+fi
 
 echo "✅ ELFLoader archive replaced"
 
