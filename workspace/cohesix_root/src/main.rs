@@ -537,6 +537,7 @@ fn exec_init() -> ! {
 
 #[no_mangle]
 pub extern "C" fn main() {
+    sys::coh_log("[root] main_enter");
     sys::init_uart();
     let boot_start_ticks = monotonic_ticks();
     trace::record("boot:start", boot_start_ticks);
