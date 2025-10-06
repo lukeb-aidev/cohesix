@@ -15,6 +15,21 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$ROOT/prebuilt/mandoc"
 MANDOC_DIR="$ROOT/third_party/mandoc"
 
+# Prefer a vendored mandoc binary if one has been provided; this avoids
+# rebuilding (and any host toolchain dependency) when the prebuilt artefact
+# is already under version control.
+for candidate in \
+    "$MANDOC_DIR/mandoc.$ARCH" \
+    "$MANDOC_DIR/bin/mandoc.$ARCH" \
+    "$OUT/mandoc.$ARCH"; do
+    if [ -f "$candidate" ]; then
+        mkdir -p "$OUT"
+        cp "$candidate" "$OUT/mandoc.$ARCH"
+        echo "mandoc staged from vendored binary: $candidate"
+        exit 0
+    fi
+done
+
 pick_tarball() {
     for candidate in \
         "$MANDOC_DIR/mdocml-${VER}.tar.gz" \
@@ -129,6 +144,7 @@ replacements = {
     '#define HAVE_SYS_ENDIAN 1': '#define HAVE_SYS_ENDIAN 0',
     '#define HAVE_STRLCAT 1': '#define HAVE_STRLCAT 0',
     '#define HAVE_STRLCPY 1': '#define HAVE_STRLCPY 0',
+    '#define HAVE_EFTYPE 1': '#define HAVE_EFTYPE 0',
 }
 for old, new in replacements.items():
     text = text.replace(old, new)
@@ -136,7 +152,7 @@ open(path, 'w', encoding='utf-8').write(text)
 PY
 fi
 
-CPPFLAGS_EXTRA="-DHAVE_SYS_ENDIAN=0 -DHAVE_STRLCAT=0 -DHAVE_STRLCPY=0"
+CPPFLAGS_EXTRA="-DHAVE_SYS_ENDIAN=0 -DHAVE_STRLCAT=0 -DHAVE_STRLCPY=0 -DHAVE_EFTYPE=0 -DEFTYPE=EIO"
 
 make CC="$CC_CHOOSEN" CPPFLAGS="$CPPFLAGS_EXTRA" \
   LDFLAGS=-static WITHOUT_X11=1 WITHOUT_MANDOCDB=1 >/dev/null
