@@ -576,67 +576,72 @@ COHESIX_RUST_LINKER_FLAGS="-C linker=${COHESIX_LINKER} -C linker-flavor=${COHESI
 COHESIX_RUST_GC_FLAGS="-C link-arg=--gc-sections -C link-arg=--eh-frame-hdr"
 
 if [ -n "$PHASE" ]; then
-  configure_libclang
-  cd "$ROOT/workspace"
-  CROSS_RUSTFLAGS="${COHESIX_RUST_LINKER_FLAGS} ${COHESIX_RUST_GC_FLAGS} -C link-arg=-L${SEL4_LIB_DIR}"
-  if [ "$PHASE" = "1" ]; then
-    log "🔨 Phase 1: Building host crates for musl userland"
-    cargo build --release --workspace \
-      --exclude 'cohesix_root' \
-      --exclude 'sel4-sys-extern-wrapper' \
-      --target aarch64-unknown-linux-musl
-    log "⏭️ Cross-target tests compiled only (aarch64-unknown-linux-musl)"
-    cargo test --release --workspace \
-      --exclude 'cohesix_root' \
-      --exclude 'sel4-sys-extern-wrapper' \
-      --target aarch64-unknown-linux-musl \
-      --no-run
-    log "✅ Phase 1 build succeeded (tests compiled for cross-target)"
-  elif [ "$PHASE" = "2" ]; then
-    log "🔨 Phase 2: Building sel4-sys-extern-wrapper"
-    export CFLAGS="-I${ROOT}/workspace/sel4-sys-extern-wrapper/out"
-    export LDFLAGS="-L${SEL4_LIB_DIR}"
-    export RUSTFLAGS="-C panic=abort -L${SEL4_LIB_DIR} ${CROSS_RUSTFLAGS}"
-    # Ensure Rust source is available for build-std
-    rustup component add rust-src --toolchain nightly || true
-    cargo +nightly build -p sel4-sys-extern-wrapper --release \
-      --target="${SEL4_TARGET_SPEC_SANITIZED:-$SEL4_TARGET_SPEC_SRC}" \
-      -Z build-std=core,alloc,compiler_builtins \
-      -Z build-std-features=compiler-builtins-mem
-    WRAPPER_RLIB=$(find target/sel4-aarch64/release/deps -maxdepth 1 -name 'libsel4_sys_extern_wrapper*.rlib' -print -quit 2>/dev/null)
-    if [ -n "$WRAPPER_RLIB" ]; then
-      log "✅ Phase 2 build succeeded: $(basename "$WRAPPER_RLIB")"
-    else
-      echo "❌ wrapper artifact missing" >&2
-      exit 1
-    fi
-  elif [ "$PHASE" = "3" ]; then
-    log "🔨 Phase 3: Building cohesix_root under nightly"
-    export LDFLAGS="-L${SEL4_LIB_DIR}"
-    export RUSTFLAGS="-C panic=abort -L${SEL4_LIB_DIR} ${CROSS_RUSTFLAGS}"
-    # Ensure Rust source is available for build-std
-    rustup component add rust-src --toolchain nightly || true
-    cargo +nightly build -p cohesix_root --release \
-      --target="${SEL4_TARGET_SPEC_SANITIZED:-$SEL4_TARGET_SPEC_SRC}" \
-      -Z build-std=core,alloc,compiler_builtins \
-      -Z build-std-features=compiler-builtins-mem
-    ROOT_ARTIFACT=$(find target/sel4-aarch64/release/deps -maxdepth 1 -name 'libcohesix_root*.rlib' -print -quit 2>/dev/null)
-    if [ -z "$ROOT_ARTIFACT" ]; then
-      BIN_ARTIFACT=$(find target/sel4-aarch64/release -maxdepth 1 -type f -name 'cohesix_root' -print -quit 2>/dev/null)
-    else
-      BIN_ARTIFACT=""
-    fi
-    if [ -n "$ROOT_ARTIFACT" ] || [ -n "$BIN_ARTIFACT" ]; then
-      log "✅ Phase 3 build succeeded: $(basename "${ROOT_ARTIFACT:-$BIN_ARTIFACT}")"
-    else
-      echo "❌ cohesix_root artifact missing" >&2
-      exit 1
-    fi
+  if [ "$PHASE" = "4" ]; then
+    log "🔁 Phase 4: Reusing previous build outputs; continuing with staging and packaging"
+    cd "$ROOT"
   else
-    echo "❌ Invalid phase: $PHASE" >&2
-    exit 1
+    configure_libclang
+    cd "$ROOT/workspace"
+    CROSS_RUSTFLAGS="${COHESIX_RUST_LINKER_FLAGS} ${COHESIX_RUST_GC_FLAGS} -C link-arg=-L${SEL4_LIB_DIR}"
+    if [ "$PHASE" = "1" ]; then
+      log "🔨 Phase 1: Building host crates for musl userland"
+      cargo build --release --workspace \
+        --exclude 'cohesix_root' \
+        --exclude 'sel4-sys-extern-wrapper' \
+        --target aarch64-unknown-linux-musl
+      log "⏭️ Cross-target tests compiled only (aarch64-unknown-linux-musl)"
+      cargo test --release --workspace \
+        --exclude 'cohesix_root' \
+        --exclude 'sel4-sys-extern-wrapper' \
+        --target aarch64-unknown-linux-musl \
+        --no-run
+      log "✅ Phase 1 build succeeded (tests compiled for cross-target)"
+    elif [ "$PHASE" = "2" ]; then
+      log "🔨 Phase 2: Building sel4-sys-extern-wrapper"
+      export CFLAGS="-I${ROOT}/workspace/sel4-sys-extern-wrapper/out"
+      export LDFLAGS="-L${SEL4_LIB_DIR}"
+      export RUSTFLAGS="-C panic=abort -L${SEL4_LIB_DIR} ${CROSS_RUSTFLAGS}"
+      # Ensure Rust source is available for build-std
+      rustup component add rust-src --toolchain nightly || true
+      cargo +nightly build -p sel4-sys-extern-wrapper --release \
+        --target="${SEL4_TARGET_SPEC_SANITIZED:-$SEL4_TARGET_SPEC_SRC}" \
+        -Z build-std=core,alloc,compiler_builtins \
+        -Z build-std-features=compiler-builtins-mem
+      WRAPPER_RLIB=$(find target/sel4-aarch64/release/deps -maxdepth 1 -name 'libsel4_sys_extern_wrapper*.rlib' -print -quit 2>/dev/null)
+      if [ -n "$WRAPPER_RLIB" ]; then
+        log "✅ Phase 2 build succeeded: $(basename "$WRAPPER_RLIB")"
+      else
+        echo "❌ wrapper artifact missing" >&2
+        exit 1
+      fi
+    elif [ "$PHASE" = "3" ]; then
+      log "🔨 Phase 3: Building cohesix_root under nightly"
+      export LDFLAGS="-L${SEL4_LIB_DIR}"
+      export RUSTFLAGS="-C panic=abort -L${SEL4_LIB_DIR} ${CROSS_RUSTFLAGS}"
+      # Ensure Rust source is available for build-std
+      rustup component add rust-src --toolchain nightly || true
+      cargo +nightly build -p cohesix_root --release \
+        --target="${SEL4_TARGET_SPEC_SANITIZED:-$SEL4_TARGET_SPEC_SRC}" \
+        -Z build-std=core,alloc,compiler_builtins \
+        -Z build-std-features=compiler-builtins-mem
+      ROOT_ARTIFACT=$(find target/sel4-aarch64/release/deps -maxdepth 1 -name 'libcohesix_root*.rlib' -print -quit 2>/dev/null)
+      if [ -z "$ROOT_ARTIFACT" ]; then
+        BIN_ARTIFACT=$(find target/sel4-aarch64/release -maxdepth 1 -type f -name 'cohesix_root' -print -quit 2>/dev/null)
+      else
+        BIN_ARTIFACT=""
+      fi
+      if [ -n "$ROOT_ARTIFACT" ] || [ -n "$BIN_ARTIFACT" ]; then
+        log "✅ Phase 3 build succeeded: $(basename "${ROOT_ARTIFACT:-$BIN_ARTIFACT}")"
+      else
+        echo "❌ cohesix_root artifact missing" >&2
+        exit 1
+      fi
+    else
+      echo "❌ Invalid phase: $PHASE" >&2
+      exit 1
+    fi
+    exit 0
   fi
-  exit 0
 fi
 STAGE_DIR="$ROOT/out"
 GO_HELPERS_DIR="$ROOT/out/go_helpers"
@@ -1211,77 +1216,87 @@ if ! grep -q "\[workspace\]" "$ROOT/workspace/Cargo.toml"; then
   exit 1
 fi
 
-log "🔨 Running Rust build section"
 cd "$ROOT/workspace"
-cargo clean
-mkdir -p target/release/deps target/debug/deps
 
-# Phase 1: host crates under musl
-log "🔨 Phase 1: Building & testing host crates (musl userland)"
-rustup target add aarch64-unknown-linux-musl || true
-cargo build --release --workspace \
-  --exclude 'cohesix_root' \
-  --exclude 'sel4-sys-extern-wrapper' \
-  --target=aarch64-unknown-linux-musl
-log "⏭️ Cross-target tests compiled only (aarch64-unknown-linux-musl)"
-cargo test --release --workspace \
-  --exclude 'cohesix_root' \
-  --exclude 'sel4-sys-extern-wrapper' \
-  --target=aarch64-unknown-linux-musl \
-  --no-run
-log "✅ Phase 1 build succeeded (tests compiled for cross-target)"
-log "✅ Phase 1 build succeeded"
-
-# Common stub-header setup
-SEL4_LIB_DIR="${ROOT}/third_party/seL4/lib"
-: "${SEL4_LIB_DIR:?SEL4_LIB_DIR must be set}"
-export LIBRARY_PATH="$SEL4_LIB_DIR:${LIBRARY_PATH:-}"
-
-export LDFLAGS="-L${SEL4_LIB_DIR}"
-
-# Phase 2: sel4-sys-extern-wrapper under nightly
-log "🔨 Phase 2: Building sel4-sys-extern-wrapper"
-export CFLAGS="-I${ROOT}/workspace/sel4-sys-extern-wrapper/out"
-export LDFLAGS="-L${SEL4_LIB_DIR}"
-export RUSTFLAGS="-C panic=abort -L${SEL4_LIB_DIR} ${CROSS_RUSTFLAGS}"
-rustup component add rust-src --toolchain nightly || true
-cargo +nightly build -p sel4-sys-extern-wrapper --release \
-  --target="${SEL4_TARGET_SPEC_SANITIZED:-$SEL4_TARGET_SPEC_SRC}" \
-  -Z build-std=core,alloc,compiler_builtins \
-  -Z build-std-features=compiler-builtins-mem
-WRAPPER_RLIB=$(find target/sel4-aarch64/release/deps -maxdepth 1 -name 'libsel4_sys_extern_wrapper*.rlib' -print -quit 2>/dev/null)
-if [ -n "$WRAPPER_RLIB" ]; then
-  log "✅ sel4-sys-extern-wrapper built: $(basename "$WRAPPER_RLIB")"
-else
-  echo "❌ wrapper build failed: artifact missing" >&2
-  exit 1
+SKIP_RUST_BUILD=0
+if [ "$PHASE" = "4" ]; then
+  SKIP_RUST_BUILD=1
 fi
 
-# Phase 3: cohesix_root under nightly
-log "🔨 Phase 3: Building cohesix_root"
-export LDFLAGS="-L${SEL4_LIB_DIR}"
-export RUSTFLAGS="-C panic=abort -L${SEL4_LIB_DIR} ${CROSS_RUSTFLAGS}"
-rustup component add rust-src --toolchain nightly || true
-cargo +nightly build \
-  -p cohesix_root \
-  --release \
-  --target="${SEL4_TARGET_SPEC_SANITIZED:-$SEL4_TARGET_SPEC_SRC}" \
-  -Z build-std=core,alloc,compiler_builtins \
-  -Z build-std-features=compiler-builtins-mem
-ROOT_ARTIFACT=$(find target/sel4-aarch64/release/deps -maxdepth 1 -name 'libcohesix_root*.rlib' -print -quit 2>/dev/null)
-if [ -z "$ROOT_ARTIFACT" ]; then
-  BIN_ARTIFACT=$(find target/sel4-aarch64/release -maxdepth 1 -type f -name 'cohesix_root' -print -quit 2>/dev/null)
-else
-  BIN_ARTIFACT=""
-fi
-if [ -n "$ROOT_ARTIFACT" ] || [ -n "$BIN_ARTIFACT" ]; then
-  log "✅ cohesix_root built: $(basename "${ROOT_ARTIFACT:-$BIN_ARTIFACT}")"
-else
-  echo "❌ cohesix_root build failed: artifact missing" >&2
-  exit 1
-fi
+if [ "$SKIP_RUST_BUILD" -eq 0 ]; then
+  log "🔨 Running Rust build section"
+  cargo clean
+  mkdir -p target/release/deps target/debug/deps
 
-log "✅ All Rust components built with proper split targets"
+  # Phase 1: host crates under musl
+  log "🔨 Phase 1: Building & testing host crates (musl userland)"
+  rustup target add aarch64-unknown-linux-musl || true
+  cargo build --release --workspace \
+    --exclude 'cohesix_root' \
+    --exclude 'sel4-sys-extern-wrapper' \
+    --target=aarch64-unknown-linux-musl
+  log "⏭️ Cross-target tests compiled only (aarch64-unknown-linux-musl)"
+  cargo test --release --workspace \
+    --exclude 'cohesix_root' \
+    --exclude 'sel4-sys-extern-wrapper' \
+    --target=aarch64-unknown-linux-musl \
+    --no-run
+  log "✅ Phase 1 build succeeded (tests compiled for cross-target)"
+  log "✅ Phase 1 build succeeded"
+
+  # Common stub-header setup
+  SEL4_LIB_DIR="${ROOT}/third_party/seL4/lib"
+  : "${SEL4_LIB_DIR:?SEL4_LIB_DIR must be set}"
+  export LIBRARY_PATH="$SEL4_LIB_DIR:${LIBRARY_PATH:-}"
+
+  export LDFLAGS="-L${SEL4_LIB_DIR}"
+
+  # Phase 2: sel4-sys-extern-wrapper under nightly
+  log "🔨 Phase 2: Building sel4-sys-extern-wrapper"
+  export CFLAGS="-I${ROOT}/workspace/sel4-sys-extern-wrapper/out"
+  export LDFLAGS="-L${SEL4_LIB_DIR}"
+  export RUSTFLAGS="-C panic=abort -L${SEL4_LIB_DIR} ${CROSS_RUSTFLAGS}"
+  rustup component add rust-src --toolchain nightly || true
+  cargo +nightly build -p sel4-sys-extern-wrapper --release \
+    --target="${SEL4_TARGET_SPEC_SANITIZED:-$SEL4_TARGET_SPEC_SRC}" \
+    -Z build-std=core,alloc,compiler_builtins \
+    -Z build-std-features=compiler-builtins-mem
+  WRAPPER_RLIB=$(find target/sel4-aarch64/release/deps -maxdepth 1 -name 'libsel4_sys_extern_wrapper*.rlib' -print -quit 2>/dev/null)
+  if [ -n "$WRAPPER_RLIB" ]; then
+    log "✅ sel4-sys-extern-wrapper built: $(basename "$WRAPPER_RLIB")"
+  else
+    echo "❌ wrapper build failed: artifact missing" >&2
+    exit 1
+  fi
+
+  # Phase 3: cohesix_root under nightly
+  log "🔨 Phase 3: Building cohesix_root"
+  export LDFLAGS="-L${SEL4_LIB_DIR}"
+  export RUSTFLAGS="-C panic=abort -L${SEL4_LIB_DIR} ${CROSS_RUSTFLAGS}"
+  rustup component add rust-src --toolchain nightly || true
+  cargo +nightly build \
+    -p cohesix_root \
+    --release \
+    --target="${SEL4_TARGET_SPEC_SANITIZED:-$SEL4_TARGET_SPEC_SRC}" \
+    -Z build-std=core,alloc,compiler_builtins \
+    -Z build-std-features=compiler-builtins-mem
+  ROOT_ARTIFACT=$(find target/sel4-aarch64/release/deps -maxdepth 1 -name 'libcohesix_root*.rlib' -print -quit 2>/dev/null)
+  if [ -z "$ROOT_ARTIFACT" ]; then
+    BIN_ARTIFACT=$(find target/sel4-aarch64/release -maxdepth 1 -type f -name 'cohesix_root' -print -quit 2>/dev/null)
+  else
+    BIN_ARTIFACT=""
+  fi
+  if [ -n "$ROOT_ARTIFACT" ] || [ -n "$BIN_ARTIFACT" ]; then
+    log "✅ cohesix_root built: $(basename "${ROOT_ARTIFACT:-$BIN_ARTIFACT}")"
+  else
+    echo "❌ cohesix_root build failed: artifact missing" >&2
+    exit 1
+  fi
+
+  log "✅ All Rust components built with proper split targets"
+else
+  log "⏭️ Phase 4: Skipping Rust rebuild; reusing existing artifacts"
+fi
 
 CROSS_RELEASE_DIR="$ROOT/workspace/target/${COHESIX_ARCH}-unknown-linux-musl/release"
 if [ -d "$CROSS_RELEASE_DIR" ]; then
@@ -1374,8 +1389,16 @@ mkdir -p "$ROOT/boot"
 ROOT_ELF_SRC="$ROOT/workspace/target/sel4-aarch64/release/cohesix_root"
 ROOT_ELF_DST="$ROOT/third_party/seL4/artefacts/cohesix_root.elf"
 mkdir -p "$ROOT/out/bin"
-cp -- "$ROOT_ELF_SRC" "$ROOT/out/bin/cohesix_root.elf"
-cp -- "$ROOT_ELF_SRC" "$ROOT_ELF_DST"
+if [ -f "$ROOT_ELF_SRC" ]; then
+  cp -- "$ROOT_ELF_SRC" "$ROOT/out/bin/cohesix_root.elf"
+  cp -- "$ROOT_ELF_SRC" "$ROOT_ELF_DST"
+elif [ -f "$ROOT_ELF_DST" ]; then
+  log "♻️  Reusing previously staged cohesix_root.elf"
+  cp -- "$ROOT_ELF_DST" "$ROOT/out/bin/cohesix_root.elf"
+else
+  echo "❌ Missing cohesix_root artefact. Run cohesix_fetch_build.sh --phase=3 before invoking phase 4" >&2
+  exit 1
+fi
 
 cp -- "$ROOT/third_party/seL4/artefacts/elfloader" \
       "$ROOT/boot/elfloader"
@@ -1386,8 +1409,8 @@ cd "$ROOT/third_party/seL4/artefacts"
 [ -f cohesix_root.elf ] || { echo "❌ Missing cohesix_root.elf" >&2; exit 1; }
 [ -f kernel.dtb ] || { echo "❌ Missing kernel.dtb" >&2; exit 1; }
 
-# 4) Pack into a newc cpio archive with the rootserver immediately after the kernel
-printf '%s\n' kernel.elf cohesix_root.elf kernel.dtb | \
+# 4) Pack into a newc cpio archive with the kernel DTB as the second image
+printf '%s\n' kernel.elf kernel.dtb cohesix_root.elf | \
   cpio -o -H newc > "$ROOT/boot/cohesix.cpio"
 
 CPIO_IMAGE="$ROOT/boot/cohesix.cpio"
@@ -1400,9 +1423,9 @@ cpio_entry_1=$(printf '%s\n' "$cpio_listing" | sed -n '1p')
 cpio_entry_2=$(printf '%s\n' "$cpio_listing" | sed -n '2p')
 cpio_entry_3=$(printf '%s\n' "$cpio_listing" | sed -n '3p')
 if [ "$cpio_entry_1" != "kernel.elf" ] || \
-   [ "$cpio_entry_2" != "cohesix_root.elf" ] || \
-   [ "$cpio_entry_3" != "kernel.dtb" ]; then
-  echo "❌ Unexpected CPIO order (expected kernel.elf cohesix_root.elf kernel.dtb): $cpio_listing" >&2
+   [ "$cpio_entry_2" != "kernel.dtb" ] || \
+   [ "$cpio_entry_3" != "cohesix_root.elf" ]; then
+  echo "❌ Unexpected CPIO order (expected kernel.elf kernel.dtb cohesix_root.elf): $cpio_listing" >&2
   exit 1
 fi
 
@@ -1483,7 +1506,9 @@ PY
 patch_elfloader_archive "$ROOT/third_party/seL4/artefacts/elfloader"
 patch_elfloader_archive "$ROOT/boot/elfloader"
 
-if ! strings -a "$ROOT/boot/elfloader" | grep -q 'ROOTSERVER ONLINE'; then
+# Use plain grep here so the pipe drains fully; `grep -q` would trigger
+# SIGPIPE on `strings` under `set -o pipefail` and wrongly flag a failure.
+if ! strings -a "$ROOT/boot/elfloader" | grep 'ROOTSERVER ONLINE' >/dev/null; then
   echo "❌ Patched elfloader archive does not contain cohesix_root payload" >&2
   exit 1
 fi

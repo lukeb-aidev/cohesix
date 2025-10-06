@@ -4,6 +4,10 @@
 // Date Modified: 2028-08-31
 #![allow(static_mut_refs)]
 
+include!(concat!(env!("OUT_DIR"), "/sel4_config.rs"));
+
+pub const MAX_BOOTINFO_UNTYPED_CAPS: usize = CONFIG_MAX_NUM_BOOTINFO_UNTYPED_CAPS;
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct SlotRegion {
@@ -19,8 +23,6 @@ pub struct UntypedDesc {
     pub is_device: u8,
     pub padding: [u8; core::mem::size_of::<usize>() - 2],
 }
-
-pub const MAX_BOOTINFO_UNTYPED_CAPS: usize = 256;
 
 /// Size of the bootinfo frame in bytes.
 pub const BOOTINFO_FRAME_SIZE: usize = 1 << 12;
@@ -52,6 +54,9 @@ pub struct BootInfo {
     pub untyped: SlotRegion,
     pub untyped_list: [UntypedDesc; MAX_BOOTINFO_UNTYPED_CAPS],
 }
+
+const BOOTINFO_SIZE: usize = core::mem::size_of::<BootInfo>();
+const _: [u8; BOOTINFO_FRAME_SIZE - BOOTINFO_SIZE] = [0; BOOTINFO_FRAME_SIZE - BOOTINFO_SIZE];
 
 const EMPTY_UNTYPED: UntypedDesc = UntypedDesc {
     paddr: 0,
