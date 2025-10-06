@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: sys.rs v0.14
 // Author: Lukas Bower
-// Date Modified: 2028-12-13
+// Date Modified: 2025-10-06
 #![allow(static_mut_refs)]
 
 use crate::monotonic_ticks;
@@ -29,7 +29,7 @@ pub fn init_uart() {
 #[no_mangle]
 pub unsafe extern "C" fn sel4_set_tls(ptr: *const u8) {
     core::arch::asm!(
-        "msr tpidr_el1, {0}",
+        "msr tpidr_el0, {0}",
         in(reg) ptr,
         options(nostack, preserves_flags)
     );
