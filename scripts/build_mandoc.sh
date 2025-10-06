@@ -78,6 +78,67 @@ if [ -z "$SRC_DIR" ]; then
 fi
 
 cd "$SRC_DIR"
-make LDFLAGS=-static WITHOUT_X11=1 WITHOUT_MANDOCDB=1 >/dev/null
+# Prefer cross toolchains when available so we produce Linux-compatible binaries.
+if [ -n "${MANDOC_CC:-}" ]; then
+    CC_CHOOSEN="$MANDOC_CC"
+else
+    case "$ARCH" in
+        aarch64)
+            if command -v aarch64-linux-gnu-gcc >/dev/null 2>&1; then
+                CC_CHOOSEN="aarch64-linux-gnu-gcc"
+            else
+                CC_CHOOSEN="cc"
+            fi
+            ;;
+        x86_64)
+            if command -v x86_64-linux-gnu-gcc >/dev/null 2>&1; then
+                CC_CHOOSEN="x86_64-linux-gnu-gcc"
+            else
+                CC_CHOOSEN="cc"
+            fi
+            ;;
+        *)
+            CC_CHOOSEN="cc"
+            ;;
+    esac
+fi
+
+HOST_TRIPLE=""
+case "$ARCH" in
+    aarch64) HOST_TRIPLE="aarch64-linux-gnu" ;;
+    x86_64) HOST_TRIPLE="x86_64-linux-gnu" ;;
+esac
+
+CONFIG_FLAGS="--disable-mandocdb"
+if [ -n "$HOST_TRIPLE" ]; then
+    CONFIG_FLAGS="$CONFIG_FLAGS --host=$HOST_TRIPLE"
+fi
+
+if [ -x ./configure ]; then
+    CC="$CC_CHOOSEN" ./configure $CONFIG_FLAGS >/dev/null
+fi
+
+# Override config.h entries that were detected for the Darwin build host but are
+# not available on the Linux/aarch64 target we ship in the root filesystem.
+if [ -f config.h ]; then
+    python3 - "$PWD/config.h" <<'PY'
+import sys
+path = sys.argv[1]
+text = open(path, 'r', encoding='utf-8').read()
+replacements = {
+    '#define HAVE_SYS_ENDIAN 1': '#define HAVE_SYS_ENDIAN 0',
+    '#define HAVE_STRLCAT 1': '#define HAVE_STRLCAT 0',
+    '#define HAVE_STRLCPY 1': '#define HAVE_STRLCPY 0',
+}
+for old, new in replacements.items():
+    text = text.replace(old, new)
+open(path, 'w', encoding='utf-8').write(text)
+PY
+fi
+
+CPPFLAGS_EXTRA="-DHAVE_SYS_ENDIAN=0 -DHAVE_STRLCAT=0 -DHAVE_STRLCPY=0"
+
+make CC="$CC_CHOOSEN" CPPFLAGS="$CPPFLAGS_EXTRA" \
+  LDFLAGS=-static WITHOUT_X11=1 WITHOUT_MANDOCDB=1 >/dev/null
 cp mandoc "$OUT/mandoc.$ARCH"
 echo "mandoc built for $ARCH at $OUT/mandoc.$ARCH"
