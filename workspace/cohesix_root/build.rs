@@ -66,6 +66,44 @@ fn embed_vectors(out_dir: &str, manifest_dir: &str) {
     }
 }
 
+fn emit_sel4_config(out_dir: &str, generated_dir: &Path) {
+    let config_path = generated_dir.join("kernel/gen_config.h");
+    let contents = fs::read_to_string(&config_path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {}", config_path.display(), err));
+
+    let mut max_untyped_caps: Option<usize> = None;
+    for line in contents.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("#define CONFIG_MAX_NUM_BOOTINFO_UNTYPED_CAPS") {
+            let value = rest
+                .split_whitespace()
+                .next()
+                .unwrap_or_else(|| panic!("missing value for CONFIG_MAX_NUM_BOOTINFO_UNTYPED_CAPS in {}", config_path.display()));
+            max_untyped_caps = Some(
+                value
+                    .parse()
+                    .unwrap_or_else(|err| panic!("invalid CONFIG_MAX_NUM_BOOTINFO_UNTYPED_CAPS `{}`: {}", value, err)),
+            );
+            break;
+        }
+    }
+
+    let caps = max_untyped_caps
+        .unwrap_or_else(|| panic!("CONFIG_MAX_NUM_BOOTINFO_UNTYPED_CAPS not found in {}", config_path.display()));
+
+    let out_path = Path::new(out_dir).join("sel4_config.rs");
+    let mut file = fs::File::create(&out_path)
+        .unwrap_or_else(|err| panic!("failed to create {}: {}", out_path.display(), err));
+    writeln!(
+        file,
+        "// Auto-generated from {config}\npub const CONFIG_MAX_NUM_BOOTINFO_UNTYPED_CAPS: usize = {caps};",
+        config = config_path.display()
+    )
+    .expect("write sel4_config.rs");
+
+    println!("cargo:rerun-if-changed={}", config_path.display());
+}
+
 fn rust_sysroot() -> String {
     let rustc = env::var("RUSTC").unwrap_or_else(|_| "rustc".to_owned());
     let output = Command::new(&rustc)
@@ -128,6 +166,8 @@ fn main() {
     generate_dtb_constants(&out_dir, &manifest_dir);
     embed_sel4_spec(&out_dir, &manifest_dir);
     embed_vectors(&out_dir, &manifest_dir);
+    let sel4_generated_dir = sel4_generated(&repo_root);
+    emit_sel4_config(&out_dir, &sel4_generated_dir);
 
     let sel4 = env::var("SEL4_INCLUDE").unwrap_or_else(|_| {
         sel4_paths::sel4_include(&repo_root)
@@ -148,7 +188,7 @@ fn main() {
     println!("cargo:rustc-env=CFLAGS={}", cflags);
     println!(
         "cargo:rustc-env=SEL4_GEN_HDR={}",
-        sel4_generated(&repo_root).display()
+        sel4_generated_dir.display()
     );
 
     println!(
