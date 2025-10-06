@@ -1390,6 +1390,8 @@ cd "$ROOT/third_party/seL4/artefacts"
 printf '%s\n' kernel.elf cohesix_root.elf kernel.dtb | \
   cpio -o -H newc > "$ROOT/boot/cohesix.cpio"
 
+CPIO_IMAGE="$ROOT/boot/cohesix.cpio"
+
 # Verify archive order
 log "📦 CPIO first entries:"
 cpio_listing=$(cpio -it < "$ROOT/boot/cohesix.cpio" | head -n 3)
@@ -1488,8 +1490,7 @@ fi
 
 echo "✅ ELFLoader archive replaced"
 
-# 5) Export the path
-CPIO_IMAGE="$ROOT/boot/cohesix.cpio"
+# 5) Return to repository root for downstream tooling
 cd "$ROOT"
 
 #
