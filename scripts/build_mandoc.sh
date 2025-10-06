@@ -24,8 +24,12 @@ for candidate in \
     "$OUT/mandoc.$ARCH"; do
     if [ -f "$candidate" ]; then
         mkdir -p "$OUT"
-        cp "$candidate" "$OUT/mandoc.$ARCH"
-        echo "mandoc staged from vendored binary: $candidate"
+        if [ "$candidate" != "$OUT/mandoc.$ARCH" ]; then
+            cp "$candidate" "$OUT/mandoc.$ARCH"
+            echo "mandoc staged from vendored binary: $candidate"
+        else
+            echo "mandoc binary already staged at $OUT/mandoc.$ARCH"
+        fi
         exit 0
     fi
 done
