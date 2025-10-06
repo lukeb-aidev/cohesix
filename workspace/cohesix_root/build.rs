@@ -72,6 +72,7 @@ fn emit_sel4_config(out_dir: &str, generated_dir: &Path) {
         .unwrap_or_else(|err| panic!("failed to read {}: {}", config_path.display(), err));
 
     let mut max_untyped_caps: Option<usize> = None;
+    let mut printing_enabled = false;
     for line in contents.lines() {
         let trimmed = line.trim();
         if let Some(rest) = trimmed.strip_prefix("#define CONFIG_MAX_NUM_BOOTINFO_UNTYPED_CAPS") {
@@ -84,7 +85,10 @@ fn emit_sel4_config(out_dir: &str, generated_dir: &Path) {
                     .parse()
                     .unwrap_or_else(|err| panic!("invalid CONFIG_MAX_NUM_BOOTINFO_UNTYPED_CAPS `{}`: {}", value, err)),
             );
-            break;
+            continue;
+        }
+        if trimmed == "#define CONFIG_PRINTING 1" {
+            printing_enabled = true;
         }
     }
 
@@ -96,8 +100,9 @@ fn emit_sel4_config(out_dir: &str, generated_dir: &Path) {
         .unwrap_or_else(|err| panic!("failed to create {}: {}", out_path.display(), err));
     writeln!(
         file,
-        "// Auto-generated from {config}\npub const CONFIG_MAX_NUM_BOOTINFO_UNTYPED_CAPS: usize = {caps};",
-        config = config_path.display()
+        "// Auto-generated from {config}\npub const CONFIG_MAX_NUM_BOOTINFO_UNTYPED_CAPS: usize = {caps};\npub const CONFIG_PRINTING: bool = {printing};",
+        config = config_path.display(),
+        printing = printing_enabled
     )
     .expect("write sel4_config.rs");
 

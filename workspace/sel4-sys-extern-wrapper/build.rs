@@ -61,6 +61,33 @@ fn generate_wrapper_header(out_dir: &Path) -> PathBuf {
     header_path
 }
 
+fn generate_extra_source(out_dir: &Path) -> PathBuf {
+    let source_path = out_dir.join("cohesix_sel4_wrappers.c");
+    let mut body = String::new();
+    body.push_str("// CLASSIFICATION: COMMUNITY\n");
+    body.push_str("// Filename: cohesix_sel4_wrappers.c v0.1\n");
+    body.push_str("// Author: Lukas Bower\n");
+    body.push_str("// Date Modified: 2025-10-06\n\n");
+    body.push_str("#include \"sel4_wrapper.h\"\n");
+    body.push_str("#include <sel4/sel4.h>\n\n");
+    body.push_str("int cohesix_seL4_Untyped_Retype(seL4_Untyped ut, seL4_Word type, seL4_Word size_bits, seL4_CNode root, seL4_Word node_index, seL4_Word node_depth, seL4_Word node_offset, seL4_Word num_objects) {\n");
+    body.push_str("    return seL4_Untyped_Retype(ut, type, size_bits, root, node_index, node_depth, node_offset, num_objects);\n}\n\n");
+    body.push_str("int cohesix_seL4_CNode_Mint(seL4_CPtr dest_root, seL4_CPtr dest_index, seL4_Word dest_depth, seL4_CPtr src_root, seL4_CPtr src_index, seL4_Word src_depth, seL4_CapRights_t rights, seL4_CapData_t data) {\n");
+    body.push_str("    return seL4_CNode_Mint(dest_root, dest_index, dest_depth, src_root, src_index, src_depth, rights, data);\n}\n\n");
+    body.push_str("int cohesix_seL4_CNode_Delete(seL4_CPtr dest_root, seL4_CPtr dest_index, seL4_Word dest_depth) {\n");
+    body.push_str("    return seL4_CNode_Delete(dest_root, dest_index, dest_depth);\n}\n\n");
+    body.push_str("int cohesix_seL4_ARM_Page_Map(seL4_ARM_Page page, seL4_CPtr vspace, seL4_Word vaddr, seL4_CapRights_t rights, seL4_ARM_VMAttributes attr) {\n");
+    body.push_str("    return seL4_ARM_Page_Map(page, vspace, vaddr, rights, attr);\n}\n\n");
+    body.push_str("int cohesix_seL4_ARM_Page_Unmap(seL4_ARM_Page page) {\n");
+    body.push_str("    return seL4_ARM_Page_Unmap(page);\n}\n\n");
+    body.push_str("seL4_CapRights_t cohesix_seL4_CapRights_new(seL4_Uint64 grant_reply, seL4_Uint64 grant, seL4_Uint64 read, seL4_Uint64 write) {\n");
+    body.push_str("    return seL4_CapRights_new(grant_reply, grant, read, write);\n}\n\n");
+    body.push_str("seL4_CNode_CapData_t cohesix_seL4_CNode_CapData_new(seL4_Uint64 guard, seL4_Uint64 guard_size) {\n");
+    body.push_str("    return seL4_CNode_CapData_new(guard, guard_size);\n}\n");
+    fs::write(&source_path, body).expect("write cohesix_sel4_wrappers.c");
+    source_path
+}
+
 fn main() {
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
     let project_root = sel4_paths::project_root(&manifest_dir);
@@ -93,6 +120,7 @@ fn main() {
     fs::write(plat_api.join("constants.h"), "#pragma once\n").expect("stub constants.h");
 
     let wrapper_header = generate_wrapper_header(&out_dir);
+    let extra_source = generate_extra_source(&out_dir);
 
     let mut builder = bindgen::Builder::default()
         .header(wrapper_header.to_str().unwrap())
@@ -114,6 +142,16 @@ fn main() {
     bindings
         .write_to_file(out_dir.join("bindings.rs"))
         .expect("Couldn't write bindings!");
+
+    let mut cc_builder = cc::Build::new();
+    cc_builder.compiler("aarch64-linux-gnu-gcc");
+    cc_builder.file(&extra_source);
+    cc_builder.include(&out_dir);
+    for dir in &include_dirs {
+        cc_builder.include(dir);
+    }
+    cc_builder.flag_if_supported("-Wno-unused-parameter");
+    cc_builder.compile("cohesix_sel4_wrappers");
 
     println!("cargo:rerun-if-changed=build.rs");
     println!(

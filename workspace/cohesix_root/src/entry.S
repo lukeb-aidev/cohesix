@@ -9,7 +9,7 @@
     .extern __bss_end
     .extern copy_bootinfo
     .extern init_tls_early
-    .extern seL4_DebugPutChar
+    .extern rust_entry
 _start:
     // Load stack pointer and clear BSS
     mov  x2, x0
@@ -34,9 +34,6 @@ _start:
     bl   copy_bootinfo
 
     bl   init_tls_early
-
-    mov  w0, #'A'
-    bl   seL4_DebugPutChar
 
     bl   rust_entry
     b    .

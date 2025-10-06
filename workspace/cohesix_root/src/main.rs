@@ -65,8 +65,11 @@ static mut ALLOC_CHECK: u64 = 0;
 #[used]
 static ROOTSERVER_ONLINE: &[u8] = b"ROOTSERVER ONLINE";
 
-fn putchar(c: u8) {
-    seL4_DebugPutChar(c as i32);
+pub(crate) fn debug_putchar(c: u8) {
+    if bootinfo::CONFIG_PRINTING {
+        seL4_DebugPutChar(c as i32);
+    }
+    crate::drivers::uart::write_char(c);
 }
 
 fn uart_flush() {
@@ -78,9 +81,9 @@ pub struct CohLogger;
 impl Write for CohLogger {
     fn write_str(&mut self, s: &str) -> fmt::Result {
         for &b in s.as_bytes() {
-            putchar(b);
+            debug_putchar(b);
         }
-        putchar(b'\n');
+        debug_putchar(b'\n');
         uart_flush();
         Ok(())
     }
@@ -104,9 +107,9 @@ fn put_hex(val: usize) {
         buf[17 - i] = hex[(val >> (i * 4)) & 0xf];
     }
     for c in &buf {
-        putchar(*c);
+        debug_putchar(*c);
     }
-    putchar(b'\n');
+    debug_putchar(b'\n');
 }
 
 fn dump_stack(sp: usize) {
@@ -326,9 +329,9 @@ pub fn validate_ptr(ptr: usize) {
 
 pub fn putstr(s: &str) {
     for &b in s.as_bytes() {
-        putchar(b);
+        debug_putchar(b);
     }
-    putchar(b'\n');
+    debug_putchar(b'\n');
 }
 
 pub fn abort(msg: &str) -> ! {

@@ -12,15 +12,11 @@ extern "C" {
     static __heap_end: u8;
 }
 
-fn putchar(c: u8) {
-    crate::seL4_DebugPutChar(c as i32);
-}
-
 fn putstr(s: &str) {
     for &b in s.as_bytes() {
-        putchar(b);
+        crate::debug_putchar(b);
     }
-    putchar(b'\n');
+    crate::debug_putchar(b'\n');
 }
 
 fn put_hex(mut val: usize) {
@@ -33,9 +29,9 @@ fn put_hex(mut val: usize) {
         val >>= 4;
     }
     for c in &buf {
-        putchar(*c);
+        crate::debug_putchar(*c);
     }
-    putchar(b'\n');
+    crate::debug_putchar(b'\n');
 }
 
 fn log_regs() {
