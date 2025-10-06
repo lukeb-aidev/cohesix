@@ -8,6 +8,7 @@
     .extern __bss_start
     .extern __bss_end
     .extern copy_bootinfo
+    .extern init_tls_early
     .extern seL4_DebugPutChar
 _start:
     // Load stack pointer and clear BSS
@@ -29,13 +30,12 @@ _start:
     dsb  sy
     isb
 
-    mov  w0, #'A'
-    bl   seL4_DebugPutChar
-
     mov  x0, x2
     bl   copy_bootinfo
 
-    mov  w0, #'B'
+    bl   init_tls_early
+
+    mov  w0, #'A'
     bl   seL4_DebugPutChar
 
     bl   rust_entry
