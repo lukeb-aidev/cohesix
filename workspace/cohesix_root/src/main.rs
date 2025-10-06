@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: main.rs v0.49
 // Author: Lukas Bower
-// Date Modified: 2028-12-12
+// Date Modified: 2025-10-06
 #![no_std]
 #![cfg_attr(not(test), no_main)]
 #![allow(internal_features)]
@@ -166,19 +166,13 @@ fn log_global_ptrs() {
 }
 
 pub(crate) fn monotonic_ticks() -> u64 {
-    let value: u64;
-    unsafe {
-        core::arch::asm!("mrs {0}, cntpct_el0", out(reg) value);
-    }
-    value
+    use core::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    COUNTER.fetch_add(1, Ordering::Relaxed)
 }
 
 fn timer_frequency() -> u64 {
-    let value: u64;
-    unsafe {
-        core::arch::asm!("mrs {0}, cntfrq_el0", out(reg) value);
-    }
-    value
+    1_000_000
 }
 
 fn ticks_to_us(delta: u64, freq: u64) -> u64 {

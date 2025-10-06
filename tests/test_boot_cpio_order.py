@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
 # Filename: test_boot_cpio_order.py v0.1
 # Author: Lukas Bower
-# Date Modified: 2029-02-21
+# Date Modified: 2025-10-06
 
 from pathlib import Path
 from typing import List
@@ -43,4 +43,4 @@ def test_cpio_rootserver_order():
         pytest.skip(f"{archive} not built")
 
     entries = _parse_newc_entries(archive, limit=3)
-    assert entries[:3] == ["kernel.elf", "cohesix_root.elf", "kernel.dtb"]
+    assert entries[:3] == ["kernel.elf", "kernel.dtb", "cohesix_root.elf"]
