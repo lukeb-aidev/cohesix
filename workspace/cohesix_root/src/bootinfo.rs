@@ -4,6 +4,8 @@
 // Date Modified: 2028-08-31
 #![allow(static_mut_refs)]
 
+use core::cmp;
+
 include!(concat!(env!("OUT_DIR"), "/sel4_config.rs"));
 
 pub const MAX_BOOTINFO_UNTYPED_CAPS: usize = CONFIG_MAX_NUM_BOOTINFO_UNTYPED_CAPS;
@@ -85,13 +87,29 @@ pub static mut BOOTINFO: BootInfo = BootInfo {
     untyped_list: [EMPTY_UNTYPED; MAX_BOOTINFO_UNTYPED_CAPS],
 };
 
+#[link_section = ".bss.bootinfo"]
+static mut BOOTINFO_FRAME_BASE: *const u8 = core::ptr::null();
+
 #[no_mangle]
 pub unsafe extern "C" fn copy_bootinfo(ptr: *const BootInfo) {
+    if ptr.is_null() {
+        return;
+    }
     BOOTINFO = ptr.read();
+    BOOTINFO_FRAME_BASE = ptr as *const u8;
 }
 
 pub unsafe fn bootinfo() -> &'static BootInfo {
     &*core::ptr::addr_of!(BOOTINFO)
+}
+
+pub unsafe fn bootinfo_frame_base() -> Option<*const u8> {
+    let base = BOOTINFO_FRAME_BASE;
+    if base.is_null() {
+        None
+    } else {
+        Some(base)
+    }
 }
 
 pub unsafe fn dump_bootinfo() {
@@ -105,17 +123,40 @@ pub unsafe fn dump_bootinfo() {
 }
 
 pub unsafe fn dtb_slice() -> Option<&'static [u8]> {
-    let bi_ptr = core::ptr::addr_of!(BOOTINFO) as usize;
-    if (*core::ptr::addr_of!(BOOTINFO)).extra_len == 0 {
+    let base_ptr = match bootinfo_frame_base() {
+        Some(ptr) => ptr as usize,
+        None => return None,
+    };
+    let bootinfo_ref = bootinfo();
+    if bootinfo_ref.extra_len == 0 {
         return None;
     }
-    let mut cur = bi_ptr + BOOTINFO_FRAME_SIZE;
-    let end = cur + (*core::ptr::addr_of!(BOOTINFO)).extra_len;
+    let extra_pages = bootinfo_ref
+        .extra_bi_pages
+        .end
+        .saturating_sub(bootinfo_ref.extra_bi_pages.start);
+    if extra_pages == 0 {
+        return None;
+    }
+    let available_bytes = extra_pages.saturating_mul(BOOTINFO_FRAME_SIZE);
+    if available_bytes == 0 {
+        return None;
+    }
+    let readable_len = cmp::min(bootinfo_ref.extra_len, available_bytes);
+    let mut cur = base_ptr + BOOTINFO_FRAME_SIZE;
+    let end = cur + readable_len;
     while cur < end {
         let hdr = &*(cur as *const BootInfoHeader);
+        let header_bytes = core::mem::size_of::<BootInfoHeader>();
+        if hdr.len < header_bytes {
+            break;
+        }
+        if cur.checked_add(hdr.len).map_or(true, |next| next > end) {
+            break;
+        }
         if hdr.id == SEL4_BOOTINFO_HEADER_FDT {
-            let data = cur + core::mem::size_of::<BootInfoHeader>();
-            let len = hdr.len - core::mem::size_of::<BootInfoHeader>();
+            let data = cur + header_bytes;
+            let len = hdr.len - header_bytes;
             return Some(core::slice::from_raw_parts(data as *const u8, len));
         }
         cur += hdr.len;
