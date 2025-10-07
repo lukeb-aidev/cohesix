@@ -2,7 +2,7 @@
 # Filename: Makefile v0.53
 # Author: Lukas Bower
 # Date Modified: 2029-02-20
-.PHONY: build cuda-build all go-build go-test c-shims help fmt lint check \
+.PHONY: build all go-build go-test c-shims help fmt lint check \
         rootserver userland full \
         boot boot-x86_64 boot-aarch64 cohrun cohbuild cohtrace cli_cap gui-orchestrator cloud test test-python check-tab-safety iso boot-grub qemu qemu-check
 
@@ -56,9 +56,6 @@ all: go-build go-test c-shims ## Run vet, tests, C shims
 
 build: ## Build Rust workspace
 	@cargo build --workspace || echo "cargo build failed"
-cuda-build: ## Build release with CUDA features
-	cargo clean && cargo build --release --features=cuda
-
 fmt: ## Run code formatters
 	@if command -v cargo-fmt >/dev/null 2>&1; then \
 	cargo fmt --all; \

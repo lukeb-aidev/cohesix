@@ -153,37 +153,6 @@ PY
   )
 }
 
-prepend_ld_library_path() {
-  new_path="$1"
-  case "${new_path}" in
-    "") return ;;
-  esac
-  case ":${LD_LIBRARY_PATH:-}:" in
-    *:"${new_path}":*) ;;
-    *)
-      if [ -n "${LD_LIBRARY_PATH:-}" ]; then
-        LD_LIBRARY_PATH="${new_path}:${LD_LIBRARY_PATH}"
-      else
-        LD_LIBRARY_PATH="${new_path}"
-      fi
-      export LD_LIBRARY_PATH
-      ;;
-  esac
-}
-
-add_library_path_list() {
-  list="$1"
-  if [ -z "$list" ]; then
-    return
-  fi
-  old_ifs=$IFS
-  IFS=':'
-  for dir in $list; do
-    prepend_ld_library_path "$dir"
-  done
-  IFS=$old_ifs
-}
-
 create_temp_dir() {
   template="${1:-cohesix}"
   base_dir="${TMPDIR%/}"
@@ -294,51 +263,6 @@ if (set -o pipefail) 2>/dev/null; then
   set -o pipefail
 fi
 export MEMCHR_DISABLE_RUNTIME_CPU_FEATURE_DETECTION=1
-export CUDA_HOME="${CUDA_HOME:-/usr}"
-export CUDA_INCLUDE_DIR="${CUDA_INCLUDE_DIR:-$CUDA_HOME/include}"
-
-if [ -z "${CUDA_LIBRARY_PATH:-}" ]; then
-  case "$HOST_OS" in
-    Darwin)
-      for candidate in \
-        "/usr/local/cuda/lib" \
-        "/usr/local/lib" \
-        "/opt/homebrew/lib"; do
-        if [ -d "$candidate" ]; then
-          CUDA_LIBRARY_PATH="$candidate"
-          break
-        fi
-      done
-      ;;
-    *)
-      case "$HOST_ARCH" in
-        x86_64|amd64)
-          DEFAULT_CUDA_LIB="/usr/lib/x86_64-linux-gnu"
-          ;;
-        aarch64|arm64)
-          DEFAULT_CUDA_LIB="/usr/lib/aarch64-linux-gnu"
-          ;;
-        *)
-          DEFAULT_CUDA_LIB=""
-          ;;
-      esac
-      if [ -n "${DEFAULT_CUDA_LIB:-}" ] && [ -d "$DEFAULT_CUDA_LIB" ]; then
-        CUDA_LIBRARY_PATH="$DEFAULT_CUDA_LIB"
-      fi
-      ;;
-  esac
-  if [ -n "${CUDA_LIBRARY_PATH:-}" ]; then
-    export CUDA_LIBRARY_PATH
-  fi
-fi
-
-if [ -n "${CUDA_LIBRARY_PATH:-}" ]; then
-  add_library_path_list "$CUDA_LIBRARY_PATH"
-fi
-
-if [ -d "$CUDA_HOME/bin" ]; then
-  export PATH="$CUDA_HOME/bin:$PATH"
-fi
 WORKSPACE="${WORKSPACE:-$ROOT/third_party/seL4}"
 
 cd "$ROOT"
@@ -768,145 +692,7 @@ log "\u2705 Cargo dependencies fetched"
 export CONFIG_BUILD_KERNEL_TESTS=n
 KERNEL_TEST_FLAG=OFF
 
-# CUDA detection and environment setup
-log "🚀 Starting CUDA check..."
-CUDA_HOME="${CUDA_HOME:-}"
-if [ -z "$CUDA_HOME" ]; then
-  if command -v nvcc >/dev/null 2>&1; then
-    NVCC_PATH="$(command -v nvcc)"
-    CUDA_HOME="$(dirname "$(dirname "$NVCC_PATH")")"
-  elif [ -d /usr/local/cuda ]; then
-    CUDA_HOME="/usr/local/cuda"
-  else
-    CUDA_FALLBACK_SCAN=""
-    for candidate in /usr/local/cuda-*arm64 /usr/local/cuda-*; do
-      case "$candidate" in
-        *\**|*\?*) continue ;;
-      esac
-      if [ -d "$candidate" ]; then
-        if [ -z "$CUDA_HOME" ]; then
-          CUDA_HOME="$candidate"
-        fi
-        if [ -n "$CUDA_FALLBACK_SCAN" ]; then
-          CUDA_FALLBACK_SCAN="$CUDA_FALLBACK_SCAN $candidate"
-        else
-          CUDA_FALLBACK_SCAN="$candidate"
-        fi
-      fi
-    done
-    # Manual override for environments where cuda.h is in /usr/include but no nvcc exists
-    if [ "$CUDA_HOME" = "/usr" ] && [ -f "/usr/include/cuda.h" ]; then
-      export CUDA_INCLUDE_DIR="/usr/include"
-      CUDA_FALLBACK_LIB=""
-      if [ "$HOST_OS" = "Darwin" ]; then
-        for candidate in \
-          "/usr/local/cuda/lib" \
-          "/usr/local/lib" \
-          "/opt/homebrew/lib"; do
-          if [ -d "$candidate" ]; then
-            CUDA_FALLBACK_LIB="$candidate"
-            break
-          fi
-        done
-      else
-        case "$HOST_ARCH" in
-          aarch64|arm64)
-            CUDA_FALLBACK_LIB="/usr/lib/aarch64-linux-gnu"
-            ;;
-          x86_64|amd64)
-            CUDA_FALLBACK_LIB="/usr/lib/x86_64-linux-gnu"
-            ;;
-          *)
-            CUDA_FALLBACK_LIB=""
-            ;;
-        esac
-      fi
-      if [ -n "$CUDA_FALLBACK_LIB" ] && [ -d "$CUDA_FALLBACK_LIB" ]; then
-        if [ -z "${CUDA_LIBRARY_PATH:-}" ]; then
-          export CUDA_LIBRARY_PATH="$CUDA_FALLBACK_LIB"
-        fi
-        add_library_path_list "$CUDA_FALLBACK_LIB"
-      fi
-      log "✅ Manually set CUDA paths for cust_raw: CUDA_HOME=$CUDA_HOME"
-    fi
-    if [ -z "$CUDA_HOME" ] || [ ! -d "$CUDA_HOME" ]; then
-      CUDA_HOME="/usr"
-    fi
-  fi
-fi
-
-# Log CUDA fallback paths
-if [ -z "${CUDA_FALLBACK_SCAN:-}" ]; then
-  log "CUDA fallback paths tried: none found"
-else
-  log "CUDA fallback paths tried: ${CUDA_FALLBACK_SCAN}"
-fi
-
-export CUDA_HOME
-if [ -d "$CUDA_HOME/bin" ]; then
-  export PATH="$CUDA_HOME/bin:$PATH"
-fi
-if [ -d "$CUDA_HOME/lib64" ]; then
-  prepend_ld_library_path "$CUDA_HOME/lib64"
-elif [ -d "$CUDA_HOME/lib" ]; then
-  prepend_ld_library_path "$CUDA_HOME/lib"
-fi
-# Add robust library path fallback for common distros
-if [ "$HOST_OS" = "Linux" ] && [ -d "/usr/lib/x86_64-linux-gnu" ]; then
-  prepend_ld_library_path "/usr/lib/x86_64-linux-gnu"
-fi
-if [ "$HOST_OS" = "Darwin" ]; then
-  for candidate in "/usr/local/lib" "/opt/homebrew/lib"; do
-    if [ -d "$candidate" ]; then
-      prepend_ld_library_path "$candidate"
-    fi
-  done
-fi
-export CUDA_LIBRARY_PATH="${CUDA_LIBRARY_PATH:-${LD_LIBRARY_PATH:-}}"
-
-if [ -f "$CUDA_HOME/include/cuda.h" ]; then
-  log "✅ Found cuda.h in $CUDA_HOME/include"
-elif [ "$HOST_OS" = "Darwin" ]; then
-  log "⚠️ cuda.h not found locally; macOS builds rely on remote CUDA via Secure9P"
-else
-  echo "❌ cuda.h not found in $CUDA_HOME/include. Check CUDA installation." >&2
-  exit 1
-fi
-
-if [ -n "$CUDA_HOME" ] && [ -f "$CUDA_HOME/bin/nvcc" ]; then
-  log "CUDA detected at $CUDA_HOME"
-  NVCC_CHECK_LOG="$(create_temp_file nvcc_check)"
-  if nvcc --version >"$NVCC_CHECK_LOG" 2>&1; then
-    nvcc_info=$(grep -m1 release "$NVCC_CHECK_LOG" || true)
-    if [ -n "$nvcc_info" ]; then
-      log "nvcc OK: $nvcc_info"
-    else
-      log "nvcc OK: version string unavailable"
-    fi
-  else
-    log "⚠️ nvcc failed: $(cat "$NVCC_CHECK_LOG")"
-  fi
-  rm -f "$NVCC_CHECK_LOG"
-  if command -v nvidia-smi >/dev/null 2>&1; then
-    NVIDIA_SMI_LOG="$(create_temp_file nvidia_smi)"
-    if nvidia-smi >"$NVIDIA_SMI_LOG" 2>&1; then
-      nvidia_smi_info=$(grep -m1 'Driver Version' "$NVIDIA_SMI_LOG" || true)
-      if [ -n "$nvidia_smi_info" ]; then
-        log "nvidia-smi OK: $nvidia_smi_info"
-      else
-        log "nvidia-smi OK: driver version string unavailable"
-      fi
-    else
-      log "⚠️ nvidia-smi failed: $(cat "$NVIDIA_SMI_LOG")"
-    fi
-    rm -f "$NVIDIA_SMI_LOG"
-  else
-    log "⚠️ nvidia-smi not found"
-  fi
-  log "✅ CUDA OK"
-else
-  log "⚠️ CUDA toolkit not detected. nvcc not found or invalid CUDA_HOME: $CUDA_HOME"
-fi
+log "ℹ️ Skipping local CUDA toolchain checks; Cohesix now orchestrates remote GPU annexes"
 
 if [ "$COH_ARCH" = "aarch64" ] && command -v rustup >/dev/null 2>&1; then
   if ! rustup target list --installed --toolchain nightly | grep -q '^aarch64-unknown-none$'; then
@@ -1001,7 +787,7 @@ if [ -f "userland/miniroot/bin/rc" ]; then
   log "✅ Staged /etc/rc"
 fi
 
-# Detect platform and GPU availability
+# Detect platform; remote GPU orchestration no longer probes local hardware
 COH_PLATFORM="$(uname -m)"
 case "$COH_PLATFORM" in
   x86_64|amd64)
@@ -1016,24 +802,9 @@ case "$COH_PLATFORM" in
 esac
 
 COH_GPU=0
-if command -v nvidia-smi >/dev/null 2>&1; then
-  NVIDIA_SMI_LOG="$(create_temp_file nvidia_smi)"
-  if nvidia-smi > "$NVIDIA_SMI_LOG" 2>&1; then
-    COH_GPU=1
-    log "nvidia-smi output:" && cat "$NVIDIA_SMI_LOG"
-  else
-    log "nvidia-smi present but failed: $(cat "$NVIDIA_SMI_LOG")"
-  fi
-  rm -f "$NVIDIA_SMI_LOG"
-elif [ -c /dev/nvidia0 ]; then
-  COH_GPU=1
-elif command -v lspci >/dev/null 2>&1 && lspci | grep -qi nvidia; then
-  COH_GPU=1
-fi
-
 export COH_ARCH COH_GPU
 export COH_PLATFORM="$COH_ARCH"
-log "Detected platform: $COH_ARCH, GPU=$COH_GPU"
+log "Detected platform: $COH_ARCH (remote GPU orchestration assumed)"
 
 # Set cross compiler for aarch64 if available
 if [ "$COH_ARCH" = "aarch64" ]; then
