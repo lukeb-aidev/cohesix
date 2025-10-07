@@ -51,31 +51,6 @@ OUT_ELF="$OUT_DIR/cohesix_root.elf"
 
 
 
-# Detect CUDA installation
-CUDA_HOME=""
-if command -v nvcc >/dev/null 2>&1; then
-    NVCC_PATH="$(command -v nvcc)"
-    CUDA_HOME="$(dirname "$(dirname "$NVCC_PATH")")"
-elif [ -d /usr/local/cuda ]; then
-    CUDA_HOME="/usr/local/cuda"
-else
-    CUDA_HOME="$(ls -d /usr/local/cuda-* 2>/dev/null | head -n1)"
-fi
-
-if [ -n "$CUDA_HOME" ] && [ -f "$CUDA_HOME/bin/nvcc" ]; then
-    export CUDA_HOME
-    export PATH="$CUDA_HOME/bin:$PATH"
-    if [ -d "$CUDA_HOME/lib64" ]; then
-        export LD_LIBRARY_PATH="$CUDA_HOME/lib64:${LD_LIBRARY_PATH:-}"
-    elif [ -d "$CUDA_HOME/lib" ]; then
-        export LD_LIBRARY_PATH="$CUDA_HOME/lib:${LD_LIBRARY_PATH:-}"
-    fi
-    export CUDA_LIBRARY_PATH="$LD_LIBRARY_PATH"
-    echo "CUDA detected at $CUDA_HOME"
-else
-    echo "⚠️ CUDA toolkit not detected." >&2
-fi
-
 mkdir -p "$OUT_DIR"
 
 cargo +nightly build -p cohesix_root --release \

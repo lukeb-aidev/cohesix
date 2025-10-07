@@ -69,10 +69,6 @@ write_files:
       cd $HOME
       git clone --depth=1 --branch 2024.1 https://github.com/seL4/seL4.git
       
-      # Pull NVIDIA L4T Docker image
-      echo "Pulling NVIDIA L4T Docker image..."
-      docker pull nvcr.io/nvidia/l4t-base:r35.2.1
-      
       echo "Setup complete!"
 
 runcmd:
