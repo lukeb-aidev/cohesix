@@ -186,11 +186,18 @@ add_library_path_list() {
 
 create_temp_dir() {
   template="${1:-cohesix}"
-  if [ "$HOST_OS" = "Darwin" ]; then
-    mktemp -d -t "$template"
-  else
-    mktemp -d -t "${template}.XXXXXX" 2>/dev/null || mktemp -d
-  fi
+  base_dir="${TMPDIR%/}"
+  [ -n "$base_dir" ] || base_dir="$ROOT/tmp"
+  mkdir -p "$base_dir"
+  mktemp -d "${base_dir}/${template}.XXXXXX"
+}
+
+create_temp_file() {
+  template="${1:-cohesix}"
+  base_dir="${TMPDIR%/}"
+  [ -n "$base_dir" ] || base_dir="$ROOT/tmp"
+  mkdir -p "$base_dir"
+  mktemp "${base_dir}/${template}.XXXXXX"
 }
 
 resolve_tool_path() {
@@ -272,6 +279,16 @@ export ROOT
 
 LOG_DIR="$ROOT/logs"
 mkdir -p "$LOG_DIR"
+
+# Establish a repository-local temporary directory hierarchy that honours
+# Cohesix trace requirements. This avoids leaking artefacts under /tmp and
+# keeps diagnostics within governed storage.
+TMP_BASE="${COHESIX_TRACE_TMP:-${COHESIX_ENS_TMP:-${TMPDIR:-}}}"
+if [ -z "$TMP_BASE" ]; then
+  TMP_BASE="$ROOT/tmp"
+fi
+mkdir -p "$TMP_BASE"
+export TMPDIR="$(cd "$TMP_BASE" && pwd -P)"
 set -eu
 if (set -o pipefail) 2>/dev/null; then
   set -o pipefail
@@ -858,17 +875,31 @@ fi
 
 if [ -n "$CUDA_HOME" ] && [ -f "$CUDA_HOME/bin/nvcc" ]; then
   log "CUDA detected at $CUDA_HOME"
-  if nvcc --version >/tmp/nvcc_check.log 2>&1; then
-    log "nvcc OK: $(grep -m1 release /tmp/nvcc_check.log)"
-  else
-    log "⚠️ nvcc failed: $(cat /tmp/nvcc_check.log)"
-  fi
-  if command -v nvidia-smi >/dev/null 2>&1; then
-    if nvidia-smi >/tmp/nvidia_smi.log 2>&1; then
-      log "nvidia-smi OK: $(grep -m1 'Driver Version' /tmp/nvidia_smi.log)"
+  NVCC_CHECK_LOG="$(create_temp_file nvcc_check)"
+  if nvcc --version >"$NVCC_CHECK_LOG" 2>&1; then
+    nvcc_info=$(grep -m1 release "$NVCC_CHECK_LOG" || true)
+    if [ -n "$nvcc_info" ]; then
+      log "nvcc OK: $nvcc_info"
     else
-      log "⚠️ nvidia-smi failed: $(cat /tmp/nvidia_smi.log)"
+      log "nvcc OK: version string unavailable"
     fi
+  else
+    log "⚠️ nvcc failed: $(cat "$NVCC_CHECK_LOG")"
+  fi
+  rm -f "$NVCC_CHECK_LOG"
+  if command -v nvidia-smi >/dev/null 2>&1; then
+    NVIDIA_SMI_LOG="$(create_temp_file nvidia_smi)"
+    if nvidia-smi >"$NVIDIA_SMI_LOG" 2>&1; then
+      nvidia_smi_info=$(grep -m1 'Driver Version' "$NVIDIA_SMI_LOG" || true)
+      if [ -n "$nvidia_smi_info" ]; then
+        log "nvidia-smi OK: $nvidia_smi_info"
+      else
+        log "nvidia-smi OK: driver version string unavailable"
+      fi
+    else
+      log "⚠️ nvidia-smi failed: $(cat "$NVIDIA_SMI_LOG")"
+    fi
+    rm -f "$NVIDIA_SMI_LOG"
   else
     log "⚠️ nvidia-smi not found"
   fi
@@ -986,12 +1017,14 @@ esac
 
 COH_GPU=0
 if command -v nvidia-smi >/dev/null 2>&1; then
-  if nvidia-smi > /tmp/nvidia_smi.log 2>&1; then
+  NVIDIA_SMI_LOG="$(create_temp_file nvidia_smi)"
+  if nvidia-smi > "$NVIDIA_SMI_LOG" 2>&1; then
     COH_GPU=1
-    log "nvidia-smi output:" && cat /tmp/nvidia_smi.log
+    log "nvidia-smi output:" && cat "$NVIDIA_SMI_LOG"
   else
-    log "nvidia-smi present but failed: $(cat /tmp/nvidia_smi.log)"
+    log "nvidia-smi present but failed: $(cat "$NVIDIA_SMI_LOG")"
   fi
+  rm -f "$NVIDIA_SMI_LOG"
 elif [ -c /dev/nvidia0 ]; then
   COH_GPU=1
 elif command -v lspci >/dev/null 2>&1 && lspci | grep -qi nvidia; then
@@ -1160,7 +1193,7 @@ if ! command -v gcc >/dev/null 2>&1; then
   echo "❌ gcc not found. Install with: sudo apt install build-essential" >&2
   exit 1
 fi
-CC_TEST_TMP="$(mktemp)"
+CC_TEST_TMP="$(create_temp_file cc_test)"
 CC_TEST_C="${CC_TEST_TMP}.c"
 mv "$CC_TEST_TMP" "$CC_TEST_C"
 cat <<'EOF' > "$CC_TEST_C"
