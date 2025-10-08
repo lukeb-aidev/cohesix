@@ -31,6 +31,10 @@ lto = true
 codegen-units = 1
 debug = true
 
+[profile.release.package.cohesix_root]
+# Author: Lukas Bower
+debug = false
+
 [profile.dev]
 panic = "abort"
 strip = "symbols"
