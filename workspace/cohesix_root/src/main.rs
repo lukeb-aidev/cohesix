@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: main.rs v0.49
+// Filename: main.rs v0.50
 // Author: Lukas Bower
-// Date Modified: 2025-10-06
+// Date Modified: 2029-10-08
 #![no_std]
 #![cfg_attr(not(test), no_main)]
 #![allow(internal_features)]
@@ -12,6 +12,7 @@ extern crate alloc;
 
 mod allocator;
 mod bootinfo;
+mod bootlog;
 mod drivers;
 mod dt;
 mod exception;
@@ -20,7 +21,6 @@ mod mmu;
 mod startup;
 mod sys;
 mod trace;
-
 
 use core::arch::global_asm;
 global_asm!(include_str!("entry.S"));
@@ -66,17 +66,11 @@ static mut ALLOC_CHECK: u64 = 0;
 static ROOTSERVER_ONLINE: &[u8] = b"ROOTSERVER ONLINE";
 
 pub(crate) fn debug_putchar(c: u8) {
-    // Always attempt to emit the character through the seL4 debug syscall.
-    //
-    // Recent kernel builds toggled `CONFIG_PRINTING` off which prevents the
-    // kernel from emitting its own boot log and also stops our previous gate
-    // from calling into `seL4_DebugPutChar`.  The syscall is still present and
-    // gracefully degrades to a no-op when printing is disabled, so invoking it
-    // unconditionally gives us best-effort visibility without requiring a
-    // kernel rebuild.  We keep the UART write as a secondary path once the
-    // MMIO region is mapped later in the boot sequence.
-    seL4_DebugPutChar(c as i32);
-    crate::drivers::uart::write_char(c);
+    if bootinfo::CONFIG_PRINTING {
+        seL4_DebugPutChar(c as i32);
+    }
+    bootlog::record(c);
+    bootlog::flush_to_uart_if_ready();
 }
 
 fn uart_flush() {

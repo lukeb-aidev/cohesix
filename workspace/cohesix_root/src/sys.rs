@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: sys.rs v0.14
+// Filename: sys.rs v0.15
 // Author: Lukas Bower
-// Date Modified: 2025-10-06
+// Date Modified: 2029-10-08
 #![allow(static_mut_refs)]
 
 use crate::{debug_putchar, monotonic_ticks, trace};
@@ -51,8 +51,14 @@ const EINVAL: i32 = -22;
 const ENOSYS: i32 = -38;
 
 #[derive(Clone, Copy)]
+enum FileData {
+    Static(&'static [u8]),
+    BootLog,
+}
+
+#[derive(Clone, Copy)]
 struct File {
-    data: &'static [u8],
+    data: FileData,
     pos: usize,
 }
 
@@ -60,23 +66,27 @@ static INIT_DATA: &[u8] = include_bytes!("../../../userland/miniroot/bin/init");
 static NS_DATA: &[u8] = include_bytes!("../../../config/plan9.ns");
 static BOOTARGS_DATA: &[u8] = b"COHROLE=DroneWorker\n";
 
-static mut FILES: [File; 4] = [
+static mut FILES: [File; 5] = [
     File {
-        data: INIT_DATA,
+        data: FileData::Static(INIT_DATA),
         pos: 0,
     }, // 0 => /bin/init
     File {
-        data: NS_DATA,
+        data: FileData::Static(NS_DATA),
         pos: 0,
     }, // 1 => /etc/plan9.ns
     File {
-        data: BOOTARGS_DATA,
+        data: FileData::Static(BOOTARGS_DATA),
         pos: 0,
     }, // 2 => /boot/bootargs.txt
     File {
-        data: b"" as &[u8],
+        data: FileData::Static(b""),
         pos: 0,
     }, // 3 => /srv/cohrole
+    File {
+        data: FileData::BootLog,
+        pos: 0,
+    }, // 4 => /log/boot_ring
 ];
 
 #[no_mangle]
@@ -90,6 +100,12 @@ pub unsafe extern "C" fn coh_open(path: *const c_char, _flags: i32, _mode: i32) 
         b"/etc/plan9.ns" => 1,
         b"/boot/bootargs.txt" => 2,
         b"/srv/cohrole" => 3,
+        b"/log/boot_ring" => {
+            if let Some(file) = FILES.get_mut(4) {
+                file.pos = crate::bootlog::base_offset();
+            }
+            4
+        }
         _ => ENOENT,
     }
 }
@@ -100,14 +116,24 @@ pub unsafe extern "C" fn coh_read(fd: i32, buf: *mut u8, len: usize) -> isize {
         return EBADF as isize;
     }
     let f = &mut FILES[fd as usize];
-    let remain = &f.data[f.pos..];
-    let n = core::cmp::min(len, remain.len());
-    if n == 0 {
-        return 0;
+    match f.data {
+        FileData::Static(data) => {
+            let remain = &data[f.pos..];
+            let n = core::cmp::min(len, remain.len());
+            if n == 0 {
+                return 0;
+            }
+            core::ptr::copy_nonoverlapping(remain.as_ptr(), buf, n);
+            f.pos += n;
+            n as isize
+        }
+        FileData::BootLog => {
+            let slice = core::slice::from_raw_parts_mut(buf, len);
+            let read = crate::bootlog::read_from(f.pos, slice);
+            f.pos = f.pos.saturating_add(read);
+            read as isize
+        }
     }
-    core::ptr::copy_nonoverlapping(remain.as_ptr(), buf, n);
-    f.pos += n;
-    n as isize
 }
 
 #[no_mangle]
@@ -115,7 +141,11 @@ pub unsafe extern "C" fn coh_close(fd: i32) -> i32 {
     if fd < 0 || (fd as usize) >= FILES.len() {
         EBADF
     } else {
-        FILES[fd as usize].pos = 0;
+        let file = &mut FILES[fd as usize];
+        file.pos = match file.data {
+            FileData::Static(_) => 0,
+            FileData::BootLog => crate::bootlog::base_offset(),
+        };
         0
     }
 }
