@@ -66,9 +66,16 @@ static mut ALLOC_CHECK: u64 = 0;
 static ROOTSERVER_ONLINE: &[u8] = b"ROOTSERVER ONLINE";
 
 pub(crate) fn debug_putchar(c: u8) {
-    if bootinfo::CONFIG_PRINTING {
-        seL4_DebugPutChar(c as i32);
-    }
+    // Always attempt to emit the character through the seL4 debug syscall.
+    //
+    // Recent kernel builds toggled `CONFIG_PRINTING` off which prevents the
+    // kernel from emitting its own boot log and also stops our previous gate
+    // from calling into `seL4_DebugPutChar`.  The syscall is still present and
+    // gracefully degrades to a no-op when printing is disabled, so invoking it
+    // unconditionally gives us best-effort visibility without requiring a
+    // kernel rebuild.  We keep the UART write as a secondary path once the
+    // MMIO region is mapped later in the boot sequence.
+    seL4_DebugPutChar(c as i32);
     crate::drivers::uart::write_char(c);
 }
 
@@ -556,6 +563,9 @@ pub extern "C" fn main() {
     }
     sys::coh_log("[root] main_enter");
     sys::coh_log("ROOTSERVER ONLINE");
+    if !bootinfo::CONFIG_PRINTING {
+        sys::coh_log("[root] warn: kernel CONFIG_PRINTING=0; using debug syscall fallback");
+    }
     unsafe {
         ALLOC_CHECK = 0xdeadbeefdeadbeef;
         if ALLOC_CHECK != 0xdeadbeefdeadbeef {
