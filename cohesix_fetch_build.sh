@@ -1267,6 +1267,25 @@ strip_rootserver_for_cpio() {
 
 strip_rootserver_for_cpio "$CPIO_STAGE_DIR/cohesix_root.elf"
 
+report_rootserver_payload() {
+  # Author: Lukas Bower
+  local target="$1"
+  if [ ! -f "$target" ]; then
+    return
+  fi
+  # Avoid locale-dependent formatting that would complicate parsing.
+  local size_bytes
+  size_bytes=$(wc -c <"$target" 2>/dev/null | tr -d ' ')
+  if [ -n "$size_bytes" ]; then
+    log "ℹ️  Rootserver payload size: ${size_bytes} bytes"
+    if [ "$size_bytes" -gt 900000 ]; then
+      log "⚠️  Rootserver still contains debug sections; install aarch64 binutils (aarch64-linux-gnu-strip) or enable the Cohesix release profile override to omit debuginfo."
+    fi
+  fi
+}
+
+report_rootserver_payload "$CPIO_STAGE_DIR/cohesix_root.elf"
+
 ( cd "$CPIO_STAGE_DIR" &&
   printf '%s\n' kernel.elf kernel.dtb cohesix_root.elf |
     cpio -o -H newc > "$ROOT/boot/cohesix.cpio" )
