@@ -32,6 +32,18 @@ fn mmio_enabled() -> bool {
     MMIO_ENABLED.load(Ordering::Relaxed)
 }
 
+#[cfg(test)]
+pub fn test_mmio_enabled() -> bool {
+    mmio_enabled()
+}
+
+#[cfg(test)]
+pub fn test_reset_mmio_state() {
+    MMIO_ENABLED.store(false, Ordering::SeqCst);
+    INITIALISED.store(false, Ordering::SeqCst);
+    WARNED_MMIO_DISABLED.store(false, Ordering::SeqCst);
+}
+
 fn log_mmio_disabled_once() {
     if !crate::bootinfo::CONFIG_PRINTING {
         return;
