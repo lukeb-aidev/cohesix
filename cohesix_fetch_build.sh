@@ -2,7 +2,7 @@
 # CLASSIFICATION: COMMUNITY
 # Filename: cohesix_fetch_build.sh v1.59
 # Author: Lukas Bower
-# Date Modified: 2029-11-19
+# Date Modified: 2029-11-21
 
 # This script fetches and builds the Cohesix project, including seL4 and other dependencies.
 
@@ -1125,20 +1125,38 @@ done
 [ -f "$STAGE_DIR/bin/physics-server" ] || { echo "❌ physics-server missing after staging" >&2; exit 1; }
 [ -f "$STAGE_DIR/bin/srv" ] || { echo "❌ srv missing after staging" >&2; exit 1; }
 
-log "📖 Building mandoc and staging man pages..."
-bash "$ROOT/scripts/build_mandoc.sh"
-MANDOC_BIN="$ROOT/prebuilt/mandoc/mandoc.$COH_ARCH"
-if [ -f "$MANDOC_BIN" ]; then
-  cp "$MANDOC_BIN" "$STAGE_DIR/bin/man"
-  log "✅ Built mandoc" 
-  if [ -d "$ROOT/workspace/docs/man" ]; then
-    mkdir -p "$STAGE_DIR/usr/share/man/man1" "$STAGE_DIR/usr/share/man/man8"
-    cp "$ROOT/workspace/docs/man/"*.1 "$STAGE_DIR/usr/share/man/man1/" 2>/dev/null || true
-    cp "$ROOT/workspace/docs/man/"*.8 "$STAGE_DIR/usr/share/man/man8/" 2>/dev/null || true
-    log "✅ Updated man pages"
+log "📖 Staging mandoc and man pages..."
+PREFERRED_MANDOC="/usr/bin/mandoc"
+MANDOC_BIN=""
+if [ -x "$PREFERRED_MANDOC" ]; then
+  MANDOC_BIN="$PREFERRED_MANDOC"
+fi
+if [ -z "$MANDOC_BIN" ]; then
+  if resolved=$(command -v mandoc 2>/dev/null); then
+    case "$resolved" in
+      "$ROOT"/prebuilt/*|"$ROOT"/third_party/*)
+        resolved=""
+        ;;
+    esac
+    if [ -n "$resolved" ]; then
+      MANDOC_BIN="$resolved"
+    fi
   fi
-  log "✅ Staged mandoc to /usr/bin"
-  cat > "$STAGE_DIR/etc/README.txt" <<'EOF'
+fi
+if [ -z "$MANDOC_BIN" ]; then
+  echo "❌ mandoc binary not found at /usr/bin/mandoc or in PATH" >&2
+  echo "   Install mandoc to continue." >&2
+  exit 1
+fi
+cp "$MANDOC_BIN" "$STAGE_DIR/bin/man"
+log "✅ Using mandoc from $MANDOC_BIN"
+if [ -d "$ROOT/workspace/docs/man" ]; then
+  mkdir -p "$STAGE_DIR/usr/share/man/man1" "$STAGE_DIR/usr/share/man/man8"
+  cp "$ROOT/workspace/docs/man/"*.1 "$STAGE_DIR/usr/share/man/man1/" 2>/dev/null || true
+  cp "$ROOT/workspace/docs/man/"*.8 "$STAGE_DIR/usr/share/man/man8/" 2>/dev/null || true
+  log "✅ Updated man pages"
+fi
+cat > "$STAGE_DIR/etc/README.txt" <<'EOF'
 Cohesix OS Quick Start
 
 Tools: cohcli, cohrun, cohtrace, cohcc, cohcap, cohesix-shell, mandoc
@@ -1152,11 +1170,7 @@ Logs: /log/
 Traces: /log/trace/
 Manual pages: mandoc -Tascii /usr/share/man/man1/<tool>.1
 EOF
-  log "✅ Created /etc/README.txt"
-else
-  echo "❌ mandoc build failed" >&2
-  exit 1
-fi
+log "✅ Created /etc/README.txt"
 
 # Stage Plan9 rc tests
 mkdir -p "$STAGE_DIR/bin/tests"
