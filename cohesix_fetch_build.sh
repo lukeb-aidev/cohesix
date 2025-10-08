@@ -1228,8 +1228,48 @@ cd "$ROOT/third_party/seL4/artefacts"
 [ -f kernel.dtb ] || { echo "❌ Missing kernel.dtb" >&2; exit 1; }
 
 # 4) Pack into a newc cpio archive with the kernel DTB as the second image
-printf '%s\n' kernel.elf kernel.dtb cohesix_root.elf | \
-  cpio -o -H newc > "$ROOT/boot/cohesix.cpio"
+CPIO_STAGE_DIR="$ROOT/out/cpio-stage"
+rm -rf "$CPIO_STAGE_DIR"
+mkdir -p "$CPIO_STAGE_DIR"
+
+for artefact in kernel.elf kernel.dtb; do
+  cp -- "$ROOT/third_party/seL4/artefacts/$artefact" \
+    "$CPIO_STAGE_DIR/$artefact"
+done
+
+cp -- "$ROOT/third_party/seL4/artefacts/cohesix_root.elf" \
+  "$CPIO_STAGE_DIR/cohesix_root.elf"
+
+strip_rootserver_for_cpio() {
+  local target="$1"
+  local strip_tool=""
+  for candidate in aarch64-linux-gnu-strip llvm-strip strip; do
+    if command -v "$candidate" >/dev/null 2>&1; then
+      strip_tool="$candidate"
+      break
+    fi
+  done
+
+  if [ -z "$strip_tool" ]; then
+    log "⚠️  No aarch64 strip tool found; embedding unstripped rootserver"
+    return 0
+  fi
+
+  local stripped_tmp="${target}.stripped"
+  if "$strip_tool" -o "$stripped_tmp" "$target" >/dev/null 2>&1; then
+    mv -- "$stripped_tmp" "$target"
+    log "✅ Stripped rootserver for CPIO payload using $strip_tool"
+  else
+    rm -f -- "$stripped_tmp"
+    log "⚠️  Failed to strip rootserver with $strip_tool; embedding unstripped binary"
+  fi
+}
+
+strip_rootserver_for_cpio "$CPIO_STAGE_DIR/cohesix_root.elf"
+
+( cd "$CPIO_STAGE_DIR" &&
+  printf '%s\n' kernel.elf kernel.dtb cohesix_root.elf |
+    cpio -o -H newc > "$ROOT/boot/cohesix.cpio" )
 
 CPIO_IMAGE="$ROOT/boot/cohesix.cpio"
 
@@ -1246,6 +1286,9 @@ if [ "$cpio_entry_1" != "kernel.elf" ] || \
   echo "❌ Unexpected CPIO order (expected kernel.elf kernel.dtb cohesix_root.elf): $cpio_listing" >&2
   exit 1
 fi
+
+# Clean up staged payloads now that the archive is sealed
+rm -rf "$CPIO_STAGE_DIR"
 
 # Replace the embedded archive inside the elfloader's .rodata section
 patch_elfloader_archive() {
