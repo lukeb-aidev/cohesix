@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: lang_items.rs v0.2
 // Author: Lukas Bower
-// Date Modified: 2029-10-09
+// Date Modified: 2029-10-10
 
 use core::panic::PanicInfo;
 use core::{alloc::Layout, arch::asm};
@@ -9,10 +9,15 @@ use core::{alloc::Layout, arch::asm};
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
     crate::putstr("[root] panic");
-    if let Some(message) = info.message() {
-        crate::coherr!("[panic] message: {}", message);
+    let panic_message = info.message();
+    if let Some(literal) = panic_message.as_str() {
+        if literal.is_empty() {
+            crate::coherr!("[panic] message: <empty literal>");
+        } else {
+            crate::coherr!("[panic] message: {}", literal);
+        }
     } else {
-        crate::coherr!("[panic] message: <none>");
+        crate::coherr!("[panic] message: {}", panic_message);
     }
     if let Some(location) = info.location() {
         crate::coherr!(
