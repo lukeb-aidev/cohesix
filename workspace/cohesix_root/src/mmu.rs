@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: mmu.rs v0.2
+// Filename: mmu.rs v0.3
 // Author: Lukas Bower
-// Date Modified: 2025-10-06
+// Date Modified: 2029-10-08
 #![allow(static_mut_refs)]
 
 pub unsafe fn init(
@@ -13,15 +13,19 @@ pub unsafe fn init(
     bootinfo_end: usize,
 ) {
     let _ = (dtb, dtb_end, bootinfo, bootinfo_end);
-    crate::coherr!("mmu:skipping_ttbr_setup dtb={:#x} bootinfo={:#x}", dtb, bootinfo);
+    crate::coherr!(
+        "mmu:skipping_ttbr_setup dtb={:#x} bootinfo={:#x}",
+        dtb,
+        bootinfo
+    );
     // The seL4 rootserver maps the UART frame lazily. Once the boot path reaches
     // the MMU initialisation stage we can safely toggle MMIO access for the UART
-    // driver so buffered logging resumes on the hardware console. Respect the
-    // build-time printing configuration so deployments that explicitly disable
-    // UART output remain silent.
-    if crate::bootinfo::CONFIG_PRINTING {
-        crate::drivers::uart::enable_mmio();
-    }
+    // driver so buffered logging resumes on the hardware console or drains into
+    // the persistent boot log buffer.  Even when the kernel disables its own
+    // printing syscalls we still enable MMIO so developers can opt into UART
+    // visibility during diagnostics; production images can rely solely on the
+    // memory-backed log exposed via /log/boot_ring.
+    crate::drivers::uart::enable_mmio();
 }
 
 #[cfg(test)]
@@ -36,15 +40,11 @@ mod tests {
     }
 
     #[test]
-    fn init_respects_printing_config() {
+    fn init_always_enables_uart_mmio() {
         crate::drivers::uart::test_reset_mmio_state();
         unsafe {
             init(0, 0, 0, 0, 0, 0);
         }
-        if crate::bootinfo::CONFIG_PRINTING {
-            assert!(crate::drivers::uart::test_mmio_enabled());
-        } else {
-            assert!(!crate::drivers::uart::test_mmio_enabled());
-        }
+        assert!(crate::drivers::uart::test_mmio_enabled());
     }
 }

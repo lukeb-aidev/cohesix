@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: sel4_paths.rs v0.7
-// Author: OpenAI
-// Date Modified: 2028-12-05
+// Filename: sel4_paths.rs v0.8
+// Author: Lukas Bower
+// Date Modified: 2029-10-08
 #![allow(dead_code)]
 
 use std::collections::{BTreeSet, HashSet};
@@ -156,11 +156,7 @@ pub fn create_arch_alias(
 
     crate::sel4_paths::copy_recursive(&src, &target_arch)?;
 
-    fn generate_wrappers(
-        src_base: &Path,
-        dst_base: &Path,
-        rel_base: &str,
-    ) -> io::Result<()> {
+    fn generate_wrappers(src_base: &Path, dst_base: &Path, rel_base: &str) -> io::Result<()> {
         for entry in fs::read_dir(src_base)? {
             let entry = entry?;
             let path = entry.path();
