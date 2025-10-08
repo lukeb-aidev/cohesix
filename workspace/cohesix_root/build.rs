@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: build.rs v1.48
+// Filename: build.rs v1.49
 // Author: Lukas Bower
-// Date Modified: 2028-11-21
+// Date Modified: 2029-10-08
 
 use std::{
     env, fs,
@@ -76,15 +76,18 @@ fn emit_sel4_config(out_dir: &str, generated_dir: &Path) {
     for line in contents.lines() {
         let trimmed = line.trim();
         if let Some(rest) = trimmed.strip_prefix("#define CONFIG_MAX_NUM_BOOTINFO_UNTYPED_CAPS") {
-            let value = rest
-                .split_whitespace()
-                .next()
-                .unwrap_or_else(|| panic!("missing value for CONFIG_MAX_NUM_BOOTINFO_UNTYPED_CAPS in {}", config_path.display()));
-            max_untyped_caps = Some(
-                value
-                    .parse()
-                    .unwrap_or_else(|err| panic!("invalid CONFIG_MAX_NUM_BOOTINFO_UNTYPED_CAPS `{}`: {}", value, err)),
-            );
+            let value = rest.split_whitespace().next().unwrap_or_else(|| {
+                panic!(
+                    "missing value for CONFIG_MAX_NUM_BOOTINFO_UNTYPED_CAPS in {}",
+                    config_path.display()
+                )
+            });
+            max_untyped_caps = Some(value.parse().unwrap_or_else(|err| {
+                panic!(
+                    "invalid CONFIG_MAX_NUM_BOOTINFO_UNTYPED_CAPS `{}`: {}",
+                    value, err
+                )
+            }));
             continue;
         }
         if trimmed == "#define CONFIG_PRINTING 1" {
@@ -92,8 +95,12 @@ fn emit_sel4_config(out_dir: &str, generated_dir: &Path) {
         }
     }
 
-    let caps = max_untyped_caps
-        .unwrap_or_else(|| panic!("CONFIG_MAX_NUM_BOOTINFO_UNTYPED_CAPS not found in {}", config_path.display()));
+    let caps = max_untyped_caps.unwrap_or_else(|| {
+        panic!(
+            "CONFIG_MAX_NUM_BOOTINFO_UNTYPED_CAPS not found in {}",
+            config_path.display()
+        )
+    });
 
     let out_path = Path::new(out_dir).join("sel4_config.rs");
     let mut file = fs::File::create(&out_path)
@@ -158,7 +165,10 @@ fn main() {
         println!("cargo:rustc-link-arg=-T{}", sel4_linker.display());
         println!("cargo:rerun-if-changed={}", sel4_linker.display());
     } else {
-        println!("cargo:warning=sel4.ld not found under {}; relying on rootserver link.ld only", lib_dir.display());
+        println!(
+            "cargo:warning=sel4.ld not found under {}; relying on rootserver link.ld only",
+            lib_dir.display()
+        );
     }
 
     let libsel4 = fs::canonicalize(lib_dir.join("libsel4.a"))

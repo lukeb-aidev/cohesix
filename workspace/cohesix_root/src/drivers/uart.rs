@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: uart.rs v0.2
+// Filename: uart.rs v0.3
 // Author: Lukas Bower
-// Date Modified: 2029-10-07
+// Date Modified: 2029-10-08
 
 use core::ptr;
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -30,6 +30,10 @@ fn base_ptr(offset: usize) -> *mut u32 {
 #[inline(always)]
 fn mmio_enabled() -> bool {
     MMIO_ENABLED.load(Ordering::Relaxed)
+}
+
+pub(crate) fn is_mmio_ready() -> bool {
+    mmio_enabled()
 }
 
 #[cfg(test)]
@@ -64,6 +68,8 @@ fn log_mmio_disabled_once() {
 pub fn enable_mmio() {
     MMIO_ENABLED.store(true, Ordering::SeqCst);
     INITIALISED.store(false, Ordering::SeqCst);
+    #[cfg(not(test))]
+    crate::bootlog::flush_to_uart_if_ready();
 }
 
 pub fn init() {
