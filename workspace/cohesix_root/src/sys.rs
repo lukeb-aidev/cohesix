@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: sys.rs v0.15
 // Author: Lukas Bower
-// Date Modified: 2029-10-08
+// Date Modified: 2030-03-09
 #![allow(static_mut_refs)]
 
 use crate::{debug_putchar, monotonic_ticks, trace};
@@ -64,7 +64,7 @@ struct File {
 
 static INIT_DATA: &[u8] = include_bytes!("../../../userland/miniroot/bin/init");
 static NS_DATA: &[u8] = include_bytes!("../../../config/plan9.ns");
-static BOOTARGS_DATA: &[u8] = b"COHROLE=DroneWorker\n";
+static BOOTARGS_DATA: &[u8] = include_bytes!("../../../boot/bootargs.txt");
 
 static mut FILES: [File; 5] = [
     File {

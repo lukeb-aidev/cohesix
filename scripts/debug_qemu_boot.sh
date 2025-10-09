@@ -2,7 +2,7 @@
 # CLASSIFICATION: COMMUNITY
 # Filename: scripts/debug_qemu_boot.sh v0.5
 # Author: Lukas Bower
-# Date Modified: 2029-10-07
+# Date Modified: 2030-03-09
 # SAFe Epic: E5-F13 Boot Telemetry | Feature: F15 QEMU Trace Instrumentation
 # Ensures this script runs cleanly under Bash for CI use
 set -euo pipefail
@@ -66,6 +66,7 @@ QEMU_CMD=(
   -initrd "$CPIO_PAYLOAD"
   -serial mon:stdio
   -nographic
+  -semihosting-config enable=on,target=native
   -d "$TRACE_FLAGS"
   -D "$TRACE_LOG"
   -S

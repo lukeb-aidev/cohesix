@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
 // Filename: main.rs v0.50
 // Author: Lukas Bower
-// Date Modified: 2029-10-08
+// Date Modified: 2030-03-09
 #![no_std]
 #![cfg_attr(not(test), no_main)]
 #![allow(internal_features)]
@@ -18,6 +18,7 @@ mod dt;
 mod exception;
 mod lang_items;
 mod mmu;
+mod semihosting;
 mod startup;
 mod sys;
 mod trace;
@@ -66,6 +67,7 @@ static mut ALLOC_CHECK: u64 = 0;
 static ROOTSERVER_ONLINE: &[u8] = b"ROOTSERVER ONLINE";
 
 pub(crate) fn debug_putchar(c: u8) {
+    semihosting::write_byte(c);
     if bootinfo::CONFIG_PRINTING {
         seL4_DebugPutChar(c as i32);
     }
@@ -405,6 +407,7 @@ fn load_bootargs() {
                     1,
                 );
             }
+            semihosting::handle_bootarg(token);
         }
     }
 }
