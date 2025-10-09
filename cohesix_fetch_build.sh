@@ -562,6 +562,7 @@ if [ -n "$PHASE" ]; then
       # Ensure Rust source is available for build-std
       rustup component add rust-src --toolchain nightly || true
       cargo +nightly build -p cohesix_root --release \
+        --features semihosting \
         --target="${SEL4_TARGET_SPEC_SANITIZED:-$SEL4_TARGET_SPEC_SRC}" \
         -Z build-std=core,alloc,compiler_builtins \
         -Z build-std-features=compiler-builtins-mem
@@ -1081,6 +1082,7 @@ if [ "$SKIP_RUST_BUILD" -eq 0 ]; then
   cargo +nightly build \
     -p cohesix_root \
     --release \
+    --features semihosting \
     --target="${SEL4_TARGET_SPEC_SANITIZED:-$SEL4_TARGET_SPEC_SRC}" \
     -Z build-std=core,alloc,compiler_builtins \
     -Z build-std-features=compiler-builtins-mem
@@ -1426,6 +1428,7 @@ qemu-system-aarch64 \
   -kernel "$ROOT/boot/elfloader" \
   -initrd "$CPIO_IMAGE" \
   -dtb "$ROOT/third_party/seL4/artefacts/kernel.dtb" \
+  -semihosting-config enable=on,target=native \
   $QEMU_FLAG_LIST \
   -D "$QEMU_LOG" 2>&1 | tee "$QEMU_SERIAL_LOG"
 
