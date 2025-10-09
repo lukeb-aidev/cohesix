@@ -1,7 +1,50 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: USERLAND_BOOT.md v0.6
+// Filename: USERLAND_BOOT.md v0.7
 // Author: Lukas Bower
-// Date Modified: 2030-03-09
+// Date Modified: 2030-10-09
+
+## Kernel entry hang triage 2030-10-09
+
+When the boot halts immediately after the ELF loader transfers control to the
+kernel, treat it as an EL1 fault that fires before seL4 can bring up the debug
+console. The following checklist narrows the problem space before we change any
+Plan 9 components:
+
+1. **Re-enable kernel diagnostics while reproducing the fault.** The generated
+   `gen_config.h` currently disables both `CONFIG_DEBUG_BUILD` and
+   `CONFIG_PRINTING`, which prevents early printk output and strips extra
+   assertions from the kernel.【F:third_party/seL4/include/generated/kernel/gen_config.h†L69-L108】
+   Re-run the seL4 configuration with those options set to `y` so the rebooting
+   kernel logs assertion sites to the UART. The rootserver already warns when it
+   detects `CONFIG_PRINTING=0`, so you should see this message disappear after
+   regenerating the kernel image.【F:workspace/cohesix_root/src/main.rs†L554-L566】
+
+2. **Capture the faulting PC using the existing QEMU trace harness.** The
+   `debug_qemu_boot.sh` helper stores both the invocation and the trace output
+   under `logs/`, and it already enables `-d in_asm,exec,…` to record the last
+   guest instructions before QEMU exits.【F:scripts/debug_qemu_boot.sh†L10-L85】
+   Open `logs/qemu_boot_trace.log` immediately after a failed boot and scroll to
+   the final `guest_errors` or `exec` entries to identify the exact PC/VA pair
+   that faulted.
+
+3. **Stop execution before the kernel entry point and attach GDB.** Re-run the
+   command recorded in `logs/qemu_invocation.log`, append `-gdb tcp::1234`, and
+   let the existing `-S` flag hold the CPUs in reset while you attach
+   `aarch64-none-elf-gdb`.【F:scripts/debug_qemu_boot.sh†L10-L85】 Load
+   `kernel.elf` as the symbol file, set breakpoints on `init_kernel` (or the
+   first C entry symbol reported by `nm kernel.elf`), and single-step until the
+   exception triggers. Inspecting `x0`–`x3`, `elr_el1`, and `spsr_el1` inside GDB
+   usually reveals whether we jumped to an unmapped address or tripped a data
+   abort during the first capability retype.
+
+4. **Keep semihosting enabled so EL1 panics mirror into the host.** The root
+   server already mirrors every `coherr!` byte into the semihosting channel when
+   `coh.semihost=stdout` (or `file:`) appears in `/boot/bootargs.txt`, and
+   `handle_bootarg` switches the mode before Plan 9 processes any other
+   environment variables.【F:workspace/cohesix_root/src/sys.rs†L36-L114】【F:workspace/cohesix_root/src/main.rs†L359-L412】【F:workspace/cohesix_root/src/semihosting.rs†L8-L134】
+   Leave this in place while you single-step the kernel so the EL1 panic handler
+   still records a register dump into `/log/boot_ring` if the fault happens after
+   the rootserver resumes.
 
 # Userland Boot Verification
 
