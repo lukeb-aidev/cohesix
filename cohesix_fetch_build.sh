@@ -1201,6 +1201,30 @@ log "FS BUILD OK: ${BIN_COUNT} binaries, ${ROLE_COUNT} roles staged" >&3
 # Ensure all staged binaries are executable
 chmod +x "$STAGE_DIR/bin"/*
 
+if [ "$PHASE" != "4" ]; then
+  log "🧩 Embedding staged rootfs into cohesix_root"
+  (
+    cd "$ROOT/workspace"
+    export LDFLAGS="-L${SEL4_LIB_DIR}"
+    export RUSTFLAGS="-C panic=abort -L${SEL4_LIB_DIR} ${CROSS_RUSTFLAGS}"
+    rustup component add rust-src --toolchain nightly || true
+    COHESIX_ROOTFS_DIR="$STAGE_DIR" \
+      cargo +nightly build \
+        -p cohesix_root \
+        --release \
+        --features semihosting \
+        --target="${SEL4_TARGET_SPEC_SANITIZED:-$SEL4_TARGET_SPEC_SRC}" \
+        -Z build-std=core,alloc,compiler_builtins \
+        -Z build-std-features=compiler-builtins-mem
+  )
+  ROOT_ELF_BUILT=$(find "$ROOT/workspace/target/sel4-aarch64/release" -maxdepth 1 -type f \( -name 'cohesix_root' -o -name 'cohesix_root.elf' \) | head -n 1)
+  if [ -z "$ROOT_ELF_BUILT" ]; then
+    echo "❌ cohesix_root rebuild failed" >&2
+    exit 1
+  fi
+  log "✅ cohesix_root rebuilt with embedded rootfs"
+fi
+
 # 1) Create boot directory
 mkdir -p "$ROOT/boot"
 
@@ -1472,7 +1496,7 @@ export SEL4_INCLUDE
 export SEL4_LIB_DIR
 RUSTFLAGS="-C panic=abort -L $SEL4_LIB_DIR $CROSS_RUSTFLAGS" \
   cargo build -p sel4-sys-extern-wrapper --release --target="${SEL4_TARGET_SPEC_SANITIZED:-$SEL4_TARGET_SPEC_SRC}"
-RUSTFLAGS="-C panic=abort -L $SEL4_LIB_DIR $CROSS_RUSTFLAGS" \
+COHESIX_ROOTFS_DIR="$STAGE_DIR" RUSTFLAGS="-C panic=abort -L $SEL4_LIB_DIR $CROSS_RUSTFLAGS" \
   cargo build -p cohesix_root --release --target="${SEL4_TARGET_SPEC_SANITIZED:-$SEL4_TARGET_SPEC_SRC}"
 RUSTFLAGS="-C panic=abort -L $SEL4_LIB_DIR $CROSS_RUSTFLAGS" \
   cargo test --release --target="${SEL4_TARGET_SPEC_SANITIZED:-$SEL4_TARGET_SPEC_SRC}" --workspace

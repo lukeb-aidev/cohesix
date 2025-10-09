@@ -4,7 +4,7 @@
 // Date Modified: 2030-03-09
 #![allow(static_mut_refs)]
 
-use crate::{debug_putchar, monotonic_ticks, trace};
+use crate::{debug_putchar, monotonic_ticks, rootfs, trace};
 use core::ffi::c_char;
 use core::sync::atomic::{compiler_fence, Ordering};
 
@@ -60,34 +60,38 @@ enum FileData {
 struct File {
     data: FileData,
     pos: usize,
+    in_use: bool,
 }
 
-static INIT_DATA: &[u8] = include_bytes!("../../../userland/miniroot/bin/init");
-static NS_DATA: &[u8] = include_bytes!("../../../config/plan9.ns");
-static BOOTARGS_DATA: &[u8] = include_bytes!("../../../bootargs.txt");
+impl File {
+    const fn unused() -> Self {
+        File {
+            data: FileData::Static(b""),
+            pos: 0,
+            in_use: false,
+        }
+    }
+}
 
-static mut FILES: [File; 5] = [
-    File {
-        data: FileData::Static(INIT_DATA),
-        pos: 0,
-    }, // 0 => /bin/init
-    File {
-        data: FileData::Static(NS_DATA),
-        pos: 0,
-    }, // 1 => /etc/plan9.ns
-    File {
-        data: FileData::Static(BOOTARGS_DATA),
-        pos: 0,
-    }, // 2 => /boot/bootargs.txt
-    File {
-        data: FileData::Static(b""),
-        pos: 0,
-    }, // 3 => /srv/cohrole
-    File {
-        data: FileData::BootLog,
-        pos: 0,
-    }, // 4 => /log/boot_ring
-];
+const MAX_FILES: usize = 64;
+static mut FILES: [File; MAX_FILES] = [File::unused(); MAX_FILES];
+
+fn allocate_file(data: FileData) -> i32 {
+    unsafe {
+        for (idx, file) in FILES.iter_mut().enumerate() {
+            if !file.in_use {
+                file.data = data;
+                file.pos = match file.data {
+                    FileData::BootLog => crate::bootlog::base_offset(),
+                    FileData::Static(_) => 0,
+                };
+                file.in_use = true;
+                return idx as i32;
+            }
+        }
+    }
+    EBADF
+}
 
 #[no_mangle]
 pub unsafe extern "C" fn coh_open(path: *const c_char, _flags: i32, _mode: i32) -> i32 {
@@ -95,19 +99,14 @@ pub unsafe extern "C" fn coh_open(path: *const c_char, _flags: i32, _mode: i32) 
         return EINVAL;
     }
     let p = core::ffi::CStr::from_ptr(path);
-    match p.to_bytes() {
-        b"/bin/init" => 0,
-        b"/etc/plan9.ns" => 1,
-        b"/boot/bootargs.txt" => 2,
-        b"/srv/cohrole" => 3,
-        b"/log/boot_ring" => {
-            if let Some(file) = FILES.get_mut(4) {
-                file.pos = crate::bootlog::base_offset();
-            }
-            4
-        }
-        _ => ENOENT,
+    let path_bytes = p.to_bytes();
+    if path_bytes == b"/log/boot_ring" {
+        return allocate_file(FileData::BootLog);
     }
+    if let Some(data) = rootfs::lookup(path_bytes) {
+        return allocate_file(FileData::Static(data));
+    }
+    ENOENT
 }
 
 #[no_mangle]
@@ -116,6 +115,9 @@ pub unsafe extern "C" fn coh_read(fd: i32, buf: *mut u8, len: usize) -> isize {
         return EBADF as isize;
     }
     let f = &mut FILES[fd as usize];
+    if !f.in_use {
+        return EBADF as isize;
+    }
     match f.data {
         FileData::Static(data) => {
             let remain = &data[f.pos..];
@@ -142,10 +144,14 @@ pub unsafe extern "C" fn coh_close(fd: i32) -> i32 {
         EBADF
     } else {
         let file = &mut FILES[fd as usize];
+        if !file.in_use {
+            return EBADF;
+        }
         file.pos = match file.data {
             FileData::Static(_) => 0,
             FileData::BootLog => crate::bootlog::base_offset(),
         };
+        file.in_use = false;
         0
     }
 }
