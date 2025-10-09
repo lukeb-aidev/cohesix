@@ -18,6 +18,7 @@ mod dt;
 mod exception;
 mod lang_items;
 mod mmu;
+mod rootfs;
 mod semihosting;
 mod startup;
 mod sys;
