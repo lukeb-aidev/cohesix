@@ -1,8 +1,8 @@
 #!/usr/bin/env sh
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v1.59
+# Filename: cohesix_fetch_build.sh v1.60
 # Author: Lukas Bower
-# Date Modified: 2029-11-21
+# Date Modified: 2030-03-15
 
 # This script fetches and builds the Cohesix project, including seL4 and other dependencies.
 
@@ -561,11 +561,14 @@ if [ -n "$PHASE" ]; then
       export RUSTFLAGS="-C panic=abort -L${SEL4_LIB_DIR} ${CROSS_RUSTFLAGS}"
       # Ensure Rust source is available for build-std
       rustup component add rust-src --toolchain nightly || true
-      cargo +nightly build -p cohesix_root --release \
-        --features semihosting \
-        --target="${SEL4_TARGET_SPEC_SANITIZED:-$SEL4_TARGET_SPEC_SRC}" \
-        -Z build-std=core,alloc,compiler_builtins \
-        -Z build-std-features=compiler-builtins-mem
+      ROOTFS_INPUT="${COHESIX_ROOTFS_DIR:-$ROOT/out}"
+      log "🧳 Using rootfs payload from $ROOTFS_INPUT for Phase 3 build"
+      COHESIX_ROOTFS_DIR="$ROOTFS_INPUT" \
+        cargo +nightly build -p cohesix_root --release \
+          --features semihosting \
+          --target="${SEL4_TARGET_SPEC_SANITIZED:-$SEL4_TARGET_SPEC_SRC}" \
+          -Z build-std=core,alloc,compiler_builtins \
+          -Z build-std-features=compiler-builtins-mem
       ROOT_ARTIFACT=$(find target/sel4-aarch64/release/deps -maxdepth 1 -name 'libcohesix_root*.rlib' -print -quit 2>/dev/null)
       if [ -z "$ROOT_ARTIFACT" ]; then
         BIN_ARTIFACT=$(find target/sel4-aarch64/release -maxdepth 1 -type f -name 'cohesix_root' -print -quit 2>/dev/null)
@@ -595,6 +598,24 @@ mkdir -p bin usr/bin usr/cli usr/share/man/man1 usr/share/man/man8 \
 cp "$ROOT/workspace/cohesix/src/kernel/init.rc" "$STAGE_DIR/srv/init.rc"
 chmod +x "$STAGE_DIR/srv/init.rc"
 log "✅ Created Cohesix FS structure"
+# Determine which rootfs directory to embed into the rootserver
+ROOTFS_PAYLOAD_DIR="$STAGE_DIR"
+if [ -n "${COHESIX_ROOTFS_DIR:-}" ]; then
+  if ROOTFS_PAYLOAD_DIR=$(resolve_path "$COHESIX_ROOTFS_DIR" 2>/dev/null); then
+    if [ ! -d "$ROOTFS_PAYLOAD_DIR" ]; then
+      echo "❌ COHESIX_ROOTFS_DIR points to missing directory: $ROOTFS_PAYLOAD_DIR" >&2
+      exit 1
+    fi
+    log "🧳 Using pre-configured rootfs payload from $ROOTFS_PAYLOAD_DIR"
+  else
+    echo "❌ Failed to resolve COHESIX_ROOTFS_DIR=$COHESIX_ROOTFS_DIR" >&2
+    exit 1
+  fi
+else
+  ROOTFS_PAYLOAD_DIR="$STAGE_DIR"
+fi
+export COHESIX_ROOTFS_DIR="$ROOTFS_PAYLOAD_DIR"
+log "📁 Rootfs payload directory set to $COHESIX_ROOTFS_DIR"
 # 🗂 Prepare /srv namespace for tests (clean and set role)
 log "🗂 Preparing staged /srv namespace under $STAGE_DIR for tests..."
 echo "DroneWorker" > "$STAGE_DIR/srv/cohrole"
@@ -1183,12 +1204,12 @@ log "✅ Staged Plan9 rc tests to /bin/tests"
 echo "✅ All builds complete."
 
 echo "[🧪] Checking boot prerequisites..."
-if [ ! -x "$STAGE_DIR/bin/init" ]; then
-  echo "❌ init binary missing in $STAGE_DIR/bin" >&2
+if [ ! -x "$COHESIX_ROOTFS_DIR/bin/init" ]; then
+  echo "❌ init binary missing in $COHESIX_ROOTFS_DIR/bin" >&2
   exit 1
 fi
-if [ ! -f "$STAGE_DIR/etc/plan9.ns" ]; then
-  echo "❌ plan9.ns missing at $STAGE_DIR/etc/plan9.ns" >&2
+if [ ! -f "$COHESIX_ROOTFS_DIR/etc/plan9.ns" ]; then
+  echo "❌ plan9.ns missing at $COHESIX_ROOTFS_DIR/etc/plan9.ns" >&2
   exit 1
 fi
 
@@ -1202,13 +1223,13 @@ log "FS BUILD OK: ${BIN_COUNT} binaries, ${ROLE_COUNT} roles staged" >&3
 chmod +x "$STAGE_DIR/bin"/*
 
 if [ "$PHASE" != "4" ]; then
-  log "🧩 Embedding staged rootfs into cohesix_root"
+  log "🧩 Embedding rootfs from $COHESIX_ROOTFS_DIR into cohesix_root"
   (
     cd "$ROOT/workspace"
     export LDFLAGS="-L${SEL4_LIB_DIR}"
     export RUSTFLAGS="-C panic=abort -L${SEL4_LIB_DIR} ${CROSS_RUSTFLAGS}"
     rustup component add rust-src --toolchain nightly || true
-    COHESIX_ROOTFS_DIR="$STAGE_DIR" \
+    COHESIX_ROOTFS_DIR="$ROOTFS_PAYLOAD_DIR" \
       cargo +nightly build \
         -p cohesix_root \
         --release \
@@ -1460,6 +1481,13 @@ qemu-system-aarch64 \
 log "✅ QEMU debug log saved to $QEMU_LOG"
 log "✅ QEMU serial log saved to $QEMU_SERIAL_LOG"
 
+if ! grep -q 'COHESIX_USERLAND_BOOT_OK' "$QEMU_SERIAL_LOG"; then
+  echo "❌ Cohesix userland did not emit COHESIX_USERLAND_BOOT_OK" >&2
+  echo "   Inspect $QEMU_SERIAL_LOG for boot failure details." >&2
+  exit 1
+fi
+log "✅ Verified Cohesix userland boot sequence"
+
 # Pre-handoff reserved region dump
 echo "Reserved regions:" | tee -a "$TRACE_LOG"
 grep -i "reserved" "$QEMU_SERIAL_LOG" | tee -a "$TRACE_LOG"
@@ -1496,7 +1524,9 @@ export SEL4_INCLUDE
 export SEL4_LIB_DIR
 RUSTFLAGS="-C panic=abort -L $SEL4_LIB_DIR $CROSS_RUSTFLAGS" \
   cargo build -p sel4-sys-extern-wrapper --release --target="${SEL4_TARGET_SPEC_SANITIZED:-$SEL4_TARGET_SPEC_SRC}"
-COHESIX_ROOTFS_DIR="$STAGE_DIR" RUSTFLAGS="-C panic=abort -L $SEL4_LIB_DIR $CROSS_RUSTFLAGS" \
-  cargo build -p cohesix_root --release --target="${SEL4_TARGET_SPEC_SANITIZED:-$SEL4_TARGET_SPEC_SRC}"
+COHESIX_ROOTFS_DIR="$ROOTFS_PAYLOAD_DIR" RUSTFLAGS="-C panic=abort -L $SEL4_LIB_DIR $CROSS_RUSTFLAGS" \
+  cargo +nightly build -p cohesix_root --release --target="${SEL4_TARGET_SPEC_SANITIZED:-$SEL4_TARGET_SPEC_SRC}" \
+    -Z build-std=core,alloc,compiler_builtins \
+    -Z build-std-features=compiler-builtins-mem
 RUSTFLAGS="-C panic=abort -L $SEL4_LIB_DIR $CROSS_RUSTFLAGS" \
   cargo test --release --target="${SEL4_TARGET_SPEC_SANITIZED:-$SEL4_TARGET_SPEC_SRC}" --workspace
