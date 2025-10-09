@@ -64,7 +64,7 @@ struct File {
 
 static INIT_DATA: &[u8] = include_bytes!("../../../userland/miniroot/bin/init");
 static NS_DATA: &[u8] = include_bytes!("../../../config/plan9.ns");
-static BOOTARGS_DATA: &[u8] = include_bytes!("../../../boot/bootargs.txt");
+static BOOTARGS_DATA: &[u8] = include_bytes!("../../../bootargs.txt");
 
 static mut FILES: [File; 5] = [
     File {
