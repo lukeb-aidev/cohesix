@@ -1450,7 +1450,9 @@ PY
 }
 
 EMBEDDED_ARCHIVE=1
-if ! patch_elfloader_archive "$ROOT/third_party/seL4/artefacts/elfloader"; then
+if patch_elfloader_archive "$ROOT/third_party/seL4/artefacts/elfloader"; then
+  :
+else
   status=$?
   if [ "$status" -eq 64 ]; then
     EMBEDDED_ARCHIVE=0
@@ -1458,7 +1460,9 @@ if ! patch_elfloader_archive "$ROOT/third_party/seL4/artefacts/elfloader"; then
     exit "$status"
   fi
 fi
-if ! patch_elfloader_archive "$ROOT/boot/elfloader"; then
+if patch_elfloader_archive "$ROOT/boot/elfloader"; then
+  :
+else
   status=$?
   if [ "$status" -eq 64 ]; then
     EMBEDDED_ARCHIVE=0
