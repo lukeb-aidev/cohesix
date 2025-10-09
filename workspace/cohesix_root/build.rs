@@ -139,6 +139,141 @@ fn rust_sysroot() -> String {
     sysroot
 }
 
+fn sanitize_rel_path(path: &Path) -> String {
+    path.to_string_lossy()
+        .replace('\\', "/")
+        .trim_start_matches('/')
+        .to_string()
+}
+
+fn embed_rootfs(out_dir: &str, manifest_dir: &str) {
+    println!("cargo:rerun-if-env-changed=COHESIX_ROOTFS_DIR");
+    let configured = env::var("COHESIX_ROOTFS_DIR").ok();
+    let rootfs_path = configured
+        .map(PathBuf::from)
+        .unwrap_or_else(|| Path::new(manifest_dir).join("../../out"));
+    let rootfs_dir = match fs::canonicalize(&rootfs_path) {
+        Ok(path) => path,
+        Err(err) => {
+            println!(
+                "cargo:warning=Rootfs directory {:?} unavailable: {}",
+                rootfs_path, err
+            );
+            return;
+        }
+    };
+    if !rootfs_dir.is_dir() {
+        println!(
+            "cargo:warning=Rootfs directory {:?} missing or not a directory",
+            rootfs_dir
+        );
+        return;
+    }
+
+    let dest_base = Path::new(out_dir).join("rootfs");
+    if dest_base.exists() {
+        fs::remove_dir_all(&dest_base).ok();
+    }
+    fs::create_dir_all(&dest_base).expect("create rootfs staging dir");
+
+    #[derive(Clone)]
+    struct Entry {
+        rel: String,
+        dest_rel: String,
+    }
+
+    fn collect(root: &Path, current: &Path, dest_base: &Path, entries: &mut Vec<Entry>) {
+        let read_dir = match fs::read_dir(current) {
+            Ok(dir) => dir,
+            Err(err) => {
+                println!(
+                    "cargo:warning=Failed to read directory {:?}: {}",
+                    current, err
+                );
+                return;
+            }
+        };
+        for entry in read_dir {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(err) => {
+                    println!("cargo:warning=Dir entry error: {}", err);
+                    continue;
+                }
+            };
+            let path = entry.path();
+            let file_type = match entry.file_type() {
+                Ok(t) => t,
+                Err(err) => {
+                    println!("cargo:warning=Failed to stat {:?}: {}", path, err);
+                    continue;
+                }
+            };
+            if file_type.is_dir() {
+                collect(root, &path, dest_base, entries);
+                continue;
+            }
+            if !file_type.is_file() {
+                continue;
+            }
+            let rel = match path.strip_prefix(root) {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+            let rel_string = sanitize_rel_path(rel);
+            if rel_string.is_empty() {
+                continue;
+            }
+            if rel_string == "bin/cohesix_root.elf" {
+                continue;
+            }
+            let dest_path = dest_base.join(&rel_string);
+            if let Some(parent) = dest_path.parent() {
+                if let Err(err) = fs::create_dir_all(parent) {
+                    println!("cargo:warning=Failed creating {:?}: {}", parent, err);
+                    continue;
+                }
+            }
+            if let Err(err) = fs::copy(&path, &dest_path) {
+                println!(
+                    "cargo:warning=Failed to copy {:?} -> {:?}: {}",
+                    path, dest_path, err
+                );
+                continue;
+            }
+            println!("cargo:rerun-if-changed={}", path.display());
+            entries.push(Entry {
+                rel: format!("/{}", rel_string),
+                dest_rel: rel_string,
+            });
+        }
+    }
+
+    let mut entries = Vec::new();
+    collect(&rootfs_dir, &rootfs_dir, &dest_base, &mut entries);
+    entries.sort_by(|a, b| a.rel.cmp(&b.rel));
+
+    let out_file = Path::new(out_dir).join("rootfs_data.rs");
+    let mut file = fs::File::create(&out_file).expect("create rootfs_data.rs");
+    writeln!(
+        file,
+        "// Auto-generated rootfs entries from {}\npub static ROOT_FS: &[RootFsEntry] = &[",
+        rootfs_dir.display()
+    )
+    .unwrap();
+    for entry in &entries {
+        let escaped_path = entry.rel.replace('\"', "\\\"");
+        let escaped_dest = entry.dest_rel.replace('\"', "\\\"");
+        writeln!(
+            file,
+            "    RootFsEntry {{ path: \"{}\", data: include_bytes!(concat!(env!(\"OUT_DIR\"), \"/rootfs/{}\")), }},",
+            escaped_path, escaped_dest
+        )
+        .unwrap();
+    }
+    writeln!(file, "];\n").unwrap();
+}
+
 fn main() {
     println!("cargo:rustc-link-lib=static=sel4");
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
@@ -183,6 +318,7 @@ fn main() {
     embed_vectors(&out_dir, &manifest_dir);
     let sel4_generated_dir = sel4_generated(&repo_root);
     emit_sel4_config(&out_dir, &sel4_generated_dir);
+    embed_rootfs(&out_dir, &manifest_dir);
 
     let sel4 = env::var("SEL4_INCLUDE").unwrap_or_else(|_| {
         sel4_paths::sel4_include(&repo_root)
