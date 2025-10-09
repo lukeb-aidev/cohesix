@@ -1,8 +1,8 @@
 #!/usr/bin/env sh
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v1.60
+# Filename: cohesix_fetch_build.sh v1.61
 # Author: Lukas Bower
-# Date Modified: 2030-03-15
+# Date Modified: 2030-03-16
 
 # This script fetches and builds the Cohesix project, including seL4 and other dependencies.
 
@@ -1360,13 +1360,16 @@ rm -rf "$CPIO_STAGE_DIR"
 patch_elfloader_archive() {
   local target="$1"
   if command -v python3 >/dev/null 2>&1; then
-    python3 - "$target" "$CPIO_IMAGE" <<'PY'
+    local output
+    if ! output=$(python3 - "$target" "$CPIO_IMAGE" <<'PY'
 import pathlib
 import subprocess
 import sys
 
 elf_path = pathlib.Path(sys.argv[1])
 cpio_path = pathlib.Path(sys.argv[2])
+
+OVERSIZE_EXIT = 64
 
 nm_output = subprocess.check_output([
     "aarch64-linux-gnu-nm", "-n", str(elf_path)
@@ -1412,9 +1415,8 @@ if start_off < rodata_off or end_off > rodata_off + rodata_size:
 archive_capacity = end_off - start_off
 cpio_data = pathlib.Path(cpio_path).read_bytes()
 if len(cpio_data) > archive_capacity:
-    sys.exit(
-        f"new archive ({len(cpio_data)}) exceeds available space ({archive_capacity})"
-    )
+    print(f"OVERSIZE {len(cpio_data)} {archive_capacity}")
+    sys.exit(OVERSIZE_EXIT)
 
 blob = bytearray(elf_path.read_bytes())
 blob[start_off:start_off + len(cpio_data)] = cpio_data
@@ -1423,6 +1425,23 @@ if pad_start < end_off:
     blob[pad_start:end_off] = b"\x00" * (end_off - pad_start)
 elf_path.write_bytes(blob)
 PY
+    ); then
+      local status=$?
+      if [ "$status" -eq 64 ] && printf '%s' "$output" | grep -q '^OVERSIZE '; then
+        local new_size
+        local capacity
+        new_size=$(printf '%s' "$output" | awk 'NR==1 {print $2}')
+        capacity=$(printf '%s' "$output" | awk 'NR==1 {print $3}')
+        if command -v log >/dev/null 2>&1; then
+          log "⚠️  $target cannot embed initrd: ${new_size} bytes exceeds reserved ${capacity} bytes"
+        else
+          printf '%s\n' "⚠️  $target cannot embed initrd: ${new_size} bytes exceeds reserved ${capacity} bytes" >&2
+        fi
+        return 64
+      fi
+      printf '%s\n' "$output" >&2
+      return "$status"
+    fi
   else
     python_skip_log
     echo "❌ python3 is required to patch the elfloader archive" >&2
@@ -1430,17 +1449,35 @@ PY
   fi
 }
 
-patch_elfloader_archive "$ROOT/third_party/seL4/artefacts/elfloader"
-patch_elfloader_archive "$ROOT/boot/elfloader"
-
-# Use plain grep here so the pipe drains fully; `grep -q` would trigger
-# SIGPIPE on `strings` under `set -o pipefail` and wrongly flag a failure.
-if ! strings -a "$ROOT/boot/elfloader" | grep 'ROOTSERVER ONLINE' >/dev/null; then
-  echo "❌ Patched elfloader archive does not contain cohesix_root payload" >&2
-  exit 1
+EMBEDDED_ARCHIVE=1
+if ! patch_elfloader_archive "$ROOT/third_party/seL4/artefacts/elfloader"; then
+  status=$?
+  if [ "$status" -eq 64 ]; then
+    EMBEDDED_ARCHIVE=0
+  else
+    exit "$status"
+  fi
+fi
+if ! patch_elfloader_archive "$ROOT/boot/elfloader"; then
+  status=$?
+  if [ "$status" -eq 64 ]; then
+    EMBEDDED_ARCHIVE=0
+  else
+    exit "$status"
+  fi
 fi
 
-echo "✅ ELFLoader archive replaced"
+if [ "$EMBEDDED_ARCHIVE" -eq 1 ]; then
+  # Use plain grep here so the pipe drains fully; `grep -q` would trigger
+  # SIGPIPE on `strings` under `set -o pipefail` and wrongly flag a failure.
+  if ! strings -a "$ROOT/boot/elfloader" | grep 'ROOTSERVER ONLINE' >/dev/null; then
+    echo "❌ Patched elfloader archive does not contain cohesix_root payload" >&2
+    exit 1
+  fi
+  echo "✅ ELFLoader archive replaced"
+else
+  log "ℹ️  Skipping embedded archive update; relying on external cohesix.cpio initrd"
+fi
 
 # 5) Return to repository root for downstream tooling
 cd "$ROOT"

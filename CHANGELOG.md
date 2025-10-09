@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v1.24
+// Filename: CHANGELOG.md v1.25
 // Author: Lukas Bower
-// Date Modified: 2030-03-08
+// Date Modified: 2030-03-16
 
 [vNext] - 2029-02-21
 ### Added
@@ -18,6 +18,9 @@
   avoids injecting nonexistent library paths on ARM hosts, and enforces that
   `cohesix_root.elf` is the first user module in the seL4 CPIO so the kernel
   launches the correct rootserver before the device tree.
+- `cohesix_fetch_build.sh` v1.61 gracefully skips elfloader archive patching when
+  the rebuilt initrd exceeds the reserved `.rodata` capacity, falling back to
+  external `cohesix.cpio` provisioning while preserving boot automation logs.
 - `third_party/seL4/build_sel4.sh` v0.3 copies the generated `kernel.dtb` into the
   staging directory and packages the CPIO with `cohesix_root.elf` immediately
   after `kernel.elf` to match seL4's rootserver expectations.
