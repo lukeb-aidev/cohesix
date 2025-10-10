@@ -1,8 +1,8 @@
 #!/usr/bin/env sh
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v1.61
+# Filename: cohesix_fetch_build.sh v1.62
 # Author: Lukas Bower
-# Date Modified: 2030-03-16
+# Date Modified: 2030-03-17
 
 # This script fetches and builds the Cohesix project, including seL4 and other dependencies.
 
@@ -1285,7 +1285,7 @@ for artefact in kernel.elf kernel.dtb; do
 done
 
 cp -- "$ROOT/third_party/seL4/artefacts/cohesix_root.elf" \
-  "$CPIO_STAGE_DIR/cohesix_root.elf"
+  "$CPIO_STAGE_DIR/rootserver"
 
 strip_rootserver_for_cpio() {
   local target="$1"
@@ -1312,7 +1312,7 @@ strip_rootserver_for_cpio() {
   fi
 }
 
-strip_rootserver_for_cpio "$CPIO_STAGE_DIR/cohesix_root.elf"
+strip_rootserver_for_cpio "$CPIO_STAGE_DIR/rootserver"
 
 report_rootserver_payload() {
   # Author: Lukas Bower
@@ -1331,13 +1331,15 @@ report_rootserver_payload() {
   fi
 }
 
-report_rootserver_payload "$CPIO_STAGE_DIR/cohesix_root.elf"
+report_rootserver_payload "$CPIO_STAGE_DIR/rootserver"
 
 ( cd "$CPIO_STAGE_DIR" &&
-  printf '%s\n' kernel.elf kernel.dtb cohesix_root.elf |
+  printf '%s\n' kernel.elf kernel.dtb rootserver |
     cpio -o -H newc > "$ROOT/boot/cohesix.cpio" )
 
 CPIO_IMAGE="$ROOT/boot/cohesix.cpio"
+CPIO_LOAD_ADDR="${CPIO_LOAD_ADDR:-0x44000000}"
+log "ℹ️  Using external CPIO payload: $CPIO_IMAGE (load addr $CPIO_LOAD_ADDR)"
 
 # Verify archive order
 log "📦 CPIO first entries:"
@@ -1348,140 +1350,15 @@ cpio_entry_2=$(printf '%s\n' "$cpio_listing" | sed -n '2p')
 cpio_entry_3=$(printf '%s\n' "$cpio_listing" | sed -n '3p')
 if [ "$cpio_entry_1" != "kernel.elf" ] || \
    [ "$cpio_entry_2" != "kernel.dtb" ] || \
-   [ "$cpio_entry_3" != "cohesix_root.elf" ]; then
-  echo "❌ Unexpected CPIO order (expected kernel.elf kernel.dtb cohesix_root.elf): $cpio_listing" >&2
+   [ "$cpio_entry_3" != "rootserver" ]; then
+  echo "❌ Unexpected CPIO order (expected kernel.elf kernel.dtb rootserver): $cpio_listing" >&2
   exit 1
 fi
 
 # Clean up staged payloads now that the archive is sealed
 rm -rf "$CPIO_STAGE_DIR"
 
-# Replace the embedded archive inside the elfloader's .rodata section
-patch_elfloader_archive() {
-  local target="$1"
-  if command -v python3 >/dev/null 2>&1; then
-    local output
-    if ! output=$(python3 - "$target" "$CPIO_IMAGE" <<'PY'
-import pathlib
-import subprocess
-import sys
-
-elf_path = pathlib.Path(sys.argv[1])
-cpio_path = pathlib.Path(sys.argv[2])
-
-OVERSIZE_EXIT = 64
-
-nm_output = subprocess.check_output([
-    "aarch64-linux-gnu-nm", "-n", str(elf_path)
-], text=True)
-symbols = {}
-for line in nm_output.splitlines():
-    parts = line.split()
-    if len(parts) >= 3:
-        addr_str, _typ, name = parts[:3]
-        if name in {"_archive_start", "_archive_end"}:
-            symbols[name] = int(addr_str, 16)
-
-start = symbols.get("_archive_start")
-end = symbols.get("_archive_end")
-if start is None or end is None:
-    sys.exit("missing archive symbols on {}".format(elf_path))
-if end <= start:
-    sys.exit("archive end precedes start on {}".format(elf_path))
-
-readelf_output = subprocess.check_output([
-    "aarch64-linux-gnu-readelf", "-S", str(elf_path)
-], text=True)
-rodata_addr = rodata_off = rodata_size = None
-lines = readelf_output.splitlines()
-for idx, line in enumerate(lines):
-    parts = line.split()
-    if len(parts) >= 6 and parts[2] == '.rodata':
-        rodata_addr = int(parts[4], 16)
-        rodata_off = int(parts[5], 16)
-        if idx + 1 < len(lines):
-            size_parts = lines[idx + 1].split()
-            if size_parts:
-                rodata_size = int(size_parts[0], 16)
-        break
-if rodata_addr is None:
-    sys.exit("failed to locate .rodata on {}".format(elf_path))
-
-start_off = rodata_off + (start - rodata_addr)
-end_off = rodata_off + (end - rodata_addr)
-if start_off < rodata_off or end_off > rodata_off + rodata_size:
-    sys.exit("archive slice outside .rodata for {}".format(elf_path))
-
-archive_capacity = end_off - start_off
-cpio_data = pathlib.Path(cpio_path).read_bytes()
-if len(cpio_data) > archive_capacity:
-    print(f"OVERSIZE {len(cpio_data)} {archive_capacity}")
-    sys.exit(OVERSIZE_EXIT)
-
-blob = bytearray(elf_path.read_bytes())
-blob[start_off:start_off + len(cpio_data)] = cpio_data
-pad_start = start_off + len(cpio_data)
-if pad_start < end_off:
-    blob[pad_start:end_off] = b"\x00" * (end_off - pad_start)
-elf_path.write_bytes(blob)
-PY
-    ); then
-      local status=$?
-      if [ "$status" -eq 64 ] && printf '%s' "$output" | grep -q '^OVERSIZE '; then
-        local new_size
-        local capacity
-        new_size=$(printf '%s' "$output" | awk 'NR==1 {print $2}')
-        capacity=$(printf '%s' "$output" | awk 'NR==1 {print $3}')
-        if command -v log >/dev/null 2>&1; then
-          log "⚠️  $target cannot embed initrd: ${new_size} bytes exceeds reserved ${capacity} bytes"
-        else
-          printf '%s\n' "⚠️  $target cannot embed initrd: ${new_size} bytes exceeds reserved ${capacity} bytes" >&2
-        fi
-        return 64
-      fi
-      printf '%s\n' "$output" >&2
-      return "$status"
-    fi
-  else
-    python_skip_log
-    echo "❌ python3 is required to patch the elfloader archive" >&2
-    exit 1
-  fi
-}
-
-EMBEDDED_ARCHIVE=1
-if patch_elfloader_archive "$ROOT/third_party/seL4/artefacts/elfloader"; then
-  :
-else
-  status=$?
-  if [ "$status" -eq 64 ]; then
-    EMBEDDED_ARCHIVE=0
-  else
-    exit "$status"
-  fi
-fi
-if patch_elfloader_archive "$ROOT/boot/elfloader"; then
-  :
-else
-  status=$?
-  if [ "$status" -eq 64 ]; then
-    EMBEDDED_ARCHIVE=0
-  else
-    exit "$status"
-  fi
-fi
-
-if [ "$EMBEDDED_ARCHIVE" -eq 1 ]; then
-  # Use plain grep here so the pipe drains fully; `grep -q` would trigger
-  # SIGPIPE on `strings` under `set -o pipefail` and wrongly flag a failure.
-  if ! strings -a "$ROOT/boot/elfloader" | grep 'ROOTSERVER ONLINE' >/dev/null; then
-    echo "❌ Patched elfloader archive does not contain cohesix_root payload" >&2
-    exit 1
-  fi
-  echo "✅ ELFLoader archive replaced"
-else
-  log "ℹ️  Skipping embedded archive update; relying on external cohesix.cpio initrd"
-fi
+log "ℹ️  Skipping elfloader archive embedding; external payload will be loaded by QEMU"
 
 # 5) Return to repository root for downstream tooling
 cd "$ROOT"
@@ -1512,7 +1389,7 @@ qemu-system-aarch64 \
   -cpu cortex-a57 \
   -m 1024M \
   -kernel "$ROOT/boot/elfloader" \
-  -initrd "$CPIO_IMAGE" \
+  -device loader,file="$CPIO_IMAGE",addr=$CPIO_LOAD_ADDR \
   -dtb "$ROOT/third_party/seL4/artefacts/kernel.dtb" \
   -semihosting-config enable=on,target=native \
   $QEMU_FLAG_LIST \
