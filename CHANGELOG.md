@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: CHANGELOG.md v1.25
+// Filename: CHANGELOG.md v1.26
 // Author: Lukas Bower
-// Date Modified: 2030-03-16
+// Date Modified: 2030-08-09
 
 [vNext] - 2029-02-21
 ### Added
@@ -34,6 +34,12 @@
   compilers and declares the community classification header.
 - `ci/qemu_boot_check.sh` v1.0 captures boot latency from the serial log and
   fails CI when the 200ms cold-boot target is exceeded.
+- `cohesix_fetch_build.sh` v1.63 enforces stripped rootserver binaries, rebuilds
+  the QEMU device tree via `dtc`, and fails fast when debuginfo or oversize
+  payloads slip through the release pipeline.
+- `ci/rootserver_release_check.sh` v0.1 verifies `aarch64-linux-gnu-strip` and
+  `readelf` hygiene before QEMU boots, while `ci/qemu_boot_check.sh` v1.1 now
+  rejects GIC target warnings and validates the expected seL4 IOPT level.
 - `src/cuda/runtime.rs` v0.17 records telemetry-backed CPU fallbacks whenever a
   remote CUDA endpoint is unavailable or misconfigured.
 - GUI orchestrator enforces default basic authentication with role-aware 403

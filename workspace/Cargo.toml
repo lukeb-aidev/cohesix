@@ -1,7 +1,7 @@
 # CLASSIFICATION: COMMUNITY
-# Filename: Cargo.toml v0.7
+# Filename: Cargo.toml v0.8
 # Author: Lukas Bower
-# Date Modified: 2028-11-28
+# Date Modified: 2030-08-09
 
 [workspace]
 members = [
@@ -26,10 +26,10 @@ allow-branch = ["main"]
 
 [profile.release]
 panic = "abort"
-strip = false
+strip = "debuginfo"
 lto = true
 codegen-units = 1
-debug = true
+debug = false
 
 [profile.release.package.cohesix_root]
 # Author: Lukas Bower

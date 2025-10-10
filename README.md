@@ -1,7 +1,7 @@
 // CLASSIFICATION: COMMUNITY
-// Filename: README.md v0.26
+// Filename: README.md v0.27
 // Author: Lukas Bower
-// Date Modified: 2029-02-22
+// Date Modified: 2030-08-09
 
 
 # Cohesix
@@ -38,6 +38,13 @@ Community documents live in `docs/community/`, while private strategy files are 
 | `PROJECT_MANIFEST.md` | Consolidated changelog, metadata, and OSS dependencies |
 | `docs/private/COMMERCIAL_PLAN.md` | Market & investor messaging (restricted) |
 | `docs/security/THREAT_MODEL.md` | Security assumptions and threat surfaces |
+
+## 🛠️ Build Requirements
+
+To keep boot artefacts reproducible and stripped of debug metadata, install the following host tools before running `cohesix_fetch_build.sh` or CI smoke tests:
+
+- **aarch64-linux-gnu-binutils** – provides `aarch64-linux-gnu-strip` and `aarch64-linux-gnu-readelf` used by `ci/rootserver_release_check.sh` and the CPIO staging pipeline to enforce debuginfo removal.
+- **device-tree-compiler (dtc)** – regenerates `third_party/seL4/artefacts/kernel.dtb` from the maintained `kernel.dts` so updated interrupt controller metadata ships with every build.
 | `docs/security/SECURITY_POLICY.md` | Defense strategy, mitigations, secure boot |
 
 | `docs/community/governance/LICENSES_AND_REUSE.md` | SPDX matrix and OSS reuse policy |

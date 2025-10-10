@@ -1,4 +1,11 @@
 /*
+ * CLASSIFICATION: COMMUNITY
+ * Filename: kernel.dts v0.3
+ * Author: Lukas Bower
+ * Date Modified: 2030-08-09
+ */
+
+/*
  * DTS of QEMU v8.2.2 for:
  *    qemu-system-aarch64
  *    -machine
@@ -331,17 +338,18 @@
 		compatible = "arm,armv8-pmuv3";
 	};
 
-	intc@8000000 {
-		phandle = <0x8002>;
-		reg = <0x00 0x8000000 0x00 0x10000 0x00 0x8010000 0x00 0x10000>;
-		compatible = "arm,cortex-a15-gic";
-		ranges;
-		#size-cells = <0x02>;
-		#address-cells = <0x02>;
-		interrupt-controller;
-		#interrupt-cells = <0x03>;
+        intc@8000000 {
+                phandle = <0x8002>;
+                reg = <0x00 0x8000000 0x00 0x10000 0x00 0x8010000 0x00 0x10000>;
+                compatible = "arm,cortex-a15-gic";
+                ranges;
+                #size-cells = <0x02>;
+                #address-cells = <0x02>;
+                interrupt-controller;
+                #interrupt-cells = <0x03>;
+                interrupts = <0x01 0x09 0x104>;
 
-		v2m@8020000 {
+                v2m@8020000 {
 			phandle = <0x8003>;
 			reg = <0x00 0x8020000 0x00 0x1000>;
 			msi-controller;
