@@ -1,8 +1,8 @@
 #!/usr/bin/env sh
 # CLASSIFICATION: COMMUNITY
-# Filename: cohesix_fetch_build.sh v1.62
+# Filename: cohesix_fetch_build.sh v1.63
 # Author: Lukas Bower
-# Date Modified: 2030-03-17
+# Date Modified: 2030-08-09
 
 # This script fetches and builds the Cohesix project, including seL4 and other dependencies.
 
@@ -1249,6 +1249,7 @@ fi
 # 1) Create boot directory
 mkdir -p "$ROOT/boot"
 
+rebuild_kernel_dtb
 
 # 2) Stage cohesix_root and elfloader
 ROOT_ELF_SRC="$ROOT/workspace/target/sel4-aarch64/release/cohesix_root"
@@ -1287,6 +1288,29 @@ done
 cp -- "$ROOT/third_party/seL4/artefacts/cohesix_root.elf" \
   "$CPIO_STAGE_DIR/rootserver"
 
+select_readelf_tool() {
+  for candidate in aarch64-linux-gnu-readelf llvm-readelf readelf; do
+    if command -v "$candidate" >/dev/null 2>&1; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+verify_rootserver_debug_sections() {
+  local target="$1"
+  local readelf_tool
+  if ! readelf_tool="$(select_readelf_tool)"; then
+    log "❌ No readelf-compatible tool available; install aarch64 binutils (aarch64-linux-gnu-readelf) or llvm-readelf."
+    exit 1
+  fi
+  if "$readelf_tool" --section-headers "$target" 2>/dev/null | grep -qE '\\.debug'; then
+    log "❌ Rootserver still contains debug sections after stripping; ensure release profile overrides are applied."
+    exit 1
+  fi
+}
+
 strip_rootserver_for_cpio() {
   local target="$1"
   local strip_tool=""
@@ -1298,17 +1322,42 @@ strip_rootserver_for_cpio() {
   done
 
   if [ -z "$strip_tool" ]; then
-    log "⚠️  No aarch64 strip tool found; embedding unstripped rootserver"
-    return 0
+    log "❌ No aarch64 strip tool found; install aarch64 binutils (aarch64-linux-gnu-strip)."
+    exit 1
   fi
 
   local stripped_tmp="${target}.stripped"
-  if "$strip_tool" -o "$stripped_tmp" "$target" >/dev/null 2>&1; then
+  if "$strip_tool" --strip-debug -o "$stripped_tmp" "$target" >/dev/null 2>&1; then
     mv -- "$stripped_tmp" "$target"
     log "✅ Stripped rootserver for CPIO payload using $strip_tool"
+    verify_rootserver_debug_sections "$target"
   else
     rm -f -- "$stripped_tmp"
-    log "⚠️  Failed to strip rootserver with $strip_tool; embedding unstripped binary"
+    log "❌ Failed to strip rootserver with $strip_tool; aborting build"
+    exit 1
+  fi
+}
+
+rebuild_kernel_dtb() {
+  local dts="$ROOT/third_party/seL4/kernel.dts"
+  local dtb="$ROOT/third_party/seL4/artefacts/kernel.dtb"
+  if [ ! -f "$dts" ]; then
+    log "❌ Kernel DTS not found at $dts"
+    exit 1
+  fi
+  if ! command -v dtc >/dev/null 2>&1; then
+    log "❌ Device Tree Compiler (dtc) not installed; install device-tree-compiler before continuing."
+    exit 1
+  fi
+  mkdir -p "$(dirname "$dtb")"
+  local dtb_tmp="${dtb}.tmp"
+  if dtc -@ -q -I dts -O dtb "$dts" -o "$dtb_tmp"; then
+    mv -- "$dtb_tmp" "$dtb"
+    log "✅ Regenerated kernel.dtb from source DTS"
+  else
+    rm -f -- "$dtb_tmp"
+    log "❌ Failed to compile $dts into $dtb"
+    exit 1
   fi
 }
 
@@ -1325,8 +1374,11 @@ report_rootserver_payload() {
   size_bytes=$(wc -c <"$target" 2>/dev/null | tr -d ' ')
   if [ -n "$size_bytes" ]; then
     log "ℹ️  Rootserver payload size: ${size_bytes} bytes"
-    if [ "$size_bytes" -gt 900000 ]; then
-      log "⚠️  Rootserver still contains debug sections; install aarch64 binutils (aarch64-linux-gnu-strip) or enable the Cohesix release profile override to omit debuginfo."
+    local max_size
+    max_size="${ROOTSERVER_MAX_BYTES:-1048576}"
+    if [ "$size_bytes" -gt "$max_size" ]; then
+      log "❌ Rootserver payload ${size_bytes} bytes exceeds enforced maximum ${max_size} bytes"
+      exit 1
     fi
   fi
 }
