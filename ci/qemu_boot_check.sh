@@ -1,8 +1,8 @@
 # CLASSIFICATION: COMMUNITY
 #!/usr/bin/env bash
-# Filename: qemu_boot_check.sh v1.0
+# Filename: qemu_boot_check.sh v1.1
 # Author: Lukas Bower
-# Date Modified: 2029-02-21
+# Date Modified: 2030-08-09
 # This script boots Cohesix under QEMU for CI. Firmware assumptions:
 # - x86_64 uses OVMF for UEFI.
 # - aarch64 requires QEMU_EFI.fd provided by system packages
@@ -42,17 +42,39 @@ find_first_file() {
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 cd "$ROOT"
 
+PLATFORM_GEN_HEADER="$ROOT/third_party/seL4/include/generated/plat/platform_gen.h"
+EXPECTED_SMMU_IOPT_LEVELS="${EXPECTED_SMMU_IOPT_LEVELS:-1}"
+
+determine_expected_iopt_levels() {
+  if [ ! -f "$PLATFORM_GEN_HEADER" ]; then
+    echo "❌ Missing seL4 platform header at $PLATFORM_GEN_HEADER" >&2
+    exit 1
+  fi
+  if grep -q '^#define CONFIGURE_SMMU' "$PLATFORM_GEN_HEADER"; then
+    printf '%s\n' "$EXPECTED_SMMU_IOPT_LEVELS"
+  else
+    printf '0\n'
+  fi
+}
+
+ROOTSERVER_CHECK="$ROOT/ci/rootserver_release_check.sh"
+if [ -x "$ROOTSERVER_CHECK" ]; then
+  "$ROOTSERVER_CHECK" "$ROOT/out/bin/cohesix_root.elf"
+fi
+
 ARCH_RAW="${BOOT_ARCH:-$(uname -m)}"
 case "$ARCH_RAW" in
   arm64) ARCH="aarch64" ;;
   amd64) ARCH="x86_64" ;;
   *)     ARCH="$ARCH_RAW" ;;
 esac
-LOG_DIR="${TMPDIR:-$(mktemp -d)}"
+LOG_DIR="${TMPDIR:-$ROOT/tmp/qemu_ci}"
+mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/qemu_serial.log"
 SUCCESS_MARKER="Cohesix shell started"
 ACCEL_ARGS=()
 QEMU_CPU_OPTS=()
+EXPECTED_IOPT_LEVELS="$(determine_expected_iopt_levels)"
 
 if [ "$ARCH" = "aarch64" ]; then
   if ! command -v qemu-system-aarch64 >/dev/null 2>&1; then
@@ -234,6 +256,30 @@ fi
 if grep -qiE "(data abort|mmu fault|prefetch abort)" "$LOG_PATH"; then
   echo "❌ MMU fault detected. Log tail:" >&2
   tail -n 20 "$LOG_PATH" >&2 || true
+  exit 1
+fi
+
+# ensure interrupt controller configured correctly
+if grep -q "Could not infer GIC interrupt target ID" "$LOG_PATH"; then
+  echo "❌ GIC target inference warning detected; verify kernel.dts configuration" >&2
+  tail -n 20 "$LOG_PATH" >&2 || true
+  exit 1
+fi
+
+# validate expected IOPT levels based on seL4 configuration
+iopt_line="$(grep -E 'IOPT levels:' "$LOG_PATH" | tail -n 1)"
+if [ -z "$iopt_line" ]; then
+  echo "❌ Unable to locate IOPT levels line in boot log" >&2
+  tail -n 20 "$LOG_PATH" >&2 || true
+  exit 1
+fi
+iopt_reported="$(printf '%s' "$iopt_line" | sed -E 's/.*IOPT levels:[[:space:]]*([0-9]+).*/\1/')"
+if [ -z "$iopt_reported" ]; then
+  echo "❌ Failed to parse IOPT level from line: $iopt_line" >&2
+  exit 1
+fi
+if [ "$iopt_reported" != "$EXPECTED_IOPT_LEVELS" ]; then
+  echo "❌ Reported IOPT levels $iopt_reported differ from expected $EXPECTED_IOPT_LEVELS" >&2
   exit 1
 fi
 
