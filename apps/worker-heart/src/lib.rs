@@ -36,9 +36,15 @@ impl HeartbeatWorker {
         &self.ticket
     }
 
+    /// Retrieve the session identifier bound to the worker.
+    #[must_use]
+    pub fn session(&self) -> SessionId {
+        self.session
+    }
+
     /// Emit a synthetic telemetry payload.
     pub fn emit(&self, tick: u64) -> Result<String> {
-        Ok(format!("heartbeat {} session {:?}", tick, self.session))
+        Ok(format!("heartbeat {tick}"))
     }
 }
 
@@ -50,6 +56,7 @@ mod tests {
     fn heartbeat_payload_includes_tick() {
         let worker = HeartbeatWorker::new(SessionId::from_raw(7));
         let payload = worker.emit(3).unwrap();
-        assert!(payload.contains("heartbeat 3"));
+        assert_eq!(payload, "heartbeat 3");
+        assert_eq!(worker.session(), SessionId::from_raw(7));
     }
 }
