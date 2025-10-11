@@ -288,12 +288,14 @@ else
     log "Size guard script not found; skipping payload size check"
 fi
 
+DTB_LOAD_ADDR=0x4f000000
 KERNEL_LOAD_ADDR=0x70000000
 ROOTSERVER_LOAD_ADDR=0x80000000
 
-QEMU_CMD=("$QEMU_BIN" -machine virt,gic-version=3 -cpu cortex-a57 -m 1024 -serial mon:stdio -display none -kernel "$ELFLOADER_PATH" -initrd "$CPIO_PATH" -device loader,file="$KERNEL_STAGE_PATH",addr=$KERNEL_LOAD_ADDR -device loader,file="$ROOTSERVER_STAGE_PATH",addr=$ROOTSERVER_LOAD_ADDR)
+QEMU_CMD=("$QEMU_BIN" -machine virt,gic-version=3,dtb-addr=$DTB_LOAD_ADDR -cpu cortex-a57 -m 1024 -serial mon:stdio -display none -kernel "$ELFLOADER_PATH" -initrd "$CPIO_PATH" -device loader,file="$KERNEL_STAGE_PATH",addr=$KERNEL_LOAD_ADDR -device loader,file="$ROOTSERVER_STAGE_PATH",addr=$ROOTSERVER_LOAD_ADDR)
 
 if [[ -n "$DTB_PATH" ]]; then
+    log "Device tree will load at $DTB_LOAD_ADDR"
     QEMU_CMD+=(-dtb "$DTB_PATH")
 fi
 
