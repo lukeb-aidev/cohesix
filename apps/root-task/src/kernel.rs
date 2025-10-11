@@ -5,7 +5,7 @@
 use core::fmt::{self, Write};
 use core::panic::PanicInfo;
 
-/// seL4 console writer backed by `seL4_DebugPutChar`.
+/// seL4 console writer backed by the kernel's `DebugPutChar` system call.
 struct DebugConsole;
 
 impl DebugConsole {
@@ -19,9 +19,7 @@ impl DebugConsole {
     #[inline(always)]
     fn write_raw(&mut self, bytes: &[u8]) {
         for &byte in bytes {
-            unsafe {
-                seL4_DebugPutChar(byte);
-            }
+            emit_debug_char(byte);
         }
     }
 
@@ -92,7 +90,7 @@ impl Write for DebugConsole {
 /// Minimal projection of `seL4_BootInfo` used for early diagnostics.
 #[repr(C)]
 #[derive(Copy, Clone)]
-struct BootInfoHeader {
+pub struct BootInfoHeader {
     extra_len: usize,
     node_id: usize,
     num_nodes: usize,
@@ -101,10 +99,6 @@ struct BootInfoHeader {
     init_thread_cnode_size_bits: usize,
     init_thread_domain: usize,
     extra_bi_pages: usize,
-}
-
-extern "C" {
-    fn seL4_DebugPutChar(character: u8);
 }
 
 /// Root task entry point invoked by seL4 after kernel initialisation.
@@ -117,6 +111,56 @@ pub extern "C" fn _start(bootinfo: *const BootInfoHeader) -> ! {
     // TODO: replace this placeholder loop with capability bootstrap logic.
     loop {
         core::hint::spin_loop();
+    }
+}
+
+#[inline(always)]
+fn emit_debug_char(byte: u8) {
+    #[cfg(all(sel4_config_printing, target_arch = "aarch64"))]
+    unsafe {
+        arch::debug_put_char(byte);
+    }
+
+    #[cfg(all(sel4_config_printing, not(target_arch = "aarch64")))]
+    {
+        let _ = byte;
+    }
+
+    #[cfg(not(sel4_config_printing))]
+    {
+        let _ = byte;
+    }
+}
+
+#[cfg(all(sel4_config_printing, not(target_arch = "aarch64")))]
+compile_error!("sel4_config_printing is only supported on aarch64 targets");
+
+#[cfg(all(sel4_config_printing, target_arch = "aarch64"))]
+mod arch {
+    use core::arch::asm;
+
+    const SYS_DEBUG_PUT_CHAR: usize = (-9i64) as usize;
+
+    #[inline(always)]
+    pub unsafe fn debug_put_char(byte: u8) {
+        let mut dest = byte as usize;
+        let mut info = 0usize;
+        let mut mr0 = 0usize;
+        let mut mr1 = 0usize;
+        let mut mr2 = 0usize;
+        let mut mr3 = 0usize;
+
+        asm!(
+            "svc #0",
+            inout("x0") dest,
+            inout("x1") info,
+            inout("x2") mr0,
+            inout("x3") mr1,
+            inout("x4") mr2,
+            inout("x5") mr3,
+            in("x7") SYS_DEBUG_PUT_CHAR,
+            options(nostack),
+        );
     }
 }
 
