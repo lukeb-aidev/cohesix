@@ -1,0 +1,255 @@
+#!/usr/bin/env bash
+# Author: Lukas Bower
+
+set -euo pipefail
+
+usage() {
+    cat <<'USAGE'
+Usage: scripts/cohesix-build-run.sh [options] [-- <extra-qemu-args>]
+
+Build the Cohesix Rust workspace, assemble the seL4 payload CPIO archive, and
+boot the system under QEMU. The script expects an existing seL4 build tree that
+already produced `elfloader`, `kernel.elf`, and support artefacts. By default it
+looks for that tree at `$HOME/seL4/build`.
+
+Options:
+  --sel4-build <dir>    Path to the seL4 build output (default: $HOME/seL4/build)
+  --out-dir <dir>       Directory for generated artefacts (default: out/cohesix)
+  --profile <name>      Cargo profile to build (release|debug|custom; default: release)
+  --cargo-target <triple>  Optional target triple passed to cargo
+  --qemu <path>         QEMU binary to execute (default: qemu-system-aarch64)
+  --no-run              Skip launching QEMU after building the artefacts
+  -h, --help            Show this help message
+
+Any arguments following `--` are forwarded directly to QEMU.
+USAGE
+}
+
+log() {
+    echo "[cohesix-build] $*"
+}
+
+fail() {
+    echo "[cohesix-build] error: $*" >&2
+    exit 1
+}
+
+SEL4_BUILD_DIR="${SEL4_BUILD:-$HOME/seL4/build}"
+OUT_DIR="out/cohesix"
+PROFILE="release"
+CARGO_TARGET=""
+QEMU_BIN="qemu-system-aarch64"
+RUN_QEMU=1
+EXTRA_QEMU_ARGS=()
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --sel4-build)
+            [[ $# -ge 2 ]] || fail "--sel4-build requires a directory"
+            SEL4_BUILD_DIR="$2"
+            shift 2
+            ;;
+        --out-dir)
+            [[ $# -ge 2 ]] || fail "--out-dir requires a directory"
+            OUT_DIR="$2"
+            shift 2
+            ;;
+        --profile)
+            [[ $# -ge 2 ]] || fail "--profile requires a value"
+            PROFILE="$2"
+            shift 2
+            ;;
+        --cargo-target)
+            [[ $# -ge 2 ]] || fail "--cargo-target requires a triple"
+            CARGO_TARGET="$2"
+            shift 2
+            ;;
+        --qemu)
+            [[ $# -ge 2 ]] || fail "--qemu requires a binary path"
+            QEMU_BIN="$2"
+            shift 2
+            ;;
+        --no-run)
+            RUN_QEMU=0
+            shift
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        --)
+            shift
+            EXTRA_QEMU_ARGS=("$@")
+            break
+            ;;
+        *)
+            fail "Unknown argument: $1"
+            ;;
+    esac
+done
+
+if [[ ! -d "$SEL4_BUILD_DIR" ]]; then
+    fail "seL4 build directory not found: $SEL4_BUILD_DIR"
+fi
+
+for cmd in cargo cpio python3 "$QEMU_BIN"; do
+    if ! command -v "$cmd" >/dev/null 2>&1; then
+        if [[ "$cmd" == "$QEMU_BIN" && "$RUN_QEMU" -eq 0 ]]; then
+            log "Skipping QEMU availability check because --no-run was provided"
+            break
+        fi
+        fail "Required command not found in PATH: $cmd"
+    fi
+    [[ "$cmd" == "$QEMU_BIN" ]] && break
+done
+
+ELFLOADER_PATH="$SEL4_BUILD_DIR/elfloader/elfloader"
+KERNEL_PATH="$SEL4_BUILD_DIR/kernel/kernel.elf"
+DTB_PATH="$SEL4_BUILD_DIR/qemu-arm-virt.dtb"
+
+[[ -f "$ELFLOADER_PATH" ]] || fail "elfloader binary not found at $ELFLOADER_PATH"
+[[ -f "$KERNEL_PATH" ]] || fail "kernel.elf not found at $KERNEL_PATH"
+
+if [[ ! -f "$DTB_PATH" ]]; then
+    log "DTB not found at $DTB_PATH; continuing without explicit -dtb"
+    DTB_PATH=""
+fi
+
+PROFILE_FLAG=()
+PROFILE_DIR="$PROFILE"
+case "$PROFILE" in
+    release)
+        PROFILE_FLAG=(--release)
+        PROFILE_DIR="release"
+        ;;
+    dev|debug)
+        PROFILE_FLAG=()
+        PROFILE_DIR="debug"
+        ;;
+    *)
+        PROFILE_FLAG=(--profile "$PROFILE")
+        ;;
+ esac
+
+CARGO_ARGS=(build --workspace --all-targets)
+CARGO_ARGS+=("${PROFILE_FLAG[@]}")
+if [[ -n "$CARGO_TARGET" ]]; then
+    CARGO_ARGS+=(--target "$CARGO_TARGET")
+fi
+
+log "Building Cohesix workspace via: cargo ${CARGO_ARGS[*]}"
+cargo "${CARGO_ARGS[@]}"
+
+if [[ -n "$CARGO_TARGET" ]]; then
+    ARTIFACT_DIR="target/$CARGO_TARGET/$PROFILE_DIR"
+else
+    ARTIFACT_DIR="target/$PROFILE_DIR"
+fi
+
+[[ -d "$ARTIFACT_DIR" ]] || fail "Cargo artefact directory not found: $ARTIFACT_DIR"
+
+COMPONENT_BINS=(root-task nine-door worker-heart worker-gpu)
+HOST_ONLY_BINS=(cohsh gpu-bridge-host)
+
+mkdir -p "$OUT_DIR"
+STAGING_DIR="$OUT_DIR/staging"
+ROOTFS_DIR="$STAGING_DIR/cohesix/bin"
+HOST_OUT_DIR="$OUT_DIR/host-tools"
+CPIO_PATH="$OUT_DIR/cohesix-system.cpio"
+
+rm -rf "$STAGING_DIR"
+mkdir -p "$ROOTFS_DIR" "$HOST_OUT_DIR"
+
+for bin in "${COMPONENT_BINS[@]}"; do
+    SRC="$ARTIFACT_DIR/$bin"
+    [[ -f "$SRC" ]] || fail "Expected binary not found: $SRC"
+    install -m 0755 -T "$SRC" "$ROOTFS_DIR/$bin"
+    log "Packaged component binary: $ROOTFS_DIR/$bin"
+done
+
+for bin in "${HOST_ONLY_BINS[@]}"; do
+    SRC="$ARTIFACT_DIR/$bin"
+    if [[ -f "$SRC" ]]; then
+        install -m 0755 -T "$SRC" "$HOST_OUT_DIR/$bin"
+        log "Copied host-side tool: $HOST_OUT_DIR/$bin"
+    else
+        log "Host tool not built for target $ARTIFACT_DIR: $bin (skipping)"
+    fi
+ done
+
+install -m 0755 -T "$KERNEL_PATH" "$STAGING_DIR/kernel.elf"
+install -m 0755 -T "$ROOTFS_DIR/root-task" "$STAGING_DIR/rootserver"
+
+RESOLVED_TARGET="$CARGO_TARGET"
+if [[ -z "$RESOLVED_TARGET" ]]; then
+    RESOLVED_TARGET=$(rustc -vV 2>/dev/null | awk '/host:/ {print $2}')
+fi
+
+MANIFEST_INPUTS=()
+for bin in "${COMPONENT_BINS[@]}"; do
+    MANIFEST_INPUTS+=("cohesix/bin/$bin")
+ done
+
+python3 - "$STAGING_DIR" "$PROFILE" "$RESOLVED_TARGET" "${MANIFEST_INPUTS[@]}" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+if len(sys.argv) < 5:
+    raise SystemExit("manifest generation requires staging dir, profile, target, and at least one binary")
+
+staging = pathlib.Path(sys.argv[1])
+profile = sys.argv[2]
+target = sys.argv[3]
+entries = []
+for rel_path in sys.argv[4:]:
+    path = staging / rel_path
+    data = path.read_bytes()
+    entries.append({
+        "name": path.name,
+        "path": rel_path,
+        "size": path.stat().st_size,
+        "sha256": hashlib.sha256(data).hexdigest(),
+    })
+manifest = {
+    "profile": profile,
+    "target": target,
+    "binaries": entries,
+}
+manifest_path = staging / "cohesix" / "manifest.json"
+manifest_path.parent.mkdir(parents=True, exist_ok=True)
+manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+PY
+
+log "Manifest written to $STAGING_DIR/cohesix/manifest.json"
+
+pushd "$STAGING_DIR" >/dev/null
+log "Creating payload archive at $CPIO_PATH"
+find . -print | LC_ALL=C sort | cpio -o -H newc > "$CPIO_PATH"
+popd >/dev/null
+
+if [[ -f scripts/ci/size_guard.sh ]]; then
+    scripts/ci/size_guard.sh "$CPIO_PATH"
+else
+    log "Size guard script not found; skipping payload size check"
+fi
+
+QEMU_CMD=("$QEMU_BIN" -machine virt,gic-version=3 -cpu cortex-a57 -m 1024 -serial mon:stdio -display none -kernel "$ELFLOADER_PATH" -initrd "$CPIO_PATH")
+
+if [[ -n "$DTB_PATH" ]]; then
+    QEMU_CMD+=(-dtb "$DTB_PATH")
+fi
+
+if [[ ${#EXTRA_QEMU_ARGS[@]} -gt 0 ]]; then
+    QEMU_CMD+=("${EXTRA_QEMU_ARGS[@]}")
+fi
+
+log "Prepared QEMU command: ${QEMU_CMD[*]}"
+
+if [[ "$RUN_QEMU" -eq 0 ]]; then
+    log "--no-run supplied; build artefacts ready at $OUT_DIR"
+    exit 0
+fi
+
+exec "${QEMU_CMD[@]}"
