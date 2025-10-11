@@ -292,7 +292,39 @@ DTB_LOAD_ADDR=0x4f000000
 KERNEL_LOAD_ADDR=0x70000000
 ROOTSERVER_LOAD_ADDR=0x80000000
 
-QEMU_MACHINE_OPTS="virt,gic-version=3"
+GIC_VERSION="3"
+GIC_CONFIG_SOURCE=""
+SEL4_CONFIG_CANDIDATES=(
+    "$SEL4_BUILD_DIR/.config"
+    "$SEL4_BUILD_DIR/kernel/.config"
+)
+
+for cfg in "${SEL4_CONFIG_CANDIDATES[@]}"; do
+    if [[ -f "$cfg" ]]; then
+        if grep -q '^CONFIG_ARM_GIC_V3_SUPPORT=y' "$cfg"; then
+            GIC_VERSION="3"
+            GIC_CONFIG_SOURCE="$cfg"
+            break
+        fi
+        if grep -q '^# CONFIG_ARM_GIC_V3_SUPPORT is not set' "$cfg"; then
+            GIC_VERSION="2"
+            GIC_CONFIG_SOURCE="$cfg"
+            break
+        fi
+    fi
+done
+
+if [[ -n "$GIC_CONFIG_SOURCE" ]]; then
+    if [[ "$GIC_VERSION" == "3" ]]; then
+        log "Detected GICv3 support in $GIC_CONFIG_SOURCE"
+    else
+        log "Detected GICv3 support disabled in $GIC_CONFIG_SOURCE; using gic-version=2"
+    fi
+else
+    log "Unable to infer GIC version from seL4 build configuration; defaulting to gic-version=$GIC_VERSION"
+fi
+
+QEMU_MACHINE_OPTS="virt,gic-version=$GIC_VERSION"
 QEMU_DTB_ADDR_SUPPORTED=0
 
 if command -v "$QEMU_BIN" >/dev/null 2>&1; then
