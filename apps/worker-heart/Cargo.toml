@@ -1,0 +1,11 @@
+# Author: Lukas Bower
+[package]
+name = "worker-heart"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+anyhow = { workspace = true }
+cohesix-ticket = { workspace = true }
+secure9p-wire = { workspace = true }
