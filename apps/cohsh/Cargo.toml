@@ -3,7 +3,7 @@
 name = "cohsh"
 version = "0.1.0"
 edition = "2021"
-description = "Cohesix shell prototype with mocked transport"
+description = "Cohesix shell prototype using the live NineDoor Secure9P transport"
 license = "MIT"
 
 [dependencies]
@@ -11,3 +11,4 @@ anyhow = { workspace = true }
 clap = { workspace = true }
 cohesix-ticket = { workspace = true }
 secure9p-wire = { workspace = true }
+nine-door = { path = "../nine-door" }

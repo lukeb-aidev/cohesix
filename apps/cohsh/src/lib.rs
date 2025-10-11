@@ -2,20 +2,18 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
-//! Cohesix shell prototype used to exercise attach and tail flows against a mocked transport.
-//!
-//! The real CLI will speak Secure9P to the NineDoor server. Milestone 1 provides
-//! a deterministic simulation so that operators and tests can observe the root
-//! task log stream while the transport stack is still under construction.
+//! Cohesix shell prototype speaking directly to the NineDoor Secure9P server.
+//! Milestone 2 replaces the mock transport with the live codec and synthetic
+//! namespace so operators can tail logs using the real filesystem protocol.
 
-use std::collections::HashMap;
 use std::fmt;
 use std::io::{self, BufRead, Write};
 
 use anyhow::{anyhow, Context, Result};
 use clap::ValueEnum;
 use cohesix_ticket::Role;
-use secure9p_wire::{FrameHeader, SessionId};
+use nine_door::{InProcessConnection, NineDoor};
+use secure9p_wire::{OpenMode, SessionId, MAX_MSIZE};
 
 /// Result of executing a single shell command.
 #[derive(Debug, PartialEq, Eq)]
@@ -52,69 +50,93 @@ impl Session {
     }
 }
 
+const ROOT_FID: u32 = 1;
+
 /// Transport abstraction used by the shell to interact with the system.
 pub trait Transport {
     /// Attach to the transport using the specified role and optional ticket payload.
     fn attach(&mut self, role: Role, ticket: Option<&str>) -> Result<Session>;
 
     /// Stream a log-like file and return the accumulated contents.
-    fn tail(&self, session: &Session, path: &str) -> Result<Vec<String>>;
+    fn tail(&mut self, session: &Session, path: &str) -> Result<Vec<String>>;
 }
 
-/// Mocked transport that simulates a subset of the NineDoor behaviours.
-#[derive(Debug, Clone)]
-pub struct MockTransport {
-    logs: HashMap<String, Vec<String>>,
-    next_session: u64,
+/// Live transport backed by the in-process NineDoor Secure9P server.
+#[derive(Debug)]
+pub struct NineDoorTransport {
+    server: NineDoor,
+    connection: Option<InProcessConnection>,
+    next_fid: u32,
 }
 
-impl Default for MockTransport {
-    fn default() -> Self {
-        let mut logs = HashMap::new();
-        logs.insert(
-            "/log/queen.log".to_owned(),
-            vec![
-                "Cohesix boot: root-task online (ticket role: Queen)".to_owned(),
-                format!(
-                    "spawned user-component endpoint {:?}",
-                    FrameHeader::new(SessionId::from_raw(1), 0)
-                ),
-                "tick 1".to_owned(),
-                "PING 1".to_owned(),
-                "PONG 1".to_owned(),
-                "tick 2".to_owned(),
-                "tick 3".to_owned(),
-                "root-task shutdown".to_owned(),
-            ],
-        );
+impl NineDoorTransport {
+    /// Create a new transport bound to the supplied server instance.
+    pub fn new(server: NineDoor) -> Self {
         Self {
-            logs,
-            next_session: 1,
+            server,
+            connection: None,
+            next_fid: ROOT_FID,
         }
+    }
+
+    fn allocate_fid(&mut self) -> u32 {
+        let fid = self.next_fid;
+        self.next_fid = self.next_fid.wrapping_add(1);
+        fid
     }
 }
 
-impl Transport for MockTransport {
+impl Transport for NineDoorTransport {
     fn attach(&mut self, role: Role, _ticket: Option<&str>) -> Result<Session> {
-        let id = SessionId::from_raw(self.next_session);
-        self.next_session += 1;
-        Ok(Session::new(id, role))
+        let mut connection = self
+            .server
+            .connect()
+            .context("failed to open NineDoor session")?;
+        connection
+            .version(MAX_MSIZE)
+            .context("version negotiation failed")?;
+        connection
+            .attach(ROOT_FID, role)
+            .context("attach request failed")?;
+        self.next_fid = ROOT_FID + 1;
+        let session = Session::new(connection.session_id(), role);
+        self.connection = Some(connection);
+        Ok(session)
     }
 
-    fn tail(&self, session: &Session, path: &str) -> Result<Vec<String>> {
-        if path != "/log/queen.log" {
-            return Err(anyhow!("path {path} is unsupported in the mock"));
+    fn tail(&mut self, _session: &Session, path: &str) -> Result<Vec<String>> {
+        let components = parse_path(path)?;
+        let fid = self.allocate_fid();
+        let connection = self
+            .connection
+            .as_mut()
+            .context("attach to a session before running tail")?;
+        connection
+            .walk(ROOT_FID, fid, &components)
+            .with_context(|| format!("failed to walk to {path}"))?;
+        connection
+            .open(fid, OpenMode::read_only())
+            .with_context(|| format!("failed to open {path}"))?;
+        let mut offset = 0u64;
+        let mut buffer = Vec::new();
+        loop {
+            let chunk = connection
+                .read(fid, offset, connection.negotiated_msize())
+                .with_context(|| format!("failed to read {path}"))?;
+            if chunk.is_empty() {
+                break;
+            }
+            offset = offset
+                .checked_add(chunk.len() as u64)
+                .context("offset overflow during read")?;
+            buffer.extend_from_slice(&chunk);
+            if chunk.len() < connection.negotiated_msize() as usize {
+                break;
+            }
         }
-        if session.role() != Role::Queen {
-            return Err(anyhow!(
-                "role {role:?} cannot tail {path}",
-                role = session.role()
-            ));
-        }
-        self.logs
-            .get(path)
-            .cloned()
-            .ok_or_else(|| anyhow!("path {path} not found"))
+        connection.clunk(fid).context("failed to clunk fid")?;
+        let text = String::from_utf8(buffer).context("log is not valid UTF-8")?;
+        Ok(text.lines().map(|line| line.to_owned()).collect())
     }
 }
 
@@ -269,6 +291,26 @@ impl<T: Transport, W: Write> Shell<T, W> {
     }
 }
 
+fn parse_path(path: &str) -> Result<Vec<String>> {
+    if !path.starts_with('/') {
+        return Err(anyhow!("paths must be absolute"));
+    }
+    let mut components = Vec::new();
+    for component in path.split('/').skip(1) {
+        if component.is_empty() {
+            continue;
+        }
+        if component == "." || component == ".." {
+            return Err(anyhow!("path component '{component}' is not permitted"));
+        }
+        if component.as_bytes().iter().any(|&b| b == 0) {
+            return Err(anyhow!("path component contains NUL byte"));
+        }
+        components.push(component.to_owned());
+    }
+    Ok(components)
+}
+
 fn parse_role(input: &str) -> Result<Role> {
     match input {
         "queen" => Ok(Role::Queen),
@@ -284,7 +326,7 @@ mod tests {
 
     #[test]
     fn attach_and_tail_logs() {
-        let transport = MockTransport::default();
+        let transport = NineDoorTransport::new(NineDoor::new());
         let buffer = Vec::new();
         let mut shell = Shell::new(transport, Cursor::new(buffer));
         shell.attach(Role::Queen, Some("ticket-1")).unwrap();
@@ -303,7 +345,7 @@ mod tests {
 
     #[test]
     fn execute_quit_command() {
-        let transport = MockTransport::default();
+        let transport = NineDoorTransport::new(NineDoor::new());
         let mut output = Vec::new();
         {
             let mut shell = Shell::new(transport, &mut output);
