@@ -1,7 +1,0 @@
-{
-  "__comment": "Partial trace entry missing timestamp and snapshot",
-  "events": [
-    {"node": "worker01", "action": "boot"},
-    {}
-  ]
-}

@@ -1,4 +1,0 @@
-{
-  "scenario": "swarm_control",
-  "plan": "examples/swarm_control.json"
-}

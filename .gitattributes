@@ -1,7 +1,0 @@
-# ── Cohesix defaults ──────────────────────────────────────────────────────────
-*.rs text eol=lf
-*.md text eol=lf
-*.sh text eol=lf
-
-# Vendor crates must be treated as binary to prevent line ending normalization or merging
-vendor/** -text eol=unset diff=false merge=false

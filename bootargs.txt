@@ -1,7 +1,0 @@
-# CLASSIFICATION: COMMUNITY
-# Filename: bootargs.txt v0.2
-# Author: Lukas Bower
-# Date Modified: 2030-03-09
-
-COHROLE=QueenPrimary secure9p=1 busybox=1
-
