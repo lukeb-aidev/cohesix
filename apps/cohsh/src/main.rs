@@ -9,10 +9,16 @@ use std::io::{self, BufReader};
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use cohesix_ticket::Role;
 
 use cohsh::{NineDoorTransport, RoleArg, Shell};
+
+#[derive(Copy, Clone, Debug, ValueEnum)]
+enum TransportKind {
+    Mock,
+    Qemu,
+}
 
 /// Cohesix shell command-line arguments.
 #[derive(Debug, Parser)]
@@ -29,13 +35,21 @@ struct Cli {
     /// Execute commands from a script file instead of starting an interactive shell.
     #[arg(long)]
     script: Option<PathBuf>,
+
+    /// Select the transport backing the shell session.
+    #[arg(long, value_enum, default_value_t = TransportKind::Mock)]
+    transport: TransportKind,
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let stdout = io::stdout();
     let writer = stdout.lock();
-    let transport = NineDoorTransport::new(nine_door::NineDoor::new());
+    let transport = match cli.transport {
+        TransportKind::Mock | TransportKind::Qemu => {
+            NineDoorTransport::new(nine_door::NineDoor::new())
+        }
+    };
     let mut shell = Shell::new(transport, writer);
     if let Some(role_arg) = cli.role {
         shell.attach(Role::from(role_arg), cli.ticket.as_deref())?;
