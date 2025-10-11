@@ -7,6 +7,16 @@ use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+const CONFIG_CANDIDATES: &[&str] = &[
+    ".config",
+    "kernel/.config",
+    "KernelConfig",
+    "kernel/KernelConfig",
+    "kernel/gen_config/KernelConfig",
+    "kernel/gen_config/KernelConfigGenerated.cmake",
+    "kernel/gen_config/kernel_all.cmake",
+];
+
 fn main() {
     println!("cargo:rerun-if-env-changed=SEL4_BUILD_DIR");
     println!("cargo:rerun-if-env-changed=SEL4_BUILD");
@@ -46,6 +56,8 @@ fn main() {
         .expect("libsel4.a should reside inside a directory");
     println!("cargo:rustc-link-search=native={}", lib_dir.display());
     println!("cargo:rustc-link-lib=static=sel4");
+
+    emit_config_flags(&build_path);
 }
 
 fn find_libsel4(root: &Path) -> Result<PathBuf, String> {
@@ -110,4 +122,141 @@ fn breadth_first_search(root: &Path, max_depth: usize) -> Result<PathBuf, String
         "searched up to depth {} but no libsel4.a was found",
         max_depth
     ))
+}
+
+fn emit_config_flags(root: &Path) {
+    if let Some(true) = probe_config_flag(root, "CONFIG_PRINTING") {
+        println!("cargo:rustc-cfg=sel4_config_printing");
+    }
+
+    if let Some(true) = probe_config_flag(root, "CONFIG_DEBUG_BUILD") {
+        println!("cargo:rustc-cfg=sel4_config_debug_build");
+    }
+}
+
+fn probe_config_flag(root: &Path, flag: &str) -> Option<bool> {
+    for relative in CONFIG_CANDIDATES {
+        let candidate = root.join(relative);
+        println!("cargo:rerun-if-changed={}", candidate.display());
+        let Ok(contents) = fs::read_to_string(&candidate) else {
+            continue;
+        };
+
+        if let Some(value) = parse_config_flag(&contents, flag) {
+            return Some(value);
+        }
+    }
+
+    None
+}
+
+fn parse_config_flag(contents: &str, flag: &str) -> Option<bool> {
+    for raw_line in contents.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        if let Some(value) = parse_comment_line(line, flag) {
+            return Some(value);
+        }
+
+        if let Some(value) = parse_assignment_line(line, flag) {
+            return Some(value);
+        }
+
+        if let Some(value) = parse_cmake_line(line, flag) {
+            return Some(value);
+        }
+    }
+
+    None
+}
+
+fn parse_comment_line(line: &str, flag: &str) -> Option<bool> {
+    if !line.starts_with('#') {
+        return None;
+    }
+
+    if line.contains(flag) && line.contains("is not set") {
+        return Some(false);
+    }
+
+    None
+}
+
+fn parse_assignment_line(line: &str, flag: &str) -> Option<bool> {
+    let Some(stripped) = line.strip_prefix(flag) else {
+        return None;
+    };
+
+    let remainder = stripped
+        .trim_start_matches(|c: char| matches!(c, '=' | ':' | '?' | ' ' | '\t'))
+        .trim();
+
+    if remainder.is_empty() {
+        return None;
+    }
+
+    let value = remainder
+        .split(|c: char| matches!(c, ' ' | '\t' | '#'))
+        .next()
+        .unwrap_or(remainder);
+
+    parse_bool_token(value)
+}
+
+fn parse_cmake_line(line: &str, flag: &str) -> Option<bool> {
+    if !(line.contains(flag) || line.starts_with("set(") || line.starts_with("option(")) {
+        return None;
+    }
+
+    let normalized = line.replace(['(', ')', '"'], " ");
+    let tokens = normalized.split_whitespace().collect::<Vec<_>>();
+
+    if tokens.len() >= 3 {
+        match tokens[0] {
+            "set" | "option" if tokens[1] == flag => {
+                if let Some(parsed) = parse_bool_token(tokens[2]) {
+                    return Some(parsed);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if let Some(idx) = tokens.iter().position(|&token| token == flag) {
+        if let Some(next) = tokens.get(idx + 1) {
+            if let Some(parsed) = parse_bool_token(next) {
+                return Some(parsed);
+            }
+        }
+    }
+
+    if let Some(pos) = line.find(flag) {
+        let after = &line[pos + flag.len()..];
+        if let Some(eq_pos) = after.find('=') {
+            let value = after[eq_pos + 1..]
+                .split(|c: char| matches!(c, ' ' | '\t' | ')' | ';'))
+                .next()
+                .unwrap_or("");
+            if let Some(parsed) = parse_bool_token(value) {
+                return Some(parsed);
+            }
+        }
+    }
+
+    None
+}
+
+fn parse_bool_token(token: &str) -> Option<bool> {
+    let normalized = token
+        .trim_matches(|c: char| matches!(c, '"' | '\'' | ')' | ';' | ','))
+        .to_ascii_uppercase();
+
+    match normalized.as_str() {
+        "Y" | "YES" | "1" | "ON" | "TRUE" => Some(true),
+        "N" | "NO" | "0" | "OFF" | "FALSE" => Some(false),
+        _ => None,
+    }
 }
