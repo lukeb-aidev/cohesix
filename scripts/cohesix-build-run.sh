@@ -166,10 +166,11 @@ COMPONENT_BINS=(root-task nine-door worker-heart worker-gpu)
 HOST_ONLY_BINS=(cohsh gpu-bridge-host)
 
 mkdir -p "$OUT_DIR"
+OUT_DIR_ABS="$(cd "$OUT_DIR" && pwd)"
 STAGING_DIR="$OUT_DIR/staging"
 ROOTFS_DIR="$STAGING_DIR/cohesix/bin"
 HOST_OUT_DIR="$OUT_DIR/host-tools"
-CPIO_PATH="$OUT_DIR/cohesix-system.cpio"
+CPIO_PATH="$OUT_DIR_ABS/cohesix-system.cpio"
 
 rm -rf "$STAGING_DIR"
 mkdir -p "$ROOTFS_DIR" "$HOST_OUT_DIR"
