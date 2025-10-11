@@ -1,9 +1,13 @@
 // Author: Lukas Bower
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
+#![no_std]
 
 //! Capability ticket primitives shared across Cohesix crates, reflecting
 //! `docs/ARCHITECTURE.md` §1-§3.
+
+#[cfg(test)]
+extern crate std;
 
 /// Roles recognised by the Cohesix capability system.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -6,6 +6,8 @@ edition = "2021"
 publish = false
 
 [dependencies]
-anyhow = { workspace = true }
 cohesix-ticket = { workspace = true }
+
+[target.'cfg(not(target_os = "none"))'.dependencies]
+anyhow = { workspace = true }
 secure9p-wire = { workspace = true }
