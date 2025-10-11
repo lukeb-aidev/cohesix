@@ -47,6 +47,7 @@ preparing and executing tasks.
   - `/queen/ctl` (append-only command sink)
   - `/worker/<id>/telemetry` (append-only, created on spawn)
 - In-VM transport (shared ring or seL4 endpoint wrapper). No TCP inside the VM.
+- `cohsh` CLI upgraded to speak the live NineDoor transport (mock removed) while preserving operator workflows.
 - Implementation satisfies the defences and layering requirements from `docs/SECURE9P.md §2-§5` and strictly adheres to
   `docs/INTERFACES.md §1-§6` for operation coverage, ticket validation, and error semantics.
 
@@ -102,6 +103,8 @@ preparing and executing tasks.
 - Job submission protocol (JSON) supporting vector add and matrix multiply kernels with SHA-256 payload validation.
 - Implementation must align with `docs/GPU_NODES.md §2-§7`, uphold the command schemas in `docs/INTERFACES.md §3-§5`, and keep
   VM-side responsibilities within the boundaries in `docs/ARCHITECTURE.md §7-§8`.
+- All temporary scaffolds, mocks, or stubs have been replaced with production-grade integrations; the completed build plan
+  represents the fully implemented Cohesix stack.
 
 **Checks**
 - Queen spawns a GPU worker (simulated if real hardware unavailable) and receives telemetry lines.
