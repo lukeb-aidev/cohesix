@@ -34,6 +34,29 @@ fail() {
     exit 1
 }
 
+describe_file() {
+    local label="$1"
+    local path="$2"
+
+    if [[ ! -f "$path" ]]; then
+        log "$label missing: $path"
+        return
+    fi
+
+    python3 - "$label" "$path" <<'PY'
+import hashlib
+import pathlib
+import sys
+
+label = sys.argv[1]
+path = pathlib.Path(sys.argv[2])
+data = path.read_bytes()
+size = path.stat().st_size
+digest = hashlib.sha256(data).hexdigest()
+print(f"[cohesix-build] {label}: {path} ({size} bytes, sha256={digest})")
+PY
+}
+
 SEL4_BUILD_DIR="${SEL4_BUILD:-$HOME/seL4/build}"
 OUT_DIR="out/cohesix"
 PROFILE="release"
@@ -103,6 +126,11 @@ for cmd in cargo cpio python3 "$QEMU_BIN"; do
     [[ "$cmd" == "$QEMU_BIN" ]] && break
 done
 
+if command -v "$QEMU_BIN" >/dev/null 2>&1; then
+    QEMU_VERSION="$($QEMU_BIN --version | head -n1)"
+    log "Using QEMU binary: $QEMU_BIN ($QEMU_VERSION)"
+fi
+
 ELFLOADER_PATH="$SEL4_BUILD_DIR/elfloader/elfloader"
 KERNEL_PATH="$SEL4_BUILD_DIR/kernel/kernel.elf"
 DTB_PATH="$SEL4_BUILD_DIR/qemu-arm-virt.dtb"
@@ -113,6 +141,8 @@ DTB_PATH="$SEL4_BUILD_DIR/qemu-arm-virt.dtb"
 if [[ ! -f "$DTB_PATH" ]]; then
     log "DTB not found at $DTB_PATH; continuing without explicit -dtb"
     DTB_PATH=""
+else
+    describe_file "Device tree" "$DTB_PATH"
 fi
 
 PROFILE_FLAG=()
@@ -192,8 +222,14 @@ for bin in "${HOST_ONLY_BINS[@]}"; do
     fi
 done
 
-install -m 0755 "$KERNEL_PATH" "$STAGING_DIR/kernel.elf"
-install -m 0755 "$ROOTFS_DIR/root-task" "$STAGING_DIR/rootserver"
+KERNEL_STAGE_PATH="$STAGING_DIR/kernel.elf"
+ROOTSERVER_STAGE_PATH="$STAGING_DIR/rootserver"
+
+install -m 0755 "$KERNEL_PATH" "$KERNEL_STAGE_PATH"
+install -m 0755 "$ROOTFS_DIR/root-task" "$ROOTSERVER_STAGE_PATH"
+
+describe_file "seL4 kernel" "$KERNEL_STAGE_PATH"
+describe_file "Root server" "$ROOTSERVER_STAGE_PATH"
 
 RESOLVED_TARGET="$CARGO_TARGET"
 if [[ -z "$RESOLVED_TARGET" ]]; then
@@ -244,13 +280,18 @@ log "Creating payload archive at $CPIO_PATH"
 find . -print | LC_ALL=C sort | cpio -o -H newc > "$CPIO_PATH"
 popd >/dev/null
 
+describe_file "Payload CPIO" "$CPIO_PATH"
+
 if [[ -f scripts/ci/size_guard.sh ]]; then
     scripts/ci/size_guard.sh "$CPIO_PATH"
 else
     log "Size guard script not found; skipping payload size check"
 fi
 
-QEMU_CMD=("$QEMU_BIN" -machine virt,gic-version=3 -cpu cortex-a57 -m 1024 -serial mon:stdio -display none -kernel "$ELFLOADER_PATH" -initrd "$CPIO_PATH")
+KERNEL_LOAD_ADDR=0x70000000
+ROOTSERVER_LOAD_ADDR=0x80000000
+
+QEMU_CMD=("$QEMU_BIN" -machine virt,gic-version=3 -cpu cortex-a57 -m 1024 -serial mon:stdio -display none -kernel "$ELFLOADER_PATH" -initrd "$CPIO_PATH" -device loader,file="$KERNEL_STAGE_PATH",addr=$KERNEL_LOAD_ADDR -device loader,file="$ROOTSERVER_STAGE_PATH",addr=$ROOTSERVER_LOAD_ADDR)
 
 if [[ -n "$DTB_PATH" ]]; then
     QEMU_CMD+=(-dtb "$DTB_PATH")
