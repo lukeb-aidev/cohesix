@@ -73,10 +73,10 @@ impl DebugConsole {
         );
         let _ = write!(
             self,
-            "{prefix}node_id={} nodes={} ipc_buffer=0x{ipc:016x}\r\n",
+            "{prefix}node_id={node_id} nodes={nodes} ipc_buffer=0x{ipc:016x}\r\n",
             prefix = Self::PREFIX,
-            header.node_id,
-            header.num_nodes,
+            node_id = header.node_id,
+            nodes = header.num_nodes,
             ipc = header.ipc_buffer,
         );
     }
