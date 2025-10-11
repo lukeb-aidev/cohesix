@@ -26,7 +26,7 @@ fn attach_walk_read_and_write() {
     client
         .open(3, OpenMode::write_append())
         .expect("open /queen/ctl for append");
-    let payload = b"{\"spawn\":\"heartbeat\"}\n";
+    let payload = b"{\"spawn\":\"heartbeat\",\"ticks\":5}\n";
     let written = client.write(3, payload).expect("write /queen/ctl");
     assert_eq!(written as usize, payload.len());
 }
