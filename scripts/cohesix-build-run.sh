@@ -304,7 +304,7 @@ if command -v "$QEMU_BIN" >/dev/null 2>&1; then
     fi
 fi
 
-QEMU_CMD=("$QEMU_BIN" -machine "$QEMU_MACHINE_OPTS" -cpu cortex-a57 -m 1024 -serial mon:stdio -display none -kernel "$ELFLOADER_PATH" -initrd "$CPIO_PATH" -device loader,file="$KERNEL_STAGE_PATH",addr=$KERNEL_LOAD_ADDR -device loader,file="$ROOTSERVER_STAGE_PATH",addr=$ROOTSERVER_LOAD_ADDR)
+QEMU_CMD=("$QEMU_BIN" -machine "$QEMU_MACHINE_OPTS" -cpu cortex-a57 -m 1024 -serial mon:stdio -display none -kernel "$ELFLOADER_PATH" -initrd "$CPIO_PATH" -device loader,file="$KERNEL_STAGE_PATH",addr=$KERNEL_LOAD_ADDR,force-raw=on -device loader,file="$ROOTSERVER_STAGE_PATH",addr=$ROOTSERVER_LOAD_ADDR,force-raw=on)
 
 if [[ -n "$DTB_PATH" ]]; then
     if [[ "$QEMU_DTB_ADDR_SUPPORTED" -eq 1 ]]; then
