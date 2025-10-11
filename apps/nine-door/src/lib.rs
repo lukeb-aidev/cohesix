@@ -228,7 +228,7 @@ impl InProcessConnection {
         let response = self.transact(RequestBody::Attach {
             fid,
             afid: u32::MAX,
-            uname: role_to_uname(role, identity),
+            uname: role_to_uname(role, identity)?,
             aname: "".to_owned(),
             n_uname: 0,
         })?;
@@ -1695,16 +1695,30 @@ fn parse_role_from_uname(uname: &str) -> Result<(Role, Option<String>), NineDoor
     ))
 }
 
-fn role_to_uname(role: Role, identity: Option<&str>) -> String {
+fn role_to_uname(role: Role, identity: Option<&str>) -> Result<String, NineDoorError> {
     match role {
-        Role::Queen => "queen".to_owned(),
+        Role::Queen => Ok("queen".to_owned()),
         Role::WorkerHeartbeat => {
-            let id = identity.expect("worker heartbeat requires identity");
-            format!("worker-heartbeat:{id}")
+            let id = identity
+                .and_then(|value| (!value.is_empty()).then_some(value))
+                .ok_or_else(|| {
+                    NineDoorError::protocol(
+                        ErrorCode::Invalid,
+                        "worker-heartbeat attach requires identity",
+                    )
+                })?;
+            Ok(format!("worker-heartbeat:{id}"))
         }
         Role::WorkerGpu => {
-            let id = identity.expect("worker gpu requires identity");
-            format!("worker-gpu:{id}")
+            let id = identity
+                .and_then(|value| (!value.is_empty()).then_some(value))
+                .ok_or_else(|| {
+                    NineDoorError::protocol(
+                        ErrorCode::Invalid,
+                        "worker-gpu attach requires identity",
+                    )
+                })?;
+            Ok(format!("worker-gpu:{id}"))
         }
     }
 }
@@ -1730,6 +1744,23 @@ mod tests {
         queen.open(3, OpenMode::read_only()).unwrap();
         let data = queen.read(3, 0, 128).unwrap();
         assert!(data.is_empty());
+    }
+
+    #[test]
+    fn worker_attach_without_identity_returns_error() {
+        let server = NineDoor::new();
+        let mut worker = server.connect().unwrap();
+        worker.version(MAX_MSIZE).unwrap();
+        let err = worker
+            .attach(1, Role::WorkerHeartbeat)
+            .expect_err("worker attach without identity should fail");
+        assert!(matches!(
+            err,
+            NineDoorError::Protocol {
+                code: ErrorCode::Invalid,
+                ref message,
+            } if message.contains("requires identity")
+        ));
     }
 
     #[test]
