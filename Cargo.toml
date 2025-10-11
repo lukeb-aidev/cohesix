@@ -1,6 +1,7 @@
 # Author: Lukas Bower
 [workspace]
 members = [
+    "apps/cohsh",
     "apps/root-task",
     "apps/nine-door",
     "apps/worker-heart",
@@ -18,3 +19,4 @@ cohesix-ticket = { path = "crates/cohesix-ticket" }
 secure9p-wire = { path = "crates/secure9p-wire" }
 anyhow = "1.0"
 thiserror = "1.0"
+clap = { version = "4.5", features = ["derive"] }
