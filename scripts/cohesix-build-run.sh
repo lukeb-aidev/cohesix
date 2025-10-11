@@ -177,22 +177,22 @@ mkdir -p "$ROOTFS_DIR" "$HOST_OUT_DIR"
 for bin in "${COMPONENT_BINS[@]}"; do
     SRC="$SEL4_ARTIFACT_DIR/$bin"
     [[ -f "$SRC" ]] || fail "Expected binary not found: $SRC"
-    install -m 0755 -T "$SRC" "$ROOTFS_DIR/$bin"
+    install -m 0755 "$SRC" "$ROOTFS_DIR/$bin"
     log "Packaged component binary: $ROOTFS_DIR/$bin"
 done
 
 for bin in "${HOST_ONLY_BINS[@]}"; do
     SRC="$HOST_ARTIFACT_DIR/$bin"
     if [[ -f "$SRC" ]]; then
-        install -m 0755 -T "$SRC" "$HOST_OUT_DIR/$bin"
+        install -m 0755 "$SRC" "$HOST_OUT_DIR/$bin"
         log "Copied host-side tool: $HOST_OUT_DIR/$bin"
     else
         log "Host tool not built for target $HOST_ARTIFACT_DIR: $bin (skipping)"
     fi
 done
 
-install -m 0755 -T "$KERNEL_PATH" "$STAGING_DIR/kernel.elf"
-install -m 0755 -T "$ROOTFS_DIR/root-task" "$STAGING_DIR/rootserver"
+install -m 0755 "$KERNEL_PATH" "$STAGING_DIR/kernel.elf"
+install -m 0755 "$ROOTFS_DIR/root-task" "$STAGING_DIR/rootserver"
 
 RESOLVED_TARGET="$CARGO_TARGET"
 if [[ -z "$RESOLVED_TARGET" ]]; then
