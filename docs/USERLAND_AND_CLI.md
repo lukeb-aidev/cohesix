@@ -18,6 +18,10 @@ Cohesix replaces the traditional Unix shell with a deterministic file-oriented c
 | `log` | Queen | Shortcut for `tail /log/queen.log` |
 | `quit` | All | Close session |
 
+> **Milestone 1 Note:** The `cohsh` prototype uses a mocked transport (`--mock`, enabled by default)
+> that exposes `attach`, `login`, `tail`, and `quit`. Additional commands in the table above are
+> documented for future milestones.
+
 ## 3. Example Sessions
 ### Queen Session
 ```
