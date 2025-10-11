@@ -120,6 +120,12 @@ impl NineDoor {
     pub fn bootstrap_ticket(&self) -> &TicketTemplate {
         &self.bootstrap_ticket
     }
+
+    /// Register a named service namespace that queen sessions may mount.
+    pub fn register_service(&self, service: &str, target: &[&str]) -> Result<(), NineDoorError> {
+        let mut core = self.inner.lock().expect("poisoned nine-door lock");
+        core.register_service(service, target)
+    }
 }
 
 impl Default for NineDoor {
@@ -325,6 +331,14 @@ impl ServerCore {
         id
     }
 
+    fn register_service(&mut self, service: &str, target: &[&str]) -> Result<(), NineDoorError> {
+        let path = target
+            .iter()
+            .map(|component| component.to_string())
+            .collect();
+        self.control.register_service(service, path)
+    }
+
     fn handle_frame(
         &mut self,
         session: SessionId,
@@ -478,7 +492,7 @@ impl ServerCore {
             }
         }
         let qid = self.control.namespace().root_qid();
-        state.insert_fid(fid, Vec::new(), qid);
+        state.insert_fid(fid, Vec::new(), Vec::new(), qid);
         state.mark_attached();
         Ok(ResponseBody::Attach { qid })
     }
@@ -493,10 +507,32 @@ impl ServerCore {
         let existing = state.fid(fid).ok_or_else(|| {
             NineDoorError::protocol(ErrorCode::NotFound, format!("fid {fid} not found"))
         })?;
-        AccessPolicy::ensure_walk(state.role(), state.worker_id(), &existing.path, wnames)?;
-        let (path, qids) = self.control.namespace_mut().walk(&existing.path, wnames)?;
-        let qid = qids.last().copied().unwrap_or(existing.qid);
-        state.insert_fid(newfid, path, qid);
+        let role = state.role();
+        let worker_id_owned = state.worker_id().map(|id| id.to_owned());
+        let worker_id = worker_id_owned.as_deref();
+        if wnames.is_empty() {
+            state.insert_fid(
+                newfid,
+                existing.view_path.clone(),
+                existing.canonical_path.clone(),
+                existing.qid,
+            );
+            return Ok(ResponseBody::Walk { qids: Vec::new() });
+        }
+        let mut qids = Vec::with_capacity(wnames.len());
+        let mut view_path = existing.view_path.clone();
+        let mut canonical_path = existing.canonical_path.clone();
+        let mut current_qid = existing.qid;
+        for component in wnames {
+            view_path.push(component.clone());
+            let resolved = state.resolve_view_path(&view_path);
+            AccessPolicy::ensure_path(role, worker_id, &resolved)?;
+            let node = self.control.namespace().lookup(&resolved)?;
+            current_qid = node.qid();
+            qids.push(current_qid);
+            canonical_path = resolved;
+        }
+        state.insert_fid(newfid, view_path, canonical_path, current_qid);
         Ok(ResponseBody::Walk { qids })
     }
 
@@ -514,8 +550,8 @@ impl ServerCore {
             let entry = state.fid_mut(fid).ok_or_else(|| {
                 NineDoorError::protocol(ErrorCode::NotFound, format!("fid {fid} not found"))
             })?;
-            AccessPolicy::ensure_open(role, worker_id, &entry.path, mode)?;
-            let node = self.control.namespace().lookup(&entry.path)?;
+            AccessPolicy::ensure_open(role, worker_id, &entry.canonical_path, mode)?;
+            let node = self.control.namespace().lookup(&entry.canonical_path)?;
             if node.is_directory() && mode.allows_write() {
                 return Err(NineDoorError::protocol(
                     ErrorCode::Permission,
@@ -553,8 +589,11 @@ impl ServerCore {
                 "fid opened without read permission",
             ));
         }
-        AccessPolicy::ensure_read(state.role(), state.worker_id(), &entry.path)?;
-        let data = self.control.namespace().read(&entry.path, offset, count)?;
+        AccessPolicy::ensure_read(state.role(), state.worker_id(), &entry.canonical_path)?;
+        let data = self
+            .control
+            .namespace()
+            .read(&entry.canonical_path, offset, count)?;
         Ok(ResponseBody::Read { data })
     }
 
@@ -581,7 +620,7 @@ impl ServerCore {
                     "fid opened without write permission",
                 ));
             }
-            entry.path.clone()
+            entry.canonical_path.clone()
         };
         AccessPolicy::ensure_write(role, worker_id, &path)?;
         let telemetry_write = worker_id
@@ -594,6 +633,17 @@ impl ServerCore {
         }
         if is_queen_ctl_path(&path) {
             let events = self.control.process_queen_write(data)?;
+            let role = state.role();
+            let worker_id_owned = state.worker_id().map(|id| id.to_owned());
+            let worker_id = worker_id_owned.as_deref();
+            for event in &events {
+                match event {
+                    QueenEvent::Bound { target, mount } | QueenEvent::Mounted { target, mount } => {
+                        state.apply_mount(role, worker_id, target, mount)?;
+                    }
+                    _ => {}
+                }
+            }
             self.process_queen_events(events, session);
             Ok(ResponseBody::Write {
                 count: data.len() as u32,
@@ -628,6 +678,8 @@ impl ServerCore {
                     );
                 }
                 QueenEvent::BudgetUpdated => {}
+                QueenEvent::Bound { .. } => {}
+                QueenEvent::Mounted { .. } => {}
             }
         }
     }
@@ -668,6 +720,7 @@ struct ControlPlane {
     workers: HashMap<String, WorkerRecord>,
     next_worker_id: u64,
     default_budget: BudgetSpec,
+    services: HashMap<String, Vec<String>>,
 }
 
 impl ControlPlane {
@@ -677,6 +730,7 @@ impl ControlPlane {
             workers: HashMap::new(),
             next_worker_id: 1,
             default_budget: BudgetSpec::default_heartbeat(),
+            services: HashMap::new(),
         }
     }
 
@@ -690,6 +744,20 @@ impl ControlPlane {
 
     fn worker_budget(&self, worker_id: &str) -> Option<BudgetSpec> {
         self.workers.get(worker_id).map(|record| record.budget)
+    }
+
+    fn register_service(
+        &mut self,
+        service: &str,
+        target: Vec<String>,
+    ) -> Result<(), NineDoorError> {
+        self.namespace.lookup(&target)?;
+        self.services.insert(service.to_owned(), target);
+        Ok(())
+    }
+
+    fn resolve_service(&self, service: &str) -> Option<Vec<String>> {
+        self.services.get(service).cloned()
     }
 
     fn process_queen_write(&mut self, data: &[u8]) -> Result<Vec<QueenEvent>, NineDoorError> {
@@ -720,6 +788,38 @@ impl ControlPlane {
                 QueenCommand::Budget(payload) => {
                     self.update_default_budget(&payload)?;
                     events.push(QueenEvent::BudgetUpdated);
+                }
+                QueenCommand::Bind(command) => {
+                    let (from_raw, to_raw, source, mount) = command.into_parts()?;
+                    if mount.is_empty() {
+                        return Err(NineDoorError::protocol(
+                            ErrorCode::Invalid,
+                            "bind target must not be root",
+                        ));
+                    }
+                    self.namespace.lookup(&source)?;
+                    self.log_event(&format!("bound {from_raw} -> {to_raw}"))?;
+                    events.push(QueenEvent::Bound {
+                        target: source,
+                        mount,
+                    });
+                }
+                QueenCommand::Mount(command) => {
+                    let (service, at_raw, mount) = command.into_parts()?;
+                    if mount.is_empty() {
+                        return Err(NineDoorError::protocol(
+                            ErrorCode::Invalid,
+                            "mount point must not be root",
+                        ));
+                    }
+                    let Some(target) = self.resolve_service(&service) else {
+                        return Err(NineDoorError::protocol(
+                            ErrorCode::NotFound,
+                            format!("service {service} not registered"),
+                        ));
+                    };
+                    self.log_event(&format!("mounted {service} at {at_raw}"))?;
+                    events.push(QueenEvent::Mounted { target, mount });
                 }
             }
         }
@@ -803,6 +903,14 @@ enum QueenEvent {
     Spawned(String),
     Killed(String),
     BudgetUpdated,
+    Bound {
+        target: Vec<String>,
+        mount: Vec<String>,
+    },
+    Mounted {
+        target: Vec<String>,
+        mount: Vec<String>,
+    },
 }
 
 /// Tracks per-session state including budget counters.
@@ -813,6 +921,7 @@ struct SessionState {
     role: Option<Role>,
     worker_id: Option<String>,
     budget: BudgetState,
+    mounts: MountTable,
 }
 
 impl SessionState {
@@ -824,6 +933,7 @@ impl SessionState {
             role: None,
             worker_id: None,
             budget: BudgetState::new(BudgetSpec::unbounded(), now),
+            mounts: MountTable::default(),
         }
     }
 
@@ -858,11 +968,18 @@ impl SessionState {
         self.fids.contains_key(&fid)
     }
 
-    fn insert_fid(&mut self, fid: u32, path: Vec<String>, qid: Qid) {
+    fn insert_fid(
+        &mut self,
+        fid: u32,
+        view_path: Vec<String>,
+        canonical_path: Vec<String>,
+        qid: Qid,
+    ) {
         self.fids.insert(
             fid,
             FidState {
-                path,
+                view_path,
+                canonical_path,
                 qid,
                 open_mode: None,
             },
@@ -922,6 +1039,21 @@ impl SessionState {
 
     fn mark_revoked(&mut self, reason: String) {
         self.budget.revoke(reason);
+    }
+
+    fn apply_mount(
+        &mut self,
+        role: Option<Role>,
+        worker_id: Option<&str>,
+        target: &[String],
+        mount: &[String],
+    ) -> Result<(), NineDoorError> {
+        AccessPolicy::ensure_path(role, worker_id, target)?;
+        self.mounts.bind(target.to_vec(), mount.to_vec())
+    }
+
+    fn resolve_view_path(&self, view_path: &[String]) -> Vec<String> {
+        self.mounts.resolve(view_path)
     }
 }
 
@@ -1008,28 +1140,53 @@ enum BudgetVerdict {
 
 #[derive(Debug, Clone)]
 struct FidState {
-    path: Vec<String>,
+    view_path: Vec<String>,
+    canonical_path: Vec<String>,
     qid: Qid,
     open_mode: Option<OpenMode>,
+}
+
+#[derive(Debug, Default, Clone)]
+struct MountTable {
+    entries: Vec<MountEntry>,
+}
+
+#[derive(Debug, Clone)]
+struct MountEntry {
+    target: Vec<String>,
+    mount: Vec<String>,
+}
+
+impl MountTable {
+    fn bind(&mut self, target: Vec<String>, mount: Vec<String>) -> Result<(), NineDoorError> {
+        if mount.is_empty() {
+            return Err(NineDoorError::protocol(
+                ErrorCode::Invalid,
+                "mount point must not be root",
+            ));
+        }
+        self.entries.retain(|entry| entry.mount != mount);
+        self.entries.push(MountEntry { target, mount });
+        self.entries
+            .sort_by(|a, b| b.mount.len().cmp(&a.mount.len()));
+        Ok(())
+    }
+
+    fn resolve(&self, view_path: &[String]) -> Vec<String> {
+        for entry in &self.entries {
+            if view_path.starts_with(entry.mount.as_slice()) {
+                let mut resolved = entry.target.clone();
+                resolved.extend_from_slice(&view_path[entry.mount.len()..]);
+                return resolved;
+            }
+        }
+        view_path.to_vec()
+    }
 }
 
 struct AccessPolicy;
 
 impl AccessPolicy {
-    fn ensure_walk(
-        role: Option<Role>,
-        worker_id: Option<&str>,
-        start: &[String],
-        components: &[String],
-    ) -> Result<(), NineDoorError> {
-        let mut path = start.to_vec();
-        for component in components {
-            path.push(component.clone());
-            Self::ensure_path(role, worker_id, &path)?;
-        }
-        Ok(())
-    }
-
     fn ensure_open(
         role: Option<Role>,
         worker_id: Option<&str>,

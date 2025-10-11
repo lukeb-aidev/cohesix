@@ -30,22 +30,6 @@ impl Namespace {
         self.root.qid
     }
 
-    /// Walk from an existing path and return the resulting path and Qids.
-    pub fn walk(
-        &mut self,
-        start: &[String],
-        components: &[String],
-    ) -> Result<(Vec<String>, Vec<Qid>), NineDoorError> {
-        let mut path = start.to_vec();
-        let mut qids = Vec::with_capacity(components.len());
-        for component in components {
-            path.push(component.clone());
-            let node = self.lookup(&path)?;
-            qids.push(node.qid());
-        }
-        Ok((path, qids))
-    }
-
     /// Read bytes from the supplied path.
     pub fn read(&self, path: &[String], offset: u64, count: u32) -> Result<Vec<u8>, NineDoorError> {
         let node = self.lookup(path)?;
