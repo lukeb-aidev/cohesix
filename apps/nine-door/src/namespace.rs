@@ -68,17 +68,7 @@ impl Namespace {
 
     /// Append bytes to the supplied path.
     pub fn write_append(&mut self, path: &[String], data: &[u8]) -> Result<u32, NineDoorError> {
-        let node = match self.lookup_mut(path) {
-            Ok(node) => node,
-            Err(err) => {
-                if let Some(worker_id) = worker_telemetry_id(path) {
-                    self.ensure_worker_telemetry(worker_id)?;
-                    self.lookup_mut(path)?
-                } else {
-                    return Err(err);
-                }
-            }
-        };
+        let node = self.lookup_mut(path)?;
         match node.node.kind_mut() {
             NodeKind::File(FileNode::AppendOnly(buffer)) => {
                 buffer.extend_from_slice(data);
@@ -93,6 +83,40 @@ impl Namespace {
                 format!("cannot write directory /{}", join_path(path)),
             )),
         }
+    }
+
+    /// Create namespace entries for a spawned worker.
+    pub fn create_worker(&mut self, worker_id: &str) -> Result<(), NineDoorError> {
+        if worker_id.is_empty() || worker_id.contains('/') {
+            return Err(NineDoorError::protocol(
+                ErrorCode::Invalid,
+                format!("invalid worker id '{worker_id}'"),
+            ));
+        }
+        let worker_root = vec!["worker".to_owned()];
+        let mut node = self.lookup_mut(&worker_root)?;
+        if node.has_child(worker_id) {
+            return Err(NineDoorError::protocol(
+                ErrorCode::Busy,
+                format!("worker {worker_id} already exists"),
+            ));
+        }
+        let worker_dir = node.ensure_directory(worker_id);
+        worker_dir.ensure_file("telemetry", FileNode::AppendOnly(Vec::new()));
+        Ok(())
+    }
+
+    /// Remove namespace entries for a killed worker.
+    pub fn remove_worker(&mut self, worker_id: &str) -> Result<(), NineDoorError> {
+        let worker_root = vec!["worker".to_owned()];
+        let mut node = self.lookup_mut(&worker_root)?;
+        if node.remove_child(worker_id).is_none() {
+            return Err(NineDoorError::protocol(
+                ErrorCode::NotFound,
+                format!("worker {worker_id} not found"),
+            ));
+        }
+        Ok(())
     }
 
     /// Lookup a node by path.
@@ -120,13 +144,6 @@ impl Namespace {
             })?;
         }
         Ok(NodeViewMut { node })
-    }
-
-    fn ensure_worker_telemetry(&mut self, worker_id: &str) -> Result<(), NineDoorError> {
-        let worker_root = vec!["worker".to_owned()];
-        self.ensure_dir(&worker_root, worker_id)?;
-        let telemetry_parent = vec!["worker".to_owned(), worker_id.to_owned()];
-        self.ensure_append_only_file(&telemetry_parent, "telemetry", b"")
     }
 
     fn bootstrap(&mut self) {
@@ -222,6 +239,13 @@ impl Node {
         }
     }
 
+    fn remove_child(&mut self, name: &str) -> Option<Node> {
+        match &mut self.kind {
+            NodeKind::Directory { children } => children.remove(name),
+            NodeKind::File(_) => None,
+        }
+    }
+
     fn ensure_directory(&mut self, name: &str) -> &mut Node {
         match &mut self.kind {
             NodeKind::Directory { children } => {
@@ -304,6 +328,14 @@ impl<'a> NodeViewMut<'a> {
     fn ensure_file(&mut self, name: &str, file: FileNode) -> &mut Node {
         self.node.ensure_file(name, file)
     }
+
+    fn has_child(&self, name: &str) -> bool {
+        self.node.child(name).is_some()
+    }
+
+    fn remove_child(&mut self, name: &str) -> Option<Node> {
+        self.node.remove_child(name)
+    }
 }
 
 fn hash_path(path: &[String]) -> u64 {
@@ -312,14 +344,6 @@ fn hash_path(path: &[String]) -> u64 {
         component.hash(&mut hasher);
     }
     hasher.finish()
-}
-
-fn worker_telemetry_id(path: &[String]) -> Option<&str> {
-    if path.len() == 3 && path[0] == "worker" && path[2] == "telemetry" {
-        Some(&path[1])
-    } else {
-        None
-    }
 }
 
 fn join_path(path: &[String]) -> String {

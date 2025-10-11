@@ -21,6 +21,7 @@ pub enum Role {
 pub struct BudgetSpec {
     ticks: Option<u64>,
     ops: Option<u64>,
+    ttl_s: Option<u64>,
 }
 
 impl BudgetSpec {
@@ -30,6 +31,7 @@ impl BudgetSpec {
         Self {
             ticks: None,
             ops: None,
+            ttl_s: None,
         }
     }
 
@@ -39,7 +41,47 @@ impl BudgetSpec {
         Self {
             ticks: Some(1_000),
             ops: Some(10_000),
+            ttl_s: Some(300),
         }
+    }
+
+    /// Override the tick budget.
+    #[must_use]
+    pub fn with_ticks(mut self, ticks: Option<u64>) -> Self {
+        self.ticks = ticks;
+        self
+    }
+
+    /// Override the operation budget.
+    #[must_use]
+    pub fn with_ops(mut self, ops: Option<u64>) -> Self {
+        self.ops = ops;
+        self
+    }
+
+    /// Override the time-to-live budget in seconds.
+    #[must_use]
+    pub fn with_ttl(mut self, ttl_s: Option<u64>) -> Self {
+        self.ttl_s = ttl_s;
+        self
+    }
+
+    /// Retrieve the configured tick budget.
+    #[must_use]
+    pub fn ticks(&self) -> Option<u64> {
+        self.ticks
+    }
+
+    /// Retrieve the configured operation budget.
+    #[must_use]
+    pub fn ops(&self) -> Option<u64> {
+        self.ops
+    }
+
+    /// Retrieve the configured time-to-live budget in seconds.
+    #[must_use]
+    pub fn ttl_s(&self) -> Option<u64> {
+        self.ttl_s
     }
 }
 
@@ -85,5 +127,6 @@ mod tests {
         let budget = BudgetSpec::default_heartbeat();
         assert!(budget.ticks.is_some());
         assert!(budget.ops.is_some());
+        assert!(budget.ttl_s.is_some());
     }
 }
