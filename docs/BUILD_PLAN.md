@@ -6,7 +6,10 @@
 **Kernel:** Upstream seL4 (external build)
 **Userspace:** Pure Rust crates (`root-task`, `nine-door`, `worker-heart`, future `worker-gpu`, `gpu-bridge` host tool)
 
-The milestones below build cumulatively; do not advance until the specified checks pass and documentation is updated.
+The milestones below build cumulatively; do not advance until the specified checks pass and documentation is updated. Each step
+is grounded in the architectural intent outlined in `docs/ARCHITECTURE.md`, the repository conventions from `docs/REPO_LAYOUT.md`,
+and the interface contracts codified in `docs/INTERFACES.md`. Treat those documents as non-negotiable source material when
+preparing and executing tasks.
 
 ## Milestone 0 — Repository Skeleton & Toolchain (1–2 days)
 **Deliverables**
@@ -14,24 +17,28 @@ The milestones below build cumulatively; do not advance until the specified chec
 - `toolchain/setup_macos_arm64.sh` script checking for Homebrew dependencies, rustup, and QEMU - and installing if absent.
 - `scripts/qemu-run.sh` that boots seL4 with externally built `elfloader`, `kernel.elf`, also creates and uses `rootfs.cpio`.
 - `ci/size_guard.sh` enforcing < 4 MiB CPIO payload.
+- Repository tree matches `docs/REPO_LAYOUT.md`, and architecture notes from `docs/ARCHITECTURE.md §1-§3` are captured in crate
+  READMEs or module docs to prevent drift.
 
 **Checks**
 - `cargo check` succeeds for the workspace.
 - `qemu-system-aarch64 --version` reports the expected binary.
 - `ci/size_guard.sh out/rootfs.cpio` rejects oversized archives.
 
-## Milestone 1 — Boot Banner, Timer, & First IPC 
+## Milestone 1 — Boot Banner, Timer, & First IPC
 **Deliverables**
 - Root task prints a banner and configures a periodic timer tick.
 - Root task spawns a secondary user component via seL4 endpoints.
 - Demonstrate one ping/pong IPC exchange and timer-driven logging.
+- Scaffold `cohsh` CLI prototype (command parsing + mocked transport) per `docs/USERLAND_AND_CLI.md §2-§4` so operators can
+  observe logs via `tail` and exercise attach/login flows defined in `docs/INTERFACES.md §7`.
 
 **Checks**
 - QEMU serial shows boot banner and periodic `tick` line.
 - QEMU serial logs `PING 1` / `PONG 1` sequence exactly once per boot.
 - No panics; QEMU terminates cleanly via monitor command.
 
-## Milestone 2 — NineDoor Minimal 9P 
+## Milestone 2 — NineDoor Minimal 9P
 **Deliverables**
 - Secure9P codec + fid/session table implementing `version`, `attach`, `walk`, `open`, `read`, `write`, `clunk`.
 - Synthetic namespace publishing:
@@ -40,13 +47,15 @@ The milestones below build cumulatively; do not advance until the specified chec
   - `/queen/ctl` (append-only command sink)
   - `/worker/<id>/telemetry` (append-only, created on spawn)
 - In-VM transport (shared ring or seL4 endpoint wrapper). No TCP inside the VM.
+- Implementation satisfies the defences and layering requirements from `docs/SECURE9P.md §2-§5` and strictly adheres to
+  `docs/INTERFACES.md §1-§6` for operation coverage, ticket validation, and error semantics.
 
 **Checks**
 - Integration test attaches, walks, reads `/proc/boot`, and appends to `/queen/ctl`.
 - Attempting to write to `/proc/boot` fails with `Permission`.
 - Decoder corpus covers malformed frames (length mismatch, fid reuse).
 
-## Milestone 3 — Queen/Worker MVP with Roles 
+## Milestone 3 — Queen/Worker MVP with Roles
 **Deliverables**
 - Role-aware access policy implementing `Queen` and `WorkerHeartbeat` roles.
 - `/queen/ctl` accepts JSON commands:
@@ -55,16 +64,20 @@ The milestones below build cumulatively; do not advance until the specified chec
   - `{"budget":{"ttl_s":120,"ops":1000}}` (optional fields)
 - Worker-heart process appends `"heartbeat <tick>"` lines to `/worker/<id>/telemetry`.
 - Budget enforcement (ttl/ticks/ops) with automatic revocation.
+- Access policy follows `docs/ROLES_AND_SCHEDULING.md §1-§5` and the queen control schema in `docs/INTERFACES.md §3-§4`; all
+  JSON handling must reject unknown formats as defined in the error table (`docs/INTERFACES.md §8`).
 
 **Checks**
 - Writing spawn command creates worker directory and live telemetry stream.
 - Writing kill removes worker directory and closes telemetry file.
 - Role isolation tests deny cross-role reads/writes.
 
-## Milestone 4 — Bind & Mount Namespaces 
+## Milestone 4 — Bind & Mount Namespaces
 **Deliverables**
 - Per-session mount table with `bind(from, to)` and `mount(service, at)` operations scoped to a single path.
 - Queen-only commands for namespace manipulation exposed via `/queen/ctl`.
+- Namespace operations mirror the behaviour defined in `docs/INTERFACES.md §3` and respect mount expectations in
+  `docs/ARCHITECTURE.md §4`.
 
 **Checks**
 - Queen remaps `/queen` to a subdirectory without affecting other sessions.
@@ -75,16 +88,20 @@ The milestones below build cumulatively; do not advance until the specified chec
 - Unit tests for codec, fid lifecycle, and access policy negative paths.
 - Fuzz harness covering length-prefix mutations and random tail bytes for the decoder.
 - Integration test: spawn heartbeat → emit telemetry → kill → verify revocation logs.
+- Cohsh regression scripts (per `docs/USERLAND_AND_CLI.md §6-§7`) execute against mock and QEMU targets, ensuring CLI and
+  Secure9P behaviours stay aligned.
 
 **Checks**
 - `cargo test` passes in CI.
 - Fuzz harness runs N iterations (configurable) without panic.
 
-## Milestone 6 — GPU Worker Integration 
+## Milestone 6 — GPU Worker Integration
 **Deliverables**
 - Define `WorkerGpu` role and extend `/queen/ctl` schema with GPU lease requests.
 - Host-side `gpu-bridge` tool implementing NVML-based discovery and 9P mirroring for `/gpu/<id>/*`.
 - Job submission protocol (JSON) supporting vector add and matrix multiply kernels with SHA-256 payload validation.
+- Implementation must align with `docs/GPU_NODES.md §2-§7`, uphold the command schemas in `docs/INTERFACES.md §3-§5`, and keep
+  VM-side responsibilities within the boundaries in `docs/ARCHITECTURE.md §7-§8`.
 
 **Checks**
 - Queen spawns a GPU worker (simulated if real hardware unavailable) and receives telemetry lines.
