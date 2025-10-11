@@ -11,7 +11,7 @@
 1. **Single Source of Truth** — This `AGENTS.md` plus `/docs/*.md` constitute canonical guidance. Update them alongside code.
 2. **No Scope Creep** — Implement only items sanctioned by the active milestone in `BUILD_PLAN.md`.
 3. **Atomic Work** — Each task must land with compiling code (`cargo check`) and updated tests/docs. Keep commits focused.
-4. **Tiny TCB** — No BusyBox, POSIX emulation layers, or TCP servers inside the VM. GPU integration stays outside the VM.
+4. **Tiny TCB** — No POSIX emulation layers, or TCP servers inside the VM. GPU integration stays outside the VM. The code footprint must be self-contained and secure.
 5. **Capability Discipline** — Interactions occur through 9P namespaces using role-scoped capability tickets.
 6. **Tooling Alignment** — Use the macOS ARM64 toolchain in `TOOLCHAIN_MAC_ARM64.md`. Do not assume Linux-specific tooling in VM code.
 
