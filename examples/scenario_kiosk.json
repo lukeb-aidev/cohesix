@@ -1,5 +1,0 @@
-{
-  "scenario": "kiosk",
-  "ui_bundle": "/srv/ui_bundle/kiosk_v1/",
-  "device": "/dev/video0"
-}
