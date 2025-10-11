@@ -42,10 +42,14 @@ pub struct SpawnCommand {
     /// Worker kind to spawn.
     pub spawn: SpawnTarget,
     /// Number of scheduler ticks to allocate to the worker.
-    pub ticks: u64,
+    #[serde(default)]
+    pub ticks: Option<u64>,
     /// Optional budget overrides.
     #[serde(default)]
     pub budget: Option<BudgetFields>,
+    /// Optional GPU lease specification.
+    #[serde(default)]
+    pub lease: Option<GpuLeaseFields>,
 }
 
 /// Supported worker spawn targets.
@@ -54,18 +58,66 @@ pub struct SpawnCommand {
 pub enum SpawnTarget {
     /// Heartbeat worker that emits telemetry.
     Heartbeat,
+    /// GPU worker that proxies host GPU leases.
+    Gpu,
 }
 
 impl SpawnCommand {
     /// Construct the final budget for the spawn request.
-    pub fn budget_spec(&self, defaults: BudgetSpec) -> BudgetSpec {
-        let with_ticks = defaults.with_ticks(Some(self.ticks));
-        if let Some(fields) = &self.budget {
-            fields.apply(with_ticks)
-        } else {
-            with_ticks
+    pub fn budget_spec(&self, defaults: BudgetSpec) -> Result<BudgetSpec, NineDoorError> {
+        match self.spawn {
+            SpawnTarget::Heartbeat => {
+                let ticks = self.ticks.ok_or_else(|| {
+                    NineDoorError::protocol(
+                        secure9p_wire::ErrorCode::Invalid,
+                        "heartbeat spawn requires ticks",
+                    )
+                })?;
+                let with_ticks = defaults.with_ticks(Some(ticks));
+                Ok(self
+                    .budget
+                    .as_ref()
+                    .map(|fields| fields.apply(with_ticks))
+                    .unwrap_or(with_ticks))
+            }
+            SpawnTarget::Gpu => {
+                let lease = self.lease.as_ref().ok_or_else(|| {
+                    NineDoorError::protocol(
+                        secure9p_wire::ErrorCode::Invalid,
+                        "gpu spawn requires lease",
+                    )
+                })?;
+                let ttl_budget = defaults.with_ttl(Some(lease.ttl_s.into()));
+                let ops_budget = ttl_budget.with_ops(Some(lease.streams as u64 * 8));
+                Ok(self
+                    .budget
+                    .as_ref()
+                    .map(|fields| fields.apply(ops_budget))
+                    .unwrap_or(ops_budget))
+            }
         }
     }
+
+    /// Retrieve the GPU lease if present.
+    pub fn gpu_lease(&self) -> Option<&GpuLeaseFields> {
+        self.lease.as_ref()
+    }
+}
+
+/// GPU lease specification parsed from queen commands.
+#[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct GpuLeaseFields {
+    /// Identifier of the GPU to lease.
+    pub gpu_id: String,
+    /// Memory in mebibytes.
+    pub mem_mb: u32,
+    /// Concurrent stream limit.
+    pub streams: u8,
+    /// Lease time-to-live in seconds.
+    pub ttl_s: u32,
+    /// Requested priority for scheduling.
+    pub priority: u8,
 }
 
 /// Kill command specifying the worker identifier.

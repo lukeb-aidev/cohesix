@@ -1,0 +1,34 @@
+// Author: Lukas Bower
+#![forbid(unsafe_code)]
+#![warn(missing_docs)]
+
+//! CLI entry point for the host-side GPU bridge. The binary prints discovered
+//! GPU information as JSON, enabling integration tests to synchronise the
+//! NineDoor namespace with host state.
+
+use anyhow::Result;
+use clap::{ArgAction, Parser};
+
+use gpu_bridge_host::{auto_bridge, SerialisedGpuNode};
+
+/// CLI arguments for the GPU bridge host tool.
+#[derive(Debug, Parser)]
+#[command(author, version, about = "Cohesix GPU bridge host utilities")]
+struct Args {
+    /// Use the deterministic mock backend instead of NVML.
+    #[arg(long, action = ArgAction::SetTrue)]
+    mock: bool,
+    /// Print GPU namespace JSON to stdout.
+    #[arg(long, action = ArgAction::SetTrue)]
+    list: bool,
+}
+
+fn main() -> Result<()> {
+    let args = Args::parse();
+    let bridge = auto_bridge(args.mock)?;
+    let namespace: Vec<SerialisedGpuNode> = bridge.serialise_namespace()?;
+    if args.list {
+        println!("{}", serde_json::to_string_pretty(&namespace)?);
+    }
+    Ok(())
+}

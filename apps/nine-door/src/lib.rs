@@ -7,18 +7,20 @@
 //! suitable for host-side integration tests and the `cohsh` CLI while the
 //! eventual seL4 runtime is constructed.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::str;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use cohesix_ticket::{BudgetSpec, Role, TicketTemplate};
+use gpu_bridge_host::{status_entry, SerialisedGpuNode};
 use secure9p_wire::{
     Codec, CodecError, ErrorCode, FrameHeader, OpenMode, Qid, Request, RequestBody, Response,
     ResponseBody, SessionId, MAX_MSIZE, VERSION,
 };
 use thiserror::Error;
+use worker_gpu::{GpuLease as WorkerGpuLease, JobDescriptor};
 
 mod control;
 mod namespace;
@@ -125,6 +127,12 @@ impl NineDoor {
     pub fn register_service(&self, service: &str, target: &[&str]) -> Result<(), NineDoorError> {
         let mut core = self.inner.lock().expect("poisoned nine-door lock");
         core.register_service(service, target)
+    }
+
+    /// Install GPU namespace nodes discovered by the host bridge.
+    pub fn install_gpu_nodes(&self, nodes: &[SerialisedGpuNode]) -> Result<(), NineDoorError> {
+        let mut core = self.inner.lock().expect("poisoned nine-door lock");
+        core.install_gpu_nodes(nodes)
     }
 }
 
@@ -339,6 +347,10 @@ impl ServerCore {
         self.control.register_service(service, path)
     }
 
+    fn install_gpu_nodes(&mut self, nodes: &[SerialisedGpuNode]) -> Result<(), NineDoorError> {
+        self.control.install_gpu_nodes(nodes)
+    }
+
     fn handle_frame(
         &mut self,
         session: SessionId,
@@ -467,7 +479,7 @@ impl ServerCore {
         let now = self.clock.now();
         match role {
             Role::Queen => {
-                state.configure_role(role, identity, BudgetSpec::unbounded(), now);
+                state.configure_role(role, identity, None, BudgetSpec::unbounded(), now);
             }
             Role::WorkerHeartbeat => {
                 let worker_id = identity.clone().ok_or_else(|| {
@@ -476,19 +488,54 @@ impl ServerCore {
                         "worker-heartbeat attach requires identity",
                     )
                 })?;
-                let Some(spec) = self.control.worker_budget(&worker_id) else {
+                let Some(record) = self.control.worker_record(&worker_id) else {
                     return Err(NineDoorError::protocol(
                         ErrorCode::NotFound,
                         format!("worker {worker_id} not found"),
                     ));
                 };
-                state.configure_role(role, Some(worker_id), spec, now);
+                match record.kind() {
+                    WorkerKind::Heartbeat => {
+                        state.configure_role(role, Some(worker_id), None, record.budget(), now);
+                    }
+                    WorkerKind::Gpu(_) => {
+                        return Err(NineDoorError::protocol(
+                            ErrorCode::Invalid,
+                            "worker-heartbeat role does not match GPU worker",
+                        ));
+                    }
+                }
             }
             Role::WorkerGpu => {
-                return Err(NineDoorError::protocol(
-                    ErrorCode::Invalid,
-                    "worker-gpu role unsupported in this milestone",
-                ));
+                let worker_id = identity.clone().ok_or_else(|| {
+                    NineDoorError::protocol(
+                        ErrorCode::Invalid,
+                        "worker-gpu attach requires identity",
+                    )
+                })?;
+                let Some(record) = self.control.worker_record(&worker_id) else {
+                    return Err(NineDoorError::protocol(
+                        ErrorCode::NotFound,
+                        format!("worker {worker_id} not found"),
+                    ));
+                };
+                match record.kind() {
+                    WorkerKind::Gpu(gpu) => {
+                        state.configure_role(
+                            role,
+                            Some(worker_id),
+                            Some(gpu.lease.gpu_id.clone()),
+                            record.budget(),
+                            now,
+                        );
+                    }
+                    WorkerKind::Heartbeat => {
+                        return Err(NineDoorError::protocol(
+                            ErrorCode::Invalid,
+                            "worker-gpu identity is not bound to a GPU lease",
+                        ));
+                    }
+                }
             }
         }
         let qid = self.control.namespace().root_qid();
@@ -510,6 +557,8 @@ impl ServerCore {
         let role = state.role();
         let worker_id_owned = state.worker_id().map(|id| id.to_owned());
         let worker_id = worker_id_owned.as_deref();
+        let gpu_scope_owned = state.gpu_scope().map(|scope| scope.to_owned());
+        let gpu_scope = gpu_scope_owned.as_deref();
         if wnames.is_empty() {
             state.insert_fid(
                 newfid,
@@ -526,7 +575,7 @@ impl ServerCore {
         for component in wnames {
             view_path.push(component.clone());
             let resolved = state.resolve_view_path(&view_path);
-            AccessPolicy::ensure_path(role, worker_id, &resolved)?;
+            AccessPolicy::ensure_path(role, worker_id, gpu_scope, &resolved)?;
             let node = self.control.namespace().lookup(&resolved)?;
             current_qid = node.qid();
             qids.push(current_qid);
@@ -545,12 +594,14 @@ impl ServerCore {
         let role = state.role();
         let worker_id_owned = state.worker_id().map(|id| id.to_owned());
         let worker_id = worker_id_owned.as_deref();
+        let gpu_scope_owned = state.gpu_scope().map(|scope| scope.to_owned());
+        let gpu_scope = gpu_scope_owned.as_deref();
         let iounit = state.negotiated_msize();
         let qid = {
             let entry = state.fid_mut(fid).ok_or_else(|| {
                 NineDoorError::protocol(ErrorCode::NotFound, format!("fid {fid} not found"))
             })?;
-            AccessPolicy::ensure_open(role, worker_id, &entry.canonical_path, mode)?;
+            AccessPolicy::ensure_open(role, worker_id, gpu_scope, &entry.canonical_path, mode)?;
             let node = self.control.namespace().lookup(&entry.canonical_path)?;
             if node.is_directory() && mode.allows_write() {
                 return Err(NineDoorError::protocol(
@@ -589,7 +640,14 @@ impl ServerCore {
                 "fid opened without read permission",
             ));
         }
-        AccessPolicy::ensure_read(state.role(), state.worker_id(), &entry.canonical_path)?;
+        let gpu_scope_owned = state.gpu_scope().map(|scope| scope.to_owned());
+        let gpu_scope = gpu_scope_owned.as_deref();
+        AccessPolicy::ensure_read(
+            state.role(),
+            state.worker_id(),
+            gpu_scope,
+            &entry.canonical_path,
+        )?;
         let data = self
             .control
             .namespace()
@@ -607,6 +665,8 @@ impl ServerCore {
         let role = state.role();
         let worker_id_owned = state.worker_id().map(|id| id.to_owned());
         let worker_id = worker_id_owned.as_deref();
+        let gpu_scope_owned = state.gpu_scope().map(|scope| scope.to_owned());
+        let gpu_scope = gpu_scope_owned.as_deref();
         let path = {
             let entry = state.fid_mut(fid).ok_or_else(|| {
                 NineDoorError::protocol(ErrorCode::NotFound, format!("fid {fid} not found"))
@@ -622,7 +682,7 @@ impl ServerCore {
             }
             entry.canonical_path.clone()
         };
-        AccessPolicy::ensure_write(role, worker_id, &path)?;
+        AccessPolicy::ensure_write(role, worker_id, gpu_scope, &path)?;
         let telemetry_write = worker_id
             .map(|id| is_worker_telemetry_path(&path, id))
             .unwrap_or(false);
@@ -631,15 +691,23 @@ impl ServerCore {
                 return Err(self.handle_budget_failure(session, state, reason));
             }
         }
+        if let (Some(worker), Some(scope)) = (worker_id, gpu_scope) {
+            if is_gpu_job_path(&path, scope) {
+                let count = self.control.process_gpu_job(worker, scope, data)?;
+                return Ok(ResponseBody::Write { count });
+            }
+        }
         if is_queen_ctl_path(&path) {
             let events = self.control.process_queen_write(data)?;
             let role = state.role();
             let worker_id_owned = state.worker_id().map(|id| id.to_owned());
             let worker_id = worker_id_owned.as_deref();
+            let gpu_scope_owned = state.gpu_scope().map(|scope| scope.to_owned());
+            let gpu_scope = gpu_scope_owned.as_deref();
             for event in &events {
                 match event {
                     QueenEvent::Bound { target, mount } | QueenEvent::Mounted { target, mount } => {
-                        state.apply_mount(role, worker_id, target, mount)?;
+                        state.apply_mount(role, worker_id, gpu_scope, target, mount)?;
                     }
                     _ => {}
                 }
@@ -728,6 +796,8 @@ struct ControlPlane {
     next_worker_id: u64,
     default_budget: BudgetSpec,
     services: HashMap<String, Vec<String>>,
+    gpu_nodes: HashSet<String>,
+    active_leases: HashMap<String, String>,
 }
 
 impl ControlPlane {
@@ -738,6 +808,8 @@ impl ControlPlane {
             next_worker_id: 1,
             default_budget: BudgetSpec::default_heartbeat(),
             services: HashMap::new(),
+            gpu_nodes: HashSet::new(),
+            active_leases: HashMap::new(),
         }
     }
 
@@ -749,8 +821,8 @@ impl ControlPlane {
         &mut self.namespace
     }
 
-    fn worker_budget(&self, worker_id: &str) -> Option<BudgetSpec> {
-        self.workers.get(worker_id).map(|record| record.budget)
+    fn worker_record(&self, worker_id: &str) -> Option<&WorkerRecord> {
+        self.workers.get(worker_id)
     }
 
     fn register_service(
@@ -765,6 +837,19 @@ impl ControlPlane {
 
     fn resolve_service(&self, service: &str) -> Option<Vec<String>> {
         self.services.get(service).cloned()
+    }
+
+    fn install_gpu_nodes(&mut self, nodes: &[SerialisedGpuNode]) -> Result<(), NineDoorError> {
+        for node in nodes {
+            self.namespace.set_gpu_node(
+                &node.id,
+                node.info_payload.as_bytes(),
+                node.ctl_payload.as_bytes(),
+                node.status_payload.as_bytes(),
+            )?;
+            self.gpu_nodes.insert(node.id.clone());
+        }
+        Ok(())
     }
 
     fn process_queen_write(&mut self, data: &[u8]) -> Result<Vec<QueenEvent>, NineDoorError> {
@@ -833,33 +918,143 @@ impl ControlPlane {
         Ok(events)
     }
 
-    fn spawn_worker(&mut self, spec: &SpawnCommand) -> Result<String, NineDoorError> {
-        let SpawnCommand { spawn, .. } = spec;
-        match spawn {
-            SpawnTarget::Heartbeat => {}
+    fn process_gpu_job(
+        &mut self,
+        worker_id: &str,
+        gpu_id: &str,
+        data: &[u8],
+    ) -> Result<u32, NineDoorError> {
+        let text = str::from_utf8(data).map_err(|err| {
+            NineDoorError::protocol(
+                ErrorCode::Invalid,
+                format!("gpu job descriptor must be UTF-8: {err}"),
+            )
+        })?;
+        let mut descriptors = Vec::new();
+        for line in text.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let descriptor: JobDescriptor = serde_json::from_str(trimmed).map_err(|err| {
+                NineDoorError::protocol(
+                    ErrorCode::Invalid,
+                    format!("invalid gpu job descriptor: {err}"),
+                )
+            })?;
+            descriptor.validate().map_err(|err| {
+                NineDoorError::protocol(
+                    ErrorCode::Invalid,
+                    format!("gpu job validation failed: {err}"),
+                )
+            })?;
+            descriptors.push(descriptor);
         }
+        let job_path = vec!["gpu".to_owned(), gpu_id.to_owned(), "job".to_owned()];
+        let count = self.namespace.write_append(&job_path, data)?;
+        let telemetry_path = vec![
+            "worker".to_owned(),
+            worker_id.to_owned(),
+            "telemetry".to_owned(),
+        ];
+        for descriptor in descriptors {
+            let job_id = descriptor.job.as_str();
+            let queued = status_entry(job_id, "QUEUED", "accepted");
+            let running = status_entry(job_id, "RUNNING", "scheduled");
+            let ok = status_entry(job_id, "OK", "completed");
+            for status in [queued, running, ok] {
+                let mut line = status.into_bytes();
+                line.push(b'\n');
+                self.namespace.append_gpu_status(gpu_id, &line)?;
+            }
+            let telemetry = format!(
+                "{{\"job\":\"{}\",\"state\":\"RUNNING\",\"detail\":\"scheduled\"}}\n",
+                job_id
+            );
+            self.namespace
+                .write_append(&telemetry_path, telemetry.as_bytes())?;
+            let telemetry_done = format!(
+                "{{\"job\":\"{}\",\"state\":\"OK\",\"detail\":\"completed\"}}\n",
+                job_id
+            );
+            self.namespace
+                .write_append(&telemetry_path, telemetry_done.as_bytes())?;
+        }
+        Ok(count)
+    }
+
+    fn spawn_worker(&mut self, spec: &SpawnCommand) -> Result<String, NineDoorError> {
+        let defaults = match spec.spawn {
+            SpawnTarget::Heartbeat => self.default_budget,
+            SpawnTarget::Gpu => BudgetSpec::default_gpu(),
+        };
+        let budget = spec.budget_spec(defaults)?;
         let worker_id = format!("worker-{}", self.next_worker_id);
         self.next_worker_id += 1;
-        let budget = spec.budget_spec(self.default_budget);
         self.namespace.create_worker(&worker_id)?;
-        self.workers
-            .insert(worker_id.clone(), WorkerRecord { budget });
-        self.log_event(&format!(
-            "spawned {worker_id} ticks={} ttl={} ops={}",
-            format_budget_value(budget.ticks()),
-            format_budget_value(budget.ttl_s()),
-            format_budget_value(budget.ops())
-        ))?;
+        let record = match spec.spawn {
+            SpawnTarget::Heartbeat => {
+                self.log_event(&format!(
+                    "spawned {worker_id} ticks={} ttl={} ops={}",
+                    format_budget_value(budget.ticks()),
+                    format_budget_value(budget.ttl_s()),
+                    format_budget_value(budget.ops())
+                ))?;
+                WorkerRecord::heartbeat(budget)
+            }
+            SpawnTarget::Gpu => {
+                let lease_fields = spec.gpu_lease().expect("gpu spawn must include lease");
+                if !self.gpu_nodes.contains(&lease_fields.gpu_id) {
+                    return Err(NineDoorError::protocol(
+                        ErrorCode::NotFound,
+                        format!("gpu {} not registered", lease_fields.gpu_id),
+                    ));
+                }
+                if self.active_leases.contains_key(&lease_fields.gpu_id) {
+                    return Err(NineDoorError::protocol(
+                        ErrorCode::Busy,
+                        format!("gpu {} already leased", lease_fields.gpu_id),
+                    ));
+                }
+                let lease = WorkerGpuLease::new(
+                    lease_fields.gpu_id.clone(),
+                    lease_fields.mem_mb,
+                    lease_fields.streams,
+                    lease_fields.ttl_s,
+                    lease_fields.priority,
+                    worker_id.clone(),
+                )
+                .map_err(|err| {
+                    NineDoorError::protocol(ErrorCode::Invalid, format!("invalid gpu lease: {err}"))
+                })?;
+                self.active_leases
+                    .insert(lease.gpu_id.clone(), worker_id.clone());
+                let ctl_path = vec!["gpu".to_owned(), lease.gpu_id.clone(), "ctl".to_owned()];
+                let message = format!(
+                    "LEASE {} mem={} streams={} priority={}\n",
+                    worker_id, lease.mem_mb, lease.streams, lease.priority
+                )
+                .into_bytes();
+                self.namespace.write_append(&ctl_path, &message)?;
+                self.log_event(&format!(
+                    "spawned {worker_id} gpu={} ttl={} streams={}",
+                    lease.gpu_id, lease.ttl_s, lease.streams
+                ))?;
+                WorkerRecord::gpu(budget, lease)
+            }
+        };
+        self.workers.insert(worker_id.clone(), record);
         Ok(worker_id)
     }
 
     fn kill_worker(&mut self, worker_id: &str) -> Result<(), NineDoorError> {
-        if self.workers.remove(worker_id).is_none() {
+        let Some(record) = self.workers.remove(worker_id) else {
             return Err(NineDoorError::protocol(
                 ErrorCode::NotFound,
                 format!("worker {worker_id} not found"),
             ));
-        }
+        };
+        self.release_gpu_for_worker(worker_id, &record, "killed by queen")?;
         self.namespace.remove_worker(worker_id)?;
         self.log_event(&format!("killed {worker_id}"))?;
         Ok(())
@@ -878,9 +1073,10 @@ impl ControlPlane {
     }
 
     fn revoke_worker(&mut self, worker_id: &str, reason: &str) -> Result<bool, NineDoorError> {
-        let Some(_record) = self.workers.remove(worker_id) else {
+        let Some(record) = self.workers.remove(worker_id) else {
             return Ok(false);
         };
+        self.release_gpu_for_worker(worker_id, &record, reason)?;
         if let Err(err) = self.namespace.remove_worker(worker_id) {
             if let NineDoorError::Protocol { code, .. } = &err {
                 if *code != ErrorCode::NotFound {
@@ -899,11 +1095,68 @@ impl ControlPlane {
         self.namespace.write_append(&log_path, &line)?;
         Ok(())
     }
+
+    fn release_gpu_for_worker(
+        &mut self,
+        worker_id: &str,
+        record: &WorkerRecord,
+        reason: &str,
+    ) -> Result<(), NineDoorError> {
+        if let WorkerKind::Gpu(gpu) = record.kind() {
+            self.active_leases.remove(&gpu.lease.gpu_id);
+            let ctl_path = vec!["gpu".to_owned(), gpu.lease.gpu_id.clone(), "ctl".to_owned()];
+            let ctl_line = format!("RELEASE {worker_id} {reason}\n");
+            self.namespace
+                .write_append(&ctl_path, ctl_line.as_bytes())?;
+            let status = status_entry(worker_id, "LEASE-ENDED", reason);
+            let mut status_bytes = status.into_bytes();
+            status_bytes.push(b'\n');
+            self.namespace
+                .append_gpu_status(&gpu.lease.gpu_id, &status_bytes)?;
+        }
+        Ok(())
+    }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct WorkerRecord {
     budget: BudgetSpec,
+    kind: WorkerKind,
+}
+
+impl WorkerRecord {
+    fn heartbeat(budget: BudgetSpec) -> Self {
+        Self {
+            budget,
+            kind: WorkerKind::Heartbeat,
+        }
+    }
+
+    fn gpu(budget: BudgetSpec, lease: WorkerGpuLease) -> Self {
+        Self {
+            budget,
+            kind: WorkerKind::Gpu(GpuWorkerRecord { lease }),
+        }
+    }
+
+    fn kind(&self) -> &WorkerKind {
+        &self.kind
+    }
+
+    fn budget(&self) -> BudgetSpec {
+        self.budget
+    }
+}
+
+#[derive(Clone)]
+enum WorkerKind {
+    Heartbeat,
+    Gpu(GpuWorkerRecord),
+}
+
+#[derive(Clone)]
+struct GpuWorkerRecord {
+    lease: WorkerGpuLease,
 }
 
 enum QueenEvent {
@@ -927,6 +1180,7 @@ struct SessionState {
     fids: HashMap<u32, FidState>,
     role: Option<Role>,
     worker_id: Option<String>,
+    gpu_scope: Option<String>,
     budget: BudgetState,
     mounts: MountTable,
 }
@@ -939,6 +1193,7 @@ impl SessionState {
             fids: HashMap::new(),
             role: None,
             worker_id: None,
+            gpu_scope: None,
             budget: BudgetState::new(BudgetSpec::unbounded(), now),
             mounts: MountTable::default(),
         }
@@ -1009,11 +1264,13 @@ impl SessionState {
         &mut self,
         role: Role,
         identity: Option<String>,
+        gpu_scope: Option<String>,
         budget: BudgetSpec,
         now: Instant,
     ) {
         self.role = Some(role);
         self.worker_id = identity;
+        self.gpu_scope = gpu_scope;
         self.budget = BudgetState::new(budget, now);
     }
 
@@ -1023,6 +1280,10 @@ impl SessionState {
 
     fn worker_id(&self) -> Option<&str> {
         self.worker_id.as_deref()
+    }
+
+    fn gpu_scope(&self) -> Option<&str> {
+        self.gpu_scope.as_deref()
     }
 
     fn matches_worker(&self, worker_id: &str) -> bool {
@@ -1052,10 +1313,11 @@ impl SessionState {
         &mut self,
         role: Option<Role>,
         worker_id: Option<&str>,
+        gpu_scope: Option<&str>,
         target: &[String],
         mount: &[String],
     ) -> Result<(), NineDoorError> {
-        AccessPolicy::ensure_path(role, worker_id, target)?;
+        AccessPolicy::ensure_path(role, worker_id, gpu_scope, target)?;
         self.mounts.bind(target.to_vec(), mount.to_vec())
     }
 
@@ -1197,15 +1459,16 @@ impl AccessPolicy {
     fn ensure_open(
         role: Option<Role>,
         worker_id: Option<&str>,
+        gpu_scope: Option<&str>,
         path: &[String],
         mode: OpenMode,
     ) -> Result<(), NineDoorError> {
-        Self::ensure_path(role, worker_id, path)?;
+        Self::ensure_path(role, worker_id, gpu_scope, path)?;
         if mode.allows_write() {
-            Self::ensure_write(role, worker_id, path)?;
+            Self::ensure_write(role, worker_id, gpu_scope, path)?;
         }
         if mode.allows_read() {
-            Self::ensure_read(role, worker_id, path)?;
+            Self::ensure_read(role, worker_id, gpu_scope, path)?;
         }
         Ok(())
     }
@@ -1213,6 +1476,7 @@ impl AccessPolicy {
     fn ensure_read(
         role: Option<Role>,
         worker_id: Option<&str>,
+        gpu_scope: Option<&str>,
         path: &[String],
     ) -> Result<(), NineDoorError> {
         match role {
@@ -1224,7 +1488,13 @@ impl AccessPolicy {
                     Err(Self::permission_denied(path))
                 }
             }
-            Some(Role::WorkerGpu) => Err(Self::permission_denied(path)),
+            Some(Role::WorkerGpu) => {
+                if worker_allowed_path(worker_id, path) || gpu_allowed_read(gpu_scope, path) {
+                    Ok(())
+                } else {
+                    Err(Self::permission_denied(path))
+                }
+            }
             None => Err(NineDoorError::protocol(
                 ErrorCode::Invalid,
                 "attach required before operation",
@@ -1235,6 +1505,7 @@ impl AccessPolicy {
     fn ensure_write(
         role: Option<Role>,
         worker_id: Option<&str>,
+        gpu_scope: Option<&str>,
         path: &[String],
     ) -> Result<(), NineDoorError> {
         match role {
@@ -1246,7 +1517,13 @@ impl AccessPolicy {
                     Err(Self::permission_denied(path))
                 }
             }
-            Some(Role::WorkerGpu) => Err(Self::permission_denied(path)),
+            Some(Role::WorkerGpu) => {
+                if worker_allowed_write(worker_id, path) || gpu_allowed_write(gpu_scope, path) {
+                    Ok(())
+                } else {
+                    Err(Self::permission_denied(path))
+                }
+            }
             None => Err(NineDoorError::protocol(
                 ErrorCode::Invalid,
                 "attach required before operation",
@@ -1257,6 +1534,7 @@ impl AccessPolicy {
     fn ensure_path(
         role: Option<Role>,
         worker_id: Option<&str>,
+        gpu_scope: Option<&str>,
         path: &[String],
     ) -> Result<(), NineDoorError> {
         match role {
@@ -1268,7 +1546,13 @@ impl AccessPolicy {
                     Err(Self::permission_denied(path))
                 }
             }
-            Some(Role::WorkerGpu) => Err(Self::permission_denied(path)),
+            Some(Role::WorkerGpu) => {
+                if worker_allowed_prefix(worker_id, path) || gpu_allowed_prefix(gpu_scope, path) {
+                    Ok(())
+                } else {
+                    Err(Self::permission_denied(path))
+                }
+            }
             None => Err(NineDoorError::protocol(
                 ErrorCode::Invalid,
                 "attach required before operation",
@@ -1322,6 +1606,34 @@ fn worker_allowed_write(worker_id: Option<&str>, path: &[String]) -> bool {
     }
 }
 
+fn gpu_allowed_prefix(gpu_scope: Option<&str>, path: &[String]) -> bool {
+    match (gpu_scope, path) {
+        (Some(_), [single]) => single == "gpu",
+        (Some(scope), [first, second]) => first == "gpu" && second == scope,
+        (Some(scope), [first, second, ..]) => first == "gpu" && second == scope,
+        _ => false,
+    }
+}
+
+fn gpu_allowed_read(gpu_scope: Option<&str>, path: &[String]) -> bool {
+    match gpu_scope {
+        Some(scope) => {
+            is_gpu_info_path(path, scope)
+                || is_gpu_status_path(path, scope)
+                || is_gpu_ctl_path(path, scope)
+                || is_gpu_job_path(path, scope)
+        }
+        None => false,
+    }
+}
+
+fn gpu_allowed_write(gpu_scope: Option<&str>, path: &[String]) -> bool {
+    match gpu_scope {
+        Some(scope) => is_gpu_job_path(path, scope),
+        None => false,
+    }
+}
+
 fn format_budget_value(value: Option<u64>) -> String {
     value.map_or_else(|| "∞".to_owned(), |v| v.to_string())
 }
@@ -1329,6 +1641,26 @@ fn format_budget_value(value: Option<u64>) -> String {
 fn is_worker_telemetry_path(path: &[String], worker_id: &str) -> bool {
     matches!(path, [first, second, third]
         if first == "worker" && second == worker_id && third == "telemetry")
+}
+
+fn is_gpu_job_path(path: &[String], scope: &str) -> bool {
+    matches!(path, [first, second, third]
+        if first == "gpu" && second == scope && third == "job")
+}
+
+fn is_gpu_status_path(path: &[String], scope: &str) -> bool {
+    matches!(path, [first, second, third]
+        if first == "gpu" && second == scope && third == "status")
+}
+
+fn is_gpu_info_path(path: &[String], scope: &str) -> bool {
+    matches!(path, [first, second, third]
+        if first == "gpu" && second == scope && third == "info")
+}
+
+fn is_gpu_ctl_path(path: &[String], scope: &str) -> bool {
+    matches!(path, [first, second, third]
+        if first == "gpu" && second == scope && third == "ctl")
 }
 
 fn is_queen_ctl_path(path: &[String]) -> bool {
@@ -1348,6 +1680,15 @@ fn parse_role_from_uname(uname: &str) -> Result<(Role, Option<String>), NineDoor
         }
         return Ok((Role::WorkerHeartbeat, Some(rest.to_owned())));
     }
+    if let Some(rest) = uname.strip_prefix("worker-gpu:") {
+        if rest.is_empty() {
+            return Err(NineDoorError::protocol(
+                ErrorCode::Invalid,
+                "worker-gpu identity cannot be empty",
+            ));
+        }
+        return Ok((Role::WorkerGpu, Some(rest.to_owned())));
+    }
     Err(NineDoorError::protocol(
         ErrorCode::Invalid,
         format!("unknown role string '{uname}'"),
@@ -1361,7 +1702,10 @@ fn role_to_uname(role: Role, identity: Option<&str>) -> String {
             let id = identity.expect("worker heartbeat requires identity");
             format!("worker-heartbeat:{id}")
         }
-        Role::WorkerGpu => "worker-gpu".to_owned(),
+        Role::WorkerGpu => {
+            let id = identity.expect("worker gpu requires identity");
+            format!("worker-gpu:{id}")
+        }
     }
 }
 

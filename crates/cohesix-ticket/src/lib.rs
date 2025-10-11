@@ -45,6 +45,16 @@ impl BudgetSpec {
         }
     }
 
+    /// Default limits for GPU workers mirroring lease guardrails.
+    #[must_use]
+    pub fn default_gpu() -> Self {
+        Self {
+            ticks: None,
+            ops: Some(64),
+            ttl_s: Some(120),
+        }
+    }
+
     /// Override the tick budget.
     #[must_use]
     pub fn with_ticks(mut self, ticks: Option<u64>) -> Self {
@@ -128,5 +138,13 @@ mod tests {
         assert!(budget.ticks.is_some());
         assert!(budget.ops.is_some());
         assert!(budget.ttl_s.is_some());
+    }
+
+    #[test]
+    fn default_gpu_limits_enforce_ttl_and_ops() {
+        let budget = BudgetSpec::default_gpu();
+        assert!(budget.ticks().is_none());
+        assert_eq!(budget.ops(), Some(64));
+        assert_eq!(budget.ttl_s(), Some(120));
     }
 }
