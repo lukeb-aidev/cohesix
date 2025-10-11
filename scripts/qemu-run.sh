@@ -3,6 +3,33 @@
 
 set -euo pipefail
 
+log() {
+    echo "[qemu-run] $*"
+}
+
+describe_file() {
+    local label="$1"
+    local path="$2"
+
+    if [[ ! -f "$path" ]]; then
+        log "$label missing: $path"
+        return
+    fi
+
+    python3 - "$label" "$path" <<'PY'
+import hashlib
+import pathlib
+import sys
+
+label = sys.argv[1]
+path = pathlib.Path(sys.argv[2])
+data = path.read_bytes()
+size = path.stat().st_size
+digest = hashlib.sha256(data).hexdigest()
+print(f"[qemu-run] {label}: {path} ({size} bytes, sha256={digest})")
+PY
+}
+
 usage() {
     cat <<'USAGE'
 Usage: scripts/qemu-run.sh --elfloader <path> --kernel <path> --root-task <path> [--out-dir <dir>] [--qemu <bin>]
@@ -62,18 +89,18 @@ fi
 
 for artefact in "$ELFLOADER" "$KERNEL" "$ROOT_TASK"; do
     if [[ ! -f "$artefact" ]]; then
-        echo "Artefact not found: $artefact" >&2
+        log "Artefact not found: $artefact"
         exit 1
     fi
 done
 
 if ! command -v "$QEMU_BIN" >/dev/null 2>&1; then
-    echo "QEMU binary not found: $QEMU_BIN" >&2
+    log "QEMU binary not found: $QEMU_BIN"
     exit 1
 fi
 
 if ! command -v cpio >/dev/null 2>&1; then
-    echo "cpio is required to package the rootfs." >&2
+    log "cpio is required to package the rootfs."
     exit 1
 fi
 
@@ -86,7 +113,15 @@ popd >/dev/null
 
 ROOTFS_CPIO="$OUT_DIR/rootfs.cpio"
 
-"$QEMU_BIN" \
+describe_file "Elfloader" "$ELFLOADER"
+describe_file "Kernel" "$KERNEL"
+describe_file "Root task" "$ROOT_TASK"
+describe_file "Rootfs CPIO" "$ROOTFS_CPIO"
+
+QEMU_VERSION="$($QEMU_BIN --version | head -n1)"
+log "Using QEMU binary: $QEMU_BIN ($QEMU_VERSION)"
+
+QEMU_CMD=("$QEMU_BIN" \
     -machine virt,gic-version=3 \
     -cpu cortex-a57 \
     -m 1024 \
@@ -95,4 +130,8 @@ ROOTFS_CPIO="$OUT_DIR/rootfs.cpio"
     -kernel "$ELFLOADER" \
     -initrd "$ROOTFS_CPIO" \
     -device loader,file="$KERNEL",addr=0x70000000 \
-    -device loader,file="$ROOT_TASK",addr=0x80000000
+    -device loader,file="$ROOT_TASK",addr=0x80000000)
+
+log "Prepared QEMU command: ${QEMU_CMD[*]}"
+
+exec "${QEMU_CMD[@]}"
