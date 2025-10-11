@@ -43,12 +43,6 @@ pub trait AccessPolicy {
 - Core emits debug hooks (`on_attach`, `on_clunk`, `on_error`) that NineDoor subscribes to for logging into `/log/queen.log`.
 - Transport adapters must expose counters for frames sent/received and error counts for CI dashboards.
 
-## 7. Salvage Strategy
-If reusing an older Secure9P implementation:
-- Extract codec/core modules that satisfy the layering above.
-- Remove dependencies on Tokio/async runtimes inside the VM; wrap them in host-only features if needed.
-- Replace POSIX file backends with synthetic providers defined in Cohesix.
-
-## 8. Future Enhancements
+## 7. Future Enhancements
 - Opportunistic support for 9P lock extensions once namespace bind/mount stabilises.
 - Optional TLS termination in host tools prior to entering the VM transport adapter.
