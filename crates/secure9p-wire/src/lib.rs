@@ -913,4 +913,50 @@ mod tests {
         frame[0..4].copy_from_slice(&size.to_le_bytes());
         assert_eq!(codec.decode_request(&frame), Err(CodecError::InvalidPath));
     }
+
+    #[test]
+    fn decode_request_reports_truncated_payload() {
+        let codec = Codec::default();
+        let mut frame = Vec::new();
+        frame.extend_from_slice(&[0u8; 4]);
+        frame.push(110); // Twalk opcode
+        frame.extend_from_slice(&1u16.to_le_bytes()); // tag
+        frame.extend_from_slice(&1u32.to_le_bytes()); // fid
+        frame.extend_from_slice(&2u32.to_le_bytes()); // newfid
+        frame.extend_from_slice(&1u16.to_le_bytes()); // one path component
+        frame.extend_from_slice(&5u16.to_le_bytes()); // declared length 5
+        frame.extend_from_slice(b"abc"); // missing two bytes
+        let size = frame.len() as u32;
+        frame[0..4].copy_from_slice(&size.to_le_bytes());
+        assert_eq!(codec.decode_request(&frame), Err(CodecError::Truncated));
+    }
+
+    #[test]
+    fn decode_response_rejects_unknown_error_code() {
+        let codec = Codec::default();
+        let response = Response {
+            tag: 41,
+            body: ResponseBody::Error {
+                code: ErrorCode::Permission,
+                message: "not used".to_owned(),
+            },
+        };
+        let mut encoded = codec.encode_response(&response).unwrap();
+        // Overwrite the error code string with a value not recognised by the decoder.
+        // Layout: size (4) | type (1) | tag (2) | strlen (2) | str bytes | ...
+        // After encoding, replace the code with "Strange".
+        let code_len_offset = 5 + 2; // skip size/type/tag
+        encoded[code_len_offset..code_len_offset + 2].copy_from_slice(&(7u16).to_le_bytes());
+        encoded.splice(
+            (code_len_offset + 2)..(code_len_offset + 2 + "Permission".len()),
+            b"Strange".to_vec(),
+        );
+        // Update outer length to match modified payload.
+        let declared = encoded.len() as u32;
+        encoded[0..4].copy_from_slice(&declared.to_le_bytes());
+        assert_eq!(
+            codec.decode_response(&encoded),
+            Err(CodecError::InvalidUtf8)
+        );
+    }
 }

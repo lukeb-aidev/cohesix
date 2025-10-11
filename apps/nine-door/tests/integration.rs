@@ -146,3 +146,62 @@ fn queen_mounts_registered_service() {
         other => panic!("unexpected error: {other:?}"),
     }
 }
+
+#[test]
+fn spawn_emit_kill_logs_revocation() {
+    let server = NineDoor::new();
+    let mut queen = server.connect().expect("create queen session");
+    queen.version(MAX_MSIZE).expect("version handshake");
+    queen.attach(1, Role::Queen).expect("queen attach");
+
+    let queen_ctl = vec!["queen".to_owned(), "ctl".to_owned()];
+    queen.walk(1, 2, &queen_ctl).expect("walk /queen/ctl");
+    queen
+        .open(2, OpenMode::write_append())
+        .expect("open /queen/ctl");
+    queen
+        .write(2, b"{\"spawn\":\"heartbeat\",\"ticks\":5}\n")
+        .expect("spawn worker");
+    queen.clunk(2).expect("clunk ctl fid");
+
+    let mut worker = server.connect().expect("create worker session");
+    worker.version(MAX_MSIZE).expect("version handshake");
+    worker
+        .attach_with_identity(1, Role::WorkerHeartbeat, Some("worker-1"))
+        .expect("worker attach");
+    let telemetry = vec![
+        "worker".to_owned(),
+        "worker-1".to_owned(),
+        "telemetry".to_owned(),
+    ];
+    worker.walk(1, 2, &telemetry).expect("walk telemetry");
+    worker
+        .open(2, OpenMode::write_append())
+        .expect("open telemetry");
+    worker.write(2, b"heartbeat 1\n").expect("write telemetry");
+
+    queen.walk(1, 3, &queen_ctl).expect("walk /queen/ctl again");
+    queen
+        .open(3, OpenMode::write_append())
+        .expect("reopen /queen/ctl");
+    queen
+        .write(3, b"{\"kill\":\"worker-1\"}\n")
+        .expect("kill worker");
+    queen.clunk(3).expect("clunk kill fid");
+
+    let err = worker
+        .write(2, b"heartbeat 2\n")
+        .expect_err("write after kill");
+    match err {
+        NineDoorError::Protocol { code, .. } => assert_eq!(code, ErrorCode::Closed),
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    let queen_log = vec!["log".to_owned(), "queen.log".to_owned()];
+    queen.walk(1, 4, &queen_log).expect("walk log");
+    queen.open(4, OpenMode::read_only()).expect("open log");
+    let log = String::from_utf8(queen.read(4, 0, MAX_MSIZE).expect("read log")).expect("log utf8");
+    assert!(log.contains("spawned worker-1"));
+    assert!(log.contains("killed worker-1"));
+    assert!(log.contains("revoked worker-1: killed by queen"));
+}

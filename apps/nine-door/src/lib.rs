@@ -644,7 +644,7 @@ impl ServerCore {
                     _ => {}
                 }
             }
-            self.process_queen_events(events, session);
+            self.process_queen_events(events, session)?;
             Ok(ResponseBody::Write {
                 count: data.len() as u32,
             })
@@ -664,7 +664,11 @@ impl ServerCore {
         Ok(ResponseBody::Clunk)
     }
 
-    fn process_queen_events(&mut self, events: Vec<QueenEvent>, current_session: SessionId) {
+    fn process_queen_events(
+        &mut self,
+        events: Vec<QueenEvent>,
+        current_session: SessionId,
+    ) -> Result<(), NineDoorError> {
         for event in events {
             match event {
                 QueenEvent::Spawned(worker_id) => {
@@ -676,12 +680,15 @@ impl ServerCore {
                         "killed by queen",
                         Some(current_session),
                     );
+                    self.control
+                        .log_event(&format!("revoked {worker_id}: killed by queen"))?;
                 }
                 QueenEvent::BudgetUpdated => {}
                 QueenEvent::Bound { .. } => {}
                 QueenEvent::Mounted { .. } => {}
             }
         }
+        Ok(())
     }
 
     fn revoke_worker_sessions(&mut self, worker_id: &str, reason: &str, skip: Option<SessionId>) {
@@ -1403,6 +1410,36 @@ mod tests {
     }
 
     #[test]
+    fn clunking_unknown_fid_reports_closed() {
+        let server = NineDoor::new();
+        let mut queen = attach_queen(&server);
+        let err = queen.clunk(42).unwrap_err();
+        assert!(matches!(
+            err,
+            NineDoorError::Protocol {
+                code: ErrorCode::Closed,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn read_requires_open() {
+        let server = NineDoor::new();
+        let mut queen = attach_queen(&server);
+        let boot_path = vec!["proc".to_owned(), "boot".to_owned()];
+        queen.walk(1, 2, &boot_path).unwrap();
+        let err = queen.read(2, 0, 16).unwrap_err();
+        assert!(matches!(
+            err,
+            NineDoorError::Protocol {
+                code: ErrorCode::Invalid,
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn worker_isolation_prevents_queen_access() {
         let server = NineDoor::new();
         let mut queen = attach_queen(&server);
@@ -1410,6 +1447,48 @@ mod tests {
         let mut worker = attach_worker(&server, "worker-1");
         let queen_path = vec!["queen".to_owned(), "ctl".to_owned()];
         let err = worker.walk(1, 2, &queen_path).unwrap_err();
+        assert!(matches!(
+            err,
+            NineDoorError::Protocol {
+                code: ErrorCode::Permission,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn worker_cannot_write_queen_log() {
+        let server = NineDoor::new();
+        let mut queen = attach_queen(&server);
+        write_queen_command(&mut queen, "{\"spawn\":\"heartbeat\",\"ticks\":5}\n");
+
+        let mut worker = attach_worker(&server, "worker-1");
+        let queen_log = vec!["log".to_owned(), "queen.log".to_owned()];
+        worker.walk(1, 2, &queen_log).unwrap();
+        let err = worker.open(2, OpenMode::write_append()).unwrap_err();
+        assert!(matches!(
+            err,
+            NineDoorError::Protocol {
+                code: ErrorCode::Permission,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn worker_cannot_read_other_worker_namespace() {
+        let server = NineDoor::new();
+        let mut queen = attach_queen(&server);
+        write_queen_command(&mut queen, "{\"spawn\":\"heartbeat\",\"ticks\":5}\n");
+        write_queen_command(&mut queen, "{\"spawn\":\"heartbeat\",\"ticks\":5}\n");
+
+        let mut worker_two = attach_worker(&server, "worker-2");
+        let worker_one_path = vec![
+            "worker".to_owned(),
+            "worker-1".to_owned(),
+            "telemetry".to_owned(),
+        ];
+        let err = worker_two.walk(1, 3, &worker_one_path).unwrap_err();
         assert!(matches!(
             err,
             NineDoorError::Protocol {
