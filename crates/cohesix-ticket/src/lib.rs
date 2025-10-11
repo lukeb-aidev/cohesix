@@ -1,0 +1,89 @@
+// Author: Lukas Bower
+#![forbid(unsafe_code)]
+#![warn(missing_docs)]
+
+//! Capability ticket primitives shared across Cohesix crates, reflecting
+//! `docs/ARCHITECTURE.md` §1-§3.
+
+/// Roles recognised by the Cohesix capability system.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Role {
+    /// Queen orchestration role controlling worker lifecycles.
+    Queen,
+    /// Worker responsible for emitting heartbeat telemetry.
+    WorkerHeartbeat,
+    /// Future GPU worker role.
+    WorkerGpu,
+}
+
+/// Budget specification describing limits applied to a ticket.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BudgetSpec {
+    ticks: Option<u64>,
+    ops: Option<u64>,
+}
+
+impl BudgetSpec {
+    /// Budget without restrictions, used during bootstrap flows.
+    #[must_use]
+    pub fn unbounded() -> Self {
+        Self {
+            ticks: None,
+            ops: None,
+        }
+    }
+
+    /// Default limits for heartbeat workers; tuned as real scheduling logic arrives.
+    #[must_use]
+    pub fn default_heartbeat() -> Self {
+        Self {
+            ticks: Some(1_000),
+            ops: Some(10_000),
+        }
+    }
+}
+
+impl Default for BudgetSpec {
+    fn default() -> Self {
+        Self::unbounded()
+    }
+}
+
+/// Template for minting capability tickets.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TicketTemplate {
+    role: Role,
+    budget: BudgetSpec,
+}
+
+impl TicketTemplate {
+    /// Create a new ticket template for the supplied role and budget.
+    #[must_use]
+    pub fn new(role: Role, budget: BudgetSpec) -> Self {
+        Self { role, budget }
+    }
+
+    /// Retrieve the ticket role.
+    #[must_use]
+    pub fn role(&self) -> Role {
+        self.role
+    }
+
+    /// Retrieve the ticket budget configuration.
+    #[must_use]
+    pub fn budget(&self) -> BudgetSpec {
+        self.budget
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_heartbeat_limits_are_finite() {
+        let budget = BudgetSpec::default_heartbeat();
+        assert!(budget.ticks.is_some());
+        assert!(budget.ops.is_some());
+    }
+}
