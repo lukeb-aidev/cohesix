@@ -2,6 +2,9 @@
 #![allow(dead_code)]
 #![allow(unsafe_code)]
 
+#[cfg(target_arch = "aarch64")]
+use core::arch::global_asm;
+
 use core::fmt::{self, Write};
 use core::panic::PanicInfo;
 
@@ -101,9 +104,37 @@ pub struct BootInfoHeader {
     extra_bi_pages: usize,
 }
 
+#[cfg(not(target_arch = "aarch64"))]
+compile_error!("root-task kernel build currently supports only aarch64 targets");
+
+#[cfg(target_arch = "aarch64")]
+const ROOT_STACK_SIZE: usize = 16 * 1024;
+
+#[cfg(target_arch = "aarch64")]
+global_asm!(
+    r#"
+    .section .bss.cohesix_root_stack,"aw",@nobits
+    .align 16
+__cohesix_root_stack:
+    .space {stack_size}
+__cohesix_root_stack_end:
+
+    .section .text._start,"ax",@progbits
+    .global _start
+    .type _start,%function
+_start:
+    adrp    x1, __cohesix_root_stack_end
+    add     x1, x1, :lo12:__cohesix_root_stack_end
+    mov     sp, x1
+    b       kernel_start
+    .size _start, . - _start
+"#,
+    stack_size = const ROOT_STACK_SIZE,
+);
+
 /// Root task entry point invoked by seL4 after kernel initialisation.
 #[no_mangle]
-pub extern "C" fn _start(bootinfo: *const BootInfoHeader) -> ! {
+pub extern "C" fn kernel_start(bootinfo: *const BootInfoHeader) -> ! {
     let mut console = DebugConsole::new();
     console.writeln_prefixed("entered from seL4 (stage0)");
     console.report_bootinfo(bootinfo);
