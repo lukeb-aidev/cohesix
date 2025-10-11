@@ -28,7 +28,7 @@ struct Cli {
     #[arg(long)]
     role: Option<RoleArg>,
 
-    /// Optional capability ticket payload.
+    /// Optional capability ticket payload or worker identity string.
     #[arg(long)]
     ticket: Option<String>,
 

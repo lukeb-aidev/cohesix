@@ -55,6 +55,9 @@ const ROOT_FID: u32 = 1;
 /// Transport abstraction used by the shell to interact with the system.
 pub trait Transport {
     /// Attach to the transport using the specified role and optional ticket payload.
+    ///
+    /// Worker roles must supply a non-empty identity string via `ticket` so the
+    /// session can bind to the correct worker namespace.
     fn attach(&mut self, role: Role, ticket: Option<&str>) -> Result<Session>;
 
     /// Stream a log-like file and return the accumulated contents.
@@ -87,7 +90,7 @@ impl NineDoorTransport {
 }
 
 impl Transport for NineDoorTransport {
-    fn attach(&mut self, role: Role, _ticket: Option<&str>) -> Result<Session> {
+    fn attach(&mut self, role: Role, ticket: Option<&str>) -> Result<Session> {
         let mut connection = self
             .server
             .connect()
@@ -95,9 +98,26 @@ impl Transport for NineDoorTransport {
         connection
             .version(MAX_MSIZE)
             .context("version negotiation failed")?;
-        connection
-            .attach(ROOT_FID, role)
-            .context("attach request failed")?;
+        let identity = match role {
+            Role::Queen => None,
+            Role::WorkerHeartbeat | Role::WorkerGpu => {
+                let provided = ticket
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "role {:?} requires an identity provided via the ticket argument",
+                            role
+                        )
+                    })?;
+                Some(provided)
+            }
+        };
+        let attach_result = match identity {
+            Some(id) => connection.attach_with_identity(ROOT_FID, role, Some(id)),
+            None => connection.attach(ROOT_FID, role),
+        };
+        attach_result.context("attach request failed")?;
         self.next_fid = ROOT_FID + 1;
         let session = Session::new(connection.session_id(), role);
         self.connection = Some(connection);
@@ -191,6 +211,7 @@ impl<T: Transport, W: Write> Shell<T, W> {
     }
 
     /// Attach to the transport using the supplied role and optional ticket payload.
+    /// Worker roles must provide their identity via `ticket`.
     pub fn attach(&mut self, role: Role, ticket: Option<&str>) -> Result<()> {
         let session = self.transport.attach(role, ticket)?;
         writeln!(
@@ -251,7 +272,7 @@ impl<T: Transport, W: Write> Shell<T, W> {
             "help" => {
                 writeln!(
                     self.writer,
-                    "Available commands: help, tail <path>, attach <role>, login <role>, quit"
+                    "Available commands: help, tail <path>, attach <role> [ticket], login <role> [ticket], quit"
                 )?;
                 Ok(CommandStatus::Continue)
             }
@@ -354,5 +375,16 @@ mod tests {
         }
         let rendered = String::from_utf8(output).unwrap();
         assert!(rendered.contains("closing session"));
+    }
+
+    #[test]
+    fn worker_attach_requires_identity() {
+        let mut transport = NineDoorTransport::new(NineDoor::new());
+        let err = transport
+            .attach(Role::WorkerHeartbeat, None)
+            .expect_err("worker attach without identity should fail");
+        assert!(err
+            .to_string()
+            .contains("requires an identity provided via the ticket argument"));
     }
 }
