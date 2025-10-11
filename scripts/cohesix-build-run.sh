@@ -16,7 +16,7 @@ Options:
   --sel4-build <dir>    Path to the seL4 build output (default: $HOME/seL4/build)
   --out-dir <dir>       Directory for generated artefacts (default: out/cohesix)
   --profile <name>      Cargo profile to build (release|debug|custom; default: release)
-  --cargo-target <triple>  Optional target triple passed to cargo
+  --cargo-target <triple>  Target triple used for seL4 component builds (required)
   --qemu <path>         QEMU binary to execute (default: qemu-system-aarch64)
   --no-run              Skip launching QEMU after building the artefacts
   -h, --help            Show this help message
@@ -131,22 +131,36 @@ case "$PROFILE" in
         ;;
  esac
 
-CARGO_ARGS=(build --workspace --all-targets)
-CARGO_ARGS+=("${PROFILE_FLAG[@]}")
-if [[ -n "$CARGO_TARGET" ]]; then
-    CARGO_ARGS+=(--target "$CARGO_TARGET")
+if [[ -z "$CARGO_TARGET" ]]; then
+    fail "--cargo-target must be provided to build seL4 components"
 fi
 
-log "Building Cohesix workspace via: cargo ${CARGO_ARGS[*]}"
-cargo "${CARGO_ARGS[@]}"
+SEL4_COMPONENT_PACKAGES=(root-task nine-door worker-heart worker-gpu)
+HOST_TOOL_PACKAGES=(cohsh gpu-bridge-host)
 
-if [[ -n "$CARGO_TARGET" ]]; then
-    ARTIFACT_DIR="target/$CARGO_TARGET/$PROFILE_DIR"
-else
-    ARTIFACT_DIR="target/$PROFILE_DIR"
-fi
+HOST_BUILD_ARGS=(build)
+HOST_BUILD_ARGS+=("${PROFILE_FLAG[@]}")
+for pkg in "${HOST_TOOL_PACKAGES[@]}"; do
+    HOST_BUILD_ARGS+=(-p "$pkg")
+done
 
-[[ -d "$ARTIFACT_DIR" ]] || fail "Cargo artefact directory not found: $ARTIFACT_DIR"
+log "Building host tooling via: cargo ${HOST_BUILD_ARGS[*]}"
+cargo "${HOST_BUILD_ARGS[@]}"
+
+SEL4_BUILD_ARGS=(build --target "$CARGO_TARGET")
+SEL4_BUILD_ARGS+=("${PROFILE_FLAG[@]}")
+for pkg in "${SEL4_COMPONENT_PACKAGES[@]}"; do
+    SEL4_BUILD_ARGS+=(-p "$pkg")
+done
+
+log "Building seL4 components via: cargo ${SEL4_BUILD_ARGS[*]}"
+cargo "${SEL4_BUILD_ARGS[@]}"
+
+HOST_ARTIFACT_DIR="target/$PROFILE_DIR"
+SEL4_ARTIFACT_DIR="target/$CARGO_TARGET/$PROFILE_DIR"
+
+[[ -d "$HOST_ARTIFACT_DIR" ]] || fail "Cargo artefact directory not found: $HOST_ARTIFACT_DIR"
+[[ -d "$SEL4_ARTIFACT_DIR" ]] || fail "Cargo artefact directory not found: $SEL4_ARTIFACT_DIR"
 
 COMPONENT_BINS=(root-task nine-door worker-heart worker-gpu)
 HOST_ONLY_BINS=(cohsh gpu-bridge-host)
@@ -161,21 +175,21 @@ rm -rf "$STAGING_DIR"
 mkdir -p "$ROOTFS_DIR" "$HOST_OUT_DIR"
 
 for bin in "${COMPONENT_BINS[@]}"; do
-    SRC="$ARTIFACT_DIR/$bin"
+    SRC="$SEL4_ARTIFACT_DIR/$bin"
     [[ -f "$SRC" ]] || fail "Expected binary not found: $SRC"
     install -m 0755 -T "$SRC" "$ROOTFS_DIR/$bin"
     log "Packaged component binary: $ROOTFS_DIR/$bin"
 done
 
 for bin in "${HOST_ONLY_BINS[@]}"; do
-    SRC="$ARTIFACT_DIR/$bin"
+    SRC="$HOST_ARTIFACT_DIR/$bin"
     if [[ -f "$SRC" ]]; then
         install -m 0755 -T "$SRC" "$HOST_OUT_DIR/$bin"
         log "Copied host-side tool: $HOST_OUT_DIR/$bin"
     else
-        log "Host tool not built for target $ARTIFACT_DIR: $bin (skipping)"
+        log "Host tool not built for target $HOST_ARTIFACT_DIR: $bin (skipping)"
     fi
- done
+done
 
 install -m 0755 -T "$KERNEL_PATH" "$STAGING_DIR/kernel.elf"
 install -m 0755 -T "$ROOTFS_DIR/root-task" "$STAGING_DIR/rootserver"
@@ -188,7 +202,7 @@ fi
 MANIFEST_INPUTS=()
 for bin in "${COMPONENT_BINS[@]}"; do
     MANIFEST_INPUTS+=("cohesix/bin/$bin")
- done
+done
 
 python3 - "$STAGING_DIR" "$PROFILE" "$RESOLVED_TARGET" "${MANIFEST_INPUTS[@]}" <<'PY'
 import hashlib
