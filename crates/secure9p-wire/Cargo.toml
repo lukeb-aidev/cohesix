@@ -7,3 +7,4 @@ license = "MIT"
 publish = false
 
 [dependencies]
+thiserror = "1"
