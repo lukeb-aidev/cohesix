@@ -1,1 +1,29 @@
-ToDo
+<!-- Author: Lukas Bower -->
+# Cohesix
+
+Cohesix is a deterministic orchestration environment built on the seL4 microkernel for ARM64 virtual machines. The project delivers a pure Rust userspace that exposes all control and telemetry through a Secure9P-backed file namespace instead of traditional Unix facilities.
+
+## Vision
+- **Deterministic control plane**: Replace shell scripts and ad-hoc RPCs with append-only JSON command streams handled by the NineDoor 9P server.
+- **Role-oriented governance**: Encode every interaction through capability tickets that enforce the roles and budgets defined in the scheduling policy.
+- **Host/VM separation**: Keep heavyweight GPU and tooling stacks on the host while the VM focuses on minimal, auditable services.
+
+## Key Components
+- **Root Task (`apps/root-task`)** — boots the system, manages capabilities, and enforces worker budgets.
+- **NineDoor (`apps/nine-door`)** — Secure9P server that publishes the queen, worker, and telemetry namespaces.
+- **Worker Suites (`apps/worker-heart`, future `apps/worker-gpu`)** — role-specific agents launched via queen commands.
+- **GPU Bridge (`apps/gpu-bridge-host`)** — host-side toolchain that mirrors GPU control surfaces into the VM through Secure9P.
+- **Cohesix Shell (`cohsh`)** — operator CLI defined in `docs/USERLAND_AND_CLI.md`, translating shell-like commands into 9P operations.
+
+## Getting Started
+1. Review the architectural blueprint in `docs/ARCHITECTURE.md` and the repository expectations in `docs/REPO_LAYOUT.md`.
+2. Follow `docs/BUILD_PLAN.md` to implement milestones sequentially, ensuring code and documentation advance together.
+3. Use the tooling instructions in `docs/TOOLCHAIN_MAC_ARM64.md` to prepare the macOS ARM64 development environment.
+
+## Documentation Map
+- Interfaces and control schemas: `docs/INTERFACES.md`
+- Roles and scheduling policy: `docs/ROLES_AND_SCHEDULING.md`
+- Secure9P design and testing expectations: `docs/SECURE9P.md`
+- GPU integration strategy: `docs/GPU_NODES.md`
+
+Each milestone must maintain alignment with these documents to keep the Cohesix platform cohesive, auditable, and ready for future GPU-enabled workloads.
