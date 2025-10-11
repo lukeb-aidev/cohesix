@@ -1,0 +1,5 @@
+# Author: Lukas Bower
+/target
+/out
+Cargo.lock
+.DS_Store

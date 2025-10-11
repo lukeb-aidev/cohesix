@@ -1,0 +1,20 @@
+# Author: Lukas Bower
+[workspace]
+members = [
+    "apps/root-task",
+    "apps/nine-door",
+    "apps/worker-heart",
+    "crates/cohesix-ticket",
+    "crates/secure9p-wire",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+cohesix-ticket = { path = "crates/cohesix-ticket" }
+secure9p-wire = { path = "crates/secure9p-wire" }
+anyhow = "1.0"
+thiserror = "1.0"
