@@ -43,14 +43,16 @@ pub struct GpuLease {
   "bytes_hash": "sha256:...",
   "inputs": ["/bundles/vadd.ptx"],
   "outputs": ["/worker/jid-42/result"],
-  "timeout_ms": 5000
+  "timeout_ms": 5000,
+  "payload_b64": "..."
 }
 ```
-- Host validates payload hash against staged artefacts before launch.
+- Host validates payload hash against staged artefacts before launch; when `payload_b64` is present the bridge decodes and hashes the inline bytes.
 - `timeout_ms` triggers job cancellation; status stream records `ERR TIMEOUT`.
+- Successful submissions emit `QUEUED`, `RUNNING`, and `OK` entries in `/gpu/<id>/status` alongside worker telemetry updates.
 
 ## 6. Simulation Path (for CI & macOS)
-- Provide a `--mock` mode that simulates GPU responses using deterministic timers.
+- `gpu-bridge-host --mock --list` emits deterministic namespace descriptors consumed by NineDoor via `install_gpu_nodes`.
 - `info` returns synthetic GPU entries, `job` triggers precomputed status sequences.
 - Enables continuous validation of control plane without real hardware.
 

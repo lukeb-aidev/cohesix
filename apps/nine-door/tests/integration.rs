@@ -2,8 +2,11 @@
 #![forbid(unsafe_code)]
 
 use cohesix_ticket::Role;
-use nine_door::{NineDoor, NineDoorError};
+use nine_door::{Clock, InProcessConnection, NineDoor, NineDoorError};
 use secure9p_wire::{ErrorCode, OpenMode, MAX_MSIZE};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+use worker_gpu::{GpuLease, GpuWorker};
 
 #[test]
 fn attach_walk_read_and_write() {
@@ -204,4 +207,214 @@ fn spawn_emit_kill_logs_revocation() {
     assert!(log.contains("spawned worker-1"));
     assert!(log.contains("killed worker-1"));
     assert!(log.contains("revoked worker-1: killed by queen"));
+}
+
+#[test]
+fn queen_spawns_gpu_worker_and_runs_job() {
+    let server = NineDoor::new();
+    let bridge = gpu_bridge_host::GpuBridge::mock();
+    let nodes = bridge.serialise_namespace().expect("serialise namespace");
+    server.install_gpu_nodes(&nodes).expect("install gpu nodes");
+
+    let mut queen = attach_queen(&server);
+    let spawn_payload = "{\"spawn\":\"gpu\",\"lease\":{\"gpu_id\":\"GPU-0\",\"mem_mb\":4096,\"streams\":2,\"ttl_s\":120,\"priority\":5}}\n";
+    write_queen_command(&mut queen, spawn_payload);
+
+    let mut worker = server.connect().expect("create gpu worker session");
+    worker.version(MAX_MSIZE).expect("version handshake");
+    worker
+        .attach_with_identity(1, Role::WorkerGpu, Some("worker-1"))
+        .expect("gpu worker attach");
+    let job_path = vec!["gpu".to_owned(), "GPU-0".to_owned(), "job".to_owned()];
+    worker.walk(1, 2, &job_path).expect("walk job path");
+    worker
+        .open(2, OpenMode::write_append())
+        .expect("open job file");
+
+    let lease = GpuLease::new("GPU-0", 4096, 2, 120, 5, "worker-1").unwrap();
+    let gpu_worker = GpuWorker::new(worker.session_id(), lease);
+    let descriptor = gpu_worker
+        .vector_add(&[1.0f32, 2.0], &[3.0f32, 4.0])
+        .expect("vector add descriptor");
+    let payload = format!("{}\n", serde_json::to_string(&descriptor).unwrap());
+    worker.write(2, payload.as_bytes()).expect("submit gpu job");
+
+    let status_path = vec!["gpu".to_owned(), "GPU-0".to_owned(), "status".to_owned()];
+    queen.walk(1, 3, &status_path).expect("walk status path");
+    queen
+        .open(3, OpenMode::read_only())
+        .expect("open status file");
+    let status = String::from_utf8(queen.read(3, 0, MAX_MSIZE).unwrap()).unwrap();
+    assert!(status.contains("\"state\":\"QUEUED\""));
+    assert!(status.contains("\"state\":\"OK\""));
+
+    let telemetry_path = vec![
+        "worker".to_owned(),
+        "worker-1".to_owned(),
+        "telemetry".to_owned(),
+    ];
+    queen
+        .walk(1, 4, &telemetry_path)
+        .expect("walk telemetry path");
+    queen
+        .open(4, OpenMode::read_only())
+        .expect("open telemetry file");
+    let telemetry = String::from_utf8(queen.read(4, 0, MAX_MSIZE).unwrap()).unwrap();
+    assert!(telemetry.contains("\"state\":\"RUNNING\""));
+    assert!(telemetry.contains("\"state\":\"OK\""));
+}
+
+#[test]
+fn gpu_job_write_requires_utf8() {
+    let server = NineDoor::new();
+    let bridge = gpu_bridge_host::GpuBridge::mock();
+    server
+        .install_gpu_nodes(&bridge.serialise_namespace().unwrap())
+        .expect("install gpu nodes");
+
+    let mut queen = attach_queen(&server);
+    let payload = "{\"spawn\":\"gpu\",\"lease\":{\"gpu_id\":\"GPU-0\",\"mem_mb\":2048,\"streams\":1,\"ttl_s\":60,\"priority\":1}}\n";
+    write_queen_command(&mut queen, payload);
+
+    let mut worker = attach_gpu_worker(&server, "worker-1");
+    open_gpu_job_file(&mut worker, 2, "GPU-0");
+
+    let err = worker
+        .write(2, &[0xff])
+        .expect_err("non-utf8 payload rejected");
+    match err {
+        NineDoorError::Protocol { code, .. } => assert_eq!(code, ErrorCode::Invalid),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn gpu_job_descriptor_must_validate_payload() {
+    let server = NineDoor::new();
+    let bridge = gpu_bridge_host::GpuBridge::mock();
+    server
+        .install_gpu_nodes(&bridge.serialise_namespace().unwrap())
+        .expect("install gpu nodes");
+
+    let mut queen = attach_queen(&server);
+    let payload = "{\"spawn\":\"gpu\",\"lease\":{\"gpu_id\":\"GPU-0\",\"mem_mb\":1024,\"streams\":1,\"ttl_s\":60,\"priority\":1}}\n";
+    write_queen_command(&mut queen, payload);
+
+    let mut worker = attach_gpu_worker(&server, "worker-1");
+    open_gpu_job_file(&mut worker, 2, "GPU-0");
+
+    let lease = GpuLease::new("GPU-0", 1024, 1, 60, 1, "worker-1").unwrap();
+    let gpu_worker = GpuWorker::new(worker.session_id(), lease);
+    let mut descriptor = gpu_worker
+        .vector_add(&[1.0f32, 2.0], &[3.0f32, 4.0])
+        .expect("descriptor");
+    descriptor.bytes_hash =
+        "sha256:0000000000000000000000000000000000000000000000000000000000000000".to_owned();
+    let payload = format!("{}\n", serde_json::to_string(&descriptor).unwrap());
+    let err = worker
+        .write(2, payload.as_bytes())
+        .expect_err("hash mismatch rejected");
+    match err {
+        NineDoorError::Protocol { code, .. } => assert_eq!(code, ErrorCode::Invalid),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn gpu_lease_expiry_revokes_job_access() {
+    let clock = Arc::new(TestClock::new());
+    let server = NineDoor::new_with_clock(clock.clone());
+    let bridge = gpu_bridge_host::GpuBridge::mock();
+    server
+        .install_gpu_nodes(&bridge.serialise_namespace().unwrap())
+        .expect("install gpu nodes");
+
+    let mut queen = attach_queen(&server);
+    let payload = "{\"spawn\":\"gpu\",\"lease\":{\"gpu_id\":\"GPU-0\",\"mem_mb\":2048,\"streams\":1,\"ttl_s\":1,\"priority\":1}}\n";
+    write_queen_command(&mut queen, payload);
+
+    let mut worker = server.connect().expect("create gpu worker session");
+    worker.version(MAX_MSIZE).expect("version handshake");
+    worker
+        .attach_with_identity(1, Role::WorkerGpu, Some("worker-1"))
+        .expect("gpu worker attach");
+    let job_path = vec!["gpu".to_owned(), "GPU-0".to_owned(), "job".to_owned()];
+    worker.walk(1, 2, &job_path).expect("walk job path");
+    worker
+        .open(2, OpenMode::write_append())
+        .expect("open job file");
+
+    clock.advance(Duration::from_secs(2));
+
+    let lease = GpuLease::new("GPU-0", 2048, 1, 1, 1, "worker-1").unwrap();
+    let gpu_worker = GpuWorker::new(worker.session_id(), lease);
+    let descriptor = gpu_worker
+        .vector_add(&[1.0f32, 2.0], &[3.0f32, 4.0])
+        .expect("descriptor");
+    let payload = format!("{}\n", serde_json::to_string(&descriptor).unwrap());
+    let err = worker
+        .write(2, payload.as_bytes())
+        .expect_err("write after ttl");
+    match err {
+        NineDoorError::Protocol { code, .. } => assert_eq!(code, ErrorCode::Closed),
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+fn attach_queen(server: &NineDoor) -> InProcessConnection {
+    let mut client = server.connect().expect("create queen session");
+    client.version(MAX_MSIZE).expect("version negotiation");
+    client.attach(1, Role::Queen).expect("queen attach");
+    client
+}
+
+fn write_queen_command(client: &mut InProcessConnection, payload: &str) {
+    let path = vec!["queen".to_owned(), "ctl".to_owned()];
+    client.walk(1, 2, &path).expect("walk /queen/ctl");
+    client
+        .open(2, OpenMode::write_append())
+        .expect("open /queen/ctl");
+    client.write(2, payload.as_bytes()).expect("write command");
+    client.clunk(2).expect("clunk ctl fid");
+}
+
+fn attach_gpu_worker(server: &NineDoor, id: &str) -> InProcessConnection {
+    let mut client = server.connect().expect("create gpu worker session");
+    client.version(MAX_MSIZE).expect("version handshake");
+    client
+        .attach_with_identity(1, Role::WorkerGpu, Some(id))
+        .expect("gpu worker attach");
+    client
+}
+
+fn open_gpu_job_file(client: &mut InProcessConnection, fid: u32, gpu_id: &str) {
+    let job_path = vec!["gpu".to_owned(), gpu_id.to_owned(), "job".to_owned()];
+    client.walk(1, fid, &job_path).expect("walk gpu job path");
+    client
+        .open(fid, OpenMode::write_append())
+        .expect("open gpu job file");
+}
+
+#[derive(Debug)]
+struct TestClock {
+    now: Mutex<Instant>,
+}
+
+impl TestClock {
+    fn new() -> Self {
+        Self {
+            now: Mutex::new(Instant::now()),
+        }
+    }
+
+    fn advance(&self, duration: Duration) {
+        let mut guard = self.now.lock().expect("clock mutex");
+        *guard += duration;
+    }
+}
+
+impl Clock for TestClock {
+    fn now(&self) -> Instant {
+        *self.now.lock().expect("clock mutex")
+    }
 }

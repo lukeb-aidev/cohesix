@@ -1,6 +1,6 @@
 <!-- Author: Lukas Bower -->
-# Worker GPU (Future)
+# Worker GPU
 
-Placeholder directory for the GPU worker crate described in `docs/BUILD_PLAN.md`
-Milestone 6 and `docs/ARCHITECTURE.md` §3, §7-§8. Implementation will arrive in
-later milestones once GPU orchestration is in scope.
+GPU worker support crate implementing descriptor validation and helper
+generators for vector-add and matrix-multiply workloads. See
+`docs/BUILD_PLAN.md` Milestone 6 for the surrounding orchestration details.

@@ -5,6 +5,8 @@ members = [
     "apps/root-task",
     "apps/nine-door",
     "apps/worker-heart",
+    "apps/worker-gpu",
+    "apps/gpu-bridge-host",
     "crates/cohesix-ticket",
     "crates/secure9p-wire",
 ]
@@ -22,3 +24,7 @@ thiserror = "1.0"
 clap = { version = "4.5", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+sha2 = "0.10"
+base64 = "0.22"
+hex = "0.4"
+rand = "0.8"

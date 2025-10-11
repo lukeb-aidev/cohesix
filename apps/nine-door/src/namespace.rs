@@ -148,6 +148,7 @@ impl Namespace {
             .expect("create /queen/ctl");
 
         self.ensure_dir(&[], "worker").expect("create /worker");
+        self.ensure_dir(&[], "gpu").expect("create /gpu");
     }
 
     fn ensure_dir(&mut self, parent: &[String], name: &str) -> Result<(), NineDoorError> {
@@ -174,6 +175,53 @@ impl Namespace {
         data: &[u8],
     ) -> Result<(), NineDoorError> {
         let mut node = self.lookup_mut(parent)?;
+        node.ensure_file(name, FileNode::AppendOnly(data.to_vec()));
+        Ok(())
+    }
+
+    pub fn set_gpu_node(
+        &mut self,
+        gpu_id: &str,
+        info: &[u8],
+        ctl: &[u8],
+        status: &[u8],
+    ) -> Result<(), NineDoorError> {
+        let root = vec!["gpu".to_owned()];
+        let base = vec!["gpu".to_owned(), gpu_id.to_owned()];
+        self.ensure_dir(&root, gpu_id)?;
+        self.set_read_only_file(&base, "info", info)?;
+        self.set_append_only_file(&base, "ctl", ctl)?;
+        self.set_append_only_file(&base, "status", status)?;
+        self.set_append_only_file(&base, "job", b"")?;
+        Ok(())
+    }
+
+    pub fn append_gpu_status(&mut self, gpu_id: &str, payload: &[u8]) -> Result<(), NineDoorError> {
+        let path = vec!["gpu".to_owned(), gpu_id.to_owned(), "status".to_owned()];
+        self.write_append(&path, payload)?;
+        Ok(())
+    }
+
+    fn set_read_only_file(
+        &mut self,
+        parent: &[String],
+        name: &str,
+        data: &[u8],
+    ) -> Result<(), NineDoorError> {
+        let mut node = self.lookup_mut(parent)?;
+        node.remove_child(name);
+        node.ensure_file(name, FileNode::ReadOnly(data.to_vec()));
+        Ok(())
+    }
+
+    fn set_append_only_file(
+        &mut self,
+        parent: &[String],
+        name: &str,
+        data: &[u8],
+    ) -> Result<(), NineDoorError> {
+        let mut node = self.lookup_mut(parent)?;
+        node.remove_child(name);
         node.ensure_file(name, FileNode::AppendOnly(data.to_vec()));
         Ok(())
     }
