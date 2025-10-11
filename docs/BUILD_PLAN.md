@@ -99,8 +99,8 @@ preparing and executing tasks.
 ## Milestone 6 — GPU Worker Integration
 **Deliverables**
 - Define `WorkerGpu` role and extend `/queen/ctl` schema with GPU lease requests.
-- Host-side `gpu-bridge` tool implementing NVML-based discovery and 9P mirroring for `/gpu/<id>/*`.
-- Job submission protocol (JSON) supporting vector add and matrix multiply kernels with SHA-256 payload validation.
+- Host-side `gpu-bridge-host` tool implementing NVML-based discovery (feature-gated) and `--mock` namespace mirroring for `/gpu/<id>/*`.
+- Job submission protocol (JSON) supporting vector add and matrix multiply kernels with SHA-256 payload validation, optional inline payloads, and status fan-out to `/gpu/<id>/status` and `/worker/<id>/telemetry`.
 - Implementation must align with `docs/GPU_NODES.md §2-§7`, uphold the command schemas in `docs/INTERFACES.md §3-§5`, and keep
   VM-side responsibilities within the boundaries in `docs/ARCHITECTURE.md §7-§8`.
 - All temporary scaffolds, mocks, or stubs have been replaced with production-grade integrations; the completed build plan

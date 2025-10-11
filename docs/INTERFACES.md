@@ -32,18 +32,20 @@ Path: `/queen/ctl` (append-only JSON lines)
 ```
 - Lines must parse as UTF-8 JSON; unknown fields logged and ignored.
 - `spawn:"gpu"` queues a lease request for the host GPU bridge; if the bridge is unavailable the command returns `Error::Busy`.
+- GPU spawns require the host bridge to publish `/gpu/<id>` entries via `install_gpu_nodes`; lease issuance is mirrored to `/log/queen.log` and `/gpu/<id>/ctl`.
+- Optional `priority` fields raise scheduling weight on the host bridge when multiple leases compete.
 
 ## 4. Worker Telemetry
 - Path: `/worker/<id>/telemetry` (append-only, newline-delimited records).
 - Heartbeat payload: `{"tick":42,"ts_ms":123456789}`.
-- GPU payload (future): `{"job":"jid-9","state":"RUNNING","progress":0.42}`.
+- GPU payload: `{"job":"jid-9","state":"RUNNING","detail":"scheduled"}` followed by `{"job":"jid-9","state":"OK","detail":"completed"}`.
 
-## 5. GPU Bridge Files (host-mirrored, future)
+## 5. GPU Bridge Files (host-mirrored)
 | Path | Mode | Description |
 |------|------|-------------|
 | `/gpu/<id>/info` | read-only | JSON metadata: vendor, model, memory, SMs, driver/runtime versions |
 | `/gpu/<id>/ctl` | append-only | Lease management: `LEASE`, `RELEASE`, `PRIORITY <n>` |
-| `/gpu/<id>/job` | append-only | JSON job descriptors (validated hash, grid/block dims) |
+| `/gpu/<id>/job` | append-only | JSON job descriptors (validated hash, grid/block dims, optional `payload_b64`) |
 | `/gpu/<id>/status` | read-only append stream | Job lifecycle entries (QUEUED/RUNNING/OK/ERR) |
 
 ## 6. Root Task RPC (internal trait)
