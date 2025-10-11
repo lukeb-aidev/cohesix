@@ -292,27 +292,55 @@ DTB_LOAD_ADDR=0x4f000000
 KERNEL_LOAD_ADDR=0x70000000
 ROOTSERVER_LOAD_ADDR=0x80000000
 
+detect_gic_version_from_file() {
+    local path="$1"
+
+    [[ -f "$path" ]] || return 1
+
+    if grep -Eq '\b(CONFIG_ARM_GIC_V3_SUPPORT|CONFIG_HAVE_ARM_GIC_V3)(=| )[yY1]' "$path" \
+        || grep -Eq 'KernelArmGICV3[ \t]*(ON|TRUE|1)' "$path"; then
+        GIC_VERSION="3"
+        GIC_CONFIG_SOURCE="$path"
+        return 0
+    fi
+
+    if grep -Eq '#[ \t]*(CONFIG_ARM_GIC_V3_SUPPORT|CONFIG_HAVE_ARM_GIC_V3) is not set' "$path" \
+        || grep -Eq '\b(CONFIG_ARM_GIC_V3_SUPPORT|CONFIG_HAVE_ARM_GIC_V3)(=| )[nN0]' "$path" \
+        || grep -Eq 'KernelArmGICV3[ \t]*(OFF|FALSE|0)' "$path"; then
+        GIC_VERSION="2"
+        GIC_CONFIG_SOURCE="$path"
+        return 0
+    fi
+
+    return 1
+}
+
 GIC_VERSION="3"
 GIC_CONFIG_SOURCE=""
 SEL4_CONFIG_CANDIDATES=(
     "$SEL4_BUILD_DIR/.config"
     "$SEL4_BUILD_DIR/kernel/.config"
+    "$SEL4_BUILD_DIR/KernelConfig"
+    "$SEL4_BUILD_DIR/kernel/KernelConfig"
+    "$SEL4_BUILD_DIR/kernel/gen_config/KernelConfig"
+    "$SEL4_BUILD_DIR/kernel/gen_config/KernelConfigGenerated.cmake"
+    "$SEL4_BUILD_DIR/kernel/gen_config/kernel_all.cmake"
 )
 
 for cfg in "${SEL4_CONFIG_CANDIDATES[@]}"; do
-    if [[ -f "$cfg" ]]; then
-        if grep -q '^CONFIG_ARM_GIC_V3_SUPPORT=y' "$cfg"; then
-            GIC_VERSION="3"
-            GIC_CONFIG_SOURCE="$cfg"
-            break
-        fi
-        if grep -q '^# CONFIG_ARM_GIC_V3_SUPPORT is not set' "$cfg"; then
-            GIC_VERSION="2"
-            GIC_CONFIG_SOURCE="$cfg"
-            break
-        fi
+    if detect_gic_version_from_file "$cfg"; then
+        break
     fi
 done
+
+if [[ -z "$GIC_CONFIG_SOURCE" ]]; then
+    while IFS= read -r -d '' cfg; do
+        if detect_gic_version_from_file "$cfg"; then
+            break
+        fi
+    done < <(find "$SEL4_BUILD_DIR" -maxdepth 5 -type f \
+        \( -name '.config' -o -name 'KernelConfig*' -o -name 'kernel_all.cmake' \) -print0)
+fi
 
 if [[ -n "$GIC_CONFIG_SOURCE" ]]; then
     if [[ "$GIC_VERSION" == "3" ]]; then
