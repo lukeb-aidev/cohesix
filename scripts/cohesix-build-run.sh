@@ -115,6 +115,9 @@ if [[ ! -d "$SEL4_BUILD_DIR" ]]; then
     fail "seL4 build directory not found: $SEL4_BUILD_DIR"
 fi
 
+export SEL4_BUILD_DIR
+export SEL4_BUILD="$SEL4_BUILD_DIR"
+
 for cmd in cargo cpio python3 "$QEMU_BIN"; do
     if ! command -v "$cmd" >/dev/null 2>&1; then
         if [[ "$cmd" == "$QEMU_BIN" && "$RUN_QEMU" -eq 0 ]]; then
