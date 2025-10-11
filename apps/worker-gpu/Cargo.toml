@@ -6,6 +6,8 @@ edition = "2021"
 publish = false
 
 [dependencies]
+
+[target.'cfg(not(target_os = "none"))'.dependencies]
 anyhow = { workspace = true }
 base64 = { workspace = true }
 cohesix-ticket = { workspace = true }
