@@ -292,10 +292,26 @@ DTB_LOAD_ADDR=0x4f000000
 KERNEL_LOAD_ADDR=0x70000000
 ROOTSERVER_LOAD_ADDR=0x80000000
 
-QEMU_CMD=("$QEMU_BIN" -machine virt,gic-version=3,dtb-addr=$DTB_LOAD_ADDR -cpu cortex-a57 -m 1024 -serial mon:stdio -display none -kernel "$ELFLOADER_PATH" -initrd "$CPIO_PATH" -device loader,file="$KERNEL_STAGE_PATH",addr=$KERNEL_LOAD_ADDR -device loader,file="$ROOTSERVER_STAGE_PATH",addr=$ROOTSERVER_LOAD_ADDR)
+QEMU_MACHINE_OPTS="virt,gic-version=3"
+QEMU_DTB_ADDR_SUPPORTED=0
+
+if command -v "$QEMU_BIN" >/dev/null 2>&1; then
+    if "$QEMU_BIN" -machine virt,help 2>&1 | grep -q 'dtb-addr'; then
+        QEMU_MACHINE_OPTS+="\,dtb-addr=$DTB_LOAD_ADDR"
+        QEMU_DTB_ADDR_SUPPORTED=1
+    else
+        log "QEMU binary $QEMU_BIN does not advertise virt.dtb-addr; using default device tree placement"
+    fi
+fi
+
+QEMU_CMD=("$QEMU_BIN" -machine "$QEMU_MACHINE_OPTS" -cpu cortex-a57 -m 1024 -serial mon:stdio -display none -kernel "$ELFLOADER_PATH" -initrd "$CPIO_PATH" -device loader,file="$KERNEL_STAGE_PATH",addr=$KERNEL_LOAD_ADDR -device loader,file="$ROOTSERVER_STAGE_PATH",addr=$ROOTSERVER_LOAD_ADDR)
 
 if [[ -n "$DTB_PATH" ]]; then
-    log "Device tree will load at $DTB_LOAD_ADDR"
+    if [[ "$QEMU_DTB_ADDR_SUPPORTED" -eq 1 ]]; then
+        log "Device tree will load at $DTB_LOAD_ADDR"
+    else
+        log "Device tree provided via -dtb; load address determined by QEMU"
+    fi
     QEMU_CMD+=(-dtb "$DTB_PATH")
 fi
 
