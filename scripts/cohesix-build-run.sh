@@ -15,6 +15,7 @@ looks for that tree at `$HOME/seL4/build`.
 Options:
   --sel4-build <dir>    Path to the seL4 build output (default: $HOME/seL4/build)
   --out-dir <dir>       Directory for generated artefacts (default: out/cohesix)
+  --clean               Remove existing contents of the output directory before building
   --profile <name>      Cargo profile to build (release|debug|custom; default: release)
   --cargo-target <triple>  Target triple used for seL4 component builds (required)
   --qemu <path>         QEMU binary to execute (default: qemu-system-aarch64)
@@ -64,6 +65,7 @@ CARGO_TARGET=""
 QEMU_BIN="qemu-system-aarch64"
 RUN_QEMU=1
 EXTRA_QEMU_ARGS=()
+CLEAN_OUT_DIR=0
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -96,6 +98,10 @@ while [[ $# -gt 0 ]]; do
             RUN_QEMU=0
             shift
             ;;
+        --clean)
+            CLEAN_OUT_DIR=1
+            shift
+            ;;
         -h|--help)
             usage
             exit 0
@@ -117,6 +123,18 @@ fi
 
 export SEL4_BUILD_DIR
 export SEL4_BUILD="$SEL4_BUILD_DIR"
+
+if [[ "$CLEAN_OUT_DIR" -eq 1 ]]; then
+    if [[ -d "$OUT_DIR" ]]; then
+        if [[ "$OUT_DIR" == "/" ]]; then
+            fail "Refusing to clean the filesystem root"
+        fi
+        log "Cleaning output directory before build: $OUT_DIR"
+        find "$OUT_DIR" -mindepth 1 -delete
+    else
+        log "Output directory $OUT_DIR does not exist; nothing to clean"
+    fi
+fi
 
 for cmd in cargo cpio python3 "$QEMU_BIN"; do
     if ! command -v "$cmd" >/dev/null 2>&1; then
