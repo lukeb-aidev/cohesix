@@ -8,20 +8,16 @@ use std::fs::File;
 use std::io::{self, BufReader};
 use std::path::PathBuf;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use clap::Parser;
 use cohesix_ticket::Role;
 
-use cohsh::{MockTransport, RoleArg, Shell};
+use cohsh::{NineDoorTransport, RoleArg, Shell};
 
 /// Cohesix shell command-line arguments.
 #[derive(Debug, Parser)]
 #[command(author = "Lukas Bower", version, about = "Cohesix shell prototype", long_about = None)]
 struct Cli {
-    /// Use the mocked in-memory transport.
-    #[arg(long, default_value_t = true)]
-    mock: bool,
-
     /// Attach immediately as the supplied role.
     #[arg(long)]
     role: Option<RoleArg>,
@@ -37,14 +33,9 @@ struct Cli {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    if !cli.mock {
-        return Err(anyhow!(
-            "non-mock transports are not yet implemented; pass --mock (default)"
-        ));
-    }
     let stdout = io::stdout();
     let writer = stdout.lock();
-    let transport = MockTransport::default();
+    let transport = NineDoorTransport::new(nine_door::NineDoor::new());
     let mut shell = Shell::new(transport, writer);
     if let Some(role_arg) = cli.role {
         shell.attach(Role::from(role_arg), cli.ticket.as_deref())?;
