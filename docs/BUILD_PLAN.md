@@ -11,8 +11,8 @@ The milestones below build cumulatively; do not advance until the specified chec
 ## Milestone 0 — Repository Skeleton & Toolchain (1–2 days)
 **Deliverables**
 - Cargo workspace initialised with crates for `root-task`, `nine-door`, and `worker-heart` plus shared utility crates.
-- `toolchain/setup_macos_arm64.sh` script installing Homebrew dependencies, rustup, and QEMU.
-- `scripts/qemu-run.sh` that boots seL4 with externally built `elfloader`, `kernel.elf`, and `rootfs.cpio`.
+- `toolchain/setup_macos_arm64.sh` script checking for Homebrew dependencies, rustup, and QEMU - and installing if absent.
+- `scripts/qemu-run.sh` that boots seL4 with externally built `elfloader`, `kernel.elf`, also creates and uses `rootfs.cpio`.
 - `ci/size_guard.sh` enforcing < 4 MiB CPIO payload.
 
 **Checks**
@@ -20,7 +20,7 @@ The milestones below build cumulatively; do not advance until the specified chec
 - `qemu-system-aarch64 --version` reports the expected binary.
 - `ci/size_guard.sh out/rootfs.cpio` rejects oversized archives.
 
-## Milestone 1 — Boot Banner, Timer, & First IPC (3–5 days)
+## Milestone 1 — Boot Banner, Timer, & First IPC 
 **Deliverables**
 - Root task prints a banner and configures a periodic timer tick.
 - Root task spawns a secondary user component via seL4 endpoints.
@@ -31,7 +31,7 @@ The milestones below build cumulatively; do not advance until the specified chec
 - QEMU serial logs `PING 1` / `PONG 1` sequence exactly once per boot.
 - No panics; QEMU terminates cleanly via monitor command.
 
-## Milestone 2 — NineDoor Minimal 9P (1–2 weeks)
+## Milestone 2 — NineDoor Minimal 9P 
 **Deliverables**
 - Secure9P codec + fid/session table implementing `version`, `attach`, `walk`, `open`, `read`, `write`, `clunk`.
 - Synthetic namespace publishing:
@@ -46,7 +46,7 @@ The milestones below build cumulatively; do not advance until the specified chec
 - Attempting to write to `/proc/boot` fails with `Permission`.
 - Decoder corpus covers malformed frames (length mismatch, fid reuse).
 
-## Milestone 3 — Queen/Worker MVP with Roles (1 week)
+## Milestone 3 — Queen/Worker MVP with Roles 
 **Deliverables**
 - Role-aware access policy implementing `Queen` and `WorkerHeartbeat` roles.
 - `/queen/ctl` accepts JSON commands:
@@ -61,7 +61,7 @@ The milestones below build cumulatively; do not advance until the specified chec
 - Writing kill removes worker directory and closes telemetry file.
 - Role isolation tests deny cross-role reads/writes.
 
-## Milestone 4 — Bind & Mount Namespaces (1 week)
+## Milestone 4 — Bind & Mount Namespaces 
 **Deliverables**
 - Per-session mount table with `bind(from, to)` and `mount(service, at)` operations scoped to a single path.
 - Queen-only commands for namespace manipulation exposed via `/queen/ctl`.
@@ -80,7 +80,7 @@ The milestones below build cumulatively; do not advance until the specified chec
 - `cargo test` passes in CI.
 - Fuzz harness runs N iterations (configurable) without panic.
 
-## Milestone 6 — GPU Worker Integration (future, 2–3 weeks)
+## Milestone 6 — GPU Worker Integration 
 **Deliverables**
 - Define `WorkerGpu` role and extend `/queen/ctl` schema with GPU lease requests.
 - Host-side `gpu-bridge` tool implementing NVML-based discovery and 9P mirroring for `/gpu/<id>/*`.
