@@ -163,21 +163,18 @@ pub extern "C" fn kernel_start(bootinfo: *const BootInfoHeader) -> ! {
 
 #[inline(always)]
 fn emit_debug_char(byte: u8) {
-    #[cfg(all(feature = "sel4-console", target_arch = "aarch64"))]
+    #[cfg(all(target_os = "none", target_arch = "aarch64"))]
     unsafe {
         arch::debug_put_char(byte);
     }
 
-    #[cfg(not(all(feature = "sel4-console", target_arch = "aarch64")))]
+    #[cfg(not(all(target_os = "none", target_arch = "aarch64")))]
     {
         let _ = byte;
     }
 }
 
-#[cfg(all(feature = "sel4-console", not(target_arch = "aarch64")))]
-compile_error!("feature \"sel4-console\" is only supported on aarch64 targets");
-
-#[cfg(all(feature = "sel4-console", target_arch = "aarch64"))]
+#[cfg(all(target_os = "none", target_arch = "aarch64"))]
 mod arch {
     use core::arch::asm;
 
