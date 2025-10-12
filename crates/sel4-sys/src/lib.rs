@@ -439,53 +439,6 @@ mod imp {
     pub use seL4_BootInfoHeader as BootInfoHeader;
     pub use seL4_SlotRegion as SlotRegion;
     pub use seL4_UntypedDesc as UntypedDesc;
-
-    pub use seL4_CNode_CapData;
-    pub use seL4_CallWithMRs;
-    pub use seL4_CapRights;
-    pub use seL4_CapRights_All;
-    pub use seL4_CapRights_ReadWrite;
-    pub use seL4_GetCap;
-    pub use seL4_GetMR;
-    pub use seL4_MessageInfo;
-    pub use seL4_SetCap;
-    pub use seL4_SetMR;
-
-    pub use seL4_ARM_PageTable_Map;
-    pub use seL4_ARM_Page_Default;
-    pub use seL4_ARM_Page_GetAddress;
-    pub use seL4_ARM_Page_Map;
-    pub use seL4_ARM_Page_Uncached;
-    pub use seL4_ARM_Page_Unmap;
-    pub use seL4_ARM_VMAttributes;
-    pub use seL4_DebugPutChar;
-    pub use seL4_Untyped_Retype;
-    pub use seL4_Yield;
-    pub use BootInfo as seL4_BootInfo;
-
-    pub const seL4_CapNull: seL4_CPtr = 0;
-    pub const seL4_CapInitThreadTCB: seL4_CPtr = 1;
-    pub const seL4_CapInitThreadCNode: seL4_CPtr = 2;
-    pub const seL4_CapInitThreadVSpace: seL4_CPtr = 3;
-    pub const seL4_CapIRQControl: seL4_CPtr = 4;
-    pub const seL4_CapASIDControl: seL4_CPtr = 5;
-    pub const seL4_CapInitThreadASIDPool: seL4_CPtr = 6;
-    pub const seL4_CapIOPortControl: seL4_CPtr = 7;
-    pub const seL4_CapIOSpace: seL4_CPtr = 8;
-    pub const seL4_CapBootInfoFrame: seL4_CPtr = 9;
-    pub const seL4_CapInitThreadIPCBuffer: seL4_CPtr = 10;
-
-    pub use seL4_ARM_Page;
-    pub use seL4_ARM_PageTable;
-    pub use seL4_CNode;
-    pub use seL4_CPtr;
-    pub use seL4_Error;
-    pub use seL4_MessageRegisterCount;
-    pub use seL4_NoError;
-    pub use seL4_Untyped;
-    pub use seL4_VSpace;
-    pub use seL4_Word;
-    pub use MAX_BOOTINFO_UNTYPEDS;
 }
 
 #[cfg(target_os = "none")]
