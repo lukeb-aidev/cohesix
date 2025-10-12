@@ -82,6 +82,23 @@ fn main() -> Result<()> {
             qemu_args.extend(extra.split_whitespace().map(|arg| arg.to_owned()));
         }
     }
+    #[cfg(feature = "tcp")]
+    let (tcp_host, tcp_port) = {
+        let mut host = cli.tcp_host.clone();
+        if let Ok(value) = env::var("COHSH_TCP_HOST") {
+            if host == "127.0.0.1" {
+                host = value;
+            }
+        }
+        let mut port = cli.tcp_port;
+        if let Ok(value) = env::var("COHSH_TCP_PORT") {
+            if let Ok(parsed) = value.parse::<u16>() {
+                port = parsed;
+            }
+        }
+        (host, port)
+    };
+
     let transport: Box<dyn Transport> = match cli.transport {
         TransportKind::Mock => Box::new(NineDoorTransport::new(nine_door::NineDoor::new())),
         TransportKind::Qemu => Box::new(QemuTransport::new(
@@ -91,7 +108,11 @@ fn main() -> Result<()> {
             qemu_args,
         )),
         #[cfg(feature = "tcp")]
-        TransportKind::Tcp => Box::new(TcpTransport::new(cli.tcp_host.clone(), cli.tcp_port)),
+        TransportKind::Tcp => Box::new(
+            TcpTransport::new(tcp_host.clone(), tcp_port)
+                .with_timeout(std::time::Duration::from_secs(5))
+                .with_heartbeat_interval(std::time::Duration::from_secs(15)),
+        ),
     };
     let mut shell = Shell::new(transport, writer);
     shell.write_line("Welcome to Cohesix. Type 'help' for commands.")?;

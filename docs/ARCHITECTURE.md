@@ -20,7 +20,9 @@
 4. **Operational State**
    - Queen and worker processes attach through NineDoor, exchanging capability tickets that encode their role and budgets.
    - The queen drives orchestration by appending JSON commands to `/queen/ctl`.
-   - Telemetry and logs are streamed through append-only files in `/worker/<id>/telemetry` and `/log/queen.log`.
+ - Telemetry and logs are streamed through append-only files in `/worker/<id>/telemetry` and `/log/queen.log`.
+  - Remote operators attach via the TCP-backed console (`cohsh --transport tcp`) which mirrors serial semantics while applying
+    heartbeat-driven keep-alives and exponential back-off so networking stalls cannot starve the event pump.
 
 ## 3. Component Responsibilities
 ### Root Task (crate: `root-task`)
@@ -82,7 +84,9 @@
 - The console loop multiplexes serial input and TCP sessions. A shared finite-state parser enforces maximum line length,
   exponential back-off for repeated authentication failures, and funnels all verbs through capability checks before invoking
   NineDoor or root-task orchestration APIs. The serial façade sanitises control characters and exposes back-pressure counters so
-  `/proc/boot` can surface saturation data.
+  `/proc/boot` can surface saturation data. TCP transports mirror the parser exactly, emitting `PING`/`PONG` heartbeats every
+  15 seconds (configurable) and logging reconnect attempts so host operators can correlate transient drops with root-task audit
+  lines.
 - Root-task’s event pump advances the networking clock on every timer tick, services console input, and emits structured log
   lines so host tooling (`cohsh`) can mirror state over either serial or TCP transports while timers and IPC continue to run.
 

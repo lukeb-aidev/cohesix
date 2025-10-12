@@ -77,16 +77,24 @@ cargo run --bin cohsh -- \
   and `tick: 3`.
 - `scripts/cohesix-build-run.sh` now boots QEMU by invoking this transport automatically, attaching as the
   queen role and printing the initial log stream before presenting the prompt.
+- `scripts/qemu-run.sh --tcp-port 31337` forwards the root-task console onto localhost so the TCP transport
+  can attach from a second terminal. The script prints the bound port and refuses to expose non-localhost
+  listeners, guiding operators toward secure defaults.
 
 ## 6. TCP Transport
 - `cohsh --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337` connects to the root-task console listener exposed by QEMU user
-  networking (`scripts/qemu-run.sh --tcp-port 31337`).
+  networking. Environment variables (`COHSH_TCP_HOST`, `COHSH_TCP_PORT`) override the defaults so multiple developer VMs can run
+  concurrently.
 - The TCP protocol is line oriented: the client sends `ATTACH <role> <ticket?>` and expects an `OK` or `ERR` response before
-  issuing verbs such as `TAIL /log/queen.log`. Streams terminate with an `END` sentinel.
+  issuing verbs such as `TAIL /log/queen.log`. Streams terminate with an `END` sentinel and `PING` / `PONG` heartbeats keep idle
+  sessions alive.
 - Rate limiting and line-length enforcement mirror the serial console: commands longer than 128 bytes are rejected and more than
-  three failed logins within 60 seconds cause a 90-second lockout reported as `RateLimited`.
+  three failed logins within 60 seconds cause a 90-second lockout reported as `RateLimited`. `cohsh` validates worker tickets
+  locally (64 hex or base64url) and prints connection telemetry (`[cohsh][tcp] connected…`, heartbeat latency) to stderr so
+  operators know when reconnection back-off is in effect.
 - Scripts can reuse the existing NineDoor command surface because the TCP transport simply proxies console verbs into the
-  running root task.
+  running root task. Reconnects are automatic; long-running `tail` commands resume after transient drops without discarding
+  buffered output.
 
 ## 7. Packaging & Distribution
 - `cohsh` is built as a standalone static binary for macOS and Linux hosts.
@@ -97,7 +105,9 @@ cargo run --bin cohsh -- \
 - Unit tests cover command parsing and error messaging.
 - Integration tests verify spawn/kill flows against a mocked NineDoor server.
 - End-to-end test boots QEMU, attaches as queen, spawns a heartbeat worker, validates telemetry, then tears down. The TCP
-  transport suite reuses these flows by forwarding the console port and driving the same scripted session over sockets.
+  transport suite reuses these flows by forwarding the console port and driving the same scripted session over sockets. The
+  `tests/tests/qemu_tcp_console.rs` harness exercises attach/log/quit behaviour with simulated disconnects to guard the
+  reconnect logic.
 
 ## 9. Accessibility & UX
 - Commands should return deterministic, human-readable messages.
