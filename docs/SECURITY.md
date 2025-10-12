@@ -27,6 +27,9 @@
   backspace/delete set.
 - Tickets presented during `attach` are verified against a deterministic `TicketTable` seeded during boot. Audit lines are
   emitted for every denial and for each successful role assertion so operators can review access attempts in `/log/queen.log`.
+- Host tooling mirrors these controls: `cohsh` validates worker tickets locally (64 hex or base64url) and emits connection
+  telemetry (`[cohsh][tcp] reconnect attempt …`, heartbeat latency) to stderr so operators can correlate client-side failures
+  with root-task audit trails.
 - The TCP console mirrors the serial surface exactly. Line-oriented commands are terminated by `END` sentinels so scripts can
   verify log completion without relying on socket closure.
 
@@ -38,6 +41,9 @@
 - Tickets are still required for worker roles even over TCP; empty ticket submissions for worker roles fail with a transport-level
   error before touching NineDoor state. Successful `attach` calls commit the session role into the event pump so subsequent verbs
   cannot escalate privileges without minting a fresh ticket.
+- Port forwarding via `scripts/qemu-run.sh --tcp-port <port>` prints the forwarded endpoint and encourages operators to tunnel
+  through localhost-only bindings. When the flag is omitted the listener remains inaccessible from the host, reducing the attack
+  surface during bring-up.
 - The event pump emits audit records (`event-pump: init <subsystem>`, `net: poll link_up=<bool> tx_drops=<count>`, `attach
   accepted`, `attach denied`) that flow to the serial log. These records are critical for forensic review because they show which
   subsystems were live at the time of an intrusion and whether the networking queues are under pressure.

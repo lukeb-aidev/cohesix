@@ -9,6 +9,7 @@ members = [
     "apps/gpu-bridge-host",
     "crates/cohesix-ticket",
     "crates/secure9p-wire",
+    "tests",
 ]
 resolver = "2"
 

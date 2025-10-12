@@ -199,8 +199,13 @@ QEMU_ARGS=(-machine "virt,gic-version=${GIC_VER}" \
 NETWORK_ARGS=()
 
 if [[ -n "$TCP_PORT" ]]; then
-    NETWORK_ARGS=(-netdev "user,id=net0,hostfwd=tcp::${TCP_PORT}-${TCP_PORT}" -device virtio-net-device,netdev=net0)
-    log "Forwarding TCP port ${TCP_PORT} via QEMU user networking"
+    if ! [[ "$TCP_PORT" =~ ^[0-9]+$ ]]; then
+        log "Invalid TCP port: $TCP_PORT"
+        exit 1
+    fi
+    NETWORK_ARGS=(-netdev "user,id=net0,hostfwd=tcp:127.0.0.1:${TCP_PORT}-${TCP_PORT}" -device virtio-net-device,netdev=net0)
+    log "Forwarding TCP port ${TCP_PORT} via QEMU user networking (127.0.0.1 only)"
+    log "Connect using: cohsh --transport tcp --tcp-port ${TCP_PORT}"
 fi
 
 if [[ -n "$DTB_OVERRIDE" ]]; then

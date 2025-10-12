@@ -67,9 +67,12 @@ pub trait RootTaskControl {
 - `--transport tcp` connects to the root-task console listener (default `127.0.0.1:31337`) and speaks a line-oriented protocol:
   - `ATTACH <role> <ticket?>` → `OK <session>` or `ERR <reason>`
   - `TAIL <path>` streams newline-delimited log entries terminated by `END`
+  - `PING` / `PONG` probes keep sessions alive; the client sends `PING` every 15 seconds of inactivity and expects an immediate
+    `PONG` even when the server is mid-stream.
   - All other verbs reuse the serial console surface (`help`, `attach`, `tail`, `log`, `spawn`, `kill`, `quit`)
 - The TCP console enforces a maximum line length of 128 bytes and rate-limits failed authentication attempts (3 strikes within
-  60 seconds triggers a 90-second cooldown).
+  60 seconds triggers a 90-second cooldown). `cohsh` additionally validates worker tickets locally, rejecting whitespace or
+  malformed values so automation does not leak failed attempts over the wire.
 
 ## 8. Error Surface
 | Error | Meaning |

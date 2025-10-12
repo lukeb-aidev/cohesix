@@ -1,0 +1,10 @@
+# Author: Lukas Bower
+[package]
+name = "tests"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = { workspace = true }
+cohesix-ticket = { workspace = true }
+cohsh = { path = "../apps/cohsh", features = ["tcp"] }
