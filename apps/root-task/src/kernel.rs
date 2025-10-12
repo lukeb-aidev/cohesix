@@ -11,8 +11,12 @@ use core::panic::PanicInfo;
 use cohesix_ticket::Role;
 
 use crate::event::{AuditSink, EventPump, IpcDispatcher, TickEvent, TicketTable, TimerSource};
+#[cfg(feature = "net")]
+use crate::net::NetStack;
 use crate::serial::{SerialDriver, SerialError, SerialPort};
 use embedded_io::Io;
+#[cfg(feature = "net")]
+use smoltcp::wire::Ipv4Address;
 
 /// seL4 console writer backed by the kernel's `DebugPutChar` system call.
 struct DebugConsole;
@@ -148,6 +152,9 @@ pub extern "C" fn kernel_start(bootinfo: *const BootInfoHeader) -> ! {
 
     console.writeln_prefixed("Cohesix v0 (AArch64/virt)");
 
+    #[cfg(feature = "net")]
+    let (mut net_stack, _) = NetStack::new(Ipv4Address::new(10, 0, 0, 2));
+
     let driver = KernelSerial::new();
     let serial = SerialPort::new(driver);
     let timer = KernelTimer::new(5);
@@ -156,6 +163,12 @@ pub extern "C" fn kernel_start(bootinfo: *const BootInfoHeader) -> ! {
     let _ = tickets.register(Role::Queen, "bootstrap");
     let mut audit = ConsoleAudit::new(&mut console);
     let mut pump = EventPump::new(serial, timer, ipc, tickets, &mut audit);
+
+    #[cfg(feature = "net")]
+    {
+        pump = pump.with_network(&mut net_stack);
+        console.writeln_prefixed("network stack initialised");
+    }
 
     console.writeln_prefixed("event pump initialised");
 
