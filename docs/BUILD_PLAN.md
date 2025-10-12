@@ -116,24 +116,24 @@ preparing and executing tasks.
 ## Milestone 7 — Standalone Console & Networking (QEMU-first)
 **Deliverables**
 - **Serial console integration**
-  - Implement a bidirectional serial driver for QEMU (`virtio-console` preferred, PL011 fallback) that supports blocking RX/TX (no heap, no std).
-  - Replace the `kernel_start` spin loop with an event pump that polls serial input, dispatches parsed commands, and yields to networking/timer tasks.
-  - Enforce ticket and role checks before privileged verbs execute; log denied attempts to `/log/queen.log` and rate-limit repeated failures.
+  - Implement a bidirectional serial driver for QEMU (`virtio-console` preferred, PL011 fallback) that supports blocking RX/TX (no heap, no `std`) and exposes an interrupt-safe API so the event pump can integrate timer and network wake-ups.
+  - Replace the `kernel_start` spin loop with an event pump that polls serial input, dispatches parsed commands, services outgoing buffers, and yields to networking/timer tasks without starving the scheduler.
+  - Enforce ticket and role checks before privileged verbs execute; log denied attempts to `/log/queen.log`, apply exponential back-off when credentials are wrong, and drop connections that exceed retry quotas.
 - **Networking substrate**
-  - Add `smoltcp` (Rust, BSD-2) to the root-task crate under a new `net` module.
-  - Implement a virtio-net MMIO PHY for QEMU; encapsulate the device behind a trait so later UEFI NICs can be swapped in.
-  - Use `heapless::{Vec, spsc::Queue}` for RX/TX buffers to keep allocations deterministic; document memory envelopes in `docs/SECURITY.md`.
+  - Add `smoltcp` (Rust, BSD-2) to the root-task crate under a new `net` module with explicit feature gating so baseline builds stay minimal.
+  - Implement a virtio-net MMIO PHY for QEMU, encapsulate the device behind a trait that abstracts descriptor management, and document the register layout alongside reset/feature negotiation flows.
+  - Use `heapless::{Vec, spsc::Queue}` for RX/TX buffers to keep allocations deterministic; document memory envelopes in `docs/SECURITY.md` and prove queue saturation behaviour with tests.
 - **Command loop**
-  - Build a minimal serial + TCP line editor using `heapless::String` and a finite-state parser for commands (`help`, `attach`, `tail`, `log`, `quit`, plus `spawn`/`kill` stubs that forward JSON to NineDoor).
-  - Integrate the loop into the root-task main event pump alongside timer ticks, enforcing capability checks before invoking root-task RPCs.
-  - Rate-limit failed logins and enforce maximum line length to harden against trivial DoS.
+  - Build a minimal serial + TCP line editor using `heapless::String` and a finite-state parser for commands (`help`, `attach`, `tail`, `log`, `quit`, plus `spawn`/`kill` stubs that forward JSON to NineDoor) with shared code paths so behaviours remain identical across transports.
+  - Integrate the loop into the root-task main event pump alongside timer ticks, networking polls, and IPC dispatch while enforcing capability checks before invoking root-task RPCs.
+  - Rate-limit failed logins, enforce maximum line length, reject control characters outside the supported set, and record audit events whenever a session hits throttling.
 - **Remote transport**
-  - Extend `cohsh` with a TCP transport that speaks to the new in-VM listener while keeping the existing mock/QEMU flows.
-  - Reuse the current NineDoor command surface so scripting and tests stay aligned; document the new `--transport tcp` flag.
+  - Extend `cohsh` with a TCP transport that speaks to the new in-VM listener while keeping the existing mock/QEMU flows; expose reconnect/back-off behaviour and certificate-less ticket validation for the prototype environment.
+  - Reuse the current NineDoor command surface so scripting and tests stay aligned, document the new `--transport tcp` flag with examples, and ensure help text highlights transport fallbacks when networking is unavailable.
 - **Documentation & tests**
-  - Update `docs/ARCHITECTURE.md`, `docs/INTERFACES.md`, and `docs/SECURITY.md` with the networking/console design, threat model, and TCB impact.
-  - Provide QEMU integration instructions (`docs/USERLAND_AND_CLI.md`) showing serial console usage and remote `cohsh` attachment.
-  - Add unit tests for the command parser (invalid verbs, overlong lines) and integration tests that boot QEMU, connect via TCP, and run a scripted session.
+  - Update `docs/ARCHITECTURE.md`, `docs/INTERFACES.md`, and `docs/SECURITY.md` with the networking/console design, threat model, and TCB impact including memory budgeting tables for serial/net buffers.
+  - Provide QEMU integration instructions (`docs/USERLAND_AND_CLI.md`) showing serial console usage, remote `cohsh` attachment, and recommended port-forwarding commands for macOS host tooling.
+  - Add unit tests for the command parser (invalid verbs, overlong lines), virtio queue wrappers, and integration tests that boot QEMU, connect via TCP, run scripted sessions, and verify audit log outputs.
 
 **Checks**
 - QEMU boot brings up the root task, configures smoltcp, accepts serial commands, and listens for TCP attachments on the configured port.
@@ -147,12 +147,12 @@ Title/ID: m7-serial-rx
 Goal: Provide bidirectional serial I/O for the root-task console in QEMU.
 Inputs: docs/ARCHITECTURE.md §2; docs/INTERFACES.md §7; seL4 virtio-console/PL011 specs; `embedded-io` 0.4 (optional traits).
 Changes:
-  - crates/root-task/src/console/serial.rs — MMIO-backed RX/TX driver exposing `read_byte`/`write_byte` without heap allocation.
-  - crates/root-task/src/kernel.rs — initialise the serial driver, hook it into the event pump, and remove the legacy busy loop.
-  - crates/root-task/tests/serial_stub.rs — host-side stub verifying backspace/line termination handling.
-Commands: cd crates/root-task && cargo test serial_stub && cargo check --features net
-Checks: Serial RX consumes interactive input without panics; console loop handles backspace/newline and rate limiting in QEMU.
-Deliverables: Root-task serial driver initialised during boot with regression tests for RX edge cases.
+  - crates/root-task/src/console/serial.rs — MMIO-backed RX/TX driver exposing `read_byte`/`write_byte` without heap allocation, plus interrupt acknowledgement helpers and a shared rate-limiter primitive for reuse by the console loop.
+  - crates/root-task/src/kernel.rs — initialise the serial driver, hook it into the event pump, remove the legacy busy loop, and document the wake-up ordering for timer/net/serial sources.
+  - crates/root-task/tests/serial_stub.rs — host-side stub verifying backspace/line termination handling, throttle escalation, and the audit log entries emitted by repeated authentication failures.
+Commands: cd crates/root-task && cargo test serial_stub && cargo check --features net && cargo clippy --features net --tests
+Checks: Serial RX consumes interactive input without panics; console loop handles backspace/newline, rate limiting, and audit logging in QEMU.
+Deliverables: Root-task serial driver initialised during boot with regression tests for RX edge cases and throttling safeguards.
 ```
 
 ```
@@ -160,13 +160,13 @@ Title/ID: m7-net-substrate
 Goal: Wire up a deterministic networking stack for the root task.
 Inputs: docs/ARCHITECTURE.md §§4,7; docs/INTERFACES.md §§1,3,6; docs/SECURITY.md §4; smoltcp 0.11; heapless 0.8; portable-atomic 1.6.
 Changes:
-  - crates/root-task/Cargo.toml — add smoltcp, heapless, portable-atomic dependencies behind `net` feature.
-  - crates/root-task/src/net/mod.rs — introduce PHY trait, virtio-net implementation (descriptor rings, IRQ handler), smoltcp device glue, and bounded queues.
-  - crates/root-task/src/main.rs — initialise networking, register poller within the root-task event loop.
-  - docs/SECURITY.md — document memory envelopes and networking threat considerations.
-Commands: cd crates/root-task && cargo check --features net && cargo test --features net net::tests
-Checks: Smoltcp interface boots in QEMU with deterministic heap usage; unit tests cover RX/TX queue saturation, link bring-up, and error paths.
-Deliverables: Root-task networking module with virtio-net backend, updated security documentation, passing feature-gated tests.
+  - crates/root-task/Cargo.toml — add `smoltcp`, `heapless`, and `portable-atomic` dependencies behind a `net` feature along with feature docs explaining footprint impact.
+  - crates/root-task/src/net/mod.rs — introduce PHY trait, virtio-net implementation (descriptor rings, IRQ handler), smoltcp device glue, bounded queues, and defensive checks for descriptor exhaustion.
+  - crates/root-task/src/main.rs — initialise networking, register poller within the root-task event loop, and expose metrics hooks so audit logs can capture link bring-up status.
+  - docs/SECURITY.md — document memory envelopes, networking threat considerations, and mitigations for RX flooding or malformed descriptors.
+Commands: cd crates/root-task && cargo check --features net && cargo test --features net net::tests && cargo clippy --features net --tests
+Checks: Smoltcp interface boots in QEMU with deterministic heap usage; unit tests cover RX/TX queue saturation, link bring-up, error paths, and descriptor validation.
+Deliverables: Root-task networking module with virtio-net backend, updated security documentation, and passing feature-gated tests reinforced by lint coverage.
 ```
 
 ```
@@ -174,12 +174,12 @@ Title/ID: m7-console-loop
 Goal: Provide an authenticated serial/TCP command shell bound to capability checks.
 Inputs: docs/INTERFACES.md §§3-5,8; docs/SECURITY.md §5; existing root-task timer/IPC code; heapless 0.8.
 Changes:
-  - crates/root-task/src/console/mod.rs — add finite-state parser, rate limiter, and shared line editor for serial/TCP sources.
-  - crates/root-task/src/main.rs — integrate console loop with networking poller and ticket validator.
-  - crates/root-task/tests/console_parser.rs — unit tests for verbs, overlong lines, and login throttling.
-Commands: cd crates/root-task && cargo test --features net console_parser
-Checks: Parser rejects invalid verbs, enforces max length, and rate limits failed logins; capability enforcement tested via mocks.
-Deliverables: Hardened console loop with comprehensive parser tests integrated into root-task.
+  - crates/root-task/src/console/mod.rs — add finite-state parser, rate limiter, shared line editor for serial/TCP sources, and an authentication/session manager that reuses ticket validation helpers.
+  - crates/root-task/src/main.rs — integrate console loop with networking poller and ticket validator while ensuring timer/NineDoor tasks retain service guarantees.
+  - crates/root-task/tests/console_parser.rs — unit tests for verbs, overlong lines, login throttling, Unicode/control character handling, and audit log integration.
+Commands: cd crates/root-task && cargo test --features net console_parser && cargo clippy --features net --tests
+Checks: Parser rejects invalid verbs, enforces max length, rate limits failed logins, normalises newline sequences, and verifies capability enforcement via mocks.
+Deliverables: Hardened console loop with comprehensive parser tests integrated into root-task and lint-clean CI coverage.
 ```
 
 ```
@@ -187,13 +187,13 @@ Title/ID: m7-cohsh-tcp
 Goal: Extend cohsh CLI with TCP transport parity while retaining existing flows.
 Inputs: docs/USERLAND_AND_CLI.md §§2,6; docs/INTERFACES.md §§3,7; existing cohsh mock/QEMU transport code.
 Changes:
-  - apps/cohsh/Cargo.toml — gate TCP transport feature and dependencies.
-  - apps/cohsh/src/transport/tcp.rs — implement TCP client with ticket authentication and reconnect handling.
-  - apps/cohsh/src/main.rs — add `--transport tcp` flag and configuration plumbing.
-  - docs/USERLAND_AND_CLI.md — document CLI usage, examples, and regression scripts covering serial and TCP paths.
-Commands: cd apps/cohsh && cargo test --features tcp && cargo clippy --features tcp
-Checks: CLI attaches via TCP to QEMU instance, tails logs, forwards NineDoor commands, and retains existing regression flow for serial transport.
-Deliverables: Feature-complete TCP transport with documentation and tests validating CLI behaviour.
+  - apps/cohsh/Cargo.toml — gate TCP transport feature and dependencies, annotate default-off status, and document cross-compilation requirements for macOS hosts.
+  - apps/cohsh/src/transport/tcp.rs — implement TCP client with ticket authentication, reconnect handling, heartbeats, and telemetry logging for CLI operators.
+  - apps/cohsh/src/main.rs — add `--transport tcp` flag and configuration plumbing, including environment overrides and validation for mutually exclusive serial parameters.
+  - docs/USERLAND_AND_CLI.md — document CLI usage, examples, regression scripts covering serial and TCP paths, and troubleshooting steps for QEMU port forwarding.
+Commands: cd apps/cohsh && cargo test --features tcp && cargo clippy --features tcp --tests && cargo fmt --check
+Checks: CLI attaches via TCP to QEMU instance, tails logs, forwards NineDoor commands, retains existing regression flow for serial transport, and recovers gracefully from simulated disconnects.
+Deliverables: Feature-complete TCP transport with documentation, tests validating CLI behaviour, and formatting/lint coverage.
 ```
 
 ```
@@ -201,14 +201,14 @@ Title/ID: m7-docs-integration-tests
 Goal: Finalise documentation updates and cross-stack integration tests for networking milestone.
 Inputs: docs/ARCHITECTURE.md, docs/INTERFACES.md, docs/SECURITY.md, docs/USERLAND_AND_CLI.md; existing integration harness scripts.
 Changes:
-  - docs/ARCHITECTURE.md — describe networking module, console loop, and PHY abstraction.
-  - docs/INTERFACES.md — specify TCP listener protocol, authentication handshake, and console commands.
-  - docs/SECURITY.md — extend threat model with networking attack surfaces and mitigations.
-  - tests/integration/qemu_tcp_console.rs — scripted boot + TCP session exercising help/attach/tail/log/quit verbs.
-  - scripts/qemu-run.sh — accept networking flags, expose forwarded TCP port, and document usage.
-Commands: ./scripts/qemu-run.sh --net tap --console tcp --exit-after 120 && cargo test -p tests --test qemu_tcp_console
-Checks: Automated QEMU run brings up TCP console reachable from host; integration test passes end-to-end; documentation reviewed for consistency.
-Deliverables: Updated documentation set, automation scripts, and passing QEMU TCP console integration test.
+  - docs/ARCHITECTURE.md — describe networking module, console loop, PHY abstraction, and update diagrams to illustrate serial/net event pump interactions.
+  - docs/INTERFACES.md — specify TCP listener protocol, authentication handshake, console commands, and error codes for throttling or malformed frames.
+  - docs/SECURITY.md — extend threat model with networking attack surfaces, mitigations, audit expectations, and documented memory bounds.
+  - tests/integration/qemu_tcp_console.rs — scripted boot + TCP session exercising help/attach/tail/log/quit verbs, plus negative tests for failed logins and overlong lines.
+  - scripts/qemu-run.sh — accept networking flags, expose forwarded TCP port, document usage, and emit helpful diagnostics when host prerequisites (tap/tuntap) are missing.
+Commands: ./scripts/qemu-run.sh --net tap --console tcp --exit-after 120 && cargo test -p tests --test qemu_tcp_console && cargo clippy -p tests --tests
+Checks: Automated QEMU run brings up TCP console reachable from host; integration test passes end-to-end; documentation reviewed for consistency and security sign-off.
+Deliverables: Updated documentation set, automation scripts, and passing QEMU TCP console integration test with lint coverage.
 ```
 
 **Foundation Allowlist (for dependency reviews / Web Codex fetches)**
