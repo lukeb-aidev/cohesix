@@ -7,6 +7,7 @@ Cohesix replaces the traditional Unix shell with a deterministic file-oriented c
 ## 2. Command Surface
 | Command | Role | Effect |
 |---------|------|--------|
+| `help` | All | Print command summary and active transports |
 | `ls [path]` | All | Enumerate directory entries via `walk` + `read` |
 | `cat <path>` | All | Stream file contents |
 | `echo <text> > <path>` | Queen, Worker roles | Append text to append-only files |
@@ -77,17 +78,28 @@ cargo run --bin cohsh -- \
 - `scripts/cohesix-build-run.sh` now boots QEMU by invoking this transport automatically, attaching as the
   queen role and printing the initial log stream before presenting the prompt.
 
-## 6. Packaging & Distribution
+## 6. TCP Transport
+- `cohsh --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337` connects to the root-task console listener exposed by QEMU user
+  networking (`scripts/qemu-run.sh --tcp-port 31337`).
+- The TCP protocol is line oriented: the client sends `ATTACH <role> <ticket?>` and expects an `OK` or `ERR` response before
+  issuing verbs such as `TAIL /log/queen.log`. Streams terminate with an `END` sentinel.
+- Rate limiting and line-length enforcement mirror the serial console: commands longer than 128 bytes are rejected and more than
+  three failed logins within 60 seconds cause a 90-second lockout reported as `RateLimited`.
+- Scripts can reuse the existing NineDoor command surface because the TCP transport simply proxies console verbs into the
+  running root task.
+
+## 7. Packaging & Distribution
 - `cohsh` is built as a standalone static binary for macOS and Linux hosts.
 - Provide Homebrew formula and Cargo install instructions once CLI stabilises.
 - CLI config (`~/.config/cohesix/cohsh.toml`) stores host transport endpoints and saved tickets.
 
-## 7. Testing Checklist
+## 8. Testing Checklist
 - Unit tests cover command parsing and error messaging.
 - Integration tests verify spawn/kill flows against a mocked NineDoor server.
-- End-to-end test boots QEMU, attaches as queen, spawns a heartbeat worker, validates telemetry, then tears down.
+- End-to-end test boots QEMU, attaches as queen, spawns a heartbeat worker, validates telemetry, then tears down. The TCP
+  transport suite reuses these flows by forwarding the console port and driving the same scripted session over sockets.
 
-## 8. Accessibility & UX
+## 9. Accessibility & UX
 - Commands should return deterministic, human-readable messages.
 - Provide `help` command summarising available actions per role.
 - Consider tab completion via Rustyline once base functionality stabilises.

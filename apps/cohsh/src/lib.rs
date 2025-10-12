@@ -6,6 +6,12 @@
 //! Milestone 2 replaces the mock transport with the live codec and synthetic
 //! namespace so operators can tail logs using the real filesystem protocol.
 
+#[cfg(feature = "tcp")]
+pub mod transport;
+
+#[cfg(feature = "tcp")]
+pub use transport::tcp::TcpTransport;
+
 use std::fmt;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
@@ -220,7 +226,7 @@ impl QemuTransport {
     {
         thread::spawn(move || {
             let reader = BufReader::new(stream);
-            for line in reader.lines().flatten() {
+            for line in reader.lines().map_while(Result::ok) {
                 if store {
                     let mut guard = lines.lock().expect("log mutex poisoned");
                     guard.push(line);
@@ -600,7 +606,7 @@ fn parse_path(path: &str) -> Result<Vec<String>> {
         if component == "." || component == ".." {
             return Err(anyhow!("path component '{component}' is not permitted"));
         }
-        if component.as_bytes().iter().any(|&b| b == 0) {
+        if component.as_bytes().contains(&0) {
             return Err(anyhow!("path component contains NUL byte"));
         }
         components.push(component.to_owned());

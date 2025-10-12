@@ -91,7 +91,7 @@ impl NineDoor {
     /// Construct a new NineDoor server populated with the synthetic namespace.
     #[must_use]
     pub fn new() -> Self {
-        Self::new_with_clock(Arc::new(SystemClock::default()))
+        Self::new_with_clock(Arc::new(SystemClock))
     }
 
     /// Construct a server using the supplied clock (primarily for tests).
@@ -165,7 +165,7 @@ impl InProcessConnection {
     fn new(server: Arc<Mutex<ServerCore>>, session: SessionId) -> Self {
         Self {
             server,
-            codec: Codec::default(),
+            codec: Codec,
             session,
             next_tag: 1,
             negotiated_msize: MAX_MSIZE,
@@ -323,7 +323,7 @@ struct ServerCore {
 impl ServerCore {
     fn new(clock: Arc<dyn Clock>) -> Self {
         Self {
-            codec: Codec::default(),
+            codec: Codec,
             control: ControlPlane::new(),
             next_session: 1,
             sessions: HashMap::new(),

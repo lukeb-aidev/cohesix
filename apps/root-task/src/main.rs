@@ -6,10 +6,10 @@
 #![doc = "Root task entry points for host and seL4 builds."]
 
 #[cfg(target_os = "none")]
-mod kernel;
+use root_task::kernel;
 
 #[cfg(not(target_os = "none"))]
-mod host;
+use root_task::host;
 
 #[cfg(not(target_os = "none"))]
 fn main() -> host::Result<()> {

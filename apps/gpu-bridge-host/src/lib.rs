@@ -133,7 +133,7 @@ impl GpuBridge {
     /// Create a bridge using the mock inventory.
     pub fn mock() -> Self {
         Self {
-            inventory: Box::new(MockInventory::default()),
+            inventory: Box::new(MockInventory),
         }
     }
 

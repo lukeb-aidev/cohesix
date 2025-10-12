@@ -5,8 +5,39 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
+[features]
+default = []
+net = [
+    "dep:heapless",
+    "dep:portable-atomic",
+    "dep:smoltcp",
+    "dep:spin",
+]
+
 [dependencies]
 cohesix-ticket = { workspace = true }
+
+[dependencies.heapless]
+version = "0.8"
+optional = true
+
+[dependencies.portable-atomic]
+version = "1.6"
+optional = true
+
+[dependencies.smoltcp]
+version = "0.11"
+optional = true
+default-features = false
+features = [
+    "medium-ethernet",
+    "proto-ipv4",
+    "socket-tcp",
+]
+
+[dependencies.spin]
+version = "0.9"
+optional = true
 
 [target.'cfg(not(target_os = "none"))'.dependencies]
 anyhow = { workspace = true }

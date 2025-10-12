@@ -34,7 +34,7 @@ PY
 
 usage() {
     cat <<'USAGE'
-Usage: scripts/qemu-run.sh --elfloader <path> --kernel <path> --root-task <path> [--out-dir <dir>] [--qemu <bin>]
+Usage: scripts/qemu-run.sh --elfloader <path> --kernel <path> --root-task <path> [--out-dir <dir>] [--qemu <bin>] [--tcp-port <port>]
 
 Boot seL4 in QEMU using externally built artefacts while packaging the Cohesix
 root task into a CPIO archive. The script mirrors the expectations in
@@ -50,6 +50,7 @@ OUT_DIR="out"
 QEMU_BIN="qemu-system-aarch64"
 SEL4_BUILD_DIR="${SEL4_BUILD:-$HOME/seL4/build}"
 DTB_OVERRIDE=""
+TCP_PORT=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -79,6 +80,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --dtb)
             DTB_OVERRIDE="$2"
+            shift 2
+            ;;
+        --tcp-port)
+            TCP_PORT="$2"
             shift 2
             ;;
         -h|--help)
@@ -191,6 +196,13 @@ QEMU_ARGS=(-machine "virt,gic-version=${GIC_VER}" \
     -device loader,file="$KERNEL",addr=0x70000000,force-raw=on \
     -device loader,file="$ROOT_TASK",addr=0x80000000,force-raw=on)
 
+NETWORK_ARGS=()
+
+if [[ -n "$TCP_PORT" ]]; then
+    NETWORK_ARGS=(-netdev "user,id=net0,hostfwd=tcp::${TCP_PORT}-${TCP_PORT}" -device virtio-net-device,netdev=net0)
+    log "Forwarding TCP port ${TCP_PORT} via QEMU user networking"
+fi
+
 if [[ -n "$DTB_OVERRIDE" ]]; then
     if [[ ! -f "$DTB_OVERRIDE" ]]; then
         log "DTB override not found: $DTB_OVERRIDE"
@@ -200,6 +212,6 @@ if [[ -n "$DTB_OVERRIDE" ]]; then
     QEMU_ARGS+=(-dtb "$DTB_OVERRIDE")
 fi
 
-log "Prepared QEMU command: ${QEMU_ARGS[*]}"
+log "Prepared QEMU command: ${QEMU_ARGS[*]} ${NETWORK_ARGS[*]}"
 
-exec "$QEMU_BIN" "${QEMU_ARGS[@]}"
+exec "$QEMU_BIN" "${QEMU_ARGS[@]}" "${NETWORK_ARGS[@]}"
