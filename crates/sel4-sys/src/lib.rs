@@ -143,6 +143,18 @@ mod imp {
     pub const seL4_FailedLookup: seL4_Error = 6;
     pub const seL4_NotEnoughMemory: seL4_Error = 10;
 
+    pub const seL4_CapNull: seL4_CPtr = 0;
+    pub const seL4_CapInitThreadTCB: seL4_CPtr = 1;
+    pub const seL4_CapInitThreadCNode: seL4_CPtr = 2;
+    pub const seL4_CapInitThreadVSpace: seL4_CPtr = 3;
+    pub const seL4_CapIRQControl: seL4_CPtr = 4;
+    pub const seL4_CapASIDControl: seL4_CPtr = 5;
+    pub const seL4_CapInitThreadASIDPool: seL4_CPtr = 6;
+    pub const seL4_CapIOPortControl: seL4_CPtr = 7;
+    pub const seL4_CapIOSpace: seL4_CPtr = 8;
+    pub const seL4_CapBootInfoFrame: seL4_CPtr = 9;
+    pub const seL4_CapInitThreadIPCBuffer: seL4_CPtr = 10;
+
     #[repr(transparent)]
     #[derive(Clone, Copy)]
     pub struct seL4_ARM_VMAttributes(pub seL4_Word);
@@ -345,8 +357,8 @@ mod imp {
         seL4_MessageInfo { words: [info_out] }
     }
 
-    pub const seL4_SysCall: seL4_Word = (!0usize); // -1 in two's complement
-    pub const seL4_SysReplyRecv: seL4_Word = (!1usize); // -2
+    pub const seL4_SysCall: seL4_Word = !0usize; // -1 in two's complement
+    pub const seL4_SysReplyRecv: seL4_Word = !1usize; // -2
 
     /// seL4_Untyped_Retype syscall.
     #[inline(always)]
@@ -537,16 +549,16 @@ mod host_stub {
     pub const seL4_MessageRegisterCount: usize = 4;
 
     pub const seL4_CapNull: seL4_CPtr = 0;
-    pub const seL4_CapInitThreadTCB: seL4_CPtr = 0;
-    pub const seL4_CapInitThreadCNode: seL4_CPtr = 0;
-    pub const seL4_CapInitThreadVSpace: seL4_CPtr = 0;
-    pub const seL4_CapIRQControl: seL4_CPtr = 0;
-    pub const seL4_CapASIDControl: seL4_CPtr = 0;
-    pub const seL4_CapInitThreadASIDPool: seL4_CPtr = 0;
-    pub const seL4_CapIOPortControl: seL4_CPtr = 0;
-    pub const seL4_CapIOSpace: seL4_CPtr = 0;
-    pub const seL4_CapBootInfoFrame: seL4_CPtr = 0;
-    pub const seL4_CapInitThreadIPCBuffer: seL4_CPtr = 0;
+    pub const seL4_CapInitThreadTCB: seL4_CPtr = 1;
+    pub const seL4_CapInitThreadCNode: seL4_CPtr = 2;
+    pub const seL4_CapInitThreadVSpace: seL4_CPtr = 3;
+    pub const seL4_CapIRQControl: seL4_CPtr = 4;
+    pub const seL4_CapASIDControl: seL4_CPtr = 5;
+    pub const seL4_CapInitThreadASIDPool: seL4_CPtr = 6;
+    pub const seL4_CapIOPortControl: seL4_CPtr = 7;
+    pub const seL4_CapIOSpace: seL4_CPtr = 8;
+    pub const seL4_CapBootInfoFrame: seL4_CPtr = 9;
+    pub const seL4_CapInitThreadIPCBuffer: seL4_CPtr = 10;
 
     pub const seL4_CapRights_All: seL4_CapRights = 0;
     pub const seL4_CapRights_ReadWrite: seL4_CapRights = 0;

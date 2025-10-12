@@ -14,8 +14,9 @@ use crate::event::{AuditSink, EventPump, IpcDispatcher, TickEvent, TicketTable, 
 #[cfg(feature = "net")]
 use crate::net::NetStack;
 use crate::sel4::KernelEnv;
-use crate::serial::pl011::Pl011;
-use crate::serial::SerialPort;
+use crate::serial::{
+    pl011::Pl011, SerialPort, DEFAULT_LINE_CAPACITY, DEFAULT_RX_CAPACITY, DEFAULT_TX_CAPACITY,
+};
 #[cfg(feature = "net")]
 use smoltcp::wire::Ipv4Address;
 
@@ -164,7 +165,7 @@ pub extern "C" fn kernel_start(bootinfo: *const BootInfoHeader) -> ! {
         .map_device(PL011_PADDR)
         .expect("PL011 UART mapping failed");
     let driver = Pl011::new(uart_region.ptr());
-    let serial = SerialPort::new(driver);
+    let serial = SerialPort::<_, DEFAULT_RX_CAPACITY, DEFAULT_TX_CAPACITY, DEFAULT_LINE_CAPACITY>::new(driver);
 
     #[cfg(all(feature = "net", target_os = "none"))]
     let mut net_stack = NetStack::new(&mut env, Ipv4Address::new(10, 0, 0, 2));
@@ -174,6 +175,9 @@ pub extern "C" fn kernel_start(bootinfo: *const BootInfoHeader) -> ! {
     let ipc = KernelIpc;
     let mut tickets: TicketTable<4> = TicketTable::new();
     let _ = tickets.register(Role::Queen, "bootstrap");
+    #[cfg(feature = "net")]
+    console.writeln_prefixed("network stack initialised");
+    console.writeln_prefixed("initialising event pump");
     let mut audit = ConsoleAudit::new(&mut console);
     let mut pump = EventPump::new(serial, timer, ipc, tickets, &mut audit);
 
@@ -185,10 +189,7 @@ pub extern "C" fn kernel_start(bootinfo: *const BootInfoHeader) -> ! {
     #[cfg(feature = "net")]
     {
         pump = pump.with_network(&mut net_stack);
-        console.writeln_prefixed("network stack initialised");
     }
-
-    console.writeln_prefixed("event pump initialised");
 
     loop {
         pump.poll();

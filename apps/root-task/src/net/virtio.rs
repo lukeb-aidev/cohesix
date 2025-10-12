@@ -1,17 +1,13 @@
 #![cfg(target_os = "none")]
+#![allow(unsafe_code)]
 
-extern crate alloc;
-
-use alloc::vec;
-use alloc::vec::Vec;
 use core::ptr::{read_volatile, write_volatile, NonNull};
 
 use heapless::{Deque, String as HeaplessString, Vec as HeaplessVec};
-use smoltcp::iface::{Config as IfaceConfig, Interface, SocketHandle, SocketSet};
+use sel4_sys::seL4_Error;
+use smoltcp::iface::{Config as IfaceConfig, Interface, SocketHandle, SocketSet, SocketStorage};
 use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
-use smoltcp::socket::tcp::State as TcpState;
-use smoltcp::socket::{SocketStorage, TcpSocket};
-use smoltcp::storage::RingBuffer;
+use smoltcp::socket::tcp::{Socket as TcpSocket, SocketBuffer as TcpSocketBuffer, State as TcpState};
 use smoltcp::time::Instant;
 use smoltcp::wire::{
     EthernetAddress, HardwareAddress, IpAddress, IpCidr, IpListenEndpoint, Ipv4Address,
@@ -47,6 +43,18 @@ const TX_QUEUE_SIZE: usize = 16;
 const TCP_LISTEN_PORT: u16 = 31337;
 const TCP_RX_BUFFER: usize = 2048;
 const TCP_TX_BUFFER: usize = 2048;
+const SOCKET_CAPACITY: usize = 4;
+
+static SOCKET_STORAGE_IN_USE: portable_atomic::AtomicBool =
+    portable_atomic::AtomicBool::new(false);
+static mut SOCKET_STORAGE: [SocketStorage<'static>; SOCKET_CAPACITY] =
+    [SocketStorage::EMPTY; SOCKET_CAPACITY];
+static TCP_RX_STORAGE_IN_USE: portable_atomic::AtomicBool =
+    portable_atomic::AtomicBool::new(false);
+static mut TCP_RX_STORAGE: [u8; TCP_RX_BUFFER] = [0u8; TCP_RX_BUFFER];
+static TCP_TX_STORAGE_IN_USE: portable_atomic::AtomicBool =
+    portable_atomic::AtomicBool::new(false);
+static mut TCP_TX_STORAGE: [u8; TCP_TX_BUFFER] = [0u8; TCP_TX_BUFFER];
 
 /// Shared monotonic clock for the interface.
 #[derive(Debug, Default)]
@@ -108,7 +116,11 @@ impl NetStack {
             }
         });
 
-        let sockets = SocketSet::new(Vec::<SocketStorage<'static>>::new());
+        assert!(
+            !SOCKET_STORAGE_IN_USE.swap(true, portable_atomic::Ordering::AcqRel),
+            "virtio-net socket storage already initialised"
+        );
+        let sockets = SocketSet::new(unsafe { &mut SOCKET_STORAGE[..] });
         let mut stack = Self {
             clock,
             device,
@@ -124,10 +136,16 @@ impl NetStack {
     }
 
     fn initialise_socket(&mut self) {
-        let rx_storage: Vec<u8> = vec![0; TCP_RX_BUFFER];
-        let tx_storage: Vec<u8> = vec![0; TCP_TX_BUFFER];
-        let rx_buffer = RingBuffer::new(rx_storage);
-        let tx_buffer = RingBuffer::new(tx_storage);
+        assert!(
+            !TCP_RX_STORAGE_IN_USE.swap(true, portable_atomic::Ordering::AcqRel),
+            "virtio-net TCP RX storage already initialised"
+        );
+        assert!(
+            !TCP_TX_STORAGE_IN_USE.swap(true, portable_atomic::Ordering::AcqRel),
+            "virtio-net TCP TX storage already initialised"
+        );
+        let rx_buffer = unsafe { TcpSocketBuffer::new(&mut TCP_RX_STORAGE[..]) };
+        let tx_buffer = unsafe { TcpSocketBuffer::new(&mut TCP_TX_STORAGE[..]) };
         let tcp_socket = TcpSocket::new(rx_buffer, tx_buffer);
         self.tcp_handle = self.sockets.add(tcp_socket);
     }
@@ -166,42 +184,38 @@ impl NetStack {
         }
 
         if socket.can_recv() {
+            let mut temp = [0u8; 256];
             while socket.can_recv() {
-                let mut produced_line = false;
-                let result = socket.recv(|buffer| {
-                    let mut processed = 0;
-                    for &byte in buffer {
-                        processed += 1;
-                        match byte {
-                            b'\r' => {}
-                            b'\n' => {
-                                if !self.line_buffer.is_empty() {
-                                    let line = self.line_buffer.clone();
-                                    let _ = self.console_lines.push_back(line);
-                                    produced_line = true;
-                                    self.line_buffer.clear();
+                match socket.recv_slice(&mut temp) {
+                    Ok(count) if count > 0 => {
+                        for &byte in &temp[..count] {
+                            match byte {
+                                b'\r' => {}
+                                b'\n' => {
+                                    if !self.line_buffer.is_empty() {
+                                        let line = self.line_buffer.clone();
+                                        let _ = self.console_lines.push_back(line);
+                                        self.line_buffer.clear();
+                                        activity = true;
+                                    }
                                 }
+                                0x08 | 0x7f => {
+                                    self.line_buffer.pop();
+                                }
+                                b if b.is_ascii() && !b.is_ascii_control() => {
+                                    let _ = self.line_buffer.push(b as char);
+                                }
+                                _ => {}
                             }
-                            0x08 | 0x7f => {
-                                self.line_buffer.pop();
-                            }
-                            b if b.is_ascii() && !b.is_ascii_control() => {
-                                let _ = self.line_buffer.push(b as char);
-                            }
-                            _ => {}
                         }
                     }
-                    (processed, produced_line)
-                });
-                match result {
-                    Ok((_, generated)) => {
-                        if generated {
-                            activity = true;
-                        }
-                    }
-                    Err(_) => break,
+                    _ => break,
                 }
             }
+        }
+
+        if socket.can_send() && !self.console_lines.is_empty() {
+            let _ = socket.send_slice(b"");
         }
 
         match socket.state() {
@@ -242,6 +256,14 @@ impl NetPoller for NetStack {
         while let Some(line) = self.console_lines.pop_front() {
             visitor(line);
         }
+    }
+}
+
+impl Drop for NetStack {
+    fn drop(&mut self) {
+        SOCKET_STORAGE_IN_USE.store(false, portable_atomic::Ordering::Release);
+        TCP_RX_STORAGE_IN_USE.store(false, portable_atomic::Ordering::Release);
+        TCP_TX_STORAGE_IN_USE.store(false, portable_atomic::Ordering::Release);
     }
 }
 
@@ -338,7 +360,7 @@ impl VirtioNet {
             );
             self.rx_queue.push_avail(idx);
         }
-        self.rx_queue.notify(&self.regs, RX_QUEUE_INDEX);
+        self.rx_queue.notify(&mut self.regs, RX_QUEUE_INDEX);
     }
 
     fn mac(&self) -> EthernetAddress {
@@ -370,7 +392,7 @@ impl VirtioNet {
                 VIRTQ_DESC_F_WRITE,
             );
             self.rx_queue.push_avail(id);
-            self.rx_queue.notify(&self.regs, RX_QUEUE_INDEX);
+            self.rx_queue.notify(&mut self.regs, RX_QUEUE_INDEX);
         }
     }
 
@@ -385,13 +407,13 @@ impl VirtioNet {
 
     fn submit_tx(&mut self, id: u16, len: usize) {
         if let Some(buffer) = self.tx_buffers.get_mut(id as usize) {
-            let slice = buffer.as_mut_slice();
             let length = len.min(MAX_FRAME_LEN);
             self.tx_queue
                 .setup_descriptor(id, buffer.paddr() as u64, length as u32, 0);
             self.tx_queue.push_avail(id);
-            self.tx_queue.notify(&self.regs, TX_QUEUE_INDEX);
+            self.tx_queue.notify(&mut self.regs, TX_QUEUE_INDEX);
             // zero the unused portion to avoid leaking stale data.
+            let slice = buffer.as_mut_slice();
             for byte in &mut slice[length..] {
                 *byte = 0;
             }
@@ -484,17 +506,21 @@ impl TxToken for VirtioTxToken {
     {
         let driver = unsafe { &mut *self.driver };
         if let Some(id) = self.desc {
-            let buffer = driver
-                .tx_buffers
-                .get_mut(id as usize)
-                .expect("tx descriptor out of range");
-            let slice = &mut buffer.as_mut_slice()[..len.min(MAX_FRAME_LEN)];
-            let result = f(slice);
-            driver.submit_tx(id, slice.len());
+            let length = len.min(MAX_FRAME_LEN);
+            let result = {
+                let buffer = driver
+                    .tx_buffers
+                    .get_mut(id as usize)
+                    .expect("tx descriptor out of range");
+                let slice = &mut buffer.as_mut_slice()[..length];
+                f(slice)
+            };
+            driver.submit_tx(id, length);
             result
         } else {
-            let mut scratch = vec![0u8; len];
-            let result = f(&mut scratch);
+            let length = len.min(MAX_FRAME_LEN);
+            let mut scratch = [0u8; MAX_FRAME_LEN];
+            let result = f(&mut scratch[..length]);
             driver.tx_drops = driver.tx_drops.saturating_add(1);
             result
         }
@@ -597,18 +623,17 @@ impl VirtioRegs {
 
     fn read_mac(&self) -> Option<EthernetAddress> {
         let mut bytes = [0u8; 6];
+        let base = Registers::CONFIG as usize;
         for (idx, byte) in bytes.iter_mut().enumerate() {
-            *byte = self.read8(Registers::CONFIG + idx as u32);
+            *byte = unsafe {
+                read_volatile(self.base().as_ptr().add(base + idx) as *const u8)
+            };
         }
         if bytes.iter().all(|&b| b == 0) {
             None
         } else {
             Some(EthernetAddress::from_bytes(&bytes))
         }
-    }
-
-    fn read8(&self, offset: Registers) -> u8 {
-        unsafe { read_volatile(self.base().as_ptr().add(offset as usize) as *const u8) }
     }
 }
 
@@ -703,7 +728,7 @@ impl VirtQueue {
         }
     }
 
-    fn notify(&self, regs: &mut VirtioRegs, queue: u32) {
+    fn notify(&mut self, regs: &mut VirtioRegs, queue: u32) {
         regs.notify(queue);
     }
 
