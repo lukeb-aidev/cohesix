@@ -1,18 +1,19 @@
 #![cfg(target_os = "none")]
 #![allow(dead_code)]
 #![allow(clippy::missing_panics_doc)]
+#![allow(unsafe_code)]
 
 use core::ptr::NonNull;
 
 use heapless::Vec;
 use sel4_sys::{
-    seL4_ARM_Page, seL4_ARM_PageTable, seL4_ARM_PageTableObject, seL4_ARM_PageTable_Map,
-    seL4_ARM_Page_Default, seL4_ARM_Page_Map, seL4_ARM_Page_Uncached, seL4_ARM_SmallPageObject,
-    seL4_BootInfo, seL4_CNode, seL4_CPtr, seL4_CapInitThreadCNode, seL4_CapInitThreadVSpace,
-    seL4_CapRights_ReadWrite, seL4_Error, seL4_FailedLookup, seL4_NoError, seL4_NotEnoughMemory,
-    seL4_SlotRegion, seL4_Untyped, seL4_Untyped_Retype, seL4_Word, UntypedDesc,
-    MAX_BOOTINFO_UNTYPEDS,
+    seL4_ARM_PageTableObject, seL4_ARM_PageTable_Map, seL4_ARM_Page_Map, seL4_ARM_Page_Uncached,
+    seL4_ARM_SmallPageObject, seL4_BootInfo, seL4_CNode, seL4_CPtr, seL4_CapRights_ReadWrite,
+    seL4_FailedLookup, seL4_NoError, seL4_NotEnoughMemory, seL4_SlotRegion, seL4_Untyped,
+    seL4_Untyped_Retype, seL4_Word, UntypedDesc, MAX_BOOTINFO_UNTYPEDS,
 };
+
+pub use sel4_sys::{seL4_CapInitThreadCNode, seL4_CapInitThreadVSpace, seL4_Error};
 
 const PAGE_BITS: usize = 12;
 const PAGE_SIZE: usize = 1 << PAGE_BITS;
@@ -20,7 +21,6 @@ const PAGE_TABLE_ALIGN: usize = 1 << 21;
 const DMA_VADDR_BASE: usize = 0xB000_0000;
 const MAX_PAGE_TABLES: usize = 64;
 
-#[derive(Debug)]
 pub struct SlotAllocator {
     cnode: seL4_CNode,
     next: seL4_CPtr,
@@ -56,14 +56,12 @@ impl SlotAllocator {
     }
 }
 
-#[derive(Debug)]
 struct ReservedUntyped {
     cap: seL4_Untyped,
     paddr: usize,
     size_bits: u8,
 }
 
-#[derive(Debug)]
 pub struct UntypedCatalog<'a> {
     bootinfo: &'a seL4_BootInfo,
     entries: &'a [UntypedDesc],
@@ -124,7 +122,7 @@ impl<'a> UntypedCatalog<'a> {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct DeviceFrame {
     cap: seL4_CPtr,
     paddr: usize,
@@ -143,7 +141,7 @@ impl DeviceFrame {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct RamFrame {
     cap: seL4_CPtr,
     paddr: usize,

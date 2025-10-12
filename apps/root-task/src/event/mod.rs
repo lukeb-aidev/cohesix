@@ -15,7 +15,7 @@ use heapless::{String as HeaplessString, Vec as HeaplessVec};
 
 use crate::console::{Command, CommandParser, ConsoleError, MAX_ROLE_LEN, MAX_TICKET_LEN};
 #[cfg(feature = "net")]
-use crate::net::CONSOLE_QUEUE_DEPTH;
+use crate::net::{CONSOLE_QUEUE_DEPTH, NetPoller};
 #[cfg(target_os = "none")]
 use crate::ninedoor::NineDoorHandler;
 use crate::serial::{SerialDriver, SerialPort, SerialTelemetry, DEFAULT_LINE_CAPACITY};
@@ -186,33 +186,6 @@ impl AuthThrottle {
 }
 
 /// Networking integration exposed to the pump when the `net` feature is enabled.
-#[cfg(feature = "net")]
-pub trait NetPoller {
-    /// Poll the network subsystem and return whether new work occurred.
-    fn poll(&mut self, now_ms: u64) -> bool;
-
-    /// Obtain telemetry for diagnostics.
-    fn telemetry(&self) -> NetTelemetry;
-
-    /// Drain any pending console lines produced by TCP listeners.
-    fn drain_console_lines(
-        &mut self,
-        visitor: &mut dyn FnMut(HeaplessString<DEFAULT_LINE_CAPACITY>),
-    );
-}
-
-/// Networking telemetry reported by [`NetPoller`].
-#[cfg(feature = "net")]
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub struct NetTelemetry {
-    /// Indicates whether the link is currently up.
-    pub link_up: bool,
-    /// Total TX drops recorded by the PHY.
-    pub tx_drops: u32,
-    /// Millisecond timestamp of the most recent poll.
-    pub last_poll_ms: u64,
-}
-
 /// Event pump orchestrating serial, timer, IPC, and optional networking work.
 pub struct EventPump<'a, D, T, I, V, const RX: usize, const TX: usize, const LINE: usize>
 where
@@ -534,6 +507,8 @@ mod tests {
     use super::*;
     use crate::serial::test_support::LoopbackSerial;
     use crate::serial::SerialPort;
+    #[cfg(feature = "net")]
+    use crate::net::NetTelemetry;
 
     struct TestTimer {
         ticks: HeaplessVec<TickEvent, 8>,

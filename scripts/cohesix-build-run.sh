@@ -437,7 +437,7 @@ PY
     declare -a CLI_EXTRA_ARGS=()
 
     if [[ "$TRANSPORT" == "tcp" ]]; then
-        NETWORK_ARGS=(-netdev "user,id=net0,hostfwd=tcp:127.0.0.1:${TCP_PORT}-${TCP_PORT}" -device virtio-net-device,netdev=net0)
+        NETWORK_ARGS=(-netdev "user,id=net0,hostfwd=tcp:127.0.0.1:${TCP_PORT}-10.0.2.15:${TCP_PORT}" -device virtio-net-device,netdev=net0)
         QEMU_ARGS+=("${NETWORK_ARGS[@]}")
     fi
 

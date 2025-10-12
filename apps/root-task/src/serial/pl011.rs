@@ -2,6 +2,7 @@
 //! Minimal PL011 UART driver for seL4 targets.
 
 #![cfg(target_os = "none")]
+#![allow(unsafe_code)]
 
 use core::ptr::{read_volatile, write_volatile, NonNull};
 
