@@ -136,6 +136,64 @@ preparing and executing tasks.
 - `cohsh --transport tcp` can attach, tail logs, and quit cleanly; regression scripts cover serial-only mode.
 - Fuzz or property-based tests exercise the new parser and networking queues without panics.
 
+### Task Breakdown
+
+```
+Title/ID: m7-net-substrate
+Goal: Wire up a deterministic networking stack for the root task.
+Inputs: docs/ARCHITECTURE.md §§4,7; docs/INTERFACES.md §§1,3,6; docs/SECURITY.md §4; smoltcp 0.11; heapless 0.8.
+Changes:
+  - crates/root-task/Cargo.toml — add smoltcp, heapless, portable-atomic dependencies behind `net` feature.
+  - crates/root-task/src/net/mod.rs — introduce PHY trait, virtio-net implementation, smoltcp device glue, and bounded queues.
+  - crates/root-task/src/main.rs — initialise networking, integrate into scheduler/event pump.
+  - docs/SECURITY.md — document memory envelopes and networking threat considerations.
+Commands: cd crates/root-task && cargo check --features net && cargo test --features net net::tests
+Checks: Smoltcp interface boots in QEMU with deterministic heap usage; unit tests cover RX/TX queue saturation, link bring-up, and error paths.
+Deliverables: Root-task networking module with virtio-net backend, updated security documentation, passing feature-gated tests.
+```
+
+```
+Title/ID: m7-console-loop
+Goal: Provide an authenticated serial/TCP command shell bound to capability checks.
+Inputs: docs/INTERFACES.md §§3-5,8; docs/SECURITY.md §5; existing root-task timer/IPC code; heapless 0.8.
+Changes:
+  - crates/root-task/src/console/mod.rs — add finite-state parser, rate limiter, and shared line editor for serial/TCP sources.
+  - crates/root-task/src/main.rs — integrate console loop with networking poller and ticket validator.
+  - crates/root-task/tests/console_parser.rs — unit tests for verbs, overlong lines, and login throttling.
+Commands: cd crates/root-task && cargo test --features net console_parser
+Checks: Parser rejects invalid verbs, enforces max length, and rate limits failed logins; capability enforcement tested via mocks.
+Deliverables: Hardened console loop with comprehensive parser tests integrated into root-task.
+```
+
+```
+Title/ID: m7-cohsh-tcp
+Goal: Extend cohsh CLI with TCP transport parity while retaining existing flows.
+Inputs: docs/USERLAND_AND_CLI.md §§2,6; docs/INTERFACES.md §§3,7; existing cohsh mock/QEMU transport code.
+Changes:
+  - apps/cohsh/Cargo.toml — gate TCP transport feature and dependencies.
+  - apps/cohsh/src/transport/tcp.rs — implement TCP client with ticket authentication and reconnect handling.
+  - apps/cohsh/src/main.rs — add `--transport tcp` flag and configuration plumbing.
+  - docs/USERLAND_AND_CLI.md — document CLI usage, examples, and regression scripts covering serial and TCP paths.
+Commands: cd apps/cohsh && cargo test --features tcp && cargo clippy --features tcp
+Checks: CLI attaches via TCP to QEMU instance, tails logs, forwards NineDoor commands, and retains existing regression flow for serial transport.
+Deliverables: Feature-complete TCP transport with documentation and tests validating CLI behaviour.
+```
+
+```
+Title/ID: m7-docs-integration-tests
+Goal: Finalise documentation updates and cross-stack integration tests for networking milestone.
+Inputs: docs/ARCHITECTURE.md, docs/INTERFACES.md, docs/SECURITY.md, docs/USERLAND_AND_CLI.md; existing integration harness scripts.
+Changes:
+  - docs/ARCHITECTURE.md — describe networking module, console loop, and PHY abstraction.
+  - docs/INTERFACES.md — specify TCP listener protocol, authentication handshake, and console commands.
+  - docs/SECURITY.md — extend threat model with networking attack surfaces and mitigations.
+  - tests/integration/qemu_tcp_console.rs — scripted boot + TCP session exercising help/attach/tail/log/quit verbs.
+  - scripts/qemu-run.sh — accept networking flags, expose forwarded TCP port, and document usage.
+Commands: ./scripts/qemu-run.sh --net tap --console tcp --exit-after 120 && cargo test -p tests --test qemu_tcp_console
+Checks: Automated QEMU run brings up TCP console reachable from host; integration test passes end-to-end; documentation reviewed for consistency.
+Deliverables: Updated documentation set, automation scripts, and passing QEMU TCP console integration test.
+```
+
 **Foundation Allowlist (for dependency reviews / Web Codex fetches)**
 - `https://crates.io/crates/smoltcp`
 - `https://crates.io/crates/heapless`
