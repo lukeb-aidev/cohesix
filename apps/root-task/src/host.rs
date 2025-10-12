@@ -139,6 +139,8 @@ struct RootTask<W: Write, T: Timer, C: UserComponent> {
     console: CommandParser,
     #[cfg(feature = "net")]
     net: NetStack,
+    #[cfg(feature = "net")]
+    net_now_ms: u64,
 }
 
 impl<W: Write, T: Timer, C: UserComponent> RootTask<W, T, C> {
@@ -156,6 +158,8 @@ impl<W: Write, T: Timer, C: UserComponent> RootTask<W, T, C> {
             console: CommandParser::new(),
             #[cfg(feature = "net")]
             net,
+            #[cfg(feature = "net")]
+            net_now_ms: 0,
         })
     }
 
@@ -275,12 +279,16 @@ impl<W: Write, T: Timer, C: UserComponent> RootTask<W, T, C> {
                 .push_rx(frame)
                 .map_err(|err| anyhow!(err.to_string()))?;
         }
-        let changed = self.net.poll(10);
+        self.net_now_ms = self.net_now_ms.saturating_add(10);
+        let changed = self.net.poll_with_time(self.net_now_ms);
         if changed {
+            let telemetry = self.net.telemetry();
             writeln!(
                 self.writer,
-                "net: polled interface {:?}",
-                self.net.hardware_address()
+                "net: polled interface {:?} link_up={} tx_drops={}",
+                self.net.hardware_address(),
+                telemetry.link_up,
+                telemetry.tx_drops
             )?;
         }
         Ok(())
