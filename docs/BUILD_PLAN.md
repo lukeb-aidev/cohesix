@@ -113,15 +113,42 @@ preparing and executing tasks.
 
 > **Rule of Engagement:** Advance milestones sequentially, treat documentation as canonical, and keep code/tests aligned after every milestone increment.
 
-## Milestone 7 — Standalone Console & Networking
+## Milestone 7 — Standalone Console & Networking (QEMU-first)
 **Deliverables**
-- Integrate a minimal `no_std` TCP/IP stack (e.g., smoltcp) inside the root task so UEFI deployments can expose a loopback and single host-facing interface without pulling in a full POSIX layer.
-- Provide a serial-first command shell bundled with the root task that mirrors the `cohsh` command surface (attach/tail/log/help/quit) and forwards privileged operations into the existing NineDoor capability model.
-- Supply a network-backed transport that accepts authenticated `cohsh` sessions over TCP while preserving capability ticket validation.
-- Harden the new surface: rate-limit inbound connections, validate line-oriented commands, and document secure defaults in `docs/INTERFACES.md`.
-- Update architecture docs to explain the on-device console, serial/TCP flows, and minimal TCB impact.
+- **Networking substrate**
+  - Add `smoltcp` (Rust, BSD-2) to the root-task crate under a new `net` module.
+  - Implement a virtio-net or tap-backed PHY targeting QEMU’s `-netdev tap` or `user` device; encapsulate driver code behind a trait so future UEFI/NIC ports swap in cleanly.
+  - Use `heapless::{Vec, spsc::Queue}` for RX/TX buffers to keep allocations deterministic; document memory envelopes in `docs/SECURITY.md`.
+- **Command loop**
+  - Build a minimal serial + TCP line editor using `heapless::String` and a finite-state parser for commands: `help`, `attach`, `tail`, `log`, `quit`, plus optional `spawn/kill` stubs that forward JSON into NineDoor.
+  - Integrate the loop into the root-task main event pump alongside timer ticks, enforcing capability and ticket checks before executing privileged verbs.
+  - Rate-limit failed logins and enforce maximum line length to harden against trivial DoS.
+- **Remote transport**
+  - Extend `cohsh` with a TCP transport that speaks to the new in-VM listener while keeping the existing mock/QEMU flows.
+  - Reuse the current NineDoor command surface so scripting and tests stay aligned; document the new `--transport tcp` flag.
+- **Documentation & tests**
+  - Update `docs/ARCHITECTURE.md`, `docs/INTERFACES.md`, and `docs/SECURITY.md` with the networking/console design, threat model, and TCB impact.
+  - Provide QEMU integration instructions (`docs/USERLAND_AND_CLI.md`) showing serial console usage and remote `cohsh` attachment.
+  - Add unit tests for the command parser (invalid verbs, overlong lines) and integration tests that boot QEMU, connect via TCP, and run a scripted session.
 
 **Checks**
-- UEFI boot image brings up the root task, configures the network interface, and accepts shell input over serial and TCP.
-- `cohsh` can attach remotely via the new transport while the embedded shell remains available for direct console access.
-- Integration tests cover invalid/slow-path networking scenarios; fuzz tests protect the command parser.
+- QEMU boot brings up the root task, configures smoltcp, accepts serial commands, and listens for TCP attachments on the configured port.
+- `cohsh --transport tcp` can attach, tail logs, and quit cleanly; regression scripts cover serial-only mode.
+- Fuzz or property-based tests exercise the new parser and networking queues without panics.
+
+**Foundation Allowlist (for dependency reviews / Web Codex fetches)**
+- `https://crates.io/crates/smoltcp`
+- `https://crates.io/crates/heapless`
+- `https://crates.io/crates/portable-atomic` (for lock-free counters)
+- `https://crates.io/crates/embassy-executor` and `https://crates.io/crates/embassy-net` (future async extension, optional)
+- `https://crates.io/crates/log` / `defmt` (optional structured logging while developing the stack)
+
+## Milestone 8 — Async & Hardware Readiness (future)
+**Deliverables**
+- Evaluate adding Embassy executors once we have multiple concurrent network tasks or hardware NICs; keep this behind a feature flag so the baseline remains deterministic.
+- Port PHY layer to target UEFI hardware (e.g., Intel i219, Broadcom) using seL4 device drivers, reusing the abstractions introduced in Milestone 7.
+- Formalise ticket-authenticated TLS or noise-based transport for remote `cohsh` sessions once hardware links are reliable.
+
+**Checks**
+- Hardware bring-up demonstrates serial + TCP console parity with QEMU.
+- Async executor (if enabled) passes the same regression suite as the synchronous loop.
