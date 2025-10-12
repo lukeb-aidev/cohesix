@@ -318,15 +318,17 @@ detect_gic_version_from_file() {
 
     [[ -f "$path" ]] || return 1
 
-    if grep -Eq '\b(CONFIG_ARM_GIC_V3_SUPPORT|CONFIG_HAVE_ARM_GIC_V3)(=| )[yY1]' "$path" \
+    if grep -Eq '\b(CONFIG_ARM_GIC_V3_SUPPORT|CONFIG_HAVE_ARM_GIC_V3|CONFIG_ARM_GICV3|CONFIG_HAVE_ARM_GICV3)(=| )[yY1]' "$path" \
+        || grep -Eq '#[ \t]*define[ \t]+CONFIG_HAVE_ARM_GIC_V3[ \t]+1' "$path" \
         || grep -Eq 'KernelArmGICV3[ \t]*(ON|TRUE|1)' "$path"; then
         GIC_VERSION="3"
         GIC_CONFIG_SOURCE="$path"
         return 0
     fi
 
-    if grep -Eq '#[ \t]*(CONFIG_ARM_GIC_V3_SUPPORT|CONFIG_HAVE_ARM_GIC_V3) is not set' "$path" \
-        || grep -Eq '\b(CONFIG_ARM_GIC_V3_SUPPORT|CONFIG_HAVE_ARM_GIC_V3)(=| )[nN0]' "$path" \
+    if grep -Eq '#[ \t]*(CONFIG_ARM_GIC_V3_SUPPORT|CONFIG_HAVE_ARM_GIC_V3|CONFIG_ARM_GICV3|CONFIG_HAVE_ARM_GICV3) is not set' "$path" \
+        || grep -Eq '\b(CONFIG_ARM_GIC_V3_SUPPORT|CONFIG_HAVE_ARM_GIC_V3|CONFIG_ARM_GICV3|CONFIG_HAVE_ARM_GICV3)(=| )[nN0]' "$path" \
+        || grep -Eq '#[ \t]*define[ \t]+CONFIG_HAVE_ARM_GIC_V3[ \t]+0' "$path" \
         || grep -Eq 'KernelArmGICV3[ \t]*(OFF|FALSE|0)' "$path"; then
         GIC_VERSION="2"
         GIC_CONFIG_SOURCE="$path"
@@ -346,6 +348,7 @@ SEL4_CONFIG_CANDIDATES=(
     "$SEL4_BUILD_DIR/kernel/gen_config/KernelConfig"
     "$SEL4_BUILD_DIR/kernel/gen_config/KernelConfigGenerated.cmake"
     "$SEL4_BUILD_DIR/kernel/gen_config/kernel_all.cmake"
+    "$SEL4_BUILD_DIR/libsel4/include/sel4/config.h"
 )
 
 for cfg in "${SEL4_CONFIG_CANDIDATES[@]}"; do

@@ -20,6 +20,8 @@ const CONFIG_CANDIDATES: &[&str] = &[
 fn main() {
     println!("cargo:rerun-if-env-changed=SEL4_BUILD_DIR");
     println!("cargo:rerun-if-env-changed=SEL4_BUILD");
+    println!("cargo:rustc-check-cfg=cfg(sel4_config_printing)");
+    println!("cargo:rustc-check-cfg=cfg(sel4_config_debug_build)");
 
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     if target_os != "none" {
