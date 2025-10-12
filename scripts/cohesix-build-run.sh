@@ -66,6 +66,7 @@ QEMU_BIN="qemu-system-aarch64"
 RUN_QEMU=1
 EXTRA_QEMU_ARGS=()
 CLEAN_OUT_DIR=0
+DTB_OVERRIDE=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -92,6 +93,11 @@ while [[ $# -gt 0 ]]; do
         --qemu)
             [[ $# -ge 2 ]] || fail "--qemu requires a binary path"
             QEMU_BIN="$2"
+            shift 2
+            ;;
+        --dtb)
+            [[ $# -ge 2 ]] || fail "--dtb requires a path"
+            DTB_OVERRIDE="$2"
             shift 2
             ;;
         --no-run)
@@ -124,6 +130,26 @@ fi
 export SEL4_BUILD_DIR
 export SEL4_BUILD="$SEL4_BUILD_DIR"
 
+detect_gic_version() {
+    local cfg_file
+    for cfg_file in \
+        "$SEL4_BUILD_DIR/kernel/gen_config/kernel_config.h" \
+        "$SEL4_BUILD_DIR/kernel/include/autoconf.h"; do
+        [[ -f "$cfg_file" ]] && break
+    done
+
+    [[ -f "$cfg_file" ]] || { echo "[cohesix-build] ERROR: cannot find seL4 config to infer GIC"; exit 2; }
+
+    if grep -qE 'CONFIG_ARM_GIC_V3[= ]1' "$cfg_file"; then
+        echo 3
+    elif grep -qE 'CONFIG_ARM_GIC_V2[= ]1' "$cfg_file"; then
+        echo 2
+    else
+        echo "[cohesix-build] ERROR: cannot infer GIC version from $cfg_file"
+        exit 2
+    fi
+}
+
 if [[ "$CLEAN_OUT_DIR" -eq 1 ]]; then
     if [[ -d "$OUT_DIR" ]]; then
         if [[ "$OUT_DIR" == "/" ]]; then
@@ -154,17 +180,8 @@ fi
 
 ELFLOADER_PATH="$SEL4_BUILD_DIR/elfloader/elfloader"
 KERNEL_PATH="$SEL4_BUILD_DIR/kernel/kernel.elf"
-DTB_PATH="$SEL4_BUILD_DIR/qemu-arm-virt.dtb"
-
 [[ -f "$ELFLOADER_PATH" ]] || fail "elfloader binary not found at $ELFLOADER_PATH"
 [[ -f "$KERNEL_PATH" ]] || fail "kernel.elf not found at $KERNEL_PATH"
-
-if [[ ! -f "$DTB_PATH" ]]; then
-    log "DTB not found at $DTB_PATH; continuing without explicit -dtb"
-    DTB_PATH=""
-else
-    describe_file "Device tree" "$DTB_PATH"
-fi
 
 PROFILE_FLAG=()
 PROFILE_DIR="$PROFILE"
@@ -186,7 +203,7 @@ if [[ -z "$CARGO_TARGET" ]]; then
     fail "--cargo-target must be provided to build seL4 components"
 fi
 
-SEL4_COMPONENT_PACKAGES=(root-task nine-door worker-heart worker-gpu)
+SEL4_COMPONENT_PACKAGES=(nine-door worker-heart worker-gpu)
 HOST_TOOL_PACKAGES=(cohsh gpu-bridge-host)
 
 HOST_BUILD_ARGS=(build)
@@ -203,6 +220,13 @@ SEL4_BUILD_ARGS+=("${PROFILE_FLAG[@]}")
 for pkg in "${SEL4_COMPONENT_PACKAGES[@]}"; do
     SEL4_BUILD_ARGS+=(-p "$pkg")
 done
+
+ROOT_TASK_BUILD_ARGS=(build --target "$CARGO_TARGET")
+ROOT_TASK_BUILD_ARGS+=("${PROFILE_FLAG[@]}")
+ROOT_TASK_BUILD_ARGS+=(-p root-task -F root-task/sel4-console)
+
+log "Building root-task with console support via: cargo ${ROOT_TASK_BUILD_ARGS[*]}"
+cargo "${ROOT_TASK_BUILD_ARGS[@]}"
 
 log "Building seL4 components via: cargo ${SEL4_BUILD_ARGS[*]}"
 cargo "${SEL4_BUILD_ARGS[@]}"
@@ -309,105 +333,29 @@ else
     log "Size guard script not found; skipping payload size check"
 fi
 
-DTB_LOAD_ADDR=0x4f000000
 KERNEL_LOAD_ADDR=0x70000000
 ROOTSERVER_LOAD_ADDR=0x80000000
 
-detect_gic_version_from_file() {
-    local path="$1"
+GIC_VER="$(detect_gic_version)"
+log "Auto-detected GIC version: gic-version=$GIC_VER"
 
-    [[ -f "$path" ]] || return 1
+QEMU_ARGS=(-machine "virt,gic-version=${GIC_VER}" -cpu cortex-a57 -m 1024 -smp 1 -serial mon:stdio -display none -kernel "$ELFLOADER_PATH" -initrd "$CPIO_PATH" -device loader,file="$KERNEL_STAGE_PATH",addr=$KERNEL_LOAD_ADDR,force-raw=on -device loader,file="$ROOTSERVER_STAGE_PATH",addr=$ROOTSERVER_LOAD_ADDR,force-raw=on)
 
-    if grep -Eq '\b(CONFIG_ARM_GIC_V3_SUPPORT|CONFIG_HAVE_ARM_GIC_V3|CONFIG_ARM_GICV3|CONFIG_HAVE_ARM_GICV3)(=| )[yY1]' "$path" \
-        || grep -Eq '#[ \t]*define[ \t]+CONFIG_HAVE_ARM_GIC_V3[ \t]+1' "$path" \
-        || grep -Eq 'KernelArmGICV3[ \t]*(ON|TRUE|1)' "$path"; then
-        GIC_VERSION="3"
-        GIC_CONFIG_SOURCE="$path"
-        return 0
-    fi
-
-    if grep -Eq '#[ \t]*(CONFIG_ARM_GIC_V3_SUPPORT|CONFIG_HAVE_ARM_GIC_V3|CONFIG_ARM_GICV3|CONFIG_HAVE_ARM_GICV3) is not set' "$path" \
-        || grep -Eq '\b(CONFIG_ARM_GIC_V3_SUPPORT|CONFIG_HAVE_ARM_GIC_V3|CONFIG_ARM_GICV3|CONFIG_HAVE_ARM_GICV3)(=| )[nN0]' "$path" \
-        || grep -Eq '#[ \t]*define[ \t]+CONFIG_HAVE_ARM_GIC_V3[ \t]+0' "$path" \
-        || grep -Eq 'KernelArmGICV3[ \t]*(OFF|FALSE|0)' "$path"; then
-        GIC_VERSION="2"
-        GIC_CONFIG_SOURCE="$path"
-        return 0
-    fi
-
-    return 1
-}
-
-GIC_VERSION="3"
-GIC_CONFIG_SOURCE=""
-SEL4_CONFIG_CANDIDATES=(
-    "$SEL4_BUILD_DIR/.config"
-    "$SEL4_BUILD_DIR/kernel/.config"
-    "$SEL4_BUILD_DIR/KernelConfig"
-    "$SEL4_BUILD_DIR/kernel/KernelConfig"
-    "$SEL4_BUILD_DIR/kernel/gen_config/KernelConfig"
-    "$SEL4_BUILD_DIR/kernel/gen_config/KernelConfigGenerated.cmake"
-    "$SEL4_BUILD_DIR/kernel/gen_config/kernel_all.cmake"
-    "$SEL4_BUILD_DIR/libsel4/include/sel4/config.h"
-)
-
-for cfg in "${SEL4_CONFIG_CANDIDATES[@]}"; do
-    if detect_gic_version_from_file "$cfg"; then
-        break
-    fi
-done
-
-if [[ -z "$GIC_CONFIG_SOURCE" ]]; then
-    while IFS= read -r -d '' cfg; do
-        if detect_gic_version_from_file "$cfg"; then
-            break
-        fi
-    done < <(find "$SEL4_BUILD_DIR" -maxdepth 5 -type f \
-        \( -name '.config' -o -name 'KernelConfig*' -o -name 'kernel_all.cmake' \) -print0)
-fi
-
-if [[ -n "$GIC_CONFIG_SOURCE" ]]; then
-    if [[ "$GIC_VERSION" == "3" ]]; then
-        log "Detected GICv3 support in $GIC_CONFIG_SOURCE"
-    else
-        log "Detected GICv3 support disabled in $GIC_CONFIG_SOURCE; using gic-version=2"
-    fi
-else
-    log "Unable to infer GIC version from seL4 build configuration; defaulting to gic-version=$GIC_VERSION"
-fi
-
-QEMU_MACHINE_OPTS="virt,gic-version=$GIC_VERSION"
-QEMU_DTB_ADDR_SUPPORTED=0
-
-if command -v "$QEMU_BIN" >/dev/null 2>&1; then
-    if "$QEMU_BIN" -machine virt,help 2>&1 | grep -q 'dtb-addr'; then
-        QEMU_MACHINE_OPTS+="\,dtb-addr=$DTB_LOAD_ADDR"
-        QEMU_DTB_ADDR_SUPPORTED=1
-    else
-        log "QEMU binary $QEMU_BIN does not advertise virt.dtb-addr; using default device tree placement"
-    fi
-fi
-
-QEMU_CMD=("$QEMU_BIN" -machine "$QEMU_MACHINE_OPTS" -cpu cortex-a57 -m 1024 -serial mon:stdio -display none -kernel "$ELFLOADER_PATH" -initrd "$CPIO_PATH" -device loader,file="$KERNEL_STAGE_PATH",addr=$KERNEL_LOAD_ADDR,force-raw=on -device loader,file="$ROOTSERVER_STAGE_PATH",addr=$ROOTSERVER_LOAD_ADDR,force-raw=on)
-
-if [[ -n "$DTB_PATH" ]]; then
-    if [[ "$QEMU_DTB_ADDR_SUPPORTED" -eq 1 ]]; then
-        log "Device tree will load at $DTB_LOAD_ADDR"
-    else
-        log "Device tree provided via -dtb; load address determined by QEMU"
-    fi
-    QEMU_CMD+=(-dtb "$DTB_PATH")
+if [[ -n "$DTB_OVERRIDE" ]]; then
+    [[ -f "$DTB_OVERRIDE" ]] || fail "Specified DTB override not found: $DTB_OVERRIDE"
+    describe_file "DTB override" "$DTB_OVERRIDE"
+    QEMU_ARGS+=(-dtb "$DTB_OVERRIDE")
 fi
 
 if [[ ${#EXTRA_QEMU_ARGS[@]} -gt 0 ]]; then
-    QEMU_CMD+=("${EXTRA_QEMU_ARGS[@]}")
+    QEMU_ARGS+=("${EXTRA_QEMU_ARGS[@]}")
 fi
 
-log "Prepared QEMU command: ${QEMU_CMD[*]}"
+log "Prepared QEMU command: ${QEMU_ARGS[*]}"
 
 if [[ "$RUN_QEMU" -eq 0 ]]; then
     log "--no-run supplied; build artefacts ready at $OUT_DIR"
     exit 0
 fi
 
-exec "${QEMU_CMD[@]}"
+exec "$QEMU_BIN" "${QEMU_ARGS[@]}"
