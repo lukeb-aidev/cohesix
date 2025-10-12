@@ -7,16 +7,46 @@ The `root-task` crate embodies the responsibilities described in
 - Own the initial capabilities and boot flow transferred from seL4.
 - Configure timers and the scheduling surface that powers worker budget enforcement.
 - Bootstrap the NineDoor 9P server and provision worker tickets for the queen orchestration loop.
+- Orchestrate serial, timer, networking, and IPC work through a
+  cooperative event pump that replaces the legacy busy loop.
 
-This milestone now ships a kernel entry path that accepts the seL4
-`BootInfo` pointer, prints early diagnostics to QEMU via
-`seL4_DebugPutChar`, and then blocks. The log banner highlights:
+## Event Pump Overview
 
-- Confirmation that control reached userland (`entered from seL4`).
-- The address, size, and span of the BootInfo extra region—useful when
-  cross-checking faults such as the data abort at
-  `FAR=0xffffffffffe02000` reported in QEMU logs.
-- Basic topology hints (`node_id`, `num_nodes`, and the IPC buffer).
+`src/event/mod.rs` introduces `EventPump`, a no-`std` coordinator that
+rotates through serial IO (`serial::SerialPort`), timer ticks,
+feature-gated networking polls, and IPC dispatch. Each cycle emits
+structured audit lines (`event-pump: init …`, `attach accepted`,
+`attach denied`) so operators can correlate subsystem activity with the
+serial log. Authentication is backed by a deterministic
+`TicketTable`, ensuring that bootstrap tickets are validated without
+heap allocation.
 
-Subsequent milestones will replace the placeholder spin-loop with real
-seL4 bindings and capability management logic.
+## Serial Console
+
+`src/serial/mod.rs` provides a heapless serial façade. Input is
+sanitised to UTF-8, backspaces are honoured, and atomic counters expose
+RX/TX saturation metrics for `/proc/boot`. The console parser enforces
+maximum line length, exponential back-off for repeated authentication
+failures, and capability checks before invoking orchestration verbs.
+
+## Testing & Feature Flags
+
+The crate ships unit and integration tests that exercise the event pump
+and console authentication flows:
+
+```
+cargo test -p root-task event_pump
+```
+
+Networking glue lives behind the `net` feature flag so developers can
+iterate on console-only changes without pulling in smoltcp. Enable the
+feature when validating the bounded virtio queues or smoltcp polls:
+
+```
+cargo check -p root-task --features net
+cargo clippy -p root-task --features net --tests
+```
+
+Host-mode simulations continue to live in `src/host.rs`; they can be
+expanded to exercise the event pump by wiring deterministic timers or
+mock serial transports as the milestone progresses.
