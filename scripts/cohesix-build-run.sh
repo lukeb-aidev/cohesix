@@ -272,6 +272,13 @@ main() {
     rm -rf "$STAGING_DIR"
     mkdir -p "$ROOTFS_DIR" "$HOST_OUT_DIR"
 
+    ELFLOADER_STAGE_PATH="$STAGING_DIR/elfloader"
+    if [[ ! -f "$SCRIPT_DIR/lib/strip_elfloader_modules.py" ]]; then
+        fail "helper missing: $SCRIPT_DIR/lib/strip_elfloader_modules.py"
+    fi
+    python3 "$SCRIPT_DIR/lib/strip_elfloader_modules.py" "$ELFLOADER_PATH" "$ELFLOADER_STAGE_PATH"
+    describe_file "Sanitised elfloader" "$ELFLOADER_STAGE_PATH"
+
     for bin in "${COMPONENT_BINS[@]}"; do
         SRC="$SEL4_ARTIFACT_DIR/$bin"
         [[ -f "$SRC" ]] || fail "Expected binary not found: $SRC"
@@ -361,7 +368,7 @@ PY
     GIC_VER="$(detect_gic_version)"
     log "Auto-detected GIC version: gic-version=$GIC_VER"
 
-    QEMU_ARGS=(-machine "virt,gic-version=${GIC_VER}" -cpu cortex-a57 -m 1024 -smp 1 -serial mon:stdio -display none -kernel "$ELFLOADER_PATH" -initrd "$CPIO_PATH" -device loader,file="$KERNEL_STAGE_PATH",addr=$KERNEL_LOAD_ADDR,force-raw=on -device loader,file="$ROOTSERVER_STAGE_PATH",addr=$ROOTSERVER_LOAD_ADDR,force-raw=on)
+    QEMU_ARGS=(-machine "virt,gic-version=${GIC_VER}" -cpu cortex-a57 -m 1024 -smp 1 -serial mon:stdio -display none -kernel "$ELFLOADER_STAGE_PATH" -initrd "$CPIO_PATH" -device loader,file="$KERNEL_STAGE_PATH",addr=$KERNEL_LOAD_ADDR,force-raw=on -device loader,file="$ROOTSERVER_STAGE_PATH",addr=$ROOTSERVER_LOAD_ADDR,force-raw=on)
 
     if [[ -n "$DTB_OVERRIDE" ]]; then
         [[ -f "$DTB_OVERRIDE" ]] || fail "Specified DTB override not found: $DTB_OVERRIDE"
