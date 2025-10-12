@@ -276,7 +276,10 @@ main() {
     if [[ ! -f "$SCRIPT_DIR/lib/strip_elfloader_modules.py" ]]; then
         fail "helper missing: $SCRIPT_DIR/lib/strip_elfloader_modules.py"
     fi
-    python3 "$SCRIPT_DIR/lib/strip_elfloader_modules.py" "$ELFLOADER_PATH" "$ELFLOADER_STAGE_PATH"
+    python3 "$SCRIPT_DIR/lib/strip_elfloader_modules.py" \
+        --rootserver "$SEL4_ARTIFACT_DIR/root-task" \
+        "$ELFLOADER_PATH" \
+        "$ELFLOADER_STAGE_PATH"
     describe_file "Sanitised elfloader" "$ELFLOADER_STAGE_PATH"
 
     for bin in "${COMPONENT_BINS[@]}"; do
