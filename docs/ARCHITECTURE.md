@@ -34,8 +34,10 @@
   revisiting the legacy spin loop.
 - Hosts the deterministic networking stack (`net::NetStack`) which wraps smoltcp with virtio-friendly, heapless RX/TX queues and
   a `NetworkClock` that advances in timer-driven increments.
-- Provides a serial façade (`serial::SerialPort`) that normalises UTF-8 input, tracks back-pressure counters via
-  `portable-atomic`, and feeds the shared console parser.
+- Provides a serial façade (`serial::SerialPort`) backed by a deterministic virtio-console driver that models the
+  RX/TX descriptor rings with bounded `heapless::spsc::Queue` instances. All console IO flows through the shared
+  UTF-8 normaliser which tracks back-pressure counters via `portable-atomic` and feeds the parser used by both
+  serial and TCP transports.
 - Runs the serial/TCP console loop (`console::CommandParser`) which multiplexes authenticated commands (`help`, `attach`, `tail`,
   `log`, `spawn`, `kill`, `quit`) alongside timer and networking events inside the root-task scheduler. Capability validation is
   driven by a deterministic ticket table (`event::TicketTable`) that records bootstrap secrets.
@@ -83,10 +85,10 @@
   metrics into the boot log.
 - The console loop multiplexes serial input and TCP sessions. A shared finite-state parser enforces maximum line length,
   exponential back-off for repeated authentication failures, and funnels all verbs through capability checks before invoking
-  NineDoor or root-task orchestration APIs. The serial façade sanitises control characters and exposes back-pressure counters so
-  `/proc/boot` can surface saturation data. TCP transports mirror the parser exactly, emitting `PING`/`PONG` heartbeats every
-  15 seconds (configurable) and logging reconnect attempts so host operators can correlate transient drops with root-task audit
-  lines.
+  NineDoor or root-task orchestration APIs. Sanitised console lines are counted once in the event-pump metrics so `/proc/boot`
+  can expose console pressure regardless of transport. TCP transports mirror the parser exactly, emitting `PING`/`PONG`
+  heartbeats every 15 seconds (configurable) and logging reconnect attempts so host operators can correlate transient drops with
+  root-task audit lines.
 - Root-task’s event pump advances the networking clock on every timer tick, services console input, and emits structured log
   lines so host tooling (`cohsh`) can mirror state over either serial or TCP transports while timers and IPC continue to run.
 

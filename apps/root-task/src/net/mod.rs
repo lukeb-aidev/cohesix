@@ -15,7 +15,7 @@ use core::fmt;
 
 use core::sync::atomic::Ordering;
 
-use heapless::{spsc::Queue, Vec as HeaplessVec};
+use heapless::{spsc::Queue, Deque, String as HeaplessString, Vec as HeaplessVec};
 use portable_atomic::{AtomicU32, AtomicU64};
 use smoltcp::iface::{Config as IfaceConfig, Interface, SocketSet, SocketStorage};
 use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
@@ -23,6 +23,7 @@ use smoltcp::time::Instant;
 use smoltcp::wire::{EthernetAddress, HardwareAddress, IpAddress, IpCidr, Ipv4Address};
 
 use crate::event::{NetPoller, NetTelemetry};
+use crate::serial::DEFAULT_LINE_CAPACITY;
 
 /// Maximum frame length supported by the bounded queues (bytes).
 pub const MAX_FRAME_LEN: usize = 1536;
@@ -35,6 +36,8 @@ pub const TX_QUEUE_DEPTH: usize = 16;
 
 /// Number of sockets provisioned for the interface.
 pub const SOCKET_CAPACITY: usize = 4;
+/// Number of console lines retained between poll cycles.
+pub const CONSOLE_QUEUE_DEPTH: usize = 8;
 
 /// Errors surfaced by the networking substrate.
 #[derive(Debug, PartialEq, Eq)]
@@ -274,6 +277,7 @@ pub struct NetStack {
     interface: Interface,
     hardware_addr: EthernetAddress,
     telemetry: NetTelemetry,
+    console_lines: Deque<HeaplessString<DEFAULT_LINE_CAPACITY>, CONSOLE_QUEUE_DEPTH>,
 }
 
 impl NetStack {
@@ -298,6 +302,7 @@ impl NetStack {
             interface,
             hardware_addr: mac,
             telemetry: NetTelemetry::default(),
+            console_lines: Deque::new(),
         };
         (stack, handle)
     }
@@ -343,6 +348,16 @@ impl NetStack {
     pub fn queue_handle(&self) -> QueueHandle {
         QueueHandle::new(self.device.rx, self.device.tx, self.device.tx_drops)
     }
+
+    /// Inject a line into the TCP console loopback queue (test/support helper).
+    pub fn enqueue_console_line(&mut self, line: &str) {
+        let mut buf: HeaplessString<DEFAULT_LINE_CAPACITY> = HeaplessString::new();
+        let trimmed = line.trim_end_matches(['\r', '\n']);
+        if buf.push_str(trimmed).is_err() {
+            return;
+        }
+        let _ = self.console_lines.push_back(buf);
+    }
 }
 
 impl NetPoller for NetStack {
@@ -352,6 +367,15 @@ impl NetPoller for NetStack {
 
     fn telemetry(&self) -> NetTelemetry {
         self.telemetry()
+    }
+
+    fn drain_console_lines(
+        &mut self,
+        visitor: &mut dyn FnMut(HeaplessString<DEFAULT_LINE_CAPACITY>),
+    ) {
+        while let Some(line) = self.console_lines.pop_front() {
+            visitor(line);
+        }
     }
 }
 
@@ -394,5 +418,20 @@ mod tests {
         assert!(telemetry.link_up);
         assert_eq!(telemetry.last_poll_ms, 25);
         assert_eq!(telemetry.tx_drops, handle.tx_drops());
+    }
+
+    #[test]
+    fn console_line_queue_drains_fifo() {
+        let (mut stack, _) = NetStack::new(Ipv4Address::new(10, 0, 2, 99));
+        stack.enqueue_console_line("attach queen token\r\n");
+        stack.enqueue_console_line("log\n");
+        let mut observed: heapless::Vec<HeaplessString<DEFAULT_LINE_CAPACITY>, 4> =
+            heapless::Vec::new();
+        stack.drain_console_lines(&mut |line| {
+            observed.push(line).unwrap();
+        });
+        assert_eq!(observed.len(), 2);
+        assert_eq!(observed[0].as_str(), "attach queen token");
+        assert_eq!(observed[1].as_str(), "log");
     }
 }

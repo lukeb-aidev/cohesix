@@ -13,6 +13,7 @@ use cohesix_ticket::Role;
 use crate::event::{AuditSink, EventPump, IpcDispatcher, TickEvent, TicketTable, TimerSource};
 #[cfg(feature = "net")]
 use crate::net::NetStack;
+use crate::serial::virtio::VirtioConsole;
 use crate::serial::{SerialDriver, SerialError, SerialPort};
 use embedded_io::Io;
 #[cfg(feature = "net")]
@@ -227,11 +228,18 @@ fn panic(info: &PanicInfo) -> ! {
     }
 }
 
-struct KernelSerial;
+struct KernelSerial {
+    console: VirtioConsole<
+        { crate::serial::DEFAULT_RX_CAPACITY },
+        { crate::serial::DEFAULT_TX_CAPACITY },
+    >,
+}
 
 impl KernelSerial {
     fn new() -> Self {
-        Self
+        Self {
+            console: VirtioConsole::new(),
+        }
     }
 }
 
@@ -241,12 +249,12 @@ impl Io for KernelSerial {
 
 impl SerialDriver for KernelSerial {
     fn read_byte(&mut self) -> nb::Result<u8, Self::Error> {
-        Err(nb::Error::WouldBlock)
+        self.console.read_byte()
     }
 
     fn write_byte(&mut self, byte: u8) -> nb::Result<(), Self::Error> {
         emit_debug_char(byte);
-        Ok(())
+        self.console.write_byte(byte)
     }
 }
 

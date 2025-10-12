@@ -21,6 +21,8 @@ use heapless::{spsc::Queue, String as HeaplessString};
 use nb::Error as NbError;
 use portable_atomic::AtomicU32;
 
+pub mod virtio;
+
 /// Capacity of the RX staging queue used by [`SerialPort`].
 pub const DEFAULT_RX_CAPACITY: usize = 256;
 
