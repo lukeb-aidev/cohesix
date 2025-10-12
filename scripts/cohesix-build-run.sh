@@ -3,6 +3,8 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 usage() {
     cat <<'USAGE'
 Usage: scripts/cohesix-build-run.sh [options] [-- <extra-qemu-args>]
@@ -75,47 +77,21 @@ detect_gic_version() {
 
     [[ -n "$cfg_file" ]] || fail "cannot find seL4 config to infer GIC"
 
-    local symbol
-    for symbol in CONFIG_ARM_GIC_V3 CONFIG_ARM_GIC_V2; do
-        if python3 - "$cfg_file" "$symbol" <<'PY'
-import sys
-import pathlib
+    local detect_script="$SCRIPT_DIR/lib/detect_gic_version.py"
+    if [[ ! -x "$detect_script" ]]; then
+        fail "helper missing or not executable: $detect_script"
+    fi
 
-cfg_path = pathlib.Path(sys.argv[1])
-symbol = sys.argv[2]
+    local result
+    if ! result=$("$detect_script" "$cfg_file"); then
+        fail "cannot infer GIC version from $cfg_file"
+    fi
 
-try:
-    lines = cfg_path.read_text(encoding="utf-8", errors="ignore").splitlines()
-except FileNotFoundError:
-    sys.exit(1)
+    if [[ -z "$result" ]]; then
+        fail "cannot infer GIC version from $cfg_file"
+    fi
 
-for raw_line in lines:
-    line = raw_line.strip()
-    if not line or line.startswith("/*"):
-        continue
-    if line.startswith("#define"):
-        tokens = line.split()
-        if len(tokens) >= 3 and tokens[1] == symbol and tokens[2] == "1":
-            sys.exit(0)
-    if line.startswith(symbol):
-        lhs, _, rhs = line.partition("=")
-        if lhs.strip() == symbol and rhs.strip() in {"1", "y"}:
-            sys.exit(0)
-
-sys.exit(1)
-PY
-        then
-            if [[ "$symbol" == "CONFIG_ARM_GIC_V3" ]]; then
-                echo 3
-                return 0
-            else
-                echo 2
-                return 0
-            fi
-        fi
-    done
-
-    fail "cannot infer GIC version from $cfg_file"
+    echo "$result"
 }
 
 main() {

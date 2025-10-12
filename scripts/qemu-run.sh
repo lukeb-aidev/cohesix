@@ -3,6 +3,8 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 log() {
     echo "[qemu-run] $*"
 }
@@ -103,23 +105,42 @@ if [[ ! -d "$SEL4_BUILD_DIR" ]]; then
 fi
 
 detect_gic_version() {
-    local cfg_file
-    for cfg_file in \
+    local cfg_file=""
+    local candidate
+    for candidate in \
         "$SEL4_BUILD_DIR/kernel/gen_config/kernel_config.h" \
-        "$SEL4_BUILD_DIR/kernel/include/autoconf.h"; do
-        [[ -f "$cfg_file" ]] && break
+        "$SEL4_BUILD_DIR/kernel/gen_config/kernel/gen_config.h" \
+        "$SEL4_BUILD_DIR/kernel/include/autoconf.h" \
+        "$SEL4_BUILD_DIR/kernel/autoconf/autoconf.h"; do
+        if [[ -f "$candidate" ]]; then
+            cfg_file="$candidate"
+            break
+        fi
     done
 
-    [[ -f "$cfg_file" ]] || { echo "[qemu-run] ERROR: cannot find seL4 config to infer GIC"; exit 2; }
-
-    if grep -qE 'CONFIG_ARM_GIC_V3[= ]1' "$cfg_file"; then
-        echo 3
-    elif grep -qE 'CONFIG_ARM_GIC_V2[= ]1' "$cfg_file"; then
-        echo 2
-    else
-        echo "[qemu-run] ERROR: cannot infer GIC version from $cfg_file"
+    if [[ -z "$cfg_file" ]]; then
+        echo "[qemu-run] ERROR: cannot find seL4 config to infer GIC" >&2
         exit 2
     fi
+
+    local detect_script="$SCRIPT_DIR/lib/detect_gic_version.py"
+    if [[ ! -x "$detect_script" ]]; then
+        echo "[qemu-run] ERROR: helper missing or not executable: $detect_script" >&2
+        exit 2
+    fi
+
+    local result
+    if ! result=$("$detect_script" "$cfg_file"); then
+        echo "[qemu-run] ERROR: cannot infer GIC version from $cfg_file" >&2
+        exit 2
+    fi
+
+    if [[ -z "$result" ]]; then
+        echo "[qemu-run] ERROR: cannot infer GIC version from $cfg_file" >&2
+        exit 2
+    fi
+
+    echo "$result"
 }
 
 for artefact in "$ELFLOADER" "$KERNEL" "$ROOT_TASK"; do

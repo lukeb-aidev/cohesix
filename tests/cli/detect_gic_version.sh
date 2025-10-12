@@ -42,4 +42,24 @@ if [[ "$(detect_gic_version)" != "3" ]]; then
     exit 1
 fi
 
+mkdir -p "$SEL4_BUILD_DIR/kernel/gen_config/kernel"
+cat > "$SEL4_BUILD_DIR/kernel/gen_config/kernel/gen_config.h" <<'CFG'
+/* disabled: CONFIG_ARM_GIC_V3_SUPPORT */
+#define CONFIG_PLAT_QEMU_ARM_VIRT 1
+CFG
+
+if [[ "$(detect_gic_version)" != "2" ]]; then
+    echo "[detect-gic-version] ERROR: expected version 2 when GICv3 support disabled" >&2
+    exit 1
+fi
+
+cat > "$SEL4_BUILD_DIR/kernel/gen_config/kernel/gen_config.h" <<'CFG'
+#define CONFIG_ARM_GIC_V3_SUPPORT 1
+CFG
+
+if [[ "$(detect_gic_version)" != "3" ]]; then
+    echo "[detect-gic-version] ERROR: expected version 3 when GICv3 support enabled" >&2
+    exit 1
+fi
+
 echo "[detect-gic-version] PASS: detected multiple GIC configuration encodings"
