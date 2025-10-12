@@ -46,6 +46,8 @@ KERNEL=""
 ROOT_TASK=""
 OUT_DIR="out"
 QEMU_BIN="qemu-system-aarch64"
+SEL4_BUILD_DIR="${SEL4_BUILD:-$HOME/seL4/build}"
+DTB_OVERRIDE=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -69,6 +71,14 @@ while [[ $# -gt 0 ]]; do
             QEMU_BIN="$2"
             shift 2
             ;;
+        --sel4-build)
+            SEL4_BUILD_DIR="$2"
+            shift 2
+            ;;
+        --dtb)
+            DTB_OVERRIDE="$2"
+            shift 2
+            ;;
         -h|--help)
             usage
             exit 0
@@ -86,6 +96,31 @@ if [[ -z "$ELFLOADER" || -z "$KERNEL" || -z "$ROOT_TASK" ]]; then
     usage
     exit 1
 fi
+
+if [[ ! -d "$SEL4_BUILD_DIR" ]]; then
+    log "seL4 build directory not found: $SEL4_BUILD_DIR"
+    exit 1
+fi
+
+detect_gic_version() {
+    local cfg_file
+    for cfg_file in \
+        "$SEL4_BUILD_DIR/kernel/gen_config/kernel_config.h" \
+        "$SEL4_BUILD_DIR/kernel/include/autoconf.h"; do
+        [[ -f "$cfg_file" ]] && break
+    done
+
+    [[ -f "$cfg_file" ]] || { echo "[qemu-run] ERROR: cannot find seL4 config to infer GIC"; exit 2; }
+
+    if grep -qE 'CONFIG_ARM_GIC_V3[= ]1' "$cfg_file"; then
+        echo 3
+    elif grep -qE 'CONFIG_ARM_GIC_V2[= ]1' "$cfg_file"; then
+        echo 2
+    else
+        echo "[qemu-run] ERROR: cannot infer GIC version from $cfg_file"
+        exit 2
+    fi
+}
 
 for artefact in "$ELFLOADER" "$KERNEL" "$ROOT_TASK"; do
     if [[ ! -f "$artefact" ]]; then
@@ -121,17 +156,29 @@ describe_file "Rootfs CPIO" "$ROOTFS_CPIO"
 QEMU_VERSION="$($QEMU_BIN --version | head -n1)"
 log "Using QEMU binary: $QEMU_BIN ($QEMU_VERSION)"
 
-QEMU_CMD=("$QEMU_BIN" \
-    -machine virt,gic-version=3 \
+GIC_VER="$(detect_gic_version)"
+log "Auto-detected GIC version: gic-version=$GIC_VER"
+
+QEMU_ARGS=(-machine "virt,gic-version=${GIC_VER}" \
     -cpu cortex-a57 \
     -m 1024 \
+    -smp 1 \
     -serial mon:stdio \
     -display none \
     -kernel "$ELFLOADER" \
     -initrd "$ROOTFS_CPIO" \
-    -device loader,file="$KERNEL",addr=0x70000000 \
-    -device loader,file="$ROOT_TASK",addr=0x80000000)
+    -device loader,file="$KERNEL",addr=0x70000000,force-raw=on \
+    -device loader,file="$ROOT_TASK",addr=0x80000000,force-raw=on)
 
-log "Prepared QEMU command: ${QEMU_CMD[*]}"
+if [[ -n "$DTB_OVERRIDE" ]]; then
+    if [[ ! -f "$DTB_OVERRIDE" ]]; then
+        log "DTB override not found: $DTB_OVERRIDE"
+        exit 1
+    fi
+    describe_file "DTB override" "$DTB_OVERRIDE"
+    QEMU_ARGS+=(-dtb "$DTB_OVERRIDE")
+fi
 
-exec "${QEMU_CMD[@]}"
+log "Prepared QEMU command: ${QEMU_ARGS[*]}"
+
+exec "$QEMU_BIN" "${QEMU_ARGS[@]}"
