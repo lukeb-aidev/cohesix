@@ -6,7 +6,8 @@
 //! The goal of this module is to provide the root task with a predictable
 //! networking surface that can operate in QEMU first and later be swapped to
 //! hardware specific PHY implementations. The implementation favours bounded
-//! heapless buffers so the memory envelope is known at compile time.
+//! heapless buffers so the memory envelope is known at compile time and exposes
+//! telemetry suitable for audit logging via the root-task event pump.
 
 extern crate alloc;
 
@@ -15,11 +16,13 @@ use core::fmt;
 use core::sync::atomic::Ordering;
 
 use heapless::{spsc::Queue, Vec as HeaplessVec};
-use portable_atomic::AtomicU32;
+use portable_atomic::{AtomicU32, AtomicU64};
 use smoltcp::iface::{Config as IfaceConfig, Interface, SocketSet, SocketStorage};
 use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::time::Instant;
 use smoltcp::wire::{EthernetAddress, HardwareAddress, IpAddress, IpCidr, Ipv4Address};
+
+use crate::event::{NetPoller, NetTelemetry};
 
 /// Maximum frame length supported by the bounded queues (bytes).
 pub const MAX_FRAME_LEN: usize = 1536;
@@ -161,6 +164,10 @@ impl QueuePhy {
             NetError::TxQueueFull
         })
     }
+
+    fn tx_drop_count(&self) -> u32 {
+        self.tx_drops.load(Ordering::Relaxed)
+    }
 }
 
 impl Device for QueuePhy {
@@ -228,7 +235,7 @@ impl<'a> TxToken for QueueTxToken<'a> {
 /// Shared monotonic clock for the interface.
 #[derive(Debug, Default)]
 pub struct NetworkClock {
-    ticks_ms: AtomicU32,
+    ticks_ms: AtomicU64,
 }
 
 impl NetworkClock {
@@ -236,20 +243,27 @@ impl NetworkClock {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            ticks_ms: AtomicU32::new(0),
+            ticks_ms: AtomicU64::new(0),
         }
     }
 
     /// Advance the clock by `delta_ms` and return the resulting instant.
     pub fn advance(&self, delta_ms: u32) -> Instant {
-        let updated = self.ticks_ms.fetch_add(delta_ms, Ordering::Relaxed) + delta_ms;
-        Instant::from_millis(i64::from(updated))
+        let delta = u64::from(delta_ms);
+        let updated = self
+            .ticks_ms
+            .fetch_add(delta, Ordering::Relaxed)
+            .saturating_add(delta);
+        let millis = i64::try_from(updated).unwrap_or(i64::MAX);
+        Instant::from_millis(millis)
     }
 
     /// Return the current instant without mutating the clock.
     #[must_use]
     pub fn now(&self) -> Instant {
-        Instant::from_millis(i64::from(self.ticks_ms.load(Ordering::Relaxed)))
+        let current = self.ticks_ms.load(Ordering::Relaxed);
+        let millis = i64::try_from(current).unwrap_or(i64::MAX);
+        Instant::from_millis(millis)
     }
 }
 
@@ -259,6 +273,7 @@ pub struct NetStack {
     device: QueuePhy,
     interface: Interface,
     hardware_addr: EthernetAddress,
+    telemetry: NetTelemetry,
 }
 
 impl NetStack {
@@ -282,18 +297,33 @@ impl NetStack {
             device,
             interface,
             hardware_addr: mac,
+            telemetry: NetTelemetry::default(),
         };
         (stack, handle)
     }
 
-    /// Poll the interface, advancing the clock by `delta_ms`.
-    pub fn poll(&mut self, delta_ms: u32) -> bool {
-        let timestamp = self.clock.advance(delta_ms);
+    /// Poll the interface using the supplied wall-clock timestamp in milliseconds.
+    pub fn poll_with_time(&mut self, now_ms: u64) -> bool {
+        let last = self.telemetry.last_poll_ms;
+        let delta = now_ms.saturating_sub(last);
+        let delta_ms = core::cmp::min(delta, u64::from(u32::MAX)) as u32;
+        let timestamp = if delta_ms == 0 {
+            self.clock.now()
+        } else {
+            self.clock.advance(delta_ms)
+        };
+
         let device = &mut self.device;
         let interface = &mut self.interface;
         let storage: &mut [SocketStorage<'static>] = &mut [];
         let mut sockets = SocketSet::new(storage);
-        interface.poll(timestamp, device, &mut sockets)
+        let changed = interface.poll(timestamp, device, &mut sockets);
+        self.telemetry.last_poll_ms = now_ms;
+        if changed || now_ms > 0 {
+            self.telemetry.link_up = true;
+        }
+        self.telemetry.tx_drops = self.device.tx_drop_count();
+        changed
     }
 
     /// Expose the configured hardware address.
@@ -302,10 +332,26 @@ impl NetStack {
         self.hardware_addr
     }
 
+    /// Retrieve telemetry captured during the most recent poll.
+    #[must_use]
+    pub fn telemetry(&self) -> NetTelemetry {
+        self.telemetry
+    }
+
     /// Access the underlying queue handle for diagnostics or tests.
     #[must_use]
     pub fn queue_handle(&self) -> QueueHandle {
         QueueHandle::new(self.device.rx, self.device.tx, self.device.tx_drops)
+    }
+}
+
+impl NetPoller for NetStack {
+    fn poll(&mut self, now_ms: u64) -> bool {
+        self.poll_with_time(now_ms)
+    }
+
+    fn telemetry(&self) -> NetTelemetry {
+        self.telemetry()
     }
 }
 
@@ -334,8 +380,19 @@ mod tests {
     fn poll_advances_clock() {
         let (mut stack, handle) = NetStack::new(Ipv4Address::new(10, 0, 2, 42));
         assert_eq!(handle.tx_drops(), 0);
-        stack.poll(10);
-        stack.poll(5);
+        stack.poll_with_time(10);
+        stack.poll_with_time(25);
         assert!(stack.clock.now() >= Instant::from_millis(15));
+    }
+
+    #[test]
+    fn telemetry_updates_after_poll() {
+        let (mut stack, handle) = NetStack::new(Ipv4Address::new(10, 0, 2, 7));
+        assert_eq!(stack.telemetry().last_poll_ms, 0);
+        stack.poll_with_time(25);
+        let telemetry = stack.telemetry();
+        assert!(telemetry.link_up);
+        assert_eq!(telemetry.last_poll_ms, 25);
+        assert_eq!(telemetry.tx_drops, handle.tx_drops());
     }
 }

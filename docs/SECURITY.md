@@ -4,12 +4,18 @@
 ## 1. Deterministic Memory Envelope
 - `root-task::net::NetStack` provisions bounded `heapless::spsc::Queue` buffers sized for 16 frames × 1536 bytes on both RX and
   TX paths (≈49 KiB total). The queues are allocated once at boot via `Box::leak` to avoid dynamic growth and are shared across
-  smoltcp and diagnostics handles.
+  smoltcp, the virtio descriptor validator, and diagnostics handles.
+- A monotonic `NetworkClock` backed by `portable_atomic::AtomicU64` bounds timestamp arithmetic while avoiding wrap for the
+  lifetime of the VM. Pollers advance the clock using explicit millisecond timestamps supplied by the event pump so the heapless
+  queues never rely on wall-clock drift.
 - smoltcp is compiled without default features; only the IPv4/TCP stack is enabled. Random seeds and MAC addresses are
   deterministic to ensure reproducible boots inside QEMU.
 - Console buffers (`heapless::String`) cap line length at 128 bytes and reject control characters beyond backspace/delete to
   prevent uncontrolled allocations. The serial façade uses `heapless::spsc::Queue` staging buffers sized at 256 bytes for RX and
   TX, and exposes atomic back-pressure counters so `/proc/boot` can surface saturation data without dynamic allocation.
+- Networking telemetry (`link_up`, `tx_drops`, `last_poll_ms`) is captured in a copyable struct so audit sinks can log
+  descriptor pressure without touching heap allocations. This telemetry is emitted whenever the event pump observes network
+  activity.
 
 ## 2. Console Hardening
 - A leaky-bucket rate limiter permits two consecutive authentication failures per 60-second window; the third failure triggers a
@@ -32,5 +38,6 @@
 - Tickets are still required for worker roles even over TCP; empty ticket submissions for worker roles fail with a transport-level
   error before touching NineDoor state. Successful `attach` calls commit the session role into the event pump so subsequent verbs
   cannot escalate privileges without minting a fresh ticket.
-- The event pump emits audit records (`event-pump: init <subsystem>`, `attach accepted`, `attach denied`) that flow to the serial
-  log. These records are critical for forensic review because they show which subsystems were live at the time of an intrusion.
+- The event pump emits audit records (`event-pump: init <subsystem>`, `net: poll link_up=<bool> tx_drops=<count>`, `attach
+  accepted`, `attach denied`) that flow to the serial log. These records are critical for forensic review because they show which
+  subsystems were live at the time of an intrusion and whether the networking queues are under pressure.
