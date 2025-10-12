@@ -351,7 +351,10 @@ PY
 
     pushd "$STAGING_DIR" >/dev/null
     log "Creating payload archive at $CPIO_PATH"
-    find . -print | LC_ALL=C sort | cpio -o -H newc > "$CPIO_PATH"
+    if [[ ! -d cohesix ]]; then
+        fail "Rootfs directory missing from staging area: $STAGING_DIR/cohesix"
+    fi
+    find cohesix -print | LC_ALL=C sort | cpio -o -H newc > "$CPIO_PATH"
     popd >/dev/null
 
     describe_file "Payload CPIO" "$CPIO_PATH"
