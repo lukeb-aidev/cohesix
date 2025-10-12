@@ -115,13 +115,17 @@ preparing and executing tasks.
 
 ## Milestone 7 — Standalone Console & Networking (QEMU-first)
 **Deliverables**
+- **Serial console integration**
+  - Implement a bidirectional serial driver for QEMU (`virtio-console` preferred, PL011 fallback) that supports blocking RX/TX (no heap, no std).
+  - Replace the `kernel_start` spin loop with an event pump that polls serial input, dispatches parsed commands, and yields to networking/timer tasks.
+  - Enforce ticket and role checks before privileged verbs execute; log denied attempts to `/log/queen.log` and rate-limit repeated failures.
 - **Networking substrate**
   - Add `smoltcp` (Rust, BSD-2) to the root-task crate under a new `net` module.
-  - Implement a virtio-net or tap-backed PHY targeting QEMU’s `-netdev tap` or `user` device; encapsulate driver code behind a trait so future UEFI/NIC ports swap in cleanly.
+  - Implement a virtio-net MMIO PHY for QEMU; encapsulate the device behind a trait so later UEFI NICs can be swapped in.
   - Use `heapless::{Vec, spsc::Queue}` for RX/TX buffers to keep allocations deterministic; document memory envelopes in `docs/SECURITY.md`.
 - **Command loop**
-  - Build a minimal serial + TCP line editor using `heapless::String` and a finite-state parser for commands: `help`, `attach`, `tail`, `log`, `quit`, plus optional `spawn/kill` stubs that forward JSON into NineDoor.
-  - Integrate the loop into the root-task main event pump alongside timer ticks, enforcing capability and ticket checks before executing privileged verbs.
+  - Build a minimal serial + TCP line editor using `heapless::String` and a finite-state parser for commands (`help`, `attach`, `tail`, `log`, `quit`, plus `spawn`/`kill` stubs that forward JSON to NineDoor).
+  - Integrate the loop into the root-task main event pump alongside timer ticks, enforcing capability checks before invoking root-task RPCs.
   - Rate-limit failed logins and enforce maximum line length to harden against trivial DoS.
 - **Remote transport**
   - Extend `cohsh` with a TCP transport that speaks to the new in-VM listener while keeping the existing mock/QEMU flows.
@@ -139,13 +143,26 @@ preparing and executing tasks.
 ### Task Breakdown
 
 ```
+Title/ID: m7-serial-rx
+Goal: Provide bidirectional serial I/O for the root-task console in QEMU.
+Inputs: docs/ARCHITECTURE.md §2; docs/INTERFACES.md §7; seL4 virtio-console/PL011 specs; `embedded-io` 0.4 (optional traits).
+Changes:
+  - crates/root-task/src/console/serial.rs — MMIO-backed RX/TX driver exposing `read_byte`/`write_byte` without heap allocation.
+  - crates/root-task/src/kernel.rs — initialise the serial driver, hook it into the event pump, and remove the legacy busy loop.
+  - crates/root-task/tests/serial_stub.rs — host-side stub verifying backspace/line termination handling.
+Commands: cd crates/root-task && cargo test serial_stub && cargo check --features net
+Checks: Serial RX consumes interactive input without panics; console loop handles backspace/newline and rate limiting in QEMU.
+Deliverables: Root-task serial driver initialised during boot with regression tests for RX edge cases.
+```
+
+```
 Title/ID: m7-net-substrate
 Goal: Wire up a deterministic networking stack for the root task.
-Inputs: docs/ARCHITECTURE.md §§4,7; docs/INTERFACES.md §§1,3,6; docs/SECURITY.md §4; smoltcp 0.11; heapless 0.8.
+Inputs: docs/ARCHITECTURE.md §§4,7; docs/INTERFACES.md §§1,3,6; docs/SECURITY.md §4; smoltcp 0.11; heapless 0.8; portable-atomic 1.6.
 Changes:
   - crates/root-task/Cargo.toml — add smoltcp, heapless, portable-atomic dependencies behind `net` feature.
-  - crates/root-task/src/net/mod.rs — introduce PHY trait, virtio-net implementation, smoltcp device glue, and bounded queues.
-  - crates/root-task/src/main.rs — initialise networking, integrate into scheduler/event pump.
+  - crates/root-task/src/net/mod.rs — introduce PHY trait, virtio-net implementation (descriptor rings, IRQ handler), smoltcp device glue, and bounded queues.
+  - crates/root-task/src/main.rs — initialise networking, register poller within the root-task event loop.
   - docs/SECURITY.md — document memory envelopes and networking threat considerations.
 Commands: cd crates/root-task && cargo check --features net && cargo test --features net net::tests
 Checks: Smoltcp interface boots in QEMU with deterministic heap usage; unit tests cover RX/TX queue saturation, link bring-up, and error paths.
@@ -200,6 +217,9 @@ Deliverables: Updated documentation set, automation scripts, and passing QEMU TC
 - `https://crates.io/crates/portable-atomic` (for lock-free counters)
 - `https://crates.io/crates/embassy-executor` and `https://crates.io/crates/embassy-net` (future async extension, optional)
 - `https://crates.io/crates/log` / `defmt` (optional structured logging while developing the stack)
+- `https://crates.io/crates/embedded-io` (serial/TCP trait adapters)
+- `https://crates.io/crates/nb` (non-blocking IO helpers)
+- `https://crates.io/crates/spin` (lock primitives for bounded queues)
 
 ## Milestone 8 — Async & Hardware Readiness (future)
 **Deliverables**
