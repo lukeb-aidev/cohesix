@@ -9,8 +9,10 @@ use heapless::String;
 /// Maximum length accepted for a single console line.
 pub const MAX_LINE_LEN: usize = 128;
 
-const MAX_ROLE_LEN: usize = 16;
-const MAX_TICKET_LEN: usize = 128;
+/// Maximum number of characters permitted in a role identifier when parsing `attach`.
+pub const MAX_ROLE_LEN: usize = 16;
+/// Maximum number of characters accepted for ticket material presented to `attach`.
+pub const MAX_TICKET_LEN: usize = 128;
 const MAX_PATH_LEN: usize = 96;
 const MAX_JSON_LEN: usize = 192;
 const MAX_ID_LEN: usize = 32;
