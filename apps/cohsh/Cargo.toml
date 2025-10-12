@@ -7,7 +7,9 @@ description = "Cohesix shell prototype using the live NineDoor Secure9P transpor
 license = "MIT"
 
 [features]
-default = ["tcp"]
+default = []
+# TCP transport pulls in `std` networking and is opt-in so offline workflows
+# can build without socket dependencies.
 tcp = []
 
 [dependencies]

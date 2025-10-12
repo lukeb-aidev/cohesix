@@ -1,9 +1,10 @@
 // Author: Lukas Bower
 //! TCP transport backend for the Cohesix shell console.
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{self, BufRead, BufReader, Write};
 use std::net::{TcpStream, ToSocketAddrs};
-use std::time::Duration;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
 use cohesix_ticket::Role;
@@ -13,6 +14,69 @@ use crate::{Session, Transport};
 
 /// Default TCP timeout applied to socket operations.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
+/// Default heartbeat cadence used to keep TCP sessions alive.
+const DEFAULT_HEARTBEAT: Duration = Duration::from_secs(15);
+/// Initial retry back-off applied when the connection drops.
+const DEFAULT_RETRY_BACKOFF: Duration = Duration::from_millis(250);
+/// Maximum retry back-off when reconnecting to the console listener.
+const DEFAULT_RETRY_CEILING: Duration = Duration::from_secs(3);
+/// Maximum retries when sending commands or recovering after a disconnect.
+const DEFAULT_MAX_RETRIES: usize = 5;
+
+#[derive(Debug, Clone)]
+struct SessionCache {
+    role: Role,
+    ticket: Option<String>,
+}
+
+#[derive(Debug, Default)]
+struct ConnectionTelemetry {
+    connects: usize,
+    reconnects: usize,
+    heartbeats: usize,
+}
+
+impl ConnectionTelemetry {
+    fn log_connect(&mut self, address: &str, port: u16) {
+        self.connects += 1;
+        eprintln!(
+            "[cohsh][tcp] connected to {address}:{port} (connects={})",
+            self.connects
+        );
+    }
+
+    fn log_reconnect(&mut self, attempt: usize, delay: Duration) {
+        self.reconnects += 1;
+        eprintln!(
+            "[cohsh][tcp] reconnect attempt #{attempt} (delay={:?}, total_reconnects={})",
+            delay, self.reconnects
+        );
+    }
+
+    fn log_disconnect(&self, error: &dyn std::error::Error) {
+        eprintln!("[cohsh][tcp] connection lost: {error}");
+    }
+
+    fn log_heartbeat(&mut self, latency: Duration) {
+        self.heartbeats += 1;
+        eprintln!(
+            "[cohsh][tcp] heartbeat acknowledged in {:?} (count={})",
+            latency, self.heartbeats
+        );
+    }
+}
+
+enum ReadStatus {
+    Line(String),
+    Timeout,
+    Closed,
+}
+
+enum HeartbeatOutcome {
+    Ack,
+    Line(String),
+    Closed,
+}
 
 /// TCP transport speaking the root-task console protocol.
 #[derive(Debug)]
@@ -20,9 +84,17 @@ pub struct TcpTransport {
     address: String,
     port: u16,
     timeout: Duration,
+    heartbeat_interval: Duration,
+    retry_backoff: Duration,
+    retry_ceiling: Duration,
+    max_retries: usize,
     stream: Option<TcpStream>,
     reader: Option<BufReader<TcpStream>>,
     next_session_id: u64,
+    last_activity: Instant,
+    last_probe: Option<Instant>,
+    session_cache: Option<SessionCache>,
+    telemetry: ConnectionTelemetry,
 }
 
 impl TcpTransport {
@@ -32,10 +104,47 @@ impl TcpTransport {
             address: address.into(),
             port,
             timeout: DEFAULT_TIMEOUT,
+            heartbeat_interval: DEFAULT_HEARTBEAT,
+            retry_backoff: DEFAULT_RETRY_BACKOFF,
+            retry_ceiling: DEFAULT_RETRY_CEILING,
+            max_retries: DEFAULT_MAX_RETRIES,
             stream: None,
             reader: None,
             next_session_id: 2,
+            last_activity: Instant::now(),
+            last_probe: None,
+            session_cache: None,
+            telemetry: ConnectionTelemetry::default(),
         }
+    }
+
+    /// Override the socket timeout used for read/write operations.
+    #[must_use]
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.timeout = timeout;
+        self
+    }
+
+    /// Override the heartbeat interval used to keep sessions alive.
+    #[must_use]
+    pub fn with_heartbeat_interval(mut self, interval: Duration) -> Self {
+        self.heartbeat_interval = interval;
+        self
+    }
+
+    /// Override the maximum retry attempts when recovering from disconnects.
+    #[must_use]
+    pub fn with_max_retries(mut self, attempts: usize) -> Self {
+        self.max_retries = attempts.max(1);
+        self
+    }
+
+    /// Override the retry back-off parameters (base delay and ceiling).
+    #[must_use]
+    pub fn with_backoff(mut self, base: Duration, ceiling: Duration) -> Self {
+        self.retry_backoff = base;
+        self.retry_ceiling = ceiling.max(base);
+        self
     }
 
     fn connect(&self) -> Result<TcpStream> {
@@ -51,46 +160,240 @@ impl TcpTransport {
         stream
             .set_write_timeout(Some(self.timeout))
             .context("failed to configure write timeout")?;
+        stream
+            .set_nodelay(true)
+            .context("failed to enable TCP_NODELAY")?;
         Ok(stream)
+    }
+
+    fn connect_with_backoff(&mut self) -> Result<()> {
+        let mut attempt = 0usize;
+        let mut delay = self.retry_backoff;
+        loop {
+            match self.connect() {
+                Ok(stream) => {
+                    let reader_stream = stream
+                        .try_clone()
+                        .context("failed to clone TCP stream for reader")?;
+                    self.reader = Some(BufReader::new(reader_stream));
+                    self.stream = Some(stream);
+                    self.last_activity = Instant::now();
+                    self.telemetry.log_connect(&self.address, self.port);
+                    return Ok(());
+                }
+                Err(err) => {
+                    if attempt >= self.max_retries {
+                        return Err(err);
+                    }
+                    self.telemetry.log_disconnect(err.as_ref());
+                    attempt += 1;
+                    self.telemetry.log_reconnect(attempt, delay);
+                    thread::sleep(delay);
+                    delay = Self::next_delay(delay, self.retry_ceiling);
+                }
+            }
+        }
     }
 
     fn ensure_connection(&mut self) -> Result<()> {
         if self.stream.is_none() {
-            let stream = self.connect()?;
-            let reader_stream = stream.try_clone().context("failed to clone TCP stream")?;
-            self.reader = Some(BufReader::new(reader_stream));
-            self.stream = Some(stream);
+            self.connect_with_backoff()?;
         }
         Ok(())
     }
 
-    fn send_line(&mut self, line: &str) -> Result<()> {
-        let stream = self
-            .stream
-            .as_mut()
-            .context("attach to the TCP transport before issuing commands")?;
-        stream
-            .write_all(line.as_bytes())
-            .context("failed to write to TCP transport")?;
-        stream
-            .write_all(b"\n")
-            .context("failed to terminate TCP line")?;
-        stream.flush().context("failed to flush TCP transport")
+    fn reset_connection(&mut self) {
+        self.stream = None;
+        self.reader = None;
+        self.last_probe = None;
     }
 
-    fn read_line(&mut self) -> Result<String> {
+    fn send_line_once(&mut self, line: &str) -> Result<(), io::Error> {
+        let stream = self.stream.as_mut().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotConnected, "TCP transport not connected")
+        })?;
+        stream.write_all(line.as_bytes())?;
+        stream.write_all(b"\n")?;
+        stream.flush()
+    }
+
+    fn send_line(&mut self, line: &str) -> Result<()> {
+        let mut attempt = 0usize;
+        let mut delay = self.retry_backoff;
+        loop {
+            self.ensure_connection()?;
+            match self.send_line_once(line) {
+                Ok(()) => {
+                    return Ok(());
+                }
+                Err(err) => {
+                    self.telemetry.log_disconnect(&err);
+                    self.reset_connection();
+                    attempt += 1;
+                    if attempt > self.max_retries {
+                        return Err(anyhow!("failed to send command after retries: {err}"));
+                    }
+                    self.telemetry.log_reconnect(attempt, delay);
+                    thread::sleep(delay);
+                    delay = Self::next_delay(delay, self.retry_ceiling);
+                }
+            }
+        }
+    }
+
+    fn read_line_internal(&mut self) -> Result<ReadStatus> {
         let reader = self
             .reader
             .as_mut()
             .context("attach to the TCP transport before reading")?;
         let mut line = String::new();
-        let bytes = reader
-            .read_line(&mut line)
-            .context("failed to read from TCP transport")?;
-        if bytes == 0 {
-            return Err(anyhow!("connection closed by peer"));
+        match reader.read_line(&mut line) {
+            Ok(0) => Ok(ReadStatus::Closed),
+            Ok(_) => {
+                self.last_activity = Instant::now();
+                Ok(ReadStatus::Line(line))
+            }
+            Err(err)
+                if matches!(
+                    err.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                ) =>
+            {
+                Ok(ReadStatus::Timeout)
+            }
+            Err(err) => Err(err.into()),
         }
-        Ok(line.trim_end_matches(['\r', '\n']).to_owned())
+    }
+
+    fn issue_heartbeat(&mut self) -> Result<HeartbeatOutcome> {
+        let start = Instant::now();
+        self.last_probe = Some(start);
+        self.send_line("PING")?;
+        loop {
+            match self.read_line_internal()? {
+                ReadStatus::Line(line) => {
+                    let trimmed = Self::trim_line(&line);
+                    if trimmed == "PONG" {
+                        let latency = self
+                            .last_probe
+                            .take()
+                            .map(|probe| probe.elapsed())
+                            .unwrap_or_else(|| start.elapsed());
+                        self.telemetry.log_heartbeat(latency);
+                        self.last_activity = Instant::now();
+                        return Ok(HeartbeatOutcome::Ack);
+                    }
+                    return Ok(HeartbeatOutcome::Line(trimmed));
+                }
+                ReadStatus::Timeout => continue,
+                ReadStatus::Closed => {
+                    self.last_probe = None;
+                    return Ok(HeartbeatOutcome::Closed);
+                }
+            }
+        }
+    }
+
+    fn next_protocol_line(&mut self) -> Result<Option<String>> {
+        loop {
+            match self.read_line_internal()? {
+                ReadStatus::Line(line) => {
+                    let trimmed = Self::trim_line(&line);
+                    if trimmed == "PONG" {
+                        let latency = self
+                            .last_probe
+                            .take()
+                            .map(|probe| probe.elapsed())
+                            .unwrap_or_default();
+                        self.telemetry.log_heartbeat(latency);
+                        self.last_activity = Instant::now();
+                        continue;
+                    }
+                    return Ok(Some(trimmed));
+                }
+                ReadStatus::Timeout => {
+                    if self.last_activity.elapsed() >= self.heartbeat_interval {
+                        match self.issue_heartbeat()? {
+                            HeartbeatOutcome::Ack => continue,
+                            HeartbeatOutcome::Line(line) => return Ok(Some(line)),
+                            HeartbeatOutcome::Closed => return Ok(None),
+                        }
+                    }
+                }
+                ReadStatus::Closed => return Ok(None),
+            }
+        }
+    }
+
+    fn recover_session(&mut self) -> Result<()> {
+        let Some(cache) = self.session_cache.clone() else {
+            return Err(anyhow!("TCP session dropped before any attach succeeded"));
+        };
+        self.reset_connection();
+        let err = anyhow!("connection closed by peer");
+        self.telemetry.log_disconnect(err.as_ref());
+        let attach_line = format!(
+            "ATTACH {} {}",
+            Self::role_label(cache.role),
+            cache.ticket.as_deref().unwrap_or("")
+        );
+        let mut attempt = 0usize;
+        let mut delay = self.retry_backoff;
+        loop {
+            self.send_line(&attach_line)?;
+            match self.next_protocol_line()? {
+                Some(response) => {
+                    if response.starts_with("OK") {
+                        return Ok(());
+                    }
+                    return Err(anyhow!("re-attach failed: {response}"));
+                }
+                None => {
+                    attempt += 1;
+                    if attempt > self.max_retries {
+                        return Err(anyhow!("unable to re-establish TCP session"));
+                    }
+                    self.reset_connection();
+                    self.telemetry.log_reconnect(attempt, delay);
+                    thread::sleep(delay);
+                    delay = Self::next_delay(delay, self.retry_ceiling);
+                }
+            }
+        }
+    }
+
+    fn normalise_ticket(role: Role, ticket: Option<&str>) -> Result<Option<String>> {
+        let trimmed = ticket.and_then(|value| {
+            let candidate = value.trim();
+            if candidate.is_empty() {
+                None
+            } else {
+                Some(candidate.to_owned())
+            }
+        });
+        match role {
+            Role::Queen => Ok(trimmed),
+            Role::WorkerHeartbeat | Role::WorkerGpu => {
+                let value = trimmed.ok_or_else(|| {
+                    anyhow!("role {:?} requires a non-empty ticket payload", role)
+                })?;
+                if !Self::is_ticket_well_formed(&value) {
+                    return Err(anyhow!(
+                        "ticket must be 64 hexadecimal characters or base64 encoded"
+                    ));
+                }
+                Ok(Some(value))
+            }
+        }
+    }
+
+    fn is_ticket_well_formed(value: &str) -> bool {
+        let hex = value.len() == 64 && value.chars().all(|c| c.is_ascii_hexdigit());
+        let base64_len_ok = matches!(value.len(), 43 | 44 | 86 | 87 | 88);
+        let base64_chars_ok = value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '/' | '=' | '-' | '_'));
+        hex || (base64_len_ok && base64_chars_ok)
     }
 
     fn role_label(role: Role) -> &'static str {
@@ -100,34 +403,92 @@ impl TcpTransport {
             Role::WorkerGpu => "worker-gpu",
         }
     }
+
+    fn trim_line(line: &str) -> String {
+        line.trim_end_matches(['\r', '\n']).to_owned()
+    }
+
+    fn next_delay(current: Duration, ceiling: Duration) -> Duration {
+        let doubled = current + current;
+        if doubled > ceiling {
+            ceiling
+        } else {
+            doubled
+        }
+    }
 }
 
 impl Transport for TcpTransport {
     fn attach(&mut self, role: Role, ticket: Option<&str>) -> Result<Session> {
-        self.ensure_connection()?;
-        let ticket_fragment = ticket.unwrap_or("");
-        let command = format!("ATTACH {} {}", Self::role_label(role), ticket_fragment);
-        self.send_line(&command)?;
-        let response = self.read_line()?;
-        if !response.starts_with("OK") {
-            return Err(anyhow!("remote attach failed: {response}"));
+        let ticket_payload = Self::normalise_ticket(role, ticket)?;
+        let attach_line = format!(
+            "ATTACH {} {}",
+            Self::role_label(role),
+            ticket_payload.as_deref().unwrap_or("")
+        );
+        let mut attempts = 0usize;
+        let mut delay = self.retry_backoff;
+        loop {
+            self.send_line(&attach_line)?;
+            match self.next_protocol_line()? {
+                Some(response) => {
+                    if !response.starts_with("OK") {
+                        return Err(anyhow!("remote attach failed: {response}"));
+                    }
+                    let session = Session::new(SessionId::from_raw(self.next_session_id), role);
+                    self.next_session_id = self.next_session_id.wrapping_add(1);
+                    self.session_cache = Some(SessionCache {
+                        role,
+                        ticket: ticket_payload.clone(),
+                    });
+                    return Ok(session);
+                }
+                None => {
+                    attempts += 1;
+                    if attempts > self.max_retries {
+                        return Err(anyhow!("unable to receive attach acknowledgement"));
+                    }
+                    let err = anyhow!("connection closed before attach acknowledgement");
+                    self.telemetry.log_disconnect(err.as_ref());
+                    self.reset_connection();
+                    self.telemetry.log_reconnect(attempts, delay);
+                    thread::sleep(delay);
+                    delay = Self::next_delay(delay, self.retry_ceiling);
+                }
+            }
         }
-        let session = Session::new(SessionId::from_raw(self.next_session_id), role);
-        self.next_session_id = self.next_session_id.wrapping_add(1);
-        Ok(session)
     }
 
     fn tail(&mut self, _session: &Session, path: &str) -> Result<Vec<String>> {
-        self.send_line(&format!("TAIL {path}"))?;
+        let command = format!("TAIL {path}");
+        let mut attempts = 0usize;
         let mut lines = Vec::new();
         loop {
-            let line = self.read_line()?;
-            if line == "END" {
-                break;
+            self.send_line(&command)?;
+            loop {
+                match self.next_protocol_line()? {
+                    Some(response) => {
+                        if response == "END" {
+                            return Ok(lines);
+                        }
+                        if response.starts_with("ERR") {
+                            return Err(anyhow!("tail failed: {response}"));
+                        }
+                        lines.push(response);
+                    }
+                    None => {
+                        attempts += 1;
+                        if attempts > self.max_retries {
+                            return Err(anyhow!(
+                                "connection dropped repeatedly while tailing {path}"
+                            ));
+                        }
+                        self.recover_session()?;
+                        break;
+                    }
+                }
             }
-            lines.push(line);
         }
-        Ok(lines)
     }
 }
 
@@ -135,30 +496,70 @@ impl Transport for TcpTransport {
 mod tests {
     use super::*;
     use std::net::TcpListener;
-    use std::thread;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
 
     #[test]
-    fn attaches_and_tails() {
+    fn ticket_validation_enforces_worker_requirements() {
+        assert!(TcpTransport::normalise_ticket(Role::Queen, None)
+            .unwrap()
+            .is_none());
+        assert!(TcpTransport::normalise_ticket(Role::Queen, Some(""))
+            .unwrap()
+            .is_none());
+        assert!(TcpTransport::normalise_ticket(Role::WorkerHeartbeat, None).is_err());
+        assert!(TcpTransport::normalise_ticket(Role::WorkerGpu, Some("  ")).is_err());
+        assert!(TcpTransport::normalise_ticket(
+            Role::WorkerHeartbeat,
+            Some("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
+        )
+        .is_ok());
+        assert!(TcpTransport::normalise_ticket(
+            Role::WorkerHeartbeat,
+            Some("MDEyMzQ1Njc4OUFCQ0RFRjAxMjM0NTY3ODlBQkNERUY="),
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn attaches_and_tails_with_reconnect_and_heartbeat() {
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let port = listener.local_addr().unwrap().port();
+        let connection_count = Arc::new(AtomicUsize::new(0));
+        let connection_barrier = Arc::clone(&connection_count);
         thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            let mut reader = BufReader::new(stream.try_clone().unwrap());
-            let mut line = String::new();
-            reader.read_line(&mut line).unwrap();
-            assert!(line.starts_with("ATTACH queen"));
-            writeln!(stream, "OK session").unwrap();
-            line.clear();
-            reader.read_line(&mut line).unwrap();
-            assert!(line.starts_with("TAIL /log/queen.log"));
-            writeln!(stream, "line one").unwrap();
-            writeln!(stream, "line two").unwrap();
-            writeln!(stream, "END").unwrap();
+            for stream in listener.incoming() {
+                let mut stream = stream.unwrap();
+                connection_barrier.fetch_add(1, Ordering::SeqCst);
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut line = String::new();
+                while reader.read_line(&mut line).unwrap_or(0) > 0 {
+                    let trimmed = line.trim();
+                    if trimmed.starts_with("ATTACH") {
+                        writeln!(stream, "OK session").unwrap();
+                    } else if trimmed.starts_with("TAIL") {
+                        if connection_barrier.load(Ordering::SeqCst) == 1 {
+                            writeln!(stream, "line one").unwrap();
+                            stream.flush().unwrap();
+                            break;
+                        } else {
+                            writeln!(stream, "line two").unwrap();
+                            writeln!(stream, "END").unwrap();
+                        }
+                    } else if trimmed == "PING" {
+                        writeln!(stream, "PONG").unwrap();
+                    }
+                    line.clear();
+                }
+            }
         });
 
-        let mut transport = TcpTransport::new("127.0.0.1", port);
+        let mut transport = TcpTransport::new("127.0.0.1", port)
+            .with_timeout(Duration::from_millis(100))
+            .with_heartbeat_interval(Duration::from_millis(50))
+            .with_max_retries(4);
         let session = transport.attach(Role::Queen, None).unwrap();
-        let lines = transport.tail(&session, "/log/queen.log").unwrap();
-        assert_eq!(lines, vec!["line one".to_owned(), "line two".to_owned()]);
+        let logs = transport.tail(&session, "/log/queen.log").unwrap();
+        assert_eq!(logs, vec!["line one".to_owned(), "line two".to_owned()]);
     }
 }
