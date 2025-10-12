@@ -139,6 +139,22 @@ pub extern "C" fn kernel_start(bootinfo: *const BootInfoHeader) -> ! {
     console.writeln_prefixed("entered from seL4 (stage0)");
     console.report_bootinfo(bootinfo);
 
+    console.writeln_prefixed("Cohesix v0 (AArch64/virt)");
+
+    for tick in 1..=HEARTBEAT_TICKS {
+        busy_wait_cycles(BUSY_WAIT_CYCLES);
+        let _ = write!(
+            console,
+            "{prefix}tick: {tick}\r\n",
+            prefix = DebugConsole::PREFIX,
+            tick = tick,
+        );
+    }
+
+    console.writeln_prefixed("PING");
+    console.writeln_prefixed("PONG");
+    console.writeln_prefixed("root task idling");
+
     // TODO: replace this placeholder loop with capability bootstrap logic.
     loop {
         core::hint::spin_loop();
@@ -147,26 +163,21 @@ pub extern "C" fn kernel_start(bootinfo: *const BootInfoHeader) -> ! {
 
 #[inline(always)]
 fn emit_debug_char(byte: u8) {
-    #[cfg(all(sel4_config_printing, target_arch = "aarch64"))]
+    #[cfg(all(feature = "sel4-console", target_arch = "aarch64"))]
     unsafe {
         arch::debug_put_char(byte);
     }
 
-    #[cfg(all(sel4_config_printing, not(target_arch = "aarch64")))]
-    {
-        let _ = byte;
-    }
-
-    #[cfg(not(sel4_config_printing))]
+    #[cfg(not(all(feature = "sel4-console", target_arch = "aarch64")))]
     {
         let _ = byte;
     }
 }
 
-#[cfg(all(sel4_config_printing, not(target_arch = "aarch64")))]
-compile_error!("sel4_config_printing is only supported on aarch64 targets");
+#[cfg(all(feature = "sel4-console", not(target_arch = "aarch64")))]
+compile_error!("feature \"sel4-console\" is only supported on aarch64 targets");
 
-#[cfg(all(sel4_config_printing, target_arch = "aarch64"))]
+#[cfg(all(feature = "sel4-console", target_arch = "aarch64"))]
 mod arch {
     use core::arch::asm;
 
@@ -206,6 +217,16 @@ fn panic(info: &PanicInfo) -> ! {
         info = info
     );
     loop {
+        core::hint::spin_loop();
+    }
+}
+
+const HEARTBEAT_TICKS: usize = 3;
+const BUSY_WAIT_CYCLES: usize = 5_000_000;
+
+#[inline(never)]
+fn busy_wait_cycles(cycles: usize) {
+    for _ in 0..cycles {
         core::hint::spin_loop();
     }
 }
