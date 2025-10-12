@@ -6,12 +6,12 @@ use core::ptr::NonNull;
 
 use heapless::Vec;
 use sel4_sys::{
-    seL4_ARM_Page, seL4_ARM_Page_Default, seL4_ARM_Page_Map, seL4_ARM_Page_Uncached,
-    seL4_ARM_PageTable, seL4_ARM_PageTable_Map, seL4_BootInfo, seL4_CNode,
-    seL4_CapInitThreadCNode, seL4_CapInitThreadVSpace, seL4_CapRights_ReadWrite, seL4_CPtr,
-    seL4_Error, seL4_SlotRegion, seL4_Untyped, seL4_Untyped_Retype, seL4_Word, UntypedDesc,
-    MAX_BOOTINFO_UNTYPEDS, seL4_ARM_PageTableObject, seL4_ARM_SmallPageObject, seL4_FailedLookup,
-    seL4_NoError, seL4_NotEnoughMemory,
+    seL4_ARM_Page, seL4_ARM_PageTable, seL4_ARM_PageTableObject, seL4_ARM_PageTable_Map,
+    seL4_ARM_Page_Default, seL4_ARM_Page_Map, seL4_ARM_Page_Uncached, seL4_ARM_SmallPageObject,
+    seL4_BootInfo, seL4_CNode, seL4_CPtr, seL4_CapInitThreadCNode, seL4_CapInitThreadVSpace,
+    seL4_CapRights_ReadWrite, seL4_Error, seL4_FailedLookup, seL4_NoError, seL4_NotEnoughMemory,
+    seL4_SlotRegion, seL4_Untyped, seL4_Untyped_Retype, seL4_Word, UntypedDesc,
+    MAX_BOOTINFO_UNTYPEDS,
 };
 
 const PAGE_BITS: usize = 12;
@@ -124,7 +124,7 @@ impl<'a> UntypedCatalog<'a> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DeviceFrame {
     cap: seL4_CPtr,
     paddr: usize,
@@ -143,7 +143,7 @@ impl DeviceFrame {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RamFrame {
     cap: seL4_CPtr,
     paddr: usize,
@@ -164,6 +164,16 @@ impl RamFrame {
     #[must_use]
     pub fn cap(&self) -> seL4_CPtr {
         self.cap
+    }
+
+    #[must_use]
+    pub fn as_mut_slice(&mut self) -> &mut [u8] {
+        unsafe { core::slice::from_raw_parts_mut(self.ptr.as_ptr(), PAGE_SIZE) }
+    }
+
+    #[must_use]
+    pub fn as_slice(&self) -> &[u8] {
+        unsafe { core::slice::from_raw_parts(self.ptr.as_ptr(), PAGE_SIZE) }
     }
 }
 
@@ -205,11 +215,7 @@ impl<'a> KernelEnv<'a> {
             .ok_or(seL4_NotEnoughMemory)?;
         let frame_slot = self.allocate_slot();
         self.retype_page(reserved.cap, frame_slot)?;
-        self.map_frame(
-            frame_slot,
-            paddr,
-            seL4_ARM_Page_Uncached,
-        )?;
+        self.map_frame(frame_slot, paddr, seL4_ARM_Page_Uncached)?;
         Ok(DeviceFrame {
             cap: frame_slot,
             paddr,
@@ -230,11 +236,7 @@ impl<'a> KernelEnv<'a> {
             .expect("dma cursor overflow (address space exhausted)")
             - PAGE_SIZE;
         self.dma_cursor += PAGE_SIZE;
-        self.map_frame(
-            frame_slot,
-            vaddr,
-            seL4_ARM_Page_Uncached,
-        )?;
+        self.map_frame(frame_slot, vaddr, seL4_ARM_Page_Uncached)?;
         Ok(RamFrame {
             cap: frame_slot,
             paddr: reserved.paddr,
@@ -242,7 +244,11 @@ impl<'a> KernelEnv<'a> {
         })
     }
 
-    fn retype_page(&mut self, untyped_cap: seL4_Untyped, slot: seL4_CPtr) -> Result<(), seL4_Error> {
+    fn retype_page(
+        &mut self,
+        untyped_cap: seL4_Untyped,
+        slot: seL4_CPtr,
+    ) -> Result<(), seL4_Error> {
         let res = unsafe {
             seL4_Untyped_Retype(
                 untyped_cap,
@@ -312,12 +318,7 @@ impl<'a> KernelEnv<'a> {
                 let pt_slot = self.allocate_slot();
                 self.retype_page_table(reserved.cap, pt_slot)?;
                 let map_res = unsafe {
-                    seL4_ARM_PageTable_Map(
-                        pt_slot,
-                        seL4_CapInitThreadVSpace,
-                        pt_base,
-                        attr,
-                    )
+                    seL4_ARM_PageTable_Map(pt_slot, seL4_CapInitThreadVSpace, pt_base, attr)
                 };
                 if map_res != seL4_NoError {
                     return Err(map_res);
