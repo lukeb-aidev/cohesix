@@ -14,7 +14,9 @@ use cohesix_ticket::Role;
 use heapless::{String as HeaplessString, Vec as HeaplessVec};
 
 use crate::console::{Command, CommandParser, ConsoleError, MAX_ROLE_LEN, MAX_TICKET_LEN};
-use crate::serial::{SerialDriver, SerialPort, SerialTelemetry};
+#[cfg(feature = "net")]
+use crate::net::CONSOLE_QUEUE_DEPTH;
+use crate::serial::{SerialDriver, SerialPort, SerialTelemetry, DEFAULT_LINE_CAPACITY};
 
 fn format_message(args: fmt::Arguments<'_>) -> HeaplessString<128> {
     let mut buf = HeaplessString::new();
@@ -123,8 +125,8 @@ impl<const N: usize> CapabilityValidator for TicketTable<N> {
 /// Snapshot of event pump metrics used for diagnostics.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct PumpMetrics {
-    /// Number of serial lines processed.
-    pub serial_lines: u64,
+    /// Number of console lines processed across serial and TCP transports.
+    pub console_lines: u64,
     /// Commands rejected due to missing authentication.
     pub denied_commands: u64,
     /// Commands executed successfully.
@@ -189,6 +191,12 @@ pub trait NetPoller {
 
     /// Obtain telemetry for diagnostics.
     fn telemetry(&self) -> NetTelemetry;
+
+    /// Drain any pending console lines produced by TCP listeners.
+    fn drain_console_lines(
+        &mut self,
+        visitor: &mut dyn FnMut(HeaplessString<DEFAULT_LINE_CAPACITY>),
+    );
 }
 
 /// Networking telemetry reported by [`NetPoller`].
@@ -290,6 +298,16 @@ where
                 ));
                 self.audit.info(message.as_str());
             }
+            let mut buffered: HeaplessVec<
+                HeaplessString<DEFAULT_LINE_CAPACITY>,
+                { CONSOLE_QUEUE_DEPTH },
+            > = HeaplessVec::new();
+            net.drain_console_lines(&mut |line| {
+                let _ = buffered.push(line);
+            });
+            for line in buffered {
+                self.handle_network_line(line);
+            }
         }
 
         self.ipc.dispatch(self.now_ms);
@@ -309,11 +327,15 @@ where
 
     fn consume_serial(&mut self) {
         while let Some(line) = self.serial.next_line() {
-            self.metrics.serial_lines = self.metrics.serial_lines.saturating_add(1);
-            if let Err(err) = self.feed_parser(&line) {
-                let message = format_message(format_args!("console error: {}", err));
-                self.audit.info(message.as_str());
-            }
+            self.process_console_line(&line);
+        }
+    }
+
+    fn process_console_line(&mut self, line: &HeaplessString<LINE>) {
+        self.metrics.console_lines = self.metrics.console_lines.saturating_add(1);
+        if let Err(err) = self.feed_parser(line) {
+            let message = format_message(format_args!("console error: {}", err));
+            self.audit.info(message.as_str());
         }
     }
 
@@ -325,6 +347,17 @@ where
             self.handle_command(command);
         }
         Ok(())
+    }
+
+    #[cfg(feature = "net")]
+    fn handle_network_line(&mut self, line: HeaplessString<DEFAULT_LINE_CAPACITY>) {
+        let mut converted: HeaplessString<LINE> = HeaplessString::new();
+        if converted.push_str(line.as_str()).is_err() {
+            self.audit
+                .denied("net console line exceeded maximum length");
+            return;
+        }
+        self.process_console_line(&converted);
     }
 
     fn handle_command(&mut self, command: Command) {
@@ -578,5 +611,64 @@ mod tests {
             .entries
             .iter()
             .any(|entry| entry.contains("log stream")));
+    }
+
+    #[cfg(feature = "net")]
+    #[test]
+    fn network_lines_feed_parser() {
+        struct FakeNet {
+            lines: heapless::Vec<HeaplessString<DEFAULT_LINE_CAPACITY>, 4>,
+        }
+
+        impl FakeNet {
+            fn new() -> Self {
+                Self {
+                    lines: heapless::Vec::new(),
+                }
+            }
+        }
+
+        impl NetPoller for FakeNet {
+            fn poll(&mut self, _now_ms: u64) -> bool {
+                true
+            }
+
+            fn telemetry(&self) -> NetTelemetry {
+                NetTelemetry {
+                    link_up: true,
+                    tx_drops: 0,
+                    last_poll_ms: 0,
+                }
+            }
+
+            fn drain_console_lines(
+                &mut self,
+                visitor: &mut dyn FnMut(HeaplessString<DEFAULT_LINE_CAPACITY>),
+            ) {
+                while !self.lines.is_empty() {
+                    let line = self.lines.remove(0);
+                    visitor(line);
+                }
+            }
+        }
+
+        let driver = LoopbackSerial::<16>::new();
+        let serial = SerialPort::<_, 16, 16, 32>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "net").unwrap();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        let mut line = HeaplessString::new();
+        line.push_str("attach queen net").unwrap();
+        net.lines.push(line).unwrap();
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+        pump.poll();
+        drop(pump);
+        assert!(audit
+            .entries
+            .iter()
+            .any(|entry| entry.contains("attach accepted")));
     }
 }
