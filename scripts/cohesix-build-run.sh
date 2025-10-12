@@ -102,7 +102,7 @@ wait_for_port() {
     local port="$2"
     local attempts="${3:-30}"
     for ((i = 0; i < attempts; i++)); do
-        if python3 - "$host" "$port" <<'PY'; then
+        if python3 - "$host" "$port" <<'PY'
 import socket
 import sys
 
