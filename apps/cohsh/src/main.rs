@@ -13,12 +13,16 @@ use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
 use cohesix_ticket::Role;
 
+#[cfg(feature = "tcp")]
+use cohsh::TcpTransport;
 use cohsh::{NineDoorTransport, QemuTransport, RoleArg, Shell, Transport};
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
 enum TransportKind {
     Mock,
     Qemu,
+    #[cfg(feature = "tcp")]
+    Tcp,
 }
 
 /// Cohesix shell command-line arguments.
@@ -56,6 +60,16 @@ struct Cli {
     /// Extra arguments forwarded to QEMU when using the qemu transport.
     #[arg(long = "qemu-arg", value_name = "ARG")]
     qemu_args: Vec<String>,
+
+    /// Hostname or IP address for the TCP transport.
+    #[cfg(feature = "tcp")]
+    #[arg(long, default_value = "127.0.0.1")]
+    tcp_host: String,
+
+    /// TCP port for the remote console listener.
+    #[cfg(feature = "tcp")]
+    #[arg(long, default_value_t = 31337)]
+    tcp_port: u16,
 }
 
 fn main() -> Result<()> {
@@ -76,14 +90,21 @@ fn main() -> Result<()> {
             cli.qemu_gic_version.clone(),
             qemu_args,
         )),
+        #[cfg(feature = "tcp")]
+        TransportKind::Tcp => Box::new(TcpTransport::new(cli.tcp_host.clone(), cli.tcp_port)),
     };
     let mut shell = Shell::new(transport, writer);
     shell.write_line("Welcome to Cohesix. Type 'help' for commands.")?;
     let mut auto_log = false;
     if let Some(role_arg) = cli.role {
         shell.attach(Role::from(role_arg), cli.ticket.as_deref())?;
-        if cli.script.is_none() && matches!(cli.transport, TransportKind::Qemu) {
-            auto_log = true;
+        if cli.script.is_none() {
+            match cli.transport {
+                TransportKind::Qemu => auto_log = true,
+                #[cfg(feature = "tcp")]
+                TransportKind::Tcp => auto_log = true,
+                _ => {}
+            }
         }
     } else {
         shell.write_line("detached shell: run 'attach <role>' to connect")?;

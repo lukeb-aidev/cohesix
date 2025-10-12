@@ -9,6 +9,12 @@ use anyhow::{anyhow, Result as AnyhowResult};
 use cohesix_ticket::{BudgetSpec, Role, TicketTemplate};
 use secure9p_wire::{FrameHeader, SessionId};
 
+use crate::console::{Command, CommandParser, ConsoleError};
+#[cfg(feature = "net")]
+use crate::net::NetStack;
+#[cfg(feature = "net")]
+use smoltcp::wire::Ipv4Address;
+
 /// Result alias used throughout the host-mode simulation.
 pub type Result<T> = AnyhowResult<T>;
 
@@ -18,7 +24,7 @@ pub fn main() -> Result<()> {
     let handle = stdout.lock();
     let timer = SleepTimer::new(Duration::from_millis(25), TICK_LIMIT);
     let component = PingPongComponent::new();
-    let mut root_task = RootTask::new(handle, timer, component);
+    let mut root_task = RootTask::new(handle, timer, component)?;
     root_task.run()
 }
 
@@ -130,29 +136,41 @@ struct RootTask<W: Write, T: Timer, C: UserComponent> {
     component: C,
     ping_sent: bool,
     bootstrap_ticket: TicketTemplate,
+    console: CommandParser,
+    #[cfg(feature = "net")]
+    net: NetStack,
 }
 
 impl<W: Write, T: Timer, C: UserComponent> RootTask<W, T, C> {
     /// Create a new root task simulation.
-    fn new(writer: W, timer: T, component: C) -> Self {
-        Self {
+    fn new(writer: W, timer: T, component: C) -> Result<Self> {
+        #[cfg(feature = "net")]
+        let (net, _) = NetStack::new(Ipv4Address::new(10, 0, 0, 2));
+
+        Ok(Self {
             writer,
             timer,
             component,
             ping_sent: false,
             bootstrap_ticket: TicketTemplate::new(Role::Queen, BudgetSpec::unbounded()),
-        }
+            console: CommandParser::new(),
+            #[cfg(feature = "net")]
+            net,
+        })
     }
 
     fn run(&mut self) -> Result<()> {
         self.log_banner()?;
         let handle = self.spawn_component()?;
         self.log_component_spawn(&handle)?;
+        self.seed_console()?;
         while let Some(tick) = self.timer.next_tick() {
             self.log_tick(tick.count)?;
             if !self.ping_sent {
                 self.perform_ping_pong(tick.count)?;
             }
+            #[cfg(feature = "net")]
+            self.poll_network()?;
         }
         writeln!(self.writer, "root-task shutdown")?;
         Ok(())
@@ -192,6 +210,85 @@ impl<W: Write, T: Timer, C: UserComponent> RootTask<W, T, C> {
         self.ping_sent = true;
         Ok(())
     }
+
+    fn seed_console(&mut self) -> Result<()> {
+        if let Err(err) = self.console.record_login_attempt(false, 1_000) {
+            writeln!(self.writer, "login limiter warning: {err}")?;
+        }
+        if let Err(err) = self.console.record_login_attempt(false, 2_000) {
+            writeln!(self.writer, "login limiter warning: {err}")?;
+        }
+        if let Err(err) = self.console.record_login_attempt(false, 3_000) {
+            writeln!(self.writer, "login limiter warning: {err}")?;
+        }
+        self.console
+            .record_login_attempt(true, 120_000)
+            .map_err(|err| anyhow!(err.to_string()))?;
+
+        const SCRIPT: &[&str] = &["help", "attach queen", "log", "tail /log/queen.log", "quit"];
+        for line in SCRIPT {
+            for byte in line.as_bytes() {
+                if let Some(command) = self.console.push_byte(*byte).map_err(to_anyhow)? {
+                    self.handle_command(command)?;
+                }
+            }
+            if let Some(command) = self.console.push_byte(b'\n').map_err(to_anyhow)? {
+                self.handle_command(command)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn handle_command(&mut self, command: Command) -> Result<()> {
+        match command {
+            Command::Help => writeln!(self.writer, "console: help requested")?,
+            Command::Attach { role, ticket } => {
+                writeln!(
+                    self.writer,
+                    "console: attach role={} ticket={}",
+                    role,
+                    ticket.as_deref().unwrap_or("<none>")
+                )?;
+            }
+            Command::Tail { path } => {
+                writeln!(self.writer, "console: tail {}", path)?;
+            }
+            Command::Log => writeln!(self.writer, "console: log streaming enabled")?,
+            Command::Quit => writeln!(self.writer, "console: quit requested")?,
+            Command::Spawn(payload) => {
+                writeln!(self.writer, "console: spawn {}", payload)?;
+            }
+            Command::Kill(ident) => {
+                writeln!(self.writer, "console: kill {}", ident)?;
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "net")]
+    fn poll_network(&mut self) -> Result<()> {
+        use crate::net::Frame;
+        let handle = self.net.queue_handle();
+        if handle.pop_tx().is_none() {
+            let frame = Frame::from_slice(&[0u8; 64]).map_err(|err| anyhow!(err.to_string()))?;
+            handle
+                .push_rx(frame)
+                .map_err(|err| anyhow!(err.to_string()))?;
+        }
+        let changed = self.net.poll(10);
+        if changed {
+            writeln!(
+                self.writer,
+                "net: polled interface {:?}",
+                self.net.hardware_address()
+            )?;
+        }
+        Ok(())
+    }
+}
+
+fn to_anyhow(err: ConsoleError) -> anyhow::Error {
+    anyhow!(err.to_string())
 }
 
 #[cfg(test)]
@@ -215,7 +312,7 @@ mod tests {
         };
         let component = PingPongComponent::new();
         let mut output = Vec::new();
-        let mut root_task = RootTask::new(&mut output, timer, component);
+        let mut root_task = RootTask::new(&mut output, timer, component).unwrap();
         root_task.run().unwrap();
         let transcript = String::from_utf8(output).unwrap();
         assert!(transcript.contains("PING 1"));

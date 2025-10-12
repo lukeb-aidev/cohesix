@@ -14,7 +14,7 @@ fn fuzz_decode_round_trips() {
         .and_then(|value| value.parse().ok())
         .unwrap_or(512);
     let mut rng = StdRng::seed_from_u64(0xC0DEC0DE_u64);
-    let codec = Codec::default();
+    let codec = Codec;
 
     for _ in 0..iterations {
         let mut frame = codec.encode_request(&random_request(&mut rng)).unwrap();
