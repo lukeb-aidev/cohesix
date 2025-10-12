@@ -112,3 +112,16 @@ preparing and executing tasks.
 - Host integration tests run in `--mock` mode when GPUs are absent.
 
 > **Rule of Engagement:** Advance milestones sequentially, treat documentation as canonical, and keep code/tests aligned after every milestone increment.
+
+## Milestone 7 — Standalone Console & Networking
+**Deliverables**
+- Integrate a minimal `no_std` TCP/IP stack (e.g., smoltcp) inside the root task so UEFI deployments can expose a loopback and single host-facing interface without pulling in a full POSIX layer.
+- Provide a serial-first command shell bundled with the root task that mirrors the `cohsh` command surface (attach/tail/log/help/quit) and forwards privileged operations into the existing NineDoor capability model.
+- Supply a network-backed transport that accepts authenticated `cohsh` sessions over TCP while preserving capability ticket validation.
+- Harden the new surface: rate-limit inbound connections, validate line-oriented commands, and document secure defaults in `docs/INTERFACES.md`.
+- Update architecture docs to explain the on-device console, serial/TCP flows, and minimal TCB impact.
+
+**Checks**
+- UEFI boot image brings up the root task, configures the network interface, and accepts shell input over serial and TCP.
+- `cohsh` can attach remotely via the new transport while the embedded shell remains available for direct console access.
+- Integration tests cover invalid/slow-path networking scenarios; fuzz tests protect the command parser.
