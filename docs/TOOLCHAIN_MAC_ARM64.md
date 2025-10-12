@@ -34,6 +34,11 @@ qemu-system-aarch64 --version | head -n1
    ```bash
    ./scripts/qemu-run.sh out/elfloader out/kernel.elf out/rootfs.cpio
    ```
+5. The Cohesix build harness copies `elfloader` into its staging directory and
+   strips any baked-in kernel/root server payloads via
+   `scripts/lib/strip_elfloader_modules.py`. This guarantees that the Rust
+   `root-task` provided by the workspace becomes the first user task instead of
+   the default `sel4test` module shipped with upstream builds.
 
 ## 5. Developer Quality-of-Life
 - Install `just` (optional) for task orchestration.
