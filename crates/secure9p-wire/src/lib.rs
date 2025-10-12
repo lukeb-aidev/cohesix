@@ -863,7 +863,7 @@ mod tests {
 
     #[test]
     fn encode_decode_version_round_trip() {
-        let codec = Codec::default();
+        let codec = Codec;
         let request = Request {
             tag: 1,
             body: RequestBody::Version {
@@ -878,7 +878,7 @@ mod tests {
 
     #[test]
     fn decode_rejects_length_mismatch() {
-        let codec = Codec::default();
+        let codec = Codec;
         let request = Request {
             tag: 2,
             body: RequestBody::Clunk { fid: 1 },
@@ -899,7 +899,7 @@ mod tests {
 
     #[test]
     fn decode_rejects_invalid_component() {
-        let codec = Codec::default();
+        let codec = Codec;
         let mut frame = Vec::new();
         frame.extend_from_slice(&[0u8; 4]);
         frame.push(110); // Twalk opcode
@@ -916,7 +916,7 @@ mod tests {
 
     #[test]
     fn decode_request_reports_truncated_payload() {
-        let codec = Codec::default();
+        let codec = Codec;
         let mut frame = Vec::new();
         frame.extend_from_slice(&[0u8; 4]);
         frame.push(110); // Twalk opcode
@@ -933,7 +933,7 @@ mod tests {
 
     #[test]
     fn decode_response_rejects_unknown_error_code() {
-        let codec = Codec::default();
+        let codec = Codec;
         let response = Response {
             tag: 41,
             body: ResponseBody::Error {

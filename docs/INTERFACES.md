@@ -64,6 +64,12 @@ pub trait RootTaskControl {
 - Client attaches using the queen or worker ticket, negotiates `msize`, then issues 9P ops corresponding to shell commands.
 - `tail` uses repeated `read` calls with offset tracking; NineDoor enforces append-only by ignoring provided offsets.
 - `bind` and `mount` commands are no-ops for non-queen roles.
+- `--transport tcp` connects to the root-task console listener (default `127.0.0.1:31337`) and speaks a line-oriented protocol:
+  - `ATTACH <role> <ticket?>` → `OK <session>` or `ERR <reason>`
+  - `TAIL <path>` streams newline-delimited log entries terminated by `END`
+  - All other verbs reuse the serial console surface (`help`, `attach`, `tail`, `log`, `spawn`, `kill`, `quit`)
+- The TCP console enforces a maximum line length of 128 bytes and rate-limits failed authentication attempts (3 strikes within
+  60 seconds triggers a 90-second cooldown).
 
 ## 8. Error Surface
 | Error | Meaning |
@@ -74,6 +80,7 @@ pub trait RootTaskControl {
 | `Invalid` | JSON parse failure or malformed 9P frame |
 | `TooBig` | Frame exceeds negotiated `msize` |
 | `Closed` | Fid used after `clunk` or revoked ticket |
+| `RateLimited` | Console authentication locked out due to repeated failures |
 
 ## 9. Documentation Hooks
 - Any new command or file path must be documented here and referenced from `ROLES_AND_SCHEDULING.md` and `BUILD_PLAN.md` before implementation.

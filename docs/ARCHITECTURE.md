@@ -25,6 +25,10 @@
 - Owns seL4 initial caps, configures memory, and manages scheduling budgets.
 - Provides a minimal RPC surface to NineDoor for spawning/killing tasks and for timer events.
 - Enforces budget expiry (ticks, ops, ttl) and revokes capabilities on violation.
+- Hosts the deterministic networking stack (`net::NetStack`) which wraps smoltcp with virtio-friendly, heapless RX/TX queues and
+  a `NetworkClock` that advances in timer-driven increments.
+- Runs the serial/TCP console loop (`console::CommandParser`) which multiplexes authenticated commands (`help`, `attach`, `tail`,
+  `log`, `spawn`, `kill`, `quit`) alongside timer and networking events inside the root-task scheduler.
 
 ### NineDoor 9P Server (crate: `nine-door`)
 - Implements the Secure9P codec/core stack and publishes the synthetic namespace.
@@ -59,12 +63,24 @@
 - **Logging**: Root task and queen append to `/log/queen.log`; workers read logs read-only for situational awareness.
 - **GPU Integration (future)**: Host bridge exposes GPU metadata/control/job/status nodes; WorkerGpu instances mediate job submission and read back status via NineDoor.
 
-## 7. Reliability & Security Considerations
+## 7. Networking & Console Integration
+- The networking substrate instantiates a virtio-style PHY backed by `heapless::spsc::Queue` buffers (16 frames × 1536 bytes) to
+  preserve deterministic memory usage. smoltcp provides the IPv4/TCP stack while the PHY abstraction allows future hardware
+  drivers to plug in without changing higher layers.
+- A host-only virtio loopback is exposed via `QueueHandle` for testing; production builds will swap this out for the seL4
+  virtio-net driver once the VM wiring is complete.
+- The console loop multiplexes serial input and TCP sessions. A shared finite-state parser enforces maximum line length, rate
+  limits repeated authentication failures, and funnels all verbs through capability checks before invoking NineDoor or root-task
+  orchestration APIs.
+- Root-task’s event pump advances the networking clock on every timer tick, services console input, and emits structured log
+  lines so host tooling (`cohsh`) can mirror state over either serial or TCP transports.
+
+## 8. Reliability & Security Considerations
 - Minimal trusted computing base: no POSIX layers, no TCP servers inside the VM, no dynamic loading.
 - All inter-process communication is file-based via 9P; no shared memory between workers.
 - Timer and watchdog infrastructure ensures runaway workers are revoked cleanly.
 - NineDoor core is `no_std + alloc` capable, allowing potential reuse in bare-metal contexts.
 
-## 8. Roadmap Dependencies
+## 9. Roadmap Dependencies
 - **Milestone alignment**: Architecture is realised incrementally per `BUILD_PLAN.md` milestones.
 - **Documentation as Source of Truth**: Changes to components or interfaces must be reflected here to avoid drift.
