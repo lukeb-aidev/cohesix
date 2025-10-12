@@ -74,6 +74,8 @@ cargo run --bin cohsh -- \
   customise the launch. The shorthand environment variable `COHSH_QEMU_ARGS` is also honoured.
 - `cohsh` filters the serial prefix, so operators see clean log lines such as `Cohesix boot: root-task online`
   and `tick: 3`.
+- `scripts/cohesix-build-run.sh` now boots QEMU by invoking this transport automatically, attaching as the
+  queen role and printing the initial log stream before presenting the prompt.
 
 ## 6. Packaging & Distribution
 - `cohsh` is built as a standalone static binary for macOS and Linux hosts.

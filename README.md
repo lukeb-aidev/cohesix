@@ -27,7 +27,7 @@ kernel image. The script expects an existing seL4 build tree such as the one
 described in `docs/TOOLCHAIN_MAC_ARM64.md`.
 
 ```bash
-# Build every Cohesix component, assemble the payload CPIO, and boot QEMU
+# Build every Cohesix component, assemble the payload CPIO, and drop into the CLI-backed QEMU session
 scripts/cohesix-build-run.sh \
   --sel4-build "$HOME/seL4/build" \
   --out-dir out/cohesix \
@@ -41,6 +41,11 @@ scripts/cohesix-build-run.sh --no-run
 The script emits a manifest (`out/cohesix/staging/cohesix/manifest.json`) with
 SHA-256 digests for every packaged binary and reuses `scripts/ci/size_guard.sh`
 to enforce the 4 MiB CPIO size budget.
+
+After a successful build the helper launches the `cohsh` CLI in QEMU transport
+mode, automatically attaching as the queen role and tailing `/log/queen.log`
+once the root task comes online. Pass `--raw-qemu` if you prefer to invoke the
+emulator directly without the interactive shell.
 
 The helper builds host tooling (such as `cohsh` and `gpu-bridge-host`) for the
 native Rust target while compiling seL4 payloads with the provided

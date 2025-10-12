@@ -79,10 +79,17 @@ fn main() -> Result<()> {
     };
     let mut shell = Shell::new(transport, writer);
     shell.write_line("Welcome to Cohesix. Type 'help' for commands.")?;
+    let mut auto_log = false;
     if let Some(role_arg) = cli.role {
         shell.attach(Role::from(role_arg), cli.ticket.as_deref())?;
+        if cli.script.is_none() && matches!(cli.transport, TransportKind::Qemu) {
+            auto_log = true;
+        }
     } else {
         shell.write_line("detached shell: run 'attach <role>' to connect")?;
+    }
+    if auto_log {
+        shell.execute("log")?;
     }
     if let Some(script_path) = cli.script {
         let file = File::open(&script_path)

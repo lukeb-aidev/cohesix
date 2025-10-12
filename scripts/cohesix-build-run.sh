@@ -22,6 +22,7 @@ Options:
   --cargo-target <triple>  Target triple used for seL4 component builds (required)
   --qemu <path>         QEMU binary to execute (default: qemu-system-aarch64)
   --no-run              Skip launching QEMU after building the artefacts
+  --raw-qemu            Launch QEMU directly instead of cohsh (disables interactive CLI)
   --dtb <path>          Override the device tree blob passed to QEMU
   -h, --help            Show this help message
 
@@ -101,7 +102,8 @@ main() {
     CARGO_TARGET=""
     QEMU_BIN="qemu-system-aarch64"
     RUN_QEMU=1
-    EXTRA_QEMU_ARGS=()
+    DIRECT_QEMU=0
+    declare -a EXTRA_QEMU_ARGS=()
     CLEAN_OUT_DIR=0
     DTB_OVERRIDE=""
 
@@ -139,6 +141,10 @@ main() {
                 ;;
             --no-run)
                 RUN_QEMU=0
+                shift
+                ;;
+            --raw-qemu)
+                DIRECT_QEMU=1
                 shift
                 ;;
             --clean)
@@ -375,14 +381,17 @@ PY
     log "Auto-detected GIC version: gic-version=$GIC_VER"
 
     QEMU_ARGS=(-machine "virt,gic-version=${GIC_VER}" -cpu cortex-a57 -m 1024 -smp 1 -serial mon:stdio -display none -kernel "$ELFLOADER_STAGE_PATH" -initrd "$CPIO_PATH" -device loader,file="$KERNEL_STAGE_PATH",addr=$KERNEL_LOAD_ADDR,force-raw=on -device loader,file="$ROOTSERVER_STAGE_PATH",addr=$ROOTSERVER_LOAD_ADDR,force-raw=on)
+    declare -a CLI_EXTRA_ARGS=()
 
     if [[ -n "$DTB_OVERRIDE" ]]; then
         [[ -f "$DTB_OVERRIDE" ]] || fail "Specified DTB override not found: $DTB_OVERRIDE"
         describe_file "DTB override" "$DTB_OVERRIDE"
         QEMU_ARGS+=(-dtb "$DTB_OVERRIDE")
+        CLI_EXTRA_ARGS+=(-dtb "$DTB_OVERRIDE")
     fi
 
     if [[ ${#EXTRA_QEMU_ARGS[@]} -gt 0 ]]; then
+        CLI_EXTRA_ARGS+=("${EXTRA_QEMU_ARGS[@]}")
         QEMU_ARGS+=("${EXTRA_QEMU_ARGS[@]}")
     fi
 
@@ -393,7 +402,18 @@ PY
         return 0
     fi
 
-    exec "$QEMU_BIN" "${QEMU_ARGS[@]}"
+    if [[ "$DIRECT_QEMU" -eq 1 ]]; then
+        exec "$QEMU_BIN" "${QEMU_ARGS[@]}"
+    fi
+
+    log "Launching cohsh (QEMU transport) for interactive session"
+    CLI_CMD=(cargo run --bin cohsh -- --transport qemu --qemu-bin "$QEMU_BIN" --qemu-out-dir "$OUT_DIR" --qemu-gic-version "$GIC_VER" --role queen)
+    if [[ ${#CLI_EXTRA_ARGS[@]} -gt 0 ]]; then
+        for arg in "${CLI_EXTRA_ARGS[@]}"; do
+            CLI_CMD+=(--qemu-arg "$arg")
+        done
+    fi
+    exec "${CLI_CMD[@]}"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
