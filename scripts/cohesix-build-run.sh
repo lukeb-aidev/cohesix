@@ -64,7 +64,9 @@ detect_gic_version() {
     local candidate
     for candidate in \
         "$SEL4_BUILD_DIR/kernel/gen_config/kernel_config.h" \
-        "$SEL4_BUILD_DIR/kernel/include/autoconf.h"; do
+        "$SEL4_BUILD_DIR/kernel/gen_config/kernel/gen_config.h" \
+        "$SEL4_BUILD_DIR/kernel/include/autoconf.h" \
+        "$SEL4_BUILD_DIR/kernel/autoconf/autoconf.h"; do
         if [[ -f "$candidate" ]]; then
             cfg_file="$candidate"
             break
