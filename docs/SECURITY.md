@@ -13,6 +13,10 @@
 - Console buffers (`heapless::String`) cap line length at 128 bytes and reject control characters beyond backspace/delete to
   prevent uncontrolled allocations. The serial façade uses `heapless::spsc::Queue` staging buffers sized at 256 bytes for RX and
   TX, and exposes atomic back-pressure counters so `/proc/boot` can surface saturation data without dynamic allocation.
+- The virtio-console driver mirrors device descriptor rings with bounded `heapless::spsc::Queue` structures (mirroring the RX/TX
+  staging buffers) so host tests can exercise the driver without MMIO. Pending TCP console lines are staged in a
+  `heapless::Deque` (depth 8) before the event pump forwards them into the parser, providing a deterministic envelope for
+  remote operator traffic.
 - Networking telemetry (`link_up`, `tx_drops`, `last_poll_ms`) is captured in a copyable struct so audit sinks can log
   descriptor pressure without touching heap allocations. This telemetry is emitted whenever the event pump observes network
   activity.
