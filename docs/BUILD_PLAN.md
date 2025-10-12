@@ -221,6 +221,87 @@ Deliverables: Updated documentation set, automation scripts, and passing QEMU TC
 - `https://crates.io/crates/nb` (non-blocking IO helpers)
 - `https://crates.io/crates/spin` (lock primitives for bounded queues)
 
+## Milestone 7a — Root-Task Event Pump & Authenticated Kernel Entry
+**Deliverables**
+- **Deprecate legacy spin loop**
+  - Replace the placeholder busy loop in `kernel_start` with a cooperative event pump that cycles serial RX/TX, timer ticks, networking polls, and IPC dispatch without relying on `std` primitives.
+  - Capture wake ordering and preemption notes in module docs so subsequent milestones can extend the pump without regressing determinism.
+  - Instrument the transition with structured audit logs showing when the pump initialises each subsystem.
+- **Serial event integration (no-std)**
+  - Introduce a `root-task` `serial` module built atop OSS crates such as `embedded-io` and `nb` for trait scaffolding while maintaining zero-allocation semantics using `heapless` buffers.
+  - Provide interrupt-safe reader/writer abstractions that feed the event pump, expose per-source back-pressure counters via `portable-atomic`, and enforce UTF-8 sanitisation before lines reach the command parser.
+  - Add conformance tests that replay captured QEMU traces to guarantee debounced input (backspace, control sequences) behaves identically across boots.
+- **Networking substrate bootstrapping**
+  - Integrate the virtio-net PHY and `smoltcp` device glue behind a feature gate, seeding deterministic RX/TX queues using `heapless::{Vec, spsc::Queue}` and documenting memory bounds in `docs/SECURITY.md`.
+  - Ensure the event pump owns the poll cadence for `smoltcp`, handles link up/down notifications, and publishes metrics to `/proc/boot` for observability.
+  - Provide fault-injection tests that exhaust descriptors, validate checksum handling, and assert the pump survives transient PHY resets.
+- **Authenticated command loop**
+  - Embed a shared command parser (serial + TCP) constructed with `heapless::String` and finite-state validation to enforce maximum line length, reject unsupported control characters, and throttle repeated failures with exponential back-off.
+  - Hook authentication into the root-task capability validator so privileged verbs (`attach`, `spawn`, `kill`, `log`) require valid tickets, emitting audit lines to `/log/queen.log` on denial.
+  - Add integration tests that execute scripted login attempts, verify rate limiting, and confirm the event pump resumes servicing timers and networking during authentication stress.
+- **Documentation updates**
+  - Update `docs/ARCHITECTURE.md` and `docs/SECURITY.md` with the new event pump topology, serial/network memory budgets, and authenticated console flow diagrams.
+  - Document migration steps for developers moving from the spin loop to the event pump, including feature flags and testing guidance in `docs/REPO_LAYOUT.md` or relevant READMEs.
+
+**Checks**
+- Root task boots under QEMU, initialises the event pump, and logs subsystem activation without reintroducing the legacy busy loop.
+- Serial RX/TX, networking polls, and command handling execute deterministically without heap allocations; fuzz/property tests cover parser and queue saturation paths.
+- Authenticated sessions enforce capability checks, rate limit failures, and keep timer/NineDoor services responsive during sustained input.
+
+### Task Breakdown
+
+```
+Title/ID: m7a-event-pump-core
+Goal: Replace the kernel_start spin loop with a cooperative no-std event pump.
+Inputs: docs/ARCHITECTURE.md §§2,4; docs/SECURITY.md §§3-4; existing root-task entrypoint.
+Changes:
+  - crates/root-task/src/kernel.rs — remove spin loop, initialise serial/net/timer pollers, and document scheduling guarantees.
+  - crates/root-task/src/event/mod.rs — new event pump coordinator orchestrating serial, timer, IPC, and networking tasks with explicit tick budgeting.
+  - crates/root-task/tests/event_pump.rs — unit tests covering scheduling fairness, back-pressure propagation, and panic-free shutdown paths.
+Commands: cd crates/root-task && cargo test event_pump && cargo check --features net && cargo clippy --features net --tests
+Checks: Event pump drives serial, timer, and networking tasks deterministically; tests cover starvation and shutdown.
+Deliverables: Root-task event pump replacing legacy loop with documented guarantees and regression tests.
+```
+
+```
+Title/ID: m7a-serial-auth
+Goal: Provide authenticated serial command handling with rate limiting and audit trails.
+Inputs: docs/INTERFACES.md §§3,7-8; docs/SECURITY.md §5; embedded-io 0.4; heapless 0.8.
+Changes:
+  - crates/root-task/src/console/mod.rs — integrate heapless line editor, authentication state machine, and audit logging.
+  - crates/root-task/src/console/serial.rs — implement no-std serial driver traits, UTF-8 sanitisation, and per-byte throttling metrics.
+  - crates/root-task/tests/console_auth.rs — tests for login success/failure, rate limiting, control sequence rejection, and audit log outputs.
+Commands: cd crates/root-task && cargo test console_auth && cargo check --features net && cargo clippy --features net --tests
+Checks: Serial console authenticates commands, enforces throttling, and keeps event pump responsive under stress.
+Deliverables: Hardened serial console with authentication, audit coverage, and passing tests.
+```
+
+```
+Title/ID: m7a-net-loop
+Goal: Embed the smoltcp-backed networking poller into the event pump with deterministic buffers.
+Inputs: docs/ARCHITECTURE.md §§4,7; docs/SECURITY.md §4; smoltcp 0.11; heapless 0.8; portable-atomic 1.6.
+Changes:
+  - crates/root-task/src/net/mod.rs — finalise virtio-net PHY, smoltcp integration, and bounded queues with instrumentation.
+  - crates/root-task/src/event/net.rs — event pump adapter scheduling smoltcp polls, handling link state, and surfacing metrics.
+  - crates/root-task/tests/net_pump.rs — property tests for descriptor exhaustion, checksum validation, and PHY reset recovery.
+Commands: cd crates/root-task && cargo test --features net net_pump && cargo check --features net && cargo clippy --features net --tests
+Checks: Networking poller integrates with event pump, survives fault injection, and maintains deterministic buffer usage.
+Deliverables: Networking subsystem integrated with event pump, documented, and guarded by targeted tests.
+```
+
+```
+Title/ID: m7a-docs-migration
+Goal: Update documentation for the event pump, authenticated console, and networking integration.
+Inputs: docs/ARCHITECTURE.md, docs/INTERFACES.md, docs/SECURITY.md, existing milestone notes.
+Changes:
+  - docs/ARCHITECTURE.md — describe event pump topology, serial/net modules, and removal of spin loop.
+  - docs/SECURITY.md — record authenticated console threat model, rate limiting strategy, and memory quotas.
+  - docs/REPO_LAYOUT.md & crate READMEs — outline developer workflows, feature flags, and testing commands for the new pump.
+Commands: cargo doc -p root-task --document-private-items && mdbook build docs (if configured)
+Checks: Documentation builds cleanly, reflects new architecture, and guides developers through migration.
+Deliverables: Synchronized documentation explaining event pump adoption, security posture, and developer workflows.
+```
+
 ## Milestone 8 — Async & Hardware Readiness (future)
 **Deliverables**
 - Evaluate adding Embassy executors once we have multiple concurrent network tasks or hardware NICs; keep this behind a feature flag so the baseline remains deterministic.
