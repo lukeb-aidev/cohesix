@@ -245,9 +245,9 @@ main() {
     if (( ${#PROFILE_ARGS[@]} > 0 )); then
         ROOT_TASK_BUILD_ARGS+=("${PROFILE_ARGS[@]}")
     fi
-    ROOT_TASK_BUILD_ARGS+=(-p root-task -F root-task/sel4-console)
+    ROOT_TASK_BUILD_ARGS+=(-p root-task)
 
-    log "Building root-task with console support via: cargo ${ROOT_TASK_BUILD_ARGS[*]}"
+    log "Building root-task via: cargo ${ROOT_TASK_BUILD_ARGS[*]}"
     cargo "${ROOT_TASK_BUILD_ARGS[@]}"
 
     log "Building seL4 components via: cargo ${SEL4_BUILD_ARGS[*]}"
