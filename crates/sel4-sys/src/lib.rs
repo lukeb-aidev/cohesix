@@ -1,9 +1,8 @@
 #![cfg_attr(target_os = "none", no_std)]
 #![allow(non_camel_case_types)]
 #![allow(dead_code)]
-
-#[cfg(not(target_os = "none"))]
-compile_error!("sel4-sys is intended for seL4 (target_os = \"none\") builds only");
+#![allow(non_snake_case)]
+#![allow(non_upper_case_globals)]
 
 #[cfg(target_os = "none")]
 mod imp {
@@ -473,3 +472,200 @@ mod imp {
 
 #[cfg(target_os = "none")]
 pub use imp::*;
+
+#[cfg(not(target_os = "none"))]
+mod host_stub {
+    use core::mem::size_of;
+
+    #[inline(always)]
+    fn unsupported() -> ! {
+        panic!("sel4-sys stubs must not be used on host targets");
+    }
+
+    pub type seL4_Word = usize;
+    pub type seL4_CPtr = usize;
+    pub type seL4_Error = isize;
+    pub type seL4_CNode = seL4_CPtr;
+    pub type seL4_Untyped = seL4_CPtr;
+    pub type seL4_VSpace = seL4_CPtr;
+    pub type seL4_ARM_Page = seL4_CPtr;
+    pub type seL4_ARM_PageTable = seL4_CPtr;
+    pub type seL4_CapRights = usize;
+
+    #[derive(Clone, Copy)]
+    pub struct seL4_MessageInfo {
+        pub words: [seL4_Word; 1],
+    }
+
+    impl seL4_MessageInfo {
+        #[inline(always)]
+        pub const fn new(label: seL4_Word, _caps_unwrapped: seL4_Word, _extra_caps: seL4_Word, _length: seL4_Word) -> Self {
+            Self { words: [label] }
+        }
+
+        #[inline(always)]
+        pub const fn label(self) -> seL4_Word {
+            self.words[0]
+        }
+
+        #[inline(always)]
+        pub const fn length(self) -> seL4_Word {
+            0
+        }
+
+        #[inline(always)]
+        pub const fn extra_caps(self) -> seL4_Word {
+            0
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    pub struct seL4_CNode_CapData;
+
+    #[derive(Clone, Copy)]
+    pub struct seL4_ARM_VMAttributes(pub seL4_Word);
+
+    pub type seL4_CapData_t = seL4_CNode_CapData;
+
+    #[derive(Clone, Copy)]
+    pub struct BootInfo;
+
+    #[derive(Clone, Copy)]
+    pub struct BootInfoHeader {
+        pub id: seL4_Word,
+        pub len: seL4_Word,
+    }
+
+    #[derive(Clone, Copy)]
+    pub struct SlotRegion {
+        pub start: seL4_CPtr,
+        pub end: seL4_CPtr,
+    }
+
+    #[derive(Clone, Copy)]
+    pub struct UntypedDesc {
+        pub paddr: seL4_Word,
+        pub sizeBits: u8,
+        pub isDevice: u8,
+        pub padding: [u8; size_of::<seL4_Word>() - 2],
+    }
+
+    #[derive(Clone, Copy)]
+    pub struct ARMPageGetAddress {
+        pub error: seL4_Error,
+        pub paddr: seL4_Word,
+    }
+
+    pub const seL4_NoError: seL4_Error = 0;
+    pub const MAX_BOOTINFO_UNTYPEDS: usize = 0;
+    pub const seL4_MessageRegisterCount: usize = 4;
+
+    pub const seL4_CapNull: seL4_CPtr = 0;
+    pub const seL4_CapInitThreadTCB: seL4_CPtr = 0;
+    pub const seL4_CapInitThreadCNode: seL4_CPtr = 0;
+    pub const seL4_CapInitThreadVSpace: seL4_CPtr = 0;
+    pub const seL4_CapIRQControl: seL4_CPtr = 0;
+    pub const seL4_CapASIDControl: seL4_CPtr = 0;
+    pub const seL4_CapInitThreadASIDPool: seL4_CPtr = 0;
+    pub const seL4_CapIOPortControl: seL4_CPtr = 0;
+    pub const seL4_CapIOSpace: seL4_CPtr = 0;
+    pub const seL4_CapBootInfoFrame: seL4_CPtr = 0;
+    pub const seL4_CapInitThreadIPCBuffer: seL4_CPtr = 0;
+
+    pub const seL4_CapRights_All: seL4_CapRights = 0;
+    pub const seL4_CapRights_ReadWrite: seL4_CapRights = 0;
+
+    pub const seL4_ARM_Page_Default: seL4_ARM_VMAttributes = seL4_ARM_VMAttributes(0);
+    pub const seL4_ARM_Page_Uncached: seL4_ARM_VMAttributes = seL4_ARM_VMAttributes(0);
+    pub const seL4_ARM_SmallPageObject: seL4_Word = 0;
+
+    #[inline(always)]
+    pub unsafe fn seL4_SetMR(_index: usize, _value: seL4_Word) {
+        unsupported();
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_GetMR(_index: usize) -> seL4_Word {
+        unsupported();
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_SetCap(_slot: usize, _cptr: seL4_CPtr) {
+        unsupported();
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_GetCap(_slot: usize) -> seL4_CPtr {
+        unsupported();
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_CallWithMRs(
+        _dest: seL4_CPtr,
+        _msg_info: seL4_MessageInfo,
+        _mr0: *mut seL4_Word,
+        _mr1: *mut seL4_Word,
+        _mr2: *mut seL4_Word,
+        _mr3: *mut seL4_Word,
+    ) -> seL4_MessageInfo {
+        unsupported();
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_ARM_Page_Map(
+        _service: seL4_ARM_Page,
+        _vspace: seL4_CPtr,
+        _vaddr: seL4_Word,
+        _rights: seL4_CapRights,
+        _attr: seL4_ARM_VMAttributes,
+    ) -> seL4_Error {
+        unsupported();
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_ARM_PageTable_Map(
+        _service: seL4_ARM_PageTable,
+        _vspace: seL4_CPtr,
+        _vaddr: seL4_Word,
+        _attr: seL4_ARM_VMAttributes,
+    ) -> seL4_Error {
+        unsupported();
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_ARM_Page_Unmap(_service: seL4_ARM_Page) -> seL4_Error {
+        unsupported();
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_ARM_Page_GetAddress(_service: seL4_ARM_Page) -> ARMPageGetAddress {
+        unsupported();
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_Untyped_Retype(
+        _service: seL4_Untyped,
+        _objtype: seL4_Word,
+        _size_bits: seL4_Word,
+        _root: seL4_CNode,
+        _node_index: seL4_Word,
+        _node_depth: seL4_Word,
+        _node_offset: seL4_Word,
+        _num_objects: seL4_Word,
+    ) -> seL4_Error {
+        unsupported();
+    }
+
+    #[inline(always)]
+    pub fn seL4_DebugPutChar(_c: u8) {
+        unsupported();
+    }
+
+    #[inline(always)]
+    pub fn seL4_Yield() {
+        unsupported();
+    }
+}
+
+#[cfg(not(target_os = "none"))]
+pub use host_stub::*;

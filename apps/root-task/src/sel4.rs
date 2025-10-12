@@ -1,19 +1,19 @@
 // Author: Lukas Bower
+#![cfg(target_os = "none")]
 #![allow(dead_code)]
 #![allow(clippy::missing_panics_doc)]
 
 use core::ptr;
 
 use sel4_sys::{
-    seL4_ARM_Page, seL4_ARM_Page_Map, seL4_ARM_Page_Uncached, seL4_ARM_Page_Unmap,
-    seL4_ARM_PageTable, seL4_ARM_PageTable_Map, seL4_BootInfo, seL4_CNode,
-    seL4_CapInitThreadCNode, seL4_CapRights_ReadWrite, seL4_CPtr, seL4_Error, seL4_SlotRegion,
-    seL4_Untyped, seL4_Untyped_Retype, seL4_Word, UntypedDesc, seL4_ARM_SmallPageObject,
-    seL4_NoError,
+    seL4_ARM_Page, seL4_ARM_Page_Map, seL4_ARM_Page_Uncached, seL4_ARM_PageTable,
+    seL4_ARM_PageTable_Map, seL4_BootInfo, seL4_CNode, seL4_CapInitThreadCNode,
+    seL4_CapInitThreadVSpace, seL4_CapRights_ReadWrite, seL4_CPtr, seL4_Error,
+    seL4_SlotRegion, seL4_Untyped, seL4_Untyped_Retype, seL4_Word, UntypedDesc,
+    seL4_ARM_SmallPageObject, seL4_NoError,
 };
 
 const PAGE_BITS: usize = 12;
-const PAGE_SIZE: usize = 1 << PAGE_BITS;
 
 #[derive(Debug)]
 pub struct SlotAllocator {
@@ -77,9 +77,7 @@ impl<'a> UntypedCatalog<'a> {
     }
 
     pub fn index_of(&self, target: &'a UntypedDesc) -> Option<usize> {
-        self.entries
-            .iter()
-            .position(|entry| ptr::eq(*entry, target))
+        self.entries.iter().position(|entry| ptr::eq(entry, target))
     }
 }
 
@@ -116,12 +114,7 @@ impl<'a> KernelEnv<'a> {
             .expect("out of CSpace slots for root task")
     }
 
-    fn retype_page(
-        &mut self,
-        untyped_cap: seL4_Untyped,
-        slot: seL4_CPtr,
-        size_bits: usize,
-    ) -> Result<(), seL4_Error> {
+    fn retype_page(&mut self, untyped_cap: seL4_Untyped, slot: seL4_CPtr) -> Result<(), seL4_Error> {
         let res = unsafe {
             seL4_Untyped_Retype(
                 untyped_cap,
@@ -153,7 +146,7 @@ impl<'a> KernelEnv<'a> {
         let offset = self.untyped.index_of(desc_ref).ok_or(-1)?;
         let untyped_cap = self.bootinfo.untyped.start + offset as seL4_CPtr;
         let frame_slot = self.allocate_slot();
-        self.retype_page(untyped_cap, frame_slot, PAGE_BITS)?;
+        self.retype_page(untyped_cap, frame_slot)?;
         self.map_frame(frame_slot, desired_vaddr)?;
         Ok(DeviceFrame {
             cap: frame_slot,
@@ -162,7 +155,7 @@ impl<'a> KernelEnv<'a> {
     }
 
     fn map_frame(&mut self, frame_cap: seL4_CPtr, vaddr: usize) -> Result<(), seL4_Error> {
-        let vspace = sel4_sys::seL4_CapInitThreadVSpace;
+        let vspace = seL4_CapInitThreadVSpace;
         unsafe {
             // Assume second-level page table already populated; attempt mapping.
             let res = seL4_ARM_Page_Map(
