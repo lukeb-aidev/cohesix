@@ -157,13 +157,18 @@ pub extern "C" fn kernel_start(bootinfo: *const BootInfoHeader) -> ! {
     let bootinfo_ref = unsafe { &*(bootinfo as *const sel4_sys::seL4_BootInfo) };
     let mut env = KernelEnv::new(bootinfo_ref);
 
+    #[cfg(target_os = "none")]
+    let mut ninedoor = crate::ninedoor::NineDoorBridge::new();
+
     let uart_region = env
         .map_device(PL011_PADDR)
         .expect("PL011 UART mapping failed");
     let driver = Pl011::new(uart_region.ptr());
     let serial = SerialPort::new(driver);
 
-    #[cfg(feature = "net")]
+    #[cfg(all(feature = "net", target_os = "none"))]
+    let mut net_stack = NetStack::new(&mut env, Ipv4Address::new(10, 0, 0, 2));
+    #[cfg(all(feature = "net", not(target_os = "none")))]
     let (mut net_stack, _) = NetStack::new(Ipv4Address::new(10, 0, 0, 2));
     let timer = KernelTimer::new(5);
     let ipc = KernelIpc;
@@ -171,6 +176,11 @@ pub extern "C" fn kernel_start(bootinfo: *const BootInfoHeader) -> ! {
     let _ = tickets.register(Role::Queen, "bootstrap");
     let mut audit = ConsoleAudit::new(&mut console);
     let mut pump = EventPump::new(serial, timer, ipc, tickets, &mut audit);
+
+    #[cfg(target_os = "none")]
+    {
+        pump = pump.with_ninedoor(&mut ninedoor);
+    }
 
     #[cfg(feature = "net")]
     {

@@ -21,6 +21,8 @@ Options:
   --profile <name>      Cargo profile to build (release|debug|custom; default: release)
   --cargo-target <triple>  Target triple used for seL4 component builds (required)
   --qemu <path>         QEMU binary to execute (default: qemu-system-aarch64)
+  --transport <kind>    Console transport to launch (tcp|qemu, default: tcp)
+  --tcp-port <port>     TCP port exposed by QEMU for the remote console (default: 31337)
   --no-run              Skip launching QEMU after building the artefacts
   --raw-qemu            Launch QEMU directly instead of cohsh (disables interactive CLI)
   --dtb <path>          Override the device tree blob passed to QEMU
@@ -95,6 +97,31 @@ detect_gic_version() {
     echo "$result"
 }
 
+wait_for_port() {
+    local host="$1"
+    local port="$2"
+    local attempts="${3:-30}"
+    for ((i = 0; i < attempts; i++)); do
+        if python3 - "$host" "$port" <<'PY'; then
+import socket
+import sys
+
+host = sys.argv[1]
+port = int(sys.argv[2])
+try:
+    with socket.create_connection((host, port), timeout=1):
+        pass
+except OSError:
+    raise SystemExit(1)
+PY
+            then
+            return 0
+        fi
+        sleep 1
+    done
+    fail "Timed out waiting for TCP port ${host}:${port}"
+}
+
 main() {
     SEL4_BUILD_DIR="${SEL4_BUILD:-$HOME/seL4/build}"
     OUT_DIR="out/cohesix"
@@ -106,6 +133,8 @@ main() {
     declare -a EXTRA_QEMU_ARGS=()
     CLEAN_OUT_DIR=0
     DTB_OVERRIDE=""
+    TRANSPORT="tcp"
+    TCP_PORT=31337
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -147,6 +176,26 @@ main() {
                 DIRECT_QEMU=1
                 shift
                 ;;
+            --transport)
+                [[ $# -ge 2 ]] || fail "--transport requires a value (tcp|qemu)"
+                case "$2" in
+                    tcp|qemu)
+                        TRANSPORT="$2"
+                        ;;
+                    *)
+                        fail "Unsupported transport: $2"
+                        ;;
+                esac
+                shift 2
+                ;;
+            --tcp-port)
+                [[ $# -ge 2 ]] || fail "--tcp-port requires a value"
+                if ! [[ "$2" =~ ^[0-9]+$ ]]; then
+                    fail "--tcp-port expects a numeric value"
+                fi
+                TCP_PORT="$2"
+                shift 2
+                ;;
             --clean)
                 CLEAN_OUT_DIR=1
                 shift
@@ -165,6 +214,10 @@ main() {
                 ;;
         esac
     done
+
+    if [[ "$TRANSPORT" == "tcp" && "$TCP_PORT" -le 0 ]]; then
+        fail "TCP port must be a positive integer"
+    fi
 
     if [[ ! -d "$SEL4_BUILD_DIR" ]]; then
         fail "seL4 build directory not found: $SEL4_BUILD_DIR"
@@ -383,6 +436,11 @@ PY
     QEMU_ARGS=(-machine "virt,gic-version=${GIC_VER}" -cpu cortex-a57 -m 1024 -smp 1 -serial mon:stdio -display none -kernel "$ELFLOADER_STAGE_PATH" -initrd "$CPIO_PATH" -device loader,file="$KERNEL_STAGE_PATH",addr=$KERNEL_LOAD_ADDR,force-raw=on -device loader,file="$ROOTSERVER_STAGE_PATH",addr=$ROOTSERVER_LOAD_ADDR,force-raw=on)
     declare -a CLI_EXTRA_ARGS=()
 
+    if [[ "$TRANSPORT" == "tcp" ]]; then
+        NETWORK_ARGS=(-netdev "user,id=net0,hostfwd=tcp:127.0.0.1:${TCP_PORT}-${TCP_PORT}" -device virtio-net-device,netdev=net0)
+        QEMU_ARGS+=("${NETWORK_ARGS[@]}")
+    fi
+
     if [[ -n "$DTB_OVERRIDE" ]]; then
         [[ -f "$DTB_OVERRIDE" ]] || fail "Specified DTB override not found: $DTB_OVERRIDE"
         describe_file "DTB override" "$DTB_OVERRIDE"
@@ -406,14 +464,33 @@ PY
         exec "$QEMU_BIN" "${QEMU_ARGS[@]}"
     fi
 
-    log "Launching cohsh (QEMU transport) for interactive session"
-    CLI_CMD=(cargo run --bin cohsh -- --transport qemu --qemu-bin "$QEMU_BIN" --qemu-out-dir "$OUT_DIR" --qemu-gic-version "$GIC_VER" --role queen)
-    if [[ ${#CLI_EXTRA_ARGS[@]} -gt 0 ]]; then
-        for arg in "${CLI_EXTRA_ARGS[@]}"; do
-            CLI_CMD+=(--qemu-arg "$arg")
-        done
+    if [[ "$TRANSPORT" == "tcp" ]]; then
+        log "Launching QEMU with TCP console bridge on port $TCP_PORT"
+        "$QEMU_BIN" "${QEMU_ARGS[@]}" &
+        QEMU_PID=$!
+        trap 'kill $QEMU_PID 2>/dev/null || true' EXIT
+
+        wait_for_port "127.0.0.1" "$TCP_PORT" 60
+        export COHSH_TCP_PORT="$TCP_PORT"
+
+        CLI_CMD=(cargo run --bin cohsh --features tcp -- --transport tcp --tcp-port "$TCP_PORT" --role queen)
+        log "Launching cohsh (TCP transport) for interactive session"
+        "${CLI_CMD[@]}"
+        STATUS=$?
+        kill "$QEMU_PID" 2>/dev/null || true
+        wait "$QEMU_PID" 2>/dev/null || true
+        trap - EXIT
+        exit $STATUS
+    else
+        log "Launching cohsh (QEMU transport) for interactive session"
+        CLI_CMD=(cargo run --bin cohsh -- --transport qemu --qemu-bin "$QEMU_BIN" --qemu-out-dir "$OUT_DIR" --qemu-gic-version "$GIC_VER" --role queen)
+        if [[ ${#CLI_EXTRA_ARGS[@]} -gt 0 ]]; then
+            for arg in "${CLI_EXTRA_ARGS[@]}"; do
+                CLI_CMD+=(--qemu-arg "$arg")
+            done
+        fi
+        exec "${CLI_CMD[@]}"
     fi
-    exec "${CLI_CMD[@]}"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

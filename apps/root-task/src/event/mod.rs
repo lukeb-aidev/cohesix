@@ -16,6 +16,8 @@ use heapless::{String as HeaplessString, Vec as HeaplessVec};
 use crate::console::{Command, CommandParser, ConsoleError, MAX_ROLE_LEN, MAX_TICKET_LEN};
 #[cfg(feature = "net")]
 use crate::net::CONSOLE_QUEUE_DEPTH;
+#[cfg(target_os = "none")]
+use crate::ninedoor::NineDoorHandler;
 use crate::serial::{SerialDriver, SerialPort, SerialTelemetry, DEFAULT_LINE_CAPACITY};
 
 fn format_message(args: fmt::Arguments<'_>) -> HeaplessString<128> {
@@ -231,6 +233,8 @@ where
     throttle: AuthThrottle,
     #[cfg(feature = "net")]
     net: Option<&'a mut dyn NetPoller>,
+    #[cfg(target_os = "none")]
+    ninedoor: Option<&'a mut dyn NineDoorHandler>,
 }
 
 impl<'a, D, T, I, V, const RX: usize, const TX: usize, const LINE: usize>
@@ -265,6 +269,8 @@ where
             throttle: AuthThrottle::default(),
             #[cfg(feature = "net")]
             net: None,
+            #[cfg(target_os = "none")]
+            ninedoor: None,
         }
     }
 
@@ -273,6 +279,13 @@ where
     pub fn with_network(mut self, net: &'a mut dyn NetPoller) -> Self {
         self.audit.info("event-pump: init network");
         self.net = Some(net);
+        self
+    }
+
+    /// Attach a NineDoor handler to the event pump.
+    #[cfg(target_os = "none")]
+    pub fn with_ninedoor(mut self, handler: &'a mut dyn NineDoorHandler) -> Self {
+        self.ninedoor = Some(handler);
         self
     }
 
@@ -361,6 +374,10 @@ where
     }
 
     fn handle_command(&mut self, command: Command) {
+        #[cfg(target_os = "none")]
+        let command_clone = command.clone();
+        #[cfg(target_os = "none")]
+        let mut forwarded = false;
         match command {
             Command::Help => {
                 self.audit.info("console: help");
@@ -372,18 +389,30 @@ where
             }
             Command::Attach { role, ticket } => {
                 self.handle_attach(role, ticket);
+                #[cfg(target_os = "none")]
+                {
+                    forwarded = matches!(self.session, Some(_));
+                }
             }
             Command::Tail { path } => {
                 if self.ensure_authenticated(SessionRole::Worker) {
                     let message = format_message(format_args!("console: tail {}", path.as_str()));
                     self.audit.info(message.as_str());
                     self.metrics.accepted_commands += 1;
+                    #[cfg(target_os = "none")]
+                    {
+                        forwarded = true;
+                    }
                 }
             }
             Command::Log => {
                 if self.ensure_authenticated(SessionRole::Queen) {
                     self.audit.info("console: log stream start");
                     self.metrics.accepted_commands += 1;
+                    #[cfg(target_os = "none")]
+                    {
+                        forwarded = true;
+                    }
                 }
             }
             Command::Spawn(payload) => {
@@ -392,6 +421,10 @@ where
                         format_message(format_args!("console: spawn {}", payload.as_str()));
                     self.audit.info(message.as_str());
                     self.metrics.accepted_commands += 1;
+                    #[cfg(target_os = "none")]
+                    {
+                        forwarded = true;
+                    }
                 }
             }
             Command::Kill(ident) => {
@@ -399,8 +432,24 @@ where
                     let message = format_message(format_args!("console: kill {}", ident.as_str()));
                     self.audit.info(message.as_str());
                     self.metrics.accepted_commands += 1;
+                    #[cfg(target_os = "none")]
+                    {
+                        forwarded = true;
+                    }
                 }
             }
+        }
+
+        #[cfg(target_os = "none")]
+        if forwarded {
+            self.forward_to_ninedoor(&command_clone);
+        }
+    }
+
+    #[cfg(target_os = "none")]
+    fn forward_to_ninedoor(&mut self, command: &Command) {
+        if let Some(handler) = self.ninedoor.as_mut() {
+            handler.handle(command, &mut *self.audit);
         }
     }
 
