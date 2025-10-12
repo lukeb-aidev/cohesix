@@ -185,21 +185,14 @@ mod arch {
 
     #[inline(always)]
     pub unsafe fn debug_put_char(byte: u8) {
-        let mut dest = byte as usize;
-        let mut info = 0usize;
-        let mut mr0 = 0usize;
-        let mut mr1 = 0usize;
-        let mut mr2 = 0usize;
-        let mut mr3 = 0usize;
-
         asm!(
             "svc #0",
-            inout("x0") dest,
-            inout("x1") info,
-            inout("x2") mr0,
-            inout("x3") mr1,
-            inout("x4") mr2,
-            inout("x5") mr3,
+            in("x0") byte as usize,
+            in("x1") 0usize,
+            in("x2") 0usize,
+            in("x3") 0usize,
+            in("x4") 0usize,
+            in("x5") 0usize,
             in("x7") SYS_DEBUG_PUT_CHAR,
             options(nostack),
         );
