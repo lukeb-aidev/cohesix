@@ -50,17 +50,42 @@ coh(worker-7)> tail /log/queen.log
 - `cohsh --json` emits machine-readable events for CI pipelines.
 - `cohsh --mock` uses the in-memory Secure9P transport for integration tests without launching QEMU.
 
-## 5. Packaging & Distribution
+## 5. QEMU Transport
+Milestone 1 keeps the CLI focused on attach/login/tail flows while still allowing operators to
+exercise the real root-task image under QEMU. The `--transport qemu` mode launches QEMU with the
+staged artefacts in `out/cohesix` and streams the `[cohesix:root-task]` serial log into
+`tail /log/queen.log`.
+
+```
+# Prepare artefacts once (skip --clean on subsequent runs to reuse the build cache)
+scripts/cohesix-build-run.sh --profile debug --cargo-target aarch64-unknown-none --no-run
+
+# Tail the Cohesix boot log from a fresh QEMU instance
+cargo run --bin cohsh -- \
+  --transport qemu \
+  --qemu-out-dir out/cohesix \
+  --qemu-arg -s \
+  --qemu-arg -S
+```
+
+- Only the queen role is supported in this mode; tickets are ignored.
+- The `tail` command currently surfaces `/log/queen.log`; other paths are reserved for later milestones.
+- Use `--qemu-bin`, `--qemu-out-dir`, `--qemu-gic-version`, or repeated `--qemu-arg <ARG>` options to
+  customise the launch. The shorthand environment variable `COHSH_QEMU_ARGS` is also honoured.
+- `cohsh` filters the serial prefix, so operators see clean log lines such as `Cohesix boot: root-task online`
+  and `tick: 3`.
+
+## 6. Packaging & Distribution
 - `cohsh` is built as a standalone static binary for macOS and Linux hosts.
 - Provide Homebrew formula and Cargo install instructions once CLI stabilises.
 - CLI config (`~/.config/cohesix/cohsh.toml`) stores host transport endpoints and saved tickets.
 
-## 6. Testing Checklist
+## 7. Testing Checklist
 - Unit tests cover command parsing and error messaging.
 - Integration tests verify spawn/kill flows against a mocked NineDoor server.
 - End-to-end test boots QEMU, attaches as queen, spawns a heartbeat worker, validates telemetry, then tears down.
 
-## 7. Accessibility & UX
+## 8. Accessibility & UX
 - Commands should return deterministic, human-readable messages.
 - Provide `help` command summarising available actions per role.
 - Consider tab completion via Rustyline once base functionality stabilises.

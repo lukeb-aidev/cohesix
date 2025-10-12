@@ -90,16 +90,32 @@ run_cli() {
 }
 
 run_mock() {
-    run_cli mock "${EXTRA_ARGS[@]}"
+    if [[ ${#EXTRA_ARGS[@]} -gt 0 ]]; then
+        run_cli mock "${EXTRA_ARGS[@]}"
+    else
+        run_cli mock
+    fi
 }
 
 run_qemu() {
-    local qemu_args=()
+    local invocation=()
     if [[ -n "${COHSH_QEMU_ARGS:-}" ]]; then
+        local raw_args=()
         # shellcheck disable=SC2206
-        qemu_args=(${COHSH_QEMU_ARGS})
+        raw_args=(${COHSH_QEMU_ARGS})
+        local token
+        for token in "${raw_args[@]}"; do
+            invocation+=(--qemu-arg "$token")
+        done
     fi
-    run_cli qemu "${qemu_args[@]}" "${EXTRA_ARGS[@]}"
+    if [[ ${#EXTRA_ARGS[@]} -gt 0 ]]; then
+        invocation+=("${EXTRA_ARGS[@]}")
+    fi
+    if [[ ${#invocation[@]} -gt 0 ]]; then
+        run_cli qemu "${invocation[@]}"
+    else
+        run_cli qemu
+    fi
 }
 
 case "$TARGET" in
