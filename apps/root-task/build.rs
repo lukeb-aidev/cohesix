@@ -183,12 +183,10 @@ fn parse_comment_line(line: &str, flag: &str) -> Option<bool> {
 }
 
 fn parse_assignment_line(line: &str, flag: &str) -> Option<bool> {
-    let Some(stripped) = line.strip_prefix(flag) else {
-        return None;
-    };
+    let stripped = line.strip_prefix(flag)?;
 
     let remainder = stripped
-        .trim_start_matches(|c: char| matches!(c, '=' | ':' | '?' | ' ' | '\t'))
+        .trim_start_matches(['=', ':', '?', ' ', '\t'])
         .trim();
 
     if remainder.is_empty() {
@@ -196,7 +194,7 @@ fn parse_assignment_line(line: &str, flag: &str) -> Option<bool> {
     }
 
     let value = remainder
-        .split(|c: char| matches!(c, ' ' | '\t' | '#'))
+        .split([' ', '\t', '#'])
         .next()
         .unwrap_or(remainder);
 
@@ -234,7 +232,7 @@ fn parse_cmake_line(line: &str, flag: &str) -> Option<bool> {
         let after = &line[pos + flag.len()..];
         if let Some(eq_pos) = after.find('=') {
             let value = after[eq_pos + 1..]
-                .split(|c: char| matches!(c, ' ' | '\t' | ')' | ';'))
+                .split([' ', '\t', ')', ';'])
                 .next()
                 .unwrap_or("");
             if let Some(parsed) = parse_bool_token(value) {
@@ -248,7 +246,7 @@ fn parse_cmake_line(line: &str, flag: &str) -> Option<bool> {
 
 fn parse_bool_token(token: &str) -> Option<bool> {
     let normalized = token
-        .trim_matches(|c: char| matches!(c, '"' | '\'' | ')' | ';' | ','))
+        .trim_matches(['"', '\'', ')', ';', ','])
         .to_ascii_uppercase();
 
     match normalized.as_str() {

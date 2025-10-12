@@ -6,6 +6,10 @@ edition = "2021"
 description = "Cohesix shell prototype using the live NineDoor Secure9P transport"
 license = "MIT"
 
+[features]
+default = ["tcp"]
+tcp = []
+
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true }
