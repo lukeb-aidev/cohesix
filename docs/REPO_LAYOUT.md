@@ -21,6 +21,7 @@
   setup_macos_arm64.sh
 /apps/
   root-task/
+    README.md            ← Event pump overview, testing commands, and feature flag notes
   nine-door/
   worker-heart/
   worker-gpu/            (future)

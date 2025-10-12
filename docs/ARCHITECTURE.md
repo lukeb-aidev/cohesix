@@ -11,6 +11,8 @@
 2. **Root Task Initialisation**
    - Configures serial logging and prints the boot banner.
    - Establishes a periodic timer and registers IRQ handlers.
+   - Constructs the cooperative event pump that rotates through serial RX/TX, timer ticks, networking polls (behind the `net`
+     feature), and IPC dispatch without relying on busy waits.
    - Creates the capability space for initial services, including the 9P endpoint and worker slots.
 3. **Service Bring-up**
    - Spawns the **NineDoor** 9P server task and hands it the root capability set.
@@ -25,10 +27,16 @@
 - Owns seL4 initial caps, configures memory, and manages scheduling budgets.
 - Provides a minimal RPC surface to NineDoor for spawning/killing tasks and for timer events.
 - Enforces budget expiry (ticks, ops, ttl) and revokes capabilities on violation.
+- Exposes a deterministic event pump (`event::EventPump`) that coordinates serial, timer, networking, and IPC tasks. The pump
+  emits structured audit lines whenever subsystems are initialised and ensures each poll cycle services every source without
+  revisiting the legacy spin loop.
 - Hosts the deterministic networking stack (`net::NetStack`) which wraps smoltcp with virtio-friendly, heapless RX/TX queues and
   a `NetworkClock` that advances in timer-driven increments.
+- Provides a serial façade (`serial::SerialPort`) that normalises UTF-8 input, tracks back-pressure counters via
+  `portable-atomic`, and feeds the shared console parser.
 - Runs the serial/TCP console loop (`console::CommandParser`) which multiplexes authenticated commands (`help`, `attach`, `tail`,
-  `log`, `spawn`, `kill`, `quit`) alongside timer and networking events inside the root-task scheduler.
+  `log`, `spawn`, `kill`, `quit`) alongside timer and networking events inside the root-task scheduler. Capability validation is
+  driven by a deterministic ticket table (`event::TicketTable`) that records bootstrap secrets.
 
 ### NineDoor 9P Server (crate: `nine-door`)
 - Implements the Secure9P codec/core stack and publishes the synthetic namespace.
@@ -66,14 +74,17 @@
 ## 7. Networking & Console Integration
 - The networking substrate instantiates a virtio-style PHY backed by `heapless::spsc::Queue` buffers (16 frames × 1536 bytes) to
   preserve deterministic memory usage. smoltcp provides the IPv4/TCP stack while the PHY abstraction allows future hardware
-  drivers to plug in without changing higher layers.
+  drivers to plug in without changing higher layers. The module is feature-gated (`--features net`) so developers can defer the
+  footprint when working on console-only flows.
 - A host-only virtio loopback is exposed via `QueueHandle` for testing; production builds will swap this out for the seL4
-  virtio-net driver once the VM wiring is complete.
-- The console loop multiplexes serial input and TCP sessions. A shared finite-state parser enforces maximum line length, rate
-  limits repeated authentication failures, and funnels all verbs through capability checks before invoking NineDoor or root-task
-  orchestration APIs.
+  virtio-net driver once the VM wiring is complete. The event pump owns the smoltcp poll cadence and publishes link status
+  metrics into the boot log.
+- The console loop multiplexes serial input and TCP sessions. A shared finite-state parser enforces maximum line length,
+  exponential back-off for repeated authentication failures, and funnels all verbs through capability checks before invoking
+  NineDoor or root-task orchestration APIs. The serial façade sanitises control characters and exposes back-pressure counters so
+  `/proc/boot` can surface saturation data.
 - Root-task’s event pump advances the networking clock on every timer tick, services console input, and emits structured log
-  lines so host tooling (`cohsh`) can mirror state over either serial or TCP transports.
+  lines so host tooling (`cohsh`) can mirror state over either serial or TCP transports while timers and IPC continue to run.
 
 ## 8. Reliability & Security Considerations
 - Minimal trusted computing base: no POSIX layers, no TCP servers inside the VM, no dynamic loading.

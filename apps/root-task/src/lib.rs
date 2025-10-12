@@ -6,6 +6,8 @@
 //! Root-task library surface exposing console and networking modules for tests.
 
 pub mod console;
+pub mod event;
+pub mod serial;
 
 #[cfg(feature = "net")]
 pub mod net;

@@ -8,22 +8,18 @@ publish = false
 [features]
 default = []
 net = [
-    "dep:heapless",
-    "dep:portable-atomic",
     "dep:smoltcp",
     "dep:spin",
 ]
 
 [dependencies]
 cohesix-ticket = { workspace = true }
+embedded-io = { version = "0.4", default-features = false }
+nb = "1.1"
+portable-atomic = "1.6"
 
 [dependencies.heapless]
 version = "0.8"
-optional = true
-
-[dependencies.portable-atomic]
-version = "1.6"
-optional = true
 
 [dependencies.smoltcp]
 version = "0.11"
