@@ -8,6 +8,12 @@ use core::arch::global_asm;
 use core::fmt::{self, Write};
 use core::panic::PanicInfo;
 
+use cohesix_ticket::Role;
+
+use crate::event::{AuditSink, EventPump, IpcDispatcher, TickEvent, TicketTable, TimerSource};
+use crate::serial::{SerialDriver, SerialError, SerialPort};
+use embedded_io::Io;
+
 /// seL4 console writer backed by the kernel's `DebugPutChar` system call.
 struct DebugConsole;
 
@@ -142,23 +148,19 @@ pub extern "C" fn kernel_start(bootinfo: *const BootInfoHeader) -> ! {
 
     console.writeln_prefixed("Cohesix v0 (AArch64/virt)");
 
-    for tick in 1..=HEARTBEAT_TICKS {
-        busy_wait_cycles(BUSY_WAIT_CYCLES);
-        let _ = write!(
-            console,
-            "{prefix}tick: {tick}\r\n",
-            prefix = DebugConsole::PREFIX,
-            tick = tick,
-        );
-    }
+    let driver = KernelSerial::new();
+    let serial = SerialPort::new(driver);
+    let timer = KernelTimer::new(5);
+    let ipc = KernelIpc;
+    let mut tickets: TicketTable<4> = TicketTable::new();
+    let _ = tickets.register(Role::Queen, "bootstrap");
+    let mut audit = ConsoleAudit::new(&mut console);
+    let mut pump = EventPump::new(serial, timer, ipc, tickets, &mut audit);
 
-    console.writeln_prefixed("PING");
-    console.writeln_prefixed("PONG");
-    console.writeln_prefixed("root task idling");
+    console.writeln_prefixed("event pump initialised");
 
-    // TODO: replace this placeholder loop with capability bootstrap logic.
     loop {
-        core::hint::spin_loop();
+        pump.poll();
     }
 }
 
@@ -212,12 +214,72 @@ fn panic(info: &PanicInfo) -> ! {
     }
 }
 
-const HEARTBEAT_TICKS: usize = 3;
-const BUSY_WAIT_CYCLES: usize = 5_000_000;
+struct KernelSerial;
 
-#[inline(never)]
-fn busy_wait_cycles(cycles: usize) {
-    for _ in 0..cycles {
-        core::hint::spin_loop();
+impl KernelSerial {
+    fn new() -> Self {
+        Self
+    }
+}
+
+impl Io for KernelSerial {
+    type Error = SerialError;
+}
+
+impl SerialDriver for KernelSerial {
+    fn read_byte(&mut self) -> nb::Result<u8, Self::Error> {
+        Err(nb::Error::WouldBlock)
+    }
+
+    fn write_byte(&mut self, byte: u8) -> nb::Result<(), Self::Error> {
+        emit_debug_char(byte);
+        Ok(())
+    }
+}
+
+struct KernelTimer {
+    tick: u64,
+    period_ms: u64,
+}
+
+impl KernelTimer {
+    fn new(period_ms: u64) -> Self {
+        Self { tick: 0, period_ms }
+    }
+}
+
+impl TimerSource for KernelTimer {
+    fn poll(&mut self, now_ms: u64) -> Option<TickEvent> {
+        self.tick = self.tick.saturating_add(1);
+        Some(TickEvent {
+            tick: self.tick,
+            now_ms: now_ms.saturating_add(self.period_ms),
+        })
+    }
+}
+
+struct KernelIpc;
+
+impl IpcDispatcher for KernelIpc {
+    fn dispatch(&mut self, _now_ms: u64) {}
+}
+
+struct ConsoleAudit<'a> {
+    console: &'a mut DebugConsole,
+}
+
+impl<'a> ConsoleAudit<'a> {
+    fn new(console: &'a mut DebugConsole) -> Self {
+        Self { console }
+    }
+}
+
+impl AuditSink for ConsoleAudit<'_> {
+    fn info(&mut self, message: &str) {
+        self.console.writeln_prefixed(message);
+    }
+
+    fn denied(&mut self, message: &str) {
+        self.console.writeln_prefixed(message);
     }
 }

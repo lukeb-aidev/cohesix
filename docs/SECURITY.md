@@ -8,21 +8,29 @@
 - smoltcp is compiled without default features; only the IPv4/TCP stack is enabled. Random seeds and MAC addresses are
   deterministic to ensure reproducible boots inside QEMU.
 - Console buffers (`heapless::String`) cap line length at 128 bytes and reject control characters beyond backspace/delete to
-  prevent uncontrolled allocations.
+  prevent uncontrolled allocations. The serial façade uses `heapless::spsc::Queue` staging buffers sized at 256 bytes for RX and
+  TX, and exposes atomic back-pressure counters so `/proc/boot` can surface saturation data without dynamic allocation.
 
 ## 2. Console Hardening
 - A leaky-bucket rate limiter permits two consecutive authentication failures per 60-second window; the third failure triggers a
-  90-second cooldown and surfaces `RateLimited` to both serial and TCP clients.
+  90-second cooldown and surfaces `RateLimited` to both serial and TCP clients. The event pump layers an exponential back-off
+  (250 ms × 2ⁿ) on top of the leaky bucket so automated brute force attempts stall progressively sooner.
 - All verbs (`help`, `attach`, `tail`, `log`, `spawn`, `kill`, `quit`) are parsed through a shared finite-state machine to ensure
   consistent validation across serial and TCP inputs. Unknown verbs and overlong values emit structured log lines and are
-  ignored.
+  ignored. The serial façade sanitises UTF-8 input before handing bytes to the parser, dropping control characters outside the
+  backspace/delete set.
+- Tickets presented during `attach` are verified against a deterministic `TicketTable` seeded during boot. Audit lines are
+  emitted for every denial and for each successful role assertion so operators can review access attempts in `/log/queen.log`.
 - The TCP console mirrors the serial surface exactly. Line-oriented commands are terminated by `END` sentinels so scripts can
   verify log completion without relying on socket closure.
 
-## 3. Threat Model Extensions
+## 3. Event Pump & Threat Model Extensions
 - User networking in QEMU is only enabled when `scripts/qemu-run.sh --tcp-port <port>` is provided, limiting the window in which
   the guest exposes a TCP listener. The helper script prints the forwarded port to encourage operator audit.
 - TCP handshake commands are human-readable (`ATTACH <role> <ticket?>` / `TAIL <path>`) to ease inspection. The transport
   validates line length before passing payloads to root-task components, and unexpected responses result in immediate disconnects.
 - Tickets are still required for worker roles even over TCP; empty ticket submissions for worker roles fail with a transport-level
-  error before touching NineDoor state.
+  error before touching NineDoor state. Successful `attach` calls commit the session role into the event pump so subsequent verbs
+  cannot escalate privileges without minting a fresh ticket.
+- The event pump emits audit records (`event-pump: init <subsystem>`, `attach accepted`, `attach denied`) that flow to the serial
+  log. These records are critical for forensic review because they show which subsystems were live at the time of an intrusion.
