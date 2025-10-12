@@ -15,6 +15,9 @@ pub mod net;
 #[cfg(target_os = "none")]
 pub mod kernel;
 
+#[cfg(target_os = "none")]
+pub mod sel4;
+
 #[cfg(not(target_os = "none"))]
 /// Host-mode simulation used for developer testing.
 pub mod host;
