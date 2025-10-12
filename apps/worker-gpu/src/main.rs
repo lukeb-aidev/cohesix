@@ -21,9 +21,7 @@ fn main() -> Result<()> {
     let descriptor = worker.vector_add(&[1.0f32, 2.0, 3.0], &[4.0f32, 5.0, 6.0])?;
     println!(
         "job={} kernel={} hash={}",
-        descriptor.job,
-        descriptor.kernel,
-        descriptor.bytes_hash
+        descriptor.job, descriptor.kernel, descriptor.bytes_hash
     );
     Ok(())
 }

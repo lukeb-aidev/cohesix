@@ -7,7 +7,13 @@
 //! namespace so operators can tail logs using the real filesystem protocol.
 
 use std::fmt;
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead, BufReader, Read, Write};
+use std::path::PathBuf;
+use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
 use clap::ValueEnum;
@@ -62,6 +68,19 @@ pub trait Transport {
 
     /// Stream a log-like file and return the accumulated contents.
     fn tail(&mut self, session: &Session, path: &str) -> Result<Vec<String>>;
+}
+
+impl<T> Transport for Box<T>
+where
+    T: Transport + ?Sized,
+{
+    fn attach(&mut self, role: Role, ticket: Option<&str>) -> Result<Session> {
+        (**self).attach(role, ticket)
+    }
+
+    fn tail(&mut self, session: &Session, path: &str) -> Result<Vec<String>> {
+        (**self).tail(session, path)
+    }
 }
 
 /// Live transport backed by the in-process NineDoor Secure9P server.
@@ -157,6 +176,236 @@ impl Transport for NineDoorTransport {
         connection.clunk(fid).context("failed to clunk fid")?;
         let text = String::from_utf8(buffer).context("log is not valid UTF-8")?;
         Ok(text.lines().map(|line| line.to_owned()).collect())
+    }
+}
+
+/// QEMU-backed transport that boots the Cohesix image and streams serial logs.
+#[derive(Debug)]
+pub struct QemuTransport {
+    qemu_bin: PathBuf,
+    out_dir: PathBuf,
+    extra_qemu_args: Vec<String>,
+    gic_version: String,
+    log_lines: Arc<Mutex<Vec<String>>>,
+    child: Option<Child>,
+    stdout_handle: Option<JoinHandle<()>>,
+    stderr_handle: Option<JoinHandle<()>>,
+    session_id: u64,
+}
+
+impl QemuTransport {
+    /// Create a new QEMU transport using the supplied binary, artefact directory, and arguments.
+    pub fn new(
+        qemu_bin: impl Into<PathBuf>,
+        out_dir: impl Into<PathBuf>,
+        gic_version: impl Into<String>,
+        extra_qemu_args: Vec<String>,
+    ) -> Self {
+        Self {
+            qemu_bin: qemu_bin.into(),
+            out_dir: out_dir.into(),
+            extra_qemu_args,
+            gic_version: gic_version.into(),
+            log_lines: Arc::new(Mutex::new(Vec::new())),
+            child: None,
+            stdout_handle: None,
+            stderr_handle: None,
+            session_id: 1,
+        }
+    }
+
+    fn spawn_reader<R>(stream: R, lines: Arc<Mutex<Vec<String>>>, store: bool) -> JoinHandle<()>
+    where
+        R: Read + Send + 'static,
+    {
+        thread::spawn(move || {
+            let reader = BufReader::new(stream);
+            for line in reader.lines().flatten() {
+                if store {
+                    let mut guard = lines.lock().expect("log mutex poisoned");
+                    guard.push(line);
+                }
+            }
+        })
+    }
+
+    fn artefacts(&self) -> Result<(PathBuf, PathBuf, PathBuf, PathBuf)> {
+        let staging = self.out_dir.join("staging");
+        let elfloader = staging.join("elfloader");
+        let kernel = staging.join("kernel.elf");
+        let rootserver = staging.join("rootserver");
+        let cpio = self.out_dir.join("cohesix-system.cpio");
+
+        for (path, label) in [
+            (&elfloader, "elfloader"),
+            (&kernel, "kernel"),
+            (&rootserver, "rootserver"),
+            (&cpio, "payload cpio"),
+        ] {
+            if !path.is_file() {
+                return Err(anyhow!(
+                    "{label} artefact not found at {} (run scripts/cohesix-build-run.sh --no-run first)",
+                    path.display()
+                ));
+            }
+        }
+
+        Ok((elfloader, kernel, rootserver, cpio))
+    }
+
+    fn wait_for_log(&self, timeout: Duration) -> Result<Vec<String>> {
+        let start = Instant::now();
+        let sentinel = "root task idling";
+        loop {
+            {
+                let guard = self.log_lines.lock().expect("log mutex poisoned");
+                if guard.iter().any(|line| line.contains(sentinel)) {
+                    return Ok(guard.clone());
+                }
+            }
+            if start.elapsed() > timeout {
+                return Err(anyhow!(
+                    "timed out waiting for root-task output from QEMU (path: {:#?})",
+                    self.out_dir
+                ));
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+    }
+
+    fn filter_root_log(lines: &[String]) -> Vec<String> {
+        lines
+            .iter()
+            .filter_map(|line| {
+                if let Some(stripped) = line.strip_prefix("[cohesix:root-task] ") {
+                    Some(stripped.to_owned())
+                } else if let Some((_, rest)) = line.split_once(']') {
+                    let body = rest.trim_start();
+                    if line.contains("[cohesix:root-task]") && !body.is_empty() {
+                        Some(body.to_owned())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    fn stop_child(&mut self) {
+        if let Some(mut child) = self.child.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        if let Some(handle) = self.stdout_handle.take() {
+            let _ = handle.join();
+        }
+        if let Some(handle) = self.stderr_handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+impl Drop for QemuTransport {
+    fn drop(&mut self) {
+        self.stop_child();
+    }
+}
+
+impl Transport for QemuTransport {
+    fn attach(&mut self, role: Role, ticket: Option<&str>) -> Result<Session> {
+        if self.child.is_some() {
+            return Err(anyhow!("QEMU session already active"));
+        }
+
+        if !matches!(role, Role::Queen) {
+            return Err(anyhow!(
+                "QEMU transport currently only supports attaching as the queen role"
+            ));
+        }
+        if let Some(ticket) = ticket {
+            if !ticket.trim().is_empty() {
+                return Err(anyhow!(
+                    "tickets are not required when attaching via the QEMU transport"
+                ));
+            }
+        }
+
+        let (elfloader, kernel, rootserver, cpio) = self.artefacts()?;
+        *self.log_lines.lock().expect("log mutex poisoned") = Vec::new();
+
+        let mut cmd = Command::new(&self.qemu_bin);
+        cmd.arg("-machine")
+            .arg(format!("virt,gic-version={}", self.gic_version))
+            .arg("-cpu")
+            .arg("cortex-a57")
+            .arg("-m")
+            .arg("1024")
+            .arg("-smp")
+            .arg("1")
+            .arg("-serial")
+            .arg("mon:stdio")
+            .arg("-display")
+            .arg("none")
+            .arg("-kernel")
+            .arg(&elfloader)
+            .arg("-initrd")
+            .arg(&cpio)
+            .arg("-device")
+            .arg(format!(
+                "loader,file={},addr=0x70000000,force-raw=on",
+                kernel.display()
+            ))
+            .arg("-device")
+            .arg(format!(
+                "loader,file={},addr=0x80000000,force-raw=on",
+                rootserver.display()
+            ));
+
+        for arg in &self.extra_qemu_args {
+            cmd.arg(arg);
+        }
+
+        cmd.stdout(Stdio::piped());
+        cmd.stderr(Stdio::piped());
+
+        let mut child = cmd
+            .spawn()
+            .context("failed to launch qemu-system-aarch64")?;
+        let stdout = child
+            .stdout
+            .take()
+            .context("failed to capture QEMU stdout")?;
+        let stderr = child
+            .stderr
+            .take()
+            .context("failed to capture QEMU stderr")?;
+
+        let stdout_lines = Arc::clone(&self.log_lines);
+        self.stdout_handle = Some(Self::spawn_reader(stdout, stdout_lines, true));
+        self.stderr_handle = Some(Self::spawn_reader(
+            stderr,
+            Arc::new(Mutex::new(Vec::new())),
+            false,
+        ));
+
+        self.child = Some(child);
+        let session = Session::new(SessionId::from_raw(self.session_id), role);
+        self.session_id = self.session_id.wrapping_add(1);
+        Ok(session)
+    }
+
+    fn tail(&mut self, _session: &Session, path: &str) -> Result<Vec<String>> {
+        if path != "/log/queen.log" {
+            return Err(anyhow!(
+                "QEMU transport currently supports tailing /log/queen.log only"
+            ));
+        }
+        let raw_lines = self.wait_for_log(Duration::from_secs(15))?;
+        let cleaned = Self::filter_root_log(&raw_lines);
+        self.stop_child();
+        Ok(cleaned)
     }
 }
 
@@ -262,6 +511,17 @@ impl<T: Transport, W: Write> Shell<T, W> {
         Ok(())
     }
 
+    fn tail_path(&mut self, path: &str) -> Result<()> {
+        let session = self
+            .session
+            .as_ref()
+            .context("attach to a session before running tail")?;
+        for line in self.transport.tail(session, path)? {
+            writeln!(self.writer, "{line}")?;
+        }
+        Ok(())
+    }
+
     /// Execute a single command line.
     pub fn execute(&mut self, line: &str) -> Result<CommandStatus> {
         let mut parts = line.split_whitespace();
@@ -270,23 +530,39 @@ impl<T: Transport, W: Write> Shell<T, W> {
         };
         match cmd {
             "help" => {
-                writeln!(
-                    self.writer,
-                    "Available commands: help, tail <path>, attach <role> [ticket], login <role> [ticket], quit"
+                self.write_line("Cohesix command surface:")?;
+                self.write_line("  help                         - Show this help message")?;
+                self.write_line("  attach <role> [ticket]       - Attach to a NineDoor session")?;
+                self.write_line("  login <role> [ticket]        - Alias for attach")?;
+                self.write_line("  tail <path>                  - Stream a file via NineDoor")?;
+                self.write_line("  log                          - Tail /log/queen.log")?;
+                self.write_line(
+                    "  ls [path]                    - Enumerate directory entries (planned)",
                 )?;
+                self.write_line("  cat <path>                   - Read file contents (planned)")?;
+                self.write_line("  echo <text> > <path>         - Append to a file (planned)")?;
+                self.write_line(
+                    "  spawn <role> [opts]          - Queue worker spawn command (planned)",
+                )?;
+                self.write_line(
+                    "  kill <worker_id>             - Queue worker termination (planned)",
+                )?;
+                self.write_line("  bind <src> <dst>             - Bind namespace path (planned)")?;
+                self.write_line(
+                    "  mount <service> <path>       - Mount service namespace (planned)",
+                )?;
+                self.write_line("  quit                         - Close the session and exit")?;
                 Ok(CommandStatus::Continue)
             }
             "tail" => {
                 let Some(path) = parts.next() else {
                     return Err(anyhow!("tail requires a path"));
                 };
-                let session = self
-                    .session
-                    .as_ref()
-                    .context("attach to a session before running tail")?;
-                for line in self.transport.tail(session, path)? {
-                    writeln!(self.writer, "{line}")?;
-                }
+                self.tail_path(path)?;
+                Ok(CommandStatus::Continue)
+            }
+            "log" => {
+                self.tail_path("/log/queen.log")?;
                 Ok(CommandStatus::Continue)
             }
             "attach" | "login" => {
@@ -386,5 +662,20 @@ mod tests {
         assert!(err
             .to_string()
             .contains("requires an identity provided via the ticket argument"));
+    }
+
+    #[test]
+    fn help_command_lists_surface() {
+        let transport = NineDoorTransport::new(NineDoor::new());
+        let mut output = Vec::new();
+        {
+            let mut shell = Shell::new(transport, &mut output);
+            shell.execute("help").unwrap();
+        }
+        let rendered = String::from_utf8(output).unwrap();
+        assert!(rendered.contains("Cohesix command surface:"));
+        assert!(rendered.contains("tail <path>"));
+        assert!(rendered.contains("ls [path]"));
+        assert!(rendered.contains("mount <service> <path>"));
     }
 }

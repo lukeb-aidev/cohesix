@@ -137,6 +137,7 @@ _start:
 pub extern "C" fn kernel_start(bootinfo: *const BootInfoHeader) -> ! {
     let mut console = DebugConsole::new();
     console.writeln_prefixed("entered from seL4 (stage0)");
+    console.writeln_prefixed("Cohesix boot: root-task online");
     console.report_bootinfo(bootinfo);
 
     console.writeln_prefixed("Cohesix v0 (AArch64/virt)");
