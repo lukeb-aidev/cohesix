@@ -13,9 +13,9 @@ use cohesix_ticket::Role;
 use crate::event::{AuditSink, EventPump, IpcDispatcher, TickEvent, TicketTable, TimerSource};
 #[cfg(feature = "net")]
 use crate::net::NetStack;
-use crate::serial::virtio::VirtioConsole;
-use crate::serial::{SerialDriver, SerialError, SerialPort};
-use embedded_io::Io;
+use crate::sel4::KernelEnv;
+use crate::serial::pl011::Pl011;
+use crate::serial::SerialPort;
 #[cfg(feature = "net")]
 use smoltcp::wire::Ipv4Address;
 
@@ -120,6 +120,7 @@ compile_error!("root-task kernel build currently supports only aarch64 targets")
 
 #[cfg(target_arch = "aarch64")]
 const ROOT_STACK_SIZE: usize = 16 * 1024;
+const PL011_PADDR: usize = 0x0900_0000;
 
 #[cfg(target_arch = "aarch64")]
 global_asm!(
@@ -153,11 +154,17 @@ pub extern "C" fn kernel_start(bootinfo: *const BootInfoHeader) -> ! {
 
     console.writeln_prefixed("Cohesix v0 (AArch64/virt)");
 
+    let bootinfo_ref = unsafe { &*(bootinfo as *const sel4_sys::seL4_BootInfo) };
+    let mut env = KernelEnv::new(bootinfo_ref);
+
+    let uart_region = env
+        .map_device(PL011_PADDR)
+        .expect("PL011 UART mapping failed");
+    let driver = Pl011::new(uart_region.ptr());
+    let serial = SerialPort::new(driver);
+
     #[cfg(feature = "net")]
     let (mut net_stack, _) = NetStack::new(Ipv4Address::new(10, 0, 0, 2));
-
-    let driver = KernelSerial::new();
-    let serial = SerialPort::new(driver);
     let timer = KernelTimer::new(5);
     let ipc = KernelIpc;
     let mut tickets: TicketTable<4> = TicketTable::new();
@@ -225,36 +232,6 @@ fn panic(info: &PanicInfo) -> ! {
     );
     loop {
         core::hint::spin_loop();
-    }
-}
-
-struct KernelSerial {
-    console: VirtioConsole<
-        { crate::serial::DEFAULT_RX_CAPACITY },
-        { crate::serial::DEFAULT_TX_CAPACITY },
-    >,
-}
-
-impl KernelSerial {
-    fn new() -> Self {
-        Self {
-            console: VirtioConsole::new(),
-        }
-    }
-}
-
-impl Io for KernelSerial {
-    type Error = SerialError;
-}
-
-impl SerialDriver for KernelSerial {
-    fn read_byte(&mut self) -> nb::Result<u8, Self::Error> {
-        self.console.read_byte()
-    }
-
-    fn write_byte(&mut self, byte: u8) -> nb::Result<(), Self::Error> {
-        emit_debug_char(byte);
-        self.console.write_byte(byte)
     }
 }
 

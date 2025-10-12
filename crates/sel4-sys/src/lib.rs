@@ -46,7 +46,12 @@ mod imp {
 
     impl seL4_MessageInfo {
         #[inline(always)]
-        pub const fn new(label: seL4_Word, caps_unwrapped: seL4_Word, extra_caps: seL4_Word, length: seL4_Word) -> Self {
+        pub const fn new(
+            label: seL4_Word,
+            caps_unwrapped: seL4_Word,
+            extra_caps: seL4_Word,
+            length: seL4_Word,
+        ) -> Self {
             let mut value = 0usize;
             value |= (label & 0x0fff_ffff_ffff_ffff) << 12;
             value |= (caps_unwrapped & 0x7) << 9;
@@ -79,7 +84,12 @@ mod imp {
 
     impl seL4_CapRights {
         #[inline(always)]
-        pub const fn new(grant_reply: seL4_Word, grant: seL4_Word, read: seL4_Word, write: seL4_Word) -> Self {
+        pub const fn new(
+            grant_reply: seL4_Word,
+            grant: seL4_Word,
+            read: seL4_Word,
+            write: seL4_Word,
+        ) -> Self {
             let mut value = 0usize;
             value |= (grant_reply & 0x1) << 3;
             value |= (grant & 0x1) << 2;
@@ -130,6 +140,8 @@ mod imp {
 
     pub const seL4_ARM_Page_Uncached: seL4_ARM_VMAttributes = seL4_ARM_VMAttributes(0);
     pub const seL4_ARM_Page_Default: seL4_ARM_VMAttributes = seL4_ARM_VMAttributes(0x03);
+    pub const seL4_FailedLookup: seL4_Error = 6;
+    pub const seL4_NotEnoughMemory: seL4_Error = 10;
 
     #[repr(transparent)]
     #[derive(Clone, Copy)]
@@ -283,10 +295,26 @@ mod imp {
     ) -> seL4_MessageInfo {
         let mut info_out = msg_info.words[0];
         let mut dummy_badge = 0usize;
-        let mut msg0 = if !mr0.is_null() && msg_info.length() > 0 { *mr0 } else { 0 };
-        let mut msg1 = if !mr1.is_null() && msg_info.length() > 1 { *mr1 } else { 0 };
-        let mut msg2 = if !mr2.is_null() && msg_info.length() > 2 { *mr2 } else { 0 };
-        let mut msg3 = if !mr3.is_null() && msg_info.length() > 3 { *mr3 } else { 0 };
+        let mut msg0 = if !mr0.is_null() && msg_info.length() > 0 {
+            *mr0
+        } else {
+            0
+        };
+        let mut msg1 = if !mr1.is_null() && msg_info.length() > 1 {
+            *mr1
+        } else {
+            0
+        };
+        let mut msg2 = if !mr2.is_null() && msg_info.length() > 2 {
+            *mr2
+        } else {
+            0
+        };
+        let mut msg3 = if !mr3.is_null() && msg_info.length() > 3 {
+            *mr3
+        } else {
+            0
+        };
 
         arm_sys_send_recv(
             seL4_SysCall,
@@ -343,14 +371,7 @@ mod imp {
         seL4_SetMR(4, node_offset);
         seL4_SetMR(5, num_objects);
 
-        let info = seL4_CallWithMRs(
-            service,
-            msg,
-            &mut mr0,
-            &mut mr1,
-            &mut mr2,
-            &mut mr3,
-        );
+        let info = seL4_CallWithMRs(service, msg, &mut mr0, &mut mr1, &mut mr2, &mut mr3);
 
         info.label() as seL4_Error
     }
@@ -396,14 +417,7 @@ mod imp {
 
         seL4_SetCap(0, vspace);
 
-        let info = seL4_CallWithMRs(
-            service,
-            msg,
-            &mut mr0,
-            &mut mr1,
-            &mut mr2,
-            ptr::null_mut(),
-        );
+        let info = seL4_CallWithMRs(service, msg, &mut mr0, &mut mr1, &mut mr2, ptr::null_mut());
 
         info.label() as seL4_Error
     }
@@ -412,37 +426,41 @@ mod imp {
         pub fn seL4_DebugPutChar(c: u8);
         pub fn seL4_Yield();
         pub fn seL4_ARM_Page_Unmap(service: seL4_ARM_Page) -> seL4_Error;
-        pub fn seL4_CNode_Delete(root: seL4_CNode, index: seL4_CPtr, depth: seL4_Word) -> seL4_Error;
+        pub fn seL4_CNode_Delete(
+            root: seL4_CNode,
+            index: seL4_CPtr,
+            depth: seL4_Word,
+        ) -> seL4_Error;
         pub fn seL4_ARM_Page_GetAddress(service: seL4_ARM_Page) -> seL4_ARM_Page_GetAddress;
     }
 
-    pub use seL4_BootInfo as BootInfo;
-    pub use seL4_UntypedDesc as UntypedDesc;
-    pub use seL4_SlotRegion as SlotRegion;
-    pub use seL4_BootInfoHeader as BootInfoHeader;
     pub use seL4_ARM_Page_GetAddress as ARMPageGetAddressResult;
+    pub use seL4_BootInfo as BootInfo;
+    pub use seL4_BootInfoHeader as BootInfoHeader;
+    pub use seL4_SlotRegion as SlotRegion;
+    pub use seL4_UntypedDesc as UntypedDesc;
 
-    pub use seL4_SetMR;
-    pub use seL4_GetMR;
-    pub use seL4_SetCap;
-    pub use seL4_GetCap;
+    pub use seL4_CNode_CapData;
     pub use seL4_CallWithMRs;
-    pub use seL4_MessageInfo;
     pub use seL4_CapRights;
     pub use seL4_CapRights_All;
     pub use seL4_CapRights_ReadWrite;
-    pub use seL4_CNode_CapData;
+    pub use seL4_GetCap;
+    pub use seL4_GetMR;
+    pub use seL4_MessageInfo;
+    pub use seL4_SetCap;
+    pub use seL4_SetMR;
 
-    pub use seL4_ARM_Page_Map;
     pub use seL4_ARM_PageTable_Map;
-    pub use seL4_ARM_Page_Unmap;
-    pub use seL4_ARM_Page_GetAddress;
-    pub use seL4_ARM_VMAttributes;
     pub use seL4_ARM_Page_Default;
+    pub use seL4_ARM_Page_GetAddress;
+    pub use seL4_ARM_Page_Map;
     pub use seL4_ARM_Page_Uncached;
+    pub use seL4_ARM_Page_Unmap;
+    pub use seL4_ARM_VMAttributes;
     pub use seL4_DebugPutChar;
-    pub use seL4_Yield;
     pub use seL4_Untyped_Retype;
+    pub use seL4_Yield;
     pub use BootInfo as seL4_BootInfo;
 
     pub const seL4_CapNull: seL4_CPtr = 0;
@@ -457,17 +475,17 @@ mod imp {
     pub const seL4_CapBootInfoFrame: seL4_CPtr = 9;
     pub const seL4_CapInitThreadIPCBuffer: seL4_CPtr = 10;
 
-    pub use seL4_CPtr;
-    pub use seL4_Word;
-    pub use seL4_Error;
-    pub use seL4_Untyped;
-    pub use seL4_CNode;
-    pub use seL4_VSpace;
     pub use seL4_ARM_Page;
     pub use seL4_ARM_PageTable;
-    pub use MAX_BOOTINFO_UNTYPEDS;
-    pub use seL4_NoError;
+    pub use seL4_CNode;
+    pub use seL4_CPtr;
+    pub use seL4_Error;
     pub use seL4_MessageRegisterCount;
+    pub use seL4_NoError;
+    pub use seL4_Untyped;
+    pub use seL4_VSpace;
+    pub use seL4_Word;
+    pub use MAX_BOOTINFO_UNTYPEDS;
 }
 
 #[cfg(target_os = "none")]
@@ -499,7 +517,12 @@ mod host_stub {
 
     impl seL4_MessageInfo {
         #[inline(always)]
-        pub const fn new(label: seL4_Word, _caps_unwrapped: seL4_Word, _extra_caps: seL4_Word, _length: seL4_Word) -> Self {
+        pub const fn new(
+            label: seL4_Word,
+            _caps_unwrapped: seL4_Word,
+            _extra_caps: seL4_Word,
+            _length: seL4_Word,
+        ) -> Self {
             Self { words: [label] }
         }
 
@@ -578,6 +601,9 @@ mod host_stub {
     pub const seL4_ARM_Page_Default: seL4_ARM_VMAttributes = seL4_ARM_VMAttributes(0);
     pub const seL4_ARM_Page_Uncached: seL4_ARM_VMAttributes = seL4_ARM_VMAttributes(0);
     pub const seL4_ARM_SmallPageObject: seL4_Word = 0;
+    pub const seL4_ARM_PageTableObject: seL4_Word = 0;
+    pub const seL4_FailedLookup: seL4_Error = 6;
+    pub const seL4_NotEnoughMemory: seL4_Error = 10;
 
     #[inline(always)]
     pub unsafe fn seL4_SetMR(_index: usize, _value: seL4_Word) {

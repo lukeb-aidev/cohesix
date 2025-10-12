@@ -3,17 +3,21 @@
 #![allow(dead_code)]
 #![allow(clippy::missing_panics_doc)]
 
-use core::ptr;
+use core::ptr::NonNull;
 
+use heapless::Vec;
 use sel4_sys::{
-    seL4_ARM_Page, seL4_ARM_Page_Map, seL4_ARM_Page_Uncached, seL4_ARM_PageTable,
-    seL4_ARM_PageTable_Map, seL4_BootInfo, seL4_CNode, seL4_CapInitThreadCNode,
-    seL4_CapInitThreadVSpace, seL4_CapRights_ReadWrite, seL4_CPtr, seL4_Error,
-    seL4_SlotRegion, seL4_Untyped, seL4_Untyped_Retype, seL4_Word, UntypedDesc,
-    seL4_ARM_SmallPageObject, seL4_NoError,
+    seL4_ARM_Page, seL4_ARM_PageTable, seL4_ARM_PageTable_Map, seL4_ARM_Page_Map,
+    seL4_ARM_Page_Uncached, seL4_ARM_SmallPageObject, seL4_BootInfo, seL4_CNode, seL4_CPtr,
+    seL4_CapInitThreadCNode, seL4_CapInitThreadVSpace, seL4_CapRights_ReadWrite, seL4_Error,
+    seL4_FailedLookup, seL4_NoError, seL4_NotEnoughMemory, seL4_SlotRegion, seL4_Untyped,
+    seL4_Untyped_Retype, seL4_Word, UntypedDesc,
 };
 
 const PAGE_BITS: usize = 12;
+const MAX_UNTYPEDS: usize = sel4_sys::MAX_BOOTINFO_UNTYPEDS;
+const PAGE_TABLE_ALIGN: usize = 1 << 21;
+const MAX_PAGE_TABLES: usize = 64;
 
 #[derive(Debug)]
 pub struct SlotAllocator {
@@ -53,44 +57,78 @@ impl SlotAllocator {
 
 #[derive(Debug)]
 pub struct UntypedCatalog<'a> {
+    bootinfo: &'a seL4_BootInfo,
     entries: &'a [UntypedDesc],
+    used: Vec<usize, MAX_UNTYPEDS>,
 }
 
 impl<'a> UntypedCatalog<'a> {
     pub fn new(bootinfo: &'a seL4_BootInfo) -> Self {
         let count = bootinfo.untyped.end - bootinfo.untyped.start;
         let entries = &bootinfo.untypedList[..count as usize];
-        Self { entries }
+        Self {
+            bootinfo,
+            entries,
+            used: Vec::new(),
+        }
     }
 
-    pub fn find_for_paddr(&self, paddr: usize, size_bits: usize) -> Option<&'a UntypedDesc> {
-        let length = 1usize << size_bits;
-        let end = paddr.saturating_add(length);
-        self.entries.iter().find(|desc| {
-            if desc.isDevice == 0 {
-                return false;
+    fn is_used(&self, index: usize) -> bool {
+        self.used.iter().any(|&value| value == index)
+    }
+
+    fn reserve_index(&mut self, index: usize) -> Option<seL4_Untyped> {
+        if self.is_used(index) {
+            return None;
+        }
+        self.used.push(index).ok()?;
+        Some(self.bootinfo.untyped.start + index as seL4_CPtr)
+    }
+
+    pub fn reserve_device(&mut self, paddr: usize, size_bits: usize) -> Option<seL4_Untyped> {
+        let end = paddr.saturating_add(1usize << size_bits);
+        for (index, desc) in self.entries.iter().enumerate() {
+            if desc.isDevice == 0 || self.is_used(index) {
+                continue;
             }
             let base = desc.paddr as usize;
             let limit = base.saturating_add(1usize << desc.sizeBits);
-            base <= paddr && end <= limit
-        })
+            if base <= paddr && end <= limit {
+                return self.reserve_index(index);
+            }
+        }
+        None
     }
 
-    pub fn index_of(&self, target: &'a UntypedDesc) -> Option<usize> {
-        self.entries.iter().position(|entry| ptr::eq(entry, target))
+    pub fn reserve_ram(&mut self, min_size_bits: u8) -> Option<seL4_Untyped> {
+        for (index, desc) in self.entries.iter().enumerate() {
+            if desc.isDevice != 0 || desc.sizeBits < min_size_bits || self.is_used(index) {
+                continue;
+            }
+            return self.reserve_index(index);
+        }
+        None
     }
 }
 
 #[derive(Debug)]
 pub struct DeviceFrame {
     pub cap: seL4_CPtr,
-    pub vaddr: usize,
+    ptr: NonNull<u8>,
+}
+
+impl DeviceFrame {
+    #[must_use]
+    pub fn ptr(&self) -> NonNull<u8> {
+        self.ptr
+    }
 }
 
 pub struct KernelEnv<'a> {
     bootinfo: &'a seL4_BootInfo,
     slots: SlotAllocator,
     untyped: UntypedCatalog<'a>,
+    mapped_pts: Vec<usize, MAX_PAGE_TABLES>,
 }
 
 impl<'a> KernelEnv<'a> {
@@ -101,6 +139,7 @@ impl<'a> KernelEnv<'a> {
             bootinfo,
             slots,
             untyped,
+            mapped_pts: Vec::new(),
         }
     }
 
@@ -114,7 +153,11 @@ impl<'a> KernelEnv<'a> {
             .expect("out of CSpace slots for root task")
     }
 
-    fn retype_page(&mut self, untyped_cap: seL4_Untyped, slot: seL4_CPtr) -> Result<(), seL4_Error> {
+    fn retype_page(
+        &mut self,
+        untyped_cap: seL4_Untyped,
+        slot: seL4_CPtr,
+    ) -> Result<(), seL4_Error> {
         let res = unsafe {
             seL4_Untyped_Retype(
                 untyped_cap,
@@ -134,41 +177,97 @@ impl<'a> KernelEnv<'a> {
         }
     }
 
-    pub fn map_device(
+    fn retype_page_table(
         &mut self,
-        paddr: usize,
-        desired_vaddr: usize,
-    ) -> Result<DeviceFrame, seL4_Error> {
-        let desc_ref = self
+        untyped_cap: seL4_Untyped,
+        slot: seL4_CPtr,
+    ) -> Result<(), seL4_Error> {
+        let res = unsafe {
+            seL4_Untyped_Retype(
+                untyped_cap,
+                sel4_sys::seL4_ARM_PageTableObject,
+                0,
+                self.slots.root(),
+                slot,
+                self.slots.depth(),
+                0,
+                1,
+            )
+        };
+        if res == seL4_NoError {
+            Ok(())
+        } else {
+            Err(res)
+        }
+    }
+
+    fn align_down(value: usize, align: usize) -> usize {
+        debug_assert!(align.is_power_of_two());
+        value & !(align - 1)
+    }
+
+    pub fn map_device(&mut self, paddr: usize) -> Result<DeviceFrame, seL4_Error> {
+        let untyped_cap = self
             .untyped
-            .find_for_paddr(paddr, PAGE_BITS)
-            .ok_or(-1)?;
-        let offset = self.untyped.index_of(desc_ref).ok_or(-1)?;
-        let untyped_cap = self.bootinfo.untyped.start + offset as seL4_CPtr;
+            .reserve_device(paddr, PAGE_BITS)
+            .ok_or(seL4_NotEnoughMemory)?;
         let frame_slot = self.allocate_slot();
         self.retype_page(untyped_cap, frame_slot)?;
-        self.map_frame(frame_slot, desired_vaddr)?;
+        self.map_frame(frame_slot, paddr)?;
         Ok(DeviceFrame {
             cap: frame_slot,
-            vaddr: desired_vaddr,
+            ptr: NonNull::new(paddr as *mut u8).expect("device mappings must be non-null"),
         })
     }
 
     fn map_frame(&mut self, frame_cap: seL4_CPtr, vaddr: usize) -> Result<(), seL4_Error> {
-        let vspace = seL4_CapInitThreadVSpace;
-        unsafe {
-            // Assume second-level page table already populated; attempt mapping.
-            let res = seL4_ARM_Page_Map(
+        let mut result = unsafe {
+            seL4_ARM_Page_Map(
                 frame_cap,
-                vspace,
+                seL4_CapInitThreadVSpace,
                 vaddr,
                 seL4_CapRights_ReadWrite,
                 seL4_ARM_Page_Uncached,
-            );
-            if res != seL4_NoError {
-                return Err(res);
+            )
+        };
+
+        if result == seL4_FailedLookup {
+            let pt_base = Self::align_down(vaddr, PAGE_TABLE_ALIGN);
+            if !self.mapped_pts.iter().any(|&addr| addr == pt_base) {
+                let pt_untyped = self
+                    .untyped
+                    .reserve_ram(PAGE_BITS as u8)
+                    .ok_or(seL4_NotEnoughMemory)?;
+                let pt_slot = self.allocate_slot();
+                self.retype_page_table(pt_untyped, pt_slot)?;
+                let map_res = unsafe {
+                    seL4_ARM_PageTable_Map(
+                        pt_slot,
+                        seL4_CapInitThreadVSpace,
+                        pt_base,
+                        seL4_ARM_Page_Uncached,
+                    )
+                };
+                if map_res != seL4_NoError {
+                    return Err(map_res);
+                }
+                let _ = self.mapped_pts.push(pt_base);
             }
+            result = unsafe {
+                seL4_ARM_Page_Map(
+                    frame_cap,
+                    seL4_CapInitThreadVSpace,
+                    vaddr,
+                    seL4_CapRights_ReadWrite,
+                    seL4_ARM_Page_Uncached,
+                )
+            };
         }
-        Ok(())
+
+        if result == seL4_NoError {
+            Ok(())
+        } else {
+            Err(result)
+        }
     }
 }
