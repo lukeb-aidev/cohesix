@@ -183,19 +183,18 @@ KERNEL_PATH="$SEL4_BUILD_DIR/kernel/kernel.elf"
 [[ -f "$ELFLOADER_PATH" ]] || fail "elfloader binary not found at $ELFLOADER_PATH"
 [[ -f "$KERNEL_PATH" ]] || fail "kernel.elf not found at $KERNEL_PATH"
 
-PROFILE_FLAG=()
+declare -a PROFILE_ARGS=()
 PROFILE_DIR="$PROFILE"
 case "$PROFILE" in
     release)
-        PROFILE_FLAG=(--release)
+        PROFILE_ARGS=(--release)
         PROFILE_DIR="release"
         ;;
     dev|debug)
-        PROFILE_FLAG=()
         PROFILE_DIR="debug"
         ;;
     *)
-        PROFILE_FLAG=(--profile "$PROFILE")
+        PROFILE_ARGS=(--profile "$PROFILE")
         ;;
  esac
 
@@ -207,7 +206,9 @@ SEL4_COMPONENT_PACKAGES=(nine-door worker-heart worker-gpu)
 HOST_TOOL_PACKAGES=(cohsh gpu-bridge-host)
 
 HOST_BUILD_ARGS=(build)
-HOST_BUILD_ARGS+=("${PROFILE_FLAG[@]}")
+if (( ${#PROFILE_ARGS[@]} > 0 )); then
+    HOST_BUILD_ARGS+=("${PROFILE_ARGS[@]}")
+fi
 for pkg in "${HOST_TOOL_PACKAGES[@]}"; do
     HOST_BUILD_ARGS+=(-p "$pkg")
 done
@@ -216,13 +217,17 @@ log "Building host tooling via: cargo ${HOST_BUILD_ARGS[*]}"
 cargo "${HOST_BUILD_ARGS[@]}"
 
 SEL4_BUILD_ARGS=(build --target "$CARGO_TARGET")
-SEL4_BUILD_ARGS+=("${PROFILE_FLAG[@]}")
+if (( ${#PROFILE_ARGS[@]} > 0 )); then
+    SEL4_BUILD_ARGS+=("${PROFILE_ARGS[@]}")
+fi
 for pkg in "${SEL4_COMPONENT_PACKAGES[@]}"; do
     SEL4_BUILD_ARGS+=(-p "$pkg")
 done
 
 ROOT_TASK_BUILD_ARGS=(build --target "$CARGO_TARGET")
-ROOT_TASK_BUILD_ARGS+=("${PROFILE_FLAG[@]}")
+if (( ${#PROFILE_ARGS[@]} > 0 )); then
+    ROOT_TASK_BUILD_ARGS+=("${PROFILE_ARGS[@]}")
+fi
 ROOT_TASK_BUILD_ARGS+=(-p root-task -F root-task/sel4-console)
 
 log "Building root-task with console support via: cargo ${ROOT_TASK_BUILD_ARGS[*]}"
