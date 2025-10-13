@@ -18,6 +18,7 @@ use sel4_sys::{
 pub use sel4_sys::{seL4_CapInitThreadCNode, seL4_CapInitThreadVSpace, seL4_Error};
 
 const PAGE_BITS: usize = 12;
+const PAGE_TABLE_BITS: usize = 12;
 const PAGE_SIZE: usize = 1 << PAGE_BITS;
 const PAGE_TABLE_ALIGN: usize = 1 << 21;
 const DEVICE_VADDR_BASE: usize = 0xA000_0000;
@@ -272,7 +273,7 @@ impl<'a> KernelEnv<'a> {
             seL4_Untyped_Retype(
                 untyped_cap,
                 seL4_ARM_SmallPageObject,
-                0,
+                PAGE_BITS as seL4_Word,
                 self.slots.root(),
                 0,
                 0,
@@ -296,7 +297,7 @@ impl<'a> KernelEnv<'a> {
             seL4_Untyped_Retype(
                 untyped_cap,
                 seL4_ARM_PageTableObject,
-                0,
+                PAGE_TABLE_BITS as seL4_Word,
                 self.slots.root(),
                 0,
                 0,
@@ -332,7 +333,7 @@ impl<'a> KernelEnv<'a> {
             if !self.mapped_pts.iter().any(|&addr| addr == pt_base) {
                 let reserved = self
                     .untyped
-                    .reserve_ram(PAGE_BITS as u8)
+                    .reserve_ram(PAGE_TABLE_BITS as u8)
                     .ok_or(seL4_NotEnoughMemory)?;
                 let pt_slot = self.allocate_slot();
                 self.retype_page_table(reserved.cap, pt_slot)?;
