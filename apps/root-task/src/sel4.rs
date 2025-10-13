@@ -473,9 +473,9 @@ impl<'a> KernelEnv<'a> {
                 seL4_ARM_SmallPageObject,
                 PAGE_BITS as seL4_Word,
                 self.slots.root(),
-                0,
-                self.slots.depth(),
                 slot,
+                self.slots.depth(),
+                0,
                 1,
             )
         };
@@ -497,9 +497,9 @@ impl<'a> KernelEnv<'a> {
                 seL4_ARM_PageTableObject,
                 PAGE_TABLE_BITS as seL4_Word,
                 self.slots.root(),
-                0,
-                self.slots.depth(),
                 slot,
+                self.slots.depth(),
+                0,
                 1,
             )
         };
