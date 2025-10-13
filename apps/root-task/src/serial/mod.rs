@@ -249,7 +249,7 @@ impl SerialTelemetryCounters {
 }
 
 /// Serial driver used by tests to emulate asynchronous RX/TX behaviour.
-#[cfg(test)]
+#[cfg(any(test, not(target_os = "none")))]
 pub mod test_support {
     use super::*;
     use core::cell::RefCell;
