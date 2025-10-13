@@ -54,6 +54,28 @@ and audit output without booting QEMU. The harness wires a sleep-backed
 timer and exercises both queen and worker tickets, ensuring host runs
 stay aligned with the seL4 entry path.
 
+## QEMU Boot Readiness
+
+- **Boot pipeline** — `kernel_start` prints seL4 bootinfo, maps the
+  PL011 UART, and installs the event pump before entering the polling
+  loop so the image runs once the elfloader jumps into the root task on
+  `qemu-system-aarch64`. 【F:apps/root-task/src/kernel.rs†L105-L210】【F:apps/root-task/src/kernel.rs†L252-L343】
+- **Tickets** — The embedded `TicketTable` registers a queen ticket plus
+  worker heartbeat/GPU placeholders, allowing authenticated attaches for
+  all three roles during QEMU sessions. 【F:apps/root-task/src/kernel.rs†L333-L339】
+- **Networking** — When built with the default `net` feature the event
+  pump initialises the virtio-net backed `NetStack`, binds to the static
+  `10.0.0.2/24` address, and listens for TCP console input on port
+  `31337`. User-space clients reach the listener via
+  `scripts/qemu-run.sh --tcp-port <host-port>`, which wires QEMU user
+  networking to the root task. 【F:apps/root-task/src/kernel.rs†L308-L331】【F:apps/root-task/src/net/virtio.rs†L119-L214】【F:scripts/qemu-run.sh†L127-L188】
+- **Command loop** — The authenticated parser accepts `help`, `attach`,
+  `tail`, `log`, `spawn`, `kill`, and `quit`. All verbs share the same
+  capability checks and rate limiting across serial and TCP transports.
+  Responses are emitted as audit lines on the seL4 debug console; the
+  TCP listener currently consumes input without echoing structured
+  responses, mirroring the host-mode simulation expectations. 【F:apps/root-task/src/console/mod.rs†L23-L112】【F:apps/root-task/src/event/mod.rs†L242-L347】【F:apps/root-task/src/net/virtio.rs†L185-L232】
+
 ## Build Plan Milestone 7 Status
 
 - **7a (Event Pump & Authenticated Entry)** — The cooperative pump and

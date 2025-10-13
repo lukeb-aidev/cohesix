@@ -4,115 +4,81 @@
 ## 1. Philosophy
 Cohesix replaces the traditional Unix shell with a deterministic file-oriented control plane. All human and automated interactions go through 9P namespaces exposed by NineDoor. The primary operator tool is the **Cohesix Shell (`cohsh`)**, a Rust REPL that translates commands into 9P operations.
 
-## 2. Command Surface
+## 2. Root-task Console (Milestone 7)
+The authenticated console introduced in Milestone 7 is implemented by
+`apps/root-task/src/console/mod.rs` and shared by serial plus TCP
+transports. The parser is heapless, validates UTF-8, and enforces
+per-command capability checks inside the event pump.
+
+### 2.1 Supported Commands
 | Command | Role | Effect |
 |---------|------|--------|
-| `help` | All | Print command summary, authenticated role, and active transports |
-| `ls [path]` | All | Enumerate directory entries via `walk` + `read` |
-| `cat <path>` | All | Stream file contents |
-| `echo <text> > <path>` | Queen, Worker roles | Append text to append-only files |
-| `spawn <role> [opts]` | Queen | Append JSON spawn command to `/queen/ctl` |
-| `kill <worker_id>` | Queen | Append kill command |
-| `bind <src> <dst>` | Queen | Request namespace bind |
-| `mount <service> <path>` | Queen | Mount host/VM services |
-| `tail <path>` | All | Continuous read with backoff; respects TCP heartbeats |
-| `log` | Queen | Shortcut for `tail /log/queen.log` |
-| `quit` | All | Close session and release ticket |
+| `help` | All | Emit an audit line indicating that help was requested |
+| `attach <role> [ticket]` | All | Authenticate the session and bind a role; workers must supply a ticket |
+| `tail <path>` | Worker, Queen | Record a request to stream a path via NineDoor once the bridge is online |
+| `log` | Queen | Shortcut for initiating the log stream verb |
+| `spawn <json>` | Queen | Forward JSON payloads to NineDoor for worker orchestration |
+| `kill <worker>` | Queen | Request termination of a worker via NineDoor |
+| `quit` | All | Close the session |
 
-> **Milestone 7 Alignment:** All verbs are serviced through the
-> authenticated command loop shared by serial and TCP transports. The
-> parser enforces the budget, rate limiting, and capability checks
-> described in `docs/BUILD_PLAN.md` milestones 7a–7c.
+> **Note:** File-oriented verbs such as `ls` and `cat` are provided by the
+> Secure9P namespace once NineDoor lands in Milestone 8; they are not part
+> of the Milestone 7 console.
+
+### 2.2 Authentication & Limits
+- Maximum console line length is 128 characters; role identifiers are
+  capped at 16 characters and tickets at 128 characters. 【F:apps/root-task/src/console/mod.rs†L11-L36】
+- The login rate limiter blocks sessions that exceed three failed
+  attempts within 60 seconds for 90 seconds. 【F:apps/root-task/src/console/mod.rs†L38-L87】
+- The event pump records outcomes in `PumpMetrics`, incrementing
+  `accepted_commands` and `denied_commands` counters for auditability. 【F:apps/root-task/src/event/mod.rs†L84-L115】【F:apps/root-task/src/event/mod.rs†L240-L347】
+
+### 2.3 Output Semantics
+Commands do not currently stream structured responses. Instead the
+`AuditSink` implementation writes prefixed audit lines to the seL4 debug
+console (visible on the QEMU serial log) while NineDoor forwarding stubs
+mirror accepted verbs for future integration. 【F:apps/root-task/src/event/mod.rs†L314-L347】【F:apps/root-task/src/ninedoor.rs†L15-L63】
 
 ## 3. Example Sessions
-### Queen Session
-```
-coh> ls /
-proc queen log worker
-coh> cat /proc/boot
-Cohesix v0 (ARM64)
-coh> spawn heartbeat ticks=100 ttl=60
-Spawned worker id=worker-1
-coh> tail /worker/worker-1/telemetry
-{"tick":1,"ts_ms":...}
-{"tick":2,"ts_ms":...}
-coh> kill worker-1
-Killed worker id=worker-1
-coh> quit
-```
-
-### WorkerHeartbeat Session
-```
-coh(worker-7)> echo '{"tick":42}' > /worker/self/telemetry
-coh(worker-7)> tail /log/queen.log
-```
+The host-mode harness demonstrates the exact command sequence exercised
+under QEMU. The scripted input runs `help`, authenticates as queen,
+invokes `log`/`spawn`, re-attaches as a worker, issues `tail`, then
+terminates with `quit`. 【F:apps/root-task/src/host.rs†L52-L104】
 
 ## 4. Scripted Automation
-- `cohsh --script scripts/smoke.coh` executes newline-delimited commands and exits non-zero on first failure.
-- `cohsh --json` emits machine-readable events for CI pipelines.
-- `cohsh --mock` uses the in-memory Secure9P transport for integration tests without launching QEMU.
+`cohsh` continues to ship scripting helpers that target the in-process
+Secure9P mock until the TCP transport is feature-complete:
+
+- `cohsh --script scripts/smoke.coh` executes newline-delimited commands
+  against the mock transport and aborts on the first error.
+- `cohsh --json` emits machine-readable events for CI.
+- `cohsh --mock` runs entirely in-process without launching QEMU, easing
+  unit testing of parser behaviour.
 
 ## 5. QEMU & Serial Console Workflow
-Milestones 7a and 7b retire the legacy busy loop and expose a
-deterministic serial console serviced by the event pump. Launch QEMU via
-`scripts/qemu-run.sh` to exercise the integrated flow:
+Use `scripts/qemu-run.sh` to package a compiled root task into a CPIO
+archive and boot seL4 under QEMU. Supply pre-built elfloader and kernel
+artefacts produced by the upstream build system:
 
 ```
-# Build artefacts and boot QEMU with the serial console attached
-scripts/qemu-run.sh --profile debug --console serial --exit-after 120
+scripts/qemu-run.sh \
+  --elfloader out/elfloader --kernel out/kernel \
+  --root-task target/aarch64-unknown-none/release/root-task \
+  --out-dir out/qemu-run --tcp-port 31337
 ```
 
-- The script validates macOS host prerequisites, boots seL4 + Cohesix,
-  and wires the virtio-console into the root-task serial driver.
-- Pass `--console inline` to keep serial IO in the invoking terminal or
-  `--console macos-terminal` to spawn a fresh Terminal.app session. Both
-  surfaces use the authenticated parser introduced in Milestone 7a.
-- Enable networking with `--net` to confirm the event pump polls smoltcp
-  without starving serial or timer work. Audit logs such as
-  `event-pump: init serial` and `event-pump: init net` confirm subsystem
-  activation order matches the Build Plan requirements.
-- The script prints the serial device path (or spawned terminal name) so
-  operators can capture it in test logs and audits.
+- The helper assembles the root task into `/bin/root-task` inside the
+  generated CPIO archive and prints SHA-256 digests for traceability. 【F:scripts/qemu-run.sh†L63-L116】【F:scripts/qemu-run.sh†L188-L204】
+- Passing `--tcp-port` wires QEMU user networking so host clients can
+  send console commands over TCP while the PL011-backed serial channel
+  continues to accept the same verbs. 【F:scripts/qemu-run.sh†L127-L188】
+- Serial output includes seL4 boot logs followed by root-task audit
+  lines such as `event-pump: init serial` and `attach accepted`.
 
-## 6. TCP Transport & Remote Sessions
-Milestone 7c extends `cohsh` with a TCP transport that mirrors serial
-behaviour:
-
-- `cohsh --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337` connects
-  to the root-task listener exposed by `scripts/qemu-run.sh --tcp-port
-  31337`. The helper refuses non-localhost binds and prints the bound
-  endpoint for audit trails.
-- The TCP protocol is line oriented: the client sends `ATTACH <role>
-  <ticket?>` and expects an `OK` or `ERR` response before issuing verbs
-  such as `TAIL /log/queen.log`. Streams terminate with an `END`
-  sentinel and `PING` / `PONG` heartbeats keep idle sessions alive.
-- Rate limiting and line-length enforcement mirror the serial console:
-  commands longer than 128 bytes are rejected and more than three failed
-  logins within 60 seconds trigger a 90-second lockout reported as
-  `RateLimited`. `cohsh` validates worker tickets locally (64 hex or
-  base64url) and prints connection telemetry (`[cohsh][tcp] reconnect
-  attempt …`, heartbeat latency) to stderr so operators know when
-  exponential back-off is in effect.
-- Scripts reuse the NineDoor command surface because the TCP transport
-  proxies console verbs into the running root task. Reconnects are
-  automatic; long-running `tail` commands resume after transient drops
-  without discarding buffered output while the event pump continues to
-  service timers and networking polls.
-
-## 7. Packaging & Distribution
-- `cohsh` is built as a standalone static binary for macOS and Linux hosts.
-- Provide Homebrew formula and Cargo install instructions once CLI stabilises.
-- CLI config (`~/.config/cohesix/cohsh.toml`) stores host transport endpoints and saved tickets.
-
-## 8. Testing Checklist
-- Unit tests cover command parsing and error messaging.
-- Integration tests verify spawn/kill flows against a mocked NineDoor server.
-- End-to-end test boots QEMU, attaches as queen, spawns a heartbeat worker, validates telemetry, then tears down. The TCP
-  transport suite reuses these flows by forwarding the console port and driving the same scripted session over sockets. The
-  `tests/integration/qemu_tcp_console.rs` harness exercises attach/log/quit behaviour with simulated disconnects to guard the
-  reconnect logic while confirming the event pump keeps timers and networking responsive.
-
-## 9. Accessibility & UX
-- Commands should return deterministic, human-readable messages.
-- Provide `help` command summarising available actions per role.
-- Consider tab completion via Rustyline once base functionality stabilises.
+## 6. TCP Transport Status
+The virtio-net backed `NetStack` listens on TCP port 31337 and forwards
+newline-delimited input into the shared console parser. The current
+implementation only consumes input; it does not yet emit `OK`/`ERR`
+responses or stream file contents back to clients. This matches the
+host-mode queue implementation used in tests and keeps the focus on
+authentication ahead of the NineDoor Secure9P integration. 【F:apps/root-task/src/net/virtio.rs†L119-L232】【F:apps/root-task/src/net/queue.rs†L258-L328】
