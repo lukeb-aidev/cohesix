@@ -101,3 +101,26 @@
 ## 9. Roadmap Dependencies
 - **Milestone alignment**: Architecture is realised incrementally per `BUILD_PLAN.md` milestones.
 - **Documentation as Source of Truth**: Changes to components or interfaces must be reflected here to avoid drift.
+
+## 10. Milestone 7 Migration Notes
+- **Event pump adoption**: Developers upgrading from the legacy spin loop
+  must initialise the `event::EventPump` in `kernel_start` and remove any
+  ad-hoc busy waits. The pump now owns serial, timer, networking, and IPC
+  poll cadence; new subsystems must register via typed handlers so audits
+  continue to show `event-pump: init <subsystem>` lines during boot.
+- **Serial driver integration**: The virtio-console façade replaces
+  direct PL011 shims. It exposes heapless RX/TX queues and atomic
+  back-pressure counters. Tests should exercise the shared console parser
+  via `cargo test -p root-task console_auth` to confirm UTF-8
+  sanitisation, rate limiting, and audit logging remain intact.
+- **Networking feature flag**: The deterministic smoltcp glue is guarded
+  by `--features net`. Enable the flag before touching networking code
+  and run `cargo check -p root-task --features net` plus
+  `cargo clippy -p root-task --features net --tests` to validate bounded
+  queue usage. Disable the feature for serial-only builds to keep the
+  baseline footprint minimal.
+- **Integration workflow**: `scripts/qemu-run.sh --console serial --net`
+  exercises the complete Milestone 7 event pump (serial + networking).
+  Pair it with `tests/integration/qemu_tcp_console.rs` to confirm the TCP
+  transport stays responsive while timers and NineDoor services continue
+  to operate.
