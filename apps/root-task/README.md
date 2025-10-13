@@ -54,18 +54,18 @@ mock serial transports as the milestone progresses.
 ## Build Plan Milestone 7 Status
 
 - **7a (Event Pump & Authenticated Entry)** — The cooperative pump and
-  authentication scaffolding exist, but QEMU still aborts during the
-  initial PL011 mapping, preventing verification of serial/network
-  activation logs mandated by the milestone.
-- **7b (Console & Networking Integration)** — Virtio/serial wiring is
-  gated by the same boot failure; runtime telemetry now surfaces the
-  failing `seL4_Untyped_Retype` call so future work can confirm the pump
-  reaches the networking initialisation milestones.
+  authentication scaffolding now run past PL011 initialisation thanks to
+  corrected CSpace path encoding during the UART retype sequence.
+- **7b (Console & Networking Integration)** — Virtio/serial wiring can
+  proceed under QEMU; diagnostics still surface retype telemetry, but
+  the UART mapping now succeeds so subsequent milestones may validate
+  the networking initialisation logs as planned.
 - **7c (Follow-on tasks)** — Dependent items remain blocked until the
   root-task can successfully map the UART and complete the early boot
   pipeline.
 
-Recent debug instrumentation records the precise untyped capability,
-destination slot, and object type involved in the failing retype at
-`kernel.rs:258`, clarifying that seL4 rejects the destination slot before
-any device mapping occurs.
+Recent debug instrumentation continues to record the precise untyped
+capability, destination slot, and object type involved in each retype at
+`kernel.rs:258`, providing quick confirmation that the corrected path
+parameters keep the UART mapping healthy and flagging any future device
+regressions early.
