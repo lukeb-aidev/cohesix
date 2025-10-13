@@ -209,23 +209,25 @@ mod imp {
         pub paddr: seL4_Word,
     }
 
-    extern "C" {
-        static mut __sel4_ipc_buffer: *mut seL4_IPCBuffer;
-    }
+    static mut IPC_BUFFER_PTR: *mut seL4_IPCBuffer = core::ptr::null_mut();
 
     #[inline(always)]
     unsafe fn ipc_buffer() -> *mut seL4_IPCBuffer {
-        __sel4_ipc_buffer
+        debug_assert!(
+            !IPC_BUFFER_PTR.is_null(),
+            "seL4 IPC buffer not initialised"
+        );
+        IPC_BUFFER_PTR
     }
 
     #[inline(always)]
     pub unsafe fn seL4_SetIPCBuffer(ptr: *mut seL4_IPCBuffer) {
-        __sel4_ipc_buffer = ptr;
+        IPC_BUFFER_PTR = ptr;
     }
 
     #[inline(always)]
     pub unsafe fn seL4_GetIPCBuffer() -> *mut seL4_IPCBuffer {
-        ipc_buffer()
+        IPC_BUFFER_PTR
     }
 
     #[inline(always)]

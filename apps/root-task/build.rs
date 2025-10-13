@@ -44,7 +44,12 @@ fn main() {
         );
     }
 
-    let libsel4 = find_libsel4(&build_path).unwrap_or_else(|err| {
+    let libsel4 = find_library(
+        &build_path,
+        "libsel4.a",
+        &["libsel4/libsel4.a", "lib/libsel4.a", "libsel4.a", "sel4/libsel4.a"],
+    )
+    .unwrap_or_else(|err| {
         panic!(
             "Unable to locate libsel4.a inside {}: {}",
             build_path.display(),
@@ -61,21 +66,15 @@ fn main() {
     emit_config_flags(&build_path);
 }
 
-fn find_libsel4(root: &Path) -> Result<PathBuf, String> {
-    let candidates = [
-        root.join("libsel4/libsel4.a"),
-        root.join("lib/libsel4.a"),
-        root.join("libsel4.a"),
-        root.join("sel4/libsel4.a"),
-    ];
-
-    for candidate in candidates {
+fn find_library(root: &Path, filename: &str, primary: &[&str]) -> Result<PathBuf, String> {
+    for relative in primary {
+        let candidate = root.join(relative);
         if file_matches(&candidate) {
             return Ok(candidate);
         }
     }
 
-    breadth_first_search(root, 6)
+    breadth_first_search(root, filename, 6)
 }
 
 fn file_matches(path: &Path) -> bool {
@@ -85,7 +84,7 @@ fn file_matches(path: &Path) -> bool {
     }
 }
 
-fn breadth_first_search(root: &Path, max_depth: usize) -> Result<PathBuf, String> {
+fn breadth_first_search(root: &Path, needle: &str, max_depth: usize) -> Result<PathBuf, String> {
     let mut queue: VecDeque<(PathBuf, usize)> = VecDeque::new();
     queue.push_back((root.to_path_buf(), 0));
 
@@ -105,7 +104,7 @@ fn breadth_first_search(root: &Path, max_depth: usize) -> Result<PathBuf, String
 
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.file_name() == Some(OsStr::new("libsel4.a")) && file_matches(&path) {
+            if path.file_name() == Some(OsStr::new(needle)) && file_matches(&path) {
                 return Ok(path);
             }
 
@@ -120,8 +119,9 @@ fn breadth_first_search(root: &Path, max_depth: usize) -> Result<PathBuf, String
     }
 
     Err(format!(
-        "searched up to depth {} but no libsel4.a was found",
-        max_depth
+        "searched up to depth {} but no {} was found",
+        max_depth,
+        needle
     ))
 }
 
