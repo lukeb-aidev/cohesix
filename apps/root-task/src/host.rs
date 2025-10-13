@@ -3,17 +3,19 @@
 
 use std::io::{self, Write};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Result as AnyhowResult};
-use cohesix_ticket::{BudgetSpec, Role, TicketTemplate};
-use secure9p_wire::{FrameHeader, SessionId};
+use cohesix_ticket::Role;
+use heapless::Vec as HeaplessVec;
 
-use crate::console::{Command, CommandParser, ConsoleError};
-#[cfg(feature = "net")]
-use crate::net::NetStack;
-#[cfg(feature = "net")]
-use smoltcp::wire::Ipv4Address;
+use crate::event::{
+    AuditSink, EventPump, IpcDispatcher, PumpMetrics, TickEvent, TicketTable, TimerSource,
+};
+use crate::serial::{
+    SerialDriver, SerialError, SerialPort, DEFAULT_LINE_CAPACITY, DEFAULT_RX_CAPACITY,
+    DEFAULT_TX_CAPACITY,
+};
 
 /// Result alias used throughout the host-mode simulation.
 pub type Result<T> = AnyhowResult<T>;
@@ -21,310 +23,242 @@ pub type Result<T> = AnyhowResult<T>;
 /// Entry point for host-mode execution of the root task simulation.
 pub fn main() -> Result<()> {
     let stdout = io::stdout();
-    let handle = stdout.lock();
-    let timer = SleepTimer::new(Duration::from_millis(25), TICK_LIMIT);
-    let component = PingPongComponent::new();
-    let mut root_task = RootTask::new(handle, timer, component)?;
-    root_task.run()
+    run_with_writer(stdout.lock())
 }
 
-/// Number of timer ticks emitted before the milestone simulation terminates.
+/// Runs the host simulation while emitting audit records to the supplied writer.
+pub fn run_with_writer<W: Write>(mut writer: W) -> Result<()> {
+    let (driver, injector) = HostSerial::new();
+    seed_console_script(&injector);
+
+    let serial: SerialPort<
+        _,
+        { DEFAULT_RX_CAPACITY },
+        { DEFAULT_TX_CAPACITY },
+        { DEFAULT_LINE_CAPACITY },
+    > = SerialPort::new(driver);
+    let timer = SleepTimer::new(Duration::from_millis(25), TICK_LIMIT);
+    let ipc = HostIpc::default();
+    let mut tickets: TicketTable<8> = TicketTable::new();
+    tickets
+        .register(Role::Queen, QUEEN_TICKET)
+        .map_err(|err| anyhow!("failed to register queen ticket: {err:?}"))?;
+    tickets
+        .register(Role::WorkerHeartbeat, WORKER_TICKET)
+        .map_err(|err| anyhow!("failed to register worker ticket: {err:?}"))?;
+
+    let mut audit = WriterAudit::new(&mut writer);
+    let mut pump = EventPump::new(serial, timer, ipc, tickets, &mut audit);
+
+    let mut metrics = PumpMetrics::default();
+    for _ in 0..MAX_CYCLES {
+        pump.poll();
+        metrics = pump.metrics();
+        if metrics.timer_ticks >= TICK_LIMIT && metrics.console_lines >= SCRIPT.len() as u64 {
+            break;
+        }
+        thread::sleep(Duration::from_millis(2));
+    }
+
+    if metrics.timer_ticks < TICK_LIMIT {
+        return Err(anyhow!(
+            "timer did not reach expected tick count ({} < {})",
+            metrics.timer_ticks,
+            TICK_LIMIT
+        ));
+    }
+
+    if metrics.console_lines < SCRIPT.len() as u64 {
+        return Err(anyhow!(
+            "not all scripted console lines were processed ({} < {})",
+            metrics.console_lines,
+            SCRIPT.len()
+        ));
+    }
+
+    writer.flush()?;
+    Ok(())
+}
+
+/// Number of timer ticks expected from the host simulation loop.
 const TICK_LIMIT: u64 = 3;
 
-/// Representation of a periodic timer that blocks the current thread between ticks.
+/// Maximum pump iterations permitted for the scripted simulation.
+const MAX_CYCLES: usize = 512;
+
+const QUEEN_TICKET: &str = "queen-bootstrap";
+const WORKER_TICKET: &str = "worker-ticket";
+
+/// Scripted console commands used to exercise the event pump.
+const SCRIPT: &[&str] = &[
+    "help",
+    "attach queen queen-bootstrap",
+    "log",
+    "spawn {\"spawn\":\"heartbeat\",\"ticks\":5}",
+    "attach worker worker-ticket",
+    "tail /worker/self/telemetry",
+    "quit",
+];
+
+fn seed_console_script(injector: &SerialInjector) {
+    for line in SCRIPT {
+        injector.push_rx(line.as_bytes());
+        injector.push_rx(b"\n");
+    }
+}
+
+/// Sleep-backed timer that emits ticks at a fixed interval.
 struct SleepTimer {
     period: Duration,
     limit: u64,
     emitted: u64,
+    next_deadline: Instant,
+    elapsed_ms: u64,
 }
 
 impl SleepTimer {
-    /// Create a new timer that yields `limit` ticks spaced `period` apart.
     fn new(period: Duration, limit: u64) -> Self {
+        let now = Instant::now();
         Self {
             period,
             limit,
             emitted: 0,
+            next_deadline: now + period,
+            elapsed_ms: 0,
         }
+    }
+
+    fn period_ms(&self) -> u64 {
+        self.period.as_millis() as u64
     }
 }
 
-impl Timer for SleepTimer {
-    fn next_tick(&mut self) -> Option<Tick> {
+impl TimerSource for SleepTimer {
+    fn poll(&mut self, _now_ms: u64) -> Option<TickEvent> {
         if self.emitted >= self.limit {
             return None;
         }
-        thread::sleep(self.period);
+        let now = Instant::now();
+        if now < self.next_deadline {
+            return None;
+        }
         self.emitted += 1;
-        Some(Tick {
-            count: self.emitted,
+        self.next_deadline = now + self.period;
+        self.elapsed_ms = self.elapsed_ms.saturating_add(self.period_ms());
+        Some(TickEvent {
+            tick: self.emitted,
+            now_ms: self.elapsed_ms,
         })
     }
 }
 
-/// Abstraction over timer implementations so tests can operate deterministically.
-trait Timer {
-    /// Produce the next tick if the timer is still active.
-    fn next_tick(&mut self) -> Option<Tick>;
+#[derive(Default)]
+struct HostIpc;
+
+impl IpcDispatcher for HostIpc {
+    fn dispatch(&mut self, _now_ms: u64) {}
 }
 
-/// Event emitted by timers to signal periodic work.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Tick {
-    count: u64,
+struct WriterAudit<'a, W: Write> {
+    writer: &'a mut W,
+    buffer: HeaplessVec<u8, 256>,
 }
 
-/// Basic simulation of a user component receiving pings from the root task.
-#[derive(Debug, Default)]
-struct PingPongComponent {
-    spawned: bool,
-    last_sequence: Option<u64>,
-}
-
-impl PingPongComponent {
-    /// Construct a new component in the pre-spawn state.
-    fn new() -> Self {
-        Self::default()
-    }
-}
-
-impl UserComponent for PingPongComponent {
-    fn spawn(&mut self) -> Result<ComponentHandle> {
-        if self.spawned {
-            return Err(anyhow!("component already spawned"));
-        }
-        self.spawned = true;
-        Ok(ComponentHandle {
-            endpoint: FrameHeader::new(SessionId::from_raw(1), 0),
-        })
-    }
-
-    fn ping(&mut self, sequence: u64) -> Result<u64> {
-        if !self.spawned {
-            return Err(anyhow!("component must be spawned before ping"));
-        }
-        self.last_sequence = Some(sequence);
-        Ok(sequence)
-    }
-}
-
-/// Minimal trait describing interactions with spawned user components.
-trait UserComponent {
-    /// Spawn the component and return a handle describing its endpoint.
-    fn spawn(&mut self) -> Result<ComponentHandle>;
-
-    /// Perform a ping/pong exchange using the provided sequence number.
-    fn ping(&mut self, sequence: u64) -> Result<u64>;
-}
-
-/// Handle returned after a component spawn to document the endpoint handshake.
-#[derive(Debug, Clone)]
-struct ComponentHandle {
-    endpoint: FrameHeader,
-}
-
-impl ComponentHandle {
-    fn endpoint(&self) -> FrameHeader {
-        self.endpoint
-    }
-}
-
-/// Root task simulation that logs boot banners, timer ticks, and IPC handshakes.
-struct RootTask<W: Write, T: Timer, C: UserComponent> {
-    writer: W,
-    timer: T,
-    component: C,
-    ping_sent: bool,
-    bootstrap_ticket: TicketTemplate,
-    console: CommandParser,
-    #[cfg(feature = "net")]
-    net: NetStack,
-    #[cfg(feature = "net")]
-    net_now_ms: u64,
-}
-
-impl<W: Write, T: Timer, C: UserComponent> RootTask<W, T, C> {
-    /// Create a new root task simulation.
-    fn new(writer: W, timer: T, component: C) -> Result<Self> {
-        #[cfg(feature = "net")]
-        let (net, _) = NetStack::new(Ipv4Address::new(10, 0, 0, 2));
-
-        Ok(Self {
+impl<'a, W: Write> WriterAudit<'a, W> {
+    fn new(writer: &'a mut W) -> Self {
+        Self {
             writer,
-            timer,
-            component,
-            ping_sent: false,
-            bootstrap_ticket: TicketTemplate::new(Role::Queen, BudgetSpec::unbounded()),
-            console: CommandParser::new(),
-            #[cfg(feature = "net")]
-            net,
-            #[cfg(feature = "net")]
-            net_now_ms: 0,
-        })
-    }
-
-    fn run(&mut self) -> Result<()> {
-        self.log_banner()?;
-        let handle = self.spawn_component()?;
-        self.log_component_spawn(&handle)?;
-        self.seed_console()?;
-        while let Some(tick) = self.timer.next_tick() {
-            self.log_tick(tick.count)?;
-            if !self.ping_sent {
-                self.perform_ping_pong(tick.count)?;
-            }
-            #[cfg(feature = "net")]
-            self.poll_network()?;
+            buffer: HeaplessVec::new(),
         }
-        writeln!(self.writer, "root-task shutdown")?;
-        Ok(())
     }
 
-    fn log_banner(&mut self) -> Result<()> {
-        writeln!(
-            self.writer,
-            "Cohesix boot: root-task online (ticket role: {:?})",
-            self.bootstrap_ticket.role()
-        )?;
-        Ok(())
-    }
-
-    fn spawn_component(&mut self) -> Result<ComponentHandle> {
-        self.component.spawn()
-    }
-
-    fn log_component_spawn(&mut self, handle: &ComponentHandle) -> Result<()> {
-        writeln!(
-            self.writer,
-            "spawned user-component endpoint {:?}",
-            handle.endpoint()
-        )?;
-        Ok(())
-    }
-
-    fn log_tick(&mut self, tick: u64) -> Result<()> {
-        writeln!(self.writer, "tick {}", tick)?;
-        Ok(())
-    }
-
-    fn perform_ping_pong(&mut self, sequence: u64) -> Result<()> {
-        writeln!(self.writer, "PING {}", sequence)?;
-        let response = self.component.ping(sequence)?;
-        writeln!(self.writer, "PONG {}", response)?;
-        self.ping_sent = true;
-        Ok(())
-    }
-
-    fn seed_console(&mut self) -> Result<()> {
-        if let Err(err) = self.console.record_login_attempt(false, 1_000) {
-            writeln!(self.writer, "login limiter warning: {err}")?;
-        }
-        if let Err(err) = self.console.record_login_attempt(false, 2_000) {
-            writeln!(self.writer, "login limiter warning: {err}")?;
-        }
-        if let Err(err) = self.console.record_login_attempt(false, 3_000) {
-            writeln!(self.writer, "login limiter warning: {err}")?;
-        }
-        self.console
-            .record_login_attempt(true, 120_000)
-            .map_err(|err| anyhow!(err.to_string()))?;
-
-        const SCRIPT: &[&str] = &["help", "attach queen", "log", "tail /log/queen.log", "quit"];
-        for line in SCRIPT {
-            for byte in line.as_bytes() {
-                if let Some(command) = self.console.push_byte(*byte).map_err(to_anyhow)? {
-                    self.handle_command(command)?;
-                }
-            }
-            if let Some(command) = self.console.push_byte(b'\n').map_err(to_anyhow)? {
-                self.handle_command(command)?;
-            }
-        }
-        Ok(())
-    }
-
-    fn handle_command(&mut self, command: Command) -> Result<()> {
-        match command {
-            Command::Help => writeln!(self.writer, "console: help requested")?,
-            Command::Attach { role, ticket } => {
-                writeln!(
-                    self.writer,
-                    "console: attach role={} ticket={}",
-                    role,
-                    ticket.as_deref().unwrap_or("<none>")
-                )?;
-            }
-            Command::Tail { path } => {
-                writeln!(self.writer, "console: tail {}", path)?;
-            }
-            Command::Log => writeln!(self.writer, "console: log streaming enabled")?,
-            Command::Quit => writeln!(self.writer, "console: quit requested")?,
-            Command::Spawn(payload) => {
-                writeln!(self.writer, "console: spawn {}", payload)?;
-            }
-            Command::Kill(ident) => {
-                writeln!(self.writer, "console: kill {}", ident)?;
-            }
-        }
-        Ok(())
-    }
-
-    #[cfg(feature = "net")]
-    fn poll_network(&mut self) -> Result<()> {
-        use crate::net::Frame;
-        let handle = self.net.queue_handle();
-        if handle.pop_tx().is_none() {
-            let frame = Frame::from_slice(&[0u8; 64]).map_err(|err| anyhow!(err.to_string()))?;
-            handle
-                .push_rx(frame)
-                .map_err(|err| anyhow!(err.to_string()))?;
-        }
-        self.net_now_ms = self.net_now_ms.saturating_add(10);
-        let changed = self.net.poll_with_time(self.net_now_ms);
-        if changed {
-            let telemetry = self.net.telemetry();
-            writeln!(
-                self.writer,
-                "net: polled interface {:?} link_up={} tx_drops={}",
-                self.net.hardware_address(),
-                telemetry.link_up,
-                telemetry.tx_drops
-            )?;
-        }
-        Ok(())
+    fn emit(&mut self, prefix: &str, message: &str) {
+        self.buffer.clear();
+        let _ = self.buffer.extend_from_slice(prefix.as_bytes());
+        let _ = self.buffer.extend_from_slice(message.as_bytes());
+        let _ = self.buffer.extend_from_slice(b"\n");
+        let _ = self.writer.write_all(&self.buffer);
     }
 }
 
-fn to_anyhow(err: ConsoleError) -> anyhow::Error {
-    anyhow!(err.to_string())
+impl<W: Write> AuditSink for WriterAudit<'_, W> {
+    fn info(&mut self, message: &str) {
+        self.emit("[host] ", message);
+    }
+
+    fn denied(&mut self, message: &str) {
+        self.emit("[host][denied] ", message);
+    }
+}
+
+/// Handle allowing scripted input to be injected into the serial driver.
+#[derive(Clone)]
+struct SerialInjector {
+    inner: std::sync::Arc<std::sync::Mutex<HeaplessVec<u8, 1024>>>,
+}
+
+impl SerialInjector {
+    fn push_rx(&self, bytes: &[u8]) {
+        let mut guard = self.inner.lock().expect("serial injector poisoned");
+        for &byte in bytes {
+            let _ = guard.push(byte);
+        }
+    }
+}
+
+struct HostSerial {
+    rx: std::sync::Arc<std::sync::Mutex<HeaplessVec<u8, 1024>>>,
+    tx: std::sync::Arc<std::sync::Mutex<HeaplessVec<u8, 1024>>>,
+}
+
+impl HostSerial {
+    fn new() -> (Self, SerialInjector) {
+        let rx = std::sync::Arc::new(std::sync::Mutex::new(HeaplessVec::new()));
+        let tx = std::sync::Arc::new(std::sync::Mutex::new(HeaplessVec::new()));
+        let injector = SerialInjector { inner: rx.clone() };
+        (Self { rx, tx }, injector)
+    }
+
+    fn dequeue_rx(&self) -> Option<u8> {
+        let mut guard = self.rx.lock().expect("serial rx poisoned");
+        if guard.is_empty() {
+            None
+        } else {
+            Some(guard.remove(0))
+        }
+    }
+}
+
+impl embedded_io::Io for HostSerial {
+    type Error = SerialError;
+}
+
+impl SerialDriver for HostSerial {
+    fn read_byte(&mut self) -> nb::Result<u8, SerialError> {
+        self.dequeue_rx().ok_or(nb::Error::WouldBlock)
+    }
+
+    fn write_byte(&mut self, byte: u8) -> nb::Result<(), SerialError> {
+        let mut guard = self.tx.lock().expect("serial tx poisoned");
+        if guard.push(byte).is_err() {
+            return Err(nb::Error::WouldBlock);
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    struct TestTimer {
-        ticks: core::iter::Take<core::ops::RangeInclusive<u64>>,
-    }
-
-    impl Timer for TestTimer {
-        fn next_tick(&mut self) -> Option<Tick> {
-            self.ticks.next().map(|count| Tick { count })
-        }
-    }
-
     #[test]
-    fn ping_pong_only_runs_once() {
-        let timer = TestTimer {
-            ticks: (1..=5).take(3),
-        };
-        let component = PingPongComponent::new();
-        let mut output = Vec::new();
-        let mut root_task = RootTask::new(&mut output, timer, component).unwrap();
-        root_task.run().unwrap();
-        let transcript = String::from_utf8(output).unwrap();
-        assert!(transcript.contains("PING 1"));
-        assert!(transcript.contains("PONG 1"));
-        assert_eq!(transcript.matches("PING").count(), 1);
+    fn scripted_run_emits_expected_audit_lines() {
+        let mut log = Vec::new();
+        run_with_writer(&mut log).expect("host run must succeed");
+        let transcript = String::from_utf8(log).expect("log must be utf8");
+        assert!(transcript.contains("event-pump: init serial"));
+        assert!(transcript.contains("console: spawn"));
+        assert!(transcript.contains("attach accepted role=Queen"));
+        assert!(transcript.contains("console: tail"));
     }
 }
