@@ -124,6 +124,7 @@ compile_error!("root-task kernel build currently supports only aarch64 targets")
 #[cfg(target_arch = "aarch64")]
 const ROOT_STACK_SIZE: usize = 16 * 1024;
 const PL011_PADDR: usize = 0x0900_0000;
+const DEVICE_FRAME_BITS: usize = 12;
 
 #[cfg(all(target_os = "none", target_arch = "aarch64"))]
 static mut TLS_IMAGE: sel4_sys::TlsImage = sel4_sys::TlsImage::new();
@@ -187,9 +188,76 @@ pub extern "C" fn kernel_start(bootinfo: *const BootInfoHeader) -> ! {
     #[cfg(target_os = "none")]
     let mut ninedoor = crate::ninedoor::NineDoorBridge::new();
 
-    let uart_region = env
-        .map_device(PL011_PADDR)
-        .expect("PL011 UART mapping failed");
+    let uart_region = match env.map_device(PL011_PADDR) {
+        Ok(region) => region,
+        Err(err) => {
+            let error_code = err as i32;
+            let mut line = heapless::String::<128>::new();
+            let _ = write!(
+                line,
+                "map_device(0x{addr:08x}) failed with seL4_Error {code}",
+                addr = PL011_PADDR,
+                code = error_code,
+            );
+            console.writeln_prefixed(line.as_str());
+
+            let snapshot = env.snapshot();
+            let mut window = heapless::String::<160>::new();
+            let _ = write!(
+                window,
+                "device_window base=0x{dbase:08x} cursor=0x{dcursor:08x}; dma_window base=0x{dmabase:08x} cursor=0x{dmacursor:08x}",
+                dbase = snapshot.device_base,
+                dcursor = snapshot.device_cursor,
+                dmabase = snapshot.dma_base,
+                dmacursor = snapshot.dma_cursor,
+            );
+            console.writeln_prefixed(window.as_str());
+
+            let mut cspace = heapless::String::<160>::new();
+            let _ = write!(
+                cspace,
+                "cspace used={used} remaining={remaining} capacity={capacity}",
+                used = snapshot.cspace_used,
+                remaining = snapshot.cspace_remaining,
+                capacity = snapshot.cspace_capacity,
+            );
+            console.writeln_prefixed(cspace.as_str());
+
+            let stats = snapshot.untyped;
+            let mut untyped = heapless::String::<192>::new();
+            let _ = write!(
+                untyped,
+                "untyped total={total} used={used}; device total={dev_total} used={dev_used}",
+                total = stats.total,
+                used = stats.used,
+                dev_total = stats.device_total,
+                dev_used = stats.device_used,
+            );
+            console.writeln_prefixed(untyped.as_str());
+
+            match env.device_coverage(PL011_PADDR, DEVICE_FRAME_BITS) {
+                Some(region) => {
+                    let mut coverage = heapless::String::<192>::new();
+                    let region_state = if region.used { "reserved" } else { "free" };
+                    let _ = write!(
+                        coverage,
+                        "device coverage idx={index} [{base:#010x}..{limit:#010x}) size_bits={size} state={state}",
+                        index = region.index,
+                        base = region.base,
+                        limit = region.limit,
+                        size = region.size_bits,
+                        state = region_state,
+                    );
+                    console.writeln_prefixed(coverage.as_str());
+                }
+                None => {
+                    console.writeln_prefixed("no device untyped covers requested PL011 range");
+                }
+            }
+
+            panic!("PL011 UART mapping failed: {}", err);
+        }
+    };
     let driver = Pl011::new(uart_region.ptr());
     let serial =
         SerialPort::<_, DEFAULT_RX_CAPACITY, DEFAULT_TX_CAPACITY, DEFAULT_LINE_CAPACITY>::new(
