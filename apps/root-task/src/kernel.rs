@@ -125,6 +125,9 @@ compile_error!("root-task kernel build currently supports only aarch64 targets")
 const ROOT_STACK_SIZE: usize = 16 * 1024;
 const PL011_PADDR: usize = 0x0900_0000;
 
+#[cfg(all(target_os = "none", target_arch = "aarch64"))]
+static mut TLS_IMAGE: sel4_sys::TlsImage = sel4_sys::TlsImage::new();
+
 #[cfg(target_arch = "aarch64")]
 global_asm!(
     r#"
@@ -159,8 +162,21 @@ pub extern "C" fn kernel_start(bootinfo: *const BootInfoHeader) -> ! {
 
     let bootinfo_ref = unsafe { &*(bootinfo as *const sel4_sys::seL4_BootInfo) };
     unsafe {
+        #[cfg(all(target_os = "none", target_arch = "aarch64"))]
+        {
+            sel4_sys::tls_set_base(core::ptr::addr_of_mut!(TLS_IMAGE));
+            debug_assert!(
+                sel4_sys::tls_image_mut().is_some(),
+                "TLS base must resolve to an image after installation",
+            );
+        }
+
         let ipc_ptr = bootinfo_ref.ipcBuffer as *mut sel4_sys::seL4_IPCBuffer;
-        ptr::write_bytes(ipc_ptr.cast::<u8>(), 0, mem::size_of::<sel4_sys::seL4_IPCBuffer>());
+        ptr::write_bytes(
+            ipc_ptr.cast::<u8>(),
+            0,
+            mem::size_of::<sel4_sys::seL4_IPCBuffer>(),
+        );
         sel4_sys::seL4_SetIPCBuffer(ipc_ptr);
         let mut msg = heapless::String::<64>::new();
         let _ = write!(msg, "ipc buffer ptr=0x{:016x}", ipc_ptr as usize);
@@ -175,7 +191,10 @@ pub extern "C" fn kernel_start(bootinfo: *const BootInfoHeader) -> ! {
         .map_device(PL011_PADDR)
         .expect("PL011 UART mapping failed");
     let driver = Pl011::new(uart_region.ptr());
-    let serial = SerialPort::<_, DEFAULT_RX_CAPACITY, DEFAULT_TX_CAPACITY, DEFAULT_LINE_CAPACITY>::new(driver);
+    let serial =
+        SerialPort::<_, DEFAULT_RX_CAPACITY, DEFAULT_TX_CAPACITY, DEFAULT_LINE_CAPACITY>::new(
+            driver,
+        );
 
     #[cfg(all(feature = "net", target_os = "none"))]
     let mut net_stack = NetStack::new(&mut env, Ipv4Address::new(10, 0, 0, 2));
