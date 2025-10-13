@@ -392,6 +392,10 @@ pub struct KernelEnvSnapshot {
     pub dma_base: usize,
     /// Virtual cursor indicating the next free DMA mapping address.
     pub dma_cursor: usize,
+    /// Capability designating the root CNode supplied to retype operations.
+    pub cspace_root: seL4_CNode,
+    /// Guard depth (in bits) associated with the root CNode capability.
+    pub cspace_root_depth: seL4_Word,
     /// Total number of CSpace slots managed by the allocator.
     pub cspace_capacity: usize,
     /// Number of CSpace slots handed out so far.
@@ -424,13 +428,15 @@ pub struct RetypeTrace {
     pub untyped_paddr: usize,
     /// Size (in bits) of the backing untyped region.
     pub untyped_size_bits: u8,
+    /// Capability designating the root CNode supplied to the kernel.
+    pub cnode_root: seL4_CNode,
     /// Destination slot selected for the newly created object.
     pub dest_slot: seL4_CPtr,
     /// Offset within the root CNode calculated for the destination slot.
     pub dest_offset: seL4_Word,
     /// Depth of the root CNode used for the allocation.
     pub cnode_depth: seL4_Word,
-    /// Index used in the retype call (zero for the root CNode).
+    /// Index supplied to the kernel when resolving the destination CNode.
     pub node_index: seL4_Word,
     /// Object type requested from the kernel.
     pub object_type: seL4_Word,
@@ -491,6 +497,8 @@ impl<'a> KernelEnv<'a> {
             device_cursor: self.device_cursor,
             dma_base: DMA_VADDR_BASE,
             dma_cursor: self.dma_cursor,
+            cspace_root: self.slots.root(),
+            cspace_root_depth: self.slots.depth(),
             cspace_capacity,
             cspace_used: self.slots.used(),
             cspace_remaining,
@@ -527,7 +535,7 @@ impl<'a> KernelEnv<'a> {
             RetypeKind::DevicePage { paddr },
         );
         self.record_retype(trace, RetypeStatus::Pending);
-        if let Err(err) = self.retype_page(reserved.cap(), frame_slot) {
+        if let Err(err) = self.retype_page(reserved.cap(), &trace) {
             self.record_retype(trace, RetypeStatus::Err(err));
             self.untyped.release(&reserved);
             return Err(err);
@@ -564,7 +572,7 @@ impl<'a> KernelEnv<'a> {
             },
         );
         self.record_retype(trace, RetypeStatus::Pending);
-        if let Err(err) = self.retype_page(reserved.cap(), frame_slot) {
+        if let Err(err) = self.retype_page(reserved.cap(), &trace) {
             self.record_retype(trace, RetypeStatus::Err(err));
             self.untyped.release(&reserved);
             return Err(err);
@@ -587,21 +595,17 @@ impl<'a> KernelEnv<'a> {
     fn retype_page(
         &mut self,
         untyped_cap: seL4_Untyped,
-        slot: seL4_CPtr,
+        trace: &RetypeTrace,
     ) -> Result<(), seL4_Error> {
-        let offset = self.slots.slot_offset(slot);
         let res = unsafe {
             seL4_Untyped_Retype(
                 untyped_cap,
-                seL4_ARM_SmallPageObject,
-                PAGE_BITS as seL4_Word,
-                self.slots.root(),
-                0,
-                // When the destination CNode is the root itself the kernel expects a
-                // zero depth so it can interpret the slot offset relative to that
-                // root capability.
-                0,
-                offset,
+                trace.object_type,
+                trace.object_size_bits,
+                trace.cnode_root,
+                trace.node_index,
+                trace.cnode_depth,
+                trace.dest_offset,
                 1,
             )
         };
@@ -615,19 +619,17 @@ impl<'a> KernelEnv<'a> {
     fn retype_page_table(
         &mut self,
         untyped_cap: seL4_Untyped,
-        slot: seL4_CPtr,
+        trace: &RetypeTrace,
     ) -> Result<(), seL4_Error> {
-        let offset = self.slots.slot_offset(slot);
         let res = unsafe {
             seL4_Untyped_Retype(
                 untyped_cap,
-                seL4_ARM_PageTableObject,
-                PAGE_TABLE_BITS as seL4_Word,
-                self.slots.root(),
-                0,
-                // See above: a zero depth targets the root CNode directly.
-                0,
-                offset,
+                trace.object_type,
+                trace.object_size_bits,
+                trace.cnode_root,
+                trace.node_index,
+                trace.cnode_depth,
+                trace.dest_offset,
                 1,
             )
         };
@@ -670,7 +672,7 @@ impl<'a> KernelEnv<'a> {
                     RetypeKind::PageTable { vaddr: pt_base },
                 );
                 self.record_retype(trace, RetypeStatus::Pending);
-                if let Err(err) = self.retype_page_table(reserved.cap(), pt_slot) {
+                if let Err(err) = self.retype_page_table(reserved.cap(), &trace) {
                     self.record_retype(trace, RetypeStatus::Err(err));
                     self.untyped.release(&reserved);
                     return Err(err);
@@ -716,14 +718,18 @@ impl<'a> KernelEnv<'a> {
         kind: RetypeKind,
     ) -> RetypeTrace {
         let dest_offset = self.slots.slot_offset(slot);
+        let cnode_root = self.slots.root();
+        let node_index = cnode_root as seL4_Word;
+        let cnode_depth = self.slots.depth();
         RetypeTrace {
             untyped_cap: reserved.cap(),
             untyped_paddr: reserved.paddr(),
             untyped_size_bits: reserved.size_bits(),
+            cnode_root,
             dest_slot: slot,
             dest_offset,
-            cnode_depth: 0,
-            node_index: 0,
+            cnode_depth,
+            node_index,
             object_type,
             object_size_bits,
             kind,
