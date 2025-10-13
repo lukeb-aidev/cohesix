@@ -64,10 +64,6 @@ impl SlotAllocator {
         Some(slot)
     }
 
-    pub fn depth(&self) -> seL4_Word {
-        self.cnode_size_bits
-    }
-
     pub fn root(&self) -> seL4_CNode {
         self.cnode
     }
@@ -278,9 +274,9 @@ impl<'a> KernelEnv<'a> {
                 seL4_ARM_SmallPageObject,
                 0,
                 self.slots.root(),
-                slot,
-                self.slots.depth(),
                 0,
+                0,
+                slot,
                 1,
             )
         };
@@ -302,9 +298,9 @@ impl<'a> KernelEnv<'a> {
                 seL4_ARM_PageTableObject,
                 0,
                 self.slots.root(),
-                slot,
-                self.slots.depth(),
                 0,
+                0,
+                slot,
                 1,
             )
         };
