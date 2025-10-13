@@ -15,7 +15,7 @@ use heapless::{String as HeaplessString, Vec as HeaplessVec};
 
 use crate::console::{Command, CommandParser, ConsoleError, MAX_ROLE_LEN, MAX_TICKET_LEN};
 #[cfg(feature = "net")]
-use crate::net::{CONSOLE_QUEUE_DEPTH, NetPoller};
+use crate::net::{NetPoller, CONSOLE_QUEUE_DEPTH};
 #[cfg(target_os = "none")]
 use crate::ninedoor::NineDoorHandler;
 use crate::serial::{SerialDriver, SerialPort, SerialTelemetry, DEFAULT_LINE_CAPACITY};
@@ -505,10 +505,10 @@ fn parse_role(raw: &str) -> Option<Role> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::serial::test_support::LoopbackSerial;
-    use crate::serial::SerialPort;
     #[cfg(feature = "net")]
     use crate::net::NetTelemetry;
+    use crate::serial::test_support::LoopbackSerial;
+    use crate::serial::SerialPort;
 
     struct TestTimer {
         ticks: HeaplessVec<TickEvent, 8>,
