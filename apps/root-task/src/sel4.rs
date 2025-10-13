@@ -597,7 +597,10 @@ impl<'a> KernelEnv<'a> {
                 PAGE_BITS as seL4_Word,
                 self.slots.root(),
                 0,
-                self.slots.depth(),
+                // When the destination CNode is the root itself the kernel expects a
+                // zero depth so it can interpret the slot offset relative to that
+                // root capability.
+                0,
                 offset,
                 1,
             )
@@ -622,7 +625,8 @@ impl<'a> KernelEnv<'a> {
                 PAGE_TABLE_BITS as seL4_Word,
                 self.slots.root(),
                 0,
-                self.slots.depth(),
+                // See above: a zero depth targets the root CNode directly.
+                0,
                 offset,
                 1,
             )
@@ -718,7 +722,7 @@ impl<'a> KernelEnv<'a> {
             untyped_size_bits: reserved.size_bits(),
             dest_slot: slot,
             dest_offset,
-            cnode_depth: self.slots.depth(),
+            cnode_depth: 0,
             node_index: 0,
             object_type,
             object_size_bits,
