@@ -1,13 +1,18 @@
+// Author: Lukas Bower
+//! Virtio MMIO network device driver used by the root task.
 #![cfg(target_os = "none")]
 #![allow(unsafe_code)]
 
+use core::fmt;
 use core::ptr::{read_volatile, write_volatile, NonNull};
 
 use heapless::{Deque, String as HeaplessString, Vec as HeaplessVec};
 use sel4_sys::seL4_Error;
 use smoltcp::iface::{Config as IfaceConfig, Interface, SocketHandle, SocketSet, SocketStorage};
 use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
-use smoltcp::socket::tcp::{Socket as TcpSocket, SocketBuffer as TcpSocketBuffer, State as TcpState};
+use smoltcp::socket::tcp::{
+    Socket as TcpSocket, SocketBuffer as TcpSocketBuffer, State as TcpState,
+};
 use smoltcp::time::Instant;
 use smoltcp::wire::{
     EthernetAddress, HardwareAddress, IpAddress, IpCidr, IpListenEndpoint, Ipv4Address,
@@ -31,8 +36,10 @@ const STATUS_DRIVER_OK: u32 = 1 << 2;
 const STATUS_FEATURES_OK: u32 = 1 << 3;
 const STATUS_FAILED: u32 = 1 << 7;
 
-const VIRTQ_DESC_F_NEXT: u16 = 1;
 const VIRTQ_DESC_F_WRITE: u16 = 1 << 1;
+
+const VIRTIO_NET_F_MAC: u32 = 1 << 5;
+const SUPPORTED_FEATURES: u32 = VIRTIO_NET_F_MAC;
 
 const RX_QUEUE_INDEX: u32 = 0;
 const TX_QUEUE_INDEX: u32 = 1;
@@ -45,15 +52,12 @@ const TCP_RX_BUFFER: usize = 2048;
 const TCP_TX_BUFFER: usize = 2048;
 const SOCKET_CAPACITY: usize = 4;
 
-static SOCKET_STORAGE_IN_USE: portable_atomic::AtomicBool =
-    portable_atomic::AtomicBool::new(false);
+static SOCKET_STORAGE_IN_USE: portable_atomic::AtomicBool = portable_atomic::AtomicBool::new(false);
 static mut SOCKET_STORAGE: [SocketStorage<'static>; SOCKET_CAPACITY] =
     [SocketStorage::EMPTY; SOCKET_CAPACITY];
-static TCP_RX_STORAGE_IN_USE: portable_atomic::AtomicBool =
-    portable_atomic::AtomicBool::new(false);
+static TCP_RX_STORAGE_IN_USE: portable_atomic::AtomicBool = portable_atomic::AtomicBool::new(false);
 static mut TCP_RX_STORAGE: [u8; TCP_RX_BUFFER] = [0u8; TCP_RX_BUFFER];
-static TCP_TX_STORAGE_IN_USE: portable_atomic::AtomicBool =
-    portable_atomic::AtomicBool::new(false);
+static TCP_TX_STORAGE_IN_USE: portable_atomic::AtomicBool = portable_atomic::AtomicBool::new(false);
 static mut TCP_TX_STORAGE: [u8; TCP_TX_BUFFER] = [0u8; TCP_TX_BUFFER];
 
 /// Shared monotonic clock for the interface.
@@ -63,6 +67,7 @@ pub struct NetworkClock {
 }
 
 impl NetworkClock {
+    /// Creates a monotonic clock initialised to zero milliseconds.
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -70,6 +75,7 @@ impl NetworkClock {
         }
     }
 
+    /// Advances the clock by `delta_ms` and returns the resulting [`Instant`].
     pub fn advance(&self, delta_ms: u32) -> Instant {
         let delta = u64::from(delta_ms);
         let updated = self
@@ -80,6 +86,7 @@ impl NetworkClock {
         Instant::from_millis(millis)
     }
 
+    /// Reads the current [`Instant`] without modifying the clock value.
     #[must_use]
     pub fn now(&self) -> Instant {
         let current = self.ticks_ms.load(portable_atomic::Ordering::Relaxed);
@@ -88,6 +95,7 @@ impl NetworkClock {
     }
 }
 
+/// Smoltcp-backed network stack that bridges the virtio-net device into the root task.
 pub struct NetStack {
     clock: NetworkClock,
     device: VirtioNet,
@@ -100,6 +108,7 @@ pub struct NetStack {
 }
 
 impl NetStack {
+    /// Constructs a network stack bound to the provided [`KernelEnv`] and IPv4 address.
     pub fn new(env: &mut KernelEnv, ip: Ipv4Address) -> Self {
         let device = VirtioNet::new(env);
         let mut device = device.expect("virtio-net device not found");
@@ -150,6 +159,7 @@ impl NetStack {
         self.tcp_handle = self.sockets.add(tcp_socket);
     }
 
+    /// Polls the network stack using a host-supplied monotonic timestamp in milliseconds.
     pub fn poll_with_time(&mut self, now_ms: u64) -> bool {
         let last = self.telemetry.last_poll_ms;
         let delta = now_ms.saturating_sub(last);
@@ -230,10 +240,13 @@ impl NetStack {
     }
 
     #[must_use]
+    /// Returns the negotiated Ethernet address for the attached virtio-net device.
+    #[must_use]
     pub fn hardware_address(&self) -> EthernetAddress {
         self.device.mac()
     }
 
+    /// Returns a snapshot of runtime statistics gathered from the driver.
     #[must_use]
     pub fn telemetry(&self) -> NetTelemetry {
         self.telemetry
@@ -292,44 +305,65 @@ impl VirtioNet {
         let rx_size = core::cmp::min(rx_max as usize, RX_QUEUE_SIZE);
         let tx_size = core::cmp::min(tx_max as usize, TX_QUEUE_SIZE);
         if rx_size == 0 || tx_size == 0 {
+            regs.set_status(STATUS_FAILED);
             return Err(DriverError::NoQueue);
         }
 
-        regs.set_guest_features(0);
+        let host_features = regs.host_features();
+        let negotiated_features = host_features & SUPPORTED_FEATURES;
+        regs.set_guest_features(negotiated_features);
         regs.set_status(STATUS_ACKNOWLEDGE | STATUS_DRIVER | STATUS_FEATURES_OK);
 
-        let queue_mem_rx = env.alloc_dma_frame().map_err(DriverError::Sel4)?;
-        let queue_mem_tx = env.alloc_dma_frame().map_err(DriverError::Sel4)?;
+        let queue_mem_rx = env.alloc_dma_frame().map_err(|err| {
+            regs.set_status(STATUS_FAILED);
+            DriverError::Sel4(err)
+        })?;
+        let queue_mem_tx = env.alloc_dma_frame().map_err(|err| {
+            regs.set_status(STATUS_FAILED);
+            DriverError::Sel4(err)
+        })?;
 
         let rx_queue = VirtQueue::new(&mut regs, queue_mem_rx, RX_QUEUE_INDEX, rx_size)?;
         let tx_queue = VirtQueue::new(&mut regs, queue_mem_tx, TX_QUEUE_INDEX, tx_size)?;
 
         let mut rx_buffers = HeaplessVec::<RamFrame, RX_QUEUE_SIZE>::new();
         for _ in 0..rx_size {
-            let frame = env.alloc_dma_frame().map_err(DriverError::Sel4)?;
-            rx_buffers
-                .push(frame)
-                .map_err(|_| DriverError::BufferExhausted)?;
+            let frame = env.alloc_dma_frame().map_err(|err| {
+                regs.set_status(STATUS_FAILED);
+                DriverError::Sel4(err)
+            })?;
+            rx_buffers.push(frame).map_err(|_| {
+                regs.set_status(STATUS_FAILED);
+                DriverError::BufferExhausted
+            })?;
         }
 
         let mut tx_buffers = HeaplessVec::<RamFrame, TX_QUEUE_SIZE>::new();
         for _ in 0..tx_size {
-            let frame = env.alloc_dma_frame().map_err(DriverError::Sel4)?;
-            tx_buffers
-                .push(frame)
-                .map_err(|_| DriverError::BufferExhausted)?;
+            let frame = env.alloc_dma_frame().map_err(|err| {
+                regs.set_status(STATUS_FAILED);
+                DriverError::Sel4(err)
+            })?;
+            tx_buffers.push(frame).map_err(|_| {
+                regs.set_status(STATUS_FAILED);
+                DriverError::BufferExhausted
+            })?;
         }
 
         let mut tx_free = HeaplessVec::<u16, TX_QUEUE_SIZE>::new();
         for idx in 0..tx_size {
-            tx_free
-                .push(idx as u16)
-                .map_err(|_| DriverError::BufferExhausted)?;
+            tx_free.push(idx as u16).map_err(|_| {
+                regs.set_status(STATUS_FAILED);
+                DriverError::BufferExhausted
+            })?;
         }
 
-        let mac = regs
-            .read_mac()
-            .unwrap_or_else(|| EthernetAddress::from_bytes(&[0x02, 0, 0, 0, 0, 1]));
+        let fallback_mac = EthernetAddress::from_bytes(&[0x02, 0, 0, 0, 0, 1]);
+        let mac = if negotiated_features & VIRTIO_NET_F_MAC != 0 {
+            regs.read_mac().unwrap_or(fallback_mac)
+        } else {
+            fallback_mac
+        };
 
         let mut driver = Self {
             regs,
@@ -372,6 +406,7 @@ impl VirtioNet {
     }
 
     fn reclaim_tx(&mut self) {
+        self.regs.acknowledge_interrupts();
         while let Some((id, _len)) = self.tx_queue.pop_used() {
             if self.tx_free.push(id).is_err() {
                 self.tx_drops = self.tx_drops.saturating_add(1);
@@ -465,6 +500,7 @@ impl Device for VirtioNet {
     }
 }
 
+/// Receive token that hands out buffers backed by virtio RX descriptors.
 pub struct VirtioRxToken {
     driver: *mut VirtioNet,
     id: u16,
@@ -488,6 +524,7 @@ impl RxToken for VirtioRxToken {
     }
 }
 
+/// Transmit token that queues frames onto the virtio TX ring.
 pub struct VirtioTxToken {
     driver: *mut VirtioNet,
     desc: Option<u16>,
@@ -537,6 +574,17 @@ enum DriverError {
     BufferExhausted,
 }
 
+impl fmt::Display for DriverError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Sel4(err) => write!(f, "seL4 error {err:?}"),
+            Self::NoDevice => f.write_str("virtio-net device not found"),
+            Self::NoQueue => f.write_str("virtio-net queues unavailable"),
+            Self::BufferExhausted => f.write_str("virtio-net DMA buffer exhausted"),
+        }
+    }
+}
+
 struct VirtioRegs {
     mmio: DeviceFrame,
 }
@@ -546,13 +594,15 @@ impl VirtioRegs {
         for slot in 0..VIRTIO_MMIO_SLOTS {
             let base = VIRTIO_MMIO_BASE + slot * VIRTIO_MMIO_STRIDE;
             let frame = env.map_device(base).map_err(DriverError::Sel4)?;
-            let regs = VirtioRegs { mmio: frame };
-            let magic = regs.read32(Registers::MAGIC_VALUE);
-            let version = regs.read32(Registers::VERSION);
-            let device_id = regs.read32(Registers::DEVICE_ID);
+            let mut regs = VirtioRegs { mmio: frame };
+            let magic = regs.read32(Registers::MagicValue);
+            let version = regs.read32(Registers::Version);
+            let device_id = regs.read32(Registers::DeviceId);
+            let vendor_id = regs.read32(Registers::VendorId);
             if magic == VIRTIO_MMIO_MAGIC
                 && version == VIRTIO_MMIO_VERSION_LEGACY
                 && device_id == VIRTIO_DEVICE_ID_NET
+                && vendor_id != 0
             {
                 return Ok(regs);
             }
@@ -572,62 +622,68 @@ impl VirtioRegs {
         unsafe { write_volatile(self.base().as_ptr().add(offset as usize) as *mut u32, value) };
     }
 
-    fn read16(&self, offset: Registers) -> u16 {
-        unsafe { read_volatile(self.base().as_ptr().add(offset as usize) as *const u16) }
-    }
-
     fn write16(&mut self, offset: Registers, value: u16) {
         unsafe { write_volatile(self.base().as_ptr().add(offset as usize) as *mut u16, value) };
     }
 
     fn reset_status(&mut self) {
-        self.write32(Registers::STATUS, 0);
+        self.write32(Registers::Status, 0);
     }
 
     fn set_status(&mut self, status: u32) {
-        self.write32(Registers::STATUS, status);
+        self.write32(Registers::Status, status);
     }
 
     fn select_queue(&mut self, index: u32) {
-        self.write32(Registers::QUEUE_SEL, index);
+        self.write32(Registers::QueueSel, index);
     }
 
     fn queue_num_max(&self) -> u32 {
-        self.read32(Registers::QUEUE_NUM_MAX)
+        self.read32(Registers::QueueNumMax)
     }
 
     fn set_queue_size(&mut self, size: u16) {
-        self.write16(Registers::QUEUE_NUM, size);
+        self.write16(Registers::QueueNum, size);
     }
 
     fn set_queue_align(&mut self, align: u32) {
-        self.write32(Registers::QUEUE_ALIGN, align);
+        self.write32(Registers::QueueAlign, align);
     }
 
     fn set_queue_pfn(&mut self, pfn: u32) {
-        self.write32(Registers::QUEUE_PFN, pfn);
+        self.write32(Registers::QueuePfn, pfn);
     }
 
     fn queue_ready(&mut self, ready: u32) {
-        self.write32(Registers::QUEUE_READY, ready);
+        self.write32(Registers::QueueReady, ready);
     }
 
     fn notify(&mut self, queue: u32) {
-        self.write32(Registers::QUEUE_NOTIFY, queue);
+        self.write32(Registers::QueueNotify, queue);
     }
 
     fn set_guest_features(&mut self, features: u32) {
-        self.write32(Registers::GUEST_FEATURES_SEL, 0);
-        self.write32(Registers::GUEST_FEATURES, features);
+        self.write32(Registers::GuestFeaturesSel, 0);
+        self.write32(Registers::GuestFeatures, features);
+    }
+
+    fn host_features(&mut self) -> u32 {
+        self.write32(Registers::HostFeaturesSel, 0);
+        self.read32(Registers::HostFeatures)
+    }
+
+    fn acknowledge_interrupts(&mut self) {
+        let status = self.read32(Registers::InterruptStatus);
+        if status != 0 {
+            self.write32(Registers::InterruptAck, status);
+        }
     }
 
     fn read_mac(&self) -> Option<EthernetAddress> {
         let mut bytes = [0u8; 6];
-        let base = Registers::CONFIG as usize;
+        let base = Registers::Config as usize;
         for (idx, byte) in bytes.iter_mut().enumerate() {
-            *byte = unsafe {
-                read_volatile(self.base().as_ptr().add(base + idx) as *const u8)
-            };
+            *byte = unsafe { read_volatile(self.base().as_ptr().add(base + idx) as *const u8) };
         }
         if bytes.iter().all(|&b| b == 0) {
             None
@@ -640,29 +696,29 @@ impl VirtioRegs {
 #[repr(u32)]
 #[derive(Clone, Copy)]
 enum Registers {
-    MAGIC_VALUE = 0x000,
-    VERSION = 0x004,
-    DEVICE_ID = 0x008,
-    VENDOR_ID = 0x00c,
-    HOST_FEATURES = 0x010,
-    HOST_FEATURES_SEL = 0x014,
-    GUEST_FEATURES = 0x020,
-    GUEST_FEATURES_SEL = 0x024,
-    QUEUE_SEL = 0x030,
-    QUEUE_NUM_MAX = 0x034,
-    QUEUE_NUM = 0x038,
-    QUEUE_ALIGN = 0x03c,
-    QUEUE_PFN = 0x040,
-    QUEUE_READY = 0x044,
-    QUEUE_NOTIFY = 0x050,
-    INTERRUPT_STATUS = 0x060,
-    INTERRUPT_ACK = 0x064,
-    STATUS = 0x070,
-    CONFIG = 0x100,
+    MagicValue = 0x000,
+    Version = 0x004,
+    DeviceId = 0x008,
+    VendorId = 0x00c,
+    HostFeatures = 0x010,
+    HostFeaturesSel = 0x014,
+    GuestFeatures = 0x020,
+    GuestFeaturesSel = 0x024,
+    QueueSel = 0x030,
+    QueueNumMax = 0x034,
+    QueueNum = 0x038,
+    QueueAlign = 0x03c,
+    QueuePfn = 0x040,
+    QueueReady = 0x044,
+    QueueNotify = 0x050,
+    InterruptStatus = 0x060,
+    InterruptAck = 0x064,
+    Status = 0x070,
+    Config = 0x100,
 }
 
 struct VirtQueue {
-    frame: RamFrame,
+    _frame: RamFrame,
     size: u16,
     desc: NonNull<VirtqDesc>,
     avail: NonNull<VirtqAvail>,
@@ -700,7 +756,7 @@ impl VirtQueue {
         regs.queue_ready(1);
 
         Ok(Self {
-            frame,
+            _frame: frame,
             size: queue_size,
             desc: desc_ptr,
             avail: avail_ptr,
