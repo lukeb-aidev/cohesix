@@ -47,7 +47,12 @@ fn main() {
     let libsel4 = find_library(
         &build_path,
         "libsel4.a",
-        &["libsel4/libsel4.a", "lib/libsel4.a", "libsel4.a", "sel4/libsel4.a"],
+        &[
+            "libsel4/libsel4.a",
+            "lib/libsel4.a",
+            "libsel4.a",
+            "sel4/libsel4.a",
+        ],
     )
     .unwrap_or_else(|err| {
         panic!(
@@ -120,8 +125,7 @@ fn breadth_first_search(root: &Path, needle: &str, max_depth: usize) -> Result<P
 
     Err(format!(
         "searched up to depth {} but no {} was found",
-        max_depth,
-        needle
+        max_depth, needle
     ))
 }
 

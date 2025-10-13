@@ -5,9 +5,6 @@
 #![warn(missing_docs)]
 #![doc = "Root task entry points for host and seL4 builds."]
 
-#[cfg(target_os = "none")]
-use root_task::kernel as _;
-
 #[cfg(not(target_os = "none"))]
 use root_task::host;
 

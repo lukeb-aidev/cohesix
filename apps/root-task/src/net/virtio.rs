@@ -239,7 +239,6 @@ impl NetStack {
         activity
     }
 
-    #[must_use]
     /// Returns the negotiated Ethernet address for the attached virtio-net device.
     #[must_use]
     pub fn hardware_address(&self) -> EthernetAddress {
@@ -594,7 +593,7 @@ impl VirtioRegs {
         for slot in 0..VIRTIO_MMIO_SLOTS {
             let base = VIRTIO_MMIO_BASE + slot * VIRTIO_MMIO_STRIDE;
             let frame = env.map_device(base).map_err(DriverError::Sel4)?;
-            let mut regs = VirtioRegs { mmio: frame };
+            let regs = VirtioRegs { mmio: frame };
             let magic = regs.read32(Registers::MagicValue);
             let version = regs.read32(Registers::Version);
             let device_id = regs.read32(Registers::DeviceId);
