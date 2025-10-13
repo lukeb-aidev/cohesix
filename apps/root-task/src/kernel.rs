@@ -3,9 +3,10 @@
 #![allow(unsafe_code)]
 
 #[cfg(target_arch = "aarch64")]
-use core::arch::global_asm;
+use core::arch::{asm, global_asm};
 
 use core::fmt::{self, Write};
+use core::mem::size_of;
 use core::panic::PanicInfo;
 
 use cohesix_ticket::Role;
@@ -156,6 +157,21 @@ pub extern "C" fn kernel_start(bootinfo: *const BootInfoHeader) -> ! {
     console.writeln_prefixed("Cohesix v0 (AArch64/virt)");
 
     let bootinfo_ref = unsafe { &*(bootinfo as *const sel4_sys::seL4_BootInfo) };
+    unsafe {
+        let ipc_ptr = bootinfo_ref.ipcBuffer as *mut sel4_sys::seL4_IPCBuffer;
+        core::ptr::write_bytes(ipc_ptr.cast::<u8>(), 0, size_of::<sel4_sys::seL4_IPCBuffer>());
+        TLS_IMAGE.ipc_buffer = ipc_ptr;
+        asm!(
+            "msr TPIDR_EL0, {ptr}",
+            ptr = in(reg) (&TLS_IMAGE as *const TlsImage),
+            options(nostack, preserves_flags)
+        );
+        sel4_sys::seL4_SetIPCBuffer(ipc_ptr);
+        let current = sel4_sys::seL4_GetIPCBuffer();
+        if current.is_null() {
+            panic!("ipc buffer pointer remained null after TLS init");
+        }
+    }
     let mut env = KernelEnv::new(bootinfo_ref);
 
     #[cfg(target_os = "none")]
@@ -292,3 +308,11 @@ impl AuditSink for ConsoleAudit<'_> {
         self.console.writeln_prefixed(message);
     }
 }
+#[repr(C)]
+struct TlsImage {
+    ipc_buffer: *mut sel4_sys::seL4_IPCBuffer,
+}
+
+static mut TLS_IMAGE: TlsImage = TlsImage {
+    ipc_buffer: core::ptr::null_mut(),
+};

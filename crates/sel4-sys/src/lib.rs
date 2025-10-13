@@ -219,6 +219,16 @@ mod imp {
     }
 
     #[inline(always)]
+    pub unsafe fn seL4_SetIPCBuffer(ptr: *mut seL4_IPCBuffer) {
+        __sel4_ipc_buffer = ptr;
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_GetIPCBuffer() -> *mut seL4_IPCBuffer {
+        ipc_buffer()
+    }
+
+    #[inline(always)]
     pub unsafe fn seL4_GetMR(index: usize) -> seL4_Word {
         (*ipc_buffer()).msg[index]
     }
