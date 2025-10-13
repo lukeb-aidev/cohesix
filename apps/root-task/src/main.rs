@@ -11,6 +11,11 @@ use core::panic::PanicInfo;
 #[cfg(target_os = "none")]
 use root_task::kernel;
 
+#[cfg(target_os = "none")]
+/// Ensures the kernel entry points remain linked when building for seL4.
+#[used]
+static FORCE_KERNEL_LINK: extern "C" fn(*const kernel::BootInfoHeader) -> ! = kernel::kernel_start;
+
 #[cfg(not(target_os = "none"))]
 use root_task::host;
 
