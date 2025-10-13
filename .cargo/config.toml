@@ -1,0 +1,24 @@
+# Author: Lukas Bower
+[profile.dev.package.root-task]
+incremental = false
+
+[profile.release.package.root-task]
+incremental = false
+
+[profile.dev.package.nine-door]
+incremental = false
+
+[profile.release.package.nine-door]
+incremental = false
+
+[profile.dev.package.worker-heart]
+incremental = false
+
+[profile.release.package.worker-heart]
+incremental = false
+
+[profile.dev.package.worker-gpu]
+incremental = false
+
+[profile.release.package.worker-gpu]
+incremental = false
