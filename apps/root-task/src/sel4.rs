@@ -28,6 +28,7 @@ const MAX_PAGE_TABLES: usize = 64;
 /// Simple bump allocator for CSpace slots rooted at the initial thread's CNode.
 pub struct SlotAllocator {
     cnode: seL4_CNode,
+    start: seL4_CPtr,
     next: seL4_CPtr,
     end: seL4_CPtr,
     cnode_size_bits: seL4_Word,
@@ -45,10 +46,29 @@ impl SlotAllocator {
         );
         Self {
             cnode: seL4_CapInitThreadCNode,
+            start: region.start,
             next: region.start,
             end: region.end,
             cnode_size_bits,
         }
+    }
+
+    /// Returns the number of free slots remaining in the allocator.
+    #[must_use]
+    pub fn remaining(&self) -> usize {
+        (self.end - self.next) as usize
+    }
+
+    /// Returns the total capacity of the allocator in slots.
+    #[must_use]
+    pub fn capacity(&self) -> usize {
+        (self.end - self.start) as usize
+    }
+
+    /// Returns the number of slots that have already been handed out.
+    #[must_use]
+    pub fn used(&self) -> usize {
+        self.capacity().saturating_sub(self.remaining())
     }
 
     fn alloc(&mut self) -> Option<seL4_CPtr> {
@@ -104,6 +124,34 @@ impl ReservedUntyped {
     pub fn size_bits(&self) -> u8 {
         self.size_bits
     }
+}
+
+/// Summary of untyped capability utilisation available to the root task.
+#[derive(Copy, Clone, Debug)]
+pub struct UntypedStats {
+    /// Total number of untyped capabilities exported by the kernel.
+    pub total: usize,
+    /// Number of untyped capabilities that have been reserved so far.
+    pub used: usize,
+    /// Number of device-tagged untyped capabilities.
+    pub device_total: usize,
+    /// Number of device-tagged untyped capabilities that have been consumed.
+    pub device_used: usize,
+}
+
+/// Diagnostic view describing a device untyped region that covers a physical range.
+#[derive(Copy, Clone, Debug)]
+pub struct DeviceCoverage {
+    /// Physical base address of the underlying untyped region.
+    pub base: usize,
+    /// Exclusive upper bound of the untyped region.
+    pub limit: usize,
+    /// Size of the untyped region in bits.
+    pub size_bits: u8,
+    /// Index of the region within the bootinfo untyped list.
+    pub index: usize,
+    /// Indicates whether the region has already been reserved.
+    pub used: bool,
 }
 
 /// Index of bootinfo-provided untyped capabilities available to the root task.
@@ -167,6 +215,57 @@ impl<'a> UntypedCatalog<'a> {
             return self.reserve_index(index);
         }
         None
+    }
+
+    /// Returns diagnostic statistics describing untyped catalogue utilisation.
+    #[must_use]
+    pub fn stats(&self) -> UntypedStats {
+        let total = self.entries.len();
+        let used = self.used.len();
+        let device_total = self
+            .entries
+            .iter()
+            .filter(|desc| desc.isDevice != 0)
+            .count();
+        let device_used = self
+            .used
+            .iter()
+            .filter(|&&index| {
+                self.entries
+                    .get(index)
+                    .map_or(false, |desc| desc.isDevice != 0)
+            })
+            .count();
+        UntypedStats {
+            total,
+            used,
+            device_total,
+            device_used,
+        }
+    }
+
+    /// Locates the device untyped covering the requested physical range, if available.
+    #[must_use]
+    pub fn device_coverage(&self, paddr: usize, size_bits: usize) -> Option<DeviceCoverage> {
+        let end = paddr.saturating_add(1usize << size_bits);
+        self.entries.iter().enumerate().find_map(|(index, desc)| {
+            if desc.isDevice == 0 {
+                return None;
+            }
+            let base = desc.paddr as usize;
+            let limit = base.saturating_add(1usize << desc.sizeBits);
+            if base <= paddr && end <= limit {
+                Some(DeviceCoverage {
+                    base,
+                    limit,
+                    size_bits: desc.sizeBits,
+                    index,
+                    used: self.is_used(index),
+                })
+            } else {
+                None
+            }
+        })
     }
 }
 
@@ -248,6 +347,27 @@ pub struct KernelEnv<'a> {
     dma_cursor: usize,
 }
 
+/// Diagnostic snapshot capturing resource utilisation within the [`KernelEnv`].
+#[derive(Copy, Clone, Debug)]
+pub struct KernelEnvSnapshot {
+    /// Virtual base of the device-mapping window.
+    pub device_base: usize,
+    /// Virtual cursor indicating the next free device mapping address.
+    pub device_cursor: usize,
+    /// Virtual base of the DMA window.
+    pub dma_base: usize,
+    /// Virtual cursor indicating the next free DMA mapping address.
+    pub dma_cursor: usize,
+    /// Total number of CSpace slots managed by the allocator.
+    pub cspace_capacity: usize,
+    /// Number of CSpace slots handed out so far.
+    pub cspace_used: usize,
+    /// Number of CSpace slots remaining for future allocations.
+    pub cspace_remaining: usize,
+    /// Summary of untyped catalogue utilisation.
+    pub untyped: UntypedStats,
+}
+
 impl<'a> KernelEnv<'a> {
     /// Builds a new environment from the seL4 bootinfo struct.
     pub fn new(bootinfo: &'a seL4_BootInfo) -> Self {
@@ -266,6 +386,29 @@ impl<'a> KernelEnv<'a> {
     /// Returns the bootinfo pointer passed to the root task.
     pub fn bootinfo(&self) -> &'a seL4_BootInfo {
         self.bootinfo
+    }
+
+    /// Produces a diagnostic snapshot describing allocator state.
+    #[must_use]
+    pub fn snapshot(&self) -> KernelEnvSnapshot {
+        let cspace_capacity = self.slots.capacity();
+        let cspace_remaining = self.slots.remaining();
+        KernelEnvSnapshot {
+            device_base: DEVICE_VADDR_BASE,
+            device_cursor: self.device_cursor,
+            dma_base: DMA_VADDR_BASE,
+            dma_cursor: self.dma_cursor,
+            cspace_capacity,
+            cspace_used: self.slots.used(),
+            cspace_remaining,
+            untyped: self.untyped.stats(),
+        }
+    }
+
+    /// Returns the device untyped covering the supplied range, if any, without reserving it.
+    #[must_use]
+    pub fn device_coverage(&self, paddr: usize, size_bits: usize) -> Option<DeviceCoverage> {
+        self.untyped.device_coverage(paddr, size_bits)
     }
 
     /// Allocates a new CSpace slot, panicking if the root CNode is exhausted.

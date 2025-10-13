@@ -13,12 +13,14 @@ pub mod serial;
 pub mod net;
 
 #[cfg(target_os = "none")]
+/// Kernel entrypoints and seL4 bootstrap wiring for the in-VM root task.
 pub mod kernel;
 
 #[cfg(target_os = "none")]
 pub mod sel4;
 
 #[cfg(target_os = "none")]
+/// NineDoor 9P bridge exposed inside the VM environment.
 pub mod ninedoor;
 
 #[cfg(not(target_os = "none"))]
