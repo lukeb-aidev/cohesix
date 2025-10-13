@@ -95,7 +95,7 @@ impl SlotAllocator {
     /// Returns the guard depth (in bits) of the root CNode capability.
     #[inline(always)]
     pub fn depth(&self) -> seL4_Word {
-        0
+        self.cnode_size_bits
     }
 
     /// Computes the slot offset within the root CNode for the provided capability pointer.
