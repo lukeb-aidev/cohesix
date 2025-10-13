@@ -20,6 +20,7 @@ pub use sel4_sys::{seL4_CapInitThreadCNode, seL4_CapInitThreadVSpace, seL4_Error
 const PAGE_BITS: usize = 12;
 const PAGE_SIZE: usize = 1 << PAGE_BITS;
 const PAGE_TABLE_ALIGN: usize = 1 << 21;
+const DEVICE_VADDR_BASE: usize = 0xA000_0000;
 const DMA_VADDR_BASE: usize = 0xB000_0000;
 const MAX_PAGE_TABLES: usize = 64;
 
@@ -196,6 +197,7 @@ pub struct KernelEnv<'a> {
     slots: SlotAllocator,
     untyped: UntypedCatalog<'a>,
     mapped_pts: Vec<usize, MAX_PAGE_TABLES>,
+    device_cursor: usize,
     dma_cursor: usize,
 }
 
@@ -208,6 +210,7 @@ impl<'a> KernelEnv<'a> {
             slots,
             untyped,
             mapped_pts: Vec::new(),
+            device_cursor: DEVICE_VADDR_BASE,
             dma_cursor: DMA_VADDR_BASE,
         }
     }
@@ -229,11 +232,17 @@ impl<'a> KernelEnv<'a> {
             .ok_or(seL4_NotEnoughMemory)?;
         let frame_slot = self.allocate_slot();
         self.retype_page(reserved.cap, frame_slot)?;
-        self.map_frame(frame_slot, paddr, seL4_ARM_Page_Uncached)?;
+        let vaddr = self
+            .device_cursor
+            .checked_add(PAGE_SIZE)
+            .expect("device cursor overflow (address space exhausted)")
+            - PAGE_SIZE;
+        self.device_cursor += PAGE_SIZE;
+        self.map_frame(frame_slot, vaddr, seL4_ARM_Page_Uncached)?;
         Ok(DeviceFrame {
             cap: frame_slot,
             paddr,
-            ptr: NonNull::new(paddr as *mut u8).expect("device mapping address must be non-null"),
+            ptr: NonNull::new(vaddr as *mut u8).expect("device mapping address must be non-null"),
         })
     }
 
