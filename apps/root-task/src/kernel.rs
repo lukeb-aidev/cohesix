@@ -236,6 +236,15 @@ pub extern "C" fn kernel_start(bootinfo: *const BootInfoHeader) -> ! {
             );
             console.writeln_prefixed(cspace.as_str());
 
+            let mut root_info = heapless::String::<160>::new();
+            let _ = write!(
+                root_info,
+                "cspace.root=0x{root:04x} depth={depth}",
+                root = snapshot.cspace_root,
+                depth = snapshot.cspace_root_depth,
+            );
+            console.writeln_prefixed(root_info.as_str());
+
             let stats = snapshot.untyped;
             let mut untyped = heapless::String::<192>::new();
             let _ = write!(
@@ -254,13 +263,15 @@ pub extern "C" fn kernel_start(bootinfo: *const BootInfoHeader) -> ! {
                     RetypeStatus::Pending => {
                         let _ = write!(
                             detail,
-                            "retype status=pending untyped=0x{ucap:08x} paddr=0x{paddr:08x} size_bits={usize_bits} slot=0x{slot:04x} offset={offset} depth={depth} obj_type={otype} obj_size_bits={obj_bits}",
+                            "retype status=pending untyped=0x{ucap:08x} paddr=0x{paddr:08x} size_bits={usize_bits} slot=0x{slot:04x} offset={offset} depth={depth} root=0x{root:04x} node_index=0x{node_index:04x} obj_type={otype} obj_size_bits={obj_bits}",
                             ucap = last.trace.untyped_cap,
                             paddr = last.trace.untyped_paddr,
                             usize_bits = last.trace.untyped_size_bits,
                             slot = last.trace.dest_slot,
                             offset = last.trace.dest_offset,
                             depth = last.trace.cnode_depth,
+                            root = last.trace.cnode_root,
+                            node_index = last.trace.node_index,
                             otype = last.trace.object_type,
                             obj_bits = last.trace.object_size_bits,
                         );
@@ -268,13 +279,15 @@ pub extern "C" fn kernel_start(bootinfo: *const BootInfoHeader) -> ! {
                     RetypeStatus::Ok => {
                         let _ = write!(
                             detail,
-                            "retype status=ok untyped=0x{ucap:08x} paddr=0x{paddr:08x} size_bits={usize_bits} slot=0x{slot:04x} offset={offset} depth={depth} obj_type={otype} obj_size_bits={obj_bits}",
+                            "retype status=ok untyped=0x{ucap:08x} paddr=0x{paddr:08x} size_bits={usize_bits} slot=0x{slot:04x} offset={offset} depth={depth} root=0x{root:04x} node_index=0x{node_index:04x} obj_type={otype} obj_size_bits={obj_bits}",
                             ucap = last.trace.untyped_cap,
                             paddr = last.trace.untyped_paddr,
                             usize_bits = last.trace.untyped_size_bits,
                             slot = last.trace.dest_slot,
                             offset = last.trace.dest_offset,
                             depth = last.trace.cnode_depth,
+                            root = last.trace.cnode_root,
+                            node_index = last.trace.node_index,
                             otype = last.trace.object_type,
                             obj_bits = last.trace.object_size_bits,
                         );
@@ -282,7 +295,7 @@ pub extern "C" fn kernel_start(bootinfo: *const BootInfoHeader) -> ! {
                     RetypeStatus::Err(code) => {
                         let _ = write!(
                             detail,
-                            "retype status=err({code}) untyped=0x{ucap:08x} paddr=0x{paddr:08x} size_bits={usize_bits} slot=0x{slot:04x} offset={offset} depth={depth} obj_type={otype} obj_size_bits={obj_bits}",
+                            "retype status=err({code}) untyped=0x{ucap:08x} paddr=0x{paddr:08x} size_bits={usize_bits} slot=0x{slot:04x} offset={offset} depth={depth} root=0x{root:04x} node_index=0x{node_index:04x} obj_type={otype} obj_size_bits={obj_bits}",
                             code = code as i32,
                             ucap = last.trace.untyped_cap,
                             paddr = last.trace.untyped_paddr,
@@ -290,6 +303,8 @@ pub extern "C" fn kernel_start(bootinfo: *const BootInfoHeader) -> ! {
                             slot = last.trace.dest_slot,
                             offset = last.trace.dest_offset,
                             depth = last.trace.cnode_depth,
+                            root = last.trace.cnode_root,
+                            node_index = last.trace.node_index,
                             otype = last.trace.object_type,
                             obj_bits = last.trace.object_size_bits,
                         );
