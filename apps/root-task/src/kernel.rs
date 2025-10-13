@@ -15,7 +15,7 @@ use cohesix_ticket::Role;
 use crate::event::{AuditSink, EventPump, IpcDispatcher, TickEvent, TicketTable, TimerSource};
 #[cfg(feature = "net")]
 use crate::net::NetStack;
-use crate::sel4::KernelEnv;
+use crate::sel4::{KernelEnv, RetypeKind, RetypeStatus};
 use crate::serial::{
     pl011::Pl011, SerialPort, DEFAULT_LINE_CAPACITY, DEFAULT_RX_CAPACITY, DEFAULT_TX_CAPACITY,
 };
@@ -162,6 +162,19 @@ pub extern "C" fn kernel_start(bootinfo: *const BootInfoHeader) -> ! {
     console.writeln_prefixed("Cohesix v0 (AArch64/virt)");
 
     let bootinfo_ref = unsafe { &*(bootinfo as *const sel4_sys::seL4_BootInfo) };
+
+    let empty = bootinfo_ref.empty;
+    let mut cnode_line = heapless::String::<160>::new();
+    let empty_span = (empty.end - empty.start) as usize;
+    let _ = write!(
+        cnode_line,
+        "bootinfo.empty slots [0x{start:04x}..0x{end:04x}) span={span} root_cnode_bits={bits}",
+        start = empty.start,
+        end = empty.end,
+        span = empty_span,
+        bits = bootinfo_ref.initThreadCNodeSizeBits,
+    );
+    console.writeln_prefixed(cnode_line.as_str());
     unsafe {
         #[cfg(all(target_os = "none", target_arch = "aarch64"))]
         {
@@ -234,6 +247,84 @@ pub extern "C" fn kernel_start(bootinfo: *const BootInfoHeader) -> ! {
                 dev_used = stats.device_used,
             );
             console.writeln_prefixed(untyped.as_str());
+
+            if let Some(last) = snapshot.last_retype {
+                let mut detail = heapless::String::<256>::new();
+                match last.status {
+                    RetypeStatus::Pending => {
+                        let _ = write!(
+                            detail,
+                            "retype status=pending untyped=0x{ucap:08x} paddr=0x{paddr:08x} size_bits={usize_bits} slot=0x{slot:04x} offset={offset} depth={depth} obj_type={otype} obj_size_bits={obj_bits}",
+                            ucap = last.trace.untyped_cap,
+                            paddr = last.trace.untyped_paddr,
+                            usize_bits = last.trace.untyped_size_bits,
+                            slot = last.trace.dest_slot,
+                            offset = last.trace.dest_offset,
+                            depth = last.trace.cnode_depth,
+                            otype = last.trace.object_type,
+                            obj_bits = last.trace.object_size_bits,
+                        );
+                    }
+                    RetypeStatus::Ok => {
+                        let _ = write!(
+                            detail,
+                            "retype status=ok untyped=0x{ucap:08x} paddr=0x{paddr:08x} size_bits={usize_bits} slot=0x{slot:04x} offset={offset} depth={depth} obj_type={otype} obj_size_bits={obj_bits}",
+                            ucap = last.trace.untyped_cap,
+                            paddr = last.trace.untyped_paddr,
+                            usize_bits = last.trace.untyped_size_bits,
+                            slot = last.trace.dest_slot,
+                            offset = last.trace.dest_offset,
+                            depth = last.trace.cnode_depth,
+                            otype = last.trace.object_type,
+                            obj_bits = last.trace.object_size_bits,
+                        );
+                    }
+                    RetypeStatus::Err(code) => {
+                        let _ = write!(
+                            detail,
+                            "retype status=err({code}) untyped=0x{ucap:08x} paddr=0x{paddr:08x} size_bits={usize_bits} slot=0x{slot:04x} offset={offset} depth={depth} obj_type={otype} obj_size_bits={obj_bits}",
+                            code = code as i32,
+                            ucap = last.trace.untyped_cap,
+                            paddr = last.trace.untyped_paddr,
+                            usize_bits = last.trace.untyped_size_bits,
+                            slot = last.trace.dest_slot,
+                            offset = last.trace.dest_offset,
+                            depth = last.trace.cnode_depth,
+                            otype = last.trace.object_type,
+                            obj_bits = last.trace.object_size_bits,
+                        );
+                    }
+                }
+                console.writeln_prefixed(detail.as_str());
+
+                let mut kind = heapless::String::<192>::new();
+                match last.trace.kind {
+                    RetypeKind::DevicePage { paddr } => {
+                        let _ = write!(
+                            kind,
+                            "retype.kind=device_page target_paddr=0x{paddr:08x}",
+                            paddr = paddr,
+                        );
+                    }
+                    RetypeKind::DmaPage { paddr } => {
+                        let _ = write!(
+                            kind,
+                            "retype.kind=dma_page target_paddr=0x{paddr:08x}",
+                            paddr = paddr,
+                        );
+                    }
+                    RetypeKind::PageTable { vaddr } => {
+                        let _ = write!(
+                            kind,
+                            "retype.kind=page_table base_vaddr=0x{vaddr:08x}",
+                            vaddr = vaddr,
+                        );
+                    }
+                }
+                console.writeln_prefixed(kind.as_str());
+            } else {
+                console.writeln_prefixed("no retype trace captured");
+            }
 
             match env.device_coverage(PL011_PADDR, DEVICE_FRAME_BITS) {
                 Some(region) => {
