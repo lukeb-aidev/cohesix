@@ -151,7 +151,8 @@ launch_cohsh_macos_terminal() {
     local cohsh_command
     cohsh_command=$(shell_join "$@")
     local shell_command
-    shell_command="cd $(printf '%q' "$workspace_root") && export COHSH_TCP_PORT=$(printf '%q' "$cohsh_tcp_port") && $cohsh_command"
+    # Ensure the spawned Terminal session inherits a live TTY so cohsh stays interactive.
+    shell_command="cd $(printf '%q' "$workspace_root") && export COHSH_TCP_PORT=$(printf '%q' "$cohsh_tcp_port") && exec </dev/tty >/dev/tty 2>/dev/tty && $cohsh_command"
     local quoted_shell
     quoted_shell=$(python3 -c 'import shlex, sys; print(shlex.quote("set -euo pipefail; " + sys.argv[1]))' "$shell_command")
 
