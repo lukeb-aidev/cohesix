@@ -4,6 +4,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+HOST_OS="$(uname -s)"
 
 usage() {
     cat <<'USAGE'
@@ -23,6 +25,7 @@ Options:
   --qemu <path>         QEMU binary to execute (default: qemu-system-aarch64)
   --transport <kind>    Console transport to launch (tcp|qemu, default: tcp)
   --tcp-port <port>     TCP port exposed by QEMU for the remote console (default: 31337)
+  --cohsh-launch <mode> Launch cohsh inline, via macOS Terminal, or auto-detect (auto|inline|macos-terminal)
   --no-run              Skip launching QEMU after building the artefacts
   --raw-qemu            Launch QEMU directly instead of cohsh (disables interactive CLI)
   --dtb <path>          Override the device tree blob passed to QEMU
@@ -122,6 +125,44 @@ PY
     fail "Timed out waiting for TCP port ${host}:${port}"
 }
 
+shell_join() {
+    local arg
+    local quoted=()
+    for arg in "$@"; do
+        quoted+=("$(printf '%q' "$arg")")
+    done
+    local IFS=' '
+    printf '%s' "${quoted[*]}"
+}
+
+launch_cohsh_macos_terminal() {
+    local workspace_root="$1"
+    local cohsh_tcp_port="$2"
+    shift 2
+
+    if [[ "$HOST_OS" != "Darwin" ]]; then
+        fail "macOS Terminal launch requested but host OS is not macOS"
+    fi
+
+    if ! command -v osascript >/dev/null 2>&1; then
+        fail "osascript is required to launch Terminal windows on macOS"
+    fi
+
+    local cohsh_command
+    cohsh_command=$(shell_join "$@")
+    local shell_command
+    shell_command="cd $(printf '%q' "$workspace_root") && export COHSH_TCP_PORT=$(printf '%q' "$cohsh_tcp_port") && $cohsh_command"
+    local quoted_shell
+    quoted_shell=$(python3 -c 'import shlex, sys; print(shlex.quote("set -euo pipefail; " + sys.argv[1]))' "$shell_command")
+
+    osascript <<OSA
+tell application "Terminal"
+    activate
+    do script "bash -lc $quoted_shell"
+end tell
+OSA
+}
+
 main() {
     SEL4_BUILD_DIR="${SEL4_BUILD:-$HOME/seL4/build}"
     OUT_DIR="out/cohesix"
@@ -135,6 +176,8 @@ main() {
     DTB_OVERRIDE=""
     TRANSPORT="tcp"
     TCP_PORT=31337
+
+    COHSH_LAUNCH_MODE="auto"
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -196,6 +239,18 @@ main() {
                 TCP_PORT="$2"
                 shift 2
                 ;;
+            --cohsh-launch)
+                [[ $# -ge 2 ]] || fail "--cohsh-launch requires a mode"
+                case "$2" in
+                    auto|inline|macos-terminal)
+                        COHSH_LAUNCH_MODE="$2"
+                        ;;
+                    *)
+                        fail "Unsupported cohsh launch mode: $2"
+                        ;;
+                esac
+                shift 2
+                ;;
             --clean)
                 CLEAN_OUT_DIR=1
                 shift
@@ -225,6 +280,19 @@ main() {
 
     export SEL4_BUILD_DIR
     export SEL4_BUILD="$SEL4_BUILD_DIR"
+
+    local EFFECTIVE_COHSH_MODE="$COHSH_LAUNCH_MODE"
+    if [[ "$EFFECTIVE_COHSH_MODE" == "auto" ]]; then
+        if [[ "$TRANSPORT" == "tcp" && "$HOST_OS" == "Darwin" ]]; then
+            if command -v osascript >/dev/null 2>&1; then
+                EFFECTIVE_COHSH_MODE="macos-terminal"
+            else
+                EFFECTIVE_COHSH_MODE="inline"
+            fi
+        else
+            EFFECTIVE_COHSH_MODE="inline"
+        fi
+    fi
 
     if [[ "$CLEAN_OUT_DIR" -eq 1 ]]; then
         if [[ -d "$OUT_DIR" ]]; then
@@ -474,13 +542,31 @@ PY
         export COHSH_TCP_PORT="$TCP_PORT"
 
         CLI_CMD=(cargo run --bin cohsh --features tcp -- --transport tcp --tcp-port "$TCP_PORT" --role queen)
-        log "Launching cohsh (TCP transport) for interactive session"
-        "${CLI_CMD[@]}"
-        STATUS=$?
-        kill "$QEMU_PID" 2>/dev/null || true
-        wait "$QEMU_PID" 2>/dev/null || true
-        trap - EXIT
-        exit $STATUS
+        case "$EFFECTIVE_COHSH_MODE" in
+            inline)
+                log "Launching cohsh inline (TCP transport) for interactive session"
+                "${CLI_CMD[@]}"
+                STATUS=$?
+                kill "$QEMU_PID" 2>/dev/null || true
+                wait "$QEMU_PID" 2>/dev/null || true
+                trap - EXIT
+                exit $STATUS
+                ;;
+            macos-terminal)
+                log "Launching cohsh in a new macOS Terminal window (TCP transport)"
+                launch_cohsh_macos_terminal "$PROJECT_ROOT" "$TCP_PORT" "${CLI_CMD[@]}"
+                log "cohsh started in a separate Terminal window. Press Ctrl+C here to stop QEMU when finished."
+                local QEMU_EXIT=0
+                if ! wait "$QEMU_PID" 2>/dev/null; then
+                    QEMU_EXIT=$?
+                fi
+                trap - EXIT
+                return $QEMU_EXIT
+                ;;
+            *)
+                fail "Unknown cohsh launch mode: $EFFECTIVE_COHSH_MODE"
+                ;;
+        esac
     else
         log "Launching cohsh (QEMU transport) for interactive session"
         CLI_CMD=(cargo run --bin cohsh -- --transport qemu --qemu-bin "$QEMU_BIN" --qemu-out-dir "$OUT_DIR" --qemu-gic-version "$GIC_VER" --role queen)

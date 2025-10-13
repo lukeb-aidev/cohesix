@@ -77,6 +77,9 @@ cargo run --bin cohsh -- \
   and `tick: 3`.
 - `scripts/cohesix-build-run.sh` now boots QEMU by invoking this transport automatically, attaching as the
   queen role and printing the initial log stream before presenting the prompt.
+- On macOS hosts the script automatically selects `--cohsh-launch macos-terminal` so operators can keep the
+  QEMU serial stream visible while interacting with `cohsh` in a separate window. Override with
+  `--cohsh-launch inline` to retain the previous single-terminal flow.
 - `scripts/qemu-run.sh --tcp-port 31337` forwards the root-task console onto localhost so the TCP transport
   can attach from a second terminal. The script prints the bound port and refuses to expose non-localhost
   listeners, guiding operators toward secure defaults.
