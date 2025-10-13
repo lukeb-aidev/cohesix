@@ -328,9 +328,8 @@ mod arch {
     }
 }
 
-/// Panic handler that emits diagnostics before halting.
-#[panic_handler]
-fn panic(info: &PanicInfo) -> ! {
+/// Panic handler implementation that emits diagnostics before halting.
+pub fn panic_handler(info: &PanicInfo) -> ! {
     let mut console = DebugConsole::new();
     let _ = write!(
         console,
