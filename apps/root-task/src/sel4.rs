@@ -118,6 +118,7 @@ pub struct ReservedUntyped {
     cap: seL4_Untyped,
     paddr: usize,
     size_bits: u8,
+    index: usize,
 }
 
 impl ReservedUntyped {
@@ -137,6 +138,12 @@ impl ReservedUntyped {
     #[must_use]
     pub fn size_bits(&self) -> u8 {
         self.size_bits
+    }
+
+    /// Returns the index within the bootinfo untyped list.
+    #[must_use]
+    pub fn index(&self) -> usize {
+        self.index
     }
 }
 
@@ -201,6 +208,7 @@ impl<'a> UntypedCatalog<'a> {
             cap: self.bootinfo.untyped.start + index as seL4_CPtr,
             paddr: desc.paddr as usize,
             size_bits: desc.sizeBits,
+            index,
         })
     }
 
@@ -229,6 +237,17 @@ impl<'a> UntypedCatalog<'a> {
             return self.reserve_index(index);
         }
         None
+    }
+
+    fn release_index(&mut self, index: usize) {
+        if let Some(position) = self.used.iter().position(|&value| value == index) {
+            let _ = self.used.swap_remove(position);
+        }
+    }
+
+    /// Releases a previously reserved untyped so it may be reused.
+    pub fn release(&mut self, reserved: &ReservedUntyped) {
+        self.release_index(reserved.index);
     }
 
     /// Returns diagnostic statistics describing untyped catalogue utilisation.
@@ -359,6 +378,7 @@ pub struct KernelEnv<'a> {
     mapped_pts: Vec<usize, MAX_PAGE_TABLES>,
     device_cursor: usize,
     dma_cursor: usize,
+    last_retype: Option<RetypeLog>,
 }
 
 /// Diagnostic snapshot capturing resource utilisation within the [`KernelEnv`].
@@ -380,6 +400,64 @@ pub struct KernelEnvSnapshot {
     pub cspace_remaining: usize,
     /// Summary of untyped catalogue utilisation.
     pub untyped: UntypedStats,
+    /// Last observed retype attempt emitted by the environment.
+    pub last_retype: Option<RetypeLog>,
+}
+
+/// Classification of the object that was being created during a retype attempt.
+#[derive(Copy, Clone, Debug)]
+pub enum RetypeKind {
+    /// Device-mapped frame for MMIO peripherals.
+    DevicePage { paddr: usize },
+    /// DMA-capable RAM frame allocated for drivers.
+    DmaPage { paddr: usize },
+    /// Page table backing a virtual mapping.
+    PageTable { vaddr: usize },
+}
+
+/// Detailed snapshot of the parameters used for a `seL4_Untyped_Retype` call.
+#[derive(Copy, Clone, Debug)]
+pub struct RetypeTrace {
+    /// Capability designating the source untyped region.
+    pub untyped_cap: seL4_Untyped,
+    /// Physical base address advertised by the untyped descriptor.
+    pub untyped_paddr: usize,
+    /// Size (in bits) of the backing untyped region.
+    pub untyped_size_bits: u8,
+    /// Destination slot selected for the newly created object.
+    pub dest_slot: seL4_CPtr,
+    /// Offset within the root CNode calculated for the destination slot.
+    pub dest_offset: seL4_Word,
+    /// Depth of the root CNode used for the allocation.
+    pub cnode_depth: seL4_Word,
+    /// Index used in the retype call (zero for the root CNode).
+    pub node_index: seL4_Word,
+    /// Object type requested from the kernel.
+    pub object_type: seL4_Word,
+    /// Object size (in bits) supplied to the kernel.
+    pub object_size_bits: seL4_Word,
+    /// High-level description of the object being materialised.
+    pub kind: RetypeKind,
+}
+
+/// Result marker describing whether the most recent retype succeeded.
+#[derive(Copy, Clone, Debug)]
+pub enum RetypeStatus {
+    /// A retype call has not yet completed.
+    Pending,
+    /// The retype call completed successfully.
+    Ok,
+    /// The retype call failed with the captured error code.
+    Err(seL4_Error),
+}
+
+/// Log entry capturing the trace and outcome for the latest retype attempt.
+#[derive(Copy, Clone, Debug)]
+pub struct RetypeLog {
+    /// Parameters passed to the kernel.
+    pub trace: RetypeTrace,
+    /// Outcome returned by the kernel.
+    pub status: RetypeStatus,
 }
 
 impl<'a> KernelEnv<'a> {
@@ -394,6 +472,7 @@ impl<'a> KernelEnv<'a> {
             mapped_pts: Vec::new(),
             device_cursor: DEVICE_VADDR_BASE,
             dma_cursor: DMA_VADDR_BASE,
+            last_retype: None,
         }
     }
 
@@ -416,6 +495,7 @@ impl<'a> KernelEnv<'a> {
             cspace_used: self.slots.used(),
             cspace_remaining,
             untyped: self.untyped.stats(),
+            last_retype: self.last_retype,
         }
     }
 
@@ -439,7 +519,20 @@ impl<'a> KernelEnv<'a> {
             .reserve_device(paddr, PAGE_BITS)
             .ok_or(seL4_NotEnoughMemory)?;
         let frame_slot = self.allocate_slot();
-        self.retype_page(reserved.cap(), frame_slot)?;
+        let trace = self.prepare_retype_trace(
+            &reserved,
+            frame_slot,
+            seL4_ARM_SmallPageObject,
+            PAGE_BITS as seL4_Word,
+            RetypeKind::DevicePage { paddr },
+        );
+        self.record_retype(trace, RetypeStatus::Pending);
+        if let Err(err) = self.retype_page(reserved.cap(), frame_slot) {
+            self.record_retype(trace, RetypeStatus::Err(err));
+            self.untyped.release(&reserved);
+            return Err(err);
+        }
+        self.record_retype(trace, RetypeStatus::Ok);
         let vaddr = self
             .device_cursor
             .checked_add(PAGE_SIZE)
@@ -461,7 +554,22 @@ impl<'a> KernelEnv<'a> {
             .reserve_ram(PAGE_BITS as u8)
             .ok_or(seL4_NotEnoughMemory)?;
         let frame_slot = self.allocate_slot();
-        self.retype_page(reserved.cap(), frame_slot)?;
+        let trace = self.prepare_retype_trace(
+            &reserved,
+            frame_slot,
+            seL4_ARM_SmallPageObject,
+            PAGE_BITS as seL4_Word,
+            RetypeKind::DmaPage {
+                paddr: reserved.paddr(),
+            },
+        );
+        self.record_retype(trace, RetypeStatus::Pending);
+        if let Err(err) = self.retype_page(reserved.cap(), frame_slot) {
+            self.record_retype(trace, RetypeStatus::Err(err));
+            self.untyped.release(&reserved);
+            return Err(err);
+        }
+        self.record_retype(trace, RetypeStatus::Ok);
         let vaddr = self
             .dma_cursor
             .checked_add(PAGE_SIZE)
@@ -550,7 +658,20 @@ impl<'a> KernelEnv<'a> {
                     .reserve_ram(PAGE_TABLE_BITS as u8)
                     .ok_or(seL4_NotEnoughMemory)?;
                 let pt_slot = self.allocate_slot();
-                self.retype_page_table(reserved.cap(), pt_slot)?;
+                let trace = self.prepare_retype_trace(
+                    &reserved,
+                    pt_slot,
+                    seL4_ARM_PageTableObject,
+                    PAGE_TABLE_BITS as seL4_Word,
+                    RetypeKind::PageTable { vaddr: pt_base },
+                );
+                self.record_retype(trace, RetypeStatus::Pending);
+                if let Err(err) = self.retype_page_table(reserved.cap(), pt_slot) {
+                    self.record_retype(trace, RetypeStatus::Err(err));
+                    self.untyped.release(&reserved);
+                    return Err(err);
+                }
+                self.record_retype(trace, RetypeStatus::Ok);
                 let map_res = unsafe {
                     seL4_ARM_PageTable_Map(pt_slot, seL4_CapInitThreadVSpace, pt_base, attr)
                 };
@@ -580,5 +701,32 @@ impl<'a> KernelEnv<'a> {
     fn align_down(value: usize, align: usize) -> usize {
         debug_assert!(align.is_power_of_two());
         value & !(align - 1)
+    }
+
+    fn prepare_retype_trace(
+        &mut self,
+        reserved: &ReservedUntyped,
+        slot: seL4_CPtr,
+        object_type: seL4_Word,
+        object_size_bits: seL4_Word,
+        kind: RetypeKind,
+    ) -> RetypeTrace {
+        let dest_offset = self.slots.slot_offset(slot);
+        RetypeTrace {
+            untyped_cap: reserved.cap(),
+            untyped_paddr: reserved.paddr(),
+            untyped_size_bits: reserved.size_bits(),
+            dest_slot: slot,
+            dest_offset,
+            cnode_depth: self.slots.depth(),
+            node_index: 0,
+            object_type,
+            object_size_bits,
+            kind,
+        }
+    }
+
+    fn record_retype(&mut self, trace: RetypeTrace, status: RetypeStatus) {
+        self.last_retype = Some(RetypeLog { trace, status });
     }
 }

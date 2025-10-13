@@ -50,3 +50,22 @@ cargo clippy -p root-task --features net --tests
 Host-mode simulations continue to live in `src/host.rs`; they can be
 expanded to exercise the event pump by wiring deterministic timers or
 mock serial transports as the milestone progresses.
+
+## Build Plan Milestone 7 Status
+
+- **7a (Event Pump & Authenticated Entry)** — The cooperative pump and
+  authentication scaffolding exist, but QEMU still aborts during the
+  initial PL011 mapping, preventing verification of serial/network
+  activation logs mandated by the milestone.
+- **7b (Console & Networking Integration)** — Virtio/serial wiring is
+  gated by the same boot failure; runtime telemetry now surfaces the
+  failing `seL4_Untyped_Retype` call so future work can confirm the pump
+  reaches the networking initialisation milestones.
+- **7c (Follow-on tasks)** — Dependent items remain blocked until the
+  root-task can successfully map the UART and complete the early boot
+  pipeline.
+
+Recent debug instrumentation records the precise untyped capability,
+destination slot, and object type involved in the failing retype at
+`kernel.rs:258`, clarifying that seL4 rejects the destination slot before
+any device mapping occurs.
