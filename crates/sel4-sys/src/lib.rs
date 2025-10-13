@@ -209,25 +209,82 @@ mod imp {
         pub paddr: seL4_Word,
     }
 
-    static mut IPC_BUFFER_PTR: *mut seL4_IPCBuffer = core::ptr::null_mut();
+    #[repr(C, align(16))]
+    pub struct TlsImage {
+        ipc_buffer: *mut seL4_IPCBuffer,
+    }
+
+    impl TlsImage {
+        pub const fn new() -> Self {
+            Self {
+                ipc_buffer: core::ptr::null_mut(),
+            }
+        }
+
+        #[inline(always)]
+        pub fn ipc_buffer(&self) -> *mut seL4_IPCBuffer {
+            self.ipc_buffer
+        }
+
+        #[inline(always)]
+        pub unsafe fn set_ipc_buffer(&mut self, ptr: *mut seL4_IPCBuffer) {
+            self.ipc_buffer = ptr;
+        }
+    }
+
+    static mut IPC_BUFFER_FALLBACK: *mut seL4_IPCBuffer = core::ptr::null_mut();
+
+    #[inline(always)]
+    unsafe fn tls_base_ptr() -> *mut TlsImage {
+        let mut base: usize;
+        asm!(
+            "mrs {out}, TPIDR_EL0",
+            out = out(reg) base,
+            options(nostack, preserves_flags)
+        );
+        base as *mut TlsImage
+    }
+
+    #[inline(always)]
+    pub unsafe fn tls_set_base(ptr: *mut TlsImage) {
+        asm!(
+            "msr TPIDR_EL0, {inptr}",
+            inptr = in(reg) ptr,
+            options(nostack, preserves_flags)
+        );
+    }
+
+    #[inline(always)]
+    pub unsafe fn tls_image_mut() -> Option<&'static mut TlsImage> {
+        let base = tls_base_ptr();
+        if base.is_null() {
+            None
+        } else {
+            Some(&mut *base)
+        }
+    }
 
     #[inline(always)]
     unsafe fn ipc_buffer() -> *mut seL4_IPCBuffer {
-        debug_assert!(
-            !IPC_BUFFER_PTR.is_null(),
-            "seL4 IPC buffer not initialised"
-        );
-        IPC_BUFFER_PTR
+        if let Some(image) = tls_image_mut() {
+            image.ipc_buffer()
+        } else {
+            IPC_BUFFER_FALLBACK
+        }
     }
 
     #[inline(always)]
     pub unsafe fn seL4_SetIPCBuffer(ptr: *mut seL4_IPCBuffer) {
-        IPC_BUFFER_PTR = ptr;
+        if let Some(image) = tls_image_mut() {
+            image.set_ipc_buffer(ptr);
+        } else {
+            IPC_BUFFER_FALLBACK = ptr;
+        }
     }
 
     #[inline(always)]
     pub unsafe fn seL4_GetIPCBuffer() -> *mut seL4_IPCBuffer {
-        IPC_BUFFER_PTR
+        ipc_buffer()
     }
 
     #[inline(always)]
