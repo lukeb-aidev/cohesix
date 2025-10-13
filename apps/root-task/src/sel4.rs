@@ -96,7 +96,9 @@ impl SlotAllocator {
     /// Returns the guard depth (in bits) of the root CNode capability.
     #[inline(always)]
     pub fn depth(&self) -> seL4_Word {
-        self.cnode_size_bits
+        // The initial CSpace is a single-level CNode, so retype operations must use a
+        // guard depth of zero to address slots directly in the root capability.
+        0
     }
 
     /// Returns the depth parameter required for cspace lookups when addressing the root CNode.
