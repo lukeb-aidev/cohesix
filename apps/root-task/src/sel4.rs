@@ -597,7 +597,7 @@ impl<'a> KernelEnv<'a> {
                 PAGE_BITS as seL4_Word,
                 self.slots.root(),
                 0,
-                0,
+                self.slots.depth(),
                 offset,
                 1,
             )
@@ -622,7 +622,7 @@ impl<'a> KernelEnv<'a> {
                 PAGE_TABLE_BITS as seL4_Word,
                 self.slots.root(),
                 0,
-                0,
+                self.slots.depth(),
                 offset,
                 1,
             )
