@@ -38,6 +38,11 @@ scripts/cohesix-build-run.sh \
 scripts/cohesix-build-run.sh --no-run
 ```
 
+On Apple Silicon hosts the helper automatically opens the `cohsh` CLI in a
+separate Terminal window so the original session can keep streaming the QEMU
+serial output. Override this behaviour with `--cohsh-launch inline` or force it
+elsewhere via `--cohsh-launch macos-terminal`.
+
 The script emits a manifest (`out/cohesix/staging/cohesix/manifest.json`) with
 SHA-256 digests for every packaged binary and reuses `scripts/ci/size_guard.sh`
 to enforce the 4 MiB CPIO size budget.
