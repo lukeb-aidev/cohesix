@@ -97,6 +97,20 @@ impl SlotAllocator {
     pub fn depth(&self) -> seL4_Word {
         self.cnode_size_bits
     }
+
+    /// Computes the slot offset within the root CNode for the provided capability pointer.
+    #[inline(always)]
+    pub fn slot_offset(&self, slot: seL4_CPtr) -> seL4_Word {
+        let limit = 1usize
+            .checked_shl(self.cnode_size_bits as u32)
+            .expect("cnode size bits overflow while computing slot offset");
+        let index = slot as usize;
+        debug_assert!(
+            index < limit,
+            "cspace slot index {index} exceeds root cnode capacity {limit}",
+        );
+        index as seL4_Word
+    }
 }
 
 /// Handle to an untyped capability reserved from the bootinfo catalog.
@@ -467,15 +481,16 @@ impl<'a> KernelEnv<'a> {
         untyped_cap: seL4_Untyped,
         slot: seL4_CPtr,
     ) -> Result<(), seL4_Error> {
+        let offset = self.slots.slot_offset(slot);
         let res = unsafe {
             seL4_Untyped_Retype(
                 untyped_cap,
                 seL4_ARM_SmallPageObject,
                 PAGE_BITS as seL4_Word,
                 self.slots.root(),
-                slot,
-                self.slots.depth(),
                 0,
+                0,
+                offset,
                 1,
             )
         };
@@ -491,15 +506,16 @@ impl<'a> KernelEnv<'a> {
         untyped_cap: seL4_Untyped,
         slot: seL4_CPtr,
     ) -> Result<(), seL4_Error> {
+        let offset = self.slots.slot_offset(slot);
         let res = unsafe {
             seL4_Untyped_Retype(
                 untyped_cap,
                 seL4_ARM_PageTableObject,
                 PAGE_TABLE_BITS as seL4_Word,
                 self.slots.root(),
-                slot,
-                self.slots.depth(),
                 0,
+                0,
+                offset,
                 1,
             )
         };
