@@ -1,8 +1,10 @@
+// Author: Lukas Bower
 #![cfg(target_os = "none")]
 #![allow(dead_code)]
 #![allow(clippy::missing_panics_doc)]
 #![allow(unsafe_code)]
 
+use core::mem;
 use core::ptr::NonNull;
 
 use heapless::Vec;
@@ -25,16 +27,23 @@ pub struct SlotAllocator {
     cnode: seL4_CNode,
     next: seL4_CPtr,
     end: seL4_CPtr,
-    depth: seL4_Word,
+    cnode_size_bits: seL4_Word,
 }
 
 impl SlotAllocator {
     pub fn new(region: seL4_SlotRegion, cnode_size_bits: seL4_Word) -> Self {
+        let capacity = 1usize
+            .checked_shl(cnode_size_bits as u32)
+            .unwrap_or(usize::MAX);
+        debug_assert!(
+            (region.end as usize) <= capacity,
+            "bootinfo empty region exceeds root cnode capacity",
+        );
         Self {
             cnode: seL4_CapInitThreadCNode,
             next: region.start,
             end: region.end,
-            depth: cnode_size_bits,
+            cnode_size_bits,
         }
     }
 
@@ -44,11 +53,18 @@ impl SlotAllocator {
         }
         let slot = self.next;
         self.next += 1;
+        let capacity = 1usize
+            .checked_shl(self.cnode_size_bits as u32)
+            .unwrap_or(usize::MAX);
+        debug_assert!(
+            (slot as usize) < capacity,
+            "allocated cspace slot exceeds root cnode capacity",
+        );
         Some(slot)
     }
 
     pub fn depth(&self) -> seL4_Word {
-        self.depth
+        (mem::size_of::<seL4_Word>() as seL4_Word) * 8
     }
 
     pub fn root(&self) -> seL4_CNode {
