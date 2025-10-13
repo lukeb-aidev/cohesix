@@ -64,7 +64,7 @@ impl SlotAllocator {
     }
 
     pub fn depth(&self) -> seL4_Word {
-        (mem::size_of::<seL4_Word>() as seL4_Word) * 8
+        self.cnode_size_bits
     }
 
     pub fn root(&self) -> seL4_CNode {
