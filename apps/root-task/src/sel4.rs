@@ -5,7 +5,7 @@
 #![allow(clippy::missing_panics_doc)]
 #![allow(unsafe_code)]
 
-use core::ptr::NonNull;
+use core::{mem, ptr::NonNull};
 
 use heapless::Vec;
 use sel4_sys::{
@@ -24,6 +24,7 @@ const PAGE_TABLE_ALIGN: usize = 1 << 21;
 const DEVICE_VADDR_BASE: usize = 0xA000_0000;
 const DMA_VADDR_BASE: usize = 0xB000_0000;
 const MAX_PAGE_TABLES: usize = 64;
+const WORD_BITS: seL4_Word = (mem::size_of::<seL4_Word>() * 8) as seL4_Word;
 
 /// Simple bump allocator for CSpace slots rooted at the initial thread's CNode.
 pub struct SlotAllocator {
@@ -98,18 +99,10 @@ impl SlotAllocator {
         self.cnode_size_bits
     }
 
-    /// Computes the slot offset within the root CNode for the provided capability pointer.
+    /// Returns the depth parameter required for cspace lookups when addressing the root CNode.
     #[inline(always)]
-    pub fn slot_offset(&self, slot: seL4_CPtr) -> seL4_Word {
-        let limit = 1usize
-            .checked_shl(self.cnode_size_bits as u32)
-            .expect("cnode size bits overflow while computing slot offset");
-        let index = slot as usize;
-        debug_assert!(
-            index < limit,
-            "cspace slot index {index} exceeds root cnode capacity {limit}",
-        );
-        index as seL4_Word
+    pub fn path_depth(&self) -> seL4_Word {
+        WORD_BITS
     }
 }
 
@@ -432,11 +425,11 @@ pub struct RetypeTrace {
     pub cnode_root: seL4_CNode,
     /// Destination slot selected for the newly created object.
     pub dest_slot: seL4_CPtr,
-    /// Offset within the root CNode calculated for the destination slot.
+    /// Offset relative to `node_index` applied when resolving the destination slot.
     pub dest_offset: seL4_Word,
-    /// Depth of the root CNode used for the allocation.
+    /// Depth parameter passed to the kernel while walking the destination CNode.
     pub cnode_depth: seL4_Word,
-    /// Index supplied to the kernel when resolving the destination CNode.
+    /// Base index supplied to the kernel when resolving the destination CNode.
     pub node_index: seL4_Word,
     /// Object type requested from the kernel.
     pub object_type: seL4_Word,
@@ -717,10 +710,10 @@ impl<'a> KernelEnv<'a> {
         object_size_bits: seL4_Word,
         kind: RetypeKind,
     ) -> RetypeTrace {
-        let dest_offset = self.slots.slot_offset(slot);
+        let dest_offset = 0;
         let cnode_root = self.slots.root();
-        let node_index = 0;
-        let cnode_depth = self.slots.depth();
+        let node_index = slot;
+        let cnode_depth = self.slots.path_depth();
         RetypeTrace {
             untyped_cap: reserved.cap(),
             untyped_paddr: reserved.paddr(),
