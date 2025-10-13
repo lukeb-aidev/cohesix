@@ -47,9 +47,12 @@ cargo check -p root-task --features net
 cargo clippy -p root-task --features net --tests
 ```
 
-Host-mode simulations continue to live in `src/host.rs`; they can be
-expanded to exercise the event pump by wiring deterministic timers or
-mock serial transports as the milestone progresses.
+Host-mode simulation in `src/host.rs` now reuses the production event
+pump. A scripted set of console commands is injected via a loopback
+serial driver so developers can observe the authenticated command flow
+and audit output without booting QEMU. The harness wires a sleep-backed
+timer and exercises both queen and worker tickets, ensuring host runs
+stay aligned with the seL4 entry path.
 
 ## Build Plan Milestone 7 Status
 
