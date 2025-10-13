@@ -92,10 +92,10 @@ impl SlotAllocator {
         self.cnode
     }
 
-    /// Returns the depth of the root CNode in bits.
+    /// Returns the guard depth (in bits) of the root CNode capability.
     #[inline(always)]
     pub fn depth(&self) -> seL4_Word {
-        self.cnode_size_bits
+        0
     }
 
     /// Computes the slot offset within the root CNode for the provided capability pointer.
@@ -719,7 +719,7 @@ impl<'a> KernelEnv<'a> {
     ) -> RetypeTrace {
         let dest_offset = self.slots.slot_offset(slot);
         let cnode_root = self.slots.root();
-        let node_index = cnode_root as seL4_Word;
+        let node_index = 0;
         let cnode_depth = self.slots.depth();
         RetypeTrace {
             untyped_cap: reserved.cap(),
