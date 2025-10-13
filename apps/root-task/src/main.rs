@@ -5,10 +5,22 @@
 #![warn(missing_docs)]
 #![doc = "Root task entry points for host and seL4 builds."]
 
+#[cfg(target_os = "none")]
+use core::panic::PanicInfo;
+
+#[cfg(target_os = "none")]
+use root_task::kernel;
+
 #[cfg(not(target_os = "none"))]
 use root_task::host;
 
 #[cfg(not(target_os = "none"))]
 fn main() -> host::Result<()> {
     host::main()
+}
+
+#[cfg(target_os = "none")]
+#[panic_handler]
+fn panic(info: &PanicInfo) -> ! {
+    kernel::panic_handler(info)
 }
