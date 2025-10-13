@@ -378,6 +378,8 @@ pub extern "C" fn kernel_start(bootinfo: *const BootInfoHeader) -> ! {
     let ipc = KernelIpc;
     let mut tickets: TicketTable<4> = TicketTable::new();
     let _ = tickets.register(Role::Queen, "bootstrap");
+    let _ = tickets.register(Role::WorkerHeartbeat, "worker");
+    let _ = tickets.register(Role::WorkerGpu, "worker-gpu");
     #[cfg(feature = "net")]
     console.writeln_prefixed("network stack initialised");
     console.writeln_prefixed("initialising event pump");
