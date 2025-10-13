@@ -68,6 +68,11 @@ impl SlotAllocator {
     pub fn root(&self) -> seL4_CNode {
         self.cnode
     }
+
+    #[inline(always)]
+    pub fn depth(&self) -> seL4_Word {
+        self.cnode_size_bits
+    }
 }
 
 struct ReservedUntyped {
@@ -276,7 +281,7 @@ impl<'a> KernelEnv<'a> {
                 PAGE_BITS as seL4_Word,
                 self.slots.root(),
                 0,
-                0,
+                self.slots.depth(),
                 slot,
                 1,
             )
@@ -300,7 +305,7 @@ impl<'a> KernelEnv<'a> {
                 PAGE_TABLE_BITS as seL4_Word,
                 self.slots.root(),
                 0,
-                0,
+                self.slots.depth(),
                 slot,
                 1,
             )
