@@ -436,11 +436,11 @@ pub struct RetypeTrace {
     pub cnode_root: seL4_CNode,
     /// Destination slot selected for the newly created object.
     pub dest_slot: seL4_CPtr,
-    /// Offset relative to `node_index` applied when resolving the destination slot.
+    /// Offset within the init CSpace used to resolve `dest_slot` (equals `dest_slot` for single-level roots).
     pub dest_offset: seL4_Word,
-    /// Depth parameter passed to the kernel while walking the destination CNode.
+    /// Depth parameter passed to the kernel while walking the destination CNode (init root depth on single-level trees).
     pub cnode_depth: seL4_Word,
-    /// Base index supplied to the kernel when resolving the destination CNode.
+    /// Base index supplied to the kernel when resolving the destination CNode (zero for single-level init roots).
     pub node_index: seL4_Word,
     /// Object type requested from the kernel.
     pub object_type: seL4_Word,
@@ -601,18 +601,7 @@ impl<'a> KernelEnv<'a> {
         untyped_cap: seL4_Untyped,
         trace: &RetypeTrace,
     ) -> Result<(), seL4_Error> {
-        let res = unsafe {
-            seL4_Untyped_Retype(
-                untyped_cap,
-                trace.object_type,
-                trace.object_size_bits,
-                trace.cnode_root,
-                trace.node_index,
-                trace.cnode_depth,
-                trace.dest_offset,
-                1,
-            )
-        };
+        let res = self.perform_retype(untyped_cap, trace);
         if res == seL4_NoError {
             Ok(())
         } else {
@@ -625,7 +614,49 @@ impl<'a> KernelEnv<'a> {
         untyped_cap: seL4_Untyped,
         trace: &RetypeTrace,
     ) -> Result<(), seL4_Error> {
-        let res = unsafe {
+        let res = self.perform_retype(untyped_cap, trace);
+        if res == seL4_NoError {
+            Ok(())
+        } else {
+            Err(res)
+        }
+    }
+
+    fn perform_retype(
+        &self,
+        untyped_cap: seL4_Untyped,
+        trace: &RetypeTrace,
+    ) -> seL4_Error {
+        let max_slots = 1usize
+            .checked_shl(trace.cnode_depth as u32)
+            .unwrap_or_else(|| panic!(
+                "cnode_depth {} exceeds host word size",
+                trace.cnode_depth
+            ));
+        if trace.node_index != 0 {
+            panic!(
+                "Invalid node_index {} (expected 0 for single-level init CSpace)",
+                trace.node_index
+            );
+        }
+        if (trace.dest_offset as usize) >= max_slots {
+            panic!(
+                "Invalid dest_offset 0x{:x} (cnode_depth={} → max_slots={})",
+                trace.dest_offset,
+                trace.cnode_depth,
+                max_slots
+            );
+        }
+
+        log::trace!(
+            "Retype params → root=0x{:x} index={} depth={} offset=0x{:x}",
+            trace.cnode_root,
+            trace.node_index,
+            trace.cnode_depth,
+            trace.dest_offset
+        );
+
+        unsafe {
             seL4_Untyped_Retype(
                 untyped_cap,
                 trace.object_type,
@@ -636,11 +667,6 @@ impl<'a> KernelEnv<'a> {
                 trace.dest_offset,
                 1,
             )
-        };
-        if res == seL4_NoError {
-            Ok(())
-        } else {
-            Err(res)
         }
     }
 
@@ -729,10 +755,10 @@ impl<'a> KernelEnv<'a> {
         object_size_bits: seL4_Word,
         kind: RetypeKind,
     ) -> RetypeTrace {
-        let dest_offset = 0;
         let cnode_root = self.slots.root();
-        let node_index = slot;
         let cnode_depth = self.slots.path_depth();
+        let node_index = 0;
+        let dest_offset = slot;
         RetypeTrace {
             untyped_cap: reserved.cap(),
             untyped_paddr: reserved.paddr(),
@@ -840,5 +866,26 @@ mod tests {
         assert!(keeper.contains(0xA000_0ABC));
         assert!(keeper.contains(0xA001_FFFF));
         assert!(!keeper.contains(0xA002_0000));
+    }
+
+    #[test]
+    fn retype_trace_validates_offset_within_depth() {
+        let bits: seL4_Word = 13;
+        let slot: seL4_CPtr = 0x00c8;
+        let trace = RetypeTrace {
+            untyped_cap: 0,
+            untyped_paddr: 0,
+            untyped_size_bits: 0,
+            cnode_root: 2,
+            dest_slot: slot,
+            dest_offset: slot as seL4_Word,
+            cnode_depth: bits,
+            node_index: 0,
+            object_type: 0,
+            object_size_bits: 0,
+            kind: RetypeKind::DevicePage { paddr: 0 },
+        };
+        assert_eq!(trace.node_index, 0);
+        assert!(trace.dest_offset < (1 << trace.cnode_depth));
     }
 }
