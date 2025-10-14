@@ -96,15 +96,15 @@ impl SlotAllocator {
     /// Returns the guard depth (in bits) of the root CNode capability.
     #[inline(always)]
     pub fn depth(&self) -> seL4_Word {
-        // The initial CSpace is a single-level CNode, so retype operations must use a
-        // guard depth of zero to address slots directly in the root capability.
+        // The initial CSpace is a single-level CNode with no guard bits, so the guard depth is
+        // zero.
         0
     }
 
     /// Returns the depth parameter required for cspace lookups when addressing the root CNode.
     #[inline(always)]
     pub fn path_depth(&self) -> seL4_Word {
-        WORD_BITS
+        self.cnode_size_bits
     }
 }
 
@@ -407,11 +407,20 @@ pub struct KernelEnvSnapshot {
 #[derive(Copy, Clone, Debug)]
 pub enum RetypeKind {
     /// Device-mapped frame for MMIO peripherals.
-    DevicePage { paddr: usize },
+    DevicePage {
+        /// Physical base address of the targeted MMIO frame.
+        paddr: usize,
+    },
     /// DMA-capable RAM frame allocated for drivers.
-    DmaPage { paddr: usize },
+    DmaPage {
+        /// Physical base address of the RAM frame being retyped.
+        paddr: usize,
+    },
     /// Page table backing a virtual mapping.
-    PageTable { vaddr: usize },
+    PageTable {
+        /// Virtual base address of the page table's mapping range.
+        vaddr: usize,
+    },
 }
 
 /// Detailed snapshot of the parameters used for a `seL4_Untyped_Retype` call.
