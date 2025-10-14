@@ -30,6 +30,7 @@ preparing and executing tasks.
 - Root task prints a banner and configures a periodic timer tick.
 - Root task spawns a secondary user component via seL4 endpoints.
 - Demonstrate one ping/pong IPC exchange and timer-driven logging.
+- Added runtime CSpace-path assert for all retypes.
 - Scaffold `cohsh` CLI prototype (command parsing + mocked transport) per `docs/USERLAND_AND_CLI.md §2-§4` so operators can
   observe logs via `tail` and exercise attach/login flows defined in `docs/INTERFACES.md §7`.
 
