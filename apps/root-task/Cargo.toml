@@ -11,6 +11,7 @@ net = [
     "dep:smoltcp",
     "dep:spin",
 ]
+sel4-debug = []
 
 [dependencies]
 cohesix-ticket = { workspace = true }
