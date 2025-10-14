@@ -58,12 +58,17 @@ impl BootInfoExt for seL4_BootInfo {
 
 /// Emits a concise dump of raw bootinfo parameters to aid debugging early boot wiring mistakes.
 pub fn bootinfo_debug_dump(bi: &seL4_BootInfo) {
+    let init_bits = bi.init_cnode_size_bits();
     log::info!(
         "[cohesix:root-task] bootinfo.raw: initCNode=0x{:x} initBits={} empty=[0x{:04x}..0x{:04x})",
         bi.init_cnode_cap(),
-        bi.init_cnode_size_bits(),
+        init_bits,
         bi.empty_first_slot(),
         bi.empty_last_slot_exclusive()
+    );
+    assert!(
+        init_bits > 0,
+        "BootInfo.initThreadCNodeSizeBits is 0 — capacity invalid"
     );
 }
 
@@ -537,6 +542,10 @@ impl<'a> KernelEnv<'a> {
     /// Builds a new environment from the seL4 bootinfo struct.
     pub fn new(bootinfo: &'a seL4_BootInfo) -> Self {
         let root_cnode_bits = bootinfo.init_cnode_size_bits();
+        assert!(
+            root_cnode_bits > 0,
+            "BootInfo.initThreadCNodeSizeBits is 0 — capacity invalid"
+        );
         let capacity = 1usize
             .checked_shl(root_cnode_bits as u32)
             .unwrap_or_else(|| {
