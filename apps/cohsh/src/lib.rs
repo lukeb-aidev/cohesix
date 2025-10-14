@@ -74,6 +74,11 @@ pub trait Transport {
 
     /// Stream a log-like file and return the accumulated contents.
     fn tail(&mut self, session: &Session, path: &str) -> Result<Vec<String>>;
+
+    /// Drain acknowledgement lines accumulated since the previous call.
+    fn drain_acknowledgements(&mut self) -> Vec<String> {
+        Vec::new()
+    }
 }
 
 impl<T> Transport for Box<T>
@@ -86,6 +91,10 @@ where
 
     fn tail(&mut self, session: &Session, path: &str) -> Result<Vec<String>> {
         (**self).tail(session, path)
+    }
+
+    fn drain_acknowledgements(&mut self) -> Vec<String> {
+        (**self).drain_acknowledgements()
     }
 }
 
@@ -469,6 +478,9 @@ impl<T: Transport, W: Write> Shell<T, W> {
     /// Worker roles must provide their identity via `ticket`.
     pub fn attach(&mut self, role: Role, ticket: Option<&str>) -> Result<()> {
         let session = self.transport.attach(role, ticket)?;
+        for ack in self.transport.drain_acknowledgements() {
+            writeln!(self.writer, "[console] {ack}")?;
+        }
         writeln!(
             self.writer,
             "attached session {:?} as {:?}",
@@ -522,7 +534,11 @@ impl<T: Transport, W: Write> Shell<T, W> {
             .session
             .as_ref()
             .context("attach to a session before running tail")?;
-        for line in self.transport.tail(session, path)? {
+        let lines = self.transport.tail(session, path)?;
+        for ack in self.transport.drain_acknowledgements() {
+            writeln!(self.writer, "[console] {ack}")?;
+        }
+        for line in lines {
             writeln!(self.writer, "{line}")?;
         }
         Ok(())

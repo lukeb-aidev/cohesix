@@ -76,9 +76,10 @@ scripts/qemu-run.sh \
   lines such as `event-pump: init serial` and `attach accepted`.
 
 ## 6. TCP Transport Status
-The virtio-net backed `NetStack` listens on TCP port 31337 and forwards
-newline-delimited input into the shared console parser. The current
-implementation only consumes input; it does not yet emit `OK`/`ERR`
-responses or stream file contents back to clients. This matches the
-host-mode queue implementation used in tests and keeps the focus on
-authentication ahead of the NineDoor Secure9P integration. 【F:apps/root-task/src/net/virtio.rs†L119-L232】【F:apps/root-task/src/net/queue.rs†L258-L328】
+The virtio-net backed `NetStack` listens on TCP port 31337 and mirrors the
+serial console: each command receives an `OK <verb> ...` or `ERR <verb>
+reason=...` acknowledgement that travels over both transports. Heartbeat
+probes continue to use `PING`/`PONG`, and `TAIL` replies now emit an
+acknowledgement before streaming log lines terminated by `END`. The host-side
+`cohsh` client surfaces these responses as `[console] ...` lines so scripts see
+consistent attach/command feedback regardless of transport. 【F:apps/root-task/src/net/virtio.rs†L200-L244】【F:apps/cohsh/src/lib.rs†L470-L516】【F:apps/cohsh/src/transport/tcp.rs†L207-L356】
