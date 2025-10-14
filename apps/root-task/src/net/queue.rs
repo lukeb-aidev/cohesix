@@ -311,12 +311,50 @@ impl NetStack {
         let storage: &mut [SocketStorage<'static>] = &mut [];
         let mut sockets = SocketSet::new(storage);
         let changed = interface.poll(timestamp, device, &mut sockets);
+        let mut activity = changed;
+
+        if self.flush_outbound_lines() {
+            activity = true;
+        }
+
         self.telemetry.last_poll_ms = now_ms;
-        if changed || now_ms > 0 {
+        if activity || now_ms > 0 {
             self.telemetry.link_up = true;
         }
         self.telemetry.tx_drops = self.device.tx_drop_count();
-        changed
+        activity
+    }
+
+    fn flush_outbound_lines(&mut self) -> bool {
+        let mut activity = false;
+        while let Some(line) = self.outbound_lines.pop_front() {
+            let mut payload: HeaplessVec<u8, { DEFAULT_LINE_CAPACITY + 2 }> = HeaplessVec::new();
+            if payload.extend_from_slice(line.as_bytes()).is_err() {
+                self.telemetry.tx_drops = self.telemetry.tx_drops.saturating_add(1);
+                continue;
+            }
+            if payload.push(b'\n').is_err() {
+                self.telemetry.tx_drops = self.telemetry.tx_drops.saturating_add(1);
+                continue;
+            }
+
+            match Frame::from_slice(payload.as_slice()) {
+                Ok(frame) => match self.device.try_enqueue_tx(frame) {
+                    Ok(()) => {
+                        activity = true;
+                    }
+                    Err(_) => {
+                        let _ = self.outbound_lines.push_front(line);
+                        break;
+                    }
+                },
+                Err(_) => {
+                    self.telemetry.tx_drops = self.telemetry.tx_drops.saturating_add(1);
+                }
+            }
+        }
+
+        activity
     }
 
     /// Expose the configured hardware address.
@@ -437,5 +475,18 @@ mod tests {
         assert_eq!(observed.len(), 2);
         assert_eq!(observed[0].as_str(), "attach queen token");
         assert_eq!(observed[1].as_str(), "log");
+    }
+
+    #[test]
+    fn outbound_lines_are_enqueued_as_frames() {
+        let (mut stack, handle) = NetStack::new(Ipv4Address::new(10, 0, 2, 100));
+        stack.send_console_line("OK TEST detail=42");
+        assert!(handle.pop_tx().is_none(), "frames should be queued on poll");
+
+        assert!(stack.poll_with_time(1));
+
+        let frame = handle.pop_tx().expect("frame not enqueued");
+        let rendered = core::str::from_utf8(frame.as_slice()).expect("frame not utf8");
+        assert_eq!(rendered, "OK TEST detail=42\n");
     }
 }
