@@ -19,13 +19,19 @@ use sel4_sys::{
 
 pub use sel4_sys::{seL4_CapInitThreadCNode, seL4_CapInitThreadVSpace, seL4_Error};
 
-/// Extension trait exposing convenience accessors for frequently used bootinfo fields.
+/// Extension trait exposing raw bootinfo fields exactly as provided by the kernel.
 pub trait BootInfoExt {
     /// Returns the writable init thread CNode capability exported via bootinfo.
     fn init_cnode_cap(&self) -> seL4_CPtr;
 
     /// Returns the number of bits describing the capacity of the init thread's CSpace root.
     fn init_cnode_size_bits(&self) -> usize;
+
+    /// Returns the first slot index within the bootinfo-declared empty slot window.
+    fn empty_first_slot(&self) -> usize;
+
+    /// Returns the exclusive upper bound of the bootinfo-declared empty slot window.
+    fn empty_last_slot_exclusive(&self) -> usize;
 }
 
 impl BootInfoExt for seL4_BootInfo {
@@ -38,6 +44,27 @@ impl BootInfoExt for seL4_BootInfo {
     fn init_cnode_size_bits(&self) -> usize {
         self.initThreadCNodeSizeBits as usize
     }
+
+    #[inline(always)]
+    fn empty_first_slot(&self) -> usize {
+        self.empty.start as usize
+    }
+
+    #[inline(always)]
+    fn empty_last_slot_exclusive(&self) -> usize {
+        self.empty.end as usize
+    }
+}
+
+/// Emits a concise dump of raw bootinfo parameters to aid debugging early boot wiring mistakes.
+pub fn bootinfo_debug_dump(bi: &seL4_BootInfo) {
+    log::info!(
+        "[cohesix:root-task] bootinfo.raw: initCNode=0x{:x} initBits={} empty=[0x{:04x}..0x{:04x})",
+        bi.init_cnode_cap(),
+        bi.init_cnode_size_bits(),
+        bi.empty_first_slot(),
+        bi.empty_last_slot_exclusive()
+    );
 }
 
 const PAGE_BITS: usize = 12;
@@ -469,14 +496,14 @@ pub struct RetypeTrace {
     pub cnode_root: seL4_CNode,
     /// Destination slot selected for the newly created object.
     pub dest_slot: seL4_CPtr,
-    /// Offset within the init CSpace used to resolve `dest_slot` (equals `dest_slot` for single-level roots).
+    /// Slot index within the selected CNode (root CNode for v0 policy, so equals `dest_slot`).
     pub dest_offset: seL4_Word,
     /// `nodeDepth` argument supplied to `seL4_Untyped_Retype` while resolving the destination CNode.
     /// Represents the guard depth traversed beneath `cnode_root`. v0 policy: MUST be zero so the
     /// kernel addresses the init CSpace root CNode directly.
     pub cnode_depth: seL4_Word,
     /// `nodeIndex` argument supplied to `seL4_Untyped_Retype` when selecting a sub-CNode below
-    /// `cnode_root`. v0 policy: zero (the init CSpace is single-level so we target the root CNode).
+    /// `cnode_root`. v0 policy: MUST be 0 (the init CSpace is single-level so we target the root).
     pub node_index: seL4_Word,
     /// Object type requested from the kernel.
     pub object_type: seL4_Word,
@@ -518,14 +545,15 @@ impl<'a> KernelEnv<'a> {
                     root_cnode_bits
                 )
             });
-        let empty_start = bootinfo.empty.start as usize;
-        let empty_end = bootinfo.empty.end as usize;
+        let empty_start = bootinfo.empty_first_slot();
+        let empty_end = bootinfo.empty_last_slot_exclusive();
+        let span = empty_end.saturating_sub(empty_start);
         log::info!(
-            "[cohesix:root-task] bootinfo.empty slots [{:#06x}..{:#06x}) span={} root_cnode_bits={}",
-            empty_start,
-            empty_end,
-            empty_end.saturating_sub(empty_start),
-            root_cnode_bits
+            "[cohesix:root-task] bootinfo.empty slots [0x{start:04x}..0x{end:04x}) span={span} root_cnode_bits={bits}",
+            start = empty_start,
+            end = empty_end,
+            span = span,
+            bits = root_cnode_bits
         );
         assert!(
             empty_end <= capacity,
@@ -692,13 +720,7 @@ impl<'a> KernelEnv<'a> {
 
     #[inline(always)]
     fn perform_retype(&self, untyped_cap: seL4_Untyped, trace: RetypeTrace) -> seL4_Error {
-        let (mut trace, init_bits) = self.sanitise_retype_trace(trace);
-
-        // Always perform retypes via the writable init thread CNode, targeting the root directly.
-        trace.cnode_root = self.init_cnode_cap();
-        trace.node_index = 0;
-        trace.cnode_depth = 0;
-        trace.dest_offset = trace.dest_slot;
+        let (trace, init_bits) = self.sanitise_retype_trace(trace);
 
         #[cfg(feature = "sel4-debug")]
         {
@@ -707,7 +729,7 @@ impl<'a> KernelEnv<'a> {
         }
 
         log::trace!(
-            "Retype params → root=0x{:x} index={} depth={} offset=0x{:x} (init_bits={})",
+            "Retype → root=0x{:x} index={} depth={} offset=0x{:x} (init_bits={})",
             trace.cnode_root,
             trace.node_index,
             trace.cnode_depth,
@@ -730,6 +752,11 @@ impl<'a> KernelEnv<'a> {
     }
 
     fn sanitise_retype_trace(&self, mut trace: RetypeTrace) -> (RetypeTrace, usize) {
+        trace.cnode_root = self.bootinfo.init_cnode_cap();
+        trace.node_index = 0;
+        trace.cnode_depth = 0;
+        trace.dest_offset = trace.dest_slot;
+
         let init_bits = self.bootinfo.init_cnode_size_bits();
         let max_slots = 1usize.checked_shl(init_bits as u32).unwrap_or_else(|| {
             panic!(
@@ -751,16 +778,12 @@ impl<'a> KernelEnv<'a> {
             "Retype: dest_offset must match dest_slot in init CSpace",
         );
         assert!(
-            (trace.dest_slot as usize) < max_slots,
-            "Retype: dest_slot 0x{:x} out of range (init_bits={}, max_slots={})",
-            trace.dest_slot,
+            (trace.dest_offset as usize) < max_slots,
+            "Retype: dest_offset 0x{:x} out of range (init_bits={}, max_slots={})",
+            trace.dest_offset,
             init_bits,
             max_slots
         );
-
-        trace.node_index = 0;
-        trace.cnode_depth = 0;
-        trace.dest_offset = trace.dest_slot;
 
         (trace, init_bits)
     }

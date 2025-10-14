@@ -15,7 +15,7 @@ use cohesix_ticket::Role;
 use crate::event::{AuditSink, EventPump, IpcDispatcher, TickEvent, TicketTable, TimerSource};
 #[cfg(feature = "net")]
 use crate::net::NetStack;
-use crate::sel4::{KernelEnv, RetypeKind, RetypeStatus};
+use crate::sel4::{bootinfo_debug_dump, BootInfoExt, KernelEnv, RetypeKind, RetypeStatus};
 use crate::serial::{
     pl011::Pl011, SerialPort, DEFAULT_LINE_CAPACITY, DEFAULT_RX_CAPACITY, DEFAULT_TX_CAPACITY,
 };
@@ -162,17 +162,19 @@ pub extern "C" fn kernel_start(bootinfo: *const BootInfoHeader) -> ! {
     console.writeln_prefixed("Cohesix v0 (AArch64/virt)");
 
     let bootinfo_ref = unsafe { &*(bootinfo as *const sel4_sys::seL4_BootInfo) };
+    bootinfo_debug_dump(bootinfo_ref);
 
-    let empty = bootinfo_ref.empty;
+    let empty_start = bootinfo_ref.empty_first_slot();
+    let empty_end = bootinfo_ref.empty_last_slot_exclusive();
     let mut cnode_line = heapless::String::<160>::new();
-    let empty_span = (empty.end - empty.start) as usize;
+    let empty_span = empty_end.saturating_sub(empty_start);
     let _ = write!(
         cnode_line,
         "bootinfo.empty slots [0x{start:04x}..0x{end:04x}) span={span} root_cnode_bits={bits}",
-        start = empty.start,
-        end = empty.end,
+        start = empty_start,
+        end = empty_end,
         span = empty_span,
-        bits = bootinfo_ref.initThreadCNodeSizeBits,
+        bits = bootinfo_ref.init_cnode_size_bits(),
     );
     console.writeln_prefixed(cnode_line.as_str());
     unsafe {
