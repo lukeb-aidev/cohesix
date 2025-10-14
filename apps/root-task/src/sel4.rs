@@ -101,9 +101,12 @@ impl SlotAllocator {
         0
     }
 
-    /// Returns the depth parameter required for cspace lookups when addressing the root CNode.
+    /// Returns the number of bits describing the capacity of the root CNode.
+    ///
+    /// This mirrors `bootinfo.initThreadCNodeSizeBits` and reflects how many slots are
+    /// addressable within the initial CSpace root.
     #[inline(always)]
-    pub fn path_depth(&self) -> seL4_Word {
+    pub fn capacity_bits(&self) -> seL4_Word {
         self.cnode_size_bits
     }
 }
@@ -438,9 +441,11 @@ pub struct RetypeTrace {
     pub dest_slot: seL4_CPtr,
     /// Offset within the init CSpace used to resolve `dest_slot` (equals `dest_slot` for single-level roots).
     pub dest_offset: seL4_Word,
-    /// Depth parameter passed to the kernel while walking the destination CNode (init root depth on single-level trees).
+    /// `nodeDepth` argument supplied to `seL4_Untyped_Retype` while resolving the destination CNode.
+    /// For a single-level init CSpace this **must** be zero so the kernel targets `cnode_root` directly.
     pub cnode_depth: seL4_Word,
-    /// Base index supplied to the kernel when resolving the destination CNode (zero for single-level init roots).
+    /// `nodeIndex` argument supplied to `seL4_Untyped_Retype` when walking sub-CNodes under `cnode_root`.
+    /// For the init thread's flat CSpace this is always zero.
     pub node_index: seL4_Word,
     /// Object type requested from the kernel.
     pub object_type: seL4_Word,
@@ -622,38 +627,16 @@ impl<'a> KernelEnv<'a> {
         }
     }
 
-    fn perform_retype(
-        &self,
-        untyped_cap: seL4_Untyped,
-        trace: &RetypeTrace,
-    ) -> seL4_Error {
-        let max_slots = 1usize
-            .checked_shl(trace.cnode_depth as u32)
-            .unwrap_or_else(|| panic!(
-                "cnode_depth {} exceeds host word size",
-                trace.cnode_depth
-            ));
-        if trace.node_index != 0 {
-            panic!(
-                "Invalid node_index {} (expected 0 for single-level init CSpace)",
-                trace.node_index
-            );
-        }
-        if (trace.dest_offset as usize) >= max_slots {
-            panic!(
-                "Invalid dest_offset 0x{:x} (cnode_depth={} → max_slots={})",
-                trace.dest_offset,
-                trace.cnode_depth,
-                max_slots
-            );
-        }
+    fn perform_retype(&self, untyped_cap: seL4_Untyped, trace: &RetypeTrace) -> seL4_Error {
+        let init_bits = self.validate_retype_destination(trace);
 
         log::trace!(
-            "Retype params → root=0x{:x} index={} depth={} offset=0x{:x}",
+            "Retype params → root=0x{:x} index={} depth={} offset=0x{:x} (init_bits={})",
             trace.cnode_root,
             trace.node_index,
             trace.cnode_depth,
-            trace.dest_offset
+            trace.dest_offset,
+            init_bits
         );
 
         unsafe {
@@ -668,6 +651,35 @@ impl<'a> KernelEnv<'a> {
                 1,
             )
         }
+    }
+
+    fn validate_retype_destination(&self, trace: &RetypeTrace) -> usize {
+        if trace.node_index != 0 {
+            panic!(
+                "Invalid node_index {} (expected 0 for single-level init CSpace)",
+                trace.node_index
+            );
+        }
+        if trace.cnode_depth != 0 {
+            panic!(
+                "Invalid cnode_depth {} (expected 0 for init CSpace root)",
+                trace.cnode_depth
+            );
+        }
+        let init_bits = self.bootinfo.initThreadCNodeSizeBits as usize;
+        let max_slots = 1usize.checked_shl(init_bits as u32).unwrap_or_else(|| {
+            panic!(
+                "initThreadCNodeSizeBits {} exceeds host word size",
+                init_bits
+            )
+        });
+        if (trace.dest_offset as usize) >= max_slots {
+            panic!(
+                "Invalid dest_offset 0x{:x} (init_cnode_bits={} → max_slots={})",
+                trace.dest_offset, init_bits, max_slots
+            );
+        }
+        init_bits
     }
 
     fn map_frame(
@@ -756,8 +768,9 @@ impl<'a> KernelEnv<'a> {
         kind: RetypeKind,
     ) -> RetypeTrace {
         let cnode_root = self.slots.root();
-        let cnode_depth = self.slots.path_depth();
+        // The init thread owns a single-level CSpace, so target the root CNode directly.
         let node_index = 0;
+        let cnode_depth = 0;
         let dest_offset = slot;
         RetypeTrace {
             untyped_cap: reserved.cap(),
@@ -869,23 +882,83 @@ mod tests {
     }
 
     #[test]
-    fn retype_trace_validates_offset_within_depth() {
-        let bits: seL4_Word = 13;
-        let slot: seL4_CPtr = 0x00c8;
-        let trace = RetypeTrace {
-            untyped_cap: 0,
-            untyped_paddr: 0,
-            untyped_size_bits: 0,
-            cnode_root: 2,
-            dest_slot: slot,
-            dest_offset: slot as seL4_Word,
-            cnode_depth: bits,
-            node_index: 0,
-            object_type: 0,
-            object_size_bits: 0,
-            kind: RetypeKind::DevicePage { paddr: 0 },
+    fn retype_trace_targets_root_cnode_slot() {
+        let mut bootinfo: seL4_BootInfo = unsafe { core::mem::zeroed() };
+        bootinfo.empty = seL4_SlotRegion {
+            start: 0,
+            end: 1 << 13,
         };
+        bootinfo.initThreadCNodeSizeBits = 13;
+        let bootinfo_ref: &'static mut seL4_BootInfo = Box::leak(Box::new(bootinfo));
+        let mut env = KernelEnv::new(bootinfo_ref);
+        let reserved = ReservedUntyped {
+            cap: 0x200,
+            paddr: 0,
+            size_bits: PAGE_BITS as u8,
+            index: 0,
+        };
+        let slot: seL4_CPtr = 0x00c8;
+        let trace = env.prepare_retype_trace(
+            &reserved,
+            slot,
+            seL4_ARM_SmallPageObject,
+            PAGE_BITS as seL4_Word,
+            RetypeKind::DevicePage { paddr: 0 },
+        );
+        assert_eq!(trace.cnode_root, seL4_CapInitThreadCNode);
         assert_eq!(trace.node_index, 0);
-        assert!(trace.dest_offset < (1 << trace.cnode_depth));
+        assert_eq!(trace.cnode_depth, 0);
+        assert_eq!(trace.dest_offset, slot);
+        assert_eq!(trace.dest_slot, slot);
+    }
+
+    #[test]
+    fn perform_retype_validates_offset_against_init_bits() {
+        use std::panic::{self, AssertUnwindSafe};
+
+        let mut bootinfo: seL4_BootInfo = unsafe { core::mem::zeroed() };
+        bootinfo.empty = seL4_SlotRegion {
+            start: 0,
+            end: 1 << 13,
+        };
+        bootinfo.initThreadCNodeSizeBits = 13;
+        let bootinfo_ref: &'static mut seL4_BootInfo = Box::leak(Box::new(bootinfo));
+        let env = KernelEnv::new(bootinfo_ref);
+        let valid_trace = RetypeTrace {
+            untyped_cap: 0x100,
+            untyped_paddr: 0,
+            untyped_size_bits: PAGE_BITS as u8,
+            cnode_root: seL4_CapInitThreadCNode,
+            dest_slot: 0x1ff,
+            dest_offset: 0x1ff,
+            cnode_depth: 0,
+            node_index: 0,
+            object_type: seL4_ARM_SmallPageObject,
+            object_size_bits: PAGE_BITS as seL4_Word,
+            kind: RetypeKind::DmaPage { paddr: 0 },
+        };
+
+        assert_eq!(env.validate_retype_destination(&valid_trace), 13);
+
+        let mut invalid_index = valid_trace;
+        invalid_index.node_index = 1;
+        let index_check = panic::catch_unwind(AssertUnwindSafe(|| {
+            env.validate_retype_destination(&invalid_index);
+        }));
+        assert!(index_check.is_err());
+
+        let mut invalid_depth = valid_trace;
+        invalid_depth.cnode_depth = 1;
+        let depth_check = panic::catch_unwind(AssertUnwindSafe(|| {
+            env.validate_retype_destination(&invalid_depth);
+        }));
+        assert!(depth_check.is_err());
+
+        let mut invalid_offset = valid_trace;
+        invalid_offset.dest_offset = 1 << 13;
+        let offset_check = panic::catch_unwind(AssertUnwindSafe(|| {
+            env.validate_retype_destination(&invalid_offset);
+        }));
+        assert!(offset_check.is_err());
     }
 }
