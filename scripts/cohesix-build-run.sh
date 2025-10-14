@@ -126,19 +126,20 @@ PY
 }
 
 launch_cohsh_macos_terminal() {
-    local workspace_root="$1"
+    local host_tools_dir="$1"
     local cohsh_tcp_port="$2"
-    shift 2
 
     if [[ "$HOST_OS" != "Darwin" ]]; then
         fail "macOS Terminal launch requested but host OS is not macOS"
     fi
 
-    (
-        cd "$workspace_root" || exit 1
-        export COHSH_TCP_PORT="$cohsh_tcp_port"
-        "$@"
-    ) >/dev/null 2>&1 &
+    local cohsh_bin="$host_tools_dir/cohsh"
+    if [[ ! -x "$cohsh_bin" ]]; then
+        fail "cohsh binary not found or not executable: $cohsh_bin"
+    fi
+
+    export COHSH_TCP_PORT="$cohsh_tcp_port"
+    "$cohsh_bin" --transport tcp --tcp-port "$cohsh_tcp_port" --role queen >/dev/null 2>&1 &
 
     log "Launched cohsh (tcp://127.0.0.1:${cohsh_tcp_port}) in background."
 }
@@ -323,7 +324,7 @@ main() {
     fi
 
     SEL4_COMPONENT_PACKAGES=(nine-door worker-heart worker-gpu)
-    HOST_TOOL_PACKAGES=(cohsh gpu-bridge-host)
+    HOST_TOOL_PACKAGES=(gpu-bridge-host)
 
     HOST_BUILD_ARGS=(build)
     if (( ${#PROFILE_ARGS[@]} > 0 )); then
@@ -335,6 +336,14 @@ main() {
 
     log "Building host tooling via: cargo ${HOST_BUILD_ARGS[*]}"
     cargo "${HOST_BUILD_ARGS[@]}"
+
+    COHSH_BUILD_ARGS=(build)
+    if (( ${#PROFILE_ARGS[@]} > 0 )); then
+        COHSH_BUILD_ARGS+=("${PROFILE_ARGS[@]}")
+    fi
+    COHSH_BUILD_ARGS+=(-p cohsh --features tcp)
+    log "Building cohsh CLI with TCP transport via: cargo ${COHSH_BUILD_ARGS[*]}"
+    cargo "${COHSH_BUILD_ARGS[@]}"
 
     SEL4_BUILD_ARGS=(build --target "$CARGO_TARGET")
     if (( ${#PROFILE_ARGS[@]} > 0 )); then
@@ -374,6 +383,8 @@ main() {
 
     rm -rf "$STAGING_DIR"
     mkdir -p "$ROOTFS_DIR" "$HOST_OUT_DIR"
+    HOST_TOOLS_DIR="$(cd "$HOST_OUT_DIR" && pwd)"
+    HOST_TOOLS="$HOST_TOOLS_DIR"
 
     ELFLOADER_STAGE_PATH="$STAGING_DIR/elfloader"
     if [[ ! -f "$SCRIPT_DIR/lib/strip_elfloader_modules.py" ]]; then
@@ -409,7 +420,7 @@ main() {
     install -m 0755 "$ROOTFS_DIR/root-task" "$ROOTSERVER_STAGE_PATH"
     log "Packaged component binary: $ROOTSERVER_STAGE_PATH"
     if [[ -f "$ROOTSERVER_STAGE_PATH" ]]; then
-        shasum -a 256 "$ROOTSERVER_STAGE_PATH" | awk '{printf "[cohesix-build] rootserver sha256=%s\\n", $1}'
+        shasum -a 256 "$ROOTSERVER_STAGE_PATH" | awk '{print "[cohesix-build] rootserver sha256=" $1}'
     fi
 
     describe_file "seL4 kernel" "$KERNEL_STAGE_PATH"
@@ -512,6 +523,8 @@ PY
         exec "$QEMU_BIN" "${QEMU_ARGS[@]}"
     fi
 
+    COHSH_BIN="$HOST_TOOLS_DIR/cohsh"
+
     if [[ "$TRANSPORT" == "tcp" ]]; then
         log "Launching QEMU with TCP console bridge on port $TCP_PORT"
         "$QEMU_BIN" "${QEMU_ARGS[@]}" &
@@ -520,8 +533,11 @@ PY
 
         wait_for_port "127.0.0.1" "$TCP_PORT" 60
         export COHSH_TCP_PORT="$TCP_PORT"
+        if [[ ! -x "$COHSH_BIN" ]]; then
+            fail "cohsh CLI not found: $COHSH_BIN"
+        fi
 
-        CLI_CMD=(cargo run --bin cohsh --features tcp -- --transport tcp --tcp-port "$TCP_PORT" --role queen)
+        CLI_CMD=("$COHSH_BIN" --transport tcp --tcp-port "$TCP_PORT" --role queen)
         case "$EFFECTIVE_COHSH_MODE" in
             inline)
                 log "Launching cohsh inline (TCP transport) for interactive session"
@@ -534,7 +550,7 @@ PY
                 ;;
             macos-terminal)
                 log "Launching cohsh in background (TCP transport)"
-                launch_cohsh_macos_terminal "$PROJECT_ROOT" "$TCP_PORT" "${CLI_CMD[@]}"
+                launch_cohsh_macos_terminal "$HOST_TOOLS_DIR" "$TCP_PORT"
                 log "cohsh started in a background session. Press Ctrl+C here to stop QEMU when finished."
                 local QEMU_EXIT=0
                 if ! wait "$QEMU_PID" 2>/dev/null; then
@@ -549,7 +565,10 @@ PY
         esac
     else
         log "Launching cohsh (QEMU transport) for interactive session"
-        CLI_CMD=(cargo run --bin cohsh -- --transport qemu --qemu-bin "$QEMU_BIN" --qemu-out-dir "$OUT_DIR" --qemu-gic-version "$GIC_VER" --role queen)
+        if [[ ! -x "$COHSH_BIN" ]]; then
+            fail "cohsh CLI not found: $COHSH_BIN"
+        fi
+        CLI_CMD=("$COHSH_BIN" --transport qemu --qemu-bin "$QEMU_BIN" --qemu-out-dir "$OUT_DIR" --qemu-gic-version "$GIC_VER" --role queen)
         if [[ ${#CLI_EXTRA_ARGS[@]} -gt 0 ]]; then
             for arg in "${CLI_EXTRA_ARGS[@]}"; do
                 CLI_CMD+=(--qemu-arg "$arg")
