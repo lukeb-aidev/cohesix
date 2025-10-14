@@ -65,11 +65,12 @@ pub trait RootTaskControl {
 - `tail` uses repeated `read` calls with offset tracking; NineDoor enforces append-only by ignoring provided offsets.
 - `bind` and `mount` commands are no-ops for non-queen roles.
 - `--transport tcp` connects to the root-task console listener (default `127.0.0.1:31337`) and speaks a line-oriented protocol:
-  - `ATTACH <role> <ticket?>` → `OK <session>` or `ERR <reason>`
-  - `TAIL <path>` streams newline-delimited log entries terminated by `END`
+  - `ATTACH <role> <ticket?>` → `OK ATTACH role=<role>` on success or `ERR ATTACH reason=<cause>` on failure.
+  - `TAIL <path>` emits `OK TAIL path=<path>` before newline-delimited log entries; the stream still terminates with `END`.
+  - All other verbs mirror serial behaviour and return a single acknowledgement (`OK LOG`, `ERR SPAWN reason=unauthenticated`, …)
+    before triggering side effects.
   - `PING` / `PONG` probes keep sessions alive; the client sends `PING` every 15 seconds of inactivity and expects an immediate
     `PONG` even when the server is mid-stream.
-  - All other verbs reuse the serial console surface (`help`, `attach`, `tail`, `log`, `spawn`, `kill`, `quit`)
 - The TCP console enforces a maximum line length of 128 bytes and rate-limits failed authentication attempts (3 strikes within
   60 seconds triggers a 90-second cooldown). `cohsh` additionally validates worker tickets locally, rejecting whitespace or
   malformed values so automation does not leak failed attempts over the wire.

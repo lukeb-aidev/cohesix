@@ -137,6 +137,21 @@ pub struct PumpMetrics {
     pub timer_ticks: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AckStatus {
+    Ok,
+    Err,
+}
+
+impl AckStatus {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Ok => "OK",
+            Self::Err => "ERR",
+        }
+    }
+}
+
 /// Authenticated session state maintained by the pump.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SessionRole {
@@ -311,6 +326,53 @@ where
         self.serial.telemetry()
     }
 
+    fn emit_console_line(&mut self, line: &str) {
+        self.serial.enqueue_tx(line.as_bytes());
+        self.serial.enqueue_tx(b"\r\n");
+        #[cfg(feature = "net")]
+        if let Some(net) = self.net.as_mut() {
+            net.send_console_line(line);
+        }
+    }
+
+    fn emit_ack(&mut self, status: AckStatus, verb: &str, detail: Option<&str>) {
+        let mut line: HeaplessString<DEFAULT_LINE_CAPACITY> = HeaplessString::new();
+        let _ = line.push_str(status.label());
+        let _ = line.push(' ');
+        let _ = line.push_str(verb);
+        if let Some(extra) = detail {
+            if !extra.is_empty() {
+                let _ = line.push(' ');
+                let _ = line.push_str(extra);
+            }
+        }
+        self.emit_console_line(line.as_str());
+    }
+
+    fn emit_ack_ok(&mut self, verb: &str, detail: Option<&str>) {
+        self.emit_ack(AckStatus::Ok, verb, detail);
+    }
+
+    fn emit_ack_err(&mut self, verb: &str, detail: Option<&str>) {
+        self.emit_ack(AckStatus::Err, verb, detail);
+    }
+
+    fn emit_auth_failure(&mut self, verb: &str) {
+        self.emit_ack_err(verb, Some("reason=unauthenticated"));
+    }
+
+    fn handle_console_error(&mut self, err: ConsoleError) {
+        let message = format_message(format_args!("console error: {}", err));
+        self.audit.info(message.as_str());
+        let detail = match err {
+            ConsoleError::RateLimited(delay) => {
+                format_message(format_args!("reason=rate-limited delay_ms={delay}"))
+            }
+            other => format_message(format_args!("reason={}", other)),
+        };
+        self.emit_ack_err("PARSE", Some(detail.as_str()));
+    }
+
     fn consume_serial(&mut self) {
         while let Some(line) = self.serial.next_line() {
             self.process_console_line(&line);
@@ -319,9 +381,13 @@ where
 
     fn process_console_line(&mut self, line: &HeaplessString<LINE>) {
         self.metrics.console_lines = self.metrics.console_lines.saturating_add(1);
+        let trimmed = line.trim();
+        if trimmed.eq_ignore_ascii_case("ping") {
+            self.emit_console_line("PONG");
+            return;
+        }
         if let Err(err) = self.feed_parser(line) {
-            let message = format_message(format_args!("console error: {}", err));
-            self.audit.info(message.as_str());
+            self.handle_console_error(err);
         }
     }
 
@@ -355,10 +421,12 @@ where
             Command::Help => {
                 self.audit.info("console: help");
                 self.metrics.accepted_commands += 1;
+                self.emit_ack_ok("HELP", None);
             }
             Command::Quit => {
                 self.audit.info("console: quit");
                 self.metrics.accepted_commands += 1;
+                self.emit_ack_ok("QUIT", None);
             }
             Command::Attach { role, ticket } => {
                 self.handle_attach(role, ticket);
@@ -372,20 +440,27 @@ where
                     let message = format_message(format_args!("console: tail {}", path.as_str()));
                     self.audit.info(message.as_str());
                     self.metrics.accepted_commands += 1;
+                    let detail = format_message(format_args!("path={}", path.as_str()));
+                    self.emit_ack_ok("TAIL", Some(detail.as_str()));
                     #[cfg(target_os = "none")]
                     {
                         forwarded = true;
                     }
+                } else {
+                    self.emit_auth_failure("TAIL");
                 }
             }
             Command::Log => {
                 if self.ensure_authenticated(SessionRole::Queen) {
                     self.audit.info("console: log stream start");
                     self.metrics.accepted_commands += 1;
+                    self.emit_ack_ok("LOG", None);
                     #[cfg(target_os = "none")]
                     {
                         forwarded = true;
                     }
+                } else {
+                    self.emit_auth_failure("LOG");
                 }
             }
             Command::Spawn(payload) => {
@@ -394,10 +469,14 @@ where
                         format_message(format_args!("console: spawn {}", payload.as_str()));
                     self.audit.info(message.as_str());
                     self.metrics.accepted_commands += 1;
+                    let detail = format_message(format_args!("payload={}", payload.as_str()));
+                    self.emit_ack_ok("SPAWN", Some(detail.as_str()));
                     #[cfg(target_os = "none")]
                     {
                         forwarded = true;
                     }
+                } else {
+                    self.emit_auth_failure("SPAWN");
                 }
             }
             Command::Kill(ident) => {
@@ -405,10 +484,14 @@ where
                     let message = format_message(format_args!("console: kill {}", ident.as_str()));
                     self.audit.info(message.as_str());
                     self.metrics.accepted_commands += 1;
+                    let detail = format_message(format_args!("id={}", ident.as_str()));
+                    self.emit_ack_ok("KILL", Some(detail.as_str()));
                     #[cfg(target_os = "none")]
                     {
                         forwarded = true;
                     }
+                } else {
+                    self.emit_auth_failure("KILL");
                 }
             }
         }
@@ -447,12 +530,15 @@ where
             let message = format_message(format_args!("attach throttled ({} ms)", delay));
             self.audit.denied(message.as_str());
             self.metrics.denied_commands += 1;
+            let detail = format_message(format_args!("reason=throttled delay_ms={delay}"));
+            self.emit_ack_err("ATTACH", Some(detail.as_str()));
             return;
         }
 
         let Some(requested_role) = parse_role(&role) else {
             self.audit.denied("attach: invalid role");
             self.metrics.denied_commands += 1;
+            self.emit_ack_err("ATTACH", Some("reason=invalid-role"));
             return;
         };
 
@@ -462,6 +548,13 @@ where
             let message = format_message(format_args!("attach rate limited: {}", err));
             self.audit.denied(message.as_str());
             self.metrics.denied_commands += 1;
+            let detail = match err {
+                ConsoleError::RateLimited(delay) => {
+                    format_message(format_args!("reason=rate-limited delay_ms={delay}"))
+                }
+                other => format_message(format_args!("reason={}", other)),
+            };
+            self.emit_ack_err("ATTACH", Some(detail.as_str()));
             return;
         }
 
@@ -471,10 +564,18 @@ where
             self.throttle.register_success();
             let message = format_message(format_args!("attach accepted role={:?}", requested_role));
             self.audit.info(message.as_str());
+            let role_label = match requested_role {
+                Role::Queen => "queen",
+                Role::WorkerHeartbeat => "worker-heartbeat",
+                Role::WorkerGpu => "worker-gpu",
+            };
+            let detail = format_message(format_args!("role={role_label}"));
+            self.emit_ack_ok("ATTACH", Some(detail.as_str()));
         } else {
             self.throttle.register_failure(self.now_ms);
             self.metrics.denied_commands += 1;
             self.audit.denied("attach denied");
+            self.emit_ack_err("ATTACH", Some("reason=denied"));
         }
     }
 }
@@ -642,12 +743,14 @@ mod tests {
     fn network_lines_feed_parser() {
         struct FakeNet {
             lines: heapless::Vec<HeaplessString<DEFAULT_LINE_CAPACITY>, 4>,
+            sent: heapless::Vec<HeaplessString<DEFAULT_LINE_CAPACITY>, 4>,
         }
 
         impl FakeNet {
             fn new() -> Self {
                 Self {
                     lines: heapless::Vec::new(),
+                    sent: heapless::Vec::new(),
                 }
             }
         }
@@ -674,6 +777,14 @@ mod tests {
                     visitor(line);
                 }
             }
+
+            fn send_console_line(&mut self, line: &str) {
+                let mut buf = HeaplessString::new();
+                if buf.push_str(line).is_err() {
+                    return;
+                }
+                let _ = self.sent.push(buf);
+            }
         }
 
         let driver = LoopbackSerial::<16>::new();
@@ -694,5 +805,65 @@ mod tests {
             .entries
             .iter()
             .any(|entry| entry.contains("attach accepted")));
+        assert!(net
+            .sent
+            .iter()
+            .any(|line| line.as_str().starts_with("OK ATTACH")));
+    }
+
+    #[test]
+    fn console_acknowledgements_emit_expected_lines() {
+        let driver = LoopbackSerial::<128>::new();
+        let serial = SerialPort::<_, 128, 128, 64>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit);
+        {
+            let driver = pump.serial_mut().driver_mut();
+            driver.push_rx(b"log\nattach queen ticket\nlog\n");
+        }
+        pump.poll();
+        pump.poll();
+        pump.poll();
+        let tx = {
+            let driver = pump.serial_mut().driver_mut();
+            driver.drain_tx()
+        };
+        let transcript: Vec<u8> = tx.into_iter().collect();
+        let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
+        assert!(
+            rendered.contains("ERR LOG reason=unauthenticated"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("OK ATTACH role=queen"), "{rendered}");
+        assert!(rendered.contains("OK LOG"), "{rendered}");
+    }
+
+    #[test]
+    fn ping_generates_pong_ack() {
+        let driver = LoopbackSerial::<32>::new();
+        let serial = SerialPort::<_, 32, 32, 32>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "pong").unwrap();
+        let mut audit = AuditLog::new();
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit);
+        {
+            let driver = pump.serial_mut().driver_mut();
+            driver.push_rx(b"PING\n");
+        }
+        pump.poll();
+        pump.poll();
+        let tx = {
+            let driver = pump.serial_mut().driver_mut();
+            driver.drain_tx()
+        };
+        let transcript: Vec<u8> = tx.into_iter().collect();
+        let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
+        assert!(rendered.contains("PONG"), "{rendered}");
     }
 }

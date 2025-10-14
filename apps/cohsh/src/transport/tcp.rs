@@ -1,6 +1,7 @@
 // Author: Lukas Bower
 //! TCP transport backend for the Cohesix shell console.
 
+use std::collections::VecDeque;
 use std::io::{self, BufRead, BufReader, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::thread;
@@ -22,6 +23,8 @@ const DEFAULT_RETRY_BACKOFF: Duration = Duration::from_millis(250);
 const DEFAULT_RETRY_CEILING: Duration = Duration::from_secs(3);
 /// Maximum retries when sending commands or recovering after a disconnect.
 const DEFAULT_MAX_RETRIES: usize = 5;
+/// Maximum number of acknowledgement lines retained between drains.
+const MAX_PENDING_ACK: usize = 32;
 
 #[derive(Debug, Clone)]
 struct SessionCache {
@@ -95,6 +98,7 @@ pub struct TcpTransport {
     last_probe: Option<Instant>,
     session_cache: Option<SessionCache>,
     telemetry: ConnectionTelemetry,
+    pending_ack: VecDeque<String>,
 }
 
 impl TcpTransport {
@@ -115,6 +119,7 @@ impl TcpTransport {
             last_probe: None,
             session_cache: None,
             telemetry: ConnectionTelemetry::default(),
+            pending_ack: VecDeque::new(),
         }
     }
 
@@ -343,6 +348,7 @@ impl TcpTransport {
             self.send_line(&attach_line)?;
             match self.next_protocol_line()? {
                 Some(response) => {
+                    let _ = self.record_ack(&response);
                     if response.starts_with("OK") {
                         return Ok(());
                     }
@@ -408,6 +414,17 @@ impl TcpTransport {
         line.trim_end_matches(['\r', '\n']).to_owned()
     }
 
+    fn record_ack(&mut self, line: &str) -> bool {
+        if !(line.starts_with("OK") || line.starts_with("ERR")) {
+            return false;
+        }
+        if self.pending_ack.len() >= MAX_PENDING_ACK {
+            self.pending_ack.pop_front();
+        }
+        self.pending_ack.push_back(line.to_owned());
+        true
+    }
+
     fn next_delay(current: Duration, ceiling: Duration) -> Duration {
         let doubled = current + current;
         if doubled > ceiling {
@@ -432,6 +449,7 @@ impl Transport for TcpTransport {
             self.send_line(&attach_line)?;
             match self.next_protocol_line()? {
                 Some(response) => {
+                    let _ = self.record_ack(&response);
                     if !response.starts_with("OK") {
                         return Err(anyhow!("remote attach failed: {response}"));
                     }
@@ -468,6 +486,12 @@ impl Transport for TcpTransport {
             loop {
                 match self.next_protocol_line()? {
                     Some(response) => {
+                        if self.record_ack(&response) {
+                            if response.starts_with("ERR") {
+                                return Err(anyhow!("tail failed: {response}"));
+                            }
+                            continue;
+                        }
                         if response == "END" {
                             return Ok(lines);
                         }
@@ -489,6 +513,10 @@ impl Transport for TcpTransport {
                 }
             }
         }
+    }
+
+    fn drain_acknowledgements(&mut self) -> Vec<String> {
+        self.pending_ack.drain(..).collect()
     }
 }
 
@@ -536,8 +564,9 @@ mod tests {
                 while reader.read_line(&mut line).unwrap_or(0) > 0 {
                     let trimmed = line.trim();
                     if trimmed.starts_with("ATTACH") {
-                        writeln!(stream, "OK session").unwrap();
+                        writeln!(stream, "OK ATTACH role=queen").unwrap();
                     } else if trimmed.starts_with("TAIL") {
+                        writeln!(stream, "OK TAIL path=/log/queen.log").unwrap();
                         if connection_barrier.load(Ordering::SeqCst) == 1 {
                             writeln!(stream, "line one").unwrap();
                             stream.flush().unwrap();
@@ -559,7 +588,13 @@ mod tests {
             .with_heartbeat_interval(Duration::from_millis(50))
             .with_max_retries(4);
         let session = transport.attach(Role::Queen, None).unwrap();
+        let attach_ack = transport.drain_acknowledgements();
+        assert_eq!(attach_ack, vec!["OK ATTACH role=queen".to_owned()]);
         let logs = transport.tail(&session, "/log/queen.log").unwrap();
         assert_eq!(logs, vec!["line one".to_owned(), "line two".to_owned()]);
+        let tail_ack = transport.drain_acknowledgements();
+        assert!(tail_ack
+            .iter()
+            .any(|ack| ack.starts_with("OK TAIL path=/log/queen.log")));
     }
 }

@@ -1,3 +1,5 @@
+// Author: Lukas Bower
+
 //! Networking subsystem abstractions for host and seL4 targets.
 
 use crate::serial::DEFAULT_LINE_CAPACITY;
@@ -33,6 +35,9 @@ pub trait NetPoller {
         &mut self,
         visitor: &mut dyn FnMut(HeaplessString<DEFAULT_LINE_CAPACITY>),
     );
+
+    /// Queue a console line for transmission to remote clients.
+    fn send_console_line(&mut self, line: &str);
 }
 
 #[cfg(target_os = "none")]

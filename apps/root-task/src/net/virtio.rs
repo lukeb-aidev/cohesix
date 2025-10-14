@@ -104,6 +104,7 @@ pub struct NetStack {
     tcp_handle: SocketHandle,
     line_buffer: HeaplessString<DEFAULT_LINE_CAPACITY>,
     console_lines: Deque<HeaplessString<DEFAULT_LINE_CAPACITY>, CONSOLE_QUEUE_DEPTH>,
+    outbound_lines: Deque<HeaplessString<DEFAULT_LINE_CAPACITY>, CONSOLE_QUEUE_DEPTH>,
     telemetry: NetTelemetry,
 }
 
@@ -138,6 +139,7 @@ impl NetStack {
             tcp_handle: SocketHandle::default(),
             line_buffer: HeaplessString::new(),
             console_lines: Deque::new(),
+            outbound_lines: Deque::new(),
             telemetry: NetTelemetry::default(),
         };
         stack.initialise_socket();
@@ -224,8 +226,27 @@ impl NetStack {
             }
         }
 
-        if socket.can_send() && !self.console_lines.is_empty() {
-            let _ = socket.send_slice(b"");
+        if socket.can_send() && !self.outbound_lines.is_empty() {
+            while socket.can_send() {
+                let Some(line) = self.outbound_lines.pop_front() else {
+                    break;
+                };
+                let mut payload: HeaplessVec<u8, { DEFAULT_LINE_CAPACITY + 2 }> =
+                    HeaplessVec::new();
+                let _ = payload.extend_from_slice(line.as_bytes());
+                let _ = payload.push(b'\n');
+                match socket.send_slice(payload.as_slice()) {
+                    Ok(sent) => {
+                        if sent != payload.len() {
+                            self.telemetry.tx_drops = self.telemetry.tx_drops.saturating_add(1);
+                        }
+                    }
+                    Err(_) => {
+                        let _ = self.outbound_lines.push_front(line);
+                        break;
+                    }
+                }
+            }
         }
 
         match socket.state() {
@@ -267,6 +288,22 @@ impl NetPoller for NetStack {
     ) {
         while let Some(line) = self.console_lines.pop_front() {
             visitor(line);
+        }
+    }
+
+    fn send_console_line(&mut self, line: &str) {
+        let mut buf: HeaplessString<DEFAULT_LINE_CAPACITY> = HeaplessString::new();
+        if buf.push_str(line).is_err() {
+            self.telemetry.tx_drops = self.telemetry.tx_drops.saturating_add(1);
+            return;
+        }
+        match self.outbound_lines.push_back(buf) {
+            Ok(()) => {}
+            Err(buf) => {
+                let _ = self.outbound_lines.pop_front();
+                let _ = self.outbound_lines.push_back(buf);
+                self.telemetry.tx_drops = self.telemetry.tx_drops.saturating_add(1);
+            }
         }
     }
 }

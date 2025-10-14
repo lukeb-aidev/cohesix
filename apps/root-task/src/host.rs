@@ -38,7 +38,7 @@ pub fn run_with_writer<W: Write>(mut writer: W) -> Result<()> {
         { DEFAULT_LINE_CAPACITY },
     > = SerialPort::new(driver);
     let timer = SleepTimer::new(Duration::from_millis(25), TICK_LIMIT);
-    let ipc = HostIpc::default();
+    let ipc = HostIpc;
     let mut tickets: TicketTable<8> = TicketTable::new();
     tickets
         .register(Role::Queen, QUEEN_TICKET)
