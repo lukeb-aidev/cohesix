@@ -76,9 +76,13 @@ const PAGE_BITS: usize = 12;
 const PAGE_TABLE_BITS: usize = 12;
 const PAGE_SIZE: usize = 1 << PAGE_BITS;
 const PAGE_TABLE_ALIGN: usize = 1 << 21;
+const PAGE_DIRECTORY_ALIGN: usize = 1 << 30;
+const PAGE_UPPER_DIRECTORY_ALIGN: usize = 1 << 39;
 const DEVICE_VADDR_BASE: usize = 0xA000_0000;
 const DMA_VADDR_BASE: usize = 0xB000_0000;
 const MAX_PAGE_TABLES: usize = 64;
+const MAX_PAGE_DIRECTORIES: usize = 32;
+const MAX_PAGE_UPPER_DIRECTORIES: usize = 8;
 const WORD_BITS: seL4_Word = (mem::size_of::<seL4_Word>() * 8) as seL4_Word;
 
 /// Simple bump allocator for CSpace slots rooted at the initial thread's CNode.
@@ -432,6 +436,8 @@ pub struct KernelEnv<'a> {
     slots: SlotAllocator,
     untyped: UntypedCatalog<'a>,
     page_tables: PageTableBookkeeper<MAX_PAGE_TABLES>,
+    page_directories: PageDirectoryBookkeeper<MAX_PAGE_DIRECTORIES>,
+    page_upper_directories: PageUpperDirectoryBookkeeper<MAX_PAGE_UPPER_DIRECTORIES>,
     device_cursor: usize,
     dma_cursor: usize,
     last_retype: Option<RetypeLog>,
@@ -458,6 +464,12 @@ pub struct KernelEnvSnapshot {
     pub cspace_used: usize,
     /// Number of CSpace slots remaining for future allocations.
     pub cspace_remaining: usize,
+    /// Number of level-3 page tables currently mapped into the VSpace.
+    pub page_tables_mapped: usize,
+    /// Number of level-2 page directories currently mapped into the VSpace.
+    pub page_directories_mapped: usize,
+    /// Number of level-1 page upper directories currently mapped into the VSpace.
+    pub page_upper_directories_mapped: usize,
     /// Summary of untyped catalogue utilisation.
     pub untyped: UntypedStats,
     /// Last observed retype attempt emitted by the environment.
@@ -480,6 +492,16 @@ pub enum RetypeKind {
     /// Page table backing a virtual mapping.
     PageTable {
         /// Virtual base address of the page table's mapping range.
+        vaddr: usize,
+    },
+    /// Page directory covering a 1 GiB region in the VSpace.
+    PageDirectory {
+        /// Virtual base address of the page directory's mapping range.
+        vaddr: usize,
+    },
+    /// Page upper directory covering a 512 GiB region in the VSpace.
+    PageUpperDirectory {
+        /// Virtual base address of the page upper directory's mapping range.
         vaddr: usize,
     },
 }
@@ -580,6 +602,8 @@ impl<'a> KernelEnv<'a> {
             slots,
             untyped,
             page_tables: PageTableBookkeeper::new(),
+            page_directories: PageDirectoryBookkeeper::new(),
+            page_upper_directories: PageUpperDirectoryBookkeeper::new(),
             device_cursor: DEVICE_VADDR_BASE,
             dma_cursor: DMA_VADDR_BASE,
             last_retype: None,
@@ -612,6 +636,9 @@ impl<'a> KernelEnv<'a> {
             cspace_capacity,
             cspace_used: self.slots.used(),
             cspace_remaining,
+            page_tables_mapped: self.page_tables.count(),
+            page_directories_mapped: self.page_directories.count(),
+            page_upper_directories_mapped: self.page_upper_directories.count(),
             untyped: self.untyped.stats(),
             last_retype: self.last_retype,
         }
@@ -829,6 +856,7 @@ impl<'a> KernelEnv<'a> {
     }
 
     fn ensure_page_table(&mut self, vaddr: usize) -> Result<(), seL4_Error> {
+        self.ensure_page_directory(vaddr)?;
         let pt_base = PageTableBookkeeper::<MAX_PAGE_TABLES>::base_for(vaddr);
         if self.page_tables.contains_base(pt_base) {
             return Ok(());
@@ -867,11 +895,112 @@ impl<'a> KernelEnv<'a> {
             unsafe {
                 let _ = seL4_CNode_Delete(self.init_cnode_cap(), pt_slot, self.slots.depth());
             }
+            self.untyped.release(&reserved);
             return Err(map_res);
         }
 
         self.page_tables
             .remember_base(pt_base)
+            .map_err(|_| seL4_NotEnoughMemory)?;
+        Ok(())
+    }
+
+    fn ensure_page_directory(&mut self, vaddr: usize) -> Result<(), seL4_Error> {
+        let pd_base = PageDirectoryBookkeeper::<MAX_PAGE_DIRECTORIES>::base_for(vaddr);
+        if self.page_directories.contains_base(pd_base) {
+            return Ok(());
+        }
+
+        self.ensure_page_upper_directory(vaddr)?;
+
+        let reserved = self
+            .untyped
+            .reserve_ram(PAGE_TABLE_BITS as u8)
+            .ok_or(seL4_NotEnoughMemory)?;
+        let pd_slot = self.allocate_slot();
+        let trace = self.prepare_retype_trace(
+            &reserved,
+            pd_slot,
+            seL4_ARM_PageTableObject,
+            PAGE_TABLE_BITS as seL4_Word,
+            RetypeKind::PageDirectory { vaddr: pd_base },
+        );
+        self.record_retype(trace, RetypeStatus::Pending);
+        if let Err(err) = self.retype_page_table(reserved.cap(), &trace) {
+            self.record_retype(trace, RetypeStatus::Err(err));
+            self.untyped.release(&reserved);
+            return Err(err);
+        }
+        self.record_retype(trace, RetypeStatus::Ok);
+
+        let map_res = unsafe {
+            seL4_ARM_PageTable_Map(
+                pd_slot,
+                seL4_CapInitThreadVSpace,
+                pd_base,
+                seL4_ARM_Page_Default,
+            )
+        };
+        if map_res != seL4_NoError {
+            self.record_retype(trace, RetypeStatus::Err(map_res));
+            unsafe {
+                let _ = seL4_CNode_Delete(self.init_cnode_cap(), pd_slot, self.slots.depth());
+            }
+            self.untyped.release(&reserved);
+            return Err(map_res);
+        }
+
+        self.page_directories
+            .remember_base(pd_base)
+            .map_err(|_| seL4_NotEnoughMemory)?;
+        Ok(())
+    }
+
+    fn ensure_page_upper_directory(&mut self, vaddr: usize) -> Result<(), seL4_Error> {
+        let pud_base = PageUpperDirectoryBookkeeper::<MAX_PAGE_UPPER_DIRECTORIES>::base_for(vaddr);
+        if self.page_upper_directories.contains_base(pud_base) {
+            return Ok(());
+        }
+
+        let reserved = self
+            .untyped
+            .reserve_ram(PAGE_TABLE_BITS as u8)
+            .ok_or(seL4_NotEnoughMemory)?;
+        let pud_slot = self.allocate_slot();
+        let trace = self.prepare_retype_trace(
+            &reserved,
+            pud_slot,
+            seL4_ARM_PageTableObject,
+            PAGE_TABLE_BITS as seL4_Word,
+            RetypeKind::PageUpperDirectory { vaddr: pud_base },
+        );
+        self.record_retype(trace, RetypeStatus::Pending);
+        if let Err(err) = self.retype_page_table(reserved.cap(), &trace) {
+            self.record_retype(trace, RetypeStatus::Err(err));
+            self.untyped.release(&reserved);
+            return Err(err);
+        }
+        self.record_retype(trace, RetypeStatus::Ok);
+
+        let map_res = unsafe {
+            seL4_ARM_PageTable_Map(
+                pud_slot,
+                seL4_CapInitThreadVSpace,
+                pud_base,
+                seL4_ARM_Page_Default,
+            )
+        };
+        if map_res != seL4_NoError {
+            self.record_retype(trace, RetypeStatus::Err(map_res));
+            unsafe {
+                let _ = seL4_CNode_Delete(self.init_cnode_cap(), pud_slot, self.slots.depth());
+            }
+            self.untyped.release(&reserved);
+            return Err(map_res);
+        }
+
+        self.page_upper_directories
+            .remember_base(pud_base)
             .map_err(|_| seL4_NotEnoughMemory)?;
         Ok(())
     }
@@ -911,11 +1040,11 @@ impl<'a> KernelEnv<'a> {
 }
 
 #[derive(Clone)]
-struct PageTableBookkeeper<const N: usize> {
+struct TranslationBookkeeper<const N: usize, const ALIGN: usize> {
     entries: Vec<usize, N>,
 }
 
-impl<const N: usize> PageTableBookkeeper<N> {
+impl<const N: usize, const ALIGN: usize> TranslationBookkeeper<N, ALIGN> {
     fn new() -> Self {
         Self {
             entries: Vec::new(),
@@ -923,9 +1052,8 @@ impl<const N: usize> PageTableBookkeeper<N> {
     }
 
     fn base_for(vaddr: usize) -> usize {
-        let align = PAGE_TABLE_ALIGN;
-        debug_assert!(align.is_power_of_two());
-        vaddr & !(align - 1)
+        debug_assert!(ALIGN.is_power_of_two());
+        vaddr & !(ALIGN - 1)
     }
 
     fn contains_base(&self, base: usize) -> bool {
@@ -950,11 +1078,15 @@ impl<const N: usize> PageTableBookkeeper<N> {
         }
     }
 
-    #[cfg(test)]
-    fn len(&self) -> usize {
+    fn count(&self) -> usize {
         self.entries.len()
     }
 }
+
+type PageTableBookkeeper<const N: usize> = TranslationBookkeeper<N, PAGE_TABLE_ALIGN>;
+type PageDirectoryBookkeeper<const N: usize> = TranslationBookkeeper<N, PAGE_DIRECTORY_ALIGN>;
+type PageUpperDirectoryBookkeeper<const N: usize> =
+    TranslationBookkeeper<N, PAGE_UPPER_DIRECTORY_ALIGN>;
 
 #[cfg(test)]
 mod tests {
@@ -969,13 +1101,28 @@ mod tests {
     }
 
     #[test]
+    fn page_directory_alignment_matches_one_gib_regions() {
+        let base0 = PageDirectoryBookkeeper::<2>::base_for(0x4000_1000);
+        assert_eq!(base0, 0x4000_0000);
+        let base1 = PageDirectoryBookkeeper::<2>::base_for(0x7FFF_FFFF);
+        assert_eq!(base1, 0x4000_0000);
+    }
+
+    #[test]
+    fn page_upper_directory_alignment_matches_512_gib_regions() {
+        let addr = 0x0002_0000_1000usize;
+        let base = PageUpperDirectoryBookkeeper::<2>::base_for(addr);
+        assert_eq!(base, 0x0002_0000_0000);
+    }
+
+    #[test]
     fn remember_base_deduplicates_entries() {
         let mut keeper: PageTableBookkeeper<2> = PageTableBookkeeper::new();
         let base = PageTableBookkeeper::<2>::base_for(0x1000);
         assert!(keeper.remember_base(base).is_ok());
         assert!(keeper.remember_base(base).is_ok());
         assert!(keeper.contains_base(base));
-        assert_eq!(keeper.len(), 1);
+        assert_eq!(keeper.count(), 1);
     }
 
     #[test]
@@ -986,7 +1133,7 @@ mod tests {
         assert!(keeper.remember_base(base0).is_ok());
         assert!(keeper.remember_base(base1).is_err());
         assert!(keeper.contains_base(base0));
-        assert_eq!(keeper.len(), 1);
+        assert_eq!(keeper.count(), 1);
     }
 
     #[test]
