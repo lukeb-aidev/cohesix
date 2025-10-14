@@ -1,3 +1,5 @@
+// Author: Lukas Bower
+
 #![cfg(not(target_os = "none"))]
 
 extern crate alloc;
@@ -262,6 +264,7 @@ pub struct NetStack {
     hardware_addr: EthernetAddress,
     telemetry: NetTelemetry,
     console_lines: Deque<HeaplessString<DEFAULT_LINE_CAPACITY>, CONSOLE_QUEUE_DEPTH>,
+    outbound_lines: Deque<HeaplessString<DEFAULT_LINE_CAPACITY>, CONSOLE_QUEUE_DEPTH>,
 }
 
 impl NetStack {
@@ -287,6 +290,7 @@ impl NetStack {
             hardware_addr: mac,
             telemetry: NetTelemetry::default(),
             console_lines: Deque::new(),
+            outbound_lines: Deque::new(),
         };
         (stack, handle)
     }
@@ -359,6 +363,22 @@ impl NetPoller for NetStack {
     ) {
         while let Some(line) = self.console_lines.pop_front() {
             visitor(line);
+        }
+    }
+
+    fn send_console_line(&mut self, line: &str) {
+        let mut buf: HeaplessString<DEFAULT_LINE_CAPACITY> = HeaplessString::new();
+        if buf.push_str(line).is_err() {
+            self.telemetry.tx_drops = self.telemetry.tx_drops.saturating_add(1);
+            return;
+        }
+        match self.outbound_lines.push_back(buf) {
+            Ok(()) => {}
+            Err(buf) => {
+                let _ = self.outbound_lines.pop_front();
+                let _ = self.outbound_lines.push_back(buf);
+                self.telemetry.tx_drops = self.telemetry.tx_drops.saturating_add(1);
+            }
         }
     }
 }
