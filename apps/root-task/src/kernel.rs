@@ -238,6 +238,16 @@ pub extern "C" fn kernel_start(bootinfo: *const BootInfoHeader) -> ! {
             );
             console.writeln_prefixed(cspace.as_str());
 
+            let mut vspace = heapless::String::<192>::new();
+            let _ = write!(
+                vspace,
+                "translation_state tables={tables} directories={directories} upper_directories={upper}",
+                tables = snapshot.page_tables_mapped,
+                directories = snapshot.page_directories_mapped,
+                upper = snapshot.page_upper_directories_mapped,
+            );
+            console.writeln_prefixed(vspace.as_str());
+
             let mut root_info = heapless::String::<160>::new();
             let _ = write!(
                 root_info,
@@ -334,6 +344,20 @@ pub extern "C" fn kernel_start(bootinfo: *const BootInfoHeader) -> ! {
                         let _ = write!(
                             kind,
                             "retype.kind=page_table base_vaddr=0x{vaddr:08x}",
+                            vaddr = vaddr,
+                        );
+                    }
+                    RetypeKind::PageDirectory { vaddr } => {
+                        let _ = write!(
+                            kind,
+                            "retype.kind=page_directory base_vaddr=0x{vaddr:08x}",
+                            vaddr = vaddr,
+                        );
+                    }
+                    RetypeKind::PageUpperDirectory { vaddr } => {
+                        let _ = write!(
+                            kind,
+                            "retype.kind=page_upper_directory base_vaddr=0x{vaddr:08x}",
                             vaddr = vaddr,
                         );
                     }
