@@ -442,11 +442,11 @@ pub struct RetypeTrace {
     /// Offset within the init CSpace used to resolve `dest_slot` (equals `dest_slot` for single-level roots).
     pub dest_offset: seL4_Word,
     /// `nodeDepth` argument supplied to `seL4_Untyped_Retype` while resolving the destination CNode.
-    /// Represents the number of guard bits traversed beneath `cnode_root`; for the flat init CSpace this
-    /// MUST remain zero so the kernel addresses the root CNode directly.
+    /// Represents the guard depth traversed beneath `cnode_root`. v0 policy: MUST be zero so the
+    /// kernel addresses the init CSpace root CNode directly.
     pub cnode_depth: seL4_Word,
     /// `nodeIndex` argument supplied to `seL4_Untyped_Retype` when selecting a sub-CNode below
-    /// `cnode_root`. Because the init thread's CSpace is single-level this value is always zero.
+    /// `cnode_root`. v0 policy: zero (the init CSpace is single-level so we target the root CNode).
     pub node_index: seL4_Word,
     /// Object type requested from the kernel.
     pub object_type: seL4_Word,
@@ -607,7 +607,7 @@ impl<'a> KernelEnv<'a> {
         untyped_cap: seL4_Untyped,
         trace: &RetypeTrace,
     ) -> Result<(), seL4_Error> {
-        let res = self.perform_retype(untyped_cap, trace);
+        let res = self.perform_retype(untyped_cap, *trace);
         if res == seL4_NoError {
             Ok(())
         } else {
@@ -620,7 +620,7 @@ impl<'a> KernelEnv<'a> {
         untyped_cap: seL4_Untyped,
         trace: &RetypeTrace,
     ) -> Result<(), seL4_Error> {
-        let res = self.perform_retype(untyped_cap, trace);
+        let res = self.perform_retype(untyped_cap, *trace);
         if res == seL4_NoError {
             Ok(())
         } else {
@@ -628,33 +628,34 @@ impl<'a> KernelEnv<'a> {
         }
     }
 
-    fn perform_retype(&self, untyped_cap: seL4_Untyped, trace: &RetypeTrace) -> seL4_Error {
-        let (sanitised, init_bits) = self.sanitise_retype_trace(trace);
+    #[inline(always)]
+    fn perform_retype(&self, untyped_cap: seL4_Untyped, trace: RetypeTrace) -> seL4_Error {
+        let (trace, init_bits) = self.sanitise_retype_trace(trace);
 
         log::trace!(
             "Retype params → root=0x{:x} index={} depth={} offset=0x{:x} (init_bits={})",
-            sanitised.cnode_root,
-            sanitised.node_index,
-            sanitised.cnode_depth,
-            sanitised.dest_offset,
+            trace.cnode_root,
+            trace.node_index,
+            trace.cnode_depth,
+            trace.dest_offset,
             init_bits
         );
 
         unsafe {
             seL4_Untyped_Retype(
                 untyped_cap,
-                sanitised.object_type,
-                sanitised.object_size_bits,
-                sanitised.cnode_root,
-                sanitised.node_index,
-                sanitised.cnode_depth,
-                sanitised.dest_offset,
+                trace.object_type,
+                trace.object_size_bits,
+                trace.cnode_root,
+                trace.node_index,
+                trace.cnode_depth,
+                trace.dest_offset,
                 1,
             )
         }
     }
 
-    fn sanitise_retype_trace(&self, trace: &RetypeTrace) -> (RetypeTrace, usize) {
+    fn sanitise_retype_trace(&self, mut trace: RetypeTrace) -> (RetypeTrace, usize) {
         let init_bits = self.bootinfo.initThreadCNodeSizeBits as usize;
         let max_slots = 1usize.checked_shl(init_bits as u32).unwrap_or_else(|| {
             panic!(
@@ -665,13 +666,11 @@ impl<'a> KernelEnv<'a> {
 
         assert_eq!(
             trace.node_index, 0,
-            "Retype: node_index must be 0 for init CSpace (got {})",
-            trace.node_index
+            "Retype: node_index must be 0 in init CSpace",
         );
         assert_eq!(
             trace.cnode_depth, 0,
-            "Retype: cnode_depth must be 0 for init CSpace (got {})",
-            trace.cnode_depth
+            "Retype: cnode_depth must be 0 in init CSpace",
         );
         assert!(
             (trace.dest_offset as usize) < max_slots,
@@ -681,11 +680,10 @@ impl<'a> KernelEnv<'a> {
             max_slots
         );
 
-        let mut sanitised = *trace;
-        sanitised.node_index = 0;
-        sanitised.cnode_depth = 0;
+        trace.node_index = 0;
+        trace.cnode_depth = 0;
 
-        (sanitised, init_bits)
+        (trace, init_bits)
     }
 
     fn map_frame(
@@ -944,7 +942,7 @@ mod tests {
             kind: RetypeKind::DevicePage { paddr: 0 },
         };
 
-        let (sanitised, init_bits) = env.sanitise_retype_trace(&trace);
+        let (sanitised, init_bits) = env.sanitise_retype_trace(trace);
         assert_eq!(sanitised.node_index, 0);
         assert_eq!(sanitised.cnode_depth, 0);
         assert_eq!(sanitised.dest_offset, slot);
@@ -977,27 +975,27 @@ mod tests {
             kind: RetypeKind::DmaPage { paddr: 0 },
         };
 
-        let (_, init_bits) = env.sanitise_retype_trace(&valid_trace);
+        let (_, init_bits) = env.sanitise_retype_trace(valid_trace);
         assert_eq!(init_bits, 13);
 
         let mut invalid_index = valid_trace;
         invalid_index.node_index = 1;
         let index_check = panic::catch_unwind(AssertUnwindSafe(|| {
-            env.sanitise_retype_trace(&invalid_index);
+            env.sanitise_retype_trace(invalid_index);
         }));
         assert!(index_check.is_err());
 
         let mut invalid_depth = valid_trace;
         invalid_depth.cnode_depth = 1;
         let depth_check = panic::catch_unwind(AssertUnwindSafe(|| {
-            env.sanitise_retype_trace(&invalid_depth);
+            env.sanitise_retype_trace(invalid_depth);
         }));
         assert!(depth_check.is_err());
 
         let mut invalid_offset = valid_trace;
         invalid_offset.dest_offset = 1 << 13;
         let offset_check = panic::catch_unwind(AssertUnwindSafe(|| {
-            env.sanitise_retype_trace(&invalid_offset);
+            env.sanitise_retype_trace(invalid_offset);
         }));
         assert!(offset_check.is_err());
     }

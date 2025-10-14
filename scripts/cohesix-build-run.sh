@@ -25,7 +25,7 @@ Options:
   --qemu <path>         QEMU binary to execute (default: qemu-system-aarch64)
   --transport <kind>    Console transport to launch (tcp|qemu, default: tcp)
   --tcp-port <port>     TCP port exposed by QEMU for the remote console (default: 31337)
-  --cohsh-launch <mode> Launch cohsh inline, via macOS Terminal, or auto-detect (auto|inline|macos-terminal)
+  --cohsh-launch <mode> Launch cohsh inline, in a macOS background session, or auto-detect (auto|inline|macos-terminal)
   --no-run              Skip launching QEMU after building the artefacts
   --raw-qemu            Launch QEMU directly instead of cohsh (disables interactive CLI)
   --dtb <path>          Override the device tree blob passed to QEMU
@@ -264,11 +264,7 @@ main() {
     local EFFECTIVE_COHSH_MODE="$COHSH_LAUNCH_MODE"
     if [[ "$EFFECTIVE_COHSH_MODE" == "auto" ]]; then
         if [[ "$TRANSPORT" == "tcp" && "$HOST_OS" == "Darwin" ]]; then
-            if command -v osascript >/dev/null 2>&1; then
-                EFFECTIVE_COHSH_MODE="macos-terminal"
-            else
-                EFFECTIVE_COHSH_MODE="inline"
-            fi
+            EFFECTIVE_COHSH_MODE="macos-terminal"
         else
             EFFECTIVE_COHSH_MODE="inline"
         fi
@@ -411,6 +407,10 @@ main() {
 
     install -m 0755 "$KERNEL_PATH" "$KERNEL_STAGE_PATH"
     install -m 0755 "$ROOTFS_DIR/root-task" "$ROOTSERVER_STAGE_PATH"
+    log "Packaged component binary: $ROOTSERVER_STAGE_PATH"
+    if [[ -f "$ROOTSERVER_STAGE_PATH" ]]; then
+        shasum -a 256 "$ROOTSERVER_STAGE_PATH" | awk '{printf "[cohesix-build] rootserver sha256=%s\\n", $1}'
+    fi
 
     describe_file "seL4 kernel" "$KERNEL_STAGE_PATH"
     describe_file "Root server" "$ROOTSERVER_STAGE_PATH"
