@@ -39,6 +39,9 @@ preparing and executing tasks.
 - QEMU serial logs `PING 1` / `PONG 1` sequence exactly once per boot.
 - No panics; QEMU terminates cleanly via monitor command.
 
+**M1 → M2 Transition Note**
+- Retype now targets the init root CNode with `(node_index=0, node_depth=0, slot)` and validates capacity via `initThreadCNodeSizeBits`.
+
 ## Milestone 2 — NineDoor Minimal 9P
 **Deliverables**
 - Secure9P codec + fid/session table implementing `version`, `attach`, `walk`, `open`, `read`, `write`, `clunk`.
