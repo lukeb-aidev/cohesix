@@ -29,6 +29,8 @@
 - Owns seL4 initial caps, configures memory, and manages scheduling budgets.
 - Provides a minimal RPC surface to NineDoor for spawning/killing tasks and for timer events.
 - Enforces budget expiry (ticks, ops, ttl) and revokes capabilities on violation.
+- Pre-seeds the device and DMA windows with translation tables so device mappings never trigger `seL4_FailedLookup` (error 6)
+  when the kernel installs frames for peripherals.
 - Exposes a deterministic event pump (`event::EventPump`) that coordinates serial, timer, networking, and IPC tasks. The pump
   emits structured audit lines whenever subsystems are initialised and ensures each poll cycle services every source without
   revisiting the legacy spin loop.
