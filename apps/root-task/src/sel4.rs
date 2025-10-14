@@ -19,6 +19,27 @@ use sel4_sys::{
 
 pub use sel4_sys::{seL4_CapInitThreadCNode, seL4_CapInitThreadVSpace, seL4_Error};
 
+/// Extension trait exposing convenience accessors for frequently used bootinfo fields.
+pub trait BootInfoExt {
+    /// Returns the writable init thread CNode capability exported via bootinfo.
+    fn init_cnode_cap(&self) -> seL4_CPtr;
+
+    /// Returns the number of bits describing the capacity of the init thread's CSpace root.
+    fn init_cnode_size_bits(&self) -> usize;
+}
+
+impl BootInfoExt for seL4_BootInfo {
+    #[inline(always)]
+    fn init_cnode_cap(&self) -> seL4_CPtr {
+        self.initThreadCNode
+    }
+
+    #[inline(always)]
+    fn init_cnode_size_bits(&self) -> usize {
+        self.initThreadCNodeSizeBits as usize
+    }
+}
+
 const PAGE_BITS: usize = 12;
 const PAGE_TABLE_BITS: usize = 12;
 const PAGE_SIZE: usize = 1 << PAGE_BITS;
@@ -45,7 +66,10 @@ impl SlotAllocator {
             .unwrap_or(usize::MAX);
         debug_assert!(
             (region.end as usize) <= capacity,
-            "bootinfo empty region exceeds root cnode capacity",
+            "bootinfo empty region exceeds root cnode capacity (end={:#x}, capacity={:#x}, bits={})",
+            region.end,
+            capacity,
+            cnode_size_bits
         );
         Self {
             cnode: seL4_CapInitThreadCNode,
@@ -485,7 +509,33 @@ pub struct RetypeLog {
 impl<'a> KernelEnv<'a> {
     /// Builds a new environment from the seL4 bootinfo struct.
     pub fn new(bootinfo: &'a seL4_BootInfo) -> Self {
-        let slots = SlotAllocator::new(bootinfo.empty, bootinfo.initThreadCNodeSizeBits);
+        let root_cnode_bits = bootinfo.init_cnode_size_bits();
+        let capacity = 1usize
+            .checked_shl(root_cnode_bits as u32)
+            .unwrap_or_else(|| {
+                panic!(
+                    "initThreadCNodeSizeBits {} exceeds host word size",
+                    root_cnode_bits
+                )
+            });
+        let empty_start = bootinfo.empty.start as usize;
+        let empty_end = bootinfo.empty.end as usize;
+        log::info!(
+            "[cohesix:root-task] bootinfo.empty slots [{:#06x}..{:#06x}) span={} root_cnode_bits={}",
+            empty_start,
+            empty_end,
+            empty_end.saturating_sub(empty_start),
+            root_cnode_bits
+        );
+        assert!(
+            empty_end <= capacity,
+            "bootinfo empty region exceeds root cnode capacity (end={:#x}, capacity={:#x}, bits={})",
+            empty_end,
+            capacity,
+            root_cnode_bits
+        );
+
+        let slots = SlotAllocator::new(bootinfo.empty, root_cnode_bits as seL4_Word);
         let untyped = UntypedCatalog::new(bootinfo);
         Self {
             bootinfo,
@@ -506,7 +556,7 @@ impl<'a> KernelEnv<'a> {
     /// Returns the writable init CNode capability published through bootinfo.
     #[inline(always)]
     pub fn init_cnode_cap(&self) -> seL4_CNode {
-        self.bootinfo.initThreadCNode
+        self.bootinfo.init_cnode_cap()
     }
 
     /// Produces a diagnostic snapshot describing allocator state.
@@ -680,7 +730,7 @@ impl<'a> KernelEnv<'a> {
     }
 
     fn sanitise_retype_trace(&self, mut trace: RetypeTrace) -> (RetypeTrace, usize) {
-        let init_bits = self.bootinfo.initThreadCNodeSizeBits as usize;
+        let init_bits = self.bootinfo.init_cnode_size_bits();
         let max_slots = 1usize.checked_shl(init_bits as u32).unwrap_or_else(|| {
             panic!(
                 "initThreadCNodeSizeBits {} exceeds host word size",
@@ -945,6 +995,55 @@ mod tests {
         assert_eq!(trace.cnode_depth, 0);
         assert_eq!(trace.dest_offset, slot);
         assert_eq!(trace.dest_slot, slot);
+    }
+
+    #[test]
+    fn bootinfo_capacity_bits_drive_cspace_math() {
+        let mut bootinfo: seL4_BootInfo = unsafe { core::mem::zeroed() };
+        bootinfo.initThreadCNodeSizeBits = 13;
+        let init_bits = bootinfo.init_cnode_size_bits();
+        assert_eq!(init_bits, 13);
+
+        let capacity = 1usize << init_bits;
+        assert_eq!(capacity, 8192);
+
+        let empty_start = 0x00c8usize;
+        let empty_end = 0x2000usize;
+        assert!(empty_start < empty_end);
+        assert!(empty_end <= capacity);
+    }
+
+    #[test]
+    fn retype_bounds_use_bootinfo_bits_not_path_depth() {
+        let mut bootinfo: seL4_BootInfo = unsafe { core::mem::zeroed() };
+        bootinfo.empty = seL4_SlotRegion {
+            start: 0,
+            end: 1 << 13,
+        };
+        bootinfo.initThreadCNodeSizeBits = 13;
+        bootinfo.initThreadCNode = seL4_CapInitThreadCNode;
+        let bootinfo_ref: &'static mut seL4_BootInfo = Box::leak(Box::new(bootinfo));
+        let env = KernelEnv::new(bootinfo_ref);
+
+        let slot: seL4_CPtr = 0x00c8;
+        let trace = RetypeTrace {
+            untyped_cap: 0x200,
+            untyped_paddr: 0,
+            untyped_size_bits: PAGE_BITS as u8,
+            cnode_root: seL4_CapInitThreadCNode,
+            dest_slot: slot,
+            dest_offset: slot,
+            cnode_depth: 0,
+            node_index: 0,
+            object_type: seL4_ARM_SmallPageObject,
+            object_size_bits: PAGE_BITS as seL4_Word,
+            kind: RetypeKind::DevicePage { paddr: 0 },
+        };
+
+        let (_, init_bits) = env.sanitise_retype_trace(trace);
+        let max_slots = 1usize << init_bits;
+        assert_eq!(init_bits, env.bootinfo().init_cnode_size_bits());
+        assert!(slot as usize < max_slots);
     }
 
     #[test]
