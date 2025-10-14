@@ -8,6 +8,8 @@
 use core::{mem, ptr::NonNull};
 
 use heapless::Vec;
+#[cfg(feature = "sel4-debug")]
+use sel4_sys::seL4_DebugCapIdentify;
 use sel4_sys::{
     seL4_ARM_PageTableObject, seL4_ARM_PageTable_Map, seL4_ARM_Page_Default, seL4_ARM_Page_Map,
     seL4_ARM_Page_Uncached, seL4_ARM_SmallPageObject, seL4_BootInfo, seL4_CNode, seL4_CNode_Delete,
@@ -427,6 +429,10 @@ pub enum RetypeKind {
 }
 
 /// Detailed snapshot of the parameters used for a `seL4_Untyped_Retype` call.
+///
+/// The destination root **must** be the writable init thread CNode capability sourced from
+/// bootinfo. Do not use allocator handles or read-only aliases. The init CSpace is single-level, so
+/// retypes always traverse `(nodeIndex=0, nodeDepth=0)` and select the final slot via `dest_offset`.
 #[derive(Copy, Clone, Debug)]
 pub struct RetypeTrace {
     /// Capability designating the source untyped region.
@@ -495,6 +501,12 @@ impl<'a> KernelEnv<'a> {
     /// Returns the bootinfo pointer passed to the root task.
     pub fn bootinfo(&self) -> &'a seL4_BootInfo {
         self.bootinfo
+    }
+
+    /// Returns the writable init CNode capability published through bootinfo.
+    #[inline(always)]
+    pub fn init_cnode_cap(&self) -> seL4_CNode {
+        self.bootinfo.initThreadCNode
     }
 
     /// Produces a diagnostic snapshot describing allocator state.
@@ -630,7 +642,19 @@ impl<'a> KernelEnv<'a> {
 
     #[inline(always)]
     fn perform_retype(&self, untyped_cap: seL4_Untyped, trace: RetypeTrace) -> seL4_Error {
-        let (trace, init_bits) = self.sanitise_retype_trace(trace);
+        let (mut trace, init_bits) = self.sanitise_retype_trace(trace);
+
+        // Always perform retypes via the writable init thread CNode, targeting the root directly.
+        trace.cnode_root = self.init_cnode_cap();
+        trace.node_index = 0;
+        trace.cnode_depth = 0;
+        trace.dest_offset = trace.dest_slot;
+
+        #[cfg(feature = "sel4-debug")]
+        {
+            let id = unsafe { seL4_DebugCapIdentify(trace.cnode_root) };
+            log::trace!("Retype dest root cap identify: 0x{:x}", id);
+        }
 
         log::trace!(
             "Retype params → root=0x{:x} index={} depth={} offset=0x{:x} (init_bits={})",
@@ -672,16 +696,21 @@ impl<'a> KernelEnv<'a> {
             trace.cnode_depth, 0,
             "Retype: cnode_depth must be 0 in init CSpace",
         );
+        assert_eq!(
+            trace.dest_offset, trace.dest_slot,
+            "Retype: dest_offset must match dest_slot in init CSpace",
+        );
         assert!(
-            (trace.dest_offset as usize) < max_slots,
-            "Retype: dest_offset 0x{:x} out of range (init_bits={}, max_slots={})",
-            trace.dest_offset,
+            (trace.dest_slot as usize) < max_slots,
+            "Retype: dest_slot 0x{:x} out of range (init_bits={}, max_slots={})",
+            trace.dest_slot,
             init_bits,
             max_slots
         );
 
         trace.node_index = 0;
         trace.cnode_depth = 0;
+        trace.dest_offset = trace.dest_slot;
 
         (trace, init_bits)
     }
@@ -771,7 +800,8 @@ impl<'a> KernelEnv<'a> {
         object_size_bits: seL4_Word,
         kind: RetypeKind,
     ) -> RetypeTrace {
-        let cnode_root = self.slots.root();
+        // Always target the writable init CNode capability supplied via bootinfo.
+        let cnode_root = self.init_cnode_cap();
         // The init thread owns a single-level CSpace, so target the root CNode directly.
         let node_index = 0;
         let cnode_depth = 0;
@@ -893,6 +923,7 @@ mod tests {
             end: 1 << 13,
         };
         bootinfo.initThreadCNodeSizeBits = 13;
+        bootinfo.initThreadCNode = seL4_CapInitThreadCNode;
         let bootinfo_ref: &'static mut seL4_BootInfo = Box::leak(Box::new(bootinfo));
         let mut env = KernelEnv::new(bootinfo_ref);
         let reserved = ReservedUntyped {
@@ -924,6 +955,7 @@ mod tests {
             end: 1 << 13,
         };
         bootinfo.initThreadCNodeSizeBits = 13;
+        bootinfo.initThreadCNode = seL4_CapInitThreadCNode;
         let bootinfo_ref: &'static mut seL4_BootInfo = Box::leak(Box::new(bootinfo));
         let env = KernelEnv::new(bootinfo_ref);
 
@@ -959,6 +991,7 @@ mod tests {
             end: 1 << 13,
         };
         bootinfo.initThreadCNodeSizeBits = 13;
+        bootinfo.initThreadCNode = seL4_CapInitThreadCNode;
         let bootinfo_ref: &'static mut seL4_BootInfo = Box::leak(Box::new(bootinfo));
         let env = KernelEnv::new(bootinfo_ref);
         let valid_trace = RetypeTrace {
@@ -993,6 +1026,7 @@ mod tests {
         assert!(depth_check.is_err());
 
         let mut invalid_offset = valid_trace;
+        invalid_offset.dest_slot = 1 << 13;
         invalid_offset.dest_offset = 1 << 13;
         let offset_check = panic::catch_unwind(AssertUnwindSafe(|| {
             env.sanitise_retype_trace(invalid_offset);
