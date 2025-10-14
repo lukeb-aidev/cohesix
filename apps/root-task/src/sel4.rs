@@ -1,6 +1,6 @@
 // Author: Lukas Bower
 //! seL4 resource management helpers for the root task.
-#![cfg(target_os = "none")]
+#![cfg(any(test, target_os = "none"))]
 #![allow(dead_code)]
 #![allow(clippy::missing_panics_doc)]
 #![allow(unsafe_code)]
@@ -9,10 +9,10 @@ use core::{mem, ptr::NonNull};
 
 use heapless::Vec;
 use sel4_sys::{
-    seL4_ARM_PageTableObject, seL4_ARM_PageTable_Map, seL4_ARM_Page_Map, seL4_ARM_Page_Uncached,
-    seL4_ARM_SmallPageObject, seL4_BootInfo, seL4_CNode, seL4_CPtr, seL4_CapRights_ReadWrite,
-    seL4_FailedLookup, seL4_NoError, seL4_NotEnoughMemory, seL4_SlotRegion, seL4_Untyped,
-    seL4_Untyped_Retype, seL4_Word, UntypedDesc, MAX_BOOTINFO_UNTYPEDS,
+    seL4_ARM_PageTableObject, seL4_ARM_PageTable_Map, seL4_ARM_Page_Default, seL4_ARM_Page_Map,
+    seL4_ARM_Page_Uncached, seL4_ARM_SmallPageObject, seL4_BootInfo, seL4_CNode, seL4_CNode_Delete,
+    seL4_CPtr, seL4_CapRights_ReadWrite, seL4_NoError, seL4_NotEnoughMemory, seL4_SlotRegion,
+    seL4_Untyped, seL4_Untyped_Retype, seL4_Word, UntypedDesc, MAX_BOOTINFO_UNTYPEDS,
 };
 
 pub use sel4_sys::{seL4_CapInitThreadCNode, seL4_CapInitThreadVSpace, seL4_Error};
@@ -370,7 +370,7 @@ pub struct KernelEnv<'a> {
     bootinfo: &'a seL4_BootInfo,
     slots: SlotAllocator,
     untyped: UntypedCatalog<'a>,
-    mapped_pts: Vec<usize, MAX_PAGE_TABLES>,
+    page_tables: PageTableBookkeeper<MAX_PAGE_TABLES>,
     device_cursor: usize,
     dma_cursor: usize,
     last_retype: Option<RetypeLog>,
@@ -470,7 +470,7 @@ impl<'a> KernelEnv<'a> {
             bootinfo,
             slots,
             untyped,
-            mapped_pts: Vec::new(),
+            page_tables: PageTableBookkeeper::new(),
             device_cursor: DEVICE_VADDR_BASE,
             dma_cursor: DMA_VADDR_BASE,
             last_retype: None,
@@ -641,7 +641,8 @@ impl<'a> KernelEnv<'a> {
         vaddr: usize,
         attr: sel4_sys::seL4_ARM_VMAttributes,
     ) -> Result<(), seL4_Error> {
-        let mut result = unsafe {
+        self.ensure_page_table(vaddr)?;
+        let result = unsafe {
             seL4_ARM_Page_Map(
                 frame_cap,
                 seL4_CapInitThreadVSpace,
@@ -650,47 +651,6 @@ impl<'a> KernelEnv<'a> {
                 attr,
             )
         };
-
-        if result == seL4_FailedLookup {
-            let pt_base = Self::align_down(vaddr, PAGE_TABLE_ALIGN);
-            if !self.mapped_pts.iter().any(|&addr| addr == pt_base) {
-                let reserved = self
-                    .untyped
-                    .reserve_ram(PAGE_TABLE_BITS as u8)
-                    .ok_or(seL4_NotEnoughMemory)?;
-                let pt_slot = self.allocate_slot();
-                let trace = self.prepare_retype_trace(
-                    &reserved,
-                    pt_slot,
-                    seL4_ARM_PageTableObject,
-                    PAGE_TABLE_BITS as seL4_Word,
-                    RetypeKind::PageTable { vaddr: pt_base },
-                );
-                self.record_retype(trace, RetypeStatus::Pending);
-                if let Err(err) = self.retype_page_table(reserved.cap(), &trace) {
-                    self.record_retype(trace, RetypeStatus::Err(err));
-                    self.untyped.release(&reserved);
-                    return Err(err);
-                }
-                self.record_retype(trace, RetypeStatus::Ok);
-                let map_res = unsafe {
-                    seL4_ARM_PageTable_Map(pt_slot, seL4_CapInitThreadVSpace, pt_base, attr)
-                };
-                if map_res != seL4_NoError {
-                    return Err(map_res);
-                }
-                let _ = self.mapped_pts.push(pt_base);
-            }
-            result = unsafe {
-                seL4_ARM_Page_Map(
-                    frame_cap,
-                    seL4_CapInitThreadVSpace,
-                    vaddr,
-                    seL4_CapRights_ReadWrite,
-                    attr,
-                )
-            };
-        }
 
         if result == seL4_NoError {
             Ok(())
@@ -702,6 +662,54 @@ impl<'a> KernelEnv<'a> {
     fn align_down(value: usize, align: usize) -> usize {
         debug_assert!(align.is_power_of_two());
         value & !(align - 1)
+    }
+
+    fn ensure_page_table(&mut self, vaddr: usize) -> Result<(), seL4_Error> {
+        let pt_base = PageTableBookkeeper::<MAX_PAGE_TABLES>::base_for(vaddr);
+        if self.page_tables.contains_base(pt_base) {
+            return Ok(());
+        }
+
+        let reserved = self
+            .untyped
+            .reserve_ram(PAGE_TABLE_BITS as u8)
+            .ok_or(seL4_NotEnoughMemory)?;
+        let pt_slot = self.allocate_slot();
+        let trace = self.prepare_retype_trace(
+            &reserved,
+            pt_slot,
+            seL4_ARM_PageTableObject,
+            PAGE_TABLE_BITS as seL4_Word,
+            RetypeKind::PageTable { vaddr: pt_base },
+        );
+        self.record_retype(trace, RetypeStatus::Pending);
+        if let Err(err) = self.retype_page_table(reserved.cap(), &trace) {
+            self.record_retype(trace, RetypeStatus::Err(err));
+            self.untyped.release(&reserved);
+            return Err(err);
+        }
+        self.record_retype(trace, RetypeStatus::Ok);
+
+        let map_res = unsafe {
+            seL4_ARM_PageTable_Map(
+                pt_slot,
+                seL4_CapInitThreadVSpace,
+                pt_base,
+                seL4_ARM_Page_Default,
+            )
+        };
+        if map_res != seL4_NoError {
+            self.record_retype(trace, RetypeStatus::Err(map_res));
+            unsafe {
+                let _ = seL4_CNode_Delete(self.slots.root(), pt_slot, self.slots.depth());
+            }
+            return Err(map_res);
+        }
+
+        self.page_tables
+            .remember_base(pt_base)
+            .map_err(|_| seL4_NotEnoughMemory)?;
+        Ok(())
     }
 
     fn prepare_retype_trace(
@@ -733,5 +741,95 @@ impl<'a> KernelEnv<'a> {
 
     fn record_retype(&mut self, trace: RetypeTrace, status: RetypeStatus) {
         self.last_retype = Some(RetypeLog { trace, status });
+    }
+}
+
+#[derive(Clone)]
+struct PageTableBookkeeper<const N: usize> {
+    entries: Vec<usize, N>,
+}
+
+impl<const N: usize> PageTableBookkeeper<N> {
+    fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+        }
+    }
+
+    fn base_for(vaddr: usize) -> usize {
+        let align = PAGE_TABLE_ALIGN;
+        debug_assert!(align.is_power_of_two());
+        vaddr & !(align - 1)
+    }
+
+    fn contains_base(&self, base: usize) -> bool {
+        self.entries.iter().any(|&value| value == base)
+    }
+
+    fn contains(&self, vaddr: usize) -> bool {
+        let base = Self::base_for(vaddr);
+        self.contains_base(base)
+    }
+
+    fn remember_base(&mut self, base: usize) -> Result<(), ()> {
+        if self.contains_base(base) {
+            return Ok(());
+        }
+        self.entries.push(base).map_err(|_| ())
+    }
+
+    fn forget_base(&mut self, base: usize) {
+        if let Some(position) = self.entries.iter().position(|&value| value == base) {
+            let _ = self.entries.swap_remove(position);
+        }
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.entries.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn page_table_alignment_matches_two_meg_regions() {
+        let base0 = PageTableBookkeeper::<4>::base_for(0xA000_1234);
+        assert_eq!(base0, 0xA000_0000);
+        let base1 = PageTableBookkeeper::<4>::base_for(0xA020_1000);
+        assert_eq!(base1, 0xA020_0000);
+    }
+
+    #[test]
+    fn remember_base_deduplicates_entries() {
+        let mut keeper: PageTableBookkeeper<2> = PageTableBookkeeper::new();
+        let base = PageTableBookkeeper::<2>::base_for(0x1000);
+        assert!(keeper.remember_base(base).is_ok());
+        assert!(keeper.remember_base(base).is_ok());
+        assert!(keeper.contains_base(base));
+        assert_eq!(keeper.len(), 1);
+    }
+
+    #[test]
+    fn remember_base_respects_capacity() {
+        let mut keeper: PageTableBookkeeper<1> = PageTableBookkeeper::new();
+        let base0 = PageTableBookkeeper::<1>::base_for(0x0);
+        let base1 = PageTableBookkeeper::<1>::base_for(PAGE_TABLE_ALIGN);
+        assert!(keeper.remember_base(base0).is_ok());
+        assert!(keeper.remember_base(base1).is_err());
+        assert!(keeper.contains_base(base0));
+        assert_eq!(keeper.len(), 1);
+    }
+
+    #[test]
+    fn contains_uses_alignment_when_tracking() {
+        let mut keeper: PageTableBookkeeper<4> = PageTableBookkeeper::new();
+        let base = PageTableBookkeeper::<4>::base_for(0xA000_0000);
+        assert!(keeper.remember_base(base).is_ok());
+        assert!(keeper.contains(0xA000_0ABC));
+        assert!(keeper.contains(0xA001_FFFF));
+        assert!(!keeper.contains(0xA002_0000));
     }
 }
