@@ -125,16 +125,6 @@ PY
     fail "Timed out waiting for TCP port ${host}:${port}"
 }
 
-shell_join() {
-    local arg
-    local quoted=()
-    for arg in "$@"; do
-        quoted+=("$(printf '%q' "$arg")")
-    done
-    local IFS=' '
-    printf '%s' "${quoted[*]}"
-}
-
 launch_cohsh_macos_terminal() {
     local workspace_root="$1"
     local cohsh_tcp_port="$2"
@@ -144,24 +134,13 @@ launch_cohsh_macos_terminal() {
         fail "macOS Terminal launch requested but host OS is not macOS"
     fi
 
-    if ! command -v osascript >/dev/null 2>&1; then
-        fail "osascript is required to launch Terminal windows on macOS"
-    fi
+    (
+        cd "$workspace_root" || exit 1
+        export COHSH_TCP_PORT="$cohsh_tcp_port"
+        "$@"
+    ) >/dev/null 2>&1 &
 
-    local cohsh_command
-    cohsh_command=$(shell_join "$@")
-    local shell_command
-    # Ensure the spawned Terminal session inherits a live TTY so cohsh stays interactive.
-    shell_command="cd $(printf '%q' "$workspace_root") && export COHSH_TCP_PORT=$(printf '%q' "$cohsh_tcp_port") && exec </dev/tty >/dev/tty 2>/dev/tty && $cohsh_command"
-    local quoted_shell
-    quoted_shell=$(python3 -c 'import shlex, sys; print(shlex.quote("set -euo pipefail; " + sys.argv[1]))' "$shell_command")
-
-    osascript <<OSA
-tell application "Terminal"
-    activate
-    do script "bash -lc $quoted_shell"
-end tell
-OSA
+    log "Launched cohsh (tcp://127.0.0.1:${cohsh_tcp_port}) in background."
 }
 
 main() {
@@ -554,9 +533,9 @@ PY
                 exit $STATUS
                 ;;
             macos-terminal)
-                log "Launching cohsh in a new macOS Terminal window (TCP transport)"
+                log "Launching cohsh in background (TCP transport)"
                 launch_cohsh_macos_terminal "$PROJECT_ROOT" "$TCP_PORT" "${CLI_CMD[@]}"
-                log "cohsh started in a separate Terminal window. Press Ctrl+C here to stop QEMU when finished."
+                log "cohsh started in a background session. Press Ctrl+C here to stop QEMU when finished."
                 local QEMU_EXIT=0
                 if ! wait "$QEMU_PID" 2>/dev/null; then
                     QEMU_EXIT=$?
