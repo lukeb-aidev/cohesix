@@ -17,6 +17,7 @@ cohesix-ticket = { workspace = true }
 embedded-io = { version = "0.4", default-features = false }
 nb = "1.1"
 portable-atomic = "1.6"
+log = { version = "0.4", default-features = false }
 [dependencies.heapless]
 version = "0.8"
 
