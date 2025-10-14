@@ -197,7 +197,6 @@ mod imp {
         pub userImagePaging: seL4_SlotRegion,
         pub ioSpaceCaps: seL4_SlotRegion,
         pub extraBIPages: seL4_SlotRegion,
-        pub initThreadCNode: seL4_CNode,
         pub initThreadCNodeSizeBits: seL4_Word,
         pub initThreadDomain: seL4_Word,
         pub untyped: seL4_SlotRegion,
