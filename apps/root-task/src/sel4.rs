@@ -12,10 +12,9 @@ use heapless::Vec;
 use sel4_sys::seL4_DebugCapIdentify;
 use sel4_sys::{
     seL4_ARM_PageTableObject, seL4_ARM_PageTable_Map, seL4_ARM_Page_Default, seL4_ARM_Page_Map,
-    seL4_ARM_Page_Uncached, seL4_BootInfo, seL4_CNode, seL4_CNode_Delete, seL4_CNode_Move,
-    seL4_CPtr, seL4_CapRights_ReadWrite, seL4_NoError, seL4_NotEnoughMemory, seL4_ObjectType,
-    seL4_SlotRegion, seL4_Untyped, seL4_Untyped_Retype, seL4_Word, UntypedDesc,
-    MAX_BOOTINFO_UNTYPEDS,
+    seL4_ARM_Page_Uncached, seL4_BootInfo, seL4_CNode, seL4_CNode_Delete, seL4_CPtr,
+    seL4_CapRights_ReadWrite, seL4_NoError, seL4_NotEnoughMemory, seL4_ObjectType, seL4_SlotRegion,
+    seL4_Untyped, seL4_Untyped_Retype, seL4_Word, UntypedDesc, MAX_BOOTINFO_UNTYPEDS,
 };
 
 #[cfg(all(target_os = "none", not(target_arch = "aarch64")))]
@@ -39,7 +38,7 @@ pub trait BootInfoExt {
     fn empty_first_slot(&self) -> usize;
 
     /// Returns the exclusive upper bound of the bootinfo-declared empty slot window.
-    fn empty_last_slot_exclusive(&self) -> usize;
+    fn empty_last_slot_excl(&self) -> usize;
 }
 
 impl BootInfoExt for seL4_BootInfo {
@@ -59,7 +58,7 @@ impl BootInfoExt for seL4_BootInfo {
     }
 
     #[inline(always)]
-    fn empty_last_slot_exclusive(&self) -> usize {
+    fn empty_last_slot_excl(&self) -> usize {
         self.empty.end as usize
     }
 }
@@ -80,15 +79,15 @@ fn log_cap_details(tag: &str, cptr: seL4_CPtr) {
 fn log_cap_details(_tag: &str, _cptr: seL4_CPtr) {}
 
 #[inline(always)]
-fn objtype_name(objtype: seL4_Word) -> &'static str {
-    match objtype {
-        x if x == seL4_ObjectType::seL4_ARM_Page as seL4_Word => "seL4_ARM_Page",
-        x if x == seL4_ObjectType::seL4_ARM_PageTableObject as seL4_Word => {
-            "seL4_ARM_PageTableObject"
-        }
-        x if x == seL4_ObjectType::seL4_CapTableObject as seL4_Word => "seL4_CapTableObject",
-        x if x == seL4_ObjectType::seL4_UntypedObject as seL4_Word => "seL4_UntypedObject",
-        _ => "<?>",
+fn objtype_name(objtype: u32) -> &'static str {
+    use sel4_sys::seL4_ObjectType::{seL4_ARM_Page, seL4_ARM_PageTableObject};
+
+    if objtype == seL4_ARM_Page as u32 {
+        "seL4_ARM_Page"
+    } else if objtype == seL4_ARM_PageTableObject as u32 {
+        "seL4_ARM_PageTableObject"
+    } else {
+        "<?>"
     }
 }
 
@@ -125,7 +124,7 @@ pub fn bootinfo_debug_dump(bi: &seL4_BootInfo) {
         bi.init_cnode_cap(),
         init_bits,
         bi.empty_first_slot(),
-        bi.empty_last_slot_exclusive()
+        bi.empty_last_slot_excl()
     );
     assert!(
         init_bits > 0,
@@ -640,7 +639,7 @@ impl<'a> KernelEnv<'a> {
                 )
             });
         let empty_start = bootinfo.empty_first_slot();
-        let empty_end = bootinfo.empty_last_slot_exclusive();
+        let empty_end = bootinfo.empty_last_slot_excl();
         let span = empty_end.saturating_sub(empty_start);
         log::info!(
             "[cohesix:root-task] bootinfo.empty slots [0x{start:04x}..0x{end:04x}) span={span} root_cnode_bits={bits}",
@@ -730,11 +729,42 @@ impl<'a> KernelEnv<'a> {
             .reserve_device(paddr, PAGE_BITS)
             .ok_or(seL4_NotEnoughMemory)?;
         let frame_slot = self.allocate_slot();
+        #[cfg(target_arch = "aarch64")]
+        let objtype: u32 = seL4_ObjectType::seL4_ARM_Page as u32;
+        #[cfg(target_arch = "aarch64")]
+        let size_bits: seL4_Word = 12;
+        #[cfg(all(not(target_arch = "aarch64"), not(test)))]
+        compile_error!("Wire correct page object type/size for non-AArch64 targets.");
+        #[cfg(all(not(target_arch = "aarch64"), test))]
+        let objtype: u32 = seL4_ObjectType::seL4_ARM_Page as u32;
+        #[cfg(all(not(target_arch = "aarch64"), test))]
+        let size_bits: seL4_Word = 12;
+
+        let dev_index = reserved.index();
+        let dev_base_paddr = reserved.paddr();
+        let dev_size_bits = reserved.size_bits();
+        let dev_span = 1usize.checked_shl(dev_size_bits as u32).unwrap_or_else(|| {
+            panic!(
+                "device untyped size_bits {} exceeds host word size",
+                dev_size_bits
+            )
+        });
+        let dev_end_paddr = dev_base_paddr.saturating_add(dev_span);
+        log::trace!(
+            "device_untyped chosen: cap=0x{:x} idx={} covers=[0x{:08x}..0x{:08x}) size_bits={} target=0x{:08x}",
+            reserved.cap(),
+            dev_index,
+            dev_base_paddr as u64,
+            dev_end_paddr as u64,
+            dev_size_bits,
+            paddr as u64
+        );
+
         let trace = self.prepare_retype_trace(
             &reserved,
             frame_slot,
-            seL4_ObjectType::seL4_ARM_Page as seL4_Word,
-            PAGE_BITS as seL4_Word,
+            objtype as seL4_Word,
+            size_bits,
             RetypeKind::DevicePage { paddr },
         );
         self.record_retype(trace, RetypeStatus::Pending);
@@ -848,137 +878,49 @@ impl<'a> KernelEnv<'a> {
         let root_cnode = self.bootinfo.init_cnode_cap();
         let init_bits = self.bootinfo.init_cnode_bits();
         let capacity = 1usize.checked_shl(init_bits as u32).unwrap_or(usize::MAX);
-        assert!(
-            (dest_slot as usize) < capacity,
-            "dest_slot 0x{:x} exceeds init CNode capacity (init_bits={}, capacity={:#x})",
-            dest_slot,
-            init_bits,
-            capacity
-        );
+        assert!((dest_slot as usize) < capacity, "dest_slot OOB");
 
         log_cap_details("RootCNode", root_cnode);
-
-        let objtype_label = objtype_name(objtype);
-        let node_index: seL4_Word = 0;
-        let node_depth: seL4_Word = 0;
         log::trace!(
-            "Retype[A] → root=0x{:x} index=0x{:x} depth={} offset=0x{:x} (init_bits={} objtype=0x{:x} ({}) size_bits={})",
+            "Retype[A] → root=0x{:x} index=0 depth=0 offset=0x{:x} (init_bits={}, objtype={}, size_bits={})",
             root_cnode,
-            node_index,
-            node_depth,
             dest_slot,
             init_bits,
-            objtype,
-            objtype_label,
+            objtype_name(objtype as u32),
             size_bits
         );
-        let err_a = unsafe {
+
+        let err = unsafe {
             seL4_Untyped_Retype(
                 untyped_cap,
                 objtype,
                 size_bits,
                 root_cnode,
-                node_index,
-                node_depth,
+                0,
+                0,
                 dest_slot,
                 1,
             )
         };
-        log::trace!("Retype[A] result: {:?}", err_a);
-        if err_a == seL4_NoError {
-            return err_a;
+        if err != seL4_NoError {
+            log::error!("Retype[A] failed: {}", err);
         }
-
-        log::warn!(
-            "Retype[A] failed with {:?}; attempting Retype[B] fallback",
-            err_a
-        );
-
-        let init_bits_word = init_bits as seL4_Word;
-
-        log_cap_details("WalkedRootCNode", root_cnode);
-
-        log::trace!(
-            "Retype[B] → root=0x{:x} index=0x{:x} depth={} offset=0 (init_bits={} objtype=0x{:x} ({}) size_bits={})",
-            root_cnode,
-            root_cnode,
-            init_bits,
-            init_bits,
-            objtype,
-            objtype_label,
-            size_bits
-        );
-        let err_b = unsafe {
-            seL4_Untyped_Retype(
-                untyped_cap,
-                objtype,
-                size_bits,
-                root_cnode,
-                root_cnode as seL4_Word,
-                init_bits_word,
-                0,
-                1,
-            )
-        };
-        log::trace!("Retype[B] result: {:?}", err_b);
-        if err_b != seL4_NoError {
-            log::error!(
-                "Retype[B] failed with {:?}; tuple[root=0x{:x} index=0x{:x} depth={} offset=0 objtype=0x{:x} ({}) size_bits={}] after Retype[A] err {:?}",
-                err_b,
-                root_cnode,
-                root_cnode,
-                init_bits,
-                objtype,
-                objtype_label,
-                size_bits,
-                err_a
-            );
-            return err_b;
-        }
-
-        if dest_slot == 0 {
-            return seL4_NoError;
-        }
-
-        log::trace!(
-            "CNode_Move fallback → dest_slot=0x{:x} src_slot=0 depth={}",
-            dest_slot,
-            init_bits
-        );
-        let move_err = unsafe {
-            seL4_CNode_Move(
-                root_cnode,
-                dest_slot,
-                init_bits_word,
-                root_cnode,
-                0,
-                init_bits_word,
-            )
-        };
-        if move_err != seL4_NoError {
-            log::error!(
-                "CNode_Move fallback to slot 0x{:x} failed with {:?}",
-                dest_slot,
-                move_err
-            );
-            return move_err;
-        }
-        seL4_NoError
+        err
     }
-
     #[inline(always)]
     fn perform_retype(&self, untyped_cap: seL4_Untyped, trace: RetypeTrace) -> SeL4Result {
         let (trace, init_bits) = self.sanitise_retype_trace(trace);
-        let objtype_label = objtype_name(trace.object_type);
+        let objtype_label = objtype_name(trace.object_type as u32);
 
         log::trace!(
-            "Retype (sanitised) → root=0x{:x} index={} depth={} offset=0x{:x} (init_bits={} objtype={} size_bits={})",
+            "Retype (sanitised) → root=0x{:x} index={} depth={} offset=0x{:x} (init_bits={} objtype={} ({:#x}) size_bits={})",
             trace.cnode_root,
             trace.node_index,
             trace.cnode_depth,
             trace.dest_offset,
             init_bits,
             objtype_label,
+            trace.object_type,
             trace.object_size_bits
         );
 
@@ -990,7 +932,7 @@ impl<'a> KernelEnv<'a> {
         );
         if err != seL4_NoError {
             log::error!(
-                "Retype failed: err={} root=0x{:x} index={} depth={} offset=0x{:x} (init_bits={} objtype={} size_bits={})",
+                "Retype failed: err={} root=0x{:x} index={} depth={} offset=0x{:x} (init_bits={} objtype={} ({:#x}) size_bits={})",
                 err,
                 trace.cnode_root,
                 trace.node_index,
@@ -998,6 +940,7 @@ impl<'a> KernelEnv<'a> {
                 trace.dest_offset,
                 init_bits,
                 objtype_label,
+                trace.object_type,
                 trace.object_size_bits
             );
         }
