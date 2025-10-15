@@ -20,7 +20,7 @@ use sel4_sys::{
 
 pub use sel4_sys::{seL4_CapInitThreadCNode, seL4_CapInitThreadVSpace, seL4_Error};
 
-/// Extension trait exposing raw bootinfo fields exactly as provided by the kernel.
+/// Extension trait exposing bootinfo fields and derived values used by the root task.
 pub trait BootInfoExt {
     /// Returns the writable init thread CNode capability exposed via the initial CSpace root slot.
     fn init_cnode_cap(&self) -> seL4_CPtr;
@@ -38,7 +38,11 @@ pub trait BootInfoExt {
 impl BootInfoExt for seL4_BootInfo {
     #[inline(always)]
     fn init_cnode_cap(&self) -> seL4_CPtr {
-        self.initThreadCNode
+        // Since seL4 15 the init thread's root CNode capability is exposed exclusively via the
+        // statically-assigned slot defined by `seL4_CapInitThreadCNode`. Earlier kernels mirrored
+        // the same value inside `seL4_BootInfo`, so we normalise the accessor to always use the
+        // constant provided by the kernel interface.
+        seL4_CapInitThreadCNode
     }
 
     #[inline(always)]
@@ -59,9 +63,9 @@ impl BootInfoExt for seL4_BootInfo {
 
 /// Lightweight wrapper translating raw seL4 error codes into ergonomic result semantics.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub struct seL4_Result(seL4_Error);
+pub struct SeL4Result(seL4_Error);
 
-impl seL4_Result {
+impl SeL4Result {
     /// Returns `true` if the underlying kernel invocation succeeded.
     #[inline(always)]
     pub fn is_ok(self) -> bool {
@@ -75,7 +79,7 @@ impl seL4_Result {
     }
 }
 
-impl From<seL4_Error> for seL4_Result {
+impl From<seL4_Error> for SeL4Result {
     #[inline(always)]
     fn from(value: seL4_Error) -> Self {
         Self(value)
@@ -789,7 +793,7 @@ impl<'a> KernelEnv<'a> {
     }
 
     #[inline(always)]
-    fn perform_retype(&self, untyped_cap: seL4_Untyped, trace: RetypeTrace) -> seL4_Result {
+    fn perform_retype(&self, untyped_cap: seL4_Untyped, trace: RetypeTrace) -> SeL4Result {
         let (trace, init_bits) = self.sanitise_retype_trace(trace);
 
         #[cfg(feature = "sel4-debug")]
@@ -819,7 +823,7 @@ impl<'a> KernelEnv<'a> {
                 1,
             )
         };
-        seL4_Result::from(err)
+        SeL4Result::from(err)
     }
 
     fn sanitise_retype_trace(&self, trace: RetypeTrace) -> (RetypeTrace, usize) {
