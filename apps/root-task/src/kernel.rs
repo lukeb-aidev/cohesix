@@ -165,7 +165,7 @@ pub extern "C" fn kernel_start(bootinfo: *const BootInfoHeader) -> ! {
     bootinfo_debug_dump(bootinfo_ref);
 
     let empty_start = bootinfo_ref.empty_first_slot();
-    let empty_end = bootinfo_ref.empty_last_slot_exclusive();
+    let empty_end = bootinfo_ref.empty_last_slot_excl();
     let mut cnode_line = heapless::String::<160>::new();
     let empty_span = empty_end.saturating_sub(empty_start);
     let _ = write!(
