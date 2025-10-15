@@ -142,13 +142,17 @@
 - **Docs-as-built**: Architecture, interfaces, and security documents
   ingest compiler snippets (CBOR schemas, `/proc` layouts, concurrency
   knobs, hardware tables). CI compares manifest fingerprints and embedded
-  excerpts to guarantee documentation reflects the running system.
+  excerpts to guarantee documentation reflects the running system. At
+  release time, tools/coh-rtc regenerates Markdown fragments (e.g., `/proc`
+  layout, concurrency knobs, CBOR schemas) and injects them into
+  `docs/INTERFACES.md` and `docs/SECURE9P.md`, ensuring each release
+  candidate’s documentation matches the compiled manifest exactly.
 - **Policy export**: Compiler outputs `out/manifests/*.json` and
   operator policy files consumed by `cohsh`, enabling deterministic
   session pooling, retry budgets, and future hardware profiles without
   editing runtime code.
 
-## 12. Hardware Trajectory & Sidecar Pattern
+## 12. Hardware Trajectory & Host/Worker Sidecar Pattern
 - **UEFI readiness**: Later milestones introduce an aarch64 UEFI loader
   that boots the generated manifest on physical hardware without a VM.
   The loader maps UART/NET MMIO regions defined in the manifest,
@@ -160,11 +164,21 @@
   records boot hashes. NineDoor exposes attestation logs via read-only
   files so host tooling and operators can verify provenance before
   enabling privileged commands.
-- **Sidecar architecture**: Industrial buses (MODBUS, DNP3, CAN), LoRa
-  schedulers, and science-grade sensor gateways run as sidecars on the
-  host or as specialised workers inside the VM. All sidecars communicate
-  through Secure9P namespaces declared in the manifest, preserving the
-  lean VM while enabling domain-specific IO without POSIX stacks.
+- **Host/Worker sidecar pattern**: *Sidecars* are auxiliary processes that
+  run **outside the seL4 VM** whenever possible (on the host or another
+  container). Each sidecar exposes its namespace into the VM **over 9P**
+  using the same security model as internal providers. Only lightweight
+  control stubs or schedulers (e.g., LoRa duty-cycle timers) execute
+  **inside** the VM under strict manifest quotas to preserve a lean,
+  deterministic TCB.
+- **Lifecycle & discovery**: Sidecar mounts and capability scopes are
+  declared in the **manifest**; the **host launcher** inspects the
+  manifest at boot, spawns or connects required sidecars, and only then
+  hands control to the root task. This keeps deployment topology in
+  lockstep with what the compiler planned.
+- **Common bridge trait (optional)**: All sidecars conform to a shared
+  trait surface (e.g., `sidecar::ProviderBridge`) so new buses (MODBUS,
+  DNP3, CAN, LoRa) can be added without modifying the VM.
 - **Budget discipline**: Sidecar-related workers are feature-gated and
   bound by manifest quotas so the event pump remains deterministic even
   under constrained links. Host tooling validates dependencies before
