@@ -12,10 +12,10 @@ use heapless::Vec;
 use sel4_sys::seL4_DebugCapIdentify;
 use sel4_sys::{
     seL4_ARM_PageTableObject, seL4_ARM_PageTable_Map, seL4_ARM_Page_Default, seL4_ARM_Page_Map,
-    seL4_ARM_Page_Uncached, seL4_AllRights, seL4_BootInfo, seL4_CNode, seL4_CNode_Copy,
-    seL4_CNode_Delete, seL4_CNode_Move, seL4_CPtr, seL4_CapRights_ReadWrite, seL4_NoError,
-    seL4_NotEnoughMemory, seL4_ObjectType, seL4_SlotRegion, seL4_Untyped, seL4_Untyped_Retype,
-    seL4_Word, UntypedDesc, MAX_BOOTINFO_UNTYPEDS,
+    seL4_ARM_Page_Uncached, seL4_BootInfo, seL4_CNode, seL4_CNode_Move, seL4_CPtr,
+    seL4_CapRights_ReadWrite, seL4_NoError, seL4_NotEnoughMemory, seL4_ObjectType,
+    seL4_SlotRegion, seL4_Untyped, seL4_Untyped_Retype, seL4_Word, UntypedDesc,
+    MAX_BOOTINFO_UNTYPEDS,
 };
 
 #[cfg(all(target_os = "none", not(target_arch = "aarch64")))]
@@ -837,39 +837,6 @@ impl<'a> KernelEnv<'a> {
         }
     }
 
-    fn cnode_probe_copy_delete(&self, dest_slot: seL4_Word) -> Result<(), seL4_Error> {
-        let root = self.bootinfo.init_cnode_cap();
-        let depth = self.bootinfo.init_cnode_bits() as seL4_Word;
-        let src = seL4_CapInitThreadCNode as seL4_Word;
-        let rights = seL4_AllRights;
-
-        if dest_slot == src {
-            log::trace!(
-                "Preflight: dest_slot 0x{dest_slot:04x} equals probe source; skipping Copy/Delete",
-            );
-            return Ok(());
-        }
-
-        log::trace!(
-            "Probe Copy: root=0x{root:04x} -> slot=0x{dest_slot:04x} (src_slot=0x{src:04x}, depth={depth})",
-        );
-        let err1 = unsafe { seL4_CNode_Copy(root, dest_slot, depth, root, src, depth, rights) };
-        if err1 != seL4_NoError {
-            log::error!("Preflight: CNode_Copy to tmp failed: {:?}", err1);
-            return Err(err1);
-        }
-
-        log::trace!("Probe Delete: root=0x{root:04x} slot=0x{dest_slot:04x} depth={depth}",);
-        let err2 = unsafe { seL4_CNode_Delete(root, dest_slot, depth) };
-        if err2 != seL4_NoError {
-            log::error!("Preflight: CNode_Delete tmp failed: {:?}", err2);
-            return Err(err2);
-        }
-
-        log::trace!("Preflight: Copy/Delete OK at slot 0x{dest_slot:04x}");
-        Ok(())
-    }
-
     #[inline(always)]
     fn retype_into_root_cnode_slot(
         &self,
@@ -891,15 +858,14 @@ impl<'a> KernelEnv<'a> {
 
         log_cap_details("RootCNode", root_cnode);
 
-        if let Err(err) = self.cnode_probe_copy_delete(dest_slot) {
-            log::error!("Preflight failed for slot 0x{dest_slot:04x}: {:?}", err);
-            return err;
-        }
-
         let objtype_label = objtype_name(objtype);
+        let node_index: seL4_Word = 0;
+        let node_depth: seL4_Word = 0;
         log::trace!(
-            "Retype[A] → root=0x{:x} index=0 depth=0 offset=0x{:x} (init_bits={} objtype=0x{:x} ({}) size_bits={})",
+            "Retype[A] → root=0x{:x} index=0x{:x} depth={} offset=0x{:x} (init_bits={} objtype=0x{:x} ({}) size_bits={})",
             root_cnode,
+            node_index,
+            node_depth,
             dest_slot,
             init_bits,
             objtype,
@@ -912,8 +878,8 @@ impl<'a> KernelEnv<'a> {
                 objtype,
                 size_bits,
                 root_cnode,
-                0,
-                0,
+                node_index,
+                node_depth,
                 dest_slot,
                 1,
             )
