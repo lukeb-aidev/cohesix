@@ -336,199 +336,242 @@ Deliverables: Bidirectional console acknowledgements spanning serial and TCP tra
 - `https://crates.io/crates/spin` (lock primitives for bounded queues)
 
 
-## Milestone 8 — Async & Hardware Readiness (future)
-**Deliverables**
-- Evaluate adding Embassy executors once we have multiple concurrent network tasks or hardware NICs; keep this behind a feature flag so the baseline remains deterministic.
-- Port PHY layer to target UEFI hardware (e.g., Intel i219, Broadcom) using seL4 device drivers, reusing the abstractions introduced in Milestone 7.
-- Formalise ticket-authenticated TLS or noise-based transport for remote `cohsh` sessions once hardware links are reliable.
+## Milestone 8C — Root-Task Compiler v0 (“coh-rtc”)
 
-**Checks**
-- Hardware bring-up demonstrates serial + TCP console parity with QEMU.
-- Async executor (if enabled) passes the same regression suite as the synchronous loop.
+**Why now (context):** M0–M7d stabilized boot, roles, NineDoor, console, and TCP/serial surfaces. To prevent drift as we scale concurrency and storage, we “freeze” today’s behavior into a tiny, declarative IR that compiles to `bootstrap.rs`, a resolved manifest, and CLI tests. From here on, **docs → IR → codegen** is the single source of truth.
 
-## Scope of this update
-This document **adds Milestones 9+** to the existing plan. Earlier milestones (M0–M8) remain unchanged. The new milestones focus on **scalable 9P‑only concurrency** and data planes that enable the broader use cases listed in `USE_CASES.md`—while keeping the Cohesix VM **lean and no_std**.
+**Goal**  
+Introduce a minimal **root-task compiler** (`tools/coh-rtc`) that ingests `root_task.toml` and generates:
+- `apps/root-task/src/generated/bootstrap.rs` (init, providers, policy)
+- `out/manifests/root_task_resolved.json`
+- `tests/cli/boot_v0.cohsh` (cat `/proc/boot`, append `/queen/ctl`)
+
+**Changes**  
+- IR v1.0: system (arch, tick), Secure9P limits (msize ≤ 8192, max walk ≤ 8, forbid `..`, no FID reuse), roles, mounts/providers.  
+- Validation: fail build on bounds violations or path escapes.  
+- Codegen: deterministic, sorted output; “GENERATED – do not edit” banner.
+
+**Commands**  
+- `cargo run -p coh-rtc -- root_task.toml --out apps/root-task/src/generated`  
+- `cohsh --script tests/cli/boot_v0.cohsh`
+
+**Checks (DoD)**  
+- Deterministic regen (same IR ⇒ identical output hash).  
+- QEMU script passes `cat /proc/boot` and `echo` to `/queen/ctl`.  
+- Compiler rejects IR that would violate red lines (size/walk/escapes).
+
+**Deliverables**  
+- `tools/coh-rtc` crate, example `root_task.toml`, generated files + CLI script.
+
+**Compiler touchpoints**  
+- Adds `root_task.schema = "1.0"`.  
+- Emits resolved manifest used by later milestones for planning and tests.
 
 ---
 
-## Milestones (new)
+## Milestone 9 — 9P Pipelining & Batching (foundational concurrency)
 
-### M9 — 9P Pipelining & Batching (foundational)
-**Goal:** Enable high concurrency using *only* 9P by allowing many in‑flight requests (tags) per session and batching framed payloads inside a single `Twrite`/`Tread` without changing 9P itself.
+**Why now (compiler):** M9 introduces many in-flight tags + batched frames **without changing 9P**. The compiler must gate and validate these knobs so runtime remains bounded and reproducible.
 
-**Changes**
-- `secure9p-core`: support **N‑outstanding tags** per connection; out‑of‑order `R*` responses.
-- `secure9p-codec`: add a zero‑copy **frame iterator** (length‑prefixed frames) for read buffers.
-- `nine-door`: provider API accepts **slices of frames**; returns **short‑write** for backpressure.
+**Goal**  
+Enable high concurrency via **N outstanding tags per session** and optional **batched frames** within `msize`.
 
-**Commands**
+**Changes**  
+- `secure9p-core`: multiple outstanding tags; out-of-order `R*` support.  
+- `secure9p-codec`: zero-copy frame iterator for length-prefixed sequences.  
+- `nine-door`: provider API accepts frame slices; uses short-write for backpressure.
+
+**Commands**  
 - `cargo test -p secure9p-core -p secure9p-codec -p nine-door`
 
-**Checks (DoD)**
-- Load test: interleave 10k tagged ops across 4 sessions → no panics, correct matching by tag.
-- Batch write with 4 CBOR frames → reader reconstructs exactly; CRC optional.
-- Short‑write path exercised; client retries the tail; order preserved.
+**Checks (DoD)**  
+- Load test: 10k interleaved ops across 4 sessions; correct tag matching.  
+- 4-frame batch round-trips; optional CRC documented.  
+- Short-write path exercised; client retries tail reliably.
 
-**Deliverables**
-- Documentation: `SECURE9P.md` updated with concurrency model and short‑write guidance.
-- Bench results table for tags/session impact.
+**Deliverables**  
+- `SECURE9P.md` updated with concurrency model and short-write guidance.
 
----
-
-### M10 — Telemetry Rings & Cursors
-**Goal:** Replace unbounded append‑only logs with **bounded ring buffers** per worker and **persistent cursors** per consumer, preserving append‑only semantics while constraining memory.
-
-**Changes**
-- New provider backing for `/worker/<id>/telemetry` as a **ring** (4–16 MB configurable).
-- `/worker/<id>/cursor` (RW, u64) to resume reads from last acked `seq`.
-- CBOR **Frame v1**: `{seq:u64, ts:u64, kind:u8, payload:bytes, meta?:map}` (documented).
-
-**Commands**
-- `cargo test -p nine-door`
-- CLI smoke: `cohsh --script tests/cli/telemetry_ring.coh`
-
-**Checks (DoD)**
-- Overflow test: ring wraps, no crash; consumer with cursor never regresses.
-- Backpressure: ring high‑water triggers short‑writes on producer.
-- Latency budget documented (P50/P95 under configured limits).
-
-**Deliverables**
-- `INTERFACES.md` CBOR schema v1; examples & cursor semantics.
+**Compiler touchpoints**  
+- IR v1.1 adds:  
+  - `secure9p.tags_per_session: u16` (default 32)  
+  - `secure9p.batch_frames: bool` (default true)  
+  - `secure9p.short_write_policy: { enable: bool, backoff_ms: u32 }`  
+- Validation: frame batch total ≤ `msize`; tags_per_session > 0.  
+- Codegen: transport/tag window config + batched Twrite tests (`tests/cli/9p_batch.cohsh`).
 
 ---
 
-### M11 — Sharded Namespaces & Provider Split
-**Goal:** Reduce contention and FID pressure by sharding worker trees.
+## Milestone 10 — Telemetry Rings & Cursors (bounded append-only)
 
-**Changes**
-- Introduce `/shard/<00..ff>/worker/<id>/*` layout; maintain legacy `/worker/<id>` as a symlink/alias (phase‑out).
-- Instantiate **one provider per shard** with its own queues and stores.
-- Hash strategy: `hh = sha256(worker_id)[0..=1]` (documented).
+**Why now (compiler):** Moves from unbounded files to **bounded rings** with **persistent cursors**. The compiler ensures memory budgets and path safety.
 
-**Commands**
-- `cargo test -p nine-door`
-- Scale smoke: `tests/scale/shard_1k.rs`
+**Goal**  
+Ring-backed `/worker/<id>/telemetry` with **per-consumer cursor** and **CBOR Frame v1**.
 
-**Checks (DoD)**
-- 1k workers attach and write concurrently; CPU and latency scale ~linearly with shard count.
-- Walk depth ≤ 8 per `SECURE9P.md`.
-- No global locks in hot paths (checked via `cargo flamegraph` notes).
+**Changes**  
+- Provider: ring (4–16 MB configurable) + backpressure via short-write.  
+- Cursor file `/worker/<id>/cursor` (RW, u64) to resume reads (by `seq`).  
+- CBOR Frame v1: `{seq:u64, ts:u64, kind:u8, payload:bytes, meta?:map}`.
 
-**Deliverables**
-- `SECURE9P.md` and `ROLES_AND_SCHEDULING.md` updated with sharding rules and quotas.
+**Commands**  
+- `cargo test -p nine-door`  
+- `cohsh --script tests/cli/telemetry_ring.coh`
 
----
+**Checks (DoD)**  
+- Wrap without crash; cursor resume never regresses; backpressure asserted.  
+- Latency budget documented (P50/P95).
 
-### M12 — Client Concurrency & Session Pooling (reference clients)
-**Goal:** Provide client‑side guidance and helpers to exploit server concurrency fully.
+**Deliverables**  
+- `INTERFACES.md` updated with CBOR schema v1, cursor semantics.
 
-**Changes**
-- `cohsh` adds a **session pool** (e.g., 2 control + 4 telemetry sessions).
-- Batched `Twrite` builder for CBOR frames; automatic retry on short‑write.
-- Example worker agent that streams telemetry using the pool.
-
-**Commands**
-- `cargo test -p cohsh`
-- `tests/cli/session_pool.coh`
-
-**Checks (DoD)**
-- Target throughput sustained with fixed `msize ≤ 8192` by increasing concurrency, not message size.
-- Recovery on transient failures without data loss (idempotent by `seq`).
-
-**Deliverables**
-- `USERLAND_AND_CLI.md` session pooling guidance & examples.
+**Compiler touchpoints**  
+- IR v1.2 adds:  
+  - `telemetry.ring_bytes_per_worker: u32` (power-of-two)  
+  - `telemetry.frame_schema: "cbor_v1"`  
+- Validation: memory budget + walk depth constraints.  
+- Codegen: ring provider scaffolding + schema in `generated/schema.rs`; wrap/resume tests.
 
 ---
 
-### M13 — Observability via Files
-**Goal:** Expose runtime metrics and backpressure state purely as files—no new protocols.
+## Milestone 11 — Sharded Namespaces & Provider Split (scale-out)
 
-**Changes**
-- `/proc/9p/{sessions,outstanding,short_writes}`
-- `/proc/ingest/{p50_ms,p95_ms,backpressure,dropped,queued}`
-- `/proc/ingest/watch` (periodic snapshots friendly to `tail`).
+**Why now (compiler):** Shards must be derived deterministically and remain within path depth limits; compiler generates the provider instances and optional aliasing.
 
-**Commands**
-- `cargo test -p nine-door`
-- CLI: `cohsh tail /proc/ingest/watch`
+**Goal**  
+Reduce contention and FID pressure by sharding worker trees.
 
-**Checks (DoD)**
-- Counters reflect synthetic stress; watch output parsable; no allocations on hot path.
+**Changes**  
+- Layout: `/shard/<00..ff>/worker/<id>/*`, with legacy `/worker/<id>` alias.  
+- One provider per shard; hash `hh = sha256(worker_id)[0..=1]`.
 
-**Deliverables**
+**Commands**  
+- `cargo test -p nine-door`  
+- `cargo test -p tests --test shard_1k` (if present)
+
+**Checks (DoD)**  
+- 1k workers attach and write concurrently; near-linear scale w/ shards.  
+- Walk depth ≤ 8; no hot-path global locks.
+
+**Deliverables**  
+- `SECURE9P.md` & `ROLES_AND_SCHEDULING.md` updated with sharding rules.
+
+**Compiler touchpoints**  
+- IR v1.2 adds:  
+  - `sharding.enable: bool`  
+  - `sharding.scheme: { kind: "hex_prefix", width: 2 }`  
+  - `sharding.legacy_worker_alias: bool`  
+- Validation: width ⇒ shard count; depth checks; forbid global provider locks.  
+- Codegen: per-shard provider tables + optional alias nodes; scale test scaffold.
+
+---
+
+## Milestone 12 — Client Concurrency & Session Pooling (reference clients)
+
+**Why now (compiler):** Provide **client-side policy** alongside server features so operators can use concurrency safely; compiler emits reference policy/config.
+
+**Goal**  
+Expose a session pool in `cohsh` and helpers for batched writes + retry.
+
+**Changes**  
+- `cohsh`: pool (e.g., 2 control + 4 telemetry), Twrite batch builder, retry on short-write; sample worker agent.
+
+**Commands**  
+- `cargo test -p cohsh`  
+- `cohsh --script tests/cli/session_pool.coh`
+
+**Checks (DoD)**  
+- Target throughput at `msize ≤ 8192` via concurrency (not bigger frames).  
+- Idempotent recovery on transient failures (by `seq`).
+
+**Deliverables**  
+- `USERLAND_AND_CLI.md` updated with pooling guidance.
+
+**Compiler touchpoints**  
+- IR v1.2 adds:  
+  - `client_policies.cohsh.pool: { control: u8, telemetry: u8 }`  
+  - `client_policies.retry: { short_write: { max_retries:u8, backoff_ms:u32 } }`  
+- Codegen: output `out/cohsh_policy.toml` and example worker using the pool.
+
+---
+
+## Milestone 13 — Observability via Files (no new protocols)
+
+**Why now (compiler):** Observability remains 9P-native. The compiler enumerates proc nodes to keep docs, code, and tests aligned.
+
+**Goal**  
+Expose runtime metrics/backpressure as files under `/proc/*`.
+
+**Changes**  
+- `/proc/9p/{sessions,outstanding,short_writes}`  
+- `/proc/ingest/{p50_ms,p95_ms,backpressure,dropped,queued}`  
+- `/proc/ingest/watch` periodic snapshots (append-only)
+
+**Commands**  
+- `cargo test -p nine-door`  
+- `cohsh tail /proc/ingest/watch`
+
+**Checks (DoD)**  
+- Counters track stress accurately; `watch` parsable; no hot-path allocations.
+
+**Deliverables**  
 - `SECURE9P.md` monitoring appendix; ops runbook snippet.
 
----
-
-### M14 — Content‑Addressed Updates (CAS) — 9P First
-**Goal:** Introduce a CAS to serve model/content updates over 9P without HTTP dependencies.
-
-**Changes**
-- Trait `CasStore` with `put(bytes)->hash`, `get(hash)`; file‑backed implementation.
-- Providers under `/updates/<epoch>/{manifest.cbor,chunks/<hash>}`.
-- Delta packs documented; integrity via hash; optional signature metadata.
-
-**Commands**
-- `cargo test -p nine-door`
-- CLI: `cohsh cat /updates/<e>/manifest.cbor | cbor2json`
-
-**Checks (DoD)**
-- Resume after disconnect using existing 9P paths; chunk integrity verified.
-- Manifest round‑trips; delta application test passes.
-
-**Deliverables**
-- `INTERFACES.md` add CAS format & delta rules.
+**Compiler touchpoints**  
+- IR v1.2 adds:  
+  - `observability.proc_9p: [...]`  
+  - `observability.proc_ingest: { fields:[...], watch_interval_ms:u32 }`  
+- Codegen: read-only providers + `watch` cadence; sample `tail` test.
 
 ---
 
-### M15 — Tickets v2: Leases, Scopes, Rate
-**Goal:** Strengthen identity and flow control for many‑worker sites.
+## Milestone 14 — Content-Addressed Updates (CAS) — 9P-first
 
-**Changes**
-- `cohesix-ticket`: add `{v:2, role, worker_id, ttl_s, scopes[], rate_limit}`.
-- Enforce TTLs and per‑worker rate buckets in providers producing telemetry.
-- Revocation list file `/queen/revocations` (append‑only).
+**Why now (compiler):** CAS layout, chunk sizes, and integrity rules must be validated and generated centrally to avoid drift and HTTP creep inside the VM.
 
-**Commands**
-- `cargo test -p cohesix-ticket -p nine-door`
-- CLI: lease renewal & revoke scripts.
+**Goal**  
+Serve model/content updates over 9P with content addressing and optional signatures.
 
-**Checks (DoD)**
-- Expired → ops denied; renewed → no data loss; rate limit produces short‑write not panic.
+**Changes**  
+- Trait `CasStore` with `put(bytes)->hash`, `get(hash)`.  
+- `/updates/<epoch>/{manifest.cbor,chunks/<hash>}` layout; delta packs; integrity via hash (optional signatures).
 
-**Deliverables**
-- `ROLES_AND_SCHEDULING.md` updated; security considerations section.
+**Commands**  
+- `cargo test -p nine-door`  
+- `cohsh cat /updates/<e>/manifest.cbor | cbor2json`
 
----
+**Checks (DoD)**  
+- Resume after disconnect using existing 9P paths; chunk integrity verified.  
+- Manifest round-trips; delta application test passes.
 
-### M16 — Host 9P Gateway (std) with SO_REUSEPORT
-**Goal:** Scale the front door horizontally on multicore/cloud hosts while the VM stays no_std.
+**Deliverables**  
+- `INTERFACES.md` section for CAS format & delta rules.
 
-**Changes**
-- New binary `ninep-gw` (std): multi‑accept, SO_REUSEPORT, bounded request queues, shard‑aware routing.
-- Optional process‑level sharding by `worker_id` hash behind an L4 LB (still 9P/TCP).
-
-**Commands**
-- `cargo build -p ninep-gw`
-- Load test: `tools/load/ninep_stress.rs`
-
-**Checks (DoD)**
-- Sustained throughput (target to be set), graceful backpressure, no drops beyond configured limits.
-
-**Deliverables**
-- Deployment guide with systemd units and example LB config.
+**Compiler touchpoints**  
+- IR v1.3 adds:  
+  - `cas.enable: bool`  
+  - `cas.store: { root: "/updates", chunk_bytes: u32, hash: "sha256", sign?: { algo: "ed25519", pubkey_path: "…" } }`  
+  - `cas.delta.enable: bool`  
+- Validation: chunk_bytes fits `msize` envelopes; key presence when signing enabled.  
+- Codegen: CAS provider layout + host `cas_tool` packing rules (doc’d); resume tests.
 
 ---
 
-## Non‑Goals (these milestones)
-- Adding HTTP/3 or gRPC inside the VM (can be layered later at a gateway).
-- Changing 9P protocol or semantics—**we remain 9P2000.L** with strict bounds.
-- POSIX emulation or general‑purpose shell.
+### Docs-as-Built Alignment (applies to M8C onward)
 
----
+To prevent drift:
 
-## Invariants & Red Lines (unchanged)
-- **no_std** inside the seL4 VM; `alloc` allowed with strict bounds.  
-- msize ≤ 8192, bounded walk depth ≤ 8, no `..` escapes, no FID reuse after clunk.  
-- No TCP listeners inside the VM unless explicitly feature‑gated and justified.  
-- CPIO payload < 4 MB.
+1. **Docs → IR → Code**  
+   - Any new behavior MUST land as IR fields with validation and codegen.  
+   - Build fails if IR references disabled gates or violates Secure9P bounds.
+
+2. **Autogenerated Snippets**  
+   - `coh-rtc` refreshes embedded snippets in `SECURE9P.md`/`INTERFACES.md` (CBOR schema, `/proc` tree, concurrency knobs) during release prep.
+
+3. **As-Built Guard**  
+   - A simple check (scripted) compares generated file hashes and resolved manifest fields to the examples embedded in docs. If mismatched, CI/docs review fails.  
+   - Rule: **Documentation must describe the system “as built”** (post-codegen), not only “as intended”.
+
+4. **Red Lines**  
+   - Enforced in the compiler and restated here: 9P2000.L, `msize ≤ 8192`, walk depth ≤ 8, no `..`, no FID reuse after clunk, no TCP listeners inside VM unless feature-gated and documented, CPIO < 4 MB, no POSIX façade.
+
