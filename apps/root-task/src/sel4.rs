@@ -571,7 +571,7 @@ pub struct RetypeTrace {
     /// `cnode_root`. Root CNode policy: MUST remain 0 so the kernel uses `cnode_root` as provided.
     pub node_index: seL4_Word,
     /// Object type requested from the kernel.
-    pub object_type: u32,
+    pub object_type: seL4_Word,
     /// Object size (in bits) supplied to the kernel.
     pub object_size_bits: seL4_Word,
     /// High-level description of the object being materialised.
@@ -708,7 +708,7 @@ impl<'a> KernelEnv<'a> {
         let trace = self.prepare_retype_trace(
             &reserved,
             frame_slot,
-            seL4_ARM_SmallPageObject as u32,
+            seL4_ARM_SmallPageObject,
             PAGE_BITS as seL4_Word,
             RetypeKind::DevicePage { paddr },
         );
@@ -743,7 +743,7 @@ impl<'a> KernelEnv<'a> {
         let trace = self.prepare_retype_trace(
             &reserved,
             frame_slot,
-            seL4_ARM_SmallPageObject as u32,
+            seL4_ARM_SmallPageObject,
             PAGE_BITS as seL4_Word,
             RetypeKind::DmaPage {
                 paddr: reserved.paddr(),
@@ -800,7 +800,7 @@ impl<'a> KernelEnv<'a> {
     fn retype_into_root_cnode_slot(
         &self,
         untyped_cap: seL4_Untyped,
-        objtype: u32,
+        objtype: seL4_Word,
         size_bits: seL4_Word,
         dest_slot: seL4_Word,
     ) -> seL4_Error {
@@ -1019,7 +1019,7 @@ impl<'a> KernelEnv<'a> {
         let trace = self.prepare_retype_trace(
             &reserved,
             pt_slot,
-            seL4_ARM_PageTableObject as u32,
+            seL4_ARM_PageTableObject,
             PAGE_TABLE_BITS as seL4_Word,
             RetypeKind::PageTable { vaddr: pt_base },
         );
@@ -1071,7 +1071,7 @@ impl<'a> KernelEnv<'a> {
         let trace = self.prepare_retype_trace(
             &reserved,
             pd_slot,
-            seL4_ARM_PageTableObject as u32,
+            seL4_ARM_PageTableObject,
             PAGE_TABLE_BITS as seL4_Word,
             RetypeKind::PageDirectory { vaddr: pd_base },
         );
@@ -1121,7 +1121,7 @@ impl<'a> KernelEnv<'a> {
         let trace = self.prepare_retype_trace(
             &reserved,
             pud_slot,
-            seL4_ARM_PageTableObject as u32,
+            seL4_ARM_PageTableObject,
             PAGE_TABLE_BITS as seL4_Word,
             RetypeKind::PageUpperDirectory { vaddr: pud_base },
         );
@@ -1161,7 +1161,7 @@ impl<'a> KernelEnv<'a> {
         &mut self,
         reserved: &ReservedUntyped,
         slot: seL4_CPtr,
-        object_type: u32,
+        object_type: seL4_Word,
         object_size_bits: seL4_Word,
         kind: RetypeKind,
     ) -> RetypeTrace {
@@ -1319,7 +1319,7 @@ mod tests {
         let trace = env.prepare_retype_trace(
             &reserved,
             slot,
-            seL4_ARM_SmallPageObject as u32,
+            seL4_ARM_SmallPageObject,
             PAGE_BITS as seL4_Word,
             RetypeKind::DevicePage { paddr: 0 },
         );
@@ -1367,7 +1367,7 @@ mod tests {
             dest_offset: slot,
             cnode_depth: 0,
             node_index: 0,
-            object_type: seL4_ARM_SmallPageObject as u32,
+            object_type: seL4_ARM_SmallPageObject,
             object_size_bits: PAGE_BITS as seL4_Word,
             kind: RetypeKind::DevicePage { paddr: 0 },
         };
@@ -1399,7 +1399,7 @@ mod tests {
             dest_offset: slot,
             cnode_depth: 13,
             node_index: 123,
-            object_type: seL4_ARM_SmallPageObject as u32,
+            object_type: seL4_ARM_SmallPageObject,
             object_size_bits: PAGE_BITS as seL4_Word,
             kind: RetypeKind::DevicePage { paddr: 0 },
         };
@@ -1432,7 +1432,7 @@ mod tests {
             dest_offset: 0x1ff,
             cnode_depth: 0,
             node_index: 0,
-            object_type: seL4_ARM_SmallPageObject as u32,
+            object_type: seL4_ARM_SmallPageObject,
             object_size_bits: PAGE_BITS as seL4_Word,
             kind: RetypeKind::DmaPage { paddr: 0 },
         };
