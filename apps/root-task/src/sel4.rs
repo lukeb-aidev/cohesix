@@ -38,11 +38,7 @@ pub trait BootInfoExt {
 impl BootInfoExt for seL4_BootInfo {
     #[inline(always)]
     fn init_cnode_cap(&self) -> seL4_CPtr {
-        // Since seL4 15 the init thread's root CNode capability is exposed exclusively via the
-        // statically-assigned slot defined by `seL4_CapInitThreadCNode`. Earlier kernels mirrored
-        // the same value inside `seL4_BootInfo`, so we normalise the accessor to always use the
-        // constant provided by the kernel interface.
-        seL4_CapInitThreadCNode
+        self.initThreadCNode
     }
 
     #[inline(always)]
@@ -821,6 +817,17 @@ impl<'a> KernelEnv<'a> {
                 1,
             )
         };
+        if err != seL4_NoError {
+            log::error!(
+                "Retype failed: err={} root=0x{:x} index={} depth={} offset=0x{:x} (init_bits={})",
+                err,
+                trace.cnode_root,
+                trace.node_index,
+                trace.cnode_depth,
+                trace.dest_offset,
+                init_bits
+            );
+        }
         SeL4Result::from(err)
     }
 
@@ -1190,6 +1197,8 @@ mod tests {
             end: 1 << 13,
         };
         bootinfo.initThreadCNodeSizeBits = 13;
+        let init_cnode = 0x1234;
+        bootinfo.initThreadCNode = init_cnode;
         let bootinfo_ref: &'static mut seL4_BootInfo = Box::leak(Box::new(bootinfo));
         let mut env = KernelEnv::new(bootinfo_ref);
         let reserved = ReservedUntyped {
@@ -1206,7 +1215,7 @@ mod tests {
             PAGE_BITS as seL4_Word,
             RetypeKind::DevicePage { paddr: 0 },
         );
-        assert_eq!(trace.cnode_root, seL4_CapInitThreadCNode);
+        assert_eq!(trace.cnode_root, init_cnode);
         assert_eq!(trace.node_index, 0);
         assert_eq!(trace.cnode_depth, 0);
         assert_eq!(trace.dest_offset, slot);
@@ -1217,6 +1226,7 @@ mod tests {
     fn bootinfo_capacity_bits_drive_cspace_math() {
         let mut bootinfo: seL4_BootInfo = unsafe { core::mem::zeroed() };
         bootinfo.initThreadCNodeSizeBits = 13;
+        bootinfo.initThreadCNode = 0x1234;
         let init_bits = bootinfo.init_cnode_size_bits();
         assert_eq!(init_bits, 13);
 
@@ -1237,6 +1247,7 @@ mod tests {
             end: 1 << 13,
         };
         bootinfo.initThreadCNodeSizeBits = 13;
+        bootinfo.initThreadCNode = 0x1234;
         let bootinfo_ref: &'static mut seL4_BootInfo = Box::leak(Box::new(bootinfo));
         let env = KernelEnv::new(bootinfo_ref);
 
@@ -1245,7 +1256,7 @@ mod tests {
             untyped_cap: 0x200,
             untyped_paddr: 0,
             untyped_size_bits: PAGE_BITS as u8,
-            cnode_root: seL4_CapInitThreadCNode,
+            cnode_root: bootinfo_ref.initThreadCNode,
             dest_slot: slot,
             dest_offset: slot,
             cnode_depth: 0,
@@ -1269,6 +1280,7 @@ mod tests {
             end: 1 << 13,
         };
         bootinfo.initThreadCNodeSizeBits = 13;
+        bootinfo.initThreadCNode = 0x1234;
         let bootinfo_ref: &'static mut seL4_BootInfo = Box::leak(Box::new(bootinfo));
         let env = KernelEnv::new(bootinfo_ref);
 
@@ -1277,7 +1289,7 @@ mod tests {
             untyped_cap: 0x100,
             untyped_paddr: 0,
             untyped_size_bits: PAGE_BITS as u8,
-            cnode_root: seL4_CapInitThreadCNode,
+            cnode_root: bootinfo_ref.initThreadCNode,
             dest_slot: slot,
             dest_offset: slot,
             cnode_depth: 13,
@@ -1304,13 +1316,14 @@ mod tests {
             end: 1 << 13,
         };
         bootinfo.initThreadCNodeSizeBits = 13;
+        bootinfo.initThreadCNode = 0x1234;
         let bootinfo_ref: &'static mut seL4_BootInfo = Box::leak(Box::new(bootinfo));
         let env = KernelEnv::new(bootinfo_ref);
         let valid_trace = RetypeTrace {
             untyped_cap: 0x100,
             untyped_paddr: 0,
             untyped_size_bits: PAGE_BITS as u8,
-            cnode_root: seL4_CapInitThreadCNode,
+            cnode_root: bootinfo_ref.initThreadCNode,
             dest_slot: 0x1ff,
             dest_offset: 0x1ff,
             cnode_depth: 0,
