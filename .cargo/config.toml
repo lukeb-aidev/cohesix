@@ -4,6 +4,9 @@ incremental = false
 
 [profile.release.package.root-task]
 incremental = false
+opt-level = "s"
+codegen-units = 1
+strip = "symbols"
 
 [profile.dev.package.nine-door]
 incremental = false
