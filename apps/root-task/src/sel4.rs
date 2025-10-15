@@ -38,7 +38,7 @@ pub trait BootInfoExt {
 impl BootInfoExt for seL4_BootInfo {
     #[inline(always)]
     fn init_cnode_cap(&self) -> seL4_CPtr {
-        self.initThreadCNode
+        seL4_CapInitThreadCNode
     }
 
     #[inline(always)]
@@ -1197,8 +1197,6 @@ mod tests {
             end: 1 << 13,
         };
         bootinfo.initThreadCNodeSizeBits = 13;
-        let init_cnode = 0x1234;
-        bootinfo.initThreadCNode = init_cnode;
         let bootinfo_ref: &'static mut seL4_BootInfo = Box::leak(Box::new(bootinfo));
         let mut env = KernelEnv::new(bootinfo_ref);
         let reserved = ReservedUntyped {
@@ -1215,7 +1213,7 @@ mod tests {
             PAGE_BITS as seL4_Word,
             RetypeKind::DevicePage { paddr: 0 },
         );
-        assert_eq!(trace.cnode_root, init_cnode);
+        assert_eq!(trace.cnode_root, seL4_CapInitThreadCNode);
         assert_eq!(trace.node_index, 0);
         assert_eq!(trace.cnode_depth, 0);
         assert_eq!(trace.dest_offset, slot);
@@ -1226,7 +1224,6 @@ mod tests {
     fn bootinfo_capacity_bits_drive_cspace_math() {
         let mut bootinfo: seL4_BootInfo = unsafe { core::mem::zeroed() };
         bootinfo.initThreadCNodeSizeBits = 13;
-        bootinfo.initThreadCNode = 0x1234;
         let init_bits = bootinfo.init_cnode_size_bits();
         assert_eq!(init_bits, 13);
 
@@ -1247,7 +1244,6 @@ mod tests {
             end: 1 << 13,
         };
         bootinfo.initThreadCNodeSizeBits = 13;
-        bootinfo.initThreadCNode = 0x1234;
         let bootinfo_ref: &'static mut seL4_BootInfo = Box::leak(Box::new(bootinfo));
         let env = KernelEnv::new(bootinfo_ref);
 
@@ -1256,7 +1252,7 @@ mod tests {
             untyped_cap: 0x200,
             untyped_paddr: 0,
             untyped_size_bits: PAGE_BITS as u8,
-            cnode_root: bootinfo_ref.initThreadCNode,
+            cnode_root: seL4_CapInitThreadCNode,
             dest_slot: slot,
             dest_offset: slot,
             cnode_depth: 0,
@@ -1280,7 +1276,6 @@ mod tests {
             end: 1 << 13,
         };
         bootinfo.initThreadCNodeSizeBits = 13;
-        bootinfo.initThreadCNode = 0x1234;
         let bootinfo_ref: &'static mut seL4_BootInfo = Box::leak(Box::new(bootinfo));
         let env = KernelEnv::new(bootinfo_ref);
 
@@ -1289,7 +1284,7 @@ mod tests {
             untyped_cap: 0x100,
             untyped_paddr: 0,
             untyped_size_bits: PAGE_BITS as u8,
-            cnode_root: bootinfo_ref.initThreadCNode,
+            cnode_root: seL4_CapInitThreadCNode,
             dest_slot: slot,
             dest_offset: slot,
             cnode_depth: 13,
@@ -1316,14 +1311,13 @@ mod tests {
             end: 1 << 13,
         };
         bootinfo.initThreadCNodeSizeBits = 13;
-        bootinfo.initThreadCNode = 0x1234;
         let bootinfo_ref: &'static mut seL4_BootInfo = Box::leak(Box::new(bootinfo));
         let env = KernelEnv::new(bootinfo_ref);
         let valid_trace = RetypeTrace {
             untyped_cap: 0x100,
             untyped_paddr: 0,
             untyped_size_bits: PAGE_BITS as u8,
-            cnode_root: bootinfo_ref.initThreadCNode,
+            cnode_root: seL4_CapInitThreadCNode,
             dest_slot: 0x1ff,
             dest_offset: 0x1ff,
             cnode_depth: 0,
