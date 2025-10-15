@@ -12,11 +12,14 @@ use heapless::Vec;
 use sel4_sys::seL4_DebugCapIdentify;
 use sel4_sys::{
     seL4_ARM_PageTableObject, seL4_ARM_PageTable_Map, seL4_ARM_Page_Default, seL4_ARM_Page_Map,
-    seL4_ARM_Page_Uncached, seL4_ARM_SmallPageObject, seL4_BootInfo, seL4_CNode, seL4_CNode_Delete,
-    seL4_CNode_Move, seL4_CPtr, seL4_CapInitThreadTCB, seL4_CapRights_ReadWrite, seL4_NoError,
-    seL4_NotEnoughMemory, seL4_SlotRegion, seL4_Untyped, seL4_Untyped_Retype, seL4_Word,
-    UntypedDesc, MAX_BOOTINFO_UNTYPEDS,
+    seL4_ARM_Page_Uncached, seL4_AllRights, seL4_BootInfo, seL4_CNode, seL4_CNode_Copy,
+    seL4_CNode_Delete, seL4_CNode_Move, seL4_CPtr, seL4_CapRights_ReadWrite, seL4_NoError,
+    seL4_NotEnoughMemory, seL4_ObjectType, seL4_SlotRegion, seL4_Untyped, seL4_Untyped_Retype,
+    seL4_Word, UntypedDesc, MAX_BOOTINFO_UNTYPEDS,
 };
+
+#[cfg(all(target_os = "none", not(target_arch = "aarch64")))]
+compile_error!("This path currently expects AArch64; wire correct ARM object types for your arch.");
 
 const _: () = {
     let _check: [u8; core::mem::size_of::<seL4_Word>()] = [0; core::mem::size_of::<usize>()];
@@ -77,11 +80,15 @@ fn log_cap_details(tag: &str, cptr: seL4_CPtr) {
 fn log_cap_details(_tag: &str, _cptr: seL4_CPtr) {}
 
 #[inline(always)]
-fn describe_object_type(objtype: seL4_Word) -> &'static str {
+fn objtype_name(objtype: seL4_Word) -> &'static str {
     match objtype {
-        seL4_ARM_SmallPageObject => "seL4_ARM_SmallPageObject",
-        seL4_ARM_PageTableObject => "seL4_ARM_PageTableObject",
-        _ => "<unknown>",
+        x if x == seL4_ObjectType::seL4_ARM_Page as seL4_Word => "seL4_ARM_Page",
+        x if x == seL4_ObjectType::seL4_ARM_PageTableObject as seL4_Word => {
+            "seL4_ARM_PageTableObject"
+        }
+        x if x == seL4_ObjectType::seL4_CapTableObject as seL4_Word => "seL4_CapTableObject",
+        x if x == seL4_ObjectType::seL4_UntypedObject as seL4_Word => "seL4_UntypedObject",
+        _ => "<?>",
     }
 }
 
@@ -726,7 +733,7 @@ impl<'a> KernelEnv<'a> {
         let trace = self.prepare_retype_trace(
             &reserved,
             frame_slot,
-            seL4_ARM_SmallPageObject,
+            seL4_ObjectType::seL4_ARM_Page as seL4_Word,
             PAGE_BITS as seL4_Word,
             RetypeKind::DevicePage { paddr },
         );
@@ -761,7 +768,7 @@ impl<'a> KernelEnv<'a> {
         let trace = self.prepare_retype_trace(
             &reserved,
             frame_slot,
-            seL4_ARM_SmallPageObject,
+            seL4_ObjectType::seL4_ARM_Page as seL4_Word,
             PAGE_BITS as seL4_Word,
             RetypeKind::DmaPage {
                 paddr: reserved.paddr(),
@@ -801,8 +808,9 @@ impl<'a> KernelEnv<'a> {
             "retype_page expects a page-related trace"
         );
         debug_assert_eq!(
-            trace.object_type, seL4_ARM_SmallPageObject,
-            "ARM device/RAM frames must use seL4_ARM_SmallPageObject"
+            trace.object_type,
+            seL4_ObjectType::seL4_ARM_Page as seL4_Word,
+            "ARM device/RAM frames must use seL4_ARM_Page",
         );
         debug_assert_eq!(
             trace.object_size_bits, PAGE_BITS as seL4_Word,
@@ -829,46 +837,36 @@ impl<'a> KernelEnv<'a> {
         }
     }
 
-    fn cnode_move_probe(&self, dest_slot: seL4_Word) -> Result<(), seL4_Error> {
+    fn cnode_probe_copy_delete(&self, dest_slot: seL4_Word) -> Result<(), seL4_Error> {
         let root = self.bootinfo.init_cnode_cap();
         let depth = self.bootinfo.init_cnode_bits() as seL4_Word;
-        let src = seL4_CapInitThreadTCB as seL4_Word;
-        let tmp = dest_slot;
+        let src = seL4_CapInitThreadCNode as seL4_Word;
+        let rights = seL4_AllRights;
 
-        if tmp == src {
+        if dest_slot == src {
             log::trace!(
-                "Preflight: dest_slot 0x{tmp:04x} equals probe source; skipping CNode_Move",
+                "Preflight: dest_slot 0x{dest_slot:04x} equals probe source; skipping Copy/Delete",
             );
             return Ok(());
         }
 
         log::trace!(
-            "Probe Move: root=0x{root:04x} tmp=0x{tmp:04x} depth={depth} src=0x{src:04x} depth={depth}",
+            "Probe Copy: root=0x{root:04x} -> slot=0x{dest_slot:04x} (src_slot=0x{src:04x}, depth={depth})",
         );
-        let err1 = unsafe { seL4_CNode_Move(root, tmp, depth, root, src, depth) };
+        let err1 = unsafe { seL4_CNode_Copy(root, dest_slot, depth, root, src, depth, rights) };
         if err1 != seL4_NoError {
-            log::error!(
-                "Preflight: CNode_Move src(0x{src:04x})->dest(0x{tmp:04x}) failed: {:?}",
-                err1
-            );
+            log::error!("Preflight: CNode_Copy to tmp failed: {:?}", err1);
             return Err(err1);
         }
 
-        log::trace!(
-            "Probe Move back: root=0x{root:04x} src=0x{src:04x} depth={depth} tmp=0x{tmp:04x} depth={depth}",
-        );
-        let err2 = unsafe { seL4_CNode_Move(root, src, depth, root, tmp, depth) };
+        log::trace!("Probe Delete: root=0x{root:04x} slot=0x{dest_slot:04x} depth={depth}",);
+        let err2 = unsafe { seL4_CNode_Delete(root, dest_slot, depth) };
         if err2 != seL4_NoError {
-            log::error!(
-                "Preflight: CNode_Move dest(0x{tmp:04x})->src(0x{src:04x}) failed: {:?}",
-                err2
-            );
-            panic!(
-                "failed to restore init thread TCB cap after preflight (slot=0x{tmp:04x} err={err2:?})"
-            );
+            log::error!("Preflight: CNode_Delete tmp failed: {:?}", err2);
+            return Err(err2);
         }
 
-        log::trace!("Preflight: CNode_Move src(0x{src:04x})<->dest(0x{tmp:04x}) succeeded",);
+        log::trace!("Preflight: Copy/Delete OK at slot 0x{dest_slot:04x}");
         Ok(())
     }
 
@@ -893,19 +891,19 @@ impl<'a> KernelEnv<'a> {
 
         log_cap_details("RootCNode", root_cnode);
 
-        if let Err(err) = self.cnode_move_probe(dest_slot) {
+        if let Err(err) = self.cnode_probe_copy_delete(dest_slot) {
             log::error!("Preflight failed for slot 0x{dest_slot:04x}: {:?}", err);
             return err;
         }
 
-        let objtype_name = describe_object_type(objtype);
+        let objtype_label = objtype_name(objtype);
         log::trace!(
             "Retype[A] → root=0x{:x} index=0 depth=0 offset=0x{:x} (init_bits={} objtype=0x{:x} ({}) size_bits={})",
             root_cnode,
             dest_slot,
             init_bits,
             objtype,
-            objtype_name,
+            objtype_label,
             size_bits
         );
         let err_a = unsafe {
@@ -920,6 +918,7 @@ impl<'a> KernelEnv<'a> {
                 1,
             )
         };
+        log::trace!("Retype[A] result: {:?}", err_a);
         if err_a == seL4_NoError {
             return err_a;
         }
@@ -940,7 +939,7 @@ impl<'a> KernelEnv<'a> {
             init_bits,
             init_bits,
             objtype,
-            objtype_name,
+            objtype_label,
             size_bits
         );
         let err_b = unsafe {
@@ -955,6 +954,7 @@ impl<'a> KernelEnv<'a> {
                 1,
             )
         };
+        log::trace!("Retype[B] result: {:?}", err_b);
         if err_b != seL4_NoError {
             log::error!(
                 "Retype[B] failed with {:?}; tuple[root=0x{:x} index=0x{:x} depth={} offset=0 objtype=0x{:x} ({}) size_bits={}] after Retype[A] err {:?}",
@@ -963,7 +963,7 @@ impl<'a> KernelEnv<'a> {
                 root_cnode,
                 init_bits,
                 objtype,
-                objtype_name,
+                objtype_label,
                 size_bits,
                 err_a
             );
@@ -1003,14 +1003,17 @@ impl<'a> KernelEnv<'a> {
     #[inline(always)]
     fn perform_retype(&self, untyped_cap: seL4_Untyped, trace: RetypeTrace) -> SeL4Result {
         let (trace, init_bits) = self.sanitise_retype_trace(trace);
+        let objtype_label = objtype_name(trace.object_type);
 
         log::trace!(
-            "Retype (sanitised) → root=0x{:x} index={} depth={} offset=0x{:x} (init_bits={})",
+            "Retype (sanitised) → root=0x{:x} index={} depth={} offset=0x{:x} (init_bits={} objtype={} size_bits={})",
             trace.cnode_root,
             trace.node_index,
             trace.cnode_depth,
             trace.dest_offset,
-            init_bits
+            init_bits,
+            objtype_label,
+            trace.object_size_bits
         );
 
         let err = self.retype_into_root_cnode_slot(
@@ -1021,13 +1024,15 @@ impl<'a> KernelEnv<'a> {
         );
         if err != seL4_NoError {
             log::error!(
-                "Retype failed: err={} root=0x{:x} index={} depth={} offset=0x{:x} (init_bits={})",
+                "Retype failed: err={} root=0x{:x} index={} depth={} offset=0x{:x} (init_bits={} objtype={} size_bits={})",
                 err,
                 trace.cnode_root,
                 trace.node_index,
                 trace.cnode_depth,
                 trace.dest_offset,
-                init_bits
+                init_bits,
+                objtype_label,
+                trace.object_size_bits
             );
         }
         SeL4Result::from(err)
@@ -1411,7 +1416,7 @@ mod tests {
         let trace = env.prepare_retype_trace(
             &reserved,
             slot,
-            seL4_ARM_SmallPageObject,
+            seL4_ObjectType::seL4_ARM_Page as seL4_Word,
             PAGE_BITS as seL4_Word,
             RetypeKind::DevicePage { paddr: 0 },
         );
@@ -1459,7 +1464,7 @@ mod tests {
             dest_offset: slot,
             cnode_depth: 0,
             node_index: 0,
-            object_type: seL4_ARM_SmallPageObject,
+            object_type: seL4_ObjectType::seL4_ARM_Page as seL4_Word,
             object_size_bits: PAGE_BITS as seL4_Word,
             kind: RetypeKind::DevicePage { paddr: 0 },
         };
@@ -1491,7 +1496,7 @@ mod tests {
             dest_offset: slot,
             cnode_depth: 13,
             node_index: 123,
-            object_type: seL4_ARM_SmallPageObject,
+            object_type: seL4_ObjectType::seL4_ARM_Page as seL4_Word,
             object_size_bits: PAGE_BITS as seL4_Word,
             kind: RetypeKind::DevicePage { paddr: 0 },
         };
@@ -1524,7 +1529,7 @@ mod tests {
             dest_offset: 0x1ff,
             cnode_depth: 0,
             node_index: 0,
-            object_type: seL4_ARM_SmallPageObject,
+            object_type: seL4_ObjectType::seL4_ARM_Page as seL4_Word,
             object_size_bits: PAGE_BITS as seL4_Word,
             kind: RetypeKind::DmaPage { paddr: 0 },
         };
