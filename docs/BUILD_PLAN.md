@@ -336,242 +336,316 @@ Deliverables: Bidirectional console acknowledgements spanning serial and TCP tra
 - `https://crates.io/crates/spin` (lock primitives for bounded queues)
 
 
-## Milestone 8C — Root-Task Compiler v0 (“coh-rtc”)
+## Milestone 8 — Root-Task Compiler & Deterministic Profiles
 
-**Why now (context):** M0–M7d stabilized boot, roles, NineDoor, console, and TCP/serial surfaces. To prevent drift as we scale concurrency and storage, we “freeze” today’s behavior into a tiny, declarative IR that compiles to `bootstrap.rs`, a resolved manifest, and CLI tests. From here on, **docs → IR → codegen** is the single source of truth.
+**Why now (context):** Milestones 0–7d stabilised the execution core, but the path to the use cases in `docs/USE_CASES.md` demands a deterministic configuration layer that keeps `no_std` guarantees intact while preventing namespace or policy drift. A tiny IR-driven compiler lets us regenerate the root task, documentation, and tests from a single artefact so smart-factory, energy, and fintech operators can audit what actually runs.
 
-**Goal**  
-Introduce a minimal **root-task compiler** (`tools/coh-rtc`) that ingests `root_task.toml` and generates:
-- `apps/root-task/src/generated/bootstrap.rs` (init, providers, policy)
-- `out/manifests/root_task_resolved.json`
-- `tests/cli/boot_v0.cohsh` (cat `/proc/boot`, append `/queen/ctl`)
+**Goal**
+Introduce the **root-task compiler** (`tools/coh-rtc`) that ingests `root_task.toml` and emits deterministic artefacts with explicit `no_std` validation hooks.
 
-**Changes**  
-- IR v1.0: system (arch, tick), Secure9P limits (msize ≤ 8192, max walk ≤ 8, forbid `..`, no FID reuse), roles, mounts/providers.  
-- Validation: fail build on bounds violations or path escapes.  
-- Codegen: deterministic, sorted output; “GENERATED – do not edit” banner.
+**Deliverables**
+- IR v1.0 covering system profile (arch, tick), Secure9P bounds (msize ≤ 8192, walk depth ≤ 8, forbid `..`, disallow fid reuse), initial providers, and role budgets. The schema must capture the event-pump wiring noted in `docs/ARCHITECTURE.md §2-§3` so generated code preserves cooperative scheduling semantics.
+- Validation pipeline that refuses builds when bounds, path hygiene, or feature gates would violate red lines or require `std`. This includes a `cargo check -p root-task --no-default-features` guard after generation.
+- Code generation producing:
+  - `apps/root-task/src/generated/bootstrap.rs` (init graph + policy tables, `#![no_std]` annotated).
+  - `out/manifests/root_task_resolved.json` (audit trail consumed by docs/tests).
+  - `tests/cli/boot_v0.cohsh` (baseline CLI regression) and a reproducible hash recorded beside the manifest.
+- Documentation glue: compiler README, IR reference in `docs/ARCHITECTURE.md §11`, and task template linkage so planners can quote schema fields directly.
 
-**Commands**  
-- `cargo run -p coh-rtc -- root_task.toml --out apps/root-task/src/generated`  
+**Use-case alignment**
+- Smart-factory gateways (Use Case §Edge 1) and HSM-adjacent signing (Security §11) need auditable boot manifests and deterministic policy regen to satisfy certification reviews.
+- Energy micro-grids (Edge §2) rely on the manifest to prove walk limits, telemetry mounts, and ticket budgets remain within regulatory envelopes.
+
+**Commands**
+- `cargo run -p coh-rtc -- root_task.toml --out apps/root-task/src/generated`
+- `cargo check -p root-task --no-default-features`
 - `cohsh --script tests/cli/boot_v0.cohsh`
 
-**Checks (DoD)**  
-- Deterministic regen (same IR ⇒ identical output hash).  
-- QEMU script passes `cat /proc/boot` and `echo` to `/queen/ctl`.  
-- Compiler rejects IR that would violate red lines (size/walk/escapes).
+**Checks (DoD)**
+- Regenerating artefacts twice without touching IR yields identical hashes and Rustfmt-stable output.
+- QEMU regression passes `cat /proc/boot` and append-only `/queen/ctl` writes using generated bootstrap code.
+- Compiler rejects manifests that would exceed Secure9P bounds, introduce path escapes, or enable features unavailable under `no_std`/`alloc`.
 
-**Deliverables**  
-- `tools/coh-rtc` crate, example `root_task.toml`, generated files + CLI script.
-
-**Compiler touchpoints**  
-- Adds `root_task.schema = "1.0"`.  
-- Emits resolved manifest used by later milestones for planning and tests.
+**Compiler touchpoints**
+- Adds `root_task.schema = "1.0"`, ties schema version to docs, and emits manifest metadata consumed by the future as-built guard.
+- Generates a `generated/mod.rs` index annotated with “GENERATED – do not edit” comments so auditors can diff artefacts cleanly.
+- Captures feature toggles (`net`, `telemetry`, `gpu`) for later hardware planning without enabling them implicitly.
 
 ---
 
-## Milestone 9 — 9P Pipelining & Batching (foundational concurrency)
+## Milestone 9 — 9P Pipelining & Batching (Foundational Concurrency)
 
-**Why now (compiler):** M9 introduces many in-flight tags + batched frames **without changing 9P**. The compiler must gate and validate these knobs so runtime remains bounded and reproducible.
+**Why now (compiler):** High-throughput telemetry and remote operations (Edge §§3–5, Telco MEC, Retail vision) require multiple inflight requests without abandoning strict bounds. Compiler-enforced knobs let us dial concurrency per deployment while preserving determinism.
 
-**Goal**  
-Enable high concurrency via **N outstanding tags per session** and optional **batched frames** within `msize`.
+**Goal**
+Enable multiple outstanding tags per session and optional batched frames while keeping Secure9P semantics and `no_std` constraints intact.
 
-**Changes**  
-- `secure9p-core`: multiple outstanding tags; out-of-order `R*` support.  
-- `secure9p-codec`: zero-copy frame iterator for length-prefixed sequences.  
-- `nine-door`: provider API accepts frame slices; uses short-write for backpressure.
+**Deliverables**
+- `secure9p-core`: tag window manager supporting out-of-order `R*` replies with bounded alloc usage; property tests validating tag reuse and error handling.
+- `secure9p-codec`: zero-copy iterator over batched Twrite/Tread frames, instrumented for fuzzing and tolerant of partial consumption.
+- `nine-door`: provider API updates to accept frame slices, apply short-write backpressure, and expose queue metrics to `/proc/9p/*` once Milestone 13 lands.
+- Compiler extensions for IR v1.1 capturing `tags_per_session`, `batch_frames`, and `short_write_policy` defaults plus docs cross-references.
 
-**Commands**  
+**Use-case alignment**
+- Logistics telemetry (Edge §4) and MEC orchestration (Edge §5) depend on deep pipelines to keep heartbeats and GPU leases responsive under load.
+- Smart-city sensing (Edge §9) benefits from batched small sensor payloads without increasing `msize`.
+
+**Commands**
 - `cargo test -p secure9p-core -p secure9p-codec -p nine-door`
+- `cargo test -p secure9p-core --features fuzz -- lib::batch_roundtrip` (feature-gated corpus replay)
+- `cargo check -p nine-door --no-default-features`
 
-**Checks (DoD)**  
-- Load test: 10k interleaved ops across 4 sessions; correct tag matching.  
-- 4-frame batch round-trips; optional CRC documented.  
-- Short-write path exercised; client retries tail reliably.
+**Checks (DoD)**
+- Load test script drives ≥10k interleaved ops across four sessions with no tag mis-match or starvation.
+- Batched frames round-trip within negotiated `msize` envelopes; optional CRC path documented and fuzzed.
+- Short-write retry path verified from `cohsh`, including exponential back-off using IR-configured policy.
 
-**Deliverables**  
-- `SECURE9P.md` updated with concurrency model and short-write guidance.
-
-**Compiler touchpoints**  
-- IR v1.1 adds:  
-  - `secure9p.tags_per_session: u16` (default 32)  
-  - `secure9p.batch_frames: bool` (default true)  
-  - `secure9p.short_write_policy: { enable: bool, backoff_ms: u32 }`  
-- Validation: frame batch total ≤ `msize`; tags_per_session > 0.  
-- Codegen: transport/tag window config + batched Twrite tests (`tests/cli/9p_batch.cohsh`).
+**Compiler touchpoints**
+- IR v1.1 introduces concurrency knobs with validation to keep total batch bytes ≤ `msize` and tag counts ≥ 1.
+- Codegen refreshes CLI samples (`tests/cli/9p_batch.cohsh`) and updates docs automatically when knob defaults change.
 
 ---
 
-## Milestone 10 — Telemetry Rings & Cursors (bounded append-only)
+## Milestone 10 — Telemetry Rings & Cursors (Bounded Append-Only)
 
-**Why now (compiler):** Moves from unbounded files to **bounded rings** with **persistent cursors**. The compiler ensures memory budgets and path safety.
+**Why now (compiler):** Offline-first sectors (Edge §§1,4,7; Science §13) need durable telemetry without unbounded growth. Rings with explicit cursors give deterministic memory and resumable reads consistent with the security posture.
 
-**Goal**  
-Ring-backed `/worker/<id>/telemetry` with **per-consumer cursor** and **CBOR Frame v1**.
+**Goal**
+Deliver ring-backed telemetry files with CBOR Frame v1 payloads and resumable cursors governed by the compiler schema.
 
-**Changes**  
-- Provider: ring (4–16 MB configurable) + backpressure via short-write.  
-- Cursor file `/worker/<id>/cursor` (RW, u64) to resume reads (by `seq`).  
-- CBOR Frame v1: `{seq:u64, ts:u64, kind:u8, payload:bytes, meta?:map}`.
+**Deliverables**
+- `nine-door` provider implementing fixed-size rings (4–16 MiB power-of-two) with short-write signalling and per-session cursors (`/worker/<id>/cursor`).
+- CBOR Frame v1 spec: `{seq:u64, ts:u64, kind:u8, payload:bytes, meta?:map}` with schema excerpt embedded into `docs/INTERFACES.md` and regenerated from compiler output.
+- CLI regression `tests/cli/telemetry_ring.coh` covering wraparound, cursor resume, and offline replay.
+- Compiler IR v1.2 additions for `telemetry.ring_bytes_per_worker` and `telemetry.frame_schema`, with validation for aggregate RAM budgets vs. `docs/ARCHITECTURE.md` allowances.
 
-**Commands**  
-- `cargo test -p nine-door`  
+**Use-case alignment**
+- Logistics and ports (Edge §4) require spool-and-forward semantics with bounded memory.
+- Autonomous depots (Edge §7) rely on resumable telemetry to sync after connectivity gaps.
+
+**Commands**
+- `cargo test -p nine-door`
 - `cohsh --script tests/cli/telemetry_ring.coh`
+- `cargo check -p nine-door --no-default-features`
 
-**Checks (DoD)**  
-- Wrap without crash; cursor resume never regresses; backpressure asserted.  
-- Latency budget documented (P50/P95).
+**Checks (DoD)**
+- Rings wrap without data loss; cursor resume validated across restarts and manifest regenerations.
+- Latency budget (P50/P95) documented in `docs/SECURITY.md` with measurements from automated tests.
 
-**Deliverables**  
-- `INTERFACES.md` updated with CBOR schema v1, cursor semantics.
-
-**Compiler touchpoints**  
-- IR v1.2 adds:  
-  - `telemetry.ring_bytes_per_worker: u32` (power-of-two)  
-  - `telemetry.frame_schema: "cbor_v1"`  
-- Validation: memory budget + walk depth constraints.  
-- Codegen: ring provider scaffolding + schema in `generated/schema.rs`; wrap/resume tests.
+**Compiler touchpoints**
+- Codegen emits ring provider scaffolding (`generated/schema.rs`) and ensures aggregate ring memory stays within IR-declared cap.
+- Docs snippets for CBOR schema are sourced from compiler artefacts to avoid drift.
 
 ---
 
-## Milestone 11 — Sharded Namespaces & Provider Split (scale-out)
+## Milestone 11 — Sharded Namespaces & Provider Split (Scale-Out)
 
-**Why now (compiler):** Shards must be derived deterministically and remain within path depth limits; compiler generates the provider instances and optional aliasing.
+**Why now (compiler):** Multi-tenant scheduling (Edge §5 Telco MEC) and healthcare telemetry (Security §12) need predictable namespace contention. Deterministic sharding keeps walk depth bounded while enabling thousands of workers.
 
-**Goal**  
-Reduce contention and FID pressure by sharding worker trees.
+**Goal**
+Partition worker trees into deterministic shards with compiler-managed provider tables and legacy aliasing for compatibility.
 
-**Changes**  
-- Layout: `/shard/<00..ff>/worker/<id>/*`, with legacy `/worker/<id>` alias.  
-- One provider per shard; hash `hh = sha256(worker_id)[0..=1]`.
+**Deliverables**
+- Namespace layout `/shard/<00..ff>/worker/<id>/*` with optional `/worker/<id>` symlink/alias preserved when configured.
+- Per-shard provider instances with hash-based routing `hh = sha256(worker_id)[0..=1]`, fully documented in `docs/ROLES_AND_SCHEDULING.md`.
+- Load/regression tests (`tests/shard_1k.rs`) demonstrating near-linear scaling without global locks.
+- Compiler IR v1.2 fields `sharding.enable`, `sharding.scheme`, `sharding.legacy_worker_alias`, plus validation for depth ≤ 8.
 
-**Commands**  
-- `cargo test -p nine-door`  
-- `cargo test -p tests --test shard_1k` (if present)
+**Use-case alignment**
+- Telco MEC orchestrator (Edge §5) requires per-tenant shard isolation and predictable capacity planning.
+- Retail CV hubs (Edge §3) benefit from sharding when many camera pipelines attach concurrently.
 
-**Checks (DoD)**  
-- 1k workers attach and write concurrently; near-linear scale w/ shards.  
-- Walk depth ≤ 8; no hot-path global locks.
+**Commands**
+- `cargo test -p nine-door`
+- `cargo test -p tests --test shard_1k`
 
-**Deliverables**  
-- `SECURE9P.md` & `ROLES_AND_SCHEDULING.md` updated with sharding rules.
+**Checks (DoD)**
+- 1k worker sessions attach and stream telemetry concurrently without violating event-pump fairness.
+- Legacy aliases continue to function when enabled and are banned by compiler validation when disabled.
 
-**Compiler touchpoints**  
-- IR v1.2 adds:  
-  - `sharding.enable: bool`  
-  - `sharding.scheme: { kind: "hex_prefix", width: 2 }`  
-  - `sharding.legacy_worker_alias: bool`  
-- Validation: width ⇒ shard count; depth checks; forbid global provider locks.  
-- Codegen: per-shard provider tables + optional alias nodes; scale test scaffold.
+**Compiler touchpoints**
+- Codegen writes per-shard provider maps and ensures alias nodes do not increase walk depth beyond limits.
+- Scale-test harness seeded with manifest data so docs and tests stay aligned.
 
 ---
 
-## Milestone 12 — Client Concurrency & Session Pooling (reference clients)
+## Milestone 12 — Client Concurrency & Session Pooling (Reference Clients)
 
-**Why now (compiler):** Provide **client-side policy** alongside server features so operators can use concurrency safely; compiler emits reference policy/config.
+**Why now (compiler):** Operators need safe concurrency defaults when taking advantage of server pipelining. Embedding policy outputs from the compiler keeps CLI behaviour reproducible across deployments.
 
-**Goal**  
-Expose a session pool in `cohsh` and helpers for batched writes + retry.
+**Goal**
+Ship pooled sessions, batched writers, and retry helpers in `cohsh`, backed by compiler-generated policy files and tests.
 
-**Changes**  
-- `cohsh`: pool (e.g., 2 control + 4 telemetry), Twrite batch builder, retry on short-write; sample worker agent.
+**Deliverables**
+- `cohsh`: session pool (e.g., 2 control + 4 telemetry), Twrite batch builder, retry/back-off logic for short-write responses, and a sample worker agent demonstrating the pattern.
+- CLI regression script `tests/cli/session_pool.coh` validating throughput improvements without exceeding `msize`.
+- Compiler IR v1.2 fields for `client_policies.cohsh.pool` and `client_policies.retry`, with generated `out/cohsh_policy.toml` consumed by the CLI at runtime.
+- Documentation updates in `docs/USERLAND_AND_CLI.md` mapping policy knobs to manifest fields and providing ops guidance.
 
-**Commands**  
-- `cargo test -p cohsh`  
+**Use-case alignment**
+- Broadcast signage (Edge §10) and smart-city sensing (Edge §9) rely on high-throughput uploads and resilient retries.
+- Secure OTA lab appliance (Developer §15) needs deterministic scripts for demonstrating policy enforcement.
+
+**Commands**
+- `cargo test -p cohsh`
 - `cohsh --script tests/cli/session_pool.coh`
 
-**Checks (DoD)**  
-- Target throughput at `msize ≤ 8192` via concurrency (not bigger frames).  
-- Idempotent recovery on transient failures (by `seq`).
+**Checks (DoD)**
+- Target throughput achieved at `msize ≤ 8192` using concurrency, not enlarged frames.
+- Retry logic proves idempotent recovery from injected short-write failures.
 
-**Deliverables**  
-- `USERLAND_AND_CLI.md` updated with pooling guidance.
-
-**Compiler touchpoints**  
-- IR v1.2 adds:  
-  - `client_policies.cohsh.pool: { control: u8, telemetry: u8 }`  
-  - `client_policies.retry: { short_write: { max_retries:u8, backoff_ms:u32 } }`  
-- Codegen: output `out/cohsh_policy.toml` and example worker using the pool.
+**Compiler touchpoints**
+- Generated policy files referenced in docs/tests; manifest validation ensures pool sizes remain within Secure9P tag budgets.
 
 ---
 
-## Milestone 13 — Observability via Files (no new protocols)
+## Milestone 13 — Observability via Files (No New Protocols)
 
-**Why now (compiler):** Observability remains 9P-native. The compiler enumerates proc nodes to keep docs, code, and tests aligned.
+**Why now (compiler):** Compliance-heavy sectors (Security §§11–12, Healthcare §6) require auditable metrics without introducing new protocols. Observability nodes must be generated from the manifest to stay in lockstep with runtime behaviour.
 
-**Goal**  
-Expose runtime metrics/backpressure as files under `/proc/*`.
+**Goal**
+Expose 9P-native observability endpoints under `/proc/*` with compiler-managed schema and documentation snippets.
 
-**Changes**  
-- `/proc/9p/{sessions,outstanding,short_writes}`  
-- `/proc/ingest/{p50_ms,p95_ms,backpressure,dropped,queued}`  
-- `/proc/ingest/watch` periodic snapshots (append-only)
+**Deliverables**
+- Read-only providers for `/proc/9p/{sessions,outstanding,short_writes}` and `/proc/ingest/{p50_ms,p95_ms,backpressure,dropped,queued}` plus append-only `/proc/ingest/watch` snapshots.
+- Telemetry summariser tests exercising back-pressure counters and verifying zero heap allocation on hot paths.
+- Ops runbook excerpts and monitoring appendix in `docs/SECURITY.md` sourced from compiler output.
+- CLI `cohsh tail /proc/ingest/watch` regression covering typical operator flows.
 
-**Commands**  
-- `cargo test -p nine-door`  
+**Use-case alignment**
+- HSM gateways (Security §11) and OT/IT segmentation appliances (Security §12) require audit-ready metrics for change control.
+- Healthcare imaging (Edge §6) must surface ingest latency for compliance.
+
+**Commands**
+- `cargo test -p nine-door`
 - `cohsh tail /proc/ingest/watch`
 
-**Checks (DoD)**  
-- Counters track stress accurately; `watch` parsable; no hot-path allocations.
+**Checks (DoD)**
+- Counters accurately reflect stress scenarios; `watch` output remains parseable and stable across releases.
+- No additional allocations occur on hot telemetry paths; verified via instrumentation and unit tests.
 
-**Deliverables**  
-- `SECURE9P.md` monitoring appendix; ops runbook snippet.
-
-**Compiler touchpoints**  
-- IR v1.2 adds:  
-  - `observability.proc_9p: [...]`  
-  - `observability.proc_ingest: { fields:[...], watch_interval_ms:u32 }`  
-- Codegen: read-only providers + `watch` cadence; sample `tail` test.
+**Compiler touchpoints**
+- IR v1.2 fields `observability.proc_9p` and `observability.proc_ingest` define nodes/fields; codegen emits provider bindings and docs snippets.
+- As-built guard compares generated observability schema with committed docs.
 
 ---
 
 ## Milestone 14 — Content-Addressed Updates (CAS) — 9P-first
 
-**Why now (compiler):** CAS layout, chunk sizes, and integrity rules must be validated and generated centrally to avoid drift and HTTP creep inside the VM.
+**Why now (compiler):** Retail CV hubs, autonomous depots, and OTA lab appliances (Edge §§3,7; Developer §15) require signed, resumable updates without adding HTTP servers inside the VM. Compiler-managed layout prevents drift and enforces integrity red lines.
 
-**Goal**  
-Serve model/content updates over 9P with content addressing and optional signatures.
+**Goal**
+Serve model/content updates over 9P using content addressing, optional signatures, and deterministic chunk sizing validated by the compiler.
 
-**Changes**  
-- Trait `CasStore` with `put(bytes)->hash`, `get(hash)`.  
-- `/updates/<epoch>/{manifest.cbor,chunks/<hash>}` layout; delta packs; integrity via hash (optional signatures).
+**Deliverables**
+- Trait `CasStore` and NineDoor provider exposing `/updates/<epoch>/{manifest.cbor,chunks/<hash>}` with delta-pack support and resumable reads.
+- Hash-based integrity checks (SHA-256 baseline) with optional Ed25519 signatures; host `cas_tool` packaging utility.
+- CLI script `tests/cli/cas_roundtrip.coh` verifying resume after disconnect and manifest/delta application.
+- Docs updates in `docs/INTERFACES.md` describing CAS file grammar, delta rules, and operational guidance.
+- Compiler IR v1.3 fields `cas.enable`, `cas.store.*`, `cas.delta.enable`, with validation that chunk sizes fit `msize` and that signing keys are provided when required.
 
-**Commands**  
-- `cargo test -p nine-door`  
+**Use-case alignment**
+- Retail analytics (Edge §3) and signage control (Edge §10) need deterministic content updates with integrity proofs.
+- Autonomous depots (Edge §7) benefit from resumable deltas over intermittent links.
+
+**Commands**
+- `cargo test -p nine-door`
 - `cohsh cat /updates/<e>/manifest.cbor | cbor2json`
+- `cargo test -p cas_tool`
 
-**Checks (DoD)**  
-- Resume after disconnect using existing 9P paths; chunk integrity verified.  
-- Manifest round-trips; delta application test passes.
+**Checks (DoD)**
+- Resume logic validated; delta application idempotent and integrity enforced.
+- Signing path tested with fake keys; unsigned mode explicitly documented.
 
-**Deliverables**  
-- `INTERFACES.md` section for CAS format & delta rules.
-
-**Compiler touchpoints**  
-- IR v1.3 adds:  
-  - `cas.enable: bool`  
-  - `cas.store: { root: "/updates", chunk_bytes: u32, hash: "sha256", sign?: { algo: "ed25519", pubkey_path: "…" } }`  
-  - `cas.delta.enable: bool`  
-- Validation: chunk_bytes fits `msize` envelopes; key presence when signing enabled.  
-- Codegen: CAS provider layout + host `cas_tool` packing rules (doc’d); resume tests.
+**Compiler touchpoints**
+- Codegen emits CAS provider layout, host tooling manifest, and doc snippets. Validation rejects IR that would exceed storage budgets or break `no_std` guarantees.
 
 ---
 
-### Docs-as-Built Alignment (applies to M8C onward)
+## Milestone 15 — UEFI Bare-Metal Boot & Device Identity
+
+**Why now (context):** To satisfy hardware deployment aspirations (Edge §3 retail hubs, Edge §8 defense ISR, Security §12 segmentation) we must run without QEMU, boot via aarch64 UEFI, and attest device identity while staying `no_std` and lean.
+
+**Goal**
+Produce a UEFI boot path for Cohesix on physical aarch64 hardware, integrating Secure Boot, TPM-backed device keys, and compiler-driven manifests so edge deployments mirror VM behaviour.
+
+**Deliverables**
+- UEFI loader crate (`apps/root-task-uefi` or module) building a PE/COFF binary that loads the same manifest-generated bootstrap code without introducing `std`.
+- Boot packaging scripts creating a FAT image with `EFI/BOOT/BOOTAA64.EFI`, generated manifest, and rootfs CPIO, plus instructions in `docs/HARDWARE_BRINGUP.md`.
+- Identity subsystem leveraging TPM 2.0 (or DICE fallback) to seal capability ticket seeds; attestation logs appended to `/proc/boot` and exported via NineDoor.
+- Secure Boot guidance aligning with `docs/SECURITY.md` red lines; ensure measurements cover generated bootstrap and manifest hashes.
+- Compiler IR v1.4 fields for hardware profiles (`hardware.profile = "uefi_aarch64"`) capturing UART/NET MMIO addresses, TPM presence, and boot policies.
+
+**Use-case alignment**
+- Defense ISR kits (Edge §8) require tamper logging and key rotation on real hardware.
+- Energy micro-grids (Edge §2) and OT segmentation (Security §12) need attested boot records for compliance.
+
+**Commands**
+- `cargo build -p root-task-uefi --target aarch64-unknown-uefi`
+- `python scripts/make_uefi_image.py --manifest out/manifests/root_task_resolved.json`
+- `scripts/qemu-run.sh --uefi` (smoke test) and lab checklist for physical board boot.
+
+**Checks (DoD)**
+- UEFI image boots on QEMU TCG + reference dev board; serial/log output matches VM baseline.
+- TPM-backed attestation chain generated and exported via `/proc/boot` without leaking secrets.
+- Compiler rejects manifests missing hardware bindings for selected profile.
+
+**Compiler touchpoints**
+- IR v1.4 describes hardware profiles, TPM usage, and Secure Boot policy; codegen produces UEFI config headers and doc tables summarising MMIO regions.
+- Docs-as-built guard extends to hardware bring-up instructions with manifest fingerprints.
+
+---
+
+## Milestone 16 — Field Bus & Low-Bandwidth Sidecars (Host/Worker Pattern)
+
+**Why now (context):** Remaining edge use cases (Edge §§1–4,8,9; Science §§13–14) depend on deterministic adapters for industrial buses and constrained links. Implementing them as sidecars preserves the lean `no_std` core while meeting operational demands.
+
+**Goal**
+Deliver a library of host/worker sidecars (outside the VM where possible) that bridge MODBUS/DNP3, LoRa, and sensor buses into NineDoor namespaces, driven by compiler-declared mounts and capability policies.
+
+**Deliverables**
+- Host-side sidecar framework (`apps/sidecar-bus`) offering async runtimes on macOS/Linux with feature gates to keep VM artefacts `no_std`. Sidecars communicate via Secure9P transports or serial overlays without embedding TCP servers in the VM.
+- Worker templates (`apps/worker-bus`, `apps/worker-lora`) that run inside the VM, remain `no_std`, and expose control/telemetry files (`/bus/*`, `/lora/*`) generated from manifest entries.
+- Scheduling integration for LoRa duty-cycle management and tamper logging, aligned with `docs/USE_CASES.md` defense and science requirements.
+- Compiler IR v1.5 fields `sidecars.modbus`, `sidecars.dnp3`, `sidecars.lora` describing mounts, baud/link settings, and capability scopes; validation ensures resources stay within event-pump budget.
+- Documentation updates (`docs/ARCHITECTURE.md §12`, `docs/INTERFACES.md`) illustrating the sidecar pattern, security boundaries, and testing strategy.
+
+**Use-case alignment**
+- Industrial IoT gateways (Edge §1) gain MODBUS/CAN integration without bloating the VM.
+- Energy substations (Edge §2) receive DNP3 scheduling and signed config updates.
+- Defense ISR kits (Edge §8) use LoRa scheduler + tamper logging, while environmental stations (Science §13) benefit from low-power telemetry scheduling.
+
+**Commands**
+- `cargo test -p worker-bus -p worker-lora`
+- `cargo test -p sidecar-bus --features modbus,dnp3`
+- `cohsh --script tests/cli/sidecar_integration.coh`
+
+**Checks (DoD)**
+- Sidecars operate within declared capability scopes; attempts to access undeclared mounts are rejected and logged.
+- LoRa scheduler enforces duty-cycle constraints under stress tests.
+- Offline telemetry spooling validated for MODBUS/DNP3 adapters with manifest-driven limits.
+
+**Compiler touchpoints**
+- IR v1.5 ensures mounts/roles/quotas for sidecars, generating documentation tables and manifest fragments consumed by host tooling.
+- Validation prevents enabling sidecars without corresponding host dependencies or event-pump capacity.
+
+---
+
+### Docs-as-Built Alignment (applies to Milestone 8 onward)
 
 To prevent drift:
 
-1. **Docs → IR → Code**  
-   - Any new behavior MUST land as IR fields with validation and codegen.  
-   - Build fails if IR references disabled gates or violates Secure9P bounds.
+1. **Docs → IR → Code**
+   - Any new behaviour MUST land as IR fields with validation and codegen.
+   - Build fails if IR references disabled gates, violates Secure9P bounds, or forces `std` where the runtime is `no_std`.
 
-2. **Autogenerated Snippets**  
-   - `coh-rtc` refreshes embedded snippets in `SECURE9P.md`/`INTERFACES.md` (CBOR schema, `/proc` tree, concurrency knobs) during release prep.
+2. **Autogenerated Snippets**
+   - `coh-rtc` refreshes embedded snippets in `SECURE9P.md`, `INTERFACES.md`, and `ARCHITECTURE.md` (CBOR schema, `/proc` tree, concurrency knobs, hardware tables) during release prep.
 
-3. **As-Built Guard**  
-   - A simple check (scripted) compares generated file hashes and resolved manifest fields to the examples embedded in docs. If mismatched, CI/docs review fails.  
+3. **As-Built Guard**
+   - Script compares generated file hashes, manifest fingerprints, and doc excerpts against committed versions. Drift fails CI and blocks release notes.
    - Rule: **Documentation must describe the system “as built”** (post-codegen), not only “as intended”.
 
-4. **Red Lines**  
-   - Enforced in the compiler and restated here: 9P2000.L, `msize ≤ 8192`, walk depth ≤ 8, no `..`, no FID reuse after clunk, no TCP listeners inside VM unless feature-gated and documented, CPIO < 4 MB, no POSIX façade.
+4. **Red Lines**
+   - Enforced in the compiler and restated here: 9P2000.L, `msize ≤ 8192`, walk depth ≤ 8, no `..`, no fid reuse after clunk, no TCP listeners inside VM unless feature-gated and documented, CPIO < 4 MiB, no POSIX façade, maintain `no_std` for VM artefacts.
 
