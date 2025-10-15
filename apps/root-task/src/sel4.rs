@@ -13,9 +13,9 @@ use sel4_sys::seL4_DebugCapIdentify;
 use sel4_sys::{
     seL4_ARM_PageTableObject, seL4_ARM_PageTable_Map, seL4_ARM_Page_Default, seL4_ARM_Page_Map,
     seL4_ARM_Page_Uncached, seL4_ARM_SmallPageObject, seL4_BootInfo, seL4_CNode, seL4_CNode_Delete,
-    seL4_CNode_Move, seL4_CPtr, seL4_CapRights_ReadWrite, seL4_NoError, seL4_NotEnoughMemory,
-    seL4_SlotRegion, seL4_Untyped, seL4_Untyped_Retype, seL4_Word, UntypedDesc,
-    MAX_BOOTINFO_UNTYPEDS,
+    seL4_CNode_Move, seL4_CPtr, seL4_CapInitThreadTCB, seL4_CapRights_ReadWrite, seL4_NoError,
+    seL4_NotEnoughMemory, seL4_SlotRegion, seL4_Untyped, seL4_Untyped_Retype, seL4_Word,
+    UntypedDesc, MAX_BOOTINFO_UNTYPEDS,
 };
 
 const _: () = {
@@ -66,6 +66,15 @@ impl BootInfoExt for seL4_BootInfo {
 fn cap_identify(cptr: seL4_CPtr) -> seL4_Word {
     unsafe { seL4_DebugCapIdentify(cptr) }
 }
+
+#[cfg(feature = "sel4-debug")]
+fn log_cap_details(tag: &str, cptr: seL4_CPtr) {
+    let id = cap_identify(cptr);
+    log::trace!("{tag}: cptr=0x{cptr:04x} DebugCapIdentify=0x{id:08x}",);
+}
+
+#[cfg(not(feature = "sel4-debug"))]
+fn log_cap_details(_tag: &str, _cptr: seL4_CPtr) {}
 
 /// Lightweight wrapper translating raw seL4 error codes into ergonomic result semantics.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -775,6 +784,21 @@ impl<'a> KernelEnv<'a> {
         untyped_cap: seL4_Untyped,
         trace: &RetypeTrace,
     ) -> Result<(), seL4_Error> {
+        debug_assert!(
+            matches!(
+                trace.kind,
+                RetypeKind::DevicePage { .. } | RetypeKind::DmaPage { .. }
+            ),
+            "retype_page expects a page-related trace"
+        );
+        debug_assert_eq!(
+            trace.object_type, seL4_ARM_SmallPageObject,
+            "ARM device/RAM frames must use seL4_ARM_SmallPageObject"
+        );
+        debug_assert_eq!(
+            trace.object_size_bits, PAGE_BITS as seL4_Word,
+            "ARM device/RAM frames must have 4KiB size bits"
+        );
         let res = self.perform_retype(untyped_cap, *trace);
         if res.is_ok() {
             Ok(())
@@ -796,6 +820,43 @@ impl<'a> KernelEnv<'a> {
         }
     }
 
+    fn cnode_move_probe(&self, dest_slot: seL4_Word) -> Result<(), seL4_Error> {
+        let root = self.bootinfo.init_cnode_cap();
+        let depth = self.bootinfo.init_cnode_bits() as seL4_Word;
+        let src = seL4_CapInitThreadTCB as seL4_Word;
+        let tmp = dest_slot;
+
+        if tmp == src {
+            log::trace!(
+                "Preflight: dest_slot 0x{tmp:04x} equals probe source; skipping CNode_Move",
+            );
+            return Ok(());
+        }
+
+        let err1 = unsafe { seL4_CNode_Move(root, tmp, depth, root, src, depth) };
+        if err1 != seL4_NoError {
+            log::error!(
+                "Preflight: CNode_Move src(0x{src:04x})->dest(0x{tmp:04x}) failed: {:?}",
+                err1
+            );
+            return Err(err1);
+        }
+
+        let err2 = unsafe { seL4_CNode_Move(root, src, depth, root, tmp, depth) };
+        if err2 != seL4_NoError {
+            log::error!(
+                "Preflight: CNode_Move dest(0x{tmp:04x})->src(0x{src:04x}) failed: {:?}",
+                err2
+            );
+            panic!(
+                "failed to restore init thread TCB cap after preflight (slot=0x{tmp:04x} err={err2:?})"
+            );
+        }
+
+        log::trace!("Preflight: CNode_Move src(0x{src:04x})<->dest(0x{tmp:04x}) succeeded",);
+        Ok(())
+    }
+
     #[inline(always)]
     fn retype_into_root_cnode_slot(
         &self,
@@ -815,15 +876,11 @@ impl<'a> KernelEnv<'a> {
             capacity
         );
 
-        #[cfg(feature = "sel4-debug")]
-        {
-            let id = cap_identify(root_cnode);
-            log::trace!(
-                "DebugCapIdentify(root=0x{:x})=0x{:x} (init_bits={})",
-                root_cnode,
-                id,
-                init_bits
-            );
+        log_cap_details("RootCNode", root_cnode);
+
+        if let Err(err) = self.cnode_move_probe(dest_slot) {
+            log::error!("Preflight failed for slot 0x{dest_slot:04x}: {:?}", err);
+            return err;
         }
 
         log::trace!(
@@ -854,6 +911,8 @@ impl<'a> KernelEnv<'a> {
         );
 
         let init_bits_word = init_bits as seL4_Word;
+
+        log_cap_details("WalkedRootCNode", root_cnode);
 
         log::trace!(
             "Retype[B] → root=0x{:x} index=0x{:x} depth={} offset=0",
