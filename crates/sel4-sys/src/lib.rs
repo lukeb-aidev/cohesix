@@ -23,6 +23,10 @@ mod imp {
 
     pub const seL4_MessageRegisterCount: usize = 4;
 
+    const SEL4_CNODE_DELETE: seL4_Word = 1;
+    const SEL4_CNODE_COPY: seL4_Word = 3;
+    const SEL4_CNODE_MOVE: seL4_Word = 5;
+
     /// Maximum number of bootinfo untyped caps for the configured kernel.
     /// The value is inferred from CONFIG_MAX_NUM_BOOTINFO_UNTYPED_CAPS in the seL4 build.
     pub const MAX_BOOTINFO_UNTYPEDS: usize = 230;
@@ -518,25 +522,77 @@ mod imp {
         info.label() as seL4_Error
     }
 
+    #[inline(always)]
+    pub unsafe fn seL4_CNode_Delete(
+        root: seL4_CNode,
+        index: seL4_CPtr,
+        depth: seL4_Word,
+    ) -> seL4_Error {
+        let msg = seL4_MessageInfo::new(SEL4_CNODE_DELETE, 0, 0, 2);
+        let mut mr0 = index;
+        let mut mr1 = depth;
+
+        let info = seL4_CallWithMRs(
+            root,
+            msg,
+            &mut mr0,
+            &mut mr1,
+            ptr::null_mut(),
+            ptr::null_mut(),
+        );
+
+        info.label() as seL4_Error
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_CNode_Move(
+        dest_root: seL4_CNode,
+        dest_index: seL4_CPtr,
+        dest_depth: seL4_Word,
+        src_root: seL4_CNode,
+        src_index: seL4_CPtr,
+        src_depth: seL4_Word,
+    ) -> seL4_Error {
+        let msg = seL4_MessageInfo::new(SEL4_CNODE_MOVE, 0, 1, 4);
+        let mut mr0 = dest_index;
+        let mut mr1 = dest_depth;
+        let mut mr2 = src_index;
+        let mut mr3 = src_depth;
+
+        seL4_SetCap(0, src_root);
+
+        let info = seL4_CallWithMRs(dest_root, msg, &mut mr0, &mut mr1, &mut mr2, &mut mr3);
+
+        info.label() as seL4_Error
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_CNode_Copy(
+        dest_root: seL4_CNode,
+        dest_index: seL4_CPtr,
+        dest_depth: seL4_Word,
+        src_root: seL4_CNode,
+        src_index: seL4_CPtr,
+        src_depth: seL4_Word,
+        rights: seL4_Word,
+    ) -> seL4_Error {
+        let msg = seL4_MessageInfo::new(SEL4_CNODE_COPY, 0, 1, 5);
+        let mut mr0 = dest_index;
+        let mut mr1 = dest_depth;
+        let mut mr2 = src_index;
+        let mut mr3 = src_depth;
+        let mut mr4 = rights;
+
+        seL4_SetCap(0, src_root);
+
+        let info = seL4_CallWithMRs(
+            dest_root, msg, &mut mr0, &mut mr1, &mut mr2, &mut mr3, &mut mr4,
+        );
+
+        info.label() as seL4_Error
+    }
+
     extern "C" {
-        pub fn seL4_CNode_Delete(root: seL4_CNode, index: seL4_CPtr, depth: seL4_Word) -> seL4_Error;
-        pub fn seL4_CNode_Move(
-            dest_root: seL4_CNode,
-            dest_index: seL4_CPtr,
-            dest_depth: seL4_Word,
-            src_root: seL4_CNode,
-            src_index: seL4_CPtr,
-            src_depth: seL4_Word,
-        ) -> seL4_Error;
-        pub fn seL4_CNode_Copy(
-            dest_root: seL4_CNode,
-            dest_index: seL4_CPtr,
-            dest_depth: seL4_Word,
-            src_root: seL4_CNode,
-            src_index: seL4_CPtr,
-            src_depth: seL4_Word,
-            rights: seL4_Word,
-        ) -> seL4_Error;
         pub fn seL4_DebugPutChar(c: u8);
         pub fn seL4_Yield();
         pub fn seL4_ARM_Page_Unmap(service: seL4_ARM_Page) -> seL4_Error;
