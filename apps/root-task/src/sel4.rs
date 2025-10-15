@@ -13,9 +13,8 @@ use sel4_sys::seL4_DebugCapIdentify;
 use sel4_sys::{
     seL4_ARM_PageTableObject, seL4_ARM_PageTable_Map, seL4_ARM_Page_Default, seL4_ARM_Page_Map,
     seL4_ARM_Page_Uncached, seL4_ARM_SmallPageObject, seL4_BootInfo, seL4_CNode, seL4_CNode_Delete,
-    seL4_CNode_Move, seL4_CPtr, seL4_CapRights_ReadWrite, seL4_Error, seL4_NoError,
-    seL4_NotEnoughMemory, seL4_SlotRegion, seL4_Untyped, seL4_Word, UntypedDesc,
-    MAX_BOOTINFO_UNTYPEDS,
+    seL4_CNode_Move, seL4_CPtr, seL4_CapRights_ReadWrite, seL4_NoError, seL4_NotEnoughMemory,
+    seL4_SlotRegion, seL4_Untyped, seL4_Word, UntypedDesc, MAX_BOOTINFO_UNTYPEDS,
 };
 
 extern "C" {
@@ -56,7 +55,7 @@ pub trait BootInfoExt {
 impl BootInfoExt for seL4_BootInfo {
     #[inline(always)]
     fn init_cnode_cap(&self) -> seL4_CPtr {
-        self.initThreadCNode
+        seL4_CapInitThreadCNode
     }
 
     #[inline(always)]
