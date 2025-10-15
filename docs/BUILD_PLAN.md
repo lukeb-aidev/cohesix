@@ -345,3 +345,190 @@ Deliverables: Bidirectional console acknowledgements spanning serial and TCP tra
 **Checks**
 - Hardware bring-up demonstrates serial + TCP console parity with QEMU.
 - Async executor (if enabled) passes the same regression suite as the synchronous loop.
+
+## Scope of this update
+This document **adds Milestones 9+** to the existing plan. Earlier milestones (M0–M8) remain unchanged. The new milestones focus on **scalable 9P‑only concurrency** and data planes that enable the broader use cases listed in `USE_CASES.md`—while keeping the Cohesix VM **lean and no_std**.
+
+---
+
+## Milestones (new)
+
+### M9 — 9P Pipelining & Batching (foundational)
+**Goal:** Enable high concurrency using *only* 9P by allowing many in‑flight requests (tags) per session and batching framed payloads inside a single `Twrite`/`Tread` without changing 9P itself.
+
+**Changes**
+- `secure9p-core`: support **N‑outstanding tags** per connection; out‑of‑order `R*` responses.
+- `secure9p-codec`: add a zero‑copy **frame iterator** (length‑prefixed frames) for read buffers.
+- `nine-door`: provider API accepts **slices of frames**; returns **short‑write** for backpressure.
+
+**Commands**
+- `cargo test -p secure9p-core -p secure9p-codec -p nine-door`
+
+**Checks (DoD)**
+- Load test: interleave 10k tagged ops across 4 sessions → no panics, correct matching by tag.
+- Batch write with 4 CBOR frames → reader reconstructs exactly; CRC optional.
+- Short‑write path exercised; client retries the tail; order preserved.
+
+**Deliverables**
+- Documentation: `SECURE9P.md` updated with concurrency model and short‑write guidance.
+- Bench results table for tags/session impact.
+
+---
+
+### M10 — Telemetry Rings & Cursors
+**Goal:** Replace unbounded append‑only logs with **bounded ring buffers** per worker and **persistent cursors** per consumer, preserving append‑only semantics while constraining memory.
+
+**Changes**
+- New provider backing for `/worker/<id>/telemetry` as a **ring** (4–16 MB configurable).
+- `/worker/<id>/cursor` (RW, u64) to resume reads from last acked `seq`.
+- CBOR **Frame v1**: `{seq:u64, ts:u64, kind:u8, payload:bytes, meta?:map}` (documented).
+
+**Commands**
+- `cargo test -p nine-door`
+- CLI smoke: `cohsh --script tests/cli/telemetry_ring.coh`
+
+**Checks (DoD)**
+- Overflow test: ring wraps, no crash; consumer with cursor never regresses.
+- Backpressure: ring high‑water triggers short‑writes on producer.
+- Latency budget documented (P50/P95 under configured limits).
+
+**Deliverables**
+- `INTERFACES.md` CBOR schema v1; examples & cursor semantics.
+
+---
+
+### M11 — Sharded Namespaces & Provider Split
+**Goal:** Reduce contention and FID pressure by sharding worker trees.
+
+**Changes**
+- Introduce `/shard/<00..ff>/worker/<id>/*` layout; maintain legacy `/worker/<id>` as a symlink/alias (phase‑out).
+- Instantiate **one provider per shard** with its own queues and stores.
+- Hash strategy: `hh = sha256(worker_id)[0..=1]` (documented).
+
+**Commands**
+- `cargo test -p nine-door`
+- Scale smoke: `tests/scale/shard_1k.rs`
+
+**Checks (DoD)**
+- 1k workers attach and write concurrently; CPU and latency scale ~linearly with shard count.
+- Walk depth ≤ 8 per `SECURE9P.md`.
+- No global locks in hot paths (checked via `cargo flamegraph` notes).
+
+**Deliverables**
+- `SECURE9P.md` and `ROLES_AND_SCHEDULING.md` updated with sharding rules and quotas.
+
+---
+
+### M12 — Client Concurrency & Session Pooling (reference clients)
+**Goal:** Provide client‑side guidance and helpers to exploit server concurrency fully.
+
+**Changes**
+- `cohsh` adds a **session pool** (e.g., 2 control + 4 telemetry sessions).
+- Batched `Twrite` builder for CBOR frames; automatic retry on short‑write.
+- Example worker agent that streams telemetry using the pool.
+
+**Commands**
+- `cargo test -p cohsh`
+- `tests/cli/session_pool.coh`
+
+**Checks (DoD)**
+- Target throughput sustained with fixed `msize ≤ 8192` by increasing concurrency, not message size.
+- Recovery on transient failures without data loss (idempotent by `seq`).
+
+**Deliverables**
+- `USERLAND_AND_CLI.md` session pooling guidance & examples.
+
+---
+
+### M13 — Observability via Files
+**Goal:** Expose runtime metrics and backpressure state purely as files—no new protocols.
+
+**Changes**
+- `/proc/9p/{sessions,outstanding,short_writes}`
+- `/proc/ingest/{p50_ms,p95_ms,backpressure,dropped,queued}`
+- `/proc/ingest/watch` (periodic snapshots friendly to `tail`).
+
+**Commands**
+- `cargo test -p nine-door`
+- CLI: `cohsh tail /proc/ingest/watch`
+
+**Checks (DoD)**
+- Counters reflect synthetic stress; watch output parsable; no allocations on hot path.
+
+**Deliverables**
+- `SECURE9P.md` monitoring appendix; ops runbook snippet.
+
+---
+
+### M14 — Content‑Addressed Updates (CAS) — 9P First
+**Goal:** Introduce a CAS to serve model/content updates over 9P without HTTP dependencies.
+
+**Changes**
+- Trait `CasStore` with `put(bytes)->hash`, `get(hash)`; file‑backed implementation.
+- Providers under `/updates/<epoch>/{manifest.cbor,chunks/<hash>}`.
+- Delta packs documented; integrity via hash; optional signature metadata.
+
+**Commands**
+- `cargo test -p nine-door`
+- CLI: `cohsh cat /updates/<e>/manifest.cbor | cbor2json`
+
+**Checks (DoD)**
+- Resume after disconnect using existing 9P paths; chunk integrity verified.
+- Manifest round‑trips; delta application test passes.
+
+**Deliverables**
+- `INTERFACES.md` add CAS format & delta rules.
+
+---
+
+### M15 — Tickets v2: Leases, Scopes, Rate
+**Goal:** Strengthen identity and flow control for many‑worker sites.
+
+**Changes**
+- `cohesix-ticket`: add `{v:2, role, worker_id, ttl_s, scopes[], rate_limit}`.
+- Enforce TTLs and per‑worker rate buckets in providers producing telemetry.
+- Revocation list file `/queen/revocations` (append‑only).
+
+**Commands**
+- `cargo test -p cohesix-ticket -p nine-door`
+- CLI: lease renewal & revoke scripts.
+
+**Checks (DoD)**
+- Expired → ops denied; renewed → no data loss; rate limit produces short‑write not panic.
+
+**Deliverables**
+- `ROLES_AND_SCHEDULING.md` updated; security considerations section.
+
+---
+
+### M16 — Host 9P Gateway (std) with SO_REUSEPORT
+**Goal:** Scale the front door horizontally on multicore/cloud hosts while the VM stays no_std.
+
+**Changes**
+- New binary `ninep-gw` (std): multi‑accept, SO_REUSEPORT, bounded request queues, shard‑aware routing.
+- Optional process‑level sharding by `worker_id` hash behind an L4 LB (still 9P/TCP).
+
+**Commands**
+- `cargo build -p ninep-gw`
+- Load test: `tools/load/ninep_stress.rs`
+
+**Checks (DoD)**
+- Sustained throughput (target to be set), graceful backpressure, no drops beyond configured limits.
+
+**Deliverables**
+- Deployment guide with systemd units and example LB config.
+
+---
+
+## Non‑Goals (these milestones)
+- Adding HTTP/3 or gRPC inside the VM (can be layered later at a gateway).
+- Changing 9P protocol or semantics—**we remain 9P2000.L** with strict bounds.
+- POSIX emulation or general‑purpose shell.
+
+---
+
+## Invariants & Red Lines (unchanged)
+- **no_std** inside the seL4 VM; `alloc` allowed with strict bounds.  
+- msize ≤ 8192, bounded walk depth ≤ 8, no `..` escapes, no FID reuse after clunk.  
+- No TCP listeners inside the VM unless explicitly feature‑gated and justified.  
+- CPIO payload < 4 MB.
