@@ -22,9 +22,12 @@ Options:
   --clean               Remove existing contents of the output directory before building
   --profile <name>      Cargo profile to build (release|debug|custom; default: release)
   --cargo-target <triple>  Target triple used for seL4 component builds (required)
+  --features <list>     Comma- or space-separated feature list for userspace builds (default: none)
+  --no-default-features Disable default features for userspace builds
+  --cohsh-port <port>   TCP port for cohsh when networking is enabled (default: 31337)
   --qemu <path>         QEMU binary to execute (default: qemu-system-aarch64)
-  --transport <kind>    Console transport to launch (tcp|qemu, default: tcp)
-  --tcp-port <port>     TCP port exposed by QEMU for the remote console (default: 31337)
+  --transport <kind>    Console transport to launch (auto|tcp|qemu|mock, default: auto)
+  --tcp-port <port>     Deprecated alias for --cohsh-port
   --cohsh-launch <mode> Launch cohsh inline, in a macOS background session, or auto-detect (auto|inline|macos-terminal)
   --no-run              Skip launching QEMU after building the artefacts
   --raw-qemu            Launch QEMU directly instead of cohsh (disables interactive CLI)
@@ -155,8 +158,10 @@ main() {
     declare -a EXTRA_QEMU_ARGS=()
     CLEAN_OUT_DIR=0
     DTB_OVERRIDE=""
-    TRANSPORT="tcp"
-    TCP_PORT=31337
+    FEATURES=""
+    NO_DEFAULT_FEATURES=0
+    COHSH_TCP_PORT=31337
+    TRANSPORT="auto"
 
     COHSH_LAUNCH_MODE="auto"
 
@@ -182,6 +187,23 @@ main() {
                 CARGO_TARGET="$2"
                 shift 2
                 ;;
+            --features)
+                [[ $# -ge 2 ]] || fail "--features requires a value"
+                FEATURES="$2"
+                shift 2
+                ;;
+            --no-default-features)
+                NO_DEFAULT_FEATURES=1
+                shift
+                ;;
+            --cohsh-port)
+                [[ $# -ge 2 ]] || fail "--cohsh-port requires a value"
+                if ! [[ "$2" =~ ^[0-9]+$ ]]; then
+                    fail "--cohsh-port expects a numeric value"
+                fi
+                COHSH_TCP_PORT="$2"
+                shift 2
+                ;;
             --qemu)
                 [[ $# -ge 2 ]] || fail "--qemu requires a binary path"
                 QEMU_BIN="$2"
@@ -201,9 +223,9 @@ main() {
                 shift
                 ;;
             --transport)
-                [[ $# -ge 2 ]] || fail "--transport requires a value (tcp|qemu)"
+                [[ $# -ge 2 ]] || fail "--transport requires a value (auto|tcp|qemu|mock)"
                 case "$2" in
-                    tcp|qemu)
+                    auto|tcp|qemu|mock)
                         TRANSPORT="$2"
                         ;;
                     *)
@@ -217,7 +239,8 @@ main() {
                 if ! [[ "$2" =~ ^[0-9]+$ ]]; then
                     fail "--tcp-port expects a numeric value"
                 fi
-                TCP_PORT="$2"
+                log "--tcp-port is deprecated; use --cohsh-port instead"
+                COHSH_TCP_PORT="$2"
                 shift 2
                 ;;
             --cohsh-launch)
@@ -251,8 +274,48 @@ main() {
         esac
     done
 
-    if [[ "$TRANSPORT" == "tcp" && "$TCP_PORT" -le 0 ]]; then
-        fail "TCP port must be a positive integer"
+    local FEATURES_CANON="${FEATURES//,/ }"
+    local -a FEATURE_TOKENS=()
+    local NET_FEATURE_ENABLED=0
+    if [[ -n "$FEATURES_CANON" ]]; then
+        # shellcheck disable=SC2206 # intentional word splitting on whitespace
+        FEATURE_TOKENS=($FEATURES_CANON)
+        for token in "${FEATURE_TOKENS[@]}"; do
+            [[ -z "$token" ]] && continue
+            if [[ "$token" == "net" ]]; then
+                NET_FEATURE_ENABLED=1
+                break
+            fi
+        done
+    fi
+
+    local EFFECTIVE_TRANSPORT="$TRANSPORT"
+    if [[ "$EFFECTIVE_TRANSPORT" == "auto" ]]; then
+        if (( NET_FEATURE_ENABLED == 1 )); then
+            EFFECTIVE_TRANSPORT="tcp"
+        else
+            EFFECTIVE_TRANSPORT="mock"
+        fi
+    fi
+
+    if [[ "$EFFECTIVE_TRANSPORT" == "tcp" || $NET_FEATURE_ENABLED -eq 1 ]]; then
+        if ! [[ "$COHSH_TCP_PORT" =~ ^[0-9]+$ ]]; then
+            fail "cohsh port must be numeric"
+        fi
+        if (( COHSH_TCP_PORT <= 0 )); then
+            fail "cohsh port must be a positive integer"
+        fi
+    fi
+
+    if (( NET_FEATURE_ENABLED == 0 )) && [[ "$EFFECTIVE_TRANSPORT" == "tcp" ]]; then
+        fail "tcp transport requires the 'net' feature; use --features net"
+    fi
+
+    log "userspace features: ${FEATURES:-<none>}  no-default-features=$NO_DEFAULT_FEATURES"
+    if (( NET_FEATURE_ENABLED == 1 )); then
+        log "networking feature enabled; cohsh tcp port=$COHSH_TCP_PORT"
+    else
+        log "networking feature disabled"
     fi
 
     if [[ ! -d "$SEL4_BUILD_DIR" ]]; then
@@ -264,7 +327,7 @@ main() {
 
     local EFFECTIVE_COHSH_MODE="$COHSH_LAUNCH_MODE"
     if [[ "$EFFECTIVE_COHSH_MODE" == "auto" ]]; then
-        if [[ "$TRANSPORT" == "tcp" && "$HOST_OS" == "Darwin" ]]; then
+        if [[ "$EFFECTIVE_TRANSPORT" == "tcp" && "$HOST_OS" == "Darwin" ]]; then
             EFFECTIVE_COHSH_MODE="macos-terminal"
         else
             EFFECTIVE_COHSH_MODE="inline"
@@ -323,6 +386,14 @@ main() {
         fail "--cargo-target must be provided to build seL4 components"
     fi
 
+    local -a US_FEATURE_FLAGS=()
+    if [[ -n "$FEATURES" ]]; then
+        US_FEATURE_FLAGS+=(--features "$FEATURES")
+    fi
+    if (( NO_DEFAULT_FEATURES == 1 )); then
+        US_FEATURE_FLAGS+=(--no-default-features)
+    fi
+
     SEL4_COMPONENT_PACKAGES=(nine-door worker-heart worker-gpu)
     HOST_TOOL_PACKAGES=(gpu-bridge-host)
 
@@ -353,11 +424,19 @@ main() {
         SEL4_BUILD_ARGS+=(-p "$pkg")
     done
 
+    if (( ${#US_FEATURE_FLAGS[@]} > 0 )); then
+        SEL4_BUILD_ARGS+=("${US_FEATURE_FLAGS[@]}")
+    fi
+
     ROOT_TASK_BUILD_ARGS=(build --target "$CARGO_TARGET")
     if (( ${#PROFILE_ARGS[@]} > 0 )); then
         ROOT_TASK_BUILD_ARGS+=("${PROFILE_ARGS[@]}")
     fi
     ROOT_TASK_BUILD_ARGS+=(-p root-task)
+
+    if (( ${#US_FEATURE_FLAGS[@]} > 0 )); then
+        ROOT_TASK_BUILD_ARGS+=("${US_FEATURE_FLAGS[@]}")
+    fi
 
     log "Building root-task via: cargo ${ROOT_TASK_BUILD_ARGS[*]}"
     cargo "${ROOT_TASK_BUILD_ARGS[@]}"
@@ -436,20 +515,30 @@ main() {
         MANIFEST_INPUTS+=("cohesix/bin/$bin")
     done
 
-    python3 - "$STAGING_DIR" "$PROFILE" "$RESOLVED_TARGET" "${MANIFEST_INPUTS[@]}" <<'PY'
+    python3 - "$STAGING_DIR" "$PROFILE" "$RESOLVED_TARGET" "$FEATURES" "$NO_DEFAULT_FEATURES" "${MANIFEST_INPUTS[@]}" <<'PY'
 import hashlib
 import json
 import pathlib
 import sys
 
-if len(sys.argv) < 5:
-    raise SystemExit("manifest generation requires staging dir, profile, target, and at least one binary")
+if len(sys.argv) < 7:
+    raise SystemExit(
+        "manifest generation requires staging dir, profile, target, features, no-default-features flag, and at least one binary"
+    )
 
 staging = pathlib.Path(sys.argv[1])
 profile = sys.argv[2]
 target = sys.argv[3]
+features_raw = sys.argv[4].strip()
+no_default_features = sys.argv[5].strip() == "1"
+start_index = 6
+feature_tokens = []
+if features_raw:
+    for token in features_raw.replace(",", " ").split():
+        if token:
+            feature_tokens.append(token)
 entries = []
-for rel_path in sys.argv[4:]:
+for rel_path in sys.argv[start_index:]:
     path = staging / rel_path
     data = path.read_bytes()
     entries.append({
@@ -461,6 +550,8 @@ for rel_path in sys.argv[4:]:
 manifest = {
     "profile": profile,
     "target": target,
+    "userspace_features": feature_tokens,
+    "userspace_no_default_features": no_default_features,
     "binaries": entries,
 }
 manifest_path = staging / "cohesix" / "manifest.json"
@@ -495,9 +586,14 @@ PY
     QEMU_ARGS=(-machine "virt,gic-version=${GIC_VER}" -cpu cortex-a57 -m 1024 -smp 1 -serial mon:stdio -display none -kernel "$ELFLOADER_STAGE_PATH" -initrd "$CPIO_PATH" -device loader,file="$KERNEL_STAGE_PATH",addr=$KERNEL_LOAD_ADDR,force-raw=on -device loader,file="$ROOTSERVER_STAGE_PATH",addr=$ROOTSERVER_LOAD_ADDR,force-raw=on)
     declare -a CLI_EXTRA_ARGS=()
 
-    if [[ "$TRANSPORT" == "tcp" ]]; then
-        NETWORK_ARGS=(-netdev "user,id=net0,hostfwd=tcp:127.0.0.1:${TCP_PORT}-10.0.2.15:${TCP_PORT}" -device virtio-net-device,netdev=net0)
+    if (( NET_FEATURE_ENABLED == 1 )); then
+        local netdev_id="n0"
+        local -a NETWORK_ARGS=(-netdev "user,id=${netdev_id},hostfwd=tcp::${COHSH_TCP_PORT}-:${COHSH_TCP_PORT}" -device "virtio-net-pci,netdev=${netdev_id}")
         QEMU_ARGS+=("${NETWORK_ARGS[@]}")
+        CLI_EXTRA_ARGS+=("${NETWORK_ARGS[@]}")
+        log "Networking enabled (virtio-net); hostfwd tcp::${COHSH_TCP_PORT}-:${COHSH_TCP_PORT}"
+    else
+        log "Networking disabled; QEMU NIC omitted"
     fi
 
     if [[ -n "$DTB_OVERRIDE" ]]; then
@@ -525,57 +621,67 @@ PY
 
     COHSH_BIN="$HOST_TOOLS_DIR/cohsh"
 
-    if [[ "$TRANSPORT" == "tcp" ]]; then
-        log "Launching QEMU with TCP console bridge on port $TCP_PORT"
-        "$QEMU_BIN" "${QEMU_ARGS[@]}" &
-        QEMU_PID=$!
-        trap 'kill $QEMU_PID 2>/dev/null || true' EXIT
+    case "$EFFECTIVE_TRANSPORT" in
+        tcp)
+            log "Launching QEMU with TCP console bridge on port $COHSH_TCP_PORT"
+            "$QEMU_BIN" "${QEMU_ARGS[@]}" &
+            QEMU_PID=$!
+            trap 'kill $QEMU_PID 2>/dev/null || true' EXIT
 
-        wait_for_port "127.0.0.1" "$TCP_PORT" 60
-        export COHSH_TCP_PORT="$TCP_PORT"
-        if [[ ! -x "$COHSH_BIN" ]]; then
-            fail "cohsh CLI not found: $COHSH_BIN"
-        fi
+            wait_for_port "127.0.0.1" "$COHSH_TCP_PORT" 60
+            export COHSH_TCP_PORT="$COHSH_TCP_PORT"
+            if [[ ! -x "$COHSH_BIN" ]]; then
+                fail "cohsh CLI not found: $COHSH_BIN"
+            fi
 
-        CLI_CMD=("$COHSH_BIN" --transport tcp --tcp-port "$TCP_PORT" --role queen)
-        case "$EFFECTIVE_COHSH_MODE" in
-            inline)
-                log "Launching cohsh inline (TCP transport) for interactive session"
-                "${CLI_CMD[@]}"
-                STATUS=$?
-                kill "$QEMU_PID" 2>/dev/null || true
-                wait "$QEMU_PID" 2>/dev/null || true
-                trap - EXIT
-                exit $STATUS
-                ;;
-            macos-terminal)
-                log "Launching cohsh in background (TCP transport)"
-                launch_cohsh_macos_terminal "$HOST_TOOLS_DIR" "$TCP_PORT"
-                log "cohsh started in a background session. Press Ctrl+C here to stop QEMU when finished."
-                local QEMU_EXIT=0
-                if ! wait "$QEMU_PID" 2>/dev/null; then
-                    QEMU_EXIT=$?
-                fi
-                trap - EXIT
-                return $QEMU_EXIT
-                ;;
-            *)
-                fail "Unknown cohsh launch mode: $EFFECTIVE_COHSH_MODE"
-                ;;
-        esac
-    else
-        log "Launching cohsh (QEMU transport) for interactive session"
-        if [[ ! -x "$COHSH_BIN" ]]; then
-            fail "cohsh CLI not found: $COHSH_BIN"
-        fi
-        CLI_CMD=("$COHSH_BIN" --transport qemu --qemu-bin "$QEMU_BIN" --qemu-out-dir "$OUT_DIR" --qemu-gic-version "$GIC_VER" --role queen)
-        if [[ ${#CLI_EXTRA_ARGS[@]} -gt 0 ]]; then
-            for arg in "${CLI_EXTRA_ARGS[@]}"; do
-                CLI_CMD+=(--qemu-arg "$arg")
-            done
-        fi
-        exec "${CLI_CMD[@]}"
-    fi
+            CLI_CMD=("$COHSH_BIN" --transport tcp --tcp-port "$COHSH_TCP_PORT" --role queen)
+            case "$EFFECTIVE_COHSH_MODE" in
+                inline)
+                    log "Launching cohsh inline (TCP transport) for interactive session"
+                    "${CLI_CMD[@]}"
+                    STATUS=$?
+                    kill "$QEMU_PID" 2>/dev/null || true
+                    wait "$QEMU_PID" 2>/dev/null || true
+                    trap - EXIT
+                    exit $STATUS
+                    ;;
+                macos-terminal)
+                    log "Launching cohsh in background (TCP transport)"
+                    launch_cohsh_macos_terminal "$HOST_TOOLS_DIR" "$COHSH_TCP_PORT"
+                    log "cohsh started in a background session. Press Ctrl+C here to stop QEMU when finished."
+                    local QEMU_EXIT=0
+                    if ! wait "$QEMU_PID" 2>/dev/null; then
+                        QEMU_EXIT=$?
+                    fi
+                    trap - EXIT
+                    return $QEMU_EXIT
+                    ;;
+                *)
+                    fail "Unknown cohsh launch mode: $EFFECTIVE_COHSH_MODE"
+                    ;;
+            esac
+            ;;
+        qemu)
+            log "Launching cohsh (QEMU transport) for interactive session"
+            if [[ ! -x "$COHSH_BIN" ]]; then
+                fail "cohsh CLI not found: $COHSH_BIN"
+            fi
+            CLI_CMD=("$COHSH_BIN" --transport qemu --qemu-bin "$QEMU_BIN" --qemu-out-dir "$OUT_DIR" --qemu-gic-version "$GIC_VER" --role queen)
+            if [[ ${#CLI_EXTRA_ARGS[@]} -gt 0 ]]; then
+                for arg in "${CLI_EXTRA_ARGS[@]}"; do
+                    CLI_CMD+=(--qemu-arg "$arg")
+                done
+            fi
+            exec "${CLI_CMD[@]}"
+            ;;
+        mock)
+            log "Networking disabled; launching QEMU without cohsh (mock transport)"
+            exec "$QEMU_BIN" "${QEMU_ARGS[@]}"
+            ;;
+        *)
+            fail "Unsupported transport after resolution: $EFFECTIVE_TRANSPORT"
+            ;;
+    esac
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
