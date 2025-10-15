@@ -126,3 +126,47 @@
   Pair it with `tests/integration/qemu_tcp_console.rs` to confirm the TCP
   transport stays responsive while timers and NineDoor services continue
   to operate.
+
+## 11. Manifest Compiler & As-Built Guarantees
+- **Single manifest**: Beginning with Milestone 8, the root task, docs,
+  and CLI scripts are generated from `root_task.toml` via the
+  `tools/coh-rtc` compiler. The manifest encodes architecture profile,
+  Secure9P bounds, provider topology, ticket policies, and feature gates
+  that keep VM artefacts `#![no_std]`.
+- **Validation**: The compiler enforces red lines (walk depth ≤ 8,
+  `msize ≤ 8192`, no `..`, no fid reuse, capability scoping) and refuses
+  manifests that would require `std`, exceed memory budgets, or enable
+  unimplemented transports. Generated Rust modules carry `#![no_std]`
+  annotations and are formatted deterministically to support reproducible
+  builds and compliance audits.
+- **Docs-as-built**: Architecture, interfaces, and security documents
+  ingest compiler snippets (CBOR schemas, `/proc` layouts, concurrency
+  knobs, hardware tables). CI compares manifest fingerprints and embedded
+  excerpts to guarantee documentation reflects the running system.
+- **Policy export**: Compiler outputs `out/manifests/*.json` and
+  operator policy files consumed by `cohsh`, enabling deterministic
+  session pooling, retry budgets, and future hardware profiles without
+  editing runtime code.
+
+## 12. Hardware Trajectory & Sidecar Pattern
+- **UEFI readiness**: Later milestones introduce an aarch64 UEFI loader
+  that boots the generated manifest on physical hardware without a VM.
+  The loader maps UART/NET MMIO regions defined in the manifest,
+  initialises the same event pump, and emits attestation records to
+  `/proc/boot`. Secure Boot measurements cover generated artefacts,
+  ensuring retail, industrial, and defense deployments can trust the
+  runtime state.
+- **Device identity**: TPM (or DICE) integration seals ticket seeds and
+  records boot hashes. NineDoor exposes attestation logs via read-only
+  files so host tooling and operators can verify provenance before
+  enabling privileged commands.
+- **Sidecar architecture**: Industrial buses (MODBUS, DNP3, CAN), LoRa
+  schedulers, and science-grade sensor gateways run as sidecars on the
+  host or as specialised workers inside the VM. All sidecars communicate
+  through Secure9P namespaces declared in the manifest, preserving the
+  lean VM while enabling domain-specific IO without POSIX stacks.
+- **Budget discipline**: Sidecar-related workers are feature-gated and
+  bound by manifest quotas so the event pump remains deterministic even
+  under constrained links. Host tooling validates dependencies before
+  enabling sidecars, preventing drift between planned and deployed
+  topologies.
