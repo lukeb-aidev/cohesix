@@ -76,6 +76,15 @@ fn log_cap_details(tag: &str, cptr: seL4_CPtr) {
 #[cfg(not(feature = "sel4-debug"))]
 fn log_cap_details(_tag: &str, _cptr: seL4_CPtr) {}
 
+#[inline(always)]
+fn describe_object_type(objtype: seL4_Word) -> &'static str {
+    match objtype {
+        seL4_ARM_SmallPageObject => "seL4_ARM_SmallPageObject",
+        seL4_ARM_PageTableObject => "seL4_ARM_PageTableObject",
+        _ => "<unknown>",
+    }
+}
+
 /// Lightweight wrapper translating raw seL4 error codes into ergonomic result semantics.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct SeL4Result(seL4_Error);
@@ -833,6 +842,9 @@ impl<'a> KernelEnv<'a> {
             return Ok(());
         }
 
+        log::trace!(
+            "Probe Move: root=0x{root:04x} tmp=0x{tmp:04x} depth={depth} src=0x{src:04x} depth={depth}",
+        );
         let err1 = unsafe { seL4_CNode_Move(root, tmp, depth, root, src, depth) };
         if err1 != seL4_NoError {
             log::error!(
@@ -842,6 +854,9 @@ impl<'a> KernelEnv<'a> {
             return Err(err1);
         }
 
+        log::trace!(
+            "Probe Move back: root=0x{root:04x} src=0x{src:04x} depth={depth} tmp=0x{tmp:04x} depth={depth}",
+        );
         let err2 = unsafe { seL4_CNode_Move(root, src, depth, root, tmp, depth) };
         if err2 != seL4_NoError {
             log::error!(
@@ -883,11 +898,15 @@ impl<'a> KernelEnv<'a> {
             return err;
         }
 
+        let objtype_name = describe_object_type(objtype);
         log::trace!(
-            "Retype[A] → root=0x{:x} index=0 depth=0 offset=0x{:x} (init_bits={})",
+            "Retype[A] → root=0x{:x} index=0 depth=0 offset=0x{:x} (init_bits={} objtype=0x{:x} ({}) size_bits={})",
             root_cnode,
             dest_slot,
-            init_bits
+            init_bits,
+            objtype,
+            objtype_name,
+            size_bits
         );
         let err_a = unsafe {
             seL4_Untyped_Retype(
@@ -915,10 +934,14 @@ impl<'a> KernelEnv<'a> {
         log_cap_details("WalkedRootCNode", root_cnode);
 
         log::trace!(
-            "Retype[B] → root=0x{:x} index=0x{:x} depth={} offset=0",
+            "Retype[B] → root=0x{:x} index=0x{:x} depth={} offset=0 (init_bits={} objtype=0x{:x} ({}) size_bits={})",
             root_cnode,
             root_cnode,
-            init_bits
+            init_bits,
+            init_bits,
+            objtype,
+            objtype_name,
+            size_bits
         );
         let err_b = unsafe {
             seL4_Untyped_Retype(
@@ -933,7 +956,17 @@ impl<'a> KernelEnv<'a> {
             )
         };
         if err_b != seL4_NoError {
-            log::error!("Retype[B] failed with {:?}", err_b);
+            log::error!(
+                "Retype[B] failed with {:?}; tuple[root=0x{:x} index=0x{:x} depth={} offset=0 objtype=0x{:x} ({}) size_bits={}] after Retype[A] err {:?}",
+                err_b,
+                root_cnode,
+                root_cnode,
+                init_bits,
+                objtype,
+                objtype_name,
+                size_bits,
+                err_a
+            );
             return err_b;
         }
 
