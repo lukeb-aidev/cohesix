@@ -174,7 +174,7 @@ pub extern "C" fn kernel_start(bootinfo: *const BootInfoHeader) -> ! {
         start = empty_start,
         end = empty_end,
         span = empty_span,
-        bits = bootinfo_ref.init_cnode_size_bits(),
+        bits = bootinfo_ref.init_cnode_bits(),
     );
     console.writeln_prefixed(cnode_line.as_str());
     unsafe {
