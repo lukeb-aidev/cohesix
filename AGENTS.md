@@ -9,9 +9,10 @@
 
 ## Operating Rules
 1. **Single Source of Truth** — This `AGENTS.md` plus `/docs/*.md` constitute canonical guidance. Update them alongside code.
+1a. **Compiler Alignment** — All manifests and generated artefacts (`root_task.toml`, `coh-rtc` outputs) define the system state. Code or docs that diverge from compiler output are invalid; regenerate manifests instead of editing generated code.
 2. **No Scope Creep** — Implement only items sanctioned by the active milestone in `BUILD_PLAN.md`.
 3. **Atomic Work** — Each task must land with compiling code (`cargo check`) and updated tests/docs. Keep commits focused.
-4. **Tiny TCB** — No POSIX emulation layers, or TCP servers inside the VM. GPU integration stays outside the VM. The code footprint must be self-contained and secure.
+4. **Tiny TCB** — No POSIX emulation layers, or TCP servers inside the VM. GPU integration stays outside the VM. The code footprint must be self-contained and secure. Sidecars run outside the seL4 VM whenever possible; only lightweight control stubs (e.g., LoRa schedulers) may execute inside the VM under manifest quotas.
 5. **Capability Discipline** — Interactions occur through 9P namespaces using role-scoped capability tickets.
 6. **Tooling Alignment** — Use the macOS ARM64 toolchain in `TOOLCHAIN_MAC_ARM64.md`. Do not assume Linux-specific tooling in VM code.
 
@@ -28,17 +29,19 @@ Deliverables: <files, logs, doc updates>
 ```
 
 ## Roles
-- **Planner** — Breaks milestones into atomic tasks using the template above.
+- **Planner** — Breaks milestones into atomic tasks using the template above and ensures each new capability or provider field is represented in the compiler IR.
 - **Builder** — Implements code/tests, runs commands, documents results.
-- **Auditor** — Reviews diffs for scope compliance and updates docs.
+- **Auditor** — Reviews diffs for scope compliance, verifies generated artefacts match manifest fingerprints, and updates docs.
 
 ## Guardrails
 - Keep rootfs CPIO under 4 MiB (see `ci/size_guard.sh`).
 - 9P server runs in userspace; transports abstracted (no direct TCP in VM).
 - GPU workers run on host/edge nodes; VM only sees mirrored files.
 - Document new file types/paths before committing code that depends on them.
+- Changes to `/docs/*.md` must reflect the as-built state produced by the compiler (snippets, schemas, `/proc` layouts).
 
 ## Security & Testing Expectations
 - Validate all user-controlled input (9P frames, JSON commands).
 - No hardcoded secrets; use config or tickets.
 - Update or add tests whenever behaviour changes; list executed commands in PR summaries.
+- Run `cargo run -p coh-rtc` and verify regenerated artefacts hash-match committed versions before merge.
