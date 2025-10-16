@@ -16,7 +16,7 @@ use heapless::{String as HeaplessString, Vec as HeaplessVec};
 use crate::console::{Command, CommandParser, ConsoleError, MAX_ROLE_LEN, MAX_TICKET_LEN};
 #[cfg(feature = "net")]
 use crate::net::{NetPoller, CONSOLE_QUEUE_DEPTH};
-#[cfg(target_os = "none")]
+#[cfg(feature = "kernel")]
 use crate::ninedoor::NineDoorHandler;
 use crate::serial::{SerialDriver, SerialPort, SerialTelemetry, DEFAULT_LINE_CAPACITY};
 
@@ -221,7 +221,7 @@ where
     throttle: AuthThrottle,
     #[cfg(feature = "net")]
     net: Option<&'a mut dyn NetPoller>,
-    #[cfg(target_os = "none")]
+    #[cfg(feature = "kernel")]
     ninedoor: Option<&'a mut dyn NineDoorHandler>,
 }
 
@@ -257,7 +257,7 @@ where
             throttle: AuthThrottle::default(),
             #[cfg(feature = "net")]
             net: None,
-            #[cfg(target_os = "none")]
+            #[cfg(feature = "kernel")]
             ninedoor: None,
         }
     }
@@ -271,7 +271,7 @@ where
     }
 
     /// Attach a NineDoor handler to the event pump.
-    #[cfg(target_os = "none")]
+    #[cfg(feature = "kernel")]
     pub fn with_ninedoor(mut self, handler: &'a mut dyn NineDoorHandler) -> Self {
         self.ninedoor = Some(handler);
         self
@@ -413,9 +413,9 @@ where
     }
 
     fn handle_command(&mut self, command: Command) {
-        #[cfg(target_os = "none")]
+        #[cfg(feature = "kernel")]
         let command_clone = command.clone();
-        #[cfg(target_os = "none")]
+        #[cfg(feature = "kernel")]
         let mut forwarded = false;
         match command {
             Command::Help => {
@@ -430,7 +430,7 @@ where
             }
             Command::Attach { role, ticket } => {
                 self.handle_attach(role, ticket);
-                #[cfg(target_os = "none")]
+                #[cfg(feature = "kernel")]
                 {
                     forwarded = matches!(self.session, Some(_));
                 }
@@ -442,7 +442,7 @@ where
                     self.metrics.accepted_commands += 1;
                     let detail = format_message(format_args!("path={}", path.as_str()));
                     self.emit_ack_ok("TAIL", Some(detail.as_str()));
-                    #[cfg(target_os = "none")]
+                    #[cfg(feature = "kernel")]
                     {
                         forwarded = true;
                     }
@@ -455,7 +455,7 @@ where
                     self.audit.info("console: log stream start");
                     self.metrics.accepted_commands += 1;
                     self.emit_ack_ok("LOG", None);
-                    #[cfg(target_os = "none")]
+                    #[cfg(feature = "kernel")]
                     {
                         forwarded = true;
                     }
@@ -471,7 +471,7 @@ where
                     self.metrics.accepted_commands += 1;
                     let detail = format_message(format_args!("payload={}", payload.as_str()));
                     self.emit_ack_ok("SPAWN", Some(detail.as_str()));
-                    #[cfg(target_os = "none")]
+                    #[cfg(feature = "kernel")]
                     {
                         forwarded = true;
                     }
@@ -486,7 +486,7 @@ where
                     self.metrics.accepted_commands += 1;
                     let detail = format_message(format_args!("id={}", ident.as_str()));
                     self.emit_ack_ok("KILL", Some(detail.as_str()));
-                    #[cfg(target_os = "none")]
+                    #[cfg(feature = "kernel")]
                     {
                         forwarded = true;
                     }
@@ -496,13 +496,13 @@ where
             }
         }
 
-        #[cfg(target_os = "none")]
+        #[cfg(feature = "kernel")]
         if forwarded {
             self.forward_to_ninedoor(&command_clone);
         }
     }
 
-    #[cfg(target_os = "none")]
+    #[cfg(feature = "kernel")]
     fn forward_to_ninedoor(&mut self, command: &Command) {
         if let Some(handler) = self.ninedoor.as_mut() {
             handler.handle(command, &mut *self.audit);

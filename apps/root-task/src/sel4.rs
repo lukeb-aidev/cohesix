@@ -1,6 +1,6 @@
 // Author: Lukas Bower
 //! seL4 resource management helpers for the root task.
-#![cfg(any(test, target_os = "none"))]
+#![cfg(any(test, feature = "kernel"))]
 #![allow(dead_code)]
 #![allow(clippy::missing_panics_doc)]
 #![allow(unsafe_code)]
@@ -45,7 +45,7 @@ pub fn error_name(err: seL4_Error) -> &'static str {
     }
 }
 
-#[cfg(all(target_os = "none", not(target_arch = "aarch64")))]
+#[cfg(all(feature = "kernel", not(target_arch = "aarch64")))]
 compile_error!("This path currently expects AArch64; wire correct ARM object types for your arch.");
 
 const _: () = {
@@ -1469,7 +1469,10 @@ mod tests {
         );
         assert_eq!(trace.cnode_root, seL4_CapInitThreadCNode);
         assert_eq!(trace.node_index, seL4_CapInitThreadCNode as seL4_Word);
-        assert_eq!(trace.cnode_depth, bootinfo_ref.init_cnode_bits() as seL4_Word);
+        assert_eq!(
+            trace.cnode_depth,
+            bootinfo_ref.init_cnode_bits() as seL4_Word
+        );
         assert_eq!(trace.dest_offset, slot);
         assert_eq!(trace.dest_slot, slot);
     }

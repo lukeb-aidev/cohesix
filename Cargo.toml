@@ -9,6 +9,8 @@ members = [
     "apps/gpu-bridge-host",
     "crates/cohesix-ticket",
     "crates/secure9p-wire",
+    "crates/sel4-panicking",
+    "crates/sel4-runtime",
     "crates/sel4-sys",
     "tests",
 ]

@@ -10,6 +10,32 @@ The `root-task` crate embodies the responsibilities described in
 - Orchestrate serial, timer, networking, and IPC work through a
   cooperative event pump that replaces the legacy busy loop.
 
+## Dual-Mode Builds
+
+`root-task` now supports both host-mode development (default via the
+`host` feature) and kernel-mode execution on upstream seL4. Host builds
+continue to use `std` so integration tests and mocks run on macOS, while kernel builds
+are activated via the `kernel` feature and compile with `no_std` and
+`sel4_runtime` providing the `_start` shim. Use the following commands
+when switching modes:
+
+```
+# Host defaults for unit and integration tests
+cargo test -p root-task
+
+# Kernel-mode release build for QEMU / aarch64-unknown-none
+cargo build -p root-task --no-default-features --features kernel --target aarch64-unknown-none --release
+
+# Guard to ensure sel4_start is present and milestone modules remain
+scripts/check-root-task.sh <path-to-rootserver-elf>
+```
+
+The workspace now carries `.cargo/config.toml` target metadata so the
+kernel build injects the seL4 linker script without disturbing host
+settings. See `apps/root-task/src/main.rs` for the dual entry path and
+`apps/root-task/src/platform.rs` for the platform abstraction that
+bridges seL4 debug I/O and the host-mode console harness.
+
 ## Event Pump Overview
 
 `src/event/mod.rs` introduces `EventPump`, a no-`std` coordinator that
@@ -56,7 +82,7 @@ stay aligned with the seL4 entry path.
 
 ## QEMU Boot Readiness
 
-- **Boot pipeline** — `kernel_start` prints seL4 bootinfo, maps the
+- **Boot pipeline** — `sel4_start` drops into `kernel::start`, prints seL4 bootinfo, maps the
   PL011 UART, and installs the event pump before entering the polling
   loop so the image runs once the elfloader jumps into the root task on
   `qemu-system-aarch64`. 【F:apps/root-task/src/kernel.rs†L105-L210】【F:apps/root-task/src/kernel.rs†L252-L343】

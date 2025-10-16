@@ -1,5 +1,5 @@
 // Author: Lukas Bower
-#![cfg_attr(target_os = "none", no_std)]
+#![cfg_attr(feature = "kernel", no_std)]
 #![deny(unsafe_code)]
 #![warn(missing_docs)]
 
@@ -12,17 +12,19 @@ pub mod serial;
 #[cfg(feature = "net")]
 pub mod net;
 
-#[cfg(target_os = "none")]
+#[cfg(feature = "kernel")]
 /// Kernel entrypoints and seL4 bootstrap wiring for the in-VM root task.
 pub mod kernel;
 
-#[cfg(target_os = "none")]
+#[cfg(feature = "kernel")]
 pub mod sel4;
 
-#[cfg(target_os = "none")]
+#[cfg(feature = "kernel")]
 /// NineDoor 9P bridge exposed inside the VM environment.
 pub mod ninedoor;
 
-#[cfg(not(target_os = "none"))]
+pub mod platform;
+
+#[cfg(not(feature = "kernel"))]
 /// Host-mode simulation used for developer testing.
 pub mod host;

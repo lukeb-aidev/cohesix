@@ -1,4 +1,5 @@
 // Author: Lukas Bower
+#![cfg(not(feature = "kernel"))]
 #![allow(clippy::module_name_repetitions)]
 
 use std::io::{self, Write};

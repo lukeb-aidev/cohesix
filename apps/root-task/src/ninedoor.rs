@@ -1,4 +1,4 @@
-#![cfg(target_os = "none")]
+#![cfg(feature = "kernel")]
 #![allow(dead_code)]
 
 use crate::console::Command;

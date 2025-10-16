@@ -1,6 +1,6 @@
 // Author: Lukas Bower
 
-#![cfg(not(target_os = "none"))]
+#![cfg(not(feature = "kernel"))]
 
 extern crate alloc;
 use core::fmt;

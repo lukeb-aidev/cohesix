@@ -2,9 +2,7 @@
 #![allow(dead_code)]
 #![allow(unsafe_code)]
 
-#[cfg(target_arch = "aarch64")]
-use core::arch::global_asm;
-
+use core::ffi::c_void;
 use core::fmt::{self, Write};
 use core::mem;
 use core::panic::PanicInfo;
@@ -15,6 +13,7 @@ use cohesix_ticket::Role;
 use crate::event::{AuditSink, EventPump, IpcDispatcher, TickEvent, TicketTable, TimerSource};
 #[cfg(feature = "net")]
 use crate::net::NetStack;
+use crate::platform::{Platform, SeL4Platform};
 use crate::sel4::{
     bootinfo_debug_dump, error_name, BootInfoExt, KernelEnv, RetypeKind, RetypeStatus,
 };
@@ -25,20 +24,22 @@ use crate::serial::{
 use smoltcp::wire::Ipv4Address;
 
 /// seL4 console writer backed by the kernel's `DebugPutChar` system call.
-struct DebugConsole;
+struct DebugConsole<'a, P: Platform> {
+    platform: &'a P,
+}
 
-impl DebugConsole {
+impl<'a, P: Platform> DebugConsole<'a, P> {
     const PREFIX: &'static str = "[cohesix:root-task] ";
 
     #[inline(always)]
-    fn new() -> Self {
-        Self
+    fn new(platform: &'a P) -> Self {
+        Self { platform }
     }
 
     #[inline(always)]
     fn write_raw(&mut self, bytes: &[u8]) {
         for &byte in bytes {
-            emit_debug_char(byte);
+            self.platform.putc(byte);
         }
     }
 
@@ -99,7 +100,7 @@ impl DebugConsole {
     }
 }
 
-impl Write for DebugConsole {
+impl<'a, P: Platform> Write for DebugConsole<'a, P> {
     fn write_str(&mut self, s: &str) -> fmt::Result {
         self.write_raw(s.as_bytes());
         Ok(())
@@ -123,47 +124,29 @@ pub struct BootInfoHeader {
 #[cfg(not(target_arch = "aarch64"))]
 compile_error!("root-task kernel build currently supports only aarch64 targets");
 
-#[cfg(target_arch = "aarch64")]
-const ROOT_STACK_SIZE: usize = 16 * 1024;
 const PL011_PADDR: usize = 0x0900_0000;
 const DEVICE_FRAME_BITS: usize = 12;
 
-#[cfg(all(target_os = "none", target_arch = "aarch64"))]
+#[cfg(target_arch = "aarch64")]
 static mut TLS_IMAGE: sel4_sys::TlsImage = sel4_sys::TlsImage::new();
 
-#[cfg(target_arch = "aarch64")]
-global_asm!(
-    r#"
-    .section .bss.cohesix_root_stack,"aw",@nobits
-    .align 16
-__cohesix_root_stack:
-    .space {stack_size}
-__cohesix_root_stack_end:
-
-    .section .text._start,"ax",@progbits
-    .global _start
-    .type _start,%function
-_start:
-    adrp    x1, __cohesix_root_stack_end
-    add     x1, x1, :lo12:__cohesix_root_stack_end
-    mov     sp, x1
-    b       kernel_start
-    .size _start, . - _start
-"#,
-    stack_size = const ROOT_STACK_SIZE,
-);
-
 /// Root task entry point invoked by seL4 after kernel initialisation.
-#[no_mangle]
-pub extern "C" fn kernel_start(bootinfo: *const BootInfoHeader) -> ! {
-    let mut console = DebugConsole::new();
+pub fn start(bootinfo: &'static sel4::BootInfo) -> ! {
+    let platform = SeL4Platform::new(bootinfo as *const _ as *const c_void);
+    bootstrap(&platform, bootinfo)
+}
+
+fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static sel4::BootInfo) -> ! {
+    let mut console = DebugConsole::new(platform);
     console.writeln_prefixed("entered from seL4 (stage0)");
     console.writeln_prefixed("Cohesix boot: root-task online");
-    console.report_bootinfo(bootinfo);
+
+    let bootinfo_ptr = bootinfo as *const sel4::BootInfo as *const BootInfoHeader;
+    console.report_bootinfo(bootinfo_ptr);
 
     console.writeln_prefixed("Cohesix v0 (AArch64/virt)");
 
-    let bootinfo_ref = unsafe { &*(bootinfo as *const sel4_sys::seL4_BootInfo) };
+    let bootinfo_ref: &'static sel4_sys::seL4_BootInfo = bootinfo;
     bootinfo_debug_dump(bootinfo_ref);
 
     let empty_start = bootinfo_ref.empty_first_slot();
@@ -180,7 +163,7 @@ pub extern "C" fn kernel_start(bootinfo: *const BootInfoHeader) -> ! {
     );
     console.writeln_prefixed(cnode_line.as_str());
     unsafe {
-        #[cfg(all(target_os = "none", target_arch = "aarch64"))]
+        #[cfg(all(feature = "kernel", target_arch = "aarch64"))]
         {
             sel4_sys::tls_set_base(core::ptr::addr_of_mut!(TLS_IMAGE));
             debug_assert!(
@@ -202,7 +185,7 @@ pub extern "C" fn kernel_start(bootinfo: *const BootInfoHeader) -> ! {
     }
     let mut env = KernelEnv::new(bootinfo_ref);
 
-    #[cfg(target_os = "none")]
+    #[cfg(feature = "kernel")]
     let mut ninedoor = crate::ninedoor::NineDoorBridge::new();
 
     let uart_region = match env.map_device(PL011_PADDR) {
@@ -453,9 +436,9 @@ pub extern "C" fn kernel_start(bootinfo: *const BootInfoHeader) -> ! {
             driver,
         );
 
-    #[cfg(all(feature = "net", target_os = "none"))]
+    #[cfg(all(feature = "net", feature = "kernel"))]
     let mut net_stack = NetStack::new(&mut env, Ipv4Address::new(10, 0, 0, 2));
-    #[cfg(all(feature = "net", not(target_os = "none")))]
+    #[cfg(all(feature = "net", not(feature = "kernel")))]
     let (mut net_stack, _) = NetStack::new(Ipv4Address::new(10, 0, 0, 2));
     let timer = KernelTimer::new(5);
     let ipc = KernelIpc;
@@ -469,7 +452,7 @@ pub extern "C" fn kernel_start(bootinfo: *const BootInfoHeader) -> ! {
     let mut audit = ConsoleAudit::new(&mut console);
     let mut pump = EventPump::new(serial, timer, ipc, tickets, &mut audit);
 
-    #[cfg(target_os = "none")]
+    #[cfg(feature = "kernel")]
     {
         pump = pump.with_ninedoor(&mut ninedoor);
     }
@@ -484,44 +467,10 @@ pub extern "C" fn kernel_start(bootinfo: *const BootInfoHeader) -> ! {
     }
 }
 
-#[inline(always)]
-fn emit_debug_char(byte: u8) {
-    #[cfg(all(target_os = "none", target_arch = "aarch64"))]
-    unsafe {
-        arch::debug_put_char(byte);
-    }
-
-    #[cfg(not(all(target_os = "none", target_arch = "aarch64")))]
-    {
-        let _ = byte;
-    }
-}
-
-#[cfg(all(target_os = "none", target_arch = "aarch64"))]
-mod arch {
-    use core::arch::asm;
-
-    const SYS_DEBUG_PUT_CHAR: usize = (-9i64) as usize;
-
-    #[inline(always)]
-    pub unsafe fn debug_put_char(byte: u8) {
-        asm!(
-            "svc #0",
-            in("x0") byte as usize,
-            in("x1") 0usize,
-            in("x2") 0usize,
-            in("x3") 0usize,
-            in("x4") 0usize,
-            in("x5") 0usize,
-            in("x7") SYS_DEBUG_PUT_CHAR,
-            options(nostack),
-        );
-    }
-}
-
 /// Panic handler implementation that emits diagnostics before halting.
 pub fn panic_handler(info: &PanicInfo) -> ! {
-    let mut console = DebugConsole::new();
+    let platform = SeL4Platform::new(core::ptr::null());
+    let mut console = DebugConsole::new(&platform);
     let _ = write!(
         console,
         "{prefix}panic: {info}\r\n",
@@ -560,17 +509,17 @@ impl IpcDispatcher for KernelIpc {
     fn dispatch(&mut self, _now_ms: u64) {}
 }
 
-struct ConsoleAudit<'a> {
-    console: &'a mut DebugConsole,
+struct ConsoleAudit<'a, P: Platform> {
+    console: &'a mut DebugConsole<'a, P>,
 }
 
-impl<'a> ConsoleAudit<'a> {
-    fn new(console: &'a mut DebugConsole) -> Self {
+impl<'a, P: Platform> ConsoleAudit<'a, P> {
+    fn new(console: &'a mut DebugConsole<'a, P>) -> Self {
         Self { console }
     }
 }
 
-impl AuditSink for ConsoleAudit<'_> {
+impl<'a, P: Platform> AuditSink for ConsoleAudit<'a, P> {
     fn info(&mut self, message: &str) {
         self.console.writeln_prefixed(message);
     }

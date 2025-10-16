@@ -25,3 +25,11 @@ incremental = false
 
 [profile.release.package.worker-gpu]
 incremental = false
+
+[target.aarch64-unknown-none]
+rustflags = [
+    "-C",
+    "link-arg=-Tsel4.ld",
+    "-C",
+    "relocation-model=static",
+]

@@ -40,12 +40,12 @@ pub trait NetPoller {
     fn send_console_line(&mut self, line: &str);
 }
 
-#[cfg(target_os = "none")]
+#[cfg(feature = "kernel")]
 mod virtio;
-#[cfg(target_os = "none")]
+#[cfg(feature = "kernel")]
 pub use virtio::*;
 
-#[cfg(not(target_os = "none"))]
+#[cfg(not(feature = "kernel"))]
 mod queue;
-#[cfg(not(target_os = "none"))]
+#[cfg(not(feature = "kernel"))]
 pub use queue::*;

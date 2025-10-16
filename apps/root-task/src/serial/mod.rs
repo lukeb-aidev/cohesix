@@ -21,7 +21,7 @@ use heapless::{spsc::Queue, String as HeaplessString};
 use nb::Error as NbError;
 use portable_atomic::AtomicU32;
 
-#[cfg(target_os = "none")]
+#[cfg(feature = "kernel")]
 pub mod pl011;
 pub mod virtio;
 
@@ -249,7 +249,7 @@ impl SerialTelemetryCounters {
 }
 
 /// Serial driver used by tests to emulate asynchronous RX/TX behaviour.
-#[cfg(any(test, not(target_os = "none")))]
+#[cfg(any(test, not(feature = "kernel")))]
 pub mod test_support {
     use super::*;
     use core::cell::RefCell;

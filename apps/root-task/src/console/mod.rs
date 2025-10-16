@@ -4,6 +4,8 @@
 
 use core::fmt;
 
+use crate::platform::Platform;
+
 use heapless::String;
 
 /// Maximum length accepted for a single console line.
@@ -115,6 +117,35 @@ impl RateLimiter {
         }
 
         Ok(())
+    }
+}
+
+/// Minimal console loop used during early kernel bring-up.
+pub fn run<P: Platform>(platform: &P) -> ! {
+    use core::fmt::Write as _;
+
+    struct Adapter<'a, P: Platform>(&'a P);
+
+    impl<'a, P: Platform> core::fmt::Write for Adapter<'a, P> {
+        fn write_str(&mut self, s: &str) -> core::fmt::Result {
+            for byte in s.as_bytes() {
+                self.0.putc(*byte);
+            }
+            Ok(())
+        }
+    }
+
+    let mut writer = Adapter(platform);
+    let _ = writeln!(writer, "[cohesix:root-task] online");
+
+    loop {
+        if let Some(byte) = platform.getc_nonblock() {
+            platform.putc(byte);
+            if byte == b'\r' || byte == b'\n' {
+                let _ = writeln!(writer);
+            }
+        }
+        core::hint::spin_loop();
     }
 }
 
