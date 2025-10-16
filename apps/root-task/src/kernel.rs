@@ -363,6 +363,38 @@ pub extern "C" fn kernel_start(bootinfo: *const BootInfoHeader) -> ! {
                     }
                 }
                 console.writeln_prefixed(kind.as_str());
+
+                let expected_depth = snapshot.cspace_root_depth as usize;
+                let actual_depth = last.trace.cnode_depth as usize;
+                if actual_depth != expected_depth {
+                    let mut depth = heapless::String::<192>::new();
+                    let _ = write!(
+                        depth,
+                        "retype.cnode_depth mismatch: expected={expected} (bootinfo.init_cnode_bits) actual={actual}",
+                        expected = expected_depth,
+                        actual = actual_depth,
+                    );
+                    console.writeln_prefixed(depth.as_str());
+                }
+
+                if expected_depth < usize::BITS as usize {
+                    let max_slots = 1usize << expected_depth;
+                    let dest = last.trace.dest_offset as usize;
+                    if dest >= max_slots {
+                        let mut offset = heapless::String::<192>::new();
+                        let _ = write!(
+                            offset,
+                            "retype.dest_offset out of range: offset=0x{dest:04x} limit=0x{max_slots:04x}",
+                            dest = dest,
+                            max_slots = max_slots,
+                        );
+                        console.writeln_prefixed(offset.as_str());
+                    }
+                } else {
+                    console.writeln_prefixed(
+                        "retype.max_slots calculation overflowed (depth exceeds host word size)",
+                    );
+                }
             } else {
                 console.writeln_prefixed("no retype trace captured");
             }
