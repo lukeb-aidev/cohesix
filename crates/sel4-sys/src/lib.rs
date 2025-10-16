@@ -20,6 +20,14 @@ mod imp {
     pub type seL4_Error = isize;
 
     pub const seL4_NoError: seL4_Error = 0;
+    pub const seL4_InvalidArgument: seL4_Error = 1;
+    pub const seL4_InvalidCapability: seL4_Error = 2;
+    pub const seL4_IllegalOperation: seL4_Error = 3;
+    pub const seL4_RangeError: seL4_Error = 4;
+    pub const seL4_AlignmentError: seL4_Error = 5;
+    pub const seL4_TruncatedMessage: seL4_Error = 7;
+    pub const seL4_DeleteFirst: seL4_Error = 8;
+    pub const seL4_RevokeFirst: seL4_Error = 9;
 
     pub const seL4_MessageRegisterCount: usize = 4;
 
@@ -695,6 +703,14 @@ mod host_stub {
     }
 
     pub const seL4_NoError: seL4_Error = 0;
+    pub const seL4_InvalidArgument: seL4_Error = 1;
+    pub const seL4_InvalidCapability: seL4_Error = 2;
+    pub const seL4_IllegalOperation: seL4_Error = 3;
+    pub const seL4_RangeError: seL4_Error = 4;
+    pub const seL4_AlignmentError: seL4_Error = 5;
+    pub const seL4_TruncatedMessage: seL4_Error = 7;
+    pub const seL4_DeleteFirst: seL4_Error = 8;
+    pub const seL4_RevokeFirst: seL4_Error = 9;
     pub const MAX_BOOTINFO_UNTYPEDS: usize = 0;
     pub const seL4_MessageRegisterCount: usize = 4;
 
