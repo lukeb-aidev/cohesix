@@ -528,8 +528,8 @@ pub enum RetypeKind {
 ///
 /// The destination root **must** be the writable init thread CNode capability resident in slot
 /// `seL4_CapInitThreadCNode`. Do not use allocator handles or read-only aliases. The init CSpace is
-/// single-level, so retypes always traverse `(root=InitCNode, nodeIndex=InitCNode, nodeDepth=0)` and
-/// select the final slot via `dest_offset`.
+/// single-level, so retypes always traverse `(root=InitCNode, nodeIndex=InitCNode, nodeDepth=WORD_BITS)`
+/// and select the final slot via `dest_offset`.
 #[derive(Copy, Clone, Debug)]
 pub struct RetypeTrace {
     /// Capability designating the source untyped region.
@@ -545,10 +545,12 @@ pub struct RetypeTrace {
     /// Slot index within the selected CNode (root CNode policy: equals `dest_slot`).
     pub dest_offset: seL4_Word,
     /// `nodeDepth` argument supplied to `seL4_Untyped_Retype` while resolving the destination CNode.
-    /// Root CNode policy: MUST remain 0 so the kernel selects `cnode_root` directly.
+    /// Root CNode policy: supply `WORD_BITS` so the kernel consumes the full guard width when
+    /// selecting the writable root slot.
     pub cnode_depth: seL4_Word,
     /// `nodeIndex` argument supplied to `seL4_Untyped_Retype` when selecting a sub-CNode below
-    /// `cnode_root`. Root CNode policy: MUST remain 0 so the kernel uses `cnode_root` as provided.
+    /// `cnode_root`. Root CNode policy: MUST equal `seL4_CapInitThreadCNode`; legacy traces may pass
+    /// 0 and are promoted automatically.
     pub node_index: seL4_Word,
     /// Object type requested from the kernel.
     pub object_type: seL4_Word,
@@ -893,10 +895,22 @@ impl<'a> KernelEnv<'a> {
             )
         });
 
+        assert!(
+            trace.node_index == 0
+                || trace.node_index == self.bootinfo.init_cnode_cap() as seL4_Word,
+            "Retype: node_index 0x{:x} must resolve to the init CSpace root",
+            trace.node_index
+        );
+        assert!(
+            trace.cnode_depth == 0 || trace.cnode_depth == WORD_BITS,
+            "Retype: cnode_depth {} invalid for init CSpace root",
+            trace.cnode_depth
+        );
+
         let mut sanitised = trace;
         sanitised.cnode_root = self.bootinfo.init_cnode_cap();
-        sanitised.node_index = 0;
-        sanitised.cnode_depth = 0;
+        sanitised.node_index = self.bootinfo.init_cnode_cap() as seL4_Word;
+        sanitised.cnode_depth = WORD_BITS;
         sanitised.dest_offset = sanitised.dest_slot as seL4_Word;
 
         assert_eq!(
@@ -906,12 +920,12 @@ impl<'a> KernelEnv<'a> {
         );
         assert_eq!(
             sanitised.node_index,
-            0,
-            "Retype: node_index must remain 0 for the init CSpace root",
+            self.bootinfo.init_cnode_cap() as seL4_Word,
+            "Retype: node_index must reference the init CSpace root capability",
         );
         assert_eq!(
-            sanitised.cnode_depth, 0,
-            "Retype: cnode_depth must be 0 for init CSpace root"
+            sanitised.cnode_depth, WORD_BITS,
+            "Retype: cnode_depth must consume the full CPtr width for init CSpace root",
         );
         assert!(
             (sanitised.dest_offset as usize) < max_slots,
@@ -1115,9 +1129,12 @@ impl<'a> KernelEnv<'a> {
         kind: RetypeKind,
     ) -> RetypeTrace {
         // Canonical: target the root CNode directly; put the destination slot in 'dest_offset'.
+        // seL4 expects the CSpace traversal to consume a full word for single-level layouts, so
+        // use the init CNode capability as both the root and traversal index with a word-sized
+        // depth. The kernel then honours the explicit destination offset for the allocated slot.
         let cnode_root = self.slots.root(); // seL4_CapInitThreadCNode
         let node_index = cnode_root; // select the writable init CNode explicitly
-        let cnode_depth = 0; // no guard/lookup bits for root
+        let cnode_depth = WORD_BITS; // consume the full guard width for the init CNode
         let dest_offset = slot as seL4_Word; // actual slot to fill
         RetypeTrace {
             untyped_cap: reserved.cap(),
@@ -1272,7 +1289,7 @@ mod tests {
         );
         assert_eq!(trace.cnode_root, seL4_CapInitThreadCNode);
         assert_eq!(trace.node_index, seL4_CapInitThreadCNode);
-        assert_eq!(trace.cnode_depth, 0);
+        assert_eq!(trace.cnode_depth, WORD_BITS);
         assert_eq!(trace.dest_offset, slot);
         assert_eq!(trace.dest_slot, slot);
     }
@@ -1353,7 +1370,7 @@ mod tests {
 
         let (sanitised, init_bits) = env.sanitise_retype_trace(trace);
         assert_eq!(sanitised.node_index, seL4_CapInitThreadCNode);
-        assert_eq!(sanitised.cnode_depth, 0);
+        assert_eq!(sanitised.cnode_depth, WORD_BITS);
         assert_eq!(sanitised.dest_offset, slot);
         assert_eq!(init_bits, 13);
     }
