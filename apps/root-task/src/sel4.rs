@@ -995,7 +995,7 @@ impl<'a> KernelEnv<'a> {
         });
 
         let init_cnode = self.bootinfo.init_cnode_cap();
-        let init_slot = 0;
+        let init_slot = seL4_CapInitThreadCNode;
         let expected_depth = init_bits;
         assert_eq!(
             trace.node_index, init_slot,
