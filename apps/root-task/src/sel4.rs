@@ -8,14 +8,23 @@
 use core::{mem, ptr::NonNull};
 
 use heapless::Vec;
-#[cfg(feature = "sel4-debug")]
-use sel4_sys::seL4_DebugCapIdentify;
 use sel4_sys::{
     seL4_ARM_PageTableObject, seL4_ARM_PageTable_Map, seL4_ARM_Page_Default, seL4_ARM_Page_Map,
     seL4_ARM_Page_Uncached, seL4_BootInfo, seL4_CNode, seL4_CNode_Delete, seL4_CPtr,
     seL4_CapRights_ReadWrite, seL4_NoError, seL4_NotEnoughMemory, seL4_ObjectType, seL4_SlotRegion,
     seL4_Untyped, seL4_Untyped_Retype, seL4_Word, UntypedDesc, MAX_BOOTINFO_UNTYPEDS,
 };
+
+fn objtype_name(t: seL4_Word) -> &'static str {
+    use sel4_sys::seL4_ObjectType::*;
+    if t == seL4_ARM_Page as seL4_Word {
+        "seL4_ARM_Page"
+    } else if t == seL4_ARM_PageTableObject as seL4_Word {
+        "seL4_ARM_PageTableObject"
+    } else {
+        "<?>"
+    }
+}
 
 #[cfg(all(target_os = "none", not(target_arch = "aarch64")))]
 compile_error!("This path currently expects AArch64; wire correct ARM object types for your arch.");
@@ -60,59 +69,6 @@ impl BootInfoExt for seL4_BootInfo {
     #[inline(always)]
     fn empty_last_slot_excl(&self) -> usize {
         self.empty.end as usize
-    }
-}
-
-#[cfg(feature = "sel4-debug")]
-#[inline(always)]
-fn cap_identify(cptr: seL4_CPtr) -> seL4_Word {
-    unsafe { seL4_DebugCapIdentify(cptr) }
-}
-
-#[cfg(feature = "sel4-debug")]
-fn log_cap_details(tag: &str, cptr: seL4_CPtr) {
-    let id = cap_identify(cptr);
-    log::trace!("{tag}: cptr=0x{cptr:04x} DebugCapIdentify=0x{id:08x}",);
-}
-
-#[cfg(not(feature = "sel4-debug"))]
-fn log_cap_details(_tag: &str, _cptr: seL4_CPtr) {}
-
-#[inline(always)]
-fn objtype_name(objtype: u32) -> &'static str {
-    use sel4_sys::seL4_ObjectType::{seL4_ARM_Page, seL4_ARM_PageTableObject};
-
-    if objtype == seL4_ARM_Page as u32 {
-        "seL4_ARM_Page"
-    } else if objtype == seL4_ARM_PageTableObject as u32 {
-        "seL4_ARM_PageTableObject"
-    } else {
-        "<?>"
-    }
-}
-
-/// Lightweight wrapper translating raw seL4 error codes into ergonomic result semantics.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub struct SeL4Result(seL4_Error);
-
-impl SeL4Result {
-    /// Returns `true` if the underlying kernel invocation succeeded.
-    #[inline(always)]
-    pub fn is_ok(self) -> bool {
-        self.0 == seL4_NoError
-    }
-
-    /// Extracts the raw seL4 error code returned by the kernel.
-    #[inline(always)]
-    pub fn into_error(self) -> seL4_Error {
-        self.0
-    }
-}
-
-impl From<seL4_Error> for SeL4Result {
-    #[inline(always)]
-    fn from(value: seL4_Error) -> Self {
-        Self(value)
     }
 }
 
@@ -730,15 +686,12 @@ impl<'a> KernelEnv<'a> {
             .ok_or(seL4_NotEnoughMemory)?;
         let frame_slot = self.allocate_slot();
         #[cfg(target_arch = "aarch64")]
-        let objtype: u32 = seL4_ObjectType::seL4_ARM_Page as u32;
+        let page_obj: seL4_Word = sel4_sys::seL4_ObjectType::seL4_ARM_Page as seL4_Word;
         #[cfg(target_arch = "aarch64")]
-        let size_bits: seL4_Word = 12;
-        #[cfg(all(not(target_arch = "aarch64"), not(test)))]
+        let page_bits: seL4_Word = 12;
+
+        #[cfg(not(target_arch = "aarch64"))]
         compile_error!("Wire correct page object type/size for non-AArch64 targets.");
-        #[cfg(all(not(target_arch = "aarch64"), test))]
-        let objtype: u32 = seL4_ObjectType::seL4_ARM_Page as u32;
-        #[cfg(all(not(target_arch = "aarch64"), test))]
-        let size_bits: seL4_Word = 12;
 
         let dev_index = reserved.index();
         let dev_base_paddr = reserved.paddr();
@@ -763,8 +716,8 @@ impl<'a> KernelEnv<'a> {
         let trace = self.prepare_retype_trace(
             &reserved,
             frame_slot,
-            objtype as seL4_Word,
-            size_bits,
+            page_obj,
+            page_bits,
             RetypeKind::DevicePage { paddr },
         );
         self.record_retype(trace, RetypeStatus::Pending);
@@ -846,11 +799,50 @@ impl<'a> KernelEnv<'a> {
             trace.object_size_bits, PAGE_BITS as seL4_Word,
             "ARM device/RAM frames must have 4KiB size bits"
         );
-        let res = self.perform_retype(untyped_cap, *trace);
-        if res.is_ok() {
+
+        let (trace, _init_bits) = self.sanitise_retype_trace(*trace);
+        log::trace!(
+            "Retype → root=0x{:x} index={} depth={} offset=0x{:x} (objtype={}({}), size_bits={}, untyped_paddr=0x{:08x})",
+            trace.cnode_root,
+            trace.node_index,
+            trace.cnode_depth,
+            trace.dest_offset,
+            trace.object_type,
+            objtype_name(trace.object_type),
+            trace.object_size_bits,
+            trace.untyped_paddr,
+        );
+
+        #[cfg(target_arch = "aarch64")]
+        if matches!(trace.kind, RetypeKind::DevicePage { .. }) {
+            debug_assert_eq!(
+                trace.object_type,
+                sel4_sys::seL4_ObjectType::seL4_ARM_Page as seL4_Word,
+                "Device page retype must use seL4_ARM_Page on AArch64"
+            );
+            debug_assert_eq!(
+                trace.object_size_bits, 12,
+                "AArch64 page size must be 12 bits (4 KiB)"
+            );
+        }
+
+        let res = unsafe {
+            seL4_Untyped_Retype(
+                untyped_cap,
+                trace.object_type,
+                trace.object_size_bits,
+                trace.cnode_root,
+                trace.node_index,
+                trace.cnode_depth,
+                trace.dest_offset,
+                1,
+            )
+        };
+
+        if res == seL4_NoError {
             Ok(())
         } else {
-            Err(res.into_error())
+            Err(res)
         }
     }
 
@@ -859,92 +851,37 @@ impl<'a> KernelEnv<'a> {
         untyped_cap: seL4_Untyped,
         trace: &RetypeTrace,
     ) -> Result<(), seL4_Error> {
-        let res = self.perform_retype(untyped_cap, *trace);
-        if res.is_ok() {
-            Ok(())
-        } else {
-            Err(res.into_error())
-        }
-    }
-
-    #[inline(always)]
-    fn retype_into_root_cnode_slot(
-        &self,
-        untyped_cap: seL4_Untyped,
-        objtype: seL4_Word,
-        size_bits: seL4_Word,
-        dest_slot: seL4_Word,
-    ) -> seL4_Error {
-        let root_cnode = self.bootinfo.init_cnode_cap();
-        let init_bits = self.bootinfo.init_cnode_bits();
-        let capacity = 1usize.checked_shl(init_bits as u32).unwrap_or(usize::MAX);
-        assert!((dest_slot as usize) < capacity, "dest_slot OOB");
-
-        log_cap_details("RootCNode", root_cnode);
+        let (trace, _init_bits) = self.sanitise_retype_trace(*trace);
         log::trace!(
-            "Retype[A] → root=0x{:x} index=0 depth=0 offset=0x{:x} (init_bits={}, objtype={}, size_bits={})",
-            root_cnode,
-            dest_slot,
-            init_bits,
-            objtype_name(objtype as u32),
-            size_bits
-        );
-
-        let err = unsafe {
-            seL4_Untyped_Retype(
-                untyped_cap,
-                objtype,
-                size_bits,
-                root_cnode,
-                0,
-                0,
-                dest_slot,
-                1,
-            )
-        };
-        if err != seL4_NoError {
-            log::error!("Retype[A] failed: {}", err);
-        }
-        err
-    }
-    #[inline(always)]
-    fn perform_retype(&self, untyped_cap: seL4_Untyped, trace: RetypeTrace) -> SeL4Result {
-        let (trace, init_bits) = self.sanitise_retype_trace(trace);
-        let objtype_label = objtype_name(trace.object_type as u32);
-
-        log::trace!(
-            "Retype (sanitised) → root=0x{:x} index={} depth={} offset=0x{:x} (init_bits={} objtype={} ({:#x}) size_bits={})",
+            "Retype → root=0x{:x} index={} depth={} offset=0x{:x} (objtype={}({}), size_bits={}, untyped_paddr=0x{:08x})",
             trace.cnode_root,
             trace.node_index,
             trace.cnode_depth,
             trace.dest_offset,
-            init_bits,
-            objtype_label,
             trace.object_type,
-            trace.object_size_bits
+            objtype_name(trace.object_type),
+            trace.object_size_bits,
+            trace.untyped_paddr,
         );
 
-        let err = self.retype_into_root_cnode_slot(
-            untyped_cap,
-            trace.object_type,
-            trace.object_size_bits,
-            trace.dest_offset,
-        );
-        if err != seL4_NoError {
-            log::error!(
-                "Retype failed: err={} root=0x{:x} index={} depth={} offset=0x{:x} (init_bits={} objtype={} ({:#x}) size_bits={})",
-                err,
+        let res = unsafe {
+            seL4_Untyped_Retype(
+                untyped_cap,
+                trace.object_type,
+                trace.object_size_bits,
                 trace.cnode_root,
                 trace.node_index,
                 trace.cnode_depth,
                 trace.dest_offset,
-                init_bits,
-                objtype_label,
-                trace.object_type,
-                trace.object_size_bits
-            );
+                1,
+            )
+        };
+
+        if res == seL4_NoError {
+            Ok(())
+        } else {
+            Err(res)
         }
-        SeL4Result::from(err)
     }
 
     fn sanitise_retype_trace(&self, trace: RetypeTrace) -> (RetypeTrace, usize) {
@@ -1171,13 +1108,11 @@ impl<'a> KernelEnv<'a> {
         object_size_bits: seL4_Word,
         kind: RetypeKind,
     ) -> RetypeTrace {
-        // Always target the writable init CNode capability exposed in the initial CSpace root slot.
-        // The `cnode_root` already resolves to a CNode capability, so set `node_index` and
-        // `cnode_depth` to zero to select it directly and address slots via `dest_offset`.
-        let cnode_root = self.init_cnode_cap();
-        let node_index = 0;
-        let cnode_depth = 0;
-        let dest_offset = slot as seL4_Word;
+        // Canonical: target the root CNode directly; put the destination slot in 'dest_offset'.
+        let cnode_root = self.slots.root(); // seL4_CapInitThreadCNode
+        let node_index = 0; // do not walk; select root directly
+        let cnode_depth = 0; // no guard/lookup bits for root
+        let dest_offset = slot as seL4_Word; // actual slot to fill
         RetypeTrace {
             untyped_cap: reserved.cap(),
             untyped_paddr: reserved.paddr(),
