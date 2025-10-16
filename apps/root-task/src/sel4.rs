@@ -999,12 +999,12 @@ impl<'a> KernelEnv<'a> {
         let expected_depth = 0;
         assert_eq!(
             trace.node_index, init_slot,
-            "Retype: node_index 0x{:x} must use the canonical zero-depth init CSpace path",
+            "Retype: node_index 0x{:x} must use the canonical zero-depth init CSpace path (expected 0x{:x})",
             trace.node_index, init_slot
         );
         assert_eq!(
             trace.cnode_depth, expected_depth,
-            "Retype: cnode_depth {} must be zero when targeting the init CSpace root",
+            "Retype: cnode_depth {} must be zero when targeting the init CSpace root (expected {})",
             trace.cnode_depth, expected_depth
         );
 
