@@ -17,3 +17,7 @@
 - Verify the destination capability path in `apps/root-task/src/kernel.rs` aligns with the manifest entry for the PL011 UART. A stale depth or guard can trigger the `seL4_FailedLookup` reported by the tracing hook.
 - Re-run `coh-rtc` to regenerate the device manifest if any physical address assignments changed; mismatches between compiled manifests and the boot image will also surface as lookup failures.
 - Inspect the root-task CNode layout dump in the debug log to confirm the slot intended for the PL011 device page is free before the retype attempt.
+
+## Resolution Summary
+- The panic stemmed from supplying the root CNode's slot index to the `node_index`/`node_depth` parameters of `seL4_Untyped_Retype`. That forced the kernel to traverse a non-existent sub-CNode and fail with `seL4_FailedLookup` before inserting the PL011 frame.
+- Updating `KernelEnv::prepare_retype_trace` and its sanitiser to leave the traversal path empty (both values zero) allows the kernel to consume the destination slot solely via `dest_offset`, restoring successful device retype and the boot flow into the root-task console.
