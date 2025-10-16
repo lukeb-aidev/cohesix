@@ -547,7 +547,7 @@ pub enum RetypeKind {
 ///
 /// The destination root **must** be the writable init thread CNode capability resident in slot
 /// `seL4_CapInitThreadCNode`. Do not use allocator handles or read-only aliases. The init CSpace is
-/// single-level, so retypes always traverse `(root=InitCNode, nodeIndex=InitCNode, nodeDepth=WORD_BITS)`
+/// single-level, so retypes always traverse `(root=InitCNode, nodeIndex=0, nodeDepth=initThreadCNodeSizeBits)`
 /// and select the final slot via `dest_offset`.
 #[derive(Copy, Clone, Debug)]
 pub struct RetypeTrace {
@@ -564,7 +564,7 @@ pub struct RetypeTrace {
     /// Slot index within the selected CNode (root CNode policy: equals `dest_slot`).
     pub dest_offset: seL4_Word,
     /// `nodeDepth` argument supplied to `seL4_Untyped_Retype` while resolving the destination CNode.
-    /// Root CNode policy: supply `WORD_BITS` so the kernel consumes the full guard width when
+    /// Root CNode policy: supply `initThreadCNodeSizeBits` so the kernel consumes the full radix when
     /// selecting the writable root slot.
     pub cnode_depth: seL4_Word,
     /// `nodeIndex` argument supplied to `seL4_Untyped_Retype` when selecting a sub-CNode below
@@ -607,7 +607,7 @@ pub enum RetypeSanitiseError {
         /// Slot index of the writable init thread CNode.
         expected: seL4_Word,
     },
-    /// The guard depth was non-zero when using the canonical init CSpace path.
+    /// The guard depth did not match the canonical init CSpace depth.
     DepthMismatch {
         /// Depth supplied in the trace.
         provided: seL4_Word,
@@ -996,15 +996,15 @@ impl<'a> KernelEnv<'a> {
 
         let init_cnode = self.bootinfo.init_cnode_cap();
         let init_slot = 0;
-        let expected_depth = 0;
+        let expected_depth = init_bits;
         assert_eq!(
             trace.node_index, init_slot,
-            "Retype: node_index 0x{:x} must use the canonical zero-depth init CSpace path (expected 0x{:x})",
+            "Retype: node_index 0x{:x} must use the canonical init CSpace root path (expected 0x{:x})",
             trace.node_index, init_slot
         );
         assert_eq!(
             trace.cnode_depth, expected_depth,
-            "Retype: cnode_depth {} must be zero when targeting the init CSpace root (expected {})",
+            "Retype: cnode_depth {} must equal initThreadCNodeSizeBits when targeting the init CSpace root (expected {})",
             trace.cnode_depth, expected_depth
         );
 
@@ -1024,7 +1024,7 @@ impl<'a> KernelEnv<'a> {
         );
         assert_eq!(
             sanitised.cnode_depth, expected_depth,
-            "Retype: cnode_depth must match canonical init CSpace depth (zero)",
+            "Retype: cnode_depth must match canonical init CSpace depth (initThreadCNodeSizeBits)",
         );
         assert!(
             (sanitised.dest_offset as usize) < max_slots,
@@ -1230,11 +1230,11 @@ impl<'a> KernelEnv<'a> {
         // Canonical: target the root CNode directly and describe the destination path explicitly.
         // seL4 first resolves the `(root, node_index, node_depth)` triple to locate the CNode that
         // will receive the new capability. The initial thread's CSpace is single-level, so the
-        // canonical path traverses zero guard bits (`node_depth = 0`) starting from slot 0. The
-        // kernel then consumes the actual slot via `dest_offset`.
+        // kernel expects the lookup depth to match the root CNode's radix (`initThreadCNodeSizeBits`).
+        // The kernel then consumes the actual slot via `dest_offset`.
         let cnode_root = self.slots.root(); // seL4_CapInitThreadCNode
         let node_index = 0; // canonical root lookup starts from the top-level CNode slot 0
-        let cnode_depth = 0; // single-level CSpace: traverse zero guard bits, write directly
+        let cnode_depth = self.slots.depth(); // depth in bits equals initThreadCNodeSizeBits
         let dest_offset = slot as seL4_Word; // actual slot to fill
         RetypeTrace {
             untyped_cap: reserved.cap(),
@@ -1255,7 +1255,7 @@ impl<'a> KernelEnv<'a> {
         let init_cnode_cap = self.bootinfo.init_cnode_cap();
         let init_cnode_slot = 0;
         let init_bits = self.bootinfo.init_cnode_bits();
-        let expected_depth = 0;
+        let expected_depth = init_bits;
         let max_slots = 1usize.checked_shl(init_bits as u32).unwrap_or_else(|| {
             panic!(
                 "initThreadCNodeSizeBits {} exceeds host word size",
@@ -1467,7 +1467,7 @@ mod tests {
         );
         assert_eq!(trace.cnode_root, seL4_CapInitThreadCNode);
         assert_eq!(trace.node_index, 0);
-        assert_eq!(trace.cnode_depth, 0);
+        assert_eq!(trace.cnode_depth, bootinfo_ref.init_cnode_bits());
         assert_eq!(trace.dest_offset, slot);
         assert_eq!(trace.dest_slot, slot);
     }
@@ -1507,7 +1507,7 @@ mod tests {
             cnode_root: seL4_CapInitThreadCNode,
             dest_slot: slot,
             dest_offset: slot,
-            cnode_depth: 0,
+            cnode_depth: env.bootinfo().init_cnode_bits() as seL4_Word,
             node_index: 0,
             object_type: seL4_ObjectType::seL4_ARM_Page as seL4_Word,
             object_size_bits: PAGE_BITS as seL4_Word,
@@ -1539,7 +1539,7 @@ mod tests {
             cnode_root: seL4_CapInitThreadCNode,
             dest_slot: slot,
             dest_offset: slot,
-            cnode_depth: 0,
+            cnode_depth: env.bootinfo().init_cnode_bits() as seL4_Word,
             node_index: 0,
             object_type: seL4_ObjectType::seL4_ARM_Page as seL4_Word,
             object_size_bits: PAGE_BITS as seL4_Word,
@@ -1548,7 +1548,7 @@ mod tests {
 
         let (sanitised, init_bits) = env.sanitise_retype_trace(trace);
         assert_eq!(sanitised.node_index, 0);
-        assert_eq!(sanitised.cnode_depth, 0);
+        assert_eq!(sanitised.cnode_depth, bootinfo_ref.init_cnode_bits());
         assert_eq!(sanitised.dest_offset, slot);
         assert_eq!(init_bits, 13);
     }
@@ -1572,7 +1572,7 @@ mod tests {
             cnode_root: seL4_CapInitThreadCNode,
             dest_slot: 0x1ff,
             dest_offset: 0x1ff,
-            cnode_depth: 0,
+            cnode_depth: env.bootinfo().init_cnode_bits() as seL4_Word,
             node_index: 0,
             object_type: seL4_ObjectType::seL4_ARM_Page as seL4_Word,
             object_size_bits: PAGE_BITS as seL4_Word,
