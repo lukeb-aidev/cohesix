@@ -1,0 +1,9 @@
+# Author: Lukas Bower
+[package]
+name = "sel4-panicking"
+version = "0.7.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+sel4 = "0.0.12"

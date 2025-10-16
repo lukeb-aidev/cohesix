@@ -1,6 +1,6 @@
 // Author: Lukas Bower
 //! Virtio MMIO network device driver used by the root task.
-#![cfg(target_os = "none")]
+#![cfg(feature = "kernel")]
 #![allow(unsafe_code)]
 
 use core::fmt;

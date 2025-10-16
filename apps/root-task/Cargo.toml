@@ -6,7 +6,17 @@ edition = "2021"
 publish = false
 
 [features]
-default = ["net"]
+default = ["host"]
+host = [
+    "dep:anyhow",
+    "dep:secure9p-wire",
+]
+kernel = [
+    "dep:sel4",
+    "dep:sel4-sys",
+    "dep:sel4-runtime",
+    "dep:sel4-panicking",
+]
 net = [
     "dep:smoltcp",
     "dep:spin",
@@ -19,6 +29,23 @@ embedded-io = { version = "0.4", default-features = false }
 nb = "1.1"
 portable-atomic = "1.6"
 log = { version = "0.4", default-features = false }
+anyhow = { workspace = true, optional = true }
+secure9p-wire = { workspace = true, optional = true }
+[dependencies.sel4]
+version = "0.0.12"
+optional = true
+[dependencies.sel4-sys]
+version = "0.1"
+optional = true
+path = "../../crates/sel4-sys"
+[dependencies.sel4-runtime]
+version = "0.7.0"
+optional = true
+path = "../../crates/sel4-runtime"
+[dependencies.sel4-panicking]
+version = "0.7.0"
+optional = true
+path = "../../crates/sel4-panicking"
 [dependencies.heapless]
 version = "0.8"
 
@@ -36,9 +63,3 @@ features = [
 version = "0.9"
 optional = true
 
-[target.'cfg(not(target_os = "none"))'.dependencies]
-anyhow = { workspace = true }
-secure9p-wire = { workspace = true }
-
-[target.'cfg(target_os = "none")'.dependencies]
-sel4-sys = { path = "../../crates/sel4-sys" }
