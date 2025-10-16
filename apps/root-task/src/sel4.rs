@@ -895,14 +895,19 @@ impl<'a> KernelEnv<'a> {
 
         let mut sanitised = trace;
         sanitised.cnode_root = self.bootinfo.init_cnode_cap();
-        sanitised.node_index = sanitised.cnode_root;
+        sanitised.node_index = 0;
         sanitised.cnode_depth = 0;
         sanitised.dest_offset = sanitised.dest_slot as seL4_Word;
 
         assert_eq!(
-            sanitised.node_index,
             sanitised.cnode_root,
-            "Retype: node_index must be the init CSpace root capability",
+            self.bootinfo.init_cnode_cap(),
+            "Retype: cnode_root must be the init CSpace root capability",
+        );
+        assert_eq!(
+            sanitised.node_index,
+            0,
+            "Retype: node_index must remain 0 for the init CSpace root",
         );
         assert_eq!(
             sanitised.cnode_depth, 0,
