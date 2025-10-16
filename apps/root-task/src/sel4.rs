@@ -1010,7 +1010,7 @@ impl<'a> KernelEnv<'a> {
         );
         assert_eq!(
             trace.cnode_depth, expected_depth,
-            "Retype: cnode_depth {} must be zero when targeting the init CSpace root",
+            "Retype: cnode_depth {} must match expected depth {} when targeting the init CSpace root",
             trace.cnode_depth, expected_depth
         );
 
