@@ -15,7 +15,9 @@ use cohesix_ticket::Role;
 use crate::event::{AuditSink, EventPump, IpcDispatcher, TickEvent, TicketTable, TimerSource};
 #[cfg(feature = "net")]
 use crate::net::NetStack;
-use crate::sel4::{bootinfo_debug_dump, BootInfoExt, KernelEnv, RetypeKind, RetypeStatus};
+use crate::sel4::{
+    bootinfo_debug_dump, error_name, BootInfoExt, KernelEnv, RetypeKind, RetypeStatus,
+};
 use crate::serial::{
     pl011::Pl011, SerialPort, DEFAULT_LINE_CAPACITY, DEFAULT_RX_CAPACITY, DEFAULT_TX_CAPACITY,
 };
@@ -207,11 +209,13 @@ pub extern "C" fn kernel_start(bootinfo: *const BootInfoHeader) -> ! {
         Ok(region) => region,
         Err(err) => {
             let error_code = err as i32;
+            let error_label = error_name(err);
             let mut line = heapless::String::<128>::new();
             let _ = write!(
                 line,
-                "map_device(0x{addr:08x}) failed with seL4_Error {code}",
+                "map_device(0x{addr:08x}) failed with {label} ({code})",
                 addr = PL011_PADDR,
+                label = error_label,
                 code = error_code,
             );
             console.writeln_prefixed(line.as_str());
@@ -275,7 +279,7 @@ pub extern "C" fn kernel_start(bootinfo: *const BootInfoHeader) -> ! {
                     RetypeStatus::Pending => {
                         let _ = write!(
                             detail,
-                            "retype status=pending untyped=0x{ucap:08x} paddr=0x{paddr:08x} size_bits={usize_bits} slot=0x{slot:04x} offset={offset} depth={depth} root=0x{root:04x} node_index=0x{node_index:04x} obj_type={otype} obj_size_bits={obj_bits}",
+                            "retype status=pending raw.untyped=0x{ucap:08x} raw.paddr=0x{paddr:08x} raw.size_bits={usize_bits} raw.slot=0x{slot:04x} raw.offset={offset} raw.depth={depth} raw.root=0x{root:04x} raw.node_index=0x{node_index:04x} obj_type={otype} obj_size_bits={obj_bits}",
                             ucap = last.trace.untyped_cap,
                             paddr = last.trace.untyped_paddr,
                             usize_bits = last.trace.untyped_size_bits,
@@ -291,7 +295,7 @@ pub extern "C" fn kernel_start(bootinfo: *const BootInfoHeader) -> ! {
                     RetypeStatus::Ok => {
                         let _ = write!(
                             detail,
-                            "retype status=ok untyped=0x{ucap:08x} paddr=0x{paddr:08x} size_bits={usize_bits} slot=0x{slot:04x} offset={offset} depth={depth} root=0x{root:04x} node_index=0x{node_index:04x} obj_type={otype} obj_size_bits={obj_bits}",
+                            "retype status=ok raw.untyped=0x{ucap:08x} raw.paddr=0x{paddr:08x} raw.size_bits={usize_bits} raw.slot=0x{slot:04x} raw.offset={offset} raw.depth={depth} raw.root=0x{root:04x} raw.node_index=0x{node_index:04x} obj_type={otype} obj_size_bits={obj_bits}",
                             ucap = last.trace.untyped_cap,
                             paddr = last.trace.untyped_paddr,
                             usize_bits = last.trace.untyped_size_bits,
@@ -307,7 +311,7 @@ pub extern "C" fn kernel_start(bootinfo: *const BootInfoHeader) -> ! {
                     RetypeStatus::Err(code) => {
                         let _ = write!(
                             detail,
-                            "retype status=err({code}) untyped=0x{ucap:08x} paddr=0x{paddr:08x} size_bits={usize_bits} slot=0x{slot:04x} offset={offset} depth={depth} root=0x{root:04x} node_index=0x{node_index:04x} obj_type={otype} obj_size_bits={obj_bits}",
+                            "retype status=err({code}) raw.untyped=0x{ucap:08x} raw.paddr=0x{paddr:08x} raw.size_bits={usize_bits} raw.slot=0x{slot:04x} raw.offset={offset} raw.depth={depth} raw.root=0x{root:04x} raw.node_index=0x{node_index:04x} obj_type={otype} obj_size_bits={obj_bits}",
                             code = code as i32,
                             ucap = last.trace.untyped_cap,
                             paddr = last.trace.untyped_paddr,
@@ -364,7 +368,35 @@ pub extern "C" fn kernel_start(bootinfo: *const BootInfoHeader) -> ! {
                 }
                 console.writeln_prefixed(kind.as_str());
 
-                let expected_depth = snapshot.cspace_root_depth as usize;
+                let mut init = heapless::String::<192>::new();
+                let _ = write!(
+                    init,
+                    "retype.init_cnode cap=0x{cap:04x} slot=0x{slot:04x} bits={bits} max_slots={max}",
+                    cap = last.init_cnode_cap,
+                    slot = last.init_cnode_slot,
+                    bits = last.init_cnode_bits,
+                    max = last.init_cnode_capacity,
+                );
+                console.writeln_prefixed(init.as_str());
+
+                if let Some(sanitised) = last.sanitised {
+                    let mut sanitised_line = heapless::String::<224>::new();
+                    let _ = write!(
+                        sanitised_line,
+                        "retype.sanitised root=0x{root:04x} index=0x{index:04x} depth={depth} offset=0x{offset:04x}",
+                        root = sanitised.cnode_root,
+                        index = sanitised.node_index,
+                        depth = sanitised.cnode_depth,
+                        offset = sanitised.dest_offset,
+                    );
+                    console.writeln_prefixed(sanitised_line.as_str());
+                } else if let Some(error) = last.sanitise_error {
+                    let mut error_line = heapless::String::<224>::new();
+                    let _ = write!(error_line, "retype.sanitise_error={error}");
+                    console.writeln_prefixed(error_line.as_str());
+                }
+
+                let expected_depth = last.init_cnode_bits;
                 let actual_depth = last.trace.cnode_depth as usize;
                 if actual_depth != expected_depth {
                     let mut depth = heapless::String::<192>::new();
@@ -377,23 +409,16 @@ pub extern "C" fn kernel_start(bootinfo: *const BootInfoHeader) -> ! {
                     console.writeln_prefixed(depth.as_str());
                 }
 
-                if expected_depth < usize::BITS as usize {
-                    let max_slots = 1usize << expected_depth;
-                    let dest = last.trace.dest_offset as usize;
-                    if dest >= max_slots {
-                        let mut offset = heapless::String::<192>::new();
-                        let _ = write!(
-                            offset,
-                            "retype.dest_offset out of range: offset=0x{dest:04x} limit=0x{max_slots:04x}",
-                            dest = dest,
-                            max_slots = max_slots,
-                        );
-                        console.writeln_prefixed(offset.as_str());
-                    }
-                } else {
-                    console.writeln_prefixed(
-                        "retype.max_slots calculation overflowed (depth exceeds host word size)",
+                let dest = last.trace.dest_offset as usize;
+                if dest >= last.init_cnode_capacity {
+                    let mut offset = heapless::String::<192>::new();
+                    let _ = write!(
+                        offset,
+                        "retype.dest_offset out of range: offset=0x{dest:04x} limit=0x{limit:04x}",
+                        dest = dest,
+                        limit = last.init_cnode_capacity,
                     );
+                    console.writeln_prefixed(offset.as_str());
                 }
             } else {
                 console.writeln_prefixed("no retype trace captured");
