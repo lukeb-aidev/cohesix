@@ -396,13 +396,13 @@ pub extern "C" fn kernel_start(bootinfo: *const BootInfoHeader) -> ! {
                     console.writeln_prefixed(error_line.as_str());
                 }
 
-                let expected_depth = last.init_cnode_bits;
+                let expected_depth = last.canonical_cnode_depth as usize;
                 let actual_depth = last.trace.cnode_depth as usize;
                 if actual_depth != expected_depth {
                     let mut depth = heapless::String::<192>::new();
                     let _ = write!(
                         depth,
-                        "retype.cnode_depth mismatch: expected={expected} (bootinfo.init_cnode_bits) actual={actual}",
+                        "retype.cnode_depth mismatch: expected={expected} (canonical root depth) actual={actual}",
                         expected = expected_depth,
                         actual = actual_depth,
                     );
