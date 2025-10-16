@@ -584,10 +584,10 @@ mod imp {
         let mut mr4 = rights;
 
         seL4_SetCap(0, src_root);
+        seL4_SetMR(4, mr4);
 
-        let info = seL4_CallWithMRs(
-            dest_root, msg, &mut mr0, &mut mr1, &mut mr2, &mut mr3, &mut mr4,
-        );
+        let info =
+            seL4_CallWithMRs(dest_root, msg, &mut mr0, &mut mr1, &mut mr2, &mut mr3);
 
         info.label() as seL4_Error
     }
