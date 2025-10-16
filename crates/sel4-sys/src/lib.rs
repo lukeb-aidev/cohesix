@@ -581,10 +581,8 @@ mod imp {
         let mut mr1 = dest_depth;
         let mut mr2 = src_index;
         let mut mr3 = src_depth;
-        let mut mr4 = rights;
-
         seL4_SetCap(0, src_root);
-        seL4_SetMR(4, mr4);
+        seL4_SetMR(4, rights);
 
         let info =
             seL4_CallWithMRs(dest_root, msg, &mut mr0, &mut mr1, &mut mr2, &mut mr3);
