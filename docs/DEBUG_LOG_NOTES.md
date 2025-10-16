@@ -19,5 +19,5 @@
 - Inspect the root-task CNode layout dump in the debug log to confirm the slot intended for the PL011 device page is free before the retype attempt.
 
 ## Resolution Summary
-- The panic stemmed from supplying the root CNode's slot index to the `node_index`/`node_depth` parameters of `seL4_Untyped_Retype`. That forced the kernel to traverse a non-existent sub-CNode and fail with `seL4_FailedLookup` before inserting the PL011 frame.
-- Updating `KernelEnv::prepare_retype_trace` and its sanitiser to leave the traversal path empty (both values zero) allows the kernel to consume the destination slot solely via `dest_offset`, restoring successful device retype and the boot flow into the root-task console.
+- The panic stemmed from leaving `node_index`/`node_depth` as zero when invoking `seL4_Untyped_Retype`. That bypassed the slot containing the writable init CNode capability, so the kernel rejected the request with `seL4_FailedLookup` before inserting the PL011 frame.
+- Updating `KernelEnv::prepare_retype_trace` and its sanitiser to point `node_index` at `seL4_CapInitThreadCNode` with `node_depth = initThreadCNodeSizeBits` provides the kernel with a valid destination path. The PL011 device frame now retypes correctly and the root-task progresses past the UART initialisation stage.
