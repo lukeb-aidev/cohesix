@@ -1,0 +1,14 @@
+<!-- Author: Lukas Bower -->
+# Root-task Debug Log Notes
+
+## Retype Instrumentation Markers
+- The root-task's `kernel` module emits lines beginning with `retype status=` whenever the extended retype tracing hook runs.
+- The suffix `pending`, `ok`, or `err(<code>)` mirrors the internal `RetypeStatus` enum from `apps/root-task/src/kernel.rs`.
+- Seeing a `retype status=err(6)` line means the trace captured the error path after `seL4_Untyped_Retype` failed and before the panic handler aborted the boot.
+- The accompanying `retype.kind=` line reports the `RetypeKind` variant, which is `device_page` for MMIO mappings such as the PL011 UART.
+- Device coverage output like `device coverage idx=16 [...] state=free` confirms the root-task examined the manifest entry for the requested MMIO region before the failure.
+
+## Implication for Current Panic
+- Because the trace shows `retype status=err(6)` directly before the panic, the extended debug path **did** execute.
+- The seL4 error code `6` corresponds to `seL4_FailedLookup`, so the kernel rejected the destination CNode/slot while decoding the untyped invocation rather than skipping our instrumentation.
+- Follow-up work should focus on why the PL011 physical address `0x09000000` cannot be retyped into a 4 kiB device page within the provided destination slot rather than on logging gaps.
