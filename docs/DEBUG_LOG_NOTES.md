@@ -12,3 +12,8 @@
 - Because the trace shows `retype status=err(6)` directly before the panic, the extended debug path **did** execute.
 - The seL4 error code `6` corresponds to `seL4_FailedLookup`, so the kernel rejected the destination CNode/slot while decoding the untyped invocation rather than skipping our instrumentation.
 - Follow-up work should focus on why the PL011 physical address `0x09000000` cannot be retyped into a 4 kiB device page within the provided destination slot rather than on logging gaps.
+
+## Recommended Investigation Path
+- Verify the destination capability path in `apps/root-task/src/kernel.rs` aligns with the manifest entry for the PL011 UART. A stale depth or guard can trigger the `seL4_FailedLookup` reported by the tracing hook.
+- Re-run `coh-rtc` to regenerate the device manifest if any physical address assignments changed; mismatches between compiled manifests and the boot image will also surface as lookup failures.
+- Inspect the root-task CNode layout dump in the debug log to confirm the slot intended for the PL011 device page is free before the retype attempt.
