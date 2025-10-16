@@ -29,20 +29,18 @@ fn objtype_name(t: seL4_Word) -> &'static str {
 /// Converts an [`seL4_Error`] into its symbolic name for human-readable diagnostics.
 #[must_use]
 pub fn error_name(err: seL4_Error) -> &'static str {
-    use sel4_sys::seL4_Error::*;
-
     match err {
-        seL4_NoError => "seL4_NoError",
-        seL4_InvalidArgument => "seL4_InvalidArgument",
-        seL4_InvalidCapability => "seL4_InvalidCapability",
-        seL4_IllegalOperation => "seL4_IllegalOperation",
-        seL4_RangeError => "seL4_RangeError",
-        seL4_AlignmentError => "seL4_AlignmentError",
-        seL4_FailedLookup => "seL4_FailedLookup",
-        seL4_TruncatedMessage => "seL4_TruncatedMessage",
-        seL4_DeleteFirst => "seL4_DeleteFirst",
-        seL4_RevokeFirst => "seL4_RevokeFirst",
-        seL4_NotEnoughMemory => "seL4_NotEnoughMemory",
+        sel4_sys::seL4_NoError => "seL4_NoError",
+        sel4_sys::seL4_InvalidArgument => "seL4_InvalidArgument",
+        sel4_sys::seL4_InvalidCapability => "seL4_InvalidCapability",
+        sel4_sys::seL4_IllegalOperation => "seL4_IllegalOperation",
+        sel4_sys::seL4_RangeError => "seL4_RangeError",
+        sel4_sys::seL4_AlignmentError => "seL4_AlignmentError",
+        sel4_sys::seL4_FailedLookup => "seL4_FailedLookup",
+        sel4_sys::seL4_TruncatedMessage => "seL4_TruncatedMessage",
+        sel4_sys::seL4_DeleteFirst => "seL4_DeleteFirst",
+        sel4_sys::seL4_RevokeFirst => "seL4_RevokeFirst",
+        sel4_sys::seL4_NotEnoughMemory => "seL4_NotEnoughMemory",
         _ => "seL4_UnknownError",
     }
 }
@@ -1367,6 +1365,29 @@ type PageUpperDirectoryBookkeeper<const N: usize> =
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn error_name_reports_expected_labels() {
+        let cases: &[(seL4_Error, &str)] = &[
+            (sel4_sys::seL4_NoError, "seL4_NoError"),
+            (sel4_sys::seL4_InvalidArgument, "seL4_InvalidArgument"),
+            (sel4_sys::seL4_InvalidCapability, "seL4_InvalidCapability"),
+            (sel4_sys::seL4_IllegalOperation, "seL4_IllegalOperation"),
+            (sel4_sys::seL4_RangeError, "seL4_RangeError"),
+            (sel4_sys::seL4_AlignmentError, "seL4_AlignmentError"),
+            (sel4_sys::seL4_FailedLookup, "seL4_FailedLookup"),
+            (sel4_sys::seL4_TruncatedMessage, "seL4_TruncatedMessage"),
+            (sel4_sys::seL4_DeleteFirst, "seL4_DeleteFirst"),
+            (sel4_sys::seL4_RevokeFirst, "seL4_RevokeFirst"),
+            (sel4_sys::seL4_NotEnoughMemory, "seL4_NotEnoughMemory"),
+        ];
+
+        for &(code, expected) in cases {
+            assert_eq!(error_name(code), expected);
+        }
+
+        assert_eq!(error_name(42), "seL4_UnknownError");
+    }
 
     #[test]
     fn page_table_alignment_matches_two_meg_regions() {
