@@ -78,6 +78,7 @@ enum ArtifactDecision {
 }
 
 fn main() {
+    println!("cargo:rerun-if-env-changed=SEL4_LD");
     println!("cargo:rerun-if-env-changed=SEL4_BUILD_DIR");
     println!("cargo:rerun-if-env-changed=SEL4_BUILD");
     println!("cargo:rustc-check-cfg=cfg(sel4_config_debug_build)");
@@ -88,12 +89,18 @@ fn main() {
         return;
     }
 
+    let explicit_linker_script = env::var("SEL4_LD").ok();
+    if let Some(ref ld) = explicit_linker_script {
+        println!("cargo:rustc-link-arg=-T{ld}");
+    }
+
     let build_dir = env::var("SEL4_BUILD_DIR")
         .or_else(|_| env::var("SEL4_BUILD"))
         .unwrap_or_else(|_| {
             panic!(
                 "The root-task build requires the SEL4_BUILD_DIR (or SEL4_BUILD) environment variable to \n\
-                 point at a completed seL4 build directory containing libsel4.a."
+                 point at a completed seL4 build directory containing libsel4.a.\n\
+                 Export SEL4_LD to use a repository-provided linker script when the seL4 build lacks one."
             );
         });
 
@@ -129,7 +136,15 @@ fn main() {
     println!("cargo:rustc-link-search=native={}", lib_dir.display());
     println!("cargo:rustc-link-lib=static=sel4");
 
-    stage_linker_script(&build_path);
+    if explicit_linker_script.is_none() {
+        if let Err(err) = stage_linker_script(&build_path) {
+            panic!(
+                "Unable to locate a suitable seL4 linker script inside {}. {}",
+                build_path.display(),
+                err
+            );
+        }
+    }
 
     emit_config_flags(&build_path);
 }
@@ -220,7 +235,7 @@ fn file_matches(path: &Path) -> bool {
     }
 }
 
-fn stage_linker_script(build_root: &Path) {
+fn stage_linker_script(build_root: &Path) -> Result<(), String> {
     let mut errors = Vec::new();
 
     for candidate in LINKER_SCRIPT_SEARCH_SETS {
@@ -260,7 +275,7 @@ fn stage_linker_script(build_root: &Path) {
                 println!("cargo:rustc-link-arg-bin=root-task=-T{}", staged.display());
                 println!("cargo:rustc-link-arg-bin=root-task=-gc-sections");
                 println!("cargo:rustc-link-arg-bin=root-task=-no-pie");
-                return;
+                return Ok(());
             }
             Err(err) => errors.push(format!("{}: {}", candidate.file_name, err)),
         }
@@ -278,12 +293,11 @@ fn stage_linker_script(build_root: &Path) {
         errors.join("; ")
     };
 
-    panic!(
-        "Unable to locate a suitable seL4 linker script inside {}. Tried [{}]. {}",
-        build_root.display(),
+    Err(format!(
+        "Tried [{}]. {}",
         searched,
         detail
-    );
+    ))
 }
 
 fn emit_config_flags(root: &Path) {
