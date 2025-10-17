@@ -472,7 +472,7 @@ pub fn panic_handler(info: &PanicInfo) -> ! {
     let _ = write!(
         console,
         "{prefix}panic: {info}\r\n",
-        prefix = DebugConsole::PREFIX,
+        prefix = DebugConsole::<SeL4Platform>::PREFIX,
         info = info
     );
     loop {

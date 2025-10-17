@@ -52,7 +52,10 @@ static BOOTINFO: BootInfoCell = BootInfoCell::new();
 
 #[inline(always)]
 fn stack_top() -> *mut u8 {
-    unsafe { BOOT_STACK.0.as_ptr().add(BOOT_STACK.0.len()) as *mut u8 }
+    unsafe {
+        let stack = ptr::addr_of_mut!(BOOT_STACK);
+        (*stack).0.as_mut_ptr().add(STACK_BYTES)
+    }
 }
 
 /// seL4 kernel entry stub invoked after seL4 initialises the initial thread.

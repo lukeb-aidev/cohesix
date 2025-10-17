@@ -5,7 +5,7 @@
 #![allow(clippy::missing_panics_doc)]
 #![allow(unsafe_code)]
 
-use core::{fmt, mem, ptr::NonNull};
+use core::{convert::TryInto, fmt, mem, ptr::NonNull};
 
 use heapless::Vec;
 use sel4_sys::{
@@ -21,13 +21,15 @@ pub type BootInfo = seL4_BootInfo;
 
 /// Emits a single byte to the seL4 debug console.
 #[inline(always)]
-pub unsafe fn debug_put_char(ch: i32) {
-    seL4_DebugPutChar(ch as u8);
+pub fn debug_put_char(ch: i32) {
+    unsafe {
+        seL4_DebugPutChar(ch as u8);
+    }
 }
 
 /// Attempts to retrieve a byte from the seL4 debug console without blocking.
 #[inline(always)]
-pub unsafe fn debug_poll_char() -> i32 {
+pub fn debug_poll_char() -> i32 {
     // The upstream seL4 debug interface does not currently expose a polling syscall on all
     // architectures. Returning -1 mirrors the absence of pending input.
     -1
@@ -1122,7 +1124,11 @@ impl<'a> KernelEnv<'a> {
         if map_res != seL4_NoError {
             self.record_retype(trace, RetypeStatus::Err(map_res));
             unsafe {
-                let depth = self.bootinfo.init_cnode_bits() as seL4_Word;
+                let depth = self
+                    .bootinfo
+                    .init_cnode_bits()
+                    .try_into()
+                    .expect("init cnode depth exceeds u8");
                 let _ = seL4_CNode_Delete(self.init_cnode_cap(), pt_slot, depth);
             }
             self.untyped.release(&reserved);
@@ -1174,7 +1180,11 @@ impl<'a> KernelEnv<'a> {
         if map_res != seL4_NoError {
             self.record_retype(trace, RetypeStatus::Err(map_res));
             unsafe {
-                let depth = self.bootinfo.init_cnode_bits() as seL4_Word;
+                let depth = self
+                    .bootinfo
+                    .init_cnode_bits()
+                    .try_into()
+                    .expect("init cnode depth exceeds u8");
                 let _ = seL4_CNode_Delete(self.init_cnode_cap(), pd_slot, depth);
             }
             self.untyped.release(&reserved);
@@ -1224,7 +1234,11 @@ impl<'a> KernelEnv<'a> {
         if map_res != seL4_NoError {
             self.record_retype(trace, RetypeStatus::Err(map_res));
             unsafe {
-                let depth = self.bootinfo.init_cnode_bits() as seL4_Word;
+                let depth = self
+                    .bootinfo
+                    .init_cnode_bits()
+                    .try_into()
+                    .expect("init cnode depth exceeds u8");
                 let _ = seL4_CNode_Delete(self.init_cnode_cap(), pud_slot, depth);
             }
             self.untyped.release(&reserved);

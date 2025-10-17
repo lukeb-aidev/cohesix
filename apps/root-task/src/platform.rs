@@ -35,13 +35,11 @@ impl SeL4Platform {
 #[cfg(feature = "kernel")]
 impl Platform for SeL4Platform {
     fn putc(&self, byte: u8) {
-        unsafe {
-            debug_put_char(byte as i32);
-        }
+        debug_put_char(byte as i32);
     }
 
     fn getc_nonblock(&self) -> Option<u8> {
-        let ch = unsafe { debug_poll_char() };
+        let ch = debug_poll_char();
         if ch >= 0 {
             Some(ch as u8)
         } else {
