@@ -34,6 +34,7 @@ mod imp {
     const SEL4_CNODE_DELETE: seL4_Word = 1;
     const SEL4_CNODE_COPY: seL4_Word = 3;
     const SEL4_CNODE_MOVE: seL4_Word = 5;
+    const SEL4_CNODE_MINT: seL4_Word = 7;
 
     /// Maximum number of bootinfo untyped caps for the configured kernel.
     /// The value is inferred from CONFIG_MAX_NUM_BOOTINFO_UNTYPED_CAPS in the seL4 build.
@@ -622,6 +623,32 @@ mod imp {
     }
 
     #[inline(always)]
+    pub unsafe fn seL4_CNode_Mint(
+        dest_root: seL4_CNode,
+        dest_index: seL4_CPtr,
+        dest_depth: seL4_Uint8,
+        src_root: seL4_CNode,
+        src_index: seL4_CPtr,
+        src_depth: seL4_Uint8,
+        rights: seL4_CapRights,
+        badge: seL4_Word,
+    ) -> seL4_Error {
+        let msg = seL4_MessageInfo::new(SEL4_CNODE_MINT, 0, 1, 6);
+        let mut mr0 = dest_index;
+        let mut mr1 = dest_depth as seL4_Word;
+        let mut mr2 = src_index;
+        let mut mr3 = src_depth as seL4_Word;
+
+        seL4_SetCap(0, src_root);
+        seL4_SetMR(4, rights.raw());
+        seL4_SetMR(5, badge);
+
+        let info = seL4_CallWithMRs(dest_root, msg, &mut mr0, &mut mr1, &mut mr2, &mut mr3);
+
+        info.label() as seL4_Error
+    }
+
+    #[inline(always)]
     pub unsafe fn seL4_CNode_Copy(
         dest_root: seL4_CNode,
         dest_index: seL4_CPtr,
@@ -863,6 +890,20 @@ mod host_stub {
         _src_root: seL4_CNode,
         _src_index: seL4_CPtr,
         _src_depth: seL4_Uint8,
+    ) -> seL4_Error {
+        unsupported();
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_CNode_Mint(
+        _dest_root: seL4_CNode,
+        _dest_index: seL4_CPtr,
+        _dest_depth: seL4_Uint8,
+        _src_root: seL4_CNode,
+        _src_index: seL4_CPtr,
+        _src_depth: seL4_Uint8,
+        _rights: seL4_CapRights,
+        _badge: seL4_Word,
     ) -> seL4_Error {
         unsupported();
     }

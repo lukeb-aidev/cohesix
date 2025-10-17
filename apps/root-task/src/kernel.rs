@@ -14,6 +14,7 @@ use crate::event::{AuditSink, EventPump, IpcDispatcher, TickEvent, TicketTable, 
 #[cfg(feature = "net")]
 use crate::net::NetStack;
 use crate::platform::{Platform, SeL4Platform};
+use crate::sel4;
 use crate::sel4::{
     bootinfo_debug_dump, debug_put_char, error_name, BootInfo, BootInfoExt, KernelEnv, RetypeKind,
     RetypeStatus,
@@ -173,12 +174,20 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
     bootinfo_debug_dump(bootinfo_ref);
 
     let mut cs = CSpace::from_bootinfo(bootinfo_ref);
+    unsafe {
+        let (lo, hi) = cs.bounds();
+        sel4::debug_put_char(b'[' as i32);
+        sel4::debug_put_char(((lo & 0xF) as u8 + b'0') as i32);
+        sel4::debug_put_char(((hi & 0xF) as u8 + b'0') as i32);
+        sel4::debug_put_char(b']' as i32);
+    }
     assert_eq!(
-        usize::from(cs.depth_bits()),
+        usize::from(cs.depth_bits),
         bootinfo_ref.initThreadCNodeSizeBits as usize,
         "init thread CNode depth mismatch"
     );
 
+    let mut consumed_slots: usize = 0;
     let endpoint_untyped = pick_untyped(bootinfo_ref, sel4_sys::seL4_EndpointBits as u8);
 
     let endpoint_slot = retype_one(
@@ -188,8 +197,11 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
         &mut cs,
     )
     .expect("failed to retype endpoint into init CSpace");
+    consumed_slots += 1;
 
-    debug_put_char(b'E' as i32);
+    unsafe {
+        sel4::debug_put_char(b'E' as i32);
+    }
 
     let notification_untyped = pick_untyped(bootinfo_ref, sel4_sys::seL4_NotificationBits as u8);
 
@@ -200,10 +212,11 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
         &mut cs,
     )
     .expect("failed to retype notification into init CSpace");
+    consumed_slots += 1;
 
-    debug_put_char(b'N' as i32);
-
-    let consumed_slots = cs.consumed() as usize;
+    unsafe {
+        sel4::debug_put_char(b'N' as i32);
+    }
     let _ = endpoint_slot;
     let _ = notification_slot;
 
