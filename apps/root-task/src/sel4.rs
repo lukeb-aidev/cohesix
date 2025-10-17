@@ -11,21 +11,26 @@ use heapless::Vec;
 use sel4_sys::{
     seL4_ARM_PageTableObject, seL4_ARM_PageTable_Map, seL4_ARM_Page_Default, seL4_ARM_Page_Map,
     seL4_ARM_Page_Uncached, seL4_BootInfo, seL4_CNode, seL4_CNode_Delete, seL4_CPtr,
-    seL4_CapRights_ReadWrite, seL4_DebugPutChar, seL4_NoError, seL4_NotEnoughMemory,
-    seL4_ObjectType, seL4_SlotRegion, seL4_Untyped, seL4_Untyped_Retype, seL4_Word, UntypedDesc,
-    MAX_BOOTINFO_UNTYPEDS,
+    seL4_CapRights_ReadWrite, seL4_NoError, seL4_NotEnoughMemory, seL4_ObjectType, seL4_SlotRegion,
+    seL4_Untyped, seL4_Untyped_Retype, seL4_Word, UntypedDesc, MAX_BOOTINFO_UNTYPEDS,
 };
+
+#[cfg(feature = "kernel")]
+use sel4_panicking::write_debug_byte;
 
 /// Alias to the boot information structure exposed by `sel4_sys`.
 pub type BootInfo = seL4_BootInfo;
 
 /// Emits a single byte to the seL4 debug console.
+#[cfg(feature = "kernel")]
 #[inline(always)]
 pub fn debug_put_char(ch: i32) {
-    unsafe {
-        seL4_DebugPutChar(ch as u8);
-    }
+    write_debug_byte(ch as u8);
 }
+
+#[cfg(not(feature = "kernel"))]
+#[inline(always)]
+pub fn debug_put_char(_ch: i32) {}
 
 /// Attempts to retrieve a byte from the seL4 debug console without blocking.
 #[inline(always)]
