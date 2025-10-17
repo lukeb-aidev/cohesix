@@ -7,6 +7,11 @@ use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+#[path = "build_support.rs"]
+mod build_support;
+
+use build_support::{classify_linker_script, LinkerScriptKind};
+
 const CONFIG_CANDIDATES: &[&str] = &[
     ".config",
     "kernel/.config",
@@ -70,12 +75,6 @@ const LINKER_SCRIPT_SEARCH_SETS: &[LinkerScriptSearchSet] = &[
 enum ArtifactDecision {
     Accept,
     Reject(String),
-}
-
-enum LinkerScriptKind {
-    Kernel,
-    User,
-    Unknown,
 }
 
 fn main() {
@@ -226,18 +225,18 @@ fn stage_linker_script(build_root: &Path) {
 
     for candidate in LINKER_SCRIPT_SEARCH_SETS {
         match find_artifact_with(build_root, candidate.file_name, candidate.primary, |path| {
-            match classify_linker_script(path)? {
-                LinkerScriptKind::Kernel => Ok(ArtifactDecision::Reject(String::from(
-                    "detected seL4 kernel linker script (contains KERNEL_ELF_BASE)",
+            let kind = classify_linker_script(path)?;
+            let display = path.display().to_string();
+            match kind {
+                LinkerScriptKind::Kernel => Ok(ArtifactDecision::Reject(format!(
+                    "detected seL4 kernel linker script: {}",
+                    display
                 ))),
                 LinkerScriptKind::User => Ok(ArtifactDecision::Accept),
-                LinkerScriptKind::Unknown => {
-                    println!(
-                        "cargo:warning=Using linker script {} without recognised userland markers",
-                        path.display()
-                    );
-                    Ok(ArtifactDecision::Accept)
-                }
+                LinkerScriptKind::Unknown => Ok(ArtifactDecision::Reject(format!(
+                    "unrecognised linker script without userland markers: {}",
+                    display
+                ))),
             }
         }) {
             Ok(script) => {
@@ -282,24 +281,6 @@ fn stage_linker_script(build_root: &Path) {
         searched,
         detail
     );
-}
-
-fn classify_linker_script(path: &Path) -> Result<LinkerScriptKind, String> {
-    let contents = fs::read_to_string(path)
-        .map_err(|err| format!("failed to read {}: {}", path.display(), err))?;
-
-    if contents.contains("KERNEL_ELF_BASE") {
-        return Ok(LinkerScriptKind::Kernel);
-    }
-
-    if contents.contains("USER_TOP")
-        || contents.contains("seL4_UserImageBase")
-        || contents.contains("_user_image")
-    {
-        return Ok(LinkerScriptKind::User);
-    }
-
-    Ok(LinkerScriptKind::Unknown)
 }
 
 fn emit_config_flags(root: &Path) {
