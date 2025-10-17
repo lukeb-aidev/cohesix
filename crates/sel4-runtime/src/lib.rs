@@ -11,14 +11,11 @@ const STACK_BYTES: usize = 16 * 1024;
 #[repr(align(16))]
 struct BootStack([u8; STACK_BYTES]);
 
-// seL4 runtime linker scripts place the root task stack in the regular `.bss`
-// segment so that it lives alongside the other zeroed data near the user image
-// base. The previous `.bss.uninit` placement mirrored a kernel-oriented layout
-// and caused the loader to treat the stack as residing at `USER_TOP`,
-// dramatically inflating the PT_LOAD segment size and overlapping the
-// elfloader. Keeping the stack in `.bss` aligns with the upstream runtime and
-// ensures the resulting image fits beneath the kernel-reserved window.
-#[link_section = ".bss"]
+// seL4 linker scripts previously mapped `.bss.uninit` near `USER_TOP`, which
+// inflated the PT_LOAD span when the root-task stack lived in that section.
+// Pin the stack to a dedicated data segment so it stays adjacent to the rest
+// of the root-task image and leaves the kernel window untouched.
+#[link_section = ".data.boot_stack"]
 static mut BOOT_STACK: BootStack = BootStack([0; STACK_BYTES]);
 
 struct BootInfoCell {
