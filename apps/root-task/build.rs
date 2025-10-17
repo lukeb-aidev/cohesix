@@ -17,12 +17,45 @@ const CONFIG_CANDIDATES: &[&str] = &[
     "kernel/gen_config/kernel_all.cmake",
 ];
 
-const LINKER_SCRIPT_CANDIDATES: &[&str] = &[
-    "sel4/sel4.ld",
-    "linker/sel4.ld",
-    "kernel/sel4.ld",
-    "kernel/linker/sel4.ld",
-    "sel4.ld",
+#[derive(Clone, Copy)]
+struct LinkerScriptSearchSet {
+    file_name: &'static str,
+    primary: &'static [&'static str],
+}
+
+const LINKER_SCRIPT_SEARCH_SETS: &[LinkerScriptSearchSet] = &[
+    LinkerScriptSearchSet {
+        file_name: "sel4.ld",
+        primary: &[
+            "sel4/sel4.ld",
+            "linker/sel4.ld",
+            "kernel/sel4.ld",
+            "kernel/linker/sel4.ld",
+            "sel4.ld",
+        ],
+    },
+    LinkerScriptSearchSet {
+        file_name: "linker.lds",
+        primary: &[
+            "sel4/linker.lds",
+            "linker/linker.lds",
+            "kernel/linker.lds",
+            "kernel/gen_config/linker.lds",
+            "kernel/gen_config/kernel/linker.lds",
+            "linker.lds",
+        ],
+    },
+    LinkerScriptSearchSet {
+        file_name: "linker.lds_pp",
+        primary: &[
+            "sel4/linker.lds_pp",
+            "linker/linker.lds_pp",
+            "kernel/linker.lds_pp",
+            "kernel/gen_config/linker.lds_pp",
+            "kernel/gen_config/kernel/linker.lds_pp",
+            "linker.lds_pp",
+        ],
+    },
 ];
 
 fn main() {
@@ -100,30 +133,52 @@ fn file_matches(path: &Path) -> bool {
 }
 
 fn stage_linker_script(build_root: &Path) {
-    let script =
-        find_artifact(build_root, "sel4.ld", LINKER_SCRIPT_CANDIDATES).unwrap_or_else(|err| {
-            panic!(
-                "Unable to locate sel4.ld inside {}: {}",
-                build_root.display(),
-                err
-            );
-        });
+    let mut errors = Vec::new();
 
-    println!("cargo:rerun-if-changed={}", script.display());
+    for candidate in LINKER_SCRIPT_SEARCH_SETS {
+        match find_artifact(build_root, candidate.file_name, candidate.primary) {
+            Ok(script) => {
+                println!("cargo:rerun-if-changed={}", script.display());
 
-    let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR must be set by cargo"));
-    let staged = out_dir.join("sel4.ld");
+                let out_dir =
+                    PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR must be set by cargo"));
+                let staged =
+                    out_dir.join(script.file_name().unwrap_or_else(|| OsStr::new("sel4.ld")));
 
-    fs::copy(&script, &staged).unwrap_or_else(|err| {
-        panic!(
-            "Failed to stage linker script from {} to {}: {}",
-            script.display(),
-            staged.display(),
-            err
-        );
-    });
+                fs::copy(&script, &staged).unwrap_or_else(|err| {
+                    panic!(
+                        "Failed to stage linker script from {} to {}: {}",
+                        script.display(),
+                        staged.display(),
+                        err
+                    );
+                });
 
-    println!("cargo:rustc-link-arg-bin=root-task=-T{}", staged.display());
+                println!("cargo:rustc-link-arg-bin=root-task=-T{}", staged.display());
+                return;
+            }
+            Err(err) => errors.push(format!("{}: {}", candidate.file_name, err)),
+        }
+    }
+
+    let searched = LINKER_SCRIPT_SEARCH_SETS
+        .iter()
+        .map(|set| set.file_name)
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let detail = if errors.is_empty() {
+        String::from("no candidates were evaluated")
+    } else {
+        errors.join("; ")
+    };
+
+    panic!(
+        "Unable to locate a suitable seL4 linker script inside {}. Tried [{}]. {}",
+        build_root.display(),
+        searched,
+        detail
+    );
 }
 
 fn breadth_first_search(root: &Path, needle: &str, max_depth: usize) -> Result<PathBuf, String> {
