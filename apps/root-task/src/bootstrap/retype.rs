@@ -23,12 +23,12 @@ pub fn retype_one(
     cs: &mut CSpace,
 ) -> Result<sys::seL4_CPtr, sys::seL4_Error> {
     let Some(slot) = cs.alloc_slot() else {
-        return Err(sys::seL4_Error::seL4_NotEnoughMemory);
+        return Err(sys::seL4_NotEnoughMemory);
     };
 
     let root = cs.root();
     let depth = sys::seL4_Word::from(cs.depth_bits());
-    let slot_word = sys::seL4_Word::from(slot);
+    let slot_word = slot as sys::seL4_Word;
 
     #[cfg(feature = "bootstrap-trace")]
     {
@@ -46,20 +46,18 @@ pub fn retype_one(
         emit_trace(line.as_str());
     }
 
-    let result = unsafe {
-        sys::seL4_Untyped_Retype(
-            untyped_cap,
-            obj_type as sys::seL4_Word,
-            sys::seL4_Word::from(obj_size_bits),
-            root,
-            slot_word,
-            depth,
-            slot_word,
-            1,
-        )
-    };
+    let result = sys::seL4_untyped_retype(
+        untyped_cap,
+        obj_type,
+        obj_size_bits,
+        root,
+        slot_word,
+        depth,
+        slot_word,
+        1,
+    );
 
-    if result == sys::seL4_Error::seL4_NoError {
+    if result == sys::seL4_NoError {
         Ok(slot_word as sys::seL4_CPtr)
     } else {
         Err(result)
