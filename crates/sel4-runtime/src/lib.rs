@@ -18,6 +18,7 @@ struct BootStack([u8; STACK_BYTES]);
 // dramatically inflating the PT_LOAD segment size and overlapping the
 // elfloader. Keeping the stack in `.bss` aligns with the upstream runtime and
 // ensures the resulting image fits beneath the kernel-reserved window.
+#[link_section = ".bss"]
 static mut BOOT_STACK: BootStack = BootStack([0; STACK_BYTES]);
 
 struct BootInfoCell {
