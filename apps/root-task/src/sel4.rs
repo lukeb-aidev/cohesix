@@ -277,11 +277,11 @@ impl SlotAllocator {
 
     /// Returns the guard depth (in bits) of the root CNode capability.
     ///
-    /// For the init thread's single-level CSpace this equals
-    /// `bootinfo.initThreadCNodeSizeBits` and ensures capability paths resolve slots directly.
+    /// For the init thread's single-level CSpace this is zero because the writable root capability
+    /// can be supplied to the kernel without an additional lookup.
     #[inline(always)]
     pub fn depth(&self) -> seL4_Word {
-        self.cnode_size_bits
+        0
     }
 
     /// Returns the number of bits describing the capacity of the root CNode.
@@ -577,7 +577,7 @@ pub struct KernelEnvSnapshot {
     pub dma_cursor: usize,
     /// Capability designating the root CNode supplied to retype operations.
     pub cspace_root: seL4_CNode,
-    /// Guard depth (in bits) associated with the root CNode capability.
+    /// Guard depth (in bits) used when submitting retype paths (zero for the init thread CSpace).
     pub cspace_root_depth: seL4_Word,
     /// Total number of CSpace slots managed by the allocator.
     pub cspace_capacity: usize,
@@ -631,10 +631,9 @@ pub enum RetypeKind {
 ///
 /// The destination root **must** be the writable init thread CNode capability resident in slot
 /// `seL4_CapInitThreadCNode`. Do not use allocator handles or read-only aliases. The init CSpace is
-/// single-level, yet the writable root capability resides in slot `seL4_CapInitThreadCNode` with the
-/// guard depth advertised through `bootinfo.initThreadCNodeSizeBits`. Retypes therefore traverse
-/// `(root=InitCNode, nodeIndex=slot, nodeDepth=initThreadCNodeSizeBits, nodeOffset=slot)` when
-/// targeting a single slot within the init CSpace root.
+/// single-level, allowing the kernel to consume the supplied root capability directly when
+/// `nodeDepth = 0`. We therefore record `nodeIndex = seL4_CapInitThreadCNode` for diagnostics while
+/// selecting the actual destination slot through `dest_offset`.
 #[derive(Copy, Clone, Debug)]
 pub struct RetypeTrace {
     /// Capability designating the source untyped region.
@@ -650,12 +649,11 @@ pub struct RetypeTrace {
     /// Slot index within the selected CNode (root CNode policy: equals `dest_slot`).
     pub dest_offset: seL4_Word,
     /// `nodeDepth` argument supplied to `seL4_Untyped_Retype` while resolving the destination CNode.
-    /// Root CNode policy: equals `bootinfo.initThreadCNodeSizeBits` so the kernel interprets
-    /// `node_index` directly as the target slot.
+    /// Root CNode policy: zero so the kernel consumes the supplied root capability directly.
     pub cnode_depth: seL4_Word,
     /// `nodeIndex` argument supplied to `seL4_Untyped_Retype` when selecting a sub-CNode below
-    /// `cnode_root`. Root CNode policy: equals the destination slot when retyping directly into the
-    /// init thread CSpace.
+    /// `cnode_root`. Root CNode policy: equals `seL4_CapInitThreadCNode` to document the writable
+    /// init thread root slot used for submissions.
     pub node_index: seL4_Word,
     /// Object type requested from the kernel.
     pub object_type: seL4_Word,
@@ -700,6 +698,13 @@ pub enum RetypeSanitiseError {
         /// Maximum representable slot index for the init CNode.
         capacity: usize,
     },
+    /// The node index did not match the canonical init thread CNode slot.
+    NodeIndexMismatch {
+        /// Node index supplied in the trace.
+        provided: seL4_Word,
+        /// Expected slot holding the writable init CNode capability.
+        expected: seL4_Word,
+    },
     /// The destination offset exceeded the init CNode's slot capacity.
     OffsetOutOfRange {
         /// Offset supplied in the trace.
@@ -707,12 +712,12 @@ pub enum RetypeSanitiseError {
         /// Maximum representable slot index for the init CNode.
         capacity: usize,
     },
-    /// The node index and destination offset diverged.
-    NodeOffsetMismatch {
-        /// Node index supplied in the trace.
-        index: seL4_Word,
+    /// The destination offset and reported capability slot diverged.
+    DestOffsetMismatch {
         /// Destination offset supplied in the trace.
         offset: seL4_Word,
+        /// Capability slot intended to receive the retyped object.
+        slot: seL4_Word,
     },
 }
 
@@ -738,16 +743,22 @@ impl fmt::Display for RetypeSanitiseError {
                     "node_index out of range: provided=0x{provided:04x} capacity={capacity}",
                 )
             }
+            Self::NodeIndexMismatch { provided, expected } => {
+                write!(
+                    f,
+                    "node_index mismatch: provided=0x{provided:04x} expected=0x{expected:04x}",
+                )
+            }
             Self::OffsetOutOfRange { provided, capacity } => {
                 write!(
                     f,
                     "dest_offset out of range: provided=0x{provided:04x} capacity={capacity}",
                 )
             }
-            Self::NodeOffsetMismatch { index, offset } => {
+            Self::DestOffsetMismatch { offset, slot } => {
                 write!(
                     f,
-                    "node_index/node_offset mismatch: index=0x{index:04x} offset=0x{offset:04x}",
+                    "dest_offset/slot mismatch: offset=0x{offset:04x} slot=0x{slot:04x}",
                 )
             }
         }
@@ -1358,12 +1369,12 @@ impl<'a> KernelEnv<'a> {
     ) -> RetypeTrace {
         // Canonical: target the root CNode directly and describe the destination slot explicitly.
         // seL4 first resolves the `(root, node_index, node_depth)` triple to locate the CNode that
-        // will receive the new capability. The initial thread's CSpace is single-level, so encode the
-        // destination slot directly in both `node_index` and `dest_offset` using the guard depth
-        // advertised by bootinfo.
+        // will receive the new capability. The initial thread's CSpace is single-level, so we retain
+        // the writable root slot in `node_index` and drive the actual destination through
+        // `dest_offset` with a zero guard depth.
         let cnode_root = self.slots.root(); // seL4_CapInitThreadCNode
-        let node_index = slot as seL4_Word; // canonical slot index
-        let cnode_depth = self.slots.depth();
+        let node_index = cnode_root as seL4_Word; // canonical init thread root slot
+        let cnode_depth: seL4_Word = 0;
         let dest_offset = slot as seL4_Word; // actual slot to fill
         RetypeTrace {
             untyped_cap: reserved.cap(),
@@ -1383,9 +1394,8 @@ impl<'a> KernelEnv<'a> {
     fn record_retype(&mut self, trace: RetypeTrace, status: RetypeStatus) {
         let init_cnode_cap = self.bootinfo.init_cnode_cap();
         let init_bits = self.bootinfo.init_cnode_bits();
-        let expected_depth: seL4_Word = init_bits
-            .try_into()
-            .expect("init cnode bits must fit in seL4_Word");
+        let expected_depth: seL4_Word = 0;
+        let expected_index: seL4_Word = init_cnode_cap as seL4_Word;
         let max_slots = 1usize.checked_shl(init_bits as u32).unwrap_or_else(|| {
             panic!(
                 "initThreadCNodeSizeBits {} exceeds host word size",
@@ -1401,33 +1411,38 @@ impl<'a> KernelEnv<'a> {
                 provided: trace.cnode_root,
                 expected: init_cnode_cap,
             });
+        } else if (trace.node_index as usize) >= max_slots {
+            sanitise_error = Some(RetypeSanitiseError::NodeIndexOutOfRange {
+                provided: trace.node_index,
+                capacity: max_slots,
+            });
+        } else if trace.node_index != expected_index {
+            sanitise_error = Some(RetypeSanitiseError::NodeIndexMismatch {
+                provided: trace.node_index,
+                expected: expected_index,
+            });
         } else if trace.cnode_depth != expected_depth {
             sanitise_error = Some(RetypeSanitiseError::DepthMismatch {
                 provided: trace.cnode_depth,
                 expected: expected_depth,
             });
         } else {
-            let node_index = trace.node_index;
             let dest_offset = trace.dest_offset;
-            if (node_index as usize) >= max_slots {
-                sanitise_error = Some(RetypeSanitiseError::NodeIndexOutOfRange {
-                    provided: node_index,
-                    capacity: max_slots,
-                });
-            } else if (dest_offset as usize) >= max_slots {
+            let dest_slot_word = trace.dest_slot as seL4_Word;
+            if (dest_offset as usize) >= max_slots {
                 sanitise_error = Some(RetypeSanitiseError::OffsetOutOfRange {
                     provided: dest_offset,
                     capacity: max_slots,
                 });
-            } else if node_index != dest_offset {
-                sanitise_error = Some(RetypeSanitiseError::NodeOffsetMismatch {
-                    index: node_index,
+            } else if dest_offset != dest_slot_word {
+                sanitise_error = Some(RetypeSanitiseError::DestOffsetMismatch {
                     offset: dest_offset,
+                    slot: dest_slot_word,
                 });
             } else {
                 let mut sanitised_trace = trace;
                 sanitised_trace.cnode_root = init_cnode_cap;
-                sanitised_trace.node_index = node_index;
+                sanitised_trace.node_index = expected_index;
                 sanitised_trace.cnode_depth = expected_depth;
                 sanitised_trace.dest_offset = dest_offset;
                 sanitised = Some(sanitised_trace);

@@ -27,21 +27,23 @@ pub fn retype_one(
     };
 
     let root = cs.root();
-    let depth = sys::seL4_Word::from(cs.depth_bits());
     let slot_word = slot as sys::seL4_Word;
+    let node_index = root as sys::seL4_Word;
+    let guard_depth: sys::seL4_Word = 0;
 
     #[cfg(feature = "bootstrap-trace")]
     {
         let mut line = String::<128>::new();
         let _ = write!(
             line,
-            "[retype u=0x{untyped:04x} type=0x{ty:02x} size={size} root=0x{root:04x} slot=0x{slot:04x} depth={depth}]\r\n",
+            "[retype u=0x{untyped:04x} type=0x{ty:02x} size={size} root=0x{root:04x} node=0x{node:04x} slot=0x{slot:04x} depth={depth}]\r\n",
             untyped = untyped_cap,
             ty = obj_type as sys::seL4_Word,
             size = obj_size_bits,
             root = root,
+            node = node_index,
             slot = slot_word,
-            depth = depth,
+            depth = guard_depth,
         );
         emit_trace(line.as_str());
     }
@@ -51,8 +53,8 @@ pub fn retype_one(
         obj_type,
         obj_size_bits,
         root,
-        slot_word,
-        depth,
+        node_index,
+        guard_depth,
         slot_word,
         1,
     );

@@ -1,7 +1,9 @@
 // Author: Lukas Bower
 #![allow(dead_code)]
 
+/// Capability-space helpers extracted from the seL4 boot info structure.
 pub mod cspace;
+/// Thin wrapper around `seL4_Untyped_Retype` tailored for the init CSpace policy.
 pub mod retype;
 
 use crate::sel4::BootInfo;
