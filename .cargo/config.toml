@@ -30,4 +30,6 @@ incremental = false
 rustflags = [
     "-C",
     "relocation-model=static",
+    "-C",
+    "code-model=large",
 ]
