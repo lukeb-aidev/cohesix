@@ -22,12 +22,12 @@ pub enum LinkerScriptKind {
 /// kernel script inflates the PT_LOAD segment span and causes the ELF-loader to
 /// overlap with the staged root task image, preventing the VM from booting.
 pub fn classify_linker_script(path: &Path) -> Result<LinkerScriptKind, String> {
-    if path_contains_component(path, "kernel") {
-        return Ok(LinkerScriptKind::Kernel);
-    }
-
     if has_path_hint(path, USER_PATH_HINTS) {
         return Ok(LinkerScriptKind::User);
+    }
+
+    if path_contains_component(path, "kernel") {
+        return Ok(LinkerScriptKind::Kernel);
     }
 
     let contents = fs::read_to_string(path)
@@ -107,6 +107,14 @@ mod tests {
     fn user_hint_in_path_short_circuits() {
         assert_eq!(
             classify_linker_script(Path::new("build/rootserver/linker.lds")).unwrap(),
+            LinkerScriptKind::User
+        );
+    }
+
+    #[test]
+    fn user_hint_beats_kernel_component_when_both_present() {
+        assert_eq!(
+            classify_linker_script(Path::new("kernel/gen_config/rootserver/linker.lds")).unwrap(),
             LinkerScriptKind::User
         );
     }

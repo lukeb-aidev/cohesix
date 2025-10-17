@@ -33,6 +33,10 @@ pub fn debug_put_char(ch: i32) {
 pub fn debug_put_char(_ch: i32) {}
 
 /// Attempts to retrieve a byte from the seL4 debug console without blocking.
+///
+/// Returns the pending byte when input is available or `-1` when the console
+/// has no buffered input. The function behaves identically across the
+/// platform-specific implementations compiled below.
 #[cfg(all(feature = "kernel", feature = "debug-input", target_arch = "aarch64"))]
 #[inline(always)]
 pub fn debug_poll_char() -> i32 {
@@ -42,6 +46,10 @@ pub fn debug_poll_char() -> i32 {
     unsafe { sel4_debug_poll_char() }
 }
 
+/// Attempts to retrieve a byte from the seL4 debug console without blocking.
+///
+/// Returns `-1` to signal that the console does not support polling on the
+/// current architecture.
 #[cfg(all(
     feature = "kernel",
     feature = "debug-input",
@@ -54,6 +62,10 @@ pub fn debug_poll_char() -> i32 {
     -1
 }
 
+/// Attempts to retrieve a byte from the seL4 debug console without blocking.
+///
+/// Returns `-1` because the build configuration does not enable the
+/// `debug-input` feature or because the code is executing in host mode.
 #[cfg(not(all(feature = "kernel", feature = "debug-input")))]
 #[inline(always)]
 pub fn debug_poll_char() -> i32 {
