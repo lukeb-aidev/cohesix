@@ -32,10 +32,4 @@ rustflags = [
     "relocation-model=static",
     "-C",
     "code-model=large",
-    "-C",
-    "link-arg=-T{env:SEL4_LD}",
-    "-C",
-    "link-arg=-Wl,--gc-sections",
-    "-C",
-    "link-arg=-no-pie",
 ]

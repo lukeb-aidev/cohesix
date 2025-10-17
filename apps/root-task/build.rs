@@ -91,7 +91,9 @@ fn main() {
 
     let explicit_linker_script = env::var("SEL4_LD").ok();
     if let Some(ref ld) = explicit_linker_script {
-        println!("cargo:rustc-link-arg=-T{ld}");
+        println!("cargo:rustc-link-arg-bin=root-task=-T{ld}");
+        println!("cargo:rustc-link-arg-bin=root-task=-gc-sections");
+        println!("cargo:rustc-link-arg-bin=root-task=-no-pie");
     }
 
     let build_dir = env::var("SEL4_BUILD_DIR")
