@@ -9,12 +9,14 @@ use core::ptr;
 
 use cohesix_ticket::Role;
 
+use crate::bootstrap::{cspace::CSpace, pick_regular_untyped, retype::retype_one};
 use crate::event::{AuditSink, EventPump, IpcDispatcher, TickEvent, TicketTable, TimerSource};
 #[cfg(feature = "net")]
 use crate::net::NetStack;
 use crate::platform::{Platform, SeL4Platform};
 use crate::sel4::{
-    bootinfo_debug_dump, error_name, BootInfo, BootInfoExt, KernelEnv, RetypeKind, RetypeStatus,
+    bootinfo_debug_dump, debug_put_char, error_name, BootInfo, BootInfoExt, KernelEnv, RetypeKind,
+    RetypeStatus,
 };
 use crate::serial::{
     pl011::Pl011, SerialPort, DEFAULT_LINE_CAPACITY, DEFAULT_RX_CAPACITY, DEFAULT_TX_CAPACITY,
@@ -170,6 +172,47 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
     let bootinfo_ref: &'static sel4_sys::seL4_BootInfo = bootinfo;
     bootinfo_debug_dump(bootinfo_ref);
 
+    let mut cs = CSpace::from_bootinfo(bootinfo_ref);
+    assert_eq!(
+        usize::from(cs.depth_bits()),
+        bootinfo_ref.initThreadCNodeSizeBits as usize,
+        "init thread CNode depth mismatch"
+    );
+
+    #[cfg(feature = "bootstrap-trace")]
+    debug_put_char(b'[' as i32);
+
+    let endpoint_untyped = pick_regular_untyped(bootinfo_ref, sel4_sys::seL4_EndpointBits as u8);
+
+    let endpoint_slot = retype_one(
+        endpoint_untyped,
+        sel4_sys::seL4_ObjectType::seL4_EndpointObject,
+        sel4_sys::seL4_EndpointBits as u8,
+        &mut cs,
+    )
+    .expect("failed to retype endpoint into init CSpace");
+
+    #[cfg(feature = "bootstrap-trace")]
+    debug_put_char(b'E' as i32);
+
+    let notification_slot = retype_one(
+        endpoint_untyped,
+        sel4_sys::seL4_ObjectType::seL4_NotificationObject,
+        sel4_sys::seL4_NotificationBits as u8,
+        &mut cs,
+    )
+    .expect("failed to retype notification into init CSpace");
+
+    #[cfg(feature = "bootstrap-trace")]
+    debug_put_char(b'N' as i32);
+
+    #[cfg(feature = "bootstrap-trace")]
+    debug_put_char(b']' as i32);
+
+    let consumed_slots = cs.consumed() as usize;
+    let _ = endpoint_slot;
+    let _ = notification_slot;
+
     let empty_start = bootinfo_ref.empty_first_slot();
     let empty_end = bootinfo_ref.empty_last_slot_excl();
     let mut cnode_line = heapless::String::<160>::new();
@@ -205,6 +248,9 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
         console.writeln_prefixed(msg.as_str());
     }
     let mut env = KernelEnv::new(bootinfo_ref);
+    if consumed_slots > 0 {
+        env.consume_bootstrap_slots(consumed_slots);
+    }
 
     #[cfg(feature = "kernel")]
     let mut ninedoor = crate::ninedoor::NineDoorBridge::new();
