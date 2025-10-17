@@ -4,13 +4,15 @@
 use core::fmt::{self, Write};
 use core::panic::PanicInfo;
 
+use sel4_sys::seL4_DebugPutChar;
+
 struct DebugWriter;
 
 impl Write for DebugWriter {
     fn write_str(&mut self, s: &str) -> fmt::Result {
         for byte in s.bytes() {
             unsafe {
-                sel4::debug_put_char(byte as i32);
+                seL4_DebugPutChar(byte);
             }
         }
         Ok(())
@@ -23,7 +25,7 @@ fn panic(info: &PanicInfo) -> ! {
     let _ = writeln!(writer, "[sel4-panicking] panic: {info}");
     loop {
         unsafe {
-            sel4::debug_put_char(b'!' as i32);
+            seL4_DebugPutChar(b'!');
         }
     }
 }

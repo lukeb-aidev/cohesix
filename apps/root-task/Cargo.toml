@@ -8,7 +8,6 @@ publish = false
 [features]
 default = []
 kernel = [
-    "dep:sel4",
     "dep:sel4-sys",
     "dep:sel4-runtime",
     "dep:sel4-panicking",
@@ -25,11 +24,8 @@ embedded-io = { version = "0.4", default-features = false }
 nb = "1.1"
 portable-atomic = "1.6"
 log = { version = "0.4", default-features = false }
-[dependencies.sel4]
-version = "0.0.12"
-optional = true
 [dependencies.sel4-sys]
-version = "0.1"
+version = "0.0.28"
 optional = true
 path = "../../crates/sel4-sys"
 [dependencies.sel4-runtime]

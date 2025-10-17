@@ -9,7 +9,7 @@
 compile_error!("enable the `kernel` feature when building root-task for seL4 targets");
 
 #[cfg(feature = "kernel")]
-use sel4::BootInfo;
+use root_task::sel4::BootInfo;
 #[cfg(feature = "kernel")]
 use sel4_panicking as _;
 #[cfg(feature = "kernel")]

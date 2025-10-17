@@ -6,4 +6,4 @@ edition = "2021"
 publish = false
 
 [dependencies]
-sel4-start = "0.0.28"
+sel4-sys = { path = "../sel4-sys" }
