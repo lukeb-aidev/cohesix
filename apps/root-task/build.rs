@@ -28,6 +28,9 @@ const LINKER_SCRIPT_SEARCH_SETS: &[LinkerScriptSearchSet] = &[
         file_name: "sel4.ld",
         primary: &[
             "sel4/sel4.ld",
+            "rootserver/sel4.ld",
+            "projects/sel4runtime/elf/sel4.ld",
+            "projects/seL4Runtime/elf/sel4.ld",
             "linker/sel4.ld",
             "kernel/sel4.ld",
             "kernel/linker/sel4.ld",
@@ -38,6 +41,9 @@ const LINKER_SCRIPT_SEARCH_SETS: &[LinkerScriptSearchSet] = &[
         file_name: "linker.lds",
         primary: &[
             "sel4/linker.lds",
+            "rootserver/linker.lds",
+            "projects/sel4runtime/elf/linker.lds",
+            "projects/seL4Runtime/elf/linker.lds",
             "linker/linker.lds",
             "kernel/linker.lds",
             "kernel/gen_config/linker.lds",
@@ -49,6 +55,9 @@ const LINKER_SCRIPT_SEARCH_SETS: &[LinkerScriptSearchSet] = &[
         file_name: "linker.lds_pp",
         primary: &[
             "sel4/linker.lds_pp",
+            "rootserver/linker.lds_pp",
+            "projects/sel4runtime/elf/linker.lds_pp",
+            "projects/seL4Runtime/elf/linker.lds_pp",
             "linker/linker.lds_pp",
             "kernel/linker.lds_pp",
             "kernel/gen_config/linker.lds_pp",
@@ -57,6 +66,17 @@ const LINKER_SCRIPT_SEARCH_SETS: &[LinkerScriptSearchSet] = &[
         ],
     },
 ];
+
+enum ArtifactDecision {
+    Accept,
+    Reject(String),
+}
+
+enum LinkerScriptKind {
+    Kernel,
+    User,
+    Unknown,
+}
 
 fn main() {
     println!("cargo:rerun-if-env-changed=SEL4_BUILD_DIR");
@@ -116,14 +136,82 @@ fn main() {
 }
 
 fn find_artifact(root: &Path, filename: &str, primary: &[&str]) -> Result<PathBuf, String> {
+    find_artifact_with(root, filename, primary, |_| Ok(ArtifactDecision::Accept))
+}
+
+fn find_artifact_with<F>(
+    root: &Path,
+    filename: &str,
+    primary: &[&str],
+    mut filter: F,
+) -> Result<PathBuf, String>
+where
+    F: FnMut(&Path) -> Result<ArtifactDecision, String>,
+{
+    let mut errors = Vec::new();
+
     for relative in primary {
         let candidate = root.join(relative);
-        if file_matches(&candidate) {
-            return Ok(candidate);
+        if !file_matches(&candidate) {
+            continue;
+        }
+
+        match filter(&candidate) {
+            Ok(ArtifactDecision::Accept) => return Ok(candidate),
+            Ok(ArtifactDecision::Reject(reason)) => {
+                errors.push(format!("{} rejected: {}", candidate.display(), reason))
+            }
+            Err(err) => errors.push(format!("{} rejected: {}", candidate.display(), err)),
         }
     }
 
-    breadth_first_search(root, filename, 6)
+    const MAX_DEPTH: usize = 6;
+    let mut queue: VecDeque<(PathBuf, usize)> = VecDeque::new();
+    queue.push_back((root.to_path_buf(), 0));
+
+    while let Some((dir, depth)) = queue.pop_front() {
+        let entries = match fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(err) => {
+                eprintln!(
+                    "cargo:warning=Skipping unreadable directory {}: {}",
+                    dir.display(),
+                    err
+                );
+                continue;
+            }
+        };
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.file_name() == Some(OsStr::new(filename)) && file_matches(&path) {
+                match filter(&path) {
+                    Ok(ArtifactDecision::Accept) => return Ok(path),
+                    Ok(ArtifactDecision::Reject(reason)) => {
+                        errors.push(format!("{} rejected: {}", path.display(), reason))
+                    }
+                    Err(err) => errors.push(format!("{} rejected: {}", path.display(), err)),
+                }
+            }
+
+            if depth < MAX_DEPTH {
+                if let Ok(meta) = entry.metadata() {
+                    if meta.is_dir() {
+                        queue.push_back((path, depth + 1));
+                    }
+                }
+            }
+        }
+    }
+
+    if errors.is_empty() {
+        Err(format!(
+            "searched up to depth {} but no {} satisfying the predicate was found",
+            MAX_DEPTH, filename
+        ))
+    } else {
+        Err(errors.join("; "))
+    }
 }
 
 fn file_matches(path: &Path) -> bool {
@@ -137,7 +225,21 @@ fn stage_linker_script(build_root: &Path) {
     let mut errors = Vec::new();
 
     for candidate in LINKER_SCRIPT_SEARCH_SETS {
-        match find_artifact(build_root, candidate.file_name, candidate.primary) {
+        match find_artifact_with(build_root, candidate.file_name, candidate.primary, |path| {
+            match classify_linker_script(path)? {
+                LinkerScriptKind::Kernel => Ok(ArtifactDecision::Reject(String::from(
+                    "detected seL4 kernel linker script (contains KERNEL_ELF_BASE)",
+                ))),
+                LinkerScriptKind::User => Ok(ArtifactDecision::Accept),
+                LinkerScriptKind::Unknown => {
+                    println!(
+                        "cargo:warning=Using linker script {} without recognised userland markers",
+                        path.display()
+                    );
+                    Ok(ArtifactDecision::Accept)
+                }
+            }
+        }) {
             Ok(script) => {
                 println!("cargo:rerun-if-changed={}", script.display());
 
@@ -182,44 +284,22 @@ fn stage_linker_script(build_root: &Path) {
     );
 }
 
-fn breadth_first_search(root: &Path, needle: &str, max_depth: usize) -> Result<PathBuf, String> {
-    let mut queue: VecDeque<(PathBuf, usize)> = VecDeque::new();
-    queue.push_back((root.to_path_buf(), 0));
+fn classify_linker_script(path: &Path) -> Result<LinkerScriptKind, String> {
+    let contents = fs::read_to_string(path)
+        .map_err(|err| format!("failed to read {}: {}", path.display(), err))?;
 
-    while let Some((dir, depth)) = queue.pop_front() {
-        let entries = match fs::read_dir(&dir) {
-            Ok(entries) => entries,
-            Err(err) => {
-                // Ignore directories we cannot read; they might be permission restricted artefacts.
-                eprintln!(
-                    "cargo:warning=Skipping unreadable directory {}: {}",
-                    dir.display(),
-                    err
-                );
-                continue;
-            }
-        };
-
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.file_name() == Some(OsStr::new(needle)) && file_matches(&path) {
-                return Ok(path);
-            }
-
-            if depth < max_depth {
-                if let Ok(meta) = entry.metadata() {
-                    if meta.is_dir() {
-                        queue.push_back((path, depth + 1));
-                    }
-                }
-            }
-        }
+    if contents.contains("KERNEL_ELF_BASE") {
+        return Ok(LinkerScriptKind::Kernel);
     }
 
-    Err(format!(
-        "searched up to depth {} but no {} was found",
-        max_depth, needle
-    ))
+    if contents.contains("USER_TOP")
+        || contents.contains("seL4_UserImageBase")
+        || contents.contains("_user_image")
+    {
+        return Ok(LinkerScriptKind::User);
+    }
+
+    Ok(LinkerScriptKind::Unknown)
 }
 
 fn emit_config_flags(root: &Path) {
