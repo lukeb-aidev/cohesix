@@ -258,7 +258,7 @@ fn stage_linker_script(build_root: &Path) {
 
                 println!("cargo:rustc-env=SEL4_LD={}", staged.display());
                 println!("cargo:rustc-link-arg-bin=root-task=-T{}", staged.display());
-                println!("cargo:rustc-link-arg-bin=root-task=-Wl,--gc-sections");
+                println!("cargo:rustc-link-arg-bin=root-task=-gc-sections");
                 println!("cargo:rustc-link-arg-bin=root-task=-no-pie");
                 return;
             }
