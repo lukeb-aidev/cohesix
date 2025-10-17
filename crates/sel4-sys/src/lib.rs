@@ -171,6 +171,8 @@ mod imp {
     pub const seL4_ARM_SmallPageObject: seL4_Word = 6;
     pub const seL4_ARM_LargePageObject: seL4_Word = 7;
     pub const seL4_ARM_PageTableObject: seL4_Word = 8;
+    pub const seL4_EndpointBits: seL4_Word = 4;
+    pub const seL4_NotificationBits: seL4_Word = 4;
 
     #[repr(usize)]
     #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -505,6 +507,31 @@ mod imp {
     }
 
     #[inline(always)]
+    pub fn seL4_untyped_retype(
+        service: seL4_Untyped,
+        objtype: seL4_ObjectType,
+        size_bits: u8,
+        root: seL4_CNode,
+        node_index: seL4_Word,
+        node_depth: seL4_Word,
+        node_offset: seL4_Word,
+        num_objects: seL4_Word,
+    ) -> seL4_Error {
+        unsafe {
+            seL4_Untyped_Retype(
+                service,
+                objtype as seL4_Word,
+                size_bits as seL4_Word,
+                root,
+                node_index,
+                node_depth,
+                node_offset,
+                num_objects,
+            )
+        }
+    }
+
+    #[inline(always)]
     pub unsafe fn seL4_ARM_PageTable_Map(
         service: seL4_ARM_PageTable,
         vspace: seL4_CPtr,
@@ -781,6 +808,8 @@ mod host_stub {
     pub const seL4_ARM_Page_Uncached: seL4_ARM_VMAttributes = seL4_ARM_VMAttributes(0);
     pub const seL4_ARM_SmallPageObject: seL4_Word = 0;
     pub const seL4_ARM_PageTableObject: seL4_Word = 0;
+    pub const seL4_EndpointBits: seL4_Word = 4;
+    pub const seL4_NotificationBits: seL4_Word = 4;
 
     #[repr(usize)]
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -906,6 +935,31 @@ mod host_stub {
         _num_objects: seL4_Word,
     ) -> seL4_Error {
         unsupported();
+    }
+
+    #[inline(always)]
+    pub fn seL4_untyped_retype(
+        service: seL4_Untyped,
+        objtype: seL4_ObjectType,
+        size_bits: u8,
+        root: seL4_CNode,
+        node_index: seL4_Word,
+        node_depth: seL4_Word,
+        node_offset: seL4_Word,
+        num_objects: seL4_Word,
+    ) -> seL4_Error {
+        unsafe {
+            seL4_Untyped_Retype(
+                service,
+                objtype as seL4_Word,
+                size_bits as seL4_Word,
+                root,
+                node_index,
+                node_depth,
+                node_offset,
+                num_objects,
+            )
+        }
     }
 
     #[inline(always)]
