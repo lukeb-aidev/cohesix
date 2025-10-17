@@ -87,13 +87,26 @@ fn has_path_hint(path: &Path, hints: &[&str]) -> bool {
 
 const KERNEL_MARKERS: &[&str] = &[
     "kernel_elf_base",
+    "kernel_elf_base_raw",
     "kernel_elf_paddr_base",
+    "kernel_elf_paddr_base_raw",
     "kernel_elf_paddr_offset",
     "kernel_window",
     "kernel_virt_offset",
+    "kload_paddr",
+    "kload_vaddr",
+    "kernel_offset",
+    "ki_boot_end",
+    "ki_end",
 ];
 
-const ROOTSERVER_MARKERS: &[&str] = &["rootserver", "sel4runtime"];
+const ROOTSERVER_MARKERS: &[&str] = &[
+    "rootserver",
+    "sel4runtime",
+    "rootserver_stack",
+    "rootserver_objects",
+    "rootserver_extra_bi",
+];
 
 const USER_MARKERS: &[&str] = &[
     "user_top",
@@ -103,6 +116,10 @@ const USER_MARKERS: &[&str] = &[
     "_user_image",
     "rootserver_image_base",
     "rootserver_elf_paddr_base",
+    "rootserver_stack_bottom",
+    "rootserver_stack_top",
+    "rootserver_objects_start",
+    "rootserver_objects_end",
 ];
 
 const USER_PATH_HINTS: &[&str] = &["rootserver", "sel4runtime", "elfloader"];

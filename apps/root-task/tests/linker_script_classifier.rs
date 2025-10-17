@@ -34,8 +34,22 @@ fn kernel_marker_in_content_detected() {
 }
 
 #[test]
+fn kernel_additional_marker_detected() {
+    let path = write_temp_script("SECTIONS { /* KLOAD_PADDR */ }");
+    let kind = classify_linker_script(path.as_ref()).unwrap();
+    assert_eq!(kind, LinkerScriptKind::Kernel);
+}
+
+#[test]
 fn user_marker_in_content_detected() {
     let path = write_temp_script("SECTIONS { /* ROOTSERVER_IMAGE_BASE */ }");
+    let kind = classify_linker_script(path.as_ref()).unwrap();
+    assert_eq!(kind, LinkerScriptKind::User);
+}
+
+#[test]
+fn user_additional_marker_detected() {
+    let path = write_temp_script("SECTIONS { /* ROOTSERVER_STACK_BOTTOM */ }");
     let kind = classify_linker_script(path.as_ref()).unwrap();
     assert_eq!(kind, LinkerScriptKind::User);
 }
