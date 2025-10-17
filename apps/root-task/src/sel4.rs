@@ -10,9 +10,10 @@ use core::{convert::TryInto, fmt, mem, ptr::NonNull};
 use heapless::Vec;
 use sel4_sys::{
     seL4_ARM_PageTableObject, seL4_ARM_PageTable_Map, seL4_ARM_Page_Default, seL4_ARM_Page_Map,
-    seL4_ARM_Page_Uncached, seL4_BootInfo, seL4_CNode, seL4_CNode_Delete, seL4_CPtr,
-    seL4_CapRights_ReadWrite, seL4_NoError, seL4_NotEnoughMemory, seL4_ObjectType, seL4_SlotRegion,
-    seL4_Untyped, seL4_Untyped_Retype, seL4_Word, UntypedDesc, MAX_BOOTINFO_UNTYPEDS,
+    seL4_ARM_Page_Uncached, seL4_BootInfo, seL4_CNode, seL4_CNode_Copy, seL4_CNode_Delete,
+    seL4_CPtr, seL4_CapRights_ReadWrite, seL4_Error, seL4_NoError, seL4_NotEnoughMemory,
+    seL4_ObjectType, seL4_SlotRegion, seL4_Untyped, seL4_Untyped_Retype, seL4_Word, UntypedDesc,
+    MAX_BOOTINFO_UNTYPEDS,
 };
 
 #[cfg(feature = "kernel")]
@@ -31,6 +32,32 @@ pub fn debug_put_char(ch: i32) {
 #[cfg(not(feature = "kernel"))]
 #[inline(always)]
 pub fn debug_put_char(_ch: i32) {}
+
+/// Safe projection of `seL4_CNode_Copy` for bootstrap modules.
+#[cfg(feature = "kernel")]
+#[inline(always)]
+pub fn cnode_copy(
+    dest_root: seL4_CNode,
+    dest_index: seL4_CPtr,
+    dest_depth: u8,
+    src_root: seL4_CNode,
+    src_index: seL4_CPtr,
+    src_depth: u8,
+    rights: sel4_sys::seL4_CapRights,
+) -> seL4_Error {
+    unsafe {
+        seL4_CNode_Copy(
+            dest_root, dest_index, dest_depth, src_root, src_index, src_depth, rights,
+        )
+    }
+}
+
+/// Safe projection of `seL4_CNode_Delete` for bootstrap modules.
+#[cfg(feature = "kernel")]
+#[inline(always)]
+pub fn cnode_delete(root: seL4_CNode, index: seL4_CPtr, depth: u8) -> seL4_Error {
+    unsafe { seL4_CNode_Delete(root, index, depth) }
+}
 
 /// Attempts to retrieve a byte from the seL4 debug console without blocking.
 ///

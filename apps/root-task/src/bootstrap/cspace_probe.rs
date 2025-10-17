@@ -1,7 +1,7 @@
 // Author: Lukas Bower
 #![allow(dead_code)]
 
-use crate::sel4::debug_put_char;
+use crate::sel4::{cnode_copy, cnode_delete, debug_put_char};
 use sel4_sys as sys;
 
 /// Copy the init thread's root CNode capability into `slot` and delete it again to prove
@@ -15,16 +15,14 @@ pub fn probe_slot_writable(
     let src_index = sys::seL4_CapInitThreadCNode;
     let rights = sys::seL4_CapRights::new(0, 0, 1, 1);
 
-    let copy_result = unsafe {
-        sys::seL4_CNode_Copy(
-            root, dest_index, depth_bits, root, src_index, depth_bits, rights,
-        )
-    };
+    let copy_result = cnode_copy(
+        root, dest_index, depth_bits, root, src_index, depth_bits, rights,
+    );
     if copy_result != sys::seL4_NoError {
         return Err(copy_result);
     }
 
-    let delete_result = unsafe { sys::seL4_CNode_Delete(root, dest_index, depth_bits) };
+    let delete_result = cnode_delete(root, dest_index, depth_bits);
     if delete_result != sys::seL4_NoError {
         return Err(delete_result);
     }

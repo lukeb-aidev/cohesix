@@ -62,16 +62,14 @@ pub fn retype_one(
 
     probe_slot_writable(cs.root(), cs.depth_bits(), slot)?;
 
-    let result = unsafe {
-        untyped_retype_one(
-            untyped_cap,
-            obj_type as sys::seL4_Word,
-            obj_size_bits,
-            cs.root(),
-            slot as sys::seL4_Word,
-            cs.depth_bits(),
-        )
-    };
+    let result = untyped_retype_one(
+        untyped_cap,
+        obj_type,
+        obj_size_bits,
+        cs.root(),
+        slot as sys::seL4_Word,
+        cs.depth_bits(),
+    );
 
     if result != sys::seL4_NoError {
         emit_retype_error(slot, cs.depth_bits(), result);
