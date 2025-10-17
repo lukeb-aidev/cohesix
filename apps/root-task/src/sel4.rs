@@ -33,11 +33,43 @@ pub fn debug_put_char(ch: i32) {
 pub fn debug_put_char(_ch: i32) {}
 
 /// Attempts to retrieve a byte from the seL4 debug console without blocking.
+#[cfg(all(feature = "kernel", feature = "debug-input", target_arch = "aarch64"))]
 #[inline(always)]
 pub fn debug_poll_char() -> i32 {
-    // The upstream seL4 debug interface does not currently expose a polling syscall on all
-    // architectures. Returning -1 mirrors the absence of pending input.
+    // SAFETY: `seL4_DebugPollChar` is provided by the seL4 kernel on targets that expose
+    // the debug console polling syscall. The call has no side effects besides returning the
+    // pending byte or a negative sentinel when no input is available.
+    unsafe { sel4_debug_poll_char() }
+}
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "debug-input",
+    not(target_arch = "aarch64")
+))]
+#[inline(always)]
+pub fn debug_poll_char() -> i32 {
+    // Some seL4 architectures do not surface a debug polling syscall. Retain the existing
+    // behaviour and report that no input is pending.
     -1
+}
+
+#[cfg(not(all(feature = "kernel", feature = "debug-input")))]
+#[inline(always)]
+pub fn debug_poll_char() -> i32 {
+    // Without the `debug-input` feature (or when compiling in host mode) the debug console
+    // remains write-only. Preserve the historical behaviour by signalling no pending input.
+    -1
+}
+
+#[cfg(all(feature = "kernel", feature = "debug-input", target_arch = "aarch64"))]
+#[inline(always)]
+unsafe fn sel4_debug_poll_char() -> i32 {
+    extern "C" {
+        fn seL4_DebugPollChar() -> i32;
+    }
+
+    seL4_DebugPollChar()
 }
 
 fn objtype_name(t: seL4_Word) -> &'static str {
