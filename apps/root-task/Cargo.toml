@@ -17,6 +17,7 @@ net = [
     "dep:spin",
 ]
 sel4-debug = []
+debug-input = []
 
 [dependencies]
 cohesix-ticket = { workspace = true }

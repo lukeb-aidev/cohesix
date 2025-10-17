@@ -73,6 +73,21 @@ cargo check -p root-task --features net
 cargo clippy -p root-task --features net --tests
 ```
 
+### Debug Console Input
+
+The seL4 debug console exposes a non-blocking polling syscall on a subset
+of architectures. Opt into this behaviour with the `debug-input` feature
+when the target kernel exports `seL4_DebugPollChar`:
+
+```
+cargo build -p root-task --release \
+  --no-default-features --features kernel,debug-input
+```
+
+When the syscall is absent for the selected platform the feature safely
+falls back to returning `-1`, preserving the historical write-only
+console semantics.
+
 Host-mode simulation in `src/host.rs` now reuses the production event
 pump. A scripted set of console commands is injected via a loopback
 serial driver so developers can observe the authenticated command flow

@@ -715,22 +715,22 @@ mod host_stub {
     pub type seL4_CapData_t = seL4_CNode_CapData;
 
     #[derive(Clone, Copy)]
-    pub struct BootInfo;
+    pub struct seL4_BootInfo;
 
     #[derive(Clone, Copy)]
-    pub struct BootInfoHeader {
+    pub struct seL4_BootInfoHeader {
         pub id: seL4_Word,
         pub len: seL4_Word,
     }
 
     #[derive(Clone, Copy)]
-    pub struct SlotRegion {
+    pub struct seL4_SlotRegion {
         pub start: seL4_CPtr,
         pub end: seL4_CPtr,
     }
 
     #[derive(Clone, Copy)]
-    pub struct UntypedDesc {
+    pub struct seL4_UntypedDesc {
         pub paddr: seL4_Word,
         pub sizeBits: u8,
         pub isDevice: u8,
@@ -738,10 +738,16 @@ mod host_stub {
     }
 
     #[derive(Clone, Copy)]
-    pub struct ARMPageGetAddress {
+    pub struct seL4_ARM_Page_GetAddress {
         pub error: seL4_Error,
         pub paddr: seL4_Word,
     }
+
+    pub type BootInfo = seL4_BootInfo;
+    pub type BootInfoHeader = seL4_BootInfoHeader;
+    pub type SlotRegion = seL4_SlotRegion;
+    pub type UntypedDesc = seL4_UntypedDesc;
+    pub type ARMPageGetAddress = seL4_ARM_Page_GetAddress;
 
     pub const seL4_NoError: seL4_Error = 0;
     pub const seL4_InvalidArgument: seL4_Error = 1;
