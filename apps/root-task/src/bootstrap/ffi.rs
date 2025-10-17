@@ -44,6 +44,7 @@ pub fn untyped_retype_one(
     dest_root: sys::seL4_CNode,
     dest_index: sys::seL4_CPtr,
     dest_depth_bits: u8,
+    dest_offset: sys::seL4_CPtr,
 ) -> sys::seL4_Error {
     // SAFETY: The wrapper fixes the argument ordering to match the seL4 C API and supplies
     // exactly one object with zero offset. The kernel contract for these arguments is upheld
@@ -56,7 +57,7 @@ pub fn untyped_retype_one(
             dest_root,
             dest_index,
             dest_depth_bits as sys::seL4_Word,
-            0,
+            dest_offset as sys::seL4_Word,
             1,
         )
     }
