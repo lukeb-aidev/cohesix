@@ -22,6 +22,9 @@ use crate::serial::{
 #[cfg(feature = "net")]
 use smoltcp::wire::Ipv4Address;
 
+#[cfg(all(feature = "kernel", not(sel4_config_printing)))]
+use sel4_panicking::{self, DebugSink};
+
 /// seL4 console writer backed by the kernel's `DebugPutChar` system call.
 struct DebugConsole<'a, P: Platform> {
     platform: &'a P,
@@ -126,8 +129,28 @@ compile_error!("root-task kernel build currently supports only aarch64 targets")
 const PL011_PADDR: usize = 0x0900_0000;
 const DEVICE_FRAME_BITS: usize = 12;
 
+#[cfg(all(feature = "kernel", not(sel4_config_printing)))]
+const PL011_DR_OFFSET: usize = 0x00;
+#[cfg(all(feature = "kernel", not(sel4_config_printing)))]
+const PL011_FR_OFFSET: usize = 0x18;
+#[cfg(all(feature = "kernel", not(sel4_config_printing)))]
+const PL011_FR_TXFF: u32 = 1 << 5;
+
 #[cfg(target_arch = "aarch64")]
 static mut TLS_IMAGE: sel4_sys::TlsImage = sel4_sys::TlsImage::new();
+
+#[cfg(all(feature = "kernel", not(sel4_config_printing)))]
+unsafe fn pl011_debug_emit(context: *mut (), byte: u8) {
+    let base = context.cast::<u8>();
+    let dr = base.add(PL011_DR_OFFSET).cast::<u32>();
+    let fr = base.add(PL011_FR_OFFSET).cast::<u32>();
+
+    while ptr::read_volatile(fr) & PL011_FR_TXFF != 0 {
+        core::hint::spin_loop();
+    }
+
+    ptr::write_volatile(dr, u32::from(byte));
+}
 
 /// Root task entry point invoked by seL4 after kernel initialisation.
 pub fn start<P: Platform>(bootinfo: &'static BootInfo, platform: &P) -> ! {
@@ -428,6 +451,15 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
             panic!("PL011 UART mapping failed: {}", err);
         }
     };
+
+    #[cfg(all(feature = "kernel", not(sel4_config_printing)))]
+    {
+        let sink = DebugSink {
+            context: uart_region.ptr().as_ptr().cast::<()>(),
+            emit: pl011_debug_emit,
+        };
+        sel4_panicking::install_debug_sink(sink);
+    }
     let driver = Pl011::new(uart_region.ptr());
     let serial =
         SerialPort::<_, DEFAULT_RX_CAPACITY, DEFAULT_TX_CAPACITY, DEFAULT_LINE_CAPACITY>::new(

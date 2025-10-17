@@ -62,6 +62,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=SEL4_BUILD_DIR");
     println!("cargo:rerun-if-env-changed=SEL4_BUILD");
     println!("cargo:rustc-check-cfg=cfg(sel4_config_debug_build)");
+    println!("cargo:rustc-check-cfg=cfg(sel4_config_printing)");
 
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     if target_os != "none" {
@@ -224,6 +225,10 @@ fn breadth_first_search(root: &Path, needle: &str, max_depth: usize) -> Result<P
 fn emit_config_flags(root: &Path) {
     if let Some(true) = probe_config_flag(root, "CONFIG_DEBUG_BUILD") {
         println!("cargo:rustc-cfg=sel4_config_debug_build");
+    }
+
+    if let Some(true) = probe_config_flag(root, "CONFIG_PRINTING") {
+        println!("cargo:rustc-cfg=sel4_config_printing");
     }
 }
 
