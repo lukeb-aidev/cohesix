@@ -5,6 +5,9 @@
 #![warn(missing_docs)]
 #![doc = "Root task entry points for host and seL4 builds."]
 
+#[cfg(all(target_os = "none", not(feature = "kernel")))]
+compile_error!("enable the `kernel` feature when building root-task for seL4 targets");
+
 #[cfg(feature = "kernel")]
 use sel4::BootInfo;
 #[cfg(feature = "kernel")]
@@ -22,7 +25,7 @@ pub extern "C" fn sel4_start(bootinfo: &'static BootInfo) -> ! {
     root_task::kernel::start(bootinfo, &platform)
 }
 
-#[cfg(not(feature = "kernel"))]
+#[cfg(all(not(feature = "kernel"), not(target_os = "none")))]
 fn main() -> root_task::host::Result<()> {
     root_task::host::main()
 }

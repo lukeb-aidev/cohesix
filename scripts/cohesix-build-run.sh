@@ -22,6 +22,9 @@ Options:
   --clean               Remove existing contents of the output directory before building
   --profile <name>      Cargo profile to build (release|debug|custom; default: release)
   --cargo-target <triple>  Target triple used for seL4 component builds (required)
+  --root-task-features <list>
+                        Comma-separated feature set used for the root-task seL4 build
+                        (default: kernel,net)
   --qemu <path>         QEMU binary to execute (default: qemu-system-aarch64)
   --transport <kind>    Console transport to launch (tcp|qemu, default: tcp)
   --tcp-port <port>     TCP port exposed by QEMU for the remote console (default: 31337)
@@ -157,6 +160,7 @@ main() {
     DTB_OVERRIDE=""
     TRANSPORT="tcp"
     TCP_PORT=31337
+    ROOT_TASK_FEATURES="kernel,net"
 
     COHSH_LAUNCH_MODE="auto"
 
@@ -180,6 +184,11 @@ main() {
             --cargo-target)
                 [[ $# -ge 2 ]] || fail "--cargo-target requires a triple"
                 CARGO_TARGET="$2"
+                shift 2
+                ;;
+            --root-task-features)
+                [[ $# -ge 2 ]] || fail "--root-task-features requires a list"
+                ROOT_TASK_FEATURES="$2"
                 shift 2
                 ;;
             --qemu)
@@ -250,6 +259,10 @@ main() {
                 ;;
         esac
     done
+
+    if [[ "$ROOT_TASK_FEATURES" == "none" ]]; then
+        ROOT_TASK_FEATURES=""
+    fi
 
     if [[ "$TRANSPORT" == "tcp" && "$TCP_PORT" -le 0 ]]; then
         fail "TCP port must be a positive integer"
@@ -357,7 +370,10 @@ main() {
     if (( ${#PROFILE_ARGS[@]} > 0 )); then
         ROOT_TASK_BUILD_ARGS+=("${PROFILE_ARGS[@]}")
     fi
-    ROOT_TASK_BUILD_ARGS+=(-p root-task)
+    ROOT_TASK_BUILD_ARGS+=(-p root-task --no-default-features)
+    if [[ -n "$ROOT_TASK_FEATURES" ]]; then
+        ROOT_TASK_BUILD_ARGS+=(--features "$ROOT_TASK_FEATURES")
+    fi
 
     log "Building root-task via: cargo ${ROOT_TASK_BUILD_ARGS[*]}"
     cargo "${ROOT_TASK_BUILD_ARGS[@]}"

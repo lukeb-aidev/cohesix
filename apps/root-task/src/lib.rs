@@ -5,6 +5,9 @@
 
 //! Root-task library surface exposing console and networking modules for tests.
 
+#[cfg(all(target_os = "none", not(feature = "kernel")))]
+compile_error!("enable the `kernel` feature when building root-task for seL4 targets");
+
 pub mod console;
 pub mod event;
 pub mod serial;
@@ -25,6 +28,6 @@ pub mod ninedoor;
 
 pub mod platform;
 
-#[cfg(not(feature = "kernel"))]
+#[cfg(all(not(feature = "kernel"), not(target_os = "none")))]
 /// Host-mode simulation used for developer testing.
 pub mod host;

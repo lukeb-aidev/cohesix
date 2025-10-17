@@ -1,5 +1,5 @@
 // Author: Lukas Bower
-#![cfg(not(feature = "kernel"))]
+#![cfg(all(not(feature = "kernel"), not(target_os = "none")))]
 #![allow(clippy::module_name_repetitions)]
 
 use std::io::{self, Write};
