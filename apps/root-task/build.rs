@@ -17,6 +17,14 @@ const CONFIG_CANDIDATES: &[&str] = &[
     "kernel/gen_config/kernel_all.cmake",
 ];
 
+const LINKER_SCRIPT_CANDIDATES: &[&str] = &[
+    "sel4/sel4.ld",
+    "linker/sel4.ld",
+    "kernel/sel4.ld",
+    "kernel/linker/sel4.ld",
+    "sel4.ld",
+];
+
 fn main() {
     println!("cargo:rerun-if-env-changed=SEL4_BUILD_DIR");
     println!("cargo:rerun-if-env-changed=SEL4_BUILD");
@@ -44,7 +52,7 @@ fn main() {
         );
     }
 
-    let libsel4 = find_library(
+    let libsel4 = find_artifact(
         &build_path,
         "libsel4.a",
         &[
@@ -68,10 +76,12 @@ fn main() {
     println!("cargo:rustc-link-search=native={}", lib_dir.display());
     println!("cargo:rustc-link-lib=static=sel4");
 
+    stage_linker_script(&build_path);
+
     emit_config_flags(&build_path);
 }
 
-fn find_library(root: &Path, filename: &str, primary: &[&str]) -> Result<PathBuf, String> {
+fn find_artifact(root: &Path, filename: &str, primary: &[&str]) -> Result<PathBuf, String> {
     for relative in primary {
         let candidate = root.join(relative);
         if file_matches(&candidate) {
@@ -87,6 +97,33 @@ fn file_matches(path: &Path) -> bool {
         Ok(meta) => meta.is_file(),
         Err(_) => false,
     }
+}
+
+fn stage_linker_script(build_root: &Path) {
+    let script =
+        find_artifact(build_root, "sel4.ld", LINKER_SCRIPT_CANDIDATES).unwrap_or_else(|err| {
+            panic!(
+                "Unable to locate sel4.ld inside {}: {}",
+                build_root.display(),
+                err
+            );
+        });
+
+    println!("cargo:rerun-if-changed={}", script.display());
+
+    let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR must be set by cargo"));
+    let staged = out_dir.join("sel4.ld");
+
+    fs::copy(&script, &staged).unwrap_or_else(|err| {
+        panic!(
+            "Failed to stage linker script from {} to {}: {}",
+            script.display(),
+            staged.display(),
+            err
+        );
+    });
+
+    println!("cargo:rustc-link-arg-bin=root-task=-T{}", staged.display());
 }
 
 fn breadth_first_search(root: &Path, needle: &str, max_depth: usize) -> Result<PathBuf, String> {
