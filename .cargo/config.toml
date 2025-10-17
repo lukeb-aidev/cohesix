@@ -29,11 +29,5 @@ incremental = false
 [target.aarch64-unknown-none]
 rustflags = [
     "-C",
-    "link-arg=-T{env:SEL4_LD}",
-    "-C",
     "relocation-model=static",
-    "-C",
-    "link-arg=-Wl,--gc-sections",
-    "-C",
-    "link-arg=-no-pie",
 ]
