@@ -11,8 +11,8 @@
 - Device coverage output like `device coverage idx=16 […] state=free` confirms the root-task examined the manifest entry for the requested MMIO region before the failure.
 
 ## Implication for Current Panic
-- Because the trace shows `retype status=err(6)` directly before the panic, the extended debug path **did** execute.
-- The failure line now spells out the symbolic error: `map_device(0x09000000) failed with seL4_FailedLookup (6)`. This confirms the kernel rejected the destination CNode/slot while decoding the untyped invocation rather than skipping our instrumentation.
+- Because the trace shows `retype status=err(3)` directly before the panic, the extended debug path **did** execute.
+- The failure line now spells out the symbolic error: `map_device(0x09000000) failed with seL4_InvalidArgument (3)`. This confirms the kernel rejected the destination CNode/slot while decoding the untyped invocation rather than skipping our instrumentation. The kernel-side log `Untyped Retype: Invalid destination address.` mirrors this return code.
 - Follow-up work should focus on why the PL011 physical address `0x09000000` cannot be retyped into a 4 KiB device page within the provided destination slot rather than on logging gaps.
 
 ## Recommended Investigation Path
@@ -22,5 +22,5 @@
 - Inspect the root-task CNode layout dump in the debug log to confirm the slot intended for the PL011 device page is free before the retype attempt.
 
 ## Resolution Summary
-- The panic stemmed from leaving `node_index`/`node_depth` as zero when invoking `seL4_Untyped_Retype`. That bypassed the slot containing the writable init CNode capability, so the kernel rejected the request with `seL4_FailedLookup` before inserting the PL011 frame.
-- Updating `KernelEnv::prepare_retype_trace` and its sanitiser to point `node_index` at `seL4_CapInitThreadCNode` with `node_depth = initThreadCNodeSizeBits` provides the kernel with a valid destination path. The PL011 device frame now retypes correctly and the root-task progresses past the UART initialisation stage.
+- The panic stemmed from passing `node_depth = initThreadCNodeSizeBits` into `seL4_Untyped_Retype`. A non-zero depth forces the kernel to resolve a nested CNode path with `lookupTargetSlot`, which fails for the init thread's single-level CSpace and triggers the `Invalid destination address` fault before any capability can be installed.
+- Updating `KernelEnv::prepare_retype_trace` and its sanitiser to keep `node_depth = 0` (while still documenting the writable root slot via `node_index = seL4_CapInitThreadCNode`) directs the kernel to use the supplied root capability without an additional lookup. The PL011 device frame now retypes correctly and the root-task progresses past the UART initialisation stage.
