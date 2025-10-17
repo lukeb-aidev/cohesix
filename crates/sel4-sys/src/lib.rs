@@ -44,11 +44,11 @@ mod imp {
     pub struct seL4_IPCBuffer {
         pub tag: seL4_MessageInfo,
         pub msg: [seL4_Word; 64],
-        pub user_data: seL4_Word,
-        pub caps_or_badges: [seL4_Word; 64],
-        pub receive_cnode: seL4_CPtr,
-        pub receive_index: seL4_CPtr,
-        pub receive_depth: seL4_Word,
+        pub userData: seL4_Word,
+        pub capsOrBadges: [seL4_Word; 64],
+        pub receiveCNode: seL4_CPtr,
+        pub receiveIndex: seL4_CPtr,
+        pub receiveDepth: seL4_Word,
     }
 
     #[repr(C)]
@@ -79,6 +79,21 @@ mod imp {
         }
 
         #[inline(always)]
+        pub const fn get_label(self) -> seL4_Word {
+            self.label()
+        }
+
+        #[inline(always)]
+        pub const fn caps_unwrapped(self) -> seL4_Word {
+            (self.words[0] >> 9) & 0x7
+        }
+
+        #[inline(always)]
+        pub const fn get_capsUnwrapped(self) -> seL4_Word {
+            self.caps_unwrapped()
+        }
+
+        #[inline(always)]
         pub const fn extra_caps(self) -> seL4_Word {
             (self.words[0] >> 7) & 0x3
         }
@@ -86,6 +101,11 @@ mod imp {
         #[inline(always)]
         pub const fn length(self) -> seL4_Word {
             self.words[0] & 0x7f
+        }
+
+        #[inline(always)]
+        pub const fn get_length(self) -> seL4_Word {
+            self.length()
         }
     }
 
@@ -326,12 +346,12 @@ mod imp {
 
     #[inline(always)]
     pub unsafe fn seL4_SetCap(slot: usize, cptr: seL4_CPtr) {
-        (*ipc_buffer()).caps_or_badges[slot] = cptr;
+        (*ipc_buffer()).capsOrBadges[slot] = cptr;
     }
 
     #[inline(always)]
     pub unsafe fn seL4_GetCap(slot: usize) -> seL4_CPtr {
-        (*ipc_buffer()).caps_or_badges[slot]
+        (*ipc_buffer()).capsOrBadges[slot]
     }
 
     #[inline(always)]
@@ -534,11 +554,11 @@ mod imp {
     pub unsafe fn seL4_CNode_Delete(
         root: seL4_CNode,
         index: seL4_CPtr,
-        depth: seL4_Word,
+        depth: seL4_Uint8,
     ) -> seL4_Error {
         let msg = seL4_MessageInfo::new(SEL4_CNODE_DELETE, 0, 0, 2);
         let mut mr0 = index;
-        let mut mr1 = depth;
+        let mut mr1 = depth as seL4_Word;
 
         let info = seL4_CallWithMRs(
             root,
@@ -556,16 +576,16 @@ mod imp {
     pub unsafe fn seL4_CNode_Move(
         dest_root: seL4_CNode,
         dest_index: seL4_CPtr,
-        dest_depth: seL4_Word,
+        dest_depth: seL4_Uint8,
         src_root: seL4_CNode,
         src_index: seL4_CPtr,
-        src_depth: seL4_Word,
+        src_depth: seL4_Uint8,
     ) -> seL4_Error {
         let msg = seL4_MessageInfo::new(SEL4_CNODE_MOVE, 0, 1, 4);
         let mut mr0 = dest_index;
-        let mut mr1 = dest_depth;
+        let mut mr1 = dest_depth as seL4_Word;
         let mut mr2 = src_index;
-        let mut mr3 = src_depth;
+        let mut mr3 = src_depth as seL4_Word;
 
         seL4_SetCap(0, src_root);
 
@@ -578,19 +598,19 @@ mod imp {
     pub unsafe fn seL4_CNode_Copy(
         dest_root: seL4_CNode,
         dest_index: seL4_CPtr,
-        dest_depth: seL4_Word,
+        dest_depth: seL4_Uint8,
         src_root: seL4_CNode,
         src_index: seL4_CPtr,
-        src_depth: seL4_Word,
-        rights: seL4_Word,
+        src_depth: seL4_Uint8,
+        rights: seL4_CapRights,
     ) -> seL4_Error {
         let msg = seL4_MessageInfo::new(SEL4_CNODE_COPY, 0, 1, 5);
         let mut mr0 = dest_index;
-        let mut mr1 = dest_depth;
+        let mut mr1 = dest_depth as seL4_Word;
         let mut mr2 = src_index;
-        let mut mr3 = src_depth;
+        let mut mr3 = src_depth as seL4_Word;
         seL4_SetCap(0, src_root);
-        seL4_SetMR(4, rights);
+        seL4_SetMR(4, rights.raw());
 
         let info = seL4_CallWithMRs(dest_root, msg, &mut mr0, &mut mr1, &mut mr2, &mut mr3);
 
@@ -632,6 +652,7 @@ mod host_stub {
     pub type seL4_ARM_Page = seL4_CPtr;
     pub type seL4_ARM_PageTable = seL4_CPtr;
     pub type seL4_CapRights = usize;
+    pub type seL4_Uint8 = u8;
 
     #[derive(Clone, Copy)]
     pub struct seL4_MessageInfo {
@@ -655,6 +676,21 @@ mod host_stub {
         }
 
         #[inline(always)]
+        pub const fn get_label(self) -> seL4_Word {
+            self.label()
+        }
+
+        #[inline(always)]
+        pub const fn caps_unwrapped(self) -> seL4_Word {
+            0
+        }
+
+        #[inline(always)]
+        pub const fn get_capsUnwrapped(self) -> seL4_Word {
+            self.caps_unwrapped()
+        }
+
+        #[inline(always)]
         pub const fn length(self) -> seL4_Word {
             0
         }
@@ -662,6 +698,11 @@ mod host_stub {
         #[inline(always)]
         pub const fn extra_caps(self) -> seL4_Word {
             0
+        }
+
+        #[inline(always)]
+        pub const fn get_length(self) -> seL4_Word {
+            self.length()
         }
     }
 
@@ -774,7 +815,7 @@ mod host_stub {
     pub unsafe fn seL4_CNode_Delete(
         _root: seL4_CNode,
         _index: seL4_CPtr,
-        _depth: seL4_Word,
+        _depth: seL4_Uint8,
     ) -> seL4_Error {
         unsupported();
     }
@@ -783,10 +824,10 @@ mod host_stub {
     pub unsafe fn seL4_CNode_Move(
         _dest_root: seL4_CNode,
         _dest_index: seL4_CPtr,
-        _dest_depth: seL4_Word,
+        _dest_depth: seL4_Uint8,
         _src_root: seL4_CNode,
         _src_index: seL4_CPtr,
-        _src_depth: seL4_Word,
+        _src_depth: seL4_Uint8,
     ) -> seL4_Error {
         unsupported();
     }
@@ -795,11 +836,11 @@ mod host_stub {
     pub unsafe fn seL4_CNode_Copy(
         _dest_root: seL4_CNode,
         _dest_index: seL4_CPtr,
-        _dest_depth: seL4_Word,
+        _dest_depth: seL4_Uint8,
         _src_root: seL4_CNode,
         _src_index: seL4_CPtr,
-        _src_depth: seL4_Word,
-        _rights: seL4_Word,
+        _src_depth: seL4_Uint8,
+        _rights: seL4_CapRights,
     ) -> seL4_Error {
         unsupported();
     }

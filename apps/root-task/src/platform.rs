@@ -4,6 +4,9 @@
 
 use core::ffi::c_void;
 
+#[cfg(feature = "kernel")]
+use crate::sel4::{debug_poll_char, debug_put_char};
+
 /// Minimal facilities required by the root task before higher-level services are initialised.
 pub trait Platform {
     /// Emits a single byte to the debug console.
@@ -33,12 +36,12 @@ impl SeL4Platform {
 impl Platform for SeL4Platform {
     fn putc(&self, byte: u8) {
         unsafe {
-            sel4::debug_put_char(byte as i32);
+            debug_put_char(byte as i32);
         }
     }
 
     fn getc_nonblock(&self) -> Option<u8> {
-        let ch = unsafe { sel4::debug_poll_char() };
+        let ch = unsafe { debug_poll_char() };
         if ch >= 0 {
             Some(ch as u8)
         } else {

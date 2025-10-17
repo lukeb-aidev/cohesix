@@ -14,7 +14,7 @@ use crate::event::{AuditSink, EventPump, IpcDispatcher, TickEvent, TicketTable, 
 use crate::net::NetStack;
 use crate::platform::{Platform, SeL4Platform};
 use crate::sel4::{
-    bootinfo_debug_dump, error_name, BootInfoExt, KernelEnv, RetypeKind, RetypeStatus,
+    bootinfo_debug_dump, error_name, BootInfo, BootInfoExt, KernelEnv, RetypeKind, RetypeStatus,
 };
 use crate::serial::{
     pl011::Pl011, SerialPort, DEFAULT_LINE_CAPACITY, DEFAULT_RX_CAPACITY, DEFAULT_TX_CAPACITY,
@@ -130,16 +130,16 @@ const DEVICE_FRAME_BITS: usize = 12;
 static mut TLS_IMAGE: sel4_sys::TlsImage = sel4_sys::TlsImage::new();
 
 /// Root task entry point invoked by seL4 after kernel initialisation.
-pub fn start<P: Platform>(bootinfo: &'static sel4::BootInfo, platform: &P) -> ! {
+pub fn start<P: Platform>(bootinfo: &'static BootInfo, platform: &P) -> ! {
     bootstrap(platform, bootinfo)
 }
 
-fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static sel4::BootInfo) -> ! {
+fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
     let mut console = DebugConsole::new(platform);
     console.writeln_prefixed("entered from seL4 (stage0)");
     console.writeln_prefixed("Cohesix boot: root-task online");
 
-    let bootinfo_ptr = bootinfo as *const sel4::BootInfo as *const BootInfoHeader;
+    let bootinfo_ptr = bootinfo as *const BootInfo as *const BootInfoHeader;
     console.report_bootinfo(bootinfo_ptr);
 
     console.writeln_prefixed("Cohesix v0 (AArch64/virt)");

@@ -11,9 +11,27 @@ use heapless::Vec;
 use sel4_sys::{
     seL4_ARM_PageTableObject, seL4_ARM_PageTable_Map, seL4_ARM_Page_Default, seL4_ARM_Page_Map,
     seL4_ARM_Page_Uncached, seL4_BootInfo, seL4_CNode, seL4_CNode_Delete, seL4_CPtr,
-    seL4_CapRights_ReadWrite, seL4_NoError, seL4_NotEnoughMemory, seL4_ObjectType, seL4_SlotRegion,
-    seL4_Untyped, seL4_Untyped_Retype, seL4_Word, UntypedDesc, MAX_BOOTINFO_UNTYPEDS,
+    seL4_CapRights_ReadWrite, seL4_DebugPutChar, seL4_NoError, seL4_NotEnoughMemory,
+    seL4_ObjectType, seL4_SlotRegion, seL4_Untyped, seL4_Untyped_Retype, seL4_Word, UntypedDesc,
+    MAX_BOOTINFO_UNTYPEDS,
 };
+
+/// Alias to the boot information structure exposed by `sel4_sys`.
+pub type BootInfo = seL4_BootInfo;
+
+/// Emits a single byte to the seL4 debug console.
+#[inline(always)]
+pub unsafe fn debug_put_char(ch: i32) {
+    seL4_DebugPutChar(ch as u8);
+}
+
+/// Attempts to retrieve a byte from the seL4 debug console without blocking.
+#[inline(always)]
+pub unsafe fn debug_poll_char() -> i32 {
+    // The upstream seL4 debug interface does not currently expose a polling syscall on all
+    // architectures. Returning -1 mirrors the absence of pending input.
+    -1
+}
 
 fn objtype_name(t: seL4_Word) -> &'static str {
     use sel4_sys::seL4_ObjectType::*;
