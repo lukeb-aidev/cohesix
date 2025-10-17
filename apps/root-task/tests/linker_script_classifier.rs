@@ -6,7 +6,7 @@ mod build_support;
 use build_support::{classify_linker_script, LinkerScriptKind};
 use std::fs;
 use std::path::Path;
-use tempfile::{NamedTempFile, TempPath};
+use tempfile::{NamedTempFile, TempDir, TempPath};
 
 fn write_temp_script(contents: &str) -> TempPath {
     let file = NamedTempFile::new().expect("failed to create temporary linker script");
@@ -35,7 +35,7 @@ fn kernel_marker_in_content_detected() {
 
 #[test]
 fn user_marker_in_content_detected() {
-    let path = write_temp_script("SECTIONS { /* USER_TOP */ }");
+    let path = write_temp_script("SECTIONS { /* ROOTSERVER_IMAGE_BASE */ }");
     let kind = classify_linker_script(path.as_ref()).unwrap();
     assert_eq!(kind, LinkerScriptKind::User);
 }
@@ -45,4 +45,14 @@ fn scripts_without_markers_are_reported_unknown() {
     let path = write_temp_script("SECTIONS { /* nothing */ }");
     let kind = classify_linker_script(path.as_ref()).unwrap();
     assert_eq!(kind, LinkerScriptKind::Unknown);
+}
+
+#[test]
+fn user_hint_does_not_override_kernel_marker() {
+    let dir = TempDir::new().expect("failed to create temporary directory");
+    let path = dir.path().join("rootserver-linker.lds");
+    fs::write(&path, "SECTIONS { /* KERNEL_ELF_PADDR_BASE */ }")
+        .expect("failed to write temporary linker script");
+    let kind = classify_linker_script(&path).unwrap();
+    assert_eq!(kind, LinkerScriptKind::Kernel);
 }
