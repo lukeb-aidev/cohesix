@@ -375,8 +375,14 @@ main() {
         ROOT_TASK_BUILD_ARGS+=(--features "$ROOT_TASK_FEATURES")
     fi
 
+    ROOT_TASK_LINKER_SCRIPT="$PROJECT_ROOT/apps/root-task/sel4.ld"
+    if [[ ! -f "$ROOT_TASK_LINKER_SCRIPT" ]]; then
+        fail "root-task linker script not found: $ROOT_TASK_LINKER_SCRIPT"
+    fi
+
+    log "Using root-task linker script: $ROOT_TASK_LINKER_SCRIPT"
     log "Building root-task via: cargo ${ROOT_TASK_BUILD_ARGS[*]}"
-    cargo "${ROOT_TASK_BUILD_ARGS[@]}"
+    SEL4_LD="$ROOT_TASK_LINKER_SCRIPT" cargo "${ROOT_TASK_BUILD_ARGS[@]}"
 
     log "Building seL4 components via: cargo ${SEL4_BUILD_ARGS[*]}"
     cargo "${SEL4_BUILD_ARGS[@]}"
