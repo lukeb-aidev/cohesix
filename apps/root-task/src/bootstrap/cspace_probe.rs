@@ -1,33 +1,27 @@
 // Author: Lukas Bower
-#![allow(dead_code)]
 
-use crate::sel4::{cnode_copy, cnode_delete, debug_put_char};
 use sel4_sys as sys;
 
-/// Copy the init thread's root CNode capability into `slot` and delete it again to prove
-/// that the location is writable from our bootstrap CSpace view.
+use super::ffi::{cnode_delete, cnode_mint_allrights};
+
+/// Prove 'slot' is writable by Minting a duplicate of the TCB cap into it, then Delete it.
 pub fn probe_slot_writable(
     root: sys::seL4_CPtr,
     depth_bits: u8,
     slot: u32,
 ) -> Result<(), sys::seL4_Error> {
-    let dest_index = slot as sys::seL4_CPtr;
-    let src_index = sys::seL4_CapInitThreadCNode;
-    let rights = sys::seL4_CapRights::new(0, 0, 1, 1);
+    let depth = depth_bits as u32;
+    let src_root = root;
+    let src_index = sys::seL4_CapInitThreadTCB as u64; // a known good source cap in init CSpace
 
-    let copy_result = cnode_copy(
-        root, dest_index, depth_bits, root, src_index, depth_bits, rights,
-    );
-    if copy_result != sys::seL4_NoError {
-        return Err(copy_result);
+    // Mint a dup with AllRights, badge=0, then delete it.
+    let r = unsafe { cnode_mint_allrights(root, slot as u64, depth, src_root, src_index, depth) };
+    if r != 0 {
+        return Err(r);
     }
-
-    let delete_result = cnode_delete(root, dest_index, depth_bits);
-    if delete_result != sys::seL4_NoError {
-        return Err(delete_result);
+    let rd = unsafe { cnode_delete(root, slot as u64, depth) };
+    if rd != 0 {
+        return Err(rd);
     }
-
-    debug_put_char(b'P' as i32);
-
     Ok(())
 }
