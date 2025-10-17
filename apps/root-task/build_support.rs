@@ -88,7 +88,7 @@ const USER_MARKERS: &[&str] = &[
     "rootserver_elf_paddr_base",
 ];
 
-const USER_PATH_HINTS: &[&str] = &["rootserver", "sel4runtime"];
+const USER_PATH_HINTS: &[&str] = &["rootserver", "sel4runtime", "elfloader"];
 
 #[cfg(test)]
 mod tests {
@@ -125,6 +125,14 @@ mod tests {
             Path::new("Build/SeL4Runtime/linker.lds"),
             USER_PATH_HINTS
         ));
+    }
+
+    #[test]
+    fn elfloader_hint_is_treated_as_user() {
+        assert_eq!(
+            classify_linker_script(Path::new("build/elfloader/linker.lds_pp")).unwrap(),
+            LinkerScriptKind::User
+        );
     }
 
     #[test]
