@@ -179,7 +179,7 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
     sel4::debug_put_char(((hi & 0xF) as u8 + b'0') as i32);
     sel4::debug_put_char(b']' as i32);
     assert_eq!(
-        usize::from(cs.depth_bits),
+        usize::from(cs.cnode_bits()),
         bootinfo_ref.initThreadCNodeSizeBits as usize,
         "init thread CNode depth mismatch"
     );

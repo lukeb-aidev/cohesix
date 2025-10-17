@@ -8,8 +8,10 @@ use sel4_sys as sys;
 pub struct CSpace {
     /// Capability pointer referencing the init thread's CSpace root CNode.
     pub root: sys::seL4_CPtr,
+    /// Slot index holding the writable init thread CNode capability.
+    root_slot: sys::seL4_CPtr,
     /// Power-of-two size of the root CNode expressed as the number of address bits.
-    pub depth_bits: u8,
+    cnode_bits: u8,
     /// Inclusive start of the bootinfo-declared free slot window.
     empty_start: sys::seL4_CPtr,
     /// Exclusive end of the bootinfo-declared free slot window.
@@ -22,12 +24,14 @@ impl CSpace {
     /// Constructs a bump allocator spanning the bootinfo-advertised empty slot window.
     pub fn from_bootinfo(bi: &'static BootInfo) -> Self {
         let root = sys::seL4_CapInitThreadCNode;
-        let depth_bits = bi.initThreadCNodeSizeBits as u8;
+        let root_slot = sys::seL4_CapInitThreadCNode;
+        let cnode_bits = bi.initThreadCNodeSizeBits as u8;
         let empty_start = bi.empty.start as sys::seL4_CPtr;
         let empty_end = bi.empty.end as sys::seL4_CPtr;
         Self {
             root,
-            depth_bits,
+            root_slot,
+            cnode_bits,
             empty_start,
             empty_end,
             next: empty_start,
@@ -47,5 +51,23 @@ impl CSpace {
     /// Returns the inclusive start and exclusive end of the managed slot window.
     pub fn bounds(&self) -> (sys::seL4_CPtr, sys::seL4_CPtr) {
         (self.empty_start, self.empty_end)
+    }
+
+    /// Returns the slot index referencing the init thread's root CNode capability.
+    #[inline(always)]
+    pub fn root_slot(&self) -> sys::seL4_CPtr {
+        self.root_slot
+    }
+
+    /// Returns the guard depth (in bits) used when addressing the init CSpace root.
+    #[inline(always)]
+    pub fn guard_depth_bits(&self) -> u8 {
+        0
+    }
+
+    /// Returns the number of address bits describing the root CNode's slot capacity.
+    #[inline(always)]
+    pub fn cnode_bits(&self) -> u8 {
+        self.cnode_bits
     }
 }
