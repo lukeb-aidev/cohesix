@@ -20,6 +20,10 @@ pub mod net;
 pub mod kernel;
 
 #[cfg(feature = "kernel")]
+/// Early bootstrap helpers for capability allocation.
+pub mod bootstrap;
+
+#[cfg(feature = "kernel")]
 pub mod sel4;
 
 #[cfg(feature = "kernel")]
