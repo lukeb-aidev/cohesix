@@ -22,37 +22,52 @@ pub enum LinkerScriptKind {
 /// kernel script inflates the PT_LOAD segment span and causes the ELF-loader to
 /// overlap with the staged root task image, preventing the VM from booting.
 pub fn classify_linker_script(path: &Path) -> Result<LinkerScriptKind, String> {
-    if has_path_hint(path, USER_PATH_HINTS) {
-        return Ok(LinkerScriptKind::User);
-    }
+    let user_hint = has_path_hint(path, USER_PATH_HINTS);
 
     if path_contains_component(path, "kernel") {
         return Ok(LinkerScriptKind::Kernel);
     }
 
-    let contents = fs::read_to_string(path)
-        .map_err(|err| format!("failed to read {}: {}", path.display(), err))?;
+    let contents = match fs::read_to_string(path) {
+        Ok(contents) => contents,
+        Err(err) => {
+            if user_hint {
+                return Ok(LinkerScriptKind::User);
+            }
 
-    Ok(classify_linker_script_contents(&contents))
+            return Err(format!("failed to read {}: {}", path.display(), err));
+        }
+    };
+
+    let classification = classify_linker_script_contents(&contents);
+    if classification == LinkerScriptKind::Unknown && user_hint {
+        Ok(LinkerScriptKind::User)
+    } else {
+        Ok(classification)
+    }
 }
 
 fn classify_linker_script_contents(contents: &str) -> LinkerScriptKind {
     let mut lower = contents.to_ascii_lowercase();
 
-    if KERNEL_MARKERS.iter().any(|marker| lower.contains(marker)) {
-        return LinkerScriptKind::Kernel;
-    }
-
-    if USER_MARKERS.iter().any(|marker| lower.contains(marker)) {
-        return LinkerScriptKind::User;
-    }
+    let has_kernel_marker = KERNEL_MARKERS.iter().any(|marker| lower.contains(marker));
+    let has_rootserver_marker = ROOTSERVER_MARKERS
+        .iter()
+        .any(|marker| lower.contains(marker));
+    let has_user_marker = USER_MARKERS.iter().any(|marker| lower.contains(marker));
 
     // Drop the temporary buffer eagerly to avoid holding on to a large
     // allocation when the caller retries classification with additional
     // context.
     lower.clear();
 
-    LinkerScriptKind::Unknown
+    match (has_kernel_marker, has_rootserver_marker, has_user_marker) {
+        (true, true, _) => LinkerScriptKind::Unknown,
+        (true, false, _) => LinkerScriptKind::Kernel,
+        (false, true, _) => LinkerScriptKind::User,
+        (false, false, true) => LinkerScriptKind::User,
+        (false, false, false) => LinkerScriptKind::Unknown,
+    }
 }
 
 fn path_contains_component(path: &Path, needle: &str) -> bool {
@@ -77,6 +92,8 @@ const KERNEL_MARKERS: &[&str] = &[
     "kernel_window",
     "kernel_virt_offset",
 ];
+
+const ROOTSERVER_MARKERS: &[&str] = &["rootserver", "sel4runtime"];
 
 const USER_MARKERS: &[&str] = &[
     "user_top",
@@ -115,7 +132,7 @@ mod tests {
     fn user_hint_beats_kernel_component_when_both_present() {
         assert_eq!(
             classify_linker_script(Path::new("kernel/gen_config/rootserver/linker.lds")).unwrap(),
-            LinkerScriptKind::User
+            LinkerScriptKind::Kernel
         );
     }
 
