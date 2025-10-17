@@ -6,11 +6,7 @@ edition = "2021"
 publish = false
 
 [features]
-default = ["host"]
-host = [
-    "dep:anyhow",
-    "dep:secure9p-wire",
-]
+default = []
 kernel = [
     "dep:sel4",
     "dep:sel4-sys",
@@ -29,8 +25,6 @@ embedded-io = { version = "0.4", default-features = false }
 nb = "1.1"
 portable-atomic = "1.6"
 log = { version = "0.4", default-features = false }
-anyhow = { workspace = true, optional = true }
-secure9p-wire = { workspace = true, optional = true }
 [dependencies.sel4]
 version = "0.0.12"
 optional = true
@@ -62,4 +56,8 @@ features = [
 [dependencies.spin]
 version = "0.9"
 optional = true
+
+[target.'cfg(not(target_os = "none"))'.dependencies]
+anyhow = { workspace = true }
+secure9p-wire = { workspace = true }
 
