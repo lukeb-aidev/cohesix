@@ -9,7 +9,7 @@ use core::ptr;
 
 use cohesix_ticket::Role;
 
-use crate::bootstrap::{cspace::CSpace, pick_regular_untyped, retype::retype_one};
+use crate::bootstrap::{cspace::CSpace, pick_untyped, retype::retype_one};
 use crate::event::{AuditSink, EventPump, IpcDispatcher, TickEvent, TicketTable, TimerSource};
 #[cfg(feature = "net")]
 use crate::net::NetStack;
@@ -179,10 +179,7 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
         "init thread CNode depth mismatch"
     );
 
-    #[cfg(feature = "bootstrap-trace")]
-    debug_put_char(b'[' as i32);
-
-    let endpoint_untyped = pick_regular_untyped(bootinfo_ref, sel4_sys::seL4_EndpointBits as u8);
+    let endpoint_untyped = pick_untyped(bootinfo_ref, sel4_sys::seL4_EndpointBits as u8);
 
     let endpoint_slot = retype_one(
         endpoint_untyped,
@@ -192,22 +189,19 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
     )
     .expect("failed to retype endpoint into init CSpace");
 
-    #[cfg(feature = "bootstrap-trace")]
     debug_put_char(b'E' as i32);
 
+    let notification_untyped = pick_untyped(bootinfo_ref, sel4_sys::seL4_NotificationBits as u8);
+
     let notification_slot = retype_one(
-        endpoint_untyped,
+        notification_untyped,
         sel4_sys::seL4_ObjectType::seL4_NotificationObject,
         sel4_sys::seL4_NotificationBits as u8,
         &mut cs,
     )
     .expect("failed to retype notification into init CSpace");
 
-    #[cfg(feature = "bootstrap-trace")]
     debug_put_char(b'N' as i32);
-
-    #[cfg(feature = "bootstrap-trace")]
-    debug_put_char(b']' as i32);
 
     let consumed_slots = cs.consumed() as usize;
     let _ = endpoint_slot;
