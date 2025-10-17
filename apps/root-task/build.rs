@@ -295,11 +295,7 @@ fn stage_linker_script(build_root: &Path) -> Result<(), String> {
         errors.join("; ")
     };
 
-    Err(format!(
-        "Tried [{}]. {}",
-        searched,
-        detail
-    ))
+    Err(format!("Tried [{}]. {}", searched, detail))
 }
 
 fn emit_config_flags(root: &Path) {
