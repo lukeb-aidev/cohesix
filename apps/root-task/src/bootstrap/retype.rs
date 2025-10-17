@@ -5,10 +5,10 @@ use sel4_sys as sys;
 
 use super::cspace::CSpace;
 use super::cspace_probe::probe_slot_writable;
-use core::convert::TryFrom;
 
 use super::ffi::untyped_retype_one;
 
+/// Retypes a single capability-sized object into the init CSpace using the provided allocator.
 pub fn retype_one(
     untyped: sys::seL4_CPtr,
     obj_type: sys::seL4_ObjectType,
@@ -30,15 +30,7 @@ pub fn retype_one(
     }
 
     // Retype — if THIS fails, we print 'R' and dump params
-    let slot_index = usize::try_from(slot).map_err(|_| sys::seL4_RangeError)?;
-    let err = untyped_retype_one(
-        untyped,
-        obj_type,
-        obj_bits,
-        cs.root,
-        slot_index,
-        cs.depth_bits,
-    );
+    let err = untyped_retype_one(untyped, obj_type, obj_bits, cs.root, slot, cs.depth_bits);
     if err != sys::seL4_NoError {
         sel4::debug_put_char(b'R' as i32);
         // 1-char crumbs: depth (0..) and last hex nibble of slot
@@ -48,5 +40,5 @@ pub fn retype_one(
         sel4::debug_put_char(n as i32);
         return Err(err);
     }
-    Ok(slot_index as sys::seL4_CPtr)
+    Ok(slot)
 }
