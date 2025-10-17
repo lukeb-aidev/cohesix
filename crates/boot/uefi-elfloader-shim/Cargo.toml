@@ -1,0 +1,11 @@
+# Author: Lukas Bower
+[package]
+name = "uefi-elfloader-shim"
+version = "0.1.0"
+edition = "2021"
+description = "Documentation shim crate for Cohesix UEFI elfloader packaging"
+license = "MIT"
+publish = false
+
+[lib]
+path = "src/lib.rs"

@@ -2,7 +2,6 @@
 #![allow(dead_code)]
 #![allow(unsafe_code)]
 
-use core::ffi::c_void;
 use core::fmt::{self, Write};
 use core::mem;
 use core::panic::PanicInfo;
@@ -131,9 +130,8 @@ const DEVICE_FRAME_BITS: usize = 12;
 static mut TLS_IMAGE: sel4_sys::TlsImage = sel4_sys::TlsImage::new();
 
 /// Root task entry point invoked by seL4 after kernel initialisation.
-pub fn start(bootinfo: &'static sel4::BootInfo) -> ! {
-    let platform = SeL4Platform::new(bootinfo as *const _ as *const c_void);
-    bootstrap(&platform, bootinfo)
+pub fn start<P: Platform>(bootinfo: &'static sel4::BootInfo, platform: &P) -> ! {
+    bootstrap(platform, bootinfo)
 }
 
 fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static sel4::BootInfo) -> ! {

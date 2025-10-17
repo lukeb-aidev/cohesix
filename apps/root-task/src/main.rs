@@ -16,7 +16,10 @@ use sel4_runtime as _;
 /// seL4 entry point invoked by `sel4_runtime`.
 #[no_mangle]
 pub extern "C" fn sel4_start(bootinfo: &'static BootInfo) -> ! {
-    root_task::kernel::start(bootinfo)
+    use root_task::platform::SeL4Platform;
+
+    let platform = SeL4Platform::new(bootinfo as *const _ as *const core::ffi::c_void);
+    root_task::kernel::start(bootinfo, &platform)
 }
 
 #[cfg(not(feature = "kernel"))]
