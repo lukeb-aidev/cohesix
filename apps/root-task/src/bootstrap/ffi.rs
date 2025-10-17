@@ -4,7 +4,7 @@
 
 use sel4_sys as sys;
 
-// One-shot wrappers to lock argument order/width on aarch64
+/// Thin wrapper around `seL4_CNode_Mint` that always grants full rights.
 pub fn cnode_mint_allrights(
     dest_root: sys::seL4_CNode,
     dest_index: sys::seL4_CPtr,
@@ -27,6 +27,7 @@ pub fn cnode_mint_allrights(
     }
 }
 
+/// Safe projection of `seL4_CNode_Delete` for bootstrap code paths.
 pub fn cnode_delete(
     root: sys::seL4_CNode,
     index: sys::seL4_CPtr,
@@ -35,6 +36,7 @@ pub fn cnode_delete(
     unsafe { sys::seL4_CNode_Delete(root, index, depth_bits) }
 }
 
+/// Retypes a single kernel object from an untyped capability into the init CSpace.
 pub fn untyped_retype_one(
     untyped: sys::seL4_Untyped,
     obj_type: sys::seL4_ObjectType,
