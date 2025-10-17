@@ -13,9 +13,10 @@ struct BootStack([u8; STACK_BYTES]);
 
 // seL4 linker scripts previously mapped `.bss.uninit` near `USER_TOP`, which
 // inflated the PT_LOAD span when the root-task stack lived in that section.
-// Pin the stack to a dedicated data segment so it stays adjacent to the rest
-// of the root-task image and leaves the kernel window untouched.
-#[link_section = ".data.boot_stack"]
+// Keep the bootstrap stack inside the main data segment so it stays adjacent
+// to the remainder of the image and avoids spanning the kernel window.
+#[link_section = ".data"]
+#[used]
 static mut BOOT_STACK: BootStack = BootStack([0; STACK_BYTES]);
 
 struct BootInfoCell {

@@ -71,8 +71,12 @@ except struct.error:
     sys.exit(1)
 
 e_phoff = header[4]
-e_phentsize = header[7]
-e_phnum = header[8]
+e_shoff = header[5]
+e_phentsize = header[8]
+e_phnum = header[9]
+e_shentsize = header[10]
+e_shnum = header[11]
+e_shstrndx = header[12]
 
 ph_fmt = endian + "IIQQQQQQ"
 segments = []
@@ -97,14 +101,51 @@ max_end = max(start + size for start, size in segments)
 span = max_end - min_start
 max_segment = max(size for _, size in segments)
 
-print(f"{min_start} {max_end} {span} {max_segment}")
+sh_fmt = endian + "IIQQQQIIQQ"
+sections = []
+
+for index in range(e_shnum):
+    offset = e_shoff + index * e_shentsize
+    try:
+        section = struct.unpack_from(sh_fmt, data, offset)
+    except struct.error:
+        print("section header truncated", file=sys.stderr)
+        sys.exit(1)
+    sections.append(section)
+
+if not sections:
+    print("rootserver ELF is missing section headers", file=sys.stderr)
+    sys.exit(1)
+
+if not (0 <= e_shstrndx < len(sections)):
+    print("section string table index out of range", file=sys.stderr)
+    sys.exit(1)
+
+strtab_header = sections[e_shstrndx]
+_, _, _, _, strtab_offset, strtab_size, _, _, _, _ = strtab_header
+shstr = data[strtab_offset : strtab_offset + strtab_size]
+
+def section_name(offset):
+    end = shstr.find(b"\x00", offset)
+    if end == -1:
+        return ""
+    return shstr[offset:end].decode(errors="ignore")
+
+bss_bytes = 0
+for header in sections:
+    sh_name, sh_type, _, _, sh_offset, sh_size, _, _, _, _ = header
+    name = section_name(sh_name)
+    if name.startswith(".bss"):
+        bss_bytes += sh_size
+
+print(f"{min_start} {max_end} {span} {max_segment} {bss_bytes}")
 PY
 ); then
     echo "failed to inspect rootserver ELF program headers" >&2
     exit 70
 fi
 
-read -r min_start max_end span_bytes max_segment_bytes <<<"$metrics"
+read -r min_start max_end span_bytes max_segment_bytes bss_bytes <<<"$metrics"
 
 max_span_limit=$((8 * 1024 * 1024))
 if (( span_bytes > max_span_limit )); then
@@ -116,6 +157,34 @@ fi
 
 if (( max_end >= 0x1_0000_0000 )); then
     printf 'rootserver physical end address 0x%X exceeds 32-bit space\n' "$max_end" >&2
+    exit 1
+fi
+
+max_segment_limit=$((32 * 1024 * 1024))
+if (( max_segment_bytes > max_segment_limit )); then
+    printf 'rootserver PT_LOAD MemSiz %s bytes (0x%X) exceeds %s bytes (0x%X)\n' \
+        "$max_segment_bytes" "$max_segment_bytes" "$max_segment_limit" "$max_segment_limit" >&2
+    exit 1
+fi
+
+bss_limit=$((8 * 1024 * 1024))
+if (( bss_bytes > bss_limit )); then
+    printf '.bss sections total %s bytes (0x%X) exceeds %s bytes (0x%X)\n' \
+        "$bss_bytes" "$bss_bytes" "$bss_limit" "$bss_limit" >&2
+    exit 1
+fi
+
+file_size_limit=$((8 * 1024 * 1024))
+file_size=$(python3 - "$rootserver" <<'PY'
+import os
+import sys
+print(os.path.getsize(sys.argv[1]))
+PY
+)
+
+if (( file_size > file_size_limit )); then
+    printf 'rootserver file size %s bytes (0x%X) exceeds %s bytes (0x%X)\n' \
+        "$file_size" "$file_size" "$file_size_limit" "$file_size_limit" >&2
     exit 1
 fi
 
@@ -133,5 +202,8 @@ for path in "${required_paths[@]}"; do
         exit 1
     fi
 done
+
+echo "top 10 largest symbols:"
+nm -S --size-sort "$rootserver" | tail -n 10
 
 echo "root-task guard checks passed"
