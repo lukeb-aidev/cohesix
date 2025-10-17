@@ -20,6 +20,7 @@ pub trait Platform {
 }
 
 #[cfg(feature = "kernel")]
+/// Platform implementation backed by seL4 kernel primitives.
 pub struct SeL4Platform {
     bootinfo: *const c_void,
 }
