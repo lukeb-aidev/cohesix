@@ -24,7 +24,7 @@ pub fn retype_one(
     }
 
     // Mint/Delete probe — if THIS fails, we print 'M' and return its error
-    if let Err(e) = probe_slot_writable(cs.root, cs.cnode_bits(), slot) {
+    if let Err(e) = probe_slot_writable(cs.root, slot) {
         sel4::debug_put_char(b'M' as i32);
         return Err(e);
     }
