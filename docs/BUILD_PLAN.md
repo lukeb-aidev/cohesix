@@ -40,7 +40,7 @@ preparing and executing tasks.
 - No panics; QEMU terminates cleanly via monitor command.
 
 **M1 → M2 Transition Note**
-- Retype now targets the init root CNode with `(node_index=seL4_CapInitThreadCNode, node_depth=0, slot)` and validates capacity via `initThreadCNodeSizeBits`.
+- Retype now targets the init root CNode with `(node_index=0, node_depth=0, slot)` and validates capacity via `initThreadCNodeSizeBits`.
 
 ## Milestone 2 — NineDoor Minimal 9P
 **Deliverables**
