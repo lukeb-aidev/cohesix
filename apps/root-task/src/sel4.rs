@@ -45,6 +45,7 @@ pub fn cnode_copy(
     src_depth: u8,
     rights: sel4_sys::seL4_CapRights,
 ) -> seL4_Error {
+    debug_put_char(b'C' as i32);
     unsafe {
         seL4_CNode_Copy(
             dest_root, dest_index, dest_depth, src_root, src_index, src_depth, rights,
@@ -56,6 +57,7 @@ pub fn cnode_copy(
 #[cfg(feature = "kernel")]
 #[inline(always)]
 pub fn cnode_delete(root: seL4_CNode, index: seL4_CPtr, depth: u8) -> seL4_Error {
+    debug_put_char(b'C' as i32);
     unsafe { seL4_CNode_Delete(root, index, depth) }
 }
 

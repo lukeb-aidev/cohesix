@@ -1,7 +1,9 @@
 // Author: Lukas Bower
+#![allow(dead_code)]
 #![allow(non_camel_case_types)]
 #![allow(unsafe_code)]
 
+use crate::sel4::debug_put_char;
 use sel4_sys as sys;
 
 /// Thin wrapper around `seL4_CNode_Mint` that always grants full rights.
@@ -13,6 +15,9 @@ pub fn cnode_mint_allrights(
     src_index: sys::seL4_CPtr,
     src_depth_bits: u8,
 ) -> sys::seL4_Error {
+    debug_put_char(b'C' as i32);
+    let rights = sys::seL4_CapRights_All;
+    debug_assert_eq!(rights.raw(), sys::seL4_AllRights);
     unsafe {
         sys::seL4_CNode_Mint(
             dest_root,
@@ -21,7 +26,7 @@ pub fn cnode_mint_allrights(
             src_root,
             src_index,
             src_depth_bits,
-            sys::seL4_CapRights_All,
+            rights,
             0,
         )
     }
@@ -33,6 +38,7 @@ pub fn cnode_delete(
     index: sys::seL4_CPtr,
     depth_bits: u8,
 ) -> sys::seL4_Error {
+    debug_put_char(b'C' as i32);
     unsafe { sys::seL4_CNode_Delete(root, index, depth_bits) }
 }
 

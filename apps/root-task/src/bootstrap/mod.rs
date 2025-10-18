@@ -3,8 +3,6 @@
 
 /// Capability-space helpers extracted from the seL4 boot info structure.
 pub mod cspace;
-/// Verifies that candidate slots within the init CSpace are writable before retyping into them.
-pub mod cspace_probe;
 /// ABI guard helpers ensuring the seL4 FFI signatures remain pinned.
 pub mod ffi;
 /// Thin wrapper around `seL4_Untyped_Retype` tailored for the init CSpace policy.
