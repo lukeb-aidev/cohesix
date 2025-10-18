@@ -10,6 +10,8 @@ use crate::sel4::{self, debug_put_char};
 use heapless::String;
 use sel4_sys as sys;
 
+use super::cspace_sys;
+
 const MAX_DIAGNOSTIC_LEN: usize = 224;
 
 pub fn cnode_mint_to_slot(
@@ -20,18 +22,32 @@ pub fn cnode_mint_to_slot(
     badge: sys::seL4_Word,
 ) -> sys::seL4_Error {
     let depth = ctx.init_cnode_bits;
-    let err = sel4::cnode_mint(
-        sys::seL4_CapInitThreadCNode,
+    let dest_root = ctx.root_cnode_cap;
+    let dest_offset = dst_slot as sys::seL4_Word;
+    let err = cspace_sys::cnode_mint_direct(
+        dest_root,
         dst_slot,
         depth,
-        sys::seL4_CapInitThreadCNode,
+        dest_root,
         src_slot,
         depth,
         rights,
         badge,
+        dest_offset,
     );
     if err != sys::seL4_NoError {
-        log_cnode_mint_failure(err, dst_slot, depth, src_slot, depth, rights, badge);
+        log_cnode_mint_failure(
+            err,
+            dest_root,
+            dst_slot,
+            depth,
+            dest_offset,
+            dest_root,
+            src_slot,
+            depth,
+            rights,
+            badge,
+        );
     }
     err
 }
@@ -43,18 +59,18 @@ pub fn untyped_retype_to_slot(
     size_bits: sys::seL4_Word,
     dst_slot: sys::seL4_CPtr,
 ) -> sys::seL4_Error {
-    let err = unsafe {
-        sys::seL4_Untyped_Retype(
-            untyped_cap,
-            obj_type,
-            size_bits,
-            sys::seL4_CapInitThreadCNode,
-            sys::seL4_CapInitThreadCNode,
-            ctx.init_cnode_bits as sys::seL4_Word,
-            dst_slot,
-            1,
-        )
-    };
+    let dest_root = ctx.root_cnode_cap;
+    let depth = ctx.init_cnode_bits;
+    let dest_offset = dst_slot as sys::seL4_Word;
+    let err = cspace_sys::untyped_retype_direct(
+        untyped_cap,
+        obj_type,
+        size_bits,
+        dest_root,
+        0,
+        depth,
+        dest_offset,
+    );
     if err != sys::seL4_NoError {
         log_untyped_retype_failure(
             err,
@@ -62,7 +78,9 @@ pub fn untyped_retype_to_slot(
             obj_type,
             size_bits,
             dst_slot,
-            ctx.init_cnode_bits as sys::seL4_Word,
+            sys::seL4_Word::from(depth),
+            dest_root,
+            dest_offset,
         );
     }
     err
@@ -70,8 +88,11 @@ pub fn untyped_retype_to_slot(
 
 fn log_cnode_mint_failure(
     err: sys::seL4_Error,
+    dest_root: sys::seL4_CNode,
     dest_index: sys::seL4_CPtr,
     dest_depth: u8,
+    dest_offset: sys::seL4_Word,
+    src_root: sys::seL4_CNode,
     src_index: sys::seL4_CPtr,
     src_depth: u8,
     rights: sys::seL4_CapRights,
@@ -80,10 +101,13 @@ fn log_cnode_mint_failure(
     let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
     let _ = write!(
         &mut line,
-        "CNode_Mint err={code} dest_index=0x{dest:04x} dest_depth={dest_depth} dest_root=seL4_CapInitThreadCNode \\n                 src_index=0x{src:04x} src_depth={src_depth} src_root=seL4_CapInitThreadCNode rights=0x{rights:08x} badge=0x{badge:08x}",
+        "CNode_Mint err={code} dest_root=0x{dest_root:04x} dest_index=0x{dest:04x} dest_depth={dest_depth} dest_offset=0x{dest_offset:04x} \\\n     src_root=0x{src_root:04x} src_index=0x{src:04x} src_depth={src_depth} rights=0x{rights:08x} badge=0x{badge:08x}",
         code = err,
+        dest_root = dest_root,
         dest = dest_index,
         dest_depth = usize::from(dest_depth),
+        dest_offset = dest_offset,
+        src_root = src_root,
         src = src_index,
         src_depth = usize::from(src_depth),
         rights = rights.raw(),
@@ -102,12 +126,16 @@ fn log_untyped_retype_failure(
     obj_bits: sys::seL4_Word,
     dest_slot: sys::seL4_CPtr,
     guard_depth: sys::seL4_Word,
+    dest_root: sys::seL4_CNode,
+    dest_offset: sys::seL4_Word,
 ) {
     let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
     let _ = write!(
         &mut line,
-        "Untyped_Retype err={code} dest_index=seL4_CapInitThreadCNode dest_depth={guard_depth} dest_offset=0x{dest_slot:04x} \\n                 src_untyped=0x{untyped:08x} obj_type=0x{obj_type:08x} obj_bits={obj_bits}",
+        "Untyped_Retype err={code} dest_root=0x{dest_root:04x} dest_index=0x{dest_index:04x} dest_depth={guard_depth} dest_offset=0x{dest_slot:04x} \\\n                 src_untyped=0x{untyped:08x} obj_type=0x{obj_type:08x} obj_bits={obj_bits}",
         code = err,
+        dest_root = dest_root,
+        dest_index = 0usize,
         guard_depth = guard_depth,
         dest_slot = dest_slot,
         untyped = untyped,

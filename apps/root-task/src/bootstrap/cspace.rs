@@ -5,6 +5,8 @@ use core::fmt::Write;
 use heapless::String;
 use sel4_sys as sys;
 
+use super::cspace_sys;
+
 const MAX_DIAGNOSTIC_LEN: usize = 192;
 
 /// Lightweight projection of [`seL4_BootInfo`] exposing capability-space fields.
@@ -110,10 +112,11 @@ impl CSpaceCtx {
         (self.first_free, self.last_free)
     }
 
-    pub fn mint_root_copy(&mut self) -> Result<(), sys::seL4_Error> {
+    pub fn mint_root_cnode_copy(&mut self) -> Result<(), sys::seL4_Error> {
         let slot = self.alloc_slot();
         let depth = self.init_cnode_bits;
-        let err = sel4::cnode_mint(
+        let dest_offset = slot as sys::seL4_Word;
+        let err = cspace_sys::cnode_mint_direct(
             self.root_cnode_cap,
             slot,
             depth,
@@ -122,12 +125,16 @@ impl CSpaceCtx {
             depth,
             sys::seL4_CapRights_All,
             0,
+            dest_offset,
         );
         if err != sys::seL4_NoError {
             log_cnode_mint_failure(
                 err,
+                self.root_cnode_cap,
                 slot,
                 depth,
+                dest_offset,
+                self.root_cnode_cap,
                 self.root_cnode_cap,
                 depth,
                 sys::seL4_CapRights_All,
@@ -171,8 +178,11 @@ impl CSpaceCtx {
 
 fn log_cnode_mint_failure(
     err: sys::seL4_Error,
+    dest_root: sys::seL4_CNode,
     dest_slot: sys::seL4_CPtr,
     dest_depth: u8,
+    dest_offset: sys::seL4_Word,
+    src_root: sys::seL4_CNode,
     src_slot: sys::seL4_CPtr,
     src_depth: u8,
     rights: sys::seL4_CapRights,
@@ -181,10 +191,13 @@ fn log_cnode_mint_failure(
     let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
     let _ = write!(
         &mut line,
-        "CNode_Mint err={code} dest_index=0x{dest_slot:04x} dest_depth={dest_depth} src_index=0x{src_slot:04x} src_depth={src_depth} rights=0x{rights:08x} badge=0x{badge:08x}",
+        "CNode_Mint err={code} dest_root=0x{dest_root:04x} dest_index=0x{dest_slot:04x} dest_depth={dest_depth} dest_offset=0x{dest_offset:04x} src_root=0x{src_root:04x} src_index=0x{src_slot:04x} src_depth={src_depth} rights=0x{rights:08x} badge=0x{badge:08x}",
         code = err,
+        dest_root = dest_root,
         dest_slot = dest_slot,
         dest_depth = usize::from(dest_depth),
+        dest_offset = dest_offset,
+        src_root = src_root,
         src_slot = src_slot,
         src_depth = usize::from(src_depth),
         rights = rights.raw(),
