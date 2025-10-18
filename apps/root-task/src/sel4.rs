@@ -73,11 +73,20 @@ pub fn cnode_mint(
     src_depth: u8,
     rights: sel4_sys::seL4_CapRights,
     badge: seL4_Word,
+    dest_offset: seL4_CPtr,
 ) -> seL4_Error {
     debug_put_char(b'C' as i32);
     unsafe {
         seL4_CNode_Mint(
-            dest_root, dest_index, dest_depth, src_root, src_index, src_depth, rights, badge,
+            dest_root,
+            dest_index,
+            dest_depth,
+            src_root,
+            src_index,
+            src_depth,
+            rights,
+            badge,
+            dest_offset,
         )
     }
 }
@@ -171,7 +180,11 @@ const _: () = {
     let _check: [u8; core::mem::size_of::<seL4_Word>()] = [0; core::mem::size_of::<usize>()];
 };
 
-pub use sel4_sys::{seL4_CapInitThreadCNode, seL4_CapInitThreadVSpace, seL4_Error};
+pub use sel4_sys::{
+    seL4_AllRights, seL4_CNode, seL4_CNode_Mint, seL4_CPtr, seL4_CapInitThreadCNode,
+    seL4_CapInitThreadVSpace, seL4_CapRights, seL4_CapRights_All, seL4_CapRights_ReadWrite,
+    seL4_Error, seL4_NoError, seL4_Untyped, seL4_Untyped_Retype, seL4_Word,
+};
 
 /// Extension trait exposing bootinfo fields and derived values used by the root task.
 pub trait BootInfoExt {
