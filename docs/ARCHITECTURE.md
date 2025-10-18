@@ -24,6 +24,11 @@
   - Remote operators attach via the TCP-backed console (`cohsh --transport tcp`) which mirrors serial semantics while applying
     heartbeat-driven keep-alives and exponential back-off so networking stalls cannot starve the event pump.
 
+### Bootstrap CSpace Addressing
+
+- The root task mints an all-rights copy of the init thread's root CNode into the first free slot of the bootinfo-provided empty window. This writeable alias prevents `seL4_Untyped_Retype` from tripping the kernel's "destination cap invalid or read-only" guard while retaining the canonical init CSpace layout.
+- All bootstrap retypes issue invocation-addressed `seL4_Untyped_Retype` calls (`node_index = 0`, `node_depth = 0`). This avoids extra CNode traversals during early boot while still targeting the slots handed out by the bump allocator within `bootinfo.empty`.
+
 ## 3. Component Responsibilities
 ### Root Task (crate: `root-task`)
 - Owns seL4 initial caps, configures memory, and manages scheduling budgets.

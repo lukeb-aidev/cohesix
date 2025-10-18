@@ -195,6 +195,13 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
     }
 
     let mut cs = CSpace::from_bootinfo(bootinfo_ref);
+    let writable_root_slot = cs.make_writable_root_copy().unwrap_or_else(|err| {
+        panic!(
+            "failed to mint writable init CNode capability: {} ({})",
+            err,
+            error_name(err)
+        )
+    });
     let (lo, hi) = cs.bounds();
     sel4::debug_put_char(b'[' as i32);
     sel4::debug_put_char(((lo & 0xF) as u8 + b'0') as i32);
@@ -206,7 +213,10 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
         "init thread CNode depth mismatch"
     );
 
-    let mut consumed_slots: usize = 0;
+    sel4::debug_put_char(b'W' as i32);
+    sel4::debug_put_char(((writable_root_slot & 0xF) as u8 + b'0') as i32);
+
+    let mut consumed_slots: usize = 1;
     let endpoint_untyped = pick_untyped(bootinfo_ref, sel4_sys::seL4_EndpointBits as u8);
 
     let endpoint_slot = retype_one(

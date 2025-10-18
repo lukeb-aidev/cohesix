@@ -48,13 +48,16 @@ pub fn untyped_retype_one(
     obj_type: sys::seL4_ObjectType,
     obj_bits: u8,
     dest_root: sys::seL4_CNode,
-    dest_index: sys::seL4_CPtr,
-    dest_depth_bits: u8,
+    _dest_index: sys::seL4_CPtr,
+    _dest_depth_bits: u8,
     dest_offset: sys::seL4_CPtr,
 ) -> sys::seL4_Error {
+    let dest_index: sys::seL4_CPtr = 0;
+    let dest_depth_bits: sys::seL4_Word = 0;
     // SAFETY: The wrapper fixes the argument ordering to match the seL4 C API and supplies
     // exactly one object with zero offset. The kernel contract for these arguments is upheld
-    // by the callers in the bootstrap sequence.
+    // by the callers in the bootstrap sequence. Invocation-style addressing keeps the
+    // destination path rooted at `dest_root` and bypasses any nested CNode traversal.
     unsafe {
         sys::seL4_Untyped_Retype(
             untyped,
@@ -62,7 +65,7 @@ pub fn untyped_retype_one(
             obj_bits as sys::seL4_Word,
             dest_root,
             dest_index,
-            dest_depth_bits as sys::seL4_Word,
+            dest_depth_bits,
             dest_offset as sys::seL4_Word,
             1,
         )
