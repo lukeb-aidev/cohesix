@@ -4,8 +4,6 @@ use crate::sel4;
 use sel4_sys as sys;
 
 use super::cspace::CSpace;
-use super::cspace_probe::probe_slot_writable;
-
 use super::ffi::untyped_retype_one;
 
 /// Retypes a single capability-sized object into the init CSpace using the provided allocator.
@@ -21,12 +19,6 @@ pub fn retype_one(
     };
     if !(slot >= lo && slot < hi) {
         return Err(sys::seL4_RangeError);
-    }
-
-    // Mint/Delete probe — if THIS fails, we print 'M' and return its error
-    if let Err(e) = probe_slot_writable(cs.root, slot) {
-        sel4::debug_put_char(b'M' as i32);
-        return Err(e);
     }
 
     // Retype — if THIS fails, we print 'R' and dump params
