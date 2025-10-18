@@ -1,6 +1,6 @@
 // Author: Lukas Bower
 
-use crate::sel4::BootInfo;
+use crate::sel4::{self, BootInfo};
 use sel4_sys as sys;
 
 /// Minimal capability-space allocator backed by the init thread's root CNode.
@@ -45,6 +45,8 @@ impl CSpace {
         slot >= self.empty_start && slot < self.empty_end
     }
 
+    /// Returns `true` when the provided slot index references a kernel-reserved
+    /// capability.
     #[inline(always)]
     pub fn is_reserved_slot(slot: sys::seL4_CPtr) -> bool {
         matches!(
@@ -139,17 +141,15 @@ impl CSpace {
             "attempted to reuse reserved capability slot for writable root copy"
         );
 
-        let err = unsafe {
-            sys::seL4_CNode_Copy(
-                sys::seL4_CapInitThreadCNode,
-                slot,
-                0,
-                sys::seL4_CapInitThreadCNode,
-                sys::seL4_CapInitThreadCNode,
-                0,
-                sys::seL4_CapRights_All,
-            )
-        };
+        let err = sel4::cnode_copy(
+            sys::seL4_CapInitThreadCNode,
+            slot,
+            0,
+            sys::seL4_CapInitThreadCNode,
+            sys::seL4_CapInitThreadCNode,
+            0,
+            sys::seL4_CapRights_All,
+        );
         if err != sys::seL4_NoError {
             return Err(err);
         }
