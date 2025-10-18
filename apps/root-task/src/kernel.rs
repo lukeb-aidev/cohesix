@@ -210,7 +210,7 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
     );
     console.writeln_prefixed(cnode_line.as_str());
 
-    cs.mint_root_copy().unwrap_or_else(|err| {
+    cs.mint_root_cnode_copy().unwrap_or_else(|err| {
         panic!(
             "failed to mint writable init CNode capability: {} ({})",
             err,
