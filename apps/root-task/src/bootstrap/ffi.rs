@@ -27,9 +27,7 @@ pub fn cnode_mint_to_slot(
         dest_root, 0, depth, dest_root, src_slot, depth, rights, badge, dst_slot,
     );
     if err != sys::seL4_NoError {
-        log_cnode_mint_failure(
-            err, 0, depth, dst_slot, dest_root, src_slot, depth, rights, badge,
-        );
+        log_cnode_mint_failure(err, 0, depth, dst_slot, src_slot, depth, rights, badge);
     }
     err
 }
@@ -68,11 +66,9 @@ pub fn untyped_retype_to_slot(
 
 fn log_cnode_mint_failure(
     err: sys::seL4_Error,
-    _dest_root: sys::seL4_CNode,
     dest_index: sys::seL4_CPtr,
     dest_depth: u8,
     dest_offset: sys::seL4_CPtr,
-    _src_root: sys::seL4_CNode,
     src_index: sys::seL4_CPtr,
     src_depth: u8,
     rights: sys::seL4_CapRights,
