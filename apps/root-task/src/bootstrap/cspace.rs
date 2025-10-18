@@ -112,25 +112,24 @@ impl CSpaceCtx {
 
     pub fn mint_root_copy(&mut self) -> Result<(), sys::seL4_Error> {
         let slot = self.alloc_slot();
-        let err = unsafe {
-            sys::seL4_CNode_Mint(
-                self.root_cnode_cap,
-                slot,
-                self.init_cnode_bits as sys::seL4_Word,
-                self.root_cnode_cap,
-                self.root_cnode_cap,
-                self.init_cnode_bits as sys::seL4_Word,
-                sys::seL4_CapRights_All,
-                0,
-            )
-        };
+        let depth = self.init_cnode_bits;
+        let err = sel4::cnode_mint(
+            self.root_cnode_cap,
+            slot,
+            depth,
+            self.root_cnode_cap,
+            self.root_cnode_cap,
+            depth,
+            sys::seL4_CapRights_All,
+            0,
+        );
         if err != sys::seL4_NoError {
             log_cnode_mint_failure(
                 err,
                 slot,
-                self.init_cnode_bits as sys::seL4_Word,
+                depth,
                 self.root_cnode_cap,
-                self.init_cnode_bits as sys::seL4_Word,
+                depth,
                 sys::seL4_CapRights_All,
                 0,
             );
@@ -173,9 +172,9 @@ impl CSpaceCtx {
 fn log_cnode_mint_failure(
     err: sys::seL4_Error,
     dest_slot: sys::seL4_CPtr,
-    dest_depth: sys::seL4_Word,
+    dest_depth: u8,
     src_slot: sys::seL4_CPtr,
-    src_depth: sys::seL4_Word,
+    src_depth: u8,
     rights: sys::seL4_CapRights,
     badge: sys::seL4_Word,
 ) {
@@ -185,9 +184,9 @@ fn log_cnode_mint_failure(
         "CNode_Mint err={code} dest_index=0x{dest_slot:04x} dest_depth={dest_depth} src_index=0x{src_slot:04x} src_depth={src_depth} rights=0x{rights:08x} badge=0x{badge:08x}",
         code = err,
         dest_slot = dest_slot,
-        dest_depth = dest_depth,
+        dest_depth = usize::from(dest_depth),
         src_slot = src_slot,
-        src_depth = src_depth,
+        src_depth = usize::from(src_depth),
         rights = rights.raw(),
         badge = badge,
     );
