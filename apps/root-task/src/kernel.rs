@@ -9,7 +9,11 @@ use core::ptr;
 
 use cohesix_ticket::Role;
 
-use crate::bootstrap::{cspace::CSpace, pick_untyped, retype::retype_one};
+use crate::bootstrap::{
+    cspace::{BootInfoView, CSpaceCtx},
+    pick_untyped,
+    retype::retype_one,
+};
 use crate::event::{AuditSink, EventPump, IpcDispatcher, TickEvent, TicketTable, TimerSource};
 #[cfg(feature = "net")]
 use crate::net::NetStack;
@@ -194,54 +198,49 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
         console.writeln_prefixed(msg.as_str());
     }
 
-    let mut cs = CSpace::from_bootinfo(bootinfo_ref);
-    let writable_root_slot = cs.make_writable_root_copy().unwrap_or_else(|err| {
+    let bi_view = BootInfoView::from(bootinfo_ref);
+    let mut cs = CSpaceCtx::new(bi_view);
+    let (lo, hi) = cs.empty_bounds();
+    let mut cnode_line = heapless::String::<160>::new();
+    let _ = write!(
+        cnode_line,
+        "[root] init_cnode_bits={} empty=[0x{lo:04x}..0x{hi:04x}) root_cnode=seL4_CapInitThreadCNode",
+        cs.init_cnode_bits,
+        lo = lo,
+        hi = hi,
+    );
+    console.writeln_prefixed(cnode_line.as_str());
+
+    cs.mint_root_copy().unwrap_or_else(|err| {
         panic!(
             "failed to mint writable init CNode capability: {} ({})",
             err,
             error_name(err)
         )
     });
-    let (lo, hi) = cs.bounds();
-    sel4::debug_put_char(b'[' as i32);
-    sel4::debug_put_char(((lo & 0xF) as u8 + b'0') as i32);
-    sel4::debug_put_char(((hi & 0xF) as u8 + b'0') as i32);
-    sel4::debug_put_char(b']' as i32);
-    assert_eq!(
-        usize::from(cs.cnode_bits()),
-        bootinfo_ref.initThreadCNodeSizeBits as usize,
-        "init thread CNode depth mismatch"
-    );
-
-    sel4::debug_put_char(b'W' as i32);
-    sel4::debug_put_char(((writable_root_slot & 0xF) as u8 + b'0') as i32);
 
     let mut consumed_slots: usize = 1;
     let endpoint_untyped = pick_untyped(bootinfo_ref, sel4_sys::seL4_EndpointBits as u8);
 
     let endpoint_slot = retype_one(
+        &mut cs,
         endpoint_untyped,
         sel4_sys::seL4_ObjectType::seL4_EndpointObject,
         sel4_sys::seL4_EndpointBits as u8,
-        &mut cs,
     )
     .expect("failed to retype endpoint into init CSpace");
     consumed_slots += 1;
 
-    sel4::debug_put_char(b'E' as i32);
-
     let notification_untyped = pick_untyped(bootinfo_ref, sel4_sys::seL4_NotificationBits as u8);
 
     let notification_slot = retype_one(
+        &mut cs,
         notification_untyped,
         sel4_sys::seL4_ObjectType::seL4_NotificationObject,
         sel4_sys::seL4_NotificationBits as u8,
-        &mut cs,
     )
     .expect("failed to retype notification into init CSpace");
     consumed_slots += 1;
-
-    sel4::debug_put_char(b'N' as i32);
     let _ = endpoint_slot;
     let _ = notification_slot;
 

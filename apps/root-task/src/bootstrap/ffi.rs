@@ -3,71 +3,128 @@
 #![allow(non_camel_case_types)]
 #![allow(unsafe_code)]
 
-use crate::sel4::debug_put_char;
+use core::fmt::Write;
+
+use crate::bootstrap::cspace::CSpaceCtx;
+use crate::sel4::{self, debug_put_char};
+use heapless::String;
 use sel4_sys as sys;
 
-/// Thin wrapper around `seL4_CNode_Mint` that always grants full rights.
-pub fn cnode_mint_allrights(
-    dest_root: sys::seL4_CNode,
-    dest_index: sys::seL4_CPtr,
-    dest_depth_bits: u8,
-    src_root: sys::seL4_CNode,
-    src_index: sys::seL4_CPtr,
-    src_depth_bits: u8,
+const MAX_DIAGNOSTIC_LEN: usize = 224;
+
+pub fn cnode_mint_to_slot(
+    ctx: &CSpaceCtx,
+    dst_slot: sys::seL4_CPtr,
+    src_slot: sys::seL4_CPtr,
+    rights: sys::seL4_CapRights,
+    badge: sys::seL4_Word,
 ) -> sys::seL4_Error {
-    debug_put_char(b'C' as i32);
-    let rights = sys::seL4_CapRights_All;
-    debug_assert_eq!(rights.raw(), sys::seL4_AllRights);
-    unsafe {
+    let err = unsafe {
         sys::seL4_CNode_Mint(
-            dest_root,
-            dest_index,
-            dest_depth_bits,
-            src_root,
-            src_index,
-            src_depth_bits,
+            sys::seL4_CapInitThreadCNode,
+            dst_slot,
+            ctx.init_cnode_bits as sys::seL4_Word,
+            sys::seL4_CapInitThreadCNode,
+            src_slot,
+            ctx.init_cnode_bits as sys::seL4_Word,
             rights,
-            0,
+            badge,
         )
+    };
+    if err != sys::seL4_NoError {
+        log_cnode_mint_failure(
+            err,
+            dst_slot,
+            ctx.init_cnode_bits as sys::seL4_Word,
+            src_slot,
+            ctx.init_cnode_bits as sys::seL4_Word,
+            rights,
+            badge,
+        );
     }
+    err
 }
 
-/// Safe projection of `seL4_CNode_Delete` for bootstrap code paths.
-pub fn cnode_delete(
-    root: sys::seL4_CNode,
-    index: sys::seL4_CPtr,
-    depth_bits: u8,
+pub fn untyped_retype_to_slot(
+    ctx: &CSpaceCtx,
+    untyped_cap: sys::seL4_CPtr,
+    obj_type: sys::seL4_Word,
+    size_bits: sys::seL4_Word,
+    dst_slot: sys::seL4_CPtr,
 ) -> sys::seL4_Error {
-    debug_put_char(b'C' as i32);
-    unsafe { sys::seL4_CNode_Delete(root, index, depth_bits) }
-}
-
-/// Retypes a single kernel object from an untyped capability into the init CSpace.
-pub fn untyped_retype_one(
-    untyped: sys::seL4_Untyped,
-    obj_type: sys::seL4_ObjectType,
-    obj_bits: u8,
-    dest_root: sys::seL4_CNode,
-    _dest_index: sys::seL4_CPtr,
-    _dest_depth_bits: u8,
-    dest_offset: sys::seL4_CPtr,
-) -> sys::seL4_Error {
-    let dest_index: sys::seL4_CPtr = 0;
-    let dest_depth_bits: sys::seL4_Word = 0;
-    // SAFETY: The wrapper fixes the argument ordering to match the seL4 C API and supplies
-    // exactly one object with zero offset. The kernel contract for these arguments is upheld
-    // by the callers in the bootstrap sequence. Invocation-style addressing keeps the
-    // destination path rooted at `dest_root` and bypasses any nested CNode traversal.
-    unsafe {
+    let err = unsafe {
         sys::seL4_Untyped_Retype(
-            untyped,
-            obj_type as sys::seL4_Word,
-            obj_bits as sys::seL4_Word,
-            dest_root,
-            dest_index,
-            dest_depth_bits,
-            dest_offset as sys::seL4_Word,
+            untyped_cap,
+            obj_type,
+            size_bits,
+            sys::seL4_CapInitThreadCNode,
+            sys::seL4_CapInitThreadCNode,
+            ctx.init_cnode_bits as sys::seL4_Word,
+            dst_slot,
             1,
         )
+    };
+    if err != sys::seL4_NoError {
+        log_untyped_retype_failure(
+            err,
+            untyped_cap,
+            obj_type,
+            size_bits,
+            dst_slot,
+            ctx.init_cnode_bits as sys::seL4_Word,
+        );
     }
+    err
+}
+
+fn log_cnode_mint_failure(
+    err: sys::seL4_Error,
+    dest_index: sys::seL4_CPtr,
+    dest_depth: sys::seL4_Word,
+    src_index: sys::seL4_CPtr,
+    src_depth: sys::seL4_Word,
+    rights: sys::seL4_CapRights,
+    badge: sys::seL4_Word,
+) {
+    let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
+    let _ = write!(
+        &mut line,
+        "CNode_Mint err={code} dest_index=0x{dest:04x} dest_depth={dest_depth} dest_root=seL4_CapInitThreadCNode \\n                 src_index=0x{src:04x} src_depth={src_depth} src_root=seL4_CapInitThreadCNode rights=0x{rights:08x} badge=0x{badge:08x}",
+        code = err,
+        dest = dest_index,
+        dest_depth = dest_depth,
+        src = src_index,
+        src_depth = src_depth,
+        rights = rights.raw(),
+        badge = badge,
+    );
+    for byte in line.as_bytes() {
+        debug_put_char(*byte as i32);
+    }
+    debug_put_char(b'\n' as i32);
+}
+
+fn log_untyped_retype_failure(
+    err: sys::seL4_Error,
+    untyped: sys::seL4_CPtr,
+    obj_type: sys::seL4_Word,
+    obj_bits: sys::seL4_Word,
+    dest_slot: sys::seL4_CPtr,
+    guard_depth: sys::seL4_Word,
+) {
+    let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
+    let _ = write!(
+        &mut line,
+        "Untyped_Retype err={code} dest_index=seL4_CapInitThreadCNode dest_depth={guard_depth} dest_offset=0x{dest_slot:04x} \\n                 src_untyped=0x{untyped:08x} obj_type=0x{obj_type:08x} obj_bits={obj_bits}",
+        code = err,
+        guard_depth = guard_depth,
+        dest_slot = dest_slot,
+        untyped = untyped,
+        obj_type = obj_type,
+        obj_bits = obj_bits,
+    );
+    for byte in line.as_bytes() {
+        sel4::debug_put_char(*byte as i32);
+    }
+    sel4::debug_put_char(b'\n' as i32);
 }

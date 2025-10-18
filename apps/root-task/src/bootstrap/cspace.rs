@@ -1,52 +1,156 @@
 // Author: Lukas Bower
 
 use crate::sel4::{self, BootInfo};
+use core::fmt::Write;
+use heapless::String;
 use sel4_sys as sys;
 
-/// Minimal capability-space allocator backed by the init thread's root CNode.
+const MAX_DIAGNOSTIC_LEN: usize = 192;
+
+/// Lightweight projection of [`seL4_BootInfo`] exposing capability-space fields.
 #[derive(Copy, Clone)]
-pub struct CSpace {
-    /// Capability pointer referencing the init thread's CSpace root CNode.
-    pub root: sys::seL4_CPtr,
-    /// Slot index holding the writable init thread CNode capability.
-    root_slot: sys::seL4_CPtr,
-    /// Slot index holding an all-rights copy of the init thread CNode capability.
-    root_writable_slot: Option<sys::seL4_CPtr>,
-    /// Power-of-two size of the root CNode expressed as the number of address bits.
-    cnode_bits: u8,
-    /// Inclusive start of the bootinfo-declared free slot window.
-    empty_start: sys::seL4_CPtr,
-    /// Exclusive end of the bootinfo-declared free slot window.
-    empty_end: sys::seL4_CPtr,
-    /// Next slot candidate handed out by the bump allocator.
-    next: sys::seL4_CPtr,
+pub struct BootInfoView {
+    bootinfo: &'static BootInfo,
 }
 
-impl CSpace {
-    /// Constructs a bump allocator spanning the bootinfo-advertised empty slot window.
-    pub fn from_bootinfo(bi: &'static BootInfo) -> Self {
-        let root = sys::seL4_CapInitThreadCNode;
-        let root_slot = sys::seL4_CapInitThreadCNode;
-        let cnode_bits = bi.initThreadCNodeSizeBits as u8;
-        let empty_start = bi.empty.start as sys::seL4_CPtr;
-        let empty_end = bi.empty.end as sys::seL4_CPtr;
+impl BootInfoView {
+    #[inline(always)]
+    pub fn new(bootinfo: &'static BootInfo) -> Self {
+        Self { bootinfo }
+    }
+
+    #[inline(always)]
+    pub fn init_cnode_bits(&self) -> u8 {
+        self.bootinfo.initThreadCNodeSizeBits as u8
+    }
+
+    #[inline(always)]
+    pub fn empty_start(&self) -> sys::seL4_CPtr {
+        self.bootinfo.empty.start as sys::seL4_CPtr
+    }
+
+    #[inline(always)]
+    pub fn empty_end(&self) -> sys::seL4_CPtr {
+        self.bootinfo.empty.end as sys::seL4_CPtr
+    }
+
+    #[inline(always)]
+    pub fn root_cnode_cap(&self) -> sys::seL4_CPtr {
+        sys::seL4_CapInitThreadCNode
+    }
+}
+
+impl From<&'static BootInfo> for BootInfoView {
+    fn from(value: &'static BootInfo) -> Self {
+        Self::new(value)
+    }
+}
+
+/// Canonical CSpace context using direct addressing for all seL4 CNode operations.
+pub struct CSpaceCtx {
+    pub bi: BootInfoView,
+    pub init_cnode_bits: u8,
+    pub first_free: sys::seL4_CPtr,
+    pub last_free: sys::seL4_CPtr,
+    pub root_cnode_cap: sys::seL4_CPtr,
+    pub root_cnode_copy_slot: sys::seL4_CPtr,
+    next_slot: sys::seL4_CPtr,
+}
+
+impl CSpaceCtx {
+    pub fn new(bi: BootInfoView) -> Self {
+        let init_cnode_bits = bi.init_cnode_bits();
+        let first_free = bi.empty_start();
+        let last_free = bi.empty_end();
+        let root_cnode_cap = bi.root_cnode_cap();
         Self {
-            root,
-            root_slot,
-            root_writable_slot: None,
-            cnode_bits,
-            empty_start,
-            empty_end,
-            next: empty_start,
+            bi,
+            init_cnode_bits,
+            first_free,
+            last_free,
+            root_cnode_cap,
+            root_cnode_copy_slot: sys::seL4_CapNull,
+            next_slot: first_free,
         }
     }
 
+    #[inline(always)]
     fn slot_in_bounds(&self, slot: sys::seL4_CPtr) -> bool {
-        slot >= self.empty_start && slot < self.empty_end
+        slot >= self.first_free && slot < self.last_free
     }
 
-    /// Returns `true` when the provided slot index references a kernel-reserved
-    /// capability.
+    #[inline(always)]
+    fn assert_slot_available(&self, slot: sys::seL4_CPtr) {
+        assert!(
+            self.slot_in_bounds(slot),
+            "allocated slot 0x{slot:04x} outside bootinfo.empty range [0x{lo:04x}..0x{hi:04x})",
+            slot = slot,
+            lo = self.first_free,
+            hi = self.last_free,
+        );
+        assert!(
+            !Self::is_reserved_slot(slot),
+            "attempted to allocate reserved capability slot 0x{slot:04x}",
+            slot = slot,
+        );
+    }
+
+    pub fn alloc_slot(&mut self) -> sys::seL4_CPtr {
+        let mut slot = self.next_slot;
+        while slot < self.last_free && Self::is_reserved_slot(slot) {
+            slot += 1;
+        }
+        self.assert_slot_available(slot);
+        self.next_slot = slot.saturating_add(1);
+        slot
+    }
+
+    #[inline(always)]
+    pub fn empty_bounds(&self) -> (sys::seL4_CPtr, sys::seL4_CPtr) {
+        (self.first_free, self.last_free)
+    }
+
+    pub fn mint_root_copy(&mut self) -> Result<(), sys::seL4_Error> {
+        let slot = self.alloc_slot();
+        let err = unsafe {
+            sys::seL4_CNode_Mint(
+                self.root_cnode_cap,
+                slot,
+                self.init_cnode_bits as sys::seL4_Word,
+                self.root_cnode_cap,
+                self.root_cnode_cap,
+                self.init_cnode_bits as sys::seL4_Word,
+                sys::seL4_CapRights_All,
+                0,
+            )
+        };
+        if err != sys::seL4_NoError {
+            log_cnode_mint_failure(
+                err,
+                slot,
+                self.init_cnode_bits as sys::seL4_Word,
+                self.root_cnode_cap,
+                self.init_cnode_bits as sys::seL4_Word,
+                sys::seL4_CapRights_All,
+                0,
+            );
+            return Err(err);
+        }
+        self.root_cnode_copy_slot = slot;
+        Ok(())
+    }
+
+    #[inline(always)]
+    pub fn next_candidate_slot(&self) -> sys::seL4_CPtr {
+        self.next_slot
+    }
+
+    #[inline(always)]
+    pub fn remaining_capacity(&self) -> sys::seL4_CPtr {
+        self.last_free.saturating_sub(self.next_slot)
+    }
+
+    /// Returns `true` when the provided slot index references a kernel-reserved capability.
     #[inline(always)]
     pub fn is_reserved_slot(slot: sys::seL4_CPtr) -> bool {
         matches!(
@@ -64,96 +168,31 @@ impl CSpace {
                 | sys::seL4_CapInitThreadIPCBuffer
         )
     }
+}
 
-    /// Reserves the next capability slot within the bootinfo span.
-    pub fn alloc_slot(&mut self) -> Option<sys::seL4_CPtr> {
-        if self.next >= self.empty_end {
-            return None;
-        }
-        let mut slot = self.next;
-        while slot < self.empty_end {
-            if Self::is_reserved_slot(slot) {
-                slot += 1;
-                continue;
-            }
-            break;
-        }
-        if slot >= self.empty_end {
-            self.next = self.empty_end;
-            return None;
-        }
-        debug_assert!(self.is_empty_slot(slot));
-        self.next = slot + 1;
-        Some(slot)
+fn log_cnode_mint_failure(
+    err: sys::seL4_Error,
+    dest_slot: sys::seL4_CPtr,
+    dest_depth: sys::seL4_Word,
+    src_slot: sys::seL4_CPtr,
+    src_depth: sys::seL4_Word,
+    rights: sys::seL4_CapRights,
+    badge: sys::seL4_Word,
+) {
+    let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
+    let _ = write!(
+        &mut line,
+        "CNode_Mint err={code} dest_index=0x{dest_slot:04x} dest_depth={dest_depth} src_index=0x{src_slot:04x} src_depth={src_depth} rights=0x{rights:08x} badge=0x{badge:08x}",
+        code = err,
+        dest_slot = dest_slot,
+        dest_depth = dest_depth,
+        src_slot = src_slot,
+        src_depth = src_depth,
+        rights = rights.raw(),
+        badge = badge,
+    );
+    for byte in line.as_bytes() {
+        sel4::debug_put_char(*byte as i32);
     }
-
-    /// Returns the inclusive start and exclusive end of the managed slot window.
-    pub fn bounds(&self) -> (sys::seL4_CPtr, sys::seL4_CPtr) {
-        (self.empty_start, self.empty_end)
-    }
-
-    /// Returns true when the slot still carries the kernel's bootinfo null capability.
-    #[inline(always)]
-    pub fn is_empty_slot(&self, slot: sys::seL4_CPtr) -> bool {
-        slot >= self.next && slot < self.empty_end
-    }
-
-    /// Returns the slot index referencing the init thread's root CNode capability.
-    #[inline(always)]
-    pub fn root_slot(&self) -> sys::seL4_CPtr {
-        self.root_slot
-    }
-
-    /// Returns the slot index containing an all-rights copy of the init thread CNode.
-    #[inline(always)]
-    pub fn root_writable(&self) -> sys::seL4_CPtr {
-        self.root_writable_slot
-            .expect("writable init CNode capability must be minted before use")
-    }
-
-    /// Returns the guard depth (in bits) used when addressing the init CSpace root.
-    #[inline(always)]
-    pub fn guard_depth_bits(&self) -> u8 {
-        0
-    }
-
-    /// Returns the number of address bits describing the root CNode's slot capacity.
-    #[inline(always)]
-    pub fn cnode_bits(&self) -> u8 {
-        self.cnode_bits
-    }
-
-    /// Copies the init thread's root CNode capability with full write permissions.
-    pub fn make_writable_root_copy(&mut self) -> Result<sys::seL4_CPtr, sys::seL4_Error> {
-        if let Some(slot) = self.root_writable_slot {
-            return Ok(slot);
-        }
-
-        let Some(slot) = self.alloc_slot() else {
-            return Err(sys::seL4_NotEnoughMemory);
-        };
-        assert!(
-            self.slot_in_bounds(slot),
-            "writable root CNode slot is outside bootinfo.empty"
-        );
-        assert!(
-            !Self::is_reserved_slot(slot),
-            "attempted to reuse reserved capability slot for writable root copy"
-        );
-
-        let err = sel4::cnode_copy(
-            sys::seL4_CapInitThreadCNode,
-            slot,
-            0,
-            sys::seL4_CapInitThreadCNode,
-            sys::seL4_CapInitThreadCNode,
-            0,
-            sys::seL4_CapRights_All,
-        );
-        if err != sys::seL4_NoError {
-            return Err(err);
-        }
-        self.root_writable_slot = Some(slot);
-        Ok(slot)
-    }
+    sel4::debug_put_char(b'\n' as i32);
 }
