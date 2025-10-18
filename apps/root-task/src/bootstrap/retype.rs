@@ -22,7 +22,7 @@ pub fn retype_one(
     }
 
     // Retype — if THIS fails, we print 'R' and dump params
-    let node_index = cs.root_slot();
+    let node_index = 0;
     let guard_depth = cs.guard_depth_bits();
     let dest_offset = slot;
     let err = untyped_retype_one(
