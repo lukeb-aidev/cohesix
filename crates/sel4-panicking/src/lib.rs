@@ -135,7 +135,11 @@ where
 {
 }
 
-#[panic_handler]
+#[cfg_attr(all(not(test), target_os = "none"), panic_handler)]
+#[cfg_attr(
+    not(all(not(test), target_os = "none")),
+    allow(dead_code)
+)]
 fn panic(info: &PanicInfo) -> ! {
     let mut writer = DebugWriter;
     let _ = writeln!(writer, "[sel4-panicking] panic: {info}");
