@@ -172,6 +172,28 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
     let bootinfo_ref: &'static sel4_sys::seL4_BootInfo = bootinfo;
     bootinfo_debug_dump(bootinfo_ref);
 
+    unsafe {
+        #[cfg(all(feature = "kernel", target_arch = "aarch64"))]
+        {
+            sel4_sys::tls_set_base(core::ptr::addr_of_mut!(TLS_IMAGE));
+            debug_assert!(
+                sel4_sys::tls_image_mut().is_some(),
+                "TLS base must resolve to an image after installation",
+            );
+        }
+
+        let ipc_ptr = bootinfo_ref.ipcBuffer as *mut sel4_sys::seL4_IPCBuffer;
+        ptr::write_bytes(
+            ipc_ptr.cast::<u8>(),
+            0,
+            mem::size_of::<sel4_sys::seL4_IPCBuffer>(),
+        );
+        sel4_sys::seL4_SetIPCBuffer(ipc_ptr);
+        let mut msg = heapless::String::<64>::new();
+        let _ = write!(msg, "ipc buffer ptr=0x{:016x}", ipc_ptr as usize);
+        console.writeln_prefixed(msg.as_str());
+    }
+
     let mut cs = CSpace::from_bootinfo(bootinfo_ref);
     let (lo, hi) = cs.bounds();
     sel4::debug_put_char(b'[' as i32);
@@ -226,27 +248,6 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
         bits = bootinfo_ref.init_cnode_bits(),
     );
     console.writeln_prefixed(cnode_line.as_str());
-    unsafe {
-        #[cfg(all(feature = "kernel", target_arch = "aarch64"))]
-        {
-            sel4_sys::tls_set_base(core::ptr::addr_of_mut!(TLS_IMAGE));
-            debug_assert!(
-                sel4_sys::tls_image_mut().is_some(),
-                "TLS base must resolve to an image after installation",
-            );
-        }
-
-        let ipc_ptr = bootinfo_ref.ipcBuffer as *mut sel4_sys::seL4_IPCBuffer;
-        ptr::write_bytes(
-            ipc_ptr.cast::<u8>(),
-            0,
-            mem::size_of::<sel4_sys::seL4_IPCBuffer>(),
-        );
-        sel4_sys::seL4_SetIPCBuffer(ipc_ptr);
-        let mut msg = heapless::String::<64>::new();
-        let _ = write!(msg, "ipc buffer ptr=0x{:016x}", ipc_ptr as usize);
-        console.writeln_prefixed(msg.as_str());
-    }
     let mut env = KernelEnv::new(bootinfo_ref);
     if consumed_slots > 0 {
         env.consume_bootstrap_slots(consumed_slots);
