@@ -19,28 +19,19 @@ pub fn cnode_mint_to_slot(
     rights: sys::seL4_CapRights,
     badge: sys::seL4_Word,
 ) -> sys::seL4_Error {
-    let err = unsafe {
-        sys::seL4_CNode_Mint(
-            sys::seL4_CapInitThreadCNode,
-            dst_slot,
-            ctx.init_cnode_bits as sys::seL4_Word,
-            sys::seL4_CapInitThreadCNode,
-            src_slot,
-            ctx.init_cnode_bits as sys::seL4_Word,
-            rights,
-            badge,
-        )
-    };
+    let depth = ctx.init_cnode_bits;
+    let err = sel4::cnode_mint(
+        sys::seL4_CapInitThreadCNode,
+        dst_slot,
+        depth,
+        sys::seL4_CapInitThreadCNode,
+        src_slot,
+        depth,
+        rights,
+        badge,
+    );
     if err != sys::seL4_NoError {
-        log_cnode_mint_failure(
-            err,
-            dst_slot,
-            ctx.init_cnode_bits as sys::seL4_Word,
-            src_slot,
-            ctx.init_cnode_bits as sys::seL4_Word,
-            rights,
-            badge,
-        );
+        log_cnode_mint_failure(err, dst_slot, depth, src_slot, depth, rights, badge);
     }
     err
 }
@@ -80,9 +71,9 @@ pub fn untyped_retype_to_slot(
 fn log_cnode_mint_failure(
     err: sys::seL4_Error,
     dest_index: sys::seL4_CPtr,
-    dest_depth: sys::seL4_Word,
+    dest_depth: u8,
     src_index: sys::seL4_CPtr,
-    src_depth: sys::seL4_Word,
+    src_depth: u8,
     rights: sys::seL4_CapRights,
     badge: sys::seL4_Word,
 ) {
@@ -92,9 +83,9 @@ fn log_cnode_mint_failure(
         "CNode_Mint err={code} dest_index=0x{dest:04x} dest_depth={dest_depth} dest_root=seL4_CapInitThreadCNode \\n                 src_index=0x{src:04x} src_depth={src_depth} src_root=seL4_CapInitThreadCNode rights=0x{rights:08x} badge=0x{badge:08x}",
         code = err,
         dest = dest_index,
-        dest_depth = dest_depth,
+        dest_depth = usize::from(dest_depth),
         src = src_index,
-        src_depth = src_depth,
+        src_depth = usize::from(src_depth),
         rights = rights.raw(),
         badge = badge,
     );

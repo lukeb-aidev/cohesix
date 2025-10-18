@@ -18,7 +18,6 @@ use crate::event::{AuditSink, EventPump, IpcDispatcher, TickEvent, TicketTable, 
 #[cfg(feature = "net")]
 use crate::net::NetStack;
 use crate::platform::{Platform, SeL4Platform};
-use crate::sel4;
 use crate::sel4::{
     bootinfo_debug_dump, error_name, BootInfo, BootInfoExt, KernelEnv, RetypeKind, RetypeStatus,
 };
