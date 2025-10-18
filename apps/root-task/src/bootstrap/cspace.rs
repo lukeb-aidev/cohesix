@@ -3,6 +3,7 @@
 use crate::sel4::{self, BootInfo};
 use core::fmt::Write;
 use heapless::String;
+use sel4_sys::seL4_CapRights_new;
 
 use super::cspace_sys;
 
@@ -58,6 +59,18 @@ pub struct CSpaceCtx {
     next_slot: sel4::seL4_CPtr,
 }
 
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub enum SlotAllocError {
+    OutOfBootWindow {
+        candidate: sel4::seL4_CPtr,
+        start: sel4::seL4_CPtr,
+        end: sel4::seL4_CPtr,
+    },
+    ReservedSlot {
+        slot: sel4::seL4_CPtr,
+    },
+}
+
 impl CSpaceCtx {
     pub fn new(bi: BootInfoView) -> Self {
         let init_cnode_bits = bi.init_cnode_bits();
@@ -97,30 +110,36 @@ impl CSpaceCtx {
         slot >= self.first_free && slot < self.last_free
     }
 
-    #[inline(always)]
-    fn assert_slot_available(&self, slot: sel4::seL4_CPtr) {
-        assert!(
-            self.slot_in_bounds(slot),
-            "allocated slot 0x{slot:04x} outside bootinfo.empty range [0x{lo:04x}..0x{hi:04x})",
-            slot = slot,
-            lo = self.first_free,
-            hi = self.last_free,
-        );
-        assert!(
-            !Self::is_reserved_slot(slot),
-            "attempted to allocate reserved capability slot 0x{slot:04x}",
-            slot = slot,
-        );
-    }
-
-    pub fn alloc_slot(&mut self) -> sel4::seL4_CPtr {
+    pub fn alloc_slot_checked(&mut self) -> Result<sel4::seL4_CPtr, SlotAllocError> {
         let mut slot = self.next_slot;
         while slot < self.last_free && Self::is_reserved_slot(slot) {
             slot += 1;
         }
-        self.assert_slot_available(slot);
+
+        if !self.slot_in_bounds(slot) {
+            return Err(SlotAllocError::OutOfBootWindow {
+                candidate: slot,
+                start: self.first_free,
+                end: self.last_free,
+            });
+        }
+
+        if Self::is_reserved_slot(slot) {
+            return Err(SlotAllocError::ReservedSlot { slot });
+        }
+
         self.next_slot = slot.saturating_add(1);
-        slot
+        Ok(slot)
+    }
+
+    pub fn alloc_slot(&mut self) -> sel4::seL4_CPtr {
+        match self.alloc_slot_checked() {
+            Ok(slot) => slot,
+            Err(err) => {
+                self.log_slot_failure(err);
+                panic!("boot CSpace exhausted while allocating slot: {:?}", err);
+            }
+        }
     }
 
     #[inline(always)]
@@ -128,30 +147,39 @@ impl CSpaceCtx {
         (self.first_free, self.last_free)
     }
 
+    #[inline(always)]
+    pub fn log_slot_failure(&self, err: SlotAllocError) {
+        log_slot_allocation_failure(err, self.first_free, self.last_free);
+    }
+
     pub fn mint_root_cnode_copy(&mut self) -> Result<(), sel4::seL4_Error> {
-        let slot = self.alloc_slot();
-        let depth = self.init_cnode_bits;
-        let err = cspace_sys::cnode_mint_direct(
+        let slot = match self.alloc_slot_checked() {
+            Ok(slot) => slot,
+            Err(err) => {
+                self.log_slot_failure(err);
+                return Err(sel4_sys::seL4_RangeError);
+            }
+        };
+        let rights = seL4_CapRights_new(1, 1, 1);
+        let src_slot = sel4::seL4_CapInitThreadCNode;
+        let err = cspace_sys::cnode_mint_invocation(
             self.root_cnode_cap,
-            0,
-            depth,
-            self.root_cnode_cap,
-            self.root_cnode_cap,
-            depth,
-            sel4::seL4_CapRights_All,
-            0,
             slot,
+            self.root_cnode_cap,
+            src_slot,
+            rights,
+            0,
         );
         if err != sel4::seL4_NoError {
             log_cnode_mint_failure(
                 err,
+                slot,
                 0,
-                depth,
                 slot,
                 self.root_cnode_cap,
-                self.root_cnode_cap,
-                depth,
-                sel4::seL4_CapRights_All,
+                src_slot,
+                0,
+                rights,
                 0,
             );
             return Err(err);
@@ -166,13 +194,11 @@ impl CSpaceCtx {
         size_bits: sel4::seL4_Word,
         dst_slot: sel4::seL4_CPtr,
     ) -> sel4::seL4_Error {
-        cspace_sys::untyped_retype_direct(
+        cspace_sys::untyped_retype_invocation(
             untyped,
             obj_ty,
             size_bits,
             self.root_cnode_cap,
-            0,
-            self.init_cnode_bits,
             dst_slot,
         )
     }
@@ -231,6 +257,45 @@ fn log_cnode_mint_failure(
         rights = rights.raw(),
         badge = badge,
     );
+    for byte in line.as_bytes() {
+        sel4::debug_put_char(*byte as i32);
+    }
+    sel4::debug_put_char(b'\n' as i32);
+}
+
+fn log_slot_allocation_failure(
+    err: SlotAllocError,
+    empty_start: sel4::seL4_CPtr,
+    empty_end: sel4::seL4_CPtr,
+) {
+    let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
+    match err {
+        SlotAllocError::OutOfBootWindow {
+            candidate,
+            start,
+            end,
+        } => {
+            let _ = write!(
+                &mut line,
+                "[cnode] op=SlotAlloc err=out_of_boot_window candidate=0x{candidate:04x} declared.empty=[0x{start:04x}..0x{end:04x}) runtime.empty=[0x{lo:04x}..0x{hi:04x})",
+                candidate = candidate,
+                start = start,
+                end = end,
+                lo = empty_start,
+                hi = empty_end,
+            );
+        }
+        SlotAllocError::ReservedSlot { slot } => {
+            let _ = write!(
+                &mut line,
+                "[cnode] op=SlotAlloc err=reserved_slot slot=0x{slot:04x} runtime.empty=[0x{lo:04x}..0x{hi:04x})",
+                slot = slot,
+                lo = empty_start,
+                hi = empty_end,
+            );
+        }
+    }
+
     for byte in line.as_bytes() {
         sel4::debug_put_char(*byte as i32);
     }

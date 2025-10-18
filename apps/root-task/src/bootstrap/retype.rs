@@ -17,13 +17,13 @@ pub fn retype_one(
     obj_type: sys::seL4_ObjectType,
     obj_bits: u8,
 ) -> Result<sys::seL4_CPtr, sys::seL4_Error> {
-    let slot = ctx.alloc_slot();
-    let (lo, hi) = ctx.empty_bounds();
-    assert!(slot >= lo && slot < hi, "dest slot out of bootinfo.empty");
-    assert!(
-        !CSpaceCtx::is_reserved_slot(slot),
-        "attempted to allocate into a reserved capability slot",
-    );
+    let slot = match ctx.alloc_slot_checked() {
+        Ok(slot) => slot,
+        Err(err) => {
+            ctx.log_slot_failure(err);
+            return Err(sys::seL4_RangeError);
+        }
+    };
 
     let err = ctx.retype_to_slot(
         untyped,
@@ -32,16 +32,8 @@ pub fn retype_one(
         slot,
     );
     if err != sys::seL4_NoError {
-        log_retype_failure(
-            err,
-            untyped,
-            obj_type,
-            obj_bits,
-            slot,
-            ctx.init_cnode_bits as sys::seL4_Word,
-            lo,
-            hi,
-        );
+        let (lo, hi) = ctx.empty_bounds();
+        log_retype_failure(err, untyped, obj_type, obj_bits, slot, 0, lo, hi);
         return Err(err);
     }
 
@@ -61,7 +53,7 @@ fn log_retype_failure(
     let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
     let _ = write!(
         &mut line,
-        "Untyped_Retype err={code} dest_index=seL4_CapInitThreadCNode dest_depth={guard_depth} dest_offset=0x{dest_slot:04x} \\n         src_untyped=0x{untyped:08x} obj_type={obj_type:?} obj_bits={obj_bits} boot.empty.lo=0x{empty_lo:08x} boot.empty.hi=0x{empty_hi:08x}",
+        "Untyped_Retype err={code} dest_index=0x{dest_slot:04x} dest_depth={guard_depth} dest_offset=0x{dest_slot:04x} \\n         src_untyped=0x{untyped:08x} obj_type={obj_type:?} obj_bits={obj_bits} boot.empty.lo=0x{empty_lo:08x} boot.empty.hi=0x{empty_hi:08x}",
         code = err,
         guard_depth = guard_depth,
         dest_slot = dest_slot,
