@@ -21,13 +21,15 @@ pub fn cnode_mint_to_slot(
     rights: sys::seL4_CapRights,
     badge: sys::seL4_Word,
 ) -> sys::seL4_Error {
-    let depth = ctx.init_cnode_bits;
     let dest_root = ctx.root_cnode_cap;
-    let err = cspace_sys::cnode_mint_direct(
-        dest_root, 0, depth, dest_root, src_slot, depth, rights, badge, dst_slot,
-    );
+    let dest_depth = 0u8;
+    let src_depth = 0u8;
+    let err =
+        cspace_sys::cnode_mint_invocation(dest_root, dst_slot, dest_root, src_slot, rights, badge);
     if err != sys::seL4_NoError {
-        log_cnode_mint_failure(err, 0, depth, dst_slot, src_slot, depth, rights, badge);
+        log_cnode_mint_failure(
+            err, dst_slot, dest_depth, dst_slot, src_slot, src_depth, rights, badge,
+        );
     }
     err
 }
@@ -40,14 +42,12 @@ pub fn untyped_retype_to_slot(
     dst_slot: sys::seL4_CPtr,
 ) -> sys::seL4_Error {
     let dest_root = ctx.root_cnode_cap;
-    let depth = ctx.init_cnode_bits;
-    let err = cspace_sys::untyped_retype_direct(
+    let dest_depth = 0u8;
+    let err = cspace_sys::untyped_retype_invocation(
         untyped_cap,
         obj_type,
         size_bits,
         dest_root,
-        0,
-        depth,
         dst_slot,
     );
     if err != sys::seL4_NoError {
@@ -58,7 +58,7 @@ pub fn untyped_retype_to_slot(
             size_bits,
             dst_slot,
             dest_root,
-            depth,
+            dest_depth,
         );
     }
     err
@@ -105,7 +105,7 @@ fn log_untyped_retype_failure(
     let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
     let _ = write!(
         &mut line,
-        "[cnode] op=Retype err={code} dest_index=0 dest_depth={guard_depth} dest_offset=0x{dest_slot:04x} src_untyped=0x{untyped:08x} obj_type=0x{obj_type:08x} obj_bits={obj_bits}",
+        "[cnode] op=Retype err={code} dest_index=0x{dest_slot:04x} dest_depth={guard_depth} dest_offset=0x{dest_slot:04x} src_untyped=0x{untyped:08x} obj_type=0x{obj_type:08x} obj_bits={obj_bits}",
         code = err,
         guard_depth = guard_depth,
         dest_slot = dest_slot,
