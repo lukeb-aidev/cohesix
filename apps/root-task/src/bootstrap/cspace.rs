@@ -3,7 +3,7 @@
 use crate::sel4::{self, BootInfo};
 use core::fmt::Write;
 use heapless::String;
-use sel4_sys::seL4_CapRights_new;
+use sel4_sys::seL4_CapRights_All;
 
 use super::cspace_sys;
 
@@ -160,7 +160,7 @@ impl CSpaceCtx {
                 return Err(sel4_sys::seL4_RangeError);
             }
         };
-        let rights = seL4_CapRights_new(1, 1, 1);
+        let rights = seL4_CapRights_All;
         let src_slot = sel4::seL4_CapInitThreadCNode;
         let err = cspace_sys::cnode_mint_invocation(
             self.root_cnode_cap,
