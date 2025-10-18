@@ -8,12 +8,19 @@
 use core::{fmt, mem, ptr::NonNull};
 
 use heapless::Vec;
+pub use sel4_sys::{
+    seL4_AllRights, seL4_CNode, seL4_CNode_Mint, seL4_CPtr, seL4_CapASIDControl,
+    seL4_CapBootInfoFrame, seL4_CapInitThreadASIDPool, seL4_CapInitThreadCNode,
+    seL4_CapInitThreadIPCBuffer, seL4_CapInitThreadTCB, seL4_CapInitThreadVSpace,
+    seL4_CapIOPortControl, seL4_CapIOSpace, seL4_CapIRQControl, seL4_CapNull,
+    seL4_CapRights, seL4_CapRights_All, seL4_CapRights_ReadWrite, seL4_Error, seL4_NoError,
+    seL4_Untyped, seL4_Untyped_Retype, seL4_Word,
+};
+
 use sel4_sys::{
     seL4_ARM_PageTableObject, seL4_ARM_PageTable_Map, seL4_ARM_Page_Default, seL4_ARM_Page_Map,
-    seL4_ARM_Page_Uncached, seL4_BootInfo, seL4_CNode, seL4_CNode_Copy, seL4_CNode_Delete,
-    seL4_CNode_Mint, seL4_CPtr, seL4_CapRights_ReadWrite, seL4_NoError, seL4_NotEnoughMemory,
-    seL4_ObjectType, seL4_SlotRegion, seL4_Untyped, seL4_Untyped_Retype, seL4_Word, UntypedDesc,
-    MAX_BOOTINFO_UNTYPEDS,
+    seL4_ARM_Page_Uncached, seL4_BootInfo, seL4_CNode_Copy, seL4_CNode_Delete, seL4_NotEnoughMemory,
+    seL4_ObjectType, seL4_SlotRegion, UntypedDesc, MAX_BOOTINFO_UNTYPEDS,
 };
 
 #[cfg(feature = "kernel")]
@@ -178,12 +185,6 @@ compile_error!("This path currently expects AArch64; wire correct ARM object typ
 
 const _: () = {
     let _check: [u8; core::mem::size_of::<seL4_Word>()] = [0; core::mem::size_of::<usize>()];
-};
-
-pub use sel4_sys::{
-    seL4_AllRights, seL4_CNode, seL4_CNode_Mint, seL4_CPtr, seL4_CapInitThreadCNode,
-    seL4_CapInitThreadVSpace, seL4_CapRights, seL4_CapRights_All, seL4_CapRights_ReadWrite,
-    seL4_Error, seL4_NoError, seL4_Untyped, seL4_Untyped_Retype, seL4_Word,
 };
 
 /// Extension trait exposing bootinfo fields and derived values used by the root task.
