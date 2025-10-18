@@ -632,8 +632,9 @@ mod imp {
         src_depth: seL4_Uint8,
         rights: seL4_CapRights,
         badge: seL4_Word,
+        dest_offset: seL4_CPtr,
     ) -> seL4_Error {
-        let msg = seL4_MessageInfo::new(SEL4_CNODE_MINT, 0, 1, 6);
+        let msg = seL4_MessageInfo::new(SEL4_CNODE_MINT, 0, 1, 7);
         let mut mr0 = dest_index;
         let mut mr1 = dest_depth as seL4_Word;
         let mut mr2 = src_index;
@@ -642,6 +643,7 @@ mod imp {
         seL4_SetCap(0, src_root);
         seL4_SetMR(4, rights.raw());
         seL4_SetMR(5, badge);
+        seL4_SetMR(6, dest_offset);
 
         let info = seL4_CallWithMRs(dest_root, msg, &mut mr0, &mut mr1, &mut mr2, &mut mr3);
 
@@ -904,6 +906,7 @@ mod host_stub {
         _src_depth: seL4_Uint8,
         _rights: seL4_CapRights,
         _badge: seL4_Word,
+        _dest_offset: seL4_CPtr,
     ) -> seL4_Error {
         unsupported();
     }

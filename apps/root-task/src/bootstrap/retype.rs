@@ -7,7 +7,6 @@ use heapless::String;
 use sel4_sys as sys;
 
 use super::cspace::CSpaceCtx;
-use super::ffi::untyped_retype_to_slot;
 
 const MAX_DIAGNOSTIC_LEN: usize = 256;
 
@@ -26,8 +25,7 @@ pub fn retype_one(
         "attempted to allocate into a reserved capability slot",
     );
 
-    let err = untyped_retype_to_slot(
-        ctx,
+    let err = ctx.retype_to_slot(
         untyped,
         obj_type as sys::seL4_Word,
         obj_bits as sys::seL4_Word,

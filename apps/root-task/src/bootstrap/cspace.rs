@@ -3,7 +3,6 @@
 use crate::sel4::{self, BootInfo};
 use core::fmt::Write;
 use heapless::String;
-use sel4_sys as sys;
 
 use super::cspace_sys;
 
@@ -27,18 +26,18 @@ impl BootInfoView {
     }
 
     #[inline(always)]
-    pub fn empty_start(&self) -> sys::seL4_CPtr {
-        self.bootinfo.empty.start as sys::seL4_CPtr
+    pub fn empty_start(&self) -> sel4::seL4_CPtr {
+        self.bootinfo.empty.start as sel4::seL4_CPtr
     }
 
     #[inline(always)]
-    pub fn empty_end(&self) -> sys::seL4_CPtr {
-        self.bootinfo.empty.end as sys::seL4_CPtr
+    pub fn empty_end(&self) -> sel4::seL4_CPtr {
+        self.bootinfo.empty.end as sel4::seL4_CPtr
     }
 
     #[inline(always)]
-    pub fn root_cnode_cap(&self) -> sys::seL4_CPtr {
-        sys::seL4_CapInitThreadCNode
+    pub fn root_cnode_cap(&self) -> sel4::seL4_CPtr {
+        sel4::seL4_CapInitThreadCNode
     }
 }
 
@@ -52,11 +51,11 @@ impl From<&'static BootInfo> for BootInfoView {
 pub struct CSpaceCtx {
     pub bi: BootInfoView,
     pub init_cnode_bits: u8,
-    pub first_free: sys::seL4_CPtr,
-    pub last_free: sys::seL4_CPtr,
-    pub root_cnode_cap: sys::seL4_CPtr,
-    pub root_cnode_copy_slot: sys::seL4_CPtr,
-    next_slot: sys::seL4_CPtr,
+    pub first_free: sel4::seL4_CPtr,
+    pub last_free: sel4::seL4_CPtr,
+    pub root_cnode_cap: sel4::seL4_CPtr,
+    pub root_cnode_copy_slot: sel4::seL4_CPtr,
+    next_slot: sel4::seL4_CPtr,
 }
 
 impl CSpaceCtx {
@@ -65,24 +64,41 @@ impl CSpaceCtx {
         let first_free = bi.empty_start();
         let last_free = bi.empty_end();
         let root_cnode_cap = bi.root_cnode_cap();
-        Self {
+        let ctx = Self {
             bi,
             init_cnode_bits,
             first_free,
             last_free,
             root_cnode_cap,
-            root_cnode_copy_slot: sys::seL4_CapNull,
+            root_cnode_copy_slot: sel4::seL4_CapNull,
             next_slot: first_free,
+        };
+        ctx.log_boot_window();
+        ctx
+    }
+
+    fn log_boot_window(&self) {
+        let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
+        let _ = write!(
+            &mut line,
+            "[boot] init_cnode_bits={bits} empty=[0x{lo:04x}..0x{hi:04x})",
+            bits = self.init_cnode_bits,
+            lo = self.first_free,
+            hi = self.last_free,
+        );
+        for byte in line.as_bytes() {
+            sel4::debug_put_char(*byte as i32);
         }
+        sel4::debug_put_char(b'\n' as i32);
     }
 
     #[inline(always)]
-    fn slot_in_bounds(&self, slot: sys::seL4_CPtr) -> bool {
+    fn slot_in_bounds(&self, slot: sel4::seL4_CPtr) -> bool {
         slot >= self.first_free && slot < self.last_free
     }
 
     #[inline(always)]
-    fn assert_slot_available(&self, slot: sys::seL4_CPtr) {
+    fn assert_slot_available(&self, slot: sel4::seL4_CPtr) {
         assert!(
             self.slot_in_bounds(slot),
             "allocated slot 0x{slot:04x} outside bootinfo.empty range [0x{lo:04x}..0x{hi:04x})",
@@ -97,7 +113,7 @@ impl CSpaceCtx {
         );
     }
 
-    pub fn alloc_slot(&mut self) -> sys::seL4_CPtr {
+    pub fn alloc_slot(&mut self) -> sel4::seL4_CPtr {
         let mut slot = self.next_slot;
         while slot < self.last_free && Self::is_reserved_slot(slot) {
             slot += 1;
@@ -108,36 +124,34 @@ impl CSpaceCtx {
     }
 
     #[inline(always)]
-    pub fn empty_bounds(&self) -> (sys::seL4_CPtr, sys::seL4_CPtr) {
+    pub fn empty_bounds(&self) -> (sel4::seL4_CPtr, sel4::seL4_CPtr) {
         (self.first_free, self.last_free)
     }
 
-    pub fn mint_root_cnode_copy(&mut self) -> Result<(), sys::seL4_Error> {
+    pub fn mint_root_cnode_copy(&mut self) -> Result<(), sel4::seL4_Error> {
         let slot = self.alloc_slot();
         let depth = self.init_cnode_bits;
-        let dest_offset = slot as sys::seL4_Word;
         let err = cspace_sys::cnode_mint_direct(
             self.root_cnode_cap,
-            slot,
-            depth,
-            self.root_cnode_cap,
-            self.root_cnode_cap,
-            depth,
-            sys::seL4_CapRights_All,
             0,
-            dest_offset,
+            depth,
+            self.root_cnode_cap,
+            self.root_cnode_cap,
+            depth,
+            sel4::seL4_CapRights_All,
+            0,
+            slot,
         );
-        if err != sys::seL4_NoError {
+        if err != sel4::seL4_NoError {
             log_cnode_mint_failure(
                 err,
-                self.root_cnode_cap,
+                0,
+                depth,
                 slot,
-                depth,
-                dest_offset,
                 self.root_cnode_cap,
                 self.root_cnode_cap,
                 depth,
-                sys::seL4_CapRights_All,
+                sel4::seL4_CapRights_All,
                 0,
             );
             return Err(err);
@@ -145,59 +159,73 @@ impl CSpaceCtx {
         self.root_cnode_copy_slot = slot;
         Ok(())
     }
+    pub fn retype_to_slot(
+        &self,
+        untyped: sel4::seL4_CPtr,
+        obj_ty: sel4::seL4_Word,
+        size_bits: sel4::seL4_Word,
+        dst_slot: sel4::seL4_CPtr,
+    ) -> sel4::seL4_Error {
+        cspace_sys::untyped_retype_direct(
+            untyped,
+            obj_ty,
+            size_bits,
+            self.root_cnode_cap,
+            0,
+            self.init_cnode_bits,
+            dst_slot,
+        )
+    }
 
     #[inline(always)]
-    pub fn next_candidate_slot(&self) -> sys::seL4_CPtr {
+    pub fn next_candidate_slot(&self) -> sel4::seL4_CPtr {
         self.next_slot
     }
 
     #[inline(always)]
-    pub fn remaining_capacity(&self) -> sys::seL4_CPtr {
+    pub fn remaining_capacity(&self) -> sel4::seL4_CPtr {
         self.last_free.saturating_sub(self.next_slot)
     }
 
     /// Returns `true` when the provided slot index references a kernel-reserved capability.
     #[inline(always)]
-    pub fn is_reserved_slot(slot: sys::seL4_CPtr) -> bool {
+    pub fn is_reserved_slot(slot: sel4::seL4_CPtr) -> bool {
         matches!(
             slot,
-            sys::seL4_CapNull
-                | sys::seL4_CapInitThreadTCB
-                | sys::seL4_CapInitThreadCNode
-                | sys::seL4_CapInitThreadVSpace
-                | sys::seL4_CapIRQControl
-                | sys::seL4_CapASIDControl
-                | sys::seL4_CapInitThreadASIDPool
-                | sys::seL4_CapIOPortControl
-                | sys::seL4_CapIOSpace
-                | sys::seL4_CapBootInfoFrame
-                | sys::seL4_CapInitThreadIPCBuffer
+            sel4::seL4_CapNull
+                | sel4::seL4_CapInitThreadTCB
+                | sel4::seL4_CapInitThreadCNode
+                | sel4::seL4_CapInitThreadVSpace
+                | sel4::seL4_CapIRQControl
+                | sel4::seL4_CapASIDControl
+                | sel4::seL4_CapInitThreadASIDPool
+                | sel4::seL4_CapIOPortControl
+                | sel4::seL4_CapIOSpace
+                | sel4::seL4_CapBootInfoFrame
+                | sel4::seL4_CapInitThreadIPCBuffer
         )
     }
 }
 
 fn log_cnode_mint_failure(
-    err: sys::seL4_Error,
-    dest_root: sys::seL4_CNode,
-    dest_slot: sys::seL4_CPtr,
+    err: sel4::seL4_Error,
+    dest_index: sel4::seL4_CPtr,
     dest_depth: u8,
-    dest_offset: sys::seL4_Word,
-    src_root: sys::seL4_CNode,
-    src_slot: sys::seL4_CPtr,
+    dest_offset: sel4::seL4_CPtr,
+    _src_root: sel4::seL4_CNode,
+    src_slot: sel4::seL4_CPtr,
     src_depth: u8,
-    rights: sys::seL4_CapRights,
-    badge: sys::seL4_Word,
+    rights: sel4::seL4_CapRights,
+    badge: sel4::seL4_Word,
 ) {
     let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
     let _ = write!(
         &mut line,
-        "CNode_Mint err={code} dest_root=0x{dest_root:04x} dest_index=0x{dest_slot:04x} dest_depth={dest_depth} dest_offset=0x{dest_offset:04x} src_root=0x{src_root:04x} src_index=0x{src_slot:04x} src_depth={src_depth} rights=0x{rights:08x} badge=0x{badge:08x}",
+        "[cnode] op=Mint err={code} dest_index={dest_index} dest_depth={dest_depth} dest_offset=0x{dest_offset:04x} src_index=0x{src_slot:04x} src_depth={src_depth} rights=0x{rights:08x} badge=0x{badge:08x}",
         code = err,
-        dest_root = dest_root,
-        dest_slot = dest_slot,
+        dest_index = dest_index,
         dest_depth = usize::from(dest_depth),
         dest_offset = dest_offset,
-        src_root = src_root,
         src_slot = src_slot,
         src_depth = usize::from(src_depth),
         rights = rights.raw(),

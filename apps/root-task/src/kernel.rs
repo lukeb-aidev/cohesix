@@ -203,7 +203,7 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
     let mut cnode_line = heapless::String::<160>::new();
     let _ = write!(
         cnode_line,
-        "[root] init_cnode_bits={} empty=[0x{lo:04x}..0x{hi:04x}) root_cnode=seL4_CapInitThreadCNode",
+        "[boot] init_cnode_bits={} empty=[0x{lo:04x}..0x{hi:04x})",
         cs.init_cnode_bits,
         lo = lo,
         hi = hi,
