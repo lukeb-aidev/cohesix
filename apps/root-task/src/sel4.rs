@@ -35,8 +35,7 @@ use sel4_panicking::DebugSink;
 /// Alias to the boot information structure exposed by `sel4_sys`.
 pub type BootInfo = seL4_BootInfo;
 
-const CANONICAL_CNODE_DEPTH: seL4_Word =
-    (mem::size_of::<seL4_Word>() * 8) as seL4_Word;
+const CANONICAL_CNODE_DEPTH: seL4_Word = (mem::size_of::<seL4_Word>() * 8) as seL4_Word;
 const CANONICAL_DEST_OFFSET: seL4_Word = 0;
 
 /// Emits a single byte to the seL4 debug console.
@@ -147,13 +146,7 @@ pub fn cnode_copy(
     debug_put_char(b'C' as i32);
     unsafe {
         seL4_CNode_Copy(
-            dest_root,
-            dest_index,
-            dest_depth,
-            src_root,
-            src_index,
-            src_depth,
-            rights,
+            dest_root, dest_index, dest_depth, src_root, src_index, src_depth, rights,
         )
     }
 }
@@ -183,14 +176,7 @@ pub(crate) fn cnode_mint(
     debug_put_char(b'C' as i32);
     unsafe {
         seL4_CNode_Mint(
-            dest_root,
-            dest_index,
-            dest_depth,
-            src_root,
-            src_index,
-            src_depth,
-            rights,
-            badge,
+            dest_root, dest_index, dest_depth, src_root, src_index, src_depth, rights, badge,
         )
     }
 }
