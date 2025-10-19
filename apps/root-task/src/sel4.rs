@@ -51,11 +51,19 @@ pub fn cnode_copy(
     src_index: seL4_CPtr,
     src_depth: u8,
     rights: sel4_sys::seL4_CapRights,
+    dest_offset: seL4_CPtr,
 ) -> seL4_Error {
     debug_put_char(b'C' as i32);
     unsafe {
         seL4_CNode_Copy(
-            dest_root, dest_index, dest_depth, src_root, src_index, src_depth, rights,
+            dest_root,
+            dest_index,
+            dest_depth,
+            src_root,
+            src_index,
+            src_depth,
+            rights,
+            dest_offset,
         )
     }
 }
