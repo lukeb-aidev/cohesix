@@ -70,8 +70,7 @@ fn zero_depth_mint_is_rejected() {
 fn canonical_depth_mint_succeeds() {
     let mut ctx = ctx_fixture();
     assert_eq!(ctx.smoke_copy_init_tcb(), Ok(()));
-    let canonical_depth =
-        (core::mem::size_of::<sel4::seL4_Word>() * 8) as u8;
+    let canonical_depth = (core::mem::size_of::<sel4::seL4_Word>() * 8) as u8;
 
     let err = unsafe {
         seL4_CNode_Mint(

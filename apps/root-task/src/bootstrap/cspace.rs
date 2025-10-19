@@ -274,8 +274,7 @@ impl CSpaceCtx {
         let dst_slot = self.first_free.saturating_add(1);
         self.assert_slot_available(dst_slot);
         let src_slot = sel4::seL4_CapInitThreadCNode;
-        let err =
-            cspace_sys::cnode_mint_invoc(self.init_cnode_bits, dst_slot, src_slot, 0);
+        let err = cspace_sys::cnode_mint_invoc(self.init_cnode_bits, dst_slot, src_slot, 0);
         self.log_cnode_mint(err, dst_slot, src_slot, 0);
         if err == sel4::seL4_NoError {
             self.root_cnode_copy_slot = dst_slot;
