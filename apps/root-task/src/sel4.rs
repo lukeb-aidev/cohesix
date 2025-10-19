@@ -32,7 +32,8 @@ use sel4_panicking::write_debug_byte;
 /// Alias to the boot information structure exposed by `sel4_sys`.
 pub type BootInfo = seL4_BootInfo;
 
-const CANONICAL_CNODE_DEPTH: seL4_Word = 0;
+const CANONICAL_CNODE_DEPTH: seL4_Word =
+    (mem::size_of::<seL4_Word>() * 8) as seL4_Word;
 const CANONICAL_DEST_OFFSET: seL4_Word = 0;
 
 /// Emits a single byte to the seL4 debug console.
@@ -1450,9 +1451,9 @@ impl<'a> KernelEnv<'a> {
         // Canonical: target the root CNode directly and describe the destination slot explicitly.
         // seL4 first resolves the `(root, node_index, node_depth)` triple to locate the CNode that
         // will receive the new capability. The initial thread's CSpace is single-level, so the
-        // kernel consumes the supplied root capability directly using invocation addressing
-        // (`node_depth = 0`). The slot to populate is therefore encoded via the node index while
-        // the destination offset remains zero.
+        // kernel consumes the supplied root capability with the guard depth equal to the machine
+        // word size. The slot to populate is therefore encoded via the node index while the
+        // destination offset remains zero.
         let cnode_root = self.slots.root(); // seL4_CapInitThreadCNode
         let node_index: seL4_Word = slot as seL4_Word;
         let cnode_depth: seL4_Word = CANONICAL_CNODE_DEPTH;
