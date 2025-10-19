@@ -26,8 +26,11 @@ use sel4_sys::{
     UntypedDesc, MAX_BOOTINFO_UNTYPEDS,
 };
 
-#[cfg(feature = "kernel")]
+#[cfg(all(feature = "kernel", not(sel4_config_printing)))]
 use sel4_panicking::write_debug_byte;
+
+#[cfg(all(feature = "kernel", not(sel4_config_printing)))]
+use sel4_panicking::DebugSink;
 
 /// Alias to the boot information structure exposed by `sel4_sys`.
 pub type BootInfo = seL4_BootInfo;
@@ -41,33 +44,8 @@ const CANONICAL_DEST_OFFSET: seL4_Word = 0;
 #[inline(always)]
 pub fn debug_put_char(ch: i32) {
     unsafe {
-        debug_put_char_syscall(ch as u8);
+        debug_syscall_put_char(ch as u8);
     }
-}
-
-#[cfg(all(feature = "kernel", sel4_config_printing))]
-#[inline(always)]
-unsafe fn debug_put_char_syscall(byte: u8) {
-    const SYS_DEBUG_PUT_CHAR: u64 = (!0u64).wrapping_sub(8); // -9 in two's complement
-    let mut x0 = byte as u64;
-    let mut x1: u64 = 0;
-    let mut x2: u64 = 0;
-    let mut x3: u64 = 0;
-    let mut x4: u64 = 0;
-    let mut x5: u64 = 0;
-    let mut x6: u64 = 0;
-    asm!(
-        "svc #0",
-        inout("x0") x0,
-        inout("x1") x1,
-        inout("x2") x2,
-        inout("x3") x3,
-        inout("x4") x4,
-        inout("x5") x5,
-        inout("x6") x6,
-        in("x7") SYS_DEBUG_PUT_CHAR,
-        options(nostack, preserves_flags),
-    );
 }
 
 #[cfg(all(feature = "kernel", not(sel4_config_printing)))]
@@ -76,9 +54,54 @@ pub fn debug_put_char(ch: i32) {
     write_debug_byte(ch as u8);
 }
 
+#[cfg(all(feature = "kernel", not(sel4_config_printing)))]
+pub fn install_debug_sink() {
+    unsafe extern "C" fn emit(_ctx: *mut (), byte: u8) {
+        debug_syscall_put_char(byte);
+    }
+
+    let sink = DebugSink {
+        context: core::ptr::null_mut(),
+        emit: emit as unsafe fn(*mut (), u8),
+    };
+    sel4_panicking::install_debug_sink(sink);
+}
+
+#[cfg(all(feature = "kernel", sel4_config_printing))]
+#[inline(always)]
+pub fn install_debug_sink() {}
+
+#[cfg(not(feature = "kernel"))]
+#[inline(always)]
+pub fn install_debug_sink() {}
+
 #[cfg(not(feature = "kernel"))]
 #[inline(always)]
 pub fn debug_put_char(_ch: i32) {}
+
+#[cfg(all(feature = "kernel", target_arch = "aarch64"))]
+#[inline(always)]
+#[allow(unused_assignments)]
+unsafe fn debug_syscall_put_char(byte: u8) {
+    const SYS_DEBUG_PUT_CHAR: u64 = (!0u64).wrapping_sub(8); // -9
+    let mut x0 = byte as u64;
+    asm!(
+        "svc #0",
+        inout("x0") x0,
+        lateout("x1") _,
+        lateout("x2") _,
+        lateout("x3") _,
+        lateout("x4") _,
+        lateout("x5") _,
+        lateout("x6") _,
+        in("x7") SYS_DEBUG_PUT_CHAR,
+        options(nostack, preserves_flags),
+    );
+}
+
+#[cfg(all(feature = "kernel", not(target_arch = "aarch64")))]
+#[inline(always)]
+unsafe fn debug_syscall_put_char(_byte: u8) {}
 
 /// Safe projection of `seL4_CNode_Copy` for bootstrap modules.
 #[cfg(feature = "kernel")]

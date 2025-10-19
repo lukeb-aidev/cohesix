@@ -163,6 +163,9 @@ pub fn start<P: Platform>(bootinfo: &'static BootInfo, platform: &P) -> ! {
 }
 
 fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
+    #[cfg(all(feature = "kernel", not(sel4_config_printing)))]
+    sel4::install_debug_sink();
+
     let mut console = DebugConsole::new(platform);
     console.writeln_prefixed("entered from seL4 (stage0)");
     console.writeln_prefixed("Cohesix boot: root-task online");
