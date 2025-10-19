@@ -257,36 +257,15 @@ impl CSpaceCtx {
     }
 
     fn probe_initial_slots(&mut self, sample: sel4::seL4_CPtr) {
-        let probe_slot = self.first_free;
         let mut slot: sel4::seL4_CPtr = 0;
         while slot < sample {
-            if slot == probe_slot {
-                slot = slot.saturating_add(1);
-                continue;
-            }
-
-            let err = cspace_sys::cnode_copy_invoc(self.init_cnode_bits, probe_slot, slot);
+            let ident = sel4::debug_cap_identify(slot);
             let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
             let _ = write!(
                 &mut line,
-                "[cnode] probe src=0x{slot:04x} err={err} ({name})",
-                name = sel4::error_name(err),
+                "[cnode] probe slot=0x{slot:04x} ident=0x{ident:08x}",
             );
             emit_console_line(line.as_str());
-
-            if err == sel4::seL4_NoError {
-                let cleanup = cspace_sys::cnode_delete_invoc(probe_slot);
-                if cleanup != sel4::seL4_NoError {
-                    let mut cleanup_line = String::<MAX_DIAGNOSTIC_LEN>::new();
-                    let _ = write!(
-                        &mut cleanup_line,
-                        "[cnode] probe cleanup dest=0x{probe_slot:04x} err={cleanup} ({name})",
-                        name = sel4::error_name(cleanup),
-                    );
-                    emit_console_line(cleanup_line.as_str());
-                }
-            }
-
             slot = slot.saturating_add(1);
         }
     }

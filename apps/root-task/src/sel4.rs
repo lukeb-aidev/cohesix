@@ -40,24 +40,16 @@ const CANONICAL_CNODE_DEPTH: seL4_Word =
 const CANONICAL_DEST_OFFSET: seL4_Word = 0;
 
 /// Emits a single byte to the seL4 debug console.
-#[cfg(all(feature = "kernel", sel4_config_printing))]
+#[cfg(feature = "kernel")]
 #[inline(always)]
 pub fn debug_put_char(ch: i32) {
-    unsafe {
-        debug_syscall_put_char(ch as u8);
-    }
-}
-
-#[cfg(all(feature = "kernel", not(sel4_config_printing)))]
-#[inline(always)]
-pub fn debug_put_char(ch: i32) {
-    write_debug_byte(ch as u8);
+    unsafe { seL4_DebugPutChar(ch as u8) }
 }
 
 #[cfg(all(feature = "kernel", not(sel4_config_printing)))]
 pub fn install_debug_sink() {
     unsafe extern "C" fn emit(_ctx: *mut (), byte: u8) {
-        debug_syscall_put_char(byte);
+        seL4_DebugPutChar(byte);
     }
 
     let sink = DebugSink {
@@ -80,9 +72,8 @@ pub fn install_debug_sink() {}
 pub fn debug_put_char(_ch: i32) {}
 
 #[cfg(all(feature = "kernel", target_arch = "aarch64"))]
-#[inline(always)]
-#[allow(unused_assignments)]
-unsafe fn debug_syscall_put_char(byte: u8) {
+#[no_mangle]
+pub unsafe extern "C" fn seL4_DebugPutChar(byte: u8) {
     const SYS_DEBUG_PUT_CHAR: u64 = (!0u64).wrapping_sub(8); // -9
     let mut x0 = byte as u64;
     asm!(
@@ -100,8 +91,46 @@ unsafe fn debug_syscall_put_char(byte: u8) {
 }
 
 #[cfg(all(feature = "kernel", not(target_arch = "aarch64")))]
+#[no_mangle]
+pub unsafe extern "C" fn seL4_DebugPutChar(_byte: u8) {}
+
+#[cfg(all(feature = "kernel", target_arch = "aarch64"))]
 #[inline(always)]
-unsafe fn debug_syscall_put_char(_byte: u8) {}
+pub fn debug_cap_identify(slot: seL4_CPtr) -> seL4_Word {
+    unsafe { debug_cap_identify_syscall(slot) }
+}
+
+#[cfg(all(feature = "kernel", not(target_arch = "aarch64")))]
+#[inline(always)]
+pub fn debug_cap_identify(_slot: seL4_CPtr) -> seL4_Word {
+    0
+}
+
+#[cfg(not(feature = "kernel"))]
+#[inline(always)]
+pub fn debug_cap_identify(_slot: seL4_CPtr) -> seL4_Word {
+    0
+}
+
+#[cfg(all(feature = "kernel", target_arch = "aarch64"))]
+#[inline(always)]
+unsafe fn debug_cap_identify_syscall(slot: seL4_CPtr) -> seL4_Word {
+    const SYS_DEBUG_CAP_IDENTIFY: u64 = (!0u64).wrapping_sub(12); // -12
+    let mut x0 = slot as u64;
+    asm!(
+        "svc #0",
+        inout("x0") x0,
+        lateout("x1") _,
+        lateout("x2") _,
+        lateout("x3") _,
+        lateout("x4") _,
+        lateout("x5") _,
+        lateout("x6") _,
+        in("x7") SYS_DEBUG_CAP_IDENTIFY,
+        options(nostack, preserves_flags),
+    );
+    x0 as seL4_Word
+}
 
 /// Safe projection of `seL4_CNode_Copy` for bootstrap modules.
 #[cfg(feature = "kernel")]
