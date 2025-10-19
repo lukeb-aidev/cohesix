@@ -31,6 +31,11 @@
 - Untyped retypes mirror the same invariant; the destination tuple is `(root=initThreadCNode, index=<slot>, depth=0, offset=0)` so the kernel never observes guard bits or offsets during bootstrap.
 - Bootstrapping begins with a smoke copy of the init TCB capability into `bootinfo.empty.start`, confirming that the invocation-only policy succeeds before any mutable capability traffic occurs.
 - Bootstrap uses invocation addressing (depth=0). Slots go in index; offset must be 0.
+- The bootstrap allocator derives `init_cnode_bits` and the empty window directly from `BootInfo`, asserting that every
+  destination slot satisfies `slot < 2^{init_cnode_bits}` before issuing the syscall. Violations panic before touching the
+  kernel, eliminating decode-time ambiguity.
+- Diagnostic logs for Copy → Mint → Retype include the exact `(index, depth, offset, badge)` tuple so regressions surface in
+  the boot transcript immediately.
 
 ## 3. Component Responsibilities
 ### Root Task (crate: `root-task`)

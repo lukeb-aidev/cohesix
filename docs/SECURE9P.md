@@ -41,6 +41,8 @@ pub trait AccessPolicy {
 
 ## 6. TCB Sanity
 - Bootstrap uses invocation addressing (depth=0). Slots go in index; offset must be 0.
+- Boot-time helpers assert `slot < 1 << init_cnode_bits` against the kernel-provided radix before mint/copy/retype, ensuring
+  decode errors surface as Rust panics instead of kernel faults.
 
 ## 7. Logging & Observability
 - Core emits debug hooks (`on_attach`, `on_clunk`, `on_error`) that NineDoor subscribes to for logging into `/log/queen.log`.
