@@ -240,9 +240,14 @@ impl CSpaceCtx {
             let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
             let _ = write!(
                 &mut line,
-                "[cnode] Copy attempt dest=0x{dst_slot:04x} src=0x{src_slot:04x}",
+                "[cnode] Copy attempt dest=0x{dst_slot:04x} src=0x{src_slot:04x} ident=0x{ident:08x}",
+                ident = sel4::debug_cap_identify(src_slot),
             );
             emit_console_line(line.as_str());
+        }
+        #[cfg(sel4_config_debug_build)]
+        {
+            sel4::debug_dump_cnode(sel4::seL4_CapInitThreadCNode);
         }
         let err = cspace_sys::cnode_copy_invoc(self.init_cnode_bits, dst_slot, src_slot);
         self.log_cnode_copy(err, dst_slot, src_slot);

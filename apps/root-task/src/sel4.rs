@@ -47,6 +47,32 @@ pub fn debug_put_char(ch: i32) {
 #[inline(always)]
 pub fn debug_put_char(_ch: i32) {}
 
+/// Identifies the capability type resident in the provided slot (debug kernels only).
+#[cfg(all(feature = "kernel", sel4_config_debug_build))]
+#[inline(always)]
+pub fn debug_cap_identify(cap: seL4_CPtr) -> seL4_Word {
+    unsafe { seL4_DebugCapIdentify(cap) }
+}
+
+/// Fallback stub when debug identify is unavailable.
+#[cfg(not(all(feature = "kernel", sel4_config_debug_build)))]
+#[inline(always)]
+pub fn debug_cap_identify(_cap: seL4_CPtr) -> seL4_Word {
+    0
+}
+
+/// Dumps the contents of a CNode to the debug console (debug kernels only).
+#[cfg(all(feature = "kernel", sel4_config_debug_build))]
+#[inline(always)]
+pub fn debug_dump_cnode(root: seL4_CNode) {
+    unsafe { seL4_DebugDumpCNode(root) }
+}
+
+/// Fallback stub when debug dump is unavailable.
+#[cfg(not(all(feature = "kernel", sel4_config_debug_build)))]
+#[inline(always)]
+pub fn debug_dump_cnode(_root: seL4_CNode) {}
+
 /// Safe projection of `seL4_CNode_Copy` for bootstrap modules.
 #[cfg(feature = "kernel")]
 #[inline(always)]
@@ -160,6 +186,12 @@ unsafe fn sel4_debug_poll_char() -> i32 {
     }
 
     seL4_DebugPollChar()
+}
+
+#[cfg(all(feature = "kernel", sel4_config_debug_build))]
+extern "C" {
+    fn seL4_DebugCapIdentify(cap: seL4_CPtr) -> seL4_Word;
+    fn seL4_DebugDumpCNode(root: seL4_CNode);
 }
 
 fn objtype_name(t: seL4_Word) -> &'static str {
