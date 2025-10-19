@@ -4,7 +4,7 @@
 #![allow(unsafe_code)]
 
 use crate::bootstrap::cspace::CSpaceCtx;
-use sel4_sys as sys;
+use crate::sel4 as sys;
 
 use super::cspace_sys;
 
@@ -22,7 +22,17 @@ pub fn cnode_mint_to_slot(
         rights,
         badge,
     );
-    ctx.log_cnode_mint("MintToSlot", err, dst_slot, src_slot, rights, badge);
+    ctx.log_cnode_mint(
+        "MintToSlot",
+        err,
+        dst_slot,
+        ctx.init_cnode_bits,
+        0,
+        src_slot,
+        0,
+        rights,
+        badge,
+    );
     err
 }
 
@@ -47,6 +57,8 @@ pub fn untyped_retype_to_slot(
         obj_type,
         size_bits,
         dst_slot,
+        ctx.init_cnode_bits,
+        0,
     );
     err
 }
