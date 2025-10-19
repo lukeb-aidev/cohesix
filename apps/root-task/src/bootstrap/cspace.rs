@@ -9,24 +9,7 @@ use super::cspace_sys;
 const MAX_DIAGNOSTIC_LEN: usize = 224;
 
 #[inline(always)]
-fn cap_rights_rw_grant() -> sel4::seL4_CapRights {
-    #[cfg(target_os = "none")]
-    {
-        sel4::seL4_CapRights::new(0, 1, 1, 1)
-    }
-
-    #[cfg(not(target_os = "none"))]
-    {
-        let mut value = 0usize;
-        value |= 1 << 2;
-        value |= 1 << 1;
-        value |= 1;
-        value as sel4::seL4_CapRights
-    }
-}
-
-#[inline(always)]
-fn cap_rights_raw(rights: sel4::seL4_CapRights) -> sel4::seL4_Word {
+fn cap_rights_bits(rights: sel4::seL4_CapRights_t) -> sel4::seL4_Word {
     #[cfg(target_os = "none")]
     {
         rights.raw()
@@ -125,8 +108,7 @@ impl CSpaceCtx {
         let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
         let _ = write!(
             &mut line,
-            "[boot] empty=[0x{lo:04x}..0x{hi:04x}) init_cnode_bits={bits}",
-            bits = self.init_cnode_bits,
+            "[boot] empty=[0x{lo:04x}..0x{hi:04x})",
             lo = self.first_free,
             hi = self.last_free,
         );
@@ -136,6 +118,22 @@ impl CSpaceCtx {
     #[inline(always)]
     fn slot_in_bounds(&self, slot: sel4::seL4_CPtr) -> bool {
         slot >= self.first_free && slot < self.last_free
+    }
+
+    #[inline(always)]
+    fn assert_slot_available(&self, slot: sel4::seL4_CPtr) {
+        assert!(
+            self.slot_in_bounds(slot),
+            "slot 0x{slot:04x} outside boot empty window [0x{lo:04x}..0x{hi:04x})",
+            slot = slot,
+            lo = self.first_free,
+            hi = self.last_free,
+        );
+        assert!(
+            !Self::is_reserved_slot(slot),
+            "slot 0x{slot:04x} collides with kernel reserved capability",
+            slot = slot,
+        );
     }
 
     #[inline(always)]
@@ -163,6 +161,7 @@ impl CSpaceCtx {
             return Err(SlotAllocError::ReservedSlot { slot });
         }
 
+        self.assert_slot_available(slot);
         self.next_slot = slot.saturating_add(1);
         Ok(slot)
     }
@@ -192,19 +191,14 @@ impl CSpaceCtx {
         tag: &str,
         err: sel4::seL4_Error,
         dest_index: sel4::seL4_CPtr,
-        dest_depth: u8,
-        dest_offset: sel4::seL4_CPtr,
         src_index: sel4::seL4_CPtr,
-        src_depth: u8,
-        rights: sel4::seL4_CapRights,
+        rights: sel4::seL4_CapRights_t,
     ) {
-        debug_assert_eq!(dest_depth, 0, "bootstrap uses invocation addressing");
-        debug_assert_eq!(dest_offset, 0, "bootstrap uses invocation addressing");
         let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
         let _ = write!(
             &mut line,
-            "[cnode] {tag} err={err} dest(index=0x{dest_index:04x}, depth={dest_depth}, offset=0x{dest_offset:04x}) src(index=0x{src_index:04x}, depth={src_depth}) rights=0x{rights:02x}",
-            rights = cap_rights_raw(rights),
+            "[cnode] Copy err={err} dest(index=0x{dest_index:04x}, depth=0) src(index=0x{src_index:04x}, depth=0) rights={rights:#04x} tag={tag}",
+            rights = cap_rights_bits(rights),
         );
         emit_console_line(line.as_str());
     }
@@ -214,20 +208,15 @@ impl CSpaceCtx {
         tag: &str,
         err: sel4::seL4_Error,
         dest_index: sel4::seL4_CPtr,
-        dest_depth: u8,
-        dest_offset: sel4::seL4_CPtr,
         src_index: sel4::seL4_CPtr,
-        src_depth: u8,
-        rights: sel4::seL4_CapRights,
+        rights: sel4::seL4_CapRights_t,
         badge: sel4::seL4_Word,
     ) {
-        debug_assert_eq!(dest_depth, 0, "bootstrap uses invocation addressing");
-        debug_assert_eq!(dest_offset, 0, "bootstrap uses invocation addressing");
         let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
         let _ = write!(
             &mut line,
-            "[cnode] {tag} err={err} dest(index=0x{dest_index:04x}, depth={dest_depth}, offset=0x{dest_offset:04x}) src(index=0x{src_index:04x}, depth={src_depth}) rights=0x{rights:02x} badge=0x{badge:08x}",
-            rights = cap_rights_raw(rights),
+            "[cnode] Mint err={err} dest(index=0x{dest_index:04x}, depth=0, offset=0) src(index=0x{src_index:04x}, depth=0) badge=0x{badge:08x} rights={rights:#04x} tag={tag}",
+            rights = cap_rights_bits(rights),
         );
         emit_console_line(line.as_str());
     }
@@ -240,54 +229,11 @@ impl CSpaceCtx {
         obj_ty: sel4::seL4_Word,
         size_bits: sel4::seL4_Word,
         dest_index: sel4::seL4_CPtr,
-        dest_depth: u8,
-        dest_offset: sel4::seL4_CPtr,
     ) {
-        debug_assert_eq!(dest_depth, 0, "bootstrap uses invocation addressing");
-        debug_assert_eq!(dest_offset, 0, "bootstrap uses invocation addressing");
         let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
         let _ = write!(
             &mut line,
-            "[retype] {tag} err={err} untyped=0x{untyped:08x} ty={obj_ty} sz={size_bits} dest(index=0x{dest_index:04x}, depth={dest_depth}, offset=0x{dest_offset:04x})",
-        );
-        emit_console_line(line.as_str());
-    }
-
-    fn log_cnode_err(
-        &self,
-        tag: &str,
-        err: sel4::seL4_Error,
-        dest_index: sel4::seL4_CPtr,
-        dest_depth: u8,
-        dest_offset: sel4::seL4_CPtr,
-        src_index: sel4::seL4_CPtr,
-        src_depth: u8,
-    ) {
-        debug_assert_eq!(dest_depth, 0, "bootstrap uses invocation addressing");
-        debug_assert_eq!(dest_offset, 0, "bootstrap uses invocation addressing");
-        let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
-        let _ = write!(
-            &mut line,
-            "[cnode] {tag} err={err} dest(index=0x{dest_index:04x}, depth={dest_depth}, offset=0x{dest_offset:04x}) src(index=0x{src_index:04x}, depth={src_depth})",
-        );
-        emit_console_line(line.as_str());
-    }
-
-    fn log_retype_err(
-        &self,
-        tag: &str,
-        err: sel4::seL4_Error,
-        untyped_slot: sel4::seL4_CPtr,
-        dest_index: sel4::seL4_CPtr,
-        dest_depth: u8,
-        dest_offset: sel4::seL4_CPtr,
-    ) {
-        debug_assert_eq!(dest_depth, 0, "bootstrap uses invocation addressing");
-        debug_assert_eq!(dest_offset, 0, "bootstrap uses invocation addressing");
-        let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
-        let _ = write!(
-            &mut line,
-            "[retype] {tag} err={err} untyped_slot=0x{untyped_slot:04x} dest(index=0x{dest_index:04x}, depth={dest_depth}, offset=0x{dest_offset:04x})",
+            "[retype] err={err} untyped_slot=0x{untyped:04x} dest(index=0x{dest_index:04x}, depth=0, offset=0) ty={obj_ty} sz={size_bits} tag={tag}",
         );
         emit_console_line(line.as_str());
     }
@@ -295,60 +241,46 @@ impl CSpaceCtx {
     pub fn smoke_copy_init_tcb(&mut self) -> Result<(), sel4::seL4_Error> {
         let dst_slot = self.first_free;
         let src_slot = sel4::seL4_CapInitThreadTCB;
-        let rights = cap_rights_rw_grant();
+        self.assert_slot_available(dst_slot);
+        let rights = cspace_sys::caprights_rw_grant();
         let err = cspace_sys::cnode_copy_invoc(dst_slot, src_slot, rights);
-        self.log_cnode_copy("SmokeCopyInitTCB", err, dst_slot, 0, 0, src_slot, 0, rights);
-        if err != sel4::seL4_NoError {
-            self.log_cnode_err("SmokeCopyInitTCB", err, dst_slot, 0, 0, src_slot, 0);
-            return Err(err);
+        self.log_cnode_copy("smoke_copy_tcb", err, dst_slot, src_slot, rights);
+        if err == sel4::seL4_NoError {
+            self.tcb_copy_slot = dst_slot;
+            self.consume_slot(dst_slot);
+            Ok(())
+        } else {
+            Err(err)
         }
-
-        self.tcb_copy_slot = dst_slot;
-        self.consume_slot(dst_slot);
-        Ok(())
     }
 
     pub fn mint_root_cnode_copy(&mut self) -> Result<(), sel4::seL4_Error> {
-        let dst_slot = match self.alloc_slot_checked() {
-            Ok(slot) => slot,
-            Err(err) => {
-                self.log_slot_failure(err);
-                return Err(sel4_sys::seL4_RangeError);
-            }
-        };
-        let rights = cap_rights_rw_grant();
+        let dst_slot = self.first_free.saturating_add(1);
+        self.assert_slot_available(dst_slot);
+        let rights = cspace_sys::caprights_rw_grant();
         let src_slot = sel4::seL4_CapInitThreadCNode;
         let err = cspace_sys::cnode_mint_invoc(dst_slot, src_slot, rights, 0);
-        self.log_cnode_mint(
-            "MintRootCNodeCopy",
-            err,
-            dst_slot,
-            0,
-            0,
-            src_slot,
-            0,
-            rights,
-            0,
-        );
-        if err != sel4::seL4_NoError {
-            self.log_cnode_err("MintRootCNodeCopy", err, dst_slot, 0, 0, src_slot, 0);
-            return Err(err);
+        self.log_cnode_mint("mint_root_cnode", err, dst_slot, src_slot, rights, 0);
+        if err == sel4::seL4_NoError {
+            self.root_cnode_copy_slot = dst_slot;
+            self.consume_slot(dst_slot);
+            Ok(())
+        } else {
+            Err(err)
         }
-        self.root_cnode_copy_slot = dst_slot;
-        self.consume_slot(dst_slot);
-        Ok(())
     }
     pub fn retype_to_slot(
-        &self,
+        &mut self,
         untyped: sel4::seL4_CPtr,
         obj_ty: sel4::seL4_Word,
         size_bits: sel4::seL4_Word,
         dst_slot: sel4::seL4_CPtr,
     ) -> sel4::seL4_Error {
+        self.assert_slot_available(dst_slot);
         let err = cspace_sys::untyped_retype_invoc(untyped, obj_ty, size_bits, dst_slot);
-        self.log_retype("Retype", err, untyped, obj_ty, size_bits, dst_slot, 0, 0);
-        if err != sel4::seL4_NoError {
-            self.log_retype_err("Retype", err, untyped, dst_slot, 0, 0);
+        self.log_retype("retype", err, untyped, obj_ty, size_bits, dst_slot);
+        if err == sel4::seL4_NoError {
+            self.consume_slot(dst_slot);
         }
         err
     }

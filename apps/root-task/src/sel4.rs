@@ -17,6 +17,9 @@ pub use sel4_sys::{
     seL4_Untyped_Retype, seL4_Word,
 };
 
+/// Canonical capability rights representation exposed by seL4.
+pub type seL4_CapRights_t = sel4_sys::seL4_CapRights;
+
 use sel4_sys::{
     seL4_ARM_PageTableObject, seL4_ARM_PageTable_Map, seL4_ARM_Page_Default, seL4_ARM_Page_Map,
     seL4_ARM_Page_Uncached, seL4_BootInfo, seL4_CNode_Delete, seL4_NotEnoughMemory,
@@ -78,6 +81,7 @@ pub fn cnode_delete(root: seL4_CNode, index: seL4_CPtr, depth: u8) -> seL4_Error
 
 /// Safe projection of `seL4_CNode_Mint` for bootstrap modules.
 #[cfg(feature = "kernel")]
+#[deprecated(note = "use cspace_sys::*_invoc")]
 #[inline(always)]
 pub(crate) fn cnode_mint(
     dest_root: seL4_CNode,

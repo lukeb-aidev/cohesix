@@ -40,7 +40,7 @@ pub trait AccessPolicy {
 | Fuzz | Length-prefix mutations, truncated frames, random tail bytes |
 
 ## 6. TCB Sanity
-- Root bootstrap uses invocation addressing for all CNode and Untyped operations; direct addressing paths are disallowed.
+- Bootstrap uses invocation addressing (depth=0). Slots go in index; offset must be 0.
 
 ## 7. Logging & Observability
 - Core emits debug hooks (`on_attach`, `on_clunk`, `on_error`) that NineDoor subscribes to for logging into `/log/queen.log`.
