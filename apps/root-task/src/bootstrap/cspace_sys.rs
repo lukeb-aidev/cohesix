@@ -6,7 +6,7 @@ use crate::sel4 as sys;
 #[inline]
 pub fn caprights_rw_grant() -> sys::SeL4CapRights {
     #[cfg(target_os = "none")]
-    unsafe {
+    {
         sys::seL4_CapRights::new(0, 1, 1, 1)
     }
 
@@ -117,7 +117,7 @@ pub fn untyped_retype_invoc(
             size_bits,
             sys::seL4_CapInitThreadCNode,
             dst_slot,
-            0u8,
+            0,
             0,
             1,
         )
