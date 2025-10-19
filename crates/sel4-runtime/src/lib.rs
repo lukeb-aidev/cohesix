@@ -56,23 +56,26 @@ impl BootInfoCell {
 
 static BOOTINFO: BootInfoCell = BootInfoCell::new();
 
-/// seL4 kernel entry stub invoked after seL4 initialises the initial thread.
 #[cfg(target_arch = "aarch64")]
-#[naked]
-#[no_mangle]
-pub unsafe extern "C" fn _start(bootinfo: *mut seL4_BootInfo) -> ! {
-    core::arch::asm!(
-        "adrp x1, {stack}",
-        "add x1, x1, :lo12:{stack}",
-        "add x1, x1, #{bytes}",
-        "mov sp, x1",
-        "b {entry}",
-        stack = sym BOOT_STACK,
-        bytes = const STACK_BYTES,
-        entry = sym __sel4_start_rust,
-        options(noreturn)
-    )
-}
+// seL4 kernel entry stub invoked after seL4 initialises the initial thread.
+// Defined in global assembly to avoid unstable `#[naked]` functions while
+// preserving the debug stack instrumentation.
+core::arch::global_asm!(
+    "
+    .section .text._start,\"ax\"
+    .globl _start
+    .p2align 2
+_start:
+    adrp x1, {stack}
+    add x1, x1, :lo12:{stack}
+    add x1, x1, #{bytes}
+    mov sp, x1
+    b {entry}
+    ",
+    stack = sym BOOT_STACK,
+    bytes = const STACK_BYTES,
+    entry = sym __sel4_start_rust,
+);
 
 #[cfg(target_arch = "aarch64")]
 #[inline(never)]
