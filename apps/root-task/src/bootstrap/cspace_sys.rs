@@ -3,9 +3,11 @@
 
 use sel4_sys as sys;
 
-/// Issues `seL4_CNode_Copy` using invocation addressing on both source and destination.
+/// Issues `seL4_CNode_Copy` using direct addressing for the destination slot while
+/// retaining invocation addressing for the source slot.
 #[inline(always)]
 pub fn cnode_copy_invocation(
+    init_cnode_bits: u8,
     dst_slot: sys::seL4_CPtr,
     src_slot: sys::seL4_CPtr,
     rights: sys::seL4_CapRights,
@@ -13,8 +15,8 @@ pub fn cnode_copy_invocation(
     unsafe {
         sys::seL4_CNode_Copy(
             sys::seL4_CapInitThreadCNode,
-            0,
-            0u8,
+            dst_slot,
+            init_cnode_bits,
             sys::seL4_CapInitThreadCNode,
             src_slot,
             0u8,
@@ -24,9 +26,11 @@ pub fn cnode_copy_invocation(
     }
 }
 
-/// Issues `seL4_CNode_Mint` using invocation addressing on both source and destination.
+/// Issues `seL4_CNode_Mint` using direct addressing for the destination slot while
+/// retaining invocation addressing for the source slot.
 #[inline(always)]
 pub fn cnode_mint_invocation(
+    init_cnode_bits: u8,
     dst_slot: sys::seL4_CPtr,
     src_slot: sys::seL4_CPtr,
     rights: sys::seL4_CapRights,
@@ -35,8 +39,8 @@ pub fn cnode_mint_invocation(
     unsafe {
         sys::seL4_CNode_Mint(
             sys::seL4_CapInitThreadCNode,
-            0,
-            0u8,
+            dst_slot,
+            init_cnode_bits,
             sys::seL4_CapInitThreadCNode,
             src_slot,
             0u8,
