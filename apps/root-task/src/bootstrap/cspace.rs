@@ -191,10 +191,10 @@ impl CSpaceCtx {
         src_index: sel4::seL4_CPtr,
     ) {
         let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
-        let canonical_depth = super::cspace_sys::CANONICAL_CNODE_DEPTH_BITS;
         let _ = write!(
             &mut line,
-            "[cnode] Copy err={err} dest(index=0x{dest_index:04x},depth={canonical_depth}) src(index=0x{src_index:04x},depth={canonical_depth})",
+            "[cnode] Copy err={err} dest(index=0x{dest_index:04x},depth={depth}) src(index=0x{src_index:04x},depth={depth})",
+            depth = self.init_cnode_bits,
         );
         emit_console_line(line.as_str());
     }
@@ -207,10 +207,10 @@ impl CSpaceCtx {
         badge: sel4::seL4_Word,
     ) {
         let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
-        let canonical_depth = super::cspace_sys::CANONICAL_CNODE_DEPTH_BITS;
         let _ = write!(
             &mut line,
-            "[cnode] Mint err={err} dest(index=0x{dest_index:04x},depth={canonical_depth},offset=0) src(index=0x{src_index:04x},depth={canonical_depth}) badge={badge}",
+            "[cnode] Mint err={err} dest(index=0x{dest_index:04x},depth={depth},offset=0) src(index=0x{src_index:04x},depth={depth}) badge={badge}",
+            depth = self.init_cnode_bits,
         );
         emit_console_line(line.as_str());
     }
@@ -224,10 +224,10 @@ impl CSpaceCtx {
         dest_index: sel4::seL4_CPtr,
     ) {
         let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
-        let canonical_depth = super::cspace_sys::CANONICAL_CNODE_DEPTH_BITS;
         let _ = write!(
             &mut line,
-            "[retype] err={err} untyped_slot=0x{untyped:04x} dest(index=0x{dest_index:04x},depth={canonical_depth},offset=0) ty={obj_ty} sz={size_bits}",
+            "[retype] err={err} untyped_slot=0x{untyped:04x} dest(index=0x{dest_index:04x},depth={depth},offset=0) ty={obj_ty} sz={size_bits}",
+            depth = self.init_cnode_bits,
         );
         emit_console_line(line.as_str());
     }
