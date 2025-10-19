@@ -608,14 +608,16 @@ mod imp {
         src_root: seL4_CNode,
         src_index: seL4_CPtr,
         src_depth: seL4_Uint8,
+        dest_offset: seL4_CPtr,
     ) -> seL4_Error {
-        let msg = seL4_MessageInfo::new(SEL4_CNODE_MOVE, 0, 1, 4);
+        let msg = seL4_MessageInfo::new(SEL4_CNODE_MOVE, 0, 1, 5);
         let mut mr0 = dest_index;
         let mut mr1 = dest_depth as seL4_Word;
         let mut mr2 = src_index;
         let mut mr3 = src_depth as seL4_Word;
 
         seL4_SetCap(0, src_root);
+        seL4_SetMR(4, dest_offset);
 
         let info = seL4_CallWithMRs(dest_root, msg, &mut mr0, &mut mr1, &mut mr2, &mut mr3);
 
@@ -659,14 +661,16 @@ mod imp {
         src_index: seL4_CPtr,
         src_depth: seL4_Uint8,
         rights: seL4_CapRights,
+        dest_offset: seL4_CPtr,
     ) -> seL4_Error {
-        let msg = seL4_MessageInfo::new(SEL4_CNODE_COPY, 0, 1, 5);
+        let msg = seL4_MessageInfo::new(SEL4_CNODE_COPY, 0, 1, 6);
         let mut mr0 = dest_index;
         let mut mr1 = dest_depth as seL4_Word;
         let mut mr2 = src_index;
         let mut mr3 = src_depth as seL4_Word;
         seL4_SetCap(0, src_root);
         seL4_SetMR(4, rights.raw());
+        seL4_SetMR(5, dest_offset);
 
         let info = seL4_CallWithMRs(dest_root, msg, &mut mr0, &mut mr1, &mut mr2, &mut mr3);
 
@@ -892,6 +896,7 @@ mod host_stub {
         _src_root: seL4_CNode,
         _src_index: seL4_CPtr,
         _src_depth: seL4_Uint8,
+        _dest_offset: seL4_CPtr,
     ) -> seL4_Error {
         unsupported();
     }
@@ -920,6 +925,7 @@ mod host_stub {
         _src_index: seL4_CPtr,
         _src_depth: seL4_Uint8,
         _rights: seL4_CapRights,
+        _dest_offset: seL4_CPtr,
     ) -> seL4_Error {
         unsupported();
     }

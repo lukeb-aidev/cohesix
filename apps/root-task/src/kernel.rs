@@ -199,9 +199,9 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
 
     let bi_view = BootInfoView::from(bootinfo_ref);
     let mut cs = CSpaceCtx::new(bi_view);
-    cs.smoke_mint_root_cnode().unwrap_or_else(|err| {
+    cs.smoke_copy_init_tcb().unwrap_or_else(|err| {
         panic!(
-            "smoke mint of init CNode capability failed: {} ({})",
+            "smoke copy of init TCB capability failed: {} ({})",
             err,
             error_name(err)
         )
@@ -225,7 +225,7 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
         )
     });
 
-    let mut consumed_slots: usize = 1;
+    let mut consumed_slots: usize = 2;
     let endpoint_untyped = pick_untyped(bootinfo_ref, sel4_sys::seL4_EndpointBits as u8);
 
     let endpoint_slot = retype_one(
