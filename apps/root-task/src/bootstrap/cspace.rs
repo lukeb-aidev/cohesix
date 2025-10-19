@@ -198,7 +198,8 @@ impl CSpaceCtx {
         let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
         let _ = write!(
             &mut line,
-            "[cnode] {tag} err={err} dest(depth=0, offset=0x{dst_slot:04x}) src(depth=0, slot=0x{src_slot:04x}) rights=0x{rights:02x}",
+            "[cnode] {tag} err={err} dest(depth={depth}, offset=0x{dst_slot:04x}) src(depth=0, slot=0x{src_slot:04x}) rights=0x{rights:02x}",
+            depth = self.init_cnode_bits,
             rights = cap_rights_raw(rights),
         );
         emit_console_line(line.as_str());
@@ -216,7 +217,8 @@ impl CSpaceCtx {
         let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
         let _ = write!(
             &mut line,
-            "[cnode] {tag} err={err} dest(depth=0, offset=0x{dst_slot:04x}) src(depth=0, slot=0x{src_slot:04x}) rights=0x{rights:02x} badge=0x{badge:08x}",
+            "[cnode] {tag} err={err} dest(depth={depth}, offset=0x{dst_slot:04x}) src(depth=0, slot=0x{src_slot:04x}) rights=0x{rights:02x} badge=0x{badge:08x}",
+            depth = self.init_cnode_bits,
             rights = cap_rights_raw(rights),
         );
         emit_console_line(line.as_str());
@@ -249,7 +251,8 @@ impl CSpaceCtx {
         let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
         let _ = write!(
             &mut line,
-            "[cnode] {tag} err={err} dest(depth=0, offset=0x{dst_slot:04x}) src(depth=0, slot=0x{src_slot:04x})",
+            "[cnode] {tag} err={err} dest(depth={depth}, offset=0x{dst_slot:04x}) src(depth=0, slot=0x{src_slot:04x})",
+            depth = self.init_cnode_bits,
         );
         emit_console_line(line.as_str());
     }
@@ -273,7 +276,8 @@ impl CSpaceCtx {
         let dst_slot = self.first_free;
         let src_slot = sel4::seL4_CapInitThreadTCB;
         let rights = cap_rights_rw_grant();
-        let err = cspace_sys::cnode_copy_invocation(dst_slot, src_slot, rights);
+        let err =
+            cspace_sys::cnode_copy_invocation(self.init_cnode_bits, dst_slot, src_slot, rights);
         self.log_cnode_copy("SmokeCopyInitTCB", err, dst_slot, src_slot, rights);
         if err != sel4::seL4_NoError {
             self.log_cnode_err("SmokeCopyInitTCB", err, dst_slot, src_slot);
@@ -295,7 +299,8 @@ impl CSpaceCtx {
         };
         let rights = cap_rights_rw_grant();
         let src_slot = sel4::seL4_CapInitThreadCNode;
-        let err = cspace_sys::cnode_mint_invocation(dst_slot, src_slot, rights, 0);
+        let err =
+            cspace_sys::cnode_mint_invocation(self.init_cnode_bits, dst_slot, src_slot, rights, 0);
         self.log_cnode_mint("MintRootCNodeCopy", err, dst_slot, src_slot, rights, 0);
         if err != sel4::seL4_NoError {
             self.log_cnode_err("MintRootCNodeCopy", err, dst_slot, src_slot);
