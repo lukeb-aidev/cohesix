@@ -236,22 +236,14 @@ impl CSpaceCtx {
         let dst_slot = self.first_free;
         let src_slot = sel4::seL4_CapInitThreadTCB;
         self.assert_slot_available(dst_slot);
-        #[cfg(sel4_config_debug_build)]
-        {
-            self.dump_init_caps(0x10);
-        }
+        self.probe_initial_slots(core::cmp::min(self.first_free, 0x20));
         {
             let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
             let _ = write!(
                 &mut line,
-                "[cnode] Copy attempt dest=0x{dst_slot:04x} src=0x{src_slot:04x} ident=0x{ident:08x}",
-                ident = sel4::debug_cap_identify(src_slot),
+                "[cnode] Copy attempt dest=0x{dst_slot:04x} src=0x{src_slot:04x}",
             );
             emit_console_line(line.as_str());
-        }
-        #[cfg(sel4_config_debug_build)]
-        {
-            sel4::debug_dump_cnode(sel4::seL4_CapInitThreadCNode);
         }
         let err = cspace_sys::cnode_copy_invoc(self.init_cnode_bits, dst_slot, src_slot);
         self.log_cnode_copy(err, dst_slot, src_slot);
@@ -264,20 +256,38 @@ impl CSpaceCtx {
         }
     }
 
-    #[cfg(sel4_config_debug_build)]
-    fn dump_init_caps(&self, max_slots: usize) {
-        let mut index = 0;
-        let limit = core::cmp::min(max_slots, self.last_free as usize);
-        while index < limit {
-            let cap = index as sel4::seL4_CPtr;
-            let ident = sel4::debug_cap_identify(cap);
+    fn probe_initial_slots(&mut self, sample: sel4::seL4_CPtr) {
+        let probe_slot = self.first_free;
+        let mut slot: sel4::seL4_CPtr = 0;
+        while slot < sample {
+            if slot == probe_slot {
+                slot = slot.saturating_add(1);
+                continue;
+            }
+
+            let err = cspace_sys::cnode_copy_invoc(self.init_cnode_bits, probe_slot, slot);
             let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
             let _ = write!(
                 &mut line,
-                "[cnode] slot=0x{cap:04x} ident=0x{ident:08x}",
+                "[cnode] probe src=0x{slot:04x} err={err} ({name})",
+                name = sel4::error_name(err),
             );
             emit_console_line(line.as_str());
-            index += 1;
+
+            if err == sel4::seL4_NoError {
+                let cleanup = cspace_sys::cnode_delete_invoc(probe_slot);
+                if cleanup != sel4::seL4_NoError {
+                    let mut cleanup_line = String::<MAX_DIAGNOSTIC_LEN>::new();
+                    let _ = write!(
+                        &mut cleanup_line,
+                        "[cnode] probe cleanup dest=0x{probe_slot:04x} err={cleanup} ({name})",
+                        name = sel4::error_name(cleanup),
+                    );
+                    emit_console_line(cleanup_line.as_str());
+                }
+            }
+
+            slot = slot.saturating_add(1);
         }
     }
 

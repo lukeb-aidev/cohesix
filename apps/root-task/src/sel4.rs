@@ -5,7 +5,7 @@
 #![allow(clippy::missing_panics_doc)]
 #![allow(unsafe_code)]
 
-use core::{fmt, mem, ptr::NonNull};
+use core::{arch::asm, fmt, mem, ptr::NonNull};
 
 use heapless::Vec;
 pub use sel4_sys::{
@@ -37,7 +37,40 @@ const CANONICAL_CNODE_DEPTH: seL4_Word =
 const CANONICAL_DEST_OFFSET: seL4_Word = 0;
 
 /// Emits a single byte to the seL4 debug console.
-#[cfg(feature = "kernel")]
+#[cfg(all(feature = "kernel", sel4_config_printing))]
+#[inline(always)]
+pub fn debug_put_char(ch: i32) {
+    unsafe {
+        debug_put_char_syscall(ch as u8);
+    }
+}
+
+#[cfg(all(feature = "kernel", sel4_config_printing))]
+#[inline(always)]
+unsafe fn debug_put_char_syscall(byte: u8) {
+    const SYS_DEBUG_PUT_CHAR: u64 = (!0u64).wrapping_sub(8); // -9 in two's complement
+    let mut x0 = byte as u64;
+    let mut x1: u64 = 0;
+    let mut x2: u64 = 0;
+    let mut x3: u64 = 0;
+    let mut x4: u64 = 0;
+    let mut x5: u64 = 0;
+    let mut x6: u64 = 0;
+    asm!(
+        "svc #0",
+        inout("x0") x0,
+        inout("x1") x1,
+        inout("x2") x2,
+        inout("x3") x3,
+        inout("x4") x4,
+        inout("x5") x5,
+        inout("x6") x6,
+        in("x7") SYS_DEBUG_PUT_CHAR,
+        options(nostack, preserves_flags),
+    );
+}
+
+#[cfg(all(feature = "kernel", not(sel4_config_printing)))]
 #[inline(always)]
 pub fn debug_put_char(ch: i32) {
     write_debug_byte(ch as u8);
@@ -46,32 +79,6 @@ pub fn debug_put_char(ch: i32) {
 #[cfg(not(feature = "kernel"))]
 #[inline(always)]
 pub fn debug_put_char(_ch: i32) {}
-
-/// Identifies the capability type resident in the provided slot (debug kernels only).
-#[cfg(all(feature = "kernel", sel4_config_debug_build))]
-#[inline(always)]
-pub fn debug_cap_identify(cap: seL4_CPtr) -> seL4_Word {
-    unsafe { seL4_DebugCapIdentify(cap) }
-}
-
-/// Fallback stub when debug identify is unavailable.
-#[cfg(not(all(feature = "kernel", sel4_config_debug_build)))]
-#[inline(always)]
-pub fn debug_cap_identify(_cap: seL4_CPtr) -> seL4_Word {
-    0
-}
-
-/// Dumps the contents of a CNode to the debug console (debug kernels only).
-#[cfg(all(feature = "kernel", sel4_config_debug_build))]
-#[inline(always)]
-pub fn debug_dump_cnode(root: seL4_CNode) {
-    unsafe { seL4_DebugDumpCNode(root) }
-}
-
-/// Fallback stub when debug dump is unavailable.
-#[cfg(not(all(feature = "kernel", sel4_config_debug_build)))]
-#[inline(always)]
-pub fn debug_dump_cnode(_root: seL4_CNode) {}
 
 /// Safe projection of `seL4_CNode_Copy` for bootstrap modules.
 #[cfg(feature = "kernel")]
@@ -186,12 +193,6 @@ unsafe fn sel4_debug_poll_char() -> i32 {
     }
 
     seL4_DebugPollChar()
-}
-
-#[cfg(all(feature = "kernel", sel4_config_debug_build))]
-extern "C" {
-    fn seL4_DebugCapIdentify(cap: seL4_CPtr) -> seL4_Word;
-    fn seL4_DebugDumpCNode(root: seL4_CNode);
 }
 
 fn objtype_name(t: seL4_Word) -> &'static str {

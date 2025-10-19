@@ -18,6 +18,9 @@ const CONFIG_CANDIDATES: &[&str] = &[
     "KernelConfig",
     "kernel/KernelConfig",
     "kernel/gen_config/KernelConfig",
+    "kernel/gen_config/kernel/gen_config.h",
+    "kernel/gen_config/kernel/KernelConfig",
+    "kernel/gen_config/kernel/KernelConfigGenerated.cmake",
     "kernel/gen_config/KernelConfigGenerated.cmake",
     "kernel/gen_config/kernel_all.cmake",
 ];
@@ -137,6 +140,28 @@ fn main() {
         .expect("libsel4.a should reside inside a directory");
     println!("cargo:rustc-link-search=native={}", lib_dir.display());
     println!("cargo:rustc-link-lib=static=sel4");
+
+    let debug_enabled = probe_config_flag(&build_path, "CONFIG_DEBUG_BUILD") == Some(true);
+    if debug_enabled {
+        if let Ok(libsel4debug) = find_artifact(
+            &build_path,
+            "libsel4debug.a",
+            &[
+                "libsel4/libsel4debug.a",
+                "lib/libsel4debug.a",
+                "libsel4debug.a",
+            ],
+        ) {
+            if let Some(dir) = libsel4debug.parent() {
+                println!("cargo:rustc-link-search=native={}", dir.display());
+            }
+            println!("cargo:rustc-link-lib=static=sel4debug");
+        } else {
+            println!(
+                "cargo:warning=CONFIG_DEBUG_BUILD enabled but libsel4debug.a not found; debug syscalls may be unavailable"
+            );
+        }
+    }
 
     if explicit_linker_script.is_none() {
         if let Err(err) = stage_linker_script(&build_path) {
