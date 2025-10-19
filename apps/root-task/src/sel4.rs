@@ -19,8 +19,8 @@ pub use sel4_sys::{
 
 use sel4_sys::{
     seL4_ARM_PageTableObject, seL4_ARM_PageTable_Map, seL4_ARM_Page_Default, seL4_ARM_Page_Map,
-    seL4_ARM_Page_Uncached, seL4_BootInfo, seL4_CNode_Copy, seL4_CNode_Delete,
-    seL4_NotEnoughMemory, seL4_ObjectType, seL4_SlotRegion, UntypedDesc, MAX_BOOTINFO_UNTYPEDS,
+    seL4_ARM_Page_Uncached, seL4_BootInfo, seL4_CNode_Delete, seL4_NotEnoughMemory,
+    seL4_ObjectType, seL4_SlotRegion, UntypedDesc, MAX_BOOTINFO_UNTYPEDS,
 };
 
 #[cfg(feature = "kernel")]
