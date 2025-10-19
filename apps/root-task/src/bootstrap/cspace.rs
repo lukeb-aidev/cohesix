@@ -6,7 +6,37 @@ use heapless::String;
 
 use super::cspace_sys;
 
-const MAX_DIAGNOSTIC_LEN: usize = 192;
+const MAX_DIAGNOSTIC_LEN: usize = 224;
+
+#[inline(always)]
+fn cap_rights_rw_grant() -> sel4::seL4_CapRights {
+    #[cfg(target_os = "none")]
+    {
+        sel4::seL4_CapRights::new(0, 1, 1, 1)
+    }
+
+    #[cfg(not(target_os = "none"))]
+    {
+        let mut value = 0usize;
+        value |= 1 << 2;
+        value |= 1 << 1;
+        value |= 1;
+        value as sel4::seL4_CapRights
+    }
+}
+
+#[inline(always)]
+fn cap_rights_raw(rights: sel4::seL4_CapRights) -> sel4::seL4_Word {
+    #[cfg(target_os = "none")]
+    {
+        rights.raw()
+    }
+
+    #[cfg(not(target_os = "none"))]
+    {
+        rights as sel4::seL4_Word
+    }
+}
 
 /// Lightweight projection of [`seL4_BootInfo`] exposing capability-space fields.
 #[derive(Copy, Clone)]
@@ -93,7 +123,7 @@ impl CSpaceCtx {
         let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
         let _ = write!(
             &mut line,
-            "boot: cnode_bits={bits} empty=[{lo}..{hi})",
+            "[boot] cnode_bits={bits} empty=[{lo}..{hi})",
             bits = self.init_cnode_bits,
             lo = self.first_free,
             hi = self.last_free,
@@ -154,13 +184,25 @@ impl CSpaceCtx {
         err: sel4::seL4_Error,
         dst_slot: sel4::seL4_CPtr,
         src_slot: sel4::seL4_CPtr,
-        dest_depth: u8,
-        src_depth: u8,
+        rights: sel4::seL4_CapRights,
+        badge: sel4::seL4_Word,
     ) {
         let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
         let _ = write!(
             &mut line,
-            "[cnode] {tag} err={err} dest(root=init, index=init, depth={dest_depth}, offset={dst_slot}) src(root=init, index(slot)={src_slot}, depth={src_depth})",
+            "[cnode] {tag} err={err} dest=direct(root=init, depth={dest_depth}, offset=0x{dst_slot:04x}) src=invoc(root=init, index=0x{src_slot:04x}) rights=0x{rights:02x} badge=0x{badge:08x}",
+            dest_depth = self.init_cnode_bits,
+            rights = cap_rights_raw(rights),
+        );
+        emit_console_line(line.as_str());
+    }
+
+    pub fn log_cnode_delete(&self, tag: &str, err: sel4::seL4_Error, dst_slot: sel4::seL4_CPtr) {
+        let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
+        let _ = write!(
+            &mut line,
+            "[cnode] {tag} err={err} dest=direct(root=init, depth={depth}, offset=0x{dst_slot:04x})",
+            depth = self.init_cnode_bits,
         );
         emit_console_line(line.as_str());
     }
@@ -173,14 +215,39 @@ impl CSpaceCtx {
         obj_ty: sel4::seL4_Word,
         size_bits: sel4::seL4_Word,
         dst_slot: sel4::seL4_CPtr,
-        dest_depth: u8,
     ) {
         let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
         let _ = write!(
             &mut line,
-            "[retype] {tag} err={err} untyped={untyped} ty={obj_ty} sz={size_bits} dest(depth={dest_depth}, offset={dst_slot})",
+            "[retype] {tag} err={err} untyped=0x{untyped:08x} ty={obj_ty} sz={size_bits} dest=direct(root=init, depth={depth}, offset=0x{dst_slot:04x})",
+            depth = self.init_cnode_bits,
         );
         emit_console_line(line.as_str());
+    }
+
+    pub fn smoke_mint_root_cnode(&self) -> Result<(), sel4::seL4_Error> {
+        let dst_slot = self.first_free;
+        let src_slot = sel4::seL4_CapInitThreadCNode;
+        let rights = cap_rights_rw_grant();
+        let err = cspace_sys::cnode_mint_dest_direct_src_invoc(
+            self.init_cnode_bits,
+            dst_slot,
+            src_slot,
+            rights,
+            0,
+        );
+        self.log_cnode_mint("SmokeMintRootCNode", err, dst_slot, src_slot, rights, 0);
+        if err != sel4::seL4_NoError {
+            return Err(err);
+        }
+
+        let delete_err = cspace_sys::cnode_delete_dest_direct(self.init_cnode_bits, dst_slot);
+        self.log_cnode_delete("SmokeMintRootCNodeCleanup", delete_err, dst_slot);
+        if delete_err != sel4::seL4_NoError {
+            return Err(delete_err);
+        }
+
+        Ok(())
     }
 
     pub fn mint_root_cnode_copy(&mut self) -> Result<(), sel4::seL4_Error> {
@@ -191,7 +258,7 @@ impl CSpaceCtx {
                 return Err(sel4_sys::seL4_RangeError);
             }
         };
-        let rights = sel4::seL4_CapRights::new(0, 1, 1, 1);
+        let rights = cap_rights_rw_grant();
         let src_slot = sel4::seL4_CapInitThreadCNode;
         let err = cspace_sys::cnode_mint_dest_direct_src_invoc(
             self.init_cnode_bits,
@@ -200,15 +267,8 @@ impl CSpaceCtx {
             rights,
             0,
         );
+        self.log_cnode_mint("MintRootCNodeCopy", err, dst_slot, src_slot, rights, 0);
         if err != sel4::seL4_NoError {
-            self.log_cnode_mint(
-                "MintRootCNodeCopy",
-                err,
-                dst_slot,
-                src_slot,
-                self.init_cnode_bits,
-                0,
-            );
             return Err(err);
         }
         self.root_cnode_copy_slot = dst_slot;
@@ -228,17 +288,7 @@ impl CSpaceCtx {
             size_bits,
             dst_slot,
         );
-        if err != sel4::seL4_NoError {
-            self.log_retype(
-                "Retype",
-                err,
-                untyped,
-                obj_ty,
-                size_bits,
-                dst_slot,
-                self.init_cnode_bits,
-            );
-        }
+        self.log_retype("Retype", err, untyped, obj_ty, size_bits, dst_slot);
         err
     }
 

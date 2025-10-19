@@ -199,6 +199,13 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
 
     let bi_view = BootInfoView::from(bootinfo_ref);
     let mut cs = CSpaceCtx::new(bi_view);
+    cs.smoke_mint_root_cnode().unwrap_or_else(|err| {
+        panic!(
+            "smoke mint of init CNode capability failed: {} ({})",
+            err,
+            error_name(err)
+        )
+    });
     let (lo, hi) = cs.empty_bounds();
     let mut cnode_line = heapless::String::<160>::new();
     let _ = write!(

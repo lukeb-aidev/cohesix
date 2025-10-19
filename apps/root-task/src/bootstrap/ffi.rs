@@ -22,16 +22,7 @@ pub fn cnode_mint_to_slot(
         rights,
         badge,
     );
-    if err != sys::seL4_NoError {
-        ctx.log_cnode_mint(
-            "MintToSlot",
-            err,
-            dst_slot,
-            src_slot,
-            ctx.init_cnode_bits,
-            0,
-        );
-    }
+    ctx.log_cnode_mint("MintToSlot", err, dst_slot, src_slot, rights, badge);
     err
 }
 
@@ -49,16 +40,13 @@ pub fn untyped_retype_to_slot(
         size_bits,
         dst_slot,
     );
-    if err != sys::seL4_NoError {
-        ctx.log_retype(
-            "RetypeToSlot",
-            err,
-            untyped_cap,
-            obj_type,
-            size_bits,
-            dst_slot,
-            ctx.init_cnode_bits,
-        );
-    }
+    ctx.log_retype(
+        "RetypeToSlot",
+        err,
+        untyped_cap,
+        obj_type,
+        size_bits,
+        dst_slot,
+    );
     err
 }

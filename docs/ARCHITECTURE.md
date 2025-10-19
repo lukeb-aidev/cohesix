@@ -26,8 +26,14 @@
 
 ### Bootstrap CSpace Addressing
 
-- The root task mints an all-rights copy of the init thread's root CNode into the first free slot of the bootinfo-provided empty window. This writeable alias prevents `seL4_Untyped_Retype` from tripping the kernel's "destination cap invalid or read-only" guard while retaining the canonical init CSpace layout.
-- All bootstrap retypes issue invocation-addressed `seL4_Untyped_Retype` calls (`node_index = 0`, `node_depth = 0`). This avoids extra CNode traversals during early boot while still targeting the slots handed out by the bump allocator within `bootinfo.empty`.
+- All bootstrap `seL4_CNode_*` calls program the destination as direct addressing:
+  - `dest_root = seL4_CapInitThreadCNode`
+  - `dest_index = seL4_CapInitThreadCNode`
+  - `dest_depth = bootinfo.initThreadCNodeSizeBits`
+  - `dest_offset = bootinfo.empty.start + slot_delta`
+- Source capabilities for mint/copy/move use invocation addressing with `src_root = seL4_CapInitThreadCNode`, `src_index = <slot>`, and `src_depth = 0`.
+- Untyped retypes target the same direct destination tuple, ensuring the kernel observes a writable CNode endpoint for freshly minted objects.
+- Bootstrapping begins with a smoke mint of the init CNode cap into `bootinfo.empty.start`, immediately deleting the temporary alias once the invocation succeeds. This provides proof that the addressing tuple matches the kernel's expectations before further mint/retype traffic occurs.
 
 ## 3. Component Responsibilities
 ### Root Task (crate: `root-task`)
