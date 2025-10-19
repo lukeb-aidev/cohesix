@@ -105,7 +105,7 @@ pub fn untyped_retype_invoc(
             size_bits,
             sys::seL4_CapInitThreadCNode,
             dst_slot,
-            0u8,
+            0usize,
             0usize,
             1,
         )
