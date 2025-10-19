@@ -32,6 +32,10 @@ use sel4_panicking::write_debug_byte;
 /// Alias to the boot information structure exposed by `sel4_sys`.
 pub type BootInfo = seL4_BootInfo;
 
+const CANONICAL_CNODE_DEPTH: seL4_Word =
+    (mem::size_of::<seL4_Word>() * 8) as seL4_Word;
+const CANONICAL_DEST_OFFSET: seL4_Word = 0;
+
 /// Emits a single byte to the seL4 debug console.
 #[cfg(feature = "kernel")]
 #[inline(always)]
@@ -54,7 +58,6 @@ pub fn cnode_copy(
     src_index: seL4_CPtr,
     src_depth: u8,
     rights: sel4_sys::seL4_CapRights,
-    dest_offset: seL4_CPtr,
 ) -> seL4_Error {
     debug_put_char(b'C' as i32);
     unsafe {
@@ -66,7 +69,6 @@ pub fn cnode_copy(
             src_index,
             src_depth,
             rights,
-            dest_offset,
         )
     }
 }
@@ -92,7 +94,6 @@ pub(crate) fn cnode_mint(
     src_depth: u8,
     rights: sel4_sys::seL4_CapRights,
     badge: seL4_Word,
-    dest_offset: seL4_CPtr,
 ) -> seL4_Error {
     debug_put_char(b'C' as i32);
     unsafe {
@@ -105,7 +106,6 @@ pub(crate) fn cnode_mint(
             src_depth,
             rights,
             badge,
-            dest_offset,
         )
     }
 }
@@ -1191,7 +1191,9 @@ impl<'a> KernelEnv<'a> {
         });
 
         let init_cnode = self.bootinfo.init_cnode_cap();
-        let expected_depth: seL4_Word = 0;
+        let expected_depth: seL4_Word = CANONICAL_CNODE_DEPTH;
+        let expected_index: seL4_Word = trace.dest_slot as seL4_Word;
+        let expected_offset: seL4_Word = CANONICAL_DEST_OFFSET;
 
         assert_eq!(
             trace.cnode_root, init_cnode,
@@ -1217,9 +1219,10 @@ impl<'a> KernelEnv<'a> {
             max_slots
         );
         assert_eq!(
-            node_index, 0,
-            "Retype: node_index 0x{:x} must be zero when targeting the init CSpace root",
-            node_index
+            node_index, expected_index,
+            "Retype: node_index 0x{:x} must match destination slot index 0x{:x} when targeting the init CSpace root",
+            node_index,
+            expected_index
         );
 
         let dest_offset = sanitised.dest_offset;
@@ -1230,9 +1233,15 @@ impl<'a> KernelEnv<'a> {
             init_bits,
             max_slots
         );
+        assert_eq!(
+            dest_offset, expected_offset,
+            "Retype: dest_offset 0x{:x} must match canonical offset 0x{:x} when targeting the init CSpace root",
+            dest_offset,
+            expected_offset
+        );
 
-        sanitised.node_index = node_index;
-        sanitised.dest_offset = dest_offset;
+        sanitised.node_index = expected_index;
+        sanitised.dest_offset = expected_offset;
 
         (sanitised, init_bits)
     }
@@ -1442,12 +1451,13 @@ impl<'a> KernelEnv<'a> {
         // Canonical: target the root CNode directly and describe the destination slot explicitly.
         // seL4 first resolves the `(root, node_index, node_depth)` triple to locate the CNode that
         // will receive the new capability. The initial thread's CSpace is single-level, so the
-        // kernel consumes the supplied root capability directly with `node_index = 0` and a zero
-        // guard depth. The slot to populate is therefore provided exclusively through `dest_offset`.
+        // kernel consumes the supplied root capability directly with a guard depth equal to the
+        // machine word size. The slot to populate is therefore encoded via the node index while the
+        // destination offset remains zero.
         let cnode_root = self.slots.root(); // seL4_CapInitThreadCNode
-        let node_index: seL4_Word = 0; // no traversal below the writable root CNode
-        let cnode_depth: seL4_Word = 0;
-        let dest_offset = slot as seL4_Word; // actual slot to fill
+        let node_index: seL4_Word = slot as seL4_Word;
+        let cnode_depth: seL4_Word = CANONICAL_CNODE_DEPTH;
+        let dest_offset: seL4_Word = CANONICAL_DEST_OFFSET;
         RetypeTrace {
             untyped_cap: reserved.cap(),
             untyped_paddr: reserved.paddr(),
@@ -1466,8 +1476,9 @@ impl<'a> KernelEnv<'a> {
     fn record_retype(&mut self, trace: RetypeTrace, status: RetypeStatus) {
         let init_cnode_cap = self.bootinfo.init_cnode_cap();
         let init_bits = self.bootinfo.init_cnode_bits();
-        let expected_depth: seL4_Word = 0;
-        let expected_index: seL4_Word = 0;
+        let expected_depth: seL4_Word = CANONICAL_CNODE_DEPTH;
+        let expected_index: seL4_Word = trace.dest_slot as seL4_Word;
+        let expected_offset: seL4_Word = CANONICAL_DEST_OFFSET;
         let max_slots = 1usize.checked_shl(init_bits as u32).unwrap_or_else(|| {
             panic!(
                 "initThreadCNodeSizeBits {} exceeds host word size",
@@ -1500,23 +1511,22 @@ impl<'a> KernelEnv<'a> {
             });
         } else {
             let dest_offset = trace.dest_offset;
-            let dest_slot_word = trace.dest_slot as seL4_Word;
             if (dest_offset as usize) >= max_slots {
                 sanitise_error = Some(RetypeSanitiseError::OffsetOutOfRange {
                     provided: dest_offset,
                     capacity: max_slots,
                 });
-            } else if dest_offset != dest_slot_word {
+            } else if dest_offset != expected_offset {
                 sanitise_error = Some(RetypeSanitiseError::DestOffsetMismatch {
                     offset: dest_offset,
-                    slot: dest_slot_word,
+                    slot: expected_offset,
                 });
             } else {
                 let mut sanitised_trace = trace;
                 sanitised_trace.cnode_root = init_cnode_cap;
                 sanitised_trace.node_index = expected_index;
                 sanitised_trace.cnode_depth = expected_depth;
-                sanitised_trace.dest_offset = dest_offset;
+                sanitised_trace.dest_offset = expected_offset;
                 sanitised = Some(sanitised_trace);
             }
         }
@@ -1738,10 +1748,11 @@ mod tests {
             RetypeKind::DevicePage { paddr: 0 },
         );
         assert_eq!(trace.cnode_root, seL4_CapInitThreadCNode);
-        let expected_index: seL4_Word = 0;
+        let expected_index: seL4_Word = slot as seL4_Word;
+        let expected_depth: seL4_Word = CANONICAL_CNODE_DEPTH;
         assert_eq!(trace.node_index, expected_index);
-        assert_eq!(trace.cnode_depth, 0);
-        assert_eq!(trace.dest_offset, slot as seL4_Word);
+        assert_eq!(trace.cnode_depth, expected_depth);
+        assert_eq!(trace.dest_offset, CANONICAL_DEST_OFFSET);
         assert_eq!(trace.dest_slot, slot);
     }
 
@@ -1773,15 +1784,15 @@ mod tests {
         let env = KernelEnv::new(bootinfo_ref);
 
         let slot: seL4_CPtr = 0x00c8;
-        let canonical_depth: seL4_Word = 0;
-        let canonical_index: seL4_Word = 0;
+        let canonical_depth: seL4_Word = CANONICAL_CNODE_DEPTH;
+        let canonical_index: seL4_Word = slot as seL4_Word;
         let trace = RetypeTrace {
             untyped_cap: 0x200,
             untyped_paddr: 0,
             untyped_size_bits: PAGE_BITS as u8,
             cnode_root: seL4_CapInitThreadCNode,
             dest_slot: slot,
-            dest_offset: slot as seL4_Word,
+            dest_offset: CANONICAL_DEST_OFFSET,
             cnode_depth: canonical_depth,
             node_index: canonical_index,
             object_type: seL4_ObjectType::seL4_ARM_Page as seL4_Word,
@@ -1807,15 +1818,15 @@ mod tests {
         let env = KernelEnv::new(bootinfo_ref);
 
         let slot: seL4_CPtr = 0x0097;
-        let canonical_index: seL4_Word = 0;
-        let canonical_depth: seL4_Word = 0;
+        let canonical_index: seL4_Word = slot as seL4_Word;
+        let canonical_depth: seL4_Word = CANONICAL_CNODE_DEPTH;
         let trace = RetypeTrace {
             untyped_cap: 0x100,
             untyped_paddr: 0,
             untyped_size_bits: PAGE_BITS as u8,
             cnode_root: seL4_CapInitThreadCNode,
             dest_slot: slot,
-            dest_offset: slot as seL4_Word,
+            dest_offset: CANONICAL_DEST_OFFSET,
             cnode_depth: canonical_depth,
             node_index: canonical_index,
             object_type: seL4_ObjectType::seL4_ARM_Page as seL4_Word,
@@ -1826,7 +1837,7 @@ mod tests {
         let (sanitised, init_bits) = env.sanitise_retype_trace(trace);
         assert_eq!(sanitised.node_index, canonical_index);
         assert_eq!(sanitised.cnode_depth, canonical_depth);
-        assert_eq!(sanitised.dest_offset, slot as seL4_Word);
+        assert_eq!(sanitised.dest_offset, CANONICAL_DEST_OFFSET);
         assert_eq!(init_bits, bootinfo_ref.init_cnode_bits());
     }
 
@@ -1842,17 +1853,16 @@ mod tests {
         bootinfo.initThreadCNodeSizeBits = 13;
         let bootinfo_ref: &'static mut seL4_BootInfo = Box::leak(Box::new(bootinfo));
         let env = KernelEnv::new(bootinfo_ref);
-        let canonical_index: seL4_Word = 0;
-        let canonical_depth: seL4_Word = 0;
+        let canonical_depth: seL4_Word = CANONICAL_CNODE_DEPTH;
         let valid_trace = RetypeTrace {
             untyped_cap: 0x100,
             untyped_paddr: 0,
             untyped_size_bits: PAGE_BITS as u8,
             cnode_root: seL4_CapInitThreadCNode,
             dest_slot: 0x1ff,
-            dest_offset: 0x1ff,
+            dest_offset: CANONICAL_DEST_OFFSET,
             cnode_depth: canonical_depth,
-            node_index: canonical_index,
+            node_index: 0x1ff,
             object_type: seL4_ObjectType::seL4_ARM_Page as seL4_Word,
             object_size_bits: PAGE_BITS as seL4_Word,
             kind: RetypeKind::DmaPage { paddr: 0 },
@@ -1868,10 +1878,10 @@ mod tests {
         }));
         assert!(index_check.is_err());
 
-        let mut nonzero_index = valid_trace;
-        nonzero_index.node_index = 1;
+        let mut nonmatching_index = valid_trace;
+        nonmatching_index.node_index = valid_trace.node_index.saturating_add(1);
         let nonzero_check = panic::catch_unwind(AssertUnwindSafe(|| {
-            env.sanitise_retype_trace(nonzero_index);
+            env.sanitise_retype_trace(nonmatching_index);
         }));
         assert!(nonzero_check.is_err());
 
@@ -1884,7 +1894,7 @@ mod tests {
 
         let mut invalid_offset = valid_trace;
         invalid_offset.dest_slot = 1 << 13;
-        invalid_offset.dest_offset = 1 << 13;
+        invalid_offset.node_index = invalid_offset.dest_slot as seL4_Word;
         let offset_check = panic::catch_unwind(AssertUnwindSafe(|| {
             env.sanitise_retype_trace(invalid_offset);
         }));

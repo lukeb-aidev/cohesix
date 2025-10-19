@@ -191,9 +191,10 @@ impl CSpaceCtx {
         src_index: sel4::seL4_CPtr,
     ) {
         let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
+        let canonical_depth = super::cspace_sys::CANONICAL_CNODE_DEPTH_BITS;
         let _ = write!(
             &mut line,
-            "[cnode] Copy err={err} dest(index=0x{dest_index:04x},depth=0) src(index=0x{src_index:04x},depth=0)",
+            "[cnode] Copy err={err} dest(index=0x{dest_index:04x},depth={canonical_depth}) src(index=0x{src_index:04x},depth={canonical_depth})",
         );
         emit_console_line(line.as_str());
     }
@@ -206,9 +207,10 @@ impl CSpaceCtx {
         badge: sel4::seL4_Word,
     ) {
         let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
+        let canonical_depth = super::cspace_sys::CANONICAL_CNODE_DEPTH_BITS;
         let _ = write!(
             &mut line,
-            "[cnode] Mint err={err} dest(index=0x{dest_index:04x},depth=0,offset=0) src(index=0x{src_index:04x},depth=0) badge={badge}",
+            "[cnode] Mint err={err} dest(index=0x{dest_index:04x},depth={canonical_depth},offset=0) src(index=0x{src_index:04x},depth={canonical_depth}) badge={badge}",
         );
         emit_console_line(line.as_str());
     }
@@ -222,9 +224,10 @@ impl CSpaceCtx {
         dest_index: sel4::seL4_CPtr,
     ) {
         let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
+        let canonical_depth = super::cspace_sys::CANONICAL_CNODE_DEPTH_BITS;
         let _ = write!(
             &mut line,
-            "[retype] err={err} untyped_slot=0x{untyped:04x} dest(index=0x{dest_index:04x},depth=0,offset=0) ty={obj_ty} sz={size_bits}",
+            "[retype] err={err} untyped_slot=0x{untyped:04x} dest(index=0x{dest_index:04x},depth={canonical_depth},offset=0) ty={obj_ty} sz={size_bits}",
         );
         emit_console_line(line.as_str());
     }
@@ -233,7 +236,15 @@ impl CSpaceCtx {
         let dst_slot = self.first_free;
         let src_slot = sel4::seL4_CapInitThreadTCB;
         self.assert_slot_available(dst_slot);
-        let err = cspace_sys::cnode_copy_invoc(dst_slot, src_slot);
+        {
+            let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
+            let _ = write!(
+                &mut line,
+                "[cnode] Copy attempt dest=0x{dst_slot:04x} src=0x{src_slot:04x}",
+            );
+            emit_console_line(line.as_str());
+        }
+        let err = cspace_sys::cnode_copy_invoc(self.init_cnode_bits, dst_slot, src_slot);
         self.log_cnode_copy(err, dst_slot, src_slot);
         if err == sel4::seL4_NoError {
             self.tcb_copy_slot = dst_slot;
@@ -248,7 +259,8 @@ impl CSpaceCtx {
         let dst_slot = self.first_free.saturating_add(1);
         self.assert_slot_available(dst_slot);
         let src_slot = sel4::seL4_CapInitThreadCNode;
-        let err = cspace_sys::cnode_mint_invoc(dst_slot, src_slot, 0);
+        let err =
+            cspace_sys::cnode_mint_invoc(self.init_cnode_bits, dst_slot, src_slot, 0);
         self.log_cnode_mint(err, dst_slot, src_slot, 0);
         if err == sel4::seL4_NoError {
             self.root_cnode_copy_slot = dst_slot;
@@ -266,7 +278,13 @@ impl CSpaceCtx {
         dst_slot: sel4::seL4_CPtr,
     ) -> sel4::seL4_Error {
         self.assert_slot_available(dst_slot);
-        let err = cspace_sys::untyped_retype_invoc(untyped, obj_ty, size_bits, dst_slot);
+        let err = cspace_sys::untyped_retype_invoc(
+            self.init_cnode_bits,
+            untyped,
+            obj_ty,
+            size_bits,
+            dst_slot,
+        );
         self.log_retype(err, untyped, obj_ty, size_bits, dst_slot);
         if err == sel4::seL4_NoError {
             self.consume_slot(dst_slot);

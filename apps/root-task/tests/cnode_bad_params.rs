@@ -44,7 +44,7 @@ fn ctx_fixture() -> CSpaceCtx {
 
 #[cfg(target_os = "none")]
 #[test]
-fn direct_destination_mint_is_rejected() {
+fn zero_depth_mint_is_rejected() {
     let mut ctx = ctx_fixture();
     assert_eq!(ctx.smoke_copy_init_tcb(), Ok(()));
 
@@ -52,7 +52,7 @@ fn direct_destination_mint_is_rejected() {
         seL4_CNode_Mint(
             seL4_CapInitThreadCNode,
             ctx.first_free,
-            ctx.init_cnode_bits,
+            0,
             seL4_CapInitThreadCNode,
             seL4_CapInitThreadTCB,
             0,
@@ -63,4 +63,29 @@ fn direct_destination_mint_is_rejected() {
     };
 
     assert_ne!(err, seL4_NoError);
+}
+
+#[cfg(target_os = "none")]
+#[test]
+fn canonical_depth_mint_succeeds() {
+    let mut ctx = ctx_fixture();
+    assert_eq!(ctx.smoke_copy_init_tcb(), Ok(()));
+    let canonical_depth =
+        (core::mem::size_of::<sel4::seL4_Word>() * 8) as u8;
+
+    let err = unsafe {
+        seL4_CNode_Mint(
+            seL4_CapInitThreadCNode,
+            ctx.first_free.saturating_add(1),
+            canonical_depth,
+            seL4_CapInitThreadCNode,
+            seL4_CapInitThreadTCB,
+            canonical_depth,
+            seL4_CapRights_ReadWrite,
+            0,
+            0,
+        )
+    };
+
+    assert_eq!(err, seL4_NoError);
 }
