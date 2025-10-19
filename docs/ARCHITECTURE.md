@@ -26,14 +26,10 @@
 
 ### Bootstrap CSpace Addressing
 
-- All bootstrap `seL4_CNode_*` calls program the destination as direct addressing:
-  - `dest_root = seL4_CapInitThreadCNode`
-  - `dest_index = seL4_CapInitThreadCNode`
-  - `dest_depth = bootinfo.initThreadCNodeSizeBits`
-  - `dest_offset = bootinfo.empty.start + slot_delta`
-- Source capabilities for mint/copy/move use invocation addressing with `src_root = seL4_CapInitThreadCNode`, `src_index = <slot>`, and `src_depth = 0`.
-- Untyped retypes target the same direct destination tuple, ensuring the kernel observes a writable CNode endpoint for freshly minted objects.
-- Bootstrapping begins with a smoke mint of the init CNode cap into `bootinfo.empty.start`, immediately deleting the temporary alias once the invocation succeeds. This provides proof that the addressing tuple matches the kernel's expectations before further mint/retype traffic occurs.
+- All bootstrap `seL4_CNode_*` calls rely on invocation addressing so the kernel always interprets the destination as the current CNode slot: `dest_root = seL4_CapInitThreadCNode`, `dest_depth = 0`, and `dest_offset = 0`. Only the `dest_index` varies per allocation.
+- Source capabilities for mint/copy/move likewise use invocation addressing with `src_root = seL4_CapInitThreadCNode`, `src_index = <slot>`, and `src_depth = 0`.
+- Untyped retypes mirror the same invariant; the destination tuple is `(root=initThreadCNode, index=<slot>, depth=0, offset=0)` so the kernel never observes guard bits or offsets during bootstrap.
+- Bootstrapping begins with a smoke copy of the init TCB capability into `bootinfo.empty.start`, confirming that the invocation-only policy succeeds before any mutable capability traffic occurs.
 
 ## 3. Component Responsibilities
 ### Root Task (crate: `root-task`)

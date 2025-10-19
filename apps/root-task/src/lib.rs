@@ -1,6 +1,7 @@
 // Author: Lukas Bower
 #![cfg_attr(feature = "kernel", no_std)]
 #![deny(unsafe_code)]
+#![deny(deprecated)]
 #![warn(missing_docs)]
 
 //! Root-task library surface exposing console and networking modules for tests.

@@ -39,10 +39,13 @@ pub trait AccessPolicy {
 | Negative | Oversized frames, invalid qid types, path traversal attempts, write to RO nodes |
 | Fuzz | Length-prefix mutations, truncated frames, random tail bytes |
 
-## 6. Logging & Observability
+## 6. TCB Sanity
+- Root bootstrap uses invocation addressing for all CNode and Untyped operations; direct addressing paths are disallowed.
+
+## 7. Logging & Observability
 - Core emits debug hooks (`on_attach`, `on_clunk`, `on_error`) that NineDoor subscribes to for logging into `/log/queen.log`.
 - Transport adapters must expose counters for frames sent/received and error counts for CI dashboards.
 
-## 7. Future Enhancements
+## 8. Future Enhancements
 - Opportunistic support for 9P lock extensions once namespace bind/mount stabilises.
 - Optional TLS termination in host tools prior to entering the VM transport adapter.
