@@ -6,7 +6,7 @@ use crate::sel4 as sys;
 #[inline]
 pub fn caprights_rw_grant() -> sys::SeL4CapRights {
     #[cfg(target_os = "none")]
-    {
+    unsafe {
         sys::seL4_CapRights::new(0, 1, 1, 1)
     }
 
@@ -20,12 +20,23 @@ pub fn caprights_rw_grant() -> sys::SeL4CapRights {
     }
 }
 
+/// Slot-range guard ensuring the root CNode index stays within `2^init_cnode_bits`.
+#[inline]
+pub fn check_slot_in_range(init_cnode_bits: u8, slot: sys::seL4_CPtr) {
+    let limit = 1u64 << (init_cnode_bits as u64);
+    assert!(
+        (slot as u64) < limit,
+        "slot {} out of range for init_cnode_bits={} (limit={})",
+        slot,
+        init_cnode_bits,
+        limit
+    );
+}
+
 /// COPY: invocation addressing only, slots passed via `*_index` with `*_depth = 0`.
-pub fn cnode_copy_invoc(
-    dst_slot: sys::seL4_CPtr,
-    src_slot: sys::seL4_CPtr,
-    rights: sys::SeL4CapRights,
-) -> sys::seL4_Error {
+pub fn cnode_copy_invoc(dst_slot: sys::seL4_CPtr, src_slot: sys::seL4_CPtr) -> sys::seL4_Error {
+    let rights = caprights_rw_grant();
+
     #[cfg(target_os = "none")]
     unsafe {
         sys::seL4_CNode_Copy(
@@ -51,9 +62,10 @@ pub fn cnode_copy_invoc(
 pub fn cnode_mint_invoc(
     dst_slot: sys::seL4_CPtr,
     src_slot: sys::seL4_CPtr,
-    rights: sys::SeL4CapRights,
     badge: sys::seL4_Word,
 ) -> sys::seL4_Error {
+    let rights = caprights_rw_grant();
+
     #[cfg(target_os = "none")]
     unsafe {
         sys::seL4_CNode_Mint(
@@ -71,7 +83,7 @@ pub fn cnode_mint_invoc(
 
     #[cfg(not(target_os = "none"))]
     {
-        let _ = (dst_slot, src_slot, rights, badge);
+        let _ = (dst_slot, src_slot, badge, rights);
         sys::seL4_NoError
     }
 }
@@ -80,7 +92,7 @@ pub fn cnode_mint_invoc(
 pub fn cnode_delete_invoc(slot: sys::seL4_CPtr) -> sys::seL4_Error {
     #[cfg(target_os = "none")]
     unsafe {
-        sel4_sys::seL4_CNode_Delete(sys::seL4_CapInitThreadCNode, slot, 0u8)
+        sys::seL4_CNode_Delete(sys::seL4_CapInitThreadCNode, slot, 0u8)
     }
 
     #[cfg(not(target_os = "none"))]
@@ -105,8 +117,8 @@ pub fn untyped_retype_invoc(
             size_bits,
             sys::seL4_CapInitThreadCNode,
             dst_slot,
-            0usize,
-            0usize,
+            0u8,
+            0,
             1,
         )
     }

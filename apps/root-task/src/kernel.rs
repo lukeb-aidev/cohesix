@@ -206,16 +206,6 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
             error_name(err)
         );
     }
-    let (lo, hi) = cs.empty_bounds();
-    let mut cnode_line = heapless::String::<160>::new();
-    let _ = write!(
-        cnode_line,
-        "[boot] init_cnode_bits={} empty=[0x{lo:04x}..0x{hi:04x})",
-        cs.init_cnode_bits,
-        lo = lo,
-        hi = hi,
-    );
-    console.writeln_prefixed(cnode_line.as_str());
 
     if let Err(err) = cs.mint_root_cnode_copy() {
         panic!(
