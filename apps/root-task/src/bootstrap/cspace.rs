@@ -236,6 +236,10 @@ impl CSpaceCtx {
         let dst_slot = self.first_free;
         let src_slot = sel4::seL4_CapInitThreadTCB;
         self.assert_slot_available(dst_slot);
+        #[cfg(sel4_config_debug_build)]
+        {
+            self.dump_init_caps(0x10);
+        }
         {
             let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
             let _ = write!(
@@ -257,6 +261,23 @@ impl CSpaceCtx {
             Ok(())
         } else {
             Err(err)
+        }
+    }
+
+    #[cfg(sel4_config_debug_build)]
+    fn dump_init_caps(&self, max_slots: usize) {
+        let mut index = 0;
+        let limit = core::cmp::min(max_slots, self.last_free as usize);
+        while index < limit {
+            let cap = index as sel4::seL4_CPtr;
+            let ident = sel4::debug_cap_identify(cap);
+            let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
+            let _ = write!(
+                &mut line,
+                "[cnode] slot=0x{cap:04x} ident=0x{ident:08x}",
+            );
+            emit_console_line(line.as_str());
+            index += 1;
         }
     }
 
