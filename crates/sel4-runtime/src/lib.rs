@@ -8,6 +8,7 @@ use sel4_sys::seL4_BootInfo;
 
 const STACK_BYTES: usize = 16 * 1024;
 
+#[allow(dead_code)]
 #[repr(align(16))]
 struct BootStack([u8; STACK_BYTES]);
 
@@ -55,23 +56,27 @@ impl BootInfoCell {
 
 static BOOTINFO: BootInfoCell = BootInfoCell::new();
 
-#[inline(always)]
-fn stack_top() -> *mut u8 {
-    unsafe {
-        let stack = ptr::addr_of_mut!(BOOT_STACK);
-        (*stack).0.as_mut_ptr().add(STACK_BYTES)
-    }
-}
-
 /// seL4 kernel entry stub invoked after seL4 initialises the initial thread.
 #[cfg(target_arch = "aarch64")]
+#[naked]
 #[no_mangle]
 pub unsafe extern "C" fn _start(bootinfo: *mut seL4_BootInfo) -> ! {
     core::arch::asm!(
-        "mov sp, {stack}",
-        stack = in(reg) stack_top(),
-        options(nostack, preserves_flags),
-    );
+        "adrp x1, {stack}",
+        "add x1, x1, :lo12:{stack}",
+        "add x1, x1, #{bytes}",
+        "mov sp, x1",
+        "b {entry}",
+        stack = sym BOOT_STACK,
+        bytes = const STACK_BYTES,
+        entry = sym __sel4_start_rust,
+        options(noreturn)
+    )
+}
+
+#[cfg(target_arch = "aarch64")]
+#[inline(never)]
+unsafe extern "C" fn __sel4_start_rust(bootinfo: *mut seL4_BootInfo) -> ! {
     __sel4_start_init_boot_info(bootinfo);
     extern "C" {
         fn sel4_start(bootinfo: *const seL4_BootInfo) -> !;
