@@ -9,7 +9,7 @@ use super::cspace_sys;
 const MAX_DIAGNOSTIC_LEN: usize = 224;
 
 #[inline(always)]
-fn cap_rights_bits(rights: sel4::seL4_CapRights_t) -> sel4::seL4_Word {
+fn cap_rights_bits(rights: sel4::SeL4CapRights) -> sel4::seL4_Word {
     #[cfg(target_os = "none")]
     {
         rights.raw()
@@ -192,7 +192,7 @@ impl CSpaceCtx {
         err: sel4::seL4_Error,
         dest_index: sel4::seL4_CPtr,
         src_index: sel4::seL4_CPtr,
-        rights: sel4::seL4_CapRights_t,
+        rights: sel4::SeL4CapRights,
     ) {
         let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
         let _ = write!(
@@ -209,7 +209,7 @@ impl CSpaceCtx {
         err: sel4::seL4_Error,
         dest_index: sel4::seL4_CPtr,
         src_index: sel4::seL4_CPtr,
-        rights: sel4::seL4_CapRights_t,
+        rights: sel4::SeL4CapRights,
         badge: sel4::seL4_Word,
     ) {
         let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();

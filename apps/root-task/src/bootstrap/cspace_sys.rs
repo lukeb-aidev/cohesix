@@ -4,7 +4,7 @@
 use crate::sel4 as sys;
 
 #[inline]
-pub fn caprights_rw_grant() -> sys::seL4_CapRights_t {
+pub fn caprights_rw_grant() -> sys::SeL4CapRights {
     #[cfg(target_os = "none")]
     {
         sys::seL4_CapRights::new(0, 1, 1, 1)
@@ -16,7 +16,7 @@ pub fn caprights_rw_grant() -> sys::seL4_CapRights_t {
         value |= 1 << 0; // write
         value |= 1 << 1; // read
         value |= 1 << 2; // grant
-        value as sys::seL4_CapRights_t
+        value as sys::SeL4CapRights
     }
 }
 
@@ -24,7 +24,7 @@ pub fn caprights_rw_grant() -> sys::seL4_CapRights_t {
 pub fn cnode_copy_invoc(
     dst_slot: sys::seL4_CPtr,
     src_slot: sys::seL4_CPtr,
-    rights: sys::seL4_CapRights_t,
+    rights: sys::SeL4CapRights,
 ) -> sys::seL4_Error {
     #[cfg(target_os = "none")]
     unsafe {
@@ -51,7 +51,7 @@ pub fn cnode_copy_invoc(
 pub fn cnode_mint_invoc(
     dst_slot: sys::seL4_CPtr,
     src_slot: sys::seL4_CPtr,
-    rights: sys::seL4_CapRights_t,
+    rights: sys::SeL4CapRights,
     badge: sys::seL4_Word,
 ) -> sys::seL4_Error {
     #[cfg(target_os = "none")]
@@ -80,7 +80,7 @@ pub fn cnode_mint_invoc(
 pub fn cnode_delete_invoc(slot: sys::seL4_CPtr) -> sys::seL4_Error {
     #[cfg(target_os = "none")]
     unsafe {
-        sys::seL4_CNode_Delete(sys::seL4_CapInitThreadCNode, slot, 0u8)
+        sel4_sys::seL4_CNode_Delete(sys::seL4_CapInitThreadCNode, slot, 0u8)
     }
 
     #[cfg(not(target_os = "none"))]
@@ -106,7 +106,7 @@ pub fn untyped_retype_invoc(
             sys::seL4_CapInitThreadCNode,
             dst_slot,
             0u8,
-            0,
+            0usize,
             1,
         )
     }
@@ -128,7 +128,7 @@ pub(crate) mod test_support {
         init_cnode_bits: u8,
         dst_slot: sys::seL4_CPtr,
         src_slot: sys::seL4_CPtr,
-        rights: sys::seL4_CapRights_t,
+        rights: sys::SeL4CapRights,
         badge: sys::seL4_Word,
     ) -> sys::seL4_Error {
         #[cfg(target_os = "none")]

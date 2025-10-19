@@ -18,7 +18,7 @@ pub use sel4_sys::{
 };
 
 /// Canonical capability rights representation exposed by seL4.
-pub type seL4_CapRights_t = sel4_sys::seL4_CapRights;
+pub type SeL4CapRights = sel4_sys::seL4_CapRights;
 
 use sel4_sys::{
     seL4_ARM_PageTableObject, seL4_ARM_PageTable_Map, seL4_ARM_Page_Default, seL4_ARM_Page_Map,

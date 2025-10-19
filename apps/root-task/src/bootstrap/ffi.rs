@@ -12,7 +12,7 @@ pub fn cnode_mint_to_slot(
     ctx: &CSpaceCtx,
     dst_slot: sys::seL4_CPtr,
     src_slot: sys::seL4_CPtr,
-    rights: sys::seL4_CapRights_t,
+    rights: sys::SeL4CapRights,
     badge: sys::seL4_Word,
 ) -> sys::seL4_Error {
     let err = cspace_sys::cnode_mint_invoc(dst_slot, src_slot, rights, badge);
