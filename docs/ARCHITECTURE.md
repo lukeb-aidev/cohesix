@@ -30,6 +30,7 @@
 - Source capabilities for mint/copy/move likewise use invocation addressing with `src_root = seL4_CapInitThreadCNode`, `src_index = <slot>`, and `src_depth = 0`.
 - Untyped retypes mirror the same invariant; the destination tuple is `(root=initThreadCNode, index=<slot>, depth=0, offset=0)` so the kernel never observes guard bits or offsets during bootstrap.
 - Bootstrapping begins with a smoke copy of the init TCB capability into `bootinfo.empty.start`, confirming that the invocation-only policy succeeds before any mutable capability traffic occurs.
+- Bootstrap uses invocation addressing (depth=0). Slots go in index; offset must be 0.
 
 ## 3. Component Responsibilities
 ### Root Task (crate: `root-task`)

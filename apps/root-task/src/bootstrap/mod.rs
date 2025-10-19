@@ -3,7 +3,7 @@
 
 /// Capability-space helpers extracted from the seL4 boot info structure.
 pub mod cspace;
-/// Syscall wrappers for capability operations using direct addressing.
+/// Syscall wrappers for capability operations using invocation addressing only.
 pub mod cspace_sys;
 /// ABI guard helpers ensuring the seL4 FFI signatures remain pinned.
 pub mod ffi;

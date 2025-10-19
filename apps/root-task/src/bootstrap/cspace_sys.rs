@@ -3,13 +3,28 @@
 
 use crate::sel4 as sys;
 
-/// COPY with invocation addressing (both sides): slots go in the `*_index` fields and
-/// `dest_offset` must remain zero.
-#[inline(always)]
+#[inline]
+pub fn caprights_rw_grant() -> sys::seL4_CapRights_t {
+    #[cfg(target_os = "none")]
+    {
+        sys::seL4_CapRights::new(0, 1, 1, 1)
+    }
+
+    #[cfg(not(target_os = "none"))]
+    {
+        let mut value = 0usize;
+        value |= 1 << 0; // write
+        value |= 1 << 1; // read
+        value |= 1 << 2; // grant
+        value as sys::seL4_CapRights_t
+    }
+}
+
+/// COPY: invocation addressing only, slots passed via `*_index` with `*_depth = 0`.
 pub fn cnode_copy_invoc(
     dst_slot: sys::seL4_CPtr,
     src_slot: sys::seL4_CPtr,
-    rights: sys::seL4_CapRights,
+    rights: sys::seL4_CapRights_t,
 ) -> sys::seL4_Error {
     #[cfg(target_os = "none")]
     unsafe {
@@ -32,12 +47,11 @@ pub fn cnode_copy_invoc(
     }
 }
 
-/// MINT with invocation addressing for both the destination and source slots.
-#[inline(always)]
+/// MINT: invocation addressing on both operands with zero offset.
 pub fn cnode_mint_invoc(
     dst_slot: sys::seL4_CPtr,
     src_slot: sys::seL4_CPtr,
-    rights: sys::seL4_CapRights,
+    rights: sys::seL4_CapRights_t,
     badge: sys::seL4_Word,
 ) -> sys::seL4_Error {
     #[cfg(target_os = "none")]
@@ -62,8 +76,21 @@ pub fn cnode_mint_invoc(
     }
 }
 
-/// RETYPE with invocation addressing for the destination slot.
-#[inline(always)]
+/// DELETE: invocation addressing helper for boot-time cleanup.
+pub fn cnode_delete_invoc(slot: sys::seL4_CPtr) -> sys::seL4_Error {
+    #[cfg(target_os = "none")]
+    unsafe {
+        sys::seL4_CNode_Delete(sys::seL4_CapInitThreadCNode, slot, 0u8)
+    }
+
+    #[cfg(not(target_os = "none"))]
+    {
+        let _ = slot;
+        sys::seL4_NoError
+    }
+}
+
+/// RETYPE: destination slot addressed via invocation tuple `(index=slot, depth=0, offset=0)`.
 pub fn untyped_retype_invoc(
     untyped_slot: sys::seL4_CPtr,
     obj_type: sys::seL4_Word,
@@ -78,7 +105,7 @@ pub fn untyped_retype_invoc(
             size_bits,
             sys::seL4_CapInitThreadCNode,
             dst_slot,
-            0,
+            0u8,
             0,
             1,
         )
@@ -101,7 +128,7 @@ pub(crate) mod test_support {
         init_cnode_bits: u8,
         dst_slot: sys::seL4_CPtr,
         src_slot: sys::seL4_CPtr,
-        rights: sys::seL4_CapRights,
+        rights: sys::seL4_CapRights_t,
         badge: sys::seL4_Word,
     ) -> sys::seL4_Error {
         #[cfg(target_os = "none")]
@@ -112,7 +139,7 @@ pub(crate) mod test_support {
                 init_cnode_bits,
                 sys::seL4_CapInitThreadCNode,
                 src_slot,
-                0,
+                0u8,
                 rights,
                 badge,
                 0,
@@ -143,7 +170,7 @@ pub(crate) mod test_support {
                 size_bits,
                 sys::seL4_CapInitThreadCNode,
                 dst_slot,
-                init_cnode_bits.into(),
+                init_cnode_bits,
                 0,
                 1,
             )

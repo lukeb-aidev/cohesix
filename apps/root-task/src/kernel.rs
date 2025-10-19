@@ -199,13 +199,13 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
 
     let bi_view = BootInfoView::from(bootinfo_ref);
     let mut cs = CSpaceCtx::new(bi_view);
-    cs.smoke_copy_init_tcb().unwrap_or_else(|err| {
+    if let Err(err) = cs.smoke_copy_init_tcb() {
         panic!(
             "smoke copy of init TCB capability failed: {} ({})",
             err,
             error_name(err)
-        )
-    });
+        );
+    }
     let (lo, hi) = cs.empty_bounds();
     let mut cnode_line = heapless::String::<160>::new();
     let _ = write!(
@@ -217,25 +217,31 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
     );
     console.writeln_prefixed(cnode_line.as_str());
 
-    cs.mint_root_cnode_copy().unwrap_or_else(|err| {
+    if let Err(err) = cs.mint_root_cnode_copy() {
         panic!(
             "failed to mint writable init CNode capability: {} ({})",
             err,
             error_name(err)
-        )
-    });
+        );
+    }
 
-    let mut consumed_slots: usize = 2;
     let endpoint_untyped = pick_untyped(bootinfo_ref, sel4_sys::seL4_EndpointBits as u8);
-
-    let endpoint_slot = retype_one(
-        &mut cs,
+    let endpoint_slot = cs.first_free.saturating_add(2);
+    let endpoint_err = cs.retype_to_slot(
         endpoint_untyped,
-        sel4_sys::seL4_ObjectType::seL4_EndpointObject,
-        sel4_sys::seL4_EndpointBits as u8,
-    )
-    .expect("failed to retype endpoint into init CSpace");
-    consumed_slots += 1;
+        sel4_sys::seL4_ObjectType::seL4_EndpointObject as sel4_sys::seL4_Word,
+        0,
+        endpoint_slot,
+    );
+    if endpoint_err != sel4_sys::seL4_NoError {
+        panic!(
+            "failed to retype endpoint into init CSpace: {} ({})",
+            endpoint_err,
+            error_name(endpoint_err)
+        );
+    }
+
+    let mut consumed_slots: usize = 3;
 
     let notification_untyped = pick_untyped(bootinfo_ref, sel4_sys::seL4_NotificationBits as u8);
 
@@ -243,7 +249,7 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
         &mut cs,
         notification_untyped,
         sel4_sys::seL4_ObjectType::seL4_NotificationObject,
-        sel4_sys::seL4_NotificationBits as u8,
+        0,
     )
     .expect("failed to retype notification into init CSpace");
     consumed_slots += 1;
