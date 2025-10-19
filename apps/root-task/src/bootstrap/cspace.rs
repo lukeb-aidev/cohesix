@@ -198,6 +198,8 @@ impl CSpaceCtx {
         src_depth: u8,
         rights: sel4::seL4_CapRights,
     ) {
+        debug_assert_eq!(dest_depth, 0, "bootstrap uses invocation addressing");
+        debug_assert_eq!(dest_offset, 0, "bootstrap uses invocation addressing");
         let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
         let _ = write!(
             &mut line,
@@ -219,6 +221,8 @@ impl CSpaceCtx {
         rights: sel4::seL4_CapRights,
         badge: sel4::seL4_Word,
     ) {
+        debug_assert_eq!(dest_depth, 0, "bootstrap uses invocation addressing");
+        debug_assert_eq!(dest_offset, 0, "bootstrap uses invocation addressing");
         let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
         let _ = write!(
             &mut line,
@@ -239,6 +243,8 @@ impl CSpaceCtx {
         dest_depth: u8,
         dest_offset: sel4::seL4_CPtr,
     ) {
+        debug_assert_eq!(dest_depth, 0, "bootstrap uses invocation addressing");
+        debug_assert_eq!(dest_offset, 0, "bootstrap uses invocation addressing");
         let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
         let _ = write!(
             &mut line,
@@ -257,6 +263,8 @@ impl CSpaceCtx {
         src_index: sel4::seL4_CPtr,
         src_depth: u8,
     ) {
+        debug_assert_eq!(dest_depth, 0, "bootstrap uses invocation addressing");
+        debug_assert_eq!(dest_offset, 0, "bootstrap uses invocation addressing");
         let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
         let _ = write!(
             &mut line,
@@ -274,6 +282,8 @@ impl CSpaceCtx {
         dest_depth: u8,
         dest_offset: sel4::seL4_CPtr,
     ) {
+        debug_assert_eq!(dest_depth, 0, "bootstrap uses invocation addressing");
+        debug_assert_eq!(dest_offset, 0, "bootstrap uses invocation addressing");
         let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
         let _ = write!(
             &mut line,

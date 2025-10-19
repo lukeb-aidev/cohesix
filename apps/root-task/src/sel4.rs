@@ -79,7 +79,7 @@ pub fn cnode_delete(root: seL4_CNode, index: seL4_CPtr, depth: u8) -> seL4_Error
 /// Safe projection of `seL4_CNode_Mint` for bootstrap modules.
 #[cfg(feature = "kernel")]
 #[inline(always)]
-pub fn cnode_mint(
+pub(crate) fn cnode_mint(
     dest_root: seL4_CNode,
     dest_index: seL4_CPtr,
     dest_depth: u8,

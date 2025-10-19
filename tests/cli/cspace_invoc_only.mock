@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Author: Lukas Bower
+
+set -euo pipefail
+
+PROJECT_ROOT="$(git rev-parse --show-toplevel)"
+TARGET_TRIPLE="${COHESIX_CARGO_TARGET:-aarch64-unknown-none}"
+
+if ! rustup target list --installed | grep -q "^${TARGET_TRIPLE}$"; then
+    echo "[cspace-invoc-only] ERROR: install target '${TARGET_TRIPLE}' via 'rustup target add ${TARGET_TRIPLE}'" >&2
+    exit 1
+fi
+
+cargo test \
+    --package root-task \
+    --features kernel \
+    --target "$TARGET_TRIPLE" \
+    --test cnode_bad_params \
+    --no-run
