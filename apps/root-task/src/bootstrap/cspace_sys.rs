@@ -4,8 +4,6 @@
 use crate::sel4 as sys;
 
 pub const CANONICAL_CNODE_DEPTH_BITS: u8 = (core::mem::size_of::<sys::seL4_Word>() * 8) as u8;
-pub const CANONICAL_CNODE_DEPTH_WORD: sys::seL4_Word = CANONICAL_CNODE_DEPTH_BITS as sys::seL4_Word;
-
 #[inline]
 pub fn caprights_rw_grant() -> sys::SeL4CapRights {
     #[cfg(target_os = "none")]
@@ -47,7 +45,7 @@ pub fn cnode_copy_invoc(
         CANONICAL_CNODE_DEPTH_BITS
     );
     let rights = caprights_rw_grant();
-    let depth = CANONICAL_CNODE_DEPTH_BITS;
+    let depth = init_cnode_bits;
 
     #[cfg(target_os = "none")]
     unsafe {
@@ -82,7 +80,7 @@ pub fn cnode_mint_invoc(
         CANONICAL_CNODE_DEPTH_BITS
     );
     let rights = caprights_rw_grant();
-    let depth = CANONICAL_CNODE_DEPTH_BITS;
+    let depth = init_cnode_bits;
 
     #[cfg(target_os = "none")]
     unsafe {
@@ -135,7 +133,7 @@ pub fn untyped_retype_invoc(
         init_cnode_bits,
         CANONICAL_CNODE_DEPTH_BITS
     );
-    let depth_word = CANONICAL_CNODE_DEPTH_WORD;
+    let depth_word = init_cnode_bits as sys::seL4_Word;
 
     #[cfg(target_os = "none")]
     unsafe {
