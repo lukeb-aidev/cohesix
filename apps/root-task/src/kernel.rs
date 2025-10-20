@@ -2,6 +2,7 @@
 #![allow(dead_code)]
 #![allow(unsafe_code)]
 
+use core::cell::UnsafeCell;
 use core::fmt::{self, Write};
 use core::mem::{self, MaybeUninit};
 use core::panic::PanicInfo;
@@ -619,6 +620,26 @@ fn install_ipc_buffer(ptr: *mut sel4_sys::seL4_IPCBuffer) {
     }
 }
 
+struct FallbackIpcBuffer {
+    buffer: UnsafeCell<MaybeUninit<sel4_sys::seL4_IPCBuffer>>,
+}
+
+impl FallbackIpcBuffer {
+    const fn new() -> Self {
+        Self {
+            buffer: UnsafeCell::new(MaybeUninit::uninit()),
+        }
+    }
+
+    unsafe fn zeroed_ptr(&self) -> *mut sel4_sys::seL4_IPCBuffer {
+        let ptr = (*self.buffer.get()).as_mut_ptr();
+        zero_ipc_buffer(ptr);
+        ptr
+    }
+}
+
+unsafe impl Sync for FallbackIpcBuffer {}
+
 unsafe fn initialise_ipc_buffer_with<F>(
     bootinfo: &sel4_sys::seL4_BootInfo,
     setter: F,
@@ -626,28 +647,27 @@ unsafe fn initialise_ipc_buffer_with<F>(
 where
     F: Fn(*mut sel4_sys::seL4_IPCBuffer),
 {
-    static mut FALLBACK_IPC_BUFFER: MaybeUninit<sel4_sys::seL4_IPCBuffer> = MaybeUninit::uninit();
+    static FALLBACK_IPC_BUFFER: FallbackIpcBuffer = FallbackIpcBuffer::new();
 
     let raw_ptr = bootinfo.ipcBuffer as *mut sel4_sys::seL4_IPCBuffer;
     let (buffer_ptr, used_fallback) = if raw_ptr.is_null() {
-        let ptr = FALLBACK_IPC_BUFFER.as_mut_ptr();
-        ptr::write_bytes(
-            ptr.cast::<u8>(),
-            0,
-            mem::size_of::<sel4_sys::seL4_IPCBuffer>(),
-        );
+        let ptr = FALLBACK_IPC_BUFFER.zeroed_ptr();
         (ptr, true)
     } else {
-        ptr::write_bytes(
-            raw_ptr.cast::<u8>(),
-            0,
-            mem::size_of::<sel4_sys::seL4_IPCBuffer>(),
-        );
+        zero_ipc_buffer(raw_ptr);
         (raw_ptr, false)
     };
 
     setter(buffer_ptr);
     (buffer_ptr, used_fallback)
+}
+
+unsafe fn zero_ipc_buffer(ptr: *mut sel4_sys::seL4_IPCBuffer) {
+    ptr::write_bytes(
+        ptr.cast::<u8>(),
+        0,
+        mem::size_of::<sel4_sys::seL4_IPCBuffer>(),
+    );
 }
 
 #[cfg(test)]
