@@ -14,11 +14,11 @@ struct CNodeDepth {
 
 impl CNodeDepth {
     #[inline(always)]
-    fn new(init_cnode_bits: u8) -> Self {
-        debug_assert!(init_cnode_bits <= CANONICAL_CNODE_DEPTH_BITS);
+    fn new(bits: u8) -> Self {
+        debug_assert!(bits <= CANONICAL_CNODE_DEPTH_BITS);
         Self {
-            bits_u8: init_cnode_bits,
-            bits_word: init_cnode_bits as sys::seL4_Word,
+            bits_u8: bits,
+            bits_word: bits as sys::seL4_Word,
         }
     }
 
@@ -35,15 +35,16 @@ impl CNodeDepth {
 
 #[inline(always)]
 fn resolve_cnode_depth(init_cnode_bits: u8) -> CNodeDepth {
-    // The init thread's CNode depth is governed by the radix width reported via
-    // bootinfo. The kernel performs guard handling internally, so userspace must
-    // forward the advertised radix when issuing `seL4_CNode_*` operations. Using
-    // the canonical word width here caused `FailedLookup` errors during bootstrap
-    // on real hardware because the kernel treated the excess bits as an invalid
-    // traversal. Propagating the bootinfo depth keeps the invocation aligned with
-    // the kernel's expectations while still bounding inputs via
-    // `CANONICAL_CNODE_DEPTH_BITS`.
-    CNodeDepth::new(init_cnode_bits)
+    // seL4 presents the init thread's root CNode as a guard node whose address
+    // space spans the architecture word size. The bootinfo radix width only
+    // covers the usable portion of that guard. When issuing `seL4_CNode_*`
+    // operations, the kernel expects invocations to walk the entire guarded
+    // width so the guard bits are validated before the radix selection occurs.
+    // Always using the canonical `seL4_WordBits` depth honours that contract
+    // while still allowing callers to sanity-check bootinfo values via the
+    // `init_cnode_bits` argument.
+    let _ = init_cnode_bits;
+    CNodeDepth::new(CANONICAL_CNODE_DEPTH_BITS)
 }
 #[inline]
 /// Constructs a capability rights mask permitting read, write, and grant operations.
@@ -78,14 +79,14 @@ pub fn check_slot_in_range(init_cnode_bits: u8, slot: sys::seL4_CPtr) {
 
 /// Issues a `seL4_CNode_Copy` targeting the init CNode across host and target builds.
 pub fn cnode_copy_invoc(
-    init_cnode_bits: u8,
+    depth_bits: u8,
     dst_slot: sys::seL4_CPtr,
     src_slot: sys::seL4_CPtr,
 ) -> sys::seL4_Error {
     let rights = caprights_rw_grant();
     #[cfg(target_os = "none")]
     {
-        let depth = resolve_cnode_depth(init_cnode_bits);
+        let depth = resolve_cnode_depth(depth_bits);
         unsafe {
             sys::seL4_CNode_Copy(
                 sys::seL4_CapInitThreadCNode,
@@ -101,9 +102,9 @@ pub fn cnode_copy_invoc(
 
     #[cfg(not(target_os = "none"))]
     {
-        let depth = resolve_cnode_depth(init_cnode_bits);
+        let depth = resolve_cnode_depth(depth_bits);
         let _ = (
-            init_cnode_bits,
+            depth_bits,
             dst_slot,
             src_slot,
             rights,
@@ -116,7 +117,7 @@ pub fn cnode_copy_invoc(
 
 /// Issues a `seL4_CNode_Mint` targeting the init CNode across host and target builds.
 pub fn cnode_mint_invoc(
-    init_cnode_bits: u8,
+    depth_bits: u8,
     dst_slot: sys::seL4_CPtr,
     src_slot: sys::seL4_CPtr,
     badge: sys::seL4_Word,
@@ -124,7 +125,7 @@ pub fn cnode_mint_invoc(
     let rights = caprights_rw_grant();
     #[cfg(target_os = "none")]
     {
-        let depth = resolve_cnode_depth(init_cnode_bits);
+        let depth = resolve_cnode_depth(depth_bits);
         unsafe {
             sys::seL4_CNode_Mint(
                 sys::seL4_CapInitThreadCNode,
@@ -141,9 +142,9 @@ pub fn cnode_mint_invoc(
 
     #[cfg(not(target_os = "none"))]
     {
-        let depth = resolve_cnode_depth(init_cnode_bits);
+        let depth = resolve_cnode_depth(depth_bits);
         let _ = (
-            init_cnode_bits,
+            depth_bits,
             dst_slot,
             src_slot,
             badge,
@@ -156,24 +157,24 @@ pub fn cnode_mint_invoc(
 }
 
 /// Issues a `seL4_CNode_Delete` against the init CNode in both target and host configurations.
-pub fn cnode_delete_invoc(init_cnode_bits: u8, slot: sys::seL4_CPtr) -> sys::seL4_Error {
+pub fn cnode_delete_invoc(depth_bits: u8, slot: sys::seL4_CPtr) -> sys::seL4_Error {
     #[cfg(target_os = "none")]
     {
-        let depth = resolve_cnode_depth(init_cnode_bits);
+        let depth = resolve_cnode_depth(depth_bits);
         unsafe { sys::seL4_CNode_Delete(sys::seL4_CapInitThreadCNode, slot, depth.as_u8()) }
     }
 
     #[cfg(not(target_os = "none"))]
     {
-        let depth = resolve_cnode_depth(init_cnode_bits);
-        let _ = (init_cnode_bits, slot, depth.as_u8(), depth.as_word());
+        let depth = resolve_cnode_depth(depth_bits);
+        let _ = (depth_bits, slot, depth.as_u8(), depth.as_word());
         sys::seL4_NoError
     }
 }
 
 /// Issues a `seL4_Untyped_Retype` call constrained to the init CNode addressing rules.
 pub fn untyped_retype_invoc(
-    init_cnode_bits: u8,
+    depth_bits: u8,
     untyped_slot: sys::seL4_CPtr,
     obj_type: sys::seL4_Word,
     size_bits: sys::seL4_Word,
@@ -181,7 +182,7 @@ pub fn untyped_retype_invoc(
 ) -> sys::seL4_Error {
     #[cfg(target_os = "none")]
     {
-        let depth = resolve_cnode_depth(init_cnode_bits);
+        let depth = resolve_cnode_depth(depth_bits);
         unsafe {
             sys::seL4_Untyped_Retype(
                 untyped_slot,
@@ -198,9 +199,9 @@ pub fn untyped_retype_invoc(
 
     #[cfg(not(target_os = "none"))]
     {
-        let depth = resolve_cnode_depth(init_cnode_bits);
+        let depth = resolve_cnode_depth(depth_bits);
         let _ = (
-            init_cnode_bits,
+            depth_bits,
             untyped_slot,
             obj_type,
             size_bits,
@@ -218,7 +219,7 @@ pub(crate) mod test_support {
 
     #[allow(dead_code)]
     pub fn cnode_mint_direct_dest(
-        init_cnode_bits: u8,
+        depth_bits: u8,
         dst_slot: sys::seL4_CPtr,
         src_slot: sys::seL4_CPtr,
         rights: sys::SeL4CapRights,
@@ -229,7 +230,7 @@ pub(crate) mod test_support {
             sys::seL4_CNode_Mint(
                 sys::seL4_CapInitThreadCNode,
                 dst_slot,
-                init_cnode_bits,
+                depth_bits,
                 sys::seL4_CapInitThreadCNode,
                 src_slot,
                 0u8,
@@ -240,14 +241,14 @@ pub(crate) mod test_support {
 
         #[cfg(not(target_os = "none"))]
         {
-            let _ = (init_cnode_bits, dst_slot, src_slot, rights, badge);
+            let _ = (depth_bits, dst_slot, src_slot, rights, badge);
             sys::seL4_IllegalOperation
         }
     }
 
     #[allow(dead_code)]
     pub fn untyped_retype_direct_dest(
-        init_cnode_bits: u8,
+        depth_bits: u8,
         untyped: sys::seL4_CPtr,
         obj_type: sys::seL4_Word,
         size_bits: sys::seL4_Word,
@@ -261,7 +262,7 @@ pub(crate) mod test_support {
                 size_bits,
                 sys::seL4_CapInitThreadCNode,
                 dst_slot,
-                init_cnode_bits as sys::seL4_Word,
+                depth_bits as sys::seL4_Word,
                 0,
                 1,
             )
@@ -269,7 +270,7 @@ pub(crate) mod test_support {
 
         #[cfg(not(target_os = "none"))]
         {
-            let _ = (init_cnode_bits, untyped, obj_type, size_bits, dst_slot);
+            let _ = (depth_bits, untyped, obj_type, size_bits, dst_slot);
             sys::seL4_IllegalOperation
         }
     }
@@ -280,11 +281,14 @@ mod tests {
     use super::{resolve_cnode_depth, CANONICAL_CNODE_DEPTH_BITS};
 
     #[test]
-    fn resolve_cnode_depth_tracks_bootinfo_bits() {
+    fn resolve_cnode_depth_uses_canonical_width() {
         for bits in [1u8, 5, 13, CANONICAL_CNODE_DEPTH_BITS] {
             let depth = resolve_cnode_depth(bits);
-            assert_eq!(depth.as_u8(), bits);
-            assert_eq!(depth.as_word(), bits as super::sys::seL4_Word);
+            assert_eq!(depth.as_u8(), CANONICAL_CNODE_DEPTH_BITS);
+            assert_eq!(
+                depth.as_word(),
+                CANONICAL_CNODE_DEPTH_BITS as super::sys::seL4_Word
+            );
 
             // The helper still enforces the provided bounds to catch invalid inputs.
             assert!(bits <= CANONICAL_CNODE_DEPTH_BITS);

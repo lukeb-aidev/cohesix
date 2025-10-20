@@ -72,6 +72,8 @@ pub struct CSpaceCtx {
     /// Cached boot info projection used for runtime diagnostics.
     pub bi: BootInfoView,
     /// Canonical depth supplied to CNode invocations targeting the init CNode.
+    pub cnode_invocation_depth_bits: u8,
+    /// Radix width of the init thread's CNode as reported by bootinfo.
     pub init_cnode_bits: u8,
     /// First slot index in the init CNode guaranteed to be available for the root task.
     pub first_free: sel4::seL4_CPtr,
@@ -109,7 +111,12 @@ impl CSpaceCtx {
     /// Constructs a new capability-space context from kernel boot information.
     pub fn new(bi: BootInfoView) -> Self {
         let init_cnode_bits = bi.init_cnode_bits();
+        let cnode_invocation_depth_bits = cspace_sys::CANONICAL_CNODE_DEPTH_BITS;
         let (first_free, last_free) = bi.init_cnode_empty_range();
+        debug_assert!(
+            init_cnode_bits <= cnode_invocation_depth_bits,
+            "bootinfo-reported radix exceeds canonical invocation depth",
+        );
         let limit = 1usize << bi.init_cnode_size_bits();
         assert!(
             first_free < limit,
@@ -122,6 +129,7 @@ impl CSpaceCtx {
         let root_cnode_cap = bi.root_cnode_cap();
         let ctx = Self {
             bi,
+            cnode_invocation_depth_bits,
             init_cnode_bits,
             first_free,
             last_free,
@@ -221,7 +229,7 @@ impl CSpaceCtx {
         let _ = write!(
             &mut line,
             "[cnode] Copy err={err} dest(index=0x{dest_index:04x},depth={depth}) src(index=0x{src_index:04x},depth={depth})",
-            depth = self.init_cnode_bits,
+            depth = self.cnode_invocation_depth_bits,
         );
         emit_console_line(line.as_str());
     }
@@ -238,7 +246,7 @@ impl CSpaceCtx {
         let _ = write!(
             &mut line,
             "[cnode] Mint err={err} dest(index=0x{dest_index:04x},depth={depth},offset=0) src(index=0x{src_index:04x},depth={depth}) badge={badge}",
-            depth = self.init_cnode_bits,
+            depth = self.cnode_invocation_depth_bits,
         );
         emit_console_line(line.as_str());
     }
@@ -256,7 +264,7 @@ impl CSpaceCtx {
         let _ = write!(
             &mut line,
             "[retype] err={err} untyped_slot=0x{untyped:04x} dest(index=0x{dest_index:04x},depth={depth},offset=0) ty={obj_ty} sz={size_bits}",
-            depth = self.init_cnode_bits,
+            depth = self.cnode_invocation_depth_bits,
         );
         emit_console_line(line.as_str());
     }
@@ -310,7 +318,8 @@ impl CSpaceCtx {
             );
             emit_console_line(line.as_str());
         }
-        let err = cspace_sys::cnode_copy_invoc(self.init_cnode_bits, dst_slot, src_slot);
+        let err =
+            cspace_sys::cnode_copy_invoc(self.cnode_invocation_depth_bits, dst_slot, src_slot);
         self.log_cnode_copy(err, dst_slot, src_slot);
         err
     }
@@ -351,7 +360,8 @@ impl CSpaceCtx {
         let dst_slot = self.first_free.saturating_add(1);
         self.assert_slot_available(dst_slot);
         let src_slot = sel4::seL4_CapInitThreadCNode;
-        let err = cspace_sys::cnode_mint_invoc(self.init_cnode_bits, dst_slot, src_slot, 0);
+        let err =
+            cspace_sys::cnode_mint_invoc(self.cnode_invocation_depth_bits, dst_slot, src_slot, 0);
         self.log_cnode_mint(err, dst_slot, src_slot, 0);
         if err == sel4::seL4_NoError {
             self.root_cnode_copy_slot = dst_slot;
@@ -372,7 +382,7 @@ impl CSpaceCtx {
     ) -> sel4::seL4_Error {
         self.assert_slot_available(dst_slot);
         let err = cspace_sys::untyped_retype_invoc(
-            self.init_cnode_bits,
+            self.cnode_invocation_depth_bits,
             untyped,
             obj_ty,
             size_bits,

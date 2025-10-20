@@ -15,7 +15,8 @@ pub fn cnode_mint_to_slot(
     src_slot: sys::seL4_CPtr,
     badge: sys::seL4_Word,
 ) -> sys::seL4_Error {
-    let err = cspace_sys::cnode_mint_invoc(ctx.init_cnode_bits, dst_slot, src_slot, badge);
+    let err =
+        cspace_sys::cnode_mint_invoc(ctx.cnode_invocation_depth_bits, dst_slot, src_slot, badge);
     ctx.log_cnode_mint(err, dst_slot, src_slot, badge);
     err
 }
@@ -29,7 +30,7 @@ pub fn untyped_retype_to_slot(
     dst_slot: sys::seL4_CPtr,
 ) -> sys::seL4_Error {
     let err = cspace_sys::untyped_retype_invoc(
-        ctx.init_cnode_bits,
+        ctx.cnode_invocation_depth_bits,
         untyped_cap,
         obj_type,
         size_bits,
