@@ -45,7 +45,7 @@ pub fn cnode_copy_invoc(
         CANONICAL_CNODE_DEPTH_BITS
     );
     let rights = caprights_rw_grant();
-    let depth = init_cnode_bits;
+    let depth = CANONICAL_CNODE_DEPTH_BITS;
 
     #[cfg(target_os = "none")]
     unsafe {
@@ -80,7 +80,7 @@ pub fn cnode_mint_invoc(
         CANONICAL_CNODE_DEPTH_BITS
     );
     let rights = caprights_rw_grant();
-    let depth = init_cnode_bits;
+    let depth = CANONICAL_CNODE_DEPTH_BITS;
 
     #[cfg(target_os = "none")]
     unsafe {
@@ -133,7 +133,7 @@ pub fn untyped_retype_invoc(
         init_cnode_bits,
         CANONICAL_CNODE_DEPTH_BITS
     );
-    let depth_word = init_cnode_bits as sys::seL4_Word;
+    let depth_word = CANONICAL_CNODE_DEPTH_BITS as sys::seL4_Word;
 
     #[cfg(target_os = "none")]
     unsafe {
