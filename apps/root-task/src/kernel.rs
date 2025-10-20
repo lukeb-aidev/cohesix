@@ -2,7 +2,7 @@
 #![allow(dead_code)]
 #![allow(unsafe_code)]
 
-use core::cell::UnsafeCell;
+use core::cell::SyncUnsafeCell;
 use core::fmt::{self, Write};
 use core::mem::{self, MaybeUninit};
 use core::panic::PanicInfo;
@@ -627,8 +627,8 @@ unsafe fn initialise_ipc_buffer_with<F>(
 where
     F: Fn(*mut sel4_sys::seL4_IPCBuffer),
 {
-    static FALLBACK_IPC_BUFFER: UnsafeCell<MaybeUninit<sel4_sys::seL4_IPCBuffer>> =
-        UnsafeCell::new(MaybeUninit::uninit());
+    static FALLBACK_IPC_BUFFER: SyncUnsafeCell<MaybeUninit<sel4_sys::seL4_IPCBuffer>> =
+        SyncUnsafeCell::new(MaybeUninit::uninit());
 
     let raw_ptr = bootinfo.ipcBuffer as *mut sel4_sys::seL4_IPCBuffer;
     let (buffer_ptr, used_fallback) = if raw_ptr.is_null() {
