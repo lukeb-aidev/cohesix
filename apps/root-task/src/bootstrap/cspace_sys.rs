@@ -9,14 +9,16 @@ pub const CANONICAL_CNODE_DEPTH_BITS: u8 = (core::mem::size_of::<sys::seL4_Word>
 fn resolve_cnode_depth(init_cnode_bits: u8) -> (u8, sys::seL4_Word) {
     debug_assert!(init_cnode_bits <= CANONICAL_CNODE_DEPTH_BITS);
 
-    // The init thread's CNode installs a guard that allows raw capability
-    // pointers to be treated as canonical addresses. When invoking CNode
-    // operations, seL4 expects the *canonical* word size so that those guard bits
-    // are consumed during the decode. Supplying only the radix width truncates
-    // the lookup and triggers `FailedLookup` errors once we touch slots outside
-    // the guard field. Always advertise the canonical depth to keep the guard
-    // alignment intact across architectures.
-    let depth_u8 = CANONICAL_CNODE_DEPTH_BITS;
+    // The initial thread's CNode is configured with guard bits so that
+    // canonical capability pointers (the raw `seL4_CPtr` values) select the
+    // correct slots. However, seL4's CNode invocations still expect the
+    // *actual* radix width of the CNode for the depth arguments, not the
+    // architectural word size. Passing the canonical depth causes the kernel to
+    // overrun the radix and reject valid slots (manifesting as `Invalid source
+    // slot`). Use the bootinfo-declared CNode size bits for both the integer and
+    // word representations so that capability lookups align with the guard
+    // configuration on every architecture.
+    let depth_u8 = init_cnode_bits;
     let depth_word = depth_u8 as sys::seL4_Word;
     (depth_u8, depth_word)
 }
