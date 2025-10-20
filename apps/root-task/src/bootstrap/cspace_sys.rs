@@ -45,24 +45,25 @@ pub fn cnode_copy_invoc(
         CANONICAL_CNODE_DEPTH_BITS
     );
     let rights = caprights_rw_grant();
-    let depth = init_cnode_bits as sys::seL4_Word;
+    let depth_u8 = init_cnode_bits;
+    let depth_word = init_cnode_bits as sys::seL4_Word;
 
     #[cfg(target_os = "none")]
     unsafe {
         sys::seL4_CNode_Copy(
             sys::seL4_CapInitThreadCNode,
             dst_slot,
-            depth,
+            depth_u8,
             sys::seL4_CapInitThreadCNode,
             src_slot,
-            depth,
+            depth_u8,
             rights,
         )
     }
 
     #[cfg(not(target_os = "none"))]
     {
-        let _ = (init_cnode_bits, dst_slot, src_slot, rights, depth);
+        let _ = (init_cnode_bits, dst_slot, src_slot, rights, depth_word);
         sys::seL4_NoError
     }
 }
@@ -80,17 +81,18 @@ pub fn cnode_mint_invoc(
         CANONICAL_CNODE_DEPTH_BITS
     );
     let rights = caprights_rw_grant();
-    let depth = init_cnode_bits as sys::seL4_Word;
+    let depth_u8 = init_cnode_bits;
+    let depth_word = init_cnode_bits as sys::seL4_Word;
 
     #[cfg(target_os = "none")]
     unsafe {
         sys::seL4_CNode_Mint(
             sys::seL4_CapInitThreadCNode,
             dst_slot,
-            depth,
+            depth_u8,
             sys::seL4_CapInitThreadCNode,
             src_slot,
-            depth,
+            depth_u8,
             rights,
             badge,
         )
@@ -98,7 +100,14 @@ pub fn cnode_mint_invoc(
 
     #[cfg(not(target_os = "none"))]
     {
-        let _ = (init_cnode_bits, dst_slot, src_slot, badge, rights, depth);
+        let _ = (
+            init_cnode_bits,
+            dst_slot,
+            src_slot,
+            badge,
+            rights,
+            depth_word,
+        );
         sys::seL4_NoError
     }
 }
