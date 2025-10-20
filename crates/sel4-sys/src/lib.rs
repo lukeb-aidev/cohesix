@@ -679,6 +679,7 @@ mod imp {
 
     extern "C" {
         pub fn seL4_DebugPutChar(c: u8);
+        pub fn seL4_DebugCapIdentify(cap: seL4_CPtr) -> seL4_Uint32;
         pub fn seL4_Yield();
         pub fn seL4_ARM_Page_Unmap(service: seL4_ARM_Page) -> seL4_Error;
         pub fn seL4_ARM_Page_GetAddress(service: seL4_ARM_Page) -> seL4_ARM_Page_GetAddress;
@@ -1016,6 +1017,11 @@ mod host_stub {
 
     #[inline(always)]
     pub fn seL4_DebugPutChar(_c: u8) {
+        unsupported();
+    }
+
+    #[inline(always)]
+    pub fn seL4_DebugCapIdentify(_cap: seL4_CPtr) -> seL4_Uint32 {
         unsupported();
     }
 

@@ -7,6 +7,7 @@ use heapless::String;
 use super::cspace_sys;
 
 const MAX_DIAGNOSTIC_LEN: usize = 224;
+const THREAD_CAP_IDENTIFIERS: [sel4::seL4_Word; 2] = [6, 7];
 
 fn log_boot(beg: sel4::seL4_CPtr, end: sel4::seL4_CPtr, bits: u8) {
     let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
@@ -234,9 +235,40 @@ impl CSpaceCtx {
 
     pub fn smoke_copy_init_tcb(&mut self) -> Result<(), sel4::seL4_Error> {
         let dst_slot = self.first_free;
-        let src_slot = sel4::seL4_CapInitThreadTCB;
         self.assert_slot_available(dst_slot);
         self.probe_initial_slots(core::cmp::min(self.first_free, 0x20));
+
+        let mut src_slot = sel4::seL4_CapInitThreadTCB;
+        let mut err = self.copy_init_tcb_from(dst_slot, src_slot);
+
+        if err == sel4_sys::seL4_FailedLookup {
+            if let Some(fallback_slot) = self.locate_init_tcb_slot() {
+                let ident = sel4::debug_cap_identify(fallback_slot);
+                let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
+                let _ = write!(
+                    &mut line,
+                    "[cnode] fallback.init_tcb slot=0x{fallback_slot:04x} ident=0x{ident:08x}",
+                );
+                emit_console_line(line.as_str());
+                src_slot = fallback_slot;
+                err = self.copy_init_tcb_from(dst_slot, src_slot);
+            }
+        }
+
+        if err == sel4::seL4_NoError {
+            self.tcb_copy_slot = dst_slot;
+            self.consume_slot(dst_slot);
+            Ok(())
+        } else {
+            Err(err)
+        }
+    }
+
+    fn copy_init_tcb_from(
+        &mut self,
+        dst_slot: sel4::seL4_CPtr,
+        src_slot: sel4::seL4_CPtr,
+    ) -> sel4::seL4_Error {
         {
             let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
             let _ = write!(
@@ -247,13 +279,7 @@ impl CSpaceCtx {
         }
         let err = cspace_sys::cnode_copy_invoc(self.init_cnode_bits, dst_slot, src_slot);
         self.log_cnode_copy(err, dst_slot, src_slot);
-        if err == sel4::seL4_NoError {
-            self.tcb_copy_slot = dst_slot;
-            self.consume_slot(dst_slot);
-            Ok(())
-        } else {
-            Err(err)
-        }
+        err
     }
 
     fn probe_initial_slots(&mut self, sample: sel4::seL4_CPtr) {
@@ -268,6 +294,21 @@ impl CSpaceCtx {
             emit_console_line(line.as_str());
             slot = slot.saturating_add(1);
         }
+    }
+
+    fn locate_init_tcb_slot(&mut self) -> Option<sel4::seL4_CPtr> {
+        let mut slot: sel4::seL4_CPtr = 0;
+        while slot < self.first_free {
+            let ident = sel4::debug_cap_identify(slot);
+            if THREAD_CAP_IDENTIFIERS
+                .iter()
+                .any(|candidate| ident == *candidate)
+            {
+                return Some(slot);
+            }
+            slot = slot.saturating_add(1);
+        }
+        None
     }
 
     pub fn mint_root_cnode_copy(&mut self) -> Result<(), sel4::seL4_Error> {

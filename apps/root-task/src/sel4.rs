@@ -94,42 +94,16 @@ pub unsafe extern "C" fn seL4_DebugPutChar(byte: u8) {
 #[no_mangle]
 pub unsafe extern "C" fn seL4_DebugPutChar(_byte: u8) {}
 
-#[cfg(all(feature = "kernel", target_arch = "aarch64"))]
+#[cfg(feature = "kernel")]
 #[inline(always)]
 pub fn debug_cap_identify(slot: seL4_CPtr) -> seL4_Word {
-    unsafe { debug_cap_identify_syscall(slot) }
-}
-
-#[cfg(all(feature = "kernel", not(target_arch = "aarch64")))]
-#[inline(always)]
-pub fn debug_cap_identify(_slot: seL4_CPtr) -> seL4_Word {
-    0
+    unsafe { sel4_sys::seL4_DebugCapIdentify(slot) as seL4_Word }
 }
 
 #[cfg(not(feature = "kernel"))]
 #[inline(always)]
 pub fn debug_cap_identify(_slot: seL4_CPtr) -> seL4_Word {
     0
-}
-
-#[cfg(all(feature = "kernel", target_arch = "aarch64"))]
-#[inline(always)]
-unsafe fn debug_cap_identify_syscall(slot: seL4_CPtr) -> seL4_Word {
-    const SYS_DEBUG_CAP_IDENTIFY: u64 = (!0u64).wrapping_sub(12); // -12
-    let mut x0 = slot as u64;
-    asm!(
-        "svc #0",
-        inout("x0") x0,
-        lateout("x1") _,
-        lateout("x2") _,
-        lateout("x3") _,
-        lateout("x4") _,
-        lateout("x5") _,
-        lateout("x6") _,
-        in("x7") SYS_DEBUG_CAP_IDENTIFY,
-        options(nostack, preserves_flags),
-    );
-    x0 as seL4_Word
 }
 
 /// Safe projection of `seL4_CNode_Copy` for bootstrap modules.
