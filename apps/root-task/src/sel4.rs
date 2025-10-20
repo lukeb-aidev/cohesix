@@ -47,6 +47,8 @@ pub fn debug_put_char(ch: i32) {
 }
 
 #[cfg(all(feature = "kernel", not(sel4_config_printing)))]
+/// Installs the kernel-backed debug sink so that panic messages surface on the seL4 console.
+#[inline(always)]
 pub fn install_debug_sink() {
     unsafe extern "C" fn emit(_ctx: *mut (), byte: u8) {
         seL4_DebugPutChar(byte);
@@ -59,11 +61,8 @@ pub fn install_debug_sink() {
     sel4_panicking::install_debug_sink(sink);
 }
 
-#[cfg(all(feature = "kernel", sel4_config_printing))]
-#[inline(always)]
-pub fn install_debug_sink() {}
-
-#[cfg(not(feature = "kernel"))]
+#[cfg(any(not(feature = "kernel"), all(feature = "kernel", sel4_config_printing)))]
+/// No-op placeholder used when the kernel does not expose a debug sink attachment point.
 #[inline(always)]
 pub fn install_debug_sink() {}
 
@@ -73,12 +72,12 @@ pub fn debug_put_char(_ch: i32) {}
 
 #[cfg(all(feature = "kernel", target_arch = "aarch64"))]
 #[no_mangle]
+/// Executes the `DebugPutChar` seL4 syscall to emit a byte on the debug console.
 pub unsafe extern "C" fn seL4_DebugPutChar(byte: u8) {
     const SYS_DEBUG_PUT_CHAR: u64 = (!0u64).wrapping_sub(8); // -9
-    let mut x0 = byte as u64;
     asm!(
         "svc #0",
-        inout("x0") x0,
+        in("x0") u64::from(byte),
         lateout("x1") _,
         lateout("x2") _,
         lateout("x3") _,
@@ -92,15 +91,28 @@ pub unsafe extern "C" fn seL4_DebugPutChar(byte: u8) {
 
 #[cfg(all(feature = "kernel", not(target_arch = "aarch64")))]
 #[no_mangle]
+/// Fallback stub for architectures without a debug console syscall implementation.
 pub unsafe extern "C" fn seL4_DebugPutChar(_byte: u8) {}
 
-#[cfg(feature = "kernel")]
+#[cfg(all(feature = "kernel", any(sel4_config_debug_build, sel4_config_printing)))]
+/// Requests the kernel to reveal the capability type stored at the provided slot index.
 #[inline(always)]
 pub fn debug_cap_identify(slot: seL4_CPtr) -> seL4_Word {
     unsafe { sel4_sys::seL4_DebugCapIdentify(slot) as seL4_Word }
 }
 
+#[cfg(all(
+    feature = "kernel",
+    not(any(sel4_config_debug_build, sel4_config_printing))
+))]
+/// Returns zero because the kernel configuration omits the debug capability identification syscall.
+#[inline(always)]
+pub fn debug_cap_identify(_slot: seL4_CPtr) -> seL4_Word {
+    0
+}
+
 #[cfg(not(feature = "kernel"))]
+/// Returns zero because the function executes only when building for the host.
 #[inline(always)]
 pub fn debug_cap_identify(_slot: seL4_CPtr) -> seL4_Word {
     0
