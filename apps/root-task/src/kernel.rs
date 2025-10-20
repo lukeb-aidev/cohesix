@@ -2,6 +2,7 @@
 #![allow(dead_code)]
 #![allow(unsafe_code)]
 
+use core::cell::UnsafeCell;
 use core::fmt::{self, Write};
 use core::mem::{self, MaybeUninit};
 use core::panic::PanicInfo;
@@ -189,7 +190,7 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
         }
 
         let (ipc_ptr, used_fallback) = initialise_ipc_buffer_with(bootinfo_ref, |ptr| {
-            unsafe { sel4_sys::seL4_SetIPCBuffer(ptr) };
+            install_ipc_buffer(ptr);
         });
 
         if used_fallback {
@@ -611,6 +612,14 @@ impl<'a, P: Platform> ConsoleAudit<'a, P> {
     }
 }
 
+#[inline(always)]
+fn install_ipc_buffer(ptr: *mut sel4_sys::seL4_IPCBuffer) {
+    debug_assert!(!ptr.is_null());
+    unsafe {
+        sel4_sys::seL4_SetIPCBuffer(ptr);
+    }
+}
+
 unsafe fn initialise_ipc_buffer_with<F>(
     bootinfo: &sel4_sys::seL4_BootInfo,
     setter: F,
@@ -618,11 +627,12 @@ unsafe fn initialise_ipc_buffer_with<F>(
 where
     F: Fn(*mut sel4_sys::seL4_IPCBuffer),
 {
-    static mut FALLBACK_IPC_BUFFER: MaybeUninit<sel4_sys::seL4_IPCBuffer> = MaybeUninit::uninit();
+    static FALLBACK_IPC_BUFFER: UnsafeCell<MaybeUninit<sel4_sys::seL4_IPCBuffer>> =
+        UnsafeCell::new(MaybeUninit::uninit());
 
     let raw_ptr = bootinfo.ipcBuffer as *mut sel4_sys::seL4_IPCBuffer;
     let (buffer_ptr, used_fallback) = if raw_ptr.is_null() {
-        let ptr = FALLBACK_IPC_BUFFER.as_mut_ptr();
+        let ptr = FALLBACK_IPC_BUFFER.get().cast::<sel4_sys::seL4_IPCBuffer>();
         ptr::write_bytes(
             ptr.cast::<u8>(),
             0,

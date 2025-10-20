@@ -3,6 +3,7 @@
 
 use crate::sel4 as sys;
 
+/// Depth (in bits) expected by init CNode invocations once the kernel installs guard bits.
 pub const CANONICAL_CNODE_DEPTH_BITS: u8 = (core::mem::size_of::<sys::seL4_Word>() * 8) as u8;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -44,6 +45,7 @@ fn resolve_cnode_depth(_init_cnode_bits: u8) -> CNodeDepth {
     CNodeDepth::new(CANONICAL_CNODE_DEPTH_BITS)
 }
 #[inline]
+/// Constructs a capability rights mask permitting read, write, and grant operations.
 pub fn caprights_rw_grant() -> sys::SeL4CapRights {
     #[cfg(target_os = "none")]
     {
@@ -61,6 +63,7 @@ pub fn caprights_rw_grant() -> sys::SeL4CapRights {
 }
 
 #[inline]
+/// Ensures that the provided slot falls within the init CNode window defined by `init_cnode_bits`.
 pub fn check_slot_in_range(init_cnode_bits: u8, slot: sys::seL4_CPtr) {
     let limit = 1u64 << (init_cnode_bits as u64);
     assert!(
@@ -72,6 +75,7 @@ pub fn check_slot_in_range(init_cnode_bits: u8, slot: sys::seL4_CPtr) {
     );
 }
 
+/// Issues a `seL4_CNode_Copy` targeting the init CNode across host and target builds.
 pub fn cnode_copy_invoc(
     init_cnode_bits: u8,
     dst_slot: sys::seL4_CPtr,
@@ -109,6 +113,7 @@ pub fn cnode_copy_invoc(
     }
 }
 
+/// Issues a `seL4_CNode_Mint` targeting the init CNode across host and target builds.
 pub fn cnode_mint_invoc(
     init_cnode_bits: u8,
     dst_slot: sys::seL4_CPtr,
@@ -149,6 +154,7 @@ pub fn cnode_mint_invoc(
     }
 }
 
+/// Issues a `seL4_CNode_Delete` against the init CNode in both target and host configurations.
 pub fn cnode_delete_invoc(init_cnode_bits: u8, slot: sys::seL4_CPtr) -> sys::seL4_Error {
     #[cfg(target_os = "none")]
     {
@@ -164,6 +170,7 @@ pub fn cnode_delete_invoc(init_cnode_bits: u8, slot: sys::seL4_CPtr) -> sys::seL
     }
 }
 
+/// Issues a `seL4_Untyped_Retype` call constrained to the init CNode addressing rules.
 pub fn untyped_retype_invoc(
     init_cnode_bits: u8,
     untyped_slot: sys::seL4_CPtr,

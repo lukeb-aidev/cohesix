@@ -8,6 +8,7 @@ use crate::sel4 as sys;
 
 use super::cspace_sys;
 
+/// Helper that logs and forwards a `seL4_CNode_Mint` request through [`CSpaceCtx`].
 pub fn cnode_mint_to_slot(
     ctx: &CSpaceCtx,
     dst_slot: sys::seL4_CPtr,
@@ -19,6 +20,7 @@ pub fn cnode_mint_to_slot(
     err
 }
 
+/// Helper that logs and forwards a `seL4_Untyped_Retype` request through [`CSpaceCtx`].
 pub fn untyped_retype_to_slot(
     ctx: &CSpaceCtx,
     untyped_cap: sys::seL4_CPtr,
