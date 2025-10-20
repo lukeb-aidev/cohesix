@@ -8,8 +8,15 @@ pub const CANONICAL_CNODE_DEPTH_BITS: u8 = (core::mem::size_of::<sys::seL4_Word>
 #[inline(always)]
 fn resolve_cnode_depth(init_cnode_bits: u8) -> (u8, sys::seL4_Word) {
     debug_assert!(init_cnode_bits <= CANONICAL_CNODE_DEPTH_BITS);
-    let depth_u8 = init_cnode_bits;
-    let depth_word = init_cnode_bits as sys::seL4_Word;
+
+    // seL4 capability invocations accept a canonical depth that spans the entire word,
+    // regardless of the actual size of the destination CNode. Using the canonical depth
+    // avoids guard mismatches when the kernel configures guard bits for the init thread
+    // CNode (observed on aarch64 where the bootstrap CNode is 13 bits wide). Emitting
+    // the canonical depth ensures that operations such as copying the init TCB succeed
+    // instead of faulting with `Target slot invalid`.
+    let depth_u8 = CANONICAL_CNODE_DEPTH_BITS;
+    let depth_word = depth_u8 as sys::seL4_Word;
     (depth_u8, depth_word)
 }
 #[inline]
@@ -232,11 +239,17 @@ mod tests {
     use super::{resolve_cnode_depth, CANONICAL_CNODE_DEPTH_BITS};
 
     #[test]
-    fn resolve_cnode_depth_matches_init_bits() {
+    fn resolve_cnode_depth_matches_canonical_bits() {
         for bits in [1u8, 5, 13, CANONICAL_CNODE_DEPTH_BITS] {
             let (depth_u8, depth_word) = resolve_cnode_depth(bits);
-            assert_eq!(depth_u8, bits);
-            assert_eq!(depth_word, bits as super::sys::seL4_Word);
+            assert_eq!(depth_u8, CANONICAL_CNODE_DEPTH_BITS);
+            assert_eq!(
+                depth_word,
+                CANONICAL_CNODE_DEPTH_BITS as super::sys::seL4_Word
+            );
+
+            // The helper still enforces the provided bounds to catch invalid inputs.
+            assert!(bits <= CANONICAL_CNODE_DEPTH_BITS);
         }
     }
 }
