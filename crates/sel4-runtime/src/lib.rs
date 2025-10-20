@@ -87,7 +87,7 @@ unsafe extern "C" fn __sel4_start_rust(bootinfo: *mut seL4_BootInfo) -> ! {
     sel4_start(bootinfo)
 }
 
-#[cfg(not(target_arch = "aarch64"))]
+#[cfg(all(not(target_arch = "aarch64"), not(test), not(doc)))]
 #[no_mangle]
 pub unsafe extern "C" fn _start(_bootinfo: *mut seL4_BootInfo) -> ! {
     loop {
