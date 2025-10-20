@@ -94,7 +94,7 @@ pub unsafe extern "C" fn seL4_DebugPutChar(byte: u8) {
 /// Fallback stub for architectures without a debug console syscall implementation.
 pub unsafe extern "C" fn seL4_DebugPutChar(_byte: u8) {}
 
-#[cfg(all(feature = "kernel", any(sel4_config_debug_build, sel4_config_printing)))]
+#[cfg(all(feature = "kernel", sel4_config_debug_build))]
 /// Requests the kernel to reveal the capability type stored at the provided slot index.
 #[inline(always)]
 pub fn debug_cap_identify(slot: seL4_CPtr) -> seL4_Word {
@@ -103,7 +103,7 @@ pub fn debug_cap_identify(slot: seL4_CPtr) -> seL4_Word {
 
 #[cfg(all(
     feature = "kernel",
-    not(any(sel4_config_debug_build, sel4_config_printing))
+    not(sel4_config_debug_build)
 ))]
 /// Returns zero because the kernel configuration omits the debug capability identification syscall.
 #[inline(always)]

@@ -7,7 +7,7 @@ use heapless::String;
 use super::cspace_sys;
 
 const MAX_DIAGNOSTIC_LEN: usize = 224;
-#[cfg(all(feature = "kernel", any(sel4_config_debug_build, sel4_config_printing)))]
+#[cfg(all(feature = "kernel", sel4_config_debug_build))]
 const THREAD_CAP_IDENTIFIERS: [sel4::seL4_Word; 2] = [6, 7];
 
 fn log_boot(beg: sel4::seL4_CPtr, end: sel4::seL4_CPtr, bits: u8) {
@@ -265,13 +265,13 @@ impl CSpaceCtx {
     pub fn smoke_copy_init_tcb(&mut self) -> Result<(), sel4::seL4_Error> {
         let dst_slot = self.first_free;
         self.assert_slot_available(dst_slot);
-        #[cfg(all(feature = "kernel", any(sel4_config_debug_build, sel4_config_printing)))]
+        #[cfg(all(feature = "kernel", sel4_config_debug_build))]
         self.probe_initial_slots(core::cmp::min(self.first_free, 0x20));
 
         let mut src_slot = sel4::seL4_CapInitThreadTCB;
         let mut err = self.copy_init_tcb_from(dst_slot, src_slot);
 
-        #[cfg(all(feature = "kernel", any(sel4_config_debug_build, sel4_config_printing)))]
+        #[cfg(all(feature = "kernel", sel4_config_debug_build))]
         {
             if err == sel4_sys::seL4_FailedLookup {
                 if let Some(fallback_slot) = self.locate_init_tcb_slot() {
@@ -315,7 +315,7 @@ impl CSpaceCtx {
         err
     }
 
-    #[cfg(all(feature = "kernel", any(sel4_config_debug_build, sel4_config_printing)))]
+    #[cfg(all(feature = "kernel", sel4_config_debug_build))]
     fn probe_initial_slots(&mut self, sample: sel4::seL4_CPtr) {
         let mut slot: sel4::seL4_CPtr = 0;
         while slot < sample {
@@ -330,7 +330,7 @@ impl CSpaceCtx {
         }
     }
 
-    #[cfg(all(feature = "kernel", any(sel4_config_debug_build, sel4_config_printing)))]
+    #[cfg(all(feature = "kernel", sel4_config_debug_build))]
     fn locate_init_tcb_slot(&mut self) -> Option<sel4::seL4_CPtr> {
         let mut slot: sel4::seL4_CPtr = 0;
         while slot < self.first_free {
