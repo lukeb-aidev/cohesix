@@ -204,6 +204,11 @@ mod imp {
     pub const seL4_CapIOSpace: seL4_CPtr = 8;
     pub const seL4_CapBootInfoFrame: seL4_CPtr = 9;
     pub const seL4_CapInitThreadIPCBuffer: seL4_CPtr = 10;
+    pub const seL4_CapDomain: seL4_CPtr = 11;
+    pub const seL4_CapSMMUSIDControl: seL4_CPtr = 12;
+    pub const seL4_CapSMMUCBControl: seL4_CPtr = 13;
+    pub const seL4_CapInitThreadSC: seL4_CPtr = 14;
+    pub const seL4_CapSMC: seL4_CPtr = 15;
 
     #[repr(transparent)]
     #[derive(Clone, Copy)]
@@ -827,6 +832,11 @@ mod host_stub {
     pub const seL4_CapIOSpace: seL4_CPtr = 8;
     pub const seL4_CapBootInfoFrame: seL4_CPtr = 9;
     pub const seL4_CapInitThreadIPCBuffer: seL4_CPtr = 10;
+    pub const seL4_CapDomain: seL4_CPtr = 11;
+    pub const seL4_CapSMMUSIDControl: seL4_CPtr = 12;
+    pub const seL4_CapSMMUCBControl: seL4_CPtr = 13;
+    pub const seL4_CapInitThreadSC: seL4_CPtr = 14;
+    pub const seL4_CapSMC: seL4_CPtr = 15;
 
     pub const seL4_CapRights_All: seL4_CapRights = 0;
     pub const seL4_CapRights_ReadWrite: seL4_CapRights = 0;
