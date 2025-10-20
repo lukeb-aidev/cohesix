@@ -8,8 +8,8 @@ pub const CANONICAL_CNODE_DEPTH_BITS: u8 = (core::mem::size_of::<sys::seL4_Word>
 #[inline(always)]
 fn resolve_cnode_depth(init_cnode_bits: u8) -> (u8, sys::seL4_Word) {
     debug_assert!(init_cnode_bits <= CANONICAL_CNODE_DEPTH_BITS);
-    let depth_u8 = CANONICAL_CNODE_DEPTH_BITS;
-    let depth_word = CANONICAL_CNODE_DEPTH_BITS as sys::seL4_Word;
+    let depth_u8 = init_cnode_bits;
+    let depth_word = init_cnode_bits as sys::seL4_Word;
     (depth_u8, depth_word)
 }
 #[inline]
@@ -223,6 +223,20 @@ pub(crate) mod test_support {
         {
             let _ = (init_cnode_bits, untyped, obj_type, size_bits, dst_slot);
             sys::seL4_IllegalOperation
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{resolve_cnode_depth, CANONICAL_CNODE_DEPTH_BITS};
+
+    #[test]
+    fn resolve_cnode_depth_matches_init_bits() {
+        for bits in [1u8, 5, 13, CANONICAL_CNODE_DEPTH_BITS] {
+            let (depth_u8, depth_word) = resolve_cnode_depth(bits);
+            assert_eq!(depth_u8, bits);
+            assert_eq!(depth_word, bits as super::sys::seL4_Word);
         }
     }
 }
