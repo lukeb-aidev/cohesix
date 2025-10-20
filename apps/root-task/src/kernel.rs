@@ -3,7 +3,7 @@
 #![allow(unsafe_code)]
 
 use core::fmt::{self, Write};
-use core::mem;
+use core::mem::{self, MaybeUninit};
 use core::panic::PanicInfo;
 use core::ptr;
 
@@ -188,13 +188,14 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
             );
         }
 
-        let ipc_ptr = bootinfo_ref.ipcBuffer as *mut sel4_sys::seL4_IPCBuffer;
-        ptr::write_bytes(
-            ipc_ptr.cast::<u8>(),
-            0,
-            mem::size_of::<sel4_sys::seL4_IPCBuffer>(),
-        );
-        sel4_sys::seL4_SetIPCBuffer(ipc_ptr);
+        let (ipc_ptr, used_fallback) = initialise_ipc_buffer_with(bootinfo_ref, |ptr| {
+            unsafe { sel4_sys::seL4_SetIPCBuffer(ptr) };
+        });
+
+        if used_fallback {
+            console.writeln_prefixed("bootinfo.ipcBuffer missing; using static fallback");
+        }
+
         let mut msg = heapless::String::<64>::new();
         let _ = write!(msg, "ipc buffer ptr=0x{:016x}", ipc_ptr as usize);
         console.writeln_prefixed(msg.as_str());
@@ -607,6 +608,77 @@ struct ConsoleAudit<'a, P: Platform> {
 impl<'a, P: Platform> ConsoleAudit<'a, P> {
     fn new(console: &'a mut DebugConsole<'a, P>) -> Self {
         Self { console }
+    }
+}
+
+unsafe fn initialise_ipc_buffer_with<F>(
+    bootinfo: &sel4_sys::seL4_BootInfo,
+    setter: F,
+) -> (*mut sel4_sys::seL4_IPCBuffer, bool)
+where
+    F: Fn(*mut sel4_sys::seL4_IPCBuffer),
+{
+    static mut FALLBACK_IPC_BUFFER: MaybeUninit<sel4_sys::seL4_IPCBuffer> = MaybeUninit::uninit();
+
+    let raw_ptr = bootinfo.ipcBuffer as *mut sel4_sys::seL4_IPCBuffer;
+    let (buffer_ptr, used_fallback) = if raw_ptr.is_null() {
+        let ptr = FALLBACK_IPC_BUFFER.as_mut_ptr();
+        ptr::write_bytes(
+            ptr.cast::<u8>(),
+            0,
+            mem::size_of::<sel4_sys::seL4_IPCBuffer>(),
+        );
+        (ptr, true)
+    } else {
+        ptr::write_bytes(
+            raw_ptr.cast::<u8>(),
+            0,
+            mem::size_of::<sel4_sys::seL4_IPCBuffer>(),
+        );
+        (raw_ptr, false)
+    };
+
+    setter(buffer_ptr);
+    (buffer_ptr, used_fallback)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::mem::MaybeUninit;
+
+    #[test]
+    fn initialise_ipc_buffer_prefers_bootinfo_pointer() {
+        let mut bootinfo: sel4_sys::seL4_BootInfo = unsafe { core::mem::zeroed() };
+        let mut backing = MaybeUninit::<sel4_sys::seL4_IPCBuffer>::uninit();
+        let buffer_ptr = backing.as_mut_ptr();
+        bootinfo.ipcBuffer = buffer_ptr as usize;
+
+        let mut captured: *mut sel4_sys::seL4_IPCBuffer = core::ptr::null_mut();
+        let (ptr, fallback) = unsafe {
+            initialise_ipc_buffer_with(&bootinfo, |ipc_ptr| {
+                captured = ipc_ptr;
+            })
+        };
+
+        assert_eq!(ptr, buffer_ptr);
+        assert_eq!(captured, buffer_ptr);
+        assert!(!fallback);
+    }
+
+    #[test]
+    fn initialise_ipc_buffer_uses_static_fallback_when_missing() {
+        let bootinfo: sel4_sys::seL4_BootInfo = unsafe { core::mem::zeroed() };
+        let mut captured: *mut sel4_sys::seL4_IPCBuffer = core::ptr::null_mut();
+        let (ptr, fallback) = unsafe {
+            initialise_ipc_buffer_with(&bootinfo, |ipc_ptr| {
+                captured = ipc_ptr;
+            })
+        };
+
+        assert!(fallback);
+        assert_eq!(ptr, captured);
+        assert!(!ptr.is_null());
     }
 }
 
