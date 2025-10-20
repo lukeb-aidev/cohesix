@@ -714,6 +714,7 @@ mod host_stub {
     pub type seL4_ARM_PageTable = seL4_CPtr;
     pub type seL4_CapRights = usize;
     pub type seL4_Uint8 = u8;
+    pub type seL4_Uint32 = u32;
 
     #[derive(Clone, Copy)]
     pub struct seL4_MessageInfo {

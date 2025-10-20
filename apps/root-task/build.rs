@@ -142,6 +142,7 @@ fn main() {
     println!("cargo:rustc-link-lib=static=sel4");
 
     let debug_enabled = probe_config_flag(&build_path, "CONFIG_DEBUG_BUILD") == Some(true);
+    let mut debug_syscalls_enabled = false;
     if debug_enabled {
         if let Ok(libsel4debug) = find_artifact(
             &build_path,
@@ -156,9 +157,10 @@ fn main() {
                 println!("cargo:rustc-link-search=native={}", dir.display());
             }
             println!("cargo:rustc-link-lib=static=sel4debug");
+            debug_syscalls_enabled = true;
         } else {
             println!(
-                "cargo:warning=CONFIG_DEBUG_BUILD enabled but libsel4debug.a not found; debug syscalls may be unavailable"
+                "cargo:warning=CONFIG_DEBUG_BUILD enabled but libsel4debug.a not found; debug syscalls will be disabled"
             );
         }
     }
@@ -173,7 +175,7 @@ fn main() {
         }
     }
 
-    emit_config_flags(&build_path);
+    emit_config_flags(&build_path, debug_syscalls_enabled);
 }
 
 fn find_artifact(root: &Path, filename: &str, primary: &[&str]) -> Result<PathBuf, String> {
@@ -323,8 +325,8 @@ fn stage_linker_script(build_root: &Path) -> Result<(), String> {
     Err(format!("Tried [{}]. {}", searched, detail))
 }
 
-fn emit_config_flags(root: &Path) {
-    if let Some(true) = probe_config_flag(root, "CONFIG_DEBUG_BUILD") {
+fn emit_config_flags(root: &Path, debug_syscalls_enabled: bool) {
+    if debug_syscalls_enabled {
         println!("cargo:rustc-cfg=sel4_config_debug_build");
     }
 

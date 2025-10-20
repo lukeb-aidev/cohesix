@@ -101,10 +101,7 @@ pub fn debug_cap_identify(slot: seL4_CPtr) -> seL4_Word {
     unsafe { sel4_sys::seL4_DebugCapIdentify(slot) as seL4_Word }
 }
 
-#[cfg(all(
-    feature = "kernel",
-    not(sel4_config_debug_build)
-))]
+#[cfg(all(feature = "kernel", not(sel4_config_debug_build)))]
 /// Returns zero because the kernel configuration omits the debug capability identification syscall.
 #[inline(always)]
 pub fn debug_cap_identify(_slot: seL4_CPtr) -> seL4_Word {
