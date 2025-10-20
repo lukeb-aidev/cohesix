@@ -89,6 +89,35 @@ pub unsafe extern "C" fn seL4_DebugPutChar(byte: u8) {
     );
 }
 
+#[cfg(all(feature = "kernel", target_arch = "aarch64", sel4_config_debug_build))]
+#[no_mangle]
+/// Executes the `DebugCapIdentify` seL4 syscall to reveal a capability's kernel tag.
+pub unsafe extern "C" fn seL4_DebugCapIdentify(slot: seL4_CPtr) -> u32 {
+    const SYS_DEBUG_CAP_IDENTIFY: i64 = -12;
+
+    let mut badge = slot as usize;
+    let mut info = 0usize;
+    let mut mr0 = 0usize;
+    let mut mr1 = 0usize;
+    let mut mr2 = 0usize;
+    let mut mr3 = 0usize;
+
+    asm!(
+        "svc #0",
+        inout("x0") badge,
+        inout("x1") info,
+        inout("x2") mr0,
+        inout("x3") mr1,
+        inout("x4") mr2,
+        inout("x5") mr3,
+        lateout("x6") _,
+        in("x7") SYS_DEBUG_CAP_IDENTIFY as usize,
+        options(nostack, preserves_flags),
+    );
+
+    badge as u32
+}
+
 #[cfg(all(feature = "kernel", not(target_arch = "aarch64")))]
 #[no_mangle]
 /// Fallback stub for architectures without a debug console syscall implementation.
