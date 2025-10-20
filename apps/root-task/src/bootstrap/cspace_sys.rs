@@ -5,10 +5,35 @@ use crate::sel4 as sys;
 
 pub const CANONICAL_CNODE_DEPTH_BITS: u8 = (core::mem::size_of::<sys::seL4_Word>() * 8) as u8;
 
-#[inline(always)]
-fn resolve_cnode_depth(init_cnode_bits: u8) -> (u8, sys::seL4_Word) {
-    debug_assert!(init_cnode_bits <= CANONICAL_CNODE_DEPTH_BITS);
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct CNodeDepth {
+    bits_u8: u8,
+    bits_word: sys::seL4_Word,
+}
 
+impl CNodeDepth {
+    #[inline(always)]
+    fn new(init_cnode_bits: u8) -> Self {
+        debug_assert!(init_cnode_bits <= CANONICAL_CNODE_DEPTH_BITS);
+        Self {
+            bits_u8: init_cnode_bits,
+            bits_word: init_cnode_bits as sys::seL4_Word,
+        }
+    }
+
+    #[inline(always)]
+    fn as_u8(self) -> u8 {
+        self.bits_u8
+    }
+
+    #[inline(always)]
+    fn as_word(self) -> sys::seL4_Word {
+        self.bits_word
+    }
+}
+
+#[inline(always)]
+fn resolve_cnode_depth(init_cnode_bits: u8) -> CNodeDepth {
     // The initial thread's CNode is configured with guard bits so that
     // canonical capability pointers (the raw `seL4_CPtr` values) select the
     // correct slots. However, seL4's CNode invocations still expect the
@@ -18,9 +43,7 @@ fn resolve_cnode_depth(init_cnode_bits: u8) -> (u8, sys::seL4_Word) {
     // slot`). Use the bootinfo-declared CNode size bits for both the integer and
     // word representations so that capability lookups align with the guard
     // configuration on every architecture.
-    let depth_u8 = init_cnode_bits;
-    let depth_word = depth_u8 as sys::seL4_Word;
-    (depth_u8, depth_word)
+    CNodeDepth::new(init_cnode_bits)
 }
 #[inline]
 pub fn caprights_rw_grant() -> sys::SeL4CapRights {
@@ -59,15 +82,15 @@ pub fn cnode_copy_invoc(
     let rights = caprights_rw_grant();
     #[cfg(target_os = "none")]
     {
-        let (depth_u8, _depth_word) = resolve_cnode_depth(init_cnode_bits);
+        let depth = resolve_cnode_depth(init_cnode_bits);
         unsafe {
             sys::seL4_CNode_Copy(
                 sys::seL4_CapInitThreadCNode,
                 dst_slot,
-                depth_u8,
+                depth.as_u8(),
                 sys::seL4_CapInitThreadCNode,
                 src_slot,
-                depth_u8,
+                depth.as_u8(),
                 rights,
             )
         }
@@ -75,8 +98,15 @@ pub fn cnode_copy_invoc(
 
     #[cfg(not(target_os = "none"))]
     {
-        let (_depth_u8, depth_word) = resolve_cnode_depth(init_cnode_bits);
-        let _ = (init_cnode_bits, dst_slot, src_slot, rights, depth_word);
+        let depth = resolve_cnode_depth(init_cnode_bits);
+        let _ = (
+            init_cnode_bits,
+            dst_slot,
+            src_slot,
+            rights,
+            depth.as_u8(),
+            depth.as_word(),
+        );
         sys::seL4_NoError
     }
 }
@@ -90,15 +120,15 @@ pub fn cnode_mint_invoc(
     let rights = caprights_rw_grant();
     #[cfg(target_os = "none")]
     {
-        let (depth_u8, _depth_word) = resolve_cnode_depth(init_cnode_bits);
+        let depth = resolve_cnode_depth(init_cnode_bits);
         unsafe {
             sys::seL4_CNode_Mint(
                 sys::seL4_CapInitThreadCNode,
                 dst_slot,
-                depth_u8,
+                depth.as_u8(),
                 sys::seL4_CapInitThreadCNode,
                 src_slot,
-                depth_u8,
+                depth.as_u8(),
                 rights,
                 badge,
             )
@@ -107,14 +137,15 @@ pub fn cnode_mint_invoc(
 
     #[cfg(not(target_os = "none"))]
     {
-        let (_depth_u8, depth_word) = resolve_cnode_depth(init_cnode_bits);
+        let depth = resolve_cnode_depth(init_cnode_bits);
         let _ = (
             init_cnode_bits,
             dst_slot,
             src_slot,
             badge,
             rights,
-            depth_word,
+            depth.as_u8(),
+            depth.as_word(),
         );
         sys::seL4_NoError
     }
@@ -123,14 +154,14 @@ pub fn cnode_mint_invoc(
 pub fn cnode_delete_invoc(init_cnode_bits: u8, slot: sys::seL4_CPtr) -> sys::seL4_Error {
     #[cfg(target_os = "none")]
     {
-        let (depth_u8, _depth_word) = resolve_cnode_depth(init_cnode_bits);
-        unsafe { sys::seL4_CNode_Delete(sys::seL4_CapInitThreadCNode, slot, depth_u8) }
+        let depth = resolve_cnode_depth(init_cnode_bits);
+        unsafe { sys::seL4_CNode_Delete(sys::seL4_CapInitThreadCNode, slot, depth.as_u8()) }
     }
 
     #[cfg(not(target_os = "none"))]
     {
-        let (_depth_u8, _depth_word) = resolve_cnode_depth(init_cnode_bits);
-        let _ = (init_cnode_bits, slot);
+        let depth = resolve_cnode_depth(init_cnode_bits);
+        let _ = (init_cnode_bits, slot, depth.as_u8(), depth.as_word());
         sys::seL4_NoError
     }
 }
@@ -144,7 +175,7 @@ pub fn untyped_retype_invoc(
 ) -> sys::seL4_Error {
     #[cfg(target_os = "none")]
     {
-        let (_depth_u8, depth_word) = resolve_cnode_depth(init_cnode_bits);
+        let depth = resolve_cnode_depth(init_cnode_bits);
         unsafe {
             sys::seL4_Untyped_Retype(
                 untyped_slot,
@@ -152,7 +183,7 @@ pub fn untyped_retype_invoc(
                 size_bits,
                 sys::seL4_CapInitThreadCNode,
                 dst_slot,
-                depth_word,
+                depth.as_word(),
                 0,
                 1,
             )
@@ -161,14 +192,15 @@ pub fn untyped_retype_invoc(
 
     #[cfg(not(target_os = "none"))]
     {
-        let (_depth_u8, depth_word) = resolve_cnode_depth(init_cnode_bits);
+        let depth = resolve_cnode_depth(init_cnode_bits);
         let _ = (
             init_cnode_bits,
             untyped_slot,
             obj_type,
             size_bits,
             dst_slot,
-            depth_word,
+            depth.as_u8(),
+            depth.as_word(),
         );
         sys::seL4_NoError
     }
@@ -244,9 +276,9 @@ mod tests {
     #[test]
     fn resolve_cnode_depth_matches_requested_bits() {
         for bits in [1u8, 5, 13, CANONICAL_CNODE_DEPTH_BITS] {
-            let (depth_u8, depth_word) = resolve_cnode_depth(bits);
-            assert_eq!(depth_u8, bits);
-            assert_eq!(depth_word, bits as super::sys::seL4_Word);
+            let depth = resolve_cnode_depth(bits);
+            assert_eq!(depth.as_u8(), bits);
+            assert_eq!(depth.as_word(), bits as super::sys::seL4_Word);
 
             // The helper still enforces the provided bounds to catch invalid inputs.
             assert!(bits <= CANONICAL_CNODE_DEPTH_BITS);
