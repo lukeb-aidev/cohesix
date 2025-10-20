@@ -3,7 +3,7 @@
 
 use crate::sel4 as sys;
 
-/// Depth (in bits) expected by init CNode invocations once the kernel installs guard bits.
+/// Maximum representable depth (in bits) for the init CNode on this architecture.
 pub const CANONICAL_CNODE_DEPTH_BITS: u8 = (core::mem::size_of::<sys::seL4_Word>() * 8) as u8;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -34,15 +34,16 @@ impl CNodeDepth {
 }
 
 #[inline(always)]
-fn resolve_cnode_depth(_init_cnode_bits: u8) -> CNodeDepth {
-    // The initial thread's CNode carries guard bits that expand the addressing
-    // space to a full word so that raw `seL4_CPtr` values index the expected
-    // slots. Every seL4 CNode invocation therefore expects the canonical depth
-    // (`seL4_WordBits`) when operating on the init thread CNode. Supplying only
-    // the radix width (e.g. 13) truncates the kernel's decode and yields
-    // `InvalidTarget` errors once the slot index exceeds the truncated depth.
-    // Always use the canonical word depth so the guard configuration is obeyed.
-    CNodeDepth::new(CANONICAL_CNODE_DEPTH_BITS)
+fn resolve_cnode_depth(init_cnode_bits: u8) -> CNodeDepth {
+    // The init thread's CNode depth is governed by the radix width reported via
+    // bootinfo. The kernel performs guard handling internally, so userspace must
+    // forward the advertised radix when issuing `seL4_CNode_*` operations. Using
+    // the canonical word width here caused `FailedLookup` errors during bootstrap
+    // on real hardware because the kernel treated the excess bits as an invalid
+    // traversal. Propagating the bootinfo depth keeps the invocation aligned with
+    // the kernel's expectations while still bounding inputs via
+    // `CANONICAL_CNODE_DEPTH_BITS`.
+    CNodeDepth::new(init_cnode_bits)
 }
 #[inline]
 /// Constructs a capability rights mask permitting read, write, and grant operations.
@@ -279,14 +280,11 @@ mod tests {
     use super::{resolve_cnode_depth, CANONICAL_CNODE_DEPTH_BITS};
 
     #[test]
-    fn resolve_cnode_depth_uses_canonical_word_bits() {
+    fn resolve_cnode_depth_tracks_bootinfo_bits() {
         for bits in [1u8, 5, 13, CANONICAL_CNODE_DEPTH_BITS] {
             let depth = resolve_cnode_depth(bits);
-            assert_eq!(depth.as_u8(), CANONICAL_CNODE_DEPTH_BITS);
-            assert_eq!(
-                depth.as_word(),
-                CANONICAL_CNODE_DEPTH_BITS as super::sys::seL4_Word
-            );
+            assert_eq!(depth.as_u8(), bits);
+            assert_eq!(depth.as_word(), bits as super::sys::seL4_Word);
 
             // The helper still enforces the provided bounds to catch invalid inputs.
             assert!(bits <= CANONICAL_CNODE_DEPTH_BITS);
