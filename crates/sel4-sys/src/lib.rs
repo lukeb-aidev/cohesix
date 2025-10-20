@@ -317,18 +317,19 @@ mod imp {
     #[inline(always)]
     unsafe fn ipc_buffer() -> *mut seL4_IPCBuffer {
         if let Some(image) = tls_image_mut() {
-            image.ipc_buffer()
-        } else {
-            IPC_BUFFER_FALLBACK
+            let ptr = image.ipc_buffer();
+            if !ptr.is_null() {
+                return ptr;
+            }
         }
+        IPC_BUFFER_FALLBACK
     }
 
     #[inline(always)]
     pub unsafe fn seL4_SetIPCBuffer(ptr: *mut seL4_IPCBuffer) {
+        IPC_BUFFER_FALLBACK = ptr;
         if let Some(image) = tls_image_mut() {
             image.set_ipc_buffer(ptr);
-        } else {
-            IPC_BUFFER_FALLBACK = ptr;
         }
     }
 
