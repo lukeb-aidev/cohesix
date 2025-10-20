@@ -7,7 +7,7 @@ use core::fmt;
 use core::ptr::{read_volatile, write_volatile, NonNull};
 
 use heapless::{Deque, String as HeaplessString, Vec as HeaplessVec};
-use sel4_sys::seL4_Error;
+use sel4_sys::{seL4_Error, seL4_NotEnoughMemory};
 use smoltcp::iface::{Config as IfaceConfig, Interface, SocketHandle, SocketSet, SocketStorage};
 use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::socket::tcp::{
@@ -29,6 +29,8 @@ const VIRTIO_MMIO_SLOTS: usize = 16;
 const VIRTIO_MMIO_MAGIC: u32 = 0x7472_6976;
 const VIRTIO_MMIO_VERSION_LEGACY: u32 = 1;
 const VIRTIO_DEVICE_ID_NET: u32 = 1;
+
+const DEVICE_FRAME_BITS: usize = 12;
 
 const STATUS_ACKNOWLEDGE: u32 = 1 << 0;
 const STATUS_DRIVER: u32 = 1 << 1;
@@ -629,7 +631,19 @@ impl VirtioRegs {
     fn probe(env: &mut KernelEnv) -> Result<Self, DriverError> {
         for slot in 0..VIRTIO_MMIO_SLOTS {
             let base = VIRTIO_MMIO_BASE + slot * VIRTIO_MMIO_STRIDE;
-            let frame = env.map_device(base).map_err(DriverError::Sel4)?;
+            if env.device_coverage(base, DEVICE_FRAME_BITS).is_none() {
+                continue;
+            }
+            let frame = match env.map_device(base) {
+                Ok(frame) => frame,
+                Err(err) if err == seL4_NotEnoughMemory => {
+                    log::trace!(
+                        "virtio-mmio: slot {slot} @ 0x{base:08x} unavailable (no device coverage)",
+                    );
+                    continue;
+                }
+                Err(err) => return Err(DriverError::Sel4(err)),
+            };
             let regs = VirtioRegs { mmio: frame };
             let magic = regs.read32(Registers::MagicValue);
             let version = regs.read32(Registers::Version);
