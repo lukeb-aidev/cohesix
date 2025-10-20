@@ -194,7 +194,7 @@ impl CSpaceCtx {
         let _ = write!(
             &mut line,
             "[cnode] Copy err={err} dest(index=0x{dest_index:04x},depth={depth}) src(index=0x{src_index:04x},depth={depth})",
-            depth = super::cspace_sys::CANONICAL_CNODE_DEPTH_BITS,
+            depth = self.init_cnode_bits,
         );
         emit_console_line(line.as_str());
     }
@@ -210,7 +210,7 @@ impl CSpaceCtx {
         let _ = write!(
             &mut line,
             "[cnode] Mint err={err} dest(index=0x{dest_index:04x},depth={depth},offset=0) src(index=0x{src_index:04x},depth={depth}) badge={badge}",
-            depth = super::cspace_sys::CANONICAL_CNODE_DEPTH_BITS,
+            depth = self.init_cnode_bits,
         );
         emit_console_line(line.as_str());
     }
@@ -224,10 +224,10 @@ impl CSpaceCtx {
         dest_index: sel4::seL4_CPtr,
     ) {
         let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
-        let depth = super::cspace_sys::CANONICAL_CNODE_DEPTH_BITS;
         let _ = write!(
             &mut line,
             "[retype] err={err} untyped_slot=0x{untyped:04x} dest(index=0x{dest_index:04x},depth={depth},offset=0) ty={obj_ty} sz={size_bits}",
+            depth = self.init_cnode_bits,
         );
         emit_console_line(line.as_str());
     }
@@ -332,6 +332,11 @@ impl CSpaceCtx {
                 | sel4::seL4_CapIOSpace
                 | sel4::seL4_CapBootInfoFrame
                 | sel4::seL4_CapInitThreadIPCBuffer
+                | sel4::seL4_CapDomain
+                | sel4::seL4_CapSMMUSIDControl
+                | sel4::seL4_CapSMMUCBControl
+                | sel4::seL4_CapInitThreadSC
+                | sel4::seL4_CapSMC
         )
     }
 }

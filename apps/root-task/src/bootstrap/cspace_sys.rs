@@ -4,6 +4,14 @@
 use crate::sel4 as sys;
 
 pub const CANONICAL_CNODE_DEPTH_BITS: u8 = (core::mem::size_of::<sys::seL4_Word>() * 8) as u8;
+
+#[inline(always)]
+fn resolve_cnode_depth(init_cnode_bits: u8) -> (u8, sys::seL4_Word) {
+    debug_assert!(init_cnode_bits <= CANONICAL_CNODE_DEPTH_BITS);
+    let depth_u8 = init_cnode_bits;
+    let depth_word = init_cnode_bits as sys::seL4_Word;
+    (depth_u8, depth_word)
+}
 #[inline]
 pub fn caprights_rw_grant() -> sys::SeL4CapRights {
     #[cfg(target_os = "none")]
@@ -38,14 +46,8 @@ pub fn cnode_copy_invoc(
     dst_slot: sys::seL4_CPtr,
     src_slot: sys::seL4_CPtr,
 ) -> sys::seL4_Error {
-    // The initial CNode is presented with guard bits such that seL4 expects
-    // the canonical depth (`seL4_WordBits`) for all operations addressed via
-    // `seL4_CapInitThreadCNode`. We accept `init_cnode_bits` for sanity but
-    // discard it once validated by the caller.
-    let _ = init_cnode_bits;
     let rights = caprights_rw_grant();
-    let depth_u8 = CANONICAL_CNODE_DEPTH_BITS;
-    let depth_word = CANONICAL_CNODE_DEPTH_BITS as sys::seL4_Word;
+    let (depth_u8, depth_word) = resolve_cnode_depth(init_cnode_bits);
 
     #[cfg(target_os = "none")]
     unsafe {
@@ -73,11 +75,8 @@ pub fn cnode_mint_invoc(
     src_slot: sys::seL4_CPtr,
     badge: sys::seL4_Word,
 ) -> sys::seL4_Error {
-    // See [`cnode_copy_invoc`] for the depth rationale.
-    let _ = init_cnode_bits;
     let rights = caprights_rw_grant();
-    let depth_u8 = CANONICAL_CNODE_DEPTH_BITS;
-    let depth_word = CANONICAL_CNODE_DEPTH_BITS as sys::seL4_Word;
+    let (depth_u8, depth_word) = resolve_cnode_depth(init_cnode_bits);
 
     #[cfg(target_os = "none")]
     unsafe {
@@ -107,19 +106,16 @@ pub fn cnode_mint_invoc(
     }
 }
 
-pub fn cnode_delete_invoc(slot: sys::seL4_CPtr) -> sys::seL4_Error {
+pub fn cnode_delete_invoc(init_cnode_bits: u8, slot: sys::seL4_CPtr) -> sys::seL4_Error {
+    let (depth_u8, _depth_word) = resolve_cnode_depth(init_cnode_bits);
     #[cfg(target_os = "none")]
     unsafe {
-        sys::seL4_CNode_Delete(
-            sys::seL4_CapInitThreadCNode,
-            slot,
-            CANONICAL_CNODE_DEPTH_BITS,
-        )
+        sys::seL4_CNode_Delete(sys::seL4_CapInitThreadCNode, slot, depth_u8)
     }
 
     #[cfg(not(target_os = "none"))]
     {
-        let _ = slot;
+        let _ = (init_cnode_bits, slot);
         sys::seL4_NoError
     }
 }
@@ -131,9 +127,7 @@ pub fn untyped_retype_invoc(
     size_bits: sys::seL4_Word,
     dst_slot: sys::seL4_CPtr,
 ) -> sys::seL4_Error {
-    // See [`cnode_copy_invoc`] for the depth rationale.
-    let _ = init_cnode_bits;
-    let depth_word = CANONICAL_CNODE_DEPTH_BITS as sys::seL4_Word;
+    let (_depth_u8, depth_word) = resolve_cnode_depth(init_cnode_bits);
 
     #[cfg(target_os = "none")]
     unsafe {
