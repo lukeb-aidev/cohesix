@@ -35,11 +35,20 @@ impl CNodeDepth {
 
 #[inline(always)]
 fn resolve_cnode_depth(invocation_bits: u8) -> CNodeDepth {
-    // The kernel now drives capability lookups using the exact radix width of
-    // the supplied CNode rather than assuming guard bits fill the remaining
-    // architecture word. Honour the bootinfo-declared invocation depth while
-    // still constraining it to the architectural maximum via `CNodeDepth::new`.
-    CNodeDepth::new(invocation_bits)
+    // seL4 expects the full architectural width when invoking operations on the
+    // init CNode so that guard bits cover the remaining word. Some bootstrapping
+    // paths report the radix width (`invocation_bits`) as the number of usable
+    // index bits, which is typically smaller (e.g. 13). Supplying that truncated
+    // value causes the kernel to reject lookups with `Invalid source slot`.
+    // Always promote to the canonical architectural depth while asserting that
+    // the reported width never exceeds it.
+    debug_assert!(
+        invocation_bits <= CANONICAL_CNODE_DEPTH_BITS,
+        "init cnode depth {} exceeds architectural limit {}",
+        invocation_bits,
+        CANONICAL_CNODE_DEPTH_BITS
+    );
+    CNodeDepth::new(CANONICAL_CNODE_DEPTH_BITS)
 }
 #[inline]
 /// Constructs a capability rights mask permitting read, write, and grant operations.
@@ -279,9 +288,22 @@ mod tests {
     fn resolve_cnode_depth_tracks_invocation_width() {
         for bits in [1u8, 5, 13, CANONICAL_CNODE_DEPTH_BITS] {
             let depth = resolve_cnode_depth(bits);
-            assert_eq!(depth.as_u8(), bits);
-            assert_eq!(depth.as_word(), bits as super::sys::seL4_Word);
+            assert_eq!(depth.as_u8(), CANONICAL_CNODE_DEPTH_BITS);
+            assert_eq!(
+                depth.as_word(),
+                CANONICAL_CNODE_DEPTH_BITS as super::sys::seL4_Word
+            );
             assert!(bits <= CANONICAL_CNODE_DEPTH_BITS);
         }
+    }
+
+    #[test]
+    fn resolve_cnode_depth_never_underfills_guard_bits() {
+        let depth = resolve_cnode_depth(0);
+        assert_eq!(depth.as_u8(), CANONICAL_CNODE_DEPTH_BITS);
+        assert_eq!(
+            depth.as_word(),
+            CANONICAL_CNODE_DEPTH_BITS as super::sys::seL4_Word
+        );
     }
 }
