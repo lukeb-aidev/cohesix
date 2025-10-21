@@ -115,10 +115,10 @@ impl CSpaceCtx {
             init_cnode_bits > 0,
             "bootinfo reported zero-width init CNode"
         );
-        let canonical_depth_bits = CANONICAL_CNODE_DEPTH_BITS;
+        let invocation_depth_bits = init_cnode_bits;
         let (first_free, last_free) = bi.init_cnode_empty_range();
         debug_assert!(
-            init_cnode_bits <= canonical_depth_bits,
+            init_cnode_bits <= CANONICAL_CNODE_DEPTH_BITS,
             "bootinfo-reported radix exceeds canonical invocation depth",
         );
         let limit = 1usize << bi.init_cnode_size_bits();
@@ -133,10 +133,11 @@ impl CSpaceCtx {
         let root_cnode_cap = bi.root_cnode_cap();
         let ctx = Self {
             bi,
-            // CNode invocations must honour the canonical guard depth (word width).
-            // Supplying the bootinfo radix directly causes the kernel to reject
-            // legitimate slot indices with `Target slot invalid` during bootstrap.
-            cnode_invocation_depth_bits: canonical_depth_bits,
+            // Match the kernel-advertised radix when invoking the init CNode. The
+            // kernel validates source and destination slots against the declared
+            // depth, so honouring the bootinfo value avoids `Invalid source slot`
+            // failures seen when using architecture word widths.
+            cnode_invocation_depth_bits: invocation_depth_bits,
             init_cnode_bits,
             first_free,
             last_free,

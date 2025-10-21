@@ -5,7 +5,6 @@
 use core::mem::{self, MaybeUninit};
 
 use root_task::bootstrap::cspace::{BootInfoView, CSpaceCtx};
-use root_task::bootstrap::cspace_sys::CANONICAL_CNODE_DEPTH_BITS;
 use root_task::sel4::{
     self, seL4_CNode_Mint, seL4_CapInitThreadCNode, seL4_CapInitThreadTCB,
     seL4_CapRights_ReadWrite, seL4_NoError, seL4_SlotRegion,
@@ -68,20 +67,20 @@ fn zero_depth_mint_is_rejected() {
 
 #[cfg(target_os = "none")]
 #[test]
-fn canonical_depth_mint_succeeds() {
+fn bootinfo_depth_mint_succeeds() {
     let mut ctx = ctx_fixture();
     assert_eq!(ctx.smoke_copy_init_tcb(), Ok(()));
-    let canonical_depth = ctx.cnode_invocation_depth_bits;
-    assert_eq!(canonical_depth, CANONICAL_CNODE_DEPTH_BITS);
+    let boot_depth = ctx.cnode_invocation_depth_bits;
+    assert_eq!(boot_depth, ctx.bi.init_cnode_bits());
 
     let err = unsafe {
         seL4_CNode_Mint(
             seL4_CapInitThreadCNode,
             ctx.first_free.saturating_add(1),
-            canonical_depth,
+            boot_depth,
             seL4_CapInitThreadCNode,
             seL4_CapInitThreadTCB,
-            canonical_depth,
+            boot_depth,
             seL4_CapRights_ReadWrite,
             0,
             0,
