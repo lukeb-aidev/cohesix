@@ -34,17 +34,12 @@ impl CNodeDepth {
 }
 
 #[inline(always)]
-fn resolve_cnode_depth(init_cnode_bits: u8) -> CNodeDepth {
-    // seL4 presents the init thread's root CNode as a guard node whose address
-    // space spans the architecture word size. The bootinfo radix width only
-    // covers the usable portion of that guard. When issuing `seL4_CNode_*`
-    // operations, the kernel expects invocations to walk the entire guarded
-    // width so the guard bits are validated before the radix selection occurs.
-    // Always using the canonical `seL4_WordBits` depth honours that contract
-    // while still allowing callers to sanity-check bootinfo values via the
-    // `init_cnode_bits` argument.
-    let _ = init_cnode_bits;
-    CNodeDepth::new(CANONICAL_CNODE_DEPTH_BITS)
+fn resolve_cnode_depth(invocation_bits: u8) -> CNodeDepth {
+    // The kernel now drives capability lookups using the exact radix width of
+    // the supplied CNode rather than assuming guard bits fill the remaining
+    // architecture word. Honour the bootinfo-declared invocation depth while
+    // still constraining it to the architectural maximum via `CNodeDepth::new`.
+    CNodeDepth::new(invocation_bits)
 }
 #[inline]
 /// Constructs a capability rights mask permitting read, write, and grant operations.
@@ -281,16 +276,11 @@ mod tests {
     use super::{resolve_cnode_depth, CANONICAL_CNODE_DEPTH_BITS};
 
     #[test]
-    fn resolve_cnode_depth_uses_canonical_width() {
+    fn resolve_cnode_depth_tracks_invocation_width() {
         for bits in [1u8, 5, 13, CANONICAL_CNODE_DEPTH_BITS] {
             let depth = resolve_cnode_depth(bits);
-            assert_eq!(depth.as_u8(), CANONICAL_CNODE_DEPTH_BITS);
-            assert_eq!(
-                depth.as_word(),
-                CANONICAL_CNODE_DEPTH_BITS as super::sys::seL4_Word
-            );
-
-            // The helper still enforces the provided bounds to catch invalid inputs.
+            assert_eq!(depth.as_u8(), bits);
+            assert_eq!(depth.as_word(), bits as super::sys::seL4_Word);
             assert!(bits <= CANONICAL_CNODE_DEPTH_BITS);
         }
     }

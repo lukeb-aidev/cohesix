@@ -7,6 +7,9 @@
 - **Kernel**: Upstream seL4 (external; never vendored).
 - **Userspace**: Pure Rust root task, NineDoor 9P server, worker suites, and host-side GPU bridge tools.
 
+## Kernel Build Artefacts
+- Reference kernel build outputs (headers, slot layouts, generated metadata) reside in `seL4/build/`.
+
 ## Operating Rules
 1. **Single Source of Truth** — This `AGENTS.md` plus `/docs/*.md` constitute canonical guidance. Update them alongside code.
 1a. **Compiler Alignment** — All manifests and generated artefacts (`root_task.toml`, `coh-rtc` outputs) define the system state. Code or docs that diverge from compiler output are invalid; regenerate manifests instead of editing generated code.
