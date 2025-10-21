@@ -4,7 +4,7 @@ use crate::sel4::{self, BootInfo};
 use core::fmt::Write;
 use heapless::String;
 
-use super::cspace_sys;
+use super::cspace_sys::{self, CANONICAL_CNODE_DEPTH_BITS};
 
 const MAX_DIAGNOSTIC_LEN: usize = 224;
 #[cfg(all(feature = "kernel", sel4_config_debug_build))]
@@ -71,7 +71,7 @@ impl From<&'static BootInfo> for BootInfoView {
 pub struct CSpaceCtx {
     /// Cached boot info projection used for runtime diagnostics.
     pub bi: BootInfoView,
-    /// Bootinfo-declared depth supplied to CNode invocations targeting the init CNode.
+    /// Canonical guard depth supplied to CNode invocations targeting the init CNode.
     pub cnode_invocation_depth_bits: u8,
     /// Radix width of the init thread's CNode as reported by bootinfo.
     pub init_cnode_bits: u8,
@@ -115,7 +115,7 @@ impl CSpaceCtx {
             init_cnode_bits > 0,
             "bootinfo reported zero-width init CNode"
         );
-        let cnode_invocation_depth_bits = init_cnode_bits;
+        let cnode_invocation_depth_bits = CANONICAL_CNODE_DEPTH_BITS;
         let (first_free, last_free) = bi.init_cnode_empty_range();
         debug_assert!(
             init_cnode_bits <= cnode_invocation_depth_bits,
