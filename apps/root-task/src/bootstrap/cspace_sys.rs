@@ -35,20 +35,18 @@ impl CNodeDepth {
 
 #[inline(always)]
 fn resolve_cnode_depth(invocation_bits: u8) -> CNodeDepth {
-    // seL4 expects the full architectural width when invoking operations on the
-    // init CNode so that guard bits cover the remaining word. Some bootstrapping
-    // paths report the radix width (`invocation_bits`) as the number of usable
-    // index bits, which is typically smaller (e.g. 13). Supplying that truncated
-    // value causes the kernel to reject lookups with `Invalid source slot`.
-    // Always promote to the canonical architectural depth while asserting that
-    // the reported width never exceeds it.
+    // seL4 interprets the depth as the number of index bits presented to the
+    // target CNode. The kernel boot info reports this as the radix width; using
+    // a larger architectural width yields guard mismatches and `Invalid source
+    // slot` errors. Honour the boot-provided depth while still guarding against
+    // impossible values that would exceed the machine word width.
     debug_assert!(
         invocation_bits <= CANONICAL_CNODE_DEPTH_BITS,
         "init cnode depth {} exceeds architectural limit {}",
         invocation_bits,
         CANONICAL_CNODE_DEPTH_BITS
     );
-    CNodeDepth::new(CANONICAL_CNODE_DEPTH_BITS)
+    CNodeDepth::new(invocation_bits)
 }
 #[inline]
 /// Constructs a capability rights mask permitting read, write, and grant operations.

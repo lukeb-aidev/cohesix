@@ -117,11 +117,10 @@ impl CSpaceCtx {
             init_cnode_bits > 0,
             "bootinfo reported zero-width init CNode"
         );
-        // The kernel's lookup logic (`lookupSlotForCNodeOp`) enforces that the
-        // supplied depth spans the entire machine word. Using a smaller depth
-        // trips the guard-mismatch path and yields the "Invalid source slot"
-        // fault that currently prevents bootstrap from cloning the init TCB.
-        let invocation_depth_bits = CANONICAL_CNODE_DEPTH_BITS;
+        // seL4 expects the depth of init CNode invocations to match the radix
+        // width reported via bootinfo. Supplying a larger architectural width
+        // causes the kernel to reject lookups with `Invalid source slot`.
+        let invocation_depth_bits = init_cnode_bits;
         let (first_free, last_free) = bi.init_cnode_empty_range();
         debug_assert!(
             init_cnode_bits <= CANONICAL_CNODE_DEPTH_BITS,
@@ -139,10 +138,6 @@ impl CSpaceCtx {
         let root_cnode_cap = bi.root_cnode_cap();
         let ctx = Self {
             bi,
-            // Always honour the canonical depth expected by
-            // `lookupSlotForCNodeOp`. Bootinfo still constrains slot ranges, but
-            // invocations must cover the full word to satisfy the kernel guard
-            // checks.
             cnode_invocation_depth_bits: invocation_depth_bits,
             init_cnode_bits,
             first_free,
