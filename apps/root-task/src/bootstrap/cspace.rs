@@ -133,7 +133,10 @@ impl CSpaceCtx {
         let root_cnode_cap = bi.root_cnode_cap();
         let ctx = Self {
             bi,
-            cnode_invocation_depth_bits: init_cnode_bits,
+            // CNode invocations must honour the canonical guard depth (word width).
+            // Supplying the bootinfo radix directly causes the kernel to reject
+            // legitimate slot indices with `Target slot invalid` during bootstrap.
+            cnode_invocation_depth_bits: canonical_depth_bits,
             init_cnode_bits,
             first_free,
             last_free,
@@ -229,13 +232,15 @@ impl CSpaceCtx {
         dest_index: sel4::seL4_CPtr,
         src_index: sel4::seL4_CPtr,
     ) {
-        let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
-        let _ = write!(
-            &mut line,
-            "[cnode] Copy err={err} dest(index=0x{dest_index:04x},depth={depth}) src(index=0x{src_index:04x},depth={depth})",
-            depth = self.cnode_invocation_depth_bits,
-        );
-        emit_console_line(line.as_str());
+        if err != sel4::seL4_NoError {
+            let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
+            let _ = write!(
+                &mut line,
+                "[cnode] Copy err={err} dest(index=0x{dest_index:04x},depth={depth}) src(index=0x{src_index:04x},depth={depth})",
+                depth = self.cnode_invocation_depth_bits,
+            );
+            emit_console_line(line.as_str());
+        }
     }
 
     /// Logs the outcome of an init CNode mint invocation.
@@ -246,13 +251,15 @@ impl CSpaceCtx {
         src_index: sel4::seL4_CPtr,
         badge: sel4::seL4_Word,
     ) {
-        let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
-        let _ = write!(
-            &mut line,
-            "[cnode] Mint err={err} dest(index=0x{dest_index:04x},depth={depth},offset=0) src(index=0x{src_index:04x},depth={depth}) badge={badge}",
-            depth = self.cnode_invocation_depth_bits,
-        );
-        emit_console_line(line.as_str());
+        if err != sel4::seL4_NoError {
+            let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
+            let _ = write!(
+                &mut line,
+                "[cnode] Mint err={err} dest(index=0x{dest_index:04x},depth={depth},offset=0) src(index=0x{src_index:04x},depth={depth}) badge={badge}",
+                depth = self.cnode_invocation_depth_bits,
+            );
+            emit_console_line(line.as_str());
+        }
     }
 
     /// Logs the outcome of an init CNode untyped retype invocation.
@@ -264,13 +271,15 @@ impl CSpaceCtx {
         size_bits: sel4::seL4_Word,
         dest_index: sel4::seL4_CPtr,
     ) {
-        let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
-        let _ = write!(
-            &mut line,
-            "[retype] err={err} untyped_slot=0x{untyped:04x} dest(index=0x{dest_index:04x},depth={depth},offset=0) ty={obj_ty} sz={size_bits}",
-            depth = self.cnode_invocation_depth_bits,
-        );
-        emit_console_line(line.as_str());
+        if err != sel4::seL4_NoError {
+            let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
+            let _ = write!(
+                &mut line,
+                "[retype] err={err} untyped_slot=0x{untyped:04x} dest(index=0x{dest_index:04x},depth={depth},offset=0) ty={obj_ty} sz={size_bits}",
+                depth = self.cnode_invocation_depth_bits,
+            );
+            emit_console_line(line.as_str());
+        }
     }
 
     /// Copies the init thread TCB capability into the free slot window to validate CSpace operations.
@@ -314,6 +323,7 @@ impl CSpaceCtx {
         dst_slot: sel4::seL4_CPtr,
         src_slot: sel4::seL4_CPtr,
     ) -> sel4::seL4_Error {
+        #[cfg(all(feature = "kernel", sel4_config_debug_build))]
         {
             let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
             let _ = write!(
