@@ -1,0 +1,1 @@
+regen /Users/lukasbower/seL4/build/kernel/gen_headers/plat/machine/devices_gen.h /Users/lukasbower/seL4/build/kernel/kernel.dtb;/Users/lukasbower/seL4/kernel/tools/hardware.yml;/Users/lukasbower/seL4/kernel/tools/hardware_schema.yml;/Users/lukasbower/seL4/kernel/tools/hardware_gen.py

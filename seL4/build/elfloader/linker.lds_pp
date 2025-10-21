@@ -1,0 +1,52 @@
+       
+       
+       
+       
+ENTRY( _start )
+SECTIONS
+{
+    . = 0x4064f000;
+    _text = .;
+    .start :
+    {
+        *(.text.start)
+    }
+    .text :
+    {
+        *(.text)
+    }
+    . = ALIGN(16);
+    .rodata :
+    {
+        *(.srodata*)
+        . = ALIGN(16);
+        *(.rodata)
+        *(.rodata.*)
+        . = ALIGN(16);
+        _archive_start = .;
+        *(._archive_cpio)
+        _archive_end = .;
+    }
+    . = ALIGN(16);
+    .data :
+    {
+        __global_pointer$ = . + 0x800;
+        *(.sdata*)
+        *(.data)
+        *(.data.*)
+    }
+    . = ALIGN(16);
+    .bss (NOLOAD) :
+    {
+        . = ALIGN(0x1000);
+        core_stack_alloc = .;
+        . = . + 1 * 1 << 12;
+        core_stack_alloc_end = .;
+        _bss = .;
+        *(.sbss*)
+        *(.bss)
+        *(.bss.*)
+        _bss_end = .;
+    }
+     _end = .;
+}

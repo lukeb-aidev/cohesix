@@ -1,0 +1,1 @@
+regen /Users/lukasbower/seL4/build/kernel/kernel.dtb /Users/lukasbower/seL4/build/qemu-arm-virt.dts;/Users/lukasbower/seL4/kernel/src/plat/qemu-arm-virt/overlay-qemu-arm-virt.dts

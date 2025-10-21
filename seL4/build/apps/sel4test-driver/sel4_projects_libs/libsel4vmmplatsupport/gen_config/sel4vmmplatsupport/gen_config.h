@@ -1,0 +1,4 @@
+#pragma once
+
+#define CONFIG_VMM_PLATSUPPORT_VESA_FRAMEBUFFER  1
+/* disabled: CONFIG_VMM_USE_HPET */

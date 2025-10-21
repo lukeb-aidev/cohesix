@@ -1,0 +1,18 @@
+{
+    "IMAGE_ELF": true,
+    "IMAGE_BINARY": false,
+    "IMAGE_EFI": false,
+    "IMAGE_UIMAGE": false,
+    "ELFLOADER_IMAGE": "elf",
+    "ARM_MONITOR_HOOK": false,
+    "GPT_PTIMER_NS_PL1_ACCESS": false,
+    "ARM_ERRATA_764369": false,
+    "HASH_NONE": true,
+    "HASH_SHA": false,
+    "HASH_MD5": false,
+    "HASH_INSTRUCTIONS": "hash_none",
+    "ELFLOADER_INCLUDE_DTB": true,
+    "ELFLOADER_ROOTSERVERS_LAST": false,
+    "ELFLOADER_ARMV8_LEAVE_AARCH64": false,
+    "ELFLOADER_PRECOMPILE": false
+}
