@@ -8,7 +8,9 @@ use super::cspace_sys::{self, CANONICAL_CNODE_DEPTH_BITS};
 
 const MAX_DIAGNOSTIC_LEN: usize = 224;
 #[cfg(all(feature = "kernel", sel4_config_debug_build))]
-const THREAD_CAP_IDENTIFIERS: [sel4::seL4_Word; 2] = [6, 7];
+// `cap_thread_cap` is enumerated as 12 in the generated kernel
+// structures (`seL4/build/kernel/generated/arch/object/structures_gen.h`).
+const THREAD_CAP_IDENTIFIERS: [sel4::seL4_Word; 1] = [0x0000_000c];
 
 fn log_boot(beg: sel4::seL4_CPtr, end: sel4::seL4_CPtr, bits: u8) {
     let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
@@ -115,7 +117,11 @@ impl CSpaceCtx {
             init_cnode_bits > 0,
             "bootinfo reported zero-width init CNode"
         );
-        let invocation_depth_bits = init_cnode_bits;
+        // The kernel's lookup logic (`lookupSlotForCNodeOp`) enforces that the
+        // supplied depth spans the entire machine word. Using a smaller depth
+        // trips the guard-mismatch path and yields the "Invalid source slot"
+        // fault that currently prevents bootstrap from cloning the init TCB.
+        let invocation_depth_bits = CANONICAL_CNODE_DEPTH_BITS;
         let (first_free, last_free) = bi.init_cnode_empty_range();
         debug_assert!(
             init_cnode_bits <= CANONICAL_CNODE_DEPTH_BITS,
@@ -133,10 +139,10 @@ impl CSpaceCtx {
         let root_cnode_cap = bi.root_cnode_cap();
         let ctx = Self {
             bi,
-            // Match the kernel-advertised radix when invoking the init CNode. The
-            // kernel validates source and destination slots against the declared
-            // depth, so honouring the bootinfo value avoids `Invalid source slot`
-            // failures seen when using architecture word widths.
+            // Always honour the canonical depth expected by
+            // `lookupSlotForCNodeOp`. Bootinfo still constrains slot ranges, but
+            // invocations must cover the full word to satisfy the kernel guard
+            // checks.
             cnode_invocation_depth_bits: invocation_depth_bits,
             init_cnode_bits,
             first_free,
