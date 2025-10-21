@@ -71,7 +71,7 @@ impl From<&'static BootInfo> for BootInfoView {
 pub struct CSpaceCtx {
     /// Cached boot info projection used for runtime diagnostics.
     pub bi: BootInfoView,
-    /// Canonical depth supplied to CNode invocations targeting the init CNode.
+    /// Bootinfo-declared depth supplied to CNode invocations targeting the init CNode.
     pub cnode_invocation_depth_bits: u8,
     /// Radix width of the init thread's CNode as reported by bootinfo.
     pub init_cnode_bits: u8,
@@ -111,7 +111,11 @@ impl CSpaceCtx {
     /// Constructs a new capability-space context from kernel boot information.
     pub fn new(bi: BootInfoView) -> Self {
         let init_cnode_bits = bi.init_cnode_bits();
-        let cnode_invocation_depth_bits = cspace_sys::CANONICAL_CNODE_DEPTH_BITS;
+        assert!(
+            init_cnode_bits > 0,
+            "bootinfo reported zero-width init CNode"
+        );
+        let cnode_invocation_depth_bits = init_cnode_bits;
         let (first_free, last_free) = bi.init_cnode_empty_range();
         debug_assert!(
             init_cnode_bits <= cnode_invocation_depth_bits,
