@@ -115,10 +115,10 @@ impl CSpaceCtx {
             init_cnode_bits > 0,
             "bootinfo reported zero-width init CNode"
         );
-        let cnode_invocation_depth_bits = CANONICAL_CNODE_DEPTH_BITS;
+        let canonical_depth_bits = CANONICAL_CNODE_DEPTH_BITS;
         let (first_free, last_free) = bi.init_cnode_empty_range();
         debug_assert!(
-            init_cnode_bits <= cnode_invocation_depth_bits,
+            init_cnode_bits <= canonical_depth_bits,
             "bootinfo-reported radix exceeds canonical invocation depth",
         );
         let limit = 1usize << bi.init_cnode_size_bits();
@@ -133,7 +133,7 @@ impl CSpaceCtx {
         let root_cnode_cap = bi.root_cnode_cap();
         let ctx = Self {
             bi,
-            cnode_invocation_depth_bits,
+            cnode_invocation_depth_bits: init_cnode_bits,
             init_cnode_bits,
             first_free,
             last_free,
