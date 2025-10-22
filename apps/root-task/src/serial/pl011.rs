@@ -56,13 +56,17 @@ struct Pl011Regs {
 /// MMIO-backed PL011 serial driver.
 pub struct Pl011 {
     base: NonNull<Pl011Regs>,
+    rx_cached: Option<u8>,
 }
 
 impl Pl011 {
     /// Create a driver from the provided MMIO base pointer.
     #[must_use]
     pub fn new(base: NonNull<u8>) -> Self {
-        Self { base: base.cast() }
+        Self {
+            base: base.cast(),
+            rx_cached: None,
+        }
     }
 
     #[inline(always)]
@@ -148,6 +152,9 @@ impl Pl011 {
 
     /// Non-blocking attempt to read a byte from the RX FIFO.
     pub fn try_getc(&mut self) -> Option<u8> {
+        if let Some(byte) = self.rx_cached.take() {
+            return Some(byte);
+        }
         let fr = unsafe { read_volatile(self.reg_fr()) };
         if (fr & FR_RXFE) != 0 {
             None
@@ -160,19 +167,15 @@ impl Pl011 {
     /// Read a console line into the provided buffer, normalising CRLF.
     pub fn read_line(&mut self, buf: &mut [u8]) -> usize {
         let mut len = 0usize;
-        let mut lookahead: Option<u8> = None;
 
         while len + 1 < buf.len() {
-            let byte = match lookahead.take() {
-                Some(value) => value,
-                None => self.getc_blocking(),
-            };
+            let byte = self.getc_blocking();
 
             match byte {
                 b'\r' => {
                     if let Some(next) = self.try_getc() {
                         if next != b'\n' {
-                            lookahead = Some(next);
+                            self.rx_cached = Some(next);
                         }
                     }
                     self.write_str("\r\n");
@@ -220,6 +223,9 @@ impl Io for Pl011 {
 
 impl SerialDriver for Pl011 {
     fn read_byte(&mut self) -> nb::Result<u8, Self::Error> {
+        if let Some(byte) = self.rx_cached.take() {
+            return Ok(byte);
+        }
         let fr = unsafe { read_volatile(self.reg_fr()) };
         if (fr & FR_RXFE) != 0 {
             return Err(NbError::WouldBlock);
@@ -237,5 +243,46 @@ impl SerialDriver for Pl011 {
             write_volatile(self.reg_dr(), u32::from(byte));
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn zeroed_regs() -> Pl011Regs {
+        Pl011Regs {
+            dr: 0,
+            _rsrv04: [0; 5],
+            fr: 0,
+            _rsrv1c: [0; 1],
+            ibrd: 0,
+            fbrd: 0,
+            lcrh: 0,
+            cr: 0,
+            ifls: 0,
+            imsc: 0,
+            _rsrv3c: [0; 1],
+            icr: 0,
+        }
+    }
+
+    #[test]
+    fn read_line_preserves_following_byte_after_cr() {
+        let mut regs = zeroed_regs();
+        let base = NonNull::from(&mut regs).cast::<u8>();
+        let mut uart = Pl011::new(base);
+
+        uart.rx_cached = Some(b'\r');
+        regs.fr = 0;
+        regs.dr = b'c' as u32;
+
+        let mut buf = [0u8; 8];
+        let len = uart.read_line(&mut buf);
+
+        assert_eq!(len, 0);
+        assert_eq!(buf[0], 0);
+        assert_eq!(uart.rx_cached, Some(b'c'));
+        assert_eq!(uart.getc_blocking(), b'c');
     }
 }
