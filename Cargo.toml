@@ -9,6 +9,7 @@ members = [
     "apps/gpu-bridge-host",
     "crates/cohesix-ticket",
     "crates/secure9p-wire",
+    "crates/domain-intents",
     "crates/boot/uefi-elfloader-shim",
     "crates/sel4-panicking",
     "crates/sel4-runtime",
