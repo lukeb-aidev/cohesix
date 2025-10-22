@@ -23,12 +23,13 @@ use crate::event::{AuditSink, EventPump, IpcDispatcher, TickEvent, TicketTable, 
 use crate::net::{NetStack, CONSOLE_TCP_PORT};
 use crate::platform::{Platform, SeL4Platform};
 use crate::sel4::{
-    bootinfo_debug_dump, debug_put_char, error_name, first_regular_untyped, BootInfo, BootInfoExt,
+    bootinfo_debug_dump, error_name, first_regular_untyped, send_nonnull, BootInfo, BootInfoExt,
     KernelEnv, RetypeKind, RetypeStatus,
 };
 use crate::serial::{
     pl011::Pl011, SerialPort, DEFAULT_LINE_CAPACITY, DEFAULT_RX_CAPACITY, DEFAULT_TX_CAPACITY,
 };
+use crate::trace::trace_ep;
 #[cfg(feature = "net-console")]
 use smoltcp::wire::Ipv4Address;
 
@@ -119,28 +120,6 @@ impl<'a, P: Platform> Write for DebugConsole<'a, P> {
     }
 }
 
-#[inline(always)]
-fn log_endpoint_slot(slot: sel4_sys::seL4_CPtr) {
-    const PREFIX: &[u8] = b"[caps ep=";
-    const SUFFIX: &[u8] = b"]\n";
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-
-    for &byte in PREFIX {
-        debug_put_char(byte as i32);
-    }
-
-    let width = core::mem::size_of::<sel4_sys::seL4_CPtr>() * 2;
-    for nibble in (0..width).rev() {
-        let shift = nibble * 4;
-        let value = ((slot as usize) >> shift) & 0xF;
-        debug_put_char(HEX[value] as i32);
-    }
-
-    for &byte in SUFFIX {
-        debug_put_char(byte as i32);
-    }
-}
-
 /// Allocates and retypes the root-task IPC endpoint prior to any seL4 invocations.
 pub fn bootstrap_ipc(bi: &sel4_sys::seL4_BootInfo) -> Result<RootCaps, sel4_sys::seL4_Error> {
     let mut caps = RootCaps::from_bootinfo(bi);
@@ -149,7 +128,7 @@ pub fn bootstrap_ipc(bi: &sel4_sys::seL4_BootInfo) -> Result<RootCaps, sel4_sys:
     let endpoint_slot = caps.alloc_slot()?;
     retype_endpoint_into_slot(untyped, caps.cnode, endpoint_slot)?;
     caps.endpoint = endpoint_slot;
-    log_endpoint_slot(endpoint_slot);
+    trace_ep(endpoint_slot);
 
     Ok(caps)
 }
@@ -157,16 +136,8 @@ pub fn bootstrap_ipc(bi: &sel4_sys::seL4_BootInfo) -> Result<RootCaps, sel4_sys:
 /// Issues the first IPC send once a valid endpoint capability has been provisioned.
 pub fn do_first_ipc(caps: &RootCaps) {
     let ep = caps.endpoint;
-    debug_assert!(ep != sel4_sys::seL4_CapNull);
-    if ep == sel4_sys::seL4_CapNull {
-        log::error!("endpoint null; aborting first IPC");
-        panic!("endpoint null; aborting first IPC");
-    }
-
     let message = sel4_sys::seL4_MessageInfo::new(0, 0, 0, 0);
-    unsafe {
-        sel4_sys::seL4_Send(ep, message);
-    }
+    send_nonnull(ep, message);
 }
 
 /// Minimal projection of `seL4_BootInfo` used for early diagnostics.

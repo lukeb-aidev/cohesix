@@ -2,7 +2,7 @@
 #![allow(unsafe_code)]
 
 use core::fmt::{self, Write};
-use sel4_sys::seL4_DebugPutChar;
+use sel4_sys::{seL4_CPtr, seL4_DebugPutChar};
 
 /// [`Write`] implementation that forwards characters to [`seL4_DebugPutChar`].
 pub struct DebugPutc;
@@ -51,5 +51,25 @@ pub fn dec_u32(mut writer: impl Write, mut value: u32) {
 
     for &digit in &buffer[position..] {
         let _ = writer.write_char(char::from(digit));
+    }
+}
+
+/// Emits a trace describing the endpoint capability slot in hexadecimal form.
+pub fn trace_ep(ep: seL4_CPtr) {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+
+    unsafe {
+        seL4_DebugPutChar(b'[' as i32);
+        seL4_DebugPutChar(b'e' as i32);
+        seL4_DebugPutChar(b'p' as i32);
+        seL4_DebugPutChar(b'=' as i32);
+        let width = core::mem::size_of::<seL4_CPtr>() * 2;
+        for nibble in (0..width).rev() {
+            let shift = nibble * 4;
+            let value = ((ep as usize) >> shift) & 0xF;
+            seL4_DebugPutChar(HEX[value] as i32);
+        }
+        seL4_DebugPutChar(b']' as i32);
+        seL4_DebugPutChar(b'\n' as i32);
     }
 }

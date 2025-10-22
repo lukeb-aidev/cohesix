@@ -15,8 +15,8 @@ pub use sel4_sys::{
     seL4_CapInitThreadIPCBuffer, seL4_CapInitThreadSC, seL4_CapInitThreadTCB,
     seL4_CapInitThreadVSpace, seL4_CapNull, seL4_CapRights, seL4_CapRights_All,
     seL4_CapRights_ReadWrite, seL4_CapSMC, seL4_CapSMMUCBControl, seL4_CapSMMUSIDControl,
-    seL4_Error, seL4_NoError, seL4_NotEnoughMemory, seL4_RangeError, seL4_Untyped,
-    seL4_Untyped_Retype, seL4_Word,
+    seL4_Error, seL4_MessageInfo, seL4_NoError, seL4_NotEnoughMemory, seL4_RangeError,
+    seL4_Untyped, seL4_Untyped_Retype, seL4_Word,
 };
 
 /// Canonical capability rights representation exposed by seL4.
@@ -51,6 +51,47 @@ pub fn first_regular_untyped(bi: &seL4_BootInfo) -> Option<seL4_CPtr> {
             None
         }
     })
+}
+
+/// Issues an seL4 send on the provided endpoint only when the capability is non-null.
+#[inline]
+pub fn send_nonnull(endpoint: seL4_CPtr, info: seL4_MessageInfo) {
+    debug_assert!(
+        endpoint != seL4_CapNull,
+        "endpoint capability must be initialised"
+    );
+    if endpoint == seL4_CapNull {
+        log::error!("attempted seL4_Send on seL4_CapNull endpoint");
+        return;
+    }
+
+    unsafe {
+        sel4_sys::seL4_Send(endpoint, info);
+    }
+}
+
+/// Issues an seL4 call on the provided endpoint only when the capability is non-null.
+#[inline]
+pub fn call_nonnull(endpoint: seL4_CPtr, info: seL4_MessageInfo) -> seL4_MessageInfo {
+    debug_assert!(
+        endpoint != seL4_CapNull,
+        "endpoint capability must be initialised"
+    );
+    if endpoint == seL4_CapNull {
+        log::error!("attempted seL4_Call on seL4_CapNull endpoint");
+        return seL4_MessageInfo::new(0, 0, 0, 0);
+    }
+
+    unsafe {
+        sel4_sys::seL4_CallWithMRs(
+            endpoint,
+            info,
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+            core::ptr::null_mut(),
+        )
+    }
 }
 
 /// Returns the addressing depth (in bits) of the init thread's root CNode.
