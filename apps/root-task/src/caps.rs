@@ -1,8 +1,8 @@
 // Author: Lukas Bower
 
+use crate::sel4::BootInfoExt;
 use sel4_sys::{
-    seL4_BootInfo, seL4_CNode, seL4_CPtr, seL4_Error, seL4_NoError, seL4_Untyped,
-    seL4_Untyped_Retype, seL4_Word,
+    seL4_BootInfo, seL4_CNode, seL4_CPtr, seL4_Error, seL4_NoError, seL4_Untyped, seL4_Word,
 };
 
 /// Root-task view over kernel capabilities required during bootstrap.
@@ -22,18 +22,18 @@ impl RootCaps {
     #[must_use]
     pub fn from_bootinfo(bi: &seL4_BootInfo) -> Self {
         Self {
-            cnode: bi.initThreadCNode,
-            cnode_bits: bi.initThreadCNodeSizeBits as u8,
-            next_free: bi.first_free_slot,
+            cnode: bi.init_cnode_cap(),
+            cnode_bits: bi.init_cnode_depth(),
+            next_free: bi.empty_first_slot() as seL4_CPtr,
             endpoint: sel4_sys::seL4_CapNull,
         }
     }
 
     /// Allocates the next free capability slot from the tracked init CNode window.
     pub fn alloc_slot(&mut self) -> Result<seL4_CPtr, seL4_Error> {
-        let limit = 1u64 << self.cnode_bits;
-        if (self.next_free as u64) >= limit {
-            return Err(seL4_Error::seL4_NotEnoughMemory);
+        let limit = 1usize << usize::from(self.cnode_bits);
+        if self.next_free >= limit {
+            return Err(sel4_sys::seL4_NotEnoughMemory);
         }
         let slot = self.next_free;
         self.next_free = self.next_free.saturating_add(1);
@@ -49,18 +49,16 @@ pub fn retype_endpoint(
     dst_depth_bits: u8,
 ) -> Result<(), seL4_Error> {
     let depth = seL4_Word::from(dst_depth_bits);
-    let err = unsafe {
-        seL4_Untyped_Retype(
-            untyped,
-            sel4_sys::seL4_ObjectType::seL4_EndpointObject as seL4_Word,
-            0,
-            dst_cnode,
-            dst_slot,
-            depth,
-            0,
-            1,
-        )
-    };
+    let err = sel4_sys::seL4_untyped_retype(
+        untyped,
+        sel4_sys::seL4_ObjectType::seL4_EndpointObject,
+        0,
+        dst_cnode,
+        dst_slot,
+        depth,
+        0,
+        1,
+    );
     if err == seL4_NoError {
         Ok(())
     } else {

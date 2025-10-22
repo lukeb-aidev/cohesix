@@ -486,6 +486,52 @@ mod imp {
 
     pub const seL4_SysCall: seL4_Word = !0usize; // -1 in two's complement
     pub const seL4_SysReplyRecv: seL4_Word = !1usize; // -2
+    pub const seL4_SysSend: seL4_Word = !2usize; // -3
+
+    #[inline(always)]
+    pub unsafe fn seL4_Send(dest: seL4_CPtr, msg_info: seL4_MessageInfo) {
+        let length = msg_info.length();
+
+        let mut mr0_val = 0usize;
+        let mut mr1_val = 0usize;
+        let mut mr2_val = 0usize;
+        let mut mr3_val = 0usize;
+
+        let mut mr0_ptr: *mut seL4_Word = ptr::null_mut();
+        let mut mr1_ptr: *mut seL4_Word = ptr::null_mut();
+        let mut mr2_ptr: *mut seL4_Word = ptr::null_mut();
+        let mut mr3_ptr: *mut seL4_Word = ptr::null_mut();
+
+        if length > 0 {
+            mr0_val = seL4_GetMR(0);
+            mr0_ptr = &mut mr0_val;
+        }
+        if length > 1 {
+            mr1_val = seL4_GetMR(1);
+            mr1_ptr = &mut mr1_val;
+        }
+        if length > 2 {
+            mr2_val = seL4_GetMR(2);
+            mr2_ptr = &mut mr2_val;
+        }
+        if length > 3 {
+            mr3_val = seL4_GetMR(3);
+            mr3_ptr = &mut mr3_val;
+        }
+
+        arm_sys_send_recv(
+            seL4_SysSend,
+            dest,
+            ptr::null_mut(),
+            msg_info.words[0],
+            ptr::null_mut(),
+            mr0_ptr,
+            mr1_ptr,
+            mr2_ptr,
+            mr3_ptr,
+            0,
+        );
+    }
 
     /// seL4_Untyped_Retype syscall.
     #[inline(always)]
@@ -945,6 +991,11 @@ mod host_stub {
         _mr2: *mut seL4_Word,
         _mr3: *mut seL4_Word,
     ) -> seL4_MessageInfo {
+        unsupported();
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_Send(_dest: seL4_CPtr, _msg_info: seL4_MessageInfo) {
         unsupported();
     }
 
