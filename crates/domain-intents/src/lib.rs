@@ -17,12 +17,8 @@
 //! behaviour without reaching external providers such as MusicKit or
 //! Apple TV+. Deeplinks are validated at construction time to make sure
 //! consumer applications can render actionable links, while permission
-//! shortfalls yield descriptive errors instead of panics. The module now
-//! also exposes Apple Intelligence affordances including parameter
-//! resolution, contextual follow-up questions, and donation payloads that
-//! downstream Swift code can publish to SiriKit or App Intents.
+//! shortfalls yield descriptive errors instead of panics.
 
-use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::fmt;
@@ -398,94 +394,6 @@ impl MediaPickQueryBuilder {
     }
 }
 
-/// Parameters supplied by Apple Intelligence when resolving media requests.
-#[derive(Debug, Clone, Default)]
-pub struct MediaIntentParameters {
-    /// Media domains requested by the user.
-    pub requested_domains: Vec<MediaDomain>,
-    /// Maximum runtime preferred by the user.
-    pub max_duration: Option<Duration>,
-    /// Preferred dayparts for the session.
-    pub preferred_dayparts: Vec<Daypart>,
-    /// Tone descriptors requested in natural language.
-    pub preferred_tags: Vec<&'static str>,
-    /// Whether the user emphasised weeknight-friendly pacing.
-    pub weeknights_only: bool,
-    /// Optional cap on the number of suggestions to surface.
-    pub limit: Option<usize>,
-}
-
-/// Result produced by parameter resolution.
-#[derive(Debug, Clone)]
-pub struct MediaIntentResolution {
-    /// Query compiled from resolved parameters, if enough context was supplied.
-    pub query: Option<MediaPickQuery>,
-    /// Follow-up questions Apple Intelligence should ask the user.
-    pub questions: Vec<ContextualQuestion>,
-}
-
-/// Context-aware questions surfaced back to Apple Intelligence.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum ContextualQuestion {
-    /// Ask the user to pick a content domain.
-    MediaDomain,
-    /// Clarify the desired daypart.
-    PreferredDaypart,
-    /// Capture the target runtime.
-    IdealDuration,
-    /// Request mood or tone descriptors.
-    ToneDescriptor,
-    /// Ask for permission grants for the provider.
-    PermissionGrant {
-        /// Provider that requires user approval before playback.
-        provider: Provider,
-    },
-    /// Finance flow needs approval to use local data.
-    FinanceDataAccess,
-}
-
-impl ContextualQuestion {
-    /// Human readable prompt for conversational systems.
-    #[must_use]
-    pub fn prompt(&self) -> Cow<'static, str> {
-        match self {
-            Self::MediaDomain => Cow::Borrowed(
-                "Would you like music, TV, podcasts, or a book recommendation?",
-            ),
-            Self::PreferredDaypart => Cow::Borrowed(
-                "When do you plan to enjoy this recommendation (morning, afternoon, evening, or late night)?",
-            ),
-            Self::IdealDuration => Cow::Borrowed(
-                "How long should the experience last?",
-            ),
-            Self::ToneDescriptor => Cow::Borrowed(
-                "Any moods or tones I should emphasise?",
-            ),
-            Self::PermissionGrant { provider } => Cow::Owned(format!(
-                "Can I use your {provider} library for this recommendation?"
-            )),
-            Self::FinanceDataAccess => Cow::Borrowed(
-                "Can I use on-device finance data to assemble the snapshot?",
-            ),
-        }
-    }
-}
-
-/// Donation payload bridging Rust suggestions to App Intents.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct IntentDonation {
-    /// Identifier matching the suggested entity.
-    pub identifier: String,
-    /// Primary title surfaced to the user.
-    pub title: String,
-    /// Supplemental copy describing the suggestion.
-    pub subtitle: String,
-    /// Deeplink to resume the experience.
-    pub deeplink: String,
-    /// Additional metadata forwarded as intent parameters.
-    pub metadata: Vec<(String, String)>,
-}
-
 /// Lightweight permission store controlling provider access.
 #[derive(Debug, Clone, Default)]
 pub struct PermissionStore {
@@ -720,99 +628,6 @@ impl PlaySomethingIntent {
         }
     }
 
-    /// Resolve conversational parameters supplied by Apple Intelligence.
-    #[must_use]
-    pub fn resolve_parameters(&self, parameters: &MediaIntentParameters) -> MediaIntentResolution {
-        let mut builder = MediaPickQuery::builder();
-        let mut questions = Vec::new();
-
-        if parameters.requested_domains.is_empty() {
-            questions.push(ContextualQuestion::MediaDomain);
-        } else {
-            builder = builder.domains(parameters.requested_domains.clone());
-
-            let requested_providers: HashSet<Provider> = self
-                .library
-                .items()
-                .filter(|item| {
-                    parameters
-                        .requested_domains
-                        .iter()
-                        .any(|domain| *domain == item.domain())
-                })
-                .map(|item| item.provider())
-                .collect();
-
-            for provider in requested_providers {
-                if !self.permissions.is_granted(provider) {
-                    questions.push(ContextualQuestion::PermissionGrant { provider });
-                }
-            }
-        }
-
-        if let Some(max_duration) = parameters.max_duration {
-            builder = builder.duration_range(None, Some(max_duration));
-        } else {
-            questions.push(ContextualQuestion::IdealDuration);
-        }
-
-        if parameters.preferred_dayparts.is_empty() {
-            questions.push(ContextualQuestion::PreferredDaypart);
-        } else {
-            builder = builder.dayparts(parameters.preferred_dayparts.clone());
-        }
-
-        if parameters.preferred_tags.is_empty() {
-            questions.push(ContextualQuestion::ToneDescriptor);
-        } else {
-            builder = builder.preferred_tags(parameters.preferred_tags.clone());
-        }
-
-        builder = builder.weeknights_only(parameters.weeknights_only);
-        if let Some(limit) = parameters.limit {
-            builder = builder.limit(limit);
-        }
-
-        let blocking =
-            parameters.requested_domains.is_empty() || parameters.preferred_dayparts.is_empty();
-        let query = if blocking {
-            None
-        } else {
-            Some(builder.build())
-        };
-
-        MediaIntentResolution { query, questions }
-    }
-
-    /// Provide only the contextual questions for conversational surfaces.
-    #[must_use]
-    pub fn contextual_questions(
-        &self,
-        parameters: &MediaIntentParameters,
-    ) -> Vec<ContextualQuestion> {
-        self.resolve_parameters(parameters).questions
-    }
-
-    /// Produce a donation payload that downstream Swift code can publish.
-    #[must_use]
-    pub fn donation_payload(&self, suggestion: &MediaSuggestion) -> IntentDonation {
-        IntentDonation {
-            identifier: suggestion.item.id().to_string(),
-            title: suggestion.item.title().to_string(),
-            subtitle: suggestion.item.subtitle().to_string(),
-            deeplink: suggestion.item.deeplink().as_str().to_string(),
-            metadata: vec![
-                ("domain".to_string(), suggestion.item.domain().to_string()),
-                (
-                    "provider".to_string(),
-                    suggestion.item.provider().to_string(),
-                ),
-                ("score".to_string(), format!("{:.2}", suggestion.score)),
-                ("rationale".to_string(), suggestion.rationale.join(" | ")),
-            ],
-        }
-    }
-
     /// Retrieve the current user preferences.
     #[must_use]
     pub fn preferences(&self) -> &UserPreferences {
@@ -1009,52 +824,6 @@ impl FinanceSnapshotIntent {
         let dataset = self.dataset.as_ref().ok_or(FinanceError::DatasetMissing)?;
         Ok(dataset.compile_snapshot())
     }
-
-    /// Determine which conversational prompts are required.
-    #[must_use]
-    pub fn contextual_questions(&self) -> Vec<ContextualQuestion> {
-        if self.permissions.allow_local_data {
-            Vec::new()
-        } else {
-            vec![ContextualQuestion::FinanceDataAccess]
-        }
-    }
-
-    /// Donation payload for the finance snapshot.
-    #[must_use]
-    pub fn donation_payload(&self, snapshot: &FinanceSnapshot) -> IntentDonation {
-        IntentDonation {
-            identifier: "finance-snapshot".to_string(),
-            title: "Daily + Weekly Snapshot".to_string(),
-            subtitle: format!(
-                "Daily net: {:+.2}, Weekly net: {:+.2}",
-                snapshot.daily.net_change, snapshot.weekly.net_change
-            ),
-            deeplink: "prefs:root=ACCOUNT_SETTINGS&path=FINANCE".to_string(),
-            metadata: vec![
-                (
-                    "daily_inflow".to_string(),
-                    format!("{:.2}", snapshot.daily.inflow),
-                ),
-                (
-                    "daily_outflow".to_string(),
-                    format!("{:.2}", snapshot.daily.outflow),
-                ),
-                (
-                    "weekly_inflow".to_string(),
-                    format!("{:.2}", snapshot.weekly.inflow),
-                ),
-                (
-                    "weekly_outflow".to_string(),
-                    format!("{:.2}", snapshot.weekly.outflow),
-                ),
-                (
-                    "subscription_count".to_string(),
-                    snapshot.subscriptions.len().to_string(),
-                ),
-            ],
-        }
-    }
 }
 
 /// Mock finance dataset powering [`FinanceSnapshotIntent`].
@@ -1238,97 +1007,5 @@ mod tests {
         let intent = FinanceSnapshotIntent::new(permissions, Some(dataset));
         let err = intent.snapshot().unwrap_err();
         assert_eq!(err, FinanceError::PermissionDenied);
-    }
-
-    #[test]
-    fn contextual_questions_prompt_text() {
-        let domain = ContextualQuestion::MediaDomain;
-        assert!(domain.prompt().contains("music"));
-        let permission = ContextualQuestion::PermissionGrant {
-            provider: Provider::AppleTvPlus,
-        };
-        assert!(permission.prompt().contains("TV+"));
-    }
-
-    #[test]
-    fn resolve_parameters_flags_missing_context() {
-        let library = MediaLibrary::curated();
-        let permissions = base_permissions();
-        let preferences = UserPreferences::default();
-        let intent = PlaySomethingIntent::new(library, permissions, preferences);
-        let parameters = MediaIntentParameters::default();
-        let resolution = intent.resolve_parameters(&parameters);
-        assert!(resolution.query.is_none());
-        assert!(resolution
-            .questions
-            .contains(&ContextualQuestion::MediaDomain));
-        assert!(resolution
-            .questions
-            .contains(&ContextualQuestion::PreferredDaypart));
-    }
-
-    #[test]
-    fn resolve_parameters_detects_permission_gap() {
-        let library = MediaLibrary::curated();
-        let mut permissions = PermissionStore::default();
-        permissions.grant(Provider::MusicKit);
-        let preferences = UserPreferences::default();
-        let intent = PlaySomethingIntent::new(library.clone(), permissions, preferences);
-        let mut parameters = MediaIntentParameters::default();
-        parameters.requested_domains = vec![MediaDomain::Tv];
-        parameters.preferred_dayparts = vec![Daypart::Evening];
-        parameters.max_duration = Some(Duration::from_secs(60 * 60));
-        let resolution = intent.resolve_parameters(&parameters);
-        assert!(resolution.query.is_some());
-        assert!(resolution
-            .questions
-            .contains(&ContextualQuestion::PermissionGrant {
-                provider: Provider::AppleTvPlus
-            }));
-    }
-
-    #[test]
-    fn donation_payload_serialises_media_suggestion() {
-        let library = MediaLibrary::curated();
-        let permissions = base_permissions();
-        let preferences = UserPreferences::default();
-        let intent = PlaySomethingIntent::new(library.clone(), permissions, preferences);
-        let query = MediaPickQuery::builder()
-            .domains([MediaDomain::Music])
-            .dayparts([Daypart::Evening])
-            .duration_range(None, Some(Duration::from_secs(25 * 60)))
-            .build();
-        let suggestion = intent.recommend(&query).expect("suggestion available");
-        let donation = intent.donation_payload(&suggestion);
-        assert!(donation.title.contains("Midnight"));
-        assert!(donation
-            .metadata
-            .iter()
-            .any(|(key, value)| key == "provider" && value == "MusicKit"));
-    }
-
-    #[test]
-    fn finance_contextual_questions_require_permission() {
-        let permissions = FinancePermissions {
-            allow_local_data: false,
-        };
-        let dataset = FinanceDataset::mock();
-        let intent = FinanceSnapshotIntent::new(permissions, Some(dataset));
-        let questions = intent.contextual_questions();
-        assert_eq!(questions, vec![ContextualQuestion::FinanceDataAccess]);
-    }
-
-    #[test]
-    fn finance_donation_payload_includes_totals() {
-        let permissions = FinancePermissions::default();
-        let dataset = FinanceDataset::mock();
-        let intent = FinanceSnapshotIntent::new(permissions, Some(dataset.clone()));
-        let snapshot = dataset.compile_snapshot();
-        let donation = intent.donation_payload(&snapshot);
-        assert!(donation.subtitle.contains("Daily net"));
-        assert!(donation
-            .metadata
-            .iter()
-            .any(|(key, value)| key == "subscription_count" && value == "3"));
     }
 }
