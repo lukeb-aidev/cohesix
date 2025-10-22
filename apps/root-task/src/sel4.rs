@@ -36,8 +36,13 @@ use sel4_panicking::DebugSink;
 /// Alias to the boot information structure exposed by `sel4_sys`.
 pub type BootInfo = seL4_BootInfo;
 
-const CANONICAL_CNODE_DEPTH: seL4_Word = (mem::size_of::<seL4_Word>() * 8) as seL4_Word;
 const CANONICAL_DEST_OFFSET: seL4_Word = 0;
+
+/// Returns the addressing depth (in bits) of the init thread's root CNode.
+#[inline]
+pub fn init_cnode_depth(bi: &seL4_BootInfo) -> u8 {
+    bi.initThreadCNodeSizeBits as u8
+}
 
 /// Emits a single byte to the seL4 debug console.
 #[cfg(feature = "kernel")]
@@ -148,18 +153,18 @@ pub fn debug_cap_identify(_slot: seL4_CPtr) -> seL4_Word {
 #[cfg(feature = "kernel")]
 #[inline(always)]
 pub fn cnode_copy(
+    bootinfo: &seL4_BootInfo,
     dest_root: seL4_CNode,
     dest_index: seL4_CPtr,
-    dest_depth: u8,
     src_root: seL4_CNode,
     src_index: seL4_CPtr,
-    src_depth: u8,
     rights: sel4_sys::seL4_CapRights,
 ) -> seL4_Error {
     debug_put_char(b'C' as i32);
+    let depth = init_cnode_depth(bootinfo);
     unsafe {
         seL4_CNode_Copy(
-            dest_root, dest_index, dest_depth, src_root, src_index, src_depth, rights,
+            dest_root, dest_index, depth, src_root, src_index, depth, rights,
         )
     }
 }
@@ -177,19 +182,19 @@ pub fn cnode_delete(root: seL4_CNode, index: seL4_CPtr, depth: u8) -> seL4_Error
 #[deprecated(note = "use cspace_sys::*_invoc")]
 #[inline(always)]
 pub(crate) fn cnode_mint(
+    bootinfo: &seL4_BootInfo,
     dest_root: seL4_CNode,
     dest_index: seL4_CPtr,
-    dest_depth: u8,
     src_root: seL4_CNode,
     src_index: seL4_CPtr,
-    src_depth: u8,
     rights: sel4_sys::seL4_CapRights,
     badge: seL4_Word,
 ) -> seL4_Error {
     debug_put_char(b'C' as i32);
+    let depth = init_cnode_depth(bootinfo);
     unsafe {
         seL4_CNode_Mint(
-            dest_root, dest_index, dest_depth, src_root, src_index, src_depth, rights, badge,
+            dest_root, dest_index, depth, src_root, src_index, depth, rights, badge,
         )
     }
 }
@@ -288,6 +293,9 @@ pub trait BootInfoExt {
     /// Returns the writable init thread CNode capability exposed via the initial CSpace root slot.
     fn init_cnode_cap(&self) -> seL4_CPtr;
 
+    /// Returns the guard depth (in bits) of the init thread's root CNode.
+    fn init_cnode_depth(&self) -> u8;
+
     /// Returns the number of bits describing the capacity of the init thread's CSpace root.
     fn init_cnode_bits(&self) -> usize;
 
@@ -302,6 +310,11 @@ impl BootInfoExt for seL4_BootInfo {
     #[inline(always)]
     fn init_cnode_cap(&self) -> seL4_CPtr {
         seL4_CapInitThreadCNode
+    }
+
+    #[inline(always)]
+    fn init_cnode_depth(&self) -> u8 {
+        init_cnode_depth(self)
     }
 
     #[inline(always)]
@@ -1309,7 +1322,7 @@ impl<'a> KernelEnv<'a> {
         });
 
         let init_cnode = self.bootinfo.init_cnode_cap();
-        let expected_depth: seL4_Word = CANONICAL_CNODE_DEPTH;
+        let expected_depth: seL4_Word = self.bootinfo.init_cnode_depth() as seL4_Word;
         let expected_index: seL4_Word = trace.dest_slot as seL4_Word;
         let expected_offset: seL4_Word = CANONICAL_DEST_OFFSET;
 
@@ -1431,11 +1444,7 @@ impl<'a> KernelEnv<'a> {
         if map_res != seL4_NoError {
             self.record_retype(trace, RetypeStatus::Err(map_res));
             unsafe {
-                let depth = self
-                    .bootinfo
-                    .init_cnode_bits()
-                    .try_into()
-                    .expect("init cnode depth exceeds u8");
+                let depth = self.bootinfo.init_cnode_depth();
                 let _ = seL4_CNode_Delete(self.init_cnode_cap(), pt_slot, depth);
             }
             self.untyped.release(&reserved);
@@ -1487,11 +1496,7 @@ impl<'a> KernelEnv<'a> {
         if map_res != seL4_NoError {
             self.record_retype(trace, RetypeStatus::Err(map_res));
             unsafe {
-                let depth = self
-                    .bootinfo
-                    .init_cnode_bits()
-                    .try_into()
-                    .expect("init cnode depth exceeds u8");
+                let depth = self.bootinfo.init_cnode_depth();
                 let _ = seL4_CNode_Delete(self.init_cnode_cap(), pd_slot, depth);
             }
             self.untyped.release(&reserved);
@@ -1541,11 +1546,7 @@ impl<'a> KernelEnv<'a> {
         if map_res != seL4_NoError {
             self.record_retype(trace, RetypeStatus::Err(map_res));
             unsafe {
-                let depth = self
-                    .bootinfo
-                    .init_cnode_bits()
-                    .try_into()
-                    .expect("init cnode depth exceeds u8");
+                let depth = self.bootinfo.init_cnode_depth();
                 let _ = seL4_CNode_Delete(self.init_cnode_cap(), pud_slot, depth);
             }
             self.untyped.release(&reserved);
@@ -1574,7 +1575,7 @@ impl<'a> KernelEnv<'a> {
         // destination offset remains zero.
         let cnode_root = self.slots.root(); // seL4_CapInitThreadCNode
         let node_index: seL4_Word = slot as seL4_Word;
-        let cnode_depth: seL4_Word = CANONICAL_CNODE_DEPTH;
+        let cnode_depth: seL4_Word = self.bootinfo.init_cnode_depth() as seL4_Word;
         let dest_offset: seL4_Word = CANONICAL_DEST_OFFSET;
         RetypeTrace {
             untyped_cap: reserved.cap(),
@@ -1594,7 +1595,7 @@ impl<'a> KernelEnv<'a> {
     fn record_retype(&mut self, trace: RetypeTrace, status: RetypeStatus) {
         let init_cnode_cap = self.bootinfo.init_cnode_cap();
         let init_bits = self.bootinfo.init_cnode_bits();
-        let expected_depth: seL4_Word = CANONICAL_CNODE_DEPTH;
+        let expected_depth: seL4_Word = self.bootinfo.init_cnode_depth() as seL4_Word;
         let expected_index: seL4_Word = trace.dest_slot as seL4_Word;
         let expected_offset: seL4_Word = CANONICAL_DEST_OFFSET;
         let max_slots = 1usize.checked_shl(init_bits as u32).unwrap_or_else(|| {
@@ -1867,7 +1868,7 @@ mod tests {
         );
         assert_eq!(trace.cnode_root, seL4_CapInitThreadCNode);
         let expected_index: seL4_Word = slot as seL4_Word;
-        let expected_depth: seL4_Word = CANONICAL_CNODE_DEPTH;
+        let expected_depth: seL4_Word = bootinfo_ref.init_cnode_depth() as seL4_Word;
         assert_eq!(trace.node_index, expected_index);
         assert_eq!(trace.cnode_depth, expected_depth);
         assert_eq!(trace.dest_offset, CANONICAL_DEST_OFFSET);
@@ -1902,7 +1903,7 @@ mod tests {
         let env = KernelEnv::new(bootinfo_ref);
 
         let slot: seL4_CPtr = 0x00c8;
-        let canonical_depth: seL4_Word = CANONICAL_CNODE_DEPTH;
+        let canonical_depth: seL4_Word = bootinfo_ref.init_cnode_depth() as seL4_Word;
         let canonical_index: seL4_Word = slot as seL4_Word;
         let trace = RetypeTrace {
             untyped_cap: 0x200,
@@ -1937,7 +1938,7 @@ mod tests {
 
         let slot: seL4_CPtr = 0x0097;
         let canonical_index: seL4_Word = slot as seL4_Word;
-        let canonical_depth: seL4_Word = CANONICAL_CNODE_DEPTH;
+        let canonical_depth: seL4_Word = bootinfo_ref.init_cnode_depth() as seL4_Word;
         let trace = RetypeTrace {
             untyped_cap: 0x100,
             untyped_paddr: 0,
@@ -1971,7 +1972,7 @@ mod tests {
         bootinfo.initThreadCNodeSizeBits = 13;
         let bootinfo_ref: &'static mut seL4_BootInfo = Box::leak(Box::new(bootinfo));
         let env = KernelEnv::new(bootinfo_ref);
-        let canonical_depth: seL4_Word = CANONICAL_CNODE_DEPTH;
+        let canonical_depth: seL4_Word = bootinfo_ref.init_cnode_depth() as seL4_Word;
         let valid_trace = RetypeTrace {
             untyped_cap: 0x100,
             untyped_paddr: 0,
