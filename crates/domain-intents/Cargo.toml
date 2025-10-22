@@ -1,0 +1,10 @@
+# Author: Lukas Bower
+[package]
+name = "domain-intents"
+version = "0.1.0"
+edition = "2021"
+authors = ["Lukas Bower <lukas@example.com>"]
+
+[dependencies]
+anyhow = { workspace = true }
+thiserror = { workspace = true }
