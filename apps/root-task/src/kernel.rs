@@ -515,6 +515,18 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
         }
     };
 
+    let mapped_vaddr = uart_region.ptr().as_ptr() as usize;
+    let mut map_line = heapless::String::<128>::new();
+    let _ = write!(
+        map_line,
+        "PL011 mapped @ 0x{vaddr:016x} (paddr=0x{paddr:08x})",
+        vaddr = mapped_vaddr,
+        paddr = PL011_PADDR,
+    );
+    console.writeln_prefixed(map_line.as_str());
+
+    let mut driver = Pl011::new(uart_region.ptr());
+    driver.init();
     #[cfg(all(feature = "kernel", not(sel4_config_printing)))]
     {
         let sink = DebugSink {
@@ -523,7 +535,7 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
         };
         sel4_panicking::install_debug_sink(sink);
     }
-    let driver = Pl011::new(uart_region.ptr());
+    driver.write_str("[cohesix:root-task] uart logger online\n");
     let serial =
         SerialPort::<_, DEFAULT_RX_CAPACITY, DEFAULT_TX_CAPACITY, DEFAULT_LINE_CAPACITY>::new(
             driver,

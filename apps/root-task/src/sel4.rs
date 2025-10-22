@@ -23,8 +23,8 @@ pub type SeL4CapRights = sel4_sys::seL4_CapRights;
 
 use sel4_sys::{
     seL4_ARM_PageTableObject, seL4_ARM_PageTable_Map, seL4_ARM_Page_Default, seL4_ARM_Page_Map,
-    seL4_ARM_Page_Uncached, seL4_BootInfo, seL4_NotEnoughMemory, seL4_ObjectType, seL4_SlotRegion,
-    UntypedDesc, MAX_BOOTINFO_UNTYPEDS,
+    seL4_ARM_Page_Uncached, seL4_ARM_VMAttributes, seL4_BootInfo, seL4_NotEnoughMemory,
+    seL4_ObjectType, seL4_SlotRegion, UntypedDesc, MAX_BOOTINFO_UNTYPEDS,
 };
 
 #[cfg(all(feature = "kernel", not(sel4_config_printing)))]
@@ -348,6 +348,7 @@ const MAX_PAGE_TABLES: usize = 64;
 const MAX_PAGE_DIRECTORIES: usize = 32;
 const MAX_PAGE_UPPER_DIRECTORIES: usize = 8;
 const WORD_BITS: seL4_Word = (mem::size_of::<seL4_Word>() * 8) as seL4_Word;
+const DEVICE_VM_ATTRIBUTES: seL4_ARM_VMAttributes = seL4_ARM_VMAttributes(1 << 2);
 
 /// Simple bump allocator for CSpace slots rooted at the initial thread's CNode.
 pub struct SlotAllocator {
@@ -400,6 +401,9 @@ impl SlotAllocator {
     }
 
     fn alloc(&mut self) -> Option<seL4_CPtr> {
+        while self.next < self.end && is_boot_reserved_slot(self.next) {
+            self.next += 1;
+        }
         if self.next >= self.end {
             return None;
         }
@@ -413,6 +417,12 @@ impl SlotAllocator {
             "allocated cspace slot exceeds root cnode capacity",
         );
         Some(slot)
+    }
+
+    /// Attempt to allocate a slot without panicking when the window is exhausted.
+    #[must_use]
+    pub fn try_alloc(&mut self) -> Option<seL4_CPtr> {
+        self.alloc()
     }
 
     /// Marks the first `slots` entries in the bootinfo empty window as consumed.
@@ -452,6 +462,30 @@ impl SlotAllocator {
     pub fn capacity_bits(&self) -> seL4_Word {
         self.cnode_size_bits
     }
+}
+
+/// Returns `true` when the supplied slot index references a kernel-reserved capability.
+#[inline(always)]
+pub fn is_boot_reserved_slot(slot: seL4_CPtr) -> bool {
+    matches!(
+        slot,
+        seL4_CapNull
+            | seL4_CapInitThreadTCB
+            | seL4_CapInitThreadCNode
+            | seL4_CapInitThreadVSpace
+            | seL4_CapIRQControl
+            | seL4_CapASIDControl
+            | seL4_CapInitThreadASIDPool
+            | seL4_CapIOPortControl
+            | seL4_CapIOSpace
+            | seL4_CapBootInfoFrame
+            | seL4_CapInitThreadIPCBuffer
+            | seL4_CapDomain
+            | seL4_CapSMMUSIDControl
+            | seL4_CapSMMUCBControl
+            | seL4_CapInitThreadSC
+            | seL4_CapSMC
+    )
 }
 
 /// Handle to an untyped capability reserved from the bootinfo catalog.
@@ -1114,7 +1148,7 @@ impl<'a> KernelEnv<'a> {
             .expect("device cursor overflow (address space exhausted)")
             - PAGE_SIZE;
         self.device_cursor += PAGE_SIZE;
-        self.map_frame(frame_slot, vaddr, seL4_ARM_Page_Uncached)?;
+        self.map_frame(frame_slot, vaddr, DEVICE_VM_ATTRIBUTES)?;
         Ok(DeviceFrame {
             cap: frame_slot,
             paddr,

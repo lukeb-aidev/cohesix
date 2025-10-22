@@ -1,6 +1,6 @@
 // Author: Lukas Bower
 
-use crate::sel4::{self, BootInfo};
+use crate::sel4::{self, is_boot_reserved_slot, BootInfo};
 use core::fmt::Write;
 use heapless::String;
 
@@ -430,25 +430,7 @@ impl CSpaceCtx {
     /// Returns `true` when the provided slot index references a kernel-reserved capability.
     #[inline(always)]
     pub fn is_reserved_slot(slot: sel4::seL4_CPtr) -> bool {
-        matches!(
-            slot,
-            sel4::seL4_CapNull
-                | sel4::seL4_CapInitThreadTCB
-                | sel4::seL4_CapInitThreadCNode
-                | sel4::seL4_CapInitThreadVSpace
-                | sel4::seL4_CapIRQControl
-                | sel4::seL4_CapASIDControl
-                | sel4::seL4_CapInitThreadASIDPool
-                | sel4::seL4_CapIOPortControl
-                | sel4::seL4_CapIOSpace
-                | sel4::seL4_CapBootInfoFrame
-                | sel4::seL4_CapInitThreadIPCBuffer
-                | sel4::seL4_CapDomain
-                | sel4::seL4_CapSMMUSIDControl
-                | sel4::seL4_CapSMMUCBControl
-                | sel4::seL4_CapInitThreadSC
-                | sel4::seL4_CapSMC
-        )
+        is_boot_reserved_slot(slot)
     }
 }
 

@@ -123,8 +123,8 @@ pub fn install_debug_sink(sink: DebugSink) {
 pub fn install_debug_sink(_sink: ()) {}
 
 #[cfg(not(sel4_config_printing))]
-pub fn drain_debug_bytes(mut f: impl FnMut(u8)) {
-    fallback::drain_with(|byte| f(byte));
+pub fn drain_debug_bytes(f: impl FnMut(u8)) {
+    fallback::drain_with(f);
 }
 
 #[cfg(sel4_config_printing)]

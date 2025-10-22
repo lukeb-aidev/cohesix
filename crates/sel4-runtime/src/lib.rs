@@ -1,5 +1,6 @@
 // Author: Lukas Bower
 #![no_std]
+#![allow(clippy::missing_safety_doc)]
 
 use core::cell::UnsafeCell;
 use core::ptr;
