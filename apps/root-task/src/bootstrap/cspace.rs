@@ -117,10 +117,14 @@ impl CSpaceCtx {
             init_cnode_bits > 0,
             "bootinfo reported zero-width init CNode"
         );
-        // seL4 expects the depth of init CNode invocations to match the radix
-        // width reported via bootinfo. Supplying a larger architectural width
-        // causes the kernel to reject lookups with `Invalid source slot`.
-        let invocation_depth_bits = init_cnode_bits;
+        // seL4 expects CNode invocations against the root CNode to use the
+        // architectural word width. The kernel boot info reports the radix
+        // width of the initial CNode (the number of index bits), but omitting
+        // the guard bits from the depth parameter results in
+        // `Target slot invalid` errors when issuing copy/mint operations.
+        // Always present the canonical machine width to honour the guard
+        // configuration baked into the init CNode capability.
+        let invocation_depth_bits = CANONICAL_CNODE_DEPTH_BITS;
         let (first_free, last_free) = bi.init_cnode_empty_range();
         debug_assert!(
             init_cnode_bits <= CANONICAL_CNODE_DEPTH_BITS,
