@@ -1,26 +1,19 @@
 // Author: Lukas Bower
 //! Virtio MMIO network device driver used by the root task.
-#![cfg(feature = "kernel")]
+#![cfg(all(feature = "kernel", feature = "net-console"))]
 #![allow(unsafe_code)]
 
 use core::fmt;
 use core::ptr::{read_volatile, write_volatile, NonNull};
 
-use heapless::{Deque, String as HeaplessString, Vec as HeaplessVec};
+use heapless::Vec as HeaplessVec;
 use sel4_sys::{seL4_Error, seL4_NotEnoughMemory};
-use smoltcp::iface::{Config as IfaceConfig, Interface, SocketHandle, SocketSet, SocketStorage};
 use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
-use smoltcp::socket::tcp::{
-    Socket as TcpSocket, SocketBuffer as TcpSocketBuffer, State as TcpState,
-};
 use smoltcp::time::Instant;
-use smoltcp::wire::{
-    EthernetAddress, HardwareAddress, IpAddress, IpCidr, IpListenEndpoint, Ipv4Address,
-};
+use smoltcp::wire::EthernetAddress;
 
-use super::{NetPoller, NetTelemetry, CONSOLE_QUEUE_DEPTH, MAX_FRAME_LEN};
+use crate::net_consts::MAX_FRAME_LEN;
 use crate::sel4::{DeviceFrame, KernelEnv, RamFrame};
-use crate::serial::DEFAULT_LINE_CAPACITY;
 
 const VIRTIO_MMIO_BASE: usize = 0x0a00_0000;
 const VIRTIO_MMIO_STRIDE: usize = 0x200;
@@ -49,276 +42,32 @@ const TX_QUEUE_INDEX: u32 = 1;
 const RX_QUEUE_SIZE: usize = 16;
 const TX_QUEUE_SIZE: usize = 16;
 
-const TCP_LISTEN_PORT: u16 = 31337;
-const TCP_RX_BUFFER: usize = 2048;
-const TCP_TX_BUFFER: usize = 2048;
-const SOCKET_CAPACITY: usize = 4;
-
-static SOCKET_STORAGE_IN_USE: portable_atomic::AtomicBool = portable_atomic::AtomicBool::new(false);
-static mut SOCKET_STORAGE: [SocketStorage<'static>; SOCKET_CAPACITY] =
-    [SocketStorage::EMPTY; SOCKET_CAPACITY];
-static TCP_RX_STORAGE_IN_USE: portable_atomic::AtomicBool = portable_atomic::AtomicBool::new(false);
-static mut TCP_RX_STORAGE: [u8; TCP_RX_BUFFER] = [0u8; TCP_RX_BUFFER];
-static TCP_TX_STORAGE_IN_USE: portable_atomic::AtomicBool = portable_atomic::AtomicBool::new(false);
-static mut TCP_TX_STORAGE: [u8; TCP_TX_BUFFER] = [0u8; TCP_TX_BUFFER];
-
-/// Shared monotonic clock for the interface.
-#[derive(Debug, Default)]
-pub struct NetworkClock {
-    ticks_ms: portable_atomic::AtomicU64,
+/// Errors surfaced by the virtio network driver.
+#[derive(Debug)]
+pub enum DriverError {
+    /// seL4 system call failure.
+    Sel4(seL4_Error),
+    /// No virtio-net device was found on the MMIO bus.
+    NoDevice,
+    /// RX or TX queues were unavailable or zero sized.
+    NoQueue,
+    /// Ran out of DMA buffers when provisioning virtio rings.
+    BufferExhausted,
 }
 
-impl NetworkClock {
-    /// Creates a monotonic clock initialised to zero milliseconds.
-    #[must_use]
-    pub fn new() -> Self {
-        Self {
-            ticks_ms: portable_atomic::AtomicU64::new(0),
-        }
-    }
-
-    /// Advances the clock by `delta_ms` and returns the resulting [`Instant`].
-    pub fn advance(&self, delta_ms: u32) -> Instant {
-        let delta = u64::from(delta_ms);
-        let updated = self
-            .ticks_ms
-            .fetch_add(delta, portable_atomic::Ordering::Relaxed)
-            .saturating_add(delta);
-        let millis = i64::try_from(updated).unwrap_or(i64::MAX);
-        Instant::from_millis(millis)
-    }
-
-    /// Reads the current [`Instant`] without modifying the clock value.
-    #[must_use]
-    pub fn now(&self) -> Instant {
-        let current = self.ticks_ms.load(portable_atomic::Ordering::Relaxed);
-        let millis = i64::try_from(current).unwrap_or(i64::MAX);
-        Instant::from_millis(millis)
-    }
-}
-
-/// Smoltcp-backed network stack that bridges the virtio-net device into the root task.
-pub struct NetStack {
-    clock: NetworkClock,
-    device: VirtioNet,
-    interface: Interface,
-    sockets: SocketSet<'static>,
-    tcp_handle: SocketHandle,
-    line_buffer: HeaplessString<DEFAULT_LINE_CAPACITY>,
-    console_lines: Deque<HeaplessString<DEFAULT_LINE_CAPACITY>, CONSOLE_QUEUE_DEPTH>,
-    outbound_lines: Deque<HeaplessString<DEFAULT_LINE_CAPACITY>, CONSOLE_QUEUE_DEPTH>,
-    telemetry: NetTelemetry,
-}
-
-impl NetStack {
-    /// Constructs a network stack bound to the provided [`KernelEnv`] and IPv4 address.
-    pub fn new(env: &mut KernelEnv, ip: Ipv4Address) -> Self {
-        let device = VirtioNet::new(env);
-        let mut device = device.expect("virtio-net device not found");
-        let mac = device.mac();
-
-        let clock = NetworkClock::new();
-        let mut config = IfaceConfig::new(HardwareAddress::Ethernet(mac));
-        config.random_seed = 0x5a5a_5a5a_1234_5678;
-
-        let mut interface = Interface::new(config, &mut device, clock.now());
-        interface.update_ip_addrs(|addrs| {
-            if addrs.push(IpCidr::new(IpAddress::from(ip), 24)).is_err() {
-                addrs[0] = IpCidr::new(IpAddress::from(ip), 24);
-            }
-        });
-
-        assert!(
-            !SOCKET_STORAGE_IN_USE.swap(true, portable_atomic::Ordering::AcqRel),
-            "virtio-net socket storage already initialised"
-        );
-        let sockets = SocketSet::new(unsafe { &mut SOCKET_STORAGE[..] });
-        let mut stack = Self {
-            clock,
-            device,
-            interface,
-            sockets,
-            tcp_handle: SocketHandle::default(),
-            line_buffer: HeaplessString::new(),
-            console_lines: Deque::new(),
-            outbound_lines: Deque::new(),
-            telemetry: NetTelemetry::default(),
-        };
-        stack.initialise_socket();
-        stack
-    }
-
-    fn initialise_socket(&mut self) {
-        assert!(
-            !TCP_RX_STORAGE_IN_USE.swap(true, portable_atomic::Ordering::AcqRel),
-            "virtio-net TCP RX storage already initialised"
-        );
-        assert!(
-            !TCP_TX_STORAGE_IN_USE.swap(true, portable_atomic::Ordering::AcqRel),
-            "virtio-net TCP TX storage already initialised"
-        );
-        let rx_buffer = unsafe { TcpSocketBuffer::new(&mut TCP_RX_STORAGE[..]) };
-        let tx_buffer = unsafe { TcpSocketBuffer::new(&mut TCP_TX_STORAGE[..]) };
-        let tcp_socket = TcpSocket::new(rx_buffer, tx_buffer);
-        self.tcp_handle = self.sockets.add(tcp_socket);
-    }
-
-    /// Polls the network stack using a host-supplied monotonic timestamp in milliseconds.
-    pub fn poll_with_time(&mut self, now_ms: u64) -> bool {
-        let last = self.telemetry.last_poll_ms;
-        let delta = now_ms.saturating_sub(last);
-        let delta_ms = core::cmp::min(delta, u64::from(u32::MAX)) as u32;
-        let timestamp = if delta_ms == 0 {
-            self.clock.now()
-        } else {
-            self.clock.advance(delta_ms)
-        };
-
-        let changed = self
-            .interface
-            .poll(timestamp, &mut self.device, &mut self.sockets);
-        let mut activity = changed;
-        activity |= self.process_tcp();
-
-        self.telemetry.last_poll_ms = now_ms;
-        if activity {
-            self.telemetry.link_up = true;
-        }
-        self.telemetry.tx_drops = self.device.tx_drop_count();
-        activity
-    }
-
-    fn process_tcp(&mut self) -> bool {
-        let mut activity = false;
-        let socket = self.sockets.get_mut::<TcpSocket>(self.tcp_handle);
-
-        if !socket.is_open() {
-            let _ = socket.listen(IpListenEndpoint::from(TCP_LISTEN_PORT));
-            self.line_buffer.clear();
-        }
-
-        if socket.can_recv() {
-            let mut temp = [0u8; 256];
-            while socket.can_recv() {
-                match socket.recv_slice(&mut temp) {
-                    Ok(count) if count > 0 => {
-                        for &byte in &temp[..count] {
-                            match byte {
-                                b'\r' => {}
-                                b'\n' => {
-                                    if !self.line_buffer.is_empty() {
-                                        let line = self.line_buffer.clone();
-                                        let _ = self.console_lines.push_back(line);
-                                        self.line_buffer.clear();
-                                        activity = true;
-                                    }
-                                }
-                                0x08 | 0x7f => {
-                                    self.line_buffer.pop();
-                                }
-                                b if b.is_ascii() && !b.is_ascii_control() => {
-                                    let _ = self.line_buffer.push(b as char);
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                    _ => break,
-                }
-            }
-        }
-
-        if socket.can_send() && !self.outbound_lines.is_empty() {
-            while socket.can_send() {
-                let Some(line) = self.outbound_lines.pop_front() else {
-                    break;
-                };
-                let mut payload: HeaplessVec<u8, { DEFAULT_LINE_CAPACITY + 2 }> =
-                    HeaplessVec::new();
-                let _ = payload.extend_from_slice(line.as_bytes());
-                let _ = payload.push(b'\n');
-                match socket.send_slice(payload.as_slice()) {
-                    Ok(sent) => {
-                        if sent != payload.len() {
-                            self.telemetry.tx_drops = self.telemetry.tx_drops.saturating_add(1);
-                        }
-                    }
-                    Err(_) => {
-                        let _ = self.outbound_lines.push_front(line);
-                        break;
-                    }
-                }
-            }
-        }
-
-        match socket.state() {
-            TcpState::CloseWait | TcpState::Closed => {
-                socket.close();
-                self.line_buffer.clear();
-            }
-            _ => {}
-        }
-
-        activity
-    }
-
-    /// Returns the negotiated Ethernet address for the attached virtio-net device.
-    #[must_use]
-    pub fn hardware_address(&self) -> EthernetAddress {
-        self.device.mac()
-    }
-
-    /// Returns a snapshot of runtime statistics gathered from the driver.
-    #[must_use]
-    pub fn telemetry(&self) -> NetTelemetry {
-        self.telemetry
-    }
-}
-
-impl NetPoller for NetStack {
-    fn poll(&mut self, now_ms: u64) -> bool {
-        self.poll_with_time(now_ms)
-    }
-
-    fn telemetry(&self) -> NetTelemetry {
-        self.telemetry()
-    }
-
-    fn drain_console_lines(
-        &mut self,
-        visitor: &mut dyn FnMut(HeaplessString<DEFAULT_LINE_CAPACITY>),
-    ) {
-        while let Some(line) = self.console_lines.pop_front() {
-            visitor(line);
-        }
-    }
-
-    fn send_console_line(&mut self, line: &str) {
-        let mut buf: HeaplessString<DEFAULT_LINE_CAPACITY> = HeaplessString::new();
-        if buf.push_str(line).is_err() {
-            self.telemetry.tx_drops = self.telemetry.tx_drops.saturating_add(1);
-            return;
-        }
-        match self.outbound_lines.push_back(buf) {
-            Ok(()) => {}
-            Err(buf) => {
-                let _ = self.outbound_lines.pop_front();
-                let _ = self.outbound_lines.push_back(buf);
-                self.telemetry.tx_drops = self.telemetry.tx_drops.saturating_add(1);
-            }
+impl fmt::Display for DriverError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Sel4(err) => write!(f, "seL4 error {err:?}"),
+            Self::NoDevice => f.write_str("virtio-net device not found"),
+            Self::NoQueue => f.write_str("virtio-net queues unavailable"),
+            Self::BufferExhausted => f.write_str("virtio-net DMA buffer exhausted"),
         }
     }
 }
 
-impl Drop for NetStack {
-    fn drop(&mut self) {
-        SOCKET_STORAGE_IN_USE.store(false, portable_atomic::Ordering::Release);
-        TCP_RX_STORAGE_IN_USE.store(false, portable_atomic::Ordering::Release);
-        TCP_TX_STORAGE_IN_USE.store(false, portable_atomic::Ordering::Release);
-    }
-}
-
-struct VirtioNet {
+/// Virtio-net MMIO implementation providing a smoltcp PHY device.
+pub struct VirtioNet {
     regs: VirtioRegs,
     rx_queue: VirtQueue,
     tx_queue: VirtQueue,
@@ -330,7 +79,8 @@ struct VirtioNet {
 }
 
 impl VirtioNet {
-    fn new(env: &mut KernelEnv) -> Result<Self, DriverError> {
+    /// Create a new driver instance by probing the virtio MMIO slots.
+    pub fn new(env: &mut KernelEnv) -> Result<Self, DriverError> {
         let mut regs = VirtioRegs::probe(env)?;
         regs.reset_status();
         regs.set_status(STATUS_ACKNOWLEDGE);
@@ -421,6 +171,18 @@ impl VirtioNet {
         Ok(driver)
     }
 
+    /// Return the negotiated Ethernet address for the device.
+    #[must_use]
+    pub fn mac(&self) -> EthernetAddress {
+        self.mac
+    }
+
+    /// Fetch the number of frames dropped due to TX descriptor exhaustion.
+    #[must_use]
+    pub fn tx_drop_count(&self) -> u32 {
+        self.tx_drops
+    }
+
     fn initialise_queues(&mut self) {
         for (index, buffer) in self.rx_buffers.iter().enumerate() {
             let idx = index as u16;
@@ -433,14 +195,6 @@ impl VirtioNet {
             self.rx_queue.push_avail(idx);
         }
         self.rx_queue.notify(&mut self.regs, RX_QUEUE_INDEX);
-    }
-
-    fn mac(&self) -> EthernetAddress {
-        self.mac
-    }
-
-    fn tx_drop_count(&self) -> u32 {
-        self.tx_drops
     }
 
     fn reclaim_tx(&mut self) {
@@ -485,7 +239,6 @@ impl VirtioNet {
                 .setup_descriptor(id, buffer.paddr() as u64, length as u32, 0);
             self.tx_queue.push_avail(id);
             self.tx_queue.notify(&mut self.regs, TX_QUEUE_INDEX);
-            // zero the unused portion to avoid leaking stale data.
             let slice = buffer.as_mut_slice();
             for byte in &mut slice[length..] {
                 *byte = 0;
@@ -602,25 +355,6 @@ impl TxToken for VirtioTxToken {
     }
 
     fn set_meta(&mut self, _meta: smoltcp::phy::PacketMeta) {}
-}
-
-#[derive(Debug)]
-enum DriverError {
-    Sel4(seL4_Error),
-    NoDevice,
-    NoQueue,
-    BufferExhausted,
-}
-
-impl fmt::Display for DriverError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Sel4(err) => write!(f, "seL4 error {err:?}"),
-            Self::NoDevice => f.write_str("virtio-net device not found"),
-            Self::NoQueue => f.write_str("virtio-net queues unavailable"),
-            Self::BufferExhausted => f.write_str("virtio-net DMA buffer exhausted"),
-        }
-    }
 }
 
 struct VirtioRegs {

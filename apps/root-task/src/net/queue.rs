@@ -13,7 +13,10 @@ use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::time::Instant;
 use smoltcp::wire::{EthernetAddress, HardwareAddress, IpAddress, IpCidr, Ipv4Address};
 
-use super::{NetPoller, NetTelemetry, CONSOLE_QUEUE_DEPTH, MAX_FRAME_LEN};
+use super::{
+    console_srv::TcpConsoleServer, NetPoller, NetTelemetry, AUTH_TOKEN, CONSOLE_QUEUE_DEPTH,
+    IDLE_TIMEOUT_MS, MAX_FRAME_LEN,
+};
 use crate::serial::DEFAULT_LINE_CAPACITY;
 
 /// Number of frames retained in the RX ring buffer.
@@ -263,8 +266,8 @@ pub struct NetStack {
     interface: Interface,
     hardware_addr: EthernetAddress,
     telemetry: NetTelemetry,
-    console_lines: Deque<HeaplessString<DEFAULT_LINE_CAPACITY>, CONSOLE_QUEUE_DEPTH>,
-    outbound_lines: Deque<HeaplessString<DEFAULT_LINE_CAPACITY>, CONSOLE_QUEUE_DEPTH>,
+    server: TcpConsoleServer,
+    session_active: bool,
 }
 
 impl NetStack {
@@ -289,8 +292,8 @@ impl NetStack {
             interface,
             hardware_addr: mac,
             telemetry: NetTelemetry::default(),
-            console_lines: Deque::new(),
-            outbound_lines: Deque::new(),
+            server: TcpConsoleServer::new(AUTH_TOKEN, IDLE_TIMEOUT_MS),
+            session_active: false,
         };
         (stack, handle)
     }
@@ -327,13 +330,11 @@ impl NetStack {
 
     fn flush_outbound_lines(&mut self) -> bool {
         let mut activity = false;
-        while let Some(line) = self.outbound_lines.pop_front() {
+        while let Some(line) = self.server.pop_outbound() {
             let mut payload: HeaplessVec<u8, { DEFAULT_LINE_CAPACITY + 2 }> = HeaplessVec::new();
-            if payload.extend_from_slice(line.as_bytes()).is_err() {
-                self.telemetry.tx_drops = self.telemetry.tx_drops.saturating_add(1);
-                continue;
-            }
-            if payload.push(b'\n').is_err() {
+            if payload.extend_from_slice(line.as_bytes()).is_err()
+                || payload.extend_from_slice(b"\r\n").is_err()
+            {
                 self.telemetry.tx_drops = self.telemetry.tx_drops.saturating_add(1);
                 continue;
             }
@@ -344,11 +345,12 @@ impl NetStack {
                         activity = true;
                     }
                     Err(_) => {
-                        let _ = self.outbound_lines.push_front(line);
+                        self.server.push_outbound_front(line);
                         break;
                     }
                 },
                 Err(_) => {
+                    self.server.push_outbound_front(line);
                     self.telemetry.tx_drops = self.telemetry.tx_drops.saturating_add(1);
                 }
             }
@@ -377,12 +379,23 @@ impl NetStack {
 
     /// Inject a line into the TCP console loopback queue (test/support helper).
     pub fn enqueue_console_line(&mut self, line: &str) {
-        let mut buf: HeaplessString<DEFAULT_LINE_CAPACITY> = HeaplessString::new();
+        if !self.session_active {
+            self.server.begin_session(0);
+            let mut auth_payload: HeaplessVec<u8, { DEFAULT_LINE_CAPACITY + 8 }> =
+                HeaplessVec::new();
+            let _ = auth_payload.extend_from_slice(b"AUTH ");
+            let _ = auth_payload.extend_from_slice(AUTH_TOKEN.as_bytes());
+            let _ = auth_payload.push(b'\n');
+            let _ = self.server.ingest(auth_payload.as_slice(), 0);
+            self.session_active = true;
+        }
+
         let trimmed = line.trim_end_matches(['\r', '\n']);
-        if buf.push_str(trimmed).is_err() {
+        let mut payload: HeaplessVec<u8, { DEFAULT_LINE_CAPACITY + 2 }> = HeaplessVec::new();
+        if payload.extend_from_slice(trimmed.as_bytes()).is_err() || payload.push(b'\n').is_err() {
             return;
         }
-        let _ = self.console_lines.push_back(buf);
+        let _ = self.server.ingest(payload.as_slice(), 1);
     }
 }
 
@@ -399,24 +412,12 @@ impl NetPoller for NetStack {
         &mut self,
         visitor: &mut dyn FnMut(HeaplessString<DEFAULT_LINE_CAPACITY>),
     ) {
-        while let Some(line) = self.console_lines.pop_front() {
-            visitor(line);
-        }
+        self.server.drain_console_lines(visitor);
     }
 
     fn send_console_line(&mut self, line: &str) {
-        let mut buf: HeaplessString<DEFAULT_LINE_CAPACITY> = HeaplessString::new();
-        if buf.push_str(line).is_err() {
+        if self.server.enqueue_outbound(line).is_err() {
             self.telemetry.tx_drops = self.telemetry.tx_drops.saturating_add(1);
-            return;
-        }
-        match self.outbound_lines.push_back(buf) {
-            Ok(()) => {}
-            Err(buf) => {
-                let _ = self.outbound_lines.pop_front();
-                let _ = self.outbound_lines.push_back(buf);
-                self.telemetry.tx_drops = self.telemetry.tx_drops.saturating_add(1);
-            }
         }
     }
 }
@@ -487,6 +488,6 @@ mod tests {
 
         let frame = handle.pop_tx().expect("frame not enqueued");
         let rendered = core::str::from_utf8(frame.as_slice()).expect("frame not utf8");
-        assert_eq!(rendered, "OK TEST detail=42\n");
+        assert_eq!(rendered, "OK TEST detail=42\r\n");
     }
 }

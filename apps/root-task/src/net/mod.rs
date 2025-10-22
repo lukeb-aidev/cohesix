@@ -5,8 +5,14 @@
 use crate::serial::DEFAULT_LINE_CAPACITY;
 use heapless::String as HeaplessString;
 
-/// Maximum frame length supported by the networking stack (bytes).
-pub const MAX_FRAME_LEN: usize = 1536;
+pub use crate::net_consts::MAX_FRAME_LEN;
+
+/// TCP port exposed by the console listener inside the VM.
+pub const CONSOLE_TCP_PORT: u16 = 31337;
+/// Authentication token expected from TCP console clients.
+pub const AUTH_TOKEN: &str = "changeme";
+/// Idle timeout applied to authenticated TCP console sessions (milliseconds).
+pub const IDLE_TIMEOUT_MS: u64 = 5 * 60 * 1000;
 
 /// Number of console lines retained between pump cycles.
 pub const CONSOLE_QUEUE_DEPTH: usize = 8;
@@ -40,10 +46,12 @@ pub trait NetPoller {
     fn send_console_line(&mut self, line: &str);
 }
 
+mod console_srv;
+
 #[cfg(feature = "kernel")]
-mod virtio;
+mod stack;
 #[cfg(feature = "kernel")]
-pub use virtio::*;
+pub use stack::*;
 
 #[cfg(not(feature = "kernel"))]
 mod queue;
