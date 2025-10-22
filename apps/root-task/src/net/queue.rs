@@ -330,6 +330,10 @@ impl NetStack {
 
     fn flush_outbound_lines(&mut self) -> bool {
         let mut activity = false;
+        if !self.server.is_authenticated() {
+            return false;
+        }
+
         while let Some(line) = self.server.pop_outbound() {
             let mut payload: HeaplessVec<u8, { DEFAULT_LINE_CAPACITY + 2 }> = HeaplessVec::new();
             if payload.extend_from_slice(line.as_bytes()).is_err()
@@ -479,15 +483,37 @@ mod tests {
     }
 
     #[test]
-    fn outbound_lines_are_enqueued_as_frames() {
+    fn outbound_lines_are_enqueued_only_after_authentication() {
+        use super::super::console_srv::SessionEvent;
+
         let (mut stack, handle) = NetStack::new(Ipv4Address::new(10, 0, 2, 100));
+        stack.server.begin_session(0);
+        stack.session_active = true;
         stack.send_console_line("OK TEST detail=42");
         assert!(handle.pop_tx().is_none(), "frames should be queued on poll");
 
-        assert!(stack.poll_with_time(1));
+        assert!(
+            !stack.poll_with_time(1),
+            "lines must not transmit before authentication"
+        );
+
+        let mut auth_payload: HeaplessVec<u8, { DEFAULT_LINE_CAPACITY + 8 }> = HeaplessVec::new();
+        auth_payload.extend_from_slice(b"AUTH ").unwrap();
+        auth_payload
+            .extend_from_slice(AUTH_TOKEN.as_bytes())
+            .unwrap();
+        auth_payload.push(b'\n').unwrap();
+        let event = stack.server.ingest(auth_payload.as_slice(), 1);
+        assert_eq!(event, SessionEvent::Authenticated);
+
+        assert!(stack.poll_with_time(2));
 
         let frame = handle.pop_tx().expect("frame not enqueued");
         let rendered = core::str::from_utf8(frame.as_slice()).expect("frame not utf8");
         assert_eq!(rendered, "OK TEST detail=42\r\n");
+
+        let ack = handle.pop_tx().expect("auth acknowledgement missing");
+        let ack_rendered = core::str::from_utf8(ack.as_slice()).expect("ack not utf8");
+        assert_eq!(ack_rendered, "OK AUTH\r\n");
     }
 }
