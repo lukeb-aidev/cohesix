@@ -13,6 +13,7 @@ use sel4_sys::{
 };
 
 /// Root-task view over kernel capabilities required during bootstrap.
+#[derive(Clone, Copy)]
 pub struct RootCaps {
     /// Capability pointer for the init thread CNode.
     pub cnode: seL4_CNode,
@@ -38,9 +39,9 @@ impl RootCaps {
 
     /// Allocates the next free capability slot from the tracked init CNode window.
     pub fn alloc_slot(&mut self) -> Result<seL4_CPtr, seL4_Error> {
-        let limit = 1usize << usize::from(self.cnode_bits);
+        let limit = 1u32 << u32::from(self.cnode_bits);
         if self.next_free >= limit {
-            return Err(sel4_sys::seL4_NotEnoughMemory);
+            return Err(seL4_Error::seL4_NotEnoughMemory);
         }
         let slot = self.next_free;
         self.next_free = self.next_free.saturating_add(1);
