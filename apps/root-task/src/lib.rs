@@ -27,6 +27,10 @@ pub mod net;
 pub mod kernel;
 
 #[cfg(feature = "kernel")]
+/// seL4 bootstrap tracing primitives for debug logging.
+pub mod trace;
+
+#[cfg(feature = "kernel")]
 pub mod caps;
 
 #[cfg(feature = "kernel")]
