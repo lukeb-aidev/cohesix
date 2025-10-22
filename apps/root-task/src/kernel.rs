@@ -16,6 +16,7 @@ use crate::bootstrap::{
     retype::retype_one,
 };
 use crate::console::Console;
+use crate::cspace::{cap_rights_read_write_grant, CSpace};
 use crate::event::{AuditSink, EventPump, IpcDispatcher, TickEvent, TicketTable, TimerSource};
 #[cfg(feature = "net-console")]
 use crate::net::{NetStack, CONSOLE_TCP_PORT};
@@ -243,23 +244,69 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
         console.writeln_prefixed(msg.as_str());
     }
 
-    let bi_view = BootInfoView::from(bootinfo_ref);
-    let mut cs = CSpaceCtx::new(bi_view);
-    if let Err(err) = cs.smoke_copy_init_tcb() {
+    let mut boot_cspace = CSpace::from_bootinfo(bootinfo_ref);
+    let rights = cap_rights_read_write_grant();
+
+    let tcb_copy_slot = match boot_cspace.alloc_slot() {
+        Ok(slot) => slot,
+        Err(err) => {
+            panic!(
+                "failed to allocate init CSpace slot for TCB copy: {} ({})",
+                err,
+                error_name(err)
+            );
+        }
+    };
+    let tcb_src_slot = bootinfo_ref.init_tcb_cap();
+    let copy_err = boot_cspace.copy_here(tcb_copy_slot, tcb_src_slot, rights);
+    if copy_err != sel4_sys::seL4_NoError {
         panic!(
-            "smoke copy of init TCB capability failed: {} ({})",
-            err,
-            error_name(err)
+            "copying init TCB capability failed: {} ({})",
+            copy_err,
+            error_name(copy_err)
+        );
+    } else {
+        log::info!(
+            "[cnode] copy root=0x{root:04x} dst=0x{dst:04x} src=0x{src:04x} depth={depth}",
+            root = boot_cspace.root(),
+            dst = tcb_copy_slot,
+            src = tcb_src_slot,
+            depth = boot_cspace.depth()
         );
     }
 
-    if let Err(err) = cs.mint_root_cnode_copy() {
+    let cnode_copy_slot = match boot_cspace.alloc_slot() {
+        Ok(slot) => slot,
+        Err(err) => {
+            panic!(
+                "failed to allocate init CSpace slot for CNode mint: {} ({})",
+                err,
+                error_name(err)
+            );
+        }
+    };
+    let cnode_src_slot = bootinfo_ref.init_cnode_cap();
+    let mint_err = boot_cspace.mint_here(cnode_copy_slot, cnode_src_slot, rights, 0);
+    if mint_err != sel4_sys::seL4_NoError {
         panic!(
             "failed to mint writable init CNode capability: {} ({})",
-            err,
-            error_name(err)
+            mint_err,
+            error_name(mint_err)
+        );
+    } else {
+        log::info!(
+            "[cnode] mint root=0x{root:04x} dst=0x{dst:04x} src=0x{src:04x} depth={depth}",
+            root = boot_cspace.root(),
+            dst = cnode_copy_slot,
+            src = cnode_src_slot,
+            depth = boot_cspace.depth()
         );
     }
+
+    let bi_view = BootInfoView::from(bootinfo_ref);
+    let mut cs = CSpaceCtx::new(bi_view, boot_cspace);
+    cs.tcb_copy_slot = tcb_copy_slot;
+    cs.root_cnode_copy_slot = cnode_copy_slot;
 
     let endpoint_untyped = pick_untyped(bootinfo_ref, sel4_sys::seL4_EndpointBits as u8);
     let endpoint_slot = cs.first_free.saturating_add(2);

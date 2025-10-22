@@ -49,24 +49,6 @@ fn resolve_cnode_depth(invocation_bits: u8) -> CNodeDepth {
     CNodeDepth::new(invocation_bits)
 }
 #[inline]
-/// Constructs a capability rights mask permitting read, write, and grant operations.
-pub fn caprights_rw_grant() -> sys::SeL4CapRights {
-    #[cfg(target_os = "none")]
-    {
-        sys::seL4_CapRights::new(0, 1, 1, 1)
-    }
-
-    #[cfg(not(target_os = "none"))]
-    {
-        let mut value = 0usize;
-        value |= 1 << 0; // write
-        value |= 1 << 1; // read
-        value |= 1 << 2; // grant
-        value as sys::SeL4CapRights
-    }
-}
-
-#[inline]
 /// Ensures that the provided slot falls within the init CNode window defined by `init_cnode_bits`.
 pub fn check_slot_in_range(init_cnode_bits: u8, slot: sys::seL4_CPtr) {
     let limit = 1u64 << (init_cnode_bits as u64);
@@ -79,103 +61,9 @@ pub fn check_slot_in_range(init_cnode_bits: u8, slot: sys::seL4_CPtr) {
     );
 }
 
-/// Issues a `seL4_CNode_Copy` targeting the init CNode across host and target builds.
-pub fn cnode_copy_invoc(
-    depth_bits: u8,
-    dst_slot: sys::seL4_CPtr,
-    src_slot: sys::seL4_CPtr,
-) -> sys::seL4_Error {
-    let rights = caprights_rw_grant();
-    #[cfg(target_os = "none")]
-    {
-        let depth = resolve_cnode_depth(depth_bits);
-        unsafe {
-            sys::seL4_CNode_Copy(
-                sys::seL4_CapInitThreadCNode,
-                dst_slot,
-                depth.as_u8(),
-                sys::seL4_CapInitThreadCNode,
-                src_slot,
-                depth.as_u8(),
-                rights,
-            )
-        }
-    }
-
-    #[cfg(not(target_os = "none"))]
-    {
-        let depth = resolve_cnode_depth(depth_bits);
-        let _ = (
-            depth_bits,
-            dst_slot,
-            src_slot,
-            rights,
-            depth.as_u8(),
-            depth.as_word(),
-        );
-        sys::seL4_NoError
-    }
-}
-
-/// Issues a `seL4_CNode_Mint` targeting the init CNode across host and target builds.
-pub fn cnode_mint_invoc(
-    depth_bits: u8,
-    dst_slot: sys::seL4_CPtr,
-    src_slot: sys::seL4_CPtr,
-    badge: sys::seL4_Word,
-) -> sys::seL4_Error {
-    let rights = caprights_rw_grant();
-    #[cfg(target_os = "none")]
-    {
-        let depth = resolve_cnode_depth(depth_bits);
-        unsafe {
-            sys::seL4_CNode_Mint(
-                sys::seL4_CapInitThreadCNode,
-                dst_slot,
-                depth.as_u8(),
-                sys::seL4_CapInitThreadCNode,
-                src_slot,
-                depth.as_u8(),
-                rights,
-                badge,
-            )
-        }
-    }
-
-    #[cfg(not(target_os = "none"))]
-    {
-        let depth = resolve_cnode_depth(depth_bits);
-        let _ = (
-            depth_bits,
-            dst_slot,
-            src_slot,
-            badge,
-            rights,
-            depth.as_u8(),
-            depth.as_word(),
-        );
-        sys::seL4_NoError
-    }
-}
-
-/// Issues a `seL4_CNode_Delete` against the init CNode in both target and host configurations.
-pub fn cnode_delete_invoc(depth_bits: u8, slot: sys::seL4_CPtr) -> sys::seL4_Error {
-    #[cfg(target_os = "none")]
-    {
-        let depth = resolve_cnode_depth(depth_bits);
-        unsafe { sys::seL4_CNode_Delete(sys::seL4_CapInitThreadCNode, slot, depth.as_u8()) }
-    }
-
-    #[cfg(not(target_os = "none"))]
-    {
-        let depth = resolve_cnode_depth(depth_bits);
-        let _ = (depth_bits, slot, depth.as_u8(), depth.as_word());
-        sys::seL4_NoError
-    }
-}
-
-/// Issues a `seL4_Untyped_Retype` call constrained to the init CNode addressing rules.
+/// Issues a `seL4_Untyped_Retype` call constrained to the supplied CNode root.
 pub fn untyped_retype_invoc(
+    dest_root: sys::seL4_CNode,
     depth_bits: u8,
     untyped_slot: sys::seL4_CPtr,
     obj_type: sys::seL4_Word,
@@ -190,7 +78,7 @@ pub fn untyped_retype_invoc(
                 untyped_slot,
                 obj_type,
                 size_bits,
-                sys::seL4_CapInitThreadCNode,
+                dest_root,
                 dst_slot,
                 depth.as_word(),
                 0,
@@ -203,12 +91,12 @@ pub fn untyped_retype_invoc(
     {
         let depth = resolve_cnode_depth(depth_bits);
         let _ = (
+            dest_root,
             depth_bits,
             untyped_slot,
             obj_type,
             size_bits,
             dst_slot,
-            depth.as_u8(),
             depth.as_word(),
         );
         sys::seL4_NoError

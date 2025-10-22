@@ -1,17 +1,13 @@
 // Author: Lukas Bower
 
-use crate::sel4::{self, is_boot_reserved_slot, BootInfo};
+use crate::cspace::{cap_rights_read_write_grant, CSpace};
+use crate::sel4::{self, is_boot_reserved_slot, BootInfo, BootInfoExt};
 use core::fmt::Write;
 use heapless::String;
 
 use super::cspace_sys::{self, CANONICAL_CNODE_DEPTH_BITS};
 
 const MAX_DIAGNOSTIC_LEN: usize = 224;
-#[cfg(all(feature = "kernel", sel4_config_debug_build))]
-// `cap_thread_cap` is enumerated as 12 in the generated kernel
-// structures (`seL4/build/kernel/generated/arch/object/structures_gen.h`).
-const THREAD_CAP_IDENTIFIERS: [sel4::seL4_Word; 1] = [0x0000_000c];
-
 fn log_boot(beg: sel4::seL4_CPtr, end: sel4::seL4_CPtr, bits: u8) {
     let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
     let _ = write!(
@@ -33,6 +29,12 @@ impl BootInfoView {
     /// Captures the kernel-provided boot info pointer for later capability-space queries.
     pub fn new(bootinfo: &'static BootInfo) -> Self {
         Self { bootinfo }
+    }
+
+    #[inline(always)]
+    /// Returns the raw bootinfo pointer backing this view.
+    pub fn bootinfo(&self) -> &'static BootInfo {
+        self.bootinfo
     }
 
     #[inline(always)]
@@ -59,7 +61,7 @@ impl BootInfoView {
     #[inline(always)]
     /// Returns the capability pointer referencing the initial thread's root CNode.
     pub fn root_cnode_cap(&self) -> sel4::seL4_CPtr {
-        sel4::seL4_CapInitThreadCNode
+        self.bootinfo.init_cnode_cap()
     }
 }
 
@@ -73,6 +75,8 @@ impl From<&'static BootInfo> for BootInfoView {
 pub struct CSpaceCtx {
     /// Cached boot info projection used for runtime diagnostics.
     pub bi: BootInfoView,
+    /// Capability-space allocator driving init CNode operations.
+    pub cspace: CSpace,
     /// Canonical guard depth supplied to CNode invocations targeting the init CNode.
     pub cnode_invocation_depth_bits: u8,
     /// Radix width of the init thread's CNode as reported by bootinfo.
@@ -87,7 +91,6 @@ pub struct CSpaceCtx {
     pub tcb_copy_slot: sel4::seL4_CPtr,
     /// Slot index containing a copied root CNode capability when minted.
     pub root_cnode_copy_slot: sel4::seL4_CPtr,
-    next_slot: sel4::seL4_CPtr,
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -111,8 +114,8 @@ pub enum SlotAllocError {
 
 impl CSpaceCtx {
     /// Constructs a new capability-space context from kernel boot information.
-    pub fn new(bi: BootInfoView) -> Self {
-        let init_cnode_bits = bi.init_cnode_bits();
+    pub fn new(bi: BootInfoView, cspace: CSpace) -> Self {
+        let init_cnode_bits = cspace.depth();
         assert!(
             init_cnode_bits > 0,
             "bootinfo reported zero-width init CNode"
@@ -132,9 +135,10 @@ impl CSpaceCtx {
             last_free <= limit,
             "bootinfo.empty.end exceeds init CNode size"
         );
-        let root_cnode_cap = bi.root_cnode_cap();
+        let root_cnode_cap = cspace.root();
         let ctx = Self {
             bi,
+            cspace,
             cnode_invocation_depth_bits: invocation_depth_bits,
             init_cnode_bits,
             first_free,
@@ -142,7 +146,6 @@ impl CSpaceCtx {
             root_cnode_cap,
             tcb_copy_slot: sel4::seL4_CapNull,
             root_cnode_copy_slot: sel4::seL4_CapNull,
-            next_slot: first_free,
         };
         log_boot(first_free, last_free, init_cnode_bits);
         ctx
@@ -177,34 +180,37 @@ impl CSpaceCtx {
     }
 
     #[inline(always)]
-    fn consume_slot(&mut self, slot: sel4::seL4_CPtr) {
-        if self.next_slot <= slot {
-            self.next_slot = slot.saturating_add(1);
-        }
-    }
-
     /// Attempts to reserve the next available slot while enforcing boot window and reservation checks.
     pub fn alloc_slot_checked(&mut self) -> Result<sel4::seL4_CPtr, SlotAllocError> {
-        let mut slot = self.next_slot;
-        while slot < self.last_free && Self::is_reserved_slot(slot) {
-            slot += 1;
-        }
+        loop {
+            let candidate = self.cspace.next_free_slot();
+            cspace_sys::check_slot_in_range(self.init_cnode_bits, candidate);
+            if !self.slot_in_bounds(candidate) {
+                return Err(SlotAllocError::OutOfBootWindow {
+                    candidate,
+                    start: self.first_free,
+                    end: self.last_free,
+                });
+            }
 
-        if !self.slot_in_bounds(slot) {
-            return Err(SlotAllocError::OutOfBootWindow {
-                candidate: slot,
-                start: self.first_free,
-                end: self.last_free,
-            });
-        }
+            let slot = match self.cspace.alloc_slot() {
+                Ok(slot) => slot,
+                Err(_) => {
+                    return Err(SlotAllocError::OutOfBootWindow {
+                        candidate,
+                        start: self.first_free,
+                        end: self.last_free,
+                    });
+                }
+            };
 
-        if Self::is_reserved_slot(slot) {
-            return Err(SlotAllocError::ReservedSlot { slot });
-        }
+            if Self::is_reserved_slot(slot) {
+                continue;
+            }
 
-        self.assert_slot_available(slot);
-        self.next_slot = slot.saturating_add(1);
-        Ok(slot)
+            self.assert_slot_available(slot);
+            return Ok(slot);
+        }
     }
 
     /// Panicking convenience wrapper around [`Self::alloc_slot_checked`].
@@ -241,7 +247,8 @@ impl CSpaceCtx {
             let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
             let _ = write!(
                 &mut line,
-                "[cnode] Copy err={err} dest(index=0x{dest_index:04x},depth={depth}) src(index=0x{src_index:04x},depth={depth})",
+                "[cnode] Copy err={err} root=0x{root:04x} dest(index=0x{dest_index:04x},depth={depth}) src(index=0x{src_index:04x},depth={depth})",
+                root = self.root_cnode_cap,
                 depth = self.cnode_invocation_depth_bits,
             );
             emit_console_line(line.as_str());
@@ -260,7 +267,8 @@ impl CSpaceCtx {
             let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
             let _ = write!(
                 &mut line,
-                "[cnode] Mint err={err} dest(index=0x{dest_index:04x},depth={depth},offset=0) src(index=0x{src_index:04x},depth={depth}) badge={badge}",
+                "[cnode] Mint err={err} root=0x{root:04x} dest(index=0x{dest_index:04x},depth={depth},offset=0) src(index=0x{src_index:04x},depth={depth}) badge={badge}",
+                root = self.root_cnode_cap,
                 depth = self.cnode_invocation_depth_bits,
             );
             emit_console_line(line.as_str());
@@ -280,7 +288,8 @@ impl CSpaceCtx {
             let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
             let _ = write!(
                 &mut line,
-                "[retype] err={err} untyped_slot=0x{untyped:04x} dest(index=0x{dest_index:04x},depth={depth},offset=0) ty={obj_ty} sz={size_bits}",
+                "[retype] err={err} root=0x{root:04x} untyped_slot=0x{untyped:04x} dest(index=0x{dest_index:04x},depth={depth},offset=0) ty={obj_ty} sz={size_bits}",
+                root = self.root_cnode_cap,
                 depth = self.cnode_invocation_depth_bits,
             );
             emit_console_line(line.as_str());
@@ -289,34 +298,17 @@ impl CSpaceCtx {
 
     /// Copies the init thread TCB capability into the free slot window to validate CSpace operations.
     pub fn smoke_copy_init_tcb(&mut self) -> Result<(), sel4::seL4_Error> {
-        let dst_slot = self.first_free;
-        self.assert_slot_available(dst_slot);
-        #[cfg(all(feature = "kernel", sel4_config_debug_build))]
-        self.probe_initial_slots(core::cmp::min(self.first_free, 0x20));
-
-        let mut src_slot = sel4::seL4_CapInitThreadTCB;
-        let mut err = self.copy_init_tcb_from(dst_slot, src_slot);
-
-        #[cfg(all(feature = "kernel", sel4_config_debug_build))]
-        {
-            if err == sel4_sys::seL4_FailedLookup {
-                if let Some(fallback_slot) = self.locate_init_tcb_slot() {
-                    let ident = sel4::debug_cap_identify(fallback_slot);
-                    let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
-                    let _ = write!(
-                        &mut line,
-                        "[cnode] fallback.init_tcb slot=0x{fallback_slot:04x} ident=0x{ident:08x}",
-                    );
-                    emit_console_line(line.as_str());
-                    src_slot = fallback_slot;
-                    err = self.copy_init_tcb_from(dst_slot, src_slot);
-                }
+        let dst_slot = match self.alloc_slot_checked() {
+            Ok(slot) => slot,
+            Err(err) => {
+                self.log_slot_failure(err);
+                return Err(sel4::seL4_RangeError);
             }
-        }
-
+        };
+        let src_slot = sel4::seL4_CapInitThreadTCB;
+        let err = self.copy_init_tcb_from(dst_slot, src_slot);
         if err == sel4::seL4_NoError {
             self.tcb_copy_slot = dst_slot;
-            self.consume_slot(dst_slot);
             Ok(())
         } else {
             Err(err)
@@ -337,54 +329,27 @@ impl CSpaceCtx {
             );
             emit_console_line(line.as_str());
         }
-        let err =
-            cspace_sys::cnode_copy_invoc(self.cnode_invocation_depth_bits, dst_slot, src_slot);
+        let rights = cap_rights_read_write_grant();
+        let err = self.cspace.copy_here(dst_slot, src_slot, rights);
         self.log_cnode_copy(err, dst_slot, src_slot);
         err
     }
 
-    #[cfg(all(feature = "kernel", sel4_config_debug_build))]
-    fn probe_initial_slots(&mut self, sample: sel4::seL4_CPtr) {
-        let mut slot: sel4::seL4_CPtr = 0;
-        while slot < sample {
-            let ident = sel4::debug_cap_identify(slot);
-            let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
-            let _ = write!(
-                &mut line,
-                "[cnode] probe slot=0x{slot:04x} ident=0x{ident:08x}",
-            );
-            emit_console_line(line.as_str());
-            slot = slot.saturating_add(1);
-        }
-    }
-
-    #[cfg(all(feature = "kernel", sel4_config_debug_build))]
-    fn locate_init_tcb_slot(&mut self) -> Option<sel4::seL4_CPtr> {
-        let mut slot: sel4::seL4_CPtr = 0;
-        while slot < self.first_free {
-            let ident = sel4::debug_cap_identify(slot);
-            if THREAD_CAP_IDENTIFIERS
-                .iter()
-                .any(|candidate| ident == *candidate)
-            {
-                return Some(slot);
-            }
-            slot = slot.saturating_add(1);
-        }
-        None
-    }
-
     /// Mints a duplicate of the root CNode capability for later management operations.
     pub fn mint_root_cnode_copy(&mut self) -> Result<(), sel4::seL4_Error> {
-        let dst_slot = self.first_free.saturating_add(1);
-        self.assert_slot_available(dst_slot);
+        let dst_slot = match self.alloc_slot_checked() {
+            Ok(slot) => slot,
+            Err(err) => {
+                self.log_slot_failure(err);
+                return Err(sel4::seL4_RangeError);
+            }
+        };
         let src_slot = sel4::seL4_CapInitThreadCNode;
-        let err =
-            cspace_sys::cnode_mint_invoc(self.cnode_invocation_depth_bits, dst_slot, src_slot, 0);
+        let rights = cap_rights_read_write_grant();
+        let err = self.cspace.mint_here(dst_slot, src_slot, rights, 0);
         self.log_cnode_mint(err, dst_slot, src_slot, 0);
         if err == sel4::seL4_NoError {
             self.root_cnode_copy_slot = dst_slot;
-            self.consume_slot(dst_slot);
             Ok(())
         } else {
             Err(err)
@@ -401,6 +366,7 @@ impl CSpaceCtx {
     ) -> sel4::seL4_Error {
         self.assert_slot_available(dst_slot);
         let err = cspace_sys::untyped_retype_invoc(
+            self.root_cnode_cap,
             self.cnode_invocation_depth_bits,
             untyped,
             obj_ty,
@@ -408,22 +374,19 @@ impl CSpaceCtx {
             dst_slot,
         );
         self.log_retype(err, untyped, obj_ty, size_bits, dst_slot);
-        if err == sel4::seL4_NoError {
-            self.consume_slot(dst_slot);
-        }
         err
     }
 
     #[inline(always)]
     /// Returns the slot index the allocator will consider next.
     pub fn next_candidate_slot(&self) -> sel4::seL4_CPtr {
-        self.next_slot
+        self.cspace.next_free_slot()
     }
 
     #[inline(always)]
     /// Reports the remaining number of slots available before exhausting the boot window.
     pub fn remaining_capacity(&self) -> sel4::seL4_CPtr {
-        self.last_free.saturating_sub(self.next_slot)
+        self.last_free.saturating_sub(self.cspace.next_free_slot())
     }
 
     /// Returns `true` when the provided slot index references a kernel-reserved capability.
