@@ -13,7 +13,13 @@ pub mod console;
 pub mod event;
 pub mod serial;
 
-#[cfg(feature = "net")]
+#[cfg(feature = "net-console")]
+mod net_consts;
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+pub(crate) mod drivers;
+
+#[cfg(feature = "net-console")]
 pub mod net;
 
 #[cfg(feature = "kernel")]

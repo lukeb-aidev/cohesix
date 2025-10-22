@@ -13,10 +13,11 @@ kernel = [
     "dep:sel4-panicking",
     "bootstrap-trace",
 ]
-net = [
+net-console = [
     "dep:smoltcp",
     "dep:spin",
 ]
+net-irq = []
 sel4-debug = []
 debug-input = []
 bootstrap-trace = []
@@ -47,6 +48,7 @@ version = "0.11"
 optional = true
 default-features = false
 features = [
+    "alloc",
     "medium-ethernet",
     "proto-ipv4",
     "socket-tcp",

@@ -17,8 +17,8 @@ use crate::bootstrap::{
 };
 use crate::console::Console;
 use crate::event::{AuditSink, EventPump, IpcDispatcher, TickEvent, TicketTable, TimerSource};
-#[cfg(feature = "net")]
-use crate::net::NetStack;
+#[cfg(feature = "net-console")]
+use crate::net::{NetStack, CONSOLE_TCP_PORT};
 use crate::platform::{Platform, SeL4Platform};
 use crate::sel4::{
     bootinfo_debug_dump, error_name, BootInfo, BootInfoExt, KernelEnv, RetypeKind, RetypeStatus,
@@ -26,7 +26,7 @@ use crate::sel4::{
 use crate::serial::{
     pl011::Pl011, SerialPort, DEFAULT_LINE_CAPACITY, DEFAULT_RX_CAPACITY, DEFAULT_TX_CAPACITY,
 };
-#[cfg(feature = "net")]
+#[cfg(feature = "net-console")]
 use smoltcp::wire::Ipv4Address;
 
 #[cfg(all(feature = "kernel", not(sel4_config_printing)))]
@@ -590,9 +590,9 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
                 driver,
             );
 
-        #[cfg(all(feature = "net", feature = "kernel"))]
-        let mut net_stack = NetStack::new(&mut env, Ipv4Address::new(10, 0, 0, 2));
-        #[cfg(all(feature = "net", not(feature = "kernel")))]
+        #[cfg(all(feature = "net-console", feature = "kernel"))]
+        let mut net_stack = NetStack::new(&mut env).expect("virtio-net device not found");
+        #[cfg(all(feature = "net-console", not(feature = "kernel")))]
         let (mut net_stack, _) = NetStack::new(Ipv4Address::new(10, 0, 0, 2));
         let timer = KernelTimer::new(5);
         let ipc = KernelIpc;
@@ -600,8 +600,22 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
         let _ = tickets.register(Role::Queen, "bootstrap");
         let _ = tickets.register(Role::WorkerHeartbeat, "worker");
         let _ = tickets.register(Role::WorkerGpu, "worker-gpu");
-        #[cfg(feature = "net")]
-        console.writeln_prefixed("network stack initialised");
+        #[cfg(all(feature = "net-console", feature = "kernel"))]
+        {
+            let mac = net_stack.hardware_address();
+            let ip = net_stack.ipv4_address();
+            let prefix = net_stack.prefix_len();
+            let mut banner = heapless::String::<128>::new();
+            if let Some(gw) = net_stack.gateway() {
+                let _ = write!(banner, "[net] virtio up mac={mac} ip={ip}/{prefix} gw={gw}");
+            } else {
+                let _ = write!(banner, "[net] virtio up mac={mac} ip={ip}/{prefix}");
+            }
+            console.writeln_prefixed(banner.as_str());
+            let mut listen = heapless::String::<64>::new();
+            let _ = write!(listen, "[console] tcp listen :{CONSOLE_TCP_PORT}");
+            console.writeln_prefixed(listen.as_str());
+        }
         console.writeln_prefixed("initialising event pump");
         let mut audit = ConsoleAudit::new(&mut console);
         let mut pump = EventPump::new(serial, timer, ipc, tickets, &mut audit);
@@ -611,7 +625,7 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
             pump = pump.with_ninedoor(&mut ninedoor);
         }
 
-        #[cfg(feature = "net")]
+        #[cfg(feature = "net-console")]
         {
             pump = pump.with_network(&mut net_stack);
         }

@@ -14,7 +14,7 @@ use cohesix_ticket::Role;
 use heapless::{String as HeaplessString, Vec as HeaplessVec};
 
 use crate::console::{Command, CommandParser, ConsoleError, MAX_ROLE_LEN, MAX_TICKET_LEN};
-#[cfg(feature = "net")]
+#[cfg(feature = "net-console")]
 use crate::net::{NetPoller, CONSOLE_QUEUE_DEPTH};
 #[cfg(feature = "kernel")]
 use crate::ninedoor::NineDoorHandler;
@@ -219,7 +219,7 @@ where
     now_ms: u64,
     session: Option<SessionRole>,
     throttle: AuthThrottle,
-    #[cfg(feature = "net")]
+    #[cfg(feature = "net-console")]
     net: Option<&'a mut dyn NetPoller>,
     #[cfg(feature = "kernel")]
     ninedoor: Option<&'a mut dyn NineDoorHandler>,
@@ -255,7 +255,7 @@ where
             now_ms: 0,
             session: None,
             throttle: AuthThrottle::default(),
-            #[cfg(feature = "net")]
+            #[cfg(feature = "net-console")]
             net: None,
             #[cfg(feature = "kernel")]
             ninedoor: None,
@@ -263,7 +263,7 @@ where
     }
 
     /// Attach a networking poller to the event pump.
-    #[cfg(feature = "net")]
+    #[cfg(feature = "net-console")]
     pub fn with_network(mut self, net: &'a mut dyn NetPoller) -> Self {
         self.audit.info("event-pump: init network");
         self.net = Some(net);
@@ -289,7 +289,7 @@ where
             self.audit.info(message.as_str());
         }
 
-        #[cfg(feature = "net")]
+        #[cfg(feature = "net-console")]
         if let Some(net) = self.net.as_mut() {
             if net.poll(self.now_ms) {
                 let telemetry = net.telemetry();
@@ -329,7 +329,7 @@ where
     fn emit_console_line(&mut self, line: &str) {
         self.serial.enqueue_tx(line.as_bytes());
         self.serial.enqueue_tx(b"\r\n");
-        #[cfg(feature = "net")]
+        #[cfg(feature = "net-console")]
         if let Some(net) = self.net.as_mut() {
             net.send_console_line(line);
         }
@@ -401,7 +401,7 @@ where
         Ok(())
     }
 
-    #[cfg(feature = "net")]
+    #[cfg(feature = "net-console")]
     fn handle_network_line(&mut self, line: HeaplessString<DEFAULT_LINE_CAPACITY>) {
         let mut converted: HeaplessString<LINE> = HeaplessString::new();
         if converted.push_str(line.as_str()).is_err() {
@@ -606,7 +606,7 @@ fn parse_role(raw: &str) -> Option<Role> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(feature = "net")]
+    #[cfg(feature = "net-console")]
     use crate::net::NetTelemetry;
     use crate::serial::test_support::LoopbackSerial;
     use crate::serial::SerialPort;
@@ -738,7 +738,7 @@ mod tests {
             .any(|entry| entry.contains("log stream")));
     }
 
-    #[cfg(feature = "net")]
+    #[cfg(feature = "net-console")]
     #[test]
     fn network_lines_feed_parser() {
         struct FakeNet {

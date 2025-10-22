@@ -50,6 +50,7 @@ OUT_DIR="out"
 QEMU_BIN="qemu-system-aarch64"
 SEL4_BUILD_DIR="${SEL4_BUILD:-$HOME/seL4/build}"
 DTB_OVERRIDE=""
+DEFAULT_TCP_PORT=31337
 TCP_PORT=""
 
 while [[ $# -gt 0 ]]; do
@@ -196,17 +197,21 @@ QEMU_ARGS=(-machine "virt,gic-version=${GIC_VER}" \
     -device loader,file="$KERNEL",addr=0x70000000,force-raw=on \
     -device loader,file="$ROOT_TASK",addr=0x80000000,force-raw=on)
 
-NETWORK_ARGS=()
-
-if [[ -n "$TCP_PORT" ]]; then
-    if ! [[ "$TCP_PORT" =~ ^[0-9]+$ ]]; then
-        log "Invalid TCP port: $TCP_PORT"
-        exit 1
-    fi
-    NETWORK_ARGS=(-netdev "user,id=net0,hostfwd=tcp:127.0.0.1:${TCP_PORT}-${TCP_PORT}" -device virtio-net-device,netdev=net0)
-    log "Forwarding TCP port ${TCP_PORT} via QEMU user networking (127.0.0.1 only)"
-    log "Connect using: cohsh --transport tcp --tcp-port ${TCP_PORT}"
+if [[ -z "$TCP_PORT" ]]; then
+    TCP_PORT="$DEFAULT_TCP_PORT"
 fi
+
+if ! [[ "$TCP_PORT" =~ ^[0-9]+$ ]]; then
+    log "Invalid TCP port: $TCP_PORT"
+    exit 1
+fi
+
+NETWORK_ARGS=(
+    -netdev "user,id=net0,hostfwd=tcp:127.0.0.1:${TCP_PORT}-${TCP_PORT}"
+    -device virtio-net-device,netdev=net0
+)
+log "Forwarding TCP console on 127.0.0.1:${TCP_PORT} (QEMU user networking)"
+log "Connect using: nc 127.0.0.1 ${TCP_PORT}"
 
 if [[ -n "$DTB_OVERRIDE" ]]; then
     if [[ ! -f "$DTB_OVERRIDE" ]]; then
