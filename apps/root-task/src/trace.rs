@@ -59,17 +59,17 @@ pub fn trace_ep(ep: seL4_CPtr) {
     const HEX: &[u8; 16] = b"0123456789abcdef";
 
     unsafe {
-        seL4_DebugPutChar(b'[' as i32);
-        seL4_DebugPutChar(b'e' as i32);
-        seL4_DebugPutChar(b'p' as i32);
-        seL4_DebugPutChar(b'=' as i32);
+        seL4_DebugPutChar(b'[');
+        seL4_DebugPutChar(b'e');
+        seL4_DebugPutChar(b'p');
+        seL4_DebugPutChar(b'=');
         let width = core::mem::size_of::<seL4_CPtr>() * 2;
         for nibble in (0..width).rev() {
             let shift = nibble * 4;
             let value = ((ep as usize) >> shift) & 0xF;
-            seL4_DebugPutChar(HEX[value] as i32);
+            seL4_DebugPutChar(HEX[value]);
         }
-        seL4_DebugPutChar(b']' as i32);
-        seL4_DebugPutChar(b'\n' as i32);
+        seL4_DebugPutChar(b']');
+        seL4_DebugPutChar(b'\n');
     }
 }
