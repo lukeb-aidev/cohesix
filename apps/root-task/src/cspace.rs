@@ -1,9 +1,7 @@
 // Author: Lukas Bower
 
-use crate::sel4::BootInfoExt;
-use sel4_sys::{
-    seL4_BootInfo, seL4_CNode_Copy, seL4_CNode_Mint, seL4_CPtr, seL4_Error, seL4_NoError, seL4_Word,
-};
+use crate::sel4::{self, BootInfoExt};
+use sel4_sys::{seL4_BootInfo, seL4_CPtr, seL4_Error, seL4_Word};
 
 /// Helper managing allocation within the init thread's capability space.
 pub struct CSpace {
@@ -45,7 +43,7 @@ impl CSpace {
     pub fn alloc_slot(&mut self) -> Result<seL4_CPtr, seL4_Error> {
         let limit = 1u64 << self.bits;
         if (self.next_free as u64) >= limit {
-            return Err(seL4_Error::seL4_NotEnoughMemory);
+            return Err(sel4_sys::seL4_NotEnoughMemory);
         }
         let slot = self.next_free;
         self.next_free = self.next_free.saturating_add(1);
@@ -59,24 +57,15 @@ impl CSpace {
         src_slot: seL4_CPtr,
         rights: sel4_sys::seL4_CapRights,
     ) -> seL4_Error {
-        #[cfg(target_os = "none")]
-        unsafe {
-            seL4_CNode_Copy(
-                self.root,
-                dst_slot,
-                self.depth(),
-                self.root,
-                src_slot,
-                self.depth(),
-                rights,
-            )
-        }
-
-        #[cfg(not(target_os = "none"))]
-        {
-            let _ = (dst_slot, src_slot, rights);
-            seL4_NoError
-        }
+        sel4::cnode_copy_depth(
+            self.root,
+            dst_slot,
+            self.depth(),
+            self.root,
+            src_slot,
+            self.depth(),
+            rights,
+        )
     }
 
     /// Issues a `seL4_CNode_Mint` within the init CSpace.
@@ -87,25 +76,16 @@ impl CSpace {
         rights: sel4_sys::seL4_CapRights,
         badge: seL4_Word,
     ) -> seL4_Error {
-        #[cfg(target_os = "none")]
-        unsafe {
-            seL4_CNode_Mint(
-                self.root,
-                dst_slot,
-                self.depth(),
-                self.root,
-                src_slot,
-                self.depth(),
-                rights,
-                badge,
-            )
-        }
-
-        #[cfg(not(target_os = "none"))]
-        {
-            let _ = (dst_slot, src_slot, rights, badge);
-            seL4_NoError
-        }
+        sel4::cnode_mint_depth(
+            self.root,
+            dst_slot,
+            self.depth(),
+            self.root,
+            src_slot,
+            self.depth(),
+            rights,
+            badge,
+        )
     }
 }
 
