@@ -145,8 +145,8 @@ fn log_endpoint_slot(slot: sel4_sys::seL4_CPtr) {
 pub fn bootstrap_ipc(bi: &sel4_sys::seL4_BootInfo) -> Result<RootCaps, sel4_sys::seL4_Error> {
     let mut caps = RootCaps::from_bootinfo(bi);
 
-    let untyped = first_regular_untyped(bi).ok_or(sel4_sys::seL4_Error::seL4_IllegalOperation)?
-        as sel4_sys::seL4_Untyped;
+    let untyped =
+        first_regular_untyped(bi).ok_or(sel4_sys::seL4_IllegalOperation)? as sel4_sys::seL4_Untyped;
     let endpoint_slot = caps.alloc_slot()?;
     retype_endpoint(untyped, caps.cnode, endpoint_slot, caps.cnode_bits)?;
     caps.endpoint = endpoint_slot;
@@ -402,7 +402,6 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
     )
     .expect("failed to retype notification into init CSpace");
     consumed_slots += 1;
-    let _ = endpoint_slot;
     let _ = notification_slot;
 
     let empty_start = bootinfo_ref.empty_first_slot();
