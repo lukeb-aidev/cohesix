@@ -39,6 +39,20 @@ pub type BootInfo = seL4_BootInfo;
 
 const CANONICAL_DEST_OFFSET: seL4_Word = 0;
 
+/// Returns the first RAM-backed untyped capability advertised by the kernel.
+#[must_use]
+pub fn first_regular_untyped(bi: &seL4_BootInfo) -> Option<seL4_CPtr> {
+    let count = (bi.untyped.end - bi.untyped.start) as usize;
+    let descriptors = &bi.untypedList[..count];
+    descriptors.iter().enumerate().find_map(|(index, desc)| {
+        if desc.isDevice == 0 {
+            Some(bi.untyped.start + index as seL4_CPtr)
+        } else {
+            None
+        }
+    })
+}
+
 /// Returns the addressing depth (in bits) of the init thread's root CNode.
 #[inline]
 pub fn init_cnode_depth(bi: &seL4_BootInfo) -> u8 {

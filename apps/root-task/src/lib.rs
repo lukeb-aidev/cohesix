@@ -27,6 +27,9 @@ pub mod net;
 pub mod kernel;
 
 #[cfg(feature = "kernel")]
+pub mod caps;
+
+#[cfg(feature = "kernel")]
 pub mod cspace;
 
 #[cfg(feature = "kernel")]

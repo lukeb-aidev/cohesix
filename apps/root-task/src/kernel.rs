@@ -15,6 +15,7 @@ use crate::bootstrap::{
     pick_untyped,
     retype::retype_one,
 };
+use crate::caps::{retype_endpoint, RootCaps};
 use crate::console::Console;
 use crate::cspace::{cap_rights_read_write_grant, CSpace};
 use crate::event::{AuditSink, EventPump, IpcDispatcher, TickEvent, TicketTable, TimerSource};
@@ -22,7 +23,8 @@ use crate::event::{AuditSink, EventPump, IpcDispatcher, TickEvent, TicketTable, 
 use crate::net::{NetStack, CONSOLE_TCP_PORT};
 use crate::platform::{Platform, SeL4Platform};
 use crate::sel4::{
-    bootinfo_debug_dump, error_name, BootInfo, BootInfoExt, KernelEnv, RetypeKind, RetypeStatus,
+    bootinfo_debug_dump, debug_put_char, error_name, first_regular_untyped, BootInfo, BootInfoExt,
+    KernelEnv, RetypeKind, RetypeStatus,
 };
 use crate::serial::{
     pl011::Pl011, SerialPort, DEFAULT_LINE_CAPACITY, DEFAULT_RX_CAPACITY, DEFAULT_TX_CAPACITY,
@@ -114,6 +116,57 @@ impl<'a, P: Platform> Write for DebugConsole<'a, P> {
     fn write_str(&mut self, s: &str) -> fmt::Result {
         self.write_raw(s.as_bytes());
         Ok(())
+    }
+}
+
+#[inline(always)]
+fn log_endpoint_slot(slot: sel4_sys::seL4_CPtr) {
+    const PREFIX: &[u8] = b"[caps ep=";
+    const SUFFIX: &[u8] = b"]\n";
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+
+    for &byte in PREFIX {
+        debug_put_char(byte as i32);
+    }
+
+    let width = core::mem::size_of::<sel4_sys::seL4_CPtr>() * 2;
+    for nibble in (0..width).rev() {
+        let shift = nibble * 4;
+        let value = ((slot as usize) >> shift) & 0xF;
+        debug_put_char(HEX[value] as i32);
+    }
+
+    for &byte in SUFFIX {
+        debug_put_char(byte as i32);
+    }
+}
+
+/// Allocates and retypes the root-task IPC endpoint prior to any seL4 invocations.
+pub fn bootstrap_ipc(bi: &sel4_sys::seL4_BootInfo) -> Result<RootCaps, sel4_sys::seL4_Error> {
+    let mut caps = RootCaps::from_bootinfo(bi);
+
+    let untyped = first_regular_untyped(bi).ok_or(sel4_sys::seL4_Error::seL4_IllegalOperation)?
+        as sel4_sys::seL4_Untyped;
+    let endpoint_slot = caps.alloc_slot()?;
+    retype_endpoint(untyped, caps.cnode, endpoint_slot, caps.cnode_bits)?;
+    caps.endpoint = endpoint_slot;
+    log_endpoint_slot(endpoint_slot);
+
+    Ok(caps)
+}
+
+/// Issues the first IPC send once a valid endpoint capability has been provisioned.
+pub fn do_first_ipc(caps: &RootCaps) {
+    let ep = caps.endpoint;
+    debug_assert!(ep != sel4_sys::seL4_CapNull);
+    if ep == sel4_sys::seL4_CapNull {
+        log::error!("IPC send aborted: endpoint slot is null");
+        return;
+    }
+
+    let message = sel4_sys::seL4_MessageInfo::new(0, 0, 0, 0);
+    unsafe {
+        sel4_sys::seL4_Send(ep, message);
     }
 }
 
@@ -221,6 +274,21 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
     let bootinfo_ref: &'static sel4_sys::seL4_BootInfo = bootinfo;
     bootinfo_debug_dump(bootinfo_ref);
 
+    let root_caps = match bootstrap_ipc(bootinfo_ref) {
+        Ok(caps) => caps,
+        Err(err) => {
+            let mut line = heapless::String::<160>::new();
+            let _ = write!(
+                line,
+                "bootstrap_ipc failed: {} ({})",
+                err as i32,
+                error_name(err)
+            );
+            console.writeln_prefixed(line.as_str());
+            panic!("bootstrap_ipc failed: {}", error_name(err));
+        }
+    };
+
     unsafe {
         #[cfg(all(feature = "kernel", target_arch = "aarch64"))]
         {
@@ -245,6 +313,20 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
     }
 
     let mut boot_cspace = CSpace::from_bootinfo(bootinfo_ref);
+    if boot_cspace.next_free_slot() < root_caps.next_free {
+        match boot_cspace.alloc_slot() {
+            Ok(slot) => {
+                debug_assert_eq!(slot, root_caps.endpoint);
+            }
+            Err(err) => {
+                panic!(
+                    "failed to reserve endpoint slot in init CSpace: {} ({})",
+                    err,
+                    error_name(err)
+                );
+            }
+        }
+    }
     let rights = cap_rights_read_write_grant();
 
     let tcb_copy_slot = match boot_cspace.alloc_slot() {
@@ -307,22 +389,6 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
     let mut cs = CSpaceCtx::new(bi_view, boot_cspace);
     cs.tcb_copy_slot = tcb_copy_slot;
     cs.root_cnode_copy_slot = cnode_copy_slot;
-
-    let endpoint_untyped = pick_untyped(bootinfo_ref, sel4_sys::seL4_EndpointBits as u8);
-    let endpoint_slot = cs.first_free.saturating_add(2);
-    let endpoint_err = cs.retype_to_slot(
-        endpoint_untyped,
-        sel4_sys::seL4_ObjectType::seL4_EndpointObject as sel4_sys::seL4_Word,
-        0,
-        endpoint_slot,
-    );
-    if endpoint_err != sel4_sys::seL4_NoError {
-        panic!(
-            "failed to retype endpoint into init CSpace: {} ({})",
-            endpoint_err,
-            error_name(endpoint_err)
-        );
-    }
 
     let mut consumed_slots: usize = 3;
 
