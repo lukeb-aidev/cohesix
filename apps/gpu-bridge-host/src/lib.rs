@@ -8,11 +8,10 @@
 //! discovery through `nvml-wrapper`.
 
 use anyhow::{anyhow, Result};
-use serde::Serialize;
-use serde_json::json;
+use std::fmt::Write;
 
 /// Summary information about a GPU surfaced to the VM namespace.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GpuInfo {
     /// Identifier used in `/gpu/<id>` paths.
     pub id: String,
@@ -30,12 +29,20 @@ pub struct GpuInfo {
 
 impl GpuInfo {
     fn to_info_payload(&self) -> String {
-        serde_json::to_string_pretty(self).expect("serialize gpu info")
+        format!(
+            "{{\n    \"id\": \"{}\",\n    \"name\": \"{}\",\n    \"memory_mb\": {},\n    \"sm_count\": {},\n    \"driver_version\": \"{}\",\n    \"runtime_version\": \"{}\"\n}}",
+            escape_json_string(&self.id),
+            escape_json_string(&self.name),
+            self.memory_mb,
+            self.sm_count,
+            escape_json_string(&self.driver_version),
+            escape_json_string(&self.runtime_version)
+        )
     }
 }
 
 /// Namespace representation created by the bridge for each GPU.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GpuNamespace {
     /// GPU metadata.
     pub info: GpuInfo,
@@ -179,7 +186,7 @@ impl GpuBridge {
 }
 
 /// Serialised GPU node representation exported by the bridge.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SerialisedGpuNode {
     /// GPU identifier used in path segments.
     pub id: String,
@@ -193,12 +200,68 @@ pub struct SerialisedGpuNode {
 
 /// Produce a minimal job status JSON entry.
 pub fn status_entry(job: &str, state: &str, detail: &str) -> String {
-    json!({
-        "job": job,
-        "state": state,
-        "detail": detail,
-    })
-    .to_string()
+    format!(
+        "{{\"job\":\"{}\",\"state\":\"{}\",\"detail\":\"{}\"}}",
+        escape_json_string(job),
+        escape_json_string(state),
+        escape_json_string(detail)
+    )
+}
+
+/// Format a namespace as pretty JSON compatible with the former serde output.
+#[must_use]
+pub fn namespace_to_json_pretty(nodes: &[SerialisedGpuNode]) -> String {
+    if nodes.is_empty() {
+        return "[]".to_string();
+    }
+
+    let mut out = String::new();
+    out.push('[');
+    out.push('\n');
+    for (index, node) in nodes.iter().enumerate() {
+        if index > 0 {
+            out.push_str(",\n");
+        }
+        out.push_str("  {\n");
+        out.push_str(&format!(
+            "    \"id\": \"{}\",\n",
+            escape_json_string(&node.id)
+        ));
+        out.push_str(&format!(
+            "    \"info_payload\": \"{}\",\n",
+            escape_json_string(&node.info_payload)
+        ));
+        out.push_str(&format!(
+            "    \"ctl_payload\": \"{}\",\n",
+            escape_json_string(&node.ctl_payload)
+        ));
+        out.push_str(&format!(
+            "    \"status_payload\": \"{}\"\n",
+            escape_json_string(&node.status_payload)
+        ));
+        out.push_str("  }");
+    }
+    out.push('\n');
+    out.push(']');
+    out
+}
+
+fn escape_json_string(input: &str) -> String {
+    let mut escaped = String::with_capacity(input.len());
+    for ch in input.chars() {
+        match ch {
+            '"' => escaped.push_str("\\\""),
+            '\\' => escaped.push_str("\\\\"),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            c if c < ' ' => {
+                write!(escaped, "\\u{:04x}", c as u32).expect("write to string");
+            }
+            c => escaped.push(c),
+        }
+    }
+    escaped
 }
 
 /// Build a bridge instance with the preferred backend.
@@ -229,5 +292,35 @@ mod tests {
         let nodes = bridge.build_namespace().unwrap();
         assert_eq!(nodes.len(), 2);
         assert!(nodes[0].info_payload().contains("GPU-0"));
+    }
+
+    #[test]
+    fn status_entry_serialises_fields() {
+        let entry = status_entry("job\"1", "running", "line\nfeed");
+        assert_eq!(
+            entry,
+            "{\"job\":\"job\\\"1\",\"state\":\"running\",\"detail\":\"line\\nfeed\"}"
+        );
+    }
+
+    #[test]
+    fn escape_json_string_handles_control_chars() {
+        let escaped = escape_json_string("\u{0007}\"\\");
+        assert_eq!(escaped, "\\u0007\\\"\\\\");
+    }
+
+    #[test]
+    fn namespace_serialises_to_pretty_json() {
+        let nodes = vec![SerialisedGpuNode {
+            id: "GPU-0".into(),
+            info_payload: "{\"id\":\"GPU-0\"}".into(),
+            ctl_payload: "LEASE GPU-0".into(),
+            status_payload: "ready".into(),
+        }];
+        let json = namespace_to_json_pretty(&nodes);
+        assert_eq!(
+            json,
+            "[\n  {\n    \"id\": \"GPU-0\",\n    \"info_payload\": \"{\\\"id\\\":\\\"GPU-0\\\"}\",\n    \"ctl_payload\": \"LEASE GPU-0\",\n    \"status_payload\": \"ready\"\n  }\n]"
+        );
     }
 }
