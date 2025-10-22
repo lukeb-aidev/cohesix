@@ -59,6 +59,15 @@
 - Delegates permission checks to a role-aware `AccessPolicy` using capability tickets minted by the root task.
 - Tracks per-session state (fid tables, msize) and ensures append-only semantics on log/telemetry nodes.
 
+### Domain Intents (crate: `domain-intents`)
+- Provides deterministic media and finance recommendation engines consumed by Apple Intelligence surfaces.
+- Resolves natural-language parameters into `MediaPickQuery` structures, emitting contextual questions when domains,
+  dayparts, or permissions are missing.
+- Emits donation payloads (`IntentDonation`) for the concierge home view so the Swift App Intents layer can donate
+  summaries and deeplinks back to SiriKit.
+- Hosts curated catalogs (`MediaLibrary::curated`, `FinanceDataset::mock`) that remain in lockstep with
+  `docs/SUGGESTION_CATALOG.md` so automated tests and documentation share the same data.
+
 ### Workers (crate family: `worker-*`)
 - Spawned by queen commands; each worker receives a ticket describing its role and budget.
 - Communicate exclusively through their mounted NineDoor namespace—no raw IPC between workers.
@@ -85,6 +94,9 @@
 - **Queen Control**: Append JSON commands to `/queen/ctl`; NineDoor forwards valid commands to root-task orchestration APIs.
 - **Telemetry**: Workers append newline-delimited status records to `/worker/<id>/telemetry`. NineDoor enforces append-only semantics by ignoring offsets.
 - **Logging**: Root task and queen append to `/log/queen.log`; workers read logs read-only for situational awareness.
+- **Apple Intelligence**: The SwiftUI concierge surface (`ios/Concierge/ConciergeHomeView.swift`) invokes the `domain-intents`
+  crate via FFI to resolve user requests, collect contextual questions for follow-up prompts, and publish donation payloads so
+  SiriKit/App Intents stays aware of the latest suggestion state.
 - **GPU Integration (future)**: Host bridge exposes GPU metadata/control/job/status nodes; WorkerGpu instances mediate job submission and read back status via NineDoor.
 
 ## 7. Networking & Console Integration
@@ -194,3 +206,6 @@
   under constrained links. Host tooling validates dependencies before
   enabling sidecars, preventing drift between planned and deployed
   topologies.
+- **Concierge hand-off**: The SwiftUI concierge home view is intentionally minimal—only the home surface and notification
+  coordinator remain. Historical UIKit dashboards were purged, and the remaining adapters are tagged with
+  `@available(*, deprecated, message: "Replaced by RalphConcierge")` so Ralph owns all future concierge UX.
