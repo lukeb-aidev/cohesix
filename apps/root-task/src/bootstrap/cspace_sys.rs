@@ -36,10 +36,10 @@ impl CNodeDepth {
 #[inline(always)]
 fn resolve_cnode_depth(invocation_bits: u8) -> CNodeDepth {
     // seL4 interprets the depth as the number of address bits (guard + index)
-    // consumed when decoding the capability pointer. The canonical machine
-    // width (word bits) is required when operating on the init CNode because
-    // the capability embeds guard bits beyond the bootinfo-reported radix.
-    // Guard against callers attempting to exceed the architectural word width.
+    // consumed when decoding the capability pointer. The init CSpace provided by
+    // bootinfo is single-level, so callers must supply the radix width reported
+    // by the kernel (initThreadCNodeSizeBits). Guard against callers attempting
+    // to exceed the architectural word width.
     debug_assert!(
         invocation_bits <= CANONICAL_CNODE_DEPTH_BITS,
         "init cnode depth {} exceeds architectural limit {}",
@@ -286,11 +286,8 @@ mod tests {
     fn resolve_cnode_depth_tracks_invocation_width() {
         for bits in [1u8, 5, 13, CANONICAL_CNODE_DEPTH_BITS] {
             let depth = resolve_cnode_depth(bits);
-            assert_eq!(depth.as_u8(), CANONICAL_CNODE_DEPTH_BITS);
-            assert_eq!(
-                depth.as_word(),
-                CANONICAL_CNODE_DEPTH_BITS as super::sys::seL4_Word
-            );
+            assert_eq!(depth.as_u8(), bits);
+            assert_eq!(depth.as_word(), bits as super::sys::seL4_Word);
             assert!(bits <= CANONICAL_CNODE_DEPTH_BITS);
         }
     }
@@ -298,10 +295,7 @@ mod tests {
     #[test]
     fn resolve_cnode_depth_never_underfills_guard_bits() {
         let depth = resolve_cnode_depth(0);
-        assert_eq!(depth.as_u8(), CANONICAL_CNODE_DEPTH_BITS);
-        assert_eq!(
-            depth.as_word(),
-            CANONICAL_CNODE_DEPTH_BITS as super::sys::seL4_Word
-        );
+        assert_eq!(depth.as_u8(), 0);
+        assert_eq!(depth.as_word(), 0);
     }
 }

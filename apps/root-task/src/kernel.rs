@@ -160,7 +160,7 @@ unsafe fn pl011_debug_emit(context: *mut (), byte: u8) {
 }
 
 /// Minimal blocking console loop used during early bring-up.
-pub fn start_console(mut uart: Pl011) -> ! {
+pub fn start_console(uart: Pl011) -> ! {
     let mut console = Console::new(uart);
     let _ = writeln!(console, "[cohesix] console ready");
     let mut buffer = [0u8; 256];
