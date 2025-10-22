@@ -231,7 +231,7 @@ impl NetStack {
             activity = true;
         }
 
-        if socket.can_send() {
+        if socket.can_send() && self.server.is_authenticated() {
             let mut budget = MAX_TX_BUDGET;
             while budget > 0 && socket.can_send() {
                 let Some(line) = self.server.pop_outbound() else {
