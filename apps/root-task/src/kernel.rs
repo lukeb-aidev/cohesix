@@ -15,7 +15,7 @@ use crate::bootstrap::{
     pick_untyped,
     retype::retype_one,
 };
-use crate::caps::{retype_endpoint, RootCaps};
+use crate::caps::{retype_endpoint_into_slot, RootCaps};
 use crate::console::Console;
 use crate::cspace::{cap_rights_read_write_grant, CSpace};
 use crate::event::{AuditSink, EventPump, IpcDispatcher, TickEvent, TicketTable, TimerSource};
@@ -145,10 +145,9 @@ fn log_endpoint_slot(slot: sel4_sys::seL4_CPtr) {
 pub fn bootstrap_ipc(bi: &sel4_sys::seL4_BootInfo) -> Result<RootCaps, sel4_sys::seL4_Error> {
     let mut caps = RootCaps::from_bootinfo(bi);
 
-    let untyped =
-        first_regular_untyped(bi).ok_or(sel4_sys::seL4_IllegalOperation)? as sel4_sys::seL4_Untyped;
+    let untyped = first_regular_untyped(bi).ok_or(sel4_sys::seL4_IllegalOperation)?;
     let endpoint_slot = caps.alloc_slot()?;
-    retype_endpoint(untyped, caps.cnode, endpoint_slot, caps.cnode_bits)?;
+    retype_endpoint_into_slot(untyped, caps.cnode, endpoint_slot)?;
     caps.endpoint = endpoint_slot;
     log_endpoint_slot(endpoint_slot);
 
@@ -160,8 +159,8 @@ pub fn do_first_ipc(caps: &RootCaps) {
     let ep = caps.endpoint;
     debug_assert!(ep != sel4_sys::seL4_CapNull);
     if ep == sel4_sys::seL4_CapNull {
-        log::error!("IPC send aborted: endpoint slot is null");
-        return;
+        log::error!("endpoint null; aborting first IPC");
+        panic!("endpoint null; aborting first IPC");
     }
 
     let message = sel4_sys::seL4_MessageInfo::new(0, 0, 0, 0);
