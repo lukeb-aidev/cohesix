@@ -15,7 +15,8 @@ pub use sel4_sys::{
     seL4_CapInitThreadIPCBuffer, seL4_CapInitThreadSC, seL4_CapInitThreadTCB,
     seL4_CapInitThreadVSpace, seL4_CapNull, seL4_CapRights, seL4_CapRights_All,
     seL4_CapRights_ReadWrite, seL4_CapSMC, seL4_CapSMMUCBControl, seL4_CapSMMUSIDControl,
-    seL4_Error, seL4_NoError, seL4_Untyped, seL4_Untyped_Retype, seL4_Word,
+    seL4_Error, seL4_NoError, seL4_NotEnoughMemory, seL4_RangeError, seL4_Untyped,
+    seL4_Untyped_Retype, seL4_Word,
 };
 
 /// Canonical capability rights representation exposed by seL4.
@@ -23,8 +24,8 @@ pub type SeL4CapRights = sel4_sys::seL4_CapRights;
 
 use sel4_sys::{
     seL4_ARM_PageTableObject, seL4_ARM_PageTable_Map, seL4_ARM_Page_Default, seL4_ARM_Page_Map,
-    seL4_ARM_Page_Uncached, seL4_ARM_VMAttributes, seL4_BootInfo, seL4_NotEnoughMemory,
-    seL4_ObjectType, seL4_SlotRegion, UntypedDesc, MAX_BOOTINFO_UNTYPEDS,
+    seL4_ARM_Page_Uncached, seL4_ARM_VMAttributes, seL4_BootInfo, seL4_ObjectType, seL4_SlotRegion,
+    UntypedDesc, MAX_BOOTINFO_UNTYPEDS,
 };
 
 #[cfg(all(feature = "kernel", not(sel4_config_printing)))]
@@ -120,6 +121,10 @@ pub unsafe extern "C" fn seL4_DebugCapIdentify(slot: seL4_CPtr) -> u32 {
         options(nostack, preserves_flags),
     );
 
+    // Acknowledge the post-syscall register values to silence compiler warnings while retaining
+    // the historical semantics of this debug helper.
+    core::hint::black_box((info, mr0, mr1, mr2, mr3));
+
     badge as u32
 }
 
@@ -169,6 +174,39 @@ pub fn cnode_copy(
     }
 }
 
+/// Safe projection of `seL4_CNode_Copy` when both invocations target precomputed depths.
+#[cfg(feature = "kernel")]
+#[inline(always)]
+pub fn cnode_copy_depth(
+    dest_root: seL4_CNode,
+    dest_index: seL4_CPtr,
+    dest_depth: u8,
+    src_root: seL4_CNode,
+    src_index: seL4_CPtr,
+    src_depth: u8,
+    rights: sel4_sys::seL4_CapRights,
+) -> seL4_Error {
+    #[cfg(target_os = "none")]
+    {
+        // SAFETY: Callers must ensure that the provided CNodes and depths originate from
+        // kernel-supplied boot information. This wrapper centralises the unsafe invocation so
+        // higher-level modules can remain within the crate-wide `#![deny(unsafe_code)]` policy.
+        unsafe {
+            seL4_CNode_Copy(
+                dest_root, dest_index, dest_depth, src_root, src_index, src_depth, rights,
+            )
+        }
+    }
+
+    #[cfg(not(target_os = "none"))]
+    {
+        let _ = (
+            dest_root, dest_index, dest_depth, src_root, src_index, src_depth, rights,
+        );
+        seL4_NoError
+    }
+}
+
 /// Safe projection of `seL4_CNode_Delete` for bootstrap modules.
 #[cfg(feature = "kernel")]
 #[inline(always)]
@@ -196,6 +234,39 @@ pub(crate) fn cnode_mint(
         seL4_CNode_Mint(
             dest_root, dest_index, depth, src_root, src_index, depth, rights, badge,
         )
+    }
+}
+
+/// Safe projection of `seL4_CNode_Mint` when both invocations target precomputed depths.
+#[cfg(feature = "kernel")]
+#[inline(always)]
+pub fn cnode_mint_depth(
+    dest_root: seL4_CNode,
+    dest_index: seL4_CPtr,
+    dest_depth: u8,
+    src_root: seL4_CNode,
+    src_index: seL4_CPtr,
+    src_depth: u8,
+    rights: sel4_sys::seL4_CapRights,
+    badge: seL4_Word,
+) -> seL4_Error {
+    #[cfg(target_os = "none")]
+    {
+        // SAFETY: Callers guarantee that the provided indices and depths stem from the
+        // kernel-advertised CSpace topology, ensuring the kernel accepts the invocation.
+        unsafe {
+            seL4_CNode_Mint(
+                dest_root, dest_index, dest_depth, src_root, src_index, src_depth, rights, badge,
+            )
+        }
+    }
+
+    #[cfg(not(target_os = "none"))]
+    {
+        let _ = (
+            dest_root, dest_index, dest_depth, src_root, src_index, src_depth, rights, badge,
+        );
+        seL4_NoError
     }
 }
 
