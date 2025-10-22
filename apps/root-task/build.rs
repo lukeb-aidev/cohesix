@@ -5,12 +5,17 @@ use std::collections::VecDeque;
 use std::env;
 use std::ffi::OsStr;
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 
 #[path = "build_support.rs"]
 mod build_support;
 
 use build_support::{classify_linker_script, LinkerScriptKind};
+
+const IPC_GUARD_SOURCE: &str = "apps/root-task/src";
+const IPC_GUARD_ALLOW: &str = "sel4.rs";
+const IPC_GUARD_PATTERNS: &[&str] = &["seL4_Send(", "seL4_Call(", "ReplyRecv("];
 
 const CONFIG_CANDIDATES: &[&str] = &[
     ".config",
@@ -86,6 +91,10 @@ fn main() {
     println!("cargo:rerun-if-env-changed=SEL4_BUILD");
     println!("cargo:rustc-check-cfg=cfg(sel4_config_debug_build)");
     println!("cargo:rustc-check-cfg=cfg(sel4_config_printing)");
+
+    if let Err(error) = enforce_guarded_ipc() {
+        panic!("failed to scan `{IPC_GUARD_SOURCE}` for direct IPC syscalls: {error}");
+    }
 
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     if target_os != "none" {
@@ -458,4 +467,44 @@ fn parse_bool_token(token: &str) -> Option<bool> {
         "N" | "NO" | "0" | "OFF" | "FALSE" => Some(false),
         _ => None,
     }
+}
+
+fn enforce_guarded_ipc() -> io::Result<()> {
+    scan_ipc_directory(Path::new(IPC_GUARD_SOURCE))
+}
+
+fn scan_ipc_directory(path: &Path) -> io::Result<()> {
+    if path.is_dir() {
+        for entry in fs::read_dir(path)? {
+            let entry = entry?;
+            scan_ipc_directory(&entry.path())?;
+        }
+        return Ok(());
+    }
+
+    if path.extension().and_then(|ext| ext.to_str()) != Some("rs") {
+        return Ok(());
+    }
+
+    if path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| name == IPC_GUARD_ALLOW)
+        .unwrap_or(false)
+    {
+        return Ok(());
+    }
+
+    let contents = fs::read_to_string(path)?;
+    for pattern in IPC_GUARD_PATTERNS {
+        if contents.contains(pattern) {
+            panic!(
+                "Forbidden `{}` in {} — use guarded wrapper",
+                pattern,
+                path.display()
+            );
+        }
+    }
+
+    Ok(())
 }

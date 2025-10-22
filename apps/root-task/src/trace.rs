@@ -1,6 +1,7 @@
 // Author: Lukas Bower
 #![allow(unsafe_code)]
 
+use core::cmp;
 use core::fmt::{self, Write};
 use sel4_sys::{seL4_CPtr, seL4_DebugPutChar, seL4_Error};
 
@@ -51,6 +52,24 @@ pub fn dec_u32(mut writer: impl Write, mut value: u32) {
 
     for &digit in &buffer[position..] {
         let _ = writer.write_char(char::from(digit));
+    }
+}
+
+/// Emits a bounded hexadecimal dump of the provided buffer.
+pub fn hex_dump(label: &str, buf: &[u8], max: usize) {
+    let mut writer = DebugPutc;
+    let limit = cmp::min(buf.len(), max);
+    let _ = write!(writer, "[dump:{} len={}]\n", label, limit);
+
+    let mut offset = 0usize;
+    while offset < limit {
+        let line_end = cmp::min(offset + 16, limit);
+        let _ = write!(writer, "{:08x}: ", offset);
+        for byte in &buf[offset..line_end] {
+            let _ = write!(writer, "{:02x} ", byte);
+        }
+        let _ = writer.write_str("\n");
+        offset = line_end;
     }
 }
 
