@@ -2,7 +2,7 @@
 
 use crate::sel4::BootInfoExt;
 use sel4_sys::{
-    seL4_BootInfo, seL4_CNode, seL4_CPtr, seL4_Error, seL4_NoError, seL4_Untyped, seL4_Word,
+    seL4_BootInfo, seL4_CNode, seL4_CPtr, seL4_Error, seL4_NoError, seL4_Untyped_Retype, seL4_Word,
 };
 
 /// Root-task view over kernel capabilities required during bootstrap.
@@ -42,23 +42,23 @@ impl RootCaps {
 }
 
 /// Retypes an untyped capability into an endpoint object at the destination slot.
-pub fn retype_endpoint(
-    untyped: seL4_Untyped,
-    dst_cnode: seL4_CNode,
+pub fn retype_endpoint_into_slot(
+    untyped: seL4_CPtr,
+    dst_cnode: seL4_CPtr,
     dst_slot: seL4_CPtr,
-    dst_depth_bits: u8,
 ) -> Result<(), seL4_Error> {
-    let depth = seL4_Word::from(dst_depth_bits);
-    let err = sel4_sys::seL4_untyped_retype(
-        untyped,
-        sel4_sys::seL4_ObjectType::seL4_EndpointObject,
-        0,
-        dst_cnode,
-        dst_slot,
-        depth,
-        0,
-        1,
-    );
+    let err = unsafe {
+        seL4_Untyped_Retype(
+            untyped,
+            sel4_sys::seL4_ObjectType::seL4_EndpointObject as seL4_Word,
+            0,
+            dst_cnode,
+            0,
+            0,
+            dst_slot,
+            1,
+        )
+    };
     if err == seL4_NoError {
         Ok(())
     } else {
