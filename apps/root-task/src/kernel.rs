@@ -3,6 +3,7 @@
 #![allow(unsafe_code)]
 
 use core::cell::UnsafeCell;
+use core::cmp;
 use core::fmt::{self, Write};
 use core::mem::{self, MaybeUninit};
 use core::panic::PanicInfo;
@@ -66,19 +67,35 @@ impl<'a, P: Platform> DebugConsole<'a, P> {
         self.write_raw(b"\r\n");
     }
 
-    fn report_bootinfo(&mut self, info_ptr: *const BootInfoHeader) {
-        if info_ptr.is_null() {
-            self.writeln_prefixed("bootinfo pointer is NULL (kernel handover failed)");
-            return;
-        }
+    fn report_bootinfo(&mut self, info: &sel4_sys::seL4_BootInfo) {
+        let addr = info as *const _ as usize;
+        let header_bytes = core::mem::size_of::<sel4_sys::seL4_BootInfo>();
+        let word_bytes = core::mem::size_of::<sel4_sys::seL4_Word>();
 
-        let addr = info_ptr as usize;
-        let header = unsafe { *info_ptr };
-        let extra_words = header.extra_len;
-        let header_bytes = core::mem::size_of::<BootInfoHeader>();
-        let extra_bytes = extra_words * core::mem::size_of::<usize>();
-        let extra_start = addr + header_bytes;
-        let extra_end = extra_start + extra_bytes;
+        let extra_words = info.extraLen as usize;
+        let extra_bytes = match extra_words.checked_mul(word_bytes) {
+            Some(bytes) => bytes,
+            None => {
+                self.writeln_prefixed("bootinfo.extraLen overflow; truncating extra byte count");
+                0
+            }
+        };
+
+        let extra_start = match addr.checked_add(header_bytes) {
+            Some(start) => start,
+            None => {
+                self.writeln_prefixed("bootinfo header address overflow");
+                0
+            }
+        };
+
+        let extra_end = match extra_start.checked_add(extra_bytes) {
+            Some(end) => end,
+            None => {
+                self.writeln_prefixed("bootinfo extra region overflow");
+                extra_start
+            }
+        };
 
         let _ = write!(
             self,
@@ -105,9 +122,32 @@ impl<'a, P: Platform> DebugConsole<'a, P> {
             self,
             "{prefix}node_id={node_id} nodes={nodes} ipc_buffer=0x{ipc:016x}\r\n",
             prefix = Self::PREFIX,
-            node_id = header.node_id,
-            nodes = header.num_nodes,
-            ipc = header.ipc_buffer,
+            node_id = info.nodeId,
+            nodes = info.numNodes,
+            ipc = info.ipcBuffer,
+        );
+
+        let bits = info.init_cnode_bits();
+        let capacity = 1usize.checked_shl(bits as u32).unwrap_or(usize::MAX);
+        let empty_start = info.empty_first_slot();
+        let empty_end = info.empty_last_slot_excl();
+        let empty_span = empty_end.saturating_sub(empty_start);
+
+        let _ = write!(
+            self,
+            "{prefix}initThreadCNode=0x{cnode:04x} bits={bits} capacity={capacity}\r\n",
+            prefix = Self::PREFIX,
+            cnode = info.init_cnode_cap(),
+            bits = bits,
+            capacity = capacity,
+        );
+        let _ = write!(
+            self,
+            "{prefix}empty slots [0x{start:04x}..0x{end:04x}) span={span}\r\n",
+            prefix = Self::PREFIX,
+            start = empty_start,
+            end = empty_end,
+            span = empty_span,
         );
     }
 }
@@ -119,25 +159,12 @@ impl<'a, P: Platform> Write for DebugConsole<'a, P> {
     }
 }
 
-/// Minimal projection of `seL4_BootInfo` used for early diagnostics.
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct BootInfoHeader {
-    extra_len: usize,
-    node_id: usize,
-    num_nodes: usize,
-    num_io_pt_levels: usize,
-    ipc_buffer: usize,
-    init_thread_cnode_size_bits: usize,
-    init_thread_domain: usize,
-    extra_bi_pages: usize,
-}
-
 #[cfg(not(target_arch = "aarch64"))]
 compile_error!("root-task kernel build currently supports only aarch64 targets");
 
 const PL011_PADDR: usize = 0x0900_0000;
 const DEVICE_FRAME_BITS: usize = 12;
+const EARLY_DUMP_LIMIT: usize = 512;
 
 #[cfg(all(feature = "kernel", not(sel4_config_printing)))]
 const PL011_DR_OFFSET: usize = 0x00;
@@ -145,6 +172,28 @@ const PL011_DR_OFFSET: usize = 0x00;
 const PL011_FR_OFFSET: usize = 0x18;
 #[cfg(all(feature = "kernel", not(sel4_config_printing)))]
 const PL011_FR_TXFF: u32 = 1 << 5;
+
+fn bootinfo_extra_prefix(
+    bootinfo: &'static sel4_sys::seL4_BootInfo,
+) -> Option<(&'static [u8], usize)> {
+    let extra_words = bootinfo.extraLen as usize;
+    if extra_words == 0 {
+        return None;
+    }
+
+    let word_bytes = core::mem::size_of::<sel4_sys::seL4_Word>();
+    let total_bytes = extra_words.checked_mul(word_bytes)?;
+
+    let base = bootinfo as *const _ as usize;
+    let header_bytes = core::mem::size_of::<sel4_sys::seL4_BootInfo>();
+    let start = base.checked_add(header_bytes)?;
+    let accessible = cmp::min(total_bytes, EARLY_DUMP_LIMIT);
+
+    // SAFETY: The kernel maps the bootinfo structure contiguously; we cap the
+    // exposed length to `EARLY_DUMP_LIMIT` to avoid walking unmapped pages.
+    let slice = unsafe { core::slice::from_raw_parts(start as *const u8, accessible) };
+    Some((slice, total_bytes))
+}
 
 #[cfg(target_arch = "aarch64")]
 static mut TLS_IMAGE: sel4_sys::TlsImage = sel4_sys::TlsImage::new();
@@ -209,19 +258,35 @@ pub fn start<P: Platform>(bootinfo: &'static BootInfo, platform: &P) -> ! {
 
 fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
     #[cfg(all(feature = "kernel", not(sel4_config_printing)))]
-    sel4::install_debug_sink();
+    crate::sel4::install_debug_sink();
 
     let mut console = DebugConsole::new(platform);
     console.writeln_prefixed("entered from seL4 (stage0)");
     console.writeln_prefixed("Cohesix boot: root-task online");
 
-    let bootinfo_ptr = core::ptr::from_ref(bootinfo).cast::<BootInfoHeader>();
-    console.report_bootinfo(bootinfo_ptr);
+    let bootinfo_ref: &'static sel4_sys::seL4_BootInfo = bootinfo;
+    console.report_bootinfo(bootinfo_ref);
 
     console.writeln_prefixed("Cohesix v0 (AArch64/virt)");
 
-    let bootinfo_ref: &'static sel4_sys::seL4_BootInfo = bootinfo;
     bootinfo_debug_dump(bootinfo_ref);
+    if let Some((extra_prefix, total_bytes)) = bootinfo_extra_prefix(bootinfo_ref) {
+        crate::trace::hex_dump("bootinfo.extra", extra_prefix, EARLY_DUMP_LIMIT);
+
+        if extra_prefix.len() >= 8 && extra_prefix.starts_with(&[0xd0, 0x0d, 0xfe, 0xed]) {
+            let totalsize = u32::from_be_bytes([
+                extra_prefix[4],
+                extra_prefix[5],
+                extra_prefix[6],
+                extra_prefix[7],
+            ]) as usize;
+            let dtb_total = cmp::min(totalsize, total_bytes);
+            let dtb_dump = cmp::min(extra_prefix.len(), cmp::min(dtb_total, EARLY_DUMP_LIMIT));
+            if dtb_dump > 0 {
+                crate::trace::hex_dump("fdt", &extra_prefix[..dtb_dump], EARLY_DUMP_LIMIT);
+            }
+        }
+    }
 
     let mut boot_cspace = CSpace::from_bootinfo(bootinfo_ref);
     let ep_slot = match ep::bootstrap_ep(bootinfo_ref, &mut boot_cspace) {
