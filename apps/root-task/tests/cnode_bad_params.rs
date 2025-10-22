@@ -5,6 +5,7 @@
 use core::mem::{self, MaybeUninit};
 
 use root_task::bootstrap::cspace::{BootInfoView, CSpaceCtx};
+use root_task::cspace::CSpace;
 use root_task::sel4::{
     self, seL4_CNode_Mint, seL4_CapInitThreadCNode, seL4_CapInitThreadTCB,
     seL4_CapRights_ReadWrite, seL4_NoError, seL4_SlotRegion,
@@ -39,7 +40,8 @@ fn bootinfo_fixture() -> &'static sel4::BootInfo {
 #[cfg(target_os = "none")]
 fn ctx_fixture() -> CSpaceCtx {
     let bootinfo = bootinfo_fixture();
-    CSpaceCtx::new(BootInfoView::new(bootinfo))
+    let cspace = CSpace::from_bootinfo(bootinfo);
+    CSpaceCtx::new(BootInfoView::new(bootinfo), cspace)
 }
 
 #[cfg(target_os = "none")]

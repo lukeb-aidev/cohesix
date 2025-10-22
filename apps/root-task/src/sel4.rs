@@ -293,6 +293,9 @@ pub trait BootInfoExt {
     /// Returns the writable init thread CNode capability exposed via the initial CSpace root slot.
     fn init_cnode_cap(&self) -> seL4_CPtr;
 
+    /// Returns the initial thread's TCB capability slot.
+    fn init_tcb_cap(&self) -> seL4_CPtr;
+
     /// Returns the guard depth (in bits) of the init thread's root CNode.
     fn init_cnode_depth(&self) -> u8;
 
@@ -310,6 +313,11 @@ impl BootInfoExt for seL4_BootInfo {
     #[inline(always)]
     fn init_cnode_cap(&self) -> seL4_CPtr {
         seL4_CapInitThreadCNode
+    }
+
+    #[inline(always)]
+    fn init_tcb_cap(&self) -> seL4_CPtr {
+        seL4_CapInitThreadTCB
     }
 
     #[inline(always)]
