@@ -110,6 +110,11 @@ impl Pl011 {
         }
     }
 
+    /// Convenience helper mirroring [`putc_blocking`] for API symmetry.
+    pub fn putc(&mut self, byte: u8) {
+        self.putc_blocking(byte);
+    }
+
     /// Flush pending characters until the UART is idle.
     pub fn flush(&mut self) {
         unsafe {
@@ -129,6 +134,73 @@ impl Pl011 {
             self.putc_blocking(byte);
         }
         self.flush();
+    }
+
+    /// Blocking read of a single byte from the RX FIFO.
+    pub fn getc_blocking(&mut self) -> u8 {
+        loop {
+            if let Some(byte) = self.try_getc() {
+                return byte;
+            }
+            core::hint::spin_loop();
+        }
+    }
+
+    /// Non-blocking attempt to read a byte from the RX FIFO.
+    pub fn try_getc(&mut self) -> Option<u8> {
+        let fr = unsafe { read_volatile(self.reg_fr()) };
+        if (fr & FR_RXFE) != 0 {
+            None
+        } else {
+            let data = unsafe { read_volatile(self.reg_dr()) };
+            Some((data & 0xFF) as u8)
+        }
+    }
+
+    /// Read a console line into the provided buffer, normalising CRLF.
+    pub fn read_line(&mut self, buf: &mut [u8]) -> usize {
+        let mut len = 0usize;
+        let mut lookahead: Option<u8> = None;
+
+        while len + 1 < buf.len() {
+            let byte = match lookahead.take() {
+                Some(value) => value,
+                None => self.getc_blocking(),
+            };
+
+            match byte {
+                b'\r' => {
+                    if let Some(next) = self.try_getc() {
+                        if next != b'\n' {
+                            lookahead = Some(next);
+                        }
+                    }
+                    self.write_str("\r\n");
+                    break;
+                }
+                b'\n' => {
+                    self.write_str("\r\n");
+                    break;
+                }
+                0x08 | 0x7f => {
+                    if len > 0 {
+                        len -= 1;
+                        self.write_str("\x08 \x08");
+                    }
+                }
+                byte => {
+                    buf[len] = byte;
+                    len += 1;
+                    self.putc_blocking(byte);
+                }
+            }
+        }
+
+        if len < buf.len() {
+            buf[len] = 0;
+        }
+
+        len
     }
 
     #[inline(always)]

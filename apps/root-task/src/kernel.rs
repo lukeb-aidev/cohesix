@@ -15,6 +15,7 @@ use crate::bootstrap::{
     pick_untyped,
     retype::retype_one,
 };
+use crate::console::Console;
 use crate::event::{AuditSink, EventPump, IpcDispatcher, TickEvent, TicketTable, TimerSource};
 #[cfg(feature = "net")]
 use crate::net::NetStack;
@@ -156,6 +157,46 @@ unsafe fn pl011_debug_emit(context: *mut (), byte: u8) {
     }
 
     ptr::write_volatile(dr, u32::from(byte));
+}
+
+/// Minimal blocking console loop used during early bring-up.
+pub fn start_console(mut uart: Pl011) -> ! {
+    let mut console = Console::new(uart);
+    let _ = writeln!(console, "[cohesix] console ready");
+    let mut buffer = [0u8; 256];
+
+    loop {
+        let _ = write!(console, "cohsh> ");
+        let count = console.read_line(&mut buffer);
+        let line = match core::str::from_utf8(&buffer[..count]) {
+            Ok(text) => text.trim(),
+            Err(_) => {
+                let _ = writeln!(console, "invalid utf-8 input");
+                continue;
+            }
+        };
+
+        if line.is_empty() {
+            continue;
+        }
+
+        if line.eq_ignore_ascii_case("help") {
+            let _ = writeln!(console, "commands: help, echo <txt>, reboot (stub)");
+            continue;
+        }
+
+        if let Some(rest) = line.strip_prefix("echo ") {
+            let _ = writeln!(console, "{}", rest);
+            continue;
+        }
+
+        if line.eq_ignore_ascii_case("reboot") {
+            let _ = writeln!(console, "reboot not implemented");
+            continue;
+        }
+
+        let _ = writeln!(console, "unknown: {}", line);
+    }
 }
 
 /// Root task entry point invoked by seL4 after kernel initialisation.
@@ -536,39 +577,48 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
         sel4_panicking::install_debug_sink(sink);
     }
     driver.write_str("[cohesix:root-task] uart logger online\n");
-    let serial =
-        SerialPort::<_, DEFAULT_RX_CAPACITY, DEFAULT_TX_CAPACITY, DEFAULT_LINE_CAPACITY>::new(
-            driver,
-        );
 
-    #[cfg(all(feature = "net", feature = "kernel"))]
-    let mut net_stack = NetStack::new(&mut env, Ipv4Address::new(10, 0, 0, 2));
-    #[cfg(all(feature = "net", not(feature = "kernel")))]
-    let (mut net_stack, _) = NetStack::new(Ipv4Address::new(10, 0, 0, 2));
-    let timer = KernelTimer::new(5);
-    let ipc = KernelIpc;
-    let mut tickets: TicketTable<4> = TicketTable::new();
-    let _ = tickets.register(Role::Queen, "bootstrap");
-    let _ = tickets.register(Role::WorkerHeartbeat, "worker");
-    let _ = tickets.register(Role::WorkerGpu, "worker-gpu");
-    #[cfg(feature = "net")]
-    console.writeln_prefixed("network stack initialised");
-    console.writeln_prefixed("initialising event pump");
-    let mut audit = ConsoleAudit::new(&mut console);
-    let mut pump = EventPump::new(serial, timer, ipc, tickets, &mut audit);
-
-    #[cfg(feature = "kernel")]
+    #[cfg(feature = "debug-input")]
     {
-        pump = pump.with_ninedoor(&mut ninedoor);
+        start_console(driver);
     }
 
-    #[cfg(feature = "net")]
+    #[cfg(not(feature = "debug-input"))]
     {
-        pump = pump.with_network(&mut net_stack);
-    }
+        let serial =
+            SerialPort::<_, DEFAULT_RX_CAPACITY, DEFAULT_TX_CAPACITY, DEFAULT_LINE_CAPACITY>::new(
+                driver,
+            );
 
-    loop {
-        pump.poll();
+        #[cfg(all(feature = "net", feature = "kernel"))]
+        let mut net_stack = NetStack::new(&mut env, Ipv4Address::new(10, 0, 0, 2));
+        #[cfg(all(feature = "net", not(feature = "kernel")))]
+        let (mut net_stack, _) = NetStack::new(Ipv4Address::new(10, 0, 0, 2));
+        let timer = KernelTimer::new(5);
+        let ipc = KernelIpc;
+        let mut tickets: TicketTable<4> = TicketTable::new();
+        let _ = tickets.register(Role::Queen, "bootstrap");
+        let _ = tickets.register(Role::WorkerHeartbeat, "worker");
+        let _ = tickets.register(Role::WorkerGpu, "worker-gpu");
+        #[cfg(feature = "net")]
+        console.writeln_prefixed("network stack initialised");
+        console.writeln_prefixed("initialising event pump");
+        let mut audit = ConsoleAudit::new(&mut console);
+        let mut pump = EventPump::new(serial, timer, ipc, tickets, &mut audit);
+
+        #[cfg(feature = "kernel")]
+        {
+            pump = pump.with_ninedoor(&mut ninedoor);
+        }
+
+        #[cfg(feature = "net")]
+        {
+            pump = pump.with_network(&mut net_stack);
+        }
+
+        loop {
+            pump.poll();
+        }
     }
 }
 

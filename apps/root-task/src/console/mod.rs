@@ -2,6 +2,11 @@
 
 //! Shared console command parser and rate limiter for the root task console.
 
+#[cfg(feature = "kernel")]
+mod io;
+#[cfg(feature = "kernel")]
+pub use io::Console;
+
 use core::fmt;
 
 use crate::platform::Platform;
