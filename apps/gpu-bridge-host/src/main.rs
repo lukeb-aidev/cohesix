@@ -9,7 +9,7 @@
 use anyhow::Result;
 use clap::{ArgAction, Parser};
 
-use gpu_bridge_host::{auto_bridge, SerialisedGpuNode};
+use gpu_bridge_host::{auto_bridge, namespace_to_json_pretty, SerialisedGpuNode};
 
 /// CLI arguments for the GPU bridge host tool.
 #[derive(Debug, Parser)]
@@ -28,7 +28,7 @@ fn main() -> Result<()> {
     let bridge = auto_bridge(args.mock)?;
     let namespace: Vec<SerialisedGpuNode> = bridge.serialise_namespace()?;
     if args.list {
-        println!("{}", serde_json::to_string_pretty(&namespace)?);
+        println!("{}", namespace_to_json_pretty(&namespace));
     }
     Ok(())
 }

@@ -9,8 +9,6 @@ publish = false
 anyhow = { workspace = true }
 clap = { workspace = true }
 cohesix-ticket = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
 nvml-wrapper = { version = "0.8", optional = true }
 
 [features]
