@@ -32,7 +32,7 @@ mod sel4_entry {
     pub extern "C" fn sel4_start(bootinfo: &'static BootInfo) -> ! {
         use root_task::platform::SeL4Platform;
 
-        let platform = SeL4Platform::new(bootinfo as *const _ as *const core::ffi::c_void);
+        let platform = SeL4Platform::new(core::ptr::from_ref(bootinfo).cast());
         root_task::kernel::start(bootinfo, &platform)
     }
 }

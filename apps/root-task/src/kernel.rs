@@ -10,12 +10,12 @@ use core::ptr;
 
 use cohesix_ticket::Role;
 
+use crate::boot::ep;
 use crate::bootstrap::{
     cspace::{BootInfoView, CSpaceCtx},
     pick_untyped,
     retype::retype_one,
 };
-use crate::caps::{retype_endpoint_into_slot, RootCaps};
 use crate::console::Console;
 use crate::cspace::{cap_rights_read_write_grant, CSpace};
 use crate::event::{AuditSink, EventPump, IpcDispatcher, TickEvent, TicketTable, TimerSource};
@@ -23,13 +23,12 @@ use crate::event::{AuditSink, EventPump, IpcDispatcher, TickEvent, TicketTable, 
 use crate::net::{NetStack, CONSOLE_TCP_PORT};
 use crate::platform::{Platform, SeL4Platform};
 use crate::sel4::{
-    bootinfo_debug_dump, error_name, first_regular_untyped, send_nonnull, BootInfo, BootInfoExt,
-    KernelEnv, RetypeKind, RetypeStatus,
+    bootinfo_debug_dump, error_name, send_guarded, BootInfo, BootInfoExt, KernelEnv, RetypeKind,
+    RetypeStatus,
 };
 use crate::serial::{
     pl011::Pl011, SerialPort, DEFAULT_LINE_CAPACITY, DEFAULT_RX_CAPACITY, DEFAULT_TX_CAPACITY,
 };
-use crate::trace::trace_ep;
 #[cfg(feature = "net-console")]
 use smoltcp::wire::Ipv4Address;
 
@@ -118,26 +117,6 @@ impl<'a, P: Platform> Write for DebugConsole<'a, P> {
         self.write_raw(s.as_bytes());
         Ok(())
     }
-}
-
-/// Allocates and retypes the root-task IPC endpoint prior to any seL4 invocations.
-pub fn bootstrap_ipc(bi: &sel4_sys::seL4_BootInfo) -> Result<RootCaps, sel4_sys::seL4_Error> {
-    let mut caps = RootCaps::from_bootinfo(bi);
-
-    let untyped = first_regular_untyped(bi).ok_or(sel4_sys::seL4_IllegalOperation)?;
-    let endpoint_slot = caps.alloc_slot()?;
-    retype_endpoint_into_slot(untyped, caps.cnode, endpoint_slot)?;
-    caps.endpoint = endpoint_slot;
-    trace_ep(endpoint_slot);
-
-    Ok(caps)
-}
-
-/// Issues the first IPC send once a valid endpoint capability has been provisioned.
-pub fn do_first_ipc(caps: &RootCaps) {
-    let ep = caps.endpoint;
-    let message = sel4_sys::seL4_MessageInfo::new(0, 0, 0, 0);
-    send_nonnull(ep, message);
 }
 
 /// Minimal projection of `seL4_BootInfo` used for early diagnostics.
@@ -236,7 +215,7 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
     console.writeln_prefixed("entered from seL4 (stage0)");
     console.writeln_prefixed("Cohesix boot: root-task online");
 
-    let bootinfo_ptr = bootinfo as *const BootInfo as *const BootInfoHeader;
+    let bootinfo_ptr = core::ptr::from_ref(bootinfo).cast::<BootInfoHeader>();
     console.report_bootinfo(bootinfo_ptr);
 
     console.writeln_prefixed("Cohesix v0 (AArch64/virt)");
@@ -244,20 +223,25 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
     let bootinfo_ref: &'static sel4_sys::seL4_BootInfo = bootinfo;
     bootinfo_debug_dump(bootinfo_ref);
 
-    let root_caps = match bootstrap_ipc(bootinfo_ref) {
-        Ok(caps) => caps,
+    let mut boot_cspace = CSpace::from_bootinfo(bootinfo_ref);
+    let ep_slot = match ep::bootstrap_ep(bootinfo_ref, &mut boot_cspace) {
+        Ok(ep_slot) => ep_slot,
         Err(err) => {
+            crate::trace::trace_fail(b"bootstrap_ep", err);
             let mut line = heapless::String::<160>::new();
             let _ = write!(
                 line,
-                "bootstrap_ipc failed: {} ({})",
+                "bootstrap_ep failed: {} ({})",
                 err as i32,
                 error_name(err)
             );
             console.writeln_prefixed(line.as_str());
-            panic!("bootstrap_ipc failed: {}", error_name(err));
+            panic!("bootstrap_ep failed: {}", error_name(err));
         }
     };
+
+    let first_msg = sel4_sys::seL4_MessageInfo::new(0, 0, 0, 0);
+    send_guarded(ep_slot, first_msg);
 
     unsafe {
         #[cfg(all(feature = "kernel", target_arch = "aarch64"))]
@@ -282,21 +266,7 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
         console.writeln_prefixed(msg.as_str());
     }
 
-    let mut boot_cspace = CSpace::from_bootinfo(bootinfo_ref);
-    if boot_cspace.next_free_slot() < root_caps.next_free {
-        match boot_cspace.alloc_slot() {
-            Ok(slot) => {
-                debug_assert_eq!(slot, root_caps.endpoint);
-            }
-            Err(err) => {
-                panic!(
-                    "failed to reserve endpoint slot in init CSpace: {} ({})",
-                    err,
-                    error_name(err)
-                );
-            }
-        }
-    }
+    debug_assert_eq!(ep_slot, ep::get_ep());
     let rights = cap_rights_read_write_grant();
 
     let tcb_copy_slot = match boot_cspace.alloc_slot() {
@@ -807,13 +777,16 @@ where
 {
     static FALLBACK_IPC_BUFFER: FallbackIpcBuffer = FallbackIpcBuffer::new();
 
-    let raw_ptr = bootinfo.ipcBuffer as *mut sel4_sys::seL4_IPCBuffer;
-    let (buffer_ptr, used_fallback) = if raw_ptr.is_null() {
+    let raw_ptr = match bootinfo.ipcBuffer as usize {
+        0 => None,
+        addr => Some(ptr::with_exposed_provenance_mut::<sel4_sys::seL4_IPCBuffer>(addr)),
+    };
+    let (buffer_ptr, used_fallback) = if let Some(ptr) = raw_ptr {
+        zero_ipc_buffer(ptr);
+        (ptr, false)
+    } else {
         let ptr = FALLBACK_IPC_BUFFER.zeroed_ptr();
         (ptr, true)
-    } else {
-        zero_ipc_buffer(raw_ptr);
-        (raw_ptr, false)
     };
 
     setter(buffer_ptr);

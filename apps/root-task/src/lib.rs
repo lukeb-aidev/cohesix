@@ -41,6 +41,10 @@ pub mod cspace;
 pub mod bootstrap;
 
 #[cfg(feature = "kernel")]
+/// Endpoint bootstrap primitives used during kernel bring-up.
+pub mod boot;
+
+#[cfg(feature = "kernel")]
 pub mod sel4;
 
 #[cfg(feature = "kernel")]
