@@ -2,7 +2,7 @@
 #![allow(unsafe_code)]
 
 use core::fmt::{self, Write};
-use sel4_sys::{seL4_CPtr, seL4_DebugPutChar};
+use sel4_sys::{seL4_CPtr, seL4_DebugPutChar, seL4_Error};
 
 /// [`Write`] implementation that forwards characters to [`seL4_DebugPutChar`].
 pub struct DebugPutc;
@@ -70,6 +70,45 @@ pub fn trace_ep(ep: seL4_CPtr) {
             seL4_DebugPutChar(HEX[value]);
         }
         seL4_DebugPutChar(b']');
+        seL4_DebugPutChar(b'\n');
+    }
+}
+
+/// Emits a debug trace describing a bootstrap failure tagged with the provided label.
+pub fn trace_fail(tag: &[u8], error: seL4_Error) {
+    unsafe {
+        for &byte in b"[fail:" {
+            seL4_DebugPutChar(byte);
+        }
+        for &byte in tag {
+            seL4_DebugPutChar(byte);
+        }
+        for &byte in b"] err=" {
+            seL4_DebugPutChar(byte);
+        }
+
+        let mut code = error as i32;
+        if code < 0 {
+            seL4_DebugPutChar(b'-');
+            code = -code;
+        }
+
+        let mut digits = [0u8; 10];
+        let mut index = digits.len();
+        let mut value = code as u32;
+        if value == 0 {
+            seL4_DebugPutChar(b'0');
+        } else {
+            while value > 0 {
+                index -= 1;
+                digits[index] = b'0' + (value % 10) as u8;
+                value /= 10;
+            }
+            for &digit in &digits[index..] {
+                seL4_DebugPutChar(digit);
+            }
+        }
+
         seL4_DebugPutChar(b'\n');
     }
 }

@@ -5,7 +5,11 @@
 #![allow(clippy::missing_panics_doc)]
 #![allow(unsafe_code)]
 
-use core::{arch::asm, fmt, mem, ptr::NonNull};
+use core::{
+    arch::asm,
+    fmt, mem,
+    ptr::{self, NonNull},
+};
 
 use heapless::Vec;
 pub use sel4_sys::{
@@ -53,15 +57,17 @@ pub fn first_regular_untyped(bi: &seL4_BootInfo) -> Option<seL4_CPtr> {
     })
 }
 
-/// Issues an seL4 send on the provided endpoint only when the capability is non-null.
+fn emit_null_ep_trace() {
+    for &byte in b"!null ep\n" {
+        debug_put_char(i32::from(byte));
+    }
+}
+
+/// Issues an seL4 send only when the endpoint capability is initialised.
 #[inline]
-pub fn send_nonnull(endpoint: seL4_CPtr, info: seL4_MessageInfo) {
-    debug_assert!(
-        endpoint != seL4_CapNull,
-        "endpoint capability must be initialised"
-    );
+pub fn send_guarded(endpoint: seL4_CPtr, info: seL4_MessageInfo) {
     if endpoint == seL4_CapNull {
-        log::error!("attempted seL4_Send on seL4_CapNull endpoint");
+        emit_null_ep_trace();
         return;
     }
 
@@ -70,15 +76,11 @@ pub fn send_nonnull(endpoint: seL4_CPtr, info: seL4_MessageInfo) {
     }
 }
 
-/// Issues an seL4 call on the provided endpoint only when the capability is non-null.
+/// Issues an seL4 call only when the endpoint capability is initialised.
 #[inline]
-pub fn call_nonnull(endpoint: seL4_CPtr, info: seL4_MessageInfo) -> seL4_MessageInfo {
-    debug_assert!(
-        endpoint != seL4_CapNull,
-        "endpoint capability must be initialised"
-    );
+pub fn call_guarded(endpoint: seL4_CPtr, info: seL4_MessageInfo) -> seL4_MessageInfo {
     if endpoint == seL4_CapNull {
-        log::error!("attempted seL4_Call on seL4_CapNull endpoint");
+        emit_null_ep_trace();
         return seL4_MessageInfo::new(0, 0, 0, 0);
     }
 
@@ -86,10 +88,10 @@ pub fn call_nonnull(endpoint: seL4_CPtr, info: seL4_MessageInfo) -> seL4_Message
         sel4_sys::seL4_CallWithMRs(
             endpoint,
             info,
-            core::ptr::null_mut(),
-            core::ptr::null_mut(),
-            core::ptr::null_mut(),
-            core::ptr::null_mut(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+            ptr::null_mut(),
         )
     }
 }
@@ -1299,7 +1301,8 @@ impl<'a> KernelEnv<'a> {
         Ok(DeviceFrame {
             cap: frame_slot,
             paddr,
-            ptr: NonNull::new(vaddr as *mut u8).expect("device mapping address must be non-null"),
+            ptr: NonNull::new(ptr::with_exposed_provenance_mut::<u8>(vaddr))
+                .expect("device mapping address must be non-null"),
         })
     }
 
@@ -1336,7 +1339,8 @@ impl<'a> KernelEnv<'a> {
         Ok(RamFrame {
             cap: frame_slot,
             paddr: reserved.paddr(),
-            ptr: NonNull::new(vaddr as *mut u8).expect("DMA mapping address must be non-null"),
+            ptr: NonNull::new(ptr::with_exposed_provenance_mut::<u8>(vaddr))
+                .expect("DMA mapping address must be non-null"),
         })
     }
 
