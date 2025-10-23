@@ -1,21 +1,22 @@
 // Author: Lukas Bower
 #![allow(dead_code)]
 
+use core::fmt::Write;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-use sel4_sys::{seL4_BootInfo, seL4_CPtr, seL4_Error, seL4_ObjectType};
+use sel4_sys::{seL4_BootInfo, seL4_CPtr, seL4_CapNull, seL4_Error, seL4_ObjectType};
 
-use crate::{caps::traced_retype_into_slot, cspace::CSpace, sel4};
+use crate::boot::bi_extra::first_regular_untyped_from_extra;
+use crate::caps::traced_retype_into_slot;
+use crate::cspace::CSpace;
+use crate::trace::{self, DebugPutc};
 
 static EP_SLOT: AtomicUsize = AtomicUsize::new(0);
 
 /// Records the live endpoint capability slot for later guarded IPC.
 #[inline]
 pub fn set_ep(ep: seL4_CPtr) {
-    debug_assert!(
-        ep != sel4_sys::seL4_CapNull,
-        "endpoint slot must be non-null"
-    );
+    debug_assert!(ep != seL4_CapNull, "endpoint slot must be non-null");
     EP_SLOT.store(ep as usize, Ordering::Release);
 }
 
@@ -28,11 +29,24 @@ pub fn get_ep() -> seL4_CPtr {
 
 /// One-shot endpoint bootstrap: pick a regular untyped, retype, publish, and trace.
 pub fn bootstrap_ep(bi: &seL4_BootInfo, cs: &mut CSpace) -> Result<seL4_CPtr, seL4_Error> {
-    if get_ep() != sel4_sys::seL4_CapNull {
+    if get_ep() != seL4_CapNull {
         return Ok(get_ep());
     }
 
-    let ut = sel4::first_regular_untyped(bi).ok_or(sel4_sys::seL4_IllegalOperation)?;
+    let (ut, desc) =
+        first_regular_untyped_from_extra(bi).ok_or(seL4_Error::seL4_IllegalOperation)?;
+
+    {
+        let mut writer = DebugPutc;
+        let _ = write!(
+            writer,
+            "[untyped: cap=0x{cap:x} size_bits={size_bits} is_device={is_device} paddr=0x{paddr:x}]\n",
+            cap = ut,
+            size_bits = desc.size_bits,
+            is_device = desc.is_device,
+            paddr = desc.paddr,
+        );
+    }
 
     let ep_slot = cs.alloc_slot()?;
 
@@ -45,6 +59,6 @@ pub fn bootstrap_ep(bi: &seL4_BootInfo, cs: &mut CSpace) -> Result<seL4_CPtr, se
     )?;
 
     set_ep(ep_slot);
-    crate::trace::trace_ep(ep_slot);
+    trace::trace_ep(ep_slot);
     Ok(ep_slot)
 }
