@@ -72,6 +72,24 @@ pub fn untyped_retype_invoc(
 ) -> sys::seL4_Error {
     #[cfg(target_os = "none")]
     {
+        let bootinfo = unsafe { &*sys::seL4_GetBootInfo() };
+        let init_cnode_bits = bootinfo.initThreadCNodeSizeBits as u8;
+        assert!(
+            depth_bits == init_cnode_bits,
+            "retype depth {} does not match initThreadCNodeSizeBits {}",
+            depth_bits,
+            init_cnode_bits
+        );
+        let empty_start = bootinfo.empty.start as sys::seL4_CPtr;
+        let empty_end = bootinfo.empty.end as sys::seL4_CPtr;
+        assert!(
+            dst_slot >= empty_start && dst_slot < empty_end,
+            "destination slot 0x{dst:04x} outside boot empty window [0x{lo:04x}..0x{hi:04x})",
+            dst = dst_slot,
+            lo = empty_start,
+            hi = empty_end,
+        );
+        check_slot_in_range(depth_bits, dst_slot);
         let depth = resolve_cnode_depth(depth_bits);
         unsafe {
             sys::seL4_Untyped_Retype(
@@ -79,9 +97,9 @@ pub fn untyped_retype_invoc(
                 obj_type,
                 size_bits,
                 dest_root,
-                dst_slot,
-                depth.as_word(),
                 0,
+                depth.as_word(),
+                dst_slot,
                 1,
             )
         }
