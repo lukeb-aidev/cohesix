@@ -30,3 +30,16 @@ fn guarded_ipc_reports_ep_not_ready() {
         Err(IpcError::EpNotReady)
     );
 }
+
+#[test]
+fn ep_ready_toggles_with_set_and_clear() {
+    sel4::clear_ep();
+    assert!(!sel4::ep_ready());
+
+    sel4::set_ep(0x1234);
+    assert!(sel4::ep_ready());
+    assert_eq!(sel4::root_endpoint(), 0x1234);
+
+    sel4::clear_ep();
+    assert!(!sel4::ep_ready());
+}

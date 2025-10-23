@@ -513,6 +513,9 @@ pub trait BootInfoExt {
 
     /// Returns the extra bootinfo region emitted by the kernel as a byte slice.
     fn extra_bytes(&self) -> &[u8];
+
+    /// Returns the init thread's IPC buffer pointer when supplied by the kernel.
+    fn ipc_buffer_ptr(&self) -> Option<NonNull<sel4_sys::seL4_IPCBuffer>>;
 }
 
 impl BootInfoExt for seL4_BootInfo {
@@ -588,6 +591,11 @@ impl BootInfoExt for seL4_BootInfo {
         // `total_bytes` bytes as reported by the kernel. The addition above guards against
         // address overflow when the bootinfo pointer is interpreted as an integer.
         unsafe { core::slice::from_raw_parts(extra_start, total_bytes) }
+    }
+
+    fn ipc_buffer_ptr(&self) -> Option<NonNull<sel4_sys::seL4_IPCBuffer>> {
+        let ptr = self.ipcBuffer as *mut sel4_sys::seL4_IPCBuffer;
+        NonNull::new(ptr)
     }
 }
 
