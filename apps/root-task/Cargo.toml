@@ -67,3 +67,6 @@ secure9p-wire = { workspace = true }
 tempfile = "3.10"
 trybuild = "1.0"
 
+[build-dependencies]
+regex = "1.10"
+

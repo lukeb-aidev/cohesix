@@ -8,6 +8,8 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use regex::Regex;
+
 #[path = "build_support.rs"]
 mod build_support;
 
@@ -15,7 +17,7 @@ use build_support::{classify_linker_script, LinkerScriptKind};
 
 const IPC_GUARD_SOURCE: &str = "apps/root-task/src";
 const IPC_GUARD_ALLOW: &str = "sel4.rs";
-const IPC_GUARD_PATTERNS: &[&str] = &["seL4_Send(", "seL4_Call(", "ReplyRecv("];
+const IPC_GUARD_PATTERN: &str = r"\bseL4_(Send|Call|ReplyRecv)\s*\(";
 
 const CONFIG_CANDIDATES: &[&str] = &[
     ".config",
@@ -470,14 +472,15 @@ fn parse_bool_token(token: &str) -> Option<bool> {
 }
 
 fn enforce_guarded_ipc() -> io::Result<()> {
-    scan_ipc_directory(Path::new(IPC_GUARD_SOURCE))
+    let regex = Regex::new(IPC_GUARD_PATTERN).expect("valid IPC guard regex");
+    scan_ipc_directory(Path::new(IPC_GUARD_SOURCE), &regex)
 }
 
-fn scan_ipc_directory(path: &Path) -> io::Result<()> {
+fn scan_ipc_directory(path: &Path, regex: &Regex) -> io::Result<()> {
     if path.is_dir() {
         for entry in fs::read_dir(path)? {
             let entry = entry?;
-            scan_ipc_directory(&entry.path())?;
+            scan_ipc_directory(&entry.path(), regex)?;
         }
         return Ok(());
     }
@@ -496,14 +499,11 @@ fn scan_ipc_directory(path: &Path) -> io::Result<()> {
     }
 
     let contents = fs::read_to_string(path)?;
-    for pattern in IPC_GUARD_PATTERNS {
-        if contents.contains(pattern) {
-            panic!(
-                "Forbidden `{}` in {} — use guarded wrapper",
-                pattern,
-                path.display()
-            );
-        }
+    if regex.is_match(&contents) {
+        panic!(
+            "Forbidden raw seL4 IPC in {} — use guarded wrapper",
+            path.display()
+        );
     }
 
     Ok(())

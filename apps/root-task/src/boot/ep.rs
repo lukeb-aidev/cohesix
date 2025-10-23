@@ -1,6 +1,5 @@
 // Author: Lukas Bower
 #![allow(dead_code)]
-use core::sync::atomic::{AtomicUsize, Ordering};
 
 use sel4_sys::{
     seL4_BootInfo, seL4_CPtr, seL4_CapInitThreadCNode, seL4_CapNull, seL4_Error,
@@ -10,28 +9,12 @@ use sel4_sys::{
 use crate::boot::bi_extra::first_regular_untyped_from_extra;
 use crate::caps::traced_retype_into_slot;
 use crate::cspace::CSpace;
-use crate::sel4::BootInfoExt;
-
-static EP_SLOT: AtomicUsize = AtomicUsize::new(0);
-
-/// Records the live endpoint capability slot for later guarded IPC.
-#[inline]
-pub fn set_ep(ep: seL4_CPtr) {
-    debug_assert!(ep != seL4_CapNull, "endpoint slot must be non-null");
-    EP_SLOT.store(ep as usize, Ordering::Release);
-}
-
-/// Returns the published endpoint capability slot if initialised, otherwise `seL4_CapNull`.
-#[inline]
-#[must_use]
-pub fn get_ep() -> seL4_CPtr {
-    EP_SLOT.load(Ordering::Acquire) as seL4_CPtr
-}
+use crate::sel4::{self, BootInfoExt};
 
 /// One-shot endpoint bootstrap: pick a regular untyped, retype, publish, and trace.
 pub fn bootstrap_ep(bi: &seL4_BootInfo, cs: &mut CSpace) -> Result<seL4_CPtr, seL4_Error> {
-    if get_ep() != seL4_CapNull {
-        return Ok(get_ep());
+    if sel4::ep_ready() {
+        return Ok(sel4::root_endpoint());
     }
 
     let (ut, desc) = first_regular_untyped_from_extra(bi).ok_or(seL4_IllegalOperation)?;

@@ -38,6 +38,7 @@ Commands do not currently stream structured responses. Instead the
 `AuditSink` implementation writes prefixed audit lines to the seL4 debug
 console (visible on the QEMU serial log) while NineDoor forwarding stubs
 mirror accepted verbs for future integration. 【F:apps/root-task/src/event/mod.rs†L314-L347】【F:apps/root-task/src/ninedoor.rs†L15-L63】
+Early boot traces always use the UART path; the IPC sink remains disabled until `sel4::ep_ready()` publishes the root endpoint, preventing send-phase faults. 【F:apps/root-task/src/trace.rs†L10-L62】【F:apps/root-task/src/sel4.rs†L74-L154】
 
 ## 3. Example Sessions
 The host-mode harness demonstrates the exact command sequence exercised

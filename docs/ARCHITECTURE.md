@@ -10,6 +10,7 @@
 1. **seL4 Bootstraps** using the external elfloader and enters the Cohesix root task entry point.
 2. **Root Task Initialisation**
    - Configures serial logging and prints the boot banner.
+   - Publishes the root endpoint before any IPC attempt and routes all calls through guarded helpers that refuse to touch seL4 syscalls until the endpoint is live. 【F:apps/root-task/src/kernel.rs†L241-L275】【F:apps/root-task/src/sel4.rs†L74-L154】
    - Establishes a periodic timer and registers IRQ handlers.
    - Constructs the cooperative event pump that rotates through serial RX/TX, timer ticks, networking polls (behind the `net`
      feature), and IPC dispatch without relying on busy waits.

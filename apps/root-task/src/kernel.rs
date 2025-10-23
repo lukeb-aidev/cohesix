@@ -24,8 +24,8 @@ use crate::event::{AuditSink, EventPump, IpcDispatcher, TickEvent, TicketTable, 
 use crate::net::{NetStack, CONSOLE_TCP_PORT};
 use crate::platform::{Platform, SeL4Platform};
 use crate::sel4::{
-    bootinfo_debug_dump, error_name, send_guarded, BootInfo, BootInfoExt, KernelEnv, RetypeKind,
-    RetypeStatus,
+    bootinfo_debug_dump, error_name, root_endpoint, send_guarded, set_ep, BootInfo, BootInfoExt,
+    IpcError, KernelEnv, RetypeKind, RetypeStatus,
 };
 use crate::serial::{
     pl011::Pl011, SerialPort, DEFAULT_LINE_CAPACITY, DEFAULT_RX_CAPACITY, DEFAULT_TX_CAPACITY,
@@ -245,24 +245,6 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
 
     let mut boot_cspace = CSpace::from_bootinfo(bootinfo_ref);
     let boot_first_free = boot_cspace.next_free_slot();
-    let ep_slot = match ep::bootstrap_ep(bootinfo_ref, &mut boot_cspace) {
-        Ok(ep_slot) => ep_slot,
-        Err(err) => {
-            crate::trace::trace_fail(b"bootstrap_ep", err);
-            let mut line = heapless::String::<160>::new();
-            let _ = write!(
-                line,
-                "bootstrap_ep failed: {} ({})",
-                err as i32,
-                error_name(err)
-            );
-            console.writeln_prefixed(line.as_str());
-            panic!("bootstrap_ep failed: {}", error_name(err));
-        }
-    };
-
-    ep::set_ep(ep_slot);
-    crate::trace::trace_ep(ep_slot);
 
     console.writeln_prefixed("entered from seL4 (stage0)");
     console.writeln_prefixed("Cohesix boot: root-task online");
@@ -300,8 +282,34 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
         }
     }
 
+    let ep_slot = match ep::bootstrap_ep(bootinfo_ref, &mut boot_cspace) {
+        Ok(ep_slot) => ep_slot,
+        Err(err) => {
+            crate::trace::trace_fail(b"bootstrap_ep", err);
+            let mut line = heapless::String::<160>::new();
+            let _ = write!(
+                line,
+                "bootstrap_ep failed: {} ({})",
+                err as i32,
+                error_name(err)
+            );
+            console.writeln_prefixed(line.as_str());
+            panic!("bootstrap_ep failed: {}", error_name(err));
+        }
+    };
+
+    set_ep(ep_slot);
+    crate::trace::trace_ep(ep_slot);
+    console.writeln_prefixed("[boot] EP ready");
+
     let first_msg = sel4_sys::seL4_MessageInfo::new(0, 0, 0, 0);
-    send_guarded(ep_slot, first_msg);
+    if let Err(err) = send_guarded(first_msg) {
+        match err {
+            IpcError::EpNotReady => {
+                console.writeln_prefixed("root endpoint not ready during bootstrap send");
+            }
+        }
+    }
 
     unsafe {
         #[cfg(all(feature = "kernel", target_arch = "aarch64"))]
@@ -326,7 +334,7 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
         console.writeln_prefixed(msg.as_str());
     }
 
-    debug_assert_eq!(ep_slot, ep::get_ep());
+    debug_assert_eq!(ep_slot, root_endpoint());
     let rights = cap_rights_read_write_grant();
 
     let tcb_copy_slot = match boot_cspace.alloc_slot() {
