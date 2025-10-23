@@ -491,7 +491,13 @@ impl BootInfoExt for seL4_BootInfo {
     #[inline(always)]
     fn header_bytes(&self) -> &[u8] {
         let header = core::slice::from_ref(self);
-        let (prefix, bytes, suffix) = header.align_to::<u8>();
+        let (prefix, bytes, suffix) = unsafe {
+            // SAFETY: `u8` has an alignment requirement of 1, therefore every
+            // possible pointer value is aligned for `u8`. The slice produced by
+            // `from_ref` is naturally aligned for `seL4_BootInfo`, so casting it
+            // to `u8` elements cannot violate alignment guarantees.
+            header.align_to::<u8>()
+        };
         debug_assert!(prefix.is_empty(), "bootinfo header must be aligned to u8");
         debug_assert!(
             suffix.is_empty(),
