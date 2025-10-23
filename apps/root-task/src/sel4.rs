@@ -21,8 +21,8 @@ pub use sel4_sys::{
     seL4_CapInitThreadIPCBuffer, seL4_CapInitThreadSC, seL4_CapInitThreadTCB,
     seL4_CapInitThreadVSpace, seL4_CapNull, seL4_CapRights, seL4_CapRights_All,
     seL4_CapRights_ReadWrite, seL4_CapSMC, seL4_CapSMMUCBControl, seL4_CapSMMUSIDControl,
-    seL4_Error, seL4_MessageInfo, seL4_NoError, seL4_NotEnoughMemory, seL4_RangeError,
-    seL4_Untyped, seL4_Untyped_Retype, seL4_Word,
+    seL4_Error, seL4_GetBootInfo, seL4_MessageInfo, seL4_NoError, seL4_NotEnoughMemory,
+    seL4_RangeError, seL4_Untyped, seL4_Untyped_Retype, seL4_Word,
 };
 
 /// Canonical capability rights representation exposed by seL4.
