@@ -1,7 +1,5 @@
 // Author: Lukas Bower
 #![allow(dead_code)]
-
-use core::fmt::Write;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 use sel4_sys::{
@@ -11,7 +9,6 @@ use sel4_sys::{
 use crate::boot::bi_extra::first_regular_untyped_from_extra;
 use crate::caps::traced_retype_into_slot;
 use crate::cspace::CSpace;
-use crate::trace::{self, DebugPutc};
 
 static EP_SLOT: AtomicUsize = AtomicUsize::new(0);
 
@@ -37,17 +34,13 @@ pub fn bootstrap_ep(bi: &seL4_BootInfo, cs: &mut CSpace) -> Result<seL4_CPtr, se
 
     let (ut, desc) = first_regular_untyped_from_extra(bi).ok_or(seL4_IllegalOperation)?;
 
-    {
-        let mut writer = DebugPutc;
-        let _ = write!(
-            writer,
-            "[untyped: cap=0x{cap:x} size_bits={size_bits} is_device={is_device} paddr=0x{paddr:x}]\n",
-            cap = ut,
-            size_bits = desc.size_bits,
-            is_device = desc.is_device,
-            paddr = desc.paddr,
-        );
-    }
+    crate::trace::println!(
+        "[untyped: cap=0x{cap:x} size_bits={size_bits} is_device={is_device} paddr=0x{paddr:x}]",
+        cap = ut,
+        size_bits = desc.size_bits,
+        is_device = desc.is_device,
+        paddr = desc.paddr,
+    );
 
     let ep_slot = cs.alloc_slot()?;
 
@@ -59,7 +52,5 @@ pub fn bootstrap_ep(bi: &seL4_BootInfo, cs: &mut CSpace) -> Result<seL4_CPtr, se
         ep_slot,
     )?;
 
-    set_ep(ep_slot);
-    trace::trace_ep(ep_slot);
     Ok(ep_slot)
 }

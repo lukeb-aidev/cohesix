@@ -2,7 +2,7 @@
 #![allow(unsafe_code)]
 
 use core::cmp;
-use core::fmt::{self, Write};
+use core::fmt::{self, Arguments, Write};
 use sel4_sys::{seL4_CPtr, seL4_DebugPutChar, seL4_Error};
 
 /// [`Write`] implementation that forwards characters to [`seL4_DebugPutChar`].
@@ -18,6 +18,21 @@ impl Write for DebugPutc {
         Ok(())
     }
 }
+
+#[inline]
+pub(crate) fn println_args(args: Arguments<'_>) {
+    let mut writer = DebugPutc;
+    let _ = writer.write_fmt(args);
+    let _ = writer.write_char('\n');
+}
+
+macro_rules! trace_println {
+    ($($arg:tt)*) => {{
+        $crate::trace::println_args(core::format_args!($($arg)*));
+    }};
+}
+
+pub(crate) use trace_println as println;
 
 /// Formats the provided [`u64`] value as a fixed-width hexadecimal literal.
 #[inline]

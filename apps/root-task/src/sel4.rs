@@ -58,8 +58,18 @@ pub fn first_regular_untyped(bi: &seL4_BootInfo) -> Option<seL4_CPtr> {
 }
 
 fn emit_null_ep_trace() {
-    for &byte in b"!null ep\n" {
-        debug_put_char(i32::from(byte));
+    #[cfg(feature = "kernel")]
+    unsafe {
+        for &byte in b"!null ep\n" {
+            seL4_DebugPutChar(byte);
+        }
+    }
+
+    #[cfg(not(feature = "kernel"))]
+    {
+        for &byte in b"!null ep\n" {
+            debug_put_char(i32::from(byte));
+        }
     }
 }
 
@@ -71,9 +81,7 @@ pub fn send_guarded(endpoint: seL4_CPtr, info: seL4_MessageInfo) {
         return;
     }
 
-    unsafe {
-        sel4_sys::seL4_Send(endpoint, info);
-    }
+    unsafe { sel4_sys::seL4_Send(endpoint, info) }
 }
 
 /// Issues an seL4 call only when the endpoint capability is initialised.
@@ -114,7 +122,9 @@ pub fn debug_put_char(ch: i32) {
 #[inline(always)]
 pub fn install_debug_sink() {
     unsafe extern "C" fn emit(_ctx: *mut (), byte: u8) {
-        seL4_DebugPutChar(byte);
+        unsafe {
+            seL4_DebugPutChar(byte);
+        }
     }
 
     let sink = DebugSink {
@@ -138,18 +148,20 @@ pub fn debug_put_char(_ch: i32) {}
 /// Executes the `DebugPutChar` seL4 syscall to emit a byte on the debug console.
 pub unsafe extern "C" fn seL4_DebugPutChar(byte: u8) {
     const SYS_DEBUG_PUT_CHAR: u64 = (!0u64).wrapping_sub(8); // -9
-    asm!(
-        "svc #0",
-        in("x0") u64::from(byte),
-        lateout("x1") _,
-        lateout("x2") _,
-        lateout("x3") _,
-        lateout("x4") _,
-        lateout("x5") _,
-        lateout("x6") _,
-        in("x7") SYS_DEBUG_PUT_CHAR,
-        options(nostack, preserves_flags),
-    );
+    unsafe {
+        asm!(
+            "svc #0",
+            in("x0") u64::from(byte),
+            lateout("x1") _,
+            lateout("x2") _,
+            lateout("x3") _,
+            lateout("x4") _,
+            lateout("x5") _,
+            lateout("x6") _,
+            in("x7") SYS_DEBUG_PUT_CHAR,
+            options(nostack, preserves_flags),
+        );
+    }
 }
 
 #[cfg(all(feature = "kernel", target_arch = "aarch64", sel4_config_debug_build))]
@@ -165,18 +177,20 @@ pub unsafe extern "C" fn seL4_DebugCapIdentify(slot: seL4_CPtr) -> u32 {
     let mut mr2 = 0usize;
     let mut mr3 = 0usize;
 
-    asm!(
-        "svc #0",
-        inout("x0") badge,
-        inout("x1") info,
-        inout("x2") mr0,
-        inout("x3") mr1,
-        inout("x4") mr2,
-        inout("x5") mr3,
-        lateout("x6") _,
-        in("x7") SYS_DEBUG_CAP_IDENTIFY as usize,
-        options(nostack, preserves_flags),
-    );
+    unsafe {
+        asm!(
+            "svc #0",
+            inout("x0") badge,
+            inout("x1") info,
+            inout("x2") mr0,
+            inout("x3") mr1,
+            inout("x4") mr2,
+            inout("x5") mr3,
+            lateout("x6") _,
+            in("x7") SYS_DEBUG_CAP_IDENTIFY as usize,
+            options(nostack, preserves_flags),
+        );
+    }
 
     // Acknowledge the post-syscall register values to silence compiler warnings while retaining
     // the historical semantics of this debug helper.
@@ -376,7 +390,7 @@ unsafe fn sel4_debug_poll_char() -> i32 {
         fn seL4_DebugPollChar() -> i32;
     }
 
-    seL4_DebugPollChar()
+    unsafe { seL4_DebugPollChar() }
 }
 
 fn objtype_name(t: seL4_Word) -> &'static str {

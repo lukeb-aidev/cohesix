@@ -2,6 +2,7 @@
 #![cfg_attr(feature = "kernel", no_std)]
 #![cfg_attr(feature = "kernel", no_main)]
 #![deny(unsafe_code)]
+#![deny(unsafe_op_in_unsafe_fn)]
 #![warn(missing_docs)]
 #![doc = "Root task entry points for host and seL4 builds."]
 
