@@ -9,8 +9,10 @@ use core::{
     arch::asm,
     fmt, mem,
     ptr::{self, NonNull},
+    sync::atomic::{AtomicUsize, Ordering},
 };
 
+use crate::serial;
 use heapless::Vec;
 pub use sel4_sys::{
     seL4_AllRights, seL4_CNode, seL4_CNode_Copy, seL4_CNode_Delete, seL4_CNode_Mint, seL4_CPtr,
@@ -57,51 +59,107 @@ pub fn first_regular_untyped(bi: &seL4_BootInfo) -> Option<seL4_CPtr> {
     })
 }
 
-fn emit_null_ep_trace() {
-    #[cfg(feature = "kernel")]
-    unsafe {
-        for &byte in b"!null ep\n" {
-            seL4_DebugPutChar(byte);
+static ROOT_ENDPOINT: AtomicUsize = AtomicUsize::new(0);
+
+/// Error returned when guarded IPC cannot proceed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IpcError {
+    /// The root endpoint has not been published yet.
+    EpNotReady,
+}
+
+impl fmt::Display for IpcError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::EpNotReady => write!(f, "root endpoint not published"),
         }
     }
+}
 
-    #[cfg(not(feature = "kernel"))]
-    {
-        for &byte in b"!null ep\n" {
-            debug_put_char(i32::from(byte));
-        }
+/// Publish the root endpoint capability once it has been retyped.
+#[inline]
+pub fn set_ep(ep: seL4_CPtr) {
+    debug_assert!(ep != seL4_CapNull, "endpoint slot must be non-null");
+    ROOT_ENDPOINT.store(ep as usize, Ordering::Release);
+}
+
+/// Clear the root endpoint pointer. Intended for tests.
+#[inline]
+pub fn clear_ep() {
+    ROOT_ENDPOINT.store(0, Ordering::Release);
+}
+
+/// Returns the currently published root endpoint capability, if any.
+#[inline]
+#[must_use]
+pub fn root_endpoint() -> seL4_CPtr {
+    ROOT_ENDPOINT.load(Ordering::Acquire) as seL4_CPtr
+}
+
+/// Returns `true` when the root endpoint has been published.
+#[inline]
+#[must_use]
+pub fn ep_ready() -> bool {
+    root_endpoint() != seL4_CapNull
+}
+
+#[inline(never)]
+fn ensure_endpoint() -> Result<seL4_CPtr, IpcError> {
+    let endpoint = root_endpoint();
+    if endpoint == seL4_CapNull {
+        serial::puts_once("[ipc] EP not ready; dropping\n");
+        Err(IpcError::EpNotReady)
+    } else {
+        Ok(endpoint)
     }
 }
 
 /// Issues an seL4 send only when the endpoint capability is initialised.
-#[inline]
-pub fn send_guarded(endpoint: seL4_CPtr, info: seL4_MessageInfo) {
-    if endpoint == seL4_CapNull {
-        emit_null_ep_trace();
-        return;
-    }
-
-    unsafe { sel4_sys::seL4_Send(endpoint, info) }
+#[inline(never)]
+pub fn send_guarded(info: seL4_MessageInfo) -> Result<(), IpcError> {
+    let endpoint = ensure_endpoint()?;
+    unsafe { sel4_sys::seL4_Send(endpoint, info) };
+    Ok(())
 }
 
 /// Issues an seL4 call only when the endpoint capability is initialised.
-#[inline]
-pub fn call_guarded(endpoint: seL4_CPtr, info: seL4_MessageInfo) -> seL4_MessageInfo {
-    if endpoint == seL4_CapNull {
-        emit_null_ep_trace();
-        return seL4_MessageInfo::new(0, 0, 0, 0);
+#[inline(never)]
+pub fn call_guarded(
+    info: seL4_MessageInfo,
+    mr0: Option<&mut seL4_Word>,
+    mr1: Option<&mut seL4_Word>,
+    mr2: Option<&mut seL4_Word>,
+    mr3: Option<&mut seL4_Word>,
+) -> Result<seL4_MessageInfo, IpcError> {
+    let endpoint = ensure_endpoint()?;
+    let m0 = mr0.map_or(ptr::null_mut(), |mr| mr as *mut seL4_Word);
+    let m1 = mr1.map_or(ptr::null_mut(), |mr| mr as *mut seL4_Word);
+    let m2 = mr2.map_or(ptr::null_mut(), |mr| mr as *mut seL4_Word);
+    let m3 = mr3.map_or(ptr::null_mut(), |mr| mr as *mut seL4_Word);
+    let info = unsafe { sel4_sys::seL4_CallWithMRs(endpoint, info, m0, m1, m2, m3) };
+    Ok(info)
+}
+
+/// Issues an seL4 reply+receive cycle only when the endpoint is initialised.
+#[inline(never)]
+pub fn replyrecv_guarded(
+    info: seL4_MessageInfo,
+    badge: Option<&mut seL4_Word>,
+) -> Result<seL4_MessageInfo, IpcError> {
+    let endpoint = ensure_endpoint()?;
+    let badge_ptr = badge.map_or(ptr::null_mut(), |b| b as *mut seL4_Word);
+
+    #[allow(non_snake_case)]
+    unsafe extern "C" {
+        fn seL4_ReplyRecv(
+            dest: seL4_CPtr,
+            msg_info: seL4_MessageInfo,
+            sender_badge: *mut seL4_Word,
+        ) -> seL4_MessageInfo;
     }
 
-    unsafe {
-        sel4_sys::seL4_CallWithMRs(
-            endpoint,
-            info,
-            ptr::null_mut(),
-            ptr::null_mut(),
-            ptr::null_mut(),
-            ptr::null_mut(),
-        )
-    }
+    let message = unsafe { seL4_ReplyRecv(endpoint, info, badge_ptr) };
+    Ok(message)
 }
 
 /// Returns the addressing depth (in bits) of the init thread's root CNode.

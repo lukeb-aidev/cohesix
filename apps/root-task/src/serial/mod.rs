@@ -20,10 +20,44 @@ use embedded_io::{Error as EmbeddedError, ErrorKind, Io};
 use heapless::{spsc::Queue, String as HeaplessString};
 use nb::Error as NbError;
 use portable_atomic::AtomicU32;
+#[cfg(feature = "kernel")]
+use portable_atomic::{AtomicU64, Ordering as AtomicOrdering};
 
 #[cfg(feature = "kernel")]
 pub mod pl011;
 pub mod virtio;
+
+#[cfg(feature = "kernel")]
+/// Emit a string to the seL4 debug console using [`crate::sel4::debug_put_char`].
+pub fn puts(message: &str) {
+    for &byte in message.as_bytes() {
+        crate::sel4::debug_put_char(i32::from(byte));
+    }
+}
+
+#[cfg(not(feature = "kernel"))]
+/// Host-mode stub used when the seL4 debug console is unavailable.
+#[allow(dead_code)]
+pub fn puts(_message: &str) {}
+
+#[cfg(feature = "kernel")]
+/// Emit a message at most once, keyed by the pointer to the `&'static str`.
+pub fn puts_once(message: &'static str) {
+    static SEEN: AtomicU64 = AtomicU64::new(0);
+
+    let ptr = message.as_ptr() as usize;
+    let index = ((ptr >> 3) & 63) as u32;
+    let mask = 1u64 << index;
+    let prev = SEEN.fetch_or(mask, AtomicOrdering::Relaxed);
+    if prev & mask == 0 {
+        puts(message);
+    }
+}
+
+#[cfg(not(feature = "kernel"))]
+/// Host-mode stub used when the seL4 debug console is unavailable.
+#[allow(dead_code)]
+pub fn puts_once(_message: &'static str) {}
 
 /// Capacity of the RX staging queue used by [`SerialPort`].
 pub const DEFAULT_RX_CAPACITY: usize = 256;
