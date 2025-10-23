@@ -2,14 +2,15 @@
 #![allow(dead_code)]
 
 use sel4_sys::{
-    seL4_BootInfo, seL4_CPtr, seL4_CapInitThreadCNode, seL4_CapNull, seL4_Error,
-    seL4_IllegalOperation, seL4_ObjectType,
+    seL4_BootInfo, seL4_CPtr, seL4_CapInitThreadCNode, seL4_Error, seL4_IllegalOperation,
+    seL4_ObjectType,
 };
 
 use crate::boot::bi_extra::first_regular_untyped_from_extra;
 use crate::caps::traced_retype_into_slot;
 use crate::cspace::CSpace;
 use crate::sel4::{self, BootInfoExt};
+use crate::serial;
 
 /// One-shot endpoint bootstrap: pick a regular untyped, retype, publish, and trace.
 pub fn bootstrap_ep(bi: &seL4_BootInfo, cs: &mut CSpace) -> Result<seL4_CPtr, seL4_Error> {
@@ -64,6 +65,9 @@ pub fn bootstrap_ep(bi: &seL4_BootInfo, cs: &mut CSpace) -> Result<seL4_CPtr, se
         node_depth,
         ep_slot,
     )?;
+
+    sel4::set_ep(ep_slot);
+    serial::puts("[boot] EP ready\n");
 
     Ok(ep_slot)
 }

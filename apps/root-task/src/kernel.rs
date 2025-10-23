@@ -2,10 +2,7 @@
 #![allow(dead_code)]
 #![allow(unsafe_code)]
 
-use core::cell::UnsafeCell;
-use core::cmp;
 use core::fmt::{self, Write};
-use core::mem::{self, MaybeUninit};
 use core::panic::PanicInfo;
 use core::ptr;
 
@@ -24,8 +21,8 @@ use crate::event::{AuditSink, EventPump, IpcDispatcher, TickEvent, TicketTable, 
 use crate::net::{NetStack, CONSOLE_TCP_PORT};
 use crate::platform::{Platform, SeL4Platform};
 use crate::sel4::{
-    bootinfo_debug_dump, error_name, root_endpoint, send_guarded, set_ep, BootInfo, BootInfoExt,
-    IpcError, KernelEnv, RetypeKind, RetypeStatus,
+    bootinfo_debug_dump, error_name, root_endpoint, BootInfo, BootInfoExt, KernelEnv, RetypeKind,
+    RetypeStatus,
 };
 use crate::serial::{
     pl011::Pl011, SerialPort, DEFAULT_LINE_CAPACITY, DEFAULT_RX_CAPACITY, DEFAULT_TX_CAPACITY,
@@ -264,22 +261,9 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
     console.writeln_prefixed("Cohesix v0 (AArch64/virt)");
 
     bootinfo_debug_dump(bootinfo_ref);
-    if let Some((extra_prefix, total_bytes)) =
-        bi_extra::dump_bootinfo(bootinfo_ref, EARLY_DUMP_LIMIT)
-    {
-        if extra_prefix.len() >= 8 && extra_prefix.starts_with(&[0xd0, 0x0d, 0xfe, 0xed]) {
-            let totalsize = u32::from_be_bytes([
-                extra_prefix[4],
-                extra_prefix[5],
-                extra_prefix[6],
-                extra_prefix[7],
-            ]) as usize;
-            let dtb_total = cmp::min(totalsize, total_bytes);
-            let dtb_dump = cmp::min(extra_prefix.len(), cmp::min(dtb_total, EARLY_DUMP_LIMIT));
-            if dtb_dump > 0 {
-                crate::trace::hex_dump_slice("fdt", &extra_prefix[..dtb_dump], EARLY_DUMP_LIMIT);
-            }
-        }
+    let extra_bytes = bootinfo_ref.extra_bytes();
+    if !extra_bytes.is_empty() {
+        console.writeln_prefixed("[boot] deferring DTB parse");
     }
 
     let ep_slot = match ep::bootstrap_ep(bootinfo_ref, &mut boot_cspace) {
@@ -298,18 +282,9 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
         }
     };
 
-    set_ep(ep_slot);
     crate::trace::trace_ep(ep_slot);
-    console.writeln_prefixed("[boot] EP ready");
 
-    let first_msg = sel4_sys::seL4_MessageInfo::new(0, 0, 0, 0);
-    if let Err(err) = send_guarded(first_msg) {
-        match err {
-            IpcError::EpNotReady => {
-                console.writeln_prefixed("root endpoint not ready during bootstrap send");
-            }
-        }
-    }
+    console.writeln_prefixed("[boot] root endpoint published");
 
     unsafe {
         #[cfg(all(feature = "kernel", target_arch = "aarch64"))]
@@ -321,21 +296,40 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
             );
         }
 
-        let (ipc_ptr, used_fallback) = initialise_ipc_buffer_with(bootinfo_ref, |ptr| {
-            install_ipc_buffer(ptr);
-        });
-
-        if used_fallback {
-            console.writeln_prefixed("bootinfo.ipcBuffer missing; using static fallback");
+        if let Some(ipc_ptr) = bootinfo_ref.ipc_buffer_ptr() {
+            let mut msg = heapless::String::<64>::new();
+            let _ = write!(msg, "ipc buffer ptr=0x{:016x}", ipc_ptr.as_ptr() as usize);
+            console.writeln_prefixed(msg.as_str());
+        } else {
+            console.writeln_prefixed("bootinfo.ipcBuffer missing");
         }
-
-        let mut msg = heapless::String::<64>::new();
-        let _ = write!(msg, "ipc buffer ptr=0x{:016x}", ipc_ptr as usize);
-        console.writeln_prefixed(msg.as_str());
     }
 
     debug_assert_eq!(ep_slot, root_endpoint());
     let rights = cap_rights_read_write_grant();
+
+    if !extra_bytes.is_empty() {
+        match bi_extra::parse_dtb(extra_bytes) {
+            Ok(dtb) => {
+                let header = dtb.header();
+                let mut msg = heapless::String::<96>::new();
+                let _ = write!(
+                    msg,
+                    "[boot] dtb totalsize={} struct_off={} strings_off={}",
+                    header.totalsize(),
+                    header.structure_offset(),
+                    header.strings_offset(),
+                );
+                console.writeln_prefixed(msg.as_str());
+                let _ = bi_extra::dump_bootinfo(bootinfo_ref, EARLY_DUMP_LIMIT);
+            }
+            Err(err) => {
+                let mut msg = heapless::String::<96>::new();
+                let _ = write!(msg, "[boot] dtb parse failed: {err}");
+                console.writeln_prefixed(msg.as_str());
+            }
+        }
+    }
 
     let tcb_copy_slot = match boot_cspace.alloc_slot() {
         Ok(slot) => slot,
@@ -805,120 +799,6 @@ struct ConsoleAudit<'a, P: Platform> {
 impl<'a, P: Platform> ConsoleAudit<'a, P> {
     fn new(console: &'a mut DebugConsole<'a, P>) -> Self {
         Self { console }
-    }
-}
-
-#[inline(always)]
-fn install_ipc_buffer(ptr: *mut sel4_sys::seL4_IPCBuffer) {
-    debug_assert!(!ptr.is_null());
-    unsafe {
-        sel4_sys::seL4_SetIPCBuffer(ptr);
-    }
-}
-
-struct FallbackIpcBuffer {
-    buffer: UnsafeCell<MaybeUninit<sel4_sys::seL4_IPCBuffer>>,
-}
-
-impl FallbackIpcBuffer {
-    const fn new() -> Self {
-        Self {
-            buffer: UnsafeCell::new(MaybeUninit::uninit()),
-        }
-    }
-
-    unsafe fn zeroed_ptr(&self) -> *mut sel4_sys::seL4_IPCBuffer {
-        // SAFETY: `UnsafeCell` guarantees exclusive access when we hold `&self`,
-        // so dereferencing the raw pointer returned by `get()` is sound here.
-        let ptr = unsafe { (*self.buffer.get()).as_mut_ptr() };
-        // SAFETY: The pointer comes from the `UnsafeCell` backing storage, so it
-        // is valid for writes of the IPC buffer size.
-        unsafe {
-            zero_ipc_buffer(ptr);
-        }
-        ptr
-    }
-}
-
-unsafe impl Sync for FallbackIpcBuffer {}
-
-unsafe fn initialise_ipc_buffer_with<F>(
-    bootinfo: &sel4_sys::seL4_BootInfo,
-    setter: F,
-) -> (*mut sel4_sys::seL4_IPCBuffer, bool)
-where
-    F: Fn(*mut sel4_sys::seL4_IPCBuffer),
-{
-    static FALLBACK_IPC_BUFFER: FallbackIpcBuffer = FallbackIpcBuffer::new();
-
-    let raw_ptr = match bootinfo.ipcBuffer as usize {
-        0 => None,
-        addr => {
-            let ptr = unsafe { ptr::with_exposed_provenance_mut::<sel4_sys::seL4_IPCBuffer>(addr) };
-            Some(ptr)
-        }
-    };
-    let (buffer_ptr, used_fallback) = if let Some(ptr) = raw_ptr {
-        unsafe {
-            zero_ipc_buffer(ptr);
-        }
-        (ptr, false)
-    } else {
-        let ptr = unsafe { FALLBACK_IPC_BUFFER.zeroed_ptr() };
-        (ptr, true)
-    };
-
-    setter(buffer_ptr);
-    (buffer_ptr, used_fallback)
-}
-
-unsafe fn zero_ipc_buffer(ptr: *mut sel4_sys::seL4_IPCBuffer) {
-    unsafe {
-        ptr::write_bytes(
-            ptr.cast::<u8>(),
-            0,
-            mem::size_of::<sel4_sys::seL4_IPCBuffer>(),
-        );
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use core::mem::MaybeUninit;
-
-    #[test]
-    fn initialise_ipc_buffer_prefers_bootinfo_pointer() {
-        let mut bootinfo: sel4_sys::seL4_BootInfo = unsafe { core::mem::zeroed() };
-        let mut backing = MaybeUninit::<sel4_sys::seL4_IPCBuffer>::uninit();
-        let buffer_ptr = backing.as_mut_ptr();
-        bootinfo.ipcBuffer = buffer_ptr as usize;
-
-        let mut captured: *mut sel4_sys::seL4_IPCBuffer = core::ptr::null_mut();
-        let (ptr, fallback) = unsafe {
-            initialise_ipc_buffer_with(&bootinfo, |ipc_ptr| {
-                captured = ipc_ptr;
-            })
-        };
-
-        assert_eq!(ptr, buffer_ptr);
-        assert_eq!(captured, buffer_ptr);
-        assert!(!fallback);
-    }
-
-    #[test]
-    fn initialise_ipc_buffer_uses_static_fallback_when_missing() {
-        let bootinfo: sel4_sys::seL4_BootInfo = unsafe { core::mem::zeroed() };
-        let mut captured: *mut sel4_sys::seL4_IPCBuffer = core::ptr::null_mut();
-        let (ptr, fallback) = unsafe {
-            initialise_ipc_buffer_with(&bootinfo, |ipc_ptr| {
-                captured = ipc_ptr;
-            })
-        };
-
-        assert!(fallback);
-        assert_eq!(ptr, captured);
-        assert!(!ptr.is_null());
     }
 }
 
