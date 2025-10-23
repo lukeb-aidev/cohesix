@@ -10,6 +10,7 @@ use sel4_sys::{
 use crate::boot::bi_extra::first_regular_untyped_from_extra;
 use crate::caps::traced_retype_into_slot;
 use crate::cspace::CSpace;
+use crate::sel4::BootInfoExt;
 
 static EP_SLOT: AtomicUsize = AtomicUsize::new(0);
 
@@ -46,7 +47,7 @@ pub fn bootstrap_ep(bi: &seL4_BootInfo, cs: &mut CSpace) -> Result<seL4_CPtr, se
     let ep_slot = cs.alloc_slot()?;
 
     let root = seL4_CapInitThreadCNode as seL4_CPtr;
-    let node_index = bi.initThreadCNode;
+    let node_index = bi.init_cnode_cap();
     let node_depth = bi.initThreadCNodeSizeBits as u8;
 
     crate::trace::println!(
