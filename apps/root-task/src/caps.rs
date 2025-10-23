@@ -5,8 +5,7 @@ use core::fmt::Write;
 
 use crate::trace::{dec_u32, hex_u64, DebugPutc};
 use sel4_sys::{
-    seL4_CNode, seL4_CPtr, seL4_Error, seL4_NoError, seL4_ObjectType, seL4_Untyped_Retype,
-    seL4_Word,
+    seL4_CPtr, seL4_Error, seL4_NoError, seL4_ObjectType, seL4_Untyped_Retype, seL4_Word,
 };
 
 #[inline]
