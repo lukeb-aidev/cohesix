@@ -295,7 +295,7 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
     let _ = write!(
         cs_line,
         "cs: root=0x{root:04x} bits={bits} first_free=0x{first_free:04x}",
-        root = bootinfo_ref.initThreadCNode,
+        root = bootinfo_ref.init_cnode_cap(),
         bits = bootinfo_ref.initThreadCNodeSizeBits,
         first_free = boot_first_free,
     );
