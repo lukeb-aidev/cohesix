@@ -3,7 +3,8 @@
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 use sel4_sys::{
-    seL4_BootInfo, seL4_CPtr, seL4_CapNull, seL4_Error, seL4_IllegalOperation, seL4_ObjectType,
+    seL4_BootInfo, seL4_CPtr, seL4_CapInitThreadCNode, seL4_CapNull, seL4_Error,
+    seL4_IllegalOperation, seL4_ObjectType,
 };
 
 use crate::boot::bi_extra::first_regular_untyped_from_extra;
@@ -44,11 +45,39 @@ pub fn bootstrap_ep(bi: &seL4_BootInfo, cs: &mut CSpace) -> Result<seL4_CPtr, se
 
     let ep_slot = cs.alloc_slot()?;
 
+    let root = seL4_CapInitThreadCNode as seL4_CPtr;
+    let node_index = bi.initThreadCNode;
+    let node_depth = bi.initThreadCNodeSizeBits as u8;
+
+    crate::trace::println!(
+        "[cs: root=0x{root:x} bits={bits} first_free=0x{slot:x}]",
+        root = node_index,
+        bits = node_depth,
+        slot = ep_slot,
+    );
+
+    if let Some(capacity) = 1usize.checked_shl(bi.initThreadCNodeSizeBits as u32) {
+        debug_assert!(
+            (ep_slot as usize) < capacity,
+            "endpoint slot 0x{:x} exceeds init CNode capacity 0x{:x}",
+            ep_slot,
+            capacity,
+        );
+    }
+    debug_assert!(
+        ep_slot >= bi.empty.start,
+        "endpoint slot 0x{:x} precedes first free slot 0x{:x}",
+        ep_slot,
+        bi.empty.start,
+    );
+
     traced_retype_into_slot(
         ut,
         seL4_ObjectType::seL4_EndpointObject,
         0,
-        cs.root(),
+        root,
+        node_index,
+        node_depth,
         ep_slot,
     )?;
 

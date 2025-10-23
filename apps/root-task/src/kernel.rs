@@ -266,6 +266,7 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
     let mut console = DebugConsole::new(platform);
 
     let mut boot_cspace = CSpace::from_bootinfo(bootinfo_ref);
+    let boot_first_free = boot_cspace.next_free_slot();
     let ep_slot = match ep::bootstrap_ep(bootinfo_ref, &mut boot_cspace) {
         Ok(ep_slot) => ep_slot,
         Err(err) => {
@@ -289,6 +290,16 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
     console.writeln_prefixed("Cohesix boot: root-task online");
 
     console.report_bootinfo(bootinfo_ref);
+
+    let mut cs_line = heapless::String::<96>::new();
+    let _ = write!(
+        cs_line,
+        "cs: root=0x{root:04x} bits={bits} first_free=0x{first_free:04x}",
+        root = bootinfo_ref.initThreadCNode,
+        bits = bootinfo_ref.initThreadCNodeSizeBits,
+        first_free = boot_first_free,
+    );
+    console.writeln_prefixed(cs_line.as_str());
 
     console.writeln_prefixed("Cohesix v0 (AArch64/virt)");
 
