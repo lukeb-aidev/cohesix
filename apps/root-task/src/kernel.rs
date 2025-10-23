@@ -831,7 +831,11 @@ impl FallbackIpcBuffer {
     }
 
     unsafe fn zeroed_ptr(&self) -> *mut sel4_sys::seL4_IPCBuffer {
-        let ptr = (*self.buffer.get()).as_mut_ptr();
+        // SAFETY: `UnsafeCell` guarantees exclusive access when we hold `&self`,
+        // so dereferencing the raw pointer returned by `get()` is sound here.
+        let ptr = unsafe { (*self.buffer.get()).as_mut_ptr() };
+        // SAFETY: The pointer comes from the `UnsafeCell` backing storage, so it
+        // is valid for writes of the IPC buffer size.
         unsafe {
             zero_ipc_buffer(ptr);
         }
