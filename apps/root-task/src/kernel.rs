@@ -4,6 +4,7 @@
 
 use core::fmt::{self, Write};
 use core::panic::PanicInfo;
+#[cfg(all(feature = "kernel", not(sel4_config_printing)))]
 use core::ptr;
 
 use cohesix_ticket::Role;
