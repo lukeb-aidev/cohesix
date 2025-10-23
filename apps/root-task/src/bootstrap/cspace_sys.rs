@@ -97,9 +97,9 @@ pub fn untyped_retype_invoc(
                 obj_type,
                 size_bits,
                 dest_root,
-                0,
-                depth.as_word(),
                 dst_slot,
+                depth.as_word(),
+                0,
                 1,
             )
         }
