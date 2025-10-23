@@ -449,6 +449,12 @@ pub trait BootInfoExt {
 
     /// Returns the exclusive upper bound of the bootinfo-declared empty slot window.
     fn empty_last_slot_excl(&self) -> usize;
+
+    /// Returns the raw bytes that make up the bootinfo header.
+    fn header_bytes(&self) -> &[u8];
+
+    /// Returns the extra bootinfo region emitted by the kernel as a byte slice.
+    fn extra_bytes(&self) -> &[u8];
 }
 
 impl BootInfoExt for seL4_BootInfo {
@@ -480,6 +486,44 @@ impl BootInfoExt for seL4_BootInfo {
     #[inline(always)]
     fn empty_last_slot_excl(&self) -> usize {
         self.empty.end as usize
+    }
+
+    #[inline(always)]
+    fn header_bytes(&self) -> &[u8] {
+        let header = core::slice::from_ref(self);
+        let (prefix, bytes, suffix) = header.align_to::<u8>();
+        debug_assert!(prefix.is_empty(), "bootinfo header must be aligned to u8");
+        debug_assert!(
+            suffix.is_empty(),
+            "bootinfo header must not leave trailing padding"
+        );
+        bytes
+    }
+
+    fn extra_bytes(&self) -> &[u8] {
+        const EMPTY: &[u8] = &[];
+
+        let extra_words = self.extraLen as usize;
+        if extra_words == 0 {
+            return EMPTY;
+        }
+
+        let word_bytes = mem::size_of::<seL4_Word>();
+        let Some(total_bytes) = extra_words.checked_mul(word_bytes) else {
+            return EMPTY;
+        };
+
+        let header_bytes = self.header_bytes();
+        let extra_start = header_bytes.as_ptr_range().end;
+
+        if (extra_start as usize).checked_add(total_bytes).is_none() {
+            return EMPTY;
+        }
+
+        // SAFETY: The extra bootinfo region is laid out immediately after the header and spans
+        // `total_bytes` bytes as reported by the kernel. The addition above guards against
+        // address overflow when the bootinfo pointer is interpreted as an integer.
+        unsafe { core::slice::from_raw_parts(extra_start, total_bytes) }
     }
 }
 
@@ -1961,6 +2005,38 @@ mod tests {
         let addr = 0x0002_0000_1000usize;
         let base = PageUpperDirectoryBookkeeper::<2>::base_for(addr);
         assert_eq!(base, 0x0002_0000_0000);
+    }
+
+    #[test]
+    fn header_bytes_span_entire_struct() {
+        let bootinfo: seL4_BootInfo = unsafe { core::mem::MaybeUninit::zeroed().assume_init() };
+        let header = bootinfo.header_bytes();
+        assert_eq!(header.len(), mem::size_of::<seL4_BootInfo>());
+    }
+
+    #[test]
+    fn extra_bytes_returns_appended_region() {
+        use core::mem::MaybeUninit;
+
+        const EXTRA_WORDS: usize = 2;
+        const EXTRA_BYTES: usize = EXTRA_WORDS * mem::size_of::<seL4_Word>();
+
+        #[repr(C)]
+        struct Fixture<const N: usize> {
+            bootinfo: seL4_BootInfo,
+            extra: [u8; N],
+        }
+
+        let mut fixture: Fixture<EXTRA_BYTES> = unsafe { MaybeUninit::zeroed().assume_init() };
+
+        for (index, byte) in fixture.extra.iter_mut().enumerate() {
+            *byte = index as u8;
+        }
+
+        fixture.bootinfo.extraLen = EXTRA_WORDS as seL4_Word;
+
+        let extra = fixture.bootinfo.extra_bytes();
+        assert_eq!(extra, &fixture.extra);
     }
 
     #[test]
