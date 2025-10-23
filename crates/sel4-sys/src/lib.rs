@@ -10,6 +10,7 @@
 #[cfg(target_os = "none")]
 mod imp {
     use core::arch::asm;
+    use core::mem::MaybeUninit;
     use core::ptr;
 
     pub type seL4_Word = usize;
@@ -492,10 +493,10 @@ mod imp {
     pub unsafe fn seL4_Send(dest: seL4_CPtr, msg_info: seL4_MessageInfo) {
         let length = msg_info.length();
 
-        let mut mr0_val = 0usize;
-        let mut mr1_val = 0usize;
-        let mut mr2_val = 0usize;
-        let mut mr3_val = 0usize;
+        let mut mr0_val = MaybeUninit::<seL4_Word>::uninit();
+        let mut mr1_val = MaybeUninit::<seL4_Word>::uninit();
+        let mut mr2_val = MaybeUninit::<seL4_Word>::uninit();
+        let mut mr3_val = MaybeUninit::<seL4_Word>::uninit();
 
         let mut mr0_ptr: *mut seL4_Word = ptr::null_mut();
         let mut mr1_ptr: *mut seL4_Word = ptr::null_mut();
@@ -503,20 +504,20 @@ mod imp {
         let mut mr3_ptr: *mut seL4_Word = ptr::null_mut();
 
         if length > 0 {
-            mr0_val = seL4_GetMR(0);
-            mr0_ptr = &mut mr0_val;
+            mr0_val.write(seL4_GetMR(0));
+            mr0_ptr = mr0_val.as_mut_ptr();
         }
         if length > 1 {
-            mr1_val = seL4_GetMR(1);
-            mr1_ptr = &mut mr1_val;
+            mr1_val.write(seL4_GetMR(1));
+            mr1_ptr = mr1_val.as_mut_ptr();
         }
         if length > 2 {
-            mr2_val = seL4_GetMR(2);
-            mr2_ptr = &mut mr2_val;
+            mr2_val.write(seL4_GetMR(2));
+            mr2_ptr = mr2_val.as_mut_ptr();
         }
         if length > 3 {
-            mr3_val = seL4_GetMR(3);
-            mr3_ptr = &mut mr3_val;
+            mr3_val.write(seL4_GetMR(3));
+            mr3_ptr = mr3_val.as_mut_ptr();
         }
 
         arm_sys_send_recv(

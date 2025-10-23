@@ -4,7 +4,9 @@
 use core::fmt::Write;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-use sel4_sys::{seL4_BootInfo, seL4_CPtr, seL4_CapNull, seL4_Error, seL4_ObjectType};
+use sel4_sys::{
+    seL4_BootInfo, seL4_CPtr, seL4_CapNull, seL4_Error, seL4_IllegalOperation, seL4_ObjectType,
+};
 
 use crate::boot::bi_extra::first_regular_untyped_from_extra;
 use crate::caps::traced_retype_into_slot;
@@ -33,8 +35,7 @@ pub fn bootstrap_ep(bi: &seL4_BootInfo, cs: &mut CSpace) -> Result<seL4_CPtr, se
         return Ok(get_ep());
     }
 
-    let (ut, desc) =
-        first_regular_untyped_from_extra(bi).ok_or(seL4_Error::seL4_IllegalOperation)?;
+    let (ut, desc) = first_regular_untyped_from_extra(bi).ok_or(seL4_IllegalOperation)?;
 
     {
         let mut writer = DebugPutc;
