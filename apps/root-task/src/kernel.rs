@@ -201,14 +201,16 @@ static mut TLS_IMAGE: sel4_sys::TlsImage = sel4_sys::TlsImage::new();
 #[cfg(all(feature = "kernel", not(sel4_config_printing)))]
 unsafe fn pl011_debug_emit(context: *mut (), byte: u8) {
     let base = context.cast::<u8>();
-    let dr = base.add(PL011_DR_OFFSET).cast::<u32>();
-    let fr = base.add(PL011_FR_OFFSET).cast::<u32>();
+    let dr = unsafe { base.add(PL011_DR_OFFSET).cast::<u32>() };
+    let fr = unsafe { base.add(PL011_FR_OFFSET).cast::<u32>() };
 
-    while ptr::read_volatile(fr) & PL011_FR_TXFF != 0 {
-        core::hint::spin_loop();
+    unsafe {
+        while ptr::read_volatile(fr) & PL011_FR_TXFF != 0 {
+            core::hint::spin_loop();
+        }
+
+        ptr::write_volatile(dr, u32::from(byte));
     }
-
-    ptr::write_volatile(dr, u32::from(byte));
 }
 
 /// Minimal blocking console loop used during early bring-up.
@@ -260,11 +262,32 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
     #[cfg(all(feature = "kernel", not(sel4_config_printing)))]
     crate::sel4::install_debug_sink();
 
+    let bootinfo_ref: &'static sel4_sys::seL4_BootInfo = bootinfo;
     let mut console = DebugConsole::new(platform);
+
+    let mut boot_cspace = CSpace::from_bootinfo(bootinfo_ref);
+    let ep_slot = match ep::bootstrap_ep(bootinfo_ref, &mut boot_cspace) {
+        Ok(ep_slot) => ep_slot,
+        Err(err) => {
+            crate::trace::trace_fail(b"bootstrap_ep", err);
+            let mut line = heapless::String::<160>::new();
+            let _ = write!(
+                line,
+                "bootstrap_ep failed: {} ({})",
+                err as i32,
+                error_name(err)
+            );
+            console.writeln_prefixed(line.as_str());
+            panic!("bootstrap_ep failed: {}", error_name(err));
+        }
+    };
+
+    ep::set_ep(ep_slot);
+    crate::trace::trace_ep(ep_slot);
+
     console.writeln_prefixed("entered from seL4 (stage0)");
     console.writeln_prefixed("Cohesix boot: root-task online");
 
-    let bootinfo_ref: &'static sel4_sys::seL4_BootInfo = bootinfo;
     console.report_bootinfo(bootinfo_ref);
 
     console.writeln_prefixed("Cohesix v0 (AArch64/virt)");
@@ -287,23 +310,6 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
             }
         }
     }
-
-    let mut boot_cspace = CSpace::from_bootinfo(bootinfo_ref);
-    let ep_slot = match ep::bootstrap_ep(bootinfo_ref, &mut boot_cspace) {
-        Ok(ep_slot) => ep_slot,
-        Err(err) => {
-            crate::trace::trace_fail(b"bootstrap_ep", err);
-            let mut line = heapless::String::<160>::new();
-            let _ = write!(
-                line,
-                "bootstrap_ep failed: {} ({})",
-                err as i32,
-                error_name(err)
-            );
-            console.writeln_prefixed(line.as_str());
-            panic!("bootstrap_ep failed: {}", error_name(err));
-        }
-    };
 
     let first_msg = sel4_sys::seL4_MessageInfo::new(0, 0, 0, 0);
     send_guarded(ep_slot, first_msg);
@@ -826,7 +832,9 @@ impl FallbackIpcBuffer {
 
     unsafe fn zeroed_ptr(&self) -> *mut sel4_sys::seL4_IPCBuffer {
         let ptr = (*self.buffer.get()).as_mut_ptr();
-        zero_ipc_buffer(ptr);
+        unsafe {
+            zero_ipc_buffer(ptr);
+        }
         ptr
     }
 }
@@ -844,13 +852,15 @@ where
 
     let raw_ptr = match bootinfo.ipcBuffer as usize {
         0 => None,
-        addr => Some(ptr::with_exposed_provenance_mut::<sel4_sys::seL4_IPCBuffer>(addr)),
+        addr => unsafe { Some(ptr::with_exposed_provenance_mut::<sel4_sys::seL4_IPCBuffer>(addr)) },
     };
     let (buffer_ptr, used_fallback) = if let Some(ptr) = raw_ptr {
-        zero_ipc_buffer(ptr);
+        unsafe {
+            zero_ipc_buffer(ptr);
+        }
         (ptr, false)
     } else {
-        let ptr = FALLBACK_IPC_BUFFER.zeroed_ptr();
+        let ptr = unsafe { FALLBACK_IPC_BUFFER.zeroed_ptr() };
         (ptr, true)
     };
 
@@ -859,11 +869,13 @@ where
 }
 
 unsafe fn zero_ipc_buffer(ptr: *mut sel4_sys::seL4_IPCBuffer) {
-    ptr::write_bytes(
-        ptr.cast::<u8>(),
-        0,
-        mem::size_of::<sel4_sys::seL4_IPCBuffer>(),
-    );
+    unsafe {
+        ptr::write_bytes(
+            ptr.cast::<u8>(),
+            0,
+            mem::size_of::<sel4_sys::seL4_IPCBuffer>(),
+        );
+    }
 }
 
 #[cfg(test)]

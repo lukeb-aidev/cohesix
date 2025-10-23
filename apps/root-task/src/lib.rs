@@ -1,6 +1,7 @@
 // Author: Lukas Bower
 #![cfg_attr(feature = "kernel", no_std)]
 #![deny(unsafe_code)]
+#![deny(unsafe_op_in_unsafe_fn)]
 #![deny(deprecated)]
 #![warn(missing_docs)]
 
