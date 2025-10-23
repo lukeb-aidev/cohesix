@@ -11,7 +11,7 @@ use core::ptr;
 
 use cohesix_ticket::Role;
 
-use crate::boot::ep;
+use crate::boot::{bi_extra, ep};
 use crate::bootstrap::{
     cspace::{BootInfoView, CSpaceCtx},
     pick_untyped,
@@ -173,28 +173,6 @@ const PL011_FR_OFFSET: usize = 0x18;
 #[cfg(all(feature = "kernel", not(sel4_config_printing)))]
 const PL011_FR_TXFF: u32 = 1 << 5;
 
-fn bootinfo_extra_prefix(
-    bootinfo: &'static sel4_sys::seL4_BootInfo,
-) -> Option<(&'static [u8], usize)> {
-    let extra_words = bootinfo.extraLen as usize;
-    if extra_words == 0 {
-        return None;
-    }
-
-    let word_bytes = core::mem::size_of::<sel4_sys::seL4_Word>();
-    let total_bytes = extra_words.checked_mul(word_bytes)?;
-
-    let base = bootinfo as *const _ as usize;
-    let header_bytes = core::mem::size_of::<sel4_sys::seL4_BootInfo>();
-    let start = base.checked_add(header_bytes)?;
-    let accessible = cmp::min(total_bytes, EARLY_DUMP_LIMIT);
-
-    // SAFETY: The kernel maps the bootinfo structure contiguously; we cap the
-    // exposed length to `EARLY_DUMP_LIMIT` to avoid walking unmapped pages.
-    let slice = unsafe { core::slice::from_raw_parts(start as *const u8, accessible) };
-    Some((slice, total_bytes))
-}
-
 #[cfg(target_arch = "aarch64")]
 static mut TLS_IMAGE: sel4_sys::TlsImage = sel4_sys::TlsImage::new();
 
@@ -304,9 +282,9 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
     console.writeln_prefixed("Cohesix v0 (AArch64/virt)");
 
     bootinfo_debug_dump(bootinfo_ref);
-    if let Some((extra_prefix, total_bytes)) = bootinfo_extra_prefix(bootinfo_ref) {
-        crate::trace::hex_dump("bootinfo.extra", extra_prefix, EARLY_DUMP_LIMIT);
-
+    if let Some((extra_prefix, total_bytes)) =
+        bi_extra::dump_bootinfo(bootinfo_ref, EARLY_DUMP_LIMIT)
+    {
         if extra_prefix.len() >= 8 && extra_prefix.starts_with(&[0xd0, 0x0d, 0xfe, 0xed]) {
             let totalsize = u32::from_be_bytes([
                 extra_prefix[4],
@@ -317,7 +295,7 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
             let dtb_total = cmp::min(totalsize, total_bytes);
             let dtb_dump = cmp::min(extra_prefix.len(), cmp::min(dtb_total, EARLY_DUMP_LIMIT));
             if dtb_dump > 0 {
-                crate::trace::hex_dump("fdt", &extra_prefix[..dtb_dump], EARLY_DUMP_LIMIT);
+                crate::trace::hex_dump_slice("fdt", &extra_prefix[..dtb_dump], EARLY_DUMP_LIMIT);
             }
         }
     }
