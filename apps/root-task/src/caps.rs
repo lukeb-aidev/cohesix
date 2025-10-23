@@ -48,11 +48,22 @@ pub fn traced_retype_into_slot(
     untyped: seL4_CPtr,
     obj_type: seL4_ObjectType,
     size_bits: u32,
-    dst_cnode: seL4_CPtr,
-    dst_slot: seL4_CPtr,
+    dst_root: seL4_CPtr,
+    node_index: seL4_CPtr,
+    node_depth: u8,
+    node_offset: seL4_CPtr,
 ) -> Result<(), seL4_Error> {
     debug_retype_log(
-        "pre", untyped, obj_type, size_bits, dst_cnode, 0, 0, dst_slot, 1, None,
+        "pre",
+        untyped,
+        obj_type,
+        size_bits,
+        dst_root,
+        node_index,
+        node_depth,
+        node_offset,
+        1,
+        None,
     );
 
     let result = unsafe {
@@ -60,10 +71,10 @@ pub fn traced_retype_into_slot(
             untyped,
             obj_type as seL4_Word,
             size_bits as seL4_Word,
-            dst_cnode,
-            0,
-            0,
-            dst_slot,
+            dst_root,
+            node_index,
+            node_depth as seL4_Word,
+            node_offset,
             1,
         )
     };
@@ -73,10 +84,10 @@ pub fn traced_retype_into_slot(
         untyped,
         obj_type,
         size_bits,
-        dst_cnode,
-        0,
-        0,
-        dst_slot,
+        dst_root,
+        node_index,
+        node_depth,
+        node_offset,
         1,
         Some(result),
     );
@@ -91,14 +102,18 @@ pub fn traced_retype_into_slot(
 /// Retypes an untyped capability into an endpoint object at the destination slot.
 pub fn retype_endpoint_into_slot(
     untyped: seL4_CPtr,
-    dst_cnode: seL4_CPtr,
-    dst_slot: seL4_CPtr,
+    dst_root: seL4_CPtr,
+    node_index: seL4_CPtr,
+    node_depth: u8,
+    node_offset: seL4_CPtr,
 ) -> Result<(), seL4_Error> {
     traced_retype_into_slot(
         untyped,
         sel4_sys::seL4_ObjectType::seL4_EndpointObject,
         0,
-        dst_cnode,
-        dst_slot,
+        dst_root,
+        node_index,
+        node_depth,
+        node_offset,
     )
 }
