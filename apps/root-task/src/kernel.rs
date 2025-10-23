@@ -845,7 +845,10 @@ where
 
     let raw_ptr = match bootinfo.ipcBuffer as usize {
         0 => None,
-        addr => unsafe { Some(ptr::with_exposed_provenance_mut::<sel4_sys::seL4_IPCBuffer>(addr)) },
+        addr => {
+            let ptr = unsafe { ptr::with_exposed_provenance_mut::<sel4_sys::seL4_IPCBuffer>(addr) };
+            Some(ptr)
+        }
     };
     let (buffer_ptr, used_fallback) = if let Some(ptr) = raw_ptr {
         unsafe {
