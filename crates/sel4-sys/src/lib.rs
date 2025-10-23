@@ -732,6 +732,7 @@ mod imp {
         pub fn seL4_Yield();
         pub fn seL4_ARM_Page_Unmap(service: seL4_ARM_Page) -> seL4_Error;
         pub fn seL4_ARM_Page_GetAddress(service: seL4_ARM_Page) -> seL4_ARM_Page_GetAddress;
+        pub fn seL4_GetBootInfo() -> *const seL4_BootInfo;
     }
 
     pub use seL4_ARM_Page_GetAddress as ARMPageGetAddressResult;
@@ -917,6 +918,11 @@ mod host_stub {
 
     #[inline(always)]
     pub unsafe fn seL4_SetMR(_index: usize, _value: seL4_Word) {
+        unsupported();
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_GetBootInfo() -> *const seL4_BootInfo {
         unsupported();
     }
 
