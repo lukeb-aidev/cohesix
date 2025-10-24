@@ -278,6 +278,13 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
         console.writeln_prefixed("[boot] deferring DTB parse");
     }
 
+    let ipc_buffer_ptr = bootinfo_ref.ipc_buffer_ptr();
+    unsafe {
+        if let Some(ptr) = ipc_buffer_ptr {
+            sel4_sys::seL4_SetIPCBuffer(ptr.as_ptr());
+        }
+    }
+
     let ep_slot = match ep::bootstrap_ep(bootinfo_ref, &mut boot_cspace) {
         Ok(ep_slot) => ep_slot,
         Err(err) => {
@@ -308,7 +315,8 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
             );
         }
 
-        if let Some(ipc_ptr) = bootinfo_ref.ipc_buffer_ptr() {
+        if let Some(ipc_ptr) = ipc_buffer_ptr {
+            sel4_sys::seL4_SetIPCBuffer(ipc_ptr.as_ptr());
             let mut msg = heapless::String::<64>::new();
             let _ = write!(msg, "ipc buffer ptr=0x{:016x}", ipc_ptr.as_ptr() as usize);
             console.writeln_prefixed(msg.as_str());
