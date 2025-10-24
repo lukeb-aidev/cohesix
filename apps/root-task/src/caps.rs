@@ -3,6 +3,7 @@
 
 use core::fmt::Write;
 
+use crate::sel4;
 use crate::trace::{dec_u32, hex_u64, DebugPutc};
 use sel4_sys::{
     seL4_CPtr, seL4_Error, seL4_NoError, seL4_ObjectType, seL4_Untyped_Retype, seL4_Word,
@@ -40,7 +41,9 @@ fn debug_retype_log(
     let mut writer = DebugPutc;
     let _ = write!(writer, "[retype:{phase}] ut=");
     hex_u64(&mut writer, untyped as u64);
-    let _ = write!(writer, " type={:?} sz=", obj_type);
+    let _ = writer.write_str(" type=");
+    let _ = writer.write_str(sel4::object_type_name(obj_type));
+    let _ = writer.write_str(" sz=");
     dec_u32(&mut writer, size_bits);
     let _ = write!(writer, " root=");
     hex_u64(&mut writer, dst_cnode as u64);
@@ -53,7 +56,8 @@ fn debug_retype_log(
     let _ = write!(writer, " n=");
     dec_u32(&mut writer, num_objects);
     if let Some(error) = err {
-        let _ = write!(writer, " -> err={:?}", error);
+        let _ = writer.write_str(" -> err=");
+        let _ = writer.write_str(sel4::error_name(error));
     }
     let _ = writer.write_str("\n");
 

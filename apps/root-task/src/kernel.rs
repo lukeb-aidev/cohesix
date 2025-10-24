@@ -378,6 +378,29 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
         );
     }
 
+    let fault_handler_err = unsafe { sel4_sys::seL4_TCB_SetFaultHandler(tcb_copy_slot, ep_slot) };
+    if fault_handler_err != sel4_sys::seL4_NoError {
+        let mut line = heapless::String::<160>::new();
+        let _ = write!(
+            line,
+            "failed to install fault handler: {} ({})",
+            fault_handler_err,
+            error_name(fault_handler_err)
+        );
+        console.writeln_prefixed(line.as_str());
+        panic!(
+            "seL4_TCB_SetFaultHandler failed: {} ({})",
+            fault_handler_err,
+            error_name(fault_handler_err)
+        );
+    } else {
+        log::info!(
+            "[tcb] fault handler installed tcb_slot=0x{slot:04x} ep=0x{ep:04x}",
+            slot = tcb_copy_slot,
+            ep = ep_slot
+        );
+    }
+
     let cnode_copy_slot = match boot_cspace.alloc_slot() {
         Ok(slot) => slot,
         Err(err) => {
