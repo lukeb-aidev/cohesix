@@ -12,8 +12,9 @@ use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::time::Instant;
 use smoltcp::wire::EthernetAddress;
 
+use crate::hal::{HalError, Hardware};
 use crate::net_consts::MAX_FRAME_LEN;
-use crate::sel4::{DeviceFrame, KernelEnv, RamFrame};
+use crate::sel4::{DeviceFrame, RamFrame};
 
 const VIRTIO_MMIO_BASE: usize = 0x0a00_0000;
 const VIRTIO_MMIO_STRIDE: usize = 0x200;
@@ -66,6 +67,14 @@ impl fmt::Display for DriverError {
     }
 }
 
+impl From<HalError> for DriverError {
+    fn from(err: HalError) -> Self {
+        match err {
+            HalError::Sel4(code) => Self::Sel4(code),
+        }
+    }
+}
+
 /// Virtio-net MMIO implementation providing a smoltcp PHY device.
 pub struct VirtioNet {
     regs: VirtioRegs,
@@ -80,8 +89,11 @@ pub struct VirtioNet {
 
 impl VirtioNet {
     /// Create a new driver instance by probing the virtio MMIO slots.
-    pub fn new(env: &mut KernelEnv) -> Result<Self, DriverError> {
-        let mut regs = VirtioRegs::probe(env)?;
+    pub fn new<H>(hal: &mut H) -> Result<Self, DriverError>
+    where
+        H: Hardware<Error = HalError>,
+    {
+        let mut regs = VirtioRegs::probe(hal)?;
         regs.reset_status();
         regs.set_status(STATUS_ACKNOWLEDGE);
         regs.set_status(STATUS_ACKNOWLEDGE | STATUS_DRIVER);
@@ -102,13 +114,13 @@ impl VirtioNet {
         regs.set_guest_features(negotiated_features);
         regs.set_status(STATUS_ACKNOWLEDGE | STATUS_DRIVER | STATUS_FEATURES_OK);
 
-        let queue_mem_rx = env.alloc_dma_frame().map_err(|err| {
+        let queue_mem_rx = hal.alloc_dma_frame().map_err(|err| {
             regs.set_status(STATUS_FAILED);
-            DriverError::Sel4(err)
+            DriverError::from(err)
         })?;
-        let queue_mem_tx = env.alloc_dma_frame().map_err(|err| {
+        let queue_mem_tx = hal.alloc_dma_frame().map_err(|err| {
             regs.set_status(STATUS_FAILED);
-            DriverError::Sel4(err)
+            DriverError::from(err)
         })?;
 
         let rx_queue = VirtQueue::new(&mut regs, queue_mem_rx, RX_QUEUE_INDEX, rx_size)?;
@@ -116,9 +128,9 @@ impl VirtioNet {
 
         let mut rx_buffers = HeaplessVec::<RamFrame, RX_QUEUE_SIZE>::new();
         for _ in 0..rx_size {
-            let frame = env.alloc_dma_frame().map_err(|err| {
+            let frame = hal.alloc_dma_frame().map_err(|err| {
                 regs.set_status(STATUS_FAILED);
-                DriverError::Sel4(err)
+                DriverError::from(err)
             })?;
             rx_buffers.push(frame).map_err(|_| {
                 regs.set_status(STATUS_FAILED);
@@ -128,9 +140,9 @@ impl VirtioNet {
 
         let mut tx_buffers = HeaplessVec::<RamFrame, TX_QUEUE_SIZE>::new();
         for _ in 0..tx_size {
-            let frame = env.alloc_dma_frame().map_err(|err| {
+            let frame = hal.alloc_dma_frame().map_err(|err| {
                 regs.set_status(STATUS_FAILED);
-                DriverError::Sel4(err)
+                DriverError::from(err)
             })?;
             tx_buffers.push(frame).map_err(|_| {
                 regs.set_status(STATUS_FAILED);
@@ -362,21 +374,24 @@ struct VirtioRegs {
 }
 
 impl VirtioRegs {
-    fn probe(env: &mut KernelEnv) -> Result<Self, DriverError> {
+    fn probe<H>(hal: &mut H) -> Result<Self, DriverError>
+    where
+        H: Hardware<Error = HalError>,
+    {
         for slot in 0..VIRTIO_MMIO_SLOTS {
             let base = VIRTIO_MMIO_BASE + slot * VIRTIO_MMIO_STRIDE;
-            if env.device_coverage(base, DEVICE_FRAME_BITS).is_none() {
+            if hal.device_coverage(base, DEVICE_FRAME_BITS).is_none() {
                 continue;
             }
-            let frame = match env.map_device(base) {
+            let frame = match hal.map_device(base) {
                 Ok(frame) => frame,
-                Err(err) if err == seL4_NotEnoughMemory => {
+                Err(HalError::Sel4(err)) if err == seL4_NotEnoughMemory => {
                     log::trace!(
                         "virtio-mmio: slot {slot} @ 0x{base:08x} unavailable (no device coverage)",
                     );
                     continue;
                 }
-                Err(err) => return Err(DriverError::Sel4(err)),
+                Err(err) => return Err(DriverError::from(err)),
             };
             let regs = VirtioRegs { mmio: frame };
             let magic = regs.read32(Registers::MagicValue);

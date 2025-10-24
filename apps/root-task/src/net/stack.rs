@@ -20,8 +20,7 @@ use super::{
     NetPoller, NetTelemetry, AUTH_TOKEN, CONSOLE_TCP_PORT, IDLE_TIMEOUT_MS,
 };
 use crate::drivers::virtio::net::{DriverError, VirtioNet};
-use crate::net_consts::MAX_FRAME_LEN;
-use crate::sel4::KernelEnv;
+use crate::hal::{HalError, Hardware};
 use crate::serial::DEFAULT_LINE_CAPACITY;
 
 const TCP_RX_BUFFER: usize = 2048;
@@ -93,19 +92,22 @@ pub struct NetStack {
 
 impl NetStack {
     /// Constructs a network stack bound to the provided [`KernelEnv`].
-    pub fn new(env: &mut KernelEnv) -> Result<Self, DriverError> {
+    pub fn new<H>(hal: &mut H) -> Result<Self, DriverError>
+    where
+        H: Hardware<Error = HalError>,
+    {
         let ip = Ipv4Address::new(DEFAULT_IP.0, DEFAULT_IP.1, DEFAULT_IP.2, DEFAULT_IP.3);
         let gateway = Ipv4Address::new(DEFAULT_GW.0, DEFAULT_GW.1, DEFAULT_GW.2, DEFAULT_GW.3);
-        Self::with_ipv4(env, ip, DEFAULT_PREFIX, Some(gateway))
+        Self::with_ipv4(hal, ip, DEFAULT_PREFIX, Some(gateway))
     }
 
     fn with_ipv4(
-        env: &mut KernelEnv,
+        hal: &mut impl Hardware<Error = HalError>,
         ip: Ipv4Address,
         prefix: u8,
         gateway: Option<Ipv4Address>,
     ) -> Result<Self, DriverError> {
-        let mut device = VirtioNet::new(env)?;
+        let mut device = VirtioNet::new(hal)?;
         let mac = device.mac();
 
         let clock = NetworkClock::new();

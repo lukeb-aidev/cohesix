@@ -24,6 +24,9 @@ pub(crate) mod drivers;
 pub mod net;
 
 #[cfg(feature = "kernel")]
+pub mod hal;
+
+#[cfg(feature = "kernel")]
 /// Kernel entrypoints and seL4 bootstrap wiring for the in-VM root task.
 pub mod kernel;
 
