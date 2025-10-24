@@ -31,13 +31,13 @@ pub fn bootstrap_ep(bi: &seL4_BootInfo, cs: &mut CSpace) -> Result<seL4_CPtr, se
     let ep_slot = cs.alloc_slot()?;
 
     let root = seL4_CapInitThreadCNode as seL4_CPtr;
-    let node_index = bi.init_cnode_cap();
-    let node_depth = bi.initThreadCNodeSizeBits as u8;
+    let node_index = 0;
+    let node_depth = 0u8;
 
     crate::trace::println!(
         "[cs: root=0x{root:x} bits={bits} first_free=0x{slot:x}]",
-        root = node_index,
-        bits = node_depth,
+        root = root,
+        bits = bi.initThreadCNodeSizeBits,
         slot = ep_slot,
     );
 

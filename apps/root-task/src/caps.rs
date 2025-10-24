@@ -8,6 +8,22 @@ use sel4_sys::{
     seL4_CPtr, seL4_Error, seL4_NoError, seL4_ObjectType, seL4_Untyped_Retype, seL4_Word,
 };
 
+#[inline(always)]
+fn canonicalize_cnode_destination(
+    dst_root: seL4_CPtr,
+    node_index: seL4_CPtr,
+    node_depth: u8,
+    node_offset: seL4_CPtr,
+) -> (seL4_CPtr, u8, seL4_CPtr) {
+    if dst_root == sel4_sys::seL4_CapInitThreadCNode {
+        debug_assert_eq!(node_index, 0, "init CNode requires node_index = 0");
+        debug_assert_eq!(node_depth, 0, "init CNode requires node_depth = 0");
+        (0, 0, node_offset)
+    } else {
+        (node_index, node_depth, node_offset)
+    }
+}
+
 #[inline]
 fn debug_retype_log(
     phase: &str,
@@ -53,6 +69,8 @@ pub fn traced_retype_into_slot(
     node_depth: u8,
     node_offset: seL4_CPtr,
 ) -> Result<(), seL4_Error> {
+    let (node_index, node_depth, node_offset) =
+        canonicalize_cnode_destination(dst_root, node_index, node_depth, node_offset);
     debug_retype_log(
         "pre",
         untyped,
