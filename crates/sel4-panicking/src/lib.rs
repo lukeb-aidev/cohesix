@@ -9,9 +9,10 @@ use sel4_sys::seL4_DebugPutChar;
 
 #[cfg(not(sel4_config_printing))]
 mod fallback {
+    use core::fmt::Write;
     use core::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 
-    use heapless::Deque;
+    use heapless::{Deque, String as HeaplessString};
     use spin::Mutex;
 
     /// Maximum number of bytes retained while no debug sink is registered.
@@ -51,7 +52,42 @@ mod fallback {
         Some(DebugSink { context, emit })
     }
 
+    fn buffer_message(message: &str) {
+        let mut guard = BUFFER.lock();
+        for &byte in message.as_bytes() {
+            if guard.push_back(byte).is_err() {
+                let _ = guard.pop_front();
+                let _ = guard.push_back(byte);
+            }
+        }
+    }
+
+    fn log_sink_registration(emit_addr: usize, context: *mut ()) {
+        let mut line = HeaplessString::<128>::new();
+        let _ = write!(
+            line,
+            "[sel4-panicking] install_debug_sink emit=0x{emit:016x} ctx=0x{ctx:016x}\n",
+            emit = emit_addr,
+            ctx = context as usize,
+        );
+        buffer_message(line.as_str());
+    }
+
     pub fn install_sink(sink: DebugSink) {
+        let emit_addr = sink.emit as usize;
+        if emit_addr & 0b11 != 0 {
+            panic!(
+                "debug sink emit pointer not 4-byte aligned: 0x{emit:016x}",
+                emit = emit_addr,
+            );
+        }
+        if emit_addr <= 0x1000 {
+            panic!(
+                "debug sink emit pointer unexpectedly low: 0x{emit:016x}",
+                emit = emit_addr,
+            );
+        }
+        log_sink_registration(emit_addr, sink.context);
         SINK_CONTEXT.store(sink.context, Ordering::SeqCst);
         SINK_EMIT.store(sink.emit as usize, Ordering::SeqCst);
         drain_with(|byte| unsafe {

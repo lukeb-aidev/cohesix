@@ -7,7 +7,9 @@
 
 use core::{
     arch::asm,
-    fmt, mem,
+    fmt,
+    fmt::Write,
+    mem,
     ptr::{self, NonNull},
     sync::atomic::{AtomicUsize, Ordering},
 };
@@ -189,6 +191,26 @@ pub fn install_debug_sink() {
         context: core::ptr::null_mut(),
         emit,
     };
+    let emit_addr = sink.emit as usize;
+    let mut line = heapless::String::<96>::new();
+    let _ = write!(
+        line,
+        "[sel4::install_debug_sink] emit=0x{emit:016x}",
+        emit = emit_addr,
+    );
+    serial::puts(line.as_str());
+    if emit_addr & 0b11 != 0 {
+        panic!(
+            "debug sink emit pointer not 4-byte aligned: 0x{emit:016x}",
+            emit = emit_addr,
+        );
+    }
+    if emit_addr <= 0x1000 {
+        panic!(
+            "debug sink emit pointer unexpectedly low: 0x{emit:016x}",
+            emit = emit_addr,
+        );
+    }
     sel4_panicking::install_debug_sink(sink);
 }
 
