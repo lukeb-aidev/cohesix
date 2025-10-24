@@ -594,6 +594,21 @@ where
     }
 }
 
+#[cfg(feature = "net-console")]
+impl<'a, D, T, I, V, const RX: usize, const TX: usize, const LINE: usize>
+    EventPump<'a, D, T, I, V, RX, TX, LINE>
+where
+    D: SerialDriver,
+    T: TimerSource,
+    I: IpcDispatcher,
+    V: CapabilityValidator,
+{
+    /// Access the attached networking poller (test support only).
+    pub fn network_mut(&mut self) -> Option<&mut (dyn NetPoller + 'a)> {
+        self.net.as_deref_mut()
+    }
+}
+
 fn parse_role(raw: &str) -> Option<Role> {
     match raw {
         value if value.eq_ignore_ascii_case("queen") => Some(Role::Queen),

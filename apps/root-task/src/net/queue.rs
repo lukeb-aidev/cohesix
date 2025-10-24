@@ -6,7 +6,7 @@ extern crate alloc;
 use core::fmt;
 use core::sync::atomic::Ordering;
 
-use heapless::{spsc::Queue, Deque, String as HeaplessString, Vec as HeaplessVec};
+use heapless::{spsc::Queue, String as HeaplessString, Vec as HeaplessVec};
 use portable_atomic::{AtomicU32, AtomicU64};
 use smoltcp::iface::{Config as IfaceConfig, Interface, SocketSet, SocketStorage};
 use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
@@ -14,8 +14,8 @@ use smoltcp::time::Instant;
 use smoltcp::wire::{EthernetAddress, HardwareAddress, IpAddress, IpCidr, Ipv4Address};
 
 use super::{
-    console_srv::TcpConsoleServer, NetPoller, NetTelemetry, AUTH_TOKEN, CONSOLE_QUEUE_DEPTH,
-    IDLE_TIMEOUT_MS, MAX_FRAME_LEN,
+    console_srv::TcpConsoleServer, NetPoller, NetTelemetry, AUTH_TOKEN, IDLE_TIMEOUT_MS,
+    MAX_FRAME_LEN,
 };
 use crate::serial::DEFAULT_LINE_CAPACITY;
 
@@ -128,6 +128,19 @@ impl QueueHandle {
     pub fn tx_drops(&self) -> u32 {
         self.tx_drops.load(Ordering::Relaxed)
     }
+
+    /// Reset the underlying queues and drop counters, emulating a PHY reset.
+    pub fn reset(&self) {
+        {
+            let mut rx = self.rx.lock();
+            while rx.dequeue().is_some() {}
+        }
+        {
+            let mut tx = self.tx.lock();
+            while tx.dequeue().is_some() {}
+        }
+        self.tx_drops.store(0, Ordering::Relaxed);
+    }
 }
 
 /// PHY implementation backed by bounded heapless queues.
@@ -159,6 +172,18 @@ impl QueuePhy {
 
     fn tx_drop_count(&self) -> u32 {
         self.tx_drops.load(Ordering::Relaxed)
+    }
+
+    fn reset(&self) {
+        {
+            let mut rx = self.rx.lock();
+            while rx.dequeue().is_some() {}
+        }
+        {
+            let mut tx = self.tx.lock();
+            while tx.dequeue().is_some() {}
+        }
+        self.tx_drops.store(0, Ordering::Relaxed);
     }
 }
 
@@ -401,6 +426,14 @@ impl NetStack {
         }
         let _ = self.server.ingest(payload.as_slice(), 1);
     }
+
+    /// Reset the queue-backed PHY and clear console session state.
+    pub fn force_reset(&mut self) {
+        self.device.reset();
+        self.server.end_session();
+        self.session_active = false;
+        self.telemetry = NetTelemetry::default();
+    }
 }
 
 impl NetPoller for NetStack {
@@ -423,6 +456,14 @@ impl NetPoller for NetStack {
         if self.server.enqueue_outbound(line).is_err() {
             self.telemetry.tx_drops = self.telemetry.tx_drops.saturating_add(1);
         }
+    }
+
+    fn inject_console_line(&mut self, line: &str) {
+        self.enqueue_console_line(line);
+    }
+
+    fn reset(&mut self) {
+        self.force_reset();
     }
 }
 
