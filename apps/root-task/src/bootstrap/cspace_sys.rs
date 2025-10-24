@@ -72,34 +72,40 @@ pub fn untyped_retype_invoc(
 ) -> sys::seL4_Error {
     #[cfg(target_os = "none")]
     {
-        let bootinfo = unsafe { &*sys::seL4_GetBootInfo() };
-        let init_cnode_bits = bootinfo.initThreadCNodeSizeBits as u8;
-        assert!(
-            depth_bits == init_cnode_bits,
-            "retype depth {} does not match initThreadCNodeSizeBits {}",
-            depth_bits,
-            init_cnode_bits
-        );
-        let empty_start = bootinfo.empty.start as sys::seL4_CPtr;
-        let empty_end = bootinfo.empty.end as sys::seL4_CPtr;
-        assert!(
-            dst_slot >= empty_start && dst_slot < empty_end,
-            "destination slot 0x{dst:04x} outside boot empty window [0x{lo:04x}..0x{hi:04x})",
-            dst = dst_slot,
-            lo = empty_start,
-            hi = empty_end,
-        );
-        check_slot_in_range(depth_bits, dst_slot);
         let depth = resolve_cnode_depth(depth_bits);
+        let (node_index, node_depth, node_offset) = if dest_root == sys::seL4_CapInitThreadCNode {
+            let bootinfo = unsafe { &*sys::seL4_GetBootInfo() };
+            let init_cnode_bits = bootinfo.initThreadCNodeSizeBits as u8;
+            assert!(
+                depth_bits == init_cnode_bits,
+                "retype depth {} does not match initThreadCNodeSizeBits {}",
+                depth_bits,
+                init_cnode_bits
+            );
+            let empty_start = bootinfo.empty.start as sys::seL4_CPtr;
+            let empty_end = bootinfo.empty.end as sys::seL4_CPtr;
+            assert!(
+                dst_slot >= empty_start && dst_slot < empty_end,
+                "destination slot 0x{dst:04x} outside boot empty window [0x{lo:04x}..0x{hi:04x})",
+                dst = dst_slot,
+                lo = empty_start,
+                hi = empty_end,
+            );
+            check_slot_in_range(depth_bits, dst_slot);
+            (0, 0, dst_slot)
+        } else {
+            (dst_slot, depth.as_word(), 0)
+        };
+
         unsafe {
             sys::seL4_Untyped_Retype(
                 untyped_slot,
                 obj_type,
                 size_bits,
                 dest_root,
-                dst_slot,
-                depth.as_word(),
-                0,
+                node_index,
+                node_depth,
+                node_offset,
                 1,
             )
         }
@@ -108,14 +114,20 @@ pub fn untyped_retype_invoc(
     #[cfg(not(target_os = "none"))]
     {
         let depth = resolve_cnode_depth(depth_bits);
+        let (node_index, node_depth, node_offset) = if dest_root == sys::seL4_CapInitThreadCNode {
+            (0, 0, dst_slot)
+        } else {
+            (dst_slot, depth.as_word(), 0)
+        };
         let _ = (
             dest_root,
             depth_bits,
             untyped_slot,
             obj_type,
             size_bits,
-            dst_slot,
-            depth.as_word(),
+            node_index,
+            node_depth,
+            node_offset,
         );
         sys::seL4_NoError
     }
@@ -169,9 +181,9 @@ pub(crate) mod test_support {
                 obj_type,
                 size_bits,
                 sys::seL4_CapInitThreadCNode,
-                dst_slot,
-                depth_bits as sys::seL4_Word,
                 0,
+                0,
+                dst_slot,
                 1,
             )
         }
