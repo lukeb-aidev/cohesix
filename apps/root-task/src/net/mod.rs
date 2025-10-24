@@ -44,6 +44,12 @@ pub trait NetPoller {
 
     /// Queue a console line for transmission to remote clients.
     fn send_console_line(&mut self, line: &str);
+
+    /// Inject a console line into the network transport (testing hook).
+    fn inject_console_line(&mut self, _line: &str) {}
+
+    /// Reset the underlying transport (testing hook).
+    fn reset(&mut self) {}
 }
 
 mod console_srv;

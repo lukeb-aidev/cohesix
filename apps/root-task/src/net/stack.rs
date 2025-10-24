@@ -323,6 +323,14 @@ impl NetPoller for NetStack {
             self.telemetry.tx_drops = self.telemetry.tx_drops.saturating_add(1);
         }
     }
+
+    fn inject_console_line(&mut self, _line: &str) {}
+
+    fn reset(&mut self) {
+        self.server.end_session();
+        self.session_active = false;
+        self.telemetry = NetTelemetry::default();
+    }
 }
 
 impl Drop for NetStack {

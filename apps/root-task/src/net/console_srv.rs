@@ -2,8 +2,6 @@
 
 //! TCP console session management shared between kernel and host stacks.
 
-use core::fmt::Write;
-
 use heapless::{Deque, String as HeaplessString};
 
 use super::CONSOLE_QUEUE_DEPTH;
@@ -112,10 +110,11 @@ impl TcpConsoleServer {
         match self.state {
             SessionState::WaitingAuth => self.process_auth(line),
             SessionState::Authenticated => {
+                let line_clone = line.clone();
                 if self.inbound.push_back(line).is_err() {
                     // Drop oldest to make space for high-priority lines.
                     let _ = self.inbound.pop_front();
-                    let _ = self.inbound.push_back(line);
+                    let _ = self.inbound.push_back(line_clone);
                 }
                 SessionEvent::None
             }
@@ -161,7 +160,7 @@ impl TcpConsoleServer {
         if buf.push_str(line).is_err() {
             return Err(());
         }
-        if self.outbound.push_back(buf).is_err() {
+        if self.outbound.push_back(buf.clone()).is_err() {
             let _ = self.outbound.pop_front();
             self.outbound.push_back(buf).map_err(|_| ())
         } else {
