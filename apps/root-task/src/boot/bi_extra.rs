@@ -6,12 +6,15 @@ use core::mem::size_of;
 use core::ops::Range;
 use core::str;
 
-use sel4_sys::{seL4_BootInfo, seL4_CPtr, seL4_UntypedDesc};
+use sel4_sys::{seL4_BootInfo, seL4_CPtr, seL4_UntypedDesc, seL4_Word};
 
 use crate::sel4::BootInfoExt;
 use crate::trace;
 
 const BOOTINFO_HEADER_DUMP_LIMIT: usize = 256;
+const BOOTINFO_HEADER_WORDS: usize = 2;
+const BOOTINFO_HEADER_SIZE: usize = BOOTINFO_HEADER_WORDS * size_of::<seL4_Word>();
+const SEL4_BOOTINFO_HEADER_FDT_ID: usize = 6;
 const FDT_MAGIC: u32 = 0xD00D_FEEDu32;
 const FDT_HEADER_LEN: usize = 10 * size_of::<u32>();
 const FDT_PROP_MAX_LEN: usize = 4 << 20; // 4 MiB hard cap.
@@ -57,6 +60,36 @@ impl fmt::Display for ParseError {
             Self::PropertyTooLarge => write!(f, "DTB property too large"),
             Self::InvalidToken(token) => write!(f, "DTB token 0x{token:08x} invalid"),
             Self::UnexpectedEnd => write!(f, "DTB structure ended prematurely"),
+        }
+    }
+}
+
+/// Errors produced while parsing the bootinfo extra records.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExtraError {
+    /// The slice was shorter than a bootinfo header.
+    TooShort,
+    /// Encountered truncated data while reading a header or payload.
+    Truncated,
+    /// Reported lengths exceeded representable bounds.
+    Bounds,
+    /// A record declared a length shorter than the mandatory header.
+    InvalidLength,
+    /// The architecture word size was unexpected.
+    UnsupportedWordSize,
+    /// No DTB record was advertised in the bootinfo extra blob.
+    MissingDtb,
+}
+
+impl fmt::Display for ExtraError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::TooShort => write!(f, "bootinfo extra shorter than header"),
+            Self::Truncated => write!(f, "bootinfo extra truncated"),
+            Self::Bounds => write!(f, "bootinfo extra length overflow"),
+            Self::InvalidLength => write!(f, "bootinfo extra header length invalid"),
+            Self::UnsupportedWordSize => write!(f, "bootinfo word size unsupported"),
+            Self::MissingDtb => write!(f, "bootinfo extra missing DTB record"),
         }
     }
 }
@@ -149,22 +182,86 @@ fn bounded_range(len: usize, offset: u32, size: u32) -> Result<Range<usize>, Par
     Ok(start..end)
 }
 
+fn read_le_word(blob: &[u8], offset: usize) -> Result<usize, ExtraError> {
+    let word_bytes = size_of::<seL4_Word>();
+    let end = offset.checked_add(word_bytes).ok_or(ExtraError::Bounds)?;
+    if end > blob.len() {
+        return Err(ExtraError::Truncated);
+    }
+
+    let value = match word_bytes {
+        4 => {
+            let bytes: [u8; 4] = blob[offset..end]
+                .try_into()
+                .expect("slice length verified via bounds check");
+            u32::from_le_bytes(bytes) as u64
+        }
+        8 => {
+            let bytes: [u8; 8] = blob[offset..end]
+                .try_into()
+                .expect("slice length verified via bounds check");
+            u64::from_le_bytes(bytes)
+        }
+        _ => return Err(ExtraError::UnsupportedWordSize),
+    };
+
+    usize::try_from(value).map_err(|_| ExtraError::Bounds)
+}
+
+/// Locates the DTB payload within the bootinfo extra blob.
+pub fn locate_dtb(extra: &[u8]) -> Result<&[u8], ExtraError> {
+    if extra.len() < BOOTINFO_HEADER_SIZE {
+        return Err(ExtraError::TooShort);
+    }
+
+    let mut cursor = 0usize;
+    let word_bytes = size_of::<seL4_Word>();
+    while cursor < extra.len() {
+        if extra.len() - cursor < BOOTINFO_HEADER_SIZE {
+            return Err(ExtraError::Truncated);
+        }
+
+        let id = read_le_word(extra, cursor)?;
+        let len = read_le_word(extra, cursor + word_bytes)?;
+        if len < BOOTINFO_HEADER_SIZE {
+            return Err(ExtraError::InvalidLength);
+        }
+
+        let payload_len = len - BOOTINFO_HEADER_SIZE;
+        let payload_start = cursor + BOOTINFO_HEADER_SIZE;
+        let payload_end = payload_start
+            .checked_add(payload_len)
+            .ok_or(ExtraError::Bounds)?;
+        if payload_end > extra.len() {
+            return Err(ExtraError::Truncated);
+        }
+
+        if id == SEL4_BOOTINFO_HEADER_FDT_ID {
+            return Ok(&extra[payload_start..payload_end]);
+        }
+
+        cursor = payload_end;
+    }
+
+    Err(ExtraError::MissingDtb)
+}
+
 /// Parses the DTB header found inside the bootinfo extra region.
-pub fn parse_dtb(extra: &[u8]) -> Result<Dtb<'_>, ParseError> {
-    if extra.len() < FDT_HEADER_LEN {
+pub fn parse_dtb(dtb_blob: &[u8]) -> Result<Dtb<'_>, ParseError> {
+    if dtb_blob.len() < FDT_HEADER_LEN {
         return Err(ParseError::TooShort);
     }
 
-    let magic = read_be_u32(extra, 0)?;
+    let magic = read_be_u32(dtb_blob, 0)?;
     if magic != FDT_MAGIC {
         return Err(ParseError::BadMagic);
     }
 
-    let totalsize = read_be_u32(extra, 4)?;
-    let off_dt_struct = read_be_u32(extra, 8)?;
-    let off_dt_strings = read_be_u32(extra, 12)?;
-    let size_dt_strings = read_be_u32(extra, 32)?;
-    let size_dt_struct = read_be_u32(extra, 36)?;
+    let totalsize = read_be_u32(dtb_blob, 4)?;
+    let off_dt_struct = read_be_u32(dtb_blob, 8)?;
+    let off_dt_strings = read_be_u32(dtb_blob, 12)?;
+    let size_dt_strings = read_be_u32(dtb_blob, 32)?;
+    let size_dt_struct = read_be_u32(dtb_blob, 36)?;
 
     let header = DtbHeader {
         totalsize,
@@ -175,14 +272,14 @@ pub fn parse_dtb(extra: &[u8]) -> Result<Dtb<'_>, ParseError> {
     };
 
     let blob_len = usize::try_from(totalsize).map_err(|_| ParseError::Bounds)?;
-    if blob_len == 0 || blob_len > extra.len() {
+    if blob_len == 0 || blob_len > dtb_blob.len() {
         return Err(ParseError::Bounds);
     }
 
     let structure_range = bounded_range(blob_len, off_dt_struct, size_dt_struct)?;
     let strings_range = bounded_range(blob_len, off_dt_strings, size_dt_strings)?;
 
-    let blob = &extra[..blob_len];
+    let blob = &dtb_blob[..blob_len];
     Ok(Dtb {
         header,
         blob,

@@ -310,23 +310,30 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
     let rights = cap_rights_read_write_grant();
 
     if !extra_bytes.is_empty() {
-        match bi_extra::parse_dtb(extra_bytes) {
-            Ok(dtb) => {
-                let header = dtb.header();
-                let mut msg = heapless::String::<96>::new();
-                let _ = write!(
-                    msg,
-                    "[boot] dtb totalsize={} struct_off={} strings_off={}",
-                    header.totalsize(),
-                    header.structure_offset(),
-                    header.strings_offset(),
-                );
-                console.writeln_prefixed(msg.as_str());
-                let _ = bi_extra::dump_bootinfo(bootinfo_ref, EARLY_DUMP_LIMIT);
-            }
+        match bi_extra::locate_dtb(extra_bytes) {
+            Ok(dtb_blob) => match bi_extra::parse_dtb(dtb_blob) {
+                Ok(dtb) => {
+                    let header = dtb.header();
+                    let mut msg = heapless::String::<96>::new();
+                    let _ = write!(
+                        msg,
+                        "[boot] dtb totalsize={} struct_off={} strings_off={}",
+                        header.totalsize(),
+                        header.structure_offset(),
+                        header.strings_offset(),
+                    );
+                    console.writeln_prefixed(msg.as_str());
+                    let _ = bi_extra::dump_bootinfo(bootinfo_ref, EARLY_DUMP_LIMIT);
+                }
+                Err(err) => {
+                    let mut msg = heapless::String::<96>::new();
+                    let _ = write!(msg, "[boot] dtb parse failed: {err}");
+                    console.writeln_prefixed(msg.as_str());
+                }
+            },
             Err(err) => {
-                let mut msg = heapless::String::<96>::new();
-                let _ = write!(msg, "[boot] dtb parse failed: {err}");
+                let mut msg = heapless::String::<112>::new();
+                let _ = write!(msg, "[boot] dtb locate failed: {err}");
                 console.writeln_prefixed(msg.as_str());
             }
         }
