@@ -18,19 +18,22 @@ mod fallback {
     const BUFFER_CAPACITY: usize = 1024;
 
     #[derive(Clone, Copy)]
+    #[repr(C)]
     pub struct DebugSink {
         pub context: *mut (),
-        pub emit: unsafe fn(*mut (), u8),
+        pub emit: unsafe extern "C" fn(*mut (), u8),
     }
 
     impl DebugSink {
         pub const fn null() -> Self {
             Self {
                 context: core::ptr::null_mut(),
-                emit: |_, _| {},
+                emit: noop_emit,
             }
         }
     }
+
+    unsafe extern "C" fn noop_emit(_: *mut (), _: u8) {}
 
     static SINK_CONTEXT: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
     static SINK_EMIT: AtomicUsize = AtomicUsize::new(0);
@@ -42,7 +45,8 @@ mod fallback {
         if emit_ptr == 0 {
             return None;
         }
-        let emit = unsafe { core::mem::transmute::<usize, unsafe fn(*mut (), u8)>(emit_ptr) };
+        let emit =
+            unsafe { core::mem::transmute::<usize, unsafe extern "C" fn(*mut (), u8)>(emit_ptr) };
         let context = SINK_CONTEXT.load(Ordering::SeqCst);
         Some(DebugSink { context, emit })
     }

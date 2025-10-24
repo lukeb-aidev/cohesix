@@ -175,7 +175,7 @@ const PL011_FR_TXFF: u32 = 1 << 5;
 static mut TLS_IMAGE: sel4_sys::TlsImage = sel4_sys::TlsImage::new();
 
 #[cfg(all(feature = "kernel", not(sel4_config_printing)))]
-unsafe fn pl011_debug_emit(context: *mut (), byte: u8) {
+unsafe extern "C" fn pl011_debug_emit(context: *mut (), byte: u8) {
     let base = context.cast::<u8>();
     let dr = unsafe { base.add(PL011_DR_OFFSET).cast::<u32>() };
     let fr = unsafe { base.add(PL011_FR_OFFSET).cast::<u32>() };
@@ -689,6 +689,34 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
             context: uart_region.ptr().as_ptr().cast::<()>(),
             emit: pl011_debug_emit,
         };
+        let emit_addr = sink.emit as usize;
+        let ctx_addr = sink.context as usize;
+        let mut sink_line = heapless::String::<128>::new();
+        let _ = write!(
+            sink_line,
+            "[debug-sink] emit=0x{emit:016x} ctx=0x{ctx:016x}",
+            emit = emit_addr,
+            ctx = ctx_addr,
+        );
+        console.writeln_prefixed(sink_line.as_str());
+        if emit_addr & 0b11 != 0 {
+            panic!(
+                "debug sink emit pointer not 4-byte aligned: 0x{emit:016x}",
+                emit = emit_addr,
+            );
+        }
+        if emit_addr <= 0x1000 {
+            panic!(
+                "debug sink emit pointer unexpectedly low: 0x{emit:016x}",
+                emit = emit_addr,
+            );
+        }
+        if ctx_addr <= 0x1000 {
+            panic!(
+                "debug sink context pointer unexpectedly low: 0x{ctx:016x}",
+                ctx = ctx_addr,
+            );
+        }
         sel4_panicking::install_debug_sink(sink);
     }
     driver.write_str("[cohesix:root-task] uart logger online\n");
