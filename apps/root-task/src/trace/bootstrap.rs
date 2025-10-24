@@ -7,6 +7,7 @@ use sel4_sys::{seL4_CPtr, seL4_Error, seL4_ObjectType};
 use spin::Mutex;
 
 use super::{dec_u32, hex_u64, DebugPutc};
+use crate::sel4;
 
 const TRACE_DEPTH: usize = 64;
 const MAX_FIELDS: usize = 10;
@@ -241,10 +242,10 @@ pub(crate) fn flush_to_uart() {
                     dec_u32(&mut writer, value);
                 }
                 FieldKind::ObjectType(value) => {
-                    let _ = write!(writer, "{:?}", value);
+                    let _ = writer.write_str(sel4::object_type_name(value));
                 }
                 FieldKind::Error(value) => {
-                    let _ = write!(writer, "{:?}", value);
+                    let _ = writer.write_str(sel4::error_name(value));
                 }
                 FieldKind::Text(value) => {
                     let _ = writer.write_str(value);

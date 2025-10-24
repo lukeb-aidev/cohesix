@@ -475,12 +475,16 @@ unsafe fn sel4_debug_poll_char() -> i32 {
 
 fn objtype_name(t: seL4_Word) -> &'static str {
     use sel4_sys::seL4_ObjectType::*;
-    if t == seL4_ARM_Page as seL4_Word {
-        "seL4_ARM_Page"
-    } else if t == seL4_ARM_PageTableObject as seL4_Word {
-        "seL4_ARM_PageTableObject"
-    } else {
-        "<?>"
+    match t {
+        x if x == seL4_UntypedObject as seL4_Word => "seL4_UntypedObject",
+        x if x == seL4_TCBObject as seL4_Word => "seL4_TCBObject",
+        x if x == seL4_EndpointObject as seL4_Word => "seL4_EndpointObject",
+        x if x == seL4_NotificationObject as seL4_Word => "seL4_NotificationObject",
+        x if x == seL4_CapTableObject as seL4_Word => "seL4_CapTableObject",
+        x if x == seL4_ARM_Page as seL4_Word => "seL4_ARM_Page",
+        x if x == seL4_ARM_LargePage as seL4_Word => "seL4_ARM_LargePage",
+        x if x == seL4_ARM_PageTableObject as seL4_Word => "seL4_ARM_PageTableObject",
+        _ => "<?>",
     }
 }
 
@@ -500,6 +504,22 @@ pub fn error_name(err: seL4_Error) -> &'static str {
         sel4_sys::seL4_RevokeFirst => "seL4_RevokeFirst",
         sel4_sys::seL4_NotEnoughMemory => "seL4_NotEnoughMemory",
         _ => "seL4_UnknownError",
+    }
+}
+
+/// Converts a [`seL4_ObjectType`] into its symbolic name for diagnostics.
+#[must_use]
+pub fn object_type_name(object_type: seL4_ObjectType) -> &'static str {
+    use sel4_sys::seL4_ObjectType::*;
+    match object_type {
+        seL4_UntypedObject => "seL4_UntypedObject",
+        seL4_TCBObject => "seL4_TCBObject",
+        seL4_EndpointObject => "seL4_EndpointObject",
+        seL4_NotificationObject => "seL4_NotificationObject",
+        seL4_CapTableObject => "seL4_CapTableObject",
+        seL4_ARM_Page => "seL4_ARM_Page",
+        seL4_ARM_LargePage => "seL4_ARM_LargePage",
+        seL4_ARM_PageTableObject => "seL4_ARM_PageTableObject",
     }
 }
 
