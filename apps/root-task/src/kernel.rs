@@ -280,32 +280,9 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
 
     let ipc_buffer_ptr = bootinfo_ref.ipc_buffer_ptr();
     if let Some(ipc_ptr) = ipc_buffer_ptr {
-        let vaddr = ipc_ptr.as_ptr() as usize;
-        let map_res = unsafe {
-            sel4_sys::seL4_ARM_Page_Map(
-                sel4_sys::seL4_CapInitThreadIPCBuffer,
-                sel4_sys::seL4_CapInitThreadVSpace,
-                vaddr,
-                sel4_sys::seL4_CapRights_ReadWrite,
-                sel4_sys::seL4_ARM_Page_Default,
-            )
-        };
-        if map_res != sel4_sys::seL4_NoError {
-            let mut line = heapless::String::<160>::new();
-            let _ = write!(
-                line,
-                "seL4_ARM_Page_Map(ipc_buffer) failed: {} ({}) vaddr=0x{vaddr:016x}",
-                map_res as i32,
-                error_name(map_res)
-            );
-            console.writeln_prefixed(line.as_str());
-            panic!(
-                "seL4_ARM_Page_Map(ipc_buffer) failed: {} ({})",
-                map_res,
-                error_name(map_res)
-            );
-        }
-
+        // The kernel maps the init thread's IPC buffer before entering userspace.  Attempting
+        // to install a second mapping triggers seL4_IllegalOperation, so we simply install the
+        // pointer provided in bootinfo into TLS and rely on the existing mapping.
         unsafe {
             sel4_sys::seL4_SetIPCBuffer(ipc_ptr.as_ptr());
         }
