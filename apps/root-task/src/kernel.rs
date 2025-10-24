@@ -18,6 +18,7 @@ use crate::bootstrap::{
 use crate::console::Console;
 use crate::cspace::{cap_rights_read_write_grant, CSpace};
 use crate::event::{AuditSink, EventPump, IpcDispatcher, TickEvent, TicketTable, TimerSource};
+use crate::hal::{HalError, KernelHal};
 #[cfg(feature = "net-console")]
 use crate::net::{NetStack, CONSOLE_TCP_PORT};
 use crate::platform::{Platform, SeL4Platform};
@@ -479,17 +480,17 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
         bits = bootinfo_ref.init_cnode_bits(),
     );
     console.writeln_prefixed(cnode_line.as_str());
-    let mut env = KernelEnv::new(bootinfo_ref);
+    let mut hal = KernelHal::new(KernelEnv::new(bootinfo_ref));
     if consumed_slots > 0 {
-        env.consume_bootstrap_slots(consumed_slots);
+        hal.consume_bootstrap_slots(consumed_slots);
     }
 
     #[cfg(feature = "kernel")]
     let mut ninedoor = crate::ninedoor::NineDoorBridge::new();
 
-    let uart_region = match env.map_device(PL011_PADDR) {
+    let uart_region = match hal.map_device(PL011_PADDR) {
         Ok(region) => region,
-        Err(err) => {
+        Err(HalError::Sel4(err)) => {
             let error_code = err as i32;
             let error_label = error_name(err);
             let mut line = heapless::String::<128>::new();
@@ -502,7 +503,7 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
             );
             console.writeln_prefixed(line.as_str());
 
-            let snapshot = env.snapshot();
+            let snapshot = hal.snapshot();
             let mut window = heapless::String::<160>::new();
             let _ = write!(
                 window,
@@ -706,7 +707,7 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
                 console.writeln_prefixed("no retype trace captured");
             }
 
-            match env.device_coverage(PL011_PADDR, DEVICE_FRAME_BITS) {
+            match hal.device_coverage(PL011_PADDR, DEVICE_FRAME_BITS) {
                 Some(region) => {
                     let mut coverage = heapless::String::<192>::new();
                     let region_state = if region.used { "reserved" } else { "free" };
@@ -797,7 +798,7 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
             );
 
         #[cfg(all(feature = "net-console", feature = "kernel"))]
-        let mut net_stack = NetStack::new(&mut env).expect("virtio-net device not found");
+        let mut net_stack = NetStack::new(&mut hal).expect("virtio-net device not found");
         #[cfg(all(feature = "net-console", not(feature = "kernel")))]
         let (mut net_stack, _) = NetStack::new(Ipv4Address::new(10, 0, 0, 2));
         let timer = KernelTimer::new(5);

@@ -373,6 +373,33 @@ Introduce the **root-task compiler** (`tools/coh-rtc`) that ingests `root_task.t
 
 ---
 
+## Milestone 8a — Lightweight Hardware Abstraction Layer
+
+**Why now (context):** Kernel bring-up now relies on multiple MMIO peripherals (PL011 UART, virtio-net). Tight coupling to `KernelEnv`
+spread driver responsibilities across modules, making future platform work and compiler integration harder to reason about.
+
+**Goal**
+Carve out a lightweight Hardware Abstraction Layer so early boot and drivers consume a focused interface for mapping device pages
+and provisioning DMA buffers.
+
+**Deliverables**
+- `apps/root-task/src/hal/mod.rs` introducing `KernelHal` and the `Hardware` trait that wrap device/DMA allocation, coverage queries,
+  and allocator snapshots.
+- `apps/root-task/src/kernel.rs` switched to the HAL for PL011 bring-up and diagnostics, keeping boot logging unchanged.
+- `apps/root-task/src/drivers/virtio/net.rs` and `apps/root-task/src/net/stack.rs` updated to rely on the HAL rather than touching
+  `KernelEnv` directly, simplifying future platform support.
+- Documentation updates in this build plan describing the milestone and entry criteria.
+
+**Commands**
+- `cargo check -p root-task --features "kernel,net-console"`
+
+**Checks (DoD)**
+- Root task still boots with PL011 logging and virtio-net initialisation using the new HAL bindings.
+- HAL error propagation surfaces seL4 error codes for diagnostics (no regression in boot failure logs).
+- Workspace `cargo check` succeeds with the kernel and net-console features enabled.
+
+---
+
 ## Milestone 9 — 9P Pipelining & Batching (Foundational Concurrency)
 
 **Why now (compiler):** High-throughput telemetry and remote operations (Edge §§3–5, Telco MEC, Retail vision) require multiple inflight requests without abandoning strict bounds. Compiler-enforced knobs let us dial concurrency per deployment while preserving determinism.
