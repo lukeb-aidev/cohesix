@@ -378,7 +378,14 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
         );
     }
 
-    let fault_handler_err = unsafe { sel4_sys::seL4_TCB_SetFaultHandler(tcb_copy_slot, ep_slot) };
+    let fault_handler_err = unsafe {
+        sel4_sys::seL4_TCB_SetFaultHandler(
+            tcb_copy_slot,
+            ep_slot,
+            sel4_sys::seL4_CapInitThreadCNode,
+            sel4_sys::seL4_CapInitThreadVSpace,
+        )
+    };
     if fault_handler_err != sel4_sys::seL4_NoError {
         let mut line = heapless::String::<160>::new();
         let _ = write!(

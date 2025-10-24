@@ -15,6 +15,7 @@ mod imp {
 
     pub type seL4_Word = usize;
     pub type seL4_CPtr = seL4_Word;
+    pub type seL4_TCB = seL4_CPtr;
     pub type seL4_Uint8 = u8;
     pub type seL4_Uint16 = u16;
     pub type seL4_Uint32 = u32;
@@ -34,6 +35,8 @@ mod imp {
 
     pub const seL4_MessageRegisterCount: usize = 4;
 
+    const SEL4_TCB_SET_SPACE: seL4_Word = 10;
+    const SEL4_TCB_SUSPEND: seL4_Word = 11;
     const SEL4_CNODE_DELETE: seL4_Word = 18;
     const SEL4_CNODE_COPY: seL4_Word = 20;
     const SEL4_CNODE_MOVE: seL4_Word = 22;
@@ -163,6 +166,7 @@ mod imp {
 
     pub type seL4_Untyped = seL4_CPtr;
     pub type seL4_CNode = seL4_CPtr;
+    pub type seL4_TCB = seL4_CPtr;
     pub type seL4_VSpace = seL4_CPtr;
     pub type seL4_ARM_Page = seL4_CPtr;
     pub type seL4_ARM_PageTable = seL4_CPtr;
@@ -634,6 +638,53 @@ mod imp {
     }
 
     #[inline(always)]
+    pub unsafe fn seL4_TCB_SetSpace(
+        service: seL4_TCB,
+        fault_ep: seL4_CPtr,
+        cspace_root: seL4_CNode,
+        cspace_root_data: seL4_Word,
+        vspace_root: seL4_CPtr,
+        vspace_root_data: seL4_Word,
+    ) -> seL4_Error {
+        let msg = seL4_MessageInfo::new(SEL4_TCB_SET_SPACE, 0, 3, 2);
+        let mut mr0 = cspace_root_data;
+        let mut mr1 = vspace_root_data;
+        let mut mr2 = 0usize;
+        let mut mr3 = 0usize;
+
+        seL4_SetCap(0, fault_ep);
+        seL4_SetCap(1, cspace_root);
+        seL4_SetCap(2, vspace_root);
+
+        let info = seL4_CallWithMRs(service, msg, &mut mr0, &mut mr1, &mut mr2, &mut mr3);
+
+        info.label() as seL4_Error
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_TCB_SetFaultHandler(
+        service: seL4_TCB,
+        fault_ep: seL4_CPtr,
+        cspace_root: seL4_CNode,
+        vspace_root: seL4_CPtr,
+    ) -> seL4_Error {
+        seL4_TCB_SetSpace(service, fault_ep, cspace_root, 0, vspace_root, 0)
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_TCB_Suspend(service: seL4_TCB) -> seL4_Error {
+        let msg = seL4_MessageInfo::new(SEL4_TCB_SUSPEND, 0, 0, 0);
+        let mut mr0 = 0usize;
+        let mut mr1 = 0usize;
+        let mut mr2 = 0usize;
+        let mut mr3 = 0usize;
+
+        let info = seL4_CallWithMRs(service, msg, &mut mr0, &mut mr1, &mut mr2, &mut mr3);
+
+        info.label() as seL4_Error
+    }
+
+    #[inline(always)]
     pub unsafe fn seL4_CNode_Delete(
         root: seL4_CNode,
         index: seL4_CPtr,
@@ -758,6 +809,7 @@ mod host_stub {
     pub type seL4_CPtr = usize;
     pub type seL4_Error = isize;
     pub type seL4_CNode = seL4_CPtr;
+    pub type seL4_TCB = seL4_CPtr;
     pub type seL4_Untyped = seL4_CPtr;
     pub type seL4_VSpace = seL4_CPtr;
     pub type seL4_ARM_Page = seL4_CPtr;
@@ -938,6 +990,33 @@ mod host_stub {
 
     #[inline(always)]
     pub unsafe fn seL4_GetCap(_slot: usize) -> seL4_CPtr {
+        unsupported();
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_TCB_SetSpace(
+        _service: seL4_TCB,
+        _fault_ep: seL4_CPtr,
+        _cspace_root: seL4_CNode,
+        _cspace_root_data: seL4_Word,
+        _vspace_root: seL4_CPtr,
+        _vspace_root_data: seL4_Word,
+    ) -> seL4_Error {
+        unsupported();
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_TCB_SetFaultHandler(
+        _service: seL4_TCB,
+        _fault_ep: seL4_CPtr,
+        _cspace_root: seL4_CNode,
+        _vspace_root: seL4_CPtr,
+    ) -> seL4_Error {
+        unsupported();
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_TCB_Suspend(_service: seL4_TCB) -> seL4_Error {
         unsupported();
     }
 
