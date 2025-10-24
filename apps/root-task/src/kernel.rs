@@ -165,6 +165,12 @@ const DEVICE_FRAME_BITS: usize = 12;
 const EARLY_DUMP_LIMIT: usize = 512;
 
 #[cfg(all(feature = "kernel", not(sel4_config_printing)))]
+static mut EARLY_UART_SINK: DebugSink = DebugSink {
+    context: core::ptr::null_mut(),
+    emit: pl011_debug_emit,
+};
+
+#[cfg(all(feature = "kernel", not(sel4_config_printing)))]
 const PL011_DR_OFFSET: usize = 0x00;
 #[cfg(all(feature = "kernel", not(sel4_config_printing)))]
 const PL011_FR_OFFSET: usize = 0x18;
@@ -176,6 +182,11 @@ static mut TLS_IMAGE: sel4_sys::TlsImage = sel4_sys::TlsImage::new();
 
 #[cfg(all(feature = "kernel", not(sel4_config_printing)))]
 unsafe extern "C" fn pl011_debug_emit(context: *mut (), byte: u8) {
+    debug_assert!(!context.is_null(), "PL011 sink context must be valid");
+    debug_assert!(
+        context as usize & (core::mem::align_of::<u32>() - 1) == 0,
+        "PL011 sink context must be 4-byte aligned",
+    );
     let base = context.cast::<u8>();
     let dr = unsafe { base.add(PL011_DR_OFFSET).cast::<u32>() };
     let fr = unsafe { base.add(PL011_FR_OFFSET).cast::<u32>() };
@@ -692,10 +703,14 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
     driver.init();
     #[cfg(all(feature = "kernel", not(sel4_config_printing)))]
     {
-        let sink = DebugSink {
-            context: uart_region.ptr().as_ptr().cast::<()>(),
-            emit: pl011_debug_emit,
-        };
+        unsafe {
+            EARLY_UART_SINK = DebugSink {
+                context: uart_region.ptr().as_ptr().cast::<()>(),
+                emit: pl011_debug_emit,
+            };
+        }
+
+        let sink = unsafe { EARLY_UART_SINK };
         let emit_addr = sink.emit as usize;
         let ctx_addr = sink.context as usize;
         let mut sink_line = heapless::String::<128>::new();
