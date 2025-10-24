@@ -40,15 +40,51 @@ mod fallback {
     static SINK_EMIT: AtomicUsize = AtomicUsize::new(0);
     static BUFFER: Mutex<Deque<u8, BUFFER_CAPACITY>> = Mutex::new(Deque::new());
 
+    const MIN_VALID_PTR: usize = 0x1000;
+    const PTR_ALIGN_MASK: usize = 0b11;
+
+    #[inline(always)]
+    fn pointer_sane(addr: usize) -> bool {
+        addr > MIN_VALID_PTR && addr & PTR_ALIGN_MASK == 0
+    }
+
+    fn context_sane(context: *mut ()) -> bool {
+        context.is_null() || (context as usize) > MIN_VALID_PTR
+    }
+
+    fn log_sink_corruption(kind: &str, emit_addr: usize, context: *mut ()) {
+        let mut line = HeaplessString::<160>::new();
+        let _ = write!(
+            line,
+            "[sel4-panicking] {kind} emit=0x{emit:016x} ctx=0x{ctx:016x}\n",
+            kind = kind,
+            emit = emit_addr,
+            ctx = context as usize,
+        );
+        buffer_message(line.as_str());
+    }
+
     #[inline(always)]
     fn current_sink() -> Option<DebugSink> {
         let emit_ptr = SINK_EMIT.load(Ordering::SeqCst);
         if emit_ptr == 0 {
             return None;
         }
+        let context = SINK_CONTEXT.load(Ordering::SeqCst);
+        if !pointer_sane(emit_ptr) {
+            log_sink_corruption("invalid_debug_sink", emit_ptr, context);
+            SINK_EMIT.store(0, Ordering::SeqCst);
+            SINK_CONTEXT.store(core::ptr::null_mut(), Ordering::SeqCst);
+            return None;
+        }
+        if !context_sane(context) {
+            log_sink_corruption("invalid_debug_context", emit_ptr, context);
+            SINK_EMIT.store(0, Ordering::SeqCst);
+            SINK_CONTEXT.store(core::ptr::null_mut(), Ordering::SeqCst);
+            return None;
+        }
         let emit =
             unsafe { core::mem::transmute::<usize, unsafe extern "C" fn(*mut (), u8)>(emit_ptr) };
-        let context = SINK_CONTEXT.load(Ordering::SeqCst);
         Some(DebugSink { context, emit })
     }
 
@@ -118,10 +154,35 @@ mod fallback {
     }
 
     pub use DebugSink as Sink;
+
+    #[cfg(test)]
+    pub(crate) fn reset_sink() {
+        SINK_EMIT.store(0, Ordering::SeqCst);
+        SINK_CONTEXT.store(core::ptr::null_mut(), Ordering::SeqCst);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn install_raw_sink(context: *mut (), emit: usize) {
+        SINK_CONTEXT.store(context, Ordering::SeqCst);
+        SINK_EMIT.store(emit, Ordering::SeqCst);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn buffer_contents() -> heapless::Vec<u8, BUFFER_CAPACITY> {
+        let mut snapshot = heapless::Vec::new();
+        let guard = BUFFER.lock();
+        for byte in guard.iter().copied() {
+            let _ = snapshot.push(byte);
+        }
+        snapshot
+    }
 }
 
 #[cfg(not(sel4_config_printing))]
 pub use fallback::Sink as DebugSink;
+
+#[cfg(test)]
+use fallback::{buffer_contents, install_raw_sink, reset_sink};
 
 struct DebugWriter;
 
@@ -182,5 +243,63 @@ fn panic(info: &PanicInfo) -> ! {
     let _ = writeln!(writer, "[sel4-panicking] panic: {info}");
     loop {
         write_debug_byte(b'!');
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::ptr;
+    use core::sync::atomic::{AtomicU8, Ordering};
+
+    unsafe extern "C" fn capture_emit(context: *mut (), byte: u8) {
+        let slot_ptr = context as *const AtomicU8;
+        if let Some(slot) = unsafe { slot_ptr.as_ref() } {
+            slot.store(byte, Ordering::SeqCst);
+        }
+    }
+
+    fn clear_debug_buffer() {
+        drain_debug_bytes(|_| {});
+    }
+
+    #[test]
+    fn invalid_emit_pointer_is_buffered() {
+        clear_debug_buffer();
+        reset_sink();
+        install_raw_sink(ptr::null_mut(), 0x2);
+        write_debug_byte(b'A');
+        let snapshot = buffer_contents();
+        assert_eq!(snapshot.as_slice().last(), Some(&b'A'));
+        clear_debug_buffer();
+        reset_sink();
+    }
+
+    #[test]
+    fn valid_emit_pointer_is_used() {
+        clear_debug_buffer();
+        reset_sink();
+        static CAPTURED: AtomicU8 = AtomicU8::new(0);
+        let context = &CAPTURED as *const AtomicU8 as *mut ();
+        install_raw_sink(context, capture_emit as usize);
+        write_debug_byte(b'B');
+        assert_eq!(CAPTURED.load(Ordering::SeqCst), b'B');
+        clear_debug_buffer();
+        reset_sink();
+    }
+
+    #[test]
+    fn invalid_context_pointer_is_buffered() {
+        clear_debug_buffer();
+        reset_sink();
+        static CAPTURED: AtomicU8 = AtomicU8::new(0);
+        let bogus_context = 0x10usize as *mut ();
+        install_raw_sink(bogus_context, capture_emit as usize);
+        write_debug_byte(b'C');
+        assert_eq!(CAPTURED.load(Ordering::SeqCst), 0);
+        let snapshot = buffer_contents();
+        assert_eq!(snapshot.as_slice().last(), Some(&b'C'));
+        clear_debug_buffer();
+        reset_sink();
     }
 }
