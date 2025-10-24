@@ -21,7 +21,9 @@ net-console = [
 net-irq = []
 sel4-debug = []
 debug-input = []
-bootstrap-trace = []
+bootstrap-trace = [
+    "dep:spin",
+]
 
 [dependencies]
 cohesix-ticket = { workspace = true }
