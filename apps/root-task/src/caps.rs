@@ -26,7 +26,7 @@ fn canonicalize_cnode_destination(
 
 #[inline]
 fn debug_retype_log(
-    phase: &str,
+    phase: &'static str,
     untyped: seL4_CPtr,
     obj_type: seL4_ObjectType,
     size_bits: u32,
@@ -56,6 +56,22 @@ fn debug_retype_log(
         let _ = write!(writer, " -> err={:?}", error);
     }
     let _ = writer.write_str("\n");
+
+    #[cfg(feature = "bootstrap-trace")]
+    {
+        crate::trace::bootstrap::record_retype_event(
+            phase,
+            untyped,
+            obj_type,
+            size_bits,
+            dst_cnode,
+            node_index,
+            node_depth,
+            node_offset,
+            num_objects,
+            err,
+        );
+    }
 }
 
 /// Retypes an untyped capability, emitting debug traces before and after the kernel call.

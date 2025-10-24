@@ -4,6 +4,9 @@ use core::cmp;
 use core::fmt::{self, Arguments, Write};
 use sel4_sys::{seL4_CPtr, seL4_Error};
 
+#[cfg(feature = "bootstrap-trace")]
+pub mod bootstrap;
+
 use crate::{
     sel4::{self, debug_put_char},
     serial,
