@@ -15,7 +15,6 @@ mod imp {
 
     pub type seL4_Word = usize;
     pub type seL4_CPtr = seL4_Word;
-    pub type seL4_TCB = seL4_CPtr;
     pub type seL4_Uint8 = u8;
     pub type seL4_Uint16 = u16;
     pub type seL4_Uint32 = u32;
