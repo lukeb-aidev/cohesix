@@ -187,7 +187,7 @@ pub fn install_debug_sink() {
 
     let sink = DebugSink {
         context: core::ptr::null_mut(),
-        emit: emit as unsafe fn(*mut (), u8),
+        emit,
     };
     sel4_panicking::install_debug_sink(sink);
 }
