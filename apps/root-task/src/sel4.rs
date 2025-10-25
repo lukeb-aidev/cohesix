@@ -7,6 +7,7 @@
 
 use core::{
     arch::asm,
+    convert::TryFrom,
     fmt, mem,
     ptr::{self, NonNull},
     sync::atomic::{AtomicUsize, Ordering},
@@ -335,7 +336,8 @@ pub fn cnode_copy(
 ) -> seL4_Error {
     debug_put_char(b'C' as i32);
     let _ = bootinfo;
-    let depth = root_guard_depth();
+    let depth_word = root_guard_depth();
+    let depth = u8::try_from(depth_word).expect("root CNode guard depth exceeds u8");
     unsafe {
         seL4_CNode_Copy(
             dest_root, dest_index, depth, src_root, src_index, depth, rights,
@@ -399,7 +401,8 @@ pub(crate) fn cnode_mint(
 ) -> seL4_Error {
     debug_put_char(b'C' as i32);
     let _ = bootinfo;
-    let depth = root_guard_depth();
+    let depth_word = root_guard_depth();
+    let depth = u8::try_from(depth_word).expect("root CNode guard depth exceeds u8");
     unsafe {
         seL4_CNode_Mint(
             dest_root, dest_index, depth, src_root, src_index, depth, rights, badge,
