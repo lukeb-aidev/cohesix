@@ -335,8 +335,34 @@ Deliverables: Bidirectional console acknowledgements spanning serial and TCP tra
 - `https://crates.io/crates/nb` (non-blocking IO helpers)
 - `https://crates.io/crates/spin` (lock primitives for bounded queues)
 
+## Milestone 8a — Lightweight Hardware Abstraction Layer
 
-## Milestone 8 — Root-Task Compiler & Deterministic Profiles
+**Why now (context):** Kernel bring-up now relies on multiple MMIO peripherals (PL011 UART, virtio-net). Tight coupling to `KernelEnv`
+spread driver responsibilities across modules, making future platform work and compiler integration harder to reason about.
+
+**Goal**
+Carve out a lightweight Hardware Abstraction Layer so early boot and drivers consume a focused interface for mapping device pages
+and provisioning DMA buffers.
+
+**Deliverables**
+- `apps/root-task/src/hal/mod.rs` introducing `KernelHal` and the `Hardware` trait that wrap device/DMA allocation, coverage queries,
+  and allocator snapshots.
+- `apps/root-task/src/kernel.rs` switched to the HAL for PL011 bring-up and diagnostics, keeping boot logging unchanged.
+- `apps/root-task/src/drivers/virtio/net.rs` and `apps/root-task/src/net/stack.rs` updated to rely on the HAL rather than touching
+  `KernelEnv` directly, simplifying future platform support.
+- Documentation updates in this build plan describing the milestone and entry criteria.
+
+**Commands**
+- `cargo check -p root-task --features "kernel,net-console"`
+
+**Checks (DoD)**
+- Root task still boots with PL011 logging and virtio-net initialisation using the new HAL bindings.
+- HAL error propagation surfaces seL4 error codes for diagnostics (no regression in boot failure logs).
+- Workspace `cargo check` succeeds with the kernel and net-console features enabled.
+
+---
+
+## Milestone 8b — Root-Task Compiler & Deterministic Profiles
 
 **Why now (context):** Milestones 0–7d stabilised the execution core, but the path to the use cases in `docs/USE_CASES.md` demands a deterministic configuration layer that keeps `no_std` guarantees intact while preventing namespace or policy drift. A tiny IR-driven compiler lets us regenerate the root task, documentation, and tests from a single artefact so smart-factory, energy, and fintech operators can audit what actually runs.
 
@@ -370,33 +396,6 @@ Introduce the **root-task compiler** (`tools/coh-rtc`) that ingests `root_task.t
 - Adds `root_task.schema = "1.0"`, ties schema version to docs, and emits manifest metadata consumed by the future as-built guard.
 - Generates a `generated/mod.rs` index annotated with “GENERATED – do not edit” comments so auditors can diff artefacts cleanly.
 - Captures feature toggles (`net`, `telemetry`, `gpu`) for later hardware planning without enabling them implicitly.
-
----
-
-## Milestone 8a — Lightweight Hardware Abstraction Layer
-
-**Why now (context):** Kernel bring-up now relies on multiple MMIO peripherals (PL011 UART, virtio-net). Tight coupling to `KernelEnv`
-spread driver responsibilities across modules, making future platform work and compiler integration harder to reason about.
-
-**Goal**
-Carve out a lightweight Hardware Abstraction Layer so early boot and drivers consume a focused interface for mapping device pages
-and provisioning DMA buffers.
-
-**Deliverables**
-- `apps/root-task/src/hal/mod.rs` introducing `KernelHal` and the `Hardware` trait that wrap device/DMA allocation, coverage queries,
-  and allocator snapshots.
-- `apps/root-task/src/kernel.rs` switched to the HAL for PL011 bring-up and diagnostics, keeping boot logging unchanged.
-- `apps/root-task/src/drivers/virtio/net.rs` and `apps/root-task/src/net/stack.rs` updated to rely on the HAL rather than touching
-  `KernelEnv` directly, simplifying future platform support.
-- Documentation updates in this build plan describing the milestone and entry criteria.
-
-**Commands**
-- `cargo check -p root-task --features "kernel,net-console"`
-
-**Checks (DoD)**
-- Root task still boots with PL011 logging and virtio-net initialisation using the new HAL bindings.
-- HAL error propagation surfaces seL4 error codes for diagnostics (no regression in boot failure logs).
-- Workspace `cargo check` succeeds with the kernel and net-console features enabled.
 
 ---
 
