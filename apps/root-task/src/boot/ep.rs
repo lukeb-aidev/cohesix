@@ -31,8 +31,9 @@ pub fn bootstrap_ep(bi: &seL4_BootInfo, cs: &mut CSpace) -> Result<seL4_CPtr, se
     let ep_slot = cs.alloc_slot()?;
 
     let root = seL4_CapInitThreadCNode as seL4_CPtr;
-    let node_index = 0;
-    let node_depth = 0u8;
+    let node_index = ep_slot;
+    let node_depth = cs.depth();
+    let node_offset = 0;
 
     crate::trace::println!(
         "[cs: root=0x{root:x} bits={bits} first_free=0x{slot:x}]",
@@ -63,7 +64,7 @@ pub fn bootstrap_ep(bi: &seL4_BootInfo, cs: &mut CSpace) -> Result<seL4_CPtr, se
         root,
         node_index,
         node_depth,
-        ep_slot,
+        node_offset,
     )?;
 
     sel4::set_ep(ep_slot);
