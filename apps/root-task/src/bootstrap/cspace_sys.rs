@@ -174,10 +174,10 @@ pub fn untyped_retype_into_init_cnode(
         );
 
         let node_index = dst_slot as sys::seL4_Word;
-        let node_depth = sel4_sys::seL4_WordBits as sys::seL4_Word;
+        let node_depth = sys::WORD_BITS;
         let node_offset = 0u64 as sys::seL4_Word;
         log::trace!(
-            "[cohesix:root-task] retype.into_init_cnode root=initCNode index=0x{index:zx} depth={depth}(WB) offset={offset}",
+            "[cohesix:root-task] retype.into_init_cnode root=initCNode index=0x{index:x} depth={depth}(WB) offset={offset}",
             index = node_index,
             depth = node_depth,
             offset = node_offset,
