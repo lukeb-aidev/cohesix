@@ -164,10 +164,19 @@ pub fn replyrecv_guarded(
     Ok(message)
 }
 
-/// Returns the addressing depth (in bits) of the init thread's root CNode.
+/// Returns the canonical guard depth (in bits) for the init thread's root CNode.
+///
+/// seL4 expects the guard depth used in CSpace invocations to match the machine
+/// word width, regardless of the number of addressable slots exposed via
+/// `initThreadCNodeSizeBits`.  The kernel enforces the guard bits derived from
+/// the compiled CNode layout, so truncating the invocation depth to the slot
+/// radix causes lookups such as `seL4_Untyped_Retype` to fail with
+/// `seL4_IllegalOperation`.  Always return `WORD_BITS` so the invocation path
+/// resolves the init thread's root CNode directly.
 #[inline]
 pub fn init_cnode_depth(bi: &seL4_BootInfo) -> u8 {
-    bi.initThreadCNodeSizeBits as u8
+    let _ = bi;
+    WORD_BITS as u8
 }
 
 /// Emits a single byte to the seL4 debug console.
