@@ -77,11 +77,7 @@ pub(crate) fn init_cnode_direct_destination_words(
         (dst_slot as usize) < (1usize << init_cnode_bits),
         "destination slot {dst_slot:#x} exceeds init CNode capacity (bits={init_cnode_bits})"
     );
-    (
-        dst_slot as sys::seL4_Word,
-        sys::WORD_BITS,
-        0,
-    )
+    (dst_slot as sys::seL4_Word, sys::WORD_BITS, 0)
 }
 
 #[cfg(test)]
@@ -177,16 +173,24 @@ pub fn untyped_retype_into_init_cnode(
             bootinfo.initThreadCNodeSizeBits
         );
 
-        let depth = sys::WORD_BITS;
+        let node_index = dst_slot as sys::seL4_Word;
+        let node_depth = sel4_sys::seL4_WordBits as sys::seL4_Word;
+        let node_offset = 0u64 as sys::seL4_Word;
+        log::trace!(
+            "[cohesix:root-task] retype.into_init_cnode root=initCNode index=0x{index:zx} depth={depth}(WB) offset={offset}",
+            index = node_index,
+            depth = node_depth,
+            offset = node_offset,
+        );
         unsafe {
             sys::seL4_Untyped_Retype(
                 untyped_slot,
                 obj_type,
                 size_bits,
                 sys::seL4_CapInitThreadCNode,
-                dst_slot,
-                depth,
-                0,
+                node_index,
+                node_depth,
+                node_offset,
                 1,
             )
         }
