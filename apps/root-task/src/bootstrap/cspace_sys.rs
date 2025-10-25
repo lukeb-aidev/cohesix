@@ -205,6 +205,18 @@ pub fn untyped_retype_into_cnode(
 ) -> sys::seL4_Error {
     #[cfg(target_os = "none")]
     {
+        // The Rust root-task path enforces `node_depth = initThreadCNodeSizeBits` when targeting the
+        // init CNode. Host-side tooling may still call into this helper, so guard the kernel path to
+        // ensure we never regress to zero-depth retypes.
+        if dest_root == sys::seL4_CapInitThreadCNode {
+            let bootinfo = unsafe { &*sys::seL4_GetBootInfo() };
+            let init_bits = bootinfo.initThreadCNodeSizeBits as u8;
+            assert_eq!(
+                depth_bits, init_bits,
+                "init CNode retypes must use initThreadCNodeSizeBits depth (provided={} expected={})",
+                depth_bits, init_bits
+            );
+        }
         let depth = resolve_cnode_depth(depth_bits);
         unsafe {
             sys::seL4_Untyped_Retype(
