@@ -66,6 +66,22 @@ pub fn encode_cnode_depth(bits: u8) -> sys::seL4_Word {
     resolve_cnode_depth(bits).as_word()
 }
 
+#[cfg(any(test, not(target_os = "none")))]
+#[inline(always)]
+pub(crate) fn init_cnode_direct_destination_words(
+    dst_slot: sys::seL4_CPtr,
+) -> (sys::seL4_Word, sys::seL4_Word, sys::seL4_Word) {
+    (0, 0, dst_slot as sys::seL4_Word)
+}
+
+#[cfg(test)]
+#[inline(always)]
+pub fn init_cnode_direct_destination_words_for_test(
+    dst_slot: sys::seL4_CPtr,
+) -> (sys::seL4_Word, sys::seL4_Word, sys::seL4_Word) {
+    init_cnode_direct_destination_words(dst_slot)
+}
+
 #[cfg(not(target_os = "none"))]
 mod host_trace {
     use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -158,11 +174,12 @@ pub fn untyped_retype_into_init_cnode(
 
     #[cfg(not(target_os = "none"))]
     {
+        let (node_index, node_depth, node_offset) = init_cnode_direct_destination_words(dst_slot);
         host_trace::record(host_trace::HostRetypeTrace {
             root: sys::seL4_CapInitThreadCNode,
-            node_index: 0,
-            node_depth: 0,
-            node_offset: dst_slot as sys::seL4_Word,
+            node_index,
+            node_depth,
+            node_offset,
         });
         let _ = (depth_bits, untyped_slot, obj_type, size_bits, dst_slot);
         sys::seL4_NoError

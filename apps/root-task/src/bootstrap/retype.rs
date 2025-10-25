@@ -11,13 +11,7 @@ pub fn retype_one(
     obj_type: sys::seL4_ObjectType,
     obj_bits: u8,
 ) -> Result<sys::seL4_CPtr, sys::seL4_Error> {
-    let slot = match ctx.alloc_slot_checked() {
-        Ok(slot) => slot,
-        Err(err) => {
-            ctx.log_slot_failure(err);
-            return Err(sys::seL4_RangeError);
-        }
-    };
+    let slot = ctx.alloc_slot_checked()?;
 
     let err = ctx.retype_to_slot(
         untyped,
@@ -27,6 +21,10 @@ pub fn retype_one(
     );
     if err != sys::seL4_NoError {
         return Err(err);
+    }
+
+    if ctx.root_cnode_copy_slot == sys::seL4_CapNull {
+        ctx.mint_root_cnode_copy()?;
     }
 
     Ok(slot)
