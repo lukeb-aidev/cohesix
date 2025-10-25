@@ -651,7 +651,7 @@ impl PlaySomethingIntent {
             .library
             .items()
             .filter(|item| query.matches(item))
-            .map(|item| {
+            .filter_map(|item| {
                 if !self.permissions.is_granted(item.provider()) {
                     blocked_provider = Some(item.provider());
                     return None;
@@ -679,7 +679,6 @@ impl PlaySomethingIntent {
                 let score = base + duration_alignment + cadence_alignment;
                 Some((score, item, rationale))
             })
-            .flatten()
             .collect();
 
         if scored.is_empty() {
