@@ -18,7 +18,7 @@ use crate::bootstrap::{
 use crate::console::Console;
 use crate::cspace::{cap_rights_read_write_grant, CSpace};
 use crate::event::{AuditSink, EventPump, IpcDispatcher, TickEvent, TicketTable, TimerSource};
-use crate::hal::{HalError, KernelHal};
+use crate::hal::{HalError, Hardware, KernelHal};
 #[cfg(feature = "net-console")]
 use crate::net::{NetStack, CONSOLE_TCP_PORT};
 use crate::platform::{Platform, SeL4Platform};

@@ -9,7 +9,7 @@ use sel4_sys::{
 use crate::boot::bi_extra::first_regular_untyped_from_extra;
 use crate::caps::traced_retype_into_slot;
 use crate::cspace::CSpace;
-use crate::sel4::{self, BootInfoExt};
+use crate::sel4;
 use crate::serial;
 
 /// One-shot endpoint bootstrap: pick a regular untyped, retype, publish, and trace.
