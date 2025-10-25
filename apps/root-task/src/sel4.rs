@@ -1487,6 +1487,18 @@ impl<'a> KernelEnv<'a> {
         })
     }
 
+    /// Maps the init thread's IPC buffer frame into the supplied virtual address.
+    pub fn map_ipc_buffer(&mut self, vaddr: usize) -> Result<(), seL4_Error> {
+        assert_ne!(vaddr, 0, "IPC buffer pointer must be non-null");
+        let aligned = Self::align_down(vaddr, PAGE_SIZE);
+        assert_eq!(
+            aligned, vaddr,
+            "IPC buffer pointer must be aligned to the page size"
+        );
+
+        self.map_frame(seL4_CapInitThreadIPCBuffer, vaddr, seL4_ARM_Page_Default)
+    }
+
     /// Allocates a DMA-capable frame of RAM and maps it into the DMA window.
     pub fn alloc_dma_frame(&mut self) -> Result<RamFrame, seL4_Error> {
         let reserved = self

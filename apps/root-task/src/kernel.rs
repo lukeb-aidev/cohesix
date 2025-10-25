@@ -274,6 +274,7 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
     console.writeln_prefixed("Cohesix v0 (AArch64/virt)");
 
     bootinfo_debug_dump(bootinfo_ref);
+    let mut kernel_env = KernelEnv::new(bootinfo_ref);
     let extra_bytes = bootinfo_ref.extra_bytes();
     if !extra_bytes.is_empty() {
         console.writeln_prefixed("[boot] deferring DTB parse");
@@ -281,11 +282,30 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
 
     let ipc_buffer_ptr = bootinfo_ref.ipc_buffer_ptr();
     if let Some(ipc_ptr) = ipc_buffer_ptr {
-        // The kernel maps the init thread's IPC buffer before entering userspace.  Attempting
-        // to install a second mapping triggers seL4_IllegalOperation, so we simply install the
-        // pointer provided in bootinfo into TLS and rely on the existing mapping.
-        unsafe {
-            sel4_sys::seL4_SetIPCBuffer(ipc_ptr.as_ptr());
+        let ipc_vaddr = ipc_ptr.as_ptr() as usize;
+        match kernel_env.map_ipc_buffer(ipc_vaddr) {
+            Ok(()) => {
+                let mut msg = heapless::String::<112>::new();
+                let _ = write!(
+                    msg,
+                    "[boot] ipc buffer mapped @ 0x{ipc_vaddr:08x}",
+                    ipc_vaddr = ipc_vaddr,
+                );
+                console.writeln_prefixed(msg.as_str());
+            }
+            Err(err) => {
+                crate::trace::trace_fail(b"map_ipc_buffer", err);
+                let mut msg = heapless::String::<160>::new();
+                let _ = write!(
+                    msg,
+                    "failed to map IPC buffer @ 0x{ipc_vaddr:08x}: {label} ({code})",
+                    ipc_vaddr = ipc_vaddr,
+                    label = error_name(err),
+                    code = err as i32,
+                );
+                console.writeln_prefixed(msg.as_str());
+                panic!("map_ipc_buffer failed: {}", error_name(err));
+            }
         }
     }
 
@@ -480,7 +500,7 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
         bits = bootinfo_ref.init_cnode_bits(),
     );
     console.writeln_prefixed(cnode_line.as_str());
-    let mut hal = KernelHal::new(KernelEnv::new(bootinfo_ref));
+    let mut hal = KernelHal::new(kernel_env);
     if consumed_slots > 0 {
         hal.consume_bootstrap_slots(consumed_slots);
     }
