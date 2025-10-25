@@ -17,8 +17,9 @@ fn init_cnode_retype_uses_direct_destination_encoding() {
     let size_bits: seL4_Word = 0;
     let dst_slot: seL4_CPtr = 0x40;
 
-    let (_index, depth, _offset) = init_cnode_direct_destination_words_for_test(dst_slot);
-    assert_eq!(depth, 0, "init CNode marshaler must emit depth=0");
+    let (_index, depth, _offset) =
+        init_cnode_direct_destination_words_for_test(depth_bits, dst_slot);
+    assert_eq!(depth, depth_bits as seL4_Word);
 
     let err = untyped_retype_into_init_cnode(depth_bits, untyped, obj_ty, size_bits, dst_slot);
     assert_eq!(err, seL4_NoError);
@@ -28,6 +29,6 @@ fn init_cnode_retype_uses_direct_destination_encoding() {
 
     assert_eq!(trace.root, seL4_CapInitThreadCNode);
     assert_eq!(trace.node_index, 0);
-    assert_eq!(trace.node_depth, 0);
+    assert_eq!(trace.node_depth, depth_bits as seL4_Word);
     assert_eq!(trace.node_offset, dst_slot as seL4_Word);
 }

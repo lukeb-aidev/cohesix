@@ -69,17 +69,23 @@ pub fn encode_cnode_depth(bits: u8) -> sys::seL4_Word {
 #[cfg(any(test, not(target_os = "none")))]
 #[inline(always)]
 pub(crate) fn init_cnode_direct_destination_words(
+    init_cnode_bits: u8,
     dst_slot: sys::seL4_CPtr,
 ) -> (sys::seL4_Word, sys::seL4_Word, sys::seL4_Word) {
-    (0, 0, dst_slot as sys::seL4_Word)
+    (
+        0,
+        encode_cnode_depth(init_cnode_bits),
+        dst_slot as sys::seL4_Word,
+    )
 }
 
 #[cfg(test)]
 #[inline(always)]
 pub fn init_cnode_direct_destination_words_for_test(
+    depth_bits: u8,
     dst_slot: sys::seL4_CPtr,
 ) -> (sys::seL4_Word, sys::seL4_Word, sys::seL4_Word) {
-    init_cnode_direct_destination_words(dst_slot)
+    init_cnode_direct_destination_words(depth_bits, dst_slot)
 }
 
 #[cfg(not(target_os = "none"))]
@@ -158,6 +164,7 @@ pub fn untyped_retype_into_init_cnode(
         );
         check_slot_in_range(depth_bits, dst_slot);
 
+        let depth = bootinfo.initThreadCNodeSizeBits as sys::seL4_Word;
         unsafe {
             sys::seL4_Untyped_Retype(
                 untyped_slot,
@@ -165,7 +172,7 @@ pub fn untyped_retype_into_init_cnode(
                 size_bits,
                 sys::seL4_CapInitThreadCNode,
                 0,
-                0,
+                depth,
                 dst_slot,
                 1,
             )
@@ -174,7 +181,8 @@ pub fn untyped_retype_into_init_cnode(
 
     #[cfg(not(target_os = "none"))]
     {
-        let (node_index, node_depth, node_offset) = init_cnode_direct_destination_words(dst_slot);
+        let (node_index, node_depth, node_offset) =
+            init_cnode_direct_destination_words(depth_bits, dst_slot);
         host_trace::record(host_trace::HostRetypeTrace {
             root: sys::seL4_CapInitThreadCNode,
             node_index,
@@ -269,13 +277,15 @@ pub(crate) mod test_support {
     ) -> sys::seL4_Error {
         #[cfg(target_os = "none")]
         unsafe {
+            let bi = &*sys::seL4_GetBootInfo();
+            let depth = bi.initThreadCNodeSizeBits as sys::seL4_Word;
             sys::seL4_Untyped_Retype(
                 untyped,
                 obj_type,
                 size_bits,
                 sys::seL4_CapInitThreadCNode,
                 0,
-                0,
+                depth,
                 dst_slot,
                 1,
             )
