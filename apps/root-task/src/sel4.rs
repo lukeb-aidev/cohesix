@@ -334,7 +334,8 @@ pub fn cnode_copy(
     rights: sel4_sys::seL4_CapRights,
 ) -> seL4_Error {
     debug_put_char(b'C' as i32);
-    let depth = init_cnode_depth(bootinfo);
+    let _ = bootinfo;
+    let depth = root_guard_depth();
     unsafe {
         seL4_CNode_Copy(
             dest_root, dest_index, depth, src_root, src_index, depth, rights,
@@ -397,7 +398,8 @@ pub(crate) fn cnode_mint(
     badge: seL4_Word,
 ) -> seL4_Error {
     debug_put_char(b'C' as i32);
-    let depth = init_cnode_depth(bootinfo);
+    let _ = bootinfo;
+    let depth = root_guard_depth();
     unsafe {
         seL4_CNode_Mint(
             dest_root, dest_index, depth, src_root, src_index, depth, rights, badge,
