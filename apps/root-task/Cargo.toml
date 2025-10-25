@@ -8,6 +8,7 @@ build = "build.rs"
 
 [features]
 default = []
+net = ["net-console"]
 kernel = [
     "dep:sel4-sys",
     "dep:sel4-runtime",
