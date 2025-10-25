@@ -7,8 +7,7 @@
 
 use core::{
     arch::asm,
-    fmt,
-    mem,
+    fmt, mem,
     ptr::{self, NonNull},
     sync::atomic::{AtomicUsize, Ordering},
 };
@@ -55,8 +54,8 @@ pub type BootInfo = seL4_BootInfo;
 
 /// Canonical guard-depth for addressing the init thread root CNode.
 #[inline(always)]
-fn root_cnode_depth_word() -> seL4_Word {
-    WORD_BITS
+fn root_guard_depth() -> seL4_Word {
+    sel4_sys::seL4_WordBits as seL4_Word
 }
 
 /// Returns the first RAM-backed untyped capability advertised by the kernel.
@@ -1398,8 +1397,8 @@ impl<'a> KernelEnv<'a> {
     }
 
     #[inline(always)]
-    fn root_cnode_depth_word() -> seL4_Word {
-        root_cnode_depth_word()
+    fn root_guard_depth() -> seL4_Word {
+        root_guard_depth()
     }
 
     /// Produces a diagnostic snapshot describing allocator state.
@@ -1660,17 +1659,25 @@ impl<'a> KernelEnv<'a> {
 
     fn sanitise_retype_trace(&self, trace: RetypeTrace) -> (RetypeTrace, usize) {
         let init_bits = self.bootinfo.init_cnode_bits();
-        let max_slots = 1usize.checked_shl(init_bits as u32).unwrap_or_else(|| {
+        let slot_limit = 1usize.checked_shl(init_bits as u32).unwrap_or_else(|| {
             panic!(
                 "initThreadCNodeSizeBits {} exceeds host word size",
                 init_bits
             )
         });
+        let max_slots = slot_limit;
 
         let init_cnode = self.bootinfo.init_cnode_cap();
-        let expected_depth: seL4_Word = Self::root_cnode_depth_word();
+        let expected_depth: seL4_Word = Self::root_guard_depth();
         let expected_index: seL4_Word = trace.dest_slot as seL4_Word;
         let expected_offset: seL4_Word = 0;
+        assert!(
+            (expected_index as usize) < slot_limit,
+            "Retype: dest_slot 0x{:x} out of range for init_bits={} (limit=0x{:x})",
+            expected_index,
+            init_bits,
+            slot_limit,
+        );
 
         assert_eq!(
             trace.cnode_root, init_cnode,
@@ -1962,7 +1969,7 @@ impl<'a> KernelEnv<'a> {
         // pointer already names the final slot in the root CNode.
         let cnode_root = self.slots.root(); // seL4_CapInitThreadCNode
         let node_index: seL4_Word = slot as seL4_Word;
-        let cnode_depth: seL4_Word = Self::root_cnode_depth_word();
+        let cnode_depth: seL4_Word = Self::root_guard_depth();
         let dest_offset: seL4_Word = 0;
         RetypeTrace {
             untyped_cap: reserved.cap(),
@@ -1982,7 +1989,7 @@ impl<'a> KernelEnv<'a> {
     fn record_retype(&mut self, trace: RetypeTrace, status: RetypeStatus) {
         let init_cnode_cap = self.bootinfo.init_cnode_cap();
         let init_bits = self.bootinfo.init_cnode_bits();
-        let expected_depth: seL4_Word = Self::root_cnode_depth_word();
+        let expected_depth: seL4_Word = Self::root_guard_depth();
         let expected_index: seL4_Word = trace.dest_slot as seL4_Word;
         let expected_offset: seL4_Word = 0;
         let max_slots = 1usize.checked_shl(init_bits as u32).unwrap_or_else(|| {
@@ -2290,7 +2297,7 @@ mod tests {
         );
         assert_eq!(trace.cnode_root, seL4_CapInitThreadCNode);
         let expected_index: seL4_Word = slot as seL4_Word;
-        let expected_depth: seL4_Word = KernelEnv::root_cnode_depth_word();
+        let expected_depth: seL4_Word = KernelEnv::root_guard_depth();
         assert_eq!(trace.node_index, expected_index);
         assert_eq!(trace.cnode_depth, expected_depth);
         assert_eq!(trace.dest_offset, 0);
@@ -2323,7 +2330,7 @@ mod tests {
         );
         let (sanitised, init_bits) = env.sanitise_retype_trace(trace);
         assert_eq!(init_bits, 13);
-        assert_eq!(sanitised.cnode_depth, KernelEnv::root_cnode_depth_word());
+        assert_eq!(sanitised.cnode_depth, KernelEnv::root_guard_depth());
         assert_eq!(sanitised.node_index, slot as seL4_Word);
         assert_eq!(sanitised.dest_offset, 0);
     }
@@ -2356,7 +2363,7 @@ mod tests {
         let env = KernelEnv::new(bootinfo_ref);
 
         let slot: seL4_CPtr = 0x00c8;
-        let expected_depth: seL4_Word = KernelEnv::root_cnode_depth_word();
+        let expected_depth: seL4_Word = KernelEnv::root_guard_depth();
         let canonical_index: seL4_Word = slot as seL4_Word;
         let trace = RetypeTrace {
             untyped_cap: 0x200,
@@ -2391,7 +2398,7 @@ mod tests {
 
         let slot: seL4_CPtr = 0x0097;
         let canonical_index: seL4_Word = slot as seL4_Word;
-        let expected_depth: seL4_Word = KernelEnv::root_cnode_depth_word();
+        let expected_depth: seL4_Word = KernelEnv::root_guard_depth();
         let trace = RetypeTrace {
             untyped_cap: 0x100,
             untyped_paddr: 0,
@@ -2425,7 +2432,7 @@ mod tests {
         bootinfo.initThreadCNodeSizeBits = 13;
         let bootinfo_ref: &'static mut seL4_BootInfo = Box::leak(Box::new(bootinfo));
         let env = KernelEnv::new(bootinfo_ref);
-        let expected_depth: seL4_Word = KernelEnv::root_cnode_depth_word();
+        let expected_depth: seL4_Word = KernelEnv::root_guard_depth();
         let valid_trace = RetypeTrace {
             untyped_cap: 0x100,
             untyped_paddr: 0,
