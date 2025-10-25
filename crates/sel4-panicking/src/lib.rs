@@ -54,9 +54,9 @@ mod fallback {
 
     fn log_sink_corruption(kind: &str, emit_addr: usize, context: *mut ()) {
         let mut line = HeaplessString::<160>::new();
-        let _ = write!(
+        let _ = writeln!(
             line,
-            "[sel4-panicking] {kind} emit=0x{emit:016x} ctx=0x{ctx:016x}\n",
+            "[sel4-panicking] {kind} emit=0x{emit:016x} ctx=0x{ctx:016x}",
             kind = kind,
             emit = emit_addr,
             ctx = context as usize,
@@ -100,9 +100,9 @@ mod fallback {
 
     fn log_sink_registration(emit_addr: usize, context: *mut ()) {
         let mut line = HeaplessString::<128>::new();
-        let _ = write!(
+        let _ = writeln!(
             line,
-            "[sel4-panicking] install_debug_sink emit=0x{emit:016x} ctx=0x{ctx:016x}\n",
+            "[sel4-panicking] install_debug_sink emit=0x{emit:016x} ctx=0x{ctx:016x}",
             emit = emit_addr,
             ctx = context as usize,
         );

@@ -61,8 +61,116 @@ pub fn check_slot_in_range(init_cnode_bits: u8, slot: sys::seL4_CPtr) {
     );
 }
 
-/// Issues a `seL4_Untyped_Retype` call constrained to the supplied CNode root.
-pub fn untyped_retype_invoc(
+#[inline(always)]
+pub fn encode_cnode_depth(bits: u8) -> sys::seL4_Word {
+    resolve_cnode_depth(bits).as_word()
+}
+
+#[cfg(not(target_os = "none"))]
+mod host_trace {
+    use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    use super::sys;
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub struct HostRetypeTrace {
+        pub root: sys::seL4_CNode,
+        pub node_index: sys::seL4_Word,
+        pub node_depth: sys::seL4_Word,
+        pub node_offset: sys::seL4_Word,
+    }
+
+    static LAST_ROOT: AtomicUsize = AtomicUsize::new(0);
+    static LAST_INDEX: AtomicUsize = AtomicUsize::new(0);
+    static LAST_DEPTH: AtomicUsize = AtomicUsize::new(0);
+    static LAST_OFFSET: AtomicUsize = AtomicUsize::new(0);
+    static HAS_TRACE: AtomicBool = AtomicBool::new(false);
+
+    #[inline(always)]
+    pub fn record(trace: HostRetypeTrace) {
+        LAST_ROOT.store(trace.root as usize, Ordering::SeqCst);
+        LAST_INDEX.store(trace.node_index as usize, Ordering::SeqCst);
+        LAST_DEPTH.store(trace.node_depth as usize, Ordering::SeqCst);
+        LAST_OFFSET.store(trace.node_offset as usize, Ordering::SeqCst);
+        HAS_TRACE.store(true, Ordering::SeqCst);
+    }
+
+    #[inline(always)]
+    pub fn take_last() -> Option<HostRetypeTrace> {
+        if !HAS_TRACE.swap(false, Ordering::SeqCst) {
+            return None;
+        }
+
+        Some(HostRetypeTrace {
+            root: LAST_ROOT.load(Ordering::SeqCst) as sys::seL4_CNode,
+            node_index: LAST_INDEX.load(Ordering::SeqCst) as sys::seL4_Word,
+            node_depth: LAST_DEPTH.load(Ordering::SeqCst) as sys::seL4_Word,
+            node_offset: LAST_OFFSET.load(Ordering::SeqCst) as sys::seL4_Word,
+        })
+    }
+}
+
+#[cfg(all(feature = "kernel", not(target_os = "none")))]
+pub use host_trace::{take_last as take_last_host_retype_trace, HostRetypeTrace};
+
+#[inline(always)]
+pub fn untyped_retype_into_init_cnode(
+    depth_bits: u8,
+    untyped_slot: sys::seL4_CPtr,
+    obj_type: sys::seL4_Word,
+    size_bits: sys::seL4_Word,
+    dst_slot: sys::seL4_CPtr,
+) -> sys::seL4_Error {
+    #[cfg(target_os = "none")]
+    {
+        let bootinfo = unsafe { &*sys::seL4_GetBootInfo() };
+        let init_cnode_bits = bootinfo.initThreadCNodeSizeBits as u8;
+        assert!(
+            depth_bits == init_cnode_bits,
+            "retype depth {} does not match initThreadCNodeSizeBits {}",
+            depth_bits,
+            init_cnode_bits
+        );
+        let empty_start = bootinfo.empty.start as sys::seL4_CPtr;
+        let empty_end = bootinfo.empty.end as sys::seL4_CPtr;
+        assert!(
+            dst_slot >= empty_start && dst_slot < empty_end,
+            "destination slot 0x{dst:04x} outside boot empty window [0x{lo:04x}..0x{hi:04x})",
+            dst = dst_slot,
+            lo = empty_start,
+            hi = empty_end,
+        );
+        check_slot_in_range(depth_bits, dst_slot);
+
+        unsafe {
+            sys::seL4_Untyped_Retype(
+                untyped_slot,
+                obj_type,
+                size_bits,
+                sys::seL4_CapInitThreadCNode,
+                0,
+                0,
+                dst_slot,
+                1,
+            )
+        }
+    }
+
+    #[cfg(not(target_os = "none"))]
+    {
+        host_trace::record(host_trace::HostRetypeTrace {
+            root: sys::seL4_CapInitThreadCNode,
+            node_index: 0,
+            node_depth: 0,
+            node_offset: dst_slot as sys::seL4_Word,
+        });
+        let _ = (depth_bits, untyped_slot, obj_type, size_bits, dst_slot);
+        sys::seL4_NoError
+    }
+}
+
+#[inline(always)]
+pub fn untyped_retype_into_cnode(
     dest_root: sys::seL4_CNode,
     depth_bits: u8,
     untyped_slot: sys::seL4_CPtr,
@@ -73,39 +181,15 @@ pub fn untyped_retype_invoc(
     #[cfg(target_os = "none")]
     {
         let depth = resolve_cnode_depth(depth_bits);
-        let (node_index, node_depth, node_offset) = if dest_root == sys::seL4_CapInitThreadCNode {
-            let bootinfo = unsafe { &*sys::seL4_GetBootInfo() };
-            let init_cnode_bits = bootinfo.initThreadCNodeSizeBits as u8;
-            assert!(
-                depth_bits == init_cnode_bits,
-                "retype depth {} does not match initThreadCNodeSizeBits {}",
-                depth_bits,
-                init_cnode_bits
-            );
-            let empty_start = bootinfo.empty.start as sys::seL4_CPtr;
-            let empty_end = bootinfo.empty.end as sys::seL4_CPtr;
-            assert!(
-                dst_slot >= empty_start && dst_slot < empty_end,
-                "destination slot 0x{dst:04x} outside boot empty window [0x{lo:04x}..0x{hi:04x})",
-                dst = dst_slot,
-                lo = empty_start,
-                hi = empty_end,
-            );
-            check_slot_in_range(depth_bits, dst_slot);
-            (0, 0, dst_slot)
-        } else {
-            (dst_slot, depth.as_word(), 0)
-        };
-
         unsafe {
             sys::seL4_Untyped_Retype(
                 untyped_slot,
                 obj_type,
                 size_bits,
                 dest_root,
-                node_index,
-                node_depth,
-                node_offset,
+                dst_slot,
+                depth.as_word(),
+                0,
                 1,
             )
         }
@@ -114,21 +198,13 @@ pub fn untyped_retype_invoc(
     #[cfg(not(target_os = "none"))]
     {
         let depth = resolve_cnode_depth(depth_bits);
-        let (node_index, node_depth, node_offset) = if dest_root == sys::seL4_CapInitThreadCNode {
-            (0, 0, dst_slot)
-        } else {
-            (dst_slot, depth.as_word(), 0)
-        };
-        let _ = (
-            dest_root,
-            depth_bits,
-            untyped_slot,
-            obj_type,
-            size_bits,
-            node_index,
-            node_depth,
-            node_offset,
-        );
+        host_trace::record(host_trace::HostRetypeTrace {
+            root: dest_root,
+            node_index: dst_slot as sys::seL4_Word,
+            node_depth: depth.as_word(),
+            node_offset: 0,
+        });
+        let _ = (untyped_slot, obj_type, size_bits);
         sys::seL4_NoError
     }
 }

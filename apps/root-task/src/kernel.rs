@@ -440,40 +440,12 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
         );
     }
 
-    let cnode_copy_slot = match boot_cspace.alloc_slot() {
-        Ok(slot) => slot,
-        Err(err) => {
-            panic!(
-                "failed to allocate init CSpace slot for CNode mint: {} ({})",
-                err,
-                error_name(err)
-            );
-        }
-    };
-    let cnode_src_slot = bootinfo_ref.init_cnode_cap();
-    let mint_err = boot_cspace.mint_here(cnode_copy_slot, cnode_src_slot, rights, 0);
-    if mint_err != sel4_sys::seL4_NoError {
-        panic!(
-            "failed to mint writable init CNode capability: {} ({})",
-            mint_err,
-            error_name(mint_err)
-        );
-    } else {
-        log::info!(
-            "[cnode] mint root=0x{root:04x} dst=0x{dst:04x} src=0x{src:04x} depth={depth}",
-            root = boot_cspace.root(),
-            dst = cnode_copy_slot,
-            src = cnode_src_slot,
-            depth = boot_cspace.depth()
-        );
-    }
-
     let bi_view = BootInfoView::from(bootinfo_ref);
     let mut cs = CSpaceCtx::new(bi_view, boot_cspace);
     cs.tcb_copy_slot = tcb_copy_slot;
-    cs.root_cnode_copy_slot = cnode_copy_slot;
-
-    let mut consumed_slots: usize = 3;
+    // Track bootstrap slot usage: the TCB copy plus the earlier endpoint bootstrap
+    // consume two slots before we begin retyping.
+    let mut consumed_slots: usize = 2;
 
     let notification_untyped = pick_untyped(bootinfo_ref, sel4_sys::seL4_NotificationBits as u8);
 
@@ -486,6 +458,25 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
     .expect("failed to retype notification into init CSpace");
     consumed_slots += 1;
     let _ = notification_slot;
+
+    let mint_result = cs.mint_root_cnode_copy();
+    match mint_result {
+        Ok(()) => {
+            consumed_slots += 1;
+            debug_assert_ne!(
+                cs.root_cnode_copy_slot,
+                sel4_sys::seL4_CapNull,
+                "mint_root_cnode_copy must populate root_cnode_copy_slot"
+            );
+        }
+        Err(err) => {
+            panic!(
+                "failed to mint writable init CNode capability: {} ({})",
+                err,
+                error_name(err)
+            );
+        }
+    }
 
     let empty_start = bootinfo_ref.empty_first_slot();
     let empty_end = bootinfo_ref.empty_last_slot_excl();
