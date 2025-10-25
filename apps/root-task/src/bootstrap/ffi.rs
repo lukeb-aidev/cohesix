@@ -28,20 +28,25 @@ pub fn untyped_retype_to_slot(
     dst_slot: sys::seL4_CPtr,
 ) -> sys::seL4_Error {
     let (err, root_cap, node_index, node_depth, node_offset, path_label) = match ctx.dest {
-        DestCNode::Init => (
-            super::cspace_sys::untyped_retype_into_init_cnode(
-                ctx.cnode_invocation_depth_bits,
-                untyped_cap,
-                obj_type,
-                size_bits,
-                dst_slot,
-            ),
-            sys::seL4_CapInitThreadCNode,
-            0,
-            0,
-            dst_slot as sys::seL4_Word,
-            DestCNode::Init.label(),
-        ),
+        DestCNode::Init => {
+            let node_index = dst_slot as sys::seL4_Word;
+            let node_depth = sys::word_bits();
+            let node_offset = 0;
+            (
+                super::cspace_sys::untyped_retype_into_init_cnode(
+                    ctx.init_cnode_bits,
+                    untyped_cap,
+                    obj_type,
+                    size_bits,
+                    dst_slot,
+                ),
+                sys::seL4_CapInitThreadCNode,
+                node_index,
+                node_depth,
+                node_offset,
+                DestCNode::Init.label(),
+            )
+        }
         DestCNode::Other { cap, bits } => (
             super::cspace_sys::untyped_retype_into_cnode(
                 cap,

@@ -57,13 +57,14 @@ impl CSpace {
         src_slot: seL4_CPtr,
         rights: sel4_sys::seL4_CapRights,
     ) -> seL4_Error {
+        let guard_depth = sel4::word_bits() as u8;
         sel4::cnode_copy_depth(
             self.root,
             dst_slot,
-            self.depth(),
+            guard_depth,
             self.root,
             src_slot,
-            self.depth(),
+            guard_depth,
             rights,
         )
     }
@@ -76,13 +77,14 @@ impl CSpace {
         rights: sel4_sys::seL4_CapRights,
         badge: seL4_Word,
     ) -> seL4_Error {
+        let guard_depth = sel4::word_bits() as u8;
         sel4::cnode_mint_depth(
             self.root,
             dst_slot,
-            self.depth(),
+            guard_depth,
             self.root,
             src_slot,
-            self.depth(),
+            guard_depth,
             rights,
             badge,
         )

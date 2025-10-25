@@ -147,7 +147,7 @@ impl CSpaceCtx {
             init_cnode_bits > 0,
             "bootinfo reported zero-width init CNode"
         );
-        let invocation_depth_bits = init_cnode_bits;
+        let invocation_depth_bits = CANONICAL_CNODE_DEPTH_BITS;
         let (first_free, last_free) = bi.init_cnode_empty_range();
         debug_assert!(
             init_cnode_bits <= CANONICAL_CNODE_DEPTH_BITS,
@@ -417,10 +417,7 @@ impl CSpaceCtx {
                 self.log_direct_init_path(dst_slot);
                 #[cfg(not(target_os = "none"))]
                 let (node_index, node_depth, node_offset) =
-                    cspace_sys::init_cnode_direct_destination_words(
-                        self.cnode_invocation_depth_bits,
-                        dst_slot,
-                    );
+                    cspace_sys::init_cnode_direct_destination_words(self.init_cnode_bits, dst_slot);
                 #[cfg(target_os = "none")]
                 let (node_index, node_depth, node_offset) =
                     (dst_slot as sel4::seL4_Word, sel4::word_bits(), 0);
@@ -432,7 +429,7 @@ impl CSpaceCtx {
 
                 (
                     cspace_sys::untyped_retype_into_init_cnode(
-                        self.cnode_invocation_depth_bits,
+                        self.init_cnode_bits,
                         untyped,
                         obj_ty,
                         size_bits,

@@ -11,12 +11,31 @@ use sel4_sys::{
 
 #[inline(always)]
 fn canonicalize_cnode_destination(
-    _dst_root: seL4_CPtr,
+    dst_root: seL4_CPtr,
     node_index: seL4_CPtr,
     node_depth: u8,
     node_offset: seL4_CPtr,
 ) -> (seL4_CPtr, u8, seL4_CPtr) {
-    (node_index, node_depth, node_offset)
+    if dst_root == sel4::seL4_CapInitThreadCNode {
+        let canonical_depth = sel4::word_bits() as u8;
+        debug_assert!(
+            sel4::word_bits() <= u8::MAX as sel4::seL4_Word,
+            "architectural word bits {} exceed u8::MAX",
+            sel4::word_bits()
+        );
+        let slot = if node_depth == 0 {
+            if node_offset != 0 {
+                node_offset
+            } else {
+                node_index
+            }
+        } else {
+            node_index
+        };
+        (slot, canonical_depth, 0)
+    } else {
+        (node_index, node_depth, node_offset)
+    }
 }
 
 #[inline]
