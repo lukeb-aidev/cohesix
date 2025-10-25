@@ -55,7 +55,7 @@ pub type BootInfo = seL4_BootInfo;
 /// Canonical guard-depth for addressing the init thread root CNode.
 #[inline(always)]
 fn root_guard_depth() -> seL4_Word {
-    sel4_sys::seL4_WordBits as seL4_Word
+    WORD_BITS
 }
 
 /// Returns the first RAM-backed untyped capability advertised by the kernel.
