@@ -213,30 +213,35 @@ impl CSpaceCtx {
 
     #[inline(always)]
     /// Attempts to reserve the next available slot while enforcing boot window and reservation checks.
-    pub fn alloc_slot_checked(&mut self) -> Result<sel4::seL4_CPtr, SlotAllocError> {
+    pub fn alloc_slot_checked(&mut self) -> Result<sel4::seL4_CPtr, sel4::seL4_Error> {
         loop {
             let candidate = self.cspace.next_free_slot();
             cspace_sys::check_slot_in_range(self.init_cnode_bits, candidate);
             if !self.slot_in_bounds(candidate) {
-                return Err(SlotAllocError::OutOfBootWindow {
+                let failure = SlotAllocError::OutOfBootWindow {
                     candidate,
                     start: self.first_free,
                     end: self.last_free,
-                });
+                };
+                self.log_slot_failure(failure);
+                return Err(sel4::seL4_RangeError);
             }
 
             let slot = match self.cspace.alloc_slot() {
                 Ok(slot) => slot,
                 Err(_) => {
-                    return Err(SlotAllocError::OutOfBootWindow {
+                    let failure = SlotAllocError::OutOfBootWindow {
                         candidate,
                         start: self.first_free,
                         end: self.last_free,
-                    });
+                    };
+                    self.log_slot_failure(failure);
+                    return Err(sel4::seL4_RangeError);
                 }
             };
 
             if Self::is_reserved_slot(slot) {
+                self.log_slot_failure(SlotAllocError::ReservedSlot { slot });
                 continue;
             }
 
@@ -250,7 +255,6 @@ impl CSpaceCtx {
         match self.alloc_slot_checked() {
             Ok(slot) => slot,
             Err(err) => {
-                self.log_slot_failure(err);
                 panic!("boot CSpace exhausted while allocating slot: {:?}", err);
             }
         }
@@ -266,6 +270,15 @@ impl CSpaceCtx {
     /// Emits a structured diagnostic covering the supplied slot allocation failure.
     pub fn log_slot_failure(&self, err: SlotAllocError) {
         log_slot_allocation_failure(err, self.first_free, self.last_free);
+    }
+
+    fn log_direct_init_path(&self, dst_slot: sel4::seL4_CPtr) {
+        let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
+        let _ = write!(
+            &mut line,
+            "[retype] path=direct:init-cnode dest=0x{dst_slot:04x}"
+        );
+        emit_console_line(line.as_str());
     }
 
     /// Logs the outcome of an init CNode copy invocation.
@@ -333,13 +346,7 @@ impl CSpaceCtx {
 
     /// Copies the init thread TCB capability into the free slot window to validate CSpace operations.
     pub fn smoke_copy_init_tcb(&mut self) -> Result<(), sel4::seL4_Error> {
-        let dst_slot = match self.alloc_slot_checked() {
-            Ok(slot) => slot,
-            Err(err) => {
-                self.log_slot_failure(err);
-                return Err(sel4::seL4_RangeError);
-            }
-        };
+        let dst_slot = self.alloc_slot_checked()?;
         let src_slot = sel4::seL4_CapInitThreadTCB;
         let err = self.copy_init_tcb_from(dst_slot, src_slot);
         if err == sel4::seL4_NoError {
@@ -372,13 +379,7 @@ impl CSpaceCtx {
 
     /// Mints a duplicate of the root CNode capability for later management operations.
     pub fn mint_root_cnode_copy(&mut self) -> Result<(), sel4::seL4_Error> {
-        let dst_slot = match self.alloc_slot_checked() {
-            Ok(slot) => slot,
-            Err(err) => {
-                self.log_slot_failure(err);
-                return Err(sel4::seL4_RangeError);
-            }
-        };
+        let dst_slot = self.alloc_slot_checked()?;
         let src_slot = sel4::seL4_CapInitThreadCNode;
         let err = self
             .cspace
@@ -388,8 +389,10 @@ impl CSpaceCtx {
             self.root_cnode_copy_slot = dst_slot;
             let init_ident = sel4::debug_cap_identify(sel4::seL4_CapInitThreadCNode);
             let copy_ident = sel4::debug_cap_identify(dst_slot);
+            let init_rights = render_cap_rights(sel4_sys::seL4_CapRights_All);
+            let copy_rights = render_cap_rights(sel4_sys::seL4_CapRights_All);
             log::info!(
-                "[cnode] mint-success path=direct:init-cnode dest=0x{dst:04x} ident(init=0x{init_ident:08x},copy=0x{copy_ident:08x})",
+                "[cnode] mint-success path=direct:init-cnode dest=0x{dst:04x} ident(init=0x{init_ident:08x},copy=0x{copy_ident:08x}) rights(init={init_rights},copy={copy_rights})",
                 dst = dst_slot
             );
             Ok(())
@@ -409,20 +412,34 @@ impl CSpaceCtx {
         self.assert_slot_available(dst_slot);
         self.debug_identify_destinations();
         let (err, root_cap, node_index, node_depth, node_offset, path_label) = match self.dest {
-            DestCNode::Init => (
-                cspace_sys::untyped_retype_into_init_cnode(
-                    self.cnode_invocation_depth_bits,
-                    untyped,
-                    obj_ty,
-                    size_bits,
-                    dst_slot,
-                ),
-                sel4::seL4_CapInitThreadCNode,
-                0,
-                0,
-                dst_slot as sel4::seL4_Word,
-                DestCNode::Init.label(),
-            ),
+            DestCNode::Init => {
+                self.log_direct_init_path(dst_slot);
+                #[cfg(not(target_os = "none"))]
+                let (node_index, node_depth, node_offset) =
+                    cspace_sys::init_cnode_direct_destination_words(dst_slot);
+                #[cfg(target_os = "none")]
+                let (node_index, node_depth, node_offset) = (0, 0, dst_slot as sel4::seL4_Word);
+                #[cfg(not(target_os = "none"))]
+                debug_assert_eq!(
+                    (node_index, node_depth, node_offset),
+                    (0, 0, dst_slot as sel4::seL4_Word)
+                );
+
+                (
+                    cspace_sys::untyped_retype_into_init_cnode(
+                        self.cnode_invocation_depth_bits,
+                        untyped,
+                        obj_ty,
+                        size_bits,
+                        dst_slot,
+                    ),
+                    sel4::seL4_CapInitThreadCNode,
+                    node_index,
+                    node_depth,
+                    node_offset,
+                    DestCNode::Init.label(),
+                )
+            }
             DestCNode::Other { cap, bits } => (
                 cspace_sys::untyped_retype_into_cnode(
                     cap, bits, untyped, obj_ty, size_bits, dst_slot,
@@ -512,22 +529,34 @@ fn emit_console_line(line: &str) {
     sel4::debug_put_char(b'\n' as i32);
 }
 
+fn render_cap_rights(rights: sel4_sys::seL4_CapRights) -> String<4> {
+    let raw = rights.raw();
+    let mut text = String::<4>::new();
+    for (mask, glyph) in [(0x2, 'R'), (0x1, 'W'), (0x4, 'G'), (0x8, 'P')] {
+        let ch = if (raw & mask) != 0 { glyph } else { '-' };
+        let _ = text.push(ch);
+    }
+    text
+}
+
 #[cfg(feature = "sel4-debug")]
 impl CSpaceCtx {
     fn debug_identify_destinations(&self) {
         let init_ident = sel4::debug_cap_identify(sel4::seL4_CapInitThreadCNode);
         let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
+        let init_rights = render_cap_rights(sel4_sys::seL4_CapRights_All);
         if self.root_cnode_copy_slot != sel4::seL4_CapNull {
             let copy_ident = sel4::debug_cap_identify(self.root_cnode_copy_slot);
+            let copy_rights = render_cap_rights(sel4_sys::seL4_CapRights_All);
             let _ = write!(
                 &mut line,
-                "[retype] ident init=0x{init_ident:08x} copy(slot=0x{slot:04x},tag=0x{copy_ident:08x})",
+                "[retype] ident init=0x{init_ident:08x} rights(init={init_rights}) copy(slot=0x{slot:04x},tag=0x{copy_ident:08x},rights={copy_rights})",
                 slot = self.root_cnode_copy_slot
             );
         } else {
             let _ = write!(
                 &mut line,
-                "[retype] ident init=0x{init_ident:08x} copy=unavailable"
+                "[retype] ident init=0x{init_ident:08x} rights(init={init_rights}) copy=unavailable"
             );
         }
         emit_console_line(line.as_str());

@@ -3,7 +3,8 @@
 #![cfg(all(feature = "kernel", not(target_os = "none")))]
 
 use root_task::bootstrap::cspace_sys::{
-    take_last_host_retype_trace, untyped_retype_into_init_cnode,
+    init_cnode_direct_destination_words_for_test, take_last_host_retype_trace,
+    untyped_retype_into_init_cnode,
 };
 use sel4_sys::{seL4_CPtr, seL4_CapInitThreadCNode, seL4_NoError, seL4_Word};
 
@@ -15,6 +16,9 @@ fn init_cnode_retype_uses_direct_destination_encoding() {
     let obj_ty: seL4_Word = 4;
     let size_bits: seL4_Word = 0;
     let dst_slot: seL4_CPtr = 0x40;
+
+    let (_index, depth, _offset) = init_cnode_direct_destination_words_for_test(dst_slot);
+    assert_eq!(depth, 0, "init CNode marshaler must emit depth=0");
 
     let err = untyped_retype_into_init_cnode(depth_bits, untyped, obj_ty, size_bits, dst_slot);
     assert_eq!(err, seL4_NoError);
