@@ -419,12 +419,19 @@ impl CSpaceCtx {
                 let (node_index, node_depth, node_offset) =
                     cspace_sys::init_cnode_direct_destination_words(self.init_cnode_bits, dst_slot);
                 #[cfg(target_os = "none")]
+                let (_, node_index, node_depth, node_offset) =
+                    cspace_sys::init_cnode_dest(dst_slot);
+                #[cfg(not(target_os = "none"))]
                 let (node_index, node_depth, node_offset) =
-                    (dst_slot as sel4::seL4_Word, sel4::word_bits(), 0);
+                    cspace_sys::init_cnode_direct_destination_words(self.init_cnode_bits, dst_slot);
                 #[cfg(not(target_os = "none"))]
                 debug_assert_eq!(
                     (node_index, node_depth, node_offset),
-                    (dst_slot as sel4::seL4_Word, sel4::word_bits(), 0,)
+                    (
+                        dst_slot as sel4::seL4_Word,
+                        self.init_cnode_bits as sel4::seL4_Word,
+                        0,
+                    )
                 );
 
                 (

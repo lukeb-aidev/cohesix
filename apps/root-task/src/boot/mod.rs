@@ -3,3 +3,4 @@
 
 pub mod bi_extra;
 pub mod ep;
+pub mod flags;

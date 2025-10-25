@@ -9,6 +9,7 @@ use sel4_sys::{
 };
 
 use crate::boot::bi_extra::first_regular_untyped_from_extra;
+use crate::bootstrap::cspace_sys;
 use crate::caps::traced_retype_into_slot;
 use crate::cspace::CSpace;
 use crate::sel4;
@@ -37,12 +38,13 @@ pub fn bootstrap_ep(bi: &seL4_BootInfo, cs: &mut CSpace) -> Result<seL4_CPtr, se
         "allocated endpoint slot must not be null"
     );
 
-    let root = seL4_CapInitThreadCNode as seL4_CPtr;
-    let node_index = ep_slot;
-    let guard_depth_word = sel4::word_bits();
-    let node_depth = u8::try_from(guard_depth_word)
-        .expect("seL4_WordBits must fit within u8 for guard-depth addressing");
-    let node_offset = 0;
+    let (root, node_index_word, node_depth_word, node_offset_word) =
+        cspace_sys::init_cnode_dest(ep_slot);
+    let node_index = seL4_CPtr::try_from(node_index_word)
+        .expect("init CNode destination index must fit in seL4_CPtr");
+    let node_depth =
+        u8::try_from(node_depth_word).expect("initThreadCNodeSizeBits must fit within u8");
+    debug_assert_eq!(node_offset_word, 0);
 
     crate::trace::println!(
         "[cs: root=0x{root:x} bits={bits} first_free=0x{slot:x}]",
@@ -66,11 +68,13 @@ pub fn bootstrap_ep(bi: &seL4_BootInfo, cs: &mut CSpace) -> Result<seL4_CPtr, se
         bi.empty.start,
     );
 
-    log::info!(
-        "[boot] endpoint retype dest root=initCNode index=0x{index:04x} depth={depth}(WB) offset=0",
-        index = node_index,
-        depth = guard_depth_word,
-    );
+    if crate::boot::flags::trace_dest() {
+        log::info!(
+            "[boot] endpoint retype dest root=initCNode index=0x{index:04x} depth={depth} (initBits) offset=0",
+            index = node_index_word,
+            depth = node_depth_word,
+        );
+    }
 
     match traced_retype_into_slot(
         ut,
@@ -79,7 +83,7 @@ pub fn bootstrap_ep(bi: &seL4_BootInfo, cs: &mut CSpace) -> Result<seL4_CPtr, se
         root,
         node_index,
         node_depth,
-        node_offset,
+        node_offset_word as seL4_CPtr,
     ) {
         Ok(()) => {
             log::info!(

@@ -17,16 +17,15 @@ fn canonicalize_cnode_destination(
     node_offset: seL4_CPtr,
 ) -> (seL4_CPtr, u8, seL4_CPtr) {
     if dst_root == sel4::seL4_CapInitThreadCNode {
-        let canonical_depth_word = sel4::word_bits();
-        let canonical_depth = u8::try_from(canonical_depth_word)
-            .expect("seL4_WordBits must fit within u8 for guard-depth addressing");
+        let bootinfo = unsafe { &*sel4::seL4_GetBootInfo() };
+        let canonical_depth = sel4::init_cnode_depth(bootinfo);
         debug_assert_eq!(
             node_offset, 0,
-            "init CNode guard-depth path must not supply a node_offset (got=0x{node_offset:04x})"
+            "init CNode radix-depth path must not supply a node_offset (got=0x{node_offset:04x})"
         );
         if node_depth != canonical_depth {
             log::warn!(
-                "[cohesix:root-task] canonicalize_cnode_destination: overriding depth {provided} with guard-depth {canonical}",
+                "[cohesix:root-task] canonicalize_cnode_destination: overriding depth {provided} with init bits {canonical}",
                 provided = node_depth,
                 canonical = canonical_depth
             );
