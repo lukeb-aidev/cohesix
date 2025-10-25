@@ -1,4 +1,15 @@
 # Author: Lukas Bower
+[env]
+# APFS and iCloud-attached volumes on macOS 26 occasionally reap the
+# temporary directories that rustc creates for incremental compilation.
+# When that happens, rustc emits "No such file or directory" errors while
+# writing rmeta artefacts (e.g. zerocopy, serde) under `target/debug/deps`,
+# matching the failures reported by local builds. Disabling incremental
+# globally keeps the build reliable across all crates, including registry
+# dependencies that were still opting into incremental compilation even after
+# the per-package overrides below.
+CARGO_INCREMENTAL = "0"
+
 [profile.dev.package.root-task]
 incremental = false
 

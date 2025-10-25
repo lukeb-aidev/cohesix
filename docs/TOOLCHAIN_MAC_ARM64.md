@@ -15,13 +15,14 @@ source "$HOME/.cargo/env"
 rustup component add rustfmt clippy
 rustc --version
 ```
-- Incremental builds for seL4-targeted crates (`root-task`, `nine-door`,
-  `worker-heart`, and `worker-gpu`) are intentionally disabled in
-  `.cargo/config.toml`. APFS on macOS 26 occasionally drops the temporary
-  directories that Rust's incremental engine relies on for `aarch64-unknown-none`
-  builds, which previously resulted in `dep-graph.part.bin` creation failures.
-  Disabling incremental compilation for these crates keeps builds reliable while
-  leaving host tooling unaffected.
+- Incremental builds are forcibly disabled (`CARGO_INCREMENTAL=0`) for the
+  entire workspace via `.cargo/config.toml`. APFS on macOS 26 occasionally drops
+  the temporary directories that Rust's incremental engine relies on, which was
+  manifesting as `No such file or directory` errors when crates like `zerocopy`
+  or `serde` attempted to emit their rmeta artefacts under `target/debug/deps`.
+  The global toggle keeps both seL4-targeted crates (`root-task`, `nine-door`,
+  `worker-heart`, `worker-gpu`) and host-side tooling reliable, at the cost of
+  slightly longer recompiles.
 
 ## 3. QEMU Validation
 ```bash
