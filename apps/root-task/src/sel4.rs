@@ -1178,15 +1178,14 @@ pub struct RetypeTrace {
     pub cnode_root: seL4_CNode,
     /// Destination slot selected for the newly created object.
     pub dest_slot: seL4_CPtr,
-    /// Slot index within the selected CNode (root CNode policy: zero because the pointer names the
-    /// final slot).
+    /// Slot offset resolved relative to `cnode_root`.
     pub dest_offset: seL4_Word,
     /// `nodeDepth` argument supplied to `seL4_Untyped_Retype` while resolving the destination CNode.
-    /// Root CNode policy for this system: equals `seL4_WordBits`.
+    /// Root CNode policy for this system: `cnode_depth = seL4_WordBits` (guard-depth), guard value
+    /// is 0.
     pub cnode_depth: seL4_Word,
     /// `nodeIndex` argument supplied to `seL4_Untyped_Retype` when selecting a sub-CNode below
-    /// `cnode_root`. Root CNode policy for this system: equals the destination slot with guard bits
-    /// cleared.
+    /// `cnode_root`. Root CNode policy for this system: `node_index = dest_slot`, `node_offset = 0`.
     pub node_index: seL4_Word,
     /// Object type requested from the kernel.
     pub object_type: seL4_Word,
@@ -1574,17 +1573,7 @@ impl<'a> KernelEnv<'a> {
         );
 
         let (trace, _init_bits) = self.sanitise_retype_trace(*trace);
-        log::trace!(
-            "Retype → root=0x{:x} index={} depth={} offset=0x{:x} (objtype={}({}), size_bits={}, untyped_paddr=0x{:08x})",
-            trace.cnode_root,
-            trace.node_index,
-            trace.cnode_depth,
-            trace.dest_offset,
-            trace.object_type,
-            objtype_name(trace.object_type),
-            trace.object_size_bits,
-            trace.untyped_paddr,
-        );
+        self.log_retype_invocation(&trace);
 
         #[cfg(target_arch = "aarch64")]
         if matches!(trace.kind, RetypeKind::DevicePage { .. }) {
@@ -1625,17 +1614,7 @@ impl<'a> KernelEnv<'a> {
         trace: &RetypeTrace,
     ) -> Result<(), seL4_Error> {
         let (trace, _init_bits) = self.sanitise_retype_trace(*trace);
-        log::trace!(
-            "Retype → root=0x{:x} index={} depth={} offset=0x{:x} (objtype={}({}), size_bits={}, untyped_paddr=0x{:08x})",
-            trace.cnode_root,
-            trace.node_index,
-            trace.cnode_depth,
-            trace.dest_offset,
-            trace.object_type,
-            objtype_name(trace.object_type),
-            trace.object_size_bits,
-            trace.untyped_paddr,
-        );
+        self.log_retype_invocation(&trace);
 
         let res = unsafe {
             seL4_Untyped_Retype(
@@ -1983,6 +1962,44 @@ impl<'a> KernelEnv<'a> {
             object_type,
             object_size_bits,
             kind,
+        }
+    }
+
+    fn log_retype_invocation(&self, trace: &RetypeTrace) {
+        let init_cnode_cap = self.bootinfo.init_cnode_cap();
+        let depth_suffix = if trace.cnode_root == init_cnode_cap
+            && trace.cnode_depth == Self::root_guard_depth()
+        {
+            "(WB)"
+        } else {
+            ""
+        };
+
+        if trace.cnode_root == init_cnode_cap {
+            log::trace!(
+                "Retype → root=initCNode index=0x{:x} depth={}{} offset={} (objtype={}({}), size_bits={}, untyped_paddr=0x{:08x})",
+                trace.node_index,
+                trace.cnode_depth,
+                depth_suffix,
+                trace.dest_offset,
+                trace.object_type,
+                objtype_name(trace.object_type),
+                trace.object_size_bits,
+                trace.untyped_paddr,
+            );
+        } else {
+            log::trace!(
+                "Retype → root=0x{:x} index=0x{:x} depth={}{} offset={} (objtype={}({}), size_bits={}, untyped_paddr=0x{:08x})",
+                trace.cnode_root,
+                trace.node_index,
+                trace.cnode_depth,
+                depth_suffix,
+                trace.dest_offset,
+                trace.object_type,
+                objtype_name(trace.object_type),
+                trace.object_size_bits,
+                trace.untyped_paddr,
+            );
         }
     }
 
