@@ -2,6 +2,7 @@
 #![allow(unsafe_code)]
 
 use crate::sel4 as sys;
+use sel4_sys;
 
 /// Maximum representable depth (in bits) for the init CNode on this architecture.
 pub const CANONICAL_CNODE_DEPTH_BITS: u8 = (core::mem::size_of::<sys::seL4_Word>() * 8) as u8;
@@ -72,10 +73,14 @@ pub(crate) fn init_cnode_direct_destination_words(
     init_cnode_bits: u8,
     dst_slot: sys::seL4_CPtr,
 ) -> (sys::seL4_Word, sys::seL4_Word, sys::seL4_Word) {
+    debug_assert!(
+        (dst_slot as usize) < (1usize << init_cnode_bits),
+        "destination slot {dst_slot:#x} exceeds init CNode capacity (bits={init_cnode_bits})"
+    );
     (
-        0,
-        encode_cnode_depth(init_cnode_bits),
         dst_slot as sys::seL4_Word,
+        sel4_sys::seL4_WordBits as sys::seL4_Word,
+        0,
     )
 }
 
@@ -163,17 +168,25 @@ pub fn untyped_retype_into_init_cnode(
             hi = empty_end,
         );
         check_slot_in_range(depth_bits, dst_slot);
+        debug_assert!(
+            (dst_slot as usize)
+                < (1usize
+                    .checked_shl(bootinfo.initThreadCNodeSizeBits as u32)
+                    .expect("initThreadCNodeSizeBits must fit in host word")),
+            "destination slot 0x{dst_slot:04x} exceeds init CNode capacity {}",
+            bootinfo.initThreadCNodeSizeBits
+        );
 
-        let depth = bootinfo.initThreadCNodeSizeBits as sys::seL4_Word;
+        let depth = sel4_sys::seL4_WordBits as sys::seL4_Word;
         unsafe {
             sys::seL4_Untyped_Retype(
                 untyped_slot,
                 obj_type,
                 size_bits,
                 sys::seL4_CapInitThreadCNode,
-                0,
-                depth,
                 dst_slot,
+                depth,
+                0,
                 1,
             )
         }
@@ -205,19 +218,24 @@ pub fn untyped_retype_into_cnode(
 ) -> sys::seL4_Error {
     #[cfg(target_os = "none")]
     {
-        // The Rust root-task path enforces `node_depth = initThreadCNodeSizeBits` when targeting the
-        // init CNode. Host-side tooling may still call into this helper, so guard the kernel path to
-        // ensure we never regress to zero-depth retypes.
+        // The Rust root-task path enforces canonical guard-depth addressing when targeting the init
+        // CNode (node_depth = seL4_WordBits). Host-side tooling may still call into this helper, so
+        // guard the kernel path to ensure we never regress to zero-depth retypes or bypass the
+        // bootinfo-advertised slot bounds.
         if dest_root == sys::seL4_CapInitThreadCNode {
             let bootinfo = unsafe { &*sys::seL4_GetBootInfo() };
             let init_bits = bootinfo.initThreadCNodeSizeBits as u8;
             assert_eq!(
                 depth_bits, init_bits,
-                "init CNode retypes must use initThreadCNodeSizeBits depth (provided={} expected={})",
+                "init CNode retypes must honour initThreadCNodeSizeBits (provided={} expected={})",
                 depth_bits, init_bits
             );
         }
-        let depth = resolve_cnode_depth(depth_bits);
+        let depth = if dest_root == sys::seL4_CapInitThreadCNode {
+            sel4_sys::seL4_WordBits as sys::seL4_Word
+        } else {
+            resolve_cnode_depth(depth_bits).as_word()
+        };
         unsafe {
             sys::seL4_Untyped_Retype(
                 untyped_slot,
@@ -225,7 +243,7 @@ pub fn untyped_retype_into_cnode(
                 size_bits,
                 dest_root,
                 dst_slot,
-                depth.as_word(),
+                depth,
                 0,
                 1,
             )
@@ -234,11 +252,15 @@ pub fn untyped_retype_into_cnode(
 
     #[cfg(not(target_os = "none"))]
     {
-        let depth = resolve_cnode_depth(depth_bits);
+        let depth = if dest_root == sys::seL4_CapInitThreadCNode {
+            sel4_sys::seL4_WordBits as sys::seL4_Word
+        } else {
+            resolve_cnode_depth(depth_bits).as_word()
+        };
         host_trace::record(host_trace::HostRetypeTrace {
             root: dest_root,
             node_index: dst_slot as sys::seL4_Word,
-            node_depth: depth.as_word(),
+            node_depth: depth,
             node_offset: 0,
         });
         let _ = (untyped_slot, obj_type, size_bits);
@@ -290,15 +312,21 @@ pub(crate) mod test_support {
         #[cfg(target_os = "none")]
         unsafe {
             let bi = &*sys::seL4_GetBootInfo();
-            let depth = bi.initThreadCNodeSizeBits as sys::seL4_Word;
+            let depth = sel4_sys::seL4_WordBits as sys::seL4_Word;
+            debug_assert!(
+                depth_bits as sys::seL4_Word == bi.initThreadCNodeSizeBits as sys::seL4_Word,
+                "init CNode retypes must honour initThreadCNodeSizeBits (provided={} expected={})",
+                depth_bits,
+                bi.initThreadCNodeSizeBits
+            );
             sys::seL4_Untyped_Retype(
                 untyped,
                 obj_type,
                 size_bits,
                 sys::seL4_CapInitThreadCNode,
-                0,
-                depth,
                 dst_slot,
+                depth,
+                0,
                 1,
             )
         }

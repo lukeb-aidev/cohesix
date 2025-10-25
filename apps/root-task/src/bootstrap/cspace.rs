@@ -6,6 +6,7 @@ use core::fmt::Write;
 use heapless::String;
 
 use super::cspace_sys::{self, CANONICAL_CNODE_DEPTH_BITS};
+use sel4_sys;
 
 const MAX_DIAGNOSTIC_LEN: usize = 224;
 fn log_boot(beg: sel4::seL4_CPtr, end: sel4::seL4_CPtr, bits: u8) {
@@ -422,17 +423,17 @@ impl CSpaceCtx {
                     );
                 #[cfg(target_os = "none")]
                 let (node_index, node_depth, node_offset) = (
-                    0,
-                    cspace_sys::encode_cnode_depth(self.cnode_invocation_depth_bits),
                     dst_slot as sel4::seL4_Word,
+                    sel4_sys::seL4_WordBits as sel4::seL4_Word,
+                    0,
                 );
                 #[cfg(not(target_os = "none"))]
                 debug_assert_eq!(
                     (node_index, node_depth, node_offset),
                     (
-                        0,
-                        cspace_sys::encode_cnode_depth(self.cnode_invocation_depth_bits),
                         dst_slot as sel4::seL4_Word,
+                        sel4_sys::seL4_WordBits as sel4::seL4_Word,
+                        0,
                     )
                 );
 

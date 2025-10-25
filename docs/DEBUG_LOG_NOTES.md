@@ -5,7 +5,7 @@
 - The root-task's `kernel` module emits lines beginning with `retype status=` whenever the extended retype tracing hook runs.
 - The suffix `pending`, `ok`, or `err(<code>)` mirrors the internal `RetypeStatus` enum from `apps/root-task/src/kernel.rs`.
 - `retype status=…` lines now emit `raw.*` field names. These values are captured **before** the trace is sanitised and therefore show exactly what the root-task attempted to hand to the kernel.
-- A subsequent `retype.init_cnode …` line dumps the expected root CNode capability, traversal index (always zero for the init thread), and guard depth derived from bootinfo. This line makes it trivial to compare the raw submission against the canonical init-thread parameters.
+- A subsequent `retype.init_cnode …` line dumps the expected root CNode capability, traversal index (the destination slot for the init thread), and guard depth derived from bootinfo. This line makes it trivial to compare the raw submission against the canonical init-thread parameters.
 - When sanitisation succeeds you will see `retype.sanitised …` with the values that were ultimately passed into `seL4_Untyped_Retype`. If sanitisation fails the log prints `retype.sanitise_error=…` describing the first mismatch (root capability, node index, guard depth, or slot bounds).
 - The accompanying `retype.kind=` line reports the `RetypeKind` variant, which is `device_page` for MMIO mappings such as the PL011 UART.
 - Device coverage output like `device coverage idx=16 […] state=free` confirms the root-task examined the manifest entry for the requested MMIO region before the failure.
@@ -23,4 +23,5 @@
 
 ## Resolution Summary
 - The panic stemmed from passing `node_depth = initThreadCNodeSizeBits` into `seL4_Untyped_Retype`. Guard bits advertised by bootinfo still force the kernel to resolve the canonical `seL4_WordBits` path, so truncating the depth caused `lookupTargetSlot` to report `Invalid destination address` before any capability could be installed.
-- Updating `KernelEnv::prepare_retype_trace` and its sanitiser to keep `node_depth = seL4_WordBits` (matching the guard depth used by the init thread root CNode) ensures the kernel consumes the supplied root capability directly. The PL011 device frame now retypes correctly and the root-task progresses past the UART initialisation stage.
+- Updating `KernelEnv::prepare_retype_trace` and its sanitiser to keep `node_depth = seL4_WordBits` and `node_index = slot` (guard cleared) ensures the kernel consumes the supplied root capability directly while addressing the correct destination slot. The PL011 device frame now retypes correctly and the root-task progresses past the UART initialisation stage.
+- When addressing the init thread CNode, always use guard-depth semantics: `node_depth = seL4_WordBits` and `node_index = slot` with a zero guard. The `node_offset` should remain zero because the pointer already names the final slot; bounds checks continue to rely on `initThreadCNodeSizeBits`.
