@@ -8,7 +8,6 @@
 use core::{
     arch::asm,
     fmt,
-    fmt::Write,
     mem,
     ptr::{self, NonNull},
     sync::atomic::{AtomicUsize, Ordering},
@@ -30,6 +29,15 @@ pub use sel4_sys::{
 /// Canonical capability rights representation exposed by seL4.
 pub type SeL4CapRights = sel4_sys::seL4_CapRights;
 
+/// Architectural word width (in bits) exposed by seL4.
+pub const WORD_BITS: seL4_Word = usize::BITS as seL4_Word;
+
+/// Returns the architectural word width (in bits) exposed by seL4.
+#[inline(always)]
+pub const fn word_bits() -> seL4_Word {
+    WORD_BITS
+}
+
 use sel4_sys::{
     seL4_ARM_PageTableObject, seL4_ARM_PageTable_Map, seL4_ARM_Page_Default, seL4_ARM_Page_Map,
     seL4_ARM_Page_Uncached, seL4_ARM_VMAttributes, seL4_BootInfo, seL4_ObjectType, seL4_SlotRegion,
@@ -48,7 +56,7 @@ pub type BootInfo = seL4_BootInfo;
 /// Canonical guard-depth for addressing the init thread root CNode.
 #[inline(always)]
 fn root_cnode_depth_word() -> seL4_Word {
-    sel4_sys::seL4_WordBits as seL4_Word
+    WORD_BITS
 }
 
 /// Returns the first RAM-backed untyped capability advertised by the kernel.

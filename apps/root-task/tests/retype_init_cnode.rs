@@ -6,6 +6,7 @@ use root_task::bootstrap::cspace_sys::{
     init_cnode_direct_destination_words_for_test, take_last_host_retype_trace,
     untyped_retype_into_init_cnode,
 };
+use root_task::sel4;
 use sel4_sys::{seL4_CPtr, seL4_CapInitThreadCNode, seL4_NoError, seL4_Word};
 
 #[test]
@@ -19,7 +20,7 @@ fn init_cnode_retype_uses_direct_destination_encoding() {
 
     let (_index, depth, _offset) =
         init_cnode_direct_destination_words_for_test(depth_bits, dst_slot);
-    assert_eq!(depth, sel4_sys::seL4_WordBits as seL4_Word);
+    assert_eq!(depth, sel4::word_bits());
 
     let err = untyped_retype_into_init_cnode(depth_bits, untyped, obj_ty, size_bits, dst_slot);
     assert_eq!(err, seL4_NoError);
@@ -29,6 +30,6 @@ fn init_cnode_retype_uses_direct_destination_encoding() {
 
     assert_eq!(trace.root, seL4_CapInitThreadCNode);
     assert_eq!(trace.node_index, dst_slot as seL4_Word);
-    assert_eq!(trace.node_depth, sel4_sys::seL4_WordBits as seL4_Word);
+    assert_eq!(trace.node_depth, sel4::word_bits());
     assert_eq!(trace.node_offset, 0);
 }

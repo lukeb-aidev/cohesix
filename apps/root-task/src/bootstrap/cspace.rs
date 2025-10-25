@@ -424,7 +424,7 @@ impl CSpaceCtx {
                 #[cfg(target_os = "none")]
                 let (node_index, node_depth, node_offset) = (
                     dst_slot as sel4::seL4_Word,
-                    sel4_sys::seL4_WordBits as sel4::seL4_Word,
+                    sel4::word_bits(),
                     0,
                 );
                 #[cfg(not(target_os = "none"))]
@@ -432,7 +432,7 @@ impl CSpaceCtx {
                     (node_index, node_depth, node_offset),
                     (
                         dst_slot as sel4::seL4_Word,
-                        sel4_sys::seL4_WordBits as sel4::seL4_Word,
+                        sel4::word_bits(),
                         0,
                     )
                 );
