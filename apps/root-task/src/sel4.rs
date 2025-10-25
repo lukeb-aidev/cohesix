@@ -10,7 +10,7 @@ use core::{
     convert::TryFrom,
     fmt, mem,
     ptr::{self, NonNull},
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
 use crate::serial;
@@ -74,6 +74,7 @@ pub fn first_regular_untyped(bi: &seL4_BootInfo) -> Option<seL4_CPtr> {
 }
 
 static ROOT_ENDPOINT: AtomicUsize = AtomicUsize::new(0);
+static SEND_LOGGED: AtomicBool = AtomicBool::new(false);
 
 /// Error returned when guarded IPC cannot proceed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -132,6 +133,13 @@ fn ensure_endpoint() -> Result<seL4_CPtr, IpcError> {
 #[inline(never)]
 pub fn send_guarded(info: seL4_MessageInfo) -> Result<(), IpcError> {
     let endpoint = ensure_endpoint()?;
+    debug_assert_ne!(
+        endpoint, seL4_CapNull,
+        "send_guarded must not transmit on the null endpoint"
+    );
+    if !SEND_LOGGED.swap(true, Ordering::AcqRel) {
+        log::info!("bootstrap: send on ep slot=0x{slot:04x}", slot = endpoint,);
+    }
     unsafe { sel4_sys::seL4_Send(endpoint, info) };
     Ok(())
 }

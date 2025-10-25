@@ -1,7 +1,7 @@
 // Author: Lukas Bower
 #![allow(unsafe_code)]
 
-use core::fmt::Write;
+use core::{convert::TryFrom, fmt::Write};
 
 use crate::sel4;
 use crate::trace::{dec_u32, hex_u64, DebugPutc};
@@ -17,22 +17,21 @@ fn canonicalize_cnode_destination(
     node_offset: seL4_CPtr,
 ) -> (seL4_CPtr, u8, seL4_CPtr) {
     if dst_root == sel4::seL4_CapInitThreadCNode {
-        let canonical_depth = sel4::word_bits() as u8;
-        debug_assert!(
-            sel4::word_bits() <= u8::MAX as sel4::seL4_Word,
-            "architectural word bits {} exceed u8::MAX",
-            sel4::word_bits()
+        let canonical_depth_word = sel4::word_bits();
+        let canonical_depth = u8::try_from(canonical_depth_word)
+            .expect("seL4_WordBits must fit within u8 for guard-depth addressing");
+        debug_assert_eq!(
+            node_offset, 0,
+            "init CNode guard-depth path must not supply a node_offset (got=0x{node_offset:04x})"
         );
-        let slot = if node_depth == 0 {
-            if node_offset != 0 {
-                node_offset
-            } else {
-                node_index
-            }
-        } else {
-            node_index
-        };
-        (slot, canonical_depth, 0)
+        if node_depth != canonical_depth {
+            log::warn!(
+                "[cohesix:root-task] canonicalize_cnode_destination: overriding depth {provided} with guard-depth {canonical}",
+                provided = node_depth,
+                canonical = canonical_depth
+            );
+        }
+        (node_index, canonical_depth, 0)
     } else {
         (node_index, node_depth, node_offset)
     }
