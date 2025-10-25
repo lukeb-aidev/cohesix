@@ -27,9 +27,9 @@
 
 ### Bootstrap CSpace Addressing
 
-- All bootstrap `seL4_CNode_*` calls use canonical invocation depth so the kernel resolves the init thread's single-level CSpace correctly: `dest_root = seL4_CapInitThreadCNode`, `dest_depth = seL4_WordBits`, and `dest_offset = 0`. Only the `dest_index` varies per allocation.
-- Source capabilities for mint/copy/move mirror the same tuple with `src_depth = seL4_WordBits`, ensuring guard bits remain satisfied when the kernel traverses the root CNode.
-- Untyped retypes reuse the same addressing policy; the destination tuple is `(root = seL4_CapInitThreadCNode, index = <slot>, depth = seL4_WordBits, offset = 0)` so retypes share the guard discipline established by the bootinfo metadata.
+- All bootstrap `seL4_CNode_*` calls use the kernel-advertised radix depth so the init thread's single-level CSpace resolves correctly: `dest_root = seL4_CapInitThreadCNode`, `dest_depth = initThreadCNodeSizeBits`, and `dest_offset = 0`. Only the `dest_index` varies per allocation.
+- Source capabilities for mint/copy/move mirror the same tuple with `src_depth = initThreadCNodeSizeBits`, ensuring the kernel traverses the root CNode using the declared radix.
+- Untyped retypes reuse the same addressing policy; the destination tuple is `(root = seL4_CapInitThreadCNode, index = <slot>, depth = initThreadCNodeSizeBits, offset = 0)` so retypes stay aligned with the bootinfo metadata.
 - Bootstrapping begins with a smoke copy of the init TCB capability into `bootinfo.empty.start`, confirming that the canonical addressing policy succeeds before any mutable capability traffic occurs.
 - The bootstrap allocator derives `init_cnode_bits` and the empty window directly from `BootInfo`, asserting that every destination slot satisfies `slot < 2^{init_cnode_bits}` before issuing the syscall. Violations panic before touching the kernel, eliminating decode-time ambiguity.
 - Diagnostic logs for Copy → Mint → Retype include the exact `(index, depth, offset, badge)` tuple so regressions surface in
