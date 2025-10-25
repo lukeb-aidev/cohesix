@@ -7,6 +7,11 @@ use sel4_sys;
 /// Maximum representable depth (in bits) for the init CNode on this architecture.
 pub const CANONICAL_CNODE_DEPTH_BITS: u8 = sel4_sys::seL4_WordBits as u8;
 
+#[inline(always)]
+fn canonical_cnode_depth_word() -> sys::seL4_Word {
+    sel4_sys::seL4_WordBits as sys::seL4_Word
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct CNodeDepth {
     bits_u8: u8,
@@ -136,6 +141,169 @@ mod host_trace {
 
 #[cfg(all(feature = "kernel", not(target_os = "none")))]
 pub use host_trace::{take_last as take_last_host_retype_trace, HostRetypeTrace};
+
+#[inline(always)]
+fn log_cnode_destination(op: &str, dst_slot: sys::seL4_CPtr) {
+    let depth = canonical_cnode_depth_word();
+    log::info!(
+        "[cohesix:root-task] CNode {op} dest: root=initCNode index=0x{index:04x} depth={depth}(WB) offset=0",
+        index = dst_slot,
+        op = op,
+    );
+}
+
+#[inline(always)]
+fn canonical_guard_depth_bits() -> u8 {
+    CANONICAL_CNODE_DEPTH_BITS
+}
+
+#[inline(always)]
+fn check_init_depth(depth_bits: u8) {
+    let bootinfo = unsafe { &*sys::seL4_GetBootInfo() };
+    let init_bits = bootinfo.initThreadCNodeSizeBits as u8;
+    debug_assert_eq!(
+        depth_bits, init_bits,
+        "init CNode invocations must honour initThreadCNodeSizeBits (provided={} expected={})",
+        depth_bits, init_bits
+    );
+}
+
+#[inline(always)]
+pub fn cnode_copy_direct_dest(
+    depth_bits: u8,
+    dst_slot: sys::seL4_CPtr,
+    src_root: sys::seL4_CNode,
+    src_index: sys::seL4_CPtr,
+    src_depth_bits: u8,
+    rights: sys::SeL4CapRights,
+) -> sys::seL4_Error {
+    log_cnode_destination("Copy", dst_slot);
+    #[cfg(target_os = "none")]
+    {
+        check_init_depth(depth_bits);
+        check_slot_in_range(depth_bits, dst_slot);
+        let guard_depth_bits = canonical_guard_depth_bits();
+        let guard_depth_word = canonical_cnode_depth_word();
+        debug_assert_eq!(
+            guard_depth_bits as sys::seL4_Word, guard_depth_word,
+            "canonical guard depth mismatch"
+        );
+        let result = unsafe {
+            sys::seL4_CNode_Copy(
+                sys::seL4_CapInitThreadCNode,
+                dst_slot as sys::seL4_Word,
+                guard_depth_bits,
+                src_root,
+                src_index as sys::seL4_Word,
+                src_depth_bits,
+                rights,
+            )
+        };
+        result
+    }
+
+    #[cfg(not(target_os = "none"))]
+    {
+        let (node_index, node_depth, node_offset) =
+            init_cnode_direct_destination_words(depth_bits, dst_slot);
+        host_trace::record(host_trace::HostRetypeTrace {
+            root: sys::seL4_CapInitThreadCNode,
+            node_index,
+            node_depth,
+            node_offset,
+        });
+        let _ = (src_root, src_index, src_depth_bits, rights);
+        sys::seL4_NoError
+    }
+}
+
+#[inline(always)]
+pub fn cnode_mint_direct_dest(
+    depth_bits: u8,
+    dst_slot: sys::seL4_CPtr,
+    src_root: sys::seL4_CNode,
+    src_index: sys::seL4_CPtr,
+    src_depth_bits: u8,
+    rights: sys::SeL4CapRights,
+    badge: sys::seL4_Word,
+) -> sys::seL4_Error {
+    log_cnode_destination("Mint", dst_slot);
+    #[cfg(target_os = "none")]
+    {
+        check_init_depth(depth_bits);
+        check_slot_in_range(depth_bits, dst_slot);
+        let guard_depth_bits = canonical_guard_depth_bits();
+        let result = unsafe {
+            sys::seL4_CNode_Mint(
+                sys::seL4_CapInitThreadCNode,
+                dst_slot as sys::seL4_Word,
+                guard_depth_bits,
+                src_root,
+                src_index as sys::seL4_Word,
+                src_depth_bits,
+                rights,
+                badge,
+            )
+        };
+        result
+    }
+
+    #[cfg(not(target_os = "none"))]
+    {
+        let (node_index, node_depth, node_offset) =
+            init_cnode_direct_destination_words(depth_bits, dst_slot);
+        host_trace::record(host_trace::HostRetypeTrace {
+            root: sys::seL4_CapInitThreadCNode,
+            node_index,
+            node_depth,
+            node_offset,
+        });
+        let _ = (src_root, src_index, src_depth_bits, rights, badge);
+        sys::seL4_NoError
+    }
+}
+
+#[inline(always)]
+pub fn cnode_move_direct_dest(
+    depth_bits: u8,
+    dst_slot: sys::seL4_CPtr,
+    src_root: sys::seL4_CNode,
+    src_index: sys::seL4_CPtr,
+    src_depth_bits: u8,
+) -> sys::seL4_Error {
+    log_cnode_destination("Move", dst_slot);
+    #[cfg(target_os = "none")]
+    {
+        check_init_depth(depth_bits);
+        check_slot_in_range(depth_bits, dst_slot);
+        let guard_depth_bits = canonical_guard_depth_bits();
+        let result = unsafe {
+            sys::seL4_CNode_Move(
+                sys::seL4_CapInitThreadCNode,
+                dst_slot as sys::seL4_Word,
+                guard_depth_bits,
+                src_root,
+                src_index as sys::seL4_Word,
+                src_depth_bits,
+            )
+        };
+        result
+    }
+
+    #[cfg(not(target_os = "none"))]
+    {
+        let (node_index, node_depth, node_offset) =
+            init_cnode_direct_destination_words(depth_bits, dst_slot);
+        host_trace::record(host_trace::HostRetypeTrace {
+            root: sys::seL4_CapInitThreadCNode,
+            node_index,
+            node_depth,
+            node_offset,
+        });
+        let _ = (src_root, src_index, src_depth_bits);
+        sys::seL4_NoError
+    }
+}
 
 #[inline(always)]
 pub fn untyped_retype_into_init_cnode(
@@ -287,25 +455,15 @@ pub(crate) mod test_support {
     ) -> sys::seL4_Error {
         #[cfg(target_os = "none")]
         {
-            let bootinfo = unsafe { &*sys::seL4_GetBootInfo() };
-            let init_bits = bootinfo.initThreadCNodeSizeBits as u8;
-            debug_assert_eq!(
-                depth_bits, init_bits,
-                "init CNode mint must honour initThreadCNodeSizeBits (provided={} expected={})",
-                depth_bits, init_bits
-            );
-            unsafe {
-                sys::seL4_CNode_Mint(
-                    sys::seL4_CapInitThreadCNode,
-                    dst_slot as sys::seL4_Word,
-                    sel4_sys::seL4_WordBits as sys::seL4_Word,
-                    sys::seL4_CapInitThreadCNode,
-                    src_slot,
-                    0u8,
-                    rights,
-                    badge,
-                )
-            }
+            super::cnode_mint_direct_dest(
+                depth_bits,
+                dst_slot,
+                sys::seL4_CapInitThreadCNode,
+                src_slot,
+                super::canonical_guard_depth_bits(),
+                rights,
+                badge,
+            )
         }
 
         #[cfg(not(target_os = "none"))]
