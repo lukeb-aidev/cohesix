@@ -5,7 +5,7 @@ use crate::sel4 as sys;
 use sel4_sys;
 
 /// Maximum representable depth (in bits) for the init CNode on this architecture.
-pub const CANONICAL_CNODE_DEPTH_BITS: u8 = sys::WORD_BITS as u8;
+pub const CANONICAL_CNODE_DEPTH_BITS: u8 = sel4_sys::seL4_WordBits as u8;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct CNodeDepth {
@@ -77,7 +77,8 @@ pub(crate) fn init_cnode_direct_destination_words(
         (dst_slot as usize) < (1usize << init_cnode_bits),
         "destination slot {dst_slot:#x} exceeds init CNode capacity (bits={init_cnode_bits})"
     );
-    (dst_slot as sys::seL4_Word, sys::WORD_BITS, 0)
+    let word_bits = sel4_sys::seL4_WordBits as sys::seL4_Word;
+    (dst_slot as sys::seL4_Word, word_bits, 0)
 }
 
 #[cfg(test)]
@@ -174,7 +175,7 @@ pub fn untyped_retype_into_init_cnode(
         );
 
         let node_index = dst_slot as sys::seL4_Word;
-        let node_depth = sys::WORD_BITS;
+        let node_depth = sel4_sys::seL4_WordBits as sys::seL4_Word;
         let node_offset = 0u64 as sys::seL4_Word;
         log::trace!(
             "[cohesix:root-task] retype.into_init_cnode root=initCNode index=0x{index:x} depth={depth}(WB) offset={offset}",
@@ -236,7 +237,7 @@ pub fn untyped_retype_into_cnode(
             );
         }
         let depth = if dest_root == sys::seL4_CapInitThreadCNode {
-            sys::WORD_BITS
+            sel4_sys::seL4_WordBits as sys::seL4_Word
         } else {
             resolve_cnode_depth(depth_bits).as_word()
         };
@@ -257,7 +258,7 @@ pub fn untyped_retype_into_cnode(
     #[cfg(not(target_os = "none"))]
     {
         let depth = if dest_root == sys::seL4_CapInitThreadCNode {
-            sys::WORD_BITS
+            sel4_sys::seL4_WordBits as sys::seL4_Word
         } else {
             resolve_cnode_depth(depth_bits).as_word()
         };
@@ -297,7 +298,7 @@ pub(crate) mod test_support {
                 sys::seL4_CNode_Mint(
                     sys::seL4_CapInitThreadCNode,
                     dst_slot as sys::seL4_Word,
-                    sys::WORD_BITS,
+                    sel4_sys::seL4_WordBits as sys::seL4_Word,
                     sys::seL4_CapInitThreadCNode,
                     src_slot,
                     0u8,
@@ -325,7 +326,7 @@ pub(crate) mod test_support {
         #[cfg(target_os = "none")]
         unsafe {
             let bi = &*sys::seL4_GetBootInfo();
-            let depth = sys::WORD_BITS;
+            let depth = sel4_sys::seL4_WordBits as sys::seL4_Word;
             debug_assert!(
                 depth_bits as sys::seL4_Word == bi.initThreadCNodeSizeBits as sys::seL4_Word,
                 "init CNode retypes must honour initThreadCNodeSizeBits (provided={} expected={})",
