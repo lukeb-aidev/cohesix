@@ -11,18 +11,12 @@ use sel4_sys::{
 
 #[inline(always)]
 fn canonicalize_cnode_destination(
-    dst_root: seL4_CPtr,
+    _dst_root: seL4_CPtr,
     node_index: seL4_CPtr,
     node_depth: u8,
     node_offset: seL4_CPtr,
 ) -> (seL4_CPtr, u8, seL4_CPtr) {
-    if dst_root == sel4_sys::seL4_CapInitThreadCNode {
-        debug_assert_eq!(node_index, 0, "init CNode requires node_index = 0");
-        debug_assert_eq!(node_depth, 0, "init CNode requires node_depth = 0");
-        (0, 0, node_offset)
-    } else {
-        (node_index, node_depth, node_offset)
-    }
+    (node_index, node_depth, node_offset)
 }
 
 #[inline]
