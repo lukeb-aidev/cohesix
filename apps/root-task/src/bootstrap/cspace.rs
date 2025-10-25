@@ -422,19 +422,12 @@ impl CSpaceCtx {
                         dst_slot,
                     );
                 #[cfg(target_os = "none")]
-                let (node_index, node_depth, node_offset) = (
-                    dst_slot as sel4::seL4_Word,
-                    sel4::word_bits(),
-                    0,
-                );
+                let (node_index, node_depth, node_offset) =
+                    (dst_slot as sel4::seL4_Word, sel4::word_bits(), 0);
                 #[cfg(not(target_os = "none"))]
                 debug_assert_eq!(
                     (node_index, node_depth, node_offset),
-                    (
-                        dst_slot as sel4::seL4_Word,
-                        sel4::word_bits(),
-                        0,
-                    )
+                    (dst_slot as sel4::seL4_Word, sel4::word_bits(), 0,)
                 );
 
                 (

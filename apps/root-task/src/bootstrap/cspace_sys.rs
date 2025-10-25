@@ -246,7 +246,7 @@ pub fn untyped_retype_into_cnode(
                 obj_type,
                 size_bits,
                 dest_root,
-                dst_slot,
+                dst_slot as sys::seL4_Word,
                 depth,
                 0,
                 1,
@@ -285,17 +285,26 @@ pub(crate) mod test_support {
         badge: sys::seL4_Word,
     ) -> sys::seL4_Error {
         #[cfg(target_os = "none")]
-        unsafe {
-            sys::seL4_CNode_Mint(
-                sys::seL4_CapInitThreadCNode,
-                dst_slot,
-                depth_bits,
-                sys::seL4_CapInitThreadCNode,
-                src_slot,
-                0u8,
-                rights,
-                badge,
-            )
+        {
+            let bootinfo = unsafe { &*sys::seL4_GetBootInfo() };
+            let init_bits = bootinfo.initThreadCNodeSizeBits as u8;
+            debug_assert_eq!(
+                depth_bits, init_bits,
+                "init CNode mint must honour initThreadCNodeSizeBits (provided={} expected={})",
+                depth_bits, init_bits
+            );
+            unsafe {
+                sys::seL4_CNode_Mint(
+                    sys::seL4_CapInitThreadCNode,
+                    dst_slot as sys::seL4_Word,
+                    sys::WORD_BITS,
+                    sys::seL4_CapInitThreadCNode,
+                    src_slot,
+                    0u8,
+                    rights,
+                    badge,
+                )
+            }
         }
 
         #[cfg(not(target_os = "none"))]
@@ -328,7 +337,7 @@ pub(crate) mod test_support {
                 obj_type,
                 size_bits,
                 sys::seL4_CapInitThreadCNode,
-                dst_slot,
+                dst_slot as sys::seL4_Word,
                 depth,
                 0,
                 1,
