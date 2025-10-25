@@ -38,9 +38,14 @@ qemu-system-aarch64 --version | head -n1
 1. Clone upstream seL4 and tool repo at compatible tags.
 2. Configure for `aarch64` + `qemu_arm_virt` platform with `CROSS_COMPILER_PREFIX=aarch64-none-elf-`.
 3. Produce `elfloader`, `kernel.elf`, and a placeholder `rootfs.cpio` (may be empty initially).
-4. Store artefacts under `out/` (not committed) and run:
+4. Store artefacts under `out/` (not committed) and run the helper with
+   explicit paths once the Rust root task has been compiled:
    ```bash
-   ./scripts/qemu-run.sh out/elfloader out/kernel.elf out/rootfs.cpio
+   scripts/qemu-run.sh \
+     --elfloader out/elfloader \
+     --kernel out/kernel.elf \
+     --root-task target/aarch64-unknown-none/release/root-task \
+     --out-dir out/qemu-direct
    ```
 5. The Cohesix build harness copies `elfloader` into its staging directory and
    strips any baked-in kernel/root server payloads via

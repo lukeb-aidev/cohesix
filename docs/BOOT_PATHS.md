@@ -10,10 +10,15 @@ payloads while preserving the existing debug console behaviour.
 The legacy flow launches QEMU with the seL4 elfloader provided as a raw
 ELF image. The loader, kernel, and root-task binaries are injected using
 QEMU's `-kernel`, `-initrd`, and `-device loader` arguments. This path
-remains untouched and is still invoked through `scripts/qemu-run.sh`.
+remains untouched and is still invoked through `scripts/qemu-run.sh`
+with explicit artefact paths:
 
 ```
-./scripts/qemu-run.sh
+scripts/qemu-run.sh \
+  --elfloader out/elfloader \
+  --kernel out/kernel.elf \
+  --root-task target/aarch64-unknown-none/release/root-task \
+  --out-dir out/qemu-direct
 ```
 
 ## Adapter B1 — UEFI elfloader
