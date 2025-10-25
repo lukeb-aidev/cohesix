@@ -29,7 +29,7 @@ pub use sel4_sys::{
 pub type SeL4CapRights = sel4_sys::seL4_CapRights;
 
 /// Architectural word width (in bits) exposed by seL4.
-pub const WORD_BITS: seL4_Word = usize::BITS as seL4_Word;
+pub const WORD_BITS: seL4_Word = sel4_sys::seL4_WordBits as seL4_Word;
 
 /// Returns the architectural word width (in bits) exposed by seL4.
 #[inline(always)]
@@ -55,7 +55,7 @@ pub type BootInfo = seL4_BootInfo;
 /// Canonical guard-depth for addressing the init thread root CNode.
 #[inline(always)]
 fn root_guard_depth() -> seL4_Word {
-    WORD_BITS
+    sel4_sys::seL4_WordBits as seL4_Word
 }
 
 /// Returns the first RAM-backed untyped capability advertised by the kernel.
