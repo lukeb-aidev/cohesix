@@ -53,7 +53,9 @@
   serial and TCP transports.
 - Runs the serial/TCP console loop (`console::CommandParser`) which multiplexes authenticated commands (`help`, `attach`, `tail`,
   `log`, `spawn`, `kill`, `quit`) alongside timer and networking events inside the root-task scheduler. Capability validation is
-  driven by a deterministic ticket table (`event::TicketTable`) that records bootstrap secrets.
+  driven by a deterministic ticket table (`event::TicketTable`) that records bootstrap secrets, and an acknowledgement dispatcher
+  emits `OK <verb>` / `ERR <verb>` lines across both transports before side effects fire so automation can align with root-task
+  state transitions.【F:apps/root-task/src/event/mod.rs†L329-L360】
 
 ### NineDoor 9P Server (crate: `nine-door`)
 - Implements the Secure9P codec/core stack and publishes the synthetic namespace.
@@ -101,7 +103,8 @@
   NineDoor or root-task orchestration APIs. Sanitised console lines are counted once in the event-pump metrics so `/proc/boot`
   can expose console pressure regardless of transport. TCP transports mirror the parser exactly, emitting `PING`/`PONG`
   heartbeats every 15 seconds (configurable) and logging reconnect attempts so host operators can correlate transient drops with
-  root-task audit lines.
+  root-task audit lines. Every command generates a deterministic acknowledgement (`OK`/`ERR`) broadcast to serial and TCP clients
+  so operators can script against shared semantics without guessing event timing.【F:apps/root-task/src/event/mod.rs†L329-L360】【F:apps/root-task/src/net/queue.rs†L526-L559】
 - Root-task’s event pump advances the networking clock on every timer tick, services console input, and emits structured log
   lines so host tooling (`cohsh`) can mirror state over either serial or TCP transports while timers and IPC continue to run.
 
