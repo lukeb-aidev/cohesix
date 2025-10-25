@@ -34,21 +34,27 @@ per-command capability checks inside the event pump.
   `accepted_commands` and `denied_commands` counters for auditability. 【F:apps/root-task/src/event/mod.rs†L84-L115】【F:apps/root-task/src/event/mod.rs†L240-L347】
 
 ### 2.3 Output Semantics
-Commands do not currently stream structured responses. Instead the
-`AuditSink` implementation writes prefixed audit lines to the seL4 debug
-console (visible on the QEMU serial log) while NineDoor forwarding stubs
-mirror accepted verbs for future integration. 【F:apps/root-task/src/event/mod.rs†L314-L347】【F:apps/root-task/src/ninedoor.rs†L15-L63】
+The console emits explicit acknowledgements for every command. Both
+serial and TCP transports return `OK <VERB> …` or `ERR <VERB>
+reason=<cause>` before any side effects occur so operators and
+automation can synchronise on deterministic state transitions. These
+acknowledgements are produced by the shared event-pump dispatcher and are
+mirrored by the audit sink, ensuring `/log/queen.log` records the same
+outcome. Streaming verbs such as `tail` and `log` also emit an
+acknowledgement before beginning payload delivery and terminate with
+`END`. 【F:apps/root-task/src/event/mod.rs†L329-L360】【F:apps/root-task/src/ninedoor.rs†L4-L63】【F:apps/root-task/src/net/queue.rs†L526-L559】
 Early boot traces always use the UART path; the IPC sink remains disabled until `sel4::ep_ready()` publishes the root endpoint, preventing send-phase faults. 【F:apps/root-task/src/trace.rs†L10-L62】【F:apps/root-task/src/sel4.rs†L74-L154】
 
 ## 3. Example Sessions
 The host-mode harness demonstrates the exact command sequence exercised
-under QEMU. The scripted input runs `help`, authenticates as queen,
-invokes `log`/`spawn`, re-attaches as a worker, issues `tail`, then
-terminates with `quit`. 【F:apps/root-task/src/host.rs†L52-L104】
+under QEMU. The scripted input runs `help`, authenticates as queen and
+observes the `OK ATTACH` acknowledgement, invokes `log`/`spawn`,
+re-attaches as a worker, issues `tail` (receiving `OK TAIL` before the
+stream), then terminates with `quit`. 【F:apps/root-task/src/host.rs†L52-L104】
 
 ## 4. Scripted Automation
-`cohsh` continues to ship scripting helpers that target the in-process
-Secure9P mock until the TCP transport is feature-complete:
+`cohsh` continues to ship scripting helpers that exercise the in-process
+Secure9P mock even though the TCP transport is now feature-complete:
 
 - `cohsh --script scripts/smoke.coh` executes newline-delimited commands
   against the mock transport and aborts on the first error.
@@ -83,4 +89,4 @@ reason=...` acknowledgement that travels over both transports. Heartbeat
 probes continue to use `PING`/`PONG`, and `TAIL` replies now emit an
 acknowledgement before streaming log lines terminated by `END`. The host-side
 `cohsh` client surfaces these responses as `[console] ...` lines so scripts see
-consistent attach/command feedback regardless of transport. 【F:apps/root-task/src/net/virtio.rs†L200-L244】【F:apps/cohsh/src/lib.rs†L470-L516】【F:apps/cohsh/src/transport/tcp.rs†L207-L356】
+consistent attach/command feedback regardless of transport. 【F:apps/root-task/src/net/stack.rs†L204-L264】【F:apps/cohsh/src/lib.rs†L471-L519】【F:apps/cohsh/src/transport/tcp.rs†L203-L356】
