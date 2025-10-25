@@ -46,6 +46,7 @@ use sel4_panicking::DebugSink;
 pub type BootInfo = seL4_BootInfo;
 
 const CANONICAL_NODE_INDEX: seL4_Word = 0;
+const CANONICAL_CNODE_DEPTH: seL4_Word = 0;
 
 /// Returns the first RAM-backed untyped capability advertised by the kernel.
 #[must_use]
@@ -164,19 +165,16 @@ pub fn replyrecv_guarded(
     Ok(message)
 }
 
-/// Returns the canonical guard depth (in bits) for the init thread's root CNode.
+/// Returns the guard depth (in bits) advertised for the init thread's root CNode.
 ///
-/// seL4 expects the guard depth used in CSpace invocations to match the machine
-/// word width, regardless of the number of addressable slots exposed via
-/// `initThreadCNodeSizeBits`.  The kernel enforces the guard bits derived from
-/// the compiled CNode layout, so truncating the invocation depth to the slot
-/// radix causes lookups such as `seL4_Untyped_Retype` to fail with
-/// `seL4_IllegalOperation`.  Always return `WORD_BITS` so the invocation path
-/// resolves the init thread's root CNode directly.
+/// seL4 models the depth parameter as the number of address bits to consume when
+/// traversing a CSpace path. For the init thread's single-level CSpace this
+/// value must match `initThreadCNodeSizeBits`, ensuring that invocations such as
+/// `seL4_CNode_Copy` and `seL4_CNode_Delete` address slots directly without
+/// introducing guard bits.
 #[inline]
 pub fn init_cnode_depth(bi: &seL4_BootInfo) -> u8 {
-    let _ = bi;
-    WORD_BITS as u8
+    bi.initThreadCNodeSizeBits as u8
 }
 
 /// Emits a single byte to the seL4 debug console.
@@ -677,7 +675,6 @@ const DMA_VADDR_BASE: usize = 0xB000_0000;
 const MAX_PAGE_TABLES: usize = 64;
 const MAX_PAGE_DIRECTORIES: usize = 32;
 const MAX_PAGE_UPPER_DIRECTORIES: usize = 8;
-const WORD_BITS: seL4_Word = (mem::size_of::<seL4_Word>() * 8) as seL4_Word;
 const DEVICE_VM_ATTRIBUTES: seL4_ARM_VMAttributes = seL4_ARM_VMAttributes(1 << 2);
 
 /// Simple bump allocator for CSpace slots rooted at the initial thread's CNode.
@@ -1653,7 +1650,7 @@ impl<'a> KernelEnv<'a> {
         });
 
         let init_cnode = self.bootinfo.init_cnode_cap();
-        let expected_depth: seL4_Word = self.bootinfo.init_cnode_depth() as seL4_Word;
+        let expected_depth: seL4_Word = CANONICAL_CNODE_DEPTH;
         let expected_index: seL4_Word = CANONICAL_NODE_INDEX;
         let expected_offset: seL4_Word = trace.dest_slot as seL4_Word;
 
@@ -1725,7 +1722,7 @@ impl<'a> KernelEnv<'a> {
             )
         };
 
-        if result == seL4_NoError {
+        if result == seL4_NoError || Self::mapping_already_present(result) {
             Ok(())
         } else {
             Err(result)
@@ -1735,6 +1732,11 @@ impl<'a> KernelEnv<'a> {
     fn align_down(value: usize, align: usize) -> usize {
         debug_assert!(align.is_power_of_two());
         value & !(align - 1)
+    }
+
+    #[inline(always)]
+    fn mapping_already_present(err: seL4_Error) -> bool {
+        err == sel4_sys::seL4_DeleteFirst || err == sel4_sys::seL4_IllegalOperation
     }
 
     fn ensure_page_table(&mut self, vaddr: usize) -> Result<(), seL4_Error> {
@@ -1772,20 +1774,32 @@ impl<'a> KernelEnv<'a> {
                 seL4_ARM_Page_Default,
             )
         };
-        if map_res != seL4_NoError {
-            self.record_retype(trace, RetypeStatus::Err(map_res));
-            unsafe {
-                let depth = self.bootinfo.init_cnode_depth();
-                let _ = seL4_CNode_Delete(self.init_cnode_cap(), pt_slot, depth);
-            }
-            self.untyped.release(&reserved);
-            return Err(map_res);
+        if map_res == seL4_NoError {
+            self.page_tables
+                .remember_base(pt_base)
+                .map_err(|_| seL4_NotEnoughMemory)?;
+            return Ok(());
         }
 
-        self.page_tables
-            .remember_base(pt_base)
-            .map_err(|_| seL4_NotEnoughMemory)?;
-        Ok(())
+        unsafe {
+            let depth = self.bootinfo.init_cnode_depth();
+            let _ = seL4_CNode_Delete(self.init_cnode_cap(), pt_slot, depth);
+        }
+        self.untyped.release(&reserved);
+
+        if Self::mapping_already_present(map_res) {
+            log::trace!(
+                "[cohesix:root-task] page table already mapped @ 0x{base:08x}",
+                base = pt_base
+            );
+            self.page_tables
+                .remember_base(pt_base)
+                .map_err(|_| seL4_NotEnoughMemory)?;
+            return Ok(());
+        }
+
+        self.record_retype(trace, RetypeStatus::Err(map_res));
+        Err(map_res)
     }
 
     fn ensure_page_directory(&mut self, vaddr: usize) -> Result<(), seL4_Error> {
@@ -1824,20 +1838,32 @@ impl<'a> KernelEnv<'a> {
                 seL4_ARM_Page_Default,
             )
         };
-        if map_res != seL4_NoError {
-            self.record_retype(trace, RetypeStatus::Err(map_res));
-            unsafe {
-                let depth = self.bootinfo.init_cnode_depth();
-                let _ = seL4_CNode_Delete(self.init_cnode_cap(), pd_slot, depth);
-            }
-            self.untyped.release(&reserved);
-            return Err(map_res);
+        if map_res == seL4_NoError {
+            self.page_directories
+                .remember_base(pd_base)
+                .map_err(|_| seL4_NotEnoughMemory)?;
+            return Ok(());
         }
 
-        self.page_directories
-            .remember_base(pd_base)
-            .map_err(|_| seL4_NotEnoughMemory)?;
-        Ok(())
+        unsafe {
+            let depth = self.bootinfo.init_cnode_depth();
+            let _ = seL4_CNode_Delete(self.init_cnode_cap(), pd_slot, depth);
+        }
+        self.untyped.release(&reserved);
+
+        if Self::mapping_already_present(map_res) {
+            log::trace!(
+                "[cohesix:root-task] page directory already mapped @ 0x{base:08x}",
+                base = pd_base
+            );
+            self.page_directories
+                .remember_base(pd_base)
+                .map_err(|_| seL4_NotEnoughMemory)?;
+            return Ok(());
+        }
+
+        self.record_retype(trace, RetypeStatus::Err(map_res));
+        Err(map_res)
     }
 
     fn ensure_page_upper_directory(&mut self, vaddr: usize) -> Result<(), seL4_Error> {
@@ -1874,20 +1900,32 @@ impl<'a> KernelEnv<'a> {
                 seL4_ARM_Page_Default,
             )
         };
-        if map_res != seL4_NoError {
-            self.record_retype(trace, RetypeStatus::Err(map_res));
-            unsafe {
-                let depth = self.bootinfo.init_cnode_depth();
-                let _ = seL4_CNode_Delete(self.init_cnode_cap(), pud_slot, depth);
-            }
-            self.untyped.release(&reserved);
-            return Err(map_res);
+        if map_res == seL4_NoError {
+            self.page_upper_directories
+                .remember_base(pud_base)
+                .map_err(|_| seL4_NotEnoughMemory)?;
+            return Ok(());
         }
 
-        self.page_upper_directories
-            .remember_base(pud_base)
-            .map_err(|_| seL4_NotEnoughMemory)?;
-        Ok(())
+        unsafe {
+            let depth = self.bootinfo.init_cnode_depth();
+            let _ = seL4_CNode_Delete(self.init_cnode_cap(), pud_slot, depth);
+        }
+        self.untyped.release(&reserved);
+
+        if Self::mapping_already_present(map_res) {
+            log::trace!(
+                "[cohesix:root-task] page upper directory already mapped @ 0x{base:08x}",
+                base = pud_base
+            );
+            self.page_upper_directories
+                .remember_base(pud_base)
+                .map_err(|_| seL4_NotEnoughMemory)?;
+            return Ok(());
+        }
+
+        self.record_retype(trace, RetypeStatus::Err(map_res));
+        Err(map_res)
     }
 
     fn prepare_retype_trace(
@@ -1905,7 +1943,7 @@ impl<'a> KernelEnv<'a> {
         // The destination slot is therefore encoded via the offset parameter.
         let cnode_root = self.slots.root(); // seL4_CapInitThreadCNode
         let node_index: seL4_Word = CANONICAL_NODE_INDEX;
-        let cnode_depth: seL4_Word = self.bootinfo.init_cnode_depth() as seL4_Word;
+        let cnode_depth: seL4_Word = CANONICAL_CNODE_DEPTH;
         let dest_offset: seL4_Word = slot as seL4_Word;
         RetypeTrace {
             untyped_cap: reserved.cap(),
@@ -1925,7 +1963,7 @@ impl<'a> KernelEnv<'a> {
     fn record_retype(&mut self, trace: RetypeTrace, status: RetypeStatus) {
         let init_cnode_cap = self.bootinfo.init_cnode_cap();
         let init_bits = self.bootinfo.init_cnode_bits();
-        let expected_depth: seL4_Word = self.bootinfo.init_cnode_depth() as seL4_Word;
+        let expected_depth: seL4_Word = CANONICAL_CNODE_DEPTH;
         let expected_index: seL4_Word = CANONICAL_NODE_INDEX;
         let expected_offset: seL4_Word = trace.dest_slot as seL4_Word;
         let max_slots = 1usize.checked_shl(init_bits as u32).unwrap_or_else(|| {
@@ -2225,7 +2263,7 @@ mod tests {
         );
         assert_eq!(trace.cnode_root, seL4_CapInitThreadCNode);
         let expected_index: seL4_Word = CANONICAL_NODE_INDEX;
-        let expected_depth: seL4_Word = bootinfo_ref.init_cnode_depth() as seL4_Word;
+        let expected_depth: seL4_Word = CANONICAL_CNODE_DEPTH;
         assert_eq!(trace.node_index, expected_index);
         assert_eq!(trace.cnode_depth, expected_depth);
         assert_eq!(trace.dest_offset, slot as seL4_Word);
@@ -2260,7 +2298,7 @@ mod tests {
         let env = KernelEnv::new(bootinfo_ref);
 
         let slot: seL4_CPtr = 0x00c8;
-        let canonical_depth: seL4_Word = bootinfo_ref.init_cnode_depth() as seL4_Word;
+        let canonical_depth: seL4_Word = CANONICAL_CNODE_DEPTH;
         let canonical_index: seL4_Word = CANONICAL_NODE_INDEX;
         let trace = RetypeTrace {
             untyped_cap: 0x200,
@@ -2295,7 +2333,7 @@ mod tests {
 
         let slot: seL4_CPtr = 0x0097;
         let canonical_index: seL4_Word = CANONICAL_NODE_INDEX;
-        let canonical_depth: seL4_Word = bootinfo_ref.init_cnode_depth() as seL4_Word;
+        let canonical_depth: seL4_Word = CANONICAL_CNODE_DEPTH;
         let trace = RetypeTrace {
             untyped_cap: 0x100,
             untyped_paddr: 0,
@@ -2329,7 +2367,7 @@ mod tests {
         bootinfo.initThreadCNodeSizeBits = 13;
         let bootinfo_ref: &'static mut seL4_BootInfo = Box::leak(Box::new(bootinfo));
         let env = KernelEnv::new(bootinfo_ref);
-        let canonical_depth: seL4_Word = bootinfo_ref.init_cnode_depth() as seL4_Word;
+        let canonical_depth: seL4_Word = CANONICAL_CNODE_DEPTH;
         let valid_trace = RetypeTrace {
             untyped_cap: 0x100,
             untyped_paddr: 0,
