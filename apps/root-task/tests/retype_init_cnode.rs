@@ -19,7 +19,7 @@ fn init_cnode_retype_uses_direct_destination_encoding() {
 
     let (_index, depth, _offset) =
         init_cnode_direct_destination_words_for_test(depth_bits, dst_slot);
-    assert_eq!(depth, depth_bits as seL4_Word);
+    assert_eq!(depth, sel4_sys::seL4_WordBits as seL4_Word);
 
     let err = untyped_retype_into_init_cnode(depth_bits, untyped, obj_ty, size_bits, dst_slot);
     assert_eq!(err, seL4_NoError);
@@ -28,7 +28,7 @@ fn init_cnode_retype_uses_direct_destination_encoding() {
         take_last_host_retype_trace().expect("host trace must record init CNode retype parameters");
 
     assert_eq!(trace.root, seL4_CapInitThreadCNode);
-    assert_eq!(trace.node_index, 0);
-    assert_eq!(trace.node_depth, depth_bits as seL4_Word);
-    assert_eq!(trace.node_offset, dst_slot as seL4_Word);
+    assert_eq!(trace.node_index, dst_slot as seL4_Word);
+    assert_eq!(trace.node_depth, sel4_sys::seL4_WordBits as seL4_Word);
+    assert_eq!(trace.node_offset, 0);
 }
