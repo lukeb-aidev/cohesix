@@ -14,6 +14,7 @@ mod imp {
     use core::ptr;
 
     pub type seL4_Word = usize;
+    pub const seL4_WordBits: seL4_Word = (core::mem::size_of::<seL4_Word>() * 8) as seL4_Word;
     pub type seL4_CPtr = seL4_Word;
     pub type seL4_Uint8 = u8;
     pub type seL4_Uint16 = u16;
@@ -805,6 +806,7 @@ mod host_stub {
     }
 
     pub type seL4_Word = usize;
+    pub const seL4_WordBits: seL4_Word = (size_of::<seL4_Word>() * 8) as seL4_Word;
     pub type seL4_CPtr = usize;
     pub type seL4_Error = isize;
     pub type seL4_CNode = seL4_CPtr;
