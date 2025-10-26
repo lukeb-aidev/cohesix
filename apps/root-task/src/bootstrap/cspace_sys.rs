@@ -7,7 +7,7 @@ extern crate alloc;
 use core::convert::TryFrom;
 
 use crate::boot;
-use crate::sel4 as sys;
+use crate::sel4::{self as sys, BootInfoExt};
 use sel4_sys;
 
 #[cfg(all(test, not(target_os = "none")))]
@@ -21,9 +21,18 @@ fn bootinfo() -> &'static sel4_sys::seL4_BootInfo {
     unsafe { &*sel4_sys::seL4_GetBootInfo() }
 }
 
+#[cfg(target_os = "none")]
 #[inline(always)]
 pub fn bootinfo_init_cnode_cptr() -> sys::seL4_CPtr {
-    sel4_sys::seL4_CapInitThreadCNode
+    let root = bootinfo().init_cnode_cap();
+    debug_assert_ne!(root, sys::seL4_CapNull, "init CNode root must be non-null");
+    root
+}
+
+#[cfg(target_os = "none")]
+#[inline(always)]
+fn bootinfo_init_cnode_bits() -> sys::seL4_Word {
+    bootinfo().initThreadCNodeSizeBits as sys::seL4_Word
 }
 
 #[cfg(all(test, not(target_os = "none")))]
@@ -41,6 +50,18 @@ fn bootinfo() -> &'static sel4_sys::seL4_BootInfo {
 
 #[cfg(all(test, not(target_os = "none")))]
 #[inline(always)]
+fn bootinfo_init_cnode_cptr() -> sys::seL4_CPtr {
+    bootinfo().init_cnode_cap()
+}
+
+#[cfg(all(test, not(target_os = "none")))]
+#[inline(always)]
+fn bootinfo_init_cnode_bits() -> sys::seL4_Word {
+    bootinfo().initThreadCNodeSizeBits as sys::seL4_Word
+}
+
+#[cfg(all(test, not(target_os = "none")))]
+#[inline(always)]
 pub(super) unsafe fn install_test_bootinfo_for_tests(
     bootinfo: sel4_sys::seL4_BootInfo,
 ) -> &'static sel4_sys::seL4_BootInfo {
@@ -53,6 +74,18 @@ pub(super) unsafe fn install_test_bootinfo_for_tests(
 #[inline(always)]
 fn bootinfo() -> &'static sel4_sys::seL4_BootInfo {
     panic!("bootinfo() unavailable on host targets");
+}
+
+#[cfg(all(not(target_os = "none"), not(test)))]
+#[inline(always)]
+fn bootinfo_init_cnode_cptr() -> sys::seL4_CPtr {
+    sys::seL4_CapInitThreadCNode
+}
+
+#[cfg(all(not(target_os = "none"), not(test)))]
+#[inline(always)]
+fn bootinfo_init_cnode_bits() -> sys::seL4_Word {
+    sel4_sys::seL4_WordBits as sys::seL4_Word
 }
 
 #[inline(always)]
@@ -85,8 +118,7 @@ pub fn init_cnode_dest(
     sys::seL4_Word,
     sys::seL4_Word,
 ) {
-    let bi = bootinfo();
-    let init_bits = bi.initThreadCNodeSizeBits as sys::seL4_Word;
+    let init_bits = bootinfo_init_cnode_bits();
     let capacity = if init_bits as usize >= usize::BITS as usize {
         usize::MAX
     } else {
@@ -113,8 +145,7 @@ pub fn retype_dest_init_cnode(
     sys::seL4_Word,
     sys::seL4_Word,
 ) {
-    let bi = bootinfo();
-    let init_bits = bi.initThreadCNodeSizeBits as sys::seL4_Word;
+    let init_bits = bootinfo_init_cnode_bits();
     let capacity = if init_bits as usize >= usize::BITS as usize {
         usize::MAX
     } else {
@@ -125,7 +156,20 @@ pub fn retype_dest_init_cnode(
         "slot 0x{slot:04x} exceeds init CNode capacity (limit=0x{capacity:04x})",
     );
 
-    (bootinfo_init_cnode_cptr(), 0, 0, slot as sys::seL4_Word)
+    let root = bootinfo_init_cnode_cptr();
+    debug_assert_ne!(root, sys::seL4_CapNull, "init CNode root must be writable");
+
+    #[cfg(all(debug_assertions, feature = "sel4_debug"))]
+    {
+        let ty = unsafe { sel4_sys::seL4_DebugCapIdentify(root) };
+        debug_assert_eq!(
+            ty,
+            sel4_sys::seL4_ObjectType::seL4_CapTableObject as sys::seL4_Word,
+            "bootinfo init CNode root 0x{root:04x} is not a CNode (ty={ty})",
+        );
+    }
+
+    (root, 0, 0, slot as sys::seL4_Word)
 }
 
 #[cfg(target_os = "none")]
@@ -432,11 +476,12 @@ pub fn untyped_retype_into_init_cnode(
 
     #[cfg(not(target_os = "none"))]
     {
+        let init_root = bootinfo_init_cnode_cptr();
         let node_index = 0;
         let node_depth = 0;
         let node_offset = dst_slot as sys::seL4_Word;
         host_trace::record(host_trace::HostRetypeTrace {
-            root: bootinfo_init_cnode_cptr(),
+            root: init_root,
             node_index,
             node_depth,
             node_offset,
@@ -457,7 +502,8 @@ pub fn untyped_retype_into_cnode(
 ) -> sys::seL4_Error {
     #[cfg(target_os = "none")]
     {
-        if dest_root == sys::seL4_CapInitThreadCNode {
+        let init_root = bootinfo_init_cnode_cptr();
+        if dest_root == init_root {
             let expected_bits = bootinfo().initThreadCNodeSizeBits as u8;
             assert_eq!(
                 depth_bits, expected_bits,
@@ -509,17 +555,18 @@ pub fn untyped_retype_into_cnode(
 
     #[cfg(not(target_os = "none"))]
     {
-        let depth = if dest_root == sys::seL4_CapInitThreadCNode {
+        let init_root = bootinfo_init_cnode_cptr();
+        let depth = if dest_root == init_root {
             0
         } else {
             encode_cnode_depth(depth_bits)
         };
-        let node_index = if dest_root == sys::seL4_CapInitThreadCNode {
+        let node_index = if dest_root == init_root {
             0
         } else {
             dst_slot as sys::seL4_Word
         };
-        let node_offset = if dest_root == sys::seL4_CapInitThreadCNode {
+        let node_offset = if dest_root == init_root {
             dst_slot as sys::seL4_Word
         } else {
             0
