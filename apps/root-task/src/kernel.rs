@@ -29,6 +29,7 @@ use crate::sel4::{
 use crate::serial::{
     pl011::Pl011, SerialPort, DEFAULT_LINE_CAPACITY, DEFAULT_RX_CAPACITY, DEFAULT_TX_CAPACITY,
 };
+use heapless::Vec as HeaplessVec;
 #[cfg(feature = "net-console")]
 use smoltcp::wire::Ipv4Address;
 
@@ -794,7 +795,11 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
         #[cfg(all(feature = "net-console", not(feature = "kernel")))]
         let (mut net_stack, _) = NetStack::new(Ipv4Address::new(10, 0, 0, 2));
         let timer = KernelTimer::new(5);
-        let ipc = KernelIpc;
+        crate::bp!("ipc.poll.begin");
+        let mut ipc = KernelIpc::new(ep_slot);
+        ipc.bootstrap_probe();
+        crate::bp!("ipc.poll.end");
+
         let mut tickets: TicketTable<4> = TicketTable::new();
         let _ = tickets.register(Role::Queen, "bootstrap");
         let _ = tickets.register(Role::WorkerHeartbeat, "worker");
@@ -802,17 +807,6 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
 
         crate::bp!("spawn.worker.begin");
         crate::bp!("spawn.worker.end");
-
-        crate::bp!("ipc.poll.begin");
-        let mut poll_badge: sel4_sys::seL4_Word = 0;
-        let poll_info = unsafe { sel4_sys::seL4_Poll(ep_slot, &mut poll_badge) };
-        log::info!(
-            "[boot] poll ep=0x{ep:04x} badge=0x{badge:016x} info=0x{info:08x}",
-            ep = ep_slot,
-            badge = poll_badge,
-            info = poll_info.words[0],
-        );
-        crate::bp!("ipc.poll.end");
 
         crate::bp!("dtb.parse.begin");
         if !extra_bytes.is_empty() {
@@ -927,10 +921,133 @@ impl TimerSource for KernelTimer {
     }
 }
 
-struct KernelIpc;
+const MAX_MESSAGE_REGS: usize = sel4_sys::seL4_MessageRegisterCount;
+
+struct StagedMessage {
+    badge: sel4_sys::seL4_Word,
+    info: sel4_sys::seL4_MessageInfo,
+    payload: HeaplessVec<sel4_sys::seL4_Word, { MAX_MESSAGE_REGS }>,
+}
+
+impl StagedMessage {
+    fn new(info: sel4_sys::seL4_MessageInfo, badge: sel4_sys::seL4_Word) -> Self {
+        let mut payload = HeaplessVec::new();
+        let length = info.length() as usize;
+        for index in 0..length {
+            let word = unsafe { sel4_sys::seL4_GetMR(index) };
+            let _ = payload.push(word);
+        }
+        Self {
+            badge,
+            info,
+            payload,
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.badge == 0 && self.info.words[0] == 0 && self.payload.is_empty()
+    }
+
+    #[cfg(test)]
+    fn from_parts(
+        info: sel4_sys::seL4_MessageInfo,
+        badge: sel4_sys::seL4_Word,
+        payload: &[sel4_sys::seL4_Word],
+    ) -> Self {
+        let mut buffer = HeaplessVec::new();
+        for &word in payload {
+            let _ = buffer.push(word);
+        }
+        Self {
+            badge,
+            info,
+            payload: buffer,
+        }
+    }
+}
+
+struct KernelIpc {
+    endpoint: sel4_sys::seL4_CPtr,
+    staged_bootstrap: Option<StagedMessage>,
+    staged_forwarded: bool,
+}
+
+impl KernelIpc {
+    fn new(endpoint: sel4_sys::seL4_CPtr) -> Self {
+        Self {
+            endpoint,
+            staged_bootstrap: None,
+            staged_forwarded: false,
+        }
+    }
+
+    fn bootstrap_probe(&mut self) {
+        if self.staged_bootstrap.is_some() {
+            return;
+        }
+
+        let mut badge: sel4_sys::seL4_Word = 0;
+        let info = unsafe { sel4_sys::seL4_Poll(self.endpoint, &mut badge) };
+        log::info!(
+            "[boot] poll ep=0x{ep:04x} badge=0x{badge:016x} info=0x{info:08x}",
+            ep = self.endpoint,
+            badge = badge,
+            info = info.words[0],
+        );
+
+        self.staged_bootstrap = Some(StagedMessage::new(info, badge));
+        self.staged_forwarded = false;
+    }
+
+    fn forward_staged(&mut self, now_ms: u64) {
+        let Some(message) = self.staged_bootstrap.as_ref() else {
+            return;
+        };
+        if self.staged_forwarded {
+            return;
+        }
+
+        if message.is_empty() {
+            log::trace!(
+                "[ipc] bootstrap poll observed empty queue at {now_ms}ms",
+                now_ms = now_ms
+            );
+        } else {
+            log::info!(
+                "[ipc] bootstrap staged ep=0x{ep:04x} badge=0x{badge:016x} info=0x{info:08x} words={words}",
+                ep = self.endpoint,
+                badge = message.badge,
+                info = message.info.words[0],
+                words = message.payload.len(),
+            );
+        }
+        self.staged_forwarded = true;
+    }
+}
 
 impl IpcDispatcher for KernelIpc {
-    fn dispatch(&mut self, _now_ms: u64) {}
+    fn dispatch(&mut self, now_ms: u64) {
+        self.forward_staged(now_ms);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::StagedMessage;
+
+    #[test]
+    fn staged_message_reports_empty() {
+        let info = sel4_sys::seL4_MessageInfo::new(0, 0, 0, 0);
+        let staged = StagedMessage::from_parts(info, 0, &[]);
+        assert!(staged.is_empty());
+    }
+
+    #[test]
+    fn staged_message_detects_payload() {
+        let info = sel4_sys::seL4_MessageInfo::new(0x42, 0, 0, 2);
+        let staged = StagedMessage::from_parts(info, 0x99, &[1, 2]);
+        assert!(!staged.is_empty());
+    }
 }
 
 struct ConsoleAudit<'a, P: Platform> {
