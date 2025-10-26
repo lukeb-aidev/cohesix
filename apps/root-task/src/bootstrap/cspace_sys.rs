@@ -122,8 +122,8 @@ pub fn retype_dest_init_cnode(
 
     (
         sel4_sys::seL4_CapInitThreadCNode,
-        sel4_sys::seL4_CapInitThreadCNode as sys::seL4_Word,
-        sel4_sys::seL4_WordBits as sys::seL4_Word,
+        0,
+        0,
         slot as sys::seL4_Word,
     )
 }
@@ -406,7 +406,7 @@ pub fn untyped_retype_into_init_cnode(
         check_slot_in_range(depth_bits, dst_slot);
         let (root, node_index, node_depth, node_offset) = retype_dest_init_cnode(dst_slot);
         log::info!(
-            "Retype DEST: root=initCNode idx=initCNode depth=WB off=0x{off:04x} n={num}",
+            "Retype DEST: root=initCNode idx=0 depth=0 off=0x{off:04x} n={num}",
             off = node_offset,
             num = 1
         );
@@ -429,8 +429,8 @@ pub fn untyped_retype_into_init_cnode(
 
     #[cfg(not(target_os = "none"))]
     {
-        let node_index = sys::seL4_CapInitThreadCNode as sys::seL4_Word;
-        let node_depth = sel4_sys::seL4_WordBits as sys::seL4_Word;
+        let node_index = 0;
+        let node_depth = 0;
         let node_offset = dst_slot as sys::seL4_Word;
         host_trace::record(host_trace::HostRetypeTrace {
             root: sys::seL4_CapInitThreadCNode,
@@ -464,7 +464,7 @@ pub fn untyped_retype_into_cnode(
             check_slot_in_range(depth_bits, dst_slot);
             let (root, node_index, node_depth, node_offset) = retype_dest_init_cnode(dst_slot);
             log::info!(
-                "Retype DEST: root=initCNode idx=initCNode depth=WB off=0x{off:04x} n={num}",
+                "Retype DEST: root=initCNode idx=0 depth=0 off=0x{off:04x} n={num}",
                 off = node_offset,
                 num = 1
             );
@@ -505,12 +505,12 @@ pub fn untyped_retype_into_cnode(
     #[cfg(not(target_os = "none"))]
     {
         let depth = if dest_root == sys::seL4_CapInitThreadCNode {
-            sel4_sys::seL4_WordBits as sys::seL4_Word
+            0
         } else {
             encode_cnode_depth(depth_bits)
         };
         let node_index = if dest_root == sys::seL4_CapInitThreadCNode {
-            sys::seL4_CapInitThreadCNode as sys::seL4_Word
+            0
         } else {
             dst_slot as sys::seL4_Word
         };
@@ -545,11 +545,7 @@ pub(crate) fn init_cnode_direct_destination_words(
         (dst_slot as usize) < limit,
         "destination slot {dst_slot:#x} exceeds init CNode capacity (bits={init_cnode_bits})"
     );
-    (
-        dst_slot as sys::seL4_Word,
-        init_cnode_bits as sys::seL4_Word,
-        0,
-    )
+    (0, 0, dst_slot as sys::seL4_Word)
 }
 
 #[cfg(test)]
@@ -584,7 +580,7 @@ mod tests {
     }
 
     #[test]
-    fn retype_dest_uses_word_bits_and_slot_offset() {
+    fn retype_dest_selects_root_cnode_slot_directly() {
         #[cfg(not(target_os = "none"))]
         unsafe {
             let mut bootinfo: sel4_sys::seL4_BootInfo = core::mem::zeroed();
@@ -595,8 +591,8 @@ mod tests {
         let slot = 0x00a6u64;
         let (root, idx, depth, off) = retype_dest_init_cnode(slot as _);
         assert_eq!(root, sel4_sys::seL4_CapInitThreadCNode);
-        assert_eq!(idx, sel4_sys::seL4_CapInitThreadCNode as _);
-        assert_eq!(depth, sel4_sys::seL4_WordBits as _);
+        assert_eq!(idx, 0);
+        assert_eq!(depth, 0);
         assert_eq!(off, slot as _);
     }
 
@@ -605,9 +601,9 @@ mod tests {
         let slot = 0x10u64;
         let bits = 13u8;
         let (idx, depth, off) = init_cnode_direct_destination_words_for_test(bits, slot as _);
-        assert_eq!(idx, slot as _);
-        assert_eq!(depth, bits as _);
-        assert_eq!(off, 0);
+        assert_eq!(idx, 0);
+        assert_eq!(depth, 0);
+        assert_eq!(off, slot as _);
     }
 
     #[cfg(not(target_os = "none"))]
