@@ -36,12 +36,15 @@ pub fn bootstrap_ep(bi: &seL4_BootInfo, cs: &mut CSpace) -> Result<seL4_CPtr, se
     );
 
     let (root, node_index_word, node_depth_word, node_offset_word) =
-        cspace_sys::init_cnode_dest(ep_slot);
+        cspace_sys::init_cnode_retype_dest(ep_slot);
     let node_index = seL4_CPtr::try_from(node_index_word)
         .expect("init CNode destination index must fit in seL4_CPtr");
     let node_depth =
         u8::try_from(node_depth_word).expect("initThreadCNodeSizeBits must fit within u8");
-    debug_assert_eq!(node_offset_word, 0);
+    let node_offset = seL4_CPtr::try_from(node_offset_word)
+        .expect("init CNode destination offset must fit in seL4_CPtr");
+    debug_assert_eq!(node_index, 0);
+    debug_assert_eq!(node_depth, 0);
 
     crate::trace::println!(
         "[cs: root=0x{root:x} bits={bits} first_free=0x{slot:x}]",
@@ -67,9 +70,9 @@ pub fn bootstrap_ep(bi: &seL4_BootInfo, cs: &mut CSpace) -> Result<seL4_CPtr, se
 
     if crate::boot::flags::trace_dest() {
         log::info!(
-            "[boot] endpoint retype dest root=initCNode index=0x{index:04x} depth={depth} (initBits) offset=0",
-            index = node_index_word,
+            "[boot] endpoint retype dest root=initCNode index=0 depth={depth} offset=0x{offset:04x}",
             depth = node_depth_word,
+            offset = node_offset_word,
         );
     }
 
@@ -80,7 +83,7 @@ pub fn bootstrap_ep(bi: &seL4_BootInfo, cs: &mut CSpace) -> Result<seL4_CPtr, se
         root,
         node_index,
         node_depth,
-        node_offset_word as seL4_CPtr,
+        node_offset,
     ) {
         Ok(()) => {
             log::info!(

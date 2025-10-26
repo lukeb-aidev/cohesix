@@ -24,7 +24,7 @@ fn bi() -> &'static sys::seL4_BootInfo {
 #[cfg(target_os = "none")]
 #[inline(always)]
 pub fn bi_init_cnode_cptr() -> sys::seL4_CPtr {
-    let root = sys::seL4_CapInitThreadCNode;
+    let root = bi().initThreadCNode;
     debug_assert_ne!(root, sys::seL4_CapNull, "init CNode root must be non-null");
     root
 }
@@ -102,7 +102,7 @@ fn bi() -> &'static sys::seL4_BootInfo {
 #[cfg(all(test, not(target_os = "none")))]
 #[inline(always)]
 fn bi_init_cnode_cptr() -> sys::seL4_CPtr {
-    sys::seL4_CapInitThreadCNode
+    bi().initThreadCNode
 }
 
 #[cfg(all(test, not(target_os = "none")))]
@@ -181,6 +181,28 @@ pub fn init_cnode_dest(
     );
     let guard_depth = sys::seL4_WordBits as sys::seL4_Word;
     (bi_init_cnode_cptr(), slot as sys::seL4_Word, guard_depth, 0)
+}
+
+#[inline(always)]
+pub fn init_cnode_retype_dest(
+    slot: sys::seL4_CPtr,
+) -> (
+    sys::seL4_CNode,
+    sys::seL4_Word,
+    sys::seL4_Word,
+    sys::seL4_Word,
+) {
+    let init_bits = bi_init_cnode_bits();
+    let capacity = if init_bits as usize >= usize::BITS as usize {
+        usize::MAX
+    } else {
+        1usize << (init_bits as usize)
+    };
+    debug_assert!(
+        (slot as usize) < capacity,
+        "slot 0x{slot:04x} exceeds init CNode capacity (limit=0x{capacity:04x})",
+    );
+    (bi_init_cnode_cptr(), 0, 0, slot as sys::seL4_Word)
 }
 
 #[cfg(target_os = "none")]
@@ -467,12 +489,9 @@ pub fn untyped_retype_into_init_root(
         let _ = preflight_init_cnode_writable(dst_slot);
     }
 
-    let root = bi_init_cnode_cptr();
-    debug_assert_ne!(root, sys::seL4_CapNull, "init CNode root must be writable");
-
-    let node_index = dst_slot as sys::seL4_Word;
-    let node_depth = sys::seL4_WordBits as sys::seL4_Word;
-    let node_offset = 0;
+    let (root, node_index, node_depth, node_offset) = init_cnode_retype_dest(dst_slot);
+    debug_assert_eq!(node_index, 0);
+    debug_assert_eq!(node_depth, 0);
 
     log::info!(
         "Retype DEST(root=0x{root:x} idx={idx} depth={depth} off=0x{off:x} obj={obj_type} sz={size_bits})",
@@ -486,7 +505,6 @@ pub fn untyped_retype_into_init_root(
 
     #[cfg(target_os = "none")]
     {
-        log_destination("Untyped_Retype", node_index, node_depth, node_offset);
         let err = unsafe {
             sys::seL4_Untyped_Retype(
                 untyped_slot,
@@ -499,7 +517,13 @@ pub fn untyped_retype_into_init_root(
                 1,
             )
         };
-        log_syscall_result("Untyped_Retype", err);
+        if err != sys::seL4_NoError {
+            log::error!(
+                "Untyped_Retype failed: err={err} ({name})",
+                err = err,
+                name = sel4::error_name(err),
+            );
+        }
         err
     }
 
@@ -636,13 +660,30 @@ mod tests {
         {
             if let Some(trace) = super::host_trace::take_last() {
                 assert_eq!(trace.root, bi_init_cnode_cptr());
-                assert_eq!(trace.node_index, slot as _);
-                assert_eq!(trace.node_depth, sys::seL4_WordBits as _);
-                assert_eq!(trace.node_offset, 0);
+                assert_eq!(trace.node_index, 0);
+                assert_eq!(trace.node_depth, 0);
+                assert_eq!(trace.node_offset, slot as _);
             } else {
                 panic!("expected host trace for init-root retype");
             }
         }
+    }
+
+    #[test]
+    fn init_cnode_retype_dest_matches_canonical_tuple() {
+        #[cfg(not(target_os = "none"))]
+        unsafe {
+            let mut bootinfo: sys::seL4_BootInfo = core::mem::zeroed();
+            bootinfo.initThreadCNodeSizeBits = 13;
+            super::install_test_bootinfo_for_tests(bootinfo);
+        }
+
+        let slot = 0x10u64;
+        let (root, idx, depth, off) = super::init_cnode_retype_dest(slot as _);
+        assert_eq!(root, bi_init_cnode_cptr());
+        assert_eq!(idx, 0);
+        assert_eq!(depth, 0);
+        assert_eq!(off, slot as _);
     }
 
     #[test]

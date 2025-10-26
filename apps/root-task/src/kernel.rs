@@ -340,7 +340,14 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
         }
 
         if let Some(ipc_ptr) = ipc_buffer_ptr {
-            sel4_sys::seL4_SetIPCBuffer(ipc_ptr.as_ptr());
+            let err = sel4_sys::seL4_TCB_SetIPCBuffer(
+                sel4::seL4_CapInitThreadTCB,
+                ipc_ptr.as_ptr() as sel4::seL4_Word,
+                sel4::seL4_CapInitThreadIPCBuffer,
+            );
+            if err != sel4::seL4_NoError {
+                panic!("seL4_TCB_SetIPCBuffer failed: {}", error_name(err));
+            }
             let mut msg = heapless::String::<64>::new();
             let _ = write!(msg, "ipc buffer ptr=0x{:016x}", ipc_ptr.as_ptr() as usize);
             console.writeln_prefixed(msg.as_str());
