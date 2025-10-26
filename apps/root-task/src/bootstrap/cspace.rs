@@ -147,9 +147,8 @@ impl CSpaceCtx {
             init_cnode_bits > 0,
             "bootinfo reported zero-width init CNode"
         );
-        // Canonical guard-depth addressing for init CNode invocations always walks the full
-        // machine word to bypass the kernel-installed guard on the init thread CNode.
-        let invocation_depth_bits = sel4_sys::seL4_WordBits as u8;
+        // Init-root retypes use the canonical depth-zero tuple.
+        let invocation_depth_bits = 0;
         let (first_free, last_free) = bi.init_cnode_empty_range();
         debug_assert!(
             init_cnode_bits <= CANONICAL_CNODE_DEPTH_BITS,
@@ -279,8 +278,7 @@ impl CSpaceCtx {
         let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
         let _ = write!(
             &mut line,
-            "[retype] path=direct:init-cnode dest=0x{dst_slot:04x} depth={depth}",
-            depth = self.cnode_invocation_depth_bits,
+            "[retype] path=direct:init-cnode dest=0x{dst_slot:04x} depth=0",
         );
         emit_console_line(line.as_str());
     }
@@ -423,9 +421,9 @@ impl CSpaceCtx {
         let (err, root_cap, node_index, node_depth, node_offset, path_label) = match self.dest {
             DestCNode::Init => {
                 self.log_direct_init_path(dst_slot);
-                let node_index = dst_slot as sel4::seL4_Word;
-                let node_depth = self.cnode_invocation_depth_bits as sel4::seL4_Word;
-                let node_offset = 0;
+                let node_index = 0;
+                let node_depth = 0;
+                let node_offset = dst_slot as sel4::seL4_Word;
 
                 (
                     cspace_sys::untyped_retype_into_init_root(untyped, obj_ty, size_bits, dst_slot),

@@ -3,38 +3,12 @@
 
 use core::fmt::Write;
 
+use crate::bootstrap::cspace_sys;
 use crate::sel4;
 use crate::trace::{dec_u32, hex_u64, DebugPutc};
 use sel4_sys::{
     seL4_CPtr, seL4_Error, seL4_NoError, seL4_ObjectType, seL4_Untyped_Retype, seL4_Word,
 };
-
-#[inline(always)]
-fn canonicalize_cnode_destination(
-    dst_root: seL4_CPtr,
-    node_index: seL4_CPtr,
-    node_depth: u8,
-    node_offset: seL4_CPtr,
-) -> (seL4_CPtr, u8, seL4_CPtr) {
-    if dst_root == sel4::seL4_CapInitThreadCNode {
-        let bootinfo = unsafe { &*sel4::seL4_GetBootInfo() };
-        let canonical_depth = sel4::init_cnode_depth(bootinfo);
-        debug_assert_eq!(
-            node_offset, 0,
-            "init CNode radix-depth path must not supply a node_offset (got=0x{node_offset:04x})"
-        );
-        if node_depth != canonical_depth {
-            log::warn!(
-                "[cohesix:root-task] canonicalize_cnode_destination: overriding depth {provided} with init bits {canonical}",
-                provided = node_depth,
-                canonical = canonical_depth
-            );
-        }
-        (node_index, canonical_depth, 0)
-    } else {
-        (node_index, node_depth, node_offset)
-    }
-}
 
 #[inline]
 fn debug_retype_log(
@@ -100,51 +74,98 @@ pub fn traced_retype_into_slot(
     node_depth: u8,
     node_offset: seL4_CPtr,
 ) -> Result<(), seL4_Error> {
-    let (node_index, node_depth, node_offset) =
-        canonicalize_cnode_destination(dst_root, node_index, node_depth, node_offset);
-    debug_retype_log(
-        "pre",
-        untyped,
-        obj_type,
-        size_bits,
-        dst_root,
-        node_index,
-        node_depth,
-        node_offset,
-        1,
-        None,
-    );
+    if dst_root == sel4::seL4_CapInitThreadCNode {
+        let slot = if node_offset != 0 {
+            node_offset
+        } else {
+            node_index
+        };
+        let (root, canonical_index, canonical_depth, canonical_offset) =
+            cspace_sys::init_cnode_retype_dest(slot);
+        debug_assert_eq!(root, dst_root);
+        debug_retype_log(
+            "pre",
+            untyped,
+            obj_type,
+            size_bits,
+            dst_root,
+            canonical_index as seL4_CPtr,
+            canonical_depth as u8,
+            canonical_offset as seL4_CPtr,
+            1,
+            None,
+        );
 
-    let result = unsafe {
-        seL4_Untyped_Retype(
+        let result = cspace_sys::untyped_retype_into_init_root(
             untyped,
             obj_type as seL4_Word,
             size_bits as seL4_Word,
+            slot,
+        );
+
+        debug_retype_log(
+            "post",
+            untyped,
+            obj_type,
+            size_bits,
+            dst_root,
+            canonical_index as seL4_CPtr,
+            canonical_depth as u8,
+            canonical_offset as seL4_CPtr,
+            1,
+            Some(result),
+        );
+
+        if result == seL4_NoError {
+            Ok(())
+        } else {
+            Err(result)
+        }
+    } else {
+        debug_retype_log(
+            "pre",
+            untyped,
+            obj_type,
+            size_bits,
             dst_root,
             node_index,
-            node_depth as seL4_Word,
+            node_depth,
             node_offset,
             1,
-        )
-    };
+            None,
+        );
 
-    debug_retype_log(
-        "post",
-        untyped,
-        obj_type,
-        size_bits,
-        dst_root,
-        node_index,
-        node_depth,
-        node_offset,
-        1,
-        Some(result),
-    );
+        let result = unsafe {
+            seL4_Untyped_Retype(
+                untyped,
+                obj_type as seL4_Word,
+                size_bits as seL4_Word,
+                dst_root,
+                node_index,
+                node_depth as seL4_Word,
+                node_offset,
+                1,
+            )
+        };
 
-    if result == seL4_NoError {
-        Ok(())
-    } else {
-        Err(result)
+        debug_retype_log(
+            "post",
+            untyped,
+            obj_type,
+            size_bits,
+            dst_root,
+            node_index,
+            node_depth,
+            node_offset,
+            1,
+            Some(result),
+        );
+
+        if result == seL4_NoError {
+            Ok(())
+        } else {
+            Err(result)
+        }
     }
 }
 
