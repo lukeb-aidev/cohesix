@@ -147,8 +147,9 @@ impl CSpaceCtx {
             init_cnode_bits > 0,
             "bootinfo reported zero-width init CNode"
         );
-        // Canonical guard-depth addressing for init CNode invocations.
-        let invocation_depth_bits = init_cnode_bits;
+        // Canonical guard-depth addressing for init CNode invocations always walks the full
+        // machine word to bypass the kernel-installed guard on the init thread CNode.
+        let invocation_depth_bits = sel4_sys::seL4_WordBits as u8;
         let (first_free, last_free) = bi.init_cnode_empty_range();
         debug_assert!(
             init_cnode_bits <= CANONICAL_CNODE_DEPTH_BITS,
