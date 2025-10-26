@@ -23,7 +23,7 @@ fn bootinfo() -> &'static sel4_sys::seL4_BootInfo {
 
 #[inline(always)]
 pub fn bootinfo_init_cnode_cptr() -> sys::seL4_CPtr {
-    bootinfo().initThreadCNode
+    sel4_sys::seL4_CapInitThreadCNode
 }
 
 #[cfg(all(test, not(target_os = "none")))]
@@ -575,7 +575,6 @@ mod tests {
         unsafe {
             let mut bootinfo: sel4_sys::seL4_BootInfo = core::mem::zeroed();
             bootinfo.initThreadCNodeSizeBits = 13;
-            bootinfo.initThreadCNode = 0x0002;
             super::install_test_bootinfo_for_tests(bootinfo);
         }
         let slot = 0x00a5u64;
@@ -592,7 +591,6 @@ mod tests {
         unsafe {
             let mut bootinfo: sel4_sys::seL4_BootInfo = core::mem::zeroed();
             bootinfo.initThreadCNodeSizeBits = 13;
-            bootinfo.initThreadCNode = 0x0002;
             super::install_test_bootinfo_for_tests(bootinfo);
         }
 
