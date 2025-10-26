@@ -2312,7 +2312,7 @@ mod tests {
             PAGE_BITS as seL4_Word,
             RetypeKind::DevicePage { paddr: 0 },
         );
-        assert_eq!(trace.cnode_root, seL4_CapInitThreadCNode);
+        assert_eq!(trace.cnode_root, bootinfo_ref.init_cnode_cap());
         let expected_index: seL4_Word = 0;
         let expected_depth: seL4_Word = 0;
         assert_eq!(trace.node_index, expected_index);
@@ -2378,6 +2378,7 @@ mod tests {
         bootinfo.initThreadCNodeSizeBits = 13;
         let bootinfo_ref: &'static mut seL4_BootInfo = Box::leak(Box::new(bootinfo));
         let env = KernelEnv::new(bootinfo_ref);
+        let init_root = bootinfo_ref.init_cnode_cap();
 
         let slot: seL4_CPtr = 0x00c8;
         let expected_depth: seL4_Word = 0;
@@ -2386,7 +2387,7 @@ mod tests {
             untyped_cap: 0x200,
             untyped_paddr: 0,
             untyped_size_bits: PAGE_BITS as u8,
-            cnode_root: seL4_CapInitThreadCNode,
+            cnode_root: init_root,
             dest_slot: slot,
             dest_offset: slot as seL4_Word,
             cnode_depth: expected_depth,
@@ -2412,6 +2413,7 @@ mod tests {
         bootinfo.initThreadCNodeSizeBits = 13;
         let bootinfo_ref: &'static mut seL4_BootInfo = Box::leak(Box::new(bootinfo));
         let env = KernelEnv::new(bootinfo_ref);
+        let init_root = bootinfo_ref.init_cnode_cap();
 
         let slot: seL4_CPtr = 0x0097;
         let canonical_index: seL4_Word = 0;
@@ -2420,7 +2422,7 @@ mod tests {
             untyped_cap: 0x100,
             untyped_paddr: 0,
             untyped_size_bits: PAGE_BITS as u8,
-            cnode_root: seL4_CapInitThreadCNode,
+            cnode_root: init_root,
             dest_slot: slot,
             dest_offset: slot as seL4_Word,
             cnode_depth: expected_depth,
@@ -2449,12 +2451,13 @@ mod tests {
         bootinfo.initThreadCNodeSizeBits = 13;
         let bootinfo_ref: &'static mut seL4_BootInfo = Box::leak(Box::new(bootinfo));
         let env = KernelEnv::new(bootinfo_ref);
+        let init_root = bootinfo_ref.init_cnode_cap();
         let expected_depth: seL4_Word = 0;
         let valid_trace = RetypeTrace {
             untyped_cap: 0x100,
             untyped_paddr: 0,
             untyped_size_bits: PAGE_BITS as u8,
-            cnode_root: seL4_CapInitThreadCNode,
+            cnode_root: init_root,
             dest_slot: 0x1ff,
             dest_offset: 0x1ff,
             cnode_depth: expected_depth,
