@@ -582,7 +582,7 @@ pub trait BootInfoExt {
 impl BootInfoExt for seL4_BootInfo {
     #[inline(always)]
     fn init_cnode_cap(&self) -> seL4_CPtr {
-        self.initThreadCNode
+        seL4_CapInitThreadCNode
     }
 
     #[inline(always)]
