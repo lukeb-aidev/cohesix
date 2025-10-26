@@ -2,6 +2,8 @@
 #![allow(dead_code)]
 #![allow(unsafe_code)]
 
+use bytemuck::cast_slice;
+use core::cmp;
 use core::fmt::{self, Write};
 use core::panic::PanicInfo;
 #[cfg(all(feature = "kernel", not(sel4_config_printing)))]
@@ -27,12 +29,12 @@ use crate::net::{NetStack, CONSOLE_TCP_PORT};
 use crate::platform::{Platform, SeL4Platform};
 use crate::sel4::{
     bootinfo_debug_dump, error_name, root_endpoint, BootInfo, BootInfoExt, KernelEnv, RetypeKind,
-    RetypeStatus,
+    RetypeStatus, IPC_PAGE_BYTES, MSG_MAX_WORDS,
 };
 use crate::serial::{
     pl011::Pl011, SerialPort, DEFAULT_LINE_CAPACITY, DEFAULT_RX_CAPACITY, DEFAULT_TX_CAPACITY,
 };
-use heapless::Vec as HeaplessVec;
+use heapless::{String as HeaplessString, Vec as HeaplessVec};
 #[cfg(feature = "net-console")]
 use smoltcp::wire::Ipv4Address;
 
@@ -289,6 +291,15 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
 
     let ipc_buffer_ptr = bootinfo_ref.ipc_buffer_ptr();
     let ipc_vaddr = ipc_buffer_ptr.map(|ptr| ptr.as_ptr() as usize);
+
+    if let Some(ptr) = ipc_buffer_ptr {
+        let addr = ptr.as_ptr() as usize;
+        assert_eq!(
+            addr & (IPC_PAGE_BYTES - 1),
+            0,
+            "IPC buffer must be page-aligned",
+        );
+    }
 
     let ep_slot = match ep::bootstrap_ep(bootinfo_ref, &mut boot_cspace) {
         Ok(ep_slot) => ep_slot,
@@ -927,22 +938,97 @@ impl TimerSource for KernelTimer {
     }
 }
 
-const MAX_MESSAGE_REGS: usize = sel4_sys::seL4_MessageRegisterCount;
+const MAX_MESSAGE_WORDS: usize = MSG_MAX_WORDS;
+const MAX_PAYLOAD_LOG_BYTES: usize = 512;
+const HEX_CHUNK_BYTES: usize = 16;
+const MAX_HEX_LINES: usize = (MAX_PAYLOAD_LOG_BYTES + HEX_CHUNK_BYTES - 1) / HEX_CHUNK_BYTES;
+
+#[inline]
+fn bounded_message_words(info: sel4_sys::seL4_MessageInfo) -> usize {
+    cmp::min(info.length() as usize, MAX_MESSAGE_WORDS)
+}
+
+fn copy_message_words<F>(
+    info: sel4_sys::seL4_MessageInfo,
+    mut read_word: F,
+) -> HeaplessVec<sel4_sys::seL4_Word, { MAX_MESSAGE_WORDS }>
+where
+    F: FnMut(usize) -> sel4_sys::seL4_Word,
+{
+    let mut payload = HeaplessVec::new();
+    let word_count = bounded_message_words(info);
+    for index in 0..word_count {
+        let word = read_word(index);
+        payload
+            .push(word)
+            .expect("payload length bounded by MAX_MESSAGE_WORDS");
+    }
+    payload
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum PayloadPreview<'a> {
+    Empty,
+    Utf8(&'a str),
+    Hex(HeaplessVec<HeaplessString<96>, { MAX_HEX_LINES }>),
+}
+
+fn preview_payload(words: &[sel4_sys::seL4_Word]) -> PayloadPreview<'_> {
+    if words.is_empty() {
+        return PayloadPreview::Empty;
+    }
+
+    let bytes = cast_slice(words);
+    if bytes.is_empty() {
+        return PayloadPreview::Empty;
+    }
+
+    let limit = cmp::min(bytes.len(), MAX_PAYLOAD_LOG_BYTES);
+    let slice = &bytes[..limit];
+    match core::str::from_utf8(slice) {
+        Ok(text) => PayloadPreview::Utf8(text),
+        Err(_) => {
+            let mut lines: HeaplessVec<HeaplessString<96>, { MAX_HEX_LINES }> = HeaplessVec::new();
+            let mut offset = 0usize;
+            for chunk in slice.chunks(HEX_CHUNK_BYTES) {
+                let mut line = HeaplessString::<96>::new();
+                let _ = write!(line, "[staged hex] {:04x}:", offset);
+                for byte in chunk {
+                    let _ = write!(line, " {:02x}", byte);
+                }
+                lines
+                    .push(line)
+                    .expect("hex preview must not exceed MAX_HEX_LINES");
+                offset += chunk.len();
+            }
+            PayloadPreview::Hex(lines)
+        }
+    }
+}
+
+fn log_bootstrap_payload(words: &[sel4_sys::seL4_Word]) {
+    match preview_payload(words) {
+        PayloadPreview::Empty => {}
+        PayloadPreview::Utf8(text) => {
+            log::info!("[staged utf8] {text}");
+        }
+        PayloadPreview::Hex(lines) => {
+            for line in lines {
+                log::info!("{}", line.as_str());
+            }
+        }
+    }
+}
 
 struct StagedMessage {
     badge: sel4_sys::seL4_Word,
     info: sel4_sys::seL4_MessageInfo,
-    payload: HeaplessVec<sel4_sys::seL4_Word, { MAX_MESSAGE_REGS }>,
+    payload: HeaplessVec<sel4_sys::seL4_Word, { MAX_MESSAGE_WORDS }>,
 }
 
 impl StagedMessage {
     fn new(info: sel4_sys::seL4_MessageInfo, badge: sel4_sys::seL4_Word) -> Self {
-        let mut payload = HeaplessVec::new();
-        let length = info.length() as usize;
-        for index in 0..length {
-            let word = unsafe { sel4_sys::seL4_GetMR(index) };
-            let _ = payload.push(word);
-        }
+        let payload = copy_message_words(info, |index| unsafe { sel4_sys::seL4_GetMR(index) });
         Self {
             badge,
             info,
@@ -951,7 +1037,7 @@ impl StagedMessage {
     }
 
     fn is_empty(&self) -> bool {
-        self.badge == 0 && self.info.words[0] == 0 && self.payload.is_empty()
+        self.badge == 0 && self.info.length() == 0 && self.payload.is_empty()
     }
 
     #[cfg(test)]
@@ -961,8 +1047,10 @@ impl StagedMessage {
         payload: &[sel4_sys::seL4_Word],
     ) -> Self {
         let mut buffer = HeaplessVec::new();
-        for &word in payload {
-            let _ = buffer.push(word);
+        for &word in payload.iter().take(MAX_MESSAGE_WORDS) {
+            buffer
+                .push(word)
+                .expect("test payload respects MAX_MESSAGE_WORDS");
         }
         Self {
             badge,
@@ -1036,6 +1124,7 @@ impl KernelIpc {
                 info = message.info.words[0],
                 words = message.payload.len(),
             );
+            log_bootstrap_payload(message.payload.as_slice());
         }
         self.staged_forwarded = true;
     }
@@ -1086,7 +1175,12 @@ impl BootstrapMessageHandler for BootstrapIpcAudit {
 
 #[cfg(test)]
 mod tests {
-    use super::{KernelIpc, StagedMessage};
+    use super::{
+        bounded_message_words, copy_message_words, preview_payload, KernelIpc, PayloadPreview,
+        StagedMessage, HEX_CHUNK_BYTES, MAX_HEX_LINES, MAX_MESSAGE_WORDS, MAX_PAYLOAD_LOG_BYTES,
+    };
+    use core::fmt::Write as _;
+    use heapless::{String as HeaplessString, Vec as HeaplessVec};
 
     #[test]
     fn staged_message_reports_empty() {
@@ -1118,6 +1212,73 @@ mod tests {
         assert_eq!(message.info.words[0], info.words[0]);
         assert_eq!(message.payload.as_slice(), &[0xFE, 0xED]);
         assert!(ipc.take_bootstrap_message().is_none());
+    }
+
+    #[test]
+    fn copy_message_words_clamps_to_kernel_limit() {
+        let info = sel4_sys::seL4_MessageInfo::new(0x11, 0, 0, 127);
+        let mut source = [0usize; MAX_MESSAGE_WORDS + 16];
+        for (index, word) in source.iter_mut().enumerate() {
+            *word = index as usize;
+        }
+        let copied = copy_message_words(info, |index| source[index]);
+        assert_eq!(copied.len(), MAX_MESSAGE_WORDS);
+        assert_eq!(bounded_message_words(info), MAX_MESSAGE_WORDS);
+        assert_eq!(copied[0], 0);
+        assert_eq!(copied[MAX_MESSAGE_WORDS - 1], MAX_MESSAGE_WORDS - 1);
+    }
+
+    #[test]
+    fn preview_payload_emits_utf8_when_valid() {
+        let text = b"hello world!";
+        let word_bytes = core::mem::size_of::<usize>();
+        let mut chunk = [0u8; core::mem::size_of::<usize>()];
+        let mut words: HeaplessVec<sel4_sys::seL4_Word, { MAX_MESSAGE_WORDS }> = HeaplessVec::new();
+        for (index, byte) in text.iter().enumerate() {
+            let offset = index % word_bytes;
+            chunk[offset] = *byte;
+            if offset + 1 == word_bytes {
+                let value = usize::from_le_bytes(chunk) as sel4_sys::seL4_Word;
+                words.push(value).expect("utf8 payload within limit");
+                chunk.fill(0);
+            }
+        }
+        if text.len() % word_bytes != 0 {
+            let value = usize::from_le_bytes(chunk) as sel4_sys::seL4_Word;
+            words.push(value).expect("utf8 payload within limit");
+        }
+        match preview_payload(words.as_slice()) {
+            PayloadPreview::Utf8(text) => assert!(text.starts_with("hello world")),
+            other => panic!("expected utf8 preview, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn preview_payload_emits_hex_for_binary() {
+        let words = [usize::MAX; 2];
+        match preview_payload(&words) {
+            PayloadPreview::Hex(lines) => {
+                assert!(!lines.is_empty());
+                assert!(lines[0].starts_with("[staged hex] 0000:"));
+            }
+            other => panic!("expected hex preview, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn preview_payload_truncates_to_cap() {
+        let words = [usize::MAX; MAX_MESSAGE_WORDS];
+        match preview_payload(&words) {
+            PayloadPreview::Hex(lines) => {
+                assert_eq!(lines.len(), MAX_HEX_LINES);
+                let last = lines.last().expect("at least one hex line");
+                let expected_offset = (MAX_PAYLOAD_LOG_BYTES - HEX_CHUNK_BYTES) as u32;
+                let mut expected = HeaplessString::<32>::new();
+                let _ = write!(expected, "[staged hex] {expected_offset:04x}:");
+                assert!(last.starts_with(expected.as_str()));
+            }
+            other => panic!("expected hex preview, got {other:?}"),
+        }
     }
 }
 

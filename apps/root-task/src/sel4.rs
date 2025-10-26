@@ -34,6 +34,19 @@ pub type SeL4CapRights = sel4_sys::seL4_CapRights;
 /// Architectural word width (in bits) exposed by seL4.
 pub const WORD_BITS: seL4_Word = sel4_sys::seL4_WordBits as seL4_Word;
 
+/// Maximum number of message words carried by an seL4 IPC frame.
+///
+/// The value mirrors `seL4_MsgMaxLength` for the target kernel build. The
+/// kernel artefacts bundled under `seL4/build/` advertise a 120-word bound for
+/// `aarch64/virt`, matching the upstream default of 960 bytes per message.
+pub const MSG_MAX_WORDS: usize = 120;
+
+/// seL4 page bits for the configured kernel (4 KiB pages).
+pub const IPC_PAGE_BITS: usize = 12;
+
+/// Size in bytes of a single seL4 IPC buffer page.
+pub const IPC_PAGE_BYTES: usize = 1 << IPC_PAGE_BITS;
+
 /// Returns the architectural word width (in bits) exposed by seL4.
 #[inline(always)]
 pub const fn word_bits() -> seL4_Word {
