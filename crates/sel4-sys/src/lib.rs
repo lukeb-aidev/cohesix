@@ -16,6 +16,12 @@ mod imp {
     pub type seL4_Word = usize;
     #[allow(clippy::manual_bits)]
     pub const seL4_WordBits: seL4_Word = (core::mem::size_of::<seL4_Word>() * 8) as seL4_Word;
+    /// Log2 of the base page size baked into the target seL4 kernel configuration.
+    ///
+    /// Cohesix kernels are built for 4 KiB pages on every supported target, so we
+    /// expose the value as a constant for consumers that need to reason about
+    /// IPC buffer placement without depending on generated C headers.
+    pub const seL4_PageBits: seL4_Word = 12;
     pub type seL4_CPtr = seL4_Word;
     pub type seL4_Uint8 = u8;
     pub type seL4_Uint16 = u16;
@@ -876,6 +882,12 @@ mod host_stub {
     pub type seL4_Word = usize;
     #[allow(clippy::manual_bits)]
     pub const seL4_WordBits: seL4_Word = (size_of::<seL4_Word>() * 8) as seL4_Word;
+    /// Log2 of the base page size baked into the target seL4 kernel configuration.
+    ///
+    /// Cohesix kernels are built for 4 KiB pages on every supported target, so we
+    /// expose the value as a constant for consumers that need to reason about
+    /// IPC buffer placement without depending on generated C headers.
+    pub const seL4_PageBits: seL4_Word = 12;
     pub type seL4_CPtr = usize;
     pub type seL4_Error = isize;
     pub type seL4_CNode = seL4_CPtr;

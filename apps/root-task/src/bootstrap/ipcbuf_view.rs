@@ -1,4 +1,5 @@
 // Author: Lukas Bower
+#![allow(unsafe_code)]
 
 use core::slice;
 
