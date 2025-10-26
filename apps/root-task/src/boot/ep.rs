@@ -3,10 +3,7 @@
 
 use core::convert::TryFrom;
 
-use sel4_sys::{
-    seL4_BootInfo, seL4_CPtr, seL4_CapInitThreadCNode, seL4_Error, seL4_IllegalOperation,
-    seL4_ObjectType,
-};
+use sel4_sys::{seL4_BootInfo, seL4_CPtr, seL4_Error, seL4_IllegalOperation, seL4_ObjectType};
 
 use crate::boot::bi_extra::first_regular_untyped_from_extra;
 use crate::bootstrap::cspace_sys;
