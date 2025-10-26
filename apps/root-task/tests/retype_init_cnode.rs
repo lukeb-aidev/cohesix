@@ -4,7 +4,7 @@
 
 use root_task::bootstrap::cspace_sys::{
     init_cnode_direct_destination_words_for_test, take_last_host_retype_trace,
-    untyped_retype_into_init_cnode,
+    untyped_retype_into_cnode, untyped_retype_into_init_cnode,
 };
 use sel4_sys::{seL4_CPtr, seL4_CapInitThreadCNode, seL4_NoError, seL4_Word};
 
@@ -27,6 +27,34 @@ fn init_cnode_retype_uses_direct_destination_encoding() {
 
     let trace =
         take_last_host_retype_trace().expect("host trace must record init CNode retype parameters");
+
+    assert_eq!(trace.root, seL4_CapInitThreadCNode);
+    assert_eq!(trace.node_index, 0);
+    assert_eq!(trace.node_depth, 0);
+    assert_eq!(trace.node_offset, dst_slot as seL4_Word);
+}
+
+#[test]
+fn generic_init_cnode_retype_uses_depth_zero_encoding() {
+    let _ = take_last_host_retype_trace();
+    let depth_bits: u8 = 0;
+    let untyped: seL4_CPtr = 0x30;
+    let obj_ty: seL4_Word = 2;
+    let size_bits: seL4_Word = 1;
+    let dst_slot: seL4_CPtr = 0x44;
+
+    let err = untyped_retype_into_cnode(
+        seL4_CapInitThreadCNode,
+        depth_bits,
+        untyped,
+        obj_ty,
+        size_bits,
+        dst_slot,
+    );
+    assert_eq!(err, seL4_NoError);
+
+    let trace = take_last_host_retype_trace()
+        .expect("host trace must record generic init CNode retype parameters");
 
     assert_eq!(trace.root, seL4_CapInitThreadCNode);
     assert_eq!(trace.node_index, 0);

@@ -147,7 +147,8 @@ impl CSpaceCtx {
             init_cnode_bits > 0,
             "bootinfo reported zero-width init CNode"
         );
-        let invocation_depth_bits = CANONICAL_CNODE_DEPTH_BITS;
+        // Canonical depth-0 addressing for init CNode retype invocations.
+        let invocation_depth_bits = 0;
         let (first_free, last_free) = bi.init_cnode_empty_range();
         debug_assert!(
             init_cnode_bits <= CANONICAL_CNODE_DEPTH_BITS,
@@ -432,7 +433,7 @@ impl CSpaceCtx {
 
                 (
                     cspace_sys::untyped_retype_into_init_cnode(
-                        self.init_cnode_bits,
+                        self.cnode_invocation_depth_bits,
                         untyped,
                         obj_ty,
                         size_bits,
