@@ -1,6 +1,7 @@
 // Author: Lukas Bower
 #![allow(dead_code)]
 
+use crate::bootstrap::ipcbuf_view::IpcBufView;
 use crate::bp;
 use crate::sel4::KernelEnv;
 
@@ -10,7 +11,7 @@ pub fn install_ipc_buffer(
     env: &mut KernelEnv<'_>,
     tcb_cap: sel4_sys::seL4_CPtr,
     ipc_vaddr: usize,
-) -> Result<(), i32> {
+) -> Result<IpcBufView, i32> {
     bp!("ipcbuf.begin");
     match env.map_ipc_buffer(ipc_vaddr) {
         Ok(()) => {}
@@ -25,17 +26,18 @@ pub fn install_ipc_buffer(
     }
 
     match env.bind_ipc_buffer(tcb_cap, ipc_vaddr) {
-        Ok(()) => {}
+        Ok(view) => {
+            bp!("tcb.set_ipcbuf");
+            bp!("ipcbuf.done");
+            Ok(view)
+        }
         Err(err) => {
             let code = err as i32;
             ::log::error!(
                 "[boot] ipcbuf.bind failed tcb=0x{tcb_cap:04x} vaddr=0x{ipc_vaddr:08x} err={code} ({name})",
                 name = crate::sel4::error_name(err)
             );
-            return Err(code);
+            Err(code)
         }
     }
-    bp!("tcb.set_ipcbuf");
-    bp!("ipcbuf.done");
-    Ok(())
 }

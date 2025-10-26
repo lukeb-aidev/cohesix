@@ -9,6 +9,8 @@ pub mod cspace_sys;
 pub mod ffi;
 /// IPC buffer bring-up helpers with deterministic logging waypoints.
 pub mod ipcbuf;
+/// Single-page view wrapper for the init thread IPC buffer.
+pub mod ipcbuf_view;
 /// Early boot logging backends.
 pub mod log;
 /// Thin wrapper around `seL4_Untyped_Retype` tailored for the init CSpace policy.
