@@ -7,7 +7,6 @@
 
 use core::{
     arch::asm,
-    convert::TryFrom,
     fmt, mem,
     ptr::{self, NonNull},
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -342,10 +341,10 @@ pub fn cnode_copy(
         seL4_CNode_Copy(
             dest_root,
             dest_index,
-            depth_bits as seL4_Word,
+            depth_bits,
             src_root,
             src_index,
-            depth_bits as seL4_Word,
+            depth_bits,
             rights,
         )
     }
@@ -411,10 +410,10 @@ pub(crate) fn cnode_mint(
         seL4_CNode_Mint(
             dest_root,
             dest_index,
-            depth_bits as seL4_Word,
+            depth_bits,
             src_root,
             src_index,
-            depth_bits as seL4_Word,
+            depth_bits,
             rights,
             badge,
         )
