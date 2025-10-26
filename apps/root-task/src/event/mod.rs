@@ -45,7 +45,7 @@ pub struct TickEvent {
 }
 
 #[cfg(feature = "kernel")]
-const MAX_BOOTSTRAP_WORDS: usize = sel4_sys::seL4_MessageRegisterCount;
+const MAX_BOOTSTRAP_WORDS: usize = crate::sel4::MSG_MAX_WORDS;
 
 #[cfg(feature = "kernel")]
 #[derive(Clone)]
