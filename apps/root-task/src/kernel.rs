@@ -12,7 +12,7 @@ use cohesix_ticket::Role;
 use crate::boot::{bi_extra, ep};
 use crate::bootstrap::{
     cspace::{BootInfoView, CSpaceCtx},
-    pick_untyped,
+    ipcbuf, log as boot_log, pick_untyped,
     retype::retype_one,
 };
 use crate::console::Console;
@@ -250,6 +250,9 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
     #[cfg(all(feature = "kernel", not(sel4_config_printing)))]
     crate::sel4::install_debug_sink();
 
+    boot_log::init_logger_bootstrap_only();
+    crate::bp!("bootstrap.begin");
+
     let bootinfo_ref: &'static sel4_sys::seL4_BootInfo = bootinfo;
     let mut console = DebugConsole::new(platform);
 
@@ -281,33 +284,7 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
     }
 
     let ipc_buffer_ptr = bootinfo_ref.ipc_buffer_ptr();
-    if let Some(ipc_ptr) = ipc_buffer_ptr {
-        let ipc_vaddr = ipc_ptr.as_ptr() as usize;
-        match kernel_env.map_ipc_buffer(ipc_vaddr) {
-            Ok(()) => {
-                let mut msg = heapless::String::<112>::new();
-                let _ = write!(
-                    msg,
-                    "[boot] ipc buffer mapped @ 0x{ipc_vaddr:08x}",
-                    ipc_vaddr = ipc_vaddr,
-                );
-                console.writeln_prefixed(msg.as_str());
-            }
-            Err(err) => {
-                crate::trace::trace_fail(b"map_ipc_buffer", err);
-                let mut msg = heapless::String::<160>::new();
-                let _ = write!(
-                    msg,
-                    "failed to map IPC buffer @ 0x{ipc_vaddr:08x}: {label} ({code})",
-                    ipc_vaddr = ipc_vaddr,
-                    label = error_name(err),
-                    code = err as i32,
-                );
-                console.writeln_prefixed(msg.as_str());
-                panic!("map_ipc_buffer failed: {}", error_name(err));
-            }
-        }
-    }
+    let ipc_vaddr = ipc_buffer_ptr.map(|ptr| ptr.as_ptr() as usize);
 
     let ep_slot = match ep::bootstrap_ep(bootinfo_ref, &mut boot_cspace) {
         Ok(ep_slot) => ep_slot,
@@ -352,36 +329,7 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
     debug_assert_eq!(ep_slot, root_endpoint());
     let rights = cap_rights_read_write_grant();
 
-    if !extra_bytes.is_empty() {
-        match bi_extra::locate_dtb(extra_bytes) {
-            Ok(dtb_blob) => match bi_extra::parse_dtb(dtb_blob) {
-                Ok(dtb) => {
-                    let header = dtb.header();
-                    let mut msg = heapless::String::<96>::new();
-                    let _ = write!(
-                        msg,
-                        "[boot] dtb totalsize={} struct_off={} strings_off={}",
-                        header.totalsize(),
-                        header.structure_offset(),
-                        header.strings_offset(),
-                    );
-                    console.writeln_prefixed(msg.as_str());
-                    let _ = bi_extra::dump_bootinfo(bootinfo_ref, EARLY_DUMP_LIMIT);
-                }
-                Err(err) => {
-                    let mut msg = heapless::String::<96>::new();
-                    let _ = write!(msg, "[boot] dtb parse failed: {err}");
-                    console.writeln_prefixed(msg.as_str());
-                }
-            },
-            Err(err) => {
-                let mut msg = heapless::String::<112>::new();
-                let _ = write!(msg, "[boot] dtb locate failed: {err}");
-                console.writeln_prefixed(msg.as_str());
-            }
-        }
-    }
-
+    crate::bp!("tcb.copy.begin");
     let tcb_copy_slot = match boot_cspace.alloc_slot() {
         Ok(slot) => slot,
         Err(err) => {
@@ -394,10 +342,10 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
     };
     let tcb_src_slot = bootinfo_ref.init_tcb_cap();
     let copy_err = boot_cspace.copy_here(tcb_copy_slot, tcb_src_slot, rights);
-    if copy_err != sel4_sys::seL4_NoError {
+    if let Err(code) = crate::bootstrap::ktry("tcb.copy", copy_err as i32) {
         panic!(
             "copying init TCB capability failed: {} ({})",
-            copy_err,
+            code,
             error_name(copy_err)
         );
     } else {
@@ -409,6 +357,39 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
             depth = boot_cspace.depth()
         );
     }
+    crate::bp!("tcb.copy.end");
+
+    if let Some(ipc_vaddr) = ipc_vaddr {
+        match ipcbuf::install_ipc_buffer(&mut kernel_env, tcb_copy_slot, ipc_vaddr) {
+            Ok(()) => {
+                let mut msg = heapless::String::<112>::new();
+                let _ = write!(
+                    msg,
+                    "[boot] ipc buffer mapped @ 0x{ipc_vaddr:08x}",
+                    ipc_vaddr = ipc_vaddr,
+                );
+                console.writeln_prefixed(msg.as_str());
+            }
+            Err(code) => {
+                panic!(
+                    "ipc buffer install failed: {} ({})",
+                    code,
+                    error_name(code as sel4_sys::seL4_Error)
+                );
+            }
+        }
+    } else {
+        console.writeln_prefixed("bootinfo.ipcBuffer missing");
+    }
+
+    if let Some(ipc_ptr) = ipc_buffer_ptr {
+        unsafe {
+            sel4_sys::seL4_SetIPCBuffer(ipc_ptr.as_ptr());
+        }
+        let mut msg = heapless::String::<64>::new();
+        let _ = write!(msg, "ipc buffer ptr=0x{:016x}", ipc_ptr.as_ptr() as usize);
+        console.writeln_prefixed(msg.as_str());
+    }
 
     let fault_handler_err = unsafe {
         sel4_sys::seL4_TCB_SetFaultHandler(
@@ -418,18 +399,18 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
             sel4_sys::seL4_CapInitThreadVSpace,
         )
     };
-    if fault_handler_err != sel4_sys::seL4_NoError {
+    if let Err(code) = crate::bootstrap::ktry("tcb.fault_handler", fault_handler_err as i32) {
         let mut line = heapless::String::<160>::new();
         let _ = write!(
             line,
             "failed to install fault handler: {} ({})",
-            fault_handler_err,
+            code,
             error_name(fault_handler_err)
         );
         console.writeln_prefixed(line.as_str());
         panic!(
             "seL4_TCB_SetFaultHandler failed: {} ({})",
-            fault_handler_err,
+            code,
             error_name(fault_handler_err)
         );
     } else {
@@ -818,6 +799,61 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
         let _ = tickets.register(Role::Queen, "bootstrap");
         let _ = tickets.register(Role::WorkerHeartbeat, "worker");
         let _ = tickets.register(Role::WorkerGpu, "worker-gpu");
+
+        crate::bp!("spawn.worker.begin");
+        crate::bp!("spawn.worker.end");
+
+        crate::bp!("ipc.poll.begin");
+        let mut poll_badge: sel4_sys::seL4_Word = 0;
+        let poll_info = unsafe { sel4_sys::seL4_Poll(ep_slot, &mut poll_badge) };
+        log::info!(
+            "[boot] poll ep=0x{ep:04x} badge=0x{badge:016x} info=0x{info:08x}",
+            ep = ep_slot,
+            badge = poll_badge,
+            info = poll_info.words[0],
+        );
+        crate::bp!("ipc.poll.end");
+
+        crate::bp!("dtb.parse.begin");
+        if !extra_bytes.is_empty() {
+            match bi_extra::locate_dtb(extra_bytes) {
+                Ok(dtb_blob) => match bi_extra::parse_dtb(dtb_blob) {
+                    Ok(dtb) => {
+                        let header = dtb.header();
+                        let mut msg = heapless::String::<96>::new();
+                        let _ = write!(
+                            msg,
+                            "[boot] dtb totalsize={} struct_off={} strings_off={}",
+                            header.totalsize(),
+                            header.structure_offset(),
+                            header.strings_offset(),
+                        );
+                        console.writeln_prefixed(msg.as_str());
+                        let _ = bi_extra::dump_bootinfo(bootinfo_ref, EARLY_DUMP_LIMIT);
+                    }
+                    Err(err) => {
+                        let mut msg = heapless::String::<96>::new();
+                        let _ = write!(msg, "[boot] dtb parse failed: {err}");
+                        console.writeln_prefixed(msg.as_str());
+                    }
+                },
+                Err(err) => {
+                    let mut msg = heapless::String::<112>::new();
+                    let _ = write!(msg, "[boot] dtb locate failed: {err}");
+                    console.writeln_prefixed(msg.as_str());
+                }
+            }
+        } else {
+            console.writeln_prefixed("[boot] no dtb payload present");
+        }
+        crate::bp!("dtb.parse.end");
+
+        crate::bp!("logger.switch.begin");
+        if let Err(err) = boot_log::switch_logger_to_userland() {
+            log::error!("[boot] logger switch failed: {:?}", err);
+            panic!("logger switch failed: {err:?}");
+        }
+        crate::bp!("logger.switch.end");
         #[cfg(all(feature = "net-console", feature = "kernel"))]
         {
             let mac = net_stack.hardware_address();
@@ -848,6 +884,7 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
             pump = pump.with_network(&mut net_stack);
         }
 
+        crate::bp!("bootstrap.done");
         loop {
             pump.poll();
         }
