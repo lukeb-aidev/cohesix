@@ -179,7 +179,8 @@ pub fn init_cnode_dest(
         (slot as usize) < capacity,
         "slot 0x{slot:04x} exceeds init CNode capacity (limit=0x{capacity:04x})",
     );
-    (bi_init_cnode_cptr(), slot as sys::seL4_Word, init_bits, 0)
+    let guard_depth = sys::seL4_WordBits as sys::seL4_Word;
+    (bi_init_cnode_cptr(), slot as sys::seL4_Word, guard_depth, 0)
 }
 
 #[cfg(target_os = "none")]
@@ -432,7 +433,7 @@ pub fn cnode_move_direct_dest(
     }
 }
 
-/// Retype explicitly into the init thread's CSpace root using canonical depth-0 encoding.
+/// Retype explicitly into the init thread's CSpace root using guard-depth semantics.
 pub fn untyped_retype_into_init_root(
     untyped_slot: sys::seL4_CPtr,
     obj_type: sys::seL4_Word,
@@ -470,7 +471,7 @@ pub fn untyped_retype_into_init_root(
     debug_assert_ne!(root, sys::seL4_CapNull, "init CNode root must be writable");
 
     let node_index = dst_slot as sys::seL4_Word;
-    let node_depth = init_bits;
+    let node_depth = sys::seL4_WordBits as sys::seL4_Word;
     let node_offset = 0;
 
     log::info!(
@@ -578,7 +579,7 @@ pub(crate) fn init_cnode_direct_destination_words(
     );
     (
         dst_slot as sys::seL4_Word,
-        init_cnode_bits as sys::seL4_Word,
+        sys::seL4_WordBits as sys::seL4_Word,
         0,
     )
 }
@@ -611,7 +612,7 @@ mod tests {
         let (root, idx, depth, off) = init_cnode_dest(slot as _);
         assert_eq!(root, bi_init_cnode_cptr());
         assert_eq!(idx, slot as _);
-        assert!(depth > 0 && depth <= sys::seL4_WordBits as _);
+        assert_eq!(depth, sys::seL4_WordBits as _);
         assert_eq!(off, 0);
     }
 
@@ -636,7 +637,7 @@ mod tests {
             if let Some(trace) = super::host_trace::take_last() {
                 assert_eq!(trace.root, bi_init_cnode_cptr());
                 assert_eq!(trace.node_index, slot as _);
-                assert_eq!(trace.node_depth, bi_init_cnode_bits());
+                assert_eq!(trace.node_depth, sys::seL4_WordBits as _);
                 assert_eq!(trace.node_offset, 0);
             } else {
                 panic!("expected host trace for init-root retype");
@@ -650,7 +651,7 @@ mod tests {
         let bits = 13u8;
         let (idx, depth, off) = init_cnode_direct_destination_words_for_test(bits, slot as _);
         assert_eq!(idx, slot as _);
-        assert_eq!(depth, bits as _);
+        assert_eq!(depth, sys::seL4_WordBits as _);
         assert_eq!(off, 0);
     }
 
