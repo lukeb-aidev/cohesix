@@ -4,6 +4,8 @@
 #[cfg(all(test, not(target_os = "none")))]
 extern crate alloc;
 
+use core::convert::TryFrom;
+
 use crate::boot;
 use crate::sel4 as sys;
 use sel4_sys;
@@ -216,11 +218,13 @@ pub fn cnode_copy_direct_dest(
         let (root, node_index, node_depth, node_offset) = init_cnode_dest(dst_slot);
         debug_assert_eq!(node_offset, 0);
         log_destination("CNode_Copy", node_index, node_depth, node_offset);
+        let node_depth_u8 =
+            u8::try_from(node_depth).expect("initThreadCNodeSizeBits must fit within u8");
         let err = unsafe {
             sys::seL4_CNode_Copy(
                 root,
                 node_index,
-                node_depth,
+                node_depth_u8,
                 src_root,
                 src_index as sys::seL4_Word,
                 src_depth_bits,
@@ -264,11 +268,13 @@ pub fn cnode_mint_direct_dest(
         let (root, node_index, node_depth, node_offset) = init_cnode_dest(dst_slot);
         debug_assert_eq!(node_offset, 0);
         log_destination("CNode_Mint", node_index, node_depth, node_offset);
+        let node_depth_u8 =
+            u8::try_from(node_depth).expect("initThreadCNodeSizeBits must fit within u8");
         let err = unsafe {
             sys::seL4_CNode_Mint(
                 root,
                 node_index,
-                node_depth,
+                node_depth_u8,
                 src_root,
                 src_index as sys::seL4_Word,
                 src_depth_bits,
@@ -311,11 +317,13 @@ pub fn cnode_move_direct_dest(
         let (root, node_index, node_depth, node_offset) = init_cnode_dest(dst_slot);
         debug_assert_eq!(node_offset, 0);
         log_destination("CNode_Move", node_index, node_depth, node_offset);
+        let node_depth_u8 =
+            u8::try_from(node_depth).expect("initThreadCNodeSizeBits must fit within u8");
         let err = unsafe {
             sys::seL4_CNode_Move(
                 root,
                 node_index,
-                node_depth,
+                node_depth_u8,
                 src_root,
                 src_index as sys::seL4_Word,
                 src_depth_bits,
