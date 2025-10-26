@@ -113,7 +113,7 @@ fn bi_init_cnode_bits() -> sys::seL4_Word {
 
 #[cfg(all(test, not(target_os = "none")))]
 #[inline(always)]
-pub(super) unsafe fn install_test_bootinfo_for_tests(
+pub(crate) unsafe fn install_test_bootinfo_for_tests(
     bootinfo: sys::seL4_BootInfo,
 ) -> &'static sys::seL4_BootInfo {
     let leaked = Box::leak(Box::new(bootinfo));
@@ -469,9 +469,9 @@ pub fn untyped_retype_into_init_root(
     let root = bi_init_cnode_cptr();
     debug_assert_ne!(root, sys::seL4_CapNull, "init CNode root must be writable");
 
-    let node_index = 0;
-    let node_depth = 0;
-    let node_offset = dst_slot as sys::seL4_Word;
+    let node_index = dst_slot as sys::seL4_Word;
+    let node_depth = init_bits;
+    let node_offset = 0;
 
     log::info!(
         "Retype DEST(root=0x{root:x} idx={idx} depth={depth} off=0x{off:x} obj={obj_type} sz={size_bits})",
@@ -576,7 +576,11 @@ pub(crate) fn init_cnode_direct_destination_words(
         (dst_slot as usize) < limit,
         "destination slot {dst_slot:#x} exceeds init CNode capacity (bits={init_cnode_bits})"
     );
-    (0, 0, dst_slot as sys::seL4_Word)
+    (
+        dst_slot as sys::seL4_Word,
+        init_cnode_bits as sys::seL4_Word,
+        0,
+    )
 }
 
 #[cfg(test)]
@@ -631,9 +635,9 @@ mod tests {
         {
             if let Some(trace) = super::host_trace::take_last() {
                 assert_eq!(trace.root, bi_init_cnode_cptr());
-                assert_eq!(trace.node_index, 0);
-                assert_eq!(trace.node_depth, 0);
-                assert_eq!(trace.node_offset, slot as _);
+                assert_eq!(trace.node_index, slot as _);
+                assert_eq!(trace.node_depth, bi_init_cnode_bits());
+                assert_eq!(trace.node_offset, 0);
             } else {
                 panic!("expected host trace for init-root retype");
             }
@@ -645,9 +649,9 @@ mod tests {
         let slot = 0x10u64;
         let bits = 13u8;
         let (idx, depth, off) = init_cnode_direct_destination_words_for_test(bits, slot as _);
-        assert_eq!(idx, 0);
-        assert_eq!(depth, 0);
-        assert_eq!(off, slot as _);
+        assert_eq!(idx, slot as _);
+        assert_eq!(depth, bits as _);
+        assert_eq!(off, 0);
     }
 
     #[cfg(not(target_os = "none"))]

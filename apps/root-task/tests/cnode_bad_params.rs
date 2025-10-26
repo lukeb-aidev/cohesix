@@ -72,11 +72,12 @@ fn zero_depth_mint_is_rejected() {
 fn guard_depth_mint_succeeds() {
     let mut ctx = ctx_fixture();
     assert_eq!(ctx.smoke_copy_init_tcb(), Ok(()));
-    let guard_depth = ctx.cnode_invocation_depth_bits;
     let init_bits = ctx.bi.init_cnode_bits();
+    let guard_depth = ctx.cnode_invocation_depth_bits;
+    let mismatch_depth = sel4::word_bits() as u8;
     assert_eq!(ctx.cnode_bits(), init_bits);
-    assert_eq!(guard_depth, sel4::word_bits() as u8);
-    assert_ne!(guard_depth, init_bits);
+    assert_eq!(guard_depth, init_bits);
+    assert_ne!(mismatch_depth, guard_depth);
 
     let err = unsafe {
         seL4_CNode_Mint(
@@ -98,10 +99,10 @@ fn guard_depth_mint_succeeds() {
         seL4_CNode_Mint(
             seL4_CapInitThreadCNode,
             ctx.first_free.saturating_add(2),
-            init_bits,
+            mismatch_depth,
             seL4_CapInitThreadCNode,
             seL4_CapInitThreadTCB,
-            init_bits,
+            mismatch_depth,
             seL4_CapRights_ReadWrite,
             0,
             0,
