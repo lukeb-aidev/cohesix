@@ -1,31 +1,51 @@
 // Author: Lukas Bower
 #![allow(unsafe_code)]
 
+#[cfg(all(test, not(target_os = "none")))]
+extern crate alloc;
+
 use crate::boot;
 use crate::sel4 as sys;
-use core::convert::TryFrom;
 use sel4_sys;
+
+#[cfg(all(test, not(target_os = "none")))]
+use alloc::boxed::Box;
 
 pub const CANONICAL_CNODE_DEPTH_BITS: u8 = sel4_sys::seL4_WordBits as u8;
 
+#[cfg(target_os = "none")]
 #[inline(always)]
 fn bootinfo() -> &'static sel4_sys::seL4_BootInfo {
     unsafe { &*sel4_sys::seL4_GetBootInfo() }
 }
 
+#[cfg(all(test, not(target_os = "none")))]
+static mut TEST_BOOTINFO_PTR: *const sel4_sys::seL4_BootInfo = core::ptr::null();
+
+#[cfg(all(test, not(target_os = "none")))]
 #[inline(always)]
-fn init_cnode_bits_word() -> sys::seL4_Word {
-    bootinfo().initThreadCNodeSizeBits as sys::seL4_Word
+fn bootinfo() -> &'static sel4_sys::seL4_BootInfo {
+    unsafe {
+        TEST_BOOTINFO_PTR
+            .as_ref()
+            .expect("test bootinfo not installed")
+    }
 }
 
+#[cfg(all(test, not(target_os = "none")))]
 #[inline(always)]
-fn init_cnode_capacity() -> usize {
-    let init_bits = init_cnode_bits_word();
-    if init_bits as usize >= usize::BITS as usize {
-        usize::MAX
-    } else {
-        1usize.checked_shl(init_bits as u32).unwrap_or(usize::MAX)
-    }
+pub(super) unsafe fn install_test_bootinfo_for_tests(
+    bootinfo: sel4_sys::seL4_BootInfo,
+) -> &'static sel4_sys::seL4_BootInfo {
+    let leaked = Box::leak(Box::new(bootinfo));
+    TEST_BOOTINFO_PTR = leaked as *const _;
+    leaked
+}
+
+#[cfg(all(not(target_os = "none"), not(test)))]
+#[inline(always)]
+fn bootinfo() -> &'static sel4_sys::seL4_BootInfo {
+    panic!("bootinfo() unavailable on host targets");
 }
 
 #[inline(always)]
@@ -58,15 +78,21 @@ pub fn init_cnode_dest(
     sys::seL4_Word,
     sys::seL4_Word,
 ) {
-    let capacity = init_cnode_capacity();
+    let bi = bootinfo();
+    let init_bits = bi.initThreadCNodeSizeBits as sys::seL4_Word;
+    let capacity = if init_bits as usize >= usize::BITS as usize {
+        usize::MAX
+    } else {
+        1usize << (init_bits as usize)
+    };
     debug_assert!(
         (slot as usize) < capacity,
-        "slot 0x{slot:04x} exceeds init CNode capacity (limit=0x{capacity:04x})"
+        "slot 0x{slot:04x} exceeds init CNode capacity (limit=0x{capacity:04x})",
     );
     (
         sel4_sys::seL4_CapInitThreadCNode,
         slot as sys::seL4_Word,
-        init_cnode_bits_word(),
+        init_bits,
         0,
     )
 }
@@ -76,7 +102,7 @@ pub fn init_cnode_dest(
 fn log_destination(op: &str, idx: sys::seL4_Word, depth: sys::seL4_Word, offset: sys::seL4_Word) {
     if boot::flags::trace_dest() {
         log::info!(
-            "DEST → op={op} root=initCNode idx=0x{idx:04x} depth={depth} (initBits) off={offset}",
+            "DEST → {op} root=initCNode idx=0x{idx:04x} depth={depth} off={offset} (ABI order: dest_root,dest_index,dest_depth,dest_offset)",
             op = op,
             idx = idx,
             depth = depth,
@@ -184,17 +210,17 @@ pub fn cnode_copy_direct_dest(
 ) -> sys::seL4_Error {
     #[cfg(target_os = "none")]
     {
-        debug_assert_eq!(depth_bits as sys::seL4_Word, init_cnode_bits_word());
+        let init_bits = bootinfo().initThreadCNodeSizeBits as u8;
+        debug_assert_eq!(depth_bits, init_bits);
         check_slot_in_range(depth_bits, dst_slot);
         let (root, node_index, node_depth, node_offset) = init_cnode_dest(dst_slot);
-        let node_depth_bits = u8::try_from(node_depth)
-            .expect("init thread CNode depth exceeds architectural word size");
+        debug_assert_eq!(node_offset, 0);
         log_destination("CNode_Copy", node_index, node_depth, node_offset);
         let err = unsafe {
             sys::seL4_CNode_Copy(
                 root,
                 node_index,
-                node_depth_bits,
+                node_depth,
                 src_root,
                 src_index as sys::seL4_Word,
                 src_depth_bits,
@@ -232,17 +258,17 @@ pub fn cnode_mint_direct_dest(
 ) -> sys::seL4_Error {
     #[cfg(target_os = "none")]
     {
-        debug_assert_eq!(depth_bits as sys::seL4_Word, init_cnode_bits_word());
+        let init_bits = bootinfo().initThreadCNodeSizeBits as u8;
+        debug_assert_eq!(depth_bits, init_bits);
         check_slot_in_range(depth_bits, dst_slot);
         let (root, node_index, node_depth, node_offset) = init_cnode_dest(dst_slot);
-        let node_depth_bits = u8::try_from(node_depth)
-            .expect("init thread CNode depth exceeds architectural word size");
+        debug_assert_eq!(node_offset, 0);
         log_destination("CNode_Mint", node_index, node_depth, node_offset);
         let err = unsafe {
             sys::seL4_CNode_Mint(
                 root,
                 node_index,
-                node_depth_bits,
+                node_depth,
                 src_root,
                 src_index as sys::seL4_Word,
                 src_depth_bits,
@@ -279,17 +305,17 @@ pub fn cnode_move_direct_dest(
 ) -> sys::seL4_Error {
     #[cfg(target_os = "none")]
     {
-        debug_assert_eq!(depth_bits as sys::seL4_Word, init_cnode_bits_word());
+        let init_bits = bootinfo().initThreadCNodeSizeBits as u8;
+        debug_assert_eq!(depth_bits, init_bits);
         check_slot_in_range(depth_bits, dst_slot);
         let (root, node_index, node_depth, node_offset) = init_cnode_dest(dst_slot);
-        let node_depth_bits = u8::try_from(node_depth)
-            .expect("init thread CNode depth exceeds architectural word size");
+        debug_assert_eq!(node_offset, 0);
         log_destination("CNode_Move", node_index, node_depth, node_offset);
         let err = unsafe {
             sys::seL4_CNode_Move(
                 root,
                 node_index,
-                node_depth_bits,
+                node_depth,
                 src_root,
                 src_index as sys::seL4_Word,
                 src_depth_bits,
@@ -386,7 +412,7 @@ pub fn untyped_retype_into_cnode(
     #[cfg(target_os = "none")]
     {
         if dest_root == sys::seL4_CapInitThreadCNode {
-            let expected_bits = init_cnode_bits_word() as u8;
+            let expected_bits = bootinfo().initThreadCNodeSizeBits as u8;
             assert_eq!(
                 depth_bits, expected_bits,
                 "init CNode retypes must honour initThreadCNodeSizeBits (provided={} expected={})",
@@ -394,6 +420,7 @@ pub fn untyped_retype_into_cnode(
             );
             check_slot_in_range(depth_bits, dst_slot);
             let (root, node_index, node_depth, node_offset) = init_cnode_dest(dst_slot);
+            debug_assert_eq!(node_offset, 0);
             log_destination("Untyped_Retype", node_index, node_depth, node_offset);
             let err = unsafe {
                 sys::seL4_Untyped_Retype(
@@ -423,13 +450,7 @@ pub fn untyped_retype_into_cnode(
                     1,
                 )
             };
-            if err != sys::seL4_NoError {
-                log::error!(
-                    "Untyped_Retype (non-init root) failed: err={err} ({name})",
-                    err = err,
-                    name = crate::sel4::error_name(err),
-                );
-            }
+            log_syscall_result("Untyped_Retype", err);
             err
         }
     }
@@ -437,7 +458,7 @@ pub fn untyped_retype_into_cnode(
     #[cfg(not(target_os = "none"))]
     {
         let depth = if dest_root == sys::seL4_CapInitThreadCNode {
-            init_cnode_bits_word()
+            bootinfo().initThreadCNodeSizeBits as sys::seL4_Word
         } else {
             encode_cnode_depth(depth_bits)
         };
@@ -489,6 +510,12 @@ mod tests {
 
     #[test]
     fn init_cnode_dest_radix_depth_is_valid() {
+        #[cfg(not(target_os = "none"))]
+        unsafe {
+            let mut bootinfo: sel4_sys::seL4_BootInfo = core::mem::zeroed();
+            bootinfo.initThreadCNodeSizeBits = 13;
+            super::install_test_bootinfo_for_tests(bootinfo);
+        }
         let slot = 0x00a5u64;
         let (root, idx, depth, off) = init_cnode_dest(slot as _);
         assert_eq!(root, sel4_sys::seL4_CapInitThreadCNode);
@@ -505,5 +532,29 @@ mod tests {
         assert_eq!(idx, slot as _);
         assert_eq!(depth, bits as _);
         assert_eq!(off, 0);
+    }
+
+    #[cfg(not(target_os = "none"))]
+    #[test]
+    #[cfg_attr(not(debug_assertions), ignore = "debug assertions disabled")]
+    fn init_cnode_dest_rejects_out_of_range_slot() {
+        use std::panic;
+
+        unsafe {
+            let mut bootinfo: sel4_sys::seL4_BootInfo = core::mem::zeroed();
+            bootinfo.initThreadCNodeSizeBits = 5;
+            super::install_test_bootinfo_for_tests(bootinfo);
+        }
+
+        let limit_slot = 1usize << 5;
+        let result = panic::catch_unwind(|| {
+            let slot = limit_slot as sel4_sys::seL4_CPtr;
+            let _ = init_cnode_dest(slot);
+        });
+
+        assert!(
+            result.is_err(),
+            "init_cnode_dest should panic when slot is out of range"
+        );
     }
 }
