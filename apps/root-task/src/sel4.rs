@@ -13,6 +13,7 @@ use core::{
 };
 
 use crate::bootstrap::cspace_sys;
+use crate::bootstrap::ipcbuf_view::IpcBufView;
 #[cfg(feature = "kernel")]
 use crate::bootstrap::ktry;
 use crate::serial;
@@ -1145,6 +1146,7 @@ pub struct KernelEnv<'a> {
     dma_cursor: usize,
     last_retype: Option<RetypeLog>,
     ipcbuf_trace: bool,
+    ipcbuf_view: Option<IpcBufView>,
 }
 
 /// Diagnostic snapshot capturing resource utilisation within the [`KernelEnv`].
@@ -1421,12 +1423,18 @@ impl<'a> KernelEnv<'a> {
             dma_cursor: DMA_VADDR_BASE,
             last_retype: None,
             ipcbuf_trace: false,
+            ipcbuf_view: None,
         }
     }
 
     /// Returns the bootinfo pointer passed to the root task.
     pub fn bootinfo(&self) -> &'a seL4_BootInfo {
         self.bootinfo
+    }
+
+    /// Returns a view over the init thread IPC buffer if it has been installed.
+    pub fn ipc_buffer_view(&self) -> Option<IpcBufView> {
+        self.ipcbuf_view
     }
 
     /// Marks a prefix of the bootinfo empty slot region as consumed by early bootstrap code.
@@ -1576,7 +1584,7 @@ impl<'a> KernelEnv<'a> {
         &mut self,
         tcb_cap: seL4_CPtr,
         buffer_vaddr: usize,
-    ) -> Result<(), seL4_Error> {
+    ) -> Result<IpcBufView, seL4_Error> {
         debug_assert_ne!(buffer_vaddr, 0, "IPC buffer pointer must be non-null");
         if self.ipcbuf_trace {
             crate::bp!("ipcbuf.tcb.bind.begin");
@@ -1593,7 +1601,17 @@ impl<'a> KernelEnv<'a> {
             unsafe {
                 sel4_sys::seL4_SetIPCBuffer(buffer_vaddr as *mut sel4_sys::seL4_IPCBuffer);
             }
-            Ok(())
+            let view = unsafe { IpcBufView::new(buffer_vaddr as *const u8) };
+            self.ipcbuf_view = Some(view);
+            unsafe {
+                let base = buffer_vaddr as *mut u8;
+                let last = base.add(IpcBufView::PAGE_LEN - 1);
+                let first_value = core::ptr::read_volatile(base);
+                core::ptr::write_volatile(base, first_value);
+                let last_value = core::ptr::read_volatile(last);
+                core::ptr::write_volatile(last, last_value);
+            }
+            Ok(view)
         } else {
             if self.ipcbuf_trace {
                 crate::bp!("ipcbuf.tcb.bind.err");

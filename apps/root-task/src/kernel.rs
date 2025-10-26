@@ -376,7 +376,7 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
 
     if let Some(ipc_vaddr) = ipc_vaddr {
         match ipcbuf::install_ipc_buffer(&mut kernel_env, tcb_copy_slot, ipc_vaddr) {
-            Ok(()) => {
+            Ok(_) => {
                 let mut msg = heapless::String::<112>::new();
                 let _ = write!(
                     msg,
