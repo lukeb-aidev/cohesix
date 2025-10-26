@@ -427,11 +427,7 @@ impl CSpaceCtx {
                 #[cfg(not(target_os = "none"))]
                 debug_assert_eq!(
                     (node_index, node_depth, node_offset),
-                    (
-                        dst_slot as sel4::seL4_Word,
-                        self.init_cnode_bits as sel4::seL4_Word,
-                        0,
-                    )
+                    (0, 0, dst_slot as sel4::seL4_Word)
                 );
 
                 (
