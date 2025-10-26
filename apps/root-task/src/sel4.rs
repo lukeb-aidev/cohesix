@@ -1558,6 +1558,37 @@ impl<'a> KernelEnv<'a> {
         res
     }
 
+    /// Binds the supplied IPC buffer frame to the provided TCB capability.
+    pub fn bind_ipc_buffer(
+        &mut self,
+        tcb_cap: seL4_CPtr,
+        buffer_vaddr: usize,
+    ) -> Result<(), seL4_Error> {
+        debug_assert_ne!(buffer_vaddr, 0, "IPC buffer pointer must be non-null");
+        if self.ipcbuf_trace {
+            crate::bp!("ipcbuf.tcb.bind.begin");
+        }
+
+        let result = unsafe {
+            sel4_sys::seL4_TCB_SetIPCBuffer(tcb_cap, buffer_vaddr, seL4_CapInitThreadIPCBuffer)
+        };
+
+        if result == seL4_NoError {
+            if self.ipcbuf_trace {
+                crate::bp!("ipcbuf.tcb.bind.ok");
+            }
+            unsafe {
+                sel4_sys::seL4_SetIPCBuffer(buffer_vaddr as *mut sel4_sys::seL4_IPCBuffer);
+            }
+            Ok(())
+        } else {
+            if self.ipcbuf_trace {
+                crate::bp!("ipcbuf.tcb.bind.err");
+            }
+            Err(result)
+        }
+    }
+
     /// Allocates a DMA-capable frame of RAM and maps it into the DMA window.
     pub fn alloc_dma_frame(&mut self) -> Result<RamFrame, seL4_Error> {
         let reserved = self

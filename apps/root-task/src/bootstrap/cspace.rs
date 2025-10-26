@@ -396,7 +396,7 @@ impl CSpaceCtx {
             let copy_ident = sel4::debug_cap_identify(dst_slot);
             let init_rights = render_cap_rights(sel4_sys::seL4_CapRights_All);
             let copy_rights = render_cap_rights(sel4_sys::seL4_CapRights_All);
-            log::info!(
+            ::log::info!(
                 "[cnode] mint-success path=direct:init-cnode dest=0x{dst:04x} ident(init=0x{init_ident:08x},copy=0x{copy_ident:08x}) rights(init={init_rights},copy={copy_rights})",
                 dst = dst_slot
             );
@@ -526,7 +526,7 @@ fn log_slot_allocation_failure(
 }
 
 fn emit_console_line(line: &str) {
-    log::info!("{}", line);
+    ::log::info!("{}", line);
     for byte in line.as_bytes() {
         sel4::debug_put_char(*byte as i32);
     }

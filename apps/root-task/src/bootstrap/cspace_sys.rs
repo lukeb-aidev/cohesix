@@ -87,7 +87,7 @@ pub fn preflight_init_cnode_writable(probe_slot: sys::seL4_CPtr) -> sys::seL4_Er
             )
         };
         if err != sys::seL4_NoError {
-            log::error!(
+            ::log::error!(
                 "preflight failed: Mint root=0x{root:04x} slot=0x{slot:04x} depth={} err={} ({})",
                 depth,
                 err,
@@ -99,7 +99,7 @@ pub fn preflight_init_cnode_writable(probe_slot: sys::seL4_CPtr) -> sys::seL4_Er
 
         let delete_err = unsafe { sys::seL4_CNode_Delete(root, probe_slot, depth) };
         if delete_err != sys::seL4_NoError {
-            log::error!(
+            ::log::error!(
                 "preflight cleanup failed: Delete root=0x{root:04x} slot=0x{slot:04x} depth={} err={} ({})",
                 depth,
                 delete_err,
@@ -241,7 +241,7 @@ pub fn init_cnode_retype_dest(
 #[inline(always)]
 fn log_destination(op: &str, idx: sys::seL4_Word, depth: sys::seL4_Word, offset: sys::seL4_Word) {
     if boot::flags::trace_dest() {
-        log::info!(
+        ::log::info!(
             "DEST → {op} root=0x{root:04x} idx=0x{idx:04x} depth={depth} off={offset} (ABI order: dest_root,dest_index,dest_depth,dest_offset)",
             op = op,
             root = bi_init_cnode_cptr(),
@@ -256,7 +256,7 @@ fn log_destination(op: &str, idx: sys::seL4_Word, depth: sys::seL4_Word, offset:
 #[inline(always)]
 fn log_syscall_result(op: &str, err: sys::seL4_Error) {
     if boot::flags::trace_dest() {
-        log::info!(
+        ::log::info!(
             "DEST ← {op} result={err} ({name})",
             op = op,
             err = err,
@@ -264,7 +264,7 @@ fn log_syscall_result(op: &str, err: sys::seL4_Error) {
         );
     }
     if err != sys::seL4_NoError {
-        log::error!(
+        ::log::error!(
             "{op} failed: err={err} ({name})",
             op = op,
             err = err,
@@ -542,7 +542,7 @@ pub fn untyped_retype_into_init_root(
     debug_assert_eq!(node_index, 0);
     debug_assert_eq!(node_depth, 0);
 
-    log::info!(
+    ::log::info!(
         "Retype DEST(root=0x{root:x} idx={idx} depth={depth} off=0x{off:x} obj={obj_type} sz={size_bits})",
         root = root,
         idx = node_index,
@@ -557,7 +557,7 @@ pub fn untyped_retype_into_init_root(
         if !PREFLIGHT_COMPLETED.load(Ordering::Acquire) {
             let pf_err = preflight_init_cnode_writable(dst_slot);
             if pf_err != sys::seL4_NoError {
-                log::error!(
+                ::log::error!(
                     "Retype preflight failed: err={pf_err} ({name})",
                     name = sel4::error_name(pf_err),
                 );
@@ -579,7 +579,7 @@ pub fn untyped_retype_into_init_root(
             )
         };
         if err != sys::seL4_NoError {
-            log::error!(
+            ::log::error!(
                 "Untyped_Retype failed: err={err} ({name})",
                 err = err,
                 name = sel4::error_name(err),
