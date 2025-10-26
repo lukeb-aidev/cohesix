@@ -33,8 +33,7 @@ pub fn untyped_retype_to_slot(
             let node_depth = 0;
             let node_offset = dst_slot as sys::seL4_Word;
             (
-                super::cspace_sys::untyped_retype_into_init_cnode(
-                    ctx.cnode_invocation_depth_bits,
+                super::cspace_sys::untyped_retype_into_init_root(
                     untyped_cap,
                     obj_type,
                     size_bits,

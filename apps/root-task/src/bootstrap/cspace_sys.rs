@@ -422,18 +422,18 @@ pub fn cnode_move_direct_dest(
     }
 }
 
-#[inline(always)]
-pub fn untyped_retype_into_init_cnode(
-    depth_bits: u8,
+/// Retype explicitly into the init thread's CSpace root using canonical depth-0 encoding.
+pub fn untyped_retype_into_init_root(
     untyped_slot: sys::seL4_CPtr,
     obj_type: sys::seL4_Word,
     size_bits: sys::seL4_Word,
     dst_slot: sys::seL4_CPtr,
 ) -> sys::seL4_Error {
+    let init_bits = bootinfo_init_cnode_bits() as u8;
+    check_slot_in_range(init_bits, dst_slot);
     #[cfg(target_os = "none")]
     {
         let bootinfo = bootinfo();
-        let init_bits = bootinfo.initThreadCNodeSizeBits as u8;
         let empty_start = bootinfo.empty.start as sys::seL4_CPtr;
         let empty_end = bootinfo.empty.end as sys::seL4_CPtr;
         assert!(
@@ -443,26 +443,23 @@ pub fn untyped_retype_into_init_cnode(
             lo = empty_start,
             hi = empty_end,
         );
-        check_slot_in_range(init_bits, dst_slot);
-        let (root, node_index, node_depth, node_offset) = if depth_bits == 0 {
-            retype_dest_init_cnode(dst_slot)
-        } else {
-            assert_eq!(
-                depth_bits, init_bits,
-                "retype depth {} does not match initThreadCNodeSizeBits {}",
-                depth_bits, init_bits
-            );
-            init_cnode_dest(dst_slot)
-        };
-        log::info!(
-            "Retype DEST: root=0x{root:x} idx={idx} depth={depth} off=0x{off:x} obj={obj_type} sz={size_bits}",
-            root = root,
-            idx = node_index,
-            depth = node_depth,
-            off = node_offset,
-            obj_type = obj_type,
-            size_bits = size_bits,
-        );
+    }
+    let root = bootinfo_init_cnode_cptr();
+    debug_assert_ne!(root, sys::seL4_CapNull, "init CNode root must be writable");
+    let node_index = 0;
+    let node_depth = 0;
+    let node_offset = dst_slot as sys::seL4_Word;
+    log::info!(
+        "Retype DEST: root=0x{root:x} idx={idx} depth={depth} off=0x{off:x} obj={obj_type} sz={size_bits}",
+        root = root,
+        idx = node_index,
+        depth = node_depth,
+        off = node_offset,
+        obj_type = obj_type,
+        size_bits = size_bits,
+    );
+    #[cfg(target_os = "none")]
+    {
         log_destination("Untyped_Retype", node_index, node_depth, node_offset);
         let err = unsafe {
             sys::seL4_Untyped_Retype(
@@ -479,37 +476,32 @@ pub fn untyped_retype_into_init_cnode(
         log_syscall_result("Untyped_Retype", err);
         err
     }
-
     #[cfg(not(target_os = "none"))]
     {
-        let init_root = bootinfo_init_cnode_cptr();
-        let (node_index, node_depth, node_offset) = if depth_bits == 0 {
-            (0, 0, dst_slot as sys::seL4_Word)
-        } else {
-            (
-                dst_slot as sys::seL4_Word,
-                encode_cnode_depth(depth_bits),
-                0,
-            )
-        };
-        log::info!(
-            "Retype DEST: root=0x{root:x} idx={idx} depth={depth} off=0x{off:x} obj={obj_type} sz={size_bits}",
-            root = init_root,
-            idx = node_index,
-            depth = node_depth,
-            off = node_offset,
-            obj_type = obj_type,
-            size_bits = size_bits,
-        );
         host_trace::record(host_trace::HostRetypeTrace {
-            root: init_root,
+            root,
             node_index,
             node_depth,
             node_offset,
         });
-        let _ = (depth_bits, untyped_slot, obj_type, size_bits, dst_slot);
+        let _ = (untyped_slot, obj_type, size_bits);
         sys::seL4_NoError
     }
+}
+
+#[inline(always)]
+pub fn untyped_retype_into_init_cnode(
+    depth_bits: u8,
+    untyped_slot: sys::seL4_CPtr,
+    obj_type: sys::seL4_Word,
+    size_bits: sys::seL4_Word,
+    dst_slot: sys::seL4_CPtr,
+) -> sys::seL4_Error {
+    debug_assert_eq!(
+        depth_bits, 0,
+        "init-root retype depth must use canonical depth-zero encoding"
+    );
+    untyped_retype_into_init_root(untyped_slot, obj_type, size_bits, dst_slot)
 }
 
 #[inline(always)]

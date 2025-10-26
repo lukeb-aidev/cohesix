@@ -4,7 +4,7 @@
 
 use root_task::bootstrap::cspace_sys::{
     init_cnode_direct_destination_words_for_test, take_last_host_retype_trace,
-    untyped_retype_into_cnode, untyped_retype_into_init_cnode,
+    untyped_retype_into_cnode, untyped_retype_into_init_root,
 };
 use sel4_sys::{seL4_CPtr, seL4_CapInitThreadCNode, seL4_NoError, seL4_Word};
 
@@ -22,7 +22,7 @@ fn init_cnode_retype_uses_direct_destination_encoding() {
     assert_eq!(depth, 0);
     assert_eq!(offset, dst_slot as seL4_Word);
 
-    let err = untyped_retype_into_init_cnode(depth_bits, untyped, obj_ty, size_bits, dst_slot);
+    let err = untyped_retype_into_init_root(untyped, obj_ty, size_bits, dst_slot);
     assert_eq!(err, seL4_NoError);
 
     let trace =
