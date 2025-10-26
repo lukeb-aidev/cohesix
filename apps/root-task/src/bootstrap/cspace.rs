@@ -118,6 +118,8 @@ pub struct CSpaceCtx {
     pub root_cnode_copy_slot: sel4::seL4_CPtr,
     /// Destination CNode selected for subsequent retype operations.
     pub dest: DestCNode,
+    /// Tracks whether the init CNode writable preflight succeeded.
+    init_cnode_preflighted: bool,
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -175,6 +177,7 @@ impl CSpaceCtx {
             tcb_copy_slot: sel4::seL4_CapNull,
             root_cnode_copy_slot: sel4::seL4_CapNull,
             dest: DestCNode::Init,
+            init_cnode_preflighted: false,
         };
         log_boot(first_free, last_free, init_cnode_bits);
         ctx
@@ -421,6 +424,13 @@ impl CSpaceCtx {
         let (err, root_cap, node_index, node_depth, node_offset, path_label) = match self.dest {
             DestCNode::Init => {
                 self.log_direct_init_path(dst_slot);
+                if !self.init_cnode_preflighted {
+                    let pf_err = cspace_sys::preflight_init_cnode_writable(dst_slot);
+                    if pf_err != sel4_sys::seL4_NoError {
+                        return pf_err;
+                    }
+                    self.init_cnode_preflighted = true;
+                }
                 let node_index = 0;
                 let node_depth = 0;
                 let node_offset = dst_slot as sel4::seL4_Word;

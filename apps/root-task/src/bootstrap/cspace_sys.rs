@@ -10,6 +10,12 @@ use crate::boot;
 use crate::sel4;
 use sel4_sys as sys;
 
+#[cfg(target_os = "none")]
+use core::sync::atomic::{AtomicBool, Ordering};
+
+#[cfg(target_os = "none")]
+static PREFLIGHT_COMPLETED: AtomicBool = AtomicBool::new(false);
+
 #[cfg(all(test, not(target_os = "none")))]
 use alloc::boxed::Box;
 
@@ -33,6 +39,15 @@ pub fn bi_init_cnode_cptr() -> sys::seL4_CPtr {
 #[inline(always)]
 fn bi_init_cnode_bits() -> sys::seL4_Word {
     bi().initThreadCNodeSizeBits as sys::seL4_Word
+}
+
+#[cfg(target_os = "none")]
+#[inline(always)]
+fn boot_empty_window() -> (sys::seL4_CPtr, sys::seL4_CPtr) {
+    (
+        bi().empty.start as sys::seL4_CPtr,
+        bi().empty.end as sys::seL4_CPtr,
+    )
 }
 
 /// Quick probe to ensure the init CNode can accept write operations before issuing a Retype.
@@ -60,22 +75,30 @@ pub fn preflight_init_cnode_writable(probe_slot: sys::seL4_CPtr) -> sys::seL4_Er
     {
         let depth = u8::try_from(bits).expect("initThreadCNodeSizeBits must fit in u8");
         let err = unsafe {
-            sys::seL4_CNode_Mint(
-                root,
-                probe_slot,
-                depth,
-                root,
-                0,
-                0,
-                sys::seL4_CapRights_All,
-                0,
-            )
+            sys::seL4_CNode_Mint(root, probe_slot, depth, root, 0, 0, sel4::seL4_AllRights, 0)
         };
         if err != sys::seL4_NoError {
+            log::error!(
+                "preflight failed: Mint root=0x{root:04x} slot=0x{slot:04x} depth={} err={} ({})",
+                depth,
+                err,
+                sel4::error_name(err),
+                slot = probe_slot,
+            );
             return err;
         }
 
-        let _ = unsafe { sys::seL4_CNode_Delete(root, probe_slot, depth) };
+        let delete_err = unsafe { sys::seL4_CNode_Delete(root, probe_slot, depth) };
+        if delete_err != sys::seL4_NoError {
+            log::error!(
+                "preflight cleanup failed: Delete root=0x{root:04x} slot=0x{slot:04x} depth={} err={} ({})",
+                depth,
+                delete_err,
+                sel4::error_name(delete_err),
+                slot = probe_slot,
+            );
+            return delete_err;
+        }
     }
 
     #[cfg(not(target_os = "none"))]
@@ -273,12 +296,16 @@ mod host_trace {
         pub node_index: sys::seL4_Word,
         pub node_depth: sys::seL4_Word,
         pub node_offset: sys::seL4_Word,
+        pub object_type: sys::seL4_Word,
+        pub size_bits: sys::seL4_Word,
     }
 
     static LAST_ROOT: AtomicUsize = AtomicUsize::new(0);
     static LAST_INDEX: AtomicUsize = AtomicUsize::new(0);
     static LAST_DEPTH: AtomicUsize = AtomicUsize::new(0);
     static LAST_OFFSET: AtomicUsize = AtomicUsize::new(0);
+    static LAST_OBJECT_TYPE: AtomicUsize = AtomicUsize::new(0);
+    static LAST_SIZE_BITS: AtomicUsize = AtomicUsize::new(0);
     static HAS_TRACE: AtomicBool = AtomicBool::new(false);
 
     #[inline(always)]
@@ -287,6 +314,8 @@ mod host_trace {
         LAST_INDEX.store(trace.node_index as usize, Ordering::SeqCst);
         LAST_DEPTH.store(trace.node_depth as usize, Ordering::SeqCst);
         LAST_OFFSET.store(trace.node_offset as usize, Ordering::SeqCst);
+        LAST_OBJECT_TYPE.store(trace.object_type as usize, Ordering::SeqCst);
+        LAST_SIZE_BITS.store(trace.size_bits as usize, Ordering::SeqCst);
         HAS_TRACE.store(true, Ordering::SeqCst);
     }
 
@@ -301,6 +330,8 @@ mod host_trace {
             node_index: LAST_INDEX.load(Ordering::SeqCst) as sys::seL4_Word,
             node_depth: LAST_DEPTH.load(Ordering::SeqCst) as sys::seL4_Word,
             node_offset: LAST_OFFSET.load(Ordering::SeqCst) as sys::seL4_Word,
+            object_type: LAST_OBJECT_TYPE.load(Ordering::SeqCst) as sys::seL4_Word,
+            size_bits: LAST_SIZE_BITS.load(Ordering::SeqCst) as sys::seL4_Word,
         })
     }
 }
@@ -351,6 +382,8 @@ pub fn cnode_copy_direct_dest(
             node_index,
             node_depth,
             node_offset,
+            object_type: 0,
+            size_bits: 0,
         });
         let _ = (src_root, src_index, src_depth_bits, rights);
         sys::seL4_NoError
@@ -402,6 +435,8 @@ pub fn cnode_mint_direct_dest(
             node_index,
             node_depth,
             node_offset,
+            object_type: 0,
+            size_bits: 0,
         });
         let _ = (src_root, src_index, src_depth_bits, rights, badge);
         sys::seL4_NoError
@@ -449,6 +484,8 @@ pub fn cnode_move_direct_dest(
             node_index,
             node_depth,
             node_offset,
+            object_type: 0,
+            size_bits: 0,
         });
         let _ = (src_root, src_index, src_depth_bits);
         sys::seL4_NoError
@@ -463,13 +500,21 @@ pub fn untyped_retype_into_init_root(
     dst_slot: sys::seL4_CPtr,
 ) -> sys::seL4_Error {
     let init_bits = bi_init_cnode_bits();
-    let init_bits_u8 = u8::try_from(init_bits).expect("initThreadCNodeSizeBits must fit in u8");
-    check_slot_in_range(init_bits_u8, dst_slot);
+    let slot_capacity = if init_bits as usize >= usize::BITS as usize {
+        usize::MAX
+    } else {
+        1usize << (init_bits as usize)
+    };
+    assert!(
+        (dst_slot as usize) < slot_capacity,
+        "destination slot 0x{dst:04x} exceeds init CNode capacity (limit=0x{limit:04x})",
+        dst = dst_slot,
+        limit = slot_capacity,
+    );
 
     #[cfg(target_os = "none")]
     {
-        let empty_start = bi().empty.start as sys::seL4_CPtr;
-        let empty_end = bi().empty.end as sys::seL4_CPtr;
+        let (empty_start, empty_end) = boot_empty_window();
         assert!(
             dst_slot >= empty_start,
             "refusing to write below first_free (0x{first_free:04x})",
@@ -482,11 +527,6 @@ pub fn untyped_retype_into_init_root(
             lo = empty_start,
             hi = empty_end,
         );
-    }
-
-    #[cfg(debug_assertions)]
-    {
-        let _ = preflight_init_cnode_writable(dst_slot);
     }
 
     let (root, node_index, node_depth, node_offset) = init_cnode_retype_dest(dst_slot);
@@ -505,6 +545,18 @@ pub fn untyped_retype_into_init_root(
 
     #[cfg(target_os = "none")]
     {
+        if !PREFLIGHT_COMPLETED.load(Ordering::Acquire) {
+            let pf_err = preflight_init_cnode_writable(dst_slot);
+            if pf_err != sys::seL4_NoError {
+                log::error!(
+                    "Retype preflight failed: err={pf_err} ({name})",
+                    name = sel4::error_name(pf_err),
+                );
+                return pf_err;
+            }
+            PREFLIGHT_COMPLETED.store(true, Ordering::Release);
+        }
+
         let err = unsafe {
             sys::seL4_Untyped_Retype(
                 untyped_slot,
@@ -534,6 +586,8 @@ pub fn untyped_retype_into_init_root(
             node_index,
             node_depth,
             node_offset,
+            object_type: obj_type,
+            size_bits,
         });
         let _ = (untyped_slot, obj_type, size_bits);
         sys::seL4_NoError
@@ -580,6 +634,8 @@ pub fn untyped_retype_into_cnode(
             node_index: dst_slot as sys::seL4_Word,
             node_depth: encode_cnode_depth(depth_bits),
             node_offset: 0,
+            object_type: obj_type,
+            size_bits,
         });
         let _ = (untyped_slot, obj_type, size_bits);
         sys::seL4_NoError
@@ -646,6 +702,8 @@ mod tests {
         unsafe {
             let mut bootinfo: sys::seL4_BootInfo = core::mem::zeroed();
             bootinfo.initThreadCNodeSizeBits = 13;
+            bootinfo.empty.start = 0x00a6;
+            bootinfo.empty.end = 0x0800;
             super::install_test_bootinfo_for_tests(bootinfo);
         }
 
@@ -663,6 +721,8 @@ mod tests {
                 assert_eq!(trace.node_index, 0);
                 assert_eq!(trace.node_depth, 0);
                 assert_eq!(trace.node_offset, slot as _);
+                assert_eq!(trace.object_type, 0);
+                assert_eq!(trace.size_bits, 0);
             } else {
                 panic!("expected host trace for init-root retype");
             }
