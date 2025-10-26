@@ -296,7 +296,7 @@ impl CSpaceCtx {
                 &mut line,
                 "[cnode] Copy err={err} root=0x{root:04x} dest(index=0x{dest_index:04x},depth={depth}) src(index=0x{src_index:04x},depth={depth})",
                 root = self.root_cnode_cap,
-                depth = self.cnode_invocation_depth_bits,
+                depth = self.init_cnode_bits,
             );
             emit_console_line(line.as_str());
         }
@@ -316,7 +316,7 @@ impl CSpaceCtx {
                 &mut line,
                 "[cnode] Mint err={err} root=0x{root:04x} dest(index=0x{dest_index:04x},depth={depth},offset=0) src(index=0x{src_index:04x},depth={depth}) badge={badge}",
                 root = self.root_cnode_cap,
-                depth = self.cnode_invocation_depth_bits,
+                depth = self.init_cnode_bits,
             );
             emit_console_line(line.as_str());
         }
@@ -416,9 +416,6 @@ impl CSpaceCtx {
         let (err, root_cap, node_index, node_depth, node_offset, path_label) = match self.dest {
             DestCNode::Init => {
                 self.log_direct_init_path(dst_slot);
-                #[cfg(not(target_os = "none"))]
-                let (node_index, node_depth, node_offset) =
-                    cspace_sys::init_cnode_direct_destination_words(self.init_cnode_bits, dst_slot);
                 #[cfg(target_os = "none")]
                 let (_, node_index, node_depth, node_offset) =
                     cspace_sys::init_cnode_dest(dst_slot);
@@ -432,13 +429,7 @@ impl CSpaceCtx {
                 );
 
                 (
-                    cspace_sys::untyped_retype_into_init_cnode(
-                        self.cnode_invocation_depth_bits,
-                        untyped,
-                        obj_ty,
-                        size_bits,
-                        dst_slot,
-                    ),
+                    cspace_sys::untyped_retype_into_init_root(untyped, obj_ty, size_bits, dst_slot),
                     sel4::seL4_CapInitThreadCNode,
                     node_index,
                     node_depth,
