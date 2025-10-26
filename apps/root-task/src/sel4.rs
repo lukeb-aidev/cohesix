@@ -1679,7 +1679,7 @@ impl<'a> KernelEnv<'a> {
         );
         assert_eq!(
             trace.cnode_depth, expected_depth,
-            "Retype: cnode_depth {} must equal zero when targeting the init CSpace root",
+            "Retype: cnode_depth {} must equal {} when targeting the init CSpace root",
             trace.cnode_depth, expected_depth
         );
 
@@ -1697,7 +1697,7 @@ impl<'a> KernelEnv<'a> {
         );
         assert_eq!(
             node_index, expected_index,
-            "Retype: node_index 0x{:x} must equal zero when targeting the init CSpace root",
+            "Retype: node_index 0x{:x} must equal 0x{:x} when targeting the init CSpace root",
             node_index, expected_index
         );
 
