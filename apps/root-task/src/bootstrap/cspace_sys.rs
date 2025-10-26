@@ -21,6 +21,11 @@ fn bootinfo() -> &'static sel4_sys::seL4_BootInfo {
     unsafe { &*sel4_sys::seL4_GetBootInfo() }
 }
 
+#[inline(always)]
+pub fn bootinfo_init_cnode_cptr() -> sys::seL4_CPtr {
+    bootinfo().initThreadCNode
+}
+
 #[cfg(all(test, not(target_os = "none")))]
 static mut TEST_BOOTINFO_PTR: *const sel4_sys::seL4_BootInfo = core::ptr::null();
 
@@ -92,7 +97,7 @@ pub fn init_cnode_dest(
         "slot 0x{slot:04x} exceeds init CNode capacity (limit=0x{capacity:04x})",
     );
     (
-        sel4_sys::seL4_CapInitThreadCNode,
+        bootinfo_init_cnode_cptr(),
         slot as sys::seL4_Word,
         init_bits,
         0,
@@ -120,12 +125,7 @@ pub fn retype_dest_init_cnode(
         "slot 0x{slot:04x} exceeds init CNode capacity (limit=0x{capacity:04x})",
     );
 
-    (
-        sel4_sys::seL4_CapInitThreadCNode,
-        0,
-        0,
-        slot as sys::seL4_Word,
-    )
+    (bootinfo_init_cnode_cptr(), 0, 0, slot as sys::seL4_Word)
 }
 
 #[cfg(target_os = "none")]
@@ -133,8 +133,9 @@ pub fn retype_dest_init_cnode(
 fn log_destination(op: &str, idx: sys::seL4_Word, depth: sys::seL4_Word, offset: sys::seL4_Word) {
     if boot::flags::trace_dest() {
         log::info!(
-            "DEST → {op} root=initCNode idx=0x{idx:04x} depth={depth} off={offset} (ABI order: dest_root,dest_index,dest_depth,dest_offset)",
+            "DEST → {op} root=0x{root:04x} idx=0x{idx:04x} depth={depth} off={offset} (ABI order: dest_root,dest_index,dest_depth,dest_offset)",
             op = op,
+            root = bootinfo_init_cnode_cptr(),
             idx = idx,
             depth = depth,
             offset = offset,
@@ -269,7 +270,7 @@ pub fn cnode_copy_direct_dest(
         let (node_index, node_depth, node_offset) =
             init_cnode_direct_destination_words(depth_bits, dst_slot);
         host_trace::record(host_trace::HostRetypeTrace {
-            root: sys::seL4_CapInitThreadCNode,
+            root: bootinfo_init_cnode_cptr(),
             node_index,
             node_depth,
             node_offset,
@@ -320,7 +321,7 @@ pub fn cnode_mint_direct_dest(
         let (node_index, node_depth, node_offset) =
             init_cnode_direct_destination_words(depth_bits, dst_slot);
         host_trace::record(host_trace::HostRetypeTrace {
-            root: sys::seL4_CapInitThreadCNode,
+            root: bootinfo_init_cnode_cptr(),
             node_index,
             node_depth,
             node_offset,
@@ -367,7 +368,7 @@ pub fn cnode_move_direct_dest(
         let (node_index, node_depth, node_offset) =
             init_cnode_direct_destination_words(depth_bits, dst_slot);
         host_trace::record(host_trace::HostRetypeTrace {
-            root: sys::seL4_CapInitThreadCNode,
+            root: bootinfo_init_cnode_cptr(),
             node_index,
             node_depth,
             node_offset,
@@ -406,9 +407,11 @@ pub fn untyped_retype_into_init_cnode(
         check_slot_in_range(depth_bits, dst_slot);
         let (root, node_index, node_depth, node_offset) = retype_dest_init_cnode(dst_slot);
         log::info!(
-            "Retype DEST: root=initCNode idx=0 depth=0 off=0x{off:04x} n={num}",
+            "Retype DEST(root=0x{root:04x}, idx={idx}, depth={depth}, off=0x{off:04x})",
+            root = root,
+            idx = node_index,
+            depth = node_depth,
             off = node_offset,
-            num = 1
         );
         log_destination("Untyped_Retype", node_index, node_depth, node_offset);
         let err = unsafe {
@@ -433,7 +436,7 @@ pub fn untyped_retype_into_init_cnode(
         let node_depth = 0;
         let node_offset = dst_slot as sys::seL4_Word;
         host_trace::record(host_trace::HostRetypeTrace {
-            root: sys::seL4_CapInitThreadCNode,
+            root: bootinfo_init_cnode_cptr(),
             node_index,
             node_depth,
             node_offset,
@@ -464,9 +467,11 @@ pub fn untyped_retype_into_cnode(
             check_slot_in_range(depth_bits, dst_slot);
             let (root, node_index, node_depth, node_offset) = retype_dest_init_cnode(dst_slot);
             log::info!(
-                "Retype DEST: root=initCNode idx=0 depth=0 off=0x{off:04x} n={num}",
+                "Retype DEST(root=0x{root:04x}, idx={idx}, depth={depth}, off=0x{off:04x})",
+                root = root,
+                idx = node_index,
+                depth = node_depth,
                 off = node_offset,
-                num = 1
             );
             log_destination("Untyped_Retype", node_index, node_depth, node_offset);
             let err = unsafe {
@@ -560,7 +565,8 @@ pub fn init_cnode_direct_destination_words_for_test(
 #[cfg(test)]
 mod tests {
     use super::{
-        init_cnode_dest, init_cnode_direct_destination_words_for_test, retype_dest_init_cnode,
+        bootinfo_init_cnode_cptr, init_cnode_dest, init_cnode_direct_destination_words_for_test,
+        retype_dest_init_cnode,
     };
 
     #[test]
@@ -569,11 +575,12 @@ mod tests {
         unsafe {
             let mut bootinfo: sel4_sys::seL4_BootInfo = core::mem::zeroed();
             bootinfo.initThreadCNodeSizeBits = 13;
+            bootinfo.initThreadCNode = 0x0002;
             super::install_test_bootinfo_for_tests(bootinfo);
         }
         let slot = 0x00a5u64;
         let (root, idx, depth, off) = init_cnode_dest(slot as _);
-        assert_eq!(root, sel4_sys::seL4_CapInitThreadCNode);
+        assert_eq!(root, bootinfo_init_cnode_cptr());
         assert_eq!(idx, slot as _);
         assert!(depth > 0 && depth <= sel4_sys::seL4_WordBits as _);
         assert_eq!(off, 0);
@@ -585,12 +592,13 @@ mod tests {
         unsafe {
             let mut bootinfo: sel4_sys::seL4_BootInfo = core::mem::zeroed();
             bootinfo.initThreadCNodeSizeBits = 13;
+            bootinfo.initThreadCNode = 0x0002;
             super::install_test_bootinfo_for_tests(bootinfo);
         }
 
         let slot = 0x00a6u64;
         let (root, idx, depth, off) = retype_dest_init_cnode(slot as _);
-        assert_eq!(root, sel4_sys::seL4_CapInitThreadCNode);
+        assert_eq!(root, bootinfo_init_cnode_cptr());
         assert_eq!(idx, 0);
         assert_eq!(depth, 0);
         assert_eq!(off, slot as _);

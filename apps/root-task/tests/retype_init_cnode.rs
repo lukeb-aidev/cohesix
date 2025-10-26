@@ -17,8 +17,7 @@ fn init_cnode_retype_uses_direct_destination_encoding() {
     let size_bits: seL4_Word = 0;
     let dst_slot: seL4_CPtr = 0x40;
 
-    let (index, depth, offset) =
-        init_cnode_direct_destination_words_for_test(depth_bits, dst_slot);
+    let (index, depth, offset) = init_cnode_direct_destination_words_for_test(depth_bits, dst_slot);
     assert_eq!(index, 0);
     assert_eq!(depth, 0);
     assert_eq!(offset, dst_slot as seL4_Word);

@@ -582,7 +582,7 @@ pub trait BootInfoExt {
 impl BootInfoExt for seL4_BootInfo {
     #[inline(always)]
     fn init_cnode_cap(&self) -> seL4_CPtr {
-        seL4_CapInitThreadCNode
+        self.initThreadCNode
     }
 
     #[inline(always)]
@@ -1976,7 +1976,8 @@ impl<'a> KernelEnv<'a> {
 
         if trace.cnode_root == init_cnode_cap {
             log::trace!(
-                "Retype → root=initCNode index=0x{:x} depth={}{} offset={} (objtype={}({}), size_bits={}, untyped_paddr=0x{:08x})",
+                "Retype → root=0x{:x} (initCNode) index=0x{:x} depth={}{} offset=0x{:x} (objtype={}({}), size_bits={}, untyped_paddr=0x{:08x})",
+                trace.cnode_root,
                 trace.node_index,
                 trace.cnode_depth,
                 depth_suffix,
@@ -1988,7 +1989,7 @@ impl<'a> KernelEnv<'a> {
             );
         } else {
             log::trace!(
-                "Retype → root=0x{:x} index=0x{:x} depth={}{} offset={} (objtype={}({}), size_bits={}, untyped_paddr=0x{:08x})",
+                "Retype → root=0x{:x} index=0x{:x} depth={}{} offset=0x{:x} (objtype={}({}), size_bits={}, untyped_paddr=0x{:08x})",
                 trace.cnode_root,
                 trace.node_index,
                 trace.cnode_depth,
