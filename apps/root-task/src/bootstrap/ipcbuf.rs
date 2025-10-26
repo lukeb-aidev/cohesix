@@ -1,7 +1,6 @@
 // Author: Lukas Bower
 #![allow(dead_code)]
 
-use crate::bootstrap::ktry;
 use crate::bp;
 use crate::sel4::KernelEnv;
 
@@ -17,7 +16,7 @@ pub fn install_ipc_buffer(
         Ok(()) => {}
         Err(err) => {
             let code = err as i32;
-            log::error!(
+            ::log::error!(
                 "[boot] ipcbuf.map failed vaddr=0x{ipc_vaddr:08x} err={code} ({name})",
                 name = crate::sel4::error_name(err)
             );
@@ -25,10 +24,17 @@ pub fn install_ipc_buffer(
         }
     }
 
-    let rc = unsafe {
-        sel4_sys::seL4_TCB_SetIPCBuffer(tcb_cap, ipc_vaddr, sel4_sys::seL4_CapInitThreadIPCBuffer)
-    };
-    ktry("tcb.set_ipcbuf", rc as i32)?;
+    match env.bind_ipc_buffer(tcb_cap, ipc_vaddr) {
+        Ok(()) => {}
+        Err(err) => {
+            let code = err as i32;
+            ::log::error!(
+                "[boot] ipcbuf.bind failed tcb=0x{tcb_cap:04x} vaddr=0x{ipc_vaddr:08x} err={code} ({name})",
+                name = crate::sel4::error_name(err)
+            );
+            return Err(code);
+        }
+    }
     bp!("tcb.set_ipcbuf");
     bp!("ipcbuf.done");
     Ok(())

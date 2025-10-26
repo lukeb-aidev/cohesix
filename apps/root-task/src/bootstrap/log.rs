@@ -4,8 +4,8 @@
 use core::fmt::Write;
 use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
+use ::log::{Level, LevelFilter, Log, Metadata, Record};
 use heapless::String as HeaplessString;
-use log::{Level, LevelFilter, Log, Metadata, Record};
 
 use crate::sel4;
 
@@ -95,10 +95,10 @@ pub fn init_logger_bootstrap_only() {
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
         .is_ok()
     {
-        log::set_logger(&LOGGER).expect("bootstrap logger install must succeed");
+        ::log::set_logger(&LOGGER).expect("bootstrap logger install must succeed");
     }
     LOGGER.set_state(LoggerState::Debug);
-    log::set_max_level(LevelFilter::Info);
+    ::log::set_max_level(LevelFilter::Info);
 }
 
 pub fn switch_logger_to_userland() -> Result<(), Error> {

@@ -21,14 +21,14 @@ pub use untyped_pick::pick_untyped;
 #[macro_export]
 macro_rules! bp {
     ($name:expr) => {
-        log::info!(concat!("[boot] ", $name));
+        ::log::info!(concat!("[boot] ", $name));
     };
 }
 
 #[inline(always)]
 pub fn ktry(step: &str, rc: i32) -> Result<(), i32> {
     if rc != sel4_sys::seL4_NoError as i32 {
-        log::error!("[boot] {step}: seL4 err={rc}");
+        ::log::error!("[boot] {step}: seL4 err={rc}");
         return Err(rc);
     }
     Ok(())

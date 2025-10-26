@@ -36,6 +36,7 @@ mod imp {
 
     pub const seL4_MessageRegisterCount: usize = 4;
 
+    const SEL4_TCB_SET_IPC_BUFFER: seL4_Word = 9;
     const SEL4_TCB_SET_SPACE: seL4_Word = 10;
     const SEL4_TCB_SUSPEND: seL4_Word = 11;
     const SEL4_CNODE_DELETE: seL4_Word = 18;
@@ -493,6 +494,53 @@ mod imp {
     pub const seL4_SysCall: seL4_Word = !0usize; // -1 in two's complement
     pub const seL4_SysReplyRecv: seL4_Word = !1usize; // -2
     pub const seL4_SysSend: seL4_Word = !2usize; // -3
+    pub const seL4_SysNBRecv: seL4_Word = !7usize; // -8
+
+    #[inline(always)]
+    pub unsafe fn seL4_Poll(dest: seL4_CPtr, sender_badge: *mut seL4_Word) -> seL4_MessageInfo {
+        let mut badge_out = 0usize;
+        let mut info_out = 0usize;
+
+        let mut mr0 = MaybeUninit::<seL4_Word>::new(0);
+        let mut mr1 = MaybeUninit::<seL4_Word>::new(0);
+        let mut mr2 = MaybeUninit::<seL4_Word>::new(0);
+        let mut mr3 = MaybeUninit::<seL4_Word>::new(0);
+
+        arm_sys_send_recv(
+            seL4_SysNBRecv,
+            dest,
+            &mut badge_out,
+            0,
+            &mut info_out,
+            mr0.as_mut_ptr(),
+            mr1.as_mut_ptr(),
+            mr2.as_mut_ptr(),
+            mr3.as_mut_ptr(),
+            0,
+        );
+
+        if !sender_badge.is_null() {
+            *sender_badge = badge_out;
+        }
+
+        let info = seL4_MessageInfo { words: [info_out] };
+        let length = info.length();
+
+        if length > 0 {
+            seL4_SetMR(0, mr0.assume_init());
+        }
+        if length > 1 {
+            seL4_SetMR(1, mr1.assume_init());
+        }
+        if length > 2 {
+            seL4_SetMR(2, mr2.assume_init());
+        }
+        if length > 3 {
+            seL4_SetMR(3, mr3.assume_init());
+        }
+
+        info
+    }
 
     #[inline(always)]
     pub unsafe fn seL4_Send(dest: seL4_CPtr, msg_info: seL4_MessageInfo) {
@@ -634,6 +682,25 @@ mod imp {
         seL4_SetCap(0, vspace);
 
         let info = seL4_CallWithMRs(service, msg, &mut mr0, &mut mr1, &mut mr2, ptr::null_mut());
+
+        info.label() as seL4_Error
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_TCB_SetIPCBuffer(
+        service: seL4_TCB,
+        buffer: seL4_Word,
+        buffer_frame: seL4_CPtr,
+    ) -> seL4_Error {
+        let msg = seL4_MessageInfo::new(SEL4_TCB_SET_IPC_BUFFER, 0, 1, 1);
+        let mut mr0 = buffer;
+        let mut mr1 = 0usize;
+        let mut mr2 = 0usize;
+        let mut mr3 = 0usize;
+
+        seL4_SetCap(0, buffer_frame);
+
+        let info = seL4_CallWithMRs(service, msg, &mut mr0, &mut mr1, &mut mr2, &mut mr3);
 
         info.label() as seL4_Error
     }
@@ -877,6 +944,9 @@ mod host_stub {
     pub struct seL4_CNode_CapData;
 
     #[derive(Clone, Copy)]
+    pub struct seL4_IPCBuffer;
+
+    #[derive(Clone, Copy)]
     pub struct seL4_ARM_VMAttributes(pub seL4_Word);
 
     pub type seL4_CapData_t = seL4_CNode_CapData;
@@ -977,6 +1047,11 @@ mod host_stub {
     }
 
     #[inline(always)]
+    pub unsafe fn seL4_SetIPCBuffer(_ptr: *mut seL4_IPCBuffer) {
+        unsupported();
+    }
+
+    #[inline(always)]
     pub unsafe fn seL4_GetBootInfo() -> *const seL4_BootInfo {
         unsupported();
     }
@@ -993,6 +1068,20 @@ mod host_stub {
 
     #[inline(always)]
     pub unsafe fn seL4_GetCap(_slot: usize) -> seL4_CPtr {
+        unsupported();
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_Poll(_dest: seL4_CPtr, _sender_badge: *mut seL4_Word) -> seL4_MessageInfo {
+        unsupported();
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_TCB_SetIPCBuffer(
+        _service: seL4_TCB,
+        _buffer: seL4_Word,
+        _buffer_frame: seL4_CPtr,
+    ) -> seL4_Error {
         unsupported();
     }
 
