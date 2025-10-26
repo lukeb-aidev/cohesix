@@ -75,7 +75,16 @@ pub fn preflight_init_cnode_writable(probe_slot: sys::seL4_CPtr) -> sys::seL4_Er
     {
         let depth = u8::try_from(bits).expect("initThreadCNodeSizeBits must fit in u8");
         let err = unsafe {
-            sys::seL4_CNode_Mint(root, probe_slot, depth, root, 0, 0, sel4::seL4_AllRights, 0)
+            sys::seL4_CNode_Mint(
+                root,
+                probe_slot,
+                depth,
+                root,
+                0,
+                0,
+                sel4::seL4_CapRights_All,
+                0,
+            )
         };
         if err != sys::seL4_NoError {
             log::error!(

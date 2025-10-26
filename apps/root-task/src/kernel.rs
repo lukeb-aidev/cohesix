@@ -23,8 +23,8 @@ use crate::hal::{HalError, Hardware, KernelHal};
 use crate::net::{NetStack, CONSOLE_TCP_PORT};
 use crate::platform::{Platform, SeL4Platform};
 use crate::sel4::{
-    self, bootinfo_debug_dump, error_name, root_endpoint, BootInfo, BootInfoExt, KernelEnv,
-    RetypeKind, RetypeStatus,
+    bootinfo_debug_dump, error_name, root_endpoint, BootInfo, BootInfoExt, KernelEnv, RetypeKind,
+    RetypeStatus,
 };
 use crate::serial::{
     pl011::Pl011, SerialPort, DEFAULT_LINE_CAPACITY, DEFAULT_RX_CAPACITY, DEFAULT_TX_CAPACITY,
