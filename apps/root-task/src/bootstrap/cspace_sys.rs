@@ -434,11 +434,6 @@ pub fn untyped_retype_into_init_cnode(
     {
         let bootinfo = bootinfo();
         let init_bits = bootinfo.initThreadCNodeSizeBits as u8;
-        assert_eq!(
-            depth_bits, init_bits,
-            "retype depth {} does not match initThreadCNodeSizeBits {}",
-            depth_bits, init_bits
-        );
         let empty_start = bootinfo.empty.start as sys::seL4_CPtr;
         let empty_end = bootinfo.empty.end as sys::seL4_CPtr;
         assert!(
@@ -448,14 +443,25 @@ pub fn untyped_retype_into_init_cnode(
             lo = empty_start,
             hi = empty_end,
         );
-        check_slot_in_range(depth_bits, dst_slot);
-        let (root, node_index, node_depth, node_offset) = retype_dest_init_cnode(dst_slot);
+        check_slot_in_range(init_bits, dst_slot);
+        let (root, node_index, node_depth, node_offset) = if depth_bits == 0 {
+            retype_dest_init_cnode(dst_slot)
+        } else {
+            assert_eq!(
+                depth_bits, init_bits,
+                "retype depth {} does not match initThreadCNodeSizeBits {}",
+                depth_bits, init_bits
+            );
+            init_cnode_dest(dst_slot)
+        };
         log::info!(
-            "Retype DEST(root=0x{root:04x}, idx={idx}, depth={depth}, off=0x{off:04x})",
+            "Retype DEST: root=0x{root:x} idx={idx} depth={depth} off=0x{off:x} obj={obj_type} sz={size_bits}",
             root = root,
             idx = node_index,
             depth = node_depth,
             off = node_offset,
+            obj_type = obj_type,
+            size_bits = size_bits,
         );
         log_destination("Untyped_Retype", node_index, node_depth, node_offset);
         let err = unsafe {
@@ -477,9 +483,24 @@ pub fn untyped_retype_into_init_cnode(
     #[cfg(not(target_os = "none"))]
     {
         let init_root = bootinfo_init_cnode_cptr();
-        let node_index = 0;
-        let node_depth = 0;
-        let node_offset = dst_slot as sys::seL4_Word;
+        let (node_index, node_depth, node_offset) = if depth_bits == 0 {
+            (0, 0, dst_slot as sys::seL4_Word)
+        } else {
+            (
+                dst_slot as sys::seL4_Word,
+                encode_cnode_depth(depth_bits),
+                0,
+            )
+        };
+        log::info!(
+            "Retype DEST: root=0x{root:x} idx={idx} depth={depth} off=0x{off:x} obj={obj_type} sz={size_bits}",
+            root = init_root,
+            idx = node_index,
+            depth = node_depth,
+            off = node_offset,
+            obj_type = obj_type,
+            size_bits = size_bits,
+        );
         host_trace::record(host_trace::HostRetypeTrace {
             root: init_root,
             node_index,
@@ -505,19 +526,25 @@ pub fn untyped_retype_into_cnode(
         let init_root = bootinfo_init_cnode_cptr();
         if dest_root == init_root {
             let expected_bits = bootinfo().initThreadCNodeSizeBits as u8;
-            assert_eq!(
-                depth_bits, expected_bits,
-                "init CNode retypes must honour initThreadCNodeSizeBits (provided={} expected={})",
-                depth_bits, expected_bits
-            );
-            check_slot_in_range(depth_bits, dst_slot);
-            let (root, node_index, node_depth, node_offset) = retype_dest_init_cnode(dst_slot);
+            check_slot_in_range(expected_bits, dst_slot);
+            let (root, node_index, node_depth, node_offset) = if depth_bits == 0 {
+                retype_dest_init_cnode(dst_slot)
+            } else {
+                assert_eq!(
+                    depth_bits, expected_bits,
+                    "init CNode retypes must honour initThreadCNodeSizeBits (provided={} expected={})",
+                    depth_bits, expected_bits
+                );
+                init_cnode_dest(dst_slot)
+            };
             log::info!(
-                "Retype DEST(root=0x{root:04x}, idx={idx}, depth={depth}, off=0x{off:04x})",
+                "Retype DEST: root=0x{root:x} idx={idx} depth={depth} off=0x{off:x} obj={obj_type} sz={size_bits}",
                 root = root,
                 idx = node_index,
                 depth = node_depth,
                 off = node_offset,
+                obj_type = obj_type,
+                size_bits = size_bits,
             );
             log_destination("Untyped_Retype", node_index, node_depth, node_offset);
             let err = unsafe {
@@ -556,25 +583,38 @@ pub fn untyped_retype_into_cnode(
     #[cfg(not(target_os = "none"))]
     {
         let init_root = bootinfo_init_cnode_cptr();
-        let depth = if dest_root == init_root {
-            0
+        let (node_index, node_depth, node_offset) = if dest_root == init_root {
+            if depth_bits == 0 {
+                (0, 0, dst_slot as sys::seL4_Word)
+            } else {
+                (
+                    dst_slot as sys::seL4_Word,
+                    encode_cnode_depth(depth_bits),
+                    0,
+                )
+            }
         } else {
-            encode_cnode_depth(depth_bits)
+            (
+                dst_slot as sys::seL4_Word,
+                encode_cnode_depth(depth_bits),
+                0,
+            )
         };
-        let node_index = if dest_root == init_root {
-            0
-        } else {
-            dst_slot as sys::seL4_Word
-        };
-        let node_offset = if dest_root == init_root {
-            dst_slot as sys::seL4_Word
-        } else {
-            0
-        };
+        if dest_root == init_root {
+            log::info!(
+                "Retype DEST: root=0x{root:x} idx={idx} depth={depth} off=0x{off:x} obj={obj_type} sz={size_bits}",
+                root = dest_root,
+                idx = node_index,
+                depth = node_depth,
+                off = node_offset,
+                obj_type = obj_type,
+                size_bits = size_bits,
+            );
+        }
         host_trace::record(host_trace::HostRetypeTrace {
             root: dest_root,
             node_index,
-            node_depth: depth,
+            node_depth,
             node_offset,
         });
         let _ = (untyped_slot, obj_type, size_bits);
