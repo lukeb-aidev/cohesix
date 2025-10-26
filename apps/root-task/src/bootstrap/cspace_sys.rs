@@ -3,7 +3,10 @@
 
 use crate::boot;
 use crate::sel4 as sys;
+use core::convert::TryFrom;
 use sel4_sys;
+
+pub const CANONICAL_CNODE_DEPTH_BITS: u8 = sel4_sys::seL4_WordBits as u8;
 
 #[inline(always)]
 fn bootinfo() -> &'static sel4_sys::seL4_BootInfo {
@@ -72,7 +75,13 @@ pub fn init_cnode_dest(
 #[inline(always)]
 fn log_destination(op: &str, idx: sys::seL4_Word, depth: sys::seL4_Word, offset: sys::seL4_Word) {
     if boot::flags::trace_dest() {
-        log::info!("DEST → root=initCNode idx=0x{idx:04x} depth={depth} (initBits) off={offset}",);
+        log::info!(
+            "DEST → op={op} root=initCNode idx=0x{idx:04x} depth={depth} (initBits) off={offset}",
+            op = op,
+            idx = idx,
+            depth = depth,
+            offset = offset,
+        );
     }
 }
 
@@ -178,15 +187,17 @@ pub fn cnode_copy_direct_dest(
         debug_assert_eq!(depth_bits as sys::seL4_Word, init_cnode_bits_word());
         check_slot_in_range(depth_bits, dst_slot);
         let (root, node_index, node_depth, node_offset) = init_cnode_dest(dst_slot);
+        let node_depth_bits = u8::try_from(node_depth)
+            .expect("init thread CNode depth exceeds architectural word size");
         log_destination("CNode_Copy", node_index, node_depth, node_offset);
         let err = unsafe {
             sys::seL4_CNode_Copy(
                 root,
                 node_index,
-                node_depth,
+                node_depth_bits,
                 src_root,
                 src_index as sys::seL4_Word,
-                src_depth_bits as sys::seL4_Word,
+                src_depth_bits,
                 rights,
             )
         };
@@ -224,15 +235,17 @@ pub fn cnode_mint_direct_dest(
         debug_assert_eq!(depth_bits as sys::seL4_Word, init_cnode_bits_word());
         check_slot_in_range(depth_bits, dst_slot);
         let (root, node_index, node_depth, node_offset) = init_cnode_dest(dst_slot);
+        let node_depth_bits = u8::try_from(node_depth)
+            .expect("init thread CNode depth exceeds architectural word size");
         log_destination("CNode_Mint", node_index, node_depth, node_offset);
         let err = unsafe {
             sys::seL4_CNode_Mint(
                 root,
                 node_index,
-                node_depth,
+                node_depth_bits,
                 src_root,
                 src_index as sys::seL4_Word,
-                src_depth_bits as sys::seL4_Word,
+                src_depth_bits,
                 rights,
                 badge,
             )
@@ -269,15 +282,17 @@ pub fn cnode_move_direct_dest(
         debug_assert_eq!(depth_bits as sys::seL4_Word, init_cnode_bits_word());
         check_slot_in_range(depth_bits, dst_slot);
         let (root, node_index, node_depth, node_offset) = init_cnode_dest(dst_slot);
+        let node_depth_bits = u8::try_from(node_depth)
+            .expect("init thread CNode depth exceeds architectural word size");
         log_destination("CNode_Move", node_index, node_depth, node_offset);
         let err = unsafe {
             sys::seL4_CNode_Move(
                 root,
                 node_index,
-                node_depth,
+                node_depth_bits,
                 src_root,
                 src_index as sys::seL4_Word,
-                src_depth_bits as sys::seL4_Word,
+                src_depth_bits,
             )
         };
         log_syscall_result("CNode_Move", err);

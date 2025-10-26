@@ -1,7 +1,7 @@
 // Author: Lukas Bower
 #![allow(unsafe_code)]
 
-use core::{convert::TryFrom, fmt::Write};
+use core::fmt::Write;
 
 use crate::sel4;
 use crate::trace::{dec_u32, hex_u64, DebugPutc};
