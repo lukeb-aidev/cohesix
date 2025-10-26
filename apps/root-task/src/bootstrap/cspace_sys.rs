@@ -150,42 +150,6 @@ pub fn init_cnode_dest(
     (bi_init_cnode_cptr(), slot as sys::seL4_Word, init_bits, 0)
 }
 
-#[inline(always)]
-pub fn retype_dest_init_cnode(
-    slot: sys::seL4_CPtr,
-) -> (
-    sel4_sys::seL4_CNode,
-    sys::seL4_Word,
-    sys::seL4_Word,
-    sys::seL4_Word,
-) {
-    let init_bits = bi_init_cnode_bits();
-    let capacity = if init_bits as usize >= usize::BITS as usize {
-        usize::MAX
-    } else {
-        1usize << (init_bits as usize)
-    };
-    debug_assert!(
-        (slot as usize) < capacity,
-        "slot 0x{slot:04x} exceeds init CNode capacity (limit=0x{capacity:04x})",
-    );
-
-    let root = bi_init_cnode_cptr();
-    debug_assert_ne!(root, sys::seL4_CapNull, "init CNode root must be writable");
-
-    #[cfg(all(debug_assertions, feature = "sel4_debug"))]
-    {
-        let ty = unsafe { sel4_sys::seL4_DebugCapIdentify(root) };
-        debug_assert_eq!(
-            ty,
-            sel4_sys::seL4_ObjectType::seL4_CapTableObject as sys::seL4_Word,
-            "bootinfo init CNode root 0x{root:04x} is not a CNode (ty={ty})",
-        );
-    }
-
-    (root, 0, 0, slot as sys::seL4_Word)
-}
-
 #[cfg(target_os = "none")]
 #[inline(always)]
 fn log_destination(op: &str, idx: sys::seL4_Word, depth: sys::seL4_Word, offset: sys::seL4_Word) {
@@ -445,6 +409,7 @@ pub fn untyped_retype_into_init_root(
 ) -> sys::seL4_Error {
     let init_bits = bi_init_cnode_bits() as u8;
     check_slot_in_range(init_bits, dst_slot);
+
     #[cfg(target_os = "none")]
     {
         let bootinfo = bi();
@@ -458,12 +423,15 @@ pub fn untyped_retype_into_init_root(
             hi = empty_end,
         );
     }
+
     let root = bi_init_cnode_cptr();
     unsafe { assert_dest_is_cnode(root) };
     debug_assert_ne!(root, sys::seL4_CapNull, "init CNode root must be writable");
+
     let node_index = 0;
     let node_depth = 0;
     let node_offset = dst_slot as sys::seL4_Word;
+
     log::info!(
         "Retype DEST(root=0x{root:x} idx={idx} depth={depth} off=0x{off:x} obj={obj_type} sz={size_bits})",
         root = root,
@@ -473,10 +441,11 @@ pub fn untyped_retype_into_init_root(
         obj_type = obj_type,
         size_bits = size_bits,
     );
+
     #[cfg(target_os = "none")]
     {
         log_destination("Untyped_Retype", node_index, node_depth, node_offset);
-        let err = unsafe {
+        let mut err = unsafe {
             sys::seL4_Untyped_Retype(
                 untyped_slot,
                 obj_type,
@@ -488,9 +457,35 @@ pub fn untyped_retype_into_init_root(
                 1,
             )
         };
+
+        if err != sys::seL4_NoError {
+            let fallback_index = root as sys::seL4_Word;
+            let fallback_depth = sel4_sys::seL4_WordBits as sys::seL4_Word;
+            log::warn!(
+                "Retype depth0 failed {err} — trying guard form (idx=0x{idx:04x}, depth={depth}, off=0x{off:04x})",
+                err = err,
+                idx = fallback_index,
+                depth = fallback_depth,
+                off = node_offset,
+            );
+            err = unsafe {
+                sys::seL4_Untyped_Retype(
+                    untyped_slot,
+                    obj_type,
+                    size_bits,
+                    root,
+                    fallback_index,
+                    fallback_depth,
+                    node_offset,
+                    1,
+                )
+            };
+        }
+
         log_syscall_result("Untyped_Retype", err);
         err
     }
+
     #[cfg(not(target_os = "none"))]
     {
         host_trace::record(host_trace::HostRetypeTrace {
@@ -505,21 +500,6 @@ pub fn untyped_retype_into_init_root(
 }
 
 #[inline(always)]
-pub fn untyped_retype_into_init_cnode(
-    depth_bits: u8,
-    untyped_slot: sys::seL4_CPtr,
-    obj_type: sys::seL4_Word,
-    size_bits: sys::seL4_Word,
-    dst_slot: sys::seL4_CPtr,
-) -> sys::seL4_Error {
-    debug_assert_eq!(
-        depth_bits, 0,
-        "init-root retype depth must use canonical depth-zero encoding"
-    );
-    untyped_retype_into_init_root(untyped_slot, obj_type, size_bits, dst_slot)
-}
-
-#[inline(always)]
 pub fn untyped_retype_into_cnode(
     dest_root: sys::seL4_CNode,
     depth_bits: u8,
@@ -528,103 +508,37 @@ pub fn untyped_retype_into_cnode(
     size_bits: sys::seL4_Word,
     dst_slot: sys::seL4_CPtr,
 ) -> sys::seL4_Error {
+    let init_root = bi_init_cnode_cptr();
+    if dest_root == init_root {
+        return untyped_retype_into_init_root(untyped_slot, obj_type, size_bits, dst_slot);
+    }
+
     #[cfg(target_os = "none")]
     {
-        let init_root = bi_init_cnode_cptr();
-        if dest_root == init_root {
-            unsafe { assert_dest_is_cnode(dest_root) };
-            let expected_bits = bi().initThreadCNodeSizeBits as u8;
-            check_slot_in_range(expected_bits, dst_slot);
-            let (root, node_index, node_depth, node_offset) = if depth_bits == 0 {
-                retype_dest_init_cnode(dst_slot)
-            } else {
-                assert_eq!(
-                    depth_bits, expected_bits,
-                    "init CNode retypes must honour initThreadCNodeSizeBits (provided={} expected={})",
-                    depth_bits, expected_bits
-                );
-                init_cnode_dest(dst_slot)
-            };
-            log::info!(
-                "Retype DEST(root=0x{root:x} idx={idx} depth={depth} off=0x{off:x} obj={obj_type} sz={size_bits})",
-                root = root,
-                idx = node_index,
-                depth = node_depth,
-                off = node_offset,
-                obj_type = obj_type,
-                size_bits = size_bits,
-            );
-            log_destination("Untyped_Retype", node_index, node_depth, node_offset);
-            let err = unsafe {
-                sys::seL4_Untyped_Retype(
-                    untyped_slot,
-                    obj_type,
-                    size_bits,
-                    root,
-                    node_index,
-                    node_depth,
-                    node_offset,
-                    1,
-                )
-            };
-            log_syscall_result("Untyped_Retype", err);
-            err
-        } else {
-            let node_depth = encode_cnode_depth(depth_bits);
-            let err = unsafe {
-                sys::seL4_Untyped_Retype(
-                    untyped_slot,
-                    obj_type,
-                    size_bits,
-                    dest_root,
-                    dst_slot as sys::seL4_Word,
-                    node_depth,
-                    0,
-                    1,
-                )
-            };
-            log_syscall_result("Untyped_Retype", err);
-            err
-        }
+        let node_depth = encode_cnode_depth(depth_bits);
+        let err = unsafe {
+            sys::seL4_Untyped_Retype(
+                untyped_slot,
+                obj_type,
+                size_bits,
+                dest_root,
+                dst_slot as sys::seL4_Word,
+                node_depth,
+                0,
+                1,
+            )
+        };
+        log_syscall_result("Untyped_Retype", err);
+        err
     }
 
     #[cfg(not(target_os = "none"))]
     {
-        let init_root = bi_init_cnode_cptr();
-        let (node_index, node_depth, node_offset) = if dest_root == init_root {
-            unsafe { assert_dest_is_cnode(dest_root) };
-            if depth_bits == 0 {
-                (0, 0, dst_slot as sys::seL4_Word)
-            } else {
-                (
-                    dst_slot as sys::seL4_Word,
-                    encode_cnode_depth(depth_bits),
-                    0,
-                )
-            }
-        } else {
-            (
-                dst_slot as sys::seL4_Word,
-                encode_cnode_depth(depth_bits),
-                0,
-            )
-        };
-        if dest_root == init_root {
-            log::info!(
-                "Retype DEST(root=0x{root:x} idx={idx} depth={depth} off=0x{off:x} obj={obj_type} sz={size_bits})",
-                root = dest_root,
-                idx = node_index,
-                depth = node_depth,
-                off = node_offset,
-                obj_type = obj_type,
-                size_bits = size_bits,
-            );
-        }
         host_trace::record(host_trace::HostRetypeTrace {
             root: dest_root,
-            node_index,
-            node_depth,
-            node_offset,
+            node_index: dst_slot as sys::seL4_Word,
+            node_depth: encode_cnode_depth(depth_bits),
+            node_offset: 0,
         });
         let _ = (untyped_slot, obj_type, size_bits);
         sys::seL4_NoError
@@ -662,7 +576,7 @@ pub fn init_cnode_direct_destination_words_for_test(
 mod tests {
     use super::{
         bi_init_cnode_cptr, init_cnode_dest, init_cnode_direct_destination_words_for_test,
-        retype_dest_init_cnode,
+        untyped_retype_into_init_root,
     };
 
     #[test]
@@ -682,7 +596,7 @@ mod tests {
     }
 
     #[test]
-    fn retype_dest_selects_root_cnode_slot_directly() {
+    fn retype_into_init_root_uses_canonical_tuple() {
         #[cfg(not(target_os = "none"))]
         unsafe {
             let mut bootinfo: sel4_sys::seL4_BootInfo = core::mem::zeroed();
@@ -691,11 +605,23 @@ mod tests {
         }
 
         let slot = 0x00a6u64;
-        let (root, idx, depth, off) = retype_dest_init_cnode(slot as _);
-        assert_eq!(root, bi_init_cnode_cptr());
-        assert_eq!(idx, 0);
-        assert_eq!(depth, 0);
-        assert_eq!(off, slot as _);
+        #[cfg(not(target_os = "none"))]
+        while super::host_trace::take_last().is_some() {}
+
+        let err = untyped_retype_into_init_root(0, 0, 0, slot as _);
+        assert_eq!(err, sel4_sys::seL4_NoError);
+
+        #[cfg(not(target_os = "none"))]
+        {
+            if let Some(trace) = super::host_trace::take_last() {
+                assert_eq!(trace.root, bi_init_cnode_cptr());
+                assert_eq!(trace.node_index, 0);
+                assert_eq!(trace.node_depth, 0);
+                assert_eq!(trace.node_offset, slot as _);
+            } else {
+                panic!("expected host trace for init-root retype");
+            }
+        }
     }
 
     #[test]
