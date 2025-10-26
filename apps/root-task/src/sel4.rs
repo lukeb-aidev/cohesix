@@ -13,6 +13,8 @@ use core::{
 };
 
 use crate::bootstrap::cspace_sys;
+#[cfg(feature = "kernel")]
+use crate::bootstrap::ktry;
 use crate::serial;
 use heapless::Vec;
 pub use sel4_sys::{
@@ -438,6 +440,38 @@ pub fn cnode_mint_depth(
             dest_root, dest_index, dest_depth, src_root, src_index, src_depth, rights, badge,
         );
         seL4_NoError
+    }
+}
+
+/// Issues a checked `seL4_CNode_Mint`, logging any non-zero return code.
+#[cfg(feature = "kernel")]
+#[inline(always)]
+pub fn cnode_mint_checked(
+    dest_root: seL4_CNode,
+    dest_index: seL4_CPtr,
+    dest_depth: u8,
+    src_root: seL4_CNode,
+    src_index: seL4_CPtr,
+    src_depth: u8,
+    rights: sel4_sys::seL4_CapRights,
+    badge: seL4_Word,
+) -> Result<(), i32> {
+    #[cfg(target_os = "none")]
+    {
+        let rc = unsafe {
+            seL4_CNode_Mint(
+                dest_root, dest_index, dest_depth, src_root, src_index, src_depth, rights, badge,
+            )
+        };
+        ktry("cnode.mint", rc as i32)
+    }
+
+    #[cfg(not(target_os = "none"))]
+    {
+        let _ = (
+            dest_root, dest_index, dest_depth, src_root, src_index, src_depth, rights, badge,
+        );
+        Ok(())
     }
 }
 
@@ -1097,6 +1131,7 @@ pub struct KernelEnv<'a> {
     device_cursor: usize,
     dma_cursor: usize,
     last_retype: Option<RetypeLog>,
+    ipcbuf_trace: bool,
 }
 
 /// Diagnostic snapshot capturing resource utilisation within the [`KernelEnv`].
@@ -1372,6 +1407,7 @@ impl<'a> KernelEnv<'a> {
             device_cursor: DEVICE_VADDR_BASE,
             dma_cursor: DMA_VADDR_BASE,
             last_retype: None,
+            ipcbuf_trace: false,
         }
     }
 
@@ -1511,12 +1547,15 @@ impl<'a> KernelEnv<'a> {
             "IPC buffer pointer must be aligned to the page size"
         );
 
-        self.map_frame(
+        self.ipcbuf_trace = true;
+        let res = self.map_frame(
             seL4_CapInitThreadIPCBuffer,
             vaddr,
             seL4_ARM_Page_Default,
             true,
-        )
+        );
+        self.ipcbuf_trace = false;
+        res
     }
 
     /// Allocates a DMA-capable frame of RAM and maps it into the DMA window.
@@ -1749,6 +1788,10 @@ impl<'a> KernelEnv<'a> {
         strict: bool,
     ) -> Result<(), seL4_Error> {
         self.ensure_page_table(vaddr, strict)?;
+        if self.ipcbuf_trace {
+            crate::bp!("ipcbuf.page.retype.ok");
+            crate::bp!("ipcbuf.page.map.begin");
+        }
         let result = unsafe {
             seL4_ARM_Page_Map(
                 frame_cap,
@@ -1760,10 +1803,17 @@ impl<'a> KernelEnv<'a> {
         };
 
         if result == seL4_NoError {
+            if self.ipcbuf_trace {
+                crate::bp!("ipcbuf.page.map.ok");
+            }
             Ok(())
         } else if !strict && Self::mapping_already_present(result) {
+            if self.ipcbuf_trace {
+                crate::bp!("ipcbuf.page.map.ok");
+            }
             Ok(())
         } else {
+            let _ = crate::bootstrap::ktry("ipcbuf.page.map", result as i32);
             Err(result)
         }
     }
@@ -1804,6 +1854,9 @@ impl<'a> KernelEnv<'a> {
             return Err(err);
         }
         self.record_retype(trace, RetypeStatus::Ok);
+        if self.ipcbuf_trace {
+            crate::bp!("ipcbuf.pt.retype.ok");
+        }
 
         let map_res = unsafe {
             seL4_ARM_PageTable_Map(
@@ -1817,6 +1870,9 @@ impl<'a> KernelEnv<'a> {
             self.page_tables
                 .remember_base(pt_base)
                 .map_err(|_| seL4_NotEnoughMemory)?;
+            if self.ipcbuf_trace {
+                crate::bp!("ipcbuf.pt.map.ok");
+            }
             return Ok(());
         }
 
@@ -1834,10 +1890,14 @@ impl<'a> KernelEnv<'a> {
             self.page_tables
                 .remember_base(pt_base)
                 .map_err(|_| seL4_NotEnoughMemory)?;
+            if self.ipcbuf_trace {
+                crate::bp!("ipcbuf.pt.map.ok");
+            }
             return Ok(());
         }
 
         self.record_retype(trace, RetypeStatus::Err(map_res));
+        let _ = crate::bootstrap::ktry("ipcbuf.pt.map", map_res as i32);
         Err(map_res)
     }
 
