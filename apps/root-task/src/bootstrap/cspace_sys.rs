@@ -24,7 +24,7 @@ fn bi() -> &'static sys::seL4_BootInfo {
 #[cfg(target_os = "none")]
 #[inline(always)]
 pub fn bi_init_cnode_cptr() -> sys::seL4_CPtr {
-    let root = bi().initThreadCNode;
+    let root = sys::seL4_CapInitThreadCNode;
     debug_assert_ne!(root, sys::seL4_CapNull, "init CNode root must be non-null");
     root
 }
@@ -44,9 +44,9 @@ pub fn preflight_init_cnode_writable(probe_slot: sys::seL4_CPtr) -> sys::seL4_Er
         "initThreadCNodeSizeBits must be less than seL4_WordBits",
     );
     let capacity = 1usize << (bits as usize);
-    debug_assert!(probe_slot as usize < capacity);
+    debug_assert!((probe_slot as usize) < capacity);
 
-    #[cfg(all(debug_assertions, feature = "sel4_debug"))]
+    #[cfg(all(debug_assertions, feature = "sel4-debug"))]
     unsafe {
         let ty = sys::seL4_DebugCapIdentify(root);
         debug_assert_eq!(
@@ -60,7 +60,16 @@ pub fn preflight_init_cnode_writable(probe_slot: sys::seL4_CPtr) -> sys::seL4_Er
     {
         let depth = u8::try_from(bits).expect("initThreadCNodeSizeBits must fit in u8");
         let err = unsafe {
-            sys::seL4_CNode_Mint(root, probe_slot, depth, root, 0, 0, sys::seL4_AllRights, 0)
+            sys::seL4_CNode_Mint(
+                root,
+                probe_slot,
+                depth,
+                root,
+                0,
+                0,
+                sys::seL4_CapRights_All,
+                0,
+            )
         };
         if err != sys::seL4_NoError {
             return err;
@@ -93,7 +102,7 @@ fn bi() -> &'static sys::seL4_BootInfo {
 #[cfg(all(test, not(target_os = "none")))]
 #[inline(always)]
 fn bi_init_cnode_cptr() -> sys::seL4_CPtr {
-    bi().initThreadCNode
+    sys::seL4_CapInitThreadCNode
 }
 
 #[cfg(all(test, not(target_os = "none")))]
@@ -130,7 +139,6 @@ fn bi_init_cnode_bits() -> sys::seL4_Word {
     sys::seL4_WordBits as sys::seL4_Word
 }
 
-#[inline(always)]
 #[inline(always)]
 pub fn check_slot_in_range(init_cnode_bits: u8, slot: sys::seL4_CPtr) {
     let limit = if init_cnode_bits as usize >= usize::BITS as usize {
