@@ -12,6 +12,7 @@ use core::{
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
+use crate::bootstrap::cspace_sys;
 use crate::serial;
 use heapless::Vec;
 pub use sel4_sys::{
@@ -1594,17 +1595,26 @@ impl<'a> KernelEnv<'a> {
             );
         }
 
-        let res = unsafe {
-            seL4_Untyped_Retype(
-                untyped_cap,
+        let res = if trace.cnode_root == self.bootinfo.init_cnode_cap() {
+            cspace_sys::untyped_retype_into_init_root(
+                untyped_cap as seL4_CPtr,
                 trace.object_type,
                 trace.object_size_bits,
-                trace.cnode_root,
-                trace.node_index,
-                trace.cnode_depth,
-                trace.dest_offset,
-                1,
+                trace.dest_slot,
             )
+        } else {
+            unsafe {
+                seL4_Untyped_Retype(
+                    untyped_cap,
+                    trace.object_type,
+                    trace.object_size_bits,
+                    trace.cnode_root,
+                    trace.node_index,
+                    trace.cnode_depth,
+                    trace.dest_offset,
+                    1,
+                )
+            }
         };
 
         if res == seL4_NoError {
@@ -1630,17 +1640,26 @@ impl<'a> KernelEnv<'a> {
         let (trace, _init_bits) = self.sanitise_retype_trace(*trace);
         self.log_retype_invocation(&trace);
 
-        let res = unsafe {
-            seL4_Untyped_Retype(
-                untyped_cap,
+        let res = if trace.cnode_root == self.bootinfo.init_cnode_cap() {
+            cspace_sys::untyped_retype_into_init_root(
+                untyped_cap as seL4_CPtr,
                 trace.object_type,
                 trace.object_size_bits,
-                trace.cnode_root,
-                trace.node_index,
-                trace.cnode_depth,
-                trace.dest_offset,
-                1,
+                trace.dest_slot,
             )
+        } else {
+            unsafe {
+                seL4_Untyped_Retype(
+                    untyped_cap,
+                    trace.object_type,
+                    trace.object_size_bits,
+                    trace.cnode_root,
+                    trace.node_index,
+                    trace.cnode_depth,
+                    trace.dest_offset,
+                    1,
+                )
+            }
         };
 
         if res == seL4_NoError {
@@ -1965,7 +1984,7 @@ impl<'a> KernelEnv<'a> {
         // receive the new capability. Init-root retypes bypass guard-depth semantics entirely and
         // therefore rely on the canonical `(node_index = 0, node_depth = 0, dest_offset = slot)`
         // tuple so that the kernel addresses the slot directly within the root CNode.
-        let cnode_root = self.slots.root(); // seL4_CapInitThreadCNode
+        let cnode_root = self.bootinfo.init_cnode_cap();
         let node_index: seL4_Word = 0;
         let cnode_depth: seL4_Word = 0;
         let dest_offset: seL4_Word = slot as seL4_Word;
