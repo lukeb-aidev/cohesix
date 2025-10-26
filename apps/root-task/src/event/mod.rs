@@ -44,6 +44,25 @@ pub struct TickEvent {
     pub now_ms: u64,
 }
 
+#[cfg(feature = "kernel")]
+const MAX_BOOTSTRAP_WORDS: usize = sel4_sys::seL4_MessageRegisterCount;
+
+#[cfg(feature = "kernel")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BootstrapMessage {
+    pub badge: sel4_sys::seL4_Word,
+    pub info: sel4_sys::seL4_MessageInfo,
+    pub payload: HeaplessVec<sel4_sys::seL4_Word, { MAX_BOOTSTRAP_WORDS }>,
+}
+
+#[cfg(feature = "kernel")]
+impl BootstrapMessage {
+    /// Returns `true` when the staged payload contained no words.
+    pub fn payload_is_empty(&self) -> bool {
+        self.payload.is_empty()
+    }
+}
+
 /// Timer abstraction used by the event pump.
 pub trait TimerSource {
     /// Poll the timer for the next tick, if any.
@@ -54,6 +73,19 @@ pub trait TimerSource {
 pub trait IpcDispatcher {
     /// Service pending IPC messages.
     fn dispatch(&mut self, now_ms: u64);
+
+    #[cfg(feature = "kernel")]
+    /// Retrieve the next staged bootstrap message, if any.
+    fn take_bootstrap_message(&mut self) -> Option<BootstrapMessage> {
+        None
+    }
+}
+
+#[cfg(feature = "kernel")]
+/// Handler invoked when the pump observes a staged bootstrap IPC message.
+pub trait BootstrapMessageHandler {
+    /// Process the staged message once it has been drained from the dispatcher.
+    fn handle(&mut self, message: &BootstrapMessage, audit: &mut dyn AuditSink);
 }
 
 /// Capability validator consulted when privileged verbs execute.
@@ -223,6 +255,8 @@ where
     net: Option<&'a mut dyn NetPoller>,
     #[cfg(feature = "kernel")]
     ninedoor: Option<&'a mut dyn NineDoorHandler>,
+    #[cfg(feature = "kernel")]
+    bootstrap_handler: Option<&'a mut dyn BootstrapMessageHandler>,
 }
 
 impl<'a, D, T, I, V, const RX: usize, const TX: usize, const LINE: usize>
@@ -259,6 +293,8 @@ where
             net: None,
             #[cfg(feature = "kernel")]
             ninedoor: None,
+            #[cfg(feature = "kernel")]
+            bootstrap_handler: None,
         }
     }
 
@@ -274,6 +310,13 @@ where
     #[cfg(feature = "kernel")]
     pub fn with_ninedoor(mut self, handler: &'a mut dyn NineDoorHandler) -> Self {
         self.ninedoor = Some(handler);
+        self
+    }
+
+    #[cfg(feature = "kernel")]
+    /// Attach a bootstrap IPC handler that consumes staged messages.
+    pub fn with_bootstrap_handler(mut self, handler: &'a mut dyn BootstrapMessageHandler) -> Self {
+        self.bootstrap_handler = Some(handler);
         self
     }
 
@@ -312,6 +355,25 @@ where
         }
 
         self.ipc.dispatch(self.now_ms);
+        #[cfg(feature = "kernel")]
+        self.drain_bootstrap_ipc();
+    }
+
+    #[cfg(feature = "kernel")]
+    fn drain_bootstrap_ipc(&mut self) {
+        while let Some(message) = self.ipc.take_bootstrap_message() {
+            if let Some(handler) = self.bootstrap_handler.as_mut() {
+                handler.handle(&message, &mut *self.audit);
+            } else {
+                let summary = format_message(format_args!(
+                    "bootstrap-ipc: badge=0x{badge:016x} label=0x{label:08x} words={words}",
+                    badge = message.badge,
+                    label = message.info.words[0],
+                    words = message.payload.len(),
+                ));
+                self.audit.info(summary.as_str());
+            }
+        }
     }
 
     /// Retrieve a snapshot of the current pump metrics.
@@ -667,6 +729,37 @@ mod tests {
         fn dispatch(&mut self, _now_ms: u64) {}
     }
 
+    #[cfg(feature = "kernel")]
+    struct StubIpc {
+        dispatched: bool,
+        message: Option<BootstrapMessage>,
+    }
+
+    #[cfg(feature = "kernel")]
+    impl StubIpc {
+        fn new(message: BootstrapMessage) -> Self {
+            Self {
+                dispatched: false,
+                message: Some(message),
+            }
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    impl IpcDispatcher for StubIpc {
+        fn dispatch(&mut self, _now_ms: u64) {
+            self.dispatched = true;
+        }
+
+        fn take_bootstrap_message(&mut self) -> Option<BootstrapMessage> {
+            if self.dispatched {
+                self.message.take()
+            } else {
+                None
+            }
+        }
+    }
+
     struct AuditLog {
         entries: heapless::Vec<HeaplessString<64>, 32>,
         denials: heapless::Vec<HeaplessString<64>, 32>,
@@ -731,6 +824,65 @@ mod tests {
         drop(pump);
         assert!(audit.denials.iter().any(|line| line.contains("attach")));
         assert!(!audit.denials.is_empty());
+    }
+
+    #[cfg(feature = "kernel")]
+    struct CaptureBootstrap {
+        messages: heapless::Vec<BootstrapMessage, 4>,
+    }
+
+    #[cfg(feature = "kernel")]
+    impl CaptureBootstrap {
+        fn new() -> Self {
+            Self {
+                messages: heapless::Vec::new(),
+            }
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    impl BootstrapMessageHandler for CaptureBootstrap {
+        fn handle(&mut self, message: &BootstrapMessage, audit: &mut dyn AuditSink) {
+            let mut line = HeaplessString::<96>::new();
+            let _ = line.push_str("handler bootstrap badge=");
+            let _ = write!(line, "0x{:016x}", message.badge);
+            audit.info(line.as_str());
+            let _ = self.messages.push(message.clone());
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn bootstrap_handler_receives_staged_message() {
+        let driver = LoopbackSerial::<32>::new();
+        let serial = SerialPort::<_, 32, 32, 64>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 5 });
+
+        let mut payload: HeaplessVec<sel4_sys::seL4_Word, { MAX_BOOTSTRAP_WORDS }> =
+            HeaplessVec::new();
+        let _ = payload.push(0x1234);
+        let message = BootstrapMessage {
+            badge: 0xDEAD,
+            info: sel4_sys::seL4_MessageInfo::new(0xCA, 0, 0, 1),
+            payload,
+        };
+        let ipc = StubIpc::new(message.clone());
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "pass").unwrap();
+        let mut audit = AuditLog::new();
+        let handler = &mut CaptureBootstrap::new();
+        let mut pump =
+            EventPump::new(serial, timer, ipc, store, &mut audit).with_bootstrap_handler(handler);
+
+        pump.poll();
+
+        assert_eq!(handler.messages.len(), 1);
+        assert_eq!(handler.messages[0].badge, 0xDEAD);
+        assert_eq!(handler.messages[0].payload.as_slice(), &[0x1234]);
+        assert!(audit
+            .entries
+            .iter()
+            .any(|entry| entry.contains("handler bootstrap")));
     }
 
     #[test]

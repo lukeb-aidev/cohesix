@@ -17,7 +17,10 @@ use crate::bootstrap::{
 };
 use crate::console::Console;
 use crate::cspace::{cap_rights_read_write_grant, CSpace};
-use crate::event::{AuditSink, EventPump, IpcDispatcher, TickEvent, TicketTable, TimerSource};
+use crate::event::{
+    AuditSink, BootstrapMessage, BootstrapMessageHandler, EventPump, IpcDispatcher, TickEvent,
+    TicketTable, TimerSource,
+};
 use crate::hal::{HalError, Hardware, KernelHal};
 #[cfg(feature = "net-console")]
 use crate::net::{NetStack, CONSOLE_TCP_PORT};
@@ -866,10 +869,13 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
         }
         console.writeln_prefixed("initialising event pump");
         let mut audit = ConsoleAudit::new(&mut console);
+        #[cfg(feature = "kernel")]
+        let mut bootstrap_ipc = BootstrapIpcAudit::new();
         let mut pump = EventPump::new(serial, timer, ipc, tickets, &mut audit);
 
         #[cfg(feature = "kernel")]
         {
+            pump = pump.with_bootstrap_handler(&mut bootstrap_ipc);
             pump = pump.with_ninedoor(&mut ninedoor);
         }
 
@@ -966,6 +972,16 @@ impl StagedMessage {
     }
 }
 
+impl From<StagedMessage> for BootstrapMessage {
+    fn from(message: StagedMessage) -> Self {
+        Self {
+            badge: message.badge,
+            info: message.info,
+            payload: message.payload,
+        }
+    }
+}
+
 struct KernelIpc {
     endpoint: sel4_sys::seL4_CPtr,
     staged_bootstrap: Option<StagedMessage>,
@@ -1029,11 +1045,48 @@ impl IpcDispatcher for KernelIpc {
     fn dispatch(&mut self, now_ms: u64) {
         self.forward_staged(now_ms);
     }
+
+    fn take_bootstrap_message(&mut self) -> Option<BootstrapMessage> {
+        let staged = self.staged_bootstrap.take()?;
+        self.staged_forwarded = false;
+        Some(staged.into())
+    }
+}
+
+struct BootstrapIpcAudit;
+
+impl BootstrapIpcAudit {
+    fn new() -> Self {
+        Self
+    }
+}
+
+impl BootstrapMessageHandler for BootstrapIpcAudit {
+    fn handle(&mut self, message: &BootstrapMessage, audit: &mut dyn AuditSink) {
+        let mut summary = heapless::String::<128>::new();
+        let _ = write!(
+            summary,
+            "[ipc] bootstrap dispatch badge=0x{badge:016x} label=0x{label:08x} words={words}",
+            badge = message.badge,
+            label = message.info.words[0],
+            words = message.payload.len(),
+        );
+        audit.info(summary.as_str());
+
+        if !message.payload.is_empty() {
+            let mut payload_line = heapless::String::<192>::new();
+            let _ = payload_line.push_str("[ipc] bootstrap payload");
+            for (index, word) in message.payload.iter().enumerate() {
+                let _ = write!(payload_line, " w{index}=0x{word:016x}");
+            }
+            audit.info(payload_line.as_str());
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::StagedMessage;
+    use super::{KernelIpc, StagedMessage};
 
     #[test]
     fn staged_message_reports_empty() {
@@ -1047,6 +1100,24 @@ mod tests {
         let info = sel4_sys::seL4_MessageInfo::new(0x42, 0, 0, 2);
         let staged = StagedMessage::from_parts(info, 0x99, &[1, 2]);
         assert!(!staged.is_empty());
+    }
+
+    #[test]
+    fn kernel_ipc_drains_staged_message() {
+        let info = sel4_sys::seL4_MessageInfo::new(0x11, 0, 0, 2);
+        let staged = StagedMessage::from_parts(info, 0xAA, &[0xFE, 0xED]);
+
+        let mut ipc = KernelIpc::new(0x200);
+        ipc.staged_bootstrap = Some(staged);
+
+        ipc.dispatch(0);
+        let message = ipc
+            .take_bootstrap_message()
+            .expect("staged message should be drained");
+        assert_eq!(message.badge, 0xAA);
+        assert_eq!(message.info.words[0], info.words[0]);
+        assert_eq!(message.payload.as_slice(), &[0xFE, 0xED]);
+        assert!(ipc.take_bootstrap_message().is_none());
     }
 }
 
