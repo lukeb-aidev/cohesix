@@ -23,8 +23,8 @@ use crate::hal::{HalError, Hardware, KernelHal};
 use crate::net::{NetStack, CONSOLE_TCP_PORT};
 use crate::platform::{Platform, SeL4Platform};
 use crate::sel4::{
-    bootinfo_debug_dump, error_name, root_endpoint, BootInfo, BootInfoExt, KernelEnv, RetypeKind,
-    RetypeStatus,
+    self, bootinfo_debug_dump, error_name, root_endpoint, BootInfo, BootInfoExt, KernelEnv,
+    RetypeKind, RetypeStatus,
 };
 use crate::serial::{
     pl011::Pl011, SerialPort, DEFAULT_LINE_CAPACITY, DEFAULT_RX_CAPACITY, DEFAULT_TX_CAPACITY,
@@ -340,14 +340,7 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
         }
 
         if let Some(ipc_ptr) = ipc_buffer_ptr {
-            let err = sel4_sys::seL4_TCB_SetIPCBuffer(
-                sel4::seL4_CapInitThreadTCB,
-                ipc_ptr.as_ptr() as sel4::seL4_Word,
-                sel4::seL4_CapInitThreadIPCBuffer,
-            );
-            if err != sel4::seL4_NoError {
-                panic!("seL4_TCB_SetIPCBuffer failed: {}", error_name(err));
-            }
+            sel4_sys::seL4_SetIPCBuffer(ipc_ptr.as_ptr());
             let mut msg = heapless::String::<64>::new();
             let _ = write!(msg, "ipc buffer ptr=0x{:016x}", ipc_ptr.as_ptr() as usize);
             console.writeln_prefixed(msg.as_str());

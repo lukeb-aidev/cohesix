@@ -24,7 +24,7 @@ fn bi() -> &'static sys::seL4_BootInfo {
 #[cfg(target_os = "none")]
 #[inline(always)]
 pub fn bi_init_cnode_cptr() -> sys::seL4_CPtr {
-    let root = bi().initThreadCNode;
+    let root = sel4::seL4_CapInitThreadCNode;
     debug_assert_ne!(root, sys::seL4_CapNull, "init CNode root must be non-null");
     root
 }
@@ -102,7 +102,7 @@ fn bi() -> &'static sys::seL4_BootInfo {
 #[cfg(all(test, not(target_os = "none")))]
 #[inline(always)]
 fn bi_init_cnode_cptr() -> sys::seL4_CPtr {
-    bi().initThreadCNode
+    sel4::seL4_CapInitThreadCNode
 }
 
 #[cfg(all(test, not(target_os = "none")))]
