@@ -339,13 +339,7 @@ pub fn cnode_copy(
     let depth_bits = bootinfo.init_cnode_depth();
     unsafe {
         seL4_CNode_Copy(
-            dest_root,
-            dest_index,
-            depth_bits,
-            src_root,
-            src_index,
-            depth_bits,
-            rights,
+            dest_root, dest_index, depth_bits, src_root, src_index, depth_bits, rights,
         )
     }
 }
@@ -408,14 +402,7 @@ pub(crate) fn cnode_mint(
     let depth_bits = bootinfo.init_cnode_depth();
     unsafe {
         seL4_CNode_Mint(
-            dest_root,
-            dest_index,
-            depth_bits,
-            src_root,
-            src_index,
-            depth_bits,
-            rights,
-            badge,
+            dest_root, dest_index, depth_bits, src_root, src_index, depth_bits, rights, badge,
         )
     }
 }
@@ -1661,7 +1648,7 @@ impl<'a> KernelEnv<'a> {
         let max_slots = slot_limit;
 
         let init_cnode = self.bootinfo.init_cnode_cap();
-        let expected_depth: seL4_Word = self.root_guard_depth();
+        let expected_depth: seL4_Word = init_bits as seL4_Word;
         let expected_index: seL4_Word = trace.dest_slot as seL4_Word;
         let expected_offset: seL4_Word = 0;
         assert!(
@@ -1961,8 +1948,9 @@ impl<'a> KernelEnv<'a> {
         // Guard bits remain clear, so the offset parameter is zero: the pointer already names the
         // final slot in the root CNode.
         let cnode_root = self.slots.root(); // seL4_CapInitThreadCNode
+        let init_bits = self.bootinfo.init_cnode_bits() as seL4_Word;
         let node_index: seL4_Word = slot as seL4_Word;
-        let cnode_depth: seL4_Word = self.root_guard_depth();
+        let cnode_depth: seL4_Word = init_bits;
         let dest_offset: seL4_Word = 0;
         RetypeTrace {
             untyped_cap: reserved.cap(),
@@ -1981,12 +1969,12 @@ impl<'a> KernelEnv<'a> {
 
     fn log_retype_invocation(&self, trace: &RetypeTrace) {
         let init_cnode_cap = self.bootinfo.init_cnode_cap();
-        let depth_suffix =
-            if trace.cnode_root == init_cnode_cap && trace.cnode_depth == self.root_guard_depth() {
-                "(initBits)"
-            } else {
-                ""
-            };
+        let init_bits = self.bootinfo.init_cnode_bits() as seL4_Word;
+        let depth_suffix = if trace.cnode_root == init_cnode_cap && trace.cnode_depth == init_bits {
+            "(initBits)"
+        } else {
+            ""
+        };
 
         if trace.cnode_root == init_cnode_cap {
             log::trace!(
@@ -2019,7 +2007,7 @@ impl<'a> KernelEnv<'a> {
     fn record_retype(&mut self, trace: RetypeTrace, status: RetypeStatus) {
         let init_cnode_cap = self.bootinfo.init_cnode_cap();
         let init_bits = self.bootinfo.init_cnode_bits();
-        let expected_depth: seL4_Word = self.root_guard_depth();
+        let expected_depth: seL4_Word = init_bits as seL4_Word;
         let expected_index: seL4_Word = trace.dest_slot as seL4_Word;
         let expected_offset: seL4_Word = 0;
         let max_slots = 1usize.checked_shl(init_bits as u32).unwrap_or_else(|| {
@@ -2360,7 +2348,10 @@ mod tests {
         );
         let (sanitised, init_bits) = env.sanitise_retype_trace(trace);
         assert_eq!(init_bits, 13);
-        assert_eq!(sanitised.cnode_depth, env.root_guard_depth());
+        assert_eq!(
+            sanitised.cnode_depth,
+            env.bootinfo().init_cnode_bits() as seL4_Word
+        );
         assert_eq!(sanitised.node_index, slot as seL4_Word);
         assert_eq!(sanitised.dest_offset, 0);
     }
