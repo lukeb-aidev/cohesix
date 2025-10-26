@@ -48,12 +48,35 @@ pub struct TickEvent {
 const MAX_BOOTSTRAP_WORDS: usize = sel4_sys::seL4_MessageRegisterCount;
 
 #[cfg(feature = "kernel")]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct BootstrapMessage {
     pub badge: sel4_sys::seL4_Word,
     pub info: sel4_sys::seL4_MessageInfo,
     pub payload: HeaplessVec<sel4_sys::seL4_Word, { MAX_BOOTSTRAP_WORDS }>,
 }
+
+#[cfg(feature = "kernel")]
+impl fmt::Debug for BootstrapMessage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BootstrapMessage")
+            .field("badge", &self.badge)
+            .field("info_raw", &self.info.words)
+            .field("payload", &self.payload)
+            .finish()
+    }
+}
+
+#[cfg(feature = "kernel")]
+impl PartialEq for BootstrapMessage {
+    fn eq(&self, other: &Self) -> bool {
+        self.badge == other.badge
+            && self.info.words == other.info.words
+            && self.payload == other.payload
+    }
+}
+
+#[cfg(feature = "kernel")]
+impl Eq for BootstrapMessage {}
 
 #[cfg(feature = "kernel")]
 impl BootstrapMessage {
