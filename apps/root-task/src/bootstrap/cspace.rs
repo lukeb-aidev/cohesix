@@ -411,22 +411,19 @@ impl CSpaceCtx {
         size_bits: sel4::seL4_Word,
         dst_slot: sel4::seL4_CPtr,
     ) -> sel4::seL4_Error {
+        let first_free = self.first_free;
+        assert!(
+            dst_slot >= first_free,
+            "refusing to write below first_free (0x{first_free:04x})",
+        );
         self.assert_slot_available(dst_slot);
         self.debug_identify_destinations();
         let (err, root_cap, node_index, node_depth, node_offset, path_label) = match self.dest {
             DestCNode::Init => {
                 self.log_direct_init_path(dst_slot);
-                #[cfg(target_os = "none")]
-                let (_, node_index, node_depth, node_offset) =
-                    cspace_sys::init_cnode_dest(dst_slot);
-                #[cfg(not(target_os = "none"))]
-                let (node_index, node_depth, node_offset) =
-                    cspace_sys::init_cnode_direct_destination_words(self.init_cnode_bits, dst_slot);
-                #[cfg(not(target_os = "none"))]
-                debug_assert_eq!(
-                    (node_index, node_depth, node_offset),
-                    (0, 0, dst_slot as sel4::seL4_Word)
-                );
+                let node_index = 0;
+                let node_depth = 0;
+                let node_offset = dst_slot as sel4::seL4_Word;
 
                 (
                     cspace_sys::untyped_retype_into_init_root(untyped, obj_ty, size_bits, dst_slot),
