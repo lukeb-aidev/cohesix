@@ -6,11 +6,12 @@ extern crate alloc;
 
 use alloc::boxed::Box;
 use core::cmp;
+use core::convert::Infallible;
 use core::fmt::{self, Write};
 use core::panic::PanicInfo;
 #[cfg(all(feature = "kernel", not(sel4_config_printing)))]
 use core::ptr;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicU8, Ordering};
 
 use cohesix_ticket::Role;
 
@@ -265,28 +266,95 @@ pub fn start_console(uart: Pl011) -> ! {
     }
 }
 
-static BOOTSTRAP_ONCE: AtomicBool = AtomicBool::new(false);
+#[derive(Debug, PartialEq, Eq)]
+enum BootState {
+    Cold = 0,
+    Booting = 1,
+    Booted = 2,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum BootError {
+    AlreadyBooted,
+}
+
+impl fmt::Display for BootError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::AlreadyBooted => f.write_str("bootstrap already invoked"),
+        }
+    }
+}
+
+struct BootStateGuard {
+    committed: bool,
+}
+
+static BOOT_STATE: AtomicU8 = AtomicU8::new(BootState::Cold as u8);
+
+impl BootStateGuard {
+    fn acquire() -> Result<Self, BootError> {
+        match BOOT_STATE.compare_exchange(
+            BootState::Cold as u8,
+            BootState::Booting as u8,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => Ok(Self { committed: false }),
+            Err(state) if state == BootState::Booting as u8 || state == BootState::Booted as u8 => {
+                log::error!("[boot] bootstrap called twice; refusing re-entry");
+                Err(BootError::AlreadyBooted)
+            }
+            Err(_) => unreachable!("invalid bootstrap state transition"),
+        }
+    }
+
+    fn commit(&mut self) {
+        BOOT_STATE.store(BootState::Booted as u8, Ordering::Release);
+        self.committed = true;
+    }
+}
+
+impl Drop for BootStateGuard {
+    fn drop(&mut self) {
+        if !self.committed {
+            BOOT_STATE.store(BootState::Cold as u8, Ordering::Release);
+        }
+    }
+}
 
 /// Root task entry point invoked by seL4 after kernel initialisation.
 pub fn start<P: Platform>(bootinfo: &'static BootInfo, platform: &P) -> ! {
-    bootstrap(platform, bootinfo)
+    match bootstrap(platform, bootinfo) {
+        Ok(never) => match never {},
+        Err(err) => {
+            log::error!("[boot] failed to enter bootstrap runtime: {err}");
+            #[cfg(feature = "kernel")]
+            crate::sel4::debug_halt();
+            loop {
+                core::hint::spin_loop();
+            }
+        }
+    }
 }
 
-fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
+fn bootstrap<P: Platform>(
+    platform: &P,
+    bootinfo: &'static BootInfo,
+) -> Result<Infallible, BootError> {
     #[cfg(all(feature = "kernel", not(sel4_config_printing)))]
     crate::sel4::install_debug_sink();
 
     crate::alloc::init_heap();
 
     boot_log::init_logger_bootstrap_only();
-    if BOOTSTRAP_ONCE.swap(true, Ordering::SeqCst) {
-        log::error!("[boot] bootstrap called twice; refusing re-entry");
-        #[cfg(feature = "kernel")]
-        crate::sel4::debug_halt();
-        loop {
-            core::hint::spin_loop();
-        }
-    }
+
+    let mut boot_guard = BootStateGuard::acquire()?;
+    debug_assert_eq!(
+        BOOT_STATE.load(Ordering::Acquire),
+        BootState::Booting as u8,
+        "bootstrap state drift",
+    );
     crate::bp!("bootstrap.begin");
 
     let bootinfo_view = match BootInfoView::new(bootinfo) {
@@ -950,9 +1018,10 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
 
         crate::bp!("bootstrap.done");
         log::trace!("B5: entering event pump loop");
-        loop {
+        boot_guard.commit();
+        return Ok(loop {
             pump.poll();
-        }
+        });
     }
 }
 
