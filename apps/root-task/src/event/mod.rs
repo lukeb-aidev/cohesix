@@ -294,7 +294,7 @@ where
     #[cfg(feature = "net-console")]
     net: Option<&'a mut dyn NetPoller>,
     #[cfg(feature = "kernel")]
-    ninedoor: Option<&'a mut dyn NineDoorHandler>,
+    ninedoor: Option<NineDoorHandler>,
     #[cfg(feature = "kernel")]
     bootstrap_handler: Option<&'a mut dyn BootstrapMessageHandler>,
 }
@@ -348,7 +348,7 @@ where
 
     /// Attach a NineDoor handler to the event pump.
     #[cfg(feature = "kernel")]
-    pub fn with_ninedoor(mut self, handler: &'a mut dyn NineDoorHandler) -> Self {
+    pub fn with_ninedoor(mut self, handler: NineDoorHandler) -> Self {
         self.ninedoor = Some(handler);
         self
     }
@@ -607,8 +607,8 @@ where
 
     #[cfg(feature = "kernel")]
     fn forward_to_ninedoor(&mut self, command: &Command) {
-        if let Some(handler) = self.ninedoor.as_mut() {
-            handler.handle(command, &mut *self.audit);
+        if let Some(handler) = self.ninedoor {
+            handler(command, &mut *self.audit);
         }
     }
 
