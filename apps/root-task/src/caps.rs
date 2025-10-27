@@ -49,7 +49,9 @@ pub fn render_retype_log_line(
     err: Option<seL4_Error>,
 ) -> HeaplessString<{ RETYPE_LOG_CAPACITY }> {
     let mut line = HeaplessString::<RETYPE_LOG_CAPACITY>::new();
-    let _ = write_retype_line(&mut line, phase, args, err);
+    if write_retype_line(&mut line, phase, args, err).is_err() {
+        // Truncated; retain the partial diagnostic without retrying.
+    }
     line
 }
 
@@ -60,7 +62,9 @@ fn debug_retype_log(
     err: Option<seL4_Error>,
 ) {
     let mut writer = DebugPutc;
-    let _ = write_retype_line(&mut writer, phase, args, err);
+    if write_retype_line(&mut writer, phase, args, err).is_err() {
+        // UART output is best-effort; ignore truncation.
+    }
     let _ = writer.write_char('\n');
 
     #[cfg(feature = "bootstrap-trace")]

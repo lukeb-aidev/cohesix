@@ -11,11 +11,15 @@ use sel4_sys;
 const MAX_DIAGNOSTIC_LEN: usize = 224;
 fn log_boot(beg: sel4::seL4_CPtr, end: sel4::seL4_CPtr, bits: u8) {
     let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
-    let _ = write!(
+    if write!(
         &mut line,
         "[boot] empty=[{:#x}..{:#x}) cnode_bits={}",
         beg, end, bits
-    );
+    )
+    .is_err()
+    {
+        // Truncated diagnostic; best effort only.
+    }
     emit_console_line(line.as_str());
 }
 
@@ -279,10 +283,14 @@ impl CSpaceCtx {
 
     fn log_direct_init_path(&self, dst_slot: sel4::seL4_CPtr) {
         let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
-        let _ = write!(
+        if write!(
             &mut line,
             "[retype] path=direct:init-cnode dest=0x{dst_slot:04x} depth=0",
-        );
+        )
+        .is_err()
+        {
+            // Truncated diagnostic; continue with partial line.
+        }
         emit_console_line(line.as_str());
     }
 
@@ -295,12 +303,16 @@ impl CSpaceCtx {
     ) {
         if err != sel4::seL4_NoError {
             let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
-            let _ = write!(
+            if write!(
                 &mut line,
                 "[cnode] Copy err={err} root=0x{root:04x} dest(index=0x{dest_index:04x},depth={depth}) src(index=0x{src_index:04x},depth={depth})",
                 root = self.root_cnode_cap,
                 depth = self.init_cnode_bits,
-            );
+            )
+            .is_err()
+            {
+                // Partial diagnostics are acceptable.
+            }
             emit_console_line(line.as_str());
         }
     }
@@ -315,12 +327,16 @@ impl CSpaceCtx {
     ) {
         if err != sel4::seL4_NoError {
             let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
-            let _ = write!(
+            if write!(
                 &mut line,
                 "[cnode] Mint err={err} root=0x{root:04x} dest(index=0x{dest_index:04x},depth={depth},offset=0) src(index=0x{src_index:04x},depth={depth}) badge={badge}",
                 root = self.root_cnode_cap,
                 depth = self.init_cnode_bits,
-            );
+            )
+            .is_err()
+            {
+                // Partial diagnostics are acceptable.
+            }
             emit_console_line(line.as_str());
         }
     }
@@ -341,10 +357,14 @@ impl CSpaceCtx {
     ) {
         if err != sel4::seL4_NoError {
             let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
-            let _ = write!(
+            if write!(
                 &mut line,
                 "[retype] path={path_label} err={err} root=0x{root:04x} untyped_slot=0x{untyped:04x} node(index=0x{node_index:04x},depth={node_depth},offset=0x{node_offset:04x}) dest_slot=0x{dest_index:04x} ty={obj_ty} sz={size_bits}",
-            );
+            )
+            .is_err()
+            {
+                // Partial diagnostics are acceptable.
+            }
             emit_console_line(line.as_str());
         }
     }
@@ -370,10 +390,14 @@ impl CSpaceCtx {
         #[cfg(all(feature = "kernel", sel4_config_debug_build))]
         {
             let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
-            let _ = write!(
+            if write!(
                 &mut line,
                 "[cnode] Copy attempt dest=0x{dst_slot:04x} src=0x{src_slot:04x}",
-            );
+            )
+            .is_err()
+            {
+                // Partial diagnostics are acceptable.
+            }
             emit_console_line(line.as_str());
         }
         let rights = cap_rights_read_write_grant();
@@ -507,7 +531,7 @@ fn log_slot_allocation_failure(
             start,
             end,
         } => {
-            let _ = write!(
+            if write!(
                 &mut line,
                 "[cnode] op=SlotAlloc err=out_of_boot_window candidate=0x{candidate:04x} declared.empty=[0x{start:04x}..0x{end:04x}) runtime.empty=[0x{lo:04x}..0x{hi:04x})",
                 candidate = candidate,
@@ -515,16 +539,24 @@ fn log_slot_allocation_failure(
                 end = end,
                 lo = empty_start,
                 hi = empty_end,
-            );
+            )
+            .is_err()
+            {
+                // Diagnostic truncation is acceptable.
+            }
         }
         SlotAllocError::ReservedSlot { slot } => {
-            let _ = write!(
+            if write!(
                 &mut line,
                 "[cnode] op=SlotAlloc err=reserved_slot slot=0x{slot:04x} runtime.empty=[0x{lo:04x}..0x{hi:04x})",
                 slot = slot,
                 lo = empty_start,
                 hi = empty_end,
-            );
+            )
+            .is_err()
+            {
+                // Diagnostic truncation is acceptable.
+            }
         }
     }
 
@@ -558,16 +590,24 @@ impl CSpaceCtx {
         if self.root_cnode_copy_slot != sel4::seL4_CapNull {
             let copy_ident = sel4::debug_cap_identify(self.root_cnode_copy_slot);
             let copy_rights = render_cap_rights(sel4_sys::seL4_CapRights_All);
-            let _ = write!(
+            if write!(
                 &mut line,
                 "[retype] ident init=0x{init_ident:08x} rights(init={init_rights}) copy(slot=0x{slot:04x},tag=0x{copy_ident:08x},rights={copy_rights})",
                 slot = self.root_cnode_copy_slot
-            );
+            )
+            .is_err()
+            {
+                // Diagnostic truncation is acceptable.
+            }
         } else {
-            let _ = write!(
+            if write!(
                 &mut line,
                 "[retype] ident init=0x{init_ident:08x} rights(init={init_rights}) copy=unavailable"
-            );
+            )
+            .is_err()
+            {
+                // Diagnostic truncation is acceptable.
+            }
         }
         emit_console_line(line.as_str());
     }

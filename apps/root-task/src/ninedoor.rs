@@ -42,10 +42,14 @@ impl NineDoorBridge {
     ) -> Result<(), NineDoorBridgeError> {
         let ticket_repr = ticket.unwrap_or("<none>");
         let mut message = HeaplessString::<128>::new();
-        let _ = write!(
+        if write!(
             message,
             "nine-door: attach role={role} ticket={ticket_repr}"
-        );
+        )
+        .is_err()
+        {
+            // Truncated audit line is acceptable.
+        }
         audit.info(message.as_str());
         Ok(())
     }
@@ -57,7 +61,9 @@ impl NineDoorBridge {
         audit: &mut dyn AuditSink,
     ) -> Result<(), NineDoorBridgeError> {
         let mut message = HeaplessString::<128>::new();
-        let _ = write!(message, "nine-door: tail {path}");
+        if write!(message, "nine-door: tail {path}").is_err() {
+            // Truncated audit line is acceptable.
+        }
         audit.info(message.as_str());
         Ok(())
     }
@@ -75,11 +81,15 @@ impl NineDoorBridge {
         audit: &mut dyn AuditSink,
     ) -> Result<(), NineDoorBridgeError> {
         let mut message = HeaplessString::<128>::new();
-        let _ = write!(
+        if write!(
             message,
             "nine-door: spawn payload={}...",
             truncate(payload, 64)
-        );
+        )
+        .is_err()
+        {
+            // Truncated audit line is acceptable.
+        }
         audit.info(message.as_str());
         Ok(())
     }
@@ -91,7 +101,9 @@ impl NineDoorBridge {
         audit: &mut dyn AuditSink,
     ) -> Result<(), NineDoorBridgeError> {
         let mut message = HeaplessString::<128>::new();
-        let _ = write!(message, "nine-door: kill {identifier}");
+        if write!(message, "nine-door: kill {identifier}").is_err() {
+            // Truncated audit line is acceptable.
+        }
         audit.info(message.as_str());
         Ok(())
     }
