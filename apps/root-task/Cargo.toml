@@ -14,6 +14,7 @@ kernel = [
     "dep:sel4-runtime",
     "dep:sel4-panicking",
     "bootstrap-trace",
+    "dep:linked_list_allocator",
 ]
 net-console = [
     "dep:smoltcp",
@@ -31,6 +32,7 @@ cohesix-ticket = { workspace = true }
 embedded-io = { version = "0.4", default-features = false }
 nb = "1.1"
 portable-atomic = "1.6"
+linked_list_allocator = { version = "0.10", default-features = false, optional = true, features = ["use_spin"] }
 log = { version = "0.4", default-features = false }
 bytemuck = { version = "1.14", features = ["must_cast"] }
 static_assertions = "1.1"

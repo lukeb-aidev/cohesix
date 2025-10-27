@@ -1,4 +1,5 @@
 // Author: Lukas Bower
+//! Bootstrap logging backend that forwards diagnostics to the seL4 debug console.
 #![allow(dead_code)]
 
 use core::fmt::Write;
@@ -9,9 +10,12 @@ use heapless::String as HeaplessString;
 
 use crate::sel4;
 
+/// Errors raised when transitioning the bootstrap logger state machine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Error {
+    /// Logger has not been initialised with [`init_logger_bootstrap_only`].
     NotInitialised,
+    /// Logger already transitioned to the userland sink.
     AlreadyUserland,
 }
 
@@ -90,6 +94,7 @@ impl BootstrapLogger {
 static LOGGER: BootstrapLogger = BootstrapLogger::new();
 static LOGGER_INSTALLED: AtomicBool = AtomicBool::new(false);
 
+/// Installs the bootstrap logger and routes output to the seL4 debug console.
 pub fn init_logger_bootstrap_only() {
     if LOGGER_INSTALLED
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -101,6 +106,7 @@ pub fn init_logger_bootstrap_only() {
     ::log::set_max_level(LevelFilter::Info);
 }
 
+/// Switches the logger sink to the userland channel once IPC is online.
 pub fn switch_logger_to_userland() -> Result<(), Error> {
     let prev = LOGGER
         .state

@@ -1,4 +1,5 @@
 // Author: Lukas Bower
+//! Trace formatting and UART emission helpers shared across bootstrap diagnostics.
 
 use core::cmp;
 use core::fmt::{self, Arguments, Write};

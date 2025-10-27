@@ -1,4 +1,5 @@
 // Author: Lukas Bower
+//! Ring buffer recording bootstrap events for post-mortem inspection via UART.
 
 use core::fmt::Write;
 
