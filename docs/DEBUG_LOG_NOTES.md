@@ -27,3 +27,8 @@
 - Updating `KernelEnv::prepare_retype_trace` and its sanitiser to emit the canonical tuple (`root = initCNode`, `idx = 0`, `depth = 0`, `off = slot`) ensures the kernel accepts the destination path while preserving the slot bounds derived from `initThreadCNodeSizeBits`.
 - Retype helpers now log the ABI order explicitly: `seL4_Untyped_Retype(untyped, obj, size_bits, root, node_index, node_depth, node_offset, n)`. When targeting the init CNode, only the offset varies; guard bits remain zero.
 - Always emit `(root=bootinfo.initThreadCNode, node_index=0, node_depth=0, node_offset=slot)` when addressing the init thread CNode. This tuple is range-checked against `initThreadCNodeSizeBits` before the syscall to prevent slot clobbering.
+
+## Message Dispatch Safety
+- Bootstrap IPC payloads probed during early boot are staged until the event pump registers all handlers; delivery only begins once `handlers_ready()` is signalled.
+- Opcode dispatch now uses the `BootstrapOp` enum and an explicit `match`, removing the former function-pointer table.
+- All IPC buffer diagnostics obtain data through `IpcBufView::prefix`, guaranteeing dumps never exceed 4096 bytes.

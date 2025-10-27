@@ -1074,6 +1074,7 @@ struct KernelIpc {
     endpoint: sel4_sys::seL4_CPtr,
     staged_bootstrap: Option<StagedMessage>,
     staged_forwarded: bool,
+    handlers_ready: bool,
 }
 
 impl KernelIpc {
@@ -1082,6 +1083,7 @@ impl KernelIpc {
             endpoint,
             staged_bootstrap: None,
             staged_forwarded: false,
+            handlers_ready: false,
         }
     }
 
@@ -1132,7 +1134,13 @@ impl KernelIpc {
 
 impl IpcDispatcher for KernelIpc {
     fn dispatch(&mut self, now_ms: u64) {
-        self.forward_staged(now_ms);
+        if self.handlers_ready {
+            self.forward_staged(now_ms);
+        }
+    }
+
+    fn handlers_ready(&mut self) {
+        self.handlers_ready = true;
     }
 
     fn take_bootstrap_message(&mut self) -> Option<BootstrapMessage> {
