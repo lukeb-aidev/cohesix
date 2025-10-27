@@ -30,7 +30,8 @@ pub fn init_heap() {
         .is_ok()
     {
         unsafe {
-            GLOBAL_ALLOCATOR.lock().init(HEAP.as_mut_ptr(), HEAP_BYTES);
+            let heap_ptr = core::ptr::addr_of_mut!(HEAP).cast::<u8>();
+            GLOBAL_ALLOCATOR.lock().init(heap_ptr, HEAP_BYTES);
         }
     }
 }
