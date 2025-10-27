@@ -13,9 +13,16 @@ pub fn install_ipc_buffer(
     ipc_vaddr: usize,
 ) -> Result<IpcBufView, i32> {
     bp!("ipcbuf.begin");
+    ::log::trace!(
+        "B2: about to map IPC buffer vaddr=0x{ipc_vaddr:08x}",
+        ipc_vaddr = ipc_vaddr,
+    );
     match env.map_ipc_buffer(ipc_vaddr) {
-        Ok(()) => {}
+        Ok(()) => {
+            ::log::trace!("B2.ret = Ok");
+        }
         Err(err) => {
+            ::log::trace!("B2.ret = Err({name})", name = crate::sel4::error_name(err));
             let code = err as i32;
             ::log::error!(
                 "[boot] ipcbuf.map failed vaddr=0x{ipc_vaddr:08x} err={code} ({name})",

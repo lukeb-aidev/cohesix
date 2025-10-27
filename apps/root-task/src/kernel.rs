@@ -855,10 +855,7 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
         #[cfg(all(feature = "net-console", not(feature = "kernel")))]
         let (mut net_stack, _) = NetStack::new(Ipv4Address::new(10, 0, 0, 2));
         let timer = KernelTimer::new(5);
-        crate::bp!("ipc.poll.begin");
         let mut ipc = KernelIpc::new(ep_slot);
-        ipc.bootstrap_probe();
-        crate::bp!("ipc.poll.end");
 
         let mut tickets: TicketTable<4> = TicketTable::new();
         let _ = tickets.register(Role::Queen, "bootstrap");
@@ -928,12 +925,15 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
         let mut audit = ConsoleAudit::new(&mut console);
         #[cfg(feature = "kernel")]
         let mut bootstrap_ipc = BootstrapIpcAudit::new();
+        log::trace!("B3: about to start event pump");
         let mut pump = EventPump::new(serial, timer, ipc, tickets, &mut audit);
 
         #[cfg(feature = "kernel")]
         {
             pump = pump.with_bootstrap_handler(&mut bootstrap_ipc);
+            log::trace!("B4: before attach_ninedoor_uart");
             pump = pump.with_ninedoor(ninedoor);
+            pump.announce_console_ready();
         }
 
         #[cfg(feature = "net-console")]
@@ -941,7 +941,15 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
             pump = pump.with_network(&mut net_stack);
         }
 
+        #[cfg(feature = "kernel")]
+        {
+            crate::bp!("ipc.poll.begin");
+            pump.bootstrap_probe();
+            crate::bp!("ipc.poll.end");
+        }
+
         crate::bp!("bootstrap.done");
+        log::trace!("B5: entering event pump loop");
         loop {
             pump.poll();
         }
@@ -1146,22 +1154,52 @@ impl KernelIpc {
         }
     }
 
-    fn bootstrap_probe(&mut self) {
+    fn message_present(info: &sel4_sys::seL4_MessageInfo, badge: sel4_sys::seL4_Word) -> bool {
+        badge != 0
+            || info.length() != 0
+            || info.label() != 0
+            || info.extra_caps() != 0
+            || info.caps_unwrapped() != 0
+    }
+
+    fn poll_endpoint(&mut self, now_ms: u64, bootstrap: bool) -> bool {
         if self.staged_bootstrap.is_some() {
-            return;
+            return true;
         }
 
         let mut badge: sel4_sys::seL4_Word = 0;
         let info = unsafe { sel4_sys::seL4_Poll(self.endpoint, &mut badge) };
-        log::info!(
-            "[boot] poll ep=0x{ep:04x} badge=0x{badge:016x} info=0x{info:08x}",
-            ep = self.endpoint,
-            badge = badge,
-            info = info.words[0],
-        );
+        if !Self::message_present(&info, badge) {
+            if bootstrap {
+                log::trace!(
+                    "[ipc] bootstrap poll idle ep=0x{ep:04x} now={now_ms} badge=0x{badge:016x}",
+                    ep = self.endpoint,
+                    now_ms = now_ms,
+                    badge = badge,
+                );
+            }
+            return false;
+        }
+
+        if bootstrap {
+            log::trace!(
+                "B5.recv ret badge=0x{badge:016x} info=0x{info:08x}",
+                badge = badge,
+                info = info.words[0]
+            );
+        } else {
+            log::trace!(
+                "[ipc] poll ep=0x{ep:04x} badge=0x{badge:016x} info=0x{info:08x} now_ms={now_ms}",
+                ep = self.endpoint,
+                badge = badge,
+                info = info.words[0],
+                now_ms = now_ms,
+            );
+        }
 
         self.staged_bootstrap = Some(StagedMessage::new(info, badge));
         self.staged_forwarded = false;
+        true
     }
 
     fn forward_staged(&mut self, now_ms: u64) {
@@ -1187,12 +1225,18 @@ impl KernelIpc {
             );
             log_bootstrap_payload(message.payload.as_slice());
         }
+        log::debug!(
+            "[ipc] staged → forwarded ep=0x{ep:04x} badge=0x{badge:016x}",
+            ep = self.endpoint,
+            badge = message.badge,
+        );
         self.staged_forwarded = true;
     }
 }
 
 impl IpcDispatcher for KernelIpc {
     fn dispatch(&mut self, now_ms: u64) {
+        let _ = self.poll_endpoint(now_ms, false);
         if self.handlers_ready {
             self.forward_staged(now_ms);
         }
@@ -1206,6 +1250,14 @@ impl IpcDispatcher for KernelIpc {
         let staged = self.staged_bootstrap.take()?;
         self.staged_forwarded = false;
         Some(staged.into())
+    }
+
+    fn bootstrap_poll(&mut self, now_ms: u64) -> bool {
+        self.poll_endpoint(now_ms, true)
+    }
+
+    fn has_staged_bootstrap(&self) -> bool {
+        self.staged_bootstrap.is_some()
     }
 }
 

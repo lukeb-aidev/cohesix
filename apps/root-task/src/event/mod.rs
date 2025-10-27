@@ -125,6 +125,19 @@ pub trait IpcDispatcher {
     fn take_bootstrap_message(&mut self) -> Option<BootstrapMessage> {
         None
     }
+
+    #[cfg(feature = "kernel")]
+    /// Poll the bootstrap endpoint, returning `true` when a message was staged.
+    fn bootstrap_poll(&mut self, now_ms: u64) -> bool {
+        let _ = now_ms;
+        false
+    }
+
+    #[cfg(feature = "kernel")]
+    /// Return `true` when a bootstrap message is currently staged.
+    fn has_staged_bootstrap(&self) -> bool {
+        false
+    }
 }
 
 #[cfg(feature = "kernel")]
@@ -404,6 +417,43 @@ where
         self.ipc.dispatch(self.now_ms);
         #[cfg(feature = "kernel")]
         self.drain_bootstrap_ipc();
+    }
+
+    #[cfg(feature = "kernel")]
+    /// Run the bootstrap probe loop until an IPC message has been staged.
+    pub fn bootstrap_probe(&mut self) {
+        log::trace!("B5: entering bootstrap probe loop");
+        loop {
+            if self.ipc.bootstrap_poll(self.now_ms) {
+                self.drain_bootstrap_ipc();
+                break;
+            }
+            self.poll();
+            unsafe {
+                sel4_sys::seL4_Yield();
+            }
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    /// Emit console audit messages once the UART bridge is connected.
+    pub fn announce_console_ready(&mut self) {
+        self.audit.info("console: attach uart");
+        if let Some(bridge) = self.ninedoor.as_mut() {
+            match bridge.log_stream(&mut *self.audit) {
+                Ok(()) => {
+                    self.audit.info("console: log stream start");
+                }
+                Err(err) => {
+                    let summary =
+                        format_message(format_args!("console: log stream failed: {}", err));
+                    self.audit.info(summary.as_str());
+                }
+            }
+        } else {
+            self.audit
+                .info("console: log stream deferred (bridge unavailable)");
+        }
     }
 
     #[cfg(feature = "kernel")]

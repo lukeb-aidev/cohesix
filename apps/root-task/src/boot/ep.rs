@@ -76,7 +76,12 @@ pub fn bootstrap_ep(bi: &seL4_BootInfo, cs: &mut CSpace) -> Result<seL4_CPtr, se
         );
     }
 
-    match traced_retype_into_slot(
+    log::trace!(
+        "B1: about to retype endpoint ut=0x{ut:04x} slot=0x{slot:04x}",
+        ut = ut,
+        slot = ep_slot,
+    );
+    let retype_result = traced_retype_into_slot(
         ut,
         seL4_ObjectType::seL4_EndpointObject,
         0,
@@ -84,14 +89,20 @@ pub fn bootstrap_ep(bi: &seL4_BootInfo, cs: &mut CSpace) -> Result<seL4_CPtr, se
         node_index,
         node_depth,
         node_offset,
-    ) {
+    );
+    match retype_result {
         Ok(()) => {
+            log::trace!("B1.ret = Ok");
             log::info!(
                 "[boot] endpoint retype ok slot=0x{slot:04x}",
                 slot = ep_slot
             );
         }
         Err(err) => {
+            log::trace!(
+                "B1.ret = Err({code})",
+                code = sel4::error_name(err as seL4_Error)
+            );
             log::error!(
                 "[boot] endpoint retype failed slot=0x{slot:04x} err={err} ({name})",
                 slot = ep_slot,
