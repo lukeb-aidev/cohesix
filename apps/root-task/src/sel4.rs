@@ -1785,9 +1785,7 @@ impl<'a> KernelEnv<'a> {
                 "[boot] ipcbuf L3 base 0x{pt_base:08x} diverges from bootinfo base 0x{bootinfo_base:08x}",
             );
             #[cfg(feature = "kernel")]
-            unsafe {
-                sel4_sys::seL4_DebugHalt();
-            }
+            crate::sel4::debug_halt();
             return Err(sel4_sys::seL4_IllegalOperation);
         }
 
@@ -2182,9 +2180,7 @@ impl<'a> KernelEnv<'a> {
             Ok(bytes) => bytes,
             Err(err) => {
                 ::log::error!("[boot] bootinfo extra validation failed: {err}",);
-                unsafe {
-                    sel4_sys::seL4_DebugHalt();
-                }
+                crate::sel4::debug_halt();
                 return;
             }
         };

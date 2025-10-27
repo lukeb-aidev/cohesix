@@ -274,8 +274,10 @@ enum BootState {
     Booted = 2,
 }
 
+/// Errors that can occur while initialising the root task runtime.
 #[derive(Debug, PartialEq, Eq)]
 pub enum BootError {
+    /// Indicates the bootstrap path has already been executed for this boot.
     AlreadyBooted,
 }
 
