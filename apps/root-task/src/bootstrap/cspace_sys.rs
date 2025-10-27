@@ -7,7 +7,6 @@ extern crate alloc;
 
 use core::convert::TryFrom;
 use core::fmt;
-use core::mem;
 
 use crate::boot;
 use crate::sel4;
@@ -956,7 +955,7 @@ mod tests {
     fn init_cnode_dest_radix_depth_is_valid() {
         #[cfg(not(target_os = "none"))]
         unsafe {
-            let mut bootinfo: sys::seL4_BootInfo = mem::zeroed();
+            let mut bootinfo: sys::seL4_BootInfo = core::mem::zeroed();
             bootinfo.initThreadCNodeSizeBits = 13;
             super::install_test_bootinfo_for_tests(bootinfo);
         }
@@ -973,7 +972,7 @@ mod tests {
     fn retype_into_init_root_uses_canonical_tuple() {
         #[cfg(not(target_os = "none"))]
         unsafe {
-            let mut bootinfo: sys::seL4_BootInfo = mem::zeroed();
+            let mut bootinfo: sys::seL4_BootInfo = core::mem::zeroed();
             bootinfo.initThreadCNodeSizeBits = 13;
             bootinfo.empty.start = 0x00a6;
             bootinfo.empty.end = 0x0800;
@@ -1007,7 +1006,7 @@ mod tests {
     fn init_cnode_retype_dest_matches_canonical_tuple() {
         #[cfg(not(target_os = "none"))]
         unsafe {
-            let mut bootinfo: sys::seL4_BootInfo = mem::zeroed();
+            let mut bootinfo: sys::seL4_BootInfo = core::mem::zeroed();
             bootinfo.initThreadCNodeSizeBits = 13;
             super::install_test_bootinfo_for_tests(bootinfo);
         }
@@ -1080,7 +1079,7 @@ mod tests {
         use std::panic;
 
         unsafe {
-            let mut bootinfo: sys::seL4_BootInfo = mem::zeroed();
+            let mut bootinfo: sys::seL4_BootInfo = core::mem::zeroed();
             bootinfo.initThreadCNodeSizeBits = 5;
             super::install_test_bootinfo_for_tests(bootinfo);
         }

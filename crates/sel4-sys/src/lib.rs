@@ -853,6 +853,7 @@ mod imp {
 
     extern "C" {
         pub fn seL4_DebugPutChar(c: u8);
+        pub fn seL4_DebugHalt();
         pub fn seL4_DebugCapIdentify(cap: seL4_CPtr) -> seL4_Uint32;
         pub fn seL4_Yield();
         pub fn seL4_ARM_Page_Unmap(service: seL4_ARM_Page) -> seL4_Error;
@@ -1271,6 +1272,11 @@ mod host_stub {
 
     #[inline(always)]
     pub fn seL4_Yield() {
+        unsupported();
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_DebugHalt() {
         unsupported();
     }
 }
