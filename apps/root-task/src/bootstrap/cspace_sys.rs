@@ -931,7 +931,7 @@ pub(crate) fn init_cnode_direct_destination_words(
     );
     (
         dst_slot as sys::seL4_Word,
-        encode_cnode_depth(depth_bits),
+        encode_cnode_depth(init_cnode_bits),
         0,
     )
 }
