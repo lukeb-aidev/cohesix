@@ -7,6 +7,20 @@
 //! cycle progresses the serial console, dispatches timer ticks, advances the
 //! networking stack (when enabled), and finally services IPC queues.
 
+#[cfg(feature = "kernel")]
+pub mod dispatch;
+#[cfg(feature = "kernel")]
+pub mod handlers;
+#[cfg(feature = "kernel")]
+pub mod op;
+
+#[cfg(feature = "kernel")]
+pub use dispatch::{dispatch_message, DispatchOutcome};
+#[cfg(feature = "kernel")]
+pub use handlers::{BootstrapHandlers, ClosureHandlers};
+#[cfg(feature = "kernel")]
+pub use op::BootstrapOp;
+
 use core::cmp::min;
 use core::fmt::{self, Write as FmtWrite};
 
@@ -96,6 +110,9 @@ pub trait TimerSource {
 pub trait IpcDispatcher {
     /// Service pending IPC messages.
     fn dispatch(&mut self, now_ms: u64);
+
+    /// Called once the event pump has registered bootstrap handlers.
+    fn handlers_ready(&mut self) {}
 
     #[cfg(feature = "kernel")]
     /// Retrieve the next staged bootstrap message, if any.
@@ -340,6 +357,7 @@ where
     /// Attach a bootstrap IPC handler that consumes staged messages.
     pub fn with_bootstrap_handler(mut self, handler: &'a mut dyn BootstrapMessageHandler) -> Self {
         self.bootstrap_handler = Some(handler);
+        self.ipc.handlers_ready();
         self
     }
 

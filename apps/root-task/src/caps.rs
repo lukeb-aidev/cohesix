@@ -5,12 +5,15 @@ use core::fmt::Write;
 
 use crate::bootstrap::cspace_sys;
 use crate::sel4;
-use crate::trace::{dec_u32, hex_u64, DebugPutc};
+use crate::trace::DebugPutc;
+use heapless::String as HeaplessString;
 use sel4_sys::{
     seL4_CPtr, seL4_Error, seL4_NoError, seL4_ObjectType, seL4_Untyped_Retype, seL4_Word,
 };
 
 #[inline]
+const RETYPE_LOG_CAPACITY: usize = 160;
+
 fn debug_retype_log(
     phase: &'static str,
     untyped: seL4_CPtr,
@@ -23,28 +26,21 @@ fn debug_retype_log(
     num_objects: u32,
     err: Option<seL4_Error>,
 ) {
+    let line = format_retype_log_line(
+        phase,
+        untyped,
+        obj_type,
+        size_bits,
+        dst_cnode,
+        node_index,
+        node_depth,
+        node_offset,
+        num_objects,
+        err,
+    );
     let mut writer = DebugPutc;
-    let _ = write!(writer, "[retype:{phase}] ut=");
-    hex_u64(&mut writer, untyped as u64);
-    let _ = writer.write_str(" type=");
-    let _ = writer.write_str(sel4::object_type_name(obj_type));
-    let _ = writer.write_str(" sz=");
-    dec_u32(&mut writer, size_bits);
-    let _ = write!(writer, " root=");
-    hex_u64(&mut writer, dst_cnode as u64);
-    let _ = write!(writer, " idx=");
-    hex_u64(&mut writer, node_index as u64);
-    let _ = write!(writer, " depth=");
-    dec_u32(&mut writer, u32::from(node_depth));
-    let _ = write!(writer, " off=");
-    hex_u64(&mut writer, node_offset as u64);
-    let _ = write!(writer, " n=");
-    dec_u32(&mut writer, num_objects);
-    if let Some(error) = err {
-        let _ = writer.write_str(" -> err=");
-        let _ = writer.write_str(sel4::error_name(error));
-    }
-    let _ = writer.write_str("\n");
+    let _ = writer.write_str(line.as_str());
+    let _ = writer.write_char('\n');
 
     #[cfg(feature = "bootstrap-trace")]
     {
@@ -61,6 +57,38 @@ fn debug_retype_log(
             err,
         );
     }
+}
+
+/// Formats the canonical retype log line with numeric encodings only.
+#[must_use]
+pub fn format_retype_log_line(
+    phase: &'static str,
+    untyped: seL4_CPtr,
+    obj_type: seL4_ObjectType,
+    size_bits: u32,
+    dst_cnode: seL4_CPtr,
+    node_index: seL4_CPtr,
+    node_depth: u8,
+    node_offset: seL4_CPtr,
+    num_objects: u32,
+    err: Option<seL4_Error>,
+) -> HeaplessString<{ RETYPE_LOG_CAPACITY }> {
+    let mut line = HeaplessString::<RETYPE_LOG_CAPACITY>::new();
+    let _ = write!(
+        line,
+        "[retype:{phase}] ut=0x{ut:016x} type=0x{ty:08x} sz={size_bits} root=0x{root:016x} idx=0x{idx:08x} depth={depth} off=0x{off:08x} n={num}",
+        ut = untyped as u64,
+        ty = obj_type as u32,
+        root = dst_cnode as u64,
+        idx = node_index as u32,
+        depth = node_depth,
+        off = node_offset as u32,
+        num = num_objects,
+    );
+    if let Some(error) = err {
+        let _ = write!(line, " err=0x{code:08x}", code = error as u32);
+    }
+    line
 }
 
 /// Retypes an untyped capability, emitting debug traces before and after the kernel call.
