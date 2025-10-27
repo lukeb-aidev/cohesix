@@ -23,6 +23,8 @@ pub enum HandlerError {
     InvalidPayload,
     /// Handler executed but reported a logical failure.
     Failure,
+    /// The handler pointer failed guard validation prior to invocation.
+    BadTarget,
 }
 
 impl fmt::Display for HandlerError {
@@ -30,6 +32,7 @@ impl fmt::Display for HandlerError {
         match self {
             Self::InvalidPayload => write!(f, "invalid payload"),
             Self::Failure => write!(f, "handler reported failure"),
+            Self::BadTarget => write!(f, "guard rejected handler target"),
         }
     }
 }
@@ -76,7 +79,11 @@ pub fn call_handler(handler: Handler, words: &[seL4_Word]) -> HandlerResult {
     {
         assert_text_fn(handler);
     }
-    guards::call_checked(handler, |f: Handler| f(words))
+    guards::trip_before_indirect("bootstrap-handler", handler as usize);
+    match guards::call_fn_checked(handler, |f: Handler| f(words)) {
+        Some(result) => result,
+        None => Err(HandlerError::BadTarget),
+    }
 }
 
 #[cfg(test)]
