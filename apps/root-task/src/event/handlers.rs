@@ -14,7 +14,7 @@ use crate::guards;
 pub type HandlerResult = Result<(), HandlerError>;
 
 /// Canonical handler pointer type for bootstrap IPC verbs.
-pub type Handler = fn(&[seL4_Word]) -> HandlerResult;
+pub type Handler = for<'a> fn(&'a [seL4_Word]) -> HandlerResult;
 
 /// Structured error surfaced by bootstrap handlers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

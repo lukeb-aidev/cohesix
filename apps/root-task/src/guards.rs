@@ -21,7 +21,7 @@ impl<R> FunctionPointer for fn() -> R {
     }
 }
 
-impl<A, R> FunctionPointer for fn(A) -> R {
+impl<A: 'static, R> FunctionPointer for fn(A) -> R {
     #[inline(always)]
     fn addr(self) -> usize {
         self as usize
@@ -43,6 +43,13 @@ impl<A, B, C, R> FunctionPointer for fn(A, B, C) -> R {
 }
 
 impl<A, B, C, D, R> FunctionPointer for fn(A, B, C, D) -> R {
+    #[inline(always)]
+    fn addr(self) -> usize {
+        self as usize
+    }
+}
+
+impl<T, R> FunctionPointer for for<'a> fn(&'a [T]) -> R {
     #[inline(always)]
     fn addr(self) -> usize {
         self as usize
@@ -136,5 +143,23 @@ mod tests {
         });
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn call_checked_supports_slice_arguments() {
+        fn handler(_: &[usize]) {}
+
+        let addr = handler as usize;
+        init_text_bounds(addr, addr + core::mem::size_of::<usize>());
+
+        let mut invoked = false;
+        call_checked(handler as for<'a> fn(&'a [usize]), |func| {
+            invoked = true;
+            let scratch = [0usize; 0];
+            func(&scratch);
+        });
+        assert!(invoked);
+
+        init_text_bounds(0, 0);
     }
 }
