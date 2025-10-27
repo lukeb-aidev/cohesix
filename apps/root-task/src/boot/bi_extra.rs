@@ -329,7 +329,12 @@ pub enum StructureItem<'a> {
     /// A node has ended.
     EndNode,
     /// A property with a resolved name and payload.
-    Property { name: &'a str, value: &'a [u8] },
+    Property {
+        /// UTF-8 name associated with the property.
+        name: &'a str,
+        /// Raw value bytes describing the property payload.
+        value: &'a [u8],
+    },
 }
 
 impl<'a> StructureCursor<'a> {
@@ -632,8 +637,11 @@ pub fn dump_bootinfo(
 /// Minimal mirror of [`seL4_UntypedDesc`] with idiomatic field names for the root task.
 #[derive(Clone, Copy)]
 pub struct UntypedDesc {
+    /// Physical base address backing the untyped frame.
     pub paddr: u64,
+    /// Size of the untyped in base-two log bytes.
     pub size_bits: u8,
+    /// Non-zero when the untyped describes device memory.
     pub is_device: u8,
 }
 

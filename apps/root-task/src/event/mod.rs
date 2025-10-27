@@ -63,9 +63,13 @@ const MAX_BOOTSTRAP_WORDS: usize = crate::sel4::MSG_MAX_WORDS;
 
 #[cfg(feature = "kernel")]
 #[derive(Clone)]
+/// IPC message staged during bootstrap and replayed once the dispatcher is ready.
 pub struct BootstrapMessage {
+    /// Badge attached to the message capability.
     pub badge: sel4_sys::seL4_Word,
+    /// Raw message info describing the word and capability counts.
     pub info: sel4_sys::seL4_MessageInfo,
+    /// Payload words staged from the IPC buffer.
     pub payload: HeaplessVec<sel4_sys::seL4_Word, { MAX_BOOTSTRAP_WORDS }>,
 }
 

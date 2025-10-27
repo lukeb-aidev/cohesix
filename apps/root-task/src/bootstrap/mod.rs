@@ -21,6 +21,7 @@ pub mod untyped_pick;
 pub use untyped_pick::pick_untyped;
 
 #[macro_export]
+/// Emits a bootstrapping progress marker prefixed with `[boot]`.
 macro_rules! bp {
     ($name:expr) => {
         ::log::info!(concat!("[boot] ", $name));
@@ -28,6 +29,7 @@ macro_rules! bp {
 }
 
 #[inline(always)]
+/// Helper returning an error when the supplied seL4 return code represents failure.
 pub fn ktry(step: &str, rc: i32) -> Result<(), i32> {
     if rc != sel4_sys::seL4_NoError as i32 {
         ::log::error!("[boot] {step}: seL4 err={rc}");

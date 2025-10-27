@@ -1,4 +1,5 @@
 // Author: Lukas Bower
+//! Thin wrappers around seL4 CSpace syscalls with argument validation helpers.
 #![allow(unsafe_code)]
 
 #[cfg(all(test, not(target_os = "none")))]
@@ -19,6 +20,7 @@ static PREFLIGHT_COMPLETED: AtomicBool = AtomicBool::new(false);
 #[cfg(all(test, not(target_os = "none")))]
 use alloc::boxed::Box;
 
+/// Depth (in bits) for a canonical single-level CNode.
 pub const CANONICAL_CNODE_DEPTH_BITS: u8 = sys::seL4_WordBits as u8;
 
 #[cfg(target_os = "none")]
@@ -29,6 +31,7 @@ fn bi() -> &'static sys::seL4_BootInfo {
 
 #[cfg(target_os = "none")]
 #[inline(always)]
+/// Returns the capability pointer for the init thread's root CNode.
 pub fn bi_init_cnode_cptr() -> sys::seL4_CPtr {
     let root = sel4::seL4_CapInitThreadCNode;
     debug_assert_ne!(root, sys::seL4_CapNull, "init CNode root must be non-null");
@@ -145,6 +148,7 @@ fn bi_init_cnode_bits() -> sys::seL4_Word {
 
 #[cfg(all(test, not(target_os = "none")))]
 #[inline(always)]
+/// Installs a synthetic bootinfo pointer for host-based tests.
 pub(crate) unsafe fn install_test_bootinfo_for_tests(
     bootinfo: sys::seL4_BootInfo,
 ) -> &'static sys::seL4_BootInfo {
@@ -172,6 +176,7 @@ fn bi_init_cnode_bits() -> sys::seL4_Word {
 }
 
 #[inline(always)]
+/// Verifies that `slot` falls within the addressable range described by `init_cnode_bits`.
 pub fn check_slot_in_range(init_cnode_bits: u8, slot: sys::seL4_CPtr) {
     let limit = if init_cnode_bits as usize >= usize::BITS as usize {
         usize::MAX
@@ -188,11 +193,13 @@ pub fn check_slot_in_range(init_cnode_bits: u8, slot: sys::seL4_CPtr) {
 }
 
 #[inline(always)]
+/// Encodes a radix depth in bits for syscall arguments expecting `seL4_Word`.
 pub fn encode_cnode_depth(bits: u8) -> sys::seL4_Word {
     bits as sys::seL4_Word
 }
 
 #[inline(always)]
+/// Constructs the `(root, index, depth, offset)` tuple targeting a slot in the init CNode.
 pub fn init_cnode_dest(
     slot: sys::seL4_CPtr,
 ) -> (
@@ -216,6 +223,7 @@ pub fn init_cnode_dest(
 }
 
 #[inline(always)]
+/// Constructs the destination tuple for retype calls targeting the init CNode.
 pub fn init_cnode_retype_dest(
     slot: sys::seL4_CPtr,
 ) -> (
@@ -349,6 +357,7 @@ mod host_trace {
 pub use host_trace::{take_last as take_last_host_retype_trace, HostRetypeTrace};
 
 #[inline(always)]
+/// Issues `seL4_CNode_Copy`, validating the target slot lies within the init CNode.
 pub fn cnode_copy_direct_dest(
     depth_bits: u8,
     dst_slot: sys::seL4_CPtr,
@@ -400,6 +409,7 @@ pub fn cnode_copy_direct_dest(
 }
 
 #[inline(always)]
+/// Issues `seL4_CNode_Mint`, validating the target slot lies within the init CNode.
 pub fn cnode_mint_direct_dest(
     depth_bits: u8,
     dst_slot: sys::seL4_CPtr,
@@ -453,6 +463,7 @@ pub fn cnode_mint_direct_dest(
 }
 
 #[inline(always)]
+/// Issues `seL4_CNode_Move`, validating the target slot lies within the init CNode.
 pub fn cnode_move_direct_dest(
     depth_bits: u8,
     dst_slot: sys::seL4_CPtr,
@@ -604,6 +615,7 @@ pub fn untyped_retype_into_init_root(
 }
 
 #[inline(always)]
+/// Retypes a RAM-backed untyped into the provided destination slot within the init CNode.
 pub fn untyped_retype_into_cnode(
     dest_root: sys::seL4_CNode,
     depth_bits: u8,

@@ -70,11 +70,6 @@ impl Pl011 {
     }
 
     #[inline(always)]
-    fn regs(&self) -> &Pl011Regs {
-        unsafe { self.base.as_ref() }
-    }
-
-    #[inline(always)]
     fn regs_mut(&mut self) -> &mut Pl011Regs {
         unsafe { self.base.as_mut() }
     }

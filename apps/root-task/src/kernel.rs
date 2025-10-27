@@ -261,6 +261,8 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
     #[cfg(all(feature = "kernel", not(sel4_config_printing)))]
     crate::sel4::install_debug_sink();
 
+    crate::alloc::init_heap();
+
     boot_log::init_logger_bootstrap_only();
     crate::bp!("bootstrap.begin");
 

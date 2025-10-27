@@ -27,6 +27,9 @@ pub mod net;
 pub mod hal;
 
 #[cfg(feature = "kernel")]
+pub(crate) mod alloc;
+
+#[cfg(feature = "kernel")]
 /// Kernel entrypoints and seL4 bootstrap wiring for the in-VM root task.
 pub mod kernel;
 
@@ -35,9 +38,11 @@ pub mod kernel;
 pub mod trace;
 
 #[cfg(feature = "kernel")]
+/// Capability operations and debug helpers built atop seL4 syscalls.
 pub mod caps;
 
 #[cfg(feature = "kernel")]
+/// Minimal capability-space view abstraction over seL4 boot info records.
 pub mod cspace;
 
 #[cfg(feature = "kernel")]

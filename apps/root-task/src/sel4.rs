@@ -855,6 +855,7 @@ impl SlotAllocator {
 
 /// Returns `true` when the supplied slot index references a kernel-reserved capability.
 #[inline(always)]
+#[allow(non_upper_case_globals)]
 pub fn is_boot_reserved_slot(slot: seL4_CPtr) -> bool {
     matches!(
         slot,
