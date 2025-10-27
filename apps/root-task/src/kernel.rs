@@ -2,6 +2,9 @@
 #![allow(dead_code)]
 #![allow(unsafe_code)]
 
+extern crate alloc;
+
+use alloc::boxed::Box;
 use bytemuck::cast_slice;
 use core::cmp;
 use core::fmt::{self, Write};
@@ -26,6 +29,8 @@ use crate::event::{
 use crate::hal::{HalError, Hardware, KernelHal};
 #[cfg(feature = "net-console")]
 use crate::net::{NetStack, CONSOLE_TCP_PORT};
+#[cfg(feature = "kernel")]
+use crate::ninedoor::NineDoorBridge;
 use crate::platform::{Platform, SeL4Platform};
 use crate::sel4::{
     bootinfo_debug_dump, error_name, root_endpoint, BootInfo, BootInfoExt, KernelEnv, RetypeKind,
@@ -493,7 +498,10 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
     }
 
     #[cfg(feature = "kernel")]
-    let ninedoor = crate::ninedoor::bridge_handler();
+    let ninedoor: &'static mut NineDoorBridge = {
+        let bridge = Box::new(NineDoorBridge::new());
+        Box::leak(bridge)
+    };
 
     let uart_region = match hal.map_device(PL011_PADDR) {
         Ok(region) => region,

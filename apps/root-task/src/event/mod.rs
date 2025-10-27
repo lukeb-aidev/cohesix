@@ -31,19 +31,8 @@ use crate::console::{Command, CommandParser, ConsoleError, MAX_ROLE_LEN, MAX_TIC
 #[cfg(feature = "net-console")]
 use crate::net::{NetPoller, CONSOLE_QUEUE_DEPTH};
 #[cfg(feature = "kernel")]
-use crate::ninedoor::NineDoorHandler;
+use crate::ninedoor::{NineDoorBridge, NineDoorBridgeError};
 use crate::serial::{SerialDriver, SerialPort, SerialTelemetry, DEFAULT_LINE_CAPACITY};
-
-#[cfg(feature = "kernel")]
-use static_assertions::const_assert;
-
-#[cfg(feature = "kernel")]
-const _: () = {
-    use core::mem::{align_of, size_of};
-
-    const_assert!(size_of::<NineDoorHandler>() == size_of::<usize>());
-    const_assert!(align_of::<NineDoorHandler>() == align_of::<usize>());
-};
 
 fn format_message(args: fmt::Arguments<'_>) -> HeaplessString<128> {
     let mut buf = HeaplessString::new();
@@ -305,7 +294,7 @@ where
     #[cfg(feature = "net-console")]
     net: Option<&'a mut dyn NetPoller>,
     #[cfg(feature = "kernel")]
-    ninedoor: Option<NineDoorDispatch>,
+    ninedoor: Option<&'a mut NineDoorBridge>,
     #[cfg(feature = "kernel")]
     bootstrap_handler: Option<&'a mut dyn BootstrapMessageHandler>,
 }
@@ -359,8 +348,8 @@ where
 
     /// Attach a NineDoor handler to the event pump.
     #[cfg(feature = "kernel")]
-    pub fn with_ninedoor(mut self, handler: NineDoorHandler) -> Self {
-        self.ninedoor = Some(NineDoorDispatch::new(handler));
+    pub fn with_ninedoor(mut self, bridge: &'a mut NineDoorBridge) -> Self {
+        self.ninedoor = Some(bridge);
         self
     }
 
@@ -510,7 +499,15 @@ where
             self.parser.push_byte(*byte)?;
         }
         if let Some(command) = self.parser.push_byte(b'\n')? {
-            self.handle_command(command);
+            match self.handle_command(command) {
+                Ok(()) => {}
+                Err(err) => {
+                    #[cfg(feature = "kernel")]
+                    self.handle_dispatch_error(err);
+                    #[cfg(not(feature = "kernel"))]
+                    match err {}
+                }
+            }
         }
         Ok(())
     }
@@ -526,7 +523,7 @@ where
         self.process_console_line(&converted);
     }
 
-    fn handle_command(&mut self, command: Command) {
+    fn handle_command(&mut self, command: Command) -> Result<(), CommandDispatchError> {
         #[cfg(feature = "kernel")]
         let command_clone = command.clone();
         #[cfg(feature = "kernel")]
@@ -612,14 +609,84 @@ where
 
         #[cfg(feature = "kernel")]
         if forwarded {
-            self.forward_to_ninedoor(&command_clone);
+            self.forward_to_ninedoor(&command_clone)?;
         }
+
+        Ok(())
     }
 
     #[cfg(feature = "kernel")]
-    fn forward_to_ninedoor(&mut self, command: &Command) {
-        if let Some(dispatch) = self.ninedoor {
-            dispatch.invoke(command, &mut *self.audit);
+    fn forward_to_ninedoor(&mut self, command: &Command) -> Result<(), CommandDispatchError> {
+        debug_assert!(self.ninedoor.is_some(), "NineDoor not attached");
+
+        #[cfg(debug_assertions)]
+        {
+            vtable_sentinel();
+        }
+
+        let verb = CommandVerb::from(command);
+
+        let Some(bridge_ref) = self.ninedoor.as_mut() else {
+            return Err(CommandDispatchError::NineDoorUnavailable { verb });
+        };
+
+        let bridge = &mut **bridge_ref;
+        let audit = &mut *self.audit;
+
+        match command {
+            Command::Attach { role, ticket } => {
+                let ticket_str = ticket.as_ref().map(|value| value.as_str());
+                bridge
+                    .attach(role.as_str(), ticket_str, audit)
+                    .map_err(|source| CommandDispatchError::Bridge { verb, source })?;
+            }
+            Command::Tail { path } => {
+                bridge
+                    .tail(path.as_str(), audit)
+                    .map_err(|source| CommandDispatchError::Bridge { verb, source })?;
+            }
+            Command::Log => {
+                bridge
+                    .log_stream(audit)
+                    .map_err(|source| CommandDispatchError::Bridge { verb, source })?;
+            }
+            Command::Spawn(payload) => {
+                bridge
+                    .spawn(payload.as_str(), audit)
+                    .map_err(|source| CommandDispatchError::Bridge { verb, source })?;
+            }
+            Command::Kill(identifier) => {
+                bridge
+                    .kill(identifier.as_str(), audit)
+                    .map_err(|source| CommandDispatchError::Bridge { verb, source })?;
+            }
+            Command::Help | Command::Quit => {
+                return Err(CommandDispatchError::UnsupportedForNineDoor { verb });
+            }
+        }
+
+        Ok(())
+    }
+
+    #[cfg(feature = "kernel")]
+    fn handle_dispatch_error(&mut self, err: CommandDispatchError) {
+        match err {
+            CommandDispatchError::NineDoorUnavailable { verb } => {
+                self.audit.denied("ninedoor unavailable");
+                self.emit_console_line("ERR: NineDoor unavailable");
+                self.emit_ack_err(verb.as_label(), Some("reason=ninedoor-unavailable"));
+            }
+            CommandDispatchError::UnsupportedForNineDoor { verb } => {
+                self.audit.denied("ninedoor unsupported command");
+                self.emit_console_line("ERR unsupported for NineDoor");
+                self.emit_ack_err(verb.as_label(), Some("reason=unsupported"));
+            }
+            CommandDispatchError::Bridge { verb, source } => {
+                let detail = format_message(format_args!("reason=ninedoor-error error={source}"));
+                let audit_line = format_message(format_args!("ninedoor bridge error: {source}"));
+                self.audit.denied(audit_line.as_str());
+                self.emit_ack_err(verb.as_label(), Some(detail.as_str()));
+            }
         }
     }
 
@@ -733,51 +800,77 @@ fn parse_role(raw: &str) -> Option<Role> {
 }
 
 #[cfg(feature = "kernel")]
-#[derive(Clone, Copy)]
-#[repr(C)]
-struct NineDoorDispatch {
-    handler: NineDoorHandler,
+#[derive(Debug, Clone, Copy)]
+enum CommandVerb {
+    Attach,
+    Tail,
+    Log,
+    Quit,
+    Spawn,
+    Kill,
+    Help,
 }
 
 #[cfg(feature = "kernel")]
-impl NineDoorDispatch {
-    fn new(handler: NineDoorHandler) -> Self {
-        assert_handler_in_text(handler);
-        Self { handler }
-    }
-
-    fn invoke(self, command: &Command, audit: &mut dyn AuditSink) {
-        assert_handler_in_text(self.handler);
-        (self.handler)(command, audit);
+impl CommandVerb {
+    fn as_label(self) -> &'static str {
+        match self {
+            Self::Attach => "ATTACH",
+            Self::Tail => "TAIL",
+            Self::Log => "LOG",
+            Self::Quit => "QUIT",
+            Self::Spawn => "SPAWN",
+            Self::Kill => "KILL",
+            Self::Help => "HELP",
+        }
     }
 }
 
-#[cfg(all(feature = "kernel", debug_assertions))]
-mod text_bounds;
-
-#[cfg(all(feature = "kernel", debug_assertions))]
-use text_bounds::text_region_bounds;
-
-#[cfg(all(feature = "kernel", debug_assertions))]
-fn assert_handler_in_text(handler: NineDoorHandler) {
-    let ptr = handler as usize;
-    let (start, end) = text_region_bounds();
-
-    assert!(
-        ptr >= start && ptr < end,
-        "NineDoor handler pointer outside .text: 0x{ptr:016x} (text=0x{start:016x}..0x{end:016x})"
-    );
+#[cfg(feature = "kernel")]
+impl From<&Command> for CommandVerb {
+    fn from(command: &Command) -> Self {
+        match command {
+            Command::Attach { .. } => Self::Attach,
+            Command::Tail { .. } => Self::Tail,
+            Command::Log => Self::Log,
+            Command::Quit => Self::Quit,
+            Command::Spawn(_) => Self::Spawn,
+            Command::Kill(_) => Self::Kill,
+            Command::Help => Self::Help,
+        }
+    }
 }
 
-#[cfg(all(feature = "kernel", not(debug_assertions)))]
-#[inline]
-fn assert_handler_in_text(_handler: NineDoorHandler) {}
+#[cfg(feature = "kernel")]
+#[derive(Debug)]
+enum CommandDispatchError {
+    NineDoorUnavailable {
+        verb: CommandVerb,
+    },
+    UnsupportedForNineDoor {
+        verb: CommandVerb,
+    },
+    Bridge {
+        verb: CommandVerb,
+        source: NineDoorBridgeError,
+    },
+}
+
+#[cfg(not(feature = "kernel"))]
+type CommandDispatchError = core::convert::Infallible;
+
+#[cfg(feature = "kernel")]
+#[cfg_attr(not(debug_assertions), allow(dead_code))]
+#[inline(never)]
+extern "C" fn vtable_sentinel() {}
 
 #[cfg(test)]
 mod tests {
     use super::*;
     #[cfg(feature = "net-console")]
     use crate::net::NetTelemetry;
+    #[cfg(feature = "kernel")]
+    use crate::ninedoor::NineDoorBridge;
     use crate::serial::test_support::LoopbackSerial;
     use crate::serial::SerialPort;
 
@@ -1125,5 +1218,57 @@ mod tests {
         let transcript: Vec<u8> = tx.into_iter().collect();
         let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
         assert!(rendered.contains("PONG"), "{rendered}");
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn forwards_commands_to_ninedoor_bridge() {
+        let driver = LoopbackSerial::<32>::new();
+        let serial = SerialPort::<_, 32, 32, 64>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 5 });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "secret").unwrap();
+        let mut audit = AuditLog::new();
+        let mut bridge = NineDoorBridge::new();
+        let mut pump =
+            EventPump::new(serial, timer, ipc, store, &mut audit).with_ninedoor(&mut bridge);
+
+        pump.session = Some(SessionRole::Queen);
+        pump.handle_command(Command::Log)
+            .expect("forward log to NineDoor");
+
+        assert!(audit
+            .entries
+            .iter()
+            .any(|entry| entry.contains("nine-door: log stream requested")));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn error_when_forwarding_without_ninedoor() {
+        let driver = LoopbackSerial::<32>::new();
+        let serial = SerialPort::<_, 32, 32, 64>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 5 });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "secret").unwrap();
+        let mut audit = AuditLog::new();
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit);
+
+        pump.session = Some(SessionRole::Queen);
+        let result = pump.handle_command(Command::Log);
+
+        match result {
+            Err(CommandDispatchError::NineDoorUnavailable { verb }) => {
+                assert_eq!(verb.as_label(), "LOG");
+            }
+            other => panic!("unexpected result: {other:?}"),
+        }
+
+        assert!(audit
+            .denials
+            .iter()
+            .any(|entry| entry.contains("ninedoor unavailable")));
     }
 }

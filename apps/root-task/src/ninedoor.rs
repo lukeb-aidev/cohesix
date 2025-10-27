@@ -3,59 +3,97 @@
 #![cfg(feature = "kernel")]
 #![allow(dead_code)]
 
-use crate::console::Command;
 use crate::event::AuditSink;
-use core::fmt::Write;
+use core::fmt::{self, Write};
 use heapless::String as HeaplessString;
 
-/// Function pointer used to forward console commands to NineDoor.
-pub type NineDoorHandler = fn(&Command, &mut dyn AuditSink);
+/// Minimal NineDoor bridge used by the seL4 build until the full Secure9P server is ported.
+#[derive(Debug, Default)]
+pub struct NineDoorBridge;
 
-/// Retrieve the NineDoor bridge handler used during bring-up.
-#[must_use]
-pub fn bridge_handler() -> NineDoorHandler {
-    handle_command
+/// Errors surfaced by [`NineDoorBridge`] operations.
+#[derive(Debug)]
+pub enum NineDoorBridgeError {
+    /// Command was not recognised by the shim bridge.
+    Unsupported(&'static str),
 }
 
-/// Minimal NineDoor bridge used by the seL4 build until the full Secure9P server is ported.
-pub fn handle_command(command: &Command, audit: &mut dyn AuditSink) {
-    match command {
-        Command::Attach { role, ticket } => {
-            let ticket_repr = ticket
-                .as_ref()
-                .map(|value| value.as_str())
-                .unwrap_or("<none>");
-            let mut message = HeaplessString::<128>::new();
-            let _ = write!(
-                message,
-                "nine-door: attach role={} ticket={ticket_repr}",
-                role.as_str()
-            );
-            audit.info(message.as_str());
+impl fmt::Display for NineDoorBridgeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Unsupported(cmd) => write!(f, "unsupported command: {cmd}"),
         }
-        Command::Tail { path } => {
-            let mut message = HeaplessString::<128>::new();
-            let _ = write!(message, "nine-door: tail {}", path.as_str());
-            audit.info(message.as_str());
-        }
-        Command::Log => {
-            audit.info("nine-door: log stream requested");
-        }
-        Command::Spawn(payload) => {
-            let mut message = HeaplessString::<128>::new();
-            let _ = write!(
-                message,
-                "nine-door: spawn payload={}...",
-                truncate(payload.as_str(), 64)
-            );
-            audit.info(message.as_str());
-        }
-        Command::Kill(identifier) => {
-            let mut message = HeaplessString::<128>::new();
-            let _ = write!(message, "nine-door: kill {}", identifier.as_str());
-            audit.info(message.as_str());
-        }
-        Command::Help | Command::Quit => {}
+    }
+}
+
+impl NineDoorBridge {
+    /// Construct a new bridge instance.
+    #[must_use]
+    pub fn new() -> Self {
+        Self
+    }
+
+    /// Handle an `attach` request received from the console.
+    pub fn attach(
+        &mut self,
+        role: &str,
+        ticket: Option<&str>,
+        audit: &mut dyn AuditSink,
+    ) -> Result<(), NineDoorBridgeError> {
+        let ticket_repr = ticket.unwrap_or("<none>");
+        let mut message = HeaplessString::<128>::new();
+        let _ = write!(
+            message,
+            "nine-door: attach role={role} ticket={ticket_repr}"
+        );
+        audit.info(message.as_str());
+        Ok(())
+    }
+
+    /// Handle a `tail` request.
+    pub fn tail(
+        &mut self,
+        path: &str,
+        audit: &mut dyn AuditSink,
+    ) -> Result<(), NineDoorBridgeError> {
+        let mut message = HeaplessString::<128>::new();
+        let _ = write!(message, "nine-door: tail {path}");
+        audit.info(message.as_str());
+        Ok(())
+    }
+
+    /// Handle a log stream request.
+    pub fn log_stream(&mut self, audit: &mut dyn AuditSink) -> Result<(), NineDoorBridgeError> {
+        audit.info("nine-door: log stream requested");
+        Ok(())
+    }
+
+    /// Handle a spawn request.
+    pub fn spawn(
+        &mut self,
+        payload: &str,
+        audit: &mut dyn AuditSink,
+    ) -> Result<(), NineDoorBridgeError> {
+        let mut message = HeaplessString::<128>::new();
+        let _ = write!(
+            message,
+            "nine-door: spawn payload={}...",
+            truncate(payload, 64)
+        );
+        audit.info(message.as_str());
+        Ok(())
+    }
+
+    /// Handle a kill request.
+    pub fn kill(
+        &mut self,
+        identifier: &str,
+        audit: &mut dyn AuditSink,
+    ) -> Result<(), NineDoorBridgeError> {
+        let mut message = HeaplessString::<128>::new();
+        let _ = write!(message, "nine-door: kill {identifier}");
+        audit.info(message.as_str());
+        Ok(())
     }
 }
 
