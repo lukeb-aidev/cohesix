@@ -78,13 +78,24 @@ pub enum BootInfoError {
     /// The supplied bootinfo pointer was null.
     Null,
     /// The bootinfo pointer was not aligned to the required boundary.
-    Unaligned { address: usize },
+    Unaligned {
+        /// Offending bootinfo pointer address supplied by the caller.
+        address: usize,
+    },
     /// The reported extra bootinfo span exceeded the permitted limit.
-    ExtraTooLarge { words: usize },
+    ExtraTooLarge {
+        /// Number of 64-bit words advertised for the extra bootinfo region.
+        words: usize,
+    },
     /// Arithmetic overflow occurred while computing bounds.
     Overflow,
     /// The computed extra range wrapped or was otherwise invalid.
-    ExtraRange { start: usize, end: usize },
+    ExtraRange {
+        /// Starting address of the invalid bootinfo extra range.
+        start: usize,
+        /// End address of the invalid bootinfo extra range.
+        end: usize,
+    },
 }
 
 impl fmt::Display for BootInfoError {

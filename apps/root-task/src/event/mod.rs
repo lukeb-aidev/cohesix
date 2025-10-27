@@ -812,7 +812,7 @@ fn parse_role(raw: &str) -> Option<Role> {
 
 #[cfg(feature = "kernel")]
 #[derive(Debug, Clone, Copy)]
-enum CommandVerb {
+pub(crate) enum CommandVerb {
     Attach,
     Tail,
     Log,
