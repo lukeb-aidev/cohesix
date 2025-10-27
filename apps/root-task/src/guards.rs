@@ -6,6 +6,49 @@
 use core::ops::Range;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
+/// Trait implemented for plain function pointers so their raw addresses can be
+/// retrieved in a generic fashion. This avoids relying on `as` casts that are
+/// only permitted for primitive types.
+pub trait FunctionPointer: Copy {
+    /// Return the address of the function pointer as a usize.
+    fn addr(self) -> usize;
+}
+
+impl<R> FunctionPointer for fn() -> R {
+    #[inline(always)]
+    fn addr(self) -> usize {
+        self as usize
+    }
+}
+
+impl<A, R> FunctionPointer for fn(A) -> R {
+    #[inline(always)]
+    fn addr(self) -> usize {
+        self as usize
+    }
+}
+
+impl<A, B, R> FunctionPointer for fn(A, B) -> R {
+    #[inline(always)]
+    fn addr(self) -> usize {
+        self as usize
+    }
+}
+
+impl<A, B, C, R> FunctionPointer for fn(A, B, C) -> R {
+    #[inline(always)]
+    fn addr(self) -> usize {
+        self as usize
+    }
+}
+
+impl<A, B, C, D, R> FunctionPointer for fn(A, B, C, D) -> R {
+    #[inline(always)]
+    fn addr(self) -> usize {
+        self as usize
+    }
+}
+
 static TEXT_START: AtomicUsize = AtomicUsize::new(0);
 static TEXT_END: AtomicUsize = AtomicUsize::new(0);
 
@@ -35,10 +78,10 @@ pub fn is_text_ptr(ptr: usize) -> bool {
 #[inline(always)]
 pub fn call_checked<T, F, R>(func: T, call: F) -> R
 where
-    T: Copy,
+    T: FunctionPointer,
     F: FnOnce(T) -> R,
 {
-    let addr = func as *const () as usize;
+    let addr = func.addr();
     if !is_text_ptr(addr) {
         let bounds = text_bounds();
         log::error!(
