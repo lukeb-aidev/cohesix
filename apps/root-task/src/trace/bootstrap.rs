@@ -160,6 +160,7 @@ impl TraceBuffer {
         let _ = self.records.push_back(record);
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     fn snapshot<const N: usize>(&self, out: &mut Vec<BootstrapRecord, N>) {
         out.clear();
         for record in self.records.iter() {
@@ -167,6 +168,7 @@ impl TraceBuffer {
         }
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     fn clear(&mut self) {
         self.sequence = 0;
         self.records.clear();
@@ -219,6 +221,7 @@ pub(crate) fn record_retype_event(
 }
 
 /// Writes the recorded events to the UART console.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn flush_to_uart() {
     let mut writer = DebugPutc;
     let guard = TRACE.lock();
@@ -259,6 +262,7 @@ pub(crate) fn flush_to_uart() {
 }
 
 /// Copies the currently recorded events into the provided buffer.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn snapshot<const N: usize>(out: &mut Vec<BootstrapRecord, N>) {
     TRACE.lock().snapshot(out);
 }

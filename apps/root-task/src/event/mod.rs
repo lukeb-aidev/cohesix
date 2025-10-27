@@ -852,7 +852,7 @@ impl From<&Command> for CommandVerb {
 
 #[cfg(feature = "kernel")]
 #[derive(Debug)]
-enum CommandDispatchError {
+pub(crate) enum CommandDispatchError {
     NineDoorUnavailable {
         verb: CommandVerb,
     },
@@ -866,7 +866,7 @@ enum CommandDispatchError {
 }
 
 #[cfg(not(feature = "kernel"))]
-type CommandDispatchError = core::convert::Infallible;
+pub(crate) type CommandDispatchError = core::convert::Infallible;
 
 #[cfg(feature = "kernel")]
 #[cfg_attr(not(debug_assertions), allow(dead_code))]

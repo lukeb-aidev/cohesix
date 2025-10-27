@@ -26,21 +26,34 @@ use alloc::boxed::Box;
 #[repr(C)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct RetypeArgs {
+    /// Capability pointer to the untyped object being retyped.
     pub ut: sys::seL4_CPtr,
+    /// Numeric identifier describing the requested object type.
     pub objtype: u32,
+    /// Padding reserved for ABI alignment.
     pub _pad0: u32,
+    /// Log2 size of the object range to retype.
     pub size_bits: u8,
+    /// Padding reserved for ABI alignment.
     pub _pad1: [u8; 7],
+    /// Capability pointer for the root CNode receiving the new objects.
     pub root: sys::seL4_CPtr,
+    /// Index within the destination CNode.
     pub node_index: sys::seL4_CPtr,
+    /// Depth (in bits) of the destination CNode pointer.
     pub cnode_depth: u8,
+    /// Padding reserved for ABI alignment.
     pub _pad2: [u8; 7],
+    /// Starting slot offset in the destination CNode.
     pub dest_offset: sys::seL4_CPtr,
+    /// Number of objects to create.
     pub num_objects: u32,
+    /// Padding reserved for ABI alignment.
     pub _pad3: u32,
 }
 
 impl RetypeArgs {
+    /// Constructs a canonical argument block for `seL4_Untyped_Retype`.
     #[inline(always)]
     pub fn new(
         ut: sys::seL4_CPtr,
@@ -76,22 +89,35 @@ impl RetypeArgs {
 /// Error raised when validating retype arguments.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RetypeArgsError {
+    /// The supplied root CNode does not match `InitThreadCNode`.
     RootMismatch {
+        /// Capability pointer provided by the caller.
         provided: sys::seL4_CPtr,
     },
+    /// The node index must be zero for initial retypes.
     NodeIndexNonZero {
+        /// Non-zero node index that was rejected.
         index: sys::seL4_CPtr,
     },
+    /// Destination depth must match the init CNode depth.
     DepthMismatch {
+        /// Depth supplied by the caller.
         provided: u8,
+        /// Expected depth derived from bootinfo.
         expected: u8,
     },
+    /// Destination offset fell outside the empty slot range.
     DestOffsetOutOfRange {
+        /// Requested slot offset.
         offset: sys::seL4_CPtr,
+        /// First slot in the empty range.
         empty_start: sys::seL4_CPtr,
+        /// Exclusive end slot of the empty range.
         empty_end: sys::seL4_CPtr,
     },
+    /// Caller attempted to retype zero objects.
     NumObjectsInvalid {
+        /// Invalid object count.
         provided: u32,
     },
 }
@@ -126,11 +152,14 @@ impl fmt::Display for RetypeArgsError {
 /// Errors produced while probing the init CNode for retype readiness.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PreflightError {
+    /// Failure occurred while calling the probe path.
     Probe(sys::seL4_Error),
+    /// Failure occurred while attempting to clean up probe state.
     Cleanup(sys::seL4_Error),
 }
 
 impl PreflightError {
+    /// Converts the error into its underlying seL4 code.
     #[inline(always)]
     pub fn into_sel4_error(self) -> sys::seL4_Error {
         match self {
@@ -142,12 +171,16 @@ impl PreflightError {
 /// Errors surfaced by `untyped_retype_into_init_root`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RetypeCallError {
+    /// The provided arguments violated required invariants.
     Invariant(RetypeArgsError),
+    /// The preflight probe detected an error.
     Preflight(PreflightError),
+    /// The underlying kernel syscall failed.
     Kernel(sys::seL4_Error),
 }
 
 impl RetypeCallError {
+    /// Converts the composite error into the seL4 status code exported to callers.
     #[inline(always)]
     pub fn into_sel4_error(self) -> sys::seL4_Error {
         match self {
@@ -926,7 +959,7 @@ mod tests {
     fn init_cnode_dest_radix_depth_is_valid() {
         #[cfg(not(target_os = "none"))]
         unsafe {
-            let mut bootinfo: sys::seL4_BootInfo = core::mem::zeroed();
+            let mut bootinfo: sys::seL4_BootInfo = mem::zeroed();
             bootinfo.initThreadCNodeSizeBits = 13;
             super::install_test_bootinfo_for_tests(bootinfo);
         }
@@ -943,7 +976,7 @@ mod tests {
     fn retype_into_init_root_uses_canonical_tuple() {
         #[cfg(not(target_os = "none"))]
         unsafe {
-            let mut bootinfo: sys::seL4_BootInfo = core::mem::zeroed();
+            let mut bootinfo: sys::seL4_BootInfo = mem::zeroed();
             bootinfo.initThreadCNodeSizeBits = 13;
             bootinfo.empty.start = 0x00a6;
             bootinfo.empty.end = 0x0800;
@@ -977,7 +1010,7 @@ mod tests {
     fn init_cnode_retype_dest_matches_canonical_tuple() {
         #[cfg(not(target_os = "none"))]
         unsafe {
-            let mut bootinfo: sys::seL4_BootInfo = core::mem::zeroed();
+            let mut bootinfo: sys::seL4_BootInfo = mem::zeroed();
             bootinfo.initThreadCNodeSizeBits = 13;
             super::install_test_bootinfo_for_tests(bootinfo);
         }
@@ -1050,7 +1083,7 @@ mod tests {
         use std::panic;
 
         unsafe {
-            let mut bootinfo: sys::seL4_BootInfo = core::mem::zeroed();
+            let mut bootinfo: sys::seL4_BootInfo = mem::zeroed();
             bootinfo.initThreadCNodeSizeBits = 5;
             super::install_test_bootinfo_for_tests(bootinfo);
         }
