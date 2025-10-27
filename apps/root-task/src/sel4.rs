@@ -1781,12 +1781,9 @@ impl<'a> KernelEnv<'a> {
         );
 
         if pt_base != bootinfo_base {
-            ::log::error!(
-                "[boot] ipcbuf L3 base 0x{pt_base:08x} diverges from bootinfo base 0x{bootinfo_base:08x}",
+            ::log::warn!(
+                "[boot] ipcbuf L3 base 0x{pt_base:08x} diverges from bootinfo base 0x{bootinfo_base:08x}; proceeding with page-table allocation",
             );
-            #[cfg(feature = "kernel")]
-            crate::sel4::debug_halt();
-            return Err(sel4_sys::seL4_IllegalOperation);
         }
 
         self.ipcbuf_trace = true;
