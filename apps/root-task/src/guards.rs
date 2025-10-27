@@ -48,12 +48,6 @@ impl<A, B, C, D, R> FunctionPointer for fn(A, B, C, D) -> R {
     }
 }
 
-impl<T, R> FunctionPointer for for<'a> fn(&'a [T]) -> R {
-    #[inline(always)]
-    fn addr(self) -> usize {
-        self as usize
-    }
-}
 
 static TEXT_START: AtomicUsize = AtomicUsize::new(0);
 static TEXT_END: AtomicUsize = AtomicUsize::new(0);
