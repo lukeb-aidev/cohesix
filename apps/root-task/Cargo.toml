@@ -33,6 +33,7 @@ nb = "1.1"
 portable-atomic = "1.6"
 log = { version = "0.4", default-features = false }
 bytemuck = { version = "1.14", features = ["must_cast"] }
+static_assertions = "1.1"
 [dependencies.sel4-sys]
 version = "0.0.28"
 optional = true

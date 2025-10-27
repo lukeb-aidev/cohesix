@@ -14,9 +14,11 @@ SECTIONS
   /* Code / RO in one contiguous RX segment */
   . = ALIGN(0x1000);
   .text : {
+    __text_start = .;
     KEEP(*(.text._start))        /* runtime entry stub */
     KEEP(*(.text.sel4_start))    /* root-task entry shim */
     *(.text .text.*)
+    __text_end = .;
   } :text
 
   .rodata : {
