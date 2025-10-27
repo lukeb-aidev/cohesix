@@ -17,7 +17,7 @@ pub mod op;
 #[cfg(feature = "kernel")]
 pub use dispatch::{dispatch_message, DispatchOutcome};
 #[cfg(feature = "kernel")]
-pub use handlers::{BootstrapHandlers, ClosureHandlers};
+pub use handlers::{call_handler, Handler, HandlerError, HandlerResult, HandlerTable};
 #[cfg(feature = "kernel")]
 pub use op::BootstrapOp;
 
@@ -527,6 +527,7 @@ where
         self.process_console_line(&converted);
     }
 
+    #[inline(never)]
     fn handle_command(&mut self, command: Command) -> Result<(), CommandDispatchError> {
         #[cfg(feature = "kernel")]
         let command_clone = command.clone();
@@ -620,6 +621,7 @@ where
     }
 
     #[cfg(feature = "kernel")]
+    #[inline(never)]
     fn forward_to_ninedoor(&mut self, command: &Command) -> Result<(), CommandDispatchError> {
         #[cfg(debug_assertions)]
         {
@@ -631,9 +633,7 @@ where
         let Some(bridge_ref) = self.ninedoor.as_mut() else {
             #[cfg(debug_assertions)]
             {
-                log::warn!(
-                    "attempted to forward {verb:?} without an attached NineDoor bridge"
-                );
+                log::warn!("attempted to forward {verb:?} without an attached NineDoor bridge");
             }
             return Err(CommandDispatchError::NineDoorUnavailable { verb });
         };
@@ -710,6 +710,7 @@ where
         }
     }
 
+    #[inline(never)]
     fn handle_attach(
         &mut self,
         role: HeaplessString<{ MAX_ROLE_LEN }>,

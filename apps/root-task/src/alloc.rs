@@ -30,9 +30,7 @@ pub fn init_heap() {
         .is_ok()
     {
         unsafe {
-            GLOBAL_ALLOCATOR
-                .lock()
-                .init(HEAP.as_mut_ptr(), HEAP_BYTES);
+            GLOBAL_ALLOCATOR.lock().init(HEAP.as_mut_ptr(), HEAP_BYTES);
         }
     }
 }

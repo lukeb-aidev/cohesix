@@ -425,18 +425,24 @@ impl CSpaceCtx {
             DestCNode::Init => {
                 self.log_direct_init_path(dst_slot);
                 if !self.init_cnode_preflighted {
-                    let pf_err = cspace_sys::preflight_init_cnode_writable(dst_slot);
-                    if pf_err != sel4_sys::seL4_NoError {
-                        return pf_err;
+                    if let Err(err) = cspace_sys::preflight_init_cnode_writable(dst_slot) {
+                        return err.into_sel4_error();
                     }
                     self.init_cnode_preflighted = true;
                 }
                 let node_index = 0;
-                let node_depth = 0;
+                let node_depth = sel4_sys::seL4_WordBits as sel4::seL4_Word;
                 let node_offset = dst_slot as sel4::seL4_Word;
 
+                let result = match cspace_sys::untyped_retype_into_init_root(
+                    untyped, obj_ty, size_bits, dst_slot,
+                ) {
+                    Ok(()) => sel4::seL4_NoError,
+                    Err(err) => err.into_sel4_error(),
+                };
+
                 (
-                    cspace_sys::untyped_retype_into_init_root(untyped, obj_ty, size_bits, dst_slot),
+                    result,
                     sel4::seL4_CapInitThreadCNode,
                     node_index,
                     node_depth,

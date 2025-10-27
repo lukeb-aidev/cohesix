@@ -2,61 +2,94 @@
 
 #![cfg(feature = "kernel")]
 
-//! Handler traits for bootstrap IPC message dispatch.
+//! Bootstrap handler primitives built around function pointers.
+
+use core::fmt;
 
 use sel4_sys::seL4_Word;
 
-/// Trait implemented by bootstrap IPC handlers interested in specific opcodes.
-pub trait BootstrapHandlers {
-    /// Handle an attach request. The provided slice includes the opcode word.
-    fn on_attach(&mut self, words: &[seL4_Word]);
+/// Result returned by a bootstrap handler invocation.
+pub type HandlerResult = Result<(), HandlerError>;
 
-    /// Handle a spawn request. The provided slice includes the opcode word.
-    fn on_spawn(&mut self, words: &[seL4_Word]);
+/// Canonical handler pointer type for bootstrap IPC verbs.
+pub type Handler = fn(&[seL4_Word]) -> HandlerResult;
 
-    /// Handle a log request. The provided slice includes the opcode word.
-    fn on_log(&mut self, words: &[seL4_Word]);
+/// Structured error surfaced by bootstrap handlers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HandlerError {
+    /// The payload slice did not meet the handler's expectations.
+    InvalidPayload,
+    /// Handler executed but reported a logical failure.
+    Failure,
 }
 
-/// Adapter allowing closures to satisfy [`BootstrapHandlers`] in tests.
-pub struct ClosureHandlers<F, G, H>
-where
-    F: FnMut(&[seL4_Word]),
-    G: FnMut(&[seL4_Word]),
-    H: FnMut(&[seL4_Word]),
-{
-    attach: F,
-    spawn: G,
-    log: H,
+impl fmt::Display for HandlerError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidPayload => write!(f, "invalid payload"),
+            Self::Failure => write!(f, "handler reported failure"),
+        }
+    }
 }
 
-impl<F, G, H> ClosureHandlers<F, G, H>
-where
-    F: FnMut(&[seL4_Word]),
-    G: FnMut(&[seL4_Word]),
-    H: FnMut(&[seL4_Word]),
-{
-    /// Constructs a handler adapter from the provided closures.
-    pub fn new(attach: F, spawn: G, log: H) -> Self {
+/// Collection of handler entry points for the bootstrap dispatcher.
+#[derive(Clone, Copy)]
+pub struct HandlerTable {
+    /// Handler invoked for `BootstrapOp::Attach` messages.
+    pub attach: Handler,
+    /// Handler invoked for `BootstrapOp::Spawn` messages.
+    pub spawn: Handler,
+    /// Handler invoked for `BootstrapOp::Log` messages.
+    pub log: Handler,
+}
+
+impl HandlerTable {
+    /// Constructs a handler table from the supplied function pointers.
+    #[must_use]
+    pub const fn new(attach: Handler, spawn: Handler, log: Handler) -> Self {
         Self { attach, spawn, log }
     }
 }
 
-impl<F, G, H> BootstrapHandlers for ClosureHandlers<F, G, H>
-where
-    F: FnMut(&[seL4_Word]),
-    G: FnMut(&[seL4_Word]),
-    H: FnMut(&[seL4_Word]),
-{
-    fn on_attach(&mut self, words: &[seL4_Word]) {
-        (self.attach)(words);
+#[cfg(debug_assertions)]
+fn assert_text_fn(handler: Handler) {
+    extern "C" {
+        static __text_start: u8;
+        static __text_end: u8;
     }
 
-    fn on_spawn(&mut self, words: &[seL4_Word]) {
-        (self.spawn)(words);
-    }
+    let ptr = handler as usize;
+    let lo = unsafe { &__text_start as *const _ as usize };
+    let hi = unsafe { &__text_end as *const _ as usize };
+    assert!(
+        ptr >= lo && ptr < hi,
+        "handler ptr not in .text: 0x{ptr:016x}"
+    );
+}
 
-    fn on_log(&mut self, words: &[seL4_Word]) {
-        (self.log)(words);
+/// Invokes the supplied handler after verifying its provenance.
+#[inline(always)]
+pub fn call_handler(handler: Handler, words: &[seL4_Word]) -> HandlerResult {
+    #[cfg(debug_assertions)]
+    {
+        assert_text_fn(handler);
+    }
+    handler(words)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn handler_layout_matches_usize() {
+        assert_eq!(
+            core::mem::size_of::<Handler>(),
+            core::mem::size_of::<usize>()
+        );
+        assert_eq!(
+            core::mem::align_of::<Handler>(),
+            core::mem::align_of::<usize>()
+        );
     }
 }
