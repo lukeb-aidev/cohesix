@@ -14,7 +14,7 @@ use root_task::serial::{
 };
 
 #[test]
-fn invalid_opcode_is_rejected() {
+fn bad_opcode_is_rejected() {
     let words = [0xFF, 0xABCD_EF01_2345_6789];
     let (message, _copy) = build_message(&words);
 
@@ -42,6 +42,6 @@ fn invalid_opcode_is_rejected() {
     assert_eq!(handler.spawn_calls, 0);
     assert_eq!(
         handler.outcomes.as_slice(),
-        &[DispatchOutcome::Unknown(0xFF)],
+        &[DispatchOutcome::BadCommand(0xFF)],
     );
 }

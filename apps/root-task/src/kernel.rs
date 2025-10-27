@@ -25,6 +25,7 @@ use crate::event::{
     AuditSink, BootstrapMessage, BootstrapMessageHandler, EventPump, IpcDispatcher, TickEvent,
     TicketTable, TimerSource,
 };
+use crate::guards;
 use crate::hal::{HalError, Hardware, KernelHal};
 #[cfg(feature = "net-console")]
 use crate::net::{NetStack, CONSOLE_TCP_PORT};
@@ -370,6 +371,15 @@ fn bootstrap<P: Platform>(
     };
     let bootinfo_ref: &'static sel4_sys::seL4_BootInfo = bootinfo_view.header();
     let mut console = DebugConsole::new(platform);
+
+    extern "C" {
+        static __text_start: u8;
+        static __text_end: u8;
+    }
+
+    let text_start = core::ptr::addr_of!(__text_start) as usize;
+    let text_end = core::ptr::addr_of!(__text_end) as usize;
+    guards::init_text_bounds(text_start, text_end);
 
     let mut boot_cspace = CSpace::from_bootinfo(bootinfo_ref);
     let boot_first_free = boot_cspace.next_free_slot();
