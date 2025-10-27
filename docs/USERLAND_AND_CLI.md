@@ -31,7 +31,9 @@ per-command capability checks inside the event pump.
 - The login rate limiter blocks sessions that exceed three failed
   attempts within 60 seconds for 90 seconds. 【F:apps/root-task/src/console/mod.rs†L38-L87】
 - The event pump records outcomes in `PumpMetrics`, incrementing
-  `accepted_commands` and `denied_commands` counters for auditability. 【F:apps/root-task/src/event/mod.rs†L84-L115】【F:apps/root-task/src/event/mod.rs†L240-L347】
+  `accepted_commands` and `denied_commands` counters for auditability and,
+  when built for the kernel, tracking bootstrap IPC deliveries via
+  `bootstrap_messages`. 【F:apps/root-task/src/event/mod.rs†L84-L120】【F:apps/root-task/src/event/mod.rs†L240-L489】
 
 ### 2.3 Output Semantics
 The console emits explicit acknowledgements for every command. Both
