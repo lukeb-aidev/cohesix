@@ -753,15 +753,15 @@ impl NineDoorDispatch {
 }
 
 #[cfg(all(feature = "kernel", debug_assertions))]
-fn assert_handler_in_text(handler: NineDoorHandler) {
-    extern "C" {
-        static __text_start: u8;
-        static __text_end: u8;
-    }
+mod text_bounds;
 
+#[cfg(all(feature = "kernel", debug_assertions))]
+use text_bounds::text_region_bounds;
+
+#[cfg(all(feature = "kernel", debug_assertions))]
+fn assert_handler_in_text(handler: NineDoorHandler) {
     let ptr = handler as usize;
-    let start = unsafe { &__text_start as *const _ as usize };
-    let end = unsafe { &__text_end as *const _ as usize };
+    let (start, end) = text_region_bounds();
 
     assert!(
         ptr >= start && ptr < end,
