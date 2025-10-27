@@ -34,6 +34,17 @@ use crate::net::{NetPoller, CONSOLE_QUEUE_DEPTH};
 use crate::ninedoor::NineDoorHandler;
 use crate::serial::{SerialDriver, SerialPort, SerialTelemetry, DEFAULT_LINE_CAPACITY};
 
+#[cfg(feature = "kernel")]
+use static_assertions::const_assert;
+
+#[cfg(feature = "kernel")]
+const _: () = {
+    use core::mem::{align_of, size_of};
+
+    const_assert!(size_of::<NineDoorHandler>() == size_of::<usize>());
+    const_assert!(align_of::<NineDoorHandler>() == align_of::<usize>());
+};
+
 fn format_message(args: fmt::Arguments<'_>) -> HeaplessString<128> {
     let mut buf = HeaplessString::new();
     let _ = FmtWrite::write_fmt(&mut buf, args);
@@ -294,7 +305,7 @@ where
     #[cfg(feature = "net-console")]
     net: Option<&'a mut dyn NetPoller>,
     #[cfg(feature = "kernel")]
-    ninedoor: Option<NineDoorHandler>,
+    ninedoor: Option<NineDoorDispatch>,
     #[cfg(feature = "kernel")]
     bootstrap_handler: Option<&'a mut dyn BootstrapMessageHandler>,
 }
@@ -349,7 +360,7 @@ where
     /// Attach a NineDoor handler to the event pump.
     #[cfg(feature = "kernel")]
     pub fn with_ninedoor(mut self, handler: NineDoorHandler) -> Self {
-        self.ninedoor = Some(handler);
+        self.ninedoor = Some(NineDoorDispatch::new(handler));
         self
     }
 
@@ -607,8 +618,8 @@ where
 
     #[cfg(feature = "kernel")]
     fn forward_to_ninedoor(&mut self, command: &Command) {
-        if let Some(handler) = self.ninedoor {
-            handler(command, &mut *self.audit);
+        if let Some(dispatch) = self.ninedoor {
+            dispatch.invoke(command, &mut *self.audit);
         }
     }
 
@@ -720,6 +731,47 @@ fn parse_role(raw: &str) -> Option<Role> {
         _ => None,
     }
 }
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy)]
+#[repr(C)]
+struct NineDoorDispatch {
+    handler: NineDoorHandler,
+}
+
+#[cfg(feature = "kernel")]
+impl NineDoorDispatch {
+    fn new(handler: NineDoorHandler) -> Self {
+        assert_handler_in_text(handler);
+        Self { handler }
+    }
+
+    fn invoke(self, command: &Command, audit: &mut dyn AuditSink) {
+        assert_handler_in_text(self.handler);
+        (self.handler)(command, audit);
+    }
+}
+
+#[cfg(all(feature = "kernel", debug_assertions))]
+fn assert_handler_in_text(handler: NineDoorHandler) {
+    extern "C" {
+        static __text_start: u8;
+        static __text_end: u8;
+    }
+
+    let ptr = handler as usize;
+    let start = unsafe { &__text_start as *const _ as usize };
+    let end = unsafe { &__text_end as *const _ as usize };
+
+    assert!(
+        ptr >= start && ptr < end,
+        "NineDoor handler pointer outside .text: 0x{ptr:016x} (text=0x{start:016x}..0x{end:016x})"
+    );
+}
+
+#[cfg(all(feature = "kernel", not(debug_assertions)))]
+#[inline]
+fn assert_handler_in_text(_handler: NineDoorHandler) {}
 
 #[cfg(test)]
 mod tests {
