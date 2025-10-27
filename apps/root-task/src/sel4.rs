@@ -1698,12 +1698,15 @@ impl<'a> KernelEnv<'a> {
         }
 
         let res = if trace.cnode_root == self.bootinfo.init_cnode_cap() {
-            cspace_sys::untyped_retype_into_init_root(
+            match cspace_sys::untyped_retype_into_init_root(
                 untyped_cap as seL4_CPtr,
                 trace.object_type,
                 trace.object_size_bits,
                 trace.dest_slot,
-            )
+            ) {
+                Ok(()) => seL4_NoError,
+                Err(err) => err.into_sel4_error(),
+            }
         } else {
             unsafe {
                 seL4_Untyped_Retype(
@@ -1743,12 +1746,15 @@ impl<'a> KernelEnv<'a> {
         self.log_retype_invocation(&trace);
 
         let res = if trace.cnode_root == self.bootinfo.init_cnode_cap() {
-            cspace_sys::untyped_retype_into_init_root(
+            match cspace_sys::untyped_retype_into_init_root(
                 untyped_cap as seL4_CPtr,
                 trace.object_type,
                 trace.object_size_bits,
                 trace.dest_slot,
-            )
+            ) {
+                Ok(()) => seL4_NoError,
+                Err(err) => err.into_sel4_error(),
+            }
         } else {
             unsafe {
                 seL4_Untyped_Retype(
@@ -2498,7 +2504,7 @@ mod tests {
         );
         let (sanitised, init_bits) = env.sanitise_retype_trace(trace);
         assert_eq!(init_bits, 13);
-        assert_eq!(sanitised.cnode_depth, 0);
+        assert_eq!(sanitised.cnode_depth, seL4_WordBits as seL4_Word);
         assert_eq!(sanitised.node_index, 0);
         assert_eq!(sanitised.dest_offset, slot as seL4_Word);
     }

@@ -4,14 +4,61 @@
 
 use heapless::{String as HeaplessString, Vec as HeaplessVec};
 use nb::Error as NbError;
+use root_task::event::BootstrapOp;
 use root_task::event::{
     dispatch_message, AuditSink, BootstrapMessage, BootstrapMessageHandler, DispatchOutcome,
-    IpcDispatcher, TickEvent, TimerSource,
+    HandlerResult, HandlerTable, IpcDispatcher, TickEvent, TimerSource,
 };
-use root_task::event::{BootstrapHandlers, BootstrapOp};
 use root_task::serial::{SerialDriver, SerialError};
 use sel4_sys::seL4_MessageInfo;
+use std::cell::RefCell;
 use std::vec::Vec;
+
+thread_local! {
+    static ACTIVE_HANDLER: RefCell<Option<*mut RecordingHandlers>> = RefCell::new(None);
+}
+
+fn with_active<R>(f: impl FnOnce(&mut RecordingHandlers) -> R) -> R {
+    ACTIVE_HANDLER.with(|slot| {
+        let mut guard = slot.borrow_mut();
+        let ptr = guard
+            .as_ref()
+            .copied()
+            .expect("active handler not installed");
+        // SAFETY: the pointer is installed with an exclusive reference and cleared
+        // immediately after dispatch completes.
+        let ctx = unsafe { &mut *ptr };
+        f(ctx)
+    })
+}
+
+fn attach_handler(words: &[sel4_sys::seL4_Word]) -> HandlerResult {
+    with_active(|ctx| {
+        ctx.attach_calls = ctx.attach_calls.saturating_add(1);
+        ctx.record(words);
+    });
+    Ok(())
+}
+
+fn spawn_handler(words: &[sel4_sys::seL4_Word]) -> HandlerResult {
+    with_active(|ctx| {
+        ctx.spawn_calls = ctx.spawn_calls.saturating_add(1);
+        ctx.record(words);
+    });
+    Ok(())
+}
+
+fn log_handler(words: &[sel4_sys::seL4_Word]) -> HandlerResult {
+    with_active(|ctx| {
+        ctx.log_calls = ctx.log_calls.saturating_add(1);
+        ctx.record(words);
+    });
+    Ok(())
+}
+
+fn table() -> HandlerTable {
+    HandlerTable::new(attach_handler, spawn_handler, log_handler)
+}
 
 pub struct DummySerial;
 
@@ -86,26 +133,9 @@ impl RecordingHandlers {
     }
 }
 
-impl BootstrapHandlers for RecordingHandlers {
-    fn on_attach(&mut self, words: &[sel4_sys::seL4_Word]) {
-        self.attach_calls = self.attach_calls.saturating_add(1);
-        self.record(words);
-    }
-
-    fn on_spawn(&mut self, words: &[sel4_sys::seL4_Word]) {
-        self.spawn_calls = self.spawn_calls.saturating_add(1);
-        self.record(words);
-    }
-
-    fn on_log(&mut self, words: &[sel4_sys::seL4_Word]) {
-        self.log_calls = self.log_calls.saturating_add(1);
-        self.record(words);
-    }
-}
-
 impl BootstrapMessageHandler for RecordingHandlers {
     fn handle(&mut self, message: &BootstrapMessage, audit: &mut dyn AuditSink) {
-        let outcome = dispatch_message(message.payload.as_slice(), self);
+        let outcome = self.dispatch_payload(message.payload.as_slice());
         let mut summary = HeaplessString::<96>::new();
         let _ = summary.push_str("dispatch outcome=");
         let _ = summary.push_str(match outcome {
@@ -117,6 +147,21 @@ impl BootstrapMessageHandler for RecordingHandlers {
         });
         audit.info(summary.as_str());
         let _ = self.outcomes.push(outcome);
+    }
+}
+
+impl RecordingHandlers {
+    fn dispatch_payload(&mut self, words: &[sel4_sys::seL4_Word]) -> DispatchOutcome {
+        ACTIVE_HANDLER.with(|slot| {
+            let mut guard = slot.borrow_mut();
+            debug_assert!(guard.is_none(), "handler context already active");
+            *guard = Some(self as *mut _);
+        });
+        let outcome = dispatch_message(words, &table());
+        ACTIVE_HANDLER.with(|slot| {
+            *slot.borrow_mut() = None;
+        });
+        outcome
     }
 }
 

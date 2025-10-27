@@ -5,7 +5,6 @@
 extern crate alloc;
 
 use alloc::boxed::Box;
-use bytemuck::cast_slice;
 use core::cmp;
 use core::fmt::{self, Write};
 use core::panic::PanicInfo;
@@ -169,6 +168,33 @@ impl<'a, P: Platform> Write for DebugConsole<'a, P> {
     }
 }
 
+#[cfg(debug_assertions)]
+fn log_text_span() {
+    extern "C" {
+        static __text_start: u8;
+        static __text_end: u8;
+    }
+
+    let lo = unsafe { &__text_start as *const _ as usize };
+    let hi = unsafe { &__text_end as *const _ as usize };
+    log::info!("[dbg] .text [{:#x}..{:#x})", lo, hi);
+    let handle_ptr = EventPump::<
+        Pl011,
+        KernelTimer,
+        KernelIpc,
+        TicketTable<4>,
+        { DEFAULT_RX_CAPACITY },
+        { DEFAULT_TX_CAPACITY },
+        { DEFAULT_LINE_CAPACITY },
+    >::handle_command as usize;
+    let retype_ptr = crate::bootstrap::cspace_sys::untyped_retype_into_init_root as usize;
+    log::info!(
+        "[dbg] anchors: handle_cmd={:#x} retype_call={:#x}",
+        handle_ptr,
+        retype_ptr
+    );
+}
+
 #[cfg(not(target_arch = "aarch64"))]
 compile_error!("root-task kernel build currently supports only aarch64 targets");
 
@@ -274,6 +300,9 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
 
     console.writeln_prefixed("entered from seL4 (stage0)");
     console.writeln_prefixed("Cohesix boot: root-task online");
+
+    #[cfg(debug_assertions)]
+    log_text_span();
 
     console.report_bootinfo(bootinfo_ref);
 
@@ -977,30 +1006,43 @@ where
 }
 
 #[derive(Debug, PartialEq, Eq)]
-enum PayloadPreview<'a> {
+enum PayloadPreview {
     Empty,
-    Utf8(&'a str),
+    Utf8(HeaplessString<{ MAX_PAYLOAD_LOG_BYTES }>),
     Hex(HeaplessVec<HeaplessString<96>, { MAX_HEX_LINES }>),
 }
 
-fn preview_payload(words: &[sel4_sys::seL4_Word]) -> PayloadPreview<'_> {
+fn preview_payload(words: &[sel4_sys::seL4_Word]) -> PayloadPreview {
     if words.is_empty() {
         return PayloadPreview::Empty;
     }
 
-    let bytes = cast_slice(words);
+    let mut bytes: heapless::Vec<u8, { MAX_PAYLOAD_LOG_BYTES }> = heapless::Vec::new();
+    'outer: for &word in words {
+        for byte in word.to_le_bytes() {
+            if bytes.len() == MAX_PAYLOAD_LOG_BYTES {
+                break 'outer;
+            }
+            bytes
+                .push(byte)
+                .expect("bytes length bounded by MAX_PAYLOAD_LOG_BYTES");
+        }
+    }
+
     if bytes.is_empty() {
         return PayloadPreview::Empty;
     }
 
-    let limit = cmp::min(bytes.len(), MAX_PAYLOAD_LOG_BYTES);
-    let slice = &bytes[..limit];
-    match core::str::from_utf8(slice) {
-        Ok(text) => PayloadPreview::Utf8(text),
+    match core::str::from_utf8(bytes.as_slice()) {
+        Ok(text) => {
+            let mut owned = HeaplessString::<{ MAX_PAYLOAD_LOG_BYTES }>::new();
+            let _ = owned.push_str(text);
+            PayloadPreview::Utf8(owned)
+        }
         Err(_) => {
             let mut lines: HeaplessVec<HeaplessString<96>, { MAX_HEX_LINES }> = HeaplessVec::new();
             let mut offset = 0usize;
-            for chunk in slice.chunks(HEX_CHUNK_BYTES) {
+            for chunk in bytes.as_slice().chunks(HEX_CHUNK_BYTES) {
                 let mut line = HeaplessString::<96>::new();
                 let _ = write!(line, "[staged hex] {:04x}:", offset);
                 for byte in chunk {
@@ -1020,7 +1062,7 @@ fn log_bootstrap_payload(words: &[sel4_sys::seL4_Word]) {
     match preview_payload(words) {
         PayloadPreview::Empty => {}
         PayloadPreview::Utf8(text) => {
-            log::info!("[staged utf8] {text}");
+            log::info!("[staged utf8] {}", text.as_str());
         }
         PayloadPreview::Hex(lines) => {
             for line in lines {
@@ -1266,7 +1308,7 @@ mod tests {
             words.push(value).expect("utf8 payload within limit");
         }
         match preview_payload(words.as_slice()) {
-            PayloadPreview::Utf8(text) => assert!(text.starts_with("hello world")),
+            PayloadPreview::Utf8(text) => assert!(text.as_str().starts_with("hello world")),
             other => panic!("expected utf8 preview, got {other:?}"),
         }
     }

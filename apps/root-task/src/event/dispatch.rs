@@ -6,7 +6,7 @@
 
 use sel4_sys::seL4_Word;
 
-use crate::event::handlers::BootstrapHandlers;
+use crate::event::handlers::{call_handler, HandlerTable};
 use crate::event::op::BootstrapOp;
 
 /// Result of attempting to dispatch a bootstrap IPC payload.
@@ -22,10 +22,7 @@ pub enum DispatchOutcome {
 
 /// Dispatches a bootstrap IPC payload to the handler implementation.
 #[must_use]
-pub fn dispatch_message(
-    words: &[seL4_Word],
-    handlers: &mut dyn BootstrapHandlers,
-) -> DispatchOutcome {
+pub fn dispatch_message(words: &[seL4_Word], handlers: &HandlerTable) -> DispatchOutcome {
     let Some(&opcode_word) = words.first() else {
         log::warn!("[bootstrap-ipc] empty payload");
         return DispatchOutcome::Empty;
@@ -39,10 +36,14 @@ pub fn dispatch_message(
         return DispatchOutcome::Unknown(opcode_word);
     };
 
-    match opcode {
-        BootstrapOp::Attach => handlers.on_attach(words),
-        BootstrapOp::Spawn => handlers.on_spawn(words),
-        BootstrapOp::Log => handlers.on_log(words),
+    let result = match opcode {
+        BootstrapOp::Attach => call_handler(handlers.attach, words),
+        BootstrapOp::Spawn => call_handler(handlers.spawn, words),
+        BootstrapOp::Log => call_handler(handlers.log, words),
+    };
+
+    if let Err(err) = result {
+        log::error!("[bootstrap-ipc] handler for {opcode:?} failed: {err}");
     }
 
     DispatchOutcome::Handled(opcode)

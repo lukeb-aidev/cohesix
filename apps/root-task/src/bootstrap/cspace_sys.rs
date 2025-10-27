@@ -6,6 +6,8 @@
 extern crate alloc;
 
 use core::convert::TryFrom;
+use core::fmt;
+use core::mem;
 
 use crate::boot;
 use crate::sel4;
@@ -19,6 +21,207 @@ static PREFLIGHT_COMPLETED: AtomicBool = AtomicBool::new(false);
 
 #[cfg(all(test, not(target_os = "none")))]
 use alloc::boxed::Box;
+
+/// Canonical ABI representation for `seL4_Untyped_Retype` arguments.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct RetypeArgs {
+    pub ut: sys::seL4_CPtr,
+    pub objtype: u32,
+    pub _pad0: u32,
+    pub size_bits: u8,
+    pub _pad1: [u8; 7],
+    pub root: sys::seL4_CPtr,
+    pub node_index: sys::seL4_CPtr,
+    pub cnode_depth: u8,
+    pub _pad2: [u8; 7],
+    pub dest_offset: sys::seL4_CPtr,
+    pub num_objects: u32,
+    pub _pad3: u32,
+}
+
+impl RetypeArgs {
+    #[inline(always)]
+    pub fn new(
+        ut: sys::seL4_CPtr,
+        objtype: sys::seL4_Word,
+        size_bits: sys::seL4_Word,
+        root: sys::seL4_CPtr,
+        node_index: sys::seL4_CPtr,
+        cnode_depth: sys::seL4_Word,
+        dest_offset: sys::seL4_CPtr,
+        num_objects: u32,
+    ) -> Self {
+        debug_assert!(size_bits <= u8::MAX as sys::seL4_Word);
+        debug_assert!(cnode_depth <= u8::MAX as sys::seL4_Word);
+        let size_bits_u8 = size_bits as u8;
+        let depth_u8 = cnode_depth as u8;
+        Self {
+            ut,
+            objtype: objtype as u32,
+            _pad0: 0,
+            size_bits: size_bits_u8,
+            _pad1: [0; 7],
+            root,
+            node_index,
+            cnode_depth: depth_u8,
+            _pad2: [0; 7],
+            dest_offset,
+            num_objects,
+            _pad3: 0,
+        }
+    }
+}
+
+/// Error raised when validating retype arguments.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RetypeArgsError {
+    RootMismatch {
+        provided: sys::seL4_CPtr,
+    },
+    NodeIndexNonZero {
+        index: sys::seL4_CPtr,
+    },
+    DepthMismatch {
+        provided: u8,
+        expected: u8,
+    },
+    DestOffsetOutOfRange {
+        offset: sys::seL4_CPtr,
+        empty_start: sys::seL4_CPtr,
+        empty_end: sys::seL4_CPtr,
+    },
+    NumObjectsInvalid {
+        provided: u32,
+    },
+}
+
+impl fmt::Display for RetypeArgsError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::RootMismatch { provided } => {
+                write!(f, "root 0x{provided:04x} != InitThreadCNode")
+            }
+            Self::NodeIndexNonZero { index } => {
+                write!(f, "node_index 0x{index:04x} must be zero for init retype")
+            }
+            Self::DepthMismatch { provided, expected } => {
+                write!(f, "cnode_depth {provided} must equal {expected} bits")
+            }
+            Self::DestOffsetOutOfRange {
+                offset,
+                empty_start,
+                empty_end,
+            } => write!(
+                f,
+                "dest_offset 0x{offset:04x} outside [{empty_start:04x}..{empty_end:04x})"
+            ),
+            Self::NumObjectsInvalid { provided } => {
+                write!(f, "num_objects {provided} must be at least one")
+            }
+        }
+    }
+}
+
+/// Errors produced while probing the init CNode for retype readiness.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PreflightError {
+    Probe(sys::seL4_Error),
+    Cleanup(sys::seL4_Error),
+}
+
+impl PreflightError {
+    #[inline(always)]
+    pub fn into_sel4_error(self) -> sys::seL4_Error {
+        match self {
+            Self::Probe(err) | Self::Cleanup(err) => err,
+        }
+    }
+}
+
+/// Errors surfaced by `untyped_retype_into_init_root`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RetypeCallError {
+    Invariant(RetypeArgsError),
+    Preflight(PreflightError),
+    Kernel(sys::seL4_Error),
+}
+
+impl RetypeCallError {
+    #[inline(always)]
+    pub fn into_sel4_error(self) -> sys::seL4_Error {
+        match self {
+            Self::Invariant(_) => sys::seL4_Error::seL4_InvalidArgument,
+            Self::Preflight(err) => err.into_sel4_error(),
+            Self::Kernel(err) => err,
+        }
+    }
+}
+
+impl From<PreflightError> for RetypeCallError {
+    fn from(err: PreflightError) -> Self {
+        Self::Preflight(err)
+    }
+}
+
+impl From<RetypeArgsError> for RetypeCallError {
+    fn from(err: RetypeArgsError) -> Self {
+        Self::Invariant(err)
+    }
+}
+
+/// Emits a diagnostic trace of the supplied retype arguments.
+pub fn log_retype_args(args: &RetypeArgs) {
+    log::info!(
+        "[retype] ut={:#x} type={:#x} size_bits={} root={:#x} idx={:#x} depth={} off={:#x} n={}",
+        args.ut,
+        args.objtype,
+        args.size_bits,
+        args.root,
+        args.node_index,
+        args.cnode_depth,
+        args.dest_offset,
+        args.num_objects
+    );
+}
+
+/// Validates the canonical invariants for init CNode retypes.
+pub fn validate_retype_args(
+    args: &RetypeArgs,
+    empty_start: sys::seL4_CPtr,
+    empty_end: sys::seL4_CPtr,
+) -> Result<(), RetypeArgsError> {
+    if args.root != sel4::seL4_CapInitThreadCNode {
+        return Err(RetypeArgsError::RootMismatch {
+            provided: args.root,
+        });
+    }
+    if args.node_index != 0 {
+        return Err(RetypeArgsError::NodeIndexNonZero {
+            index: args.node_index,
+        });
+    }
+    let expected_depth = mem::size_of::<sys::seL4_Word>() as u8 * 8;
+    if args.cnode_depth != expected_depth {
+        return Err(RetypeArgsError::DepthMismatch {
+            provided: args.cnode_depth,
+            expected: expected_depth,
+        });
+    }
+    if args.dest_offset < empty_start || args.dest_offset >= empty_end {
+        return Err(RetypeArgsError::DestOffsetOutOfRange {
+            offset: args.dest_offset,
+            empty_start,
+            empty_end,
+        });
+    }
+    if args.num_objects == 0 {
+        return Err(RetypeArgsError::NumObjectsInvalid {
+            provided: args.num_objects,
+        });
+    }
+    Ok(())
+}
 
 /// Depth (in bits) for a canonical single-level CNode.
 pub const CANONICAL_CNODE_DEPTH_BITS: u8 = sys::seL4_WordBits as u8;
@@ -54,7 +257,7 @@ fn boot_empty_window() -> (sys::seL4_CPtr, sys::seL4_CPtr) {
 }
 
 /// Quick probe to ensure the init CNode can accept write operations before issuing a Retype.
-pub fn preflight_init_cnode_writable(probe_slot: sys::seL4_CPtr) -> sys::seL4_Error {
+pub fn preflight_init_cnode_writable(probe_slot: sys::seL4_CPtr) -> Result<(), PreflightError> {
     let root = bi_init_cnode_cptr();
     let bits = bi_init_cnode_bits();
     debug_assert!(
@@ -97,7 +300,7 @@ pub fn preflight_init_cnode_writable(probe_slot: sys::seL4_CPtr) -> sys::seL4_Er
                 sel4::error_name(err),
                 slot = probe_slot,
             );
-            return err;
+            return Err(PreflightError::Probe(err));
         }
 
         let delete_err = unsafe { sys::seL4_CNode_Delete(root, probe_slot, depth) };
@@ -109,7 +312,7 @@ pub fn preflight_init_cnode_writable(probe_slot: sys::seL4_CPtr) -> sys::seL4_Er
                 sel4::error_name(delete_err),
                 slot = probe_slot,
             );
-            return delete_err;
+            return Err(PreflightError::Cleanup(delete_err));
         }
     }
 
@@ -118,7 +321,7 @@ pub fn preflight_init_cnode_writable(probe_slot: sys::seL4_CPtr) -> sys::seL4_Er
         let _ = probe_slot;
     }
 
-    sys::seL4_NoError
+    Ok(())
 }
 
 #[cfg(all(test, not(target_os = "none")))]
@@ -242,7 +445,12 @@ pub fn init_cnode_retype_dest(
         (slot as usize) < capacity,
         "slot 0x{slot:04x} exceeds init CNode capacity (limit=0x{capacity:04x})",
     );
-    (bi_init_cnode_cptr(), 0, 0, slot as sys::seL4_Word)
+    (
+        bi_init_cnode_cptr(),
+        0,
+        sys::seL4_WordBits as sys::seL4_Word,
+        slot as sys::seL4_Word,
+    )
 }
 
 #[cfg(target_os = "none")]
@@ -518,7 +726,7 @@ pub fn untyped_retype_into_init_root(
     obj_type: sys::seL4_Word,
     size_bits: sys::seL4_Word,
     dst_slot: sys::seL4_CPtr,
-) -> sys::seL4_Error {
+) -> Result<(), RetypeCallError> {
     let init_bits = bi_init_cnode_bits();
     let slot_capacity = if init_bits as usize >= usize::BITS as usize {
         usize::MAX
@@ -550,53 +758,57 @@ pub fn untyped_retype_into_init_root(
     }
 
     let (root, node_index, node_depth, node_offset) = init_cnode_retype_dest(dst_slot);
-    debug_assert_eq!(node_index, 0);
-    debug_assert_eq!(node_depth, 0);
-
-    ::log::info!(
-        "Retype DEST(root=0x{root:x} idx={idx} depth={depth} off=0x{off:x} obj={obj_type} sz={size_bits})",
-        root = root,
-        idx = node_index,
-        depth = node_depth,
-        off = node_offset,
-        obj_type = obj_type,
-        size_bits = size_bits,
+    let args = RetypeArgs::new(
+        untyped_slot,
+        obj_type,
+        size_bits,
+        root,
+        node_index,
+        node_depth,
+        node_offset,
+        1,
     );
+
+    log_retype_args(&args);
 
     #[cfg(target_os = "none")]
     {
+        let (empty_start, empty_end) = boot_empty_window();
+        debug_assert!(node_index == 0);
+        let expected_depth = mem::size_of::<sys::seL4_Word>() as usize * 8;
+        debug_assert_eq!(usize::from(args.cnode_depth), expected_depth);
+        debug_assert!(
+            args.dest_offset >= empty_start && args.dest_offset < empty_end,
+            "dest_offset outside boot empty window"
+        );
+
+        validate_retype_args(&args, empty_start, empty_end)?;
+
         if !PREFLIGHT_COMPLETED.load(Ordering::Acquire) {
-            let pf_err = preflight_init_cnode_writable(dst_slot);
-            if pf_err != sys::seL4_NoError {
-                ::log::error!(
-                    "Retype preflight failed: err={pf_err} ({name})",
-                    name = sel4::error_name(pf_err),
-                );
-                return pf_err;
-            }
+            preflight_init_cnode_writable(dst_slot)?;
             PREFLIGHT_COMPLETED.store(true, Ordering::Release);
         }
 
         let err = unsafe {
             sys::seL4_Untyped_Retype(
-                untyped_slot,
+                args.ut,
                 obj_type,
                 size_bits,
-                root,
-                node_index,
+                args.root,
+                args.node_index,
                 node_depth,
-                node_offset,
-                1,
+                args.dest_offset,
+                args.num_objects,
             )
         };
         if err != sys::seL4_NoError {
-            ::log::error!(
+            log::error!(
                 "Untyped_Retype failed: err={err} ({name})",
                 err = err,
                 name = sel4::error_name(err),
             );
+            return Err(RetypeCallError::Kernel(err));
         }
-        err
     }
 
     #[cfg(not(target_os = "none"))]
@@ -610,8 +822,9 @@ pub fn untyped_retype_into_init_root(
             size_bits,
         });
         let _ = (untyped_slot, obj_type, size_bits);
-        sys::seL4_NoError
     }
+
+    Ok(())
 }
 
 #[inline(always)]
@@ -626,7 +839,10 @@ pub fn untyped_retype_into_cnode(
 ) -> sys::seL4_Error {
     let init_root = bi_init_cnode_cptr();
     if dest_root == init_root {
-        return untyped_retype_into_init_root(untyped_slot, obj_type, size_bits, dst_slot);
+        return match untyped_retype_into_init_root(untyped_slot, obj_type, size_bits, dst_slot) {
+            Ok(()) => sys::seL4_NoError,
+            Err(err) => err.into_sel4_error(),
+        };
     }
 
     #[cfg(target_os = "none")]
@@ -733,14 +949,14 @@ mod tests {
         while super::host_trace::take_last().is_some() {}
 
         let err = untyped_retype_into_init_root(0, 0, 0, slot as _);
-        assert_eq!(err, sys::seL4_NoError);
+        assert!(err.is_ok());
 
         #[cfg(not(target_os = "none"))]
         {
             if let Some(trace) = super::host_trace::take_last() {
                 assert_eq!(trace.root, bi_init_cnode_cptr());
                 assert_eq!(trace.node_index, 0);
-                assert_eq!(trace.node_depth, 0);
+                assert_eq!(trace.node_depth, sys::seL4_WordBits as _);
                 assert_eq!(trace.node_offset, slot as _);
                 assert_eq!(trace.object_type, 0);
                 assert_eq!(trace.size_bits, 0);
@@ -763,7 +979,7 @@ mod tests {
         let (root, idx, depth, off) = super::init_cnode_retype_dest(slot as _);
         assert_eq!(root, bi_init_cnode_cptr());
         assert_eq!(idx, 0);
-        assert_eq!(depth, 0);
+        assert_eq!(depth, sys::seL4_WordBits as _);
         assert_eq!(off, slot as _);
     }
 
@@ -775,6 +991,48 @@ mod tests {
         assert_eq!(idx, slot as _);
         assert_eq!(depth, sys::seL4_WordBits as _);
         assert_eq!(off, 0);
+    }
+
+    #[test]
+    fn validate_retype_args_accepts_canonical_call() {
+        let empty_start = 0x100;
+        let empty_end = 0x200;
+        let args = super::RetypeArgs::new(
+            0x80,
+            0x20,
+            12,
+            bi_init_cnode_cptr(),
+            0,
+            sys::seL4_WordBits as _,
+            0x180,
+            1,
+        );
+        assert!(
+            super::validate_retype_args(&args, empty_start, empty_end).is_ok(),
+            "canonical args should validate"
+        );
+    }
+
+    #[test]
+    fn validate_retype_args_rejects_offset_before_window() {
+        let empty_start = 0x120;
+        let empty_end = 0x200;
+        let args = super::RetypeArgs::new(
+            0x90,
+            0x30,
+            10,
+            bi_init_cnode_cptr(),
+            0,
+            sys::seL4_WordBits as _,
+            empty_start - 1,
+            1,
+        );
+        let err = super::validate_retype_args(&args, empty_start, empty_end)
+            .expect_err("offset before window should fail");
+        match err {
+            super::RetypeArgsError::DestOffsetOutOfRange { .. } => {}
+            other => panic!("unexpected error: {other:?}"),
+        }
     }
 
     #[cfg(not(target_os = "none"))]
