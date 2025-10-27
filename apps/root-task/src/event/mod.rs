@@ -621,8 +621,6 @@ where
 
     #[cfg(feature = "kernel")]
     fn forward_to_ninedoor(&mut self, command: &Command) -> Result<(), CommandDispatchError> {
-        debug_assert!(self.ninedoor.is_some(), "NineDoor not attached");
-
         #[cfg(debug_assertions)]
         {
             vtable_sentinel();
@@ -631,6 +629,12 @@ where
         let verb = CommandVerb::from(command);
 
         let Some(bridge_ref) = self.ninedoor.as_mut() else {
+            #[cfg(debug_assertions)]
+            {
+                log::warn!(
+                    "attempted to forward {verb:?} without an attached NineDoor bridge"
+                );
+            }
             return Err(CommandDispatchError::NineDoorUnavailable { verb });
         };
 
