@@ -28,6 +28,7 @@ pub use sel4_sys::{
     seL4_CapSMMUSIDControl, seL4_Error, seL4_GetBootInfo, seL4_MessageInfo, seL4_NoError,
     seL4_NotEnoughMemory, seL4_RangeError, seL4_Untyped, seL4_Untyped_Retype, seL4_Word,
 };
+use static_assertions::const_assert;
 
 /// Canonical capability rights representation exposed by seL4.
 pub type SeL4CapRights = sel4_sys::seL4_CapRights;
@@ -47,6 +48,8 @@ pub const IPC_PAGE_BITS: usize = 12;
 
 /// Size in bytes of a single seL4 IPC buffer page.
 pub const IPC_PAGE_BYTES: usize = 1 << IPC_PAGE_BITS;
+
+const_assert!(sel4_sys::seL4_PageBits == 12);
 
 /// Returns the architectural word width (in bits) exposed by seL4.
 #[inline(always)]
@@ -1761,20 +1764,46 @@ impl<'a> KernelEnv<'a> {
     /// Maps the init thread's IPC buffer frame into the supplied virtual address.
     pub fn map_ipc_buffer(&mut self, vaddr: usize) -> Result<(), seL4_Error> {
         assert_ne!(vaddr, 0, "IPC buffer pointer must be non-null");
-        let aligned = Self::align_down(vaddr, PAGE_SIZE);
         assert_eq!(
-            aligned, vaddr,
-            "IPC buffer pointer must be aligned to the page size"
+            vaddr & ((1 << IPC_PAGE_BITS) - 1),
+            0,
+            "IPC buffer pointer must be aligned to the page size",
         );
+
+        let (l1, l2, l3, page) = Self::translation_indices(vaddr);
+        let pt_base = PageTableBookkeeper::<MAX_PAGE_TABLES>::base_for(vaddr);
+        let bootinfo_addr = self.bootinfo as *const _ as usize;
+        let bootinfo_base = PageTableBookkeeper::<MAX_PAGE_TABLES>::base_for(bootinfo_addr);
+
+        ::log::info!(
+            "[boot] ipcbuf translation indices l1={l1:#05x} l2={l2:#05x} l3={l3:#05x} page={page:#05x} base=0x{pt_base:08x} page_bits={page_bits}",
+            page_bits = sel4_sys::seL4_PageBits,
+        );
+
+        if pt_base != bootinfo_base {
+            ::log::error!(
+                "[boot] ipcbuf L3 base 0x{pt_base:08x} diverges from bootinfo base 0x{bootinfo_base:08x}",
+            );
+            #[cfg(feature = "kernel")]
+            unsafe {
+                sel4_sys::seL4_DebugHalt();
+            }
+            return Err(sel4_sys::seL4_IllegalOperation);
+        }
 
         self.ipcbuf_trace = true;
         let res = self.map_frame(
             seL4_CapInitThreadIPCBuffer,
             vaddr,
             seL4_ARM_Page_Default,
-            true,
+            false,
         );
         self.ipcbuf_trace = false;
+
+        if res.is_ok() {
+            self.guard_bootinfo_access();
+        }
+
         res
     }
 
@@ -2054,12 +2083,63 @@ impl<'a> KernelEnv<'a> {
         attr: sel4_sys::seL4_ARM_VMAttributes,
         strict: bool,
     ) -> Result<(), seL4_Error> {
-        self.ensure_page_table(vaddr, strict)?;
+        Self::assert_page_aligned(vaddr);
+
+        let mut result = self.attempt_page_map(frame_cap, vaddr, attr);
+        if result == seL4_NoError {
+            if self.ipcbuf_trace {
+                crate::bp!("ipcbuf.page.map.ok");
+            }
+            return Ok(());
+        }
+
+        if !strict && Self::mapping_already_present(result) {
+            if self.ipcbuf_trace {
+                crate::bp!("ipcbuf.page.map.ok");
+            }
+            return Ok(());
+        }
+
+        if result == sel4_sys::seL4_FailedLookup {
+            self.ensure_page_table(vaddr, strict)?;
+            if self.ipcbuf_trace {
+                crate::bp!("ipcbuf.page.map.retry");
+            }
+            result = self.attempt_page_map(frame_cap, vaddr, attr);
+            if result == seL4_NoError {
+                if self.ipcbuf_trace {
+                    crate::bp!("ipcbuf.page.map.ok");
+                }
+                return Ok(());
+            }
+
+            if !strict && Self::mapping_already_present(result) {
+                if self.ipcbuf_trace {
+                    crate::bp!("ipcbuf.page.map.ok");
+                }
+                return Ok(());
+            }
+        }
+
+        let _ = crate::bootstrap::ktry("ipcbuf.page.map", result as i32);
+        Err(result)
+    }
+
+    fn align_down(value: usize, align: usize) -> usize {
+        debug_assert!(align.is_power_of_two());
+        value & !(align - 1)
+    }
+
+    fn attempt_page_map(
+        &mut self,
+        frame_cap: seL4_CPtr,
+        vaddr: usize,
+        attr: sel4_sys::seL4_ARM_VMAttributes,
+    ) -> seL4_Error {
         if self.ipcbuf_trace {
-            crate::bp!("ipcbuf.page.retype.ok");
             crate::bp!("ipcbuf.page.map.begin");
         }
-        let result = unsafe {
+        unsafe {
             seL4_ARM_Page_Map(
                 frame_cap,
                 seL4_CapInitThreadVSpace,
@@ -2067,28 +2147,75 @@ impl<'a> KernelEnv<'a> {
                 seL4_CapRights_ReadWrite,
                 attr,
             )
-        };
-
-        if result == seL4_NoError {
-            if self.ipcbuf_trace {
-                crate::bp!("ipcbuf.page.map.ok");
-            }
-            Ok(())
-        } else if !strict && Self::mapping_already_present(result) {
-            if self.ipcbuf_trace {
-                crate::bp!("ipcbuf.page.map.ok");
-            }
-            Ok(())
-        } else {
-            let _ = crate::bootstrap::ktry("ipcbuf.page.map", result as i32);
-            Err(result)
         }
     }
 
-    fn align_down(value: usize, align: usize) -> usize {
-        debug_assert!(align.is_power_of_two());
-        value & !(align - 1)
+    fn assert_page_aligned(vaddr: usize) {
+        assert_eq!(
+            vaddr & (PAGE_SIZE - 1),
+            0,
+            "virtual address 0x{vaddr:08x} must be page aligned",
+        );
     }
+
+    fn translation_indices(vaddr: usize) -> (usize, usize, usize, usize) {
+        const MASK: usize = 0x1FF;
+        const L1_SHIFT: usize = 39;
+        const L2_SHIFT: usize = 30;
+        const L3_SHIFT: usize = 21;
+        const PAGE_SHIFT: usize = IPC_PAGE_BITS;
+
+        let l1 = (vaddr >> L1_SHIFT) & MASK;
+        let l2 = (vaddr >> L2_SHIFT) & MASK;
+        let l3 = (vaddr >> L3_SHIFT) & MASK;
+        let page = (vaddr >> PAGE_SHIFT) & MASK;
+        (l1, l2, l3, page)
+    }
+
+    #[cfg(feature = "kernel")]
+    fn guard_bootinfo_access(&self) {
+        let header_addr = self.bootinfo as *const _ as usize;
+        let header_ptr = header_addr as *const u8;
+        let header_byte = unsafe { ptr::read_volatile(header_ptr) };
+
+        let extra_bytes = match bootinfo_extra_slice(self.bootinfo) {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                ::log::error!("[boot] bootinfo extra validation failed: {err}",);
+                unsafe {
+                    sel4_sys::seL4_DebugHalt();
+                }
+                return;
+            }
+        };
+
+        let header_size = mem::size_of::<seL4_BootInfo>();
+        let extra_start = header_addr + header_size;
+        let extra_end = extra_start + extra_bytes.len();
+
+        ::log::trace!(
+            "[boot] bootinfo header @ 0x{header_addr:08x} byte=0x{header_byte:02x} extra=[0x{extra_start:08x}..0x{extra_end:08x})",
+        );
+
+        if extra_bytes.is_empty() {
+            ::log::warn!("[boot] bootinfo extra region empty; skipping guard probe");
+            return;
+        }
+
+        let desired_probe_addr = header_addr + 0x3000;
+        let probe_addr = if desired_probe_addr >= extra_start && desired_probe_addr < extra_end {
+            desired_probe_addr
+        } else {
+            extra_end - 1
+        };
+
+        let probe_ptr = probe_addr as *const u8;
+        let probe_byte = unsafe { ptr::read_volatile(probe_ptr) };
+        ::log::trace!("[boot] bootinfo extra probe @ 0x{probe_addr:08x} byte=0x{probe_byte:02x}",);
+    }
+
+    #[cfg(not(feature = "kernel"))]
+    fn guard_bootinfo_access(&self) {}
 
     #[inline(always)]
     fn mapping_already_present(err: seL4_Error) -> bool {
