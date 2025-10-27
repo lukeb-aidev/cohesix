@@ -11,7 +11,6 @@ use sel4_sys::{
     seL4_CPtr, seL4_Error, seL4_NoError, seL4_ObjectType, seL4_Untyped_Retype, seL4_Word,
 };
 
-#[inline]
 const RETYPE_LOG_CAPACITY: usize = 160;
 
 fn debug_retype_log(
