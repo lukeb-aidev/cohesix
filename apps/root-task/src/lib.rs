@@ -60,6 +60,10 @@ pub mod sel4;
 /// NineDoor 9P bridge exposed inside the VM environment.
 pub mod ninedoor;
 
+#[cfg(feature = "kernel")]
+/// Guard helpers for validating indirect call targets at runtime.
+pub mod guards;
+
 pub mod platform;
 
 #[cfg(all(not(feature = "kernel"), not(target_os = "none")))]

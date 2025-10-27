@@ -2,6 +2,9 @@
 
 #![cfg(feature = "kernel")]
 
+use core::ptr;
+use core::sync::atomic::{AtomicBool, Ordering};
+
 use heapless::{String as HeaplessString, Vec as HeaplessVec};
 use nb::Error as NbError;
 use root_task::event::BootstrapOp;
@@ -9,6 +12,7 @@ use root_task::event::{
     dispatch_message, AuditSink, BootstrapMessage, BootstrapMessageHandler, DispatchOutcome,
     HandlerResult, HandlerTable, IpcDispatcher, TickEvent, TimerSource,
 };
+use root_task::guards;
 use root_task::serial::{SerialDriver, SerialError};
 use sel4_sys::seL4_MessageInfo;
 use std::cell::RefCell;
@@ -58,6 +62,23 @@ fn log_handler(words: &[sel4_sys::seL4_Word]) -> HandlerResult {
 
 fn table() -> HandlerTable {
     HandlerTable::new(attach_handler, spawn_handler, log_handler)
+}
+
+fn ensure_text_bounds() {
+    static INITIALISED: AtomicBool = AtomicBool::new(false);
+    if INITIALISED.load(Ordering::Acquire) {
+        return;
+    }
+
+    extern "C" {
+        static __text_start: u8;
+        static __text_end: u8;
+    }
+
+    let start = ptr::addr_of!(__text_start) as usize;
+    let end = ptr::addr_of!(__text_end) as usize;
+    guards::init_text_bounds(start, end);
+    INITIALISED.store(true, Ordering::Release);
 }
 
 pub struct DummySerial;
@@ -143,7 +164,7 @@ impl BootstrapMessageHandler for RecordingHandlers {
             DispatchOutcome::Handled(BootstrapOp::Attach) => "attach",
             DispatchOutcome::Handled(BootstrapOp::Spawn) => "spawn",
             DispatchOutcome::Handled(BootstrapOp::Log) => "log",
-            DispatchOutcome::Unknown(_) => "unknown",
+            DispatchOutcome::BadCommand(_) => "bad",
         });
         audit.info(summary.as_str());
         let _ = self.outcomes.push(outcome);
@@ -157,6 +178,7 @@ impl RecordingHandlers {
             debug_assert!(guard.is_none(), "handler context already active");
             *guard = Some(self as *mut _);
         });
+        ensure_text_bounds();
         let outcome = dispatch_message(words, &table());
         ACTIVE_HANDLER.with(|slot| {
             *slot.borrow_mut() = None;

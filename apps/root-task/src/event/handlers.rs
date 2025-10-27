@@ -8,6 +8,8 @@ use core::fmt;
 
 use sel4_sys::seL4_Word;
 
+use crate::guards;
+
 /// Result returned by a bootstrap handler invocation.
 pub type HandlerResult = Result<(), HandlerError>;
 
@@ -74,7 +76,7 @@ pub fn call_handler(handler: Handler, words: &[seL4_Word]) -> HandlerResult {
     {
         assert_text_fn(handler);
     }
-    handler(words)
+    guards::call_checked(handler, |f: Handler| f(words))
 }
 
 #[cfg(test)]

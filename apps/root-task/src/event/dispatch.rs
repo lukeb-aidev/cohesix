@@ -17,7 +17,7 @@ pub enum DispatchOutcome {
     /// The opcode was recognised and the appropriate handler executed.
     Handled(BootstrapOp),
     /// The opcode was invalid and no handler was invoked.
-    Unknown(seL4_Word),
+    BadCommand(seL4_Word),
 }
 
 /// Dispatches a bootstrap IPC payload to the handler implementation.
@@ -30,10 +30,10 @@ pub fn dispatch_message(words: &[seL4_Word], handlers: &HandlerTable) -> Dispatc
 
     let Some(opcode) = BootstrapOp::decode(opcode_word) else {
         log::warn!(
-            "[bootstrap-ipc] unknown opcode=0x{opcode:02x}",
+            "[bootstrap-ipc] bad opcode=0x{opcode:02x}",
             opcode = opcode_word
         );
-        return DispatchOutcome::Unknown(opcode_word);
+        return DispatchOutcome::BadCommand(opcode_word);
     };
 
     let result = match opcode {
