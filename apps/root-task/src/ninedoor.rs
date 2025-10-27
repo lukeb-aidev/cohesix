@@ -8,8 +8,10 @@ use core::fmt::{self, Write};
 use heapless::String as HeaplessString;
 
 /// Minimal NineDoor bridge used by the seL4 build until the full Secure9P server is ported.
-#[derive(Debug, Default)]
-pub struct NineDoorBridge;
+#[derive(Debug)]
+pub struct NineDoorBridge {
+    attached: bool,
+}
 
 /// Errors surfaced by [`NineDoorBridge`] operations.
 #[derive(Debug)]
@@ -30,7 +32,13 @@ impl NineDoorBridge {
     /// Construct a new bridge instance.
     #[must_use]
     pub fn new() -> Self {
-        Self
+        Self { attached: false }
+    }
+
+    /// Returns `true` when the bridge has successfully attached to the host.
+    #[must_use]
+    pub fn attached(&self) -> bool {
+        self.attached
     }
 
     /// Handle an `attach` request received from the console.
@@ -51,6 +59,13 @@ impl NineDoorBridge {
             // Truncated audit line is acceptable.
         }
         audit.info(message.as_str());
+        if !self.attached {
+            self.attached = true;
+            #[cfg(feature = "kernel")]
+            {
+                crate::bootstrap::log::notify_bridge_attached();
+            }
+        }
         Ok(())
     }
 
