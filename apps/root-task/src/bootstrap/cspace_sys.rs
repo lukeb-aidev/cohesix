@@ -30,12 +30,10 @@ pub struct RetypeArgs {
     pub ut: sys::seL4_CPtr,
     /// Numeric identifier describing the requested object type.
     pub objtype: u32,
-    /// Padding reserved for ABI alignment.
-    pub _pad0: u32,
-    /// Log2 size of the object range to retype.
+    /// Size of the requested objects expressed as base-two logarithm.
     pub size_bits: u8,
     /// Padding reserved for ABI alignment.
-    pub _pad1: [u8; 7],
+    pub _pad0: [u8; 3],
     /// Capability pointer for the root CNode receiving the new objects.
     pub root: sys::seL4_CPtr,
     /// Index within the destination CNode.
@@ -43,13 +41,13 @@ pub struct RetypeArgs {
     /// Depth (in bits) of the destination CNode pointer.
     pub cnode_depth: u8,
     /// Padding reserved for ABI alignment.
-    pub _pad2: [u8; 7],
+    pub _pad1: [u8; 7],
     /// Starting slot offset in the destination CNode.
     pub dest_offset: sys::seL4_CPtr,
     /// Number of objects to create.
     pub num_objects: u32,
     /// Padding reserved for ABI alignment.
-    pub _pad3: u32,
+    pub _pad2: u32,
 }
 
 impl RetypeArgs {
@@ -67,21 +65,18 @@ impl RetypeArgs {
     ) -> Self {
         debug_assert!(size_bits <= u8::MAX as sys::seL4_Word);
         debug_assert!(cnode_depth <= u8::MAX as sys::seL4_Word);
-        let size_bits_u8 = size_bits as u8;
-        let depth_u8 = cnode_depth as u8;
         Self {
             ut,
             objtype: objtype as u32,
-            _pad0: 0,
-            size_bits: size_bits_u8,
-            _pad1: [0; 7],
+            size_bits: size_bits as u8,
+            _pad0: [0; 3],
             root,
             node_index,
-            cnode_depth: depth_u8,
-            _pad2: [0; 7],
+            cnode_depth: cnode_depth as u8,
+            _pad1: [0; 7],
             dest_offset,
             num_objects,
-            _pad3: 0,
+            _pad2: 0,
         }
     }
 }
@@ -235,6 +230,8 @@ pub fn validate_retype_args(
         });
     }
     let expected_depth = INIT_CNODE_RETYPE_DEPTH_BITS;
+    let word_bits = core::mem::size_of::<sys::seL4_Word>() * 8;
+    debug_assert_eq!(usize::from(args.cnode_depth), word_bits);
     if args.cnode_depth != expected_depth {
         return Err(RetypeArgsError::DepthMismatch {
             provided: args.cnode_depth,
@@ -259,7 +256,7 @@ pub fn validate_retype_args(
 /// Depth (in bits) for a canonical single-level CNode.
 pub const CANONICAL_CNODE_DEPTH_BITS: u8 = sys::seL4_WordBits as u8;
 /// Depth (in bits) supplied when retyping into the init thread CNode.
-pub const INIT_CNODE_RETYPE_DEPTH_BITS: u8 = 0;
+pub const INIT_CNODE_RETYPE_DEPTH_BITS: u8 = CANONICAL_CNODE_DEPTH_BITS;
 
 #[cfg(target_os = "none")]
 #[inline(always)]
@@ -794,6 +791,9 @@ pub fn untyped_retype_into_init_root(
     }
 
     let (root, node_index, node_depth, node_offset) = init_cnode_retype_dest(dst_slot);
+    let word_bits = core::mem::size_of::<sys::seL4_Word>() * 8;
+    debug_assert_eq!(root, sel4::seL4_CapInitThreadCNode);
+    debug_assert_eq!(node_depth as usize, word_bits);
     let args = RetypeArgs::new(
         untyped_slot,
         obj_type,
@@ -813,10 +813,7 @@ pub fn untyped_retype_into_init_root(
         debug_assert!(node_index == 0);
         let expected_depth = usize::from(INIT_CNODE_RETYPE_DEPTH_BITS);
         debug_assert_eq!(usize::from(args.cnode_depth), expected_depth);
-        debug_assert!(
-            args.dest_offset >= empty_start && args.dest_offset < empty_end,
-            "dest_offset outside boot empty window"
-        );
+        debug_assert!(args.dest_offset >= empty_start && args.dest_offset < empty_end);
 
         validate_retype_args(&args, empty_start, empty_end)?;
 

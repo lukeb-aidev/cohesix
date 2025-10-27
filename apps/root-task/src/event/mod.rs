@@ -36,7 +36,9 @@ use crate::serial::{SerialDriver, SerialPort, SerialTelemetry, DEFAULT_LINE_CAPA
 
 fn format_message(args: fmt::Arguments<'_>) -> HeaplessString<128> {
     let mut buf = HeaplessString::new();
-    let _ = FmtWrite::write_fmt(&mut buf, args);
+    if FmtWrite::write_fmt(&mut buf, args).is_err() {
+        // Truncated diagnostic; best-effort only.
+    }
     buf
 }
 

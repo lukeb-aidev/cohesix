@@ -78,110 +78,70 @@ pub(crate) use trace_println as println;
 /// Formats the provided [`u64`] value as a fixed-width hexadecimal literal.
 #[inline]
 pub fn hex_u64(mut writer: impl Write, value: u64) {
-    let _ = writer.write_str("0x");
-    for index in (0..16).rev() {
-        let nibble = ((value >> (index * 4)) & 0xF) as u8;
-        let digit = if nibble < 10 {
-            b'0' + nibble
-        } else {
-            b'a' + (nibble - 10)
-        };
-        let _ = writer.write_char(char::from(digit));
-    }
+    let _ = write!(writer, "{value:#018x}");
 }
 
 /// Writes the decimal representation of the provided [`u32`] without allocations.
 #[inline]
-pub fn dec_u32(mut writer: impl Write, mut value: u32) {
-    if value == 0 {
-        let _ = writer.write_str("0");
-        return;
-    }
+pub fn dec_u32(mut writer: impl Write, value: u32) {
+    let _ = write!(writer, "{value}");
+}
 
-    let mut buffer = [0u8; 10];
-    let mut position = buffer.len();
-    while value > 0 {
-        position -= 1;
-        buffer[position] = b'0' + (value % 10) as u8;
-        value /= 10;
-    }
+struct HexChunk<'a>(&'a [u8]);
 
-    for &digit in &buffer[position..] {
-        let _ = writer.write_char(char::from(digit));
+impl fmt::Display for HexChunk<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for byte in self.0 {
+            write!(f, "{:02x} ", byte)?;
+        }
+        Ok(())
+    }
+}
+
+struct TagDisplay<'a>(&'a [u8]);
+
+impl fmt::Display for TagDisplay<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for &byte in self.0 {
+            f.write_char(char::from(byte))?;
+        }
+        Ok(())
     }
 }
 
 /// Emits a bounded hexadecimal dump of the provided buffer.
 pub fn hex_dump_slice(label: &str, buf: &[u8], max: usize) {
-    let mut writer = DebugPutc;
     let limit = cmp::min(buf.len(), max);
-    let _ = write!(writer, "[dump:{} len={}]\n", label, limit);
+    log::trace!("[dump] {label} len={limit}");
+    for (index, chunk) in buf[..limit].chunks(16).enumerate() {
+        let offset = index * 16;
+        log::trace!("  {offset:04x}: {}", HexChunk(chunk));
+    }
+}
 
-    let mut offset = 0usize;
-    while offset < limit {
-        let line_end = cmp::min(offset + 16, limit);
-        let _ = write!(writer, "{:08x}: ", offset);
-        for byte in &buf[offset..line_end] {
-            let _ = write!(writer, "{:02x} ", byte);
-        }
-        let _ = writer.write_str("\n");
-        offset = line_end;
+/// Emits a diagnostic dump of machine words using structured logging.
+pub fn dump_words(label: &str, words: &[usize]) {
+    log::trace!("{label} len={}", words.len());
+    for (i, word) in words.iter().enumerate() {
+        log::trace!("  {i:04}: {word:#018x}");
     }
 }
 
 /// Emits a trace describing the endpoint capability slot in hexadecimal form.
 pub fn trace_ep(ep: seL4_CPtr) {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-
-    debug_put_char(b'[' as i32);
-    debug_put_char(b'e' as i32);
-    debug_put_char(b'p' as i32);
-    debug_put_char(b'=' as i32);
+    let mut writer = DebugPutc;
     let width = core::mem::size_of::<seL4_CPtr>() * 2;
-    for nibble in (0..width).rev() {
-        let shift = nibble * 4;
-        let value = ((ep as usize) >> shift) & 0xF;
-        debug_put_char(HEX[value] as i32);
+    if writeln!(writer, "[ep=0x{value:0width$x}]", value = ep, width = width).is_err() {
+        // UART trace is best-effort.
     }
-    debug_put_char(b']' as i32);
-    debug_put_char(b'\n' as i32);
 }
 
 /// Emits a debug trace describing a bootstrap failure tagged with the provided label.
 pub fn trace_fail(tag: &[u8], error: seL4_Error) {
-    for &byte in b"[fail:" {
-        debug_put_char(byte as i32);
+    let mut writer = DebugPutc;
+    if writeln!(writer, "[fail:{}] err={}", TagDisplay(tag), error as i32).is_err() {
+        // UART trace is best-effort.
     }
-    for &byte in tag {
-        debug_put_char(byte as i32);
-    }
-    for &byte in b"] err=" {
-        debug_put_char(byte as i32);
-    }
-
-    let mut code = error as i32;
-    if code < 0 {
-        debug_put_char(b'-' as i32);
-        code = -code;
-    }
-
-    let mut digits = [0u8; 10];
-    let mut index = digits.len();
-    let mut value = code as u32;
-    if value == 0 {
-        debug_put_char(b'0' as i32);
-    } else {
-        while value > 0 {
-            index -= 1;
-            digits[index] = b'0' + (value % 10) as u8;
-            value /= 10;
-        }
-        for &digit in &digits[index..] {
-            debug_put_char(digit as i32);
-        }
-    }
-
-    debug_put_char(b'\n' as i32);
 }
 
 #[cfg(test)]
