@@ -528,7 +528,7 @@ where
     }
 
     #[inline(never)]
-    fn handle_command(&mut self, command: Command) -> Result<(), CommandDispatchError> {
+    pub(crate) fn handle_command(&mut self, command: Command) -> Result<(), CommandDispatchError> {
         #[cfg(feature = "kernel")]
         let command_clone = command.clone();
         #[cfg(feature = "kernel")]

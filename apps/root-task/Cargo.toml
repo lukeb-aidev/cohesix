@@ -26,6 +26,7 @@ debug-input = []
 bootstrap-trace = [
     "dep:spin",
 ]
+test-support = []
 
 [dependencies]
 cohesix-ticket = { workspace = true }
