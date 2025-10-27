@@ -24,13 +24,14 @@ fn write_retype_line<W: fmt::Write>(
 ) -> fmt::Result {
     write!(
         writer,
-        "[retype:{phase}] ut=0x{ut:016x} type=0x{ty:08x} sz={} root=0x{root:016x} idx=0x{idx:08x} depth={} off=0x{off:08x} n={num}",
-        args.size_bits,
+        "[retype:{phase}] ut=0x{ut:016x} type=0x{ty:08x} sz={size} root=0x{root:016x} idx=0x{idx:08x} depth={depth} off=0x{off:08x} n={num}",
+        phase = phase,
         ut = args.ut as u64,
         ty = args.objtype,
+        size = args.size_bits,
         root = args.root as u64,
         idx = args.node_index as u32,
-        args.cnode_depth,
+        depth = args.cnode_depth,
         off = args.dest_offset as u32,
         num = args.num_objects,
     )?;
@@ -118,7 +119,7 @@ pub fn traced_retype_into_slot(
             slot,
         );
 
-        let post_err = result.as_ref().err().map(RetypeCallError::into_sel4_error);
+        let post_err = result.as_ref().err().map(|err| (*err).into_sel4_error());
         debug_retype_log("post", &pre_args, obj_type, post_err);
 
         result.map_err(RetypeCallError::into_sel4_error)

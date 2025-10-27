@@ -175,8 +175,8 @@ fn log_text_span() {
         static __text_end: u8;
     }
 
-    let lo = unsafe { &__text_start as *const _ as usize };
-    let hi = unsafe { &__text_end as *const _ as usize };
+    let lo = core::ptr::addr_of!(__text_start) as usize;
+    let hi = core::ptr::addr_of!(__text_end) as usize;
     log::info!("[dbg] .text [{:#x}..{:#x})", lo, hi);
     let handle_ptr = EventPump::<
         Pl011,

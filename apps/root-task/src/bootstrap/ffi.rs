@@ -30,7 +30,9 @@ pub fn untyped_retype_to_slot(
     let (err, root_cap, node_index, node_depth, node_offset, path_label) = match ctx.dest {
         DestCNode::Init => {
             let node_index = 0;
-            let node_depth = sys::seL4_WordBits as sys::seL4_Word;
+            let node_depth = super::cspace_sys::encode_cnode_depth(
+                super::cspace_sys::INIT_CNODE_RETYPE_DEPTH_BITS,
+            );
             let node_offset = dst_slot as sys::seL4_Word;
             let err = match super::cspace_sys::untyped_retype_into_init_root(
                 untyped_cap,

@@ -59,8 +59,8 @@ fn assert_text_fn(handler: Handler) {
     }
 
     let ptr = handler as usize;
-    let lo = unsafe { &__text_start as *const _ as usize };
-    let hi = unsafe { &__text_end as *const _ as usize };
+    let lo = core::ptr::addr_of!(__text_start) as usize;
+    let hi = core::ptr::addr_of!(__text_end) as usize;
     assert!(
         ptr >= lo && ptr < hi,
         "handler ptr not in .text: 0x{ptr:016x}"
