@@ -855,7 +855,7 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
         #[cfg(all(feature = "net-console", not(feature = "kernel")))]
         let (mut net_stack, _) = NetStack::new(Ipv4Address::new(10, 0, 0, 2));
         let timer = KernelTimer::new(5);
-        let mut ipc = KernelIpc::new(ep_slot);
+        let ipc = KernelIpc::new(ep_slot);
 
         let mut tickets: TicketTable<4> = TicketTable::new();
         let _ = tickets.register(Role::Queen, "bootstrap");

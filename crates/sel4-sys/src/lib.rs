@@ -861,6 +861,14 @@ mod imp {
         pub fn seL4_GetBootInfo() -> *const seL4_BootInfo;
     }
 
+    /// Yield the current thread to the seL4 scheduler.
+    #[inline(always)]
+    pub fn yield_now() {
+        unsafe {
+            seL4_Yield();
+        }
+    }
+
     pub use seL4_ARM_Page_GetAddress as ARMPageGetAddressResult;
     pub use seL4_BootInfo as BootInfo;
     pub use seL4_BootInfoHeader as BootInfoHeader;
@@ -1272,6 +1280,15 @@ mod host_stub {
 
     #[inline(always)]
     pub fn seL4_Yield() {
+        unsupported();
+    }
+
+    /// Yield the current thread when running under host stubs.
+    ///
+    /// Host executions do not model kernel scheduling, so invoking this helper
+    /// indicates a logic error in the calling code.
+    #[inline(always)]
+    pub fn yield_now() {
         unsupported();
     }
 
