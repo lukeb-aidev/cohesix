@@ -10,14 +10,13 @@ use core::fmt::{self, Write};
 use core::panic::PanicInfo;
 #[cfg(all(feature = "kernel", not(sel4_config_printing)))]
 use core::ptr;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use cohesix_ticket::Role;
 
 use crate::boot::{bi_extra, ep};
 use crate::bootstrap::{
-    cspace::{BootInfoView, CSpaceCtx},
-    ipcbuf, log as boot_log, pick_untyped,
-    retype::retype_one,
+    cspace::CSpaceCtx, ipcbuf, log as boot_log, pick_untyped, retype::retype_one,
 };
 use crate::console::Console;
 use crate::cspace::{cap_rights_read_write_grant, CSpace};
@@ -32,8 +31,8 @@ use crate::net::{NetStack, CONSOLE_TCP_PORT};
 use crate::ninedoor::NineDoorBridge;
 use crate::platform::{Platform, SeL4Platform};
 use crate::sel4::{
-    bootinfo_debug_dump, error_name, root_endpoint, BootInfo, BootInfoExt, KernelEnv, RetypeKind,
-    RetypeStatus, IPC_PAGE_BYTES, MSG_MAX_WORDS,
+    bootinfo_debug_dump, error_name, root_endpoint, BootInfo, BootInfoExt, BootInfoView, KernelEnv,
+    RetypeKind, RetypeStatus, IPC_PAGE_BYTES, MSG_MAX_WORDS,
 };
 use crate::serial::{
     pl011::Pl011, SerialPort, DEFAULT_LINE_CAPACITY, DEFAULT_RX_CAPACITY, DEFAULT_TX_CAPACITY,
@@ -76,49 +75,37 @@ impl<'a, P: Platform> DebugConsole<'a, P> {
         self.write_raw(b"\r\n");
     }
 
-    fn report_bootinfo(&mut self, info: &sel4_sys::seL4_BootInfo) {
-        let addr = info as *const _ as usize;
-        let header_bytes = core::mem::size_of::<sel4_sys::seL4_BootInfo>();
-        let word_bytes = core::mem::size_of::<sel4_sys::seL4_Word>();
+    fn report_bootinfo(&mut self, view: &BootInfoView) {
+        let header = view.header();
+        let header_bytes = view.header_bytes();
+        let header_addr = header as *const _ as usize;
+        let header_len = header_bytes.len();
+        let header_range = header_bytes.as_ptr_range();
+        let header_end = header_range.end as usize;
 
-        let extra_words = info.extraLen as usize;
-        let extra_bytes = match extra_words.checked_mul(word_bytes) {
-            Some(bytes) => bytes,
-            None => {
-                self.writeln_prefixed("bootinfo.extraLen overflow; truncating extra byte count");
-                0
-            }
-        };
-
-        let extra_start = match addr.checked_add(header_bytes) {
-            Some(start) => start,
-            None => {
-                self.writeln_prefixed("bootinfo header address overflow");
-                0
-            }
-        };
-
-        let extra_end = match extra_start.checked_add(extra_bytes) {
-            Some(end) => end,
-            None => {
-                self.writeln_prefixed("bootinfo extra region overflow");
-                extra_start
-            }
+        let extra_words = view.extra_words();
+        let extra_slice = view.extra();
+        let extra_len = extra_slice.len();
+        let (extra_start, extra_end) = if extra_len == 0 {
+            (header_end, header_end)
+        } else {
+            let range = extra_slice.as_ptr_range();
+            (range.start as usize, range.end as usize)
         };
 
         let _ = write!(
             self,
-            "{prefix}bootinfo @ 0x{addr:016x} (header {header_bytes} bytes)\r\n",
+            "{prefix}bootinfo @ 0x{addr:016x} (header {header_len} bytes)\r\n",
             prefix = Self::PREFIX,
-            addr = addr,
-            header_bytes = header_bytes,
+            addr = header_addr,
+            header_len = header_len,
         );
         let _ = write!(
             self,
-            "{prefix}bootinfo.extraLen = {extra_words} words ({extra_bytes} bytes)\r\n",
+            "{prefix}bootinfo.extraLen = {extra_words} words ({extra_len} bytes)\r\n",
             prefix = Self::PREFIX,
             extra_words = extra_words,
-            extra_bytes = extra_bytes,
+            extra_len = extra_len,
         );
         let _ = write!(
             self,
@@ -131,22 +118,22 @@ impl<'a, P: Platform> DebugConsole<'a, P> {
             self,
             "{prefix}node_id={node_id} nodes={nodes} ipc_buffer=0x{ipc:016x}\r\n",
             prefix = Self::PREFIX,
-            node_id = info.nodeId,
-            nodes = info.numNodes,
-            ipc = info.ipcBuffer,
+            node_id = header.nodeId,
+            nodes = header.numNodes,
+            ipc = header.ipcBuffer,
         );
 
-        let bits = info.init_cnode_bits();
+        let bits = header.init_cnode_bits();
         let capacity = 1usize.checked_shl(bits as u32).unwrap_or(usize::MAX);
-        let empty_start = info.empty_first_slot();
-        let empty_end = info.empty_last_slot_excl();
+        let empty_start = header.empty_first_slot();
+        let empty_end = header.empty_last_slot_excl();
         let empty_span = empty_end.saturating_sub(empty_start);
 
         let _ = write!(
             self,
             "{prefix}initThreadCNode=0x{cnode:04x} bits={bits} capacity={capacity}\r\n",
             prefix = Self::PREFIX,
-            cnode = info.init_cnode_cap(),
+            cnode = view.root_cnode_cap(),
             bits = bits,
             capacity = capacity,
         );
@@ -278,6 +265,8 @@ pub fn start_console(uart: Pl011) -> ! {
     }
 }
 
+static BOOTSTRAP_ONCE: AtomicBool = AtomicBool::new(false);
+
 /// Root task entry point invoked by seL4 after kernel initialisation.
 pub fn start<P: Platform>(bootinfo: &'static BootInfo, platform: &P) -> ! {
     bootstrap(platform, bootinfo)
@@ -290,9 +279,32 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
     crate::alloc::init_heap();
 
     boot_log::init_logger_bootstrap_only();
+    if BOOTSTRAP_ONCE.swap(true, Ordering::SeqCst) {
+        log::error!("[boot] bootstrap called twice; refusing re-entry");
+        #[cfg(feature = "kernel")]
+        unsafe {
+            sel4_sys::seL4_DebugHalt();
+        }
+        loop {
+            core::hint::spin_loop();
+        }
+    }
     crate::bp!("bootstrap.begin");
 
-    let bootinfo_ref: &'static sel4_sys::seL4_BootInfo = bootinfo;
+    let bootinfo_view = match BootInfoView::new(bootinfo) {
+        Ok(view) => view,
+        Err(err) => {
+            log::error!("[boot] invalid bootinfo: {err}");
+            #[cfg(feature = "kernel")]
+            unsafe {
+                sel4_sys::seL4_DebugHalt();
+            }
+            loop {
+                core::hint::spin_loop();
+            }
+        }
+    };
+    let bootinfo_ref: &'static sel4_sys::seL4_BootInfo = bootinfo_view.header();
     let mut console = DebugConsole::new(platform);
 
     let mut boot_cspace = CSpace::from_bootinfo(bootinfo_ref);
@@ -304,7 +316,7 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
     #[cfg(debug_assertions)]
     log_text_span();
 
-    console.report_bootinfo(bootinfo_ref);
+    console.report_bootinfo(&bootinfo_view);
 
     let mut cs_line = heapless::String::<96>::new();
     let _ = write!(
@@ -318,9 +330,9 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
 
     console.writeln_prefixed("Cohesix v0 (AArch64/virt)");
 
-    bootinfo_debug_dump(bootinfo_ref);
+    bootinfo_debug_dump(&bootinfo_view);
     let mut kernel_env = KernelEnv::new(bootinfo_ref);
-    let extra_bytes = bootinfo_ref.extra_bytes();
+    let extra_bytes = bootinfo_view.extra();
     if !extra_bytes.is_empty() {
         console.writeln_prefixed("[boot] deferring DTB parse");
     }
@@ -472,8 +484,7 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
         );
     }
 
-    let bi_view = BootInfoView::from(bootinfo_ref);
-    let mut cs = CSpaceCtx::new(bi_view, boot_cspace);
+    let mut cs = CSpaceCtx::new(bootinfo_view, boot_cspace);
     cs.tcb_copy_slot = tcb_copy_slot;
     // Track bootstrap slot usage: the TCB copy plus the earlier endpoint bootstrap
     // consume two slots before we begin retyping.
@@ -876,7 +887,7 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
                             header.strings_offset(),
                         );
                         console.writeln_prefixed(msg.as_str());
-                        let _ = bi_extra::dump_bootinfo(bootinfo_ref, EARLY_DUMP_LIMIT);
+                        let _ = bi_extra::dump_bootinfo(&bootinfo_view, EARLY_DUMP_LIMIT);
                     }
                     Err(err) => {
                         let mut msg = heapless::String::<96>::new();

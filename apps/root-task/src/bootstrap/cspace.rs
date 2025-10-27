@@ -1,7 +1,7 @@
 // Author: Lukas Bower
 
 use crate::cspace::{cap_rights_read_write_grant, CSpace};
-use crate::sel4::{self, is_boot_reserved_slot, BootInfo, BootInfoExt};
+use crate::sel4::{self, is_boot_reserved_slot, BootInfoView, WORD_BITS};
 use core::fmt::Write;
 use heapless::String;
 
@@ -21,59 +21,6 @@ fn log_boot(beg: sel4::seL4_CPtr, end: sel4::seL4_CPtr, bits: u8) {
         // Truncated diagnostic; best effort only.
     }
     emit_console_line(line.as_str());
-}
-
-/// Lightweight projection of [`seL4_BootInfo`] exposing capability-space fields.
-#[derive(Copy, Clone)]
-pub struct BootInfoView {
-    bootinfo: &'static BootInfo,
-}
-
-impl BootInfoView {
-    #[inline(always)]
-    /// Captures the kernel-provided boot info pointer for later capability-space queries.
-    pub fn new(bootinfo: &'static BootInfo) -> Self {
-        Self { bootinfo }
-    }
-
-    #[inline(always)]
-    /// Returns the raw bootinfo pointer backing this view.
-    pub fn bootinfo(&self) -> &'static BootInfo {
-        self.bootinfo
-    }
-
-    #[inline(always)]
-    /// Returns the radix width of the initial thread's CNode as declared by the kernel.
-    pub fn init_cnode_bits(&self) -> u8 {
-        self.bootinfo.initThreadCNodeSizeBits as u8
-    }
-
-    #[inline(always)]
-    /// Returns the radix width of the initial thread's CNode expressed as `usize`.
-    pub fn init_cnode_size_bits(&self) -> usize {
-        self.bootinfo.initThreadCNodeSizeBits as usize
-    }
-
-    #[inline(always)]
-    /// Reports the inclusive-exclusive range of free slots available in the initial CNode.
-    pub fn init_cnode_empty_range(&self) -> (sel4::seL4_CPtr, sel4::seL4_CPtr) {
-        (
-            self.bootinfo.empty.start as sel4::seL4_CPtr,
-            self.bootinfo.empty.end as sel4::seL4_CPtr,
-        )
-    }
-
-    #[inline(always)]
-    /// Returns the capability pointer referencing the initial thread's root CNode.
-    pub fn root_cnode_cap(&self) -> sel4::seL4_CPtr {
-        self.bootinfo.init_cnode_cap()
-    }
-}
-
-impl From<&'static BootInfo> for BootInfoView {
-    fn from(value: &'static BootInfo) -> Self {
-        Self::new(value)
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -148,10 +95,28 @@ pub enum SlotAllocError {
 impl CSpaceCtx {
     /// Constructs a new capability-space context from kernel boot information.
     pub fn new(bi: BootInfoView, cspace: CSpace) -> Self {
+        let init_cspace_root = cspace.root();
+        assert_eq!(
+            init_cspace_root,
+            sel4::seL4_CapInitThreadCNode,
+            "init CSpace root must match seL4_CapInitThreadCNode",
+        );
+
         let init_cnode_bits = cspace.depth();
+        let boot_bits = bi.init_cnode_bits();
+        assert_eq!(
+            init_cnode_bits, boot_bits,
+            "CSpace depth and bootinfo init bits must align"
+        );
         assert!(
             init_cnode_bits > 0,
             "bootinfo reported zero-width init CNode"
+        );
+        let word_bits = WORD_BITS as usize;
+        assert!(
+            init_cnode_bits as usize <= word_bits,
+            "init CNode width {init} exceeds WordBits {word_bits}",
+            init = init_cnode_bits,
         );
         // Init-root retypes use the canonical depth-zero tuple.
         let invocation_depth_bits = 0;
@@ -159,6 +124,10 @@ impl CSpaceCtx {
         debug_assert!(
             init_cnode_bits <= CANONICAL_CNODE_DEPTH_BITS,
             "bootinfo-reported radix exceeds canonical invocation depth",
+        );
+        assert!(
+            first_free < last_free,
+            "bootinfo empty window must not be empty"
         );
         let limit = 1usize << bi.init_cnode_size_bits();
         assert!(
@@ -169,7 +138,7 @@ impl CSpaceCtx {
             last_free <= limit,
             "bootinfo.empty.end exceeds init CNode size"
         );
-        let root_cnode_cap = cspace.root();
+        let root_cnode_cap = init_cspace_root;
         let ctx = Self {
             bi,
             cspace,
