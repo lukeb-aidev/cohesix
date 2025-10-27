@@ -226,6 +226,9 @@ pub struct PumpMetrics {
     pub accepted_commands: u64,
     /// Timer ticks processed.
     pub timer_ticks: u64,
+    #[cfg(feature = "kernel")]
+    /// Bootstrap IPC messages processed.
+    pub bootstrap_messages: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -424,11 +427,14 @@ where
     pub fn bootstrap_probe(&mut self) {
         log::trace!("B5: entering bootstrap probe loop");
         loop {
+            let handled_before = self.metrics.bootstrap_messages;
             if self.ipc.bootstrap_poll(self.now_ms) {
                 self.drain_bootstrap_ipc();
-                break;
             }
             self.poll();
+            if self.metrics.bootstrap_messages != handled_before {
+                break;
+            }
             sel4_sys::yield_now();
         }
     }
@@ -457,6 +463,7 @@ where
     #[cfg(feature = "kernel")]
     fn drain_bootstrap_ipc(&mut self) {
         while let Some(message) = self.ipc.take_bootstrap_message() {
+            self.metrics.bootstrap_messages = self.metrics.bootstrap_messages.saturating_add(1);
             if let Some(handler) = self.bootstrap_handler.as_mut() {
                 handler.handle(&message, &mut *self.audit);
             } else {
@@ -1005,6 +1012,45 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "kernel")]
+    struct ProbeIpc {
+        staged: Option<BootstrapMessage>,
+        pending: Option<BootstrapMessage>,
+        polls: u32,
+    }
+
+    #[cfg(feature = "kernel")]
+    impl ProbeIpc {
+        fn new(message: BootstrapMessage) -> Self {
+            Self {
+                staged: None,
+                pending: Some(message),
+                polls: 0,
+            }
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    impl IpcDispatcher for ProbeIpc {
+        fn dispatch(&mut self, _now_ms: u64) {
+            if self.staged.is_none() {
+                self.staged = self.pending.take();
+            }
+        }
+
+        fn take_bootstrap_message(&mut self) -> Option<BootstrapMessage> {
+            self.staged.take()
+        }
+
+        fn bootstrap_poll(&mut self, _now_ms: u64) -> bool {
+            self.polls = self.polls.saturating_add(1);
+            if self.polls > 1 {
+                panic!("bootstrap probe failed to observe drained message");
+            }
+            false
+        }
+    }
+
     struct AuditLog {
         entries: heapless::Vec<HeaplessString<64>, 32>,
         denials: heapless::Vec<HeaplessString<64>, 32>,
@@ -1128,6 +1174,40 @@ mod tests {
             .entries
             .iter()
             .any(|entry| entry.contains("handler bootstrap")));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn bootstrap_probe_exits_after_poll_consumes_message() {
+        let driver = LoopbackSerial::<32>::new();
+        let serial = SerialPort::<_, 32, 32, 64>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 5 });
+
+        let mut payload: HeaplessVec<sel4_sys::seL4_Word, { MAX_BOOTSTRAP_WORDS }> =
+            HeaplessVec::new();
+        let _ = payload.push(0xC0DE);
+        let message = BootstrapMessage {
+            badge: 0xBEEF,
+            info: sel4_sys::seL4_MessageInfo::new(0xAA, 0, 0, 1),
+            payload,
+        };
+
+        let ipc = ProbeIpc::new(message.clone());
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "pass").unwrap();
+        let mut audit = AuditLog::new();
+        let handler = &mut CaptureBootstrap::new();
+        let mut pump =
+            EventPump::new(serial, timer, ipc, store, &mut audit).with_bootstrap_handler(handler);
+
+        pump.bootstrap_probe();
+
+        let metrics = pump.metrics();
+        drop(pump);
+
+        assert_eq!(handler.messages.len(), 1);
+        assert_eq!(handler.messages[0], message);
+        assert_eq!(metrics.bootstrap_messages, 1);
     }
 
     #[test]
