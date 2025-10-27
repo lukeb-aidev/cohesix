@@ -317,6 +317,20 @@ pub fn ep_ready() -> bool {
     root_endpoint() != seL4_CapNull
 }
 
+/// Writes a value into an IPC message register.
+#[cfg(feature = "kernel")]
+#[inline]
+pub fn set_message_register(index: usize, value: seL4_Word) {
+    unsafe { sel4_sys::seL4_SetMR(index, value) };
+}
+
+/// Yields the current thread to the scheduler.
+#[cfg(feature = "kernel")]
+#[inline]
+pub fn yield_now() {
+    unsafe { sel4_sys::seL4_Yield() };
+}
+
 #[inline(never)]
 fn ensure_endpoint() -> Result<seL4_CPtr, IpcError> {
     let endpoint = root_endpoint();
