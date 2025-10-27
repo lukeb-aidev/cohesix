@@ -1029,9 +1029,9 @@ fn bootstrap<P: Platform>(
         crate::bp!("bootstrap.done");
         log::trace!("B5: entering event pump loop");
         boot_guard.commit();
-        return Ok(loop {
+        loop {
             pump.poll();
-        });
+        }
     }
 }
 
