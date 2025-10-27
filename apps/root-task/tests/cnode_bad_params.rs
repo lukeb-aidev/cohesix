@@ -41,7 +41,8 @@ fn bootinfo_fixture() -> &'static sel4::BootInfo {
 fn ctx_fixture() -> CSpaceCtx {
     let bootinfo = bootinfo_fixture();
     let cspace = CSpace::from_bootinfo(bootinfo);
-    CSpaceCtx::new(BootInfoView::new(bootinfo), cspace)
+    let view = BootInfoView::new(bootinfo).expect("bootinfo fixture must be valid");
+    CSpaceCtx::new(view, cspace)
 }
 
 #[cfg(target_os = "none")]

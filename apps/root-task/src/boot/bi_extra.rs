@@ -8,7 +8,7 @@ use core::str;
 
 use sel4_sys::{seL4_BootInfo, seL4_CPtr, seL4_UntypedDesc, seL4_Word};
 
-use crate::sel4::BootInfoExt;
+use crate::sel4::BootInfoView;
 use crate::trace;
 
 const BOOTINFO_HEADER_DUMP_LIMIT: usize = 256;
@@ -620,12 +620,12 @@ mod tests {
 
 /// Emits a diagnostic dump of the bootinfo header and extra region.
 pub fn dump_bootinfo(
-    bootinfo: &'static seL4_BootInfo,
+    view: &BootInfoView,
     extra_dump_limit: usize,
 ) -> Option<(&'static [u8], usize)> {
-    let header_bytes = bootinfo.header_bytes();
+    let header_bytes = view.header_bytes();
     trace::hex_dump_slice("bootinfo.header", header_bytes, BOOTINFO_HEADER_DUMP_LIMIT);
-    let extra_slice = bootinfo.extra_bytes();
+    let extra_slice = view.extra();
     if extra_slice.is_empty() {
         return None;
     }

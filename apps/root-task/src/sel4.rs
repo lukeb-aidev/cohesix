@@ -69,6 +69,176 @@ use sel4_panicking::DebugSink;
 /// Alias to the boot information structure exposed by `sel4_sys`.
 pub type BootInfo = seL4_BootInfo;
 
+const BOOTINFO_ALIGN_MASK: usize = 0xF;
+const MAX_BOOTINFO_EXTRA_WORDS: usize = 32 * 1024;
+
+/// Errors raised while validating a bootinfo pointer and its extra region.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BootInfoError {
+    /// The supplied bootinfo pointer was null.
+    Null,
+    /// The bootinfo pointer was not aligned to the required boundary.
+    Unaligned { address: usize },
+    /// The reported extra bootinfo span exceeded the permitted limit.
+    ExtraTooLarge { words: usize },
+    /// Arithmetic overflow occurred while computing bounds.
+    Overflow,
+    /// The computed extra range wrapped or was otherwise invalid.
+    ExtraRange { start: usize, end: usize },
+}
+
+impl fmt::Display for BootInfoError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Null => write!(f, "bootinfo pointer was null"),
+            Self::Unaligned { address } => {
+                write!(f, "bootinfo pointer not 16-byte aligned: 0x{address:016x}")
+            }
+            Self::ExtraTooLarge { words } => {
+                write!(f, "bootinfo.extraLen exceeded limit: {words} words")
+            }
+            Self::Overflow => write!(f, "bootinfo bounds computation overflowed"),
+            Self::ExtraRange { start, end } => write!(
+                f,
+                "bootinfo extra range invalid: [0x{start:016x}..0x{end:016x})"
+            ),
+        }
+    }
+}
+
+fn bootinfo_extra_slice<'a>(header: &'a seL4_BootInfo) -> Result<&'a [u8], BootInfoError> {
+    let addr = header as *const _ as usize;
+    if addr & BOOTINFO_ALIGN_MASK != 0 {
+        return Err(BootInfoError::Unaligned { address: addr });
+    }
+
+    let extra_words = header.extraLen as usize;
+    if extra_words == 0 {
+        return Ok(&[]);
+    }
+
+    if extra_words > MAX_BOOTINFO_EXTRA_WORDS {
+        return Err(BootInfoError::ExtraTooLarge { words: extra_words });
+    }
+
+    let word_bytes = mem::size_of::<seL4_Word>();
+    let extra_len = extra_words
+        .checked_mul(word_bytes)
+        .ok_or(BootInfoError::Overflow)?;
+
+    let header_size = mem::size_of::<seL4_BootInfo>();
+    let extra_start = addr
+        .checked_add(header_size)
+        .ok_or(BootInfoError::Overflow)?;
+    let extra_end = extra_start
+        .checked_add(extra_len)
+        .ok_or(BootInfoError::Overflow)?;
+
+    if extra_end <= extra_start {
+        return Err(BootInfoError::ExtraRange {
+            start: extra_start,
+            end: extra_end,
+        });
+    }
+
+    // SAFETY: The kernel guarantees that bootinfo and its extra region are mapped as
+    // readable memory for the root task. The calculations above ensure we do not
+    // wrap the address space or overrun the reported length.
+    let slice = unsafe { core::slice::from_raw_parts(extra_start as *const u8, extra_len) };
+    Ok(slice)
+}
+
+/// Immutable projection of the kernel-supplied bootinfo region.
+#[derive(Clone, Copy)]
+pub struct BootInfoView {
+    header: &'static seL4_BootInfo,
+    extra_bytes: &'static [u8],
+}
+
+impl BootInfoView {
+    fn build(header: &'static seL4_BootInfo) -> Result<Self, BootInfoError> {
+        let extra_bytes = bootinfo_extra_slice(header)?;
+        Ok(Self {
+            header,
+            extra_bytes,
+        })
+    }
+
+    /// Constructs a [`BootInfoView`] from a trusted reference.
+    pub fn new(header: &'static seL4_BootInfo) -> Result<Self, BootInfoError> {
+        Self::build(header)
+    }
+
+    /// Constructs a [`BootInfoView`] from a raw pointer after validation.
+    ///
+    /// # Safety
+    ///
+    /// The caller must guarantee that `ptr` references a live `seL4_BootInfo`
+    /// structure for the duration of the returned view.
+    pub unsafe fn from_ptr(ptr: *const seL4_BootInfo) -> Result<Self, BootInfoError> {
+        let p = NonNull::new(ptr as *mut seL4_BootInfo).ok_or(BootInfoError::Null)?;
+        let header = &*p.as_ptr();
+        // The pointer dereference above is safe only if the caller honours the
+        // contract documented for this method. All further bounds checks are
+        // performed on the resulting reference.
+        Self::build(header)
+    }
+
+    /// Returns the bootinfo header exposed by this view.
+    #[must_use]
+    pub fn header(&self) -> &'static seL4_BootInfo {
+        self.header
+    }
+
+    /// Returns the kernel-advertised extra region as a byte slice.
+    #[must_use]
+    pub fn extra(&self) -> &'static [u8] {
+        self.extra_bytes
+    }
+
+    /// Returns the raw bytes that back the bootinfo header.
+    #[must_use]
+    pub fn header_bytes(&self) -> &'static [u8] {
+        let ptr = self.header as *const _ as *const u8;
+        // SAFETY: `seL4_BootInfo` is plain data; we rely on the compiler-provided
+        // layout and the static lifetime guaranteed by the kernel mapping.
+        unsafe { core::slice::from_raw_parts(ptr, mem::size_of::<seL4_BootInfo>()) }
+    }
+
+    /// Returns the number of extra words reported by the kernel.
+    #[must_use]
+    pub fn extra_words(&self) -> usize {
+        self.header.extraLen as usize
+    }
+
+    /// Returns the radix width (in bits) of the init thread's CNode.
+    #[must_use]
+    pub fn init_cnode_bits(&self) -> u8 {
+        self.header.initThreadCNodeSizeBits as u8
+    }
+
+    /// Returns the radix width of the init thread's CNode as `usize`.
+    #[must_use]
+    pub fn init_cnode_size_bits(&self) -> usize {
+        self.header.initThreadCNodeSizeBits as usize
+    }
+
+    /// Returns the inclusive-exclusive slot range advertised as free by the kernel.
+    #[must_use]
+    pub fn init_cnode_empty_range(&self) -> (seL4_CPtr, seL4_CPtr) {
+        (
+            self.header.empty.start as seL4_CPtr,
+            self.header.empty.end as seL4_CPtr,
+        )
+    }
+
+    /// Returns the capability designating the init thread's root CNode.
+    #[must_use]
+    pub fn root_cnode_cap(&self) -> seL4_CPtr {
+        sel4_sys::seL4_CapInitThreadCNode
+    }
+}
+
 /// Returns the first RAM-backed untyped capability advertised by the kernel.
 #[must_use]
 pub fn first_regular_untyped(bi: &seL4_BootInfo) -> Option<seL4_CPtr> {
@@ -678,29 +848,13 @@ impl BootInfoExt for seL4_BootInfo {
     }
 
     fn extra_bytes(&self) -> &[u8] {
-        const EMPTY: &[u8] = &[];
-
-        let extra_words = self.extraLen as usize;
-        if extra_words == 0 {
-            return EMPTY;
+        match bootinfo_extra_slice(self) {
+            Ok(slice) => slice,
+            Err(err) => {
+                log::error!("invalid bootinfo extra region: {err}");
+                &[]
+            }
         }
-
-        let word_bytes = mem::size_of::<seL4_Word>();
-        let Some(total_bytes) = extra_words.checked_mul(word_bytes) else {
-            return EMPTY;
-        };
-
-        let header_bytes = self.header_bytes();
-        let extra_start = header_bytes.as_ptr_range().end;
-
-        if (extra_start as usize).checked_add(total_bytes).is_none() {
-            return EMPTY;
-        }
-
-        // SAFETY: The extra bootinfo region is laid out immediately after the header and spans
-        // `total_bytes` bytes as reported by the kernel. The addition above guards against
-        // address overflow when the bootinfo pointer is interpreted as an integer.
-        unsafe { core::slice::from_raw_parts(extra_start, total_bytes) }
     }
 
     fn ipc_buffer_ptr(&self) -> Option<NonNull<sel4_sys::seL4_IPCBuffer>> {
@@ -710,14 +864,15 @@ impl BootInfoExt for seL4_BootInfo {
 }
 
 /// Emits a concise dump of raw bootinfo parameters to aid debugging early boot wiring mistakes.
-pub fn bootinfo_debug_dump(bi: &seL4_BootInfo) {
-    let init_bits = bi.init_cnode_bits();
+pub fn bootinfo_debug_dump(view: &BootInfoView) {
+    let header = view.header();
+    let init_bits = header.init_cnode_bits();
     log::info!(
         "[cohesix:root-task] bootinfo.raw: initCNode=0x{:x} initBits={} empty=[0x{:04x}..0x{:04x})",
-        bi.init_cnode_cap(),
+        view.root_cnode_cap(),
         init_bits,
-        bi.empty_first_slot(),
-        bi.empty_last_slot_excl()
+        header.empty_first_slot(),
+        header.empty_last_slot_excl()
     );
     assert!(
         init_bits > 0,
