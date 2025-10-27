@@ -82,16 +82,59 @@ where
     F: FnOnce(T) -> R,
 {
     let addr = func.addr();
-    if !is_text_ptr(addr) {
-        let bounds = text_bounds();
-        log::error!(
-            "[guard] rejected call target=0x{addr:x} text=[0x{lo:x}..0x{hi:x})",
-            addr = addr,
-            lo = bounds.start,
-            hi = bounds.end
-        );
-        crate::sel4::debug_halt();
+    if is_text_ptr(addr) {
+        return call(func);
     }
 
-    call(func)
+    let bounds = text_bounds();
+    log::error!(
+        "[guard] rejected call target=0x{addr:x} text=[0x{lo:x}..0x{hi:x})",
+        addr = addr,
+        lo = bounds.start,
+        hi = bounds.end
+    );
+    crate::sel4::debug_halt();
+    panic!(
+        "rejected indirect call to 0x{addr:x}; expected text range [0x{lo:x}..0x{hi:x})",
+        addr = addr,
+        lo = bounds.start,
+        hi = bounds.end
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn call_checked_allows_text_target() {
+        fn allowed() {}
+
+        let addr = allowed as usize;
+        init_text_bounds(addr, addr + core::mem::size_of::<usize>());
+
+        let mut invoked = false;
+        call_checked(allowed as fn(), |func| {
+            invoked = true;
+            assert_eq!(func.addr(), addr);
+        });
+        assert!(invoked);
+
+        init_text_bounds(0, 0);
+    }
+
+    #[test]
+    fn call_checked_rejects_non_text_target() {
+        fn target() {}
+
+        init_text_bounds(0, 0);
+
+        let result = std::panic::catch_unwind(|| {
+            call_checked(target as fn(), |func| {
+                let _ = func.addr();
+            });
+        });
+
+        assert!(result.is_err());
+    }
 }
