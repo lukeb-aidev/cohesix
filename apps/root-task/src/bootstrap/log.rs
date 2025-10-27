@@ -14,7 +14,7 @@ use crate::event::{AuditSink, BootstrapOp};
 use crate::sel4;
 
 #[cfg(feature = "kernel")]
-use sel4_sys::{seL4_MessageInfo, seL4_SetMR, seL4_Yield};
+use sel4_sys::{seL4_MessageInfo, seL4_Word};
 #[cfg(feature = "kernel")]
 use spin::Mutex;
 
@@ -28,6 +28,7 @@ pub enum Error {
 }
 
 #[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LoggerState {
     Uninitialised = 0,
     Uart = 1,
@@ -119,7 +120,7 @@ static LOGGER: BootstrapLogger = BootstrapLogger::new();
 static LOGGER_INSTALLED: AtomicBool = AtomicBool::new(false);
 static EP_REQUESTED: AtomicBool = AtomicBool::new(false);
 static EP_ATTACHED: AtomicBool = AtomicBool::new(false);
-static NO_BRIDGE_MODE: AtomicBool = AtomicBool::new(option_env!("NO_BRIDGE") == Some("1"));
+static NO_BRIDGE_MODE: AtomicBool = AtomicBool::new(matches!(option_env!("NO_BRIDGE"), Some("1")));
 static PING_TOKEN: AtomicU32 = AtomicU32::new(1);
 static PING_ACK: AtomicU32 = AtomicU32::new(0);
 
@@ -161,21 +162,21 @@ fn emit_ep(payload: &[u8]) -> Result<(), ()> {
 #[cfg(feature = "kernel")]
 fn send_frame(payload: &[u8]) -> Result<(), ()> {
     let mut guard = SEND_LOCK.lock();
-    let mut words = [0u64; crate::sel4::MSG_MAX_WORDS];
+    let mut words: [seL4_Word; crate::sel4::MSG_MAX_WORDS] = [0; crate::sel4::MSG_MAX_WORDS];
     let mut index = 0usize;
 
     words[index] = BootstrapOp::Log.encode();
     index += 1;
-    words[index] = payload.len() as u64;
+    words[index] = payload.len() as seL4_Word;
     index += 1;
 
     let mut offset = 0usize;
     while offset < payload.len() && index < words.len() {
         let remain = payload.len() - offset;
-        let mut chunk = [0u8; core::mem::size_of::<u64>()];
+        let mut chunk = [0u8; core::mem::size_of::<seL4_Word>()];
         let copy_len = min(remain, chunk.len());
         chunk[..copy_len].copy_from_slice(&payload[offset..offset + copy_len]);
-        words[index] = u64::from_le_bytes(chunk);
+        words[index] = seL4_Word::from_le_bytes(chunk);
         offset += copy_len;
         index += 1;
     }
@@ -186,12 +187,10 @@ fn send_frame(payload: &[u8]) -> Result<(), ()> {
     }
 
     for (slot, word) in words[..index].iter().enumerate() {
-        unsafe {
-            seL4_SetMR(slot, *word);
-        }
+        crate::sel4::set_message_register(slot, *word);
     }
 
-    let info = seL4_MessageInfo::new(0, 0, 0, index as u32);
+    let info = seL4_MessageInfo::new(0, 0, 0, index as seL4_Word);
     let result = sel4::send_guarded(info);
     drop(guard);
     result.map_err(|_| ())
@@ -221,9 +220,7 @@ fn run_self_test() -> bool {
             if PING_ACK.load(Ordering::Acquire) == token {
                 return true;
             }
-            unsafe {
-                seL4_Yield();
-            }
+            crate::sel4::yield_now();
         }
         false
     }
