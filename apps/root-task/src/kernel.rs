@@ -493,7 +493,7 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
     }
 
     #[cfg(feature = "kernel")]
-    let mut ninedoor = crate::ninedoor::NineDoorBridge::new();
+    let ninedoor = crate::ninedoor::bridge_handler();
 
     let uart_region = match hal.map_device(PL011_PADDR) {
         Ok(region) => region,
@@ -887,7 +887,7 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
         #[cfg(feature = "kernel")]
         {
             pump = pump.with_bootstrap_handler(&mut bootstrap_ipc);
-            pump = pump.with_ninedoor(&mut ninedoor);
+            pump = pump.with_ninedoor(ninedoor);
         }
 
         #[cfg(feature = "net-console")]
