@@ -429,9 +429,7 @@ where
                 break;
             }
             self.poll();
-            unsafe {
-                sel4_sys::seL4_Yield();
-            }
+            sel4_sys::yield_now();
         }
     }
 
