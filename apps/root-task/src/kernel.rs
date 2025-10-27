@@ -1362,6 +1362,8 @@ impl BootstrapMessageHandler for BootstrapIpcAudit {
         );
         audit.info(summary.as_str());
 
+        crate::bootstrap::log::process_ep_payload(message.payload.as_slice(), audit);
+
         if !message.payload.is_empty() {
             let mut payload_line = heapless::String::<192>::new();
             let _ = payload_line.push_str("[ipc] bootstrap payload");
