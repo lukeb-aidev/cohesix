@@ -267,18 +267,6 @@ pub fn start_console(uart: Pl011) -> ! {
 
 static BOOTSTRAP_ONCE: AtomicBool = AtomicBool::new(false);
 
-#[cfg(all(feature = "kernel", sel4_config_debug_build))]
-#[inline(always)]
-fn debug_halt() {
-    unsafe {
-        sel4_sys::seL4_DebugHalt();
-    }
-}
-
-#[cfg(any(not(feature = "kernel"), not(sel4_config_debug_build)))]
-#[inline(always)]
-fn debug_halt() {}
-
 /// Root task entry point invoked by seL4 after kernel initialisation.
 pub fn start<P: Platform>(bootinfo: &'static BootInfo, platform: &P) -> ! {
     bootstrap(platform, bootinfo)
@@ -294,7 +282,7 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
     if BOOTSTRAP_ONCE.swap(true, Ordering::SeqCst) {
         log::error!("[boot] bootstrap called twice; refusing re-entry");
         #[cfg(feature = "kernel")]
-        debug_halt();
+        crate::sel4::debug_halt();
         loop {
             core::hint::spin_loop();
         }
@@ -306,7 +294,7 @@ fn bootstrap<P: Platform>(platform: &P, bootinfo: &'static BootInfo) -> ! {
         Err(err) => {
             log::error!("[boot] invalid bootinfo: {err}");
             #[cfg(feature = "kernel")]
-            debug_halt();
+            crate::sel4::debug_halt();
             loop {
                 core::hint::spin_loop();
             }

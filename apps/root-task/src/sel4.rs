@@ -467,6 +467,33 @@ pub unsafe extern "C" fn seL4_DebugPutChar(byte: u8) {
 }
 
 #[cfg(all(feature = "kernel", target_arch = "aarch64", sel4_config_debug_build))]
+#[inline(always)]
+/// Requests the kernel to halt execution of the current thread via the debug syscall.
+pub fn debug_halt() {
+    const SYS_DEBUG_HALT: u64 = (!0u64).wrapping_sub(10); // -11
+
+    unsafe {
+        asm!(
+            "svc #0",
+            inout("x0") 0usize => _,
+            lateout("x1") _,
+            lateout("x2") _,
+            lateout("x3") _,
+            lateout("x4") _,
+            lateout("x5") _,
+            lateout("x6") _,
+            in("x7") SYS_DEBUG_HALT,
+            options(nostack, preserves_flags),
+        );
+    }
+}
+
+#[cfg(not(all(feature = "kernel", target_arch = "aarch64", sel4_config_debug_build)))]
+#[inline(always)]
+/// Stub used when the kernel omits the debug halt syscall.
+pub fn debug_halt() {}
+
+#[cfg(all(feature = "kernel", target_arch = "aarch64", sel4_config_debug_build))]
 #[no_mangle]
 /// Executes the `DebugCapIdentify` seL4 syscall to reveal a capability's kernel tag.
 pub unsafe extern "C" fn seL4_DebugCapIdentify(slot: seL4_CPtr) -> u32 {
