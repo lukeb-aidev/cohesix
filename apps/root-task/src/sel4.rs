@@ -177,7 +177,12 @@ impl BootInfoView {
     /// structure for the duration of the returned view.
     pub unsafe fn from_ptr(ptr: *const seL4_BootInfo) -> Result<Self, BootInfoError> {
         let p = NonNull::new(ptr as *mut seL4_BootInfo).ok_or(BootInfoError::Null)?;
-        let header = &*p.as_ptr();
+        let header = unsafe {
+            // SAFETY: `NonNull::new` guarantees the pointer is not null. The
+            // caller promises that the pointer references a live
+            // `seL4_BootInfo` structure for the required lifetime.
+            &*p.as_ptr()
+        };
         // The pointer dereference above is safe only if the caller honours the
         // contract documented for this method. All further bounds checks are
         // performed on the resulting reference.
