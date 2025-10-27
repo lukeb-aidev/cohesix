@@ -500,6 +500,7 @@ mod imp {
     pub const seL4_SysCall: seL4_Word = !0usize; // -1 in two's complement
     pub const seL4_SysReplyRecv: seL4_Word = !1usize; // -2
     pub const seL4_SysSend: seL4_Word = !2usize; // -3
+    pub const seL4_SysYield: seL4_Word = !6usize; // -7
     pub const seL4_SysNBRecv: seL4_Word = !7usize; // -8
 
     #[inline(always)]
@@ -855,10 +856,25 @@ mod imp {
         pub fn seL4_DebugPutChar(c: u8);
         pub fn seL4_DebugHalt();
         pub fn seL4_DebugCapIdentify(cap: seL4_CPtr) -> seL4_Uint32;
-        pub fn seL4_Yield();
         pub fn seL4_ARM_Page_Unmap(service: seL4_ARM_Page) -> seL4_Error;
         pub fn seL4_ARM_Page_GetAddress(service: seL4_ARM_Page) -> seL4_ARM_Page_GetAddress;
         pub fn seL4_GetBootInfo() -> *const seL4_BootInfo;
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_Yield() {
+        arm_sys_send_recv(
+            seL4_SysYield,
+            0,
+            ptr::null_mut(),
+            0,
+            ptr::null_mut(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+            0,
+        );
     }
 
     /// Yield the current thread to the seL4 scheduler.
