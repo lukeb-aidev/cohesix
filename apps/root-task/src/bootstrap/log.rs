@@ -29,11 +29,11 @@ pub enum Error {
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum LoggerState {
+enum LogTransport {
     Uninitialised = 0,
-    Uart = 1,
-    Pending = 2,
-    Userland = 3,
+    UartOnly = 1,
+    UartMirroredEp = 2,
+    EpOnly = 3,
 }
 
 const FRAME_KIND_LINE: u8 = 0x01;
@@ -48,21 +48,21 @@ struct BootstrapLogger {
 impl BootstrapLogger {
     const fn new() -> Self {
         Self {
-            state: AtomicU8::new(LoggerState::Uninitialised as u8),
+            state: AtomicU8::new(LogTransport::Uninitialised as u8),
         }
     }
 
-    fn sink_state(&self) -> LoggerState {
+    fn transport(&self) -> LogTransport {
         match self.state.load(Ordering::Acquire) {
-            1 => LoggerState::Uart,
-            2 => LoggerState::Pending,
-            3 => LoggerState::Userland,
-            _ => LoggerState::Uninitialised,
+            1 => LogTransport::UartOnly,
+            2 => LogTransport::UartMirroredEp,
+            3 => LogTransport::EpOnly,
+            _ => LogTransport::Uninitialised,
         }
     }
 
-    fn set_state(&self, state: LoggerState) {
-        self.state.store(state as u8, Ordering::Release);
+    fn set_transport(&self, transport: LogTransport) {
+        self.state.store(transport as u8, Ordering::Release);
     }
 }
 
@@ -100,13 +100,14 @@ impl Log for BootstrapLogger {
 
 impl BootstrapLogger {
     fn emit(&self, line: &[u8]) {
-        match self.sink_state() {
-            LoggerState::Uninitialised => {}
-            LoggerState::Uart => emit_uart(line),
-            LoggerState::Pending => {
+        match self.transport() {
+            LogTransport::Uninitialised => {}
+            LogTransport::UartOnly => emit_uart(line),
+            LogTransport::UartMirroredEp => {
                 emit_uart(line);
+                let _ = emit_ep(line);
             }
-            LoggerState::Userland => {
+            LogTransport::EpOnly => {
                 if emit_ep(line).is_err() {
                     revert_to_uart(b"[trace] EP log sink stalled; reverting to UART\r\n");
                     emit_uart(line);
@@ -120,6 +121,7 @@ static LOGGER: BootstrapLogger = BootstrapLogger::new();
 static LOGGER_INSTALLED: AtomicBool = AtomicBool::new(false);
 static EP_REQUESTED: AtomicBool = AtomicBool::new(false);
 static EP_ATTACHED: AtomicBool = AtomicBool::new(false);
+static BRIDGE_CREATED: AtomicBool = AtomicBool::new(false);
 const fn env_flag(value: Option<&'static str>) -> bool {
     match value {
         Some(val) => {
@@ -143,6 +145,12 @@ fn emit_uart(payload: &[u8]) {
     for &byte in payload {
         sel4::debug_put_char(byte as i32);
     }
+}
+
+/// Emit a UART line regardless of the current logger transport.
+pub fn force_uart_line(line: &str) {
+    emit_uart(line.as_bytes());
+    emit_uart(b"\r\n");
 }
 
 fn emit_ep(payload: &[u8]) -> Result<(), ()> {
@@ -244,31 +252,39 @@ fn run_self_test() -> bool {
 }
 
 fn revert_to_uart(reason: &[u8]) {
-    LOGGER.set_state(LoggerState::Uart);
+    LOGGER.set_transport(LogTransport::UartOnly);
     EP_REQUESTED.store(false, Ordering::Release);
     EP_ATTACHED.store(false, Ordering::Release);
+    BRIDGE_CREATED.store(false, Ordering::Release);
     emit_uart(reason);
 }
 
-fn complete_transition() {
+fn enter_mirrored_transport() {
     if NO_BRIDGE_MODE.load(Ordering::Acquire) {
-        revert_to_uart(b"[trace] log bridge disabled; UART only\r\n");
         return;
     }
-
-    if LOGGER.sink_state() != LoggerState::Pending {
+    if LOGGER.transport() == LogTransport::UartMirroredEp {
         return;
     }
+    LOGGER.set_transport(LogTransport::UartMirroredEp);
+    emit_uart(b"[trace] log transport: UART mirrored to EP\r\n");
+}
 
-    emit_uart(b"[trace] switching log transport: UART -> EP\r\n");
-
-    if run_self_test() {
-        LOGGER.set_state(LoggerState::Userland);
-        let _ = emit_ep(b"[trace] EP log sink attached\r\n");
-        emit_uart(b"[trace] EP log sink attached\r\n");
-    } else {
-        revert_to_uart(b"[trace] EP log sink ping timeout; reverting to UART\r\n");
+fn try_enter_ep_only() {
+    if NO_BRIDGE_MODE.load(Ordering::Acquire) {
+        return;
     }
+    if LOGGER.transport() != LogTransport::UartMirroredEp {
+        return;
+    }
+    if !run_self_test() {
+        emit_uart(b"[trace] EP log sink ping timeout; staying mirrored\r\n");
+        return;
+    }
+    LOGGER.set_transport(LogTransport::EpOnly);
+    let message = b"[trace] EP log sink attached; switching to EPOnly\r\n";
+    let _ = emit_ep(message);
+    emit_uart(message);
 }
 
 /// Installs the bootstrap logger and routes output to the seL4 debug console.
@@ -279,7 +295,10 @@ pub fn init_logger_bootstrap_only() {
     {
         ::log::set_logger(&LOGGER).expect("bootstrap logger install must succeed");
     }
-    LOGGER.set_state(LoggerState::Uart);
+    LOGGER.set_transport(LogTransport::UartOnly);
+    EP_REQUESTED.store(false, Ordering::Release);
+    EP_ATTACHED.store(false, Ordering::Release);
+    BRIDGE_CREATED.store(false, Ordering::Release);
     ::log::set_max_level(LevelFilter::Info);
 }
 
@@ -288,40 +307,52 @@ pub fn switch_logger_to_userland() -> Result<(), Error> {
     if NO_BRIDGE_MODE.load(Ordering::Acquire) {
         return Ok(());
     }
-
-    LOGGER
-        .state
-        .compare_exchange(
-            LoggerState::Uart as u8,
-            LoggerState::Pending as u8,
-            Ordering::AcqRel,
-            Ordering::Acquire,
-        )
-        .map_err(|observed| match observed {
-            0 => Error::NotInitialised,
-            2 | 3 => Error::AlreadyUserland,
-            _ => Error::NotInitialised,
-        })?;
+    match LOGGER.transport() {
+        LogTransport::Uninitialised => return Err(Error::NotInitialised),
+        LogTransport::EpOnly | LogTransport::UartMirroredEp => return Err(Error::AlreadyUserland),
+        LogTransport::UartOnly => {}
+    }
     EP_REQUESTED.store(true, Ordering::Release);
-    if EP_ATTACHED.load(Ordering::Acquire) {
-        complete_transition();
+    if BRIDGE_CREATED.load(Ordering::Acquire) {
+        enter_mirrored_transport();
+        if EP_ATTACHED.load(Ordering::Acquire) {
+            try_enter_ep_only();
+        }
     }
     Ok(())
+}
+
+/// Inform the logger that the NineDoor bridge capability has been created.
+pub fn notify_bridge_created() {
+    if NO_BRIDGE_MODE.load(Ordering::Acquire) {
+        return;
+    }
+    BRIDGE_CREATED.store(true, Ordering::Release);
+    if EP_REQUESTED.load(Ordering::Acquire) {
+        enter_mirrored_transport();
+    }
 }
 
 /// Inform the logger that the NineDoor bridge has completed authentication.
 pub fn notify_bridge_attached() {
     EP_ATTACHED.store(true, Ordering::Release);
     if EP_REQUESTED.load(Ordering::Acquire) {
-        complete_transition();
+        if BRIDGE_CREATED.load(Ordering::Acquire) {
+            enter_mirrored_transport();
+            try_enter_ep_only();
+        }
     }
 }
 
 /// Inform the logger that the bridge is no longer attached.
 pub fn notify_bridge_detached() {
     EP_ATTACHED.store(false, Ordering::Release);
-    if LOGGER.sink_state() == LoggerState::Userland {
-        revert_to_uart(b"[trace] NineDoor detached; returning to UART\r\n");
+    if matches!(
+        LOGGER.transport(),
+        LogTransport::EpOnly | LogTransport::UartMirroredEp
+    ) {
+        LOGGER.set_transport(LogTransport::UartOnly);
+        emit_uart(b"[trace] NineDoor detached; returning to UART\r\n");
     }
 }
 
@@ -329,8 +360,21 @@ pub fn notify_bridge_detached() {
 pub fn set_no_bridge_mode(enabled: bool) {
     NO_BRIDGE_MODE.store(enabled, Ordering::Release);
     if enabled {
-        LOGGER.set_state(LoggerState::Uart);
+        LOGGER.set_transport(LogTransport::UartOnly);
+        EP_REQUESTED.store(false, Ordering::Release);
+        EP_ATTACHED.store(false, Ordering::Release);
+        BRIDGE_CREATED.store(false, Ordering::Release);
     }
+}
+
+/// Returns `true` when the logger has switched exclusively to the EP transport.
+pub fn ep_only_active() -> bool {
+    matches!(LOGGER.transport(), LogTransport::EpOnly)
+}
+
+/// Returns `true` when the bridge transport has been disabled via environment configuration.
+pub fn bridge_disabled() -> bool {
+    NO_BRIDGE_MODE.load(Ordering::Acquire)
 }
 
 /// Decode an IPC payload emitted by the EP log sink and surface the payload via the audit sink.
