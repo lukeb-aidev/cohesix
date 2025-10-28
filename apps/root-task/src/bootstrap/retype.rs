@@ -6,13 +6,137 @@ use heapless::String;
 use sel4_sys as sys;
 
 use super::cspace::{slot_in_empty_window, CSpaceCtx, DestCNode};
-use super::cspace_sys;
 use crate::bootstrap::log::force_uart_line;
 use crate::bootstrap::{boot_tracer, BootPhase, UntypedSelection};
 use crate::sel4::{error_name, PAGE_BITS, PAGE_TABLE_BITS};
+#[cfg(any(test, feature = "ffi_shim"))]
+use spin::Mutex;
 
 const DEFAULT_RETYPE_LIMIT: u32 = 512;
 const PROGRESS_INTERVAL: u32 = 64;
+
+fn log_retype_call(
+    ut_cap: sys::seL4_Word,
+    obj_type: sys::seL4_Word,
+    size_bits: sys::seL4_Word,
+    dest: &DestCNode,
+    num_objects: sys::seL4_Word,
+) {
+    let mut line = String::<128>::new();
+    let _ = write!(
+        &mut line,
+        "[retype:call] ut={:#x} obj={:#x} sz_bits={} root={:#x} idx={:#x} depth={} off={:#x} n={}",
+        ut_cap,
+        obj_type,
+        size_bits,
+        dest.root,
+        dest.node_index,
+        dest.depth_bits,
+        dest.slot_offset,
+        num_objects
+    );
+    force_uart_line(line.as_str());
+}
+
+#[cfg(any(test, feature = "ffi_shim"))]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RetypeCallRecord {
+    pub ut: sys::seL4_Word,
+    pub obj: sys::seL4_Word,
+    pub size_bits: sys::seL4_Word,
+    pub root: sys::seL4_CPtr,
+    pub idx: sys::seL4_CPtr,
+    pub depth: u8,
+    pub off: sys::seL4_Word,
+    pub n: sys::seL4_Word,
+}
+
+#[cfg(any(test, feature = "ffi_shim"))]
+static LAST_RETYPE: spin::Mutex<Option<RetypeCallRecord>> = spin::Mutex::new(None);
+
+#[cfg(any(test, feature = "ffi_shim"))]
+fn record_retype_call(record: RetypeCallRecord) {
+    *LAST_RETYPE.lock() = Some(record);
+}
+
+#[cfg(any(test, feature = "ffi_shim"))]
+pub fn last_retype_args() -> RetypeCallRecord {
+    LAST_RETYPE
+        .lock()
+        .copied()
+        .expect("no retype calls recorded")
+}
+
+#[cfg(any(test, feature = "ffi_shim"))]
+fn seL4_Untyped_Retype(
+    ut_cap: sys::seL4_Word,
+    obj_type: sys::seL4_Word,
+    size_bits: sys::seL4_Word,
+    dest_root: sys::seL4_CPtr,
+    node_index: sys::seL4_CPtr,
+    node_depth: sys::seL4_Word,
+    node_offset: sys::seL4_Word,
+    num_objects: sys::seL4_Word,
+) -> sys::seL4_Error {
+    record_retype_call(RetypeCallRecord {
+        ut: ut_cap,
+        obj: obj_type,
+        size_bits,
+        root: dest_root,
+        idx: node_index,
+        depth: node_depth as u8,
+        off: node_offset,
+        n: num_objects,
+    });
+    sys::seL4_NoError
+}
+
+#[cfg(not(any(test, feature = "ffi_shim")))]
+fn seL4_Untyped_Retype(
+    ut_cap: sys::seL4_Word,
+    obj_type: sys::seL4_Word,
+    size_bits: sys::seL4_Word,
+    dest_root: sys::seL4_CPtr,
+    node_index: sys::seL4_CPtr,
+    node_depth: sys::seL4_Word,
+    node_offset: sys::seL4_Word,
+    num_objects: sys::seL4_Word,
+) -> sys::seL4_Error {
+    unsafe {
+        sys::seL4_Untyped_Retype(
+            ut_cap,
+            obj_type,
+            size_bits,
+            dest_root,
+            node_index,
+            node_depth,
+            node_offset,
+            num_objects,
+        )
+    }
+}
+
+#[inline(always)]
+pub(crate) fn call_retype(
+    ut_cap: sys::seL4_Word,
+    obj_type: sys::seL4_Word,
+    size_bits: sys::seL4_Word,
+    dest: &DestCNode,
+    num_objects: sys::seL4_Word,
+) -> sys::seL4_Error {
+    dest.assert_sane();
+    log_retype_call(ut_cap, obj_type, size_bits, dest, num_objects);
+    seL4_Untyped_Retype(
+        ut_cap,
+        obj_type,
+        size_bits,
+        dest.root,
+        dest.node_index,
+        sys::seL4_Word::from(dest.depth_bits),
+        sys::seL4_Word::from(dest.slot_offset),
+        num_objects,
+    )
+}
 
 fn boot_retype_limit() -> u32 {
     option_env!("BOOT_RETYPE_MAX")
@@ -130,10 +254,7 @@ where
     }
 
     let (start, end) = ctx.empty_bounds();
-    let log_node_depth = match ctx.dest {
-        DestCNode::Init => cspace_sys::encode_cnode_depth(cspace_sys::INIT_CNODE_RETYPE_DEPTH_BITS),
-        DestCNode::Other { bits, .. } => cspace_sys::encode_cnode_depth(bits),
-    };
+    let log_node_depth = sys::seL4_Word::from(ctx.dest.depth_bits);
 
     let categories: [(u32, sys::seL4_ObjectType, u8); 2] = [
         (

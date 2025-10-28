@@ -1,7 +1,11 @@
 // Author: Lukas Bower
 
 use crate::cspace::{cap_rights_read_write_grant, CSpace};
-use crate::sel4::{self, is_boot_reserved_slot, BootInfoView, WORD_BITS};
+use crate::sel4::{
+    self, empty_window, init_cnode_bits, init_cnode_cptr, is_boot_reserved_slot, BootInfoView,
+    WORD_BITS,
+};
+use core::convert::TryInto;
 use core::fmt::Write;
 use heapless::String;
 
@@ -24,27 +28,66 @@ fn log_boot(beg: sel4::seL4_CPtr, end: sel4::seL4_CPtr, bits: u8) {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-/// Identifies the destination CNode that retype operations should target.
-pub enum DestCNode {
-    /// Directs retype operations into the init thread CNode.
-    Init,
-    /// Directs retype operations into a non-init CNode capability.
-    Other {
-        /// Capability pointer referencing the destination CNode.
-        cap: sel4::seL4_CPtr,
-        /// Radix width (in bits) of the destination CNode.
-        bits: u8,
-    },
+/// Structurally typed destination descriptor for seL4 retype operations.
+pub struct DestCNode {
+    /// Capability to the root CNode of the destination CSpace.
+    pub root: sel4::seL4_CPtr,
+    /// Capability pointer to the CNode where objects are placed; interpreted at `depth_bits`.
+    pub node_index: sel4::seL4_CPtr,
+    /// Radix width (in bits) of the destination CNode.
+    pub depth_bits: u8,
+    /// First free slot offset within the destination CNode.
+    pub slot_offset: u32,
 }
 
 impl DestCNode {
-    #[inline(always)]
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            Self::Init => "direct:init-cnode",
-            Self::Other { .. } => "general:cnode",
-        }
+    /// Verifies that the destination invariants remain sane.
+    pub fn assert_sane(&self) {
+        assert!(
+            (1..=31).contains(&self.depth_bits),
+            "depth_bits must be 1..=31 (got {})",
+            self.depth_bits
+        );
+        assert_eq!(
+            self.root, self.node_index,
+            "For now we only support root-level inserts"
+        );
     }
+
+    #[inline(always)]
+    pub fn path_label(&self) -> &'static str {
+        "direct:init-cnode"
+    }
+
+    #[inline(always)]
+    pub fn set_slot_offset(&mut self, slot: sel4::seL4_CPtr) {
+        self.slot_offset = slot
+            .try_into()
+            .expect("slot offset must fit within u32 for init CNode");
+    }
+
+    #[inline(always)]
+    pub fn bump_slot(&mut self) {
+        self.slot_offset = self
+            .slot_offset
+            .checked_add(1)
+            .expect("slot offset overflow");
+    }
+}
+
+/// Constructs a destination descriptor anchored at the root CNode.
+pub fn make_root_dest(bi: &sel4_sys::seL4_BootInfo) -> DestCNode {
+    let root = init_cnode_cptr(bi);
+    let depth_bits = init_cnode_bits(bi);
+    let (start, _) = empty_window(bi);
+    let dest = DestCNode {
+        root,
+        node_index: root,
+        depth_bits,
+        slot_offset: start,
+    };
+    dest.assert_sane();
+    dest
 }
 
 /// Canonical CSpace context orchestrating bootstrap-time seL4 CNode operations.
@@ -139,6 +182,7 @@ impl CSpaceCtx {
             "bootinfo.empty.end exceeds init CNode size"
         );
         let root_cnode_cap = init_cspace_root;
+        let dest = make_root_dest(bi.header());
         let ctx = Self {
             bi,
             cspace,
@@ -149,7 +193,7 @@ impl CSpaceCtx {
             root_cnode_cap,
             tcb_copy_slot: sel4::seL4_CapNull,
             root_cnode_copy_slot: sel4::seL4_CapNull,
-            dest: DestCNode::Init,
+            dest,
             init_cnode_preflighted: false,
         };
         log_boot(first_free, last_free, init_cnode_bits);
@@ -164,6 +208,7 @@ impl CSpaceCtx {
 
     /// Updates the destination CNode used for subsequent retype operations.
     pub fn set_dest(&mut self, dest: DestCNode) {
+        dest.assert_sane();
         self.dest = dest;
     }
 
@@ -252,9 +297,10 @@ impl CSpaceCtx {
 
     fn log_direct_init_path(&self, dst_slot: sel4::seL4_CPtr) {
         let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
+        let depth_bits = self.dest.depth_bits;
         if write!(
             &mut line,
-            "[retype] path=direct:init-cnode dest=0x{dst_slot:04x} depth=0",
+            "[retype] path=direct:init-cnode dest=0x{dst_slot:04x} depth={depth_bits}",
         )
         .is_err()
         {
@@ -314,21 +360,22 @@ impl CSpaceCtx {
     pub fn log_retype(
         &self,
         err: sel4::seL4_Error,
-        root: sel4::seL4_CNode,
         untyped: sel4::seL4_CPtr,
         obj_ty: sel4::seL4_Word,
         size_bits: sel4::seL4_Word,
         dest_index: sel4::seL4_CPtr,
-        node_index: sel4::seL4_Word,
-        node_depth: sel4::seL4_Word,
-        node_offset: sel4::seL4_Word,
-        path_label: &str,
+        dest: &DestCNode,
     ) {
         if err != sel4::seL4_NoError {
             let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
             if write!(
                 &mut line,
-                "[retype] path={path_label} err={err} root=0x{root:04x} untyped_slot=0x{untyped:04x} node(index=0x{node_index:04x},depth={node_depth},offset=0x{node_offset:04x}) dest_slot=0x{dest_index:04x} ty={obj_ty} sz={size_bits}",
+                "[retype] path={path} err={err} root=0x{root:04x} untyped_slot=0x{untyped:04x} node(index=0x{node_index:04x},depth={node_depth},offset=0x{node_offset:04x}) dest_slot=0x{dest_index:04x} ty={obj_ty} sz={size_bits}",
+                path = dest.path_label(),
+                root = dest.root,
+                node_index = dest.node_index,
+                node_depth = dest.depth_bits,
+                node_offset = dest.slot_offset,
             )
             .is_err()
             {
@@ -414,58 +461,23 @@ impl CSpaceCtx {
         );
         self.assert_slot_available(dst_slot);
         self.debug_identify_destinations();
-        let (err, root_cap, node_index, node_depth, node_offset, path_label) = match self.dest {
-            DestCNode::Init => {
-                self.log_direct_init_path(dst_slot);
-                if !self.init_cnode_preflighted {
-                    if let Err(err) = cspace_sys::preflight_init_cnode_writable(dst_slot) {
-                        return err.into_sel4_error();
-                    }
-                    self.init_cnode_preflighted = true;
-                }
-                let node_index = 0;
-                let node_depth = sel4_sys::seL4_WordBits as sel4::seL4_Word;
-                let node_offset = dst_slot as sel4::seL4_Word;
-
-                let result = match cspace_sys::untyped_retype_into_init_root(
-                    untyped, obj_ty, size_bits, dst_slot,
-                ) {
-                    Ok(()) => sel4::seL4_NoError,
-                    Err(err) => err.into_sel4_error(),
-                };
-
-                (
-                    result,
-                    sel4::seL4_CapInitThreadCNode,
-                    node_index,
-                    node_depth,
-                    node_offset,
-                    DestCNode::Init.label(),
-                )
+        let mut dest = self.dest;
+        dest.set_slot_offset(dst_slot);
+        dest.assert_sane();
+        self.log_direct_init_path(dst_slot);
+        if !self.init_cnode_preflighted {
+            if let Err(err) = cspace_sys::preflight_init_cnode_writable(dst_slot) {
+                return err.into_sel4_error();
             }
-            DestCNode::Other { cap, bits } => (
-                cspace_sys::untyped_retype_into_cnode(
-                    cap, bits, untyped, obj_ty, size_bits, dst_slot,
-                ),
-                cap,
-                dst_slot as sel4::seL4_Word,
-                cspace_sys::encode_cnode_depth(bits),
-                0,
-                DestCNode::Other { cap, bits }.label(),
-            ),
-        };
-        self.log_retype(
-            err,
-            root_cap,
-            untyped,
-            obj_ty,
-            size_bits,
-            dst_slot,
-            node_index,
-            node_depth,
-            node_offset,
-            path_label,
-        );
+            self.init_cnode_preflighted = true;
+        }
+
+        let err = super::retype::call_retype(untyped, obj_ty, size_bits, &dest, 1);
+        self.log_retype(err, untyped, obj_ty, size_bits, dst_slot, &dest);
+        if err == sel4::seL4_NoError {
+            dest.bump_slot();
+        }
+        self.dest = dest;
         err
     }
 
