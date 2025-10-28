@@ -18,7 +18,7 @@ use cohesix_ticket::Role;
 use crate::boot::{bi_extra, ep};
 use crate::bootstrap::{
     boot_tracer,
-    cspace::CSpaceCtx,
+    cspace::{cspace_first_retypes, CSpaceCtx},
     ipcbuf, log as boot_log, pick_untyped,
     retype::{retype_one, retype_selection},
     BootPhase,
@@ -37,8 +37,8 @@ use crate::net::{NetStack, CONSOLE_TCP_PORT};
 use crate::ninedoor::NineDoorBridge;
 use crate::platform::{Platform, SeL4Platform};
 use crate::sel4::{
-    bootinfo_debug_dump, error_name, root_endpoint, BootInfo, BootInfoExt, BootInfoView, KernelEnv,
-    RetypeKind, RetypeStatus, IPC_PAGE_BYTES, MSG_MAX_WORDS,
+    bootinfo_debug_dump, error_name, first_regular_untyped, root_endpoint, BootInfo, BootInfoExt,
+    BootInfoView, KernelEnv, RetypeKind, RetypeStatus, IPC_PAGE_BYTES, MSG_MAX_WORDS,
 };
 use crate::serial::{
     pl011::Pl011, SerialPort, DEFAULT_LINE_CAPACITY, DEFAULT_RX_CAPACITY, DEFAULT_TX_CAPACITY,
@@ -460,6 +460,34 @@ fn bootstrap<P: Platform>(
     if !extra_bytes.is_empty() {
         console.writeln_prefixed("[boot] deferring DTB parse");
         boot_tracer().advance(BootPhase::DTBParseDeferred);
+    }
+
+    if let Some((first_ut_cap, _)) = bi_extra::first_regular_untyped_from_extra(bootinfo_ref) {
+        if let Err(err) = cspace_first_retypes(bootinfo_ref, &mut boot_cspace, first_ut_cap) {
+            let mut line = heapless::String::<160>::new();
+            let _ = write!(
+                line,
+                "[boot] first retypes failed: {} ({})",
+                err as i32,
+                error_name(err),
+            );
+            console.writeln_prefixed(line.as_str());
+            panic!("first retypes failed: {}", error_name(err));
+        }
+    } else if let Some(first_ut_cap) = first_regular_untyped(bootinfo_ref) {
+        if let Err(err) = cspace_first_retypes(bootinfo_ref, &mut boot_cspace, first_ut_cap) {
+            let mut line = heapless::String::<160>::new();
+            let _ = write!(
+                line,
+                "[boot] first retypes failed: {} ({})",
+                err as i32,
+                error_name(err),
+            );
+            console.writeln_prefixed(line.as_str());
+            panic!("first retypes failed: {}", error_name(err));
+        }
+    } else {
+        console.writeln_prefixed("[boot] no RAM-backed untyped for proof retypes");
     }
 
     let ipc_buffer_ptr = bootinfo_ref.ipc_buffer_ptr();
