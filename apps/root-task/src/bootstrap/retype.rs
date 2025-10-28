@@ -133,8 +133,7 @@ pub(crate) fn call_retype(
         dest.root,
         dest.node_index,
         sys::seL4_Word::from(dest.depth_bits),
-        usize::try_from(dest.slot_offset)
-            .expect("slot offset must fit within seL4_Word width"),
+        usize::try_from(dest.slot_offset).expect("slot offset must fit within seL4_Word width"),
         num_objects,
     )
 }
