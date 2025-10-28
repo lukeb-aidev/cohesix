@@ -611,9 +611,13 @@ fn bootstrap<P: Platform>(
 
     let mut cs = CSpaceCtx::new(bootinfo_view, boot_cspace);
     cs.tcb_copy_slot = tcb_copy_slot;
-    // Track bootstrap slot usage: the TCB copy plus the earlier endpoint bootstrap
-    // consume two slots before we begin retyping.
-    let mut consumed_slots: usize = 2;
+    // Track bootstrap slot usage by measuring the init CSpace cursor before
+    // further retype activity. This covers the endpoint bootstrap, the TCB
+    // copy, and any proof-of-life retypes that ran prior to entering the
+    // retype plan, ensuring the HAL reserves every populated slot.
+    let initial_consumed =
+        (cs.next_candidate_slot() as usize).saturating_sub(boot_first_free as usize);
+    let mut consumed_slots: usize = cmp::max(initial_consumed, 2);
     let mut retyped_objects: u32 = 0;
 
     boot_tracer().advance(BootPhase::UntypedEnumerate);
