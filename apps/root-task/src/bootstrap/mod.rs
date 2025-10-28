@@ -210,4 +210,5 @@ pub fn ktry(step: &str, rc: i32) -> Result<(), i32> {
 #[cfg(test)]
 pub mod tests {
     pub mod cspace_math;
+    pub mod retype_args;
 }

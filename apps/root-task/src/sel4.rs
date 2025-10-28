@@ -72,6 +72,24 @@ use sel4_panicking::DebugSink;
 /// Alias to the boot information structure exposed by `sel4_sys`.
 pub type BootInfo = seL4_BootInfo;
 
+/// Returns the capability pointer for the init thread's root CNode.
+#[inline(always)]
+pub fn init_cnode_cptr(bi: &seL4_BootInfo) -> seL4_CPtr {
+    bi.initThreadCNode as seL4_CPtr
+}
+
+/// Returns the radix width (in bits) for the init thread's root CNode.
+#[inline(always)]
+pub fn init_cnode_bits(bi: &seL4_BootInfo) -> u8 {
+    bi.initThreadCNodeSizeBits as u8
+}
+
+/// Returns the `[start, end)` empty slot window advertised by bootinfo.
+#[inline(always)]
+pub fn empty_window(bi: &seL4_BootInfo) -> (u32, u32) {
+    (bi.empty.start as u32, bi.empty.end as u32)
+}
+
 const BOOTINFO_ALIGN_MASK: usize = 0xF;
 const MAX_BOOTINFO_EXTRA_WORDS: usize = 32 * 1024;
 
