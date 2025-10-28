@@ -1,11 +1,13 @@
 // Author: Lukas Bower
 
+use core::convert::TryFrom;
 use core::fmt::Write;
 
 use heapless::String;
 use sel4_sys as sys;
 
 use super::cspace::{slot_in_empty_window, CSpaceCtx, DestCNode};
+use super::ffi::raw_untyped_retype;
 use crate::bootstrap::log::force_uart_line;
 use crate::bootstrap::{boot_tracer, BootPhase, UntypedSelection};
 use crate::sel4::{error_name, PAGE_BITS, PAGE_TABLE_BITS};
@@ -102,18 +104,16 @@ fn seL4_Untyped_Retype(
     node_offset: sys::seL4_Word,
     num_objects: sys::seL4_Word,
 ) -> sys::seL4_Error {
-    unsafe {
-        sys::seL4_Untyped_Retype(
-            ut_cap,
-            obj_type,
-            size_bits,
-            dest_root,
-            node_index,
-            node_depth,
-            node_offset,
-            num_objects,
-        )
-    }
+    raw_untyped_retype(
+        ut_cap,
+        obj_type,
+        size_bits,
+        dest_root,
+        node_index,
+        node_depth,
+        node_offset,
+        num_objects,
+    )
 }
 
 #[inline(always)]
@@ -133,7 +133,8 @@ pub(crate) fn call_retype(
         dest.root,
         dest.node_index,
         sys::seL4_Word::from(dest.depth_bits),
-        sys::seL4_Word::from(dest.slot_offset),
+        usize::try_from(dest.slot_offset)
+            .expect("slot offset must fit within seL4_Word width"),
         num_objects,
     )
 }
