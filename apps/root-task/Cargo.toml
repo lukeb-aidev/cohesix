@@ -27,6 +27,9 @@ bootstrap-trace = [
     "dep:spin",
 ]
 test-support = []
+ffi_shim = [
+    "dep:spin",
+]
 
 [dependencies]
 cohesix-ticket = { workspace = true }

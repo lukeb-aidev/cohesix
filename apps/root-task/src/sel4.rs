@@ -74,8 +74,8 @@ pub type BootInfo = seL4_BootInfo;
 
 /// Returns the capability pointer for the init thread's root CNode.
 #[inline(always)]
-pub fn init_cnode_cptr(bi: &seL4_BootInfo) -> seL4_CPtr {
-    bi.initThreadCNode as seL4_CPtr
+pub fn init_cnode_cptr(_: &seL4_BootInfo) -> seL4_CPtr {
+    seL4_CapInitThreadCNode
 }
 
 /// Returns the radix width (in bits) for the init thread's root CNode.
