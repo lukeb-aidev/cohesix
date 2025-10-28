@@ -1,5 +1,7 @@
 // Author: Lukas Bower
 
+use crate::bootstrap::log::force_uart_line;
+use crate::bootstrap::retype::{bump_slot, retype_captable, retype_endpoint};
 use crate::cspace::{cap_rights_read_write_grant, CSpace};
 use crate::sel4::{
     self, empty_window, init_cnode_bits, init_cnode_cptr, is_boot_reserved_slot, BootInfoView,
@@ -88,6 +90,91 @@ pub fn make_root_dest(bi: &sel4_sys::seL4_BootInfo) -> DestCNode {
     };
     dest.assert_sane();
     dest
+}
+
+/// Performs the initial proof-of-life retype calls against the init CNode.
+pub fn cspace_first_retypes(
+    bi: &sel4_sys::seL4_BootInfo,
+    cs: &mut CSpace,
+    ut_cap: sel4_sys::seL4_CPtr,
+) -> Result<(), sel4_sys::seL4_Error> {
+    let mut dest = make_root_dest(bi);
+    dest.set_slot_offset(cs.next_free_slot());
+    dest.assert_sane();
+
+    let endpoint_slot = match cs.alloc_slot() {
+        Ok(slot) => slot,
+        Err(err) => {
+            let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
+            if write!(
+                &mut line,
+                "[cspace:init] endpoint slot alloc err={}",
+                err as i32,
+            )
+            .is_err()
+            {
+                // Partial diagnostics are acceptable.
+            }
+            force_uart_line(line.as_str());
+            return Err(err);
+        }
+    };
+    dest.set_slot_offset(endpoint_slot);
+    let endpoint_err = retype_endpoint(ut_cap as sel4_sys::seL4_Word, &dest);
+    let mut endpoint_line = String::<MAX_DIAGNOSTIC_LEN>::new();
+    if write!(
+        &mut endpoint_line,
+        "[cspace:init] endpoint slot=0x{slot:04x} err={}",
+        endpoint_err as i32,
+        slot = endpoint_slot,
+    )
+    .is_err()
+    {
+        // Partial diagnostics are acceptable.
+    }
+    force_uart_line(endpoint_line.as_str());
+    if endpoint_err != sel4_sys::seL4_NoError {
+        return Err(endpoint_err);
+    }
+    bump_slot(&mut dest);
+
+    let captable_slot = match cs.alloc_slot() {
+        Ok(slot) => slot,
+        Err(err) => {
+            let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
+            if write!(
+                &mut line,
+                "[cspace:init] captable slot alloc err={}",
+                err as i32,
+            )
+            .is_err()
+            {
+                // Partial diagnostics are acceptable.
+            }
+            force_uart_line(line.as_str());
+            return Err(err);
+        }
+    };
+    dest.set_slot_offset(captable_slot);
+    let captable_err = retype_captable(ut_cap as sel4_sys::seL4_Word, 4, &dest);
+    let mut captable_line = String::<MAX_DIAGNOSTIC_LEN>::new();
+    if write!(
+        &mut captable_line,
+        "[cspace:init] captable(4) slot=0x{slot:04x} err={}",
+        captable_err as i32,
+        slot = captable_slot,
+    )
+    .is_err()
+    {
+        // Partial diagnostics are acceptable.
+    }
+    force_uart_line(captable_line.as_str());
+    if captable_err != sel4_sys::seL4_NoError {
+        return Err(captable_err);
+    }
+    bump_slot(&mut dest);
+
+    Ok(())
 }
 
 /// Canonical CSpace context orchestrating bootstrap-time seL4 CNode operations.

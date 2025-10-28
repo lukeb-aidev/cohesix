@@ -4,7 +4,7 @@ use core::convert::TryFrom;
 use core::fmt::Write;
 
 use heapless::String;
-use sel4_sys as sys;
+use sel4_sys::{self as sys, seL4_CapTableObject, seL4_EndpointObject};
 
 use super::cspace::{slot_in_empty_window, CSpaceCtx, DestCNode};
 use super::ffi::raw_untyped_retype;
@@ -126,17 +126,43 @@ pub(crate) fn call_retype(
 ) -> sys::seL4_Error {
     dest.assert_sane();
     log_retype_call(ut_cap, obj_type, size_bits, dest, num_objects);
-    seL4_Untyped_Retype(
+    let err = seL4_Untyped_Retype(
         ut_cap,
         obj_type,
         size_bits,
         dest.root,
         dest.node_index,
         sys::seL4_Word::from(dest.depth_bits),
-        usize::try_from(dest.slot_offset)
-            .expect("slot offset must fit within seL4_Word width"),
+        usize::try_from(dest.slot_offset).expect("slot offset must fit within seL4_Word width"),
         num_objects,
+    );
+    let mut line = String::<64>::new();
+    if write!(&mut line, "[retype:ret] err={}", err).is_err() {
+        // Preserve the best-effort diagnostic even if truncated.
+    }
+    force_uart_line(line.as_str());
+    err
+}
+
+/// Convenience wrapper for minting an endpoint object via [`call_retype`].
+pub fn retype_endpoint(ut: sys::seL4_Word, dest: &DestCNode) -> sys::seL4_Error {
+    call_retype(ut, seL4_EndpointObject as sys::seL4_Word, 0, dest, 1)
+}
+
+/// Convenience wrapper for minting a small CNode via [`call_retype`].
+pub fn retype_captable(ut: sys::seL4_Word, bits: u8, dest: &DestCNode) -> sys::seL4_Error {
+    call_retype(
+        ut,
+        seL4_CapTableObject as sys::seL4_Word,
+        bits as sys::seL4_Word,
+        dest,
+        1,
     )
+}
+
+/// Bumps the destination slot forward by one, panicking on overflow.
+pub fn bump_slot(dest: &mut DestCNode) {
+    dest.bump_slot();
 }
 
 fn boot_retype_limit() -> u32 {
