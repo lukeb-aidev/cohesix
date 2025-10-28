@@ -52,14 +52,20 @@ struct BootTracerState {
     progress_total: u32,
 }
 
-impl Default for BootTracerState {
-    fn default() -> Self {
+impl BootTracerState {
+    const fn new() -> Self {
         Self {
             phase: BootPhase::Begin,
             last_slot: None,
             progress_done: 0,
             progress_total: 0,
         }
+    }
+}
+
+impl Default for BootTracerState {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -103,7 +109,7 @@ impl BootTracer {
 
     const fn new() -> Self {
         Self {
-            state: Mutex::new(BootTracerState::default()),
+            state: Mutex::new(BootTracerState::new()),
             sequence: AtomicU64::new(0),
         }
     }

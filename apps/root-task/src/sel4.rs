@@ -940,8 +940,8 @@ pub fn bootinfo_debug_dump(view: &BootInfoView) {
     );
 }
 
-const PAGE_BITS: usize = 12;
-const PAGE_TABLE_BITS: usize = 12;
+pub const PAGE_BITS: usize = 12;
+pub const PAGE_TABLE_BITS: usize = 12;
 const PAGE_SIZE: usize = 1 << PAGE_BITS;
 const PAGE_TABLE_ALIGN: usize = 1 << 21;
 const PAGE_DIRECTORY_ALIGN: usize = 1 << 30;

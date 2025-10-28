@@ -3,7 +3,7 @@
 use core::{cmp::min, fmt::Write};
 
 use crate::bootstrap::log::force_uart_line;
-use crate::sel4::{BootInfo, BootInfoExt};
+use crate::sel4::{BootInfo, BootInfoExt, PAGE_BITS, PAGE_TABLE_BITS};
 use heapless::String;
 use sel4_sys as sys;
 
@@ -48,8 +48,8 @@ pub struct UntypedSelection {
 
 fn plan_for_untyped(size_bits: u8, dest_start: sys::seL4_CPtr) -> RetypePlan {
     let mut remaining_bytes: u64 = 1u64 << size_bits;
-    let page_table_bits = sel4_sys::seL4_PageTableBits as u8;
-    let page_bits = sel4_sys::seL4_PageBits as u8;
+    let page_table_bits = PAGE_TABLE_BITS as u8;
+    let page_bits = PAGE_BITS as u8;
 
     let mut page_tables = 0u32;
     if size_bits >= page_table_bits {
