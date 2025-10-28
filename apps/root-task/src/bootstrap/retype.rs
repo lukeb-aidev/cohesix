@@ -8,7 +8,7 @@ use sel4_sys as sys;
 use super::cspace::{slot_in_empty_window, CSpaceCtx};
 use crate::bootstrap::log::force_uart_line;
 use crate::bootstrap::{boot_tracer, BootPhase, UntypedSelection};
-use crate::sel4::{self, error_name};
+use crate::sel4::{error_name, PAGE_BITS, PAGE_TABLE_BITS};
 
 const DEFAULT_RETYPE_LIMIT: u32 = 512;
 const PROGRESS_INTERVAL: u32 = 64;
@@ -23,7 +23,7 @@ fn boot_retype_limit() -> u32 {
 fn object_name(obj_type: sys::seL4_ObjectType) -> &'static str {
     match obj_type {
         sys::seL4_ObjectType::seL4_ARM_PageTableObject => "PageTable",
-        sys::seL4_ObjectType::seL4_ARM_SmallPageObject => "Page",
+        sys::seL4_ObjectType::seL4_ARM_Page => "Page",
         sys::seL4_ObjectType::seL4_NotificationObject => "Notification",
         _ => "Object",
     }
@@ -129,20 +129,15 @@ where
     }
 
     let (start, end) = ctx.empty_bounds();
-    let root = ctx.bi.root_cnode_cap();
     let root_bits = ctx.bi.init_cnode_bits() as sys::seL4_Word;
 
     let categories: [(u32, sys::seL4_ObjectType, u8); 2] = [
         (
             tables,
             sys::seL4_ObjectType::seL4_ARM_PageTableObject,
-            sel4_sys::seL4_PageTableBits as u8,
+            PAGE_TABLE_BITS as u8,
         ),
-        (
-            pages,
-            sys::seL4_ObjectType::seL4_ARM_SmallPageObject,
-            sel4_sys::seL4_PageBits as u8,
-        ),
+        (pages, sys::seL4_ObjectType::seL4_ARM_Page, PAGE_BITS as u8),
     ];
 
     let mut done = 0u32;
@@ -164,18 +159,12 @@ where
                 return Ok(done);
             }
             tracer.record_slot(slot as u32);
-            let result = unsafe {
-                sys::seL4_Untyped_Retype(
-                    selection.cap,
-                    obj_type as sys::seL4_Word,
-                    obj_bits as sys::seL4_Word,
-                    root,
-                    slot as sys::seL4_Word,
-                    root_bits,
-                    0,
-                    1,
-                )
-            };
+            let result = ctx.retype_to_slot(
+                selection.cap,
+                obj_type as sys::seL4_Word,
+                obj_bits as sys::seL4_Word,
+                slot,
+            );
             if result != sys::seL4_NoError {
                 log_retype_error(selection.cap, obj_type, slot, root_bits, result);
                 tracer.advance(BootPhase::RetypeDone);

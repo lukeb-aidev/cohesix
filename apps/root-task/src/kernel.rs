@@ -21,7 +21,7 @@ use crate::bootstrap::{
     cspace::CSpaceCtx,
     ipcbuf, log as boot_log, pick_untyped,
     retype::{retype_one, retype_selection},
-    BootPhase, UntypedSelection,
+    BootPhase,
 };
 use crate::console::Console;
 use crate::cspace::{cap_rights_read_write_grant, CSpace};
