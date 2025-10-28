@@ -120,7 +120,10 @@ static LOGGER: BootstrapLogger = BootstrapLogger::new();
 static LOGGER_INSTALLED: AtomicBool = AtomicBool::new(false);
 static EP_REQUESTED: AtomicBool = AtomicBool::new(false);
 static EP_ATTACHED: AtomicBool = AtomicBool::new(false);
-static NO_BRIDGE_MODE: AtomicBool = AtomicBool::new(matches!(option_env!("NO_BRIDGE"), Some("1")));
+static NO_BRIDGE_MODE: AtomicBool = AtomicBool::new(match option_env!("NO_BRIDGE") {
+    Some(value) => value == "1",
+    None => false,
+});
 static PING_TOKEN: AtomicU32 = AtomicU32::new(1);
 static PING_ACK: AtomicU32 = AtomicU32::new(0);
 
@@ -161,7 +164,7 @@ fn emit_ep(payload: &[u8]) -> Result<(), ()> {
 
 #[cfg(feature = "kernel")]
 fn send_frame(payload: &[u8]) -> Result<(), ()> {
-    let mut guard = SEND_LOCK.lock();
+    let guard = SEND_LOCK.lock();
     let mut words: [seL4_Word; crate::sel4::MSG_MAX_WORDS] = [0; crate::sel4::MSG_MAX_WORDS];
     let mut index = 0usize;
 
