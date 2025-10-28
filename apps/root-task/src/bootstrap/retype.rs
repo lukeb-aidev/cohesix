@@ -5,7 +5,8 @@ use core::fmt::Write;
 use heapless::String;
 use sel4_sys as sys;
 
-use super::cspace::{slot_in_empty_window, CSpaceCtx};
+use super::cspace::{slot_in_empty_window, CSpaceCtx, DestCNode};
+use super::cspace_sys;
 use crate::bootstrap::log::force_uart_line;
 use crate::bootstrap::{boot_tracer, BootPhase, UntypedSelection};
 use crate::sel4::{error_name, PAGE_BITS, PAGE_TABLE_BITS};
@@ -129,7 +130,10 @@ where
     }
 
     let (start, end) = ctx.empty_bounds();
-    let root_bits = ctx.bi.init_cnode_bits() as sys::seL4_Word;
+    let log_node_depth = match ctx.dest {
+        DestCNode::Init => cspace_sys::encode_cnode_depth(cspace_sys::INIT_CNODE_RETYPE_DEPTH_BITS),
+        DestCNode::Other { bits, .. } => cspace_sys::encode_cnode_depth(bits),
+    };
 
     let categories: [(u32, sys::seL4_ObjectType, u8); 2] = [
         (
@@ -166,7 +170,7 @@ where
                 slot,
             );
             if result != sys::seL4_NoError {
-                log_retype_error(selection.cap, obj_type, slot, root_bits, result);
+                log_retype_error(selection.cap, obj_type, slot, log_node_depth, result);
                 tracer.advance(BootPhase::RetypeDone);
                 return Err(result);
             }
