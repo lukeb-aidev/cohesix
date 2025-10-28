@@ -120,10 +120,12 @@ static LOGGER: BootstrapLogger = BootstrapLogger::new();
 static LOGGER_INSTALLED: AtomicBool = AtomicBool::new(false);
 static EP_REQUESTED: AtomicBool = AtomicBool::new(false);
 static EP_ATTACHED: AtomicBool = AtomicBool::new(false);
-static NO_BRIDGE_MODE: AtomicBool = AtomicBool::new(match option_env!("NO_BRIDGE") {
-    Some(value) => value == "1",
-    None => false,
-});
+const NO_BRIDGE_DEFAULT: bool = match option_env!("NO_BRIDGE") {
+    Some("1") => true,
+    _ => false,
+};
+
+static NO_BRIDGE_MODE: AtomicBool = AtomicBool::new(NO_BRIDGE_DEFAULT);
 static PING_TOKEN: AtomicU32 = AtomicU32::new(1);
 static PING_ACK: AtomicU32 = AtomicU32::new(0);
 
