@@ -169,7 +169,7 @@ impl CSpaceCtx {
 
     #[inline(always)]
     fn slot_in_bounds(&self, slot: sel4::seL4_CPtr) -> bool {
-        slot >= self.first_free && slot < self.last_free
+        slot_in_empty_window(slot, self.first_free, self.last_free)
     }
 
     #[inline(always)]
@@ -548,6 +548,22 @@ fn render_cap_rights(rights: sel4_sys::seL4_CapRights) -> String<4> {
         let _ = text.push(ch);
     }
     text
+}
+
+#[inline(always)]
+/// Returns `true` when the provided slot index lies within the bootinfo empty window.
+pub fn slot_in_empty_window(
+    idx: sel4::seL4_CPtr,
+    start: sel4::seL4_CPtr,
+    end: sel4::seL4_CPtr,
+) -> bool {
+    idx >= start && idx < end
+}
+
+#[inline(always)]
+/// Returns the next slot index if advancing by one does not overflow.
+pub fn slot_advance(idx: sel4::seL4_CPtr) -> Option<sel4::seL4_CPtr> {
+    idx.checked_add(1)
 }
 
 #[cfg(feature = "sel4-debug")]

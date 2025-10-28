@@ -17,7 +17,11 @@ use cohesix_ticket::Role;
 
 use crate::boot::{bi_extra, ep};
 use crate::bootstrap::{
-    cspace::CSpaceCtx, ipcbuf, log as boot_log, pick_untyped, retype::retype_one,
+    boot_tracer,
+    cspace::CSpaceCtx,
+    ipcbuf, log as boot_log, pick_untyped,
+    retype::{retype_one, retype_selection},
+    BootPhase, UntypedSelection,
 };
 use crate::console::Console;
 use crate::cspace::{cap_rights_read_write_grant, CSpace};
@@ -154,6 +158,48 @@ impl<'a, P: Platform> Write for DebugConsole<'a, P> {
     fn write_str(&mut self, s: &str) -> fmt::Result {
         self.write_raw(s.as_bytes());
         Ok(())
+    }
+}
+
+struct BootWatchdog {
+    last_sequence: u64,
+    stagnant_ticks: u32,
+}
+
+impl BootWatchdog {
+    const STALL_LIMIT: u32 = 512;
+
+    const fn new() -> Self {
+        Self {
+            last_sequence: 0,
+            stagnant_ticks: 0,
+        }
+    }
+
+    fn poll(&mut self) {
+        let snapshot = boot_tracer().snapshot();
+        if snapshot.sequence == self.last_sequence {
+            self.stagnant_ticks = self.stagnant_ticks.saturating_add(1);
+            if self.stagnant_ticks >= Self::STALL_LIMIT {
+                let dest = snapshot.last_slot.unwrap_or(0);
+                let total = if snapshot.progress_total == 0 {
+                    1
+                } else {
+                    snapshot.progress_total
+                };
+                let mut line = heapless::String::<160>::new();
+                let _ = write!(
+                    line,
+                    "[boot:wd] stalled? last={:?} dest=0x{dest:04x} done={}/{}",
+                    snapshot.phase, snapshot.progress_done, total,
+                );
+                boot_log::force_uart_line(line.as_str());
+                self.stagnant_ticks = 0;
+            }
+        } else {
+            self.last_sequence = snapshot.sequence;
+            self.stagnant_ticks = 0;
+        }
     }
 }
 
@@ -359,6 +405,7 @@ fn bootstrap<P: Platform>(
         "bootstrap state drift",
     );
     crate::bp!("bootstrap.begin");
+    boot_tracer().advance(BootPhase::Begin);
 
     let bootinfo_view = match BootInfoView::new(bootinfo) {
         Ok(view) => view,
@@ -385,6 +432,7 @@ fn bootstrap<P: Platform>(
 
     let mut boot_cspace = CSpace::from_bootinfo(bootinfo_ref);
     let boot_first_free = boot_cspace.next_free_slot();
+    boot_tracer().advance(BootPhase::CSpaceInit);
 
     console.writeln_prefixed("entered from seL4 (stage0)");
     console.writeln_prefixed("Cohesix boot: root-task online");
@@ -411,6 +459,7 @@ fn bootstrap<P: Platform>(
     let extra_bytes = bootinfo_view.extra();
     if !extra_bytes.is_empty() {
         console.writeln_prefixed("[boot] deferring DTB parse");
+        boot_tracer().advance(BootPhase::DTBParseDeferred);
     }
 
     let ipc_buffer_ptr = bootinfo_ref.ipc_buffer_ptr();
@@ -565,18 +614,40 @@ fn bootstrap<P: Platform>(
     // Track bootstrap slot usage: the TCB copy plus the earlier endpoint bootstrap
     // consume two slots before we begin retyping.
     let mut consumed_slots: usize = 2;
+    let mut retyped_objects: u32 = 0;
 
-    let notification_untyped = pick_untyped(bootinfo_ref, sel4_sys::seL4_NotificationBits as u8);
+    boot_tracer().advance(BootPhase::UntypedEnumerate);
+    let notification_selection = pick_untyped(bootinfo_ref, sel4_sys::seL4_NotificationBits as u8);
 
     let notification_slot = retype_one(
         &mut cs,
-        notification_untyped,
+        notification_selection.cap,
         sel4_sys::seL4_ObjectType::seL4_NotificationObject,
         0,
     )
     .expect("failed to retype notification into init CSpace");
     consumed_slots += 1;
+    retyped_objects += 1;
     let _ = notification_slot;
+
+    let mut watchdog = BootWatchdog::new();
+    match retype_selection(&mut cs, &notification_selection, || watchdog.poll()) {
+        Ok(count) => {
+            consumed_slots += count as usize;
+            retyped_objects += count;
+        }
+        Err(err) => {
+            let mut line = heapless::String::<128>::new();
+            let _ = write!(
+                line,
+                "[boot] retype plan failed: {} ({})",
+                err as i32,
+                error_name(err)
+            );
+            console.writeln_prefixed(line.as_str());
+            panic!("retype plan failed: {}", error_name(err));
+        }
+    }
 
     let mint_result = cs.mint_root_cnode_copy();
     match mint_result {
@@ -978,6 +1049,7 @@ fn bootstrap<P: Platform>(
             console.writeln_prefixed("[boot] no dtb payload present");
         }
         crate::bp!("dtb.parse.end");
+        boot_tracer().advance(BootPhase::DTBParseDone);
 
         crate::bp!("logger.switch.begin");
         if let Err(err) = boot_log::switch_logger_to_userland() {
@@ -985,6 +1057,9 @@ fn bootstrap<P: Platform>(
             panic!("logger switch failed: {err:?}");
         }
         crate::bp!("logger.switch.end");
+        if !boot_log::bridge_disabled() {
+            boot_tracer().advance(BootPhase::EPAttachWait);
+        }
         #[cfg(all(feature = "net-console", feature = "kernel"))]
         {
             let mac = net_stack.hardware_address();
@@ -1028,7 +1103,17 @@ fn bootstrap<P: Platform>(
             crate::bp!("ipc.poll.end");
         }
 
+        let caps_start = empty_start as u32;
+        let caps_end = cs.next_candidate_slot();
+        let caps_remaining = cs.remaining_capacity();
+        let mut summary = heapless::String::<160>::new();
+        let _ = write!(
+            summary,
+            "[boot:ok] retyped={retyped_objects} caps_used=[0x{caps_start:04x}..0x{caps_end:04x}) left={caps_remaining}",
+        );
+        boot_log::force_uart_line(summary.as_str());
         crate::bp!("bootstrap.done");
+        boot_tracer().advance(BootPhase::HandOff);
         log::trace!("B5: entering event pump loop");
         boot_guard.commit();
         loop {
