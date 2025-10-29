@@ -1,10 +1,11 @@
 // Author: Lukas Bower
+#![allow(unsafe_code)]
 
 use crate::bootstrap::log::force_uart_line;
 use crate::bootstrap::retype::{bump_slot, retype_captable, retype_endpoint};
 use crate::cspace::{cap_rights_read_write_grant, CSpace};
-use crate::cspace_view::slot_as_cptr;
-use crate::debug::{identify_cap, name_of_type};
+use crate::cspace_view::slot_index_as_cptr;
+use crate::debug::{identify_cap, type_name};
 use crate::sel4::{
     self, empty_window, init_cnode_bits, init_cnode_cptr, is_boot_reserved_slot, BootInfoView,
     WORD_BITS,
@@ -14,50 +15,58 @@ use core::fmt::Write;
 use heapless::String;
 
 use super::cspace_sys::{self, CANONICAL_CNODE_DEPTH_BITS};
-use sel4_sys;
+use sel4_sys::{self, seL4_CNode_Copy, seL4_CNode_Delete, seL4_CapRights, seL4_Word};
 
 const MAX_DIAGNOSTIC_LEN: usize = 224;
 
-fn log_cap_identity(stage: &str, slot: sel4::seL4_CPtr, cap_type: sel4::seL4_Word) {
-    let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
-    if write!(
-        &mut line,
-        "[cnode:identify] {stage} slot=0x{slot:04x} type={} ({})",
-        cap_type,
-        name_of_type(cap_type),
-    )
-    .is_err()
-    {
-        // Partial diagnostics are acceptable.
-    }
-    force_uart_line(line.as_str());
+fn all_rights() -> sel4_sys::seL4_CapRights {
+    seL4_CapRights::new(1, 1, 1, 1)
 }
 
 fn sanity_copy_root_cnode(
     dest: &DestCNode,
     slot: sel4::seL4_CPtr,
 ) -> Result<(), sel4_sys::seL4_Error> {
-    let probe_cptr = slot_as_cptr(slot);
-    let root_type = identify_cap(dest.root);
-    log_cap_identity("root", dest.root, root_type);
-    let target_type_before = identify_cap(probe_cptr);
-    log_cap_identity("pre-copy target", slot, target_type_before);
-
+    let root = dest.root;
     let depth = dest.root_bits;
-    let copy_err = sel4::cnode_copy_depth(
-        dest.root,
-        probe_cptr,
-        depth,
-        dest.root,
-        dest.root,
-        depth,
-        sel4::seL4_CapRights_All,
-    );
+    let probe_slot = slot;
+
+    let root_type = identify_cap(root);
+    let mut root_line = String::<MAX_DIAGNOSTIC_LEN>::new();
+    if write!(
+        &mut root_line,
+        "[cnode:identify] root cap={:#x} type={} ({})",
+        root,
+        root_type,
+        type_name(root_type),
+    )
+    .is_err()
+    {
+        // Partial diagnostics are acceptable.
+    }
+    force_uart_line(root_line.as_str());
+    if root_type != 5 {
+        let mut fatal_line = String::<MAX_DIAGNOSTIC_LEN>::new();
+        if write!(
+            &mut fatal_line,
+            "[cspace:init] FATAL: initThreadCNode is not a CNode (got {}). abort.",
+            type_name(root_type),
+        )
+        .is_err()
+        {
+            // Partial diagnostics are acceptable.
+        }
+        force_uart_line(fatal_line.as_str());
+        return Err(sel4_sys::seL4_InvalidCapability);
+    }
+
+    let copy_err =
+        unsafe { seL4_CNode_Copy(root, probe_slot, depth, root, root, depth, all_rights()) };
     let mut copy_line = String::<MAX_DIAGNOSTIC_LEN>::new();
     if write!(
         &mut copy_line,
-        "[cnode:copy] src=root slot=0x{slot:04x} err={}",
-        copy_err as i32,
+        "[cnode:copy] root->{:#06x} err={}",
+        probe_slot, copy_err,
     )
     .is_err()
     {
@@ -65,18 +74,54 @@ fn sanity_copy_root_cnode(
     }
     force_uart_line(copy_line.as_str());
     if copy_err != sel4_sys::seL4_NoError {
+        let mut fatal_line = String::<MAX_DIAGNOSTIC_LEN>::new();
+        if write!(
+            &mut fatal_line,
+            "[cspace:init] COPY sanity failed (dest slot or root invalid). abort.",
+        )
+        .is_err()
+        {
+            // Partial diagnostics are acceptable.
+        }
+        force_uart_line(fatal_line.as_str());
         return Err(copy_err);
     }
 
-    let target_type_after = identify_cap(probe_cptr);
-    log_cap_identity("post-copy target", slot, target_type_after);
+    let copied_cptr = slot_index_as_cptr(probe_slot);
+    let copied_type = identify_cap(copied_cptr);
+    let mut copied_line = String::<MAX_DIAGNOSTIC_LEN>::new();
+    if write!(
+        &mut copied_line,
+        "[cnode:identify] copied slot {:#06x} type={} ({})",
+        probe_slot,
+        copied_type,
+        type_name(copied_type),
+    )
+    .is_err()
+    {
+        // Partial diagnostics are acceptable.
+    }
+    force_uart_line(copied_line.as_str());
+    if copied_type != 5 {
+        let mut fatal_line = String::<MAX_DIAGNOSTIC_LEN>::new();
+        if write!(
+            &mut fatal_line,
+            "[cspace:init] FATAL: probe slot did not end up with a CNode. abort.",
+        )
+        .is_err()
+        {
+            // Partial diagnostics are acceptable.
+        }
+        force_uart_line(fatal_line.as_str());
+        return Err(sel4_sys::seL4_InvalidCapability);
+    }
 
-    let delete_err = sel4::cnode_delete(dest.root, probe_cptr, depth);
+    let delete_err = unsafe { seL4_CNode_Delete(root, probe_slot, depth) };
     let mut delete_line = String::<MAX_DIAGNOSTIC_LEN>::new();
     if write!(
         &mut delete_line,
-        "[cnode:delete] slot=0x{slot:04x} err={}",
-        delete_err as i32,
+        "[cnode:delete] probe {:#06x} err={}",
+        probe_slot, delete_err,
     )
     .is_err()
     {
@@ -87,11 +132,9 @@ fn sanity_copy_root_cnode(
         return Err(delete_err);
     }
 
-    let target_type_post_delete = identify_cap(probe_cptr);
-    log_cap_identity("post-delete target", slot, target_type_post_delete);
-
     Ok(())
 }
+
 fn log_boot(beg: sel4::seL4_CPtr, end: sel4::seL4_CPtr, bits: u8) {
     let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
     if write!(
@@ -219,6 +262,17 @@ pub fn cspace_first_retypes(
     ut_cap: sel4_sys::seL4_CPtr,
 ) -> Result<(), sel4_sys::seL4_Error> {
     let mut dest = make_root_dest(bi);
+    let mut init_line = String::<MAX_DIAGNOSTIC_LEN>::new();
+    if write!(
+        &mut init_line,
+        "[cspace:init] root={:#06x} bits={} window=[{:#06x}..{:#06x})",
+        dest.root, dest.root_bits, dest.empty_start, dest.empty_end,
+    )
+    .is_err()
+    {
+        // Partial diagnostics are acceptable.
+    }
+    force_uart_line(init_line.as_str());
     dest.set_slot_offset(cs.next_free_slot());
     dest.assert_sane();
 
