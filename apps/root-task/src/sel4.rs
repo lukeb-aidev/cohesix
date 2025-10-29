@@ -7,6 +7,7 @@
 
 use core::{
     arch::asm,
+    convert::TryInto,
     fmt, mem,
     ptr::{self, NonNull},
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -16,6 +17,7 @@ use crate::bootstrap::cspace_sys;
 use crate::bootstrap::ipcbuf_view::IpcBufView;
 #[cfg(feature = "kernel")]
 use crate::bootstrap::ktry;
+use crate::sel4_view;
 use crate::serial;
 use heapless::Vec;
 pub use sel4_sys::{
@@ -74,20 +76,28 @@ pub type BootInfo = seL4_BootInfo;
 
 /// Returns the capability pointer for the init thread's root CNode.
 #[inline(always)]
-pub fn init_cnode_cptr(_: &seL4_BootInfo) -> seL4_CPtr {
-    seL4_CapInitThreadCNode
+pub fn init_cnode_cptr(bi: &seL4_BootInfo) -> seL4_CPtr {
+    sel4_view::init_cnode_cptr(bi)
 }
 
 /// Returns the radix width (in bits) for the init thread's root CNode.
 #[inline(always)]
 pub fn init_cnode_bits(bi: &seL4_BootInfo) -> u8 {
-    bi.initThreadCNodeSizeBits as u8
+    sel4_view::init_cnode_bits(bi)
+        .try_into()
+        .expect("init CNode bits must fit in u8")
 }
 
 /// Returns the `[start, end)` empty slot window advertised by bootinfo.
 #[inline(always)]
 pub fn empty_window(bi: &seL4_BootInfo) -> (u32, u32) {
-    (bi.empty.start as u32, bi.empty.end as u32)
+    let (start, end) = sel4_view::empty_window(bi);
+    (
+        start
+            .try_into()
+            .expect("empty window start must fit in u32"),
+        end.try_into().expect("empty window end must fit in u32"),
+    )
 }
 
 const BOOTINFO_ALIGN_MASK: usize = 0xF;

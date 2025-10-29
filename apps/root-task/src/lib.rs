@@ -64,6 +64,9 @@ pub mod boot;
 #[cfg(feature = "kernel")]
 pub mod sel4;
 
+#[cfg(any(test, feature = "kernel"))]
+pub mod sel4_view;
+
 #[cfg(feature = "kernel")]
 /// NineDoor 9P bridge exposed inside the VM environment.
 pub mod ninedoor;

@@ -4,23 +4,21 @@
 use crate::bootstrap::log::force_uart_line;
 use crate::bootstrap::retype::{bump_slot, retype_captable, retype_endpoint};
 use crate::cspace::{cap_rights_read_write_grant, CSpace};
-use crate::cspace_view::slot_index_as_cptr;
-use crate::debug::{identify_cap, type_name};
-use crate::sel4::{
-    self, empty_window, init_cnode_bits, init_cnode_cptr, is_boot_reserved_slot, BootInfoView,
-    WORD_BITS,
-};
+use crate::debug::debug_identify;
+use crate::sel4::{self, is_boot_reserved_slot, BootInfoView, WORD_BITS};
+use crate::sel4_view::{empty_window, init_cnode_bits, init_cnode_cptr};
 use core::convert::TryInto;
 use core::fmt::Write;
 use heapless::String;
 
 use super::cspace_sys::{self, CANONICAL_CNODE_DEPTH_BITS};
-use sel4_sys::{self, seL4_CNode_Copy, seL4_CNode_Delete, seL4_CapRights, seL4_Word};
+use sel4_sys::{self, seL4_CNode_Copy, seL4_CNode_Delete, seL4_Word};
 
 const MAX_DIAGNOSTIC_LEN: usize = 224;
 
+#[inline(always)]
 fn all_rights() -> sel4_sys::seL4_CapRights {
-    seL4_CapRights::new(1, 1, 1, 1)
+    sel4_sys::seL4_CapRights_All
 }
 
 fn sanity_copy_root_cnode(
@@ -31,34 +29,18 @@ fn sanity_copy_root_cnode(
     let depth = dest.root_bits;
     let probe_slot = slot;
 
-    let root_type = identify_cap(root);
     let mut root_line = String::<MAX_DIAGNOSTIC_LEN>::new();
     if write!(
         &mut root_line,
-        "[cnode:identify] root cap={:#x} type={} ({})",
+        "[cnode:identify] root cap={:#x} type_id={}",
         root,
-        root_type,
-        type_name(root_type),
+        debug_identify(root),
     )
     .is_err()
     {
         // Partial diagnostics are acceptable.
     }
     force_uart_line(root_line.as_str());
-    if root_type != 5 {
-        let mut fatal_line = String::<MAX_DIAGNOSTIC_LEN>::new();
-        if write!(
-            &mut fatal_line,
-            "[cspace:init] FATAL: initThreadCNode is not a CNode (got {}). abort.",
-            type_name(root_type),
-        )
-        .is_err()
-        {
-            // Partial diagnostics are acceptable.
-        }
-        force_uart_line(fatal_line.as_str());
-        return Err(sel4_sys::seL4_InvalidCapability);
-    }
 
     let copy_err =
         unsafe { seL4_CNode_Copy(root, probe_slot, depth, root, root, depth, all_rights()) };
@@ -74,46 +56,7 @@ fn sanity_copy_root_cnode(
     }
     force_uart_line(copy_line.as_str());
     if copy_err != sel4_sys::seL4_NoError {
-        let mut fatal_line = String::<MAX_DIAGNOSTIC_LEN>::new();
-        if write!(
-            &mut fatal_line,
-            "[cspace:init] COPY sanity failed (dest slot or root invalid). abort.",
-        )
-        .is_err()
-        {
-            // Partial diagnostics are acceptable.
-        }
-        force_uart_line(fatal_line.as_str());
         return Err(copy_err);
-    }
-
-    let copied_cptr = slot_index_as_cptr(probe_slot);
-    let copied_type = identify_cap(copied_cptr);
-    let mut copied_line = String::<MAX_DIAGNOSTIC_LEN>::new();
-    if write!(
-        &mut copied_line,
-        "[cnode:identify] copied slot {:#06x} type={} ({})",
-        probe_slot,
-        copied_type,
-        type_name(copied_type),
-    )
-    .is_err()
-    {
-        // Partial diagnostics are acceptable.
-    }
-    force_uart_line(copied_line.as_str());
-    if copied_type != 5 {
-        let mut fatal_line = String::<MAX_DIAGNOSTIC_LEN>::new();
-        if write!(
-            &mut fatal_line,
-            "[cspace:init] FATAL: probe slot did not end up with a CNode. abort.",
-        )
-        .is_err()
-        {
-            // Partial diagnostics are acceptable.
-        }
-        force_uart_line(fatal_line.as_str());
-        return Err(sel4_sys::seL4_InvalidCapability);
     }
 
     let delete_err = unsafe { seL4_CNode_Delete(root, probe_slot, depth) };
@@ -242,14 +185,22 @@ impl DestCNode {
 /// Constructs a destination descriptor anchored at the root CNode.
 pub fn make_root_dest(bi: &sel4_sys::seL4_BootInfo) -> DestCNode {
     let root = init_cnode_cptr(bi);
-    let depth_bits = init_cnode_bits(bi);
+    let depth_bits: u8 = init_cnode_bits(bi)
+        .try_into()
+        .expect("init cnode bits must fit within u8");
     let (start, end) = empty_window(bi);
+    let empty_start: u32 = start
+        .try_into()
+        .expect("empty window start must fit within u32");
+    let empty_end: u32 = end
+        .try_into()
+        .expect("empty window end must fit within u32");
     let dest = DestCNode {
         root,
         root_bits: depth_bits,
-        empty_start: start,
-        empty_end: end,
-        slot_offset: start,
+        empty_start,
+        empty_end,
+        slot_offset: empty_start,
     };
     dest.assert_sane();
     dest
