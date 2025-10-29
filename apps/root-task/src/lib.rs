@@ -50,6 +50,10 @@ pub mod caps;
 pub mod cspace;
 
 #[cfg(feature = "kernel")]
+/// Helpers for addressing slots within the init CSpace.
+pub mod cspace_view;
+
+#[cfg(feature = "kernel")]
 /// Early bootstrap helpers for capability allocation.
 pub mod bootstrap;
 
