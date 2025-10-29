@@ -34,25 +34,46 @@ fn log_boot(beg: sel4::seL4_CPtr, end: sel4::seL4_CPtr, bits: u8) {
 pub struct DestCNode {
     /// Capability to the root CNode of the destination CSpace.
     pub root: sel4::seL4_CPtr,
-    /// Capability pointer to the CNode where objects are placed; interpreted at `depth_bits`.
-    pub node_index: sel4::seL4_CPtr,
     /// Radix width (in bits) of the destination CNode.
-    pub depth_bits: u8,
-    /// First free slot offset within the destination CNode.
+    pub root_bits: u8,
+    /// First free slot index advertised by bootinfo.
+    pub empty_start: u32,
+    /// One-past-the-end bound of the bootinfo empty window.
+    pub empty_end: u32,
+    /// Current insertion slot within the root CNode.
     pub slot_offset: u32,
 }
 
 impl DestCNode {
+    #[inline(always)]
+    fn cap_slots(&self) -> u32 {
+        1u32 << self.root_bits
+    }
+
     /// Verifies that the destination invariants remain sane.
     pub fn assert_sane(&self) {
         assert!(
-            (1..=31).contains(&self.depth_bits),
-            "depth_bits must be 1..=31 (got {})",
-            self.depth_bits
+            self.root_bits <= 31,
+            "root_bits must be <= 31 (got {})",
+            self.root_bits
         );
-        assert_eq!(
-            self.root, self.node_index,
-            "For now we only support root-level inserts"
+        assert!(
+            self.empty_start < self.empty_end,
+            "empty window must be non-empty"
+        );
+        let cap_slots = self.cap_slots();
+        assert!(
+            self.empty_end <= cap_slots,
+            "empty window end 0x{end:04x} exceeds cnode capacity 0x{cap:04x}",
+            end = self.empty_end,
+            cap = cap_slots,
+        );
+        assert!(
+            self.slot_offset >= self.empty_start && self.slot_offset < self.empty_end,
+            "slot 0x{slot:04x} outside empty window [0x{start:04x}..0x{end:04x})",
+            slot = self.slot_offset,
+            start = self.empty_start,
+            end = self.empty_end,
         );
     }
 
@@ -62,10 +83,30 @@ impl DestCNode {
     }
 
     #[inline(always)]
+    fn validate_slot(&self, slot: u32) {
+        assert!(
+            slot >= self.empty_start && slot < self.empty_end,
+            "slot 0x{slot:04x} outside empty window [0x{start:04x}..0x{end:04x})",
+            slot = slot,
+            start = self.empty_start,
+            end = self.empty_end,
+        );
+        let cap_slots = self.cap_slots();
+        assert!(
+            slot < cap_slots,
+            "slot 0x{slot:04x} exceeds cnode capacity 0x{cap:04x}",
+            slot = slot,
+            cap = cap_slots,
+        );
+    }
+
+    #[inline(always)]
     pub fn set_slot_offset(&mut self, slot: sel4::seL4_CPtr) {
-        self.slot_offset = slot
+        let slot_u32 = slot
             .try_into()
             .expect("slot offset must fit within u32 for init CNode");
+        self.validate_slot(slot_u32);
+        self.slot_offset = slot_u32;
     }
 
     #[inline(always)]
@@ -74,6 +115,7 @@ impl DestCNode {
             .slot_offset
             .checked_add(1)
             .expect("slot offset overflow");
+        assert!(self.slot_offset <= self.empty_end, "ran out of empty slots",);
     }
 }
 
@@ -81,11 +123,12 @@ impl DestCNode {
 pub fn make_root_dest(bi: &sel4_sys::seL4_BootInfo) -> DestCNode {
     let root = init_cnode_cptr(bi);
     let depth_bits = init_cnode_bits(bi);
-    let (start, _) = empty_window(bi);
+    let (start, end) = empty_window(bi);
     let dest = DestCNode {
         root,
-        node_index: root,
-        depth_bits,
+        root_bits: depth_bits,
+        empty_start: start,
+        empty_end: end,
         slot_offset: start,
     };
     dest.assert_sane();
@@ -384,10 +427,12 @@ impl CSpaceCtx {
 
     fn log_direct_init_path(&self, dst_slot: sel4::seL4_CPtr) {
         let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
-        let depth_bits = self.dest.depth_bits;
         if write!(
             &mut line,
-            "[retype] path=direct:init-cnode dest=0x{dst_slot:04x} depth={depth_bits}",
+            "[retype] path=direct:init-cnode dest=0x{dst_slot:04x} depth=0 root_bits={} window=[0x{start:04x}..0x{end:04x})",
+            self.dest.root_bits,
+            start = self.dest.empty_start,
+            end = self.dest.empty_end,
         )
         .is_err()
         {
@@ -457,12 +502,13 @@ impl CSpaceCtx {
             let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
             if write!(
                 &mut line,
-                "[retype] path={path} err={err} root=0x{root:04x} untyped_slot=0x{untyped:04x} node(index=0x{node_index:04x},depth={node_depth},offset=0x{node_offset:04x}) dest_slot=0x{dest_index:04x} ty={obj_ty} sz={size_bits}",
+                "[retype] path={path} err={err} root=0x{root:04x} untyped_slot=0x{untyped:04x} node(idx=0,depth=0,off=0x{node_offset:04x}) dest_slot=0x{dest_index:04x} ty={obj_ty} sz={size_bits} window=[0x{start:04x}..0x{end:04x}) root_bits={bits}",
                 path = dest.path_label(),
                 root = dest.root,
-                node_index = dest.node_index,
-                node_depth = dest.depth_bits,
                 node_offset = dest.slot_offset,
+                start = dest.empty_start,
+                end = dest.empty_end,
+                bits = dest.root_bits,
             )
             .is_err()
             {

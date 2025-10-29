@@ -1,6 +1,5 @@
 // Author: Lukas Bower
 
-use core::convert::TryFrom;
 use core::fmt::Write;
 
 use heapless::String;
@@ -27,14 +26,14 @@ fn log_retype_call(
     let mut line = String::<128>::new();
     let _ = write!(
         &mut line,
-        "[retype:call] ut={:#x} obj={:#x} sz_bits={} root={:#x} idx={:#x} depth={} off={:#x} n={}",
+        "[retype:call] ut={:#x} obj={:#x} sz_bits={} root={:#x} idx=0 depth=0 off={:#x} n={} window=[0x{start:04x}..0x{end:04x})",
         ut_cap,
         obj_type,
         size_bits,
         dest.root,
-        dest.node_index,
-        dest.depth_bits,
         dest.slot_offset,
+        start = dest.empty_start,
+        end = dest.empty_end,
         num_objects
     );
     force_uart_line(line.as_str());
@@ -126,14 +125,17 @@ pub(crate) fn call_retype(
 ) -> sys::seL4_Error {
     dest.assert_sane();
     log_retype_call(ut_cap, obj_type, size_bits, dest, num_objects);
+    let node_index: sys::seL4_Word = 0;
+    let node_depth: sys::seL4_Word = 0;
+    let slot_offset = sys::seL4_Word::from(dest.slot_offset);
     let err = seL4_Untyped_Retype(
         ut_cap,
         obj_type,
         size_bits,
         dest.root,
-        dest.node_index,
-        sys::seL4_Word::from(dest.depth_bits),
-        usize::try_from(dest.slot_offset).expect("slot offset must fit within seL4_Word width"),
+        node_index,
+        node_depth,
+        slot_offset,
         num_objects,
     );
     let mut line = String::<64>::new();
