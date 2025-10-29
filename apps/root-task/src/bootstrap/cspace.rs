@@ -12,7 +12,7 @@ use core::fmt::Write;
 use heapless::String;
 
 use super::cspace_sys::{self, CANONICAL_CNODE_DEPTH_BITS};
-use sel4_sys::{self, seL4_CNode_Copy, seL4_CNode_Delete, seL4_CapInitThreadCNode, seL4_WordBits};
+use sel4_sys::{self, seL4_CNode_Copy, seL4_CNode_Delete, seL4_CapInitThreadCNode, seL4_Word};
 
 const MAX_DIAGNOSTIC_LEN: usize = 224;
 
@@ -25,17 +25,23 @@ fn sanity_copy_root_cnode(
     dest: &DestCNode,
     slot: sel4::seL4_CPtr,
 ) -> Result<(), sel4_sys::seL4_Error> {
-    let root = dest.root;
-    let depth: sel4_sys::seL4_Uint8 = seL4_WordBits
+    dest.assert_sane();
+    let slot_u32: u32 = slot
         .try_into()
-        .expect("seL4_WordBits must fit within u8 for seL4 CNode depth");
+        .expect("slot index must fit within u32 for init CNode");
+    dest.validate_slot(slot_u32);
+
+    let root = dest.root;
+    let depth: seL4_Word = dest.root_bits as seL4_Word;
     let probe_slot = slot;
+    let source_slot: sel4::seL4_CPtr = seL4_CapInitThreadCNode;
 
     let mut root_line = String::<MAX_DIAGNOSTIC_LEN>::new();
     if write!(
         &mut root_line,
-        "[cnode:identify] root cap={:#x} type_id={}",
+        "[cnode:identify] root cap={:#x} depth={} type_id={}",
         root,
+        depth,
         debug_identify(root),
     )
     .is_err()
@@ -44,13 +50,25 @@ fn sanity_copy_root_cnode(
     }
     force_uart_line(root_line.as_str());
 
+    let mut constants_line = String::<MAX_DIAGNOSTIC_LEN>::new();
+    if write!(
+        &mut constants_line,
+        "[cnode:constants] CapInitThreadCNode={:#06x}",
+        source_slot,
+    )
+    .is_err()
+    {
+        // Partial diagnostics are acceptable.
+    }
+    force_uart_line(constants_line.as_str());
+
     let copy_err = unsafe {
         seL4_CNode_Copy(
             root,
             probe_slot,
             depth,
             root,
-            seL4_CapInitThreadCNode,
+            source_slot,
             depth,
             all_rights(),
         )
@@ -58,8 +76,8 @@ fn sanity_copy_root_cnode(
     let mut copy_line = String::<MAX_DIAGNOSTIC_LEN>::new();
     if write!(
         &mut copy_line,
-        "[cnode:copy] root->{:#06x} err={}",
-        probe_slot, copy_err,
+        "[cnode:copy] src=CapInitThreadCNode depth={} dst={:#06x} err={}",
+        depth, probe_slot, copy_err,
     )
     .is_err()
     {
