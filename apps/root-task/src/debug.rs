@@ -1,21 +1,21 @@
 // Author: Lukas Bower
 #![allow(dead_code)]
+#![allow(unsafe_code)]
 
-use crate::sel4;
 use sel4_sys::{seL4_CPtr, seL4_Word};
 
-/// Identify the kernel object type stored in the supplied capability pointer.
-#[inline(always)]
-#[must_use]
-pub fn identify_cap(cap: seL4_CPtr) -> seL4_Word {
-    sel4::debug_cap_identify(cap)
+extern "C" {
+    fn seL4_DebugCapIdentify(cap: seL4_CPtr) -> seL4_Word;
 }
 
-/// Human-readable kernel object type names for debug logging.
 #[inline(always)]
-#[must_use]
-pub fn name_of_type(object_type: seL4_Word) -> &'static str {
-    match object_type {
+pub fn identify_cap(cap: seL4_CPtr) -> seL4_Word {
+    unsafe { seL4_DebugCapIdentify(cap) }
+}
+
+#[inline(always)]
+pub fn type_name(ty: seL4_Word) -> &'static str {
+    match ty {
         0 => "Null",
         1 => "Untyped",
         2 => "TCB",
