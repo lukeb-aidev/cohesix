@@ -285,7 +285,7 @@ where
     }
 
     let (start, end) = ctx.empty_bounds();
-    let log_node_depth = sys::seL4_Word::from(ctx.cnode_invocation_depth_bits);
+    let log_node_depth = sys::seL4_Word::from(0u8);
 
     let categories: [(u32, sys::seL4_ObjectType, u8); 2] = [
         (
