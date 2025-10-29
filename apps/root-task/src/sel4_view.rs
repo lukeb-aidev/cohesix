@@ -2,7 +2,7 @@
 #![allow(dead_code)]
 #![allow(unsafe_code)]
 
-use sel4_sys::{seL4_BootInfo, seL4_CPtr, seL4_Word, seL4_CapInitThreadCNode};
+use sel4_sys::{seL4_BootInfo, seL4_CPtr, seL4_CapInitThreadCNode, seL4_Word};
 
 #[inline(always)]
 pub fn init_cnode_cptr(_bi: &seL4_BootInfo) -> seL4_CPtr {
