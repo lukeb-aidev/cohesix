@@ -12,7 +12,7 @@ use core::fmt::Write;
 use heapless::String;
 
 use super::cspace_sys::{self, CANONICAL_CNODE_DEPTH_BITS};
-use sel4_sys::{self, seL4_CNode_Copy, seL4_CNode_Delete, seL4_Word};
+use sel4_sys::{self, seL4_CNode_Copy, seL4_CNode_Delete};
 
 const MAX_DIAGNOSTIC_LEN: usize = 224;
 
