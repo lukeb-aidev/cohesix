@@ -38,6 +38,10 @@ pub mod kernel;
 pub mod trace;
 
 #[cfg(feature = "kernel")]
+/// Runtime helpers for interrogating kernel capabilities during bootstrap.
+pub mod debug;
+
+#[cfg(feature = "kernel")]
 /// Capability operations and debug helpers built atop seL4 syscalls.
 pub mod caps;
 

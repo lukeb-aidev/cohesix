@@ -3,6 +3,7 @@
 use crate::bootstrap::log::force_uart_line;
 use crate::bootstrap::retype::{bump_slot, retype_captable, retype_endpoint};
 use crate::cspace::{cap_rights_read_write_grant, CSpace};
+use crate::debug::{identify_cap, name_of_type};
 use crate::sel4::{
     self, empty_window, init_cnode_bits, init_cnode_cptr, is_boot_reserved_slot, BootInfoView,
     WORD_BITS,
@@ -15,6 +16,73 @@ use super::cspace_sys::{self, CANONICAL_CNODE_DEPTH_BITS};
 use sel4_sys;
 
 const MAX_DIAGNOSTIC_LEN: usize = 224;
+
+fn log_cap_identity(stage: &str, slot: sel4::seL4_CPtr, cap_type: sel4::seL4_Word) {
+    let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
+    if write!(
+        &mut line,
+        "[cnode:identify] {stage} slot=0x{slot:04x} type={} ({})",
+        cap_type,
+        name_of_type(cap_type),
+    )
+    .is_err()
+    {
+        // Partial diagnostics are acceptable.
+    }
+    force_uart_line(line.as_str());
+}
+
+fn sanity_copy_root_cnode(
+    cs: &mut CSpace,
+    dest: &DestCNode,
+    slot: sel4::seL4_CPtr,
+) -> Result<(), sel4::seL4_Error> {
+    let root_type = identify_cap(dest.root);
+    log_cap_identity("root", dest.root, root_type);
+    let target_type_before = identify_cap(slot);
+    log_cap_identity("pre-copy target", slot, target_type_before);
+
+    let rights = cap_rights_read_write_grant();
+    let copy_err = cs.copy_here(slot, dest.root, rights);
+    let mut copy_line = String::<MAX_DIAGNOSTIC_LEN>::new();
+    if write!(
+        &mut copy_line,
+        "[cnode:copy] src=root slot=0x{slot:04x} err={}",
+        copy_err as i32,
+    )
+    .is_err()
+    {
+        // Partial diagnostics are acceptable.
+    }
+    force_uart_line(copy_line.as_str());
+    if copy_err != sel4_sys::seL4_NoError {
+        return Err(copy_err);
+    }
+
+    let target_type_after = identify_cap(slot);
+    log_cap_identity("post-copy target", slot, target_type_after);
+
+    let delete_err = sel4::cnode_delete(dest.root, slot, dest.root_bits);
+    let mut delete_line = String::<MAX_DIAGNOSTIC_LEN>::new();
+    if write!(
+        &mut delete_line,
+        "[cnode:delete] slot=0x{slot:04x} err={}",
+        delete_err as i32,
+    )
+    .is_err()
+    {
+        // Partial diagnostics are acceptable.
+    }
+    force_uart_line(delete_line.as_str());
+    if delete_err != sel4_sys::seL4_NoError {
+        return Err(delete_err);
+    }
+
+    let target_type_post_delete = identify_cap(slot);
+    log_cap_identity("post-delete target", slot, target_type_post_delete);
+
+    Ok(())
+}
 fn log_boot(beg: sel4::seL4_CPtr, end: sel4::seL4_CPtr, bits: u8) {
     let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
     if write!(
@@ -144,6 +212,23 @@ pub fn cspace_first_retypes(
     let mut dest = make_root_dest(bi);
     dest.set_slot_offset(cs.next_free_slot());
     dest.assert_sane();
+
+    let probe_slot =
+        usize::try_from(dest.slot_offset).expect("slot offset must fit within seL4_CPtr");
+    if let Err(err) = sanity_copy_root_cnode(cs, &dest, probe_slot) {
+        let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
+        if write!(
+            &mut line,
+            "[cspace:init] root CNode copy failed slot=0x{probe_slot:04x} err={}",
+            err as i32,
+        )
+        .is_err()
+        {
+            // Partial diagnostics are acceptable.
+        }
+        force_uart_line(line.as_str());
+        return Err(err);
+    }
 
     let endpoint_slot = match cs.alloc_slot() {
         Ok(slot) => slot,
