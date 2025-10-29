@@ -26,7 +26,9 @@ fn sanity_copy_root_cnode(
     slot: sel4::seL4_CPtr,
 ) -> Result<(), sel4_sys::seL4_Error> {
     let root = dest.root;
-    let depth = WORD_BITS;
+    let depth: u8 = WORD_BITS
+        .try_into()
+        .expect("WORD_BITS must fit within u8 for seL4 CNode depth");
     let probe_slot = slot;
 
     let mut root_line = String::<MAX_DIAGNOSTIC_LEN>::new();
@@ -42,9 +44,8 @@ fn sanity_copy_root_cnode(
     }
     force_uart_line(root_line.as_str());
 
-    let copy_err = unsafe {
-        seL4_CNode_Copy(root, probe_slot, depth, root, root, depth, all_rights())
-    };
+    let copy_err =
+        unsafe { seL4_CNode_Copy(root, probe_slot, depth, root, root, depth, all_rights()) };
     let mut copy_line = String::<MAX_DIAGNOSTIC_LEN>::new();
     if write!(
         &mut copy_line,
