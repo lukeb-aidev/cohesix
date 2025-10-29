@@ -3,6 +3,7 @@
 use crate::bootstrap::log::force_uart_line;
 use crate::bootstrap::retype::{bump_slot, retype_captable, retype_endpoint};
 use crate::cspace::{cap_rights_read_write_grant, CSpace};
+use crate::cspace_view::slot_as_cptr;
 use crate::debug::{identify_cap, name_of_type};
 use crate::sel4::{
     self, empty_window, init_cnode_bits, init_cnode_cptr, is_boot_reserved_slot, BootInfoView,
@@ -33,17 +34,25 @@ fn log_cap_identity(stage: &str, slot: sel4::seL4_CPtr, cap_type: sel4::seL4_Wor
 }
 
 fn sanity_copy_root_cnode(
-    cs: &mut CSpace,
     dest: &DestCNode,
     slot: sel4::seL4_CPtr,
-) -> Result<(), sel4::seL4_Error> {
+) -> Result<(), sel4_sys::seL4_Error> {
+    let probe_cptr = slot_as_cptr(slot);
     let root_type = identify_cap(dest.root);
     log_cap_identity("root", dest.root, root_type);
-    let target_type_before = identify_cap(slot);
+    let target_type_before = identify_cap(probe_cptr);
     log_cap_identity("pre-copy target", slot, target_type_before);
 
-    let rights = cap_rights_read_write_grant();
-    let copy_err = cs.copy_here(slot, dest.root, rights);
+    let depth = dest.root_bits;
+    let copy_err = sel4::cnode_copy_depth(
+        dest.root,
+        probe_cptr,
+        depth,
+        dest.root,
+        dest.root,
+        depth,
+        sel4::seL4_CapRights_All,
+    );
     let mut copy_line = String::<MAX_DIAGNOSTIC_LEN>::new();
     if write!(
         &mut copy_line,
@@ -59,10 +68,10 @@ fn sanity_copy_root_cnode(
         return Err(copy_err);
     }
 
-    let target_type_after = identify_cap(slot);
+    let target_type_after = identify_cap(probe_cptr);
     log_cap_identity("post-copy target", slot, target_type_after);
 
-    let delete_err = sel4::cnode_delete(dest.root, slot, dest.root_bits);
+    let delete_err = sel4::cnode_delete(dest.root, probe_cptr, depth);
     let mut delete_line = String::<MAX_DIAGNOSTIC_LEN>::new();
     if write!(
         &mut delete_line,
@@ -78,7 +87,7 @@ fn sanity_copy_root_cnode(
         return Err(delete_err);
     }
 
-    let target_type_post_delete = identify_cap(slot);
+    let target_type_post_delete = identify_cap(probe_cptr);
     log_cap_identity("post-delete target", slot, target_type_post_delete);
 
     Ok(())
@@ -215,7 +224,7 @@ pub fn cspace_first_retypes(
 
     let probe_slot =
         usize::try_from(dest.slot_offset).expect("slot offset must fit within seL4_CPtr");
-    if let Err(err) = sanity_copy_root_cnode(cs, &dest, probe_slot) {
+    if let Err(err) = sanity_copy_root_cnode(&dest, probe_slot) {
         let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
         if write!(
             &mut line,
