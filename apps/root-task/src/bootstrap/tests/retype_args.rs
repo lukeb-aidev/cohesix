@@ -8,8 +8,9 @@ use sel4_sys as sys;
 fn packs_correct_args_for_root_level_insert() {
     let dest = DestCNode {
         root: 0x2,
-        node_index: 0x2,
-        depth_bits: 13,
+        root_bits: 13,
+        empty_start: 0x0103,
+        empty_end: 0x0200,
         slot_offset: 0x0103,
     };
     dest.assert_sane();
@@ -22,8 +23,8 @@ fn packs_correct_args_for_root_level_insert() {
     assert_eq!(last.obj, 0x1);
     assert_eq!(last.size_bits, 0);
     assert_eq!(last.root, 0x2);
-    assert_eq!(last.idx, 0x2);
-    assert_eq!(last.depth, 13);
+    assert_eq!(last.idx, 0);
+    assert_eq!(last.depth, 0);
     assert_eq!(last.off, 0x0103);
     assert_eq!(last.n, 1);
 }
