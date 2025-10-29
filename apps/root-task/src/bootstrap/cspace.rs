@@ -12,7 +12,7 @@ use core::fmt::Write;
 use heapless::String;
 
 use super::cspace_sys::{self, CANONICAL_CNODE_DEPTH_BITS};
-use sel4_sys::{self, seL4_CNode_Copy, seL4_CNode_Delete};
+use sel4_sys::{self, seL4_CNode_Copy, seL4_CNode_Delete, seL4_CapInitThreadCNode, seL4_WordBits};
 
 const MAX_DIAGNOSTIC_LEN: usize = 224;
 
@@ -26,9 +26,9 @@ fn sanity_copy_root_cnode(
     slot: sel4::seL4_CPtr,
 ) -> Result<(), sel4_sys::seL4_Error> {
     let root = dest.root;
-    let depth: u8 = WORD_BITS
+    let depth: sel4_sys::seL4_Uint8 = seL4_WordBits
         .try_into()
-        .expect("WORD_BITS must fit within u8 for seL4 CNode depth");
+        .expect("seL4_WordBits must fit within u8 for seL4 CNode depth");
     let probe_slot = slot;
 
     let mut root_line = String::<MAX_DIAGNOSTIC_LEN>::new();
@@ -44,8 +44,17 @@ fn sanity_copy_root_cnode(
     }
     force_uart_line(root_line.as_str());
 
-    let copy_err =
-        unsafe { seL4_CNode_Copy(root, probe_slot, depth, root, root, depth, all_rights()) };
+    let copy_err = unsafe {
+        seL4_CNode_Copy(
+            root,
+            probe_slot,
+            depth,
+            root,
+            seL4_CapInitThreadCNode,
+            depth,
+            all_rights(),
+        )
+    };
     let mut copy_line = String::<MAX_DIAGNOSTIC_LEN>::new();
     if write!(
         &mut copy_line,
