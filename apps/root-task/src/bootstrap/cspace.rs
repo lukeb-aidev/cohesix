@@ -37,7 +37,11 @@ fn first_non_device_untyped(bi: &seL4_BootInfo) -> Option<sel4::seL4_CPtr> {
 
 fn cspace_retype_probe(bi: &seL4_BootInfo) -> Result<(), seL4_Word> {
     let root: sel4::seL4_CPtr = init_cnode_cptr(bi);
-    let depth: seL4_Word = bi.initThreadCNodeSizeBits as seL4_Word;
+    let init_cnode_bits: u8 = bi
+        .initThreadCNodeSizeBits
+        .try_into()
+        .expect("initThreadCNodeSizeBits must fit within u8");
+    let node_depth: seL4_Word = cspace_sys::encode_cnode_depth(CANONICAL_CNODE_DEPTH_BITS);
     let dst_slot: sel4::seL4_CPtr = bi.empty.start as sel4::seL4_CPtr;
 
     assert!(
@@ -58,7 +62,7 @@ fn cspace_retype_probe(bi: &seL4_BootInfo) -> Result<(), seL4_Word> {
     if write!(
         &mut probe_line,
         "[retype:probe] ut={:#06x} -> Endpoint at slot={:#06x} root={:#06x} depth={}",
-        ut, dst_slot, root, depth,
+        ut, dst_slot, root, node_depth,
     )
     .is_err()
     {
@@ -73,7 +77,7 @@ fn cspace_retype_probe(bi: &seL4_BootInfo) -> Result<(), seL4_Word> {
             0,
             root,
             0,
-            depth,
+            node_depth,
             dst_slot,
             1,
         )
@@ -87,10 +91,7 @@ fn cspace_retype_probe(bi: &seL4_BootInfo) -> Result<(), seL4_Word> {
         return Err(err_retype as seL4_Word);
     }
 
-    let depth_bits: u8 = depth
-        .try_into()
-        .expect("initThreadCNodeSizeBits must fit within u8");
-    let err_del = unsafe { seL4_CNode_Delete(root, dst_slot, depth_bits) };
+    let err_del = unsafe { seL4_CNode_Delete(root, dst_slot, init_cnode_bits) };
     let mut cleanup_line = String::<MAX_DIAGNOSTIC_LEN>::new();
     if write!(&mut cleanup_line, "[retype:cleanup] delete err={}", err_del).is_err() {
         // Partial diagnostics are acceptable.
