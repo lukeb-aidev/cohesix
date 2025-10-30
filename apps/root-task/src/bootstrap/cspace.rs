@@ -4,7 +4,6 @@
 use crate::bootstrap::log::force_uart_line;
 use crate::bootstrap::retype::{bump_slot, retype_captable};
 use crate::cspace::{cap_rights_read_write_grant, CSpace};
-use crate::debug::debug_identify;
 use crate::sel4::{self, is_boot_reserved_slot, BootInfoView, WORD_BITS};
 use crate::sel4_view::{empty_window, init_cnode_bits, init_cnode_cptr};
 use core::convert::{TryFrom, TryInto};
@@ -103,7 +102,8 @@ fn cspace_retype_probe(bi: &seL4_BootInfo) -> Result<(), seL4_Word> {
         return Err(err_retype as seL4_Word);
     }
 
-    let err_del = unsafe { seL4_CNode_Delete(root, dst_slot, depth) };
+    let depth_u8 = u8::try_from(depth).expect("cnode depth must fit in u8");
+    let err_del = unsafe { seL4_CNode_Delete(root, dst_slot, depth_u8) };
     let mut cleanup_line = String::<MAX_DIAGNOSTIC_LEN>::new();
     if write!(&mut cleanup_line, "[retype:cleanup] delete err={}", err_del).is_err() {
         // Partial diagnostics are acceptable.
