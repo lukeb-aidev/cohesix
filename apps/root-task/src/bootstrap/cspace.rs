@@ -32,7 +32,8 @@ fn sanity_copy_root_cnode(
     dest.validate_slot(slot_u32);
 
     let root = dest.root;
-    let depth: seL4_Word = dest.root_bits as seL4_Word;
+    let depth_bits: u8 = dest.root_bits;
+    let depth: seL4_Word = depth_bits as seL4_Word;
     let probe_slot = slot;
     let source_slot: sel4::seL4_CPtr = seL4_CapInitThreadCNode;
 
@@ -66,10 +67,10 @@ fn sanity_copy_root_cnode(
         seL4_CNode_Copy(
             root,
             probe_slot,
-            depth,
+            depth_bits,
             root,
             source_slot,
-            depth,
+            depth_bits,
             all_rights(),
         )
     };
@@ -88,7 +89,7 @@ fn sanity_copy_root_cnode(
         return Err(copy_err);
     }
 
-    let delete_err = unsafe { seL4_CNode_Delete(root, probe_slot, depth) };
+    let delete_err = unsafe { seL4_CNode_Delete(root, probe_slot, depth_bits) };
     let mut delete_line = String::<MAX_DIAGNOSTIC_LEN>::new();
     if write!(
         &mut delete_line,
