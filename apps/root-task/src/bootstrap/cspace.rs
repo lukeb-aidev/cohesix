@@ -37,10 +37,6 @@ fn first_non_device_untyped(bi: &seL4_BootInfo) -> Option<sel4::seL4_CPtr> {
 
 fn cspace_retype_probe(bi: &seL4_BootInfo) -> Result<(), seL4_Word> {
     let root: sel4::seL4_CPtr = init_cnode_cptr(bi);
-    let init_cnode_bits: u8 = bi
-        .initThreadCNodeSizeBits
-        .try_into()
-        .expect("initThreadCNodeSizeBits must fit within u8");
     let node_depth: seL4_Word = cspace_sys::encode_cnode_depth(CANONICAL_CNODE_DEPTH_BITS);
     let dst_slot: sel4::seL4_CPtr = bi.empty.start as sel4::seL4_CPtr;
 
@@ -91,7 +87,7 @@ fn cspace_retype_probe(bi: &seL4_BootInfo) -> Result<(), seL4_Word> {
         return Err(err_retype as seL4_Word);
     }
 
-    let err_del = unsafe { seL4_CNode_Delete(root, dst_slot, init_cnode_bits) };
+    let err_del = unsafe { seL4_CNode_Delete(root, dst_slot, CANONICAL_CNODE_DEPTH_BITS) };
     let mut cleanup_line = String::<MAX_DIAGNOSTIC_LEN>::new();
     if write!(&mut cleanup_line, "[retype:cleanup] delete err={}", err_del).is_err() {
         // Partial diagnostics are acceptable.
