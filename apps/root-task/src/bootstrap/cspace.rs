@@ -415,8 +415,8 @@ impl CSpaceCtx {
             "init CNode width {init} exceeds WordBits {word_bits}",
             init = init_cnode_bits,
         );
-        // Init-root retypes use the canonical depth-zero tuple.
-        let invocation_depth_bits = 0;
+        // Init-root retypes use the canonical full-word guard depth.
+        let invocation_depth_bits = CANONICAL_CNODE_DEPTH_BITS;
         let (first_free, last_free) = bi.init_cnode_empty_range();
         debug_assert!(
             init_cnode_bits <= CANONICAL_CNODE_DEPTH_BITS,
@@ -553,7 +553,8 @@ impl CSpaceCtx {
         let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
         if write!(
             &mut line,
-            "[retype] path=direct:init-cnode dest=0x{dst_slot:04x} depth=0 root_bits={} window=[0x{start:04x}..0x{end:04x})",
+            "[retype] path=direct:init-cnode dest=0x{dst_slot:04x} depth={} root_bits={} window=[0x{start:04x}..0x{end:04x})",
+            CANONICAL_CNODE_DEPTH_BITS,
             self.dest.root_bits,
             start = self.dest.empty_start,
             end = self.dest.empty_end,
@@ -626,7 +627,8 @@ impl CSpaceCtx {
             let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
             if write!(
                 &mut line,
-                "[retype] path={path} err={err} root=0x{root:04x} untyped_slot=0x{untyped:04x} node(idx=0,depth=0,off=0x{node_offset:04x}) dest_slot=0x{dest_index:04x} ty={obj_ty} sz={size_bits} window=[0x{start:04x}..0x{end:04x}) root_bits={bits}",
+                "[retype] path={path} err={err} root=0x{root:04x} untyped_slot=0x{untyped:04x} node(idx=0,depth={},off=0x{node_offset:04x}) dest_slot=0x{dest_index:04x} ty={obj_ty} sz={size_bits} window=[0x{start:04x}..0x{end:04x}) root_bits={bits}",
+                CANONICAL_CNODE_DEPTH_BITS,
                 path = dest.path_label(),
                 root = dest.root,
                 node_offset = dest.slot_offset,

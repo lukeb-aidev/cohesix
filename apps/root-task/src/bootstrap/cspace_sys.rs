@@ -88,14 +88,14 @@ pub enum RetypeArgsError {
         /// Capability pointer provided by the caller.
         provided: sys::seL4_CPtr,
     },
-    /// The node index must match the destination root CNode.
+    /// The node index must match the canonical guard index (zero).
     NodeIndexMismatch {
         /// Node index supplied by the caller.
         provided: sys::seL4_CPtr,
-        /// Expected node index (root CNode capability).
+        /// Expected canonical guard index.
         expected: sys::seL4_CPtr,
     },
-    /// Destination depth must match the init CNode depth.
+    /// Destination depth must match the canonical guard depth (WordBits).
     DepthMismatch {
         /// Depth supplied by the caller.
         provided: u8,
@@ -127,7 +127,7 @@ impl fmt::Display for RetypeArgsError {
             Self::NodeIndexMismatch { provided, expected } => {
                 write!(
                     f,
-                    "node_index 0x{provided:04x} must equal root 0x{expected:04x}",
+                    "node_index 0x{provided:04x} must equal canonical index 0x{expected:04x}",
                 )
             }
             Self::DepthMismatch { provided, expected } => {
@@ -229,14 +229,13 @@ pub fn validate_retype_args(
             provided: args.root,
         });
     }
-    if args.node_index != expected_root {
+    if args.node_index != CANONICAL_CNODE_INDEX {
         return Err(RetypeArgsError::NodeIndexMismatch {
             provided: args.node_index,
-            expected: expected_root,
+            expected: CANONICAL_CNODE_INDEX,
         });
     }
-    let expected_depth =
-        u8::try_from(bi_init_cnode_bits()).expect("initThreadCNodeSizeBits must fit within u8");
+    let expected_depth = CANONICAL_CNODE_DEPTH_BITS;
     if args.cnode_depth != expected_depth {
         return Err(RetypeArgsError::DepthMismatch {
             provided: args.cnode_depth,
@@ -260,6 +259,7 @@ pub fn validate_retype_args(
 
 /// Depth (in bits) for a canonical single-level CNode.
 pub const CANONICAL_CNODE_DEPTH_BITS: u8 = sys::seL4_WordBits as u8;
+pub const CANONICAL_CNODE_INDEX: sys::seL4_CPtr = 0;
 
 #[cfg(target_os = "none")]
 #[inline(always)]
@@ -482,12 +482,10 @@ pub fn init_cnode_retype_dest(
         "slot 0x{slot:04x} exceeds init CNode capacity (limit=0x{capacity:04x})",
     );
     let root = bi_init_cnode_cptr();
-    let depth_bits =
-        u8::try_from(bi_init_cnode_bits()).expect("initThreadCNodeSizeBits must fit within u8");
     (
         root,
-        root,
-        encode_cnode_depth(depth_bits),
+        CANONICAL_CNODE_INDEX as sys::seL4_Word,
+        encode_cnode_depth(CANONICAL_CNODE_DEPTH_BITS),
         slot as sys::seL4_Word,
     )
 }
@@ -797,11 +795,9 @@ pub fn untyped_retype_into_init_root(
     }
 
     let (root, node_index, node_depth, node_offset) = init_cnode_retype_dest(dst_slot);
-    let depth_bits =
-        u8::try_from(bi_init_cnode_bits()).expect("initThreadCNodeSizeBits must fit within u8");
-    let expected_depth = encode_cnode_depth(depth_bits);
+    let expected_depth = encode_cnode_depth(CANONICAL_CNODE_DEPTH_BITS);
     debug_assert_eq!(root, sel4::seL4_CapInitThreadCNode);
-    debug_assert_eq!(node_index, root);
+    debug_assert_eq!(node_index, CANONICAL_CNODE_INDEX as sys::seL4_Word);
     debug_assert_eq!(node_depth, expected_depth);
     let args = RetypeArgs::new(
         untyped_slot,
@@ -819,8 +815,8 @@ pub fn untyped_retype_into_init_root(
     #[cfg(target_os = "none")]
     {
         let (empty_start, empty_end) = boot_empty_window();
-        debug_assert_eq!(node_index, root);
-        debug_assert_eq!(args.cnode_depth, depth_bits);
+        debug_assert_eq!(node_index, CANONICAL_CNODE_INDEX as sys::seL4_Word);
+        debug_assert_eq!(args.cnode_depth, CANONICAL_CNODE_DEPTH_BITS);
         debug_assert!(args.dest_offset >= empty_start && args.dest_offset < empty_end);
 
         validate_retype_args(&args, empty_start, empty_end)?;
@@ -1001,10 +997,8 @@ mod tests {
         {
             if let Some(trace) = super::host_trace::take_last() {
                 assert_eq!(trace.root, bi_init_cnode_cptr());
-                assert_eq!(trace.node_index, bi_init_cnode_cptr());
-                let depth_bits = u8::try_from(super::bi_init_cnode_bits())
-                    .expect("initThreadCNodeSizeBits must fit within u8");
-                let expected_depth = super::encode_cnode_depth(depth_bits);
+                assert_eq!(trace.node_index, CANONICAL_CNODE_INDEX as _);
+                let expected_depth = super::encode_cnode_depth(super::CANONICAL_CNODE_DEPTH_BITS);
                 assert_eq!(trace.node_depth, expected_depth);
                 assert_eq!(trace.node_offset, slot as _);
                 assert_eq!(trace.object_type, 0);
@@ -1027,10 +1021,8 @@ mod tests {
         let slot = 0x10u64;
         let (root, idx, depth, off) = super::init_cnode_retype_dest(slot as _);
         assert_eq!(root, bi_init_cnode_cptr());
-        assert_eq!(idx, bi_init_cnode_cptr());
-        let depth_bits = u8::try_from(super::bi_init_cnode_bits())
-            .expect("initThreadCNodeSizeBits must fit within u8");
-        let expected_depth = super::encode_cnode_depth(depth_bits);
+        assert_eq!(idx, CANONICAL_CNODE_INDEX as _);
+        let expected_depth = super::encode_cnode_depth(super::CANONICAL_CNODE_DEPTH_BITS);
         assert_eq!(depth, expected_depth);
         assert_eq!(off, slot as _);
     }
@@ -1049,15 +1041,13 @@ mod tests {
     fn validate_retype_args_accepts_canonical_call() {
         let empty_start = 0x100;
         let empty_end = 0x200;
-        let depth_bits = u8::try_from(super::bi_init_cnode_bits())
-            .expect("initThreadCNodeSizeBits must fit within u8");
         let args = super::RetypeArgs::new(
             0x80,
             0x20,
             12,
             bi_init_cnode_cptr(),
-            bi_init_cnode_cptr(),
-            super::encode_cnode_depth(depth_bits),
+            super::CANONICAL_CNODE_INDEX,
+            super::encode_cnode_depth(super::CANONICAL_CNODE_DEPTH_BITS),
             0x180,
             1,
         );
@@ -1071,15 +1061,13 @@ mod tests {
     fn validate_retype_args_rejects_offset_before_window() {
         let empty_start = 0x120;
         let empty_end = 0x200;
-        let depth_bits = u8::try_from(super::bi_init_cnode_bits())
-            .expect("initThreadCNodeSizeBits must fit within u8");
         let args = super::RetypeArgs::new(
             0x90,
             0x30,
             10,
             bi_init_cnode_cptr(),
-            bi_init_cnode_cptr(),
-            super::encode_cnode_depth(depth_bits),
+            super::CANONICAL_CNODE_INDEX,
+            super::encode_cnode_depth(super::CANONICAL_CNODE_DEPTH_BITS),
             empty_start - 1,
             1,
         );
