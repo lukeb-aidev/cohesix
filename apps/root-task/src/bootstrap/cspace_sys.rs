@@ -9,7 +9,11 @@ use core::convert::TryFrom;
 use core::fmt;
 
 use crate::boot;
-use crate::bootstrap::cspace::{guard_root_path, root_cnode_path};
+use crate::bootstrap::cspace::{
+    assert_root_path, assert_root_path_b, guard_root_path, root_cnode_path, root_cnode_path_mode_b,
+};
+#[cfg(target_os = "none")]
+use crate::bootstrap::log::force_uart_line;
 use crate::sel4;
 use sel4_sys as sys;
 
@@ -18,6 +22,24 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 #[cfg(target_os = "none")]
 static PREFLIGHT_COMPLETED: AtomicBool = AtomicBool::new(false);
+
+#[cfg(target_os = "none")]
+const DEBUG_LOG_CAPACITY: usize = 224;
+
+#[cfg(target_os = "none")]
+fn debug_log(args: fmt::Arguments<'_>) {
+    use core::fmt::Write;
+    use heapless::String;
+
+    let mut line = String::<DEBUG_LOG_CAPACITY>::new();
+    let _ = line.write_fmt(args);
+    force_uart_line(line.as_str());
+}
+
+#[cfg(not(target_os = "none"))]
+fn debug_log(args: fmt::Arguments<'_>) {
+    ::log::debug!("{}", args);
+}
 
 #[cfg(all(test, not(target_os = "none")))]
 use alloc::boxed::Box;
@@ -499,23 +521,75 @@ pub fn retype_into_root(
     dst_slot: sys::seL4_CPtr,
 ) -> sys::seL4_Error {
     let node_offset = dst_slot as sys::seL4_Word;
-    let (root, index, depth, offset) = root_cnode_path(init_cnode_bits, node_offset);
-    guard_root_path(init_cnode_bits, index, depth, offset);
-    debug_assert_eq!(index, CANONICAL_CNODE_INDEX as sys::seL4_Word);
+    let (root_b, index_b, depth_b, offset_b) = root_cnode_path_mode_b(init_cnode_bits, node_offset);
+    assert_root_path_b(init_cnode_bits, index_b, depth_b, offset_b);
+
+    #[cfg(debug_assertions)]
+    {
+        let depth_u8 = u8::try_from(depth_b).expect("init CNode depth must fit within u8");
+        let rc =
+            unsafe { sys::seL4_CNode_Move(root_b, index_b, depth_u8, sys::seL4_CapNull, 0, 0) };
+        debug_log(format_args!("[probe:move-null/B] rc={}", rc as i32));
+    }
+
+    debug_log(format_args!(
+        "[retype:call/B] ut={:#06x} type={} size_bits={} root={:#06x} index={:#06x} depth={} offset={}",
+        untyped, obj_type, size_bits, root_b, index_b, depth_b, offset_b
+    ));
 
     #[cfg(target_os = "none")]
     {
-        log_destination("Untyped_Retype", index, depth, offset);
+        log_destination("Untyped_Retype", index_b, depth_b, offset_b);
     }
 
     let err = unsafe {
-        sys::seL4_Untyped_Retype(untyped, obj_type, size_bits, root, index, depth, offset, 1)
+        sys::seL4_Untyped_Retype(
+            untyped, obj_type, size_bits, root_b, index_b, depth_b, offset_b, 1,
+        )
     };
 
-    #[cfg(target_os = "none")]
-    {
-        log_syscall_result("Untyped_Retype", err);
+    if err == sys::seL4_NoError {
+        debug_log(format_args!("[retype:ret/B] ok"));
+        #[cfg(target_os = "none")]
+        {
+            log_syscall_result("Untyped_Retype", err);
+        }
+        return err;
     }
+
+    if err == sys::seL4_FailedLookup {
+        let (root_a, index_a, depth_a, offset_a) = root_cnode_path(init_cnode_bits, node_offset);
+        assert_root_path(init_cnode_bits, index_a, depth_a, offset_a);
+
+        debug_log(format_args!(
+            "[retype:call/A] ut={:#06x} type={} size_bits={} root={:#06x} index={} depth={} offset={:#06x}",
+            untyped, obj_type, size_bits, root_a, index_a, depth_a, offset_a
+        ));
+
+        #[cfg(target_os = "none")]
+        {
+            log_destination("Untyped_Retype", index_a, depth_a, offset_a);
+        }
+
+        let err_a = unsafe {
+            sys::seL4_Untyped_Retype(
+                untyped, obj_type, size_bits, root_a, index_a, depth_a, offset_a, 1,
+            )
+        };
+
+        if err_a == sys::seL4_NoError {
+            debug_log(format_args!("[retype:ret/A] ok"));
+            #[cfg(target_os = "none")]
+            {
+                log_syscall_result("Untyped_Retype", err_a);
+            }
+            return err_a;
+        }
+
+        debug_log(format_args!("[retype:ret/A] err={}", err_a as i32));
+    }
+
+    debug_log(format_args!("[retype:ret/B] err={}", err as i32));
 
     err
 }

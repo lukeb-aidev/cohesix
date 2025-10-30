@@ -28,6 +28,19 @@ pub fn root_cnode_path(
 }
 
 #[inline(always)]
+pub fn root_cnode_path_mode_b(
+    init_bits: u8,
+    slot: seL4_Word,
+) -> (seL4_CPtr, seL4_Word, seL4_Word, seL4_Word) {
+    (
+        sel4_sys::seL4_CapInitThreadCNode,
+        slot,
+        init_bits as seL4_Word,
+        0,
+    )
+}
+
+#[inline(always)]
 pub fn guard_root_path(init_cnode_bits: u8, index: seL4_Word, depth: seL4_Word, offset: seL4_Word) {
     assert_eq!(
         depth, init_cnode_bits as seL4_Word,
@@ -40,6 +53,32 @@ pub fn guard_root_path(init_cnode_bits: u8, index: seL4_Word, depth: seL4_Word, 
         1usize << init_cnode_bits
     };
     assert!((offset as usize) < limit, "slot out of range",);
+}
+
+#[inline(always)]
+pub fn assert_root_path(
+    init_cnode_bits: u8,
+    index: seL4_Word,
+    depth: seL4_Word,
+    offset: seL4_Word,
+) {
+    guard_root_path(init_cnode_bits, index, depth, offset);
+}
+
+#[inline(always)]
+pub fn assert_root_path_b(init_bits: u8, index: seL4_Word, depth: seL4_Word, offset: seL4_Word) {
+    assert_eq!(
+        depth, init_bits as seL4_Word,
+        "depth must equal init CNode bits"
+    );
+    assert_eq!(offset, 0, "Mode B requires offset=0");
+    let limit = if init_bits as usize >= usize::BITS as usize {
+        usize::MAX
+    } else {
+        1usize << init_bits
+    };
+    let index_usize = usize::try_from(index).expect("index must fit within usize");
+    assert!(index_usize < limit, "index out of range for init CNode");
 }
 
 fn first_non_device_untyped(bi: &seL4_BootInfo) -> Option<sel4::seL4_CPtr> {
