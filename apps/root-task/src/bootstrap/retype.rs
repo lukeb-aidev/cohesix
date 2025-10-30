@@ -7,7 +7,7 @@ use heapless::String;
 use sel4_sys::{self as sys, seL4_CapTableObject, seL4_EndpointObject};
 
 use super::cspace::{slot_in_empty_window, CSpaceCtx, DestCNode};
-use super::cspace_sys::{encode_cnode_depth, CANONICAL_CNODE_DEPTH_BITS};
+use super::cspace_sys::encode_cnode_depth;
 use super::ffi::raw_untyped_retype;
 use crate::bootstrap::log::force_uart_line;
 use crate::bootstrap::{boot_tracer, BootPhase, UntypedSelection};
@@ -25,7 +25,7 @@ fn log_retype_call(
     dest: &DestCNode,
     num_objects: sys::seL4_Word,
 ) {
-    let node_depth = encode_cnode_depth(CANONICAL_CNODE_DEPTH_BITS);
+    let node_depth = encode_cnode_depth(dest.root_bits);
     let mut line = String::<128>::new();
     let _ = write!(
         &mut line,
@@ -130,7 +130,7 @@ pub(crate) fn call_retype(
     dest.assert_sane();
     log_retype_call(ut_cap, obj_type, size_bits, dest, num_objects);
     let node_index: sys::seL4_Word = 0;
-    let node_depth: sys::seL4_Word = encode_cnode_depth(CANONICAL_CNODE_DEPTH_BITS);
+    let node_depth: sys::seL4_Word = encode_cnode_depth(dest.root_bits);
     let slot_offset =
         sys::seL4_Word::try_from(dest.slot_offset).expect("slot offset must fit within seL4_Word");
     let err = seL4_Untyped_Retype(

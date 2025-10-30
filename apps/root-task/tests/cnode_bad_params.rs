@@ -77,17 +77,17 @@ fn guard_depth_mint_succeeds() {
     let guard_depth = ctx.cnode_invocation_depth_bits;
     let canonical_depth = sel4::word_bits() as u8;
     assert_eq!(ctx.cnode_bits(), init_bits);
-    assert_eq!(guard_depth, canonical_depth);
-    assert_ne!(init_bits, canonical_depth);
+    assert_eq!(guard_depth, init_bits);
+    assert_ne!(canonical_depth, init_bits);
 
     let err = unsafe {
         seL4_CNode_Mint(
             seL4_CapInitThreadCNode,
             ctx.first_free.saturating_add(1),
-            canonical_depth,
+            guard_depth,
             seL4_CapInitThreadCNode,
             seL4_CapInitThreadTCB,
-            canonical_depth,
+            guard_depth,
             seL4_CapRights_ReadWrite,
             0,
             0,
@@ -100,10 +100,10 @@ fn guard_depth_mint_succeeds() {
         seL4_CNode_Mint(
             seL4_CapInitThreadCNode,
             ctx.first_free.saturating_add(2),
-            init_bits,
+            canonical_depth,
             seL4_CapInitThreadCNode,
             seL4_CapInitThreadTCB,
-            init_bits,
+            canonical_depth,
             seL4_CapRights_ReadWrite,
             0,
             0,
