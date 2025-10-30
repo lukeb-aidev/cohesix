@@ -2,22 +2,46 @@
 #![allow(unsafe_code)]
 
 use crate::bootstrap::log::force_uart_line;
-use crate::bootstrap::retype::{bump_slot, retype_captable, retype_endpoint};
+use crate::bootstrap::retype::{bump_slot, retype_captable};
 use crate::cspace::{cap_rights_read_write_grant, CSpace};
 use crate::debug::debug_identify;
 use crate::sel4::{self, is_boot_reserved_slot, BootInfoView, WORD_BITS};
 use crate::sel4_view::{empty_window, init_cnode_bits, init_cnode_cptr};
-use core::convert::TryInto;
+use core::convert::{TryFrom, TryInto};
 use core::fmt::Write;
 use heapless::String;
 
-use super::cspace_sys::{self, CANONICAL_CNODE_DEPTH_BITS};
+use super::cspace_sys;
 use sel4_sys::{
-    self, seL4_BootInfo, seL4_CNode_Delete, seL4_CapInitThreadCNode, seL4_EndpointObject,
-    seL4_Untyped_Retype, seL4_Word,
+    self, seL4_BootInfo, seL4_CNode_Delete, seL4_CPtr, seL4_CapInitThreadCNode,
+    seL4_EndpointObject, seL4_Word,
 };
 
 const MAX_DIAGNOSTIC_LEN: usize = 224;
+
+#[inline(always)]
+pub fn root_cnode_path(
+    init_cnode_bits: u8,
+    dst_slot: seL4_Word,
+) -> (seL4_CPtr, seL4_Word, seL4_Word, seL4_Word) {
+    let depth = init_cnode_bits as seL4_Word;
+    (seL4_CapInitThreadCNode, 0, depth, dst_slot)
+}
+
+#[inline(always)]
+pub fn guard_root_path(init_cnode_bits: u8, index: seL4_Word, depth: seL4_Word, offset: seL4_Word) {
+    assert_eq!(
+        depth, init_cnode_bits as seL4_Word,
+        "depth must equal init CNode bits",
+    );
+    assert_eq!(index, 0, "index must be 0 for root-cnode");
+    let limit = if init_cnode_bits as usize >= usize::BITS as usize {
+        usize::MAX
+    } else {
+        1usize << init_cnode_bits
+    };
+    assert!((offset as usize) < limit, "slot out of range",);
+}
 
 fn first_non_device_untyped(bi: &seL4_BootInfo) -> Option<sel4::seL4_CPtr> {
     let start = bi.untyped.start;
@@ -36,9 +60,11 @@ fn first_non_device_untyped(bi: &seL4_BootInfo) -> Option<sel4::seL4_CPtr> {
 }
 
 fn cspace_retype_probe(bi: &seL4_BootInfo) -> Result<(), seL4_Word> {
-    let root: sel4::seL4_CPtr = init_cnode_cptr(bi);
-    let node_depth: seL4_Word = cspace_sys::encode_cnode_depth(CANONICAL_CNODE_DEPTH_BITS);
+    let init_bits_word = init_cnode_bits(bi);
+    let init_bits = u8::try_from(init_bits_word).expect("init cnode bits must fit within u8");
     let dst_slot: sel4::seL4_CPtr = bi.empty.start as sel4::seL4_CPtr;
+    let (root, index, depth, offset) = root_cnode_path(init_bits, dst_slot as seL4_Word);
+    guard_root_path(init_bits, index, depth, offset);
 
     assert!(
         bi.empty.start < bi.empty.end,
@@ -57,8 +83,8 @@ fn cspace_retype_probe(bi: &seL4_BootInfo) -> Result<(), seL4_Word> {
     let mut probe_line = String::<MAX_DIAGNOSTIC_LEN>::new();
     if write!(
         &mut probe_line,
-        "[retype:probe] ut={:#06x} -> Endpoint at slot={:#06x} root={:#06x} depth={}",
-        ut, dst_slot, root, node_depth,
+        "[retype:probe] ut={:#06x} -> Endpoint at slot={:#06x} root={:#06x} index={} depth={} offset={:#06x}",
+        ut, dst_slot, root, index, depth, offset,
     )
     .is_err()
     {
@@ -66,18 +92,8 @@ fn cspace_retype_probe(bi: &seL4_BootInfo) -> Result<(), seL4_Word> {
     }
     force_uart_line(probe_line.as_str());
 
-    let err_retype = unsafe {
-        seL4_Untyped_Retype(
-            ut,
-            seL4_EndpointObject as seL4_Word,
-            0,
-            root,
-            0,
-            node_depth,
-            dst_slot,
-            1,
-        )
-    };
+    let err_retype =
+        cspace_sys::retype_into_root(ut, seL4_EndpointObject as seL4_Word, 0, init_bits, dst_slot);
     let mut ret_line = String::<MAX_DIAGNOSTIC_LEN>::new();
     if write!(&mut ret_line, "[retype:ret] err={}", err_retype).is_err() {
         // Partial diagnostics are acceptable.
@@ -87,7 +103,7 @@ fn cspace_retype_probe(bi: &seL4_BootInfo) -> Result<(), seL4_Word> {
         return Err(err_retype as seL4_Word);
     }
 
-    let err_del = unsafe { seL4_CNode_Delete(root, dst_slot, CANONICAL_CNODE_DEPTH_BITS) };
+    let err_del = unsafe { seL4_CNode_Delete(root, dst_slot, depth) };
     let mut cleanup_line = String::<MAX_DIAGNOSTIC_LEN>::new();
     if write!(&mut cleanup_line, "[retype:cleanup] delete err={}", err_del).is_err() {
         // Partial diagnostics are acceptable.
@@ -284,7 +300,13 @@ pub fn cspace_first_retypes(
         }
     };
     dest.set_slot_offset(endpoint_slot);
-    let endpoint_err = retype_endpoint(ut_cap as sel4_sys::seL4_Word, &dest);
+    let endpoint_err = cspace_sys::retype_into_root(
+        ut_cap,
+        sel4_sys::seL4_ObjectType::seL4_EndpointObject as _,
+        0,
+        dest.root_bits,
+        endpoint_slot,
+    );
     let mut endpoint_line = String::<MAX_DIAGNOSTIC_LEN>::new();
     if write!(
         &mut endpoint_line,
@@ -412,13 +434,9 @@ impl CSpaceCtx {
             "init CNode width {init} exceeds WordBits {word_bits}",
             init = init_cnode_bits,
         );
-        // Init-root retypes use the canonical full-word guard depth.
-        let invocation_depth_bits = CANONICAL_CNODE_DEPTH_BITS;
+        // Init-root retypes use the bootinfo-advertised guard depth.
+        let invocation_depth_bits = init_cnode_bits;
         let (first_free, last_free) = bi.init_cnode_empty_range();
-        debug_assert!(
-            init_cnode_bits <= CANONICAL_CNODE_DEPTH_BITS,
-            "bootinfo-reported radix exceeds canonical invocation depth",
-        );
         assert!(
             first_free < last_free,
             "bootinfo empty window must not be empty"
@@ -551,7 +569,7 @@ impl CSpaceCtx {
         if write!(
             &mut line,
             "[retype] path=direct:init-cnode dest=0x{dst_slot:04x} depth={} root_bits={} window=[0x{start:04x}..0x{end:04x})",
-            CANONICAL_CNODE_DEPTH_BITS,
+            self.init_cnode_bits,
             self.dest.root_bits,
             start = self.dest.empty_start,
             end = self.dest.empty_end,
@@ -625,7 +643,7 @@ impl CSpaceCtx {
             if write!(
                 &mut line,
                 "[retype] path={path} err={err} root=0x{root:04x} untyped_slot=0x{untyped:04x} node(idx=0,depth={},off=0x{node_offset:04x}) dest_slot=0x{dest_index:04x} ty={obj_ty} sz={size_bits} window=[0x{start:04x}..0x{end:04x}) root_bits={bits}",
-                CANONICAL_CNODE_DEPTH_BITS,
+                dest.root_bits,
                 path = dest.path_label(),
                 root = dest.root,
                 node_offset = dest.slot_offset,
