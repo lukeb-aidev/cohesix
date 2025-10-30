@@ -12,97 +12,92 @@ use core::fmt::Write;
 use heapless::String;
 
 use super::cspace_sys::{self, CANONICAL_CNODE_DEPTH_BITS};
-use sel4_sys::{self, seL4_CNode_Copy, seL4_CNode_Delete, seL4_CapInitThreadCNode, seL4_Word};
+use sel4_sys::{
+    self, seL4_BootInfo, seL4_CNode_Delete, seL4_CapInitThreadCNode, seL4_EndpointObject,
+    seL4_Untyped_Retype, seL4_Word,
+};
 
 const MAX_DIAGNOSTIC_LEN: usize = 224;
 
-#[inline(always)]
-fn all_rights() -> sel4_sys::seL4_CapRights {
-    sel4_sys::seL4_CapRights_All
+fn first_non_device_untyped(bi: &seL4_BootInfo) -> Option<sel4::seL4_CPtr> {
+    let start = bi.untyped.start;
+    let end = bi.untyped.end;
+    if end <= start {
+        return None;
+    }
+    let count = end.saturating_sub(start) as usize;
+    for (index, desc) in bi.untypedList.iter().enumerate().take(count) {
+        if desc.isDevice == 0 {
+            let slot = start.checked_add(index as sel4::seL4_CPtr)?;
+            return Some(slot);
+        }
+    }
+    None
 }
 
-fn sanity_copy_root_cnode(
-    dest: &DestCNode,
-    slot: sel4::seL4_CPtr,
-) -> Result<(), sel4_sys::seL4_Error> {
-    dest.assert_sane();
-    let slot_u32: u32 = slot
-        .try_into()
-        .expect("slot index must fit within u32 for init CNode");
-    dest.validate_slot(slot_u32);
+fn cspace_retype_probe(bi: &seL4_BootInfo) -> Result<(), seL4_Word> {
+    let root: sel4::seL4_CPtr = bi.initThreadCNode as sel4::seL4_CPtr;
+    let depth: seL4_Word = bi.initThreadCNodeSizeBits as seL4_Word;
+    let dst_slot: sel4::seL4_CPtr = bi.empty.start as sel4::seL4_CPtr;
 
-    let root = dest.root;
-    let depth_bits: u8 = dest.root_bits;
-    let depth: seL4_Word = depth_bits as seL4_Word;
-    let probe_slot = slot;
-    let source_slot: sel4::seL4_CPtr = seL4_CapInitThreadCNode;
+    assert!(
+        bi.empty.start < bi.empty.end,
+        "empty window must be non-empty"
+    );
+    assert!(
+        dst_slot >= bi.empty.start as sel4::seL4_CPtr && dst_slot < bi.empty.end as sel4::seL4_CPtr,
+        "probe slot {:#06x} outside bootinfo window [0x{start:04x}..0x{end:04x})",
+        dst_slot,
+        start = bi.empty.start,
+        end = bi.empty.end,
+    );
 
-    let mut root_line = String::<MAX_DIAGNOSTIC_LEN>::new();
+    let ut = first_non_device_untyped(bi).expect("no non-device untyped available");
+
+    let mut probe_line = String::<MAX_DIAGNOSTIC_LEN>::new();
     if write!(
-        &mut root_line,
-        "[cnode:identify] root cap={:#x} depth={} type_id={}",
-        root,
-        depth,
-        debug_identify(root),
+        &mut probe_line,
+        "[retype:probe] ut={:#06x} -> Endpoint at slot={:#06x} root={:#06x} depth={}",
+        ut, dst_slot, root, depth,
     )
     .is_err()
     {
         // Partial diagnostics are acceptable.
     }
-    force_uart_line(root_line.as_str());
+    force_uart_line(probe_line.as_str());
 
-    let mut constants_line = String::<MAX_DIAGNOSTIC_LEN>::new();
-    if write!(
-        &mut constants_line,
-        "[cnode:constants] CapInitThreadCNode={:#06x}",
-        source_slot,
-    )
-    .is_err()
-    {
-        // Partial diagnostics are acceptable.
-    }
-    force_uart_line(constants_line.as_str());
-
-    let copy_err = unsafe {
-        seL4_CNode_Copy(
+    let err_retype = unsafe {
+        seL4_Untyped_Retype(
+            ut,
+            seL4_EndpointObject as seL4_Word,
+            0,
             root,
-            probe_slot,
-            depth_bits,
-            root,
-            source_slot,
-            depth_bits,
-            all_rights(),
+            0,
+            depth,
+            dst_slot,
+            1,
         )
     };
-    let mut copy_line = String::<MAX_DIAGNOSTIC_LEN>::new();
-    if write!(
-        &mut copy_line,
-        "[cnode:copy] src=CapInitThreadCNode depth={} dst={:#06x} err={}",
-        depth, probe_slot, copy_err,
-    )
-    .is_err()
-    {
+    let mut ret_line = String::<MAX_DIAGNOSTIC_LEN>::new();
+    if write!(&mut ret_line, "[retype:ret] err={}", err_retype).is_err() {
         // Partial diagnostics are acceptable.
     }
-    force_uart_line(copy_line.as_str());
-    if copy_err != sel4_sys::seL4_NoError {
-        return Err(copy_err);
+    force_uart_line(ret_line.as_str());
+    if err_retype != sel4_sys::seL4_NoError {
+        return Err(err_retype as seL4_Word);
     }
 
-    let delete_err = unsafe { seL4_CNode_Delete(root, probe_slot, depth_bits) };
-    let mut delete_line = String::<MAX_DIAGNOSTIC_LEN>::new();
-    if write!(
-        &mut delete_line,
-        "[cnode:delete] probe {:#06x} err={}",
-        probe_slot, delete_err,
-    )
-    .is_err()
-    {
+    let depth_bits: u8 = depth
+        .try_into()
+        .expect("initThreadCNodeSizeBits must fit within u8");
+    let err_del = unsafe { seL4_CNode_Delete(root, dst_slot, depth_bits) };
+    let mut cleanup_line = String::<MAX_DIAGNOSTIC_LEN>::new();
+    if write!(&mut cleanup_line, "[retype:cleanup] delete err={}", err_del).is_err() {
         // Partial diagnostics are acceptable.
     }
-    force_uart_line(delete_line.as_str());
-    if delete_err != sel4_sys::seL4_NoError {
-        return Err(delete_err);
+    force_uart_line(cleanup_line.as_str());
+    if err_del != sel4_sys::seL4_NoError {
+        return Err(err_del as seL4_Word);
     }
 
     Ok(())
@@ -257,14 +252,14 @@ pub fn cspace_first_retypes(
     dest.set_slot_offset(cs.next_free_slot());
     dest.assert_sane();
 
-    let probe_slot =
-        usize::try_from(dest.slot_offset).expect("slot offset must fit within seL4_CPtr");
-    if let Err(err) = sanity_copy_root_cnode(&dest, probe_slot) {
+    if let Err(err_word) = cspace_retype_probe(bi) {
+        let err = err_word as sel4_sys::seL4_Error;
         let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
         if write!(
             &mut line,
-            "[cspace:init] root CNode copy failed slot=0x{probe_slot:04x} err={}",
-            err as i32,
+            "[cspace:init] retype probe failed slot=0x{slot:04x} err={}",
+            err_word,
+            slot = dest.slot_offset,
         )
         .is_err()
         {
