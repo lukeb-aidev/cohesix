@@ -1,6 +1,7 @@
 // Author: Lukas Bower
 
 use crate::bootstrap::cspace::DestCNode;
+use crate::bootstrap::cspace_sys::CANONICAL_CNODE_DEPTH_BITS;
 use crate::bootstrap::retype::{call_retype, last_retype_args};
 use sel4_sys as sys;
 
@@ -24,7 +25,7 @@ fn packs_correct_args_for_root_level_insert() {
     assert_eq!(last.size_bits, 0);
     assert_eq!(last.root, 0x2);
     assert_eq!(last.idx, 0);
-    assert_eq!(last.depth, 0);
+    assert_eq!(last.depth, CANONICAL_CNODE_DEPTH_BITS);
     assert_eq!(last.off, 0x0103);
     assert_eq!(last.n, 1);
 }
