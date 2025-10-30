@@ -36,7 +36,7 @@ fn first_non_device_untyped(bi: &seL4_BootInfo) -> Option<sel4::seL4_CPtr> {
 }
 
 fn cspace_retype_probe(bi: &seL4_BootInfo) -> Result<(), seL4_Word> {
-    let root: sel4::seL4_CPtr = bi.initThreadCNode as sel4::seL4_CPtr;
+    let root: sel4::seL4_CPtr = init_cnode_cptr(bi);
     let depth: seL4_Word = bi.initThreadCNodeSizeBits as seL4_Word;
     let dst_slot: sel4::seL4_CPtr = bi.empty.start as sel4::seL4_CPtr;
 
