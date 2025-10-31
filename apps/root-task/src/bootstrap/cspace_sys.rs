@@ -721,13 +721,13 @@ pub fn cnode_copy_direct_dest(
         debug_assert_eq!(depth_bits, init_bits);
         check_slot_in_range(depth_bits, dst_slot);
         let (root, node_index, node_depth, node_offset) = init_cnode_dest(dst_slot);
-        debug_assert_eq!(node_offset, 0);
+        debug_assert_eq!(node_index, bi_init_cnode_cptr() as sys::seL4_Word);
         log_destination("CNode_Copy", node_index, node_depth, node_offset);
         let node_depth_u8 = u8::try_from(node_depth).expect("seL4_WordBits must fit within u8");
         let err = unsafe {
             sys::seL4_CNode_Copy(
                 root,
-                node_index,
+                node_offset,
                 node_depth_u8,
                 src_root,
                 src_index as sys::seL4_Word,
@@ -773,13 +773,13 @@ pub fn cnode_mint_direct_dest(
         debug_assert_eq!(depth_bits, init_bits);
         check_slot_in_range(depth_bits, dst_slot);
         let (root, node_index, node_depth, node_offset) = init_cnode_dest(dst_slot);
-        debug_assert_eq!(node_offset, 0);
+        debug_assert_eq!(node_index, bi_init_cnode_cptr() as sys::seL4_Word);
         log_destination("CNode_Mint", node_index, node_depth, node_offset);
         let node_depth_u8 = u8::try_from(node_depth).expect("seL4_WordBits must fit within u8");
         let err = unsafe {
             sys::seL4_CNode_Mint(
                 root,
-                node_index,
+                node_offset,
                 node_depth_u8,
                 src_root,
                 src_index as sys::seL4_Word,
@@ -824,13 +824,13 @@ pub fn cnode_move_direct_dest(
         debug_assert_eq!(depth_bits, init_bits);
         check_slot_in_range(depth_bits, dst_slot);
         let (root, node_index, node_depth, node_offset) = init_cnode_dest(dst_slot);
-        debug_assert_eq!(node_offset, 0);
+        debug_assert_eq!(node_index, bi_init_cnode_cptr() as sys::seL4_Word);
         log_destination("CNode_Move", node_index, node_depth, node_offset);
         let node_depth_u8 = u8::try_from(node_depth).expect("seL4_WordBits must fit within u8");
         let err = unsafe {
             sys::seL4_CNode_Move(
                 root,
-                node_index,
+                node_offset,
                 node_depth_u8,
                 src_root,
                 src_index as sys::seL4_Word,
@@ -1070,10 +1070,10 @@ mod tests {
         let slot = 0x00a5u64;
         let (root, idx, depth, off) = init_cnode_dest(slot as _);
         assert_eq!(root, bi_init_cnode_cptr());
-        assert_eq!(idx, slot as _);
+        assert_eq!(idx, bi_init_cnode_cptr() as _);
         let expected_depth = sys::seL4_WordBits as sys::seL4_Word;
         assert_eq!(depth, expected_depth);
-        assert_eq!(off, 0);
+        assert_eq!(off, slot as _);
     }
 
     #[test]
