@@ -75,6 +75,14 @@ pub mod ninedoor;
 /// Guard helpers for validating indirect call targets at runtime.
 pub mod guards;
 
+#[cfg(feature = "kernel")]
+/// Minimal UART helpers used by the early bootstrap console.
+pub mod uart;
+
+#[cfg(feature = "kernel")]
+/// Re-export canonical init CNode tuple helpers.
+pub use crate::cspace::tuples;
+
 pub mod platform;
 
 #[cfg(all(not(feature = "kernel"), not(target_os = "none")))]
