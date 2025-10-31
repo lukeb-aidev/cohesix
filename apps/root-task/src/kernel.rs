@@ -276,15 +276,15 @@ unsafe extern "C" fn pl011_debug_emit(context: *mut (), byte: u8) {
 #[derive(Copy, Clone, Debug)]
 pub struct ConsoleCaps {
     /// Init CNode capability pointer.
-    pub init_cnode: sel4::seL4_CPtr,
+    pub init_cnode: crate::sel4::seL4_CPtr,
     /// Init VSpace capability pointer.
-    pub init_vspace: sel4::seL4_CPtr,
+    pub init_vspace: crate::sel4::seL4_CPtr,
     /// Init TCB capability pointer.
-    pub init_tcb: sel4::seL4_CPtr,
+    pub init_tcb: crate::sel4::seL4_CPtr,
     /// Slot containing the console endpoint minted during bootstrap.
-    pub console_endpoint_slot: sel4::seL4_CPtr,
+    pub console_endpoint_slot: crate::sel4::seL4_CPtr,
     /// Optional slot where the init TCB capability was copied for diagnostics.
-    pub tcb_copy_slot: Option<sel4::seL4_CPtr>,
+    pub tcb_copy_slot: Option<crate::sel4::seL4_CPtr>,
 }
 
 fn parse_hex(arg: &str) -> Option<usize> {
@@ -1141,7 +1141,7 @@ fn bootstrap<P: Platform>(
             console_endpoint_slot: first_retypes
                 .as_ref()
                 .map(|info| info.endpoint_slot)
-                .unwrap_or(sel4::seL4_CapNull),
+                .unwrap_or(crate::sel4::seL4_CapNull),
             tcb_copy_slot: first_retypes.as_ref().map(|info| info.tcb_copy_slot),
         };
         start_console(driver, console_caps);
