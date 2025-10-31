@@ -24,13 +24,13 @@ pub fn root_cnode_path(
     dst_slot: seL4_Word,
 ) -> (seL4_CPtr, seL4_Word, seL4_Word, seL4_Word) {
     let _ = init_cnode_bits;
-    (seL4_CapInitThreadCNode, 0, WORD_BITS, dst_slot)
+    (seL4_CapInitThreadCNode, 0, 0, dst_slot)
 }
 
 #[inline(always)]
 pub fn guard_root_path(init_cnode_bits: u8, index: seL4_Word, depth: seL4_Word, offset: seL4_Word) {
-    assert_eq!(depth, WORD_BITS, "depth must equal seL4_WordBits",);
     assert_eq!(index, 0, "index must be 0 for root-cnode");
+    assert_eq!(depth, 0, "depth must be zero for direct init CNode access");
     let limit = if init_cnode_bits as usize >= usize::BITS as usize {
         usize::MAX
     } else {
@@ -109,8 +109,8 @@ fn cspace_retype_probe(bi: &seL4_BootInfo) -> Result<(), seL4_Word> {
         return Err(err_retype as seL4_Word);
     }
 
-    let depth_u8 = u8::try_from(depth).expect("cnode depth must fit in u8");
-    let err_del = unsafe { seL4_CNode_Delete(root, dst_slot, depth_u8) };
+    let delete_depth = u8::try_from(WORD_BITS).expect("WORD_BITS must fit in u8");
+    let err_del = unsafe { seL4_CNode_Delete(root, dst_slot, delete_depth) };
     let mut cleanup_line = String::<MAX_DIAGNOSTIC_LEN>::new();
     if write!(&mut cleanup_line, "[retype:cleanup] delete err={}", err_del).is_err() {
         // Partial diagnostics are acceptable.
