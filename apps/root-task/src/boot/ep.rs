@@ -3,17 +3,21 @@
 
 use core::convert::TryFrom;
 
-use sel4_sys::{seL4_BootInfo, seL4_CPtr, seL4_Error, seL4_IllegalOperation, seL4_ObjectType};
+use sel4_sys::{seL4_BootInfo, seL4_CPtr, seL4_Error, seL4_IllegalOperation};
 
 use crate::boot::bi_extra::first_regular_untyped_from_extra;
 use crate::bootstrap::cspace_sys;
-use crate::caps::traced_retype_into_slot;
+use crate::cspace::tuples::retype_endpoint_into_slot;
 use crate::cspace::CSpace;
 use crate::sel4;
 use crate::serial;
 
 /// One-shot endpoint bootstrap: pick a regular untyped, retype, publish, and trace.
-pub fn bootstrap_ep(bi: &seL4_BootInfo, cs: &mut CSpace) -> Result<seL4_CPtr, seL4_Error> {
+pub fn bootstrap_ep(
+    bi: &seL4_BootInfo,
+    cs: &mut CSpace,
+    tuple: &crate::cspace::tuples::RetypeTuple,
+) -> Result<seL4_CPtr, seL4_Error> {
     if sel4::ep_ready() {
         return Ok(sel4::root_endpoint());
     }
@@ -82,36 +86,25 @@ pub fn bootstrap_ep(bi: &seL4_BootInfo, cs: &mut CSpace) -> Result<seL4_CPtr, se
         ut = ut,
         slot = ep_slot,
     );
-    let retype_result = traced_retype_into_slot(
-        ut,
-        seL4_ObjectType::seL4_EndpointObject,
-        0,
-        root,
-        node_index,
-        node_depth,
-        node_offset,
-    );
-    match retype_result {
-        Ok(()) => {
-            log::trace!("B1.ret = Ok");
-            log::info!(
-                "[boot] endpoint retype ok slot=0x{slot:04x}",
-                slot = ep_slot
-            );
-        }
-        Err(err) => {
-            log::trace!(
-                "B1.ret = Err({code})",
-                code = sel4::error_name(err as seL4_Error)
-            );
-            log::error!(
-                "[boot] endpoint retype failed slot=0x{slot:04x} err={err} ({name})",
-                slot = ep_slot,
-                err = err,
-                name = sel4::error_name(err),
-            );
-            return Err(err);
-        }
+    let retype_err = retype_endpoint_into_slot(ut, ep_slot as seL4_Word, tuple);
+    if retype_err == sel4_sys::seL4_NoError {
+        log::trace!("B1.ret = Ok");
+        log::info!(
+            "[rt-fix] retype:endpoint OK slot=0x{slot:04x}",
+            slot = ep_slot
+        );
+    } else {
+        log::trace!(
+            "B1.ret = Err({code})",
+            code = sel4::error_name(retype_err as seL4_Error)
+        );
+        log::error!(
+            "[boot] endpoint retype failed slot=0x{slot:04x} err={err} ({name})",
+            slot = ep_slot,
+            err = retype_err,
+            name = sel4::error_name(retype_err),
+        );
+        return Err(retype_err);
     }
 
     let slot_ident = sel4::debug_cap_identify(ep_slot);

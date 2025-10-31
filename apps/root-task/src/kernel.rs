@@ -23,6 +23,9 @@ use crate::bootstrap::{
     BootPhase,
 };
 use crate::console::Console;
+use crate::cspace::tuples::{
+    assert_ipc_buffer_matches_bootinfo, make_cnode_tuple, make_retype_tuple, try_cnode_copy_proof,
+};
 use crate::cspace::{cap_rights_read_write_grant, CSpace};
 use crate::event::{
     AuditSink, BootstrapMessage, BootstrapMessageHandler, EventPump, IpcDispatcher, TickEvent,
@@ -36,12 +39,14 @@ use crate::net::{NetStack, CONSOLE_TCP_PORT};
 use crate::ninedoor::NineDoorBridge;
 use crate::platform::{Platform, SeL4Platform};
 use crate::sel4::{
-    bootinfo_debug_dump, error_name, first_regular_untyped, root_endpoint, BootInfo, BootInfoExt,
-    BootInfoView, KernelEnv, RetypeKind, RetypeStatus, IPC_PAGE_BYTES, MSG_MAX_WORDS,
+    bootinfo_debug_dump, error_name, first_regular_untyped, root_endpoint, seL4_CapInitThreadTCB,
+    BootInfo, BootInfoExt, BootInfoView, KernelEnv, RetypeKind, RetypeStatus, IPC_PAGE_BYTES,
+    MSG_MAX_WORDS,
 };
 use crate::serial::{
     pl011::Pl011, SerialPort, DEFAULT_LINE_CAPACITY, DEFAULT_RX_CAPACITY, DEFAULT_TX_CAPACITY,
 };
+use crate::uart::pl011::{self as early_uart};
 use heapless::{String as HeaplessString, Vec as HeaplessVec};
 #[cfg(feature = "net-console")]
 use smoltcp::wire::Ipv4Address;
@@ -236,6 +241,24 @@ const PL011_PADDR: usize = 0x0900_0000;
 const DEVICE_FRAME_BITS: usize = 12;
 const EARLY_DUMP_LIMIT: usize = 512;
 
+fn find_pl011_device_ut(bi: &sel4_sys::seL4_BootInfo) -> Option<seL4_CPtr> {
+    let ut_start = bi.untyped.start;
+    let ut_end = bi.untyped.end;
+    let total = ut_end.saturating_sub(ut_start) as usize;
+    for (index, desc) in bi.untypedList.iter().take(total).enumerate() {
+        if desc.isDevice == 0 {
+            continue;
+        }
+        let base = desc.paddr as u64;
+        let span = 1u64 << desc.sizeBits;
+        let limit = base.saturating_add(span);
+        if base <= early_uart::pl011_paddr() && early_uart::pl011_paddr() + 0x1000 <= limit {
+            return Some(ut_start + index as seL4_CPtr);
+        }
+    }
+    None
+}
+
 #[cfg(all(feature = "kernel", not(sel4_config_printing)))]
 static mut EARLY_UART_SINK: DebugSink = DebugSink {
     context: core::ptr::null_mut(),
@@ -297,7 +320,7 @@ const MAX_HEXDUMP_LEN: usize = 256;
 /// Minimal blocking console loop used during early bring-up.
 pub fn start_console(uart: Pl011, caps: ConsoleCaps) -> ! {
     let mut console = Console::new(uart);
-    let _ = writeln!(console, "[console] ready");
+    let _ = writeln!(console, "console ready");
     let mut buffer = [0u8; 256];
 
     loop {
@@ -530,6 +553,18 @@ fn bootstrap<P: Platform>(
 
     let mut boot_cspace = CSpace::from_bootinfo(bootinfo_ref);
     let boot_first_free = boot_cspace.next_free_slot();
+    let cnode_tuple = make_cnode_tuple(
+        bootinfo_ref.init_cnode_cap(),
+        bootinfo_ref.initThreadCNodeSizeBits as u8,
+    );
+    let retype_tuple = make_retype_tuple(bootinfo_ref.init_cnode_cap());
+    log::info!(
+        "[rt-fix] cspace window [0x{start:04x}..0x{end:04x}), initBits={bits}, initCNode=0x{root:04x}",
+        start = bootinfo_ref.empty_first_slot(),
+        end = bootinfo_ref.empty_last_slot_excl(),
+        bits = bootinfo_ref.initThreadCNodeSizeBits,
+        root = bootinfo_ref.init_cnode_cap()
+    );
     boot_tracer().advance(BootPhase::CSpaceInit);
 
     console.writeln_prefixed("entered from seL4 (stage0)");
@@ -564,6 +599,27 @@ fn bootstrap<P: Platform>(
         unsafe {
             sel4_sys::seL4_SetIPCBuffer(ptr.as_ptr());
         }
+        assert_ipc_buffer_matches_bootinfo(bootinfo_ref);
+    }
+
+    let proof_slot = boot_first_free;
+    let proof_err =
+        try_cnode_copy_proof(&cnode_tuple, proof_slot as seL4_Word, seL4_CapInitThreadTCB);
+    if proof_err == sel4_sys::seL4_NoError {
+        let delete_err = sel4::cnode_delete(cnode_tuple.root, proof_slot, cnode_tuple.depth);
+        if delete_err != sel4_sys::seL4_NoError {
+            log::warn!(
+                "[rt-fix] cnode.delete cleanup failed slot=0x{slot:04x} err={err}",
+                slot = proof_slot,
+                err = delete_err
+            );
+        }
+    } else {
+        log::warn!(
+            "[rt-fix] cnode.copy proof failed slot=0x{slot:04x} err={err}",
+            slot = proof_slot,
+            err = proof_err
+        );
     }
 
     let mut kernel_env = KernelEnv::new(bootinfo_ref);
@@ -610,7 +666,7 @@ fn bootstrap<P: Platform>(
 
     let ipc_vaddr = ipc_buffer_ptr.map(|ptr| ptr.as_ptr() as usize);
 
-    let ep_slot = match ep::bootstrap_ep(bootinfo_ref, &mut boot_cspace) {
+    let ep_slot = match ep::bootstrap_ep(bootinfo_ref, &mut boot_cspace, &retype_tuple) {
         Ok(ep_slot) => ep_slot,
         Err(err) => {
             crate::trace::trace_fail(b"bootstrap_ep", err);
@@ -625,6 +681,41 @@ fn bootstrap<P: Platform>(
             panic!("bootstrap_ep failed: {}", error_name(err));
         }
     };
+
+    if let Some(dev_ut) = find_pl011_device_ut(bootinfo_ref) {
+        match boot_cspace.alloc_slot() {
+            Ok(page_slot) => {
+                let map_err = early_uart::map_pl011_smallpage(
+                    dev_ut,
+                    page_slot as seL4_Word,
+                    &retype_tuple,
+                    sel4_sys::seL4_CapInitThreadVSpace,
+                );
+                if map_err == sel4_sys::seL4_NoError {
+                    early_uart::register_console_base(early_uart::PL011_VADDR);
+                    log::info!(
+                        "[rt-fix] map:pl011 OK vaddr=0x{vaddr:08x}",
+                        vaddr = early_uart::PL011_VADDR
+                    );
+                } else {
+                    log::warn!(
+                        "[rt-fix] map:pl011 failed ut=0x{ut:04x} slot=0x{slot:04x} err={err}",
+                        ut = dev_ut,
+                        slot = page_slot,
+                        err = map_err
+                    );
+                }
+            }
+            Err(err) => {
+                log::warn!(
+                    "[rt-fix] map:pl011 slot allocation failed err={err}",
+                    err = err
+                );
+            }
+        }
+    } else {
+        log::warn!("[rt-fix] map:pl011 device untyped not found");
+    }
 
     crate::trace::trace_ep(ep_slot);
 
