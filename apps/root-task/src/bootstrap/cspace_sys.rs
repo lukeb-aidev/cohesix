@@ -116,7 +116,7 @@ pub enum RetypeArgsError {
         /// Expected canonical guard index.
         expected: sys::seL4_CPtr,
     },
-    /// Destination depth must match the canonical guard depth (WordBits).
+    /// Destination depth must match the canonical guard depth (zero).
     DepthMismatch {
         /// Depth supplied by the caller.
         provided: u8,
@@ -256,7 +256,7 @@ pub fn validate_retype_args(
             expected: CANONICAL_CNODE_INDEX,
         });
     }
-    let expected_depth = sys::seL4_WordBits as u8;
+    let expected_depth = 0u8;
     if args.cnode_depth != expected_depth {
         return Err(RetypeArgsError::DepthMismatch {
             provided: args.cnode_depth,
@@ -500,10 +500,10 @@ pub fn init_cnode_retype_dest(
         "slot 0x{slot:04x} exceeds init CNode capacity (limit=0x{capacity:04x})",
     );
     let root = bi_init_cnode_cptr();
-    let depth_bits = u8::try_from(init_bits).expect("initThreadCNodeSizeBits must fit within u8");
     let node_index = CANONICAL_CNODE_INDEX as sys::seL4_Word;
-    let node_depth = sys::seL4_WordBits as sys::seL4_Word;
+    let node_depth = 0;
     let node_offset = slot as sys::seL4_Word;
+    let depth_bits = u8::try_from(init_bits).expect("initThreadCNodeSizeBits must fit within u8");
     guard_root_path(depth_bits, node_index, node_depth, node_offset);
     (root, node_index, node_depth, node_offset)
 }
@@ -518,7 +518,7 @@ pub fn retype_into_root(
 ) -> sys::seL4_Error {
     let root = sys::seL4_CapInitThreadCNode;
     let index = CANONICAL_CNODE_INDEX as sys::seL4_Word;
-    let depth = sys::seL4_WordBits as sys::seL4_Word;
+    let depth = 0;
     let offset = dst_slot as sys::seL4_Word;
 
     guard_root_path(init_cnode_bits, index, depth, offset);
@@ -856,7 +856,6 @@ pub fn untyped_retype_into_init_root(
     dst_slot: sys::seL4_CPtr,
 ) -> Result<(), RetypeCallError> {
     let init_bits = bi_init_cnode_bits();
-    let depth_bits = u8::try_from(init_bits).expect("initThreadCNodeSizeBits must fit within u8");
     let slot_capacity = if init_bits as usize >= usize::BITS as usize {
         usize::MAX
     } else {
@@ -887,7 +886,7 @@ pub fn untyped_retype_into_init_root(
     }
 
     let (root, node_index, node_depth, node_offset) = init_cnode_retype_dest(dst_slot);
-    let expected_depth = sys::seL4_WordBits as sys::seL4_Word;
+    let expected_depth = 0;
     debug_assert_eq!(root, sel4::seL4_CapInitThreadCNode);
     debug_assert_eq!(node_index, CANONICAL_CNODE_INDEX as sys::seL4_Word);
     debug_assert_eq!(node_depth, expected_depth);
@@ -908,7 +907,7 @@ pub fn untyped_retype_into_init_root(
     {
         let (empty_start, empty_end) = boot_empty_window();
         debug_assert_eq!(node_index, CANONICAL_CNODE_INDEX as sys::seL4_Word);
-        debug_assert_eq!(args.cnode_depth, sys::seL4_WordBits as u8);
+        debug_assert_eq!(args.cnode_depth, expected_depth as u8);
         debug_assert!(args.dest_offset >= empty_start && args.dest_offset < empty_end);
 
         validate_retype_args(&args, empty_start, empty_end)?;
@@ -1090,7 +1089,7 @@ mod tests {
             if let Some(trace) = super::host_trace::take_last() {
                 assert_eq!(trace.root, bi_init_cnode_cptr());
                 assert_eq!(trace.node_index, CANONICAL_CNODE_INDEX as _);
-                let expected_depth = sys::seL4_WordBits as sys::seL4_Word;
+                let expected_depth: sys::seL4_Word = 0;
                 assert_eq!(trace.node_depth, expected_depth);
                 assert_eq!(trace.node_offset, slot as _);
                 assert_eq!(trace.object_type, 0);
@@ -1114,7 +1113,7 @@ mod tests {
         let (root, idx, depth, off) = super::init_cnode_retype_dest(slot as _);
         assert_eq!(root, bi_init_cnode_cptr());
         assert_eq!(idx, CANONICAL_CNODE_INDEX as _);
-        let expected_depth = sys::seL4_WordBits as sys::seL4_Word;
+        let expected_depth: sys::seL4_Word = 0;
         assert_eq!(depth, expected_depth);
         assert_eq!(off, slot as _);
     }
