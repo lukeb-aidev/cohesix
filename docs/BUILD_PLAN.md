@@ -660,7 +660,100 @@ Deliver a library of host/worker sidecars (outside the VM where possible) that b
 - Validation prevents enabling sidecars without corresponding host dependencies or event-pump capacity.
 
 ---
+## Milestone 17a — `cohsh-core` Extraction (Shared Grammar & Transport)
+**Purpose:** One command/ACK grammar for CLI, automation, and UI.  
+**Deliverables**
+- New crate `crates/cohsh-core/` with verb grammar (`attach`, `tail`, `spawn`, `kill`, `quit`), ACK/ERR/END model, login throttling, ticket checks.
+- 9P client transport over smoltcp TCP sockets (feature-gated).
+- Golden-transcript fixtures for parity across transports.
+**Checks**
+- Console (serial/TCP) ≡ `cohsh` CLI ≡ `cohsh-core` tests (byte-for-byte ACK/ERR/END).
+- Heapless build passes; no unbounded allocations.
 
+---
+
+## Milestone 17b — `cohsh` as 9P Client Library
+**Purpose:** File-centric client API for automation and UI.  
+**Deliverables**
+- `CohClient` with `open/read/write/clunk`, `tail()` streaming helper.
+- Helpers for `/queen/ctl` JSON (`spawn`, `kill`, `budget`).
+- Script harness that replays sessions via 9P instead of console.  
+**Checks**
+- `tail()` stream over 9P matches console stream identically.
+- `spawn/kill` via file writes produce identical ACK/ERR semantics.
+
+---
+
+## Milestone 17c — NineDoor UI Providers
+**Purpose:** System summaries as read-only 9P files (no new protocols).  
+**Deliverables**
+- Providers:  
+  - `/proc/9p/{sessions,outstanding,short_writes}`  
+  - `/proc/ingest/{p50_ms,p95_ms,backpressure}`  
+  - `/policy/preflight/{req,diff}`  
+  - `/updates/<epoch>/{manifest.cbor,status}`
+- `.cbor` and `.txt` variants; cursor-resume semantics for long reads.  
+**Checks**
+- Each provider ≤ 32 KiB per read; deterministic EOF; fuzzed frames don’t panic.
+
+---
+
+## Milestone 17d — SwarmUI Desktop (Tauri, Pure 9P/TCP)
+**Purpose:** First operator UI speaking only 9P over smoltcp TCP.  
+**Deliverables**
+- `apps/swarmui/` (Tauri): Rust backend links `cohsh-core`.
+- Panels: **Telemetry Rings** (tail `/worker/*/telemetry`), **Fleet Map** (read `/proc/ingest/*` + worker directories).
+- Offline CBOR cache under `$DATA_DIR/snapshots/`.
+- Ticket/lease auth identical to CLI.  
+**Checks**
+- Renders telemetry; shows exact `OK …` then stream, terminates with `END`.
+- Build proves no HTTP/REST dependencies (static link audit).
+
+---
+
+## Milestone 17e — Edge Local Status (UEFI Host Tool)
+**Purpose:** Installer/field tech dashboard on bare-metal edges.  
+**Deliverables**
+- `coh-status` (CLI or tiny Tauri): read-only views of `/proc/boot`, `/proc/attest/*`, `/worker/*/telemetry` via localhost 9P/TCP.
+- TPM attestation check displaying manifest fingerprint.  
+**Checks**
+- Works offline; wrong/expired ticket → deterministic `ERR reason=Permission`.
+- CBOR parsing identical to SwarmUI.
+
+---
+
+## Milestone 17f — CLI/UI Convergence Tests
+**Purpose:** Prove UI, CLI, and console equivalence at the boundary.  
+**Deliverables**
+- Golden transcript harness comparing console, `cohsh`, and `cohsh-core`.
+- CI job that fails on any byte-level drift in ACK/ERR/END.  
+**Checks**
+- Script `help → attach → log → spawn → tail → quit` matches across all frontends.
+- Timing deltas < 50 ms in smoltcp simulation (tolerance documented).
+
+---
+
+## Milestone 17g — UI Security Hardening (Tickets & Quotas)
+**Purpose:** Enforce least privilege for interactive tails and controls.  
+**Deliverables**
+- Ticket scopes `{path, verb, rate}`; per-ticket bandwidth and cursor quotas.
+- `PumpMetrics` adds `ui_reads`, `ui_denies`; audit lines for denials.  
+**Checks**
+- Write with read-only ticket → `ERR EPERM` across all transports.
+- Quota breach → `ERR ELIMIT`; audit lines consistent and deterministic.
+
+---
+
+## Milestone 17h — Deterministic Snapshot & Replay (UI Testing)
+**Purpose:** Repeatable UI regressions without live targets.  
+**Deliverables**
+- `cohsh-core` trace recorder/replayer for 9P frames + ACKs (`.trace` files).
+- SwarmUI “offline replay” mode; docs in `docs/TEST_PLAN.md`.  
+**Checks**
+- Replay reproduces identical telemetry curves and ACK sequences.
+- Trace size target ≤ 1 MiB per 10 s of tail traffic.
+
+---
 ### Docs-as-Built Alignment (applies to Milestone 8 onward)
 
 To prevent drift:
