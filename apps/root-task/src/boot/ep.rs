@@ -70,7 +70,8 @@ pub fn bootstrap_ep(bi: &seL4_BootInfo, cs: &mut CSpace) -> Result<seL4_CPtr, se
 
     if crate::boot::flags::trace_dest() {
         log::info!(
-            "[boot] endpoint retype dest root=initCNode index=0 depth={depth} offset=0x{offset:04x}",
+            "[boot] endpoint retype dest root=initCNode index=0x{index:04x} depth={depth} offset=0x{offset:04x}",
+            index = node_index,
             depth = node_depth_word,
             offset = node_offset_word,
         );

@@ -674,11 +674,12 @@ fn bootstrap<P: Platform>(
             );
         } else {
             log::info!(
-                "[cnode] copy root=0x{root:04x} dst=0x{dst:04x} src=0x{src:04x} depth={depth}",
+                "[cnode] copy root=0x{root:04x} dst=0x{dst:04x} src=0x{src:04x} guard_depth={guard} root_bits={bits}",
                 root = boot_cspace.root(),
                 dst = slot,
                 src = tcb_src_slot,
-                depth = boot_cspace.depth()
+                guard = sel4_sys::seL4_WordBits,
+                bits = boot_cspace.depth()
             );
         }
         crate::bp!("tcb.copy.end");

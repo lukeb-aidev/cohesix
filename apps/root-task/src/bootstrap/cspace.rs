@@ -323,13 +323,13 @@ pub fn cspace_first_retypes(
     };
     dest.set_slot_offset(tcb_copy_slot);
     let rights = cap_rights_read_write_grant();
-    let depth_bits: u8 = WORD_BITS.try_into().expect("WORD_BITS must fit in u8");
+    let guard_depth_bits: u8 = WORD_BITS.try_into().expect("WORD_BITS must fit in u8");
     let copy_err = cspace_sys::cnode_copy_direct_dest(
-        depth_bits,
+        dest.root_bits,
         tcb_copy_slot,
         seL4_CapInitThreadCNode,
         sel4::seL4_CapInitThreadTCB,
-        depth_bits,
+        guard_depth_bits,
         rights,
     );
     let mut copy_line = String::<MAX_DIAGNOSTIC_LEN>::new();
@@ -489,8 +489,8 @@ impl CSpaceCtx {
             "init CNode width {init} exceeds WordBits {word_bits}",
             init = init_cnode_bits,
         );
-        // Init-root retypes use the bootinfo-advertised guard depth.
-        let invocation_depth_bits = init_cnode_bits;
+        // Init-root invocations must supply seL4_WordBits as the traversal depth.
+        let invocation_depth_bits: u8 = WORD_BITS.try_into().expect("WORD_BITS must fit within u8");
         let (first_free, last_free) = bi.init_cnode_empty_range();
         assert!(
             first_free < last_free,
@@ -621,10 +621,11 @@ impl CSpaceCtx {
 
     fn log_direct_init_path(&self, dst_slot: sel4::seL4_CPtr) {
         let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
+        let guard_depth = WORD_BITS;
         if write!(
             &mut line,
-            "[retype] path=direct:init-cnode dest=0x{dst_slot:04x} depth={} root_bits={} window=[0x{start:04x}..0x{end:04x})",
-            self.init_cnode_bits,
+            "[retype] path=direct:init-cnode dest=0x{dst_slot:04x} guard_depth={} root_bits={} window=[0x{start:04x}..0x{end:04x})",
+            guard_depth,
             self.dest.root_bits,
             start = self.dest.empty_start,
             end = self.dest.empty_end,
@@ -649,7 +650,7 @@ impl CSpaceCtx {
                 &mut line,
                 "[cnode] Copy err={err} root=0x{root:04x} dest(index=0x{dest_index:04x},depth={depth}) src(index=0x{src_index:04x},depth={depth})",
                 root = self.root_cnode_cap,
-                depth = self.init_cnode_bits,
+                depth = WORD_BITS,
             )
             .is_err()
             {
@@ -673,7 +674,7 @@ impl CSpaceCtx {
                 &mut line,
                 "[cnode] Mint err={err} root=0x{root:04x} dest(index=0x{dest_index:04x},depth={depth},offset=0) src(index=0x{src_index:04x},depth={depth}) badge={badge}",
                 root = self.root_cnode_cap,
-                depth = self.init_cnode_bits,
+                depth = WORD_BITS,
             )
             .is_err()
             {
@@ -698,7 +699,7 @@ impl CSpaceCtx {
             if write!(
                 &mut line,
                 "[retype] path={path} err={err} root=0x{root:04x} untyped_slot=0x{untyped:04x} node(idx=0,depth={},off=0x{node_offset:04x}) dest_slot=0x{dest_index:04x} ty={obj_ty} sz={size_bits} window=[0x{start:04x}..0x{end:04x}) root_bits={bits}",
-                dest.root_bits,
+                WORD_BITS,
                 path = dest.path_label(),
                 root = dest.root,
                 node_offset = dest.slot_offset,
