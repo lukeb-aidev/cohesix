@@ -64,7 +64,7 @@ pub mod boot;
 #[cfg(feature = "kernel")]
 pub mod sel4;
 
-#[cfg(any(test, feature = "kernel"))]
+#[cfg(feature = "kernel")]
 pub mod sel4_view;
 
 #[cfg(feature = "kernel")]
