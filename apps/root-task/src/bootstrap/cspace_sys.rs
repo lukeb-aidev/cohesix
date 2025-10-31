@@ -555,8 +555,14 @@ pub fn retype_into_root(
     }
 
     debug_log(format_args!(
-        "[retype:call] ut={:#06x} type={} size_bits={} root={:#06x} index=0x{index:04x} depth={} offset=0x{offset:04x}",
-        untyped, obj_type, size_bits, root, index, depth, offset
+        "[retype:call] ut={untyped:#06x} type={obj_type} size_bits={size_bits} root={root:#06x} index=0x{index:04x} depth={depth} offset=0x{offset:04x}",
+        untyped = untyped,
+        obj_type = obj_type,
+        size_bits = size_bits,
+        root = root,
+        index = index,
+        depth = depth,
+        offset = offset,
     ));
 
     #[cfg(target_os = "none")]

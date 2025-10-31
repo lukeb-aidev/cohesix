@@ -346,10 +346,10 @@ pub fn cspace_first_retypes(
         }
     } else if write!(
         &mut copy_line,
-        "[cnode:copy] src=TCB depth={} -> dst=0x{slot:04x} ERR={}",
+        "[cnode:copy] src=TCB depth={} -> dst=0x{slot:04x} ERR={err}",
         WORD_BITS,
         slot = tcb_copy_slot,
-        copy_err as i32,
+        err = copy_err as i32,
     )
     .is_err()
     {
