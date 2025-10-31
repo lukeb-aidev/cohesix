@@ -88,6 +88,56 @@ When the syscall is absent for the selected platform the feature safely
 falls back to returning `-1`, preserving the historical write-only
 console semantics.
 
+### Interactive Shell
+
+Enable `debug-input` alongside `kernel` to reach the early interactive
+console exposed on the PL011 UART:
+
+```
+cargo build -p root-task --release \
+  --no-default-features --features kernel,debug-input \
+  --target aarch64-unknown-none
+```
+
+Boot logs will now include the corrected capability path diagnostics and
+device mapping beacons:
+
+```
+[cspace:init] root=0x0002 bits=13 window=[0x0104..0x2000)
+[cnode:copy] src=TCB depth=64 -> dst=0x0104 OK
+[retype:call] ut=0x00e6 type=5 size_bits=0 root=0x0002 index=0x0002 depth=64 offset=0x0105
+[retype:ret] err=0
+[vspace:map] pl011 paddr=0x09000000 -> vaddr=0x70000000 attrs=UNCACHED OK
+[uart] init OK
+```
+
+Once the boot sequence reaches the interactive loop the shell presents a
+`cohesix>` prompt and understands a minimal command set:
+
+```
+cohesix> help
+Commands: help, echo <s>, hexdump <addr> <len>, caps, reboot
+cohesix> caps
+initCNode=0x0002 vspace=0x0003 tcb=0x0004 ep_console=0x0105 tcb_copy=0x0104
+cohesix> hexdump 0x70000000 40
+0x0000000070000000: 30 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  |0...............|
+...
+```
+
+Use the standard QEMU launch parameters to boot the resulting image:
+
+```
+qemu-system-aarch64 -machine virt,gic-version=2 -cpu cortex-a57 -m 1024 -smp 1 \
+  -serial mon:stdio -display none \
+  -kernel out/cohesix/staging/elfloader \
+  -initrd out/cohesix/cohesix-system.cpio \
+  -device loader,file=out/cohesix/staging/kernel.elf,addr=0x70000000,force-raw=on \
+  -device loader,file=out/cohesix/staging/rootserver,addr=0x80000000,force-raw=on
+```
+
+The shell intentionally avoids IRQ-driven input so the root task remains
+single-threaded during bring-up.
+
 Host-mode simulation in `src/host.rs` now reuses the production event
 pump. A scripted set of console commands is injected via a loopback
 serial driver so developers can observe the authenticated command flow

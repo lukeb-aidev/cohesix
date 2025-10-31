@@ -9,7 +9,6 @@ use core::cmp;
 use core::convert::Infallible;
 use core::fmt::{self, Write};
 use core::panic::PanicInfo;
-#[cfg(all(feature = "kernel", not(sel4_config_printing)))]
 use core::ptr;
 use core::sync::atomic::{AtomicU8, Ordering};
 
@@ -18,7 +17,7 @@ use cohesix_ticket::Role;
 use crate::boot::{bi_extra, ep};
 use crate::bootstrap::{
     boot_tracer,
-    cspace::{cspace_first_retypes, CSpaceCtx},
+    cspace::{cspace_first_retypes, CSpaceCtx, FirstRetypeResult},
     ipcbuf, log as boot_log, pick_untyped,
     retype::{retype_one, retype_selection},
     BootPhase,
@@ -273,14 +272,36 @@ unsafe extern "C" fn pl011_debug_emit(context: *mut (), byte: u8) {
     }
 }
 
+/// Capability summary exposed to the interactive console.
+#[derive(Copy, Clone, Debug)]
+pub struct ConsoleCaps {
+    /// Init CNode capability pointer.
+    pub init_cnode: sel4::seL4_CPtr,
+    /// Init VSpace capability pointer.
+    pub init_vspace: sel4::seL4_CPtr,
+    /// Init TCB capability pointer.
+    pub init_tcb: sel4::seL4_CPtr,
+    /// Slot containing the console endpoint minted during bootstrap.
+    pub console_endpoint_slot: sel4::seL4_CPtr,
+    /// Optional slot where the init TCB capability was copied for diagnostics.
+    pub tcb_copy_slot: Option<sel4::seL4_CPtr>,
+}
+
+fn parse_hex(arg: &str) -> Option<usize> {
+    let trimmed = arg.trim_start_matches("0x");
+    usize::from_str_radix(trimmed, 16).ok()
+}
+
+const MAX_HEXDUMP_LEN: usize = 256;
+
 /// Minimal blocking console loop used during early bring-up.
-pub fn start_console(uart: Pl011) -> ! {
+pub fn start_console(uart: Pl011, caps: ConsoleCaps) -> ! {
     let mut console = Console::new(uart);
-    let _ = writeln!(console, "[cohesix] console ready");
+    let _ = writeln!(console, "[console] ready");
     let mut buffer = [0u8; 256];
 
     loop {
-        let _ = write!(console, "cohsh> ");
+        let _ = write!(console, "cohesix> ");
         let count = console.read_line(&mut buffer);
         let line = match core::str::from_utf8(&buffer[..count]) {
             Ok(text) => text.trim(),
@@ -294,22 +315,99 @@ pub fn start_console(uart: Pl011) -> ! {
             continue;
         }
 
-        if line.eq_ignore_ascii_case("help") {
-            let _ = writeln!(console, "commands: help, echo <txt>, reboot (stub)");
-            continue;
-        }
+        let mut parts = line.split_whitespace();
+        let command = parts.next().unwrap_or("");
 
-        if let Some(rest) = line.strip_prefix("echo ") {
-            let _ = writeln!(console, "{}", rest);
-            continue;
-        }
+        match command {
+            "help" => {
+                let _ = writeln!(
+                    console,
+                    "Commands: help, echo <s>, hexdump <addr> <len>, caps, reboot"
+                );
+            }
+            "echo" => {
+                let rest = line[command.len()..].trim_start();
+                let _ = writeln!(console, "{}", rest);
+            }
+            "hexdump" => {
+                let Some(addr_str) = parts.next() else {
+                    let _ = writeln!(console, "usage: hexdump <addr> <len>");
+                    continue;
+                };
+                let Some(len_str) = parts.next() else {
+                    let _ = writeln!(console, "usage: hexdump <addr> <len>");
+                    continue;
+                };
+                let Some(mut addr) = parse_hex(addr_str) else {
+                    let _ = writeln!(console, "invalid address");
+                    continue;
+                };
+                let Some(len_raw) = parse_hex(len_str) else {
+                    let _ = writeln!(console, "invalid length");
+                    continue;
+                };
+                let len = len_raw.min(MAX_HEXDUMP_LEN);
+                if len == 0 {
+                    let _ = writeln!(console, "length must be > 0");
+                    continue;
+                }
+                if addr.checked_add(len).is_none() {
+                    let _ = writeln!(console, "address overflow");
+                    continue;
+                }
 
-        if line.eq_ignore_ascii_case("reboot") {
-            let _ = writeln!(console, "reboot not implemented");
-            continue;
+                let mut remaining = len;
+                while remaining > 0 {
+                    let line_len = remaining.min(16);
+                    let mut bytes = [0u8; 16];
+                    for (index, slot) in bytes.iter_mut().take(line_len).enumerate() {
+                        unsafe {
+                            *slot = ptr::read_volatile((addr + index) as *const u8);
+                        }
+                    }
+                    let _ = write!(console, "0x{addr:016x}: ");
+                    for (index, byte) in bytes.iter().enumerate() {
+                        if index < line_len {
+                            let _ = write!(console, "{:02x} ", byte);
+                        } else {
+                            let _ = write!(console, "   ");
+                        }
+                    }
+                    let _ = write!(console, " |");
+                    for byte in bytes.iter().take(line_len) {
+                        let ch = match byte {
+                            0x20..=0x7e => char::from(*byte),
+                            _ => '.',
+                        };
+                        let _ = write!(console, "{ch}");
+                    }
+                    let _ = writeln!(console, "|");
+                    addr = addr.saturating_add(line_len);
+                    remaining -= line_len;
+                }
+            }
+            "caps" => {
+                let mut line = HeaplessString::<64>::new();
+                let _ = write!(
+                    line,
+                    "initCNode=0x{cnode:04x} vspace=0x{vspace:04x} tcb=0x{tcb:04x} ep_console=0x{ep:04x}",
+                    cnode = caps.init_cnode,
+                    vspace = caps.init_vspace,
+                    tcb = caps.init_tcb,
+                    ep = caps.console_endpoint_slot,
+                );
+                if let Some(copy_slot) = caps.tcb_copy_slot {
+                    let _ = write!(line, " tcb_copy=0x{copy:04x}", copy = copy_slot);
+                }
+                let _ = writeln!(console, "{}", line.as_str());
+            }
+            "reboot" => {
+                let _ = writeln!(console, "(stub) reboot not implemented");
+            }
+            _ => {
+                let _ = writeln!(console, "unknown command: {}", line);
+            }
         }
-
-        let _ = writeln!(console, "unknown: {}", line);
     }
 }
 
@@ -462,29 +560,36 @@ fn bootstrap<P: Platform>(
         boot_tracer().advance(BootPhase::DTBParseDeferred);
     }
 
+    let mut first_retypes: Option<FirstRetypeResult> = None;
     if let Some((first_ut_cap, _)) = bi_extra::first_regular_untyped_from_extra(bootinfo_ref) {
-        if let Err(err) = cspace_first_retypes(bootinfo_ref, &mut boot_cspace, first_ut_cap) {
-            let mut line = heapless::String::<160>::new();
-            let _ = write!(
-                line,
-                "[boot] first retypes failed: {} ({})",
-                err as i32,
-                error_name(err),
-            );
-            console.writeln_prefixed(line.as_str());
-            panic!("first retypes failed: {}", error_name(err));
+        match cspace_first_retypes(bootinfo_ref, &mut boot_cspace, first_ut_cap) {
+            Ok(result) => first_retypes = Some(result),
+            Err(err) => {
+                let mut line = heapless::String::<160>::new();
+                let _ = write!(
+                    line,
+                    "[boot] first retypes failed: {} ({})",
+                    err as i32,
+                    error_name(err),
+                );
+                console.writeln_prefixed(line.as_str());
+                panic!("first retypes failed: {}", error_name(err));
+            }
         }
     } else if let Some(first_ut_cap) = first_regular_untyped(bootinfo_ref) {
-        if let Err(err) = cspace_first_retypes(bootinfo_ref, &mut boot_cspace, first_ut_cap) {
-            let mut line = heapless::String::<160>::new();
-            let _ = write!(
-                line,
-                "[boot] first retypes failed: {} ({})",
-                err as i32,
-                error_name(err),
-            );
-            console.writeln_prefixed(line.as_str());
-            panic!("first retypes failed: {}", error_name(err));
+        match cspace_first_retypes(bootinfo_ref, &mut boot_cspace, first_ut_cap) {
+            Ok(result) => first_retypes = Some(result),
+            Err(err) => {
+                let mut line = heapless::String::<160>::new();
+                let _ = write!(
+                    line,
+                    "[boot] first retypes failed: {} ({})",
+                    err as i32,
+                    error_name(err),
+                );
+                console.writeln_prefixed(line.as_str());
+                panic!("first retypes failed: {}", error_name(err));
+            }
         }
     } else {
         console.writeln_prefixed("[boot] no RAM-backed untyped for proof retypes");
@@ -545,35 +650,40 @@ fn bootstrap<P: Platform>(
     debug_assert_eq!(ep_slot, root_endpoint());
     let rights = cap_rights_read_write_grant();
 
-    crate::bp!("tcb.copy.begin");
-    let tcb_copy_slot = match boot_cspace.alloc_slot() {
-        Ok(slot) => slot,
-        Err(err) => {
+    let tcb_copy_slot = if let Some(ref info) = first_retypes {
+        info.tcb_copy_slot
+    } else {
+        crate::bp!("tcb.copy.begin");
+        let slot = match boot_cspace.alloc_slot() {
+            Ok(slot) => slot,
+            Err(err) => {
+                panic!(
+                    "failed to allocate init CSpace slot for TCB copy: {} ({})",
+                    err,
+                    error_name(err)
+                );
+            }
+        };
+        let tcb_src_slot = bootinfo_ref.init_tcb_cap();
+        let copy_err = boot_cspace.copy_here(slot, tcb_src_slot, rights);
+        if let Err(code) = crate::bootstrap::ktry("tcb.copy", copy_err as i32) {
             panic!(
-                "failed to allocate init CSpace slot for TCB copy: {} ({})",
-                err,
-                error_name(err)
+                "copying init TCB capability failed: {} ({})",
+                code,
+                error_name(copy_err)
+            );
+        } else {
+            log::info!(
+                "[cnode] copy root=0x{root:04x} dst=0x{dst:04x} src=0x{src:04x} depth={depth}",
+                root = boot_cspace.root(),
+                dst = slot,
+                src = tcb_src_slot,
+                depth = boot_cspace.depth()
             );
         }
+        crate::bp!("tcb.copy.end");
+        slot
     };
-    let tcb_src_slot = bootinfo_ref.init_tcb_cap();
-    let copy_err = boot_cspace.copy_here(tcb_copy_slot, tcb_src_slot, rights);
-    if let Err(code) = crate::bootstrap::ktry("tcb.copy", copy_err as i32) {
-        panic!(
-            "copying init TCB capability failed: {} ({})",
-            code,
-            error_name(copy_err)
-        );
-    } else {
-        log::info!(
-            "[cnode] copy root=0x{root:04x} dst=0x{dst:04x} src=0x{src:04x} depth={depth}",
-            root = boot_cspace.root(),
-            dst = tcb_copy_slot,
-            src = tcb_src_slot,
-            depth = boot_cspace.depth()
-        );
-    }
-    crate::bp!("tcb.copy.end");
 
     if let Some(ipc_vaddr) = ipc_vaddr {
         match ipcbuf::install_ipc_buffer(&mut kernel_env, tcb_copy_slot, ipc_vaddr) {
@@ -971,7 +1081,7 @@ fn bootstrap<P: Platform>(
     let mut map_line = heapless::String::<128>::new();
     let _ = write!(
         map_line,
-        "PL011 mapped @ 0x{vaddr:016x} (paddr=0x{paddr:08x})",
+        "[vspace:map] pl011 paddr=0x{paddr:08x} -> vaddr=0x{vaddr:016x} attrs=UNCACHED OK",
         vaddr = mapped_vaddr,
         paddr = PL011_PADDR,
     );
@@ -979,6 +1089,7 @@ fn bootstrap<P: Platform>(
 
     let mut driver = Pl011::new(uart_region.ptr());
     driver.init();
+    console.writeln_prefixed("[uart] init OK");
     #[cfg(all(feature = "kernel", not(sel4_config_printing)))]
     {
         unsafe {
@@ -1023,7 +1134,17 @@ fn bootstrap<P: Platform>(
 
     #[cfg(feature = "debug-input")]
     {
-        start_console(driver);
+        let console_caps = ConsoleCaps {
+            init_cnode: bootinfo_ref.init_cnode_cap(),
+            init_vspace: sel4_sys::seL4_CapInitThreadVSpace,
+            init_tcb: bootinfo_ref.init_tcb_cap(),
+            console_endpoint_slot: first_retypes
+                .as_ref()
+                .map(|info| info.endpoint_slot)
+                .unwrap_or(sel4::seL4_CapNull),
+            tcb_copy_slot: first_retypes.as_ref().map(|info| info.tcb_copy_slot),
+        };
+        start_console(driver, console_caps);
     }
 
     #[cfg(not(feature = "debug-input"))]

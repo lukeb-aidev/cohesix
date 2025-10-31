@@ -5,7 +5,7 @@
 #[cfg(all(test, not(target_os = "none")))]
 extern crate alloc;
 
-use core::convert::TryFrom;
+use core::convert::{TryFrom, TryInto};
 use core::fmt;
 
 use crate::boot;
@@ -278,7 +278,7 @@ pub fn validate_retype_args(
     Ok(())
 }
 
-pub const CANONICAL_CNODE_INDEX: sys::seL4_CPtr = 0;
+pub const CANONICAL_CNODE_INDEX: sys::seL4_CPtr = sys::seL4_CapInitThreadCNode;
 
 #[cfg(target_os = "none")]
 #[inline(always)]
@@ -475,8 +475,18 @@ pub fn init_cnode_dest(
         (slot as usize) < capacity,
         "slot 0x{slot:04x} exceeds init CNode capacity (limit=0x{capacity:04x})",
     );
+    let root = bi_init_cnode_cptr();
     let guard_depth = sys::seL4_WordBits as sys::seL4_Word;
-    (bi_init_cnode_cptr(), slot as sys::seL4_Word, guard_depth, 0)
+    let offset = slot as sys::seL4_Word;
+    guard_root_path(
+        init_bits
+            .try_into()
+            .expect("initThreadCNodeSizeBits must fit within u8"),
+        root as sys::seL4_Word,
+        guard_depth,
+        offset,
+    );
+    (root, root as sys::seL4_Word, guard_depth, offset)
 }
 
 #[inline(always)]
@@ -500,8 +510,8 @@ pub fn init_cnode_retype_dest(
         "slot 0x{slot:04x} exceeds init CNode capacity (limit=0x{capacity:04x})",
     );
     let root = bi_init_cnode_cptr();
-    let node_index = CANONICAL_CNODE_INDEX as sys::seL4_Word;
-    let node_depth = 0;
+    let node_index = root as sys::seL4_Word;
+    let node_depth = sys::seL4_WordBits as sys::seL4_Word;
     let node_offset = slot as sys::seL4_Word;
     let depth_bits = u8::try_from(init_bits).expect("initThreadCNodeSizeBits must fit within u8");
     guard_root_path(depth_bits, node_index, node_depth, node_offset);
@@ -517,8 +527,8 @@ pub fn retype_into_root(
     dst_slot: sys::seL4_CPtr,
 ) -> sys::seL4_Error {
     let root = sys::seL4_CapInitThreadCNode;
-    let index = CANONICAL_CNODE_INDEX as sys::seL4_Word;
-    let depth = 0;
+    let index = root as sys::seL4_Word;
+    let depth = sys::seL4_WordBits as sys::seL4_Word;
     let offset = dst_slot as sys::seL4_Word;
 
     guard_root_path(init_cnode_bits, index, depth, offset);
@@ -545,7 +555,7 @@ pub fn retype_into_root(
     }
 
     debug_log(format_args!(
-        "[retype:call] ut={:#06x} type={} size_bits={} root={:#06x} index={} depth={} offset={}",
+        "[retype:call] ut={:#06x} type={} size_bits={} root={:#06x} index=0x{index:04x} depth={} offset=0x{offset:04x}",
         untyped, obj_type, size_bits, root, index, depth, offset
     ));
 
@@ -1025,9 +1035,9 @@ pub(crate) fn init_cnode_direct_destination_words(
         "destination slot {dst_slot:#x} exceeds init CNode capacity (bits={init_cnode_bits})"
     );
     (
-        dst_slot as sys::seL4_Word,
+        bi_init_cnode_cptr() as sys::seL4_Word,
         sys::seL4_WordBits as sys::seL4_Word,
-        0,
+        dst_slot as sys::seL4_Word,
     )
 }
 
@@ -1088,8 +1098,8 @@ mod tests {
         {
             if let Some(trace) = super::host_trace::take_last() {
                 assert_eq!(trace.root, bi_init_cnode_cptr());
-                assert_eq!(trace.node_index, CANONICAL_CNODE_INDEX as _);
-                let expected_depth: sys::seL4_Word = 0;
+                assert_eq!(trace.node_index, bi_init_cnode_cptr() as _);
+                let expected_depth: sys::seL4_Word = sys::seL4_WordBits as sys::seL4_Word;
                 assert_eq!(trace.node_depth, expected_depth);
                 assert_eq!(trace.node_offset, slot as _);
                 assert_eq!(trace.object_type, 0);
@@ -1112,8 +1122,8 @@ mod tests {
         let slot = 0x10u64;
         let (root, idx, depth, off) = super::init_cnode_retype_dest(slot as _);
         assert_eq!(root, bi_init_cnode_cptr());
-        assert_eq!(idx, CANONICAL_CNODE_INDEX as _);
-        let expected_depth: sys::seL4_Word = 0;
+        assert_eq!(idx, bi_init_cnode_cptr() as _);
+        let expected_depth: sys::seL4_Word = sys::seL4_WordBits as sys::seL4_Word;
         assert_eq!(depth, expected_depth);
         assert_eq!(off, slot as _);
     }
@@ -1123,9 +1133,9 @@ mod tests {
         let slot = 0x10u64;
         let bits = 13u8;
         let (idx, depth, off) = init_cnode_direct_destination_words_for_test(bits, slot as _);
-        assert_eq!(idx, slot as _);
+        assert_eq!(idx, bi_init_cnode_cptr() as _);
         assert_eq!(depth, sys::seL4_WordBits as sys::seL4_Word);
-        assert_eq!(off, 0);
+        assert_eq!(off, slot as _);
     }
 
     #[test]

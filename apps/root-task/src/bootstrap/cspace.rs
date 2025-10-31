@@ -12,25 +12,126 @@ use heapless::String;
 
 use super::cspace_sys;
 use sel4_sys::{
-    self, seL4_BootInfo, seL4_CNode_Delete, seL4_CPtr, seL4_CapInitThreadCNode,
+    self, seL4_BootInfo, seL4_CNode, seL4_CNode_Delete, seL4_CPtr, seL4_CapInitThreadCNode,
     seL4_EndpointObject, seL4_Word,
 };
 
 const MAX_DIAGNOSTIC_LEN: usize = 224;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// Canonical representation of a capability path targeting a CNode.
+pub struct CNodePath {
+    /// Root capability selecting the destination CSpace.
+    pub root: seL4_CPtr,
+    /// Capability pointer identifying the destination CNode object.
+    pub index: seL4_CPtr,
+    /// Guard depth (in bits) associated with the destination CNode pointer.
+    pub depth: seL4_Word,
+}
+
+impl CNodePath {
+    /// Construct a new path descriptor.
+    #[must_use]
+    pub const fn new(root: seL4_CPtr, index: seL4_CPtr, depth: seL4_Word) -> Self {
+        Self { root, index, depth }
+    }
+
+    /// Render the `(root, index, depth, offset)` tuple expected by seL4 syscalls.
+    #[must_use]
+    pub const fn as_tuple(
+        &self,
+        offset: seL4_Word,
+    ) -> (seL4_CPtr, seL4_Word, seL4_Word, seL4_Word) {
+        (self.root, self.index as seL4_Word, self.depth, offset)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// Half-open slot interval within a CNode.
+pub struct SlotRange {
+    /// First usable slot within the range.
+    pub start: seL4_Word,
+    /// Exclusive end of the slot interval.
+    pub end: seL4_Word,
+}
+
+impl SlotRange {
+    /// Construct a range and validate ordering.
+    #[must_use]
+    pub const fn new(start: seL4_Word, end: seL4_Word) -> Self {
+        Self { start, end }
+    }
+
+    /// Returns `true` when `slot` lies within the interval.
+    #[must_use]
+    pub const fn contains(&self, slot: seL4_Word) -> bool {
+        slot >= self.start && slot < self.end
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// Canonical view of the init thread's root CNode as advertised by bootinfo.
+pub struct InitCNode {
+    /// Fully-qualified capability path to the init CNode.
+    pub path: CNodePath,
+    /// Empty slot interval reserved for the root task.
+    pub empty: SlotRange,
+    /// Radix width (in bits) of the init CNode object.
+    pub bits: u8,
+}
+
+impl InitCNode {
+    /// Build the descriptor from kernel boot information.
+    #[must_use]
+    pub fn from_bootinfo(bi: &seL4_BootInfo) -> Self {
+        let root = seL4_CapInitThreadCNode;
+        let depth = WORD_BITS;
+        let index = root;
+        let bits = bi.initThreadCNodeSizeBits as u8;
+        let empty = SlotRange::new(bi.empty.start as seL4_Word, bi.empty.end as seL4_Word);
+        Self {
+            path: CNodePath::new(root, index, depth),
+            empty,
+            bits,
+        }
+    }
+
+    /// Assert that `slot` resides within the bootinfo-provided empty window.
+    pub fn assert_slot(&self, slot: seL4_Word) {
+        assert!(
+            self.empty.contains(slot),
+            "slot 0x{slot:04x} outside init empty window [0x{start:04x}..0x{end:04x})",
+            start = self.empty.start,
+            end = self.empty.end,
+        );
+    }
+}
 
 #[inline(always)]
 pub fn root_cnode_path(
     init_cnode_bits: u8,
     dst_slot: seL4_Word,
 ) -> (seL4_CPtr, seL4_Word, seL4_Word, seL4_Word) {
-    let _ = init_cnode_bits;
-    (seL4_CapInitThreadCNode, 0, 0, dst_slot)
+    let path = CNodePath::new(seL4_CapInitThreadCNode, seL4_CapInitThreadCNode, WORD_BITS);
+    guard_root_path(
+        init_cnode_bits,
+        path.index as seL4_Word,
+        path.depth,
+        dst_slot,
+    );
+    path.as_tuple(dst_slot)
 }
 
 #[inline(always)]
 pub fn guard_root_path(init_cnode_bits: u8, index: seL4_Word, depth: seL4_Word, offset: seL4_Word) {
-    assert_eq!(index, 0, "index must be 0 for root-cnode");
-    assert_eq!(depth, 0, "depth must be zero for direct init CNode access");
+    assert_eq!(
+        index as seL4_CNode, seL4_CapInitThreadCNode,
+        "index must reference the init thread CNode",
+    );
+    assert_eq!(
+        depth, WORD_BITS,
+        "depth must equal seL4_WordBits for direct init CNode access",
+    );
     let limit = if init_cnode_bits as usize >= usize::BITS as usize {
         usize::MAX
     } else {
@@ -47,80 +148,6 @@ pub fn assert_root_path(
     offset: seL4_Word,
 ) {
     guard_root_path(init_cnode_bits, index, depth, offset);
-}
-
-fn first_non_device_untyped(bi: &seL4_BootInfo) -> Option<sel4::seL4_CPtr> {
-    let start = bi.untyped.start;
-    let end = bi.untyped.end;
-    if end <= start {
-        return None;
-    }
-    let count = end.saturating_sub(start) as usize;
-    for (index, desc) in bi.untypedList.iter().enumerate().take(count) {
-        if desc.isDevice == 0 {
-            let slot = start.checked_add(index as sel4::seL4_CPtr)?;
-            return Some(slot);
-        }
-    }
-    None
-}
-
-fn cspace_retype_probe(bi: &seL4_BootInfo) -> Result<(), seL4_Word> {
-    let init_bits_word = init_cnode_bits(bi);
-    let init_bits = u8::try_from(init_bits_word).expect("init cnode bits must fit within u8");
-    let dst_slot: sel4::seL4_CPtr = bi.empty.start as sel4::seL4_CPtr;
-    let (root, index, depth, offset) = root_cnode_path(init_bits, dst_slot as seL4_Word);
-    guard_root_path(init_bits, index, depth, offset);
-
-    assert!(
-        bi.empty.start < bi.empty.end,
-        "empty window must be non-empty"
-    );
-    assert!(
-        dst_slot >= bi.empty.start as sel4::seL4_CPtr && dst_slot < bi.empty.end as sel4::seL4_CPtr,
-        "probe slot {:#06x} outside bootinfo window [0x{start:04x}..0x{end:04x})",
-        dst_slot,
-        start = bi.empty.start,
-        end = bi.empty.end,
-    );
-
-    let ut = first_non_device_untyped(bi).expect("no non-device untyped available");
-
-    let mut probe_line = String::<MAX_DIAGNOSTIC_LEN>::new();
-    if write!(
-        &mut probe_line,
-        "[retype:probe] ut={:#06x} -> Endpoint at slot={:#06x} root={:#06x} index={} depth={} offset={:#06x}",
-        ut, dst_slot, root, index, depth, offset,
-    )
-    .is_err()
-    {
-        // Partial diagnostics are acceptable.
-    }
-    force_uart_line(probe_line.as_str());
-
-    let err_retype =
-        cspace_sys::retype_into_root(ut, seL4_EndpointObject as seL4_Word, 0, init_bits, dst_slot);
-    let mut ret_line = String::<MAX_DIAGNOSTIC_LEN>::new();
-    if write!(&mut ret_line, "[retype:ret] err={}", err_retype).is_err() {
-        // Partial diagnostics are acceptable.
-    }
-    force_uart_line(ret_line.as_str());
-    if err_retype != sel4_sys::seL4_NoError {
-        return Err(err_retype as seL4_Word);
-    }
-
-    let delete_depth = u8::try_from(WORD_BITS).expect("WORD_BITS must fit in u8");
-    let err_del = unsafe { seL4_CNode_Delete(root, dst_slot, delete_depth) };
-    let mut cleanup_line = String::<MAX_DIAGNOSTIC_LEN>::new();
-    if write!(&mut cleanup_line, "[retype:cleanup] delete err={}", err_del).is_err() {
-        // Partial diagnostics are acceptable.
-    }
-    force_uart_line(cleanup_line.as_str());
-    if err_del != sel4_sys::seL4_NoError {
-        return Err(err_del as seL4_Word);
-    }
-
-    Ok(())
 }
 
 fn log_boot(beg: sel4::seL4_CPtr, end: sel4::seL4_CPtr, bits: u8) {
@@ -229,15 +256,17 @@ impl DestCNode {
 
 /// Constructs a destination descriptor anchored at the root CNode.
 pub fn make_root_dest(bi: &sel4_sys::seL4_BootInfo) -> DestCNode {
-    let root = init_cnode_cptr(bi);
-    let depth_bits: u8 = init_cnode_bits(bi)
-        .try_into()
-        .expect("init cnode bits must fit within u8");
-    let (start, end) = empty_window(bi);
-    let empty_start: u32 = start
+    let init = InitCNode::from_bootinfo(bi);
+    let root = init.path.root;
+    let depth_bits = init.bits;
+    let empty_start: u32 = init
+        .empty
+        .start
         .try_into()
         .expect("empty window start must fit within u32");
-    let empty_end: u32 = end
+    let empty_end: u32 = init
+        .empty
+        .end
         .try_into()
         .expect("empty window end must fit within u32");
     let dest = DestCNode {
@@ -252,17 +281,28 @@ pub fn make_root_dest(bi: &sel4_sys::seL4_BootInfo) -> DestCNode {
 }
 
 /// Performs the initial proof-of-life retype calls against the init CNode.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FirstRetypeResult {
+    /// Slot containing a copied init TCB capability used for sanity checks.
+    pub tcb_copy_slot: sel4::seL4_CPtr,
+    /// Slot populated with the freshly retyped endpoint.
+    pub endpoint_slot: sel4::seL4_CPtr,
+    /// Slot populated with the scratch CNode used for later allocations.
+    pub captable_slot: sel4::seL4_CPtr,
+}
+
 pub fn cspace_first_retypes(
     bi: &sel4_sys::seL4_BootInfo,
     cs: &mut CSpace,
     ut_cap: sel4_sys::seL4_CPtr,
-) -> Result<(), sel4_sys::seL4_Error> {
+) -> Result<FirstRetypeResult, sel4_sys::seL4_Error> {
+    let init = InitCNode::from_bootinfo(bi);
     let mut dest = make_root_dest(bi);
     let mut init_line = String::<MAX_DIAGNOSTIC_LEN>::new();
     if write!(
         &mut init_line,
         "[cspace:init] root={:#06x} bits={} window=[{:#06x}..{:#06x})",
-        dest.root, dest.root_bits, dest.empty_start, dest.empty_end,
+        init.path.root, init.bits, init.empty.start, init.empty.end,
     )
     .is_err()
     {
@@ -272,22 +312,54 @@ pub fn cspace_first_retypes(
     dest.set_slot_offset(cs.next_free_slot());
     dest.assert_sane();
 
-    if let Err(err_word) = cspace_retype_probe(bi) {
-        let err = err_word as sel4_sys::seL4_Error;
-        let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
+    let tcb_copy_slot = match cs.alloc_slot() {
+        Ok(slot) => slot,
+        Err(err) => {
+            let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
+            if write!(&mut line, "[cnode:copy] slot alloc err={}", err as i32).is_err() {}
+            force_uart_line(line.as_str());
+            return Err(err);
+        }
+    };
+    dest.set_slot_offset(tcb_copy_slot);
+    let rights = cap_rights_read_write_grant();
+    let depth_bits: u8 = WORD_BITS.try_into().expect("WORD_BITS must fit in u8");
+    let copy_err = cspace_sys::cnode_copy_direct_dest(
+        depth_bits,
+        tcb_copy_slot,
+        seL4_CapInitThreadCNode,
+        sel4::seL4_CapInitThreadTCB,
+        depth_bits,
+        rights,
+    );
+    let mut copy_line = String::<MAX_DIAGNOSTIC_LEN>::new();
+    if copy_err == sel4_sys::seL4_NoError {
         if write!(
-            &mut line,
-            "[cspace:init] retype probe failed slot=0x{slot:04x} err={}",
-            err_word,
-            slot = dest.slot_offset,
+            &mut copy_line,
+            "[cnode:copy] src=TCB depth={} -> dst=0x{slot:04x} OK",
+            WORD_BITS,
+            slot = tcb_copy_slot,
         )
         .is_err()
         {
             // Partial diagnostics are acceptable.
         }
-        force_uart_line(line.as_str());
-        return Err(err);
+    } else if write!(
+        &mut copy_line,
+        "[cnode:copy] src=TCB depth={} -> dst=0x{slot:04x} ERR={}",
+        WORD_BITS,
+        slot = tcb_copy_slot,
+        copy_err as i32,
+    )
+    .is_err()
+    {
+        // Partial diagnostics are acceptable.
     }
+    force_uart_line(copy_line.as_str());
+    if copy_err != sel4_sys::seL4_NoError {
+        return Err(copy_err);
+    }
+    bump_slot(&mut dest);
 
     let endpoint_slot = match cs.alloc_slot() {
         Ok(slot) => slot,
@@ -299,9 +371,7 @@ pub fn cspace_first_retypes(
                 err as i32,
             )
             .is_err()
-            {
-                // Partial diagnostics are acceptable.
-            }
+            {}
             force_uart_line(line.as_str());
             return Err(err);
         }
@@ -314,18 +384,6 @@ pub fn cspace_first_retypes(
         dest.root_bits,
         endpoint_slot,
     );
-    let mut endpoint_line = String::<MAX_DIAGNOSTIC_LEN>::new();
-    if write!(
-        &mut endpoint_line,
-        "[cspace:init] endpoint slot=0x{slot:04x} err={}",
-        endpoint_err as i32,
-        slot = endpoint_slot,
-    )
-    .is_err()
-    {
-        // Partial diagnostics are acceptable.
-    }
-    force_uart_line(endpoint_line.as_str());
     if endpoint_err != sel4_sys::seL4_NoError {
         return Err(endpoint_err);
     }
@@ -341,33 +399,23 @@ pub fn cspace_first_retypes(
                 err as i32,
             )
             .is_err()
-            {
-                // Partial diagnostics are acceptable.
-            }
+            {}
             force_uart_line(line.as_str());
             return Err(err);
         }
     };
     dest.set_slot_offset(captable_slot);
     let captable_err = retype_captable(ut_cap as sel4_sys::seL4_Word, 4, &dest);
-    let mut captable_line = String::<MAX_DIAGNOSTIC_LEN>::new();
-    if write!(
-        &mut captable_line,
-        "[cspace:init] captable(4) slot=0x{slot:04x} err={}",
-        captable_err as i32,
-        slot = captable_slot,
-    )
-    .is_err()
-    {
-        // Partial diagnostics are acceptable.
-    }
-    force_uart_line(captable_line.as_str());
     if captable_err != sel4_sys::seL4_NoError {
         return Err(captable_err);
     }
     bump_slot(&mut dest);
 
-    Ok(())
+    Ok(FirstRetypeResult {
+        tcb_copy_slot,
+        endpoint_slot,
+        captable_slot,
+    })
 }
 
 /// Canonical CSpace context orchestrating bootstrap-time seL4 CNode operations.

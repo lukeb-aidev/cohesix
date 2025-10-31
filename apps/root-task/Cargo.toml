@@ -76,6 +76,9 @@ secure9p-wire = { workspace = true }
 [dev-dependencies]
 tempfile = "3.10"
 trybuild = "1.0"
+[dev-dependencies.sel4-sys]
+version = "0.0.28"
+path = "../../crates/sel4-sys"
 
 [build-dependencies]
 regex = "1.10"
