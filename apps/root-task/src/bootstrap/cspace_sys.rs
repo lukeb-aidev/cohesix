@@ -256,7 +256,7 @@ pub fn validate_retype_args(
             expected: CANONICAL_CNODE_INDEX,
         });
     }
-    let expected_depth = 0u8;
+    let expected_depth = sys::seL4_WordBits as u8;
     if args.cnode_depth != expected_depth {
         return Err(RetypeArgsError::DepthMismatch {
             provided: args.cnode_depth,
@@ -714,7 +714,7 @@ pub use host_trace::{take_last as take_last_host_retype_trace, HostRetypeTrace};
 #[inline(always)]
 /// Issues `seL4_CNode_Copy`, validating the target slot lies within the init CNode.
 pub fn cnode_copy_direct_dest(
-    depth_bits: u8,
+    init_cnode_bits: u8,
     dst_slot: sys::seL4_CPtr,
     src_root: sys::seL4_CNode,
     src_index: sys::seL4_CPtr,
@@ -723,9 +723,7 @@ pub fn cnode_copy_direct_dest(
 ) -> sys::seL4_Error {
     #[cfg(target_os = "none")]
     {
-        let init_bits = bi().initThreadCNodeSizeBits as u8;
-        debug_assert_eq!(depth_bits, init_bits);
-        check_slot_in_range(depth_bits, dst_slot);
+        check_slot_in_range(init_cnode_bits, dst_slot);
         let (root, node_index, node_depth, node_offset) = init_cnode_dest(dst_slot);
         debug_assert_eq!(node_index, bi_init_cnode_cptr() as sys::seL4_Word);
         log_destination("CNode_Copy", node_index, node_depth, node_offset);
@@ -748,7 +746,7 @@ pub fn cnode_copy_direct_dest(
     #[cfg(not(target_os = "none"))]
     {
         let (node_index, node_depth, node_offset) =
-            init_cnode_direct_destination_words(depth_bits, dst_slot);
+            init_cnode_direct_destination_words(init_cnode_bits, dst_slot);
         host_trace::record(host_trace::HostRetypeTrace {
             root: bi_init_cnode_cptr(),
             node_index,
@@ -765,7 +763,7 @@ pub fn cnode_copy_direct_dest(
 #[inline(always)]
 /// Issues `seL4_CNode_Mint`, validating the target slot lies within the init CNode.
 pub fn cnode_mint_direct_dest(
-    depth_bits: u8,
+    init_cnode_bits: u8,
     dst_slot: sys::seL4_CPtr,
     src_root: sys::seL4_CNode,
     src_index: sys::seL4_CPtr,
@@ -775,9 +773,7 @@ pub fn cnode_mint_direct_dest(
 ) -> sys::seL4_Error {
     #[cfg(target_os = "none")]
     {
-        let init_bits = bi().initThreadCNodeSizeBits as u8;
-        debug_assert_eq!(depth_bits, init_bits);
-        check_slot_in_range(depth_bits, dst_slot);
+        check_slot_in_range(init_cnode_bits, dst_slot);
         let (root, node_index, node_depth, node_offset) = init_cnode_dest(dst_slot);
         debug_assert_eq!(node_index, bi_init_cnode_cptr() as sys::seL4_Word);
         log_destination("CNode_Mint", node_index, node_depth, node_offset);
@@ -801,7 +797,7 @@ pub fn cnode_mint_direct_dest(
     #[cfg(not(target_os = "none"))]
     {
         let (node_index, node_depth, node_offset) =
-            init_cnode_direct_destination_words(depth_bits, dst_slot);
+            init_cnode_direct_destination_words(init_cnode_bits, dst_slot);
         host_trace::record(host_trace::HostRetypeTrace {
             root: bi_init_cnode_cptr(),
             node_index,
@@ -818,7 +814,7 @@ pub fn cnode_mint_direct_dest(
 #[inline(always)]
 /// Issues `seL4_CNode_Move`, validating the target slot lies within the init CNode.
 pub fn cnode_move_direct_dest(
-    depth_bits: u8,
+    init_cnode_bits: u8,
     dst_slot: sys::seL4_CPtr,
     src_root: sys::seL4_CNode,
     src_index: sys::seL4_CPtr,
@@ -826,9 +822,7 @@ pub fn cnode_move_direct_dest(
 ) -> sys::seL4_Error {
     #[cfg(target_os = "none")]
     {
-        let init_bits = bi().initThreadCNodeSizeBits as u8;
-        debug_assert_eq!(depth_bits, init_bits);
-        check_slot_in_range(depth_bits, dst_slot);
+        check_slot_in_range(init_cnode_bits, dst_slot);
         let (root, node_index, node_depth, node_offset) = init_cnode_dest(dst_slot);
         debug_assert_eq!(node_index, bi_init_cnode_cptr() as sys::seL4_Word);
         log_destination("CNode_Move", node_index, node_depth, node_offset);
@@ -850,7 +844,7 @@ pub fn cnode_move_direct_dest(
     #[cfg(not(target_os = "none"))]
     {
         let (node_index, node_depth, node_offset) =
-            init_cnode_direct_destination_words(depth_bits, dst_slot);
+            init_cnode_direct_destination_words(init_cnode_bits, dst_slot);
         host_trace::record(host_trace::HostRetypeTrace {
             root: bi_init_cnode_cptr(),
             node_index,
@@ -902,7 +896,7 @@ pub fn untyped_retype_into_init_root(
     }
 
     let (root, node_index, node_depth, node_offset) = init_cnode_retype_dest(dst_slot);
-    let expected_depth = 0;
+    let expected_depth = sys::seL4_WordBits as sys::seL4_Word;
     debug_assert_eq!(root, sel4::seL4_CapInitThreadCNode);
     debug_assert_eq!(node_index, CANONICAL_CNODE_INDEX as sys::seL4_Word);
     debug_assert_eq!(node_depth, expected_depth);

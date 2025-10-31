@@ -1,7 +1,9 @@
 // Author: Lukas Bower
 
+use core::convert::TryInto;
+
 use crate::sel4::{self, BootInfoExt};
-use sel4_sys::{seL4_BootInfo, seL4_CPtr, seL4_Error, seL4_Word};
+use sel4_sys::{seL4_BootInfo, seL4_CPtr, seL4_Error, seL4_Word, seL4_WordBits};
 
 /// Helper managing allocation within the init thread's capability space.
 pub struct CSpace {
@@ -21,7 +23,7 @@ impl CSpace {
         }
     }
 
-    /// Returns the depth (in bits) of the init CNode.
+    /// Returns the radix width (in bits) of the init CNode.
     #[must_use]
     pub fn depth(&self) -> u8 {
         self.bits
@@ -57,10 +59,12 @@ impl CSpace {
         src_slot: seL4_CPtr,
         rights: sel4_sys::seL4_CapRights,
     ) -> seL4_Error {
-        let guard_depth_word = self.bits as sel4::seL4_Word;
-        let guard_depth = self.bits;
+        let guard_depth_word = seL4_WordBits as sel4::seL4_Word;
+        let guard_depth: u8 = seL4_WordBits
+            .try_into()
+            .expect("seL4_WordBits must fit within u8");
         log::info!(
-            "[cnode] Copy dest: root=initCNode index=0x{slot:04x} depth={depth}(initBits) offset=0",
+            "[cnode] Copy dest: root=initCNode index=0x{slot:04x} depth={depth}(wordBits) offset=0",
             slot = dst_slot,
             depth = guard_depth_word,
         );
@@ -83,10 +87,12 @@ impl CSpace {
         rights: sel4_sys::seL4_CapRights,
         badge: seL4_Word,
     ) -> seL4_Error {
-        let guard_depth_word = self.bits as sel4::seL4_Word;
-        let guard_depth = self.bits;
+        let guard_depth_word = seL4_WordBits as sel4::seL4_Word;
+        let guard_depth: u8 = seL4_WordBits
+            .try_into()
+            .expect("seL4_WordBits must fit within u8");
         log::info!(
-            "[cnode] Mint dest: root=initCNode index=0x{slot:04x} depth={depth}(initBits) offset=0",
+            "[cnode] Mint dest: root=initCNode index=0x{slot:04x} depth={depth}(wordBits) offset=0",
             slot = dst_slot,
             depth = guard_depth_word,
         );
