@@ -312,6 +312,7 @@ where
     metrics: PumpMetrics,
     now_ms: u64,
     session: Option<SessionRole>,
+    stream_end_pending: bool,
     throttle: AuthThrottle,
     #[cfg(feature = "net-console")]
     net: Option<&'a mut dyn NetPoller>,
@@ -350,6 +351,7 @@ where
             metrics: PumpMetrics::default(),
             now_ms: 0,
             session: None,
+            stream_end_pending: false,
             throttle: AuthThrottle::default(),
             #[cfg(feature = "net-console")]
             net: None,
@@ -600,6 +602,7 @@ where
                 self.audit.info("console: quit");
                 self.metrics.accepted_commands += 1;
                 self.emit_ack_ok("QUIT", None);
+                self.session = None;
             }
             Command::Attach { role, ticket } => {
                 self.handle_attach(role, ticket);
@@ -615,6 +618,7 @@ where
                     self.metrics.accepted_commands += 1;
                     let detail = format_message(format_args!("path={}", path.as_str()));
                     self.emit_ack_ok("TAIL", Some(detail.as_str()));
+                    self.stream_end_pending = true;
                     #[cfg(feature = "kernel")]
                     {
                         forwarded = true;
@@ -628,6 +632,7 @@ where
                     self.audit.info("console: log stream start");
                     self.metrics.accepted_commands += 1;
                     self.emit_ack_ok("LOG", None);
+                    self.stream_end_pending = true;
                     #[cfg(feature = "kernel")]
                     {
                         forwarded = true;
@@ -671,8 +676,13 @@ where
 
         #[cfg(feature = "kernel")]
         if forwarded {
-            self.forward_to_ninedoor(&command_clone)?;
+            if let Err(err) = self.forward_to_ninedoor(&command_clone) {
+                self.stream_end_pending = false;
+                return Err(err);
+            }
         }
+
+        self.emit_stream_end_if_pending();
 
         Ok(())
     }
@@ -752,6 +762,13 @@ where
                 self.audit.denied(audit_line.as_str());
                 self.emit_ack_err(verb.as_label(), Some(detail.as_str()));
             }
+        }
+    }
+
+    fn emit_stream_end_if_pending(&mut self) {
+        if self.stream_end_pending {
+            self.stream_end_pending = false;
+            self.emit_console_line("END");
         }
     }
 
@@ -1332,6 +1349,80 @@ mod tests {
         );
         assert!(rendered.contains("OK ATTACH role=queen"), "{rendered}");
         assert!(rendered.contains("OK LOG"), "{rendered}");
+    }
+
+    #[test]
+    fn tail_command_emits_end_sentinel() {
+        let driver = LoopbackSerial::<128>::new();
+        let serial = SerialPort::<_, 128, 128, 64>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "queen-ticket").unwrap();
+        store
+            .register(Role::WorkerHeartbeat, "worker-ticket")
+            .unwrap();
+        let mut audit = AuditLog::new();
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit);
+        {
+            let driver = pump.serial_mut().driver_mut();
+            driver.push_rx(b"attach worker worker-ticket\n");
+            driver.push_rx(b"tail /log/queen.log\n");
+        }
+        pump.poll();
+        pump.poll();
+        let transcript = {
+            let driver = pump.serial_mut().driver_mut();
+            driver.drain_tx()
+        };
+        let rendered = String::from_utf8(transcript.into_iter().collect())
+            .expect("serial output must be utf8");
+        assert!(
+            rendered.contains("OK ATTACH role=worker-heartbeat"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("OK TAIL path=/log/queen.log"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("END\r\n"), "{rendered}");
+    }
+
+    #[test]
+    fn log_command_emits_end_sentinel_and_quit_clears_session() {
+        let driver = LoopbackSerial::<128>::new();
+        let serial = SerialPort::<_, 128, 128, 64>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit);
+        {
+            let driver = pump.serial_mut().driver_mut();
+            driver.push_rx(b"attach queen ticket\n");
+            driver.push_rx(b"log\n");
+            driver.push_rx(b"quit\n");
+            driver.push_rx(b"log\n");
+        }
+        pump.poll();
+        pump.poll();
+        pump.poll();
+        pump.poll();
+        let transcript = {
+            let driver = pump.serial_mut().driver_mut();
+            driver.drain_tx()
+        };
+        let rendered = String::from_utf8(transcript.into_iter().collect())
+            .expect("serial output must be utf8");
+        assert!(rendered.contains("OK ATTACH role=queen"), "{rendered}");
+        assert!(rendered.contains("OK LOG"), "{rendered}");
+        assert!(rendered.contains("END\r\n"), "{rendered}");
+        assert!(rendered.contains("OK QUIT"), "{rendered}");
+        assert!(
+            rendered.contains("ERR LOG reason=unauthenticated"),
+            "{rendered}"
+        );
     }
 
     #[test]

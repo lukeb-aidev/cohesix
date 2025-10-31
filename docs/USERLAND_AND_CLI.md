@@ -14,7 +14,7 @@ per-command capability checks inside the event pump.
 | Command | Role | Effect |
 |---------|------|--------|
 | `help` | All | Emit an audit line indicating that help was requested |
-| `attach <role> [ticket]` | All | Authenticate the session and bind a role; workers must supply a ticket |
+| `attach <role> <ticket>` | All | Authenticate the session and bind a role; tickets are required for every role |
 | `tail <path>` | Worker, Queen | Record a request to stream a path via NineDoor once the bridge is online |
 | `log` | Queen | Shortcut for initiating the log stream verb |
 | `spawn <json>` | Queen | Forward JSON payloads to NineDoor for worker orchestration |
@@ -44,7 +44,7 @@ acknowledgements are produced by the shared event-pump dispatcher and are
 mirrored by the audit sink, ensuring `/log/queen.log` records the same
 outcome. Streaming verbs such as `tail` and `log` also emit an
 acknowledgement before beginning payload delivery and terminate with
-`END`. 【F:apps/root-task/src/event/mod.rs†L329-L360】【F:apps/root-task/src/ninedoor.rs†L4-L63】【F:apps/root-task/src/net/queue.rs†L526-L559】
+`END`. 【F:apps/root-task/src/event/mod.rs†L495-L772】【F:apps/root-task/src/ninedoor.rs†L4-L63】【F:apps/root-task/src/net/queue.rs†L526-L559】
 Early boot traces always use the UART path; the IPC sink remains disabled until `sel4::ep_ready()` publishes the root endpoint, preventing send-phase faults. 【F:apps/root-task/src/trace.rs†L10-L62】【F:apps/root-task/src/sel4.rs†L74-L154】
 
 ## 3. Example Sessions
