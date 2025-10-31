@@ -553,6 +553,19 @@ fn bootstrap<P: Platform>(
     console.writeln_prefixed("Cohesix v0 (AArch64/virt)");
 
     bootinfo_debug_dump(&bootinfo_view);
+    let ipc_buffer_ptr = bootinfo_ref.ipc_buffer_ptr();
+    if let Some(ptr) = ipc_buffer_ptr {
+        let addr = ptr.as_ptr() as usize;
+        assert_eq!(
+            addr & (IPC_PAGE_BYTES - 1),
+            0,
+            "IPC buffer must be page-aligned",
+        );
+        unsafe {
+            sel4_sys::seL4_SetIPCBuffer(ptr.as_ptr());
+        }
+    }
+
     let mut kernel_env = KernelEnv::new(bootinfo_ref);
     let extra_bytes = bootinfo_view.extra();
     if !extra_bytes.is_empty() {
@@ -595,17 +608,7 @@ fn bootstrap<P: Platform>(
         console.writeln_prefixed("[boot] no RAM-backed untyped for proof retypes");
     }
 
-    let ipc_buffer_ptr = bootinfo_ref.ipc_buffer_ptr();
     let ipc_vaddr = ipc_buffer_ptr.map(|ptr| ptr.as_ptr() as usize);
-
-    if let Some(ptr) = ipc_buffer_ptr {
-        let addr = ptr.as_ptr() as usize;
-        assert_eq!(
-            addr & (IPC_PAGE_BYTES - 1),
-            0,
-            "IPC buffer must be page-aligned",
-        );
-    }
 
     let ep_slot = match ep::bootstrap_ep(bootinfo_ref, &mut boot_cspace) {
         Ok(ep_slot) => ep_slot,
@@ -707,15 +710,6 @@ fn bootstrap<P: Platform>(
         }
     } else {
         console.writeln_prefixed("bootinfo.ipcBuffer missing");
-    }
-
-    if let Some(ipc_ptr) = ipc_buffer_ptr {
-        unsafe {
-            sel4_sys::seL4_SetIPCBuffer(ipc_ptr.as_ptr());
-        }
-        let mut msg = heapless::String::<64>::new();
-        let _ = write!(msg, "ipc buffer ptr=0x{:016x}", ipc_ptr.as_ptr() as usize);
-        console.writeln_prefixed(msg.as_str());
     }
 
     let fault_handler_err = unsafe {
