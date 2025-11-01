@@ -5,6 +5,7 @@ use crate::bootstrap::log::force_uart_line;
 use crate::bootstrap::retype::{bump_slot, retype_captable};
 use crate::cspace::{cap_rights_read_write_grant, CSpace};
 use crate::sel4::{self, is_boot_reserved_slot, BootInfoView, WORD_BITS};
+use core::convert::{TryFrom, TryInto};
 use core::fmt::Write;
 use heapless::String;
 
@@ -286,6 +287,7 @@ pub struct FirstRetypeResult {
     pub captable_slot: sel4::seL4_CPtr,
 }
 
+#[cfg(not(feature = "canonical_cspace"))]
 pub fn cspace_first_retypes(
     bi: &sel4_sys::seL4_BootInfo,
     cs: &mut CSpace,
@@ -401,6 +403,159 @@ pub fn cspace_first_retypes(
     };
     dest.set_slot_offset(captable_slot);
     let captable_err = retype_captable(ut_cap as sel4_sys::seL4_Word, 4, &dest);
+    if captable_err != sel4_sys::seL4_NoError {
+        return Err(captable_err);
+    }
+    bump_slot(&mut dest);
+
+    Ok(FirstRetypeResult {
+        tcb_copy_slot,
+        endpoint_slot,
+        captable_slot,
+    })
+}
+
+#[cfg(feature = "canonical_cspace")]
+pub fn cspace_first_retypes(
+    bi: &sel4_sys::seL4_BootInfo,
+    cs: &mut CSpace,
+    _ut_cap: sel4_sys::seL4_CPtr,
+) -> Result<FirstRetypeResult, sel4_sys::seL4_Error> {
+    let init = InitCNode::from_bootinfo(bi);
+    let mut dest = make_root_dest(bi);
+    let mut init_line = String::<MAX_DIAGNOSTIC_LEN>::new();
+    if write!(
+        &mut init_line,
+        "[cspace:init] root={:#06x} bits={} window=[{:#06x}..{:#06x})",
+        init.path.root, init.bits, init.empty.start, init.empty.end,
+    )
+    .is_err()
+    {
+        // Partial diagnostics are acceptable.
+    }
+    force_uart_line(init_line.as_str());
+    dest.set_slot_offset(cs.next_free_slot());
+    dest.assert_sane();
+
+    let rights = cap_rights_read_write_grant();
+    let guard_depth_bits: u8 =
+        u8::try_from(sel4::WORD_BITS).expect("WORD_BITS must fit within u8 for canonical copy");
+
+    let endpoint_slot = match cs.alloc_slot() {
+        Ok(slot) => slot,
+        Err(err) => {
+            let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
+            if write!(
+                &mut line,
+                "[cspace:init] endpoint slot alloc err={}",
+                err as i32
+            )
+            .is_err()
+            {}
+            force_uart_line(line.as_str());
+            return Err(err);
+        }
+    };
+
+    dest.set_slot_offset(endpoint_slot);
+    dest.assert_sane();
+
+    let endpoint_slot_u32 = u32::try_from(endpoint_slot)
+        .expect("endpoint slot must fit within 32 bits for canonical operations");
+
+    let (window_start, _) = crate::sel4_view::empty_window(bi);
+    let window_start_u32 = u32::try_from(window_start)
+        .expect("bootinfo empty window start must fit within u32 for canonical operations");
+    debug_assert_eq!(
+        endpoint_slot_u32, window_start_u32,
+        "first canonical endpoint slot should align with bootinfo window",
+    );
+
+    let _ = cspace_sys::cnode_delete_from_root(endpoint_slot_u32, bi);
+    cspace_sys::cnode_copy_into_root(endpoint_slot_u32, bi)
+        .map_err(|e| panic!("[selftest] copy fail slot=0x{endpoint_slot_u32:04x} err={e:?}"))?;
+    cspace_sys::cnode_delete_from_root(endpoint_slot_u32, bi)
+        .map_err(|e| panic!("[selftest] delete fail slot=0x{endpoint_slot_u32:04x} err={e:?}"))?;
+
+    let ut = crate::sel4::pick_smallest_non_device_untyped(bi);
+    let ut_raw = u32::try_from(ut).expect("untyped capability must fit within u32");
+    cspace_sys::canonical::retype_into_root(
+        ut_raw,
+        sel4_sys::seL4_ObjectType::seL4_EndpointObject as u32,
+        0,
+        endpoint_slot_u32,
+        bi,
+    )
+    .map_err(|e| panic!("[retype] endpoint fail slot=0x{endpoint_slot_u32:04x} err={e:?}"))?;
+
+    log::info!("[retype:ok] endpoint @ slot=0x{:04x}", endpoint_slot_u32);
+
+    bump_slot(&mut dest);
+
+    let tcb_copy_slot = match cs.alloc_slot() {
+        Ok(slot) => slot,
+        Err(err) => {
+            let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
+            if write!(&mut line, "[cnode:copy] slot alloc err={}", err as i32).is_err() {}
+            force_uart_line(line.as_str());
+            return Err(err);
+        }
+    };
+    dest.set_slot_offset(tcb_copy_slot);
+    let copy_err = cspace_sys::cnode_copy_direct_dest(
+        dest.root_bits,
+        tcb_copy_slot,
+        sel4_sys::seL4_CapInitThreadCNode,
+        sel4::seL4_CapInitThreadTCB,
+        guard_depth_bits,
+        rights,
+    );
+    let mut copy_line = String::<MAX_DIAGNOSTIC_LEN>::new();
+    if copy_err == sel4_sys::seL4_NoError {
+        if write!(
+            &mut copy_line,
+            "[cnode:copy] src=TCB depth={} -> dst=0x{slot:04x} OK",
+            WORD_BITS,
+            slot = tcb_copy_slot,
+        )
+        .is_err()
+        {
+            // Partial diagnostics are acceptable.
+        }
+    } else if write!(
+        &mut copy_line,
+        "[cnode:copy] src=TCB depth={} -> dst=0x{slot:04x} ERR={err}",
+        WORD_BITS,
+        slot = tcb_copy_slot,
+        err = copy_err as i32,
+    )
+    .is_err()
+    {
+        // Partial diagnostics are acceptable.
+    }
+    force_uart_line(copy_line.as_str());
+    if copy_err != sel4_sys::seL4_NoError {
+        return Err(copy_err);
+    }
+    bump_slot(&mut dest);
+
+    let captable_slot = match cs.alloc_slot() {
+        Ok(slot) => slot,
+        Err(err) => {
+            let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
+            if write!(
+                &mut line,
+                "[cspace:init] captable slot alloc err={}",
+                err as i32,
+            )
+            .is_err()
+            {}
+            force_uart_line(line.as_str());
+            return Err(err);
+        }
+    };
+    dest.set_slot_offset(captable_slot);
+    let captable_err = retype_captable(ut as sel4_sys::seL4_Word, 4, &dest);
     if captable_err != sel4_sys::seL4_NoError {
         return Err(captable_err);
     }
