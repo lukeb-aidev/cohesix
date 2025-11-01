@@ -335,18 +335,17 @@ pub fn preflight_init_cnode_writable(probe_slot: sys::seL4_CPtr) -> Result<(), P
 
     #[cfg(target_os = "none")]
     {
-        let _init_bits = u8::try_from(bits).expect("initThreadCNodeSizeBits must fit in u8");
-        let depth_bits = cspace_depth_wordbits();
-        let depth_word = depth_bits as sys::seL4_Word;
+        let depth = bits;
+        let depth_word = depth;
         let probe_index = probe_slot as sys::seL4_Word;
         let err = unsafe {
             sys::seL4_CNode_Mint(
                 root,
                 probe_index,
-                depth_bits,
+                depth,
                 root,
                 CANONICAL_CNODE_INDEX,
-                depth_bits,
+                depth,
                 sel4::seL4_CapRights_All,
                 0,
             )
@@ -363,7 +362,7 @@ pub fn preflight_init_cnode_writable(probe_slot: sys::seL4_CPtr) -> Result<(), P
             return Err(PreflightError::Probe(err));
         }
 
-        let delete_err = unsafe { sys::seL4_CNode_Delete(root, probe_index, depth_bits) };
+        let delete_err = unsafe { sys::seL4_CNode_Delete(root, probe_index, depth) };
         if delete_err != sys::seL4_NoError {
             ::log::error!(
                 "preflight cleanup failed: Delete root=0x{root:04x} slot=0x{slot:04x} depth={} err={} ({})",
@@ -462,15 +461,11 @@ pub fn encode_cnode_depth(bits: u8) -> sys::seL4_Word {
     bits as sys::seL4_Word
 }
 
-/// Canonical path depth used by seL4 CNode invocations.
-/// For a single-level root CNode, the invocation depth must be `seL4_WordBits`.
+/// Depth to use when traversing the *initial* root CNode:
+/// use the radix (`initThreadCNodeSizeBits`), not `seL4_WordBits`.
 #[inline(always)]
-fn cspace_depth_wordbits() -> u8 {
-    u8::try_from(sel4::word_bits()).expect("word_bits must fit within u8")
-}
-
-fn word_depth() -> sys::seL4_Word {
-    cspace_depth_wordbits() as sys::seL4_Word
+fn init_cspace_depth_words(bi: &sys::seL4_BootInfo) -> sys::seL4_Word {
+    sel4::init_cnode_bits(bi) as sys::seL4_Word // e.g. 13
 }
 
 #[inline(always)]
@@ -501,17 +496,15 @@ pub fn cnode_copy_raw(
     src_slot_raw: sys::seL4_Word,
     rights: sys::seL4_CapRights,
 ) -> sys::seL4_Error {
-    let _ = bi;
-    let depth_bits = cspace_depth_wordbits();
-    let depth_word = word_depth();
+    let depth = init_cspace_depth_words(bi);
     let dst_label = slot_constant_label(dst_slot_raw);
     let src_label = slot_constant_label(src_slot_raw);
     let dst_root_label = root_constant_label(dst_root);
     let src_root_label = root_constant_label(src_root);
 
     ::log::info!(
-        "[cnode-copy] dst_root={dst_root_label} dst_slot=0x{dst_slot_raw:04x} ({dst_label}) dst_depth={depth_word}  \
-         src_root={src_root_label} src_slot=0x{src_slot_raw:04x} ({src_label}) src_depth={depth_word}",
+        "[cnode-copy] dst_root={dst_root_label} dst_slot=0x{dst_slot_raw:04x} ({dst_label}) dst_depth={depth}  \
+         src_root={src_root_label} src_slot=0x{src_slot_raw:04x} ({src_label}) src_depth={depth} (initBits)",
     );
 
     #[cfg(target_os = "none")]
@@ -520,10 +513,10 @@ pub fn cnode_copy_raw(
             sys::seL4_CNode_Copy(
                 dst_root,
                 dst_slot_raw as sys::seL4_CPtr,
-                depth_bits,
+                depth,
                 src_root,
                 src_slot_raw as sys::seL4_CPtr,
-                depth_bits,
+                depth,
                 rights,
             )
         }
@@ -539,14 +532,14 @@ pub fn cnode_copy_raw(
 /// Probe 1: copy BootInfo cap into the first free slot.
 pub fn probe_copy_bootinfo(bi: &sys::seL4_BootInfo) -> sys::seL4_Error {
     let dst = bi.empty.start as sys::seL4_CPtr;
-    let src = sys::seL4_CapBootInfoFrame as sys::seL4_Word;
+    let src = sys::seL4_CapBootInfoFrame;
     ::log::info!("[probe] BootInfo -> 0x{dst:04x} (src=seL4_CapBootInfoFrame={src})");
     cnode_copy_raw(
         bi,
         sys::seL4_CapInitThreadCNode,
         dst as sys::seL4_Word,
         sys::seL4_CapInitThreadCNode,
-        src,
+        src as sys::seL4_Word,
         sys::seL4_CapRights_All,
     )
 }
@@ -554,14 +547,14 @@ pub fn probe_copy_bootinfo(bi: &sys::seL4_BootInfo) -> sys::seL4_Error {
 /// Probe 2: copy the init CNode cap into the next free slot.
 pub fn probe_copy_cnode(bi: &sys::seL4_BootInfo) -> sys::seL4_Error {
     let dst = (bi.empty.start + 1) as sys::seL4_CPtr;
-    let src = sys::seL4_CapInitThreadCNode as sys::seL4_Word;
+    let src = sys::seL4_CapInitThreadCNode;
     ::log::info!("[probe] CNode -> 0x{dst:04x} (src=seL4_CapInitThreadCNode={src})");
     cnode_copy_raw(
         bi,
         sys::seL4_CapInitThreadCNode,
         dst as sys::seL4_Word,
         sys::seL4_CapInitThreadCNode,
-        src,
+        src as sys::seL4_Word,
         sys::seL4_CapRights_All,
     )
 }
@@ -569,14 +562,14 @@ pub fn probe_copy_cnode(bi: &sys::seL4_BootInfo) -> sys::seL4_Error {
 /// Seed: copy the init thread TCB cap into the first free slot.
 pub fn seed_copy_tcb_to_first_free(bi: &sys::seL4_BootInfo) -> sys::seL4_Error {
     let dst = bi.empty.start as sys::seL4_CPtr;
-    let src = sys::seL4_CapInitThreadTCB as sys::seL4_Word;
+    let src = sys::seL4_CapInitThreadTCB;
     ::log::info!("[seed] TCB -> 0x{dst:04x} (src=seL4_CapInitThreadTCB={src})");
     cnode_copy_raw(
         bi,
         sys::seL4_CapInitThreadCNode,
         dst as sys::seL4_Word,
         sys::seL4_CapInitThreadCNode,
-        src,
+        src as sys::seL4_Word,
         sys::seL4_CapRights_All,
     )
 }
@@ -591,18 +584,17 @@ pub fn cnode_mint_raw(
     rights: sys::seL4_CapRights,
     badge: sys::seL4_Word,
 ) -> sys::seL4_Error {
-    let _ = bi;
     #[cfg(target_os = "none")]
     {
-        let depth_bits = cspace_depth_wordbits();
+        let depth = init_cspace_depth_words(bi);
         unsafe {
             sys::seL4_CNode_Mint(
                 dst_root,
                 dst_slot_raw as sys::seL4_CPtr,
-                depth_bits,
+                depth,
                 src_root,
                 src_slot_raw as sys::seL4_CPtr,
-                depth_bits,
+                depth,
                 rights,
                 badge,
             )
@@ -632,18 +624,17 @@ pub fn cnode_move_raw(
     src_root: sys::seL4_CNode,
     src_slot_raw: sys::seL4_Word,
 ) -> sys::seL4_Error {
-    let _ = bi;
     #[cfg(target_os = "none")]
     {
-        let depth_bits = cspace_depth_wordbits();
+        let depth = init_cspace_depth_words(bi);
         unsafe {
             sys::seL4_CNode_Move(
                 dst_root,
                 dst_slot_raw as sys::seL4_CPtr,
-                depth_bits,
+                depth,
                 src_root,
                 src_slot_raw as sys::seL4_CPtr,
-                depth_bits,
+                depth,
             )
         }
     }
@@ -813,7 +804,7 @@ pub mod canonical {
         let raw_slot = path.offset();
         let src_slot = sys::seL4_CapInitThreadCNode as sys::seL4_Word;
         let rights = sys::seL4_CapRights_All;
-        let depth_word = super::cspace_depth_wordbits() as sys::seL4_Word;
+        let depth_word = super::init_cspace_depth_words(bi);
         let dst_label = super::slot_constant_label(raw_slot);
         let src_label = super::slot_constant_label(src_slot);
 
@@ -864,11 +855,10 @@ pub mod canonical {
 
         let root = sys::seL4_CapInitThreadCNode;
         let idx = path.offset();
-        let depth_bits = super::cspace_depth_wordbits();
-        let depth_word = depth_bits as sys::seL4_Word;
+        let depth_word = super::init_cspace_depth_words(bi);
 
         #[cfg(target_os = "none")]
-        let err = unsafe { sys::seL4_CNode_Delete(root, idx, depth_bits) };
+        let err = unsafe { sys::seL4_CNode_Delete(root, idx, depth_word) };
 
         #[cfg(not(target_os = "none"))]
         let err = sys::seL4_NoError;
@@ -962,7 +952,7 @@ pub mod canonical {
 #[cfg(feature = "canonical_cspace")]
 pub fn cnode_copy_into_root(dst_slot: u32, bi: &sys::seL4_BootInfo) -> Result<(), sys::seL4_Error> {
     let rights = crate::cspace::cap_rights_read_write_grant();
-    let depth_bits = cspace_depth_wordbits();
+    let depth_bits = sel4::init_cnode_bits(bi);
     canonical::cnode_copy_into_root(
         dst_slot,
         sys::seL4_CapInitThreadCNode,
