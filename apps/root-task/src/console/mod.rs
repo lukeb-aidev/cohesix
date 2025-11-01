@@ -58,7 +58,6 @@ pub enum ConsoleError {
     RateLimited(u64),
 }
 
-#[cfg(feature = "canonical_cspace")]
 impl fmt::Display for ConsoleError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
