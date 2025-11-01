@@ -613,11 +613,7 @@ pub mod canonical {
 
     #[inline(always)]
     fn encode_slot(slot: sys::seL4_Word, init_bits: u8) -> sys::seL4_Word {
-        let shift = (sel4::WORD_BITS as u32)
-            .checked_sub(init_bits as u32)
-            .expect("init CNode bits must not exceed WORD_BITS");
-        slot.checked_shl(shift)
-            .expect("encoded init CNode slot must fit within WORD_BITS")
+        super::enc_index(slot, init_bits)
     }
 
     #[inline(always)]
@@ -633,19 +629,24 @@ pub mod canonical {
         log_path("[cnode:copy]", dst_slot, &path);
 
         let dst_root = sys::seL4_CapInitThreadCNode;
-        let dst_index = path.encoded_offset();
+        let dst_index_enc = path.encoded_offset();
         let init_bits = path.init_bits();
-        let dst_depth = init_bits;
+        let depth = init_bits;
         let src_root = sys::seL4_CapInitThreadCNode;
         let src_slot = sel4::init_cnode_cptr(bi) as sys::seL4_Word;
-        let src_index = encode_slot(src_slot, init_bits);
-        let src_depth = init_bits;
+        let src_index_enc = encode_slot(src_slot, init_bits);
         let rights = sys::seL4_CapRights_All;
 
         #[cfg(target_os = "none")]
         let err = unsafe {
             sys::seL4_CNode_Copy(
-                dst_root, dst_index, dst_depth, src_root, src_index, src_depth, rights,
+                dst_root,
+                dst_index_enc,
+                depth,
+                src_root,
+                src_index_enc,
+                depth,
+                rights,
             )
         };
 
@@ -653,14 +654,13 @@ pub mod canonical {
         let err = sys::seL4_NoError;
 
         ::log::info!(
-            "[cnode.copy] dst_root=0x{dst_root:x} idx=0x{dst_index:x} depth={dst_depth} \
-             src_root=0x{src_root:x} idx=0x{src_index:x} depth={src_depth} rights=0x{rights:x} -> err={err}",
+            "[cnode.copy] dst_root=0x{dst_root:x} idx=0x{dst_index:x} depth={depth} \
+             src_root=0x{src_root:x} idx=0x{src_index:x} depth={depth} rights=0x{rights:x} -> err={err}",
             dst_root = dst_root,
-            dst_index = dst_index,
-            dst_depth = dst_depth,
+            dst_index = dst_index_enc,
+            depth = depth,
             src_root = src_root,
-            src_index = src_index,
-            src_depth = src_depth,
+            src_index = src_index_enc,
             rights = rights.raw(),
             err = err,
         );
@@ -1008,13 +1008,15 @@ pub fn cnode_copy_direct_dest(
         let src_depth_word = encode_cnode_depth(src_depth_bits);
         let src_depth = u8::try_from(src_depth_word)
             .expect("source depth must fit within u8 for seL4_CNode_Copy");
+        let src_index_enc =
+            encode_cptr_index(src_index as sys::seL4_Word, init_cnode_bits, word_bits);
         let err = unsafe {
             sys::seL4_CNode_Copy(
                 root,
                 node_index,
                 node_depth,
                 src_root,
-                src_index as sys::seL4_Word,
+                src_index_enc,
                 src_depth,
                 rights,
             )
@@ -1064,13 +1066,15 @@ pub fn cnode_mint_direct_dest(
         let src_depth_word = encode_cnode_depth(src_depth_bits);
         let src_depth = u8::try_from(src_depth_word)
             .expect("source depth must fit within u8 for seL4_CNode_Mint");
+        let src_index_enc =
+            encode_cptr_index(src_index as sys::seL4_Word, init_cnode_bits, word_bits);
         let err = unsafe {
             sys::seL4_CNode_Mint(
                 root,
                 node_index,
                 node_depth,
                 src_root,
-                src_index as sys::seL4_Word,
+                src_index_enc,
                 src_depth,
                 rights,
                 badge,
@@ -1119,13 +1123,15 @@ pub fn cnode_move_direct_dest(
         let src_depth_word = encode_cnode_depth(src_depth_bits);
         let src_depth = u8::try_from(src_depth_word)
             .expect("source depth must fit within u8 for seL4_CNode_Move");
+        let src_index_enc =
+            encode_cptr_index(src_index as sys::seL4_Word, init_cnode_bits, word_bits);
         let err = unsafe {
             sys::seL4_CNode_Move(
                 root,
                 node_index,
                 node_depth,
                 src_root,
-                src_index as sys::seL4_Word,
+                src_index_enc,
                 src_depth,
             )
         };

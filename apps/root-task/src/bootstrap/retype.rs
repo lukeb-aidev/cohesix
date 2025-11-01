@@ -6,6 +6,8 @@ use core::fmt::Write;
 use heapless::String;
 use sel4_sys::{self as sys, seL4_CapTableObject, seL4_EndpointObject};
 
+#[cfg(feature = "canonical_cspace")]
+use super::cspace::first_endpoint_retype;
 use super::cspace::{slot_in_empty_window, CSpaceCtx, DestCNode};
 use super::ffi::raw_untyped_retype;
 use crate::bootstrap::log::force_uart_line;
@@ -349,38 +351,10 @@ pub fn canonical_cspace_console(bi: &sel4_sys::seL4_BootInfo) -> ! {
     let (start, _end) = sel4_view::empty_window(bi);
     let dst = u32::try_from(start).expect("bootinfo empty window start must fit within u32");
 
-    let _ = cspace_sys::cnode_delete_from_root(dst, bi);
-
-    if let Err(err) = cspace_sys::cnode_copy_into_root(dst, bi) {
-        panic!(
-            "[selftest] copy fail slot=0x{dst:04x} err={err:?}",
-            dst = dst,
-            err = err,
-        );
-    }
-
-    if let Err(err) = cspace_sys::cnode_delete_from_root(dst, bi) {
-        panic!(
-            "[selftest] delete fail slot=0x{dst:04x} err={err:?}",
-            dst = dst,
-            err = err,
-        );
-    }
+    crate::bootstrap::cspace::cnode_copy_selftest(bi).expect("CNode copy selftest failed");
 
     let ut = pick_smallest_non_device_untyped(bi);
-    if let Err(err) = cspace_sys::retype_into_root(
-        ut,
-        sel4_sys::seL4_ObjectType::seL4_EndpointObject as _,
-        0,
-        dst,
-        bi,
-    ) {
-        panic!(
-            "[retype] endpoint fail slot=0x{dst:04x} err={err:?}",
-            dst = dst,
-            err = err,
-        );
-    }
+    first_endpoint_retype(bi, ut, dst).expect("endpoint retype failed");
 
     log::info!("[retype:ok] endpoint @ slot=0x{:04x}", dst);
 
