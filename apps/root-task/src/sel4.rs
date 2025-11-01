@@ -374,6 +374,27 @@ pub fn set_message_register(index: usize, value: seL4_Word) {
     unsafe { sel4_sys::seL4_SetMR(index, value) };
 }
 
+/// Reads a value from an IPC message register.
+#[cfg(feature = "kernel")]
+#[inline]
+pub fn message_register(index: usize) -> seL4_Word {
+    unsafe { sel4_sys::seL4_GetMR(index) }
+}
+
+/// Issues an seL4 reply using the current thread's reply capability.
+#[cfg(feature = "kernel")]
+#[inline]
+pub fn reply(info: seL4_MessageInfo) {
+    #[allow(non_snake_case)]
+    unsafe extern "C" {
+        fn seL4_Reply(msg_info: seL4_MessageInfo);
+    }
+
+    unsafe {
+        seL4_Reply(info);
+    }
+}
+
 /// Yields the current thread to the scheduler.
 #[cfg(feature = "kernel")]
 #[inline]

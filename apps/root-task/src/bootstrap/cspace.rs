@@ -489,6 +489,10 @@ pub fn cspace_first_retypes(
     .map_err(|e| panic!("[retype] endpoint fail slot=0x{endpoint_slot_u32:04x} err={e:?}"))?;
 
     log::info!("[retype:ok] endpoint @ slot=0x{:04x}", endpoint_slot_u32);
+    #[cfg(feature = "canonical_cspace")]
+    {
+        let _ = crate::console::start(&dest, bi);
+    }
 
     bump_slot(&mut dest);
 

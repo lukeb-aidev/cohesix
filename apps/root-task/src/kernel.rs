@@ -1586,6 +1586,11 @@ impl KernelIpc {
             return false;
         }
 
+        #[cfg(feature = "canonical_cspace")]
+        if crate::console::try_handle_message(info, badge) {
+            return true;
+        }
+
         if bootstrap {
             log::trace!(
                 "B5.recv ret badge=0x{badge:016x} info=0x{info:08x}",
