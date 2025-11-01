@@ -294,7 +294,7 @@ pub fn cnode_copy_selftest(bi: &seL4_BootInfo) -> Result<(), seL4_Error> {
         root = root,
     );
 
-    let copy_err = cspace_sys::cnode_copy_canonical(bi, root, dst_slot, root, src_slot, rights);
+    let copy_err = cspace_sys::cnode_copy_raw(bi, root, dst_slot, root, src_slot, rights);
 
     if copy_err != seL4_NoError {
         log::warn!("[selftest] CNode_Copy failed err={copy_err}");
@@ -305,8 +305,7 @@ pub fn cnode_copy_selftest(bi: &seL4_BootInfo) -> Result<(), seL4_Error> {
 
     #[cfg(target_os = "none")]
     {
-        let dst_index = cspace_sys::enc_index(dst_slot, init_bits);
-        let delete_err = unsafe { seL4_CNode_Delete(root, dst_index, init_bits) };
+        let delete_err = unsafe { seL4_CNode_Delete(root, dst_slot as seL4_CPtr, init_bits) };
         if delete_err != seL4_NoError {
             log::warn!("[selftest] cleanup delete failed err={delete_err}");
             return Err(delete_err);
@@ -384,8 +383,7 @@ pub fn cspace_first_retypes(
     };
     dest.set_slot_offset(tcb_copy_slot);
     let rights = cap_rights_read_write_grant();
-    let guard_depth_bits = init.bits;
-    let copy_err = cspace_sys::cnode_copy_canonical(
+    let copy_err = cspace_sys::cnode_copy_raw(
         bi,
         seL4_CapInitThreadCNode,
         tcb_copy_slot as seL4_Word,
@@ -501,7 +499,6 @@ pub fn cspace_first_retypes(
     cnode_copy_selftest(bi).expect("[selftest] cnode.copy failed");
 
     let rights = cap_rights_read_write_grant();
-    let guard_depth_bits = init.bits;
 
     let endpoint_slot = match cs.alloc_slot() {
         Ok(slot) => slot,
@@ -554,7 +551,7 @@ pub fn cspace_first_retypes(
         }
     };
     dest.set_slot_offset(tcb_copy_slot);
-    let copy_err = cspace_sys::cnode_copy_canonical(
+    let copy_err = cspace_sys::cnode_copy_raw(
         bi,
         seL4_CapInitThreadCNode,
         tcb_copy_slot as seL4_Word,
