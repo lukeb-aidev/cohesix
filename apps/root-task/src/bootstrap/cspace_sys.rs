@@ -455,6 +455,39 @@ pub fn encode_cnode_depth(bits: u8) -> sys::seL4_Word {
     bits as sys::seL4_Word
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct RootPath {
+    root: sys::seL4_CNode,
+    index: sys::seL4_Word,
+    depth: sys::seL4_Word,
+    offset: sys::seL4_Word,
+}
+
+impl RootPath {
+    #[inline(always)]
+    pub(super) fn from_bootinfo(slot: u32, bi: &sys::seL4_BootInfo) -> Self {
+        let init_bits = sel4::init_cnode_bits(bi);
+        let root = sel4::init_cnode_cptr(bi);
+        let index = root as sys::seL4_Word;
+        let depth = sys::seL4_WordBits as sys::seL4_Word;
+        let offset = slot as sys::seL4_Word;
+        guard_root_path(init_bits, index, depth, offset);
+        let (empty_start, empty_end) = sel4::empty_window(bi);
+        assert!(
+            slot >= empty_start && slot < empty_end,
+            "slot 0x{slot:04x} outside bootinfo empty window [0x{start:04x}..0x{end:04x})",
+            start = empty_start,
+            end = empty_end,
+        );
+        Self {
+            root,
+            index,
+            depth,
+            offset,
+        }
+    }
+}
+
 #[inline(always)]
 /// Constructs the `(root, index, depth, offset)` tuple targeting a slot in the init CNode.
 pub fn init_cnode_dest(
@@ -516,6 +549,153 @@ pub fn init_cnode_retype_dest(
     let depth_bits = u8::try_from(init_bits).expect("initThreadCNodeSizeBits must fit within u8");
     guard_root_path(depth_bits, node_index, node_depth, node_offset);
     (root, node_index, node_depth, node_offset)
+}
+
+pub mod canonical {
+    #[cfg(not(target_os = "none"))]
+    use super::host_trace;
+    use super::{debug_log, sel4, sys, RootPath};
+    use core::convert::TryFrom;
+
+    #[inline(always)]
+    fn build_root_path(slot: u32, bi: &sys::seL4_BootInfo) -> RootPath {
+        RootPath::from_bootinfo(slot, bi)
+    }
+
+    #[inline(always)]
+    fn log_path(prefix: &str, slot: u32, path: &RootPath) {
+        debug_log(format_args!(
+            "{prefix} dst=0x{slot:04x} (root=0x{root:x} index={index} depth={depth} offset={offset})",
+            prefix = prefix,
+            slot = slot,
+            root = path.root,
+            index = path.index,
+            depth = path.depth,
+            offset = path.offset,
+        ));
+    }
+
+    #[inline(always)]
+    pub fn cnode_copy_into_root(
+        dst_slot: u32,
+        src_root: sys::seL4_CNode,
+        src_index: sys::seL4_CPtr,
+        src_depth_bits: u8,
+        rights: sel4::SeL4CapRights,
+        bi: &sys::seL4_BootInfo,
+    ) -> Result<(), sys::seL4_Error> {
+        let path = build_root_path(dst_slot, bi);
+        log_path("[cnode:copy]", dst_slot, &path);
+
+        #[cfg(target_os = "none")]
+        {
+            let dest_depth = u8::try_from(path.depth).expect("seL4_WordBits must fit within u8");
+            let err = unsafe {
+                sys::seL4_CNode_Copy(
+                    path.root,
+                    path.offset,
+                    dest_depth as sys::seL4_Word,
+                    src_root,
+                    src_index as sys::seL4_Word,
+                    src_depth_bits,
+                    rights,
+                )
+            };
+            return if err == sys::seL4_NoError {
+                Ok(())
+            } else {
+                Err(err)
+            };
+        }
+
+        #[cfg(not(target_os = "none"))]
+        {
+            let _ = (src_root, src_index, src_depth_bits, rights);
+            Ok(())
+        }
+    }
+
+    #[inline(always)]
+    pub fn cnode_delete_from_root(
+        dst_slot: u32,
+        bi: &sys::seL4_BootInfo,
+    ) -> Result<(), sys::seL4_Error> {
+        let path = build_root_path(dst_slot, bi);
+        log_path("[cnode:delete]", dst_slot, &path);
+
+        #[cfg(target_os = "none")]
+        {
+            let depth = u8::try_from(path.depth).expect("seL4_WordBits must fit within u8");
+            let err =
+                unsafe { sys::seL4_CNode_Delete(path.root, path.offset, depth as sys::seL4_Word) };
+            return if err == sys::seL4_NoError {
+                Ok(())
+            } else {
+                Err(err)
+            };
+        }
+
+        #[cfg(not(target_os = "none"))]
+        {
+            Ok(())
+        }
+    }
+
+    #[inline(always)]
+    pub fn retype_into_root(
+        ut: sys::seL4_CPtr,
+        obj: u32,
+        sz_bits: u32,
+        dst_slot: u32,
+        bi: &sys::seL4_BootInfo,
+    ) -> Result<(), sys::seL4_Error> {
+        let path = build_root_path(dst_slot, bi);
+        debug_log(format_args!(
+            "[retype:call] ut=0x{ut:x} obj={obj} sz={sz} -> (root,index,depth,offset)=(0x{root:x},{index},{depth},{offset})",
+            ut = ut,
+            obj = obj,
+            sz = sz_bits,
+            root = path.root,
+            index = path.index,
+            depth = path.depth,
+            offset = path.offset,
+        ));
+
+        #[cfg(target_os = "none")]
+        {
+            let err = unsafe {
+                sys::seL4_Untyped_Retype(
+                    ut,
+                    obj as sys::seL4_Word,
+                    sz_bits as sys::seL4_Word,
+                    path.root,
+                    path.index,
+                    path.depth,
+                    path.offset,
+                    1,
+                )
+            };
+            return if err == sys::seL4_NoError {
+                Ok(())
+            } else {
+                Err(err)
+            };
+        }
+
+        #[cfg(not(target_os = "none"))]
+        {
+            host_trace::record(host_trace::HostRetypeTrace {
+                root: path.root,
+                node_index: path.index,
+                node_depth: path.depth,
+                node_offset: path.offset,
+                object_type: obj as sys::seL4_Word,
+                size_bits: sz_bits as sys::seL4_Word,
+            });
+            let _ = ut;
+            Ok(())
+        }
+    }
 }
 
 /// Issues `seL4_Untyped_Retype` directly into the root CNode using canonical guard parameters.
@@ -1047,9 +1227,18 @@ mod tests {
     use core::convert::TryFrom;
 
     use super::{
-        bi_init_cnode_cptr, init_cnode_dest, init_cnode_direct_destination_words_for_test,
-        untyped_retype_into_init_root,
+        bi_init_cnode_cptr, canonical, init_cnode_dest,
+        init_cnode_direct_destination_words_for_test, sys, untyped_retype_into_init_root,
     };
+
+    #[cfg(not(target_os = "none"))]
+    fn mock_bootinfo(empty_start: u32, empty_end: u32, bits: u8) -> sys::seL4_BootInfo {
+        let mut bootinfo: sys::seL4_BootInfo = unsafe { core::mem::zeroed() };
+        bootinfo.initThreadCNodeSizeBits = bits as _;
+        bootinfo.empty.start = empty_start as _;
+        bootinfo.empty.end = empty_end as _;
+        bootinfo
+    }
 
     #[test]
     fn init_cnode_dest_radix_depth_is_valid() {
@@ -1208,5 +1397,83 @@ mod tests {
             result.is_err(),
             "init_cnode_dest should panic when slot is out of range"
         );
+    }
+
+    #[cfg(not(target_os = "none"))]
+    #[test]
+    fn canonical_root_path_accepts_empty_window_slot() {
+        let bootinfo = mock_bootinfo(0x20, 0x40, 6);
+        let path = super::RootPath::from_bootinfo(0x22, &bootinfo);
+        assert_eq!(path.root, sys::seL4_CapInitThreadCNode);
+        assert_eq!(path.index, sys::seL4_CapInitThreadCNode as _);
+        assert_eq!(path.depth, sys::seL4_WordBits as sys::seL4_Word);
+        assert_eq!(path.offset, 0x22);
+    }
+
+    #[cfg(not(target_os = "none"))]
+    #[test]
+    fn canonical_root_path_rejects_before_empty_window() {
+        use std::panic;
+
+        let bootinfo = mock_bootinfo(0x30, 0x50, 6);
+        let result = panic::catch_unwind(|| {
+            let _ = super::RootPath::from_bootinfo(0x2F, &bootinfo);
+        });
+        assert!(result.is_err(), "slot before empty window should panic");
+    }
+
+    #[cfg(not(target_os = "none"))]
+    #[test]
+    fn canonical_copy_guard_blocks_out_of_window() {
+        use std::panic;
+
+        let bootinfo = mock_bootinfo(0x40, 0x60, 7);
+        let rights = sel4_sys::seL4_CapRights::new(0, 1, 1, 1);
+        let result = panic::catch_unwind(|| {
+            let _ = canonical::cnode_copy_into_root(
+                0x3F,
+                sys::seL4_CapInitThreadCNode,
+                0,
+                0,
+                rights,
+                &bootinfo,
+            );
+        });
+        assert!(
+            result.is_err(),
+            "copy should guard against slots before window"
+        );
+    }
+
+    #[cfg(not(target_os = "none"))]
+    #[test]
+    fn canonical_copy_allows_valid_slot() {
+        let bootinfo = mock_bootinfo(0x80, 0xA0, 8);
+        let rights = sel4_sys::seL4_CapRights::new(0, 1, 1, 1);
+        let result = canonical::cnode_copy_into_root(
+            0x85,
+            sys::seL4_CapInitThreadCNode,
+            0,
+            0,
+            rights,
+            &bootinfo,
+        );
+        assert!(result.is_ok());
+    }
+
+    #[cfg(not(target_os = "none"))]
+    #[test]
+    fn canonical_retype_records_host_trace() {
+        while super::host_trace::take_last().is_some() {}
+        let bootinfo = mock_bootinfo(0x100, 0x180, 8);
+        let result = canonical::retype_into_root(0xAA, 4, 12, 0x120, &bootinfo);
+        assert!(result.is_ok());
+        let trace = super::host_trace::take_last().expect("expected host trace entry");
+        assert_eq!(trace.root, sys::seL4_CapInitThreadCNode);
+        assert_eq!(trace.node_index, sys::seL4_CapInitThreadCNode as _);
+        assert_eq!(trace.node_depth, sys::seL4_WordBits as sys::seL4_Word);
+        assert_eq!(trace.node_offset, 0x120);
+        assert_eq!(trace.object_type, 4);
+        assert_eq!(trace.size_bits, 12);
     }
 }
