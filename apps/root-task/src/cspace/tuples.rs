@@ -2,13 +2,12 @@
 //! Canonical tuple helpers for seL4 CSpace operations during early bootstrap.
 #![allow(unsafe_code)]
 
-use core::convert::TryInto;
 use core::fmt::Write as _;
 
 use crate::sel4::BootInfoExt;
 use sel4_sys::{
-    seL4_CNode_Copy, seL4_CPtr, seL4_CapRights_All, seL4_DebugPutChar, seL4_EndpointObject,
-    seL4_Error, seL4_IPCBuffer, seL4_Untyped_Retype, seL4_Word,
+    seL4_CPtr, seL4_DebugPutChar, seL4_EndpointObject, seL4_Error, seL4_IPCBuffer,
+    seL4_Untyped_Retype, seL4_Word,
 };
 
 /// Tuple describing the canonical addressing required for init CNode operations.
@@ -83,43 +82,6 @@ fn heartbeat(tag: u8) {
     unsafe {
         seL4_DebugPutChar(tag);
     }
-}
-
-/// Emit a non-blocking proof copy of a capability from the init CNode to validate
-/// canonical addressing tuples.
-pub fn try_cnode_copy_proof(
-    cn: &CNodeTuple,
-    slot_free: seL4_Word,
-    src_slot: seL4_CPtr,
-) -> seL4_Error {
-    heartbeat(b'c');
-    let depth_bits = cn
-        .init_bits
-        .try_into()
-        .expect("initBits must fit within u8 for seL4_CNode_Copy");
-    let depth_word = depth_bits as seL4_Word;
-    let dest_index = slot_free;
-    let src_index = src_slot as seL4_Word;
-    let result = unsafe {
-        seL4_CNode_Copy(
-            cn.root,
-            dest_index as seL4_CPtr,
-            depth_bits,
-            cn.root,
-            src_index as seL4_CPtr,
-            depth_bits,
-            seL4_CapRights_All,
-        )
-    };
-    heartbeat(b'C');
-    if result != sel4_sys::seL4_NoError {
-        debug_puts("[rt-fix] cnode.copy fail #");
-        debug_hex(" dest=0x", dest_index);
-        debug_hex(" src=0x", src_index);
-        debug_hex(" depth=0x", depth_word);
-        debug_puts("\n");
-    }
-    result
 }
 
 /// Retype a single endpoint object into the supplied slot using canonical arguments.
