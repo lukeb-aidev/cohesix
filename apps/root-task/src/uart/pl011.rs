@@ -4,6 +4,7 @@
 
 use core::sync::atomic::{AtomicUsize, Ordering};
 
+use crate::bootstrap::cspace_sys::encode_cptr_index;
 use crate::cspace::tuples::RetypeTuple;
 use sel4_sys::{
     seL4_ARM_Page_Map, seL4_ARM_Page_Uncached, seL4_ARM_SmallPageObject, seL4_CPtr,
@@ -152,6 +153,7 @@ pub fn map_pl011_smallpage(
     vspace: seL4_CPtr,
 ) -> seL4_Error {
     unsafe {
+        let encoded_slot = encode_cptr_index(page_slot, cnode.init_bits, cnode.node_depth);
         let retype = seL4_Untyped_Retype(
             dev_ut,
             seL4_ARM_SmallPageObject,
@@ -159,7 +161,7 @@ pub fn map_pl011_smallpage(
             cnode.node_root,
             cnode.node_index,
             cnode.node_depth as seL4_Word,
-            page_slot,
+            encoded_slot as seL4_CPtr,
             1,
         );
         if retype != sel4_sys::seL4_NoError {
@@ -167,7 +169,7 @@ pub fn map_pl011_smallpage(
         }
 
         seL4_ARM_Page_Map(
-            page_slot as seL4_CPtr,
+            encoded_slot as seL4_CPtr,
             vspace,
             PL011_VADDR,
             seL4_CapRights_ReadWrite,

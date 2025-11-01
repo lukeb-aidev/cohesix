@@ -6,7 +6,7 @@ extern crate alloc;
 
 use alloc::boxed::Box;
 use core::cmp;
-use core::convert::Infallible;
+use core::convert::{Infallible, TryFrom};
 use core::fmt::{self, Write};
 use core::panic::PanicInfo;
 use core::ptr;
@@ -40,8 +40,8 @@ use crate::ninedoor::NineDoorBridge;
 use crate::platform::{Platform, SeL4Platform};
 use crate::sel4::{
     self, bootinfo_debug_dump, error_name, first_regular_untyped, root_endpoint, seL4_CPtr,
-    seL4_CapInitThreadTCB, seL4_Word, BootInfo, BootInfoExt, BootInfoView, KernelEnv, RetypeKind,
-    RetypeStatus, IPC_PAGE_BYTES, MSG_MAX_WORDS,
+    seL4_CapInitThreadCNode, seL4_CapInitThreadTCB, seL4_Word, BootInfo, BootInfoExt, BootInfoView,
+    KernelEnv, RetypeKind, RetypeStatus, IPC_PAGE_BYTES, MSG_MAX_WORDS,
 };
 use crate::serial::{
     pl011::Pl011, SerialPort, DEFAULT_LINE_CAPACITY, DEFAULT_RX_CAPACITY, DEFAULT_TX_CAPACITY,
@@ -557,7 +557,10 @@ fn bootstrap<P: Platform>(
         bootinfo_ref.init_cnode_cap(),
         bootinfo_ref.initThreadCNodeSizeBits as u8,
     );
-    let retype_tuple = make_retype_tuple(bootinfo_ref.init_cnode_cap());
+    let retype_tuple = make_retype_tuple(
+        bootinfo_ref.init_cnode_cap(),
+        bootinfo_ref.initThreadCNodeSizeBits as u8,
+    );
     log::info!(
         "[rt-fix] cspace window [0x{start:04x}..0x{end:04x}), initBits={bits}, initCNode=0x{root:04x}",
         start = bootinfo_ref.empty_first_slot(),
@@ -603,10 +606,20 @@ fn bootstrap<P: Platform>(
     }
 
     let proof_slot = boot_first_free;
-    let proof_err =
-        try_cnode_copy_proof(&cnode_tuple, proof_slot as seL4_Word, seL4_CapInitThreadTCB);
+    let proof_err = try_cnode_copy_proof(
+        &cnode_tuple,
+        proof_slot as seL4_Word,
+        seL4_CapInitThreadCNode,
+    );
     if proof_err == sel4_sys::seL4_NoError {
-        let delete_err = sel4::cnode_delete(cnode_tuple.root, proof_slot, cnode_tuple.depth);
+        let encoded_proof_slot = cnode_tuple.encode_slot(proof_slot as seL4_Word);
+        let guard_depth_bits =
+            u8::try_from(cnode_tuple.guard_depth()).expect("guard depth must fit within u8");
+        let delete_err = sel4::cnode_delete(
+            cnode_tuple.root,
+            encoded_proof_slot as seL4_CPtr,
+            guard_depth_bits,
+        );
         if delete_err != sel4_sys::seL4_NoError {
             log::warn!(
                 "[rt-fix] cnode.delete cleanup failed slot=0x{slot:04x} err={err}",
