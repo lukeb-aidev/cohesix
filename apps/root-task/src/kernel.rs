@@ -6,7 +6,7 @@ extern crate alloc;
 
 use alloc::boxed::Box;
 use core::cmp;
-use core::convert::{Infallible, TryFrom};
+use core::convert::Infallible;
 use core::fmt::{self, Write};
 use core::panic::PanicInfo;
 use core::ptr;

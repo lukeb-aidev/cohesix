@@ -5,14 +5,13 @@ use crate::bootstrap::log::force_uart_line;
 use crate::bootstrap::retype::{bump_slot, retype_captable};
 use crate::cspace::{cap_rights_read_write_grant, CSpace};
 use crate::sel4::{self, is_boot_reserved_slot, BootInfoView, WORD_BITS};
-use core::convert::TryInto;
 use core::fmt::Write;
 use heapless::String;
 
 use super::cspace_sys;
 use sel4_sys::{
     self, seL4_AllRights, seL4_BootInfo, seL4_CNode, seL4_CNode_Copy, seL4_CNode_Delete, seL4_CPtr,
-    seL4_CapInitThreadCNode, seL4_CapRights_All, seL4_Error, seL4_NoError, seL4_Word,
+    seL4_CapInitThreadCNode, seL4_Error, seL4_NoError, seL4_Word,
 };
 
 const MAX_DIAGNOSTIC_LEN: usize = 224;
@@ -307,8 +306,11 @@ pub fn cnode_copy_selftest(bi: &seL4_BootInfo) -> Result<(), seL4_Error> {
     let rights = seL4_AllRights;
 
     #[cfg(target_os = "none")]
-    let copy_err =
-        unsafe { seL4_CNode_Copy(root, dst_index, depth, root, src_index, depth, rights) };
+    let copy_err = unsafe {
+        seL4_CNode_Copy(
+            root, dst_index, init_bits, root, src_index, init_bits, rights,
+        )
+    };
 
     #[cfg(not(target_os = "none"))]
     let copy_err = seL4_NoError;
@@ -322,7 +324,7 @@ pub fn cnode_copy_selftest(bi: &seL4_BootInfo) -> Result<(), seL4_Error> {
 
     #[cfg(target_os = "none")]
     {
-        let delete_err = unsafe { seL4_CNode_Delete(root, dst_index, depth) };
+        let delete_err = unsafe { seL4_CNode_Delete(root, dst_index, init_bits) };
         if delete_err != seL4_NoError {
             log::warn!("[selftest] cleanup delete failed err={delete_err}");
             return Err(delete_err);
