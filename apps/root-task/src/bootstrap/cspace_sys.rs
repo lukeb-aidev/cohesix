@@ -335,8 +335,8 @@ pub fn preflight_init_cnode_writable(probe_slot: sys::seL4_CPtr) -> Result<(), P
 
     #[cfg(target_os = "none")]
     {
-        let depth = bits;
-        let depth_word = depth;
+        let depth_word = bits;
+        let depth = u8::try_from(depth_word).expect("init CNode depth exceeds u8");
         let probe_index = probe_slot as sys::seL4_Word;
         let err = unsafe {
             sys::seL4_CNode_Mint(
@@ -497,6 +497,7 @@ pub fn cnode_copy_raw(
     rights: sys::seL4_CapRights,
 ) -> sys::seL4_Error {
     let depth = init_cspace_depth_words(bi);
+    let depth_bits = u8::try_from(depth).expect("init CSpace depth exceeds u8");
     let dst_label = slot_constant_label(dst_slot_raw);
     let src_label = slot_constant_label(src_slot_raw);
     let dst_root_label = root_constant_label(dst_root);
@@ -513,10 +514,10 @@ pub fn cnode_copy_raw(
             sys::seL4_CNode_Copy(
                 dst_root,
                 dst_slot_raw as sys::seL4_CPtr,
-                depth,
+                depth_bits,
                 src_root,
                 src_slot_raw as sys::seL4_CPtr,
-                depth,
+                depth_bits,
                 rights,
             )
         }
@@ -587,14 +588,15 @@ pub fn cnode_mint_raw(
     #[cfg(target_os = "none")]
     {
         let depth = init_cspace_depth_words(bi);
+        let depth_bits = u8::try_from(depth).expect("init CSpace depth exceeds u8");
         unsafe {
             sys::seL4_CNode_Mint(
                 dst_root,
                 dst_slot_raw as sys::seL4_CPtr,
-                depth,
+                depth_bits,
                 src_root,
                 src_slot_raw as sys::seL4_CPtr,
-                depth,
+                depth_bits,
                 rights,
                 badge,
             )
@@ -627,14 +629,15 @@ pub fn cnode_move_raw(
     #[cfg(target_os = "none")]
     {
         let depth = init_cspace_depth_words(bi);
+        let depth_bits = u8::try_from(depth).expect("init CSpace depth exceeds u8");
         unsafe {
             sys::seL4_CNode_Move(
                 dst_root,
                 dst_slot_raw as sys::seL4_CPtr,
-                depth,
+                depth_bits,
                 src_root,
                 src_slot_raw as sys::seL4_CPtr,
-                depth,
+                depth_bits,
             )
         }
     }
@@ -856,9 +859,10 @@ pub mod canonical {
         let root = sys::seL4_CapInitThreadCNode;
         let idx = path.offset();
         let depth_word = super::init_cspace_depth_words(bi);
+        let depth_bits = u8::try_from(depth_word).expect("init CSpace depth exceeds u8");
 
         #[cfg(target_os = "none")]
-        let err = unsafe { sys::seL4_CNode_Delete(root, idx, depth_word) };
+        let err = unsafe { sys::seL4_CNode_Delete(root, idx, depth_bits) };
 
         #[cfg(not(target_os = "none"))]
         let err = sys::seL4_NoError;
