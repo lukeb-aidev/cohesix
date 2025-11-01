@@ -11,19 +11,19 @@ use heapless::String;
 
 use super::cspace_sys;
 use sel4_sys::{
-    self, seL4_BootInfo, seL4_CNode, seL4_CNode_Copy, seL4_CNode_Delete, seL4_CPtr,
+    self, seL4_AllRights, seL4_BootInfo, seL4_CNode, seL4_CNode_Copy, seL4_CNode_Delete, seL4_CPtr,
     seL4_CapInitThreadCNode, seL4_CapRights_All, seL4_Error, seL4_NoError, seL4_Word,
 };
 
 const MAX_DIAGNOSTIC_LEN: usize = 224;
 
-#[cfg(feature = "canonical_cspace")]
 #[inline(always)]
-fn enc_index(slot: seL4_Word, init_bits: u8) -> seL4_Word {
-    let shift = (WORD_BITS as u32)
-        .checked_sub(init_bits as u32)
+pub fn enc_index(slot: seL4_Word, init_bits: u8) -> seL4_Word {
+    let guard_bits = WORD_BITS
+        .checked_sub(init_bits as seL4_Word)
         .expect("init CNode bits must not exceed WORD_BITS");
-    slot.checked_shl(shift)
+    let guard_bits = u32::try_from(guard_bits).expect("guard bits must fit within u32");
+    slot.checked_shl(guard_bits)
         .expect("encoded init CNode slot must fit within WORD_BITS")
 }
 
@@ -291,7 +291,6 @@ pub fn make_root_dest(bi: &sel4_sys::seL4_BootInfo) -> DestCNode {
     dest
 }
 
-#[cfg(feature = "canonical_cspace")]
 pub fn cnode_copy_selftest(bi: &seL4_BootInfo) -> Result<(), seL4_Error> {
     let (start, _end) = crate::sel4_view::empty_window(bi);
     let init_bits = bi.initThreadCNodeSizeBits as u8;
@@ -303,11 +302,9 @@ pub fn cnode_copy_selftest(bi: &seL4_BootInfo) -> Result<(), seL4_Error> {
     let src_slot = sel4::init_cnode_cptr(bi) as seL4_Word;
     let src_index = enc_index(src_slot, init_bits);
 
-    log::info!(
-        "[cnode.copy] root=0x{root:x} dst_slot=0x{dst_slot:04x} src_slot=0x{src_slot:04x} -> dst_enc=0x{dst_index:016x} src_enc=0x{src_index:016x} depth={depth}",
-    );
+    log::info!("[selftest] root={root:#x} dst={dst_index:#x} src={src_index:#x} depth={depth}",);
 
-    let rights = seL4_CapRights_All;
+    let rights = seL4_AllRights;
 
     #[cfg(target_os = "none")]
     let copy_err =
@@ -317,24 +314,21 @@ pub fn cnode_copy_selftest(bi: &seL4_BootInfo) -> Result<(), seL4_Error> {
     let copy_err = seL4_NoError;
 
     if copy_err != seL4_NoError {
-        log::warn!("[cnode.copy] failed err={copy_err}");
+        log::warn!("[selftest] CNode_Copy failed err={copy_err}");
         return Err(copy_err);
     }
 
+    log::info!("[selftest] CNode_Copy OK (slot {start:#04x})");
+
     #[cfg(target_os = "none")]
-    let delete_err = unsafe { seL4_CNode_Delete(root, dst_index, depth) };
-
-    #[cfg(not(target_os = "none"))]
-    let delete_err = seL4_NoError;
-
-    if delete_err != seL4_NoError {
-        log::warn!("[cnode.copy] cleanup delete failed err={delete_err}");
-        return Err(delete_err);
+    {
+        let delete_err = unsafe { seL4_CNode_Delete(root, dst_index, depth) };
+        if delete_err != seL4_NoError {
+            log::warn!("[selftest] cleanup delete failed err={delete_err}");
+            return Err(delete_err);
+        }
     }
 
-    log::info!(
-        "[cnode.copy] ok (copied CapInitThreadCNode -> slot 0x{dst_slot:04x} and cleaned up)",
-    );
     Ok(())
 }
 
