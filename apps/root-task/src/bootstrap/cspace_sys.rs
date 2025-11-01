@@ -590,10 +590,14 @@ pub mod canonical {
 
         let dst_root = sys::seL4_CapInitThreadCNode;
         let dst_index = dst_slot as sys::seL4_Word;
-        let dst_depth = sel4_view::init_cnode_bits(bi);
+        let dst_depth_word = sel4_view::init_cnode_bits(bi);
+        let dst_depth = u8::try_from(dst_depth_word)
+            .expect("initThreadCNodeSizeBits must fit within u8");
         let src_root = sys::seL4_CapInitThreadCNode;
         let src_index = sel4::init_cnode_cptr(bi) as sys::seL4_Word;
-        let src_depth = sel4_view::init_cnode_bits(bi);
+        let src_depth_word = sel4_view::init_cnode_bits(bi);
+        let src_depth = u8::try_from(src_depth_word)
+            .expect("initThreadCNodeSizeBits must fit within u8");
         let rights = sys::seL4_CapRights_All;
 
         #[cfg(target_os = "none")]
@@ -611,10 +615,10 @@ pub mod canonical {
              src_root=0x{src_root:x} idx=0x{src_index:x} depth={src_depth} rights=0x{rights:x} -> err={err}",
             dst_root = dst_root,
             dst_index = dst_index,
-            dst_depth = dst_depth,
+            dst_depth = dst_depth_word,
             src_root = src_root,
             src_index = src_index,
-            src_depth = src_depth,
+            src_depth = src_depth_word,
             rights = rights.raw(),
             err = err,
         );
@@ -636,7 +640,9 @@ pub mod canonical {
 
         let root = sys::seL4_CapInitThreadCNode;
         let idx = dst_slot as sys::seL4_Word;
-        let depth = sel4_view::init_cnode_bits(bi);
+        let depth_word = sel4_view::init_cnode_bits(bi);
+        let depth = u8::try_from(depth_word)
+            .expect("initThreadCNodeSizeBits must fit within u8");
 
         #[cfg(target_os = "none")]
         let err = unsafe { sys::seL4_CNode_Delete(root, idx, depth) };
@@ -648,7 +654,7 @@ pub mod canonical {
             "[cnode.delete] root=0x{root:x} idx=0x{idx:x} depth={depth} -> err={err}",
             root = root,
             idx = idx,
-            depth = depth,
+            depth = depth_word,
             err = err,
         );
 
