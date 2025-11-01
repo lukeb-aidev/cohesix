@@ -61,12 +61,10 @@ impl CSpace {
         src_slot: seL4_CPtr,
         rights: sel4_sys::seL4_CapRights,
     ) -> seL4_Error {
-        let guard_depth_word = seL4_WordBits as sel4::seL4_Word;
-        let guard_depth: u8 = seL4_WordBits
-            .try_into()
-            .expect("seL4_WordBits must fit within u8");
+        let guard_depth_word = self.bits as sel4::seL4_Word;
+        let guard_depth = self.bits;
         log::info!(
-            "[cnode] Copy dest: root=initCNode index=0x{slot:04x} depth={depth}(wordBits) offset=0",
+            "[cnode] Copy dest: root=initCNode index=0x{slot:04x} depth={depth} offset=0",
             slot = dst_slot,
             depth = guard_depth_word,
         );
@@ -89,12 +87,10 @@ impl CSpace {
         rights: sel4_sys::seL4_CapRights,
         badge: seL4_Word,
     ) -> seL4_Error {
-        let guard_depth_word = seL4_WordBits as sel4::seL4_Word;
-        let guard_depth: u8 = seL4_WordBits
-            .try_into()
-            .expect("seL4_WordBits must fit within u8");
+        let guard_depth_word = self.bits as sel4::seL4_Word;
+        let guard_depth = self.bits;
         log::info!(
-            "[cnode] Mint dest: root=initCNode index=0x{slot:04x} depth={depth}(wordBits) offset=0",
+            "[cnode] Mint dest: root=initCNode index=0x{slot:04x} depth={depth} offset=0",
             slot = dst_slot,
             depth = guard_depth_word,
         );

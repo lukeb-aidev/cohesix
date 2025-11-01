@@ -468,11 +468,11 @@ pub fn replyrecv_guarded(
     Ok(message)
 }
 
-/// Returns the guard depth (in bits) required to traverse the init thread's root CNode.
+/// Returns the legacy guard depth (in bits) historically used for init CNode traversal.
 ///
-/// The kernel expects CSpace arguments to consume the full architectural word width when
-/// addressing the init thread's single-level CNode. `initThreadCNodeSizeBits` describes the
-/// slot capacity, while every syscall should supply `seL4_WordBits` as the traversal depth.
+/// Bootstrap code that issues raw seL4 syscalls should prefer the init CNode width reported by
+/// `seL4_BootInfo::initThreadCNodeSizeBits`. This helper exists for compatibility with host-side
+/// traces that still model the guard-encoded calling convention.
 #[inline]
 pub fn init_cnode_depth(_bi: &seL4_BootInfo) -> u8 {
     sel4_sys::seL4_WordBits as u8

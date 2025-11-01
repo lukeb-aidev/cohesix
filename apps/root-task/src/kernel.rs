@@ -612,14 +612,8 @@ fn bootstrap<P: Platform>(
         seL4_CapInitThreadCNode,
     );
     if proof_err == sel4_sys::seL4_NoError {
-        let encoded_proof_slot = cnode_tuple.encode_slot(proof_slot as seL4_Word);
-        let guard_depth_bits =
-            u8::try_from(cnode_tuple.guard_depth()).expect("guard depth must fit within u8");
-        let delete_err = sel4::cnode_delete(
-            cnode_tuple.root,
-            encoded_proof_slot as seL4_CPtr,
-            guard_depth_bits,
-        );
+        let guard_depth_bits = cnode_tuple.init_bits;
+        let delete_err = sel4::cnode_delete(cnode_tuple.root, proof_slot, guard_depth_bits);
         if delete_err != sel4_sys::seL4_NoError {
             log::warn!(
                 "[rt-fix] cnode.delete cleanup failed slot=0x{slot:04x} err={err}",
