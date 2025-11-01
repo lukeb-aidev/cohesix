@@ -11,9 +11,9 @@ use super::cspace_sys::encode_cnode_depth;
 use super::ffi::raw_untyped_retype;
 use crate::bootstrap::log::force_uart_line;
 use crate::bootstrap::{boot_tracer, BootPhase, UntypedSelection};
-use crate::sel4::{error_name, PAGE_BITS, PAGE_TABLE_BITS};
 #[cfg(feature = "canonical_cspace")]
 use crate::sel4::pick_smallest_non_device_untyped;
+use crate::sel4::{error_name, PAGE_BITS, PAGE_TABLE_BITS};
 #[cfg(feature = "canonical_cspace")]
 use crate::sel4_view;
 #[cfg(any(test, feature = "ffi_shim"))]
