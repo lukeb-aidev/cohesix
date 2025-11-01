@@ -539,15 +539,15 @@ pub fn cnode_copy_raw(
 /// Probe 1: copy BootInfo cap into the first free slot.
 pub fn probe_copy_bootinfo(bi: &sys::seL4_BootInfo) -> sys::seL4_Error {
     let dst = bi.empty.start as sys::seL4_CPtr;
-    let src = sys::seL4_CapInitThreadBootInfo as sys::seL4_Word;
-    ::log::info!("[probe] BootInfo -> 0x{dst:04x} (src=seL4_CapInitThreadBootInfo={src})");
+    let src = sys::seL4_CapBootInfoFrame as sys::seL4_Word;
+    ::log::info!("[probe] BootInfo -> 0x{dst:04x} (src=seL4_CapBootInfoFrame={src})");
     cnode_copy_raw(
         bi,
         sys::seL4_CapInitThreadCNode,
         dst as sys::seL4_Word,
         sys::seL4_CapInitThreadCNode,
         src,
-        sys::seL4_AllRights,
+        sys::seL4_CapRights_All,
     )
 }
 
@@ -562,7 +562,7 @@ pub fn probe_copy_cnode(bi: &sys::seL4_BootInfo) -> sys::seL4_Error {
         dst as sys::seL4_Word,
         sys::seL4_CapInitThreadCNode,
         src,
-        sys::seL4_AllRights,
+        sys::seL4_CapRights_All,
     )
 }
 
@@ -577,7 +577,7 @@ pub fn seed_copy_tcb_to_first_free(bi: &sys::seL4_BootInfo) -> sys::seL4_Error {
         dst as sys::seL4_Word,
         sys::seL4_CapInitThreadCNode,
         src,
-        sys::seL4_AllRights,
+        sys::seL4_CapRights_All,
     )
 }
 

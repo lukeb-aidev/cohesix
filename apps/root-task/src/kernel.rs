@@ -613,7 +613,7 @@ fn bootstrap<P: Platform>(
         sel4_sys::seL4_CapInitThreadCNode,
         sel4_sys::seL4_CapInitThreadVSpace,
         sel4_sys::seL4_CapInitThreadIPCBuffer,
-        sel4_sys::seL4_CapInitThreadBootInfo,
+        sel4_sys::seL4_CapBootInfoFrame,
     );
 
     let probe_slot = boot_first_free;
