@@ -81,7 +81,7 @@ impl InitCNode {
     #[must_use]
     pub fn from_bootinfo(bi: &seL4_BootInfo) -> Self {
         let root = seL4_CapInitThreadCNode;
-        let depth = WORD_BITS;
+        let depth = bi.initThreadCNodeSizeBits as seL4_Word;
         let index = root;
         let bits = bi.initThreadCNodeSizeBits as u8;
         let empty = SlotRange::new(bi.empty.start as seL4_Word, bi.empty.end as seL4_Word);
@@ -108,7 +108,8 @@ pub fn root_cnode_path(
     init_cnode_bits: u8,
     dst_slot: seL4_Word,
 ) -> (seL4_CPtr, seL4_Word, seL4_Word, seL4_Word) {
-    let path = CNodePath::new(seL4_CapInitThreadCNode, seL4_CapInitThreadCNode, WORD_BITS);
+    let depth = init_cnode_bits as seL4_Word;
+    let path = CNodePath::new(seL4_CapInitThreadCNode, seL4_CapInitThreadCNode, depth);
     guard_root_path(
         init_cnode_bits,
         path.index as seL4_Word,
@@ -124,9 +125,10 @@ pub fn guard_root_path(init_cnode_bits: u8, index: seL4_Word, depth: seL4_Word, 
         index as seL4_CNode, seL4_CapInitThreadCNode,
         "index must reference the init thread CNode",
     );
+    let expected_depth: seL4_Word = init_cnode_bits as seL4_Word;
     assert_eq!(
-        depth, WORD_BITS,
-        "depth must equal seL4_WordBits for direct init CNode access",
+        depth, expected_depth,
+        "depth must equal initThreadCNodeSizeBits for direct init CNode access",
     );
     let limit = if init_cnode_bits as usize >= usize::BITS as usize {
         usize::MAX
@@ -320,7 +322,7 @@ pub fn cspace_first_retypes(
     };
     dest.set_slot_offset(tcb_copy_slot);
     let rights = cap_rights_read_write_grant();
-    let guard_depth_bits: u8 = WORD_BITS.try_into().expect("WORD_BITS must fit in u8");
+    let guard_depth_bits = init.bits;
     let copy_err = cspace_sys::cnode_copy_direct_dest(
         dest.root_bits,
         tcb_copy_slot,
@@ -334,7 +336,7 @@ pub fn cspace_first_retypes(
         if write!(
             &mut copy_line,
             "[cnode:copy] src=TCB depth={} -> dst=0x{slot:04x} OK",
-            WORD_BITS,
+            init.bits,
             slot = tcb_copy_slot,
         )
         .is_err()
@@ -344,7 +346,7 @@ pub fn cspace_first_retypes(
     } else if write!(
         &mut copy_line,
         "[cnode:copy] src=TCB depth={} -> dst=0x{slot:04x} ERR={err}",
-        WORD_BITS,
+        init.bits,
         slot = tcb_copy_slot,
         err = copy_err as i32,
     )
@@ -435,8 +437,7 @@ pub fn cspace_first_retypes(
     dest.assert_sane();
 
     let rights = cap_rights_read_write_grant();
-    let guard_depth_bits: u8 =
-        u8::try_from(sel4::WORD_BITS).expect("WORD_BITS must fit within u8 for canonical copy");
+    let guard_depth_bits = init.bits;
 
     let endpoint_slot = match cs.alloc_slot() {
         Ok(slot) => slot,
@@ -515,7 +516,7 @@ pub fn cspace_first_retypes(
         if write!(
             &mut copy_line,
             "[cnode:copy] src=TCB depth={} -> dst=0x{slot:04x} OK",
-            WORD_BITS,
+            init.bits,
             slot = tcb_copy_slot,
         )
         .is_err()
@@ -525,7 +526,7 @@ pub fn cspace_first_retypes(
     } else if write!(
         &mut copy_line,
         "[cnode:copy] src=TCB depth={} -> dst=0x{slot:04x} ERR={err}",
-        WORD_BITS,
+        init.bits,
         slot = tcb_copy_slot,
         err = copy_err as i32,
     )
@@ -639,8 +640,8 @@ impl CSpaceCtx {
             "init CNode width {init} exceeds WordBits {word_bits}",
             init = init_cnode_bits,
         );
-        // Init-root invocations must supply seL4_WordBits as the traversal depth.
-        let invocation_depth_bits: u8 = WORD_BITS.try_into().expect("WORD_BITS must fit within u8");
+        // Init-root invocations must supply the bootinfo-advertised guard depth.
+        let invocation_depth_bits = init_cnode_bits;
         let (first_free, last_free) = bi.init_cnode_empty_range();
         assert!(
             first_free < last_free,
@@ -771,7 +772,7 @@ impl CSpaceCtx {
 
     fn log_direct_init_path(&self, dst_slot: sel4::seL4_CPtr) {
         let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
-        let guard_depth = WORD_BITS;
+        let guard_depth = self.dest.root_bits;
         if write!(
             &mut line,
             "[retype] path=direct:init-cnode dest=0x{dst_slot:04x} guard_depth={} root_bits={} window=[0x{start:04x}..0x{end:04x})",
@@ -800,7 +801,7 @@ impl CSpaceCtx {
                 &mut line,
                 "[cnode] Copy err={err} root=0x{root:04x} dest(index=0x{dest_index:04x},depth={depth}) src(index=0x{src_index:04x},depth={depth})",
                 root = self.root_cnode_cap,
-                depth = WORD_BITS,
+                depth = self.dest.root_bits,
             )
             .is_err()
             {
@@ -824,7 +825,7 @@ impl CSpaceCtx {
                 &mut line,
                 "[cnode] Mint err={err} root=0x{root:04x} dest(index=0x{dest_index:04x},depth={depth},offset=0) src(index=0x{src_index:04x},depth={depth}) badge={badge}",
                 root = self.root_cnode_cap,
-                depth = WORD_BITS,
+                depth = self.dest.root_bits,
             )
             .is_err()
             {
