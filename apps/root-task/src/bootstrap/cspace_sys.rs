@@ -9,7 +9,7 @@ use core::convert::TryFrom;
 use core::fmt;
 
 use crate::boot;
-use crate::bootstrap::cspace::{enc_index, guard_root_path};
+use crate::bootstrap::cspace::guard_root_path;
 #[cfg(target_os = "none")]
 use crate::bootstrap::log::force_uart_line;
 use crate::sel4;
@@ -612,7 +612,7 @@ pub mod canonical {
 
     #[inline(always)]
     fn encode_slot(slot: sys::seL4_Word, init_bits: u8) -> sys::seL4_Word {
-        enc_index(slot, init_bits)
+        crate::bootstrap::cspace::enc_index(slot, init_bits)
     }
 
     #[inline(always)]
