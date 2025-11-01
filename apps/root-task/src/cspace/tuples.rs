@@ -6,7 +6,7 @@ use core::convert::TryInto;
 use core::fmt::Write as _;
 
 use crate::bootstrap::cspace_sys::encode_cptr_index;
-use crate::sel4::WORD_BITS;
+use crate::sel4::{BootInfoExt, WORD_BITS};
 use sel4_sys::{
     seL4_CNode_Copy, seL4_CPtr, seL4_CapRights_All, seL4_DebugPutChar, seL4_EndpointObject,
     seL4_Error, seL4_IPCBuffer, seL4_Untyped_Retype, seL4_Word,
@@ -108,14 +108,17 @@ pub fn try_cnode_copy_proof(
     let encoded_dest = cn.encode_slot(slot_free);
     let encoded_src = cn.encode_slot(src_slot as seL4_Word);
     let depth_word = guard_depth;
+    let depth_bits: u8 = depth_word
+        .try_into()
+        .expect("guard depth must fit within u8 for seL4_CNode_Copy");
     let result = unsafe {
         seL4_CNode_Copy(
             cn.root,
             encoded_dest as seL4_CPtr,
-            depth_word,
+            depth_bits,
             cn.root,
             encoded_src as seL4_CPtr,
-            depth_word,
+            depth_bits,
             seL4_CapRights_All,
         )
     };
