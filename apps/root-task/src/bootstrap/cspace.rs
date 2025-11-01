@@ -10,9 +10,22 @@ use core::fmt::Write;
 use heapless::String;
 
 use super::cspace_sys;
-use sel4_sys::{self, seL4_BootInfo, seL4_CNode, seL4_CPtr, seL4_CapInitThreadCNode, seL4_Word};
+use sel4_sys::{
+    self, seL4_BootInfo, seL4_CNode, seL4_CNode_Copy, seL4_CNode_Delete, seL4_CPtr,
+    seL4_CapInitThreadCNode, seL4_CapRights_All, seL4_Error, seL4_NoError, seL4_Word,
+};
 
 const MAX_DIAGNOSTIC_LEN: usize = 224;
+
+#[cfg(feature = "canonical_cspace")]
+#[inline(always)]
+fn enc_index(slot: seL4_Word, init_bits: u8) -> seL4_Word {
+    let shift = (WORD_BITS as u32)
+        .checked_sub(init_bits as u32)
+        .expect("init CNode bits must not exceed WORD_BITS");
+    slot.checked_shl(shift)
+        .expect("encoded init CNode slot must fit within WORD_BITS")
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 /// Canonical representation of a capability path targeting a CNode.
@@ -278,6 +291,77 @@ pub fn make_root_dest(bi: &sel4_sys::seL4_BootInfo) -> DestCNode {
     dest
 }
 
+#[cfg(feature = "canonical_cspace")]
+pub fn cnode_copy_selftest(bi: &seL4_BootInfo) -> Result<(), seL4_Error> {
+    let (start, _end) = crate::sel4_view::empty_window(bi);
+    let init_bits = bi.initThreadCNodeSizeBits as u8;
+    let depth = bi.initThreadCNodeSizeBits as seL4_Word;
+    let root = seL4_CapInitThreadCNode;
+
+    let dst_slot = start as seL4_Word;
+    let dst_index = enc_index(dst_slot, init_bits);
+    let src_slot = sel4::init_cnode_cptr(bi) as seL4_Word;
+    let src_index = enc_index(src_slot, init_bits);
+
+    log::info!(
+        "[cnode.copy] root=0x{root:x} dst_slot=0x{dst_slot:04x} src_slot=0x{src_slot:04x} -> dst_enc=0x{dst_index:016x} src_enc=0x{src_index:016x} depth={depth}",
+    );
+
+    let rights = seL4_CapRights_All;
+
+    #[cfg(target_os = "none")]
+    let copy_err =
+        unsafe { seL4_CNode_Copy(root, dst_index, depth, root, src_index, depth, rights) };
+
+    #[cfg(not(target_os = "none"))]
+    let copy_err = seL4_NoError;
+
+    if copy_err != seL4_NoError {
+        log::warn!("[cnode.copy] failed err={copy_err}");
+        return Err(copy_err);
+    }
+
+    #[cfg(target_os = "none")]
+    let delete_err = unsafe { seL4_CNode_Delete(root, dst_index, depth) };
+
+    #[cfg(not(target_os = "none"))]
+    let delete_err = seL4_NoError;
+
+    if delete_err != seL4_NoError {
+        log::warn!("[cnode.copy] cleanup delete failed err={delete_err}");
+        return Err(delete_err);
+    }
+
+    log::info!(
+        "[cnode.copy] ok (copied CapInitThreadCNode -> slot 0x{dst_slot:04x} and cleaned up)",
+    );
+    Ok(())
+}
+
+#[cfg(feature = "canonical_cspace")]
+pub fn first_endpoint_retype(
+    bi: &seL4_BootInfo,
+    ut_cap: seL4_CPtr,
+    slot: seL4_CPtr,
+) -> Result<(), seL4_Error> {
+    let dst_root = seL4_CapInitThreadCNode;
+    let node_index = 0u32;
+    let node_depth = 0u32;
+    let node_off = slot as seL4_Word;
+
+    log::info!(
+        "[retype] request ut=0x{ut_cap:04x} root=0x{dst_root:04x} idx={node_index} depth={node_depth} off=0x{node_off:04x}",
+    );
+
+    cspace_sys::retype_into_root(
+        ut_cap,
+        sel4_sys::seL4_ObjectType::seL4_EndpointObject as _,
+        0,
+        slot,
+        bi,
+    )
+}
+
 /// Performs the initial proof-of-life retype calls against the init CNode.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FirstRetypeResult {
@@ -436,6 +520,8 @@ pub fn cspace_first_retypes(
     dest.set_slot_offset(cs.next_free_slot());
     dest.assert_sane();
 
+    cnode_copy_selftest(bi).expect("[selftest] cnode.copy failed");
+
     let rights = cap_rights_read_write_grant();
     let guard_depth_bits = init.bits;
 
@@ -469,21 +555,8 @@ pub fn cspace_first_retypes(
         "first canonical endpoint slot should align with bootinfo window",
     );
 
-    let _ = cspace_sys::cnode_delete_from_root(endpoint_slot_u32, bi);
-    cspace_sys::cnode_copy_into_root(endpoint_slot_u32, bi)
-        .map_err(|e| panic!("[selftest] copy fail slot=0x{endpoint_slot_u32:04x} err={e:?}"))?;
-    cspace_sys::cnode_delete_from_root(endpoint_slot_u32, bi)
-        .map_err(|e| panic!("[selftest] delete fail slot=0x{endpoint_slot_u32:04x} err={e:?}"))?;
-
-    let ut_raw = u32::try_from(ut_cap).expect("untyped capability must fit within u32");
-    cspace_sys::canonical::retype_into_root(
-        ut_raw,
-        sel4_sys::seL4_ObjectType::seL4_EndpointObject as u32,
-        0,
-        endpoint_slot_u32,
-        bi,
-    )
-    .map_err(|e| panic!("[retype] endpoint fail slot=0x{endpoint_slot_u32:04x} err={e:?}"))?;
+    first_endpoint_retype(bi, ut_cap, endpoint_slot)
+        .map_err(|e| panic!("[retype] endpoint fail slot=0x{endpoint_slot_u32:04x} err={e:?}"))?;
 
     log::info!("[retype:ok] endpoint @ slot=0x{:04x}", endpoint_slot_u32);
     #[cfg(feature = "canonical_cspace")]
