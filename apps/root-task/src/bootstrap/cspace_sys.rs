@@ -594,7 +594,7 @@ pub mod canonical {
                 sys::seL4_CNode_Copy(
                     path.root,
                     path.offset,
-                    dest_depth as sys::seL4_Word,
+                    dest_depth as sys::seL4_Uint8,
                     src_root,
                     src_index as sys::seL4_Word,
                     src_depth_bits,

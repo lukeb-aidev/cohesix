@@ -419,7 +419,7 @@ pub fn cspace_first_retypes(
 pub fn cspace_first_retypes(
     bi: &sel4_sys::seL4_BootInfo,
     cs: &mut CSpace,
-    _ut_cap: sel4_sys::seL4_CPtr,
+    ut_cap: sel4_sys::seL4_CPtr,
 ) -> Result<FirstRetypeResult, sel4_sys::seL4_Error> {
     let init = InitCNode::from_bootinfo(bi);
     let mut dest = make_root_dest(bi);
@@ -477,8 +477,7 @@ pub fn cspace_first_retypes(
     cspace_sys::cnode_delete_from_root(endpoint_slot_u32, bi)
         .map_err(|e| panic!("[selftest] delete fail slot=0x{endpoint_slot_u32:04x} err={e:?}"))?;
 
-    let ut = crate::sel4::pick_smallest_non_device_untyped(bi);
-    let ut_raw = u32::try_from(ut).expect("untyped capability must fit within u32");
+    let ut_raw = u32::try_from(ut_cap).expect("untyped capability must fit within u32");
     cspace_sys::canonical::retype_into_root(
         ut_raw,
         sel4_sys::seL4_ObjectType::seL4_EndpointObject as u32,
@@ -559,7 +558,7 @@ pub fn cspace_first_retypes(
         }
     };
     dest.set_slot_offset(captable_slot);
-    let captable_err = retype_captable(ut as sel4_sys::seL4_Word, 4, &dest);
+    let captable_err = retype_captable(ut_cap as sel4_sys::seL4_Word, 4, &dest);
     if captable_err != sel4_sys::seL4_NoError {
         return Err(captable_err);
     }
