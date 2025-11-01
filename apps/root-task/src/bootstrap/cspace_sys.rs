@@ -469,6 +469,10 @@ fn cspace_depth_wordbits() -> u8 {
     u8::try_from(sel4::word_bits()).expect("word_bits must fit within u8")
 }
 
+fn word_depth() -> sys::seL4_Word {
+    cspace_depth_wordbits() as sys::seL4_Word
+}
+
 #[inline(always)]
 fn slot_constant_label(slot: sys::seL4_Word) -> &'static str {
     match slot as sys::seL4_CPtr {
@@ -477,6 +481,14 @@ fn slot_constant_label(slot: sys::seL4_Word) -> &'static str {
         x if x == sys::seL4_CapIRQControl => "seL4_CapIRQControl",
         x if x == sys::seL4_CapASIDControl => "seL4_CapASIDControl",
         _ => "-",
+    }
+}
+
+fn root_constant_label(root: sys::seL4_CNode) -> &'static str {
+    if root == sys::seL4_CapInitThreadCNode {
+        "InitCNode"
+    } else {
+        "-"
     }
 }
 
@@ -491,13 +503,15 @@ pub fn cnode_copy_raw(
 ) -> sys::seL4_Error {
     let _ = bi;
     let depth_bits = cspace_depth_wordbits();
-    let depth_word = depth_bits as sys::seL4_Word;
+    let depth_word = word_depth();
     let dst_label = slot_constant_label(dst_slot_raw);
     let src_label = slot_constant_label(src_slot_raw);
+    let dst_root_label = root_constant_label(dst_root);
+    let src_root_label = root_constant_label(src_root);
 
     ::log::info!(
-        "[cnode-copy] dst_root=0x{dst_root:04x} dst_slot=0x{dst_slot_raw:04x} ({dst_label}) dst_depth={depth_word} \
-src_root=0x{src_root:04x} src_slot=0x{src_slot_raw:04x} ({src_label}) src_depth={depth_word} (seL4_WordBits)",
+        "[cnode-copy] dst_root={dst_root_label} dst_slot=0x{dst_slot_raw:04x} ({dst_label}) dst_depth={depth_word}  \
+         src_root={src_root_label} src_slot=0x{src_slot_raw:04x} ({src_label}) src_depth={depth_word}",
     );
 
     #[cfg(target_os = "none")]
@@ -520,6 +534,51 @@ src_root=0x{src_root:04x} src_slot=0x{src_slot_raw:04x} ({src_label}) src_depth=
         let _ = (bi, dst_root, dst_slot_raw, src_root, src_slot_raw, rights);
         sys::seL4_NoError
     }
+}
+
+/// Probe 1: copy BootInfo cap into the first free slot.
+pub fn probe_copy_bootinfo(bi: &sys::seL4_BootInfo) -> sys::seL4_Error {
+    let dst = bi.empty.start as sys::seL4_CPtr;
+    let src = sys::seL4_CapInitThreadBootInfo as sys::seL4_Word;
+    ::log::info!("[probe] BootInfo -> 0x{dst:04x} (src=seL4_CapInitThreadBootInfo={src})");
+    cnode_copy_raw(
+        bi,
+        sys::seL4_CapInitThreadCNode,
+        dst as sys::seL4_Word,
+        sys::seL4_CapInitThreadCNode,
+        src,
+        sys::seL4_AllRights,
+    )
+}
+
+/// Probe 2: copy the init CNode cap into the next free slot.
+pub fn probe_copy_cnode(bi: &sys::seL4_BootInfo) -> sys::seL4_Error {
+    let dst = (bi.empty.start + 1) as sys::seL4_CPtr;
+    let src = sys::seL4_CapInitThreadCNode as sys::seL4_Word;
+    ::log::info!("[probe] CNode -> 0x{dst:04x} (src=seL4_CapInitThreadCNode={src})");
+    cnode_copy_raw(
+        bi,
+        sys::seL4_CapInitThreadCNode,
+        dst as sys::seL4_Word,
+        sys::seL4_CapInitThreadCNode,
+        src,
+        sys::seL4_AllRights,
+    )
+}
+
+/// Seed: copy the init thread TCB cap into the first free slot.
+pub fn seed_copy_tcb_to_first_free(bi: &sys::seL4_BootInfo) -> sys::seL4_Error {
+    let dst = bi.empty.start as sys::seL4_CPtr;
+    let src = sys::seL4_CapInitThreadTCB as sys::seL4_Word;
+    ::log::info!("[seed] TCB -> 0x{dst:04x} (src=seL4_CapInitThreadTCB={src})");
+    cnode_copy_raw(
+        bi,
+        sys::seL4_CapInitThreadCNode,
+        dst as sys::seL4_Word,
+        sys::seL4_CapInitThreadCNode,
+        src,
+        sys::seL4_AllRights,
+    )
 }
 
 #[inline(always)]

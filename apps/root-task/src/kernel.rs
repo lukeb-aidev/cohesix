@@ -6,7 +6,7 @@ extern crate alloc;
 
 use alloc::boxed::Box;
 use core::cmp;
-use core::convert::Infallible;
+use core::convert::{Infallible, TryFrom};
 use core::fmt::{self, Write};
 use core::panic::PanicInfo;
 use core::ptr;
@@ -15,6 +15,7 @@ use core::sync::atomic::{AtomicU8, Ordering};
 use cohesix_ticket::Role;
 
 use crate::boot::{bi_extra, ep};
+use crate::bootstrap::cspace_sys;
 use crate::bootstrap::{
     boot_tracer,
     cspace::{cspace_first_retypes, CSpaceCtx, FirstRetypeResult},
@@ -24,7 +25,7 @@ use crate::bootstrap::{
 };
 use crate::console::Console;
 use crate::cspace::tuples::{
-    assert_ipc_buffer_matches_bootinfo, make_cnode_tuple, make_retype_tuple, try_cnode_copy_proof,
+    assert_ipc_buffer_matches_bootinfo, make_cnode_tuple, make_retype_tuple,
 };
 use crate::cspace::{cap_rights_read_write_grant, CSpace};
 use crate::event::{
@@ -605,29 +606,49 @@ fn bootstrap<P: Platform>(
         assert_ipc_buffer_matches_bootinfo(bootinfo_ref);
     }
 
-    let proof_slot = boot_first_free;
-    let proof_err = try_cnode_copy_proof(
-        &cnode_tuple,
-        proof_slot as seL4_Word,
-        seL4_CapInitThreadCNode,
+    log::info!(
+        "[caps] Null={} TCB={} CNode={} VSpace={} IPCBuf={} BootInfo={}",
+        sel4_sys::seL4_CapNull,
+        sel4_sys::seL4_CapInitThreadTCB,
+        sel4_sys::seL4_CapInitThreadCNode,
+        sel4_sys::seL4_CapInitThreadVSpace,
+        sel4_sys::seL4_CapInitThreadIPCBuffer,
+        sel4_sys::seL4_CapInitThreadBootInfo,
     );
-    if proof_err == sel4_sys::seL4_NoError {
-        let guard_depth_bits = cnode_tuple.init_bits;
-        let delete_err = sel4::cnode_delete(cnode_tuple.root, proof_slot, guard_depth_bits);
+
+    let probe_slot = boot_first_free;
+    let depth_word_bits: u8 =
+        u8::try_from(sel4::word_bits()).expect("seL4 word_bits must fit within u8 for guard depth");
+
+    let probe_bootinfo = cspace_sys::probe_copy_bootinfo(bootinfo_ref);
+    log::info!("[probe] BootInfo copy -> {:?}", probe_bootinfo);
+    if probe_bootinfo == sel4_sys::seL4_NoError {
+        let delete_err = sel4::cnode_delete(cnode_tuple.root, probe_slot, depth_word_bits);
         if delete_err != sel4_sys::seL4_NoError {
             log::warn!(
-                "[rt-fix] cnode.delete cleanup failed slot=0x{slot:04x} err={err}",
-                slot = proof_slot,
-                err = delete_err
+                "[probe] delete cleanup failed slot=0x{slot:04x} err={err}",
+                slot = probe_slot,
+                err = delete_err,
             );
         }
-    } else {
-        log::warn!(
-            "[rt-fix] cnode.copy proof failed slot=0x{slot:04x} err={err}",
-            slot = proof_slot,
-            err = proof_err
-        );
     }
+
+    let probe_cnode = cspace_sys::probe_copy_cnode(bootinfo_ref);
+    log::info!("[probe] CNode copy    -> {:?}", probe_cnode);
+    if probe_cnode == sel4_sys::seL4_NoError {
+        let cleanup_slot = probe_slot + 1;
+        let delete_err = sel4::cnode_delete(cnode_tuple.root, cleanup_slot, depth_word_bits);
+        if delete_err != sel4_sys::seL4_NoError {
+            log::warn!(
+                "[probe] delete cleanup failed slot=0x{slot:04x} err={err}",
+                slot = cleanup_slot,
+                err = delete_err,
+            );
+        }
+    }
+
+    let probe_tcb = cspace_sys::seed_copy_tcb_to_first_free(bootinfo_ref);
+    log::info!("[seed] TCB copy       -> {:?}", probe_tcb);
 
     let mut kernel_env = KernelEnv::new(bootinfo_ref);
     let extra_bytes = bootinfo_view.extra();
