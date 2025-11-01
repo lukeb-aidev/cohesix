@@ -10,21 +10,11 @@ use heapless::String;
 
 use super::cspace_sys;
 use sel4_sys::{
-    self, seL4_BootInfo, seL4_CNode, seL4_CNode_Copy, seL4_CNode_Delete, seL4_CPtr,
-    seL4_CapInitThreadCNode, seL4_CapRights_All, seL4_Error, seL4_NoError, seL4_Word,
+    self, seL4_BootInfo, seL4_CNode, seL4_CNode_Delete, seL4_CPtr, seL4_CapInitThreadCNode,
+    seL4_CapRights_All, seL4_Error, seL4_NoError, seL4_Word,
 };
 
 const MAX_DIAGNOSTIC_LEN: usize = 224;
-
-#[inline(always)]
-pub fn enc_index(slot: seL4_Word, init_bits: u8) -> seL4_Word {
-    let guard_bits = WORD_BITS
-        .checked_sub(init_bits as seL4_Word)
-        .expect("init CNode bits must not exceed WORD_BITS");
-    let guard_bits = u32::try_from(guard_bits).expect("guard bits must fit within u32");
-    slot.checked_shl(guard_bits)
-        .expect("encoded init CNode slot must fit within WORD_BITS")
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 /// Canonical representation of a capability path targeting a CNode.
@@ -293,27 +283,18 @@ pub fn make_root_dest(bi: &sel4_sys::seL4_BootInfo) -> DestCNode {
 pub fn cnode_copy_selftest(bi: &seL4_BootInfo) -> Result<(), seL4_Error> {
     let (start, _end) = crate::sel4_view::empty_window(bi);
     let init_bits = bi.initThreadCNodeSizeBits as u8;
-    let depth = bi.initThreadCNodeSizeBits as seL4_Word;
     let root = seL4_CapInitThreadCNode;
 
     let dst_slot = start as seL4_Word;
-    let dst_index = enc_index(dst_slot, init_bits);
     let src_slot = sel4::init_cnode_cptr(bi) as seL4_Word;
-    let src_index = enc_index(src_slot, init_bits);
-
-    log::info!("[selftest] root={root:#x} dst={dst_index:#x} src={src_index:#x} depth={depth}",);
-
     let rights = seL4_CapRights_All;
 
-    #[cfg(target_os = "none")]
-    let copy_err = unsafe {
-        seL4_CNode_Copy(
-            root, dst_index, init_bits, root, src_index, init_bits, rights,
-        )
-    };
+    log::info!(
+        "[selftest] copy init CNode cap into slot 0x{start:04x} (root=0x{root:04x})",
+        root = root,
+    );
 
-    #[cfg(not(target_os = "none"))]
-    let copy_err = seL4_NoError;
+    let copy_err = cspace_sys::cnode_copy_canonical(bi, root, dst_slot, root, src_slot, rights);
 
     if copy_err != seL4_NoError {
         log::warn!("[selftest] CNode_Copy failed err={copy_err}");
@@ -324,6 +305,7 @@ pub fn cnode_copy_selftest(bi: &seL4_BootInfo) -> Result<(), seL4_Error> {
 
     #[cfg(target_os = "none")]
     {
+        let dst_index = cspace_sys::enc_index(dst_slot, init_bits);
         let delete_err = unsafe { seL4_CNode_Delete(root, dst_index, init_bits) };
         if delete_err != seL4_NoError {
             log::warn!("[selftest] cleanup delete failed err={delete_err}");
@@ -403,12 +385,12 @@ pub fn cspace_first_retypes(
     dest.set_slot_offset(tcb_copy_slot);
     let rights = cap_rights_read_write_grant();
     let guard_depth_bits = init.bits;
-    let copy_err = cspace_sys::cnode_copy_direct_dest(
-        dest.root_bits,
-        tcb_copy_slot,
+    let copy_err = cspace_sys::cnode_copy_canonical(
+        bi,
         seL4_CapInitThreadCNode,
-        sel4::seL4_CapInitThreadTCB,
-        guard_depth_bits,
+        tcb_copy_slot as seL4_Word,
+        seL4_CapInitThreadCNode,
+        sel4::seL4_CapInitThreadTCB as seL4_Word,
         rights,
     );
     let mut copy_line = String::<MAX_DIAGNOSTIC_LEN>::new();
@@ -572,12 +554,12 @@ pub fn cspace_first_retypes(
         }
     };
     dest.set_slot_offset(tcb_copy_slot);
-    let copy_err = cspace_sys::cnode_copy_direct_dest(
-        dest.root_bits,
-        tcb_copy_slot,
-        sel4_sys::seL4_CapInitThreadCNode,
-        sel4::seL4_CapInitThreadTCB,
-        guard_depth_bits,
+    let copy_err = cspace_sys::cnode_copy_canonical(
+        bi,
+        seL4_CapInitThreadCNode,
+        tcb_copy_slot as seL4_Word,
+        seL4_CapInitThreadCNode,
+        sel4::seL4_CapInitThreadTCB as seL4_Word,
         rights,
     );
     let mut copy_line = String::<MAX_DIAGNOSTIC_LEN>::new();
