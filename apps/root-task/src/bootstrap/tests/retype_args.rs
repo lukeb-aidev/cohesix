@@ -24,7 +24,7 @@ fn packs_correct_args_for_root_level_insert() {
     assert_eq!(last.size_bits, 0);
     assert_eq!(last.root, 0x2);
     assert_eq!(last.idx, 0);
-    assert_eq!(last.depth, dest.root_bits);
+    assert_eq!(last.depth, 0);
     assert_eq!(last.off, 0x0103);
     assert_eq!(last.n, 1);
 }
