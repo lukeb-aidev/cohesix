@@ -629,6 +629,11 @@ fn bootstrap<P: Platform>(
         boot_tracer().advance(BootPhase::DTBParseDeferred);
     }
 
+    #[cfg(feature = "canonical_cspace")]
+    {
+        crate::bootstrap::retype::canonical_cspace_console(bootinfo_ref);
+    }
+
     let mut first_retypes: Option<FirstRetypeResult> = None;
     if let Some((first_ut_cap, _)) = bi_extra::first_regular_untyped_from_extra(bootinfo_ref) {
         match cspace_first_retypes(bootinfo_ref, &mut boot_cspace, first_ut_cap) {
@@ -1584,11 +1589,6 @@ impl KernelIpc {
                 );
             }
             return false;
-        }
-
-        #[cfg(feature = "canonical_cspace")]
-        if crate::console::try_handle_message(info, badge) {
-            return true;
         }
 
         if bootstrap {

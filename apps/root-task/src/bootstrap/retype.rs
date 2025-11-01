@@ -11,7 +11,8 @@ use super::cspace_sys::encode_cnode_depth;
 use super::ffi::raw_untyped_retype;
 use crate::bootstrap::log::force_uart_line;
 use crate::bootstrap::{boot_tracer, BootPhase, UntypedSelection};
-use crate::sel4::{error_name, PAGE_BITS, PAGE_TABLE_BITS};
+use crate::sel4::{error_name, pick_smallest_non_device_untyped, PAGE_BITS, PAGE_TABLE_BITS};
+use crate::sel4_view;
 #[cfg(any(test, feature = "ffi_shim"))]
 use spin::Mutex;
 
@@ -341,4 +342,50 @@ where
 
     tracer.advance(BootPhase::RetypeDone);
     Ok(done)
+}
+
+#[cfg(feature = "canonical_cspace")]
+pub fn canonical_cspace_console(bi: &sel4_sys::seL4_BootInfo) -> ! {
+    let (start, _end) = sel4_view::empty_window(bi);
+    let dst = u32::try_from(start).expect("bootinfo empty window start must fit within u32");
+
+    let _ = cspace_sys::cnode_delete_from_root(dst, bi);
+
+    if let Err(err) = cspace_sys::cnode_copy_into_root(dst, bi) {
+        panic!(
+            "[selftest] copy fail slot=0x{dst:04x} err={err:?}",
+            dst = dst,
+            err = err,
+        );
+    }
+
+    if let Err(err) = cspace_sys::cnode_delete_from_root(dst, bi) {
+        panic!(
+            "[selftest] delete fail slot=0x{dst:04x} err={err:?}",
+            dst = dst,
+            err = err,
+        );
+    }
+
+    let ut = pick_smallest_non_device_untyped(bi);
+    if let Err(err) = cspace_sys::retype_into_root(
+        ut,
+        sel4_sys::seL4_ObjectType::seL4_EndpointObject as _,
+        0,
+        dst,
+        bi,
+    ) {
+        panic!(
+            "[retype] endpoint fail slot=0x{dst:04x} err={err:?}",
+            dst = dst,
+            err = err,
+        );
+    }
+
+    log::info!("[retype:ok] endpoint @ slot=0x{:04x}", dst);
+
+    crate::console::start(dst, bi);
+    loop {
+        core::hint::spin_loop();
+    }
 }
