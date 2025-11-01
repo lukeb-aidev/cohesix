@@ -7,8 +7,14 @@
 # matching the failures reported by local builds. Disabling incremental
 # globally keeps the build reliable across all crates, including registry
 # dependencies that were still opting into incremental compilation even after
-# the per-package overrides below.
+# the per-package overrides below. A lightweight rustc wrapper (see
+# `scripts/rustc-wrapper.sh`) now pre-creates the relevant output directories
+# before each invocation so that dep-info writes do not fail even if APFS
+# aggressively trims empty folders mid-build.
 CARGO_INCREMENTAL = "0"
+
+[build]
+rustc-wrapper = "scripts/rustc-wrapper.sh"
 
 [profile.dev.package.root-task]
 incremental = false

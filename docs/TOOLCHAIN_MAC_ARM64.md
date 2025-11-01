@@ -22,7 +22,9 @@ rustc --version
   or `serde` attempted to emit their rmeta artefacts under `target/debug/deps`.
   The global toggle keeps both seL4-targeted crates (`root-task`, `nine-door`,
   `worker-heart`, `worker-gpu`) and host-side tooling reliable, at the cost of
-  slightly longer recompiles.
+  slightly longer recompiles. The workspace also routes every `rustc`
+  invocation through `scripts/rustc-wrapper.sh`, which pre-creates the dep-info
+  and artefact directories so APFS/iCloud clean-ups cannot race the compiler.
 
 ## 3. QEMU Validation
 ```bash
