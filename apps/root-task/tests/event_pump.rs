@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
 use cohesix_ticket::Role;
-use embedded_io::Io;
+use embedded_io::ErrorType;
 use nb::Error as NbError;
 use root_task::event::{AuditSink, EventPump, IpcDispatcher, TickEvent, TicketTable, TimerSource};
 use root_task::serial::{
@@ -110,7 +110,7 @@ impl SharedSerial {
     }
 }
 
-impl Io for SharedSerial {
+impl ErrorType for SharedSerial {
     type Error = SerialError;
 }
 

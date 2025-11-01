@@ -15,7 +15,7 @@
 use heapless::spsc::Queue;
 
 use super::{SerialDriver, SerialError};
-use embedded_io::Io;
+use embedded_io::ErrorType;
 use nb::Error as NbError;
 
 /// Register-level access used by the virtio console when running on MMIO.
@@ -76,7 +76,7 @@ impl<const RX: usize, const TX: usize> Default for VirtioConsole<RX, TX> {
     }
 }
 
-impl<const RX: usize, const TX: usize> Io for VirtioConsole<RX, TX> {
+impl<const RX: usize, const TX: usize> ErrorType for VirtioConsole<RX, TX> {
     type Error = SerialError;
 }
 

@@ -83,7 +83,7 @@ fn ensure_text_bounds() {
 
 pub struct DummySerial;
 
-impl embedded_io::Io for DummySerial {
+impl embedded_io::ErrorType for DummySerial {
     type Error = SerialError;
 }
 

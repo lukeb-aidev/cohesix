@@ -6,7 +6,7 @@
 
 use core::ptr::{addr_of_mut, read_volatile, write_volatile, NonNull};
 
-use embedded_io::Io;
+use embedded_io::ErrorType;
 use nb::Error as NbError;
 
 use super::{SerialDriver, SerialError};
@@ -212,7 +212,7 @@ impl Pl011 {
     }
 }
 
-impl Io for Pl011 {
+impl ErrorType for Pl011 {
     type Error = SerialError;
 }
 
