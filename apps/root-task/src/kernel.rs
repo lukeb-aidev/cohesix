@@ -40,7 +40,7 @@ use crate::ninedoor::NineDoorBridge;
 use crate::platform::{Platform, SeL4Platform};
 use crate::sel4::{
     self, bootinfo_debug_dump, error_name, first_regular_untyped, root_endpoint, seL4_CPtr,
-    seL4_CapInitThreadCNode, seL4_CapInitThreadTCB, seL4_Word, BootInfo, BootInfoExt, BootInfoView,
+    seL4_CapInitThreadCNode, seL4_Word, BootInfo, BootInfoExt, BootInfoView,
     KernelEnv, RetypeKind, RetypeStatus, IPC_PAGE_BYTES, MSG_MAX_WORDS,
 };
 use crate::serial::{
