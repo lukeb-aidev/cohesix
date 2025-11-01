@@ -39,9 +39,9 @@ use crate::net::{NetStack, CONSOLE_TCP_PORT};
 use crate::ninedoor::NineDoorBridge;
 use crate::platform::{Platform, SeL4Platform};
 use crate::sel4::{
-    bootinfo_debug_dump, error_name, first_regular_untyped, root_endpoint, seL4_CapInitThreadTCB,
-    BootInfo, BootInfoExt, BootInfoView, KernelEnv, RetypeKind, RetypeStatus, IPC_PAGE_BYTES,
-    MSG_MAX_WORDS,
+    self, bootinfo_debug_dump, error_name, first_regular_untyped, root_endpoint, seL4_CPtr,
+    seL4_CapInitThreadTCB, seL4_Word, BootInfo, BootInfoExt, BootInfoView, KernelEnv, RetypeKind,
+    RetypeStatus, IPC_PAGE_BYTES, MSG_MAX_WORDS,
 };
 use crate::serial::{
     pl011::Pl011, SerialPort, DEFAULT_LINE_CAPACITY, DEFAULT_RX_CAPACITY, DEFAULT_TX_CAPACITY,

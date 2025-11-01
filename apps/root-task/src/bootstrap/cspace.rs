@@ -5,16 +5,11 @@ use crate::bootstrap::log::force_uart_line;
 use crate::bootstrap::retype::{bump_slot, retype_captable};
 use crate::cspace::{cap_rights_read_write_grant, CSpace};
 use crate::sel4::{self, is_boot_reserved_slot, BootInfoView, WORD_BITS};
-use crate::sel4_view::{empty_window, init_cnode_bits, init_cnode_cptr};
-use core::convert::{TryFrom, TryInto};
 use core::fmt::Write;
 use heapless::String;
 
 use super::cspace_sys;
-use sel4_sys::{
-    self, seL4_BootInfo, seL4_CNode, seL4_CNode_Delete, seL4_CPtr, seL4_CapInitThreadCNode,
-    seL4_EndpointObject, seL4_Word,
-};
+use sel4_sys::{self, seL4_BootInfo, seL4_CNode, seL4_CPtr, seL4_CapInitThreadCNode, seL4_Word};
 
 const MAX_DIAGNOSTIC_LEN: usize = 224;
 

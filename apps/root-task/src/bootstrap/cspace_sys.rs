@@ -541,16 +541,8 @@ pub fn retype_into_root(
             ident as u64
         ));
         let depth_bits = u8::try_from(sys::seL4_WordBits).expect("WordBits must fit within u8");
-        let rc = unsafe {
-            sys::seL4_CNode_Move(
-                root,
-                dst_slot,
-                depth_bits as sys::seL4_Word,
-                sys::seL4_CapNull,
-                0,
-                0,
-            )
-        };
+        let rc =
+            unsafe { sys::seL4_CNode_Move(root, dst_slot, depth_bits, sys::seL4_CapNull, 0, 0) };
         debug_log(format_args!("[probe:move-null] rc={}", rc as i32));
     }
 

@@ -6,8 +6,8 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::cspace::tuples::RetypeTuple;
 use sel4_sys::{
-    seL4_ARM_PageUncacheable, seL4_ARM_Page_Map, seL4_CPtr, seL4_CanRead, seL4_CanWrite,
-    seL4_DebugPutChar, seL4_Error, seL4_Untyped_Retype, seL4_Word,
+    seL4_ARM_Page_Map, seL4_ARM_Page_Uncached, seL4_ARM_SmallPageObject, seL4_CPtr,
+    seL4_CapRights_ReadWrite, seL4_DebugPutChar, seL4_Error, seL4_Untyped_Retype, seL4_Word,
 };
 
 const PL011_PADDR: u64 = 0x0900_0000;
@@ -47,12 +47,18 @@ fn base_ptr() -> *mut u8 {
 
 #[inline(always)]
 unsafe fn read_reg(offset: usize) -> u32 {
-    core::ptr::read_volatile(base_ptr().add(offset) as *const u32)
+    unsafe {
+        let ptr = base_ptr().add(offset) as *const u32;
+        core::ptr::read_volatile(ptr)
+    }
 }
 
 #[inline(always)]
 unsafe fn write_reg(offset: usize, value: u32) {
-    core::ptr::write_volatile(base_ptr().add(offset) as *mut u32, value);
+    unsafe {
+        let ptr = base_ptr().add(offset) as *mut u32;
+        core::ptr::write_volatile(ptr, value);
+    }
 }
 
 fn wait_tx_ready() {
@@ -148,7 +154,7 @@ pub fn map_pl011_smallpage(
     unsafe {
         let retype = seL4_Untyped_Retype(
             dev_ut,
-            sel4_sys::seL4_ObjectType_seL4_ARM_SmallPageObject,
+            seL4_ARM_SmallPageObject,
             12,
             cnode.node_root,
             cnode.node_index,
@@ -161,11 +167,11 @@ pub fn map_pl011_smallpage(
         }
 
         seL4_ARM_Page_Map(
-            page_slot,
+            page_slot as seL4_CPtr,
             vspace,
             PL011_VADDR,
-            seL4_CanRead | seL4_CanWrite,
-            seL4_ARM_PageUncacheable,
+            seL4_CapRights_ReadWrite,
+            seL4_ARM_Page_Uncached,
         )
     }
 }
