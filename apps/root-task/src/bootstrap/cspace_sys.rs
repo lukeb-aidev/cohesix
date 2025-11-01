@@ -335,17 +335,18 @@ pub fn preflight_init_cnode_writable(probe_slot: sys::seL4_CPtr) -> Result<(), P
 
     #[cfg(target_os = "none")]
     {
-        let init_bits = u8::try_from(bits).expect("initThreadCNodeSizeBits must fit in u8");
-        let depth = cspace_depth_wordbits() as sys::seL4_Word;
+        let _init_bits = u8::try_from(bits).expect("initThreadCNodeSizeBits must fit in u8");
+        let depth_bits = cspace_depth_wordbits();
+        let depth_word = depth_bits as sys::seL4_Word;
         let probe_index = probe_slot as sys::seL4_Word;
         let err = unsafe {
             sys::seL4_CNode_Mint(
                 root,
                 probe_index,
-                depth,
+                depth_bits,
                 root,
                 CANONICAL_CNODE_INDEX,
-                depth,
+                depth_bits,
                 sel4::seL4_CapRights_All,
                 0,
             )
@@ -353,7 +354,7 @@ pub fn preflight_init_cnode_writable(probe_slot: sys::seL4_CPtr) -> Result<(), P
         if err != sys::seL4_NoError {
             ::log::error!(
                 "preflight failed: Mint root=0x{root:04x} slot=0x{slot:04x} depth={} err={} ({})",
-                depth,
+                depth_word,
                 err,
                 sel4::error_name(err),
                 slot = probe_slot,
@@ -362,11 +363,11 @@ pub fn preflight_init_cnode_writable(probe_slot: sys::seL4_CPtr) -> Result<(), P
             return Err(PreflightError::Probe(err));
         }
 
-        let delete_err = unsafe { sys::seL4_CNode_Delete(root, probe_index, depth) };
+        let delete_err = unsafe { sys::seL4_CNode_Delete(root, probe_index, depth_bits) };
         if delete_err != sys::seL4_NoError {
             ::log::error!(
                 "preflight cleanup failed: Delete root=0x{root:04x} slot=0x{slot:04x} depth={} err={} ({})",
-                depth,
+                depth_word,
                 delete_err,
                 sel4::error_name(delete_err),
                 slot = probe_slot,
@@ -465,7 +466,7 @@ pub fn encode_cnode_depth(bits: u8) -> sys::seL4_Word {
 /// For a single-level root CNode, the invocation depth must be `seL4_WordBits`.
 #[inline(always)]
 fn cspace_depth_wordbits() -> u8 {
-    sel4::word_bits() as u8
+    u8::try_from(sel4::word_bits()).expect("word_bits must fit within u8")
 }
 
 #[inline(always)]
@@ -489,8 +490,8 @@ pub fn cnode_copy_raw(
     rights: sys::seL4_CapRights,
 ) -> sys::seL4_Error {
     let _ = bi;
-    let depth = cspace_depth_wordbits();
-    let depth_word = depth as sys::seL4_Word;
+    let depth_bits = cspace_depth_wordbits();
+    let depth_word = depth_bits as sys::seL4_Word;
     let dst_label = slot_constant_label(dst_slot_raw);
     let src_label = slot_constant_label(src_slot_raw);
 
@@ -505,10 +506,10 @@ src_root=0x{src_root:04x} src_slot=0x{src_slot_raw:04x} ({src_label}) src_depth=
             sys::seL4_CNode_Copy(
                 dst_root,
                 dst_slot_raw as sys::seL4_CPtr,
-                depth as sys::seL4_Word,
+                depth_bits,
                 src_root,
                 src_slot_raw as sys::seL4_CPtr,
-                depth as sys::seL4_Word,
+                depth_bits,
                 rights,
             )
         }
@@ -532,18 +533,17 @@ pub fn cnode_mint_raw(
     badge: sys::seL4_Word,
 ) -> sys::seL4_Error {
     let _ = bi;
-    let depth = cspace_depth_wordbits() as sys::seL4_Word;
-
     #[cfg(target_os = "none")]
     {
+        let depth_bits = cspace_depth_wordbits();
         unsafe {
             sys::seL4_CNode_Mint(
                 dst_root,
                 dst_slot_raw as sys::seL4_CPtr,
-                depth,
+                depth_bits,
                 src_root,
                 src_slot_raw as sys::seL4_CPtr,
-                depth,
+                depth_bits,
                 rights,
                 badge,
             )
@@ -574,18 +574,17 @@ pub fn cnode_move_raw(
     src_slot_raw: sys::seL4_Word,
 ) -> sys::seL4_Error {
     let _ = bi;
-    let depth = cspace_depth_wordbits() as sys::seL4_Word;
-
     #[cfg(target_os = "none")]
     {
+        let depth_bits = cspace_depth_wordbits();
         unsafe {
             sys::seL4_CNode_Move(
                 dst_root,
                 dst_slot_raw as sys::seL4_CPtr,
-                depth,
+                depth_bits,
                 src_root,
                 src_slot_raw as sys::seL4_CPtr,
-                depth,
+                depth_bits,
             )
         }
     }
@@ -680,7 +679,7 @@ pub fn init_cnode_dest(
     let offset = slot as sys::seL4_Word;
     let init_bits_u8 = u8::try_from(init_bits).expect("initThreadCNodeSizeBits must fit within u8");
     guard_root_path(init_bits_u8, root as sys::seL4_Word, guard_depth, offset);
-    let word_bits = u8::try_from(sel4::WORD_BITS).expect("WORD_BITS must fit within u8");
+    let _word_bits = u8::try_from(sel4::WORD_BITS).expect("WORD_BITS must fit within u8");
     let raw_index = offset;
     (root, raw_index, guard_depth, offset)
 }
@@ -806,10 +805,11 @@ pub mod canonical {
 
         let root = sys::seL4_CapInitThreadCNode;
         let idx = path.offset();
-        let depth = super::cspace_depth_wordbits() as sys::seL4_Word;
+        let depth_bits = super::cspace_depth_wordbits();
+        let depth_word = depth_bits as sys::seL4_Word;
 
         #[cfg(target_os = "none")]
-        let err = unsafe { sys::seL4_CNode_Delete(root, idx, depth) };
+        let err = unsafe { sys::seL4_CNode_Delete(root, idx, depth_bits) };
 
         #[cfg(not(target_os = "none"))]
         let err = sys::seL4_NoError;
@@ -818,7 +818,7 @@ pub mod canonical {
             "[cnode.delete] root=0x{root:x} idx=0x{idx:x} depth={depth} -> err={err}",
             root = root,
             idx = idx,
-            depth = depth,
+            depth = depth_word,
             err = err,
         );
 
