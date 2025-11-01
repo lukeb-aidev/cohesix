@@ -48,7 +48,7 @@ pub fn bootstrap_ep(
     let _node_offset = seL4_CPtr::try_from(node_offset_word)
         .expect("init CNode destination offset must fit in seL4_CPtr");
     debug_assert_eq!(node_index, 0);
-    debug_assert_eq!(node_depth, crate::sel4::WORD_BITS as u8);
+    debug_assert_eq!(node_depth, 0);
 
     crate::trace::println!(
         "[cs: root=0x{root:x} bits={bits} first_free=0x{slot:x}]",
