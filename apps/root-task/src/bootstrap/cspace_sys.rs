@@ -555,7 +555,7 @@ pub fn init_cnode_retype_dest(
 pub mod canonical {
     #[cfg(not(target_os = "none"))]
     use super::host_trace;
-    use super::{debug_log, sel4, sys, RootPath};
+    use super::{debug_log, sel4, sel4_view, sys, RootPath};
     use core::convert::TryFrom;
 
     #[inline(always)]
@@ -594,7 +594,7 @@ pub mod canonical {
         let src_root = sys::seL4_CapInitThreadCNode;
         let src_index = sel4::init_cnode_cptr(bi) as sys::seL4_Word;
         let src_depth = sel4_view::init_cnode_bits(bi);
-        let rights: sys::seL4_CapRights = sys::seL4_AllRights as sys::seL4_CapRights;
+        let rights = sys::seL4_CapRights_All;
 
         #[cfg(target_os = "none")]
         let err = unsafe {
@@ -615,7 +615,7 @@ pub mod canonical {
             src_root = src_root,
             src_index = src_index,
             src_depth = src_depth,
-            rights = rights as sys::seL4_Word,
+            rights = rights.raw(),
             err = err,
         );
 
