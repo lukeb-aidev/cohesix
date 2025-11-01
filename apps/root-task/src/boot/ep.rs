@@ -9,7 +9,7 @@ use crate::boot::bi_extra::first_regular_untyped_from_extra;
 use crate::bootstrap::cspace_sys;
 use crate::cspace::tuples::retype_endpoint_into_slot;
 use crate::cspace::CSpace;
-use crate::sel4;
+use crate::sel4::{self, seL4_Word};
 use crate::serial;
 
 /// One-shot endpoint bootstrap: pick a regular untyped, retype, publish, and trace.
@@ -45,7 +45,7 @@ pub fn bootstrap_ep(
         .expect("init CNode destination index must fit in seL4_CPtr");
     let node_depth =
         u8::try_from(node_depth_word).expect("initThreadCNodeSizeBits must fit within u8");
-    let node_offset = seL4_CPtr::try_from(node_offset_word)
+    let _node_offset = seL4_CPtr::try_from(node_offset_word)
         .expect("init CNode destination offset must fit in seL4_CPtr");
     debug_assert_eq!(node_index, 0);
     debug_assert_eq!(node_depth, 0);

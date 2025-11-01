@@ -4,9 +4,10 @@
 
 use core::fmt::Write as _;
 
+use crate::sel4::BootInfoExt;
 use sel4_sys::{
-    seL4_AllRights, seL4_CNode_Copy, seL4_CPtr, seL4_DebugPutChar, seL4_Error, seL4_IPCBuffer,
-    seL4_Untyped_Retype, seL4_Word,
+    seL4_CNode_Copy, seL4_CPtr, seL4_CapRights_All, seL4_DebugPutChar, seL4_EndpointObject,
+    seL4_Error, seL4_IPCBuffer, seL4_Untyped_Retype, seL4_Word,
 };
 
 /// Tuple describing the canonical addressing required for init CNode operations.
@@ -79,11 +80,11 @@ pub fn try_cnode_copy_proof(
         seL4_CNode_Copy(
             cn.root,
             slot_free,
-            cn.depth as seL4_Word,
+            cn.depth,
             cn.root,
             src_cap,
-            cn.depth as seL4_Word,
-            seL4_AllRights,
+            cn.depth,
+            seL4_CapRights_All,
         )
     };
     heartbeat(b'C');
@@ -103,7 +104,7 @@ pub fn retype_endpoint_into_slot(ut: seL4_CPtr, slot: seL4_Word, rt: &RetypeTupl
     let result = unsafe {
         seL4_Untyped_Retype(
             ut,
-            sel4_sys::seL4_ObjectType_seL4_EndpointObject,
+            seL4_EndpointObject,
             0,
             rt.node_root,
             rt.node_index,
