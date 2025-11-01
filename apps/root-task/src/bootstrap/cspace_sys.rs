@@ -461,9 +461,12 @@ pub fn encode_cnode_depth(bits: u8) -> sys::seL4_Word {
     bits as sys::seL4_Word
 }
 
+/// Canonical path depth used by seL4 CNode invocations.
+/// For a single-level root CNode, the invocation depth must be seL4_WordBits,
+/// *not* the radix of the init CNode (initThreadCNodeSizeBits).
 #[inline(always)]
-fn init_cnode_depth(bi: &sys::seL4_BootInfo) -> u8 {
-    sel4::init_cnode_bits(bi)
+fn init_cnode_depth(_bi: &sys::seL4_BootInfo) -> u8 {
+    sel4::word_bits() as u8
 }
 
 #[inline(always)]
@@ -479,7 +482,7 @@ pub fn cnode_copy_raw(
     let depth_word = depth as sys::seL4_Word;
 
     ::log::info!(
-        "[cnode-copy] dst=0x{dst_slot_raw:04x} src=0x{src_slot_raw:04x} depth={depth_word}",
+        "[cnode-copy] dst=0x{dst_slot_raw:04x} src=0x{src_slot_raw:04x} depth={depth_word} (wordBits)",
     );
 
     #[cfg(target_os = "none")]
