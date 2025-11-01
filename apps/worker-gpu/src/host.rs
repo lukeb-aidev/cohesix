@@ -12,7 +12,7 @@ use std::fmt;
 use anyhow::{anyhow, Context, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use cohesix_ticket::{BudgetSpec, Role, TicketTemplate};
-use rand::{rngs::OsRng, RngCore};
+use rand::{rngs::OsRng, TryRngCore};
 use secure9p_wire::SessionId;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -25,7 +25,9 @@ impl JobId {
     /// Generate a random job identifier with a `job-` prefix.
     pub fn random() -> Self {
         let mut bytes = [0u8; 8];
-        OsRng.fill_bytes(&mut bytes);
+        OsRng
+            .try_fill_bytes(&mut bytes)
+            .expect("os entropy source unavailable");
         Self(format!("job-{}", hex::encode(bytes)))
     }
 

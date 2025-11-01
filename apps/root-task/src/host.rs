@@ -230,7 +230,7 @@ impl HostSerial {
     }
 }
 
-impl embedded_io::Io for HostSerial {
+impl embedded_io::ErrorType for HostSerial {
     type Error = SerialError;
 }
 

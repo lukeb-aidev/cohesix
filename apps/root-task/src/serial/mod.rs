@@ -16,7 +16,7 @@
 
 use core::fmt;
 
-use embedded_io::{Error as EmbeddedError, ErrorKind, Io};
+use embedded_io::{Error as EmbeddedError, ErrorKind, ErrorType};
 use heapless::{spsc::Queue, String as HeaplessString};
 use nb::Error as NbError;
 use portable_atomic::AtomicU32;
@@ -86,6 +86,8 @@ impl fmt::Display for SerialError {
     }
 }
 
+impl core::error::Error for SerialError {}
+
 impl EmbeddedError for SerialError {
     fn kind(&self) -> ErrorKind {
         ErrorKind::Other
@@ -93,7 +95,7 @@ impl EmbeddedError for SerialError {
 }
 
 /// Lightweight trait abstracting the MMIO-backed console device.
-pub trait SerialDriver: Io {
+pub trait SerialDriver: ErrorType {
     /// Attempt to read a single byte from the device.
     fn read_byte(&mut self) -> nb::Result<u8, Self::Error>;
 
@@ -328,7 +330,7 @@ pub mod test_support {
         }
     }
 
-    impl<const CAP: usize> Io for LoopbackSerial<CAP> {
+    impl<const CAP: usize> ErrorType for LoopbackSerial<CAP> {
         type Error = SerialError;
     }
 
