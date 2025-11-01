@@ -2,9 +2,11 @@
 //! Canonical tuple helpers for seL4 CSpace operations during early bootstrap.
 #![allow(unsafe_code)]
 
+use core::convert::TryInto;
 use core::fmt::Write as _;
 
-use crate::sel4::BootInfoExt;
+use crate::bootstrap::cspace_sys::encode_cptr_index;
+use crate::sel4::WORD_BITS;
 use sel4_sys::{
     seL4_CNode_Copy, seL4_CPtr, seL4_CapRights_All, seL4_DebugPutChar, seL4_EndpointObject,
     seL4_Error, seL4_IPCBuffer, seL4_Untyped_Retype, seL4_Word,
@@ -15,8 +17,27 @@ use sel4_sys::{
 pub struct CNodeTuple {
     /// Root capability designating the init thread CNode.
     pub root: seL4_CPtr,
-    /// Depth (in bits) required when addressing slots in the init CNode.
-    pub depth: u8,
+    /// Radix width (in bits) of the init thread CNode as reported by bootinfo.
+    pub init_bits: u8,
+}
+
+impl CNodeTuple {
+    #[inline(always)]
+    fn word_bits_u8(&self) -> u8 {
+        WORD_BITS
+            .try_into()
+            .expect("WORD_BITS must fit within u8 for canonical CSpace addressing")
+    }
+
+    #[inline(always)]
+    pub fn guard_depth(&self) -> seL4_Word {
+        WORD_BITS as seL4_Word
+    }
+
+    #[inline(always)]
+    pub fn encode_slot(&self, slot: seL4_Word) -> seL4_Word {
+        encode_cptr_index(slot, self.init_bits, self.word_bits_u8())
+    }
 }
 
 /// Tuple describing the destination parameters for `seL4_Untyped_Retype`.
@@ -26,8 +47,10 @@ pub struct RetypeTuple {
     pub node_root: seL4_CPtr,
     /// Capability pointer supplied as `nodeIndex` (must equal `node_root`).
     pub node_index: seL4_CPtr,
-    /// Destination depth supplied as `nodeDepth` (always zero for init CNode).
+    /// Destination depth supplied as `nodeDepth` (canonical guard depth = `seL4_WordBits`).
     pub node_depth: u8,
+    /// Radix width (in bits) of the init thread CNode as reported by bootinfo.
+    pub init_bits: u8,
 }
 
 /// Construct the canonical init CNode tuple.
@@ -35,17 +58,21 @@ pub struct RetypeTuple {
 pub fn make_cnode_tuple(init_cnode: seL4_CPtr, init_bits: u8) -> CNodeTuple {
     CNodeTuple {
         root: init_cnode,
-        depth: init_bits,
+        init_bits,
     }
 }
 
 /// Construct the canonical tuple for retype destinations.
 #[inline(always)]
-pub fn make_retype_tuple(init_cnode: seL4_CPtr) -> RetypeTuple {
+pub fn make_retype_tuple(init_cnode: seL4_CPtr, init_bits: u8) -> RetypeTuple {
+    let guard_depth = WORD_BITS
+        .try_into()
+        .expect("WORD_BITS must fit within u8 for canonical CSpace addressing");
     RetypeTuple {
         node_root: init_cnode,
         node_index: init_cnode,
-        node_depth: 0,
+        node_depth: guard_depth,
+        init_bits,
     }
 }
 
@@ -69,21 +96,26 @@ fn heartbeat(tag: u8) {
     }
 }
 
-/// Emit a non-blocking proof copy of a capability to validate addressing tuples.
+/// Emit a non-blocking proof copy of a capability from the init CNode to validate
+/// canonical addressing tuples.
 pub fn try_cnode_copy_proof(
     cn: &CNodeTuple,
     slot_free: seL4_Word,
-    src_cap: seL4_CPtr,
+    src_slot: seL4_CPtr,
 ) -> seL4_Error {
     heartbeat(b'c');
+    let guard_depth = cn.guard_depth();
+    let encoded_dest = cn.encode_slot(slot_free);
+    let encoded_src = cn.encode_slot(src_slot as seL4_Word);
+    let depth_word = guard_depth;
     let result = unsafe {
         seL4_CNode_Copy(
             cn.root,
-            slot_free,
-            cn.depth,
+            encoded_dest as seL4_CPtr,
+            depth_word,
             cn.root,
-            src_cap,
-            cn.depth,
+            encoded_src as seL4_CPtr,
+            depth_word,
             seL4_CapRights_All,
         )
     };
@@ -91,8 +123,10 @@ pub fn try_cnode_copy_proof(
     if result != sel4_sys::seL4_NoError {
         debug_puts("[rt-fix] cnode.copy fail #");
         debug_hex(" dest=0x", slot_free);
-        debug_hex(" src=0x", src_cap);
-        debug_hex(" depth=0x", cn.depth as seL4_Word);
+        debug_hex(" dest_enc=0x", encoded_dest);
+        debug_hex(" src=0x", src_slot as seL4_Word);
+        debug_hex(" src_enc=0x", encoded_src);
+        debug_hex(" depth=0x", depth_word);
         debug_puts("\n");
     }
     result
@@ -101,6 +135,7 @@ pub fn try_cnode_copy_proof(
 /// Retype a single endpoint object into the supplied slot using canonical arguments.
 pub fn retype_endpoint_into_slot(ut: seL4_CPtr, slot: seL4_Word, rt: &RetypeTuple) -> seL4_Error {
     heartbeat(b'r');
+    let encoded_slot = encode_cptr_index(slot, rt.init_bits, rt.node_depth);
     let result = unsafe {
         seL4_Untyped_Retype(
             ut,
@@ -109,7 +144,7 @@ pub fn retype_endpoint_into_slot(ut: seL4_CPtr, slot: seL4_Word, rt: &RetypeTupl
             rt.node_root,
             rt.node_index,
             rt.node_depth as seL4_Word,
-            slot,
+            encoded_slot as seL4_CPtr,
             1,
         )
     };
@@ -118,7 +153,9 @@ pub fn retype_endpoint_into_slot(ut: seL4_CPtr, slot: seL4_Word, rt: &RetypeTupl
         debug_puts("[rt-fix] retype:endpoint fail #");
         debug_hex(" ut=0x", ut);
         debug_hex(" slot=0x", slot);
+        debug_hex(" slot_enc=0x", encoded_slot);
         debug_hex(" root=0x", rt.node_root);
+        debug_hex(" depth=0x", rt.node_depth as seL4_Word);
         debug_puts("\n");
     }
     result
