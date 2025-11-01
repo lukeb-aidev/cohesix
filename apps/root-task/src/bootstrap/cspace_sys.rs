@@ -5,11 +5,11 @@
 #[cfg(all(test, not(target_os = "none")))]
 extern crate alloc;
 
-use core::convert::{TryFrom, TryInto};
+use core::convert::TryFrom;
 use core::fmt;
 
 use crate::boot;
-use crate::bootstrap::cspace::guard_root_path;
+use crate::bootstrap::cspace::{enc_index, guard_root_path};
 #[cfg(target_os = "none")]
 use crate::bootstrap::log::force_uart_line;
 use crate::sel4;
@@ -590,7 +590,6 @@ pub mod canonical {
     #[cfg(not(target_os = "none"))]
     use super::host_trace;
     use super::{debug_log, sel4, sys, RootPath, CANONICAL_CNODE_INDEX};
-    use core::convert::TryFrom;
 
     #[inline(always)]
     fn build_root_path(slot: u32, bi: &sys::seL4_BootInfo) -> RootPath {
@@ -613,7 +612,7 @@ pub mod canonical {
 
     #[inline(always)]
     fn encode_slot(slot: sys::seL4_Word, init_bits: u8) -> sys::seL4_Word {
-        super::enc_index(slot, init_bits)
+        enc_index(slot, init_bits)
     }
 
     #[inline(always)]

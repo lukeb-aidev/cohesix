@@ -1,11 +1,9 @@
 // Author: Lukas Bower
 
-use core::convert::TryInto;
-
 pub mod tuples;
 
 use crate::sel4::{self, BootInfoExt};
-use sel4_sys::{seL4_BootInfo, seL4_CPtr, seL4_Error, seL4_Word, seL4_WordBits};
+use sel4_sys::{seL4_BootInfo, seL4_CPtr, seL4_Error, seL4_Word};
 
 /// Helper managing allocation within the init thread's capability space.
 pub struct CSpace {
