@@ -13,6 +13,7 @@ use crate::bootstrap::cspace::guard_root_path;
 #[cfg(target_os = "none")]
 use crate::bootstrap::log::force_uart_line;
 use crate::sel4;
+use crate::sel4_view;
 use sel4_sys as sys;
 
 #[cfg(target_os = "none")]
@@ -578,40 +579,50 @@ pub mod canonical {
     #[inline(always)]
     pub fn cnode_copy_into_root(
         dst_slot: u32,
-        src_root: sys::seL4_CNode,
-        src_index: sys::seL4_CPtr,
-        src_depth_bits: u8,
-        rights: sel4::SeL4CapRights,
+        _src_root: sys::seL4_CNode,
+        _src_index: sys::seL4_CPtr,
+        _src_depth_bits: u8,
+        _rights: sel4::SeL4CapRights,
         bi: &sys::seL4_BootInfo,
     ) -> Result<(), sys::seL4_Error> {
         let path = build_root_path(dst_slot, bi);
         log_path("[cnode:copy]", dst_slot, &path);
 
+        let dst_root = sys::seL4_CapInitThreadCNode;
+        let dst_index = dst_slot as sys::seL4_Word;
+        let dst_depth = sel4_view::init_cnode_bits(bi);
+        let src_root = sys::seL4_CapInitThreadCNode;
+        let src_index = sel4::init_cnode_cptr(bi) as sys::seL4_Word;
+        let src_depth = sel4_view::init_cnode_bits(bi);
+        let rights: sys::seL4_CapRights = sys::seL4_AllRights as sys::seL4_CapRights;
+
         #[cfg(target_os = "none")]
-        {
-            let dest_depth = u8::try_from(path.depth).expect("seL4_WordBits must fit within u8");
-            let err = unsafe {
-                sys::seL4_CNode_Copy(
-                    path.root,
-                    path.offset,
-                    dest_depth as sys::seL4_Uint8,
-                    src_root,
-                    src_index as sys::seL4_Word,
-                    src_depth_bits,
-                    rights,
-                )
-            };
-            return if err == sys::seL4_NoError {
-                Ok(())
-            } else {
-                Err(err)
-            };
-        }
+        let err = unsafe {
+            sys::seL4_CNode_Copy(
+                dst_root, dst_index, dst_depth, src_root, src_index, src_depth, rights,
+            )
+        };
 
         #[cfg(not(target_os = "none"))]
-        {
-            let _ = (src_root, src_index, src_depth_bits, rights);
+        let err = sys::seL4_NoError;
+
+        ::log::info!(
+            "[cnode.copy] dst_root=0x{dst_root:x} idx=0x{dst_index:x} depth={dst_depth} \
+             src_root=0x{src_root:x} idx=0x{src_index:x} depth={src_depth} rights=0x{rights:x} -> err={err}",
+            dst_root = dst_root,
+            dst_index = dst_index,
+            dst_depth = dst_depth,
+            src_root = src_root,
+            src_index = src_index,
+            src_depth = src_depth,
+            rights = rights as sys::seL4_Word,
+            err = err,
+        );
+
+        if err == sys::seL4_NoError {
             Ok(())
+        } else {
+            Err(err)
         }
     }
 
@@ -623,20 +634,28 @@ pub mod canonical {
         let path = build_root_path(dst_slot, bi);
         log_path("[cnode:delete]", dst_slot, &path);
 
+        let root = sys::seL4_CapInitThreadCNode;
+        let idx = dst_slot as sys::seL4_Word;
+        let depth = sel4_view::init_cnode_bits(bi);
+
         #[cfg(target_os = "none")]
-        {
-            let depth = u8::try_from(path.depth).expect("seL4_WordBits must fit within u8");
-            let err = unsafe { sys::seL4_CNode_Delete(path.root, path.offset, depth) };
-            return if err == sys::seL4_NoError {
-                Ok(())
-            } else {
-                Err(err)
-            };
-        }
+        let err = unsafe { sys::seL4_CNode_Delete(root, idx, depth) };
 
         #[cfg(not(target_os = "none"))]
-        {
+        let err = sys::seL4_NoError;
+
+        ::log::info!(
+            "[cnode.delete] root=0x{root:x} idx=0x{idx:x} depth={depth} -> err={err}",
+            root = root,
+            idx = idx,
+            depth = depth,
+            err = err,
+        );
+
+        if err == sys::seL4_NoError {
             Ok(())
+        } else {
+            Err(err)
         }
     }
 
@@ -660,39 +679,53 @@ pub mod canonical {
             offset = path.offset,
         ));
 
+        let root = sys::seL4_CapInitThreadCNode;
+        let idx = sel4::init_cnode_cptr(bi) as sys::seL4_Word;
+        let depth = sel4_view::init_cnode_bits(bi);
+        let offset = dst_slot as sys::seL4_Word;
+
         #[cfg(target_os = "none")]
-        {
-            let err = unsafe {
-                sys::seL4_Untyped_Retype(
-                    ut,
-                    obj as sys::seL4_Word,
-                    sz_bits as sys::seL4_Word,
-                    path.root,
-                    path.index,
-                    path.depth,
-                    path.offset,
-                    1,
-                )
-            };
-            return if err == sys::seL4_NoError {
-                Ok(())
-            } else {
-                Err(err)
-            };
-        }
+        let err = unsafe {
+            sys::seL4_Untyped_Retype(
+                ut,
+                obj as sys::seL4_Word,
+                sz_bits as sys::seL4_Word,
+                root,
+                idx,
+                depth,
+                offset,
+                1,
+            )
+        };
 
         #[cfg(not(target_os = "none"))]
-        {
+        let err = {
             host_trace::record(host_trace::HostRetypeTrace {
-                root: path.root,
-                node_index: path.index,
-                node_depth: path.depth,
-                node_offset: path.offset,
+                root,
+                node_index: idx,
+                node_depth: depth,
+                node_offset: offset,
                 object_type: obj as sys::seL4_Word,
                 size_bits: sz_bits as sys::seL4_Word,
             });
-            let _ = ut;
+            sys::seL4_NoError
+        };
+
+        ::log::info!(
+            "[retype] ut=0x{ut:x} obj={obj} sz={sz_bits} root=0x{root:x} idx=0x{idx:x} depth={depth} -> err={err}",
+            ut = ut,
+            obj = obj,
+            sz_bits = sz_bits,
+            root = root,
+            idx = idx,
+            depth = depth,
+            err = err,
+        );
+
+        if err == sys::seL4_NoError {
             Ok(())
+        } else {
+            Err(err)
         }
     }
 }
@@ -716,14 +749,15 @@ pub fn retype_into_root(
     untyped: sys::seL4_CPtr,
     obj_type: sys::seL4_Word,
     size_bits: sys::seL4_Word,
-    init_cnode_bits: u8,
     dst_slot: sys::seL4_CPtr,
-) -> sys::seL4_Error {
+    bi: &sys::seL4_BootInfo,
+) -> Result<(), sys::seL4_Error> {
     let root = sys::seL4_CapInitThreadCNode;
-    let index = root as sys::seL4_Word;
-    let depth = sys::seL4_WordBits as sys::seL4_Word;
+    let index = sel4::init_cnode_cptr(bi) as sys::seL4_Word;
+    let depth = sel4_view::init_cnode_bits(bi);
     let offset = dst_slot as sys::seL4_Word;
 
+    let init_cnode_bits = sel4::init_cnode_bits(bi);
     guard_root_path(init_cnode_bits, index, depth, offset);
 
     #[cfg(all(target_os = "none", debug_assertions))]
@@ -767,9 +801,13 @@ pub fn retype_into_root(
         });
     }
 
+    #[cfg(target_os = "none")]
     let err = unsafe {
         sys::seL4_Untyped_Retype(untyped, obj_type, size_bits, root, index, depth, offset, 1)
     };
+
+    #[cfg(not(target_os = "none"))]
+    let err = sys::seL4_NoError;
 
     if err == sys::seL4_NoError {
         debug_log(format_args!("[retype:ret] ok"));
@@ -777,12 +815,12 @@ pub fn retype_into_root(
         {
             log_syscall_result("Untyped_Retype", err);
         }
-        return err;
+        return Ok(());
     }
 
     debug_log(format_args!("[retype:ret] err={}", err as i32));
 
-    err
+    Err(err)
 }
 
 #[cfg(target_os = "none")]

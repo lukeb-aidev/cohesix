@@ -374,16 +374,13 @@ pub fn cspace_first_retypes(
         }
     };
     dest.set_slot_offset(endpoint_slot);
-    let endpoint_err = cspace_sys::retype_into_root(
+    cspace_sys::retype_into_root(
         ut_cap,
         sel4_sys::seL4_ObjectType::seL4_EndpointObject as _,
         0,
-        dest.root_bits,
         endpoint_slot,
-    );
-    if endpoint_err != sel4_sys::seL4_NoError {
-        return Err(endpoint_err);
-    }
+        bi,
+    )?;
     bump_slot(&mut dest);
 
     let captable_slot = match cs.alloc_slot() {
@@ -490,7 +487,7 @@ pub fn cspace_first_retypes(
     log::info!("[retype:ok] endpoint @ slot=0x{:04x}", endpoint_slot_u32);
     #[cfg(feature = "canonical_cspace")]
     {
-        let _ = crate::console::start(&dest, bi);
+        crate::console::start(endpoint_slot_u32, bi);
     }
 
     bump_slot(&mut dest);
