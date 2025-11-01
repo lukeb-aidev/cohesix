@@ -5,7 +5,7 @@ use crate::bootstrap::log::force_uart_line;
 use crate::bootstrap::retype::{bump_slot, retype_captable};
 use crate::cspace::{cap_rights_read_write_grant, CSpace};
 use crate::sel4::{self, is_boot_reserved_slot, BootInfoView, WORD_BITS};
-use core::convert::{TryFrom, TryInto};
+use core::convert::TryInto;
 use core::fmt::Write;
 use heapless::String;
 

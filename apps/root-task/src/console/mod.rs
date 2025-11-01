@@ -13,7 +13,6 @@ use crate::platform::Platform;
 
 #[cfg(feature = "canonical_cspace")]
 use core::cell::OnceCell;
-use core::fmt::Write as _;
 #[cfg(feature = "canonical_cspace")]
 use core::mem;
 

@@ -626,8 +626,7 @@ pub mod canonical {
         #[cfg(target_os = "none")]
         {
             let depth = u8::try_from(path.depth).expect("seL4_WordBits must fit within u8");
-            let err =
-                unsafe { sys::seL4_CNode_Delete(path.root, path.offset, depth as sys::seL4_Word) };
+            let err = unsafe { sys::seL4_CNode_Delete(path.root, path.offset, depth) };
             return if err == sys::seL4_NoError {
                 Ok(())
             } else {
