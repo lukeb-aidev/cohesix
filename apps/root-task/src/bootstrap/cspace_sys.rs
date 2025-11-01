@@ -698,6 +698,20 @@ pub mod canonical {
     }
 }
 
+#[cfg(feature = "canonical_cspace")]
+pub fn cnode_copy_into_root(dst_slot: u32, bi: &sys::seL4_BootInfo) -> Result<(), sys::seL4_Error> {
+    let rights = crate::cspace::cap_rights_read_write_grant();
+    let depth_bits = u8::try_from(sel4::WORD_BITS).expect("WORD_BITS must fit within u8");
+    canonical::cnode_copy_into_root(
+        dst_slot,
+        sys::seL4_CapInitThreadCNode,
+        sel4::seL4_CapInitThreadTCB,
+        depth_bits,
+        rights,
+        bi,
+    )
+}
+
 /// Issues `seL4_Untyped_Retype` directly into the root CNode using canonical guard parameters.
 pub fn retype_into_root(
     untyped: sys::seL4_CPtr,

@@ -300,6 +300,28 @@ pub fn first_regular_untyped(bi: &seL4_BootInfo) -> Option<seL4_CPtr> {
     })
 }
 
+#[cfg(feature = "canonical_cspace")]
+#[must_use]
+pub fn pick_smallest_non_device_untyped(bi: &seL4_BootInfo) -> seL4_CPtr {
+    let count = (bi.untyped.end - bi.untyped.start) as usize;
+    let mut best: Option<(u8, seL4_CPtr)> = None;
+    for (index, desc) in bi.untypedList[..count].iter().enumerate() {
+        if desc.isDevice != 0 {
+            continue;
+        }
+        let cap = bi.untyped.start + index as seL4_CPtr;
+        match best {
+            Some((bits, _)) if desc.sizeBits as u8 >= bits => {}
+            _ => best = Some((desc.sizeBits as u8, cap)),
+        }
+    }
+
+    match best {
+        Some((_, cap)) => cap,
+        None => panic!("bootinfo must provide at least one RAM-backed untyped capability"),
+    }
+}
+
 static ROOT_ENDPOINT: AtomicUsize = AtomicUsize::new(0);
 static SEND_LOGGED: AtomicBool = AtomicBool::new(false);
 
