@@ -11,7 +11,7 @@ use heapless::String;
 use super::cspace_sys;
 use sel4_sys::{
     self, seL4_BootInfo, seL4_CNode, seL4_CNode_Delete, seL4_CPtr, seL4_CapInitThreadCNode,
-    seL4_CapRights_All, seL4_Error, seL4_NoError, seL4_Word,
+    seL4_CapInitThreadTCB, seL4_CapRights_All, seL4_Error, seL4_NoError, seL4_Word,
 };
 
 const MAX_DIAGNOSTIC_LEN: usize = 224;
@@ -282,12 +282,12 @@ pub fn make_root_dest(bi: &sel4_sys::seL4_BootInfo) -> DestCNode {
 
 pub fn cnode_copy_selftest(bi: &seL4_BootInfo) -> Result<(), seL4_Error> {
     let (start, _end) = crate::sel4_view::empty_window(bi);
-    let init_bits = bi.initThreadCNodeSizeBits as u8;
     let root = seL4_CapInitThreadCNode;
 
     let dst_slot = start as seL4_Word;
-    let src_slot = sel4::init_cnode_cptr(bi) as seL4_Word;
+    let src_slot = seL4_CapInitThreadCNode as seL4_Word;
     let rights = seL4_CapRights_All;
+    let depth_word = sel4::word_bits() as seL4_Word;
 
     log::info!(
         "[selftest] copy init CNode cap into slot 0x{start:04x} (root=0x{root:04x})",
@@ -305,7 +305,7 @@ pub fn cnode_copy_selftest(bi: &seL4_BootInfo) -> Result<(), seL4_Error> {
 
     #[cfg(target_os = "none")]
     {
-        let delete_err = unsafe { seL4_CNode_Delete(root, dst_slot as seL4_CPtr, init_bits) };
+        let delete_err = unsafe { seL4_CNode_Delete(root, dst_slot as seL4_CPtr, depth_word) };
         if delete_err != seL4_NoError {
             log::warn!("[selftest] cleanup delete failed err={delete_err}");
             return Err(delete_err);
@@ -388,30 +388,35 @@ pub fn cspace_first_retypes(
         seL4_CapInitThreadCNode,
         tcb_copy_slot as seL4_Word,
         seL4_CapInitThreadCNode,
-        sel4::seL4_CapInitThreadTCB as seL4_Word,
+        seL4_CapInitThreadTCB as seL4_Word,
         rights,
     );
     let mut copy_line = String::<MAX_DIAGNOSTIC_LEN>::new();
-    if copy_err == sel4_sys::seL4_NoError {
-        if write!(
+    let depth_word = sel4::word_bits() as seL4_Word;
+    let src_slot = seL4_CapInitThreadTCB as seL4_Word;
+    let log_result = if copy_err == sel4_sys::seL4_NoError {
+        write!(
             &mut copy_line,
-            "[cnode:copy] src=TCB depth={} -> dst=0x{slot:04x} OK",
-            init.bits,
-            slot = tcb_copy_slot,
+            "[cnode:copy] src=seL4_CapInitThreadTCB slot=0x{src_slot:04x} src_depth={depth} \
+             -> dst=0x{dst_slot:04x} dst_depth={dst_depth} OK",
+            src_slot = src_slot,
+            depth = depth_word,
+            dst_slot = tcb_copy_slot,
+            dst_depth = depth_word,
         )
-        .is_err()
-        {
-            // Partial diagnostics are acceptable.
-        }
-    } else if write!(
-        &mut copy_line,
-        "[cnode:copy] src=TCB depth={} -> dst=0x{slot:04x} ERR={err}",
-        init.bits,
-        slot = tcb_copy_slot,
-        err = copy_err as i32,
-    )
-    .is_err()
-    {
+    } else {
+        write!(
+            &mut copy_line,
+            "[cnode:copy] src=seL4_CapInitThreadTCB slot=0x{src_slot:04x} src_depth={depth} \
+             -> dst=0x{dst_slot:04x} dst_depth={dst_depth} ERR={err}",
+            src_slot = src_slot,
+            depth = depth_word,
+            dst_slot = tcb_copy_slot,
+            dst_depth = depth_word,
+            err = copy_err as i32,
+        )
+    };
+    if log_result.is_err() {
         // Partial diagnostics are acceptable.
     }
     force_uart_line(copy_line.as_str());
@@ -556,30 +561,35 @@ pub fn cspace_first_retypes(
         seL4_CapInitThreadCNode,
         tcb_copy_slot as seL4_Word,
         seL4_CapInitThreadCNode,
-        sel4::seL4_CapInitThreadTCB as seL4_Word,
+        seL4_CapInitThreadTCB as seL4_Word,
         rights,
     );
     let mut copy_line = String::<MAX_DIAGNOSTIC_LEN>::new();
-    if copy_err == sel4_sys::seL4_NoError {
-        if write!(
+    let depth_word = sel4::word_bits() as seL4_Word;
+    let src_slot = seL4_CapInitThreadTCB as seL4_Word;
+    let log_result = if copy_err == sel4_sys::seL4_NoError {
+        write!(
             &mut copy_line,
-            "[cnode:copy] src=TCB depth={} -> dst=0x{slot:04x} OK",
-            init.bits,
-            slot = tcb_copy_slot,
+            "[cnode:copy] src=seL4_CapInitThreadTCB slot=0x{src_slot:04x} src_depth={depth} \
+             -> dst=0x{dst_slot:04x} dst_depth={dst_depth} OK",
+            src_slot = src_slot,
+            depth = depth_word,
+            dst_slot = tcb_copy_slot,
+            dst_depth = depth_word,
         )
-        .is_err()
-        {
-            // Partial diagnostics are acceptable.
-        }
-    } else if write!(
-        &mut copy_line,
-        "[cnode:copy] src=TCB depth={} -> dst=0x{slot:04x} ERR={err}",
-        init.bits,
-        slot = tcb_copy_slot,
-        err = copy_err as i32,
-    )
-    .is_err()
-    {
+    } else {
+        write!(
+            &mut copy_line,
+            "[cnode:copy] src=seL4_CapInitThreadTCB slot=0x{src_slot:04x} src_depth={depth} \
+             -> dst=0x{dst_slot:04x} dst_depth={dst_depth} ERR={err}",
+            src_slot = src_slot,
+            depth = depth_word,
+            dst_slot = tcb_copy_slot,
+            dst_depth = depth_word,
+            err = copy_err as i32,
+        )
+    };
+    if log_result.is_err() {
         // Partial diagnostics are acceptable.
     }
     force_uart_line(copy_line.as_str());
@@ -667,8 +677,7 @@ impl CSpaceCtx {
     pub fn new(bi: BootInfoView, cspace: CSpace) -> Self {
         let init_cspace_root = cspace.root();
         assert_eq!(
-            init_cspace_root,
-            sel4::seL4_CapInitThreadCNode,
+            init_cspace_root, seL4_CapInitThreadCNode,
             "init CSpace root must match seL4_CapInitThreadCNode",
         );
 
@@ -917,7 +926,7 @@ impl CSpaceCtx {
     /// Copies the init thread TCB capability into the free slot window to validate CSpace operations.
     pub fn smoke_copy_init_tcb(&mut self) -> Result<(), sel4::seL4_Error> {
         let dst_slot = self.alloc_slot_checked()?;
-        let src_slot = sel4::seL4_CapInitThreadTCB;
+        let src_slot = seL4_CapInitThreadTCB;
         let err = self.copy_init_tcb_from(dst_slot, src_slot);
         if err == sel4::seL4_NoError {
             self.tcb_copy_slot = dst_slot;
@@ -954,14 +963,14 @@ impl CSpaceCtx {
     /// Mints a duplicate of the root CNode capability for later management operations.
     pub fn mint_root_cnode_copy(&mut self) -> Result<(), sel4::seL4_Error> {
         let dst_slot = self.alloc_slot_checked()?;
-        let src_slot = sel4::seL4_CapInitThreadCNode;
+        let src_slot = seL4_CapInitThreadCNode;
         let err = self
             .cspace
             .mint_here(dst_slot, src_slot, sel4_sys::seL4_CapRights_All, 0);
         self.log_cnode_mint(err, dst_slot, src_slot, 0);
         if err == sel4::seL4_NoError {
             self.root_cnode_copy_slot = dst_slot;
-            let init_ident = sel4::debug_cap_identify(sel4::seL4_CapInitThreadCNode);
+            let init_ident = sel4::debug_cap_identify(seL4_CapInitThreadCNode);
             let copy_ident = sel4::debug_cap_identify(dst_slot);
             let init_rights = render_cap_rights(sel4_sys::seL4_CapRights_All);
             let copy_rights = render_cap_rights(sel4_sys::seL4_CapRights_All);
@@ -1110,7 +1119,7 @@ pub fn slot_advance(idx: sel4::seL4_CPtr) -> Option<sel4::seL4_CPtr> {
 #[cfg(feature = "sel4-debug")]
 impl CSpaceCtx {
     fn debug_identify_destinations(&self) {
-        let init_ident = sel4::debug_cap_identify(sel4::seL4_CapInitThreadCNode);
+        let init_ident = sel4::debug_cap_identify(seL4_CapInitThreadCNode);
         let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
         let init_rights = render_cap_rights(sel4_sys::seL4_CapRights_All);
         if self.root_cnode_copy_slot != sel4::seL4_CapNull {
