@@ -38,7 +38,7 @@ pub struct RetypeTuple {
     pub node_root: seL4_CPtr,
     /// Capability pointer supplied as `nodeIndex` (raw slot number for the init CNode root).
     pub node_index: seL4_Word,
-    /// Destination depth supplied as `nodeDepth` (direct addressing uses `0`).
+    /// Destination depth supplied as `nodeDepth` (must match the init CNode radix width).
     pub node_depth: seL4_Word,
     /// Radix width (in bits) of the init thread CNode as reported by bootinfo.
     pub init_bits: u8,
@@ -59,7 +59,7 @@ pub fn make_retype_tuple(init_cnode: seL4_CPtr, init_bits: u8) -> RetypeTuple {
     RetypeTuple {
         node_root: init_cnode,
         node_index: 0,
-        node_depth: 0,
+        node_depth: init_bits as seL4_Word,
         init_bits,
     }
 }

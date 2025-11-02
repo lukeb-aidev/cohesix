@@ -14,6 +14,7 @@ canonical_cspace = ["kernel"]
 serial-console = []
 untyped-debug = []
 trace-heavy-init = []
+strict-bootstrap = []
 kernel = [
     "dep:sel4-sys",
     "dep:sel4-runtime",
