@@ -24,9 +24,11 @@ use worker_gpu::{GpuLease as WorkerGpuLease, JobDescriptor};
 
 mod control;
 mod namespace;
+mod tracefs;
 
 use control::{BudgetCommand, KillCommand, QueenCommand, SpawnCommand, SpawnTarget};
 use namespace::Namespace;
+use trace_model::TraceLevel;
 
 /// Errors surfaced by NineDoor operations.
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -748,8 +750,12 @@ impl ServerCore {
                         "killed by queen",
                         Some(current_session),
                     );
-                    self.control
-                        .log_event(&format!("revoked {worker_id}: killed by queen"))?;
+                    self.control.log_event(
+                        "queen",
+                        TraceLevel::Warn,
+                        Some(&worker_id),
+                        &format!("revoked {worker_id}: killed by queen"),
+                    )?;
                 }
                 QueenEvent::BudgetUpdated => {}
                 QueenEvent::Bound { .. } => {}
@@ -890,7 +896,12 @@ impl ControlPlane {
                         ));
                     }
                     self.namespace.lookup(&source)?;
-                    self.log_event(&format!("bound {from_raw} -> {to_raw}"))?;
+                    self.log_event(
+                        "queen",
+                        TraceLevel::Info,
+                        None,
+                        &format!("bound {from_raw} -> {to_raw}"),
+                    )?;
                     events.push(QueenEvent::Bound {
                         target: source,
                         mount,
@@ -910,7 +921,12 @@ impl ControlPlane {
                             format!("service {service} not registered"),
                         ));
                     };
-                    self.log_event(&format!("mounted {service} at {at_raw}"))?;
+                    self.log_event(
+                        "queen",
+                        TraceLevel::Info,
+                        None,
+                        &format!("mounted {service} at {at_raw}"),
+                    )?;
                     events.push(QueenEvent::Mounted { target, mount });
                 }
             }
@@ -994,12 +1010,17 @@ impl ControlPlane {
         self.namespace.create_worker(&worker_id)?;
         let record = match spec.spawn {
             SpawnTarget::Heartbeat => {
-                self.log_event(&format!(
-                    "spawned {worker_id} ticks={} ttl={} ops={}",
-                    format_budget_value(budget.ticks()),
-                    format_budget_value(budget.ttl_s()),
-                    format_budget_value(budget.ops())
-                ))?;
+                self.log_event(
+                    "worker",
+                    TraceLevel::Info,
+                    Some(&worker_id),
+                    &format!(
+                        "spawned {worker_id} ticks={} ttl={} ops={}",
+                        format_budget_value(budget.ticks()),
+                        format_budget_value(budget.ttl_s()),
+                        format_budget_value(budget.ops())
+                    ),
+                )?;
                 WorkerRecord::heartbeat(budget)
             }
             SpawnTarget::Gpu => {
@@ -1036,10 +1057,15 @@ impl ControlPlane {
                 )
                 .into_bytes();
                 self.namespace.write_append(&ctl_path, &message)?;
-                self.log_event(&format!(
-                    "spawned {worker_id} gpu={} ttl={} streams={}",
-                    lease.gpu_id, lease.ttl_s, lease.streams
-                ))?;
+                self.log_event(
+                    "worker",
+                    TraceLevel::Info,
+                    Some(&worker_id),
+                    &format!(
+                        "spawned {worker_id} gpu={} ttl={} streams={}",
+                        lease.gpu_id, lease.ttl_s, lease.streams
+                    ),
+                )?;
                 WorkerRecord::gpu(budget, lease)
             }
         };
@@ -1056,19 +1082,29 @@ impl ControlPlane {
         };
         self.release_gpu_for_worker(worker_id, &record, "killed by queen")?;
         self.namespace.remove_worker(worker_id)?;
-        self.log_event(&format!("killed {worker_id}"))?;
+        self.log_event(
+            "queen",
+            TraceLevel::Info,
+            Some(worker_id),
+            &format!("killed {worker_id}"),
+        )?;
         Ok(())
     }
 
     fn update_default_budget(&mut self, payload: &BudgetCommand) -> Result<(), NineDoorError> {
         self.default_budget = payload.apply(self.default_budget);
         let budget = self.default_budget;
-        self.log_event(&format!(
-            "updated default budget ttl={} ops={} ticks={}",
-            format_budget_value(budget.ttl_s()),
-            format_budget_value(budget.ops()),
-            format_budget_value(budget.ticks())
-        ))?;
+        self.log_event(
+            "queen",
+            TraceLevel::Info,
+            None,
+            &format!(
+                "updated default budget ttl={} ops={} ticks={}",
+                format_budget_value(budget.ttl_s()),
+                format_budget_value(budget.ops()),
+                format_budget_value(budget.ticks())
+            ),
+        )?;
         Ok(())
     }
 
@@ -1084,11 +1120,29 @@ impl ControlPlane {
                 }
             }
         }
-        self.log_event(&format!("revoked {worker_id}: {reason}"))?;
+        self.log_event(
+            "queen",
+            TraceLevel::Info,
+            Some(worker_id),
+            &format!("revoked {worker_id}: {reason}"),
+        )?;
         Ok(true)
     }
 
-    fn log_event(&mut self, message: &str) -> Result<(), NineDoorError> {
+    fn log_event(
+        &mut self,
+        category: &str,
+        level: TraceLevel,
+        task: Option<&str>,
+        message: &str,
+    ) -> Result<(), NineDoorError> {
+        self.namespace
+            .tracefs_mut()
+            .record(level, category, task, message);
+        self.append_queen_log(message)
+    }
+
+    fn append_queen_log(&mut self, message: &str) -> Result<(), NineDoorError> {
         let log_path = vec!["log".to_owned(), "queen.log".to_owned()];
         let mut line = message.as_bytes().to_vec();
         line.push(b'\n');

@@ -75,6 +75,9 @@ pub trait Transport {
     /// Stream a log-like file and return the accumulated contents.
     fn tail(&mut self, session: &Session, path: &str) -> Result<Vec<String>>;
 
+    /// Append bytes to an append-only file within the NineDoor namespace.
+    fn write(&mut self, session: &Session, path: &str, payload: &[u8]) -> Result<()>;
+
     /// Drain acknowledgement lines accumulated since the previous call.
     fn drain_acknowledgements(&mut self) -> Vec<String> {
         Vec::new()
@@ -91,6 +94,10 @@ where
 
     fn tail(&mut self, session: &Session, path: &str) -> Result<Vec<String>> {
         (**self).tail(session, path)
+    }
+
+    fn write(&mut self, session: &Session, path: &str, payload: &[u8]) -> Result<()> {
+        (**self).write(session, path, payload)
     }
 
     fn drain_acknowledgements(&mut self) -> Vec<String> {
@@ -191,6 +198,32 @@ impl Transport for NineDoorTransport {
         connection.clunk(fid).context("failed to clunk fid")?;
         let text = String::from_utf8(buffer).context("log is not valid UTF-8")?;
         Ok(text.lines().map(|line| line.to_owned()).collect())
+    }
+
+    fn write(&mut self, _session: &Session, path: &str, payload: &[u8]) -> Result<()> {
+        let components = parse_path(path)?;
+        let fid = self.allocate_fid();
+        let connection = self
+            .connection
+            .as_mut()
+            .context("attach to a session before running write")?;
+        connection
+            .walk(ROOT_FID, fid, &components)
+            .with_context(|| format!("failed to walk to {path}"))?;
+        connection
+            .open(fid, OpenMode::write_append())
+            .with_context(|| format!("failed to open {path}"))?;
+        let written = connection
+            .write(fid, payload)
+            .with_context(|| format!("failed to write {path}"))?;
+        connection.clunk(fid).context("failed to clunk fid")?;
+        if written as usize != payload.len() {
+            return Err(anyhow!(
+                "short write to {path}: expected {} bytes, wrote {written}",
+                payload.len()
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -422,6 +455,12 @@ impl Transport for QemuTransport {
         self.stop_child();
         Ok(cleaned)
     }
+
+    fn write(&mut self, _session: &Session, _path: &str, _payload: &[u8]) -> Result<()> {
+        Err(anyhow!(
+            "writes are not supported when using the QEMU transport"
+        ))
+    }
 }
 
 /// Clap-compatible role selector used by the CLI entry point.
@@ -544,6 +583,18 @@ impl<T: Transport, W: Write> Shell<T, W> {
         Ok(())
     }
 
+    fn write_path(&mut self, path: &str, payload: &[u8]) -> Result<()> {
+        let session = self
+            .session
+            .as_ref()
+            .context("attach to a session before running echo")?;
+        self.transport.write(session, path, payload)?;
+        for ack in self.transport.drain_acknowledgements() {
+            writeln!(self.writer, "[console] {ack}")?;
+        }
+        Ok(())
+    }
+
     /// Execute a single command line.
     pub fn execute(&mut self, line: &str) -> Result<CommandStatus> {
         let mut parts = line.split_whitespace();
@@ -562,7 +613,9 @@ impl<T: Transport, W: Write> Shell<T, W> {
                     "  ls [path]                    - Enumerate directory entries (planned)",
                 )?;
                 self.write_line("  cat <path>                   - Read file contents (planned)")?;
-                self.write_line("  echo <text> > <path>         - Append to a file (planned)")?;
+                self.write_line(
+                    "  echo <text> > <path>         - Append to a file (adds newline)",
+                )?;
                 self.write_line(
                     "  spawn <role> [opts]          - Queue worker spawn command (planned)",
                 )?;
@@ -585,6 +638,19 @@ impl<T: Transport, W: Write> Shell<T, W> {
             }
             "log" => {
                 self.tail_path("/log/queen.log")?;
+                Ok(CommandStatus::Continue)
+            }
+            "echo" => {
+                let payload_start = line[4..].trim_start();
+                let (raw_text, path_part) = payload_start
+                    .split_once('>')
+                    .ok_or_else(|| anyhow!("echo requires syntax: echo <text> > <path>"))?;
+                let path = path_part.trim();
+                if !path.starts_with('/') {
+                    return Err(anyhow!("echo target must be an absolute path"));
+                }
+                let payload = normalise_echo_payload(raw_text);
+                self.write_path(path, payload.as_bytes())?;
                 Ok(CommandStatus::Continue)
             }
             "attach" | "login" => {
@@ -637,6 +703,21 @@ fn parse_role(input: &str) -> Result<Role> {
         other => Err(anyhow!("unknown role '{other}'")),
     }
 }
+fn normalise_echo_payload(input: &str) -> String {
+    let trimmed = input.trim();
+    let content = if trimmed.len() >= 2 && trimmed.starts_with('"') && trimmed.ends_with('"') {
+        &trimmed[1..trimmed.len() - 1]
+    } else if trimmed.len() >= 2 && trimmed.starts_with('\'') && trimmed.ends_with('\'') {
+        &trimmed[1..trimmed.len() - 1]
+    } else {
+        trimmed
+    };
+    let mut payload = content.to_owned();
+    if !payload.ends_with('\n') {
+        payload.push('\n');
+    }
+    payload
+}
 
 #[cfg(test)]
 mod tests {
@@ -684,6 +765,12 @@ mod tests {
         assert!(err
             .to_string()
             .contains("requires an identity provided via the ticket argument"));
+    }
+
+    #[test]
+    fn normalise_echo_payload_appends_newline() {
+        assert_eq!(normalise_echo_payload("'trace'"), "trace\n");
+        assert_eq!(normalise_echo_payload("plain"), "plain\n");
     }
 
     #[test]

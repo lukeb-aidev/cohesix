@@ -16,3 +16,4 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 worker-gpu = { path = "../worker-gpu" }
 gpu-bridge-host = { path = "../gpu-bridge-host" }
+trace-model = { path = "../../crates/trace-model" }

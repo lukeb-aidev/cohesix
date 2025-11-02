@@ -11,6 +11,7 @@ members = [
     "crates/secure9p-wire",
     "crates/domain-intents",
     "crates/boot/uefi-elfloader-shim",
+    "crates/trace-model",
     "crates/sel4-panicking",
     "crates/sel4-runtime",
     "crates/sel4-sys",

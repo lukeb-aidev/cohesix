@@ -7,12 +7,14 @@ use std::hash::{Hash, Hasher};
 
 use secure9p_wire::{ErrorCode, Qid, QidType};
 
+use super::tracefs::TraceFs;
 use crate::NineDoorError;
 
 /// Synthetic namespace backing the NineDoor Secure9P server.
 #[derive(Debug)]
 pub struct Namespace {
     root: Node,
+    trace: TraceFs,
 }
 
 impl Namespace {
@@ -20,6 +22,7 @@ impl Namespace {
     pub fn new() -> Self {
         let mut namespace = Self {
             root: Node::directory(Vec::new()),
+            trace: TraceFs::new(),
         };
         namespace.bootstrap();
         namespace
@@ -39,13 +42,12 @@ impl Namespace {
                 format!("cannot read directory /{}", join_path(path)),
             )),
             NodeKind::File(FileNode::ReadOnly(data))
-            | NodeKind::File(FileNode::AppendOnly(data)) => {
-                let start = offset as usize;
-                if start >= data.len() {
-                    return Ok(Vec::new());
-                }
-                let end = start.saturating_add(count as usize).min(data.len());
-                Ok(data[start..end].to_vec())
+            | NodeKind::File(FileNode::AppendOnly(data)) => Ok(read_slice(data, offset, count)),
+            NodeKind::File(FileNode::TraceControl) => Ok(self.trace.read_ctl(offset, count)),
+            NodeKind::File(FileNode::TraceEvents) => Ok(self.trace.read_events(offset, count)),
+            NodeKind::File(FileNode::KernelMessages) => Ok(self.trace.read_kmesg(offset, count)),
+            NodeKind::File(FileNode::TaskTrace(task)) => {
+                Ok(self.trace.read_task(task, offset, count))
             }
         }
     }
@@ -59,6 +61,13 @@ impl Namespace {
                 Ok(data.len() as u32)
             }
             NodeKind::File(FileNode::ReadOnly(_)) => Err(NineDoorError::protocol(
+                ErrorCode::Permission,
+                format!("cannot write read-only file /{}", join_path(path)),
+            )),
+            NodeKind::File(FileNode::TraceControl) => self.trace.write_ctl(data),
+            NodeKind::File(FileNode::TraceEvents)
+            | NodeKind::File(FileNode::KernelMessages)
+            | NodeKind::File(FileNode::TaskTrace(_)) => Err(NineDoorError::protocol(
                 ErrorCode::Permission,
                 format!("cannot write read-only file /{}", join_path(path)),
             )),
@@ -87,6 +96,11 @@ impl Namespace {
         }
         let worker_dir = node.ensure_directory(worker_id);
         worker_dir.ensure_file("telemetry", FileNode::AppendOnly(Vec::new()));
+        let proc_root = vec!["proc".to_owned()];
+        self.ensure_dir(&proc_root, worker_id)?;
+        let proc_path = vec!["proc".to_owned(), worker_id.to_owned()];
+        let mut proc_node = self.lookup_mut(&proc_path)?;
+        proc_node.ensure_file("trace", FileNode::TaskTrace(worker_id.to_owned()));
         Ok(())
     }
 
@@ -100,7 +114,16 @@ impl Namespace {
                 format!("worker {worker_id} not found"),
             ));
         }
+        let proc_root = vec!["proc".to_owned()];
+        if let Ok(mut proc_dir) = self.lookup_mut(&proc_root) {
+            let _ = proc_dir.remove_child(worker_id);
+        }
         Ok(())
+    }
+
+    /// Borrow the trace filesystem for mutation.
+    pub fn tracefs_mut(&mut self) -> &mut TraceFs {
+        &mut self.trace
     }
 
     /// Lookup a node by path.
@@ -149,6 +172,13 @@ impl Namespace {
 
         self.ensure_dir(&[], "worker").expect("create /worker");
         self.ensure_dir(&[], "gpu").expect("create /gpu");
+        self.ensure_dir(&[], "trace").expect("create /trace");
+        let trace_path = vec!["trace".to_owned()];
+        self.ensure_trace_control(&trace_path, "ctl")
+            .expect("create /trace/ctl");
+        self.ensure_trace_events(&trace_path, "events")
+            .expect("create /trace/events");
+        self.ensure_kernel_messages().expect("create /kmesg");
     }
 
     fn ensure_dir(&mut self, parent: &[String], name: &str) -> Result<(), NineDoorError> {
@@ -176,6 +206,24 @@ impl Namespace {
     ) -> Result<(), NineDoorError> {
         let mut node = self.lookup_mut(parent)?;
         node.ensure_file(name, FileNode::AppendOnly(data.to_vec()));
+        Ok(())
+    }
+
+    fn ensure_trace_control(&mut self, parent: &[String], name: &str) -> Result<(), NineDoorError> {
+        let mut node = self.lookup_mut(parent)?;
+        node.ensure_file(name, FileNode::TraceControl);
+        Ok(())
+    }
+
+    fn ensure_trace_events(&mut self, parent: &[String], name: &str) -> Result<(), NineDoorError> {
+        let mut node = self.lookup_mut(parent)?;
+        node.ensure_file(name, FileNode::TraceEvents);
+        Ok(())
+    }
+
+    fn ensure_kernel_messages(&mut self) -> Result<(), NineDoorError> {
+        let mut node = self.lookup_mut(&[])?;
+        node.ensure_file("kmesg", FileNode::KernelMessages);
         Ok(())
     }
 
@@ -249,6 +297,10 @@ impl Node {
         let ty = match file {
             FileNode::ReadOnly(_) => QidType::FILE,
             FileNode::AppendOnly(_) => QidType::APPEND_ONLY,
+            FileNode::TraceControl => QidType::APPEND_ONLY,
+            FileNode::TraceEvents | FileNode::KernelMessages | FileNode::TaskTrace(_) => {
+                QidType::FILE
+            }
         };
         Self {
             qid: Qid::new(ty, 0, hash_path(&path)),
@@ -331,6 +383,10 @@ enum NodeKind {
 enum FileNode {
     ReadOnly(Vec<u8>),
     AppendOnly(Vec<u8>),
+    TraceControl,
+    TraceEvents,
+    KernelMessages,
+    TaskTrace(String),
 }
 
 /// Borrowed node view used by callers.
@@ -384,4 +440,13 @@ fn join_path(path: &[String]) -> String {
     } else {
         path.join("/")
     }
+}
+
+fn read_slice(data: &[u8], offset: u64, count: u32) -> Vec<u8> {
+    let start = offset as usize;
+    if start >= data.len() {
+        return Vec::new();
+    }
+    let end = start.saturating_add(count as usize).min(data.len());
+    data[start..end].to_vec()
 }
