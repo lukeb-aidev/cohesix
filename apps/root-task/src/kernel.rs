@@ -627,6 +627,11 @@ fn bootstrap<P: Platform>(
     //      - Add negative tests for depth, guard, and slot windows.
     log::info!("[boot] CSpaceInit - bypassed seed/probes; proceeding");
 
+    #[cfg(feature = "untyped-debug")]
+    {
+        crate::bootstrap::untyped::enumerate_and_plan(bootinfo_ref);
+    }
+
     let mut kernel_env = KernelEnv::new(bootinfo_ref);
     let extra_bytes = bootinfo_view.extra();
     if !extra_bytes.is_empty() {
@@ -1373,8 +1378,15 @@ fn bootstrap<P: Platform>(
         log::trace!("B5: entering event pump loop");
         boot_guard.commit();
         boot_log::force_uart_line("[console] serial fallback ready");
-        log::info!("[console] starting serial console");
-        crate::userland::start_console_or_cohsh(platform);
+        log::info!("[console] handoff → serial console");
+        #[allow(unreachable_code)]
+        {
+            crate::userland::start_console_or_cohsh(platform);
+            log::error!("[console] ERROR: console returned; parking");
+            loop {
+                crate::sel4::yield_now();
+            }
+        }
     }
 }
 

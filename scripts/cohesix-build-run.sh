@@ -67,6 +67,22 @@ append_root_task_feature() {
     esac
 }
 
+remove_root_task_feature() {
+    local feature="$1"
+    if [[ -z "${ROOT_TASK_FEATURES:-}" ]]; then
+        return
+    fi
+
+    local padded=",${ROOT_TASK_FEATURES},"
+    padded="${padded//,$feature,/}"
+    while [[ "$padded" == *",,"* ]]; do
+        padded="${padded//,,/,}"
+    done
+    padded="${padded#,}"
+    padded="${padded%,}"
+    ROOT_TASK_FEATURES="$padded"
+}
+
 describe_file() {
     local label="$1"
     local path="$2"
@@ -180,7 +196,7 @@ main() {
     DTB_OVERRIDE=""
     TRANSPORT="tcp"
     TCP_PORT=31337
-    ROOT_TASK_FEATURES="kernel,net"
+    ROOT_TASK_FEATURES="kernel,bootstrap-trace"
 
     COHSH_LAUNCH_MODE="auto"
 
@@ -300,10 +316,21 @@ main() {
         append_root_task_feature "serial-console"
     fi
 
+    remove_root_task_feature "untyped-debug"
+    remove_root_task_feature "trace-heavy-init"
+    remove_root_task_feature "dtb-dump"
+
     if [[ -n "$ROOT_TASK_FEATURES" ]]; then
         log "Final root-task feature set: $ROOT_TASK_FEATURES"
     else
         log "Final root-task feature set: <none>"
+    fi
+
+    if matches=$(rg -n "\\[untyped:" apps/root-task/src 2>/dev/null); then
+        if printf '%s\n' "$matches" | grep -v "bootstrap/untyped.rs" >/dev/null; then
+            echo "[cohesix-build] ERROR: found untyped prints outside feature gate" >&2
+            exit 1
+        fi
     fi
 
     if [[ "$TRANSPORT" == "tcp" && "$TCP_PORT" -le 0 ]]; then

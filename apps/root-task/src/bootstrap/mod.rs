@@ -26,6 +26,11 @@ pub mod untyped_pick;
 
 pub use untyped_pick::{pick_untyped, RetypePlan, UntypedSelection};
 
+#[cfg(feature = "untyped-debug")]
+pub mod untyped;
+#[cfg(not(feature = "untyped-debug"))]
+mod untyped_stub {}
+
 /// Enumerates the significant waypoints encountered during bootstrap. Each
 /// transition is surfaced directly via the UART, independent of the endpoint
 /// log transport state.
