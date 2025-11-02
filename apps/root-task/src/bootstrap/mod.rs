@@ -220,8 +220,8 @@ pub mod tests {
 
 /// Emit the final bootstrap beacons and return immediately to unblock the console handoff.
 pub fn run() {
-    log::info!("[boot] CSpaceInit");
-    log::info!("[boot] DTBParseDeferred");
+    ::log::info!("[boot] CSpaceInit");
+    ::log::info!("[boot] DTBParseDeferred");
     #[cfg(feature = "dtb-dump")]
     {
         crate::bootstrap::dtb::dump_if_present();
