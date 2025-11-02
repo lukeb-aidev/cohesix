@@ -38,6 +38,10 @@ pub mod kernel;
 pub mod trace;
 
 #[cfg(feature = "kernel")]
+/// Userland entrypoints exposed after the bootstrap hand-off.
+pub mod userland;
+
+#[cfg(feature = "kernel")]
 /// Runtime helpers for interrogating kernel capabilities during bootstrap.
 pub mod debug;
 

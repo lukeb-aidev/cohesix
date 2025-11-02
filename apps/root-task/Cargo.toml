@@ -11,6 +11,7 @@ default = []
 cap-probes = []   # gate experimental cap ops (tests/bench only)
 net = ["net-console"]
 canonical_cspace = ["kernel"]
+serial-console = []
 kernel = [
     "dep:sel4-sys",
     "dep:sel4-runtime",
