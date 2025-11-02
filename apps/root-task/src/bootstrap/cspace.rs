@@ -310,8 +310,7 @@ pub fn cnode_copy_selftest(bi: &seL4_BootInfo) -> Result<(), seL4_Error> {
 
     #[cfg(target_os = "none")]
     {
-        let depth_bits =
-            u8::try_from(sel4::word_bits()).expect("word_bits must fit within u8");
+        let depth_bits = u8::try_from(sel4::word_bits()).expect("word_bits must fit within u8");
         let delete_err = unsafe { seL4_CNode_Delete(root, dst_slot as seL4_CPtr, depth_bits) };
         if delete_err != seL4_NoError {
             log::warn!("[selftest] cleanup delete failed err={delete_err}");

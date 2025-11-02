@@ -1372,15 +1372,9 @@ fn bootstrap<P: Platform>(
         boot_tracer().advance(BootPhase::HandOff);
         log::trace!("B5: entering event pump loop");
         boot_guard.commit();
-        #[cfg(feature = "serial-console")]
-        {
-            boot_log::force_uart_line("[console] serial fallback ready");
-            crate::userland::start_console_or_cohsh(platform);
-        }
-        #[cfg(not(feature = "serial-console"))]
-        loop {
-            pump.poll();
-        }
+        boot_log::force_uart_line("[console] serial fallback ready");
+        log::info!("[console] starting serial console");
+        crate::userland::start_console_or_cohsh(platform);
     }
 }
 

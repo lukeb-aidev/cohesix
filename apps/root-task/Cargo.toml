@@ -7,11 +7,12 @@ publish = false
 build = "build.rs"
 
 [features]
-default = []
+default = []        # no debug features enabled by default
 cap-probes = []   # gate experimental cap ops (tests/bench only)
 net = ["net-console"]
 canonical_cspace = ["kernel"]
 serial-console = []
+untyped-debug = []
 kernel = [
     "dep:sel4-sys",
     "dep:sel4-runtime",
