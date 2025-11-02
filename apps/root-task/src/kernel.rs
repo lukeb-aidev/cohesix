@@ -6,7 +6,7 @@ extern crate alloc;
 
 use alloc::boxed::Box;
 use core::cmp;
-use core::convert::{Infallible, TryFrom};
+use core::convert::Infallible;
 use core::fmt::{self, Write};
 use core::panic::PanicInfo;
 use core::ptr;
@@ -18,11 +18,13 @@ use crate::boot::{bi_extra, ep};
 use crate::bootstrap::cspace_sys;
 use crate::bootstrap::{
     boot_tracer,
-    cspace::{cspace_first_retypes, CSpaceCtx, FirstRetypeResult},
+    cspace::{CSpaceCtx, FirstRetypeResult},
     ipcbuf, log as boot_log, pick_untyped,
     retype::{retype_one, retype_selection},
     BootPhase,
 };
+#[cfg(feature = "cap-probes")]
+use crate::bootstrap::cspace::cspace_first_retypes;
 use crate::console::Console;
 use crate::cspace::tuples::{
     assert_ipc_buffer_matches_bootinfo, make_cnode_tuple, make_retype_tuple,
@@ -40,10 +42,11 @@ use crate::net::{NetStack, CONSOLE_TCP_PORT};
 use crate::ninedoor::NineDoorBridge;
 use crate::platform::{Platform, SeL4Platform};
 use crate::sel4::{
-    self, bootinfo_debug_dump, error_name, first_regular_untyped, root_endpoint, seL4_CPtr,
-    seL4_Word, BootInfo, BootInfoExt, BootInfoView, KernelEnv, RetypeKind, RetypeStatus,
-    IPC_PAGE_BYTES, MSG_MAX_WORDS,
+    self, bootinfo_debug_dump, error_name, root_endpoint, seL4_CPtr, seL4_Word, BootInfo,
+    BootInfoExt, BootInfoView, KernelEnv, RetypeKind, RetypeStatus, IPC_PAGE_BYTES, MSG_MAX_WORDS,
 };
+#[cfg(feature = "cap-probes")]
+use crate::sel4::first_regular_untyped;
 use crate::serial::{
     pl011::Pl011, SerialPort, DEFAULT_LINE_CAPACITY, DEFAULT_RX_CAPACITY, DEFAULT_TX_CAPACITY,
 };
@@ -227,7 +230,7 @@ fn log_text_span() {
         { DEFAULT_TX_CAPACITY },
         { DEFAULT_LINE_CAPACITY },
     >::handle_command as usize;
-    let retype_ptr = crate::bootstrap::cspace_sys::untyped_retype_into_init_root as usize;
+    let retype_ptr = cspace_sys::untyped_retype_into_init_root as usize;
     log::info!(
         "[dbg] anchors: handle_cmd={:#x} retype_call={:#x}",
         handle_ptr,
@@ -635,39 +638,46 @@ fn bootstrap<P: Platform>(
         crate::bootstrap::retype::canonical_cspace_console(bootinfo_ref);
     }
 
+    #[cfg(feature = "cap-probes")]
     let mut first_retypes: Option<FirstRetypeResult> = None;
-    if let Some((first_ut_cap, _)) = bi_extra::first_regular_untyped_from_extra(bootinfo_ref) {
-        match cspace_first_retypes(bootinfo_ref, &mut boot_cspace, first_ut_cap) {
-            Ok(result) => first_retypes = Some(result),
-            Err(err) => {
-                let mut line = heapless::String::<160>::new();
-                let _ = write!(
-                    line,
-                    "[boot] first retypes failed: {} ({})",
-                    err as i32,
-                    error_name(err),
-                );
-                console.writeln_prefixed(line.as_str());
-                panic!("first retypes failed: {}", error_name(err));
+    #[cfg(not(feature = "cap-probes"))]
+    let first_retypes: Option<FirstRetypeResult> = None;
+
+    #[cfg(feature = "cap-probes")]
+    {
+        if let Some((first_ut_cap, _)) = bi_extra::first_regular_untyped_from_extra(bootinfo_ref) {
+            match cspace_first_retypes(bootinfo_ref, &mut boot_cspace, first_ut_cap) {
+                Ok(result) => first_retypes = Some(result),
+                Err(err) => {
+                    let mut line = heapless::String::<160>::new();
+                    let _ = write!(
+                        line,
+                        "[boot] first retypes failed: {} ({})",
+                        err as i32,
+                        error_name(err),
+                    );
+                    console.writeln_prefixed(line.as_str());
+                    panic!("first retypes failed: {}", error_name(err));
+                }
             }
-        }
-    } else if let Some(first_ut_cap) = first_regular_untyped(bootinfo_ref) {
-        match cspace_first_retypes(bootinfo_ref, &mut boot_cspace, first_ut_cap) {
-            Ok(result) => first_retypes = Some(result),
-            Err(err) => {
-                let mut line = heapless::String::<160>::new();
-                let _ = write!(
-                    line,
-                    "[boot] first retypes failed: {} ({})",
-                    err as i32,
-                    error_name(err),
-                );
-                console.writeln_prefixed(line.as_str());
-                panic!("first retypes failed: {}", error_name(err));
+        } else if let Some(first_ut_cap) = first_regular_untyped(bootinfo_ref) {
+            match cspace_first_retypes(bootinfo_ref, &mut boot_cspace, first_ut_cap) {
+                Ok(result) => first_retypes = Some(result),
+                Err(err) => {
+                    let mut line = heapless::String::<160>::new();
+                    let _ = write!(
+                        line,
+                        "[boot] first retypes failed: {} ({})",
+                        err as i32,
+                        error_name(err),
+                    );
+                    console.writeln_prefixed(line.as_str());
+                    panic!("first retypes failed: {}", error_name(err));
+                }
             }
+        } else {
+            console.writeln_prefixed("[boot] no RAM-backed untyped for proof retypes");
         }
-    } else {
-        console.writeln_prefixed("[boot] no RAM-backed untyped for proof retypes");
     }
 
     let ipc_vaddr = ipc_buffer_ptr.map(|ptr| ptr.as_ptr() as usize);

@@ -8,6 +8,7 @@ build = "build.rs"
 
 [features]
 default = []
+cap-probes = []   # gate experimental cap ops (tests/bench only)
 net = ["net-console"]
 canonical_cspace = ["kernel"]
 kernel = [

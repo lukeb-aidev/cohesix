@@ -1,19 +1,24 @@
 // Author: Lukas Bower
 #![allow(unsafe_code)]
 
+#[cfg(feature = "cap-probes")]
 use crate::bootstrap::log::force_uart_line;
+#[cfg(feature = "cap-probes")]
 use crate::bootstrap::retype::{bump_slot, retype_captable};
 use crate::cspace::{cap_rights_read_write_grant, CSpace};
 use crate::sel4::{self, is_boot_reserved_slot, BootInfoView, WORD_BITS};
+#[cfg(feature = "cap-probes")]
 use core::convert::TryFrom;
 use core::fmt::Write;
 use heapless::String;
 
 use super::cspace_sys;
 use sel4_sys::{
-    self, seL4_BootInfo, seL4_CNode, seL4_CNode_Delete, seL4_CPtr, seL4_CapInitThreadCNode,
-    seL4_CapInitThreadTCB, seL4_CapRights_All, seL4_Error, seL4_NoError, seL4_Word,
+    self, seL4_BootInfo, seL4_CNode, seL4_CPtr, seL4_CapInitThreadCNode, seL4_CapInitThreadTCB,
+    seL4_Word,
 };
+#[cfg(feature = "cap-probes")]
+use sel4_sys::{seL4_CNode_Delete, seL4_CapRights_All, seL4_Error, seL4_NoError};
 
 const MAX_DIAGNOSTIC_LEN: usize = 224;
 
@@ -281,6 +286,7 @@ pub fn make_root_dest(bi: &sel4_sys::seL4_BootInfo) -> DestCNode {
     dest
 }
 
+#[cfg(feature = "cap-probes")]
 pub fn cnode_copy_selftest(bi: &seL4_BootInfo) -> Result<(), seL4_Error> {
     let (start, _end) = crate::sel4_view::empty_window(bi);
     let root = seL4_CapInitThreadCNode;
@@ -351,7 +357,7 @@ pub struct FirstRetypeResult {
     pub captable_slot: sel4::seL4_CPtr,
 }
 
-#[cfg(not(feature = "canonical_cspace"))]
+#[cfg(all(feature = "cap-probes", not(feature = "canonical_cspace")))]
 pub fn cspace_first_retypes(
     bi: &sel4_sys::seL4_BootInfo,
     cs: &mut CSpace,
@@ -480,7 +486,7 @@ pub fn cspace_first_retypes(
     })
 }
 
-#[cfg(feature = "canonical_cspace")]
+#[cfg(all(feature = "cap-probes", feature = "canonical_cspace"))]
 pub fn cspace_first_retypes(
     bi: &sel4_sys::seL4_BootInfo,
     cs: &mut CSpace,
