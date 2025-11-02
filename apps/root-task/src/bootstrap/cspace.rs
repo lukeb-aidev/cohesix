@@ -5,7 +5,7 @@
 use crate::bootstrap::log::force_uart_line;
 #[cfg(feature = "cap-probes")]
 use crate::bootstrap::retype::{bump_slot, retype_captable};
-use crate::cspace::{cap_rights_read_write_grant, CSpace};
+use crate::cspace::{cap_rights_read_write_grant, encode_index, CSpace};
 use crate::sel4::{self, is_boot_reserved_slot, BootInfoView, WORD_BITS};
 #[cfg(feature = "cap-probes")]
 use core::convert::TryFrom;
@@ -340,7 +340,9 @@ pub fn cnode_copy_selftest(bi: &seL4_BootInfo) -> Result<(), seL4_Error> {
     #[cfg(target_os = "none")]
     {
         let depth_bits = u8::try_from(sel4::word_bits()).expect("word_bits must fit within u8");
-        let delete_err = unsafe { seL4_CNode_Delete(root, dst_slot as seL4_CPtr, depth_bits) };
+        let init_bits = sel4::init_cnode_bits(bi);
+        let encoded_slot = encode_index(dst_slot, init_bits) as seL4_CPtr;
+        let delete_err = unsafe { seL4_CNode_Delete(root, encoded_slot, depth_bits) };
         if delete_err != seL4_NoError {
             log::warn!("[selftest] cleanup delete failed err={delete_err}");
             return Err(delete_err);

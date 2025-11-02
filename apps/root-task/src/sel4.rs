@@ -7,7 +7,7 @@
 
 use core::{
     arch::asm,
-    convert::TryInto,
+    convert::{TryFrom, TryInto},
     fmt, mem,
     ptr::{self, NonNull},
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -17,6 +17,7 @@ use crate::bootstrap::cspace_sys;
 use crate::bootstrap::ipcbuf_view::IpcBufView;
 #[cfg(feature = "kernel")]
 use crate::bootstrap::ktry;
+use crate::cspace::encode_index;
 use crate::sel4_view;
 use crate::serial;
 use heapless::Vec;
@@ -2351,7 +2352,10 @@ impl<'a> KernelEnv<'a> {
 
         unsafe {
             let depth = self.bootinfo.init_cnode_depth();
-            let _ = seL4_CNode_Delete(self.init_cnode_cap(), pt_slot, depth);
+            let init_bits = u8::try_from(self.bootinfo.init_cnode_bits())
+                .expect("init CNode bits must fit in u8");
+            let encoded_slot = encode_index(pt_slot as seL4_Word, init_bits) as seL4_CPtr;
+            let _ = seL4_CNode_Delete(self.init_cnode_cap(), encoded_slot, depth);
         }
         self.untyped.release(&reserved);
 
@@ -2419,7 +2423,10 @@ impl<'a> KernelEnv<'a> {
 
         unsafe {
             let depth = self.bootinfo.init_cnode_depth();
-            let _ = seL4_CNode_Delete(self.init_cnode_cap(), pd_slot, depth);
+            let init_bits = u8::try_from(self.bootinfo.init_cnode_bits())
+                .expect("init CNode bits must fit in u8");
+            let encoded_slot = encode_index(pd_slot as seL4_Word, init_bits) as seL4_CPtr;
+            let _ = seL4_CNode_Delete(self.init_cnode_cap(), encoded_slot, depth);
         }
         self.untyped.release(&reserved);
 
@@ -2485,7 +2492,10 @@ impl<'a> KernelEnv<'a> {
 
         unsafe {
             let depth = self.bootinfo.init_cnode_depth();
-            let _ = seL4_CNode_Delete(self.init_cnode_cap(), pud_slot, depth);
+            let init_bits = u8::try_from(self.bootinfo.init_cnode_bits())
+                .expect("init CNode bits must fit in u8");
+            let encoded_slot = encode_index(pud_slot as seL4_Word, init_bits) as seL4_CPtr;
+            let _ = seL4_CNode_Delete(self.init_cnode_cap(), encoded_slot, depth);
         }
         self.untyped.release(&reserved);
 
