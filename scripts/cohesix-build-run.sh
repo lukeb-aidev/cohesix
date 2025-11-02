@@ -466,6 +466,8 @@ main() {
     [[ -d "$HOST_ARTIFACT_DIR" ]] || fail "Cargo artefact directory not found: $HOST_ARTIFACT_DIR"
     [[ -d "$SEL4_ARTIFACT_DIR" ]] || fail "Cargo artefact directory not found: $SEL4_ARTIFACT_DIR"
 
+    describe_file "Built root-task" "$SEL4_ARTIFACT_DIR/root-task"
+
     COMPONENT_BINS=(root-task nine-door worker-heart worker-gpu)
     HOST_ONLY_BINS=(cohsh gpu-bridge-host)
 
@@ -512,6 +514,7 @@ main() {
     ROOTSERVER_STAGE_PATH="$STAGING_DIR/rootserver"
 
     install -m 0755 "$KERNEL_PATH" "$KERNEL_STAGE_PATH"
+    rm -f "$ROOTSERVER_STAGE_PATH"
     install -m 0755 "$ROOTFS_DIR/root-task" "$ROOTSERVER_STAGE_PATH"
     log "Packaged component binary: $ROOTSERVER_STAGE_PATH"
     if [[ -f "$ROOTSERVER_STAGE_PATH" ]]; then

@@ -524,6 +524,19 @@ fn bootstrap<P: Platform>(
 
     boot_log::init_logger_bootstrap_only();
 
+    let mut build_line = heapless::String::<160>::new();
+    let _ = write!(
+        build_line,
+        "[BUILD] {} {} features=[kernel:{} bootstrap-trace:{} serial-console:{}]",
+        crate::built_info::GIT_HASH,
+        crate::built_info::BUILD_TS,
+        cfg!(feature = "kernel") as u8,
+        cfg!(feature = "bootstrap-trace") as u8,
+        cfg!(feature = "serial-console") as u8,
+    );
+    boot_log::force_uart_line(build_line.as_str());
+    log::info!("{}", build_line.as_str());
+
     let mut boot_guard = BootStateGuard::acquire()?;
     debug_assert_eq!(
         BOOT_STATE.load(Ordering::Acquire),

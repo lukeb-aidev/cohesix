@@ -220,17 +220,9 @@ pub mod tests {
 
 /// Emit the final bootstrap beacons and return immediately to unblock the console handoff.
 pub fn run() {
-    ::log::info!("[boot] CSpaceInit");
-    ::log::info!("[boot] DTBParseDeferred");
-    #[cfg(feature = "dtb-dump")]
-    {
-        crate::bootstrap::dtb::dump_if_present();
-    }
-    // IMPORTANT: Do not start services/providers/event loops here in default boots.
-    // All heavy init is deferred to after the console banner.
-
-    // === MUST-SEE BEACON ===
-    ::log::info!("[boot] bootstrap.run.end");
-    crate::bootstrap::log::force_uart_line("[BOOT] bootstrap.run.end");
-    return;
+    // *** MINIMAL BYPASS FOR DIAG ***
+    crate::bootstrap::log::force_uart_line("[BOOT] run.min.start");
+    ::log::info!("[boot] run.minimal.begin");
+    ::log::info!("[boot] run.minimal.end");
+    crate::bootstrap::log::force_uart_line("[BOOT] run.min.end");
 }

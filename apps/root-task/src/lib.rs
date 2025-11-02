@@ -33,6 +33,14 @@ pub(crate) mod alloc;
 /// Kernel entrypoints and seL4 bootstrap wiring for the in-VM root task.
 pub mod kernel;
 
+#[cfg(feature = "kernel")]
+pub mod built_info {
+    include!(concat!(env!("OUT_DIR"), "/built_info.rs"));
+}
+
+#[cfg(feature = "kernel")]
+mod panic;
+
 #[cfg(any(feature = "kernel", feature = "bootstrap-trace"))]
 /// seL4 bootstrap tracing primitives for debug logging.
 pub mod trace;
