@@ -39,6 +39,25 @@ fn debug_log(args: fmt::Arguments<'_>) {
     ::log::debug!("{}", args);
 }
 
+/// Convert `initThreadCNodeSizeBits` into `u8` without panicking during
+/// bring-up.
+///
+/// seL4 guarantees that this value is typically in the range 12–16. When an
+/// unexpected value does slip through we log the anomaly and fall back to 13 so
+/// that the system can continue booting deterministically.
+fn bits_as_u8(init_bits: usize) -> u8 {
+    match u8::try_from(init_bits) {
+        Ok(bits) => bits,
+        Err(_) => {
+            ::log::error!(
+                "[cspace] initThreadCNodeSizeBits={} does not fit in u8; falling back to 13",
+                init_bits
+            );
+            13
+        }
+    }
+}
+
 #[cfg(all(test, not(target_os = "none")))]
 use alloc::boxed::Box;
 
@@ -723,20 +742,30 @@ pub fn init_cnode_dest(
     sys::seL4_Word,
     sys::seL4_Word,
 ) {
-    let init_bits = bi_init_cnode_bits();
-    let capacity = if init_bits as usize >= usize::BITS as usize {
+    let init_bits_word = bi_init_cnode_bits();
+    let init_bits_usize = init_bits_word as usize;
+    let capacity = if init_bits_usize >= usize::BITS as usize {
         usize::MAX
     } else {
-        1usize << (init_bits as usize)
+        1usize << init_bits_usize
     };
     debug_assert!(
         (slot as usize) < capacity,
         "slot 0x{slot:04x} exceeds init CNode capacity (limit=0x{capacity:04x})",
     );
     let root = bi_init_cnode_cptr();
-    let guard_depth = init_bits;
     let offset = slot as sys::seL4_Word;
-    let init_bits_u8 = u8::try_from(init_bits).expect("initThreadCNodeSizeBits must fit within u8");
+    let init_bits_u8 = bits_as_u8(init_bits_usize);
+    debug_assert!(
+        init_bits_u8 <= 31,
+        "impossible cnode bits > 31 on AArch64: {init_bits_usize}",
+    );
+    ::log::info!(
+        "[cspace] initBits(raw)={} -> (u8)={}",
+        init_bits_usize,
+        init_bits_u8
+    );
+    let guard_depth = init_bits_u8 as sys::seL4_Word;
     guard_root_path(init_bits_u8, root as sys::seL4_Word, guard_depth, offset);
     let _word_bits = u8::try_from(sel4::WORD_BITS).expect("WORD_BITS must fit within u8");
     let raw_index = offset;
@@ -753,11 +782,12 @@ pub fn init_cnode_retype_dest(
     sys::seL4_Word,
     sys::seL4_Word,
 ) {
-    let init_bits = bi_init_cnode_bits();
-    let capacity = if init_bits as usize >= usize::BITS as usize {
+    let init_bits_word = bi_init_cnode_bits();
+    let init_bits_usize = init_bits_word as usize;
+    let capacity = if init_bits_usize >= usize::BITS as usize {
         usize::MAX
     } else {
-        1usize << (init_bits as usize)
+        1usize << init_bits_usize
     };
     debug_assert!(
         (slot as usize) < capacity,
@@ -767,10 +797,17 @@ pub fn init_cnode_retype_dest(
     let node_index = 0;
     let node_depth = 0;
     let node_offset = slot as sys::seL4_Word;
-    let depth_bits = u8::try_from(init_bits).expect("initThreadCNodeSizeBits must fit within u8");
+    let depth_bits = bits_as_u8(init_bits_usize);
+    debug_assert!(
+        depth_bits <= 31,
+        "impossible cnode bits > 31 on AArch64: {init_bits_usize}",
+    );
     check_slot_in_range(depth_bits, slot);
     (root, node_index, node_depth, node_offset)
 }
+
+#[cfg(test)]
+pub(crate) use bits_as_u8 as super_bits_as_u8_for_test;
 
 pub mod canonical {
     #[cfg(not(target_os = "none"))]
