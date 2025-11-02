@@ -22,7 +22,7 @@ use crate::bootstrap::cspace::cspace_first_retypes;
 use crate::bootstrap::cspace_sys;
 use crate::bootstrap::{
     boot_tracer,
-    cspace::{CSpaceCtx, FirstRetypeResult},
+    cspace::{CSpaceCtx, CSpaceWindow, FirstRetypeResult},
     ipcbuf, log as boot_log, pick_untyped,
     retype::{retype_one, retype_selection},
     BootPhase,
@@ -557,6 +557,7 @@ fn bootstrap<P: Platform>(
         }
     };
     let bootinfo_ref: &'static sel4_sys::seL4_BootInfo = bootinfo_view.header();
+    let cspace_window = CSpaceWindow::from_bootinfo(&bootinfo_view);
     let mut console = DebugConsole::new(platform);
 
     extern "C" {
@@ -570,16 +571,16 @@ fn bootstrap<P: Platform>(
 
     let mut boot_cspace = CSpace::from_bootinfo(bootinfo_ref);
     let boot_first_free = boot_cspace.next_free_slot();
-    let retype_tuple = make_retype_tuple(
-        bootinfo_ref.init_cnode_cap(),
-        bootinfo_ref.initThreadCNodeSizeBits as u8,
-    );
+    debug_assert_eq!(boot_first_free, cspace_window.first_free);
+    debug_assert_eq!(boot_cspace.depth(), cspace_window.bits);
+    let retype_tuple = make_retype_tuple(cspace_window.root, cspace_window.bits);
+    let (_, empty_end) = bootinfo_view.init_cnode_empty_range();
     log::info!(
         "[rt-fix] cspace window [0x{start:04x}..0x{end:04x}), initBits={bits}, initCNode=0x{root:04x}",
-        start = bootinfo_ref.empty_first_slot(),
-        end = bootinfo_ref.empty_last_slot_excl(),
-        bits = bootinfo_ref.initThreadCNodeSizeBits,
-        root = bootinfo_ref.init_cnode_cap()
+        start = cspace_window.first_free,
+        end = empty_end,
+        bits = cspace_window.bits,
+        root = cspace_window.root
     );
     boot_tracer().advance(BootPhase::CSpaceInit);
 
@@ -595,8 +596,8 @@ fn bootstrap<P: Platform>(
     let _ = write!(
         cs_line,
         "cs: root=0x{root:04x} bits={bits} first_free=0x{first_free:04x}",
-        root = bootinfo_ref.init_cnode_cap(),
-        bits = bootinfo_ref.initThreadCNodeSizeBits,
+        root = cspace_window.root,
+        bits = cspace_window.bits,
         first_free = boot_first_free,
     );
     console.writeln_prefixed(cs_line.as_str());
@@ -696,8 +697,8 @@ fn bootstrap<P: Platform>(
 
     let ipc_vaddr = ipc_buffer_ptr.map(|ptr| ptr.as_ptr() as usize);
 
-    let ep_slot = match ep::bootstrap_ep(bootinfo_ref, &mut boot_cspace, &retype_tuple) {
-        Ok(ep_slot) => ep_slot,
+    let (ep_slot, boot_ep_ok) = match ep::bootstrap_ep(&bootinfo_view, &mut boot_cspace) {
+        Ok(slot) => (slot, true),
         Err(err) => {
             crate::trace::trace_fail(b"bootstrap_ep", err);
             let mut line = heapless::String::<160>::new();
@@ -708,9 +709,28 @@ fn bootstrap<P: Platform>(
                 error_name(err)
             );
             console.writeln_prefixed(line.as_str());
-            panic!("bootstrap_ep failed: {}", error_name(err));
+            #[cfg(feature = "strict-bootstrap")]
+            {
+                panic!("bootstrap_ep failed: {}", error_name(err));
+            }
+            #[cfg(not(feature = "strict-bootstrap"))]
+            {
+                log::error!(
+                    "[fail:bootstrap_ep] err={} ({})",
+                    err as i32,
+                    error_name(err)
+                );
+                (root_endpoint(), false)
+            }
         }
     };
+
+    if !boot_ep_ok {
+        log::warn!(
+            "[boot] continuing with existing root endpoint=0x{slot:04x}",
+            slot = ep_slot
+        );
+    }
 
     if let Some(dev_ut) = find_pl011_device_ut(bootinfo_ref) {
         match boot_cspace.alloc_slot() {

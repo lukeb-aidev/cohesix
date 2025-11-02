@@ -1,27 +1,22 @@
 // Author: Lukas Bower
 #![allow(dead_code)]
 
-use core::convert::TryFrom;
-
-use sel4_sys::{seL4_BootInfo, seL4_CPtr, seL4_Error, seL4_IllegalOperation};
+use sel4_sys::{seL4_CPtr, seL4_Error, seL4_IllegalOperation};
 
 use crate::boot::bi_extra::first_regular_untyped_from_extra;
-use crate::bootstrap::cspace_sys;
-use crate::cspace::tuples::retype_endpoint_into_slot;
+use crate::bootstrap::cspace::CSpaceWindow;
+use crate::bootstrap::cspace_sys::{bits_as_u8, retype_endpoint_once};
 use crate::cspace::CSpace;
-use crate::sel4::{self, seL4_Word};
+use crate::sel4::{self, BootInfoView};
 use crate::serial;
 
 /// One-shot endpoint bootstrap: pick a regular untyped, retype, publish, and trace.
-pub fn bootstrap_ep(
-    bi: &seL4_BootInfo,
-    cs: &mut CSpace,
-    tuple: &crate::cspace::tuples::RetypeTuple,
-) -> Result<seL4_CPtr, seL4_Error> {
+pub fn bootstrap_ep(view: &BootInfoView, cs: &mut CSpace) -> Result<seL4_CPtr, seL4_Error> {
     if sel4::ep_ready() {
         return Ok(sel4::root_endpoint());
     }
 
+    let bi = view.header();
     let (ut, desc) = first_regular_untyped_from_extra(bi).ok_or(seL4_IllegalOperation)?;
 
     #[cfg(feature = "untyped-debug")]
@@ -44,48 +39,36 @@ pub fn bootstrap_ep(
     debug_assert_ne!(
         ep_slot,
         sel4::seL4_CapNull,
-        "allocated endpoint slot must not be null"
+        "allocated endpoint slot must not be null",
     );
 
-    let (root, node_index_word, node_depth_word, node_offset_word) =
-        cspace_sys::init_cnode_retype_dest(ep_slot);
-    let node_index = seL4_CPtr::try_from(node_index_word)
-        .expect("init CNode destination index must fit in seL4_CPtr");
-    let node_depth =
-        u8::try_from(node_depth_word).expect("initThreadCNodeSizeBits must fit within u8");
-    let _node_offset = seL4_CPtr::try_from(node_offset_word)
-        .expect("init CNode destination offset must fit in seL4_CPtr");
-    debug_assert_eq!(node_index, 0);
-    debug_assert_eq!(node_depth, bi.initThreadCNodeSizeBits as u8);
+    let mut window = CSpaceWindow::from_bootinfo(view);
+    window.first_free = ep_slot;
+    log::info!(
+        "[boot:ep] win root=0x{root:x} bits={bits} first_free=0x{slot:x}",
+        root = window.root,
+        bits = window.bits,
+        slot = window.first_free,
+    );
+    debug_assert_eq!(
+        bits_as_u8(usize::from(view.init_cnode_bits())),
+        window.bits,
+        "canonical init CNode bits mismatch",
+    );
 
     crate::trace::println!(
         "[cs: root=0x{root:x} bits={bits} first_free=0x{slot:x}]",
-        root = root,
-        bits = bi.initThreadCNodeSizeBits,
-        slot = ep_slot,
-    );
-
-    if let Some(capacity) = 1usize.checked_shl(bi.initThreadCNodeSizeBits as u32) {
-        debug_assert!(
-            (ep_slot as usize) < capacity,
-            "endpoint slot 0x{:x} exceeds init CNode capacity 0x{:x}",
-            ep_slot,
-            capacity,
-        );
-    }
-    debug_assert!(
-        ep_slot >= bi.empty.start,
-        "endpoint slot 0x{:x} precedes first free slot 0x{:x}",
-        ep_slot,
-        bi.empty.start,
+        root = window.root,
+        bits = window.bits,
+        slot = window.first_free,
     );
 
     if crate::boot::flags::trace_dest() {
         log::info!(
-            "[boot] endpoint retype dest root=initCNode index=0x{index:04x} depth={depth} offset=0x{offset:04x}",
-            index = node_index,
-            depth = node_depth_word,
-            offset = node_offset_word,
+            "[boot] endpoint retype dest root=0x{root:04x} depth={depth} slot=0x{slot:04x}",
+            root = window.root,
+            depth = window.bits,
+            slot = window.first_free,
         );
     }
 
@@ -94,25 +77,26 @@ pub fn bootstrap_ep(
         ut = ut,
         slot = ep_slot,
     );
-    let retype_err = retype_endpoint_into_slot(ut, ep_slot as seL4_Word, tuple);
-    if retype_err == sel4_sys::seL4_NoError {
-        log::trace!("B1.ret = Ok");
-        log::info!(
-            "[rt-fix] retype:endpoint OK slot=0x{slot:04x}",
-            slot = ep_slot
-        );
-    } else {
-        log::trace!(
-            "B1.ret = Err({code})",
-            code = sel4::error_name(retype_err as seL4_Error)
-        );
-        log::error!(
-            "[boot] endpoint retype failed slot=0x{slot:04x} err={err} ({name})",
-            slot = ep_slot,
-            err = retype_err,
-            name = sel4::error_name(retype_err),
-        );
-        return Err(retype_err);
+
+    match retype_endpoint_once(ut, &window) {
+        Ok(slot) => {
+            debug_assert_eq!(slot, ep_slot);
+            log::trace!("B1.ret = Ok");
+            log::info!(
+                "[rt-fix] retype:endpoint OK slot=0x{slot:04x}",
+                slot = ep_slot,
+            );
+        }
+        Err(err) => {
+            log::trace!("B1.ret = Err({code})", code = sel4::error_name(err),);
+            log::error!(
+                "[boot] endpoint retype failed slot=0x{slot:04x} err={err:?} ({name})",
+                slot = ep_slot,
+                err = err,
+                name = sel4::error_name(err),
+            );
+            return Err(err);
+        }
     }
 
     let slot_ident = sel4::debug_cap_identify(ep_slot);
@@ -123,7 +107,10 @@ pub fn bootstrap_ep(
     );
 
     sel4::set_ep(ep_slot);
-    serial::puts("[boot] EP ready\n");
+    serial::puts(
+        "[boot] EP ready
+",
+    );
 
     Ok(ep_slot)
 }

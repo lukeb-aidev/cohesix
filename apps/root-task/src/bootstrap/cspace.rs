@@ -40,7 +40,7 @@ impl CSpaceWindow {
         let (first_free, _) = view.init_cnode_empty_range();
         Self {
             root: view.root_cnode_cap(),
-            bits: view.init_cnode_bits(),
+            bits: cspace_sys::bits_as_u8(usize::from(view.init_cnode_bits())),
             first_free,
         }
     }
