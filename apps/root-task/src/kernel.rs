@@ -5,6 +5,7 @@
 extern crate alloc;
 
 use alloc::boxed::Box;
+use core::arch::asm;
 use core::cmp;
 use core::convert::Infallible;
 use core::fmt::{self, Write};
@@ -1401,22 +1402,70 @@ pub fn panic_handler(info: &PanicInfo) -> ! {
 struct KernelTimer {
     tick: u64,
     period_ms: u64,
+    period_cycles: u64,
+    last_cycles: u64,
 }
 
 impl KernelTimer {
     fn new(period_ms: u64) -> Self {
-        Self { tick: 0, period_ms }
+        let freq = read_cntfrq();
+        let period_cycles = compute_period_cycles(freq, period_ms);
+        let last_cycles = read_cntpct();
+        Self {
+            tick: 0,
+            period_ms: period_ms.max(1),
+            period_cycles,
+            last_cycles,
+        }
     }
 }
 
 impl TimerSource for KernelTimer {
     fn poll(&mut self, now_ms: u64) -> Option<TickEvent> {
-        self.tick = self.tick.saturating_add(1);
+        let current = read_cntpct();
+        let elapsed = current.wrapping_sub(self.last_cycles);
+        if elapsed < self.period_cycles {
+            return None;
+        }
+
+        let ticks = core::cmp::max(1, elapsed / self.period_cycles);
+        let overshoot = elapsed % self.period_cycles;
+        self.last_cycles = current.wrapping_sub(overshoot);
+        self.tick = self.tick.saturating_add(ticks);
+
+        let delta_ms = self.period_ms.saturating_mul(ticks);
+        let updated_now = now_ms.saturating_add(delta_ms);
         Some(TickEvent {
             tick: self.tick,
-            now_ms: now_ms.saturating_add(self.period_ms),
+            now_ms: updated_now,
         })
     }
+}
+
+fn compute_period_cycles(freq_hz: u64, period_ms: u64) -> u64 {
+    if freq_hz == 0 {
+        return 1;
+    }
+
+    let clamped_period = period_ms.max(1);
+    let cycles = ((freq_hz as u128) * (clamped_period as u128) / 1_000u128) as u64;
+    cycles.max(1)
+}
+
+fn read_cntfrq() -> u64 {
+    let value: u64;
+    unsafe {
+        asm!("mrs {value}, cntfrq_el0", value = out(reg) value, options(nomem, preserves_flags));
+    }
+    value
+}
+
+fn read_cntpct() -> u64 {
+    let value: u64;
+    unsafe {
+        asm!("mrs {value}, cntpct_el0", value = out(reg) value, options(nomem, preserves_flags));
+    }
+    value
 }
 
 const MAX_MESSAGE_WORDS: usize = MSG_MAX_WORDS;
