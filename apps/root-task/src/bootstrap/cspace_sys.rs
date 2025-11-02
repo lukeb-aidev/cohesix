@@ -111,7 +111,8 @@ pub fn retype_endpoint_once(
 /// seL4 guarantees that this value is typically in the range 12–16. When an
 /// unexpected value does slip through we log the anomaly and fall back to 13 so
 /// that the system can continue booting deterministically.
-fn bits_as_u8(init_bits: usize) -> u8 {
+#[inline(always)]
+pub fn bits_as_u8(init_bits: usize) -> u8 {
     match u8::try_from(init_bits) {
         Ok(bits) => bits,
         Err(_) => {
@@ -873,8 +874,8 @@ pub fn init_cnode_retype_dest(
     (root, node_index, node_depth, node_offset)
 }
 
-#[cfg(test)]
-pub(crate) use bits_as_u8 as super_bits_as_u8_for_test;
+#[doc(hidden)]
+pub use bits_as_u8 as super_bits_as_u8_for_test;
 
 pub mod canonical {
     #[cfg(not(target_os = "none"))]
