@@ -5,7 +5,9 @@
 use crate::bootstrap::log::force_uart_line;
 #[cfg(feature = "cap-probes")]
 use crate::bootstrap::retype::{bump_slot, retype_captable};
-use crate::cspace::{cap_rights_read_write_grant, encode_index, CSpace};
+#[cfg(target_os = "none")]
+use crate::cspace::encode_index;
+use crate::cspace::{cap_rights_read_write_grant, CSpace};
 use crate::sel4::{self, is_boot_reserved_slot, BootInfoView, WORD_BITS};
 #[cfg(feature = "cap-probes")]
 use core::convert::TryFrom;
