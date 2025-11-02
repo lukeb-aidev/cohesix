@@ -531,6 +531,7 @@ pub fn cnode_copy_raw(
 }
 
 /// Probe 1: copy BootInfo cap into the first free slot.
+#[allow(dead_code)]
 pub fn probe_copy_bootinfo(bi: &sys::seL4_BootInfo) -> sys::seL4_Error {
     let dst = bi.empty.start as sys::seL4_CPtr;
     let src = sys::seL4_CapBootInfoFrame;
@@ -546,6 +547,7 @@ pub fn probe_copy_bootinfo(bi: &sys::seL4_BootInfo) -> sys::seL4_Error {
 }
 
 /// Probe 2: copy the init CNode cap into the next free slot.
+#[allow(dead_code)]
 pub fn probe_copy_cnode(bi: &sys::seL4_BootInfo) -> sys::seL4_Error {
     let dst = (bi.empty.start + 1) as sys::seL4_CPtr;
     let src = sys::seL4_CapInitThreadCNode;
@@ -561,6 +563,7 @@ pub fn probe_copy_cnode(bi: &sys::seL4_BootInfo) -> sys::seL4_Error {
 }
 
 /// Seed: copy the init thread TCB cap into the first free slot.
+#[allow(dead_code)]
 pub fn seed_copy_tcb_to_first_free(bi: &sys::seL4_BootInfo) -> sys::seL4_Error {
     let dst = bi.empty.start as sys::seL4_CPtr;
     let src = sys::seL4_CapInitThreadTCB;
