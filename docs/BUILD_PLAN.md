@@ -335,6 +335,49 @@ Deliverables: Bidirectional console acknowledgements spanning serial and TCP tra
 - `https://crates.io/crates/nb` (non-blocking IO helpers)
 - `https://crates.io/crates/spin` (lock primitives for bounded queues)
 
+## Milestone 7e — TraceFS (JSONL Synthetic Filesystem)
+**Purpose**  
+Add a minimal synthetic 9P provider (`tracefs`) exposing JSONL-based tracing and diagnostic streams.  
+Enable root-task and userspace components to log, filter, and stream events via append-only 9P files, following the Plan 9 “everything is a file” model.
+
+**Deliverables**
+- New `nine-door` provider `/trace/ctl`, `/trace/events`, `/kmesg`, and per-task `/proc/<tid>/trace`.
+- Root-task `Trace` facade with zero-allocation ring buffer and `trace!()` macro.
+- Category/level filters controllable by writing JSON commands to `/trace/ctl`.
+- Persistent, append-only JSONL event format shared across roles.
+- CLI (`cohsh`) integration for `tail`/`echo` commands against `/trace/*`.
+- Optional host-side mirroring via a bridge mount.
+
+**Commands (Mac ARM64)**
+```bash
+SEL4_BUILD_DIR=$HOME/seL4/build \
+./scripts/cohesix-build-run.sh \
+  --sel4-build "$HOME/seL4/build" \
+  --out-dir out/cohesix \
+  --profile release \
+  --root-task-features kernel,bootstrap-trace,serial-console \
+  --cargo-target aarch64-unknown-none \
+  --transport qemu \
+  --raw-qemu
+cohsh> echo '{"set":{"level":"debug","cats":["boot","ninep"]}}' > /trace/ctl
+cohsh> tail /trace/events
+```
+
+**Checks**
+
+* `/trace/events` streams JSONL trace lines after boot.
+* `/trace/ctl` accepts JSON control messages without panic.
+* Per-task `/proc/<tid>/trace` returns filtered events.
+* Host build passes `cargo test -p nine-door` and integration test `tests/cli/tracefs_script.sh`.
+
+**Definition of Done**
+
+* Boot completes and serial console shows `[Cohesix] Root console ready.`
+* Writing to `/trace/ctl` dynamically changes categories/levels.
+* Reading `/trace/events` shows bounded ring output with sequence continuity.
+* No TCP or external logging inside the VM.
+* Code aligned with `secure9p-*` layering; passes `cargo clippy -- -D warnings`.
+
 ## Milestone 8a — Lightweight Hardware Abstraction Layer
 
 **Why now (context):** Kernel bring-up now relies on multiple MMIO peripherals (PL011 UART, virtio-net). Tight coupling to `KernelEnv`
