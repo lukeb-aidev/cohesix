@@ -1,7 +1,9 @@
 // Author: Lukas Bower
 #![no_std]
 
+#[cfg(feature = "panic-handler")]
 use core::fmt::{self, Write};
+#[cfg(feature = "panic-handler")]
 use core::panic::PanicInfo;
 
 #[cfg(sel4_config_printing)]
@@ -184,8 +186,10 @@ pub use fallback::Sink as DebugSink;
 #[cfg(test)]
 use fallback::{buffer_contents, install_raw_sink, reset_sink};
 
+#[cfg(feature = "panic-handler")]
 struct DebugWriter;
 
+#[cfg(feature = "panic-handler")]
 impl Write for DebugWriter {
     fn write_str(&mut self, s: &str) -> fmt::Result {
         for byte in s.bytes() {
@@ -236,6 +240,7 @@ where
 {
 }
 
+#[cfg(feature = "panic-handler")]
 #[cfg_attr(all(not(test), target_os = "none"), panic_handler)]
 #[cfg_attr(not(all(not(test), target_os = "none")), allow(dead_code))]
 fn panic(info: &PanicInfo) -> ! {

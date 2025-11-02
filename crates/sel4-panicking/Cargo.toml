@@ -5,6 +5,10 @@ version = "0.7.0"
 edition = "2021"
 publish = false
 
+[features]
+default = ["panic-handler"]
+panic-handler = []
+
 [dependencies]
 sel4-sys = { path = "../sel4-sys" }
 heapless = { version = "0.9.1", default-features = false }

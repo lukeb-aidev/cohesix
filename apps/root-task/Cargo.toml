@@ -57,6 +57,7 @@ path = "../../crates/sel4-runtime"
 version = "0.7.0"
 optional = true
 path = "../../crates/sel4-panicking"
+default-features = false
 [dependencies.heapless]
 version = "0.9.1"
 

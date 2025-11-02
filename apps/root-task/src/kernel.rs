@@ -18,6 +18,7 @@ use cohesix_ticket::Role;
 use crate::boot::{bi_extra, ep};
 #[cfg(feature = "cap-probes")]
 use crate::bootstrap::cspace::cspace_first_retypes;
+#[cfg(debug_assertions)]
 use crate::bootstrap::cspace_sys;
 use crate::bootstrap::{
     boot_tracer,
@@ -28,7 +29,7 @@ use crate::bootstrap::{
 };
 use crate::console::Console;
 use crate::cspace::tuples::{
-    assert_ipc_buffer_matches_bootinfo, make_cnode_tuple, make_retype_tuple,
+    assert_ipc_buffer_matches_bootinfo, make_retype_tuple,
 };
 use crate::cspace::{cap_rights_read_write_grant, CSpace};
 use crate::event::{
@@ -45,7 +46,7 @@ use crate::platform::{Platform, SeL4Platform};
 #[cfg(feature = "cap-probes")]
 use crate::sel4::first_regular_untyped;
 use crate::sel4::{
-    self, bootinfo_debug_dump, error_name, root_endpoint, seL4_CPtr, seL4_Word, BootInfo,
+    bootinfo_debug_dump, error_name, root_endpoint, seL4_CPtr, seL4_Word, BootInfo,
     BootInfoExt, BootInfoView, KernelEnv, RetypeKind, RetypeStatus, IPC_PAGE_BYTES, MSG_MAX_WORDS,
 };
 use crate::serial::{
@@ -571,10 +572,6 @@ fn bootstrap<P: Platform>(
 
     let mut boot_cspace = CSpace::from_bootinfo(bootinfo_ref);
     let boot_first_free = boot_cspace.next_free_slot();
-    let cnode_tuple = make_cnode_tuple(
-        bootinfo_ref.init_cnode_cap(),
-        bootinfo_ref.initThreadCNodeSizeBits as u8,
-    );
     let retype_tuple = make_retype_tuple(
         bootinfo_ref.init_cnode_cap(),
         bootinfo_ref.initThreadCNodeSizeBits as u8,
