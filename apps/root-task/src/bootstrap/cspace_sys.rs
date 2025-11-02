@@ -898,7 +898,7 @@ pub use bits_as_u8 as super_bits_as_u8_for_test;
 pub mod canonical {
     #[cfg(not(target_os = "none"))]
     use super::host_trace;
-    use super::{debug_log, sel4, sys, RootPath, CANONICAL_CNODE_INDEX};
+    use super::{debug_log, sel4, sys, word_bits_u8, RootPath, CANONICAL_CNODE_INDEX};
 
     #[inline(always)]
     fn build_root_path(slot: u32, bi: &sys::seL4_BootInfo) -> RootPath {
@@ -934,7 +934,7 @@ pub mod canonical {
         let dst_root = sys::seL4_CapInitThreadCNode;
         let src_root = sys::seL4_CapInitThreadCNode;
         let raw_slot = path.offset();
-        let src_slot = sys::seL4_CapInitThreadCNode as sys::seL4_Word;
+        let src_slot = CANONICAL_CNODE_INDEX as sys::seL4_Word;
         let rights = sys::seL4_CapRights_All;
         let depth_word = super::init_cspace_depth_words(bi);
         let dst_label = super::slot_constant_label(raw_slot);
