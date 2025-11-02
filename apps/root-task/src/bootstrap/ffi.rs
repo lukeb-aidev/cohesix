@@ -5,6 +5,8 @@
 
 use crate::bootstrap::cspace::CSpaceCtx;
 use crate::sel4 as sys;
+#[cfg(target_os = "none")]
+use crate::sel4::{BootInfoError, BootInfoView};
 
 /// Helper that logs and forwards a `seL4_CNode_Mint` request through [`CSpaceCtx`].
 pub fn cnode_mint_to_slot(
@@ -54,4 +56,11 @@ pub fn raw_untyped_retype(
             num_objects,
         )
     }
+}
+
+#[cfg(target_os = "none")]
+/// Returns a validated [`BootInfoView`] captured from the running kernel.
+pub fn bootinfo_view() -> Result<BootInfoView, BootInfoError> {
+    let bootinfo_ptr = unsafe { sys::seL4_GetBootInfo() };
+    unsafe { BootInfoView::from_ptr(bootinfo_ptr) }
 }
