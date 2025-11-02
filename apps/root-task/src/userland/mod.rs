@@ -14,6 +14,8 @@ use crate::sel4;
 /// Start the userland console or Cohesix shell over the serial transport.
 #[allow(clippy::module_name_repetitions)]
 pub fn start_console_or_cohsh<P: Platform>(platform: &P) -> ! {
+    serial_console::banner(platform);
+    deferred_bringup_nonblocking();
     serial_console::run(platform)
 }
 
@@ -41,12 +43,16 @@ pub mod serial_console {
         let _ = write!(writer, "\r\n> ");
     }
 
-    /// Run a minimal interactive loop that echoes input and keeps the prompt alive.
-    pub fn run<P: Platform>(platform: &P) -> ! {
+    pub fn banner<P: Platform>(platform: &P) {
         let mut writer = PlatformWriter { platform };
         let _ = writeln!(writer);
         let _ = writeln!(writer, "[Cohesix] Root console ready. Type 'help'.");
         let _ = write!(writer, "> ");
+    }
+
+    /// Run a minimal interactive loop that echoes input and keeps the prompt alive.
+    pub fn run<P: Platform>(platform: &P) -> ! {
+        let mut writer = PlatformWriter { platform };
 
         let counter_frequency = counter_frequency();
         let mut last_heartbeat_tick = monotonic_ticks();
@@ -79,6 +85,12 @@ pub mod serial_console {
             }
         }
     }
+}
+
+// ---- Deferred bring-up: must NOT block, must return quickly.
+fn deferred_bringup_nonblocking() {
+    ::log::info!("[bringup] deferred.start");
+    ::log::info!("[bringup] deferred.done");
 }
 
 #[inline]

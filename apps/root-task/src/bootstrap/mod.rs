@@ -217,3 +217,9 @@ pub mod tests {
     pub mod cspace_math;
     pub mod retype_args;
 }
+
+/// Emit the final bootstrap beacons and return immediately to unblock the console handoff.
+pub fn run() {
+    ::log::info!("[boot] bootstrap.run.end");
+    crate::bootstrap::log::force_uart_line("[BOOT] bootstrap.run.end");
+}
