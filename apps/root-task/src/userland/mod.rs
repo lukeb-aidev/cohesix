@@ -15,7 +15,7 @@ use crate::sel4;
 #[allow(clippy::module_name_repetitions)]
 pub fn start_console_or_cohsh<P: Platform>(platform: &P) -> ! {
     serial_console::banner(platform);
-    deferred_bringup_nonblocking();
+    deferred_bringup_nonblocking(); // quick, non-blocking, then return
     serial_console::run(platform)
 }
 
@@ -130,7 +130,9 @@ fn counter_frequency() -> u64 {
 #[inline]
 fn read_cntpct() -> u64 {
     let value: u64;
-    unsafe { core::arch::asm!("mrs {value}, cntpct_el0", value = out(reg) value); }
+    unsafe {
+        core::arch::asm!("mrs {value}, cntpct_el0", value = out(reg) value);
+    }
     value
 }
 
@@ -138,6 +140,8 @@ fn read_cntpct() -> u64 {
 #[inline]
 fn read_cntfrq() -> u64 {
     let value: u64;
-    unsafe { core::arch::asm!("mrs {value}, cntfrq_el0", value = out(reg) value); }
+    unsafe {
+        core::arch::asm!("mrs {value}, cntfrq_el0", value = out(reg) value);
+    }
     value
 }

@@ -1379,7 +1379,9 @@ fn bootstrap<P: Platform>(
         boot_guard.commit();
         boot_log::force_uart_line("[console] serial fallback ready");
         crate::bootstrap::run();
+        // MUST-SEE BEACON: if you don't see this, run() didn't return.
         log::info!("[console] handoff → serial console");
+        boot_log::force_uart_line("[Cohesix] console.handoff");
         #[allow(unreachable_code)]
         {
             crate::userland::start_console_or_cohsh(platform);
