@@ -88,4 +88,5 @@ path = "../../crates/sel4-sys"
 
 [build-dependencies]
 regex = "1.10"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 

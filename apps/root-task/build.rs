@@ -7,7 +7,9 @@ use std::ffi::OsStr;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
+use chrono::Utc;
 use regex::Regex;
 
 #[path = "build_support.rs"]
@@ -88,6 +90,10 @@ enum ArtifactDecision {
 }
 
 fn main() {
+    if let Err(err) = emit_built_info() {
+        panic!("failed to emit built_info.rs: {err}");
+    }
+
     println!("cargo:rerun-if-env-changed=SEL4_LD");
     println!("cargo:rerun-if-env-changed=SEL4_BUILD_DIR");
     println!("cargo:rerun-if-env-changed=SEL4_BUILD");
@@ -187,6 +193,27 @@ fn main() {
     }
 
     emit_config_flags(&build_path, debug_syscalls_enabled);
+}
+
+fn emit_built_info() -> io::Result<()> {
+    let out_dir = PathBuf::from(
+        env::var("OUT_DIR").map_err(|err| io::Error::new(io::ErrorKind::Other, err))?,
+    );
+    let git = Command::new("git")
+        .args(["rev-parse", "--short", "HEAD"])
+        .output()
+        .ok()
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .unwrap_or_else(|| "nogit".to_owned());
+    let timestamp = Utc::now().to_rfc3339();
+    let contents = format!(
+        "pub const GIT_HASH:&str=\"{}\";\npub const BUILD_TS:&str=\"{}\";\n",
+        git.trim(),
+        timestamp
+    );
+    fs::write(out_dir.join("built_info.rs"), contents)?;
+    println!("cargo:rerun-if-changed=build.rs");
+    Ok(())
 }
 
 fn find_artifact(root: &Path, filename: &str, primary: &[&str]) -> Result<PathBuf, String> {
