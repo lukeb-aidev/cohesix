@@ -64,6 +64,39 @@ pub struct TickEvent {
 const MAX_BOOTSTRAP_WORDS: usize = crate::sel4::MSG_MAX_WORDS;
 
 #[cfg(feature = "kernel")]
+const BOOTSTRAP_IDLE_SPINS: usize = 512;
+
+#[cfg_attr(not(any(test, feature = "kernel")), allow(dead_code))]
+#[derive(Debug, Default)]
+struct BootstrapBackoff {
+    idle_spins: usize,
+    limit: usize,
+}
+
+#[cfg_attr(not(any(test, feature = "kernel")), allow(dead_code))]
+impl BootstrapBackoff {
+    fn new(limit: usize) -> Self {
+        Self {
+            idle_spins: 0,
+            limit,
+        }
+    }
+
+    fn observe(&mut self, has_staged: bool) -> Option<usize> {
+        if has_staged {
+            self.idle_spins = 0;
+            return None;
+        }
+        self.idle_spins = self.idle_spins.saturating_add(1);
+        if self.idle_spins >= self.limit {
+            Some(self.idle_spins)
+        } else {
+            None
+        }
+    }
+}
+
+#[cfg(feature = "kernel")]
 #[derive(Clone)]
 /// IPC message staged during bootstrap and replayed once the dispatcher is ready.
 pub struct BootstrapMessage {
@@ -428,6 +461,7 @@ where
     /// Run the bootstrap probe loop until an IPC message has been staged.
     pub fn bootstrap_probe(&mut self) {
         log::trace!("B5: entering bootstrap probe loop");
+        let mut backoff = BootstrapBackoff::new(BOOTSTRAP_IDLE_SPINS);
         loop {
             let handled_before = self.metrics.bootstrap_messages;
             if self.ipc.bootstrap_poll(self.now_ms) {
@@ -437,7 +471,14 @@ where
             if self.metrics.bootstrap_messages != handled_before {
                 break;
             }
-            sel4_sys::yield_now();
+            if let Some(spins) = backoff.observe(self.ipc.has_staged_bootstrap()) {
+                let summary = format_message(format_args!(
+                    "bootstrap-ipc: idle after {spins} polls; continuing"
+                ));
+                self.audit.info(summary.as_str());
+                break;
+            }
+            crate::sel4::yield_now();
         }
     }
 
@@ -990,6 +1031,23 @@ mod tests {
             self.index += 1;
             Some(tick)
         }
+    }
+
+    #[test]
+    fn bootstrap_backoff_triggers_once_limit_reached() {
+        let mut backoff = BootstrapBackoff::new(3);
+        assert_eq!(backoff.observe(false), None);
+        assert_eq!(backoff.observe(false), None);
+        assert_eq!(backoff.observe(false), Some(3));
+    }
+
+    #[test]
+    fn bootstrap_backoff_resets_when_message_staged() {
+        let mut backoff = BootstrapBackoff::new(2);
+        assert_eq!(backoff.observe(false), None);
+        assert_eq!(backoff.observe(true), None);
+        assert_eq!(backoff.observe(false), None);
+        assert_eq!(backoff.observe(false), Some(2));
     }
 
     struct NullIpc;
