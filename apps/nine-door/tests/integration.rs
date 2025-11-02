@@ -361,6 +361,47 @@ fn gpu_lease_expiry_revokes_job_access() {
     }
 }
 
+#[test]
+fn trace_events_record_spawn_and_task_view() {
+    let server = NineDoor::new();
+    let mut queen = attach_queen(&server);
+    write_queen_command(&mut queen, "{\"spawn\":\"heartbeat\",\"ticks\":5}\n");
+
+    let events_path = vec!["trace".to_owned(), "events".to_owned()];
+    let events = read_all(&mut queen, &events_path);
+    assert!(events.contains("\"spawned worker-1"));
+
+    let task_path = vec!["proc".to_owned(), "worker-1".to_owned(), "trace".to_owned()];
+    let task_view = read_all(&mut queen, &task_path);
+    assert!(task_view.contains("\"spawned worker-1"));
+}
+
+#[test]
+fn trace_control_filters_categories() {
+    let server = NineDoor::new();
+    let mut queen = attach_queen(&server);
+
+    let ctl_path = vec!["trace".to_owned(), "ctl".to_owned()];
+    queen.walk(1, 2, &ctl_path).expect("walk /trace/ctl");
+    queen
+        .open(2, OpenMode::write_append())
+        .expect("open /trace/ctl");
+    let filter_payload = b"{\"set\":{\"level\":\"info\",\"cats\":[\"queen\"]}}\n";
+    queen.write(2, filter_payload).expect("write trace filter");
+    queen.clunk(2).expect("clunk trace ctl");
+
+    write_queen_command(&mut queen, "{\"spawn\":\"heartbeat\",\"ticks\":5}\n");
+    write_queen_command(&mut queen, "{\"budget\":{\"ttl_s\":60}}\n");
+
+    let events_path = vec!["trace".to_owned(), "events".to_owned()];
+    let events = read_all(&mut queen, &events_path);
+    assert!(events.contains("updated default budget"));
+    assert!(!events.contains("spawned worker-1"));
+
+    let ctl_contents = read_all(&mut queen, &ctl_path);
+    assert!(ctl_contents.contains("\"cats\":[\"queen\"]"));
+}
+
 fn attach_queen(server: &NineDoor) -> InProcessConnection {
     let mut client = server.connect().expect("create queen session");
     client.version(MAX_MSIZE).expect("version negotiation");
@@ -393,6 +434,31 @@ fn open_gpu_job_file(client: &mut InProcessConnection, fid: u32, gpu_id: &str) {
     client
         .open(fid, OpenMode::write_append())
         .expect("open gpu job file");
+}
+
+fn read_all(client: &mut InProcessConnection, path: &[String]) -> String {
+    let fid = 97;
+    client.walk(1, fid, path).expect("walk read path");
+    client
+        .open(fid, OpenMode::read_only())
+        .expect("open read path");
+    let mut offset = 0u64;
+    let mut buffer = Vec::new();
+    loop {
+        let chunk = client
+            .read(fid, offset, MAX_MSIZE)
+            .expect("read path chunk");
+        if chunk.is_empty() {
+            break;
+        }
+        offset = offset + chunk.len() as u64;
+        buffer.extend_from_slice(&chunk);
+        if chunk.len() < MAX_MSIZE as usize {
+            break;
+        }
+    }
+    client.clunk(fid).expect("clunk read fid");
+    String::from_utf8(buffer).expect("path utf8")
 }
 
 #[derive(Debug)]

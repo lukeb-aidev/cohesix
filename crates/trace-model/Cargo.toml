@@ -1,0 +1,9 @@
+# Author: Lukas Bower
+[package]
+name = "trace-model"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+heapless = "0.9.1"

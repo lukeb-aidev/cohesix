@@ -515,6 +515,13 @@ impl Transport for TcpTransport {
         }
     }
 
+    fn write(&mut self, _session: &Session, path: &str, payload: &[u8]) -> Result<()> {
+        let line = String::from_utf8(payload.to_vec()).context("payload must be UTF-8")?;
+        Err(anyhow!(
+            "writes are not yet supported over the TCP transport (path: {path}, payload: {line})"
+        ))
+    }
+
     fn drain_acknowledgements(&mut self) -> Vec<String> {
         self.pending_ack.drain(..).collect()
     }
