@@ -3,7 +3,7 @@
 pub mod tuples;
 
 use crate::sel4::{self, BootInfoExt};
-use sel4_sys::{seL4_BootInfo, seL4_CPtr, seL4_Error, seL4_Word};
+use sel4_sys::{seL4_BootInfo, seL4_CPtr, seL4_Error, seL4_Word, seL4_WordBits};
 
 /// Helper managing allocation within the init thread's capability space.
 pub struct CSpace {
@@ -59,21 +59,14 @@ impl CSpace {
         src_slot: seL4_CPtr,
         rights: sel4_sys::seL4_CapRights,
     ) -> seL4_Error {
-        let guard_depth_word = self.bits as sel4::seL4_Word;
-        let guard_depth = self.bits;
+        let word_depth = seL4_WordBits as sel4::seL4_Word;
         log::info!(
             "[cnode] Copy dest: root=initCNode index=0x{slot:04x} depth={depth} offset=0",
             slot = dst_slot,
-            depth = guard_depth_word,
+            depth = word_depth,
         );
         sel4::cnode_copy_depth(
-            self.root,
-            dst_slot,
-            guard_depth,
-            self.root,
-            src_slot,
-            guard_depth,
-            rights,
+            self.root, dst_slot, self.bits, self.root, src_slot, self.bits, rights,
         )
     }
 
@@ -85,22 +78,14 @@ impl CSpace {
         rights: sel4_sys::seL4_CapRights,
         badge: seL4_Word,
     ) -> seL4_Error {
-        let guard_depth_word = self.bits as sel4::seL4_Word;
-        let guard_depth = self.bits;
+        let word_depth = seL4_WordBits as sel4::seL4_Word;
         log::info!(
             "[cnode] Mint dest: root=initCNode index=0x{slot:04x} depth={depth} offset=0",
             slot = dst_slot,
-            depth = guard_depth_word,
+            depth = word_depth,
         );
         sel4::cnode_mint_depth(
-            self.root,
-            dst_slot,
-            guard_depth,
-            self.root,
-            src_slot,
-            guard_depth,
-            rights,
-            badge,
+            self.root, dst_slot, self.bits, self.root, src_slot, self.bits, rights, badge,
         )
     }
 }

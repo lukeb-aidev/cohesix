@@ -24,6 +24,11 @@ static PREFLIGHT_COMPLETED: AtomicBool = AtomicBool::new(false);
 #[cfg(target_os = "none")]
 const DEBUG_LOG_CAPACITY: usize = 224;
 
+#[inline(always)]
+const fn word_bits_u8() -> u8 {
+    sys::seL4_WordBits as u8
+}
+
 #[cfg(target_os = "none")]
 fn debug_log(args: fmt::Arguments<'_>) {
     use core::fmt::Write;
@@ -57,9 +62,9 @@ pub fn retype_endpoint_once(
 ) -> Result<sys::seL4_CPtr, sys::seL4_Error> {
     log_window("win", window);
     let dest_root = window.root;
-    let node_index: sys::seL4_Word = 0;
-    let node_depth: sys::seL4_Word = window.bits as sys::seL4_Word;
-    let node_offset: sys::seL4_Word = window.first_free as sys::seL4_Word;
+    let node_index: sys::seL4_Word = window.first_free as sys::seL4_Word;
+    let node_depth: sys::seL4_Word = word_bits_u8() as sys::seL4_Word;
+    let node_offset: sys::seL4_Word = 0;
     let num_objects: sys::seL4_Word = 1;
     let size_bits: sys::seL4_Word = 0;
 
@@ -91,14 +96,14 @@ pub fn retype_endpoint_once(
     };
 
     if err == sys::seL4_NoError {
-        Ok(node_offset as sys::seL4_CPtr)
+        Ok(node_index as sys::seL4_CPtr)
     } else {
         ::log::error!(
             "[boot:retype_ep] ut=0x{ut:04x} root=0x{root:04x} depth={depth} slot=0x{slot:04x} err={err:?}",
             ut = untyped,
             root = dest_root,
             depth = node_depth,
-            slot = node_offset,
+            slot = node_index,
             err = err,
         );
         Err(err)
