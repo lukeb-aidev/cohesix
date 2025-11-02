@@ -26,6 +26,8 @@ Options:
   --root-task-features <list>
                         Comma-separated feature set used for the root-task seL4 build
                         (default: kernel,net)
+  --features <name>      Enable additional root-task feature (bootstrap-trace|serial-console).
+                         May be specified multiple times.
   --qemu <path>         QEMU binary to execute (default: qemu-system-aarch64)
   --transport <kind>    Console transport to launch (tcp|qemu, default: tcp)
   --tcp-port <port>     TCP port exposed by QEMU for the remote console (default: 31337)
@@ -46,6 +48,23 @@ log() {
 fail() {
     echo "[cohesix-build] error: $*" >&2
     exit 1
+}
+
+append_root_task_feature() {
+    local feature="$1"
+    if [[ -z "$feature" ]]; then
+        return
+    fi
+
+    if [[ "$ROOT_TASK_FEATURES" == "none" || -z "$ROOT_TASK_FEATURES" ]]; then
+        ROOT_TASK_FEATURES="$feature"
+        return
+    fi
+
+    case ",$ROOT_TASK_FEATURES," in
+        *,"$feature",*) ;;
+        *) ROOT_TASK_FEATURES="$ROOT_TASK_FEATURES,$feature" ;;
+    esac
 }
 
 describe_file() {
@@ -192,6 +211,18 @@ main() {
                 ROOT_TASK_FEATURES="$2"
                 shift 2
                 ;;
+            --features)
+                [[ $# -ge 2 ]] || fail "--features requires a value"
+                case "$2" in
+                    bootstrap-trace|serial-console)
+                        append_root_task_feature "$2"
+                        ;;
+                    *)
+                        fail "Unsupported feature requested via --features: $2"
+                        ;;
+                esac
+                shift 2
+                ;;
             --qemu)
                 [[ $# -ge 2 ]] || fail "--qemu requires a binary path"
                 QEMU_BIN="$2"
@@ -266,14 +297,7 @@ main() {
     fi
 
     if [[ "$TRANSPORT" == "qemu" || "$DIRECT_QEMU" -eq 1 ]]; then
-        if [[ -z "$ROOT_TASK_FEATURES" ]]; then
-            ROOT_TASK_FEATURES="serial-console"
-        else
-            case ",$ROOT_TASK_FEATURES," in
-                *,serial-console,*) ;;
-                *) ROOT_TASK_FEATURES="$ROOT_TASK_FEATURES,serial-console" ;;
-            esac
-        fi
+        append_root_task_feature "serial-console"
     fi
 
     if [[ -n "$ROOT_TASK_FEATURES" ]]; then
