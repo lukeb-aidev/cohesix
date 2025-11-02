@@ -147,7 +147,9 @@ fn random_response<R: Rng>(rng: &mut R) -> Response {
         2 => Response {
             tag,
             body: ResponseBody::Walk {
-                qids: (0..rng.random_range(0..4)).map(|_| random_qid(rng)).collect(),
+                qids: (0..rng.random_range(0..4))
+                    .map(|_| random_qid(rng))
+                    .collect(),
             },
         },
         3 => Response {

@@ -24,13 +24,21 @@ pub fn bootstrap_ep(
 
     let (ut, desc) = first_regular_untyped_from_extra(bi).ok_or(seL4_IllegalOperation)?;
 
-    crate::trace::println!(
-        "[untyped: cap=0x{cap:x} size_bits={size_bits} is_device={is_device} paddr=0x{paddr:x}]",
-        cap = ut,
-        size_bits = desc.size_bits,
-        is_device = desc.is_device,
-        paddr = desc.paddr,
-    );
+    #[cfg(feature = "untyped-debug")]
+    {
+        crate::trace::println!(
+            "[untyped: cap=0x{cap:x} size_bits={size_bits} is_device={is_device} paddr=0x{paddr:x}]",
+            cap = ut,
+            size_bits = desc.size_bits,
+            is_device = desc.is_device,
+            paddr = desc.paddr,
+        );
+    }
+
+    #[cfg(not(feature = "untyped-debug"))]
+    {
+        let _ = desc;
+    }
 
     let ep_slot = cs.alloc_slot()?;
     debug_assert_ne!(

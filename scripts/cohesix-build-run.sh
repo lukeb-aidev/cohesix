@@ -265,6 +265,23 @@ main() {
         ROOT_TASK_FEATURES=""
     fi
 
+    if [[ "$TRANSPORT" == "qemu" || "$DIRECT_QEMU" -eq 1 ]]; then
+        if [[ -z "$ROOT_TASK_FEATURES" ]]; then
+            ROOT_TASK_FEATURES="serial-console"
+        else
+            case ",$ROOT_TASK_FEATURES," in
+                *,serial-console,*) ;;
+                *) ROOT_TASK_FEATURES="$ROOT_TASK_FEATURES,serial-console" ;;
+            esac
+        fi
+    fi
+
+    if [[ -n "$ROOT_TASK_FEATURES" ]]; then
+        log "Final root-task feature set: $ROOT_TASK_FEATURES"
+    else
+        log "Final root-task feature set: <none>"
+    fi
+
     if [[ "$TRANSPORT" == "tcp" && "$TCP_PORT" -le 0 ]]; then
         fail "TCP port must be a positive integer"
     fi
