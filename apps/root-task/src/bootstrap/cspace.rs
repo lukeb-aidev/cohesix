@@ -22,6 +22,30 @@ use sel4_sys::{seL4_CNode_Delete, seL4_CapRights_All, seL4_Error, seL4_NoError};
 
 const MAX_DIAGNOSTIC_LEN: usize = 224;
 
+#[derive(Copy, Clone, Debug)]
+/// Canonical projection of the init thread CSpace window captured from bootinfo.
+pub struct CSpaceWindow {
+    /// Root CNode capability designating the init thread's CSpace.
+    pub root: sel4::seL4_CPtr,
+    /// Radix width (in bits) of the init CNode as reported by bootinfo.
+    pub bits: u8,
+    /// First free slot index inside the init CNode window.
+    pub first_free: sel4::seL4_CPtr,
+}
+
+impl CSpaceWindow {
+    /// Constructs a canonical window from the supplied bootinfo view.
+    #[must_use]
+    pub fn from_bootinfo(view: &BootInfoView) -> Self {
+        let (first_free, _) = view.init_cnode_empty_range();
+        Self {
+            root: view.root_cnode_cap(),
+            bits: view.init_cnode_bits(),
+            first_free,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 /// Canonical representation of a capability path targeting a CNode.
 pub struct CNodePath {
@@ -329,7 +353,7 @@ pub fn first_endpoint_retype(
 ) -> Result<(), seL4_Error> {
     let dst_root = seL4_CapInitThreadCNode;
     let node_index = 0u32;
-    let node_depth = 0u32;
+    let node_depth = bi.initThreadCNodeSizeBits;
     let node_off = slot as seL4_Word;
 
     log::info!(

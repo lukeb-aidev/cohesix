@@ -223,6 +223,27 @@ pub fn run() {
     // *** MINIMAL BYPASS FOR DIAG ***
     crate::bootstrap::log::force_uart_line("[BOOT] run.min.start");
     ::log::info!("[boot] run.minimal.begin");
+
+    #[cfg(target_os = "none")]
+    {
+        let bootinfo_ptr = unsafe { sel4_sys::seL4_GetBootInfo() };
+        let bootinfo_ref = unsafe { &*bootinfo_ptr };
+        match crate::sel4::BootInfoView::new(bootinfo_ref) {
+            Ok(view) => {
+                let window = crate::bootstrap::cspace::CSpaceWindow::from_bootinfo(&view);
+                ::log::info!(
+                    "[cs: win] root=0x{root:04x} bits={bits} first_free=0x{slot:04x}",
+                    root = window.root,
+                    bits = window.bits,
+                    slot = window.first_free,
+                );
+            }
+            Err(err) => {
+                ::log::error!("[boot] bootinfo view error: {err}");
+            }
+        }
+    }
+
     ::log::info!("[boot] run.minimal.end");
     crate::bootstrap::log::force_uart_line("[BOOT] run.min.end");
 }

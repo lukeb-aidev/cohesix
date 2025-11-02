@@ -33,11 +33,12 @@ fn log_retype_call(
     let mut line = String::<128>::new();
     let _ = write!(
         &mut line,
-        "[retype:call] ut={:#x} obj={:#x} sz_bits={} root={:#x} idx=0 depth=0 off={:#x} n={n} window=[0x{start:04x}..0x{end:04x})",
+        "[retype:call] ut={:#x} obj={:#x} sz_bits={} root={:#x} idx=0 depth={} off={:#x} n={n} window=[0x{start:04x}..0x{end:04x})",
         ut_cap,
         obj_type,
         size_bits,
         dest.root,
+        dest.root_bits,
         dest.slot_offset,
         start = dest.empty_start,
         end = dest.empty_end,
@@ -133,7 +134,7 @@ pub(crate) fn call_retype(
     dest.assert_sane();
     log_retype_call(ut_cap, obj_type, size_bits, dest, num_objects);
     let node_index: sys::seL4_Word = 0;
-    let node_depth: sys::seL4_Word = 0;
+    let node_depth: sys::seL4_Word = dest.root_bits as sys::seL4_Word;
     let slot_offset =
         sys::seL4_Word::try_from(dest.slot_offset).expect("slot offset must fit within seL4_Word");
     let err = seL4_Untyped_Retype(
@@ -291,7 +292,7 @@ where
     }
 
     let (start, end) = ctx.empty_bounds();
-    let log_node_depth = sys::seL4_Word::from(0u8);
+    let log_node_depth = sys::seL4_Word::from(ctx.cnode_bits());
 
     let categories: [(u32, sys::seL4_ObjectType, u8); 2] = [
         (

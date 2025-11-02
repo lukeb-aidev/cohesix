@@ -5,8 +5,8 @@
 - The root-task's `kernel` module emits lines beginning with `retype status=` whenever the extended retype tracing hook runs.
 - The suffix `pending`, `ok`, or `err(<code>)` mirrors the internal `RetypeStatus` enum from `apps/root-task/src/kernel.rs`.
 - `retype status=…` lines now emit `raw.*` field names. These values are captured **before** the trace is sanitised and therefore show exactly what the root-task attempted to hand to the kernel.
-- A subsequent `retype.init_cnode …` line dumps the expected root CNode capability, traversal index (the destination slot for the init thread), and guard depth derived from bootinfo. This line makes it trivial to compare the raw submission against the canonical init-thread parameters. Each kernel submission also logs `Retype → root=initCNode index=0 depth=0 offset=0x<slot> …` immediately before issuing `seL4_Untyped_Retype`, confirming the canonical tuple was used.
-- The syscall gateway now emits `Retype DEST(root=0x… idx=0 depth=0 off=0x… obj=<ty> sz=<bits>)` for every init-root retype, mirroring the ABI order `(root, node_index, node_depth, node_offset)` and making type/size mismatches obvious when they occur.
+- A subsequent `retype.init_cnode …` line dumps the expected root CNode capability, traversal index (the destination slot for the init thread), and guard depth derived from bootinfo. This line makes it trivial to compare the raw submission against the canonical init-thread parameters. Each kernel submission also logs `Retype → root=initCNode index=0 depth=<initBits> offset=0x<slot> …` immediately before issuing `seL4_Untyped_Retype`, confirming the canonical tuple was used.
+- The syscall gateway now emits `Retype DEST(root=0x… idx=0 depth=<initBits> off=0x… obj=<ty> sz=<bits>)` for every init-root retype, mirroring the ABI order `(root, node_index, node_depth, node_offset)` and making type/size mismatches obvious when they occur.
 - When sanitisation succeeds you will see `retype.sanitised …` with the values that were ultimately passed into `seL4_Untyped_Retype`. If sanitisation fails the log prints `retype.sanitise_error=…` describing the first mismatch (root capability, node index, guard depth, or slot bounds).
 - The accompanying `retype.kind=` line reports the `RetypeKind` variant, which is `device_page` for MMIO mappings such as the PL011 UART.
 - Device coverage output like `device coverage idx=16 […] state=free` confirms the root-task examined the manifest entry for the requested MMIO region before the failure.
@@ -23,10 +23,10 @@
 - Inspect the root-task CNode layout dump in the debug log to confirm the slot intended for the PL011 device page is free before the retype attempt.
 
 ## Resolution Summary
-- The failure stemmed from issuing guard-depth tuples to `seL4_Untyped_Retype`. The kernel expects the init CNode to be addressed directly with `(node_index = 0, node_depth = 0, node_offset = slot)`; supplying guard bits causes `lookupTargetSlot` to reject the destination before any capability can be installed.
-- Updating `KernelEnv::prepare_retype_trace` and its sanitiser to emit the canonical tuple (`root = initCNode`, `idx = 0`, `depth = 0`, `off = slot`) ensures the kernel accepts the destination path while preserving the slot bounds derived from `initThreadCNodeSizeBits`.
-- Retype helpers now log the ABI order explicitly: `seL4_Untyped_Retype(untyped, obj, size_bits, root, node_index, node_depth, node_offset, n)`. When targeting the init CNode, only the offset varies; guard bits remain zero.
-- Always emit `(root=bootinfo.initThreadCNode, node_index=0, node_depth=0, node_offset=slot)` when addressing the init thread CNode. This tuple is range-checked against `initThreadCNodeSizeBits` before the syscall to prevent slot clobbering.
+- The failure stemmed from issuing `node_depth = 0` tuples to `seL4_Untyped_Retype`. The kernel expects the init CNode to be addressed with guard depth equal to `initThreadCNodeSizeBits`; supplying zero causes `lookupTargetSlot` to reject the destination before any capability can be installed.
+- Updating `KernelEnv::prepare_retype_trace` and its sanitiser to emit the canonical tuple (`root = initCNode`, `idx = 0`, `depth = initBits`, `off = slot`) ensures the kernel accepts the destination path while preserving the slot bounds derived from `initThreadCNodeSizeBits`.
+- Retype helpers now log the ABI order explicitly: `seL4_Untyped_Retype(untyped, obj, size_bits, root, node_index, node_depth, node_offset, n)`. When targeting the init CNode, the offset varies while the guard depth remains `initThreadCNodeSizeBits`.
+- Always emit `(root=bootinfo.initThreadCNode, node_index=0, node_depth=initThreadCNodeSizeBits, node_offset=slot)` when addressing the init thread CNode. This tuple is range-checked against `initThreadCNodeSizeBits` before the syscall to prevent slot clobbering.
 
 ## Message Dispatch Safety
 - Bootstrap IPC payloads probed during early boot are staged until the event pump registers all handlers; delivery only begins once `handlers_ready()` is signalled.
