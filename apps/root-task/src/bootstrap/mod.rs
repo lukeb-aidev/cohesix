@@ -226,9 +226,7 @@ pub fn run() {
 
     #[cfg(target_os = "none")]
     {
-        let bootinfo_ptr = unsafe { sel4_sys::seL4_GetBootInfo() };
-        let bootinfo_ref = unsafe { &*bootinfo_ptr };
-        match crate::sel4::BootInfoView::new(bootinfo_ref) {
+        match crate::bootstrap::ffi::bootinfo_view() {
             Ok(view) => {
                 let window = crate::bootstrap::cspace::CSpaceWindow::from_bootinfo(&view);
                 ::log::info!(
