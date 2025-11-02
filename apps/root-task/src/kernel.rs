@@ -616,39 +616,12 @@ fn bootstrap<P: Platform>(
         sel4_sys::seL4_CapBootInfoFrame,
     );
 
-    let probe_slot = boot_first_free;
-    let depth_word_bits: u8 =
-        u8::try_from(sel4::word_bits()).expect("seL4 word_bits must fit within u8 for guard depth");
-
-    let probe_bootinfo = cspace_sys::probe_copy_bootinfo(bootinfo_ref);
-    log::info!("[probe] BootInfo copy -> {:?}", probe_bootinfo);
-    if probe_bootinfo == sel4_sys::seL4_NoError {
-        let delete_err = sel4::cnode_delete(cnode_tuple.root, probe_slot, depth_word_bits);
-        if delete_err != sel4_sys::seL4_NoError {
-            log::warn!(
-                "[probe] delete cleanup failed slot=0x{slot:04x} err={err}",
-                slot = probe_slot,
-                err = delete_err,
-            );
-        }
-    }
-
-    let probe_cnode = cspace_sys::probe_copy_cnode(bootinfo_ref);
-    log::info!("[probe] CNode copy    -> {:?}", probe_cnode);
-    if probe_cnode == sel4_sys::seL4_NoError {
-        let cleanup_slot = probe_slot + 1;
-        let delete_err = sel4::cnode_delete(cnode_tuple.root, cleanup_slot, depth_word_bits);
-        if delete_err != sel4_sys::seL4_NoError {
-            log::warn!(
-                "[probe] delete cleanup failed slot=0x{slot:04x} err={err}",
-                slot = cleanup_slot,
-                err = delete_err,
-            );
-        }
-    }
-
-    let probe_tcb = cspace_sys::seed_copy_tcb_to_first_free(bootinfo_ref);
-    log::info!("[seed] TCB copy       -> {:?}", probe_tcb);
+    // NOTE: We do not need any cap copies to reach the console.
+    // Temporarily bypass all experimental/probe CNode ops to unblock boot.
+    // TODO(cohesix-m2/cspace): reintroduce strictly-verified cap ops with unit tests only.
+    //      - Never run cap experiments in the hot boot path again.
+    //      - Add negative tests for depth, guard, and slot windows.
+    log::info!("[boot] CSpaceInit - bypassed seed/probes; proceeding");
 
     let mut kernel_env = KernelEnv::new(bootinfo_ref);
     let extra_bytes = bootinfo_view.extra();
