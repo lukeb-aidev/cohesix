@@ -5,7 +5,7 @@ use sel4_sys::{seL4_CPtr, seL4_Error, seL4_IllegalOperation};
 
 use crate::boot::bi_extra::first_regular_untyped_from_extra;
 use crate::bootstrap::cspace::CSpaceWindow;
-use crate::bootstrap::cspace_sys::{bits_as_u8, retype_endpoint_once};
+use crate::bootstrap::cspace_sys::retype_endpoint_once;
 use crate::cspace::CSpace;
 use crate::sel4::{self, BootInfoView};
 use crate::serial;
@@ -51,9 +51,9 @@ pub fn bootstrap_ep(view: &BootInfoView, cs: &mut CSpace) -> Result<seL4_CPtr, s
         slot = window.first_free,
     );
     debug_assert_eq!(
-        bits_as_u8(usize::from(view.init_cnode_bits())),
+        view.init_cnode_bits(),
         window.bits,
-        "canonical init CNode bits mismatch",
+        "canonical init CNode bits mismatch"
     );
 
     crate::trace::println!(
@@ -67,7 +67,7 @@ pub fn bootstrap_ep(view: &BootInfoView, cs: &mut CSpace) -> Result<seL4_CPtr, s
         log::info!(
             "[boot] endpoint retype dest root=0x{root:04x} depth={depth} slot=0x{slot:04x}",
             root = window.root,
-            depth = window.bits,
+            depth = sel4_sys::seL4_WordBits,
             slot = window.first_free,
         );
     }
@@ -86,6 +86,7 @@ pub fn bootstrap_ep(view: &BootInfoView, cs: &mut CSpace) -> Result<seL4_CPtr, s
                 "[rt-fix] retype:endpoint OK slot=0x{slot:04x}",
                 slot = ep_slot,
             );
+            window.bump();
         }
         Err(err) => {
             log::trace!("B1.ret = Err({code})", code = sel4::error_name(err),);

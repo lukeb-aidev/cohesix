@@ -44,6 +44,11 @@ impl CSpaceWindow {
             first_free,
         }
     }
+
+    /// Advances the first-free slot pointer, avoiding slot reuse between placements.
+    pub fn bump(&mut self) {
+        self.first_free = self.first_free.wrapping_add(1);
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

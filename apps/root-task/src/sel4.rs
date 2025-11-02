@@ -652,7 +652,8 @@ pub fn cnode_copy(
     rights: sel4_sys::seL4_CapRights,
 ) -> seL4_Error {
     debug_put_char(b'C' as i32);
-    let depth_bits = bootinfo.init_cnode_depth();
+    let _ = bootinfo;
+    let depth_bits = sel4_sys::seL4_WordBits as u8;
     unsafe {
         seL4_CNode_Copy(
             dest_root, dest_index, depth_bits, src_root, src_index, depth_bits, rights,
@@ -666,10 +667,10 @@ pub fn cnode_copy(
 pub fn cnode_copy_depth(
     dest_root: seL4_CNode,
     dest_index: seL4_CPtr,
-    dest_depth: u8,
+    _dest_depth: u8,
     src_root: seL4_CNode,
     src_index: seL4_CPtr,
-    src_depth: u8,
+    _src_depth: u8,
     rights: sel4_sys::seL4_CapRights,
 ) -> seL4_Error {
     #[cfg(target_os = "none")]
@@ -679,16 +680,20 @@ pub fn cnode_copy_depth(
         // higher-level modules can remain within the crate-wide `#![deny(unsafe_code)]` policy.
         unsafe {
             seL4_CNode_Copy(
-                dest_root, dest_index, dest_depth, src_root, src_index, src_depth, rights,
+                dest_root,
+                dest_index,
+                sel4_sys::seL4_WordBits as u8,
+                src_root,
+                src_index,
+                sel4_sys::seL4_WordBits as u8,
+                rights,
             )
         }
     }
 
     #[cfg(not(target_os = "none"))]
     {
-        let _ = (
-            dest_root, dest_index, dest_depth, src_root, src_index, src_depth, rights,
-        );
+        let _ = (dest_root, dest_index, src_root, src_index, rights);
         seL4_NoError
     }
 }
@@ -715,7 +720,8 @@ pub(crate) fn cnode_mint(
     badge: seL4_Word,
 ) -> seL4_Error {
     debug_put_char(b'C' as i32);
-    let depth_bits = bootinfo.init_cnode_depth();
+    let _ = bootinfo;
+    let depth_bits = sel4_sys::seL4_WordBits as u8;
     unsafe {
         seL4_CNode_Mint(
             dest_root, dest_index, depth_bits, src_root, src_index, depth_bits, rights, badge,
@@ -729,10 +735,10 @@ pub(crate) fn cnode_mint(
 pub fn cnode_mint_depth(
     dest_root: seL4_CNode,
     dest_index: seL4_CPtr,
-    dest_depth: u8,
+    _dest_depth: u8,
     src_root: seL4_CNode,
     src_index: seL4_CPtr,
-    src_depth: u8,
+    _src_depth: u8,
     rights: sel4_sys::seL4_CapRights,
     badge: seL4_Word,
 ) -> seL4_Error {
@@ -742,16 +748,21 @@ pub fn cnode_mint_depth(
         // kernel-advertised CSpace topology, ensuring the kernel accepts the invocation.
         unsafe {
             seL4_CNode_Mint(
-                dest_root, dest_index, dest_depth, src_root, src_index, src_depth, rights, badge,
+                dest_root,
+                dest_index,
+                sel4_sys::seL4_WordBits as u8,
+                src_root,
+                src_index,
+                sel4_sys::seL4_WordBits as u8,
+                rights,
+                badge,
             )
         }
     }
 
     #[cfg(not(target_os = "none"))]
     {
-        let _ = (
-            dest_root, dest_index, dest_depth, src_root, src_index, src_depth, rights, badge,
-        );
+        let _ = (dest_root, dest_index, src_root, src_index, rights, badge);
         seL4_NoError
     }
 }
