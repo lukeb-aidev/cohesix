@@ -316,6 +316,10 @@ main() {
         append_root_task_feature "serial-console"
     fi
 
+    if [[ "$TRANSPORT" == "tcp" ]]; then
+        append_root_task_feature "net"
+    fi
+
     remove_root_task_feature "untyped-debug"
     remove_root_task_feature "trace-heavy-init"
     remove_root_task_feature "dtb-dump"
