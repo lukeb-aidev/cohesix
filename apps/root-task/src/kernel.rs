@@ -15,6 +15,8 @@ use core::sync::atomic::{AtomicU8, Ordering};
 use cohesix_ticket::Role;
 
 use crate::boot::{bi_extra, ep};
+#[cfg(feature = "cap-probes")]
+use crate::bootstrap::cspace::cspace_first_retypes;
 use crate::bootstrap::cspace_sys;
 use crate::bootstrap::{
     boot_tracer,
@@ -23,8 +25,6 @@ use crate::bootstrap::{
     retype::{retype_one, retype_selection},
     BootPhase,
 };
-#[cfg(feature = "cap-probes")]
-use crate::bootstrap::cspace::cspace_first_retypes;
 use crate::console::Console;
 use crate::cspace::tuples::{
     assert_ipc_buffer_matches_bootinfo, make_cnode_tuple, make_retype_tuple,
@@ -41,12 +41,12 @@ use crate::net::{NetStack, CONSOLE_TCP_PORT};
 #[cfg(feature = "kernel")]
 use crate::ninedoor::NineDoorBridge;
 use crate::platform::{Platform, SeL4Platform};
+#[cfg(feature = "cap-probes")]
+use crate::sel4::first_regular_untyped;
 use crate::sel4::{
     self, bootinfo_debug_dump, error_name, root_endpoint, seL4_CPtr, seL4_Word, BootInfo,
     BootInfoExt, BootInfoView, KernelEnv, RetypeKind, RetypeStatus, IPC_PAGE_BYTES, MSG_MAX_WORDS,
 };
-#[cfg(feature = "cap-probes")]
-use crate::sel4::first_regular_untyped;
 use crate::serial::{
     pl011::Pl011, SerialPort, DEFAULT_LINE_CAPACITY, DEFAULT_RX_CAPACITY, DEFAULT_TX_CAPACITY,
 };
@@ -1371,6 +1371,12 @@ fn bootstrap<P: Platform>(
         boot_tracer().advance(BootPhase::HandOff);
         log::trace!("B5: entering event pump loop");
         boot_guard.commit();
+        #[cfg(feature = "serial-console")]
+        {
+            boot_log::force_uart_line("[console] serial fallback ready");
+            crate::userland::start_console_or_cohsh(platform);
+        }
+        #[cfg(not(feature = "serial-console"))]
         loop {
             pump.poll();
         }
