@@ -1378,6 +1378,7 @@ fn bootstrap<P: Platform>(
         log::trace!("B5: entering event pump loop");
         boot_guard.commit();
         boot_log::force_uart_line("[console] serial fallback ready");
+        crate::bootstrap::run();
         log::info!("[console] handoff → serial console");
         #[allow(unreachable_code)]
         {
