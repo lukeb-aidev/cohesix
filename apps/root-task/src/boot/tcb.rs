@@ -2,8 +2,9 @@
 //! Bootstrap helpers for copying the init TCB capability.
 #![allow(unsafe_code)]
 
-use crate::bootstrap::cspace::CSpace;
 use crate::bootstrap::cspace_sys::cnode_copy_encoded;
+use crate::cspace::CSpace;
+use crate::sel4::BootInfoExt;
 use sel4_sys::{self, seL4_CPtr, seL4_CapRights_ReadWrite, seL4_Error, seL4_NoError};
 
 /// Copy the init thread TCB capability into the next free slot of the init CSpace.
