@@ -74,6 +74,10 @@ pub mod bootstrap;
 pub mod boot;
 
 #[cfg(feature = "kernel")]
+/// IPC helpers that guard direct syscalls during early bring-up.
+pub mod ipc;
+
+#[cfg(feature = "kernel")]
 pub mod sel4;
 
 #[cfg(feature = "kernel")]

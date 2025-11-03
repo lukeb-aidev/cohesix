@@ -704,6 +704,7 @@ fn bootstrap<P: Platform>(
         log::warn!(
             "[boot] bootstrap-minimal: skipping EP retype/PL011 map/TCB copy; entering console"
         );
+        crate::boot::ep::publish_root_ep(sel4_sys::seL4_CapNull);
         console.writeln_prefixed("[boot] bootstrap-minimal: entering console");
         boot_guard.commit();
         boot_log::force_uart_line("[console] serial fallback ready");

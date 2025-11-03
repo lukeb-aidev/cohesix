@@ -343,8 +343,10 @@ impl fmt::Display for IpcError {
 /// Publish the root endpoint capability once it has been retyped.
 #[inline]
 pub fn set_ep(ep: seL4_CPtr) {
-    debug_assert!(ep != seL4_CapNull, "endpoint slot must be non-null");
     ROOT_ENDPOINT.store(ep as usize, Ordering::Release);
+    if ep == seL4_CapNull {
+        SEND_LOGGED.store(false, Ordering::Release);
+    }
 }
 
 /// Clear the root endpoint pointer. Intended for tests.

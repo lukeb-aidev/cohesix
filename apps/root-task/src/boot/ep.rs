@@ -1,7 +1,8 @@
 // Author: Lukas Bower
 #![allow(dead_code)]
+#![allow(unsafe_code)]
 
-use sel4_sys::{seL4_CPtr, seL4_Error, seL4_IllegalOperation};
+use sel4_sys::{seL4_CPtr, seL4_CapNull, seL4_Error, seL4_IllegalOperation};
 
 use crate::boot::bi_extra::first_regular_untyped_from_extra;
 use crate::bootstrap::cspace::CSpaceWindow;
@@ -9,6 +10,16 @@ use crate::bootstrap::cspace_sys::retype_endpoint_once;
 use crate::cspace::CSpace;
 use crate::sel4::{self, BootInfoView};
 use crate::serial;
+
+pub static mut ROOT_EP: seL4_CPtr = seL4_CapNull;
+
+pub fn publish_root_ep(ep: seL4_CPtr) {
+    unsafe {
+        ROOT_EP = ep;
+    }
+    log::info!("[boot] root endpoint published ep=0x{:x}", ep as usize);
+    crate::sel4::set_ep(ep);
+}
 
 /// One-shot endpoint bootstrap: pick a regular untyped, retype, publish, and trace.
 pub fn bootstrap_ep(view: &BootInfoView, cs: &mut CSpace) -> Result<seL4_CPtr, seL4_Error> {
@@ -106,7 +117,7 @@ pub fn bootstrap_ep(view: &BootInfoView, cs: &mut CSpace) -> Result<seL4_CPtr, s
         ident = slot_ident,
     );
 
-    sel4::set_ep(ep_slot);
+    publish_root_ep(ep_slot);
     serial::puts(
         "[boot] EP ready
 ",
