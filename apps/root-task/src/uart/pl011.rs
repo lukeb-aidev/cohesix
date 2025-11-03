@@ -4,10 +4,11 @@
 
 use core::sync::atomic::{AtomicUsize, Ordering};
 
+use crate::bootstrap::cspace_sys::untyped_retype_encoded;
 use crate::cspace::tuples::RetypeTuple;
 use sel4_sys::{
     seL4_ARM_Page_Map, seL4_ARM_Page_Uncached, seL4_ARM_SmallPageObject, seL4_CPtr,
-    seL4_CapRights_ReadWrite, seL4_DebugPutChar, seL4_Error, seL4_Untyped_Retype, seL4_Word,
+    seL4_CapRights_ReadWrite, seL4_DebugPutChar, seL4_Error, seL4_Word,
 };
 
 const PL011_PADDR: u64 = 0x0900_0000;
@@ -151,21 +152,25 @@ pub fn map_pl011_smallpage(
     cnode: &RetypeTuple,
     vspace: seL4_CPtr,
 ) -> seL4_Error {
-    unsafe {
-        let retype = seL4_Untyped_Retype(
-            dev_ut,
-            seL4_ARM_SmallPageObject,
-            12,
-            cnode.node_root,
-            cnode.node_index,
-            cnode.node_depth,
-            page_slot as seL4_CPtr,
-            1,
-        );
-        if retype != sel4_sys::seL4_NoError {
-            return retype;
-        }
+    let retype = untyped_retype_encoded(
+        dev_ut,
+        seL4_ARM_SmallPageObject as u32,
+        12,
+        cnode.node_root,
+        page_slot as u64,
+        cnode.init_bits,
+        1,
+    );
+    log::info!(
+        "[pl011] retype -> slot=0x{slot:04x} err={err}",
+        slot = page_slot,
+        err = retype,
+    );
+    if retype != sel4_sys::seL4_NoError {
+        return retype;
+    }
 
+    let map_err = unsafe {
         seL4_ARM_Page_Map(
             page_slot as seL4_CPtr,
             vspace,
@@ -173,7 +178,9 @@ pub fn map_pl011_smallpage(
             seL4_CapRights_ReadWrite,
             seL4_ARM_Page_Uncached,
         )
-    }
+    };
+    log::info!("[pl011] map  -> err={err}", err = map_err);
+    map_err
 }
 
 /// Simple console loop servicing the bootstrap REPL.

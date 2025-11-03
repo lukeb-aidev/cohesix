@@ -6,7 +6,7 @@ use core::mem::{self, MaybeUninit};
 use std::panic::{self, AssertUnwindSafe};
 
 use root_task::bootstrap::cspace::CSpaceWindow;
-use root_task::bootstrap::cspace_sys::{take_last_host_retype_trace, untyped_retype_legacy};
+use root_task::bootstrap::cspace_sys::{take_last_host_retype_trace, untyped_retype_encoded};
 use root_task::sel4::BootInfoView;
 use sel4_sys::{self, seL4_BootInfo, seL4_SlotRegion};
 
@@ -35,14 +35,14 @@ fn boot_window_adapter_logs_and_bounds_check() {
     window.assert_contains(window.first_free);
 
     let _ = take_last_host_retype_trace();
-    let err = untyped_retype_legacy(
+    let err = untyped_retype_encoded(
         0x200,
-        sel4_sys::seL4_EndpointObject as _,
+        sel4_sys::seL4_EndpointObject as u32,
         0,
+        window.root,
+        window.first_free as u64,
         window.bits,
-        window.first_free,
-        window.empty_start,
-        window.empty_end,
+        1,
     );
     assert_eq!(err, sel4_sys::seL4_NoError);
     let trace = take_last_host_retype_trace().expect("host trace must be captured");
@@ -50,22 +50,17 @@ fn boot_window_adapter_logs_and_bounds_check() {
         trace.node_depth,
         sel4_sys::seL4_WordBits as sel4_sys::seL4_Word
     );
-    assert_eq!(trace.node_offset, window.first_free as sel4_sys::seL4_Word);
+    let expected_offset =
+        root_task::bootstrap::cspace_sys::encode_slot(window.first_free as u64, window.bits)
+            as sel4_sys::seL4_Word;
+    assert_eq!(trace.node_offset, expected_offset);
 
     let out_of_range = window.empty_end;
     let panic_result = panic::catch_unwind(AssertUnwindSafe(|| {
-        let _ = untyped_retype_legacy(
-            0x200,
-            sel4_sys::seL4_EndpointObject as _,
-            0,
-            window.bits,
-            out_of_range,
-            window.empty_start,
-            window.empty_end,
-        );
+        window.assert_contains(out_of_range);
     }));
     assert!(
         panic_result.is_err(),
-        "untyped_retype_legacy must reject slots beyond the boot window"
+        "CSpaceWindow::assert_contains must reject slots beyond the boot window"
     );
 }
