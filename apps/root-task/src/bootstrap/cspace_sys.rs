@@ -131,6 +131,13 @@ pub fn untyped_retype_encoded(
 
     #[cfg(target_os = "none")]
     unsafe {
+        let obj_type_word = usize::try_from(obj_type).expect("object type must fit in seL4_Word");
+        let size_bits_word = usize::from(size_bits);
+        let depth_word = usize::from(depth);
+        let encoded_slot_word =
+            usize::try_from(encoded_slot).expect("encoded slot must fit in seL4_Word");
+        let num_objects_word =
+            usize::try_from(num_objects).expect("object count must fit in seL4_Word");
         debug_log(format_args!(
             "[cs] op=retype dst_slot=0x{dst_slot:04x} enc=0x{enc:016x} depth={depth} root=0x{root:04x}",
             dst_slot = dst_slot,
@@ -140,13 +147,13 @@ pub fn untyped_retype_encoded(
         ));
         sys::seL4_Untyped_Retype(
             ut,
-            obj_type,
-            size_bits as sys::seL4_Word,
+            obj_type_word,
+            size_bits_word,
             dst_root,
             0,
-            depth,
-            encoded_slot as sys::seL4_Word,
-            num_objects as sys::seL4_Word,
+            depth_word,
+            encoded_slot_word,
+            num_objects_word,
         )
     }
 
@@ -696,7 +703,6 @@ pub fn cnode_copy_raw(
     let (src_index_u64, src_depth_bits) =
         encode_slot_for_wordbits(u32::try_from(src_slot).expect("src slot must fit within u32"));
     debug_assert_eq!(depth_bits, src_depth_bits, "source/dest depth mismatch");
-    let depth_word = sys::seL4_Word::from(depth_bits);
     let word_bits = usize::from(WORD_BITS);
     let hex_width = (word_bits + 3) / 4;
     let empty_start = bi.empty.start as sys::seL4_CPtr;

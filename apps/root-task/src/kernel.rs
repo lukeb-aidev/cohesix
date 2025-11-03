@@ -571,10 +571,12 @@ fn bootstrap<P: Platform>(
     let text_end = core::ptr::addr_of!(__text_end) as usize;
     guards::init_text_bounds(text_start, text_end);
 
+    #[cfg_attr(feature = "bootstrap-minimal", allow(unused_mut))]
     let mut boot_cspace = CSpace::from_bootinfo(bootinfo_ref);
     let boot_first_free = boot_cspace.next_free_slot();
     debug_assert_eq!(boot_first_free, cspace_window.first_free);
     debug_assert_eq!(boot_cspace.depth(), cspace_window.bits);
+    #[cfg_attr(feature = "bootstrap-minimal", allow(unused_variables))]
     let retype_tuple = make_retype_tuple(cspace_window.root, cspace_window.bits);
     let (_, empty_end) = bootinfo_view.init_cnode_empty_range();
     log::info!(
@@ -643,6 +645,7 @@ fn bootstrap<P: Platform>(
         crate::bootstrap::untyped::enumerate_and_plan(bootinfo_ref);
     }
 
+    #[cfg_attr(feature = "bootstrap-minimal", allow(unused_mut))]
     let mut kernel_env = KernelEnv::new(bootinfo_ref);
     let extra_bytes = bootinfo_view.extra();
     if !extra_bytes.is_empty() {
@@ -656,8 +659,10 @@ fn bootstrap<P: Platform>(
     }
 
     #[cfg(feature = "cap-probes")]
+    #[cfg_attr(feature = "bootstrap-minimal", allow(unused_variables))]
     let mut first_retypes: Option<FirstRetypeResult> = None;
     #[cfg(not(feature = "cap-probes"))]
+    #[cfg_attr(feature = "bootstrap-minimal", allow(unused_variables))]
     let first_retypes: Option<FirstRetypeResult> = None;
 
     #[cfg(feature = "cap-probes")]
@@ -697,6 +702,7 @@ fn bootstrap<P: Platform>(
         }
     }
 
+    #[cfg_attr(feature = "bootstrap-minimal", allow(unused_variables))]
     let ipc_vaddr = ipc_buffer_ptr.map(|ptr| ptr.as_ptr() as usize);
 
     #[cfg(feature = "bootstrap-minimal")]
@@ -714,7 +720,7 @@ fn bootstrap<P: Platform>(
             );
         }
         crate::bootstrap::run_minimal(bootinfo_ref);
-        return crate::userland::start_console_or_cohsh(platform);
+        crate::userland::start_console_or_cohsh(platform);
     }
 
     let (ep_slot, boot_ep_ok) = match ep::bootstrap_ep(&bootinfo_view, &mut boot_cspace) {

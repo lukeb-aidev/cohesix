@@ -54,6 +54,13 @@ impl CSpace {
         Ok(slot)
     }
 
+    #[inline]
+    fn encode_slot_index(&self, slot: seL4_CPtr) -> seL4_CPtr {
+        let slot_u64 = u64::try_from(slot).expect("capability slot must fit within u64");
+        let encoded = crate::bootstrap::cspace_sys::encode_slot(slot_u64, self.bits);
+        usize::try_from(encoded).expect("encoded slot must fit within seL4_CPtr")
+    }
+
     /// Issues a `seL4_CNode_Copy` within the init CSpace.
     pub fn copy_here(
         &mut self,
@@ -62,21 +69,21 @@ impl CSpace {
         rights: sel4_sys::seL4_CapRights,
     ) -> seL4_Error {
         let depth = u8::try_from(sel4_sys::seL4_WordBits).expect("seL4_WordBits must fit in u8");
-        let encoded_dst = crate::bootstrap::cspace_sys::encode_slot(dst_slot, self.bits);
-        let encoded_src = crate::bootstrap::cspace_sys::encode_slot(src_slot, self.bits);
+        let encoded_dst = self.encode_slot_index(dst_slot);
+        let encoded_src = self.encode_slot_index(src_slot);
         let word_bits = sel4_sys::seL4_WordBits as usize;
         let hex_width = (word_bits + 3) / 4;
         log::info!(
             "[cnode] Copy dst=0x{dst:04x} enc=0x{enc:0width$x} depth=WordBits({bits})",
             dst = dst_slot,
-            enc = encoded_dst as u64,
+            enc = u64::try_from(encoded_dst).expect("encoded dst must fit in u64"),
             width = hex_width,
             bits = sel4_sys::seL4_WordBits,
         );
         log::info!(
             "[cnode] Copy src=0x{src:04x} enc=0x{enc:0width$x} depth=WordBits({bits})",
             src = src_slot,
-            enc = encoded_src as u64,
+            enc = u64::try_from(encoded_src).expect("encoded src must fit in u64"),
             width = hex_width,
             bits = sel4_sys::seL4_WordBits,
         );
@@ -100,21 +107,21 @@ impl CSpace {
         badge: seL4_Word,
     ) -> seL4_Error {
         let depth = u8::try_from(sel4_sys::seL4_WordBits).expect("seL4_WordBits must fit in u8");
-        let encoded_dst = crate::bootstrap::cspace_sys::encode_slot(dst_slot, self.bits);
-        let encoded_src = crate::bootstrap::cspace_sys::encode_slot(src_slot, self.bits);
+        let encoded_dst = self.encode_slot_index(dst_slot);
+        let encoded_src = self.encode_slot_index(src_slot);
         let word_bits = sel4_sys::seL4_WordBits as usize;
         let hex_width = (word_bits + 3) / 4;
         log::info!(
             "[cnode] Mint dst=0x{dst:04x} enc=0x{enc:0width$x} depth=WordBits({bits})",
             dst = dst_slot,
-            enc = encoded_dst as u64,
+            enc = u64::try_from(encoded_dst).expect("encoded dst must fit in u64"),
             width = hex_width,
             bits = sel4_sys::seL4_WordBits,
         );
         log::info!(
             "[cnode] Mint src=0x{src:04x} enc=0x{enc:0width$x} depth=WordBits({bits})",
             src = src_slot,
-            enc = encoded_src as u64,
+            enc = u64::try_from(encoded_src).expect("encoded src must fit in u64"),
             width = hex_width,
             bits = sel4_sys::seL4_WordBits,
         );
