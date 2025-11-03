@@ -5,9 +5,9 @@
 
 use crate::bootstrap::cspace::CSpaceCtx;
 use crate::sel4 as sys;
-use sel4_sys::seL4_WordBits;
 #[cfg(target_os = "none")]
 use crate::sel4::{BootInfoError, BootInfoView};
+use sel4_sys::seL4_WordBits;
 
 /// Helper that logs and forwards a `seL4_CNode_Mint` request through [`CSpaceCtx`].
 pub fn cnode_mint_to_slot(

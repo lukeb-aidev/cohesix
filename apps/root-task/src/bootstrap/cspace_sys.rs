@@ -50,57 +50,114 @@ fn log_window(tag: &str, window: &CSpaceWindow) {
     );
 }
 
+#[inline]
+pub fn cnode_copy_legacy(
+    init_bits: u8,
+    dst_slot: sys::seL4_CPtr,
+    src_slot: sys::seL4_CPtr,
+    rights: sys::seL4_CapRights,
+) -> sys::seL4_Error {
+    let root = sys::seL4_CapInitThreadCNode;
+    let depth = sys::seL4_Word::from(init_bits);
+    let rights_raw = rights.raw();
+    log::info!(
+        "[cnode:copy/legacy] root=0x{root:x} dst_slot=0x{dst:04x} depth={depth} src_slot=0x{src:04x} depth={depth} rights=0x{rights:02x}",
+        root = root,
+        dst = dst_slot,
+        depth = depth,
+        src = src_slot,
+        rights = rights_raw,
+    );
+
+    #[cfg(target_os = "none")]
+    unsafe {
+        sys::seL4_CNode_Copy(root, dst_slot, depth, root, src_slot, depth, rights)
+    }
+
+    #[cfg(not(target_os = "none"))]
+    {
+        sys::seL4_NoError
+    }
+}
+
+#[inline]
+pub fn untyped_retype_legacy(
+    ut: sys::seL4_CPtr,
+    obj_type: sys::seL4_Word,
+    size_bits: sys::seL4_Word,
+    init_bits: u8,
+    dst_slot: sys::seL4_CPtr,
+) -> sys::seL4_Error {
+    let root = sys::seL4_CapInitThreadCNode;
+    let node_index: sys::seL4_Word = dst_slot as _;
+    let node_depth: sys::seL4_Word = init_bits as _;
+    let node_offset: sys::seL4_Word = 0;
+    let node_count: sys::seL4_Word = 1;
+    log::info!(
+        "[untyped:retype/legacy] ut=0x{ut:x} obj_type={obj_type} size_bits={size_bits} root=0x{root:x} index=0x{index:x} depth={depth} offset={offset} count={count}",
+        ut = ut,
+        obj_type = obj_type,
+        size_bits = size_bits,
+        root = root,
+        index = node_index,
+        depth = node_depth,
+        offset = node_offset,
+        count = node_count,
+    );
+
+    #[cfg(target_os = "none")]
+    unsafe {
+        sys::seL4_Untyped_Retype(
+            ut,
+            obj_type,
+            size_bits,
+            root,
+            node_index,
+            node_depth,
+            node_offset,
+            node_count,
+        )
+    }
+
+    #[cfg(not(target_os = "none"))]
+    {
+        host_trace::record(host_trace::HostRetypeTrace {
+            root,
+            node_index,
+            node_depth,
+            node_offset,
+            object_type: obj_type,
+            size_bits,
+        });
+        sys::seL4_NoError
+    }
+}
+
 /// Retype a single endpoint object into the first free slot of the init CNode window.
 pub fn retype_endpoint_once(
     untyped: sys::seL4_CPtr,
     window: &mut CSpaceWindow,
 ) -> Result<sys::seL4_CPtr, sys::seL4_Error> {
     log_window("win", window);
-    let dest_root = window.root;
-    let slot = window.first_free as sys::seL4_Word;
-    let node_index: sys::seL4_Word = 0;
-    let node_depth: sys::seL4_Word = 0;
-    let node_offset: sys::seL4_Word = slot;
-    let num_objects: sys::seL4_Word = 1;
+    let slot = window.first_free;
     let size_bits: sys::seL4_Word = 0;
-
-    #[cfg(target_os = "none")]
-    let err = unsafe {
-        sys::seL4_Untyped_Retype(
-            untyped,
-            sys::seL4_ObjectType::seL4_EndpointObject as sys::seL4_Word,
-            size_bits,
-            dest_root,
-            node_index,
-            node_depth,
-            node_offset,
-            num_objects,
-        )
-    };
-
-    #[cfg(not(target_os = "none"))]
-    let err = {
-        host_trace::record(host_trace::HostRetypeTrace {
-            root: dest_root,
-            node_index,
-            node_depth,
-            node_offset,
-            object_type: sys::seL4_ObjectType::seL4_EndpointObject as sys::seL4_Word,
-            size_bits,
-        });
-        sys::seL4_NoError
-    };
+    let err = untyped_retype_legacy(
+        untyped,
+        sys::seL4_ObjectType::seL4_EndpointObject as sys::seL4_Word,
+        size_bits,
+        window.bits,
+        slot,
+    );
 
     if err == sys::seL4_NoError {
         window.bump();
-        Ok(node_offset as sys::seL4_CPtr)
+        Ok(slot)
     } else {
         ::log::error!(
-            "[boot:retype_ep] ut=0x{ut:04x} root=0x{root:04x} depth={depth} offset=0x{offset:04x} err={err:?}",
+            "[boot:retype_ep] ut=0x{ut:04x} slot=0x{slot:04x} depth={depth} err={err:?}",
             ut = untyped,
-            root = dest_root,
-            depth = node_depth,
-            offset = node_offset,
+            slot = slot,
+            depth = window.bits,
             err = err,
         );
         Err(err)
@@ -931,7 +988,6 @@ pub fn init_cnode_retype_dest(
     (root, node_index, node_depth, node_offset)
 }
 
-#[doc(hidden)]
 pub use bits_as_u8 as super_bits_as_u8_for_test;
 
 pub mod canonical {
@@ -1607,6 +1663,12 @@ mod tests {
             } else {
                 panic!("expected host trace for init-root retype");
             }
+        }
+
+        #[test]
+        fn bits_helper_reexport_available() {
+            let value = super::super_bits_as_u8_for_test(13usize);
+            assert_eq!(value, 13);
         }
     }
 
