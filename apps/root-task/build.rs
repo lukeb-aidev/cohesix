@@ -196,9 +196,7 @@ fn main() {
 }
 
 fn emit_built_info() -> io::Result<()> {
-    let out_dir = PathBuf::from(
-        env::var("OUT_DIR").map_err(|err| io::Error::new(io::ErrorKind::Other, err))?,
-    );
+    let out_dir = PathBuf::from(env::var("OUT_DIR").map_err(io::Error::other)?);
     let git = Command::new("git")
         .args(["rev-parse", "--short", "HEAD"])
         .output()

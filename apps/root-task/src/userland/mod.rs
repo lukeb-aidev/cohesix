@@ -8,6 +8,8 @@ use core::fmt::Write;
 #[cfg(not(target_arch = "aarch64"))]
 use core::sync::atomic::{AtomicU64, Ordering};
 
+#[cfg(feature = "serial-console")]
+use crate::ipc;
 use crate::platform::Platform;
 use crate::sel4;
 
@@ -91,6 +93,12 @@ pub mod serial_console {
 
 #[cfg(feature = "serial-console")]
 pub fn deferred_bringup() {
+    let ep = sel4::root_endpoint();
+    if !ipc::ep_is_valid(ep) {
+        ::log::info!("[bringup] minimal; no IPC (ep=null)");
+        return;
+    }
+
     ::log::info!("[bringup] minimal; skipping IPC/queen handshake");
 }
 
