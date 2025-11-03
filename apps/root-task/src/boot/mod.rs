@@ -6,3 +6,5 @@ pub mod bi_extra;
 /// Kernel endpoint bootstrap scaffolding.
 pub mod ep;
 pub mod flags;
+pub mod tcb;
+pub mod uart_pl011;

@@ -83,13 +83,10 @@ pub fn cnode_copy_encoded(
     let src_index = encode_slot(src_slot, src_bits) as sys::seL4_Word;
     let depth = depth_wordbits();
     log::info!(
-        "[cnode:copy] dst=0x{dst:04x}->0x{dst_index:016x} src=0x{src:04x}->0x{src_index:016x} depth={depth} rights=0x{rights:02x}",
-        dst = dst_slot,
+        "[enc] dst_index=0x{dst_index:016x} depth={depth} src_index=0x{src_index:016x}",
         dst_index = dst_index,
-        src = src_slot,
-        src_index = src_index,
         depth = depth,
-        rights = rights.raw(),
+        src_index = src_index,
     );
 
     #[cfg(target_os = "none")]
@@ -119,14 +116,9 @@ pub fn untyped_retype_encoded(
     let encoded_slot = encode_slot(dst_slot, dst_bits);
     let depth = depth_wordbits();
     log::info!(
-        "[untyped:retype] ut=0x{ut:x} obj_type={obj_type} size_bits={size_bits} dst_slot=0x{slot:04x} enc=0x{enc:016x} depth={depth} count={count}",
-        ut = ut,
-        obj_type = obj_type,
-        size_bits = size_bits,
-        slot = dst_slot,
+        "[enc] dst_index=0x{enc:016x} depth={depth}",
         enc = encoded_slot,
         depth = depth,
-        count = num_objects,
     );
 
     #[cfg(target_os = "none")]
@@ -150,9 +142,9 @@ pub fn untyped_retype_encoded(
             obj_type_word,
             size_bits_word,
             dst_root,
-            0,
-            depth_word,
             encoded_slot_word,
+            depth_word,
+            0,
             num_objects_word,
         )
     }
@@ -161,9 +153,9 @@ pub fn untyped_retype_encoded(
     {
         host_trace::record(host_trace::HostRetypeTrace {
             root: dst_root,
-            node_index: 0,
+            node_index: encoded_slot as sys::seL4_Word,
             node_depth: depth as sys::seL4_Word,
-            node_offset: encoded_slot as sys::seL4_Word,
+            node_offset: 0,
             object_type: obj_type as sys::seL4_Word,
             size_bits: size_bits as sys::seL4_Word,
         });

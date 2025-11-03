@@ -49,6 +49,19 @@ pub mod serial_console {
         let mut writer = PlatformWriter { platform };
         let _ = writeln!(writer);
         let _ = writeln!(writer, "[Cohesix] Root console ready. Type 'help'.");
+        let ep = sel4::root_endpoint();
+        if !ipc::ep_is_valid(ep) {
+            let _ = writeln!(
+                writer,
+                "[console] IPC disabled (root ep = null); use local commands only"
+            );
+        } else {
+            let _ = writeln!(
+                writer,
+                "[console] IPC enabled (root ep = 0x{ep:04x})",
+                ep = ep
+            );
+        }
         let _ = write!(writer, "> ");
     }
 

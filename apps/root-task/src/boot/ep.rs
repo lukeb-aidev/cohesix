@@ -4,7 +4,7 @@
 
 use sel4_sys::{seL4_CPtr, seL4_CapNull, seL4_Error, seL4_IllegalOperation};
 
-use crate::boot::bi_extra::first_regular_untyped_from_extra;
+use crate::boot::bi_extra::UntypedDesc;
 use crate::bootstrap::cspace::CSpaceWindow;
 use crate::bootstrap::cspace_sys::untyped_retype_encoded;
 use crate::cspace::CSpace;
@@ -17,7 +17,7 @@ pub fn publish_root_ep(ep: seL4_CPtr) {
     unsafe {
         ROOT_EP = ep;
     }
-    log::info!("[boot] root endpoint published ep=0x{:x}", ep as usize);
+    log::info!("[boot] root endpoint published ep=0x{ep:04x}", ep = ep);
     crate::sel4::set_ep(ep);
 }
 
@@ -28,12 +28,25 @@ pub fn bootstrap_ep(view: &BootInfoView, cs: &mut CSpace) -> Result<seL4_CPtr, s
     }
 
     let bi = view.header();
-    let (ut, desc) = first_regular_untyped_from_extra(bi).ok_or(seL4_IllegalOperation)?;
+    const MIN_ENDPOINT_BITS: u8 = 12;
+    let count = (bi.untyped.end - bi.untyped.start) as usize;
+    let descriptors = &bi.untypedList[..count];
+    let (ut, desc): (seL4_CPtr, UntypedDesc) = descriptors
+        .iter()
+        .enumerate()
+        .find_map(|(index, desc)| {
+            if desc.isDevice != 0 || desc.sizeBits < MIN_ENDPOINT_BITS {
+                return None;
+            }
+            let cap = bi.untyped.start + index as seL4_CPtr;
+            Some((cap, (*desc).into()))
+        })
+        .ok_or(seL4_IllegalOperation)?;
 
     #[cfg(feature = "untyped-debug")]
     {
         crate::trace::println!(
-            "[untyped: cap=0x{cap:x} size_bits={size_bits} is_device={is_device} paddr=0x{paddr:x}]",
+            "[ram-ut: cap=0x{cap:x} size_bits={size_bits} is_device={is_device} paddr=0x{paddr:x}]",
             cap = ut,
             size_bits = desc.size_bits,
             is_device = desc.is_device,
@@ -47,6 +60,12 @@ pub fn bootstrap_ep(view: &BootInfoView, cs: &mut CSpace) -> Result<seL4_CPtr, s
     }
 
     let ep_slot = cs.alloc_slot()?;
+    log::info!(
+        "[cs] win root=0x{root:04x} bits={bits} first_free=0x{slot:04x}",
+        root = cs.root(),
+        bits = cs.depth(),
+        slot = ep_slot,
+    );
     debug_assert_ne!(
         ep_slot,
         sel4::seL4_CapNull,
@@ -57,7 +76,7 @@ pub fn bootstrap_ep(view: &BootInfoView, cs: &mut CSpace) -> Result<seL4_CPtr, s
     window.first_free = ep_slot;
     window.assert_contains(ep_slot);
     log::info!(
-        "[boot:ep] win root=0x{root:x} bits={bits} first_free=0x{slot:x}",
+        "[cs] win root=0x{root:04x} bits={bits} first_free=0x{slot:04x}",
         root = window.root,
         bits = window.bits,
         slot = window.first_free,
@@ -102,9 +121,9 @@ pub fn bootstrap_ep(view: &BootInfoView, cs: &mut CSpace) -> Result<seL4_CPtr, s
         1,
     );
     log::info!(
-        "[ep] retyped -> slot=0x{slot:04x} err={err}",
+        "[ep] retype -> dst=0x{slot:04x} err={err}",
         slot = ep_slot,
-        err = err,
+        err = err
     );
     if err != sel4_sys::seL4_NoError {
         log::trace!("B1.ret = Err({code})", code = sel4::error_name(err));
