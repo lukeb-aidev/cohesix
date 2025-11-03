@@ -61,14 +61,25 @@ impl CSpace {
         src_slot: seL4_CPtr,
         rights: sel4_sys::seL4_CapRights,
     ) -> seL4_Error {
-        log::info!(
-            "[cnode] Copy dest_slot=0x{slot:04x} depth=WordBits({depth})",
-            slot = dst_slot,
-            depth = sel4_sys::seL4_WordBits,
-        );
         let depth = u8::try_from(sel4_sys::seL4_WordBits).expect("seL4_WordBits must fit in u8");
         let encoded_dst = crate::bootstrap::cspace_sys::encode_slot(dst_slot, self.bits);
         let encoded_src = crate::bootstrap::cspace_sys::encode_slot(src_slot, self.bits);
+        let word_bits = sel4_sys::seL4_WordBits as usize;
+        let hex_width = (word_bits + 3) / 4;
+        log::info!(
+            "[cnode] Copy dst=0x{dst:04x} enc=0x{enc:0width$x} depth=WordBits({bits})",
+            dst = dst_slot,
+            enc = encoded_dst as u64,
+            width = hex_width,
+            bits = sel4_sys::seL4_WordBits,
+        );
+        log::info!(
+            "[cnode] Copy src=0x{src:04x} enc=0x{enc:0width$x} depth=WordBits({bits})",
+            src = src_slot,
+            enc = encoded_src as u64,
+            width = hex_width,
+            bits = sel4_sys::seL4_WordBits,
+        );
         sel4::cnode_copy_depth(
             self.root,
             encoded_dst,
@@ -88,14 +99,25 @@ impl CSpace {
         rights: sel4_sys::seL4_CapRights,
         badge: seL4_Word,
     ) -> seL4_Error {
-        log::info!(
-            "[cnode] Mint dest_slot=0x{slot:04x} depth=WordBits({depth})",
-            slot = dst_slot,
-            depth = sel4_sys::seL4_WordBits,
-        );
         let depth = u8::try_from(sel4_sys::seL4_WordBits).expect("seL4_WordBits must fit in u8");
         let encoded_dst = crate::bootstrap::cspace_sys::encode_slot(dst_slot, self.bits);
         let encoded_src = crate::bootstrap::cspace_sys::encode_slot(src_slot, self.bits);
+        let word_bits = sel4_sys::seL4_WordBits as usize;
+        let hex_width = (word_bits + 3) / 4;
+        log::info!(
+            "[cnode] Mint dst=0x{dst:04x} enc=0x{enc:0width$x} depth=WordBits({bits})",
+            dst = dst_slot,
+            enc = encoded_dst as u64,
+            width = hex_width,
+            bits = sel4_sys::seL4_WordBits,
+        );
+        log::info!(
+            "[cnode] Mint src=0x{src:04x} enc=0x{enc:0width$x} depth=WordBits({bits})",
+            src = src_slot,
+            enc = encoded_src as u64,
+            width = hex_width,
+            bits = sel4_sys::seL4_WordBits,
+        );
         sel4::cnode_mint_depth(
             self.root,
             encoded_dst,

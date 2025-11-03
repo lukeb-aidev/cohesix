@@ -44,6 +44,18 @@ pub fn raw_untyped_retype(
     node_offset: sys::seL4_Word,
     num_objects: sys::seL4_Word,
 ) -> sys::seL4_Error {
+    let word_bits = sys::seL4_WordBits as usize;
+    let hex_width = (word_bits + 3) / 4;
+    ::log::info!(
+        "[retype] ut=0x{ut:0width$x} root=0x{root:04x} depth={depth} index=0x{index:0width$x} offset=0x{offset:0width$x} n={num}",
+        ut = ut_cap,
+        root = dest_root,
+        depth = node_depth,
+        index = node_index,
+        offset = node_offset,
+        num = num_objects,
+        width = hex_width,
+    );
     unsafe {
         sys::seL4_Untyped_Retype(
             ut_cap,

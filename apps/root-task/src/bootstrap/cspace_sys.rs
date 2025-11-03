@@ -622,24 +622,32 @@ pub fn cnode_copy_raw(
     let src_slot = src_slot_raw as sys::seL4_CPtr;
     let dst_index = encode_slot(dst_slot, init_bits);
     let src_index = encode_slot(src_slot, init_bits);
+    let word_bits = sys::seL4_WordBits as usize;
+    let hex_width = (word_bits + 3) / 4;
 
     ::log::info!(
         "[cnode-copy] dst_root={dst_root_label} dst_slot=0x{dst_slot_raw:04x} depth=WordBits({depth}) \
          src_root={src_root_label} src_slot=0x{src_slot_raw:04x} depth=WordBits({depth})",
         depth = sys::seL4_WordBits,
     );
+    ::log::info!(
+        "[cnode] Copy dst=0x{dst_slot_raw:04x} enc=0x{dst_index:0width$x} depth=WordBits({depth})",
+        width = hex_width,
+        depth = sys::seL4_WordBits,
+        dst_index = dst_index as u64,
+    );
+    ::log::info!(
+        "[cnode] Copy src=0x{src_slot_raw:04x} enc=0x{src_index:0width$x} depth=WordBits({depth})",
+        width = hex_width,
+        depth = sys::seL4_WordBits,
+        src_index = src_index as u64,
+    );
 
     #[cfg(target_os = "none")]
     {
         unsafe {
             sys::seL4_CNode_Copy(
-                dst_root,
-                dst_index,
-                depth_bits,
-                src_root,
-                src_index,
-                depth_bits,
-                rights,
+                dst_root, dst_index, depth_bits, src_root, src_index, depth_bits, rights,
             )
         }
     }
@@ -731,14 +739,7 @@ pub fn cnode_mint_raw(
     {
         unsafe {
             sys::seL4_CNode_Mint(
-                dst_root,
-                dst_index,
-                depth_bits,
-                src_root,
-                src_index,
-                depth_bits,
-                rights,
-                badge,
+                dst_root, dst_index, depth_bits, src_root, src_index, depth_bits, rights, badge,
             )
         }
     }
@@ -779,12 +780,7 @@ pub fn cnode_move_raw(
     {
         unsafe {
             sys::seL4_CNode_Move(
-                dst_root,
-                dst_index,
-                depth_bits,
-                src_root,
-                src_index,
-                depth_bits,
+                dst_root, dst_index, depth_bits, src_root, src_index, depth_bits,
             )
         }
     }
