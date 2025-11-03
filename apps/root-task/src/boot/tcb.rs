@@ -11,7 +11,6 @@ use sel4_sys::{self, seL4_CPtr, seL4_CapRights_ReadWrite, seL4_Error, seL4_NoErr
 pub fn bootstrap_copy_init_tcb(
     bootinfo: &sel4_sys::seL4_BootInfo,
     cs: &mut CSpace,
-    init_bits: u8,
 ) -> Result<seL4_CPtr, seL4_Error> {
     let dst_slot = cs.alloc_slot()?;
     log::info!(

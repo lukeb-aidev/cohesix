@@ -789,9 +789,7 @@ fn bootstrap<P: Platform>(
         info.tcb_copy_slot
     } else {
         crate::bp!("tcb.copy.begin");
-        let init_bits = bootinfo_view.init_cnode_bits();
-        let init_bits_u8 = crate::bootstrap::cspace_sys::bits_as_u8(usize::from(init_bits));
-        let copy_slot = tcb::bootstrap_copy_init_tcb(bootinfo_ref, &mut boot_cspace, init_bits_u8)
+        let copy_slot = tcb::bootstrap_copy_init_tcb(bootinfo_ref, &mut boot_cspace)
             .unwrap_or_else(|err| {
                 panic!(
                     "copying init TCB capability failed: {} ({})",
