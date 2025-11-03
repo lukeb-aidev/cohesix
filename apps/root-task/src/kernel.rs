@@ -564,6 +564,12 @@ fn bootstrap<P: Platform>(
         bits = cspace_window.bits,
         root = cspace_window.root
     );
+    match crate::bootstrap::cspace::prove_dest_path_with_bootinfo(bootinfo_ref, boot_first_free) {
+        Ok(()) => log::info!("[probe] dest path OK at slot=0x{boot_first_free:04x}"),
+        Err(err) => panic!(
+            "dest path invalid: Copy BootInfo -> slot=0x{boot_first_free:04x} failed err={err}",
+        ),
+    }
     boot_tracer().advance(BootPhase::CSpaceInit);
 
     console.writeln_prefixed("entered from seL4 (stage0)");

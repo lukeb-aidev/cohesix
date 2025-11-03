@@ -146,7 +146,7 @@ pub(crate) fn call_retype(
     dest.assert_sane();
     let style = tuple_style();
     let (node_index, node_depth): (sys::seL4_Word, sys::seL4_Word) = match style {
-        TupleStyle::Raw => (0, 0),
+        TupleStyle::Raw => (0, dest.root_bits as sys::seL4_Word),
         TupleStyle::Encoded => (
             dest.root as sys::seL4_Word,
             dest.root_bits as sys::seL4_Word,
