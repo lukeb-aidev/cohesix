@@ -2,7 +2,7 @@
 //! Bootstrap helpers for copying the init TCB capability.
 #![allow(unsafe_code)]
 
-use crate::bootstrap::cspace_sys::cnode_copy_raw;
+use crate::bootstrap::cspace_sys::cnode_copy;
 use crate::cspace::CSpace;
 use crate::sel4::BootInfoExt;
 use sel4_sys::{self, seL4_CPtr, seL4_CapRights_ReadWrite, seL4_Error, seL4_NoError, seL4_Word};
@@ -22,7 +22,7 @@ pub fn bootstrap_copy_init_tcb(
 
     let init_root = cs.root();
     let src_slot = bootinfo.init_tcb_cap();
-    let err = cnode_copy_raw(
+    let err = cnode_copy(
         bootinfo,
         init_root,
         dst_slot as seL4_Word,

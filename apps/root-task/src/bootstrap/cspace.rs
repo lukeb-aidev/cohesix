@@ -365,7 +365,7 @@ pub fn cnode_copy_selftest(bi: &seL4_BootInfo) -> Result<(), seL4_Error> {
         root = root,
     );
 
-    let copy_err = cspace_sys::cnode_copy_raw(bi, root, dst_slot, root, src_slot, rights);
+    let copy_err = cspace_sys::cnode_copy(bi, root, dst_slot, root, src_slot, rights);
 
     if copy_err != seL4_NoError {
         log::warn!("[selftest] CNode_Copy failed err={copy_err}");
@@ -455,7 +455,7 @@ pub fn cspace_first_retypes(
     };
     dest.set_slot_offset(tcb_copy_slot);
     let rights = cap_rights_read_write_grant();
-    let copy_err = cspace_sys::cnode_copy_raw(
+    let copy_err = cspace_sys::cnode_copy(
         bi,
         seL4_CapInitThreadCNode,
         tcb_copy_slot as seL4_Word,
@@ -628,7 +628,7 @@ pub fn cspace_first_retypes(
         }
     };
     dest.set_slot_offset(tcb_copy_slot);
-    let copy_err = cspace_sys::cnode_copy_raw(
+    let copy_err = cspace_sys::cnode_copy(
         bi,
         seL4_CapInitThreadCNode,
         tcb_copy_slot as seL4_Word,

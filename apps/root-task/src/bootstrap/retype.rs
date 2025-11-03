@@ -9,6 +9,7 @@ use sel4_sys::{self as sys, seL4_CapTableObject, seL4_EndpointObject};
 #[cfg(feature = "canonical_cspace")]
 use super::cspace::first_endpoint_retype;
 use super::cspace::{slot_in_empty_window, CSpaceCtx, DestCNode};
+use super::cspace_sys::{tuple_style, tuple_style_label, TupleStyle};
 use super::ffi::raw_untyped_retype;
 use crate::bootstrap::log::force_uart_line;
 use crate::bootstrap::{boot_tracer, BootPhase, UntypedSelection};
@@ -32,13 +33,14 @@ fn log_retype_call(
     node_depth: sys::seL4_Word,
     node_offset: sys::seL4_Word,
     num_objects: sys::seL4_Word,
+    style: TupleStyle,
 ) {
     let word_bits = sys::seL4_WordBits as usize;
     let hex_width = (word_bits + 3) / 4;
     let mut line = String::<128>::new();
     let _ = write!(
         &mut line,
-        "[retype:call] ut={:#x} obj={:#x} sz_bits={} root={:#x} idx=0x{idx:0width$x} depth={depth} off=0x{off:0width$x} n={n} window=[0x{start:04x}..0x{end:04x})",
+        "[retype] dst=0x{off:04x} index={idx:#0width$x} depth={depth} root=0x{root:04x} style={style} ut=0x{ut:04x} obj=0x{obj:04x} sz={sz} n={n}",
         ut_cap,
         obj_type,
         size_bits,
@@ -49,8 +51,13 @@ fn log_retype_call(
         start = dest.empty_start,
         end = dest.empty_end,
         n = num_objects,
+        style = tuple_style_label(style),
+        ut = ut_cap,
+        obj = obj_type,
+        sz = size_bits,
         width = hex_width,
     );
+    ::log::info!("{}", line.as_str());
     force_uart_line(line.as_str());
 }
 
@@ -139,8 +146,14 @@ pub(crate) fn call_retype(
     num_objects: sys::seL4_Word,
 ) -> sys::seL4_Error {
     dest.assert_sane();
-    let node_index: sys::seL4_Word = 0;
-    let node_depth: sys::seL4_Word = 0;
+    let style = tuple_style();
+    let (node_index, node_depth): (sys::seL4_Word, sys::seL4_Word) = match style {
+        TupleStyle::Raw => (0, 0),
+        TupleStyle::Encoded => (
+            dest.root as sys::seL4_Word,
+            dest.root_bits as sys::seL4_Word,
+        ),
+    };
     let slot_offset =
         sys::seL4_Word::try_from(dest.slot_offset).expect("slot offset must fit within seL4_Word");
     log_retype_call(
@@ -152,6 +165,7 @@ pub(crate) fn call_retype(
         node_depth,
         slot_offset,
         num_objects,
+        style,
     );
     let err = seL4_Untyped_Retype(
         ut_cap,
@@ -164,9 +178,17 @@ pub(crate) fn call_retype(
         num_objects,
     );
     let mut line = String::<64>::new();
-    if write!(&mut line, "[retype:ret] err={}", err).is_err() {
+    if write!(
+        &mut line,
+        "[retype:ret] err={} style={}",
+        err,
+        tuple_style_label(style)
+    )
+    .is_err()
+    {
         // Preserve the best-effort diagnostic even if truncated.
     }
+    ::log::info!("{}", line.as_str());
     force_uart_line(line.as_str());
     err
 }

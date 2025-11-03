@@ -3,7 +3,7 @@
 #![cfg(feature = "kernel")]
 
 use root_task::bootstrap::cspace_sys::{
-    cnode_copy_raw, encode_slot, take_last_host_retype_trace, untyped_retype_encoded,
+    cnode_copy, encode_slot, take_last_host_retype_trace, untyped_retype_encoded,
 };
 use sel4_sys::{self, seL4_CNode, seL4_CPtr, seL4_CapRights};
 
@@ -16,7 +16,7 @@ fn encode_slot_applies_word_aligned_shift() {
 }
 
 #[test]
-fn cnode_copy_raw_uses_direct_indices() {
+fn cnode_copy_uses_selected_style() {
     let rights = seL4_CapRights::new(1, 1, 1, 1);
     let init_bits = 13u8;
     let dst_slot: seL4_CPtr = 0x20;
@@ -27,7 +27,7 @@ fn cnode_copy_raw_uses_direct_indices() {
     bootinfo.empty.end = 0x80;
 
     let root = sel4_sys::seL4_CapInitThreadCNode;
-    let err = cnode_copy_raw(&bootinfo, root, dst_slot as _, root, src_slot as _, rights);
+    let err = cnode_copy(&bootinfo, root, dst_slot as _, root, src_slot as _, rights);
     assert_eq!(err, sel4_sys::seL4_NoError);
 }
 
