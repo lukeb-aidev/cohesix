@@ -14,10 +14,12 @@ use heapless::String;
 
 use super::cspace_sys;
 use sel4_sys::{
-    self, seL4_BootInfo, seL4_CPtr, seL4_CapInitThreadCNode, seL4_CapInitThreadTCB, seL4_Word,
+    self, seL4_BootInfo, seL4_CNode, seL4_CPtr, seL4_CapBootInfoFrame, seL4_CapInitThreadCNode,
+    seL4_CapInitThreadTCB, seL4_Word,
 };
+use sel4_sys::{seL4_CNode_Delete, seL4_NoError};
 #[cfg(feature = "cap-probes")]
-use sel4_sys::{seL4_CNode_Delete, seL4_CapRights_All, seL4_Error, seL4_NoError};
+use sel4_sys::{seL4_CapRights_All, seL4_Error};
 
 const MAX_DIAGNOSTIC_LEN: usize = 224;
 
@@ -352,6 +354,36 @@ pub fn make_root_dest(bi: &sel4_sys::seL4_BootInfo) -> DestCNode {
     dest
 }
 
+pub fn prove_dest_path_with_bootinfo(
+    bi: &sel4_sys::seL4_BootInfo,
+    first_free: sel4::seL4_CPtr,
+) -> Result<(), sel4_sys::seL4_Error> {
+    let dst_root = seL4_CapInitThreadCNode as seL4_CNode;
+    let src_root = dst_root;
+    let src_slot = seL4_CapBootInfoFrame as seL4_Word;
+    let dst_slot = first_free as seL4_Word;
+
+    cspace_sys::debug_identify_cap("InitCNode", dst_root as seL4_CPtr);
+    cspace_sys::assert_init_cnode_layout(bi);
+
+    let depth = sel4::init_cnode_bits(bi) as seL4_Word;
+    unsafe {
+        let _ = seL4_CNode_Delete(dst_root, dst_slot, depth);
+    }
+
+    let err = cspace_sys::cnode_copy_raw_single(bi, dst_root, dst_slot, src_root, src_slot);
+    ::log::info!("[probe] copy BootInfo -> 0x{dst_slot:04x} err={err}");
+
+    if err == seL4_NoError {
+        unsafe {
+            let _ = seL4_CNode_Delete(dst_root, dst_slot, depth);
+        }
+        Ok(())
+    } else {
+        Err(err)
+    }
+}
+
 #[cfg(feature = "cap-probes")]
 pub fn cnode_copy_selftest(bi: &seL4_BootInfo) -> Result<(), seL4_Error> {
     let (start, _end) = crate::sel4_view::empty_window(bi);
@@ -454,14 +486,12 @@ pub fn cspace_first_retypes(
         }
     };
     dest.set_slot_offset(tcb_copy_slot);
-    let rights = cap_rights_read_write_grant();
-    let copy_err = cspace_sys::cnode_copy(
+    let copy_err = cspace_sys::cnode_copy_raw_single(
         bi,
-        seL4_CapInitThreadCNode,
+        seL4_CapInitThreadCNode as seL4_CNode,
         tcb_copy_slot as seL4_Word,
-        seL4_CapInitThreadCNode,
+        seL4_CapInitThreadCNode as seL4_CNode,
         seL4_CapInitThreadTCB as seL4_Word,
-        rights,
     );
     let mut copy_line = String::<MAX_DIAGNOSTIC_LEN>::new();
     let depth_word = sel4::word_bits() as seL4_Word;

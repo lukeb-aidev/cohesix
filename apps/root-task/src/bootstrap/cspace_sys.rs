@@ -98,6 +98,62 @@ fn log_window(tag: &str, window: &CSpaceWindow) {
     );
 }
 
+pub fn debug_identify_cap(label: &str, cap: sys::seL4_CPtr) {
+    #[cfg(all(feature = "kernel", target_os = "none"))]
+    {
+        unsafe {
+            let ty = sys::seL4_DebugCapIdentify(cap);
+            ::log::info!("[capid] {label} cap=0x{cap:04x} ty_raw=0x{ty:x}");
+        }
+    }
+
+    #[cfg(not(all(feature = "kernel", target_os = "none")))]
+    {
+        let _ = (label, cap);
+    }
+}
+
+pub fn assert_init_cnode_layout(bi: &sys::seL4_BootInfo) {
+    let init_bits = bi.initThreadCNodeSizeBits as usize;
+    assert!(
+        init_bits > 0 && init_bits <= 32,
+        "initThreadCNodeSizeBits unexpected: {}",
+        init_bits,
+    );
+    ::log::info!("[cnode] expect single-level: radix={} guard=0", init_bits);
+}
+
+pub fn cnode_copy_raw_single(
+    bi: &sys::seL4_BootInfo,
+    dst_root: sys::seL4_CNode,
+    dst_slot: sys::seL4_Word,
+    src_root: sys::seL4_CNode,
+    src_slot: sys::seL4_Word,
+) -> sys::seL4_Error {
+    let depth = sel4::init_cnode_bits(bi) as sys::seL4_Word;
+    let rights = sys::seL4_CapRights::new(1, 1, 1, 1);
+
+    ::log::info!(
+        "[cnode.copy/raw] dst_root=0x{dst_root:04x} dst_slot=0x{dst_slot:04x} depth={depth} src=0x{src_root:04x}/0x{src_slot:04x}",
+        dst_root = dst_root,
+        dst_slot = dst_slot,
+        depth = depth,
+        src_root = src_root,
+        src_slot = src_slot,
+    );
+
+    #[cfg(target_os = "none")]
+    unsafe {
+        sys::seL4_CNode_Copy(dst_root, dst_slot, depth, src_root, src_slot, depth, rights)
+    }
+
+    #[cfg(not(target_os = "none"))]
+    {
+        let _ = (bi, dst_root, dst_slot, src_root, src_slot, depth, rights);
+        sys::seL4_NoError
+    }
+}
+
 #[inline(always)]
 pub const fn depth_wordbits() -> u8 {
     sys::seL4_WordBits as u8
@@ -193,13 +249,7 @@ fn cnode_copy_with_style(
             dst_root = dst_root,
         ));
         sys::seL4_CNode_Copy(
-            dst_root,
-            dst_index,
-            depth_u8,
-            src_root,
-            src_index,
-            depth_u8,
-            rights,
+            dst_root, dst_index, depth_u8, src_root, src_index, depth_u8, rights,
         )
     }
 
@@ -271,14 +321,7 @@ fn cnode_mint_with_style(
             badge = badge,
         ));
         sys::seL4_CNode_Mint(
-            dst_root,
-            dst_index,
-            depth_u8,
-            src_root,
-            src_index,
-            depth_u8,
-            rights,
-            badge,
+            dst_root, dst_index, depth_u8, src_root, src_index, depth_u8, rights, badge,
         )
     }
 
@@ -324,14 +367,7 @@ fn cnode_move_with_style(
             src = src_slot_raw,
             depth = depth,
         ));
-        sys::seL4_CNode_Move(
-            dst_root,
-            dst_index,
-            depth_u8,
-            src_root,
-            src_index,
-            depth_u8,
-        )
+        sys::seL4_CNode_Move(dst_root, dst_index, depth_u8, src_root, src_index, depth_u8)
     }
 
     #[cfg(not(target_os = "none"))]
@@ -1631,7 +1667,7 @@ pub mod canonical {
         ));
 
         let root = sys::seL4_CapInitThreadCNode;
-        let depth = 0;
+        let depth = sel4::init_cnode_bits(bi) as sys::seL4_Word;
         let offset = path.offset();
         let idx = 0;
 
@@ -1710,9 +1746,10 @@ pub fn retype_into_root(
     check_slot_in_range(init_cnode_bits, dst_slot);
 
     let style = tuple_style();
+    let depth_raw = init_cnode_bits as sys::seL4_Word;
     let (index, depth) = match style {
-        TupleStyle::Raw => (0, 0),
-        TupleStyle::Encoded => (root as sys::seL4_Word, init_cnode_bits as sys::seL4_Word),
+        TupleStyle::Raw => (0, depth_raw),
+        TupleStyle::Encoded => (root as sys::seL4_Word, depth_raw),
     };
 
     #[cfg(all(target_os = "none", debug_assertions))]
