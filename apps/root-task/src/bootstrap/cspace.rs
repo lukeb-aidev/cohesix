@@ -898,14 +898,23 @@ impl CSpaceCtx {
         src_index: sel4::seL4_CPtr,
     ) {
         if err != sel4::seL4_NoError {
+            let encoded_dest =
+                cspace_sys::encode_slot(dest_index as sel4::seL4_CPtr, self.init_cnode_bits);
+            let encoded_src =
+                cspace_sys::encode_slot(src_index as sel4::seL4_CPtr, self.init_cnode_bits);
+            let word_bits = sel4_sys::seL4_WordBits as usize;
+            let hex_width = (word_bits + 3) / 4;
             let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
             if write!(
                 &mut line,
-                "[cnode] Copy err={err} root=0x{root:04x} dest(index=0x{dest_index:04x},depth={depth}) src(index=0x{src_index:04x},depth={depth})",
+                "[cnode] Copy err={err} root=0x{root:04x} dest(slot=0x{dest_index:04x},enc=0x{dest_enc:0width$x},depth={depth}) src(slot=0x{src_index:04x},enc=0x{src_enc:0width$x},depth={depth})",
                 root = self.root_cnode_cap,
                 depth = sel4_sys::seL4_WordBits,
                 dest_index = dest_index,
                 src_index = src_index,
+                dest_enc = encoded_dest as u64,
+                src_enc = encoded_src as u64,
+                width = hex_width,
             )
             .is_err()
             {
@@ -924,15 +933,24 @@ impl CSpaceCtx {
         badge: sel4::seL4_Word,
     ) {
         if err != sel4::seL4_NoError {
+            let encoded_dest =
+                cspace_sys::encode_slot(dest_index as sel4::seL4_CPtr, self.init_cnode_bits);
+            let encoded_src =
+                cspace_sys::encode_slot(src_index as sel4::seL4_CPtr, self.init_cnode_bits);
+            let word_bits = sel4_sys::seL4_WordBits as usize;
+            let hex_width = (word_bits + 3) / 4;
             let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
             if write!(
                 &mut line,
-                "[cnode] Mint err={err} root=0x{root:04x} dest(index=0x{dest_index:04x},depth={depth},offset=0) src(index=0x{src_index:04x},depth={depth}) badge={badge}",
+                "[cnode] Mint err={err} root=0x{root:04x} dest(slot=0x{dest_index:04x},enc=0x{dest_enc:0width$x},depth={depth},offset=0) src(slot=0x{src_index:04x},enc=0x{src_enc:0width$x},depth={depth}) badge={badge}",
                 root = self.root_cnode_cap,
                 depth = sel4_sys::seL4_WordBits,
                 dest_index = dest_index,
                 src_index = src_index,
                 badge = badge,
+                dest_enc = encoded_dest as u64,
+                src_enc = encoded_src as u64,
+                width = hex_width,
             )
             .is_err()
             {
@@ -953,17 +971,22 @@ impl CSpaceCtx {
         dest: &DestCNode,
     ) {
         if err != sel4::seL4_NoError {
+            let encoded_dest =
+                cspace_sys::encode_slot(dest_index as sel4::seL4_CPtr, self.init_cnode_bits);
+            let word_bits = sel4_sys::seL4_WordBits as usize;
+            let hex_width = (word_bits + 3) / 4;
             let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
             if write!(
                 &mut line,
-                "[retype] path={path} err={err} root=0x{root:04x} untyped_slot=0x{untyped:04x} node(idx=0,depth={},off=0x{node_offset:04x}) dest_slot=0x{dest_index:04x} ty={obj_ty} sz={size_bits} window=[0x{start:04x}..0x{end:04x}) root_bits={bits}",
-                WORD_BITS,
+                "[retype] path={path} err={err} root=0x{root:04x} untyped_slot=0x{untyped:04x} node(idx=0,depth=0,off=0x{node_offset:04x}) dest_slot=0x{dest_index:04x} dest_enc=0x{dest_enc:0width$x} ty={obj_ty} sz={size_bits} window=[0x{start:04x}..0x{end:04x}) root_bits={bits}",
                 path = dest.path_label(),
                 root = dest.root,
                 node_offset = dest.slot_offset,
                 start = dest.empty_start,
                 end = dest.empty_end,
                 bits = dest.root_bits,
+                dest_enc = encoded_dest as u64,
+                width = hex_width,
             )
             .is_err()
             {
