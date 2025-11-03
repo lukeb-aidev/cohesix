@@ -7,6 +7,7 @@ extern crate alloc;
 
 use core::convert::TryFrom;
 use core::fmt;
+use core::sync::atomic::{AtomicU8, Ordering};
 
 #[cfg(target_os = "none")]
 use crate::boot::flags;
@@ -17,10 +18,54 @@ use crate::sel4;
 use sel4_sys as sys;
 
 #[cfg(target_os = "none")]
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::AtomicBool;
 
 #[cfg(target_os = "none")]
 static PREFLIGHT_COMPLETED: AtomicBool = AtomicBool::new(false);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TupleStyle {
+    Raw = 0,
+    Encoded = 1,
+}
+
+impl TupleStyle {
+    #[inline(always)]
+    fn from_u8(value: u8) -> Self {
+        match value {
+            1 => Self::Encoded,
+            _ => Self::Raw,
+        }
+    }
+
+    #[inline(always)]
+    fn as_u8(self) -> u8 {
+        match self {
+            Self::Raw => 0,
+            Self::Encoded => 1,
+        }
+    }
+}
+
+static SELECTED_TUPLE_STYLE: AtomicU8 = AtomicU8::new(TupleStyle::Raw as u8);
+
+#[inline(always)]
+pub fn tuple_style() -> TupleStyle {
+    TupleStyle::from_u8(SELECTED_TUPLE_STYLE.load(Ordering::Relaxed))
+}
+
+#[inline(always)]
+fn set_tuple_style(style: TupleStyle) {
+    SELECTED_TUPLE_STYLE.store(style.as_u8(), Ordering::Relaxed);
+}
+
+#[inline(always)]
+pub fn tuple_style_label(style: TupleStyle) -> &'static str {
+    match style {
+        TupleStyle::Raw => "Raw",
+        TupleStyle::Encoded => "Encoded",
+    }
+}
 
 #[cfg(target_os = "none")]
 const DEBUG_LOG_CAPACITY: usize = 224;
@@ -66,6 +111,481 @@ pub fn encode_slot(slot: u64, bits: u8) -> u64 {
     );
     let shift = u32::from(depth_wordbits() - bits);
     slot << shift
+}
+
+#[inline(always)]
+pub fn cnode_depth(bi: &sys::seL4_BootInfo, style: TupleStyle) -> sys::seL4_Word {
+    match style {
+        TupleStyle::Raw => sel4::init_cnode_bits(bi) as sys::seL4_Word,
+        TupleStyle::Encoded => sys::seL4_WordBits as sys::seL4_Word,
+    }
+}
+
+#[inline(always)]
+pub fn enc_index(
+    slot: sys::seL4_Word,
+    bi: &sys::seL4_BootInfo,
+    style: TupleStyle,
+) -> sys::seL4_Word {
+    match style {
+        TupleStyle::Raw => slot,
+        TupleStyle::Encoded => {
+            let bits = sel4::init_cnode_bits(bi);
+            encode_slot(slot as u64, bits) as sys::seL4_Word
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct StyleProbeErrors {
+    pub raw: sys::seL4_Error,
+    pub encoded: sys::seL4_Error,
+    pub cleanup_raw: sys::seL4_Error,
+    pub cleanup_encoded: sys::seL4_Error,
+}
+
+impl StyleProbeErrors {
+    pub const fn new() -> Self {
+        Self {
+            raw: sys::seL4_NoError,
+            encoded: sys::seL4_NoError,
+            cleanup_raw: sys::seL4_NoError,
+            cleanup_encoded: sys::seL4_NoError,
+        }
+    }
+}
+
+impl Default for StyleProbeErrors {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ProbeFailure {
+    pub copy: StyleProbeErrors,
+    pub retype: StyleProbeErrors,
+}
+
+#[inline(always)]
+fn cnode_copy_with_style(
+    bi: &sys::seL4_BootInfo,
+    dst_root: sys::seL4_CNode,
+    dst_slot_raw: sys::seL4_Word,
+    src_root: sys::seL4_CNode,
+    src_slot_raw: sys::seL4_Word,
+    rights: sys::seL4_CapRights,
+    style: TupleStyle,
+) -> sys::seL4_Error {
+    let dst_index = enc_index(dst_slot_raw, bi, style) as sys::seL4_CPtr;
+    let src_index = enc_index(src_slot_raw, bi, style) as sys::seL4_CPtr;
+    let depth = cnode_depth(bi, style);
+
+    #[cfg(target_os = "none")]
+    unsafe {
+        debug_log(format_args!(
+            "[cs] op=copy style={style} dst_slot=0x{dst_slot:04x} src_slot=0x{src_slot:04x} depth={depth} root=0x{dst_root:04x}",
+            style = tuple_style_label(style),
+            dst_slot = dst_slot_raw,
+            src_slot = src_slot_raw,
+            depth = depth,
+            dst_root = dst_root,
+        ));
+        sys::seL4_CNode_Copy(
+            dst_root, dst_index, depth, src_root, src_index, depth, rights,
+        )
+    }
+
+    #[cfg(not(target_os = "none"))]
+    {
+        let _ = (
+            bi,
+            dst_root,
+            dst_slot_raw,
+            src_root,
+            src_slot_raw,
+            rights,
+            style,
+            dst_index,
+            src_index,
+            depth,
+        );
+        sys::seL4_NoError
+    }
+}
+
+#[inline(always)]
+fn cnode_delete_with_style(
+    bi: &sys::seL4_BootInfo,
+    root: sys::seL4_CNode,
+    slot: sys::seL4_Word,
+    style: TupleStyle,
+) -> sys::seL4_Error {
+    let index = enc_index(slot, bi, style) as sys::seL4_CPtr;
+    let depth = cnode_depth(bi, style);
+
+    #[cfg(target_os = "none")]
+    unsafe {
+        sys::seL4_CNode_Delete(root, index, depth)
+    }
+
+    #[cfg(not(target_os = "none"))]
+    {
+        let _ = (bi, root, slot, style, index, depth);
+        sys::seL4_NoError
+    }
+}
+
+#[inline(always)]
+fn cnode_mint_with_style(
+    bi: &sys::seL4_BootInfo,
+    dst_root: sys::seL4_CNode,
+    dst_slot_raw: sys::seL4_Word,
+    src_root: sys::seL4_CNode,
+    src_slot_raw: sys::seL4_Word,
+    rights: sys::seL4_CapRights,
+    badge: sys::seL4_Word,
+    style: TupleStyle,
+) -> sys::seL4_Error {
+    let dst_index = enc_index(dst_slot_raw, bi, style) as sys::seL4_CPtr;
+    let src_index = enc_index(src_slot_raw, bi, style) as sys::seL4_CPtr;
+    let depth = cnode_depth(bi, style);
+
+    #[cfg(target_os = "none")]
+    unsafe {
+        debug_log(format_args!(
+            "[cs] op=mint style={style} dst_slot=0x{dst:04x} src_slot=0x{src:04x} depth={depth} badge=0x{badge:04x}",
+            style = tuple_style_label(style),
+            dst = dst_slot_raw,
+            src = src_slot_raw,
+            depth = depth,
+            badge = badge,
+        ));
+        sys::seL4_CNode_Mint(
+            dst_root, dst_index, depth, src_root, src_index, depth, rights, badge,
+        )
+    }
+
+    #[cfg(not(target_os = "none"))]
+    {
+        let _ = (
+            bi,
+            dst_root,
+            dst_slot_raw,
+            src_root,
+            src_slot_raw,
+            rights,
+            badge,
+            style,
+            dst_index,
+            src_index,
+            depth,
+        );
+        sys::seL4_NoError
+    }
+}
+
+#[inline(always)]
+fn cnode_move_with_style(
+    bi: &sys::seL4_BootInfo,
+    dst_root: sys::seL4_CNode,
+    dst_slot_raw: sys::seL4_Word,
+    src_root: sys::seL4_CNode,
+    src_slot_raw: sys::seL4_Word,
+    style: TupleStyle,
+) -> sys::seL4_Error {
+    let dst_index = enc_index(dst_slot_raw, bi, style) as sys::seL4_CPtr;
+    let src_index = enc_index(src_slot_raw, bi, style) as sys::seL4_CPtr;
+    let depth = cnode_depth(bi, style);
+
+    #[cfg(target_os = "none")]
+    unsafe {
+        debug_log(format_args!(
+            "[cs] op=move style={style} dst_slot=0x{dst:04x} src_slot=0x{src:04x} depth={depth}",
+            style = tuple_style_label(style),
+            dst = dst_slot_raw,
+            src = src_slot_raw,
+            depth = depth,
+        ));
+        sys::seL4_CNode_Move(dst_root, dst_index, depth, src_root, src_index, depth)
+    }
+
+    #[cfg(not(target_os = "none"))]
+    {
+        let _ = (
+            bi,
+            dst_root,
+            dst_slot_raw,
+            src_root,
+            src_slot_raw,
+            style,
+            dst_index,
+            src_index,
+            depth,
+        );
+        sys::seL4_NoError
+    }
+}
+
+#[inline(always)]
+fn probe_cnode_copy_style(
+    bi: &sys::seL4_BootInfo,
+    dst_slot: sys::seL4_Word,
+    src_slot: sys::seL4_Word,
+    style: TupleStyle,
+    style_tag: char,
+) -> (sys::seL4_Error, sys::seL4_Error) {
+    let root = sys::seL4_CapInitThreadCNode;
+    let rights = sys::seL4_CapRights_All;
+    let depth = cnode_depth(bi, style);
+    let dst_index = enc_index(dst_slot, bi, style);
+    let src_index = enc_index(src_slot, bi, style);
+    let err = cnode_copy_with_style(bi, root, dst_slot, root, src_slot, rights, style);
+
+    ::log::info!(
+        "[probe] cnode.copy style={tag} dst=0x{dst:04x} src=0x{src:04x} depth={depth} idx.dst=0x{dst_idx:04x} idx.src=0x{src_idx:04x} -> err={err}",
+        tag = style_tag,
+        dst = dst_slot,
+        src = src_slot,
+        depth = depth,
+        dst_idx = dst_index,
+        src_idx = src_index,
+        err = err,
+    );
+
+    let cleanup_err = if err == sys::seL4_NoError {
+        let cleanup = cnode_delete_with_style(bi, root, dst_slot, style);
+        ::log::info!(
+            "[probe] cnode.delete style={tag} dst=0x{dst:04x} depth={depth} -> err={cleanup}",
+            tag = style_tag,
+            dst = dst_slot,
+            depth = depth,
+            cleanup = cleanup,
+        );
+        cleanup
+    } else {
+        sys::seL4_NoError
+    };
+
+    (err, cleanup_err)
+}
+
+#[inline(always)]
+pub fn retype_endpoint_raw(ut: sys::seL4_Word, dst: sys::seL4_Word) -> sys::seL4_Error {
+    #[cfg(target_os = "none")]
+    unsafe {
+        sys::seL4_Untyped_Retype(
+            ut,
+            sys::seL4_ObjectType::seL4_EndpointObject as sys::seL4_Word,
+            0,
+            sys::seL4_CapInitThreadCNode,
+            0,
+            0,
+            dst,
+            1,
+        )
+    }
+
+    #[cfg(not(target_os = "none"))]
+    {
+        let _ = (ut, dst);
+        sys::seL4_NoError
+    }
+}
+
+#[inline(always)]
+pub fn retype_endpoint_encoded(
+    bi: &sys::seL4_BootInfo,
+    ut: sys::seL4_Word,
+    dst: sys::seL4_Word,
+) -> sys::seL4_Error {
+    let depth = sel4::init_cnode_bits(bi) as sys::seL4_Word;
+
+    #[cfg(target_os = "none")]
+    unsafe {
+        sys::seL4_Untyped_Retype(
+            ut,
+            sys::seL4_ObjectType::seL4_EndpointObject as sys::seL4_Word,
+            0,
+            sys::seL4_CapInitThreadCNode,
+            sys::seL4_CapInitThreadCNode as sys::seL4_Word,
+            depth,
+            dst,
+            1,
+        )
+    }
+
+    #[cfg(not(target_os = "none"))]
+    {
+        let _ = (bi, ut, dst, depth);
+        sys::seL4_NoError
+    }
+}
+
+#[inline(always)]
+pub fn retype_endpoint_auto(
+    bi: &sys::seL4_BootInfo,
+    ut: sys::seL4_Word,
+    dst: sys::seL4_Word,
+) -> sys::seL4_Error {
+    match tuple_style() {
+        TupleStyle::Raw => retype_endpoint_raw(ut, dst),
+        TupleStyle::Encoded => retype_endpoint_encoded(bi, ut, dst),
+    }
+}
+
+#[inline(always)]
+fn probe_retype_style(
+    bi: &sys::seL4_BootInfo,
+    ut: sys::seL4_Word,
+    dst_slot: sys::seL4_Word,
+    style: TupleStyle,
+    style_tag: char,
+) -> (sys::seL4_Error, sys::seL4_Error) {
+    let (index, depth) = match style {
+        TupleStyle::Raw => (0, 0),
+        TupleStyle::Encoded => (
+            sys::seL4_CapInitThreadCNode as sys::seL4_Word,
+            sel4::init_cnode_bits(bi) as sys::seL4_Word,
+        ),
+    };
+    let err = match style {
+        TupleStyle::Raw => retype_endpoint_raw(ut, dst_slot),
+        TupleStyle::Encoded => retype_endpoint_encoded(bi, ut, dst_slot),
+    };
+
+    ::log::info!(
+        "[probe] retype style={tag} dst=0x{dst:04x} index={index:#06x} depth={depth} -> err={err}",
+        tag = style_tag,
+        dst = dst_slot,
+        index = index,
+        depth = depth,
+        err = err,
+    );
+
+    let cleanup_err = if err == sys::seL4_NoError {
+        let cleanup = cnode_delete_with_style(bi, sys::seL4_CapInitThreadCNode, dst_slot, style);
+        ::log::info!(
+            "[probe] retype.cleanup style={tag} dst=0x{dst:04x} depth={depth} -> err={cleanup}",
+            tag = style_tag,
+            dst = dst_slot,
+            depth = depth,
+            cleanup = cleanup,
+        );
+        cleanup
+    } else {
+        sys::seL4_NoError
+    };
+
+    (err, cleanup_err)
+}
+
+#[allow(dead_code)]
+pub fn try_cnode_copy(
+    bi: &sys::seL4_BootInfo,
+    dst_slot: sys::seL4_Word,
+    src_slot: sys::seL4_Word,
+) -> Result<TupleStyle, StyleProbeErrors> {
+    let mut errors = StyleProbeErrors::new();
+
+    let (raw_err, raw_cleanup) =
+        probe_cnode_copy_style(bi, dst_slot, src_slot, TupleStyle::Raw, 'A');
+    errors.raw = raw_err;
+    errors.cleanup_raw = raw_cleanup;
+    if raw_err == sys::seL4_NoError && raw_cleanup == sys::seL4_NoError {
+        return Ok(TupleStyle::Raw);
+    }
+
+    let (enc_err, enc_cleanup) =
+        probe_cnode_copy_style(bi, dst_slot, src_slot, TupleStyle::Encoded, 'B');
+    errors.encoded = enc_err;
+    errors.cleanup_encoded = enc_cleanup;
+    if enc_err == sys::seL4_NoError && enc_cleanup == sys::seL4_NoError {
+        return Ok(TupleStyle::Encoded);
+    }
+
+    Err(errors)
+}
+
+#[allow(dead_code)]
+pub fn try_retype_ep(
+    bi: &sys::seL4_BootInfo,
+    ut: sys::seL4_Word,
+    dst_slot: sys::seL4_Word,
+) -> Result<TupleStyle, StyleProbeErrors> {
+    let mut errors = StyleProbeErrors::new();
+
+    let (raw_err, raw_cleanup) = probe_retype_style(bi, ut, dst_slot, TupleStyle::Raw, 'A');
+    errors.raw = raw_err;
+    errors.cleanup_raw = raw_cleanup;
+    if raw_err == sys::seL4_NoError && raw_cleanup == sys::seL4_NoError {
+        return Ok(TupleStyle::Raw);
+    }
+
+    let (enc_err, enc_cleanup) = probe_retype_style(bi, ut, dst_slot, TupleStyle::Encoded, 'B');
+    errors.encoded = enc_err;
+    errors.cleanup_encoded = enc_cleanup;
+    if enc_err == sys::seL4_NoError && enc_cleanup == sys::seL4_NoError {
+        return Ok(TupleStyle::Encoded);
+    }
+
+    Err(errors)
+}
+
+#[cfg(target_os = "none")]
+pub fn determine_tuple_style(
+    bi: &sys::seL4_BootInfo,
+    ut_cap: sys::seL4_Word,
+    test_slot: sys::seL4_Word,
+    src_slot: sys::seL4_Word,
+) -> Result<TupleStyle, ProbeFailure> {
+    let mut failure = ProbeFailure::default();
+
+    let (copy_raw_err, copy_raw_cleanup) =
+        probe_cnode_copy_style(bi, test_slot, src_slot, TupleStyle::Raw, 'A');
+    failure.copy.raw = copy_raw_err;
+    failure.copy.cleanup_raw = copy_raw_cleanup;
+    if copy_raw_err == sys::seL4_NoError && copy_raw_cleanup == sys::seL4_NoError {
+        let (retype_raw_err, retype_raw_cleanup) =
+            probe_retype_style(bi, ut_cap, test_slot, TupleStyle::Raw, 'A');
+        failure.retype.raw = retype_raw_err;
+        failure.retype.cleanup_raw = retype_raw_cleanup;
+        if retype_raw_err == sys::seL4_NoError && retype_raw_cleanup == sys::seL4_NoError {
+            set_tuple_style(TupleStyle::Raw);
+            ::log::info!("[probe] style=Raw");
+            return Ok(TupleStyle::Raw);
+        }
+    }
+
+    let (copy_enc_err, copy_enc_cleanup) =
+        probe_cnode_copy_style(bi, test_slot, src_slot, TupleStyle::Encoded, 'B');
+    failure.copy.encoded = copy_enc_err;
+    failure.copy.cleanup_encoded = copy_enc_cleanup;
+    if copy_enc_err == sys::seL4_NoError && copy_enc_cleanup == sys::seL4_NoError {
+        let (retype_enc_err, retype_enc_cleanup) =
+            probe_retype_style(bi, ut_cap, test_slot, TupleStyle::Encoded, 'B');
+        failure.retype.encoded = retype_enc_err;
+        failure.retype.cleanup_encoded = retype_enc_cleanup;
+        if retype_enc_err == sys::seL4_NoError && retype_enc_cleanup == sys::seL4_NoError {
+            set_tuple_style(TupleStyle::Encoded);
+            ::log::info!("[probe] style=Encoded");
+            return Ok(TupleStyle::Encoded);
+        }
+    }
+
+    Err(failure)
+}
+
+#[cfg(not(target_os = "none"))]
+pub fn determine_tuple_style(
+    bi: &sys::seL4_BootInfo,
+    ut_cap: sys::seL4_Word,
+    test_slot: sys::seL4_Word,
+    src_slot: sys::seL4_Word,
+) -> Result<TupleStyle, ProbeFailure> {
+    let _ = (bi, ut_cap, test_slot, src_slot);
+    set_tuple_style(TupleStyle::Raw);
+    Ok(TupleStyle::Raw)
 }
 
 #[inline]
@@ -139,17 +659,7 @@ pub fn retype_endpoint_once(
     log_window("win", window);
     let slot = window.first_free;
     window.assert_contains(slot);
-    let size_bits: sys::seL4_Word = 0;
-    let size_bits_u8 = u8::try_from(size_bits).unwrap_or(0);
-    let err = untyped_retype_encoded(
-        untyped,
-        sys::seL4_ObjectType::seL4_EndpointObject as u32,
-        size_bits_u8,
-        window.root,
-        slot as u64,
-        window.bits,
-        1,
-    );
+    let err = retype_endpoint_auto(bi(), untyped, slot as sys::seL4_Word);
 
     if err == sys::seL4_NoError {
         window.bump();
@@ -644,7 +1154,7 @@ fn root_constant_label(root: sys::seL4_CNode) -> &'static str {
 }
 
 #[inline(always)]
-pub fn cnode_copy_raw(
+pub fn cnode_copy(
     bi: &sys::seL4_BootInfo,
     dst_root: sys::seL4_CNode,
     dst_slot_raw: sys::seL4_Word,
@@ -652,86 +1162,62 @@ pub fn cnode_copy_raw(
     src_slot_raw: sys::seL4_Word,
     rights: sys::seL4_CapRights,
 ) -> sys::seL4_Error {
-    let dst_label = slot_constant_label(dst_slot_raw);
-    let src_label = slot_constant_label(src_slot_raw);
-    let dst_root_label = root_constant_label(dst_root);
-    let src_root_label = root_constant_label(src_root);
-    let dst_slot = dst_slot_raw as sys::seL4_CPtr;
-    let src_slot = src_slot_raw as sys::seL4_CPtr;
     let init_bits = sel4::init_cnode_bits(bi);
-    let depth_bits = init_bits;
-    let depth_word = depth_bits as sys::seL4_Word;
     let limit = if init_bits as usize >= usize::BITS as usize {
         usize::MAX
     } else {
         1usize << (init_bits as usize)
     };
-    let empty_start = bi.empty.start as sys::seL4_CPtr;
-    let empty_end = bi.empty.end as sys::seL4_CPtr;
+    debug_assert!(
+        (dst_slot_raw as usize) < limit,
+        "dst slot 0x{slot:04x} exceeds init CNode capacity",
+        slot = dst_slot_raw,
+    );
+    debug_assert!(
+        (src_slot_raw as usize) < limit,
+        "src slot 0x{slot:04x} exceeds init CNode capacity",
+        slot = src_slot_raw,
+    );
+
+    let empty_start = bi.empty.start as sys::seL4_Word;
+    let empty_end = bi.empty.end as sys::seL4_Word;
     assert!(
-        dst_slot >= empty_start && dst_slot < empty_end,
+        dst_slot_raw >= empty_start && dst_slot_raw < empty_end,
         "copy dest slot 0x{slot:04x} outside bootinfo window [0x{start:04x}..0x{end:04x})",
-        slot = dst_slot,
+        slot = dst_slot_raw,
         start = empty_start,
         end = empty_end,
     );
-    debug_assert!(
-        (dst_slot as usize) < limit,
-        "dst slot 0x{slot:04x} exceeds init CNode capacity",
-        slot = dst_slot,
-    );
-    debug_assert!(
-        (src_slot as usize) < limit,
-        "src slot 0x{slot:04x} exceeds init CNode capacity",
-        slot = src_slot,
-    );
+
+    let style = tuple_style();
+    let depth_word = cnode_depth(bi, style);
+    let dst_index = enc_index(dst_slot_raw, bi, style);
+    let src_index = enc_index(src_slot_raw, bi, style);
+    let style_label = tuple_style_label(style);
+    let dst_label = slot_constant_label(dst_slot_raw);
+    let src_label = slot_constant_label(src_slot_raw);
+    let dst_root_label = root_constant_label(dst_root);
+    let src_root_label = root_constant_label(src_root);
 
     ::log::info!(
-        "[cnode] op=copy dst=0x{dst_slot_raw:04x} src=0x{src_slot_raw:04x} depth={depth}",
-        depth = depth_word,
+        "[cnode] op=copy dst=0x{dst_slot_raw:04x} src=0x{src_slot_raw:04x} depth={depth_word} style={style_label} idx.dst=0x{dst_index:04x} idx.src=0x{src_index:04x}",
     );
     ::log::info!(
         "[cnode] roots dst={dst_root_label}(0x{dst_root:04x}) src={src_root_label}(0x{src_root:04x})",
         dst_root = dst_root,
         src_root = src_root,
     );
+    ::log::info!("[cnode] labels dst={dst_label} src={src_label}",);
 
-    #[cfg(target_os = "none")]
-    {
-        unsafe {
-            debug_log(format_args!(
-                "[cs] op=copy dst_slot=0x{dst_slot:04x} src_slot=0x{src_slot:04x} depth={depth} root=0x{dst_root:04x}",
-                dst_slot = dst_slot,
-                src_slot = src_slot,
-                depth = depth_word,
-                dst_root = dst_root,
-            ));
-            sys::seL4_CNode_Copy(
-                dst_root,
-                dst_slot_raw,
-                depth_bits,
-                src_root,
-                src_slot_raw,
-                depth_bits,
-                rights,
-            )
-        }
-    }
-
-    #[cfg(not(target_os = "none"))]
-    {
-        let _ = (
-            bi,
-            dst_root,
-            dst_slot_raw,
-            src_root,
-            src_slot_raw,
-            rights,
-            depth_bits,
-            depth_word,
-        );
-        sys::seL4_NoError
-    }
+    cnode_copy_with_style(
+        bi,
+        dst_root,
+        dst_slot_raw,
+        src_root,
+        src_slot_raw,
+        rights,
+        style,
+    )
 }
 
 /// Probe 1: copy BootInfo cap into the first free slot.
@@ -741,7 +1227,7 @@ pub fn probe_copy_bootinfo(bi: &sys::seL4_BootInfo) -> sys::seL4_Error {
     let dst = bi.empty.start as sys::seL4_CPtr;
     let src = sys::seL4_CapBootInfoFrame;
     ::log::info!("[probe] BootInfo -> 0x{dst:04x} (src=seL4_CapBootInfoFrame={src})");
-    cnode_copy_raw(
+    cnode_copy(
         bi,
         sys::seL4_CapInitThreadCNode,
         dst as sys::seL4_Word,
@@ -758,7 +1244,7 @@ pub fn probe_copy_cnode(bi: &sys::seL4_BootInfo) -> sys::seL4_Error {
     let dst = (bi.empty.start + 1) as sys::seL4_CPtr;
     let src = sys::seL4_CapInitThreadCNode;
     ::log::info!("[probe] CNode -> 0x{dst:04x} (src=seL4_CapInitThreadCNode={src})");
-    cnode_copy_raw(
+    cnode_copy(
         bi,
         sys::seL4_CapInitThreadCNode,
         dst as sys::seL4_Word,
@@ -775,7 +1261,7 @@ pub fn seed_copy_tcb_to_first_free(bi: &sys::seL4_BootInfo) -> sys::seL4_Error {
     let dst = bi.empty.start as sys::seL4_CPtr;
     let src = sys::seL4_CapInitThreadTCB;
     ::log::info!("[seed] TCB -> 0x{dst:04x} (src=seL4_CapInitThreadTCB={src})");
-    cnode_copy_raw(
+    cnode_copy(
         bi,
         sys::seL4_CapInitThreadCNode,
         dst as sys::seL4_Word,
@@ -786,7 +1272,7 @@ pub fn seed_copy_tcb_to_first_free(bi: &sys::seL4_BootInfo) -> sys::seL4_Error {
 }
 
 #[inline(always)]
-pub fn cnode_mint_raw(
+pub fn cnode_mint(
     bi: &sys::seL4_BootInfo,
     dst_root: sys::seL4_CNode,
     dst_slot_raw: sys::seL4_Word,
@@ -796,8 +1282,6 @@ pub fn cnode_mint_raw(
     badge: sys::seL4_Word,
 ) -> sys::seL4_Error {
     let init_bits = sel4::init_cnode_bits(bi);
-    let depth_bits = init_bits;
-    let depth_word = depth_bits as sys::seL4_Word;
     let limit = if init_bits as usize >= usize::BITS as usize {
         usize::MAX
     } else {
@@ -806,42 +1290,40 @@ pub fn cnode_mint_raw(
     debug_assert!((dst_slot_raw as usize) < limit);
     debug_assert!((src_slot_raw as usize) < limit);
 
-    #[cfg(target_os = "none")]
-    {
-        unsafe {
-            sys::seL4_CNode_Mint(
-                dst_root,
-                dst_slot_raw,
-                depth_bits,
-                src_root,
-                src_slot_raw,
-                depth_bits,
-                rights,
-                badge,
-            )
-        }
-    }
+    let empty_start = bi.empty.start as sys::seL4_Word;
+    let empty_end = bi.empty.end as sys::seL4_Word;
+    assert!(
+        dst_slot_raw >= empty_start && dst_slot_raw < empty_end,
+        "mint dest slot 0x{slot:04x} outside bootinfo window [0x{start:04x}..0x{end:04x})",
+        slot = dst_slot_raw,
+        start = empty_start,
+        end = empty_end,
+    );
 
-    #[cfg(not(target_os = "none"))]
-    {
-        let _ = (
-            bi,
-            dst_root,
-            dst_slot_raw,
-            src_root,
-            src_slot_raw,
-            rights,
-            badge,
-            init_bits,
-            depth_bits,
-            depth_word,
-        );
-        sys::seL4_NoError
-    }
+    let style = tuple_style();
+    let depth_word = cnode_depth(bi, style);
+    let dst_index = enc_index(dst_slot_raw, bi, style);
+    let src_index = enc_index(src_slot_raw, bi, style);
+    let style_label = tuple_style_label(style);
+
+    ::log::info!(
+        "[cnode] op=mint dst=0x{dst_slot_raw:04x} src=0x{src_slot_raw:04x} depth={depth_word} style={style_label} idx.dst=0x{dst_index:04x} idx.src=0x{src_index:04x} badge=0x{badge:04x}",
+    );
+
+    cnode_mint_with_style(
+        bi,
+        dst_root,
+        dst_slot_raw,
+        src_root,
+        src_slot_raw,
+        rights,
+        badge,
+        style,
+    )
 }
 
 #[inline(always)]
-pub fn cnode_move_raw(
+pub fn cnode_move(
     bi: &sys::seL4_BootInfo,
     dst_root: sys::seL4_CNode,
     dst_slot_raw: sys::seL4_Word,
@@ -849,8 +1331,6 @@ pub fn cnode_move_raw(
     src_slot_raw: sys::seL4_Word,
 ) -> sys::seL4_Error {
     let init_bits = sel4::init_cnode_bits(bi);
-    let depth_bits = init_bits;
-    let depth_word = depth_bits as sys::seL4_Word;
     let limit = if init_bits as usize >= usize::BITS as usize {
         usize::MAX
     } else {
@@ -859,34 +1339,17 @@ pub fn cnode_move_raw(
     debug_assert!((dst_slot_raw as usize) < limit);
     debug_assert!((src_slot_raw as usize) < limit);
 
-    #[cfg(target_os = "none")]
-    {
-        unsafe {
-            sys::seL4_CNode_Move(
-                dst_root,
-                dst_slot_raw,
-                depth_bits,
-                src_root,
-                src_slot_raw,
-                depth_bits,
-            )
-        }
-    }
+    let style = tuple_style();
+    let depth_word = cnode_depth(bi, style);
+    let dst_index = enc_index(dst_slot_raw, bi, style);
+    let src_index = enc_index(src_slot_raw, bi, style);
+    let style_label = tuple_style_label(style);
 
-    #[cfg(not(target_os = "none"))]
-    {
-        let _ = (
-            bi,
-            dst_root,
-            dst_slot_raw,
-            src_root,
-            src_slot_raw,
-            init_bits,
-            depth_bits,
-            depth_word,
-        );
-        sys::seL4_NoError
-    }
+    ::log::info!(
+        "[cnode] op=move dst=0x{dst_slot_raw:04x} src=0x{src_slot_raw:04x} depth={depth_word} style={style_label} idx.dst=0x{dst_index:04x} idx.src=0x{src_index:04x}",
+    );
+
+    cnode_move_with_style(bi, dst_root, dst_slot_raw, src_root, src_slot_raw, style)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1051,7 +1514,7 @@ pub mod canonical {
         let src_label = super::slot_constant_label(src_slot);
 
         #[cfg(target_os = "none")]
-        let err = super::cnode_copy_raw(bi, dst_root, raw_slot, src_root, src_slot, rights);
+        let err = super::cnode_copy(bi, dst_root, raw_slot, src_root, src_slot, rights);
 
         #[cfg(not(target_os = "none"))]
         let err = {
@@ -1063,7 +1526,7 @@ pub mod canonical {
                 object_type: 0,
                 size_bits: 0,
             });
-            super::cnode_copy_raw(bi, dst_root, raw_slot, src_root, src_slot, rights)
+            super::cnode_copy(bi, dst_root, raw_slot, src_root, src_slot, rights)
         };
 
         ::log::info!(
@@ -1218,11 +1681,15 @@ pub fn retype_into_root(
     bi: &sys::seL4_BootInfo,
 ) -> Result<(), sys::seL4_Error> {
     let root = sys::seL4_CapInitThreadCNode;
-    let depth = 0;
     let init_cnode_bits = sel4::init_cnode_bits(bi);
     let offset = dst_slot as sys::seL4_Word;
-    let index = 0;
     check_slot_in_range(init_cnode_bits, dst_slot);
+
+    let style = tuple_style();
+    let (index, depth) = match style {
+        TupleStyle::Raw => (0, 0),
+        TupleStyle::Encoded => (root as sys::seL4_Word, init_cnode_bits as sys::seL4_Word),
+    };
 
     #[cfg(all(target_os = "none", debug_assertions))]
     {
@@ -1245,7 +1712,7 @@ pub fn retype_into_root(
     }
 
     debug_log(format_args!(
-        "[retype:call] ut={untyped:#06x} type={obj_type} size_bits={size_bits} root={root:#06x} index=0x{index:04x} depth={depth} offset=0x{offset:04x}",
+        "[retype:call] ut={untyped:#06x} type={obj_type} size_bits={size_bits} root={root:#06x} index=0x{index:04x} depth={depth} offset=0x{offset:04x} style={style}",
         untyped = untyped,
         obj_type = obj_type,
         size_bits = size_bits,
@@ -1253,6 +1720,7 @@ pub fn retype_into_root(
         index = index,
         depth = depth,
         offset = offset,
+        style = tuple_style_label(style),
     ));
 
     #[cfg(target_os = "none")]
@@ -1281,7 +1749,10 @@ pub fn retype_into_root(
     let err = sys::seL4_NoError;
 
     if err == sys::seL4_NoError {
-        debug_log(format_args!("[retype:ret] ok"));
+        debug_log(format_args!(
+            "[retype:ret] ok style={}",
+            tuple_style_label(style)
+        ));
         #[cfg(target_os = "none")]
         {
             log_syscall_result("Untyped_Retype", err);

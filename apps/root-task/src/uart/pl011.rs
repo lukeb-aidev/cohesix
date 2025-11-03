@@ -4,7 +4,7 @@
 
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::bootstrap::cspace_sys::untyped_retype_encoded;
+use crate::bootstrap::cspace_sys::{tuple_style, tuple_style_label, TupleStyle};
 use crate::cspace::tuples::RetypeTuple;
 use sel4_sys::{
     seL4_ARM_Page_Map, seL4_ARM_Page_Uncached, seL4_ARM_SmallPageObject, seL4_CPtr,
@@ -152,19 +152,28 @@ pub fn map_pl011_smallpage(
     cnode: &RetypeTuple,
     vspace: seL4_CPtr,
 ) -> seL4_Error {
-    let retype = untyped_retype_encoded(
-        dev_ut,
-        seL4_ARM_SmallPageObject as u32,
-        12,
-        cnode.node_root,
-        page_slot as u64,
-        cnode.init_bits,
-        1,
-    );
+    let style = tuple_style();
+    let (node_index, node_depth): (seL4_Word, seL4_Word) = match style {
+        TupleStyle::Raw => (0, 0),
+        TupleStyle::Encoded => (cnode.node_root as seL4_Word, cnode.init_bits as seL4_Word),
+    };
+    let retype = unsafe {
+        sel4_sys::seL4_Untyped_Retype(
+            dev_ut,
+            seL4_ARM_SmallPageObject as seL4_Word,
+            12,
+            cnode.node_root,
+            node_index,
+            node_depth,
+            page_slot as seL4_CPtr,
+            1,
+        )
+    };
     log::info!(
-        "[pl011] retype -> slot=0x{slot:04x} err={err}",
+        "[pl011] retype -> slot=0x{slot:04x} err={err} style={style}",
         slot = page_slot,
         err = retype,
+        style = tuple_style_label(style),
     );
     if retype != sel4_sys::seL4_NoError {
         return retype;

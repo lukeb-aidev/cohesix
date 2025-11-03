@@ -18,7 +18,6 @@ use cohesix_ticket::Role;
 use crate::boot::{bi_extra, ep, tcb, uart_pl011};
 #[cfg(feature = "cap-probes")]
 use crate::bootstrap::cspace::cspace_first_retypes;
-#[cfg(debug_assertions)]
 use crate::bootstrap::cspace_sys;
 use crate::bootstrap::{
     boot_tracer,
@@ -612,12 +611,44 @@ fn bootstrap<P: Platform>(
         sel4_sys::seL4_CapBootInfoFrame,
     );
 
-    // NOTE: We do not need any cap copies to reach the console.
-    // Temporarily bypass all experimental/probe CNode ops to unblock boot.
-    // TODO(cohesix-m2/cspace): reintroduce strictly-verified cap ops with unit tests only.
-    //      - Never run cap experiments in the hot boot path again.
-    //      - Add negative tests for depth, guard, and slot windows.
-    log::info!("[boot] CSpaceInit - bypassed seed/probes; proceeding");
+    let tuple_probe_selection = pick_untyped(bootinfo_ref, 4);
+    let ut_index = (tuple_probe_selection.cap - bootinfo_ref.untyped.start) as usize;
+    let ut_desc = bootinfo_ref
+        .untypedList
+        .get(ut_index)
+        .copied()
+        .unwrap_or_else(|| {
+            panic!(
+                "probe untyped index {} outside bootinfo range (start=0x{:04x} end=0x{:04x})",
+                ut_index, bootinfo_ref.untyped.start, bootinfo_ref.untyped.end,
+            )
+        });
+    log::info!(
+        "[probe] ut=0x{cap:04x} size_bits={bits} device={device}",
+        cap = tuple_probe_selection.cap,
+        bits = ut_desc.sizeBits,
+        device = ut_desc.isDevice,
+    );
+    let probe_slot = cspace_window.first_free as sel4_sys::seL4_Word;
+    let probe_src = sel4_sys::seL4_CapInitThreadCNode as sel4_sys::seL4_Word;
+    if let Err(failure) = cspace_sys::determine_tuple_style(
+        bootinfo_ref,
+        tuple_probe_selection.cap as sel4_sys::seL4_Word,
+        probe_slot,
+        probe_src,
+    ) {
+        panic!(
+            "tuple probe failed: copyA={} cleanA={} retypeA={} cleanA={} copyB={} cleanB={} retypeB={} cleanB={}",
+            failure.copy.raw,
+            failure.copy.cleanup_raw,
+            failure.retype.raw,
+            failure.retype.cleanup_raw,
+            failure.copy.encoded,
+            failure.copy.cleanup_encoded,
+            failure.retype.encoded,
+            failure.retype.cleanup_encoded,
+        );
+    }
 
     #[cfg(feature = "untyped-debug")]
     {

@@ -6,7 +6,7 @@ use sel4_sys::{seL4_CPtr, seL4_CapNull, seL4_Error, seL4_IllegalOperation};
 
 use crate::boot::bi_extra::UntypedDesc;
 use crate::bootstrap::cspace::CSpaceWindow;
-use crate::bootstrap::cspace_sys::untyped_retype_encoded;
+use crate::bootstrap::cspace_sys::retype_endpoint_auto;
 use crate::cspace::CSpace;
 use crate::sel4::{self, BootInfoView};
 use crate::serial;
@@ -109,16 +109,10 @@ pub fn bootstrap_ep(view: &BootInfoView, cs: &mut CSpace) -> Result<seL4_CPtr, s
         slot = ep_slot,
     );
 
-    let init_cnode = window.root;
-    let init_bits = window.bits;
-    let err = untyped_retype_encoded(
-        ut,
-        sel4_sys::seL4_ObjectType::seL4_EndpointObject as u32,
-        0,
-        init_cnode,
-        ep_slot as u64,
-        init_bits,
-        1,
+    let err = retype_endpoint_auto(
+        bi,
+        ut as sel4_sys::seL4_Word,
+        ep_slot as sel4_sys::seL4_Word,
     );
     log::info!(
         "[ep] retype -> dst=0x{slot:04x} err={err}",
