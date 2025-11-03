@@ -78,7 +78,7 @@ pub fn bootstrap_ep(view: &BootInfoView, cs: &mut CSpace) -> Result<seL4_CPtr, s
         slot = ep_slot,
     );
 
-    match retype_endpoint_once(ut, &window) {
+    match retype_endpoint_once(ut, &mut window) {
         Ok(slot) => {
             debug_assert_eq!(slot, ep_slot);
             log::trace!("B1.ret = Ok");
@@ -86,7 +86,6 @@ pub fn bootstrap_ep(view: &BootInfoView, cs: &mut CSpace) -> Result<seL4_CPtr, s
                 "[rt-fix] retype:endpoint OK slot=0x{slot:04x}",
                 slot = ep_slot,
             );
-            window.bump();
         }
         Err(err) => {
             log::trace!("B1.ret = Err({code})", code = sel4::error_name(err),);

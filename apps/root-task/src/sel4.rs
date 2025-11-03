@@ -17,7 +17,6 @@ use crate::bootstrap::cspace_sys;
 use crate::bootstrap::ipcbuf_view::IpcBufView;
 #[cfg(feature = "kernel")]
 use crate::bootstrap::ktry;
-use crate::cspace::encode_index;
 use crate::sel4_view;
 use crate::serial;
 use heapless::Vec;
@@ -475,8 +474,8 @@ pub fn replyrecv_guarded(
 /// `seL4_BootInfo::initThreadCNodeSizeBits`. This helper exists for compatibility with host-side
 /// traces that still model the guard-encoded calling convention.
 #[inline]
-pub fn init_cnode_depth(_bi: &seL4_BootInfo) -> u8 {
-    sel4_sys::seL4_WordBits as u8
+pub fn init_cnode_depth(bi: &seL4_BootInfo) -> u8 {
+    bi.initThreadCNodeSizeBits as u8
 }
 
 /// Emits a single byte to the seL4 debug console.
@@ -653,8 +652,7 @@ pub fn cnode_copy(
     rights: sel4_sys::seL4_CapRights,
 ) -> seL4_Error {
     debug_put_char(b'C' as i32);
-    let _ = bootinfo;
-    let depth_bits = sel4_sys::seL4_WordBits as u8;
+    let depth_bits = bootinfo.initThreadCNodeSizeBits as u8;
     unsafe {
         seL4_CNode_Copy(
             dest_root, dest_index, depth_bits, src_root, src_index, depth_bits, rights,
@@ -668,10 +666,10 @@ pub fn cnode_copy(
 pub fn cnode_copy_depth(
     dest_root: seL4_CNode,
     dest_index: seL4_CPtr,
-    _dest_depth: u8,
+    dest_depth: u8,
     src_root: seL4_CNode,
     src_index: seL4_CPtr,
-    _src_depth: u8,
+    src_depth: u8,
     rights: sel4_sys::seL4_CapRights,
 ) -> seL4_Error {
     #[cfg(target_os = "none")]
@@ -681,13 +679,7 @@ pub fn cnode_copy_depth(
         // higher-level modules can remain within the crate-wide `#![deny(unsafe_code)]` policy.
         unsafe {
             seL4_CNode_Copy(
-                dest_root,
-                dest_index,
-                sel4_sys::seL4_WordBits as u8,
-                src_root,
-                src_index,
-                sel4_sys::seL4_WordBits as u8,
-                rights,
+                dest_root, dest_index, dest_depth, src_root, src_index, src_depth, rights,
             )
         }
     }
@@ -721,8 +713,7 @@ pub(crate) fn cnode_mint(
     badge: seL4_Word,
 ) -> seL4_Error {
     debug_put_char(b'C' as i32);
-    let _ = bootinfo;
-    let depth_bits = sel4_sys::seL4_WordBits as u8;
+    let depth_bits = bootinfo.initThreadCNodeSizeBits as u8;
     unsafe {
         seL4_CNode_Mint(
             dest_root, dest_index, depth_bits, src_root, src_index, depth_bits, rights, badge,
@@ -736,10 +727,10 @@ pub(crate) fn cnode_mint(
 pub fn cnode_mint_depth(
     dest_root: seL4_CNode,
     dest_index: seL4_CPtr,
-    _dest_depth: u8,
+    dest_depth: u8,
     src_root: seL4_CNode,
     src_index: seL4_CPtr,
-    _src_depth: u8,
+    src_depth: u8,
     rights: sel4_sys::seL4_CapRights,
     badge: seL4_Word,
 ) -> seL4_Error {
@@ -749,14 +740,7 @@ pub fn cnode_mint_depth(
         // kernel-advertised CSpace topology, ensuring the kernel accepts the invocation.
         unsafe {
             seL4_CNode_Mint(
-                dest_root,
-                dest_index,
-                sel4_sys::seL4_WordBits as u8,
-                src_root,
-                src_index,
-                sel4_sys::seL4_WordBits as u8,
-                rights,
-                badge,
+                dest_root, dest_index, dest_depth, src_root, src_index, src_depth, rights, badge,
             )
         }
     }
@@ -2352,10 +2336,7 @@ impl<'a> KernelEnv<'a> {
 
         unsafe {
             let depth = self.bootinfo.init_cnode_depth();
-            let init_bits = u8::try_from(self.bootinfo.init_cnode_bits())
-                .expect("init CNode bits must fit in u8");
-            let encoded_slot = encode_index(pt_slot as seL4_Word, init_bits) as seL4_CPtr;
-            let _ = seL4_CNode_Delete(self.init_cnode_cap(), encoded_slot, depth);
+            let _ = seL4_CNode_Delete(self.init_cnode_cap(), pt_slot as seL4_CPtr, depth);
         }
         self.untyped.release(&reserved);
 
@@ -2423,10 +2404,7 @@ impl<'a> KernelEnv<'a> {
 
         unsafe {
             let depth = self.bootinfo.init_cnode_depth();
-            let init_bits = u8::try_from(self.bootinfo.init_cnode_bits())
-                .expect("init CNode bits must fit in u8");
-            let encoded_slot = encode_index(pd_slot as seL4_Word, init_bits) as seL4_CPtr;
-            let _ = seL4_CNode_Delete(self.init_cnode_cap(), encoded_slot, depth);
+            let _ = seL4_CNode_Delete(self.init_cnode_cap(), pd_slot as seL4_CPtr, depth);
         }
         self.untyped.release(&reserved);
 
@@ -2492,10 +2470,7 @@ impl<'a> KernelEnv<'a> {
 
         unsafe {
             let depth = self.bootinfo.init_cnode_depth();
-            let init_bits = u8::try_from(self.bootinfo.init_cnode_bits())
-                .expect("init CNode bits must fit in u8");
-            let encoded_slot = encode_index(pud_slot as seL4_Word, init_bits) as seL4_CPtr;
-            let _ = seL4_CNode_Delete(self.init_cnode_cap(), encoded_slot, depth);
+            let _ = seL4_CNode_Delete(self.init_cnode_cap(), pud_slot as seL4_CPtr, depth);
         }
         self.untyped.release(&reserved);
 

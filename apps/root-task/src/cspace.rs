@@ -3,18 +3,7 @@
 pub mod tuples;
 
 use crate::sel4::{self, BootInfoExt};
-use sel4_sys::{seL4_BootInfo, seL4_CPtr, seL4_Error, seL4_Word, seL4_WordBits};
-
-/// Encodes a capability slot index for MSB-first seL4 CSpace addressing.
-#[inline(always)]
-pub fn encode_index(slot: seL4_Word, init_bits: u8) -> seL4_Word {
-    debug_assert!(
-        init_bits <= seL4_WordBits as u8,
-        "init_bits must not exceed seL4_WordBits",
-    );
-    let shift = (seL4_WordBits as u8) - init_bits;
-    slot << shift
-}
+use sel4_sys::{seL4_BootInfo, seL4_CPtr, seL4_Error, seL4_Word};
 
 /// Helper managing allocation within the init thread's capability space.
 pub struct CSpace {
@@ -70,17 +59,13 @@ impl CSpace {
         src_slot: seL4_CPtr,
         rights: sel4_sys::seL4_CapRights,
     ) -> seL4_Error {
-        let word_depth = seL4_WordBits as sel4::seL4_Word;
-        let dst_index = encode_index(dst_slot as seL4_Word, self.bits) as seL4_CPtr;
-        let src_index = encode_index(src_slot as seL4_Word, self.bits) as seL4_CPtr;
         log::info!(
-            "[cnode] Copy dest_slot=0x{slot:04x} enc=0x{enc:016x} depth={depth} offset=0",
+            "[cnode] Copy dest_slot=0x{slot:04x} depth=initBits({depth})",
             slot = dst_slot,
-            enc = dst_index,
-            depth = word_depth,
+            depth = self.bits,
         );
         sel4::cnode_copy_depth(
-            self.root, dst_index, self.bits, self.root, src_index, self.bits, rights,
+            self.root, dst_slot, self.bits, self.root, src_slot, self.bits, rights,
         )
     }
 
@@ -92,17 +77,13 @@ impl CSpace {
         rights: sel4_sys::seL4_CapRights,
         badge: seL4_Word,
     ) -> seL4_Error {
-        let word_depth = seL4_WordBits as sel4::seL4_Word;
-        let dst_index = encode_index(dst_slot as seL4_Word, self.bits) as seL4_CPtr;
-        let src_index = encode_index(src_slot as seL4_Word, self.bits) as seL4_CPtr;
         log::info!(
-            "[cnode] Mint dest_slot=0x{slot:04x} enc=0x{enc:016x} depth={depth} offset=0",
+            "[cnode] Mint dest_slot=0x{slot:04x} depth=initBits({depth})",
             slot = dst_slot,
-            enc = dst_index,
-            depth = word_depth,
+            depth = self.bits,
         );
         sel4::cnode_mint_depth(
-            self.root, dst_index, self.bits, self.root, src_index, self.bits, rights, badge,
+            self.root, dst_slot, self.bits, self.root, src_slot, self.bits, rights, badge,
         )
     }
 }
