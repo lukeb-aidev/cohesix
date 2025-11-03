@@ -8,7 +8,6 @@ extern crate alloc;
 use core::convert::TryFrom;
 use core::fmt;
 
-use crate::boot;
 use crate::bootstrap::cspace::{guard_root_path, CSpaceWindow};
 #[cfg(target_os = "none")]
 use crate::bootstrap::log::force_uart_line;
@@ -60,19 +59,30 @@ pub fn cnode_copy_legacy(
     let root = sys::seL4_CapInitThreadCNode;
     let depth = init_bits;
     let depth_word = sys::seL4_Word::from(depth);
+    let encoded_dst = encode_slot(dst_slot as sys::seL4_Word, init_bits);
+    let encoded_src = encode_slot(src_slot as sys::seL4_Word, init_bits);
     let rights_raw = rights.raw();
     log::info!(
-        "[cnode:copy/legacy] root=0x{root:x} dst_slot=0x{dst:04x} depth={depth} src_slot=0x{src:04x} depth={depth} rights=0x{rights:02x}",
-        root = root,
+        "[cnode:copy/legacy] dst=0x{dst:04x}->0x{dst_enc:016x} src=0x{src:04x}->0x{src_enc:016x} depth={depth} rights=0x{rights:02x}",
         dst = dst_slot,
-        depth = depth_word,
+        dst_enc = encoded_dst,
         src = src_slot,
+        src_enc = encoded_src,
+        depth = depth_word,
         rights = rights_raw,
     );
 
     #[cfg(target_os = "none")]
     unsafe {
-        sys::seL4_CNode_Copy(root, dst_slot, depth, root, src_slot, depth, rights)
+        sys::seL4_CNode_Copy(
+            root,
+            encoded_dst,
+            depth_word,
+            root,
+            encoded_src,
+            depth_word,
+            rights,
+        )
     }
 
     #[cfg(not(target_os = "none"))]
@@ -90,18 +100,20 @@ pub fn untyped_retype_legacy(
     dst_slot: sys::seL4_CPtr,
 ) -> sys::seL4_Error {
     let root = sys::seL4_CapInitThreadCNode;
-    let node_index: sys::seL4_Word = dst_slot as _;
-    let node_depth: sys::seL4_Word = init_bits as _;
-    let node_offset: sys::seL4_Word = 0;
+    let node_index: sys::seL4_Word = 0;
+    let node_depth: sys::seL4_Word = 0;
+    let node_offset: sys::seL4_Word = dst_slot as _;
     let node_count: sys::seL4_Word = 1;
+    let depth_word = sys::seL4_Word::from(init_bits);
     log::info!(
-        "[untyped:retype/legacy] ut=0x{ut:x} obj_type={obj_type} size_bits={size_bits} root=0x{root:x} index=0x{index:x} depth={depth} offset={offset} count={count}",
+        "[untyped:retype/legacy] ut=0x{ut:x} obj_type={obj_type} size_bits={size_bits} dst_slot=0x{slot:04x} root=0x{root:x} index=0x{index:x} depth={depth_word} offset={offset} count={count}",
         ut = ut,
         obj_type = obj_type,
         size_bits = size_bits,
+        slot = dst_slot,
         root = root,
         index = node_index,
-        depth = node_depth,
+        depth_word = depth_word,
         offset = node_offset,
         count = node_count,
     );
@@ -191,17 +203,15 @@ pub fn bits_as_u8(init_bits: usize) -> u8 {
 /// with a traversal depth of `seL4_WordBits`. The kernel extracts the destination slot by
 /// shifting the pointer right by `seL4_WordBits - init_bits`, therefore we pre-encode the slot by
 /// shifting the raw slot number left by the complementary amount.
-#[inline(always)]
-pub fn encode_slot(slot: sys::seL4_CPtr, init_bits: u8) -> sys::seL4_CPtr {
+#[inline]
+pub fn encode_slot(slot: sys::seL4_Word, init_bits: u8) -> sys::seL4_Word {
     let word_bits = sys::seL4_WordBits as u8;
     debug_assert!(
         init_bits <= word_bits,
         "initThreadCNodeSizeBits must not exceed seL4_WordBits"
     );
     let shift = usize::from(word_bits - init_bits);
-    let slot_word = slot as sys::seL4_Word;
-    let encoded = slot_word << shift;
-    encoded as sys::seL4_CPtr
+    slot << shift
 }
 
 #[cfg(all(test, not(target_os = "none")))]

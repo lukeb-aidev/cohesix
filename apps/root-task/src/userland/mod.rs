@@ -15,7 +15,7 @@ use crate::sel4;
 #[allow(clippy::module_name_repetitions)]
 pub fn start_console_or_cohsh<P: Platform>(platform: &P) -> ! {
     serial_console::banner(platform);
-    deferred_bringup_nonblocking(); // quick, non-blocking, then return
+    deferred_bringup(); // quick, non-blocking, then return
     serial_console::run(platform)
 }
 
@@ -88,7 +88,14 @@ pub mod serial_console {
 }
 
 // ---- Deferred bring-up: must NOT block, must return quickly.
-fn deferred_bringup_nonblocking() {
+
+#[cfg(feature = "serial-console")]
+pub fn deferred_bringup() {
+    ::log::info!("[bringup] minimal; skipping IPC/queen handshake");
+}
+
+#[cfg(not(feature = "serial-console"))]
+pub fn deferred_bringup() {
     ::log::info!("[bringup] deferred.start");
     ::log::info!("[bringup] deferred.done");
 }
