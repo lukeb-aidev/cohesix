@@ -114,13 +114,29 @@ pub fn debug_identify_cap(label: &str, cap: sys::seL4_CPtr) {
 }
 
 pub fn assert_init_cnode_layout(bi: &sys::seL4_BootInfo) {
-    let init_bits = bi.initThreadCNodeSizeBits as usize;
+    let init_bits = sel4::init_cnode_bits(bi) as usize;
     assert!(
-        init_bits > 0 && init_bits <= 32,
+        (1..=32).contains(&init_bits),
         "initThreadCNodeSizeBits unexpected: {}",
         init_bits,
     );
-    ::log::info!("[cnode] expect single-level: radix={} guard=0", init_bits);
+
+    let capacity = 1usize << init_bits;
+    let empty_start = bi.empty.start as usize;
+    let empty_end = bi.empty.end as usize;
+    assert!(
+        empty_start < empty_end,
+        "bootinfo empty window is empty (start={empty_start:#x} end={empty_end:#x})",
+    );
+    assert!(
+        empty_end <= capacity,
+        "bootinfo empty window end 0x{empty_end:04x} exceeds init CNode capacity 0x{capacity:04x}",
+    );
+
+    ::log::info!(
+        "[cnode] expect single-level: radix={} guard=0 empty=[0x{empty_start:04x}..0x{empty_end:04x})",
+        init_bits
+    );
 }
 
 pub fn cnode_copy_raw_single(
