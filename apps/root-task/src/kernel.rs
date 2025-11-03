@@ -20,6 +20,7 @@ use crate::boot::{bi_extra, ep};
 use crate::bootstrap::cspace::cspace_first_retypes;
 #[cfg(debug_assertions)]
 use crate::bootstrap::cspace_sys;
+use crate::bootstrap::cspace_sys::cnode_copy_legacy;
 use crate::bootstrap::{
     boot_tracer,
     cspace::{CSpaceCtx, CSpaceWindow, FirstRetypeResult},
@@ -29,7 +30,7 @@ use crate::bootstrap::{
 };
 use crate::console::Console;
 use crate::cspace::tuples::{assert_ipc_buffer_matches_bootinfo, make_retype_tuple};
-use crate::cspace::{cap_rights_read_write_grant, CSpace};
+use crate::cspace::CSpace;
 use crate::event::{
     AuditSink, BootstrapMessage, BootstrapMessageHandler, EventPump, IpcDispatcher, TickEvent,
     TicketTable, TimerSource,
@@ -57,6 +58,7 @@ use smoltcp::wire::Ipv4Address;
 
 #[cfg(all(feature = "kernel", not(sel4_config_printing)))]
 use sel4_panicking::{self, DebugSink};
+use sel4_sys::seL4_CapRights_ReadWrite;
 
 /// seL4 console writer backed by the kernel's `DebugPutChar` system call.
 struct DebugConsole<'a, P: Platform> {
@@ -697,6 +699,18 @@ fn bootstrap<P: Platform>(
 
     let ipc_vaddr = ipc_buffer_ptr.map(|ptr| ptr.as_ptr() as usize);
 
+    #[cfg(feature = "bootstrap-minimal")]
+    {
+        log::warn!(
+            "[boot] bootstrap-minimal: skipping EP retype/PL011 map/TCB copy; entering console"
+        );
+        console.writeln_prefixed("[boot] bootstrap-minimal: entering console");
+        boot_guard.commit();
+        boot_log::force_uart_line("[console] serial fallback ready");
+        crate::bootstrap::run();
+        crate::userland::start_console_or_cohsh(platform);
+    }
+
     let (ep_slot, boot_ep_ok) = match ep::bootstrap_ep(&bootinfo_view, &mut boot_cspace) {
         Ok(slot) => (slot, true),
         Err(err) => {
@@ -792,8 +806,6 @@ fn bootstrap<P: Platform>(
     }
 
     debug_assert_eq!(ep_slot, root_endpoint());
-    let rights = cap_rights_read_write_grant();
-
     let tcb_copy_slot = if let Some(ref info) = first_retypes {
         info.tcb_copy_slot
     } else {
@@ -809,21 +821,14 @@ fn bootstrap<P: Platform>(
             }
         };
         let tcb_src_slot = bootinfo_ref.init_tcb_cap();
-        let copy_err = boot_cspace.copy_here(slot, tcb_src_slot, rights);
+        let init_bits = bootinfo_view.init_cnode_bits();
+        let rights = seL4_CapRights_ReadWrite;
+        let copy_err = cnode_copy_legacy(init_bits, slot, tcb_src_slot, rights);
         if let Err(code) = crate::bootstrap::ktry("tcb.copy", copy_err as i32) {
             panic!(
                 "copying init TCB capability failed: {} ({})",
                 code,
                 error_name(copy_err)
-            );
-        } else {
-            log::info!(
-                "[cnode] copy root=0x{root:04x} dst=0x{dst:04x} src=0x{src:04x} guard_depth={guard} root_bits={bits}",
-                root = boot_cspace.root(),
-                dst = slot,
-                src = tcb_src_slot,
-                guard = sel4_sys::seL4_WordBits,
-                bits = boot_cspace.depth()
             );
         }
         crate::bp!("tcb.copy.end");
