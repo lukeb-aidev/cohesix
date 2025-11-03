@@ -73,7 +73,6 @@ pub mod bootstrap;
 /// Endpoint bootstrap primitives used during kernel bring-up.
 pub mod boot;
 
-#[cfg(feature = "kernel")]
 /// IPC helpers that guard direct syscalls during early bring-up.
 pub mod ipc;
 

@@ -7,6 +7,10 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use heapless::String;
 use spin::Mutex;
 
+use crate::sel4::BootInfo;
+#[cfg(target_os = "none")]
+use crate::sel4::BootInfoView;
+
 /// Capability-space helpers extracted from the seL4 boot info structure.
 pub mod cspace;
 /// Slot encoding helpers for bootstrap-only capability syscalls.
@@ -221,14 +225,14 @@ pub mod tests {
 }
 
 /// Emit the final bootstrap beacons and return immediately to unblock the console handoff.
-pub fn run() {
+pub fn run_minimal(bootinfo: &BootInfo) {
     // *** MINIMAL BYPASS FOR DIAG ***
     crate::bootstrap::log::force_uart_line("[BOOT] run.min.start");
     ::log::info!("[boot] run.minimal.begin");
 
     #[cfg(target_os = "none")]
     {
-        match crate::bootstrap::ffi::bootinfo_view() {
+        match unsafe { BootInfoView::from_ptr(bootinfo as *const BootInfo) } {
             Ok(view) => {
                 let window = crate::bootstrap::cspace::CSpaceWindow::from_bootinfo(&view);
                 ::log::info!(
@@ -243,6 +247,9 @@ pub fn run() {
             }
         }
     }
+
+    #[cfg(not(target_os = "none"))]
+    let _ = bootinfo;
 
     ::log::info!("[boot] run.minimal.end");
     crate::bootstrap::log::force_uart_line("[BOOT] run.min.end");

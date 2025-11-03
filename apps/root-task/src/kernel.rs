@@ -708,7 +708,12 @@ fn bootstrap<P: Platform>(
         console.writeln_prefixed("[boot] bootstrap-minimal: entering console");
         boot_guard.commit();
         boot_log::force_uart_line("[console] serial fallback ready");
-        crate::bootstrap::run();
+        if !crate::ipc::ep_is_valid(crate::sel4::root_endpoint()) {
+            boot_log::force_uart_line(
+                "[console] IPC disabled (root ep = null); use local commands only",
+            );
+        }
+        crate::bootstrap::run_minimal(bootinfo_ref);
         return crate::userland::start_console_or_cohsh(platform);
     }
 
@@ -1412,7 +1417,7 @@ fn bootstrap<P: Platform>(
         log::trace!("B5: entering event pump loop");
         boot_guard.commit();
         boot_log::force_uart_line("[console] serial fallback ready");
-        crate::bootstrap::run();
+        crate::bootstrap::run_minimal(bootinfo_ref);
         // MUST-SEE BEACON: if you don't see this, run() didn't return.
         log::info!("[console] handoff → serial console");
         boot_log::force_uart_line("[Cohesix] console.handoff");
