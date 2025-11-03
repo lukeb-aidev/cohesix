@@ -580,7 +580,7 @@ pub fn encode_cnode_depth(bits: u8) -> sys::seL4_Word {
 
 /// Depth (in bits) used when traversing the init CNode for syscall arguments.
 #[inline(always)]
-fn init_cspace_depth_words(bi: &sys::seL4_BootInfo) -> sys::seL4_Word {
+fn init_cspace_depth_words(_bi: &sys::seL4_BootInfo) -> sys::seL4_Word {
     sys::seL4_WordBits as sys::seL4_Word
 }
 
@@ -613,7 +613,7 @@ pub fn cnode_copy_raw(
     rights: sys::seL4_CapRights,
 ) -> sys::seL4_Error {
     let init_bits = sel4::init_cnode_bits(bi);
-    let depth_bits = sys::seL4_WordBits as sys::seL4_Word;
+    let depth_bits = bits_as_u8(sys::seL4_WordBits as usize);
     let dst_label = slot_constant_label(dst_slot_raw);
     let src_label = slot_constant_label(src_slot_raw);
     let dst_root_label = root_constant_label(dst_root);
@@ -633,7 +633,13 @@ pub fn cnode_copy_raw(
     {
         unsafe {
             sys::seL4_CNode_Copy(
-                dst_root, dst_index, depth_bits, src_root, src_index, depth_bits, rights,
+                dst_root,
+                dst_index,
+                depth_bits,
+                src_root,
+                src_index,
+                depth_bits,
+                rights,
             )
         }
     }
@@ -649,7 +655,7 @@ pub fn cnode_copy_raw(
             rights,
             dst_index,
             src_index,
-            depth_bits,
+            sys::seL4_WordBits as sys::seL4_Word,
         );
         sys::seL4_NoError
     }
@@ -717,7 +723,7 @@ pub fn cnode_mint_raw(
     badge: sys::seL4_Word,
 ) -> sys::seL4_Error {
     let init_bits = sel4::init_cnode_bits(bi);
-    let depth_bits = sys::seL4_WordBits as sys::seL4_Word;
+    let depth_bits = bits_as_u8(sys::seL4_WordBits as usize);
     let dst_index = encode_slot(dst_slot_raw as sys::seL4_CPtr, init_bits);
     let src_index = encode_slot(src_slot_raw as sys::seL4_CPtr, init_bits);
 
@@ -725,7 +731,14 @@ pub fn cnode_mint_raw(
     {
         unsafe {
             sys::seL4_CNode_Mint(
-                dst_root, dst_index, depth_bits, src_root, src_index, depth_bits, rights, badge,
+                dst_root,
+                dst_index,
+                depth_bits,
+                src_root,
+                src_index,
+                depth_bits,
+                rights,
+                badge,
             )
         }
     }
@@ -740,7 +753,7 @@ pub fn cnode_mint_raw(
             src_slot_raw,
             rights,
             badge,
-            depth_bits,
+            sys::seL4_WordBits as sys::seL4_Word,
             init_bits,
             dst_index,
             src_index,
@@ -758,7 +771,7 @@ pub fn cnode_move_raw(
     src_slot_raw: sys::seL4_Word,
 ) -> sys::seL4_Error {
     let init_bits = sel4::init_cnode_bits(bi);
-    let depth_bits = sys::seL4_WordBits as sys::seL4_Word;
+    let depth_bits = bits_as_u8(sys::seL4_WordBits as usize);
     let dst_index = encode_slot(dst_slot_raw as sys::seL4_CPtr, init_bits);
     let src_index = encode_slot(src_slot_raw as sys::seL4_CPtr, init_bits);
 
@@ -766,7 +779,12 @@ pub fn cnode_move_raw(
     {
         unsafe {
             sys::seL4_CNode_Move(
-                dst_root, dst_index, depth_bits, src_root, src_index, depth_bits,
+                dst_root,
+                dst_index,
+                depth_bits,
+                src_root,
+                src_index,
+                depth_bits,
             )
         }
     }
@@ -781,7 +799,7 @@ pub fn cnode_move_raw(
             src_slot_raw,
             dst_index,
             src_index,
-            depth_bits,
+            sys::seL4_WordBits as sys::seL4_Word,
             init_bits,
         );
         sys::seL4_NoError
