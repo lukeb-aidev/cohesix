@@ -58,13 +58,14 @@ pub fn cnode_copy_legacy(
     rights: sys::seL4_CapRights,
 ) -> sys::seL4_Error {
     let root = sys::seL4_CapInitThreadCNode;
-    let depth = sys::seL4_Word::from(init_bits);
+    let depth = init_bits;
+    let depth_word = sys::seL4_Word::from(depth);
     let rights_raw = rights.raw();
     log::info!(
         "[cnode:copy/legacy] root=0x{root:x} dst_slot=0x{dst:04x} depth={depth} src_slot=0x{src:04x} depth={depth} rights=0x{rights:02x}",
         root = root,
         dst = dst_slot,
-        depth = depth,
+        depth = depth_word,
         src = src_slot,
         rights = rights_raw,
     );
