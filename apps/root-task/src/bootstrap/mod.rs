@@ -225,14 +225,14 @@ pub mod tests {
 }
 
 /// Emit the final bootstrap beacons and return immediately to unblock the console handoff.
-pub fn run_minimal(bootinfo: &BootInfo) {
+pub fn run_minimal(bootinfo: &'static BootInfo) {
     // *** MINIMAL BYPASS FOR DIAG ***
     crate::bootstrap::log::force_uart_line("[BOOT] run.min.start");
     ::log::info!("[boot] run.minimal.begin");
 
     #[cfg(target_os = "none")]
     {
-        match unsafe { BootInfoView::from_ptr(bootinfo as *const BootInfo) } {
+        match BootInfoView::new(bootinfo) {
             Ok(view) => {
                 let window = crate::bootstrap::cspace::CSpaceWindow::from_bootinfo(&view);
                 ::log::info!(
