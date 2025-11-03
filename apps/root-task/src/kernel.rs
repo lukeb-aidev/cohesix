@@ -20,7 +20,7 @@ use crate::boot::{bi_extra, ep};
 use crate::bootstrap::cspace::cspace_first_retypes;
 #[cfg(debug_assertions)]
 use crate::bootstrap::cspace_sys;
-use crate::bootstrap::cspace_sys::cnode_copy_legacy;
+use crate::bootstrap::cspace_sys::cnode_copy_encoded;
 use crate::bootstrap::{
     boot_tracer,
     cspace::{CSpaceCtx, CSpaceWindow, FirstRetypeResult},
@@ -761,6 +761,10 @@ fn bootstrap<P: Platform>(
                     &retype_tuple,
                     sel4_sys::seL4_CapInitThreadVSpace,
                 );
+                log::info!(
+                    "[cs] first_free=0x{slot:04x}",
+                    slot = boot_cspace.next_free_slot()
+                );
                 if map_err == sel4_sys::seL4_NoError {
                     early_uart::register_console_base(early_uart::PL011_VADDR);
                     log::info!(
@@ -829,7 +833,21 @@ fn bootstrap<P: Platform>(
         let tcb_src_slot = bootinfo_ref.init_tcb_cap();
         let init_bits = bootinfo_view.init_cnode_bits();
         let rights = seL4_CapRights_ReadWrite;
-        let copy_err = cnode_copy_legacy(init_bits, slot, tcb_src_slot, rights);
+        let init_root = boot_cspace.root();
+        let copy_err = cnode_copy_encoded(
+            init_root,
+            slot as u64,
+            init_bits,
+            init_root,
+            tcb_src_slot as u64,
+            init_bits,
+            rights,
+        );
+        log::info!(
+            "[tcb] copy   -> dst=0x{dst:04x} err={err}",
+            dst = slot,
+            err = copy_err,
+        );
         if let Err(code) = crate::bootstrap::ktry("tcb.copy", copy_err as i32) {
             panic!(
                 "copying init TCB capability failed: {} ({})",
@@ -837,6 +855,10 @@ fn bootstrap<P: Platform>(
                 error_name(copy_err)
             );
         }
+        log::info!(
+            "[cs] first_free=0x{slot:04x}",
+            slot = boot_cspace.next_free_slot()
+        );
         crate::bp!("tcb.copy.end");
         slot
     };

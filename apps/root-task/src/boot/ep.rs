@@ -6,7 +6,7 @@ use sel4_sys::{seL4_CPtr, seL4_CapNull, seL4_Error, seL4_IllegalOperation};
 
 use crate::boot::bi_extra::first_regular_untyped_from_extra;
 use crate::bootstrap::cspace::CSpaceWindow;
-use crate::bootstrap::cspace_sys::retype_endpoint_once;
+use crate::bootstrap::cspace_sys::untyped_retype_encoded;
 use crate::cspace::CSpace;
 use crate::sel4::{self, BootInfoView};
 use crate::serial;
@@ -90,26 +90,35 @@ pub fn bootstrap_ep(view: &BootInfoView, cs: &mut CSpace) -> Result<seL4_CPtr, s
         slot = ep_slot,
     );
 
-    match retype_endpoint_once(ut, &mut window) {
-        Ok(slot) => {
-            debug_assert_eq!(slot, ep_slot);
-            log::trace!("B1.ret = Ok");
-            log::info!(
-                "[rt-fix] retype:endpoint OK slot=0x{slot:04x}",
-                slot = ep_slot,
-            );
-        }
-        Err(err) => {
-            log::trace!("B1.ret = Err({code})", code = sel4::error_name(err),);
-            log::error!(
-                "[boot] endpoint retype failed slot=0x{slot:04x} err={err:?} ({name})",
-                slot = ep_slot,
-                err = err,
-                name = sel4::error_name(err),
-            );
-            return Err(err);
-        }
+    let init_cnode = window.root;
+    let init_bits = window.bits;
+    let err = untyped_retype_encoded(
+        ut,
+        sel4_sys::seL4_ObjectType::seL4_EndpointObject as u32,
+        0,
+        init_cnode,
+        ep_slot as u64,
+        init_bits,
+        1,
+    );
+    log::info!(
+        "[ep] retyped -> slot=0x{slot:04x} err={err}",
+        slot = ep_slot,
+        err = err,
+    );
+    if err != sel4_sys::seL4_NoError {
+        log::trace!("B1.ret = Err({code})", code = sel4::error_name(err));
+        log::error!(
+            "[boot] endpoint retype failed slot=0x{slot:04x} err={err:?} ({name})",
+            slot = ep_slot,
+            err = err,
+            name = sel4::error_name(err),
+        );
+        return Err(err);
     }
+    log::trace!("B1.ret = Ok");
+    window.bump();
+    log::info!("[cs] first_free=0x{slot:04x}", slot = cs.next_free_slot());
 
     let slot_ident = sel4::debug_cap_identify(ep_slot);
     log::info!(

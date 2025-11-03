@@ -3,7 +3,7 @@
 #![cfg(feature = "kernel")]
 
 use root_task::bootstrap::cspace_sys::{
-    cnode_copy_legacy, encode_slot, take_last_host_retype_trace, untyped_retype_legacy,
+    cnode_copy_encoded, encode_slot, take_last_host_retype_trace, untyped_retype_encoded,
 };
 use sel4_sys::{self, seL4_CNode, seL4_CPtr, seL4_CapRights};
 
@@ -16,33 +16,42 @@ fn encode_slot_applies_word_aligned_shift() {
 }
 
 #[test]
-fn cnode_copy_legacy_encodes_indices_and_succeeds() {
+fn cnode_copy_encoded_encodes_indices_and_succeeds() {
     let rights = seL4_CapRights::new(1, 1, 1, 1);
     let init_bits = 13u8;
     let dst_slot: seL4_CPtr = 0x20;
     let src_slot: seL4_CPtr = 0x10;
-    let encoded_dst = encode_slot(dst_slot as sel4_sys::seL4_Word, init_bits);
-    let encoded_src = encode_slot(src_slot as sel4_sys::seL4_Word, init_bits);
-    assert_ne!(encoded_dst, dst_slot as sel4_sys::seL4_Word);
-    assert_ne!(encoded_src, src_slot as sel4_sys::seL4_Word);
-    let err = cnode_copy_legacy(init_bits, dst_slot, src_slot, rights);
+    let encoded_dst = encode_slot(dst_slot as u64, init_bits);
+    let encoded_src = encode_slot(src_slot as u64, init_bits);
+    assert_ne!(encoded_dst, dst_slot as u64);
+    assert_ne!(encoded_src, src_slot as u64);
+    let root = sel4_sys::seL4_CapInitThreadCNode;
+    let err = cnode_copy_encoded(
+        root,
+        dst_slot as u64,
+        init_bits,
+        root,
+        src_slot as u64,
+        init_bits,
+        rights,
+    );
     assert_eq!(err, sel4_sys::seL4_NoError);
 }
 
 #[test]
-fn untyped_retype_legacy_uses_canonical_root_tuple() {
+fn untyped_retype_encoded_uses_canonical_root_tuple() {
     let init_bits = 13u8;
     let dst_slot: seL4_CPtr = 0x40;
     let ut_cap: seL4_CNode = 0x200;
     let _ = take_last_host_retype_trace();
-    let err = untyped_retype_legacy(
+    let err = untyped_retype_encoded(
         ut_cap,
-        sel4_sys::seL4_EndpointObject as _,
+        sel4_sys::seL4_EndpointObject as u32,
         0,
+        sel4_sys::seL4_CapInitThreadCNode,
+        dst_slot as u64,
         init_bits,
-        dst_slot,
-        0x20,
-        0x200,
+        1,
     );
     assert_eq!(err, sel4_sys::seL4_NoError);
     let trace = take_last_host_retype_trace().expect("host trace must be captured");
@@ -52,7 +61,8 @@ fn untyped_retype_legacy_uses_canonical_root_tuple() {
         trace.node_depth,
         sel4_sys::seL4_WordBits as sel4_sys::seL4_Word
     );
-    assert_eq!(trace.node_offset, dst_slot as sel4_sys::seL4_Word);
+    let expected_offset = encode_slot(dst_slot as u64, init_bits) as sel4_sys::seL4_Word;
+    assert_eq!(trace.node_offset, expected_offset);
     assert_eq!(
         trace.object_type,
         sel4_sys::seL4_EndpointObject as sel4_sys::seL4_Word

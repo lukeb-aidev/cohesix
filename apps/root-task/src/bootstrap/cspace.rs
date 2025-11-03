@@ -926,9 +926,9 @@ impl CSpaceCtx {
     ) {
         if err != sel4::seL4_NoError {
             let encoded_dest =
-                cspace_sys::encode_slot(dest_index as sel4::seL4_CPtr, self.init_cnode_bits);
+                cspace_sys::encode_slot(dest_index as u64, self.init_cnode_bits) as sel4::seL4_CPtr;
             let encoded_src =
-                cspace_sys::encode_slot(src_index as sel4::seL4_CPtr, self.init_cnode_bits);
+                cspace_sys::encode_slot(src_index as u64, self.init_cnode_bits) as sel4::seL4_CPtr;
             let word_bits = sel4_sys::seL4_WordBits as usize;
             let hex_width = (word_bits + 3) / 4;
             let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
@@ -961,9 +961,9 @@ impl CSpaceCtx {
     ) {
         if err != sel4::seL4_NoError {
             let encoded_dest =
-                cspace_sys::encode_slot(dest_index as sel4::seL4_CPtr, self.init_cnode_bits);
+                cspace_sys::encode_slot(dest_index as u64, self.init_cnode_bits) as sel4::seL4_CPtr;
             let encoded_src =
-                cspace_sys::encode_slot(src_index as sel4::seL4_CPtr, self.init_cnode_bits);
+                cspace_sys::encode_slot(src_index as u64, self.init_cnode_bits) as sel4::seL4_CPtr;
             let word_bits = sel4_sys::seL4_WordBits as usize;
             let hex_width = (word_bits + 3) / 4;
             let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
@@ -999,7 +999,7 @@ impl CSpaceCtx {
     ) {
         if err != sel4::seL4_NoError {
             let encoded_dest =
-                cspace_sys::encode_slot(dest_index as sel4::seL4_CPtr, self.init_cnode_bits);
+                cspace_sys::encode_slot(dest_index as u64, self.init_cnode_bits) as sel4::seL4_CPtr;
             let word_bits = sel4_sys::seL4_WordBits as usize;
             let hex_width = (word_bits + 3) / 4;
             let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
