@@ -158,14 +158,10 @@ pub fn root_cnode_path(
 
 #[inline(always)]
 pub fn guard_root_path(init_cnode_bits: u8, index: seL4_Word, depth: seL4_Word, offset: seL4_Word) {
+    let word_bits = WORD_BITS;
     assert_eq!(
-        index as seL4_CNode, seL4_CapInitThreadCNode,
-        "index must reference the init thread CNode",
-    );
-    let expected_depth: seL4_Word = init_cnode_bits as seL4_Word;
-    assert_eq!(
-        depth, expected_depth,
-        "depth must equal initThreadCNodeSizeBits for direct init CNode access",
+        depth, word_bits,
+        "depth must equal seL4_WordBits for init CNode addressing",
     );
     let limit = if init_cnode_bits as usize >= usize::BITS as usize {
         usize::MAX
@@ -173,6 +169,21 @@ pub fn guard_root_path(init_cnode_bits: u8, index: seL4_Word, depth: seL4_Word, 
         1usize << init_cnode_bits
     };
     assert!((offset as usize) < limit, "slot out of range",);
+    let word_bits_usize = usize::try_from(word_bits).expect("WORD_BITS must fit in usize");
+    let init_bits_usize = usize::from(init_cnode_bits);
+    assert!(
+        init_bits_usize <= word_bits_usize,
+        "initThreadCNodeSizeBits must not exceed WORD_BITS",
+    );
+    let shift = word_bits_usize - init_bits_usize;
+    let expected_index = ((offset as usize) << shift) as seL4_Word;
+    assert_eq!(
+        index,
+        expected_index,
+        "encoded index {index:#x} does not match slot {offset:#x}",
+        index = index,
+        offset = offset,
+    );
 }
 
 #[inline(always)]
@@ -893,7 +904,9 @@ impl CSpaceCtx {
                 &mut line,
                 "[cnode] Copy err={err} root=0x{root:04x} dest(index=0x{dest_index:04x},depth={depth}) src(index=0x{src_index:04x},depth={depth})",
                 root = self.root_cnode_cap,
-                depth = self.dest.root_bits,
+                depth = sel4_sys::seL4_WordBits,
+                dest_index = dest_index,
+                src_index = src_index,
             )
             .is_err()
             {
@@ -917,7 +930,10 @@ impl CSpaceCtx {
                 &mut line,
                 "[cnode] Mint err={err} root=0x{root:04x} dest(index=0x{dest_index:04x},depth={depth},offset=0) src(index=0x{src_index:04x},depth={depth}) badge={badge}",
                 root = self.root_cnode_cap,
-                depth = self.dest.root_bits,
+                depth = sel4_sys::seL4_WordBits,
+                dest_index = dest_index,
+                src_index = src_index,
+                badge = badge,
             )
             .is_err()
             {

@@ -2,6 +2,8 @@
 
 pub mod tuples;
 
+use core::convert::TryFrom;
+
 use crate::sel4::{self, BootInfoExt};
 use sel4_sys::{seL4_BootInfo, seL4_CPtr, seL4_Error, seL4_Word};
 
@@ -60,12 +62,21 @@ impl CSpace {
         rights: sel4_sys::seL4_CapRights,
     ) -> seL4_Error {
         log::info!(
-            "[cnode] Copy dest_slot=0x{slot:04x} depth=initBits({depth})",
+            "[cnode] Copy dest_slot=0x{slot:04x} depth=WordBits({depth})",
             slot = dst_slot,
-            depth = self.bits,
+            depth = sel4_sys::seL4_WordBits,
         );
+        let depth = u8::try_from(sel4_sys::seL4_WordBits).expect("seL4_WordBits must fit in u8");
+        let encoded_dst = crate::bootstrap::cspace_sys::encode_slot(dst_slot, self.bits);
+        let encoded_src = crate::bootstrap::cspace_sys::encode_slot(src_slot, self.bits);
         sel4::cnode_copy_depth(
-            self.root, dst_slot, self.bits, self.root, src_slot, self.bits, rights,
+            self.root,
+            encoded_dst,
+            depth,
+            self.root,
+            encoded_src,
+            depth,
+            rights,
         )
     }
 
@@ -78,12 +89,22 @@ impl CSpace {
         badge: seL4_Word,
     ) -> seL4_Error {
         log::info!(
-            "[cnode] Mint dest_slot=0x{slot:04x} depth=initBits({depth})",
+            "[cnode] Mint dest_slot=0x{slot:04x} depth=WordBits({depth})",
             slot = dst_slot,
-            depth = self.bits,
+            depth = sel4_sys::seL4_WordBits,
         );
+        let depth = u8::try_from(sel4_sys::seL4_WordBits).expect("seL4_WordBits must fit in u8");
+        let encoded_dst = crate::bootstrap::cspace_sys::encode_slot(dst_slot, self.bits);
+        let encoded_src = crate::bootstrap::cspace_sys::encode_slot(src_slot, self.bits);
         sel4::cnode_mint_depth(
-            self.root, dst_slot, self.bits, self.root, src_slot, self.bits, rights, badge,
+            self.root,
+            encoded_dst,
+            depth,
+            self.root,
+            encoded_src,
+            depth,
+            rights,
+            badge,
         )
     }
 }
