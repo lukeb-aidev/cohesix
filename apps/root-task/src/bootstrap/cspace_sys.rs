@@ -11,6 +11,7 @@ use core::fmt;
 #[cfg(target_os = "none")]
 use crate::boot::flags;
 use crate::bootstrap::cspace::{guard_root_path, CSpaceWindow};
+use crate::bootstrap::cspace_encode::{encode_slot_for_wordbits, WORD_BITS};
 #[cfg(target_os = "none")]
 use crate::bootstrap::log::force_uart_line;
 use crate::sel4;
@@ -43,11 +44,13 @@ fn debug_log(args: fmt::Arguments<'_>) {
 #[inline(always)]
 fn log_window(tag: &str, window: &CSpaceWindow) {
     ::log::info!(
-        "[cs] {tag}: root=0x{root:04x} bits={bits} first_free=0x{first:04x}",
+        "[cs] {tag}: root=0x{root:04x} bits={bits} first_free=0x{first:04x} window=[0x{start:04x}..0x{end:04x})",
         tag = tag,
         root = window.root,
         bits = window.bits,
         first = window.first_free,
+        start = window.empty_start,
+        end = window.empty_end,
     );
 }
 
@@ -92,13 +95,24 @@ pub fn untyped_retype_legacy(
     size_bits: sys::seL4_Word,
     init_bits: u8,
     dst_slot: sys::seL4_CPtr,
+    empty_start: sys::seL4_CPtr,
+    empty_end: sys::seL4_CPtr,
 ) -> sys::seL4_Error {
     let root = sys::seL4_CapInitThreadCNode;
     let node_index: sys::seL4_Word = 0;
-    let node_depth: sys::seL4_Word = 0;
-    let node_offset: sys::seL4_Word = dst_slot as _;
+    let (encoded_slot, encoded_depth_bits) =
+        encode_slot_for_wordbits(u32::try_from(dst_slot).expect("dest slot must fit within u32"));
+    let node_depth: sys::seL4_Word = sys::seL4_Word::from(encoded_depth_bits);
+    let node_offset: sys::seL4_Word = encoded_slot as _;
     let node_count: sys::seL4_Word = 1;
     let depth_word = sys::seL4_Word::from(init_bits);
+    assert!(
+        dst_slot >= empty_start && dst_slot < empty_end,
+        "dest slot 0x{slot:04x} outside bootinfo window [0x{start:04x}..0x{end:04x})",
+        slot = dst_slot,
+        start = empty_start,
+        end = empty_end,
+    );
     log::info!(
         "[untyped:retype/legacy] ut=0x{ut:x} obj_type={obj_type} size_bits={size_bits} dst_slot=0x{slot:04x} root=0x{root:x} index=0x{index:x} depth={depth_word} offset={offset} count={count}",
         ut = ut,
@@ -114,6 +128,13 @@ pub fn untyped_retype_legacy(
 
     #[cfg(target_os = "none")]
     unsafe {
+        debug_log(format_args!(
+            "[cs] op=retype dst_slot=0x{dst_slot:04x} enc=0x{enc:016x} depth={depth} root=0x{root:04x}",
+            dst_slot = dst_slot,
+            enc = encoded_slot,
+            depth = encoded_depth_bits,
+            root = root,
+        ));
         sys::seL4_Untyped_Retype(
             ut,
             obj_type,
@@ -147,6 +168,7 @@ pub fn retype_endpoint_once(
 ) -> Result<sys::seL4_CPtr, sys::seL4_Error> {
     log_window("win", window);
     let slot = window.first_free;
+    window.assert_contains(slot);
     let size_bits: sys::seL4_Word = 0;
     let err = untyped_retype_legacy(
         untyped,
@@ -154,6 +176,8 @@ pub fn retype_endpoint_once(
         size_bits,
         window.bits,
         slot,
+        window.empty_start,
+        window.empty_end,
     );
 
     if err == sys::seL4_NoError {
@@ -674,44 +698,68 @@ pub fn cnode_copy_raw(
     src_slot_raw: sys::seL4_Word,
     rights: sys::seL4_CapRights,
 ) -> sys::seL4_Error {
-    let init_bits = sel4::init_cnode_bits(bi);
-    let depth_bits = bits_as_u8(sys::seL4_WordBits as usize);
     let dst_label = slot_constant_label(dst_slot_raw);
     let src_label = slot_constant_label(src_slot_raw);
     let dst_root_label = root_constant_label(dst_root);
     let src_root_label = root_constant_label(src_root);
     let dst_slot = dst_slot_raw as sys::seL4_CPtr;
     let src_slot = src_slot_raw as sys::seL4_CPtr;
-    let dst_index = encode_slot(dst_slot, init_bits);
-    let src_index = encode_slot(src_slot, init_bits);
-    let word_bits = sys::seL4_WordBits as usize;
+    let (dst_index_u64, depth_bits) =
+        encode_slot_for_wordbits(u32::try_from(dst_slot).expect("dst slot must fit within u32"));
+    let (src_index_u64, src_depth_bits) =
+        encode_slot_for_wordbits(u32::try_from(src_slot).expect("src slot must fit within u32"));
+    debug_assert_eq!(depth_bits, src_depth_bits, "source/dest depth mismatch");
+    let depth_word = sys::seL4_Word::from(depth_bits);
+    let word_bits = usize::from(WORD_BITS);
     let hex_width = (word_bits + 3) / 4;
+    let empty_start = bi.empty.start as sys::seL4_CPtr;
+    let empty_end = bi.empty.end as sys::seL4_CPtr;
+    assert!(
+        dst_slot >= empty_start && dst_slot < empty_end,
+        "copy dest slot 0x{slot:04x} outside bootinfo window [0x{start:04x}..0x{end:04x})",
+        slot = dst_slot,
+        start = empty_start,
+        end = empty_end,
+    );
 
     ::log::info!(
         "[cnode-copy] dst_root={dst_root_label}(0x{dst_root:04x}) dst_slot={dst_label}@0x{dst_slot_raw:04x} depth=WordBits({depth}) \
          src_root={src_root_label}(0x{src_root:04x}) src_slot={src_label}@0x{src_slot_raw:04x} depth=WordBits({depth})",
-        depth = sys::seL4_WordBits,
+        depth = depth_bits,
         dst_root = dst_root,
         src_root = src_root,
     );
     ::log::info!(
         "[cnode] Copy dst=0x{dst_slot_raw:04x} enc=0x{dst_index:0width$x} depth=WordBits({depth})",
         width = hex_width,
-        depth = sys::seL4_WordBits,
-        dst_index = dst_index as u64,
+        depth = depth_bits,
+        dst_index = dst_index_u64,
     );
     ::log::info!(
         "[cnode] Copy src=0x{src_slot_raw:04x} enc=0x{src_index:0width$x} depth=WordBits({depth})",
         width = hex_width,
-        depth = sys::seL4_WordBits,
-        src_index = src_index as u64,
+        depth = depth_bits,
+        src_index = src_index_u64,
     );
 
     #[cfg(target_os = "none")]
     {
         unsafe {
+            debug_log(format_args!(
+                "[cs] op=copy dst_slot=0x{dst_slot:04x} enc=0x{dst_enc:016x} depth={depth} root=0x{dst_root:04x}",
+                dst_slot = dst_slot,
+                dst_enc = dst_index_u64,
+                depth = depth_bits,
+                dst_root = dst_root,
+            ));
             sys::seL4_CNode_Copy(
-                dst_root, dst_index, depth_bits, src_root, src_index, depth_bits, rights,
+                dst_root,
+                dst_index_u64 as sys::seL4_CPtr,
+                depth_word,
+                src_root,
+                src_index_u64 as sys::seL4_CPtr,
+                depth_word,
+                rights,
             )
         }
     }
@@ -725,9 +773,9 @@ pub fn cnode_copy_raw(
             src_root,
             src_slot_raw,
             rights,
-            dst_index,
-            src_index,
-            sys::seL4_WordBits as sys::seL4_Word,
+            dst_index_u64,
+            src_index_u64,
+            depth_bits,
         );
         sys::seL4_NoError
     }
