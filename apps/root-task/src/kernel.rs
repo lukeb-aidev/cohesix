@@ -708,7 +708,7 @@ fn bootstrap<P: Platform>(
         boot_guard.commit();
         boot_log::force_uart_line("[console] serial fallback ready");
         crate::bootstrap::run();
-        crate::userland::start_console_or_cohsh(platform);
+        return crate::userland::start_console_or_cohsh(platform);
     }
 
     let (ep_slot, boot_ep_ok) = match ep::bootstrap_ep(&bootinfo_view, &mut boot_cspace) {
