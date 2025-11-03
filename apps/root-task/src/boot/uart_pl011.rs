@@ -2,8 +2,8 @@
 //! Bootstrap helpers for mapping the PL011 UART console.
 #![allow(unsafe_code)]
 
-use crate::cspace::CSpace;
 use crate::cspace::tuples::RetypeTuple;
+use crate::cspace::CSpace;
 use crate::uart::pl011;
 use log::warn;
 use sel4_sys::{self, seL4_CPtr, seL4_CapInitThreadVSpace, seL4_Error, seL4_NoError};
