@@ -7,7 +7,7 @@
 
 use core::{
     arch::asm,
-    convert::{TryFrom, TryInto},
+    convert::TryInto,
     fmt, mem,
     ptr::{self, NonNull},
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
