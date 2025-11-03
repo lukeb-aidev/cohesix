@@ -2,13 +2,11 @@
 //! Bootstrap helpers for mapping the PL011 UART console.
 #![allow(unsafe_code)]
 
-use crate::bootstrap::cspace::CSpace;
+use crate::cspace::CSpace;
 use crate::cspace::tuples::RetypeTuple;
 use crate::uart::pl011;
 use log::warn;
 use sel4_sys::{self, seL4_CPtr, seL4_CapInitThreadVSpace, seL4_Error, seL4_NoError};
-
-const PL011_PADDR: u64 = 0x0900_0000;
 
 /// Locate the device untyped that backs the PL011 UART MMIO page.
 #[must_use]
@@ -23,7 +21,7 @@ pub fn find_pl011_device_ut(bi: &sel4_sys::seL4_BootInfo) -> Option<seL4_CPtr> {
         let base = desc.paddr as u64;
         let span = 1u64 << desc.sizeBits;
         let limit = base.saturating_add(span);
-        if base <= PL011_PADDR && PL011_PADDR + 0x1000 <= limit {
+        if base <= pl011::PL011_PADDR && pl011::PL011_PADDR + 0x1000 <= limit {
             return Some(ut_start + index as seL4_CPtr);
         }
     }

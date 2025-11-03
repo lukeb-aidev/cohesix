@@ -11,7 +11,7 @@ use sel4_sys::{
     seL4_CapRights_ReadWrite, seL4_DebugPutChar, seL4_Error, seL4_Word,
 };
 
-const PL011_PADDR: u64 = 0x0900_0000;
+pub const PL011_PADDR: u64 = 0x0900_0000;
 /// Virtual address used for the bootstrap console mapping.
 pub const PL011_VADDR: usize = 0x7000_0000;
 

@@ -20,7 +20,6 @@ use crate::boot::{bi_extra, ep, tcb, uart_pl011};
 use crate::bootstrap::cspace::cspace_first_retypes;
 #[cfg(debug_assertions)]
 use crate::bootstrap::cspace_sys;
-use crate::bootstrap::cspace_sys::cnode_copy_encoded;
 use crate::bootstrap::{
     boot_tracer,
     cspace::{CSpaceCtx, CSpaceWindow, FirstRetypeResult},
@@ -51,12 +50,13 @@ use crate::sel4::{
 use crate::serial::{
     pl011::Pl011, SerialPort, DEFAULT_LINE_CAPACITY, DEFAULT_RX_CAPACITY, DEFAULT_TX_CAPACITY,
 };
-use crate::uart::pl011::{self as early_uart};
+use crate::uart::pl011::{self as early_uart, PL011_PADDR};
 use heapless::{String as HeaplessString, Vec as HeaplessVec};
 #[cfg(feature = "net-console")]
 use smoltcp::wire::Ipv4Address;
 
 const EARLY_DUMP_LIMIT: usize = 512;
+const DEVICE_FRAME_BITS: usize = 12;
 
 #[cfg(all(feature = "kernel", not(sel4_config_printing)))]
 use sel4_panicking::{self, DebugSink};
@@ -791,7 +791,7 @@ fn bootstrap<P: Platform>(
     } else {
         crate::bp!("tcb.copy.begin");
         let init_bits = bootinfo_view.init_cnode_bits();
-        let init_bits_u8 = crate::bootstrap::cspace_sys::bits_as_u8(init_bits);
+        let init_bits_u8 = crate::bootstrap::cspace_sys::bits_as_u8(usize::from(init_bits));
         let copy_slot = tcb::bootstrap_copy_init_tcb(bootinfo_ref, &mut boot_cspace, init_bits_u8)
             .unwrap_or_else(|err| {
                 panic!(
