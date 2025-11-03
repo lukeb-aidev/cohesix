@@ -40,21 +40,19 @@ fn log_retype_call(
     let mut line = String::<128>::new();
     let _ = write!(
         &mut line,
-        "[retype] dst=0x{off:04x} index={idx:#0width$x} depth={depth} root=0x{root:04x} style={style} ut=0x{ut:04x} obj=0x{obj:04x} sz={sz} n={n}",
-        ut_cap,
-        obj_type,
-        size_bits,
-        dest.root,
+        "[retype] dst=0x{off:04x} index={idx:#0width$x} depth={depth} root=0x{root:04x} style={style} \
+ut=0x{ut:04x} obj=0x{obj:04x} sz={sz} n={n} empty=[0x{start:04x},0x{end:04x})",
+        off = node_offset,
         idx = node_index,
         depth = node_depth,
-        off = node_offset,
-        start = dest.empty_start,
-        end = dest.empty_end,
-        n = num_objects,
+        root = dest.root,
         style = tuple_style_label(style),
         ut = ut_cap,
         obj = obj_type,
         sz = size_bits,
+        n = num_objects,
+        start = dest.empty_start,
+        end = dest.empty_end,
         width = hex_width,
     );
     ::log::info!("{}", line.as_str());

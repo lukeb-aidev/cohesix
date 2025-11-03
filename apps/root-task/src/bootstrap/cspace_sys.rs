@@ -180,6 +180,7 @@ fn cnode_copy_with_style(
     let dst_index = enc_index(dst_slot_raw, bi, style) as sys::seL4_CPtr;
     let src_index = enc_index(src_slot_raw, bi, style) as sys::seL4_CPtr;
     let depth = cnode_depth(bi, style);
+    let depth_u8 = u8::try_from(depth).expect("cnode depth must fit in u8");
 
     #[cfg(target_os = "none")]
     unsafe {
@@ -192,7 +193,13 @@ fn cnode_copy_with_style(
             dst_root = dst_root,
         ));
         sys::seL4_CNode_Copy(
-            dst_root, dst_index, depth, src_root, src_index, depth, rights,
+            dst_root,
+            dst_index,
+            depth_u8,
+            src_root,
+            src_index,
+            depth_u8,
+            rights,
         )
     }
 
@@ -223,10 +230,11 @@ fn cnode_delete_with_style(
 ) -> sys::seL4_Error {
     let index = enc_index(slot, bi, style) as sys::seL4_CPtr;
     let depth = cnode_depth(bi, style);
+    let depth_u8 = u8::try_from(depth).expect("cnode depth must fit in u8");
 
     #[cfg(target_os = "none")]
     unsafe {
-        sys::seL4_CNode_Delete(root, index, depth)
+        sys::seL4_CNode_Delete(root, index, depth_u8)
     }
 
     #[cfg(not(target_os = "none"))]
@@ -250,6 +258,7 @@ fn cnode_mint_with_style(
     let dst_index = enc_index(dst_slot_raw, bi, style) as sys::seL4_CPtr;
     let src_index = enc_index(src_slot_raw, bi, style) as sys::seL4_CPtr;
     let depth = cnode_depth(bi, style);
+    let depth_u8 = u8::try_from(depth).expect("cnode depth must fit in u8");
 
     #[cfg(target_os = "none")]
     unsafe {
@@ -262,7 +271,14 @@ fn cnode_mint_with_style(
             badge = badge,
         ));
         sys::seL4_CNode_Mint(
-            dst_root, dst_index, depth, src_root, src_index, depth, rights, badge,
+            dst_root,
+            dst_index,
+            depth_u8,
+            src_root,
+            src_index,
+            depth_u8,
+            rights,
+            badge,
         )
     }
 
@@ -297,6 +313,7 @@ fn cnode_move_with_style(
     let dst_index = enc_index(dst_slot_raw, bi, style) as sys::seL4_CPtr;
     let src_index = enc_index(src_slot_raw, bi, style) as sys::seL4_CPtr;
     let depth = cnode_depth(bi, style);
+    let depth_u8 = u8::try_from(depth).expect("cnode depth must fit in u8");
 
     #[cfg(target_os = "none")]
     unsafe {
@@ -307,7 +324,14 @@ fn cnode_move_with_style(
             src = src_slot_raw,
             depth = depth,
         ));
-        sys::seL4_CNode_Move(dst_root, dst_index, depth, src_root, src_index, depth)
+        sys::seL4_CNode_Move(
+            dst_root,
+            dst_index,
+            depth_u8,
+            src_root,
+            src_index,
+            depth_u8,
+        )
     }
 
     #[cfg(not(target_os = "none"))]
