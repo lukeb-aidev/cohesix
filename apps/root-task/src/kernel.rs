@@ -15,7 +15,7 @@ use core::sync::atomic::{AtomicU8, Ordering};
 
 use cohesix_ticket::Role;
 
-use crate::boot::{bi_extra, ep};
+use crate::boot::{bi_extra, ep, tcb, uart_pl011};
 #[cfg(feature = "cap-probes")]
 use crate::bootstrap::cspace::cspace_first_retypes;
 #[cfg(debug_assertions)]
@@ -55,6 +55,8 @@ use crate::uart::pl011::{self as early_uart};
 use heapless::{String as HeaplessString, Vec as HeaplessVec};
 #[cfg(feature = "net-console")]
 use smoltcp::wire::Ipv4Address;
+
+const EARLY_DUMP_LIMIT: usize = 512;
 
 #[cfg(all(feature = "kernel", not(sel4_config_printing)))]
 use sel4_panicking::{self, DebugSink};
@@ -242,28 +244,6 @@ fn log_text_span() {
 
 #[cfg(not(target_arch = "aarch64"))]
 compile_error!("root-task kernel build currently supports only aarch64 targets");
-
-const PL011_PADDR: usize = 0x0900_0000;
-const DEVICE_FRAME_BITS: usize = 12;
-const EARLY_DUMP_LIMIT: usize = 512;
-
-fn find_pl011_device_ut(bi: &sel4_sys::seL4_BootInfo) -> Option<seL4_CPtr> {
-    let ut_start = bi.untyped.start;
-    let ut_end = bi.untyped.end;
-    let total = ut_end.saturating_sub(ut_start) as usize;
-    for (index, desc) in bi.untypedList.iter().take(total).enumerate() {
-        if desc.isDevice == 0 {
-            continue;
-        }
-        let base = desc.paddr as u64;
-        let span = 1u64 << desc.sizeBits;
-        let limit = base.saturating_add(span);
-        if base <= early_uart::pl011_paddr() && early_uart::pl011_paddr() + 0x1000 <= limit {
-            return Some(ut_start + index as seL4_CPtr);
-        }
-    }
-    None
-}
 
 #[cfg(all(feature = "kernel", not(sel4_config_printing)))]
 static mut EARLY_UART_SINK: DebugSink = DebugSink {
@@ -758,48 +738,32 @@ fn bootstrap<P: Platform>(
         );
     }
 
-    if let Some(dev_ut) = find_pl011_device_ut(bootinfo_ref) {
-        match boot_cspace.alloc_slot() {
-            Ok(page_slot) => {
-                let map_err = early_uart::map_pl011_smallpage(
-                    dev_ut,
-                    page_slot as seL4_Word,
-                    &retype_tuple,
-                    sel4_sys::seL4_CapInitThreadVSpace,
-                );
-                log::info!(
-                    "[cs] first_free=0x{slot:04x}",
-                    slot = boot_cspace.next_free_slot()
-                );
-                if map_err == sel4_sys::seL4_NoError {
-                    early_uart::register_console_base(early_uart::PL011_VADDR);
-                    log::info!(
-                        "[rt-fix] map:pl011 OK vaddr=0x{vaddr:08x}",
-                        vaddr = early_uart::PL011_VADDR
-                    );
-                } else {
-                    log::warn!(
-                        "[rt-fix] map:pl011 failed ut=0x{ut:04x} slot=0x{slot:04x} err={err}",
-                        ut = dev_ut,
-                        slot = page_slot,
-                        err = map_err
-                    );
-                }
-            }
-            Err(err) => {
-                log::warn!(
-                    "[rt-fix] map:pl011 slot allocation failed err={err}",
-                    err = err
-                );
-            }
+    match uart_pl011::bootstrap_map_pl011(bootinfo_ref, &mut boot_cspace, &retype_tuple) {
+        Ok(()) => {
+            early_uart::register_console_base(early_uart::PL011_VADDR);
+            log::info!(
+                "[pl011] map OK vaddr=0x{vaddr:08x}",
+                vaddr = early_uart::PL011_VADDR
+            );
         }
-    } else {
-        log::warn!("[rt-fix] map:pl011 device untyped not found");
+        Err(err) => {
+            log::warn!(
+                "[pl011] map deferred err={err} ({name})",
+                err = err,
+                name = error_name(err)
+            );
+        }
     }
 
     crate::trace::trace_ep(ep_slot);
 
-    console.writeln_prefixed("[boot] root endpoint published");
+    let mut ep_line = heapless::String::<96>::new();
+    let _ = write!(
+        ep_line,
+        "[boot] root endpoint published ep=0x{ep:04x}",
+        ep = ep_slot
+    );
+    console.writeln_prefixed(ep_line.as_str());
 
     unsafe {
         #[cfg(all(feature = "kernel", target_arch = "aarch64"))]
@@ -826,47 +790,18 @@ fn bootstrap<P: Platform>(
         info.tcb_copy_slot
     } else {
         crate::bp!("tcb.copy.begin");
-        let slot = match boot_cspace.alloc_slot() {
-            Ok(slot) => slot,
-            Err(err) => {
+        let init_bits = bootinfo_view.init_cnode_bits();
+        let init_bits_u8 = crate::bootstrap::cspace_sys::bits_as_u8(init_bits);
+        let copy_slot = tcb::bootstrap_copy_init_tcb(bootinfo_ref, &mut boot_cspace, init_bits_u8)
+            .unwrap_or_else(|err| {
                 panic!(
-                    "failed to allocate init CSpace slot for TCB copy: {} ({})",
+                    "copying init TCB capability failed: {} ({})",
                     err,
                     error_name(err)
                 );
-            }
-        };
-        let tcb_src_slot = bootinfo_ref.init_tcb_cap();
-        let init_bits = bootinfo_view.init_cnode_bits();
-        let rights = seL4_CapRights_ReadWrite;
-        let init_root = boot_cspace.root();
-        let copy_err = cnode_copy_encoded(
-            init_root,
-            slot as u64,
-            init_bits,
-            init_root,
-            tcb_src_slot as u64,
-            init_bits,
-            rights,
-        );
-        log::info!(
-            "[tcb] copy   -> dst=0x{dst:04x} err={err}",
-            dst = slot,
-            err = copy_err,
-        );
-        if let Err(code) = crate::bootstrap::ktry("tcb.copy", copy_err as i32) {
-            panic!(
-                "copying init TCB capability failed: {} ({})",
-                code,
-                error_name(copy_err)
-            );
-        }
-        log::info!(
-            "[cs] first_free=0x{slot:04x}",
-            slot = boot_cspace.next_free_slot()
-        );
+            });
         crate::bp!("tcb.copy.end");
-        slot
+        copy_slot
     };
 
     if let Some(ipc_vaddr) = ipc_vaddr {
