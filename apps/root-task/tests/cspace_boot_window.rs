@@ -46,14 +46,8 @@ fn boot_window_adapter_logs_and_bounds_check() {
     );
     assert_eq!(err, sel4_sys::seL4_NoError);
     let trace = take_last_host_retype_trace().expect("host trace must be captured");
-    assert_eq!(
-        trace.node_depth,
-        sel4_sys::seL4_WordBits as sel4_sys::seL4_Word
-    );
-    let expected_offset =
-        root_task::bootstrap::cspace_sys::encode_slot(window.first_free as u64, window.bits)
-            as sel4_sys::seL4_Word;
-    assert_eq!(trace.node_offset, expected_offset);
+    assert_eq!(trace.node_depth, 0);
+    assert_eq!(trace.node_offset, window.first_free as sel4_sys::seL4_Word);
 
     let out_of_range = window.empty_end;
     let panic_result = panic::catch_unwind(AssertUnwindSafe(|| {
