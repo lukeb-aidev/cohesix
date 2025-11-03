@@ -30,23 +30,50 @@ pub struct CSpaceWindow {
     pub bits: u8,
     /// First free slot index inside the init CNode window.
     pub first_free: sel4::seL4_CPtr,
+    /// Lower bound (inclusive) of the init CSpace free window advertised by the kernel.
+    pub empty_start: sel4::seL4_CPtr,
+    /// Upper bound (exclusive) of the init CSpace free window advertised by the kernel.
+    pub empty_end: sel4::seL4_CPtr,
 }
 
 impl CSpaceWindow {
     /// Constructs a canonical window from the supplied bootinfo view.
     #[must_use]
     pub fn from_bootinfo(view: &BootInfoView) -> Self {
-        let (first_free, _) = view.init_cnode_empty_range();
+        let (first_free, end) = view.init_cnode_empty_range();
         Self {
             root: view.root_cnode_cap(),
             bits: cspace_sys::bits_as_u8(usize::from(view.init_cnode_bits())),
             first_free,
+            empty_start: first_free,
+            empty_end: end,
         }
     }
 
     /// Advances the first-free slot pointer, avoiding slot reuse between placements.
     pub fn bump(&mut self) {
         self.first_free = self.first_free.wrapping_add(1);
+        debug_assert!(
+            self.first_free <= self.empty_end,
+            "first_free advanced beyond bootinfo window end"
+        );
+    }
+
+    /// Returns `true` when `slot` lies within the bootinfo-advertised free window.
+    #[must_use]
+    pub fn contains(&self, slot: sel4::seL4_CPtr) -> bool {
+        slot >= self.empty_start && slot < self.empty_end
+    }
+
+    /// Asserts that `slot` lies within the bootinfo-advertised free window.
+    pub fn assert_contains(&self, slot: sel4::seL4_CPtr) {
+        assert!(
+            self.contains(slot),
+            "slot 0x{slot:04x} outside bootinfo window [0x{start:04x}..0x{end:04x})",
+            slot = slot,
+            start = self.empty_start,
+            end = self.empty_end,
+        );
     }
 }
 

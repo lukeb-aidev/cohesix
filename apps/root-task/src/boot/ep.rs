@@ -55,6 +55,7 @@ pub fn bootstrap_ep(view: &BootInfoView, cs: &mut CSpace) -> Result<seL4_CPtr, s
 
     let mut window = CSpaceWindow::from_bootinfo(view);
     window.first_free = ep_slot;
+    window.assert_contains(ep_slot);
     log::info!(
         "[boot:ep] win root=0x{root:x} bits={bits} first_free=0x{slot:x}",
         root = window.root,

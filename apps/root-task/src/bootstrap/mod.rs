@@ -9,6 +9,8 @@ use spin::Mutex;
 
 /// Capability-space helpers extracted from the seL4 boot info structure.
 pub mod cspace;
+/// Slot encoding helpers for bootstrap-only capability syscalls.
+pub mod cspace_encode;
 /// Syscall wrappers for capability operations using invocation addressing only.
 pub mod cspace_sys;
 /// ABI guard helpers ensuring the seL4 FFI signatures remain pinned.
