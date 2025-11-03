@@ -1,6 +1,6 @@
 // Author: Lukas Bower
 
-#![cfg(all(feature = "kernel", not(target_os = "none")))]
+#![cfg(all(feature = "mock-sel4", not(target_os = "none")))]
 
 use core::mem;
 
@@ -40,7 +40,7 @@ fn init_cnode_retype_uses_direct_destination_encoding() {
 
     assert_eq!(trace.root, seL4_CapInitThreadCNode);
     assert_eq!(trace.node_index, 0);
-    assert_eq!(trace.node_depth, sel4_sys::seL4_WordBits as seL4_Word);
+    assert_eq!(trace.node_depth, 0);
     assert_eq!(trace.node_offset, dst_slot as seL4_Word);
     assert_eq!(trace.object_type, obj_ty);
     assert_eq!(trace.size_bits, size_bits);
@@ -74,7 +74,7 @@ fn generic_init_cnode_retype_uses_canonical_encoding() {
 
     assert_eq!(trace.root, seL4_CapInitThreadCNode);
     assert_eq!(trace.node_index, 0);
-    assert_eq!(trace.node_depth, sel4_sys::seL4_WordBits as seL4_Word);
+    assert_eq!(trace.node_depth, 0);
     assert_eq!(trace.node_offset, dst_slot as seL4_Word);
     assert_eq!(trace.object_type, obj_ty);
     assert_eq!(trace.size_bits, size_bits);

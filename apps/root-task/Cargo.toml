@@ -22,6 +22,7 @@ kernel = [
     "bootstrap-trace",
     "dep:linked_list_allocator",
 ]
+mock-sel4 = ["kernel"]
 net-console = [
     "dep:smoltcp",
     "dep:spin",

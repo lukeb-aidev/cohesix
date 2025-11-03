@@ -127,6 +127,25 @@ pub fn bits_as_u8(init_bits: usize) -> u8 {
     }
 }
 
+/// Encodes a raw init CNode slot index into the canonical word-aligned `seL4_CPtr` format.
+///
+/// seL4 expects callers to present capability slots as the upper bits of the capability word
+/// with a traversal depth of `seL4_WordBits`. The kernel extracts the destination slot by
+/// shifting the pointer right by `seL4_WordBits - init_bits`, therefore we pre-encode the slot by
+/// shifting the raw slot number left by the complementary amount.
+#[inline(always)]
+pub fn encode_slot(slot: sys::seL4_CPtr, init_bits: u8) -> sys::seL4_CPtr {
+    let word_bits = sys::seL4_WordBits as u8;
+    debug_assert!(
+        init_bits <= word_bits,
+        "initThreadCNodeSizeBits must not exceed seL4_WordBits"
+    );
+    let shift = usize::from(word_bits - init_bits);
+    let slot_word = slot as sys::seL4_Word;
+    let encoded = slot_word << shift;
+    encoded as sys::seL4_CPtr
+}
+
 #[cfg(all(test, not(target_os = "none")))]
 use alloc::boxed::Box;
 
@@ -340,18 +359,16 @@ pub fn validate_retype_args(
             provided: args.root,
         });
     }
-    if args.node_index != CANONICAL_CNODE_INDEX {
+    if args.node_index != 0 {
         return Err(RetypeArgsError::NodeIndexMismatch {
             provided: args.node_index,
-            expected: CANONICAL_CNODE_INDEX,
+            expected: 0,
         });
     }
-    let init_bits_word = bi_init_cnode_bits();
-    let expected_depth = bits_as_u8(init_bits_word as usize);
-    if args.cnode_depth != expected_depth {
+    if args.cnode_depth != 0 {
         return Err(RetypeArgsError::DepthMismatch {
             provided: args.cnode_depth,
-            expected: expected_depth,
+            expected: 0,
         });
     }
     if args.dest_offset < empty_start || args.dest_offset >= empty_end {
@@ -564,7 +581,7 @@ pub fn encode_cnode_depth(bits: u8) -> sys::seL4_Word {
 /// Depth (in bits) used when traversing the init CNode for syscall arguments.
 #[inline(always)]
 fn init_cspace_depth_words(bi: &sys::seL4_BootInfo) -> sys::seL4_Word {
-    sel4::init_cnode_bits(bi) as sys::seL4_Word
+    sys::seL4_WordBits as sys::seL4_Word
 }
 
 #[inline(always)]
@@ -596,38 +613,44 @@ pub fn cnode_copy_raw(
     rights: sys::seL4_CapRights,
 ) -> sys::seL4_Error {
     let init_bits = sel4::init_cnode_bits(bi);
-    let depth_bits = init_bits;
+    let depth_bits = sys::seL4_WordBits as sys::seL4_Word;
     let dst_label = slot_constant_label(dst_slot_raw);
     let src_label = slot_constant_label(src_slot_raw);
     let dst_root_label = root_constant_label(dst_root);
     let src_root_label = root_constant_label(src_root);
-    let dst_index = dst_slot_raw;
-    let src_index = src_slot_raw;
+    let dst_slot = dst_slot_raw as sys::seL4_CPtr;
+    let src_slot = src_slot_raw as sys::seL4_CPtr;
+    let dst_index = encode_slot(dst_slot, init_bits);
+    let src_index = encode_slot(src_slot, init_bits);
 
     ::log::info!(
-        "[cnode-copy] dst_root={dst_root_label} dst_slot=0x{dst_slot_raw:04x} depth=initBits({depth}) ({dst_label})  \
-         src_root={src_root_label} src_slot=0x{src_slot_raw:04x} depth=initBits({depth}) ({src_label})",
-        depth = init_bits,
+        "[cnode-copy] dst_root={dst_root_label} dst_slot=0x{dst_slot_raw:04x} depth=WordBits({depth}) \
+         src_root={src_root_label} src_slot=0x{src_slot_raw:04x} depth=WordBits({depth})",
+        depth = sys::seL4_WordBits,
     );
 
     #[cfg(target_os = "none")]
     {
         unsafe {
             sys::seL4_CNode_Copy(
-                dst_root,
-                dst_index as sys::seL4_CPtr,
-                depth_bits,
-                src_root,
-                src_index as sys::seL4_CPtr,
-                depth_bits,
-                rights,
+                dst_root, dst_index, depth_bits, src_root, src_index, depth_bits, rights,
             )
         }
     }
 
     #[cfg(not(target_os = "none"))]
     {
-        let _ = (bi, dst_root, dst_slot_raw, src_root, src_slot_raw, rights);
+        let _ = (
+            bi,
+            dst_root,
+            dst_slot_raw,
+            src_root,
+            src_slot_raw,
+            rights,
+            dst_index,
+            src_index,
+            depth_bits,
+        );
         sys::seL4_NoError
     }
 }
@@ -693,22 +716,16 @@ pub fn cnode_mint_raw(
     rights: sys::seL4_CapRights,
     badge: sys::seL4_Word,
 ) -> sys::seL4_Error {
+    let init_bits = sel4::init_cnode_bits(bi);
+    let depth_bits = sys::seL4_WordBits as sys::seL4_Word;
+    let dst_index = encode_slot(dst_slot_raw as sys::seL4_CPtr, init_bits);
+    let src_index = encode_slot(src_slot_raw as sys::seL4_CPtr, init_bits);
+
     #[cfg(target_os = "none")]
     {
-        let init_bits = sel4::init_cnode_bits(bi);
-        let depth_bits = init_bits;
-        let dst_index = dst_slot_raw;
-        let src_index = src_slot_raw;
         unsafe {
             sys::seL4_CNode_Mint(
-                dst_root,
-                dst_index as sys::seL4_CPtr,
-                depth_bits,
-                src_root,
-                src_index as sys::seL4_CPtr,
-                depth_bits,
-                rights,
-                badge,
+                dst_root, dst_index, depth_bits, src_root, src_index, depth_bits, rights, badge,
             )
         }
     }
@@ -723,6 +740,10 @@ pub fn cnode_mint_raw(
             src_slot_raw,
             rights,
             badge,
+            depth_bits,
+            init_bits,
+            dst_index,
+            src_index,
         );
         sys::seL4_NoError
     }
@@ -736,27 +757,33 @@ pub fn cnode_move_raw(
     src_root: sys::seL4_CNode,
     src_slot_raw: sys::seL4_Word,
 ) -> sys::seL4_Error {
+    let init_bits = sel4::init_cnode_bits(bi);
+    let depth_bits = sys::seL4_WordBits as sys::seL4_Word;
+    let dst_index = encode_slot(dst_slot_raw as sys::seL4_CPtr, init_bits);
+    let src_index = encode_slot(src_slot_raw as sys::seL4_CPtr, init_bits);
+
     #[cfg(target_os = "none")]
     {
-        let init_bits = sel4::init_cnode_bits(bi);
-        let depth_bits = init_bits;
-        let dst_index = dst_slot_raw;
-        let src_index = src_slot_raw;
         unsafe {
             sys::seL4_CNode_Move(
-                dst_root,
-                dst_index as sys::seL4_CPtr,
-                depth_bits,
-                src_root,
-                src_index as sys::seL4_CPtr,
-                depth_bits,
+                dst_root, dst_index, depth_bits, src_root, src_index, depth_bits,
             )
         }
     }
 
     #[cfg(not(target_os = "none"))]
     {
-        let _ = (bi, dst_root, dst_slot_raw, src_root, src_slot_raw);
+        let _ = (
+            bi,
+            dst_root,
+            dst_slot_raw,
+            src_root,
+            src_slot_raw,
+            dst_index,
+            src_index,
+            depth_bits,
+            init_bits,
+        );
         sys::seL4_NoError
     }
 }
@@ -776,9 +803,10 @@ impl RootPath {
     pub(super) fn from_bootinfo(slot: u32, bi: &sys::seL4_BootInfo) -> Self {
         let init_bits = sel4::init_cnode_bits(bi);
         let root = sel4::init_cnode_cptr(bi);
-        let index = root as sys::seL4_Word;
-        let depth = init_bits as sys::seL4_Word;
         let offset = slot as sys::seL4_Word;
+        let encoded = encode_slot(slot as sys::seL4_CPtr, init_bits);
+        let index = encoded as sys::seL4_Word;
+        let depth = sys::seL4_WordBits as sys::seL4_Word;
         guard_root_path(init_bits, index, depth, offset);
         let (empty_start, empty_end) = sel4::empty_window(bi);
         assert!(
@@ -787,7 +815,7 @@ impl RootPath {
             start = empty_start,
             end = empty_end,
         );
-        let encoded_offset = offset;
+        let encoded_offset = encoded as sys::seL4_Word;
         Self {
             root,
             index,
@@ -847,11 +875,10 @@ pub fn init_cnode_dest(
         init_bits_usize,
         init_bits_u8
     );
-    let guard_depth = init_bits_u8 as sys::seL4_Word;
-    guard_root_path(init_bits_u8, root as sys::seL4_Word, guard_depth, offset);
-    let _word_bits = u8::try_from(sel4::WORD_BITS).expect("WORD_BITS must fit within u8");
-    let raw_index = offset;
-    (root, raw_index, guard_depth, offset)
+    let guard_depth = sys::seL4_WordBits as sys::seL4_Word;
+    let encoded_index = encode_slot(slot as sys::seL4_CPtr, init_bits_u8) as sys::seL4_Word;
+    guard_root_path(init_bits_u8, encoded_index, guard_depth, offset);
+    (root, encoded_index, guard_depth, offset)
 }
 
 #[inline(always)]
@@ -877,7 +904,7 @@ pub fn init_cnode_retype_dest(
     );
     let root = bi_init_cnode_cptr();
     let node_index = 0;
-    let node_depth = init_bits_word;
+    let node_depth = 0;
     let node_offset = slot as sys::seL4_Word;
     let depth_bits = bits_as_u8(init_bits_usize);
     debug_assert!(
@@ -942,7 +969,7 @@ pub mod canonical {
         let err = {
             host_trace::record(host_trace::HostRetypeTrace {
                 root: dst_root,
-                node_index: path.offset(),
+                node_index: path.encoded_offset(),
                 node_depth: depth_word,
                 node_offset: 0,
                 object_type: 0,
@@ -982,7 +1009,7 @@ pub mod canonical {
 
         let root = sys::seL4_CapInitThreadCNode;
         let raw_offset = path.offset();
-        let idx = path.offset();
+        let idx = path.encoded_offset();
         let depth_word = super::init_cspace_depth_words(bi);
         let depth_bits = bits_as_u8(depth_word as usize);
 
@@ -993,7 +1020,7 @@ pub mod canonical {
         let err = sys::seL4_NoError;
 
         ::log::info!(
-            "[cnode.delete] root=0x{root:x} slot=0x{slot:04x} idx=0x{idx:04x} depth=initBits({depth}) -> err={err}",
+            "[cnode.delete] root=0x{root:x} slot=0x{slot:04x} idx=0x{idx:04x} depth=WordBits({depth}) -> err={err}",
             root = root,
             slot = raw_offset,
             idx = idx,
@@ -1335,10 +1362,9 @@ pub fn untyped_retype_into_init_root(
     }
 
     let (root, node_index, node_depth, node_offset) = init_cnode_retype_dest(dst_slot);
-    let expected_depth = bi_init_cnode_bits();
     debug_assert_eq!(root, sel4::seL4_CapInitThreadCNode);
-    debug_assert_eq!(node_index, CANONICAL_CNODE_INDEX as sys::seL4_Word);
-    debug_assert_eq!(node_depth, expected_depth);
+    debug_assert_eq!(node_index, 0);
+    debug_assert_eq!(node_depth, 0);
     let args = RetypeArgs::new(
         untyped_slot,
         obj_type,
@@ -1355,9 +1381,8 @@ pub fn untyped_retype_into_init_root(
     #[cfg(target_os = "none")]
     {
         let (empty_start, empty_end) = boot_empty_window();
-        debug_assert_eq!(node_index, CANONICAL_CNODE_INDEX as sys::seL4_Word);
-        let expected_depth_bits = bits_as_u8(expected_depth as usize);
-        debug_assert_eq!(args.cnode_depth, expected_depth_bits);
+        debug_assert_eq!(node_index, 0);
+        debug_assert_eq!(args.cnode_depth, 0);
         debug_assert!(args.dest_offset >= empty_start && args.dest_offset < empty_end);
 
         validate_retype_args(&args, empty_start, empty_end)?;
@@ -1474,10 +1499,10 @@ pub(crate) fn init_cnode_direct_destination_words(
         (dst_slot as usize) < limit,
         "destination slot {dst_slot:#x} exceeds init CNode capacity (bits={init_cnode_bits})"
     );
-    let raw_index = dst_slot as sys::seL4_Word;
+    let encoded_index = encode_slot(dst_slot, init_cnode_bits) as sys::seL4_Word;
     (
-        raw_index,
-        init_cnode_bits as sys::seL4_Word,
+        encoded_index,
+        sys::seL4_WordBits as sys::seL4_Word,
         dst_slot as sys::seL4_Word,
     )
 }
@@ -1500,6 +1525,15 @@ mod tests {
         init_cnode_direct_destination_words_for_test, sel4, sys, untyped_retype_into_init_root,
     };
 
+    #[test]
+    fn encode_slot_aligns_to_word_bits() {
+        let init_bits = 13u8;
+        let value = super::encode_slot(0x0101, init_bits);
+        let shift = (sel4_sys::seL4_WordBits as u32) - u32::from(init_bits);
+        let expected = (0x0101u64) << shift;
+        assert_eq!(value as u64, expected);
+    }
+
     #[cfg(not(target_os = "none"))]
     fn mock_bootinfo(empty_start: u32, empty_end: u32, bits: u8) -> sys::seL4_BootInfo {
         let mut bootinfo: sys::seL4_BootInfo = unsafe { core::mem::zeroed() };
@@ -1520,8 +1554,9 @@ mod tests {
         let slot = 0x00a5u64;
         let (root, idx, depth, off) = init_cnode_dest(slot as _);
         assert_eq!(root, bi_init_cnode_cptr());
-        assert_eq!(idx, slot as sys::seL4_Word);
-        let expected_depth = 13u64;
+        let expected_idx = super::encode_slot(slot as _, 13) as sys::seL4_Word;
+        assert_eq!(idx, expected_idx);
+        let expected_depth = sel4_sys::seL4_WordBits as sys::seL4_Word;
         assert_eq!(depth, expected_depth);
         assert_eq!(off, slot as sys::seL4_Word);
     }
@@ -1548,9 +1583,8 @@ mod tests {
         {
             if let Some(trace) = super::host_trace::take_last() {
                 assert_eq!(trace.root, bi_init_cnode_cptr());
-                assert_eq!(trace.node_index, super::CANONICAL_CNODE_INDEX as _);
-                let expected_depth = bi_init_cnode_bits();
-                assert_eq!(trace.node_depth, expected_depth);
+                assert_eq!(trace.node_index, 0);
+                assert_eq!(trace.node_depth, 0);
                 assert_eq!(trace.node_offset, slot as _);
                 assert_eq!(trace.object_type, 0);
                 assert_eq!(trace.size_bits, 0);
@@ -1572,9 +1606,8 @@ mod tests {
         let slot = 0x10u64;
         let (root, idx, depth, off) = super::init_cnode_retype_dest(slot as _);
         assert_eq!(root, bi_init_cnode_cptr());
-        assert_eq!(idx, super::CANONICAL_CNODE_INDEX as _);
-        let expected_depth = bi_init_cnode_bits();
-        assert_eq!(depth, expected_depth);
+        assert_eq!(idx, 0);
+        assert_eq!(depth, 0);
         assert_eq!(off, slot as _);
     }
 
@@ -1583,9 +1616,9 @@ mod tests {
         let slot = 0x10u64;
         let bits = 13u8;
         let (idx, depth, off) = init_cnode_direct_destination_words_for_test(bits, slot as _);
-        let expected_index = encode_slot(slot, bits);
+        let expected_index = super::encode_slot(slot as _, bits) as sys::seL4_Word;
         assert_eq!(idx, expected_index);
-        assert_eq!(depth, bits as sys::seL4_Word);
+        assert_eq!(depth, sel4_sys::seL4_WordBits as sys::seL4_Word);
         assert_eq!(off, slot as _);
     }
 
@@ -1601,16 +1634,8 @@ mod tests {
         let empty_start = 0x100;
         let empty_end = 0x200;
         let dest_offset = 0x180;
-        let args = super::RetypeArgs::new(
-            0x80,
-            0x20,
-            12,
-            bi_init_cnode_cptr(),
-            super::CANONICAL_CNODE_INDEX,
-            bi_init_cnode_bits(),
-            dest_offset,
-            1,
-        );
+        let args =
+            super::RetypeArgs::new(0x80, 0x20, 12, bi_init_cnode_cptr(), 0, 0, dest_offset, 1);
         assert!(
             super::validate_retype_args(&args, empty_start, empty_end).is_ok(),
             "canonical args should validate"
@@ -1635,8 +1660,8 @@ mod tests {
             0x30,
             10,
             bi_init_cnode_cptr(),
-            super::CANONICAL_CNODE_INDEX,
-            bi_init_cnode_bits(),
+            0,
+            0,
             encoded_before_window,
             1,
         );
@@ -1678,10 +1703,11 @@ mod tests {
         let bootinfo = mock_bootinfo(0x20, 0x40, 6);
         let path = super::RootPath::from_bootinfo(0x22, &bootinfo);
         assert_eq!(path.root, sys::seL4_CapInitThreadCNode);
-        assert_eq!(path.index, sys::seL4_CapInitThreadCNode as _);
-        assert_eq!(path.depth, 6);
+        let expected_index = super::encode_slot(0x22, bootinfo.initThreadCNodeSizeBits as u8);
+        assert_eq!(path.index, expected_index as _);
+        assert_eq!(path.depth, sel4_sys::seL4_WordBits as sys::seL4_Word);
         assert_eq!(path.offset(), 0x22);
-        assert_eq!(path.encoded_offset(), 0x22);
+        assert_eq!(path.encoded_offset(), expected_index as _);
     }
 
     #[cfg(not(target_os = "none"))]
@@ -1744,11 +1770,8 @@ mod tests {
         assert!(result.is_ok());
         let trace = super::host_trace::take_last().expect("expected host trace entry");
         assert_eq!(trace.root, sys::seL4_CapInitThreadCNode);
-        assert_eq!(trace.node_index, sys::seL4_CapInitThreadCNode as _);
-        assert_eq!(
-            trace.node_depth,
-            sel4::init_cnode_bits(&bootinfo) as sys::seL4_Word
-        );
+        assert_eq!(trace.node_index, 0);
+        assert_eq!(trace.node_depth, 0);
         assert_eq!(trace.node_offset, 0x120);
         assert_eq!(trace.object_type, 4);
         assert_eq!(trace.size_bits, 12);
