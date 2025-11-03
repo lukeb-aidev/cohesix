@@ -404,6 +404,77 @@ pub fn yield_now() {
     unsafe { sel4_sys::seL4_Yield() };
 }
 
+/// Issues a raw seL4 send without validating the destination capability.
+#[cfg(feature = "kernel")]
+#[inline(always)]
+pub fn send_unchecked(dest: seL4_CPtr, info: seL4_MessageInfo) {
+    unsafe {
+        sel4_sys::seL4_Send(dest, info);
+    }
+}
+
+/// Issues a raw seL4 call without validating the destination capability.
+#[cfg(feature = "kernel")]
+#[inline(always)]
+pub fn call_unchecked(dest: seL4_CPtr, info: seL4_MessageInfo) -> seL4_MessageInfo {
+    let length = info.length();
+
+    let mut mr0_val = 0;
+    let mut mr1_val = 0;
+    let mut mr2_val = 0;
+    let mut mr3_val = 0;
+
+    let mut mr0_ptr: *mut seL4_Word = ptr::null_mut();
+    let mut mr1_ptr: *mut seL4_Word = ptr::null_mut();
+    let mut mr2_ptr: *mut seL4_Word = ptr::null_mut();
+    let mut mr3_ptr: *mut seL4_Word = ptr::null_mut();
+
+    if length > 0 {
+        mr0_val = unsafe { sel4_sys::seL4_GetMR(0) };
+        mr0_ptr = &mut mr0_val;
+    }
+    if length > 1 {
+        mr1_val = unsafe { sel4_sys::seL4_GetMR(1) };
+        mr1_ptr = &mut mr1_val;
+    }
+    if length > 2 {
+        mr2_val = unsafe { sel4_sys::seL4_GetMR(2) };
+        mr2_ptr = &mut mr2_val;
+    }
+    if length > 3 {
+        mr3_val = unsafe { sel4_sys::seL4_GetMR(3) };
+        mr3_ptr = &mut mr3_val;
+    }
+
+    let reply =
+        unsafe { sel4_sys::seL4_CallWithMRs(dest, info, mr0_ptr, mr1_ptr, mr2_ptr, mr3_ptr) };
+
+    if length > 0 {
+        unsafe { sel4_sys::seL4_SetMR(0, mr0_val) };
+    }
+    if length > 1 {
+        unsafe { sel4_sys::seL4_SetMR(1, mr1_val) };
+    }
+    if length > 2 {
+        unsafe { sel4_sys::seL4_SetMR(2, mr2_val) };
+    }
+    if length > 3 {
+        unsafe { sel4_sys::seL4_SetMR(3, mr3_val) };
+    }
+
+    reply
+}
+
+/// Signals a notification capability without validating the destination pointer.
+#[cfg(feature = "kernel")]
+#[inline(always)]
+pub fn signal_unchecked(dest: seL4_CPtr) {
+    let empty = seL4_MessageInfo::new(0, 0, 0, 0);
+    unsafe {
+        sel4_sys::seL4_Send(dest, empty);
+    }
+}
+
 #[inline(never)]
 fn ensure_endpoint() -> Result<seL4_CPtr, IpcError> {
     let endpoint = root_endpoint();
@@ -426,7 +497,7 @@ pub fn send_guarded(info: seL4_MessageInfo) -> Result<(), IpcError> {
     if !SEND_LOGGED.swap(true, Ordering::AcqRel) {
         log::info!("bootstrap: send on ep slot=0x{slot:04x}", slot = endpoint,);
     }
-    unsafe { sel4_sys::seL4_Send(endpoint, info) };
+    send_unchecked(endpoint, info);
     Ok(())
 }
 
