@@ -894,7 +894,7 @@ pub use bits_as_u8 as super_bits_as_u8_for_test;
 pub mod canonical {
     #[cfg(not(target_os = "none"))]
     use super::host_trace;
-    use super::{debug_log, sel4, sys, RootPath};
+    use super::{bits_as_u8, debug_log, sel4, sys, RootPath};
 
     #[inline(always)]
     fn build_root_path(slot: u32, bi: &sys::seL4_BootInfo) -> RootPath {
@@ -993,7 +993,7 @@ pub mod canonical {
         let err = sys::seL4_NoError;
 
         ::log::info!(
-            "[cnode.delete] root=0x{root:x} slot=0x{slot:04x} depth=initBits({depth}) -> err={err}",
+            "[cnode.delete] root=0x{root:x} slot=0x{slot:04x} idx=0x{idx:04x} depth=initBits({depth}) -> err={err}",
             root = root,
             slot = raw_offset,
             idx = idx,
@@ -1061,7 +1061,7 @@ pub mod canonical {
         };
 
         ::log::info!(
-            "[retype] ut=0x{ut:x} obj={obj} sz={sz_bits} root=0x{root:x} depth={depth} offset=0x{offset:04x} -> err={err}",
+            "[retype] ut=0x{ut:x} obj={obj} sz={sz_bits} root=0x{root:x} idx=0x{idx:04x} depth={depth} offset=0x{offset:04x} -> err={err}",
             ut = ut,
             obj = obj,
             sz_bits = sz_bits,
