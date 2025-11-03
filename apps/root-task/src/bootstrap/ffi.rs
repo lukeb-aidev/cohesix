@@ -5,6 +5,7 @@
 
 use crate::bootstrap::cspace::CSpaceCtx;
 use crate::sel4 as sys;
+use sel4_sys::seL4_WordBits;
 #[cfg(target_os = "none")]
 use crate::sel4::{BootInfoError, BootInfoView};
 
@@ -44,7 +45,7 @@ pub fn raw_untyped_retype(
     node_offset: sys::seL4_Word,
     num_objects: sys::seL4_Word,
 ) -> sys::seL4_Error {
-    let word_bits = sys::seL4_WordBits as usize;
+    let word_bits = seL4_WordBits as usize;
     let hex_width = (word_bits + 3) / 4;
     ::log::info!(
         "[retype] ut=0x{ut:0width$x} root=0x{root:04x} depth={depth} index=0x{index:0width$x} offset=0x{offset:0width$x} n={num}",

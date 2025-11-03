@@ -626,9 +626,11 @@ pub fn cnode_copy_raw(
     let hex_width = (word_bits + 3) / 4;
 
     ::log::info!(
-        "[cnode-copy] dst_root={dst_root_label} dst_slot=0x{dst_slot_raw:04x} depth=WordBits({depth}) \
-         src_root={src_root_label} src_slot=0x{src_slot_raw:04x} depth=WordBits({depth})",
+        "[cnode-copy] dst_root={dst_root_label}(0x{dst_root:04x}) dst_slot={dst_label}@0x{dst_slot_raw:04x} depth=WordBits({depth}) \
+         src_root={src_root_label}(0x{src_root:04x}) src_slot={src_label}@0x{src_slot_raw:04x} depth=WordBits({depth})",
         depth = sys::seL4_WordBits,
+        dst_root = dst_root,
+        src_root = src_root,
     );
     ::log::info!(
         "[cnode] Copy dst=0x{dst_slot_raw:04x} enc=0x{dst_index:0width$x} depth=WordBits({depth})",
