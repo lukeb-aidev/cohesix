@@ -7,7 +7,7 @@ extern crate alloc;
 use alloc::boxed::Box;
 use core::arch::asm;
 use core::cmp;
-use core::convert::Infallible;
+use core::convert::{Infallible, TryFrom};
 use core::fmt::{self, Write};
 use core::panic::PanicInfo;
 use core::ptr;
@@ -44,8 +44,8 @@ use crate::platform::{Platform, SeL4Platform};
 #[cfg(feature = "cap-probes")]
 use crate::sel4::first_regular_untyped;
 use crate::sel4::{
-    bootinfo_debug_dump, error_name, root_endpoint, seL4_CPtr, seL4_Word, BootInfo, BootInfoExt,
-    BootInfoView, KernelEnv, RetypeKind, RetypeStatus, IPC_PAGE_BYTES, MSG_MAX_WORDS,
+    bootinfo_debug_dump, error_name, root_endpoint, BootInfo, BootInfoExt, BootInfoView, KernelEnv,
+    RetypeKind, RetypeStatus, IPC_PAGE_BYTES, MSG_MAX_WORDS,
 };
 use crate::serial::{
     pl011::Pl011, SerialPort, DEFAULT_LINE_CAPACITY, DEFAULT_RX_CAPACITY, DEFAULT_TX_CAPACITY,
@@ -60,7 +60,6 @@ const DEVICE_FRAME_BITS: usize = 12;
 
 #[cfg(all(feature = "kernel", not(sel4_config_printing)))]
 use sel4_panicking::{self, DebugSink};
-use sel4_sys::seL4_CapRights_ReadWrite;
 
 /// seL4 console writer backed by the kernel's `DebugPutChar` system call.
 struct DebugConsole<'a, P: Platform> {
@@ -944,7 +943,9 @@ fn bootstrap<P: Platform>(
         Box::leak(bridge)
     };
 
-    let uart_region = match hal.map_device(PL011_PADDR) {
+    let pl011_paddr = usize::try_from(PL011_PADDR)
+        .expect("PL011 physical address must fit within usize on this platform");
+    let uart_region = match hal.map_device(pl011_paddr) {
         Ok(region) => region,
         Err(HalError::Sel4(err)) => {
             let error_code = err as i32;
@@ -1163,7 +1164,7 @@ fn bootstrap<P: Platform>(
                 console.writeln_prefixed("no retype trace captured");
             }
 
-            match hal.device_coverage(PL011_PADDR, DEVICE_FRAME_BITS) {
+            match hal.device_coverage(pl011_paddr, DEVICE_FRAME_BITS) {
                 Some(region) => {
                     let mut coverage = heapless::String::<192>::new();
                     let region_state = if region.used { "reserved" } else { "free" };
