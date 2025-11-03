@@ -659,7 +659,8 @@ pub fn cnode_copy_raw(
     let dst_slot = dst_slot_raw as sys::seL4_CPtr;
     let src_slot = src_slot_raw as sys::seL4_CPtr;
     let init_bits = sel4::init_cnode_bits(bi);
-    let depth_bits = init_bits as sys::seL4_Word;
+    let depth_bits = init_bits;
+    let depth_word = depth_bits as sys::seL4_Word;
     let limit = if init_bits as usize >= usize::BITS as usize {
         usize::MAX
     } else {
@@ -687,7 +688,7 @@ pub fn cnode_copy_raw(
 
     ::log::info!(
         "[cnode] op=copy dst=0x{dst_slot_raw:04x} src=0x{src_slot_raw:04x} depth={depth}",
-        depth = depth_bits,
+        depth = depth_word,
     );
     ::log::info!(
         "[cnode] roots dst={dst_root_label}(0x{dst_root:04x}) src={src_root_label}(0x{src_root:04x})",
@@ -702,7 +703,7 @@ pub fn cnode_copy_raw(
                 "[cs] op=copy dst_slot=0x{dst_slot:04x} src_slot=0x{src_slot:04x} depth={depth} root=0x{dst_root:04x}",
                 dst_slot = dst_slot,
                 src_slot = src_slot,
-                depth = depth_bits,
+                depth = depth_word,
                 dst_root = dst_root,
             ));
             sys::seL4_CNode_Copy(
@@ -727,6 +728,7 @@ pub fn cnode_copy_raw(
             src_slot_raw,
             rights,
             depth_bits,
+            depth_word,
         );
         sys::seL4_NoError
     }
@@ -794,7 +796,8 @@ pub fn cnode_mint_raw(
     badge: sys::seL4_Word,
 ) -> sys::seL4_Error {
     let init_bits = sel4::init_cnode_bits(bi);
-    let depth_bits = init_bits as sys::seL4_Word;
+    let depth_bits = init_bits;
+    let depth_word = depth_bits as sys::seL4_Word;
     let limit = if init_bits as usize >= usize::BITS as usize {
         usize::MAX
     } else {
@@ -831,6 +834,7 @@ pub fn cnode_mint_raw(
             badge,
             init_bits,
             depth_bits,
+            depth_word,
         );
         sys::seL4_NoError
     }
@@ -845,7 +849,8 @@ pub fn cnode_move_raw(
     src_slot_raw: sys::seL4_Word,
 ) -> sys::seL4_Error {
     let init_bits = sel4::init_cnode_bits(bi);
-    let depth_bits = init_bits as sys::seL4_Word;
+    let depth_bits = init_bits;
+    let depth_word = depth_bits as sys::seL4_Word;
     let limit = if init_bits as usize >= usize::BITS as usize {
         usize::MAX
     } else {
@@ -878,6 +883,7 @@ pub fn cnode_move_raw(
             src_slot_raw,
             init_bits,
             depth_bits,
+            depth_word,
         );
         sys::seL4_NoError
     }
