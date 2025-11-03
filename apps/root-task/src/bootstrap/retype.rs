@@ -38,13 +38,13 @@ fn log_retype_call(
     let mut line = String::<128>::new();
     let _ = write!(
         &mut line,
-        "[retype:call] ut={:#x} obj={:#x} sz_bits={} root={:#x} idx=0x{idx:0width$x} depth={} off=0x{off:0width$x} n={n} window=[0x{start:04x}..0x{end:04x})",
+        "[retype:call] ut={:#x} obj={:#x} sz_bits={} root={:#x} idx=0x{idx:0width$x} depth={depth} off=0x{off:0width$x} n={n} window=[0x{start:04x}..0x{end:04x})",
         ut_cap,
         obj_type,
         size_bits,
         dest.root,
         idx = node_index,
-        node_depth,
+        depth = node_depth,
         off = node_offset,
         start = dest.empty_start,
         end = dest.empty_end,
