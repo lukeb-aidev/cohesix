@@ -755,10 +755,10 @@ pub fn cnode_copy_raw(
             sys::seL4_CNode_Copy(
                 dst_root,
                 dst_index_u64 as sys::seL4_CPtr,
-                depth_word,
+                depth_bits,
                 src_root,
                 src_index_u64 as sys::seL4_CPtr,
-                depth_word,
+                depth_bits,
                 rights,
             )
         }
