@@ -1,7 +1,7 @@
 // Author: Lukas Bower
 #![allow(unsafe_code)]
 
-use sel4_sys::*;
+use crate::sel4::{self, seL4_CPtr, seL4_CapNull, seL4_MessageInfo};
 
 #[inline]
 pub fn cap_is_valid(ep: seL4_CPtr) -> bool {
@@ -14,7 +14,7 @@ pub fn send_if_valid(ep: seL4_CPtr, info: seL4_MessageInfo) {
         log::warn!("[ipc] send skipped: null ep");
         return;
     }
-    unsafe { seL4_Send(ep, info) }
+    sel4::send_unchecked(ep, info)
 }
 
 #[inline]
@@ -23,7 +23,7 @@ pub fn call_if_valid(ep: seL4_CPtr, info: seL4_MessageInfo) -> seL4_MessageInfo 
         log::warn!("[ipc] call skipped: null ep");
         return seL4_MessageInfo::new(0, 0, 0, 0);
     }
-    unsafe { seL4_Call(ep, info) }
+    sel4::call_unchecked(ep, info)
 }
 
 #[inline]
@@ -32,5 +32,5 @@ pub fn signal_if_valid(ep: seL4_CPtr) {
         log::warn!("[ipc] signal skipped: null ep");
         return;
     }
-    unsafe { seL4_Signal(ep) }
+    sel4::signal_unchecked(ep)
 }

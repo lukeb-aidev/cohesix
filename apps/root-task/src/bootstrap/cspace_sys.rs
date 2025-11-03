@@ -8,6 +8,8 @@ extern crate alloc;
 use core::convert::TryFrom;
 use core::fmt;
 
+#[cfg(target_os = "none")]
+use crate::boot::flags;
 use crate::bootstrap::cspace::{guard_root_path, CSpaceWindow};
 #[cfg(target_os = "none")]
 use crate::bootstrap::log::force_uart_line;
@@ -74,15 +76,7 @@ pub fn cnode_copy_legacy(
 
     #[cfg(target_os = "none")]
     unsafe {
-        sys::seL4_CNode_Copy(
-            root,
-            encoded_dst,
-            depth_word,
-            root,
-            encoded_src,
-            depth_word,
-            rights,
-        )
+        sys::seL4_CNode_Copy(root, encoded_dst, depth, root, encoded_src, depth, rights)
     }
 
     #[cfg(not(target_os = "none"))]
@@ -1299,7 +1293,7 @@ pub fn retype_into_root(
 #[cfg(target_os = "none")]
 #[inline(always)]
 fn log_destination(op: &str, idx: sys::seL4_Word, depth: sys::seL4_Word, offset: sys::seL4_Word) {
-    if boot::flags::trace_dest() {
+    if flags::trace_dest() {
         ::log::info!(
             "DEST → {op} root=0x{root:04x} idx=0x{idx:04x} depth={depth} off=0x{offset:04x} (ABI order: dest_root,dest_index,dest_depth,dest_offset)",
             op = op,
@@ -1314,7 +1308,7 @@ fn log_destination(op: &str, idx: sys::seL4_Word, depth: sys::seL4_Word, offset:
 #[cfg(target_os = "none")]
 #[inline(always)]
 fn log_syscall_result(op: &str, err: sys::seL4_Error) {
-    if boot::flags::trace_dest() {
+    if flags::trace_dest() {
         ::log::info!(
             "DEST ← {op} result={err} ({name})",
             op = op,
