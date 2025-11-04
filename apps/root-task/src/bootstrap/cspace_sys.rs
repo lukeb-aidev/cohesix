@@ -146,7 +146,9 @@ pub fn cnode_copy_raw_single(
     src_root: sys::seL4_CNode,
     src_slot: sys::seL4_Word,
 ) -> sys::seL4_Error {
-    let depth = sel4::init_cnode_bits(bi) as sys::seL4_Word;
+    let depth_bits = sel4::init_cnode_bits(bi);
+    let depth = depth_bits as sys::seL4_Word;
+    let depth_u8 = bits_as_u8(depth_bits);
     let rights = sys::seL4_CapRights::new(1, 1, 1, 1);
 
     ::log::info!(
@@ -160,12 +162,29 @@ pub fn cnode_copy_raw_single(
 
     #[cfg(target_os = "none")]
     unsafe {
-        sys::seL4_CNode_Copy(dst_root, dst_slot, depth, src_root, src_slot, depth, rights)
+        sys::seL4_CNode_Copy(
+            dst_root,
+            dst_slot,
+            depth_u8,
+            src_root,
+            src_slot,
+            depth_u8,
+            rights,
+        )
     }
 
     #[cfg(not(target_os = "none"))]
     {
-        let _ = (bi, dst_root, dst_slot, src_root, src_slot, depth, rights);
+        let _ = (
+            bi,
+            dst_root,
+            dst_slot,
+            src_root,
+            src_slot,
+            depth,
+            depth_u8,
+            rights,
+        );
         sys::seL4_NoError
     }
 }
