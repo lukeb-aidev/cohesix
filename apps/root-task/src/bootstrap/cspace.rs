@@ -366,9 +366,9 @@ pub fn prove_dest_path_with_bootinfo(
     cspace_sys::debug_identify_cap("InitCNode", dst_root as seL4_CPtr);
     cspace_sys::assert_init_cnode_layout(bi);
 
-    let depth = sel4::init_cnode_bits(bi) as seL4_Word;
+    let depth_bits = cspace_sys::bits_as_u8(sel4::init_cnode_bits(bi));
     unsafe {
-        let _ = seL4_CNode_Delete(dst_root, dst_slot, depth);
+        let _ = seL4_CNode_Delete(dst_root, dst_slot, depth_bits);
     }
 
     let err = cspace_sys::cnode_copy_raw_single(bi, dst_root, dst_slot, src_root, src_slot);
@@ -376,7 +376,7 @@ pub fn prove_dest_path_with_bootinfo(
 
     if err == seL4_NoError {
         unsafe {
-            let _ = seL4_CNode_Delete(dst_root, dst_slot, depth);
+            let _ = seL4_CNode_Delete(dst_root, dst_slot, depth_bits);
         }
         Ok(())
     } else {
@@ -409,7 +409,8 @@ pub fn cnode_copy_selftest(bi: &seL4_BootInfo) -> Result<(), seL4_Error> {
     #[cfg(target_os = "none")]
     {
         let init_bits = sel4::init_cnode_bits(bi);
-        let delete_err = unsafe { seL4_CNode_Delete(root, dst_slot as seL4_CPtr, init_bits) };
+        let depth_bits = cspace_sys::bits_as_u8(init_bits);
+        let delete_err = unsafe { seL4_CNode_Delete(root, dst_slot as seL4_CPtr, depth_bits) };
         if delete_err != seL4_NoError {
             log::warn!("[selftest] cleanup delete failed err={delete_err}");
             return Err(delete_err);
