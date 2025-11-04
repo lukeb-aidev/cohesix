@@ -366,7 +366,8 @@ pub fn prove_dest_path_with_bootinfo(
     cspace_sys::debug_identify_cap("InitCNode", dst_root as seL4_CPtr);
     cspace_sys::assert_init_cnode_layout(bi);
 
-    let depth_bits = cspace_sys::bits_as_u8(sel4::init_cnode_bits(bi));
+    let depth_bits =
+        cspace_sys::bits_as_u8(usize::from(sel4::init_cnode_bits(bi)));
     unsafe {
         let _ = seL4_CNode_Delete(dst_root, dst_slot, depth_bits);
     }
