@@ -15,7 +15,7 @@ use heapless::String;
 use super::cspace_sys;
 use sel4_sys::{
     self, seL4_BootInfo, seL4_CNode, seL4_CPtr, seL4_CapBootInfoFrame, seL4_CapInitThreadCNode,
-    seL4_CapInitThreadTCB, seL4_Word,
+    seL4_CapInitThreadTCB, seL4_Word, seL4_WordBits,
 };
 use sel4_sys::{seL4_CNode_Delete, seL4_NoError};
 #[cfg(feature = "cap-probes")]
@@ -169,12 +169,43 @@ impl InitCNode {
 }
 
 #[inline(always)]
+fn root_cnode() -> seL4_CNode {
+    seL4_CapInitThreadCNode
+}
+
+#[inline(always)]
+fn depth() -> u8 {
+    debug_assert!(seL4_WordBits <= u8::MAX as seL4_Word);
+    seL4_WordBits as u8
+}
+
+#[inline(always)]
+fn depth_word() -> seL4_Word {
+    seL4_WordBits as seL4_Word
+}
+
+#[inline(always)]
+fn idx(slot: usize) -> seL4_CPtr {
+    slot as seL4_CPtr
+}
+
+fn assert_caps_known() {
+    debug_assert_eq!(seL4_CapInitThreadCNode as usize, 2);
+    debug_assert_eq!(seL4_CapBootInfoFrame as usize, 9);
+    debug_assert_eq!(seL4_CapInitThreadTCB as usize, 1);
+}
+
+fn cap_type_of(slot: usize) -> u32 {
+    unsafe { sel4_sys::seL4_DebugCapIdentify(idx(slot)) }
+}
+
+#[inline(always)]
 pub fn root_cnode_path(
     init_cnode_bits: u8,
     dst_slot: seL4_Word,
 ) -> (seL4_CPtr, seL4_Word, seL4_Word, seL4_Word) {
-    let depth = sel4_sys::seL4_WordBits as seL4_Word;
-    let path = CNodePath::new(seL4_CapInitThreadCNode, 0, depth);
+    let depth = depth_word();
+    let path = CNodePath::new(root_cnode(), 0, depth);
     guard_root_path(
         init_cnode_bits,
         path.index as seL4_Word,
@@ -347,21 +378,35 @@ pub fn prove_dest_path_with_bootinfo(
     bi: &sel4_sys::seL4_BootInfo,
     first_free: sel4::seL4_CPtr,
 ) -> Result<(), sel4_sys::seL4_Error> {
-    let dst_root = seL4_CapInitThreadCNode as seL4_CNode;
+    assert_caps_known();
+
+    let dst_root = root_cnode();
     let src_root = dst_root;
-    let src_slot = seL4_CapBootInfoFrame as seL4_Word;
-    let dst_slot = first_free as seL4_Word;
+    let bootinfo_slot = seL4_CapBootInfoFrame as usize;
+    let dst_slot_raw = first_free as usize;
+    let dst_slot = idx(dst_slot_raw);
+    let src_slot = idx(bootinfo_slot);
+    let dst_slot_word = dst_slot as seL4_Word;
+    let src_slot_word = src_slot as seL4_Word;
+
+    let t_bootinfo = cap_type_of(bootinfo_slot);
+    assert!(
+        t_bootinfo != 0,
+        "BootInfo cap not present in slot 0x{slot:04x}",
+        slot = bootinfo_slot,
+    );
 
     cspace_sys::debug_identify_cap("InitCNode", dst_root as seL4_CPtr);
     cspace_sys::assert_init_cnode_layout(bi);
 
-    let depth_bits = cspace_sys::bits_as_u8(usize::from(sel4::init_cnode_bits(bi)));
+    let depth_bits = depth();
     unsafe {
         let _ = seL4_CNode_Delete(dst_root, dst_slot, depth_bits);
     }
 
-    let err = cspace_sys::cnode_copy_raw_single(bi, dst_root, dst_slot, src_root, src_slot);
-    ::log::info!("[probe] copy BootInfo -> 0x{dst_slot:04x} err={err}");
+    let err =
+        cspace_sys::cnode_copy_raw_single(bi, dst_root, dst_slot_word, src_root, src_slot_word);
+    ::log::info!("[probe] copy BootInfo -> 0x{dst_slot_raw:04x} err={err}");
 
     if err == seL4_NoError {
         unsafe {
@@ -376,10 +421,10 @@ pub fn prove_dest_path_with_bootinfo(
 #[cfg(feature = "cap-probes")]
 pub fn cnode_copy_selftest(bi: &seL4_BootInfo) -> Result<(), seL4_Error> {
     let (start, _end) = crate::sel4_view::empty_window(bi);
-    let root = seL4_CapInitThreadCNode;
+    let root = root_cnode();
 
-    let dst_slot = start as seL4_Word;
-    let src_slot = seL4_CapInitThreadCNode as seL4_Word;
+    let dst_slot = idx(start as usize) as seL4_Word;
+    let src_slot = idx(seL4_CapInitThreadCNode as usize) as seL4_Word;
     let rights = seL4_CapRights_All;
     log::info!(
         "[selftest] copy init CNode cap into slot 0x{start:04x} (root=0x{root:04x})",
@@ -397,9 +442,8 @@ pub fn cnode_copy_selftest(bi: &seL4_BootInfo) -> Result<(), seL4_Error> {
 
     #[cfg(target_os = "none")]
     {
-        let init_bits = sel4::init_cnode_bits(bi);
-        let depth_bits = cspace_sys::bits_as_u8(init_bits);
-        let delete_err = unsafe { seL4_CNode_Delete(root, dst_slot as seL4_CPtr, depth_bits) };
+        let depth_bits = depth();
+        let delete_err = unsafe { seL4_CNode_Delete(root, idx(start as usize), depth_bits) };
         if delete_err != seL4_NoError {
             log::warn!("[selftest] cleanup delete failed err={delete_err}");
             return Err(delete_err);
@@ -415,9 +459,9 @@ pub fn first_endpoint_retype(
     ut_cap: seL4_CPtr,
     slot: seL4_CPtr,
 ) -> Result<(), seL4_Error> {
-    let dst_root = seL4_CapInitThreadCNode;
+    let dst_root = root_cnode();
     let node_index = 0u32;
-    let node_depth = bi.initThreadCNodeSizeBits;
+    let node_depth = depth_word();
     let node_off = slot as seL4_Word;
 
     log::info!(
