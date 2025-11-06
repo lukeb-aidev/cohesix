@@ -233,9 +233,7 @@ impl CohesixConsole {
         let _ = write!(
             line,
             "[bi] node_bits={} empty=[0x{:04x}..0x{:04x}) ",
-            bi.initThreadCNodeSizeBits,
-            bi.empty.start,
-            bi.empty.end,
+            bi.initThreadCNodeSizeBits, bi.empty.start, bi.empty.end,
         );
         if let Some(ptr) = bi.ipc_buffer_ptr() {
             let addr = ptr.as_ptr() as usize;

@@ -22,7 +22,7 @@ pub struct CNodeTuple {
 impl CNodeTuple {
     #[inline(always)]
     pub fn guard_depth(&self) -> seL4_Word {
-        self.init_bits as seL4_Word
+        sel4_sys::seL4_WordBits as seL4_Word
     }
 
     #[inline(always)]
@@ -59,7 +59,7 @@ pub fn make_retype_tuple(init_cnode: seL4_CPtr, init_bits: u8) -> RetypeTuple {
     RetypeTuple {
         node_root: init_cnode,
         node_index: 0,
-        node_depth: init_bits as seL4_Word,
+        node_depth: sel4_sys::seL4_WordBits as seL4_Word,
         init_bits,
     }
 }

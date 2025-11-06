@@ -146,7 +146,7 @@ pub(crate) fn call_retype(
     dest.assert_sane();
     let style = TupleStyle::Raw;
     let node_index: sys::seL4_Word = 0;
-    let node_depth: sys::seL4_Word = dest.root_bits as sys::seL4_Word;
+    let node_depth: sys::seL4_Word = sys::seL4_WordBits as sys::seL4_Word;
     let slot_offset =
         sys::seL4_Word::try_from(dest.slot_offset).expect("slot offset must fit within seL4_Word");
     log_retype_call(
