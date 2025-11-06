@@ -1484,7 +1484,7 @@ impl RootPath {
         let root = sel4::init_cnode_cptr(bi);
         let offset = slot as sys::seL4_Word;
         let index = 0;
-        let depth = path_depth_word();
+        let depth = super::path_depth_word();
         let (empty_start, empty_end) = sel4::empty_window(bi);
         assert!(
             slot >= empty_start && slot < empty_end,
