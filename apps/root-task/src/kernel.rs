@@ -617,42 +617,15 @@ fn bootstrap<P: Platform>(
         sel4_sys::seL4_CapBootInfoFrame,
     );
 
-    let tuple_probe_selection = pick_untyped(bootinfo_ref, 4);
-    let ut_index = (tuple_probe_selection.cap - bootinfo_ref.untyped.start) as usize;
-    let ut_desc = bootinfo_ref
-        .untypedList
-        .get(ut_index)
-        .copied()
-        .unwrap_or_else(|| {
-            panic!(
-                "probe untyped index {} outside bootinfo range (start=0x{:04x} end=0x{:04x})",
-                ut_index, bootinfo_ref.untyped.start, bootinfo_ref.untyped.end,
-            )
-        });
-    log::info!(
-        "[probe] ut=0x{cap:04x} size_bits={bits} device={device}",
-        cap = tuple_probe_selection.cap,
-        bits = ut_desc.sizeBits,
-        device = ut_desc.isDevice,
-    );
-    let probe_slot = cspace_window.first_free as sel4_sys::seL4_Word;
-    let probe_src = sel4_sys::seL4_CapInitThreadCNode as sel4_sys::seL4_Word;
-    if let Err(failure) = cspace_sys::determine_tuple_style(
+    if let Err(err) = cspace_sys::verify_root_cnode_slot(
         bootinfo_ref,
-        tuple_probe_selection.cap as sel4_sys::seL4_Word,
-        probe_slot,
-        probe_src,
+        cspace_window.first_free as sel4_sys::seL4_Word,
     ) {
         panic!(
-            "tuple probe failed: copyA={} cleanA={} retypeA={} cleanA={} copyB={} cleanB={} retypeB={} cleanB={}",
-            failure.copy.raw,
-            failure.copy.cleanup_raw,
-            failure.retype.raw,
-            failure.retype.cleanup_raw,
-            failure.copy.encoded,
-            failure.copy.cleanup_encoded,
-            failure.retype.encoded,
-            failure.retype.cleanup_encoded,
+            "init CNode path probe failed: slot=0x{:04x} err={} ({})",
+            cspace_window.first_free,
+            err,
+            error_name(err),
         );
     }
 
@@ -775,7 +748,7 @@ fn bootstrap<P: Platform>(
     }
 
     match uart_pl011::bootstrap_map_pl011(bootinfo_ref, &mut boot_cspace, &retype_tuple) {
-        Ok(()) => {
+        Ok(_slot) => {
             early_uart::register_console_base(early_uart::PL011_VADDR);
             log::info!(
                 "[pl011] map OK vaddr=0x{vaddr:08x}",

@@ -6,7 +6,7 @@ use sel4_sys::{seL4_CPtr, seL4_CapNull, seL4_Error, seL4_IllegalOperation};
 
 use crate::boot::bi_extra::UntypedDesc;
 use crate::bootstrap::cspace::CSpaceWindow;
-use crate::bootstrap::cspace_sys::retype_endpoint_auto;
+use crate::bootstrap::cspace_sys::{retype_endpoint_auto, verify_root_cnode_slot};
 use crate::cspace::CSpace;
 use crate::sel4::{self, BootInfoView};
 use crate::serial;
@@ -98,7 +98,7 @@ pub fn bootstrap_ep(view: &BootInfoView, cs: &mut CSpace) -> Result<seL4_CPtr, s
         log::info!(
             "[boot] endpoint retype dest root=0x{root:04x} depth={depth} slot=0x{slot:04x}",
             root = window.root,
-            depth = sel4_sys::seL4_WordBits,
+            depth = window.bits,
             slot = window.first_free,
         );
     }
@@ -108,6 +108,16 @@ pub fn bootstrap_ep(view: &BootInfoView, cs: &mut CSpace) -> Result<seL4_CPtr, s
         ut = ut,
         slot = ep_slot,
     );
+
+    if let Err(err) = verify_root_cnode_slot(bi, ep_slot as sel4_sys::seL4_Word) {
+        log::error!(
+            "[boot] init CNode path probe failed slot=0x{slot:04x} err={err} ({name})",
+            slot = ep_slot,
+            err = err,
+            name = sel4::error_name(err),
+        );
+        return Err(err);
+    }
 
     let err = retype_endpoint_auto(
         bi,
