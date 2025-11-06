@@ -639,6 +639,27 @@ where
                 self.metrics.accepted_commands += 1;
                 self.emit_ack_ok("HELP", None);
             }
+            Command::BootInfo => {
+                self.audit.denied("console: bootinfo unsupported");
+                self.metrics.denied_commands += 1;
+                self.emit_ack_err("BOOTINFO", Some("reason=unsupported"));
+            }
+            Command::Caps => {
+                self.audit.denied("console: caps unsupported");
+                self.metrics.denied_commands += 1;
+                self.emit_ack_err("CAPS", Some("reason=unsupported"));
+            }
+            Command::Mem => {
+                self.audit.denied("console: mem unsupported");
+                self.metrics.denied_commands += 1;
+                self.emit_ack_err("MEM", Some("reason=unsupported"));
+            }
+            Command::Ping => {
+                self.audit.info("console: ping");
+                self.metrics.accepted_commands += 1;
+                self.emit_console_line("PONG");
+                self.emit_ack_ok("PING", Some("reply=pong"));
+            }
             Command::Quit => {
                 self.audit.info("console: quit");
                 self.metrics.accepted_commands += 1;
@@ -776,7 +797,12 @@ where
                     .kill(identifier.as_str(), audit)
                     .map_err(|source| CommandDispatchError::Bridge { verb, source })?;
             }
-            Command::Help | Command::Quit => {
+            Command::Help
+            | Command::Quit
+            | Command::BootInfo
+            | Command::Caps
+            | Command::Mem
+            | Command::Ping => {
                 return Err(CommandDispatchError::UnsupportedForNineDoor { verb });
             }
         }
@@ -933,6 +959,10 @@ pub(crate) enum CommandVerb {
     Spawn,
     Kill,
     Help,
+    BootInfo,
+    Caps,
+    Mem,
+    Ping,
 }
 
 #[cfg(feature = "kernel")]
@@ -946,6 +976,10 @@ impl CommandVerb {
             Self::Spawn => "SPAWN",
             Self::Kill => "KILL",
             Self::Help => "HELP",
+            Self::BootInfo => "BOOTINFO",
+            Self::Caps => "CAPS",
+            Self::Mem => "MEM",
+            Self::Ping => "PING",
         }
     }
 }
@@ -961,6 +995,10 @@ impl From<&Command> for CommandVerb {
             Command::Spawn(_) => Self::Spawn,
             Command::Kill(_) => Self::Kill,
             Command::Help => Self::Help,
+            Command::BootInfo => Self::BootInfo,
+            Command::Caps => Self::Caps,
+            Command::Mem => Self::Mem,
+            Command::Ping => Self::Ping,
         }
     }
 }

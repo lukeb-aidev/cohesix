@@ -9,7 +9,7 @@ use sel4_sys::{self as sys, seL4_CapTableObject, seL4_EndpointObject};
 #[cfg(feature = "canonical_cspace")]
 use super::cspace::first_endpoint_retype;
 use super::cspace::{slot_in_empty_window, CSpaceCtx, DestCNode};
-use super::cspace_sys::{tuple_style, tuple_style_label, TupleStyle};
+use super::cspace_sys::{tuple_style_label, TupleStyle};
 use super::ffi::raw_untyped_retype;
 use crate::bootstrap::log::force_uart_line;
 use crate::bootstrap::{boot_tracer, BootPhase, UntypedSelection};
