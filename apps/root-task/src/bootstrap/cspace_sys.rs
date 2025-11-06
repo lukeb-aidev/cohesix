@@ -163,27 +163,14 @@ pub fn cnode_copy_raw_single(
     #[cfg(target_os = "none")]
     unsafe {
         sys::seL4_CNode_Copy(
-            dst_root,
-            dst_slot,
-            depth_u8,
-            src_root,
-            src_slot,
-            depth_u8,
-            rights,
+            dst_root, dst_slot, depth_u8, src_root, src_slot, depth_u8, rights,
         )
     }
 
     #[cfg(not(target_os = "none"))]
     {
         let _ = (
-            bi,
-            dst_root,
-            dst_slot,
-            src_root,
-            src_slot,
-            depth,
-            depth_u8,
-            rights,
+            bi, dst_root, dst_slot, src_root, src_slot, depth, depth_u8, rights,
         );
         sys::seL4_NoError
     }
@@ -466,30 +453,7 @@ fn probe_cnode_copy_style(
 }
 
 #[inline(always)]
-pub fn retype_endpoint_raw(ut: sys::seL4_Word, dst: sys::seL4_Word) -> sys::seL4_Error {
-    #[cfg(target_os = "none")]
-    unsafe {
-        sys::seL4_Untyped_Retype(
-            ut,
-            sys::seL4_ObjectType::seL4_EndpointObject as sys::seL4_Word,
-            0,
-            sys::seL4_CapInitThreadCNode,
-            0,
-            0,
-            dst,
-            1,
-        )
-    }
-
-    #[cfg(not(target_os = "none"))]
-    {
-        let _ = (ut, dst);
-        sys::seL4_NoError
-    }
-}
-
-#[inline(always)]
-pub fn retype_endpoint_encoded(
+pub fn retype_endpoint_raw(
     bi: &sys::seL4_BootInfo,
     ut: sys::seL4_Word,
     dst: sys::seL4_Word,
@@ -503,7 +467,7 @@ pub fn retype_endpoint_encoded(
             sys::seL4_ObjectType::seL4_EndpointObject as sys::seL4_Word,
             0,
             sys::seL4_CapInitThreadCNode,
-            sys::seL4_CapInitThreadCNode as sys::seL4_Word,
+            0,
             depth,
             dst,
             1,
@@ -523,10 +487,8 @@ pub fn retype_endpoint_auto(
     ut: sys::seL4_Word,
     dst: sys::seL4_Word,
 ) -> sys::seL4_Error {
-    match tuple_style() {
-        TupleStyle::Raw => retype_endpoint_raw(ut, dst),
-        TupleStyle::Encoded => retype_endpoint_encoded(bi, ut, dst),
-    }
+    let _ = tuple_style();
+    retype_endpoint_raw(bi, ut, dst)
 }
 
 #[inline(always)]
@@ -545,8 +507,8 @@ fn probe_retype_style(
         ),
     };
     let err = match style {
-        TupleStyle::Raw => retype_endpoint_raw(ut, dst_slot),
-        TupleStyle::Encoded => retype_endpoint_encoded(bi, ut, dst_slot),
+        TupleStyle::Raw => retype_endpoint_raw(bi, ut, dst_slot),
+        TupleStyle::Encoded => retype_endpoint_raw(bi, ut, dst_slot),
     };
 
     ::log::info!(
@@ -1010,10 +972,11 @@ pub fn validate_retype_args(
             expected: 0,
         });
     }
-    if args.cnode_depth != 0 {
+    let expected_depth = bits_as_u8(bi_init_cnode_bits() as usize);
+    if args.cnode_depth != expected_depth {
         return Err(RetypeArgsError::DepthMismatch {
             provided: args.cnode_depth,
-            expected: 0,
+            expected: expected_depth,
         });
     }
     if args.dest_offset < empty_start || args.dest_offset >= empty_end {
@@ -1063,6 +1026,44 @@ pub fn bi_init_cnode_cptr() -> sys::seL4_CPtr {
 #[inline(always)]
 fn bi_init_cnode_bits() -> sys::seL4_Word {
     bi().initThreadCNodeSizeBits as sys::seL4_Word
+}
+
+/// Issues a delete+copy probe to confirm the init CNode slot accepts canonical addressing.
+pub fn verify_root_cnode_slot(
+    bi: &sys::seL4_BootInfo,
+    slot: sys::seL4_Word,
+) -> Result<(), sys::seL4_Error> {
+    let root = sys::seL4_CapInitThreadCNode;
+    let depth = bits_as_u8(sel4::init_cnode_bits(bi) as usize);
+    let rights = sys::seL4_CapRights::new(1, 1, 1, 1);
+
+    #[cfg(target_os = "none")]
+    unsafe {
+        let _ = sys::seL4_CNode_Delete(root, slot, depth);
+        let copy_err = sys::seL4_CNode_Copy(
+            root,
+            slot,
+            depth,
+            root,
+            sys::seL4_CapBootInfoFrame,
+            depth,
+            rights,
+        );
+        if copy_err != sys::seL4_NoError {
+            return Err(copy_err);
+        }
+        let cleanup_err = sys::seL4_CNode_Delete(root, slot, depth);
+        if cleanup_err != sys::seL4_NoError {
+            return Err(cleanup_err);
+        }
+    }
+
+    #[cfg(not(target_os = "none"))]
+    {
+        let _ = (bi, slot, root, depth, rights);
+    }
+
+    Ok(())
 }
 
 #[cfg(target_os = "none")]
@@ -1551,7 +1552,7 @@ pub fn init_cnode_retype_dest(
     );
     let root = bi_init_cnode_cptr();
     let node_index = 0;
-    let node_depth = 0;
+    let node_depth = init_bits_word;
     let node_offset = slot as sys::seL4_Word;
     let depth_bits = bits_as_u8(init_bits_usize);
     debug_assert!(
@@ -2012,7 +2013,7 @@ pub fn untyped_retype_into_init_root(
     let (root, node_index, node_depth, node_offset) = init_cnode_retype_dest(dst_slot);
     debug_assert_eq!(root, sel4::seL4_CapInitThreadCNode);
     debug_assert_eq!(node_index, 0);
-    debug_assert_eq!(node_depth, 0);
+    debug_assert_eq!(node_depth, bi_init_cnode_bits());
     let args = RetypeArgs::new(
         untyped_slot,
         obj_type,
@@ -2030,7 +2031,8 @@ pub fn untyped_retype_into_init_root(
     {
         let (empty_start, empty_end) = boot_empty_window();
         debug_assert_eq!(node_index, 0);
-        debug_assert_eq!(args.cnode_depth, 0);
+        let expected_depth = bits_as_u8(bi_init_cnode_bits() as usize);
+        debug_assert_eq!(args.cnode_depth, expected_depth);
         debug_assert!(args.dest_offset >= empty_start && args.dest_offset < empty_end);
 
         validate_retype_args(&args, empty_start, empty_end)?;
@@ -2286,8 +2288,17 @@ mod tests {
         let empty_start = 0x100;
         let empty_end = 0x200;
         let dest_offset = 0x180;
-        let args =
-            super::RetypeArgs::new(0x80, 0x20, 12, bi_init_cnode_cptr(), 0, 0, dest_offset, 1);
+        let depth = super::bits_as_u8(13);
+        let args = super::RetypeArgs::new(
+            0x80,
+            0x20,
+            12,
+            bi_init_cnode_cptr(),
+            0,
+            depth as sys::seL4_Word,
+            dest_offset,
+            1,
+        );
         assert!(
             super::validate_retype_args(&args, empty_start, empty_end).is_ok(),
             "canonical args should validate"
@@ -2307,13 +2318,14 @@ mod tests {
         let empty_end = 0x200u64;
         let empty_start = empty_start_raw;
         let encoded_before_window = empty_start_raw - 1;
+        let depth = super::bits_as_u8(13) as sys::seL4_Word;
         let args = super::RetypeArgs::new(
             0x90,
             0x30,
             10,
             bi_init_cnode_cptr(),
             0,
-            0,
+            depth,
             encoded_before_window,
             1,
         );

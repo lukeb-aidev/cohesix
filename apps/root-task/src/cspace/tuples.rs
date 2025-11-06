@@ -27,7 +27,7 @@ impl CNodeTuple {
 
     #[inline(always)]
     pub fn encode_slot(&self, slot: seL4_Word) -> seL4_Word {
-        crate::bootstrap::cspace_sys::encode_slot(slot as u64, self.init_bits) as seL4_Word
+        slot
     }
 }
 

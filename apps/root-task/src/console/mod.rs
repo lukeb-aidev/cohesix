@@ -1,5 +1,7 @@
 // Author: Lukas Bower
 
+#![allow(unsafe_code)]
+
 //! Shared console command parser and rate limiter for the root task console.
 
 #[cfg(feature = "kernel")]
@@ -12,6 +14,15 @@ use core::fmt;
 use crate::platform::Platform;
 
 use heapless::String;
+
+#[cfg(feature = "kernel")]
+use crate::sel4;
+#[cfg(feature = "kernel")]
+use crate::uart::pl011;
+#[cfg(feature = "kernel")]
+use core::fmt::Write as FmtWrite;
+#[cfg(feature = "kernel")]
+use sel4_sys::seL4_CPtr;
 
 /// Maximum length accepted for a single console line.
 pub const MAX_LINE_LEN: usize = 128;
@@ -33,6 +44,10 @@ const COOLDOWN_MS: u64 = 90_000;
 #[allow(missing_docs)]
 pub enum Command {
     Help,
+    BootInfo,
+    Caps,
+    Mem,
+    Ping,
     Attach {
         role: String<MAX_ROLE_LEN>,
         ticket: Option<String<MAX_TICKET_LEN>>,
@@ -167,6 +182,186 @@ pub fn run<P: Platform>(platform: &P) -> ! {
     }
 }
 
+#[cfg(feature = "kernel")]
+pub struct CohesixConsole {
+    ep_slot: seL4_CPtr,
+    uart_slot: seL4_CPtr,
+    parser: CommandParser,
+}
+
+#[cfg(feature = "kernel")]
+impl CohesixConsole {
+    #[must_use]
+    pub fn new(ep_slot: seL4_CPtr, uart_slot: seL4_CPtr) -> Self {
+        Self {
+            ep_slot,
+            uart_slot,
+            parser: CommandParser::new(),
+        }
+    }
+
+    fn emit(&self, text: &str) {
+        pl011::write_str(text);
+    }
+
+    fn emit_line(&self, text: &str) {
+        self.emit(text);
+        self.emit("\r\n");
+    }
+
+    fn prompt(&self) {
+        self.emit("Cohesix> ");
+    }
+
+    fn bootinfo(&self) -> &'static sel4_sys::seL4_BootInfo {
+        unsafe { &*sel4_sys::seL4_GetBootInfo() }
+    }
+
+    fn print_help(&self) {
+        self.emit_line("Commands:");
+        self.emit_line("  help  - Show this help");
+        self.emit_line("  bi    - Show bootinfo summary");
+        self.emit_line("  caps  - Show capability slots");
+        self.emit_line("  mem   - Show untyped summary");
+        self.emit_line("  ping  - Respond with pong");
+        self.emit_line("  quit  - Exit the console session");
+    }
+
+    fn print_bootinfo(&self) {
+        let bi = self.bootinfo();
+        let mut line = String::<128>::new();
+        let _ = write!(
+            line,
+            "[bi] node_bits={} empty=[0x{:04x}..0x{:04x}) ipc=0x{:08x}",
+            bi.initThreadCNodeSizeBits, bi.empty.start, bi.empty.end, bi.ipcBufferPaddr,
+        );
+        self.emit_line(line.as_str());
+    }
+
+    fn print_caps(&self) {
+        let bi = self.bootinfo();
+        let mut line = String::<128>::new();
+        let _ = write!(
+            line,
+            "[caps] root=0x{:04x} ep=0x{:04x} uart=0x{:04x}",
+            bi.init_cnode_cap(),
+            self.ep_slot,
+            self.uart_slot,
+        );
+        self.emit_line(line.as_str());
+    }
+
+    fn print_mem(&self) {
+        let bi = self.bootinfo();
+        let count = (bi.untyped.end - bi.untyped.start) as usize;
+        let mut ram_ut = 0usize;
+        for desc in bi.untypedList.iter().take(count) {
+            if desc.isDevice == 0 {
+                ram_ut += 1;
+            }
+        }
+        let mut line = String::<128>::new();
+        let _ = write!(
+            line,
+            "[mem] untyped caps={} ram_ut={} device_ut={}",
+            count,
+            ram_ut,
+            count.saturating_sub(ram_ut),
+        );
+        self.emit_line(line.as_str());
+    }
+
+    fn handle_command(&mut self, command: Command) {
+        match command {
+            Command::Help => self.print_help(),
+            Command::BootInfo => self.print_bootinfo(),
+            Command::Caps => self.print_caps(),
+            Command::Mem => self.print_mem(),
+            Command::Ping => self.emit_line("pong"),
+            Command::Quit => self.emit_line("quit not supported on root console"),
+            Command::Log => self.emit_line("log streaming unavailable"),
+            Command::Attach { .. }
+            | Command::Tail { .. }
+            | Command::Spawn(_)
+            | Command::Kill(_) => self.emit_line("command not implemented"),
+        }
+    }
+
+    fn reset_parser(&mut self) {
+        self.parser = CommandParser::new();
+    }
+
+    fn echo(&self, byte: u8) {
+        match byte {
+            b'\r' | b'\n' => self.emit("\r\n"),
+            0x08 | 0x7f => self.emit("\x08 \x08"),
+            _ => {
+                let mut buf = [0u8; 4];
+                let s = char::from(byte).encode_utf8(&mut buf);
+                self.emit(s);
+            }
+        }
+    }
+
+    pub fn run(&mut self) -> ! {
+        pl011::init_pl011();
+        log::info!(
+            "[console] starting root shell ep=0x{ep:04x} uart=0x{uart:04x}",
+            ep = self.ep_slot,
+            uart = self.uart_slot,
+        );
+        self.emit_line("[console] Cohesix console ready");
+        self.prompt();
+
+        loop {
+            if let Some(byte) = pl011::poll_byte() {
+                let mapped = match byte {
+                    b'\r' | b'\n' => {
+                        self.echo(b'\n');
+                        Some(b'\n')
+                    }
+                    0x08 | 0x7f => {
+                        self.echo(byte);
+                        Some(byte)
+                    }
+                    _ => {
+                        self.echo(byte);
+                        Some(byte)
+                    }
+                };
+
+                if let Some(token) = mapped {
+                    match self.parser.push_byte(token) {
+                        Ok(Some(command)) => {
+                            self.handle_command(command);
+                            self.reset_parser();
+                            self.prompt();
+                        }
+                        Ok(None) => {}
+                        Err(err) => {
+                            let mut line = String::<128>::new();
+                            let _ = write!(line, "error: {err}");
+                            self.emit_line(line.as_str());
+                            self.reset_parser();
+                            self.prompt();
+                        }
+                    }
+                }
+            } else {
+                sel4::yield_now();
+            }
+        }
+    }
+}
+
+#[cfg(feature = "kernel")]
+impl FmtWrite for CohesixConsole {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        self.emit(s);
+        Ok(())
+    }
+}
+
 /// Finite-state console parser building commands from incoming bytes.
 #[derive(Debug, Default)]
 pub struct CommandParser {
@@ -230,6 +425,10 @@ impl CommandParser {
         let remainder = parts.next().map(str::trim).unwrap_or("");
         match verb {
             v if v.eq_ignore_ascii_case("help") => Ok(Command::Help),
+            v if v.eq_ignore_ascii_case("bi") => Ok(Command::BootInfo),
+            v if v.eq_ignore_ascii_case("caps") => Ok(Command::Caps),
+            v if v.eq_ignore_ascii_case("mem") => Ok(Command::Mem),
+            v if v.eq_ignore_ascii_case("ping") => Ok(Command::Ping),
             v if v.eq_ignore_ascii_case("log") => Ok(Command::Log),
             v if v.eq_ignore_ascii_case("quit") => Ok(Command::Quit),
             v if v.eq_ignore_ascii_case("tail") => {

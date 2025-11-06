@@ -2,11 +2,30 @@
 //! Bootstrap helpers for mapping the PL011 UART console.
 #![allow(unsafe_code)]
 
+use core::sync::atomic::{AtomicUsize, Ordering};
+
 use crate::cspace::tuples::RetypeTuple;
 use crate::cspace::CSpace;
 use crate::uart::pl011;
 use log::warn;
 use sel4_sys::{self, seL4_CPtr, seL4_CapInitThreadVSpace, seL4_Error, seL4_NoError};
+
+static UART_FRAME_SLOT: AtomicUsize = AtomicUsize::new(sel4_sys::seL4_CapNull as usize);
+
+/// Publish the capability slot holding the PL011 frame mapping.
+pub fn publish_uart_slot(slot: seL4_CPtr) {
+    UART_FRAME_SLOT.store(slot as usize, Ordering::Release);
+}
+
+/// Retrieve the published PL011 frame slot, if it has been mapped.
+pub fn uart_slot() -> Option<seL4_CPtr> {
+    let slot = UART_FRAME_SLOT.load(Ordering::Acquire) as seL4_CPtr;
+    if slot == sel4_sys::seL4_CapNull {
+        None
+    } else {
+        Some(slot)
+    }
+}
 
 /// Locate the device untyped that backs the PL011 UART MMIO page.
 #[must_use]
@@ -33,10 +52,10 @@ pub fn bootstrap_map_pl011(
     bi: &sel4_sys::seL4_BootInfo,
     cs: &mut CSpace,
     tuple: &RetypeTuple,
-) -> Result<(), seL4_Error> {
+) -> Result<seL4_CPtr, seL4_Error> {
     let Some(device_ut) = find_pl011_device_ut(bi) else {
         warn!("[pl011] device untyped not found; continuing without MMIO console");
-        return Ok(());
+        return Ok(sel4_sys::seL4_CapNull);
     };
 
     let page_slot = cs.alloc_slot()?;
@@ -47,6 +66,18 @@ pub fn bootstrap_map_pl011(
         slot = page_slot,
     );
 
+    if let Err(err) =
+        crate::bootstrap::cspace_sys::verify_root_cnode_slot(bi, page_slot as sel4_sys::seL4_Word)
+    {
+        warn!(
+            "[pl011] init CNode path probe failed slot=0x{slot:04x} err={err} ({name})",
+            slot = page_slot,
+            err = err,
+            name = crate::sel4::error_name(err),
+        );
+        return Err(err);
+    }
+
     let map_err = pl011::map_pl011_smallpage(
         device_ut,
         page_slot as sel4_sys::seL4_Word,
@@ -55,7 +86,8 @@ pub fn bootstrap_map_pl011(
     );
     if map_err == seL4_NoError {
         log::info!("[cs] first_free=0x{slot:04x}", slot = cs.next_free_slot());
-        Ok(())
+        publish_uart_slot(page_slot);
+        Ok(page_slot)
     } else {
         warn!(
             "[pl011] map failed slot=0x{slot:04x} err={err}",
