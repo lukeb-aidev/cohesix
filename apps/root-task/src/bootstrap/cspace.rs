@@ -146,8 +146,8 @@ impl InitCNode {
     #[must_use]
     pub fn from_bootinfo(bi: &seL4_BootInfo) -> Self {
         let root = seL4_CapInitThreadCNode;
-        let depth = bi.initThreadCNodeSizeBits as seL4_Word;
-        let index = root;
+        let depth = sel4_sys::seL4_WordBits as seL4_Word;
+        let index = 0;
         let bits = bi.initThreadCNodeSizeBits as u8;
         let empty = SlotRange::new(bi.empty.start as seL4_Word, bi.empty.end as seL4_Word);
         Self {
@@ -173,8 +173,8 @@ pub fn root_cnode_path(
     init_cnode_bits: u8,
     dst_slot: seL4_Word,
 ) -> (seL4_CPtr, seL4_Word, seL4_Word, seL4_Word) {
-    let depth = init_cnode_bits as seL4_Word;
-    let path = CNodePath::new(seL4_CapInitThreadCNode, seL4_CapInitThreadCNode, depth);
+    let depth = sel4_sys::seL4_WordBits as seL4_Word;
+    let path = CNodePath::new(seL4_CapInitThreadCNode, 0, depth);
     guard_root_path(
         init_cnode_bits,
         path.index as seL4_Word,
@@ -191,27 +191,16 @@ pub fn guard_root_path(init_cnode_bits: u8, index: seL4_Word, depth: seL4_Word, 
         depth, word_bits,
         "depth must equal seL4_WordBits for init CNode addressing",
     );
+    assert_eq!(
+        index, 0,
+        "node index must be zero for init CNode direct path"
+    );
     let limit = if init_cnode_bits as usize >= usize::BITS as usize {
         usize::MAX
     } else {
         1usize << init_cnode_bits
     };
     assert!((offset as usize) < limit, "slot out of range",);
-    let word_bits_usize = usize::try_from(word_bits).expect("WORD_BITS must fit in usize");
-    let init_bits_usize = usize::from(init_cnode_bits);
-    assert!(
-        init_bits_usize <= word_bits_usize,
-        "initThreadCNodeSizeBits must not exceed WORD_BITS",
-    );
-    let shift = word_bits_usize - init_bits_usize;
-    let expected_index = ((offset as usize) << shift) as seL4_Word;
-    assert_eq!(
-        index,
-        expected_index,
-        "encoded index {index:#x} does not match slot {offset:#x}",
-        index = index,
-        offset = offset,
-    );
 }
 
 #[inline(always)]

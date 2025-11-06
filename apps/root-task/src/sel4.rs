@@ -547,8 +547,8 @@ pub fn replyrecv_guarded(
 /// `seL4_BootInfo::initThreadCNodeSizeBits`. This helper exists for compatibility with host-side
 /// traces that still model the guard-encoded calling convention.
 #[inline]
-pub fn init_cnode_depth(bi: &seL4_BootInfo) -> u8 {
-    bi.initThreadCNodeSizeBits as u8
+pub fn init_cnode_depth(_bi: &seL4_BootInfo) -> u8 {
+    sel4_sys::seL4_WordBits as u8
 }
 
 /// Emits a single byte to the seL4 debug console.
@@ -725,7 +725,8 @@ pub fn cnode_copy(
     rights: sel4_sys::seL4_CapRights,
 ) -> seL4_Error {
     debug_put_char(b'C' as i32);
-    let depth_bits = bootinfo.initThreadCNodeSizeBits as u8;
+    let _ = bootinfo;
+    let depth_bits = sel4_sys::seL4_WordBits as u8;
     unsafe {
         seL4_CNode_Copy(
             dest_root, dest_index, depth_bits, src_root, src_index, depth_bits, rights,
@@ -786,7 +787,8 @@ pub(crate) fn cnode_mint(
     badge: seL4_Word,
 ) -> seL4_Error {
     debug_put_char(b'C' as i32);
-    let depth_bits = bootinfo.initThreadCNodeSizeBits as u8;
+    let _ = bootinfo;
+    let depth_bits = sel4_sys::seL4_WordBits as u8;
     unsafe {
         seL4_CNode_Mint(
             dest_root, dest_index, depth_bits, src_root, src_index, depth_bits, rights, badge,
