@@ -24,23 +24,23 @@ use core::sync::atomic::AtomicBool;
 static PREFLIGHT_COMPLETED: AtomicBool = AtomicBool::new(false);
 
 #[inline(always)]
-fn root_cnode() -> seL4_CNode {
+pub fn root_cnode() -> seL4_CNode {
     seL4_CapInitThreadCNode
 }
 
 #[inline(always)]
-fn path_depth() -> u8 {
+pub fn path_depth() -> u8 {
     debug_assert!(seL4_WordBits <= u8::MAX as sys::seL4_Word);
     seL4_WordBits as u8
 }
 
 #[inline(always)]
-fn path_depth_word() -> sys::seL4_Word {
+pub fn path_depth_word() -> sys::seL4_Word {
     seL4_WordBits as sys::seL4_Word
 }
 
 #[inline(always)]
-fn slot_index(slot: sys::seL4_Word) -> sys::seL4_CPtr {
+pub fn slot_index(slot: sys::seL4_Word) -> sys::seL4_CPtr {
     slot as sys::seL4_CPtr
 }
 
@@ -1714,7 +1714,7 @@ pub mod canonical {
         ));
 
         let root = sys::seL4_CapInitThreadCNode;
-        let depth = sel4::init_cnode_bits(bi) as sys::seL4_Word;
+        let depth = path_depth_word();
         let offset = path.offset();
         let idx = 0;
 
