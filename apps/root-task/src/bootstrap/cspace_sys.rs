@@ -1484,7 +1484,7 @@ impl RootPath {
         let root = sel4::init_cnode_cptr(bi);
         let offset = slot as sys::seL4_Word;
         let index = 0;
-        let depth = super::path_depth_word();
+        let depth = path_depth_word();
         let (empty_start, empty_end) = sel4::empty_window(bi);
         assert!(
             slot >= empty_start && slot < empty_end,
@@ -1579,7 +1579,7 @@ pub use bits_as_u8 as super_bits_as_u8_for_test;
 pub mod canonical {
     #[cfg(not(target_os = "none"))]
     use super::host_trace;
-    use super::{bits_as_u8, debug_log, sel4, slot_index, sys, RootPath};
+    use super::{bits_as_u8, debug_log, path_depth_word, sel4, slot_index, sys, RootPath};
 
     #[inline(always)]
     fn build_root_path(slot: u32, bi: &sys::seL4_BootInfo) -> RootPath {
