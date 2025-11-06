@@ -16,7 +16,7 @@ use crate::platform::Platform;
 use heapless::String;
 
 #[cfg(feature = "kernel")]
-use crate::sel4;
+use crate::sel4::{self, BootInfoExt};
 #[cfg(feature = "kernel")]
 use crate::uart::pl011;
 #[cfg(feature = "kernel")]
@@ -232,9 +232,18 @@ impl CohesixConsole {
         let mut line = String::<128>::new();
         let _ = write!(
             line,
-            "[bi] node_bits={} empty=[0x{:04x}..0x{:04x}) ipc=0x{:08x}",
-            bi.initThreadCNodeSizeBits, bi.empty.start, bi.empty.end, bi.ipcBufferPaddr,
+            "[bi] node_bits={} empty=[0x{:04x}..0x{:04x}) ",
+            bi.initThreadCNodeSizeBits,
+            bi.empty.start,
+            bi.empty.end,
         );
+        if let Some(ptr) = bi.ipc_buffer_ptr() {
+            let addr = ptr.as_ptr() as usize;
+            let width = core::mem::size_of::<usize>() * 2;
+            let _ = write!(line, "ipc=0x{addr:0width$x}");
+        } else {
+            let _ = line.push_str("ipc=<none>");
+        }
         self.emit_line(line.as_str());
     }
 

@@ -2,8 +2,6 @@
 
 pub mod tuples;
 
-use core::convert::TryFrom;
-
 use crate::sel4::{self, BootInfoExt};
 use sel4_sys::{seL4_BootInfo, seL4_CPtr, seL4_Error, seL4_Word};
 
