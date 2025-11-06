@@ -1048,7 +1048,7 @@ fn bi_init_cnode_bits() -> sys::seL4_Word {
 
 /// Issues a delete+copy probe to confirm the init CNode slot accepts canonical addressing.
 pub fn verify_root_cnode_slot(
-    bi: &sys::seL4_BootInfo,
+    _bi: &sys::seL4_BootInfo,
     slot: sys::seL4_Word,
 ) -> Result<(), sys::seL4_Error> {
     let root = root_cnode();
@@ -1579,7 +1579,7 @@ pub use bits_as_u8 as super_bits_as_u8_for_test;
 pub mod canonical {
     #[cfg(not(target_os = "none"))]
     use super::host_trace;
-    use super::{bits_as_u8, debug_log, sel4, sys, RootPath};
+    use super::{bits_as_u8, debug_log, sel4, slot_index, sys, RootPath};
 
     #[inline(always)]
     fn build_root_path(slot: u32, bi: &sys::seL4_BootInfo) -> RootPath {
