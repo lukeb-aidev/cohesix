@@ -277,13 +277,8 @@ pub fn enc_index(
     bi: &sys::seL4_BootInfo,
     style: TupleStyle,
 ) -> sys::seL4_Word {
-    match style {
-        TupleStyle::Raw => slot,
-        TupleStyle::Encoded => {
-            let bits = sel4::init_cnode_bits(bi);
-            encode_slot(slot as u64, bits) as sys::seL4_Word
-        }
-    }
+    let _ = (bi, style);
+    slot
 }
 
 #[derive(Clone, Copy, Debug)]
