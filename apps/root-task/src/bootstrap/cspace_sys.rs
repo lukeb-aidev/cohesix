@@ -264,8 +264,8 @@ pub fn encode_slot(slot: u64, bits: u8) -> u64 {
 }
 
 #[inline(always)]
-pub fn cnode_depth(_bi: &sys::seL4_BootInfo, _style: TupleStyle) -> sys::seL4_Word {
-    path_depth_word()
+pub fn cnode_depth(bi: &sys::seL4_BootInfo, _style: TupleStyle) -> sys::seL4_Word {
+    sel4::init_cnode_bits(bi) as sys::seL4_Word
 }
 
 #[inline(always)]
