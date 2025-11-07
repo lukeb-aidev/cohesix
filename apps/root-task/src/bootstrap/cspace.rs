@@ -408,14 +408,37 @@ pub fn prove_dest_path_with_bootinfo(
         cspace_sys::cnode_copy_raw_single(bi, dst_root, dst_slot_word, src_root, src_slot_word);
     ::log::info!("[probe] copy BootInfo -> 0x{dst_slot_raw:04x} err={err}");
 
-    if err == seL4_NoError {
+    let mut cleanup = || {
+        let depth_bits = depth();
         unsafe {
             let _ = seL4_CNode_Delete(dst_root, dst_slot, depth_bits);
         }
-        Ok(())
-    } else {
-        Err(err)
+    };
+
+    if err == seL4_NoError {
+        cleanup();
+        return Ok(());
     }
+
+    if err == seL4_FailedLookup {
+        ::log::warn!(
+            "[probe] BootInfo copy failed with seL4_FailedLookup — probing with InitThreadTCB"
+        );
+        let tcb_slot = seL4_CapInitThreadTCB as usize;
+        let tcb_slot_word = idx(tcb_slot) as seL4_Word;
+        let fallback_err =
+            cspace_sys::cnode_copy_raw_single(bi, dst_root, dst_slot_word, src_root, tcb_slot_word);
+        ::log::info!(
+            "[probe] copy InitThreadTCB -> 0x{dst_slot_raw:04x} err={fallback_err}"
+        );
+        if fallback_err == seL4_NoError {
+            cleanup();
+            return Ok(());
+        }
+        return Err(fallback_err);
+    }
+
+    Err(err)
 }
 
 #[cfg(feature = "cap-probes")]

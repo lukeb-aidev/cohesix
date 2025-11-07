@@ -70,13 +70,13 @@ impl TupleStyle {
     #[inline(always)]
     fn fallback(self) -> Option<Self> {
         match self {
-            Self::Raw => Some(Self::Encoded),
             Self::Encoded => Some(Self::Raw),
+            _ => None,
         }
     }
 }
 
-static SELECTED_TUPLE_STYLE: AtomicU8 = AtomicU8::new(TupleStyle::Encoded as u8);
+static SELECTED_TUPLE_STYLE: AtomicU8 = AtomicU8::new(TupleStyle::Raw as u8);
 
 #[inline(always)]
 pub fn tuple_style() -> TupleStyle {
@@ -227,22 +227,22 @@ pub fn cnode_copy_raw_single(
 
     if should_retry(first) {
         if let Some(fallback) = initial_style.fallback() {
-        ::log::warn!(
-            "[cnode.copy/raw] style={} failed err={} — retrying with {}",
-            tuple_style_label(initial_style),
-            first,
-            tuple_style_label(fallback),
-        );
-        let second = copy_once(bi, dst_root, dst_slot, src_root, src_slot, fallback);
-        if second == sys::seL4_NoError {
-            set_tuple_style(fallback);
-            ::log::info!(
-                "[cnode] tuple style promoted to {}",
-                tuple_style_label(fallback)
+            ::log::warn!(
+                "[cnode.copy/raw] style={} failed err={} — retrying with {}",
+                tuple_style_label(initial_style),
+                first,
+                tuple_style_label(fallback),
             );
+            let second = copy_once(bi, dst_root, dst_slot, src_root, src_slot, fallback);
+            if second == sys::seL4_NoError {
+                set_tuple_style(fallback);
+                ::log::info!(
+                    "[cnode] tuple style promoted to {}",
+                    tuple_style_label(fallback)
+                );
+            }
+            return second;
         }
-        return second;
-    }
     }
 
     first
@@ -264,20 +264,16 @@ pub fn encode_slot(slot: u64, bits: u8) -> u64 {
 }
 
 #[inline(always)]
-pub fn cnode_depth(bi: &sys::seL4_BootInfo, style: TupleStyle) -> sys::seL4_Word {
-    match style {
-        TupleStyle::Raw => path_depth_word(),
-        TupleStyle::Encoded => sel4::init_cnode_bits(bi) as sys::seL4_Word,
-    }
+pub fn cnode_depth(_bi: &sys::seL4_BootInfo, _style: TupleStyle) -> sys::seL4_Word {
+    path_depth_word()
 }
 
 #[inline(always)]
 pub fn enc_index(
     slot: sys::seL4_Word,
-    bi: &sys::seL4_BootInfo,
-    style: TupleStyle,
+    _bi: &sys::seL4_BootInfo,
+    _style: TupleStyle,
 ) -> sys::seL4_Word {
-    let _ = (bi, style);
     slot
 }
 
@@ -678,22 +674,6 @@ pub fn determine_tuple_style(
             set_tuple_style(TupleStyle::Raw);
             ::log::info!("[probe] style=Raw");
             return Ok(TupleStyle::Raw);
-        }
-    }
-
-    let (copy_enc_err, copy_enc_cleanup) =
-        probe_cnode_copy_style(bi, test_slot, src_slot, TupleStyle::Encoded, 'B');
-    failure.copy.encoded = copy_enc_err;
-    failure.copy.cleanup_encoded = copy_enc_cleanup;
-    if copy_enc_err == sys::seL4_NoError && copy_enc_cleanup == sys::seL4_NoError {
-        let (retype_enc_err, retype_enc_cleanup) =
-            probe_retype_style(bi, ut_cap, test_slot, TupleStyle::Encoded, 'B');
-        failure.retype.encoded = retype_enc_err;
-        failure.retype.cleanup_encoded = retype_enc_cleanup;
-        if retype_enc_err == sys::seL4_NoError && retype_enc_cleanup == sys::seL4_NoError {
-            set_tuple_style(TupleStyle::Encoded);
-            ::log::info!("[probe] style=Encoded");
-            return Ok(TupleStyle::Encoded);
         }
     }
 
@@ -1107,14 +1087,36 @@ pub fn verify_root_cnode_slot(
         let _ = cnode_delete_with_style(bi, root, slot, style);
         let copy_err =
             cnode_copy_raw_single(bi, root, slot, root, sys::seL4_CapBootInfoFrame as sys::seL4_Word);
-        if copy_err != sys::seL4_NoError {
-            return Err(copy_err);
+        if copy_err == sys::seL4_NoError {
+            let cleanup_style = tuple_style();
+            let cleanup_err = cnode_delete_with_style(bi, root, slot, cleanup_style);
+            if cleanup_err != sys::seL4_NoError {
+                return Err(cleanup_err);
+            }
+            return Ok(());
         }
-        let cleanup_style = tuple_style();
-        let cleanup_err = cnode_delete_with_style(bi, root, slot, cleanup_style);
-        if cleanup_err != sys::seL4_NoError {
-            return Err(cleanup_err);
+        if copy_err == sys::seL4_FailedLookup {
+            ::log::warn!(
+                "[verify_root_cnode_slot] BootInfo copy failed; retrying with InitThreadTCB"
+            );
+            let fallback_err = cnode_copy_raw_single(
+                bi,
+                root,
+                slot,
+                root,
+                sys::seL4_CapInitThreadTCB as sys::seL4_Word,
+            );
+            if fallback_err == sys::seL4_NoError {
+                let cleanup_style = tuple_style();
+                let cleanup_err = cnode_delete_with_style(bi, root, slot, cleanup_style);
+                if cleanup_err != sys::seL4_NoError {
+                    return Err(cleanup_err);
+                }
+                return Ok(());
+            }
+            return Err(fallback_err);
         }
+        return Err(copy_err);
     }
 
     #[cfg(not(target_os = "none"))]
