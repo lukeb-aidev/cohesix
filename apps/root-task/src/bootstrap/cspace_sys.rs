@@ -167,9 +167,8 @@ pub fn cnode_copy_raw_single(
     src_root: sys::seL4_CNode,
     src_slot: sys::seL4_Word,
 ) -> sys::seL4_Error {
-    let _ = bi;
-    let depth = path_depth_word();
-    let depth_u8 = path_depth();
+    let depth_u8 = sel4::init_cnode_bits(bi);
+    let depth = depth_u8 as sys::seL4_Word;
     let rights = sys::seL4_CapRights::new(1, 1, 1, 1);
 
     ::log::info!(
@@ -219,8 +218,8 @@ pub fn encode_slot(slot: u64, bits: u8) -> u64 {
 }
 
 #[inline(always)]
-pub fn cnode_depth(_bi: &sys::seL4_BootInfo, _style: TupleStyle) -> sys::seL4_Word {
-    path_depth_word()
+pub fn cnode_depth(bi: &sys::seL4_BootInfo, _style: TupleStyle) -> sys::seL4_Word {
+    sel4::init_cnode_bits(bi) as sys::seL4_Word
 }
 
 #[inline(always)]
@@ -1048,11 +1047,11 @@ fn bi_init_cnode_bits() -> sys::seL4_Word {
 
 /// Issues a delete+copy probe to confirm the init CNode slot accepts canonical addressing.
 pub fn verify_root_cnode_slot(
-    _bi: &sys::seL4_BootInfo,
+    bi: &sys::seL4_BootInfo,
     slot: sys::seL4_Word,
 ) -> Result<(), sys::seL4_Error> {
     let root = root_cnode();
-    let depth = path_depth();
+    let depth = sel4::init_cnode_bits(bi);
     let rights = sys::seL4_CapRights::new(1, 1, 1, 1);
 
     #[cfg(target_os = "none")]
@@ -1116,7 +1115,7 @@ pub fn preflight_init_cnode_writable(probe_slot: sys::seL4_CPtr) -> Result<(), P
 
     #[cfg(target_os = "none")]
     {
-        let depth = path_depth();
+        let depth = bits as u8;
         let src_index = CANONICAL_INIT_CNODE_SLOT as sys::seL4_CPtr;
         let err = unsafe {
             sys::seL4_CNode_Mint(
@@ -1246,8 +1245,7 @@ pub fn encode_cnode_depth(bits: u8) -> sys::seL4_Word {
 /// Depth (in bits) used when traversing the init CNode for syscall arguments.
 #[inline(always)]
 fn init_cspace_depth_words(bi: &sys::seL4_BootInfo) -> sys::seL4_Word {
-    let _ = bi;
-    path_depth_word()
+    sel4::init_cnode_bits(bi) as sys::seL4_Word
 }
 
 #[inline(always)]
