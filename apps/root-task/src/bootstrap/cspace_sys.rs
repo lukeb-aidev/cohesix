@@ -7,8 +7,6 @@ extern crate alloc;
 
 use core::convert::TryFrom;
 use core::fmt;
-use core::sync::atomic::{AtomicU8, Ordering};
-
 #[cfg(target_os = "none")]
 use crate::boot::flags;
 use crate::bootstrap::cspace::CSpaceWindow;
@@ -18,7 +16,7 @@ use crate::sel4;
 use sel4_sys::{self as sys, seL4_CNode, seL4_CapInitThreadCNode, seL4_WordBits};
 
 #[cfg(target_os = "none")]
-use core::sync::atomic::AtomicBool;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 #[cfg(target_os = "none")]
 static PREFLIGHT_COMPLETED: AtomicBool = AtomicBool::new(false);
@@ -60,32 +58,20 @@ impl TupleStyle {
     }
 
     #[inline(always)]
-    fn as_u8(self) -> u8 {
-        match self {
-            Self::Raw => 0,
-            Self::Encoded => 1,
-        }
-    }
-
-    #[inline(always)]
     fn fallback(self) -> Option<Self> {
-        match self {
-            Self::Encoded => Some(Self::Raw),
-            Self::Raw => None,
-        }
+        let _ = self;
+        None
     }
 }
 
-static SELECTED_TUPLE_STYLE: AtomicU8 = AtomicU8::new(TupleStyle::Encoded as u8);
-
 #[inline(always)]
 pub fn tuple_style() -> TupleStyle {
-    TupleStyle::from_u8(SELECTED_TUPLE_STYLE.load(Ordering::Relaxed))
+    TupleStyle::Raw
 }
 
 #[inline(always)]
 fn set_tuple_style(style: TupleStyle) {
-    SELECTED_TUPLE_STYLE.store(style.as_u8(), Ordering::Relaxed);
+    let _ = style;
 }
 
 #[inline(always)]
@@ -264,26 +250,14 @@ pub fn encode_slot(slot: u64, bits: u8) -> u64 {
 }
 
 #[inline(always)]
-pub fn cnode_depth(bi: &sys::seL4_BootInfo, style: TupleStyle) -> sys::seL4_Word {
-    match style {
-        TupleStyle::Raw => path_depth_word(),
-        TupleStyle::Encoded => sel4::init_cnode_bits(bi) as sys::seL4_Word,
-    }
+pub fn cnode_depth(_bi: &sys::seL4_BootInfo, _style: TupleStyle) -> sys::seL4_Word {
+    path_depth_word()
 }
 
 #[inline(always)]
-pub fn enc_index(
-    slot: sys::seL4_Word,
-    bi: &sys::seL4_BootInfo,
-    style: TupleStyle,
-) -> sys::seL4_Word {
-    match style {
-        TupleStyle::Raw => {
-            let bits = sel4::init_cnode_bits(bi);
-            encode_slot(slot as u64, bits) as sys::seL4_Word
-        }
-        TupleStyle::Encoded => slot,
-    }
+pub fn enc_index(slot: sys::seL4_Word, bi: &sys::seL4_BootInfo, _style: TupleStyle) -> sys::seL4_Word {
+    let bits = sel4::init_cnode_bits(bi);
+    encode_slot(slot as u64, bits) as sys::seL4_Word
 }
 
 #[derive(Clone, Copy, Debug)]

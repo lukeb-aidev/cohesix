@@ -15,9 +15,8 @@ use heapless::String;
 use super::cspace_sys;
 use sel4_sys::{
     self, seL4_BootInfo, seL4_CNode, seL4_CPtr, seL4_CapBootInfoFrame, seL4_CapInitThreadCNode,
-    seL4_CapInitThreadTCB, seL4_FailedLookup, seL4_Word, seL4_WordBits,
+    seL4_CapInitThreadTCB, seL4_FailedLookup, seL4_NoError, seL4_Word, seL4_WordBits,
 };
-use sel4_sys::{seL4_CNode_Delete, seL4_NoError};
 #[cfg(feature = "cap-probes")]
 use sel4_sys::{seL4_CapRights_All, seL4_Error};
 
@@ -406,7 +405,7 @@ pub fn prove_dest_path_with_bootinfo(
         cspace_sys::cnode_copy_raw_single(bi, dst_root, dst_slot_word, src_root, src_slot_word);
     ::log::info!("[probe] copy BootInfo -> 0x{dst_slot_raw:04x} err={err}");
 
-    let mut cleanup = || {
+    let cleanup = || {
         let style = cspace_sys::tuple_style();
         let _ = cspace_sys::cnode_delete_with_style(bi, dst_root, dst_slot_word, style);
     };
