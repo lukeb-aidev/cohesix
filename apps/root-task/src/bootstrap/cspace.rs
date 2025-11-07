@@ -399,20 +399,16 @@ pub fn prove_dest_path_with_bootinfo(
     cspace_sys::debug_identify_cap("InitCNode", dst_root as seL4_CPtr);
     cspace_sys::assert_init_cnode_layout(bi);
 
-    let depth_bits = depth();
-    unsafe {
-        let _ = seL4_CNode_Delete(dst_root, dst_slot, depth_bits);
-    }
+    let style = cspace_sys::tuple_style();
+    let _ = cspace_sys::cnode_delete_with_style(bi, dst_root, dst_slot_word, style);
 
     let err =
         cspace_sys::cnode_copy_raw_single(bi, dst_root, dst_slot_word, src_root, src_slot_word);
     ::log::info!("[probe] copy BootInfo -> 0x{dst_slot_raw:04x} err={err}");
 
     let mut cleanup = || {
-        let depth_bits = depth();
-        unsafe {
-            let _ = seL4_CNode_Delete(dst_root, dst_slot, depth_bits);
-        }
+        let style = cspace_sys::tuple_style();
+        let _ = cspace_sys::cnode_delete_with_style(bi, dst_root, dst_slot_word, style);
     };
 
     if err == seL4_NoError {

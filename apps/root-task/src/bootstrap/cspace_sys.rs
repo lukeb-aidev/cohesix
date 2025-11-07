@@ -71,12 +71,12 @@ impl TupleStyle {
     fn fallback(self) -> Option<Self> {
         match self {
             Self::Encoded => Some(Self::Raw),
-            _ => None,
+            Self::Raw => None,
         }
     }
 }
 
-static SELECTED_TUPLE_STYLE: AtomicU8 = AtomicU8::new(TupleStyle::Raw as u8);
+static SELECTED_TUPLE_STYLE: AtomicU8 = AtomicU8::new(TupleStyle::Encoded as u8);
 
 #[inline(always)]
 pub fn tuple_style() -> TupleStyle {
@@ -366,7 +366,7 @@ fn cnode_copy_with_style(
 }
 
 #[inline(always)]
-fn cnode_delete_with_style(
+pub fn cnode_delete_with_style(
     bi: &sys::seL4_BootInfo,
     root: sys::seL4_CNode,
     slot: sys::seL4_Word,
