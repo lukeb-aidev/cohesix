@@ -66,6 +66,14 @@ impl TupleStyle {
             Self::Encoded => 1,
         }
     }
+
+    #[inline(always)]
+    fn fallback(self) -> Option<Self> {
+        match self {
+            Self::Raw => Some(Self::Encoded),
+            Self::Encoded => None,
+        }
+    }
 }
 
 static SELECTED_TUPLE_STYLE: AtomicU8 = AtomicU8::new(TupleStyle::Raw as u8);
@@ -167,39 +175,76 @@ pub fn cnode_copy_raw_single(
     src_root: sys::seL4_CNode,
     src_slot: sys::seL4_Word,
 ) -> sys::seL4_Error {
-    let depth_u8 = sel4::init_cnode_bits(bi);
-    let depth = depth_u8 as sys::seL4_Word;
-    let rights = sys::seL4_CapRights::new(1, 1, 1, 1);
-
-    ::log::info!(
-        "[cnode.copy/raw] dst_root=0x{dst_root:04x} dst_slot=0x{dst_slot:04x} depth={depth} src=0x{src_root:04x}/0x{src_slot:04x}",
-        dst_root = dst_root,
-        dst_slot = dst_slot,
-        depth = depth,
-        src_root = src_root,
-        src_slot = src_slot,
-    );
-
-    #[cfg(target_os = "none")]
-    unsafe {
-        sys::seL4_CNode_Copy(
-            dst_root,
-            slot_index(dst_slot),
-            depth_u8,
-            src_root,
-            slot_index(src_slot),
-            depth_u8,
-            rights,
-        )
+    fn should_retry(style: TupleStyle, err: sys::seL4_Error) -> bool {
+        matches!(style, TupleStyle::Raw)
+            && matches!(err, sys::seL4_FailedLookup | sys::seL4_InvalidCapability)
     }
 
-    #[cfg(not(target_os = "none"))]
-    {
-        let _ = (
-            bi, dst_root, dst_slot, src_root, src_slot, depth, depth_u8, rights,
+    fn copy_once(
+        bi: &sys::seL4_BootInfo,
+        dst_root: sys::seL4_CNode,
+        dst_slot: sys::seL4_Word,
+        src_root: sys::seL4_CNode,
+        src_slot: sys::seL4_Word,
+        style: TupleStyle,
+    ) -> sys::seL4_Error {
+        let depth = cnode_depth(bi, style);
+        let depth_u8 = u8::try_from(depth).expect("cnode depth must fit in u8");
+        let dst_index = slot_index(enc_index(dst_slot, bi, style));
+        let src_index = slot_index(enc_index(src_slot, bi, style));
+        let rights = sys::seL4_CapRights::new(1, 1, 1, 1);
+
+        ::log::info!(
+            "[cnode.copy/raw] style={style} dst_root=0x{dst_root:04x} dst_slot=0x{dst_slot:04x} depth={depth} src=0x{src_root:04x}/0x{src_slot:04x}",
+            style = tuple_style_label(style),
+            dst_root = dst_root,
+            dst_slot = dst_slot,
+            depth = depth,
+            src_root = src_root,
+            src_slot = src_slot,
         );
-        sys::seL4_NoError
+
+        #[cfg(target_os = "none")]
+        unsafe {
+            sys::seL4_CNode_Copy(
+                dst_root, dst_index, depth_u8, src_root, src_index, depth_u8, rights,
+            )
+        }
+
+        #[cfg(not(target_os = "none"))]
+        {
+            let _ = (
+                bi, dst_root, dst_slot, src_root, src_slot, rights, style, depth, depth_u8,
+            );
+            sys::seL4_NoError
+        }
     }
+
+    let initial_style = tuple_style();
+    let first = copy_once(bi, dst_root, dst_slot, src_root, src_slot, initial_style);
+    if first == sys::seL4_NoError || !should_retry(initial_style, first) {
+        return first;
+    }
+
+    if let Some(fallback) = initial_style.fallback() {
+        ::log::warn!(
+            "[cnode.copy/raw] style={} failed err={} — retrying with {}",
+            tuple_style_label(initial_style),
+            first,
+            tuple_style_label(fallback),
+        );
+        let second = copy_once(bi, dst_root, dst_slot, src_root, src_slot, fallback);
+        if second == sys::seL4_NoError {
+            set_tuple_style(fallback);
+            ::log::info!(
+                "[cnode] tuple style promoted to {}",
+                tuple_style_label(fallback)
+            );
+        }
+        return second;
+    }
+
+    first
 }
 
 #[inline(always)]
@@ -218,17 +263,26 @@ pub fn encode_slot(slot: u64, bits: u8) -> u64 {
 }
 
 #[inline(always)]
-pub fn cnode_depth(bi: &sys::seL4_BootInfo, _style: TupleStyle) -> sys::seL4_Word {
-    sel4::init_cnode_bits(bi) as sys::seL4_Word
+pub fn cnode_depth(bi: &sys::seL4_BootInfo, style: TupleStyle) -> sys::seL4_Word {
+    match style {
+        TupleStyle::Raw => path_depth_word(),
+        TupleStyle::Encoded => sel4::init_cnode_bits(bi) as sys::seL4_Word,
+    }
 }
 
 #[inline(always)]
 pub fn enc_index(
     slot: sys::seL4_Word,
-    _bi: &sys::seL4_BootInfo,
-    _style: TupleStyle,
+    bi: &sys::seL4_BootInfo,
+    style: TupleStyle,
 ) -> sys::seL4_Word {
-    slot
+    match style {
+        TupleStyle::Raw => slot,
+        TupleStyle::Encoded => {
+            let bits = sel4::init_cnode_bits(bi);
+            encode_slot(slot as u64, bits) as sys::seL4_Word
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1051,25 +1105,17 @@ pub fn verify_root_cnode_slot(
     slot: sys::seL4_Word,
 ) -> Result<(), sys::seL4_Error> {
     let root = root_cnode();
-    let depth = sel4::init_cnode_bits(bi);
-    let rights = sys::seL4_CapRights::new(1, 1, 1, 1);
-
     #[cfg(target_os = "none")]
-    unsafe {
-        let _ = sys::seL4_CNode_Delete(root, slot_index(slot), depth);
-        let copy_err = sys::seL4_CNode_Copy(
-            root,
-            slot_index(slot),
-            depth,
-            root,
-            slot_index(sys::seL4_CapBootInfoFrame as sys::seL4_Word),
-            depth,
-            rights,
-        );
+    {
+        let style = tuple_style();
+        let _ = cnode_delete_with_style(bi, root, slot, style);
+        let copy_err =
+            cnode_copy_raw_single(bi, root, slot, root, sys::seL4_CapBootInfoFrame as sys::seL4_Word);
         if copy_err != sys::seL4_NoError {
             return Err(copy_err);
         }
-        let cleanup_err = sys::seL4_CNode_Delete(root, slot_index(slot), depth);
+        let cleanup_style = tuple_style();
+        let cleanup_err = cnode_delete_with_style(bi, root, slot, cleanup_style);
         if cleanup_err != sys::seL4_NoError {
             return Err(cleanup_err);
         }
@@ -1077,7 +1123,7 @@ pub fn verify_root_cnode_slot(
 
     #[cfg(not(target_os = "none"))]
     {
-        let _ = (bi, slot, root, depth, rights);
+        let _ = (bi, slot, root);
     }
 
     Ok(())
