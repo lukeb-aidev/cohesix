@@ -71,12 +71,12 @@ impl TupleStyle {
     fn fallback(self) -> Option<Self> {
         match self {
             Self::Raw => Some(Self::Encoded),
-            Self::Encoded => None,
+            Self::Encoded => Some(Self::Raw),
         }
     }
 }
 
-static SELECTED_TUPLE_STYLE: AtomicU8 = AtomicU8::new(TupleStyle::Raw as u8);
+static SELECTED_TUPLE_STYLE: AtomicU8 = AtomicU8::new(TupleStyle::Encoded as u8);
 
 #[inline(always)]
 pub fn tuple_style() -> TupleStyle {
@@ -175,9 +175,8 @@ pub fn cnode_copy_raw_single(
     src_root: sys::seL4_CNode,
     src_slot: sys::seL4_Word,
 ) -> sys::seL4_Error {
-    fn should_retry(style: TupleStyle, err: sys::seL4_Error) -> bool {
-        matches!(style, TupleStyle::Raw)
-            && matches!(err, sys::seL4_FailedLookup | sys::seL4_InvalidCapability)
+    fn should_retry(err: sys::seL4_Error) -> bool {
+        matches!(err, sys::seL4_FailedLookup | sys::seL4_InvalidCapability)
     }
 
     fn copy_once(
@@ -222,11 +221,12 @@ pub fn cnode_copy_raw_single(
 
     let initial_style = tuple_style();
     let first = copy_once(bi, dst_root, dst_slot, src_root, src_slot, initial_style);
-    if first == sys::seL4_NoError || !should_retry(initial_style, first) {
+    if first == sys::seL4_NoError || !should_retry(first) {
         return first;
     }
 
-    if let Some(fallback) = initial_style.fallback() {
+    if should_retry(first) {
+        if let Some(fallback) = initial_style.fallback() {
         ::log::warn!(
             "[cnode.copy/raw] style={} failed err={} — retrying with {}",
             tuple_style_label(initial_style),
@@ -242,6 +242,7 @@ pub fn cnode_copy_raw_single(
             );
         }
         return second;
+    }
     }
 
     first
