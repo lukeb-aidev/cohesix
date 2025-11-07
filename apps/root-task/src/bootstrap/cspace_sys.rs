@@ -1087,15 +1087,20 @@ pub fn verify_root_cnode_slot(
         let _ = cnode_delete_with_style(bi, root, slot, style);
         let copy_err =
             cnode_copy_raw_single(bi, root, slot, root, sys::seL4_CapBootInfoFrame as sys::seL4_Word);
-        if copy_err == sys::seL4_NoError {
+
+        let finish_cleanup = |result: Result<(), sys::seL4_Error>| -> Result<(), sys::seL4_Error> {
             let cleanup_style = tuple_style();
             let cleanup_err = cnode_delete_with_style(bi, root, slot, cleanup_style);
             if cleanup_err != sys::seL4_NoError {
-                return Err(cleanup_err);
+                Err(cleanup_err)
+            } else {
+                result
             }
-            return Ok(());
-        }
-        if copy_err == sys::seL4_FailedLookup {
+        };
+
+        return if copy_err == sys::seL4_NoError {
+            finish_cleanup(Ok(()))
+        } else if copy_err == sys::seL4_FailedLookup {
             ::log::warn!(
                 "[verify_root_cnode_slot] BootInfo copy failed; retrying with InitThreadTCB"
             );
@@ -1107,24 +1112,20 @@ pub fn verify_root_cnode_slot(
                 sys::seL4_CapInitThreadTCB as sys::seL4_Word,
             );
             if fallback_err == sys::seL4_NoError {
-                let cleanup_style = tuple_style();
-                let cleanup_err = cnode_delete_with_style(bi, root, slot, cleanup_style);
-                if cleanup_err != sys::seL4_NoError {
-                    return Err(cleanup_err);
-                }
-                return Ok(());
+                finish_cleanup(Ok(()))
+            } else {
+                Err(fallback_err)
             }
-            return Err(fallback_err);
-        }
-        return Err(copy_err);
+        } else {
+            Err(copy_err)
+        };
     }
 
     #[cfg(not(target_os = "none"))]
     {
         let _ = (bi, slot, root);
+        Ok(())
     }
-
-    Ok(())
 }
 
 #[cfg(target_os = "none")]
