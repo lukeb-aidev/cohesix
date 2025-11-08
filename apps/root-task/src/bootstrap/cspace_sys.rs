@@ -231,8 +231,12 @@ pub const fn depth_wordbits() -> u8 {
 
 #[inline(always)]
 pub fn encode_slot(slot: u64, bits: u8) -> u64 {
-    let _ = bits;
-    slot
+    debug_assert!(
+        bits <= depth_wordbits(),
+        "initThreadCNodeSizeBits must not exceed seL4_WordBits"
+    );
+    let shift = u32::from(depth_wordbits() - bits);
+    slot << shift
 }
 
 #[inline(always)]
@@ -244,7 +248,7 @@ pub fn cnode_depth(_bi: &sys::seL4_BootInfo, _style: TupleStyle) -> sys::seL4_Wo
 pub fn enc_index(slot: sys::seL4_Word, bi: &sys::seL4_BootInfo, _style: TupleStyle) -> sys::seL4_Word {
     let init_bits = sel4::init_cnode_bits(bi);
     check_slot_in_range(init_bits, slot as sys::seL4_CPtr);
-    slot
+    encode_slot(slot as u64, init_bits) as sys::seL4_Word
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -2156,7 +2160,9 @@ mod tests {
     fn encode_slot_aligns_to_word_bits() {
         let init_bits = 13u8;
         let value = super::encode_slot(0x0101, init_bits);
-        assert_eq!(value as u64, 0x0101);
+        let shift = (sel4_sys::seL4_WordBits as u32) - u32::from(init_bits);
+        let expected = (0x0101u64) << shift;
+        assert_eq!(value as u64, expected);
     }
 
     #[cfg(not(target_os = "none"))]
