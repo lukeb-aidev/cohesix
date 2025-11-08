@@ -222,8 +222,8 @@ pub fn guard_root_path(init_cnode_bits: u8, index: seL4_Word, depth: seL4_Word, 
         "depth must equal seL4_WordBits for init CNode addressing",
     );
     assert_eq!(
-        index, root_cnode() as seL4_Word,
-        "node index must equal seL4_CapInitThreadCNode for init CNode direct path"
+        index, 0,
+        "node index must be zero for init CNode direct path"
     );
     let limit = if init_cnode_bits as usize >= usize::BITS as usize {
         usize::MAX

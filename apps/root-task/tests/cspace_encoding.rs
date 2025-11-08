@@ -8,11 +8,10 @@ use root_task::bootstrap::cspace_sys::{
 use sel4_sys::{self, seL4_CNode, seL4_CPtr, seL4_CapRights};
 
 #[test]
-fn encode_slot_applies_guard_shift() {
+fn encode_slot_is_identity() {
     let init_bits = 13u8;
     let encoded = encode_slot(0x1, init_bits);
-    let expected_shift = (sel4_sys::seL4_WordBits - u32::from(init_bits)) as usize;
-    assert_eq!(encoded, 0x1 << expected_shift);
+    assert_eq!(encoded, 0x1);
 }
 
 #[test]
