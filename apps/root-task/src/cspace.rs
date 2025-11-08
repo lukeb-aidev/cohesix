@@ -52,6 +52,13 @@ impl CSpace {
         Ok(slot)
     }
 
+    /// Releases a slot previously returned by [`alloc_slot`], allowing it to be reused.
+    pub fn release_slot(&mut self, slot: seL4_CPtr) {
+        if slot + 1 == self.next_free {
+            self.next_free = slot;
+        }
+    }
+
     /// Issues a `seL4_CNode_Copy` within the init CSpace.
     pub fn copy_here(
         &mut self,
@@ -59,7 +66,7 @@ impl CSpace {
         src_slot: seL4_CPtr,
         rights: sel4_sys::seL4_CapRights,
     ) -> seL4_Error {
-        let depth = self.bits;
+        let depth = sel4_sys::seL4_WordBits as u8;
         log::info!(
             "[cnode] Copy dst=0x{dst:04x} depth={depth}",
             dst = dst_slot,
@@ -83,7 +90,7 @@ impl CSpace {
         rights: sel4_sys::seL4_CapRights,
         badge: seL4_Word,
     ) -> seL4_Error {
-        let depth = self.bits;
+        let depth = sel4_sys::seL4_WordBits as u8;
         log::info!(
             "[cnode] Mint dst=0x{dst:04x} depth={depth}",
             dst = dst_slot,

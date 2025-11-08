@@ -1,5 +1,6 @@
 # Author: Lukas Bower
 /target
+/.target_check
 /out
 Cargo.lock
 .DS_Store

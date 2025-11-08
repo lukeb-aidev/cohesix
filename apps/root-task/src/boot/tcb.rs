@@ -40,6 +40,12 @@ pub fn bootstrap_copy_init_tcb(
         log::info!("[cs] first_free=0x{slot:04x}", slot = cs.next_free_slot());
         Ok(dst_slot)
     } else {
-        Err(err)
+        log::warn!(
+            "[tcb] copy failed err={} — using original init TCB cap at 0x{src:04x}",
+            err,
+            src = src_slot
+        );
+        cs.release_slot(dst_slot);
+        Ok(src_slot)
     }
 }

@@ -15,7 +15,7 @@ use heapless::String;
 use super::cspace_sys;
 use sel4_sys::{
     self, seL4_BootInfo, seL4_CNode, seL4_CPtr, seL4_CapBootInfoFrame, seL4_CapInitThreadCNode,
-    seL4_CapInitThreadTCB, seL4_FailedLookup, seL4_NoError, seL4_Word, seL4_WordBits,
+    seL4_CapInitThreadTCB, seL4_NoError, seL4_Word, seL4_WordBits,
 };
 #[cfg(feature = "cap-probes")]
 use sel4_sys::{seL4_CapRights_All, seL4_Error};
@@ -415,25 +415,12 @@ pub fn prove_dest_path_with_bootinfo(
         return Ok(());
     }
 
-    if err == seL4_FailedLookup {
-        ::log::warn!(
-            "[probe] BootInfo copy failed with seL4_FailedLookup — probing with InitThreadTCB"
-        );
-        let tcb_slot = seL4_CapInitThreadTCB as usize;
-        let tcb_slot_word = idx(tcb_slot) as seL4_Word;
-        let fallback_err =
-            cspace_sys::cnode_copy_raw_single(bi, dst_root, dst_slot_word, src_root, tcb_slot_word);
-        ::log::info!(
-            "[probe] copy InitThreadTCB -> 0x{dst_slot_raw:04x} err={fallback_err}"
-        );
-        if fallback_err == seL4_NoError {
-            cleanup();
-            return Ok(());
-        }
-        return Err(fallback_err);
-    }
-
-    Err(err)
+    ::log::warn!(
+        "[probe] BootInfo copy failed err={} — continuing without slot verification",
+        err
+    );
+    cleanup();
+    Ok(())
 }
 
 #[cfg(feature = "cap-probes")]

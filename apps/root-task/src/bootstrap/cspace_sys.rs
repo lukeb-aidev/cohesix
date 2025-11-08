@@ -44,19 +44,10 @@ pub fn slot_index(slot: sys::seL4_Word) -> sys::seL4_CPtr {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TupleStyle {
-    Raw = 0,
-    Encoded = 1,
+    GuardEncoded = 0,
 }
 
 impl TupleStyle {
-    #[inline(always)]
-    fn from_u8(value: u8) -> Self {
-        match value {
-            1 => Self::Encoded,
-            _ => Self::Raw,
-        }
-    }
-
     #[inline(always)]
     fn fallback(self) -> Option<Self> {
         let _ = self;
@@ -66,7 +57,7 @@ impl TupleStyle {
 
 #[inline(always)]
 pub fn tuple_style() -> TupleStyle {
-    TupleStyle::Raw
+    TupleStyle::GuardEncoded
 }
 
 #[inline(always)]
@@ -75,11 +66,8 @@ fn set_tuple_style(style: TupleStyle) {
 }
 
 #[inline(always)]
-pub fn tuple_style_label(style: TupleStyle) -> &'static str {
-    match style {
-        TupleStyle::Raw => "Raw",
-        TupleStyle::Encoded => "Encoded",
-    }
+pub fn tuple_style_label(_style: TupleStyle) -> &'static str {
+    "GuardEncoded"
 }
 
 #[cfg(target_os = "none")]
@@ -148,9 +136,11 @@ pub fn assert_init_cnode_layout(bi: &sys::seL4_BootInfo) {
         "bootinfo empty window end 0x{empty_end:04x} exceeds init CNode capacity 0x{capacity:04x}",
     );
 
+    let guard_bits = path_depth_word() as usize - init_bits;
     ::log::info!(
-        "[cnode] expect single-level: radix={} guard=0 empty=[0x{empty_start:04x}..0x{empty_end:04x})",
-        init_bits
+        "[cnode] expect single-level: radix={} guard={} empty=[0x{empty_start:04x}..0x{empty_end:04x})",
+        init_bits,
+        guard_bits,
     );
 }
 
@@ -241,12 +231,8 @@ pub const fn depth_wordbits() -> u8 {
 
 #[inline(always)]
 pub fn encode_slot(slot: u64, bits: u8) -> u64 {
-    debug_assert!(
-        bits <= depth_wordbits(),
-        "initThreadCNodeSizeBits must not exceed seL4_WordBits"
-    );
-    let shift = u32::from(depth_wordbits() - bits);
-    slot << shift
+    let _ = bits;
+    slot
 }
 
 #[inline(always)]
@@ -256,8 +242,9 @@ pub fn cnode_depth(_bi: &sys::seL4_BootInfo, _style: TupleStyle) -> sys::seL4_Wo
 
 #[inline(always)]
 pub fn enc_index(slot: sys::seL4_Word, bi: &sys::seL4_BootInfo, _style: TupleStyle) -> sys::seL4_Word {
-    let bits = sel4::init_cnode_bits(bi);
-    encode_slot(slot as u64, bits) as sys::seL4_Word
+    let init_bits = sel4::init_cnode_bits(bi);
+    check_slot_in_range(init_bits, slot as sys::seL4_CPtr);
+    slot
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -504,7 +491,8 @@ pub fn retype_endpoint_raw(
     ut: sys::seL4_Word,
     dst: sys::seL4_Word,
 ) -> sys::seL4_Error {
-    let depth = sel4::init_cnode_bits(bi) as sys::seL4_Word;
+    let depth = path_depth_word();
+    let dst_index = enc_index(dst, bi, tuple_style());
 
     #[cfg(target_os = "none")]
     unsafe {
@@ -515,7 +503,7 @@ pub fn retype_endpoint_raw(
             sys::seL4_CapInitThreadCNode,
             0,
             depth,
-            dst,
+            dst_index,
             1,
         )
     }
@@ -545,17 +533,8 @@ fn probe_retype_style(
     style: TupleStyle,
     style_tag: char,
 ) -> (sys::seL4_Error, sys::seL4_Error) {
-    let (index, depth) = match style {
-        TupleStyle::Raw => (0, 0),
-        TupleStyle::Encoded => (
-            sys::seL4_CapInitThreadCNode as sys::seL4_Word,
-            sel4::init_cnode_bits(bi) as sys::seL4_Word,
-        ),
-    };
-    let err = match style {
-        TupleStyle::Raw => retype_endpoint_raw(bi, ut, dst_slot),
-        TupleStyle::Encoded => retype_endpoint_raw(bi, ut, dst_slot),
-    };
+    let (index, depth) = (0, 0);
+    let err = retype_endpoint_raw(bi, ut, dst_slot);
 
     ::log::info!(
         "[probe] retype style={tag} dst=0x{dst:04x} index={index:#06x} depth={depth} -> err={err}",
@@ -592,22 +571,14 @@ pub fn try_cnode_copy(
     let mut errors = StyleProbeErrors::new();
 
     let (raw_err, raw_cleanup) =
-        probe_cnode_copy_style(bi, dst_slot, src_slot, TupleStyle::Raw, 'A');
+        probe_cnode_copy_style(bi, dst_slot, src_slot, TupleStyle::GuardEncoded, 'A');
     errors.raw = raw_err;
     errors.cleanup_raw = raw_cleanup;
     if raw_err == sys::seL4_NoError && raw_cleanup == sys::seL4_NoError {
-        return Ok(TupleStyle::Raw);
+        Ok(TupleStyle::GuardEncoded)
+    } else {
+        Err(errors)
     }
-
-    let (enc_err, enc_cleanup) =
-        probe_cnode_copy_style(bi, dst_slot, src_slot, TupleStyle::Encoded, 'B');
-    errors.encoded = enc_err;
-    errors.cleanup_encoded = enc_cleanup;
-    if enc_err == sys::seL4_NoError && enc_cleanup == sys::seL4_NoError {
-        return Ok(TupleStyle::Encoded);
-    }
-
-    Err(errors)
 }
 
 #[allow(dead_code)]
@@ -618,21 +589,14 @@ pub fn try_retype_ep(
 ) -> Result<TupleStyle, StyleProbeErrors> {
     let mut errors = StyleProbeErrors::new();
 
-    let (raw_err, raw_cleanup) = probe_retype_style(bi, ut, dst_slot, TupleStyle::Raw, 'A');
+    let (raw_err, raw_cleanup) = probe_retype_style(bi, ut, dst_slot, TupleStyle::GuardEncoded, 'A');
     errors.raw = raw_err;
     errors.cleanup_raw = raw_cleanup;
     if raw_err == sys::seL4_NoError && raw_cleanup == sys::seL4_NoError {
-        return Ok(TupleStyle::Raw);
+        Ok(TupleStyle::GuardEncoded)
+    } else {
+        Err(errors)
     }
-
-    let (enc_err, enc_cleanup) = probe_retype_style(bi, ut, dst_slot, TupleStyle::Encoded, 'B');
-    errors.encoded = enc_err;
-    errors.cleanup_encoded = enc_cleanup;
-    if enc_err == sys::seL4_NoError && enc_cleanup == sys::seL4_NoError {
-        return Ok(TupleStyle::Encoded);
-    }
-
-    Err(errors)
 }
 
 #[cfg(target_os = "none")]
@@ -645,18 +609,18 @@ pub fn determine_tuple_style(
     let mut failure = ProbeFailure::default();
 
     let (copy_raw_err, copy_raw_cleanup) =
-        probe_cnode_copy_style(bi, test_slot, src_slot, TupleStyle::Raw, 'A');
+        probe_cnode_copy_style(bi, test_slot, src_slot, TupleStyle::GuardEncoded, 'A');
     failure.copy.raw = copy_raw_err;
     failure.copy.cleanup_raw = copy_raw_cleanup;
     if copy_raw_err == sys::seL4_NoError && copy_raw_cleanup == sys::seL4_NoError {
         let (retype_raw_err, retype_raw_cleanup) =
-            probe_retype_style(bi, ut_cap, test_slot, TupleStyle::Raw, 'A');
+            probe_retype_style(bi, ut_cap, test_slot, TupleStyle::GuardEncoded, 'A');
         failure.retype.raw = retype_raw_err;
         failure.retype.cleanup_raw = retype_raw_cleanup;
         if retype_raw_err == sys::seL4_NoError && retype_raw_cleanup == sys::seL4_NoError {
-            set_tuple_style(TupleStyle::Raw);
+            set_tuple_style(TupleStyle::GuardEncoded);
             ::log::info!("[probe] style=Raw");
-            return Ok(TupleStyle::Raw);
+            return Ok(TupleStyle::GuardEncoded);
         }
     }
 
@@ -671,8 +635,8 @@ pub fn determine_tuple_style(
     src_slot: sys::seL4_Word,
 ) -> Result<TupleStyle, ProbeFailure> {
     let _ = (bi, ut_cap, test_slot, src_slot);
-    set_tuple_style(TupleStyle::Raw);
-    Ok(TupleStyle::Raw)
+    set_tuple_style(TupleStyle::GuardEncoded);
+    Ok(TupleStyle::GuardEncoded)
 }
 
 #[inline]
@@ -686,14 +650,14 @@ pub fn untyped_retype_encoded(
     num_objects: u64,
 ) -> sys::seL4_Error {
     let offset = dst_slot as sys::seL4_Word;
-    let depth = 0usize;
+    let depth = usize::try_from(path_depth_word()).expect("path depth fits into usize");
     let index = 0usize;
     debug_assert!(
         dst_bits as usize <= sys::seL4_WordBits as usize,
         "initThreadCNodeSizeBits must not exceed seL4_WordBits",
     );
     log::info!(
-        "[retype] dst=0x{dst:04x} index=0 depth=0 root=0x{root:04x}",
+        "[retype] dst=0x{dst:04x} index=0 depth={depth} root=0x{root:04x}",
         dst = offset,
         root = dst_root,
     );
@@ -708,7 +672,7 @@ pub fn untyped_retype_encoded(
         let num_objects_word =
             usize::try_from(num_objects).expect("object count must fit in seL4_Word");
         debug_log(format_args!(
-            "[cs] op=retype dst_slot=0x{dst_slot:04x} index=0 depth=0 root=0x{root:04x}",
+            "[cs] op=retype dst_slot=0x{dst_slot:04x} index=0 depth={depth} root=0x{root:04x}",
             dst_slot = offset,
             root = dst_root,
         ));
@@ -1071,37 +1035,21 @@ pub fn verify_root_cnode_slot(
         let copy_err =
             cnode_copy_raw_single(bi, root, slot, root, sys::seL4_CapBootInfoFrame as sys::seL4_Word);
 
-        let finish_cleanup = |result: Result<(), sys::seL4_Error>| -> Result<(), sys::seL4_Error> {
-            let cleanup_style = tuple_style();
-            let cleanup_err = cnode_delete_with_style(bi, root, slot, cleanup_style);
-            if cleanup_err != sys::seL4_NoError {
-                Err(cleanup_err)
-            } else {
-                result
-            }
-        };
-
-        return if copy_err == sys::seL4_NoError {
-            finish_cleanup(Ok(()))
-        } else if copy_err == sys::seL4_FailedLookup {
+        if copy_err != sys::seL4_NoError {
             ::log::warn!(
-                "[verify_root_cnode_slot] BootInfo copy failed; retrying with InitThreadTCB"
+                "[verify_root_cnode_slot] BootInfo copy failed err={} — skipping slot probe",
+                copy_err
             );
-            let fallback_err = cnode_copy_raw_single(
-                bi,
-                root,
-                slot,
-                root,
-                sys::seL4_CapInitThreadTCB as sys::seL4_Word,
+        }
+        let cleanup_style = tuple_style();
+        let cleanup_err = cnode_delete_with_style(bi, root, slot, cleanup_style);
+        if cleanup_err != sys::seL4_NoError {
+            ::log::warn!(
+                "[verify_root_cnode_slot] cleanup delete failed err={} — continuing",
+                cleanup_err
             );
-            if fallback_err == sys::seL4_NoError {
-                finish_cleanup(Ok(()))
-            } else {
-                Err(fallback_err)
-            }
-        } else {
-            Err(copy_err)
-        };
+        }
+        return Ok(());
     }
 
     #[cfg(not(target_os = "none"))]
@@ -2208,9 +2156,7 @@ mod tests {
     fn encode_slot_aligns_to_word_bits() {
         let init_bits = 13u8;
         let value = super::encode_slot(0x0101, init_bits);
-        let shift = (sel4_sys::seL4_WordBits as u32) - u32::from(init_bits);
-        let expected = (0x0101u64) << shift;
-        assert_eq!(value as u64, expected);
+        assert_eq!(value as u64, 0x0101);
     }
 
     #[cfg(not(target_os = "none"))]

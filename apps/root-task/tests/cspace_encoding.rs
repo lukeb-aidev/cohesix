@@ -8,11 +8,10 @@ use root_task::bootstrap::cspace_sys::{
 use sel4_sys::{self, seL4_CNode, seL4_CPtr, seL4_CapRights};
 
 #[test]
-fn encode_slot_applies_word_aligned_shift() {
+fn encode_slot_is_identity() {
     let init_bits = 13u8;
     let encoded = encode_slot(0x1, init_bits);
-    let expected_shift = (sel4_sys::seL4_WordBits - u32::from(init_bits)) as usize;
-    assert_eq!(encoded, 0x1 << expected_shift);
+    assert_eq!(encoded, 0x1);
 }
 
 #[test]
@@ -50,7 +49,7 @@ fn untyped_retype_encoded_uses_canonical_root_tuple() {
     let trace = take_last_host_retype_trace().expect("host trace must be captured");
     assert_eq!(trace.root, sel4_sys::seL4_CapInitThreadCNode);
     assert_eq!(trace.node_index, 0);
-    assert_eq!(trace.node_depth, 0);
+    assert_eq!(trace.node_depth, sel4_sys::seL4_WordBits as sel4_sys::seL4_Word);
     assert_eq!(trace.node_offset, dst_slot as sel4_sys::seL4_Word);
     assert_eq!(
         trace.object_type,
