@@ -547,14 +547,10 @@ pub fn replyrecv_guarded(
     Ok(message)
 }
 
-/// Returns the legacy guard depth (in bits) historically used for init CNode traversal.
-///
-/// Bootstrap code that issues raw seL4 syscalls should prefer the init CNode width reported by
-/// `seL4_BootInfo::initThreadCNodeSizeBits`. This helper exists for compatibility with host-side
-/// traces that still model the guard-encoded calling convention.
+/// Returns the radix width (in bits) for the init CNode derived from bootinfo.
 #[inline]
-pub fn init_cnode_depth(_bi: &seL4_BootInfo) -> u8 {
-    sel4_sys::seL4_WordBits as u8
+pub fn init_cnode_depth(bi: &seL4_BootInfo) -> u8 {
+    init_cnode_bits(bi)
 }
 
 /// Emits a single byte to the seL4 debug console.

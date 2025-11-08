@@ -66,7 +66,7 @@ impl CSpace {
         src_slot: seL4_CPtr,
         rights: sel4_sys::seL4_CapRights,
     ) -> seL4_Error {
-        let depth = sel4_sys::seL4_WordBits as u8;
+        let depth = self.depth();
         log::info!(
             "[cnode] Copy dst=0x{dst:04x} depth={depth}",
             dst = dst_slot,
@@ -90,7 +90,7 @@ impl CSpace {
         rights: sel4_sys::seL4_CapRights,
         badge: seL4_Word,
     ) -> seL4_Error {
-        let depth = sel4_sys::seL4_WordBits as u8;
+        let depth = self.depth();
         log::info!(
             "[cnode] Mint dst=0x{dst:04x} depth={depth}",
             dst = dst_slot,
