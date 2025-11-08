@@ -616,6 +616,7 @@ fn bootstrap<P: Platform>(
         sel4_sys::seL4_CapInitThreadIPCBuffer,
         sel4_sys::seL4_CapBootInfoFrame,
     );
+    cspace_sys::dump_init_cnode_slots(0..32);
 
     if let Err(err) = cspace_sys::verify_root_cnode_slot(
         bootinfo_ref,

@@ -7,6 +7,7 @@ extern crate alloc;
 
 use core::convert::TryFrom;
 use core::fmt;
+use core::ops::Range;
 #[cfg(target_os = "none")]
 use crate::boot::flags;
 use crate::bootstrap::cspace::CSpaceWindow;
@@ -118,6 +119,15 @@ pub fn debug_identify_cap(label: &str, cap: sys::seL4_CPtr) {
     #[cfg(not(all(feature = "kernel", target_os = "none")))]
     {
         let _ = (label, cap);
+    }
+}
+
+/// Logs the capability types present in the init thread CNode for the supplied slot range.
+pub fn dump_init_cnode_slots(range: Range<usize>) {
+    for slot in range {
+        let cap = slot as sys::seL4_CPtr;
+        let ty = sel4::debug_cap_identify(cap);
+        ::log::info!("[cnode.slot] slot=0x{slot:04x} type=0x{ty:08x}");
     }
 }
 
@@ -236,8 +246,12 @@ pub const fn depth_wordbits() -> u8 {
 
 #[inline(always)]
 pub fn encode_slot(slot: u64, bits: u8) -> u64 {
-    let _ = bits;
-    slot
+    debug_assert!(
+        bits <= depth_wordbits(),
+        "initThreadCNodeSizeBits must not exceed seL4_WordBits"
+    );
+    let shift = depth_wordbits() - bits;
+    slot << shift
 }
 
 #[inline(always)]
@@ -249,7 +263,7 @@ pub fn cnode_depth(_bi: &sys::seL4_BootInfo, _style: TupleStyle) -> sys::seL4_Wo
 pub fn enc_index(slot: sys::seL4_Word, bi: &sys::seL4_BootInfo, _style: TupleStyle) -> sys::seL4_Word {
     let init_bits = sel4::init_cnode_bits(bi);
     check_slot_in_range(init_bits, slot as sys::seL4_CPtr);
-    slot
+    encode_slot(slot as u64, init_bits) as sys::seL4_Word
 }
 
 #[derive(Clone, Copy, Debug)]
