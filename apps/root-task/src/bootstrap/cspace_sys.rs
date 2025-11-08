@@ -245,8 +245,13 @@ pub const fn depth_wordbits() -> u8 {
 }
 
 #[inline(always)]
-pub fn encode_slot(slot: u64, _bits: u8) -> u64 {
-    slot
+pub fn encode_slot(slot: u64, bits: u8) -> u64 {
+    debug_assert!(
+        bits <= depth_wordbits(),
+        "initThreadCNodeSizeBits must not exceed seL4_WordBits"
+    );
+    let shift = depth_wordbits() - bits;
+    slot << shift
 }
 
 #[inline(always)]
