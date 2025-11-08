@@ -250,8 +250,9 @@ pub fn encode_slot(slot: u64, bits: u8) -> u64 {
         bits <= depth_wordbits(),
         "initThreadCNodeSizeBits must not exceed seL4_WordBits"
     );
-    let shift = depth_wordbits() - bits;
-    slot << shift
+    // Kernel reports guard bits via the capability itself (guard value = 0, guard size = WordBits - initBits).
+    // The tuple path must still use raw slot indices, so leave the slot unmodified.
+    slot
 }
 
 #[inline(always)]
