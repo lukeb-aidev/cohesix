@@ -52,7 +52,7 @@ fn boot_window_adapter_logs_and_bounds_check() {
     );
     assert_eq!(
         trace.node_depth,
-        sel4_sys::seL4_WordBits as sel4_sys::seL4_Word
+        bootinfo.initThreadCNodeSizeBits as sel4_sys::seL4_Word
     );
     assert_eq!(trace.node_offset, window.first_free as sel4_sys::seL4_Word);
 

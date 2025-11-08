@@ -67,7 +67,7 @@ impl CSpace {
         src_slot: seL4_CPtr,
         rights: sel4_sys::seL4_CapRights,
     ) -> seL4_Error {
-        let depth = sel4_sys::seL4_WordBits as u8;
+        let depth = self.bits;
         log::info!(
             "[cnode] Copy dst=0x{dst:04x} depth={depth}",
             dst = dst_slot,
@@ -78,7 +78,9 @@ impl CSpace {
             src = src_slot,
             depth = depth,
         );
-        sel4::cnode_copy_depth(self.root, dst_slot, depth, src_root, src_slot, depth, rights)
+        sel4::cnode_copy_depth(
+            self.root, dst_slot, depth, src_root, src_slot, depth, rights,
+        )
     }
 
     /// Issues a `seL4_CNode_Mint` within the init CSpace.
@@ -90,7 +92,7 @@ impl CSpace {
         rights: sel4_sys::seL4_CapRights,
         badge: seL4_Word,
     ) -> seL4_Error {
-        let depth = sel4_sys::seL4_WordBits as u8;
+        let depth = self.bits;
         log::info!(
             "[cnode] Mint dst=0x{dst:04x} depth={depth}",
             dst = dst_slot,
@@ -102,14 +104,7 @@ impl CSpace {
             depth = depth,
         );
         sel4::cnode_mint_depth(
-            self.root,
-            dst_slot,
-            depth,
-            src_root,
-            src_slot,
-            depth,
-            rights,
-            badge,
+            self.root, dst_slot, depth, src_root, src_slot, depth, rights, badge,
         )
     }
 }

@@ -53,7 +53,7 @@ fn untyped_retype_encoded_uses_canonical_root_tuple() {
         trace.node_index,
         sel4_sys::seL4_CapInitThreadCNode as sel4_sys::seL4_Word
     );
-    assert_eq!(trace.node_depth, sel4_sys::seL4_WordBits as sel4_sys::seL4_Word);
+    assert_eq!(trace.node_depth, init_bits as sel4_sys::seL4_Word);
     assert_eq!(trace.node_offset, dst_slot as sel4_sys::seL4_Word);
     assert_eq!(
         trace.object_type,

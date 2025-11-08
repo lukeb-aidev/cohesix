@@ -39,11 +39,8 @@ fn init_cnode_retype_uses_direct_destination_encoding() {
         take_last_host_retype_trace().expect("host trace must record init CNode retype parameters");
 
     assert_eq!(trace.root, seL4_CapInitThreadCNode);
-    assert_eq!(
-        trace.node_index,
-        seL4_CapInitThreadCNode as seL4_Word
-    );
-    assert_eq!(trace.node_depth, sel4_sys::seL4_WordBits as seL4_Word);
+    assert_eq!(trace.node_index, seL4_CapInitThreadCNode as seL4_Word);
+    assert_eq!(trace.node_depth, depth_bits as seL4_Word);
     assert_eq!(trace.node_offset, dst_slot as seL4_Word);
     assert_eq!(trace.object_type, obj_ty);
     assert_eq!(trace.size_bits, size_bits);
@@ -76,11 +73,8 @@ fn generic_init_cnode_retype_uses_canonical_encoding() {
         .expect("host trace must record generic init CNode retype parameters");
 
     assert_eq!(trace.root, seL4_CapInitThreadCNode);
-    assert_eq!(
-        trace.node_index,
-        seL4_CapInitThreadCNode as seL4_Word
-    );
-    assert_eq!(trace.node_depth, sel4_sys::seL4_WordBits as seL4_Word);
+    assert_eq!(trace.node_index, seL4_CapInitThreadCNode as seL4_Word);
+    assert_eq!(trace.node_depth, init_bits as seL4_Word);
     assert_eq!(trace.node_offset, dst_slot as seL4_Word);
     assert_eq!(trace.object_type, obj_ty);
     assert_eq!(trace.size_bits, size_bits);
