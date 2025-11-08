@@ -106,7 +106,6 @@ pub fn empty_window(bi: &seL4_BootInfo) -> (u32, u32) {
     )
 }
 
-const BOOTINFO_ALIGN_MASK: usize = 0xF;
 const MAX_BOOTINFO_EXTRA_WORDS: usize = 32 * 1024;
 
 /// Errors raised while validating a bootinfo pointer and its extra region.
@@ -118,6 +117,8 @@ pub enum BootInfoError {
     Unaligned {
         /// Offending bootinfo pointer address supplied by the caller.
         address: usize,
+        /// Alignment (in bytes) required by the `seL4_BootInfo` structure.
+        required: usize,
     },
     /// The reported extra bootinfo span exceeded the permitted limit.
     ExtraTooLarge {
@@ -139,8 +140,11 @@ impl fmt::Display for BootInfoError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Null => write!(f, "bootinfo pointer was null"),
-            Self::Unaligned { address } => {
-                write!(f, "bootinfo pointer not 16-byte aligned: 0x{address:016x}")
+            Self::Unaligned { address, required } => {
+                write!(
+                    f,
+                    "bootinfo pointer not {required}-byte aligned: 0x{address:016x}"
+                )
             }
             Self::ExtraTooLarge { words } => {
                 write!(f, "bootinfo.extraLen exceeded limit: {words} words")
@@ -156,8 +160,12 @@ impl fmt::Display for BootInfoError {
 
 fn bootinfo_extra_slice<'a>(header: &'a seL4_BootInfo) -> Result<&'a [u8], BootInfoError> {
     let addr = header as *const _ as usize;
-    if addr & BOOTINFO_ALIGN_MASK != 0 {
-        return Err(BootInfoError::Unaligned { address: addr });
+    let required_align = mem::align_of::<seL4_BootInfo>();
+    if required_align != 0 && addr % required_align != 0 {
+        return Err(BootInfoError::Unaligned {
+            address: addr,
+            required: required_align,
+        });
     }
 
     let extra_words = header.extraLen as usize;
