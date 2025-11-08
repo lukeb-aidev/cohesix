@@ -983,6 +983,8 @@ const _: () = {
 pub trait BootInfoExt {
     /// Returns the writable init thread CNode capability exposed via the initial CSpace root slot.
     fn init_cnode_cap(&self) -> seL4_CPtr;
+    /// Returns the canonical (guard-less) init CNode capability provided by the kernel.
+    fn canonical_root_cap(&self) -> seL4_CPtr;
 
     /// Returns the initial thread's TCB capability slot.
     fn init_tcb_cap(&self) -> seL4_CPtr;
@@ -1012,6 +1014,11 @@ pub trait BootInfoExt {
 impl BootInfoExt for seL4_BootInfo {
     #[inline(always)]
     fn init_cnode_cap(&self) -> seL4_CPtr {
+        seL4_CapInitThreadCNode
+    }
+
+    #[inline(always)]
+    fn canonical_root_cap(&self) -> seL4_CPtr {
         seL4_CapInitThreadCNode
     }
 

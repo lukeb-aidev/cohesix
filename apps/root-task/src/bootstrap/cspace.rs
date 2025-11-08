@@ -6,7 +6,7 @@ use crate::bootstrap::log::force_uart_line;
 #[cfg(feature = "cap-probes")]
 use crate::bootstrap::retype::{bump_slot, retype_captable};
 use crate::cspace::{cap_rights_read_write_grant, CSpace};
-use crate::sel4::{self, is_boot_reserved_slot, BootInfoView, WORD_BITS};
+use crate::sel4::{self, is_boot_reserved_slot, BootInfoExt, BootInfoView, WORD_BITS};
 #[cfg(feature = "cap-probes")]
 use core::convert::TryFrom;
 use core::fmt::Write;
@@ -383,7 +383,7 @@ pub fn prove_dest_path_with_bootinfo(
     assert_caps_known();
 
     let dst_root = root_cnode();
-    let src_root = dst_root;
+    let src_root = bi.canonical_root_cap();
     let bootinfo_slot = seL4_CapBootInfoFrame as usize;
     let dst_slot_raw = first_free as usize;
     let dst_slot = idx(dst_slot_raw);
@@ -439,7 +439,8 @@ pub fn cnode_copy_selftest(bi: &seL4_BootInfo) -> Result<(), seL4_Error> {
         root = root,
     );
 
-    let copy_err = cspace_sys::cnode_copy(bi, root, dst_slot, root, src_slot, rights);
+    let canonical_root = bi.canonical_root_cap();
+    let copy_err = cspace_sys::cnode_copy(bi, root, dst_slot, canonical_root, src_slot, rights);
 
     if copy_err != seL4_NoError {
         log::warn!("[selftest] CNode_Copy failed err={copy_err}");

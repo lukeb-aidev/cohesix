@@ -13,7 +13,7 @@ use crate::boot::flags;
 use crate::bootstrap::cspace::CSpaceWindow;
 #[cfg(target_os = "none")]
 use crate::bootstrap::log::force_uart_line;
-use crate::sel4;
+use crate::sel4::{self, BootInfoExt};
 use sel4_sys::{self as sys, seL4_CNode, seL4_CapInitThreadCNode, seL4_WordBits};
 
 #[cfg(target_os = "none")]
@@ -275,7 +275,7 @@ pub fn enc_index(slot: sys::seL4_Word, bi: &sys::seL4_BootInfo, style: TupleStyl
     };
     let shift = depth_wordbits().saturating_sub(init_bits);
     ::log::info!(
-        "[cnode.enc] style={} slot=0x{slot:04x} bits={} shift={} encoded=0x{encoded:016x}",
+        "[cnode.enc] style={} slot=0x{slot:04x} bits={bits} shift={shift} encoded=0x{encoded:016x}",
         tuple_style_label(style),
         bits = init_bits,
         shift = shift,
@@ -329,7 +329,7 @@ fn cnode_copy_with_style(
     let depth = cnode_depth(bi, style);
     let depth_u8 = u8::try_from(depth).expect("cnode depth must fit in u8");
     ::log::info!(
-        "[cnode.tuple] style={} dst_index=0x{dst_index:04x} src_index=0x{src_index:04x} depth={} dst_offset=0x{dst_raw:04x} src_offset=0x{src_raw:04x}",
+        "[cnode.tuple] style={} dst_index=0x{dst_index:04x} src_index=0x{src_index:04x} depth={depth} dst_offset=0x{dst_raw:04x} src_offset=0x{src_raw:04x}",
         tuple_style_label(style),
         depth = depth,
         dst_raw = dst_slot_raw,
@@ -1086,8 +1086,9 @@ pub fn verify_root_cnode_slot(
     {
         let style = tuple_style();
         let _ = cnode_delete_with_style(bi, root, slot, style);
+        let canonical_root = bi.canonical_root_cap();
         let copy_err =
-            cnode_copy_raw_single(bi, root, slot, root, sys::seL4_CapBootInfoFrame as sys::seL4_Word);
+            cnode_copy_raw_single(bi, root, slot, canonical_root, sys::seL4_CapBootInfoFrame as sys::seL4_Word);
 
         if copy_err != sys::seL4_NoError {
             ::log::warn!(
