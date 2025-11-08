@@ -1112,12 +1112,14 @@ pub fn preflight_init_cnode_writable(probe_slot: sys::seL4_CPtr) -> Result<(), P
 
     #[cfg(target_os = "none")]
     {
-        let depth = bits as u8;
+        let style = tuple_style();
+        let depth = cnode_depth(bi(), style) as u8;
+        let dst_index = enc_index(probe_slot as sys::seL4_Word, bi(), style);
         let src_index = CANONICAL_INIT_CNODE_SLOT as sys::seL4_CPtr;
         let err = unsafe {
             sys::seL4_CNode_Mint(
                 root,
-                slot_index(probe_slot as sys::seL4_Word),
+                dst_index as sys::seL4_CPtr,
                 depth,
                 root,
                 src_index,
@@ -1138,9 +1140,8 @@ pub fn preflight_init_cnode_writable(probe_slot: sys::seL4_CPtr) -> Result<(), P
             return Err(PreflightError::Probe(err));
         }
 
-        let delete_err = unsafe {
-            sys::seL4_CNode_Delete(root, slot_index(probe_slot as sys::seL4_Word), depth)
-        };
+        let delete_err =
+            unsafe { sys::seL4_CNode_Delete(root, dst_index as sys::seL4_CPtr, depth) };
         if delete_err != sys::seL4_NoError {
             ::log::error!(
                 "preflight cleanup failed: Delete root=0x{root:04x} slot=0x{slot:04x} depth=initBits({depth}) err={} ({})",
