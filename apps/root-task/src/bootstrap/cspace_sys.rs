@@ -45,7 +45,8 @@ pub fn slot_index(slot: sys::seL4_Word) -> sys::seL4_CPtr {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TupleStyle {
-    GuardEncoded = 0,
+    Raw = 0,
+    GuardEncoded = 1,
 }
 
 #[inline(always)]
@@ -56,14 +57,16 @@ fn init_root_index() -> sys::seL4_Word {
 impl TupleStyle {
     #[inline(always)]
     fn fallback(self) -> Option<Self> {
-        let _ = self;
-        None
+        match self {
+            TupleStyle::Raw => Some(TupleStyle::GuardEncoded),
+            TupleStyle::GuardEncoded => None,
+        }
     }
 }
 
 #[inline(always)]
 pub fn tuple_style() -> TupleStyle {
-    TupleStyle::GuardEncoded
+    TupleStyle::Raw
 }
 
 #[inline(always)]
@@ -72,8 +75,11 @@ fn set_tuple_style(style: TupleStyle) {
 }
 
 #[inline(always)]
-pub fn tuple_style_label(_style: TupleStyle) -> &'static str {
-    "GuardEncoded"
+pub fn tuple_style_label(style: TupleStyle) -> &'static str {
+    match style {
+        TupleStyle::Raw => "Raw",
+        TupleStyle::GuardEncoded => "GuardEncoded",
+    }
 }
 
 #[cfg(target_os = "none")]
@@ -261,10 +267,13 @@ pub fn cnode_depth(_bi: &sys::seL4_BootInfo, _style: TupleStyle) -> sys::seL4_Wo
 }
 
 #[inline(always)]
-pub fn enc_index(slot: sys::seL4_Word, bi: &sys::seL4_BootInfo, _style: TupleStyle) -> sys::seL4_Word {
+pub fn enc_index(slot: sys::seL4_Word, bi: &sys::seL4_BootInfo, style: TupleStyle) -> sys::seL4_Word {
     let init_bits = sel4::init_cnode_bits(bi);
     check_slot_in_range(init_bits, slot as sys::seL4_CPtr);
-    encode_slot(slot as u64, init_bits) as sys::seL4_Word
+    match style {
+        TupleStyle::Raw => slot,
+        TupleStyle::GuardEncoded => encode_slot(slot as u64, init_bits) as sys::seL4_Word,
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -592,11 +601,11 @@ pub fn try_cnode_copy(
     let mut errors = StyleProbeErrors::new();
 
     let (raw_err, raw_cleanup) =
-        probe_cnode_copy_style(bi, dst_slot, src_slot, TupleStyle::GuardEncoded, 'A');
+        probe_cnode_copy_style(bi, dst_slot, src_slot, TupleStyle::Raw, 'A');
     errors.raw = raw_err;
     errors.cleanup_raw = raw_cleanup;
     if raw_err == sys::seL4_NoError && raw_cleanup == sys::seL4_NoError {
-        Ok(TupleStyle::GuardEncoded)
+        Ok(TupleStyle::Raw)
     } else {
         Err(errors)
     }
@@ -610,11 +619,11 @@ pub fn try_retype_ep(
 ) -> Result<TupleStyle, StyleProbeErrors> {
     let mut errors = StyleProbeErrors::new();
 
-    let (raw_err, raw_cleanup) = probe_retype_style(bi, ut, dst_slot, TupleStyle::GuardEncoded, 'A');
+    let (raw_err, raw_cleanup) = probe_retype_style(bi, ut, dst_slot, TupleStyle::Raw, 'A');
     errors.raw = raw_err;
     errors.cleanup_raw = raw_cleanup;
     if raw_err == sys::seL4_NoError && raw_cleanup == sys::seL4_NoError {
-        Ok(TupleStyle::GuardEncoded)
+        Ok(TupleStyle::Raw)
     } else {
         Err(errors)
     }
@@ -630,18 +639,18 @@ pub fn determine_tuple_style(
     let mut failure = ProbeFailure::default();
 
     let (copy_raw_err, copy_raw_cleanup) =
-        probe_cnode_copy_style(bi, test_slot, src_slot, TupleStyle::GuardEncoded, 'A');
+        probe_cnode_copy_style(bi, test_slot, src_slot, TupleStyle::Raw, 'A');
     failure.copy.raw = copy_raw_err;
     failure.copy.cleanup_raw = copy_raw_cleanup;
     if copy_raw_err == sys::seL4_NoError && copy_raw_cleanup == sys::seL4_NoError {
         let (retype_raw_err, retype_raw_cleanup) =
-            probe_retype_style(bi, ut_cap, test_slot, TupleStyle::GuardEncoded, 'A');
+            probe_retype_style(bi, ut_cap, test_slot, TupleStyle::Raw, 'A');
         failure.retype.raw = retype_raw_err;
         failure.retype.cleanup_raw = retype_raw_cleanup;
         if retype_raw_err == sys::seL4_NoError && retype_raw_cleanup == sys::seL4_NoError {
-            set_tuple_style(TupleStyle::GuardEncoded);
+            set_tuple_style(TupleStyle::Raw);
             ::log::info!("[probe] style=Raw");
-            return Ok(TupleStyle::GuardEncoded);
+            return Ok(TupleStyle::Raw);
         }
     }
 
@@ -656,8 +665,8 @@ pub fn determine_tuple_style(
     src_slot: sys::seL4_Word,
 ) -> Result<TupleStyle, ProbeFailure> {
     let _ = (bi, ut_cap, test_slot, src_slot);
-    set_tuple_style(TupleStyle::GuardEncoded);
-    Ok(TupleStyle::GuardEncoded)
+    set_tuple_style(TupleStyle::Raw);
+    Ok(TupleStyle::Raw)
 }
 
 #[inline]
