@@ -48,7 +48,10 @@ fn untyped_retype_encoded_uses_canonical_root_tuple() {
     assert_eq!(err, sel4_sys::seL4_NoError);
     let trace = take_last_host_retype_trace().expect("host trace must be captured");
     assert_eq!(trace.root, sel4_sys::seL4_CapInitThreadCNode);
-    assert_eq!(trace.node_index, 0);
+    assert_eq!(
+        trace.node_index,
+        sel4_sys::seL4_CapInitThreadCNode as sel4_sys::seL4_Word
+    );
     assert_eq!(trace.node_depth, sel4_sys::seL4_WordBits as sel4_sys::seL4_Word);
     assert_eq!(trace.node_offset, dst_slot as sel4_sys::seL4_Word);
     assert_eq!(

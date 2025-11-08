@@ -4,7 +4,7 @@
 
 use core::fmt::Write as _;
 
-use crate::sel4::BootInfoExt;
+use crate::sel4::{init_cnode_index_word, BootInfoExt};
 use sel4_sys::{
     seL4_CPtr, seL4_DebugPutChar, seL4_EndpointObject, seL4_Error, seL4_IPCBuffer,
     seL4_Untyped_Retype, seL4_Word,
@@ -58,7 +58,7 @@ pub fn make_cnode_tuple(init_cnode: seL4_CPtr, init_bits: u8) -> CNodeTuple {
 pub fn make_retype_tuple(init_cnode: seL4_CPtr, init_bits: u8) -> RetypeTuple {
     RetypeTuple {
         node_root: init_cnode,
-        node_index: 0,
+        node_index: init_cnode as seL4_Word,
         node_depth: sel4_sys::seL4_WordBits as seL4_Word,
         init_bits,
     }

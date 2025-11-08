@@ -47,6 +47,11 @@ pub enum TupleStyle {
     GuardEncoded = 0,
 }
 
+#[inline(always)]
+fn init_root_index() -> sys::seL4_Word {
+    sel4::init_cnode_index_word() as sys::seL4_Word
+}
+
 impl TupleStyle {
     #[inline(always)]
     fn fallback(self) -> Option<Self> {
@@ -493,6 +498,7 @@ pub fn retype_endpoint_raw(
 ) -> sys::seL4_Error {
     let depth = path_depth_word();
     let dst_index = enc_index(dst, bi, tuple_style());
+    let node_index = init_root_index();
 
     #[cfg(target_os = "none")]
     unsafe {
@@ -501,7 +507,7 @@ pub fn retype_endpoint_raw(
             sys::seL4_ObjectType::seL4_EndpointObject as sys::seL4_Word,
             0,
             sys::seL4_CapInitThreadCNode,
-            0,
+            node_index,
             depth,
             dst_index,
             1,
@@ -960,10 +966,11 @@ pub fn validate_retype_args(
             provided: args.root,
         });
     }
-    if args.node_index != 0 {
+    let expected_index = init_root_index();
+    if args.node_index != expected_index {
         return Err(RetypeArgsError::NodeIndexMismatch {
             provided: args.node_index,
-            expected: 0,
+            expected: expected_index,
         });
     }
     let expected_depth = path_depth();
@@ -1509,7 +1516,7 @@ pub fn init_cnode_dest(
     );
     let root = bi_init_cnode_cptr();
     let offset = slot as sys::seL4_Word;
-    let node_index = 0;
+    let node_index = init_root_index();
     let node_depth = path_depth_word();
     (root, node_index, node_depth, offset)
 }
@@ -1536,7 +1543,7 @@ pub fn init_cnode_retype_dest(
         "slot 0x{slot:04x} exceeds init CNode capacity (limit=0x{capacity:04x})",
     );
     let root = bi_init_cnode_cptr();
-    let node_index = 0;
+    let node_index = init_root_index();
     let node_depth = path_depth_word();
     let node_offset = slot as sys::seL4_Word;
     let depth_bits = bits_as_u8(init_bits_usize);
@@ -1994,7 +2001,7 @@ pub fn untyped_retype_into_init_root(
 
     let (root, node_index, node_depth, node_offset) = init_cnode_retype_dest(dst_slot);
     debug_assert_eq!(root, sel4::seL4_CapInitThreadCNode);
-    debug_assert_eq!(node_index, 0);
+    debug_assert_eq!(node_index, init_root_index());
     debug_assert_eq!(node_depth, path_depth_word());
     let args = RetypeArgs::new(
         untyped_slot,
@@ -2012,7 +2019,7 @@ pub fn untyped_retype_into_init_root(
     #[cfg(target_os = "none")]
     {
         let (empty_start, empty_end) = boot_empty_window();
-        debug_assert_eq!(node_index, 0);
+        debug_assert_eq!(node_index, init_root_index());
         let expected_depth = path_depth();
         debug_assert_eq!(args.cnode_depth, expected_depth);
         debug_assert!(args.dest_offset >= empty_start && args.dest_offset < empty_end);
@@ -2207,7 +2214,7 @@ mod tests {
         {
             if let Some(trace) = super::host_trace::take_last() {
                 assert_eq!(trace.root, bi_init_cnode_cptr());
-                assert_eq!(trace.node_index, 0);
+                assert_eq!(trace.node_index, init_root_index());
                 assert_eq!(trace.node_depth, sel4_sys::seL4_WordBits as sys::seL4_Word);
                 assert_eq!(trace.node_offset, slot as _);
                 assert_eq!(trace.object_type, 0);
@@ -2406,7 +2413,7 @@ mod tests {
         assert!(result.is_ok());
         let trace = super::host_trace::take_last().expect("expected host trace entry");
         assert_eq!(trace.root, sys::seL4_CapInitThreadCNode);
-        assert_eq!(trace.node_index, 0);
+        assert_eq!(trace.node_index, init_root_index());
         assert_eq!(trace.node_depth, sel4_sys::seL4_WordBits as sys::seL4_Word);
         assert_eq!(trace.node_offset, 0x120);
         assert_eq!(trace.object_type, 4);

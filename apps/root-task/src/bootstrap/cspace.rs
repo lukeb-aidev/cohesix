@@ -465,7 +465,7 @@ pub fn first_endpoint_retype(
     slot: seL4_CPtr,
 ) -> Result<(), seL4_Error> {
     let dst_root = root_cnode();
-    let node_index = 0u32;
+    let node_index = sel4::init_cnode_index_word() as u32;
     let node_depth = depth_word();
     let node_off = slot as seL4_Word;
 

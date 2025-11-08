@@ -15,7 +15,7 @@ use crate::bootstrap::log::force_uart_line;
 use crate::bootstrap::{boot_tracer, BootPhase, UntypedSelection};
 #[cfg(feature = "canonical_cspace")]
 use crate::sel4::pick_smallest_non_device_untyped;
-use crate::sel4::{error_name, PAGE_BITS, PAGE_TABLE_BITS};
+use crate::sel4::{error_name, init_cnode_index_word, PAGE_BITS, PAGE_TABLE_BITS};
 #[cfg(feature = "canonical_cspace")]
 use crate::sel4_view;
 #[cfg(any(test, feature = "ffi_shim"))]
@@ -145,7 +145,7 @@ pub(crate) fn call_retype(
 ) -> sys::seL4_Error {
     dest.assert_sane();
     let style = TupleStyle::GuardEncoded;
-    let node_index: sys::seL4_Word = 0;
+    let node_index: sys::seL4_Word = init_cnode_index_word();
     let node_depth: sys::seL4_Word = sys::seL4_WordBits as sys::seL4_Word;
     let slot_offset = sys::seL4_Word::try_from(dest.slot_offset)
         .expect("slot offset must fit within seL4_Word");

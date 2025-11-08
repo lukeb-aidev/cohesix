@@ -80,6 +80,12 @@ pub fn init_cnode_cptr(bi: &seL4_BootInfo) -> seL4_CPtr {
     sel4_view::init_cnode_cptr(bi)
 }
 
+/// Canonical node index used when addressing the init thread's root CNode.
+#[inline(always)]
+pub fn init_cnode_index_word() -> seL4_Word {
+    seL4_CapInitThreadCNode as seL4_Word
+}
+
 /// Returns the radix width (in bits) for the init thread's root CNode.
 #[inline(always)]
 pub fn init_cnode_bits(bi: &seL4_BootInfo) -> u8 {
