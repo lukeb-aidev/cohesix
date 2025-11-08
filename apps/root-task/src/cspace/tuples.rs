@@ -55,10 +55,10 @@ pub fn make_cnode_tuple(init_cnode: seL4_CPtr, init_bits: u8) -> CNodeTuple {
 
 /// Construct the canonical tuple for retype destinations.
 #[inline(always)]
-pub fn make_retype_tuple(init_cnode: seL4_CPtr, init_bits: u8) -> RetypeTuple {
+pub fn make_retype_tuple(canonical_root: seL4_CPtr, init_bits: u8) -> RetypeTuple {
     RetypeTuple {
-        node_root: init_cnode,
-        node_index: init_cnode as seL4_Word,
+        node_root: canonical_root,
+        node_index: canonical_root as seL4_Word,
         node_depth: sel4_sys::seL4_WordBits as seL4_Word,
         init_bits,
     }

@@ -27,6 +27,8 @@ const MAX_DIAGNOSTIC_LEN: usize = 224;
 pub struct CSpaceWindow {
     /// Root CNode capability designating the init thread's CSpace.
     pub root: sel4::seL4_CPtr,
+    /// Canonical guard-less root capability that can address kernel slots below the advertised window.
+    pub canonical_root: sel4::seL4_CPtr,
     /// Radix width (in bits) of the init CNode as reported by bootinfo.
     pub bits: u8,
     /// First free slot index inside the init CNode window.
@@ -44,6 +46,7 @@ impl CSpaceWindow {
         let (first_free, end) = view.init_cnode_empty_range();
         Self {
             root: view.root_cnode_cap(),
+            canonical_root: view.canonical_root_cap(),
             bits: cspace_sys::bits_as_u8(usize::from(view.init_cnode_bits())),
             first_free,
             empty_start: first_free,
@@ -784,6 +787,8 @@ pub struct CSpaceCtx {
     pub last_free: sel4::seL4_CPtr,
     /// Capability pointer for the init CNode itself.
     pub root_cnode_cap: sel4::seL4_CPtr,
+    /// Canonical root capability that can access kernel-seeded slots below `empty_start`.
+    pub canonical_root_cap: sel4::seL4_CPtr,
     /// Slot index containing a copied init TCB capability once `smoke_copy_init_tcb` succeeds.
     pub tcb_copy_slot: sel4::seL4_CPtr,
     /// Slot index containing a copied root CNode capability when minted.
@@ -854,6 +859,7 @@ impl CSpaceCtx {
             last_free <= limit,
             "bootinfo.empty.end exceeds init CNode size"
         );
+        let canonical_root_cap = bi.canonical_root_cap();
         let root_cnode_cap = init_cspace_root;
         let dest = make_root_dest(bi.header());
         let ctx = Self {
@@ -864,6 +870,7 @@ impl CSpaceCtx {
             first_free,
             last_free,
             root_cnode_cap,
+            canonical_root_cap,
             tcb_copy_slot: sel4::seL4_CapNull,
             root_cnode_copy_slot: sel4::seL4_CapNull,
             dest,
@@ -1100,7 +1107,9 @@ impl CSpaceCtx {
             emit_console_line(line.as_str());
         }
         let rights = cap_rights_read_write_grant();
-        let err = self.cspace.copy_here(dst_slot, src_slot, rights);
+        let err = self
+            .cspace
+            .copy_here(dst_slot, self.canonical_root_cap, src_slot, rights);
         self.log_cnode_copy(err, dst_slot, src_slot);
         err
     }
@@ -1109,9 +1118,13 @@ impl CSpaceCtx {
     pub fn mint_root_cnode_copy(&mut self) -> Result<(), sel4::seL4_Error> {
         let dst_slot = self.alloc_slot_checked()?;
         let src_slot = seL4_CapInitThreadCNode;
-        let err = self
-            .cspace
-            .mint_here(dst_slot, src_slot, sel4_sys::seL4_CapRights_All, 0);
+        let err = self.cspace.mint_here(
+            dst_slot,
+            self.canonical_root_cap,
+            src_slot,
+            sel4_sys::seL4_CapRights_All,
+            0,
+        );
         self.log_cnode_mint(err, dst_slot, src_slot, 0);
         if err == sel4::seL4_NoError {
             self.root_cnode_copy_slot = dst_slot;

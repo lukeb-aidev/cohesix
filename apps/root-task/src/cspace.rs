@@ -63,6 +63,7 @@ impl CSpace {
     pub fn copy_here(
         &mut self,
         dst_slot: seL4_CPtr,
+        src_root: seL4_CPtr,
         src_slot: seL4_CPtr,
         rights: sel4_sys::seL4_CapRights,
     ) -> seL4_Error {
@@ -77,15 +78,14 @@ impl CSpace {
             src = src_slot,
             depth = depth,
         );
-        sel4::cnode_copy_depth(
-            self.root, dst_slot, depth, self.root, src_slot, depth, rights,
-        )
+        sel4::cnode_copy_depth(self.root, dst_slot, depth, src_root, src_slot, depth, rights)
     }
 
     /// Issues a `seL4_CNode_Mint` within the init CSpace.
     pub fn mint_here(
         &mut self,
         dst_slot: seL4_CPtr,
+        src_root: seL4_CPtr,
         src_slot: seL4_CPtr,
         rights: sel4_sys::seL4_CapRights,
         badge: seL4_Word,
@@ -102,7 +102,14 @@ impl CSpace {
             depth = depth,
         );
         sel4::cnode_mint_depth(
-            self.root, dst_slot, depth, self.root, src_slot, depth, rights, badge,
+            self.root,
+            dst_slot,
+            depth,
+            src_root,
+            src_slot,
+            depth,
+            rights,
+            badge,
         )
     }
 }

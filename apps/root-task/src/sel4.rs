@@ -290,6 +290,15 @@ impl BootInfoView {
     pub fn root_cnode_cap(&self) -> seL4_CPtr {
         sel4_sys::seL4_CapInitThreadCNode
     }
+
+    /// Returns the canonical (guard-less) root CNode capability provided by the kernel.
+    ///
+    /// This capability can traverse slots below the bootinfo empty window, so it should be used
+    /// whenever we need to read kernel-provided caps that live outside the advertised range.
+    #[must_use]
+    pub fn canonical_root_cap(&self) -> seL4_CPtr {
+        sel4_sys::seL4_CapInitThreadCNode
+    }
 }
 
 /// Returns the first RAM-backed untyped capability advertised by the kernel.

@@ -555,7 +555,7 @@ fn bootstrap<P: Platform>(
     debug_assert_eq!(boot_first_free, cspace_window.first_free);
     debug_assert_eq!(boot_cspace.depth(), cspace_window.bits);
     #[cfg_attr(feature = "bootstrap-minimal", allow(unused_variables))]
-    let retype_tuple = make_retype_tuple(cspace_window.root, cspace_window.bits);
+    let retype_tuple = make_retype_tuple(cspace_window.canonical_root, cspace_window.bits);
     let (_, empty_end) = bootinfo_view.init_cnode_empty_range();
     log::info!(
         "[rt-fix] cspace window [0x{start:04x}..0x{end:04x}), initBits={bits}, initCNode=0x{root:04x}",
