@@ -148,7 +148,7 @@ impl InitCNode {
     #[must_use]
     pub fn from_bootinfo(bi: &seL4_BootInfo) -> Self {
         let root = seL4_CapInitThreadCNode;
-        let depth = sel4_sys::seL4_WordBits as seL4_Word;
+        let depth = bi.initThreadCNodeSizeBits as seL4_Word;
         let index = 0;
         let bits = bi.initThreadCNodeSizeBits as u8;
         let empty = SlotRange::new(bi.empty.start as seL4_Word, bi.empty.end as seL4_Word);
@@ -176,17 +176,6 @@ fn root_cnode() -> seL4_CNode {
 }
 
 #[inline(always)]
-fn depth() -> u8 {
-    debug_assert!(seL4_WordBits <= u8::MAX as seL4_Word);
-    seL4_WordBits as u8
-}
-
-#[inline(always)]
-fn depth_word() -> seL4_Word {
-    seL4_WordBits as seL4_Word
-}
-
-#[inline(always)]
 fn idx(slot: usize) -> seL4_CPtr {
     slot as seL4_CPtr
 }
@@ -206,7 +195,7 @@ pub fn root_cnode_path(
     init_cnode_bits: u8,
     dst_slot: seL4_Word,
 ) -> (seL4_CPtr, seL4_Word, seL4_Word, seL4_Word) {
-    let depth = depth_word();
+    let depth = usize::from(init_cnode_bits) as seL4_Word;
     let path = CNodePath::new(root_cnode(), 0, depth);
     guard_root_path(
         init_cnode_bits,
@@ -219,11 +208,8 @@ pub fn root_cnode_path(
 
 #[inline(always)]
 pub fn guard_root_path(init_cnode_bits: u8, index: seL4_Word, depth: seL4_Word, offset: seL4_Word) {
-    let word_bits = WORD_BITS;
-    assert_eq!(
-        depth, word_bits,
-        "depth must equal seL4_WordBits for init CNode addressing",
-    );
+    let expected_depth = usize::from(init_cnode_bits) as seL4_Word;
+    assert_eq!(depth, expected_depth, "depth must equal init cnode bits");
     assert_eq!(
         index, 0,
         "node index must be zero for init CNode direct path"
@@ -451,7 +437,7 @@ pub fn cnode_copy_selftest(bi: &seL4_BootInfo) -> Result<(), seL4_Error> {
 
     #[cfg(target_os = "none")]
     {
-        let depth_bits = depth();
+        let depth_bits = sel4::init_cnode_depth(bi);
         let delete_err = unsafe { seL4_CNode_Delete(root, idx(start as usize), depth_bits) };
         if delete_err != seL4_NoError {
             log::warn!("[selftest] cleanup delete failed err={delete_err}");
@@ -470,7 +456,7 @@ pub fn first_endpoint_retype(
 ) -> Result<(), seL4_Error> {
     let dst_root = root_cnode();
     let node_index = sel4::init_cnode_index_word() as u32;
-    let node_depth = depth_word();
+    let node_depth = sel4::init_cnode_depth(bi) as seL4_Word;
     let node_off = slot as seL4_Word;
 
     log::info!(
@@ -537,7 +523,7 @@ pub fn cspace_first_retypes(
         seL4_CapInitThreadTCB as seL4_Word,
     );
     let mut copy_line = String::<MAX_DIAGNOSTIC_LEN>::new();
-    let depth_word = sel4::word_bits() as seL4_Word;
+    let depth_word = sel4::init_cnode_depth(bi) as seL4_Word;
     let src_slot = seL4_CapInitThreadTCB as seL4_Word;
     let log_result = if copy_err == sel4_sys::seL4_NoError {
         write!(
@@ -710,7 +696,7 @@ pub fn cspace_first_retypes(
         rights,
     );
     let mut copy_line = String::<MAX_DIAGNOSTIC_LEN>::new();
-    let depth_word = sel4::word_bits() as seL4_Word;
+    let depth_word = sel4::init_cnode_depth(bi) as seL4_Word;
     let src_slot = seL4_CapInitThreadTCB as seL4_Word;
     let log_result = if copy_err == sel4_sys::seL4_NoError {
         write!(
