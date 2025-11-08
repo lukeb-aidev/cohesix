@@ -270,7 +270,7 @@ pub fn enc_index(slot: sys::seL4_Word, bi: &sys::seL4_BootInfo, style: TupleStyl
     let init_bits = sel4::init_cnode_bits(bi);
     check_slot_in_range(init_bits, slot as sys::seL4_CPtr);
     let encoded = match style {
-        TupleStyle::Raw => 0,
+        TupleStyle::Raw => slot,
         TupleStyle::GuardEncoded => encode_slot(slot as u64, init_bits) as sys::seL4_Word,
     };
     let shift = depth_wordbits().saturating_sub(init_bits);
@@ -407,6 +407,15 @@ fn cnode_mint_with_style(
     let src_index = enc_index(src_slot_raw, bi, style) as sys::seL4_CPtr;
     let depth = cnode_depth(bi, style);
     let depth_u8 = u8::try_from(depth).expect("cnode depth must fit in u8");
+
+    #[cfg(target_os = "none")]
+    unsafe {
+        let dst_ty = sys::seL4_DebugCapIdentify(dst_root);
+        let src_ty = sys::seL4_DebugCapIdentify(src_root);
+        debug_log(format_args!(
+            "[cnode.capid] dst_root=0x{dst_root:04x} ty=0x{dst_ty:08x} src_root=0x{src_root:04x} ty=0x{src_ty:08x}",
+        ));
+    }
 
     #[cfg(target_os = "none")]
     unsafe {
