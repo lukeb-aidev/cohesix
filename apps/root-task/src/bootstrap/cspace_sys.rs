@@ -256,24 +256,31 @@ pub fn encode_slot(slot: u64, bits: u8) -> u64 {
         bits <= depth_wordbits(),
         "initThreadCNodeSizeBits must not exceed seL4_WordBits"
     );
-    // Kernel reports guard bits via the capability itself (guard value = 0, guard size = WordBits - initBits).
-    // The tuple path must still use raw slot indices, so leave the slot unmodified.
-    slot
+    let shift = depth_wordbits() - bits;
+    slot << shift
 }
 
 #[inline(always)]
 pub fn cnode_depth(_bi: &sys::seL4_BootInfo, _style: TupleStyle) -> sys::seL4_Word {
-    sel4::init_cnode_bits(_bi) as sys::seL4_Word
+    path_depth_word()
 }
 
 #[inline(always)]
 pub fn enc_index(slot: sys::seL4_Word, bi: &sys::seL4_BootInfo, style: TupleStyle) -> sys::seL4_Word {
     let init_bits = sel4::init_cnode_bits(bi);
     check_slot_in_range(init_bits, slot as sys::seL4_CPtr);
-    match style {
-        TupleStyle::Raw => slot,
+    let encoded = match style {
+        TupleStyle::Raw => encode_slot(slot as u64, init_bits) as sys::seL4_Word,
         TupleStyle::GuardEncoded => encode_slot(slot as u64, init_bits) as sys::seL4_Word,
-    }
+    };
+    let shift = depth_wordbits().saturating_sub(init_bits);
+    ::log::info!(
+        "[cnode.enc] style={} slot=0x{slot:04x} bits={} shift={} encoded=0x{encoded:016x}",
+        tuple_style_label(style),
+        bits = init_bits,
+        shift = shift,
+    );
+    encoded
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -520,7 +527,7 @@ pub fn retype_endpoint_raw(
     ut: sys::seL4_Word,
     dst: sys::seL4_Word,
 ) -> sys::seL4_Error {
-    let depth = sel4::init_cnode_bits(bi) as sys::seL4_Word;
+    let depth = path_depth_word();
     let dst_index = enc_index(dst, bi, tuple_style());
     let node_index = init_root_index();
 
@@ -680,7 +687,7 @@ pub fn untyped_retype_encoded(
     num_objects: u64,
 ) -> sys::seL4_Error {
     let offset = dst_slot as sys::seL4_Word;
-    let depth = usize::from(dst_bits);
+    let depth = usize::try_from(path_depth_word()).expect("path depth fits into usize");
     let index = 0usize;
     debug_assert!(
         dst_bits as usize <= sys::seL4_WordBits as usize,
@@ -997,7 +1004,7 @@ pub fn validate_retype_args(
             expected: expected_index,
         });
     }
-    let expected_depth = bits_as_u8(bi_init_cnode_bits() as usize);
+    let expected_depth = path_depth();
     if args.cnode_depth != expected_depth {
         return Err(RetypeArgsError::DepthMismatch {
             provided: args.cnode_depth,
@@ -1253,7 +1260,8 @@ pub fn encode_cnode_depth(bits: u8) -> sys::seL4_Word {
 /// Depth (in bits) used when traversing the init CNode for syscall arguments.
 #[inline(always)]
 fn init_cspace_depth_words(bi: &sys::seL4_BootInfo) -> sys::seL4_Word {
-    sel4::init_cnode_bits(bi) as sys::seL4_Word
+    let _ = bi;
+    path_depth_word()
 }
 
 #[inline(always)]
@@ -1490,7 +1498,7 @@ impl RootPath {
         let root = sel4::init_cnode_cptr(bi);
         let offset = slot as sys::seL4_Word;
         let index = 0;
-        let depth = init_bits as sys::seL4_Word;
+        let depth = path_depth_word();
         let (empty_start, empty_end) = sel4::empty_window(bi);
         assert!(
             slot >= empty_start && slot < empty_end,
@@ -1542,7 +1550,7 @@ pub fn init_cnode_dest(
     let root = bi_init_cnode_cptr();
     let offset = slot as sys::seL4_Word;
     let node_index = init_root_index();
-    let node_depth = init_bits_word;
+    let node_depth = path_depth_word();
     (root, node_index, node_depth, offset)
 }
 
@@ -1569,7 +1577,7 @@ pub fn init_cnode_retype_dest(
     );
     let root = bi_init_cnode_cptr();
     let node_index = init_root_index();
-    let node_depth = init_bits_word;
+    let node_depth = path_depth_word();
     let node_offset = slot as sys::seL4_Word;
     let depth_bits = bits_as_u8(init_bits_usize);
     debug_assert!(
@@ -1794,13 +1802,13 @@ pub fn retype_into_root(
     bi: &sys::seL4_BootInfo,
 ) -> Result<(), sys::seL4_Error> {
     let root = sys::seL4_CapInitThreadCNode;
-    let init_cnode_bits = sel4::init_cnode_bits(bi);
     let offset = dst_slot as sys::seL4_Word;
+    let init_cnode_bits = sel4::init_cnode_bits(bi);
     check_slot_in_range(init_cnode_bits, dst_slot);
 
     let style = tuple_style();
     let index = 0;
-    let depth = init_cnode_bits as sys::seL4_Word;
+    let depth = path_depth_word();
 
     #[cfg(all(target_os = "none", debug_assertions))]
     {
@@ -1813,7 +1821,7 @@ pub fn retype_into_root(
             sys::seL4_CNode_Move(
                 root,
                 slot_index(offset),
-                init_cnode_bits,
+                path_depth(),
                 sys::seL4_CapNull,
                 0,
                 0,
@@ -2027,7 +2035,7 @@ pub fn untyped_retype_into_init_root(
     let (root, node_index, node_depth, node_offset) = init_cnode_retype_dest(dst_slot);
     debug_assert_eq!(root, sel4::seL4_CapInitThreadCNode);
     debug_assert_eq!(node_index, init_root_index());
-    debug_assert_eq!(node_depth, bi_init_cnode_bits());
+    debug_assert_eq!(node_depth, path_depth_word());
     let args = RetypeArgs::new(
         untyped_slot,
         obj_type,
@@ -2045,7 +2053,7 @@ pub fn untyped_retype_into_init_root(
     {
         let (empty_start, empty_end) = boot_empty_window();
         debug_assert_eq!(node_index, init_root_index());
-        let expected_depth = bits_as_u8(bi_init_cnode_bits() as usize);
+        let expected_depth = path_depth();
         debug_assert_eq!(args.cnode_depth, expected_depth);
         debug_assert!(args.dest_offset >= empty_start && args.dest_offset < empty_end);
 
@@ -2163,7 +2171,7 @@ pub(crate) fn init_cnode_direct_destination_words(
         (dst_slot as usize) < limit,
         "destination slot {dst_slot:#x} exceeds init CNode capacity (bits={init_cnode_bits})"
     );
-    (0, init_cnode_bits as sys::seL4_Word, dst_slot as sys::seL4_Word)
+    (0, path_depth_word(), dst_slot as sys::seL4_Word)
 }
 
 #[cfg(test)]

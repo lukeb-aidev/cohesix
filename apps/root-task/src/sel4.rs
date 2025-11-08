@@ -547,10 +547,10 @@ pub fn replyrecv_guarded(
     Ok(message)
 }
 
-/// Returns the radix width (in bits) for the init CNode derived from bootinfo.
+/// Returns the canonical guard depth (WordBits) for init CNode operations.
 #[inline]
-pub fn init_cnode_depth(bi: &seL4_BootInfo) -> u8 {
-    init_cnode_bits(bi)
+pub fn init_cnode_depth(_bi: &seL4_BootInfo) -> u8 {
+    sel4_sys::seL4_WordBits as u8
 }
 
 /// Emits a single byte to the seL4 debug console.
