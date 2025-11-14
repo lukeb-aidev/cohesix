@@ -7,7 +7,7 @@
 
 use core::{
     arch::asm,
-    convert::{TryFrom, TryInto},
+    convert::TryInto,
     fmt, mem,
     ptr::{self, NonNull},
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -561,20 +561,15 @@ pub fn replyrecv_guarded(
     Ok(message)
 }
 
-/// Returns the canonical guard depth for init CNode operations (radix width).
+/// Returns the canonical guard depth (in bits) for init CNode syscall invocations.
 #[inline]
-pub fn init_cnode_depth(bi: &seL4_BootInfo) -> u8 {
-    // seL4 resolves CNode paths using the radix depth reported via bootinfo. Guard bits are
-    // encoded within the capability pointer itself, therefore callers must pass the actual
-    // init CNode radix rather than the architectural word width. Using the kernel-provided
-    // radix keeps CNode invocations aligned with the init thread layout and avoids failed
-    // lookups during boot.
-    let bits = bi.initThreadCNodeSizeBits;
-    debug_assert!(
-        bits <= sel4_sys::seL4_WordBits as usize,
-        "initThreadCNodeSizeBits must not exceed seL4_WordBits",
-    );
-    u8::try_from(bits).expect("initThreadCNodeSizeBits must fit within u8")
+pub fn init_cnode_depth(_bi: &seL4_BootInfo) -> u8 {
+    // seL4 expects CNode invocations to supply the architectural word width as the traversal
+    // depth when addressing the init thread CSpace. The kernel encodes guard bits within the
+    // capability pointer itself, so presenting `seL4_WordBits` ensures guard comparisons
+    // succeed while allowing the low bits to select the destination slot. Using the word width
+    // avoids the failed lookups observed when the bootinfo radix was supplied instead.
+    sel4_sys::seL4_WordBits as u8
 }
 
 /// Emits a single byte to the seL4 debug console.
