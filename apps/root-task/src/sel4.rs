@@ -7,7 +7,7 @@
 
 use core::{
     arch::asm,
-    convert::TryInto,
+    convert::{TryFrom, TryInto},
     fmt, mem,
     ptr::{self, NonNull},
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -571,10 +571,10 @@ pub fn init_cnode_depth(bi: &seL4_BootInfo) -> u8 {
     // lookups during boot.
     let bits = bi.initThreadCNodeSizeBits;
     debug_assert!(
-        bits <= sel4_sys::seL4_WordBits as u8,
+        bits <= sel4_sys::seL4_WordBits as usize,
         "initThreadCNodeSizeBits must not exceed seL4_WordBits",
     );
-    bits
+    u8::try_from(bits).expect("initThreadCNodeSizeBits must fit within u8")
 }
 
 /// Emits a single byte to the seL4 debug console.
