@@ -563,8 +563,13 @@ pub fn replyrecv_guarded(
 
 /// Returns the canonical guard depth for init CNode operations (radix width).
 #[inline]
-pub fn init_cnode_depth(bi: &seL4_BootInfo) -> u8 {
-    init_cnode_bits(bi)
+pub fn init_cnode_depth(_bi: &seL4_BootInfo) -> u8 {
+    // seL4 expects callers to traverse the init CNode using a full-word depth so that the
+    // capability pointer follows the canonical guard encoding described in the ABI.
+    // Returning `seL4_WordBits` keeps all CNode invocations consistent with the kernel's
+    // expectations regardless of the init CNode radix advertised by bootinfo.
+    let _ = _bi;
+    word_bits() as u8
 }
 
 /// Emits a single byte to the seL4 debug console.
@@ -2183,7 +2188,7 @@ impl<'a> KernelEnv<'a> {
             )
         });
         let init_cnode = self.bootinfo.init_cnode_cap();
-        let expected_depth: seL4_Word = init_bits as seL4_Word;
+        let expected_depth: seL4_Word = word_bits();
         let expected_index: seL4_Word = init_cnode as seL4_Word;
         let expected_offset: seL4_Word = trace.dest_slot as seL4_Word;
         assert!(
@@ -2649,7 +2654,7 @@ impl<'a> KernelEnv<'a> {
     fn record_retype(&mut self, trace: RetypeTrace, status: RetypeStatus) {
         let init_cnode_cap = self.bootinfo.init_cnode_cap();
         let init_bits = self.bootinfo.init_cnode_bits();
-        let expected_depth: seL4_Word = init_bits as seL4_Word;
+        let expected_depth: seL4_Word = word_bits();
         let expected_index: seL4_Word = init_cnode_cap as seL4_Word;
         let expected_offset: seL4_Word = trace.dest_slot as seL4_Word;
         let max_slots = 1usize.checked_shl(init_bits as u32).unwrap_or_else(|| {
@@ -2957,7 +2962,7 @@ mod tests {
         );
         assert_eq!(trace.cnode_root, bootinfo_ref.init_cnode_cap());
         let expected_index: seL4_Word = bootinfo_ref.init_cnode_cap() as seL4_Word;
-        let expected_depth: seL4_Word = bootinfo_ref.init_cnode_bits() as seL4_Word;
+        let expected_depth: seL4_Word = word_bits();
         assert_eq!(trace.node_index, expected_index);
         assert_eq!(trace.cnode_depth, expected_depth);
         assert_eq!(trace.dest_offset, slot as seL4_Word);
@@ -2965,7 +2970,7 @@ mod tests {
     }
 
     #[test]
-    fn retype_sanitiser_uses_bootinfo_depth() {
+    fn retype_sanitiser_uses_canonical_depth() {
         let mut bootinfo: seL4_BootInfo = unsafe { core::mem::zeroed() };
         bootinfo.empty = seL4_SlotRegion {
             start: 0,
@@ -2990,10 +2995,7 @@ mod tests {
         );
         let (sanitised, init_bits) = env.sanitise_retype_trace(trace);
         assert_eq!(init_bits, 13);
-        assert_eq!(
-            sanitised.cnode_depth,
-            bootinfo_ref.init_cnode_bits() as seL4_Word
-        );
+        assert_eq!(sanitised.cnode_depth, word_bits());
         assert_eq!(
             sanitised.node_index,
             bootinfo_ref.init_cnode_cap() as seL4_Word
@@ -3030,7 +3032,7 @@ mod tests {
         let init_root = bootinfo_ref.init_cnode_cap();
 
         let slot: seL4_CPtr = 0x00c8;
-        let expected_depth: seL4_Word = bootinfo_ref.init_cnode_bits() as seL4_Word;
+        let expected_depth: seL4_Word = word_bits();
         let canonical_index: seL4_Word = init_root as seL4_Word;
         let trace = RetypeTrace {
             untyped_cap: 0x200,
@@ -3066,7 +3068,7 @@ mod tests {
 
         let slot: seL4_CPtr = 0x0097;
         let canonical_index: seL4_Word = init_root as seL4_Word;
-        let expected_depth: seL4_Word = bootinfo_ref.init_cnode_bits() as seL4_Word;
+        let expected_depth: seL4_Word = word_bits();
         let trace = RetypeTrace {
             untyped_cap: 0x100,
             untyped_paddr: 0,
@@ -3101,7 +3103,7 @@ mod tests {
         let bootinfo_ref: &'static mut seL4_BootInfo = Box::leak(Box::new(bootinfo));
         let env = KernelEnv::new(bootinfo_ref);
         let init_root = bootinfo_ref.init_cnode_cap();
-        let expected_depth: seL4_Word = bootinfo_ref.init_cnode_bits() as seL4_Word;
+        let expected_depth: seL4_Word = word_bits();
         let valid_trace = RetypeTrace {
             untyped_cap: 0x100,
             untyped_paddr: 0,

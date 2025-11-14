@@ -29,13 +29,12 @@ pub fn root_cnode() -> seL4_CNode {
 
 #[inline(always)]
 pub fn path_depth() -> u8 {
-    let bits = bi_init_cnode_bits() as usize;
-    bits_as_u8(bits)
+    bits_as_u8(sys::seL4_WordBits as usize)
 }
 
 #[inline(always)]
 pub fn path_depth_word() -> sys::seL4_Word {
-    bi_init_cnode_bits()
+    sys::seL4_WordBits as sys::seL4_Word
 }
 
 #[inline(always)]

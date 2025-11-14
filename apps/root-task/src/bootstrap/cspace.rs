@@ -831,7 +831,7 @@ impl CSpaceCtx {
             init = init_cnode_bits,
         );
         // Init-root invocations must supply the bootinfo-advertised guard depth.
-        let invocation_depth_bits = init_cnode_bits;
+        let invocation_depth_bits = sel4::word_bits() as u8;
         let (first_free, last_free) = bi.init_cnode_empty_range();
         assert!(
             first_free < last_free,
