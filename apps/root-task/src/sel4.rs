@@ -106,7 +106,7 @@ pub fn empty_window(bi: &seL4_BootInfo) -> (u32, u32) {
     )
 }
 
-const MAX_BOOTINFO_EXTRA_WORDS: usize = 32 * 1024;
+const MAX_BOOTINFO_EXTRA_BYTES: usize = 32 * 1024;
 
 /// Errors raised while validating a bootinfo pointer and its extra region.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -122,8 +122,8 @@ pub enum BootInfoError {
     },
     /// The reported extra bootinfo span exceeded the permitted limit.
     ExtraTooLarge {
-        /// Number of 64-bit words advertised for the extra bootinfo region.
-        words: usize,
+        /// Number of bytes advertised for the extra bootinfo region.
+        bytes: usize,
     },
     /// Arithmetic overflow occurred while computing bounds.
     Overflow,
@@ -146,8 +146,8 @@ impl fmt::Display for BootInfoError {
                     "bootinfo pointer not {required}-byte aligned: 0x{address:016x}"
                 )
             }
-            Self::ExtraTooLarge { words } => {
-                write!(f, "bootinfo.extraLen exceeded limit: {words} words")
+            Self::ExtraTooLarge { bytes } => {
+                write!(f, "bootinfo.extraLen exceeded limit: {bytes} bytes")
             }
             Self::Overflow => write!(f, "bootinfo bounds computation overflowed"),
             Self::ExtraRange { start, end } => write!(
@@ -168,19 +168,16 @@ fn bootinfo_extra_slice<'a>(header: &'a seL4_BootInfo) -> Result<&'a [u8], BootI
         });
     }
 
-    let extra_words = header.extraLen as usize;
-    if extra_words == 0 {
+    let extra_bytes = header.extraLen as usize;
+    if extra_bytes == 0 {
         return Ok(&[]);
     }
 
-    if extra_words > MAX_BOOTINFO_EXTRA_WORDS {
-        return Err(BootInfoError::ExtraTooLarge { words: extra_words });
+    if extra_bytes > MAX_BOOTINFO_EXTRA_BYTES {
+        return Err(BootInfoError::ExtraTooLarge { bytes: extra_bytes });
     }
 
-    let word_bytes = mem::size_of::<seL4_Word>();
-    let extra_len = extra_words
-        .checked_mul(word_bytes)
-        .ok_or(BootInfoError::Overflow)?;
+    let extra_len = extra_bytes;
 
     let header_size = mem::size_of::<seL4_BootInfo>();
     let extra_start = addr
@@ -268,7 +265,7 @@ impl BootInfoView {
 
     /// Returns the number of extra words reported by the kernel.
     #[must_use]
-    pub fn extra_words(&self) -> usize {
+    pub fn extra_bytes(&self) -> usize {
         self.header.extraLen as usize
     }
 
@@ -1082,8 +1079,7 @@ impl BootInfoExt for seL4_BootInfo {
     }
 
     fn ipc_buffer_ptr(&self) -> Option<NonNull<sel4_sys::seL4_IPCBuffer>> {
-        let ptr = self.ipcBuffer as *mut sel4_sys::seL4_IPCBuffer;
-        NonNull::new(ptr)
+        NonNull::new(self.ipcBuffer)
     }
 }
 
