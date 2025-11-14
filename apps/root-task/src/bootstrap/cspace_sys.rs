@@ -29,12 +29,12 @@ pub fn root_cnode() -> seL4_CNode {
 
 #[inline(always)]
 pub fn path_depth() -> u8 {
-    bits_as_u8(sys::seL4_WordBits as usize)
+    bits_as_u8(bi_init_cnode_bits() as usize)
 }
 
 #[inline(always)]
 pub fn path_depth_word() -> sys::seL4_Word {
-    sys::seL4_WordBits as sys::seL4_Word
+    bi_init_cnode_bits()
 }
 
 #[inline(always)]
@@ -156,7 +156,7 @@ pub fn assert_init_cnode_layout(bi: &sys::seL4_BootInfo) {
         "bootinfo empty window end 0x{empty_end:04x} exceeds init CNode capacity 0x{capacity:04x}",
     );
 
-    let guard_bits = path_depth_word() as usize - init_bits;
+    let guard_bits = sel4::word_bits() as usize - init_bits;
     ::log::info!(
         "[cnode] expect single-level: radix={} guard={} empty=[0x{empty_start:04x}..0x{empty_end:04x})",
         init_bits,
@@ -260,9 +260,11 @@ pub fn encode_slot(slot: u64, bits: u8) -> u64 {
 }
 
 #[inline(always)]
-pub fn cnode_depth(bi: &sys::seL4_BootInfo, _style: TupleStyle) -> sys::seL4_Word {
-    let _ = bi;
-    sys::seL4_WordBits as sys::seL4_Word
+pub fn cnode_depth(bi: &sys::seL4_BootInfo, style: TupleStyle) -> sys::seL4_Word {
+    match style {
+        TupleStyle::Raw => sel4::init_cnode_bits(bi) as sys::seL4_Word,
+        TupleStyle::GuardEncoded => sys::seL4_WordBits as sys::seL4_Word,
+    }
 }
 
 #[inline(always)]
@@ -547,7 +549,7 @@ pub fn retype_endpoint_raw(
     ut: sys::seL4_Word,
     dst: sys::seL4_Word,
 ) -> sys::seL4_Error {
-    let depth = path_depth_word();
+    let depth = sel4::init_cnode_bits(bi) as sys::seL4_Word;
     let dst_index = enc_index(dst, bi, tuple_style());
     let node_index = init_root_index();
 
@@ -1286,8 +1288,7 @@ pub fn encode_cnode_depth(bits: u8) -> sys::seL4_Word {
 /// Depth (in bits) used when traversing the init CNode for syscall arguments.
 #[inline(always)]
 fn init_cspace_depth_words(bi: &sys::seL4_BootInfo) -> sys::seL4_Word {
-    let _ = bi;
-    sys::seL4_WordBits as sys::seL4_Word
+    sel4::init_cnode_bits(bi) as sys::seL4_Word
 }
 
 #[inline(always)]
@@ -1524,7 +1525,7 @@ impl RootPath {
         let root = sel4::init_cnode_cptr(bi);
         let offset = slot as sys::seL4_Word;
         let index = 0;
-        let depth = path_depth_word();
+        let depth = init_bits as sys::seL4_Word;
         let (empty_start, empty_end) = sel4::empty_window(bi);
         assert!(
             slot >= empty_start && slot < empty_end,
@@ -1576,7 +1577,7 @@ pub fn init_cnode_dest(
     let root = bi_init_cnode_cptr();
     let offset = slot as sys::seL4_Word;
     let node_index = init_root_index();
-    let node_depth = path_depth_word();
+    let node_depth = init_bits_word;
     (root, node_index, node_depth, offset)
 }
 
@@ -1603,7 +1604,7 @@ pub fn init_cnode_retype_dest(
     );
     let root = bi_init_cnode_cptr();
     let node_index = init_root_index();
-    let node_depth = path_depth_word();
+    let node_depth = init_bits_word;
     let node_offset = slot as sys::seL4_Word;
     let depth_bits = bits_as_u8(init_bits_usize);
     debug_assert!(
