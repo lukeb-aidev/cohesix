@@ -14,7 +14,7 @@ use crate::sel4::{self, BootInfoExt};
 use core::convert::TryFrom;
 use core::fmt;
 use core::ops::Range;
-use sel4_sys::{self as sys, seL4_CNode, seL4_CapInitThreadCNode, seL4_WordBits};
+use sel4_sys::{self as sys, seL4_CNode, seL4_CapInitThreadCNode};
 
 #[cfg(target_os = "none")]
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -1633,7 +1633,7 @@ pub use bits_as_u8 as super_bits_as_u8_for_test;
 pub mod canonical {
     #[cfg(not(target_os = "none"))]
     use super::host_trace;
-    use super::{bits_as_u8, debug_log, path_depth_word, sel4, slot_index, sys, RootPath};
+    use super::{bits_as_u8, debug_log, sel4, slot_index, sys, RootPath};
 
     #[inline(always)]
     fn build_root_path(slot: u32, bi: &sys::seL4_BootInfo) -> RootPath {
@@ -2075,7 +2075,7 @@ pub fn untyped_retype_into_init_root(
     let (root, node_index, node_depth, node_offset) = init_cnode_retype_dest(dst_slot);
     debug_assert_eq!(root, sel4::seL4_CapInitThreadCNode);
     debug_assert_eq!(node_index, init_root_index());
-    debug_assert_eq!(node_depth, path_depth_word());
+    debug_assert_eq!(node_depth, super::path_depth_word());
     let args = RetypeArgs::new(
         untyped_slot,
         obj_type,
