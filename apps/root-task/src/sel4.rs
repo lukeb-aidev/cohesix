@@ -564,11 +564,19 @@ pub fn replyrecv_guarded(
 /// Returns the traversal depth (in bits) for init CNode syscall invocations.
 #[inline]
 pub fn init_cnode_depth(bi: &seL4_BootInfo) -> u8 {
-    // seL4 expects the traversal depth for init CNode operations to match the radix published in
-    // the bootinfo block. Passing the architectural word width causes the kernel to interpret the
-    // operation as targeting a multi-level CSpace, triggering failed lookups at boot. Staying
-    // aligned with `initThreadCNodeSizeBits` keeps the traversal within the init CNode's radix.
-    bi.initThreadCNodeSizeBits as u8
+    // The init thread receives a single-level CNode whose guard occupies the upper word bits. seL4
+    // expects callers to traverse the guard and radix in one step by providing the architectural
+    // word width as the depth. Supplying only the radix width (e.g. `initThreadCNodeSizeBits`)
+    // truncates the traversal before the guard is checked, causing the kernel to fail the lookup.
+    let init_bits = bi.initThreadCNodeSizeBits as seL4_Word;
+    debug_assert!(
+        init_bits <= word_bits(),
+        "initThreadCNodeSizeBits exceeds architectural word width"
+    );
+
+    word_bits()
+        .try_into()
+        .expect("architectural word width must fit in u8")
 }
 
 /// Emits a single byte to the seL4 debug console.
