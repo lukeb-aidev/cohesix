@@ -2075,7 +2075,7 @@ pub fn untyped_retype_into_init_root(
     let (root, node_index, node_depth, node_offset) = init_cnode_retype_dest(dst_slot);
     debug_assert_eq!(root, sel4::seL4_CapInitThreadCNode);
     debug_assert_eq!(node_index, init_root_index());
-    debug_assert_eq!(node_depth, super::path_depth_word());
+    debug_assert_eq!(node_depth, path_depth_word());
     let args = RetypeArgs::new(
         untyped_slot,
         obj_type,
