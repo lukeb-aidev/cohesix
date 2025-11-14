@@ -751,7 +751,7 @@ pub fn cnode_copy(
     rights: sel4_sys::seL4_CapRights,
 ) -> seL4_Error {
     debug_put_char(b'C' as i32);
-    let depth_bits = init_cnode_depth(bootinfo);
+    let depth_bits = sel4_sys::seL4_WordBits as u8;
     unsafe {
         seL4_CNode_Copy(
             dest_root, dest_index, depth_bits, src_root, src_index, depth_bits, rights,
