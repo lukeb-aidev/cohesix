@@ -4,6 +4,7 @@ name = "sel4-sys"
 version = "0.0.28"
 edition = "2021"
 publish = false
+build = "build.rs"
 
 [features]
 default = []

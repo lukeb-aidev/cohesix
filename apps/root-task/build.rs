@@ -99,6 +99,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=SEL4_BUILD");
     println!("cargo:rustc-check-cfg=cfg(sel4_config_debug_build)");
     println!("cargo:rustc-check-cfg=cfg(sel4_config_printing)");
+    println!("cargo:rustc-check-cfg=cfg(sel4_config_kernel_mcs)");
 
     if let Err(error) = enforce_guarded_ipc() {
         panic!("failed to scan `{IPC_GUARD_SOURCE}` for direct IPC syscalls: {error}");
@@ -368,6 +369,10 @@ fn emit_config_flags(root: &Path, debug_syscalls_enabled: bool) {
 
     if let Some(true) = probe_config_flag(root, "CONFIG_PRINTING") {
         println!("cargo:rustc-cfg=sel4_config_printing");
+    }
+
+    if let Some(true) = probe_config_flag(root, "CONFIG_KERNEL_MCS") {
+        println!("cargo:rustc-cfg=sel4_config_kernel_mcs");
     }
 }
 

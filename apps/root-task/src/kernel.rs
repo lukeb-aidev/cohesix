@@ -99,7 +99,8 @@ impl<'a, P: Platform> DebugConsole<'a, P> {
         let header_range = header_bytes.as_ptr_range();
         let header_end = header_range.end as usize;
 
-        let extra_words = view.extra_words();
+        let extra_bytes = view.extra_bytes();
+        let approx_words = extra_bytes / core::mem::size_of::<sel4_sys::seL4_Word>();
         let extra_slice = view.extra();
         let extra_len = extra_slice.len();
         let (extra_start, extra_end) = if extra_len == 0 {
@@ -118,10 +119,10 @@ impl<'a, P: Platform> DebugConsole<'a, P> {
         );
         let _ = write!(
             self,
-            "{prefix}bootinfo.extraLen = {extra_words} words ({extra_len} bytes)\r\n",
+            "{prefix}bootinfo.extraLen = {extra_bytes} bytes (~{approx_words} words)\r\n",
             prefix = Self::PREFIX,
-            extra_words = extra_words,
-            extra_len = extra_len,
+            extra_bytes = extra_bytes,
+            approx_words = approx_words,
         );
         let _ = write!(
             self,
@@ -136,7 +137,7 @@ impl<'a, P: Platform> DebugConsole<'a, P> {
             prefix = Self::PREFIX,
             node_id = header.nodeId,
             nodes = header.numNodes,
-            ipc = header.ipcBuffer,
+            ipc = header.ipcBuffer as usize,
         );
 
         let bits = header.init_cnode_bits();

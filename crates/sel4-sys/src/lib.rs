@@ -259,7 +259,7 @@ mod imp {
         pub nodeId: seL4_Word,
         pub numNodes: seL4_Word,
         pub numIOPTLevels: seL4_Word,
-        pub ipcBuffer: seL4_Word,
+        pub ipcBuffer: *mut seL4_IPCBuffer,
         pub empty: seL4_SlotRegion,
         pub sharedFrames: seL4_SlotRegion,
         pub userImageFrames: seL4_SlotRegion,
@@ -268,6 +268,8 @@ mod imp {
         pub extraBIPages: seL4_SlotRegion,
         pub initThreadCNodeSizeBits: seL4_Word,
         pub initThreadDomain: seL4_Word,
+        #[cfg(sel4_config_kernel_mcs)]
+        pub schedcontrol: seL4_SlotRegion,
         pub untyped: seL4_SlotRegion,
         pub untypedList: [seL4_UntypedDesc; MAX_BOOTINFO_UNTYPEDS],
     }
