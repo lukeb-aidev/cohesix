@@ -29,12 +29,28 @@ pub fn root_cnode() -> seL4_CNode {
 
 #[inline(always)]
 pub fn path_depth() -> u8 {
-    bits_as_u8(sys::seL4_WordBits as usize)
+    #[cfg(any(target_os = "none", test))]
+    {
+        return bits_as_u8(bi_init_cnode_bits() as usize);
+    }
+
+    #[cfg(all(not(target_os = "none"), not(test)))]
+    {
+        bits_as_u8(sys::seL4_WordBits as usize)
+    }
 }
 
 #[inline(always)]
 pub fn path_depth_word() -> sys::seL4_Word {
-    sys::seL4_WordBits as sys::seL4_Word
+    #[cfg(any(target_os = "none", test))]
+    {
+        return bi_init_cnode_bits();
+    }
+
+    #[cfg(all(not(target_os = "none"), not(test)))]
+    {
+        sys::seL4_WordBits as sys::seL4_Word
+    }
 }
 
 #[inline(always)]
