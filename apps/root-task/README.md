@@ -129,12 +129,13 @@ cohesix> hexdump 0x70000000 40
 The corrected bootstrap path now differentiates between two canonical
 tuples supplied to seL4:
 
-- **CNode tuple** — `(root=initCNode, depth=initBits)` accompanies
-  `CNode_Copy`/`CNode_Delete`, ensuring destination indices are resolved
-  directly within the init thread CNode.
+- **CNode tuple** — `(root=initCNode, depth=seL4_WordBits)` accompanies
+  `CNode_Copy`/`CNode_Delete`, ensuring guard bits are honoured while
+  resolving destination indices within the init thread CNode.
 - **Retype tuple** — `(node_root=initCNode, node_index=initCNode,
-  node_depth=0)` is passed to `Untyped_Retype`, so the kernel treats
-  `nodeOffset` as a slot inside the root CNode without guard traversal.
+  node_depth=seL4_WordBits)` is passed to `Untyped_Retype`, so the kernel
+  treats `nodeOffset` as a slot inside the root CNode while preserving the
+  guard parameters derived from the architectural word size.
 
 Keeping these roles separate prevents the failed lookups that previously
 wedged endpoint retype attempts and PL011 mappings during early boot.
