@@ -563,13 +563,18 @@ pub fn replyrecv_guarded(
 
 /// Returns the canonical guard depth for init CNode operations (radix width).
 #[inline]
-pub fn init_cnode_depth(_bi: &seL4_BootInfo) -> u8 {
-    // seL4 expects callers to traverse the init CNode using a full-word depth so that the
-    // capability pointer follows the canonical guard encoding described in the ABI.
-    // Returning `seL4_WordBits` keeps all CNode invocations consistent with the kernel's
-    // expectations regardless of the init CNode radix advertised by bootinfo.
-    let _ = _bi;
-    word_bits() as u8
+pub fn init_cnode_depth(bi: &seL4_BootInfo) -> u8 {
+    // seL4 resolves CNode paths using the radix depth reported via bootinfo. Guard bits are
+    // encoded within the capability pointer itself, therefore callers must pass the actual
+    // init CNode radix rather than the architectural word width. Using the kernel-provided
+    // radix keeps CNode invocations aligned with the init thread layout and avoids failed
+    // lookups during boot.
+    let bits = bi.initThreadCNodeSizeBits;
+    debug_assert!(
+        bits <= sel4_sys::seL4_WordBits as u8,
+        "initThreadCNodeSizeBits must not exceed seL4_WordBits",
+    );
+    bits
 }
 
 /// Emits a single byte to the seL4 debug console.
