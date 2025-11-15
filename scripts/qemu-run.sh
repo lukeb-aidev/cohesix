@@ -207,7 +207,7 @@ if ! [[ "$TCP_PORT" =~ ^[0-9]+$ ]]; then
 fi
 
 NETWORK_ARGS=(
-    -netdev "user,id=net0,hostfwd=tcp:127.0.0.1:${TCP_PORT}-${TCP_PORT}"
+    -netdev "user,id=net0,hostfwd=tcp:127.0.0.1:${TCP_PORT}-10.0.2.15:${TCP_PORT}"
     -device virtio-net-device,netdev=net0
 )
 log "Forwarding TCP console on 127.0.0.1:${TCP_PORT} (QEMU user networking)"

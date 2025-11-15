@@ -12,7 +12,6 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use crate::boot::uart_pl011;
 #[cfg(all(feature = "serial-console", feature = "kernel"))]
 use crate::console::CohesixConsole;
-#[cfg(feature = "serial-console")]
 use crate::ipc;
 use crate::platform::Platform;
 use crate::sel4;
@@ -71,7 +70,7 @@ pub mod serial_console {
 
     /// Run a minimal interactive loop that echoes input and keeps the prompt alive.
     pub fn run<P: Platform>(platform: &P) -> ! {
-        #[cfg(feature = "kernel")]
+        #[cfg(all(feature = "kernel", feature = "serial-console"))]
         if let Some(uart_slot) = uart_pl011::uart_slot() {
             let ep = sel4::root_endpoint();
             let mut console = CohesixConsole::new(ep, uart_slot);

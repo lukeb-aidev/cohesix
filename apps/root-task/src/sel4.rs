@@ -88,164 +88,17 @@ pub fn reset_canonical_root_alias() {
     CANONICAL_ROOT_SLOT.store(CANONICAL_ROOT_SENTINEL, Ordering::Release);
 }
 
-#[inline(always)]
-pub const fn cap_data_guard(guard: seL4_Word, guard_size: seL4_Word) -> seL4_Word {
-    let guard_masked = guard & 0x3fff_ffff_ffff_ffff;
-    let guard_bits = guard_size & 0x3f;
-    (guard_masked << 6) | guard_bits
-}
-const CANONICAL_ROOT_SENTINEL: usize = usize::MAX;
-static CANONICAL_ROOT_CAP: AtomicUsize =
-    AtomicUsize::new(sel4_sys::seL4_CapInitThreadCNode as usize);
-static CANONICAL_ROOT_SLOT: AtomicUsize = AtomicUsize::new(CANONICAL_ROOT_SENTINEL);
-
-/// Returns the guard-free alias currently owned by the runtime.
-#[inline(always)]
-pub fn canonical_root_cap_ptr() -> seL4_CPtr {
-    CANONICAL_ROOT_CAP.load(Ordering::Acquire) as seL4_CPtr
-}
-
-/// Stores the guard-free alias and its slot index.
-#[inline(always)]
-pub fn publish_canonical_root_alias(alias_slot: seL4_CPtr) {
-    debug_assert_ne!(alias_slot, seL4_CapNull, "canonical alias must not be null");
-    CANONICAL_ROOT_CAP.store(alias_slot as usize, Ordering::Release);
-    CANONICAL_ROOT_SLOT.store(alias_slot as usize, Ordering::Release);
-}
-
-/// Returns the published alias slot, if any.
-#[inline(always)]
-pub fn canonical_root_alias_slot() -> Option<seL4_CPtr> {
-    let slot = CANONICAL_ROOT_SLOT.load(Ordering::Acquire);
-    if slot == CANONICAL_ROOT_SENTINEL {
-        None
-    } else {
-        Some(slot as seL4_CPtr)
-    }
-}
-
-/// Resets canonical alias tracking to the kernel-provided init CNode cap.
-#[inline(always)]
-pub fn reset_canonical_root_alias() {
-    CANONICAL_ROOT_CAP.store(
-        sel4_sys::seL4_CapInitThreadCNode as usize,
-        Ordering::Release,
-    );
-    CANONICAL_ROOT_SLOT.store(CANONICAL_ROOT_SENTINEL, Ordering::Release);
-}
-
-/// Encodes guard metadata for `seL4_CNode_Mint`.
-#[inline(always)]
-pub const fn cap_data_guard(guard: seL4_Word, guard_size: seL4_Word) -> seL4_Word {
-    let guard_masked = guard & 0x3fff_ffff_ffff_ffff;
-    let guard_bits = guard_size & 0x3f;
-    (guard_masked << 6) | guard_bits
-}
-const CANONICAL_ROOT_SENTINEL: usize = usize::MAX;
-static CANONICAL_ROOT_CAP: AtomicUsize =
-    AtomicUsize::new(sel4_sys::seL4_CapInitThreadCNode as usize);
-static CANONICAL_ROOT_SLOT: AtomicUsize = AtomicUsize::new(CANONICAL_ROOT_SENTINEL);
-
-/// Returns the currently tracked canonical init root cap.
-#[inline(always)]
-pub fn canonical_root_cap_ptr() -> seL4_CPtr {
-    CANONICAL_ROOT_CAP.load(Ordering::Acquire) as seL4_CPtr
-}
-
-/// Publishes the guard-less alias and remembers its slot.
-#[inline(always)]
-pub fn publish_canonical_root_alias(alias_slot: seL4_CPtr) {
-    debug_assert_ne!(alias_slot, seL4_CapNull, "canonical alias must not be null");
-    CANONICAL_ROOT_CAP.store(alias_slot as usize, Ordering::Release);
-    CANONICAL_ROOT_SLOT.store(alias_slot as usize, Ordering::Release);
-}
-
-/// Resets canonical alias tracking to the kernel-provided root.
-#[inline(always)]
-pub fn reset_canonical_root_alias() {
-    CANONICAL_ROOT_CAP.store(
-        sel4_sys::seL4_CapInitThreadCNode as usize,
-        Ordering::Release,
-    );
-    CANONICAL_ROOT_SLOT.store(CANONICAL_ROOT_SENTINEL, Ordering::Release);
-}
-
-/// Returns the slot containing the canonical alias, if published.
-#[inline(always)]
-pub fn canonical_root_alias_slot() -> Option<seL4_CPtr> {
-    let slot = CANONICAL_ROOT_SLOT.load(Ordering::Acquire);
-    if slot == CANONICAL_ROOT_SENTINEL {
-        None
-    } else {
-        Some(slot as seL4_CPtr)
-    }
-}
-
-/// Encodes guard metadata for `seL4_CNode_Mint`.
-#[inline(always)]
-pub const fn cap_data_guard(guard: seL4_Word, guard_size: seL4_Word) -> seL4_Word {
-    let guard_masked = guard & 0x3fff_ffff_ffff_ffff;
-    let guard_bits = guard_size & 0x3f;
-    (guard_masked << 6) | guard_bits
-}
-const CANONICAL_ROOT_SENTINEL: usize = usize::MAX;
-static CANONICAL_ROOT_CAP: AtomicUsize =
-    AtomicUsize::new(sel4_sys::seL4_CapInitThreadCNode as usize);
-static CANONICAL_ROOT_SLOT: AtomicUsize = AtomicUsize::new(CANONICAL_ROOT_SENTINEL);
-
-/// Returns the canonical root cap the bootstrap currently tracks.
-#[inline(always)]
-pub fn canonical_root_cap_ptr() -> seL4_CPtr {
-    CANONICAL_ROOT_CAP.load(Ordering::Acquire) as seL4_CPtr
-}
-
-/// Publish the guard-free alias and remember its slot.
-#[inline(always)]
-pub fn publish_canonical_root_alias(alias_slot: seL4_CPtr) {
-    debug_assert_ne!(alias_slot, seL4_CapNull, "canonical alias must not be null");
-    CANONICAL_ROOT_CAP.store(alias_slot as usize, Ordering::Release);
-    CANONICAL_ROOT_SLOT.store(alias_slot as usize, Ordering::Release);
-}
-
-/// Reset the alias tracker back to the kernel-provided init CNode.
-#[inline(always)]
-pub fn reset_canonical_root_alias() {
-    CANONICAL_ROOT_CAP.store(
-        sel4_sys::seL4_CapInitThreadCNode as usize,
-        Ordering::Release,
-    );
-    CANONICAL_ROOT_SLOT.store(CANONICAL_ROOT_SENTINEL, Ordering::Release);
-}
-
-/// Returns the slot index of the canonical alias, if present.
-#[inline(always)]
-pub fn canonical_root_alias_slot() -> Option<seL4_CPtr> {
-    let slot = CANONICAL_ROOT_SLOT.load(Ordering::Acquire);
-    if slot == CANONICAL_ROOT_SENTINEL {
-        None
-    } else {
-        Some(slot as seL4_CPtr)
-    }
-}
-
-/// Encodes guard metadata for mint calls.
-#[inline(always)]
-pub const fn cap_data_guard(guard: seL4_Word, guard_size: seL4_Word) -> seL4_Word {
-    let guard_masked = guard & 0x3fff_ffff_ffff_ffff;
-    let guard_bits = guard_size & 0x3f;
-    (guard_masked << 6) | guard_bits
-}
-
 /// Returns the architectural word width (in bits) exposed by seL4.
 #[inline(always)]
 pub const fn word_bits() -> seL4_Word {
     WORD_BITS
 }
 
+#[inline(always)]
 pub const fn cap_data_guard(guard: seL4_Word, guard_size: seL4_Word) -> seL4_Word {
     let guard_masked = guard & 0x3fff_ffff_ffff_ffff;
-    let size_masked = guard_size & 0x3f;
-    (guard_masked << 6) | size_masked
+    let guard_bits = guard_size & 0x3f;
+    (guard_masked << 6) | guard_bits
 }
 
 use sel4_sys::{

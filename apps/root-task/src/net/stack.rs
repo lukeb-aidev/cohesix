@@ -1,12 +1,15 @@
 // Author: Lukas Bower
 
 //! Smoltcp-backed TCP console stack for the in-VM root task.
+#![allow(unsafe_code)]
 
 #![cfg(feature = "kernel")]
 
 use heapless::{String as HeaplessString, Vec as HeaplessVec};
 use portable_atomic::AtomicBool;
-use smoltcp::iface::{Config as IfaceConfig, Interface, SocketHandle, SocketSet, SocketStorage};
+use smoltcp::iface::{
+    Config as IfaceConfig, Interface, PollResult, SocketHandle, SocketSet, SocketStorage,
+};
 use smoltcp::socket::tcp::{
     Socket as TcpSocket, SocketBuffer as TcpSocketBuffer, State as TcpState,
 };
@@ -174,9 +177,10 @@ impl NetStack {
             self.clock.advance(delta_ms)
         };
 
-        let mut activity = self
+        let poll_result = self
             .interface
             .poll(timestamp, &mut self.device, &mut self.sockets);
+        let mut activity = poll_result != PollResult::None;
         if self.process_tcp(now_ms) {
             activity = true;
         }
