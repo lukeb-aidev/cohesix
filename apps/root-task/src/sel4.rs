@@ -564,19 +564,20 @@ pub fn replyrecv_guarded(
 /// Returns the traversal depth (in bits) for init CNode syscall invocations.
 #[inline]
 pub fn init_cnode_depth(bi: &seL4_BootInfo) -> u8 {
-    // The init thread receives a single-level CNode whose guard occupies the upper word bits. seL4
-    // expects callers to traverse the guard and radix in one step by providing the architectural
-    // word width as the depth. Supplying only the radix width (e.g. `initThreadCNodeSizeBits`)
-    // truncates the traversal before the guard is checked, causing the kernel to fail the lookup.
-    let init_bits = bi.initThreadCNodeSizeBits as seL4_Word;
+    // The kernel expects depth queries to match the radix width advertised by bootinfo.
+    let init_bits = bi.initThreadCNodeSizeBits;
+    assert!(
+        init_bits != 0,
+        "initThreadCNodeSizeBits must be non-zero for a valid init CNode"
+    );
     debug_assert!(
         init_bits <= word_bits(),
         "initThreadCNodeSizeBits exceeds architectural word width"
     );
 
-    word_bits()
+    init_bits
         .try_into()
-        .expect("architectural word width must fit in u8")
+        .expect("initThreadCNodeSizeBits must fit in u8")
 }
 
 /// Emits a single byte to the seL4 debug console.
@@ -753,7 +754,7 @@ pub fn cnode_copy(
     rights: sel4_sys::seL4_CapRights,
 ) -> seL4_Error {
     debug_put_char(b'C' as i32);
-    let depth_bits = sel4_sys::seL4_WordBits as u8;
+    let depth_bits = init_cnode_depth(bootinfo);
     unsafe {
         seL4_CNode_Copy(
             dest_root, dest_index, depth_bits, src_root, src_index, depth_bits, rights,

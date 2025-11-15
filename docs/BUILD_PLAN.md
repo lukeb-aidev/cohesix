@@ -11,6 +11,23 @@ is grounded in the architectural intent outlined in `docs/ARCHITECTURE.md`, the 
 and the interface contracts codified in `docs/INTERFACES.md`. Treat those documents as non-negotiable source material when
 preparing and executing tasks.
 
+## seL4 Reference Manual Alignment (v13.0.0)
+
+We treat the seL4 Reference Manual v13.0.0 (`seL4/seL4-manual-latest.pdf`) as the authoritative description of kernel semantics. This plan
+cross-checks each milestone against the relevant chapters to ensure we remain within the manual’s constraints:
+- **Chapters 2 & 3 (Kernel Services, Objects, and Capability Spaces)** drive the capability discipline, retype requirements, and CSpace
+  layout described in Milestones 0–4.
+- **Chapters 4 & 5 (Message Passing and Notifications)** inform the NineDoor 9P transport, IPC patterns, and event/endpoint handling
+  in Milestones 1–3.
+- **Chapters 6 & 7 (Threads, Execution, and Address Spaces)** govern timer/tick handling, scheduling contexts, and deterministic memory
+  budgets we rely on for the root-task event pump and worker isolation.
+- **Chapter 8 (Hardware I/O)** constrains the virtio-console/net interaction surface and informs how we integrate serial/network drivers
+  with the kernel’s interrupt/IO model.
+- **Chapters 9 & 10 (System Bootstrapping and API Reference)** describe bootinfo, CPIO loading, and syscall behaviours, underpinning
+  `scripts/qemu-run.sh`, `ci/size_guard.sh`, and all entrypoint work.
+
+We revisit these sections whenever we specify new kernel interactions or manifest changes so that documentation and implementations remain aligned.
+
 ## Milestone 0 — Repository Skeleton & Toolchain (1–2 days)
 **Deliverables**
 - Cargo workspace initialised with crates for `root-task`, `nine-door`, and `worker-heart` plus shared utility crates.
@@ -814,4 +831,3 @@ To prevent drift:
 
 4. **Red Lines**
    - Enforced in the compiler and restated here: 9P2000.L, `msize ≤ 8192`, walk depth ≤ 8, no `..`, no fid reuse after clunk, no TCP listeners inside VM unless feature-gated and documented, CPIO < 4 MiB, no POSIX façade, maintain `no_std` for VM artefacts.
-
