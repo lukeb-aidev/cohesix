@@ -3,6 +3,7 @@
 # Author: Lukas Bower
 
 set -euo pipefail
+SEL4_LD="${SEL4_LD:-}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
