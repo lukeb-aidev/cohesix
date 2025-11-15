@@ -32,6 +32,7 @@
 - Untyped retypes reuse the same addressing policy; the destination tuple is `(root = seL4_CapInitThreadCNode, index = <slot>, depth = initThreadCNodeSizeBits, offset = 0)` so retypes stay aligned with the bootinfo metadata.
 - Bootstrapping begins with a smoke copy of the init TCB capability into `bootinfo.empty.start`, confirming that the canonical addressing policy succeeds before any mutable capability traffic occurs.
 - The bootstrap allocator derives `init_cnode_bits` and the empty window directly from `BootInfo`, asserting that every destination slot satisfies `slot < 2^{init_cnode_bits}` before issuing the syscall. Violations panic before touching the kernel, eliminating decode-time ambiguity.
+- The kernel-seeded slots are treated as reserved exactly as listed in Table 9.1 of `seL4/seL4-manual-latest.pdf` (`seL4_CapNull` through `seL4_CapInitThreadSC`, plus Arm’s optional `seL4_CapSMC`), so the allocator only consumes indices from the advertised `bootinfo.empty` window onward.【F:apps/root-task/src/sel4.rs†L120-L142】
 - Diagnostic logs for Copy → Mint → Retype include the exact `(index, depth, offset, badge)` tuple so regressions surface in
   the boot transcript immediately.
 
