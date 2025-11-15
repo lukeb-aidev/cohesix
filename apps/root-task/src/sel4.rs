@@ -563,20 +563,10 @@ pub fn replyrecv_guarded(
 
 /// Returns the traversal depth (in bits) for init CNode syscall invocations.
 #[inline]
-pub fn init_cnode_depth(bi: &seL4_BootInfo) -> u8 {
-    let init_bits = bi.initThreadCNodeSizeBits;
-    assert!(
-        init_bits != 0,
-        "initThreadCNodeSizeBits must be non-zero for a valid init CNode"
-    );
-    debug_assert!(
-        init_bits <= word_bits(),
-        "initThreadCNodeSizeBits exceeds architectural word width"
-    );
-
-    init_bits
+pub fn init_cnode_depth(_bi: &seL4_BootInfo) -> u8 {
+    word_bits()
         .try_into()
-        .expect("initThreadCNodeSizeBits must fit in u8")
+        .expect("architectural word width must fit in u8")
 }
 
 /// Emits a single byte to the seL4 debug console.

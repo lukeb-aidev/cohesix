@@ -29,12 +29,12 @@ pub fn root_cnode() -> seL4_CNode {
 
 #[inline(always)]
 pub fn path_depth() -> u8 {
-    bits_as_u8(bi_init_cnode_bits() as usize)
+    bits_as_u8(sel4::word_bits() as usize)
 }
 
 #[inline(always)]
 pub fn path_depth_word() -> sys::seL4_Word {
-    bi_init_cnode_bits()
+    sel4::word_bits()
 }
 
 #[inline(always)]
@@ -65,7 +65,7 @@ impl TupleStyle {
 
 #[inline(always)]
 pub fn tuple_style() -> TupleStyle {
-    TupleStyle::Raw
+    TupleStyle::GuardEncoded
 }
 
 #[inline(always)]
