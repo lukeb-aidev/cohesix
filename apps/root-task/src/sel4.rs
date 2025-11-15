@@ -23,7 +23,7 @@ use heapless::Vec;
 pub use sel4_sys::{
     seL4_AllRights, seL4_CNode, seL4_CNode_Copy, seL4_CNode_Delete, seL4_CNode_Mint,
     seL4_CNode_Move, seL4_CPtr, seL4_CapASIDControl, seL4_CapBootInfoFrame, seL4_CapDomain,
-    seL4_CapIOPortControl, seL4_CapIOSpace, seL4_CapIRQControl, seL4_CapInitThreadASIDPool,
+    seL4_CapIOPort, seL4_CapIOSpace, seL4_CapIRQControl, seL4_CapInitThreadASIDPool,
     seL4_CapInitThreadCNode, seL4_CapInitThreadIPCBuffer, seL4_CapInitThreadSC,
     seL4_CapInitThreadTCB, seL4_CapInitThreadVSpace, seL4_CapNull, seL4_CapRights,
     seL4_CapRights_All, seL4_CapRights_ReadWrite, seL4_CapSMC, seL4_CapSMMUCBControl,
@@ -1241,6 +1241,9 @@ impl SlotAllocator {
 }
 
 /// Returns `true` when the supplied slot index references a kernel-reserved capability.
+///
+/// The set mirrors Table 9.1 of the seL4 reference manual (version 13.0.0) and includes the
+/// optional `seL4_CapSMC` slot provided by Arm kernels.
 #[inline(always)]
 #[allow(non_upper_case_globals)]
 pub fn is_boot_reserved_slot(slot: seL4_CPtr) -> bool {
@@ -1253,7 +1256,7 @@ pub fn is_boot_reserved_slot(slot: seL4_CPtr) -> bool {
             | seL4_CapIRQControl
             | seL4_CapASIDControl
             | seL4_CapInitThreadASIDPool
-            | seL4_CapIOPortControl
+            | seL4_CapIOPort
             | seL4_CapIOSpace
             | seL4_CapBootInfoFrame
             | seL4_CapInitThreadIPCBuffer
@@ -2833,6 +2836,36 @@ type PageUpperDirectoryBookkeeper<const N: usize> =
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn manual_initial_caps_marked_reserved() {
+        let manual_caps: &[seL4_CPtr] = &[
+            seL4_CapNull,
+            seL4_CapInitThreadTCB,
+            seL4_CapInitThreadCNode,
+            seL4_CapInitThreadVSpace,
+            seL4_CapIRQControl,
+            seL4_CapASIDControl,
+            seL4_CapInitThreadASIDPool,
+            seL4_CapIOPort,
+            seL4_CapIOSpace,
+            seL4_CapBootInfoFrame,
+            seL4_CapInitThreadIPCBuffer,
+            seL4_CapDomain,
+            seL4_CapSMMUSIDControl,
+            seL4_CapSMMUCBControl,
+            seL4_CapInitThreadSC,
+        ];
+
+        for &cap in manual_caps {
+            assert!(
+                is_boot_reserved_slot(cap),
+                "cap 0x{cap:04x} should be reserved"
+            );
+        }
+
+        assert!(is_boot_reserved_slot(seL4_CapSMC));
+    }
 
     #[test]
     fn error_name_reports_expected_labels() {

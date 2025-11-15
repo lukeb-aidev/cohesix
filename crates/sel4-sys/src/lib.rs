@@ -216,6 +216,8 @@ mod imp {
     pub const seL4_CapASIDControl: seL4_CPtr = 5;
     pub const seL4_CapInitThreadASIDPool: seL4_CPtr = 6;
     pub const seL4_CapIOPortControl: seL4_CPtr = 7;
+    /// Alias mirroring the nomenclature used in Table 9.1 of the seL4 reference manual.
+    pub const seL4_CapIOPort: seL4_CPtr = seL4_CapIOPortControl;
     pub const seL4_CapIOSpace: seL4_CPtr = 8;
     pub const seL4_CapBootInfoFrame: seL4_CPtr = 9;
     pub const seL4_CapInitThreadIPCBuffer: seL4_CPtr = 10;
@@ -1045,6 +1047,8 @@ mod host_stub {
     pub const seL4_CapASIDControl: seL4_CPtr = 5;
     pub const seL4_CapInitThreadASIDPool: seL4_CPtr = 6;
     pub const seL4_CapIOPortControl: seL4_CPtr = 7;
+    /// Alias mirroring the nomenclature used in Table 9.1 of the seL4 reference manual.
+    pub const seL4_CapIOPort: seL4_CPtr = seL4_CapIOPortControl;
     pub const seL4_CapIOSpace: seL4_CPtr = 8;
     pub const seL4_CapBootInfoFrame: seL4_CPtr = 9;
     pub const seL4_CapInitThreadIPCBuffer: seL4_CPtr = 10;
