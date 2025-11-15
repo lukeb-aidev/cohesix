@@ -6,7 +6,7 @@ use crate::bootstrap::log::force_uart_line;
 #[cfg(feature = "cap-probes")]
 use crate::bootstrap::retype::{bump_slot, retype_captable};
 use crate::cspace::{cap_rights_read_write_grant, CSpace};
-use crate::sel4::{self, is_boot_reserved_slot, BootInfoView, WORD_BITS};
+use crate::sel4::{self, is_boot_reserved_slot, BootInfoExt, BootInfoView, WORD_BITS};
 #[cfg(feature = "cap-probes")]
 use core::convert::TryFrom;
 use core::fmt::Write;
@@ -38,6 +38,23 @@ pub struct CSpaceWindow {
     pub empty_start: sel4::seL4_CPtr,
     /// Upper bound (exclusive) of the init CSpace free window advertised by the kernel.
     pub empty_end: sel4::seL4_CPtr,
+}
+
+fn locate_bootinfo_frame_slot(bi: &seL4_BootInfo) -> Option<sel4::seL4_CPtr> {
+    let canonical = seL4_CapBootInfoFrame as sel4::seL4_CPtr;
+    if sel4::debug_cap_identify(canonical) != 0 {
+        return Some(canonical);
+    }
+    let (start, end) = bi.extra_bipage_slots();
+    if start >= end {
+        return None;
+    }
+    for slot in start as sel4::seL4_CPtr..end as sel4::seL4_CPtr {
+        if sel4::debug_cap_identify(slot) != 0 {
+            return Some(slot);
+        }
+    }
+    None
 }
 
 impl CSpaceWindow {
@@ -370,15 +387,13 @@ pub fn prove_dest_path_with_bootinfo(
     assert_caps_known();
     let dst_slot_raw = first_free as usize;
     let dst_slot_word = dst_slot_raw as seL4_Word;
-    let probe_slot = seL4_CapInitThreadTCB as seL4_Word;
-    let rights = seL4_CapRights_All;
-    if sel4::debug_cap_identify(seL4_CapBootInfoFrame) == 0 {
+    let Some(source_slot) = locate_bootinfo_frame_slot(bi) else {
         ::log::info!(
-            "[probe] BootInfo cap absent in slot {} — skipping slot verification",
-            seL4_CapBootInfoFrame
+            "[probe] BootInfo frame capability not present — skipping slot verification"
         );
         return Ok(());
-    }
+    };
+    let rights = seL4_CapRights_All;
     let dst_root = root_cnode();
 
     cspace_sys::debug_identify_cap("InitCNode", dst_root as seL4_CPtr);
@@ -387,9 +402,10 @@ pub fn prove_dest_path_with_bootinfo(
     let style = cspace_sys::tuple_style();
     let _ = cspace_sys::cnode_delete_with_style(bi, dst_root as seL4_CNode, dst_slot_word, style);
 
-    let err = cspace_sys::canonical_cnode_copy(bi, dst_slot_word, probe_slot, rights);
+    let err = cspace_sys::canonical_cnode_copy(bi, dst_slot_word, source_slot as seL4_Word, rights);
     ::log::info!(
-        "[probe] copy InitTCB -> 0x{dst_slot_raw:04x} err={err}",
+        "[probe] copy BootInfo frame slot=0x{source_slot:04x} -> 0x{dst_slot_raw:04x} err={err}",
+        source_slot = source_slot,
         dst_slot_raw = dst_slot_raw,
         err = err
     );
@@ -401,7 +417,7 @@ pub fn prove_dest_path_with_bootinfo(
     }
 
     ::log::warn!(
-        "[probe] BootInfo copy failed err={} — continuing without slot verification",
+        "[probe] BootInfo frame copy failed err={} — continuing without slot verification",
         err
     );
     Ok(())

@@ -1005,6 +1005,8 @@ pub trait BootInfoExt {
 
     /// Returns the exclusive upper bound of the bootinfo-declared empty slot window.
     fn empty_last_slot_excl(&self) -> usize;
+    /// Returns the slot range containing extra bootinfo pages.
+    fn extra_bipage_slots(&self) -> (seL4_CPtr, seL4_CPtr);
 
     /// Returns the raw bytes that make up the bootinfo header.
     fn header_bytes(&self) -> &[u8];
@@ -1050,6 +1052,14 @@ impl BootInfoExt for seL4_BootInfo {
     #[inline(always)]
     fn empty_last_slot_excl(&self) -> usize {
         self.empty.end as usize
+    }
+
+    #[inline(always)]
+    fn extra_bipage_slots(&self) -> (seL4_CPtr, seL4_CPtr) {
+        (
+            self.extraBIPages.start as seL4_CPtr,
+            self.extraBIPages.end as seL4_CPtr,
+        )
     }
 
     #[inline(always)]
