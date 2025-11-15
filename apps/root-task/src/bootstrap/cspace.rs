@@ -6,7 +6,10 @@ use crate::bootstrap::log::force_uart_line;
 #[cfg(feature = "cap-probes")]
 use crate::bootstrap::retype::{bump_slot, retype_captable};
 use crate::cspace::{cap_rights_read_write_grant, CSpace};
-use crate::sel4::{self, is_boot_reserved_slot, BootInfoExt, BootInfoView, WORD_BITS};
+use crate::sel4::{
+    self, cap_data_guard, is_boot_reserved_slot, publish_canonical_root_alias, BootInfoExt,
+    BootInfoView, WORD_BITS,
+};
 #[cfg(feature = "cap-probes")]
 use core::convert::TryFrom;
 use core::fmt::Write;
@@ -97,6 +100,73 @@ impl CSpaceWindow {
             end = self.empty_end,
         );
     }
+}
+
+/// Ensures the init CSpace exposes a guard-encoded alias that accepts canonical tuples.
+pub fn ensure_canonical_root_alias(
+    bi: &seL4_BootInfo,
+) -> Result<sel4::seL4_CPtr, sel4::seL4_Error> {
+    let current = sel4::canonical_root_cap_ptr();
+    if current != seL4_CapInitThreadCNode {
+        ::log::info!(
+            "[cnode] canonical alias already installed alias=0x{current:04x}",
+            current = current
+        );
+        return Ok(current);
+    }
+
+    let (empty_start, empty_end) = bi.init_cnode_empty_range();
+    assert!(
+        empty_start < empty_end,
+        "bootinfo empty window must not be empty"
+    );
+    let alias_slot = empty_end
+        .checked_sub(1)
+        .expect("bootinfo empty window must contain at least one slot");
+    assert!(
+        alias_slot >= empty_start,
+        "alias slot fell outside the bootinfo empty window"
+    );
+    assert!(
+        !is_boot_reserved_slot(alias_slot),
+        "alias slot collides with a kernel-reserved capability"
+    );
+
+    let init_bits = bi.initThreadCNodeSizeBits as u8;
+    let guard_size = sel4::word_bits()
+        .checked_sub(init_bits as sel4::seL4_Word)
+        .expect("word bits must exceed init cnode bits");
+    let cap_data = cap_data_guard(0, guard_size);
+    let rights = sel4_sys::seL4_CapRights_All;
+
+    ::log::info!(
+        "[cnode] mint canonical alias slot=0x{alias_slot:04x} guard_bits={guard_size}",
+        guard_size = guard_size
+    );
+    let err = sel4::cnode_mint_depth(
+        seL4_CapInitThreadCNode,
+        alias_slot,
+        init_bits,
+        seL4_CapInitThreadCNode,
+        seL4_CapInitThreadCNode,
+        init_bits,
+        rights,
+        cap_data,
+    );
+    if err != seL4_NoError {
+        ::log::error!(
+            "[cnode] canonical alias mint failed slot=0x{alias_slot:04x} err={err} ({name})",
+            name = sel4::error_name(err),
+        );
+        return Err(err);
+    }
+
+    publish_canonical_root_alias(alias_slot);
+    ::log::info!(
+        "[cnode] canonical alias ready slot=0x{alias_slot:04x} guard_bits={guard_size}",
+        guard_size = guard_size
+    );
+    Ok(alias_slot)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -388,9 +458,7 @@ pub fn prove_dest_path_with_bootinfo(
     let dst_slot_raw = first_free as usize;
     let dst_slot_word = dst_slot_raw as seL4_Word;
     let Some(source_slot) = locate_bootinfo_frame_slot(bi) else {
-        ::log::info!(
-            "[probe] BootInfo frame capability not present — skipping slot verification"
-        );
+        ::log::info!("[probe] BootInfo frame capability not present — skipping slot verification");
         return Ok(());
     };
     let rights = seL4_CapRights_All;

@@ -538,6 +538,13 @@ fn bootstrap<P: Platform>(
         }
     };
     let bootinfo_ref: &'static sel4_sys::seL4_BootInfo = bootinfo_view.header();
+    if let Err(err) = crate::bootstrap::cspace::ensure_canonical_root_alias(bootinfo_ref) {
+        panic!(
+            "failed to mint canonical init CNode alias: {} ({})",
+            err,
+            error_name(err),
+        );
+    }
     let cspace_window = CSpaceWindow::from_bootinfo(&bootinfo_view);
     let mut console = DebugConsole::new(platform);
 

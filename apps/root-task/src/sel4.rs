@@ -53,10 +53,55 @@ pub const IPC_PAGE_BYTES: usize = 1 << IPC_PAGE_BITS;
 
 const_assert!(sel4_sys::seL4_PageBits == 12);
 
+const CANONICAL_ROOT_SENTINEL: usize = usize::MAX;
+static CANONICAL_ROOT_CAP: AtomicUsize =
+    AtomicUsize::new(sel4_sys::seL4_CapInitThreadCNode as usize);
+static CANONICAL_ROOT_SLOT: AtomicUsize = AtomicUsize::new(CANONICAL_ROOT_SENTINEL);
+
 /// Returns the architectural word width (in bits) exposed by seL4.
 #[inline(always)]
 pub const fn word_bits() -> seL4_Word {
     WORD_BITS
+}
+
+/// Returns the canonical init CNode capability currently published by the runtime.
+#[inline(always)]
+pub fn canonical_root_cap_ptr() -> seL4_CPtr {
+    CANONICAL_ROOT_CAP.load(Ordering::Acquire) as seL4_CPtr
+}
+
+/// Publishes a freshly minted canonical init CNode alias along with its slot index.
+#[inline(always)]
+pub fn publish_canonical_root_alias(alias_slot: seL4_CPtr) {
+    debug_assert_ne!(alias_slot, seL4_CapNull, "canonical alias must not be null");
+    CANONICAL_ROOT_CAP.store(alias_slot as usize, Ordering::Release);
+    CANONICAL_ROOT_SLOT.store(alias_slot as usize, Ordering::Release);
+}
+
+/// Returns the slot index containing the canonical init CNode alias, if any.
+#[inline(always)]
+pub fn canonical_root_alias_slot() -> Option<seL4_CPtr> {
+    let slot = CANONICAL_ROOT_SLOT.load(Ordering::Acquire);
+    if slot == CANONICAL_ROOT_SENTINEL {
+        None
+    } else {
+        Some(slot as seL4_CPtr)
+    }
+}
+
+/// Resets the canonical alias tracking to the kernel-provided init CNode slot.
+#[inline(always)]
+pub fn reset_canonical_root_alias() {
+    CANONICAL_ROOT_CAP.store(seL4_CapInitThreadCNode as usize, Ordering::Release);
+    CANONICAL_ROOT_SLOT.store(CANONICAL_ROOT_SENTINEL, Ordering::Release);
+}
+
+/// Encodes a guard value and size into the `cap_data` word used by `seL4_CNode_Mint`.
+#[inline(always)]
+pub const fn cap_data_guard(guard: seL4_Word, guard_size: seL4_Word) -> seL4_Word {
+    let guard_masked = guard & 0x3fff_ffff_ffff_ffff;
+    let size_masked = guard_size & 0x3f;
+    (guard_masked << 6) | size_masked
 }
 
 use sel4_sys::{
@@ -302,7 +347,7 @@ impl BootInfoView {
     /// whenever we need to read kernel-provided caps that live outside the advertised range.
     #[must_use]
     pub fn canonical_root_cap(&self) -> seL4_CPtr {
-        sel4_sys::seL4_CapInitThreadCNode
+        canonical_root_cap_ptr()
     }
 }
 
@@ -1026,7 +1071,7 @@ impl BootInfoExt for seL4_BootInfo {
 
     #[inline(always)]
     fn canonical_root_cap(&self) -> seL4_CPtr {
-        seL4_CapInitThreadCNode
+        canonical_root_cap_ptr()
     }
 
     #[inline(always)]
@@ -1247,7 +1292,7 @@ impl SlotAllocator {
 #[inline(always)]
 #[allow(non_upper_case_globals)]
 pub fn is_boot_reserved_slot(slot: seL4_CPtr) -> bool {
-    matches!(
+    if matches!(
         slot,
         seL4_CapNull
             | seL4_CapInitThreadTCB
@@ -1265,7 +1310,15 @@ pub fn is_boot_reserved_slot(slot: seL4_CPtr) -> bool {
             | seL4_CapSMMUCBControl
             | seL4_CapInitThreadSC
             | seL4_CapSMC
-    )
+    ) {
+        return true;
+    }
+    if let Some(alias_slot) = canonical_root_alias_slot() {
+        if alias_slot == slot {
+            return true;
+        }
+    }
+    false
 }
 
 /// Handle to an untyped capability reserved from the bootinfo catalog.
