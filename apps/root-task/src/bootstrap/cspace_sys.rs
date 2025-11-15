@@ -557,7 +557,6 @@ pub fn retype_endpoint_raw(
     let init_bits = sel4::init_cnode_bits(bi);
     check_slot_in_range(init_bits, dst as sys::seL4_CPtr);
     let node_offset = dst;
-    let node_index = 0;
     let canon_root = bi.canonical_root_cap();
 
     #[cfg(target_os = "none")]
@@ -567,7 +566,7 @@ pub fn retype_endpoint_raw(
             sys::seL4_ObjectType::seL4_EndpointObject as sys::seL4_Word,
             0,
             canon_root,
-            node_index,
+            0,
             depth,
             node_offset,
             1,
