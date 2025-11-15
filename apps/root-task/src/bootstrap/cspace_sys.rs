@@ -1095,13 +1095,11 @@ pub fn verify_root_cnode_slot(
     {
         let style = tuple_style();
         let _ = cnode_delete_with_style(bi, root, slot, style);
-        let canonical_root = bi.canonical_root_cap();
-        let copy_err = cnode_copy_raw_single(
+        let copy_err = canonical_cnode_copy(
             bi,
-            root,
             slot,
-            canonical_root,
             sys::seL4_CapBootInfoFrame as sys::seL4_Word,
+            sys::seL4_CapRights_All,
         );
 
         if copy_err != sys::seL4_NoError {
