@@ -171,6 +171,10 @@ pub fn cnode_copy_raw_single(
     src_root: sys::seL4_CNode,
     src_slot: sys::seL4_Word,
 ) -> sys::seL4_Error {
+    let empty_start = bi.empty.start as sys::seL4_Word;
+    if src_slot < empty_start {
+        return canonical_cnode_copy(bi, dst_slot, src_slot, sys::seL4_CapRights::new(1, 1, 1, 1));
+    }
     fn should_retry(err: sys::seL4_Error) -> bool {
         matches!(err, sys::seL4_FailedLookup | sys::seL4_InvalidCapability)
     }
@@ -1347,6 +1351,9 @@ pub fn cnode_copy(
         start = empty_start,
         end = empty_end,
     );
+    if src_slot_raw < empty_start {
+        return canonical_cnode_copy(bi, dst_slot_raw, src_slot_raw, rights);
+    }
 
     let style = tuple_style();
     let depth_word = cnode_depth(bi, style);
