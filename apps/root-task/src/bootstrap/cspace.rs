@@ -15,10 +15,11 @@ use heapless::String;
 use super::cspace_sys;
 use sel4_sys::{
     self, seL4_BootInfo, seL4_CNode, seL4_CPtr, seL4_CapBootInfoFrame, seL4_CapInitThreadCNode,
-    seL4_CapInitThreadTCB, seL4_NoError, seL4_Word,
+    seL4_CapInitThreadTCB, seL4_CapRights_All, seL4_NoError, seL4_Word,
 };
+
 #[cfg(feature = "cap-probes")]
-use sel4_sys::{seL4_CapRights_All, seL4_Error};
+use sel4_sys::seL4_Error;
 
 const MAX_DIAGNOSTIC_LEN: usize = 224;
 
@@ -367,40 +368,28 @@ pub fn prove_dest_path_with_bootinfo(
     first_free: sel4::seL4_CPtr,
 ) -> Result<(), sel4_sys::seL4_Error> {
     assert_caps_known();
-
-    let dst_root = root_cnode();
-    let src_root = bi.canonical_root_cap();
-    let bootinfo_slot = seL4_CapBootInfoFrame as usize;
     let dst_slot_raw = first_free as usize;
-    let dst_slot = idx(dst_slot_raw);
-    let src_slot = idx(bootinfo_slot);
-    let dst_slot_word = dst_slot as seL4_Word;
-    let src_slot_word = src_slot as seL4_Word;
-
-    let t_bootinfo = cap_type_of(bootinfo_slot);
-    assert!(
-        t_bootinfo != 0,
-        "BootInfo cap not present in slot 0x{slot:04x}",
-        slot = bootinfo_slot,
-    );
+    let dst_slot_word = dst_slot_raw as seL4_Word;
+    let bootinfo_slot = seL4_CapBootInfoFrame as seL4_Word;
+    let rights = seL4_CapRights_All;
+    let dst_root = root_cnode();
 
     cspace_sys::debug_identify_cap("InitCNode", dst_root as seL4_CPtr);
     cspace_sys::assert_init_cnode_layout(bi);
 
     let style = cspace_sys::tuple_style();
-    let _ = cspace_sys::cnode_delete_with_style(bi, dst_root, dst_slot_word, style);
+    let _ = cspace_sys::cnode_delete_with_style(bi, dst_root as seL4_CNode, dst_slot_word, style);
 
-    let err =
-        cspace_sys::cnode_copy_raw_single(bi, dst_root, dst_slot_word, src_root, src_slot_word);
-    ::log::info!("[probe] copy BootInfo -> 0x{dst_slot_raw:04x} err={err}");
+    let err = cspace_sys::canonical_cnode_copy(bi, dst_slot_word, bootinfo_slot, rights);
+    ::log::info!(
+        "[probe] copy BootInfo -> 0x{dst_slot_raw:04x} err={err}",
+        dst_slot_raw = dst_slot_raw,
+        err = err
+    );
 
-    let cleanup = || {
-        let style = cspace_sys::tuple_style();
-        let _ = cspace_sys::cnode_delete_with_style(bi, dst_root, dst_slot_word, style);
-    };
+    let _ = cspace_sys::cnode_delete_with_style(bi, dst_root as seL4_CNode, dst_slot_word, style);
 
     if err == seL4_NoError {
-        cleanup();
         return Ok(());
     }
 
@@ -408,7 +397,6 @@ pub fn prove_dest_path_with_bootinfo(
         "[probe] BootInfo copy failed err={} — continuing without slot verification",
         err
     );
-    cleanup();
     Ok(())
 }
 

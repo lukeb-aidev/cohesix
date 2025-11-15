@@ -1513,6 +1513,20 @@ pub fn cnode_move(
     cnode_move_with_style(bi, dst_root, dst_slot_raw, src_root, src_slot_raw, style)
 }
 
+/// Issues `seL4_CNode_Copy` with the canonical tuple advertised by the kernel.
+pub fn canonical_cnode_copy(
+    bi: &sys::seL4_BootInfo,
+    dst_slot: sys::seL4_Word,
+    src_slot: sys::seL4_Word,
+    rights: sys::seL4_CapRights,
+) -> sys::seL4_Error {
+    let depth = sel4::init_cnode_depth(bi);
+    let root = bi.canonical_root_cap();
+    let dst_index = slot_index(dst_slot);
+    let src_index = slot_index(src_slot);
+    unsafe { sys::seL4_CNode_Copy(root, dst_index, depth, root, src_index, depth, rights) }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct RootPath {
     root: sys::seL4_CNode,
