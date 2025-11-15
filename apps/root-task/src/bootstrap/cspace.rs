@@ -174,6 +174,78 @@ impl CSpaceWindow {
     }
 }
 
+/// Ensures the init CSpace exposes a canonical alias that handles guard depth properly.
+pub fn ensure_canonical_root_alias(
+    bi: &seL4_BootInfo,
+) -> Result<sel4::seL4_CPtr, sel4::seL4_Error> {
+    let current = canonical_root_cap_ptr();
+    if current != seL4_CapInitThreadCNode {
+        ::log::info!("[cnode] canonical alias already installed alias=0x{current:04x}");
+        return Ok(current);
+    }
+
+    let empty_start = bi.empty_first_slot() as sel4::seL4_CPtr;
+    let empty_end = bi.empty_last_slot_excl() as sel4::seL4_CPtr;
+    assert!(
+        empty_start < empty_end,
+        "bootinfo empty window must not be empty"
+    );
+    let alias_slot = empty_end
+        .checked_sub(1)
+        .expect("bootinfo empty window must contain at least one slot");
+    assert!(
+        alias_slot >= empty_start,
+        "alias slot fell outside the bootinfo empty window"
+    );
+    assert!(
+        !is_boot_reserved_slot(alias_slot),
+        "alias slot collides with a kernel-reserved capability"
+    );
+
+    let init_bits = bi.initThreadCNodeSizeBits as u8;
+    let guard_size = sel4::word_bits()
+        .checked_sub(init_bits as sel4::seL4_Word)
+        .expect("word bits must exceed init cnode bits");
+    let cap_data = cap_data_guard(0, guard_size);
+    let rights = sel4::SeL4CapRights::new(1, 1, 1, 1);
+
+    ::log::info!(
+        "[cnode] mint canonical alias slot=0x{alias_slot:04x} guard_bits={guard_size}",
+        guard_size = guard_size
+    );
+    let depth = sel4::word_bits() as u8;
+    let dst_index = cspace_sys::enc_index(
+        alias_slot as seL4_Word,
+        bi,
+        cspace_sys::TupleStyle::GuardEncoded,
+    ) as sel4::seL4_CPtr;
+    let src_index = seL4_CapInitThreadCNode as sel4::seL4_Word;
+    let err = sel4::cnode_mint_depth(
+        seL4_CapInitThreadCNode,
+        dst_index,
+        depth,
+        seL4_CapInitThreadCNode,
+        src_index,
+        init_bits,
+        rights,
+        cap_data,
+    );
+    if err != seL4_NoError {
+        ::log::error!(
+            "[cnode] canonical alias mint failed slot=0x{alias_slot:04x} err={err} ({name})",
+            name = sel4::error_name(err),
+        );
+        return Err(err);
+    }
+
+    publish_canonical_root_alias(alias_slot);
+    ::log::info!(
+        "[cnode] canonical alias ready slot=0x{alias_slot:04x} guard_bits={guard_size}",
+        guard_size = guard_size
+    );
+    Ok(alias_slot)
+}
+
 /// Ensures the init CSpace exposes a guard-encoded alias that accepts canonical tuples.
 pub fn ensure_canonical_root_alias(
     bi: &seL4_BootInfo,
