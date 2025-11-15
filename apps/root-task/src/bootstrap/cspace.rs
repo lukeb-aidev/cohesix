@@ -141,33 +141,34 @@ pub fn ensure_canonical_root_alias(
         "[cnode] mint canonical alias slot=0x{alias_slot:04x} guard_bits={guard_size}",
         guard_size = guard_size
     );
-    let dst_slot = alias_slot
-        .try_into()
-        .expect("alias slot must fit within u32 for canonical operations");
-    match cspace_sys::canonical::cnode_copy_into_root(
-        dst_slot,
+    let style = cspace_sys::TupleStyle::GuardEncoded;
+    let dst_index = cspace_sys::enc_index(alias_slot as seL4_Word, bi, style) as sel4::seL4_CPtr;
+    let dst_depth = sel4::word_bits() as u8;
+    let src_index = seL4_CapInitThreadCNode as sel4::seL4_Word;
+    let src_depth = init_bits;
+    let err = sel4::cnode_mint_depth(
         seL4_CapInitThreadCNode,
+        dst_index,
+        dst_depth,
         seL4_CapInitThreadCNode,
-        init_bits,
+        src_index,
+        src_depth,
         rights,
-        bi,
-    ) {
-        Ok(()) => {
-            publish_canonical_root_alias(alias_slot);
-            ::log::info!(
-                "[cnode] canonical alias ready slot=0x{alias_slot:04x} guard_bits={guard_size}",
-                guard_size = guard_size
-            );
-            Ok(alias_slot)
-        }
-        Err(err) => {
-            ::log::error!(
-                "[cnode] canonical alias mint failed slot=0x{alias_slot:04x} err={err} ({name})",
-                name = sel4::error_name(err),
-            );
-            Err(err)
-        }
+        cap_data,
+    );
+    if err != seL4_NoError {
+        ::log::error!(
+            "[cnode] canonical alias mint failed slot=0x{alias_slot:04x} err={err} ({name})",
+            name = sel4::error_name(err),
+        );
+        return Err(err);
     }
+    publish_canonical_root_alias(alias_slot);
+    ::log::info!(
+        "[cnode] canonical alias ready slot=0x{alias_slot:04x} guard_bits={guard_size}",
+        guard_size = guard_size
+    );
+    Ok(alias_slot)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
