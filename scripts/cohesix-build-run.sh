@@ -448,9 +448,13 @@ main() {
         ROOT_TASK_BUILD_ARGS+=(--features "$ROOT_TASK_FEATURES")
     fi
 
-    ROOT_TASK_LINKER_SCRIPT="$PROJECT_ROOT/apps/root-task/sel4.ld"
-    if [[ ! -f "$ROOT_TASK_LINKER_SCRIPT" ]]; then
-        fail "root-task linker script not found: $ROOT_TASK_LINKER_SCRIPT"
+    if [[ -n "$SEL4_LD" ]]; then
+        ROOT_TASK_LINKER_SCRIPT="$SEL4_LD"
+    else
+        ROOT_TASK_LINKER_SCRIPT="$PROJECT_ROOT/apps/root-task/sel4.ld"
+        if [[ ! -f "$ROOT_TASK_LINKER_SCRIPT" ]]; then
+            fail "root-task linker script not found: $ROOT_TASK_LINKER_SCRIPT"
+        fi
     fi
 
     log "Using root-task linker script: $ROOT_TASK_LINKER_SCRIPT"
