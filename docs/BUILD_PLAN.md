@@ -464,6 +464,30 @@ Introduce the `coh-rtc` compiler that ingests `configs/root_task.toml` and emits
 
 ---
 
+## Milestone 8c — Cache-Safe DMA via AArch64 VSpace Calls
+
+**Why now (context):** DMA regions shared with host-side GPUs, telemetry rings, and future sidecars cross NineDoor and HAL boundaries, but our cache maintenance is still implicit. Section 10.9.2 of the seL4 manual exposes the AArch64-only `seL4_ARM_VSpace_{Clean, CleanInvalidate, Invalidate, Unify}_Data` invocations; wrapping them in Rust lets us publish deterministic cache semantics instead of trusting ad-hoc CPU flushes.
+
+**Goal**
+Wrap the AArch64-specific VSpace cache operations in the HAL, wire them into manifest-driven DMA contracts, and call them whenever pages are pinned for host DMA so shared buffers remain coherent and auditable.
+
+**Deliverables**
+- `apps/root-task/src/hal/cache.rs` (new module) defining `CacheMaintenance` helpers around `seL4_ARM_VSpace_Clean_Data`, `CleanInvalidate_Data`, `Invalidate_Data`, and `Unify_Instruction` plus error/trace plumbing so callers can treat range, alignment, and domain failures deterministically.
+- HAL integration updates (telemetry rings, GPU windows, future sidecar buffers) that execute the helpers immediately before handing memory to host-side actors and right after reclaiming pins, ensuring caches flush/invalidates happen in lockstep with page sharing.
+- `tools/coh-rtc` schema additions (`cache.dma_clean`, `cache.dma_invalidate`, `cache.unify_instructions`) plus generated bootstrap tables and docs (`docs/ARCHITECTURE.md §11`, `docs/SECURE9P.md`) describing why AArch64 cache ops are necessary for deterministic DMA. The manifest rejects configurations that omit `cache.kernel_ops = true` while requesting DMA cache maintenance, preventing bizarreness.
+- `apps/root-task/tests/cache_maintenance.rs` (QEMU/host shim) covering success/error paths of the helpers and asserting audit logs for flushed ranges before the shared region becomes available to NineDoor clients.
+
+**Commands**
+- `cd apps/root-task && cargo test cache_maintenance --features cache-maintenance`
+- `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json`
+- `cargo test -p tools/coh-rtc`
+
+**Checks (DoD)**
+- Cache helpers succeed for valid, aligned ranges and surface `seL4_RangeError`/`seL4_InvalidArgument` in logs when misaligned.
+- Serial logs around NineDoor/DMA transitions mention cache flush/invalidate audit lines, proving the helpers run before sharing buffers.
+- `coh-rtc` refuses to emit bootstrap tables for DMA cache maintenance when `cache.kernel_ops` is disabled, keeping docs/code aligned with the manual’s capability requirements.
+
+---
 ## Milestone 9 — Secure9P Pipelining & Batching
 
 **Why now (compiler):** Host NineDoor already handles baseline 9P flows, but upcoming use cases demand concurrent telemetry and command streams. Enabling multiple in-flight tags and batched writes requires new core structures and manifest knobs so deployments tune throughput without compromising determinism.
