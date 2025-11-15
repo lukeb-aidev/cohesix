@@ -136,6 +136,7 @@ pub fn ensure_canonical_root_alias(
     let guard_size = sel4::word_bits()
         .checked_sub(init_bits as sel4::seL4_Word)
         .expect("word bits must exceed init cnode bits");
+    let cap_data = cap_data_guard(0, guard_size);
     let rights = sel4::SeL4CapRights::new(1, 1, 1, 1);
     ::log::info!(
         "[cnode] mint canonical alias slot=0x{alias_slot:04x} guard_bits={guard_size}",
