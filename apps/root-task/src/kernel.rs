@@ -217,7 +217,9 @@ impl BootWatchdog {
 #[cfg(debug_assertions)]
 fn log_text_span() {
     extern "C" {
+        #[link_name = "_text"]
         static __text_start: u8;
+        #[link_name = "_end"]
         static __text_end: u8;
     }
 
@@ -549,7 +551,9 @@ fn bootstrap<P: Platform>(
     let mut console = DebugConsole::new(platform);
 
     extern "C" {
+        #[link_name = "_text"]
         static __text_start: u8;
+        #[link_name = "_end"]
         static __text_end: u8;
     }
 

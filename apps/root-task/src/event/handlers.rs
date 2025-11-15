@@ -59,7 +59,9 @@ impl HandlerTable {
 #[cfg(debug_assertions)]
 fn assert_text_fn(handler: Handler) {
     extern "C" {
+        #[link_name = "_text"]
         static __text_start: u8;
+        #[link_name = "_end"]
         static __text_end: u8;
     }
 

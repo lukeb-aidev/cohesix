@@ -3,7 +3,9 @@ use core::ptr;
 
 #[cfg(all(feature = "kernel", debug_assertions))]
 extern "C" {
+    #[link_name = "_text"]
     static __text_start: u8;
+    #[link_name = "_end"]
     static __text_end: u8;
 }
 

@@ -71,7 +71,9 @@ fn ensure_text_bounds() {
     }
 
     extern "C" {
+        #[link_name = "_text"]
         static __text_start: u8;
+        #[link_name = "_end"]
         static __text_end: u8;
     }
 
