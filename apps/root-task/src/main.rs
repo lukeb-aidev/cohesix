@@ -18,20 +18,20 @@ use sel4_runtime as _;
 
 #[cfg(feature = "kernel")]
 mod sel4_entry {
-    #![doc = "seL4 runtime entry shim exposed with an unmangled symbol."]
+    #![doc = "seL4 entry shim exposed with an unmangled symbol."]
     #![allow(unsafe_code)]
 
     use super::*;
 
-    /// seL4 entry point invoked by `sel4_runtime`.
+    /// seL4 entry point invoked by the assembly `_start` trampoline provided by `sel4_runtime`.
     ///
-    /// The symbol must remain unmangled because `sel4_runtime`'s `_start`
-    /// trampoline performs a raw C call into this function. We explicitly
-    /// allow the linted `no_mangle` attribute here to keep the rest of the
-    /// crate `#![deny(unsafe_code)]`.
+    /// The symbol must remain unmangled because the `_start` shim branches into
+    /// this function before the broader kernel startup sequence executes.
     #[no_mangle]
     pub extern "C" fn sel4_start(bootinfo: &'static BootInfo) -> ! {
         use root_task::platform::SeL4Platform;
+
+        let _ = sel4_runtime::bootinfo();
 
         let platform = SeL4Platform::new(core::ptr::from_ref(bootinfo).cast());
         root_task::kernel::start(bootinfo, &platform)

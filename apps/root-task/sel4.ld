@@ -2,7 +2,7 @@
 /* Minimal AArch64 seL4 rootserver linker script (no jumps inside PT_LOAD) */
 OUTPUT_FORMAT(elf64-littleaarch64)
 OUTPUT_ARCH(aarch64)
-ENTRY(sel4_start)
+ENTRY(_start)
 
 PHDRS {
   text PT_LOAD FLAGS(5); /* R+X */
@@ -12,13 +12,14 @@ PHDRS {
 SECTIONS
 {
   /* Code / RO in one contiguous RX segment */
-  . = ALIGN(0x1000);
-  . = ALIGN(16);
-  PROVIDE(_text = .);
-  .text : {
-    KEEP(*(.text.sel4_start))    /* entry */
-    *(.text .text.*)
-  } :text
+. = ALIGN(0x1000);
+KEEP(*(.text._start))
+. = ALIGN(16);
+PROVIDE(_text = .);
+.text : {
+  KEEP(*(.text.sel4_start))    /* entry */
+  *(.text .text.*)
+} :text
 
   .rodata : {
     *(.rodata .rodata.*)

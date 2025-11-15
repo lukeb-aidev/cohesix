@@ -2,7 +2,6 @@
 
 //! Smoltcp-backed TCP console stack for the in-VM root task.
 #![allow(unsafe_code)]
-
 #![cfg(feature = "kernel")]
 
 use heapless::{String as HeaplessString, Vec as HeaplessVec};
