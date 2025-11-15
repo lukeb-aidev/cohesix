@@ -144,13 +144,21 @@ pub fn ensure_canonical_root_alias(
         "[cnode] mint canonical alias slot=0x{alias_slot:04x} guard_bits={guard_size}",
         guard_size = guard_size
     );
+    let style = cspace_sys::TupleStyle::GuardEncoded;
+    let depth_word = cspace_sys::cnode_depth(bi, style);
+    let depth_bits: u8 = depth_word
+        .try_into()
+        .expect("canonical mint depth must fit within u8");
+    let dst_index = cspace_sys::enc_index(alias_slot as seL4_Word, bi, style) as sel4::seL4_CPtr;
+    let src_index =
+        cspace_sys::enc_index(seL4_CapInitThreadCNode as seL4_Word, bi, style) as sel4::seL4_CPtr;
     let err = sel4::cnode_mint_depth(
         seL4_CapInitThreadCNode,
-        alias_slot,
-        init_bits,
+        dst_index,
+        depth_bits,
         seL4_CapInitThreadCNode,
-        seL4_CapInitThreadCNode,
-        init_bits,
+        src_index,
+        depth_bits,
         rights,
         cap_data,
     );
