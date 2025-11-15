@@ -1520,11 +1520,14 @@ pub fn canonical_cnode_copy(
     src_slot: sys::seL4_Word,
     rights: sys::seL4_CapRights,
 ) -> sys::seL4_Error {
-    let depth = sel4::init_cnode_depth(bi);
+    let depth_u8 = sel4::word_bits()
+        .try_into()
+        .expect("word width must fit within u8 for canonical depth");
+    let depth = depth_u8 as sys::seL4_Word;
     let root = bi.canonical_root_cap();
     let dst_index = slot_index(dst_slot);
     let src_index = slot_index(src_slot);
-    unsafe { sys::seL4_CNode_Copy(root, dst_index, depth, root, src_index, depth, rights) }
+    unsafe { sys::seL4_CNode_Copy(root, dst_index, depth_u8, root, src_index, depth_u8, rights) }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
