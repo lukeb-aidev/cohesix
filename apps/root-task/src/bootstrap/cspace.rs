@@ -372,6 +372,13 @@ pub fn prove_dest_path_with_bootinfo(
     let dst_slot_word = dst_slot_raw as seL4_Word;
     let bootinfo_slot = seL4_CapBootInfoFrame as seL4_Word;
     let rights = seL4_CapRights_All;
+    if sel4::debug_cap_identify(seL4_CapBootInfoFrame) == 0 {
+        ::log::info!(
+            "[probe] BootInfo cap absent in slot {} — skipping slot verification",
+            seL4_CapBootInfoFrame
+        );
+        return Ok(());
+    }
     let dst_root = root_cnode();
 
     cspace_sys::debug_identify_cap("InitCNode", dst_root as seL4_CPtr);
