@@ -1102,13 +1102,13 @@ pub fn verify_root_cnode_slot(
         let copy_err = canonical_cnode_copy(
             bi,
             slot,
-            sys::seL4_CapBootInfoFrame as sys::seL4_Word,
+            sys::seL4_CapInitThreadTCB as sys::seL4_Word,
             sys::seL4_CapRights_All,
         );
 
         if copy_err != sys::seL4_NoError {
             ::log::warn!(
-                "[verify_root_cnode_slot] BootInfo copy failed err={} — skipping slot probe",
+                "[verify_root_cnode_slot] TCB copy failed err={} — skipping slot probe",
                 copy_err
             );
         }

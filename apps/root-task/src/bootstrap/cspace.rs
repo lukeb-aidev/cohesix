@@ -370,7 +370,7 @@ pub fn prove_dest_path_with_bootinfo(
     assert_caps_known();
     let dst_slot_raw = first_free as usize;
     let dst_slot_word = dst_slot_raw as seL4_Word;
-    let bootinfo_slot = seL4_CapBootInfoFrame as seL4_Word;
+    let probe_slot = seL4_CapInitThreadTCB as seL4_Word;
     let rights = seL4_CapRights_All;
     if sel4::debug_cap_identify(seL4_CapBootInfoFrame) == 0 {
         ::log::info!(
@@ -387,9 +387,9 @@ pub fn prove_dest_path_with_bootinfo(
     let style = cspace_sys::tuple_style();
     let _ = cspace_sys::cnode_delete_with_style(bi, dst_root as seL4_CNode, dst_slot_word, style);
 
-    let err = cspace_sys::canonical_cnode_copy(bi, dst_slot_word, bootinfo_slot, rights);
+    let err = cspace_sys::canonical_cnode_copy(bi, dst_slot_word, probe_slot, rights);
     ::log::info!(
-        "[probe] copy BootInfo -> 0x{dst_slot_raw:04x} err={err}",
+        "[probe] copy InitTCB -> 0x{dst_slot_raw:04x} err={err}",
         dst_slot_raw = dst_slot_raw,
         err = err
     );
