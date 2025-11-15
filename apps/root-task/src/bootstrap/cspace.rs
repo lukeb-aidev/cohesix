@@ -7,8 +7,7 @@ use crate::bootstrap::log::force_uart_line;
 use crate::bootstrap::retype::{bump_slot, retype_captable};
 use crate::cspace::{cap_rights_read_write_grant, CSpace};
 use crate::sel4::{
-    self, cap_data_guard, is_boot_reserved_slot, publish_canonical_root_alias, BootInfoExt,
-    BootInfoView, WORD_BITS,
+    self, is_boot_reserved_slot, publish_canonical_root_alias, BootInfoExt, BootInfoView, WORD_BITS,
 };
 #[cfg(feature = "cap-probes")]
 use core::convert::TryFrom;
@@ -137,37 +136,38 @@ pub fn ensure_canonical_root_alias(
     let guard_size = sel4::word_bits()
         .checked_sub(init_bits as sel4::seL4_Word)
         .expect("word bits must exceed init cnode bits");
-    let cap_data = cap_data_guard(0, guard_size);
-    let rights = sel4_sys::seL4_CapRights_All;
-
+    let rights = sel4::SeL4CapRights::new(1, 1, 1, 1);
     ::log::info!(
         "[cnode] mint canonical alias slot=0x{alias_slot:04x} guard_bits={guard_size}",
         guard_size = guard_size
     );
-    let err = sel4::cnode_mint_depth(
-        seL4_CapInitThreadCNode,
-        alias_slot,
-        init_bits,
+    let dst_slot = alias_slot
+        .try_into()
+        .expect("alias slot must fit within u32 for canonical operations");
+    match cspace_sys::canonical::cnode_copy_into_root(
+        dst_slot,
         seL4_CapInitThreadCNode,
         seL4_CapInitThreadCNode,
         init_bits,
         rights,
-        cap_data,
-    );
-    if err != seL4_NoError {
-        ::log::error!(
-            "[cnode] canonical alias mint failed slot=0x{alias_slot:04x} err={err} ({name})",
-            name = sel4::error_name(err),
-        );
-        return Err(err);
+        bi,
+    ) {
+        Ok(()) => {
+            publish_canonical_root_alias(alias_slot);
+            ::log::info!(
+                "[cnode] canonical alias ready slot=0x{alias_slot:04x} guard_bits={guard_size}",
+                guard_size = guard_size
+            );
+            Ok(alias_slot)
+        }
+        Err(err) => {
+            ::log::error!(
+                "[cnode] canonical alias mint failed slot=0x{alias_slot:04x} err={err} ({name})",
+                name = sel4::error_name(err),
+            );
+            Err(err)
+        }
     }
-
-    publish_canonical_root_alias(alias_slot);
-    ::log::info!(
-        "[cnode] canonical alias ready slot=0x{alias_slot:04x} guard_bits={guard_size}",
-        guard_size = guard_size
-    );
-    Ok(alias_slot)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
