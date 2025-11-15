@@ -780,7 +780,7 @@ pub fn debug_cap_identify(_slot: seL4_CPtr) -> seL4_Word {
 #[cfg(feature = "kernel")]
 #[inline(always)]
 pub fn cnode_copy(
-    bootinfo: &seL4_BootInfo,
+    _bootinfo: &seL4_BootInfo,
     dest_root: seL4_CNode,
     dest_index: seL4_CPtr,
     src_root: seL4_CNode,
@@ -840,7 +840,7 @@ pub fn cnode_delete(root: seL4_CNode, index: seL4_CPtr, depth: u8) -> seL4_Error
 #[deprecated(note = "use cspace_sys::*_invoc")]
 #[inline(always)]
 pub(crate) fn cnode_mint(
-    bootinfo: &seL4_BootInfo,
+    _bootinfo: &seL4_BootInfo,
     dest_root: seL4_CNode,
     dest_index: seL4_CPtr,
     src_root: seL4_CNode,

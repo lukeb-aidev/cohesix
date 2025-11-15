@@ -1528,7 +1528,6 @@ pub fn canonical_cnode_copy(
     let depth_u8 = sel4::word_bits()
         .try_into()
         .expect("word width must fit within u8 for canonical depth");
-    let depth = depth_u8 as sys::seL4_Word;
     let root = bi.canonical_root_cap();
     let dst_index = slot_index(dst_slot);
     let src_index = slot_index(src_slot);

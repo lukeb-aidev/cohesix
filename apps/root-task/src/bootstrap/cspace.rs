@@ -115,7 +115,8 @@ pub fn ensure_canonical_root_alias(
         return Ok(current);
     }
 
-    let (empty_start, empty_end) = bi.init_cnode_empty_range();
+    let empty_start = bi.empty_first_slot() as sel4::seL4_CPtr;
+    let empty_end = bi.empty_last_slot_excl() as sel4::seL4_CPtr;
     assert!(
         empty_start < empty_end,
         "bootinfo empty window must not be empty"
