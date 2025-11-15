@@ -13,6 +13,8 @@ SECTIONS
 {
   /* Code / RO in one contiguous RX segment */
   . = ALIGN(0x1000);
+  . = ALIGN(16);
+  PROVIDE(_text = .);
   .text : {
     KEEP(*(.text.sel4_start))    /* entry */
     *(.text .text.*)
@@ -39,6 +41,7 @@ SECTIONS
     *(COMMON)
   } :data
   __bss_end__ = .;
+  PROVIDE(_end = .);
 
   /* Do NOT advance '.' to device/MMIO addresses here. Keep segments tight. */
 }
