@@ -7,8 +7,8 @@ use crate::bootstrap::log::force_uart_line;
 use crate::bootstrap::retype::{bump_slot, retype_captable};
 use crate::cspace::{cap_rights_read_write_grant, CSpace};
 use crate::sel4::{
-    self, canonical_root_cap_ptr, cap_data_guard, is_boot_reserved_slot,
-    publish_canonical_root_alias, BootInfoExt, BootInfoView, WORD_BITS,
+    self, cap_data_guard, init_cnode_cptr, is_boot_reserved_slot, publish_canonical_root_alias,
+    BootInfoExt, BootInfoView, WORD_BITS,
 };
 #[cfg(feature = "cap-probes")]
 use core::convert::TryFrom;
@@ -17,8 +17,8 @@ use heapless::String;
 
 use super::cspace_sys;
 use sel4_sys::{
-    self, seL4_BootInfo, seL4_CNode, seL4_CPtr, seL4_CapBootInfoFrame, seL4_CapInitThreadCNode,
-    seL4_CapInitThreadTCB, seL4_CapRights_All, seL4_NoError, seL4_Word,
+    self, seL4_BootInfo, seL4_CNode, seL4_CNode_Mint, seL4_CPtr, seL4_CapBootInfoFrame,
+    seL4_CapInitThreadCNode, seL4_CapInitThreadTCB, seL4_CapRights_All, seL4_NoError, seL4_Word,
 };
 
 #[cfg(feature = "cap-probes")]
@@ -147,34 +147,38 @@ pub fn ensure_canonical_root_alias(
         guard_size = guard_size,
     );
     let cap_data = cap_data_guard(0, guard_size);
-    let rights = sel4::SeL4CapRights::new(1, 1, 1, 1);
-    let dst_index = alias_slot;
-    let depth_bits = init_bits;
-    let src_index = seL4_CapInitThreadCNode;
-    let src_depth = init_bits;
+    let style = cspace_sys::tuple_style();
+    let style_label = cspace_sys::tuple_style_label(style);
+    let dest_root = init_cnode_cptr(bi) as seL4_CNode;
+    let dest_slot = alias_slot as seL4_Word;
+    let src_slot = seL4_CapInitThreadCNode as seL4_Word;
+    let dst_index = cspace_sys::enc_index(dest_slot, bi, style);
+    let src_index = cspace_sys::enc_index(src_slot, bi, style);
+    let depth = cspace_sys::cnode_depth(bi, style);
+    let depth_u8 = u8::try_from(depth).expect("cnode depth must fit in u8");
+    let dst_index_ptr = dst_index as seL4_CPtr;
+    let src_index_ptr = src_index as seL4_CPtr;
     ::log::info!(
-        "[cnode] mint canonical alias slot=0x{alias_slot:04x} guard_bits={guard_size} cap_data=0x{cap_data:016x}",
+        "[cnode] mint canonical alias slot=0x{alias_slot:04x} style={style_label} depth={depth} guard_bits={guard_size} cap_data=0x{cap_data:016x}",
+        alias_slot = alias_slot,
+        style_label = style_label,
+        depth = depth,
         guard_size = guard_size,
         cap_data = cap_data,
     );
-    ::log::info!(
-        "[cnode] mint: dst_index=0x{dst_index:04x} dst_depth={dst_depth} src_index=0x{src_index:04x} src_depth={src_depth} guard_size={guard_size}",
-        dst_index = dst_index,
-        dst_depth = depth_bits,
-        src_index = src_index,
-        src_depth = src_depth,
-        guard_size = guard_size
-    );
-    let err = sel4::cnode_mint_depth(
-        seL4_CapInitThreadCNode,
-        dst_index,
-        depth_bits,
-        seL4_CapInitThreadCNode,
-        src_index,
-        src_depth,
-        rights,
-        cap_data,
-    );
+    let rights = sel4::SeL4CapRights::new(1, 1, 1, 1);
+    let err = unsafe {
+        seL4_CNode_Mint(
+            dest_root,
+            dst_index_ptr,
+            depth_u8,
+            dest_root,
+            src_index_ptr,
+            depth_u8,
+            rights,
+            cap_data,
+        )
+    };
     if err != seL4_NoError {
         ::log::error!(
             "[cnode] canonical alias mint failed slot=0x{alias_slot:04x} err={err} ({name})",
