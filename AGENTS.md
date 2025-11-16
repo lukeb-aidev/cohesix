@@ -45,7 +45,7 @@ Deliverables: <files, logs, doc updates>
 
 ## Canonical Documents
 docs/*.md
-seL4/seL4-manual-latest.pdf
+seL4/seL4-manual-latest.md
 seL4/elfloader.md
 
 ## seL4
