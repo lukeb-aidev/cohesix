@@ -10,8 +10,6 @@ use crate::sel4::{
     self, cap_data_guard, init_cnode_cptr, is_boot_reserved_slot, publish_canonical_root_alias,
     BootInfoExt, BootInfoView, WORD_BITS,
 };
-#[cfg(feature = "cap-probes")]
-use core::convert::TryFrom;
 use core::fmt::Write;
 use heapless::String;
 
@@ -140,20 +138,23 @@ pub fn ensure_canonical_root_alias(
     let guard_size = sel4::word_bits()
         .checked_sub(init_bits as sel4::seL4_Word)
         .expect("word bits must exceed init cnode bits");
-    let rights = sel4::SeL4CapRights::new(1, 1, 1, 1);
-    let dest_root = init_cnode_cptr(bi) as seL4_CNode;
-    let dest_index = alias_slot as seL4_CPtr;
-    let dest_depth = init_bits;
-    let src_root = bi.canonical_root_cap() as seL4_CNode;
-    let src_slot = seL4_CapInitThreadCNode as seL4_Word;
     let style = cspace_sys::tuple_style();
-    let src_index = cspace_sys::enc_index(src_slot, bi, style);
-    let src_depth = cspace_sys::cnode_depth(bi, style);
+    let encoded_alias = cspace_sys::enc_index(alias_slot as seL4_Word, bi, style);
+    let depth_word = sel4::word_bits();
+    let depth_bits = depth_word as u8;
+    let dest_root = init_cnode_cptr(bi) as seL4_CNode;
+    let dest_index = encoded_alias as seL4_CPtr;
+    let dest_depth = depth_bits;
+    let src_root = seL4_CapInitThreadCNode;
+    let src_index = sel4::init_cnode_index_word();
+    let src_depth = depth_bits;
     let guard_data = cap_data_guard(0, guard_size);
     ::log::info!(
-        "[cnode] mint canonical alias slot=0x{alias_slot:04x} guard_bits={guard_bits} cap_data=0x{guard_data:016x}",
+        "[cnode] mint canonical alias slot=0x{alias_slot:04x} enc_index=0x{encoded:016x} depth={depth} guard_bits={guard} cap_data=0x{guard_data:016x}",
         alias_slot = alias_slot,
-        guard_bits = guard_size,
+        encoded = encoded_alias,
+        depth = depth_bits,
+        guard = guard_size,
         guard_data = guard_data,
     );
     let err = unsafe {
@@ -162,9 +163,9 @@ pub fn ensure_canonical_root_alias(
             dest_index,
             dest_depth,
             src_root,
-            src_index as seL4_CPtr,
+            src_index,
             src_depth,
-            rights,
+            sel4::SeL4CapRights::new(1, 1, 1, 1),
             guard_data,
         )
     };
