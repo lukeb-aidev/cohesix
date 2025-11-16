@@ -140,9 +140,9 @@ pub fn ensure_canonical_root_alias(
         .expect("word bits must exceed init cnode bits");
     let style = cspace_sys::tuple_style();
     let encoded_alias = cspace_sys::enc_index(alias_slot as seL4_Word, bi, style);
-    let rights = sel4::SeL4CapRights::new(1, 1, 1, 1);
     let dst_slot_raw = alias_slot as seL4_Word;
     let src_slot_raw = bi.canonical_root_cap() as seL4_Word;
+    let rights = sel4::SeL4CapRights::new(1, 1, 1, 1);
     ::log::info!(
         "[cnode] canonical copy dst=0x{dst:04x} src=0x{src:04x} guard_bits={guard} enc_dst=0x{encoded:016x}",
         dst = dst_slot_raw,
