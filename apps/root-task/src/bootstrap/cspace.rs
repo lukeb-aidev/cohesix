@@ -127,22 +127,39 @@ pub fn ensure_canonical_root_alias(
         end = empty_end,
         bits = bi.initThreadCNodeSizeBits,
     );
-    let alias_slot = empty_end
+    let mut alias_slot = empty_end
         .checked_sub(1)
         .expect("bootinfo empty window must contain at least one slot");
-    if alias_slot < empty_start || alias_slot >= empty_end {
-        ::log::error!(
-            "[cnode] alias_slot=0x{alias_slot:04x} outside empty window [0x{start:04x}..0x{end:04x})",
-            alias_slot = alias_slot,
-            start = empty_start,
-            end = empty_end,
+    let style = cspace_sys::tuple_style();
+    let guard_bits = sel4::word_bits()
+        .checked_sub(bi.initThreadCNodeSizeBits as sel4::seL4_Word)
+        .expect("word bits must exceed init cnode bits") as sel4::seL4_Word;
+    let mut found_valid = false;
+    while alias_slot >= empty_start {
+        if is_boot_reserved_slot(alias_slot) {
+            ::log::trace!(
+                "[cnode] slot=0x{slot:04x} reserved; skipping",
+                slot = alias_slot
+            );
+            alias_slot = alias_slot.saturating_sub(1);
+            continue;
+        }
+        let dst_index =
+            cspace_sys::enc_index(alias_slot as sel4::seL4_Word, bi, style) as sel4::seL4_CPtr;
+        ::log::trace!(
+            "[cnode] probing slot=0x{slot:04x} encoded=0x{dst:04x} guard_bits={guard}",
+            slot = alias_slot,
+            dst = dst_index,
+            guard = guard_bits,
         );
+        if cspace_sys::verify_root_cnode_slot(bi, alias_slot as sel4::seL4_Word).is_ok() {
+            found_valid = true;
+            break;
+        }
+        alias_slot = alias_slot.saturating_sub(1);
     }
-    if is_boot_reserved_slot(alias_slot) {
-        ::log::error!(
-            "[cnode] alias_slot=0x{alias_slot:04x} collides with kernel reserved slot",
-            alias_slot = alias_slot,
-        );
+    if !found_valid {
+        panic!("no valid alias slot found inside bootinfo empty window");
     }
 
     let init_bits = bi.initThreadCNodeSizeBits as u8;
