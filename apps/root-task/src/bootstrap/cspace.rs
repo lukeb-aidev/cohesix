@@ -127,21 +127,19 @@ pub fn ensure_canonical_root_alias(
         end = empty_end,
         bits = bi.initThreadCNodeSizeBits,
     );
-    let mut alias_slot = empty_end
-        .checked_sub(1)
-        .expect("bootinfo empty window must contain at least one slot");
+    let mut alias_slot = empty_start;
     let style = cspace_sys::tuple_style();
     let guard_bits = sel4::word_bits()
         .checked_sub(bi.initThreadCNodeSizeBits as sel4::seL4_Word)
         .expect("word bits must exceed init cnode bits") as sel4::seL4_Word;
     let mut found_valid = false;
-    while alias_slot >= empty_start {
+    while alias_slot < empty_end {
         if is_boot_reserved_slot(alias_slot) {
             ::log::trace!(
                 "[cnode] slot=0x{slot:04x} reserved; skipping",
                 slot = alias_slot
             );
-            alias_slot = alias_slot.saturating_sub(1);
+            alias_slot = alias_slot.saturating_add(1);
             continue;
         }
         let dst_index =
@@ -156,7 +154,7 @@ pub fn ensure_canonical_root_alias(
             found_valid = true;
             break;
         }
-        alias_slot = alias_slot.saturating_sub(1);
+        alias_slot = alias_slot.saturating_add(1);
     }
     if !found_valid {
         panic!("no valid alias slot found inside bootinfo empty window");
