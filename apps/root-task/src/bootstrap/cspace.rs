@@ -7,8 +7,7 @@ use crate::bootstrap::log::force_uart_line;
 use crate::bootstrap::retype::{bump_slot, retype_captable};
 use crate::cspace::{cap_rights_read_write_grant, CSpace};
 use crate::sel4::{
-    self, cap_data_guard, init_cnode_cptr, is_boot_reserved_slot, publish_canonical_root_alias,
-    BootInfoExt, BootInfoView, WORD_BITS,
+    self, is_boot_reserved_slot, publish_canonical_root_alias, BootInfoExt, BootInfoView, WORD_BITS,
 };
 #[cfg(feature = "cap-probes")]
 use core::convert::TryFrom;
@@ -17,8 +16,8 @@ use heapless::String;
 
 use super::cspace_sys;
 use sel4_sys::{
-    self, seL4_BootInfo, seL4_CNode, seL4_CNode_Mint, seL4_CPtr, seL4_CapBootInfoFrame,
-    seL4_CapInitThreadCNode, seL4_CapInitThreadTCB, seL4_CapRights_All, seL4_NoError, seL4_Word,
+    self, seL4_BootInfo, seL4_CNode, seL4_CPtr, seL4_CapBootInfoFrame, seL4_CapInitThreadCNode,
+    seL4_CapInitThreadTCB, seL4_CapRights_All, seL4_NoError, seL4_Word,
 };
 
 #[cfg(feature = "cap-probes")]
@@ -136,48 +135,17 @@ pub fn ensure_canonical_root_alias(
         ident = sel4::debug_cap_identify(sel4::seL4_CapInitThreadCNode),
     );
 
-    let init_bits = bi.initThreadCNodeSizeBits as u8;
-    let guard_size = sel4::word_bits()
-        .checked_sub(init_bits as sel4::seL4_Word)
-        .expect("word bits must exceed init cnode bits");
-    ::log::info!(
-        "[cnode] guard formula word_bits={} init_bits={} -> guard_bits={guard_size}",
-        sel4::word_bits(),
-        init_bits,
-        guard_size = guard_size,
-    );
-    let cap_data = cap_data_guard(0, guard_size);
-    let dest_root = init_cnode_cptr(bi) as seL4_CNode;
-    let src_root = dest_root;
-    let dst_index_ptr = alias_slot as seL4_CPtr;
-    let src_index_ptr = sel4::init_cnode_index_word() as seL4_CPtr;
-    let depth = init_bits;
-    let depth_u8 = depth;
-    ::log::info!(
-        "[cnode] mint canonical alias slot=0x{alias_slot:04x} depth={depth} guard_bits={guard_size} cap_data=0x{cap_data:016x}",
-        alias_slot = alias_slot,
-        depth = depth,
-        guard_size = guard_size,
-        cap_data = cap_data,
-    );
     let rights = sel4::SeL4CapRights::new(1, 1, 1, 1);
-    let err = unsafe {
-        seL4_CNode_Mint(
-            dest_root,
-            dst_index_ptr,
-            depth_u8,
-            src_root,
-            src_index_ptr,
-            depth_u8,
-            rights,
-            cap_data,
-        )
-    };
+    let dst_slot_word = alias_slot as seL4_Word;
+    let src_slot_word = seL4_CapInitThreadCNode as seL4_Word;
+    ::log::info!(
+        "[cnode] copy canonical root -> slot=0x{alias_slot:04x}",
+        alias_slot = alias_slot,
+    );
+    let err = cspace_sys::canonical_cnode_copy(bi, dst_slot_word, src_slot_word, rights);
     if err != seL4_NoError {
-        cspace_sys::debug_identify_cap("dest_root", dest_root as seL4_CPtr);
-        cspace_sys::debug_identify_cap("src_root", src_root as seL4_CPtr);
         ::log::error!(
-            "[cnode] canonical alias mint failed slot=0x{alias_slot:04x} err={err} ({name})",
+            "[cnode] canonical alias copy failed slot=0x{alias_slot:04x} err={err} ({name})",
             name = sel4::error_name(err),
         );
         return Err(err);
