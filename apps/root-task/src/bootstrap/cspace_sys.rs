@@ -1108,9 +1108,11 @@ pub fn verify_root_cnode_slot(
 
         if copy_err != sys::seL4_NoError {
             ::log::warn!(
-                "[verify_root_cnode_slot] TCB copy failed err={} — skipping slot probe",
-                copy_err
+                "[verify_root_cnode_slot] TCB copy failed slot=0x{slot:04x} err={copy_err} — skipping slot probe",
+                slot = slot,
+                copy_err = copy_err,
             );
+            return Err(copy_err);
         }
         let cleanup_style = tuple_style();
         let cleanup_err = cnode_delete_with_style(bi, root, slot, cleanup_style);
