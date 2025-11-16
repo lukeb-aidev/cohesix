@@ -153,8 +153,10 @@ pub fn ensure_canonical_root_alias(
     let dest_slot = alias_slot as seL4_Word;
     let src_root = bi.canonical_root_cap() as seL4_CNode;
     let src_slot = seL4_CapInitThreadCNode as seL4_Word;
-    let dst_index_ptr = dest_slot as seL4_CPtr;
-    let src_index_ptr = src_slot as seL4_CPtr;
+    let dst_index = cspace_sys::enc_index(dest_slot, bi, style);
+    let src_index = cspace_sys::enc_index(src_slot, bi, style);
+    let dst_index_ptr = dst_index as seL4_CPtr;
+    let src_index_ptr = src_index as seL4_CPtr;
     let depth = cspace_sys::cnode_depth(bi, style);
     let depth_u8 = u8::try_from(depth).expect("cnode depth must fit in u8");
     ::log::info!(
