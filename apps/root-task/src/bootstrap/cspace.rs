@@ -13,7 +13,7 @@ use crate::sel4::{
 #[cfg(feature = "cap-probes")]
 use core::convert::TryFrom;
 use core::fmt::Write;
-use heapless::{String, Vec};
+use heapless::String;
 
 use super::cspace_sys;
 use sel4_sys::{
@@ -127,24 +127,14 @@ pub fn ensure_canonical_root_alias(
         end = empty_end,
         bits = bi.initThreadCNodeSizeBits,
     );
-    let mut alias_slot = empty_start;
-    let mut candidate_slots = heapless::Vec::<sel4::seL4_CPtr, 16>::new();
-    while alias_slot < empty_end {
-        let ident = sel4::debug_cap_identify(alias_slot);
-        ::log::info!(
-            "[cnode] probe slot=0x{slot:04x} id=0x{ident:08x}",
-            slot = alias_slot,
-            ident = ident,
-        );
-        if ident != 0 {
-            let _ = candidate_slots.push(alias_slot);
-        }
-        alias_slot = alias_slot.saturating_add(1);
-    }
-    if candidate_slots.is_empty() {
-        panic!("no non-null slot found inside bootinfo empty window");
-    }
-    alias_slot = candidate_slots[0];
+    let alias_slot = empty_end
+        .checked_sub(1)
+        .expect("bootinfo empty window must contain at least one slot");
+    ::log::info!(
+        "[cnode] probing canonical root slot=0x{root:04x} identify=0x{ident:08x}",
+        root = sel4::seL4_CapInitThreadCNode,
+        ident = sel4::debug_cap_identify(sel4::seL4_CapInitThreadCNode),
+    );
 
     let init_bits = bi.initThreadCNodeSizeBits as u8;
     let guard_size = sel4::word_bits()
@@ -152,10 +142,10 @@ pub fn ensure_canonical_root_alias(
         .expect("word bits must exceed init cnode bits");
     let cap_data = cap_data_guard(0, guard_size);
     let rights = sel4::SeL4CapRights::new(1, 1, 1, 1);
-    let identifier = sel4::debug_cap_identify(alias_slot);
     ::log::info!(
-        "[cnode] mint canonical alias slot=0x{alias_slot:04x} guard_bits={guard_size} identify=0x{identifier:08x}",
-        guard_size = guard_size
+        "[cnode] mint canonical alias slot=0x{alias_slot:04x} guard_bits={guard_size} cap_data=0x{cap_data:016x}",
+        guard_size = guard_size,
+        cap_data = cap_data
     );
     let style = cspace_sys::TupleStyle::GuardEncoded;
     let dst_index = cspace_sys::enc_index(alias_slot as seL4_Word, bi, style) as sel4::seL4_CPtr;
