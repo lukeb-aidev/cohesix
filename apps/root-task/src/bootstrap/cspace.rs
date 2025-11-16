@@ -147,30 +147,15 @@ pub fn ensure_canonical_root_alias(
         guard_size = guard_size,
     );
     let cap_data = cap_data_guard(0, guard_size);
-    let style = cspace_sys::tuple_style();
-    let style_label = cspace_sys::tuple_style_label(style);
     let dest_root = init_cnode_cptr(bi) as seL4_CNode;
-    let dest_slot = alias_slot as seL4_Word;
-    let src_root = bi.canonical_root_cap() as seL4_CNode;
-    let src_slot = seL4_CapInitThreadCNode as seL4_Word;
-    let dst_index = cspace_sys::enc_index(dest_slot, bi, style);
-    let src_index = cspace_sys::enc_index(src_slot, bi, style);
-    let dst_index_ptr = dst_index as seL4_CPtr;
-    let src_index_ptr = src_index as seL4_CPtr;
-    let depth = cspace_sys::cnode_depth(bi, style);
-    let depth_u8 = u8::try_from(depth).expect("cnode depth must fit in u8");
-    let canonical_tuple = cspace_sys::init_cnode_dest(alias_slot);
+    let src_root = dest_root;
+    let dst_index_ptr = alias_slot as seL4_CPtr;
+    let src_index_ptr = sel4::init_cnode_index_word() as seL4_CPtr;
+    let depth = init_bits;
+    let depth_u8 = depth;
     ::log::info!(
-        "[cnode] canonical tuple root=0x{tuple_root:04x} idx=0x{tuple_idx:04x} depth={tuple_depth} slot=0x{tuple_offset:04x}",
-        tuple_root = canonical_tuple.0,
-        tuple_idx = canonical_tuple.1,
-        tuple_depth = canonical_tuple.2,
-        tuple_offset = canonical_tuple.3,
-    );
-    ::log::info!(
-        "[cnode] mint canonical alias slot=0x{alias_slot:04x} style={style_label} depth={depth} guard_bits={guard_size} cap_data=0x{cap_data:016x}",
+        "[cnode] mint canonical alias slot=0x{alias_slot:04x} depth={depth} guard_bits={guard_size} cap_data=0x{cap_data:016x}",
         alias_slot = alias_slot,
-        style_label = style_label,
         depth = depth,
         guard_size = guard_size,
         cap_data = cap_data,
