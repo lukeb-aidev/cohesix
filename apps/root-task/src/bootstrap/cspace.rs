@@ -135,6 +135,10 @@ pub fn ensure_canonical_root_alias(
         ident = sel4::debug_cap_identify(sel4::seL4_CapInitThreadCNode),
     );
 
+    let init_bits = bi.initThreadCNodeSizeBits as u8;
+    let guard_size = sel4::word_bits()
+        .checked_sub(init_bits as sel4::seL4_Word)
+        .expect("word bits must exceed init cnode bits");
     let rights = sel4::SeL4CapRights::new(1, 1, 1, 1);
     let dst_slot_word = alias_slot as seL4_Word;
     let src_slot_word = seL4_CapInitThreadCNode as seL4_Word;
