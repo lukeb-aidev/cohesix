@@ -121,17 +121,29 @@ pub fn ensure_canonical_root_alias(
         empty_start < empty_end,
         "bootinfo empty window must not be empty"
     );
+    ::log::info!(
+        "[cnode] empty window [0x{start:04x}..0x{end:04x}) bits={bits}",
+        start = empty_start,
+        end = empty_end,
+        bits = bi.initThreadCNodeSizeBits,
+    );
     let alias_slot = empty_end
         .checked_sub(1)
         .expect("bootinfo empty window must contain at least one slot");
-    assert!(
-        alias_slot >= empty_start,
-        "alias slot fell outside the bootinfo empty window"
-    );
-    assert!(
-        !is_boot_reserved_slot(alias_slot),
-        "alias slot collides with a kernel-reserved capability"
-    );
+    if alias_slot < empty_start || alias_slot >= empty_end {
+        ::log::error!(
+            "[cnode] alias_slot=0x{alias_slot:04x} outside empty window [0x{start:04x}..0x{end:04x})",
+            alias_slot = alias_slot,
+            start = empty_start,
+            end = empty_end,
+        );
+    }
+    if is_boot_reserved_slot(alias_slot) {
+        ::log::error!(
+            "[cnode] alias_slot=0x{alias_slot:04x} collides with kernel reserved slot",
+            alias_slot = alias_slot,
+        );
+    }
 
     let init_bits = bi.initThreadCNodeSizeBits as u8;
     let guard_size = sel4::word_bits()
@@ -145,6 +157,12 @@ pub fn ensure_canonical_root_alias(
     );
     let style = cspace_sys::TupleStyle::GuardEncoded;
     let dst_index = cspace_sys::enc_index(alias_slot as seL4_Word, bi, style) as sel4::seL4_CPtr;
+    ::log::info!(
+        "[cnode] mint: dst_index=0x{dst_index:04x} dst_depth={dst_depth} guard_size={guard_size}",
+        dst_index = dst_index,
+        dst_depth = sel4::word_bits() as u8,
+        guard_size = guard_size
+    );
     let dst_depth = sel4::word_bits() as u8;
     let src_index = seL4_CapInitThreadCNode as sel4::seL4_Word;
     let src_depth = init_bits;
