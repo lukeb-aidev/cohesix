@@ -17,6 +17,9 @@ use sel4_panicking as _;
 use sel4_runtime as _;
 
 #[cfg(feature = "kernel")]
+pub use sel4_runtime::_start;
+
+#[cfg(feature = "kernel")]
 mod sel4_entry {
     #![doc = "seL4 entry shim exposed with an unmangled symbol."]
     #![allow(unsafe_code)]

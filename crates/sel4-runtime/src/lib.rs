@@ -108,3 +108,12 @@ pub fn bootinfo() -> Option<&'static mut seL4_BootInfo> {
         .get()
         .map(|ptr| unsafe { &mut *ptr.cast::<seL4_BootInfo>() })
 }
+
+#[cfg(target_arch = "aarch64")]
+extern "C" {
+    pub fn _start(bootinfo: *mut seL4_BootInfo) -> !;
+}
+
+#[cfg(target_arch = "aarch64")]
+#[used]
+static START_PTR: unsafe extern "C" fn(*mut seL4_BootInfo) -> ! = _start;
