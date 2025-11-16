@@ -12,14 +12,14 @@ PHDRS {
 SECTIONS
 {
   /* Code / RO in one contiguous RX segment */
-. = ALIGN(0x1000);
-KEEP(*(.text._start))
-. = ALIGN(16);
-PROVIDE(_text = .);
-.text : {
-  KEEP(*(.text.sel4_start))    /* entry */
-  *(.text .text.*)
-} :text
+  . = ALIGN(0x1000);
+  . = ALIGN(16);
+  PROVIDE(_text = .);
+  .text : {
+    KEEP(*(.text._start))
+    KEEP(*(.text.sel4_start))    /* entry */
+    *(.text .text.*)
+  } :text
 
   .rodata : {
     *(.rodata .rodata.*)
