@@ -30,8 +30,8 @@ use crate::console::Console;
 use crate::cspace::tuples::{assert_ipc_buffer_matches_bootinfo, make_retype_tuple};
 use crate::cspace::CSpace;
 use crate::event::{
-    AuditSink, BootstrapMessage, BootstrapMessageHandler, EventPump, IpcDispatcher, TickEvent,
-    TicketTable, TimerSource,
+    AuditSink, BootstrapMessage, BootstrapMessageHandler, CapabilityValidator, EventPump,
+    IpcDispatcher, TickEvent, TicketTable, TimerSource,
 };
 use crate::guards;
 use crate::hal::{HalError, Hardware, KernelHal};
@@ -47,7 +47,8 @@ use crate::sel4::{
     RetypeKind, RetypeStatus, IPC_PAGE_BYTES, MSG_MAX_WORDS,
 };
 use crate::serial::{
-    pl011::Pl011, SerialPort, DEFAULT_LINE_CAPACITY, DEFAULT_RX_CAPACITY, DEFAULT_TX_CAPACITY,
+    pl011::Pl011, SerialDriver, SerialPort, DEFAULT_LINE_CAPACITY, DEFAULT_RX_CAPACITY,
+    DEFAULT_TX_CAPACITY,
 };
 use crate::uart::pl011::{self as early_uart, PL011_PADDR};
 use heapless::{String as HeaplessString, Vec as HeaplessVec};
@@ -1408,12 +1409,25 @@ fn bootstrap<P: Platform>(
         boot_log::force_uart_line("[Cohesix] console.handoff");
         #[allow(unreachable_code)]
         {
+            run_event_loop(pump);
+            log::error!("[console] event loop returned; entering fallback console");
             crate::userland::start_console_or_cohsh(platform);
-            log::error!("[console] ERROR: console returned; parking");
-            loop {
-                crate::sel4::yield_now();
-            }
         }
+    }
+}
+
+fn run_event_loop<'a, D, T, I, V, const RX: usize, const TX: usize, const LINE: usize>(
+    mut pump: EventPump<'a, D, T, I, V, RX, TX, LINE>,
+) -> !
+where
+    D: SerialDriver,
+    T: TimerSource,
+    I: IpcDispatcher,
+    V: CapabilityValidator,
+{
+    loop {
+        pump.poll();
+        crate::sel4::yield_now();
     }
 }
 
