@@ -155,16 +155,16 @@ pub fn ensure_canonical_root_alias(
         cap_data = cap_data,
         style_label = cspace_sys::tuple_style_label(style),
     );
-    let dst_index = cspace_sys::enc_index(alias_slot as seL4_Word, bi, style) as sel4::seL4_CPtr;
+    let dst_index = alias_slot;
+    let dst_depth = init_bits;
+    let src_index = seL4_CapInitThreadCNode;
+    let src_depth = init_bits;
     ::log::info!(
         "[cnode] mint: dst_index=0x{dst_index:04x} dst_depth={dst_depth} guard_size={guard_size}",
         dst_index = dst_index,
-        dst_depth = sel4::word_bits() as u8,
+        dst_depth = dst_depth,
         guard_size = guard_size
     );
-    let dst_depth = sel4::word_bits() as u8;
-    let src_index = seL4_CapInitThreadCNode as sel4::seL4_Word;
-    let src_depth = init_bits;
     let err = sel4::cnode_mint_depth(
         seL4_CapInitThreadCNode,
         dst_index,
