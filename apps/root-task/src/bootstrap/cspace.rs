@@ -148,16 +148,14 @@ pub fn ensure_canonical_root_alias(
     );
     let cap_data = cap_data_guard(0, guard_size);
     let rights = sel4::SeL4CapRights::new(1, 1, 1, 1);
-    let style = cspace_sys::TupleStyle::GuardEncoded;
-    let dst_index = cspace_sys::enc_index(alias_slot as seL4_Word, bi, style) as seL4_CPtr;
-    let depth_bits = sel4::word_bits() as u8;
+    let dst_index = alias_slot;
+    let depth_bits = init_bits;
     let src_index = seL4_CapInitThreadCNode;
     let src_depth = init_bits;
     ::log::info!(
-        "[cnode] mint canonical alias slot=0x{alias_slot:04x} guard_bits={guard_size} cap_data=0x{cap_data:016x} style={style_label}",
+        "[cnode] mint canonical alias slot=0x{alias_slot:04x} guard_bits={guard_size} cap_data=0x{cap_data:016x}",
         guard_size = guard_size,
         cap_data = cap_data,
-        style_label = cspace_sys::tuple_style_label(style),
     );
     ::log::info!(
         "[cnode] mint: dst_index=0x{dst_index:04x} dst_depth={dst_depth} src_index=0x{src_index:04x} src_depth={src_depth} guard_size={guard_size}",
