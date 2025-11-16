@@ -43,8 +43,18 @@ Deliverables: <files, logs, doc updates>
 - Document new file types/paths before committing code that depends on them.
 - Changes to `/docs/*.md` must reflect the as-built state produced by the compiler (snippets, schemas, `/proc` layouts).
 
+## Canonical Documents
+docs/*.md
+seL4/seL4-manual-latest.pdf
+seL4/elfloader.md
+
+## seL4
+A full seL4 build tree can be found in:
+seL4
+
 ## Security & Testing Expectations
 - Validate all user-controlled input (9P frames, JSON commands).
 - No hardcoded secrets; use config or tickets.
 - Update or add tests whenever behaviour changes; list executed commands in PR summaries.
 - Run `cargo run -p coh-rtc` and verify regenerated artefacts hash-match committed versions before merge.
+

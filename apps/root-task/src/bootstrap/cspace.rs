@@ -140,12 +140,19 @@ pub fn ensure_canonical_root_alias(
     let guard_size = sel4::word_bits()
         .checked_sub(init_bits as sel4::seL4_Word)
         .expect("word bits must exceed init cnode bits");
+    ::log::info!(
+        "[cnode] guard formula word_bits={} init_bits={} -> guard_bits={guard_size}",
+        sel4::word_bits(),
+        init_bits,
+        guard_size = guard_size,
+    );
     let cap_data = cap_data_guard(0, guard_size);
     let rights = sel4::SeL4CapRights::new(1, 1, 1, 1);
     ::log::info!(
-        "[cnode] mint canonical alias slot=0x{alias_slot:04x} guard_bits={guard_size} cap_data=0x{cap_data:016x}",
+        "[cnode] mint canonical alias slot=0x{alias_slot:04x} guard_bits={guard_size} cap_data=0x{cap_data:016x} style={style_label}",
         guard_size = guard_size,
-        cap_data = cap_data
+        cap_data = cap_data,
+        style_label = cspace_sys::tuple_style_label(style),
     );
     let style = cspace_sys::TupleStyle::GuardEncoded;
     let dst_index = cspace_sys::enc_index(alias_slot as seL4_Word, bi, style) as sel4::seL4_CPtr;
