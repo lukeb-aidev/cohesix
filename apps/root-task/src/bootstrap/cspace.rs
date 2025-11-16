@@ -13,7 +13,7 @@ use crate::sel4::{
 #[cfg(feature = "cap-probes")]
 use core::convert::TryFrom;
 use core::fmt::Write;
-use heapless::String;
+use heapless::{String, Vec};
 
 use super::cspace_sys;
 use sel4_sys::{
@@ -127,23 +127,24 @@ pub fn ensure_canonical_root_alias(
         end = empty_end,
         bits = bi.initThreadCNodeSizeBits,
     );
-    let alias_slot = empty_end
-        .checked_sub(1)
-        .expect("bootinfo empty window must contain at least one slot");
-    if alias_slot < empty_start || alias_slot >= empty_end {
-        ::log::error!(
-            "[cnode] alias_slot=0x{slot:04x} falls outside [0x{start:04x}..0x{end:04x})",
+    let mut alias_slot = empty_start;
+    let mut candidate_slots = heapless::Vec::<sel4::seL4_CPtr, 16>::new();
+    while alias_slot < empty_end {
+        let ident = sel4::debug_cap_identify(alias_slot);
+        ::log::info!(
+            "[cnode] probe slot=0x{slot:04x} id=0x{ident:08x}",
             slot = alias_slot,
-            start = empty_start,
-            end = empty_end,
+            ident = ident,
         );
+        if ident != 0 {
+            let _ = candidate_slots.push(alias_slot);
+        }
+        alias_slot = alias_slot.saturating_add(1);
     }
-    if is_boot_reserved_slot(alias_slot) {
-        ::log::error!(
-            "[cnode] alias_slot=0x{slot:04x} collides with kernel reserved slot",
-            slot = alias_slot,
-        );
+    if candidate_slots.is_empty() {
+        panic!("no non-null slot found inside bootinfo empty window");
     }
+    alias_slot = candidate_slots[0];
 
     let init_bits = bi.initThreadCNodeSizeBits as u8;
     let guard_size = sel4::word_bits()
