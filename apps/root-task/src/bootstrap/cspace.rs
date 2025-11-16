@@ -140,40 +140,22 @@ pub fn ensure_canonical_root_alias(
         .expect("word bits must exceed init cnode bits");
     let style = cspace_sys::tuple_style();
     let encoded_alias = cspace_sys::enc_index(alias_slot as seL4_Word, bi, style);
-    let depth_word = sel4::word_bits();
-    let depth_bits = depth_word as u8;
-    let dest_root = init_cnode_cptr(bi) as seL4_CNode;
-    let dest_index = encoded_alias as seL4_CPtr;
-    let dest_depth = depth_bits;
-    let src_root = seL4_CapInitThreadCNode;
-    let src_index = sel4::init_cnode_index_word();
-    let src_depth = depth_bits;
-    let guard_data = cap_data_guard(0, guard_size);
+    let rights = sel4::SeL4CapRights::new(1, 1, 1, 1);
+    let dst_slot_raw = alias_slot as seL4_Word;
+    let src_slot_raw = bi.canonical_root_cap() as seL4_Word;
     ::log::info!(
-        "[cnode] mint canonical alias slot=0x{alias_slot:04x} enc_index=0x{encoded:016x} depth={depth} guard_bits={guard} cap_data=0x{guard_data:016x}",
-        alias_slot = alias_slot,
-        encoded = encoded_alias,
-        depth = depth_bits,
+        "[cnode] canonical copy dst=0x{dst:04x} src=0x{src:04x} guard_bits={guard} enc_dst=0x{encoded:016x}",
+        dst = dst_slot_raw,
+        src = src_slot_raw,
         guard = guard_size,
-        guard_data = guard_data,
+        encoded = encoded_alias,
     );
-    let err = unsafe {
-        seL4_CNode_Mint(
-            dest_root,
-            dest_index,
-            dest_depth,
-            src_root,
-            src_index,
-            src_depth,
-            sel4::SeL4CapRights::new(1, 1, 1, 1),
-            guard_data,
-        )
-    };
+    let err = cspace_sys::canonical_cnode_copy(bi, dst_slot_raw, src_slot_raw, rights);
     if err != seL4_NoError {
-        cspace_sys::debug_identify_cap("dest_root", dest_root as seL4_CPtr);
-        cspace_sys::debug_identify_cap("src_root", src_root as seL4_CPtr);
+        cspace_sys::debug_identify_cap("dest_root", sel4::seL4_CapInitThreadCNode);
+        cspace_sys::debug_identify_cap("src_root", bi.canonical_root_cap());
         ::log::error!(
-            "[cnode] canonical alias mint failed slot=0x{alias_slot:04x} err={err} ({name})",
+            "[cnode] canonical alias copy failed slot=0x{alias_slot:04x} err={err} ({name})",
             name = sel4::error_name(err),
         );
         return Err(err);
