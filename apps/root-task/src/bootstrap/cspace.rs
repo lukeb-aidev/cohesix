@@ -159,6 +159,14 @@ pub fn ensure_canonical_root_alias(
     let src_index_ptr = src_index as seL4_CPtr;
     let depth = cspace_sys::cnode_depth(bi, style);
     let depth_u8 = u8::try_from(depth).expect("cnode depth must fit in u8");
+    let canonical_tuple = cspace_sys::init_cnode_dest(alias_slot);
+    ::log::info!(
+        "[cnode] canonical tuple root=0x{tuple_root:04x} idx=0x{tuple_idx:04x} depth={tuple_depth} slot=0x{tuple_offset:04x}",
+        tuple_root = canonical_tuple.0,
+        tuple_idx = canonical_tuple.1,
+        tuple_depth = canonical_tuple.2,
+        tuple_offset = canonical_tuple.3,
+    );
     ::log::info!(
         "[cnode] mint canonical alias slot=0x{alias_slot:04x} style={style_label} depth={depth} guard_bits={guard_size} cap_data=0x{cap_data:016x}",
         alias_slot = alias_slot,
@@ -181,6 +189,8 @@ pub fn ensure_canonical_root_alias(
         )
     };
     if err != seL4_NoError {
+        cspace_sys::debug_identify_cap("dest_root", dest_root as seL4_CPtr);
+        cspace_sys::debug_identify_cap("src_root", src_root as seL4_CPtr);
         ::log::error!(
             "[cnode] canonical alias mint failed slot=0x{alias_slot:04x} err={err} ({name})",
             name = sel4::error_name(err),
