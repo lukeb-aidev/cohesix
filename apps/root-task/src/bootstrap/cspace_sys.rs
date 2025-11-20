@@ -29,28 +29,12 @@ pub fn root_cnode() -> seL4_CNode {
 
 #[inline(always)]
 pub fn path_depth() -> u8 {
-    #[cfg(target_os = "none")]
-    {
-        bits_as_u8(bi_init_cnode_bits() as usize)
-    }
-
-    #[cfg(not(target_os = "none"))]
-    {
-        bits_as_u8(sel4::word_bits() as usize)
-    }
+    bits_as_u8(sel4::word_bits() as usize)
 }
 
 #[inline(always)]
 pub fn path_depth_word() -> sys::seL4_Word {
-    #[cfg(target_os = "none")]
-    {
-        bi_init_cnode_bits()
-    }
-
-    #[cfg(not(target_os = "none"))]
-    {
-        sel4::word_bits()
-    }
+    sel4::word_bits()
 }
 
 #[inline(always)]
@@ -281,8 +265,10 @@ pub fn encode_slot(slot: u64, bits: u8) -> u64 {
 
 #[inline(always)]
 pub fn cnode_depth(bi: &sys::seL4_BootInfo, style: TupleStyle) -> sys::seL4_Word {
-    let _ = style;
-    sel4::init_cnode_bits(bi) as sys::seL4_Word
+    match style {
+        TupleStyle::Raw => sel4::init_cnode_bits(bi) as sys::seL4_Word,
+        TupleStyle::GuardEncoded => sel4::word_bits(),
+    }
 }
 
 #[inline(always)]
@@ -1619,9 +1605,9 @@ pub fn init_cnode_dest(
         "slot 0x{slot:04x} exceeds init CNode capacity (limit=0x{capacity:04x})",
     );
     let root = bi_init_cnode_cptr();
-    let offset = slot as sys::seL4_Word;
+    let offset = enc_index(slot as sys::seL4_Word, bi(), tuple_style());
     let node_index = init_root_index();
-    let node_depth = bi_init_cnode_bits();
+    let node_depth = sel4::word_bits();
     (root, node_index, node_depth, offset)
 }
 
@@ -1648,8 +1634,8 @@ pub fn init_cnode_retype_dest(
     );
     let root = bi_init_cnode_cptr();
     let node_index = init_root_index();
-    let node_depth = bi_init_cnode_bits();
-    let node_offset = slot as sys::seL4_Word;
+    let node_depth = sel4::word_bits();
+    let node_offset = enc_index(slot as sys::seL4_Word, bi(), tuple_style());
     let depth_bits = bits_as_u8(init_bits_usize);
     debug_assert!(
         depth_bits <= 31,
