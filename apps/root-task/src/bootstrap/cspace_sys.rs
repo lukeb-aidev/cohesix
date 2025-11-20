@@ -65,7 +65,7 @@ impl TupleStyle {
 
 #[inline(always)]
 pub fn tuple_style() -> TupleStyle {
-    TupleStyle::Raw
+    TupleStyle::GuardEncoded
 }
 
 #[inline(always)]
@@ -266,9 +266,8 @@ pub fn encode_slot(slot: u64, bits: u8) -> u64 {
 #[inline(always)]
 pub fn cnode_depth(bi: &sys::seL4_BootInfo, style: TupleStyle) -> sys::seL4_Word {
     match style {
-        // Raw style uses the init CNode guard+radix depth (word width on seL4).
-        TupleStyle::Raw => sel4::init_cnode_depth(bi) as sys::seL4_Word,
-        TupleStyle::GuardEncoded => sys::seL4_WordBits as sys::seL4_Word,
+        TupleStyle::Raw => sel4::init_cnode_bits(bi) as sys::seL4_Word,
+        TupleStyle::GuardEncoded => sel4::word_bits(),
     }
 }
 
@@ -281,7 +280,6 @@ pub fn enc_index(
     let init_bits = sel4::init_cnode_bits(bi);
     check_slot_in_range(init_bits, slot as sys::seL4_CPtr);
     let (encoded, shift) = match style {
-        // Raw tuples use the slot value directly; depth determines how many bits the kernel consumes.
         TupleStyle::Raw => (slot, 0),
         TupleStyle::GuardEncoded => {
             let shift = depth_wordbits().saturating_sub(init_bits);
