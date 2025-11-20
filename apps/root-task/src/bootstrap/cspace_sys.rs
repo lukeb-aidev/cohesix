@@ -81,7 +81,7 @@ impl TupleStyle {
 
 #[inline(always)]
 pub fn tuple_style() -> TupleStyle {
-    TupleStyle::GuardEncoded
+    TupleStyle::Raw
 }
 
 #[inline(always)]
