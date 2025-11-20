@@ -113,6 +113,16 @@ pub fn ensure_canonical_root_alias(
         return Ok(current);
     }
 
+    // The initial CNode provided by the kernel already resolves the full word width (guard
+    // plus radix) as required by the seL4 API. We keep that capability as the canonical root
+    // and simply publish it, avoiding any self-copies that can fail early in bring-up.
+    sel4::publish_canonical_root_alias(seL4_CapInitThreadCNode);
+    ::log::info!(
+        "[cnode] canonical alias uses init CNode slot=0x{slot:04x}",
+        slot = seL4_CapInitThreadCNode
+    );
+    return Ok(seL4_CapInitThreadCNode);
+
     let empty_start = bi.empty_first_slot() as sel4::seL4_CPtr;
     let empty_end = bi.empty_last_slot_excl() as sel4::seL4_CPtr;
     assert!(
