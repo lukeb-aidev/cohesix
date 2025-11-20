@@ -8,7 +8,7 @@ use core::sync::atomic::Ordering;
 
 use heapless::{spsc::Queue, String as HeaplessString, Vec as HeaplessVec};
 use portable_atomic::{AtomicU32, AtomicU64};
-use smoltcp::iface::{Config as IfaceConfig, Interface, SocketSet, SocketStorage};
+use smoltcp::iface::{Config as IfaceConfig, Interface, PollResult, SocketSet, SocketStorage};
 use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::time::Instant;
 use smoltcp::wire::{EthernetAddress, HardwareAddress, IpAddress, IpCidr, Ipv4Address};
@@ -223,11 +223,11 @@ pub struct QueueRxToken {
 }
 
 impl RxToken for QueueRxToken {
-    fn consume<R, F>(mut self, f: F) -> R
+    fn consume<R, F>(self, f: F) -> R
     where
-        F: FnOnce(&mut [u8]) -> R,
+        F: FnOnce(&[u8]) -> R,
     {
-        f(self.frame.as_mut_slice())
+        f(self.frame.as_slice())
     }
 }
 
@@ -339,7 +339,7 @@ impl NetStack {
         let storage: &mut [SocketStorage<'static>] = &mut [];
         let mut sockets = SocketSet::new(storage);
         let changed = interface.poll(timestamp, device, &mut sockets);
-        let mut activity = changed;
+        let mut activity = changed != PollResult::None;
 
         if self.flush_outbound_lines() {
             activity = true;
