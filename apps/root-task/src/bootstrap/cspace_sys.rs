@@ -65,7 +65,7 @@ impl TupleStyle {
 
 #[inline(always)]
 pub fn tuple_style() -> TupleStyle {
-    TupleStyle::GuardEncoded
+    TupleStyle::Raw
 }
 
 #[inline(always)]
@@ -1529,49 +1529,14 @@ pub fn canonical_cnode_copy(
 ) -> sys::seL4_Error {
     let root = bi.canonical_root_cap();
     let style = tuple_style();
-    let mut word_depth = sel4::word_bits();
-    if word_depth == 0 {
-        word_depth = sel4_sys::seL4_WordBits as sys::seL4_Word;
-    }
-    let mut size_depth = sel4::init_cnode_bits(bi);
-    if size_depth == 0 {
-        size_depth = 13;
-    }
-
+    let depth = bits_as_u8(sel4::word_bits() as usize);
+    let dst_index = slot_index(enc_index(dst_slot, bi, style));
+    let src_index = slot_index(enc_index(src_slot, bi, style));
     ::log::info!(
-        "[cnode] canonical-copy depths word_bits={word_depth} size_bits={size_depth} style={}",
-        tuple_style_label(style),
+        "[cnode] op=canonical-copy form={style} depth=word root=0x{root:04x} dst=0x{dst_slot:04x} src=0x{src_slot:04x} idx.dst=0x{dst_index:016x} idx.src=0x{src_index:016x}",
+        style = tuple_style_label(style),
     );
-
-    let enc_dst = enc_index(dst_slot, bi, style);
-    let enc_src = enc_index(src_slot, bi, style);
-
-    let mut last_err = sys::seL4_NoError;
-    let dst_depth_u8 = u8::try_from(word_depth).unwrap_or(64);
-    let raw_dst = dst_slot;
-    let raw_src = src_slot;
-    for src_depth_u8 in 1..=dst_depth_u8 {
-        ::log::info!(
-            "[cnode] op=canonical-copy form=raw/raw depth=word/{src_depth_u8} root=0x{root:04x} dst=0x{dst_slot:04x} src=0x{src_slot:04x} idx.dst=0x{raw_dst:016x} idx.src=0x{raw_src:016x}",
-        );
-        let err = unsafe {
-            sys::seL4_CNode_Copy(
-                root,
-                slot_index(raw_dst),
-                dst_depth_u8,
-                root,
-                slot_index(raw_src),
-                src_depth_u8,
-                rights,
-            )
-        };
-        last_err = err;
-        if err == sys::seL4_NoError {
-            return err;
-        }
-    }
-
-    last_err
+    unsafe { sys::seL4_CNode_Copy(root, dst_index, depth, root, src_index, depth, rights) }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
