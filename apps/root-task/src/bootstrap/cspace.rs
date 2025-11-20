@@ -133,6 +133,19 @@ pub fn ensure_canonical_root_alias(
         root = sel4::seL4_CapInitThreadCNode,
         ident = sel4::debug_cap_identify(sel4::seL4_CapInitThreadCNode),
     );
+    let enc_alias = cspace_sys::enc_index(alias_slot as seL4_Word, bi, cspace_sys::tuple_style());
+    let enc_src = cspace_sys::enc_index(sel4::seL4_CapInitThreadCNode as seL4_Word, bi, cspace_sys::tuple_style());
+    ::log::info!(
+        "[cnode] ident raw.dst=0x{dst:016x} -> 0x{dst_ident:08x} enc.dst=0x{enc_dst:016x} -> 0x{enc_dst_ident:08x} raw.src=0x{src:016x} -> 0x{src_ident:08x} enc.src=0x{enc_src:016x} -> 0x{enc_src_ident:08x}",
+        dst = alias_slot,
+        dst_ident = sel4::debug_cap_identify(alias_slot),
+        enc_dst = enc_alias,
+        enc_dst_ident = sel4::debug_cap_identify(enc_alias as seL4_CPtr),
+        src = sel4::seL4_CapInitThreadCNode,
+        src_ident = sel4::debug_cap_identify(sel4::seL4_CapInitThreadCNode),
+        enc_src = enc_src,
+        enc_src_ident = sel4::debug_cap_identify(enc_src as seL4_CPtr),
+    );
 
     let init_bits = bi.initThreadCNodeSizeBits as u8;
     let guard_size = sel4::word_bits()
