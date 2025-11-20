@@ -29,12 +29,28 @@ pub fn root_cnode() -> seL4_CNode {
 
 #[inline(always)]
 pub fn path_depth() -> u8 {
-    bits_as_u8(sel4::word_bits() as usize)
+    #[cfg(target_os = "none")]
+    {
+        bits_as_u8(bi_init_cnode_bits() as usize)
+    }
+
+    #[cfg(not(target_os = "none"))]
+    {
+        bits_as_u8(sel4::word_bits() as usize)
+    }
 }
 
 #[inline(always)]
 pub fn path_depth_word() -> sys::seL4_Word {
-    sel4::word_bits()
+    #[cfg(target_os = "none")]
+    {
+        bi_init_cnode_bits()
+    }
+
+    #[cfg(not(target_os = "none"))]
+    {
+        sel4::word_bits()
+    }
 }
 
 #[inline(always)]
@@ -65,7 +81,7 @@ impl TupleStyle {
 
 #[inline(always)]
 pub fn tuple_style() -> TupleStyle {
-    TupleStyle::Raw
+    TupleStyle::GuardEncoded
 }
 
 #[inline(always)]
@@ -278,7 +294,11 @@ pub fn enc_index(
 ) -> sys::seL4_Word {
     let init_bits = sel4::init_cnode_bits(bi);
     check_slot_in_range(init_bits, slot as sys::seL4_CPtr);
-    let (encoded, shift) = (slot, 0);
+    let shift = depth_wordbits() - init_bits;
+    let encoded = match style {
+        TupleStyle::Raw => slot,
+        TupleStyle::GuardEncoded => encode_slot(slot as u64, init_bits) as sys::seL4_Word,
+    };
     ::log::info!(
         "[cnode.enc] style={} slot=0x{slot:04x} bits={bits} shift={shift} encoded=0x{encoded:016x}",
         tuple_style_label(style),
@@ -1602,7 +1622,7 @@ pub fn init_cnode_dest(
     let root = bi_init_cnode_cptr();
     let offset = slot as sys::seL4_Word;
     let node_index = init_root_index();
-    let node_depth = sel4::word_bits();
+    let node_depth = bi_init_cnode_bits();
     (root, node_index, node_depth, offset)
 }
 
@@ -1629,7 +1649,7 @@ pub fn init_cnode_retype_dest(
     );
     let root = bi_init_cnode_cptr();
     let node_index = init_root_index();
-    let node_depth = sel4::word_bits();
+    let node_depth = bi_init_cnode_bits();
     let node_offset = slot as sys::seL4_Word;
     let depth_bits = bits_as_u8(init_bits_usize);
     debug_assert!(
