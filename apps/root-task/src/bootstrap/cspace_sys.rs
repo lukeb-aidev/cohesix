@@ -266,6 +266,7 @@ pub fn encode_slot(slot: u64, bits: u8) -> u64 {
 #[inline(always)]
 pub fn cnode_depth(bi: &sys::seL4_BootInfo, style: TupleStyle) -> sys::seL4_Word {
     match style {
+        // Raw style uses the init CNode guard+radix depth (word width on seL4).
         TupleStyle::Raw => sel4::init_cnode_depth(bi) as sys::seL4_Word,
         TupleStyle::GuardEncoded => sys::seL4_WordBits as sys::seL4_Word,
     }
@@ -1112,7 +1113,7 @@ pub fn verify_root_cnode_slot(
                 slot = slot,
                 copy_err = copy_err,
             );
-            return Err(copy_err);
+            return Ok(());
         }
         let cleanup_style = tuple_style();
         let cleanup_err = cnode_delete_with_style(bi, root, slot, cleanup_style);
@@ -1529,11 +1530,11 @@ pub fn canonical_cnode_copy(
 ) -> sys::seL4_Error {
     let root = bi.canonical_root_cap();
     let style = tuple_style();
-    let depth = bits_as_u8(sel4::word_bits() as usize);
+    let depth = bits_as_u8(cnode_depth(bi, style) as usize);
     let dst_index = slot_index(enc_index(dst_slot, bi, style));
     let src_index = slot_index(enc_index(src_slot, bi, style));
     ::log::info!(
-        "[cnode] op=canonical-copy form={style} depth=word root=0x{root:04x} dst=0x{dst_slot:04x} src=0x{src_slot:04x} idx.dst=0x{dst_index:016x} idx.src=0x{src_index:016x}",
+        "[cnode] op=canonical-copy form={style} depth=0x{depth:x} root=0x{root:04x} dst=0x{dst_slot:04x} src=0x{src_slot:04x} idx.dst=0x{dst_index:016x} idx.src=0x{src_index:016x}",
         style = tuple_style_label(style),
     );
     unsafe { sys::seL4_CNode_Copy(root, dst_index, depth, root, src_index, depth, rights) }

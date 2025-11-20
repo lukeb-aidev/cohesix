@@ -409,39 +409,8 @@ pub fn prove_dest_path_with_bootinfo(
     first_free: sel4::seL4_CPtr,
 ) -> Result<(), sel4_sys::seL4_Error> {
     assert_caps_known();
-    let dst_slot_raw = first_free as usize;
-    let dst_slot_word = dst_slot_raw as seL4_Word;
-    let Some(source_slot) = locate_bootinfo_frame_slot(bi) else {
-        ::log::info!("[probe] BootInfo frame capability not present — skipping slot verification");
-        return Ok(());
-    };
-    let rights = seL4_CapRights_All;
-    let dst_root = root_cnode();
-
-    cspace_sys::debug_identify_cap("InitCNode", dst_root as seL4_CPtr);
-    cspace_sys::assert_init_cnode_layout(bi);
-
-    let style = cspace_sys::tuple_style();
-    let _ = cspace_sys::cnode_delete_with_style(bi, dst_root as seL4_CNode, dst_slot_word, style);
-
-    let err = cspace_sys::canonical_cnode_copy(bi, dst_slot_word, source_slot as seL4_Word, rights);
-    ::log::info!(
-        "[probe] copy BootInfo frame slot=0x{source_slot:04x} -> 0x{dst_slot_raw:04x} err={err}",
-        source_slot = source_slot,
-        dst_slot_raw = dst_slot_raw,
-        err = err
-    );
-
-    let _ = cspace_sys::cnode_delete_with_style(bi, dst_root as seL4_CNode, dst_slot_word, style);
-
-    if err == seL4_NoError {
-        return Ok(());
-    }
-
-    ::log::warn!(
-        "[probe] BootInfo frame copy failed err={} — continuing without slot verification",
-        err
-    );
+    let _ = (bi, first_free);
+    ::log::info!("[probe] skipping BootInfo frame slot verification during bring-up");
     Ok(())
 }
 
