@@ -81,7 +81,7 @@ impl TupleStyle {
 
 #[inline(always)]
 pub fn tuple_style() -> TupleStyle {
-    TupleStyle::Raw
+    TupleStyle::GuardEncoded
 }
 
 #[inline(always)]
@@ -281,9 +281,8 @@ pub fn encode_slot(slot: u64, bits: u8) -> u64 {
 
 #[inline(always)]
 pub fn cnode_depth(bi: &sys::seL4_BootInfo, style: TupleStyle) -> sys::seL4_Word {
-    let init_bits = sel4::init_cnode_bits(bi) as sys::seL4_Word;
     let _ = style;
-    init_bits
+    sel4::init_cnode_bits(bi) as sys::seL4_Word
 }
 
 #[inline(always)]
