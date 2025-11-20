@@ -15,7 +15,7 @@ use heapless::String;
 use super::cspace_sys;
 use sel4_sys::{
     self, seL4_BootInfo, seL4_CNode, seL4_CPtr, seL4_CapBootInfoFrame, seL4_CapInitThreadCNode,
-    seL4_CapInitThreadTCB, seL4_CapRights_All, seL4_NoError, seL4_Word,
+    seL4_CapInitThreadTCB, seL4_Word,
 };
 
 #[cfg(feature = "cap-probes")]
