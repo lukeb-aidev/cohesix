@@ -65,7 +65,7 @@ impl TupleStyle {
 
 #[inline(always)]
 pub fn tuple_style() -> TupleStyle {
-    TupleStyle::GuardEncoded
+    TupleStyle::Raw
 }
 
 #[inline(always)]
@@ -557,7 +557,8 @@ pub fn retype_endpoint_raw(
     ut: sys::seL4_Word,
     dst: sys::seL4_Word,
 ) -> sys::seL4_Error {
-    let depth = sel4::word_bits();
+    let style = tuple_style();
+    let depth = cnode_depth(bi, style);
     let init_bits = sel4::init_cnode_bits(bi);
     check_slot_in_range(init_bits, dst as sys::seL4_CPtr);
     let node_offset = dst;
@@ -1299,8 +1300,7 @@ pub fn encode_cnode_depth(bits: u8) -> sys::seL4_Word {
 /// Depth (in bits) used when traversing the init CNode for syscall arguments.
 #[inline(always)]
 fn init_cspace_depth_words(bi: &sys::seL4_BootInfo) -> sys::seL4_Word {
-    let _ = bi;
-    sel4::word_bits()
+    cnode_depth(bi, tuple_style())
 }
 
 #[inline(always)]
@@ -1559,7 +1559,7 @@ impl RootPath {
         let root = sel4::init_cnode_cptr(bi);
         let offset = slot as sys::seL4_Word;
         let index = init_root_index();
-        let depth = sel4::word_bits();
+        let depth = cnode_depth(bi, tuple_style());
         let (empty_start, empty_end) = sel4::empty_window(bi);
         assert!(
             slot >= empty_start && slot < empty_end,
