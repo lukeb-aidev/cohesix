@@ -65,7 +65,7 @@ impl TupleStyle {
 
 #[inline(always)]
 pub fn tuple_style() -> TupleStyle {
-    TupleStyle::GuardEncoded
+    TupleStyle::Raw
 }
 
 #[inline(always)]
@@ -265,10 +265,9 @@ pub fn encode_slot(slot: u64, bits: u8) -> u64 {
 
 #[inline(always)]
 pub fn cnode_depth(bi: &sys::seL4_BootInfo, style: TupleStyle) -> sys::seL4_Word {
-    match style {
-        TupleStyle::Raw => sel4::init_cnode_bits(bi) as sys::seL4_Word,
-        TupleStyle::GuardEncoded => sel4::word_bits(),
-    }
+    let init_bits = sel4::init_cnode_bits(bi) as sys::seL4_Word;
+    let _ = style;
+    init_bits
 }
 
 #[inline(always)]
@@ -279,13 +278,7 @@ pub fn enc_index(
 ) -> sys::seL4_Word {
     let init_bits = sel4::init_cnode_bits(bi);
     check_slot_in_range(init_bits, slot as sys::seL4_CPtr);
-    let (encoded, shift) = match style {
-        TupleStyle::Raw => (slot, 0),
-        TupleStyle::GuardEncoded => {
-            let shift = depth_wordbits().saturating_sub(init_bits);
-            (encode_slot(slot as u64, init_bits) as sys::seL4_Word, shift)
-        }
-    };
+    let (encoded, shift) = (slot, 0);
     ::log::info!(
         "[cnode.enc] style={} slot=0x{slot:04x} bits={bits} shift={shift} encoded=0x{encoded:016x}",
         tuple_style_label(style),
