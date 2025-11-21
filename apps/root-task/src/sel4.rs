@@ -718,12 +718,12 @@ pub fn debug_halt() {}
 pub unsafe extern "C" fn seL4_DebugCapIdentify(slot: seL4_CPtr) -> u32 {
     const SYS_DEBUG_CAP_IDENTIFY: i64 = -12;
 
-    let mut badge = slot as usize;
-    let mut info = 0usize;
-    let mut mr0 = 0usize;
-    let mut mr1 = 0usize;
-    let mut mr2 = 0usize;
-    let mut mr3 = 0usize;
+    let mut badge = slot as seL4_Word;
+    let mut info: seL4_Word = 0;
+    let mut mr0: seL4_Word = 0;
+    let mut mr1: seL4_Word = 0;
+    let mut mr2: seL4_Word = 0;
+    let mut mr3: seL4_Word = 0;
 
     unsafe {
         asm!(

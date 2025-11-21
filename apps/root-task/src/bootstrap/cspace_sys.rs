@@ -1951,14 +1951,7 @@ pub fn retype_into_root(
     #[cfg(target_os = "none")]
     let err = unsafe {
         sys::seL4_Untyped_Retype(
-            untyped,
-            obj_type,
-            size_bits,
-            root,
-            index,
-            depth_bits,
-            offset,
-            1,
+            untyped, obj_type, size_bits, root, index, depth_bits, offset, 1,
         )
     };
 
