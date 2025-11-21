@@ -211,7 +211,13 @@ pub fn cnode_copy_raw_single(
         #[cfg(target_os = "none")]
         unsafe {
             sys::seL4_CNode_Copy(
-                dst_root, dst_index, depth_u8, src_root, src_index, depth_u8, rights,
+                dst_root,
+                dst_index,
+                depth_u8,
+                src_root,
+                src_index,
+                depth_u8,
+                sys::seL4_CapRights_to_word(rights),
             )
         }
 
@@ -362,7 +368,13 @@ fn cnode_copy_with_style(
             dst_root = dst_root,
         ));
         sys::seL4_CNode_Copy(
-            dst_root, dst_index, depth_u8, src_root, src_index, depth_u8, rights,
+            dst_root,
+            dst_index,
+            depth_u8,
+            src_root,
+            src_index,
+            depth_u8,
+            sys::seL4_CapRights_to_word(rights),
         )
     }
 
@@ -571,7 +583,7 @@ pub fn retype_endpoint_raw(
             0,
             canon_root,
             0,
-            0,
+            0u8,
             node_offset,
             1,
         )
@@ -741,7 +753,7 @@ pub fn untyped_retype_encoded(
     unsafe {
         let obj_type_word = usize::try_from(obj_type).expect("object type must fit in seL4_Word");
         let size_bits_word = usize::from(size_bits);
-        let depth_word = depth;
+        let depth_word = depth as u8;
         let index_word = index;
         let offset_word = usize::try_from(offset).expect("slot must fit in seL4_Word");
         let num_objects_word =
@@ -1550,7 +1562,13 @@ pub fn canonical_cnode_copy(
     );
     unsafe {
         sys::seL4_CNode_Copy(
-            dest_root, dst_index, depth, src_root, src_index, depth, rights,
+            dest_root,
+            dst_index,
+            depth,
+            src_root,
+            src_index,
+            depth,
+            sys::seL4_CapRights_to_word(rights),
         )
     }
 }

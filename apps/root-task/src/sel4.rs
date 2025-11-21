@@ -788,7 +788,13 @@ pub fn cnode_copy(
     let depth_bits = sel4_sys::seL4_WordBits as u8;
     unsafe {
         seL4_CNode_Copy(
-            dest_root, dest_index, depth_bits, src_root, src_index, depth_bits, rights,
+            dest_root,
+            dest_index,
+            depth_bits,
+            src_root,
+            src_index,
+            depth_bits,
+            sel4_sys::seL4_CapRights_to_word(rights),
         )
     }
 }
@@ -812,7 +818,13 @@ pub fn cnode_copy_depth(
         // higher-level modules can remain within the crate-wide `#![deny(unsafe_code)]` policy.
         unsafe {
             seL4_CNode_Copy(
-                dest_root, dest_index, dest_depth, src_root, src_index, src_depth, rights,
+                dest_root,
+                dest_index,
+                dest_depth,
+                src_root,
+                src_index,
+                src_depth,
+                sel4_sys::seL4_CapRights_to_word(rights),
             )
         }
     }
@@ -2178,7 +2190,7 @@ impl<'a> KernelEnv<'a> {
                     trace.object_size_bits,
                     trace.cnode_root,
                     trace.node_index,
-                    trace.cnode_depth,
+                    trace.cnode_depth as u8,
                     trace.dest_offset,
                     1,
                 )
@@ -2226,7 +2238,7 @@ impl<'a> KernelEnv<'a> {
                     trace.object_size_bits,
                     trace.cnode_root,
                     trace.node_index,
-                    trace.cnode_depth,
+                    trace.cnode_depth as u8,
                     trace.dest_offset,
                     1,
                 )
