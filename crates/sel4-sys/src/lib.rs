@@ -152,6 +152,13 @@ mod imp {
         }
     }
 
+    pub type seL4_CapRights_t = seL4_Word;
+
+    #[inline(always)]
+    pub const fn seL4_CapRights_to_word(rights: seL4_CapRights) -> seL4_CapRights_t {
+        rights.raw()
+    }
+
     pub const seL4_CapRights_ReadWrite: seL4_CapRights = seL4_CapRights::new(0, 0, 1, 1);
     pub const seL4_CapRights_All: seL4_CapRights = seL4_CapRights::new(1, 1, 1, 1);
     pub const seL4_AllRights: seL4_Word = seL4_CapRights_All.raw();
@@ -606,7 +613,7 @@ mod imp {
         size_bits: seL4_Word,
         root: seL4_CNode,
         node_index: seL4_Word,
-        node_depth: seL4_Word,
+        node_depth: seL4_Uint8,
         node_offset: seL4_Word,
         num_objects: seL4_Word,
     ) -> seL4_Error {
@@ -615,7 +622,7 @@ mod imp {
         let mut mr0 = objtype;
         let mut mr1 = size_bits;
         let mut mr2 = node_index;
-        let mut mr3 = node_depth;
+        let mut mr3 = node_depth as seL4_Word;
 
         seL4_SetCap(0, root);
         seL4_SetMR(4, node_offset);
@@ -633,7 +640,7 @@ mod imp {
         size_bits: u8,
         root: seL4_CNode,
         node_index: seL4_Word,
-        node_depth: seL4_Word,
+        node_depth: seL4_Uint8,
         node_offset: seL4_Word,
         num_objects: seL4_Word,
     ) -> seL4_Error {
@@ -841,7 +848,7 @@ mod imp {
         src_root: seL4_CNode,
         src_index: seL4_CPtr,
         src_depth: seL4_Uint8,
-        rights: seL4_CapRights,
+        rights: seL4_CapRights_t,
     ) -> seL4_Error {
         let msg = seL4_MessageInfo::new(SEL4_CNODE_COPY, 0, 1, 5);
         let mut mr0 = dest_index;
@@ -849,11 +856,16 @@ mod imp {
         let mut mr2 = src_index;
         let mut mr3 = src_depth as seL4_Word;
         seL4_SetCap(0, src_root);
-        seL4_SetMR(4, rights.raw());
+        seL4_SetMR(4, rights);
 
         let info = seL4_CallWithMRs(dest_root, msg, &mut mr0, &mut mr1, &mut mr2, &mut mr3);
 
         info.label() as seL4_Error
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_CapIdentify(service: seL4_CPtr) -> seL4_Word {
+        seL4_DebugCapIdentify(service) as seL4_Word
     }
 
     extern "C" {
@@ -926,6 +938,7 @@ mod host_stub {
     pub type seL4_ARM_Page = seL4_CPtr;
     pub type seL4_ARM_PageTable = seL4_CPtr;
     pub type seL4_CapRights = usize;
+    pub type seL4_CapRights_t = seL4_Word;
     pub type seL4_Uint8 = u8;
     pub type seL4_Uint32 = u32;
 
@@ -1198,7 +1211,7 @@ mod host_stub {
         _src_root: seL4_CNode,
         _src_index: seL4_CPtr,
         _src_depth: seL4_Uint8,
-        _rights: seL4_CapRights,
+        _rights: seL4_CapRights_t,
     ) -> seL4_Error {
         unsupported();
     }
@@ -1258,7 +1271,7 @@ mod host_stub {
         _size_bits: seL4_Word,
         _root: seL4_CNode,
         _node_index: seL4_Word,
-        _node_depth: seL4_Word,
+        _node_depth: seL4_Uint8,
         _node_offset: seL4_Word,
         _num_objects: seL4_Word,
     ) -> seL4_Error {
@@ -1272,7 +1285,7 @@ mod host_stub {
         size_bits: u8,
         root: seL4_CNode,
         node_index: seL4_Word,
-        node_depth: seL4_Word,
+        node_depth: seL4_Uint8,
         node_offset: seL4_Word,
         num_objects: seL4_Word,
     ) -> seL4_Error {
@@ -1297,6 +1310,11 @@ mod host_stub {
 
     #[inline(always)]
     pub fn seL4_DebugCapIdentify(_cap: seL4_CPtr) -> seL4_Uint32 {
+        unsupported();
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_CapIdentify(_cap: seL4_CPtr) -> seL4_Word {
         unsupported();
     }
 

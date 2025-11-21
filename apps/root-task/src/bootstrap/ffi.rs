@@ -43,7 +43,7 @@ pub fn raw_untyped_retype(
     size_bits: sys::seL4_Word,
     dest_root: sys::seL4_CPtr,
     node_index: sys::seL4_CPtr,
-    node_depth: sys::seL4_Word,
+    node_depth: u8,
     node_offset: sys::seL4_Word,
     num_objects: sys::seL4_Word,
 ) -> sys::seL4_Error {

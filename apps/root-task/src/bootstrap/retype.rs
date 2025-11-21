@@ -30,7 +30,7 @@ fn log_retype_call(
     size_bits: sys::seL4_Word,
     dest: &DestCNode,
     node_index: sys::seL4_Word,
-    node_depth: sys::seL4_Word,
+    node_depth: u8,
     node_offset: sys::seL4_Word,
     num_objects: sys::seL4_Word,
     style: TupleStyle,
@@ -95,7 +95,7 @@ fn seL4_Untyped_Retype(
     size_bits: sys::seL4_Word,
     dest_root: sys::seL4_CPtr,
     node_index: sys::seL4_CPtr,
-    node_depth: sys::seL4_Word,
+    node_depth: u8,
     node_offset: sys::seL4_Word,
     num_objects: sys::seL4_Word,
 ) -> sys::seL4_Error {
@@ -119,7 +119,7 @@ fn seL4_Untyped_Retype(
     size_bits: sys::seL4_Word,
     dest_root: sys::seL4_CPtr,
     node_index: sys::seL4_CPtr,
-    node_depth: sys::seL4_Word,
+    node_depth: u8,
     node_offset: sys::seL4_Word,
     num_objects: sys::seL4_Word,
 ) -> sys::seL4_Error {
@@ -129,7 +129,7 @@ fn seL4_Untyped_Retype(
         size_bits,
         dest_root,
         node_index,
-        node_depth,
+        node_depth.into(),
         node_offset,
         num_objects,
     )
@@ -146,7 +146,7 @@ pub(crate) fn call_retype(
     dest.assert_sane();
     let style = TupleStyle::GuardEncoded;
     let node_index: sys::seL4_Word = init_cnode_index_word();
-    let node_depth: sys::seL4_Word = word_bits();
+    let node_depth: u8 = word_bits() as u8;
     let slot_offset =
         sys::seL4_Word::try_from(dest.slot_offset).expect("slot offset must fit within seL4_Word");
     log_retype_call(
