@@ -751,13 +751,14 @@ pub fn untyped_retype_encoded(
 
     #[cfg(target_os = "none")]
     unsafe {
-        let obj_type_word = usize::try_from(obj_type).expect("object type must fit in seL4_Word");
-        let size_bits_word = usize::from(size_bits);
+        let obj_type_word =
+            sys::seL4_Word::try_from(obj_type).expect("object type must fit in seL4_Word");
+        let size_bits_word = sys::seL4_Word::from(size_bits);
         let depth_word = depth as u8;
-        let index_word = index;
-        let offset_word = usize::try_from(offset).expect("slot must fit in seL4_Word");
+        let index_word = sys::seL4_Word::try_from(index).expect("index must fit in seL4_Word");
+        let offset_word = sys::seL4_Word::try_from(offset).expect("slot must fit in seL4_Word");
         let num_objects_word =
-            usize::try_from(num_objects).expect("object count must fit in seL4_Word");
+            sys::seL4_Word::try_from(num_objects).expect("object count must fit in seL4_Word");
         debug_log(format_args!(
             "[cs] op=retype dst_slot=0x{dst_slot:04x} index=0 depth={depth} root=0x{root:04x}",
             dst_slot = offset,
@@ -2159,8 +2160,8 @@ pub fn untyped_retype_into_init_root(
             PREFLIGHT_COMPLETED.store(true, Ordering::Release);
         }
 
-        let num_objects =
-            usize::try_from(args.num_objects).expect("num_objects must fit within usize");
+        let num_objects = sys::seL4_Word::try_from(args.num_objects)
+            .expect("num_objects must fit within seL4_Word");
         let err = unsafe {
             sys::seL4_Untyped_Retype(
                 args.ut,

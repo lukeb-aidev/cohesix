@@ -194,10 +194,12 @@ pub fn map_pl011_smallpage(
     }
 
     let map_err = unsafe {
+        let pl011_vaddr = sel4_sys::seL4_Word::try_from(PL011_VADDR)
+            .expect("PL011 virtual address must fit in seL4_Word");
         seL4_ARM_Page_Map(
             page_slot as seL4_CPtr,
             vspace,
-            PL011_VADDR,
+            pl011_vaddr,
             seL4_CapRights_ReadWrite,
             seL4_ARM_Page_Uncached,
         )
