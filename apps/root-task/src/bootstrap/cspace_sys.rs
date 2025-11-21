@@ -1807,6 +1807,8 @@ pub mod canonical {
         _bi: &sys::seL4_BootInfo,
     ) -> Result<(), sys::seL4_Error> {
         let (root, idx, depth, offset) = super::init_cnode_retype_dest(dst_slot as _);
+        let depth_bits = u8::try_from(depth)
+            .expect("init CNode depth must fit within a u8 for seL4_Untyped_Retype");
         debug_log(format_args!(
             "[retype:call] ut=0x{ut:x} obj={obj} sz={sz} -> (root,index,depth,raw)=(0x{root:x},{index},{depth},0x{raw:04x})",
             ut = ut,
@@ -1826,7 +1828,7 @@ pub mod canonical {
                 sz_bits as sys::seL4_Word,
                 root,
                 idx,
-                depth,
+                depth_bits,
                 offset,
                 1,
             )
