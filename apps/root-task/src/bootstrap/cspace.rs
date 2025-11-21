@@ -226,7 +226,7 @@ fn assert_caps_known() {
     debug_assert_eq!(seL4_CapInitThreadTCB as usize, 1);
 }
 
-fn cap_type_of(slot: usize) -> u32 {
+fn cap_type_of(slot: usize) -> seL4_Word {
     unsafe { sel4_sys::seL4_DebugCapIdentify(idx(slot)) }
 }
 
@@ -837,7 +837,7 @@ impl CSpaceCtx {
             first_free < last_free,
             "bootinfo empty window must not be empty"
         );
-        let limit = 1usize << bi.init_cnode_size_bits();
+        let limit: seL4_Word = 1 << bi.init_cnode_size_bits();
         assert!(
             first_free < limit,
             "bootinfo.empty.start exceeds init CNode size"

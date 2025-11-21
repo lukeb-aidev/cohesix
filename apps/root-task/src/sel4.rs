@@ -2066,9 +2066,10 @@ impl<'a> KernelEnv<'a> {
         }
 
         let buffer_frame = seL4_CapInitThreadIPCBuffer;
+        let buffer_word = sel4_sys::seL4_Word::try_from(buffer_vaddr)
+            .expect("IPC buffer pointer must fit in seL4_Word");
 
-        let result =
-            unsafe { sel4_sys::seL4_TCB_SetIPCBuffer(tcb_cap, buffer_vaddr, buffer_frame) };
+        let result = unsafe { sel4_sys::seL4_TCB_SetIPCBuffer(tcb_cap, buffer_word, buffer_frame) };
 
         if result == seL4_NoError {
             if self.ipcbuf_trace {
@@ -2378,11 +2379,13 @@ impl<'a> KernelEnv<'a> {
         if self.ipcbuf_trace {
             crate::bp!("ipcbuf.page.map.begin");
         }
+        let vaddr_word =
+            sel4_sys::seL4_Word::try_from(vaddr).expect("virtual address must fit in seL4_Word");
         unsafe {
             seL4_ARM_Page_Map(
                 frame_cap,
                 seL4_CapInitThreadVSpace,
-                vaddr,
+                vaddr_word,
                 seL4_CapRights_ReadWrite,
                 attr,
             )
@@ -2489,11 +2492,13 @@ impl<'a> KernelEnv<'a> {
             crate::bp!("ipcbuf.pt.retype.ok");
         }
 
+        let pt_base_word =
+            sel4_sys::seL4_Word::try_from(pt_base).expect("page table base must fit in seL4_Word");
         let map_res = unsafe {
             seL4_ARM_PageTable_Map(
                 pt_slot,
                 seL4_CapInitThreadVSpace,
-                pt_base,
+                pt_base_word,
                 seL4_ARM_Page_Default,
             )
         };
@@ -2560,11 +2565,13 @@ impl<'a> KernelEnv<'a> {
         }
         self.record_retype(trace, RetypeStatus::Ok);
 
+        let pd_base_word = sel4_sys::seL4_Word::try_from(pd_base)
+            .expect("page directory base must fit in seL4_Word");
         let map_res = unsafe {
             seL4_ARM_PageTable_Map(
                 pd_slot,
                 seL4_CapInitThreadVSpace,
-                pd_base,
+                pd_base_word,
                 seL4_ARM_Page_Default,
             )
         };
@@ -2626,11 +2633,13 @@ impl<'a> KernelEnv<'a> {
         }
         self.record_retype(trace, RetypeStatus::Ok);
 
+        let pud_base_word = sel4_sys::seL4_Word::try_from(pud_base)
+            .expect("page upper directory base must fit in seL4_Word");
         let map_res = unsafe {
             seL4_ARM_PageTable_Map(
                 pud_slot,
                 seL4_CapInitThreadVSpace,
-                pud_base,
+                pud_base_word,
                 seL4_ARM_Page_Default,
             )
         };
