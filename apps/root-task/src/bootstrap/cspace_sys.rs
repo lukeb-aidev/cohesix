@@ -1894,7 +1894,8 @@ pub fn retype_into_root(
 
     let style = tuple_style();
     let index = init_root_index();
-    let depth = path_depth_word();
+    let depth_bits = bits_as_u8(path_depth_word() as usize);
+    let depth = depth_bits as sys::seL4_Word;
 
     #[cfg(all(target_os = "none", debug_assertions))]
     {
@@ -1947,7 +1948,16 @@ pub fn retype_into_root(
 
     #[cfg(target_os = "none")]
     let err = unsafe {
-        sys::seL4_Untyped_Retype(untyped, obj_type, size_bits, root, index, depth, offset, 1)
+        sys::seL4_Untyped_Retype(
+            untyped,
+            obj_type,
+            size_bits,
+            root,
+            index,
+            depth_bits,
+            offset,
+            1,
+        )
     };
 
     #[cfg(not(target_os = "none"))]
@@ -2118,20 +2128,21 @@ pub fn untyped_retype_into_init_root(
         );
     }
 
-    let (root, node_index, node_depth, node_offset) = init_cnode_retype_dest(dst_slot);
+    let (root, node_index, node_depth_word, node_offset) = init_cnode_retype_dest(dst_slot);
     debug_assert_eq!(root, sel4::seL4_CapInitThreadCNode);
     debug_assert_eq!(node_index, init_root_index());
-    debug_assert_eq!(node_depth, path_depth_word());
+    debug_assert_eq!(node_depth_word, path_depth_word());
     let args = RetypeArgs::new(
         untyped_slot,
         obj_type,
         size_bits,
         root,
         node_index,
-        node_depth,
+        node_depth_word,
         node_offset,
         1,
     );
+    let node_depth_bits = args.cnode_depth;
 
     log_retype_args(&args);
 
@@ -2143,6 +2154,7 @@ pub fn untyped_retype_into_init_root(
         let expected_depth_u8 = u8::try_from(expected_depth)
             .expect("path_depth_word must fit within a u8 for cnode depth");
         debug_assert_eq!(args.cnode_depth, expected_depth_u8);
+        debug_assert_eq!(node_depth_bits, expected_depth_u8);
         debug_assert!(args.dest_offset >= empty_start && args.dest_offset < empty_end);
 
         validate_retype_args(&args, empty_start, empty_end)?;
@@ -2161,7 +2173,7 @@ pub fn untyped_retype_into_init_root(
                 size_bits,
                 args.root,
                 args.node_index,
-                node_depth,
+                node_depth_bits,
                 args.dest_offset,
                 num_objects,
             )
@@ -2181,7 +2193,7 @@ pub fn untyped_retype_into_init_root(
         host_trace::record(host_trace::HostRetypeTrace {
             root,
             node_index,
-            node_depth,
+            node_depth: node_depth_word,
             node_offset,
             object_type: obj_type,
             size_bits,
@@ -2212,7 +2224,6 @@ pub fn untyped_retype_into_cnode(
 
     #[cfg(target_os = "none")]
     {
-        let node_depth = encode_cnode_depth(depth_bits);
         let err = unsafe {
             sys::seL4_Untyped_Retype(
                 untyped_slot,
@@ -2220,7 +2231,7 @@ pub fn untyped_retype_into_cnode(
                 size_bits,
                 dest_root,
                 dst_slot as sys::seL4_Word,
-                node_depth,
+                depth_bits,
                 0,
                 1,
             )
