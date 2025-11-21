@@ -29,12 +29,12 @@ pub fn root_cnode() -> seL4_CNode {
 
 #[inline(always)]
 pub fn path_depth() -> u8 {
-    0
+    depth_wordbits()
 }
 
 #[inline(always)]
 pub fn path_depth_word() -> sys::seL4_Word {
-    0
+    sel4::word_bits()
 }
 
 #[inline(always)]
@@ -1650,7 +1650,7 @@ pub fn init_cnode_retype_dest(
     );
     let root = bi_init_cnode_cptr();
     let node_index = init_root_index();
-    let node_depth = 0;
+    let node_depth = path_depth_word();
     let node_offset = slot as sys::seL4_Word;
     let depth_bits = bits_as_u8(init_bits_usize);
     debug_assert!(
@@ -2103,7 +2103,7 @@ pub fn untyped_retype_into_init_root(
     let (root, node_index, node_depth, node_offset) = init_cnode_retype_dest(dst_slot);
     debug_assert_eq!(root, sel4::seL4_CapInitThreadCNode);
     debug_assert_eq!(node_index, init_root_index());
-    debug_assert_eq!(node_depth, 0);
+    debug_assert_eq!(node_depth, path_depth_word());
     let args = RetypeArgs::new(
         untyped_slot,
         obj_type,
@@ -2121,7 +2121,7 @@ pub fn untyped_retype_into_init_root(
     {
         let (empty_start, empty_end) = boot_empty_window();
         debug_assert_eq!(node_index, init_root_index());
-        let expected_depth = 0;
+        let expected_depth = path_depth_word();
         debug_assert_eq!(args.cnode_depth, expected_depth);
         debug_assert!(args.dest_offset >= empty_start && args.dest_offset < empty_end);
 
@@ -2239,7 +2239,7 @@ pub(crate) fn init_cnode_direct_destination_words(
         (dst_slot as usize) < limit,
         "destination slot {dst_slot:#x} exceeds init CNode capacity (bits={init_cnode_bits})"
     );
-    let depth = 0;
+    let depth = path_depth_word();
     let index = init_root_index();
     (index, depth, dst_slot as sys::seL4_Word)
 }
@@ -2319,7 +2319,7 @@ mod tests {
             if let Some(trace) = super::host_trace::take_last() {
                 assert_eq!(trace.root, bi_init_cnode_cptr());
                 assert_eq!(trace.node_index, init_root_index());
-                assert_eq!(trace.node_depth, 0);
+                assert_eq!(trace.node_depth, path_depth_word());
                 assert_eq!(trace.node_offset, slot as _);
                 assert_eq!(trace.object_type, 0);
                 assert_eq!(trace.size_bits, 0);
@@ -2348,7 +2348,7 @@ mod tests {
         let (root, idx, depth, off) = super::init_cnode_retype_dest(slot as _);
         assert_eq!(root, bi_init_cnode_cptr());
         assert_eq!(idx, init_root_index());
-        assert_eq!(depth, 0);
+        assert_eq!(depth, path_depth_word());
         assert_eq!(off, slot as _);
     }
 
@@ -2357,7 +2357,7 @@ mod tests {
         let slot = 0x10u64;
         let (idx, depth, off) = init_cnode_direct_destination_words_for_test(13, slot as _);
         assert_eq!(idx, 0);
-        assert_eq!(depth, 0);
+        assert_eq!(depth, path_depth_word());
         assert_eq!(off, slot as _);
     }
 
