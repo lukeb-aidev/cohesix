@@ -29,12 +29,12 @@ pub fn root_cnode() -> seL4_CNode {
 
 #[inline(always)]
 pub fn path_depth() -> u8 {
-    bits_as_u8(sel4::word_bits() as usize)
+    0
 }
 
 #[inline(always)]
 pub fn path_depth_word() -> sys::seL4_Word {
-    sel4::word_bits()
+    0
 }
 
 #[inline(always)]
@@ -558,8 +558,6 @@ pub fn retype_endpoint_raw(
     ut: sys::seL4_Word,
     dst: sys::seL4_Word,
 ) -> sys::seL4_Error {
-    let style = tuple_style();
-    let depth = cnode_depth(bi, style);
     let init_bits = sel4::init_cnode_bits(bi);
     check_slot_in_range(init_bits, dst as sys::seL4_CPtr);
     let node_offset = dst;
@@ -573,7 +571,7 @@ pub fn retype_endpoint_raw(
             0,
             canon_root,
             0,
-            depth,
+            0,
             node_offset,
             1,
         )
@@ -581,7 +579,7 @@ pub fn retype_endpoint_raw(
 
     #[cfg(not(target_os = "none"))]
     {
-        let _ = (bi, ut, dst, depth, node_offset);
+        let _ = (bi, ut, dst, node_offset);
         sys::seL4_NoError
     }
 }
@@ -1538,13 +1536,11 @@ pub fn canonical_cnode_copy(
     rights: sys::seL4_CapRights,
 ) -> sys::seL4_Error {
     let root = bi.canonical_root_cap();
-    let style = tuple_style();
-    let depth = bits_as_u8(cnode_depth(bi, style) as usize);
-    let dst_index = slot_index(enc_index(dst_slot, bi, style));
-    let src_index = slot_index(enc_index(src_slot, bi, style));
+    let depth = bits_as_u8(sel4::word_bits() as usize);
+    let dst_index = slot_index(dst_slot);
+    let src_index = slot_index(src_slot);
     ::log::info!(
-        "[cnode] op=canonical-copy form={style} depth=0x{depth:x} root=0x{root:04x} dst=0x{dst_slot:04x} src=0x{src_slot:04x} idx.dst=0x{dst_index:016x} idx.src=0x{src_index:016x}",
-        style = tuple_style_label(style),
+        "[cnode] op=canonical-copy form=Raw depth=0x{depth:x} root=0x{root:04x} dst=0x{dst_slot:04x} src=0x{src_slot:04x} idx.dst=0x{dst_index:016x} idx.src=0x{src_index:016x}",
     );
     unsafe { sys::seL4_CNode_Copy(root, dst_index, depth, root, src_index, depth, rights) }
 }
@@ -1615,9 +1611,9 @@ pub fn init_cnode_dest(
         "slot 0x{slot:04x} exceeds init CNode capacity (limit=0x{capacity:04x})",
     );
     let root = bi_init_cnode_cptr();
-    let offset = enc_index(slot as sys::seL4_Word, bi(), tuple_style());
+    let offset = slot as sys::seL4_Word;
     let node_index = init_root_index();
-    let node_depth = sel4::word_bits();
+    let node_depth = path_depth_word();
     (root, node_index, node_depth, offset)
 }
 
