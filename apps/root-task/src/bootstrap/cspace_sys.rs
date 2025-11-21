@@ -65,7 +65,12 @@ impl TupleStyle {
 
 #[inline(always)]
 pub fn tuple_style() -> TupleStyle {
-    TupleStyle::GuardEncoded
+    // The init CNode provided by the seL4 kernel is guard-less. Using guard-encoded
+    // addressing here inflates the depth to `seL4_WordBits` and injects a large guard
+    // prefix, which the kernel will reject as an invalid target slot. Stick to the
+    // raw tuple so CNode syscalls operate on the actual radix width advertised via
+    // `initThreadCNodeSizeBits`.
+    TupleStyle::Raw
 }
 
 #[inline(always)]

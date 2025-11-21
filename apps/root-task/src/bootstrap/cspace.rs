@@ -6,9 +6,7 @@ use crate::bootstrap::log::force_uart_line;
 #[cfg(feature = "cap-probes")]
 use crate::bootstrap::retype::{bump_slot, retype_captable};
 use crate::cspace::{cap_rights_read_write_grant, CSpace};
-use crate::sel4::{
-    self, is_boot_reserved_slot, BootInfoExt, BootInfoView, WORD_BITS,
-};
+use crate::sel4::{self, is_boot_reserved_slot, BootInfoExt, BootInfoView, WORD_BITS};
 use core::fmt::Write;
 use heapless::String;
 
