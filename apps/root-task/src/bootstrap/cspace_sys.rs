@@ -1535,14 +1535,24 @@ pub fn canonical_cnode_copy(
     src_slot: sys::seL4_Word,
     rights: sys::seL4_CapRights,
 ) -> sys::seL4_Error {
-    let root = bi.canonical_root_cap();
+    let dest_root = bi.canonical_root_cap();
+    let src_root = dest_root;
     let depth = bits_as_u8(sel4::word_bits() as usize);
     let dst_index = slot_index(dst_slot);
     let src_index = slot_index(src_slot);
     ::log::info!(
         "[cnode] op=canonical-copy form=Raw depth=0x{depth:x} root=0x{root:04x} dst=0x{dst_slot:04x} src=0x{src_slot:04x} idx.dst=0x{dst_index:016x} idx.src=0x{src_index:016x}",
+        root = dest_root,
+        dst_slot = dst_slot,
+        src_slot = src_slot,
+        dst_index = dst_index,
+        src_index = src_index,
     );
-    unsafe { sys::seL4_CNode_Copy(root, dst_index, depth, root, src_index, depth, rights) }
+    unsafe {
+        sys::seL4_CNode_Copy(
+            dest_root, dst_index, depth, src_root, src_index, depth, rights,
+        )
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1778,22 +1788,17 @@ pub mod canonical {
         dst_slot: u32,
         bi: &sys::seL4_BootInfo,
     ) -> Result<(), sys::seL4_Error> {
-        let path = build_root_path(dst_slot, bi);
+        let (root, idx, depth, offset) = super::init_cnode_retype_dest(dst_slot as _);
         debug_log(format_args!(
             "[retype:call] ut=0x{ut:x} obj={obj} sz={sz} -> (root,index,depth,raw)=(0x{root:x},{index},{depth},0x{raw:04x})",
             ut = ut,
             obj = obj,
             sz = sz_bits,
-            root = path.root,
-            index = path.index,
-            depth = path.depth,
-            raw = path.offset(),
+            root = root,
+            index = idx,
+            depth = depth,
+            raw = offset,
         ));
-
-        let root = sys::seL4_CapInitThreadCNode;
-        let depth = path.depth;
-        let offset = path.offset();
-        let idx = 0;
 
         #[cfg(target_os = "none")]
         let err = unsafe {

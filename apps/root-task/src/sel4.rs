@@ -2053,9 +2053,10 @@ impl<'a> KernelEnv<'a> {
             crate::bp!("ipcbuf.tcb.bind.begin");
         }
 
-        let result = unsafe {
-            sel4_sys::seL4_TCB_SetIPCBuffer(tcb_cap, buffer_vaddr, seL4_CapInitThreadIPCBuffer)
-        };
+        let buffer_frame = seL4_CapInitThreadIPCBuffer;
+
+        let result =
+            unsafe { sel4_sys::seL4_TCB_SetIPCBuffer(tcb_cap, buffer_vaddr, buffer_frame) };
 
         if result == seL4_NoError {
             if self.ipcbuf_trace {
