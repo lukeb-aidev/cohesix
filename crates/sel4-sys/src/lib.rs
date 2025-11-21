@@ -13,7 +13,7 @@ mod imp {
     use core::mem::MaybeUninit;
     use core::ptr;
 
-    pub type seL4_Word = usize;
+    pub type seL4_Word = u64;
     #[allow(clippy::manual_bits)]
     pub const seL4_WordBits: seL4_Word = (core::mem::size_of::<seL4_Word>() * 8) as seL4_Word;
     /// Log2 of the base page size baked into the target seL4 kernel configuration.
@@ -28,7 +28,7 @@ mod imp {
     pub type seL4_Uint32 = u32;
     pub type seL4_Uint64 = u64;
     pub type seL4_Bool = u8;
-    pub type seL4_Error = isize;
+    pub type seL4_Error = i32;
 
     pub const seL4_NoError: seL4_Error = 0;
     pub const seL4_InvalidArgument: seL4_Error = 1;
@@ -80,7 +80,7 @@ mod imp {
             extra_caps: seL4_Word,
             length: seL4_Word,
         ) -> Self {
-            let mut value = 0usize;
+            let mut value: seL4_Word = 0;
             value |= (label & 0x0fff_ffff_ffff_ffff) << 12;
             value |= (caps_unwrapped & 0x7) << 9;
             value |= (extra_caps & 0x3) << 7;
@@ -138,7 +138,7 @@ mod imp {
             read: seL4_Word,
             write: seL4_Word,
         ) -> Self {
-            let mut value = 0usize;
+            let mut value: seL4_Word = 0;
             value |= (grant_reply & 0x1) << 3;
             value |= (grant & 0x1) << 2;
             value |= (read & 0x1) << 1;
@@ -172,7 +172,7 @@ mod imp {
     impl seL4_CNode_CapData {
         #[inline(always)]
         pub const fn new(guard: seL4_Word, guard_size: seL4_Word) -> Self {
-            let mut value = 0usize;
+            let mut value: seL4_Word = 0;
             value |= (guard & 0x3fff_ffff_ffff_ffff) << 6;
             value |= guard_size & 0x3f;
             Self { words: [value] }
@@ -457,7 +457,7 @@ mod imp {
         mr3: *mut seL4_Word,
     ) -> seL4_MessageInfo {
         let mut info_out = msg_info.words[0];
-        let mut dummy_badge = 0usize;
+        let mut dummy_badge: seL4_Word = 0;
         let mut msg0 = if !mr0.is_null() && msg_info.length() > 0 {
             *mr0
         } else {
@@ -508,16 +508,16 @@ mod imp {
         seL4_MessageInfo { words: [info_out] }
     }
 
-    pub const seL4_SysCall: seL4_Word = !0usize; // -1 in two's complement
-    pub const seL4_SysReplyRecv: seL4_Word = !1usize; // -2
-    pub const seL4_SysSend: seL4_Word = !2usize; // -3
-    pub const seL4_SysYield: seL4_Word = !6usize; // -7
-    pub const seL4_SysNBRecv: seL4_Word = !7usize; // -8
+    pub const seL4_SysCall: seL4_Word = !0u64; // -1 in two's complement
+    pub const seL4_SysReplyRecv: seL4_Word = !1u64; // -2
+    pub const seL4_SysSend: seL4_Word = !2u64; // -3
+    pub const seL4_SysYield: seL4_Word = !6u64; // -7
+    pub const seL4_SysNBRecv: seL4_Word = !7u64; // -8
 
     #[inline(always)]
     pub unsafe fn seL4_Poll(dest: seL4_CPtr, sender_badge: *mut seL4_Word) -> seL4_MessageInfo {
-        let mut badge_out = 0usize;
-        let mut info_out = 0usize;
+        let mut badge_out: seL4_Word = 0;
+        let mut info_out: seL4_Word = 0;
 
         let mut mr0 = MaybeUninit::<seL4_Word>::new(0);
         let mut mr1 = MaybeUninit::<seL4_Word>::new(0);
@@ -712,9 +712,9 @@ mod imp {
     ) -> seL4_Error {
         let msg = seL4_MessageInfo::new(SEL4_TCB_SET_IPC_BUFFER, 0, 1, 1);
         let mut mr0 = buffer;
-        let mut mr1 = 0usize;
-        let mut mr2 = 0usize;
-        let mut mr3 = 0usize;
+        let mut mr1: seL4_Word = 0;
+        let mut mr2: seL4_Word = 0;
+        let mut mr3: seL4_Word = 0;
 
         seL4_SetCap(0, buffer_frame);
 
@@ -735,8 +735,8 @@ mod imp {
         let msg = seL4_MessageInfo::new(SEL4_TCB_SET_SPACE, 0, 3, 2);
         let mut mr0 = cspace_root_data;
         let mut mr1 = vspace_root_data;
-        let mut mr2 = 0usize;
-        let mut mr3 = 0usize;
+        let mut mr2: seL4_Word = 0;
+        let mut mr3: seL4_Word = 0;
 
         seL4_SetCap(0, fault_ep);
         seL4_SetCap(1, cspace_root);
@@ -760,10 +760,10 @@ mod imp {
     #[inline(always)]
     pub unsafe fn seL4_TCB_Suspend(service: seL4_TCB) -> seL4_Error {
         let msg = seL4_MessageInfo::new(SEL4_TCB_SUSPEND, 0, 0, 0);
-        let mut mr0 = 0usize;
-        let mut mr1 = 0usize;
-        let mut mr2 = 0usize;
-        let mut mr3 = 0usize;
+        let mut mr0: seL4_Word = 0;
+        let mut mr1: seL4_Word = 0;
+        let mut mr2: seL4_Word = 0;
+        let mut mr3: seL4_Word = 0;
 
         let info = seL4_CallWithMRs(service, msg, &mut mr0, &mut mr1, &mut mr2, &mut mr3);
 
@@ -865,13 +865,13 @@ mod imp {
 
     #[inline(always)]
     pub unsafe fn seL4_CapIdentify(service: seL4_CPtr) -> seL4_Word {
-        seL4_DebugCapIdentify(service) as seL4_Word
+        seL4_DebugCapIdentify(service)
     }
 
     extern "C" {
         pub fn seL4_DebugPutChar(c: u8);
         pub fn seL4_DebugHalt();
-        pub fn seL4_DebugCapIdentify(cap: seL4_CPtr) -> seL4_Uint32;
+        pub fn seL4_DebugCapIdentify(cap: seL4_CPtr) -> seL4_Word;
         pub fn seL4_ARM_Page_Unmap(service: seL4_ARM_Page) -> seL4_Error;
         pub fn seL4_ARM_Page_GetAddress(service: seL4_ARM_Page) -> seL4_ARM_Page_GetAddress;
         pub fn seL4_GetBootInfo() -> *const seL4_BootInfo;
@@ -920,7 +920,7 @@ mod host_stub {
         panic!("sel4-sys stubs must not be used on host targets");
     }
 
-    pub type seL4_Word = usize;
+    pub type seL4_Word = u64;
     #[allow(clippy::manual_bits)]
     pub const seL4_WordBits: seL4_Word = (size_of::<seL4_Word>() * 8) as seL4_Word;
     /// Log2 of the base page size baked into the target seL4 kernel configuration.
@@ -929,15 +929,15 @@ mod host_stub {
     /// expose the value as a constant for consumers that need to reason about
     /// IPC buffer placement without depending on generated C headers.
     pub const seL4_PageBits: seL4_Word = 12;
-    pub type seL4_CPtr = usize;
-    pub type seL4_Error = isize;
+    pub type seL4_CPtr = u64;
+    pub type seL4_Error = i32;
     pub type seL4_CNode = seL4_CPtr;
     pub type seL4_TCB = seL4_CPtr;
     pub type seL4_Untyped = seL4_CPtr;
     pub type seL4_VSpace = seL4_CPtr;
     pub type seL4_ARM_Page = seL4_CPtr;
     pub type seL4_ARM_PageTable = seL4_CPtr;
-    pub type seL4_CapRights = usize;
+    pub type seL4_CapRights = u64;
     pub type seL4_CapRights_t = seL4_Word;
     pub type seL4_Uint8 = u8;
     pub type seL4_Uint32 = u32;
@@ -1309,7 +1309,7 @@ mod host_stub {
     }
 
     #[inline(always)]
-    pub fn seL4_DebugCapIdentify(_cap: seL4_CPtr) -> seL4_Uint32 {
+    pub fn seL4_DebugCapIdentify(_cap: seL4_CPtr) -> seL4_Word {
         unsupported();
     }
 

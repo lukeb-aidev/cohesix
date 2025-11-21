@@ -61,6 +61,13 @@ const DEVICE_FRAME_BITS: usize = 12;
 #[cfg(all(feature = "kernel", not(sel4_config_printing)))]
 use sel4_panicking::{self, DebugSink};
 
+fn debug_identify_boot_caps() {
+    for slot in 0u64..16u64 {
+        let ty = unsafe { sel4_sys::seL4_CapIdentify(slot) };
+        log::info!("[identify] slot=0x{slot:04x} ty=0x{ty:08x}");
+    }
+}
+
 /// seL4 console writer backed by the kernel's `DebugPutChar` system call.
 struct DebugConsole<'a, P: Platform> {
     platform: &'a P,
@@ -629,6 +636,7 @@ fn bootstrap<P: Platform>(
         sel4_sys::seL4_CapInitThreadIPCBuffer,
         sel4_sys::seL4_CapBootInfoFrame,
     );
+    debug_identify_boot_caps();
     cspace_sys::dump_init_cnode_slots(0..32);
 
     if let Err(err) = cspace_sys::verify_root_cnode_slot(
