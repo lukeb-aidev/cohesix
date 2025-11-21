@@ -108,7 +108,7 @@ pub fn retype_endpoint_into_slot(ut: seL4_CPtr, slot: seL4_Word, rt: &RetypeTupl
         debug_hex(" slot_enc=0x", encoded_slot);
         debug_hex(" root=0x", rt.node_root);
         debug_hex(" node_index=0x", rt.node_index);
-        debug_hex(" depth=0x", rt.node_depth);
+        debug_hex(" depth=0x", rt.node_depth as seL4_Word);
         debug_puts("\n");
     }
     result
