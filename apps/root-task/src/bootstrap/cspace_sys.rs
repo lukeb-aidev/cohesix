@@ -269,7 +269,7 @@ pub fn encode_slot(slot: u64, bits: u8) -> u64 {
 }
 
 #[inline(always)]
-pub fn cnode_depth(bi: &sys::seL4_BootInfo, style: TupleStyle) -> sys::seL4_Word {
+pub fn cnode_depth(_bi: &sys::seL4_BootInfo, style: TupleStyle) -> sys::seL4_Word {
     match style {
         TupleStyle::Raw => sel4::word_bits(),
         TupleStyle::GuardEncoded => sel4::word_bits(),
@@ -1786,7 +1786,7 @@ pub mod canonical {
         obj: u32,
         sz_bits: u32,
         dst_slot: u32,
-        bi: &sys::seL4_BootInfo,
+        _bi: &sys::seL4_BootInfo,
     ) -> Result<(), sys::seL4_Error> {
         let (root, idx, depth, offset) = super::init_cnode_retype_dest(dst_slot as _);
         debug_log(format_args!(
@@ -2122,7 +2122,9 @@ pub fn untyped_retype_into_init_root(
         let (empty_start, empty_end) = boot_empty_window();
         debug_assert_eq!(node_index, init_root_index());
         let expected_depth = path_depth_word();
-        debug_assert_eq!(args.cnode_depth, expected_depth);
+        let expected_depth_u8 = u8::try_from(expected_depth)
+            .expect("path_depth_word must fit within a u8 for cnode depth");
+        debug_assert_eq!(args.cnode_depth, expected_depth_u8);
         debug_assert!(args.dest_offset >= empty_start && args.dest_offset < empty_end);
 
         validate_retype_args(&args, empty_start, empty_end)?;
