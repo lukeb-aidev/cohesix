@@ -65,11 +65,12 @@ impl TupleStyle {
 
 #[inline(always)]
 pub fn tuple_style() -> TupleStyle {
-    // The seL4 CNode syscalls expect guard-encoded addressing for the init CNode: the
-    // kernel validates the guard prefix then walks the radix bits that encode the
-    // slot offset. Using the raw (unshifted) tuple causes the kernel to reject the
-    // destination slot as invalid during bootstrap because the guard bits are absent.
-    TupleStyle::GuardEncoded
+    // The init CNode guard depth is zero on our target configurations, so the kernel
+    // expects raw (unshifted) slot indices when addressing the root CSpace. Using a
+    // guard-encoded tuple here inflates the guard width to `WordBits - initBits`,
+    // causing the kernel to reject otherwise valid slots as out of range. Default to
+    // the raw tuple to ensure bootstrap operations target the correct slots.
+    TupleStyle::Raw
 }
 
 #[inline(always)]
