@@ -200,14 +200,14 @@ mod imp {
     #[repr(usize)]
     #[derive(Copy, Clone, Debug, PartialEq, Eq)]
     pub enum seL4_ObjectType {
-        seL4_UntypedObject = seL4_UntypedObject,
-        seL4_TCBObject = seL4_TCBObject,
-        seL4_EndpointObject = seL4_EndpointObject,
-        seL4_NotificationObject = seL4_NotificationObject,
-        seL4_CapTableObject = seL4_CapTableObject,
-        seL4_ARM_Page = seL4_ARM_SmallPageObject,
-        seL4_ARM_LargePage = seL4_ARM_LargePageObject,
-        seL4_ARM_PageTableObject = seL4_ARM_PageTableObject,
+        seL4_UntypedObject = seL4_UntypedObject as usize,
+        seL4_TCBObject = seL4_TCBObject as usize,
+        seL4_EndpointObject = seL4_EndpointObject as usize,
+        seL4_NotificationObject = seL4_NotificationObject as usize,
+        seL4_CapTableObject = seL4_CapTableObject as usize,
+        seL4_ARM_Page = seL4_ARM_SmallPageObject as usize,
+        seL4_ARM_LargePage = seL4_ARM_LargePageObject as usize,
+        seL4_ARM_PageTableObject = seL4_ARM_PageTableObject as usize,
     }
 
     pub const seL4_ARM_Page_Uncached: seL4_ARM_VMAttributes = seL4_ARM_VMAttributes(0);
