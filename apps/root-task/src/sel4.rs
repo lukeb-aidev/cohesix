@@ -7,6 +7,7 @@
 
 use core::{
     arch::asm,
+    cmp,
     convert::TryInto,
     fmt, mem,
     ptr::{self, NonNull},
@@ -95,6 +96,46 @@ pub const fn canonical_cnode_depth(init_bits: u8, word_bits: u8) -> u8 {
         init_bits as usize <= word_bits as usize,
         "initThreadCNodeSizeBits must not exceed word width",
     );
+    init_bits
+}
+
+#[inline(always)]
+pub fn canonical_cnode_bits(bi: &sel4_sys::seL4_BootInfo) -> u8 {
+    let raw_bits = bi.initThreadCNodeSizeBits as u8;
+    let empty_end = bi.empty.end as usize;
+    let inferred_bits = if empty_end > 0 {
+        let bits = usize::BITS - (empty_end.saturating_sub(1)).leading_zeros();
+        cmp::min(bits as u8, sel4_sys::seL4_WordBits as u8)
+    } else {
+        0
+    };
+
+    let init_bits = match (inferred_bits, raw_bits) {
+        (bits, _) if bits > 0 => bits,
+        (_, bits) if bits > 0 => bits,
+        _ => 13,
+    };
+
+    if raw_bits == 0 {
+        log::warn!(
+            target: "root_task::bootstrap::cspace",
+            "[cspace] initThreadCNodeSizeBits=0; using initBits={} for CSpace width",
+            init_bits
+        );
+    } else if raw_bits != init_bits {
+        log::warn!(
+            target: "root_task::bootstrap::cspace",
+            "[cspace] initThreadCNodeSizeBits mismatch: raw={} initBits={}; using initBits",
+            raw_bits,
+            init_bits
+        );
+    }
+
+    assert!(
+        init_bits as usize <= sel4_sys::seL4_WordBits as usize,
+        "initBits must not exceed word width"
+    );
+    debug_assert!(init_bits > 0, "init CNode capacity must be non-zero");
     init_bits
 }
 
@@ -341,10 +382,13 @@ pub struct BootInfoView {
 
 impl BootInfoView {
     fn build(header: &'static seL4_BootInfo) -> Result<Self, BootInfoError> {
-        let init_bits = header.initThreadCNodeSizeBits as usize;
-        debug_assert!(init_bits <= 31, "initThreadCNodeSizeBits must be <= 31");
-        if init_bits > 31 {
-            ::log::error!("bootinfo initThreadCNodeSizeBits invalid: {init_bits} (expected <= 31)");
+        let init_bits = canonical_cnode_bits(header) as usize;
+        debug_assert!(
+            init_bits <= sel4_sys::seL4_WordBits as usize,
+            "initBits must be <= word width",
+        );
+        if init_bits > sel4_sys::seL4_WordBits as usize {
+            ::log::error!("bootinfo initBits invalid: {init_bits} (expected <= seL4_WordBits)");
             return Err(BootInfoError::InitCNodeBits { bits: init_bits });
         }
         let extra_bytes = bootinfo_extra_slice(header)?;
@@ -409,7 +453,7 @@ impl BootInfoView {
     /// Returns the radix width (in bits) of the init thread's CNode.
     #[must_use]
     pub fn init_cnode_bits(&self) -> u8 {
-        self.header.initThreadCNodeSizeBits as u8
+        canonical_cnode_bits(self.header)
     }
 
     /// Returns the canonical traversal depth for the init thread CNode.
@@ -421,7 +465,7 @@ impl BootInfoView {
     /// Returns the radix width of the init thread's CNode as `usize`.
     #[must_use]
     pub fn init_cnode_size_bits(&self) -> usize {
-        self.header.initThreadCNodeSizeBits as usize
+        usize::from(self.init_cnode_bits())
     }
 
     /// Returns the inclusive-exclusive slot range advertised as free by the kernel.
@@ -716,7 +760,7 @@ pub fn replyrecv_guarded(
 /// Returns the traversal depth (in bits) for init CNode syscall invocations.
 #[inline]
 pub fn init_cnode_depth(_bi: &seL4_BootInfo) -> u8 {
-    let init_bits = _bi.initThreadCNodeSizeBits as u8;
+    let init_bits = canonical_cnode_bits(_bi);
     canonical_cnode_depth(init_bits, WORD_BITS as u8)
 }
 
@@ -1207,12 +1251,7 @@ impl BootInfoExt for seL4_BootInfo {
 
     #[inline(always)]
     fn init_cnode_bits(&self) -> usize {
-        let bits = self.initThreadCNodeSizeBits as usize;
-        assert!(
-            (1..=32).contains(&bits),
-            "initThreadCNodeSizeBits unexpected: {bits}",
-        );
-        bits
+        canonical_cnode_bits(self) as usize
     }
 
     #[inline(always)]
@@ -1282,10 +1321,7 @@ pub fn bootinfo_debug_dump(view: &BootInfoView) {
         header.empty_first_slot(),
         header.empty_last_slot_excl()
     );
-    assert!(
-        init_bits > 0,
-        "BootInfo.initThreadCNodeSizeBits is 0 — capacity invalid"
-    );
+    debug_assert!(init_bits > 0, "BootInfo initBits is 0 — capacity invalid");
 }
 
 pub const PAGE_BITS: usize = 12;
@@ -1955,16 +1991,11 @@ impl<'a> KernelEnv<'a> {
         let root_cnode_bits = bootinfo.init_cnode_bits();
         assert!(
             root_cnode_bits > 0,
-            "BootInfo.initThreadCNodeSizeBits is 0 — capacity invalid"
+            "BootInfo initBits is 0 — capacity invalid"
         );
         let capacity = 1usize
             .checked_shl(root_cnode_bits as u32)
-            .unwrap_or_else(|| {
-                panic!(
-                    "initThreadCNodeSizeBits {} exceeds host word size",
-                    root_cnode_bits
-                )
-            });
+            .unwrap_or_else(|| panic!("initBits {} exceeds host word size", root_cnode_bits));
         let empty_start = bootinfo.empty_first_slot();
         let empty_end = bootinfo.empty_last_slot_excl();
         let span = empty_end.saturating_sub(empty_start);
