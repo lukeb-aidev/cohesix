@@ -94,7 +94,7 @@ pub const fn canonical_cnode_depth(init_bits: u8, word_bits: u8) -> u8 {
     let depth = init_bits as usize + word_bits as usize;
     assert!(
         depth <= u8::MAX as usize,
-        "cnode depth {depth} exceeds u8::MAX"
+        "cnode depth exceeds u8::MAX"
     );
     depth as u8
 }
@@ -1101,6 +1101,9 @@ pub trait BootInfoExt {
 
     /// Returns the exclusive upper bound of the bootinfo-declared empty slot window.
     fn empty_last_slot_excl(&self) -> usize;
+
+    /// Returns the bootinfo-advertised empty slot window as `usize` values.
+    fn init_cnode_empty_usize(&self) -> (usize, usize);
     /// Returns the slot range containing extra bootinfo pages.
     fn extra_bipage_slots(&self) -> (seL4_CPtr, seL4_CPtr);
 
@@ -1153,6 +1156,14 @@ impl BootInfoExt for seL4_BootInfo {
     #[inline(always)]
     fn empty_last_slot_excl(&self) -> usize {
         self.empty.end as usize
+    }
+
+    #[inline(always)]
+    fn init_cnode_empty_usize(&self) -> (usize, usize) {
+        (
+            self.empty_first_slot(),
+            self.empty_last_slot_excl(),
+        )
     }
 
     #[inline(always)]
