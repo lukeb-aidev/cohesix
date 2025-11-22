@@ -24,7 +24,7 @@ impl IpcBufView {
     ///
     /// The caller must guarantee that `base` points to the first byte of the
     /// mapped IPC buffer page and remains valid for the lifetime of the view.
-    pub const unsafe fn new(base: *const u8, frame: seL4_CPtr) -> Self {
+    pub unsafe fn new(base: *const u8, frame: seL4_CPtr) -> Self {
         Self {
             base,
             frame,
