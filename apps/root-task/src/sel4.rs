@@ -91,12 +91,81 @@ pub fn reset_canonical_root_alias() {
 /// Computes the canonical traversal depth (in bits) for addressing the init thread's CNode.
 #[inline(always)]
 pub const fn canonical_cnode_depth(init_bits: u8, word_bits: u8) -> u8 {
-    let depth = init_bits as usize + word_bits as usize;
     assert!(
-        depth <= u8::MAX as usize,
-        "cnode depth exceeds u8::MAX"
+        init_bits as usize <= word_bits as usize,
+        "initThreadCNodeSizeBits must not exceed word width",
     );
-    depth as u8
+    init_bits
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CapTag {
+    Null = 0,
+    Frame = 1,
+    Untyped = 2,
+    PageTable = 3,
+    Endpoint = 4,
+    Notification = 6,
+    Reply = 8,
+    VSpace = 9,
+    CNode = 10,
+    AsidControl = 11,
+    Thread = 12,
+    AsidPool = 13,
+    IrqControl = 14,
+    IrqHandler = 16,
+    Zombie = 18,
+    Domain = 20,
+    SgiSignal = 27,
+}
+
+impl CapTag {
+    #[inline(always)]
+    pub const fn from_raw(raw: seL4_Word) -> Option<Self> {
+        match raw {
+            0 => Some(Self::Null),
+            1 => Some(Self::Frame),
+            2 => Some(Self::Untyped),
+            3 => Some(Self::PageTable),
+            4 => Some(Self::Endpoint),
+            6 => Some(Self::Notification),
+            8 => Some(Self::Reply),
+            9 => Some(Self::VSpace),
+            10 => Some(Self::CNode),
+            11 => Some(Self::AsidControl),
+            12 => Some(Self::Thread),
+            13 => Some(Self::AsidPool),
+            14 => Some(Self::IrqControl),
+            16 => Some(Self::IrqHandler),
+            18 => Some(Self::Zombie),
+            20 => Some(Self::Domain),
+            27 => Some(Self::SgiSignal),
+            _ => None,
+        }
+    }
+
+    #[inline(always)]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Null => "null",
+            Self::Frame => "frame",
+            Self::Untyped => "untyped",
+            Self::PageTable => "page_table",
+            Self::Endpoint => "endpoint",
+            Self::Notification => "notification",
+            Self::Reply => "reply",
+            Self::VSpace => "vspace",
+            Self::CNode => "cnode",
+            Self::AsidControl => "asid_control",
+            Self::Thread => "tcb",
+            Self::AsidPool => "asid_pool",
+            Self::IrqControl => "irq_control",
+            Self::IrqHandler => "irq_handler",
+            Self::Zombie => "zombie",
+            Self::Domain => "domain",
+            Self::SgiSignal => "sgi_signal",
+        }
+    }
 }
 
 /// Returns the architectural word width (in bits) exposed by seL4.
@@ -275,9 +344,7 @@ impl BootInfoView {
         let init_bits = header.initThreadCNodeSizeBits as usize;
         debug_assert!(init_bits <= 31, "initThreadCNodeSizeBits must be <= 31");
         if init_bits > 31 {
-            ::log::error!(
-                "bootinfo initThreadCNodeSizeBits invalid: {init_bits} (expected <= 31)"
-            );
+            ::log::error!("bootinfo initThreadCNodeSizeBits invalid: {init_bits} (expected <= 31)");
             return Err(BootInfoError::InitCNodeBits { bits: init_bits });
         }
         let extra_bytes = bootinfo_extra_slice(header)?;
@@ -827,7 +894,7 @@ pub fn cnode_copy(
     rights: sel4_sys::seL4_CapRights,
 ) -> seL4_Error {
     debug_put_char(b'C' as i32);
-    let depth_bits = sel4_sys::seL4_WordBits as u8;
+    let depth_bits = _bootinfo.init_cnode_depth();
     unsafe {
         seL4_CNode_Copy(
             dest_root,
@@ -1160,10 +1227,7 @@ impl BootInfoExt for seL4_BootInfo {
 
     #[inline(always)]
     fn init_cnode_empty_usize(&self) -> (usize, usize) {
-        (
-            self.empty_first_slot(),
-            self.empty_last_slot_excl(),
-        )
+        (self.empty_first_slot(), self.empty_last_slot_excl())
     }
 
     #[inline(always)]
@@ -2127,42 +2191,27 @@ impl<'a> KernelEnv<'a> {
         let buffer_frame = seL4_CapInitThreadIPCBuffer;
         let buffer_word = sel4_sys::seL4_Word::try_from(buffer_vaddr)
             .expect("IPC buffer pointer must fit in seL4_Word");
-
         #[cfg(target_os = "none")]
-        let cap_ty = unsafe { sel4_sys::seL4_CapIdentify(buffer_frame) } as usize;
+        let cap_tag_raw = unsafe { sel4_sys::seL4_DebugCapIdentify(buffer_frame) };
         #[cfg(not(target_os = "none"))]
-        let cap_ty = sel4_sys::seL4_ObjectType::seL4_ARM_Page as usize;
+        let cap_tag_raw = CapTag::Frame as seL4_Word;
+
+        let cap_tag = CapTag::from_raw(cap_tag_raw);
 
         ::log::info!(
-            "[ipcbuf] capid frame=0x{buffer_frame:04x} ty=0x{cap_ty:08x} vaddr=0x{buffer_vaddr:08x}",
+            "[ipcbuf] capid frame=0x{buffer_frame:04x} ty=0x{cap_tag_raw:08x} ({tag}) vaddr=0x{buffer_vaddr:08x}",
             buffer_frame = buffer_frame,
-            cap_ty = cap_ty,
+            cap_tag_raw = cap_tag_raw,
+            tag = cap_tag.map(CapTag::name).unwrap_or("unknown"),
             buffer_vaddr = buffer_vaddr,
         );
 
-        let expected_ty = sel4_sys::seL4_ObjectType::seL4_ARM_Page as usize;
-        if cap_ty != expected_ty {
+        if !matches!(cap_tag, Some(CapTag::Frame)) {
             ::log::error!(
-                "[ipcbuf] frame cap type mismatch: got=0x{cap_ty:08x} expected=0x{expected:08x}",
-                expected = expected_ty,
+                "[ipcbuf] frame cap type mismatch: got=0x{cap_tag_raw:08x} ({tag}) expected=frame",
+                tag = cap_tag.map(CapTag::name).unwrap_or("unknown"),
             );
             return Err(sel4_sys::seL4_IllegalOperation);
-        }
-
-        #[cfg(target_os = "none")]
-        {
-            let cap_ty = unsafe { sel4_sys::seL4_DebugCapIdentify(buffer_frame) };
-            assert_eq!(
-                cap_ty,
-                sel4_sys::seL4_ObjectType::seL4_ARM_Page as seL4_Word,
-                "IPC buffer cap must resolve to a frame"
-            );
-            ::log::info!(
-                "[ipcbuf] capid frame=0x{buffer_frame:04x} ty=0x{cap_ty:08x} vaddr=0x{buffer_vaddr:08x}",
-                buffer_frame = buffer_frame,
-                cap_ty = cap_ty,
-                buffer_vaddr = buffer_vaddr,
-            );
         }
 
         let result = unsafe { sel4_sys::seL4_TCB_SetIPCBuffer(tcb_cap, buffer_word, buffer_frame) };
@@ -2378,8 +2427,7 @@ impl<'a> KernelEnv<'a> {
             slot_limit,
         );
         assert!(
-            (trace.dest_slot as usize) >= empty_start
-                && (trace.dest_slot as usize) < empty_end,
+            (trace.dest_slot as usize) >= empty_start && (trace.dest_slot as usize) < empty_end,
             "Retype: dest_slot 0x{slot:04x} outside empty window [0x{start:04x}..0x{end:04x})",
             slot = trace.dest_slot,
             start = empty_start,
@@ -3220,11 +3268,11 @@ mod tests {
         );
         let (sanitised, init_bits) = env.sanitise_retype_trace(trace);
         assert_eq!(init_bits, 13);
-        assert_eq!(sanitised.cnode_depth, bootinfo_ref.init_cnode_depth() as seL4_Word);
         assert_eq!(
-            sanitised.node_index,
-            0
+            sanitised.cnode_depth,
+            bootinfo_ref.init_cnode_depth() as seL4_Word
         );
+        assert_eq!(sanitised.node_index, 0);
         assert_eq!(sanitised.dest_offset, slot as seL4_Word);
     }
 
