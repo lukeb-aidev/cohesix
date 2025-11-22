@@ -884,7 +884,7 @@ fn bootstrap<P: Platform>(
             )
         };
 
-        if fault_handler_err != sel4_sys::seL4_Error::seL4_NoError as sel4_sys::seL4_Error {
+        if fault_handler_err != sel4_sys::seL4_NoError {
             let mut line = heapless::String::<200>::new();
             let _ = write!(
                 line,
