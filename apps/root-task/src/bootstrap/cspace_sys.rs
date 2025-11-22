@@ -1190,10 +1190,13 @@ pub fn preflight_init_cnode_writable(probe_slot: sys::seL4_CPtr) -> Result<(), P
         let shift = depth_wordbits() as sys::seL4_Word - depth;
         let dst_index = (probe_slot as sys::seL4_Word) << shift;
         let src_index = CANONICAL_INIT_CNODE_SLOT as sys::seL4_CPtr;
+        let depth_u8: u8 = depth
+            .try_into()
+            .expect("init CNode depth must fit in a seL4 depth field");
         ::log::info!(
             target: "root_task::bootstrap::cspace_sys",
-            "[cnode.enc] style={} slot=0x{slot:04x} bits={} shift={} encoded=0x{encoded:016x}",
-            tuple_style_label(TupleStyle::Raw),
+            "[cnode.enc] style={style} slot=0x{slot:04x} bits={bits} shift={shift} encoded=0x{encoded:016x}",
+            style = tuple_style_label(TupleStyle::Raw),
             slot = probe_slot,
             bits = bits,
             shift = shift,
@@ -1203,10 +1206,10 @@ pub fn preflight_init_cnode_writable(probe_slot: sys::seL4_CPtr) -> Result<(), P
             sys::seL4_CNode_Mint(
                 root,
                 dst_index as sys::seL4_CPtr,
-                depth,
+                depth_u8,
                 root,
                 src_index,
-                depth,
+                depth_u8,
                 sel4::seL4_CapRights_All,
                 0,
             )
@@ -1224,8 +1227,9 @@ pub fn preflight_init_cnode_writable(probe_slot: sys::seL4_CPtr) -> Result<(), P
             return Err(PreflightError::Probe(err));
         }
 
-        let delete_err =
-            unsafe { sys::seL4_CNode_Delete(root, dst_index as sys::seL4_CPtr, depth) };
+        let delete_err = unsafe {
+            sys::seL4_CNode_Delete(root, dst_index as sys::seL4_CPtr, depth_u8)
+        };
         if delete_err != sys::seL4_NoError {
             ::log::error!(
                 target: "root_task::bootstrap::cspace_sys",
