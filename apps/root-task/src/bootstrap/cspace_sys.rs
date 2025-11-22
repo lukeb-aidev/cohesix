@@ -1564,6 +1564,7 @@ pub fn canonical_cnode_copy(
     let depth = cnode_depth(bi, style) as u8;
     let dst_index = enc_index(dst_slot, bi, style);
     let src_index = enc_index(src_slot, bi, style);
+    let rights_word = rights.raw();
     ::log::info!(
         "[cnode] op=canonical-copy form={} depth=0x{depth:x} root=0x{root:04x} dst=0x{dst_slot:04x} src=0x{src_slot:04x} idx.dst=0x{dst_index:016x} idx.src=0x{src_index:016x}",
         tuple_style_label(style),
@@ -1572,6 +1573,15 @@ pub fn canonical_cnode_copy(
         src_slot = src_slot,
         dst_index = dst_index,
         src_index = src_index,
+    );
+    ::log::info!(
+        "[ffi] seL4_CNode_Copy destRoot=0x{dest_root:04x} destIndex=0x{dst_index:016x} destDepth={depth} srcRoot=0x{src_root:04x} srcIndex=0x{src_index:016x} srcDepth={depth} rights=0x{rights_word:02x}",
+        dest_root = dest_root,
+        dst_index = dst_index,
+        depth = depth,
+        src_root = src_root,
+        src_index = src_index,
+        rights_word = rights_word,
     );
     unsafe {
         sys::seL4_CNode_Copy(
@@ -1947,6 +1957,16 @@ pub fn retype_into_root(
     #[cfg(target_os = "none")]
     {
         log_destination("Untyped_Retype", index, depth, offset);
+        ::log::info!(
+            "[ffi] seL4_Untyped_Retype ut=0x{untyped:04x} type={obj_type} size_bits={size_bits} root=0x{root:04x} index=0x{index:04x} depth={depth_bits} offset=0x{offset:04x} count=1",
+            untyped = untyped,
+            obj_type = obj_type,
+            size_bits = size_bits,
+            root = root,
+            index = index,
+            depth_bits = depth_bits,
+            offset = offset,
+        );
     }
 
     #[cfg(not(target_os = "none"))]
@@ -1964,7 +1984,14 @@ pub fn retype_into_root(
     #[cfg(target_os = "none")]
     let err = unsafe {
         sys::seL4_Untyped_Retype(
-            untyped, obj_type, size_bits, root, index, depth_bits, offset, 1,
+            untyped,
+            obj_type,
+            size_bits,
+            root,
+            index,
+            encode_cnode_depth(depth_bits),
+            offset,
+            1,
         )
     };
 
