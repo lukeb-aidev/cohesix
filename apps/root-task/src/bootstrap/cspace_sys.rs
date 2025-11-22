@@ -23,6 +23,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 static PREFLIGHT_COMPLETED: AtomicBool = AtomicBool::new(false);
 
 const SE_L4_WORDBITS: sys::seL4_Word = sys::seL4_WordBits as sys::seL4_Word;
+const INIT_CNODE_DEPTH: u8 = sys::seL4_WordBits as u8;
 
 #[inline(always)]
 pub fn encode_direct_slot(slot: u64) -> (sys::seL4_Word, sys::seL4_Word) {
@@ -212,10 +213,9 @@ pub fn cnode_copy_raw_single(
         src_slot: sys::seL4_Word,
         style: TupleStyle,
     ) -> sys::seL4_Error {
-        let (dst_index, depth_word) = encode_direct_slot(dst_slot as u64);
-        let (src_index, src_depth) = encode_direct_slot(src_slot as u64);
-        let depth_u8 = u8::try_from(depth_word).expect("cnode depth must fit in u8");
-        let src_depth_u8 = u8::try_from(src_depth).expect("cnode depth must fit in u8");
+        let dst_index = dst_slot as sys::seL4_Word;
+        let src_index = src_slot as sys::seL4_Word;
+        let depth_u8 = INIT_CNODE_DEPTH;
         let rights = sys::seL4_CapRights::new(1, 1, 1, 1);
 
         ::log::info!(
@@ -223,7 +223,7 @@ pub fn cnode_copy_raw_single(
             style = tuple_style_label(style),
             dst_root = dst_root,
             dst_slot = dst_slot,
-            depth_word = depth_word,
+            depth_word = depth_u8,
             src_root = src_root,
             src_slot = src_slot,
         );
@@ -232,11 +232,11 @@ pub fn cnode_copy_raw_single(
         unsafe {
             sys::seL4_CNode_Copy(
                 dst_root,
-                dst_index as sys::seL4_CPtr,
+                dst_index as sys::seL4_Word,
                 depth_u8,
                 src_root,
-                src_index as sys::seL4_CPtr,
-                src_depth_u8,
+                src_index as sys::seL4_Word,
+                depth_u8,
                 rights,
             )
         }
@@ -244,7 +244,7 @@ pub fn cnode_copy_raw_single(
         #[cfg(not(target_os = "none"))]
         {
             let _ = (
-                bi, dst_root, dst_slot, src_root, src_slot, rights, style, depth, depth_u8,
+                bi, dst_root, dst_slot, src_root, src_slot, rights, style, depth_u8,
             );
             sys::seL4_NoError
         }
@@ -353,14 +353,13 @@ fn cnode_copy_with_style(
     rights: sys::seL4_CapRights,
     style: TupleStyle,
 ) -> sys::seL4_Error {
-    let (dst_index, depth_word) = encode_direct_slot(dst_slot_raw as u64);
-    let (src_index, src_depth) = encode_direct_slot(src_slot_raw as u64);
-    let depth_u8 = u8::try_from(depth_word).expect("cnode depth must fit in u8");
-    let src_depth_u8 = u8::try_from(src_depth).expect("cnode depth must fit in u8");
+    let dst_index = dst_slot_raw as sys::seL4_Word;
+    let src_index = src_slot_raw as sys::seL4_Word;
+    let depth_u8 = INIT_CNODE_DEPTH;
     ::log::info!(
-        "[cnode.tuple] style={} dst_index=0x{dst_index:04x} src_index=0x{src_index:04x} depth={depth_word} dst_offset=0x{dst_raw:04x} src_offset=0x{src_raw:04x}",
+        "[cnode.tuple] style={} dst_index=0x{dst_index:04x} src_index=0x{src_index:04x} depth={depth} dst_offset=0x{dst_raw:04x} src_offset=0x{src_raw:04x}",
         tuple_style_label(style),
-        depth_word = depth_word,
+        depth = depth_u8,
         dst_raw = dst_slot_raw,
         src_raw = src_slot_raw,
     );
@@ -372,16 +371,16 @@ fn cnode_copy_with_style(
             style = tuple_style_label(style),
             dst_slot = dst_slot_raw,
             src_slot = src_slot_raw,
-            depth = depth_word,
+            depth = depth_u8,
             dst_root = dst_root,
         ));
         sys::seL4_CNode_Copy(
             dst_root,
-            dst_index as sys::seL4_CPtr,
+            dst_index as sys::seL4_Word,
             depth_u8,
             src_root,
-            src_index as sys::seL4_CPtr,
-            src_depth_u8,
+            src_index as sys::seL4_Word,
+            depth_u8,
             rights,
         )
     }
@@ -398,7 +397,7 @@ fn cnode_copy_with_style(
             style,
             dst_index,
             src_index,
-            depth,
+            depth_u8,
         );
         sys::seL4_NoError
     }
@@ -411,17 +410,17 @@ pub fn cnode_delete_with_style(
     slot: sys::seL4_Word,
     style: TupleStyle,
 ) -> sys::seL4_Error {
-    let (index, depth_word) = encode_direct_slot(slot as u64);
-    let depth_u8 = u8::try_from(depth_word).expect("cnode depth must fit in u8");
+    let index = slot as sys::seL4_Word;
+    let depth_u8 = INIT_CNODE_DEPTH;
 
     #[cfg(target_os = "none")]
     unsafe {
-        sys::seL4_CNode_Delete(root, index as sys::seL4_CPtr, depth_u8)
+        sys::seL4_CNode_Delete(root, index as sys::seL4_Word, depth_u8)
     }
 
     #[cfg(not(target_os = "none"))]
     {
-        let _ = (bi, root, slot, style, index, depth);
+        let _ = (bi, root, slot, style, index, depth_u8);
         sys::seL4_NoError
     }
 }
@@ -437,10 +436,9 @@ fn cnode_mint_with_style(
     badge: sys::seL4_Word,
     style: TupleStyle,
 ) -> sys::seL4_Error {
-    let (dst_index, depth_word) = encode_direct_slot(dst_slot_raw as u64);
-    let (src_index, src_depth) = encode_direct_slot(src_slot_raw as u64);
-    let depth_u8 = u8::try_from(depth_word).expect("cnode depth must fit in u8");
-    let src_depth_u8 = u8::try_from(src_depth).expect("cnode depth must fit in u8");
+    let dst_index = dst_slot_raw as sys::seL4_Word;
+    let src_index = src_slot_raw as sys::seL4_Word;
+    let depth_u8 = INIT_CNODE_DEPTH;
 
     #[cfg(target_os = "none")]
     unsafe {
@@ -458,16 +456,16 @@ fn cnode_mint_with_style(
             style = tuple_style_label(style),
             dst = dst_slot_raw,
             src = src_slot_raw,
-            depth = depth_word,
+            depth = depth_u8,
             badge = badge,
         ));
         sys::seL4_CNode_Mint(
             dst_root,
-            dst_index as sys::seL4_CPtr,
+            dst_index as sys::seL4_Word,
             depth_u8,
             src_root,
-            src_index as sys::seL4_CPtr,
-            src_depth_u8,
+            src_index as sys::seL4_Word,
+            depth_u8,
             rights,
             badge,
         )
@@ -486,7 +484,7 @@ fn cnode_mint_with_style(
             style,
             dst_index,
             src_index,
-            depth,
+            depth_u8,
         );
         sys::seL4_NoError
     }
@@ -501,10 +499,9 @@ fn cnode_move_with_style(
     src_slot_raw: sys::seL4_Word,
     style: TupleStyle,
 ) -> sys::seL4_Error {
-    let (dst_index, depth_word) = encode_direct_slot(dst_slot_raw as u64);
-    let (src_index, src_depth) = encode_direct_slot(src_slot_raw as u64);
-    let depth_u8 = u8::try_from(depth_word).expect("cnode depth must fit in u8");
-    let src_depth_u8 = u8::try_from(src_depth).expect("cnode depth must fit in u8");
+    let dst_index = dst_slot_raw as sys::seL4_Word;
+    let src_index = src_slot_raw as sys::seL4_Word;
+    let depth_u8 = INIT_CNODE_DEPTH;
 
     #[cfg(target_os = "none")]
     unsafe {
@@ -513,15 +510,15 @@ fn cnode_move_with_style(
             style = tuple_style_label(style),
             dst = dst_slot_raw,
             src = src_slot_raw,
-            depth = depth_word,
+            depth = depth_u8,
         ));
         sys::seL4_CNode_Move(
             dst_root,
-            dst_index as sys::seL4_CPtr,
+            dst_index as sys::seL4_Word,
             depth_u8,
             src_root,
-            src_index as sys::seL4_CPtr,
-            src_depth_u8,
+            src_index as sys::seL4_Word,
+            depth_u8,
         )
     }
 
@@ -536,7 +533,7 @@ fn cnode_move_with_style(
             style,
             dst_index,
             src_index,
-            depth,
+            depth_u8,
         );
         sys::seL4_NoError
     }
@@ -1126,25 +1123,47 @@ pub fn verify_root_cnode_slot(
     let root = root_cnode();
     #[cfg(target_os = "none")]
     {
-        let style = tuple_style();
-        let _ = cnode_delete_with_style(bi, root, slot, style);
-        let copy_err = canonical_cnode_copy(
-            bi,
-            slot,
-            sys::seL4_CapInitThreadTCB as sys::seL4_Word,
-            sys::seL4_CapRights_All,
-        );
+        let _ = cnode_delete_with_style(bi, root, slot, tuple_style());
+        let depth_u8 = INIT_CNODE_DEPTH;
+        let src_slot = sys::seL4_CapInitThreadTCB as sys::seL4_Word;
+        let src_ident = unsafe { sys::seL4_DebugCapIdentify(src_slot as sys::seL4_CPtr) };
+        let dst_ident_before = unsafe { sys::seL4_DebugCapIdentify(slot as sys::seL4_CPtr) };
+        let root_ident = unsafe { sys::seL4_DebugCapIdentify(root as sys::seL4_CPtr) };
+        let copy_err = unsafe {
+            sys::seL4_CNode_Copy(
+                root,
+                slot as sys::seL4_Word,
+                depth_u8,
+                root,
+                src_slot as sys::seL4_Word,
+                depth_u8,
+                sys::seL4_CapRights::new(1, 1, 1, 1),
+            )
+        };
 
         if copy_err != sys::seL4_NoError {
-            ::log::warn!(
-                "[verify_root_cnode_slot] TCB copy failed slot=0x{slot:04x} err={copy_err} — skipping slot probe",
+            panic!(
+                "[verify_root_cnode_slot] init TCB copy failed: slot=0x{slot:04x} err={copy_err} ({err_name}) root=0x{root:04x} root_ident=0x{root_ident:08x} src_ident=0x{src_ident:08x} dst_ident=0x{dst_ident:08x} depth={depth}",
                 slot = slot,
                 copy_err = copy_err,
+                err_name = sel4::error_name(copy_err),
+                root = root,
+                root_ident = root_ident,
+                src_ident = src_ident,
+                dst_ident = dst_ident_before,
+                depth = depth_u8,
             );
-            return Ok(());
         }
-        let cleanup_style = tuple_style();
-        let cleanup_err = cnode_delete_with_style(bi, root, slot, cleanup_style);
+
+        let copied_ident = unsafe { sys::seL4_DebugCapIdentify(slot as sys::seL4_CPtr) };
+        ::log::info!(
+            "[verify_root_cnode_slot] copied init TCB into slot=0x{slot:04x} ident=0x{ident:08x} depth={depth}",
+            slot = slot,
+            ident = copied_ident,
+            depth = depth_u8,
+        );
+
+        let cleanup_err = unsafe { sys::seL4_CNode_Delete(root, slot as sys::seL4_Word, depth_u8) };
         if cleanup_err != sys::seL4_NoError {
             ::log::warn!(
                 "[verify_root_cnode_slot] cleanup delete failed err={} — continuing",
@@ -1193,29 +1212,29 @@ pub fn preflight_init_cnode_writable(probe_slot: sys::seL4_CPtr) -> Result<(), P
 
     #[cfg(target_os = "none")]
     {
-        let (dst_index, depth) = encode_direct_slot(probe_slot as u64);
-        let (src_index, src_depth) = encode_direct_slot(CANONICAL_INIT_CNODE_SLOT as u64);
-        let depth_u8: u8 = depth
-            .try_into()
-            .expect("init CNode depth must fit in a seL4 depth field");
+        let dst_index = probe_slot as sys::seL4_Word;
+        let depth_u8 = INIT_CNODE_DEPTH;
+        let src_slot = sys::seL4_CapInitThreadTCB as sys::seL4_Word;
+        let src_ident = unsafe { sys::seL4_DebugCapIdentify(src_slot as sys::seL4_CPtr) };
+        let dst_ident = unsafe { sys::seL4_DebugCapIdentify(dst_index as sys::seL4_CPtr) };
         ::log::info!(
             target: "root_task::bootstrap::cspace_sys",
-            "[cnode.enc] style={style} slot=0x{slot:04x} depth={depth} encoded=0x{encoded:016x}",
+            "[cnode.enc] style={style} slot=0x{slot:04x} depth={depth} encoded=0x{encoded:016x} src_ident=0x{src_ident:08x} dst_ident=0x{dst_ident:08x}",
             style = tuple_style_label(TupleStyle::Raw),
             slot = probe_slot,
             encoded = dst_index,
-            depth = depth,
+            depth = depth_u8,
+            src_ident = src_ident,
+            dst_ident = dst_ident,
         );
         let err = unsafe {
             sys::seL4_CNode_Mint(
                 root,
-                dst_index as sys::seL4_CPtr,
+                dst_index as sys::seL4_Word,
                 depth_u8,
                 root,
-                src_index as sys::seL4_CPtr,
-                src_depth
-                    .try_into()
-                    .expect("init CNode depth must fit in a seL4 depth field"),
+                src_slot as sys::seL4_Word,
+                depth_u8,
                 sys::seL4_CapRights::new(1, 1, 1, 1),
                 0,
             )
@@ -1223,23 +1242,25 @@ pub fn preflight_init_cnode_writable(probe_slot: sys::seL4_CPtr) -> Result<(), P
         if err != sys::seL4_NoError {
             ::log::error!(
                 target: "root_task::bootstrap::cspace_sys",
-                "preflight failed: Mint root=0x{root:04x} slot=0x{slot:04x} depth={} err={} ({})",
-                depth,
+                "preflight failed: Mint root=0x{root:04x} slot=0x{slot:04x} depth={} err={} ({}) src_ident=0x{src_ident:08x} dst_ident=0x{dst_ident:08x}",
+                depth_u8,
                 err,
                 sel4::error_name(err),
                 slot = probe_slot,
                 root = root,
+                src_ident = src_ident,
+                dst_ident = dst_ident,
             );
             return Err(PreflightError::Probe(err));
         }
 
         let delete_err =
-            unsafe { sys::seL4_CNode_Delete(root, dst_index as sys::seL4_CPtr, depth_u8) };
+            unsafe { sys::seL4_CNode_Delete(root, dst_index as sys::seL4_Word, depth_u8) };
         if delete_err != sys::seL4_NoError {
             ::log::error!(
                 target: "root_task::bootstrap::cspace_sys",
                 "preflight cleanup failed: Delete root=0x{root:04x} slot=0x{slot:04x} depth={} err={} ({})",
-                depth,
+                depth_u8,
                 delete_err,
                 sel4::error_name(delete_err),
                 slot = probe_slot,
@@ -1574,10 +1595,9 @@ pub fn canonical_cnode_copy(
     let dest_root = bi.canonical_root_cap();
     let src_root = dest_root;
     let style = tuple_style();
-    let (dst_index, depth_word) = encode_direct_slot(dst_slot as u64);
-    let (src_index, src_depth) = encode_direct_slot(src_slot as u64);
-    let depth = depth_word as u8;
-    let src_depth_u8 = src_depth as u8;
+    let dst_index = dst_slot as sys::seL4_Word;
+    let src_index = src_slot as sys::seL4_Word;
+    let depth = INIT_CNODE_DEPTH;
     let rights_word = rights.raw();
     ::log::info!(
         "[cnode] op=canonical-copy form={} depth=0x{depth:x} root=0x{root:04x} dst=0x{dst_slot:04x} src=0x{src_slot:04x} idx.dst=0x{dst_index:016x} idx.src=0x{src_index:016x}",
@@ -1595,17 +1615,17 @@ pub fn canonical_cnode_copy(
         depth = depth,
         src_root = src_root,
         src_index = src_index,
-        src_depth = src_depth_u8,
+        src_depth = depth,
         rights_word = rights_word,
     );
     unsafe {
         sys::seL4_CNode_Copy(
             dest_root,
-            dst_index as sys::seL4_CPtr,
+            dst_index as sys::seL4_Word,
             depth,
             src_root,
-            src_index as sys::seL4_CPtr,
-            src_depth_u8,
+            src_index as sys::seL4_Word,
+            depth,
             rights,
         )
     }
