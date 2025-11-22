@@ -188,7 +188,9 @@ impl InitCNode {
     #[must_use]
     pub fn from_bootinfo(bi: &seL4_BootInfo) -> Self {
         let root = seL4_CapInitThreadCNode;
-        let depth = bi.initThreadCNodeSizeBits as seL4_Word;
+        let depth =
+            sel4::canonical_cnode_depth(bi.initThreadCNodeSizeBits as u8, sel4::WORD_BITS as u8)
+                as seL4_Word;
         let index = 0;
         let bits = bi.initThreadCNodeSizeBits as u8;
         let empty = SlotRange::new(bi.empty.start as seL4_Word, bi.empty.end as seL4_Word);
@@ -235,7 +237,7 @@ pub fn root_cnode_path(
     init_cnode_bits: u8,
     dst_slot: seL4_Word,
 ) -> (seL4_CPtr, seL4_Word, seL4_Word, seL4_Word) {
-    let depth = usize::from(init_cnode_bits) as seL4_Word;
+    let depth = sel4::canonical_cnode_depth(init_cnode_bits, sel4::WORD_BITS as u8) as seL4_Word;
     let path = CNodePath::new(root_cnode(), 0, depth);
     guard_root_path(
         init_cnode_bits,
@@ -248,8 +250,9 @@ pub fn root_cnode_path(
 
 #[inline(always)]
 pub fn guard_root_path(init_cnode_bits: u8, index: seL4_Word, depth: seL4_Word, offset: seL4_Word) {
-    let expected_depth = usize::from(init_cnode_bits) as seL4_Word;
-    assert_eq!(depth, expected_depth, "depth must equal init cnode bits");
+    let expected_depth = sel4::canonical_cnode_depth(init_cnode_bits, sel4::WORD_BITS as u8)
+        as seL4_Word;
+    assert_eq!(depth, expected_depth, "depth must equal canonical init cnode depth");
     assert_eq!(
         index, 0,
         "node index must be zero for init CNode direct path"

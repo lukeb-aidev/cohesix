@@ -88,6 +88,17 @@ pub fn reset_canonical_root_alias() {
     CANONICAL_ROOT_SLOT.store(CANONICAL_ROOT_SENTINEL, Ordering::Release);
 }
 
+/// Computes the canonical traversal depth (in bits) for addressing the init thread's CNode.
+#[inline(always)]
+pub const fn canonical_cnode_depth(init_bits: u8, word_bits: u8) -> u8 {
+    let depth = init_bits as usize + word_bits as usize;
+    assert!(
+        depth <= u8::MAX as usize,
+        "cnode depth {depth} exceeds u8::MAX"
+    );
+    depth as u8
+}
+
 /// Returns the architectural word width (in bits) exposed by seL4.
 #[inline(always)]
 pub const fn word_bits() -> seL4_Word {
@@ -125,7 +136,7 @@ pub fn init_cnode_cptr(bi: &seL4_BootInfo) -> seL4_CPtr {
 /// Canonical node index used when addressing the init thread's root CNode.
 #[inline(always)]
 pub fn init_cnode_index_word() -> seL4_Word {
-    seL4_CapInitThreadCNode as seL4_Word
+    0
 }
 
 /// Returns the radix width (in bits) for the init thread's root CNode.
@@ -169,6 +180,11 @@ pub enum BootInfoError {
     },
     /// Arithmetic overflow occurred while computing bounds.
     Overflow,
+    /// The initThreadCNodeSizeBits field was invalid.
+    InitCNodeBits {
+        /// Reported radix width in bits.
+        bits: usize,
+    },
     /// The computed extra range wrapped or was otherwise invalid.
     ExtraRange {
         /// Starting address of the invalid bootinfo extra range.
@@ -192,6 +208,10 @@ impl fmt::Display for BootInfoError {
                 write!(f, "bootinfo.extraLen exceeded limit: {bytes} bytes")
             }
             Self::Overflow => write!(f, "bootinfo bounds computation overflowed"),
+            Self::InitCNodeBits { bits } => write!(
+                f,
+                "initThreadCNodeSizeBits out of range: {bits} (expected <= 31)"
+            ),
             Self::ExtraRange { start, end } => write!(
                 f,
                 "bootinfo extra range invalid: [0x{start:016x}..0x{end:016x})"
@@ -252,6 +272,14 @@ pub struct BootInfoView {
 
 impl BootInfoView {
     fn build(header: &'static seL4_BootInfo) -> Result<Self, BootInfoError> {
+        let init_bits = header.initThreadCNodeSizeBits as usize;
+        debug_assert!(init_bits <= 31, "initThreadCNodeSizeBits must be <= 31");
+        if init_bits > 31 {
+            ::log::error!(
+                "bootinfo initThreadCNodeSizeBits invalid: {init_bits} (expected <= 31)"
+            );
+            return Err(BootInfoError::InitCNodeBits { bits: init_bits });
+        }
         let extra_bytes = bootinfo_extra_slice(header)?;
         Ok(Self {
             header,
@@ -317,6 +345,12 @@ impl BootInfoView {
         self.header.initThreadCNodeSizeBits as u8
     }
 
+    /// Returns the canonical traversal depth for the init thread CNode.
+    #[must_use]
+    pub fn init_cnode_depth(&self) -> u8 {
+        canonical_cnode_depth(self.init_cnode_bits(), WORD_BITS as u8)
+    }
+
     /// Returns the radix width of the init thread's CNode as `usize`.
     #[must_use]
     pub fn init_cnode_size_bits(&self) -> usize {
@@ -329,6 +363,15 @@ impl BootInfoView {
         (
             self.header.empty.start as seL4_CPtr,
             self.header.empty.end as seL4_CPtr,
+        )
+    }
+
+    /// Returns the bootinfo-advertised empty slot window as `usize` values.
+    #[must_use]
+    pub fn init_cnode_empty_usize(&self) -> (usize, usize) {
+        (
+            self.header.empty.start as usize,
+            self.header.empty.end as usize,
         )
     }
 
@@ -606,9 +649,8 @@ pub fn replyrecv_guarded(
 /// Returns the traversal depth (in bits) for init CNode syscall invocations.
 #[inline]
 pub fn init_cnode_depth(_bi: &seL4_BootInfo) -> u8 {
-    word_bits()
-        .try_into()
-        .expect("word_bits must fit in u8 for seL4 depth arguments")
+    let init_bits = _bi.initThreadCNodeSizeBits as u8;
+    canonical_cnode_depth(init_bits, WORD_BITS as u8)
 }
 
 /// Emits a single byte to the seL4 debug console.
@@ -1675,8 +1717,8 @@ pub enum RetypeKind {
 /// The destination root **must** be the writable init thread CNode capability resident in slot
 /// `seL4_CapInitThreadCNode`. Do not use allocator handles or read-only aliases. The init CSpace is
 /// single-level, so the kernel consumes the supplied root capability directly. Root CNode policy for
-/// this system: direct addressing with `node_depth = seL4_WordBits`, `node_index = seL4_CapInitThreadCNode`,
-/// and `dest_offset = dest_slot`.
+/// this system: direct addressing with `node_depth = initThreadCNodeSizeBits + seL4_WordBits`,
+/// `node_index = 0`, and `dest_offset = dest_slot`.
 #[derive(Copy, Clone, Debug)]
 pub struct RetypeTrace {
     /// Capability designating the source untyped region.
@@ -1693,10 +1735,11 @@ pub struct RetypeTrace {
     /// Root CNode policy for this system: `dest_offset = dest_slot`.
     pub dest_offset: seL4_Word,
     /// `nodeDepth` argument supplied to `seL4_Untyped_Retype` while resolving the destination CNode.
-    /// Root CNode policy for this system: `cnode_depth = seL4_WordBits` (single-level traversal).
+    /// Root CNode policy for this system: `cnode_depth = initThreadCNodeSizeBits + seL4_WordBits`
+    /// (single-level traversal with canonical guard width).
     pub cnode_depth: seL4_Word,
     /// `nodeIndex` argument supplied to `seL4_Untyped_Retype` when selecting a sub-CNode below
-    /// `cnode_root`. Root CNode policy for this system: `node_index = seL4_CapInitThreadCNode`.
+    /// `cnode_root`. Root CNode policy for this system: `node_index = 0`.
     pub node_index: seL4_Word,
     /// Object type requested from the kernel.
     pub object_type: seL4_Word,
@@ -2075,6 +2118,27 @@ impl<'a> KernelEnv<'a> {
             .expect("IPC buffer pointer must fit in seL4_Word");
 
         #[cfg(target_os = "none")]
+        let cap_ty = unsafe { sel4_sys::seL4_CapIdentify(buffer_frame) } as usize;
+        #[cfg(not(target_os = "none"))]
+        let cap_ty = sel4_sys::seL4_ObjectType::seL4_ARM_Page as usize;
+
+        ::log::info!(
+            "[ipcbuf] capid frame=0x{buffer_frame:04x} ty=0x{cap_ty:08x} vaddr=0x{buffer_vaddr:08x}",
+            buffer_frame = buffer_frame,
+            cap_ty = cap_ty,
+            buffer_vaddr = buffer_vaddr,
+        );
+
+        let expected_ty = sel4_sys::seL4_ObjectType::seL4_ARM_Page as usize;
+        if cap_ty != expected_ty {
+            ::log::error!(
+                "[ipcbuf] frame cap type mismatch: got=0x{cap_ty:08x} expected=0x{expected:08x}",
+                expected = expected_ty,
+            );
+            return Err(sel4_sys::seL4_IllegalOperation);
+        }
+
+        #[cfg(target_os = "none")]
         {
             let cap_ty = unsafe { sel4_sys::seL4_DebugCapIdentify(buffer_frame) };
             assert_eq!(
@@ -2284,6 +2348,7 @@ impl<'a> KernelEnv<'a> {
 
     fn sanitise_retype_trace(&self, trace: RetypeTrace) -> (RetypeTrace, usize) {
         let init_bits = self.bootinfo.init_cnode_bits();
+        let (empty_start, empty_end) = self.bootinfo.init_cnode_empty_usize();
         let slot_limit = 1usize.checked_shl(init_bits as u32).unwrap_or_else(|| {
             panic!(
                 "initThreadCNodeSizeBits {} exceeds host word size",
@@ -2291,8 +2356,8 @@ impl<'a> KernelEnv<'a> {
             )
         });
         let init_cnode = self.bootinfo.init_cnode_cap();
-        let expected_depth: seL4_Word = self.bootinfo.init_cnode_bits() as seL4_Word;
-        let expected_index: seL4_Word = init_cnode as seL4_Word;
+        let expected_depth: seL4_Word = self.bootinfo.init_cnode_depth() as seL4_Word;
+        let expected_index: seL4_Word = 0;
         let expected_offset: seL4_Word = trace.dest_slot as seL4_Word;
         assert!(
             (trace.dest_slot as usize) < slot_limit,
@@ -2300,6 +2365,14 @@ impl<'a> KernelEnv<'a> {
             trace.dest_slot,
             init_bits,
             slot_limit,
+        );
+        assert!(
+            (trace.dest_slot as usize) >= empty_start
+                && (trace.dest_slot as usize) < empty_end,
+            "Retype: dest_slot 0x{slot:04x} outside empty window [0x{start:04x}..0x{end:04x})",
+            slot = trace.dest_slot,
+            start = empty_start,
+            end = empty_end,
         );
 
         assert_eq!(
@@ -2711,11 +2784,11 @@ impl<'a> KernelEnv<'a> {
         // Target the root CNode directly and describe the destination slot explicitly.
         // seL4 resolves the `(root, node_index, node_depth)` triple to select the CNode that will
         // receive the new capability. Init-root retypes rely on the canonical
-        // `(node_index = seL4_CapInitThreadCNode, node_depth = initBits, dest_offset = slot)`
-        // tuple so that the kernel addresses the slot directly within the root CNode.
+        // `(node_index = 0, node_depth = initBits + wordBits, dest_offset = slot)` tuple so that
+        // the kernel addresses the slot directly within the root CNode.
         let cnode_root = self.bootinfo.init_cnode_cap();
-        let node_index: seL4_Word = cnode_root as seL4_Word;
-        let cnode_depth: seL4_Word = self.bootinfo.init_cnode_bits() as seL4_Word;
+        let node_index: seL4_Word = 0;
+        let cnode_depth: seL4_Word = self.bootinfo.init_cnode_depth() as seL4_Word;
         let dest_offset: seL4_Word = slot as seL4_Word;
         RetypeTrace {
             untyped_cap: reserved.cap(),
@@ -3102,8 +3175,8 @@ mod tests {
             RetypeKind::DevicePage { paddr: 0 },
         );
         assert_eq!(trace.cnode_root, bootinfo_ref.init_cnode_cap());
-        let expected_index: seL4_Word = bootinfo_ref.init_cnode_cap() as seL4_Word;
-        let expected_depth: seL4_Word = bootinfo_ref.init_cnode_bits() as seL4_Word;
+        let expected_index: seL4_Word = 0;
+        let expected_depth: seL4_Word = bootinfo_ref.init_cnode_depth() as seL4_Word;
         assert_eq!(trace.node_index, expected_index);
         assert_eq!(trace.cnode_depth, expected_depth);
         assert_eq!(trace.dest_offset, slot as seL4_Word);
@@ -3136,10 +3209,10 @@ mod tests {
         );
         let (sanitised, init_bits) = env.sanitise_retype_trace(trace);
         assert_eq!(init_bits, 13);
-        assert_eq!(sanitised.cnode_depth, init_bits as seL4_Word);
+        assert_eq!(sanitised.cnode_depth, bootinfo_ref.init_cnode_depth() as seL4_Word);
         assert_eq!(
             sanitised.node_index,
-            bootinfo_ref.init_cnode_cap() as seL4_Word
+            0
         );
         assert_eq!(sanitised.dest_offset, slot as seL4_Word);
     }
@@ -3173,8 +3246,8 @@ mod tests {
         let init_root = bootinfo_ref.init_cnode_cap();
 
         let slot: seL4_CPtr = 0x00c8;
-        let expected_depth: seL4_Word = bootinfo_ref.init_cnode_bits() as seL4_Word;
-        let canonical_index: seL4_Word = init_root as seL4_Word;
+        let expected_depth: seL4_Word = bootinfo_ref.init_cnode_depth() as seL4_Word;
+        let canonical_index: seL4_Word = 0;
         let trace = RetypeTrace {
             untyped_cap: 0x200,
             untyped_paddr: 0,
@@ -3208,8 +3281,8 @@ mod tests {
         let init_root = bootinfo_ref.init_cnode_cap();
 
         let slot: seL4_CPtr = 0x0097;
-        let canonical_index: seL4_Word = init_root as seL4_Word;
-        let expected_depth: seL4_Word = bootinfo_ref.init_cnode_bits() as seL4_Word;
+        let canonical_index: seL4_Word = 0;
+        let expected_depth: seL4_Word = bootinfo_ref.init_cnode_depth() as seL4_Word;
         let trace = RetypeTrace {
             untyped_cap: 0x100,
             untyped_paddr: 0,
@@ -3244,7 +3317,7 @@ mod tests {
         let bootinfo_ref: &'static mut seL4_BootInfo = Box::leak(Box::new(bootinfo));
         let env = KernelEnv::new(bootinfo_ref);
         let init_root = bootinfo_ref.init_cnode_cap();
-        let expected_depth: seL4_Word = bootinfo_ref.init_cnode_bits() as seL4_Word;
+        let expected_depth: seL4_Word = bootinfo_ref.init_cnode_depth() as seL4_Word;
         let valid_trace = RetypeTrace {
             untyped_cap: 0x100,
             untyped_paddr: 0,
