@@ -126,11 +126,11 @@ mod imp {
 
     #[repr(C)]
     #[derive(Clone, Copy)]
-    pub struct seL4_CapRights {
+    pub struct seL4_CapRights_t {
         words: [seL4_Word; 1],
     }
 
-    impl seL4_CapRights {
+    impl seL4_CapRights_t {
         #[inline(always)]
         pub const fn new(
             grant_reply: seL4_Word,
@@ -152,15 +152,15 @@ mod imp {
         }
     }
 
-    pub type seL4_CapRights_t = seL4_CapRights;
+    pub type seL4_CapRights = seL4_CapRights_t;
 
     #[inline(always)]
     pub const fn seL4_CapRights_to_word(rights: seL4_CapRights) -> seL4_CapRights_t {
         rights
     }
 
-    pub const seL4_CapRights_ReadWrite: seL4_CapRights = seL4_CapRights::new(0, 0, 1, 1);
-    pub const seL4_CapRights_All: seL4_CapRights = seL4_CapRights::new(1, 1, 1, 1);
+    pub const seL4_CapRights_ReadWrite: seL4_CapRights_t = seL4_CapRights_t::new(0, 0, 1, 1);
+    pub const seL4_CapRights_All: seL4_CapRights_t = seL4_CapRights_t::new(1, 1, 1, 1);
     pub const seL4_AllRights: seL4_Word = seL4_CapRights_All.raw();
 
     #[repr(C)]
@@ -822,19 +822,19 @@ mod imp {
     #[inline(always)]
     pub unsafe fn seL4_CNode_Mint(
         dest_root: seL4_CNode,
-        dest_index: seL4_CPtr,
+        dest_index: seL4_Word,
         dest_depth: seL4_Uint8,
         src_root: seL4_CNode,
-        src_index: seL4_CPtr,
+        src_index: seL4_Word,
         src_depth: seL4_Uint8,
         rights: seL4_CapRights_t,
         badge: seL4_Word,
     ) -> seL4_Error {
         let msg = seL4_MessageInfo::new(SEL4_CNODE_MINT, 0, 1, 6);
         let mut mr0 = dest_index;
-        let mut mr1 = dest_depth as seL4_Word;
+        let mut mr1 = (dest_depth & 0xff) as seL4_Word;
         let mut mr2 = src_index;
-        let mut mr3 = src_depth as seL4_Word;
+        let mut mr3 = (src_depth & 0xff) as seL4_Word;
 
         seL4_SetCap(0, src_root);
         seL4_SetMR(4, rights.raw());
@@ -848,18 +848,18 @@ mod imp {
     #[inline(always)]
     pub unsafe fn seL4_CNode_Copy(
         dest_root: seL4_CNode,
-        dest_index: seL4_CPtr,
+        dest_index: seL4_Word,
         dest_depth: seL4_Uint8,
         src_root: seL4_CNode,
-        src_index: seL4_CPtr,
+        src_index: seL4_Word,
         src_depth: seL4_Uint8,
         rights: seL4_CapRights_t,
     ) -> seL4_Error {
         let msg = seL4_MessageInfo::new(SEL4_CNODE_COPY, 0, 1, 5);
         let mut mr0 = dest_index;
-        let mut mr1 = dest_depth as seL4_Word;
+        let mut mr1 = (dest_depth & 0xff) as seL4_Word;
         let mut mr2 = src_index;
-        let mut mr3 = src_depth as seL4_Word;
+        let mut mr3 = (src_depth & 0xff) as seL4_Word;
         seL4_SetCap(0, src_root);
         seL4_SetMR(4, rights.raw());
 
@@ -942,8 +942,35 @@ mod host_stub {
     pub type seL4_VSpace = seL4_CPtr;
     pub type seL4_ARM_Page = seL4_CPtr;
     pub type seL4_ARM_PageTable = seL4_CPtr;
-    pub type seL4_CapRights = u64;
-    pub type seL4_CapRights_t = seL4_Word;
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct seL4_CapRights_t {
+        pub words: [seL4_Word; 1],
+    }
+
+    impl seL4_CapRights_t {
+        #[inline(always)]
+        pub const fn new(
+            grant_reply: seL4_Word,
+            grant: seL4_Word,
+            read: seL4_Word,
+            write: seL4_Word,
+        ) -> Self {
+            let mut value: seL4_Word = 0;
+            value |= (grant_reply & 0x1) << 3;
+            value |= (grant & 0x1) << 2;
+            value |= (read & 0x1) << 1;
+            value |= write & 0x1;
+            Self { words: [value] }
+        }
+
+        #[inline(always)]
+        pub const fn raw(self) -> seL4_Word {
+            self.words[0]
+        }
+    }
+
+    pub type seL4_CapRights = seL4_CapRights_t;
     pub type seL4_Uint8 = u8;
     pub type seL4_Uint32 = u32;
 
@@ -1097,9 +1124,9 @@ mod host_stub {
     pub const seL4_CapInitThreadSC: seL4_CPtr = 14;
     pub const seL4_CapSMC: seL4_CPtr = 15;
 
-    pub const seL4_CapRights_All: seL4_CapRights = 0;
-    pub const seL4_CapRights_ReadWrite: seL4_CapRights = 0;
-    pub const seL4_AllRights: seL4_Word = 0;
+    pub const seL4_CapRights_All: seL4_CapRights_t = seL4_CapRights_t::new(1, 1, 1, 1);
+    pub const seL4_CapRights_ReadWrite: seL4_CapRights_t = seL4_CapRights_t::new(0, 0, 1, 1);
+    pub const seL4_AllRights: seL4_Word = seL4_CapRights_All.raw();
 
     pub const seL4_ARM_Page_Default: seL4_ARM_VMAttributes = seL4_ARM_VMAttributes(0);
     pub const seL4_ARM_Page_Uncached: seL4_ARM_VMAttributes = seL4_ARM_VMAttributes(0);
