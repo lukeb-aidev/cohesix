@@ -15,7 +15,11 @@ use crate::bootstrap::log::force_uart_line;
 use crate::bootstrap::{boot_tracer, BootPhase, UntypedSelection};
 #[cfg(feature = "canonical_cspace")]
 use crate::sel4::pick_smallest_non_device_untyped;
-use crate::sel4::{error_name, init_cnode_index_word, word_bits, PAGE_BITS, PAGE_TABLE_BITS};
+use crate::sel4::{
+    canonical_cnode_depth, error_name, init_cnode_index_word, word_bits, PAGE_BITS,
+    PAGE_TABLE_BITS,
+};
+use crate::sel4::BootInfoView;
 #[cfg(feature = "canonical_cspace")]
 use crate::sel4_view;
 #[cfg(any(test, feature = "ffi_shim"))]
@@ -23,6 +27,66 @@ use spin::Mutex;
 
 const DEFAULT_RETYPE_LIMIT: u32 = 512;
 const PROGRESS_INTERVAL: u32 = 64;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RetypePlan {
+    pub root: sys::seL4_CPtr,
+    pub node_index: sys::seL4_Word,
+    pub cnode_depth: u8,
+    pub dest_offset: sys::seL4_Word,
+    pub num_objects: sys::seL4_Word,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RetypePlanError {
+    RootMismatch,
+    DepthMismatch { provided: u8, expected: u8 },
+    IndexMismatch { provided: sys::seL4_Word },
+    DestOutOfRange { offset: sys::seL4_Word, start: sys::seL4_Word, end: sys::seL4_Word },
+    DestSpanOverflow { offset: sys::seL4_Word, count: sys::seL4_Word, end: sys::seL4_Word },
+}
+
+impl RetypePlan {
+    pub fn sanitise_against_bootinfo(self, view: &BootInfoView) -> Result<Self, RetypePlanError> {
+        let (empty_start, empty_end) = view.init_cnode_empty_range();
+        let expected_depth = view.init_cnode_depth();
+        if self.root != view.root_cnode_cap() {
+            return Err(RetypePlanError::RootMismatch);
+        }
+        if self.cnode_depth != expected_depth {
+            return Err(RetypePlanError::DepthMismatch {
+                provided: self.cnode_depth,
+                expected: expected_depth,
+            });
+        }
+        if self.node_index != 0 {
+            return Err(RetypePlanError::IndexMismatch {
+                provided: self.node_index,
+            });
+        }
+        if self.dest_offset < empty_start as sys::seL4_Word
+            || self.dest_offset >= empty_end as sys::seL4_Word
+        {
+            return Err(RetypePlanError::DestOutOfRange {
+                offset: self.dest_offset,
+                start: empty_start as sys::seL4_Word,
+                end: empty_end as sys::seL4_Word,
+            });
+        }
+        if self
+            .dest_offset
+            .saturating_add(self.num_objects)
+            .gt(&(empty_end as sys::seL4_Word))
+        {
+            return Err(RetypePlanError::DestSpanOverflow {
+                offset: self.dest_offset,
+                count: self.num_objects,
+                end: empty_end as sys::seL4_Word,
+            });
+        }
+        Ok(self)
+    }
+}
 
 fn log_retype_call(
     ut_cap: sys::seL4_Word,
@@ -146,7 +210,7 @@ pub(crate) fn call_retype(
     dest.assert_sane();
     let style = TupleStyle::GuardEncoded;
     let node_index: sys::seL4_Word = init_cnode_index_word();
-    let node_depth: u8 = word_bits() as u8;
+    let node_depth: u8 = canonical_cnode_depth(dest.root_bits, word_bits() as u8);
     let slot_offset =
         sys::seL4_Word::try_from(dest.slot_offset).expect("slot offset must fit within seL4_Word");
     log_retype_call(
@@ -220,6 +284,52 @@ fn object_name(obj_type: sys::seL4_ObjectType) -> &'static str {
         sys::seL4_ObjectType::seL4_ARM_Page => "Page",
         sys::seL4_ObjectType::seL4_NotificationObject => "Notification",
         _ => "Object",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sel4_sys::{seL4_BootInfo, seL4_CapInitThreadCNode, seL4_SlotRegion};
+
+    fn mock_bootinfo(empty_start: u32, empty_end: u32, bits: u8) -> BootInfoView {
+        let mut bootinfo: seL4_BootInfo = unsafe { core::mem::zeroed() };
+        bootinfo.empty = seL4_SlotRegion {
+            start: empty_start,
+            end: empty_end,
+        };
+        bootinfo.initThreadCNodeSizeBits = bits as usize as u8;
+        let leaked: &'static mut seL4_BootInfo = Box::leak(Box::new(bootinfo));
+        BootInfoView::new(leaked).expect("bootinfo view must be valid")
+    }
+
+    #[test]
+    fn sanitise_retype_plan_accepts_canonical_init_window() {
+        let view = mock_bootinfo(0x0103, 0x2000, 13);
+        let plan = RetypePlan {
+            root: seL4_CapInitThreadCNode,
+            node_index: 0,
+            cnode_depth: view.init_cnode_depth(),
+            dest_offset: 0x0103,
+            num_objects: 1,
+        };
+        assert!(plan.sanitise_against_bootinfo(&view).is_ok());
+    }
+
+    #[test]
+    fn sanitise_retype_plan_rejects_out_of_range_slot() {
+        let view = mock_bootinfo(0x0103, 0x2000, 13);
+        let plan = RetypePlan {
+            root: seL4_CapInitThreadCNode,
+            node_index: 0,
+            cnode_depth: view.init_cnode_depth(),
+            dest_offset: 0x0002,
+            num_objects: 1,
+        };
+        assert!(matches!(
+            plan.sanitise_against_bootinfo(&view),
+            Err(RetypePlanError::DestOutOfRange { .. })
+        ));
     }
 }
 
