@@ -606,9 +606,9 @@ pub fn replyrecv_guarded(
 /// Returns the traversal depth (in bits) for init CNode syscall invocations.
 #[inline]
 pub fn init_cnode_depth(_bi: &seL4_BootInfo) -> u8 {
-    init_cnode_bits(_bi)
+    word_bits()
         .try_into()
-        .expect("initThreadCNodeSizeBits must fit in u8")
+        .expect("word_bits must fit in u8 for seL4 depth arguments")
 }
 
 /// Emits a single byte to the seL4 debug console.
@@ -1095,7 +1095,12 @@ impl BootInfoExt for seL4_BootInfo {
 
     #[inline(always)]
     fn init_cnode_bits(&self) -> usize {
-        self.initThreadCNodeSizeBits as usize
+        let bits = self.initThreadCNodeSizeBits as usize;
+        assert!(
+            (1..=32).contains(&bits),
+            "initThreadCNodeSizeBits unexpected: {bits}",
+        );
+        bits
     }
 
     #[inline(always)]
@@ -1276,12 +1281,12 @@ impl SlotAllocator {
 
     /// Returns the radix depth (in bits) of the root CNode capability.
     ///
-    /// For the init thread's single-level CSpace this equals `initThreadCNodeSizeBits` because the
-    /// kernel consumes the supplied root capability directly and addresses slots using the full
-    /// radix width.
+    /// For the init thread's single-level CSpace this equals `seL4_WordBits` because the kernel
+    /// consumes the supplied root capability directly and addresses slots using the full word
+    /// width.
     #[inline(always)]
     pub fn depth(&self) -> seL4_Word {
-        self.cnode_size_bits
+        sel4_sys::seL4_WordBits as seL4_Word
     }
 
     /// Returns the number of bits describing the capacity of the root CNode.
@@ -1615,7 +1620,7 @@ pub struct KernelEnvSnapshot {
     pub dma_cursor: usize,
     /// Capability designating the root CNode supplied to retype operations.
     pub cspace_root: seL4_CNode,
-    /// Radix depth (in bits) used when submitting retype paths (equals `initThreadCNodeSizeBits`).
+    /// Traversal depth (in bits) used when submitting CSpace paths (equals `seL4_WordBits`).
     pub cspace_root_depth: seL4_Word,
     /// Total number of CSpace slots managed by the allocator.
     pub cspace_capacity: usize,
@@ -1670,7 +1675,7 @@ pub enum RetypeKind {
 /// The destination root **must** be the writable init thread CNode capability resident in slot
 /// `seL4_CapInitThreadCNode`. Do not use allocator handles or read-only aliases. The init CSpace is
 /// single-level, so the kernel consumes the supplied root capability directly. Root CNode policy for
-/// this system: direct addressing with `node_depth = initThreadCNodeSizeBits`, `node_index = seL4_CapInitThreadCNode`,
+/// this system: direct addressing with `node_depth = seL4_WordBits`, `node_index = seL4_CapInitThreadCNode`,
 /// and `dest_offset = dest_slot`.
 #[derive(Copy, Clone, Debug)]
 pub struct RetypeTrace {
@@ -1688,7 +1693,7 @@ pub struct RetypeTrace {
     /// Root CNode policy for this system: `dest_offset = dest_slot`.
     pub dest_offset: seL4_Word,
     /// `nodeDepth` argument supplied to `seL4_Untyped_Retype` while resolving the destination CNode.
-    /// Root CNode policy for this system: `cnode_depth = initThreadCNodeSizeBits` (single-level traversal).
+    /// Root CNode policy for this system: `cnode_depth = seL4_WordBits` (single-level traversal).
     pub cnode_depth: seL4_Word,
     /// `nodeIndex` argument supplied to `seL4_Untyped_Retype` when selecting a sub-CNode below
     /// `cnode_root`. Root CNode policy for this system: `node_index = seL4_CapInitThreadCNode`.
@@ -2072,6 +2077,11 @@ impl<'a> KernelEnv<'a> {
         #[cfg(target_os = "none")]
         {
             let cap_ty = unsafe { sel4_sys::seL4_DebugCapIdentify(buffer_frame) };
+            assert_eq!(
+                cap_ty,
+                sel4_sys::seL4_ObjectType::seL4_ARM_Page as seL4_Word,
+                "IPC buffer cap must resolve to a frame"
+            );
             ::log::info!(
                 "[ipcbuf] capid frame=0x{buffer_frame:04x} ty=0x{cap_ty:08x} vaddr=0x{buffer_vaddr:08x}",
                 buffer_frame = buffer_frame,
@@ -2104,6 +2114,14 @@ impl<'a> KernelEnv<'a> {
             if self.ipcbuf_trace {
                 crate::bp!("ipcbuf.tcb.bind.err");
             }
+            ::log::error!(
+                "[ipcbuf] bind failed tcb=0x{tcb:04x} frame=0x{frame:04x} vaddr=0x{vaddr:08x} err={err} ({name})",
+                tcb = tcb_cap,
+                frame = buffer_frame,
+                vaddr = buffer_vaddr,
+                err = result,
+                name = error_name(result),
+            );
             Err(result)
         }
     }

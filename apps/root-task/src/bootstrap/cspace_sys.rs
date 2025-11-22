@@ -29,12 +29,12 @@ pub fn root_cnode() -> seL4_CNode {
 
 #[inline(always)]
 pub fn path_depth() -> u8 {
-    bits_as_u8(bi_init_cnode_bits() as usize)
+    sel4::word_bits() as u8
 }
 
 #[inline(always)]
 pub fn path_depth_word() -> sys::seL4_Word {
-    encode_cnode_depth(bits_as_u8(bi_init_cnode_bits() as usize))
+    encode_cnode_depth(sel4::word_bits() as u8)
 }
 
 #[inline(always)]
@@ -142,12 +142,7 @@ pub fn dump_init_cnode_slots(range: Range<usize>) {
 }
 
 pub fn assert_init_cnode_layout(bi: &sys::seL4_BootInfo) {
-    let init_bits = sel4::init_cnode_bits(bi) as usize;
-    assert!(
-        (1..=32).contains(&init_bits),
-        "initThreadCNodeSizeBits unexpected: {}",
-        init_bits,
-    );
+    let init_bits = init_cnode_bits_u8(bi) as usize;
 
     let capacity = 1usize << init_bits;
     let empty_start = bi.empty.start as usize;
@@ -162,10 +157,28 @@ pub fn assert_init_cnode_layout(bi: &sys::seL4_BootInfo) {
     );
 
     let guard_bits = sel4::word_bits() as usize - init_bits;
+    assert_eq!(
+        sel4::word_bits() as usize,
+        sys::seL4_WordBits as usize,
+        "word_bits must mirror seL4_WordBits",
+    );
+    assert_eq!(
+        sel4::word_bits() as usize,
+        sel4::WORD_BITS as usize,
+        "word_bits constant mismatch",
+    );
     ::log::info!(
         "[cnode] expect single-level: radix={} guard={} empty=[0x{empty_start:04x}..0x{empty_end:04x})",
         init_bits,
         guard_bits,
+    );
+    assert_eq!(
+        init_bits, 13,
+        "unexpected initThreadCNodeSizeBits (expected 13 for aarch64/virt)"
+    );
+    assert_eq!(
+        guard_bits, 51,
+        "unexpected guard depth for init CNode (expected 51)"
     );
 }
 
@@ -277,7 +290,7 @@ pub fn encode_slot(slot: u64, bits: u8) -> u64 {
 #[inline(always)]
 pub fn cnode_depth(_bi: &sys::seL4_BootInfo, style: TupleStyle) -> sys::seL4_Word {
     match style {
-        TupleStyle::Raw => encode_cnode_depth(bits_as_u8(bi_init_cnode_bits() as usize)),
+        TupleStyle::Raw => sel4::word_bits(),
         TupleStyle::GuardEncoded => sel4::word_bits(),
     }
 }
@@ -288,7 +301,7 @@ pub fn enc_index(
     bi: &sys::seL4_BootInfo,
     style: TupleStyle,
 ) -> sys::seL4_Word {
-    let init_bits = sel4::init_cnode_bits(bi);
+    let init_bits = init_cnode_bits_u8(bi);
     check_slot_in_range(init_bits, slot as sys::seL4_CPtr);
     let shift = depth_wordbits() - init_bits;
     let encoded = match style {
@@ -570,7 +583,7 @@ pub fn retype_endpoint_raw(
     ut: sys::seL4_Word,
     dst: sys::seL4_Word,
 ) -> sys::seL4_Error {
-    let init_bits = sel4::init_cnode_bits(bi);
+    let init_bits = init_cnode_bits_u8(bi);
     check_slot_in_range(init_bits, dst as sys::seL4_CPtr);
     let node_offset = dst;
     let canon_root = bi.canonical_root_cap();
@@ -732,12 +745,7 @@ pub fn untyped_retype_encoded(
     num_objects: u64,
 ) -> sys::seL4_Error {
     let offset = dst_slot as sys::seL4_Word;
-    let is_init_cnode = dst_root == sys::seL4_CapInitThreadCNode;
-    let depth = if is_init_cnode {
-        0usize
-    } else {
-        usize::from(dst_bits)
-    };
+    let depth = sel4::word_bits() as usize;
     let index = 0usize;
     debug_assert!(
         dst_bits as usize <= sys::seL4_WordBits as usize,
@@ -823,16 +831,7 @@ pub fn retype_endpoint_once(
 /// that the system can continue booting deterministically.
 #[inline(always)]
 pub fn bits_as_u8(init_bits: usize) -> u8 {
-    match u8::try_from(init_bits) {
-        Ok(bits) => bits,
-        Err(_) => {
-            ::log::error!(
-                "[cspace] initThreadCNodeSizeBits={} does not fit in u8; falling back to 13",
-                init_bits
-            );
-            13
-        }
-    }
+    u8::try_from(init_bits).expect("initThreadCNodeSizeBits must fit in u8")
 }
 
 #[cfg(all(test, not(target_os = "none")))]
@@ -1288,7 +1287,7 @@ fn bi_init_cnode_cptr() -> sys::seL4_CPtr {
 #[cfg(all(not(target_os = "none"), not(test)))]
 #[inline(always)]
 fn bi_init_cnode_bits() -> sys::seL4_Word {
-    sys::seL4_WordBits as sys::seL4_Word
+    13
 }
 
 #[inline(always)]
@@ -1312,6 +1311,17 @@ pub fn check_slot_in_range(init_cnode_bits: u8, slot: sys::seL4_CPtr) {
 /// Encodes a radix depth in bits for syscall arguments expecting `seL4_Word`.
 pub fn encode_cnode_depth(bits: u8) -> sys::seL4_Word {
     bits as sys::seL4_Word
+}
+
+#[inline(always)]
+fn init_cnode_bits_u8(bi: &sys::seL4_BootInfo) -> u8 {
+    let bits = bi.initThreadCNodeSizeBits;
+    assert!(
+        (1..=32).contains(&(bits as usize)),
+        "initThreadCNodeSizeBits unexpected: {}",
+        bits
+    );
+    bits
 }
 
 /// Depth (in bits) used when traversing the init CNode for syscall arguments.
@@ -1588,7 +1598,7 @@ pub(super) struct RootPath {
 impl RootPath {
     #[inline(always)]
     pub(super) fn from_bootinfo(slot: u32, bi: &sys::seL4_BootInfo) -> Self {
-        let init_bits = sel4::init_cnode_bits(bi);
+        let init_bits = init_cnode_bits_u8(bi);
         let root = sel4::init_cnode_cptr(bi);
         let offset = slot as sys::seL4_Word;
         let index = init_root_index();
