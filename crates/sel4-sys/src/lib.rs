@@ -275,7 +275,12 @@ mod imp {
         pub userImagePaging: seL4_SlotRegion,
         pub ioSpaceCaps: seL4_SlotRegion,
         pub extraBIPages: seL4_SlotRegion,
-        pub initThreadCNodeSizeBits: seL4_Word,
+        pub initThreadCNodeSizeBits: seL4_Uint8,
+        /// Padding inserted by the kernel ABI to restore native alignment after the
+        /// 8-bit `initThreadCNodeSizeBits` field. Keeping this explicit prevents the
+        /// following `initThreadDomain` field from aliasing unrelated memory when
+        /// the bootinfo layout changes across kernel releases.
+        pub _padding_init_cnode_bits: [seL4_Uint8; core::mem::size_of::<seL4_Word>() - 1],
         pub initThreadDomain: seL4_Word,
         #[cfg(sel4_config_kernel_mcs)]
         pub schedcontrol: seL4_SlotRegion,
@@ -1005,21 +1010,42 @@ mod host_stub {
 
     pub type seL4_CapData_t = seL4_CNode_CapData;
 
+    #[repr(C)]
     #[derive(Clone, Copy)]
-    pub struct seL4_BootInfo;
+    pub struct seL4_BootInfo {
+        pub extraLen: seL4_Word,
+        pub nodeId: seL4_Word,
+        pub numNodes: seL4_Word,
+        pub numIOPTLevels: seL4_Word,
+        pub ipcBuffer: *mut seL4_IPCBuffer,
+        pub empty: seL4_SlotRegion,
+        pub sharedFrames: seL4_SlotRegion,
+        pub userImageFrames: seL4_SlotRegion,
+        pub userImagePaging: seL4_SlotRegion,
+        pub ioSpaceCaps: seL4_SlotRegion,
+        pub extraBIPages: seL4_SlotRegion,
+        pub initThreadCNodeSizeBits: u8,
+        pub _padding_init_cnode_bits: [u8; size_of::<seL4_Word>() - 1],
+        pub initThreadDomain: seL4_Word,
+        pub untyped: seL4_SlotRegion,
+        pub untypedList: [seL4_UntypedDesc; MAX_BOOTINFO_UNTYPEDS],
+    }
 
+    #[repr(C)]
     #[derive(Clone, Copy)]
     pub struct seL4_BootInfoHeader {
         pub id: seL4_Word,
         pub len: seL4_Word,
     }
 
+    #[repr(C)]
     #[derive(Clone, Copy)]
     pub struct seL4_SlotRegion {
         pub start: seL4_CPtr,
         pub end: seL4_CPtr,
     }
 
+    #[repr(C)]
     #[derive(Clone, Copy)]
     pub struct seL4_UntypedDesc {
         pub paddr: seL4_Word,

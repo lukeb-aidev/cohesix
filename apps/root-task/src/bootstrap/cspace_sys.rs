@@ -1550,11 +1550,13 @@ pub fn canonical_cnode_copy(
 ) -> sys::seL4_Error {
     let dest_root = bi.canonical_root_cap();
     let src_root = dest_root;
-    let depth = bits_as_u8(sel4::word_bits() as usize);
-    let dst_index = slot_index(dst_slot);
-    let src_index = slot_index(src_slot);
+    let style = tuple_style();
+    let depth = cnode_depth(bi, style) as u8;
+    let dst_index = enc_index(dst_slot, bi, style);
+    let src_index = enc_index(src_slot, bi, style);
     ::log::info!(
-        "[cnode] op=canonical-copy form=Raw depth=0x{depth:x} root=0x{root:04x} dst=0x{dst_slot:04x} src=0x{src_slot:04x} idx.dst=0x{dst_index:016x} idx.src=0x{src_index:016x}",
+        "[cnode] op=canonical-copy form={} depth=0x{depth:x} root=0x{root:04x} dst=0x{dst_slot:04x} src=0x{src_slot:04x} idx.dst=0x{dst_index:016x} idx.src=0x{src_index:016x}",
+        tuple_style_label(style),
         root = dest_root,
         dst_slot = dst_slot,
         src_slot = src_slot,
