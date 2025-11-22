@@ -874,32 +874,37 @@ fn bootstrap<P: Platform>(
         console.writeln_prefixed("bootinfo.ipcBuffer missing");
     }
 
-    let fault_handler_err = unsafe {
-        sel4_sys::seL4_TCB_SetFaultHandler(
-            tcb_copy_slot,
-            ep_slot,
-            sel4_sys::seL4_CapInitThreadCNode,
-            sel4_sys::seL4_CapInitThreadVSpace,
-        )
-    };
-    if let Err(code) = crate::bootstrap::ktry("tcb.fault_handler", fault_handler_err as i32) {
-        let mut line = heapless::String::<160>::new();
-        let _ = write!(
-            line,
-            "failed to install fault handler: {} ({})",
-            code,
-            error_name(fault_handler_err)
-        );
-        console.writeln_prefixed(line.as_str());
-        panic!(
-            "seL4_TCB_SetFaultHandler failed: {} ({})",
-            code,
-            error_name(fault_handler_err)
-        );
+    if ep_slot != sel4_sys::seL4_CapNull {
+        let fault_handler_err = unsafe {
+            sel4_sys::seL4_TCB_SetFaultHandler(
+                tcb_copy_slot,
+                ep_slot,
+                sel4_sys::seL4_CapInitThreadCNode,
+                sel4_sys::seL4_CapInitThreadVSpace,
+            )
+        };
+
+        if fault_handler_err != sel4_sys::seL4_Error::seL4_NoError as sel4_sys::seL4_Error {
+            let mut line = heapless::String::<200>::new();
+            let _ = write!(
+                line,
+                "[boot] failed to install fault handler: {} ({}) — continuing without custom fault handler",
+                fault_handler_err as sel4_sys::seL4_Word,
+                error_name(fault_handler_err)
+            );
+            console.writeln_prefixed(line.as_str());
+        } else {
+            log::info!(
+                target: "root_task::bootstrap",
+                "[boot] fault handler installed tcb_slot=0x{slot:04x} ep=0x{ep:04x}",
+                slot = tcb_copy_slot,
+                ep = ep_slot
+            );
+        }
     } else {
-        log::info!(
-            "[tcb] fault handler installed tcb_slot=0x{slot:04x} ep=0x{ep:04x}",
-            slot = tcb_copy_slot,
+        log::warn!(
+            target: "root_task::bootstrap",
+            "[boot] skipping fault handler install: ep_slot is null (0x{ep:04x})",
             ep = ep_slot
         );
     }
