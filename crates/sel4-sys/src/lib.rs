@@ -779,7 +779,7 @@ mod imp {
     pub unsafe fn seL4_CNode_Delete(
         root: seL4_CNode,
         index: seL4_CPtr,
-        depth: seL4_Uint8,
+        depth: seL4_Word,
     ) -> seL4_Error {
         let msg = seL4_MessageInfo::new(SEL4_CNODE_DELETE, 0, 0, 2);
         let mut mr0 = index;
@@ -823,10 +823,10 @@ mod imp {
     pub unsafe fn seL4_CNode_Mint(
         dest_root: seL4_CNode,
         dest_index: seL4_Word,
-        dest_depth: seL4_Uint8,
+        dest_depth: seL4_Word,
         src_root: seL4_CNode,
         src_index: seL4_Word,
-        src_depth: seL4_Uint8,
+        src_depth: seL4_Word,
         rights: seL4_CapRights_t,
         badge: seL4_Word,
     ) -> seL4_Error {
@@ -849,10 +849,10 @@ mod imp {
     pub unsafe fn seL4_CNode_Copy(
         dest_root: seL4_CNode,
         dest_index: seL4_Word,
-        dest_depth: seL4_Uint8,
+        dest_depth: seL4_Word,
         src_root: seL4_CNode,
         src_index: seL4_Word,
-        src_depth: seL4_Uint8,
+        src_depth: seL4_Word,
         rights: seL4_CapRights_t,
     ) -> seL4_Error {
         let msg = seL4_MessageInfo::new(SEL4_CNODE_COPY, 0, 1, 5);
@@ -1225,7 +1225,7 @@ mod host_stub {
     pub unsafe fn seL4_CNode_Delete(
         _root: seL4_CNode,
         _index: seL4_CPtr,
-        _depth: seL4_Uint8,
+        _depth: seL4_Word,
     ) -> seL4_Error {
         unsupported();
     }
@@ -1234,10 +1234,10 @@ mod host_stub {
     pub unsafe fn seL4_CNode_Move(
         _dest_root: seL4_CNode,
         _dest_index: seL4_CPtr,
-        _dest_depth: seL4_Uint8,
+        _dest_depth: seL4_Word,
         _src_root: seL4_CNode,
         _src_index: seL4_CPtr,
-        _src_depth: seL4_Uint8,
+        _src_depth: seL4_Word,
     ) -> seL4_Error {
         unsupported();
     }
@@ -1246,10 +1246,10 @@ mod host_stub {
     pub unsafe fn seL4_CNode_Mint(
         _dest_root: seL4_CNode,
         _dest_index: seL4_CPtr,
-        _dest_depth: seL4_Uint8,
+        _dest_depth: seL4_Word,
         _src_root: seL4_CNode,
         _src_index: seL4_CPtr,
-        _src_depth: seL4_Uint8,
+        _src_depth: seL4_Word,
         _rights: seL4_CapRights_t,
         _badge: seL4_Word,
     ) -> seL4_Error {
@@ -1260,10 +1260,10 @@ mod host_stub {
     pub unsafe fn seL4_CNode_Copy(
         _dest_root: seL4_CNode,
         _dest_index: seL4_CPtr,
-        _dest_depth: seL4_Uint8,
+        _dest_depth: seL4_Word,
         _src_root: seL4_CNode,
         _src_index: seL4_CPtr,
-        _src_depth: seL4_Uint8,
+        _src_depth: seL4_Word,
         _rights: seL4_CapRights_t,
     ) -> seL4_Error {
         unsupported();
