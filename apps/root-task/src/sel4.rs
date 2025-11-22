@@ -101,36 +101,7 @@ pub const fn canonical_cnode_depth(init_bits: u8, word_bits: u8) -> u8 {
 
 #[inline(always)]
 pub fn canonical_cnode_bits(bi: &sel4_sys::seL4_BootInfo) -> u8 {
-    let raw_bits = bi.initThreadCNodeSizeBits as u8;
-    let empty_end = bi.empty.end as usize;
-    let inferred_bits = if empty_end > 0 {
-        let bits = usize::BITS - (empty_end.saturating_sub(1)).leading_zeros();
-        cmp::min(bits as u8, sel4_sys::seL4_WordBits as u8)
-    } else {
-        0
-    };
-
-    let init_bits = match (inferred_bits, raw_bits) {
-        (bits, _) if bits > 0 => bits,
-        (_, bits) if bits > 0 => bits,
-        _ => 13,
-    };
-
-    if raw_bits == 0 {
-        log::warn!(
-            target: "root_task::bootstrap::cspace",
-            "[cspace] initThreadCNodeSizeBits=0; using initBits={} for CSpace width",
-            init_bits
-        );
-    } else if raw_bits != init_bits {
-        log::warn!(
-            target: "root_task::bootstrap::cspace",
-            "[cspace] initThreadCNodeSizeBits mismatch: raw={} initBits={}; using initBits",
-            raw_bits,
-            init_bits
-        );
-    }
-
+    let init_bits = bi.initThreadCNodeSizeBits as u8;
     assert!(
         init_bits as usize <= sel4_sys::seL4_WordBits as usize,
         "initBits must not exceed word width"
