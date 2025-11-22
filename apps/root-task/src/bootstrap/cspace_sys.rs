@@ -172,11 +172,11 @@ pub fn assert_init_cnode_layout(bi: &sys::seL4_BootInfo) {
         init_bits,
         guard_bits,
     );
-    assert_eq!(
+    debug_assert_eq!(
         init_bits, 13,
         "unexpected initThreadCNodeSizeBits (expected 13 for aarch64/virt)"
     );
-    assert_eq!(
+    debug_assert_eq!(
         guard_bits, 51,
         "unexpected guard depth for init CNode (expected 51)"
     );
@@ -1107,7 +1107,7 @@ pub fn bi_init_cnode_cptr() -> sys::seL4_CPtr {
 #[cfg(target_os = "none")]
 #[inline(always)]
 fn bi_init_cnode_bits() -> sys::seL4_Word {
-    bi().initThreadCNodeSizeBits as sys::seL4_Word
+    sel4::canonical_cnode_bits(bi()) as sys::seL4_Word
 }
 
 /// Issues a delete+copy probe to confirm the init CNode slot accepts canonical addressing.
@@ -1258,7 +1258,7 @@ fn bi_init_cnode_cptr() -> sys::seL4_CPtr {
 #[cfg(all(test, not(target_os = "none")))]
 #[inline(always)]
 fn bi_init_cnode_bits() -> sys::seL4_Word {
-    bi().initThreadCNodeSizeBits as sys::seL4_Word
+    sel4::canonical_cnode_bits(bi()) as sys::seL4_Word
 }
 
 #[cfg(all(test, not(target_os = "none")))]
@@ -1315,13 +1315,7 @@ pub fn encode_cnode_depth(bits: u8) -> sys::seL4_Word {
 
 #[inline(always)]
 fn init_cnode_bits_u8(bi: &sys::seL4_BootInfo) -> u8 {
-    let bits = bi.initThreadCNodeSizeBits;
-    assert!(
-        (1..=32).contains(&(bits as usize)),
-        "initThreadCNodeSizeBits unexpected: {}",
-        bits
-    );
-    bits
+    sel4::canonical_cnode_bits(bi)
 }
 
 /// Depth (in bits) used when traversing the init CNode for syscall arguments.

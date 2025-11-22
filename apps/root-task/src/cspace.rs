@@ -18,7 +18,7 @@ impl CSpace {
     pub fn from_bootinfo(bi: &seL4_BootInfo) -> Self {
         Self {
             root: bi.init_cnode_cap(),
-            bits: bi.initThreadCNodeSizeBits as u8,
+            bits: bi.init_cnode_bits() as u8,
             next_free: bi.empty.start,
         }
     }

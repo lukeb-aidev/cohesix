@@ -188,11 +188,9 @@ impl InitCNode {
     #[must_use]
     pub fn from_bootinfo(bi: &seL4_BootInfo) -> Self {
         let root = seL4_CapInitThreadCNode;
-        let depth =
-            sel4::canonical_cnode_depth(bi.initThreadCNodeSizeBits as u8, sel4::WORD_BITS as u8)
-                as seL4_Word;
+        let bits = sel4::canonical_cnode_bits(bi);
+        let depth = sel4::canonical_cnode_depth(bits, sel4::WORD_BITS as u8) as seL4_Word;
         let index = 0;
-        let bits = bi.initThreadCNodeSizeBits as u8;
         let empty = SlotRange::new(bi.empty.start as seL4_Word, bi.empty.end as seL4_Word);
         Self {
             path: CNodePath::new(root, index, depth),
