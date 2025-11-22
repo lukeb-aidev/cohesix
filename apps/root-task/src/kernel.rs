@@ -845,7 +845,7 @@ fn bootstrap<P: Platform>(
             Ok(view) => ipc_view = Some(view),
             Err(code) => {
                 let err = code as sel4_sys::seL4_Error;
-                if err == sel4_sys::seL4_Error::seL4_IllegalOperation {
+                if err == sel4_sys::seL4_IllegalOperation {
                     log::warn!(
                         "[boot] ipc buffer re-bind not accepted by kernel; using boot-provided mapping only: err={} ({})",
                         err,
