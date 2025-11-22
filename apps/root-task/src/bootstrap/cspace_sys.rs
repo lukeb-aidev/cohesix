@@ -29,7 +29,7 @@ pub fn root_cnode() -> seL4_CNode {
 
 #[inline(always)]
 pub fn path_depth(_bi: &sys::seL4_BootInfo) -> u8 {
-    sel4::canonical_cnode_depth(bi_init_cnode_bits() as u8, sel4::word_bits() as u8)
+    bits_as_u8(bi_init_cnode_bits() as usize)
 }
 
 #[inline(always)]
@@ -289,10 +289,10 @@ pub fn encode_slot(slot: u64, bits: u8) -> u64 {
 
 #[inline(always)]
 pub fn cnode_depth(_bi: &sys::seL4_BootInfo, style: TupleStyle) -> sys::seL4_Word {
-    match style {
-        TupleStyle::Raw => sel4::init_cnode_depth(_bi) as sys::seL4_Word,
-        TupleStyle::GuardEncoded => sel4::init_cnode_depth(_bi) as sys::seL4_Word,
-    }
+    let _ = style;
+    let bits = init_cnode_bits_u8(_bi) as sys::seL4_Word;
+    debug_assert!(bits <= depth_wordbits() as sys::seL4_Word);
+    bits
 }
 
 #[inline(always)]

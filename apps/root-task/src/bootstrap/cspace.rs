@@ -250,9 +250,12 @@ pub fn root_cnode_path(
 
 #[inline(always)]
 pub fn guard_root_path(init_cnode_bits: u8, index: seL4_Word, depth: seL4_Word, offset: seL4_Word) {
-    let expected_depth = sel4::canonical_cnode_depth(init_cnode_bits, sel4::WORD_BITS as u8)
-        as seL4_Word;
-    assert_eq!(depth, expected_depth, "depth must equal canonical init cnode depth");
+    let expected_depth =
+        sel4::canonical_cnode_depth(init_cnode_bits, sel4::WORD_BITS as u8) as seL4_Word;
+    assert_eq!(
+        depth, expected_depth,
+        "depth must equal canonical init cnode depth"
+    );
     assert_eq!(
         index, 0,
         "node index must be zero for init CNode direct path"

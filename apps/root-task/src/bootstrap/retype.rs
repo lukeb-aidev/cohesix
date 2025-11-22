@@ -15,11 +15,10 @@ use crate::bootstrap::log::force_uart_line;
 use crate::bootstrap::{boot_tracer, BootPhase, UntypedSelection};
 #[cfg(feature = "canonical_cspace")]
 use crate::sel4::pick_smallest_non_device_untyped;
-use crate::sel4::{
-    canonical_cnode_depth, error_name, init_cnode_index_word, word_bits, PAGE_BITS,
-    PAGE_TABLE_BITS,
-};
 use crate::sel4::BootInfoView;
+use crate::sel4::{
+    canonical_cnode_depth, error_name, init_cnode_index_word, word_bits, PAGE_BITS, PAGE_TABLE_BITS,
+};
 #[cfg(feature = "canonical_cspace")]
 use crate::sel4_view;
 #[cfg(any(test, feature = "ffi_shim"))]
@@ -40,10 +39,23 @@ pub struct RetypePlan {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RetypePlanError {
     RootMismatch,
-    DepthMismatch { provided: u8, expected: u8 },
-    IndexMismatch { provided: sys::seL4_Word },
-    DestOutOfRange { offset: sys::seL4_Word, start: sys::seL4_Word, end: sys::seL4_Word },
-    DestSpanOverflow { offset: sys::seL4_Word, count: sys::seL4_Word, end: sys::seL4_Word },
+    DepthMismatch {
+        provided: u8,
+        expected: u8,
+    },
+    IndexMismatch {
+        provided: sys::seL4_Word,
+    },
+    DestOutOfRange {
+        offset: sys::seL4_Word,
+        start: sys::seL4_Word,
+        end: sys::seL4_Word,
+    },
+    DestSpanOverflow {
+        offset: sys::seL4_Word,
+        count: sys::seL4_Word,
+        end: sys::seL4_Word,
+    },
 }
 
 impl RetypePlan {
