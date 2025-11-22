@@ -835,7 +835,7 @@ impl CSpaceCtx {
             init = init_cnode_bits,
         );
         // Init-root invocations must supply the bootinfo-advertised guard depth.
-        let invocation_depth_bits = sel4::word_bits() as u8;
+        let invocation_depth_bits = boot_bits;
         let (first_free, last_free) = bi.init_cnode_empty_range();
         assert!(
             first_free < last_free,
@@ -968,12 +968,13 @@ impl CSpaceCtx {
 
     fn log_direct_init_path(&self, dst_slot: sel4::seL4_CPtr) {
         let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
-        let guard_depth = self.dest.root_bits;
+        let guard_depth: u8 = 0;
+        let root_bits = self.dest.root_bits;
         if write!(
             &mut line,
             "[retype] path=direct:init-cnode dest=0x{dst_slot:04x} guard_depth={} root_bits={} window=[0x{start:04x}..0x{end:04x})",
             guard_depth,
-            self.dest.root_bits,
+            root_bits,
             start = self.dest.empty_start,
             end = self.dest.empty_end,
         )

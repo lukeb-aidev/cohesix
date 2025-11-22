@@ -1185,10 +1185,20 @@ pub fn preflight_init_cnode_writable(probe_slot: sys::seL4_CPtr) -> Result<(), P
 
     #[cfg(target_os = "none")]
     {
-        let style = tuple_style();
-        let depth = cnode_depth(bi(), style) as u8;
-        let dst_index = enc_index(probe_slot as sys::seL4_Word, bi(), style);
+        let bits = bi_init_cnode_bits();
+        let depth = bits;
+        let shift = depth_wordbits() as sys::seL4_Word - depth;
+        let dst_index = (probe_slot as sys::seL4_Word) << shift;
         let src_index = CANONICAL_INIT_CNODE_SLOT as sys::seL4_CPtr;
+        ::log::info!(
+            target: "root_task::bootstrap::cspace_sys",
+            "[cnode.enc] style={} slot=0x{slot:04x} bits={} shift={} encoded=0x{encoded:016x}",
+            tuple_style_label(TupleStyle::Raw),
+            slot = probe_slot,
+            bits = bits,
+            shift = shift,
+            encoded = dst_index,
+        );
         let err = unsafe {
             sys::seL4_CNode_Mint(
                 root,
@@ -1203,11 +1213,12 @@ pub fn preflight_init_cnode_writable(probe_slot: sys::seL4_CPtr) -> Result<(), P
         };
         if err != sys::seL4_NoError {
             ::log::error!(
-                "preflight failed: Mint root=0x{root:04x} slot=0x{slot:04x} depth=wordBits({depth}) err={} ({})",
+                target: "root_task::bootstrap::cspace_sys",
+                "preflight failed: Mint root=0x{root:04x} slot=0x{slot:04x} depth={} err={} ({})",
+                depth,
                 err,
                 sel4::error_name(err),
                 slot = probe_slot,
-                depth = depth,
                 root = root,
             );
             return Err(PreflightError::Probe(err));
@@ -1217,11 +1228,12 @@ pub fn preflight_init_cnode_writable(probe_slot: sys::seL4_CPtr) -> Result<(), P
             unsafe { sys::seL4_CNode_Delete(root, dst_index as sys::seL4_CPtr, depth) };
         if delete_err != sys::seL4_NoError {
             ::log::error!(
-                "preflight cleanup failed: Delete root=0x{root:04x} slot=0x{slot:04x} depth=wordBits({depth}) err={} ({})",
+                target: "root_task::bootstrap::cspace_sys",
+                "preflight cleanup failed: Delete root=0x{root:04x} slot=0x{slot:04x} depth={} err={} ({})",
+                depth,
                 delete_err,
                 sel4::error_name(delete_err),
                 slot = probe_slot,
-                depth = depth,
                 root = root,
             );
             return Err(PreflightError::Cleanup(delete_err));
