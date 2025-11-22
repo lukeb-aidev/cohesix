@@ -147,7 +147,7 @@ pub fn traced_retype_into_slot(
                 size_bits as seL4_Word,
                 dst_root,
                 node_index,
-                node_depth,
+                u64::from(node_depth),
                 node_offset,
                 1,
             )

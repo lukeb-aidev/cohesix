@@ -2350,7 +2350,7 @@ impl<'a> KernelEnv<'a> {
                     trace.object_size_bits,
                     trace.cnode_root,
                     trace.node_index,
-                    trace.cnode_depth as u8,
+                    u64::from(trace.cnode_depth as u8),
                     trace.dest_offset,
                     1,
                 )
@@ -2398,7 +2398,7 @@ impl<'a> KernelEnv<'a> {
                     trace.object_size_bits,
                     trace.cnode_root,
                     trace.node_index,
-                    trace.cnode_depth as u8,
+                    u64::from(trace.cnode_depth as u8),
                     trace.dest_offset,
                     1,
                 )

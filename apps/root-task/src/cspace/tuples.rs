@@ -95,7 +95,7 @@ pub fn retype_endpoint_into_slot(ut: seL4_CPtr, slot: seL4_Word, rt: &RetypeTupl
             0,
             rt.node_root,
             rt.node_index,
-            rt.node_depth,
+            u64::from(rt.node_depth),
             encoded_slot as seL4_CPtr,
             1,
         )

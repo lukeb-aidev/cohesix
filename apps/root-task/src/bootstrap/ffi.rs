@@ -66,7 +66,7 @@ pub fn raw_untyped_retype(
             size_bits,
             dest_root,
             node_index,
-            node_depth,
+            u64::from(node_depth),
             node_offset,
             num_objects,
         )

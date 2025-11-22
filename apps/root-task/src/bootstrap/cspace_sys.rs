@@ -590,17 +590,17 @@ pub fn retype_endpoint_raw(
 
     #[cfg(target_os = "none")]
     unsafe {
-        sys::seL4_Untyped_Retype(
-            ut,
-            sys::seL4_ObjectType::seL4_EndpointObject as sys::seL4_Word,
-            0,
-            canon_root,
-            0,
-            0u8,
-            node_offset,
-            1,
-        )
-    }
+            sys::seL4_Untyped_Retype(
+                ut,
+                sys::seL4_ObjectType::seL4_EndpointObject as sys::seL4_Word,
+                0,
+                canon_root,
+                0,
+                0u64,
+                node_offset,
+                1,
+            )
+        }
 
     #[cfg(not(target_os = "none"))]
     {
@@ -762,7 +762,7 @@ pub fn untyped_retype_encoded(
         let obj_type_word =
             sys::seL4_Word::try_from(obj_type).expect("object type must fit in seL4_Word");
         let size_bits_word = sys::seL4_Word::from(size_bits);
-        let depth_word = depth as u8;
+        let depth_word = sys::seL4_Word::from(depth);
         let index_word = sys::seL4_Word::try_from(index).expect("index must fit in seL4_Word");
         let offset_word = sys::seL4_Word::try_from(offset).expect("slot must fit in seL4_Word");
         let num_objects_word =
@@ -1851,7 +1851,7 @@ pub mod canonical {
                 sz_bits as sys::seL4_Word,
                 root,
                 idx,
-                depth_bits,
+                sys::seL4_Word::from(depth_bits),
                 offset,
                 1,
             )
@@ -2208,7 +2208,7 @@ pub fn untyped_retype_into_init_root(
                 size_bits,
                 args.root,
                 args.node_index,
-                node_depth_bits,
+                sys::seL4_Word::from(node_depth_bits),
                 args.dest_offset,
                 num_objects,
             )
@@ -2266,7 +2266,7 @@ pub fn untyped_retype_into_cnode(
                 size_bits,
                 dest_root,
                 dst_slot as sys::seL4_Word,
-                depth_bits,
+                sys::seL4_Word::from(depth_bits),
                 0,
                 1,
             )
