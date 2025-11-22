@@ -2069,6 +2069,17 @@ impl<'a> KernelEnv<'a> {
         let buffer_word = sel4_sys::seL4_Word::try_from(buffer_vaddr)
             .expect("IPC buffer pointer must fit in seL4_Word");
 
+        #[cfg(target_os = "none")]
+        {
+            let cap_ty = unsafe { sel4_sys::seL4_DebugCapIdentify(buffer_frame) };
+            ::log::info!(
+                "[ipcbuf] capid frame=0x{buffer_frame:04x} ty=0x{cap_ty:08x} vaddr=0x{buffer_vaddr:08x}",
+                buffer_frame = buffer_frame,
+                cap_ty = cap_ty,
+                buffer_vaddr = buffer_vaddr,
+            );
+        }
+
         let result = unsafe { sel4_sys::seL4_TCB_SetIPCBuffer(tcb_cap, buffer_word, buffer_frame) };
 
         if result == seL4_NoError {
