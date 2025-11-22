@@ -29,7 +29,7 @@ pub fn root_cnode() -> seL4_CNode {
 
 #[inline(always)]
 pub fn path_depth(_bi: &sys::seL4_BootInfo) -> u8 {
-    bits_as_u8(bi_init_cnode_bits() as usize)
+    depth_wordbits()
 }
 
 #[inline(always)]
@@ -290,9 +290,7 @@ pub fn encode_slot(slot: u64, bits: u8) -> u64 {
 #[inline(always)]
 pub fn cnode_depth(_bi: &sys::seL4_BootInfo, style: TupleStyle) -> sys::seL4_Word {
     let _ = style;
-    let bits = init_cnode_bits_u8(_bi) as sys::seL4_Word;
-    debug_assert!(bits <= depth_wordbits() as sys::seL4_Word);
-    bits
+    depth_wordbits() as sys::seL4_Word
 }
 
 #[inline(always)]
@@ -303,10 +301,13 @@ pub fn enc_index(
 ) -> sys::seL4_Word {
     let init_bits = init_cnode_bits_u8(bi);
     check_slot_in_range(init_bits, slot as sys::seL4_CPtr);
-    let shift = depth_wordbits() - init_bits;
     let encoded = match style {
         TupleStyle::Raw => slot,
         TupleStyle::GuardEncoded => encode_slot(slot as u64, init_bits) as sys::seL4_Word,
+    };
+    let shift = match style {
+        TupleStyle::Raw => 0,
+        TupleStyle::GuardEncoded => depth_wordbits() - init_bits,
     };
     ::log::info!(
         "[cnode.enc] style={} slot=0x{slot:04x} bits={bits} shift={shift} encoded=0x{encoded:016x}",
@@ -1227,9 +1228,8 @@ pub fn preflight_init_cnode_writable(probe_slot: sys::seL4_CPtr) -> Result<(), P
             return Err(PreflightError::Probe(err));
         }
 
-        let delete_err = unsafe {
-            sys::seL4_CNode_Delete(root, dst_index as sys::seL4_CPtr, depth_u8)
-        };
+        let delete_err =
+            unsafe { sys::seL4_CNode_Delete(root, dst_index as sys::seL4_CPtr, depth_u8) };
         if delete_err != sys::seL4_NoError {
             ::log::error!(
                 target: "root_task::bootstrap::cspace_sys",
@@ -1337,7 +1337,7 @@ fn init_cnode_bits_u8(bi: &sys::seL4_BootInfo) -> u8 {
 /// Depth (in bits) used when traversing the init CNode for syscall arguments.
 #[inline(always)]
 fn init_cspace_depth_words(bi: &sys::seL4_BootInfo) -> sys::seL4_Word {
-    cnode_depth(bi, tuple_style())
+    depth_wordbits() as sys::seL4_Word
 }
 
 #[inline(always)]
