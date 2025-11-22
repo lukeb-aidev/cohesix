@@ -179,7 +179,7 @@ pub fn map_pl011_smallpage(
             12,
             cnode.node_root,
             cnode.node_index,
-            cnode.node_depth,
+            u64::from(cnode.node_depth),
             page_slot as seL4_CPtr,
             1,
         )
