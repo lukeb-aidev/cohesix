@@ -10,6 +10,7 @@ use crate::sel4::KernelEnv;
 pub fn install_ipc_buffer(
     env: &mut KernelEnv<'_>,
     tcb_cap: sel4_sys::seL4_CPtr,
+    ipc_frame: sel4_sys::seL4_CPtr,
     ipc_vaddr: usize,
 ) -> Result<IpcBufView, i32> {
     bp!("ipcbuf.begin");
@@ -18,7 +19,20 @@ pub fn install_ipc_buffer(
         ipc_vaddr = ipc_vaddr,
     );
 
-    match env.bind_ipc_buffer(tcb_cap, ipc_vaddr) {
+    env.log_ipc_buffer_cap(ipc_frame, ipc_vaddr);
+
+    if tcb_cap == sel4_sys::seL4_CapInitThreadTCB
+        && ipc_frame == sel4_sys::seL4_CapInitThreadIPCBuffer
+    {
+        ::log::info!(
+            "[boot] using boot-provided IPC buffer without re-binding: tcb=0x{tcb_cap:04x} frame=0x{ipc_frame:04x} vaddr=0x{ipc_vaddr:08x}"
+        );
+        let view = env.record_boot_ipc_buffer(ipc_frame, ipc_vaddr);
+        bp!("ipcbuf.done");
+        return Ok(view);
+    }
+
+    match env.bind_ipc_buffer(tcb_cap, ipc_frame, ipc_vaddr) {
         Ok(view) => {
             bp!("tcb.set_ipcbuf");
             bp!("ipcbuf.done");

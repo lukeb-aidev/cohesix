@@ -715,6 +715,7 @@ fn bootstrap<P: Platform>(
 
     #[cfg_attr(feature = "bootstrap-minimal", allow(unused_variables))]
     let ipc_vaddr = ipc_buffer_ptr.map(|ptr| ptr.as_ptr() as usize);
+    let ipc_frame = sel4_sys::seL4_CapInitThreadIPCBuffer;
 
     #[cfg(feature = "bootstrap-minimal")]
     {
@@ -834,27 +835,40 @@ fn bootstrap<P: Platform>(
     };
 
     if let Some(ipc_vaddr) = ipc_vaddr {
+        let mut ipc_view: Option<crate::bootstrap::ipcbuf_view::IpcBufView> = None;
         match ipcbuf::install_ipc_buffer(
             &mut kernel_env,
             sel4_sys::seL4_CapInitThreadTCB,
+            ipc_frame,
             ipc_vaddr,
         ) {
-            Ok(_) => {
-                let mut msg = heapless::String::<112>::new();
-                let _ = write!(
-                    msg,
-                    "[boot] ipc buffer mapped @ 0x{ipc_vaddr:08x}",
-                    ipc_vaddr = ipc_vaddr,
-                );
-                console.writeln_prefixed(msg.as_str());
-            }
+            Ok(view) => ipc_view = Some(view),
             Err(code) => {
-                panic!(
-                    "ipc buffer install failed: {} ({})",
-                    code,
-                    error_name(code as sel4_sys::seL4_Error)
-                );
+                let err = code as sel4_sys::seL4_Error;
+                if err == sel4_sys::seL4_Error::seL4_IllegalOperation {
+                    log::warn!(
+                        "[boot] ipc buffer re-bind not accepted by kernel; using boot-provided mapping only: err={} ({})",
+                        err,
+                        error_name(err)
+                    );
+                    ipc_view = kernel_env.ipc_buffer_view();
+                    if ipc_view.is_none() {
+                        ipc_view = Some(kernel_env.record_boot_ipc_buffer(ipc_frame, ipc_vaddr));
+                    }
+                } else {
+                    panic!("ipc buffer install failed: {} ({})", code, error_name(err));
+                }
             }
+        }
+
+        if let Some(view) = ipc_view {
+            let mut msg = heapless::String::<112>::new();
+            let _ = write!(
+                msg,
+                "[boot] ipc buffer mapped @ 0x{vaddr:08x}",
+                vaddr = view.vaddr(),
+            );
+            console.writeln_prefixed(msg.as_str());
         }
     } else {
         console.writeln_prefixed("bootinfo.ipcBuffer missing");

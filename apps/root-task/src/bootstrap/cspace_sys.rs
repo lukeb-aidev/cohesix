@@ -590,17 +590,17 @@ pub fn retype_endpoint_raw(
 
     #[cfg(target_os = "none")]
     unsafe {
-            sys::seL4_Untyped_Retype(
-                ut,
-                sys::seL4_ObjectType::seL4_EndpointObject as sys::seL4_Word,
-                0,
-                canon_root,
-                0,
-                0u64,
-                node_offset,
-                1,
-            )
-        }
+        sys::seL4_Untyped_Retype(
+            ut,
+            sys::seL4_ObjectType::seL4_EndpointObject as sys::seL4_Word,
+            0,
+            canon_root,
+            0,
+            0u64,
+            node_offset,
+            1,
+        )
+    }
 
     #[cfg(not(target_os = "none"))]
     {
@@ -762,8 +762,7 @@ pub fn untyped_retype_encoded(
         let obj_type_word =
             sys::seL4_Word::try_from(obj_type).expect("object type must fit in seL4_Word");
         let size_bits_word = sys::seL4_Word::from(size_bits);
-        let depth_word =
-            sys::seL4_Word::try_from(depth).expect("depth must fit in seL4_Word");
+        let depth_word = sys::seL4_Word::try_from(depth).expect("depth must fit in seL4_Word");
         let index_word = sys::seL4_Word::try_from(index).expect("index must fit in seL4_Word");
         let offset_word = sys::seL4_Word::try_from(offset).expect("slot must fit in seL4_Word");
         let num_objects_word =

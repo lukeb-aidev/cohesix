@@ -2,11 +2,14 @@
 #![allow(unsafe_code)]
 
 use core::slice;
+use sel4_sys::seL4_CPtr;
 
 /// Immutable view over the single-page seL4 IPC buffer.
 #[derive(Clone, Copy)]
 pub struct IpcBufView {
     base: *const u8,
+    frame: seL4_CPtr,
+    vaddr: usize,
 }
 
 impl IpcBufView {
@@ -21,8 +24,24 @@ impl IpcBufView {
     ///
     /// The caller must guarantee that `base` points to the first byte of the
     /// mapped IPC buffer page and remains valid for the lifetime of the view.
-    pub const unsafe fn new(base: *const u8) -> Self {
-        Self { base }
+    pub const unsafe fn new(base: *const u8, frame: seL4_CPtr) -> Self {
+        Self {
+            base,
+            frame,
+            vaddr: base as usize,
+        }
+    }
+
+    /// Returns the frame capability backing this IPC buffer mapping.
+    #[inline(always)]
+    pub const fn frame(&self) -> seL4_CPtr {
+        self.frame
+    }
+
+    /// Returns the virtual address of the IPC buffer mapping.
+    #[inline(always)]
+    pub const fn vaddr(&self) -> usize {
+        self.vaddr
     }
 
     /// Returns the IPC buffer contents as a byte slice capped to a single page.
