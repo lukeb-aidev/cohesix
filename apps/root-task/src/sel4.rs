@@ -2014,6 +2014,15 @@ impl<'a> KernelEnv<'a> {
         self.ipcbuf_view
     }
 
+    /// Records the boot-provided IPC buffer mapping for the init thread without
+    /// invoking a TCB rebind.
+    pub fn record_boot_ipc_buffer(&mut self, frame: seL4_CPtr, vaddr: usize) -> IpcBufView {
+        debug_assert_ne!(vaddr, 0, "IPC buffer pointer must be non-null");
+        let view = unsafe { IpcBufView::new(vaddr as *const u8, frame) };
+        self.ipcbuf_view = Some(view);
+        view
+    }
+
     /// Marks a prefix of the bootinfo empty slot region as consumed by early bootstrap code.
     pub fn consume_bootstrap_slots(&mut self, slots: usize) {
         if slots == 0 {
@@ -2177,20 +2186,11 @@ impl<'a> KernelEnv<'a> {
         res
     }
 
-    /// Binds the supplied IPC buffer frame to the provided TCB capability.
-    pub fn bind_ipc_buffer(
-        &mut self,
-        tcb_cap: seL4_CPtr,
+    pub(crate) fn log_ipc_buffer_cap(
+        &self,
+        buffer_frame: seL4_CPtr,
         buffer_vaddr: usize,
-    ) -> Result<IpcBufView, seL4_Error> {
-        debug_assert_ne!(buffer_vaddr, 0, "IPC buffer pointer must be non-null");
-        if self.ipcbuf_trace {
-            crate::bp!("ipcbuf.tcb.bind.begin");
-        }
-
-        let buffer_frame = seL4_CapInitThreadIPCBuffer;
-        let buffer_word = sel4_sys::seL4_Word::try_from(buffer_vaddr)
-            .expect("IPC buffer pointer must fit in seL4_Word");
+    ) -> Option<CapTag> {
         #[cfg(target_os = "none")]
         let cap_tag_raw = unsafe { sel4_sys::seL4_DebugCapIdentify(buffer_frame) };
         #[cfg(not(target_os = "none"))]
@@ -2213,6 +2213,25 @@ impl<'a> KernelEnv<'a> {
             );
         }
 
+        cap_tag
+    }
+
+    /// Binds the supplied IPC buffer frame to the provided TCB capability.
+    pub fn bind_ipc_buffer(
+        &mut self,
+        tcb_cap: seL4_CPtr,
+        buffer_frame: seL4_CPtr,
+        buffer_vaddr: usize,
+    ) -> Result<IpcBufView, seL4_Error> {
+        debug_assert_ne!(buffer_vaddr, 0, "IPC buffer pointer must be non-null");
+        if self.ipcbuf_trace {
+            crate::bp!("ipcbuf.tcb.bind.begin");
+        }
+
+        let _cap_tag = self.log_ipc_buffer_cap(buffer_frame, buffer_vaddr);
+        let buffer_word = sel4_sys::seL4_Word::try_from(buffer_vaddr)
+            .expect("IPC buffer pointer must fit in seL4_Word");
+
         ::log::info!(
             "[ffi] seL4_TCB_SetIPCBuffer service=0x{tcb_cap:04x} buffer=0x{buffer_word:08x} frame=0x{buffer_frame:04x}",
             tcb_cap = tcb_cap,
@@ -2229,7 +2248,7 @@ impl<'a> KernelEnv<'a> {
             unsafe {
                 sel4_sys::seL4_SetIPCBuffer(buffer_vaddr as *mut sel4_sys::seL4_IPCBuffer);
             }
-            let view = unsafe { IpcBufView::new(buffer_vaddr as *const u8) };
+            let view = unsafe { IpcBufView::new(buffer_vaddr as *const u8, buffer_frame) };
             self.ipcbuf_view = Some(view);
             unsafe {
                 let base = buffer_vaddr as *mut u8;
