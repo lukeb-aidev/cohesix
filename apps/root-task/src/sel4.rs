@@ -2207,12 +2207,18 @@ impl<'a> KernelEnv<'a> {
         );
 
         if !matches!(cap_tag, Some(CapTag::Frame)) {
-            ::log::error!(
-                "[ipcbuf] frame cap type mismatch: got=0x{cap_tag_raw:08x} ({tag}) expected=frame",
+            ::log::warn!(
+                "[ipcbuf] unexpected cap type for IPC buffer: 0x{cap_tag_raw:08x} ({tag})",
                 tag = cap_tag.map(CapTag::name).unwrap_or("unknown"),
             );
-            return Err(sel4_sys::seL4_IllegalOperation);
         }
+
+        ::log::info!(
+            "[ffi] seL4_TCB_SetIPCBuffer service=0x{tcb_cap:04x} buffer=0x{buffer_word:08x} frame=0x{buffer_frame:04x}",
+            tcb_cap = tcb_cap,
+            buffer_word = buffer_word,
+            buffer_frame = buffer_frame,
+        );
 
         let result = unsafe { sel4_sys::seL4_TCB_SetIPCBuffer(tcb_cap, buffer_word, buffer_frame) };
 

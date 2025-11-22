@@ -152,11 +152,11 @@ mod imp {
         }
     }
 
-    pub type seL4_CapRights_t = seL4_Word;
+    pub type seL4_CapRights_t = seL4_CapRights;
 
     #[inline(always)]
     pub const fn seL4_CapRights_to_word(rights: seL4_CapRights) -> seL4_CapRights_t {
-        rights.raw()
+        rights
     }
 
     pub const seL4_CapRights_ReadWrite: seL4_CapRights = seL4_CapRights::new(0, 0, 1, 1);
@@ -618,7 +618,7 @@ mod imp {
         size_bits: seL4_Word,
         root: seL4_CNode,
         node_index: seL4_Word,
-        node_depth: seL4_Uint8,
+        node_depth: seL4_Word,
         node_offset: seL4_Word,
         num_objects: seL4_Word,
     ) -> seL4_Error {
@@ -627,7 +627,7 @@ mod imp {
         let mut mr0 = objtype;
         let mut mr1 = size_bits;
         let mut mr2 = node_index;
-        let mut mr3 = node_depth as seL4_Word;
+        let mut mr3 = node_depth;
 
         seL4_SetCap(0, root);
         seL4_SetMR(4, node_offset);
@@ -645,7 +645,7 @@ mod imp {
         size_bits: u8,
         root: seL4_CNode,
         node_index: seL4_Word,
-        node_depth: seL4_Uint8,
+        node_depth: seL4_Word,
         node_offset: seL4_Word,
         num_objects: seL4_Word,
     ) -> seL4_Error {
@@ -827,7 +827,7 @@ mod imp {
         src_root: seL4_CNode,
         src_index: seL4_CPtr,
         src_depth: seL4_Uint8,
-        rights: seL4_CapRights,
+        rights: seL4_CapRights_t,
         badge: seL4_Word,
     ) -> seL4_Error {
         let msg = seL4_MessageInfo::new(SEL4_CNODE_MINT, 0, 1, 6);
@@ -861,7 +861,7 @@ mod imp {
         let mut mr2 = src_index;
         let mut mr3 = src_depth as seL4_Word;
         seL4_SetCap(0, src_root);
-        seL4_SetMR(4, rights);
+        seL4_SetMR(4, rights.raw());
 
         let info = seL4_CallWithMRs(dest_root, msg, &mut mr0, &mut mr1, &mut mr2, &mut mr3);
 
@@ -1223,7 +1223,7 @@ mod host_stub {
         _src_root: seL4_CNode,
         _src_index: seL4_CPtr,
         _src_depth: seL4_Uint8,
-        _rights: seL4_CapRights,
+        _rights: seL4_CapRights_t,
         _badge: seL4_Word,
     ) -> seL4_Error {
         unsupported();
@@ -1297,7 +1297,7 @@ mod host_stub {
         _size_bits: seL4_Word,
         _root: seL4_CNode,
         _node_index: seL4_Word,
-        _node_depth: seL4_Uint8,
+        _node_depth: seL4_Word,
         _node_offset: seL4_Word,
         _num_objects: seL4_Word,
     ) -> seL4_Error {
@@ -1311,7 +1311,7 @@ mod host_stub {
         size_bits: u8,
         root: seL4_CNode,
         node_index: seL4_Word,
-        node_depth: seL4_Uint8,
+        node_depth: seL4_Word,
         node_offset: seL4_Word,
         num_objects: seL4_Word,
     ) -> seL4_Error {
