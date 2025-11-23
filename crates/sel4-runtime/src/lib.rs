@@ -7,6 +7,15 @@ use core::ptr;
 
 use sel4_sys::seL4_BootInfo;
 
+#[cfg(target_arch = "aarch64")]
+#[repr(align(16))]
+struct TlsBaseCell(usize);
+
+#[cfg(target_arch = "aarch64")]
+#[no_mangle]
+#[used]
+static mut __tls_base: TlsBaseCell = TlsBaseCell(0);
+
 const STACK_BYTES: usize = 16 * 1024;
 
 #[allow(dead_code)]
