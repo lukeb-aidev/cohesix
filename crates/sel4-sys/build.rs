@@ -1,6 +1,7 @@
 // Author: Lukas Bower
 use std::env;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 const CONFIG_CANDIDATES: &[&str] = &[
@@ -35,6 +36,8 @@ fn main() {
     if let Some(true) = probe_config_flag(&build_dir, "CONFIG_KERNEL_MCS") {
         println!("cargo:rustc-cfg=sel4_config_kernel_mcs");
     }
+
+    generate_bindings(&build_dir);
 }
 
 fn probe_config_flag(root: &Path, flag: &str) -> Option<bool> {
@@ -117,4 +120,220 @@ fn parse_cmake_line(line: &str, flag: &str) -> Option<bool> {
         "OFF" | "FALSE" | "NO" | "0" => Some(false),
         _ => None,
     }
+}
+
+fn generate_bindings(build_dir: &Path) {
+    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    if target_os != "none" {
+        return;
+    }
+
+    let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
+    let shim_dir = out_dir.join("sel4_shim");
+    let shim_sel4 = shim_dir.join("sel4");
+    let shim_sel4_arch = shim_sel4.join("sel4_arch");
+    fs::create_dir_all(&shim_sel4_arch).expect("create shim include");
+
+    write_macros(&shim_sel4.join("macros.h"));
+    write_debug_assert(&shim_sel4.join("debug_assert.h"));
+    write_config(&shim_sel4.join("config.h"));
+    write_simple_types(&shim_sel4.join("simple_types.h"));
+    write_constants(&shim_sel4.join("constants.h"));
+    write_arch_constants(&shim_sel4_arch.join("constants.h"));
+    write_arch_types(&shim_sel4_arch.join("types.h"));
+    write_errors(&shim_sel4.join("errors.h"));
+    write_types(&shim_sel4.join("types.h"));
+    write_shared_types(&shim_sel4.join("shared_types.h"));
+    write_mode_types(&shim_sel4.join("mode"));
+
+    let wrapper = shim_dir.join("wrapper.h");
+    let mut wrapper_file = fs::File::create(&wrapper).expect("create wrapper");
+    writeln!(wrapper_file, "#include <interfaces/sel4_client.h>").unwrap();
+
+    let builder = bindgen::Builder::default()
+        .use_core()
+        .ctypes_prefix("core::ffi")
+        .header(wrapper.to_string_lossy())
+        .clang_arg(format!("-I{}", shim_dir.display()))
+        .clang_arg(format!("-I{}", build_dir.join("libsel4/include").display()))
+        .clang_arg(format!(
+            "-I{}",
+            build_dir
+                .join("libsel4/sel4_arch_include/aarch64")
+                .display()
+        ))
+        .clang_arg(format!(
+            "-I{}",
+            build_dir.join("libsel4/arch_include/arm").display()
+        ))
+        .clang_arg(format!(
+            "-I{}",
+            build_dir.join("libsel4/autoconf").display()
+        ))
+        .clang_arg(format!(
+            "-I{}",
+            build_dir.join("libsel4/gen_config").display()
+        ))
+        .clang_arg(format!(
+            "-I{}",
+            build_dir.join("kernel/gen_config").display()
+        ))
+        .generate_inline_functions(true)
+        .layout_tests(false)
+        .size_t_is_usize(true)
+        .allowlist_function("seL4_.*")
+        .allowlist_type("seL4_.*")
+        .allowlist_var("seL4_.*")
+        .blocklist_item("seL4_ARM_CB.*")
+        .blocklist_item("seL4_ARM_SID.*");
+
+    let bindings = builder.generate().expect("unable to generate bindings");
+    bindings
+        .write_to_file(out_dir.join("bindings.rs"))
+        .expect("write bindings");
+}
+
+fn write_macros(path: &Path) {
+    let mut file = fs::File::create(path).expect("create macros.h");
+    writeln!(file, "#pragma once").unwrap();
+    writeln!(file, "#define LIBSEL4_INLINE static inline").unwrap();
+    writeln!(file, "#define LIBSEL4_INLINE_FUNC static inline").unwrap();
+    writeln!(file, "#define LIBSEL4_INLINE_FUNC_WARN_UNUSED_RESULT static inline __attribute__((warn_unused_result))").unwrap();
+    writeln!(file, "#define LIBSEL4_INLINE_FUNC_DEPRECATED(msg) static inline __attribute__((deprecated(msg)))").unwrap();
+    writeln!(
+        file,
+        "#define LIBSEL4_WARN_UNUSED_RESULT __attribute__((warn_unused_result))"
+    )
+    .unwrap();
+    writeln!(
+        file,
+        "#define LIBSEL4_DEPRECATED(msg) __attribute__((deprecated(msg)))"
+    )
+    .unwrap();
+    writeln!(file, "#define LIBSEL4_ALIGN(x) __attribute__((aligned(x)))").unwrap();
+    writeln!(file, "#define LIBSEL4_BIT(x) (1ull << (x))").unwrap();
+    writeln!(
+        file,
+        "#define SEL4_COMPILE_ASSERT(name, expr) typedef char name[(expr) ? 1 : -1]"
+    )
+    .unwrap();
+    writeln!(file, "#define SEL4_INLINE static inline").unwrap();
+    writeln!(file, "#define SEL4_CONST __attribute__((const))").unwrap();
+    writeln!(
+        file,
+        "#define SEL4_FORCE_INLINE static inline __attribute__((always_inline))"
+    )
+    .unwrap();
+    writeln!(file, "#define PURE __attribute__((pure))").unwrap();
+    writeln!(file, "#define CONST __attribute__((const))").unwrap();
+}
+
+fn write_debug_assert(path: &Path) {
+    let mut file = fs::File::create(path).expect("create debug_assert.h");
+    writeln!(file, "#pragma once").unwrap();
+    writeln!(file, "#define seL4_DebugAssert(cond) ((void)0)").unwrap();
+}
+
+fn write_config(path: &Path) {
+    let mut file = fs::File::create(path).expect("create config.h");
+    writeln!(file, "#pragma once").unwrap();
+    writeln!(file, "#include <kernel/gen_config.h>").unwrap();
+    writeln!(file, "#include <sel4/gen_config.h>").unwrap();
+}
+
+fn write_simple_types(path: &Path) {
+    let mut file = fs::File::create(path).expect("create simple_types.h");
+    writeln!(file, "#pragma once").unwrap();
+    writeln!(file, "#include <sel4/macros.h>").unwrap();
+    writeln!(file, "#include <stdint.h>").unwrap();
+    writeln!(file, "#include <stddef.h>").unwrap();
+    writeln!(file, "typedef int8_t seL4_Int8;").unwrap();
+    writeln!(file, "typedef int16_t seL4_Int16;").unwrap();
+    writeln!(file, "typedef int32_t seL4_Int32;").unwrap();
+    writeln!(file, "typedef int64_t seL4_Int64;").unwrap();
+    writeln!(file, "typedef uint8_t seL4_Uint8;").unwrap();
+    writeln!(file, "typedef uint16_t seL4_Uint16;").unwrap();
+    writeln!(file, "typedef uint32_t seL4_Uint32;").unwrap();
+    writeln!(file, "typedef uint64_t seL4_Uint64;").unwrap();
+    writeln!(file, "typedef uint8_t seL4_Bool;").unwrap();
+    writeln!(file, "typedef unsigned long seL4_Word;").unwrap();
+    writeln!(file, "typedef signed long seL4_SWord;").unwrap();
+    writeln!(file, "typedef seL4_Word seL4_CPtr;").unwrap();
+    writeln!(file, "typedef seL4_Word seL4_UintPtr;").unwrap();
+    writeln!(file, "typedef seL4_Word seL4_PAddr;").unwrap();
+}
+
+fn write_constants(path: &Path) {
+    let mut file = fs::File::create(path).expect("create constants.h");
+    writeln!(file, "#pragma once").unwrap();
+    writeln!(file, "#include <sel4/macros.h>").unwrap();
+    writeln!(file, "#define seL4_WordBits 64").unwrap();
+    writeln!(file, "#define seL4_PageBits 12").unwrap();
+    writeln!(file, "#define seL4_MsgMaxLength 120").unwrap();
+}
+
+fn write_arch_constants(path: &Path) {
+    let mut file = fs::File::create(path).expect("create arch constants");
+    writeln!(file, "#pragma once").unwrap();
+    writeln!(file, "#include <sel4/constants.h>").unwrap();
+}
+
+fn write_arch_types(path: &Path) {
+    let mut file = fs::File::create(path).expect("create sel4_arch/types.h");
+    writeln!(file, "#pragma once").unwrap();
+    writeln!(file, "#include <sel4/simple_types.h>").unwrap();
+    writeln!(file, "#include <sel4/sel4_arch/types_gen.h>").unwrap();
+}
+
+fn write_errors(path: &Path) {
+    let mut file = fs::File::create(path).expect("create errors.h");
+    writeln!(file, "#pragma once").unwrap();
+    writeln!(file, "typedef int seL4_Error;").unwrap();
+    writeln!(file, "#define seL4_NoError 0").unwrap();
+    writeln!(file, "#define seL4_InvalidArgument 1").unwrap();
+    writeln!(file, "#define seL4_InvalidCapability 2").unwrap();
+    writeln!(file, "#define seL4_IllegalOperation 3").unwrap();
+    writeln!(file, "#define seL4_RangeError 4").unwrap();
+    writeln!(file, "#define seL4_AlignmentError 5").unwrap();
+    writeln!(file, "#define seL4_FailedLookup 6").unwrap();
+    writeln!(file, "#define seL4_TruncatedMessage 7").unwrap();
+    writeln!(file, "#define seL4_DeleteFirst 8").unwrap();
+    writeln!(file, "#define seL4_RevokeFirst 9").unwrap();
+}
+
+fn write_types(path: &Path) {
+    let mut file = fs::File::create(path).expect("create types.h");
+    writeln!(file, "#pragma once").unwrap();
+    writeln!(file, "#include <sel4/config.h>").unwrap();
+    writeln!(file, "#include <sel4/simple_types.h>").unwrap();
+    writeln!(file, "#include <sel4/macros.h>").unwrap();
+    writeln!(file, "#include <sel4/sel4_arch/types.h>").unwrap();
+    writeln!(file, "#include <sel4/errors.h>").unwrap();
+    writeln!(file, "#include <sel4/shared_types_gen.h>").unwrap();
+    writeln!(file, "typedef seL4_Word seL4_NodeId;").unwrap();
+    writeln!(file, "typedef seL4_Word seL4_Domain;").unwrap();
+    writeln!(file, "typedef seL4_CPtr seL4_CNode;").unwrap();
+    writeln!(file, "typedef seL4_CPtr seL4_IRQHandler;").unwrap();
+    writeln!(file, "typedef seL4_CPtr seL4_IRQControl;").unwrap();
+    writeln!(file, "typedef seL4_CPtr seL4_TCB;").unwrap();
+    writeln!(file, "typedef seL4_CPtr seL4_Untyped;").unwrap();
+    writeln!(file, "typedef seL4_CPtr seL4_DomainSet;").unwrap();
+    writeln!(file, "typedef seL4_CPtr seL4_SchedContext;").unwrap();
+    writeln!(file, "typedef seL4_CPtr seL4_SchedControl;").unwrap();
+    writeln!(file, "typedef seL4_Uint64 seL4_Time;").unwrap();
+    writeln!(file, "#define seL4_NilData 0").unwrap();
+}
+
+fn write_shared_types(path: &Path) {
+    fs::create_dir_all(path).expect("create shared_types dir");
+    let file_path = path.join("types.h");
+    let mut file = fs::File::create(file_path).expect("create shared_types.h");
+    writeln!(file, "#pragma once").unwrap();
+    writeln!(file, "#include <sel4/shared_types_gen.h>").unwrap();
+}
+
+fn write_mode_types(path: &Path) {
+    fs::create_dir_all(path).expect("create mode dir");
+    let mut file = fs::File::create(path.join("types.h")).expect("create mode/types.h");
+    writeln!(file, "#pragma once").unwrap();
 }
