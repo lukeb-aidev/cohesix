@@ -143,13 +143,14 @@ fn generate_bindings(build_dir: &Path) {
     write_arch_types(&shim_sel4_arch.join("types.h"));
     write_errors(&shim_sel4.join("errors.h"));
     write_types(&shim_sel4.join("types.h"));
-    write_shared_types(&shim_sel4.join("shared_types.h"));
+    write_shared_types(&shim_sel4);
     write_mode_types(&shim_sel4.join("mode"));
     write_sel4_api(&shim_sel4.join("sel4.h"));
 
     let wrapper = shim_dir.join("wrapper.h");
     let mut wrapper_file = fs::File::create(&wrapper).expect("create wrapper");
     writeln!(wrapper_file, "#include <sel4/sel4.h>").unwrap();
+    writeln!(wrapper_file, "#include <sel4/shared_types.h>").unwrap();
     writeln!(wrapper_file, "#include <interfaces/sel4_client.h>").unwrap();
 
     let builder = bindgen::Builder::default()
@@ -247,8 +248,15 @@ fn write_simple_types(path: &Path) {
     let mut file = fs::File::create(path).expect("create simple_types.h");
     writeln!(file, "#pragma once").unwrap();
     writeln!(file, "#include <sel4/macros.h>").unwrap();
-    writeln!(file, "#include <stdint.h>").unwrap();
-    writeln!(file, "#include <stddef.h>").unwrap();
+    writeln!(file, "typedef signed char int8_t;").unwrap();
+    writeln!(file, "typedef short int16_t;").unwrap();
+    writeln!(file, "typedef int int32_t;").unwrap();
+    writeln!(file, "typedef long int64_t;").unwrap();
+    writeln!(file, "typedef unsigned char uint8_t;").unwrap();
+    writeln!(file, "typedef unsigned short uint16_t;").unwrap();
+    writeln!(file, "typedef unsigned int uint32_t;").unwrap();
+    writeln!(file, "typedef unsigned long uint64_t;").unwrap();
+    writeln!(file, "typedef unsigned long size_t;").unwrap();
     writeln!(file, "typedef int8_t seL4_Int8;").unwrap();
     writeln!(file, "typedef int16_t seL4_Int16;").unwrap();
     writeln!(file, "typedef int32_t seL4_Int32;").unwrap();
@@ -361,9 +369,9 @@ fn write_types(path: &Path) {
     writeln!(file, "}} seL4_ARM_SMCContext;").unwrap();
 }
 
-fn write_shared_types(path: &Path) {
-    fs::create_dir_all(path).expect("create shared_types dir");
-    let file_path = path.join("types.h");
+fn write_shared_types(dir: &Path) {
+    fs::create_dir_all(dir).expect("create shared_types dir");
+    let file_path = dir.join("shared_types.h");
     let mut file = fs::File::create(file_path).expect("create shared_types.h");
     writeln!(file, "#pragma once").unwrap();
     writeln!(file, "#include <sel4/shared_types_gen.h>").unwrap();
