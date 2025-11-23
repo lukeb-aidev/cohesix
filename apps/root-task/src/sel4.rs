@@ -7,7 +7,6 @@
 
 use core::{
     arch::asm,
-    cmp,
     convert::TryInto,
     fmt, mem,
     ptr::{self, NonNull},
@@ -2724,7 +2723,7 @@ impl<'a> KernelEnv<'a> {
 
         unsafe {
             let depth = self.bootinfo.init_cnode_depth();
-            let _ = seL4_CNode_Delete(self.init_cnode_cap(), pt_slot as seL4_CPtr, depth);
+            let _ = seL4_CNode_Delete(self.init_cnode_cap(), pt_slot as seL4_CPtr, depth.into());
         }
         self.untyped.release(&reserved);
 
@@ -2794,7 +2793,7 @@ impl<'a> KernelEnv<'a> {
 
         unsafe {
             let depth = self.bootinfo.init_cnode_depth();
-            let _ = seL4_CNode_Delete(self.init_cnode_cap(), pd_slot as seL4_CPtr, depth);
+            let _ = seL4_CNode_Delete(self.init_cnode_cap(), pd_slot as seL4_CPtr, depth.into());
         }
         self.untyped.release(&reserved);
 
@@ -2862,7 +2861,7 @@ impl<'a> KernelEnv<'a> {
 
         unsafe {
             let depth = self.bootinfo.init_cnode_depth();
-            let _ = seL4_CNode_Delete(self.init_cnode_cap(), pud_slot as seL4_CPtr, depth);
+            let _ = seL4_CNode_Delete(self.init_cnode_cap(), pud_slot as seL4_CPtr, depth.into());
         }
         self.untyped.release(&reserved);
 
