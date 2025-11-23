@@ -24,15 +24,33 @@ mod imp {
 
     #[inline(always)]
     pub unsafe fn seL4_GetIPCBuffer() -> *mut seL4_IPCBuffer {
-        tls_image_mut()
-            .map(|tls| tls.ipc_buffer())
-            .unwrap_or(core::ptr::null_mut())
+        #[cfg(target_arch = "aarch64")]
+        {
+            let ipc_buffer: usize;
+            asm!("mrs {0}, tpidr_el0", out(reg) ipc_buffer, options(nostack, preserves_flags));
+            ipc_buffer as *mut seL4_IPCBuffer
+        }
+
+        #[cfg(not(target_arch = "aarch64"))]
+        {
+            tls_image_mut()
+                .map(|tls| tls.ipc_buffer())
+                .unwrap_or(core::ptr::null_mut())
+        }
     }
 
     #[inline(always)]
     pub unsafe fn seL4_SetIPCBuffer(buffer: *mut seL4_IPCBuffer) {
-        if let Some(tls) = tls_image_mut() {
-            tls.set_ipc_buffer(buffer);
+        #[cfg(target_arch = "aarch64")]
+        {
+            asm!("msr tpidr_el0, {0}", in(reg) buffer, options(nostack, preserves_flags));
+        }
+
+        #[cfg(not(target_arch = "aarch64"))]
+        {
+            if let Some(tls) = tls_image_mut() {
+                tls.set_ipc_buffer(buffer);
+            }
         }
     }
 
