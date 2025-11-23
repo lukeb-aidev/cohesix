@@ -137,6 +137,37 @@ fn generate_bindings(build_dir: &Path) {
     writeln!(wrapper_file, "#include <sel4/sel4.h>").unwrap();
     writeln!(wrapper_file, "#include <sel4/syscalls.h>").unwrap();
 
+    writeln!(
+        wrapper_file,
+        "seL4_Error seL4_CNode_Copy(seL4_CNode _service, seL4_Word dest_index, seL4_Uint8 dest_depth, seL4_CNode src_root, seL4_Word src_index, seL4_Uint8 src_depth, seL4_CapRights_t rights);",
+    )
+    .unwrap();
+    writeln!(
+        wrapper_file,
+        "seL4_Error seL4_CNode_Mint(seL4_CNode _service, seL4_Word dest_index, seL4_Uint8 dest_depth, seL4_CNode src_root, seL4_Word src_index, seL4_Uint8 src_depth, seL4_CapRights_t rights, seL4_Word badge);",
+    )
+    .unwrap();
+    writeln!(
+        wrapper_file,
+        "seL4_Error seL4_Untyped_Retype(seL4_Untyped _service, seL4_Word type, seL4_Word size_bits, seL4_CNode root, seL4_Word node_index, seL4_Word node_depth, seL4_Word node_offset, seL4_Word num_objects);",
+    )
+    .unwrap();
+    writeln!(
+        wrapper_file,
+        "seL4_Error seL4_TCB_SetIPCBuffer(seL4_TCB _service, seL4_Word buffer, seL4_CPtr bufferFrame);",
+    )
+    .unwrap();
+    writeln!(
+        wrapper_file,
+        "seL4_Error seL4_TCB_SetFaultHandler(seL4_TCB _service, seL4_CPtr faultEP);",
+    )
+    .unwrap();
+    writeln!(
+        wrapper_file,
+        "seL4_Uint32 seL4_DebugCapIdentify(seL4_CPtr cap);",
+    )
+    .unwrap();
+
     let builder = bindgen::Builder::default()
         .use_core()
         .ctypes_prefix("core::ffi")
@@ -167,9 +198,7 @@ fn generate_bindings(build_dir: &Path) {
         .clang_arg(format!("-I{}", upstream_root.join("include").display()))
         .clang_arg(format!(
             "-I{}",
-            upstream_root
-                .join("sel4_arch_include/aarch64")
-                .display()
+            upstream_root.join("sel4_arch_include/aarch64").display()
         ))
         .clang_arg(format!(
             "-I{}",
