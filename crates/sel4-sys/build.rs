@@ -145,9 +145,11 @@ fn generate_bindings(build_dir: &Path) {
     write_types(&shim_sel4.join("types.h"));
     write_shared_types(&shim_sel4.join("shared_types.h"));
     write_mode_types(&shim_sel4.join("mode"));
+    write_sel4_api(&shim_sel4.join("sel4.h"));
 
     let wrapper = shim_dir.join("wrapper.h");
     let mut wrapper_file = fs::File::create(&wrapper).expect("create wrapper");
+    writeln!(wrapper_file, "#include <sel4/sel4.h>").unwrap();
     writeln!(wrapper_file, "#include <interfaces/sel4_client.h>").unwrap();
 
     let builder = bindgen::Builder::default()
@@ -275,6 +277,7 @@ fn write_constants(path: &Path) {
 fn write_arch_constants(path: &Path) {
     let mut file = fs::File::create(path).expect("create arch constants");
     writeln!(file, "#pragma once").unwrap();
+    writeln!(file, "#include <sel4/invocation.h>").unwrap();
     writeln!(file, "#include <sel4/config.h>").unwrap();
     writeln!(file, "#include <sel4/sel4_arch/invocation.h>").unwrap();
     writeln!(file, "#include <sel4/constants.h>").unwrap();
@@ -370,4 +373,19 @@ fn write_mode_types(path: &Path) {
     fs::create_dir_all(path).expect("create mode dir");
     let mut file = fs::File::create(path.join("types.h")).expect("create mode/types.h");
     writeln!(file, "#pragma once").unwrap();
+}
+
+fn write_sel4_api(path: &Path) {
+    let mut file = fs::File::create(path).expect("create sel4.h");
+    writeln!(file, "#pragma once").unwrap();
+    writeln!(file, "#include <sel4/config.h>").unwrap();
+    writeln!(file, "#include <sel4/constants.h>").unwrap();
+    writeln!(file, "#include <sel4/types.h>").unwrap();
+    writeln!(file, "#include <sel4/invocation.h>").unwrap();
+    writeln!(file, "#include <sel4/sel4_arch/invocation.h>").unwrap();
+
+    writeln!(file, "seL4_MessageInfo_t seL4_CallWithMRs(seL4_CPtr, seL4_MessageInfo_t, seL4_Word*, seL4_Word*, seL4_Word*, seL4_Word*);").unwrap();
+    writeln!(file, "void seL4_SetMR(seL4_Word, seL4_Word);").unwrap();
+    writeln!(file, "seL4_Word seL4_GetMR(seL4_Word);").unwrap();
+    writeln!(file, "void seL4_SetCap(seL4_Word, seL4_CPtr);").unwrap();
 }
