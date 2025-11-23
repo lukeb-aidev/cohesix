@@ -344,12 +344,12 @@ fn write_types(path: &Path) {
     writeln!(file, "#define seL4_NilData 0").unwrap();
 
     writeln!(file, "typedef struct seL4_UserContext {{").unwrap();
+    writeln!(file, "    seL4_Word pc;").unwrap();
+    writeln!(file, "    seL4_Word sp;").unwrap();
+    writeln!(file, "    seL4_Word spsr;").unwrap();
     for reg in 0..31 {
         writeln!(file, "    seL4_Word x{};", reg).unwrap();
     }
-    writeln!(file, "    seL4_Word sp_el0;").unwrap();
-    writeln!(file, "    seL4_Word pc;").unwrap();
-    writeln!(file, "    seL4_Word spsr;").unwrap();
     writeln!(file, "    seL4_Word tpidr_el0;").unwrap();
     writeln!(file, "    seL4_Word tpidrro_el0;").unwrap();
     writeln!(file, "}} seL4_UserContext;").unwrap();
