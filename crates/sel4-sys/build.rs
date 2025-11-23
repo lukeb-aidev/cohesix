@@ -203,6 +203,69 @@ fn trim_config_value(raw: &str) -> String {
     raw.trim_matches(&['"', '\''][..]).to_string()
 }
 
+fn resolve_platform(
+    config_sources: &[(PathBuf, String)],
+    upstream_root: &Path,
+) -> Result<String, String> {
+    if let Ok(value) = env::var("SEL4_PLATFORM") {
+        return Ok(value);
+    }
+
+    if let Some(value) = parse_config_value(config_sources, "CONFIG_PLAT") {
+        return Ok(value);
+    }
+
+    if let Some(value) = parse_config_value(config_sources, "CONFIG_ARM_PLAT") {
+        return Ok(value);
+    }
+
+    if let Some(value) = parse_config_value(config_sources, "KernelPlatform") {
+        return Ok(value);
+    }
+
+    if let Some(value) = parse_config_value(config_sources, "PLATFORM") {
+        return Ok(value);
+    }
+
+    let plat_root = upstream_root.join("plat_include");
+    let platforms: Vec<String> = fs::read_dir(&plat_root)
+        .map(|entries| {
+            entries
+                .filter_map(|entry| entry.ok())
+                .filter_map(|entry| entry.file_name().into_string().ok())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    for name in &platforms {
+        let flag = format!("CONFIG_PLAT_{}", name.replace('-', "_").to_ascii_uppercase());
+        if let Some(true) = probe_config_flag(config_sources, &flag) {
+            return Ok(name.clone());
+        }
+    }
+
+    if !platforms.is_empty() {
+        
+        if platforms.len() == 1 {
+            let platform = platforms[0].clone();
+            println!(
+                "cargo:warning=Unable to derive seL4 platform from configuration; defaulting to vendored {}",
+                platform
+            );
+            return Ok(platform);
+        }
+
+        return Err(format!(
+            "Unable to determine seL4 platform; set SEL4_BUILD_DIR or SEL4_PLATFORM to one of: {}",
+            platforms.join(", ")
+        ));
+    }
+
+    Err(
+        "No vendored platform headers found under upstream/libsel4/plat_include; unable to derive platform".to_string(),
+    )
+}
+
 fn generate_bindings(build_dir: &Path, config_sources: &[(PathBuf, String)]) {
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     if target_os != "none" {
@@ -218,6 +281,9 @@ fn generate_bindings(build_dir: &Path, config_sources: &[(PathBuf, String)]) {
     let sel4_arch = parse_config_value(config_sources, "CONFIG_SEL4_ARCH")
         .or_else(|| env::var("SEL4_ARCH").ok())
         .unwrap_or_else(|| "aarch64".to_string());
+    let platform = resolve_platform(config_sources, &upstream_root).unwrap_or_else(|message| {
+        panic!("{}", message);
+    });
     let mode = parse_config_value(config_sources, "CONFIG_WORD_SIZE")
         .as_deref()
         .and_then(|value| value.parse::<u32>().ok())
@@ -238,6 +304,16 @@ fn generate_bindings(build_dir: &Path, config_sources: &[(PathBuf, String)]) {
         );
     }
 
+    let plat_include_dir = upstream_root.join(format!("plat_include/{}", platform));
+    let plat_header = plat_include_dir.join("sel4/plat/api/constants.h");
+    if !plat_header.is_file() {
+        panic!(
+            "Could not locate libsel4 platform headers for current seL4 config (platform {}); expected {}",
+            platform,
+            plat_header.display()
+        );
+    }
+
     let mut include_dirs = vec![
         build_dir.join("libsel4/include"),
         build_dir.join(format!("libsel4/sel4_arch_include/{}", sel4_arch)),
@@ -245,16 +321,25 @@ fn generate_bindings(build_dir: &Path, config_sources: &[(PathBuf, String)]) {
         build_dir.join("libsel4/autoconf"),
         build_dir.join("libsel4/gen_config"),
         build_dir.join("kernel/gen_config"),
-        upstream_root.join("include"),
-        upstream_root.join(format!("sel4_arch_include/{}", sel4_arch)),
-        upstream_root.join(format!("arch_include/{}", arch)),
-        mode_include_dir.clone(),
     ];
 
     let build_mode_dir = build_dir.join(format!("libsel4/mode_include/{}", mode));
     if build_mode_dir.is_dir() {
         include_dirs.push(build_mode_dir);
     }
+
+    let build_platform_dir = build_dir.join(format!("libsel4/sel4_plat_include/{}", platform));
+    if build_platform_dir.is_dir() {
+        include_dirs.push(build_platform_dir);
+    }
+
+    include_dirs.extend_from_slice(&[
+        upstream_root.join("include"),
+        upstream_root.join(format!("sel4_arch_include/{}", sel4_arch)),
+        upstream_root.join(format!("arch_include/{}", arch)),
+        mode_include_dir.clone(),
+        plat_include_dir.clone(),
+    ]);
 
     include_dirs.retain(|dir| dir.is_dir());
 
