@@ -275,6 +275,8 @@ fn write_constants(path: &Path) {
 fn write_arch_constants(path: &Path) {
     let mut file = fs::File::create(path).expect("create arch constants");
     writeln!(file, "#pragma once").unwrap();
+    writeln!(file, "#include <sel4/config.h>").unwrap();
+    writeln!(file, "#include <sel4/sel4_arch/invocation.h>").unwrap();
     writeln!(file, "#include <sel4/constants.h>").unwrap();
 }
 
@@ -321,7 +323,39 @@ fn write_types(path: &Path) {
     writeln!(file, "typedef seL4_CPtr seL4_SchedContext;").unwrap();
     writeln!(file, "typedef seL4_CPtr seL4_SchedControl;").unwrap();
     writeln!(file, "typedef seL4_Uint64 seL4_Time;").unwrap();
+    writeln!(file, "typedef seL4_Word seL4_ARM_VMAttributes;").unwrap();
+    writeln!(file, "typedef seL4_CPtr seL4_ARM_Page;").unwrap();
+    writeln!(file, "typedef seL4_CPtr seL4_ARM_PageTable;").unwrap();
+    writeln!(file, "typedef seL4_CPtr seL4_ARM_VSpace;").unwrap();
+    writeln!(file, "typedef seL4_CPtr seL4_ARM_ASIDControl;").unwrap();
+    writeln!(file, "typedef seL4_CPtr seL4_ARM_ASIDPool;").unwrap();
+    writeln!(file, "typedef seL4_CPtr seL4_ARM_VCPU;").unwrap();
+    writeln!(file, "typedef seL4_CPtr seL4_ARM_IOSpace;").unwrap();
+    writeln!(file, "typedef seL4_CPtr seL4_ARM_IOPageTable;").unwrap();
+    writeln!(file, "typedef seL4_CPtr seL4_ARM_SMC;").unwrap();
+    writeln!(file, "typedef seL4_CPtr seL4_ARM_SIDControl;").unwrap();
+    writeln!(file, "typedef seL4_CPtr seL4_ARM_SID;").unwrap();
+    writeln!(file, "typedef seL4_CPtr seL4_ARM_CBControl;").unwrap();
+    writeln!(file, "typedef seL4_CPtr seL4_ARM_CB;").unwrap();
+    writeln!(file, "typedef seL4_Word seL4_VCPUReg;").unwrap();
     writeln!(file, "#define seL4_NilData 0").unwrap();
+
+    writeln!(file, "typedef struct seL4_UserContext {{").unwrap();
+    for reg in 0..31 {
+        writeln!(file, "    seL4_Word x{};", reg).unwrap();
+    }
+    writeln!(file, "    seL4_Word sp_el0;").unwrap();
+    writeln!(file, "    seL4_Word pc;").unwrap();
+    writeln!(file, "    seL4_Word spsr;").unwrap();
+    writeln!(file, "    seL4_Word tpidr_el0;").unwrap();
+    writeln!(file, "    seL4_Word tpidrro_el0;").unwrap();
+    writeln!(file, "}} seL4_UserContext;").unwrap();
+
+    writeln!(file, "typedef struct seL4_ARM_SMCContext {{").unwrap();
+    for idx in 0..8 {
+        writeln!(file, "    seL4_Word x{};", idx).unwrap();
+    }
+    writeln!(file, "}} seL4_ARM_SMCContext;").unwrap();
 }
 
 fn write_shared_types(path: &Path) {
