@@ -271,10 +271,10 @@ mod imp {
     pub unsafe fn seL4_CNode_Copy(
         _dest_root: seL4_CNode,
         _dest_index: seL4_Word,
-        _dest_depth: seL4_Word,
+        _dest_depth: seL4_Uint8,
         _src_root: seL4_CNode,
         _src_index: seL4_Word,
-        _src_depth: seL4_Word,
+        _src_depth: seL4_Uint8,
         _rights: seL4_CapRights_t,
     ) -> seL4_Error {
         unsupported_error()
@@ -284,7 +284,7 @@ mod imp {
     pub unsafe fn seL4_CNode_Delete(
         _root: seL4_CNode,
         _index: seL4_Word,
-        _depth: seL4_Word,
+        _depth: seL4_Uint8,
     ) -> seL4_Error {
         unsupported_error()
     }
@@ -293,10 +293,10 @@ mod imp {
     pub unsafe fn seL4_CNode_Move(
         _dest_root: seL4_CNode,
         _dest_index: seL4_Word,
-        _dest_depth: seL4_Word,
+        _dest_depth: seL4_Uint8,
         _src_root: seL4_CNode,
         _src_index: seL4_Word,
-        _src_depth: seL4_Word,
+        _src_depth: seL4_Uint8,
     ) -> seL4_Error {
         unsupported_error()
     }
@@ -305,10 +305,10 @@ mod imp {
     pub unsafe fn seL4_CNode_Mint(
         _dest_root: seL4_CNode,
         _dest_index: seL4_Word,
-        _dest_depth: seL4_Word,
+        _dest_depth: seL4_Uint8,
         _src_root: seL4_CNode,
         _src_index: seL4_Word,
-        _src_depth: seL4_Word,
+        _src_depth: seL4_Uint8,
         _rights: seL4_CapRights_t,
         _badge: seL4_Word,
     ) -> seL4_Error {
@@ -391,7 +391,7 @@ mod imp {
     }
 
     #[inline(always)]
-    pub fn seL4_DebugCapIdentify(_cap: seL4_CPtr) -> seL4_Word {
+    pub fn seL4_DebugCapIdentify(_cap: seL4_CPtr) -> seL4_Uint32 {
         unsupported();
     }
 

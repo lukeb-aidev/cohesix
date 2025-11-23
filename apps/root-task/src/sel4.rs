@@ -121,7 +121,7 @@ pub const fn canonical_cnode_depth(init_bits: u8, word_bits: u8) -> u8 {
         init_bits as usize <= word_bits as usize,
         "initThreadCNodeSizeBits must not exceed word width",
     );
-    word_bits
+    init_bits
 }
 
 #[inline(always)]

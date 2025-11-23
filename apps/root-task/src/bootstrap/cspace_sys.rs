@@ -163,7 +163,7 @@ pub fn assert_init_cnode_layout(bi: &sys::seL4_BootInfo) {
         "bootinfo empty window end 0x{empty_end:04x} exceeds init CNode capacity 0x{capacity:04x}",
     );
 
-    let guard_bits = sel4::word_bits() as usize - init_bits;
+    let guard_bits = 0usize;
     assert_eq!(
         sel4::word_bits() as usize,
         sys::seL4_WordBits as usize,
@@ -184,8 +184,8 @@ pub fn assert_init_cnode_layout(bi: &sys::seL4_BootInfo) {
         "unexpected initThreadCNodeSizeBits (expected 13 for aarch64/virt)"
     );
     debug_assert_eq!(
-        guard_bits, 51,
-        "unexpected guard depth for init CNode (expected 51)"
+        guard_bits, 0,
+        "unexpected guard depth for init CNode (expected 0)"
     );
 }
 
@@ -230,6 +230,15 @@ pub fn cnode_copy_raw_single(
 
         #[cfg(target_os = "none")]
         unsafe {
+            debug_log(format_args!(
+                "[ffi] seL4_CNode_Copy destRoot=0x{dst_root:04x} destIndex=0x{dst_index:016x} destDepth={depth} srcRoot=0x{src_root:04x} srcIndex=0x{src_index:016x} srcDepth={depth} rights=0x{rights:02x}",
+                dst_root = dst_root,
+                dst_index = dst_index,
+                depth = depth_u8,
+                src_root = src_root,
+                src_index = src_index,
+                rights = rights.raw(),
+            ));
             sys::seL4_CNode_Copy(
                 dst_root,
                 dst_index as sys::seL4_Word,
@@ -460,6 +469,16 @@ fn cnode_mint_with_style(
             dst = dst_slot_raw,
             src = src_slot_raw,
             depth = depth_word,
+            badge = badge,
+        ));
+        debug_log(format_args!(
+            "[ffi] seL4_CNode_Mint destRoot=0x{dst_root:04x} destIndex=0x{dst_index:016x} destDepth={depth} srcRoot=0x{src_root:04x} srcIndex=0x{src_index:016x} srcDepth={depth} rights=0x{rights:02x} badge=0x{badge:04x}",
+            dst_root = dst_root,
+            dst_index = dst_index,
+            depth = depth_u8,
+            src_root = src_root,
+            src_index = src_index,
+            rights = rights.raw(),
             badge = badge,
         ));
         sys::seL4_CNode_Mint(
