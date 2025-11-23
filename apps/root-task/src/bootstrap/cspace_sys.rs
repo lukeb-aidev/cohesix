@@ -409,7 +409,7 @@ pub fn cnode_delete_with_style(
     bi: &sys::seL4_BootInfo,
     root: sys::seL4_CNode,
     slot: sys::seL4_Word,
-    style: TupleStyle,
+    _style: TupleStyle,
 ) -> sys::seL4_Error {
     let index = slot as sys::seL4_Word;
     let depth_u8 = init_cnode_bits_u8(bi);
@@ -422,7 +422,7 @@ pub fn cnode_delete_with_style(
 
     #[cfg(not(target_os = "none"))]
     {
-        let _ = (bi, root, slot, style, index, depth_word);
+        let _ = (bi, root, slot, _style, index, depth_word);
         sys::seL4_NoError
     }
 }
@@ -519,10 +519,10 @@ fn cnode_move_with_style(
         sys::seL4_CNode_Move(
             dst_root,
             dst_index as sys::seL4_Word,
-            depth_word,
+            depth_u8,
             src_root,
             src_index as sys::seL4_Word,
-            depth_word,
+            depth_u8,
         )
     }
 
@@ -1226,7 +1226,7 @@ pub fn preflight_init_cnode_writable(probe_slot: sys::seL4_CPtr) -> Result<(), P
     #[cfg(target_os = "none")]
     {
         let dst_index = probe_slot as sys::seL4_Word;
-        let depth_bits = bi.init_cnode_bits() as u8;
+        let depth_bits = bi().init_cnode_bits() as u8;
         let depth_word = encode_cnode_depth(depth_bits);
         let src_slot = sys::seL4_CapInitThreadTCB as sys::seL4_Word;
         let src_ident = unsafe { sys::seL4_DebugCapIdentify(src_slot as sys::seL4_CPtr) };
@@ -1855,10 +1855,9 @@ pub mod canonical {
         let raw_offset = path.offset();
         let idx = path.index;
         let depth_word = super::init_cspace_depth_words(bi);
-        let depth_bits = bits_as_u8(depth_word as usize);
 
         #[cfg(target_os = "none")]
-        let err = unsafe { sys::seL4_CNode_Delete(root, slot_index(raw_offset), depth_bits) };
+        let err = unsafe { sys::seL4_CNode_Delete(root, slot_index(raw_offset), depth_word) };
 
         #[cfg(not(target_os = "none"))]
         let err = sys::seL4_NoError;
