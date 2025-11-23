@@ -188,7 +188,11 @@ fn generate_bindings(build_dir: &Path) {
         .allowlist_type("seL4_.*")
         .allowlist_var("seL4_.*")
         .blocklist_item("seL4_ARM_CB.*")
-        .blocklist_item("seL4_ARM_SID.*");
+        .blocklist_item("seL4_ARM_SID.*")
+        .blocklist_type("seL4_BootInfo")
+        .blocklist_type("seL4_BootInfoHeader")
+        .blocklist_type("seL4_SlotRegion")
+        .blocklist_type("seL4_UntypedDesc");
 
     let bindings = builder.generate().expect("unable to generate bindings");
     bindings
@@ -399,14 +403,32 @@ fn write_mode_types(path: &Path) {
 fn write_sel4_api(path: &Path) {
     let mut file = fs::File::create(path).expect("create sel4.h");
     writeln!(file, "#pragma once").unwrap();
+    writeln!(file, "#include <sel4/macros.h>").unwrap();
     writeln!(file, "#include <sel4/config.h>").unwrap();
     writeln!(file, "#include <sel4/constants.h>").unwrap();
     writeln!(file, "#include <sel4/types.h>").unwrap();
     writeln!(file, "#include <sel4/invocation.h>").unwrap();
     writeln!(file, "#include <sel4/sel4_arch/invocation.h>").unwrap();
+    writeln!(file, "#include <sel4/shared_types.h>").unwrap();
+    writeln!(file, "#ifndef SEL4_FORCE_LONG_ENUM").unwrap();
+    writeln!(file, "#define SEL4_FORCE_LONG_ENUM(type) type##_FORCE_LONG_ENUM = 0x7fffffff").unwrap();
+    writeln!(file, "#endif").unwrap();
+    writeln!(file, "#include <sel4/syscall.h>").unwrap();
 
-    writeln!(file, "seL4_MessageInfo_t seL4_CallWithMRs(seL4_CPtr, seL4_MessageInfo_t, seL4_Word*, seL4_Word*, seL4_Word*, seL4_Word*);").unwrap();
+    writeln!(file, "typedef struct seL4_BootInfo seL4_BootInfo;").unwrap();
+
+    writeln!(
+        file,
+        "seL4_MessageInfo_t seL4_CallWithMRs(seL4_CPtr, seL4_MessageInfo_t, seL4_Word*, seL4_Word*, seL4_Word*, seL4_Word*);",
+    )
+    .unwrap();
     writeln!(file, "void seL4_SetMR(seL4_Word, seL4_Word);").unwrap();
     writeln!(file, "seL4_Word seL4_GetMR(seL4_Word);").unwrap();
     writeln!(file, "void seL4_SetCap(seL4_Word, seL4_CPtr);").unwrap();
+    writeln!(file, "seL4_CPtr seL4_GetCap(seL4_Word);").unwrap();
+    writeln!(file, "const seL4_BootInfo* seL4_GetBootInfo(void);").unwrap();
+    writeln!(file, "void seL4_SetIPCBuffer(seL4_IPCBuffer*);").unwrap();
+    writeln!(file, "seL4_IPCBuffer* seL4_GetIPCBuffer(void);").unwrap();
+    writeln!(file, "void seL4_DebugPutChar(char);").unwrap();
+    writeln!(file, "seL4_Word seL4_DebugCapIdentify(seL4_CPtr);").unwrap();
 }
