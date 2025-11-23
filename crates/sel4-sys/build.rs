@@ -192,7 +192,8 @@ fn generate_bindings(build_dir: &Path) {
         .blocklist_type("seL4_BootInfo")
         .blocklist_type("seL4_BootInfoHeader")
         .blocklist_type("seL4_SlotRegion")
-        .blocklist_type("seL4_UntypedDesc");
+        .blocklist_type("seL4_UntypedDesc")
+        .wrap_static_fns(true);
 
     let bindings = builder.generate().expect("unable to generate bindings");
     bindings
@@ -308,16 +309,16 @@ fn write_errors(path: &Path) {
     let mut file = fs::File::create(path).expect("create errors.h");
     writeln!(file, "#pragma once").unwrap();
     writeln!(file, "typedef int seL4_Error;").unwrap();
-    writeln!(file, "#define seL4_NoError 0").unwrap();
-    writeln!(file, "#define seL4_InvalidArgument 1").unwrap();
-    writeln!(file, "#define seL4_InvalidCapability 2").unwrap();
-    writeln!(file, "#define seL4_IllegalOperation 3").unwrap();
-    writeln!(file, "#define seL4_RangeError 4").unwrap();
-    writeln!(file, "#define seL4_AlignmentError 5").unwrap();
-    writeln!(file, "#define seL4_FailedLookup 6").unwrap();
-    writeln!(file, "#define seL4_TruncatedMessage 7").unwrap();
-    writeln!(file, "#define seL4_DeleteFirst 8").unwrap();
-    writeln!(file, "#define seL4_RevokeFirst 9").unwrap();
+    writeln!(file, "#define seL4_NoError ((seL4_Error)0)").unwrap();
+    writeln!(file, "#define seL4_InvalidArgument ((seL4_Error)1)").unwrap();
+    writeln!(file, "#define seL4_InvalidCapability ((seL4_Error)2)").unwrap();
+    writeln!(file, "#define seL4_IllegalOperation ((seL4_Error)3)").unwrap();
+    writeln!(file, "#define seL4_RangeError ((seL4_Error)4)").unwrap();
+    writeln!(file, "#define seL4_AlignmentError ((seL4_Error)5)").unwrap();
+    writeln!(file, "#define seL4_FailedLookup ((seL4_Error)6)").unwrap();
+    writeln!(file, "#define seL4_TruncatedMessage ((seL4_Error)7)").unwrap();
+    writeln!(file, "#define seL4_DeleteFirst ((seL4_Error)8)").unwrap();
+    writeln!(file, "#define seL4_RevokeFirst ((seL4_Error)9)").unwrap();
 }
 
 fn write_types(path: &Path) {
