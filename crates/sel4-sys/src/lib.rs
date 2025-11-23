@@ -202,6 +202,7 @@ pub use imp::*;
 #[cfg(not(target_os = "none"))]
 mod imp {
     use core::mem::size_of;
+    use core::ptr;
 
     #[inline(always)]
     fn unsupported() -> ! {
@@ -358,6 +359,9 @@ mod imp {
     #[derive(Clone, Copy)]
     pub struct seL4_ARM_VMAttributes(pub seL4_Word);
 
+    pub const seL4_ARM_Page_Uncached: seL4_ARM_VMAttributes = seL4_ARM_VMAttributes(0);
+    pub const seL4_ARM_Page_Default: seL4_ARM_VMAttributes = seL4_ARM_VMAttributes(0x03);
+
     pub type seL4_CapData_t = seL4_CNode_CapData;
 
     #[repr(C)]
@@ -379,6 +383,78 @@ mod imp {
         pub initThreadDomain: seL4_Word,
         pub untyped: seL4_SlotRegion,
         pub untypedList: [seL4_UntypedDesc; MAX_BOOTINFO_UNTYPEDS],
+    }
+
+    #[inline(always)]
+    fn unsupported_error() -> seL4_Error {
+        unsupported();
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_GetBootInfo() -> *const seL4_BootInfo {
+        ptr::null()
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_CNode_Copy(
+        _dest_root: seL4_CNode,
+        _dest_index: seL4_Word,
+        _dest_depth: seL4_Word,
+        _src_root: seL4_CNode,
+        _src_index: seL4_Word,
+        _src_depth: seL4_Word,
+        _rights: seL4_CapRights_t,
+    ) -> seL4_Error {
+        unsupported_error()
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_CNode_Delete(
+        _root: seL4_CNode,
+        _index: seL4_Word,
+        _depth: seL4_Word,
+    ) -> seL4_Error {
+        unsupported_error()
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_CNode_Move(
+        _dest_root: seL4_CNode,
+        _dest_index: seL4_Word,
+        _dest_depth: seL4_Word,
+        _src_root: seL4_CNode,
+        _src_index: seL4_Word,
+        _src_depth: seL4_Word,
+    ) -> seL4_Error {
+        unsupported_error()
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_CNode_Mint(
+        _dest_root: seL4_CNode,
+        _dest_index: seL4_Word,
+        _dest_depth: seL4_Word,
+        _src_root: seL4_CNode,
+        _src_index: seL4_Word,
+        _src_depth: seL4_Word,
+        _rights: seL4_CapRights_t,
+        _badge: seL4_Word,
+    ) -> seL4_Error {
+        unsupported_error()
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_Untyped_Retype(
+        _ut_cap: seL4_Untyped,
+        _obj_type: seL4_Word,
+        _size_bits: seL4_Word,
+        _root: seL4_CNode,
+        _node_index: seL4_Word,
+        _node_depth: seL4_Word,
+        _node_offset: seL4_Word,
+        _num: seL4_Word,
+    ) -> seL4_Error {
+        unsupported_error()
     }
 
     #[repr(C)]
@@ -426,6 +502,7 @@ mod imp {
     pub const seL4_DeleteFirst: seL4_Error = 8;
     pub const seL4_RevokeFirst: seL4_Error = 9;
     pub const seL4_FailedLookup: seL4_Error = 6;
+    pub const seL4_NotEnoughMemory: seL4_Error = 10;
 
     #[inline(always)]
     pub fn seL4_CapRights_to_word(rights: seL4_CapRights) -> seL4_CapRights_t {
@@ -454,6 +531,91 @@ mod imp {
     #[inline(always)]
     pub fn seL4_Yield() {
         unsupported();
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_Send(_dest: seL4_CPtr, _msg: seL4_MessageInfo) {
+        unsupported();
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_Recv(_src: seL4_CPtr, _sender_badge: *mut seL4_Word) -> seL4_MessageInfo {
+        unsupported();
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_Poll(_src: seL4_CPtr, _sender_badge: *mut seL4_Word) -> seL4_MessageInfo {
+        unsupported();
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_CallWithMRs(
+        _dest: seL4_CPtr,
+        _msg: seL4_MessageInfo,
+        _mr0: *mut seL4_Word,
+        _mr1: *mut seL4_Word,
+        _mr2: *mut seL4_Word,
+        _mr3: *mut seL4_Word,
+    ) -> seL4_MessageInfo {
+        unsupported();
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_SetMR(_index: seL4_Word, _value: seL4_Word) {
+        unsupported();
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_GetMR(_index: seL4_Word) -> seL4_Word {
+        unsupported();
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_TCB_SetFaultHandler(
+        _tcb: seL4_TCB,
+        _fault_handler: seL4_CPtr,
+    ) -> seL4_Error {
+        unsupported_error()
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_TCB_SetIPCBuffer(
+        _tcb: seL4_TCB,
+        _buffer_addr: seL4_Word,
+        _buffer_frame: seL4_CPtr,
+    ) -> seL4_Error {
+        unsupported_error()
+    }
+
+    #[inline(always)]
+    pub fn seL4_SetIPCBuffer(_buf: *mut seL4_IPCBuffer) {
+        unsupported();
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_GetIPCBuffer() -> *mut seL4_IPCBuffer {
+        ptr::null_mut()
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_ARM_Page_Map(
+        _page: seL4_ARM_Page,
+        _vspace: seL4_VSpace,
+        _vaddr: seL4_Word,
+        _rights: seL4_CapRights_t,
+        _attr: seL4_ARM_VMAttributes,
+    ) -> seL4_Error {
+        unsupported_error()
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_ARM_PageTable_Map(
+        _pt: seL4_ARM_PageTable,
+        _vspace: seL4_VSpace,
+        _vaddr: seL4_Word,
+        _attr: seL4_ARM_VMAttributes,
+    ) -> seL4_Error {
+        unsupported_error()
     }
 
     #[inline(always)]
