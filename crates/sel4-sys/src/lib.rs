@@ -42,10 +42,6 @@ mod imp {
     pub const seL4_EndpointBits: seL4_Word = 4;
     pub const seL4_NotificationBits: seL4_Word = 4;
 
-    #[repr(transparent)]
-    #[derive(Clone, Copy)]
-    pub struct seL4_ARM_VMAttributes(pub seL4_Word);
-
     #[repr(usize)]
     #[derive(Copy, Clone, Debug, PartialEq, Eq)]
     pub enum seL4_ObjectType {
@@ -59,10 +55,8 @@ mod imp {
         seL4_ARM_PageTableObject = seL4_ARM_PageTableObject as usize,
     }
 
-    pub const seL4_ARM_Page_Uncached: seL4_ARM_VMAttributes = seL4_ARM_VMAttributes(0);
-    pub const seL4_ARM_Page_Default: seL4_ARM_VMAttributes = seL4_ARM_VMAttributes(0x03);
-
-    pub const seL4_FailedLookup: seL4_Error = 6;
+    pub const seL4_ARM_Page_Uncached: seL4_ARM_VMAttributes = 0;
+    pub const seL4_ARM_Page_Default: seL4_ARM_VMAttributes = 0x03;
     pub const seL4_NotEnoughMemory: seL4_Error = 10;
 
     #[repr(C)]
@@ -116,21 +110,35 @@ mod imp {
     pub type SlotRegion = seL4_SlotRegion;
     pub type UntypedDesc = seL4_UntypedDesc;
 
-    pub type seL4_CapRights = seL4_CapRights_t;
-    pub const seL4_CapRights_ReadWrite: seL4_CapRights_t = seL4_CapRights_t { words: [0x6] };
-    pub const seL4_CapRights_All: seL4_CapRights_t = seL4_CapRights_t { words: [0xf] };
+    pub const seL4_CapRights_ReadWrite: seL4_CapRights = seL4_CapRights { words: [0x6] };
+    pub const seL4_CapRights_All: seL4_CapRights = seL4_CapRights { words: [0xf] };
     pub const seL4_AllRights: seL4_Word = seL4_CapRights_All.words[0];
 
     #[inline(always)]
-    pub fn seL4_CapRights_to_word(rights: seL4_CapRights) -> seL4_CapRights_t {
+    pub fn seL4_CapRights_to_word(rights: seL4_CapRights) -> seL4_CapRights {
         rights
     }
 
-    #[repr(C)]
-    #[derive(Clone, Copy)]
-    pub struct seL4_ARM_Page_GetAddress {
-        pub error: seL4_Error,
-        pub paddr: seL4_Word,
+    impl seL4_CapRights {
+        #[inline(always)]
+        pub const fn new(
+            grant_reply: seL4_Word,
+            grant: seL4_Word,
+            read: seL4_Word,
+            write: seL4_Word,
+        ) -> Self {
+            let mut value: seL4_Word = 0;
+            value |= (grant_reply & 0x1) << 3;
+            value |= (grant & 0x1) << 2;
+            value |= (read & 0x1) << 1;
+            value |= write & 0x1;
+            Self { words: [value] }
+        }
+
+        #[inline(always)]
+        pub const fn raw(self) -> seL4_Word {
+            self.words[0]
+        }
     }
 
     #[repr(C, align(16))]
