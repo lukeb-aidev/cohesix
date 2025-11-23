@@ -446,11 +446,6 @@ fn generate_bindings(build_dir: &Path, config_sources: &[(PathBuf, String)]) {
         "seL4_Error seL4_TCB_SetIPCBuffer(seL4_TCB _service, seL4_Word buffer, seL4_CPtr bufferFrame);",
     )
     .unwrap();
-    writeln!(
-        wrapper_file,
-        "seL4_Error seL4_TCB_SetFaultHandler(seL4_TCB _service, seL4_CPtr faultEP);",
-    )
-    .unwrap();
     writeln!(wrapper_file, "void seL4_DebugPutChar(char c);").unwrap();
     writeln!(
         wrapper_file,

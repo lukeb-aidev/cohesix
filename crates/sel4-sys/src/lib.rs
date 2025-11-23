@@ -550,6 +550,71 @@ mod imp {
     }
 
     #[inline(always)]
+    pub unsafe fn seL4_TCB_SetFaultHandler(
+        tcb: seL4_TCB,
+        fault_handler: seL4_CPtr,
+    ) -> seL4_Error {
+        #[cfg(sel4_config_kernel_mcs)]
+        {
+            seL4_SetCap(0, fault_handler);
+            seL4_SetCap(1, seL4_CapInitThreadCNode);
+            seL4_SetCap(2, seL4_CapInitThreadVSpace);
+
+            let mut mr0: seL4_Word = 0;
+            let mut mr1: seL4_Word = 0;
+            let mut mr2: seL4_Word = 0;
+            let mut mr3: seL4_Word = 0;
+
+            let tag = seL4_MessageInfo::new(
+                invocation_label_TCBSetSpace as seL4_Word,
+                0,
+                3,
+                2,
+            );
+            let output_tag = seL4_CallWithMRs(tcb, tag, &mut mr0, &mut mr1, &mut mr2, &mut mr3);
+            let result = seL4_MessageInfo_get_label(output_tag) as seL4_Error;
+
+            if result != seL4_NoError {
+                seL4_SetMR(0, mr0);
+                seL4_SetMR(1, mr1);
+                seL4_SetMR(2, mr2);
+                seL4_SetMR(3, mr3);
+            }
+
+            return result;
+        }
+
+        #[cfg(not(sel4_config_kernel_mcs))]
+        {
+            seL4_SetCap(0, seL4_CapInitThreadCNode);
+            seL4_SetCap(1, seL4_CapInitThreadVSpace);
+
+            let mut mr0: seL4_Word = fault_handler as seL4_Word;
+            let mut mr1: seL4_Word = 0;
+            let mut mr2: seL4_Word = 0;
+            let mut mr3: seL4_Word = 0;
+
+            let tag = seL4_MessageInfo::new(
+                invocation_label_TCBSetSpace as seL4_Word,
+                0,
+                2,
+                3,
+            );
+            let output_tag = seL4_CallWithMRs(tcb, tag, &mut mr0, &mut mr1, &mut mr2, &mut mr3);
+            let result = seL4_MessageInfo_get_label(output_tag) as seL4_Error;
+
+            if result != seL4_NoError {
+                seL4_SetMR(0, mr0);
+                seL4_SetMR(1, mr1);
+                seL4_SetMR(2, mr2);
+                seL4_SetMR(3, mr3);
+            }
+
+            result
+        }
+    }
+
+    #[inline(always)]
     pub unsafe fn seL4_TCB_SetIPCBuffer(
         _tcb_cap: seL4_TCB,
         buffer_word: seL4_Word,
