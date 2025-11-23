@@ -279,6 +279,8 @@ fn write_constants(path: &Path) {
     writeln!(file, "#include <sel4/macros.h>").unwrap();
     writeln!(file, "#define seL4_WordBits 64").unwrap();
     writeln!(file, "#define seL4_PageBits 12").unwrap();
+    writeln!(file, "#define seL4_MsgLengthBits 7").unwrap();
+    writeln!(file, "#define seL4_MsgExtraCapBits 2").unwrap();
     writeln!(file, "#define seL4_MsgMaxLength 120").unwrap();
 }
 
@@ -374,7 +376,18 @@ fn write_shared_types(dir: &Path) {
     let file_path = dir.join("shared_types.h");
     let mut file = fs::File::create(file_path).expect("create shared_types.h");
     writeln!(file, "#pragma once").unwrap();
+    writeln!(file, "#include <sel4/constants.h>").unwrap();
     writeln!(file, "#include <sel4/shared_types_gen.h>").unwrap();
+
+    writeln!(file, "typedef struct seL4_IPCBuffer_ {{").unwrap();
+    writeln!(file, "    seL4_MessageInfo_t tag;").unwrap();
+    writeln!(file, "    seL4_Word msg[seL4_MsgMaxLength];").unwrap();
+    writeln!(file, "    seL4_Word userData;").unwrap();
+    writeln!(file, "    seL4_Word caps_or_badges[((1ul << (seL4_MsgExtraCapBits)) - 1)];").unwrap();
+    writeln!(file, "    seL4_CPtr receiveCNode;").unwrap();
+    writeln!(file, "    seL4_CPtr receiveIndex;").unwrap();
+    writeln!(file, "    seL4_Word receiveDepth;").unwrap();
+    writeln!(file, "}} seL4_IPCBuffer __attribute__((__aligned__(sizeof(struct seL4_IPCBuffer_))));").unwrap();
 }
 
 fn write_mode_types(path: &Path) {
