@@ -410,7 +410,12 @@ fn generate_bindings(build_dir: &Path, config_sources: &[(PathBuf, String)]) {
     let mut wrapper_file = fs::File::create(&wrapper).expect("create wrapper");
     writeln!(wrapper_file, "#include <sel4/sel4.h>").unwrap();
     writeln!(wrapper_file, "#include <sel4/syscalls.h>").unwrap();
+    writeln!(wrapper_file, "#include <sel4/functions.h>").unwrap();
+    writeln!(wrapper_file, "#include <interfaces/sel4_client.h>").unwrap();
 
+    writeln!(wrapper_file, "#ifdef __cplusplus").unwrap();
+    writeln!(wrapper_file, "extern \"C\" {{").unwrap();
+    writeln!(wrapper_file, "#endif").unwrap();
     writeln!(
         wrapper_file,
         "seL4_Error seL4_CNode_Copy(seL4_CNode _service, seL4_Word dest_index, seL4_Uint8 dest_depth, seL4_CNode src_root, seL4_Word src_index, seL4_Uint8 src_depth, seL4_CapRights_t rights);",
@@ -419,6 +424,16 @@ fn generate_bindings(build_dir: &Path, config_sources: &[(PathBuf, String)]) {
     writeln!(
         wrapper_file,
         "seL4_Error seL4_CNode_Mint(seL4_CNode _service, seL4_Word dest_index, seL4_Uint8 dest_depth, seL4_CNode src_root, seL4_Word src_index, seL4_Uint8 src_depth, seL4_CapRights_t rights, seL4_Word badge);",
+    )
+    .unwrap();
+    writeln!(
+        wrapper_file,
+        "seL4_Error seL4_CNode_Move(seL4_CNode _service, seL4_Word dest_index, seL4_Uint8 dest_depth, seL4_CNode src_root, seL4_Word src_index, seL4_Uint8 src_depth);",
+    )
+    .unwrap();
+    writeln!(
+        wrapper_file,
+        "seL4_Error seL4_CNode_Delete(seL4_CNode _service, seL4_Word index, seL4_Uint8 depth);",
     )
     .unwrap();
     writeln!(
@@ -436,17 +451,31 @@ fn generate_bindings(build_dir: &Path, config_sources: &[(PathBuf, String)]) {
         "seL4_Error seL4_TCB_SetFaultHandler(seL4_TCB _service, seL4_CPtr faultEP);",
     )
     .unwrap();
+    writeln!(wrapper_file, "void seL4_DebugPutChar(char c);").unwrap();
     writeln!(
         wrapper_file,
         "seL4_Uint32 seL4_DebugCapIdentify(seL4_CPtr cap);",
     )
     .unwrap();
+    writeln!(
+        wrapper_file,
+        "seL4_Error seL4_ARM_Page_Map(seL4_ARM_Page _service, seL4_CPtr vspace, seL4_Word vaddr, seL4_CapRights_t rights, seL4_ARM_VMAttributes attr);",
+    )
+    .unwrap();
+    writeln!(
+        wrapper_file,
+        "seL4_Error seL4_ARM_PageTable_Map(seL4_ARM_PageTable _service, seL4_CPtr vspace, seL4_Word vaddr, seL4_ARM_VMAttributes attr);",
+    )
+    .unwrap();
+    writeln!(wrapper_file, "#ifdef __cplusplus").unwrap();
+    writeln!(wrapper_file, "}}").unwrap();
+    writeln!(wrapper_file, "#endif").unwrap();
 
     let mut builder = bindgen::Builder::default()
         .use_core()
         .ctypes_prefix("core::ffi")
         .header(wrapper.to_string_lossy())
-        .generate_inline_functions(false)
+        .generate_inline_functions(true)
         .layout_tests(false)
         .size_t_is_usize(true)
         .allowlist_function("seL4_.*")

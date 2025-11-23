@@ -636,6 +636,7 @@ pub fn dump_bootinfo(
 
 /// Minimal mirror of [`seL4_UntypedDesc`] with idiomatic field names for the root task.
 #[derive(Clone, Copy)]
+#[derive(Debug)]
 pub struct UntypedDesc {
     /// Physical base address backing the untyped frame.
     pub paddr: u64,
