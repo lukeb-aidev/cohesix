@@ -10,8 +10,7 @@
 #[cfg(target_os = "none")]
 mod imp {
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
-
-    pub const MAX_BOOTINFO_UNTYPEDS: usize = CONFIG_MAX_NUM_BOOTINFO_UNTYPED_CAPS as usize;
+    include!(concat!(env!("OUT_DIR"), "/sel4_config_consts.rs"));
 
     #[repr(C, align(16))]
     pub struct TlsImage {
