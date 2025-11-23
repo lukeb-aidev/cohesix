@@ -33,22 +33,31 @@ fn main() {
         .map(PathBuf::from)
         .unwrap_or_else(|_| manifest_dir.join("../../seL4/build"));
 
-    if let Some(true) = probe_config_flag(&build_dir, "CONFIG_KERNEL_MCS") {
+    let config_sources = load_config_files(&build_dir);
+
+    if let Some(true) = probe_config_flag(&config_sources, "CONFIG_KERNEL_MCS") {
         println!("cargo:rustc-cfg=sel4_config_kernel_mcs");
     }
 
-    generate_bindings(&build_dir);
+    generate_bindings(&build_dir, &config_sources);
 }
 
-fn probe_config_flag(root: &Path, flag: &str) -> Option<bool> {
+fn load_config_files(root: &Path) -> Vec<(PathBuf, String)> {
+    let mut sources = Vec::new();
     for relative in CONFIG_CANDIDATES {
         let candidate = root.join(relative);
         println!("cargo:rerun-if-changed={}", candidate.display());
-        let Ok(contents) = fs::read_to_string(&candidate) else {
-            continue;
-        };
+        if let Ok(contents) = fs::read_to_string(&candidate) {
+            sources.push((candidate, contents));
+        }
+    }
 
-        if let Some(value) = parse_config_flag(&contents, flag) {
+    sources
+}
+
+fn probe_config_flag(sources: &[(PathBuf, String)], flag: &str) -> Option<bool> {
+    for (_path, contents) in sources {
+        if let Some(value) = parse_config_flag(contents, flag) {
             return Some(value);
         }
     }
@@ -122,7 +131,79 @@ fn parse_cmake_line(line: &str, flag: &str) -> Option<bool> {
     }
 }
 
-fn generate_bindings(build_dir: &Path) {
+fn parse_config_value(sources: &[(PathBuf, String)], key: &str) -> Option<String> {
+    for (_path, contents) in sources {
+        if let Some(value) = parse_value_line(contents, key) {
+            return Some(value);
+        }
+    }
+
+    None
+}
+
+fn parse_value_line(contents: &str, key: &str) -> Option<String> {
+    for raw_line in contents.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with("/* disabled:") {
+            continue;
+        }
+
+        if let Some(value) = parse_define_value(line, key) {
+            return Some(value);
+        }
+
+        if let Some(value) = parse_assignment_value(line, key) {
+            return Some(value);
+        }
+
+        if let Some(value) = parse_cmake_value(line, key) {
+            return Some(value);
+        }
+    }
+
+    None
+}
+
+fn parse_define_value(line: &str, key: &str) -> Option<String> {
+    let line = line.strip_prefix("#define ")?;
+    let mut parts = line.split_whitespace();
+    let name = parts.next()?;
+    if name != key {
+        return None;
+    }
+
+    let value = parts.collect::<Vec<_>>().join(" ");
+    Some(trim_config_value(&value))
+}
+
+fn parse_assignment_value(line: &str, key: &str) -> Option<String> {
+    if !line.starts_with(key) {
+        return None;
+    }
+
+    let mut parts = line.splitn(2, '=');
+    let _name = parts.next()?;
+    let value = parts.next()?.trim();
+    Some(trim_config_value(value))
+}
+
+fn parse_cmake_value(line: &str, key: &str) -> Option<String> {
+    let line = line.strip_prefix("set(")?.trim_end_matches(')');
+    let mut parts = line.split_whitespace();
+    let name = parts.next()?;
+    if name != key {
+        return None;
+    }
+
+    let value = parts.next()?;
+    Some(trim_config_value(value))
+}
+
+fn trim_config_value(raw: &str) -> String {
+    raw.trim_matches(&['"', '\''][..]).to_string()
+}
+
+fn generate_bindings(build_dir: &Path, config_sources: &[(PathBuf, String)]) {
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     if target_os != "none" {
         return;
@@ -131,6 +212,51 @@ fn generate_bindings(build_dir: &Path) {
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let upstream_root = manifest_dir.join("upstream/libsel4");
+
+    let arch = parse_config_value(config_sources, "CONFIG_ARCH")
+        .unwrap_or_else(|| "arm".to_string());
+    let sel4_arch = parse_config_value(config_sources, "CONFIG_SEL4_ARCH")
+        .or_else(|| env::var("SEL4_ARCH").ok())
+        .unwrap_or_else(|| "aarch64".to_string());
+    let mode = parse_config_value(config_sources, "CONFIG_WORD_SIZE")
+        .as_deref()
+        .and_then(|value| value.parse::<u32>().ok())
+        .map(|word_size| if word_size >= 64 { "64" } else { "32" })
+        .unwrap_or_else(|| match sel4_arch.as_str() {
+            "aarch64" | "x86_64" | "riscv64" => "64",
+            _ => "32",
+        })
+        .to_string();
+
+    let mode_include_dir = upstream_root.join(format!("mode_include/{}", mode));
+    let mode_header = mode_include_dir.join("sel4/mode/types.h");
+    if !mode_header.is_file() {
+        panic!(
+            "Could not locate libsel4 mode headers for current seL4 config (mode {}); expected {}",
+            mode,
+            mode_header.display()
+        );
+    }
+
+    let mut include_dirs = vec![
+        build_dir.join("libsel4/include"),
+        build_dir.join(format!("libsel4/sel4_arch_include/{}", sel4_arch)),
+        build_dir.join(format!("libsel4/arch_include/{}", arch)),
+        build_dir.join("libsel4/autoconf"),
+        build_dir.join("libsel4/gen_config"),
+        build_dir.join("kernel/gen_config"),
+        upstream_root.join("include"),
+        upstream_root.join(format!("sel4_arch_include/{}", sel4_arch)),
+        upstream_root.join(format!("arch_include/{}", arch)),
+        mode_include_dir.clone(),
+    ];
+
+    let build_mode_dir = build_dir.join(format!("libsel4/mode_include/{}", mode));
+    if build_mode_dir.is_dir() {
+        include_dirs.push(build_mode_dir);
+    }
+
+    include_dirs.retain(|dir| dir.is_dir());
 
     let wrapper = out_dir.join("wrapper.h");
     let mut wrapper_file = fs::File::create(&wrapper).expect("create wrapper");
@@ -168,48 +294,20 @@ fn generate_bindings(build_dir: &Path) {
     )
     .unwrap();
 
-    let builder = bindgen::Builder::default()
+    let mut builder = bindgen::Builder::default()
         .use_core()
         .ctypes_prefix("core::ffi")
         .header(wrapper.to_string_lossy())
-        .clang_arg(format!("-I{}", build_dir.join("libsel4/include").display()))
-        .clang_arg(format!(
-            "-I{}",
-            build_dir
-                .join("libsel4/sel4_arch_include/aarch64")
-                .display()
-        ))
-        .clang_arg(format!(
-            "-I{}",
-            build_dir.join("libsel4/arch_include/arm").display()
-        ))
-        .clang_arg(format!(
-            "-I{}",
-            build_dir.join("libsel4/autoconf").display()
-        ))
-        .clang_arg(format!(
-            "-I{}",
-            build_dir.join("libsel4/gen_config").display()
-        ))
-        .clang_arg(format!(
-            "-I{}",
-            build_dir.join("kernel/gen_config").display()
-        ))
-        .clang_arg(format!("-I{}", upstream_root.join("include").display()))
-        .clang_arg(format!(
-            "-I{}",
-            upstream_root.join("sel4_arch_include/aarch64").display()
-        ))
-        .clang_arg(format!(
-            "-I{}",
-            upstream_root.join("arch_include/arm").display()
-        ))
         .generate_inline_functions(false)
         .layout_tests(false)
         .size_t_is_usize(true)
         .allowlist_function("seL4_.*")
         .allowlist_type("seL4_.*")
         .allowlist_var("seL4_.*");
+
+    for dir in include_dirs {
+        builder = builder.clang_arg(format!("-I{}", dir.display()));
+    }
 
     let bindings = builder.generate().expect("unable to generate bindings");
     bindings
