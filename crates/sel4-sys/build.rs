@@ -479,8 +479,8 @@ fn generate_bindings(build_dir: &Path, config_sources: &[(PathBuf, String)]) {
         .layout_tests(false)
         .size_t_is_usize(true)
         .allowlist_function("seL4_.*")
-        .allowlist_type("seL4_.*")
-        .allowlist_var("seL4_.*");
+        .allowlist_type("seL4_.*|invocation_label|arch_invocation_label")
+        .allowlist_var("seL4_.*|CNode.*|UntypedRetype|ARMPageTableMap|ARMPageMap|InvalidInvocation");
 
     for dir in include_dirs {
         builder = builder.clang_arg(format!("-I{}", dir.display()));
