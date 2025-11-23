@@ -91,7 +91,7 @@ pub fn retype_endpoint_into_slot(ut: seL4_CPtr, slot: seL4_Word, rt: &RetypeTupl
     let result = unsafe {
         seL4_Untyped_Retype(
             ut,
-            seL4_EndpointObject,
+            seL4_EndpointObject as seL4_Word,
             0,
             rt.node_root,
             rt.node_index,

@@ -9,8 +9,254 @@
 
 #[cfg(target_os = "none")]
 mod imp {
+    use core::arch::asm;
+
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
     include!(concat!(env!("OUT_DIR"), "/sel4_config_consts.rs"));
+
+    extern "C" {
+        pub fn seL4_DebugCapIdentify(cap: seL4_CPtr) -> seL4_Uint32;
+
+        pub fn seL4_DebugPutChar(c: u8);
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_GetIPCBuffer() -> *mut seL4_IPCBuffer {
+        tls_image_mut()
+            .map(|tls| tls.ipc_buffer())
+            .unwrap_or(core::ptr::null_mut())
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_SetIPCBuffer(buffer: *mut seL4_IPCBuffer) {
+        if let Some(tls) = tls_image_mut() {
+            tls.set_ipc_buffer(buffer);
+        }
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_GetMR(index: i32) -> seL4_Word {
+        (*seL4_GetIPCBuffer()).msg[index as usize]
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_SetMR(index: i32, value: seL4_Word) {
+        (*seL4_GetIPCBuffer()).msg[index as usize] = value;
+    }
+
+    #[inline(always)]
+    unsafe fn arm_sys_send(
+        sys: seL4_Word,
+        dest: seL4_Word,
+        info_arg: seL4_Word,
+        mr0: seL4_Word,
+        mr1: seL4_Word,
+        mr2: seL4_Word,
+        mr3: seL4_Word,
+    ) {
+        let mut destptr = dest;
+        let mut info = info_arg;
+        let mut msg0 = mr0;
+        let mut msg1 = mr1;
+        let mut msg2 = mr2;
+        let mut msg3 = mr3;
+        let scno = sys;
+        asm!(
+            "svc #0",
+            inout("x0") destptr,
+            inout("x2") msg0,
+            inout("x3") msg1,
+            inout("x4") msg2,
+            inout("x5") msg3,
+            inout("x1") info,
+            in("x7") scno,
+        );
+    }
+
+    #[inline(always)]
+    unsafe fn arm_sys_send_recv(
+        sys: seL4_Word,
+        dest: seL4_Word,
+        out_badge: *mut seL4_Word,
+        info_arg: seL4_Word,
+        out_info: *mut seL4_Word,
+        in_out_mr0: *mut seL4_Word,
+        in_out_mr1: *mut seL4_Word,
+        in_out_mr2: *mut seL4_Word,
+        in_out_mr3: *mut seL4_Word,
+        #[allow(unused_variables)] reply: seL4_Word,
+    ) {
+        let mut destptr = dest;
+        let mut info = info_arg;
+        let mut msg0 = *in_out_mr0;
+        let mut msg1 = *in_out_mr1;
+        let mut msg2 = *in_out_mr2;
+        let mut msg3 = *in_out_mr3;
+        let scno = sys;
+        asm!(
+            "svc #0",
+            inout("x0") destptr,
+        inout("x2") msg0,
+        inout("x3") msg1,
+        inout("x4") msg2,
+        inout("x5") msg3,
+        inout("x1") info,
+        in("x7") scno,
+        options(nostack),
+    );
+        *out_info = info;
+        *out_badge = destptr;
+        *in_out_mr0 = msg0;
+        *in_out_mr1 = msg1;
+        *in_out_mr2 = msg2;
+        *in_out_mr3 = msg3;
+    }
+
+    #[inline(always)]
+    unsafe fn arm_sys_null(sys: seL4_Word) {
+        let scno = sys;
+        asm!("svc #0", in("x7") scno, options(nostack, preserves_flags));
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_Send(dest: seL4_CPtr, msg_info: seL4_MessageInfo) {
+        arm_sys_send(
+            seL4_SysSend as seL4_Word,
+            dest as seL4_Word,
+            msg_info.words[0],
+            seL4_GetMR(0),
+            seL4_GetMR(1),
+            seL4_GetMR(2),
+            seL4_GetMR(3),
+        );
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_CallWithMRs(
+        dest: seL4_CPtr,
+        msg_info: seL4_MessageInfo,
+        mr0: *mut seL4_Word,
+        mr1: *mut seL4_Word,
+        mr2: *mut seL4_Word,
+        mr3: *mut seL4_Word,
+    ) -> seL4_MessageInfo {
+        let mut info = msg_info;
+        let mut msg0 = 0;
+        let mut msg1 = 0;
+        let mut msg2 = 0;
+        let mut msg3 = 0;
+
+        if !mr0.is_null() && info.length() > 0 {
+            msg0 = *mr0;
+        }
+        if !mr1.is_null() && info.length() > 1 {
+            msg1 = *mr1;
+        }
+        if !mr2.is_null() && info.length() > 2 {
+            msg2 = *mr2;
+        }
+        if !mr3.is_null() && info.length() > 3 {
+            msg3 = *mr3;
+        }
+
+        let mut badge_dest = dest as seL4_Word;
+
+        arm_sys_send_recv(
+            seL4_SysCall as seL4_Word,
+            dest as seL4_Word,
+            &mut badge_dest,
+            info.words[0],
+            &mut info.words[0],
+            &mut msg0,
+            &mut msg1,
+            &mut msg2,
+            &mut msg3,
+            0,
+        );
+
+        if !mr0.is_null() {
+            *mr0 = msg0;
+        }
+        if !mr1.is_null() {
+            *mr1 = msg1;
+        }
+        if !mr2.is_null() {
+            *mr2 = msg2;
+        }
+        if !mr3.is_null() {
+            *mr3 = msg3;
+        }
+
+        info
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_Yield() {
+        arm_sys_null(seL4_SysYield as seL4_Word);
+        asm!("", options(nostack, nomem, preserves_flags));
+    }
+
+    pub const seL4_NoError: seL4_Error = seL4_Error_seL4_NoError;
+    pub const seL4_InvalidArgument: seL4_Error = seL4_Error_seL4_InvalidArgument;
+    pub const seL4_InvalidCapability: seL4_Error = seL4_Error_seL4_InvalidCapability;
+    pub const seL4_AlignmentError: seL4_Error = seL4_Error_seL4_AlignmentError;
+    pub const seL4_TruncatedMessage: seL4_Error = seL4_Error_seL4_TruncatedMessage;
+    pub const seL4_RevokeFirst: seL4_Error = seL4_Error_seL4_RevokeFirst;
+    pub const seL4_IllegalOperation: seL4_Error = seL4_Error_seL4_IllegalOperation;
+    pub const seL4_NotEnoughMemory: seL4_Error = seL4_Error_seL4_NotEnoughMemory;
+    pub const seL4_RangeError: seL4_Error = seL4_Error_seL4_RangeError;
+    pub const seL4_FailedLookup: seL4_Error = seL4_Error_seL4_FailedLookup;
+    pub const seL4_DeleteFirst: seL4_Error = seL4_Error_seL4_DeleteFirst;
+
+    pub const seL4_SysSend: seL4_Word = seL4_Syscall_ID_seL4_SysSend as seL4_Word;
+    pub const seL4_SysCall: seL4_Word = seL4_Syscall_ID_seL4_SysCall as seL4_Word;
+    pub const seL4_SysYield: seL4_Word = seL4_Syscall_ID_seL4_SysYield as seL4_Word;
+
+    pub const seL4_UntypedObject: seL4_ObjectType = api_object_seL4_UntypedObject;
+    pub const seL4_TCBObject: seL4_ObjectType = api_object_seL4_TCBObject;
+    pub const seL4_EndpointObject: seL4_ObjectType = api_object_seL4_EndpointObject;
+    pub const seL4_NotificationObject: seL4_ObjectType = api_object_seL4_NotificationObject;
+    pub const seL4_CapTableObject: seL4_ObjectType = api_object_seL4_CapTableObject;
+
+    pub const seL4_ARM_Page: seL4_ObjectType = _object_seL4_ARM_SmallPageObject as seL4_ObjectType;
+    pub const seL4_ARM_LargePage: seL4_ObjectType = _object_seL4_ARM_LargePageObject as seL4_ObjectType;
+    pub const seL4_ARM_PageTableObject: seL4_ObjectType =
+        _object_seL4_ARM_PageTableObject as seL4_ObjectType;
+    pub const seL4_ARM_SmallPageObject: seL4_ObjectType = seL4_ARM_Page;
+
+    pub const seL4_CapNull: seL4_CPtr = seL4_RootCNodeCapSlots_seL4_CapNull as seL4_CPtr;
+    pub const seL4_CapInitThreadTCB: seL4_CPtr =
+        seL4_RootCNodeCapSlots_seL4_CapInitThreadTCB as seL4_CPtr;
+    pub const seL4_CapInitThreadCNode: seL4_CPtr =
+        seL4_RootCNodeCapSlots_seL4_CapInitThreadCNode as seL4_CPtr;
+    pub const seL4_CapInitThreadVSpace: seL4_CPtr =
+        seL4_RootCNodeCapSlots_seL4_CapInitThreadVSpace as seL4_CPtr;
+    pub const seL4_CapIRQControl: seL4_CPtr = seL4_RootCNodeCapSlots_seL4_CapIRQControl as seL4_CPtr;
+    pub const seL4_CapASIDControl: seL4_CPtr = seL4_RootCNodeCapSlots_seL4_CapASIDControl as seL4_CPtr;
+    pub const seL4_CapInitThreadASIDPool: seL4_CPtr =
+        seL4_RootCNodeCapSlots_seL4_CapInitThreadASIDPool as seL4_CPtr;
+    pub const seL4_CapIOPortControl: seL4_CPtr =
+        seL4_RootCNodeCapSlots_seL4_CapIOPortControl as seL4_CPtr;
+    pub const seL4_CapIOPort: seL4_CPtr = seL4_CapIOPortControl;
+    pub const seL4_CapIOSpace: seL4_CPtr = seL4_RootCNodeCapSlots_seL4_CapIOSpace as seL4_CPtr;
+    pub const seL4_CapBootInfoFrame: seL4_CPtr =
+        seL4_RootCNodeCapSlots_seL4_CapBootInfoFrame as seL4_CPtr;
+    pub const seL4_CapInitThreadIPCBuffer: seL4_CPtr =
+        seL4_RootCNodeCapSlots_seL4_CapInitThreadIPCBuffer as seL4_CPtr;
+    pub const seL4_CapDomain: seL4_CPtr = seL4_RootCNodeCapSlots_seL4_CapDomain as seL4_CPtr;
+    pub const seL4_CapSMMUSIDControl: seL4_CPtr =
+        seL4_RootCNodeCapSlots_seL4_CapSMMUSIDControl as seL4_CPtr;
+    pub const seL4_CapSMMUCBControl: seL4_CPtr =
+        seL4_RootCNodeCapSlots_seL4_CapSMMUCBControl as seL4_CPtr;
+    pub const seL4_CapInitThreadSC: seL4_CPtr = seL4_RootCNodeCapSlots_seL4_CapInitThreadSC as seL4_CPtr;
+    pub const seL4_CapSMC: seL4_CPtr = seL4_RootCNodeCapSlots_seL4_CapSMC as seL4_CPtr;
+
+    pub const seL4_WordBits: seL4_Word = (core::mem::size_of::<seL4_Word>() * 8) as seL4_Word;
+
+    pub const seL4_ARM_Page_Default: seL4_ARM_VMAttributes =
+        seL4_ARM_VMAttributes_seL4_ARM_Default_VMAttributes;
+    pub const seL4_ARM_Page_Uncached: seL4_ARM_VMAttributes = 0;
+    pub use seL4_DebugCapIdentify as seL4_CapIdentify;
 
     #[repr(C, align(16))]
     pub struct TlsImage {
@@ -64,6 +310,74 @@ mod imp {
         }
 
         Some(&mut *base)
+    }
+
+    impl seL4_CapRights {
+        #[inline(always)]
+        pub const fn new(
+            grant_reply: u8,
+            grant: u8,
+            read: u8,
+            write: u8,
+        ) -> Self {
+            let mut value: seL4_Word = 0;
+            value |= (grant_reply as seL4_Word & 0x1) << 3;
+            value |= (grant as seL4_Word & 0x1) << 2;
+            value |= (read as seL4_Word & 0x1) << 1;
+            value |= write as seL4_Word & 0x1;
+            Self { words: [value] }
+        }
+
+        #[inline(always)]
+        pub const fn raw(self) -> seL4_Word {
+            self.words[0]
+        }
+    }
+
+    pub const seL4_AllRights: seL4_CapRights = seL4_CapRights::new(1, 1, 1, 1);
+    pub const seL4_CapRights_All: seL4_CapRights = seL4_AllRights;
+    pub const seL4_CapRights_ReadWrite: seL4_CapRights = seL4_CapRights::new(0, 0, 1, 1);
+
+    #[inline(always)]
+    pub const fn seL4_CapRights_to_word(rights: seL4_CapRights) -> seL4_CapRights_t {
+        rights
+    }
+
+    impl seL4_MessageInfo {
+        #[inline(always)]
+        pub const fn new(
+            label: seL4_Word,
+            caps_unwrapped: seL4_Word,
+            extra_caps: seL4_Word,
+            length: seL4_Word,
+        ) -> Self {
+            let mut value: seL4_Word = 0;
+            value |= (label & 0xfffffffffffff) << 12;
+            value |= (caps_unwrapped & 0x7) << 9;
+            value |= (extra_caps & 0x3) << 7;
+            value |= length & 0x7f;
+            Self { words: [value] }
+        }
+
+        #[inline(always)]
+        pub const fn length(self) -> seL4_Word {
+            (self.words[0] & 0x7f) >> 0
+        }
+
+        #[inline(always)]
+        pub const fn label(self) -> seL4_Word {
+            (self.words[0] & 0xfffffffffffff000) >> 12
+        }
+
+        #[inline(always)]
+        pub const fn extra_caps(self) -> seL4_Word {
+            (self.words[0] & 0x180) >> 7
+        }
+
+        #[inline(always)]
+        pub const fn caps_unwrapped(self) -> seL4_Word {
+            (self.words[0] & 0xe00) >> 9
+        }
     }
 }
 
@@ -178,16 +492,21 @@ mod imp {
         #[inline(always)]
         pub const fn new(
             label: seL4_Word,
-            _caps_unwrapped: seL4_Word,
-            _extra_caps: seL4_Word,
-            _length: seL4_Word,
+            caps_unwrapped: seL4_Word,
+            extra_caps: seL4_Word,
+            length: seL4_Word,
         ) -> Self {
-            Self { words: [label] }
+            let mut value: seL4_Word = 0;
+            value |= (label & 0xfffffffffffff) << 12;
+            value |= (caps_unwrapped & 0x7) << 9;
+            value |= (extra_caps & 0x3) << 7;
+            value |= length & 0x7f;
+            Self { words: [value] }
         }
 
         #[inline(always)]
         pub const fn label(self) -> seL4_Word {
-            self.words[0]
+            (self.words[0] & 0xfffffffffffff000) >> 12
         }
 
         #[inline(always)]
@@ -197,7 +516,7 @@ mod imp {
 
         #[inline(always)]
         pub const fn caps_unwrapped(self) -> seL4_Word {
-            0
+            (self.words[0] & 0xe00) >> 9
         }
 
         #[inline(always)]
@@ -207,12 +526,12 @@ mod imp {
 
         #[inline(always)]
         pub const fn length(self) -> seL4_Word {
-            0
+            (self.words[0] & 0x7f) >> 0
         }
 
         #[inline(always)]
         pub const fn extra_caps(self) -> seL4_Word {
-            0
+            (self.words[0] & 0x180) >> 7
         }
 
         #[inline(always)]

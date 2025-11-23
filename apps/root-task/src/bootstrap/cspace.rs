@@ -13,7 +13,7 @@ use heapless::String;
 use super::cspace_sys;
 use sel4_sys::{
     self, seL4_BootInfo, seL4_CNode, seL4_CPtr, seL4_CapBootInfoFrame, seL4_CapInitThreadCNode,
-    seL4_CapInitThreadTCB, seL4_Word,
+    seL4_CapInitThreadTCB, seL4_NoError, seL4_Word,
 };
 
 #[cfg(feature = "cap-probes")]
@@ -227,7 +227,7 @@ fn assert_caps_known() {
 }
 
 fn cap_type_of(slot: usize) -> seL4_Word {
-    unsafe { sel4_sys::seL4_DebugCapIdentify(idx(slot)) }
+    unsafe { sel4_sys::seL4_DebugCapIdentify(idx(slot)).into() }
 }
 
 #[inline(always)]
@@ -469,7 +469,7 @@ pub fn first_endpoint_retype(
 
     cspace_sys::retype_into_root(
         ut_cap,
-        sel4_sys::seL4_ObjectType::seL4_EndpointObject as _,
+        sel4_sys::seL4_EndpointObject as _,
         0,
         slot,
         bi,
@@ -578,7 +578,7 @@ pub fn cspace_first_retypes(
     dest.set_slot_offset(endpoint_slot);
     cspace_sys::retype_into_root(
         ut_cap,
-        sel4_sys::seL4_ObjectType::seL4_EndpointObject as _,
+        sel4_sys::seL4_EndpointObject as _,
         0,
         endpoint_slot,
         bi,
@@ -992,7 +992,7 @@ impl CSpaceCtx {
         dest_index: sel4::seL4_CPtr,
         src_index: sel4::seL4_CPtr,
     ) {
-        if err != sel4::seL4_NoError {
+        if err != seL4_NoError {
             let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
             if write!(
                 &mut line,
@@ -1018,7 +1018,7 @@ impl CSpaceCtx {
         src_index: sel4::seL4_CPtr,
         badge: sel4::seL4_Word,
     ) {
-        if err != sel4::seL4_NoError {
+        if err != seL4_NoError {
             let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
             if write!(
                 &mut line,
@@ -1047,7 +1047,7 @@ impl CSpaceCtx {
         dest_index: sel4::seL4_CPtr,
         dest: &DestCNode,
     ) {
-        if err != sel4::seL4_NoError {
+        if err != seL4_NoError {
             let mut line = String::<MAX_DIAGNOSTIC_LEN>::new();
             if write!(
                 &mut line,
@@ -1072,7 +1072,7 @@ impl CSpaceCtx {
         let dst_slot = self.alloc_slot_checked()?;
         let src_slot = seL4_CapInitThreadTCB;
         let err = self.copy_init_tcb_from(dst_slot, src_slot);
-        if err == sel4::seL4_NoError {
+        if err == seL4_NoError {
             self.tcb_copy_slot = dst_slot;
             Ok(())
         } else {
@@ -1118,7 +1118,7 @@ impl CSpaceCtx {
             0,
         );
         self.log_cnode_mint(err, dst_slot, src_slot, 0);
-        if err == sel4::seL4_NoError {
+        if err == seL4_NoError {
             self.root_cnode_copy_slot = dst_slot;
             let init_ident = sel4::debug_cap_identify(seL4_CapInitThreadCNode);
             let copy_ident = sel4::debug_cap_identify(dst_slot);
@@ -1162,7 +1162,7 @@ impl CSpaceCtx {
 
         let err = super::retype::call_retype(untyped, obj_ty, size_bits, &dest, 1);
         self.log_retype(err, untyped, obj_ty, size_bits, dst_slot, &dest);
-        if err == sel4::seL4_NoError {
+        if err == seL4_NoError {
             dest.bump_slot();
         }
         self.dest = dest;

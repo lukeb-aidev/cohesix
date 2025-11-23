@@ -292,9 +292,9 @@ fn boot_retype_limit() -> u32 {
 
 fn object_name(obj_type: sys::seL4_ObjectType) -> &'static str {
     match obj_type {
-        sys::seL4_ObjectType::seL4_ARM_PageTableObject => "PageTable",
-        sys::seL4_ObjectType::seL4_ARM_Page => "Page",
-        sys::seL4_ObjectType::seL4_NotificationObject => "Notification",
+        x if x == sys::seL4_ARM_PageTableObject => "PageTable",
+        x if x == sys::seL4_ARM_Page => "Page",
+        x if x == sys::seL4_NotificationObject => "Notification",
         _ => "Object",
     }
 }
@@ -450,10 +450,10 @@ where
     let categories: [(u32, sys::seL4_ObjectType, u8); 2] = [
         (
             tables,
-            sys::seL4_ObjectType::seL4_ARM_PageTableObject,
+            sys::seL4_ARM_PageTableObject,
             PAGE_TABLE_BITS as u8,
         ),
-        (pages, sys::seL4_ObjectType::seL4_ARM_Page, PAGE_BITS as u8),
+        (pages, sys::seL4_ARM_Page, PAGE_BITS as u8),
     ];
 
     let mut done = 0u32;

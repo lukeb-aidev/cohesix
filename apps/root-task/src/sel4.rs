@@ -27,8 +27,9 @@ pub use sel4_sys::{
     seL4_CapInitThreadCNode, seL4_CapInitThreadIPCBuffer, seL4_CapInitThreadSC,
     seL4_CapInitThreadTCB, seL4_CapInitThreadVSpace, seL4_CapNull, seL4_CapRights,
     seL4_CapRights_All, seL4_CapRights_ReadWrite, seL4_CapSMC, seL4_CapSMMUCBControl,
-    seL4_CapSMMUSIDControl, seL4_Error, seL4_GetBootInfo, seL4_MessageInfo, seL4_NoError,
-    seL4_NotEnoughMemory, seL4_RangeError, seL4_Untyped, seL4_Untyped_Retype, seL4_Word,
+    seL4_CapSMMUSIDControl, seL4_DeleteFirst, seL4_Error, seL4_FailedLookup, seL4_GetBootInfo,
+    seL4_MessageInfo, seL4_NoError, seL4_NotEnoughMemory, seL4_ObjectType, seL4_RangeError,
+    seL4_Untyped, seL4_Untyped_Retype, seL4_Word,
 };
 use static_assertions::const_assert;
 
@@ -220,9 +221,10 @@ pub const fn cap_data_guard(guard: seL4_Word, guard_size: seL4_Word) -> seL4_Wor
 
 use sel4_sys::{
     seL4_ARM_PageTableObject, seL4_ARM_PageTable_Map, seL4_ARM_Page_Default, seL4_ARM_Page_Map,
-    seL4_ARM_Page_Uncached, seL4_ARM_VMAttributes, seL4_BootInfo, seL4_ObjectType, seL4_SlotRegion,
-    UntypedDesc, MAX_BOOTINFO_UNTYPEDS,
+    seL4_ARM_Page_Uncached, seL4_ARM_VMAttributes, seL4_BootInfo, seL4_SlotRegion,
+    MAX_BOOTINFO_UNTYPEDS,
 };
+use crate::boot::bi_extra::UntypedDesc;
 
 #[cfg(all(feature = "kernel", not(sel4_config_printing)))]
 use sel4_panicking::write_debug_byte;
@@ -585,14 +587,20 @@ pub fn ep_ready() -> bool {
 #[cfg(feature = "kernel")]
 #[inline]
 pub fn set_message_register(index: usize, value: seL4_Word) {
-    unsafe { sel4_sys::seL4_SetMR(index, value) };
+    let mr_index: i32 = index
+        .try_into()
+        .expect("message register index must fit in i32");
+    unsafe { sel4_sys::seL4_SetMR(mr_index, value) };
 }
 
 /// Reads a value from an IPC message register.
 #[cfg(feature = "kernel")]
 #[inline]
 pub fn message_register(index: usize) -> seL4_Word {
-    unsafe { sel4_sys::seL4_GetMR(index) }
+    let reg_index: i32 = index
+        .try_into()
+        .expect("message register index must fit in i32");
+    unsafe { sel4_sys::seL4_GetMR(reg_index) }
 }
 
 /// Issues an seL4 reply using the current thread's reply capability.
@@ -935,7 +943,7 @@ pub fn cnode_copy(
 ) -> seL4_Error {
     debug_put_char(b'C' as i32);
     let depth_bits = _bootinfo.init_cnode_depth();
-    let depth_word = depth_bits as sel4_sys::seL4_Word;
+    let depth_word: u8 = depth_bits.try_into().expect("init cnode depth fits in u8");
     unsafe {
         seL4_CNode_Copy(
             dest_root,
@@ -966,16 +974,14 @@ pub fn cnode_copy_depth(
         // SAFETY: Callers must ensure that the provided CNodes and depths originate from
         // kernel-supplied boot information. This wrapper centralises the unsafe invocation so
         // higher-level modules can remain within the crate-wide `#![deny(unsafe_code)]` policy.
-        let dest_depth_word = dest_depth as sel4_sys::seL4_Word;
-        let src_depth_word = src_depth as sel4_sys::seL4_Word;
         unsafe {
             seL4_CNode_Copy(
                 dest_root,
                 dest_index,
-                dest_depth_word,
+                dest_depth,
                 src_root,
                 src_index,
-                src_depth_word,
+                src_depth,
                 sel4_sys::seL4_CapRights_to_word(rights),
             )
         }
@@ -993,7 +999,7 @@ pub fn cnode_copy_depth(
 #[inline(always)]
 pub fn cnode_delete(root: seL4_CNode, index: seL4_CPtr, depth: u8) -> seL4_Error {
     debug_put_char(b'C' as i32);
-    unsafe { seL4_CNode_Delete(root, index, depth as sel4_sys::seL4_Word) }
+    unsafe { seL4_CNode_Delete(root, index, depth) }
 }
 
 /// Safe projection of `seL4_CNode_Mint` for bootstrap modules.
@@ -1011,7 +1017,7 @@ pub(crate) fn cnode_mint(
 ) -> seL4_Error {
     debug_put_char(b'C' as i32);
     let depth_bits = _bootinfo.init_cnode_depth();
-    let depth_word = depth_bits as sel4_sys::seL4_Word;
+    let depth_word: u8 = depth_bits.try_into().expect("init cnode depth fits in u8");
     unsafe {
         seL4_CNode_Mint(
             dest_root, dest_index, depth_word, src_root, src_index, depth_word, rights, badge,
@@ -1036,16 +1042,14 @@ pub fn cnode_mint_depth(
     {
         // SAFETY: Callers guarantee that the provided indices and depths stem from the
         // kernel-advertised CSpace topology, ensuring the kernel accepts the invocation.
-        let dest_depth_word = dest_depth as sel4_sys::seL4_Word;
-        let src_depth_word = src_depth as sel4_sys::seL4_Word;
         unsafe {
             seL4_CNode_Mint(
                 dest_root,
                 dest_index,
-                dest_depth_word,
+                dest_depth,
                 src_root,
                 src_index,
-                src_depth_word,
+                src_depth,
                 rights,
                 badge,
             )
@@ -1074,16 +1078,14 @@ pub fn cnode_mint_checked(
 ) -> Result<(), i32> {
     #[cfg(target_os = "none")]
     {
-        let dest_depth_word = dest_depth as sel4_sys::seL4_Word;
-        let src_depth_word = src_depth as sel4_sys::seL4_Word;
         let rc = unsafe {
             seL4_CNode_Mint(
                 dest_root,
                 dest_index,
-                dest_depth_word,
+                dest_depth,
                 src_root,
                 src_index,
-                src_depth_word,
+                src_depth,
                 rights,
                 badge,
             )
@@ -1153,16 +1155,15 @@ unsafe fn sel4_debug_poll_char() -> i32 {
 }
 
 fn objtype_name(t: seL4_Word) -> &'static str {
-    use sel4_sys::seL4_ObjectType::*;
     match t {
-        x if x == seL4_UntypedObject as seL4_Word => "seL4_UntypedObject",
-        x if x == seL4_TCBObject as seL4_Word => "seL4_TCBObject",
-        x if x == seL4_EndpointObject as seL4_Word => "seL4_EndpointObject",
-        x if x == seL4_NotificationObject as seL4_Word => "seL4_NotificationObject",
-        x if x == seL4_CapTableObject as seL4_Word => "seL4_CapTableObject",
-        x if x == seL4_ARM_Page as seL4_Word => "seL4_ARM_Page",
-        x if x == seL4_ARM_LargePage as seL4_Word => "seL4_ARM_LargePage",
-        x if x == seL4_ARM_PageTableObject as seL4_Word => "seL4_ARM_PageTableObject",
+        x if x == sel4_sys::seL4_UntypedObject as seL4_Word => "seL4_UntypedObject",
+        x if x == sel4_sys::seL4_TCBObject as seL4_Word => "seL4_TCBObject",
+        x if x == sel4_sys::seL4_EndpointObject as seL4_Word => "seL4_EndpointObject",
+        x if x == sel4_sys::seL4_NotificationObject as seL4_Word => "seL4_NotificationObject",
+        x if x == sel4_sys::seL4_CapTableObject as seL4_Word => "seL4_CapTableObject",
+        x if x == sel4_sys::seL4_ARM_Page as seL4_Word => "seL4_ARM_Page",
+        x if x == sel4_sys::seL4_ARM_LargePage as seL4_Word => "seL4_ARM_LargePage",
+        x if x == sel4_sys::seL4_ARM_PageTableObject as seL4_Word => "seL4_ARM_PageTableObject",
         _ => "<?>",
     }
 }
@@ -1189,16 +1190,16 @@ pub fn error_name(err: seL4_Error) -> &'static str {
 /// Converts a [`seL4_ObjectType`] into its symbolic name for diagnostics.
 #[must_use]
 pub fn object_type_name(object_type: seL4_ObjectType) -> &'static str {
-    use sel4_sys::seL4_ObjectType::*;
     match object_type {
-        seL4_UntypedObject => "seL4_UntypedObject",
-        seL4_TCBObject => "seL4_TCBObject",
-        seL4_EndpointObject => "seL4_EndpointObject",
-        seL4_NotificationObject => "seL4_NotificationObject",
-        seL4_CapTableObject => "seL4_CapTableObject",
-        seL4_ARM_Page => "seL4_ARM_Page",
-        seL4_ARM_LargePage => "seL4_ARM_LargePage",
-        seL4_ARM_PageTableObject => "seL4_ARM_PageTableObject",
+        x if x == sel4_sys::seL4_UntypedObject => "seL4_UntypedObject",
+        x if x == sel4_sys::seL4_TCBObject => "seL4_TCBObject",
+        x if x == sel4_sys::seL4_EndpointObject => "seL4_EndpointObject",
+        x if x == sel4_sys::seL4_NotificationObject => "seL4_NotificationObject",
+        x if x == sel4_sys::seL4_CapTableObject => "seL4_CapTableObject",
+        x if x == sel4_sys::seL4_ARM_Page => "seL4_ARM_Page",
+        x if x == sel4_sys::seL4_ARM_LargePage => "seL4_ARM_LargePage",
+        x if x == sel4_sys::seL4_ARM_PageTableObject => "seL4_ARM_PageTableObject",
+        _ => "<?>",
     }
 }
 
@@ -1353,7 +1354,7 @@ const DMA_VADDR_BASE: usize = 0xB000_0000;
 const MAX_PAGE_TABLES: usize = 64;
 const MAX_PAGE_DIRECTORIES: usize = 32;
 const MAX_PAGE_UPPER_DIRECTORIES: usize = 8;
-const DEVICE_VM_ATTRIBUTES: seL4_ARM_VMAttributes = seL4_ARM_VMAttributes(1 << 2);
+const DEVICE_VM_ATTRIBUTES: seL4_ARM_VMAttributes = 1 << 2;
 
 /// Simple bump allocator for CSpace slots rooted at the initial thread's CNode.
 pub struct SlotAllocator {
@@ -1571,7 +1572,7 @@ pub struct DeviceCoverage {
 /// Index of bootinfo-provided untyped capabilities available to the root task.
 pub struct UntypedCatalog<'a> {
     bootinfo: &'a seL4_BootInfo,
-    entries: &'a [UntypedDesc],
+    entries: Vec<UntypedDesc, MAX_BOOTINFO_UNTYPEDS>,
     used: Vec<usize, MAX_BOOTINFO_UNTYPEDS>,
 }
 
@@ -1579,7 +1580,12 @@ impl<'a> UntypedCatalog<'a> {
     /// Creates a catalog view over the untyped list exported by seL4.
     pub fn new(bootinfo: &'a seL4_BootInfo) -> Self {
         let count = bootinfo.untyped.end - bootinfo.untyped.start;
-        let entries = &bootinfo.untypedList[..count as usize];
+        let mut entries = Vec::new();
+        for desc in &bootinfo.untypedList[..count as usize] {
+            entries
+                .push((*desc).into())
+                .expect("bootinfo untyped list exceeds MAX_BOOTINFO_UNTYPEDS");
+        }
         Self {
             bootinfo,
             entries,
@@ -1596,11 +1602,11 @@ impl<'a> UntypedCatalog<'a> {
             return None;
         }
         self.used.push(index).ok()?;
-        let desc = &self.entries[index];
+        let desc = self.entries.get(index)?;
         Some(ReservedUntyped {
             cap: self.bootinfo.untyped.start + index as seL4_CPtr,
             paddr: desc.paddr as usize,
-            size_bits: desc.sizeBits,
+            size_bits: desc.size_bits,
             index,
         })
     }
@@ -1609,11 +1615,11 @@ impl<'a> UntypedCatalog<'a> {
     pub fn reserve_device(&mut self, paddr: usize, size_bits: usize) -> Option<ReservedUntyped> {
         let end = paddr.saturating_add(1usize << size_bits);
         for (index, desc) in self.entries.iter().enumerate() {
-            if desc.isDevice == 0 || self.is_used(index) {
+            if desc.is_device == 0 || self.is_used(index) {
                 continue;
             }
             let base = desc.paddr as usize;
-            let limit = base.saturating_add(1usize << desc.sizeBits);
+            let limit = base.saturating_add(1usize << desc.size_bits);
             if base <= paddr && end <= limit {
                 return self.reserve_index(index);
             }
@@ -1624,7 +1630,7 @@ impl<'a> UntypedCatalog<'a> {
     /// Reserves the first RAM untyped meeting the requested size.
     pub fn reserve_ram(&mut self, min_size_bits: u8) -> Option<ReservedUntyped> {
         for (index, desc) in self.entries.iter().enumerate() {
-            if desc.isDevice != 0 || desc.sizeBits < min_size_bits || self.is_used(index) {
+            if desc.is_device != 0 || desc.size_bits < min_size_bits || self.is_used(index) {
                 continue;
             }
             return self.reserve_index(index);
@@ -1651,7 +1657,7 @@ impl<'a> UntypedCatalog<'a> {
         let device_total = self
             .entries
             .iter()
-            .filter(|desc| desc.isDevice != 0)
+            .filter(|desc| desc.is_device != 0)
             .count();
         let device_used = self
             .used
@@ -1659,7 +1665,7 @@ impl<'a> UntypedCatalog<'a> {
             .filter(|&&index| {
                 self.entries
                     .get(index)
-                    .map_or(false, |desc| desc.isDevice != 0)
+                    .map_or(false, |desc| desc.is_device != 0)
             })
             .count();
         UntypedStats {
@@ -1675,16 +1681,16 @@ impl<'a> UntypedCatalog<'a> {
     pub fn device_coverage(&self, paddr: usize, size_bits: usize) -> Option<DeviceCoverage> {
         let end = paddr.saturating_add(1usize << size_bits);
         self.entries.iter().enumerate().find_map(|(index, desc)| {
-            if desc.isDevice == 0 {
+            if desc.is_device == 0 {
                 return None;
             }
             let base = desc.paddr as usize;
-            let limit = base.saturating_add(1usize << desc.sizeBits);
+            let limit = base.saturating_add(1usize << desc.size_bits);
             if base <= paddr && end <= limit {
                 Some(DeviceCoverage {
                     base,
                     limit,
-                    size_bits: desc.sizeBits,
+                    size_bits: desc.size_bits,
                     index,
                     used: self.is_used(index),
                 })
@@ -2138,7 +2144,7 @@ impl<'a> KernelEnv<'a> {
             .ok_or(seL4_NotEnoughMemory)?;
         let frame_slot = self.allocate_slot();
         #[cfg(target_arch = "aarch64")]
-        let page_obj: seL4_Word = sel4_sys::seL4_ObjectType::seL4_ARM_Page as seL4_Word;
+        let page_obj: seL4_Word = sel4_sys::seL4_ARM_Page as seL4_Word;
         #[cfg(target_arch = "aarch64")]
         let page_bits: seL4_Word = 12;
 
@@ -2245,7 +2251,7 @@ impl<'a> KernelEnv<'a> {
         #[cfg(not(target_os = "none"))]
         let cap_tag_raw = CapTag::Frame as seL4_Word;
 
-        let cap_tag = CapTag::from_raw(cap_tag_raw);
+        let cap_tag = CapTag::from_raw(cap_tag_raw as seL4_Word);
 
         ::log::info!(
             "[ipcbuf] capid frame=0x{buffer_frame:04x} ty=0x{cap_tag_raw:08x} ({tag}) vaddr=0x{buffer_vaddr:08x}",
@@ -2334,7 +2340,7 @@ impl<'a> KernelEnv<'a> {
         let trace = self.prepare_retype_trace(
             &reserved,
             frame_slot,
-            seL4_ObjectType::seL4_ARM_Page as seL4_Word,
+            sel4_sys::seL4_ARM_Page as seL4_Word,
             PAGE_BITS as seL4_Word,
             RetypeKind::DmaPage {
                 paddr: reserved.paddr(),
@@ -2376,7 +2382,7 @@ impl<'a> KernelEnv<'a> {
         );
         debug_assert_eq!(
             trace.object_type,
-            seL4_ObjectType::seL4_ARM_Page as seL4_Word,
+            sel4_sys::seL4_ARM_Page as seL4_Word,
             "ARM device/RAM frames must use seL4_ARM_Page",
         );
         debug_assert_eq!(
@@ -2391,7 +2397,7 @@ impl<'a> KernelEnv<'a> {
         if matches!(trace.kind, RetypeKind::DevicePage { .. }) {
             debug_assert_eq!(
                 trace.object_type,
-                sel4_sys::seL4_ObjectType::seL4_ARM_Page as seL4_Word,
+                sel4_sys::seL4_ARM_Page as seL4_Word,
                 "Device page retype must use seL4_ARM_Page on AArch64"
             );
             debug_assert_eq!(
@@ -2712,7 +2718,7 @@ impl<'a> KernelEnv<'a> {
         let trace = self.prepare_retype_trace(
             &reserved,
             pt_slot,
-            seL4_ARM_PageTableObject,
+            seL4_ARM_PageTableObject as seL4_Word,
             PAGE_TABLE_BITS as seL4_Word,
             RetypeKind::PageTable { vaddr: pt_base },
         );
@@ -2788,7 +2794,7 @@ impl<'a> KernelEnv<'a> {
         let trace = self.prepare_retype_trace(
             &reserved,
             pd_slot,
-            seL4_ARM_PageTableObject,
+            seL4_ARM_PageTableObject as seL4_Word,
             PAGE_TABLE_BITS as seL4_Word,
             RetypeKind::PageDirectory { vaddr: pd_base },
         );
@@ -2856,7 +2862,7 @@ impl<'a> KernelEnv<'a> {
         let trace = self.prepare_retype_trace(
             &reserved,
             pud_slot,
-            seL4_ARM_PageTableObject,
+            seL4_ARM_PageTableObject as seL4_Word,
             PAGE_TABLE_BITS as seL4_Word,
             RetypeKind::PageUpperDirectory { vaddr: pud_base },
         );
@@ -3303,7 +3309,7 @@ mod tests {
         let trace = env.prepare_retype_trace(
             &reserved,
             slot,
-            seL4_ObjectType::seL4_ARM_Page as seL4_Word,
+            sel4_sys::seL4_ARM_Page as seL4_Word,
             PAGE_BITS as seL4_Word,
             RetypeKind::DevicePage { paddr: 0 },
         );
@@ -3390,7 +3396,7 @@ mod tests {
             dest_offset: slot as seL4_Word,
             cnode_depth: expected_depth,
             node_index: canonical_index,
-            object_type: seL4_ObjectType::seL4_ARM_Page as seL4_Word,
+            object_type: sel4_sys::seL4_ARM_Page as seL4_Word,
             object_size_bits: PAGE_BITS as seL4_Word,
             kind: RetypeKind::DevicePage { paddr: 0 },
         };
@@ -3425,7 +3431,7 @@ mod tests {
             dest_offset: slot as seL4_Word,
             cnode_depth: expected_depth,
             node_index: canonical_index,
-            object_type: seL4_ObjectType::seL4_ARM_Page as seL4_Word,
+            object_type: sel4_sys::seL4_ARM_Page as seL4_Word,
             object_size_bits: PAGE_BITS as seL4_Word,
             kind: RetypeKind::DevicePage { paddr: 0 },
         };
@@ -3460,7 +3466,7 @@ mod tests {
             dest_offset: 0x1ff,
             cnode_depth: expected_depth,
             node_index: init_root as seL4_Word,
-            object_type: seL4_ObjectType::seL4_ARM_Page as seL4_Word,
+            object_type: sel4_sys::seL4_ARM_Page as seL4_Word,
             object_size_bits: PAGE_BITS as seL4_Word,
             kind: RetypeKind::DmaPage { paddr: 0 },
         };

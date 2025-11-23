@@ -288,7 +288,7 @@ mod tests {
         record_retype_event(
             "pre",
             0x2000,
-            sel4_sys::seL4_ObjectType::seL4_EndpointObject,
+            sel4_sys::seL4_EndpointObject,
             12,
             0x4000,
             0x0,
@@ -315,7 +315,7 @@ mod tests {
             record_retype_event(
                 "pre",
                 index as seL4_CPtr,
-                sel4_sys::seL4_ObjectType::seL4_EndpointObject,
+                sel4_sys::seL4_EndpointObject,
                 0,
                 0,
                 0,

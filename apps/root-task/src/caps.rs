@@ -173,7 +173,7 @@ pub fn retype_endpoint_into_slot(
 ) -> Result<(), seL4_Error> {
     traced_retype_into_slot(
         untyped,
-        sel4_sys::seL4_ObjectType::seL4_EndpointObject,
+        sel4_sys::seL4_EndpointObject,
         0,
         dst_root,
         node_index,

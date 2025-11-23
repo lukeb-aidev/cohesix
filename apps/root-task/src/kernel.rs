@@ -143,7 +143,7 @@ impl<'a, P: Platform> DebugConsole<'a, P> {
             self,
             "{prefix}node_id={node_id} nodes={nodes} ipc_buffer=0x{ipc:016x}\r\n",
             prefix = Self::PREFIX,
-            node_id = header.nodeId,
+            node_id = header.nodeID,
             nodes = header.numNodes,
             ipc = header.ipcBuffer as usize,
         );
@@ -877,14 +877,8 @@ fn bootstrap<P: Platform>(
     }
 
     if ep_slot != sel4_sys::seL4_CapNull {
-        let fault_handler_err = unsafe {
-            sel4_sys::seL4_TCB_SetFaultHandler(
-                tcb_copy_slot,
-                ep_slot,
-                sel4_sys::seL4_CapInitThreadCNode,
-                sel4_sys::seL4_CapInitThreadVSpace,
-            )
-        };
+        let fault_handler_err =
+            unsafe { sel4_sys::seL4_TCB_SetFaultHandler(sel4_sys::seL4_CapInitThreadTCB, ep_slot) };
 
         if fault_handler_err != sel4_sys::seL4_NoError {
             let mut line = heapless::String::<200>::new();
@@ -928,7 +922,7 @@ fn bootstrap<P: Platform>(
     let notification_slot = retype_one(
         &mut cs,
         notification_selection.cap,
-        sel4_sys::seL4_ObjectType::seL4_NotificationObject,
+        sel4_sys::seL4_NotificationObject,
         0,
     )
     .expect("failed to retype notification into init CSpace");
@@ -1651,7 +1645,10 @@ struct StagedMessage {
 
 impl StagedMessage {
     fn new(info: sel4_sys::seL4_MessageInfo, badge: sel4_sys::seL4_Word) -> Self {
-        let payload = copy_message_words(info, |index| unsafe { sel4_sys::seL4_GetMR(index) });
+        let payload = copy_message_words(info, |index| {
+            let mr_index: i32 = index.try_into().expect("message register index must fit in i32");
+            unsafe { sel4_sys::seL4_GetMR(mr_index) }
+        });
         Self {
             badge,
             info,
