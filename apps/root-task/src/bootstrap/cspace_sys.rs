@@ -1129,27 +1129,29 @@ pub fn verify_root_cnode_slot(
     {
         let _ = cnode_delete_with_style(bi, root, slot, tuple_style());
         let depth_bits = init_cnode_bits_u8(bi);
-        let depth_word = encode_cnode_depth(depth_bits);
+        let depth_word = depth_bits as sys::seL4_Word;
         let src_slot = sys::seL4_CapInitThreadTCB as sys::seL4_Word;
         let src_ident = unsafe { sys::seL4_DebugCapIdentify(src_slot as sys::seL4_CPtr) };
         let dst_ident_before = unsafe { sys::seL4_DebugCapIdentify(slot as sys::seL4_CPtr) };
         let root_ident = unsafe { sys::seL4_DebugCapIdentify(root as sys::seL4_CPtr) };
-        let rights = sys::seL4_CapRights::new(1, 1, 1, 1);
+        let rights = sys::seL4_CapRights_All;
+        let rights_word = rights.words[0];
         ::log::info!(
-            "[verify_root_cnode_slot] op=copy destRoot=0x{root:04x} destIndex=0x{dst:04x} destDepth={depth} srcRoot=0x{root:04x} srcIndex=0x{src:04x} srcDepth={depth}",
+            "[verify_root_cnode_slot] op=copy destRoot=0x{root:04x} destIndex=0x{dst:04x} destDepth={depth} srcRoot=0x{root:04x} srcIndex=0x{src:04x} srcDepth={depth} rights=0x{rights_word:02x}",
             root = root,
             dst = slot,
             depth = depth_word,
             src = src_slot,
+            rights_word = rights_word,
         );
         let copy_err = unsafe {
             sys::seL4_CNode_Copy(
                 root,
                 slot as sys::seL4_Word,
-                depth_word,
+                depth_bits,
                 root,
                 src_slot as sys::seL4_Word,
-                depth_word,
+                depth_bits,
                 rights,
             )
         };
@@ -1182,7 +1184,7 @@ pub fn verify_root_cnode_slot(
             src_ident = bi_src_ident,
         );
         let sanity_err = unsafe {
-            sys::seL4_CNode_Copy(root, bi_dst, depth_word, root, bi_src, depth_word, rights)
+            sys::seL4_CNode_Copy(root, bi_dst, depth_bits, root, bi_src, depth_bits, rights)
         };
 
         if sanity_err != sys::seL4_NoError {

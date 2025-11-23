@@ -57,6 +57,32 @@ static CANONICAL_ROOT_CAP: AtomicUsize =
     AtomicUsize::new(sel4_sys::seL4_CapInitThreadCNode as usize);
 static CANONICAL_ROOT_SLOT: AtomicUsize = AtomicUsize::new(CANONICAL_ROOT_SENTINEL);
 
+/// Logs ABI sanity for key seL4 types to validate the Rust FFI surface.
+pub fn log_sel4_type_sanity() {
+    use core::mem::{align_of, size_of};
+
+    log::info!(
+        "[sel4-type-sanity] seL4_Word size={} align={} seL4_CNode size={} align={} seL4_Error size={} align={}",
+        size_of::<sel4_sys::seL4_Word>(),
+        align_of::<sel4_sys::seL4_Word>(),
+        size_of::<sel4_sys::seL4_CNode>(),
+        align_of::<sel4_sys::seL4_CNode>(),
+        size_of::<sel4_sys::seL4_Error>(),
+        align_of::<sel4_sys::seL4_Error>(),
+    );
+
+    log::info!(
+        "[sel4-type-sanity] seL4_CapRights size={} align={} seL4_CPtr size={} align={}",
+        size_of::<sel4_sys::seL4_CapRights_t>(),
+        align_of::<sel4_sys::seL4_CapRights_t>(),
+        size_of::<sel4_sys::seL4_CPtr>(),
+        align_of::<sel4_sys::seL4_CPtr>(),
+    );
+
+    debug_assert_eq!(size_of::<sel4_sys::seL4_Word>(), 8);
+    debug_assert_eq!(align_of::<sel4_sys::seL4_Word>(), 8);
+}
+
 #[inline(always)]
 pub fn canonical_root_cap_ptr() -> seL4_CPtr {
     CANONICAL_ROOT_CAP.load(Ordering::Acquire) as seL4_CPtr

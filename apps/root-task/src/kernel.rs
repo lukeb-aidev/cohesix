@@ -514,6 +514,8 @@ fn bootstrap<P: Platform>(
 
     boot_log::init_logger_bootstrap_only();
 
+    crate::sel4::log_sel4_type_sanity();
+
     let mut build_line = heapless::String::<160>::new();
     let _ = write!(
         build_line,
