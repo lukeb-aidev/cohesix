@@ -388,11 +388,19 @@ fn write_shared_types(dir: &Path) {
     writeln!(file, "    seL4_MessageInfo_t tag;").unwrap();
     writeln!(file, "    seL4_Word msg[seL4_MsgMaxLength];").unwrap();
     writeln!(file, "    seL4_Word userData;").unwrap();
-    writeln!(file, "    seL4_Word caps_or_badges[((1ul << (seL4_MsgExtraCapBits)) - 1)];").unwrap();
+    writeln!(
+        file,
+        "    seL4_Word caps_or_badges[((1ul << (seL4_MsgExtraCapBits)) - 1)];"
+    )
+    .unwrap();
     writeln!(file, "    seL4_CPtr receiveCNode;").unwrap();
     writeln!(file, "    seL4_CPtr receiveIndex;").unwrap();
     writeln!(file, "    seL4_Word receiveDepth;").unwrap();
-    writeln!(file, "}} seL4_IPCBuffer __attribute__((__aligned__(sizeof(struct seL4_IPCBuffer_))));").unwrap();
+    writeln!(
+        file,
+        "}} seL4_IPCBuffer __attribute__((__aligned__(sizeof(struct seL4_IPCBuffer_))));"
+    )
+    .unwrap();
 }
 
 fn write_mode_types(path: &Path) {
@@ -412,7 +420,11 @@ fn write_sel4_api(path: &Path) {
     writeln!(file, "#include <sel4/sel4_arch/invocation.h>").unwrap();
     writeln!(file, "#include <sel4/shared_types.h>").unwrap();
     writeln!(file, "#ifndef SEL4_FORCE_LONG_ENUM").unwrap();
-    writeln!(file, "#define SEL4_FORCE_LONG_ENUM(type) type##_FORCE_LONG_ENUM = 0x7fffffff").unwrap();
+    writeln!(
+        file,
+        "#define SEL4_FORCE_LONG_ENUM(type) type##_FORCE_LONG_ENUM = 0x7fffffff"
+    )
+    .unwrap();
     writeln!(file, "#endif").unwrap();
     writeln!(file, "#include <sel4/syscall.h>").unwrap();
 
