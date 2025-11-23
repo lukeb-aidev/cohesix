@@ -1134,6 +1134,7 @@ pub fn verify_root_cnode_slot(
         let src_ident = unsafe { sys::seL4_DebugCapIdentify(src_slot as sys::seL4_CPtr) };
         let dst_ident_before = unsafe { sys::seL4_DebugCapIdentify(slot as sys::seL4_CPtr) };
         let root_ident = unsafe { sys::seL4_DebugCapIdentify(root as sys::seL4_CPtr) };
+        let rights = sys::seL4_CapRights::new(1, 1, 1, 1);
         ::log::info!(
             "[verify_root_cnode_slot] op=copy destRoot=0x{root:04x} destIndex=0x{dst:04x} destDepth={depth} srcRoot=0x{root:04x} srcIndex=0x{src:04x} srcDepth={depth}",
             root = root,
@@ -1149,7 +1150,7 @@ pub fn verify_root_cnode_slot(
                 root,
                 src_slot as sys::seL4_Word,
                 depth_word,
-                sys::seL4_CapRights::new(1, 1, 1, 1),
+                rights,
             )
         };
 
@@ -1166,6 +1167,43 @@ pub fn verify_root_cnode_slot(
                 depth = depth_word,
             );
         }
+
+        let bi_src = sel4::seL4_CapBootInfoFrame as sys::seL4_Word;
+        let bi_dst = slot + 1;
+        let bi_dst_ident_before = unsafe { sys::seL4_DebugCapIdentify(bi_dst as sys::seL4_CPtr) };
+        let bi_src_ident = unsafe { sys::seL4_DebugCapIdentify(bi_src as sys::seL4_CPtr) };
+        ::log::info!(
+            "[verify_root_cnode_slot] sanity-copy destRoot=0x{root:04x} destIndex=0x{bi_dst:04x} destDepth={depth} srcRoot=0x{root:04x} srcIndex=0x{bi_src:04x} srcDepth={depth} dstIdent=0x{dst_ident:08x} srcIdent=0x{src_ident:08x}",
+            root = root,
+            bi_dst = bi_dst,
+            depth = depth_word,
+            bi_src = bi_src,
+            dst_ident = bi_dst_ident_before,
+            src_ident = bi_src_ident,
+        );
+        let sanity_err = unsafe {
+            sys::seL4_CNode_Copy(root, bi_dst, depth_word, root, bi_src, depth_word, rights)
+        };
+
+        if sanity_err != sys::seL4_NoError {
+            panic!(
+                "[verify_root_cnode_slot] sanity bootinfo copy failed: dst=0x{bi_dst:04x} err={sanity_err} ({err_name}) src=0x{bi_src:04x} depth={depth}",
+                bi_dst = bi_dst,
+                sanity_err = sanity_err,
+                err_name = sel4::error_name(sanity_err),
+                bi_src = bi_src,
+                depth = depth_word,
+            );
+        }
+
+        let bi_dst_ident_after = unsafe { sys::seL4_DebugCapIdentify(bi_dst as sys::seL4_CPtr) };
+        ::log::info!(
+            "[verify_root_cnode_slot] sanity-copy bootinfo dst=0x{bi_dst:04x} ident=0x{ident:08x}",
+            bi_dst = bi_dst,
+            ident = bi_dst_ident_after,
+        );
+
+        let _ = unsafe { sys::seL4_CNode_Delete(root, bi_dst, depth_word) };
 
         let copied_ident = unsafe { sys::seL4_DebugCapIdentify(slot as sys::seL4_CPtr) };
         ::log::info!(

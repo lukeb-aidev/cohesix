@@ -127,7 +127,7 @@ mod imp {
     #[repr(C)]
     #[derive(Clone, Copy)]
     pub struct seL4_CapRights_t {
-        words: [seL4_Word; 1],
+        pub words: [seL4_Word; 1],
     }
 
     impl seL4_CapRights_t {
@@ -1245,10 +1245,10 @@ mod host_stub {
     #[inline(always)]
     pub unsafe fn seL4_CNode_Mint(
         _dest_root: seL4_CNode,
-        _dest_index: seL4_CPtr,
+        _dest_index: seL4_Word,
         _dest_depth: seL4_Word,
         _src_root: seL4_CNode,
-        _src_index: seL4_CPtr,
+        _src_index: seL4_Word,
         _src_depth: seL4_Word,
         _rights: seL4_CapRights_t,
         _badge: seL4_Word,
@@ -1259,10 +1259,10 @@ mod host_stub {
     #[inline(always)]
     pub unsafe fn seL4_CNode_Copy(
         _dest_root: seL4_CNode,
-        _dest_index: seL4_CPtr,
+        _dest_index: seL4_Word,
         _dest_depth: seL4_Word,
         _src_root: seL4_CNode,
-        _src_index: seL4_CPtr,
+        _src_index: seL4_Word,
         _src_depth: seL4_Word,
         _rights: seL4_CapRights_t,
     ) -> seL4_Error {
