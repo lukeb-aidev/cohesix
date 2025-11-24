@@ -135,8 +135,7 @@ fn main() {
         );
     }
 
-    let debug_enabled = probe_config_flag(&build_path, "CONFIG_DEBUG_BUILD") == Some(true);
-    let mut debug_syscalls_enabled = false;
+    let debug_syscalls_enabled = probe_config_flag(&build_path, "CONFIG_DEBUG_BUILD") == Some(true);
 
     if explicit_linker_script.is_none() {
         if let Err(err) = stage_linker_script(&build_path) {
@@ -168,10 +167,6 @@ fn emit_built_info() -> io::Result<()> {
     fs::write(out_dir.join("built_info.rs"), contents)?;
     println!("cargo:rerun-if-changed=build.rs");
     Ok(())
-}
-
-fn find_artifact(root: &Path, filename: &str, primary: &[&str]) -> Result<PathBuf, String> {
-    find_artifact_with(root, filename, primary, |_| Ok(ArtifactDecision::Accept))
 }
 
 fn find_artifact_with<F>(
