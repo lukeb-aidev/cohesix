@@ -449,7 +449,7 @@ fn generate_bindings(build_dir: &Path, config_sources: &[(PathBuf, String)]) {
     writeln!(wrapper_file, "void seL4_DebugPutChar(char c);").unwrap();
     writeln!(
         wrapper_file,
-        "seL4_Word seL4_DebugCapIdentify(seL4_CPtr cap);",
+        "seL4_Uint32 seL4_DebugCapIdentify(seL4_CPtr cap);",
     )
     .unwrap();
     writeln!(
