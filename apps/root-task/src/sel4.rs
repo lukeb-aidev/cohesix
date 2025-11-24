@@ -367,6 +367,28 @@ fn bootinfo_extra_slice<'a>(header: &'a seL4_BootInfo) -> Result<&'a [u8], BootI
         });
     }
 
+    let extra_pages = header.extraBIPages.end.saturating_sub(header.extraBIPages.start) as usize;
+    if extra_pages == 0 {
+        return Err(BootInfoError::ExtraRange {
+            start: extra_start,
+            end: extra_end,
+        });
+    }
+
+    let page_size = 1usize << PAGE_BITS;
+    let mapped_bytes = extra_pages
+        .checked_mul(page_size)
+        .ok_or(BootInfoError::Overflow)?;
+    let intra_page_offset = extra_start % page_size;
+    let available_bytes = mapped_bytes.saturating_sub(intra_page_offset);
+
+    if extra_len > available_bytes {
+        return Err(BootInfoError::ExtraRange {
+            start: extra_start,
+            end: extra_end,
+        });
+    }
+
     // SAFETY: The kernel guarantees that bootinfo and its extra region are mapped as
     // readable memory for the root task. The calculations above ensure we do not
     // wrap the address space or overrun the reported length.
@@ -2635,6 +2657,8 @@ impl<'a> KernelEnv<'a> {
         let extra_start = header_addr + header_size;
         let extra_end = extra_start + extra_bytes.len();
 
+        debug_assert!(extra_start < extra_end, "bootinfo extra range must be non-empty when len > 0");
+
         ::log::trace!(
             "[boot] bootinfo header @ 0x{header_addr:08x} byte=0x{header_byte:02x} extra=[0x{extra_start:08x}..0x{extra_end:08x})",
         );
@@ -2644,7 +2668,9 @@ impl<'a> KernelEnv<'a> {
             return;
         }
 
-        let probe_addr = extra_start + extra_bytes.len().saturating_sub(1).min(0x3000);
+        let probe_offset = extra_bytes.len().saturating_sub(1);
+        let probe_addr = extra_start + probe_offset;
+        debug_assert!(probe_addr < extra_end);
 
         let probe_ptr = probe_addr as *const u8;
         let probe_byte = unsafe { ptr::read_volatile(probe_ptr) };
