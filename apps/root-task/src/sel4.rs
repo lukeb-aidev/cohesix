@@ -267,8 +267,6 @@ pub fn empty_window(bi: &seL4_BootInfo) -> (u32, u32) {
     )
 }
 
-const MAX_BOOTINFO_EXTRA_BYTES: usize = 32 * 1024;
-
 /// Errors raised while validating a bootinfo pointer and its extra region.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BootInfoError {
@@ -280,11 +278,6 @@ pub enum BootInfoError {
         address: usize,
         /// Alignment (in bytes) required by the `seL4_BootInfo` structure.
         required: usize,
-    },
-    /// The reported extra bootinfo span exceeded the permitted limit.
-    ExtraTooLarge {
-        /// Number of bytes advertised for the extra bootinfo region.
-        bytes: usize,
     },
     /// Arithmetic overflow occurred while computing bounds.
     Overflow,
@@ -312,9 +305,6 @@ impl fmt::Display for BootInfoError {
                     "bootinfo pointer not {required}-byte aligned: 0x{address:016x}"
                 )
             }
-            Self::ExtraTooLarge { bytes } => {
-                write!(f, "bootinfo.extraLen exceeded limit: {bytes} bytes")
-            }
             Self::Overflow => write!(f, "bootinfo bounds computation overflowed"),
             Self::InitCNodeBits { bits } => write!(
                 f,
@@ -338,21 +328,12 @@ fn bootinfo_extra_slice<'a>(header: &'a seL4_BootInfo) -> Result<&'a [u8], BootI
         });
     }
 
-    let extra_bytes = header.extraLen as usize;
-    if extra_bytes == 0 {
+    let extra_len = header.extraLen as usize;
+    if extra_len == 0 {
         return Ok(&[]);
     }
 
-    if extra_bytes > MAX_BOOTINFO_EXTRA_BYTES {
-        return Err(BootInfoError::ExtraTooLarge { bytes: extra_bytes });
-    }
-
-    let extra_len = extra_bytes;
-
-    // Prefer the actual byte span of the bootinfo header (including the
-    // untyped list) instead of any page-rounded view so that the computed
-    // extra slice exactly matches the kernel-advertised `extraLen`.
-    let header_size = core::mem::size_of_val(core::slice::from_ref(header));
+    let header_size = core::mem::size_of::<seL4_BootInfo>();
     let extra_start = addr
         .checked_add(header_size)
         .ok_or(BootInfoError::Overflow)?;
@@ -360,29 +341,7 @@ fn bootinfo_extra_slice<'a>(header: &'a seL4_BootInfo) -> Result<&'a [u8], BootI
         .checked_add(extra_len)
         .ok_or(BootInfoError::Overflow)?;
 
-    if extra_end <= extra_start {
-        return Err(BootInfoError::ExtraRange {
-            start: extra_start,
-            end: extra_end,
-        });
-    }
-
-    let extra_pages = header.extraBIPages.end.saturating_sub(header.extraBIPages.start) as usize;
-    if extra_pages == 0 {
-        return Err(BootInfoError::ExtraRange {
-            start: extra_start,
-            end: extra_end,
-        });
-    }
-
-    let page_size = 1usize << PAGE_BITS;
-    let mapped_bytes = extra_pages
-        .checked_mul(page_size)
-        .ok_or(BootInfoError::Overflow)?;
-    let intra_page_offset = extra_start % page_size;
-    let available_bytes = mapped_bytes.saturating_sub(intra_page_offset);
-
-    if extra_len > available_bytes {
+    if extra_end < extra_start {
         return Err(BootInfoError::ExtraRange {
             start: extra_start,
             end: extra_end,
@@ -2657,7 +2616,10 @@ impl<'a> KernelEnv<'a> {
         let extra_start = header_addr + header_size;
         let extra_end = extra_start + extra_bytes.len();
 
-        debug_assert!(extra_start < extra_end, "bootinfo extra range must be non-empty when len > 0");
+        debug_assert!(
+            extra_start < extra_end,
+            "bootinfo extra range must be non-empty when len > 0"
+        );
 
         ::log::trace!(
             "[boot] bootinfo header @ 0x{header_addr:08x} byte=0x{header_byte:02x} extra=[0x{extra_start:08x}..0x{extra_end:08x})",
