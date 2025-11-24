@@ -418,22 +418,22 @@ fn generate_bindings(build_dir: &Path, config_sources: &[(PathBuf, String)]) {
     writeln!(wrapper_file, "#endif").unwrap();
     writeln!(
         wrapper_file,
-        "seL4_Error seL4_CNode_Copy(seL4_CNode _service, seL4_Word dest_index, seL4_Word dest_depth, seL4_CNode src_root, seL4_Word src_index, seL4_Word src_depth, seL4_CapRights_t rights);",
+        "seL4_Error seL4_CNode_Copy(seL4_CNode _service, seL4_Word dest_index, seL4_Uint8 dest_depth, seL4_CNode src_root, seL4_Word src_index, seL4_Uint8 src_depth, seL4_CapRights_t rights);",
     )
     .unwrap();
     writeln!(
         wrapper_file,
-        "seL4_Error seL4_CNode_Mint(seL4_CNode _service, seL4_Word dest_index, seL4_Word dest_depth, seL4_CNode src_root, seL4_Word src_index, seL4_Word src_depth, seL4_CapRights_t rights, seL4_Word badge);",
+        "seL4_Error seL4_CNode_Mint(seL4_CNode _service, seL4_Word dest_index, seL4_Uint8 dest_depth, seL4_CNode src_root, seL4_Word src_index, seL4_Uint8 src_depth, seL4_CapRights_t rights, seL4_Word badge);",
     )
     .unwrap();
     writeln!(
         wrapper_file,
-        "seL4_Error seL4_CNode_Move(seL4_CNode _service, seL4_Word dest_index, seL4_Word dest_depth, seL4_CNode src_root, seL4_Word src_index, seL4_Word src_depth);",
+        "seL4_Error seL4_CNode_Move(seL4_CNode _service, seL4_Word dest_index, seL4_Uint8 dest_depth, seL4_CNode src_root, seL4_Word src_index, seL4_Uint8 src_depth);",
     )
     .unwrap();
     writeln!(
         wrapper_file,
-        "seL4_Error seL4_CNode_Delete(seL4_CNode _service, seL4_Word index, seL4_Word depth);",
+        "seL4_Error seL4_CNode_Delete(seL4_CNode _service, seL4_Word index, seL4_Uint8 depth);",
     )
     .unwrap();
     writeln!(
@@ -473,6 +473,7 @@ fn generate_bindings(build_dir: &Path, config_sources: &[(PathBuf, String)]) {
         .generate_inline_functions(true)
         .layout_tests(false)
         .size_t_is_usize(true)
+        .blocklist_function("seL4_InitBootInfo")
         .allowlist_function("seL4_.*")
         .allowlist_type("seL4_.*|invocation_label|arch_invocation_label")
         .allowlist_var(
