@@ -568,18 +568,22 @@ mod imp {
     }
 
     #[inline(always)]
-    pub unsafe fn seL4_TCB_SetFaultHandler(
-        tcb: seL4_TCB,
-        fault_handler: seL4_CPtr,
+    pub unsafe fn seL4_TCB_SetSpace(
+        service: seL4_TCB,
+        fault_ep: seL4_CPtr,
+        cspace_root: seL4_CNode,
+        cspace_root_data: seL4_Word,
+        vspace_root: seL4_CPtr,
+        vspace_root_data: seL4_Word,
     ) -> seL4_Error {
         #[cfg(sel4_config_kernel_mcs)]
         {
-            seL4_SetCap(0, fault_handler);
-            seL4_SetCap(1, seL4_CapInitThreadCNode);
-            seL4_SetCap(2, seL4_CapInitThreadVSpace);
+            seL4_SetCap(0, fault_ep);
+            seL4_SetCap(1, cspace_root);
+            seL4_SetCap(2, vspace_root);
 
-            let mut mr0: seL4_Word = 0;
-            let mut mr1: seL4_Word = 0;
+            let mut mr0: seL4_Word = cspace_root_data;
+            let mut mr1: seL4_Word = vspace_root_data;
             let mut mr2: seL4_Word = 0;
             let mut mr3: seL4_Word = 0;
 
@@ -589,36 +593,8 @@ mod imp {
                 3,
                 2,
             );
-            let output_tag = seL4_CallWithMRs(tcb, tag, &mut mr0, &mut mr1, &mut mr2, &mut mr3);
-            let result = seL4_MessageInfo_get_label(output_tag) as seL4_Error;
-
-            if result != seL4_NoError {
-                seL4_SetMR(0, mr0);
-                seL4_SetMR(1, mr1);
-                seL4_SetMR(2, mr2);
-                seL4_SetMR(3, mr3);
-            }
-
-            return result;
-        }
-
-        #[cfg(not(sel4_config_kernel_mcs))]
-        {
-            seL4_SetCap(0, seL4_CapInitThreadCNode);
-            seL4_SetCap(1, seL4_CapInitThreadVSpace);
-
-            let mut mr0: seL4_Word = fault_handler as seL4_Word;
-            let mut mr1: seL4_Word = 0;
-            let mut mr2: seL4_Word = 0;
-            let mut mr3: seL4_Word = 0;
-
-            let tag = seL4_MessageInfo::new(
-                invocation_label_TCBSetSpace as seL4_Word,
-                0,
-                2,
-                3,
-            );
-            let output_tag = seL4_CallWithMRs(tcb, tag, &mut mr0, &mut mr1, &mut mr2, &mut mr3);
+            let output_tag =
+                seL4_CallWithMRs(service, tag, &mut mr0, &mut mr1, &mut mr2, &mut mr3);
             let result = seL4_MessageInfo_get_label(output_tag) as seL4_Error;
 
             if result != seL4_NoError {
@@ -630,6 +606,54 @@ mod imp {
 
             result
         }
+
+        #[cfg(not(sel4_config_kernel_mcs))]
+        {
+            seL4_SetCap(0, cspace_root);
+            seL4_SetCap(1, vspace_root);
+
+            let mut mr0: seL4_Word = fault_ep as seL4_Word;
+            let mut mr1: seL4_Word = cspace_root_data;
+            let mut mr2: seL4_Word = vspace_root_data;
+            let mut mr3: seL4_Word = 0;
+
+            let tag = seL4_MessageInfo::new(
+                invocation_label_TCBSetSpace as seL4_Word,
+                0,
+                2,
+                3,
+            );
+            let output_tag = seL4_CallWithMRs(service, tag, &mut mr0, &mut mr1, &mut mr2, &mut mr3);
+            let result = seL4_MessageInfo_get_label(output_tag) as seL4_Error;
+
+            if result != seL4_NoError {
+                seL4_SetMR(0, mr0);
+                seL4_SetMR(1, mr1);
+                seL4_SetMR(2, mr2);
+                seL4_SetMR(3, mr3);
+            }
+
+            result
+        }
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_TCB_SetFaultHandler(
+        tcb: seL4_TCB,
+        fault_handler: seL4_CPtr,
+        cspace_root: seL4_CNode,
+        cspace_root_data: seL4_Word,
+        vspace_root: seL4_CPtr,
+        vspace_root_data: seL4_Word,
+    ) -> seL4_Error {
+        seL4_TCB_SetSpace(
+            tcb,
+            fault_handler,
+            cspace_root,
+            cspace_root_data,
+            vspace_root,
+            vspace_root_data,
+        )
     }
 
     #[inline(always)]
@@ -1227,9 +1251,25 @@ mod imp {
     }
 
     #[inline(always)]
+    pub unsafe fn seL4_TCB_SetSpace(
+        _service: seL4_TCB,
+        _fault_ep: seL4_CPtr,
+        _cspace_root: seL4_CNode,
+        _cspace_root_data: seL4_Word,
+        _vspace_root: seL4_CPtr,
+        _vspace_root_data: seL4_Word,
+    ) -> seL4_Error {
+        unsupported_error()
+    }
+
+    #[inline(always)]
     pub unsafe fn seL4_TCB_SetFaultHandler(
         _tcb: seL4_TCB,
         _fault_handler: seL4_CPtr,
+        _cspace_root: seL4_CNode,
+        _cspace_root_data: seL4_Word,
+        _vspace_root: seL4_CPtr,
+        _vspace_root_data: seL4_Word,
     ) -> seL4_Error {
         unsupported_error()
     }

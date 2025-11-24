@@ -35,6 +35,7 @@ use crate::event::{
 };
 use crate::guards;
 use crate::hal::{HalError, Hardware, KernelHal};
+use crate::sel4;
 #[cfg(feature = "net-console")]
 use crate::net::{NetStack, CONSOLE_TCP_PORT};
 #[cfg(feature = "kernel")]
@@ -877,8 +878,19 @@ fn bootstrap<P: Platform>(
     }
 
     if ep_slot != sel4_sys::seL4_CapNull {
-        let fault_handler_err =
-            unsafe { sel4_sys::seL4_TCB_SetFaultHandler(sel4_sys::seL4_CapInitThreadTCB, ep_slot) };
+        let guard_bits = sel4::word_bits()
+            .saturating_sub(bootinfo_ref.init_cnode_bits() as sel4_sys::seL4_Word);
+        let guard_data = sel4::cap_data_guard(0, guard_bits);
+        let fault_handler_err = unsafe {
+            sel4_sys::seL4_TCB_SetFaultHandler(
+                sel4_sys::seL4_CapInitThreadTCB,
+                ep_slot,
+                bootinfo_ref.init_cnode_cap(),
+                guard_data,
+                sel4_sys::seL4_CapInitThreadVSpace,
+                0,
+            )
+        };
 
         if fault_handler_err != sel4_sys::seL4_NoError {
             let mut line = heapless::String::<200>::new();
