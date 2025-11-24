@@ -15,8 +15,7 @@ use core::convert::TryFrom;
 use core::fmt;
 use core::ops::Range;
 use sel4_sys::{
-    self as sys, seL4_ARM_Page, seL4_ARM_PageTableObject, seL4_CNode, seL4_CapInitThreadCNode,
-    seL4_CapTableObject, seL4_EndpointObject, seL4_InvalidArgument, seL4_InvalidCapability,
+    self as sys, seL4_CNode, seL4_CapInitThreadCNode, seL4_EndpointObject,
 };
 
 #[cfg(target_os = "none")]
@@ -1815,7 +1814,7 @@ pub use bits_as_u8 as super_bits_as_u8_for_test;
 pub mod canonical {
     #[cfg(not(target_os = "none"))]
     use super::host_trace;
-    use super::{bits_as_u8, debug_log, sel4, slot_index, sys, RootPath};
+    use super::{debug_log, sel4, slot_index, sys, RootPath};
 
     #[inline(always)]
     fn build_root_path(slot: u32, bi: &sys::seL4_BootInfo) -> RootPath {
