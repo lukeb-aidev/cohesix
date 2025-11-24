@@ -22,36 +22,17 @@ mod imp {
 
     pub type seL4_VSpace = seL4_CPtr;
 
+    #[no_mangle]
+    pub static mut __sel4_ipc_buffer: *mut seL4_IPCBuffer = core::ptr::null_mut();
+
     #[inline(always)]
     pub unsafe fn seL4_GetIPCBuffer() -> *mut seL4_IPCBuffer {
-        #[cfg(target_arch = "aarch64")]
-        {
-            let ipc_buffer: usize;
-            asm!("mrs {0}, tpidr_el0", out(reg) ipc_buffer, options(nostack, preserves_flags));
-            ipc_buffer as *mut seL4_IPCBuffer
-        }
-
-        #[cfg(not(target_arch = "aarch64"))]
-        {
-            tls_image_mut()
-                .map(|tls| tls.ipc_buffer())
-                .unwrap_or(core::ptr::null_mut())
-        }
+        __sel4_ipc_buffer
     }
 
     #[inline(always)]
     pub unsafe fn seL4_SetIPCBuffer(buffer: *mut seL4_IPCBuffer) {
-        #[cfg(target_arch = "aarch64")]
-        {
-            asm!("msr tpidr_el0, {0}", in(reg) buffer, options(nostack, preserves_flags));
-        }
-
-        #[cfg(not(target_arch = "aarch64"))]
-        {
-            if let Some(tls) = tls_image_mut() {
-                tls.set_ipc_buffer(buffer);
-            }
-        }
+        __sel4_ipc_buffer = buffer;
     }
 
     #[inline(always)]
@@ -114,6 +95,35 @@ mod imp {
             inout("x5") msg3,
             inout("x1") info,
             in("x7") scno,
+            options(nostack)
+        );
+    }
+
+    #[cfg(not(sel4_config_kernel_mcs))]
+    unsafe fn arm_sys_reply(
+        sys: seL4_Word,
+        info_arg: seL4_Word,
+        mr0: seL4_Word,
+        mr1: seL4_Word,
+        mr2: seL4_Word,
+        mr3: seL4_Word,
+    ) {
+        let mut info = info_arg;
+        let mut msg0 = mr0;
+        let mut msg1 = mr1;
+        let mut msg2 = mr2;
+        let mut msg3 = mr3;
+        let scno = sys;
+
+        asm!(
+            "svc #0",
+            inout("x2") msg0,
+            inout("x3") msg1,
+            inout("x4") msg2,
+            inout("x5") msg3,
+            inout("x1") info,
+            in("x7") scno,
+            options(nostack)
         );
     }
 
@@ -127,25 +137,41 @@ mod imp {
         out_mr1: *mut seL4_Word,
         out_mr2: *mut seL4_Word,
         out_mr3: *mut seL4_Word,
+        reply: seL4_Word,
     ) {
         let mut badge = src;
-        let mut info = 0;
+        let mut info: seL4_Word;
         let scno = sys;
-        let mut msg0: seL4_Word;
-        let mut msg1: seL4_Word;
-        let mut msg2: seL4_Word;
-        let mut msg3: seL4_Word;
+        let msg0: seL4_Word;
+        let msg1: seL4_Word;
+        let msg2: seL4_Word;
+        let msg3: seL4_Word;
 
+        #[cfg(sel4_config_kernel_mcs)]
         asm!(
             "svc #0",
+            out("x2") msg0,
+            out("x3") msg1,
+            out("x4") msg2,
+            out("x5") msg3,
+            out("x1") info,
             inout("x0") badge,
-            lateout("x2") msg0,
-            lateout("x3") msg1,
-            lateout("x4") msg2,
-            lateout("x5") msg3,
-            lateout("x1") info,
             in("x7") scno,
-            options(nostack, preserves_flags)
+            in("x6") reply,
+            options(nostack)
+        );
+
+        #[cfg(not(sel4_config_kernel_mcs))]
+        asm!(
+            "svc #0",
+            out("x2") msg0,
+            out("x3") msg1,
+            out("x4") msg2,
+            out("x5") msg3,
+            out("x1") info,
+            inout("x0") badge,
+            in("x7") scno,
+            options(nostack)
         );
 
         *out_badge = badge;
@@ -167,7 +193,7 @@ mod imp {
         in_out_mr1: *mut seL4_Word,
         in_out_mr2: *mut seL4_Word,
         in_out_mr3: *mut seL4_Word,
-        #[allow(unused_variables)] reply: seL4_Word,
+        reply: seL4_Word,
     ) {
         let mut destptr = dest;
         let mut info = info_arg;
@@ -176,23 +202,96 @@ mod imp {
         let mut msg2 = *in_out_mr2;
         let mut msg3 = *in_out_mr3;
         let scno = sys;
+
+        #[cfg(sel4_config_kernel_mcs)]
         asm!(
             "svc #0",
+            inout("x2") msg0,
+            inout("x3") msg1,
+            inout("x4") msg2,
+            inout("x5") msg3,
+            inout("x1") info,
             inout("x0") destptr,
-        inout("x2") msg0,
-        inout("x3") msg1,
-        inout("x4") msg2,
-        inout("x5") msg3,
-        inout("x1") info,
-        in("x7") scno,
-        options(nostack),
-    );
+            in("x7") scno,
+            in("x6") reply,
+            options(nostack)
+        );
+
+        #[cfg(not(sel4_config_kernel_mcs))]
+        asm!(
+            "svc #0",
+            inout("x2") msg0,
+            inout("x3") msg1,
+            inout("x4") msg2,
+            inout("x5") msg3,
+            inout("x1") info,
+            inout("x0") destptr,
+            in("x7") scno,
+            options(nostack)
+        );
+
         *out_info = info;
         *out_badge = destptr;
         *in_out_mr0 = msg0;
         *in_out_mr1 = msg1;
         *in_out_mr2 = msg2;
         *in_out_mr3 = msg3;
+    }
+
+    #[cfg(sel4_config_kernel_mcs)]
+    #[inline(always)]
+    unsafe fn arm_sys_nbsend_recv(
+        sys: seL4_Word,
+        dest: seL4_Word,
+        src: seL4_Word,
+        out_badge: *mut seL4_Word,
+        info_arg: seL4_Word,
+        out_info: *mut seL4_Word,
+        in_out_mr0: *mut seL4_Word,
+        in_out_mr1: *mut seL4_Word,
+        in_out_mr2: *mut seL4_Word,
+        in_out_mr3: *mut seL4_Word,
+        reply: seL4_Word,
+    ) {
+        let mut src_and_badge = src;
+        let mut info = info_arg;
+        let mut msg0 = *in_out_mr0;
+        let mut msg1 = *in_out_mr1;
+        let mut msg2 = *in_out_mr2;
+        let mut msg3 = *in_out_mr3;
+        let reply_reg = reply;
+        let dest_reg = dest;
+        let scno = sys;
+
+        asm!(
+            "svc #0",
+            inout("x2") msg0,
+            inout("x3") msg1,
+            inout("x4") msg2,
+            inout("x5") msg3,
+            inout("x0") src_and_badge,
+            inout("x1") info,
+            in("x7") scno,
+            in("x6") reply_reg,
+            in("x8") dest_reg,
+            options(nostack)
+        );
+
+        *out_badge = src_and_badge;
+        *out_info = info;
+        *in_out_mr0 = msg0;
+        *in_out_mr1 = msg1;
+        *in_out_mr2 = msg2;
+        *in_out_mr3 = msg3;
+    }
+
+    #[inline(always)]
+    unsafe fn arm_sys_send_null(sys: seL4_Word, src: seL4_Word, info_arg: seL4_Word) {
+        let mut destptr = src;
+        let mut info = info_arg;
+        let scno = sys;
+
+        asm!("svc #0", inout("x0") destptr, inout("x1") info, in("x7") scno, options(nostack));
     }
 
     #[inline(always)]
@@ -212,6 +311,178 @@ mod imp {
             seL4_GetMR(2),
             seL4_GetMR(3),
         );
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_SendWithMRs(
+        dest: seL4_CPtr,
+        msg_info: seL4_MessageInfo,
+        mr0: *const seL4_Word,
+        mr1: *const seL4_Word,
+        mr2: *const seL4_Word,
+        mr3: *const seL4_Word,
+    ) {
+        arm_sys_send(
+            seL4_SysSend as seL4_Word,
+            dest as seL4_Word,
+            msg_info.words[0],
+            if !mr0.is_null() && msg_info.length() > 0 {
+                *mr0
+            } else {
+                0
+            },
+            if !mr1.is_null() && msg_info.length() > 0 {
+                *mr1
+            } else {
+                0
+            },
+            if !mr2.is_null() && msg_info.length() > 0 {
+                *mr2
+            } else {
+                0
+            },
+            if !mr3.is_null() && msg_info.length() > 0 {
+                *mr3
+            } else {
+                0
+            },
+        );
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_NBSend(dest: seL4_CPtr, msg_info: seL4_MessageInfo) {
+        arm_sys_send(
+            seL4_SysNBSend as seL4_Word,
+            dest as seL4_Word,
+            msg_info.words[0],
+            seL4_GetMR(0),
+            seL4_GetMR(1),
+            seL4_GetMR(2),
+            seL4_GetMR(3),
+        );
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_NBSendWithMRs(
+        dest: seL4_CPtr,
+        msg_info: seL4_MessageInfo,
+        mr0: *const seL4_Word,
+        mr1: *const seL4_Word,
+        mr2: *const seL4_Word,
+        mr3: *const seL4_Word,
+    ) {
+        arm_sys_send(
+            seL4_SysNBSend as seL4_Word,
+            dest as seL4_Word,
+            msg_info.words[0],
+            if !mr0.is_null() && msg_info.length() > 0 {
+                *mr0
+            } else {
+                0
+            },
+            if !mr1.is_null() && msg_info.length() > 0 {
+                *mr1
+            } else {
+                0
+            },
+            if !mr2.is_null() && msg_info.length() > 0 {
+                *mr2
+            } else {
+                0
+            },
+            if !mr3.is_null() && msg_info.length() > 0 {
+                *mr3
+            } else {
+                0
+            },
+        );
+    }
+
+    #[cfg(not(sel4_config_kernel_mcs))]
+    #[inline(always)]
+    pub unsafe fn seL4_Reply(msg_info: seL4_MessageInfo) {
+        arm_sys_reply(
+            seL4_SysReply as seL4_Word,
+            msg_info.words[0],
+            seL4_GetMR(0),
+            seL4_GetMR(1),
+            seL4_GetMR(2),
+            seL4_GetMR(3),
+        );
+    }
+
+    #[cfg(not(sel4_config_kernel_mcs))]
+    #[inline(always)]
+    pub unsafe fn seL4_ReplyWithMRs(
+        msg_info: seL4_MessageInfo,
+        mr0: *const seL4_Word,
+        mr1: *const seL4_Word,
+        mr2: *const seL4_Word,
+        mr3: *const seL4_Word,
+    ) {
+        arm_sys_reply(
+            seL4_SysReply as seL4_Word,
+            msg_info.words[0],
+            if !mr0.is_null() && msg_info.length() > 0 {
+                *mr0
+            } else {
+                0
+            },
+            if !mr1.is_null() && msg_info.length() > 0 {
+                *mr1
+            } else {
+                0
+            },
+            if !mr2.is_null() && msg_info.length() > 0 {
+                *mr2
+            } else {
+                0
+            },
+            if !mr3.is_null() && msg_info.length() > 0 {
+                *mr3
+            } else {
+                0
+            },
+        );
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_Signal(dest: seL4_CPtr) {
+        arm_sys_send_null(
+            seL4_SysSend as seL4_Word,
+            dest as seL4_Word,
+            seL4_MessageInfo_new(0, 0, 0, 0).words[0],
+        );
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_Call(dest: seL4_CPtr, msg_info: seL4_MessageInfo) -> seL4_MessageInfo {
+        let mut info = msg_info;
+        let mut msg0 = seL4_GetMR(0);
+        let mut msg1 = seL4_GetMR(1);
+        let mut msg2 = seL4_GetMR(2);
+        let mut msg3 = seL4_GetMR(3);
+        let mut badge_dest = dest as seL4_Word;
+
+        arm_sys_send_recv(
+            seL4_SysCall as seL4_Word,
+            dest as seL4_Word,
+            &mut badge_dest,
+            info.words[0],
+            &mut info.words[0],
+            &mut msg0,
+            &mut msg1,
+            &mut msg2,
+            &mut msg3,
+            0,
+        );
+
+        seL4_SetMR(0, msg0);
+        seL4_SetMR(1, msg1);
+        seL4_SetMR(2, msg2);
+        seL4_SetMR(3, msg3);
+
+        info
     }
 
     #[inline(always)]
@@ -273,30 +544,36 @@ mod imp {
         info
     }
 
+    #[cfg(sel4_config_kernel_mcs)]
     #[inline(always)]
-    pub unsafe fn seL4_Recv(src: seL4_CPtr, sender_badge: *mut seL4_Word) -> seL4_MessageInfo {
+    pub unsafe fn seL4_Recv(
+        src: seL4_CPtr,
+        sender_badge: *mut seL4_Word,
+        reply: seL4_CPtr,
+    ) -> seL4_MessageInfo {
         let mut info = seL4_MessageInfo { words: [0] };
         let mut badge = 0;
-        let mut mr0 = 0;
-        let mut mr1 = 0;
-        let mut mr2 = 0;
-        let mut mr3 = 0;
+        let mut msg0 = 0;
+        let mut msg1 = 0;
+        let mut msg2 = 0;
+        let mut msg3 = 0;
 
         arm_sys_recv(
             seL4_SysRecv as seL4_Word,
             src as seL4_Word,
             &mut badge,
             &mut info.words[0],
-            &mut mr0,
-            &mut mr1,
-            &mut mr2,
-            &mut mr3,
+            &mut msg0,
+            &mut msg1,
+            &mut msg2,
+            &mut msg3,
+            reply as seL4_Word,
         );
 
-        seL4_SetMR(0, mr0);
-        seL4_SetMR(1, mr1);
-        seL4_SetMR(2, mr2);
-        seL4_SetMR(3, mr3);
+        seL4_SetMR(0, msg0);
+        seL4_SetMR(1, msg1);
+        seL4_SetMR(2, msg2);
+        seL4_SetMR(3, msg3);
 
         if !sender_badge.is_null() {
             *sender_badge = badge;
@@ -305,36 +582,289 @@ mod imp {
         info
     }
 
+    #[cfg(not(sel4_config_kernel_mcs))]
     #[inline(always)]
-    pub unsafe fn seL4_NBRecv(src: seL4_CPtr, sender_badge: *mut seL4_Word) -> seL4_MessageInfo {
+    pub unsafe fn seL4_Recv(src: seL4_CPtr, sender_badge: *mut seL4_Word) -> seL4_MessageInfo {
         let mut info = seL4_MessageInfo { words: [0] };
         let mut badge = 0;
-        let mut mr0 = 0;
-        let mut mr1 = 0;
-        let mut mr2 = 0;
-        let mut mr3 = 0;
+        let mut msg0 = 0;
+        let mut msg1 = 0;
+        let mut msg2 = 0;
+        let mut msg3 = 0;
 
         arm_sys_recv(
-            seL4_SysNBRecv as seL4_Word,
+            seL4_SysRecv as seL4_Word,
             src as seL4_Word,
             &mut badge,
             &mut info.words[0],
-            &mut mr0,
-            &mut mr1,
-            &mut mr2,
-            &mut mr3,
+            &mut msg0,
+            &mut msg1,
+            &mut msg2,
+            &mut msg3,
+            0,
         );
 
-        seL4_SetMR(0, mr0);
-        seL4_SetMR(1, mr1);
-        seL4_SetMR(2, mr2);
-        seL4_SetMR(3, mr3);
+        seL4_SetMR(0, msg0);
+        seL4_SetMR(1, msg1);
+        seL4_SetMR(2, msg2);
+        seL4_SetMR(3, msg3);
 
         if !sender_badge.is_null() {
             *sender_badge = badge;
         }
 
         info
+    }
+
+    #[cfg(sel4_config_kernel_mcs)]
+    #[inline(always)]
+    pub unsafe fn seL4_RecvWithMRs(
+        src: seL4_CPtr,
+        sender_badge: *mut seL4_Word,
+        reply: seL4_CPtr,
+        mr0: *mut seL4_Word,
+        mr1: *mut seL4_Word,
+        mr2: *mut seL4_Word,
+        mr3: *mut seL4_Word,
+    ) -> seL4_MessageInfo {
+        let mut info = seL4_MessageInfo { words: [0] };
+        let mut badge = 0;
+        let mut msg0 = 0;
+        let mut msg1 = 0;
+        let mut msg2 = 0;
+        let mut msg3 = 0;
+
+        arm_sys_recv(
+            seL4_SysRecv as seL4_Word,
+            src as seL4_Word,
+            &mut badge,
+            &mut info.words[0],
+            &mut msg0,
+            &mut msg1,
+            &mut msg2,
+            &mut msg3,
+            reply as seL4_Word,
+        );
+
+        if !mr0.is_null() {
+            *mr0 = msg0;
+        }
+        if !mr1.is_null() {
+            *mr1 = msg1;
+        }
+        if !mr2.is_null() {
+            *mr2 = msg2;
+        }
+        if !mr3.is_null() {
+            *mr3 = msg3;
+        }
+
+        if !sender_badge.is_null() {
+            *sender_badge = badge;
+        }
+
+        info
+    }
+
+    #[cfg(not(sel4_config_kernel_mcs))]
+    #[inline(always)]
+    pub unsafe fn seL4_RecvWithMRs(
+        src: seL4_CPtr,
+        sender_badge: *mut seL4_Word,
+        mr0: *mut seL4_Word,
+        mr1: *mut seL4_Word,
+        mr2: *mut seL4_Word,
+        mr3: *mut seL4_Word,
+    ) -> seL4_MessageInfo {
+        let mut info = seL4_MessageInfo { words: [0] };
+        let mut badge = 0;
+        let mut msg0 = 0;
+        let mut msg1 = 0;
+        let mut msg2 = 0;
+        let mut msg3 = 0;
+
+        arm_sys_recv(
+            seL4_SysRecv as seL4_Word,
+            src as seL4_Word,
+            &mut badge,
+            &mut info.words[0],
+            &mut msg0,
+            &mut msg1,
+            &mut msg2,
+            &mut msg3,
+            0,
+        );
+
+        if !mr0.is_null() {
+            *mr0 = msg0;
+        }
+        if !mr1.is_null() {
+            *mr1 = msg1;
+        }
+        if !mr2.is_null() {
+            *mr2 = msg2;
+        }
+        if !mr3.is_null() {
+            *mr3 = msg3;
+        }
+
+        if !sender_badge.is_null() {
+            *sender_badge = badge;
+        }
+
+        info
+    }
+
+    #[cfg(sel4_config_kernel_mcs)]
+    #[inline(always)]
+    pub unsafe fn seL4_NBRecv(
+        src: seL4_CPtr,
+        sender_badge: *mut seL4_Word,
+        reply: seL4_CPtr,
+    ) -> seL4_MessageInfo {
+        let mut info = seL4_MessageInfo { words: [0] };
+        let mut badge = 0;
+        let mut msg0 = 0;
+        let mut msg1 = 0;
+        let mut msg2 = 0;
+        let mut msg3 = 0;
+
+        arm_sys_recv(
+            seL4_SysNBRecv as seL4_Word,
+            src as seL4_Word,
+            &mut badge,
+            &mut info.words[0],
+            &mut msg0,
+            &mut msg1,
+            &mut msg2,
+            &mut msg3,
+            reply as seL4_Word,
+        );
+
+        seL4_SetMR(0, msg0);
+        seL4_SetMR(1, msg1);
+        seL4_SetMR(2, msg2);
+        seL4_SetMR(3, msg3);
+
+        if !sender_badge.is_null() {
+            *sender_badge = badge;
+        }
+
+        info
+    }
+
+    #[cfg(not(sel4_config_kernel_mcs))]
+    #[inline(always)]
+    pub unsafe fn seL4_NBRecv(src: seL4_CPtr, sender_badge: *mut seL4_Word) -> seL4_MessageInfo {
+        let mut info = seL4_MessageInfo { words: [0] };
+        let mut badge = 0;
+        let mut msg0 = 0;
+        let mut msg1 = 0;
+        let mut msg2 = 0;
+        let mut msg3 = 0;
+
+        arm_sys_recv(
+            seL4_SysNBRecv as seL4_Word,
+            src as seL4_Word,
+            &mut badge,
+            &mut info.words[0],
+            &mut msg0,
+            &mut msg1,
+            &mut msg2,
+            &mut msg3,
+            0,
+        );
+
+        seL4_SetMR(0, msg0);
+        seL4_SetMR(1, msg1);
+        seL4_SetMR(2, msg2);
+        seL4_SetMR(3, msg3);
+
+        if !sender_badge.is_null() {
+            *sender_badge = badge;
+        }
+
+        info
+    }
+
+    #[cfg(sel4_config_kernel_mcs)]
+    #[inline(always)]
+    pub unsafe fn seL4_Wait(src: seL4_CPtr, sender_badge: *mut seL4_Word) -> seL4_MessageInfo {
+        let mut info = seL4_MessageInfo { words: [0] };
+        let mut badge = 0;
+        let mut msg0 = 0;
+        let mut msg1 = 0;
+        let mut msg2 = 0;
+        let mut msg3 = 0;
+
+        arm_sys_recv(
+            seL4_SysWait as seL4_Word,
+            src as seL4_Word,
+            &mut badge,
+            &mut info.words[0],
+            &mut msg0,
+            &mut msg1,
+            &mut msg2,
+            &mut msg3,
+            0,
+        );
+
+        seL4_SetMR(0, msg0);
+        seL4_SetMR(1, msg1);
+        seL4_SetMR(2, msg2);
+        seL4_SetMR(3, msg3);
+
+        if !sender_badge.is_null() {
+            *sender_badge = badge;
+        }
+
+        info
+    }
+
+    #[cfg(not(sel4_config_kernel_mcs))]
+    #[inline(always)]
+    pub unsafe fn seL4_Wait(src: seL4_CPtr, sender_badge: *mut seL4_Word) -> seL4_MessageInfo {
+        seL4_Recv(src, sender_badge)
+    }
+
+    #[cfg(sel4_config_kernel_mcs)]
+    #[inline(always)]
+    pub unsafe fn seL4_NBWait(src: seL4_CPtr, sender_badge: *mut seL4_Word) -> seL4_MessageInfo {
+        let mut info = seL4_MessageInfo { words: [0] };
+        let mut badge = 0;
+        let mut msg0 = 0;
+        let mut msg1 = 0;
+        let mut msg2 = 0;
+        let mut msg3 = 0;
+
+        arm_sys_recv(
+            seL4_SysNBWait as seL4_Word,
+            src as seL4_Word,
+            &mut badge,
+            &mut info.words[0],
+            &mut msg0,
+            &mut msg1,
+            &mut msg2,
+            &mut msg3,
+            0,
+        );
+
+        seL4_SetMR(0, msg0);
+        seL4_SetMR(1, msg1);
+        seL4_SetMR(2, msg2);
+        seL4_SetMR(3, msg3);
+
+        if !sender_badge.is_null() {
+            *sender_badge = badge;
+        }
+
+        info
+    }
+
+    #[cfg(not(sel4_config_kernel_mcs))]
+    #[inline(always)]
+    pub unsafe fn seL4_NBWait(src: seL4_CPtr, sender_badge: *mut seL4_Word) -> seL4_MessageInfo {
+        seL4_NBRecv(src, sender_badge)
     }
 
     #[inline(always)]
@@ -523,8 +1053,7 @@ mod imp {
         let mut mr2 = 0;
         let mut mr3 = 0;
 
-        let tag =
-            seL4_MessageInfo_new(arch_invocation_label_ARMPageTableMap as seL4_Word, 0, 1, 2);
+        let tag = seL4_MessageInfo_new(arch_invocation_label_ARMPageTableMap as seL4_Word, 0, 1, 2);
         let output_tag = seL4_CallWithMRs(pt, tag, &mut mr0, &mut mr1, &mut mr2, &mut mr3);
         let result = seL4_MessageInfo_get_label(output_tag) as seL4_Error;
 
@@ -587,14 +1116,8 @@ mod imp {
             let mut mr2: seL4_Word = 0;
             let mut mr3: seL4_Word = 0;
 
-            let tag = seL4_MessageInfo::new(
-                invocation_label_TCBSetSpace as seL4_Word,
-                0,
-                3,
-                2,
-            );
-            let output_tag =
-                seL4_CallWithMRs(service, tag, &mut mr0, &mut mr1, &mut mr2, &mut mr3);
+            let tag = seL4_MessageInfo::new(invocation_label_TCBSetSpace as seL4_Word, 0, 3, 2);
+            let output_tag = seL4_CallWithMRs(service, tag, &mut mr0, &mut mr1, &mut mr2, &mut mr3);
             let result = seL4_MessageInfo_get_label(output_tag) as seL4_Error;
 
             if result != seL4_NoError {
@@ -617,12 +1140,7 @@ mod imp {
             let mut mr2: seL4_Word = vspace_root_data;
             let mut mr3: seL4_Word = 0;
 
-            let tag = seL4_MessageInfo::new(
-                invocation_label_TCBSetSpace as seL4_Word,
-                0,
-                2,
-                3,
-            );
+            let tag = seL4_MessageInfo::new(invocation_label_TCBSetSpace as seL4_Word, 0, 2, 3);
             let output_tag = seL4_CallWithMRs(service, tag, &mut mr0, &mut mr1, &mut mr2, &mut mr3);
             let result = seL4_MessageInfo_get_label(output_tag) as seL4_Error;
 
@@ -697,8 +1215,11 @@ mod imp {
     pub const seL4_DeleteFirst: seL4_Error = seL4_Error_seL4_DeleteFirst;
 
     pub const seL4_SysSend: seL4_Word = seL4_Syscall_ID_seL4_SysSend as seL4_Word;
+    pub const seL4_SysNBSend: seL4_Word = seL4_Syscall_ID_seL4_SysNBSend as seL4_Word;
     pub const seL4_SysRecv: seL4_Word = seL4_Syscall_ID_seL4_SysRecv as seL4_Word;
     pub const seL4_SysNBRecv: seL4_Word = seL4_Syscall_ID_seL4_SysNBRecv as seL4_Word;
+    #[cfg(not(sel4_config_kernel_mcs))]
+    pub const seL4_SysReply: seL4_Word = seL4_Syscall_ID_seL4_SysReply as seL4_Word;
     pub const seL4_SysCall: seL4_Word = seL4_Syscall_ID_seL4_SysCall as seL4_Word;
     pub const seL4_SysYield: seL4_Word = seL4_Syscall_ID_seL4_SysYield as seL4_Word;
 
@@ -709,7 +1230,8 @@ mod imp {
     pub const seL4_CapTableObject: seL4_ObjectType = api_object_seL4_CapTableObject;
 
     pub const seL4_ARM_Page: seL4_ObjectType = _object_seL4_ARM_SmallPageObject as seL4_ObjectType;
-    pub const seL4_ARM_LargePage: seL4_ObjectType = _object_seL4_ARM_LargePageObject as seL4_ObjectType;
+    pub const seL4_ARM_LargePage: seL4_ObjectType =
+        _object_seL4_ARM_LargePageObject as seL4_ObjectType;
     pub const seL4_ARM_PageTableObject: seL4_ObjectType =
         _object_seL4_ARM_PageTableObject as seL4_ObjectType;
     pub const seL4_ARM_SmallPageObject: seL4_ObjectType = seL4_ARM_Page;
@@ -721,8 +1243,10 @@ mod imp {
         seL4_RootCNodeCapSlots_seL4_CapInitThreadCNode as seL4_CPtr;
     pub const seL4_CapInitThreadVSpace: seL4_CPtr =
         seL4_RootCNodeCapSlots_seL4_CapInitThreadVSpace as seL4_CPtr;
-    pub const seL4_CapIRQControl: seL4_CPtr = seL4_RootCNodeCapSlots_seL4_CapIRQControl as seL4_CPtr;
-    pub const seL4_CapASIDControl: seL4_CPtr = seL4_RootCNodeCapSlots_seL4_CapASIDControl as seL4_CPtr;
+    pub const seL4_CapIRQControl: seL4_CPtr =
+        seL4_RootCNodeCapSlots_seL4_CapIRQControl as seL4_CPtr;
+    pub const seL4_CapASIDControl: seL4_CPtr =
+        seL4_RootCNodeCapSlots_seL4_CapASIDControl as seL4_CPtr;
     pub const seL4_CapInitThreadASIDPool: seL4_CPtr =
         seL4_RootCNodeCapSlots_seL4_CapInitThreadASIDPool as seL4_CPtr;
     pub const seL4_CapIOPortControl: seL4_CPtr =
@@ -738,7 +1262,8 @@ mod imp {
         seL4_RootCNodeCapSlots_seL4_CapSMMUSIDControl as seL4_CPtr;
     pub const seL4_CapSMMUCBControl: seL4_CPtr =
         seL4_RootCNodeCapSlots_seL4_CapSMMUCBControl as seL4_CPtr;
-    pub const seL4_CapInitThreadSC: seL4_CPtr = seL4_RootCNodeCapSlots_seL4_CapInitThreadSC as seL4_CPtr;
+    pub const seL4_CapInitThreadSC: seL4_CPtr =
+        seL4_RootCNodeCapSlots_seL4_CapInitThreadSC as seL4_CPtr;
     pub const seL4_CapSMC: seL4_CPtr = seL4_RootCNodeCapSlots_seL4_CapSMC as seL4_CPtr;
 
     pub const seL4_WordBits: seL4_Word = (core::mem::size_of::<seL4_Word>() * 8) as seL4_Word;
@@ -804,12 +1329,7 @@ mod imp {
 
     impl seL4_CapRights {
         #[inline(always)]
-        pub const fn new(
-            grant_reply: u8,
-            grant: u8,
-            read: u8,
-            write: u8,
-        ) -> Self {
+        pub const fn new(grant_reply: u8, grant: u8, read: u8, write: u8) -> Self {
             let mut value: seL4_Word = 0;
             value |= (grant_reply as seL4_Word & 0x1) << 3;
             value |= (grant as seL4_Word & 0x1) << 2;
