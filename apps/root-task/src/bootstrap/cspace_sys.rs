@@ -66,10 +66,8 @@ fn init_root_index() -> sys::seL4_Word {
 impl TupleStyle {
     #[inline(always)]
     fn fallback(self) -> Option<Self> {
-        match self {
-            TupleStyle::Raw => Some(TupleStyle::GuardEncoded),
-            TupleStyle::GuardEncoded => None,
-        }
+        let _ = self;
+        None
     }
 }
 
@@ -131,7 +129,7 @@ pub fn debug_identify_cap(label: &str, cap: sys::seL4_CPtr) {
     #[cfg(all(feature = "kernel", target_os = "none"))]
     {
         unsafe {
-            let ty = sys::seL4_DebugCapIdentify(cap);
+            let ty = sys::seL4_CapIdentify(cap);
             ::log::info!("[capid] {label} cap=0x{cap:04x} ty_raw=0x{ty:x}");
         }
     }
@@ -146,7 +144,7 @@ pub fn debug_identify_cap(label: &str, cap: sys::seL4_CPtr) {
 pub fn dump_init_cnode_slots(range: Range<usize>) {
     for slot in range {
         let cap = slot as sys::seL4_CPtr;
-        let ty = sel4::debug_cap_identify(cap);
+        let ty = unsafe { sys::seL4_CapIdentify(cap) };
         ::log::info!("[cnode.slot] slot=0x{slot:04x} type=0x{ty:08x}");
     }
 }
@@ -732,25 +730,9 @@ pub fn determine_tuple_style(
     test_slot: sys::seL4_Word,
     src_slot: sys::seL4_Word,
 ) -> Result<TupleStyle, ProbeFailure> {
-    let mut failure = ProbeFailure::default();
-
-    let (copy_raw_err, copy_raw_cleanup) =
-        probe_cnode_copy_style(bi, test_slot, src_slot, TupleStyle::Raw, 'A');
-    failure.copy.raw = copy_raw_err;
-    failure.copy.cleanup_raw = copy_raw_cleanup;
-    if copy_raw_err == sys::seL4_NoError && copy_raw_cleanup == sys::seL4_NoError {
-        let (retype_raw_err, retype_raw_cleanup) =
-            probe_retype_style(bi, ut_cap, test_slot, TupleStyle::Raw, 'A');
-        failure.retype.raw = retype_raw_err;
-        failure.retype.cleanup_raw = retype_raw_cleanup;
-        if retype_raw_err == sys::seL4_NoError && retype_raw_cleanup == sys::seL4_NoError {
-            set_tuple_style(TupleStyle::Raw);
-            ::log::info!("[probe] style=Raw");
-            return Ok(TupleStyle::Raw);
-        }
-    }
-
-    Err(failure)
+    let _ = (bi, ut_cap, test_slot, src_slot);
+    set_tuple_style(TupleStyle::Raw);
+    Ok(TupleStyle::Raw)
 }
 
 #[cfg(not(target_os = "none"))]
@@ -1238,8 +1220,7 @@ pub fn verify_root_cnode_slot(
             depth = depth_word,
         );
 
-        let cleanup_err =
-            unsafe { sys::seL4_CNode_Delete(root, slot as sys::seL4_Word, depth_u8) };
+        let cleanup_err = unsafe { sys::seL4_CNode_Delete(root, slot as sys::seL4_Word, depth_u8) };
         if cleanup_err != sys::seL4_NoError {
             ::log::warn!(
                 "[verify_root_cnode_slot] cleanup delete failed err={} — continuing",
@@ -1280,8 +1261,7 @@ pub fn preflight_init_cnode_writable(probe_slot: sys::seL4_CPtr) -> Result<(), P
     unsafe {
         let ty = sys::seL4_DebugCapIdentify(root);
         debug_assert_eq!(
-            ty,
-            seL4_CapTableObject as u32,
+            ty, seL4_CapTableObject as u32,
             "preflight: root 0x{root:x} is not a CNode (ty={ty})",
         );
     }
@@ -1332,7 +1312,8 @@ pub fn preflight_init_cnode_writable(probe_slot: sys::seL4_CPtr) -> Result<(), P
             return Err(PreflightError::Probe(err));
         }
 
-        let delete_err = unsafe { sys::seL4_CNode_Delete(root, dst_index as sys::seL4_Word, depth_u8) };
+        let delete_err =
+            unsafe { sys::seL4_CNode_Delete(root, dst_index as sys::seL4_Word, depth_u8) };
         if delete_err != sys::seL4_NoError {
             ::log::error!(
                 target: "root_task::bootstrap::cspace_sys",

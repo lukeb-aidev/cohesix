@@ -219,12 +219,12 @@ pub const fn cap_data_guard(guard: seL4_Word, guard_size: seL4_Word) -> seL4_Wor
     (guard_masked << 6) | guard_bits
 }
 
+use crate::boot::bi_extra::UntypedDesc;
 use sel4_sys::{
     seL4_ARM_PageTableObject, seL4_ARM_PageTable_Map, seL4_ARM_Page_Default, seL4_ARM_Page_Map,
     seL4_ARM_Page_Uncached, seL4_ARM_VMAttributes, seL4_BootInfo, seL4_SlotRegion,
     MAX_BOOTINFO_UNTYPEDS,
 };
-use crate::boot::bi_extra::UntypedDesc;
 
 #[cfg(all(feature = "kernel", not(sel4_config_printing)))]
 use sel4_panicking::write_debug_byte;
@@ -872,7 +872,7 @@ pub fn debug_halt() {}
 #[cfg(all(feature = "kernel", target_arch = "aarch64", sel4_config_debug_build))]
 #[inline(always)]
 /// Executes the `DebugCapIdentify` seL4 syscall to reveal a capability's kernel tag.
-pub unsafe fn seL4_DebugCapIdentify(slot: seL4_CPtr) -> u32 {
+pub unsafe fn seL4_DebugCapIdentify(slot: seL4_CPtr) -> seL4_Word {
     unsafe { sel4_sys::seL4_DebugCapIdentify(slot) }
 }
 
@@ -1016,14 +1016,7 @@ pub fn cnode_mint_depth(
         // kernel-advertised CSpace topology, ensuring the kernel accepts the invocation.
         unsafe {
             seL4_CNode_Mint(
-                dest_root,
-                dest_index,
-                dest_depth,
-                src_root,
-                src_index,
-                src_depth,
-                rights,
-                badge,
+                dest_root, dest_index, dest_depth, src_root, src_index, src_depth, rights, badge,
             )
         }
     }
@@ -1052,14 +1045,7 @@ pub fn cnode_mint_checked(
     {
         let rc = unsafe {
             seL4_CNode_Mint(
-                dest_root,
-                dest_index,
-                dest_depth,
-                src_root,
-                src_index,
-                src_depth,
-                rights,
-                badge,
+                dest_root, dest_index, dest_depth, src_root, src_index, src_depth, rights, badge,
             )
         };
         ktry("cnode.mint", rc as i32)

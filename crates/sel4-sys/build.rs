@@ -449,7 +449,7 @@ fn generate_bindings(build_dir: &Path, config_sources: &[(PathBuf, String)]) {
     writeln!(wrapper_file, "void seL4_DebugPutChar(char c);").unwrap();
     writeln!(
         wrapper_file,
-        "seL4_Uint32 seL4_DebugCapIdentify(seL4_CPtr cap);",
+        "seL4_Word seL4_DebugCapIdentify(seL4_CPtr cap);",
     )
     .unwrap();
     writeln!(
@@ -475,7 +475,9 @@ fn generate_bindings(build_dir: &Path, config_sources: &[(PathBuf, String)]) {
         .size_t_is_usize(true)
         .allowlist_function("seL4_.*")
         .allowlist_type("seL4_.*|invocation_label|arch_invocation_label")
-        .allowlist_var("seL4_.*|CNode.*|UntypedRetype|ARMPageTableMap|ARMPageMap|InvalidInvocation");
+        .allowlist_var(
+            "seL4_.*|CNode.*|UntypedRetype|ARMPageTableMap|ARMPageMap|InvalidInvocation",
+        );
 
     for dir in include_dirs {
         builder = builder.clang_arg(format!("-I{}", dir.display()));
