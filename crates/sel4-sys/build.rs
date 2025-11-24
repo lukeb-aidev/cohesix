@@ -34,6 +34,8 @@ fn main() {
         .map(PathBuf::from)
         .unwrap_or_else(|_| manifest_dir.join("../../seL4/build"));
 
+    emit_link_flags(&build_dir);
+
     let config_sources = load_config_files(&build_dir);
 
     let max_bootinfo_untypeds = parse_config_usize(
@@ -54,6 +56,26 @@ fn main() {
     }
 
     generate_bindings(&build_dir, &config_sources);
+}
+
+fn emit_link_flags(build_dir: &Path) {
+    let libsel4_dir = build_dir.join("libsel4");
+    let libsel4_archive = libsel4_dir.join("libsel4.a");
+    if !libsel4_archive.is_file() {
+        panic!(
+            "Missing libsel4.a; ensure seL4 is built and set SEL4_BUILD_DIR (current: {})",
+            build_dir.display()
+        );
+    }
+
+    println!("cargo:rerun-if-changed={}", libsel4_archive.display());
+    println!("cargo:rustc-link-search=native={}", libsel4_dir.display());
+    println!("cargo:rustc-link-lib=static=sel4");
+
+    let support_lib_dir = build_dir.join("lib");
+    if support_lib_dir.is_dir() {
+        println!("cargo:rustc-link-search=native={}", support_lib_dir.display());
+    }
 }
 
 fn load_config_files(root: &Path) -> Vec<(PathBuf, String)> {
