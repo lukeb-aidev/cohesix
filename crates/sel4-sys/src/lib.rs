@@ -15,7 +15,7 @@ mod imp {
     include!(concat!(env!("OUT_DIR"), "/sel4_config_consts.rs"));
 
     extern "C" {
-        pub fn seL4_DebugCapIdentify(cap: seL4_CPtr) -> seL4_Uint32;
+        pub fn seL4_DebugCapIdentify(cap: seL4_CPtr) -> seL4_Word;
 
         pub fn seL4_DebugPutChar(c: u8);
     }
@@ -70,7 +70,7 @@ mod imp {
     }
 
     #[export_name = "seL4_DebugCapIdentify"]
-    pub unsafe extern "C" fn sel4_debug_cap_identify(cap: seL4_CPtr) -> seL4_Uint32 {
+    pub unsafe extern "C" fn sel4_debug_cap_identify(cap: seL4_CPtr) -> seL4_Word {
         let mut cap_word = cap as seL4_Word;
         let mut info = 0;
         let mut msg0 = 0;
@@ -91,7 +91,7 @@ mod imp {
             0,
         );
 
-        cap_word as seL4_Uint32
+        cap_word
     }
 
     #[inline(always)]
