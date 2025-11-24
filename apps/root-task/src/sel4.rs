@@ -870,38 +870,10 @@ pub fn debug_halt() {
 pub fn debug_halt() {}
 
 #[cfg(all(feature = "kernel", target_arch = "aarch64", sel4_config_debug_build))]
-#[no_mangle]
+#[inline(always)]
 /// Executes the `DebugCapIdentify` seL4 syscall to reveal a capability's kernel tag.
-pub unsafe extern "C" fn seL4_DebugCapIdentify(slot: seL4_CPtr) -> u32 {
-    const SYS_DEBUG_CAP_IDENTIFY: i64 = -12;
-
-    let mut badge = slot as seL4_Word;
-    let mut info: seL4_Word = 0;
-    let mut mr0: seL4_Word = 0;
-    let mut mr1: seL4_Word = 0;
-    let mut mr2: seL4_Word = 0;
-    let mut mr3: seL4_Word = 0;
-
-    unsafe {
-        asm!(
-            "svc #0",
-            inout("x0") badge,
-            inout("x1") info,
-            inout("x2") mr0,
-            inout("x3") mr1,
-            inout("x4") mr2,
-            inout("x5") mr3,
-            lateout("x6") _,
-            in("x7") SYS_DEBUG_CAP_IDENTIFY as usize,
-            options(nostack, preserves_flags),
-        );
-    }
-
-    // Acknowledge the post-syscall register values to silence compiler warnings while retaining
-    // the historical semantics of this debug helper.
-    core::hint::black_box((info, mr0, mr1, mr2, mr3));
-
-    badge as u32
+pub unsafe fn seL4_DebugCapIdentify(slot: seL4_CPtr) -> u32 {
+    unsafe { sel4_sys::seL4_DebugCapIdentify(slot) }
 }
 
 #[cfg(all(feature = "kernel", not(target_arch = "aarch64")))]
