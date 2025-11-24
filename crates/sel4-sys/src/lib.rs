@@ -18,58 +18,6 @@ mod imp {
         pub fn seL4_DebugCapIdentify(cap: seL4_CPtr) -> seL4_Word;
 
         pub fn seL4_DebugPutChar(c: u8);
-
-        #[link_name = "seL4_CNode_Copy"]
-        pub fn ffi_seL4_CNode_Copy(
-            dest_root: seL4_CNode,
-            dest_index: seL4_Word,
-            dest_depth: seL4_Word,
-            src_root: seL4_CNode,
-            src_index: seL4_Word,
-            src_depth: seL4_Word,
-            rights: seL4_CapRights,
-        ) -> seL4_Error;
-
-        #[link_name = "seL4_CNode_Mint"]
-        pub fn ffi_seL4_CNode_Mint(
-            dest_root: seL4_CNode,
-            dest_index: seL4_Word,
-            dest_depth: seL4_Word,
-            src_root: seL4_CNode,
-            src_index: seL4_Word,
-            src_depth: seL4_Word,
-            rights: seL4_CapRights,
-            badge: seL4_Word,
-        ) -> seL4_Error;
-
-        #[link_name = "seL4_CNode_Move"]
-        pub fn ffi_seL4_CNode_Move(
-            dest_root: seL4_CNode,
-            dest_index: seL4_Word,
-            dest_depth: seL4_Word,
-            src_root: seL4_CNode,
-            src_index: seL4_Word,
-            src_depth: seL4_Word,
-        ) -> seL4_Error;
-
-        #[link_name = "seL4_CNode_Delete"]
-        pub fn ffi_seL4_CNode_Delete(
-            dest_root: seL4_CNode,
-            dest_index: seL4_Word,
-            dest_depth: seL4_Word,
-        ) -> seL4_Error;
-
-        #[link_name = "seL4_Untyped_Retype"]
-        pub fn ffi_seL4_Untyped_Retype(
-            ut_cap: seL4_Untyped,
-            obj_type: seL4_Word,
-            size_bits: seL4_Word,
-            root: seL4_CNode,
-            node_index: seL4_Word,
-            node_depth: seL4_Word,
-            node_offset: seL4_Word,
-            num: seL4_Word,
-        ) -> seL4_Error;
     }
 
     pub type seL4_VSpace = seL4_CPtr;
@@ -958,7 +906,21 @@ mod imp {
     }
 
     #[inline(always)]
-    pub unsafe fn seL4_CNode_Copy(
+    fn encode_depth(depth: seL4_Uint8) -> seL4_Word {
+        (depth & 0xff) as seL4_Word
+    }
+
+    fn set_error_mrs(mr0: seL4_Word, mr1: seL4_Word, mr2: seL4_Word, mr3: seL4_Word) {
+        unsafe {
+            seL4_SetMR(0, mr0);
+            seL4_SetMR(1, mr1);
+            seL4_SetMR(2, mr2);
+            seL4_SetMR(3, mr3);
+        }
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn seL4_CNode_Copy(
         dest_root: seL4_CNode,
         dest_index: seL4_Word,
         dest_depth: seL4_Word,
@@ -967,24 +929,27 @@ mod imp {
         src_depth: seL4_Word,
         rights: seL4_CapRights,
     ) -> seL4_Error {
-        ::log::info!(
-            "[ffi::seL4_CNode_Copy] destRoot=0x{:x} destIndex=0x{:x} destDepth={} srcRoot=0x{:x} srcIndex=0x{:x} srcDepth={} rights=0x{:x}",
-            dest_root,
-            dest_index,
-            dest_depth,
-            src_root,
-            src_index,
-            src_depth,
-            rights.raw()
-        );
+        let tag = seL4_MessageInfo_new(invocation_label_CNodeCopy as seL4_Word, 0, 1, 5);
 
-        ffi_seL4_CNode_Copy(
-            dest_root, dest_index, dest_depth, src_root, src_index, src_depth, rights,
-        )
+        seL4_SetCap(0, src_root);
+
+        let mut mr0 = dest_index;
+        let mut mr1 = encode_depth(dest_depth as seL4_Uint8);
+        let mut mr2 = src_index;
+        let mut mr3 = encode_depth(src_depth as seL4_Uint8);
+        seL4_SetMR(4, rights.words[0]);
+
+        let output_tag = seL4_CallWithMRs(dest_root, tag, &mut mr0, &mut mr1, &mut mr2, &mut mr3);
+        let result = seL4_MessageInfo_get_label(output_tag) as seL4_Error;
+        if result != seL4_NoError {
+            set_error_mrs(mr0, mr1, mr2, mr3);
+        }
+
+        result
     }
 
-    #[inline(always)]
-    pub unsafe fn seL4_CNode_Mint(
+    #[no_mangle]
+    pub unsafe extern "C" fn seL4_CNode_Mint(
         dest_root: seL4_CNode,
         dest_index: seL4_Word,
         dest_depth: seL4_Word,
@@ -994,13 +959,28 @@ mod imp {
         rights: seL4_CapRights,
         badge: seL4_Word,
     ) -> seL4_Error {
-        ffi_seL4_CNode_Mint(
-            dest_root, dest_index, dest_depth, src_root, src_index, src_depth, rights, badge,
-        )
+        let tag = seL4_MessageInfo_new(invocation_label_CNodeMint as seL4_Word, 0, 1, 6);
+
+        seL4_SetCap(0, src_root);
+
+        let mut mr0 = dest_index;
+        let mut mr1 = encode_depth(dest_depth as seL4_Uint8);
+        let mut mr2 = src_index;
+        let mut mr3 = encode_depth(src_depth as seL4_Uint8);
+        seL4_SetMR(4, rights.words[0]);
+        seL4_SetMR(5, badge);
+
+        let output_tag = seL4_CallWithMRs(dest_root, tag, &mut mr0, &mut mr1, &mut mr2, &mut mr3);
+        let result = seL4_MessageInfo_get_label(output_tag) as seL4_Error;
+        if result != seL4_NoError {
+            set_error_mrs(mr0, mr1, mr2, mr3);
+        }
+
+        result
     }
 
-    #[inline(always)]
-    pub unsafe fn seL4_CNode_Move(
+    #[no_mangle]
+    pub unsafe extern "C" fn seL4_CNode_Move(
         dest_root: seL4_CNode,
         dest_index: seL4_Word,
         dest_depth: seL4_Word,
@@ -1008,22 +988,48 @@ mod imp {
         src_index: seL4_Word,
         src_depth: seL4_Word,
     ) -> seL4_Error {
-        ffi_seL4_CNode_Move(
-            dest_root, dest_index, dest_depth, src_root, src_index, src_depth,
-        )
+        let tag = seL4_MessageInfo_new(invocation_label_CNodeMove as seL4_Word, 0, 1, 4);
+
+        seL4_SetCap(0, src_root);
+
+        let mut mr0 = dest_index;
+        let mut mr1 = encode_depth(dest_depth as seL4_Uint8);
+        let mut mr2 = src_index;
+        let mut mr3 = encode_depth(src_depth as seL4_Uint8);
+
+        let output_tag = seL4_CallWithMRs(dest_root, tag, &mut mr0, &mut mr1, &mut mr2, &mut mr3);
+        let result = seL4_MessageInfo_get_label(output_tag) as seL4_Error;
+        if result != seL4_NoError {
+            set_error_mrs(mr0, mr1, mr2, mr3);
+        }
+
+        result
     }
 
-    #[inline(always)]
-    pub unsafe fn seL4_CNode_Delete(
+    #[no_mangle]
+    pub unsafe extern "C" fn seL4_CNode_Delete(
         dest_root: seL4_CNode,
         index: seL4_Word,
         depth: seL4_Word,
     ) -> seL4_Error {
-        ffi_seL4_CNode_Delete(dest_root, index, depth)
+        let tag = seL4_MessageInfo_new(invocation_label_CNodeDelete as seL4_Word, 0, 0, 2);
+
+        let mut mr0 = index;
+        let mut mr1 = encode_depth(depth as seL4_Uint8);
+        let mut mr2 = 0;
+        let mut mr3 = 0;
+
+        let output_tag = seL4_CallWithMRs(dest_root, tag, &mut mr0, &mut mr1, &mut mr2, &mut mr3);
+        let result = seL4_MessageInfo_get_label(output_tag) as seL4_Error;
+        if result != seL4_NoError {
+            set_error_mrs(mr0, mr1, mr2, mr3);
+        }
+
+        result
     }
 
-    #[inline(always)]
-    pub unsafe fn seL4_Untyped_Retype(
+    #[no_mangle]
+    pub unsafe extern "C" fn seL4_Untyped_Retype(
         ut_cap: seL4_Untyped,
         obj_type: seL4_Word,
         size_bits: seL4_Word,
@@ -1033,16 +1039,24 @@ mod imp {
         node_offset: seL4_Word,
         num: seL4_Word,
     ) -> seL4_Error {
-        ffi_seL4_Untyped_Retype(
-            ut_cap,
-            obj_type,
-            size_bits,
-            root,
-            node_index,
-            node_depth,
-            node_offset,
-            num,
-        )
+        let tag = seL4_MessageInfo_new(invocation_label_UntypedRetype as seL4_Word, 0, 1, 6);
+
+        seL4_SetCap(0, root);
+
+        let mut mr0 = obj_type;
+        let mut mr1 = size_bits;
+        let mut mr2 = node_index;
+        let mut mr3 = node_depth;
+        seL4_SetMR(4, node_offset);
+        seL4_SetMR(5, num);
+
+        let output_tag = seL4_CallWithMRs(ut_cap, tag, &mut mr0, &mut mr1, &mut mr2, &mut mr3);
+        let result = seL4_MessageInfo_get_label(output_tag) as seL4_Error;
+        if result != seL4_NoError {
+            set_error_mrs(mr0, mr1, mr2, mr3);
+        }
+
+        result
     }
 
     #[inline(always)]
