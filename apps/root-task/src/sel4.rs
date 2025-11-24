@@ -349,7 +349,10 @@ fn bootinfo_extra_slice<'a>(header: &'a seL4_BootInfo) -> Result<&'a [u8], BootI
 
     let extra_len = extra_bytes;
 
-    let header_size = mem::size_of::<seL4_BootInfo>();
+    // Prefer the actual byte span of the bootinfo header (including the
+    // untyped list) instead of any page-rounded view so that the computed
+    // extra slice exactly matches the kernel-advertised `extraLen`.
+    let header_size = core::mem::size_of_val(core::slice::from_ref(header));
     let extra_start = addr
         .checked_add(header_size)
         .ok_or(BootInfoError::Overflow)?;
@@ -2641,12 +2644,7 @@ impl<'a> KernelEnv<'a> {
             return;
         }
 
-        let desired_probe_addr = header_addr + 0x3000;
-        let probe_addr = if desired_probe_addr >= extra_start && desired_probe_addr < extra_end {
-            desired_probe_addr
-        } else {
-            extra_end - 1
-        };
+        let probe_addr = extra_start + extra_bytes.len().saturating_sub(1).min(0x3000);
 
         let probe_ptr = probe_addr as *const u8;
         let probe_byte = unsafe { ptr::read_volatile(probe_ptr) };
