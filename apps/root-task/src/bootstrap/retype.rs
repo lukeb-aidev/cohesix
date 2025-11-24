@@ -9,7 +9,7 @@ use sel4_sys::{self as sys, seL4_CapTableObject, seL4_EndpointObject};
 #[cfg(feature = "canonical_cspace")]
 use super::cspace::first_endpoint_retype;
 use super::cspace::{slot_in_empty_window, CSpaceCtx, DestCNode};
-use super::cspace_sys::{tuple_style_label, TupleStyle};
+use super::cspace_sys::{tuple_style, tuple_style_label, TupleStyle};
 use super::ffi::raw_untyped_retype;
 use crate::bootstrap::log::force_uart_line;
 use crate::bootstrap::{boot_tracer, BootPhase, UntypedSelection};
@@ -61,7 +61,11 @@ pub enum RetypePlanError {
 impl RetypePlan {
     pub fn sanitise_against_bootinfo(self, view: &BootInfoView) -> Result<Self, RetypePlanError> {
         let (empty_start, empty_end) = view.init_cnode_empty_range();
-        let expected_depth = view.init_cnode_depth();
+        let style = tuple_style();
+        let expected_depth = match style {
+            TupleStyle::Raw => word_bits() as u8,
+            TupleStyle::GuardEncoded => view.init_cnode_depth(),
+        };
         if self.root != view.root_cnode_cap() {
             return Err(RetypePlanError::RootMismatch);
         }
@@ -71,7 +75,11 @@ impl RetypePlan {
                 expected: expected_depth,
             });
         }
-        if self.node_index != 0 {
+        let expected_index = match style {
+            TupleStyle::Raw => view.root_cnode_cap(),
+            TupleStyle::GuardEncoded => init_cnode_index_word(),
+        };
+        if self.node_index != expected_index {
             return Err(RetypePlanError::IndexMismatch {
                 provided: self.node_index,
             });
@@ -220,11 +228,28 @@ pub(crate) fn call_retype(
     num_objects: sys::seL4_Word,
 ) -> sys::seL4_Error {
     dest.assert_sane();
-    let style = TupleStyle::GuardEncoded;
-    let node_index: sys::seL4_Word = init_cnode_index_word();
-    let node_depth: u8 = canonical_cnode_depth(dest.root_bits, word_bits() as u8);
-    let slot_offset =
-        sys::seL4_Word::try_from(dest.slot_offset).expect("slot offset must fit within seL4_Word");
+    let style = tuple_style();
+    // Mirror libsel4's initial `cspacepath_t` construction for `initThreadCNode`
+    // (libsel4/include/sel4/types.h), which uses `capDepth = seL4_WordBits` and
+    // `capPtr = seL4_CapInitThreadCNode`. The raw tuple keeps retypes aligned
+    // with the CNode copy path so both operations address the init CSpace
+    // identically.
+    let (node_index, node_depth, slot_offset) = match style {
+        TupleStyle::Raw => {
+            let offset = sys::seL4_Word::try_from(dest.slot_offset)
+                .expect("slot offset must fit within seL4_Word");
+            (dest.root as sys::seL4_Word, word_bits() as u8, offset)
+        }
+        TupleStyle::GuardEncoded => {
+            let offset = sys::seL4_Word::try_from(dest.slot_offset)
+                .expect("slot offset must fit within seL4_Word");
+            (
+                init_cnode_index_word(),
+                canonical_cnode_depth(dest.root_bits, word_bits() as u8),
+                offset,
+            )
+        }
+    };
     log_retype_call(
         ut_cap,
         obj_type,
@@ -320,8 +345,8 @@ mod tests {
         let view = mock_bootinfo(0x0103, 0x2000, 13);
         let plan = RetypePlan {
             root: seL4_CapInitThreadCNode,
-            node_index: 0,
-            cnode_depth: view.init_cnode_depth(),
+            node_index: view.root_cnode_cap(),
+            cnode_depth: word_bits() as u8,
             dest_offset: 0x0103,
             num_objects: 1,
         };
@@ -333,8 +358,8 @@ mod tests {
         let view = mock_bootinfo(0x0103, 0x2000, 13);
         let plan = RetypePlan {
             root: seL4_CapInitThreadCNode,
-            node_index: 0,
-            cnode_depth: view.init_cnode_depth(),
+            node_index: view.root_cnode_cap(),
+            cnode_depth: word_bits() as u8,
             dest_offset: 0x0002,
             num_objects: 1,
         };
@@ -448,11 +473,7 @@ where
     let log_node_depth = sys::seL4_Word::from(ctx.cnode_bits());
 
     let categories: [(u32, sys::seL4_ObjectType, u8); 2] = [
-        (
-            tables,
-            sys::seL4_ARM_PageTableObject,
-            PAGE_TABLE_BITS as u8,
-        ),
+        (tables, sys::seL4_ARM_PageTableObject, PAGE_TABLE_BITS as u8),
         (pages, sys::seL4_ARM_Page, PAGE_BITS as u8),
     ];
 
