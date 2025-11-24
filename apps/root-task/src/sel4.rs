@@ -1045,7 +1045,14 @@ pub fn cnode_mint_checked(
     {
         let rc = unsafe {
             seL4_CNode_Mint(
-                dest_root, dest_index, dest_depth, src_root, src_index, src_depth, rights, badge,
+                dest_root,
+                dest_index,
+                dest_depth as seL4_Word,
+                src_root,
+                src_index,
+                src_depth as seL4_Word,
+                rights,
+                badge,
             )
         };
         ktry("cnode.mint", rc as i32)

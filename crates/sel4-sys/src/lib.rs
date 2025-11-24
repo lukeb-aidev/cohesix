@@ -180,21 +180,15 @@ mod imp {
         mr2: seL4_Word,
         mr3: seL4_Word,
     ) {
-        let mut destptr = dest;
-        let mut info = info_arg;
-        let mut msg0 = mr0;
-        let mut msg1 = mr1;
-        let mut msg2 = mr2;
-        let mut msg3 = mr3;
         let scno = sys;
         asm!(
             "svc #0",
-            inout("x0") destptr,
-            inout("x2") msg0,
-            inout("x3") msg1,
-            inout("x4") msg2,
-            inout("x5") msg3,
-            inout("x1") info,
+            in("x0") dest,
+            in("x2") mr0,
+            in("x3") mr1,
+            in("x4") mr2,
+            in("x5") mr3,
+            in("x1") info_arg,
             in("x7") scno,
             options(nostack)
         );
@@ -209,26 +203,22 @@ mod imp {
         mr2: seL4_Word,
         mr3: seL4_Word,
     ) {
-        let mut info = info_arg;
-        let mut msg0 = mr0;
-        let mut msg1 = mr1;
-        let mut msg2 = mr2;
-        let mut msg3 = mr3;
         let scno = sys;
 
         asm!(
             "svc #0",
-            inout("x2") msg0,
-            inout("x3") msg1,
-            inout("x4") msg2,
-            inout("x5") msg3,
-            inout("x1") info,
+            in("x2") mr0,
+            in("x3") mr1,
+            in("x4") mr2,
+            in("x5") mr3,
+            in("x1") info_arg,
             in("x7") scno,
             options(nostack)
         );
     }
 
     #[inline(always)]
+    #[cfg_attr(not(sel4_config_kernel_mcs), allow(unused_variables))]
     unsafe fn arm_sys_recv(
         sys: seL4_Word,
         src: seL4_Word,
@@ -294,6 +284,7 @@ mod imp {
         in_out_mr1: *mut seL4_Word,
         in_out_mr2: *mut seL4_Word,
         in_out_mr3: *mut seL4_Word,
+        #[cfg_attr(not(sel4_config_kernel_mcs), allow(unused_variables))]
         reply: seL4_Word,
     ) {
         let mut destptr = dest;
@@ -388,11 +379,9 @@ mod imp {
 
     #[inline(always)]
     unsafe fn arm_sys_send_null(sys: seL4_Word, src: seL4_Word, info_arg: seL4_Word) {
-        let mut destptr = src;
-        let mut info = info_arg;
         let scno = sys;
 
-        asm!("svc #0", inout("x0") destptr, inout("x1") info, in("x7") scno, options(nostack));
+        asm!("svc #0", in("x0") src, in("x1") info_arg, in("x7") scno, options(nostack));
     }
 
     #[inline(always)]
