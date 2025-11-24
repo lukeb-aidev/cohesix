@@ -44,12 +44,18 @@ pub fn root_cnode() -> seL4_CNode {
 
 #[inline(always)]
 pub fn path_depth(_bi: &sys::seL4_BootInfo) -> u8 {
-    init_cnode_bits_u8(_bi)
+    match tuple_style() {
+        TupleStyle::Raw => SE_L4_WORDBITS,
+        TupleStyle::GuardEncoded => init_cnode_bits_u8(_bi),
+    }
 }
 
 #[inline(always)]
 pub fn path_depth_word(bi: &sys::seL4_BootInfo) -> sys::seL4_Word {
-    init_cspace_depth_word(bi)
+    match tuple_style() {
+        TupleStyle::Raw => se_l4_wordbits_word(),
+        TupleStyle::GuardEncoded => init_cspace_depth_word(bi),
+    }
 }
 
 #[inline(always)]
@@ -79,10 +85,13 @@ impl TupleStyle {
 #[inline(always)]
 pub fn tuple_style() -> TupleStyle {
     // The init CNode guard depth is zero on our target configurations, so the kernel
-    // expects raw (unshifted) slot indices when addressing the root CSpace. Using a
-    // guard-encoded tuple here inflates the guard width to `WordBits - initBits`,
-    // causing the kernel to reject otherwise valid slots as out of range. Default to
-    // the raw tuple to ensure bootstrap operations target the correct slots.
+    // expects raw (unshifted) slot indices when addressing the root CSpace. Upstream
+    // libsel4 constructs the initial `cspacepath_t` for `initThreadCNode` with
+    // `capDepth = seL4_WordBits`, so we mirror that convention here rather than
+    // shifting or truncating the slot. Using a guard-encoded tuple inflates the guard
+    // width to `WordBits - initBits`, causing the kernel to reject otherwise valid
+    // slots as out of range. Default to the raw tuple to ensure bootstrap operations
+    // target the correct slots.
     TupleStyle::Raw
 }
 
@@ -220,7 +229,7 @@ pub fn cnode_copy_raw_single(
     ) -> sys::seL4_Error {
         let dst_index = dst_slot as sys::seL4_Word;
         let src_index = src_slot as sys::seL4_Word;
-        let depth_word = encode_cnode_depth(init_cnode_bits_u8(bi));
+        let depth_word = se_l4_wordbits_word();
         let rights = sys::seL4_CapRights::new(1, 1, 1, 1);
 
         ::log::info!(
@@ -300,16 +309,22 @@ pub const fn depth_wordbits() -> u8 {
 
 #[inline(always)]
 pub fn encode_slot(slot: u64, bits: u8) -> u64 {
-    let shift = SE_L4_WORDBITS
-        .checked_sub(bits)
-        .expect("slot encoding requires bits <= seL4_WordBits") as u32;
-    slot << shift
+    if bits == SE_L4_WORDBITS {
+        slot
+    } else {
+        let shift = SE_L4_WORDBITS
+            .checked_sub(bits)
+            .expect("slot encoding requires bits <= seL4_WordBits") as u32;
+        slot << shift
+    }
 }
 
 #[inline(always)]
 pub fn cnode_depth(_bi: &sys::seL4_BootInfo, style: TupleStyle) -> sys::seL4_Word {
-    let _ = style;
-    encode_cnode_depth(init_cnode_bits_u8(_bi))
+    match style {
+        TupleStyle::Raw => se_l4_wordbits_word(),
+        TupleStyle::GuardEncoded => encode_cnode_depth(init_cnode_bits_u8(_bi)),
+    }
 }
 
 #[inline(always)]
@@ -318,14 +333,27 @@ pub fn enc_index(
     bi: &sys::seL4_BootInfo,
     style: TupleStyle,
 ) -> sys::seL4_Word {
-    let depth_bits = init_cnode_bits_u8(bi);
-    let (index, depth) = encode_direct_slot(slot as u64, depth_bits);
-    ::log::info!(
-        "[cnode.enc] style={} slot=0x{slot:04x} depth={depth} encoded=0x{index:016x}",
-        tuple_style_label(style),
-        depth = depth,
-    );
-    index
+    match style {
+        TupleStyle::Raw => {
+            let index = slot as sys::seL4_Word;
+            let depth = se_l4_wordbits_word();
+            ::log::info!(
+                "[cnode.enc] style={} slot=0x{slot:04x} depth={depth} encoded=0x{index:016x}",
+                tuple_style_label(style),
+            );
+            index
+        }
+        TupleStyle::GuardEncoded => {
+            let depth_bits = init_cnode_bits_u8(bi);
+            let (index, depth) = encode_direct_slot(slot as u64, depth_bits);
+            ::log::info!(
+                "[cnode.enc] style={} slot=0x{slot:04x} depth={depth} encoded=0x{index:016x}",
+                tuple_style_label(style),
+                depth = depth,
+            );
+            index
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1134,8 +1162,7 @@ pub fn verify_root_cnode_slot(
     #[cfg(target_os = "none")]
     {
         let _ = cnode_delete_with_style(bi, root, slot, tuple_style());
-        let depth_bits = init_cnode_bits_u8(bi);
-        let depth_word = depth_bits as sys::seL4_Word;
+        let depth_word = se_l4_wordbits_word();
         let src_slot = sys::seL4_CapInitThreadTCB as sys::seL4_Word;
         let src_ident = unsafe { sys::seL4_DebugCapIdentify(src_slot as sys::seL4_CPtr) };
         let dst_ident_before = unsafe { sys::seL4_DebugCapIdentify(slot as sys::seL4_CPtr) };
@@ -1271,8 +1298,7 @@ pub fn preflight_init_cnode_writable(probe_slot: sys::seL4_CPtr) -> Result<(), P
     #[cfg(target_os = "none")]
     {
         let dst_index = probe_slot as sys::seL4_Word;
-        let depth_bits = bi().init_cnode_bits() as u8;
-        let depth_word = encode_cnode_depth(depth_bits);
+        let depth_word = se_l4_wordbits_word();
         let src_slot = sys::seL4_CapInitThreadTCB as sys::seL4_Word;
         let src_ident = unsafe { sys::seL4_DebugCapIdentify(src_slot as sys::seL4_CPtr) };
         let dst_ident = unsafe { sys::seL4_DebugCapIdentify(dst_index as sys::seL4_CPtr) };
@@ -1421,7 +1447,7 @@ fn init_cnode_bits_u8(bi: &sys::seL4_BootInfo) -> u8 {
 
 #[inline(always)]
 pub(crate) fn canonical_depth_word() -> sys::seL4_Word {
-    encode_cnode_depth(bi_init_cnode_bits() as u8)
+    se_l4_wordbits_word()
 }
 
 /// Depth (in bits) used when traversing the init CNode for syscall arguments.
