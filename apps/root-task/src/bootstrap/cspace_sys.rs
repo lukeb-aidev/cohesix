@@ -25,11 +25,20 @@ use core::sync::atomic::{AtomicBool, Ordering};
 #[cfg(target_os = "none")]
 static PREFLIGHT_COMPLETED: AtomicBool = AtomicBool::new(false);
 
-const SE_L4_WORDBITS: sys::seL4_Word = sys::seL4_WordBits as sys::seL4_Word;
+const SE_L4_WORDBITS: u8 = sys::seL4_WordBits as u8;
+
+#[inline(always)]
+const fn se_l4_wordbits_word() -> sys::seL4_Word {
+    SE_L4_WORDBITS as sys::seL4_Word
+}
 
 #[inline(always)]
 pub fn encode_direct_slot(slot: u64, depth_bits: u8) -> (sys::seL4_Word, sys::seL4_Word) {
-    (slot as sys::seL4_Word, encode_cnode_depth(depth_bits))
+    let index = encode_slot(slot, depth_bits);
+    (
+        index as sys::seL4_Word,
+        encode_cnode_depth(se_l4_wordbits_word() as u8),
+    )
 }
 
 #[inline(always)]
@@ -39,7 +48,7 @@ pub fn root_cnode() -> seL4_CNode {
 
 #[inline(always)]
 pub fn path_depth(_bi: &sys::seL4_BootInfo) -> u8 {
-    init_cnode_bits_u8(_bi)
+    depth_wordbits()
 }
 
 #[inline(always)]
@@ -291,19 +300,21 @@ pub fn cnode_copy_raw_single(
 
 #[inline(always)]
 pub const fn depth_wordbits() -> u8 {
-    sys::seL4_WordBits as u8
+    SE_L4_WORDBITS
 }
 
 #[inline(always)]
 pub fn encode_slot(slot: u64, bits: u8) -> u64 {
-    let _ = bits;
-    slot
+    let shift = SE_L4_WORDBITS
+        .checked_sub(bits)
+        .expect("slot encoding requires bits <= seL4_WordBits") as u32;
+    slot << shift
 }
 
 #[inline(always)]
 pub fn cnode_depth(_bi: &sys::seL4_BootInfo, style: TupleStyle) -> sys::seL4_Word {
     let _ = style;
-    encode_cnode_depth(init_cnode_bits_u8(_bi))
+    encode_cnode_depth(depth_wordbits())
 }
 
 #[inline(always)]
@@ -363,10 +374,10 @@ fn cnode_copy_with_style(
     rights: sys::seL4_CapRights,
     style: TupleStyle,
 ) -> sys::seL4_Error {
-    let dst_index = dst_slot_raw as sys::seL4_Word;
-    let src_index = src_slot_raw as sys::seL4_Word;
-    let depth_u8 = init_cnode_bits_u8(bi);
-    let depth_word = encode_cnode_depth(depth_u8);
+    let dst_index = enc_index(dst_slot_raw, bi, style);
+    let src_index = enc_index(src_slot_raw, bi, style);
+    let depth_u8 = path_depth(bi);
+    let depth_word = path_depth_word();
     ::log::info!(
         "[cnode.tuple] style={} dst_index=0x{dst_index:04x} src_index=0x{src_index:04x} depth={depth} dst_offset=0x{dst_raw:04x} src_offset=0x{src_raw:04x}",
         tuple_style_label(style),
@@ -421,9 +432,9 @@ pub fn cnode_delete_with_style(
     slot: sys::seL4_Word,
     _style: TupleStyle,
 ) -> sys::seL4_Error {
-    let index = slot as sys::seL4_Word;
-    let depth_u8 = init_cnode_bits_u8(bi);
-    let _depth_word = encode_cnode_depth(depth_u8);
+    let index = enc_index(slot, bi, tuple_style());
+    let depth_u8 = path_depth(bi);
+    let _depth_word = path_depth_word();
 
     #[cfg(target_os = "none")]
     unsafe {
@@ -448,10 +459,10 @@ fn cnode_mint_with_style(
     badge: sys::seL4_Word,
     style: TupleStyle,
 ) -> sys::seL4_Error {
-    let dst_index = dst_slot_raw as sys::seL4_Word;
-    let src_index = src_slot_raw as sys::seL4_Word;
-    let depth_u8 = init_cnode_bits_u8(bi);
-    let depth_word = encode_cnode_depth(depth_u8);
+    let dst_index = enc_index(dst_slot_raw, bi, style);
+    let src_index = enc_index(src_slot_raw, bi, style);
+    let depth_u8 = path_depth(bi);
+    let depth_word = path_depth_word();
 
     #[cfg(target_os = "none")]
     unsafe {
@@ -522,10 +533,10 @@ fn cnode_move_with_style(
     src_slot_raw: sys::seL4_Word,
     style: TupleStyle,
 ) -> sys::seL4_Error {
-    let dst_index = dst_slot_raw as sys::seL4_Word;
-    let src_index = src_slot_raw as sys::seL4_Word;
-    let depth_u8 = init_cnode_bits_u8(bi);
-    let depth_word = encode_cnode_depth(depth_u8);
+    let dst_index = enc_index(dst_slot_raw, bi, style);
+    let src_index = enc_index(src_slot_raw, bi, style);
+    let depth_u8 = path_depth(bi);
+    let depth_word = path_depth_word();
 
     #[cfg(target_os = "none")]
     unsafe {
@@ -1421,13 +1432,13 @@ fn init_cnode_bits_u8(bi: &sys::seL4_BootInfo) -> u8 {
 /// Depth (in bits) used when traversing the init CNode for syscall arguments.
 #[inline(always)]
 fn init_cspace_depth_words(bi: &sys::seL4_BootInfo) -> sys::seL4_Word {
-    encode_cnode_depth(init_cnode_bits_u8(bi))
+    let _ = bi;
+    encode_cnode_depth(depth_wordbits())
 }
 
 #[inline(always)]
 fn init_cspace_depth_word() -> sys::seL4_Word {
-    let bits = bi_init_cnode_bits() as u8;
-    encode_cnode_depth(bits)
+    encode_cnode_depth(depth_wordbits())
 }
 
 #[inline(always)]
@@ -1661,9 +1672,9 @@ pub fn canonical_cnode_copy(
     let dest_root = bi.canonical_root_cap();
     let src_root = dest_root;
     let style = tuple_style();
-    let dst_index = dst_slot as sys::seL4_Word;
-    let src_index = src_slot as sys::seL4_Word;
-    let depth_bits = init_cnode_bits_u8(bi);
+    let dst_index = enc_index(dst_slot, bi, style);
+    let src_index = enc_index(src_slot, bi, style);
+    let depth_bits = path_depth(bi);
     let depth = encode_cnode_depth(depth_bits);
     let rights_word = rights.raw();
     ::log::info!(
@@ -2438,7 +2449,7 @@ mod tests {
     fn encode_slot_aligns_to_word_bits() {
         let init_bits = 13u8;
         let value = super::encode_slot(0x0101, init_bits);
-        assert_eq!(value as u64, 0x0101);
+        assert_eq!(value as u64, 0x808000000000000);
     }
 
     #[cfg(not(target_os = "none"))]

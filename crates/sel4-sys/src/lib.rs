@@ -919,7 +919,7 @@ mod imp {
         src_root: seL4_CNode,
         src_index: seL4_Word,
         src_depth: seL4_Uint8,
-        rights: seL4_CapRights_t,
+        rights: seL4_CapRights,
     ) -> seL4_Error {
         seL4_SetCap(0, src_root);
 
@@ -1642,7 +1642,7 @@ mod imp {
         _src_root: seL4_CNode,
         _src_index: seL4_Word,
         _src_depth: seL4_Uint8,
-        _rights: seL4_CapRights_t,
+        _rights: seL4_CapRights,
     ) -> seL4_Error {
         unsupported_error()
     }
