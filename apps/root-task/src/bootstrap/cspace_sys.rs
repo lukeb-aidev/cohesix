@@ -14,9 +14,7 @@ use crate::sel4::{self, BootInfoExt};
 use core::convert::TryFrom;
 use core::fmt;
 use core::ops::Range;
-use sel4_sys::{
-    self as sys, seL4_CNode, seL4_CapInitThreadCNode, seL4_EndpointObject,
-};
+use sel4_sys::{self as sys, seL4_CNode, seL4_CapInitThreadCNode, seL4_EndpointObject};
 
 #[cfg(target_os = "none")]
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -71,7 +69,7 @@ pub enum TupleStyle {
 
 #[inline(always)]
 fn init_root_index() -> sys::seL4_Word {
-    0
+    sel4::seL4_CapInitThreadCNode as sys::seL4_Word
 }
 
 impl TupleStyle {
@@ -789,14 +787,15 @@ pub fn untyped_retype_encoded(
 ) -> sys::seL4_Error {
     let offset = dst_slot as sys::seL4_Word;
     let depth = sel4::word_bits() as usize;
-    let index = 0usize;
+    let index = init_root_index();
     debug_assert!(
         dst_bits as usize <= sys::seL4_WordBits as usize,
         "initThreadCNodeSizeBits must not exceed seL4_WordBits",
     );
     log::info!(
-        "[retype] dst=0x{dst:04x} index=0 depth={depth} root=0x{root:04x}",
+        "[retype] dst=0x{dst:04x} index=0x{index:04x} depth={depth} root=0x{root:04x}",
         dst = offset,
+        index = index,
         root = dst_root,
     );
 
@@ -811,8 +810,9 @@ pub fn untyped_retype_encoded(
         let num_objects_word =
             sys::seL4_Word::try_from(num_objects).expect("object count must fit in seL4_Word");
         debug_log(format_args!(
-            "[cs] op=retype dst_slot=0x{dst_slot:04x} index=0 depth={depth} root=0x{root:04x}",
+            "[cs] op=retype dst_slot=0x{dst_slot:04x} index=0x{index:04x} depth={depth} root=0x{root:04x}",
             dst_slot = offset,
+            index = index,
             root = dst_root,
         ));
         sys::seL4_Untyped_Retype(
@@ -1097,7 +1097,7 @@ pub fn validate_retype_args(
             expected: expected_index,
         });
     }
-    let expected_depth = 0;
+    let expected_depth = sel4::word_bits() as u8;
     if args.cnode_depth != expected_depth {
         return Err(RetypeArgsError::DepthMismatch {
             provided: args.cnode_depth,
@@ -1797,7 +1797,7 @@ pub fn init_cnode_dest(
     let root = bi_init_cnode_cptr();
     let offset = slot as sys::seL4_Word;
     let node_index = init_root_index();
-    let node_depth = encode_cnode_depth(bi_init_cnode_bits() as u8);
+    let node_depth = canonical_depth_word();
     (root, node_index, node_depth, offset)
 }
 
@@ -1824,7 +1824,7 @@ pub fn init_cnode_retype_dest(
     );
     let root = bi_init_cnode_cptr();
     let node_index = init_root_index();
-    let node_depth = encode_cnode_depth(bi_init_cnode_bits() as u8);
+    let node_depth = canonical_depth_word();
     let node_offset = slot as sys::seL4_Word;
     let depth_bits = bits_as_u8(init_bits_usize);
     debug_assert!(
@@ -2298,10 +2298,7 @@ pub fn untyped_retype_into_init_root(
     let (root, node_index, node_depth_word, node_offset) = init_cnode_retype_dest(dst_slot);
     debug_assert_eq!(root, sel4::seL4_CapInitThreadCNode);
     debug_assert_eq!(node_index, init_root_index());
-    debug_assert_eq!(
-        node_depth_word,
-        encode_cnode_depth(bi_init_cnode_bits() as u8)
-    );
+    debug_assert_eq!(node_depth_word, canonical_depth_word());
     let args = RetypeArgs::new(
         untyped_slot,
         obj_type,
@@ -2320,7 +2317,7 @@ pub fn untyped_retype_into_init_root(
     {
         let (empty_start, empty_end) = boot_empty_window();
         debug_assert_eq!(node_index, init_root_index());
-        let expected_depth = encode_cnode_depth(bi_init_cnode_bits() as u8);
+        let expected_depth = canonical_depth_word();
         let expected_depth_u8 = u8::try_from(expected_depth)
             .expect("path_depth_word must fit within a u8 for cnode depth");
         debug_assert_eq!(args.cnode_depth, expected_depth_u8);
@@ -2557,7 +2554,7 @@ mod tests {
     fn direct_destination_words_match_depth_bits() {
         let slot = 0x10u64;
         let (idx, depth, off) = init_cnode_direct_destination_words_for_test(13, slot as _);
-        assert_eq!(idx, 0);
+        assert_eq!(idx, init_root_index());
         assert_eq!(depth, canonical_depth_word());
         assert_eq!(off, slot as _);
     }
@@ -2574,7 +2571,7 @@ mod tests {
         let empty_start = 0x100;
         let empty_end = 0x200;
         let dest_offset = 0x180;
-        let depth = 0;
+        let depth = canonical_depth_word();
         let args = super::RetypeArgs::new(
             0x80,
             0x20,
