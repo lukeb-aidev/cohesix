@@ -838,14 +838,13 @@ fn bootstrap<P: Platform>(
     };
 
     if let Some(ipc_vaddr) = ipc_vaddr {
-        let mut ipc_view: Option<crate::bootstrap::ipcbuf_view::IpcBufView> = None;
-        match ipcbuf::install_ipc_buffer(
+        let ipc_view = match ipcbuf::install_ipc_buffer(
             &mut kernel_env,
             sel4_sys::seL4_CapInitThreadTCB,
             ipc_frame,
             ipc_vaddr,
         ) {
-            Ok(view) => ipc_view = Some(view),
+            Ok(view) => Some(view),
             Err(code) => {
                 let err = code as sel4_sys::seL4_Error;
                 if err == sel4_sys::seL4_IllegalOperation {
@@ -854,15 +853,15 @@ fn bootstrap<P: Platform>(
                         err,
                         error_name(err)
                     );
-                    ipc_view = kernel_env.ipc_buffer_view();
-                    if ipc_view.is_none() {
-                        ipc_view = Some(kernel_env.record_boot_ipc_buffer(ipc_frame, ipc_vaddr));
-                    }
+                    let fallback_view = kernel_env
+                        .ipc_buffer_view()
+                        .or_else(|| Some(kernel_env.record_boot_ipc_buffer(ipc_frame, ipc_vaddr)));
+                    fallback_view
                 } else {
                     panic!("ipc buffer install failed: {} ({})", code, error_name(err));
                 }
             }
-        }
+        };
 
         if let Some(view) = ipc_view {
             let mut msg = heapless::String::<112>::new();

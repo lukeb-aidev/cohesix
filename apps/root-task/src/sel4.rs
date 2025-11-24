@@ -899,7 +899,9 @@ pub fn cnode_copy(
 ) -> seL4_Error {
     debug_put_char(b'C' as i32);
     let depth_bits = _bootinfo.init_cnode_depth();
-    let depth_word: u8 = depth_bits.try_into().expect("init cnode depth fits in u8");
+    let depth_word: seL4_Word = depth_bits
+        .try_into()
+        .expect("init cnode depth fits in u8");
     unsafe {
         seL4_CNode_Copy(
             dest_root,
@@ -927,6 +929,8 @@ pub fn cnode_copy_depth(
 ) -> seL4_Error {
     #[cfg(target_os = "none")]
     {
+        let dest_depth_word: seL4_Word = dest_depth.into();
+        let src_depth_word: seL4_Word = src_depth.into();
         // SAFETY: Callers must ensure that the provided CNodes and depths originate from
         // kernel-supplied boot information. This wrapper centralises the unsafe invocation so
         // higher-level modules can remain within the crate-wide `#![deny(unsafe_code)]` policy.
@@ -934,10 +938,10 @@ pub fn cnode_copy_depth(
             seL4_CNode_Copy(
                 dest_root,
                 dest_index,
-                dest_depth,
+                dest_depth_word,
                 src_root,
                 src_index,
-                src_depth,
+                src_depth_word,
                 sel4_sys::seL4_CapRights_to_word(rights),
             )
         }
@@ -955,7 +959,8 @@ pub fn cnode_copy_depth(
 #[inline(always)]
 pub fn cnode_delete(root: seL4_CNode, index: seL4_CPtr, depth: u8) -> seL4_Error {
     debug_put_char(b'C' as i32);
-    unsafe { seL4_CNode_Delete(root, index, depth) }
+    let depth_word: seL4_Word = depth.into();
+    unsafe { seL4_CNode_Delete(root, index, depth_word) }
 }
 
 /// Safe projection of `seL4_CNode_Mint` for bootstrap modules.
@@ -973,7 +978,9 @@ pub(crate) fn cnode_mint(
 ) -> seL4_Error {
     debug_put_char(b'C' as i32);
     let depth_bits = _bootinfo.init_cnode_depth();
-    let depth_word: u8 = depth_bits.try_into().expect("init cnode depth fits in u8");
+    let depth_word: seL4_Word = depth_bits
+        .try_into()
+        .expect("init cnode depth fits in u8");
     unsafe {
         seL4_CNode_Mint(
             dest_root, dest_index, depth_word, src_root, src_index, depth_word, rights, badge,
@@ -996,11 +1003,20 @@ pub fn cnode_mint_depth(
 ) -> seL4_Error {
     #[cfg(target_os = "none")]
     {
+        let dest_depth_word: seL4_Word = dest_depth.into();
+        let src_depth_word: seL4_Word = src_depth.into();
         // SAFETY: Callers guarantee that the provided indices and depths stem from the
         // kernel-advertised CSpace topology, ensuring the kernel accepts the invocation.
         unsafe {
             seL4_CNode_Mint(
-                dest_root, dest_index, dest_depth, src_root, src_index, src_depth, rights, badge,
+                dest_root,
+                dest_index,
+                dest_depth_word,
+                src_root,
+                src_index,
+                src_depth_word,
+                rights,
+                badge,
             )
         }
     }
