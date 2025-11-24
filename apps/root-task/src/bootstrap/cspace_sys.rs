@@ -2065,7 +2065,7 @@ pub fn retype_into_root(
             sys::seL4_CNode_Move(
                 root,
                 slot_index(offset),
-                path_depth(bi),
+                path_depth(bi).into(),
                 sys::seL4_CapNull,
                 0,
                 0,
