@@ -25,6 +25,12 @@ mod imp {
     #[no_mangle]
     pub static mut __sel4_ipc_buffer: *mut seL4_IPCBuffer = core::ptr::null_mut();
 
+    #[no_mangle]
+    pub static mut __sel4_print_error: core::ffi::c_char = 0;
+
+    #[no_mangle]
+    pub static mut bootinfo: *mut seL4_BootInfo = core::ptr::null_mut();
+
     #[inline(always)]
     pub unsafe fn seL4_GetIPCBuffer() -> *mut seL4_IPCBuffer {
         __sel4_ipc_buffer
@@ -33,6 +39,19 @@ mod imp {
     #[inline(always)]
     pub unsafe fn seL4_SetIPCBuffer(buffer: *mut seL4_IPCBuffer) {
         __sel4_ipc_buffer = buffer;
+    }
+
+    #[export_name = "seL4_InitBootInfo"]
+    pub unsafe extern "C" fn sel4_init_bootinfo(bi: *mut seL4_BootInfo) {
+        bootinfo = bi;
+        if !bi.is_null() {
+            seL4_SetIPCBuffer((*bi).ipcBuffer);
+        }
+    }
+
+    #[export_name = "seL4_GetBootInfo"]
+    pub unsafe extern "C" fn sel4_get_bootinfo() -> *mut seL4_BootInfo {
+        bootinfo
     }
 
     #[inline(always)]
@@ -48,6 +67,31 @@ mod imp {
     #[inline(always)]
     pub unsafe fn seL4_SetMR(index: i32, value: seL4_Word) {
         (*seL4_GetIPCBuffer()).msg[index as usize] = value;
+    }
+
+    #[export_name = "seL4_DebugCapIdentify"]
+    pub unsafe extern "C" fn sel4_debug_cap_identify(cap: seL4_CPtr) -> seL4_Uint32 {
+        let mut cap_word = cap as seL4_Word;
+        let mut info = 0;
+        let mut msg0 = 0;
+        let mut msg1 = 0;
+        let mut msg2 = 0;
+        let mut msg3 = 0;
+
+        arm_sys_send_recv(
+            seL4_Syscall_ID_seL4_SysDebugCapIdentify as seL4_Word,
+            cap_word,
+            &mut cap_word,
+            0,
+            &mut info,
+            &mut msg0,
+            &mut msg1,
+            &mut msg2,
+            &mut msg3,
+            0,
+        );
+
+        cap_word as seL4_Uint32
     }
 
     #[inline(always)]
@@ -1591,11 +1635,6 @@ mod imp {
     }
 
     #[inline(always)]
-    pub unsafe fn seL4_GetBootInfo() -> *const seL4_BootInfo {
-        ptr::null()
-    }
-
-    #[inline(always)]
     pub unsafe fn seL4_CNode_Copy(
         _dest_root: seL4_CNode,
         _dest_index: seL4_Word,
@@ -1715,11 +1754,6 @@ mod imp {
 
     #[inline(always)]
     pub fn seL4_DebugPutChar(_c: u8) {
-        unsupported();
-    }
-
-    #[inline(always)]
-    pub fn seL4_DebugCapIdentify(_cap: seL4_CPtr) -> seL4_Uint32 {
         unsupported();
     }
 

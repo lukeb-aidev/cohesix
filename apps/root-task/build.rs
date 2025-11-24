@@ -135,53 +135,8 @@ fn main() {
         );
     }
 
-    let libsel4 = find_artifact(
-        &build_path,
-        "libsel4.a",
-        &[
-            "libsel4/libsel4.a",
-            "lib/libsel4.a",
-            "libsel4.a",
-            "sel4/libsel4.a",
-        ],
-    )
-    .unwrap_or_else(|err| {
-        panic!(
-            "Unable to locate libsel4.a inside {}: {}",
-            build_path.display(),
-            err
-        );
-    });
-
-    let lib_dir = libsel4
-        .parent()
-        .expect("libsel4.a should reside inside a directory");
-    println!("cargo:rustc-link-search=native={}", lib_dir.display());
-    println!("cargo:rustc-link-lib=static=sel4");
-
     let debug_enabled = probe_config_flag(&build_path, "CONFIG_DEBUG_BUILD") == Some(true);
     let mut debug_syscalls_enabled = false;
-    if debug_enabled {
-        if let Ok(libsel4debug) = find_artifact(
-            &build_path,
-            "libsel4debug.a",
-            &[
-                "libsel4/libsel4debug.a",
-                "lib/libsel4debug.a",
-                "libsel4debug.a",
-            ],
-        ) {
-            if let Some(dir) = libsel4debug.parent() {
-                println!("cargo:rustc-link-search=native={}", dir.display());
-            }
-            println!("cargo:rustc-link-lib=static=sel4debug");
-            debug_syscalls_enabled = true;
-        } else {
-            println!(
-                "cargo:warning=CONFIG_DEBUG_BUILD enabled but libsel4debug.a not found; debug syscalls will be disabled"
-            );
-        }
-    }
 
     if explicit_linker_script.is_none() {
         if let Err(err) = stage_linker_script(&build_path) {
@@ -328,7 +283,26 @@ fn stage_linker_script(build_root: &Path) -> Result<(), String> {
                 let staged =
                     out_dir.join(script.file_name().unwrap_or_else(|| OsStr::new("sel4.ld")));
 
-                fs::copy(&script, &staged).unwrap_or_else(|err| {
+                let mut contents = fs::read_to_string(&script).unwrap_or_else(|err| {
+                    panic!(
+                        "Failed to read linker script {} for staging: {}",
+                        script.display(),
+                        err
+                    );
+                });
+
+                // Guard against the precedence pitfall in the upstream elfloader
+                // script where the core stack reservation expression,
+                // `. = . + 1 * 1 << 12;`, expands to `(. + 1) << 12`, inflating the
+                // root-task image size by ~256 GiB and pushing `.bss` symbols far
+                // outside the 4 GiB range that AArch64 ADRP relocations can reach.
+                // Normalise the expression so the increment is a single 4 KiB page.
+                contents = contents.replace(
+                    ". = . + 1 * 1 << 12;",
+                    ". = . + (1 * (1 << 12));",
+                );
+
+                fs::write(&staged, contents).unwrap_or_else(|err| {
                     panic!(
                         "Failed to stage linker script from {} to {}: {}",
                         script.display(),

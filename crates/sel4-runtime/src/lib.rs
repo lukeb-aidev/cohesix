@@ -109,6 +109,7 @@ pub unsafe extern "C" fn _start(_bootinfo: *mut seL4_BootInfo) -> ! {
 #[no_mangle]
 pub unsafe extern "C" fn __sel4_start_init_boot_info(bootinfo: *mut seL4_BootInfo) {
     BOOTINFO.set_once(bootinfo);
+    sel4_sys::seL4_InitBootInfo(bootinfo);
 }
 
 /// Returns the bootinfo pointer recorded during startup, if initialised.
