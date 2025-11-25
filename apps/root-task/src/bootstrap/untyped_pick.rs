@@ -42,36 +42,78 @@ pub struct UntypedSelection {
     pub cap: sys::seL4_CPtr,
     /// Size (in bits) reported by the kernel for the untyped.
     pub size_bits: u8,
+    /// Bytes already consumed from this untyped by prior allocations.
+    pub used_bytes: u128,
     /// Planned object counts derived from the untyped.
     pub plan: RetypePlan,
 }
 
-fn plan_for_untyped(size_bits: u8, dest_start: sys::seL4_CPtr) -> RetypePlan {
-    let mut remaining_bytes: u64 = 1u64 << size_bits;
+impl UntypedSelection {
+    #[inline(always)]
+    #[must_use]
+    pub const fn capacity_bytes(&self) -> u128 {
+        1u128 << self.size_bits
+    }
+
+    pub fn record_consumed(&mut self, obj_bits: u8) {
+        self.used_bytes = self
+            .used_bytes
+            .saturating_add(1u128 << core::cmp::min(obj_bits, 127));
+    }
+}
+
+fn log_plan_skip(
+    cap: sys::seL4_CPtr,
+    kind: &str,
+    obj_bytes: u128,
+    capacity_bytes: u128,
+    used_bytes: u128,
+) {
+    let mut line = String::<192>::new();
+    let _ = write!(
+        line,
+        "[retype:plan] skipping {kind} from ut=0x{cap:03x}: 1x{size}B would exceed {capacity}B capacity (used={used}B)",
+        size = obj_bytes,
+        capacity = capacity_bytes,
+        used = used_bytes,
+    );
+    force_uart_line(line.as_str());
+}
+
+fn plan_for_untyped(cap: sys::seL4_CPtr, size_bits: u8, dest_start: sys::seL4_CPtr) -> RetypePlan {
+    let capacity_bytes: u128 = 1u128 << size_bits;
+    let mut used_bytes: u128 = 0;
+
     let page_table_bits = PAGE_TABLE_BITS as u8;
     let page_bits = PAGE_BITS as u8;
+    let page_table_bytes = 1u128 << page_table_bits;
+    let page_bytes = 1u128 << page_bits;
 
-    let mut page_tables = 0u32;
-    if size_bits >= page_table_bits {
-        page_tables = 1;
-        let pt_bytes = 1u64 << page_table_bits;
-        remaining_bytes = remaining_bytes.saturating_sub(pt_bytes);
+    let requested_page_tables: u32 = if size_bits >= page_table_bits { 1 } else { 0 };
+    let available_tables =
+        (capacity_bytes / page_table_bytes).min(requested_page_tables as u128) as u32;
+    used_bytes =
+        used_bytes.saturating_add(page_table_bytes.saturating_mul(available_tables as u128));
+    if available_tables < requested_page_tables {
+        log_plan_skip(
+            cap,
+            "PageTable",
+            page_table_bytes,
+            capacity_bytes,
+            used_bytes,
+        );
     }
 
-    let page_bytes = 1u64 << page_bits;
-    let small_pages = if remaining_bytes >= page_bytes {
-        let raw = remaining_bytes / page_bytes;
-        min(raw, u32::MAX as u64) as u32
-    } else {
-        0
-    };
-
-    let plan = RetypePlan::new(page_tables, small_pages, dest_start);
-    if plan.total == 0 {
-        RetypePlan::new(0, 1, dest_start)
-    } else {
-        plan
+    let requested_pages = min(u128::from(u32::MAX), capacity_bytes / page_bytes) as u32;
+    let available_pages = (capacity_bytes.saturating_sub(used_bytes) / page_bytes)
+        .min(u128::from(requested_pages)) as u32;
+    let used_after_pages =
+        used_bytes.saturating_add(page_bytes.saturating_mul(available_pages as u128));
+    if available_pages < requested_pages {
+        log_plan_skip(cap, "Page", page_bytes, capacity_bytes, used_after_pages);
     }
+
+    RetypePlan::new(available_tables, available_pages, dest_start)
 }
 
 fn log_plan(selection: &UntypedSelection) {
@@ -101,7 +143,8 @@ pub fn pick_untyped(bi: &'static BootInfo, min_bits: u8) -> UntypedSelection {
             let selection = UntypedSelection {
                 cap,
                 size_bits: ut.sizeBits as u8,
-                plan: plan_for_untyped(ut.sizeBits as u8, dest_start),
+                used_bytes: 0,
+                plan: plan_for_untyped(cap, ut.sizeBits as u8, dest_start),
             };
             log_plan(&selection);
             return selection;
@@ -118,7 +161,8 @@ pub fn pick_untyped(bi: &'static BootInfo, min_bits: u8) -> UntypedSelection {
     let selection = UntypedSelection {
         cap,
         size_bits: ut.sizeBits as u8,
-        plan: plan_for_untyped(ut.sizeBits as u8, dest_start),
+        used_bytes: 0,
+        plan: plan_for_untyped(cap, ut.sizeBits as u8, dest_start),
     };
     log_plan(&selection);
     selection
@@ -136,17 +180,25 @@ mod tests {
 
     #[test]
     fn plan_for_untyped_clamps_small_pages() {
-        let plan = plan_for_untyped(48, 0x0140);
+        let plan = plan_for_untyped(0x0200, 48, 0x0140);
         assert_eq!(plan.page_tables, 1);
         assert_eq!(plan.small_pages, u32::MAX);
         assert_eq!(plan.total, u32::MAX);
     }
 
     #[test]
-    fn zero_size_promotes_single_page_plan() {
-        let plan = plan_for_untyped(0, 0x0200);
+    fn zero_size_yields_empty_plan() {
+        let plan = plan_for_untyped(0x0100, 0, 0x0200);
         assert_eq!(plan.page_tables, 0);
-        assert_eq!(plan.small_pages, 1);
-        assert_eq!(plan.total, 1);
+        assert_eq!(plan.small_pages, 0);
+        assert_eq!(plan.total, 0);
+    }
+
+    #[test]
+    fn page_table_consumption_limits_pages() {
+        let plan = plan_for_untyped(0x0100, 16, 0x010f);
+        assert_eq!(plan.page_tables, 1);
+        assert_eq!(plan.small_pages, 15);
+        assert_eq!(plan.total, 16);
     }
 }

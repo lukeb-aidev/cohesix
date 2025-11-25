@@ -410,6 +410,44 @@ fn log_slot_alloc_failure(
     force_uart_line(line.as_str());
 }
 
+fn log_untyped_capacity_skip(
+    ut_cap: sys::seL4_CPtr,
+    obj_type: sys::seL4_ObjectType,
+    obj_bytes: u128,
+    capacity_bytes: u128,
+    used_bytes: u128,
+) {
+    let mut line = String::<160>::new();
+    let _ = write!(
+        line,
+        "[retype:plan] skipping {kind} from ut=0x{ut:03x}: 1x{bytes}B would exceed {cap}B capacity (used={used}B)",
+        kind = object_name(obj_type),
+        bytes = obj_bytes,
+        cap = capacity_bytes,
+        used = used_bytes,
+    );
+    force_uart_line(line.as_str());
+}
+
+fn log_untyped_exhausted(
+    ut_cap: sys::seL4_CPtr,
+    obj_type: sys::seL4_ObjectType,
+    slot: sys::seL4_CPtr,
+    used_bytes: u128,
+    capacity_bytes: u128,
+) {
+    let mut line = String::<192>::new();
+    let _ = write!(
+        line,
+        "[retype:err] ut=0x{ut:03x} exhausted while minting {kind} dest=0x{slot:04x} used={used}B cap={cap}B",
+        kind = object_name(obj_type),
+        ut = ut_cap,
+        used = used_bytes,
+        cap = capacity_bytes,
+    );
+    force_uart_line(line.as_str());
+}
+
 /// Retypes a single kernel object from an untyped capability into the init CSpace.
 pub fn retype_one(
     ctx: &mut CSpaceCtx,
@@ -445,7 +483,7 @@ pub fn retype_one(
 /// Retypes a batch of objects according to the supplied untyped selection plan.
 pub fn retype_selection<F>(
     ctx: &mut CSpaceCtx,
-    selection: &UntypedSelection,
+    selection: &mut UntypedSelection,
     mut watchdog: F,
 ) -> Result<u32, sys::seL4_Error>
 where
@@ -471,6 +509,8 @@ where
 
     let (start, end) = ctx.empty_bounds();
     let log_node_depth = sys::seL4_Word::from(ctx.cnode_bits());
+    let capacity_bytes = selection.capacity_bytes();
+    let mut used_bytes = selection.used_bytes;
 
     let categories: [(u32, sys::seL4_ObjectType, u8); 2] = [
         (tables, sys::seL4_ARM_PageTableObject, PAGE_TABLE_BITS as u8),
@@ -481,6 +521,19 @@ where
     for (count, obj_type, obj_bits) in categories {
         for _ in 0..count {
             watchdog();
+            let obj_bytes = 1u128 << obj_bits;
+            if used_bytes.saturating_add(obj_bytes) > capacity_bytes {
+                log_untyped_capacity_skip(
+                    selection.cap,
+                    obj_type,
+                    obj_bytes,
+                    capacity_bytes,
+                    used_bytes,
+                );
+                tracer.advance(BootPhase::RetypeDone);
+                selection.used_bytes = used_bytes;
+                return Ok(done);
+            }
             let slot = match ctx.alloc_slot_checked() {
                 Ok(slot) => slot,
                 Err(err) => {
@@ -503,10 +556,26 @@ where
                 slot,
             );
             if result != sys::seL4_NoError {
+                if result == sys::seL4_NotEnoughMemory {
+                    let attempted_use = used_bytes.saturating_add(obj_bytes);
+                    let logged_use = core::cmp::min(attempted_use, capacity_bytes);
+                    log_untyped_exhausted(
+                        selection.cap,
+                        obj_type,
+                        slot,
+                        logged_use,
+                        capacity_bytes,
+                    );
+                    tracer.advance(BootPhase::RetypeDone);
+                    selection.used_bytes = logged_use;
+                    return Ok(done);
+                }
                 log_retype_error(selection.cap, obj_type, slot, log_node_depth, result);
                 tracer.advance(BootPhase::RetypeDone);
                 return Err(result);
             }
+            used_bytes = used_bytes.saturating_add(obj_bytes);
+            selection.used_bytes = used_bytes;
             done += 1;
             if done % PROGRESS_INTERVAL == 0 || done == total_target {
                 tracer.advance(BootPhase::RetypeProgress {
