@@ -24,7 +24,7 @@ use crate::bootstrap::{
     cspace::{CSpaceCtx, CSpaceWindow, FirstRetypeResult},
     ipcbuf, log as boot_log, pick_untyped,
     retype::{retype_one, retype_selection},
-    BootPhase,
+    BootPhase, UntypedSelection,
 };
 use crate::console::Console;
 use crate::cspace::tuples::{assert_ipc_buffer_matches_bootinfo, make_retype_tuple};
@@ -959,12 +959,14 @@ fn bootstrap<P: Platform>(
 
     if let Err(err) = bootstrap_notification(&mut cs, &notification_selection) {
         let mut line = heapless::String::<160>::new();
+        let err_code = err as i32;
+        let err_name = error_name(err);
         let _ = write!(
             line,
-            "[boot] notification retype failed ut=0x{ut:03x} err={} ({})",
+            "[boot] notification retype failed ut=0x{ut:03x} err={err} ({name})",
             ut = notification_selection.cap,
-            err as i32,
-            error_name(err)
+            err = err_code,
+            name = err_name
         );
         console.writeln_prefixed(line.as_str());
     } else {
