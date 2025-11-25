@@ -948,10 +948,12 @@ fn bootstrap<P: Platform>(
 
     let notification_rights = sel4_sys::seL4_CapRights_All;
     let notification_badge: sel4_sys::seL4_Word = 0;
-    let mint_err = cs.cspace.mint_here(
-        notification_copy_slot,
+    let mint_err = cspace_sys::cnode_mint_raw_single(
+        bootinfo_ref,
         cs.canonical_root_cap,
-        notification_slot,
+        notification_copy_slot as sel4_sys::seL4_Word,
+        cs.canonical_root_cap,
+        notification_slot as sel4_sys::seL4_Word,
         notification_rights,
         notification_badge,
     );
