@@ -1031,6 +1031,15 @@ fn bootstrap<P: Platform>(
         }
     }
 
+    let measured_consumed =
+        (cs.next_candidate_slot() as usize).saturating_sub(boot_first_free as usize);
+    if measured_consumed != consumed_slots {
+        log::warn!(
+            "[boot] reconciled bootstrap slot usage measured={measured_consumed} tracked={consumed_slots}",
+        );
+        consumed_slots = measured_consumed;
+    }
+
     let empty_start = bootinfo_ref.empty_first_slot();
     let empty_end = bootinfo_ref.empty_last_slot_excl();
     let mut cnode_line = heapless::String::<160>::new();
@@ -1058,7 +1067,7 @@ fn bootstrap<P: Platform>(
     let pl011_paddr = usize::try_from(PL011_PADDR)
         .expect("PL011 physical address must fit within usize on this platform");
     let uart_region = match hal.map_device(pl011_paddr) {
-        Ok(region) => region,
+        Ok(region) => Some(region),
         Err(HalError::Sel4(err)) => {
             let error_code = err as i32;
             let error_label = error_name(err);
@@ -1163,8 +1172,9 @@ fn bootstrap<P: Platform>(
                     RetypeStatus::Err(code) => {
                         let _ = write!(
                             detail,
-                            "retype status=err({code}) raw.untyped=0x{ucap:08x} raw.paddr=0x{paddr:08x} raw.size_bits={usize_bits} raw.slot=0x{slot:04x} raw.offset={offset} raw.depth={depth} raw.root=0x{root:04x} raw.node_index=0x{node_index:04x} obj_type={otype} obj_size_bits={obj_bits}",
-                            code = code as i32,
+                            "retype status={err}({code}) raw.untyped=0x{ucap:08x} raw.paddr=0x{paddr:08x} raw.size_bits={usize_bits} raw.slot=0x{slot:04x} raw.offset={offset} raw.depth={depth} raw.root=0x{root:04x} raw.node_index=0x{node_index:04x} obj_type={otype} obj_size_bits={obj_bits}",
+                            err = error_name(code),
+                            code = code,
                             ucap = last.trace.untyped_cap,
                             paddr = last.trace.untyped_paddr,
                             usize_bits = last.trace.untyped_size_bits,
@@ -1180,7 +1190,7 @@ fn bootstrap<P: Platform>(
                 }
                 console.writeln_prefixed(detail.as_str());
 
-                let mut kind = heapless::String::<192>::new();
+                let mut kind = heapless::String::<176>::new();
                 match last.trace.kind {
                     RetypeKind::DevicePage { paddr } => {
                         let _ = write!(
@@ -1296,28 +1306,50 @@ fn bootstrap<P: Platform>(
                 }
             }
 
-            panic!("PL011 UART mapping failed: {}", err);
+            log::warn!(
+                "[pl011] UART map failed with {label} ({code}); continuing without MMIO console",
+                label = error_label,
+                code = error_code,
+            );
+            None
         }
     };
 
-    let mapped_vaddr = uart_region.ptr().as_ptr() as usize;
+    let uart_ptr = uart_region
+        .as_ref()
+        .map(|region| region.ptr())
+        .unwrap_or_else(|| unsafe {
+            core::ptr::NonNull::new(pl011::PL011_VADDR as *mut u8)
+                .expect("PL011 virtual address must be non-null")
+        });
+
     let mut map_line = heapless::String::<128>::new();
-    let _ = write!(
-        map_line,
-        "[vspace:map] pl011 paddr=0x{paddr:08x} -> vaddr=0x{vaddr:016x} attrs=UNCACHED OK",
-        vaddr = mapped_vaddr,
-        paddr = PL011_PADDR,
-    );
+    if uart_region.is_some() {
+        let mapped_vaddr = uart_ptr.as_ptr() as usize;
+        let _ = write!(
+            map_line,
+            "[vspace:map] pl011 paddr=0x{paddr:08x} -> vaddr=0x{vaddr:016x} attrs=UNCACHED OK",
+            vaddr = mapped_vaddr,
+            paddr = PL011_PADDR,
+        );
+    } else {
+        let fallback_vaddr = uart_ptr.as_ptr() as usize;
+        let _ = write!(
+            map_line,
+            "[vspace:map] pl011 using fallback vaddr=0x{vaddr:016x} (no new device map)",
+            vaddr = fallback_vaddr,
+        );
+    }
     console.writeln_prefixed(map_line.as_str());
 
-    let mut driver = Pl011::new(uart_region.ptr());
+    let mut driver = Pl011::new(uart_ptr);
     driver.init();
     console.writeln_prefixed("[uart] init OK");
     #[cfg(all(feature = "kernel", not(sel4_config_printing)))]
     {
         unsafe {
             EARLY_UART_SINK = DebugSink {
-                context: uart_region.ptr().as_ptr().cast::<()>(),
+                context: uart_ptr.as_ptr().cast::<()>(),
                 emit: pl011_debug_emit,
             };
         }

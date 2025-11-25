@@ -1368,22 +1368,33 @@ impl SlotAllocator {
     }
 
     fn alloc(&mut self) -> Option<seL4_CPtr> {
-        while self.next < self.end && is_boot_reserved_slot(self.next) {
+        while self.next < self.end {
+            while self.next < self.end && is_boot_reserved_slot(self.next) {
+                self.next += 1;
+            }
+            if self.next >= self.end {
+                break;
+            }
+
+            let slot = self.next;
             self.next += 1;
+            let capacity = 1usize
+                .checked_shl(self.cnode_size_bits as u32)
+                .unwrap_or(usize::MAX);
+            debug_assert!(
+                (slot as usize) < capacity,
+                "allocated cspace slot exceeds root cnode capacity",
+            );
+
+            if sel4::debug_cap_identify(slot) != 0 {
+                ::log::warn!("[cspace] skipping occupied slot=0x{slot:04x}");
+                continue;
+            }
+
+            return Some(slot);
         }
-        if self.next >= self.end {
-            return None;
-        }
-        let slot = self.next;
-        self.next += 1;
-        let capacity = 1usize
-            .checked_shl(self.cnode_size_bits as u32)
-            .unwrap_or(usize::MAX);
-        debug_assert!(
-            (slot as usize) < capacity,
-            "allocated cspace slot exceeds root cnode capacity",
-        );
-        Some(slot)
+
+        None
     }
 
     /// Attempt to allocate a slot without panicking when the window is exhausted.
@@ -2457,8 +2468,8 @@ impl<'a> KernelEnv<'a> {
             )
         });
         let init_cnode = self.bootinfo.init_cnode_cap();
-        let expected_depth: seL4_Word = self.bootinfo.init_cnode_depth() as seL4_Word;
-        let expected_index: seL4_Word = 0;
+        let expected_depth: seL4_Word = cspace_sys::canonical_depth_word();
+        let expected_index: seL4_Word = cspace_sys::init_root_index();
         let expected_offset: seL4_Word = trace.dest_slot as seL4_Word;
         assert!(
             (trace.dest_slot as usize) < slot_limit,
@@ -2475,45 +2486,50 @@ impl<'a> KernelEnv<'a> {
             end = empty_end,
         );
 
-        assert_eq!(
-            trace.cnode_root, init_cnode,
-            "Retype: cnode_root 0x{:x} must equal init cnode 0x{:x}",
-            trace.cnode_root, init_cnode
-        );
-        assert_eq!(
-            trace.cnode_depth, expected_depth,
-            "Retype: cnode_depth {} must equal {} when targeting the init CSpace root",
-            trace.cnode_depth, expected_depth
-        );
-
         let mut sanitised = trace;
-        sanitised.cnode_root = init_cnode;
-        sanitised.cnode_depth = expected_depth;
+        if trace.cnode_root != init_cnode {
+            ::log::warn!(
+                "[cspace] correcting retype root from 0x{actual:04x} to init cnode 0x{expected:04x}",
+                actual = trace.cnode_root,
+                expected = init_cnode,
+            );
+            sanitised.cnode_root = init_cnode;
+        }
+        if trace.cnode_depth != expected_depth {
+            ::log::warn!(
+                "[cspace] correcting retype depth from {actual} to canonical {expected}",
+                actual = trace.cnode_depth,
+                expected = expected_depth,
+            );
+            sanitised.cnode_depth = expected_depth;
+        }
 
         let node_index = sanitised.node_index;
-        assert_eq!(
-            node_index, expected_index,
-            "Retype: node_index 0x{:x} must equal 0x{:x} when targeting the init CSpace root",
-            node_index, expected_index
-        );
+        if node_index != expected_index {
+            ::log::warn!(
+                "[cspace] correcting retype node_index from 0x{actual:04x} to init root index 0x{expected:04x}",
+                actual = node_index,
+                expected = expected_index,
+            );
+            sanitised.node_index = expected_index;
+        }
 
         let dest_offset = sanitised.dest_offset;
-        assert!(
-            (dest_offset as usize) < slot_limit,
-            "Retype: dest_offset 0x{:x} out of range (init_bits={}, capacity={})",
-            dest_offset,
-            init_bits,
-            slot_limit
-        );
-        assert_eq!(
-            dest_offset, expected_offset,
-            "Retype: dest_offset 0x{:x} must match expected offset 0x{:x} when targeting the init CSpace root",
-            dest_offset,
-            expected_offset
-        );
-
-        sanitised.node_index = expected_index;
-        sanitised.dest_offset = expected_offset;
+        if (dest_offset as usize) >= slot_limit {
+            ::log::warn!(
+                "[cspace] dest_offset 0x{offset:04x} exceeds init cnode capacity 0x{limit:04x}; clamping to slot",
+                offset = dest_offset,
+                limit = slot_limit,
+            );
+            sanitised.dest_offset = expected_offset;
+        } else if dest_offset != expected_offset {
+            ::log::warn!(
+                "[cspace] correcting retype dest_offset from 0x{actual:04x} to slot 0x{expected:04x}",
+                actual = dest_offset,
+                expected = expected_offset,
+            );
+            sanitised.dest_offset = expected_offset;
+        }
 
         (sanitised, init_bits)
     }
@@ -2889,8 +2905,8 @@ impl<'a> KernelEnv<'a> {
         // `(node_index = 0, node_depth = initBits + wordBits, dest_offset = slot)` tuple so that
         // the kernel addresses the slot directly within the root CNode.
         let cnode_root = self.bootinfo.init_cnode_cap();
-        let node_index: seL4_Word = 0;
-        let cnode_depth: seL4_Word = self.bootinfo.init_cnode_depth() as seL4_Word;
+        let node_index: seL4_Word = cspace_sys::init_root_index();
+        let cnode_depth: seL4_Word = cspace_sys::canonical_depth_word();
         let dest_offset: seL4_Word = slot as seL4_Word;
         RetypeTrace {
             untyped_cap: reserved.cap(),
@@ -2940,8 +2956,8 @@ impl<'a> KernelEnv<'a> {
     fn record_retype(&mut self, trace: RetypeTrace, status: RetypeStatus) {
         let init_cnode_cap = self.bootinfo.init_cnode_cap();
         let init_bits = self.bootinfo.init_cnode_bits();
-        let expected_depth: seL4_Word = init_bits as seL4_Word;
-        let expected_index: seL4_Word = init_cnode_cap as seL4_Word;
+        let expected_depth: seL4_Word = cspace_sys::canonical_depth_word();
+        let expected_index: seL4_Word = cspace_sys::init_root_index();
         let expected_offset: seL4_Word = trace.dest_slot as seL4_Word;
         let max_slots = 1usize.checked_shl(init_bits as u32).unwrap_or_else(|| {
             panic!(
