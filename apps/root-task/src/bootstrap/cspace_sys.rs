@@ -326,6 +326,131 @@ pub fn cnode_copy_raw_single(
     first
 }
 
+/// Performs a raw tuple mint between init CNode slots while assuming the init thread
+/// root (slot 0x0002) and `initBits = 13` guardless addressing. This helper mirrors
+/// [`cnode_copy_raw_single`] but preserves badges during duplication.
+pub fn cnode_mint_raw_single(
+    bi: &sys::seL4_BootInfo,
+    dst_root: sys::seL4_CNode,
+    dst_slot: sys::seL4_Word,
+    src_root: sys::seL4_CNode,
+    src_slot: sys::seL4_Word,
+    rights: sys::seL4_CapRights,
+    badge: sys::seL4_Word,
+) -> sys::seL4_Error {
+    fn should_retry(err: sys::seL4_Error) -> bool {
+        matches!(err, sys::seL4_FailedLookup | sys::seL4_InvalidCapability)
+    }
+
+    fn mint_once(
+        _bi: &sys::seL4_BootInfo,
+        dst_root: sys::seL4_CNode,
+        dst_slot: sys::seL4_Word,
+        src_root: sys::seL4_CNode,
+        src_slot: sys::seL4_Word,
+        rights: sys::seL4_CapRights,
+        badge: sys::seL4_Word,
+        style: TupleStyle,
+    ) -> sys::seL4_Error {
+        let dst_index = dst_slot as sys::seL4_Word;
+        let src_index = src_slot as sys::seL4_Word;
+        let depth_word = se_l4_wordbits_word();
+
+        ::log::info!(
+            "[cnode.mint/raw] style={style} dst_root=0x{dst_root:04x} dst_slot=0x{dst_slot:04x} depth={depth_word} src=0x{src_root:04x}/0x{src_slot:04x} badge=0x{badge:04x}",
+            style = tuple_style_label(style),
+            dst_root = dst_root,
+            dst_slot = dst_slot,
+            depth_word = depth_word,
+            src_root = src_root,
+            src_slot = src_slot,
+            badge = badge,
+        );
+
+        let result = {
+            #[cfg(target_os = "none")]
+            unsafe {
+                debug_log(format_args!(
+                    "[ffi] seL4_CNode_Mint destRoot=0x{dst_root:04x} destIndex=0x{dst_index:016x} destDepth={depth} srcRoot=0x{src_root:04x} srcIndex=0x{src_index:016x} srcDepth={depth} rights=0x{rights:02x} badge=0x{badge:04x}",
+                    dst_root = dst_root,
+                    dst_index = dst_index,
+                    depth = depth_word,
+                    src_root = src_root,
+                    src_index = src_index,
+                    rights = rights.raw(),
+                    badge = badge,
+                ));
+                sys::seL4_CNode_Mint(
+                    dst_root,
+                    dst_index as sys::seL4_Word,
+                    depth_word,
+                    src_root,
+                    src_index as sys::seL4_Word,
+                    depth_word,
+                    rights,
+                    badge,
+                )
+            }
+
+            #[cfg(not(target_os = "none"))]
+            {
+                let _ = (
+                    _bi, dst_root, dst_slot, src_root, src_slot, rights, badge, style, dst_index,
+                    src_index, depth_word,
+                );
+                sys::seL4_NoError
+            }
+        };
+
+        ::log::info!(
+            "[cnode.mint/raw] dst_root=0x{dst_root:04x} dst_slot=0x{dst_slot:04x} depth={depth} src_root=0x{src_root:04x} src_slot=0x{src_slot:04x} badge=0x{badge:04x} err={err}",
+            depth = depth_word,
+            err = result,
+        );
+
+        result
+    }
+
+    let initial_style = tuple_style();
+    let first = mint_once(
+        bi,
+        dst_root,
+        dst_slot,
+        src_root,
+        src_slot,
+        rights,
+        badge,
+        initial_style,
+    );
+    if first == sys::seL4_NoError || !should_retry(first) {
+        return first;
+    }
+
+    if should_retry(first) {
+        if let Some(fallback) = initial_style.fallback() {
+            ::log::warn!(
+                "[cnode.mint/raw] style={} failed err={} — retrying with {}",
+                tuple_style_label(initial_style),
+                first,
+                tuple_style_label(fallback),
+            );
+            let second = mint_once(
+                bi, dst_root, dst_slot, src_root, src_slot, rights, badge, fallback,
+            );
+            if second == sys::seL4_NoError {
+                set_tuple_style(fallback);
+                ::log::info!(
+                    "[cnode] tuple style promoted to {}",
+                    tuple_style_label(fallback)
+                );
+            }
+            return second;
+        }
+    }
+
+    first
+}
+
 #[inline(always)]
 pub const fn depth_wordbits() -> u8 {
     SE_L4_WORDBITS
