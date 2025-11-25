@@ -61,6 +61,11 @@ pub fn slot_index(slot: sys::seL4_Word) -> sys::seL4_CPtr {
     slot as sys::seL4_CPtr
 }
 
+/// TupleStyle selects whether the init CNode paths are expressed as raw slot indices
+/// (as expected when `initBits` is 13 and the guard depth is zero) or using encoded
+/// tuples that shift the index left by `(WordBits - initBits)`. The root task relies
+/// on the boot-time `initThreadCNode` root (slot 0x0002) and the kernel-advertised
+/// empty window without adjusting depths, so Raw is the default.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TupleStyle {
     Raw = 0,
@@ -80,6 +85,10 @@ impl TupleStyle {
     }
 }
 
+/// Returns the tuple style used to address the init CNode. Our seL4 configuration
+/// exposes a flat `initThreadCNode` with `initBits = 13`, guard depth zero, and an
+/// empty window `[empty_start..empty_end)` that we must not shift when passing slot
+/// indices to syscalls.
 #[inline(always)]
 pub fn tuple_style() -> TupleStyle {
     // The init CNode guard depth is zero on our target configurations, so the kernel
@@ -98,6 +107,7 @@ fn set_tuple_style(style: TupleStyle) {
     let _ = style;
 }
 
+/// Human readable label describing the tuple encoding mode used for init CNode paths.
 #[inline(always)]
 pub fn tuple_style_label(style: TupleStyle) -> &'static str {
     match style {
@@ -161,6 +171,8 @@ pub fn dump_init_cnode_slots(range: Range<usize>) {
     }
 }
 
+/// Sanity checks the init CNode layout, relying on `initBits = 13`, guard depth 0,
+/// and a non-empty `[empty_start..empty_end)` window provided by the kernel.
 pub fn assert_init_cnode_layout(bi: &sys::seL4_BootInfo) {
     let init_bits = init_cnode_bits_u8(bi) as usize;
 
@@ -202,6 +214,10 @@ pub fn assert_init_cnode_layout(bi: &sys::seL4_BootInfo) {
     );
 }
 
+/// Performs a raw tuple copy between init CNode slots while assuming the init thread
+/// root (slot 0x0002) and `initBits = 13` guardless addressing. This helper only
+/// operates inside the bootinfo-advertised window `[empty_start..empty_end)` and
+/// leaves slot allocation untouched.
 pub fn cnode_copy_raw_single(
     bi: &sys::seL4_BootInfo,
     dst_root: sys::seL4_CNode,
@@ -240,35 +256,45 @@ pub fn cnode_copy_raw_single(
             src_slot = src_slot,
         );
 
-        #[cfg(target_os = "none")]
-        unsafe {
-            debug_log(format_args!(
-                "[ffi] seL4_CNode_Copy destRoot=0x{dst_root:04x} destIndex=0x{dst_index:016x} destDepth={depth} srcRoot=0x{src_root:04x} srcIndex=0x{src_index:016x} srcDepth={depth} rights=0x{rights:02x}",
-                dst_root = dst_root,
-                dst_index = dst_index,
-                depth = depth_word,
-                src_root = src_root,
-                src_index = src_index,
-                rights = rights.raw(),
-            ));
-            sys::seL4_CNode_Copy(
-                dst_root,
-                dst_index as sys::seL4_Word,
-                depth_word,
-                src_root,
-                src_index as sys::seL4_Word,
-                depth_word,
-                rights,
-            )
-        }
+        let result = {
+            #[cfg(target_os = "none")]
+            unsafe {
+                debug_log(format_args!(
+                    "[ffi] seL4_CNode_Copy destRoot=0x{dst_root:04x} destIndex=0x{dst_index:016x} destDepth={depth} srcRoot=0x{src_root:04x} srcIndex=0x{src_index:016x} srcDepth={depth} rights=0x{rights:02x}",
+                    dst_root = dst_root,
+                    dst_index = dst_index,
+                    depth = depth_word,
+                    src_root = src_root,
+                    src_index = src_index,
+                    rights = rights.raw(),
+                ));
+                sys::seL4_CNode_Copy(
+                    dst_root,
+                    dst_index as sys::seL4_Word,
+                    depth_word,
+                    src_root,
+                    src_index as sys::seL4_Word,
+                    depth_word,
+                    rights,
+                )
+            }
 
-        #[cfg(not(target_os = "none"))]
-        {
-            let _ = (
-                bi, dst_root, dst_slot, src_root, src_slot, rights, style, depth_word,
-            );
-            sys::seL4_NoError
-        }
+            #[cfg(not(target_os = "none"))]
+            {
+                let _ = (
+                    bi, dst_root, dst_slot, src_root, src_slot, rights, style, depth_word,
+                );
+                sys::seL4_NoError
+            }
+        };
+
+        ::log::info!(
+            "[cnode.copy/raw] dst_root=0x{dst_root:04x} dst_slot=0x{dst_slot:04x} depth={depth} src_root=0x{src_root:04x} src_slot=0x{src_slot:04x} err={err}",
+            depth = depth_word,
+            err = result,
+        );
+
+        result
     }
 
     let initial_style = tuple_style();
@@ -406,43 +432,54 @@ fn cnode_copy_with_style(
         src_raw = src_slot_raw,
     );
 
-    #[cfg(target_os = "none")]
-    unsafe {
-        debug_log(format_args!(
-            "[cs] op=copy style={style} dst_slot=0x{dst_slot:04x} src_slot=0x{src_slot:04x} depth={depth} root=0x{dst_root:04x}",
-            style = tuple_style_label(style),
-            dst_slot = dst_slot_raw,
-            src_slot = src_slot_raw,
-            depth = depth_word,
-            dst_root = dst_root,
-        ));
-        sys::seL4_CNode_Copy(
-            dst_root,
-            dst_index as sys::seL4_Word,
-            depth_word,
-            src_root,
-            src_index as sys::seL4_Word,
-            depth_word,
-            rights,
-        )
-    }
+    let result = {
+        #[cfg(target_os = "none")]
+        unsafe {
+            debug_log(format_args!(
+                "[cs] op=copy style={style} dst_slot=0x{dst_slot:04x} src_slot=0x{src_slot:04x} depth={depth} root=0x{dst_root:04x}",
+                style = tuple_style_label(style),
+                dst_slot = dst_slot_raw,
+                src_slot = src_slot_raw,
+                depth = depth_word,
+                dst_root = dst_root,
+            ));
+            sys::seL4_CNode_Copy(
+                dst_root,
+                dst_index as sys::seL4_Word,
+                depth_word,
+                src_root,
+                src_index as sys::seL4_Word,
+                depth_word,
+                rights,
+            )
+        }
 
-    #[cfg(not(target_os = "none"))]
-    {
-        let _ = (
-            bi,
-            dst_root,
-            dst_slot_raw,
-            src_root,
-            src_slot_raw,
-            rights,
-            style,
-            dst_index,
-            src_index,
-            depth_word,
-        );
-        sys::seL4_NoError
-    }
+        #[cfg(not(target_os = "none"))]
+        {
+            let _ = (
+                bi,
+                dst_root,
+                dst_slot_raw,
+                src_root,
+                src_slot_raw,
+                rights,
+                style,
+                dst_index,
+                src_index,
+                depth_word,
+            );
+            sys::seL4_NoError
+        }
+    };
+
+    ::log::info!(
+        "[cnode.copy/tuple] style={} dst_root=0x{dst_root:04x} dst_slot=0x{dst_slot:04x} depth={depth} src_root=0x{src_root:04x} src_slot=0x{src_slot:04x} err={err}",
+        tuple_style_label(style),
+        depth = depth_word,
+        err = result,
+    );
+
+    result
 }
 
 #[inline(always)]
@@ -491,55 +528,66 @@ fn cnode_mint_with_style(
         ));
     }
 
-    #[cfg(target_os = "none")]
-    unsafe {
-        debug_log(format_args!(
-            "[cs] op=mint style={style} dst_slot=0x{dst:04x} src_slot=0x{src:04x} depth={depth} badge=0x{badge:04x}",
-            style = tuple_style_label(style),
-            dst = dst_slot_raw,
-            src = src_slot_raw,
-            depth = depth_word,
-            badge = badge,
-        ));
-        debug_log(format_args!(
-            "[ffi] seL4_CNode_Mint destRoot=0x{dst_root:04x} destIndex=0x{dst_index:016x} destDepth={depth} srcRoot=0x{src_root:04x} srcIndex=0x{src_index:016x} srcDepth={depth} rights=0x{rights:02x} badge=0x{badge:04x}",
-            dst_root = dst_root,
-            dst_index = dst_index,
-            depth = depth_word,
-            src_root = src_root,
-            src_index = src_index,
-            rights = rights.raw(),
-            badge = badge,
-        ));
-        sys::seL4_CNode_Mint(
-            dst_root,
-            dst_index as sys::seL4_Word,
-            depth_word,
-            src_root,
-            src_index as sys::seL4_Word,
-            depth_word,
-            rights,
-            badge,
-        )
-    }
+    let result = {
+        #[cfg(target_os = "none")]
+        unsafe {
+            debug_log(format_args!(
+                "[cs] op=mint style={style} dst_slot=0x{dst:04x} src_slot=0x{src:04x} depth={depth} badge=0x{badge:04x}",
+                style = tuple_style_label(style),
+                dst = dst_slot_raw,
+                src = src_slot_raw,
+                depth = depth_word,
+                badge = badge,
+            ));
+            debug_log(format_args!(
+                "[ffi] seL4_CNode_Mint destRoot=0x{dst_root:04x} destIndex=0x{dst_index:016x} destDepth={depth} srcRoot=0x{src_root:04x} srcIndex=0x{src_index:016x} srcDepth={depth} rights=0x{rights:02x} badge=0x{badge:04x}",
+                dst_root = dst_root,
+                dst_index = dst_index,
+                depth = depth_word,
+                src_root = src_root,
+                src_index = src_index,
+                rights = rights.raw(),
+                badge = badge,
+            ));
+            sys::seL4_CNode_Mint(
+                dst_root,
+                dst_index as sys::seL4_Word,
+                depth_word,
+                src_root,
+                src_index as sys::seL4_Word,
+                depth_word,
+                rights,
+                badge,
+            )
+        }
 
-    #[cfg(not(target_os = "none"))]
-    {
-        let _ = (
-            bi,
-            dst_root,
-            dst_slot_raw,
-            src_root,
-            src_slot_raw,
-            rights,
-            badge,
-            style,
-            dst_index,
-            src_index,
-            depth_word,
-        );
-        sys::seL4_NoError
-    }
+        #[cfg(not(target_os = "none"))]
+        {
+            let _ = (
+                bi,
+                dst_root,
+                dst_slot_raw,
+                src_root,
+                src_slot_raw,
+                rights,
+                badge,
+                style,
+                dst_index,
+                src_index,
+                depth_word,
+            );
+            sys::seL4_NoError
+        }
+    };
+
+    ::log::info!(
+        "[cnode.mint] style={} dst_root=0x{dst_root:04x} dst_slot=0x{dst_slot:04x} depth={depth} src_root=0x{src_root:04x} src_slot=0x{src_slot:04x} badge=0x{badge:04x} err={err}",
+        tuple_style_label(style),
+        depth = depth_word,
+        err = result,
+    );
+
+    result
 }
 
 #[inline(always)]
@@ -634,6 +682,9 @@ fn probe_cnode_copy_style(
     (err, cleanup_err)
 }
 
+/// Retypes a single endpoint into the init thread CSpace using the canonical root
+/// (slot 0x0002) and depth derived from `initBits`. Assumes `dst` lies inside the
+/// bootinfo empty window and does not advance `first_free`.
 #[inline(always)]
 pub fn retype_endpoint_raw(
     bi: &sys::seL4_BootInfo,
@@ -645,25 +696,38 @@ pub fn retype_endpoint_raw(
     let node_offset = dst;
     let canon_root = bi.canonical_root_cap();
 
-    #[cfg(target_os = "none")]
-    unsafe {
-        sys::seL4_Untyped_Retype(
-            ut,
-            seL4_EndpointObject as sys::seL4_Word,
-            0,
-            canon_root,
-            0,
-            0u64,
-            node_offset,
-            1,
-        )
-    }
+    let result = {
+        #[cfg(target_os = "none")]
+        unsafe {
+            sys::seL4_Untyped_Retype(
+                ut,
+                seL4_EndpointObject as sys::seL4_Word,
+                0,
+                canon_root,
+                0,
+                0u64,
+                node_offset,
+                1,
+            )
+        }
 
-    #[cfg(not(target_os = "none"))]
-    {
-        let _ = (bi, ut, dst, node_offset);
-        sys::seL4_NoError
-    }
+        #[cfg(not(target_os = "none"))]
+        {
+            let _ = (bi, ut, dst, node_offset);
+            sys::seL4_NoError
+        }
+    };
+
+    ::log::info!(
+        "[retype.ep] root=0x{root:04x} slot=0x{slot:04x} depth={depth} ut=0x{ut:04x} err={err}",
+        root = canon_root,
+        slot = dst,
+        depth = init_bits,
+        ut = ut,
+        err = result,
+    );
+
+    result
 }
 
 #[inline(always)]

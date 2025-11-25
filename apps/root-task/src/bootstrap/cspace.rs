@@ -23,6 +23,9 @@ const MAX_DIAGNOSTIC_LEN: usize = 224;
 
 #[derive(Copy, Clone, Debug)]
 /// Canonical projection of the init thread CSpace window captured from bootinfo.
+/// Assumes the kernel provided `initThreadCNode` root (slot 0x0002) with
+/// `initBits = 13` and an empty window `[empty_start..empty_end)` that remains
+/// reserved for bootstrap placements.
 pub struct CSpaceWindow {
     /// Root CNode capability designating the init thread's CSpace.
     pub root: sel4::seL4_CPtr,
@@ -56,7 +59,9 @@ fn locate_bootinfo_frame_slot(bi: &seL4_BootInfo) -> Option<sel4::seL4_CPtr> {
 }
 
 impl CSpaceWindow {
-    /// Constructs a canonical window from the supplied bootinfo view.
+    /// Constructs a canonical window from the supplied bootinfo view. The initial
+    /// `first_free` is aligned to `bootinfo.empty_start` so callers must avoid
+    /// consuming slots below that bound to preserve the kernel's reserved layout.
     #[must_use]
     pub fn from_bootinfo(view: &BootInfoView) -> Self {
         let (first_free, end) = view.init_cnode_empty_range();
@@ -71,6 +76,8 @@ impl CSpaceWindow {
     }
 
     /// Advances the first-free slot pointer, avoiding slot reuse between placements.
+    /// Callers must ensure `first_free` never crosses `empty_end`, otherwise we
+    /// would clobber kernel-owned slots below the init CNode capacity.
     pub fn bump(&mut self) {
         self.first_free = self.first_free.wrapping_add(1);
         debug_assert!(
@@ -467,13 +474,7 @@ pub fn first_endpoint_retype(
         "[retype] request ut=0x{ut_cap:04x} root=0x{dst_root:04x} idx={node_index} depth={node_depth} off=0x{node_off:04x}",
     );
 
-    cspace_sys::retype_into_root(
-        ut_cap,
-        sel4_sys::seL4_EndpointObject as _,
-        0,
-        slot,
-        bi,
-    )
+    cspace_sys::retype_into_root(ut_cap, sel4_sys::seL4_EndpointObject as _, 0, slot, bi)
 }
 
 /// Performs the initial proof-of-life retype calls against the init CNode.

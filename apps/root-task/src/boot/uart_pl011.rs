@@ -47,7 +47,10 @@ pub fn find_pl011_device_ut(bi: &sel4_sys::seL4_BootInfo) -> Option<seL4_CPtr> {
     None
 }
 
-/// Best-effort mapping for the PL011 UART into the init VSpace.
+/// Best-effort mapping for the PL011 UART into the init VSpace. Assumes the
+/// mapping destination slot lives inside the bootinfo empty window and reuses the
+/// canonical init CNode root (slot 0x0002) with `initBits = 13` for the retype
+/// tuple.
 pub fn bootstrap_map_pl011(
     bi: &sel4_sys::seL4_BootInfo,
     cs: &mut CSpace,
@@ -78,6 +81,14 @@ pub fn bootstrap_map_pl011(
         return Err(err);
     }
 
+    log::info!(
+        "[pl011] map attempt root=0x{root:04x} depth={depth} slot=0x{slot:04x} ut=0x{ut:04x}",
+        root = tuple.node_root,
+        depth = tuple.node_depth,
+        slot = page_slot,
+        ut = device_ut,
+    );
+
     let map_err = pl011::map_pl011_smallpage(
         device_ut,
         page_slot as sel4_sys::seL4_Word,
@@ -90,7 +101,9 @@ pub fn bootstrap_map_pl011(
         Ok(page_slot)
     } else {
         warn!(
-            "[pl011] map failed slot=0x{slot:04x} err={err}",
+            "[pl011] map failed root=0x{root:04x} depth={depth} slot=0x{slot:04x} err={err}",
+            root = tuple.node_root,
+            depth = tuple.node_depth,
             slot = page_slot,
             err = map_err
         );
