@@ -75,7 +75,7 @@ fn debug_identify_boot_caps() {
 /// (`initBits = 13`) and empty-range bounds reported by bootinfo.
 fn bootstrap_notification(
     cs: &mut CSpaceCtx,
-    selection: &UntypedSelection,
+    selection: &mut UntypedSelection,
 ) -> Result<sel4_sys::seL4_CPtr, sel4_sys::seL4_Error> {
     let slot = retype_one(
         cs,
@@ -83,6 +83,8 @@ fn bootstrap_notification(
         sel4_sys::seL4_NotificationObject,
         sel4_sys::seL4_NotificationBits as u8,
     )?;
+
+    selection.record_consumed(sel4_sys::seL4_NotificationBits as u8);
 
     log::info!(
         target: "root_task::bootstrap",
@@ -955,9 +957,10 @@ fn bootstrap<P: Platform>(
     let mut retyped_objects: u32 = 0;
 
     boot_tracer().advance(BootPhase::UntypedEnumerate);
-    let notification_selection = pick_untyped(bootinfo_ref, sel4_sys::seL4_NotificationBits as u8);
+    let mut notification_selection =
+        pick_untyped(bootinfo_ref, sel4_sys::seL4_NotificationBits as u8);
 
-    if let Err(err) = bootstrap_notification(&mut cs, &notification_selection) {
+    if let Err(err) = bootstrap_notification(&mut cs, &mut notification_selection) {
         let mut line = heapless::String::<160>::new();
         let err_code = err as i32;
         let err_name = error_name(err);
@@ -975,10 +978,21 @@ fn bootstrap<P: Platform>(
     }
 
     let mut watchdog = BootWatchdog::new();
-    match retype_selection(&mut cs, &notification_selection, || watchdog.poll()) {
+    match retype_selection(&mut cs, &mut notification_selection, || watchdog.poll()) {
         Ok(count) => {
             consumed_slots += count as usize;
             retyped_objects += count;
+        }
+        Err(err) if err == sel4_sys::seL4_NotEnoughMemory => {
+            let mut line = heapless::String::<160>::new();
+            let _ = write!(
+                line,
+                "[boot] retype plan exhausted untyped ut=0x{ut:03x}: {code} ({name})",
+                ut = notification_selection.cap,
+                code = err as i32,
+                name = error_name(err)
+            );
+            console.writeln_prefixed(line.as_str());
         }
         Err(err) => {
             let mut line = heapless::String::<128>::new();
