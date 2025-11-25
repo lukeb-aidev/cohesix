@@ -6,6 +6,9 @@ use crate::bp;
 use crate::sel4::KernelEnv;
 
 /// Maps the init thread IPC buffer and binds it to the provided TCB.
+/// Assumes the init thread's CSpace and VSpace are intact, uses the boot-provided
+/// `initThreadIPCBuffer` slot when possible, and does not allocate additional CNode
+/// slots beyond the kernel-advertised empty region.
 #[allow(clippy::missing_errors_doc)]
 pub fn install_ipc_buffer(
     env: &mut KernelEnv<'_>,

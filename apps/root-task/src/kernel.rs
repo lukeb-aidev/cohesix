@@ -35,12 +35,12 @@ use crate::event::{
 };
 use crate::guards;
 use crate::hal::{HalError, Hardware, KernelHal};
-use crate::sel4;
 #[cfg(feature = "net-console")]
 use crate::net::{NetStack, CONSOLE_TCP_PORT};
 #[cfg(feature = "kernel")]
 use crate::ninedoor::NineDoorBridge;
 use crate::platform::{Platform, SeL4Platform};
+use crate::sel4;
 #[cfg(feature = "cap-probes")]
 use crate::sel4::first_regular_untyped;
 use crate::sel4::{
@@ -561,6 +561,22 @@ fn bootstrap<P: Platform>(
     let cspace_window = CSpaceWindow::from_bootinfo(&bootinfo_view);
     let mut console = DebugConsole::new(platform);
 
+    #[inline(always)]
+    fn report_first_retype_failure<P: Platform>(
+        console: &mut DebugConsole<'_, P>,
+        err: sel4_sys::seL4_Error,
+    ) -> ! {
+        let mut line = heapless::String::<160>::new();
+        let _ = write!(
+            line,
+            "[boot] first retypes failed: {} ({})",
+            err as i32,
+            error_name(err),
+        );
+        console.writeln_prefixed(line.as_str());
+        panic!("first retypes failed: {}", error_name(err));
+    }
+
     extern "C" {
         #[link_name = "_text"]
         static __text_start: u8;
@@ -642,6 +658,8 @@ fn bootstrap<P: Platform>(
     debug_identify_boot_caps();
     cspace_sys::dump_init_cnode_slots(0..32);
 
+    // Confirm the init CNode path using the kernel-advertised radix (`initBits = 13`)
+    // and empty window before consuming slots inside `[empty_start..empty_end)`.
     if let Err(err) = cspace_sys::verify_root_cnode_slot(
         bootinfo_ref,
         cspace_window.first_free as sel4_sys::seL4_Word,
@@ -685,30 +703,14 @@ fn bootstrap<P: Platform>(
             match cspace_first_retypes(bootinfo_ref, &mut boot_cspace, first_ut_cap) {
                 Ok(result) => first_retypes = Some(result),
                 Err(err) => {
-                    let mut line = heapless::String::<160>::new();
-                    let _ = write!(
-                        line,
-                        "[boot] first retypes failed: {} ({})",
-                        err as i32,
-                        error_name(err),
-                    );
-                    console.writeln_prefixed(line.as_str());
-                    panic!("first retypes failed: {}", error_name(err));
+                    report_first_retype_failure(&mut console, err);
                 }
             }
         } else if let Some(first_ut_cap) = first_regular_untyped(bootinfo_ref) {
             match cspace_first_retypes(bootinfo_ref, &mut boot_cspace, first_ut_cap) {
                 Ok(result) => first_retypes = Some(result),
                 Err(err) => {
-                    let mut line = heapless::String::<160>::new();
-                    let _ = write!(
-                        line,
-                        "[boot] first retypes failed: {} ({})",
-                        err as i32,
-                        error_name(err),
-                    );
-                    console.writeln_prefixed(line.as_str());
-                    panic!("first retypes failed: {}", error_name(err));
+                    report_first_retype_failure(&mut console, err);
                 }
             }
         } else {
@@ -877,8 +879,8 @@ fn bootstrap<P: Platform>(
     }
 
     if ep_slot != sel4_sys::seL4_CapNull {
-        let guard_bits = sel4::word_bits()
-            .saturating_sub(bootinfo_ref.init_cnode_bits() as sel4_sys::seL4_Word);
+        let guard_bits =
+            sel4::word_bits().saturating_sub(bootinfo_ref.init_cnode_bits() as sel4_sys::seL4_Word);
         let guard_data = sel4::cap_data_guard(0, guard_bits);
         let fault_handler_err = unsafe {
             sel4_sys::seL4_TCB_SetFaultHandler(
@@ -1657,7 +1659,9 @@ struct StagedMessage {
 impl StagedMessage {
     fn new(info: sel4_sys::seL4_MessageInfo, badge: sel4_sys::seL4_Word) -> Self {
         let payload = copy_message_words(info, |index| {
-            let mr_index: i32 = index.try_into().expect("message register index must fit in i32");
+            let mr_index: i32 = index
+                .try_into()
+                .expect("message register index must fit in i32");
             unsafe { sel4_sys::seL4_GetMR(mr_index) }
         });
         Self {

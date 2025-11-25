@@ -13,6 +13,24 @@ use crate::serial;
 
 pub static mut ROOT_EP: seL4_CPtr = seL4_CapNull;
 
+fn log_window_state(
+    tag: &str,
+    root: seL4_CPtr,
+    bits: u8,
+    first_free: seL4_CPtr,
+    empty: Option<(seL4_CPtr, seL4_CPtr)>,
+) {
+    let (start, end) = empty.unwrap_or((first_free, first_free));
+    log::info!(
+        "[cs] {tag} root=0x{root:04x} bits={bits} first_free=0x{slot:04x} empty=[0x{start:04x}..0x{end:04x})",
+        root = root,
+        bits = bits,
+        slot = first_free,
+        start = start,
+        end = end,
+    );
+}
+
 pub fn publish_root_ep(ep: seL4_CPtr) {
     unsafe {
         ROOT_EP = ep;
@@ -22,6 +40,10 @@ pub fn publish_root_ep(ep: seL4_CPtr) {
 }
 
 /// One-shot endpoint bootstrap: pick a regular untyped, retype, publish, and trace.
+/// Assumes the init CNode root (slot 0x0002) has `initBits = 13` and that
+/// `first_free` is set within the kernel-advertised empty window
+/// `[empty_start..empty_end)`. This function consumes exactly one slot from that
+/// window and leaves ordering of earlier boot phases unchanged.
 pub fn bootstrap_ep(view: &BootInfoView, cs: &mut CSpace) -> Result<seL4_CPtr, seL4_Error> {
     if sel4::ep_ready() {
         return Ok(sel4::root_endpoint());
@@ -60,12 +82,7 @@ pub fn bootstrap_ep(view: &BootInfoView, cs: &mut CSpace) -> Result<seL4_CPtr, s
     }
 
     let ep_slot = cs.alloc_slot()?;
-    log::info!(
-        "[cs] win root=0x{root:04x} bits={bits} first_free=0x{slot:04x}",
-        root = cs.root(),
-        bits = cs.depth(),
-        slot = ep_slot,
-    );
+    log_window_state("alloc", cs.root(), cs.depth(), ep_slot, None);
     debug_assert_ne!(
         ep_slot,
         sel4::seL4_CapNull,
@@ -75,11 +92,12 @@ pub fn bootstrap_ep(view: &BootInfoView, cs: &mut CSpace) -> Result<seL4_CPtr, s
     let mut window = CSpaceWindow::from_bootinfo(view);
     window.first_free = ep_slot;
     window.assert_contains(ep_slot);
-    log::info!(
-        "[cs] win root=0x{root:04x} bits={bits} first_free=0x{slot:04x}",
-        root = window.root,
-        bits = window.bits,
-        slot = window.first_free,
+    log_window_state(
+        "bootinfo",
+        window.root,
+        window.bits,
+        window.first_free,
+        Some((window.empty_start, window.empty_end)),
     );
     debug_assert_eq!(
         view.init_cnode_bits(),
@@ -125,9 +143,11 @@ pub fn bootstrap_ep(view: &BootInfoView, cs: &mut CSpace) -> Result<seL4_CPtr, s
         ep_slot as sel4_sys::seL4_Word,
     );
     log::info!(
-        "[ep] retype -> dst=0x{slot:04x} err={err}",
+        "[ep] retype root=0x{root:04x} depth={depth} dst=0x{slot:04x} err={err}",
+        root = window.root,
+        depth = window.bits,
         slot = ep_slot,
-        err = err
+        err = err,
     );
     if err != sel4_sys::seL4_NoError {
         log::trace!("B1.ret = Err({code})", code = sel4::error_name(err));
