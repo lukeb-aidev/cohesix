@@ -234,7 +234,7 @@ pub fn cnode_copy_raw_single(
     }
 
     fn copy_once(
-        bi: &sys::seL4_BootInfo,
+        _bi: &sys::seL4_BootInfo,
         dst_root: sys::seL4_CNode,
         dst_slot: sys::seL4_Word,
         src_root: sys::seL4_CNode,
@@ -475,7 +475,11 @@ fn cnode_copy_with_style(
     ::log::info!(
         "[cnode.copy/tuple] style={} dst_root=0x{dst_root:04x} dst_slot=0x{dst_slot:04x} depth={depth} src_root=0x{src_root:04x} src_slot=0x{src_slot:04x} err={err}",
         tuple_style_label(style),
+        dst_root = dst_root,
+        dst_slot = dst_slot_raw,
         depth = depth_word,
+        src_root = src_root,
+        src_slot = src_slot_raw,
         err = result,
     );
 
@@ -583,7 +587,11 @@ fn cnode_mint_with_style(
     ::log::info!(
         "[cnode.mint] style={} dst_root=0x{dst_root:04x} dst_slot=0x{dst_slot:04x} depth={depth} src_root=0x{src_root:04x} src_slot=0x{src_slot:04x} badge=0x{badge:04x} err={err}",
         tuple_style_label(style),
+        dst_root = dst_root,
+        dst_slot = dst_slot_raw,
         depth = depth_word,
+        src_root = src_root,
+        src_slot = src_slot_raw,
         err = result,
     );
 
