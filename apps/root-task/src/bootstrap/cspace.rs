@@ -999,7 +999,7 @@ impl CSpaceCtx {
                 &mut line,
                 "[cnode] Copy err={err} root=0x{root:04x} dest(slot=0x{dest_index:04x},depth={depth}) src(slot=0x{src_index:04x},depth={depth})",
                 root = self.root_cnode_cap,
-                depth = self.init_cnode_bits,
+                depth = sel4_sys::seL4_WordBits,
                 dest_index = dest_index,
                 src_index = src_index,
             )
@@ -1025,7 +1025,7 @@ impl CSpaceCtx {
                 &mut line,
                 "[cnode] Mint err={err} root=0x{root:04x} dest(slot=0x{dest_index:04x},depth={depth}) src(slot=0x{src_index:04x},depth={depth}) badge={badge}",
                 root = self.root_cnode_cap,
-                depth = self.init_cnode_bits,
+                depth = sel4_sys::seL4_WordBits,
                 dest_index = dest_index,
                 src_index = src_index,
                 badge = badge,
@@ -1081,6 +1081,27 @@ impl CSpaceCtx {
         }
     }
 
+    /// Issues a raw-style init CNode mint using the canonical root.
+    pub fn mint_raw_from_root(
+        &mut self,
+        dst_slot: sel4::seL4_CPtr,
+        src_slot: sel4::seL4_CPtr,
+        rights: sel4_sys::seL4_CapRights,
+        badge: sel4::seL4_Word,
+    ) -> sel4::seL4_Error {
+        let err = cspace_sys::cnode_mint_raw_single(
+            self.bi.header(),
+            self.canonical_root_cap as sel4_sys::seL4_CNode,
+            dst_slot as sel4_sys::seL4_Word,
+            self.canonical_root_cap as sel4_sys::seL4_CNode,
+            src_slot as sel4_sys::seL4_Word,
+            rights,
+            badge,
+        );
+        self.log_cnode_mint(err, dst_slot, src_slot, badge);
+        err
+    }
+
     fn copy_init_tcb_from(
         &mut self,
         dst_slot: sel4::seL4_CPtr,
@@ -1111,14 +1132,7 @@ impl CSpaceCtx {
     pub fn mint_root_cnode_copy(&mut self) -> Result<(), sel4::seL4_Error> {
         let dst_slot = self.alloc_slot_checked()?;
         let src_slot = seL4_CapInitThreadCNode;
-        let err = self.cspace.mint_here(
-            dst_slot,
-            self.canonical_root_cap,
-            src_slot,
-            sel4_sys::seL4_CapRights_All,
-            0,
-        );
-        self.log_cnode_mint(err, dst_slot, src_slot, 0);
+        let err = self.mint_raw_from_root(dst_slot, src_slot, sel4_sys::seL4_CapRights_All, 0);
         if err == seL4_NoError {
             self.root_cnode_copy_slot = dst_slot;
             let init_ident = sel4::debug_cap_identify(seL4_CapInitThreadCNode);
