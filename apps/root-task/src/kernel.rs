@@ -941,7 +941,33 @@ fn bootstrap<P: Platform>(
     .expect("failed to retype notification into init CSpace");
     consumed_slots += 1;
     retyped_objects += 1;
-    let _ = notification_slot;
+    let notification_copy_slot = cs
+        .alloc_slot_checked()
+        .expect("failed to allocate notification mint slot");
+    consumed_slots += 1;
+
+    let notification_rights = sel4_sys::seL4_CapRights_All;
+    let notification_badge: sel4_sys::seL4_Word = 0;
+    let mint_err = cs.cspace.mint_here(
+        notification_copy_slot,
+        cs.canonical_root_cap,
+        notification_slot,
+        notification_rights,
+        notification_badge,
+    );
+    cs.log_cnode_mint(
+        mint_err,
+        notification_copy_slot,
+        notification_slot,
+        notification_badge,
+    );
+    if mint_err != sel4_sys::seL4_NoError {
+        panic!(
+            "failed to mint notification into init CSpace: {} ({})",
+            mint_err,
+            error_name(mint_err)
+        );
+    }
 
     let mut watchdog = BootWatchdog::new();
     match retype_selection(&mut cs, &notification_selection, || watchdog.poll()) {
