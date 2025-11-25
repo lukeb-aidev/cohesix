@@ -1018,11 +1018,16 @@ fn bootstrap<P: Platform>(
             );
         }
         Err(err) => {
-            panic!(
-                "failed to mint writable init CNode capability: {} ({})",
+            cs.root_cnode_copy_slot = sel4_sys::seL4_CapInitThreadCNode;
+            let mut line = heapless::String::<160>::new();
+            let _ = write!(
+                line,
+                "[boot] writable init CNode mint failed: {} ({}) — falling back to slot 0x{slot:04x}",
                 err,
-                error_name(err)
+                error_name(err),
+                slot = sel4_sys::seL4_CapInitThreadCNode
             );
+            console.writeln_prefixed(line.as_str());
         }
     }
 

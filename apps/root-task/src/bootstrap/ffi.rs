@@ -17,11 +17,7 @@ pub fn cnode_mint_to_slot(
     badge: sys::seL4_Word,
 ) -> sys::seL4_Error {
     let rights = crate::cspace::cap_rights_read_write_grant();
-    let err = ctx
-        .cspace
-        .mint_here(dst_slot, ctx.canonical_root_cap, src_slot, rights, badge);
-    ctx.log_cnode_mint(err, dst_slot, src_slot, badge);
-    err
+    ctx.mint_raw_from_root(dst_slot, src_slot, rights, badge)
 }
 
 /// Helper that logs and forwards a `seL4_Untyped_Retype` request through [`CSpaceCtx`].
