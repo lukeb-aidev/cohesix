@@ -419,6 +419,7 @@ and provisioning DMA buffers.
 - Root task still boots with PL011 logging and virtio-net initialisation using the new HAL bindings.
 - HAL error propagation surfaces seL4 error codes for diagnostics (no regression in boot failure logs).
 - Workspace `cargo check` succeeds with the kernel and net-console features enabled.
+- Run the Regression Pack (see “Docs-as-Built Alignment”) to confirm console behaviour, networking event pump cadence, and NineDoor flows are unchanged despite the new HAL. Any change in ACK/ERR or `/proc/boot` output must be documented and justified.
 
 ---
 ## Milestone 8b — Root-Task Compiler & Deterministic Profiles
@@ -456,6 +457,7 @@ Introduce the `coh-rtc` compiler that ingests `configs/root_task.toml` and emits
 - Regeneration is deterministic: two consecutive runs of `cargo run -p coh-rtc …` produce identical Rust, JSON, and CLI artefacts (verified via hash comparison recorded in `out/manifests/root_task_resolved.json.sha256`).
 - Root task boots under QEMU using generated bootstrap tables; serial log shows manifest fingerprint and ticket registration sourced from generated code.
 - Compiler validation rejects manifests that violate red lines (e.g., invalid walk depth, enabling `gpu` while `profile.kernel` omits the feature gate) and exits with non-zero status.
+- Run the Regression Pack and reject any drift in `tests/cli/boot_v0.cohsh` output or manifest fingerprints unless the docs and schema version are updated in the same change.
 
 **Compiler touchpoints**
 - Introduces `root_task.schema = "1.0"`; schema mismatches abort generation and instruct operators to upgrade docs.
@@ -517,6 +519,7 @@ Refactor Secure9P into codec/core crates with bounded pipelining and manifest-co
 - Synthetic load (10k interleaved operations across four sessions) completes without tag reuse violations or starvation; metrics expose queue depth and retry counts.
 - Batched frames round-trip within negotiated `msize`; when the manifest disables batching the same tests pass with single-frame semantics.
 - Short-write retry policies (e.g., exponential back-off) are enforced according to manifest configuration and verified by CLI regression output.
+- Re-run the Regression Pack to ensure pipelining and batching do not alter existing single-request semantics (tags, errors, or short-write handling) as exercised by earlier CLI scripts.
 
 **Compiler touchpoints**
 - `coh-rtc` emits concurrency defaults into generated Rust tables and CLI fixtures; docs snippets pull from the manifest rather than hard-coded prose.
@@ -549,6 +552,7 @@ Implement ring-backed telemetry providers with manifest-governed sizes and CBOR 
 - Rings wrap without data loss; on reboot the cursor manifest regenerates identical ring state and CLI replay resumes exactly where it left off.
 - Latency metrics (P50/P95) captured during tests and recorded in `docs/SECURITY.md`, sourced from automated output instead of manual measurements.
 - Attempts to exceed manifest-declared ring quotas are rejected and logged; CI asserts the rejection path.
+- Re-run the Regression Pack to confirm that adding ring-backed telemetry does not change console grammar or existing `/worker/<id>/telemetry` semantics outside the new CBOR frames.
 
 **Compiler touchpoints**
 - Codegen emits ring metadata for `/proc/boot` so operators can inspect per-worker quotas; docs pull from the generated JSON to avoid drift.
@@ -579,6 +583,7 @@ Introduce manifest-driven namespace sharding with optional legacy aliases.
 **Checks (DoD)**
 - 1k worker sessions attach concurrently without starvation; metrics exported via `/proc/9p/sessions` demonstrate shard distribution.
 - Enabling legacy aliases preserves `/worker/<id>` paths for backwards compatibility; disabling them causes the compiler to reject manifests that still reference legacy paths.
+- Re-run the Regression Pack and compare paths: legacy `/worker/<id>` scripts must either continue to pass when aliases are enabled or fail deterministically when aliasing is disabled, with matching docs and manifest examples.
 
 **Compiler touchpoints**
 - Generated bootstrap code publishes shard tables for the event pump and NineDoor bridge; docs consume the same tables.
@@ -609,6 +614,7 @@ Add pooled sessions and retry policies to `cohsh`, governed by compiler-exported
 - Throughput benchmark (documented in test output) demonstrates improvement relative to single-session baseline without exceeding `msize` or server tag limits.
 - Retry logic proves idempotent: injected short-write failures eventually succeed without duplicating telemetry or exhausting tickets.
 - CLI refuses to start when the manifest policy hash mismatches the compiled defaults.
+- Re-run the Regression Pack and assert that pooled sessions preserve ACK/ERR ordering and idempotent retries for all existing CLI scripts.
 
 **Compiler touchpoints**
 - `coh-rtc` emits policy TOML plus hash recorded in docs/tests; regeneration guard compares CLI-consumed hash with manifest fingerprint.
@@ -640,6 +646,7 @@ Expose audit-friendly observability nodes under `/proc` generated from the manif
 - Stress harness records accurate counters; metrics exported via `/proc` match expected values within tolerance.
 - CLI tail output remains parseable and line-oriented; regression test asserts exact output grammar.
 - Compiler rejects manifests that attempt to enable observability nodes without allocating sufficient buffers.
+- Re-run the Regression Pack to ensure `/proc` additions are strictly additive and do not change existing node sizes, EOF behaviour, or latency characteristics beyond documented tolerances.
 
 **Compiler touchpoints**
 - Generated code provides `/proc` descriptors; docs embed them via compiler output.
@@ -671,6 +678,7 @@ Provide CAS-backed update distribution via NineDoor with compiler-enforced integ
 - Resume logic validated via regression script; delta application is idempotent and verified by hashing installed payloads before/after.
 - Signing path tested with fixture keys; unsigned mode explicitly documented and requires manifest acknowledgement (e.g., `cas.signing.required = false`).
 - Compiler rejects manifests where CAS storage exceeds event-pump memory budgets or chunk sizes exceed `msize`.
+- Re-run the Regression Pack and verify that enabling CAS does not change baseline NineDoor error codes or 9P limits (e.g., `msize`, walk depth) enforced by earlier milestones.
 
 **Compiler touchpoints**
 - Codegen emits CAS provider tables and host-tool manifest templates; docs ingest the same JSON to prevent drift.
@@ -703,6 +711,7 @@ Deliver a UEFI boot path that loads the generated manifest, performs TPM-backed 
 - UEFI image boots under QEMU TCG and on the reference dev board; serial output matches VM baseline including manifest fingerprint and ticket registration lines.
 - TPM-backed attestation chain exported via `/proc/boot` matches manifest hash and does not leak secret material; failure to access TPM causes boot abort with audited error.
 - Compiler rejects manifests selecting the UEFI profile without providing required hardware bindings or attestation settings.
+- For this milestone, run the full Regression Pack both under QEMU and (where applicable) on the target hardware profile, and treat any divergence between the two as a bug unless explicitly documented.
 
 **Compiler touchpoints**
 - `coh-rtc` emits hardware tables for the selected profile; docs import them for `docs/HARDWARE_BRINGUP.md` and `docs/ARCHITECTURE.md`.
@@ -738,6 +747,7 @@ Deliver a library of host/worker sidecars (outside the VM where possible) that b
 - Sidecars operate within declared capability scopes; attempts to access undeclared mounts are rejected and logged.
 - LoRa scheduler enforces duty-cycle constraints under stress tests.
 - Offline telemetry spooling validated for MODBUS/DNP3 adapters with manifest-driven limits.
+- For this milestone, run the full Regression Pack both under QEMU and (where applicable) on the target hardware profile, and treat any divergence between the two as a bug unless explicitly documented.
 
 **Compiler touchpoints**
 - IR v1.5 ensures mounts/roles/quotas for sidecars, generating documentation tables and manifest fragments consumed by host tooling.
@@ -855,3 +865,18 @@ To prevent drift:
 
 4. **Red Lines**
    - Enforced in the compiler and restated here: 9P2000.L, `msize ≤ 8192`, walk depth ≤ 8, no `..`, no fid reuse after clunk, no TCP listeners inside VM unless feature-gated and documented, CPIO < 4 MiB, no POSIX façade, maintain `no_std` for VM artefacts.
+
+5. **Regression Pack (post–Milestone 7c)**
+   - From Milestone 8 onward, any change that lands **MUST** re-run the shared regression pack from earlier milestones, not just new tests.
+   - The regression pack includes at minimum:
+     - `tests/integration/qemu_tcp_console.rs` (Milestone 7 TCP console flow).
+     - `tests/cli/boot_v0.cohsh` (baseline help/attach/log/quit script from the manifest compiler).
+     - `tests/cli/tracefs_script.sh` (TraceFS JSONL flows).
+     - `tests/cli/9p_batch.cohsh` (Secure9P batching).
+     - `tests/cli/telemetry_ring.cohsh` (telemetry rings & cursor resumption).
+     - `tests/cli/observe_watch.cohsh` (observability `/proc` grammar).
+     - `tests/cli/cas_roundtrip.cohsh` (CAS update round-trip).
+   - CI for each Milestone ≥ 8 must:
+     - Run the full regression pack unchanged and fail on any output drift (including ACK/ERR/END lines, `/proc` grammars, and telemetry formats).
+     - Only permit intentional behaviour changes when the relevant CLI scripts, doc snippets, and manifest fields are updated **in the same change**.
+   - The regression pack is treated as the canonical “no-regression” harness; new tests are **additive**, not substitutes.
