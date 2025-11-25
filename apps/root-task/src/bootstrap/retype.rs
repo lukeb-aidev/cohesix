@@ -422,6 +422,7 @@ fn log_untyped_capacity_skip(
         line,
         "[retype:plan] skipping {kind} from ut=0x{ut:03x}: 1x{bytes}B would exceed {cap}B capacity (used={used}B)",
         kind = object_name(obj_type),
+        ut = ut_cap,
         bytes = obj_bytes,
         cap = capacity_bytes,
         used = used_bytes,
