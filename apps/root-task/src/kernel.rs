@@ -69,6 +69,31 @@ fn debug_identify_boot_caps() {
     }
 }
 
+/// Retypes a single notification object from the selected RAM-backed untyped and
+/// installs it into the init CSpace window ([0x010f..0x2000)). The destination
+/// slot is allocated from `CSpaceCtx`, ensuring it honours the init CSpace depth
+/// (`initBits = 13`) and empty-range bounds reported by bootinfo.
+fn bootstrap_notification(
+    cs: &mut CSpaceCtx,
+    selection: &UntypedSelection,
+) -> Result<sel4_sys::seL4_CPtr, sel4_sys::seL4_Error> {
+    let slot = retype_one(
+        cs,
+        selection.cap,
+        sel4_sys::seL4_NotificationObject,
+        sel4_sys::seL4_NotificationBits as u8,
+    )?;
+
+    log::info!(
+        target: "root_task::bootstrap",
+        "[boot] notification retyped ut=0x{ut:03x} slot=0x{slot:04x}",
+        ut = selection.cap,
+        slot = slot,
+    );
+
+    Ok(slot)
+}
+
 /// seL4 console writer backed by the kernel's `DebugPutChar` system call.
 struct DebugConsole<'a, P: Platform> {
     platform: &'a P,
@@ -932,43 +957,19 @@ fn bootstrap<P: Platform>(
     boot_tracer().advance(BootPhase::UntypedEnumerate);
     let notification_selection = pick_untyped(bootinfo_ref, sel4_sys::seL4_NotificationBits as u8);
 
-    let notification_slot = retype_one(
-        &mut cs,
-        notification_selection.cap,
-        sel4_sys::seL4_NotificationObject,
-        0,
-    )
-    .expect("failed to retype notification into init CSpace");
-    consumed_slots += 1;
-    retyped_objects += 1;
-    let notification_copy_slot = cs
-        .alloc_slot_checked()
-        .expect("failed to allocate notification mint slot");
-    consumed_slots += 1;
-
-    let notification_rights = sel4_sys::seL4_CapRights_All;
-    let notification_badge: sel4_sys::seL4_Word = 0;
-    let mint_err = cspace_sys::cnode_mint_raw_single(
-        bootinfo_ref,
-        cs.canonical_root_cap,
-        notification_copy_slot as sel4_sys::seL4_Word,
-        cs.canonical_root_cap,
-        notification_slot as sel4_sys::seL4_Word,
-        notification_rights,
-        notification_badge,
-    );
-    cs.log_cnode_mint(
-        mint_err,
-        notification_copy_slot,
-        notification_slot,
-        notification_badge,
-    );
-    if mint_err != sel4_sys::seL4_NoError {
-        panic!(
-            "failed to mint notification into init CSpace: {} ({})",
-            mint_err,
-            error_name(mint_err)
+    if let Err(err) = bootstrap_notification(&mut cs, &notification_selection) {
+        let mut line = heapless::String::<160>::new();
+        let _ = write!(
+            line,
+            "[boot] notification retype failed ut=0x{ut:03x} err={} ({})",
+            ut = notification_selection.cap,
+            err as i32,
+            error_name(err)
         );
+        console.writeln_prefixed(line.as_str());
+    } else {
+        consumed_slots += 1;
+        retyped_objects += 1;
     }
 
     let mut watchdog = BootWatchdog::new();
