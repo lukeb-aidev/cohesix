@@ -59,7 +59,10 @@ pub fn make_retype_tuple(canonical_root: seL4_CPtr, init_bits: u8) -> RetypeTupl
     RetypeTuple {
         node_root: canonical_root,
         node_index: canonical_root as seL4_Word,
-        node_depth: init_bits,
+        // Use the raw depth expected by the init CNode (guard depth zero,
+        // initBits width) so retypes target the same addressing mode as the
+        // canonical copy helpers.
+        node_depth: sel4_sys::seL4_WordBits as u8,
         init_bits,
     }
 }

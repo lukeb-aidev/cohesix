@@ -292,10 +292,7 @@ fn stage_linker_script(build_root: &Path) -> Result<(), String> {
                 // root-task image size by ~256 GiB and pushing `.bss` symbols far
                 // outside the 4 GiB range that AArch64 ADRP relocations can reach.
                 // Normalise the expression so the increment is a single 4 KiB page.
-                contents = contents.replace(
-                    ". = . + 1 * 1 << 12;",
-                    ". = . + (1 * (1 << 12));",
-                );
+                contents = contents.replace(". = . + 1 * 1 << 12;", ". = . + (1 * (1 << 12));");
 
                 fs::write(&staged, contents).unwrap_or_else(|err| {
                     panic!(

@@ -899,9 +899,7 @@ pub fn cnode_copy(
 ) -> seL4_Error {
     debug_put_char(b'C' as i32);
     let depth_bits = _bootinfo.init_cnode_depth();
-    let depth_word: seL4_Word = depth_bits
-        .try_into()
-        .expect("init cnode depth fits in u8");
+    let depth_word: seL4_Word = depth_bits.try_into().expect("init cnode depth fits in u8");
     unsafe {
         seL4_CNode_Copy(
             dest_root,
@@ -978,9 +976,7 @@ pub(crate) fn cnode_mint(
 ) -> seL4_Error {
     debug_put_char(b'C' as i32);
     let depth_bits = _bootinfo.init_cnode_depth();
-    let depth_word: seL4_Word = depth_bits
-        .try_into()
-        .expect("init cnode depth fits in u8");
+    let depth_word: seL4_Word = depth_bits.try_into().expect("init cnode depth fits in u8");
     unsafe {
         seL4_CNode_Mint(
             dest_root, dest_index, depth_word, src_root, src_index, depth_word, rights, badge,
