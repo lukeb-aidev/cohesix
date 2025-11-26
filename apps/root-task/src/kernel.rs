@@ -1328,7 +1328,7 @@ fn bootstrap<P: Platform>(
     let uart_ptr = uart_region
         .as_ref()
         .map(|region| region.ptr())
-        .unwrap_or_else(|| unsafe {
+        .unwrap_or_else(|| {
             core::ptr::NonNull::new(early_uart::PL011_VADDR as *mut u8)
                 .expect("PL011 virtual address must be non-null")
         });
