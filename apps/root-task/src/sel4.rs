@@ -1327,6 +1327,14 @@ pub struct SlotAllocator {
     cnode_size_bits: seL4_Word,
 }
 
+/// Snapshot describing the init CNode empty-slot window.
+#[derive(Copy, Clone, Debug)]
+pub struct SlotWindow {
+    pub start: seL4_CPtr,
+    pub next: seL4_CPtr,
+    pub end: seL4_CPtr,
+}
+
 impl SlotAllocator {
     /// Creates a new allocator spanning the provided bootinfo slot region for the supplied root
     /// CNode capability.
@@ -1366,6 +1374,16 @@ impl SlotAllocator {
     #[must_use]
     pub fn used(&self) -> usize {
         self.capacity().saturating_sub(self.remaining())
+    }
+
+    /// Returns a snapshot of the underlying bootinfo empty-slot window.
+    #[must_use]
+    pub fn window(&self) -> SlotWindow {
+        SlotWindow {
+            start: self.start,
+            next: self.next,
+            end: self.end,
+        }
     }
 
     fn alloc(&mut self) -> Option<seL4_CPtr> {
@@ -1576,12 +1594,40 @@ impl DevicePtPool {
         self.index == index
     }
 
+    #[inline(always)]
+    fn page_table_bytes(&self) -> usize {
+        1usize << PAGE_TABLE_BITS
+    }
+
+    #[inline(always)]
+    fn remaining_bytes(&self) -> usize {
+        self.total_bytes.saturating_sub(self.used_bytes)
+    }
+
+    #[inline(always)]
+    fn remaining_tables(&self) -> usize {
+        self.remaining_bytes() / self.page_table_bytes()
+    }
+
     fn reserve_page_table(&mut self) -> Result<ReservedUntyped, seL4_Error> {
-        let page_table_bytes = 1usize << PAGE_TABLE_BITS;
-        if self.used_bytes.saturating_add(page_table_bytes) > self.total_bytes {
+        let page_table_bytes = self.page_table_bytes();
+        if page_table_bytes > self.remaining_bytes() {
+            log::error!(
+                "[device-pt] pool exhausted: ut=0x{ut:03x} used={used}B total={total}B tables_remaining=0",
+                ut = self.ut_slot,
+                used = self.used_bytes,
+                total = self.total_bytes,
+            );
             return Err(seL4_NotEnoughMemory);
         }
         self.used_bytes = self.used_bytes.saturating_add(page_table_bytes);
+        log::trace!(
+            "[device-pt] reserve ut=0x{ut:03x} paddr=0x{paddr:08x} used={used}B remaining_tables={remaining}",
+            ut = self.ut_slot,
+            paddr = self.paddr,
+            used = self.used_bytes,
+            remaining = self.remaining_tables(),
+        );
         Ok(ReservedUntyped {
             cap: self.ut_slot,
             paddr: self.paddr,
@@ -2785,14 +2831,30 @@ impl<'a> KernelEnv<'a> {
         vaddr >= DEVICE_VADDR_BASE && vaddr < DMA_VADDR_BASE
     }
 
-    fn reserve_device_page_table(&mut self) -> Result<ReservedUntyped, seL4_Error> {
-        let pool = self
-            .device_pt_pool
-            .as_mut()
-            .ok_or(sel4_sys::seL4_FailedLookup)?;
+    fn reserve_device_page_table(
+        &mut self,
+        level: &'static str,
+        vaddr: usize,
+    ) -> Result<ReservedUntyped, seL4_Error> {
+        let Some(pool) = self.device_pt_pool.as_mut() else {
+            log::error!(
+                "[device-pt] pool unavailable for level={level} vaddr=0x{vaddr:016x}; cannot reserve",
+            );
+            return Err(sel4_sys::seL4_NotEnoughMemory);
+        };
+        let before = pool.remaining_tables();
         let reserved = pool.reserve_page_table()?;
         self.untyped
             .record_usage(pool.index, pool.used_bytes as u128);
+        log::debug!(
+            "[device-pt] reserve level={level} vaddr=0x{vaddr:016x} remaining_tables={remaining}",
+            remaining = pool.remaining_tables(),
+        );
+        if before == 0 {
+            log::warn!(
+                "[device-pt] pool reported no remaining tables before allocation; reservation forced failure path"
+            );
+        }
         Ok(reserved)
     }
 
@@ -2809,6 +2871,20 @@ impl<'a> KernelEnv<'a> {
         self.untyped.release(reserved);
     }
 
+    fn reserve_page_table_for_vaddr(
+        &mut self,
+        vaddr: usize,
+        level: &'static str,
+    ) -> Result<ReservedUntyped, seL4_Error> {
+        if self.is_device_window_vaddr(vaddr) {
+            return self.reserve_device_page_table(level, vaddr);
+        }
+
+        self.untyped
+            .reserve_ram(PAGE_TABLE_BITS as u8)
+            .ok_or(seL4_NotEnoughMemory)
+    }
+
     fn ensure_page_table(&mut self, vaddr: usize, strict: bool) -> Result<(), seL4_Error> {
         self.ensure_page_directory(vaddr, strict)?;
         let pt_base = PageTableBookkeeper::<MAX_PAGE_TABLES>::base_for(vaddr);
@@ -2816,14 +2892,7 @@ impl<'a> KernelEnv<'a> {
             return Ok(());
         }
 
-        let use_device_pool = self.is_device_window_vaddr(vaddr) && self.device_pt_pool.is_some();
-        let reserved = if use_device_pool {
-            self.reserve_device_page_table()?
-        } else {
-            self.untyped
-                .reserve_ram(PAGE_TABLE_BITS as u8)
-                .ok_or(seL4_NotEnoughMemory)?
-        };
+        let reserved = self.reserve_page_table_for_vaddr(pt_base, "page_table")?;
         let pt_slot = self.allocate_slot();
         let trace = self.prepare_retype_trace(
             &reserved,
@@ -2896,10 +2965,7 @@ impl<'a> KernelEnv<'a> {
 
         self.ensure_page_upper_directory(vaddr, strict)?;
 
-        let reserved = self
-            .untyped
-            .reserve_ram(PAGE_TABLE_BITS as u8)
-            .ok_or(seL4_NotEnoughMemory)?;
+        let reserved = self.reserve_page_table_for_vaddr(pd_base, "page_directory")?;
         let pd_slot = self.allocate_slot();
         let trace = self.prepare_retype_trace(
             &reserved,
@@ -2964,10 +3030,7 @@ impl<'a> KernelEnv<'a> {
             return Ok(());
         }
 
-        let reserved = self
-            .untyped
-            .reserve_ram(PAGE_TABLE_BITS as u8)
-            .ok_or(seL4_NotEnoughMemory)?;
+        let reserved = self.reserve_page_table_for_vaddr(pud_base, "page_upper_directory")?;
         let pud_slot = self.allocate_slot();
         let trace = self.prepare_retype_trace(
             &reserved,
@@ -3056,6 +3119,16 @@ impl<'a> KernelEnv<'a> {
 
     fn log_retype_invocation(&self, trace: &RetypeTrace) {
         let init_cnode_cap = self.bootinfo.init_cnode_cap();
+        let window = self.slots.window();
+        let boot_first_free = self.bootinfo.empty_first_slot();
+        log::trace!(
+            "[cspace] window start=0x{start:04x} next=0x{next:04x} end=0x{end:04x} boot_first_free=0x{boot_first:04x} dest=0x{dest:04x}",
+            start = window.start,
+            next = window.next,
+            end = window.end,
+            boot_first = boot_first_free,
+            dest = trace.dest_slot,
+        );
 
         if trace.cnode_root == init_cnode_cap {
             log::trace!(
@@ -3334,6 +3407,28 @@ mod tests {
         let addr = 0x0002_0000_1000usize;
         let base = PageUpperDirectoryBookkeeper::<2>::base_for(addr);
         assert_eq!(base, 0x0002_0000_0000);
+    }
+
+    #[test]
+    fn device_pool_allocation_stops_at_capacity() {
+        let mut pool = DevicePtPool {
+            ut_slot: 0x0f3,
+            paddr: 0x4000_0000,
+            size_bits: 16,
+            index: 3,
+            used_bytes: 0,
+            total_bytes: 1 << 16,
+        };
+
+        let mut successes = 0;
+        while pool.remaining_tables() > 0 {
+            pool.reserve_page_table()
+                .expect("reservation within capacity");
+            successes += 1;
+        }
+
+        assert_eq!(successes, (pool.total_bytes / (1 << PAGE_TABLE_BITS)));
+        assert_eq!(pool.reserve_page_table(), Err(seL4_NotEnoughMemory));
     }
 
     #[test]
