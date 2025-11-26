@@ -327,6 +327,10 @@ Deliverables: Updated documentation set, automation scripts, and passing QEMU TC
   - Update protocol documentation to describe the acknowledgement lifecycle, including reconnection semantics and error payloads.
   - Extend automated coverage so both serial and TCP transports assert the presence of acknowledgements during scripted sessions.
 
+**Checks (DoD)**
+
+- Adding ACK/ERR output MUST NOT change line prefixes, newline behaviour, or attach handshake timing established in Milestone 7c. The Regression Pack must pass without modifying any fixture.
+
 ### Task Breakdown
 ```
 Title/ID: m7d-console-ack
@@ -420,6 +424,7 @@ and provisioning DMA buffers.
 - HAL error propagation surfaces seL4 error codes for diagnostics (no regression in boot failure logs).
 - Workspace `cargo check` succeeds with the kernel and net-console features enabled.
 - Run the Regression Pack (see “Docs-as-Built Alignment”) to confirm console behaviour, networking event pump cadence, and NineDoor flows are unchanged despite the new HAL. Any change in ACK/ERR or `/proc/boot` output must be documented and justified.
+- HAL introduction MUST NOT alter device MMIO layout, IRQ numbering, or virtio feature-negotiation visible in QEMU logs. Any change requires a manifest schema bump and doc update.
 
 ---
 ## Milestone 8b — Root-Task Compiler & Deterministic Profiles
@@ -458,6 +463,7 @@ Introduce the `coh-rtc` compiler that ingests `configs/root_task.toml` and emits
 - Root task boots under QEMU using generated bootstrap tables; serial log shows manifest fingerprint and ticket registration sourced from generated code.
 - Compiler validation rejects manifests that violate red lines (e.g., invalid walk depth, enabling `gpu` while `profile.kernel` omits the feature gate) and exits with non-zero status.
 - Run the Regression Pack and reject any drift in `tests/cli/boot_v0.cohsh` output or manifest fingerprints unless the docs and schema version are updated in the same change.
+- Generated modules MUST NOT introduce new global state or reorder initialisation in a way that changes serial boot ordering or `/proc/boot` output.
 
 **Compiler touchpoints**
 - Introduces `root_task.schema = "1.0"`; schema mismatches abort generation and instruct operators to upgrade docs.
@@ -492,6 +498,8 @@ Wrap the AArch64-specific VSpace cache operations in the HAL, wire them into man
 ---
 ## Milestone 9 — Secure9P Pipelining & Batching
 
+(Clarification) Milestones 9–12 intentionally build on the full 7d acknowledgement grammar. Do NOT attempt to pull 9P batching/pipelining earlier than 7d; doing so breaks test surfaces.
+
 **Why now (compiler):** Host NineDoor already handles baseline 9P flows, but upcoming use cases demand concurrent telemetry and command streams. Enabling multiple in-flight tags and batched writes requires new core structures and manifest knobs so deployments tune throughput without compromising determinism.
 
 **Goal**
@@ -520,6 +528,7 @@ Refactor Secure9P into codec/core crates with bounded pipelining and manifest-co
 - Batched frames round-trip within negotiated `msize`; when the manifest disables batching the same tests pass with single-frame semantics.
 - Short-write retry policies (e.g., exponential back-off) are enforced according to manifest configuration and verified by CLI regression output.
 - Re-run the Regression Pack to ensure pipelining and batching do not alter existing single-request semantics (tags, errors, or short-write handling) as exercised by earlier CLI scripts.
+- Tag scheduling MUST remain deterministic: single-request scripts from milestones ≤7 MUST still produce byte-identical ACK/ERR sequences.
 
 **Compiler touchpoints**
 - `coh-rtc` emits concurrency defaults into generated Rust tables and CLI fixtures; docs snippets pull from the manifest rather than hard-coded prose.
@@ -553,6 +562,7 @@ Implement ring-backed telemetry providers with manifest-governed sizes and CBOR 
 - Latency metrics (P50/P95) captured during tests and recorded in `docs/SECURITY.md`, sourced from automated output instead of manual measurements.
 - Attempts to exceed manifest-declared ring quotas are rejected and logged; CI asserts the rejection path.
 - Re-run the Regression Pack to confirm that adding ring-backed telemetry does not change console grammar or existing `/worker/<id>/telemetry` semantics outside the new CBOR frames.
+- Introduction of CBOR telemetry MUST NOT alter legacy plain-text worker telemetry unless explicitly gated by manifest field `telemetry.frame_schema`.
 
 **Compiler touchpoints**
 - Codegen emits ring metadata for `/proc/boot` so operators can inspect per-worker quotas; docs pull from the generated JSON to avoid drift.
@@ -584,6 +594,7 @@ Introduce manifest-driven namespace sharding with optional legacy aliases.
 - 1k worker sessions attach concurrently without starvation; metrics exported via `/proc/9p/sessions` demonstrate shard distribution.
 - Enabling legacy aliases preserves `/worker/<id>` paths for backwards compatibility; disabling them causes the compiler to reject manifests that still reference legacy paths.
 - Re-run the Regression Pack and compare paths: legacy `/worker/<id>` scripts must either continue to pass when aliases are enabled or fail deterministically when aliasing is disabled, with matching docs and manifest examples.
+- Walk-depth MUST remain ≤8 at all times; CI must emit a hard error if shard/alias combinations ever generate deeper paths.
 
 **Compiler touchpoints**
 - Generated bootstrap code publishes shard tables for the event pump and NineDoor bridge; docs consume the same tables.
@@ -615,6 +626,7 @@ Add pooled sessions and retry policies to `cohsh`, governed by compiler-exported
 - Retry logic proves idempotent: injected short-write failures eventually succeed without duplicating telemetry or exhausting tickets.
 - CLI refuses to start when the manifest policy hash mismatches the compiled defaults.
 - Re-run the Regression Pack and assert that pooled sessions preserve ACK/ERR ordering and idempotent retries for all existing CLI scripts.
+- Pooled sessions MUST NOT reorder ACKs across operations that were previously strictly ordered (attach/log/tail/quit baseline).
 
 **Compiler touchpoints**
 - `coh-rtc` emits policy TOML plus hash recorded in docs/tests; regeneration guard compares CLI-consumed hash with manifest fingerprint.
@@ -647,6 +659,7 @@ Expose audit-friendly observability nodes under `/proc` generated from the manif
 - CLI tail output remains parseable and line-oriented; regression test asserts exact output grammar.
 - Compiler rejects manifests that attempt to enable observability nodes without allocating sufficient buffers.
 - Re-run the Regression Pack to ensure `/proc` additions are strictly additive and do not change existing node sizes, EOF behaviour, or latency characteristics beyond documented tolerances.
+- `/proc` nodes MUST NOT change default units, JSON keys, or column spacing without a manifest schema revision and updated golden outputs.
 
 **Compiler touchpoints**
 - Generated code provides `/proc` descriptors; docs embed them via compiler output.
@@ -679,6 +692,7 @@ Provide CAS-backed update distribution via NineDoor with compiler-enforced integ
 - Signing path tested with fixture keys; unsigned mode explicitly documented and requires manifest acknowledgement (e.g., `cas.signing.required = false`).
 - Compiler rejects manifests where CAS storage exceeds event-pump memory budgets or chunk sizes exceed `msize`.
 - Re-run the Regression Pack and verify that enabling CAS does not change baseline NineDoor error codes or 9P limits (e.g., `msize`, walk depth) enforced by earlier milestones.
+- CAS fetch paths MUST NOT alter 9P latency or error codes for non-CAS workloads; regression pack MUST prove no change in baseline attach/log/tail flows.
 
 **Compiler touchpoints**
 - Codegen emits CAS provider tables and host-tool manifest templates; docs ingest the same JSON to prevent drift.
@@ -689,6 +703,8 @@ Provide CAS-backed update distribution via NineDoor with compiler-enforced integ
 ## Milestone 15 — UEFI Bare-Metal Boot & Device Identity
 
 **Why now (context):** To meet hardware deployment goals (Edge §3 retail hubs, Edge §8 defense ISR, Security §12 segmentation) we must boot on physical aarch64 hardware with attested manifests while preserving the lean `no_std` footprint.
+
+Note: No networking, 9P semantics, or console behaviours may diverge between VM and UEFI profiles except where explicitly marked as hardware-profile-specific in `ARCHITECTURE.md`. Any divergence must be documented and schema-gated.
 
 **Goal**
 Deliver a UEFI boot path that loads the generated manifest, performs TPM-backed identity attestation, and mirrors VM behaviour.
@@ -712,6 +728,7 @@ Deliver a UEFI boot path that loads the generated manifest, performs TPM-backed 
 - TPM-backed attestation chain exported via `/proc/boot` matches manifest hash and does not leak secret material; failure to access TPM causes boot abort with audited error.
 - Compiler rejects manifests selecting the UEFI profile without providing required hardware bindings or attestation settings.
 - For this milestone, run the full Regression Pack both under QEMU and (where applicable) on the target hardware profile, and treat any divergence between the two as a bug unless explicitly documented.
+- UEFI boot MUST preserve exact serial startup ordering: any drift vs. VM baseline is treated as a bug unless documented and gated by profile.
 
 **Compiler touchpoints**
 - `coh-rtc` emits hardware tables for the selected profile; docs import them for `docs/HARDWARE_BRINGUP.md` and `docs/ARCHITECTURE.md`.
@@ -748,6 +765,7 @@ Deliver a library of host/worker sidecars (outside the VM where possible) that b
 - LoRa scheduler enforces duty-cycle constraints under stress tests.
 - Offline telemetry spooling validated for MODBUS/DNP3 adapters with manifest-driven limits.
 - For this milestone, run the full Regression Pack both under QEMU and (where applicable) on the target hardware profile, and treat any divergence between the two as a bug unless explicitly documented.
+- Sidecar mounts MUST NOT introduce new `/bus` or `/lora` names that collide with legacy namespaces; compiler must hash-prefix automatically if conflicts appear.
 
 **Compiler touchpoints**
 - IR v1.5 ensures mounts/roles/quotas for sidecars, generating documentation tables and manifest fragments consumed by host tooling.
@@ -763,6 +781,7 @@ Deliver a library of host/worker sidecars (outside the VM where possible) that b
 **Checks**
 - Console (serial/TCP) ≡ `cohsh` CLI ≡ `cohsh-core` tests (byte-for-byte ACK/ERR/END).
 - Heapless build passes; no unbounded allocations.
+- UI/CLI/console equivalence MUST be preserved: ACK/ERR/END sequences must remain byte-stable relative to the 7c baseline.
 
 ---
 
@@ -775,6 +794,7 @@ Deliver a library of host/worker sidecars (outside the VM where possible) that b
 **Checks**
 - `tail()` stream over 9P matches console stream identically.
 - `spawn/kill` via file writes produce identical ACK/ERR semantics.
+- UI/CLI/console equivalence MUST be preserved: ACK/ERR/END sequences must remain byte-stable relative to the 7c baseline.
 
 ---
 
@@ -789,6 +809,7 @@ Deliver a library of host/worker sidecars (outside the VM where possible) that b
 - `.cbor` and `.txt` variants; cursor-resume semantics for long reads.  
 **Checks**
 - Each provider ≤ 32 KiB per read; deterministic EOF; fuzzed frames don’t panic.
+- UI/CLI/console equivalence MUST be preserved: ACK/ERR/END sequences must remain byte-stable relative to the 7c baseline.
 
 ---
 
@@ -802,6 +823,7 @@ Deliver a library of host/worker sidecars (outside the VM where possible) that b
 **Checks**
 - Renders telemetry; shows exact `OK …` then stream, terminates with `END`.
 - Build proves no HTTP/REST dependencies (static link audit).
+- UI/CLI/console equivalence MUST be preserved: ACK/ERR/END sequences must remain byte-stable relative to the 7c baseline.
 
 ---
 
@@ -813,6 +835,7 @@ Deliver a library of host/worker sidecars (outside the VM where possible) that b
 **Checks**
 - Works offline; wrong/expired ticket → deterministic `ERR reason=Permission`.
 - CBOR parsing identical to SwarmUI.
+- UI/CLI/console equivalence MUST be preserved: ACK/ERR/END sequences must remain byte-stable relative to the 7c baseline.
 
 ---
 
@@ -824,6 +847,7 @@ Deliver a library of host/worker sidecars (outside the VM where possible) that b
 **Checks**
 - Script `help → attach → log → spawn → tail → quit` matches across all frontends.
 - Timing deltas < 50 ms in smoltcp simulation (tolerance documented).
+- UI/CLI/console equivalence MUST be preserved: ACK/ERR/END sequences must remain byte-stable relative to the 7c baseline.
 
 ---
 
@@ -835,6 +859,7 @@ Deliver a library of host/worker sidecars (outside the VM where possible) that b
 **Checks**
 - Write with read-only ticket → `ERR EPERM` across all transports.
 - Quota breach → `ERR ELIMIT`; audit lines consistent and deterministic.
+- UI/CLI/console equivalence MUST be preserved: ACK/ERR/END sequences must remain byte-stable relative to the 7c baseline.
 
 ---
 
@@ -846,6 +871,7 @@ Deliver a library of host/worker sidecars (outside the VM where possible) that b
 **Checks**
 - Replay reproduces identical telemetry curves and ACK sequences.
 - Trace size target ≤ 1 MiB per 10 s of tail traffic.
+- UI/CLI/console equivalence MUST be preserved: ACK/ERR/END sequences must remain byte-stable relative to the 7c baseline.
 
 ---
 ### Docs-as-Built Alignment (applies to Milestone 8 onward)
@@ -880,3 +906,12 @@ To prevent drift:
      - Run the full regression pack unchanged and fail on any output drift (including ACK/ERR/END lines, `/proc` grammars, and telemetry formats).
      - Only permit intentional behaviour changes when the relevant CLI scripts, doc snippets, and manifest fields are updated **in the same change**.
    - The regression pack is treated as the canonical “no-regression” harness; new tests are **additive**, not substitutes.
+
+6. **Cross-Milestone Stability Rules**
+   - Changes to console ACK/ERR/END grammar, NineDoor error codes, or `/proc` node formats MUST be treated as breaking changes and require:
+     - (a) matching updates to all CLI fixtures under `tests/cli/*`,
+     - (b) regeneration of manifest-derived snippets,
+     - (c) explicit doc updates in `INTERFACES.md`, and
+     - (d) a version bump of the manifest schema.
+   - Milestones ≥ 9 MUST NOT introduce new 9P verbs or extend grammars unless routed through the manifest compiler and validated by IR red lines.
+   - Networking cadence and event-pump tick pacing MUST NOT shift across milestones unless the change is documented in `SECURITY.md` with updated bounds.
