@@ -1485,6 +1485,7 @@ pub struct ReservedUntyped {
     paddr: usize,
     size_bits: u8,
     index: usize,
+    reserved_bytes: u128,
 }
 
 impl ReservedUntyped {
@@ -1504,6 +1505,12 @@ impl ReservedUntyped {
     #[must_use]
     pub fn size_bits(&self) -> u8 {
         self.size_bits
+    }
+
+    /// Returns the number of bytes reserved from this untyped instance.
+    #[must_use]
+    pub fn reserved_bytes(&self) -> u128 {
+        self.reserved_bytes
     }
 
     /// Returns the index within the bootinfo untyped list.
@@ -1541,11 +1548,28 @@ pub struct DeviceCoverage {
     pub used: bool,
 }
 
+#[derive(Copy, Clone, Debug)]
+struct TrackedUntyped {
+    desc: UntypedDesc,
+    used_bytes: u128,
+}
+
+impl TrackedUntyped {
+    #[inline(always)]
+    fn capacity_bytes(&self) -> u128 {
+        1u128 << self.desc.size_bits
+    }
+
+    #[inline(always)]
+    fn remaining_bytes(&self) -> u128 {
+        self.capacity_bytes().saturating_sub(self.used_bytes)
+    }
+}
+
 /// Index of bootinfo-provided untyped capabilities available to the root task.
 pub struct UntypedCatalog<'a> {
     bootinfo: &'a seL4_BootInfo,
-    entries: Vec<UntypedDesc, MAX_BOOTINFO_UNTYPEDS>,
-    used: Vec<usize, MAX_BOOTINFO_UNTYPEDS>,
+    entries: Vec<TrackedUntyped, MAX_BOOTINFO_UNTYPEDS>,
 }
 
 impl<'a> UntypedCatalog<'a> {
@@ -1554,91 +1578,84 @@ impl<'a> UntypedCatalog<'a> {
         let count = bootinfo.untyped.end - bootinfo.untyped.start;
         let mut entries = Vec::new();
         for desc in &bootinfo.untypedList[..count as usize] {
+            let tracked = TrackedUntyped {
+                desc: (*desc).into(),
+                used_bytes: 0,
+            };
             entries
-                .push((*desc).into())
+                .push(tracked)
                 .expect("bootinfo untyped list exceeds MAX_BOOTINFO_UNTYPEDS");
         }
-        Self {
-            bootinfo,
-            entries,
-            used: Vec::new(),
-        }
+        Self { bootinfo, entries }
     }
 
-    fn is_used(&self, index: usize) -> bool {
-        self.used.iter().any(|&value| value == index)
-    }
-
-    fn reserve_index(&mut self, index: usize) -> Option<ReservedUntyped> {
-        if self.is_used(index) {
+    fn reserve_index(&mut self, index: usize, obj_bits: u8) -> Option<ReservedUntyped> {
+        let entry = self.entries.get_mut(index)?;
+        let obj_bytes = 1u128 << core::cmp::min(obj_bits, 127);
+        let capacity_bytes = entry.capacity_bytes();
+        if entry.used_bytes.saturating_add(obj_bytes) > capacity_bytes {
             return None;
         }
-        self.used.push(index).ok()?;
-        let desc = self.entries.get(index)?;
+        entry.used_bytes = entry.used_bytes.saturating_add(obj_bytes);
         Some(ReservedUntyped {
             cap: self.bootinfo.untyped.start + index as seL4_CPtr,
-            paddr: desc.paddr as usize,
-            size_bits: desc.size_bits,
+            paddr: entry.desc.paddr as usize,
+            size_bits: entry.desc.size_bits,
             index,
+            reserved_bytes: obj_bytes,
         })
     }
 
     /// Reserves an untyped covering the supplied device physical address range.
     pub fn reserve_device(&mut self, paddr: usize, size_bits: usize) -> Option<ReservedUntyped> {
         let end = paddr.saturating_add(1usize << size_bits);
-        for (index, desc) in self.entries.iter().enumerate() {
-            if desc.is_device == 0 || self.is_used(index) {
+        for (index, entry) in self.entries.iter().enumerate() {
+            if entry.desc.is_device == 0 {
                 continue;
             }
-            let base = desc.paddr as usize;
-            let limit = base.saturating_add(1usize << desc.size_bits);
+            let base = entry.desc.paddr as usize;
+            let limit = base.saturating_add(1usize << entry.desc.size_bits);
             if base <= paddr && end <= limit {
-                return self.reserve_index(index);
+                return self.reserve_index(index, size_bits as u8);
             }
         }
         None
     }
 
     /// Reserves the first RAM untyped meeting the requested size.
-    pub fn reserve_ram(&mut self, min_size_bits: u8) -> Option<ReservedUntyped> {
-        for (index, desc) in self.entries.iter().enumerate() {
-            if desc.is_device != 0 || desc.size_bits < min_size_bits || self.is_used(index) {
-                continue;
-            }
-            return self.reserve_index(index);
-        }
-        None
-    }
-
-    fn release_index(&mut self, index: usize) {
-        if let Some(position) = self.used.iter().position(|&value| value == index) {
-            let _ = self.used.swap_remove(position);
-        }
+    pub fn reserve_ram(&mut self, obj_bits: u8) -> Option<ReservedUntyped> {
+        self.entries
+            .iter()
+            .enumerate()
+            .find(|(_, entry)| entry.desc.is_device == 0 && entry.desc.size_bits >= obj_bits)
+            .and_then(|(index, _)| self.reserve_index(index, obj_bits))
     }
 
     /// Releases a previously reserved untyped so it may be reused.
     pub fn release(&mut self, reserved: &ReservedUntyped) {
-        self.release_index(reserved.index);
+        if let Some(entry) = self.entries.get_mut(reserved.index) {
+            entry.used_bytes = entry.used_bytes.saturating_sub(reserved.reserved_bytes);
+        }
     }
 
     /// Returns diagnostic statistics describing untyped catalogue utilisation.
     #[must_use]
     pub fn stats(&self) -> UntypedStats {
         let total = self.entries.len();
-        let used = self.used.len();
+        let used = self
+            .entries
+            .iter()
+            .filter(|entry| entry.used_bytes > 0)
+            .count();
         let device_total = self
             .entries
             .iter()
-            .filter(|desc| desc.is_device != 0)
+            .filter(|entry| entry.desc.is_device != 0)
             .count();
         let device_used = self
-            .used
+            .entries
             .iter()
-            .filter(|&&index| {
-                self.entries
-                    .get(index)
-                    .map_or(false, |desc| desc.is_device != 0)
-            })
+            .filter(|entry| entry.desc.is_device != 0 && entry.used_bytes > 0)
             .count();
         UntypedStats {
             total,
@@ -1648,23 +1665,31 @@ impl<'a> UntypedCatalog<'a> {
         }
     }
 
+    /// Records previously consumed bytes for the specified untyped index.
+    pub fn record_usage(&mut self, index: usize, used_bytes: u128) {
+        if let Some(entry) = self.entries.get_mut(index) {
+            let clamped = core::cmp::min(entry.capacity_bytes(), used_bytes);
+            entry.used_bytes = core::cmp::max(entry.used_bytes, clamped);
+        }
+    }
+
     /// Locates the device untyped covering the requested physical range, if available.
     #[must_use]
     pub fn device_coverage(&self, paddr: usize, size_bits: usize) -> Option<DeviceCoverage> {
         let end = paddr.saturating_add(1usize << size_bits);
-        self.entries.iter().enumerate().find_map(|(index, desc)| {
-            if desc.is_device == 0 {
+        self.entries.iter().enumerate().find_map(|(index, entry)| {
+            if entry.desc.is_device == 0 {
                 return None;
             }
-            let base = desc.paddr as usize;
-            let limit = base.saturating_add(1usize << desc.size_bits);
+            let base = entry.desc.paddr as usize;
+            let limit = base.saturating_add(1usize << entry.desc.size_bits);
             if base <= paddr && end <= limit {
                 Some(DeviceCoverage {
                     base,
                     limit,
-                    size_bits: desc.size_bits,
+                    size_bits: entry.desc.size_bits,
                     index,
-                    used: self.is_used(index),
+                    used: entry.used_bytes > 0,
                 })
             } else {
                 None
@@ -2034,6 +2059,11 @@ impl<'a> KernelEnv<'a> {
     /// Returns the bootinfo pointer passed to the root task.
     pub fn bootinfo(&self) -> &'a seL4_BootInfo {
         self.bootinfo
+    }
+
+    /// Records previously consumed bytes for a bootinfo-provided untyped.
+    pub fn record_untyped_bytes(&mut self, index: usize, used_bytes: u128) {
+        self.untyped.record_usage(index, used_bytes);
     }
 
     /// Returns a view over the init thread IPC buffer if it has been installed.
@@ -3283,6 +3313,7 @@ mod tests {
             paddr: 0,
             size_bits: PAGE_BITS as u8,
             index: 0,
+            reserved_bytes: 1 << PAGE_BITS,
         };
         let slot: seL4_CPtr = 0x00c8;
         let trace = env.prepare_retype_trace(
@@ -3316,6 +3347,7 @@ mod tests {
             paddr: 0,
             size_bits: PAGE_TABLE_BITS as u8,
             index: 0,
+            reserved_bytes: 1 << PAGE_TABLE_BITS,
         };
         let slot: seL4_CPtr = 0x00a2;
         let trace = env.prepare_retype_trace(

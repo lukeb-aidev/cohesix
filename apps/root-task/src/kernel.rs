@@ -1053,6 +1053,11 @@ fn bootstrap<P: Platform>(
         bits = bootinfo_ref.init_cnode_bits(),
     );
     console.writeln_prefixed(cnode_line.as_str());
+
+    kernel_env.record_untyped_bytes(
+        notification_selection.index,
+        notification_selection.used_bytes,
+    );
     let mut hal = KernelHal::new(kernel_env);
     if consumed_slots > 0 {
         hal.consume_bootstrap_slots(consumed_slots);
@@ -1066,8 +1071,8 @@ fn bootstrap<P: Platform>(
 
     let pl011_paddr = usize::try_from(PL011_PADDR)
         .expect("PL011 physical address must fit within usize on this platform");
-    let uart_region = match hal.map_device(pl011_paddr) {
-        Ok(region) => Some(region),
+    let (uart_region, pl011_map_error) = match hal.map_device(pl011_paddr) {
+        Ok(region) => (Some(region), None),
         Err(HalError::Sel4(err)) => {
             let error_code = err as i32;
             let error_label = error_name(err);
@@ -1080,6 +1085,11 @@ fn bootstrap<P: Platform>(
                 code = error_code,
             );
             console.writeln_prefixed(line.as_str());
+            if err == sel4_sys::seL4_NotEnoughMemory {
+                log::error!(
+                    "[pl011] device PageTable retype hit NotEnoughMemory; planner under-reserved RAM for device mappings"
+                );
+            }
 
             let snapshot = hal.snapshot();
             let mut window = heapless::String::<160>::new();
@@ -1307,11 +1317,11 @@ fn bootstrap<P: Platform>(
             }
 
             log::warn!(
-                "[pl011] UART map failed with {label} ({code}); continuing without MMIO console",
+                "[pl011] UART map failed with {label} ({code}); PL011 MMIO console unavailable",
                 label = error_label,
                 code = error_code,
             );
-            None
+            (None, Some(err))
         }
     };
 
@@ -1336,8 +1346,9 @@ fn bootstrap<P: Platform>(
         let fallback_vaddr = uart_ptr.as_ptr() as usize;
         let _ = write!(
             map_line,
-            "[vspace:map] pl011 using fallback vaddr=0x{vaddr:016x} (no new device map)",
+            "[vspace:map] pl011 mapping unavailable (err={label}); fallback vaddr=0x{vaddr:016x}",
             vaddr = fallback_vaddr,
+            label = pl011_map_error.map(error_name).unwrap_or("unknown"),
         );
     }
     console.writeln_prefixed(map_line.as_str());
@@ -1345,6 +1356,9 @@ fn bootstrap<P: Platform>(
     let mut driver = Pl011::new(uart_ptr);
     driver.init();
     console.writeln_prefixed("[uart] init OK");
+    if uart_region.is_some() {
+        driver.write_str("[console] PL011 console online\n");
+    }
     #[cfg(all(feature = "kernel", not(sel4_config_printing)))]
     {
         unsafe {

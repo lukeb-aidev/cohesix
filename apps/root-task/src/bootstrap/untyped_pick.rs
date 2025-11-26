@@ -40,6 +40,8 @@ impl RetypePlan {
 pub struct UntypedSelection {
     /// Capability pointer referencing the selected untyped slot.
     pub cap: sys::seL4_CPtr,
+    /// Index of the untyped within the bootinfo list.
+    pub index: usize,
     /// Size (in bits) reported by the kernel for the untyped.
     pub size_bits: u8,
     /// Bytes already consumed from this untyped by prior allocations.
@@ -104,11 +106,13 @@ fn plan_for_untyped(cap: sys::seL4_CPtr, size_bits: u8, dest_start: sys::seL4_CP
         );
     }
 
+    let reserve_bytes = page_table_bytes;
     let requested_pages = min(u128::from(u32::MAX), capacity_bytes / page_bytes) as u32;
-    let available_pages = (capacity_bytes.saturating_sub(used_bytes) / page_bytes)
+    let available_pages = (capacity_bytes.saturating_sub(used_bytes + reserve_bytes) / page_bytes)
         .min(u128::from(requested_pages)) as u32;
-    let used_after_pages =
-        used_bytes.saturating_add(page_bytes.saturating_mul(available_pages as u128));
+    let used_after_pages = used_bytes
+        .saturating_add(reserve_bytes)
+        .saturating_add(page_bytes.saturating_mul(available_pages as u128));
     if available_pages < requested_pages {
         log_plan_skip(cap, "Page", page_bytes, capacity_bytes, used_after_pages);
     }
@@ -142,6 +146,7 @@ pub fn pick_untyped(bi: &'static BootInfo, min_bits: u8) -> UntypedSelection {
             let cap = bi.untyped.start + offset as sys::seL4_CPtr;
             let selection = UntypedSelection {
                 cap,
+                index: offset,
                 size_bits: ut.sizeBits as u8,
                 used_bytes: 0,
                 plan: plan_for_untyped(cap, ut.sizeBits as u8, dest_start),
@@ -160,6 +165,7 @@ pub fn pick_untyped(bi: &'static BootInfo, min_bits: u8) -> UntypedSelection {
     let cap = bi.untyped.start + offset as sys::seL4_CPtr;
     let selection = UntypedSelection {
         cap,
+        index: offset,
         size_bits: ut.sizeBits as u8,
         used_bytes: 0,
         plan: plan_for_untyped(cap, ut.sizeBits as u8, dest_start),
@@ -198,7 +204,7 @@ mod tests {
     fn page_table_consumption_limits_pages() {
         let plan = plan_for_untyped(0x0100, 16, 0x010f);
         assert_eq!(plan.page_tables, 1);
-        assert_eq!(plan.small_pages, 15);
-        assert_eq!(plan.total, 16);
+        assert_eq!(plan.small_pages, 14);
+        assert_eq!(plan.total, 15);
     }
 }
