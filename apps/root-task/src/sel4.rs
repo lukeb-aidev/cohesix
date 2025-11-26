@@ -1624,11 +1624,14 @@ impl<'a> UntypedCatalog<'a> {
 
     /// Reserves the first RAM untyped meeting the requested size.
     pub fn reserve_ram(&mut self, obj_bits: u8) -> Option<ReservedUntyped> {
-        self.entries
+        let index = self
+            .entries
             .iter()
             .enumerate()
             .find(|(_, entry)| entry.desc.is_device == 0 && entry.desc.size_bits >= obj_bits)
-            .and_then(|(index, _)| self.reserve_index(index, obj_bits))
+            .map(|(index, _)| index)?;
+
+        self.reserve_index(index, obj_bits)
     }
 
     /// Releases a previously reserved untyped so it may be reused.
