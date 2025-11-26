@@ -30,7 +30,10 @@ pub mod retype;
 /// Helpers for selecting RAM-backed untyped capabilities during bootstrap.
 pub mod untyped_pick;
 
-pub use untyped_pick::{pick_untyped, RetypePlan, UntypedSelection};
+pub use untyped_pick::{
+    device_pt_pool, ensure_device_pt_pool, pick_untyped, DevicePtPoolConfig, RetypePlan,
+    UntypedSelection,
+};
 
 #[cfg(feature = "untyped-debug")]
 pub mod untyped;

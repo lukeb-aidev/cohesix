@@ -17,6 +17,7 @@ use crate::bootstrap::cspace_sys;
 use crate::bootstrap::ipcbuf_view::IpcBufView;
 #[cfg(feature = "kernel")]
 use crate::bootstrap::ktry;
+use crate::bootstrap::DevicePtPoolConfig;
 use crate::sel4_view;
 use crate::serial;
 use heapless::Vec;
@@ -1549,6 +1550,58 @@ pub struct DeviceCoverage {
 }
 
 #[derive(Copy, Clone, Debug)]
+pub struct DevicePtPool {
+    ut_slot: seL4_CPtr,
+    paddr: usize,
+    size_bits: u8,
+    index: usize,
+    used_bytes: usize,
+    total_bytes: usize,
+}
+
+impl DevicePtPool {
+    pub fn from_config(config: DevicePtPoolConfig) -> Self {
+        Self {
+            ut_slot: config.ut_slot,
+            paddr: config.paddr,
+            size_bits: config.size_bits,
+            index: config.index,
+            used_bytes: 0,
+            total_bytes: config.total_bytes,
+        }
+    }
+
+    #[inline(always)]
+    fn matches_index(&self, index: usize) -> bool {
+        self.index == index
+    }
+
+    fn reserve_page_table(&mut self) -> Result<ReservedUntyped, seL4_Error> {
+        let page_table_bytes = 1usize << PAGE_TABLE_BITS;
+        if self.used_bytes.saturating_add(page_table_bytes) > self.total_bytes {
+            return Err(seL4_NotEnoughMemory);
+        }
+        self.used_bytes = self.used_bytes.saturating_add(page_table_bytes);
+        Ok(ReservedUntyped {
+            cap: self.ut_slot,
+            paddr: self.paddr,
+            size_bits: self.size_bits,
+            index: self.index,
+            reserved_bytes: page_table_bytes as u128,
+        })
+    }
+
+    fn release(&mut self, reserved: &ReservedUntyped) {
+        let bytes = reserved
+            .reserved_bytes
+            .min(self.used_bytes as u128)
+            .try_into()
+            .unwrap_or(0);
+        self.used_bytes = self.used_bytes.saturating_sub(bytes);
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
 struct TrackedUntyped {
     desc: UntypedDesc,
     used_bytes: u128,
@@ -1570,11 +1623,12 @@ impl TrackedUntyped {
 pub struct UntypedCatalog<'a> {
     bootinfo: &'a seL4_BootInfo,
     entries: Vec<TrackedUntyped, MAX_BOOTINFO_UNTYPEDS>,
+    device_pt_pool_index: Option<usize>,
 }
 
 impl<'a> UntypedCatalog<'a> {
     /// Creates a catalog view over the untyped list exported by seL4.
-    pub fn new(bootinfo: &'a seL4_BootInfo) -> Self {
+    pub fn new(bootinfo: &'a seL4_BootInfo, device_pt_pool_index: Option<usize>) -> Self {
         let count = bootinfo.untyped.end - bootinfo.untyped.start;
         let mut entries = Vec::new();
         for desc in &bootinfo.untypedList[..count as usize] {
@@ -1586,7 +1640,11 @@ impl<'a> UntypedCatalog<'a> {
                 .push(tracked)
                 .expect("bootinfo untyped list exceeds MAX_BOOTINFO_UNTYPEDS");
         }
-        Self { bootinfo, entries }
+        Self {
+            bootinfo,
+            entries,
+            device_pt_pool_index,
+        }
     }
 
     fn reserve_index(&mut self, index: usize, obj_bits: u8) -> Option<ReservedUntyped> {
@@ -1628,7 +1686,11 @@ impl<'a> UntypedCatalog<'a> {
             .entries
             .iter()
             .enumerate()
-            .find(|(_, entry)| entry.desc.is_device == 0 && entry.desc.size_bits >= obj_bits)
+            .find(|(idx, entry)| {
+                self.device_pt_pool_index != Some(*idx)
+                    && entry.desc.is_device == 0
+                    && entry.desc.size_bits >= obj_bits
+            })
             .map(|(index, _)| index)?;
 
         self.reserve_index(index, obj_bits)
@@ -1782,6 +1844,7 @@ pub struct KernelEnv<'a> {
     last_retype: Option<RetypeLog>,
     ipcbuf_trace: bool,
     ipcbuf_view: Option<IpcBufView>,
+    device_pt_pool: Option<DevicePtPool>,
 }
 
 /// Diagnostic snapshot capturing resource utilisation within the [`KernelEnv`].
@@ -2011,7 +2074,7 @@ pub struct RetypeLog {
 
 impl<'a> KernelEnv<'a> {
     /// Builds a new environment from the seL4 bootinfo struct.
-    pub fn new(bootinfo: &'a seL4_BootInfo) -> Self {
+    pub fn new(bootinfo: &'a seL4_BootInfo, device_pt_pool: Option<DevicePtPool>) -> Self {
         let root_cnode_bits = bootinfo.init_cnode_bits();
         assert!(
             root_cnode_bits > 0,
@@ -2043,7 +2106,8 @@ impl<'a> KernelEnv<'a> {
             bootinfo.empty,
             root_cnode_bits as seL4_Word,
         );
-        let untyped = UntypedCatalog::new(bootinfo);
+        let pool_index = device_pt_pool.as_ref().map(|pool| pool.index);
+        let untyped = UntypedCatalog::new(bootinfo, pool_index);
         Self {
             bootinfo,
             slots,
@@ -2056,6 +2120,7 @@ impl<'a> KernelEnv<'a> {
             last_retype: None,
             ipcbuf_trace: false,
             ipcbuf_view: None,
+            device_pt_pool,
         }
     }
 
@@ -2715,6 +2780,35 @@ impl<'a> KernelEnv<'a> {
         err == sel4_sys::seL4_DeleteFirst || err == sel4_sys::seL4_IllegalOperation
     }
 
+    #[inline(always)]
+    fn is_device_window_vaddr(&self, vaddr: usize) -> bool {
+        vaddr >= DEVICE_VADDR_BASE && vaddr < DMA_VADDR_BASE
+    }
+
+    fn reserve_device_page_table(&mut self) -> Result<ReservedUntyped, seL4_Error> {
+        let pool = self
+            .device_pt_pool
+            .as_mut()
+            .ok_or(sel4_sys::seL4_FailedLookup)?;
+        let reserved = pool.reserve_page_table()?;
+        self.untyped
+            .record_usage(pool.index, pool.used_bytes as u128);
+        Ok(reserved)
+    }
+
+    fn release_reserved_page_table(&mut self, reserved: &ReservedUntyped) {
+        if let Some(pool) = self.device_pt_pool.as_mut() {
+            if pool.matches_index(reserved.index) {
+                pool.release(reserved);
+                self.untyped
+                    .record_usage(pool.index, pool.used_bytes as u128);
+                return;
+            }
+        }
+
+        self.untyped.release(reserved);
+    }
+
     fn ensure_page_table(&mut self, vaddr: usize, strict: bool) -> Result<(), seL4_Error> {
         self.ensure_page_directory(vaddr, strict)?;
         let pt_base = PageTableBookkeeper::<MAX_PAGE_TABLES>::base_for(vaddr);
@@ -2722,10 +2816,14 @@ impl<'a> KernelEnv<'a> {
             return Ok(());
         }
 
-        let reserved = self
-            .untyped
-            .reserve_ram(PAGE_TABLE_BITS as u8)
-            .ok_or(seL4_NotEnoughMemory)?;
+        let use_device_pool = self.is_device_window_vaddr(vaddr) && self.device_pt_pool.is_some();
+        let reserved = if use_device_pool {
+            self.reserve_device_page_table()?
+        } else {
+            self.untyped
+                .reserve_ram(PAGE_TABLE_BITS as u8)
+                .ok_or(seL4_NotEnoughMemory)?
+        };
         let pt_slot = self.allocate_slot();
         let trace = self.prepare_retype_trace(
             &reserved,
@@ -2737,7 +2835,7 @@ impl<'a> KernelEnv<'a> {
         self.record_retype(trace, RetypeStatus::Pending);
         if let Err(err) = self.retype_page_table(reserved.cap(), &trace) {
             self.record_retype(trace, RetypeStatus::Err(err));
-            self.untyped.release(&reserved);
+            self.release_reserved_page_table(&reserved);
             return Err(err);
         }
         self.record_retype(trace, RetypeStatus::Ok);
@@ -2769,7 +2867,7 @@ impl<'a> KernelEnv<'a> {
             let depth = self.bootinfo.init_cnode_depth();
             let _ = seL4_CNode_Delete(self.init_cnode_cap(), pt_slot as seL4_CPtr, depth.into());
         }
-        self.untyped.release(&reserved);
+        self.release_reserved_page_table(&reserved);
 
         if !strict && Self::mapping_already_present(map_res) {
             log::trace!(
@@ -3310,7 +3408,7 @@ mod tests {
         };
         bootinfo.initThreadCNodeSizeBits = 13;
         let bootinfo_ref: &'static mut seL4_BootInfo = Box::leak(Box::new(bootinfo));
-        let mut env = KernelEnv::new(bootinfo_ref);
+        let mut env = KernelEnv::new(bootinfo_ref, None);
         let reserved = ReservedUntyped {
             cap: 0x200,
             paddr: 0,
@@ -3344,7 +3442,7 @@ mod tests {
         };
         bootinfo.initThreadCNodeSizeBits = 13;
         let bootinfo_ref: &'static mut seL4_BootInfo = Box::leak(Box::new(bootinfo));
-        let mut env = KernelEnv::new(bootinfo_ref);
+        let mut env = KernelEnv::new(bootinfo_ref, None);
         let dummy = ReservedUntyped {
             cap: 0x555,
             paddr: 0,
@@ -3395,7 +3493,7 @@ mod tests {
         };
         bootinfo.initThreadCNodeSizeBits = 13;
         let bootinfo_ref: &'static mut seL4_BootInfo = Box::leak(Box::new(bootinfo));
-        let env = KernelEnv::new(bootinfo_ref);
+        let env = KernelEnv::new(bootinfo_ref, None);
         let init_root = bootinfo_ref.init_cnode_cap();
 
         let slot: seL4_CPtr = 0x00c8;
@@ -3430,7 +3528,7 @@ mod tests {
         };
         bootinfo.initThreadCNodeSizeBits = 13;
         let bootinfo_ref: &'static mut seL4_BootInfo = Box::leak(Box::new(bootinfo));
-        let env = KernelEnv::new(bootinfo_ref);
+        let env = KernelEnv::new(bootinfo_ref, None);
         let init_root = bootinfo_ref.init_cnode_cap();
 
         let slot: seL4_CPtr = 0x0097;
@@ -3468,7 +3566,7 @@ mod tests {
         };
         bootinfo.initThreadCNodeSizeBits = 13;
         let bootinfo_ref: &'static mut seL4_BootInfo = Box::leak(Box::new(bootinfo));
-        let env = KernelEnv::new(bootinfo_ref);
+        let env = KernelEnv::new(bootinfo_ref, None);
         let init_root = bootinfo_ref.init_cnode_cap();
         let expected_depth: seL4_Word = bootinfo_ref.init_cnode_depth() as seL4_Word;
         let valid_trace = RetypeTrace {

@@ -22,7 +22,7 @@ use crate::bootstrap::cspace_sys;
 use crate::bootstrap::{
     boot_tracer,
     cspace::{CSpaceCtx, CSpaceWindow, FirstRetypeResult},
-    ipcbuf, log as boot_log, pick_untyped,
+    device_pt_pool, ensure_device_pt_pool, ipcbuf, log as boot_log, pick_untyped,
     retype::{retype_one, retype_selection},
     BootPhase, UntypedSelection,
 };
@@ -44,8 +44,8 @@ use crate::sel4;
 #[cfg(feature = "cap-probes")]
 use crate::sel4::first_regular_untyped;
 use crate::sel4::{
-    bootinfo_debug_dump, error_name, root_endpoint, BootInfo, BootInfoExt, BootInfoView, KernelEnv,
-    RetypeKind, RetypeStatus, IPC_PAGE_BYTES, MSG_MAX_WORDS,
+    bootinfo_debug_dump, error_name, root_endpoint, BootInfo, BootInfoExt, BootInfoView,
+    DevicePtPool, KernelEnv, RetypeKind, RetypeStatus, IPC_PAGE_BYTES, MSG_MAX_WORDS,
 };
 use crate::serial::{
     pl011::Pl011, SerialDriver, SerialPort, DEFAULT_LINE_CAPACITY, DEFAULT_RX_CAPACITY,
@@ -704,8 +704,13 @@ fn bootstrap<P: Platform>(
         crate::bootstrap::untyped::enumerate_and_plan(bootinfo_ref);
     }
 
+    ensure_device_pt_pool(bootinfo_ref);
+
     #[cfg_attr(feature = "bootstrap-minimal", allow(unused_mut))]
-    let mut kernel_env = KernelEnv::new(bootinfo_ref);
+    let mut kernel_env = KernelEnv::new(
+        bootinfo_ref,
+        device_pt_pool().map(DevicePtPool::from_config),
+    );
     let extra_bytes = bootinfo_view.extra();
     if !extra_bytes.is_empty() {
         console.writeln_prefixed("[boot] deferring DTB parse");
