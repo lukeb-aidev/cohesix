@@ -1514,6 +1514,7 @@ fn bootstrap<P: Platform>(
             crate::bp!("ipc.poll.begin");
             pump.bootstrap_probe();
             crate::bp!("ipc.poll.end");
+            pump.start_cli();
         }
 
         let caps_start = empty_start as u32;

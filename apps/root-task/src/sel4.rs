@@ -1387,6 +1387,14 @@ impl SlotAllocator {
     }
 
     fn alloc(&mut self) -> Option<seL4_CPtr> {
+        if self.next < self.start {
+            ::log::warn!(
+                "[cspace] next slot 0x{next:04x} before window start 0x{start:04x}; correcting",
+                next = self.next,
+                start = self.start,
+            );
+            self.next = self.start;
+        }
         while self.next < self.end {
             while self.next < self.end && is_boot_reserved_slot(self.next) {
                 self.next += 1;
@@ -2247,9 +2255,19 @@ impl<'a> KernelEnv<'a> {
 
     /// Allocates a new CSpace slot, panicking if the root CNode is exhausted.
     pub fn allocate_slot(&mut self) -> seL4_CPtr {
-        self.slots
+        let slot = self
+            .slots
             .alloc()
-            .expect("cspace exhausted while allocating seL4 objects")
+            .expect("cspace exhausted while allocating seL4 objects");
+        let empty_start = self.bootinfo.empty.start;
+        let empty_end = self.bootinfo.empty.end;
+        assert!(
+            slot >= empty_start && slot < empty_end,
+            "allocated slot 0x{slot:04x} outside bootinfo window [0x{start:04x}..0x{end:04x})",
+            start = empty_start,
+            end = empty_end,
+        );
+        slot
     }
 
     /// Maps a physical device frame into the root task's device window.
