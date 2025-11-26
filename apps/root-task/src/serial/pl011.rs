@@ -91,8 +91,9 @@ impl Pl011 {
             let regs = self.regs_mut();
             write_volatile(addr_of_mut!(regs.cr), 0);
             write_volatile(addr_of_mut!(regs.icr), 0x7FF);
-            write_volatile(addr_of_mut!(regs.ibrd), 1);
-            write_volatile(addr_of_mut!(regs.fbrd), 40);
+            write_volatile(addr_of_mut!(regs.imsc), 0);
+            write_volatile(addr_of_mut!(regs.ibrd), 13);
+            write_volatile(addr_of_mut!(regs.fbrd), 2);
             write_volatile(addr_of_mut!(regs.lcrh), LCRH_WLEN_8 | LCRH_FEN);
             write_volatile(addr_of_mut!(regs.cr), CR_UARTEN | CR_TXE | CR_RXE);
         }
