@@ -12,7 +12,7 @@ use sel4_sys::{
 
 pub const PL011_PADDR: u64 = 0x0900_0000;
 /// Virtual address used for the bootstrap console mapping.
-pub const PL011_VADDR: usize = 0x7000_0000;
+pub const PL011_VADDR: usize = 0xA000_0000;
 
 const DR: usize = 0x00;
 const FR: usize = 0x18;

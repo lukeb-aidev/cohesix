@@ -210,7 +210,7 @@ impl CohesixConsole {
     }
 
     fn prompt(&self) {
-        self.emit("Cohesix> ");
+        self.emit("cohesix> ");
     }
 
     fn bootinfo(&self) -> &'static sel4_sys::seL4_BootInfo {
@@ -317,7 +317,7 @@ impl CohesixConsole {
             ep = self.ep_slot,
             uart = self.uart_slot,
         );
-        self.emit_line("[console] Cohesix console ready");
+        self.emit_line("Cohesix console ready.");
         self.prompt();
 
         loop {
