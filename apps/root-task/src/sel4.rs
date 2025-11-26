@@ -1386,7 +1386,7 @@ impl SlotAllocator {
                 "allocated cspace slot exceeds root cnode capacity",
             );
 
-            if sel4::debug_cap_identify(slot) != 0 {
+            if debug_cap_identify(slot) != 0 {
                 ::log::warn!("[cspace] skipping occupied slot=0x{slot:04x}");
                 continue;
             }

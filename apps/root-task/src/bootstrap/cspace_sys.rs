@@ -73,7 +73,7 @@ pub enum TupleStyle {
 }
 
 #[inline(always)]
-fn init_root_index() -> sys::seL4_Word {
+pub(crate) fn init_root_index() -> sys::seL4_Word {
     sel4::seL4_CapInitThreadCNode as sys::seL4_Word
 }
 
