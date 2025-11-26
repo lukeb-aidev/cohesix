@@ -22,7 +22,7 @@ pub struct CNodeTuple {
 impl CNodeTuple {
     #[inline(always)]
     pub fn guard_depth(&self) -> seL4_Word {
-        sel4_sys::seL4_WordBits as seL4_Word
+        0
     }
 
     #[inline(always)]
@@ -55,14 +55,14 @@ pub fn make_cnode_tuple(init_cnode: seL4_CPtr, init_bits: u8) -> CNodeTuple {
 
 /// Construct the canonical tuple for retype destinations.
 #[inline(always)]
+#[allow(dead_code)]
 pub fn make_retype_tuple(canonical_root: seL4_CPtr, init_bits: u8) -> RetypeTuple {
     RetypeTuple {
         node_root: canonical_root,
-        node_index: canonical_root as seL4_Word,
-        // Use the raw depth expected by the init CNode (guard depth zero,
-        // initBits width) so retypes target the same addressing mode as the
-        // canonical copy helpers.
-        node_depth: sel4_sys::seL4_WordBits as u8,
+        node_index: 0,
+        // Use the init CNode radix width with zero guard depth so destination
+        // paths match the kernel-advertised layout from bootinfo.
+        node_depth: init_bits,
         init_bits,
     }
 }

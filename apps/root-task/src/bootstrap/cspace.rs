@@ -999,7 +999,7 @@ impl CSpaceCtx {
                 &mut line,
                 "[cnode] Copy err={err} root=0x{root:04x} dest(slot=0x{dest_index:04x},depth={depth}) src(slot=0x{src_index:04x},depth={depth})",
                 root = self.root_cnode_cap,
-                depth = sel4_sys::seL4_WordBits,
+                depth = self.dest.root_bits,
                 dest_index = dest_index,
                 src_index = src_index,
             )
@@ -1025,7 +1025,7 @@ impl CSpaceCtx {
                 &mut line,
                 "[cnode] Mint err={err} root=0x{root:04x} dest(slot=0x{dest_index:04x},depth={depth}) src(slot=0x{src_index:04x},depth={depth}) badge={badge}",
                 root = self.root_cnode_cap,
-                depth = sel4_sys::seL4_WordBits,
+                depth = self.dest.root_bits,
                 dest_index = dest_index,
                 src_index = src_index,
                 badge = badge,

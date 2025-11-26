@@ -27,7 +27,7 @@ use crate::bootstrap::{
     BootPhase, UntypedSelection,
 };
 use crate::console::Console;
-use crate::cspace::tuples::{assert_ipc_buffer_matches_bootinfo, make_retype_tuple};
+use crate::cspace::tuples::assert_ipc_buffer_matches_bootinfo;
 use crate::cspace::CSpace;
 use crate::event::{
     AuditSink, BootstrapMessage, BootstrapMessageHandler, CapabilityValidator, EventPump,
@@ -620,8 +620,6 @@ fn bootstrap<P: Platform>(
     let boot_first_free = boot_cspace.next_free_slot();
     debug_assert_eq!(boot_first_free, cspace_window.first_free);
     debug_assert_eq!(boot_cspace.depth(), cspace_window.bits);
-    #[cfg_attr(feature = "bootstrap-minimal", allow(unused_variables))]
-    let retype_tuple = make_retype_tuple(cspace_window.canonical_root, cspace_window.bits);
     let (_, empty_end) = bootinfo_view.init_cnode_empty_range();
     log::info!(
         "[rt-fix] cspace window [0x{start:04x}..0x{end:04x}), initBits={bits}, initCNode=0x{root:04x}",
@@ -805,23 +803,6 @@ fn bootstrap<P: Platform>(
             "[boot] continuing with existing root endpoint=0x{slot:04x}",
             slot = ep_slot
         );
-    }
-
-    match uart_pl011::bootstrap_map_pl011(bootinfo_ref, &mut boot_cspace, &retype_tuple) {
-        Ok(_slot) => {
-            early_uart::register_console_base(early_uart::PL011_VADDR);
-            log::info!(
-                "[pl011] map OK vaddr=0x{vaddr:08x}",
-                vaddr = early_uart::PL011_VADDR
-            );
-        }
-        Err(err) => {
-            log::warn!(
-                "[pl011] map deferred err={err} ({name})",
-                err = err,
-                name = error_name(err)
-            );
-        }
     }
 
     crate::trace::trace_ep(ep_slot);
@@ -1357,6 +1338,11 @@ fn bootstrap<P: Platform>(
         );
     }
     console.writeln_prefixed(map_line.as_str());
+
+    if let Some(region) = uart_region.as_ref() {
+        uart_pl011::publish_uart_slot(region.cap());
+        early_uart::register_console_base(region.ptr().as_ptr() as usize);
+    }
 
     let mut driver = Pl011::new(uart_ptr);
     driver.init();
