@@ -1319,7 +1319,7 @@ fn bootstrap<P: Platform>(
         .as_ref()
         .map(|region| region.ptr())
         .unwrap_or_else(|| unsafe {
-            core::ptr::NonNull::new(pl011::PL011_VADDR as *mut u8)
+            core::ptr::NonNull::new(early_uart::PL011_VADDR as *mut u8)
                 .expect("PL011 virtual address must be non-null")
         });
 
