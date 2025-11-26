@@ -74,7 +74,10 @@ fn emit_link_flags(build_dir: &Path) {
 
     let support_lib_dir = build_dir.join("lib");
     if support_lib_dir.is_dir() {
-        println!("cargo:rustc-link-search=native={}", support_lib_dir.display());
+        println!(
+            "cargo:rustc-link-search=native={}",
+            support_lib_dir.display()
+        );
     }
 }
 

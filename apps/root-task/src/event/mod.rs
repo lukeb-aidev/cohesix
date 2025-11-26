@@ -66,6 +66,9 @@ const MAX_BOOTSTRAP_WORDS: usize = crate::sel4::MSG_MAX_WORDS;
 #[cfg(feature = "kernel")]
 const BOOTSTRAP_IDLE_SPINS: usize = 512;
 
+const CONSOLE_BANNER: &str = "Cohesix console ready";
+const CONSOLE_PROMPT: &str = "cohesix> ";
+
 #[cfg_attr(not(any(test, feature = "kernel")), allow(dead_code))]
 #[derive(Debug, Default)]
 struct BootstrapBackoff {
@@ -521,6 +524,12 @@ where
         }
     }
 
+    /// Emit the interactive banner and initial prompt over the serial console.
+    pub fn start_cli(&mut self) {
+        self.emit_console_line(CONSOLE_BANNER);
+        self.emit_prompt();
+    }
+
     /// Retrieve a snapshot of the current pump metrics.
     #[must_use]
     pub fn metrics(&self) -> PumpMetrics {
@@ -540,6 +549,10 @@ where
         if let Some(net) = self.net.as_mut() {
             net.send_console_line(line);
         }
+    }
+
+    fn emit_prompt(&mut self) {
+        self.serial.enqueue_tx(CONSOLE_PROMPT.as_bytes());
     }
 
     fn emit_ack(&mut self, status: AckStatus, verb: &str, detail: Option<&str>) {
@@ -591,11 +604,13 @@ where
         let trimmed = line.trim();
         if trimmed.eq_ignore_ascii_case("ping") {
             self.emit_console_line("PONG");
+            self.emit_prompt();
             return;
         }
         if let Err(err) = self.feed_parser(line) {
             self.handle_console_error(err);
         }
+        self.emit_prompt();
     }
 
     fn feed_parser(&mut self, line: &HeaplessString<LINE>) -> Result<(), ConsoleError> {

@@ -129,6 +129,8 @@ pub struct SerialPort<
     line: HeaplessString<LINE>,
     pending_tx: Option<u8>,
     telemetry: SerialTelemetryCounters,
+    echo: bool,
+    suppress_lf: bool,
 }
 
 impl<D, const RX: usize, const TX: usize, const LINE: usize> SerialPort<D, RX, TX, LINE>
@@ -144,6 +146,8 @@ where
             line: HeaplessString::new(),
             pending_tx: None,
             telemetry: SerialTelemetryCounters::default(),
+            echo: true,
+            suppress_lf: false,
         }
     }
 
@@ -215,15 +219,30 @@ where
     /// Retrieve the next sanitised console line, if available.
     pub fn next_line(&mut self) -> Option<HeaplessString<LINE>> {
         while let Some(byte) = self.rx.dequeue() {
+            if self.suppress_lf && byte == b'\n' {
+                self.suppress_lf = false;
+                continue;
+            }
             match byte {
-                b'\r' => continue,
+                b'\r' => {
+                    self.suppress_lf = true;
+                    self.emit_newline();
+                    let mut completed = HeaplessString::new();
+                    core::mem::swap(&mut completed, &mut self.line);
+                    return Some(completed);
+                }
                 b'\n' => {
+                    self.emit_newline();
                     let mut completed = HeaplessString::new();
                     core::mem::swap(&mut completed, &mut self.line);
                     return Some(completed);
                 }
                 0x08 | 0x7f => {
-                    self.line.pop();
+                    if self.line.pop().is_some() {
+                        if self.echo {
+                            self.enqueue_tx(b"\x08 \x08");
+                        }
+                    }
                 }
                 byte if byte.is_ascii_control() => {
                     self.telemetry.utf8_drop();
@@ -231,11 +250,21 @@ where
                 byte => {
                     if self.line.push(byte as char).is_err() {
                         self.telemetry.utf8_drop();
+                        continue;
+                    }
+                    if self.echo {
+                        self.enqueue_tx(&[byte]);
                     }
                 }
             }
         }
         None
+    }
+
+    fn emit_newline(&mut self) {
+        if self.echo {
+            self.enqueue_tx(b"\r\n");
+        }
     }
 
     /// Access the driver mutably (used by tests for inspection).
@@ -373,5 +402,20 @@ mod tests {
         port.poll_io();
         let telemetry = port.telemetry();
         assert!(telemetry.tx_backpressure > 0);
+    }
+
+    #[test]
+    fn echoes_input_and_handles_backspace() {
+        let driver = LoopbackSerial::<16>::new();
+        let mut port: SerialPort<_, 16, 16, 8> = SerialPort::new(driver);
+        port.driver_mut().push_rx(b"ab\x08c\r");
+        port.poll_io();
+
+        let line = port.next_line().unwrap();
+        assert_eq!(line.as_str(), "ac");
+
+        port.poll_io();
+        let echoed = port.driver_mut().drain_tx();
+        assert_eq!(echoed.as_slice(), b"ab\x08 \x08c\r\n");
     }
 }

@@ -232,8 +232,7 @@ mod imp {
         in_out_mr1: *mut seL4_Word,
         in_out_mr2: *mut seL4_Word,
         in_out_mr3: *mut seL4_Word,
-        #[cfg_attr(not(sel4_config_kernel_mcs), allow(unused_variables))]
-        reply: seL4_Word,
+        #[cfg_attr(not(sel4_config_kernel_mcs), allow(unused_variables))] reply: seL4_Word,
     ) {
         let mut destptr = dest;
         let mut info = info_arg;
