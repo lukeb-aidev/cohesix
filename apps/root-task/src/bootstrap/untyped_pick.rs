@@ -6,6 +6,18 @@ use crate::bootstrap::log::force_uart_line;
 use crate::sel4::{BootInfo, BootInfoExt, PAGE_BITS, PAGE_TABLE_BITS};
 use heapless::String;
 use sel4_sys as sys;
+use spin::Mutex;
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct DevicePtPoolConfig {
+    pub ut_slot: sys::seL4_CPtr,
+    pub paddr: usize,
+    pub size_bits: u8,
+    pub index: usize,
+    pub total_bytes: usize,
+}
+
+static DEVICE_PT_POOL: Mutex<Option<DevicePtPoolConfig>> = Mutex::new(None);
 
 /// Planned object counts derived from a RAM-backed untyped capability.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -18,6 +30,42 @@ pub struct RetypePlan {
     pub total: u32,
     /// Destination slot index at which the plan begins.
     pub dest_start: sys::seL4_CPtr,
+}
+
+fn device_pt_pool_index() -> Option<usize> {
+    DEVICE_PT_POOL.lock().as_ref().map(|pool| pool.index)
+}
+
+fn register_device_pt_pool(cap: sys::seL4_CPtr, size_bits: u8, index: usize, paddr: usize) {
+    let mut pool = DEVICE_PT_POOL.lock();
+    if pool.is_some() {
+        return;
+    }
+
+    let total_bytes = 1usize << size_bits;
+    let config = DevicePtPoolConfig {
+        ut_slot: cap,
+        paddr,
+        size_bits,
+        index,
+        total_bytes,
+    };
+
+    let mut line = String::<192>::new();
+    let _ = write!(
+        line,
+        "[retype:plan] reserved device PageTable pool ut=0x{cap:03x} bits={bits} paddr=0x{paddr:08x} capacity={bytes}B",
+        bits = size_bits,
+        paddr = paddr,
+        bytes = total_bytes,
+    );
+    force_uart_line(line.as_str());
+
+    *pool = Some(config);
+}
+
+pub fn device_pt_pool() -> Option<DevicePtPoolConfig> {
+    DEVICE_PT_POOL.lock().as_ref().copied()
 }
 
 impl RetypePlan {
@@ -82,6 +130,27 @@ fn log_plan_skip(
     force_uart_line(line.as_str());
 }
 
+pub fn ensure_device_pt_pool(bi: &'static BootInfo) {
+    if device_pt_pool().is_some() {
+        return;
+    }
+
+    let total = (bi.untyped.end - bi.untyped.start) as usize;
+    let entries = &bi.untypedList[..total];
+    let ut_start = bi.untyped.start;
+
+    for min_bits in [16u8, 12u8] {
+        for (offset, desc) in entries.iter().enumerate() {
+            if desc.isDevice != 0 || (desc.sizeBits as u8) < min_bits {
+                continue;
+            }
+            let cap = ut_start + offset as sys::seL4_CPtr;
+            register_device_pt_pool(cap, desc.sizeBits as u8, offset, desc.paddr as usize);
+            return;
+        }
+    }
+}
+
 fn plan_for_untyped(cap: sys::seL4_CPtr, size_bits: u8, dest_start: sys::seL4_CPtr) -> RetypePlan {
     let capacity_bytes: u128 = 1u128 << size_bits;
     let mut used_bytes: u128 = 0;
@@ -141,7 +210,14 @@ pub fn pick_untyped(bi: &'static BootInfo, min_bits: u8) -> UntypedSelection {
     let entries = &bi.untypedList[..total];
     let dest_start = bi.empty_first_slot() as sys::seL4_CPtr;
 
+    ensure_device_pt_pool(bi);
+    let reserved_device_pool = device_pt_pool_index();
+
     for (offset, ut) in entries.iter().enumerate() {
+        if Some(offset) == reserved_device_pool {
+            continue;
+        }
+
         if ut.isDevice == 0 && (ut.sizeBits as u8) >= min_bits {
             let cap = bi.untyped.start + offset as sys::seL4_CPtr;
             let selection = UntypedSelection {
@@ -159,7 +235,7 @@ pub fn pick_untyped(bi: &'static BootInfo, min_bits: u8) -> UntypedSelection {
     let (offset, ut) = entries
         .iter()
         .enumerate()
-        .find(|(_, ut)| ut.isDevice == 0)
+        .find(|(index, ut)| ut.isDevice == 0 && Some(*index) != reserved_device_pool)
         .expect("bootinfo must provide at least one RAM-backed untyped capability");
 
     let cap = bi.untyped.start + offset as sys::seL4_CPtr;
