@@ -18,8 +18,6 @@ use heapless::String;
 #[cfg(feature = "kernel")]
 use crate::sel4::{self, BootInfoExt};
 #[cfg(feature = "kernel")]
-use crate::uart::pl011;
-#[cfg(feature = "kernel")]
 use core::fmt::Write as FmtWrite;
 #[cfg(feature = "kernel")]
 use sel4_sys::seL4_CPtr;
@@ -184,6 +182,7 @@ pub fn run<P: Platform>(platform: &P) -> ! {
 
 #[cfg(feature = "kernel")]
 pub struct CohesixConsole {
+    console: Console,
     ep_slot: seL4_CPtr,
     uart_slot: seL4_CPtr,
     parser: CommandParser,
@@ -192,24 +191,26 @@ pub struct CohesixConsole {
 #[cfg(feature = "kernel")]
 impl CohesixConsole {
     #[must_use]
-    pub fn new(ep_slot: seL4_CPtr, uart_slot: seL4_CPtr) -> Self {
+    pub fn with_console(console: Console, ep_slot: seL4_CPtr, uart_slot: seL4_CPtr) -> Self {
         Self {
+            console,
             ep_slot,
             uart_slot,
             parser: CommandParser::new(),
         }
     }
 
-    fn emit(&self, text: &str) {
-        pl011::write_str(text);
+    fn emit(&mut self, text: &str) {
+        let _ = self.console.write_str(text);
+        self.console.flush();
     }
 
-    fn emit_line(&self, text: &str) {
+    fn emit_line(&mut self, text: &str) {
         self.emit(text);
         self.emit("\r\n");
     }
 
-    fn prompt(&self) {
+    fn prompt(&mut self) {
         self.emit("cohesix> ");
     }
 
@@ -217,7 +218,7 @@ impl CohesixConsole {
         unsafe { &*sel4_sys::seL4_GetBootInfo() }
     }
 
-    fn print_help(&self) {
+    fn print_help(&mut self) {
         self.emit_line("Commands:");
         self.emit_line("  help  - Show this help");
         self.emit_line("  bi    - Show bootinfo summary");
@@ -227,7 +228,7 @@ impl CohesixConsole {
         self.emit_line("  quit  - Exit the console session");
     }
 
-    fn print_bootinfo(&self) {
+    fn print_bootinfo(&mut self) {
         let bi = self.bootinfo();
         let mut line = String::<128>::new();
         let _ = write!(
@@ -245,7 +246,7 @@ impl CohesixConsole {
         self.emit_line(line.as_str());
     }
 
-    fn print_caps(&self) {
+    fn print_caps(&mut self) {
         let bi = self.bootinfo();
         let mut line = String::<128>::new();
         let _ = write!(
@@ -258,7 +259,7 @@ impl CohesixConsole {
         self.emit_line(line.as_str());
     }
 
-    fn print_mem(&self) {
+    fn print_mem(&mut self) {
         let bi = self.bootinfo();
         let count = (bi.untyped.end - bi.untyped.start) as usize;
         let mut ram_ut = 0usize;
@@ -298,73 +299,60 @@ impl CohesixConsole {
         self.parser = CommandParser::new();
     }
 
-    fn echo(&self, byte: u8) {
-        match byte {
-            b'\r' | b'\n' => self.emit("\r\n"),
-            0x08 | 0x7f => self.emit("\x08 \x08"),
-            _ => {
-                let mut buf = [0u8; 4];
-                let s = char::from(byte).encode_utf8(&mut buf);
-                self.emit(s);
-            }
-        }
-    }
-
     pub fn run(&mut self) -> ! {
-        pl011::init_pl011();
         log::info!(
             "[console] starting root shell ep=0x{ep:04x} uart=0x{uart:04x}",
             ep = self.ep_slot,
             uart = self.uart_slot,
         );
-        self.emit_line("Cohesix console ready.");
-        self.prompt();
+        self.emit_line("Cohesix console ready");
 
         loop {
-            if let Some(byte) = pl011::poll_byte() {
-                let mapped = match byte {
-                    b'\r' | b'\n' => {
-                        self.echo(b'\n');
-                        Some(b'\n')
-                    }
-                    0x08 | 0x7f => {
-                        self.echo(byte);
-                        Some(byte)
-                    }
-                    _ => {
-                        self.echo(byte);
-                        Some(byte)
-                    }
-                };
+            self.prompt();
 
-                if let Some(token) = mapped {
-                    match self.parser.push_byte(token) {
-                        Ok(Some(command)) => {
-                            self.handle_command(command);
-                            self.reset_parser();
-                            self.prompt();
-                        }
-                        Ok(None) => {}
-                        Err(err) => {
-                            let mut line = String::<128>::new();
-                            let _ = write!(line, "error: {err}");
-                            self.emit_line(line.as_str());
-                            self.reset_parser();
-                            self.prompt();
-                        }
-                    }
+            let mut buffer = [0u8; MAX_LINE_LEN];
+            let count = self.console.read_line(&mut buffer);
+            let line = core::str::from_utf8(&buffer[..count])
+                .unwrap_or("")
+                .trim_matches(char::from(0))
+                .trim();
+
+            if let Err(err) = self.feed_line(line.as_bytes()) {
+                let mut message = String::<128>::new();
+                let _ = write!(message, "error: {err}");
+                self.emit_line(message.as_str());
+                self.reset_parser();
+                continue;
+            }
+
+            match self.parser.push_byte(b'\n') {
+                Ok(Some(command)) => {
+                    self.handle_command(command);
+                    self.reset_parser();
                 }
-            } else {
-                sel4::yield_now();
+                Ok(None) => {}
+                Err(err) => {
+                    let mut message = String::<128>::new();
+                    let _ = write!(message, "error: {err}");
+                    self.emit_line(message.as_str());
+                    self.reset_parser();
+                }
             }
         }
+    }
+
+    fn feed_line(&mut self, line: &[u8]) -> Result<(), ConsoleError> {
+        for &byte in line {
+            self.parser.push_byte(byte)?;
+        }
+        Ok(())
     }
 }
 
 #[cfg(feature = "kernel")]
 impl FmtWrite for CohesixConsole {
     fn write_str(&mut self, s: &str) -> fmt::Result {
-        self.emit(s);
+        let _ = self.console.write_str(s);
         Ok(())
     }
 }

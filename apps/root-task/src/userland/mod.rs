@@ -12,9 +12,17 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use crate::boot::uart_pl011;
 #[cfg(all(feature = "serial-console", feature = "kernel"))]
 use crate::console::CohesixConsole;
+#[cfg(all(feature = "serial-console", feature = "kernel"))]
+use crate::console::Console as SerialConsole;
 use crate::ipc;
 use crate::platform::Platform;
 use crate::sel4;
+#[cfg(all(feature = "serial-console", feature = "kernel"))]
+use crate::serial::pl011::Pl011;
+#[cfg(all(feature = "serial-console", feature = "kernel"))]
+use crate::uart::pl011::PL011_VADDR;
+#[cfg(all(feature = "serial-console", feature = "kernel"))]
+use core::ptr::NonNull;
 
 /// Start the userland console or Cohesix shell over the serial transport.
 #[allow(clippy::module_name_repetitions)]
@@ -73,8 +81,12 @@ pub mod serial_console {
         #[cfg(all(feature = "kernel", feature = "serial-console"))]
         if let Some(uart_slot) = uart_pl011::uart_slot() {
             let ep = sel4::root_endpoint();
-            let mut console = CohesixConsole::new(ep, uart_slot);
-            console.run();
+            if let Some(base) = NonNull::new(PL011_VADDR as *mut u8) {
+                let driver = Pl011::new(base);
+                let console = SerialConsole::new(driver);
+                let mut console = CohesixConsole::with_console(console, ep, uart_slot);
+                console.run();
+            }
         }
 
         let mut writer = PlatformWriter { platform };
