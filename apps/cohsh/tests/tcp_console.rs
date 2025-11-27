@@ -6,6 +6,7 @@ use std::net::TcpListener;
 use std::thread;
 
 use cohesix_ticket::Role;
+use cohsh::proto::{parse_ack, AckStatus};
 use cohsh::{TcpTransport, Transport};
 
 #[test]
@@ -28,8 +29,15 @@ fn tcp_transport_handles_attach_and_tail() {
 
     let mut transport = TcpTransport::new("127.0.0.1", port);
     let session = transport.attach(Role::Queen, None).expect("attach queen");
+    let attach_ack = transport.drain_acknowledgements();
+    assert_eq!(attach_ack.len(), 1);
+    let ack = parse_ack(&attach_ack[0]).expect("parse attach ack");
+    assert_eq!(ack.status, AckStatus::Ok);
+    assert_eq!(ack.verb, "session");
+
     let logs = transport
         .tail(&session, "/log/queen.log")
         .expect("tail log");
     assert_eq!(logs, vec!["boot line".to_owned()]);
+    assert!(transport.drain_acknowledgements().is_empty());
 }

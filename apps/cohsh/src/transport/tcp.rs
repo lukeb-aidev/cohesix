@@ -11,6 +11,7 @@ use anyhow::{anyhow, Context, Result};
 use cohesix_ticket::Role;
 use secure9p_wire::SessionId;
 
+use crate::proto::{parse_ack, AckStatus};
 use crate::{Session, Transport};
 
 /// Default TCP timeout applied to socket operations.
@@ -81,6 +82,33 @@ enum HeartbeatOutcome {
     Closed,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AckOwned {
+    status: AckStatus,
+    verb: String,
+    detail: Option<String>,
+}
+
+impl AckOwned {
+    fn into_line(self) -> String {
+        let mut line = format!(
+            "{} {}",
+            match self.status {
+                AckStatus::Ok => "OK",
+                AckStatus::Err => "ERR",
+            },
+            self.verb
+        );
+        if let Some(detail) = self.detail {
+            if !detail.is_empty() {
+                line.push(' ');
+                line.push_str(&detail);
+            }
+        }
+        line
+    }
+}
+
 /// TCP transport speaking the root-task console protocol.
 #[derive(Debug)]
 pub struct TcpTransport {
@@ -98,7 +126,7 @@ pub struct TcpTransport {
     last_probe: Option<Instant>,
     session_cache: Option<SessionCache>,
     telemetry: ConnectionTelemetry,
-    pending_ack: VecDeque<String>,
+    pending_ack: VecDeque<AckOwned>,
 }
 
 impl TcpTransport {
@@ -415,13 +443,17 @@ impl TcpTransport {
     }
 
     fn record_ack(&mut self, line: &str) -> bool {
-        if !(line.starts_with("OK") || line.starts_with("ERR")) {
+        let Some(ack) = parse_ack(line) else {
             return false;
-        }
+        };
         if self.pending_ack.len() >= MAX_PENDING_ACK {
             self.pending_ack.pop_front();
         }
-        self.pending_ack.push_back(line.to_owned());
+        self.pending_ack.push_back(AckOwned {
+            status: ack.status,
+            verb: ack.verb.to_owned(),
+            detail: ack.detail.map(str::to_owned),
+        });
         true
     }
 
@@ -523,7 +555,10 @@ impl Transport for TcpTransport {
     }
 
     fn drain_acknowledgements(&mut self) -> Vec<String> {
-        self.pending_ack.drain(..).collect()
+        self.pending_ack
+            .drain(..)
+            .map(AckOwned::into_line)
+            .collect()
     }
 }
 

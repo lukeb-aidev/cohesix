@@ -27,6 +27,7 @@ use core::fmt::{self, Write as FmtWrite};
 use cohesix_ticket::Role;
 use heapless::{String as HeaplessString, Vec as HeaplessVec};
 
+use crate::console::proto::{render_ack, AckLine, AckStatus, LineFormatError};
 use crate::console::{Command, CommandParser, ConsoleError, MAX_ROLE_LEN, MAX_TICKET_LEN};
 #[cfg(feature = "net-console")]
 use crate::net::{NetPoller, CONSOLE_QUEUE_DEPTH};
@@ -265,21 +266,6 @@ pub struct PumpMetrics {
     #[cfg(feature = "kernel")]
     /// Bootstrap IPC messages processed.
     pub bootstrap_messages: u64,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AckStatus {
-    Ok,
-    Err,
-}
-
-impl AckStatus {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Ok => "OK",
-            Self::Err => "ERR",
-        }
-    }
 }
 
 /// Authenticated session state maintained by the pump.
@@ -557,16 +543,18 @@ where
 
     fn emit_ack(&mut self, status: AckStatus, verb: &str, detail: Option<&str>) {
         let mut line: HeaplessString<DEFAULT_LINE_CAPACITY> = HeaplessString::new();
-        let _ = line.push_str(status.label());
-        let _ = line.push(' ');
-        let _ = line.push_str(verb);
-        if let Some(extra) = detail {
-            if !extra.is_empty() {
-                let _ = line.push(' ');
-                let _ = line.push_str(extra);
+        let ack_line = AckLine {
+            status,
+            verb,
+            detail,
+        };
+        match render_ack(&mut line, &ack_line) {
+            Ok(()) => self.emit_console_line(line.as_str()),
+            Err(LineFormatError::Truncated) => {
+                self.audit.denied("console ack truncated");
+                self.emit_console_line("ERR PARSE reason=ack-truncated");
             }
         }
-        self.emit_console_line(line.as_str());
     }
 
     fn emit_ack_ok(&mut self, verb: &str, detail: Option<&str>) {

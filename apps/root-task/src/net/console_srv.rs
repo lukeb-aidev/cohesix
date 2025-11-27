@@ -5,8 +5,11 @@
 use heapless::{Deque, String as HeaplessString};
 
 use super::CONSOLE_QUEUE_DEPTH;
+use crate::console::proto::{render_ack, AckLine, AckStatus, LineFormatError};
 use crate::serial::DEFAULT_LINE_CAPACITY;
 
+// Transport-level guard to prevent unauthenticated TCP sessions from issuing console verbs.
+// Application-layer ticket and role checks are enforced by the console/event pump.
 const AUTH_PREFIX: &str = "AUTH ";
 
 /// Outcome of processing newly received bytes from the TCP stream.
@@ -125,16 +128,16 @@ impl TcpConsoleServer {
     fn process_auth(&mut self, line: HeaplessString<DEFAULT_LINE_CAPACITY>) -> SessionEvent {
         let trimmed = line.trim();
         if !trimmed.starts_with(AUTH_PREFIX) {
-            let _ = self.enqueue_outbound("ERR AUTH reason=expected-token");
+            let _ = self.enqueue_auth_ack(AckStatus::Err, Some("reason=expected-token"));
             return SessionEvent::Close;
         }
         let token = trimmed.split_at(AUTH_PREFIX.len()).1.trim();
         if token != self.auth_token {
-            let _ = self.enqueue_outbound("ERR AUTH reason=invalid-token");
+            let _ = self.enqueue_auth_ack(AckStatus::Err, Some("reason=invalid-token"));
             return SessionEvent::Close;
         }
         self.state = SessionState::Authenticated;
-        let _ = self.enqueue_outbound("OK AUTH");
+        let _ = self.enqueue_auth_ack(AckStatus::Ok, None);
         SessionEvent::Authenticated
     }
 
@@ -189,6 +192,22 @@ impl TcpConsoleServer {
     pub fn mark_activity(&mut self, now_ms: u64) {
         if matches!(self.state, SessionState::Authenticated) {
             self.last_activity_ms = now_ms;
+        }
+    }
+
+    fn enqueue_auth_ack(&mut self, status: AckStatus, detail: Option<&str>) -> Result<(), ()> {
+        let mut line: HeaplessString<DEFAULT_LINE_CAPACITY> = HeaplessString::new();
+        let ack = AckLine {
+            status,
+            verb: "AUTH",
+            detail,
+        };
+        match render_ack(&mut line, &ack) {
+            Ok(()) => self.enqueue_outbound(line.as_str()),
+            Err(LineFormatError::Truncated) => {
+                // Transport-level guard; fall back to a simple error string to avoid panics.
+                self.enqueue_outbound("ERR AUTH")
+            }
         }
     }
 }

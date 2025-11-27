@@ -6,6 +6,8 @@
 //! Milestone 2 replaces the mock transport with the live codec and synthetic
 //! namespace so operators can tail logs using the real filesystem protocol.
 
+pub mod proto;
+
 #[cfg(feature = "tcp")]
 pub mod transport;
 
