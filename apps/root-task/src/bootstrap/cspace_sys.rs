@@ -1365,7 +1365,7 @@ pub fn verify_root_cnode_slot(
         return Err(sys::seL4_InvalidCapability);
     }
 
-    #[cfg(target_os = "none")]
+    #[cfg(all(feature = "bootstrap-debug", target_os = "none"))]
     {
         let root_ident = unsafe { sys::seL4_DebugCapIdentify(root_cnode()) };
         if root_ident == 0 {
