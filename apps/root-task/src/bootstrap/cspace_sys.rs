@@ -1395,6 +1395,8 @@ fn boot_empty_window() -> (sys::seL4_CPtr, sys::seL4_CPtr) {
 
 /// Quick probe to ensure the init CNode can accept write operations before issuing a Retype.
 pub fn preflight_init_cnode_writable(probe_slot: sys::seL4_CPtr) -> Result<(), PreflightError> {
+    verify_root_cnode_slot(bi(), probe_slot).map_err(PreflightError::Probe)?;
+
     let root = bi_init_cnode_cptr();
     let bits = bi_init_cnode_bits();
     debug_assert!(
@@ -1415,62 +1417,15 @@ pub fn preflight_init_cnode_writable(probe_slot: sys::seL4_CPtr) -> Result<(), P
 
     #[cfg(target_os = "none")]
     {
-        let dst_index = probe_slot as sys::seL4_Word;
-        let depth_word = se_l4_wordbits_word();
-        let src_slot = sys::seL4_CapInitThreadTCB as sys::seL4_Word;
-        let src_ident = unsafe { sys::seL4_DebugCapIdentify(src_slot as sys::seL4_CPtr) };
-        let dst_ident = unsafe { sys::seL4_DebugCapIdentify(dst_index as sys::seL4_CPtr) };
-        ::log::info!(
+        ::log::debug!(
             target: "root_task::bootstrap::cspace_sys",
-            "[cnode.enc] style={style} slot=0x{slot:04x} depth={depth} encoded=0x{encoded:016x} src_ident=0x{src_ident:08x} dst_ident=0x{dst_ident:08x}",
-            style = tuple_style_label(TupleStyle::Raw),
+            "[cnode.preflight] slot=0x{slot:04x} depth_bits={depth} window=[0x{start:04x}..0x{end:04x})",
             slot = probe_slot,
-            encoded = dst_index,
-            depth = depth_word,
-            src_ident = src_ident,
-            dst_ident = dst_ident,
+            depth = bits,
+            start = bi().empty.start,
+            end = bi().empty.end,
         );
-        let err = unsafe {
-            sys::seL4_CNode_Mint(
-                root,
-                dst_index as sys::seL4_Word,
-                depth_word,
-                root,
-                src_slot as sys::seL4_Word,
-                depth_word,
-                sys::seL4_CapRights::new(1, 1, 1, 1),
-                0,
-            )
-        };
-        if err != sys::seL4_NoError {
-            ::log::error!(
-                target: "root_task::bootstrap::cspace_sys",
-                "preflight failed: Mint root=0x{root:04x} slot=0x{slot:04x} depth={} err={} ({}) src_ident=0x{src_ident:08x} dst_ident=0x{dst_ident:08x}",
-                depth_word,
-                err,
-                sel4::error_name(err),
-                slot = probe_slot,
-                root = root,
-                src_ident = src_ident,
-                dst_ident = dst_ident,
-            );
-            return Err(PreflightError::Probe(err));
-        }
-
-        let delete_err =
-            unsafe { sys::seL4_CNode_Delete(root, dst_index as sys::seL4_Word, depth_word) };
-        if delete_err != sys::seL4_NoError {
-            ::log::error!(
-                target: "root_task::bootstrap::cspace_sys",
-                "preflight cleanup failed: Delete root=0x{root:04x} slot=0x{slot:04x} depth={} err={} ({})",
-                depth_word,
-                delete_err,
-                sel4::error_name(delete_err),
-                slot = probe_slot,
-                root = root,
-            );
-            return Err(PreflightError::Cleanup(delete_err));
-        }
+        return Ok(());
     }
 
     #[cfg(not(target_os = "none"))]
