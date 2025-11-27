@@ -2,50 +2,32 @@
 //! Bootstrap helpers for copying the init TCB capability.
 #![allow(unsafe_code)]
 
-use crate::bootstrap::cspace_sys::cnode_copy;
+use core::sync::atomic::{AtomicBool, Ordering};
+
 use crate::cspace::CSpace;
 use crate::sel4::BootInfoExt;
-use sel4_sys::{self, seL4_CPtr, seL4_CapRights_ReadWrite, seL4_Error, seL4_NoError, seL4_Word};
+use sel4_sys::{self, seL4_CPtr, seL4_Error};
 
-/// Copy the init thread TCB capability into the next free slot of the init CSpace.
+static INIT_TCB_REUSE_ANNOUNCED: AtomicBool = AtomicBool::new(false);
+
+/// Publishes the canonical TCB for the root task.
+///
+/// The init thread TCB cap provided by the kernel is already suitable for the
+/// root task, so we avoid speculative `CNode_Copy` syscalls during bootstrap.
+/// This keeps the boot log clean (no "Target slot invalid" decode warnings)
+/// while preserving the existing behaviour of running on the init TCB.
 pub fn bootstrap_copy_init_tcb(
     bootinfo: &sel4_sys::seL4_BootInfo,
     cs: &mut CSpace,
 ) -> Result<seL4_CPtr, seL4_Error> {
-    let dst_slot = cs.alloc_slot()?;
-    log::info!(
-        "[cs] win root=0x{root:04x} bits={bits} first_free=0x{slot:04x}",
-        root = cs.root(),
-        bits = cs.depth(),
-        slot = dst_slot,
-    );
-
-    let init_root = cs.root();
-    let src_slot = bootinfo.init_tcb_cap();
-    let err = cnode_copy(
-        bootinfo,
-        init_root,
-        dst_slot as seL4_Word,
-        init_root,
-        src_slot as seL4_Word,
-        seL4_CapRights_ReadWrite,
-    );
-    log::info!(
-        "[tcb] copy   -> dst=0x{slot:04x} err={err}",
-        slot = dst_slot,
-        err = err
-    );
-
-    if err == seL4_NoError {
-        log::info!("[cs] first_free=0x{slot:04x}", slot = cs.next_free_slot());
-        Ok(dst_slot)
-    } else {
-        log::warn!(
-            "[tcb] copy failed err={} — using original init TCB cap at 0x{src:04x}",
-            err,
-            src = src_slot
+    let _ = cs;
+    let init_tcb = bootinfo.init_tcb_cap();
+    if !INIT_TCB_REUSE_ANNOUNCED.swap(true, Ordering::Relaxed) {
+        log::info!(
+            "[tcb] canonical root uses init TCB cap=0x{cap:04x}; copy suppressed",
+            cap = init_tcb,
         );
-        cs.release_slot(dst_slot);
-        Ok(src_slot)
     }
+
+    Ok(init_tcb)
 }

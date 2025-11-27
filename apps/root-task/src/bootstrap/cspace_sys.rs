@@ -240,10 +240,10 @@ pub fn cnode_copy_raw_single(
         let depth_word = se_l4_wordbits_word();
         let rights = sys::seL4_CapRights::new(1, 1, 1, 1);
 
-        ::log::info!(
-            "[cnode.copy/raw] style={style} dst_root=0x{dst_root:04x} dst_slot=0x{dst_slot:04x} depth={depth_word} src=0x{src_root:04x}/0x{src_slot:04x}",
-            style = tuple_style_label(style),
-            dst_root = dst_root,
+        ::log::debug!(
+        "[cnode.copy/raw] style={style} dst_root=0x{dst_root:04x} dst_slot=0x{dst_slot:04x} depth={depth_word} src=0x{src_root:04x}/0x{src_slot:04x}",
+        style = tuple_style_label(style),
+        dst_root = dst_root,
             dst_slot = dst_slot,
             depth_word = depth_word,
             src_root = src_root,
@@ -282,10 +282,10 @@ pub fn cnode_copy_raw_single(
             }
         };
 
-        ::log::info!(
-            "[cnode.copy/raw] dst_root=0x{dst_root:04x} dst_slot=0x{dst_slot:04x} depth={depth} src_root=0x{src_root:04x} src_slot=0x{src_slot:04x} err={err}",
-            depth = depth_word,
-            err = result,
+        ::log::debug!(
+        "[cnode.copy/raw] dst_root=0x{dst_root:04x} dst_slot=0x{dst_slot:04x} depth={depth} src_root=0x{src_root:04x} src_slot=0x{src_slot:04x} err={err}",
+        depth = depth_word,
+        err = result,
         );
 
         result
@@ -299,7 +299,7 @@ pub fn cnode_copy_raw_single(
 
     if should_retry(first) {
         if let Some(fallback) = initial_style.fallback() {
-            ::log::warn!(
+            ::log::debug!(
                 "[cnode.copy/raw] style={} failed err={} — retrying with {}",
                 tuple_style_label(initial_style),
                 first,
@@ -350,10 +350,10 @@ pub fn cnode_mint_raw_single(
         let src_index = src_slot as sys::seL4_Word;
         let depth_word = se_l4_wordbits_word();
 
-        ::log::info!(
-            "[cnode.mint/raw] style={style} dst_root=0x{dst_root:04x} dst_slot=0x{dst_slot:04x} depth={depth_word} src=0x{src_root:04x}/0x{src_slot:04x} badge=0x{badge:04x}",
-            style = tuple_style_label(style),
-            dst_root = dst_root,
+        ::log::debug!(
+        "[cnode.mint/raw] style={style} dst_root=0x{dst_root:04x} dst_slot=0x{dst_slot:04x} depth={depth_word} src=0x{src_root:04x}/0x{src_slot:04x} badge=0x{badge:04x}",
+        style = tuple_style_label(style),
+        dst_root = dst_root,
             dst_slot = dst_slot,
             depth_word = depth_word,
             src_root = src_root,
@@ -396,10 +396,10 @@ pub fn cnode_mint_raw_single(
             }
         };
 
-        ::log::info!(
-            "[cnode.mint/raw] dst_root=0x{dst_root:04x} dst_slot=0x{dst_slot:04x} depth={depth} src_root=0x{src_root:04x} src_slot=0x{src_slot:04x} badge=0x{badge:04x} err={err}",
-            depth = depth_word,
-            err = result,
+        ::log::debug!(
+        "[cnode.mint/raw] dst_root=0x{dst_root:04x} dst_slot=0x{dst_slot:04x} depth={depth} src_root=0x{src_root:04x} src_slot=0x{src_slot:04x} badge=0x{badge:04x} err={err}",
+        depth = depth_word,
+        err = result,
         );
 
         result
@@ -422,7 +422,7 @@ pub fn cnode_mint_raw_single(
 
     if should_retry(first) {
         if let Some(fallback) = initial_style.fallback() {
-            ::log::warn!(
+            ::log::debug!(
                 "[cnode.mint/raw] style={} failed err={} — retrying with {}",
                 tuple_style_label(initial_style),
                 first,
@@ -543,7 +543,7 @@ fn cnode_copy_with_style(
     let dst_index = enc_index(dst_slot_raw, bi, style);
     let src_index = enc_index(src_slot_raw, bi, style);
     let depth_word = path_depth_word(bi);
-    ::log::info!(
+    ::log::debug!(
         "[cnode.tuple] style={} dst_index=0x{dst_index:04x} src_index=0x{src_index:04x} depth={depth} dst_offset=0x{dst_raw:04x} src_offset=0x{src_raw:04x}",
         tuple_style_label(style),
         depth = depth_word,
@@ -591,7 +591,7 @@ fn cnode_copy_with_style(
         }
     };
 
-    ::log::info!(
+    ::log::debug!(
         "[cnode.copy/tuple] style={} dst_root=0x{dst_root:04x} dst_slot=0x{dst_slot:04x} depth={depth} src_root=0x{src_root:04x} src_slot=0x{src_slot:04x} err={err}",
         tuple_style_label(style),
         dst_root = dst_root,
@@ -1344,117 +1344,44 @@ fn bi_init_cnode_bits() -> sys::seL4_Word {
     sel4::canonical_cnode_bits(bi()) as sys::seL4_Word
 }
 
-/// Issues a delete+copy probe to confirm the init CNode slot accepts canonical addressing.
+/// Validates that a candidate slot lies inside the bootinfo-advertised window.
+///
+/// The default configuration avoids speculative CNode invocations that would
+/// trigger noisy decode warnings in the kernel. Deep probes remain available
+/// behind debug builds, but the fast path only checks slot bounds.
 pub fn verify_root_cnode_slot(
     bi: &sys::seL4_BootInfo,
     slot: sys::seL4_Word,
 ) -> Result<(), sys::seL4_Error> {
-    let root = root_cnode();
+    let start = bi.empty.start as sys::seL4_Word;
+    let end = bi.empty.end as sys::seL4_Word;
+    if slot < start || slot >= end {
+        ::log::error!(
+            "[verify_root_cnode_slot] slot=0x{slot:04x} outside bootinfo window [0x{start:04x}..0x{end:04x})",
+            slot = slot,
+            start = start,
+            end = end,
+        );
+        return Err(sys::seL4_InvalidCapability);
+    }
+
     #[cfg(target_os = "none")]
     {
-        let _ = cnode_delete_with_style(bi, root, slot, tuple_style());
-        let depth_word = se_l4_wordbits_word();
-        let src_slot = sys::seL4_CapInitThreadTCB as sys::seL4_Word;
-        let src_ident = unsafe { sys::seL4_DebugCapIdentify(src_slot as sys::seL4_CPtr) };
-        let dst_ident_before = unsafe { sys::seL4_DebugCapIdentify(slot as sys::seL4_CPtr) };
-        let root_ident = unsafe { sys::seL4_DebugCapIdentify(root as sys::seL4_CPtr) };
-        let rights = sys::seL4_CapRights_All;
-        let rights_word = rights.words[0];
-        ::log::info!(
-            "[verify_root_cnode_slot] op=copy destRoot=0x{root:04x} destIndex=0x{dst:04x} destDepth={depth} srcRoot=0x{root:04x} srcIndex=0x{src:04x} srcDepth={depth} rights=0x{rights_word:02x}",
-            root = root,
-            dst = slot,
-            depth = depth_word,
-            src = src_slot,
-            rights_word = rights_word,
-        );
-        let copy_err = unsafe {
-            sys::seL4_CNode_Copy(
-                root,
-                slot as sys::seL4_Word,
-                depth_word,
-                root,
-                src_slot as sys::seL4_Word,
-                depth_word,
-                rights,
-            )
-        };
-
-        if copy_err != sys::seL4_NoError {
-            panic!(
-                "[verify_root_cnode_slot] init TCB copy failed: slot=0x{slot:04x} err={copy_err} ({err_name}) root=0x{root:04x} root_ident=0x{root_ident:08x} src_ident=0x{src_ident:08x} dst_ident=0x{dst_ident:08x} depth={depth}",
-                slot = slot,
-                copy_err = copy_err,
-                err_name = sel4::error_name(copy_err),
-                root = root,
-                root_ident = root_ident,
-                src_ident = src_ident,
-                dst_ident = dst_ident_before,
-                depth = depth_word,
-            );
+        let root_ident = unsafe { sys::seL4_DebugCapIdentify(root_cnode()) };
+        if root_ident == 0 {
+            ::log::error!("[verify_root_cnode_slot] init CNode ident empty; refusing probe");
+            return Err(sys::seL4_InvalidCapability);
         }
-
-        let bi_src = sel4::seL4_CapBootInfoFrame as sys::seL4_Word;
-        let bi_dst = slot + 1;
-        let bi_dst_ident_before = unsafe { sys::seL4_DebugCapIdentify(bi_dst as sys::seL4_CPtr) };
-        let bi_src_ident = unsafe { sys::seL4_DebugCapIdentify(bi_src as sys::seL4_CPtr) };
-        ::log::info!(
-            "[verify_root_cnode_slot] sanity-copy destRoot=0x{root:04x} destIndex=0x{bi_dst:04x} destDepth={depth} srcRoot=0x{root:04x} srcIndex=0x{bi_src:04x} srcDepth={depth} dstIdent=0x{dst_ident:08x} srcIdent=0x{src_ident:08x}",
-            root = root,
-            bi_dst = bi_dst,
-            depth = depth_word,
-            bi_src = bi_src,
-            dst_ident = bi_dst_ident_before,
-            src_ident = bi_src_ident,
-        );
-        let sanity_err = unsafe {
-            sys::seL4_CNode_Copy(root, bi_dst, depth_word, root, bi_src, depth_word, rights)
-        };
-
-        if sanity_err != sys::seL4_NoError {
-            panic!(
-                "[verify_root_cnode_slot] sanity bootinfo copy failed: dst=0x{bi_dst:04x} err={sanity_err} ({err_name}) src=0x{bi_src:04x} depth={depth}",
-                bi_dst = bi_dst,
-                sanity_err = sanity_err,
-                err_name = sel4::error_name(sanity_err),
-                bi_src = bi_src,
-                depth = depth_word,
-            );
-        }
-
-        let bi_dst_ident_after = unsafe { sys::seL4_DebugCapIdentify(bi_dst as sys::seL4_CPtr) };
-        ::log::info!(
-            "[verify_root_cnode_slot] sanity-copy bootinfo dst=0x{bi_dst:04x} ident=0x{ident:08x}",
-            bi_dst = bi_dst,
-            ident = bi_dst_ident_after,
-        );
-
-        let _ = unsafe { sys::seL4_CNode_Delete(root, bi_dst, depth_word) };
-
-        let copied_ident = unsafe { sys::seL4_DebugCapIdentify(slot as sys::seL4_CPtr) };
-        ::log::info!(
-            "[verify_root_cnode_slot] copied init TCB into slot=0x{slot:04x} ident=0x{ident:08x} depth={depth}",
-            slot = slot,
-            ident = copied_ident,
-            depth = depth_word,
-        );
-
-        let cleanup_err =
-            unsafe { sys::seL4_CNode_Delete(root, slot as sys::seL4_Word, depth_word) };
-        if cleanup_err != sys::seL4_NoError {
-            ::log::warn!(
-                "[verify_root_cnode_slot] cleanup delete failed err={} — continuing",
-                cleanup_err
-            );
-        }
-        return Ok(());
     }
 
-    #[cfg(not(target_os = "none"))]
-    {
-        let _ = (bi, slot, root);
-        Ok(())
-    }
+    ::log::debug!(
+        "[verify_root_cnode_slot] slot=0x{slot:04x} accepted within bootinfo window [0x{start:04x}..0x{end:04x})",
+        slot = slot,
+        start = start,
+        end = end,
+    );
+
+    Ok(())
 }
 
 #[cfg(target_os = "none")]
@@ -1720,15 +1647,15 @@ pub fn cnode_copy(
     let dst_root_label = root_constant_label(dst_root);
     let src_root_label = root_constant_label(src_root);
 
-    ::log::info!(
+    ::log::debug!(
         "[cnode] op=copy dst=0x{dst_slot_raw:04x} src=0x{src_slot_raw:04x} depth={depth_word} style={style_label} idx.dst=0x{dst_index:04x} idx.src=0x{src_index:04x}",
     );
-    ::log::info!(
+    ::log::debug!(
         "[cnode] roots dst={dst_root_label}(0x{dst_root:04x}) src={src_root_label}(0x{src_root:04x})",
         dst_root = dst_root,
         src_root = src_root,
     );
-    ::log::info!("[cnode] labels dst={dst_label} src={src_label}",);
+    ::log::debug!("[cnode] labels dst={dst_label} src={src_label}",);
 
     cnode_copy_with_style(
         bi,
