@@ -17,6 +17,25 @@ pub const IDLE_TIMEOUT_MS: u64 = 5 * 60 * 1000;
 /// Number of console lines retained between pump cycles.
 pub const CONSOLE_QUEUE_DEPTH: usize = 8;
 
+/// Configuration for console networking transports.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ConsoleNetConfig {
+    /// Authentication token expected from TCP console clients.
+    pub auth_token: &'static str,
+    /// Idle timeout applied to authenticated sessions (milliseconds).
+    pub idle_timeout_ms: u64,
+}
+
+impl ConsoleNetConfig {
+    /// Construct a configuration using the default constants.
+    pub const fn default() -> Self {
+        Self {
+            auth_token: AUTH_TOKEN,
+            idle_timeout_ms: IDLE_TIMEOUT_MS,
+        }
+    }
+}
+
 /// Networking telemetry reported by the event pump.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct NetTelemetry {

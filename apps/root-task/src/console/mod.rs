@@ -4,6 +4,8 @@
 
 //! Shared console command parser and rate limiter for the root task console.
 
+pub mod proto;
+
 #[cfg(feature = "kernel")]
 mod io;
 #[cfg(feature = "kernel")]
