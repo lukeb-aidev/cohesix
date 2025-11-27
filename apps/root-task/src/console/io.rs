@@ -18,21 +18,47 @@ impl Console {
         Self { uart }
     }
 
-    /// Read a line of input into `buf`, returning the number of bytes stored.
-    pub fn read_line(&mut self, buf: &mut [u8]) -> usize {
-        self.uart.read_line(buf)
-    }
-
-    /// Blocking read of a single character from the UART RX FIFO.
+    /// Blocking read of a single byte from the UART RX FIFO.
     #[must_use]
-    pub fn read_char(&mut self) -> u8 {
+    pub fn read_byte_blocking(&mut self) -> u8 {
         self.uart.getc_blocking()
     }
 
-    /// Non-blocking attempt to retrieve a single character from the UART RX FIFO.
-    #[must_use]
-    pub fn poll_char(&mut self) -> Option<u8> {
-        self.uart.try_getc()
+    /// Read a line of input into `buf`, returning the number of bytes stored.
+    ///
+    /// Characters are echoed as they are received, CR/LF are normalised, and
+    /// destructive backspace handling is performed when space remains in the
+    /// buffer.
+    pub fn read_line(&mut self, buf: &mut [u8]) -> usize {
+        let mut len = 0usize;
+
+        while len + 1 < buf.len() {
+            let byte = self.read_byte_blocking();
+
+            match byte {
+                b'\r' | b'\n' => {
+                    self.write_str("\r\n");
+                    break;
+                }
+                0x08 | 0x7f => {
+                    if len > 0 {
+                        len -= 1;
+                        self.write_str("\x08 \x08");
+                    }
+                }
+                byte => {
+                    buf[len] = byte;
+                    len += 1;
+                    self.uart.putc(byte);
+                }
+            }
+        }
+
+        if len < buf.len() {
+            buf[len] = 0;
+        }
+
+        len
     }
 
     /// Flush any pending UART output.

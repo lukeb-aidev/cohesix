@@ -41,19 +41,13 @@ pub fn root_cnode() -> seL4_CNode {
 }
 
 #[inline(always)]
-pub fn path_depth(_bi: &sys::seL4_BootInfo) -> u8 {
-    match tuple_style() {
-        TupleStyle::Raw => SE_L4_WORDBITS,
-        TupleStyle::GuardEncoded => init_cnode_bits_u8(_bi),
-    }
+pub fn path_depth(bi: &sys::seL4_BootInfo) -> u8 {
+    init_cnode_bits_u8(bi)
 }
 
 #[inline(always)]
 pub fn path_depth_word(bi: &sys::seL4_BootInfo) -> sys::seL4_Word {
-    match tuple_style() {
-        TupleStyle::Raw => se_l4_wordbits_word(),
-        TupleStyle::GuardEncoded => init_cspace_depth_word(bi),
-    }
+    init_cspace_depth_word(bi)
 }
 
 #[inline(always)]

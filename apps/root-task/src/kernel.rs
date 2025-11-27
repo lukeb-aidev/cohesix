@@ -1392,6 +1392,17 @@ fn bootstrap<P: Platform>(
     }
     driver.write_str("[cohesix:root-task] uart logger online\n");
 
+    #[cfg(not(feature = "net-console"))]
+    {
+        let uart_slot = uart_region
+            .as_ref()
+            .map(|region| region.cap())
+            .unwrap_or(sel4_sys::seL4_CapNull);
+        let mut console = crate::console::Console::new(Pl011::new(uart_ptr));
+        let mut cli = crate::console::CohesixConsole::with_console(console, ep_slot, uart_slot);
+        cli.run();
+    }
+
     #[cfg(feature = "debug-input")]
     {
         let console_caps = ConsoleCaps {
