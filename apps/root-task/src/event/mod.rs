@@ -1433,7 +1433,7 @@ mod tests {
 
     #[test]
     fn console_acknowledgements_emit_expected_lines() {
-        let driver = LoopbackSerial::<128>::new();
+        let driver = LoopbackSerial::<256>::new();
         let serial = SerialPort::<_, 128, 128, 64>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
         let ipc = NullIpc;
@@ -1464,7 +1464,7 @@ mod tests {
 
     #[test]
     fn tail_command_emits_end_sentinel() {
-        let driver = LoopbackSerial::<128>::new();
+        let driver = LoopbackSerial::<256>::new();
         let serial = SerialPort::<_, 128, 128, 64>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
         let ipc = NullIpc;
@@ -1520,12 +1520,22 @@ mod tests {
         pump.poll();
         pump.poll();
         pump.poll();
-        let transcript = {
-            let driver = pump.serial_mut().driver_mut();
-            driver.drain_tx()
-        };
-        let rendered = String::from_utf8(transcript.into_iter().collect())
-            .expect("serial output must be utf8");
+        let mut rendered = String::new();
+        loop {
+            pump.serial_mut().poll_io();
+            let transcript = {
+                let driver = pump.serial_mut().driver_mut();
+                driver.drain_tx()
+            };
+            if transcript.is_empty() {
+                break;
+            }
+            rendered.push_str(
+                String::from_utf8(transcript.into_iter().collect())
+                    .expect("serial output must be utf8")
+                    .as_str(),
+            );
+        }
         assert!(rendered.contains("OK ATTACH role=queen"), "{rendered}");
         assert!(rendered.contains("OK LOG"), "{rendered}");
         assert!(rendered.contains("END\r\n"), "{rendered}");

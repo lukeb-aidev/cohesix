@@ -23,6 +23,18 @@ impl Console {
         self.uart.read_line(buf)
     }
 
+    /// Blocking read of a single character from the UART RX FIFO.
+    #[must_use]
+    pub fn read_char(&mut self) -> u8 {
+        self.uart.getc_blocking()
+    }
+
+    /// Non-blocking attempt to retrieve a single character from the UART RX FIFO.
+    #[must_use]
+    pub fn poll_char(&mut self) -> Option<u8> {
+        self.uart.try_getc()
+    }
+
     /// Flush any pending UART output.
     pub fn flush(&mut self) {
         self.uart.flush();
