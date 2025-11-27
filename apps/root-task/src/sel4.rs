@@ -2202,6 +2202,19 @@ impl<'a> KernelEnv<'a> {
             root_cnode_bits as seL4_Word,
         );
         let pool_index = device_pt_pool.as_ref().map(|pool| pool.index);
+        if let Some(pool) = device_pt_pool.as_ref() {
+            let remaining_tables = pool.remaining_tables();
+            log::info!(
+                "[device-pt] reserved pool ut=0x{ut:03x} tables={tables} bytes={bytes}",
+                ut = pool.ut_slot,
+                tables = remaining_tables,
+                bytes = pool.remaining_bytes(),
+            );
+            assert!(
+                remaining_tables > 0,
+                "device page-table pool exhausted during bootstrap reservation"
+            );
+        }
         let untyped = UntypedCatalog::new(bootinfo, pool_index);
         Self {
             bootinfo,
@@ -2902,6 +2915,10 @@ impl<'a> KernelEnv<'a> {
             return Err(sel4_sys::seL4_NotEnoughMemory);
         };
         let before = pool.remaining_tables();
+        assert!(
+            before > 0,
+            "device page-table pool exhausted before mapping level={level} vaddr=0x{vaddr:016x}",
+        );
         let reserved = pool.reserve_page_table()?;
         self.untyped
             .record_usage(pool.index, pool.used_bytes as u128);
@@ -2909,11 +2926,6 @@ impl<'a> KernelEnv<'a> {
             "[device-pt] reserve level={level} vaddr=0x{vaddr:016x} remaining_tables={remaining}",
             remaining = pool.remaining_tables(),
         );
-        if before == 0 {
-            log::warn!(
-                "[device-pt] pool reported no remaining tables before allocation; reservation forced failure path"
-            );
-        }
         Ok(reserved)
     }
 

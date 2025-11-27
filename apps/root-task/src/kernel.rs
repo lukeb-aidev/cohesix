@@ -1302,12 +1302,15 @@ fn bootstrap<P: Platform>(
                 }
             }
 
-            log::warn!(
-                "[pl011] UART map failed with {label} ({code}); PL011 MMIO console unavailable",
+            log::error!(
+                "[pl011] UART map failed with {label} ({code}); halting because device console is required",
                 label = error_label,
                 code = error_code,
             );
-            (None, Some(err))
+            panic!(
+                "device mapping for PL011 failed: {} ({})",
+                error_label, error_code
+            );
         }
     };
 
