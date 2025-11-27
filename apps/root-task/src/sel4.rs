@@ -1619,12 +1619,13 @@ impl DevicePtPool {
 
     fn reserve_page_table(&mut self) -> Result<ReservedUntyped, seL4_Error> {
         let page_table_bytes = self.page_table_bytes();
-        if page_table_bytes > self.remaining_bytes() {
+        let free_bytes = self.remaining_bytes();
+        if page_table_bytes > free_bytes {
             log::error!(
-                "[device-pt] pool exhausted: ut=0x{ut:03x} used={used}B total={total}B tables_remaining=0",
+                "[device-pt] pool insufficient: wanted {wanted}B but only {free}B free in ut=0x{ut:03x}",
+                wanted = page_table_bytes,
+                free = free_bytes,
                 ut = self.ut_slot,
-                used = self.used_bytes,
-                total = self.total_bytes,
             );
             return Err(seL4_NotEnoughMemory);
         }
@@ -1721,6 +1722,7 @@ impl<'a> UntypedCatalog<'a> {
     /// Reserves an untyped covering the supplied device physical address range.
     pub fn reserve_device(&mut self, paddr: usize, size_bits: usize) -> Option<ReservedUntyped> {
         let end = paddr.saturating_add(1usize << size_bits);
+        let obj_bits = size_bits as u8;
         for (index, entry) in self.entries.iter().enumerate() {
             if entry.desc.is_device == 0 {
                 continue;
@@ -1728,7 +1730,16 @@ impl<'a> UntypedCatalog<'a> {
             let base = entry.desc.paddr as usize;
             let limit = base.saturating_add(1usize << entry.desc.size_bits);
             if base <= paddr && end <= limit {
-                return self.reserve_index(index, size_bits as u8);
+                if entry.remaining_bytes() == 0 {
+                    log::error!(
+                        "[device-pt] device ut=0x{cap:03x} exhausted; skipping retype request",
+                        cap = self.bootinfo.untyped.start + index as seL4_CPtr,
+                    );
+                    continue;
+                }
+                if let Some(reserved) = self.reserve_index(index, obj_bits) {
+                    return Some(reserved);
+                }
             }
         }
         None
@@ -1736,18 +1747,32 @@ impl<'a> UntypedCatalog<'a> {
 
     /// Reserves the first RAM untyped meeting the requested size.
     pub fn reserve_ram(&mut self, obj_bits: u8) -> Option<ReservedUntyped> {
-        let index = self
-            .entries
-            .iter()
-            .enumerate()
-            .find(|(idx, entry)| {
-                self.device_pt_pool_index != Some(*idx)
-                    && entry.desc.is_device == 0
-                    && entry.desc.size_bits >= obj_bits
-            })
-            .map(|(index, _)| index)?;
+        let obj_bytes = 1u128 << core::cmp::min(obj_bits, 127);
+        for (index, entry) in self.entries.iter().enumerate() {
+            if self.device_pt_pool_index == Some(index)
+                || entry.desc.is_device != 0
+                || entry.desc.size_bits < obj_bits
+            {
+                continue;
+            }
 
-        self.reserve_index(index, obj_bits)
+            if entry.remaining_bytes() < obj_bytes {
+                log::debug!(
+                    "[untyped] skip ut=0x{cap:03x} size_bits={bits} used={used}B (insufficient for {need}B)",
+                    cap = self.bootinfo.untyped.start + index as seL4_CPtr,
+                    bits = entry.desc.size_bits,
+                    used = entry.used_bytes,
+                    need = obj_bytes,
+                );
+                continue;
+            }
+
+            if let Some(reserved) = self.reserve_index(index, obj_bits) {
+                return Some(reserved);
+            }
+        }
+
+        None
     }
 
     /// Releases a previously reserved untyped so it may be reused.
@@ -2891,11 +2916,12 @@ impl<'a> KernelEnv<'a> {
 
     fn reserve_page_table_for_vaddr(
         &mut self,
-        vaddr: usize,
+        table_base: usize,
+        mapping_vaddr: usize,
         level: &'static str,
     ) -> Result<ReservedUntyped, seL4_Error> {
-        if self.is_device_window_vaddr(vaddr) {
-            return self.reserve_device_page_table(level, vaddr);
+        if self.is_device_window_vaddr(mapping_vaddr) {
+            return self.reserve_device_page_table(level, table_base);
         }
 
         self.untyped
@@ -2910,7 +2936,7 @@ impl<'a> KernelEnv<'a> {
             return Ok(());
         }
 
-        let reserved = self.reserve_page_table_for_vaddr(pt_base, "page_table")?;
+        let reserved = self.reserve_page_table_for_vaddr(pt_base, vaddr, "page_table")?;
         let pt_slot = self.allocate_slot();
         let trace = self.prepare_retype_trace(
             &reserved,
@@ -2983,7 +3009,7 @@ impl<'a> KernelEnv<'a> {
 
         self.ensure_page_upper_directory(vaddr, strict)?;
 
-        let reserved = self.reserve_page_table_for_vaddr(pd_base, "page_directory")?;
+        let reserved = self.reserve_page_table_for_vaddr(pd_base, vaddr, "page_directory")?;
         let pd_slot = self.allocate_slot();
         let trace = self.prepare_retype_trace(
             &reserved,
@@ -3048,7 +3074,8 @@ impl<'a> KernelEnv<'a> {
             return Ok(());
         }
 
-        let reserved = self.reserve_page_table_for_vaddr(pud_base, "page_upper_directory")?;
+        let reserved =
+            self.reserve_page_table_for_vaddr(pud_base, vaddr, "page_upper_directory")?;
         let pud_slot = self.allocate_slot();
         let trace = self.prepare_retype_trace(
             &reserved,

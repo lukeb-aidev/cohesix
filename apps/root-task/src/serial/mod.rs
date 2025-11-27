@@ -160,8 +160,14 @@ where
     /// Inject data that should be transmitted to the remote peer.
     pub fn enqueue_tx(&mut self, data: &[u8]) {
         for &byte in data {
-            if self.tx.enqueue(byte).is_err() {
+            let mut attempts = 0usize;
+            while self.tx.enqueue(byte).is_err() {
                 self.telemetry.tx_overflow();
+                self.flush_tx();
+                attempts = attempts.saturating_add(1);
+                if attempts > TX {
+                    break;
+                }
             }
         }
     }
@@ -185,6 +191,10 @@ where
             }
         }
 
+        self.flush_tx();
+    }
+
+    fn flush_tx(&mut self) {
         // Flush staged TX bytes to the device until it reports back-pressure.
         if let Some(byte) = self.pending_tx.take() {
             match self.driver.write_byte(byte) {
