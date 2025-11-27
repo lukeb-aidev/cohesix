@@ -1723,20 +1723,31 @@ impl<'a> UntypedCatalog<'a> {
     pub fn reserve_device(&mut self, paddr: usize, size_bits: usize) -> Option<ReservedUntyped> {
         let end = paddr.saturating_add(1usize << size_bits);
         let obj_bits = size_bits as u8;
-        for (index, entry) in self.entries.iter().enumerate() {
-            if entry.desc.is_device == 0 {
-                continue;
-            }
-            let base = entry.desc.paddr as usize;
-            let limit = base.saturating_add(1usize << entry.desc.size_bits);
-            if base <= paddr && end <= limit {
-                if entry.remaining_bytes() == 0 {
-                    log::error!(
-                        "[device-pt] device ut=0x{cap:03x} exhausted; skipping retype request",
-                        cap = self.bootinfo.untyped.start + index as seL4_CPtr,
-                    );
-                    continue;
+        for index in 0..self.entries.len() {
+            let should_reserve = {
+                let entry = &self.entries[index];
+                if entry.desc.is_device == 0 {
+                    false
+                } else {
+                    let base = entry.desc.paddr as usize;
+                    let limit = base.saturating_add(1usize << entry.desc.size_bits);
+                    if base <= paddr && end <= limit {
+                        if entry.remaining_bytes() == 0 {
+                            log::error!(
+                                "[device-pt] device ut=0x{cap:03x} exhausted; skipping retype request",
+                                cap = self.bootinfo.untyped.start + index as seL4_CPtr,
+                            );
+                            false
+                        } else {
+                            true
+                        }
+                    } else {
+                        false
+                    }
                 }
+            };
+
+            if should_reserve {
                 if let Some(reserved) = self.reserve_index(index, obj_bits) {
                     return Some(reserved);
                 }
@@ -1748,27 +1759,32 @@ impl<'a> UntypedCatalog<'a> {
     /// Reserves the first RAM untyped meeting the requested size.
     pub fn reserve_ram(&mut self, obj_bits: u8) -> Option<ReservedUntyped> {
         let obj_bytes = 1u128 << core::cmp::min(obj_bits, 127);
-        for (index, entry) in self.entries.iter().enumerate() {
-            if self.device_pt_pool_index == Some(index)
-                || entry.desc.is_device != 0
-                || entry.desc.size_bits < obj_bits
-            {
-                continue;
-            }
+        for index in 0..self.entries.len() {
+            let should_reserve = {
+                let entry = &self.entries[index];
+                if self.device_pt_pool_index == Some(index)
+                    || entry.desc.is_device != 0
+                    || entry.desc.size_bits < obj_bits
+                {
+                    false
+                } else if entry.remaining_bytes() < obj_bytes {
+                    log::debug!(
+                        "[untyped] skip ut=0x{cap:03x} size_bits={bits} used={used}B (insufficient for {need}B)",
+                        cap = self.bootinfo.untyped.start + index as seL4_CPtr,
+                        bits = entry.desc.size_bits,
+                        used = entry.used_bytes,
+                        need = obj_bytes,
+                    );
+                    false
+                } else {
+                    true
+                }
+            };
 
-            if entry.remaining_bytes() < obj_bytes {
-                log::debug!(
-                    "[untyped] skip ut=0x{cap:03x} size_bits={bits} used={used}B (insufficient for {need}B)",
-                    cap = self.bootinfo.untyped.start + index as seL4_CPtr,
-                    bits = entry.desc.size_bits,
-                    used = entry.used_bytes,
-                    need = obj_bytes,
-                );
-                continue;
-            }
-
-            if let Some(reserved) = self.reserve_index(index, obj_bits) {
-                return Some(reserved);
+            if should_reserve {
+                if let Some(reserved) = self.reserve_index(index, obj_bits) {
+                    return Some(reserved);
+                }
             }
         }
 
