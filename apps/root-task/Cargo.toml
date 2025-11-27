@@ -12,6 +12,7 @@ cap-probes = []   # gate experimental cap ops (tests/bench only)
 net = ["net-console"]
 canonical_cspace = ["kernel"]
 bootstrap-minimal = []
+bootstrap-debug = []
 serial-console = []
 untyped-debug = []
 trace-heavy-init = []
