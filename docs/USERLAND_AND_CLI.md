@@ -15,7 +15,7 @@ per-command capability checks inside the event pump.
 |---------|------|--------|
 | `help` | All | Emit an audit line indicating that help was requested |
 | `attach <role> <ticket>` | All | Authenticate the session and bind a role; tickets are required for every role |
-| `ping` | All | Report whether the client is attached; errors when detached so scripts can gate |
+| `ping` | All | Send a `PING` console verb and expect `PONG` + `OK PING reply=pong`; errors when detached |
 | `tail <path>` | Worker, Queen | Record a request to stream a path via NineDoor once the bridge is online |
 | `log` | Queen | Shortcut for initiating the log stream verb |
 | `spawn <json>` | Queen | Forward JSON payloads to NineDoor for worker orchestration |
@@ -26,10 +26,12 @@ per-command capability checks inside the event pump.
 > Secure9P namespace once NineDoor lands in Milestone 8; they are not part
 > of the Milestone 7 console.
 
-`ping` is a client-side reachability check: when attached it reports the
-current role and transport and returns success, and when detached it prints
-`ping: not attached` and fails so scripts can detect a missing session without
-altering system state.
+`ping` now performs a real round-trip over the active transport. When a
+session is attached the TCP listener (or QEMU/serial console) returns
+`PONG` plus `OK PING reply=pong`; the CLI surfaces this as `ping: pong` and
+records the acknowledgements with `[console]` prefixes. When detached, the
+command fails with `ping: not attached` so scripts can detect a missing
+session without mutating state.
 
 ### 2.2 Authentication & Limits
 - Maximum console line length is 128 characters; role identifiers are
@@ -40,6 +42,9 @@ altering system state.
   `accepted_commands` and `denied_commands` counters for auditability and,
   when built for the kernel, tracking bootstrap IPC deliveries via
   `bootstrap_messages`. 【F:apps/root-task/src/event/mod.rs†L84-L120】【F:apps/root-task/src/event/mod.rs†L240-L489】
+- The TCP listener requires an authentication token (`AUTH <token>`).
+  `cohsh --transport tcp` defaults to `changeme` but can be overridden via
+  `--auth-token` or `COHSH_AUTH_TOKEN`.
 
 ### 2.3 Output Semantics
 The console emits explicit acknowledgements for every command. Both

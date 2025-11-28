@@ -26,24 +26,29 @@ fn tcp_console_script_recovers_from_disconnect() -> Result<()> {
             let mut line = String::new();
             while reader.read_line(&mut line).unwrap_or(0) > 0 {
                 let trimmed = line.trim();
-                if trimmed.starts_with("ATTACH") {
+                if trimmed == "AUTH changeme" {
+                    writeln!(stream, "OK AUTH").unwrap();
+                } else if trimmed.starts_with("ATTACH") {
                     server_log
                         .lock()
                         .expect("ticket log poisoned")
                         .push(trimmed.to_owned());
-                    writeln!(stream, "OK session-{attempts}").unwrap();
+                    writeln!(stream, "OK ATTACH role=queen session-{attempts}").unwrap();
                 } else if trimmed.starts_with("TAIL") {
                     if attempts == 1 {
+                        writeln!(stream, "OK TAIL path=/log/queen.log").unwrap();
                         writeln!(stream, "queen boot").unwrap();
                         stream.flush().unwrap();
                         break;
                     } else {
+                        writeln!(stream, "OK TAIL path=/log/queen.log").unwrap();
                         writeln!(stream, "queen boot").unwrap();
                         writeln!(stream, "reconnected line").unwrap();
                         writeln!(stream, "END").unwrap();
                     }
                 } else if trimmed == "PING" {
                     writeln!(stream, "PONG").unwrap();
+                    writeln!(stream, "OK PING reply=pong").unwrap();
                 }
                 line.clear();
             }

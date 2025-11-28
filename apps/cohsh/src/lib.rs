@@ -82,6 +82,9 @@ pub trait Transport {
         "transport"
     }
 
+    /// Perform a lightweight health probe using the underlying protocol.
+    fn ping(&mut self, session: &Session) -> Result<String>;
+
     /// Stream a log-like file and return the accumulated contents.
     fn tail(&mut self, session: &Session, path: &str) -> Result<Vec<String>>;
 
@@ -104,6 +107,10 @@ where
 
     fn kind(&self) -> &'static str {
         (**self).kind()
+    }
+
+    fn ping(&mut self, session: &Session) -> Result<String> {
+        (**self).ping(session)
     }
 
     fn tail(&mut self, session: &Session, path: &str) -> Result<Vec<String>> {
@@ -181,6 +188,19 @@ impl Transport for NineDoorTransport {
 
     fn kind(&self) -> &'static str {
         "mock"
+    }
+
+    fn ping(&mut self, session: &Session) -> Result<String> {
+        let fid = self.allocate_fid();
+        let connection = self
+            .connection
+            .as_mut()
+            .context("attach to a session before running ping")?;
+        connection
+            .walk(ROOT_FID, fid, &[])
+            .context("ping walk failed")?;
+        connection.clunk(fid).context("ping clunk failed")?;
+        Ok(format!("attached as {:?} via mock", session.role()))
     }
 
     fn tail(&mut self, _session: &Session, path: &str) -> Result<Vec<String>> {
@@ -466,6 +486,16 @@ impl Transport for QemuTransport {
         "qemu"
     }
 
+    fn ping(&mut self, session: &Session) -> Result<String> {
+        if let Some(child) = self.child.as_mut() {
+            if let Some(status) = child.try_wait().context("failed to query QEMU state")? {
+                return Err(anyhow!("qemu exited with status {status}"));
+            }
+            return Ok(format!("ping: qemu running for {:?}", session.role()));
+        }
+        Err(anyhow!("attach via QEMU before issuing ping"))
+    }
+
     fn tail(&mut self, _session: &Session, path: &str) -> Result<Vec<String>> {
         if path != "/log/queen.log" {
             return Err(anyhow!(
@@ -535,6 +565,13 @@ impl<T: Transport, W: Write> Shell<T, W> {
         Ok(())
     }
 
+    fn prompt(&self) -> String {
+        match self.session {
+            Some(_) => "coh> ".to_owned(),
+            None => format!("coh[{}:disconnected]> ", self.transport.kind()),
+        }
+    }
+
     /// Attach to the transport using the supplied role and optional ticket payload.
     /// Worker roles must provide their identity via `ticket`.
     pub fn attach(&mut self, role: Role, ticket: Option<&str>) -> Result<()> {
@@ -577,7 +614,7 @@ impl<T: Transport, W: Write> Shell<T, W> {
         let mut reader = stdin.lock();
         let mut line = String::new();
         loop {
-            write!(self.writer, "coh> ")?;
+            write!(self.writer, "{}", self.prompt())?;
             self.writer.flush()?;
             line.clear();
             if reader.read_line(&mut line)? == 0 {
@@ -680,18 +717,16 @@ impl<T: Transport, W: Write> Shell<T, W> {
                 if parts.next().is_some() {
                     return Err(anyhow!("ping does not take any arguments"));
                 }
-                if let Some(session) = &self.session {
-                    writeln!(
-                        self.writer,
-                        "ping: attached as {:?} via {}",
-                        session.role(),
-                        self.transport.kind(),
-                    )?;
-                    Ok(CommandStatus::Continue)
-                } else {
+                let Some(session) = self.session.as_ref() else {
                     writeln!(self.writer, "ping: not attached")?;
-                    Err(anyhow!("ping: not attached"))
+                    return Err(anyhow!("ping: not attached"));
+                };
+                let response = self.transport.ping(session)?;
+                for ack in self.transport.drain_acknowledgements() {
+                    writeln!(self.writer, "[console] {ack}")?;
                 }
+                writeln!(self.writer, "ping: {response}")?;
+                Ok(CommandStatus::Continue)
             }
             "echo" => {
                 let payload_start = line[4..].trim_start();

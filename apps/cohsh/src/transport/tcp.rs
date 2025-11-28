@@ -119,6 +119,7 @@ pub struct TcpTransport {
     retry_backoff: Duration,
     retry_ceiling: Duration,
     max_retries: usize,
+    auth_token: String,
     stream: Option<TcpStream>,
     reader: Option<BufReader<TcpStream>>,
     next_session_id: u64,
@@ -127,6 +128,7 @@ pub struct TcpTransport {
     session_cache: Option<SessionCache>,
     telemetry: ConnectionTelemetry,
     pending_ack: VecDeque<AckOwned>,
+    authenticated: bool,
 }
 
 impl TcpTransport {
@@ -140,6 +142,7 @@ impl TcpTransport {
             retry_backoff: DEFAULT_RETRY_BACKOFF,
             retry_ceiling: DEFAULT_RETRY_CEILING,
             max_retries: DEFAULT_MAX_RETRIES,
+            auth_token: "changeme".to_owned(),
             stream: None,
             reader: None,
             next_session_id: 2,
@@ -148,6 +151,7 @@ impl TcpTransport {
             session_cache: None,
             telemetry: ConnectionTelemetry::default(),
             pending_ack: VecDeque::new(),
+            authenticated: false,
         }
     }
 
@@ -169,6 +173,13 @@ impl TcpTransport {
     #[must_use]
     pub fn with_max_retries(mut self, attempts: usize) -> Self {
         self.max_retries = attempts.max(1);
+        self
+    }
+
+    /// Override the authentication token expected by the remote listener.
+    #[must_use]
+    pub fn with_auth_token(mut self, token: impl Into<String>) -> Self {
+        self.auth_token = token.into();
         self
     }
 
@@ -215,6 +226,7 @@ impl TcpTransport {
                         .context("failed to clone TCP stream for reader")?;
                     self.reader = Some(BufReader::new(reader_stream));
                     self.stream = Some(stream);
+                    self.authenticated = false;
                     self.last_activity = Instant::now();
                     self.telemetry.log_connect(&self.address, self.port);
                     return Ok(());
@@ -233,20 +245,75 @@ impl TcpTransport {
         }
     }
 
-    fn ensure_connection(&mut self) -> Result<()> {
-        if self.stream.is_none() {
-            self.connect_with_backoff()?;
+    fn perform_auth(&mut self) -> Result<()> {
+        let auth_line = format!("AUTH {}", self.auth_token);
+        self.send_line_raw(&auth_line)?;
+        let mut timeouts = 0usize;
+        loop {
+            match self.read_line_internal()? {
+                ReadStatus::Line(line) => {
+                    let trimmed = Self::trim_line(&line);
+                    if let Some(ack) = parse_ack(&trimmed) {
+                        if ack.verb.eq_ignore_ascii_case("AUTH")
+                            && matches!(ack.status, AckStatus::Ok)
+                        {
+                            self.record_ack(&trimmed);
+                            self.authenticated = true;
+                            self.last_activity = Instant::now();
+                            return Ok(());
+                        }
+                        return Err(anyhow!("authentication rejected: {trimmed}"));
+                    }
+                }
+                ReadStatus::Timeout => {
+                    timeouts += 1;
+                    if timeouts > self.max_retries {
+                        return Err(anyhow!("authentication timed out"));
+                    }
+                }
+                ReadStatus::Closed => {
+                    return Err(anyhow!("connection closed during authentication"));
+                }
+            }
         }
-        Ok(())
+    }
+
+    fn ensure_authenticated(&mut self) -> Result<()> {
+        if self.authenticated && self.stream.is_some() {
+            return Ok(());
+        }
+
+        let mut attempt = 0usize;
+        let mut delay = self.retry_backoff;
+        loop {
+            self.connect_with_backoff()?;
+            match self.perform_auth() {
+                Ok(()) => return Ok(()),
+                Err(err) => {
+                    let message = err.to_string();
+                    let fatal_auth = message.contains("authentication rejected");
+                    self.telemetry.log_disconnect(err.as_ref());
+                    self.reset_connection();
+                    attempt += 1;
+                    if fatal_auth || attempt > self.max_retries {
+                        return Err(anyhow!("authentication failed: {message}"));
+                    }
+                    self.telemetry.log_reconnect(attempt, delay);
+                    thread::sleep(delay);
+                    delay = Self::next_delay(delay, self.retry_ceiling);
+                }
+            }
+        }
     }
 
     fn reset_connection(&mut self) {
         self.stream = None;
         self.reader = None;
         self.last_probe = None;
+        self.authenticated = false;
     }
 
-    fn send_line_once(&mut self, line: &str) -> Result<(), io::Error> {
+    fn send_line_raw(&mut self, line: &str) -> Result<(), io::Error> {
         let stream = self.stream.as_mut().ok_or_else(|| {
             io::Error::new(io::ErrorKind::NotConnected, "TCP transport not connected")
         })?;
@@ -259,8 +326,8 @@ impl TcpTransport {
         let mut attempt = 0usize;
         let mut delay = self.retry_backoff;
         loop {
-            self.ensure_connection()?;
-            match self.send_line_once(line) {
+            self.ensure_authenticated()?;
+            match self.send_line_raw(line) {
                 Ok(()) => {
                     return Ok(());
                 }
@@ -333,6 +400,9 @@ impl TcpTransport {
     }
 
     fn next_protocol_line(&mut self) -> Result<Option<String>> {
+        if self.reader.is_none() {
+            self.ensure_authenticated()?;
+        }
         loop {
             match self.read_line_internal()? {
                 ReadStatus::Line(line) => {
@@ -496,6 +566,7 @@ impl Transport for TcpTransport {
                         role,
                         ticket: ticket_payload.clone(),
                     });
+                    eprintln!("[cohsh][tcp] remote NineDoor ready as role {:?}", role);
                     return Ok(session);
                 }
                 None => {
@@ -516,6 +587,36 @@ impl Transport for TcpTransport {
 
     fn kind(&self) -> &'static str {
         "tcp"
+    }
+
+    fn ping(&mut self, _session: &Session) -> Result<String> {
+        let mut attempts = 0usize;
+        loop {
+            self.send_line("PING")?;
+            match self.next_protocol_line()? {
+                Some(response) => {
+                    if self.record_ack(&response) {
+                        if response.starts_with("OK PING") {
+                            return Ok("pong".to_owned());
+                        }
+                        if response.starts_with("ERR PING") {
+                            return Err(anyhow!("ping failed: {response}"));
+                        }
+                        continue;
+                    }
+                    if response.eq_ignore_ascii_case("PONG") {
+                        return Ok("pong".to_owned());
+                    }
+                }
+                None => {
+                    attempts += 1;
+                    if attempts > self.max_retries {
+                        return Err(anyhow!("connection dropped repeatedly while awaiting PING"));
+                    }
+                    self.recover_session()?;
+                }
+            }
+        }
     }
 
     fn tail(&mut self, _session: &Session, path: &str) -> Result<Vec<String>> {
@@ -614,7 +715,14 @@ mod tests {
                 let mut line = String::new();
                 while reader.read_line(&mut line).unwrap_or(0) > 0 {
                     let trimmed = line.trim();
-                    if trimmed.starts_with("ATTACH") {
+                    if trimmed.starts_with("AUTH ") {
+                        if trimmed == "AUTH changeme" {
+                            writeln!(stream, "OK AUTH").unwrap();
+                        } else {
+                            writeln!(stream, "ERR AUTH reason=invalid-token").unwrap();
+                            break;
+                        }
+                    } else if trimmed.starts_with("ATTACH") {
                         writeln!(stream, "OK ATTACH role=queen").unwrap();
                     } else if trimmed.starts_with("TAIL") {
                         writeln!(stream, "OK TAIL path=/log/queen.log").unwrap();
@@ -628,6 +736,7 @@ mod tests {
                         }
                     } else if trimmed == "PING" {
                         writeln!(stream, "PONG").unwrap();
+                        writeln!(stream, "OK PING reply=pong").unwrap();
                     }
                     line.clear();
                 }
@@ -637,16 +746,28 @@ mod tests {
         let mut transport = TcpTransport::new("127.0.0.1", port)
             .with_timeout(Duration::from_millis(100))
             .with_heartbeat_interval(Duration::from_millis(50))
-            .with_max_retries(4);
+            .with_max_retries(4)
+            .with_auth_token("changeme");
         let session = transport.attach(Role::Queen, None).unwrap();
         let attach_ack = transport.drain_acknowledgements();
-        assert_eq!(attach_ack, vec!["OK ATTACH role=queen".to_owned()]);
+        assert!(attach_ack
+            .iter()
+            .any(|ack| ack.eq_ignore_ascii_case("OK AUTH")));
+        assert!(attach_ack
+            .iter()
+            .any(|ack| ack.starts_with("OK ATTACH role=queen")));
         let logs = transport.tail(&session, "/log/queen.log").unwrap();
         assert_eq!(logs, vec!["line one".to_owned(), "line two".to_owned()]);
         let tail_ack = transport.drain_acknowledgements();
         assert!(tail_ack
             .iter()
             .any(|ack| ack.starts_with("OK TAIL path=/log/queen.log")));
+        let ping_response = transport.ping(&session).unwrap();
+        assert_eq!(ping_response, "pong");
+        let ping_ack = transport.drain_acknowledgements();
+        assert!(ping_ack
+            .iter()
+            .any(|ack| ack.starts_with("OK PING reply=pong")));
     }
 
     #[test]
@@ -664,5 +785,34 @@ mod tests {
         assert!(err
             .to_string()
             .contains("failed to connect to Cohesix TCP console"));
+    }
+
+    #[test]
+    fn invalid_auth_triggers_clean_error() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        thread::spawn(move || {
+            for stream in listener.incoming().take(1) {
+                let mut stream = stream.unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut line = String::new();
+                while reader.read_line(&mut line).unwrap_or(0) > 0 {
+                    if line.trim().starts_with("AUTH ") {
+                        writeln!(stream, "ERR AUTH reason=invalid-token").unwrap();
+                        break;
+                    }
+                    line.clear();
+                }
+            }
+        });
+
+        let mut transport = TcpTransport::new("127.0.0.1", port)
+            .with_timeout(Duration::from_millis(100))
+            .with_max_retries(1)
+            .with_auth_token("wrong");
+        let err = transport
+            .attach(Role::Queen, None)
+            .expect_err("attach should fail on bad auth");
+        assert!(err.to_string().contains("authentication failed"));
     }
 }
