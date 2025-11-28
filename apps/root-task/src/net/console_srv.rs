@@ -3,6 +3,7 @@
 //! TCP console session management shared between kernel and host stacks.
 
 use heapless::{Deque, String as HeaplessString};
+use log::{info, warn};
 
 use super::CONSOLE_QUEUE_DEPTH;
 use crate::console::proto::{render_ack, AckLine, AckStatus, LineFormatError};
@@ -19,6 +20,8 @@ pub enum SessionEvent {
     None,
     /// The client successfully authenticated.
     Authenticated,
+    /// Authentication failed and the connection should be terminated.
+    AuthFailed(&'static str),
     /// The server should close the connection.
     Close,
 }
@@ -62,6 +65,7 @@ impl TcpConsoleServer {
         self.inbound.clear();
         self.outbound.clear();
         self.last_activity_ms = now_ms;
+        info!("[net-console] auth begin");
     }
 
     /// Tear down any per-connection state.
@@ -129,15 +133,20 @@ impl TcpConsoleServer {
         let trimmed = line.trim();
         if !trimmed.starts_with(AUTH_PREFIX) {
             let _ = self.enqueue_auth_ack(AckStatus::Err, Some("reason=expected-token"));
-            return SessionEvent::Close;
+            self.state = SessionState::Inactive;
+            warn!("[net-console] auth failed reason=expected-token");
+            return SessionEvent::AuthFailed("expected-token");
         }
         let token = trimmed.split_at(AUTH_PREFIX.len()).1.trim();
         if token != self.auth_token {
             let _ = self.enqueue_auth_ack(AckStatus::Err, Some("reason=invalid-token"));
-            return SessionEvent::Close;
+            self.state = SessionState::Inactive;
+            warn!("[net-console] auth failed reason=invalid-token");
+            return SessionEvent::AuthFailed("invalid-token");
         }
         self.state = SessionState::Authenticated;
         let _ = self.enqueue_auth_ack(AckStatus::Ok, None);
+        info!("[net-console] auth ok");
         SessionEvent::Authenticated
     }
 
@@ -235,7 +244,7 @@ mod tests {
         server.begin_session(0);
 
         let event = server.ingest(b"AUTH wrong\n", 1);
-        assert_eq!(event, SessionEvent::Close);
+        assert_eq!(event, SessionEvent::AuthFailed("invalid-token"));
         assert!(!server.is_authenticated());
 
         let ack = server.pop_outbound().expect("ack present");

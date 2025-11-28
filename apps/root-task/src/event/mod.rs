@@ -245,6 +245,17 @@ impl<const N: usize> Default for TicketTable<N> {
 
 impl<const N: usize> CapabilityValidator for TicketTable<N> {
     fn validate(&self, role: Role, ticket: Option<&str>) -> bool {
+        let ticket = ticket.and_then(|value| {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed)
+            }
+        });
+        if role == Role::Queen && ticket.is_none() {
+            return true;
+        }
         let Some(ticket) = ticket else { return false };
         self.entries
             .iter()
@@ -1231,6 +1242,25 @@ mod tests {
         drop(pump);
         assert!(audit.denials.iter().any(|line| line.contains("attach")));
         assert!(!audit.denials.is_empty());
+    }
+
+    #[test]
+    fn queen_attach_without_ticket_is_permitted() {
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "bootstrap").unwrap();
+        assert!(store.validate(Role::Queen, None));
+        assert!(store.validate(Role::Queen, Some("   ")));
+    }
+
+    #[test]
+    fn worker_roles_still_require_tickets() {
+        let mut store: TicketTable<4> = TicketTable::new();
+        store
+            .register(Role::WorkerHeartbeat, "worker-ticket")
+            .unwrap();
+        assert!(!store.validate(Role::WorkerHeartbeat, None));
+        assert!(!store.validate(Role::WorkerHeartbeat, Some("  ")));
+        assert!(store.validate(Role::WorkerHeartbeat, Some("worker-ticket")));
     }
 
     #[cfg(feature = "kernel")]

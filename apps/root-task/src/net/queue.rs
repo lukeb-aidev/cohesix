@@ -355,11 +355,12 @@ impl NetStack {
 
     fn flush_outbound_lines(&mut self) -> bool {
         let mut activity = false;
-        if !self.server.is_authenticated() {
-            return false;
-        }
-
+        let pre_auth = !self.server.is_authenticated();
         while let Some(line) = self.server.pop_outbound() {
+            if pre_auth && !(line.starts_with("OK AUTH") || line.starts_with("ERR AUTH")) {
+                self.server.push_outbound_front(line);
+                break;
+            }
             let mut payload: HeaplessVec<u8, { DEFAULT_LINE_CAPACITY + 2 }> = HeaplessVec::new();
             if payload.extend_from_slice(line.as_bytes()).is_err()
                 || payload.extend_from_slice(b"\r\n").is_err()
@@ -556,5 +557,22 @@ mod tests {
         let ack = handle.pop_tx().expect("auth acknowledgement missing");
         let ack_rendered = core::str::from_utf8(ack.as_slice()).expect("ack not utf8");
         assert_eq!(ack_rendered, "OK AUTH\r\n");
+    }
+
+    #[test]
+    fn auth_failures_flush_error_before_closing() {
+        use super::super::console_srv::SessionEvent;
+
+        let (mut stack, handle) = NetStack::new(Ipv4Address::new(10, 0, 2, 150));
+        stack.server.begin_session(0);
+        stack.session_active = true;
+        let event = stack.server.ingest(b"AUTH wrong\n", 1);
+        assert!(matches!(event, SessionEvent::AuthFailed(_)));
+
+        assert!(stack.poll_with_time(1));
+
+        let frame = handle.pop_tx().expect("auth failure frame missing");
+        let rendered = core::str::from_utf8(frame.as_slice()).expect("frame not utf8");
+        assert!(rendered.starts_with("ERR AUTH"));
     }
 }
