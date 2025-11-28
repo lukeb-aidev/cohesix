@@ -21,7 +21,9 @@ fn tcp_script_executes_against_basic_server() {
             let mut line = String::new();
             while reader.read_line(&mut line).expect("read line") > 0 {
                 let trimmed = line.trim();
-                if trimmed.starts_with("ATTACH") {
+                if trimmed == "AUTH changeme" {
+                    writeln!(stream, "OK AUTH").expect("ack auth");
+                } else if trimmed.starts_with("ATTACH") {
                     writeln!(stream, "OK ATTACH role=queen").expect("ack attach");
                 } else if trimmed.starts_with("TAIL") {
                     writeln!(stream, "OK TAIL path=/log/queen.log").expect("ack tail");
@@ -30,6 +32,7 @@ fn tcp_script_executes_against_basic_server() {
                     writeln!(stream, "END").expect("write end");
                 } else if trimmed == "PING" {
                     writeln!(stream, "PONG").expect("pong");
+                    writeln!(stream, "OK PING reply=pong").expect("ack ping");
                 }
                 line.clear();
             }

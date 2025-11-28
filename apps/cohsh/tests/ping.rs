@@ -18,6 +18,10 @@ impl Transport for StubTransport {
         "stub"
     }
 
+    fn ping(&mut self, session: &Session) -> anyhow::Result<String> {
+        Ok(format!("attached as {:?} via stub", session.role()))
+    }
+
     fn tail(&mut self, _session: &Session, _path: &str) -> anyhow::Result<Vec<String>> {
         unimplemented!("tail not used in ping tests")
     }

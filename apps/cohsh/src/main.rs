@@ -74,6 +74,11 @@ struct Cli {
     #[cfg(feature = "tcp")]
     #[arg(long, default_value_t = 31337)]
     tcp_port: u16,
+
+    /// Authentication token required by the TCP console listener.
+    #[cfg(feature = "tcp")]
+    #[arg(long, default_value = "changeme")]
+    auth_token: String,
 }
 
 fn main() -> Result<()> {
@@ -87,7 +92,7 @@ fn main() -> Result<()> {
         }
     }
     #[cfg(feature = "tcp")]
-    let (tcp_host, tcp_port) = {
+    let (tcp_host, tcp_port, auth_token) = {
         let mut host = cli.tcp_host.clone();
         if let Ok(value) = env::var("COHSH_TCP_HOST") {
             if host == "127.0.0.1" {
@@ -100,7 +105,13 @@ fn main() -> Result<()> {
                 port = parsed;
             }
         }
-        (host, port)
+        let mut token = cli.auth_token.clone();
+        if let Ok(value) = env::var("COHSH_AUTH_TOKEN") {
+            if token == "changeme" {
+                token = value;
+            }
+        }
+        (host, port, token)
     };
 
     let transport: Box<dyn Transport> = match cli.transport {
@@ -115,7 +126,8 @@ fn main() -> Result<()> {
         TransportKind::Tcp => Box::new(
             TcpTransport::new(tcp_host.clone(), tcp_port)
                 .with_timeout(std::time::Duration::from_secs(5))
-                .with_heartbeat_interval(std::time::Duration::from_secs(15)),
+                .with_heartbeat_interval(std::time::Duration::from_secs(15))
+                .with_auth_token(auth_token.clone()),
         ),
     };
     let mut shell = Shell::new(transport, writer);
@@ -139,11 +151,29 @@ fn main() -> Result<()> {
                     return Err(error);
                 }
                 eprintln!("Error: {error}");
-                shell.write_line("detached shell: run 'attach <role>' to connect")?;
+                #[cfg(feature = "tcp")]
+                let hint = match cli.transport {
+                    TransportKind::Tcp => {
+                        "tcp transport disconnected; run 'attach <role>' to reconnect"
+                    }
+                    TransportKind::Qemu => "qemu transport idle; run 'attach <role>' to boot",
+                    TransportKind::Mock => "detached shell: run 'attach <role>' to connect",
+                };
+                #[cfg(not(feature = "tcp"))]
+                let hint = "detached shell: run 'attach <role>' to connect";
+                shell.write_line(hint)?;
             }
         }
     } else {
-        shell.write_line("detached shell: run 'attach <role>' to connect")?;
+        #[cfg(feature = "tcp")]
+        let hint = match cli.transport {
+            TransportKind::Tcp => "tcp transport disconnected; run 'attach <role>' to connect",
+            TransportKind::Qemu => "qemu transport idle; run 'attach <role>' to connect",
+            TransportKind::Mock => "detached shell: run 'attach <role>' to connect",
+        };
+        #[cfg(not(feature = "tcp"))]
+        let hint = "detached shell: run 'attach <role>' to connect";
+        shell.write_line(hint)?;
     }
     if auto_log {
         shell.execute("log")?;

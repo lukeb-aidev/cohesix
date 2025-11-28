@@ -92,6 +92,7 @@ pub struct NetStack {
     gateway: Option<Ipv4Address>,
     prefix_len: u8,
     session_active: bool,
+    listener_announced: bool,
 }
 
 impl NetStack {
@@ -147,6 +148,7 @@ impl NetStack {
             gateway,
             prefix_len: prefix,
             session_active: false,
+            listener_announced: false,
         };
         stack.initialise_socket();
         Ok(stack)
@@ -200,10 +202,13 @@ impl NetStack {
 
         if !socket.is_open() {
             let _ = socket.listen(IpListenEndpoint::from(CONSOLE_TCP_PORT));
-            info!(
-                "[cohesix:root-task] tcp_console: listening on {}:{}",
-                self.ip, CONSOLE_TCP_PORT
-            );
+            if !self.listener_announced {
+                info!(
+                    "[cohesix:root-task] tcp_console: listener bound on 0.0.0.0:{} (iface ip={})",
+                    CONSOLE_TCP_PORT, self.ip
+                );
+                self.listener_announced = true;
+            }
             if self.session_active {
                 self.server.end_session();
                 self.session_active = false;
@@ -238,6 +243,8 @@ impl NetStack {
                                 "[cohesix:root-task] tcp_console: closing connection after session end"
                             );
                             socket.close();
+                            self.server.end_session();
+                            self.session_active = false;
                             activity = true;
                             break;
                         }
@@ -251,6 +258,9 @@ impl NetStack {
                                 warn!("[cohesix:root-task] tcp_console: read error: {other}");
                             }
                         }
+                        socket.close();
+                        self.server.end_session();
+                        self.session_active = false;
                         break;
                     }
                 }
@@ -261,6 +271,8 @@ impl NetStack {
             warn!("[cohesix:root-task] tcp_console: connection timed out due to inactivity");
             let _ = self.server.enqueue_outbound("ERR CONSOLE reason=timeout");
             socket.close();
+            self.server.end_session();
+            self.session_active = false;
             activity = true;
         }
 

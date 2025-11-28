@@ -17,12 +17,17 @@ fn tcp_transport_handles_attach_and_tail() {
         let (mut stream, _) = listener.accept().expect("accept client");
         let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
         let mut line = String::new();
+        reader.read_line(&mut line).expect("read auth");
+        assert!(line.starts_with("AUTH changeme"));
+        writeln!(stream, "OK AUTH").expect("write auth ok");
+        line.clear();
         reader.read_line(&mut line).expect("read attach");
         assert!(line.starts_with("ATTACH queen"));
-        writeln!(stream, "OK session").expect("write ok");
+        writeln!(stream, "OK ATTACH role=queen").expect("write ok");
         line.clear();
         reader.read_line(&mut line).expect("read tail");
         assert!(line.starts_with("TAIL /log/queen.log"));
+        writeln!(stream, "OK TAIL path=/log/queen.log").expect("ack tail");
         writeln!(stream, "boot line").expect("write line");
         writeln!(stream, "END").expect("write end");
     });
@@ -30,14 +35,20 @@ fn tcp_transport_handles_attach_and_tail() {
     let mut transport = TcpTransport::new("127.0.0.1", port);
     let session = transport.attach(Role::Queen, None).expect("attach queen");
     let attach_ack = transport.drain_acknowledgements();
-    assert_eq!(attach_ack.len(), 1);
-    let ack = parse_ack(&attach_ack[0]).expect("parse attach ack");
-    assert_eq!(ack.status, AckStatus::Ok);
-    assert_eq!(ack.verb, "session");
+    assert_eq!(attach_ack.len(), 2);
+    let auth_ack = parse_ack(&attach_ack[0]).expect("parse auth ack");
+    assert_eq!(auth_ack.status, AckStatus::Ok);
+    assert_eq!(auth_ack.verb, "AUTH");
+    let attach = parse_ack(&attach_ack[1]).expect("parse attach ack");
+    assert_eq!(attach.status, AckStatus::Ok);
+    assert_eq!(attach.verb, "ATTACH");
 
     let logs = transport
         .tail(&session, "/log/queen.log")
         .expect("tail log");
     assert_eq!(logs, vec!["boot line".to_owned()]);
-    assert!(transport.drain_acknowledgements().is_empty());
+    let tail_ack = transport.drain_acknowledgements();
+    assert!(tail_ack
+        .iter()
+        .any(|line| line.starts_with("OK TAIL path=/log/queen.log")));
 }

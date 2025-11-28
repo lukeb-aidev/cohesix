@@ -542,15 +542,29 @@ fn bootstrap<P: Platform>(
 
     crate::sel4::log_sel4_type_sanity();
 
-    let mut build_line = heapless::String::<160>::new();
+    let mut build_line = heapless::String::<192>::new();
+    let mut feature_report = heapless::String::<96>::new();
+    for (idx, (label, enabled)) in [
+        ("kernel", cfg!(feature = "kernel")),
+        ("bootstrap-trace", cfg!(feature = "bootstrap-trace")),
+        ("serial-console", cfg!(feature = "serial-console")),
+        ("net", cfg!(feature = "net")),
+        ("net-console", cfg!(feature = "net-console")),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        if idx > 0 {
+            let _ = write!(feature_report, " ");
+        }
+        let _ = write!(feature_report, "{label}:{value}", value = enabled as u8);
+    }
     let _ = write!(
         build_line,
-        "[BUILD] {} {} features=[kernel:{} bootstrap-trace:{} serial-console:{}]",
+        "[BUILD] {} {} features=[{}]",
         crate::built_info::GIT_HASH,
         crate::built_info::BUILD_TS,
-        cfg!(feature = "kernel") as u8,
-        cfg!(feature = "bootstrap-trace") as u8,
-        cfg!(feature = "serial-console") as u8,
+        feature_report
     );
     boot_log::force_uart_line(build_line.as_str());
     log::info!("{}", build_line.as_str());
