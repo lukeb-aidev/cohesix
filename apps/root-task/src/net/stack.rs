@@ -5,6 +5,7 @@
 #![cfg(feature = "kernel")]
 
 use heapless::{String as HeaplessString, Vec as HeaplessVec};
+use log::{info, warn};
 use portable_atomic::AtomicBool;
 use smoltcp::iface::{
     Config as IfaceConfig, Interface, PollResult, SocketHandle, SocketSet, SocketStorage,
@@ -198,6 +199,11 @@ impl NetStack {
 
         if !socket.is_open() {
             let _ = socket.listen(IpListenEndpoint::from(CONSOLE_TCP_PORT));
+            info!(
+                "[cohesix:root-task] tcp_console: listening on {}:{}",
+                self.ip,
+                CONSOLE_TCP_PORT
+            );
             if self.session_active {
                 self.server.end_session();
                 self.session_active = false;
@@ -205,6 +211,14 @@ impl NetStack {
         }
 
         if socket.state() == TcpState::Established && !self.session_active {
+            if let Some(endpoint) = socket.remote_endpoint() {
+                info!(
+                    "[cohesix:root-task] tcp_console: accepted connection from {}",
+                    endpoint
+                );
+            } else {
+                info!("[cohesix:root-task] tcp_console: accepted connection");
+            }
             self.server.begin_session(now_ms);
             self.session_active = true;
         }
@@ -225,7 +239,10 @@ impl NetStack {
                             break;
                         }
                     },
-                    Err(_) => break,
+                    Err(err) => {
+                        warn!("[cohesix:root-task] tcp_console: read error: {err}");
+                        break;
+                    }
                 }
             }
         }
@@ -256,7 +273,13 @@ impl NetStack {
                         self.server.mark_activity(now_ms);
                         activity = true;
                     }
-                    Ok(_) | Err(_) => {
+                    Ok(_) => {
+                        self.server.push_outbound_front(line);
+                        self.telemetry.tx_drops = self.telemetry.tx_drops.saturating_add(1);
+                        break;
+                    }
+                    Err(err) => {
+                        warn!("[cohesix:root-task] tcp_console: write error: {err}");
                         self.server.push_outbound_front(line);
                         self.telemetry.tx_drops = self.telemetry.tx_drops.saturating_add(1);
                         break;
@@ -267,6 +290,7 @@ impl NetStack {
         }
 
         if matches!(socket.state(), TcpState::CloseWait | TcpState::Closed) && self.session_active {
+            info!("[cohesix:root-task] tcp_console: connection closed");
             socket.close();
             self.server.end_session();
             self.session_active = false;
