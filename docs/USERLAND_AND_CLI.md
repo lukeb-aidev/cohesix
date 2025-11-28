@@ -15,6 +15,7 @@ per-command capability checks inside the event pump.
 |---------|------|--------|
 | `help` | All | Emit an audit line indicating that help was requested |
 | `attach <role> <ticket>` | All | Authenticate the session and bind a role; tickets are required for every role |
+| `ping` | All | Report whether the client is attached; errors when detached so scripts can gate |
 | `tail <path>` | Worker, Queen | Record a request to stream a path via NineDoor once the bridge is online |
 | `log` | Queen | Shortcut for initiating the log stream verb |
 | `spawn <json>` | Queen | Forward JSON payloads to NineDoor for worker orchestration |
@@ -24,6 +25,11 @@ per-command capability checks inside the event pump.
 > **Note:** File-oriented verbs such as `ls` and `cat` are provided by the
 > Secure9P namespace once NineDoor lands in Milestone 8; they are not part
 > of the Milestone 7 console.
+
+`ping` is a client-side reachability check: when attached it reports the
+current role and transport and returns success, and when detached it prints
+`ping: not attached` and fails so scripts can detect a missing session without
+altering system state.
 
 ### 2.2 Authentication & Limits
 - Maximum console line length is 128 characters; role identifiers are

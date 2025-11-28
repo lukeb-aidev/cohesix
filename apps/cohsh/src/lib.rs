@@ -77,6 +77,11 @@ pub trait Transport {
     /// session can bind to the correct worker namespace.
     fn attach(&mut self, role: Role, ticket: Option<&str>) -> Result<Session>;
 
+    /// Return a human-readable label describing the transport implementation.
+    fn kind(&self) -> &'static str {
+        "transport"
+    }
+
     /// Stream a log-like file and return the accumulated contents.
     fn tail(&mut self, session: &Session, path: &str) -> Result<Vec<String>>;
 
@@ -95,6 +100,10 @@ where
 {
     fn attach(&mut self, role: Role, ticket: Option<&str>) -> Result<Session> {
         (**self).attach(role, ticket)
+    }
+
+    fn kind(&self) -> &'static str {
+        (**self).kind()
     }
 
     fn tail(&mut self, session: &Session, path: &str) -> Result<Vec<String>> {
@@ -168,6 +177,10 @@ impl Transport for NineDoorTransport {
         let session = Session::new(connection.session_id(), role);
         self.connection = Some(connection);
         Ok(session)
+    }
+
+    fn kind(&self) -> &'static str {
+        "mock"
     }
 
     fn tail(&mut self, _session: &Session, path: &str) -> Result<Vec<String>> {
@@ -449,6 +462,10 @@ impl Transport for QemuTransport {
         Ok(session)
     }
 
+    fn kind(&self) -> &'static str {
+        "qemu"
+    }
+
     fn tail(&mut self, _session: &Session, path: &str) -> Result<Vec<String>> {
         if path != "/log/queen.log" {
             return Err(anyhow!(
@@ -620,6 +637,9 @@ impl<T: Transport, W: Write> Shell<T, W> {
                 self.write_line("  tail <path>                  - Stream a file via NineDoor")?;
                 self.write_line("  log                          - Tail /log/queen.log")?;
                 self.write_line(
+                    "  ping                         - Report attachment status for health checks",
+                )?;
+                self.write_line(
                     "  ls [path]                    - Enumerate directory entries (planned)",
                 )?;
                 self.write_line("  cat <path>                   - Read file contents (planned)")?;
@@ -655,6 +675,23 @@ impl<T: Transport, W: Write> Shell<T, W> {
             "log" => {
                 self.tail_path("/log/queen.log")?;
                 Ok(CommandStatus::Continue)
+            }
+            "ping" => {
+                if parts.next().is_some() {
+                    return Err(anyhow!("ping does not take any arguments"));
+                }
+                if let Some(session) = &self.session {
+                    writeln!(
+                        self.writer,
+                        "ping: attached as {:?} via {}",
+                        session.role(),
+                        self.transport.kind(),
+                    )?;
+                    Ok(CommandStatus::Continue)
+                } else {
+                    writeln!(self.writer, "ping: not attached")?;
+                    Err(anyhow!("ping: not attached"))
+                }
             }
             "echo" => {
                 let payload_start = line[4..].trim_start();

@@ -514,6 +514,10 @@ impl Transport for TcpTransport {
         }
     }
 
+    fn kind(&self) -> &'static str {
+        "tcp"
+    }
+
     fn tail(&mut self, _session: &Session, path: &str) -> Result<Vec<String>> {
         let command = format!("TAIL {path}");
         let mut attempts = 0usize;
