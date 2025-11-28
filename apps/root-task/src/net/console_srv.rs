@@ -211,3 +211,37 @@ impl TcpConsoleServer {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn authenticates_and_tracks_activity() {
+        let mut server = TcpConsoleServer::new("token", 1000);
+        server.begin_session(10);
+
+        let event = server.ingest(b"AUTH token\n", 11);
+        assert_eq!(event, SessionEvent::Authenticated);
+        assert!(server.is_authenticated());
+
+        server.mark_activity(20);
+        assert!(!server.should_timeout(1000));
+    }
+
+    #[test]
+    fn rejects_invalid_auth_and_marks_session_inactive() {
+        let mut server = TcpConsoleServer::new("token", 1000);
+        server.begin_session(0);
+
+        let event = server.ingest(b"AUTH wrong\n", 1);
+        assert_eq!(event, SessionEvent::Close);
+        assert!(!server.is_authenticated());
+
+        let ack = server.pop_outbound().expect("ack present");
+        assert!(ack.starts_with("ERR AUTH"));
+
+        server.end_session();
+        assert!(!server.should_timeout(2000));
+    }
+}

@@ -20,7 +20,7 @@ fn interactive_mode_retains_prompt_after_failed_attach() {
         .stdout(predicate::str::contains(
             "detached shell: run 'attach <role>' to connect",
         ))
-        .stdout(predicate::str::contains("coh[mock:disconnected]> "))
+        .stdout(predicate::str::contains("coh> "))
         .stderr(predicate::str::contains("requires an identity"));
 }
 

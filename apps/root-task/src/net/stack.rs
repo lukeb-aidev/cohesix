@@ -93,6 +93,8 @@ pub struct NetStack {
     prefix_len: u8,
     session_active: bool,
     listener_announced: bool,
+    active_client_id: Option<u32>,
+    client_counter: u32,
 }
 
 impl NetStack {
@@ -149,6 +151,8 @@ impl NetStack {
             prefix_len: prefix,
             session_active: false,
             listener_announced: false,
+            active_client_id: None,
+            client_counter: 0,
         };
         stack.initialise_socket();
         Ok(stack)
@@ -201,10 +205,13 @@ impl NetStack {
         let socket = self.sockets.get_mut::<TcpSocket>(self.tcp_handle);
 
         if !socket.is_open() {
-            let _ = socket.listen(IpListenEndpoint::from(CONSOLE_TCP_PORT));
+            if let Err(err) = socket.listen(IpListenEndpoint::from(CONSOLE_TCP_PORT)) {
+                warn!("[net-console] failed to start TCP console listener: {err}",);
+                return activity;
+            }
             if !self.listener_announced {
                 info!(
-                    "[cohesix:root-task] tcp_console: listener bound on 0.0.0.0:{} (iface ip={})",
+                    "[net-console] TCP console listening on 0.0.0.0:{} (iface ip={})",
                     CONSOLE_TCP_PORT, self.ip
                 );
                 self.listener_announced = true;
@@ -212,17 +219,21 @@ impl NetStack {
             if self.session_active {
                 self.server.end_session();
                 self.session_active = false;
+                self.active_client_id = None;
             }
         }
 
         if socket.state() == TcpState::Established && !self.session_active {
+            let client_id = self.client_counter.wrapping_add(1);
+            self.client_counter = client_id;
+            self.active_client_id = Some(client_id);
             if let Some(endpoint) = socket.remote_endpoint() {
                 info!(
-                    "[cohesix:root-task] tcp_console: accepted connection from {}",
-                    endpoint
+                    "[net-console] accepted TCP client #{} from {}",
+                    client_id, endpoint
                 );
             } else {
-                info!("[cohesix:root-task] tcp_console: accepted connection");
+                info!("[net-console] accepted TCP client #{}", client_id);
             }
             self.server.begin_session(now_ms);
             self.session_active = true;
@@ -235,16 +246,16 @@ impl NetStack {
                     Ok(0) => break,
                     Ok(count) => match self.server.ingest(&temp[..count], now_ms) {
                         SessionEvent::None => {}
-                        SessionEvent::Authenticated => {
-                            activity = true;
-                        }
+                        SessionEvent::Authenticated => activity = true,
                         SessionEvent::Close => {
-                            info!(
-                                "[cohesix:root-task] tcp_console: closing connection after session end"
+                            warn!(
+                                "[net-console] TCP client #{} closing after session end",
+                                self.active_client_id.unwrap_or(0)
                             );
                             socket.close();
                             self.server.end_session();
                             self.session_active = false;
+                            self.active_client_id = None;
                             activity = true;
                             break;
                         }
@@ -252,15 +263,22 @@ impl NetStack {
                     Err(err) => {
                         match err {
                             TcpRecvError::Finished => {
-                                info!("[cohesix:root-task] tcp_console: connection closed");
+                                info!(
+                                    "[net-console] TCP client #{} closed (clean shutdown)",
+                                    self.active_client_id.unwrap_or(0)
+                                );
                             }
                             other => {
-                                warn!("[cohesix:root-task] tcp_console: read error: {other}");
+                                warn!(
+                                    "[net-console] TCP client #{} error={other} (closing connection)",
+                                    self.active_client_id.unwrap_or(0)
+                                );
                             }
                         }
                         socket.close();
                         self.server.end_session();
                         self.session_active = false;
+                        self.active_client_id = None;
                         break;
                     }
                 }
@@ -268,11 +286,15 @@ impl NetStack {
         }
 
         if self.session_active && self.server.should_timeout(now_ms) {
-            warn!("[cohesix:root-task] tcp_console: connection timed out due to inactivity");
+            warn!(
+                "[net-console] TCP client #{} timed out due to inactivity",
+                self.active_client_id.unwrap_or(0)
+            );
             let _ = self.server.enqueue_outbound("ERR CONSOLE reason=timeout");
             socket.close();
             self.server.end_session();
             self.session_active = false;
+            self.active_client_id = None;
             activity = true;
         }
 
@@ -302,7 +324,10 @@ impl NetStack {
                         break;
                     }
                     Err(err) => {
-                        warn!("[cohesix:root-task] tcp_console: write error: {err}");
+                        warn!(
+                            "[net-console] TCP client #{} write error: {err}",
+                            self.active_client_id.unwrap_or(0)
+                        );
                         self.server.push_outbound_front(line);
                         self.telemetry.tx_drops = self.telemetry.tx_drops.saturating_add(1);
                         break;
@@ -313,10 +338,15 @@ impl NetStack {
         }
 
         if matches!(socket.state(), TcpState::CloseWait | TcpState::Closed) && self.session_active {
-            info!("[cohesix:root-task] tcp_console: connection closed");
+            info!(
+                "[net-console] TCP client #{} closed (state={:?})",
+                self.active_client_id.unwrap_or(0),
+                socket.state()
+            );
             socket.close();
             self.server.end_session();
             self.session_active = false;
+            self.active_client_id = None;
             activity = true;
         }
 
