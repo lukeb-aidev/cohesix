@@ -4,9 +4,9 @@
 ## 1. Roles
 | Role | Capabilities | Namespace |
 |------|--------------|-----------|
-| **Queen** | Spawn/kill workers, bind/mount namespaces, inspect logs, request GPU leases | Full `/`, `/queen`, `/worker/*`, `/log`, `/gpu/* (future)` |
-| **WorkerHeartbeat** | Emit telemetry, read queen log, read boot info | `/proc/boot`, `/worker/self/telemetry`, `/log/queen.log` (RO) |
-| **WorkerGpu** (future) | Submit GPU jobs, monitor leases, emit telemetry | WorkerHeartbeat view + `/gpu/<lease>/*` |
+| **Queen** | Orchestration role driven by `cohsh`: spawn/kill workers, bind/mount namespaces, inspect logs, request GPU leases | Full `/`, `/queen`, `/worker/*`, `/log`, `/gpu/*` (when installed) |
+| **WorkerHeartbeat** | Minimal worker that emits heartbeat telemetry and confirms console/attach paths | `/proc/boot`, `/worker/self/telemetry`, `/log/queen.log` (RO) |
+| **WorkerGpu** | GPU-centric worker that reads ticket/lease state and reports telemetry for host-provided GPU nodes | WorkerHeartbeat view + `/gpu/<id>/*` |
 | **Observer** (future) | Read-only status access | `/proc`, `/log` |
 
 ## 2. Ticket Lifecycle
@@ -15,10 +15,16 @@
 3. Ticket is delivered during 9P `attach`; NineDoor verifies MAC and initialises session state.
 4. On kill or budget expiry, root task revokes ticket and notifies NineDoor to clunk all active fids.
 
+Attachments always arrive via NineDoor: queen mounts the full namespace, worker-heartbeat mounts only its telemetry and boot views, and worker-gpu attaches to the `/gpu/<id>/` subtrees exposed to its ticket. Ticket values (when present) select the role-specific namespace, and NineDoor aborts attaches on ticket mismatch, timeouts, or unsupported roles, leaving `cohsh` detached with an explicit error.
+
 ## 3. Scheduling Strategy
 - **v0**: Round-robin over runnable endpoints with per-worker tick budgets (coarse-grained cooperative scheduling).
 - **v1**: Priority bands (`system`, `control`, `worker`) with budgeted quanta; queen/control tasks reside in higher band.
 - **GPU (future)**: Lease-enforced concurrency; GPU workers must honour host-provided stream counts.
+
+Control flows are file-oriented (e.g., appends to `/queen/ctl`) instead of the deprecated RPC/virtual-console sketches; `cohsh` always runs outside the VM and speaks the NineDoor transport.
+
+Scheduling contexts originate in root-task: initial SCs are held by root, carved out for NineDoor and per-worker threads, and reclaimed on revocation without altering seL4 SC semantics or time accounting.
 
 ## 4. Budget Types
 ```rust
@@ -41,6 +47,8 @@ pub struct Budget {
 - **Unit**: Role-path filter tests ensure workers cannot traverse outside assigned mounts. Budget counters validated with deterministic scenarios.
 - **Integration**: Scenario test spawns two heartbeat workers with different TTLs; verifies early expiry worker is revoked and log entry recorded.
 - **Fuzz**: Randomised spawn/kill command sequences ensure scheduler state remains consistent (no leaked caps).
+
+Cross-refs: see `SECURE9P.md` for namespace enforcement, `USERLAND_AND_CLI.md` for attach semantics, and `ARCHITECTURE.md` for the serial + TCP console model.
 
 ## 7. Future Extensions
 - Role hierarchy for observers/auditors.
