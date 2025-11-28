@@ -15,6 +15,9 @@ use core::fmt;
 
 use crate::platform::Platform;
 
+#[cfg(feature = "kernel")]
+use crate::sel4::BootInfoExt;
+
 use heapless::String;
 
 #[cfg(feature = "kernel")]
