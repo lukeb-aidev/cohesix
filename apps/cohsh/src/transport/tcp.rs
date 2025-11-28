@@ -15,15 +15,15 @@ use crate::proto::{parse_ack, AckStatus};
 use crate::{Session, Transport};
 
 /// Default TCP timeout applied to socket operations.
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(3);
 /// Default heartbeat cadence used to keep TCP sessions alive.
 const DEFAULT_HEARTBEAT: Duration = Duration::from_secs(15);
 /// Initial retry back-off applied when the connection drops.
-const DEFAULT_RETRY_BACKOFF: Duration = Duration::from_millis(250);
+const DEFAULT_RETRY_BACKOFF: Duration = Duration::from_millis(200);
 /// Maximum retry back-off when reconnecting to the console listener.
-const DEFAULT_RETRY_CEILING: Duration = Duration::from_secs(3);
+const DEFAULT_RETRY_CEILING: Duration = Duration::from_secs(2);
 /// Maximum retries when sending commands or recovering after a disconnect.
-const DEFAULT_MAX_RETRIES: usize = 5;
+const DEFAULT_MAX_RETRIES: usize = 3;
 /// Maximum number of acknowledgement lines retained between drains.
 const MAX_PENDING_ACK: usize = 32;
 
@@ -186,7 +186,12 @@ impl TcpTransport {
             .context("invalid TCP endpoint")?
             .next()
             .ok_or_else(|| anyhow!("no TCP addresses resolved"))?;
-        let stream = TcpStream::connect(socket_addr).context("failed to connect to TCP console")?;
+        let stream = TcpStream::connect(socket_addr).with_context(|| {
+            format!(
+                "failed to connect to Cohesix TCP console at {}:{}",
+                self.address, self.port
+            )
+        })?;
         stream
             .set_read_timeout(Some(self.timeout))
             .context("failed to configure read timeout")?;
@@ -638,5 +643,22 @@ mod tests {
         assert!(tail_ack
             .iter()
             .any(|ack| ack.starts_with("OK TAIL path=/log/queen.log")));
+    }
+
+    #[test]
+    fn connection_errors_include_endpoint() {
+        let guard = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = guard.local_addr().unwrap().port();
+        drop(guard);
+
+        let mut transport = TcpTransport::new("127.0.0.1", port)
+            .with_timeout(Duration::from_millis(200))
+            .with_max_retries(1);
+        let err = transport
+            .attach(Role::Queen, None)
+            .expect_err("connection should fail with no listener");
+        assert!(err
+            .to_string()
+            .contains("failed to connect to Cohesix TCP console"));
     }
 }
