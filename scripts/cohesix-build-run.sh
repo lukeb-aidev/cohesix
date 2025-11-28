@@ -26,17 +26,23 @@ Options:
   --cargo-target <triple>  Target triple used for seL4 component builds (required)
   --root-task-features <list>
                         Comma-separated feature set used for the root-task seL4 build
-                        (default: kernel,bootstrap-trace,net)
+                        (default: kernel,bootstrap-trace)
   --features <name>      Enable additional root-task feature (bootstrap-trace|serial-console).
                          May be specified multiple times.
   --qemu <path>         QEMU binary to execute (default: qemu-system-aarch64)
   --transport <kind>    Console transport to launch (tcp|qemu, default: tcp)
+                        tcp: run QEMU here with PL011 serial console and TCP console listener;
+                             connect from another terminal via cohsh --transport tcp.
+                        qemu: run cohsh using its QEMU transport; cohsh manages QEMU and no
+                              TCP console is exposed to the host by default.
   --tcp-port <port>     TCP port exposed by QEMU for the remote console (default: 31337)
+  --raw-qemu            Launch QEMU directly in this terminal after building (bypasses cohsh)
   --no-run              Skip launching QEMU after building the artefacts
   --dtb <path>          Override the device tree blob passed to QEMU
   -h, --help            Show this help message
 
-Any arguments following `--` are forwarded directly to QEMU.
+Any arguments following `--` are forwarded directly to QEMU (or passed through
+to cohsh via --qemu-arg when --transport qemu is selected).
 USAGE
 }
 
@@ -105,6 +111,32 @@ print(f"[cohesix-build] {label}: {path} ({size} bytes, sha256={digest})")
 PY
 }
 
+wait_for_port() {
+    local host="$1"
+    local port="$2"
+    local timeout="${3:-30}"
+
+    python3 - "$host" "$port" "$timeout" <<'PY'
+import socket
+import sys
+import time
+
+host = sys.argv[1]
+port = int(sys.argv[2])
+deadline = time.time() + float(sys.argv[3])
+
+while time.time() < deadline:
+    try:
+        with socket.create_connection((host, port), timeout=1):
+            sys.exit(0)
+    except OSError:
+        time.sleep(0.1)
+
+print(f"[cohesix-build] error: timed out waiting for {host}:{port}", file=sys.stderr)
+sys.exit(1)
+PY
+}
+
 detect_gic_version() {
     local cfg_file=""
     local candidate
@@ -145,12 +177,13 @@ main() {
     CARGO_TARGET=""
     QEMU_BIN="qemu-system-aarch64"
     RUN_QEMU=1
+    DIRECT_QEMU=0
     declare -a EXTRA_QEMU_ARGS=()
     CLEAN_OUT_DIR=0
     DTB_OVERRIDE=""
     TRANSPORT="tcp"
     TCP_PORT=31337
-    ROOT_TASK_FEATURES="kernel,bootstrap-trace,serial-console,net"
+    ROOT_TASK_FEATURES="kernel,bootstrap-trace"
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -205,6 +238,10 @@ main() {
                 RUN_QEMU=0
                 shift
                 ;;
+            --raw-qemu)
+                DIRECT_QEMU=1
+                shift
+                ;;
             --transport)
                 [[ $# -ge 2 ]] || fail "--transport requires a value (tcp|qemu)"
                 case "$2" in
@@ -248,12 +285,11 @@ main() {
         ROOT_TASK_FEATURES=""
     fi
 
-    if [[ "$TRANSPORT" == "qemu" ]]; then
-        append_root_task_feature "serial-console"
-    fi
+    append_root_task_feature "serial-console"
 
     if [[ "$TRANSPORT" == "tcp" ]]; then
         append_root_task_feature "net"
+        append_root_task_feature "net-console"
     fi
 
     remove_root_task_feature "untyped-debug"
@@ -524,7 +560,10 @@ PY
     QEMU_ARGS=(-machine "virt,gic-version=${GIC_VER}" -cpu cortex-a57 -m 1024 -smp 1 -serial mon:stdio -display none -kernel "$ELFLOADER_STAGE_PATH" -initrd "$CPIO_PATH" -device loader,file="$KERNEL_STAGE_PATH",addr=$KERNEL_LOAD_ADDR,force-raw=on -device loader,file="$ROOTSERVER_STAGE_PATH",addr=$ROOTSERVER_LOAD_ADDR,force-raw=on)
 
     if [[ "$TRANSPORT" == "tcp" ]]; then
-        NETWORK_ARGS=(-netdev "user,id=net0,hostfwd=tcp:127.0.0.1:${TCP_PORT}-10.0.2.15:${TCP_PORT}" -device virtio-net-device,netdev=net0)
+        NETWORK_ARGS=(
+            -netdev "user,id=net0,hostfwd=tcp:127.0.0.1:${TCP_PORT}-10.0.2.15:${TCP_PORT}"
+            -device virtio-net-device,netdev=net0
+        )
         QEMU_ARGS+=("${NETWORK_ARGS[@]}")
     fi
 
@@ -545,12 +584,49 @@ PY
         return 0
     fi
 
-    if [[ "$TRANSPORT" == "tcp" ]]; then
-        log "QEMU will run with TCP console bridge on port $TCP_PORT"
-        log "Run: ./cohsh --transport tcp --tcp-port $TCP_PORT --role queen   in another terminal."
+    if [[ "$DIRECT_QEMU" -eq 1 ]]; then
+        exec "$QEMU_BIN" "${QEMU_ARGS[@]}"
     fi
 
-    exec "$QEMU_BIN" "${QEMU_ARGS[@]}"
+    if [[ "$TRANSPORT" == "tcp" ]]; then
+        "$QEMU_BIN" "${QEMU_ARGS[@]}" &
+        QEMU_PID=$!
+        trap 'kill $QEMU_PID 2>/dev/null || true' EXIT
+
+        wait_for_port "127.0.0.1" "$TCP_PORT" 60
+
+        log "QEMU is running with serial console and TCP console on port $TCP_PORT"
+        log "Run: ./cohsh --transport tcp --tcp-port $TCP_PORT    in another terminal."
+
+        wait "$QEMU_PID"
+        trap - EXIT
+        return 0
+    fi
+
+    if [[ "$TRANSPORT" == "qemu" ]]; then
+        log "Launching cohsh (QEMU transport) for interactive session"
+        COHSH_BIN="$HOST_TOOLS_DIR/cohsh"
+        if [[ ! -x "$COHSH_BIN" ]]; then
+            fail "cohsh CLI not found: $COHSH_BIN"
+        fi
+
+        CLI_CMD=(
+            "$COHSH_BIN"
+            --transport qemu
+            --qemu-bin "$QEMU_BIN"
+            --qemu-out-dir "$OUT_DIR"
+            --qemu-gic-version "$GIC_VER"
+            --role queen
+        )
+
+        if [[ ${#EXTRA_QEMU_ARGS[@]} -gt 0 ]]; then
+            for arg in "${EXTRA_QEMU_ARGS[@]}"; do
+                CLI_CMD+=(--qemu-arg "$arg")
+            done
+        fi
+
+        exec "${CLI_CMD[@]}"
+    fi
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
