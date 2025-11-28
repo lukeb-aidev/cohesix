@@ -122,13 +122,24 @@ fn main() -> Result<()> {
     shell.write_line("Welcome to Cohesix. Type 'help' for commands.")?;
     let mut auto_log = false;
     if let Some(role_arg) = cli.role {
-        shell.attach(Role::from(role_arg), cli.ticket.as_deref())?;
-        if cli.script.is_none() {
-            match cli.transport {
-                TransportKind::Qemu => auto_log = true,
-                #[cfg(feature = "tcp")]
-                TransportKind::Tcp => auto_log = true,
-                _ => {}
+        let role = Role::from(role_arg);
+        match shell.attach(role, cli.ticket.as_deref()) {
+            Ok(()) => {
+                if cli.script.is_none() {
+                    match cli.transport {
+                        TransportKind::Qemu => auto_log = true,
+                        #[cfg(feature = "tcp")]
+                        TransportKind::Tcp => auto_log = true,
+                        _ => {}
+                    }
+                }
+            }
+            Err(error) => {
+                if cli.script.is_some() {
+                    return Err(error);
+                }
+                eprintln!("Error: {error}");
+                shell.write_line("detached shell: run 'attach <role>' to connect")?;
             }
         }
     } else {

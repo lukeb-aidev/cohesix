@@ -17,6 +17,7 @@ use smoltcp::time::Instant;
 use smoltcp::wire::{
     EthernetAddress, HardwareAddress, IpAddress, IpCidr, IpListenEndpoint, Ipv4Address,
 };
+use smoltcp::Error;
 
 use super::{
     console_srv::{SessionEvent, TcpConsoleServer},
@@ -201,8 +202,7 @@ impl NetStack {
             let _ = socket.listen(IpListenEndpoint::from(CONSOLE_TCP_PORT));
             info!(
                 "[cohesix:root-task] tcp_console: listening on {}:{}",
-                self.ip,
-                CONSOLE_TCP_PORT
+                self.ip, CONSOLE_TCP_PORT
             );
             if self.session_active {
                 self.server.end_session();
@@ -234,13 +234,23 @@ impl NetStack {
                             activity = true;
                         }
                         SessionEvent::Close => {
+                            info!(
+                                "[cohesix:root-task] tcp_console: closing connection after session end"
+                            );
                             socket.close();
                             activity = true;
                             break;
                         }
                     },
                     Err(err) => {
-                        warn!("[cohesix:root-task] tcp_console: read error: {err}");
+                        match err {
+                            Error::Finished => {
+                                info!("[cohesix:root-task] tcp_console: connection closed");
+                            }
+                            other => {
+                                warn!("[cohesix:root-task] tcp_console: read error: {other}");
+                            }
+                        }
                         break;
                     }
                 }
@@ -248,6 +258,7 @@ impl NetStack {
         }
 
         if self.session_active && self.server.should_timeout(now_ms) {
+            warn!("[cohesix:root-task] tcp_console: connection timed out due to inactivity");
             let _ = self.server.enqueue_outbound("ERR CONSOLE reason=timeout");
             socket.close();
             activity = true;
