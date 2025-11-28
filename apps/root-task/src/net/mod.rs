@@ -13,6 +13,8 @@ pub const CONSOLE_TCP_PORT: u16 = 31337;
 pub const AUTH_TOKEN: &str = "changeme";
 /// Idle timeout applied to authenticated TCP console sessions (milliseconds).
 pub const IDLE_TIMEOUT_MS: u64 = 5 * 60 * 1000;
+/// Timeout applied to authentication attempts from newly connected clients.
+pub const AUTH_TIMEOUT_MS: u64 = 5 * 1000;
 
 /// Number of console lines retained between pump cycles.
 pub const CONSOLE_QUEUE_DEPTH: usize = 8;

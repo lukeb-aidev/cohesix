@@ -9,7 +9,7 @@ build = "build.rs"
 [features]
 default = []   # no debug features by default
 cap-probes = []   # gate experimental cap ops (tests/bench only)
-net = ["net-console"]
+net = []
 canonical_cspace = ["kernel"]
 bootstrap-minimal = []
 bootstrap-debug = []
@@ -26,6 +26,7 @@ kernel = [
 ]
 mock-sel4 = ["kernel"]
 net-console = [
+    "net",
     "dep:smoltcp",
     "dep:spin",
 ]

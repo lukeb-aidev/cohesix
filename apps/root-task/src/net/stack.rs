@@ -236,6 +236,7 @@ impl NetStack {
                 info!("[net-console] accepted TCP client #{}", client_id);
             }
             self.server.begin_session(now_ms);
+            info!("[net-console] auth start client={}", client_id);
             self.session_active = true;
         }
 
@@ -246,14 +247,25 @@ impl NetStack {
                     Ok(0) => break,
                     Ok(count) => match self.server.ingest(&temp[..count], now_ms) {
                         SessionEvent::None => {}
-                        SessionEvent::Authenticated => activity = true,
+                        SessionEvent::Authenticated => {
+                            info!(
+                                "[net-console] auth success client={}",
+                                self.active_client_id.unwrap_or(0)
+                            );
+                            activity = true;
+                        }
                         SessionEvent::AuthFailed(reason) => {
                             warn!(
                                 "[net-console] TCP client #{} auth failed reason={}",
                                 self.active_client_id.unwrap_or(0),
                                 reason
                             );
-                            activity |= self.flush_outbound(socket, now_ms);
+                            activity |= Self::flush_outbound(
+                                &mut self.server,
+                                &mut self.telemetry,
+                                socket,
+                                now_ms,
+                            );
                             socket.close();
                             self.server.end_session();
                             self.session_active = false;
@@ -265,7 +277,12 @@ impl NetStack {
                                 "[net-console] TCP client #{} closing after session end",
                                 self.active_client_id.unwrap_or(0)
                             );
-                            activity |= self.flush_outbound(socket, now_ms);
+                            activity |= Self::flush_outbound(
+                                &mut self.server,
+                                &mut self.telemetry,
+                                socket,
+                                now_ms,
+                            );
                             socket.close();
                             self.server.end_session();
                             self.session_active = false;
@@ -299,13 +316,16 @@ impl NetStack {
             }
         }
 
-        if self.session_active && self.server.should_timeout(now_ms) {
+        if self.session_active
+            && !self.server.is_authenticated()
+            && self.server.auth_timed_out(now_ms)
+        {
             warn!(
-                "[net-console] TCP client #{} timed out due to inactivity",
+                "[net-console] TCP client #{} auth timeout",
                 self.active_client_id.unwrap_or(0)
             );
-            let _ = self.server.enqueue_outbound("ERR CONSOLE reason=timeout");
-            activity |= self.flush_outbound(socket, now_ms);
+            let _ = self.server.enqueue_outbound("ERR AUTH reason=timeout");
+            activity |= Self::flush_outbound(&mut self.server, &mut self.telemetry, socket, now_ms);
             socket.close();
             self.server.end_session();
             self.session_active = false;
@@ -313,7 +333,21 @@ impl NetStack {
             activity = true;
         }
 
-        activity |= self.flush_outbound(socket, now_ms);
+        if self.session_active && self.server.should_timeout(now_ms) {
+            warn!(
+                "[net-console] TCP client #{} timed out due to inactivity",
+                self.active_client_id.unwrap_or(0)
+            );
+            let _ = self.server.enqueue_outbound("ERR CONSOLE reason=timeout");
+            activity |= Self::flush_outbound(&mut self.server, &mut self.telemetry, socket, now_ms);
+            socket.close();
+            self.server.end_session();
+            self.session_active = false;
+            self.active_client_id = None;
+            activity = true;
+        }
+
+        activity |= Self::flush_outbound(&mut self.server, &mut self.telemetry, socket, now_ms);
 
         if matches!(socket.state(), TcpState::CloseWait | TcpState::Closed) && self.session_active {
             info!(
@@ -331,48 +365,50 @@ impl NetStack {
         activity
     }
 
-    fn flush_outbound(&mut self, socket: &mut TcpSocket, now_ms: u64) -> bool {
+    fn flush_outbound(
+        server: &mut TcpConsoleServer,
+        telemetry: &mut NetTelemetry,
+        socket: &mut TcpSocket,
+        now_ms: u64,
+    ) -> bool {
         if !socket.can_send() {
             return false;
         }
         let mut activity = false;
-        let pre_auth = !self.server.is_authenticated();
+        let pre_auth = !server.is_authenticated();
         let mut budget = MAX_TX_BUDGET;
         while budget > 0 && socket.can_send() {
-            let Some(line) = self.server.pop_outbound() else {
+            let Some(line) = server.pop_outbound() else {
                 break;
             };
             if pre_auth && !(line.starts_with("OK AUTH") || line.starts_with("ERR AUTH")) {
-                self.server.push_outbound_front(line);
+                server.push_outbound_front(line);
                 break;
             }
             let mut payload: HeaplessVec<u8, { DEFAULT_LINE_CAPACITY + 2 }> = HeaplessVec::new();
             if payload.extend_from_slice(line.as_bytes()).is_err()
                 || payload.extend_from_slice(b"\r\n").is_err()
             {
-                self.server.push_outbound_front(line);
-                self.telemetry.tx_drops = self.telemetry.tx_drops.saturating_add(1);
+                server.push_outbound_front(line);
+                telemetry.tx_drops = telemetry.tx_drops.saturating_add(1);
                 break;
             }
             match socket.send_slice(payload.as_slice()) {
                 Ok(sent) if sent == payload.len() => {
-                    if self.server.is_authenticated() {
-                        self.server.mark_activity(now_ms);
+                    if server.is_authenticated() {
+                        server.mark_activity(now_ms);
                     }
                     activity = true;
                 }
                 Ok(_) => {
-                    self.server.push_outbound_front(line);
-                    self.telemetry.tx_drops = self.telemetry.tx_drops.saturating_add(1);
+                    server.push_outbound_front(line);
+                    telemetry.tx_drops = telemetry.tx_drops.saturating_add(1);
                     break;
                 }
                 Err(err) => {
-                    warn!(
-                        "[net-console] TCP client #{} write error: {err}",
-                        self.active_client_id.unwrap_or(0)
-                    );
-                    self.server.push_outbound_front(line);
-                    self.telemetry.tx_drops = self.telemetry.tx_drops.saturating_add(1);
+                    warn!("[net-console] TCP client write error: {err}",);
+                    server.push_outbound_front(line);
+                    telemetry.tx_drops = telemetry.tx_drops.saturating_add(1);
                     break;
                 }
             }
