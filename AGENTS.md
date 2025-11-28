@@ -19,6 +19,13 @@
 5. **Capability Discipline** — Interactions occur through 9P namespaces using role-scoped capability tickets.
 6. **Tooling Alignment** — Use the macOS ARM64 toolchain in `TOOLCHAIN_MAC_ARM64.md`. Do not assume Linux-specific tooling in VM code.
 
+### Worker Bring-up
+- Root-task spawns **queen**, **worker-heart**, and **worker-gpu** per the sequencing in `docs/BUILD_PLAN.md`, handing out scheduling contexts that follow `docs/ROLES_AND_SCHEDULING.md` budgets.
+- Workers run solely via their mounted namespaces (e.g., `/worker/<id>`), exchanging tickets and telemetry through Secure9P; no host-initiated ad-hoc RPC exists, and all coordination is file and event driven.
+
+### GPU Worker Boundaries
+- Worker-gpu handles ticket/lease files and telemetry only; GPU hardware access stays on the host-side `gpu-bridge-host`, keeping CUDA/NVML outside the VM and TCB.
+
 ## Task Template (use verbatim in planning docs)
 ```
 Title/ID: <slug>
@@ -35,6 +42,7 @@ Deliverables: <files, logs, doc updates>
 - **Planner** — Breaks milestones into atomic tasks using the template above and ensures each new capability or provider field is represented in the compiler IR.
 - **Builder** — Implements code/tests, runs commands, documents results.
 - **Auditor** — Reviews diffs for scope compliance, verifies generated artefacts match manifest fingerprints, and updates docs.
+- **Queen / Workers** — Queen orchestrates control-plane actions; worker-heart emits heartbeat telemetry; worker-gpu mirrors GPU lease/ticket state. No other agent roles exist beyond those sanctioned in `docs/BUILD_PLAN.md`.
 
 ## Guardrails
 - Keep rootfs CPIO under 4 MiB (see `ci/size_guard.sh`).
@@ -57,4 +65,8 @@ seL4
 - No hardcoded secrets; use config or tickets.
 - Update or add tests whenever behaviour changes; list executed commands in PR summaries.
 - Run `cargo run -p coh-rtc` and verify regenerated artefacts hash-match committed versions before merge.
+
+## Future Notes
+- Automated worker lifecycle and `/queen/ctl` bindings for worker-create/worker-kill remain scheduled per `BUILD_PLAN.md` milestones.
+- Secure9P surfaces will grow explicit worker-create/worker-kill verbs and GPU lease renewal flows as milestones advance; keep namespace semantics aligned when they land.
 
