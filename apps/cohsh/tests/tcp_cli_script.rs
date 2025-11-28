@@ -89,3 +89,31 @@ fn tcp_script_reports_connection_failure() {
         "failed to connect to Cohesix TCP console",
     ));
 }
+
+#[test]
+fn tcp_interactive_attach_failure_keeps_prompt() {
+    let unused_listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind ephemeral");
+    let port = unused_listener.local_addr().expect("listener addr").port();
+    drop(unused_listener);
+
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("cohsh"));
+    let assert = cmd
+        .arg("--transport")
+        .arg("tcp")
+        .arg("--tcp-port")
+        .arg(port.to_string())
+        .arg("--role")
+        .arg("queen")
+        .write_stdin("quit\n")
+        .timeout(Duration::from_secs(10))
+        .assert();
+
+    assert
+        .success()
+        .stdout(predicate::str::contains("Welcome to Cohesix"))
+        .stdout(predicate::str::contains(
+            "detached shell: run 'attach <role>' to connect",
+        ))
+        .stdout(predicate::str::contains("coh> "))
+        .stderr(predicate::str::contains("TCP attach failed"));
+}

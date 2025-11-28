@@ -52,8 +52,9 @@ impl ConnectionTelemetry {
     fn log_reconnect(&mut self, attempt: usize, delay: Duration) {
         self.reconnects += 1;
         eprintln!(
-            "[cohsh][tcp] reconnect attempt #{attempt} (delay={:?}, total_reconnects={})",
-            delay, self.reconnects
+            "[cohsh][tcp] reconnect attempt #{attempt} (delay={}ms, total_reconnects={})",
+            delay.as_millis(),
+            self.reconnects
         );
     }
 
@@ -353,7 +354,13 @@ impl TcpTransport {
             .context("attach to the TCP transport before reading")?;
         let mut line = String::new();
         match reader.read_line(&mut line) {
-            Ok(0) => Ok(ReadStatus::Closed),
+            Ok(0) => {
+                self.telemetry.log_disconnect(&io::Error::new(
+                    io::ErrorKind::ConnectionReset,
+                    "connection closed by peer",
+                ));
+                Ok(ReadStatus::Closed)
+            }
             Ok(_) => {
                 self.last_activity = Instant::now();
                 Ok(ReadStatus::Line(line))

@@ -566,10 +566,7 @@ impl<T: Transport, W: Write> Shell<T, W> {
     }
 
     fn prompt(&self) -> String {
-        match self.session {
-            Some(_) => "coh> ".to_owned(),
-            None => format!("coh[{}:disconnected]> ", self.transport.kind()),
-        }
+        "coh> ".to_owned()
     }
 
     /// Attach to the transport using the supplied role and optional ticket payload.
@@ -625,8 +622,12 @@ impl<T: Transport, W: Write> Shell<T, W> {
             if trimmed.is_empty() {
                 continue;
             }
-            if self.execute(trimmed)? == CommandStatus::Quit {
-                break;
+            match self.execute(trimmed) {
+                Ok(CommandStatus::Quit) => break,
+                Ok(CommandStatus::Continue) => {}
+                Err(err) => {
+                    writeln!(self.writer, "Error: {err}")?;
+                }
             }
         }
         Ok(())

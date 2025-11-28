@@ -150,30 +150,20 @@ fn main() -> Result<()> {
                 if cli.script.is_some() {
                     return Err(error);
                 }
-                eprintln!("Error: {error}");
                 #[cfg(feature = "tcp")]
-                let hint = match cli.transport {
-                    TransportKind::Tcp => {
-                        "tcp transport disconnected; run 'attach <role>' to reconnect"
-                    }
-                    TransportKind::Qemu => "qemu transport idle; run 'attach <role>' to boot",
-                    TransportKind::Mock => "detached shell: run 'attach <role>' to connect",
+                let transport_hint = if matches!(cli.transport, TransportKind::Tcp) {
+                    "TCP attach failed"
+                } else {
+                    "attach failed"
                 };
                 #[cfg(not(feature = "tcp"))]
-                let hint = "detached shell: run 'attach <role>' to connect";
-                shell.write_line(hint)?;
+                let transport_hint = "attach failed";
+                eprintln!("Error: {transport_hint}: {error}");
+                shell.write_line("detached shell: run 'attach <role>' to connect")?;
             }
         }
     } else {
-        #[cfg(feature = "tcp")]
-        let hint = match cli.transport {
-            TransportKind::Tcp => "tcp transport disconnected; run 'attach <role>' to connect",
-            TransportKind::Qemu => "qemu transport idle; run 'attach <role>' to connect",
-            TransportKind::Mock => "detached shell: run 'attach <role>' to connect",
-        };
-        #[cfg(not(feature = "tcp"))]
-        let hint = "detached shell: run 'attach <role>' to connect";
-        shell.write_line(hint)?;
+        shell.write_line("detached shell: run 'attach <role>' to connect")?;
     }
     if auto_log {
         shell.execute("log")?;
