@@ -1407,16 +1407,10 @@ fn bootstrap<P: Platform>(
     }
     driver.write_str("[cohesix:root-task] uart logger online\n");
 
-    #[cfg(not(feature = "net-console"))]
-    {
-        let uart_slot = uart_region
-            .as_ref()
-            .map(|region| region.cap())
-            .unwrap_or(sel4_sys::seL4_CapNull);
-        let mut console = crate::console::Console::new(Pl011::new(uart_ptr));
-        let mut cli = crate::console::CohesixConsole::with_console(console, ep_slot, uart_slot);
-        cli.run();
-    }
+    let uart_slot = uart_region
+        .as_ref()
+        .map(|region| region.cap())
+        .unwrap_or(sel4_sys::seL4_CapNull);
 
     #[cfg(feature = "debug-input")]
     {
@@ -1519,6 +1513,11 @@ fn bootstrap<P: Platform>(
         let mut audit = ConsoleAudit::new(&mut console);
         #[cfg(feature = "kernel")]
         let mut bootstrap_ipc = BootstrapIpcAudit::new();
+        log::info!(
+            "[console] starting root shell ep=0x{ep:04x} uart=0x{uart:04x}",
+            ep = ep_slot,
+            uart = uart_slot,
+        );
         log::trace!("B3: about to start event pump");
         let mut pump = EventPump::new(serial, timer, ipc, tickets, &mut audit);
 

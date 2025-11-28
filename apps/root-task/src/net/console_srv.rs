@@ -5,7 +5,7 @@
 use heapless::{Deque, String as HeaplessString};
 use log::{info, warn};
 
-use super::CONSOLE_QUEUE_DEPTH;
+use super::{AUTH_TIMEOUT_MS, CONSOLE_QUEUE_DEPTH};
 use crate::console::proto::{render_ack, AckLine, AckStatus, LineFormatError};
 use crate::serial::DEFAULT_LINE_CAPACITY;
 
@@ -42,6 +42,7 @@ pub struct TcpConsoleServer {
     inbound: Deque<HeaplessString<DEFAULT_LINE_CAPACITY>, CONSOLE_QUEUE_DEPTH>,
     outbound: Deque<HeaplessString<DEFAULT_LINE_CAPACITY>, CONSOLE_QUEUE_DEPTH>,
     last_activity_ms: u64,
+    auth_deadline_ms: Option<u64>,
 }
 
 impl TcpConsoleServer {
@@ -55,6 +56,7 @@ impl TcpConsoleServer {
             inbound: Deque::new(),
             outbound: Deque::new(),
             last_activity_ms: 0,
+            auth_deadline_ms: None,
         }
     }
 
@@ -65,6 +67,7 @@ impl TcpConsoleServer {
         self.inbound.clear();
         self.outbound.clear();
         self.last_activity_ms = now_ms;
+        self.auth_deadline_ms = Some(now_ms.saturating_add(AUTH_TIMEOUT_MS));
         info!("[net-console] auth begin");
     }
 
@@ -75,6 +78,7 @@ impl TcpConsoleServer {
         self.inbound.clear();
         self.outbound.clear();
         self.last_activity_ms = 0;
+        self.auth_deadline_ms = None;
     }
 
     /// Consume bytes received from the client, returning any resulting session event.
@@ -145,6 +149,7 @@ impl TcpConsoleServer {
             return SessionEvent::AuthFailed("invalid-token");
         }
         self.state = SessionState::Authenticated;
+        self.auth_deadline_ms = None;
         let _ = self.enqueue_auth_ack(AckStatus::Ok, None);
         info!("[net-console] auth ok");
         SessionEvent::Authenticated
@@ -154,6 +159,15 @@ impl TcpConsoleServer {
     pub fn should_timeout(&self, now_ms: u64) -> bool {
         matches!(self.state, SessionState::Authenticated)
             && now_ms.saturating_sub(self.last_activity_ms) >= self.idle_timeout_ms
+    }
+
+    /// Return true if an unauthenticated client failed to present credentials in time.
+    pub fn auth_timed_out(&self, now_ms: u64) -> bool {
+        matches!(self.state, SessionState::WaitingAuth)
+            && self
+                .auth_deadline_ms
+                .map(|deadline| now_ms >= deadline)
+                .unwrap_or(false)
     }
 
     /// Forward buffered console lines to the provided visitor.
@@ -236,6 +250,18 @@ mod tests {
 
         server.mark_activity(20);
         assert!(!server.should_timeout(1000));
+    }
+
+    #[test]
+    fn auth_timeout_triggers_and_resets() {
+        let mut server = TcpConsoleServer::new("token", 1000);
+        server.begin_session(0);
+
+        assert!(!server.auth_timed_out(1));
+        assert!(server.auth_timed_out(AUTH_TIMEOUT_MS + 1));
+
+        server.end_session();
+        assert!(!server.auth_timed_out(AUTH_TIMEOUT_MS + 2));
     }
 
     #[test]
