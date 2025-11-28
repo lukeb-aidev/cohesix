@@ -10,11 +10,13 @@
 1. **seL4 Bootstraps** using the external elfloader and enters the Cohesix root task entry point.
 2. **Root Task Initialisation**
    - Configures serial logging and prints the boot banner.
-   - Publishes the root endpoint before any IPC attempt and routes all calls through guarded helpers that refuse to touch seL4 syscalls until the endpoint is live. 【F:apps/root-task/src/kernel.rs†L241-L275】【F:apps/root-task/src/sel4.rs†L74-L154】
+   - Reconstructs canonical init CSpace access (probe + init-root alias) before any mutable syscall, then walks `bootinfo.empty`
+     to plan untyped retypes and capability consumption. 【F:apps/root-task/src/kernel.rs†L640-L718】
+   - Publishes the root endpoint before any IPC attempt and routes all calls through guarded helpers that refuse to touch seL4 syscalls until the endpoint is live. 【F:apps/root-task/src/kernel.rs†L760-L833】【F:apps/root-task/src/sel4.rs†L74-L154】
+   - Maps PL011 early, brings up the UART driver, and logs the resolved vaddr/slot before switching the logger to userland. 【F:apps/root-task/src/kernel.rs†L1119-L1217】
    - Establishes a periodic timer and registers IRQ handlers.
    - Constructs the cooperative event pump that rotates through serial RX/TX, timer ticks, networking polls (behind the `net`
-     feature), and IPC dispatch without relying on busy waits.
-   - Creates the capability space for initial services, including the 9P endpoint and worker slots.
+     feature), and IPC dispatch without relying on busy waits; enters it after announcing the root console endpoint and TCP listener when enabled. 【F:apps/root-task/src/kernel.rs†L1474-L1565】
 3. **Service Bring-up**
    - Spawns the **NineDoor** 9P server task and hands it the root capability set.
    - Registers static providers that expose `/proc`, `/queen`, `/log`, and the worker namespace.
@@ -48,10 +50,9 @@
   revisiting the legacy spin loop.
 - Hosts the deterministic networking stack (`net::NetStack`) which wraps smoltcp with virtio-friendly, heapless RX/TX queues and
   a `NetworkClock` that advances in timer-driven increments.
-- Provides a serial façade (`serial::SerialPort`) backed by a deterministic virtio-console driver that models the
-  RX/TX descriptor rings with bounded `heapless::spsc::Queue` instances. All console IO flows through the shared
-  UTF-8 normaliser which tracks back-pressure counters via `portable-atomic` and feeds the parser used by both
-  serial and TCP transports.
+- Provides the PL011-backed serial façade (`serial::pl011` + `console::Console`) that powers the always-on root shell
+  when `serial-console` is enabled. Input/output is line-buffered with bounded heapless queues and UTF-8
+  normalisation shared with the TCP transport.
 - Runs the serial/TCP console loop (`console::CommandParser`) which multiplexes authenticated commands (`help`, `attach`, `tail`,
   `log`, `spawn`, `kill`, `quit`) alongside timer and networking events inside the root-task scheduler. Capability validation is
   driven by a deterministic ticket table (`event::TicketTable`) that records bootstrap secrets, and an acknowledgement dispatcher
@@ -64,9 +65,12 @@
 - Tracks per-session state (fid tables, msize) and ensures append-only semantics on log/telemetry nodes.
 
 ### Workers (crate family: `worker-*`)
-- Spawned by queen commands; each worker receives a ticket describing its role and budget.
-- Communicate exclusively through their mounted NineDoor namespace—no raw IPC between workers.
-- Heartbeat workers emit periodic telemetry; future GPU workers coordinate with host GPU bridges.
+- Spawned by queen commands; each worker receives a ticket describing its role and budget, and remains capability-limited to its
+  assigned mounts.【F:docs/ROLES_AND_SCHEDULING.md†L4-L17】
+- Communicate exclusively through their mounted NineDoor namespace—no raw IPC between workers; queen keeps orchestration state
+  in `/queen` while worker-heart processes stick to `/worker/<id>`.
+- Heartbeat workers emit periodic telemetry; worker-gpu stubs exist for future host-bridge coordination but stay isolated from
+  queen mounts beyond their lease scopes.
 
 ### Host GPU Bridge (future, crate: `gpu-bridge`)
 - Runs **outside** the VM, using NVML/CUDA to manage real hardware.
@@ -78,6 +82,8 @@
   - **Queen**: `/`, `/queen`, `/proc`, `/log`, `/worker/*`, `/gpu/* (future)`.
   - **WorkerHeartbeat**: `/proc/boot`, `/worker/self/telemetry`, `/log/queen.log (read-only)`.
   - **WorkerGpu (future)**: Worker heartbeat view + `/gpu/<lease>/*` nodes.
+- Mount tables keep `/queen`, `/worker/<id>`, `/log`, and `/gpu/*` isolated so worker processes cannot traverse queen control or
+  other worker directories even when sharing a NineDoor transport.【F:docs/ROLES_AND_SCHEDULING.md†L4-L17】
 - `bind` and `mount` operations are implemented via per-session mount tables maintained by NineDoor. Operations are scoped to a single path (no union mounts) and require queen privileges.
 
 ## 5. Capability & Role Model
@@ -92,6 +98,14 @@
 - **GPU Integration (future)**: Host bridge exposes GPU metadata/control/job/status nodes; WorkerGpu instances mediate job submission and read back status via NineDoor.
 
 ## 7. Networking & Console Integration
+- The root shell always runs on the PL011 UART when the `serial-console` feature is enabled, presenting the `cohesix>` prompt
+  for low-level debug, bootinfo inspection, and capability sanity checks. It is intended as the non-negotiable bring-up path
+  and remains active regardless of other transports.【F:apps/root-task/src/userland/mod.rs†L27-L120】
+- When the `net` and `net-console` features are enabled, a TCP-backed console listener starts alongside the PL011 console. It
+  speaks the same command parser, accepts `cohsh --transport tcp` sessions over the NineDoor-compatible protocol, and is
+  required to remain non-blocking so it cannot interfere with root shell input or event-pump cadence.【F:apps/root-task/src/net/console_srv.rs†L1-L134】
+- Both consoles run concurrently; remote access is additive rather than a replacement, ensuring local serial recovery remains
+  available even when TCP listeners are present.【F:apps/root-task/src/kernel.rs†L1474-L1565】
 - The networking substrate instantiates a virtio-style PHY backed by `heapless::spsc::Queue` buffers (16 frames × 1536 bytes) to
   preserve deterministic memory usage. smoltcp provides the IPv4/TCP stack while the PHY abstraction allows future hardware
   drivers to plug in without changing higher layers. The module is feature-gated (`--features net`) so developers can defer the
@@ -108,6 +122,10 @@
   so operators can script against shared semantics without guessing event timing.【F:apps/root-task/src/event/mod.rs†L329-L360】【F:apps/root-task/src/net/queue.rs†L526-L559】
 - Root-task’s event pump advances the networking clock on every timer tick, services console input, and emits structured log
   lines so host tooling (`cohsh`) can mirror state over either serial or TCP transports while timers and IPC continue to run.
+
+`cohsh` is a host-only CLI: it never executes inside the VM or QEMU guest, instead running on macOS and connecting over the TCP
+transport (or wrapping a local QEMU subprocess via the `qemu` transport) using the NineDoor protocol. It mirrors the root shell
+command set but keeps orchestration off-VM, matching the build instructions in `docs/USERLAND_AND_CLI.md`. 【F:apps/cohsh/src/main.rs†L44-L132】
 
 ## 8. Reliability & Security Considerations
 - Minimal trusted computing base: no POSIX layers, no TCP servers inside the VM, no dynamic loading.
@@ -199,3 +217,8 @@
   under constrained links. Host tooling validates dependencies before
   enabling sidecars, preventing drift between planned and deployed
   topologies.
+
+## Future Notes (post–Milestone 7c)
+- Event loop unification and shared transport polling land in later Milestone 7d/7e work to remove remaining spin-based fallbacks.【F:docs/BUILD_PLAN.md†L218-L340】
+- Worker lifecycle automation (spawn/kill, budget expiry) is scheduled for the post-7c scheduler hardening tasks in the build plan.【F:docs/BUILD_PLAN.md†L218-L340】
+- GPU node expansion follows the Milestone 6/8 host-bridge roadmap, keeping VM-side worker-gpu stubs minimal until host leases are available.【F:docs/BUILD_PLAN.md†L120-L135】
