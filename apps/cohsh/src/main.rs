@@ -42,7 +42,11 @@ struct Cli {
     script: Option<PathBuf>,
 
     /// Select the transport backing the shell session.
-    #[arg(long, value_enum, default_value_t = TransportKind::Mock)]
+    #[cfg_attr(feature = "tcp", arg(long, value_enum, default_value_t = TransportKind::Tcp))]
+    #[cfg_attr(
+        not(feature = "tcp"),
+        arg(long, value_enum, default_value_t = TransportKind::Mock)
+    )]
     transport: TransportKind,
 
     /// Path to the QEMU binary when using the qemu transport.
