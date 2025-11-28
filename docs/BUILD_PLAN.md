@@ -11,6 +11,12 @@ is grounded in the architectural intent outlined in `docs/ARCHITECTURE.md`, the 
 and the interface contracts codified in `docs/INTERFACES.md`. Treat those documents as non-negotiable source material when
 preparing and executing tasks.
 
+**Current Status Snapshot (through Milestone 7c)**
+- Milestones 0–7c are implemented: the cooperative event pump, PL011 root console, TCP console listener, and Secure9P namespace are live and reflected in the updated architecture and CLI docs (see `ARCHITECTURE.md` / `USERLAND_AND_CLI.md`).
+- Dual consoles now run concurrently; the TCP listener is non-blocking and mirrors serial semantics while keeping PL011 always-on for recovery.
+- NineDoor attach/namespace semantics follow `SECURE9P.md` and role mounts from `ROLES_AND_SCHEDULING.md`; worker-heart and worker-gpu remain stubs until later milestones integrate them with the live namespaces.
+- Remaining milestones focus on acknowledgement hardening, HAL/compiler work, and future worker/GPU namespace extensions.
+
 ## seL4 Reference Manual Alignment (v13.0.0)
 
 We treat the seL4 Reference Manual v13.0.0 (`seL4/seL4-manual-latest.pdf`) as the authoritative description of kernel semantics. This plan
@@ -29,6 +35,7 @@ cross-checks each milestone against the relevant chapters to ensure we remain wi
 We revisit these sections whenever we specify new kernel interactions or manifest changes so that documentation and implementations remain aligned.
 
 ## Milestone 0 — Repository Skeleton & Toolchain (1–2 days)
+**Status:** Complete — repo/workspace scaffolding, build scripts, and size guard are in place; keep regenerated artefacts in sync with toolchain outputs.
 **Deliverables**
 - Cargo workspace initialised with crates for `root-task`, `nine-door`, and `worker-heart` plus shared utility crates.
 - `toolchain/setup_macos_arm64.sh` script checking for Homebrew dependencies, rustup, and QEMU - and installing if absent.
@@ -43,6 +50,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 - `ci/size_guard.sh out/rootfs.cpio` rejects oversized archives.
 
 ## Milestone 1 — Boot Banner, Timer, & First IPC
+**Status:** Complete — boot banner, timer tick, and initial IPC appear in current boot logs; retain existing log ordering.
 **Deliverables**
 - Root task prints a banner and configures a periodic timer tick.
 - Root task spawns a secondary user component via seL4 endpoints.
@@ -60,6 +68,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 - Retype now targets the init root CNode using the canonical tuple `(root=seL4_CapInitThreadCNode, node_index=0, node_depth=bootinfo.initThreadCNodeSizeBits, slot)` and validates capacity via `initThreadCNodeSizeBits`.
 
 ## Milestone 2 — NineDoor Minimal 9P
+**Status:** Complete — Secure9P codec, fid/session handling, and the synthetic namespace are active; follow-up limited to ongoing fuzz coverage.
 **Deliverables**
 - Secure9P codec + fid/session table implementing `version`, `attach`, `walk`, `open`, `read`, `write`, `clunk`.
 - Synthetic namespace publishing:
@@ -78,6 +87,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 - Decoder corpus covers malformed frames (length mismatch, fid reuse).
 
 ## Milestone 3 — Queen/Worker MVP with Roles
+**Status:** Complete — Queen/worker roles, budgets, and `/queen/ctl` JSON handling are live; keep tests aligned with current ticket and namespace semantics.
 **Deliverables**
 - Role-aware access policy implementing `Queen` and `WorkerHeartbeat` roles.
 - `/queen/ctl` accepts JSON commands:
@@ -95,6 +105,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 - Role isolation tests deny cross-role reads/writes.
 
 ## Milestone 4 — Bind & Mount Namespaces
+**Status:** Complete — Per-session mount tables are implemented; future changes must preserve established bind/mount semantics from `SECURE9P.md`.
 **Deliverables**
 - Per-session mount table with `bind(from, to)` and `mount(service, at)` operations scoped to a single path.
 - Queen-only commands for namespace manipulation exposed via `/queen/ctl`.
@@ -106,6 +117,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 - Attempted bind by a worker fails with `Permission`.
 
 ## Milestone 5 — Hardening & Test Automation (ongoing)
+**Status:** Complete — Unit/fuzz/integration coverage exists; maintain regression packs as features evolve.
 **Deliverables**
 - Unit tests for codec, fid lifecycle, and access policy negative paths.
 - Fuzz harness covering length-prefix mutations and random tail bytes for the decoder.
@@ -118,6 +130,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 - Fuzz harness runs N iterations (configurable) without panic.
 
 ## Milestone 6 — GPU Worker Integration
+**Status:** Complete (host-side scaffolding in place; VM-side worker stubs remain minimal until host bridge integration lands).
 **Deliverables**
 - Define `WorkerGpu` role and extend `/queen/ctl` schema with GPU lease requests.
 - Host-side `gpu-bridge-host` tool implementing NVML-based discovery (feature-gated) and `--mock` namespace mirroring for `/gpu/<id>/*`.
@@ -135,6 +148,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 > **Rule of Engagement:** Advance milestones sequentially, treat documentation as canonical, and keep code/tests aligned after every milestone increment.
 
 ## Milestone 7a — Root-Task Event Pump & Authenticated Kernel Entry
+**Status:** Complete — Event pump replaces the spin loop; authenticated console flow and serial integration are live. Preserve PL011 logging and audit ordering during follow-up changes.
 **Deliverables**
 - **Deprecate legacy spin loop**
   - Replace the placeholder busy loop in `kernel_start` with a cooperative event pump that cycles serial RX/TX, timer ticks, networking polls, and IPC dispatch without relying on `std` primitives.
@@ -216,6 +230,7 @@ Deliverables: Synchronized documentation explaining event pump adoption, securit
 ```
 
 ## Milestone 7b — Standalone Console & Networking (QEMU-first)
+**Status:** Complete — PL011 root console and TCP console co-exist; networking stack is feature-gated and non-blocking. Virtio-console is not used; PL011 remains the root console (see `ARCHITECTURE.md` for dual-console expectations).
 **Deliverables**
 - **Serial console integration**
   - Implement a bidirectional serial driver for QEMU (`virtio-console` preferred, PL011 fallback) that supports blocking RX/TX (no heap, no `std`) and exposes an interrupt-safe API so the event pump can integrate timer and network wake-ups.
@@ -278,6 +293,7 @@ Checks: Parser rejects invalid verbs, enforces max length, rate limits failed lo
 Deliverables: Hardened console loop with comprehensive parser tests integrated into root-task and lint-clean CI coverage.
 ```
 ## Milestone 7c
+**Status:** Complete — TCP transport, documentation updates, and integration tests are in tree; keep host build scripts and console fixtures in sync when toggling transport flags.
 **Deliverables**
 - **Remote transport**
   - Extend `cohsh` with a TCP transport that speaks to the new in-VM listener while keeping the existing mock/QEMU flows; expose reconnect/back-off behaviour and certificate-less ticket validation for the prototype environment.
@@ -317,7 +333,10 @@ Deliverables: Updated documentation set, automation scripts, and passing QEMU TC
 ```
 
 ## Milestone 7d
+**Status:** In progress — ACK/ERR broadcast already exists in the event pump for serial and TCP; focus now is fixture stability, reconnection semantics, and documentation parity.
 **Deliverables**
+- Ensure the PL011 root console remains active alongside the TCP listener; TCP handling must stay non-blocking so serial recovery remains deterministic (see `ARCHITECTURE.md`).
+- Attachments must respect the current NineDoor handshake and ticket validation; acknowledgements should reuse the parser grammar from `USERLAND_AND_CLI.md`.
 - **Console acknowledgements**
   - Enable the root-task TCP listener to emit `OK`/`ERR` responses for `ATTACH`, heartbeat probes, and command verbs so remote operators receive immediate feedback.
   - Surface execution outcomes (success, denial, or validation failure) through the shared serial/TCP output path with structured debug strings suitable for regression tests.
@@ -357,7 +376,8 @@ Deliverables: Bidirectional console acknowledgements spanning serial and TCP tra
 - `https://crates.io/crates/spin` (lock primitives for bounded queues)
 
 ## Milestone 7e — TraceFS (JSONL Synthetic Filesystem)
-**Purpose**  
+**Status:** Pending — NineDoor namespaces and Secure9P path semantics are live; add the trace provider without regressing existing mounts (see `SECURE9P.md`).
+**Purpose**
 Add a minimal synthetic 9P provider (`tracefs`) exposing JSONL-based tracing and diagnostic streams.  
 Enable root-task and userspace components to log, filter, and stream events via append-only 9P files, following the Plan 9 “everything is a file” model.
 
@@ -398,6 +418,7 @@ cohsh> tail /trace/events
 * Reading `/trace/events` shows bounded ring output with sequence continuity.
 * No TCP or external logging inside the VM.
 * Code aligned with `secure9p-*` layering; passes `cargo clippy -- -D warnings`.
+* TCP console must remain non-blocking and PL011 stays active as the fallback root console (see `ARCHITECTURE.md`).
 
 ## Milestone 8a — Lightweight Hardware Abstraction Layer
 
