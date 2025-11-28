@@ -247,11 +247,25 @@ impl NetStack {
                     Ok(count) => match self.server.ingest(&temp[..count], now_ms) {
                         SessionEvent::None => {}
                         SessionEvent::Authenticated => activity = true,
+                        SessionEvent::AuthFailed(reason) => {
+                            warn!(
+                                "[net-console] TCP client #{} auth failed reason={}",
+                                self.active_client_id.unwrap_or(0),
+                                reason
+                            );
+                            activity |= self.flush_outbound(socket, now_ms);
+                            socket.close();
+                            self.server.end_session();
+                            self.session_active = false;
+                            self.active_client_id = None;
+                            break;
+                        }
                         SessionEvent::Close => {
                             warn!(
                                 "[net-console] TCP client #{} closing after session end",
                                 self.active_client_id.unwrap_or(0)
                             );
+                            activity |= self.flush_outbound(socket, now_ms);
                             socket.close();
                             self.server.end_session();
                             self.session_active = false;
@@ -291,6 +305,7 @@ impl NetStack {
                 self.active_client_id.unwrap_or(0)
             );
             let _ = self.server.enqueue_outbound("ERR CONSOLE reason=timeout");
+            activity |= self.flush_outbound(socket, now_ms);
             socket.close();
             self.server.end_session();
             self.session_active = false;
@@ -298,44 +313,7 @@ impl NetStack {
             activity = true;
         }
 
-        if socket.can_send() && self.server.is_authenticated() {
-            let mut budget = MAX_TX_BUDGET;
-            while budget > 0 && socket.can_send() {
-                let Some(line) = self.server.pop_outbound() else {
-                    break;
-                };
-                let mut payload: HeaplessVec<u8, { DEFAULT_LINE_CAPACITY + 2 }> =
-                    HeaplessVec::new();
-                if payload.extend_from_slice(line.as_bytes()).is_err()
-                    || payload.extend_from_slice(b"\r\n").is_err()
-                {
-                    self.server.push_outbound_front(line);
-                    self.telemetry.tx_drops = self.telemetry.tx_drops.saturating_add(1);
-                    break;
-                }
-                match socket.send_slice(payload.as_slice()) {
-                    Ok(sent) if sent == payload.len() => {
-                        self.server.mark_activity(now_ms);
-                        activity = true;
-                    }
-                    Ok(_) => {
-                        self.server.push_outbound_front(line);
-                        self.telemetry.tx_drops = self.telemetry.tx_drops.saturating_add(1);
-                        break;
-                    }
-                    Err(err) => {
-                        warn!(
-                            "[net-console] TCP client #{} write error: {err}",
-                            self.active_client_id.unwrap_or(0)
-                        );
-                        self.server.push_outbound_front(line);
-                        self.telemetry.tx_drops = self.telemetry.tx_drops.saturating_add(1);
-                        break;
-                    }
-                }
-                budget -= 1;
-            }
-        }
+        activity |= self.flush_outbound(socket, now_ms);
 
         if matches!(socket.state(), TcpState::CloseWait | TcpState::Closed) && self.session_active {
             info!(
@@ -350,6 +328,56 @@ impl NetStack {
             activity = true;
         }
 
+        activity
+    }
+
+    fn flush_outbound(&mut self, socket: &mut TcpSocket, now_ms: u64) -> bool {
+        if !socket.can_send() {
+            return false;
+        }
+        let mut activity = false;
+        let pre_auth = !self.server.is_authenticated();
+        let mut budget = MAX_TX_BUDGET;
+        while budget > 0 && socket.can_send() {
+            let Some(line) = self.server.pop_outbound() else {
+                break;
+            };
+            if pre_auth && !(line.starts_with("OK AUTH") || line.starts_with("ERR AUTH")) {
+                self.server.push_outbound_front(line);
+                break;
+            }
+            let mut payload: HeaplessVec<u8, { DEFAULT_LINE_CAPACITY + 2 }> = HeaplessVec::new();
+            if payload.extend_from_slice(line.as_bytes()).is_err()
+                || payload.extend_from_slice(b"\r\n").is_err()
+            {
+                self.server.push_outbound_front(line);
+                self.telemetry.tx_drops = self.telemetry.tx_drops.saturating_add(1);
+                break;
+            }
+            match socket.send_slice(payload.as_slice()) {
+                Ok(sent) if sent == payload.len() => {
+                    if self.server.is_authenticated() {
+                        self.server.mark_activity(now_ms);
+                    }
+                    activity = true;
+                }
+                Ok(_) => {
+                    self.server.push_outbound_front(line);
+                    self.telemetry.tx_drops = self.telemetry.tx_drops.saturating_add(1);
+                    break;
+                }
+                Err(err) => {
+                    warn!(
+                        "[net-console] TCP client #{} write error: {err}",
+                        self.active_client_id.unwrap_or(0)
+                    );
+                    self.server.push_outbound_front(line);
+                    self.telemetry.tx_drops = self.telemetry.tx_drops.saturating_add(1);
+                    break;
+                }
+            }
+            budget -= 1;
+        }
         activity
     }
 
