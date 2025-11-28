@@ -1,105 +1,147 @@
 <!-- Author: Lukas Bower -->
 # Cohesix Userland & CLI
 
-## 1. Philosophy
-Cohesix replaces the traditional Unix shell with a deterministic file-oriented control plane. All human and automated interactions go through 9P namespaces exposed by NineDoor. The primary operator tool is the **Cohesix Shell (`cohsh`)**, a Rust REPL that translates commands into 9P operations.
+## Overview
+Cohesix userland exposes two operator entry points:
+- **Root console** on the PL011 UART via QEMU `-serial mon:stdio`, showing the `cohesix>` prompt for on-box bring-up and bootinfo sanity checks.
+- **`cohsh` host CLI** (`coh>` prompt) running on the host, speaking to the VM over TCP (primary), or the mock/QEMU transports for development. `cohsh` never executes inside the VM.
 
-## 2. Root-task Console (Milestone 7)
-The authenticated console introduced in Milestone 7 is implemented by
-`apps/root-task/src/console/mod.rs` and shared by serial plus TCP
-transports. The parser is heapless, validates UTF-8, and enforces
-per-command capability checks inside the event pump.
+Use the root console for low-level validation (bootinfo, capability layout, untyped counts) and quick liveness checks. Use `cohsh` for day-to-day operator workflows and NineDoor interactions.
 
-### 2.1 Supported Commands
-| Command | Role | Effect |
-|---------|------|--------|
-| `help` | All | Emit an audit line indicating that help was requested |
-| `attach <role> <ticket>` | All | Authenticate the session and bind a role; tickets are required for every role |
-| `ping` | All | Send a `PING` console verb and expect `PONG` + `OK PING reply=pong`; errors when detached |
-| `tail <path>` | Worker, Queen | Record a request to stream a path via NineDoor once the bridge is online |
-| `log` | Queen | Shortcut for initiating the log stream verb |
-| `spawn <json>` | Queen | Forward JSON payloads to NineDoor for worker orchestration |
-| `kill <worker>` | Queen | Request termination of a worker via NineDoor |
-| `quit` | All | Close the session |
+## Root Console (PL011 / QEMU Serial)
+### Access and purpose
+- Brought up once PL011 initialises; exposed on QEMU `-serial mon:stdio`.
+- Prompt: `cohesix>` from the in-kernel console loop.【F:apps/root-task/src/console/mod.rs†L216-L305】
+- Intended for local debug/bring-up: verify seL4 bootinfo, CSpace layout, untyped enumeration, and that the root task is alive.
 
-> **Note:** File-oriented verbs such as `ls` and `cat` are provided by the
-> Secure9P namespace once NineDoor lands in Milestone 8; they are not part
-> of the Milestone 7 console.
+### Commands (current behaviour)
+- `help` – list available commands.【F:apps/root-task/src/console/mod.rs†L224-L233】
+- `bi` – bootinfo summary (node bits, empty window, IPC buffer if present).【F:apps/root-task/src/console/mod.rs†L234-L250】
+- `caps` – key capability slots (root CNode, endpoint, UART).【F:apps/root-task/src/console/mod.rs†L252-L263】
+- `mem` – untyped cap counts with RAM vs device breakdown.【F:apps/root-task/src/console/mod.rs†L265-L283】
+- `ping` – replies `pong` as a liveness check.【F:apps/root-task/src/console/mod.rs†L285-L293】
+- `quit` – currently prints `quit not supported on root console`; the loop continues (no session exit).【F:apps/root-task/src/console/mod.rs†L285-L299】
 
-`ping` now performs a real round-trip over the active transport. When a
-session is attached the TCP listener (or QEMU/serial console) returns
-`PONG` plus `OK PING reply=pong`; the CLI surfaces this as `ping: pong` and
-records the acknowledgements with `[console]` prefixes. When detached, the
-command fails with `ping: not attached` so scripts can detect a missing
-session without mutating state.
-
-### 2.2 Authentication & Limits
-- Maximum console line length is 128 characters; role identifiers are
-  capped at 16 characters and tickets at 128 characters. 【F:apps/root-task/src/console/mod.rs†L11-L36】
-- The login rate limiter blocks sessions that exceed three failed
-  attempts within 60 seconds for 90 seconds. 【F:apps/root-task/src/console/mod.rs†L38-L87】
-- The event pump records outcomes in `PumpMetrics`, incrementing
-  `accepted_commands` and `denied_commands` counters for auditability and,
-  when built for the kernel, tracking bootstrap IPC deliveries via
-  `bootstrap_messages`. 【F:apps/root-task/src/event/mod.rs†L84-L120】【F:apps/root-task/src/event/mod.rs†L240-L489】
-- The TCP listener requires an authentication token (`AUTH <token>`).
-  `cohsh --transport tcp` defaults to `changeme` but can be overridden via
-  `--auth-token` or `COHSH_AUTH_TOKEN`.
-
-### 2.3 Output Semantics
-The console emits explicit acknowledgements for every command. Both
-serial and TCP transports return `OK <VERB> …` or `ERR <VERB>
-reason=<cause>` before any side effects occur so operators and
-automation can synchronise on deterministic state transitions. These
-acknowledgements are produced by the shared event-pump dispatcher and are
-mirrored by the audit sink, ensuring `/log/queen.log` records the same
-outcome. Streaming verbs such as `tail` and `log` also emit an
-acknowledgement before beginning payload delivery and terminate with
-`END`. 【F:apps/root-task/src/event/mod.rs†L495-L772】【F:apps/root-task/src/ninedoor.rs†L4-L63】【F:apps/root-task/src/net/queue.rs†L526-L559】
-Early boot traces always use the UART path; the IPC sink remains disabled until `sel4::ep_ready()` publishes the root endpoint, preventing send-phase faults. 【F:apps/root-task/src/trace.rs†L10-L62】【F:apps/root-task/src/sel4.rs†L74-L154】
-
-## 3. Example Sessions
-The host-mode harness demonstrates the exact command sequence exercised
-under QEMU. The scripted input runs `help`, authenticates as queen and
-observes the `OK ATTACH` acknowledgement, invokes `log`/`spawn`,
-re-attaches as a worker, issues `tail` (receiving `OK TAIL` before the
-stream), then terminates with `quit`. 【F:apps/root-task/src/host.rs†L52-L104】
-
-## 4. Scripted Automation
-`cohsh` continues to ship scripting helpers that exercise the in-process
-Secure9P mock even though the TCP transport is now feature-complete:
-
-- `cohsh --script scripts/smoke.coh` executes newline-delimited commands
-  against the mock transport and aborts on the first error.
-- `cohsh --json` emits machine-readable events for CI.
-- `cohsh --mock` runs entirely in-process without launching QEMU, easing
-  unit testing of parser behaviour.
-
-## 5. QEMU & Serial Console Workflow
-Use `scripts/qemu-run.sh` to package a compiled root task into a CPIO
-archive and boot seL4 under QEMU. Supply pre-built elfloader and kernel
-artefacts produced by the upstream build system:
-
+### Example boot and probe
 ```
-scripts/qemu-run.sh \
-  --elfloader out/elfloader --kernel out/kernel \
-  --root-task target/aarch64-unknown-none/release/root-task \
-  --out-dir out/qemu-run --tcp-port 31337
+[cohesix:root-task] [uart] init OK
+[console] PL011 console online
+cohesix> help
+Commands:
+  help  - Show this help
+  bi    - Show bootinfo summary
+  caps  - Show capability slots
+  mem   - Show untyped summary
+  ping  - Respond with pong
+  quit  - Exit the console session
+cohesix> bi
+[bi] node_bits=12 empty=[0x0010..0x0100) ipc=0x7f000000
+cohesix> caps
+[caps] root=0x0001 ep=0x0002 uart=0x0003
+cohesix> mem
+[mem] untyped caps=16 ram_ut=14 device_ut=2
+cohesix> ping
+pong
+```
+Use this surface to confirm boot-time state before bringing up TCP or NineDoor; it is not the operator-facing control plane.
+
+## `cohsh` Shell (Host CLI)
+### What it is
+- Rust CLI at `apps/cohsh`, installed to `out/cohesix/host-tools/cohsh` by the build script.【F:scripts/cohesix-build-run.sh†L402-L442】
+- Pure client: runs on the host, never inside QEMU.
+- Supports transports: `tcp` (primary), `mock` (in-process NineDoor stub), `qemu` (dev convenience to spawn QEMU). Default is `tcp` when built with the TCP feature.【F:apps/cohsh/src/main.rs†L44-L132】
+
+### CLI flags (current)
+Key options from `--help`:
+- `--role <role>` and `--ticket <ticket>` to auto-attach on startup.
+- `--script <file>` to execute commands non-interactively.
+- `--transport <mock|qemu|tcp>` to choose backend; TCP exposes `--tcp-host` / `--tcp-port` (defaults `127.0.0.1:31337`).【F:apps/cohsh/src/main.rs†L44-L132】
+- QEMU helpers: `--qemu-bin`, `--qemu-out-dir`, `--qemu-gic-version`, `--qemu-arg` (dev/CI convenience).【F:apps/cohsh/src/main.rs†L52-L131】
+- `--auth-token` forwards the TCP console authentication secret; defaults to `changeme`.【F:apps/cohsh/src/main.rs†L78-L115】
+
+### Interactive shell surface
+Startup banner and prompt:
+```
+Welcome to Cohesix. Type 'help' for commands.
+detached shell: run 'attach <role>' to connect
+coh>
 ```
 
-- The helper assembles the root task into `/bin/root-task` inside the
-  generated CPIO archive and prints SHA-256 digests for traceability. 【F:scripts/qemu-run.sh†L63-L116】【F:scripts/qemu-run.sh†L188-L204】
-- Passing `--tcp-port` wires QEMU user networking so host clients can
-  send console commands over TCP while the PL011-backed serial channel
-  continues to accept the same verbs. 【F:scripts/qemu-run.sh†L127-L188】
-- Serial output includes seL4 boot logs followed by root-task audit
-  lines such as `event-pump: init serial` and `attach accepted`.
+Commands and status:
+- `help` – show the command list.【F:apps/cohsh/src/lib.rs†L663-L699】
+- `attach <role> [ticket]` / `login` – attach to a NineDoor session. Valid roles today: `queen`, `worker-heartbeat`; missing roles, unknown roles, too many args, or re-attaching emit errors via the parser and shell.【F:apps/cohsh/src/lib.rs†L572-L592】【F:apps/cohsh/src/lib.rs†L785-L801】
+- `tail <path>` – stream a file; `log` tails `/log/queen.log`. Requires attachment.【F:apps/cohsh/src/lib.rs†L706-L716】
+- `ping` – reports attachment status; errors when detached or when given arguments.【F:apps/cohsh/src/lib.rs†L717-L730】
+- `echo <text> > <path>` – append a newline-terminated payload to an absolute path via NineDoor.【F:apps/cohsh/src/lib.rs†L732-L740】【F:apps/cohsh/src/lib.rs†L803-L817】
+- Planned (not implemented): `ls`, `cat`, `spawn`, `kill`, `bind`, `mount`; the shell prints explicit “planned” errors today.【F:apps/cohsh/src/lib.rs†L700-L705】
+- `quit` – prints `closing session` and exits the shell loop.【F:apps/cohsh/src/lib.rs†L697-L699】
 
-## 6. TCP Transport Status
-The virtio-net backed `NetStack` listens on TCP port 31337 and mirrors the
-serial console: each command receives an `OK <verb> ...` or `ERR <verb>
-reason=...` acknowledgement that travels over both transports. Heartbeat
-probes continue to use `PING`/`PONG`, and `TAIL` replies now emit an
-acknowledgement before streaming log lines terminated by `END`. The host-side
-`cohsh` client surfaces these responses as `[console] ...` lines so scripts see
-consistent attach/command feedback regardless of transport. 【F:apps/root-task/src/net/stack.rs†L204-L264】【F:apps/cohsh/src/lib.rs†L471-L519】【F:apps/cohsh/src/transport/tcp.rs†L203-L356】
+Attachment semantics:
+- No role argument → `attach requires a role`.
+- Unknown role string → `unknown role '<x>'`.
+- More than two args → `attach takes at most two arguments: role and optional ticket`.
+- Attempting a second attach without quitting → `already attached; run 'quit' to close the current session`.【F:apps/cohsh/src/lib.rs†L572-L592】【F:apps/cohsh/src/lib.rs†L785-L801】
+
+Connection handling (TCP transport):
+- Successful connect logs `[cohsh][tcp] connected to <host>:<port> (connects=N)` before presenting the prompt.【F:apps/cohsh/src/transport/tcp.rs†L43-L50】
+- Disconnects log `[cohsh][tcp] connection lost: …` and trigger reconnect attempts with incremental back-off, emitting `[cohsh][tcp] reconnect attempt #<n> …`. The shell remains usable in interactive mode; in `--script` mode errors propagate and stop the run.【F:apps/cohsh/src/transport/tcp.rs†L52-L63】
+
+### Script mode
+`--script <file>` feeds newline-delimited commands; blank lines and lines starting with `#` are ignored. Errors abort the script and bubble up as a non-zero exit.【F:apps/cohsh/src/lib.rs†L594-L605】
+
+## End-to-End Workflow: QEMU + `cohsh` over TCP
+### Terminal 1 – build and boot under QEMU
+Run the build wrapper to compile components, stage host tools, and launch QEMU with PL011 serial plus a user-mode TCP forward to `127.0.0.1:<port>`:
+```
+SEL4_BUILD_DIR=$HOME/seL4/build ./scripts/cohesix-build-run.sh \
+  --sel4-build "$HOME/seL4/build" \
+  --out-dir out/cohesix \
+  --profile release \
+  --root-task-features kernel,bootstrap-trace,serial-console,net \
+  --cargo-target aarch64-unknown-none \
+  --transport tcp
+```
+The script builds `root-task` with the serial console and net features, compiles NineDoor and workers, copies host tools (`cohsh`, `gpu-bridge-host`) into `out/cohesix/host-tools/`, and assembles the CPIO payload.【F:scripts/cohesix-build-run.sh†L369-L454】【F:scripts/cohesix-build-run.sh†L402-L442】
+QEMU runs with `-serial mon:stdio` plus `-netdev user,id=net0,hostfwd=tcp:127.0.0.1:<port>-10.0.2.15:<port>` so the TCP console inside the VM is reachable from the host.【F:scripts/cohesix-build-run.sh†L521-L553】 The script prints the ready command for `cohsh` once QEMU is live.【F:scripts/cohesix-build-run.sh†L548-L553】
+
+### Terminal 2 – host `cohsh` session over TCP
+From `out/cohesix/host-tools/`:
+```
+./cohsh --transport tcp --tcp-port 31337
+Welcome to Cohesix. Type 'help' for commands.
+detached shell: run 'attach <role>' to connect
+coh> attach queen
+[console] OK ATTACH role=Queen session=1
+attached session SessionId(1) as Queen
+coh>
+```
+Use `log` to stream `/log/queen.log`, `ping` for health, and `tail <path>` for ad-hoc inspection. If the TCP session resets, `cohsh` reports the error and continues in a detached state; reconnects are attempted automatically with back-off in interactive mode.【F:apps/cohsh/src/transport/tcp.rs†L43-L63】
+
+## Scripted Sessions with `--script`
+Example script (`queen.coh`):
+```
+# Attach and tail the queen log
+attach queen
+log
+quit
+```
+Run via `./cohsh --transport tcp --tcp-port 31337 --script queen.coh`. The runner stops on the first error (including connection failures) and propagates the error code to the host shell.【F:apps/cohsh/src/lib.rs†L594-L605】
+
+## Debugging TCP Console Issues
+- **Connection refused / wrong port**: confirm QEMU launched with `--transport tcp` and the `hostfwd` rule; the build script prints the expected port.【F:scripts/cohesix-build-run.sh†L521-L553】
+- **Connection reset by peer**: `cohsh` logs the reset and reconnect attempts. Re-run `attach <role>` once the console listener is reachable.【F:apps/cohsh/src/transport/tcp.rs†L43-L63】
+- **Authentication failures**: ensure the `--auth-token` (or `COHSH_AUTH_TOKEN`) matches the listener requirement; the TCP transport defaults to `changeme`.【F:apps/cohsh/src/main.rs†L78-L115】
+- **Serial vs TCP differences**: the root console is independent of the TCP listener—verify liveness with `ping` on the serial console (`cohesix>`) to isolate network issues.【F:apps/root-task/src/console/mod.rs†L224-L299】
+
+## Future Root Console Extensions (ideas)
+Not implemented yet, but likely additions for debugging:
+- `net` – report virtio-net status and console listener port.
+- `tcp` – list active TCP console sessions and counters.
+- `9p` – basic NineDoor state (session counts, outstanding requests).
+- `trace` – toggle trace categories for boot/net/9p.
+Any future commands must remain deterministic, no_std-friendly, and will be documented here when they land.
+
+## References & Cross-links
+- Architecture and role model: `docs/ARCHITECTURE.md`.
+- Protocol/schema details: `docs/INTERFACES.md` (once stabilised).
+- This document stays focused on operator-facing workflows and real behaviours for the root console and `cohsh` CLI.
