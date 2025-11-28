@@ -18,8 +18,6 @@ use crate::platform::Platform;
 use heapless::String;
 
 #[cfg(feature = "kernel")]
-use crate::sel4::{self, BootInfoExt};
-#[cfg(feature = "kernel")]
 use core::fmt::Write as FmtWrite;
 #[cfg(feature = "kernel")]
 use sel4_sys::seL4_CPtr;

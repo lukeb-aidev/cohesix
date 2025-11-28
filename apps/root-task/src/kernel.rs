@@ -53,8 +53,6 @@ use crate::serial::{
 };
 use crate::uart::pl011::{self as early_uart, PL011_PADDR};
 use heapless::{String as HeaplessString, Vec as HeaplessVec};
-#[cfg(feature = "net-console")]
-use smoltcp::wire::Ipv4Address;
 
 const EARLY_DUMP_LIMIT: usize = 512;
 const DEVICE_FRAME_BITS: usize = 12;

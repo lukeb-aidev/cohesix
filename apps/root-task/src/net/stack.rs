@@ -11,13 +11,13 @@ use smoltcp::iface::{
     Config as IfaceConfig, Interface, PollResult, SocketHandle, SocketSet, SocketStorage,
 };
 use smoltcp::socket::tcp::{
-    Socket as TcpSocket, SocketBuffer as TcpSocketBuffer, State as TcpState,
+    RecvError as TcpRecvError, Socket as TcpSocket, SocketBuffer as TcpSocketBuffer,
+    State as TcpState,
 };
 use smoltcp::time::Instant;
 use smoltcp::wire::{
     EthernetAddress, HardwareAddress, IpAddress, IpCidr, IpListenEndpoint, Ipv4Address,
 };
-use smoltcp::Error;
 
 use super::{
     console_srv::{SessionEvent, TcpConsoleServer},
@@ -244,7 +244,7 @@ impl NetStack {
                     },
                     Err(err) => {
                         match err {
-                            Error::Finished => {
+                            TcpRecvError::Finished => {
                                 info!("[cohesix:root-task] tcp_console: connection closed");
                             }
                             other => {

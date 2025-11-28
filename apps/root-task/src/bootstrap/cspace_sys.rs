@@ -1397,7 +1397,6 @@ fn boot_empty_window() -> (sys::seL4_CPtr, sys::seL4_CPtr) {
 pub fn preflight_init_cnode_writable(probe_slot: sys::seL4_CPtr) -> Result<(), PreflightError> {
     verify_root_cnode_slot(bi(), probe_slot).map_err(PreflightError::Probe)?;
 
-    let root = bi_init_cnode_cptr();
     let bits = bi_init_cnode_bits();
     debug_assert!(
         bits < sys::seL4_WordBits,
@@ -1408,6 +1407,7 @@ pub fn preflight_init_cnode_writable(probe_slot: sys::seL4_CPtr) -> Result<(), P
 
     #[cfg(all(debug_assertions, feature = "sel4-debug"))]
     unsafe {
+        let root = bi_init_cnode_cptr();
         let ty = sys::seL4_DebugCapIdentify(root);
         debug_assert_eq!(
             ty, seL4_CapTableObject as u32,
@@ -1432,8 +1432,10 @@ pub fn preflight_init_cnode_writable(probe_slot: sys::seL4_CPtr) -> Result<(), P
     {
         let _ = probe_slot;
     }
-
-    Ok(())
+    #[cfg(not(target_os = "none"))]
+    {
+        Ok(())
+    }
 }
 
 #[cfg(all(test, not(target_os = "none")))]
