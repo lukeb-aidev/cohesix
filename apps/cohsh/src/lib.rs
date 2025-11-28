@@ -3,8 +3,11 @@
 #![warn(missing_docs)]
 
 //! Cohesix shell prototype speaking directly to the NineDoor Secure9P server.
-//! Milestone 2 replaces the mock transport with the live codec and synthetic
-//! namespace so operators can tail logs using the real filesystem protocol.
+//!
+//! User-facing prompts, banners, and help text are rendered locally while
+//! commands such as `attach` and `tail` are forwarded to the configured
+//! transport. The client prefixes transport acknowledgements with `[console]`
+//! so callers can distinguish remote answers from local UX noise.
 
 pub mod proto;
 
@@ -518,6 +521,11 @@ impl<T: Transport, W: Write> Shell<T, W> {
     /// Attach to the transport using the supplied role and optional ticket payload.
     /// Worker roles must provide their identity via `ticket`.
     pub fn attach(&mut self, role: Role, ticket: Option<&str>) -> Result<()> {
+        if self.session.is_some() {
+            return Err(anyhow!(
+                "already attached; run 'quit' to close the current session"
+            ));
+        }
         let session = self.transport.attach(role, ticket)?;
         for ack in self.transport.drain_acknowledgements() {
             writeln!(self.writer, "[console] {ack}")?;
@@ -536,7 +544,7 @@ impl<T: Transport, W: Write> Shell<T, W> {
     pub fn run_script<R: BufRead>(&mut self, reader: R) -> Result<()> {
         for line in reader.lines() {
             let line = line?;
-            if line.trim().is_empty() {
+            if line.trim().is_empty() || line.trim_start().starts_with('#') {
                 continue;
             }
             if self.execute(&line)?.eq(&CommandStatus::Quit) {
@@ -631,6 +639,12 @@ impl<T: Transport, W: Write> Shell<T, W> {
                 self.write_line("  quit                         - Close the session and exit")?;
                 Ok(CommandStatus::Continue)
             }
+            "ls" | "cat" | "spawn" | "kill" | "bind" | "mount" => {
+                self.write_line(&format!(
+                    "Error: '{cmd}' is planned but not implemented yet in this build"
+                ))?;
+                Ok(CommandStatus::Continue)
+            }
             "tail" => {
                 let Some(path) = parts.next() else {
                     return Err(anyhow!("tail requires a path"));
@@ -656,11 +670,8 @@ impl<T: Transport, W: Write> Shell<T, W> {
                 Ok(CommandStatus::Continue)
             }
             "attach" | "login" => {
-                let Some(role_arg) = parts.next() else {
-                    return Err(anyhow!("{cmd} requires a role"));
-                };
-                let role = parse_role(role_arg)?;
-                let ticket = parts.next();
+                let args: Vec<&str> = parts.collect();
+                let (role, ticket) = parse_attach_args(cmd, &args)?;
                 self.attach(role, ticket)?;
                 Ok(CommandStatus::Continue)
             }
@@ -703,6 +714,17 @@ fn parse_role(input: &str) -> Result<Role> {
         "queen" => Ok(Role::Queen),
         "worker-heartbeat" => Ok(Role::WorkerHeartbeat),
         other => Err(anyhow!("unknown role '{other}'")),
+    }
+}
+
+fn parse_attach_args<'a>(cmd: &str, args: &'a [&'a str]) -> Result<(Role, Option<&'a str>)> {
+    match args {
+        [] => Err(anyhow!("{cmd} requires a role")),
+        [role] => Ok((parse_role(role)?, None)),
+        [role, ticket] => Ok((parse_role(role)?, Some(*ticket))),
+        _ => Err(anyhow!(
+            "{cmd} takes at most two arguments: role and optional ticket"
+        )),
     }
 }
 fn normalise_echo_payload(input: &str) -> String {

@@ -2,7 +2,12 @@
 
 use cohsh::proto::{parse_ack, AckStatus};
 
-fn assert_ack(line: &str, expected_status: AckStatus, expected_verb: &str, expected_detail: Option<&str>) {
+fn assert_ack(
+    line: &str,
+    expected_status: AckStatus,
+    expected_verb: &str,
+    expected_detail: Option<&str>,
+) {
     let parsed = parse_ack(line).expect("line should parse as ACK");
     assert_eq!(parsed.status, expected_status);
     assert_eq!(parsed.verb, expected_verb);
