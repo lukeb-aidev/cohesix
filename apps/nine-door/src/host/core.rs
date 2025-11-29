@@ -126,6 +126,13 @@ impl ServerCore {
         };
         let result = match &request.body {
             RequestBody::Version { msize, version } => {
+                info!(
+                    target: "nine-door",
+                    "session {}: version={} msize={}",
+                    session.session(),
+                    version,
+                    msize
+                );
                 debug!(
                     "[net-console][auth] session={} state={:?} recv Tversion msize={} version={}",
                     session.session(),
@@ -155,6 +162,13 @@ impl ServerCore {
                 outcome
             }
             RequestBody::Attach { fid, uname, .. } => {
+                info!(
+                    target: "nine-door",
+                    "session {}: attach role={} fid={}",
+                    session.session(),
+                    uname,
+                    fid
+                );
                 debug!(
                     "[net-console][auth] session={} state={:?} recv Tattach fid={} uname={}",
                     session.session(),

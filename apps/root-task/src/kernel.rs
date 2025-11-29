@@ -6,6 +6,7 @@ extern crate alloc;
 
 use alloc::boxed::Box;
 use core::arch::asm;
+use core::cell::RefCell;
 use core::cmp;
 use core::convert::{Infallible, TryFrom};
 use core::fmt::{self, Write};
@@ -483,6 +484,38 @@ struct BootStateGuard {
 
 static BOOT_STATE: AtomicU8 = AtomicU8::new(BootState::Cold as u8);
 
+/// Boot-time feature flags enabling optional subsystems.
+pub struct BootFeatures {
+    /// Whether the PL011-backed serial console is enabled.
+    pub serial_console: bool,
+    /// Whether the networking stack is enabled.
+    pub net: bool,
+    /// Whether the TCP console / Secure9P surface is enabled.
+    pub net_console: bool,
+}
+
+/// Aggregated bootstrap artefacts passed to userland for final bring-up.
+pub struct BootContext {
+    /// Bootinfo view captured during kernel bootstrap.
+    pub bootinfo: BootInfoView<'static>,
+    /// Feature flags summarising the current profile.
+    pub features: BootFeatures,
+    /// Root endpoint slot shared with userland subsystems.
+    pub ep_slot: sel4_sys::seL4_CPtr,
+    /// PL011 UART slot reserved for the serial console.
+    pub uart_slot: Option<sel4_sys::seL4_CPtr>,
+    pub(crate) serial: RefCell<
+        Option<SerialPort<Pl011, DEFAULT_RX_CAPACITY, DEFAULT_TX_CAPACITY, DEFAULT_LINE_CAPACITY>>,
+    >,
+    pub(crate) timer: RefCell<Option<KernelTimer>>,
+    pub(crate) ipc: RefCell<Option<KernelIpc>>,
+    pub(crate) tickets: RefCell<Option<TicketTable<4>>>,
+    #[cfg(feature = "net-console")]
+    pub(crate) net_stack: RefCell<Option<NetStack>>,
+    #[cfg(feature = "kernel")]
+    pub(crate) ninedoor: RefCell<Option<&'static mut NineDoorBridge>>,
+}
+
 impl BootStateGuard {
     fn acquire() -> Result<Self, BootError> {
         match BOOT_STATE.compare_exchange(
@@ -516,8 +549,12 @@ impl Drop for BootStateGuard {
 
 /// Root task entry point invoked by seL4 after kernel initialisation.
 pub fn start<P: Platform>(bootinfo: &'static BootInfo, platform: &P) -> ! {
+    log::info!(target: "kernel", "[kernel] boot entrypoint: starting bootstrap");
     match bootstrap(platform, bootinfo) {
-        Ok(never) => match never {},
+        Ok(ctx) => {
+            log::info!(target: "kernel", "[kernel] boot complete, handoff to userland");
+            crate::userland::main(&ctx);
+        }
         Err(err) => {
             log::error!("[boot] failed to enter bootstrap runtime: {err}");
             #[cfg(feature = "kernel")]
@@ -532,7 +569,7 @@ pub fn start<P: Platform>(bootinfo: &'static BootInfo, platform: &P) -> ! {
 fn bootstrap<P: Platform>(
     platform: &P,
     bootinfo: &'static BootInfo,
-) -> Result<Infallible, BootError> {
+) -> Result<BootContext, BootError> {
     #[cfg(all(feature = "kernel", not(sel4_config_printing)))]
     crate::sel4::install_debug_sink();
 
@@ -1509,46 +1546,6 @@ fn bootstrap<P: Platform>(
             let _ = write!(listen, "[console] tcp listen :{CONSOLE_TCP_PORT}");
             console.writeln_prefixed(listen.as_str());
         }
-        console.writeln_prefixed("initialising event pump");
-        let mut audit = ConsoleAudit::new(&mut console);
-        #[cfg(feature = "kernel")]
-        let mut bootstrap_ipc = BootstrapIpcAudit::new();
-        log::info!(
-            "[console] starting root shell ep=0x{ep:04x} uart=0x{uart:04x}",
-            ep = ep_slot,
-            uart = uart_slot,
-        );
-        boot_log::force_uart_line("[console] starting root shell");
-        log::trace!("B3: about to start event pump");
-        let mut pump = EventPump::new(serial, timer, ipc, tickets, &mut audit);
-
-        #[cfg(feature = "kernel")]
-        {
-            pump = pump.with_bootstrap_handler(&mut bootstrap_ipc);
-            log::trace!("B4: before attach_ninedoor_uart");
-            pump = pump.with_ninedoor(ninedoor);
-            pump.announce_console_ready();
-        }
-
-        #[cfg(feature = "net-console")]
-        {
-            pump = pump.with_network(&mut net_stack);
-        }
-
-        #[cfg(feature = "kernel")]
-        {
-            // Surface the root shell immediately so the PL011 console remains usable even
-            // when additional transports (for example, the TCP console) are enabled.
-            // Bootstrap probing continues in the background but must never gate prompt
-            // emission.
-            pump.start_cli();
-            pump.emit_console_line("Cohesix console ready");
-
-            crate::bp!("ipc.poll.begin");
-            pump.bootstrap_probe();
-            crate::bp!("ipc.poll.end");
-        }
-
         let caps_start = empty_start as u32;
         let caps_end = cs.next_candidate_slot();
         let caps_remaining = cs.remaining_capacity();
@@ -1560,14 +1557,44 @@ fn bootstrap<P: Platform>(
         boot_log::force_uart_line(summary.as_str());
         crate::bp!("bootstrap.done");
         boot_tracer().advance(BootPhase::HandOff);
-        log::info!("[kernel] handoff to userland");
         boot_guard.commit();
         boot_log::force_uart_line("[console] serial fallback ready");
         crate::bootstrap::run_minimal(bootinfo_ref);
-        // MUST-SEE BEACON: if you don't see this, run() didn't return.
-        log::info!("[console] handoff → serial console");
-        boot_log::force_uart_line("[Cohesix] console.handoff");
-        crate::userland::main(pump, platform);
+        let features = BootFeatures {
+            serial_console: cfg!(feature = "serial-console"),
+            net: cfg!(feature = "net"),
+            net_console: cfg!(feature = "net-console"),
+        };
+
+        #[cfg(feature = "net-console")]
+        let ctx = BootContext {
+            bootinfo: bootinfo_view,
+            features,
+            ep_slot,
+            uart_slot,
+            serial: RefCell::new(Some(serial)),
+            timer: RefCell::new(Some(timer)),
+            ipc: RefCell::new(Some(ipc)),
+            tickets: RefCell::new(Some(tickets)),
+            net_stack: RefCell::new(Some(net_stack)),
+            #[cfg(feature = "kernel")]
+            ninedoor: RefCell::new(Some(ninedoor)),
+        };
+
+        #[cfg(not(feature = "net-console"))]
+        let ctx = BootContext {
+            bootinfo: bootinfo_view,
+            features,
+            ep_slot,
+            uart_slot,
+            serial: RefCell::new(Some(serial)),
+            timer: RefCell::new(Some(timer)),
+            ipc: RefCell::new(Some(ipc)),
+            tickets: RefCell::new(Some(tickets)),
+            #[cfg(feature = "kernel")]
+            ninedoor: RefCell::new(None),
+        };
+        return Ok(ctx);
     }
 }
 
