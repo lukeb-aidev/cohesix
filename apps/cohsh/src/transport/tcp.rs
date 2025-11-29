@@ -16,7 +16,7 @@ use crate::proto::{parse_ack, AckStatus};
 use crate::{Session, Transport};
 
 /// Default TCP timeout applied to socket operations.
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(3);
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(2);
 /// Default heartbeat cadence used to keep TCP sessions alive.
 const DEFAULT_HEARTBEAT: Duration = Duration::from_secs(15);
 /// Initial retry back-off applied when the connection drops.
@@ -249,9 +249,7 @@ impl TcpTransport {
                     self.auth_state = AuthState::Connected;
                     debug!(
                         "[cohsh][auth] state={:?} TCP connected to {}:{}",
-                        self.auth_state,
-                        self.address,
-                        self.port
+                        self.auth_state, self.address, self.port
                     );
                     self.telemetry.log_connect(&self.address, self.port);
                     return Ok(());
@@ -270,7 +268,66 @@ impl TcpTransport {
         }
     }
 
+    fn await_auth_ready(&mut self) -> Result<()> {
+        self.auth_state = AuthState::WaitingVersion;
+        let mut timeouts = 0usize;
+        loop {
+            match self.read_line_internal()? {
+                ReadStatus::Line(line) => {
+                    let trimmed = Self::trim_line(&line);
+                    if let Some(ack) = parse_ack(&trimmed) {
+                        if ack.verb.eq_ignore_ascii_case("AUTH") {
+                            self.record_ack(&trimmed);
+                            if matches!(ack.status, AckStatus::Err) {
+                                self.auth_state = AuthState::Failed;
+                                debug!(
+                                    "[cohsh][auth] state={:?} auth preface rejected line={}",
+                                    self.auth_state, trimmed
+                                );
+                                return Err(anyhow!(
+                                    "authentication rejected during greeting: {trimmed}"
+                                ));
+                            }
+                            self.auth_state = AuthState::AuthRequested;
+                            debug!(
+                                "[cohsh][auth] state={:?} received auth challenge line={}",
+                                self.auth_state, trimmed
+                            );
+                            return Ok(());
+                        }
+                        let _ = self.record_ack(&trimmed);
+                        continue;
+                    }
+                }
+                ReadStatus::Timeout => {
+                    timeouts += 1;
+                    debug!(
+                        "[cohsh][auth] state={:?} waiting for auth challenge timeout={}",
+                        self.auth_state, timeouts
+                    );
+                    if timeouts > self.max_retries {
+                        self.auth_state = AuthState::Failed;
+                        return Err(anyhow!(
+                            "authentication timed out waiting for server greeting"
+                        ));
+                    }
+                }
+                ReadStatus::Closed => {
+                    self.auth_state = AuthState::Failed;
+                    debug!(
+                        "[cohsh][auth] state={:?} connection closed before auth challenge",
+                        self.auth_state
+                    );
+                    return Err(anyhow!(
+                        "connection closed before authentication challenge received"
+                    ));
+                }
+            }
+        }
+    }
+
     fn perform_auth(&mut self) -> Result<()> {
+        self.await_auth_ready()?;
         let auth_line = format!("AUTH {}", self.auth_token);
         debug!(
             "[cohsh][auth] state={:?} send AUTH token_len={}",
@@ -293,17 +350,13 @@ impl TcpTransport {
                             self.authenticated = true;
                             self.last_activity = Instant::now();
                             self.auth_state = AuthState::AuthOk;
-                            debug!(
-                                "[cohsh][auth] state={:?} recv AUTH ok",
-                                self.auth_state
-                            );
+                            debug!("[cohsh][auth] state={:?} recv AUTH ok", self.auth_state);
                             return Ok(());
                         }
                         self.auth_state = AuthState::Failed;
                         debug!(
                             "[cohsh][auth] state={:?} recv AUTH rejection line={}",
-                            self.auth_state,
-                            trimmed
+                            self.auth_state, trimmed
                         );
                         return Err(anyhow!("authentication rejected: {trimmed}"));
                     }
@@ -312,8 +365,7 @@ impl TcpTransport {
                     timeouts += 1;
                     debug!(
                         "[cohsh][auth] state={:?} authentication timeout attempt={}",
-                        self.auth_state,
-                        timeouts
+                        self.auth_state, timeouts
                     );
                     if timeouts > self.max_retries {
                         self.auth_state = AuthState::Failed;
@@ -353,16 +405,13 @@ impl TcpTransport {
                         self.auth_state = AuthState::Failed;
                         debug!(
                             "[cohsh][auth] state={:?} authentication failed fatal={} attempts={}",
-                            self.auth_state,
-                            fatal_auth,
-                            attempt
+                            self.auth_state, fatal_auth, attempt
                         );
                         return Err(anyhow!("authentication failed: {message}"));
                     }
                     debug!(
                         "[cohsh][auth] state={:?} retrying authentication attempt={}",
-                        self.auth_state,
-                        attempt
+                        self.auth_state, attempt
                     );
                     self.telemetry.log_reconnect(attempt, delay);
                     thread::sleep(delay);
@@ -542,17 +591,14 @@ impl TcpTransport {
                         self.auth_state = AuthState::Attached;
                         debug!(
                             "[cohsh][auth] state={:?} re-attach ok response={}",
-                            self.auth_state,
-                            response
+                            self.auth_state, response
                         );
                         return Ok(());
                     }
                     self.auth_state = AuthState::Failed;
                     debug!(
                         "[cohsh][auth] state={:?} re-attach failed response={} attempt={}",
-                        self.auth_state,
-                        response,
-                        attempt
+                        self.auth_state, response, attempt
                     );
                     return Err(anyhow!("re-attach failed: {response}"));
                 }
@@ -570,8 +616,7 @@ impl TcpTransport {
                     self.reset_connection();
                     debug!(
                         "[cohsh][auth] state={:?} waiting to retry attach attempt={}",
-                        self.auth_state,
-                        attempt
+                        self.auth_state, attempt
                     );
                     self.telemetry.log_reconnect(attempt, delay);
                     thread::sleep(delay);
@@ -655,12 +700,13 @@ impl TcpTransport {
 impl Transport for TcpTransport {
     fn attach(&mut self, role: Role, ticket: Option<&str>) -> Result<Session> {
         let ticket_payload = Self::normalise_ticket(role, ticket)?;
-        let ticket_len = ticket_payload.as_ref().map(|value| value.len()).unwrap_or(0);
+        let ticket_len = ticket_payload
+            .as_ref()
+            .map(|value| value.len())
+            .unwrap_or(0);
         debug!(
             "[cohsh][auth] new session: role={:?} state={:?} ticket_len={}",
-            role,
-            self.auth_state,
-            ticket_len
+            role, self.auth_state, ticket_len
         );
         let attach_line = format!(
             "ATTACH {} {}",
@@ -673,9 +719,7 @@ impl Transport for TcpTransport {
             self.auth_state = AuthState::AttachSent;
             debug!(
                 "[cohsh][auth] state={:?} send ATTACH role={:?} ticket_len={}",
-                self.auth_state,
-                role,
-                ticket_len
+                self.auth_state, role, ticket_len
             );
             self.send_line(&attach_line)?;
             self.auth_state = AuthState::WaitingAttachOk;
@@ -686,9 +730,7 @@ impl Transport for TcpTransport {
                         self.auth_state = AuthState::Failed;
                         debug!(
                             "[cohsh][auth] state={:?} recv attach error response={} attempts={}",
-                            self.auth_state,
-                            response,
-                            attempts
+                            self.auth_state, response, attempts
                         );
                         return Err(anyhow!("remote attach failed: {response}"));
                     }
@@ -701,8 +743,7 @@ impl Transport for TcpTransport {
                     self.auth_state = AuthState::Attached;
                     debug!(
                         "[cohsh][auth] state={:?} recv attach ok response={}",
-                        self.auth_state,
-                        response
+                        self.auth_state, response
                     );
                     eprintln!("[cohsh][tcp] remote NineDoor ready as role {:?}", role);
                     return Ok(session);
@@ -713,8 +754,7 @@ impl Transport for TcpTransport {
                         self.auth_state = AuthState::Failed;
                         debug!(
                             "[cohsh][auth] state={:?} attach acknowledgement missing attempts={}",
-                            self.auth_state,
-                            attempts
+                            self.auth_state, attempts
                         );
                         return Err(anyhow!("unable to receive attach acknowledgement"));
                     }
@@ -860,6 +900,7 @@ mod tests {
             for stream in listener.incoming() {
                 let mut stream = stream.unwrap();
                 connection_barrier.fetch_add(1, Ordering::SeqCst);
+                writeln!(stream, "OK AUTH detail=present-token").unwrap();
                 let mut reader = BufReader::new(stream.try_clone().unwrap());
                 let mut line = String::new();
                 while reader.read_line(&mut line).unwrap_or(0) > 0 {
@@ -943,6 +984,7 @@ mod tests {
         thread::spawn(move || {
             for stream in listener.incoming().take(1) {
                 let mut stream = stream.unwrap();
+                writeln!(stream, "OK AUTH detail=present-token").unwrap();
                 let mut reader = BufReader::new(stream.try_clone().unwrap());
                 let mut line = String::new();
                 while reader.read_line(&mut line).unwrap_or(0) > 0 {

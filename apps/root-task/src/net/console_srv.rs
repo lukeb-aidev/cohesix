@@ -67,8 +67,14 @@ impl TcpConsoleServer {
         self.inbound.clear();
         self.outbound.clear();
         self.last_activity_ms = now_ms;
-        self.auth_deadline_ms = Some(now_ms.saturating_add(AUTH_TIMEOUT_MS));
-        info!("[net-console] auth begin");
+        self.auth_deadline_ms = None;
+        if self
+            .enqueue_auth_ack(AckStatus::Ok, Some("detail=present-token"))
+            .is_ok()
+        {
+            self.auth_deadline_ms = Some(now_ms.saturating_add(AUTH_TIMEOUT_MS));
+        }
+        info!("[net-console] auth begin (challenge sent)");
     }
 
     /// Tear down any per-connection state.
@@ -243,6 +249,9 @@ mod tests {
     fn authenticates_and_tracks_activity() {
         let mut server = TcpConsoleServer::new("token", 1000);
         server.begin_session(10);
+
+        let ready = server.pop_outbound().expect("ready ack present");
+        assert!(ready.starts_with("OK AUTH"));
 
         let event = server.ingest(b"AUTH token\n", 11);
         assert_eq!(event, SessionEvent::Authenticated);

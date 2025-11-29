@@ -525,6 +525,7 @@ where
     pub fn start_cli(&mut self) {
         self.emit_console_line(CONSOLE_BANNER);
         self.emit_prompt();
+        self.serial.poll_io();
     }
 
     /// Retrieve a snapshot of the current pump metrics.

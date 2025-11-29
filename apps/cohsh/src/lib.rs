@@ -605,12 +605,74 @@ impl<T: Transport, W: Write> Shell<T, W> {
         Ok(())
     }
 
+    fn run_pending_attach(&mut self, pending: &mut Option<AutoAttach>) -> Result<()> {
+        if let Some(auto) = pending.as_mut() {
+            match self.attach(auto.role, auto.ticket.as_deref()) {
+                Ok(()) => {
+                    if auto.auto_log {
+                        if let Err(err) = self.tail_path("/log/queen.log") {
+                            writeln!(self.writer, "auto-log failed: {err}")?;
+                        }
+                    }
+                    *pending = None;
+                }
+                Err(err) => {
+                    auto.attempts = auto.attempts.saturating_add(1);
+                    eprintln!(
+                        "[cohsh] auto-attach attempt {} failed: {}",
+                        auto.attempts, err
+                    );
+                    if auto.attempts >= auto.max_attempts {
+                        self.write_line("detached shell: run 'attach <role>' to connect")?;
+                        *pending = None;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Run an interactive REPL against stdin.
     pub fn repl(&mut self) -> Result<()> {
         let stdin = io::stdin();
         let mut reader = stdin.lock();
         let mut line = String::new();
         loop {
+            write!(self.writer, "{}", self.prompt())?;
+            self.writer.flush()?;
+            line.clear();
+            if reader.read_line(&mut line)? == 0 {
+                writeln!(self.writer)?;
+                break;
+            }
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            match self.execute(trimmed) {
+                Ok(CommandStatus::Quit) => break,
+                Ok(CommandStatus::Continue) => {}
+                Err(err) => {
+                    writeln!(self.writer, "Error: {err}")?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Run an interactive REPL that performs a bounded auto-attach before
+    /// accepting user commands.
+    pub fn repl_with_autologin(&mut self, pending: Option<AutoAttach>) -> Result<()> {
+        let mut pending_attach = pending;
+        if pending_attach.is_some() {
+            write!(self.writer, "{}", self.prompt())?;
+            self.writer.flush()?;
+        }
+        let stdin = io::stdin();
+        let mut reader = stdin.lock();
+        let mut line = String::new();
+        loop {
+            self.run_pending_attach(&mut pending_attach)?;
             write!(self.writer, "{}", self.prompt())?;
             self.writer.flush()?;
             line.clear();
@@ -760,6 +822,21 @@ impl<T: Transport, W: Write> Shell<T, W> {
     pub fn into_parts(self) -> (T, W) {
         (self.transport, self.writer)
     }
+}
+
+/// Bounded auto-attach configuration used when starting the interactive shell.
+#[derive(Debug, Clone)]
+pub struct AutoAttach {
+    /// Target role for the initial session.
+    pub role: Role,
+    /// Optional ticket payload to accompany the role selection.
+    pub ticket: Option<String>,
+    /// Number of attempts already performed.
+    pub attempts: usize,
+    /// Maximum attach attempts before deferring to user input.
+    pub max_attempts: usize,
+    /// Automatically start tailing the queen log after attaching.
+    pub auto_log: bool,
 }
 
 fn parse_path(path: &str) -> Result<Vec<String>> {
