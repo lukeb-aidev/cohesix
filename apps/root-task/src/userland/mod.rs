@@ -82,14 +82,34 @@ pub fn main(ctx: BootContext) -> ! {
     start_kernel_cli(&mut pump);
 
     #[cfg(all(feature = "net-console", feature = "kernel"))]
-    if let Some(stack) = net_stack_handle.as_ref() {
-        let addr = stack.ipv4_address();
-        log::info!(
-            target: "net-console",
-            "[net-console] listening on {}:{}",
-            addr,
-            crate::net::CONSOLE_TCP_PORT
-        );
+    match (
+        ctx.features.net,
+        ctx.features.net_console,
+        net_stack_handle.as_ref(),
+    ) {
+        (true, true, Some(stack)) => {
+            let addr = stack.ipv4_address();
+            log::info!(
+                target: "net-console",
+                "[net-console] listening on {}:{}",
+                addr,
+                crate::net::CONSOLE_TCP_PORT
+            );
+        }
+        (true, true, None) => {
+            log::info!(
+                target: "net-console",
+                "[net-console] net-console requested but network stack unavailable; skipping"
+            );
+        }
+        (net_enabled, net_console_enabled, _) => {
+            log::info!(
+                target: "net-console",
+                "[net-console] net-console skipped (net={}, net-console={})",
+                net_enabled,
+                net_console_enabled,
+            );
+        }
     }
 
     pump.run();

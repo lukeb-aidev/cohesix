@@ -4,6 +4,7 @@
 #![allow(unsafe_code)]
 #![cfg(feature = "kernel")]
 
+use core::fmt::Write as FmtWrite;
 use heapless::{String as HeaplessString, Vec as HeaplessVec};
 use log::{debug, info, trace, warn};
 use portable_atomic::AtomicBool;
@@ -21,7 +22,7 @@ use smoltcp::wire::{
 
 use super::{
     console_srv::{SessionEvent, TcpConsoleServer},
-    NetPoller, NetTelemetry, AUTH_TOKEN, CONSOLE_TCP_PORT, IDLE_TIMEOUT_MS,
+    NetConsoleEvent, NetPoller, NetTelemetry, AUTH_TOKEN, CONSOLE_TCP_PORT, IDLE_TIMEOUT_MS,
 };
 use crate::drivers::virtio::net::{DriverError, VirtioNet};
 use crate::hal::{HalError, Hardware};
@@ -115,6 +116,7 @@ pub struct NetStack {
     auth_state: AuthState,
     conn_bytes_read: u64,
     conn_bytes_written: u64,
+    events: HeaplessVec<NetConsoleEvent, SOCKET_CAPACITY>,
 }
 
 impl NetStack {
@@ -176,6 +178,7 @@ impl NetStack {
             auth_state: AuthState::Start,
             conn_bytes_read: 0,
             conn_bytes_written: 0,
+            events: HeaplessVec::new(),
         };
         stack.initialise_socket();
         Ok(stack)
@@ -258,14 +261,25 @@ impl NetStack {
             self.active_client_id = Some(client_id);
             self.conn_bytes_read = 0;
             self.conn_bytes_written = 0;
-            if let Some(endpoint) = socket.remote_endpoint() {
+            let peer = if let Some(endpoint) = socket.remote_endpoint() {
                 info!(
                     "[net-console] conn {}: established from {}",
                     client_id, endpoint
                 );
+                let mut label = HeaplessString::<32>::new();
+                if let Ok(()) = FmtWrite::write_fmt(&mut label, format_args!("{}", endpoint)) {
+                    Some(label)
+                } else {
+                    None
+                }
             } else {
                 info!("[net-console] conn {}: established", client_id);
-            }
+                None
+            };
+            let _ = self.events.push(NetConsoleEvent::Connected {
+                conn_id: client_id,
+                peer,
+            });
             self.server.begin_session(now_ms);
             self.auth_state
                 .log_transition(AuthState::WaitingVersion, client_id);
@@ -456,6 +470,7 @@ impl NetStack {
             self.auth_state.log_transition(AuthState::Failed, conn_id);
             self.auth_state = AuthState::Failed;
             self.log_conn_summary(self.active_client_id);
+            self.record_conn_closed();
             self.active_client_id = None;
             activity = true;
         }
@@ -487,6 +502,7 @@ impl NetStack {
             self.auth_state.log_transition(AuthState::Failed, conn_id);
             self.auth_state = AuthState::Failed;
             self.log_conn_summary(self.active_client_id);
+            self.record_conn_closed();
             self.active_client_id = None;
             activity = true;
         }
@@ -516,6 +532,7 @@ impl NetStack {
             self.server.end_session();
             self.session_active = false;
             self.log_conn_summary(self.active_client_id);
+            self.record_conn_closed();
             self.active_client_id = None;
             self.auth_state = AuthState::Start;
             activity = true;
@@ -593,6 +610,15 @@ impl NetStack {
         );
     }
 
+    fn record_conn_closed(&mut self) {
+        let id = self.active_client_id.unwrap_or(0);
+        let _ = self.events.push(NetConsoleEvent::Disconnected {
+            conn_id: id,
+            bytes_read: self.conn_bytes_read,
+            bytes_written: self.conn_bytes_written,
+        });
+    }
+
     /// Returns the negotiated Ethernet address for the attached virtio-net device.
     #[must_use]
     pub fn hardware_address(&self) -> EthernetAddress {
@@ -643,6 +669,16 @@ impl NetPoller for NetStack {
     fn send_console_line(&mut self, line: &str) {
         if self.server.enqueue_outbound(line).is_err() {
             self.telemetry.tx_drops = self.telemetry.tx_drops.saturating_add(1);
+        }
+    }
+
+    fn drain_console_events(&mut self, visitor: &mut dyn FnMut(NetConsoleEvent)) {
+        let mut drained = HeaplessVec::<NetConsoleEvent, SOCKET_CAPACITY>::new();
+        while let Some(event) = self.events.pop() {
+            let _ = drained.push(event);
+        }
+        for event in drained {
+            visitor(event);
         }
     }
 

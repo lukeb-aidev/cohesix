@@ -66,11 +66,35 @@ pub trait NetPoller {
     /// Queue a console line for transmission to remote clients.
     fn send_console_line(&mut self, line: &str);
 
+    /// Drain pending net-console connection events (optional).
+    fn drain_console_events(&mut self, _visitor: &mut dyn FnMut(NetConsoleEvent)) {}
+
     /// Inject a console line into the network transport (testing hook).
     fn inject_console_line(&mut self, _line: &str) {}
 
     /// Reset the underlying transport (testing hook).
     fn reset(&mut self) {}
+}
+
+/// Connection lifecycle notifications surfaced by TCP console transports.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NetConsoleEvent {
+    /// A TCP console client has successfully connected.
+    Connected {
+        /// Unique connection identifier assigned by the stack.
+        conn_id: u64,
+        /// Peer address (if known).
+        peer: Option<heapless::String<32>>,
+    },
+    /// A TCP console client disconnected or was closed by the server.
+    Disconnected {
+        /// Unique connection identifier assigned by the stack.
+        conn_id: u64,
+        /// Total bytes read from the client during the session.
+        bytes_read: u64,
+        /// Total bytes written to the client during the session.
+        bytes_written: u64,
+    },
 }
 
 mod console_srv;
