@@ -140,7 +140,12 @@ pub mod serial_console {
 
 #[cfg(feature = "serial-console")]
 pub fn deferred_bringup() {
-    ::log::info!("[userland] starting PL011 root console bringup");
+    ::log::info!(
+        "[userland] starting deferred bringup (serial-console={} net={} net-console={})",
+        cfg!(feature = "serial-console"),
+        cfg!(feature = "net"),
+        cfg!(feature = "net-console")
+    );
     let ep = sel4::root_endpoint();
     if !ipc::ep_is_valid(ep) {
         ::log::info!("[bringup] minimal; no IPC (ep=null)");
