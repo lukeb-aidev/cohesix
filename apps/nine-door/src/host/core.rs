@@ -82,23 +82,20 @@ impl ServerCore {
         session: SessionId,
         request_bytes: &[u8],
     ) -> Result<Vec<u8>, NineDoorError> {
-        let request = self
-            .codec
-            .decode_request(request_bytes)
-            .map_err(|err| {
-                let state = self
-                    .sessions
-                    .get(&session)
-                    .map(|entry| entry.auth_state)
-                    .unwrap_or(AuthState::Failed);
-                debug!(
-                    "[net-console][auth] session={} state={:?} decode error: {}",
-                    session.session(),
-                    state,
-                    err
-                );
+        let request = self.codec.decode_request(request_bytes).map_err(|err| {
+            let state = self
+                .sessions
+                .get(&session)
+                .map(|entry| entry.auth_state)
+                .unwrap_or(AuthState::Failed);
+            debug!(
+                "[net-console][auth] session={} state={:?} decode error: {}",
+                session.session(),
+                state,
                 err
-            })?;
+            );
+            err
+        })?;
         let response_body = match self.dispatch(session, &request) {
             Ok(body) => body,
             Err(NineDoorError::Protocol { code, message }) => ResponseBody::Error { code, message },

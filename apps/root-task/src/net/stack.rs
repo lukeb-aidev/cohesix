@@ -250,7 +250,7 @@ impl NetStack {
             }
             self.server.begin_session(now_ms);
             info!("[net-console] auth start client={}", client_id);
-            self.auth_state = AuthState::WaitingVersion;
+            self.auth_state = AuthState::AuthRequested;
             debug!(
                 "[net-console][auth] new connection client={} state={:?}",
                 client_id, self.auth_state

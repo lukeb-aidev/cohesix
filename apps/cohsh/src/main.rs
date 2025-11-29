@@ -15,7 +15,7 @@ use cohesix_ticket::Role;
 
 #[cfg(feature = "tcp")]
 use cohsh::TcpTransport;
-use cohsh::{NineDoorTransport, QemuTransport, RoleArg, Shell, Transport};
+use cohsh::{AutoAttach, NineDoorTransport, QemuTransport, RoleArg, Shell, Transport};
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
 enum TransportKind {
@@ -132,48 +132,39 @@ fn main() -> Result<()> {
     };
     let mut shell = Shell::new(transport, writer);
     shell.write_line("Welcome to Cohesix. Type 'help' for commands.")?;
-    let mut auto_log = false;
-    if let Some(role_arg) = cli.role {
-        let role = Role::from(role_arg);
-        match shell.attach(role, cli.ticket.as_deref()) {
-            Ok(()) => {
-                if cli.script.is_none() {
-                    match cli.transport {
-                        TransportKind::Qemu => auto_log = true,
-                        #[cfg(feature = "tcp")]
-                        TransportKind::Tcp => auto_log = true,
-                        _ => {}
-                    }
-                }
-            }
-            Err(error) => {
-                if cli.script.is_some() {
-                    return Err(error);
-                }
-                #[cfg(feature = "tcp")]
-                let transport_hint = if matches!(cli.transport, TransportKind::Tcp) {
-                    "TCP attach failed"
-                } else {
-                    "attach failed"
-                };
-                #[cfg(not(feature = "tcp"))]
-                let transport_hint = "attach failed";
-                eprintln!("Error: {transport_hint}: {error}");
-                shell.write_line("detached shell: run 'attach <role>' to connect")?;
-            }
-        }
-    } else {
-        shell.write_line("detached shell: run 'attach <role>' to connect")?;
-    }
-    if auto_log {
-        shell.execute("log")?;
-    }
+
     if let Some(script_path) = cli.script {
+        if let Some(role_arg) = cli.role {
+            let role = Role::from(role_arg);
+            shell.attach(role, cli.ticket.as_deref())?;
+        } else {
+            shell.write_line("detached shell: run 'attach <role>' to connect")?;
+        }
         let file = File::open(&script_path)
             .with_context(|| format!("failed to open script {script_path:?}"))?;
         shell.run_script(BufReader::new(file))?;
     } else {
-        shell.repl()?;
+        let auto_role = cli.role.map(Role::from);
+        let auto_attach = auto_role.map(|role| AutoAttach {
+            role,
+            ticket: cli.ticket.clone(),
+            attempts: 0,
+            max_attempts: 1,
+            auto_log: {
+                #[cfg(feature = "tcp")]
+                {
+                    matches!(cli.transport, TransportKind::Qemu | TransportKind::Tcp)
+                }
+                #[cfg(not(feature = "tcp"))]
+                {
+                    matches!(cli.transport, TransportKind::Qemu)
+                }
+            },
+        });
+        if auto_attach.is_none() {
+            shell.write_line("detached shell: run 'attach <role>' to connect")?;
+        }
+        shell.repl_with_autologin(auto_attach)?;
     }
     Ok(())
 }
