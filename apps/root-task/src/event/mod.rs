@@ -33,7 +33,11 @@ use crate::console::{Command, CommandParser, ConsoleError, MAX_ROLE_LEN, MAX_TIC
 use crate::net::{NetPoller, CONSOLE_QUEUE_DEPTH};
 #[cfg(feature = "kernel")]
 use crate::ninedoor::{NineDoorBridge, NineDoorBridgeError};
+#[cfg(feature = "kernel")]
+use crate::sel4::{BootInfoExt, BootInfoView};
 use crate::serial::{SerialDriver, SerialPort, SerialTelemetry, DEFAULT_LINE_CAPACITY};
+#[cfg(feature = "kernel")]
+use sel4_sys::seL4_CPtr;
 
 fn format_message(args: fmt::Arguments<'_>) -> HeaplessString<128> {
     let mut buf = HeaplessString::new();
@@ -67,7 +71,7 @@ const MAX_BOOTSTRAP_WORDS: usize = crate::sel4::MSG_MAX_WORDS;
 #[cfg(feature = "kernel")]
 const BOOTSTRAP_IDLE_SPINS: usize = 512;
 
-const CONSOLE_BANNER: &str = "Cohesix console ready";
+const CONSOLE_BANNER: &str = "[Cohesix] Root console ready (type 'help' for commands)";
 const CONSOLE_PROMPT: &str = "cohesix> ";
 
 #[cfg_attr(not(any(test, feature = "kernel")), allow(dead_code))]
@@ -353,6 +357,16 @@ where
     ninedoor: Option<&'a mut NineDoorBridge>,
     #[cfg(feature = "kernel")]
     bootstrap_handler: Option<&'a mut dyn BootstrapMessageHandler>,
+    #[cfg(feature = "kernel")]
+    console_context: Option<ConsoleContext>,
+}
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy)]
+struct ConsoleContext {
+    bootinfo: BootInfoView,
+    ep_slot: seL4_CPtr,
+    uart_slot: Option<seL4_CPtr>,
 }
 
 impl<'a, D, T, I, V, const RX: usize, const TX: usize, const LINE: usize>
@@ -392,6 +406,8 @@ where
             ninedoor: None,
             #[cfg(feature = "kernel")]
             bootstrap_handler: None,
+            #[cfg(feature = "kernel")]
+            console_context: None,
         }
     }
 
@@ -407,6 +423,22 @@ where
     #[cfg(feature = "kernel")]
     pub fn with_ninedoor(mut self, bridge: &'a mut NineDoorBridge) -> Self {
         self.ninedoor = Some(bridge);
+        self
+    }
+
+    #[cfg(feature = "kernel")]
+    /// Attach boot-time console metadata for diagnostic commands.
+    pub fn with_console_context(
+        mut self,
+        bootinfo: BootInfoView,
+        ep_slot: seL4_CPtr,
+        uart_slot: Option<seL4_CPtr>,
+    ) -> Self {
+        self.console_context = Some(ConsoleContext {
+            bootinfo,
+            ep_slot,
+            uart_slot,
+        });
         self
     }
 
@@ -554,6 +586,102 @@ where
         self.serial.enqueue_tx(CONSOLE_PROMPT.as_bytes());
     }
 
+    fn emit_help(&mut self) {
+        self.emit_console_line("Commands:");
+        self.emit_console_line("  help  - Show this help");
+        self.emit_console_line("  bi    - Show bootinfo summary");
+        self.emit_console_line("  caps  - Show capability slots");
+        self.emit_console_line("  mem   - Show untyped summary");
+        self.emit_console_line("  ping  - Respond with pong");
+        self.emit_console_line("  quit  - Exit the console session");
+    }
+
+    #[cfg(feature = "kernel")]
+    fn emit_bootinfo(&mut self) -> bool {
+        let context = match self.console_context {
+            Some(context) => context,
+            None => return false,
+        };
+        let header = context.bootinfo.header();
+        let mut line = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
+        let _ = write!(
+            line,
+            "[bi] node_bits={} empty=[0x{:04x}..0x{:04x}) ",
+            header.initThreadCNodeSizeBits, header.empty.start, header.empty.end,
+        );
+        if let Some(ptr) = header.ipc_buffer_ptr() {
+            let addr = ptr.as_ptr() as usize;
+            let width = core::mem::size_of::<usize>() * 2;
+            let _ = write!(line, "ipc=0x{addr:0width$x}");
+        } else {
+            let _ = line.push_str("ipc=<none>");
+        }
+        self.emit_console_line(line.as_str());
+        true
+    }
+
+    #[cfg(not(feature = "kernel"))]
+    fn emit_bootinfo(&mut self) -> bool {
+        let _ = self;
+        false
+    }
+
+    #[cfg(feature = "kernel")]
+    fn emit_caps(&mut self) -> bool {
+        let context = match self.console_context {
+            Some(context) => context,
+            None => return false,
+        };
+        let mut line = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
+        let _ = write!(
+            line,
+            "[caps] root=0x{:04x} ep=0x{:04x} uart=0x{:04x}",
+            context.bootinfo.root_cnode_cap(),
+            context.ep_slot,
+            context.uart_slot.unwrap_or(sel4_sys::seL4_CapNull),
+        );
+        self.emit_console_line(line.as_str());
+        true
+    }
+
+    #[cfg(not(feature = "kernel"))]
+    fn emit_caps(&mut self) -> bool {
+        let _ = self;
+        false
+    }
+
+    #[cfg(feature = "kernel")]
+    fn emit_mem(&mut self) -> bool {
+        let context = match self.console_context {
+            Some(context) => context,
+            None => return false,
+        };
+        let header = context.bootinfo.header();
+        let count = (header.untyped.end - header.untyped.start) as usize;
+        let mut ram_ut = 0usize;
+        for desc in header.untypedList.iter().take(count) {
+            if desc.isDevice == 0 {
+                ram_ut += 1;
+            }
+        }
+        let mut line = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
+        let _ = write!(
+            line,
+            "[mem] untyped caps={} ram_ut={} device_ut={}",
+            count,
+            ram_ut,
+            count.saturating_sub(ram_ut),
+        );
+        self.emit_console_line(line.as_str());
+        true
+    }
+
+    #[cfg(not(feature = "kernel"))]
+    fn emit_mem(&mut self) -> bool {
+        let _ = self;
+        false
+    }
+
     fn emit_ack(&mut self, status: AckStatus, verb: &str, detail: Option<&str>) {
         let mut line: HeaplessString<DEFAULT_LINE_CAPACITY> = HeaplessString::new();
         let ack_line = AckLine {
@@ -653,22 +781,35 @@ where
             Command::Help => {
                 self.audit.info("console: help");
                 self.metrics.accepted_commands += 1;
+                self.emit_help();
                 self.emit_ack_ok("HELP", None);
             }
             Command::BootInfo => {
-                self.audit.denied("console: bootinfo unsupported");
-                self.metrics.denied_commands += 1;
-                self.emit_ack_err("BOOTINFO", Some("reason=unsupported"));
+                if self.emit_bootinfo() {
+                    self.metrics.accepted_commands += 1;
+                    self.emit_ack_ok("BOOTINFO", None);
+                } else {
+                    self.metrics.denied_commands += 1;
+                    self.emit_ack_err("BOOTINFO", Some("reason=unavailable"));
+                }
             }
             Command::Caps => {
-                self.audit.denied("console: caps unsupported");
-                self.metrics.denied_commands += 1;
-                self.emit_ack_err("CAPS", Some("reason=unsupported"));
+                if self.emit_caps() {
+                    self.metrics.accepted_commands += 1;
+                    self.emit_ack_ok("CAPS", None);
+                } else {
+                    self.metrics.denied_commands += 1;
+                    self.emit_ack_err("CAPS", Some("reason=unavailable"));
+                }
             }
             Command::Mem => {
-                self.audit.denied("console: mem unsupported");
-                self.metrics.denied_commands += 1;
-                self.emit_ack_err("MEM", Some("reason=unsupported"));
+                if self.emit_mem() {
+                    self.metrics.accepted_commands += 1;
+                    self.emit_ack_ok("MEM", None);
+                } else {
+                    self.metrics.denied_commands += 1;
+                    self.emit_ack_err("MEM", Some("reason=unavailable"));
+                }
             }
             Command::Ping => {
                 self.audit.info("console: ping");
