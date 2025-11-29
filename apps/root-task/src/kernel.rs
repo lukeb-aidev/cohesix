@@ -551,16 +551,17 @@ pub fn start<P: Platform>(bootinfo: &'static BootInfo, platform: &P) -> ! {
     log::info!(target: "kernel", "[kernel] boot entrypoint: starting bootstrap");
     match bootstrap(platform, bootinfo) {
         Ok(ctx) => {
-            log::info!(target: "kernel", "[kernel] boot complete, handoff to userland");
+            log::info!(
+                target: "kernel",
+                "[kernel] bootstrap complete, handing off to userland runtime"
+            );
             crate::userland::main(ctx);
+            log::error!("[kernel] userland runtime returned unexpectedly");
+            panic!("userland runtime returned");
         }
         Err(err) => {
             log::error!("[boot] failed to enter bootstrap runtime: {err}");
-            #[cfg(feature = "kernel")]
-            crate::sel4::debug_halt();
-            loop {
-                core::hint::spin_loop();
-            }
+            crate::userland::start_console_or_cohsh(platform);
         }
     }
 }

@@ -113,6 +113,8 @@ pub struct NetStack {
     active_client_id: Option<u64>,
     client_counter: u64,
     auth_state: AuthState,
+    conn_bytes_read: u64,
+    conn_bytes_written: u64,
 }
 
 impl NetStack {
@@ -172,6 +174,8 @@ impl NetStack {
             active_client_id: None,
             client_counter: 0,
             auth_state: AuthState::Start,
+            conn_bytes_read: 0,
+            conn_bytes_written: 0,
         };
         stack.initialise_socket();
         Ok(stack)
@@ -252,24 +256,15 @@ impl NetStack {
             let client_id = self.client_counter.wrapping_add(1);
             self.client_counter = client_id;
             self.active_client_id = Some(client_id);
+            self.conn_bytes_read = 0;
+            self.conn_bytes_written = 0;
             if let Some(endpoint) = socket.remote_endpoint() {
                 info!(
-                    target: "net",
-                    "TCP console: accepted connection id={} from {}",
-                    client_id,
-                    endpoint
-                );
-                info!(
-                    "[net-console] accepted TCP client #{} from {}",
+                    "[net-console] conn {}: established from {}",
                     client_id, endpoint
                 );
             } else {
-                info!(
-                    target: "net",
-                    "TCP console: accepted connection id={}",
-                    client_id
-                );
-                info!("[net-console] accepted TCP client #{}", client_id);
+                info!("[net-console] conn {}: established", client_id);
             }
             self.server.begin_session(now_ms);
             self.auth_state
@@ -306,6 +301,7 @@ impl NetStack {
                 match socket.recv_slice(&mut temp) {
                     Ok(0) => break,
                     Ok(count) => {
+                        self.conn_bytes_read = self.conn_bytes_read.saturating_add(count as u64);
                         trace!(
                             "[net-auth][conn={}] read {} bytes in state {:?}",
                             self.active_client_id.unwrap_or(0),
@@ -356,6 +352,12 @@ impl NetStack {
                                 socket.close();
                                 self.server.end_session();
                                 self.session_active = false;
+                                info!(
+                                    "[net-console] conn {}: bytes read={}, bytes written={}",
+                                    self.active_client_id.unwrap_or(0),
+                                    self.conn_bytes_read,
+                                    self.conn_bytes_written
+                                );
                                 self.active_client_id = None;
                                 break;
                             }
@@ -412,6 +414,12 @@ impl NetStack {
                         socket.close();
                         self.server.end_session();
                         self.session_active = false;
+                        info!(
+                            "[net-console] conn {}: bytes read={}, bytes written={}",
+                            self.active_client_id.unwrap_or(0),
+                            self.conn_bytes_read,
+                            self.conn_bytes_written
+                        );
                         self.active_client_id = None;
                         break;
                     }
@@ -445,9 +453,10 @@ impl NetStack {
             self.server.end_session();
             self.session_active = false;
             let conn_id = self.active_client_id.unwrap_or(0);
-            self.active_client_id = None;
             self.auth_state.log_transition(AuthState::Failed, conn_id);
             self.auth_state = AuthState::Failed;
+            self.log_conn_summary(self.active_client_id);
+            self.active_client_id = None;
             activity = true;
         }
 
@@ -475,9 +484,10 @@ impl NetStack {
             self.server.end_session();
             self.session_active = false;
             let conn_id = self.active_client_id.unwrap_or(0);
-            self.active_client_id = None;
             self.auth_state.log_transition(AuthState::Failed, conn_id);
             self.auth_state = AuthState::Failed;
+            self.log_conn_summary(self.active_client_id);
+            self.active_client_id = None;
             activity = true;
         }
 
@@ -505,6 +515,7 @@ impl NetStack {
             socket.close();
             self.server.end_session();
             self.session_active = false;
+            self.log_conn_summary(self.active_client_id);
             self.active_client_id = None;
             self.auth_state = AuthState::Start;
             activity = true;
@@ -545,6 +556,7 @@ impl NetStack {
             }
             match socket.send_slice(payload.as_slice()) {
                 Ok(sent) if sent == payload.len() => {
+                    self.conn_bytes_written = self.conn_bytes_written.saturating_add(sent as u64);
                     if server.is_authenticated() {
                         server.mark_activity(now_ms);
                     }
@@ -571,6 +583,14 @@ impl NetStack {
             budget -= 1;
         }
         activity
+    }
+
+    fn log_conn_summary(&self, conn_id: Option<u64>) {
+        let id = conn_id.unwrap_or(self.active_client_id.unwrap_or(0));
+        info!(
+            "[net-console] conn {}: bytes read={}, bytes written={}",
+            id, self.conn_bytes_read, self.conn_bytes_written
+        );
     }
 
     /// Returns the negotiated Ethernet address for the attached virtio-net device.
