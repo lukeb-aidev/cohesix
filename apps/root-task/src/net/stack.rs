@@ -280,7 +280,7 @@ impl NetStack {
                 "[net-console][auth] new connection client={} state={:?}",
                 client_id, self.auth_state
             );
-            activity |= Self::flush_outbound(
+            let _ = Self::flush_outbound(
                 &mut self.server,
                 &mut self.telemetry,
                 socket,
@@ -345,7 +345,7 @@ impl NetStack {
                                     "[net-console][auth] state={:?} client={} reason={}",
                                     self.auth_state, conn_id, reason
                                 );
-                                activity |= Self::flush_outbound(
+                                let _ = Self::flush_outbound(
                                     &mut self.server,
                                     &mut self.telemetry,
                                     socket,
@@ -369,7 +369,7 @@ impl NetStack {
                                     self.auth_state,
                                     self.active_client_id.unwrap_or(0)
                                 );
-                                activity |= Self::flush_outbound(
+                                let _ = Self::flush_outbound(
                                     &mut self.server,
                                     &mut self.telemetry,
                                     socket,
@@ -433,7 +433,7 @@ impl NetStack {
                 now_ms
             );
             let _ = self.server.enqueue_outbound("ERR AUTH reason=timeout");
-            activity |= Self::flush_outbound(
+            let _ = Self::flush_outbound(
                 &mut self.server,
                 &mut self.telemetry,
                 socket,

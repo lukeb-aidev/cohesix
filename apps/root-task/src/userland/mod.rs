@@ -71,11 +71,17 @@ pub fn main(ctx: &BootContext) -> ! {
         .expect("ticket table unavailable");
 
     let mut audit = LoggerAudit;
+
+    #[cfg(feature = "kernel")]
+    let mut bootstrap_ipc = UserlandBootstrapHandler;
+
+    #[cfg(feature = "net-console")]
+    let mut net_stack_handle = ctx.net_stack.borrow_mut().take();
+
     let mut pump = EventPump::new(serial, timer, ipc, tickets, &mut audit);
 
     #[cfg(feature = "kernel")]
     {
-        let mut bootstrap_ipc = UserlandBootstrapHandler;
         pump = pump.with_bootstrap_handler(&mut bootstrap_ipc);
     }
 
@@ -89,7 +95,7 @@ pub fn main(ctx: &BootContext) -> ! {
 
     #[cfg(feature = "net-console")]
     {
-        if let Some(net_stack) = ctx.net_stack.borrow_mut().as_mut() {
+        if let Some(net_stack) = net_stack_handle.as_mut() {
             pump = pump.with_network(net_stack);
         }
     }
