@@ -195,6 +195,11 @@ pub struct CohesixConsole {
 impl CohesixConsole {
     #[must_use]
     pub fn with_console(console: Console, ep_slot: seL4_CPtr, uart_slot: seL4_CPtr) -> Self {
+        log::trace!(
+            "[console] CohesixConsole::with_console created (ep_slot=0x{ep:04x}, uart_slot=0x{uart:04x})",
+            ep = ep_slot,
+            uart = uart_slot,
+        );
         Self {
             console,
             ep_slot,
@@ -303,6 +308,7 @@ impl CohesixConsole {
     }
 
     pub fn run(&mut self) -> ! {
+        log::info!("[console] root shell loop starting");
         log::info!(
             "[console] starting root shell ep=0x{ep:04x} uart=0x{uart:04x}",
             ep = self.ep_slot,
@@ -319,6 +325,8 @@ impl CohesixConsole {
                 .unwrap_or("")
                 .trim_matches(char::from(0))
                 .trim();
+
+            log::trace!("[console] received line bytes={} line=<{line}>", count);
 
             if let Err(err) = self.feed_line(line.as_bytes()) {
                 let mut message = String::<128>::new();

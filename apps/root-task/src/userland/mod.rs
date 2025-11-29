@@ -27,6 +27,14 @@ use core::ptr::NonNull;
 /// Start the userland console or Cohesix shell over the serial transport.
 #[allow(clippy::module_name_repetitions)]
 pub fn start_console_or_cohsh<P: Platform>(platform: &P) -> ! {
+    ::log::info!(
+        "[userland] serial-console enabled: {}",
+        cfg!(feature = "serial-console")
+    );
+    ::log::info!(
+        "[userland] net-console enabled: {}",
+        cfg!(feature = "net-console")
+    );
     serial_console::banner(platform);
     deferred_bringup(); // quick, non-blocking, then return
     serial_console::run(platform)
@@ -80,6 +88,7 @@ pub mod serial_console {
     pub fn run<P: Platform>(platform: &P) -> ! {
         #[cfg(all(feature = "kernel", feature = "serial-console"))]
         if let Some(uart_slot) = uart_pl011::uart_slot() {
+            ::log::info!("[userland] starting PL011 root console bringup");
             let ep = sel4::root_endpoint();
             if let Some(base) = NonNull::new(PL011_VADDR as *mut u8) {
                 let driver = Pl011::new(base);
@@ -87,6 +96,9 @@ pub mod serial_console {
                 let mut console = CohesixConsole::with_console(console, ep, uart_slot);
                 console.run();
             }
+            ::log::info!(
+                "[userland] PL011 root console bringup done (this log should only appear if run() returns)"
+            );
         }
 
         let mut writer = PlatformWriter { platform };
@@ -128,6 +140,7 @@ pub mod serial_console {
 
 #[cfg(feature = "serial-console")]
 pub fn deferred_bringup() {
+    ::log::info!("[userland] starting PL011 root console bringup");
     let ep = sel4::root_endpoint();
     if !ipc::ep_is_valid(ep) {
         ::log::info!("[bringup] minimal; no IPC (ep=null)");
@@ -140,6 +153,9 @@ pub fn deferred_bringup() {
 #[cfg(not(feature = "serial-console"))]
 pub fn deferred_bringup() {
     ::log::info!("[bringup] deferred.start");
+    ::log::info!(
+        "[userland] PL011 root console bringup done (this log should only appear if run() returns)"
+    );
     ::log::info!("[bringup] deferred.done");
 }
 
