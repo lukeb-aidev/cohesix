@@ -279,6 +279,7 @@ impl TcpTransport {
                     let trimmed = Self::trim_line(&line);
                     if let Some(ack) = parse_ack(&trimmed) {
                         if ack.verb.eq_ignore_ascii_case("AUTH") {
+                            self.auth_state = AuthState::VersionSent;
                             self.record_ack(&trimmed);
                             if matches!(ack.status, AckStatus::Err) {
                                 self.auth_state = AuthState::Failed;

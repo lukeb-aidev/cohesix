@@ -1518,6 +1518,7 @@ fn bootstrap<P: Platform>(
             ep = ep_slot,
             uart = uart_slot,
         );
+        boot_log::force_uart_line("[console] starting root shell");
         log::trace!("B3: about to start event pump");
         let mut pump = EventPump::new(serial, timer, ipc, tickets, &mut audit);
 
@@ -1541,6 +1542,7 @@ fn bootstrap<P: Platform>(
             // Bootstrap probing continues in the background but must never gate prompt
             // emission.
             pump.start_cli();
+            pump.emit_console_line("Cohesix console ready");
 
             crate::bp!("ipc.poll.begin");
             pump.bootstrap_probe();

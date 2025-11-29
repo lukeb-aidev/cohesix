@@ -249,12 +249,20 @@ impl NetStack {
                 info!("[net-console] accepted TCP client #{}", client_id);
             }
             self.server.begin_session(now_ms);
+            self.auth_state = AuthState::WaitingVersion;
             info!("[net-console] auth start client={}", client_id);
-            self.auth_state = AuthState::AuthRequested;
             debug!(
                 "[net-console][auth] new connection client={} state={:?}",
                 client_id, self.auth_state
             );
+            activity |= Self::flush_outbound(&mut self.server, &mut self.telemetry, socket, now_ms);
+            if activity {
+                debug!(
+                    "[net-console][auth] greeting sent client={} state={:?}",
+                    client_id, self.auth_state
+                );
+            }
+            self.auth_state = AuthState::AuthRequested;
             self.session_active = true;
         }
 
@@ -273,11 +281,11 @@ impl NetStack {
                             );
                         }
                         SessionEvent::Authenticated => {
+                            self.auth_state = AuthState::Attached;
                             info!(
                                 "[net-console] auth success client={}",
                                 self.active_client_id.unwrap_or(0)
                             );
-                            self.auth_state = AuthState::AuthOk;
                             debug!(
                                 "[net-console][auth] state transitioned to {:?} client={}",
                                 self.auth_state,
