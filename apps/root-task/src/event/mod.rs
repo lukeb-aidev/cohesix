@@ -560,6 +560,7 @@ where
     /// Emit the interactive banner and initial prompt over the serial console.
     pub fn start_cli(&mut self) {
         self.emit_console_line(CONSOLE_BANNER);
+        self.emit_help();
         self.emit_prompt();
         self.serial.poll_io();
         if !self.banner_emitted {
