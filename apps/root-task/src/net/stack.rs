@@ -5,7 +5,7 @@
 #![cfg(feature = "kernel")]
 
 use heapless::{String as HeaplessString, Vec as HeaplessVec};
-use log::{info, warn};
+use log::{debug, info, warn};
 use portable_atomic::AtomicBool;
 use smoltcp::iface::{
     Config as IfaceConfig, Interface, PollResult, SocketHandle, SocketSet, SocketStorage,
@@ -35,6 +35,17 @@ const RANDOM_SEED: u64 = 0x5a5a_5a5a_1234_5678;
 const DEFAULT_IP: (u8, u8, u8, u8) = (10, 0, 2, 15);
 const DEFAULT_GW: (u8, u8, u8, u8) = (10, 0, 2, 2);
 const DEFAULT_PREFIX: u8 = 24;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AuthState {
+    Start,
+    WaitingVersion,
+    AuthRequested,
+    AuthOk,
+    AttachRequested,
+    Attached,
+    Failed,
+}
 
 static SOCKET_STORAGE_IN_USE: AtomicBool = AtomicBool::new(false);
 static mut SOCKET_STORAGE: [SocketStorage<'static>; SOCKET_CAPACITY] =
@@ -95,6 +106,7 @@ pub struct NetStack {
     listener_announced: bool,
     active_client_id: Option<u32>,
     client_counter: u32,
+    auth_state: AuthState,
 }
 
 impl NetStack {
@@ -153,6 +165,7 @@ impl NetStack {
             listener_announced: false,
             active_client_id: None,
             client_counter: 0,
+            auth_state: AuthState::Start,
         };
         stack.initialise_socket();
         Ok(stack)
@@ -237,6 +250,11 @@ impl NetStack {
             }
             self.server.begin_session(now_ms);
             info!("[net-console] auth start client={}", client_id);
+            self.auth_state = AuthState::WaitingVersion;
+            debug!(
+                "[net-console][auth] new connection client={} state={:?}",
+                client_id, self.auth_state
+            );
             self.session_active = true;
         }
 
@@ -246,10 +264,23 @@ impl NetStack {
                 match socket.recv_slice(&mut temp) {
                     Ok(0) => break,
                     Ok(count) => match self.server.ingest(&temp[..count], now_ms) {
-                        SessionEvent::None => {}
+                        SessionEvent::None => {
+                            debug!(
+                                "[net-console][auth] state={:?} recv_bytes={} client={}",
+                                self.auth_state,
+                                count,
+                                self.active_client_id.unwrap_or(0)
+                            );
+                        }
                         SessionEvent::Authenticated => {
                             info!(
                                 "[net-console] auth success client={}",
+                                self.active_client_id.unwrap_or(0)
+                            );
+                            self.auth_state = AuthState::AuthOk;
+                            debug!(
+                                "[net-console][auth] state transitioned to {:?} client={}",
+                                self.auth_state,
                                 self.active_client_id.unwrap_or(0)
                             );
                             activity = true;
@@ -257,6 +288,13 @@ impl NetStack {
                         SessionEvent::AuthFailed(reason) => {
                             warn!(
                                 "[net-console] TCP client #{} auth failed reason={}",
+                                self.active_client_id.unwrap_or(0),
+                                reason
+                            );
+                            self.auth_state = AuthState::Failed;
+                            debug!(
+                                "[net-console][auth] state={:?} client={} reason={}",
+                                self.auth_state,
                                 self.active_client_id.unwrap_or(0),
                                 reason
                             );
@@ -275,6 +313,11 @@ impl NetStack {
                         SessionEvent::Close => {
                             warn!(
                                 "[net-console] TCP client #{} closing after session end",
+                                self.active_client_id.unwrap_or(0)
+                            );
+                            debug!(
+                                "[net-console][auth] state={:?} close requested client={}",
+                                self.auth_state,
                                 self.active_client_id.unwrap_or(0)
                             );
                             activity |= Self::flush_outbound(
@@ -306,6 +349,12 @@ impl NetStack {
                                 );
                             }
                         }
+                        self.auth_state = AuthState::Failed;
+                        debug!(
+                            "[net-console][auth] state={:?} recv error from client={}",
+                            self.auth_state,
+                            self.active_client_id.unwrap_or(0)
+                        );
                         socket.close();
                         self.server.end_session();
                         self.session_active = false;
@@ -324,12 +373,19 @@ impl NetStack {
                 "[net-console] TCP client #{} auth timeout",
                 self.active_client_id.unwrap_or(0)
             );
+            debug!(
+                "[net-console][auth] state={:?} auth timeout client={} now_ms={}",
+                self.auth_state,
+                self.active_client_id.unwrap_or(0),
+                now_ms
+            );
             let _ = self.server.enqueue_outbound("ERR AUTH reason=timeout");
             activity |= Self::flush_outbound(&mut self.server, &mut self.telemetry, socket, now_ms);
             socket.close();
             self.server.end_session();
             self.session_active = false;
             self.active_client_id = None;
+            self.auth_state = AuthState::Failed;
             activity = true;
         }
 
@@ -338,12 +394,19 @@ impl NetStack {
                 "[net-console] TCP client #{} timed out due to inactivity",
                 self.active_client_id.unwrap_or(0)
             );
+            debug!(
+                "[net-console][auth] state={:?} inactivity timeout client={} now_ms={}",
+                self.auth_state,
+                self.active_client_id.unwrap_or(0),
+                now_ms
+            );
             let _ = self.server.enqueue_outbound("ERR CONSOLE reason=timeout");
             activity |= Self::flush_outbound(&mut self.server, &mut self.telemetry, socket, now_ms);
             socket.close();
             self.server.end_session();
             self.session_active = false;
             self.active_client_id = None;
+            self.auth_state = AuthState::Failed;
             activity = true;
         }
 
@@ -355,10 +418,17 @@ impl NetStack {
                 self.active_client_id.unwrap_or(0),
                 socket.state()
             );
+            debug!(
+                "[net-console][auth] state={:?} client={} closing socket state={:?}",
+                self.auth_state,
+                self.active_client_id.unwrap_or(0),
+                socket.state()
+            );
             socket.close();
             self.server.end_session();
             self.session_active = false;
             self.active_client_id = None;
+            self.auth_state = AuthState::Start;
             activity = true;
         }
 
