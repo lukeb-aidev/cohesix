@@ -14,8 +14,12 @@ use crate::boot::uart_pl011;
 use crate::console::CohesixConsole;
 #[cfg(all(feature = "serial-console", feature = "kernel"))]
 use crate::console::Console as SerialConsole;
-use crate::event::{CapabilityValidator, EventPump, IpcDispatcher, TimerSource};
+use crate::event::{
+    AuditSink, BootstrapMessage, BootstrapMessageHandler, CapabilityValidator, EventPump,
+    IpcDispatcher, TimerSource,
+};
 use crate::ipc;
+use crate::kernel::BootContext;
 use crate::platform::Platform;
 use crate::sel4;
 #[cfg(all(feature = "serial-console", feature = "kernel"))]
@@ -24,29 +28,83 @@ use crate::serial::pl011::Pl011;
 use crate::uart::pl011::PL011_VADDR;
 #[cfg(all(feature = "serial-console", feature = "kernel"))]
 use core::ptr::NonNull;
+use heapless::String as HeaplessString;
 
 /// Authoritative entrypoint for userland bring-up and runtime loops.
-pub fn main<'a, D, T, I, V, const RX: usize, const TX: usize, const LINE: usize, P>(
-    pump: EventPump<'a, D, T, I, V, RX, TX, LINE>,
-    _platform: &P,
-) -> !
-where
-    D: crate::serial::SerialDriver,
-    T: TimerSource,
-    I: IpcDispatcher,
-    V: CapabilityValidator,
-    P: Platform,
-{
-    ::log::info!(
-        "[userland] bringup starting (serial_console={} net={} net_console={})",
-        cfg!(feature = "serial-console"),
-        cfg!(feature = "net"),
-        cfg!(feature = "net-console")
+pub fn main(ctx: &BootContext) -> ! {
+    log::info!(
+        target: "userland",
+        "Cohesix userland starting: serial_console={}, net={}, net_console={}",
+        ctx.features.serial_console,
+        ctx.features.net,
+        ctx.features.net_console,
     );
 
-    deferred_bringup();
+    log::info!(
+        target: "userland",
+        "Console config: serial_console={}, net_console={}",
+        ctx.features.serial_console,
+        ctx.features.net_console,
+    );
 
-    ::log::info!("[userland] starting root console and net loop");
+    deferred_bringup(ctx);
+
+    let serial = ctx
+        .serial
+        .borrow_mut()
+        .take()
+        .expect("serial port unavailable");
+    let timer = ctx
+        .timer
+        .borrow_mut()
+        .take()
+        .expect("kernel timer unavailable");
+    let ipc = ctx
+        .ipc
+        .borrow_mut()
+        .take()
+        .expect("kernel IPC dispatcher unavailable");
+    let tickets = ctx
+        .tickets
+        .borrow_mut()
+        .take()
+        .expect("ticket table unavailable");
+
+    let mut audit = LoggerAudit;
+    let mut pump = EventPump::new(serial, timer, ipc, tickets, &mut audit);
+
+    #[cfg(feature = "kernel")]
+    {
+        let mut bootstrap_ipc = UserlandBootstrapHandler;
+        pump = pump.with_bootstrap_handler(&mut bootstrap_ipc);
+    }
+
+    #[cfg(feature = "kernel")]
+    {
+        if let Some(ninedoor) = ctx.ninedoor.borrow_mut().take() {
+            pump = pump.with_ninedoor(ninedoor);
+        }
+        pump.announce_console_ready();
+    }
+
+    #[cfg(feature = "net-console")]
+    {
+        if let Some(net_stack) = ctx.net_stack.borrow_mut().as_mut() {
+            pump = pump.with_network(net_stack);
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    {
+        pump.start_cli();
+        pump.emit_console_line("Cohesix console ready");
+        log::info!(
+            target: "userland",
+            "Root shell: Cohesix console online on PL011",
+        );
+    }
+
+    log::info!(target: "userland", "Cohesix userland entering main event loop");
     run_event_loop(pump);
 }
 
@@ -62,7 +120,6 @@ pub fn start_console_or_cohsh<P: Platform>(platform: &P) -> ! {
         cfg!(feature = "net-console")
     );
     serial_console::banner(platform);
-    deferred_bringup(); // quick, non-blocking, then return
     serial_console::run(platform)
 }
 
@@ -165,41 +222,25 @@ pub mod serial_console {
 // ---- Deferred bring-up: defers to the kernel event loop when the TCP console
 // is enabled, otherwise starts a standalone serial console.
 
-pub fn deferred_bringup() {
+pub fn deferred_bringup(ctx: &BootContext) {
     let ep = sel4::root_endpoint();
     if !ipc::ep_is_valid(ep) {
-        ::log::info!("[userland] skipping bringup: root endpoint is null");
+        log::info!(target: "userland", "[userland] skipping bringup: root endpoint is null");
         return;
     }
 
     #[cfg(all(feature = "serial-console", feature = "kernel"))]
     {
-        if cfg!(feature = "net-console") {
-            ::log::info!(
-                "[userland] net console enabled; deferring to kernel event loop for bringup"
+        if let Some(uart_slot) = ctx.uart_slot {
+            log::info!(
+                target: "userland",
+                "[userland] deferred bringup ready (ep=0x{ep:04x} uart=0x{uart:04x})",
+                ep = ep,
+                uart = uart_slot,
             );
-            return;
-        }
-
-        if let Some(uart_slot) = uart_pl011::uart_slot() {
-            ::log::info!("[userland] starting root console loop");
-
-            if let Some(base) = NonNull::new(PL011_VADDR as *mut u8) {
-                let driver = Pl011::new(base);
-                let console = SerialConsole::new(driver);
-                let mut console = CohesixConsole::with_console(console, ep, uart_slot);
-                console.run();
-            } else {
-                ::log::warn!("[userland] PL011 base vaddr unavailable; console not started");
-            }
         } else {
-            ::log::warn!("[userland] uart slot unavailable; console not started");
+            log::warn!(target: "userland", "[userland] uart slot unavailable during bringup");
         }
-    }
-
-    #[cfg(not(all(feature = "serial-console", feature = "kernel")))]
-    {
-        ::log::info!("[userland] bringup complete (console features disabled)");
     }
 }
 
@@ -215,6 +256,35 @@ where
     loop {
         pump.poll();
         sel4::yield_now();
+    }
+}
+
+struct LoggerAudit;
+
+impl AuditSink for LoggerAudit {
+    fn info(&mut self, message: &str) {
+        log::info!(target: "audit", "{message}");
+    }
+
+    fn denied(&mut self, message: &str) {
+        log::warn!(target: "audit", "{message}");
+    }
+}
+
+struct UserlandBootstrapHandler;
+
+impl BootstrapMessageHandler for UserlandBootstrapHandler {
+    fn handle(&mut self, message: &BootstrapMessage, audit: &mut dyn AuditSink) {
+        let mut summary = HeaplessString::<128>::new();
+        let _ = write!(
+            summary,
+            "[ipc] bootstrap dispatch badge=0x{badge:016x} label=0x{label:08x} words={words}",
+            badge = message.badge,
+            label = message.info.words[0],
+            words = message.payload.len(),
+        );
+        audit.info(summary.as_str());
+        crate::bootstrap::log::process_ep_payload(message.payload.as_slice(), audit);
     }
 }
 

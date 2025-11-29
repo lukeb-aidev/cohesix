@@ -224,6 +224,12 @@ impl NetStack {
         let socket = self.sockets.get_mut::<TcpSocket>(self.tcp_handle);
 
         if !socket.is_open() {
+            info!(
+                target: "net",
+                "TCP console: binding listener on {}:{}",
+                self.ip,
+                CONSOLE_TCP_PORT
+            );
             if let Err(err) = socket.listen(IpListenEndpoint::from(CONSOLE_TCP_PORT)) {
                 warn!("[net-console] failed to start TCP console listener: {err}",);
                 return activity;
@@ -248,10 +254,21 @@ impl NetStack {
             self.active_client_id = Some(client_id);
             if let Some(endpoint) = socket.remote_endpoint() {
                 info!(
+                    target: "net",
+                    "TCP console: accepted connection id={} from {}",
+                    client_id,
+                    endpoint
+                );
+                info!(
                     "[net-console] accepted TCP client #{} from {}",
                     client_id, endpoint
                 );
             } else {
+                info!(
+                    target: "net",
+                    "TCP console: accepted connection id={}",
+                    client_id
+                );
                 info!("[net-console] accepted TCP client #{}", client_id);
             }
             self.server.begin_session(now_ms);
