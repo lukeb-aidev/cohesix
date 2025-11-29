@@ -136,32 +136,52 @@ pub mod serial_console {
     }
 }
 
-// ---- Deferred bring-up: must NOT block, must return quickly.
+// ---- Deferred bring-up: defers to the kernel event loop when the TCP console
+// is enabled, otherwise starts a standalone serial console.
 
-#[cfg(feature = "serial-console")]
 pub fn deferred_bringup() {
     ::log::info!(
-        "[userland] starting deferred bringup (serial-console={} net={} net-console={})",
+        "[userland] bringup starting (serial_console={} net={} net_console={})",
         cfg!(feature = "serial-console"),
         cfg!(feature = "net"),
         cfg!(feature = "net-console")
     );
+
     let ep = sel4::root_endpoint();
     if !ipc::ep_is_valid(ep) {
-        ::log::info!("[bringup] minimal; no IPC (ep=null)");
+        ::log::info!("[userland] skipping bringup: root endpoint is null");
         return;
     }
 
-    ::log::info!("[bringup] minimal; skipping IPC/queen handshake");
-}
+    #[cfg(all(feature = "serial-console", feature = "kernel"))]
+    {
+        if cfg!(feature = "net-console") {
+            ::log::info!(
+                "[userland] net console enabled; deferring to kernel event loop for bringup"
+            );
+            return;
+        }
 
-#[cfg(not(feature = "serial-console"))]
-pub fn deferred_bringup() {
-    ::log::info!("[bringup] deferred.start");
-    ::log::info!(
-        "[userland] PL011 root console bringup done (this log should only appear if run() returns)"
-    );
-    ::log::info!("[bringup] deferred.done");
+        if let Some(uart_slot) = uart_pl011::uart_slot() {
+            ::log::info!("[userland] starting root console loop");
+
+            if let Some(base) = NonNull::new(PL011_VADDR as *mut u8) {
+                let driver = Pl011::new(base);
+                let console = SerialConsole::new(driver);
+                let mut console = CohesixConsole::with_console(console, ep, uart_slot);
+                console.run();
+            } else {
+                ::log::warn!("[userland] PL011 base vaddr unavailable; console not started");
+            }
+        } else {
+            ::log::warn!("[userland] uart slot unavailable; console not started");
+        }
+    }
+
+    #[cfg(not(all(feature = "serial-console", feature = "kernel")))]
+    {
+        ::log::info!("[userland] bringup complete (console features disabled)");
+    }
 }
 
 #[inline]
