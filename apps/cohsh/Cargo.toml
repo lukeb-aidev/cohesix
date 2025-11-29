@@ -18,6 +18,7 @@ clap = { workspace = true }
 cohesix-ticket = { workspace = true }
 secure9p-wire = { workspace = true }
 nine-door = { path = "../nine-door" }
+log = "0.4"
 
 [dev-dependencies]
 assert_cmd = "2.0"
