@@ -8,7 +8,7 @@ use alloc::boxed::Box;
 use core::arch::asm;
 use core::cell::RefCell;
 use core::cmp;
-use core::convert::{Infallible, TryFrom};
+use core::convert::TryFrom;
 use core::fmt::{self, Write};
 use core::panic::PanicInfo;
 use core::ptr;
@@ -31,8 +31,8 @@ use crate::console::Console;
 use crate::cspace::tuples::assert_ipc_buffer_matches_bootinfo;
 use crate::cspace::CSpace;
 use crate::event::{
-    AuditSink, BootstrapMessage, BootstrapMessageHandler, CapabilityValidator, EventPump,
-    IpcDispatcher, TickEvent, TicketTable, TimerSource,
+    AuditSink, BootstrapMessage, BootstrapMessageHandler, IpcDispatcher, TickEvent, TicketTable,
+    TimerSource,
 };
 use crate::guards;
 use crate::hal::{HalError, Hardware, KernelHal};
@@ -49,8 +49,7 @@ use crate::sel4::{
     DevicePtPool, KernelEnv, RetypeKind, RetypeStatus, IPC_PAGE_BYTES, MSG_MAX_WORDS,
 };
 use crate::serial::{
-    pl011::Pl011, SerialDriver, SerialPort, DEFAULT_LINE_CAPACITY, DEFAULT_RX_CAPACITY,
-    DEFAULT_TX_CAPACITY,
+    pl011::Pl011, SerialPort, DEFAULT_LINE_CAPACITY, DEFAULT_RX_CAPACITY, DEFAULT_TX_CAPACITY,
 };
 use crate::uart::pl011::{self as early_uart, PL011_PADDR};
 use heapless::{String as HeaplessString, Vec as HeaplessVec};
@@ -497,7 +496,7 @@ pub struct BootFeatures {
 /// Aggregated bootstrap artefacts passed to userland for final bring-up.
 pub struct BootContext {
     /// Bootinfo view captured during kernel bootstrap.
-    pub bootinfo: BootInfoView<'static>,
+    pub bootinfo: BootInfoView,
     /// Feature flags summarising the current profile.
     pub features: BootFeatures,
     /// Root endpoint slot shared with userland subsystems.
@@ -1444,10 +1443,7 @@ fn bootstrap<P: Platform>(
     }
     driver.write_str("[cohesix:root-task] uart logger online\n");
 
-    let uart_slot = uart_region
-        .as_ref()
-        .map(|region| region.cap())
-        .unwrap_or(sel4_sys::seL4_CapNull);
+    let uart_slot = uart_region.as_ref().map(|region| region.cap());
 
     #[cfg(feature = "debug-input")]
     {
