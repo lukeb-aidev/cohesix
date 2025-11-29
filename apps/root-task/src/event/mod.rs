@@ -34,6 +34,8 @@ use crate::net::{NetPoller, CONSOLE_QUEUE_DEPTH};
 #[cfg(feature = "kernel")]
 use crate::ninedoor::{NineDoorBridge, NineDoorBridgeError};
 #[cfg(feature = "kernel")]
+use crate::sel4;
+#[cfg(feature = "kernel")]
 use crate::sel4::{BootInfoExt, BootInfoView};
 use crate::serial::{SerialDriver, SerialPort, SerialTelemetry, DEFAULT_LINE_CAPACITY};
 #[cfg(feature = "kernel")]
@@ -359,6 +361,7 @@ where
     bootstrap_handler: Option<&'a mut dyn BootstrapMessageHandler>,
     #[cfg(feature = "kernel")]
     console_context: Option<ConsoleContext>,
+    banner_emitted: bool,
 }
 
 #[cfg(feature = "kernel")]
@@ -408,6 +411,7 @@ where
             bootstrap_handler: None,
             #[cfg(feature = "kernel")]
             console_context: None,
+            banner_emitted: false,
         }
     }
 
@@ -558,6 +562,39 @@ where
         self.emit_console_line(CONSOLE_BANNER);
         self.emit_prompt();
         self.serial.poll_io();
+        if !self.banner_emitted {
+            log::info!(target: "event", "[event] root console banner emitted");
+            self.banner_emitted = true;
+        }
+    }
+
+    /// Run the cooperative pump until shutdown.
+    pub fn run(mut self) -> ! {
+        let has_root_console = true;
+        #[cfg(feature = "net-console")]
+        let has_net_console = self.net.is_some();
+        #[cfg(not(feature = "net-console"))]
+        let has_net_console = false;
+        #[cfg(feature = "kernel")]
+        let has_ninedoor = self.ninedoor.is_some();
+        #[cfg(not(feature = "kernel"))]
+        let has_ninedoor = false;
+
+        log::info!(
+            target: "event",
+            "[event] pump starting: root_console={}, net_console={}, ninedoor={}",
+            has_root_console,
+            has_net_console,
+            has_ninedoor,
+        );
+
+        loop {
+            self.poll();
+            #[cfg(feature = "kernel")]
+            sel4::yield_now();
+            #[cfg(not(feature = "kernel"))]
+            core::hint::spin_loop();
+        }
     }
 
     /// Retrieve a snapshot of the current pump metrics.

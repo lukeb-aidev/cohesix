@@ -41,12 +41,11 @@ type NetStackHandle = ();
 pub fn main(ctx: BootContext) -> ! {
     log::info!(
         target: "userland",
-        "[userland] root-task userland starting (serial-console={}, net-console={})",
+        "[userland] starting runtime: serial-console={}, net={}, net-console={}",
         ctx.features.serial_console,
+        ctx.features.net,
         ctx.features.net_console,
     );
-
-    deferred_bringup(&ctx);
 
     let serial = ctx
         .serial
@@ -82,8 +81,18 @@ pub fn main(ctx: BootContext) -> ! {
     announce_console_ready(&mut pump);
     start_kernel_cli(&mut pump);
 
-    log::info!(target: "userland", "Cohesix userland entering main event loop");
-    run_event_loop(pump);
+    #[cfg(all(feature = "net-console", feature = "kernel"))]
+    if let Some(stack) = net_stack_handle.as_ref() {
+        let addr = stack.ipv4_address();
+        log::info!(
+            target: "net-console",
+            "[net-console] listening on {}:{}",
+            addr,
+            crate::net::CONSOLE_TCP_PORT
+        );
+    }
+
+    pump.run();
 }
 
 /// Start the userland console or Cohesix shell over the serial transport.
@@ -194,46 +203,6 @@ pub mod serial_console {
                 emit_prompt(&mut writer);
             }
         }
-    }
-}
-
-// ---- Deferred bring-up: defers to the kernel event loop when the TCP console
-// is enabled, otherwise starts a standalone serial console.
-
-pub fn deferred_bringup(ctx: &BootContext) {
-    let ep = sel4::root_endpoint();
-    if !ipc::ep_is_valid(ep) {
-        log::info!(target: "userland", "[userland] skipping bringup: root endpoint is null");
-        return;
-    }
-
-    #[cfg(all(feature = "serial-console", feature = "kernel"))]
-    {
-        if let Some(uart_slot) = ctx.uart_slot {
-            log::info!(
-                target: "userland",
-                "[userland] deferred bringup ready (ep=0x{ep:04x} uart=0x{uart:04x})",
-                ep = ep,
-                uart = uart_slot,
-            );
-        } else {
-            log::warn!(target: "userland", "[userland] uart slot unavailable during bringup");
-        }
-    }
-}
-
-fn run_event_loop<'a, D, T, I, V, const RX: usize, const TX: usize, const LINE: usize>(
-    mut pump: EventPump<'a, D, T, I, V, RX, TX, LINE>,
-) -> !
-where
-    D: crate::serial::SerialDriver,
-    T: TimerSource,
-    I: IpcDispatcher,
-    V: CapabilityValidator,
-{
-    loop {
-        pump.poll();
-        sel4::yield_now();
     }
 }
 
@@ -371,8 +340,7 @@ where
 #[cfg(feature = "kernel")]
 fn announce_console_ready<'a, D, T, I, V, const RX: usize, const TX: usize, const LINE: usize>(
     pump: &mut EventPump<'a, D, T, I, V, RX, TX, LINE>,
-)
-where
+) where
     D: crate::serial::SerialDriver,
     T: TimerSource,
     I: IpcDispatcher,
@@ -384,8 +352,7 @@ where
 #[cfg(not(feature = "kernel"))]
 fn announce_console_ready<'a, D, T, I, V, const RX: usize, const TX: usize, const LINE: usize>(
     _pump: &mut EventPump<'a, D, T, I, V, RX, TX, LINE>,
-)
-where
+) where
     D: crate::serial::SerialDriver,
     T: TimerSource,
     I: IpcDispatcher,
@@ -396,8 +363,7 @@ where
 #[cfg(feature = "kernel")]
 fn start_kernel_cli<'a, D, T, I, V, const RX: usize, const TX: usize, const LINE: usize>(
     pump: &mut EventPump<'a, D, T, I, V, RX, TX, LINE>,
-)
-where
+) where
     D: crate::serial::SerialDriver,
     T: TimerSource,
     I: IpcDispatcher,
@@ -413,8 +379,7 @@ where
 #[cfg(not(feature = "kernel"))]
 fn start_kernel_cli<'a, D, T, I, V, const RX: usize, const TX: usize, const LINE: usize>(
     _pump: &mut EventPump<'a, D, T, I, V, RX, TX, LINE>,
-)
-where
+) where
     D: crate::serial::SerialDriver,
     T: TimerSource,
     I: IpcDispatcher,
