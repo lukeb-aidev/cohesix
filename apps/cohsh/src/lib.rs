@@ -21,6 +21,7 @@ use std::fmt;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::thread::JoinHandle;
@@ -664,34 +665,60 @@ impl<T: Transport, W: Write> Shell<T, W> {
     /// accepting user commands.
     pub fn repl_with_autologin(&mut self, pending: Option<AutoAttach>) -> Result<()> {
         let mut pending_attach = pending;
-        if pending_attach.is_some() {
-            write!(self.writer, "{}", self.prompt())?;
-            self.writer.flush()?;
-        }
-        let stdin = io::stdin();
-        let mut reader = stdin.lock();
-        let mut line = String::new();
-        loop {
-            self.run_pending_attach(&mut pending_attach)?;
-            write!(self.writer, "{}", self.prompt())?;
-            self.writer.flush()?;
-            line.clear();
-            if reader.read_line(&mut line)? == 0 {
-                writeln!(self.writer)?;
-                break;
-            }
-            let trimmed = line.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-            match self.execute(trimmed) {
-                Ok(CommandStatus::Quit) => break,
-                Ok(CommandStatus::Continue) => {}
-                Err(err) => {
-                    writeln!(self.writer, "Error: {err}")?;
+        let (tx, rx) = mpsc::channel();
+        let input_handle = thread::spawn(move || {
+            let stdin = io::stdin();
+            let mut reader = stdin.lock();
+            loop {
+                let mut line = String::new();
+                match reader.read_line(&mut line) {
+                    Ok(0) => {
+                        let _ = tx.send(None);
+                        break;
+                    }
+                    Ok(_) => {
+                        if tx.send(Some(line)).is_err() {
+                            break;
+                        }
+                    }
+                    Err(_) => break,
                 }
             }
+        });
+
+        let mut prompt_rendered = false;
+        loop {
+            self.run_pending_attach(&mut pending_attach)?;
+            if !prompt_rendered {
+                write!(self.writer, "{}", self.prompt())?;
+                self.writer.flush()?;
+                prompt_rendered = true;
+            }
+
+            match rx.recv_timeout(Duration::from_millis(100)) {
+                Ok(Some(line)) => {
+                    let trimmed = line.trim();
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+                    prompt_rendered = false;
+                    match self.execute(trimmed) {
+                        Ok(CommandStatus::Quit) => break,
+                        Ok(CommandStatus::Continue) => {}
+                        Err(err) => {
+                            writeln!(self.writer, "Error: {err}")?;
+                        }
+                    }
+                }
+                Ok(None) => {
+                    writeln!(self.writer)?;
+                    break;
+                }
+                Err(RecvTimeoutError::Timeout) => continue,
+                Err(RecvTimeoutError::Disconnected) => break,
+            }
         }
+        let _ = input_handle.join();
         Ok(())
     }
 

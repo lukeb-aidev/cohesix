@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use cohesix_ticket::{BudgetSpec, Role};
 use gpu_bridge_host::{status_entry, SerialisedGpuNode};
-use log::{debug, trace};
+use log::{debug, info, trace};
 use secure9p_wire::{
     Codec, ErrorCode, OpenMode, Qid, Request, RequestBody, Response, ResponseBody, SessionId,
     MAX_MSIZE, VERSION,
@@ -133,10 +133,22 @@ impl ServerCore {
                     msize,
                     version
                 );
+                info!(
+                    "[secure9p][session={}] received Tversion (msize={}, version={})",
+                    session.session(),
+                    msize,
+                    version
+                );
                 state.auth_state = AuthState::WaitingVersion;
                 let outcome = Self::handle_version(&mut state, *msize, version);
                 if outcome.is_ok() {
                     state.auth_state = AuthState::VersionNegotiated;
+                    info!(
+                        "[secure9p][session={}] negotiated version {} (msize={})",
+                        session.session(),
+                        VERSION,
+                        state.negotiated_msize()
+                    );
                 } else {
                     state.auth_state = AuthState::Failed;
                 }
@@ -150,10 +162,21 @@ impl ServerCore {
                     fid,
                     uname
                 );
+                info!(
+                    "[secure9p][session={}] received Tattach fid={} uname={}",
+                    session.session(),
+                    fid,
+                    uname
+                );
                 state.auth_state = AuthState::AttachRequested;
                 let outcome = self.handle_attach(&mut state, *fid, uname.as_str());
                 if outcome.is_ok() {
                     state.auth_state = AuthState::Attached;
+                    info!(
+                        "[secure9p][session={}] attach accepted role={:?}",
+                        session.session(),
+                        state.role()
+                    );
                 } else {
                     state.auth_state = AuthState::Failed;
                 }
@@ -252,6 +275,20 @@ impl ServerCore {
                 state.auth_state,
                 err
             );
+        }
+        if state.attached
+            && !state.first_request_logged
+            && !matches!(
+                request.body,
+                RequestBody::Version { .. } | RequestBody::Attach { .. }
+            )
+        {
+            info!(
+                "[secure9p][session={}] first post-attach request: {:?}",
+                session.session(),
+                request.body
+            );
+            state.first_request_logged = true;
         }
         self.sessions.insert(session, state);
         result
@@ -1055,6 +1092,7 @@ struct SessionState {
     budget: BudgetState,
     mounts: MountTable,
     auth_state: AuthState,
+    first_request_logged: bool,
 }
 
 impl SessionState {
@@ -1069,6 +1107,7 @@ impl SessionState {
             budget: BudgetState::new(BudgetSpec::unbounded(), now),
             mounts: MountTable::default(),
             auth_state: AuthState::Start,
+            first_request_logged: false,
         }
     }
 
