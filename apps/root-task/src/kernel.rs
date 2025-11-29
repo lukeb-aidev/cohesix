@@ -1609,7 +1609,7 @@ pub fn panic_handler(info: &PanicInfo) -> ! {
     }
 }
 
-struct KernelTimer {
+pub(crate) struct KernelTimer {
     tick: u64,
     period_ms: u64,
     period_cycles: u64,
@@ -1617,7 +1617,7 @@ struct KernelTimer {
 }
 
 impl KernelTimer {
-    fn new(period_ms: u64) -> Self {
+    pub(crate) fn new(period_ms: u64) -> Self {
         let freq = read_cntfrq();
         let period_cycles = compute_period_cycles(freq, period_ms);
         let last_cycles = read_cntpct();
@@ -1828,7 +1828,7 @@ impl From<StagedMessage> for BootstrapMessage {
     }
 }
 
-struct KernelIpc {
+pub(crate) struct KernelIpc {
     endpoint: sel4_sys::seL4_CPtr,
     staged_bootstrap: Option<StagedMessage>,
     staged_forwarded: bool,
@@ -1836,7 +1836,7 @@ struct KernelIpc {
 }
 
 impl KernelIpc {
-    fn new(endpoint: sel4_sys::seL4_CPtr) -> Self {
+    pub(crate) fn new(endpoint: sel4_sys::seL4_CPtr) -> Self {
         Self {
             endpoint,
             staged_bootstrap: None,
