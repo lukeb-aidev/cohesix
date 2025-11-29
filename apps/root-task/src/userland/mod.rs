@@ -73,10 +73,8 @@ pub fn main(ctx: BootContext) -> ! {
     let mut pump = EventPump::new(serial, timer, ipc, tickets, &mut audit);
 
     #[cfg(feature = "kernel")]
-    pump = pump.with_console_context(ctx.bootinfo, ctx.ep_slot, ctx.uart_slot);
-
-    #[cfg(feature = "kernel")]
     {
+        pump = pump.with_console_context(ctx.bootinfo, ctx.ep_slot, ctx.uart_slot);
         pump = pump.with_bootstrap_handler(&mut bootstrap_ipc);
     }
 

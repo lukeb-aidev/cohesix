@@ -1468,9 +1468,9 @@ fn bootstrap<P: Platform>(
             );
 
         #[cfg(all(feature = "net-console", feature = "kernel"))]
-        let mut net_stack = NetStack::new(&mut hal).expect("virtio-net device not found");
+        let net_stack = NetStack::new(&mut hal).expect("virtio-net device not found");
         #[cfg(all(feature = "net-console", not(feature = "kernel")))]
-        let (mut net_stack, _) = NetStack::new(Ipv4Address::new(10, 0, 0, 2));
+        let (net_stack, _) = NetStack::new(Ipv4Address::new(10, 0, 0, 2));
         let timer = KernelTimer::new(5);
         let ipc = KernelIpc::new(ep_slot);
 
