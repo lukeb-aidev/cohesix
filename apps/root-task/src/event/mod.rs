@@ -30,7 +30,7 @@ use heapless::{String as HeaplessString, Vec as HeaplessVec};
 use crate::console::proto::{render_ack, AckLine, AckStatus, LineFormatError};
 use crate::console::{Command, CommandParser, ConsoleError, MAX_ROLE_LEN, MAX_TICKET_LEN};
 #[cfg(feature = "net-console")]
-use crate::net::{NetPoller, CONSOLE_QUEUE_DEPTH};
+use crate::net::{NetConsoleEvent, NetPoller, CONSOLE_QUEUE_DEPTH};
 #[cfg(feature = "kernel")]
 use crate::ninedoor::{NineDoorBridge, NineDoorBridgeError};
 #[cfg(feature = "kernel")]
@@ -486,6 +486,7 @@ where
             for line in buffered {
                 self.handle_network_line(line);
             }
+            self.drain_net_console_events();
         }
 
         self.ipc.dispatch(self.now_ms);
@@ -571,22 +572,12 @@ where
 
     /// Run the cooperative pump until shutdown.
     pub fn run(mut self) -> ! {
-        let has_root_console = true;
-        #[cfg(feature = "net-console")]
-        let has_net_console = self.net.is_some();
-        #[cfg(not(feature = "net-console"))]
-        let has_net_console = false;
-        #[cfg(feature = "kernel")]
-        let has_ninedoor = self.ninedoor.is_some();
-        #[cfg(not(feature = "kernel"))]
-        let has_ninedoor = false;
-
         log::info!(
             target: "event",
-            "[event] pump starting: root_console={}, net_console={}, ninedoor={}",
-            has_root_console,
-            has_net_console,
-            has_ninedoor,
+            "[event] pump starting: root_console={}, net_console_enabled={}, ninedoor_enabled={}",
+            self.has_root_console(),
+            self.net_console_enabled(),
+            self.ninedoor_enabled(),
         );
 
         loop {
@@ -595,6 +586,35 @@ where
             sel4::yield_now();
             #[cfg(not(feature = "kernel"))]
             core::hint::spin_loop();
+        }
+    }
+
+    /// Returns whether the root console is attached.
+    pub fn has_root_console(&self) -> bool {
+        true
+    }
+
+    /// Returns whether net-console handling is enabled.
+    pub fn net_console_enabled(&self) -> bool {
+        #[cfg(feature = "net-console")]
+        {
+            return self.net.is_some();
+        }
+        #[cfg(not(feature = "net-console"))]
+        {
+            false
+        }
+    }
+
+    /// Returns whether the NineDoor bridge is enabled.
+    pub fn ninedoor_enabled(&self) -> bool {
+        #[cfg(feature = "kernel")]
+        {
+            return self.ninedoor.is_some();
+        }
+        #[cfg(not(feature = "kernel"))]
+        {
+            false
         }
     }
 
@@ -807,6 +827,44 @@ where
             return;
         }
         self.process_console_line(&converted);
+    }
+
+    #[cfg(feature = "net-console")]
+    fn drain_net_console_events(&mut self) {
+        if let Some(net) = self.net.as_mut() {
+            net.drain_console_events(&mut |event| match event {
+                NetConsoleEvent::Connected { conn_id, peer } => match peer {
+                    Some(remote) => {
+                        log::info!(
+                            target: "net-console",
+                            "[net-console] conn {}: established from {}",
+                            conn_id,
+                            remote
+                        );
+                    }
+                    None => {
+                        log::info!(
+                            target: "net-console",
+                            "[net-console] conn {}: established",
+                            conn_id
+                        );
+                    }
+                },
+                NetConsoleEvent::Disconnected {
+                    conn_id,
+                    bytes_read,
+                    bytes_written,
+                } => {
+                    log::info!(
+                        target: "net-console",
+                        "[net-console] conn {}: closed (bytes_read={}, bytes_written={})",
+                        conn_id,
+                        bytes_read,
+                        bytes_written,
+                    );
+                }
+            });
+        }
     }
 
     #[inline(never)]
