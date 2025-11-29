@@ -1528,6 +1528,7 @@ fn bootstrap<P: Platform>(
             log::trace!("B4: before attach_ninedoor_uart");
             pump = pump.with_ninedoor(ninedoor);
             pump.announce_console_ready();
+            crate::userland::deferred_bringup();
         }
 
         #[cfg(feature = "net-console")]

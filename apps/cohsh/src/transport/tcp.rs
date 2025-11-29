@@ -89,9 +89,6 @@ enum HeartbeatOutcome {
 enum AuthState {
     Start,
     Connected,
-    VersionSent,
-    WaitingVersion,
-    AuthRequested,
     AuthSent,
     WaitingAuthOk,
     AuthOk,
@@ -282,79 +279,7 @@ impl TcpTransport {
         }
     }
 
-    fn await_auth_ready(&mut self) -> Result<()> {
-        self.set_auth_state(AuthState::WaitingVersion);
-        let mut timeouts = 0usize;
-        let mut total_bytes_read = 0usize;
-        let mut total_bytes_written = 0usize;
-        loop {
-            match self.read_line_internal()? {
-                ReadStatus::Line(line) => {
-                    let trimmed = Self::trim_line(&line);
-                    total_bytes_read = total_bytes_read.saturating_add(line.len());
-                    if let Some(ack) = parse_ack(&trimmed) {
-                        if ack.verb.eq_ignore_ascii_case("AUTH") {
-                            self.set_auth_state(AuthState::VersionSent);
-                            self.record_ack(&trimmed);
-                            if matches!(ack.status, AckStatus::Err) {
-                                self.set_auth_state(AuthState::Failed);
-                                debug!(
-                                    "[cohsh][auth] state={:?} auth preface rejected line={}",
-                                    self.auth_state, trimmed
-                                );
-                                return Err(anyhow!(
-                                    "authentication rejected during greeting: {trimmed}"
-                                ));
-                            }
-                            self.set_auth_state(AuthState::AuthRequested);
-                            debug!(
-                                "[cohsh][auth] state={:?} received auth challenge line={}",
-                                self.auth_state, trimmed
-                            );
-                            return Ok(());
-                        }
-                        let _ = self.record_ack(&trimmed);
-                        continue;
-                    }
-                }
-                ReadStatus::Timeout => {
-                    timeouts += 1;
-                    debug!(
-                        "[cohsh][auth] state={:?} waiting for auth challenge timeout={}",
-                        self.auth_state, timeouts
-                    );
-                    if timeouts > self.max_retries {
-                        self.set_auth_state(AuthState::Failed);
-                        warn!(
-                            "[cohsh][auth] timeout in state {:?} (total_bytes_read={}, total_bytes_written={})",
-                            self.auth_state,
-                            total_bytes_read,
-                            total_bytes_written,
-                        );
-                        return Err(anyhow!(
-                            "authentication timed out waiting for server greeting (state={:?}, bytes_read={}, bytes_written={})",
-                            self.auth_state,
-                            total_bytes_read,
-                            total_bytes_written
-                        ));
-                    }
-                }
-                ReadStatus::Closed => {
-                    self.set_auth_state(AuthState::Failed);
-                    debug!(
-                        "[cohsh][auth] state={:?} connection closed before auth challenge",
-                        self.auth_state
-                    );
-                    return Err(anyhow!(
-                        "connection closed before authentication challenge received"
-                    ));
-                }
-            }
-        }
-    }
-
     fn perform_auth(&mut self) -> Result<()> {
-        self.await_auth_ready()?;
         let auth_line = format!("AUTH {}", self.auth_token);
         debug!(
             "[cohsh][auth] state={:?} send AUTH token_len={}",
@@ -363,6 +288,7 @@ impl TcpTransport {
         );
         self.set_auth_state(AuthState::AuthSent);
         self.send_line_raw(&auth_line)?;
+        self.last_activity = Instant::now();
         self.set_auth_state(AuthState::WaitingAuthOk);
         let mut timeouts = 0usize;
         let mut total_bytes_read = 0usize;
@@ -383,12 +309,16 @@ impl TcpTransport {
                             debug!("[cohsh][auth] state={:?} recv AUTH ok", self.auth_state);
                             return Ok(());
                         }
-                        self.set_auth_state(AuthState::Failed);
-                        debug!(
-                            "[cohsh][auth] state={:?} recv AUTH rejection line={}",
-                            self.auth_state, trimmed
-                        );
-                        return Err(anyhow!("authentication rejected: {trimmed}"));
+                        if ack.verb.eq_ignore_ascii_case("AUTH") {
+                            self.set_auth_state(AuthState::Failed);
+                            debug!(
+                                "[cohsh][auth] state={:?} recv AUTH rejection line={}",
+                                self.auth_state, trimmed
+                            );
+                            return Err(anyhow!("authentication rejected: {trimmed}"));
+                        }
+                        let _ = self.record_ack(&trimmed);
+                        continue;
                     }
                 }
                 ReadStatus::Timeout => {
@@ -406,7 +336,7 @@ impl TcpTransport {
                             total_bytes_written,
                         );
                         return Err(anyhow!(
-                            "authentication timed out (state={:?}, bytes_read={}, bytes_written={})",
+                            "authentication timed out waiting for server response (state={:?}, bytes_read={}, bytes_written={})",
                             self.auth_state,
                             total_bytes_read,
                             total_bytes_written
