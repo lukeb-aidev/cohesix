@@ -1522,7 +1522,7 @@ fn init_cnode_bits_u8(bi: &sys::seL4_BootInfo) -> u8 {
 
 #[inline(always)]
 pub(crate) fn canonical_depth_word() -> sys::seL4_Word {
-    encode_cnode_depth(bi_init_cnode_bits() as u8)
+    encode_cnode_depth(sys::seL4_WordBits as u8)
 }
 
 /// Depth (in bits) used when traversing the init CNode for syscall arguments.

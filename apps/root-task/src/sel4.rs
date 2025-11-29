@@ -123,7 +123,7 @@ pub const fn canonical_cnode_depth(init_bits: u8, word_bits: u8) -> u8 {
         init_bits as usize <= word_bits as usize,
         "initThreadCNodeSizeBits must not exceed word width",
     );
-    init_bits
+    word_bits
 }
 
 #[inline(always)]
@@ -442,7 +442,7 @@ impl BootInfoView {
     /// Returns the canonical traversal depth for the init thread CNode.
     #[must_use]
     pub fn init_cnode_depth(&self) -> u8 {
-        canonical_cnode_depth(self.init_cnode_bits(), WORD_BITS as u8)
+        canonical_cnode_depth(self.init_cnode_bits(), sel4_sys::seL4_WordBits as u8)
     }
 
     /// Returns the radix width of the init thread's CNode as `usize`.
