@@ -1528,7 +1528,6 @@ fn bootstrap<P: Platform>(
             log::trace!("B4: before attach_ninedoor_uart");
             pump = pump.with_ninedoor(ninedoor);
             pump.announce_console_ready();
-            crate::userland::deferred_bringup();
         }
 
         #[cfg(feature = "net-console")]
@@ -1561,6 +1560,8 @@ fn bootstrap<P: Platform>(
         boot_log::force_uart_line(summary.as_str());
         crate::bp!("bootstrap.done");
         boot_tracer().advance(BootPhase::HandOff);
+        log::info!("[kernel] handoff to userland");
+        crate::userland::deferred_bringup();
         log::trace!("B5: entering event pump loop");
         boot_guard.commit();
         boot_log::force_uart_line("[console] serial fallback ready");
