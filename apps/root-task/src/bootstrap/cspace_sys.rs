@@ -1522,7 +1522,7 @@ fn init_cnode_bits_u8(bi: &sys::seL4_BootInfo) -> u8 {
 
 #[inline(always)]
 pub(crate) fn canonical_depth_word() -> sys::seL4_Word {
-    se_l4_wordbits_word()
+    encode_cnode_depth(bi_init_cnode_bits() as u8)
 }
 
 /// Depth (in bits) used when traversing the init CNode for syscall arguments.
@@ -2531,9 +2531,9 @@ mod tests {
     use core::convert::TryFrom;
 
     use super::{
-        bi_init_cnode_bits, bi_init_cnode_cptr, canonical, canonical_depth_word, init_cnode_dest,
-        init_cnode_direct_destination_words_for_test, init_root_index, path_depth, sel4, sys,
-        untyped_retype_into_init_root,
+        bi_init_cnode_bits, bi_init_cnode_cptr, canonical, canonical_depth_word,
+        encode_cnode_depth, init_cnode_dest, init_cnode_direct_destination_words_for_test,
+        init_root_index, path_depth, sel4, sys, untyped_retype_into_init_root,
     };
 
     #[test]
@@ -2567,6 +2567,19 @@ mod tests {
         let expected_depth = canonical_depth_word();
         assert_eq!(depth, expected_depth);
         assert_eq!(off, slot as sys::seL4_Word);
+    }
+
+    #[test]
+    fn canonical_depth_tracks_bootinfo_bits() {
+        #[cfg(not(target_os = "none"))]
+        unsafe {
+            let mut bootinfo: sys::seL4_BootInfo = core::mem::zeroed();
+            bootinfo.initThreadCNodeSizeBits = 15;
+            super::install_test_bootinfo_for_tests(bootinfo);
+        }
+
+        let expected_depth = encode_cnode_depth(bi_init_cnode_bits() as u8);
+        assert_eq!(canonical_depth_word(), expected_depth);
     }
 
     #[test]
