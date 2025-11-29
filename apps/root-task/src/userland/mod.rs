@@ -31,23 +31,15 @@ use core::ptr::NonNull;
 use heapless::String as HeaplessString;
 
 /// Authoritative entrypoint for userland bring-up and runtime loops.
-pub fn main(ctx: &BootContext) -> ! {
+pub fn main(ctx: BootContext) -> ! {
     log::info!(
         target: "userland",
-        "Cohesix userland starting: serial_console={}, net={}, net_console={}",
-        ctx.features.serial_console,
-        ctx.features.net,
-        ctx.features.net_console,
-    );
-
-    log::info!(
-        target: "userland",
-        "Console config: serial_console={}, net_console={}",
+        "[userland] root-task userland starting (serial-console={}, net-console={})",
         ctx.features.serial_console,
         ctx.features.net_console,
     );
 
-    deferred_bringup(ctx);
+    deferred_bringup(&ctx);
 
     let serial = ctx
         .serial
@@ -81,6 +73,9 @@ pub fn main(ctx: &BootContext) -> ! {
     let mut pump = EventPump::new(serial, timer, ipc, tickets, &mut audit);
 
     #[cfg(feature = "kernel")]
+    pump = pump.with_console_context(ctx.bootinfo, ctx.ep_slot, ctx.uart_slot);
+
+    #[cfg(feature = "kernel")]
     {
         pump = pump.with_bootstrap_handler(&mut bootstrap_ipc);
     }
@@ -103,7 +98,6 @@ pub fn main(ctx: &BootContext) -> ! {
     #[cfg(feature = "kernel")]
     {
         pump.start_cli();
-        pump.emit_console_line("Cohesix console ready");
         log::info!(
             target: "userland",
             "Root shell: Cohesix console online on PL011",

@@ -552,7 +552,7 @@ pub fn start<P: Platform>(bootinfo: &'static BootInfo, platform: &P) -> ! {
     match bootstrap(platform, bootinfo) {
         Ok(ctx) => {
             log::info!(target: "kernel", "[kernel] boot complete, handoff to userland");
-            crate::userland::main(&ctx);
+            crate::userland::main(ctx);
         }
         Err(err) => {
             log::error!("[boot] failed to enter bootstrap runtime: {err}");
