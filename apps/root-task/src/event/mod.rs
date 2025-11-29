@@ -540,7 +540,8 @@ where
         self.serial.telemetry()
     }
 
-    fn emit_console_line(&mut self, line: &str) {
+    /// Emit a console line to the serial console and any attached TCP clients.
+    pub fn emit_console_line(&mut self, line: &str) {
         self.serial.enqueue_tx(line.as_bytes());
         self.serial.enqueue_tx(b"\r\n");
         #[cfg(feature = "net-console")]
