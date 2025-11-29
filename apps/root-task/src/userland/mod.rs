@@ -20,6 +20,8 @@ use crate::event::{
 };
 use crate::ipc;
 use crate::kernel::BootContext;
+#[cfg(feature = "net-console")]
+use crate::net::NetStack;
 use crate::platform::Platform;
 use crate::sel4;
 #[cfg(all(feature = "serial-console", feature = "kernel"))]
@@ -29,6 +31,11 @@ use crate::uart::pl011::PL011_VADDR;
 #[cfg(all(feature = "serial-console", feature = "kernel"))]
 use core::ptr::NonNull;
 use heapless::String as HeaplessString;
+
+#[cfg(feature = "net-console")]
+type NetStackHandle = NetStack;
+#[cfg(not(feature = "net-console"))]
+type NetStackHandle = ();
 
 /// Authoritative entrypoint for userland bring-up and runtime loops.
 pub fn main(ctx: BootContext) -> ! {
@@ -63,44 +70,17 @@ pub fn main(ctx: BootContext) -> ! {
         .expect("ticket table unavailable");
 
     let mut audit = LoggerAudit;
-
-    #[cfg(feature = "kernel")]
-    let mut bootstrap_ipc = UserlandBootstrapHandler;
-
-    #[cfg(feature = "net-console")]
-    let mut net_stack_handle = ctx.net_stack.borrow_mut().take();
+    let mut bootstrap_ipc = kernel_bootstrap_handler();
+    let mut net_stack_handle = take_net_stack(&ctx);
 
     let mut pump = EventPump::new(serial, timer, ipc, tickets, &mut audit);
 
-    #[cfg(feature = "kernel")]
-    {
-        pump = pump.with_console_context(ctx.bootinfo, ctx.ep_slot, ctx.uart_slot);
-        pump = pump.with_bootstrap_handler(&mut bootstrap_ipc);
-    }
+    pump = attach_kernel_console(pump, &ctx, bootstrap_ipc.as_mut());
+    pump = attach_ninedoor_bridge(pump, &ctx);
+    pump = attach_network(pump, net_stack_handle.as_mut());
 
-    #[cfg(feature = "kernel")]
-    {
-        if let Some(ninedoor) = ctx.ninedoor.borrow_mut().take() {
-            pump = pump.with_ninedoor(ninedoor);
-        }
-        pump.announce_console_ready();
-    }
-
-    #[cfg(feature = "net-console")]
-    {
-        if let Some(net_stack) = net_stack_handle.as_mut() {
-            pump = pump.with_network(net_stack);
-        }
-    }
-
-    #[cfg(feature = "kernel")]
-    {
-        pump.start_cli();
-        log::info!(
-            target: "userland",
-            "Root shell: Cohesix console online on PL011",
-        );
-    }
+    announce_console_ready(&mut pump);
+    start_kernel_cli(&mut pump);
 
     log::info!(target: "userland", "Cohesix userland entering main event loop");
     run_event_loop(pump);
@@ -267,6 +247,179 @@ impl AuditSink for LoggerAudit {
     fn denied(&mut self, message: &str) {
         log::warn!(target: "audit", "{message}");
     }
+}
+
+#[cfg(feature = "kernel")]
+fn kernel_bootstrap_handler() -> Option<UserlandBootstrapHandler> {
+    Some(UserlandBootstrapHandler)
+}
+
+#[cfg(not(feature = "kernel"))]
+fn kernel_bootstrap_handler() -> Option<UserlandBootstrapHandler> {
+    None
+}
+
+#[cfg(feature = "net-console")]
+fn take_net_stack(ctx: &BootContext) -> Option<NetStackHandle> {
+    ctx.net_stack.borrow_mut().take()
+}
+
+#[cfg(not(feature = "net-console"))]
+fn take_net_stack(_ctx: &BootContext) -> Option<NetStackHandle> {
+    None
+}
+
+#[cfg(feature = "kernel")]
+fn attach_kernel_console<'a, D, T, I, V, const RX: usize, const TX: usize, const LINE: usize>(
+    mut pump: EventPump<'a, D, T, I, V, RX, TX, LINE>,
+    ctx: &BootContext,
+    bootstrap_ipc: Option<&mut UserlandBootstrapHandler>,
+) -> EventPump<'a, D, T, I, V, RX, TX, LINE>
+where
+    D: crate::serial::SerialDriver,
+    T: TimerSource,
+    I: IpcDispatcher,
+    V: CapabilityValidator,
+{
+    if let Some(handler) = bootstrap_ipc {
+        pump = pump.with_console_context(ctx.bootinfo, ctx.ep_slot, ctx.uart_slot);
+        pump = pump.with_bootstrap_handler(handler);
+    }
+
+    pump
+}
+
+#[cfg(not(feature = "kernel"))]
+fn attach_kernel_console<'a, D, T, I, V, const RX: usize, const TX: usize, const LINE: usize>(
+    pump: EventPump<'a, D, T, I, V, RX, TX, LINE>,
+    _ctx: &BootContext,
+    _bootstrap_ipc: Option<&mut UserlandBootstrapHandler>,
+) -> EventPump<'a, D, T, I, V, RX, TX, LINE>
+where
+    D: crate::serial::SerialDriver,
+    T: TimerSource,
+    I: IpcDispatcher,
+    V: CapabilityValidator,
+{
+    pump
+}
+
+#[cfg(feature = "kernel")]
+fn attach_ninedoor_bridge<'a, D, T, I, V, const RX: usize, const TX: usize, const LINE: usize>(
+    mut pump: EventPump<'a, D, T, I, V, RX, TX, LINE>,
+    ctx: &BootContext,
+) -> EventPump<'a, D, T, I, V, RX, TX, LINE>
+where
+    D: crate::serial::SerialDriver,
+    T: TimerSource,
+    I: IpcDispatcher,
+    V: CapabilityValidator,
+{
+    if let Some(ninedoor) = ctx.ninedoor.borrow_mut().take() {
+        pump = pump.with_ninedoor(ninedoor);
+    }
+
+    pump
+}
+
+#[cfg(not(feature = "kernel"))]
+fn attach_ninedoor_bridge<'a, D, T, I, V, const RX: usize, const TX: usize, const LINE: usize>(
+    pump: EventPump<'a, D, T, I, V, RX, TX, LINE>,
+    _ctx: &BootContext,
+) -> EventPump<'a, D, T, I, V, RX, TX, LINE>
+where
+    D: crate::serial::SerialDriver,
+    T: TimerSource,
+    I: IpcDispatcher,
+    V: CapabilityValidator,
+{
+    pump
+}
+
+#[cfg(feature = "net-console")]
+fn attach_network<'a, D, T, I, V, const RX: usize, const TX: usize, const LINE: usize>(
+    mut pump: EventPump<'a, D, T, I, V, RX, TX, LINE>,
+    net_stack_handle: Option<&mut NetStackHandle>,
+) -> EventPump<'a, D, T, I, V, RX, TX, LINE>
+where
+    D: crate::serial::SerialDriver,
+    T: TimerSource,
+    I: IpcDispatcher,
+    V: CapabilityValidator,
+{
+    if let Some(net_stack) = net_stack_handle {
+        pump = pump.with_network(net_stack);
+    }
+
+    pump
+}
+
+#[cfg(not(feature = "net-console"))]
+fn attach_network<'a, D, T, I, V, const RX: usize, const TX: usize, const LINE: usize>(
+    pump: EventPump<'a, D, T, I, V, RX, TX, LINE>,
+    _net_stack_handle: Option<&mut NetStackHandle>,
+) -> EventPump<'a, D, T, I, V, RX, TX, LINE>
+where
+    D: crate::serial::SerialDriver,
+    T: TimerSource,
+    I: IpcDispatcher,
+    V: CapabilityValidator,
+{
+    pump
+}
+
+#[cfg(feature = "kernel")]
+fn announce_console_ready<'a, D, T, I, V, const RX: usize, const TX: usize, const LINE: usize>(
+    pump: &mut EventPump<'a, D, T, I, V, RX, TX, LINE>,
+)
+where
+    D: crate::serial::SerialDriver,
+    T: TimerSource,
+    I: IpcDispatcher,
+    V: CapabilityValidator,
+{
+    pump.announce_console_ready();
+}
+
+#[cfg(not(feature = "kernel"))]
+fn announce_console_ready<'a, D, T, I, V, const RX: usize, const TX: usize, const LINE: usize>(
+    _pump: &mut EventPump<'a, D, T, I, V, RX, TX, LINE>,
+)
+where
+    D: crate::serial::SerialDriver,
+    T: TimerSource,
+    I: IpcDispatcher,
+    V: CapabilityValidator,
+{
+}
+
+#[cfg(feature = "kernel")]
+fn start_kernel_cli<'a, D, T, I, V, const RX: usize, const TX: usize, const LINE: usize>(
+    pump: &mut EventPump<'a, D, T, I, V, RX, TX, LINE>,
+)
+where
+    D: crate::serial::SerialDriver,
+    T: TimerSource,
+    I: IpcDispatcher,
+    V: CapabilityValidator,
+{
+    pump.start_cli();
+    log::info!(
+        target: "userland",
+        "Root shell: Cohesix console online on PL011",
+    );
+}
+
+#[cfg(not(feature = "kernel"))]
+fn start_kernel_cli<'a, D, T, I, V, const RX: usize, const TX: usize, const LINE: usize>(
+    _pump: &mut EventPump<'a, D, T, I, V, RX, TX, LINE>,
+)
+where
+    D: crate::serial::SerialDriver,
+    T: TimerSource,
+    I: IpcDispatcher,
+    V: CapabilityValidator,
+{
 }
 
 struct UserlandBootstrapHandler;
