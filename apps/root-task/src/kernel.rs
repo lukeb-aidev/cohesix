@@ -1536,10 +1536,15 @@ fn bootstrap<P: Platform>(
 
         #[cfg(feature = "kernel")]
         {
+            // Surface the root shell immediately so the PL011 console remains usable even
+            // when additional transports (for example, the TCP console) are enabled.
+            // Bootstrap probing continues in the background but must never gate prompt
+            // emission.
+            pump.start_cli();
+
             crate::bp!("ipc.poll.begin");
             pump.bootstrap_probe();
             crate::bp!("ipc.poll.end");
-            pump.start_cli();
         }
 
         let caps_start = empty_start as u32;
