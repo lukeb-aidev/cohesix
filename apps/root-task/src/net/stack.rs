@@ -463,7 +463,7 @@ impl NetStack {
                 now_ms
             );
             let _ = self.server.enqueue_outbound("ERR CONSOLE reason=timeout");
-            activity |= Self::flush_outbound(
+            let _ = Self::flush_outbound(
                 &mut self.server,
                 &mut self.telemetry,
                 socket,
