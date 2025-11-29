@@ -1561,35 +1561,13 @@ fn bootstrap<P: Platform>(
         crate::bp!("bootstrap.done");
         boot_tracer().advance(BootPhase::HandOff);
         log::info!("[kernel] handoff to userland");
-        crate::userland::deferred_bringup();
-        log::trace!("B5: entering event pump loop");
         boot_guard.commit();
         boot_log::force_uart_line("[console] serial fallback ready");
         crate::bootstrap::run_minimal(bootinfo_ref);
         // MUST-SEE BEACON: if you don't see this, run() didn't return.
         log::info!("[console] handoff → serial console");
         boot_log::force_uart_line("[Cohesix] console.handoff");
-        #[allow(unreachable_code)]
-        {
-            run_event_loop(pump);
-            log::error!("[console] event loop returned; entering fallback console");
-            crate::userland::start_console_or_cohsh(platform);
-        }
-    }
-}
-
-fn run_event_loop<'a, D, T, I, V, const RX: usize, const TX: usize, const LINE: usize>(
-    mut pump: EventPump<'a, D, T, I, V, RX, TX, LINE>,
-) -> !
-where
-    D: SerialDriver,
-    T: TimerSource,
-    I: IpcDispatcher,
-    V: CapabilityValidator,
-{
-    loop {
-        pump.poll();
-        crate::sel4::yield_now();
+        crate::userland::main(pump, platform);
     }
 }
 
