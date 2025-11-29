@@ -14,6 +14,7 @@ use crate::boot::uart_pl011;
 use crate::console::CohesixConsole;
 #[cfg(all(feature = "serial-console", feature = "kernel"))]
 use crate::console::Console as SerialConsole;
+use crate::event::{CapabilityValidator, EventPump, IpcDispatcher, TimerSource};
 use crate::ipc;
 use crate::platform::Platform;
 use crate::sel4;
@@ -23,6 +24,31 @@ use crate::serial::pl011::Pl011;
 use crate::uart::pl011::PL011_VADDR;
 #[cfg(all(feature = "serial-console", feature = "kernel"))]
 use core::ptr::NonNull;
+
+/// Authoritative entrypoint for userland bring-up and runtime loops.
+pub fn main<'a, D, T, I, V, const RX: usize, const TX: usize, const LINE: usize, P>(
+    pump: EventPump<'a, D, T, I, V, RX, TX, LINE>,
+    _platform: &P,
+) -> !
+where
+    D: crate::serial::SerialDriver,
+    T: TimerSource,
+    I: IpcDispatcher,
+    V: CapabilityValidator,
+    P: Platform,
+{
+    ::log::info!(
+        "[userland] bringup starting (serial_console={} net={} net_console={})",
+        cfg!(feature = "serial-console"),
+        cfg!(feature = "net"),
+        cfg!(feature = "net-console")
+    );
+
+    deferred_bringup();
+
+    ::log::info!("[userland] starting root console and net loop");
+    run_event_loop(pump);
+}
 
 /// Start the userland console or Cohesix shell over the serial transport.
 #[allow(clippy::module_name_repetitions)]
@@ -140,13 +166,6 @@ pub mod serial_console {
 // is enabled, otherwise starts a standalone serial console.
 
 pub fn deferred_bringup() {
-    ::log::info!(
-        "[userland] bringup starting (serial_console={} net={} net_console={})",
-        cfg!(feature = "serial-console"),
-        cfg!(feature = "net"),
-        cfg!(feature = "net-console")
-    );
-
     let ep = sel4::root_endpoint();
     if !ipc::ep_is_valid(ep) {
         ::log::info!("[userland] skipping bringup: root endpoint is null");
@@ -181,6 +200,21 @@ pub fn deferred_bringup() {
     #[cfg(not(all(feature = "serial-console", feature = "kernel")))]
     {
         ::log::info!("[userland] bringup complete (console features disabled)");
+    }
+}
+
+fn run_event_loop<'a, D, T, I, V, const RX: usize, const TX: usize, const LINE: usize>(
+    mut pump: EventPump<'a, D, T, I, V, RX, TX, LINE>,
+) -> !
+where
+    D: crate::serial::SerialDriver,
+    T: TimerSource,
+    I: IpcDispatcher,
+    V: CapabilityValidator,
+{
+    loop {
+        pump.poll();
+        sel4::yield_now();
     }
 }
 
