@@ -273,7 +273,7 @@ fn take_net_stack(_ctx: &BootContext) -> Option<NetStackHandle> {
 fn attach_kernel_console<'a, D, T, I, V, const RX: usize, const TX: usize, const LINE: usize>(
     mut pump: EventPump<'a, D, T, I, V, RX, TX, LINE>,
     ctx: &BootContext,
-    bootstrap_ipc: Option<&mut UserlandBootstrapHandler>,
+    bootstrap_ipc: Option<&'a mut UserlandBootstrapHandler>,
 ) -> EventPump<'a, D, T, I, V, RX, TX, LINE>
 where
     D: crate::serial::SerialDriver,
@@ -293,7 +293,7 @@ where
 fn attach_kernel_console<'a, D, T, I, V, const RX: usize, const TX: usize, const LINE: usize>(
     pump: EventPump<'a, D, T, I, V, RX, TX, LINE>,
     _ctx: &BootContext,
-    _bootstrap_ipc: Option<&mut UserlandBootstrapHandler>,
+    _bootstrap_ipc: Option<&'a mut UserlandBootstrapHandler>,
 ) -> EventPump<'a, D, T, I, V, RX, TX, LINE>
 where
     D: crate::serial::SerialDriver,
@@ -339,7 +339,7 @@ where
 #[cfg(feature = "net-console")]
 fn attach_network<'a, D, T, I, V, const RX: usize, const TX: usize, const LINE: usize>(
     mut pump: EventPump<'a, D, T, I, V, RX, TX, LINE>,
-    net_stack_handle: Option<&mut NetStackHandle>,
+    net_stack_handle: Option<&'a mut NetStackHandle>,
 ) -> EventPump<'a, D, T, I, V, RX, TX, LINE>
 where
     D: crate::serial::SerialDriver,
@@ -357,7 +357,7 @@ where
 #[cfg(not(feature = "net-console"))]
 fn attach_network<'a, D, T, I, V, const RX: usize, const TX: usize, const LINE: usize>(
     pump: EventPump<'a, D, T, I, V, RX, TX, LINE>,
-    _net_stack_handle: Option<&mut NetStackHandle>,
+    _net_stack_handle: Option<&'a mut NetStackHandle>,
 ) -> EventPump<'a, D, T, I, V, RX, TX, LINE>
 where
     D: crate::serial::SerialDriver,
