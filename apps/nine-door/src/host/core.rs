@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 
 use cohesix_ticket::{BudgetSpec, Role};
 use gpu_bridge_host::{status_entry, SerialisedGpuNode};
+use log::{debug, trace};
 use secure9p_wire::{
     Codec, ErrorCode, OpenMode, Qid, Request, RequestBody, Response, ResponseBody, SessionId,
     MAX_MSIZE, VERSION,
@@ -26,6 +27,16 @@ pub(crate) struct ServerCore {
     next_session: u64,
     sessions: HashMap<SessionId, SessionState>,
     clock: Arc<dyn Clock>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AuthState {
+    Start,
+    WaitingVersion,
+    VersionNegotiated,
+    AttachRequested,
+    Attached,
+    Failed,
 }
 
 impl ServerCore {
@@ -71,7 +82,23 @@ impl ServerCore {
         session: SessionId,
         request_bytes: &[u8],
     ) -> Result<Vec<u8>, NineDoorError> {
-        let request = self.codec.decode_request(request_bytes)?;
+        let request = self
+            .codec
+            .decode_request(request_bytes)
+            .map_err(|err| {
+                let state = self
+                    .sessions
+                    .get(&session)
+                    .map(|entry| entry.auth_state)
+                    .unwrap_or(AuthState::Failed);
+                debug!(
+                    "[net-console][auth] session={} state={:?} decode error: {}",
+                    session.session(),
+                    state,
+                    err
+                );
+                err
+            })?;
         let response_body = match self.dispatch(session, &request) {
             Ok(body) => body,
             Err(NineDoorError::Protocol { code, message }) => ResponseBody::Error { code, message },
@@ -89,22 +116,65 @@ impl ServerCore {
         session: SessionId,
         request: &Request,
     ) -> Result<ResponseBody, NineDoorError> {
-        let mut state = self
-            .sessions
-            .remove(&session)
-            .ok_or(NineDoorError::UnknownSession(session))?;
+        let mut state = match self.sessions.remove(&session) {
+            Some(state) => state,
+            None => {
+                debug!(
+                    "[net-console][auth] unknown session {} while handling {:?}",
+                    session.session(),
+                    request.body
+                );
+                return Err(NineDoorError::UnknownSession(session));
+            }
+        };
         let result = match &request.body {
             RequestBody::Version { msize, version } => {
-                Self::handle_version(&mut state, *msize, version)
+                debug!(
+                    "[net-console][auth] session={} state={:?} recv Tversion msize={} version={}",
+                    session.session(),
+                    state.auth_state,
+                    msize,
+                    version
+                );
+                state.auth_state = AuthState::WaitingVersion;
+                let outcome = Self::handle_version(&mut state, *msize, version);
+                if outcome.is_ok() {
+                    state.auth_state = AuthState::VersionNegotiated;
+                } else {
+                    state.auth_state = AuthState::Failed;
+                }
+                outcome
             }
             RequestBody::Attach { fid, uname, .. } => {
-                self.handle_attach(&mut state, *fid, uname.as_str())
+                debug!(
+                    "[net-console][auth] session={} state={:?} recv Tattach fid={} uname={}",
+                    session.session(),
+                    state.auth_state,
+                    fid,
+                    uname
+                );
+                state.auth_state = AuthState::AttachRequested;
+                let outcome = self.handle_attach(&mut state, *fid, uname.as_str());
+                if outcome.is_ok() {
+                    state.auth_state = AuthState::Attached;
+                } else {
+                    state.auth_state = AuthState::Failed;
+                }
+                outcome
             }
             RequestBody::Walk {
                 fid,
                 newfid,
                 wnames,
             } => {
+                trace!(
+                    "[net-console][auth] session={} state={:?} recv Twalk fid={} newfid={} components={}",
+                    session.session(),
+                    state.auth_state,
+                    fid,
+                    newfid,
+                    wnames.len()
+                );
                 state.ensure_attached()?;
                 if let Err(reason) = state.pre_operation(self.clock.now()) {
                     Err(self.handle_budget_failure(session, &mut state, reason))
@@ -115,6 +185,13 @@ impl ServerCore {
                 }
             }
             RequestBody::Open { fid, mode } => {
+                trace!(
+                    "[net-console][auth] session={} state={:?} recv Topen fid={} mode={:?}",
+                    session.session(),
+                    state.auth_state,
+                    fid,
+                    mode
+                );
                 state.ensure_attached()?;
                 if let Err(reason) = state.pre_operation(self.clock.now()) {
                     Err(self.handle_budget_failure(session, &mut state, reason))
@@ -125,6 +202,14 @@ impl ServerCore {
                 }
             }
             RequestBody::Read { fid, offset, count } => {
+                trace!(
+                    "[net-console][auth] session={} state={:?} recv Tread fid={} offset={} count={}",
+                    session.session(),
+                    state.auth_state,
+                    fid,
+                    offset,
+                    count
+                );
                 state.ensure_attached()?;
                 if let Err(reason) = state.pre_operation(self.clock.now()) {
                     Err(self.handle_budget_failure(session, &mut state, reason))
@@ -135,6 +220,13 @@ impl ServerCore {
                 }
             }
             RequestBody::Write { fid, data, .. } => {
+                trace!(
+                    "[net-console][auth] session={} state={:?} recv Twrite fid={} payload_len={}",
+                    session.session(),
+                    state.auth_state,
+                    fid,
+                    data.len()
+                );
                 state.ensure_attached()?;
                 if let Err(reason) = state.pre_operation(self.clock.now()) {
                     Err(self.handle_budget_failure(session, &mut state, reason))
@@ -145,10 +237,25 @@ impl ServerCore {
                 }
             }
             RequestBody::Clunk { fid } => {
+                trace!(
+                    "[net-console][auth] session={} state={:?} recv Tclunk fid={}",
+                    session.session(),
+                    state.auth_state,
+                    fid
+                );
                 state.ensure_attached()?;
                 Self::handle_clunk(&mut state, *fid)
             }
         };
+        if let Err(ref err) = result {
+            state.auth_state = AuthState::Failed;
+            debug!(
+                "[net-console][auth] session={} state={:?} error handling request: {}",
+                session.session(),
+                state.auth_state,
+                err
+            );
+        }
         self.sessions.insert(session, state);
         result
     }
@@ -950,6 +1057,7 @@ struct SessionState {
     gpu_scope: Option<String>,
     budget: BudgetState,
     mounts: MountTable,
+    auth_state: AuthState,
 }
 
 impl SessionState {
@@ -963,6 +1071,7 @@ impl SessionState {
             gpu_scope: None,
             budget: BudgetState::new(BudgetSpec::unbounded(), now),
             mounts: MountTable::default(),
+            auth_state: AuthState::Start,
         }
     }
 
