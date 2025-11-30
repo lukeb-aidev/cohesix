@@ -13,7 +13,7 @@ secure9p-core       // Session + fid tables, AccessPolicy hooks
 secure9p-transport  // Optional adapters: InProc ring, Sel4Endpoint, (host-only) Tcp
 nine-door           // Filesystem providers, role enforcement, logging
 ```
-- `secure9p-transport::Tcp` is host-only and never packaged into the VM image.
+- `secure9p-transport::Tcp` is host-only and never packaged into the Cohesix instance image (including the QEMU development CPIO).
 - The TCP console attaches through this stack with the same role selection semantics and remains bound to a single namespace per session; PL011 continues to service the root console in parallel.
 
 ## 3. Mandatory Defences
@@ -57,5 +57,5 @@ pub trait AccessPolicy {
 
 ## 8. Future Enhancements
 - Opportunistic support for 9P lock extensions once namespace bind/mount stabilises.
-- Optional TLS termination in host tools prior to entering the VM transport adapter.
+- Optional TLS termination in host tools prior to entering the development VM transport adapter; the same boundary applies when the transport targets physical hardware.
 - Status (Build Plan ≤7c): root and TCP consoles run concurrently; Secure9P namespaces and role-aware mounts are live; upcoming milestones will extend worker-side bind/mount, flesh out worker/GPU namespace detail, and wire GPU lease paths from host bridge into `/gpu/<id>`.

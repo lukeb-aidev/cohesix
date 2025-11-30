@@ -7,7 +7,7 @@
 ## Overview
 Cohesix userland exposes two operator entry points:
 - **Root console** on the PL011 UART via QEMU `-serial mon:stdio`, showing the `cohesix>` prompt for on-box bring-up and bootinfo sanity checks.
-- **`cohsh` host CLI** (`coh>` prompt) running on the host, speaking to the VM over TCP (primary), or the mock/QEMU transports for development. `cohsh` never executes inside the VM.
+- **`cohsh` host CLI** (`coh>` prompt) running on the host, speaking to the Cohesix instance over TCP (QEMU for development, UEFI hardware in deployment) or the mock/QEMU transports for development. `cohsh` never executes inside the VM and follows the same pattern on physical hardware.
 
 Use the root console for low-level validation (bootinfo, capability layout, untyped counts) and quick liveness checks. Use `cohsh` for day-to-day operator workflows and NineDoor interactions.
 
@@ -94,6 +94,7 @@ Connection handling (TCP transport):
 `--script <file>` feeds newline-delimited commands; blank lines and lines starting with `#` are ignored. Errors abort the script and bubble up as a non-zero exit.【F:apps/cohsh/src/lib.rs†L594-L605】
 
 ## End-to-End Workflow: QEMU + `cohsh` over TCP
+This section covers the development harness for running Cohesix on QEMU; production deployments target physical ARM64 hardware booted via UEFI with equivalent console and `cohsh` semantics.
 ### Terminal 1 – build and boot under QEMU
 Run the build wrapper to compile components, stage host tools, and launch QEMU with PL011 serial plus a user-mode TCP forward to `127.0.0.1:<port>`:
 ```
@@ -106,7 +107,7 @@ SEL4_BUILD_DIR=$HOME/seL4/build ./scripts/cohesix-build-run.sh \
   --transport tcp
 ```
 The script builds `root-task` with the serial console and net features, compiles NineDoor and workers, copies host tools (`cohsh`, `gpu-bridge-host`) into `out/cohesix/host-tools/`, and assembles the CPIO payload.【F:scripts/cohesix-build-run.sh†L369-L454】【F:scripts/cohesix-build-run.sh†L402-L442】
-QEMU runs with `-serial mon:stdio` plus `-netdev user,id=net0,hostfwd=tcp:127.0.0.1:<port>-10.0.2.15:<port>` so the TCP console inside the VM is reachable from the host.【F:scripts/cohesix-build-run.sh†L521-L553】 The script prints the ready command for `cohsh` once QEMU is live.【F:scripts/cohesix-build-run.sh†L548-L553】
+QEMU runs with `-serial mon:stdio` plus `-netdev user,id=net0,hostfwd=tcp:127.0.0.1:<port>-10.0.2.15:<port>` so the TCP console inside the development VM is reachable from the host.【F:scripts/cohesix-build-run.sh†L521-L553】 The script prints the ready command for `cohsh` once QEMU is live.【F:scripts/cohesix-build-run.sh†L548-L553】 In deployment, the same console and `cohsh` flows apply to UEFI-booted ARM64 hardware without the VM wrapper.
 
 ### Terminal 2 – host `cohsh` session over TCP
 From `out/cohesix/host-tools/`:

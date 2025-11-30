@@ -6,6 +6,8 @@
 **Kernel:** Upstream seL4 (external build)
 **Userspace:** Pure Rust crates (`root-task`, `nine-door`, `worker-heart`, future `worker-gpu`, `gpu-bridge` host tool)
 
+Physical ARM64 hardware booted via UEFI is the planned deployment environment; early milestones stabilise against QEMU `aarch64/virt` as the reference development and CI profile while preserving semantics for the eventual hardware bring-up.
+
 The milestones below build cumulatively; do not advance until the specified checks pass and documentation is updated. Each step
 is grounded in the architectural intent outlined in `docs/ARCHITECTURE.md`, the repository conventions from `docs/REPO_LAYOUT.md`,
 and the interface contracts codified in `docs/INTERFACES.md`. Treat those documents as non-negotiable source material when
@@ -732,7 +734,7 @@ Provide CAS-backed update distribution via NineDoor with compiler-enforced integ
 
 **Why now (context):** To meet hardware deployment goals (Edge §3 retail hubs, Edge §8 defense ISR, Security §12 segmentation) we must boot on physical aarch64 hardware with attested manifests while preserving the lean `no_std` footprint.
 
-Note: No networking, 9P semantics, or console behaviours may diverge between VM and UEFI profiles except where explicitly marked as hardware-profile-specific in `ARCHITECTURE.md`. Any divergence must be documented and schema-gated.
+Note: No networking, 9P semantics, or console behaviours may diverge between VM and UEFI profiles except where explicitly marked as hardware-profile-specific in `ARCHITECTURE.md`. Any divergence must be documented and schema-gated. This milestone is the bridge from the QEMU reference profile used earlier in the plan to deployment on physical UEFI hardware, with VM behaviour expected to mirror the hardware target.
 
 **Goal**
 Deliver a UEFI boot path that loads the generated manifest, performs TPM-backed identity attestation, and mirrors VM behaviour.

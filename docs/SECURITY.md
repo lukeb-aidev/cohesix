@@ -1,15 +1,17 @@
 <!-- Author: Lukas Bower -->
 # Cohesix Security Addendum — Networking & Console
 
+The threat model applies to Cohesix running on ARM64 hardware booted via UEFI; QEMU `aarch64/virt` serves as the development/CI harness and is expected to mirror the same attack surface rather than being the deployment end-state.
+
 ## 1. Deterministic Memory Envelope
 - `root-task::net::NetStack` provisions bounded `heapless::spsc::Queue` buffers sized for 16 frames × 1536 bytes on both RX and
   TX paths (≈49 KiB total). The queues are allocated once at boot via `Box::leak` to avoid dynamic growth and are shared across
   smoltcp, the virtio descriptor validator, and diagnostics handles.
 - A monotonic `NetworkClock` backed by `portable_atomic::AtomicU64` bounds timestamp arithmetic while avoiding wrap for the
-  lifetime of the VM. Pollers advance the clock using explicit millisecond timestamps supplied by the event pump so the heapless
+  lifetime of the Cohesix instance. Pollers advance the clock using explicit millisecond timestamps supplied by the event pump so the heapless
   queues never rely on wall-clock drift.
 - smoltcp is compiled without default features; only the IPv4/TCP stack is enabled. Random seeds and MAC addresses are
-  deterministic to ensure reproducible boots inside QEMU.
+  deterministic to ensure reproducible boots inside QEMU and when mirrored on hardware.
 - Console buffers (`heapless::String`) cap line length at 128 bytes and reject control characters beyond backspace/delete to
   prevent uncontrolled allocations. The serial façade uses `heapless::spsc::Queue` staging buffers sized at 256 bytes for RX and
   TX, and exposes atomic back-pressure counters so `/proc/boot` can surface saturation data without dynamic allocation.
