@@ -102,11 +102,11 @@ SEL4_BUILD_DIR=$HOME/seL4/build ./scripts/cohesix-build-run.sh \
   --sel4-build "$HOME/seL4/build" \
   --out-dir out/cohesix \
   --profile release \
-  --root-task-features kernel,bootstrap-trace,serial-console,net \
+  --root-task-features kernel,bootstrap-trace,serial-console,net,net-console \
   --cargo-target aarch64-unknown-none \
   --transport tcp
 ```
-The script builds `root-task` with the serial console and net features, compiles NineDoor and workers, copies host tools (`cohsh`, `gpu-bridge-host`) into `out/cohesix/host-tools/`, and assembles the CPIO payload.【F:scripts/cohesix-build-run.sh†L369-L454】【F:scripts/cohesix-build-run.sh†L402-L442】
+The script builds `root-task` with the serial and TCP console features, compiles NineDoor and workers, copies host tools (`cohsh`, `gpu-bridge-host`) into `out/cohesix/host-tools/`, and assembles the CPIO payload.【F:scripts/cohesix-build-run.sh†L369-L454】【F:scripts/cohesix-build-run.sh†L402-L442】
 QEMU runs with `-serial mon:stdio` plus `-netdev user,id=net0,hostfwd=tcp:127.0.0.1:<port>-10.0.2.15:<port>` so the TCP console inside the development VM is reachable from the host.【F:scripts/cohesix-build-run.sh†L521-L553】 The script prints the ready command for `cohsh` once QEMU is live.【F:scripts/cohesix-build-run.sh†L548-L553】 In deployment, the same console and `cohsh` flows apply to UEFI-booted ARM64 hardware without the VM wrapper.
 
 ### Terminal 2 – host `cohsh` session over TCP
