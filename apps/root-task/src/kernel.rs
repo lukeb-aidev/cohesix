@@ -1497,18 +1497,14 @@ fn bootstrap<P: Platform>(
             match NetStack::new(&mut hal) {
                 Ok(stack) => {
                     log::info!("[boot] net-console: virtio-net initialised");
-                    log::info!("[net-console] init: success; TCP console wired (non-blocking)");
-                    log::warn!(
-                        "[net-console] TCP console worker not started; serial console remains primary"
+                    log::info!(
+                        "[net-console] init: success; tcp console will be available on port {CONSOLE_TCP_PORT}"
                     );
                     Some(stack)
                 }
                 Err(err) => {
                     log::error!(
-                        "[boot] net-console: virtio-net init failed ({err}); continuing without TCP console"
-                    );
-                    log::error!(
-                        "[net-console] init failed: {err}; TCP console disabled for this boot"
+                        "[boot] net-console: init failed ({err:?}); continuing WITHOUT TCP console"
                     );
                     None
                 }

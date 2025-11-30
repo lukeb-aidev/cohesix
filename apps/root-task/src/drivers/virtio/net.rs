@@ -19,7 +19,7 @@ use crate::sel4::{DeviceFrame, RamFrame};
 
 const VIRTIO_MMIO_BASE: usize = 0x0a00_0000;
 const VIRTIO_MMIO_STRIDE: usize = 0x200;
-const VIRTIO_MMIO_SLOTS: usize = 16;
+const VIRTIO_MMIO_SLOTS: usize = 8;
 
 const VIRTIO_MMIO_MAGIC: u32 = 0x7472_6976;
 const VIRTIO_MMIO_VERSION_LEGACY: u32 = 1;
@@ -458,11 +458,22 @@ impl VirtioRegs {
                 vendor_id = vendor_id,
                 version = version
             );
-            if magic == VIRTIO_MMIO_MAGIC
-                && version == VIRTIO_MMIO_VERSION_LEGACY
-                && device_id == VIRTIO_DEVICE_ID_NET
-                && vendor_id != 0
-            {
+            let header_valid = magic == VIRTIO_MMIO_MAGIC && version == VIRTIO_MMIO_VERSION_LEGACY;
+            if header_valid && device_id == 0 {
+                warn!(
+                    "[net-console] slot={} has virtio header but device_id=0 (no usable device)",
+                    slot
+                );
+                continue;
+            }
+            if header_valid && device_id != VIRTIO_DEVICE_ID_NET {
+                warn!(
+                    "[net-console] slot={} hosts non-net virtio device (id=0x{device_id:04x}); skipping",
+                    slot
+                );
+                continue;
+            }
+            if header_valid && device_id == VIRTIO_DEVICE_ID_NET && vendor_id != 0 {
                 info!(
                     "[net-console] virtio-net found at slot={} mmio=0x{base:08x}",
                     slot,
