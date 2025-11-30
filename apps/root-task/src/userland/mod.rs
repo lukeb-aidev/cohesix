@@ -37,87 +37,58 @@ type NetStackHandle = NetStack;
 #[cfg(not(feature = "net-console"))]
 type NetStackHandle = ();
 
-/// Authoritative entrypoint for userland bring-up and runtime loops.
+/// Authoritative entrypoint for userland bring-up and runtime loops. Full boots
+/// must always flow through this handoff so the serial root console comes up;
+/// bootstrap-minimal remains a specialised debug mode only.
 pub fn main(ctx: BootContext) -> ! {
+    let BootContext {
+        features,
+        ep_slot,
+        uart_slot,
+        ..
+    } = ctx;
+
     log::info!(
         target: "userland",
-        "[userland] entering userland main with BootContext: {:?}",
-        ctx.features
-    );
-    log::info!(
-        target: "event",
-        "[event] starting event pump (serial-console={}, net-console={})",
-        ctx.features.serial_console,
-        ctx.features.net_console
+        "[userland] main: entered (serial_console={}, net={}, net_console={})",
+        features.serial_console,
+        features.net,
+        features.net_console
     );
 
-    let serial = ctx
-        .serial
-        .borrow_mut()
-        .take()
-        .expect("serial port unavailable");
-    let timer = ctx
-        .timer
-        .borrow_mut()
-        .take()
-        .expect("kernel timer unavailable");
-    let ipc = ctx
-        .ipc
-        .borrow_mut()
-        .take()
-        .expect("kernel IPC dispatcher unavailable");
-    let tickets = ctx
-        .tickets
-        .borrow_mut()
-        .take()
-        .expect("ticket table unavailable");
-
-    let mut audit = LoggerAudit;
-    let mut bootstrap_ipc = kernel_bootstrap_handler();
-    let mut net_stack_handle = take_net_stack(&ctx);
-
-    let mut pump = EventPump::new(serial, timer, ipc, tickets, &mut audit);
-
-    #[cfg(all(feature = "net-console", feature = "kernel"))]
-    match (
-        ctx.features.net,
-        ctx.features.net_console,
-        net_stack_handle.as_ref(),
-    ) {
-        (true, true, Some(stack)) => {
-            let addr = stack.ipv4_address();
-            log::info!(
-                target: "net-console",
-                "[net-console] listening on {}:{}",
-                addr,
-                crate::net::CONSOLE_TCP_PORT
-            );
-        }
-        (true, true, None) => {
-            log::info!(
-                target: "net-console",
-                "[net-console] net-console requested but network stack unavailable; skipping"
-            );
-        }
-        (net_enabled, net_console_enabled, _) => {
-            log::info!(
-                target: "net-console",
-                "[net-console] net-console skipped (net={}, net-console={})",
-                net_enabled,
-                net_console_enabled,
-            );
+    #[cfg(all(feature = "serial-console", feature = "kernel"))]
+    {
+        log::info!(
+            target: "userland",
+            "[userland] main: starting PL011 root console (network paths disabled)"
+        );
+        match (uart_slot, NonNull::new(PL011_VADDR as *mut u8)) {
+            (Some(slot), Some(base)) => {
+                let driver = Pl011::new(base);
+                let console = SerialConsole::new(driver);
+                let mut console = CohesixConsole::with_console(console, ep_slot, slot);
+                console.run();
+            }
+            (None, _) => {
+                log::error!(
+                    target: "userland",
+                    "[userland] main: uart_slot unavailable; cannot start root console"
+                );
+            }
+            (_, None) => {
+                log::error!(
+                    target: "userland",
+                    "[userland] main: PL011 base address missing; cannot start root console"
+                );
+            }
         }
     }
 
-    pump = attach_kernel_console(pump, &ctx, bootstrap_ipc.as_mut());
-    pump = attach_ninedoor_bridge(pump, &ctx);
-    pump = attach_network(pump, net_stack_handle.as_mut());
-
-    announce_console_ready(&mut pump);
-    log::info!(target: "event", "[event] root console online; emitting banner and prompt");
-    start_kernel_cli(&mut pump);
-
-    pump.run();
+    log::error!("[userland] BUG: userland::main returned unexpectedly");
+    log::error!("[userland] parking thread after unexpected console return");
+    loop {
+        unsafe { sel4_sys::seL4_Yield() };
+    }
 }
 
 /// Start the userland console or Cohesix shell over the serial transport.
