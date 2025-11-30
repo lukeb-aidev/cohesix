@@ -16,15 +16,17 @@ The `root-task` crate embodies the responsibilities described in
 `host` feature) and kernel-mode execution on upstream seL4. Host builds
 continue to use `std` so integration tests and mocks run on macOS, while kernel builds
 are activated via the `kernel` feature and compile with `no_std` and
-`sel4_runtime` providing the `_start` shim. Use the following commands
-when switching modes:
+`sel4_runtime` providing the `_start` shim. The crate ships with an empty
+`default = []` feature set, so kernel builds must list every required
+capability explicitly with `--no-default-features`. Use the following
+commands when switching modes:
 
 ```
 # Host defaults for unit and integration tests
 cargo test -p root-task
 
-# Kernel-mode release build for QEMU / aarch64-unknown-none
-cargo build -p root-task --no-default-features --features kernel --target aarch64-unknown-none --release
+# Kernel-mode release build for QEMU / aarch64-unknown-none (serial + TCP console)
+cargo build -p root-task --no-default-features --features kernel,bootstrap-trace,serial-console,net,net-console --target aarch64-unknown-none --release
 
 # Guard to ensure sel4_start is present and milestone modules remain
 scripts/check-root-task.sh <path-to-rootserver-elf>
@@ -35,6 +37,38 @@ kernel build injects the seL4 linker script without disturbing host
 settings. See `apps/root-task/src/main.rs` for the dual entry path and
 `apps/root-task/src/platform.rs` for the platform abstraction that
 bridges seL4 debug I/O and the host-mode console harness.
+
+### Feature flags and dev boot profiles
+
+All feature flags live in `Cargo.toml` with no defaults enabled. The
+production bring-up path expects the following combinations when using
+`--no-default-features`:
+
+- **Serial-only dev boot (PL011 console, no TCP)**
+
+  ```
+  cargo build \
+    --target aarch64-unknown-none \
+    --release \
+    -p root-task \
+    --no-default-features \
+    --features kernel,bootstrap-trace,serial-console
+  ```
+
+- **Serial + net-console dev boot (PL011 + TCP console)**
+
+  ```
+  cargo build \
+    --target aarch64-unknown-none \
+    --release \
+    -p root-task \
+    --no-default-features \
+    --features kernel,bootstrap-trace,serial-console,net,net-console
+  ```
+
+The `net-console` feature already pulls in `net` plus TCP console glue,
+so omitting it disables the virtio network stack and TCP listener even if
+`net` is listed independently.
 
 ## Event Pump Overview
 
@@ -170,10 +204,11 @@ stay aligned with the seL4 entry path.
 - **Tickets** — The embedded `TicketTable` registers a queen ticket plus
   worker heartbeat/GPU placeholders, allowing authenticated attaches for
   all three roles during QEMU sessions. 【F:apps/root-task/src/kernel.rs†L333-L339】
-- **Networking** — When built with the default `net` feature the event
-  pump initialises the virtio-net backed `NetStack`, binds to the static
-  `10.0.0.2/24` address, and listens for TCP console input on port
-  `31337`. User-space clients reach the listener via
+- **Networking** — When built with `--no-default-features` and
+  `--features kernel,bootstrap-trace,serial-console,net,net-console` the
+  event pump initialises the virtio-net backed `NetStack`, binds to the
+  static `10.0.0.2/24` address, and listens for TCP console input on
+  port `31337`. User-space clients reach the listener via
   `scripts/qemu-run.sh --tcp-port <host-port>`, which wires QEMU user
   networking to the root task. 【F:apps/root-task/src/kernel.rs†L308-L331】【F:apps/root-task/src/net/virtio.rs†L119-L214】【F:scripts/qemu-run.sh†L127-L188】
 - **Command loop** — The authenticated parser accepts `help`, `attach`,

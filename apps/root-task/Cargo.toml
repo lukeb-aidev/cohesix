@@ -8,6 +8,10 @@ build = "build.rs"
 
 [features]
 default = []   # no debug features by default
+# Feature combinations validated for developer builds:
+# - Serial-only dev boot: kernel + bootstrap-trace + serial-console
+# - Serial + TCP console: kernel + bootstrap-trace + serial-console + net + net-console
+# Defaults are empty, so always pass `--no-default-features` and list the desired features explicitly.
 cap-probes = []   # gate experimental cap ops (tests/bench only)
 net = []
 canonical_cspace = ["kernel"]
