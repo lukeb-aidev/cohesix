@@ -1505,7 +1505,10 @@ fn bootstrap<P: Platform>(
             match NetStack::new(&mut hal) {
                 Ok(stack) => {
                     log::info!("[boot] net-console: virtio-net initialised");
-                    log::info!("[net-console] init: success; TCP console online");
+                    log::info!("[net-console] init: success; TCP console wired (non-blocking)");
+                    log::warn!(
+                        "[net-console] TCP console worker not started; serial console remains primary"
+                    );
                     Some(stack)
                 }
                 Err(err) => {

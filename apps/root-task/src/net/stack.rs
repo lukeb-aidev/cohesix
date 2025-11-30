@@ -4,10 +4,10 @@
 #![allow(unsafe_code)]
 #![cfg(feature = "kernel")]
 
-use core::fmt::Write as FmtWrite;
+use core::fmt::{self, Write as FmtWrite};
 use heapless::{String as HeaplessString, Vec as HeaplessVec};
 use log::{debug, info, trace, warn};
-use portable_atomic::AtomicBool;
+use portable_atomic::{AtomicBool, Ordering};
 use smoltcp::iface::{
     Config as IfaceConfig, Interface, PollResult, SocketHandle, SocketSet, SocketStorage,
 };
@@ -36,6 +36,61 @@ const RANDOM_SEED: u64 = 0x5a5a_5a5a_1234_5678;
 const DEFAULT_IP: (u8, u8, u8, u8) = (10, 0, 2, 15);
 const DEFAULT_GW: (u8, u8, u8, u8) = (10, 0, 2, 2);
 const DEFAULT_PREFIX: u8 = 24;
+
+#[derive(Debug)]
+pub enum NetStackError {
+    Driver(DriverError),
+    SocketStorageInUse,
+    TcpRxStorageInUse,
+    TcpTxStorageInUse,
+}
+
+impl fmt::Display for NetStackError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Driver(err) => write!(f, "{err}"),
+            Self::SocketStorageInUse => f.write_str("socket storage already in use"),
+            Self::TcpRxStorageInUse => f.write_str("TCP RX storage already in use"),
+            Self::TcpTxStorageInUse => f.write_str("TCP TX storage already in use"),
+        }
+    }
+}
+
+impl From<DriverError> for NetStackError {
+    fn from(value: DriverError) -> Self {
+        Self::Driver(value)
+    }
+}
+
+struct StorageGuard<'a> {
+    flag: &'a AtomicBool,
+    release_on_drop: bool,
+}
+
+impl<'a> StorageGuard<'a> {
+    fn acquire(flag: &'a AtomicBool, busy_error: NetStackError) -> Result<Self, NetStackError> {
+        if flag.swap(true, Ordering::AcqRel) {
+            Err(busy_error)
+        } else {
+            Ok(Self {
+                flag,
+                release_on_drop: true,
+            })
+        }
+    }
+
+    fn disarm(mut self) {
+        self.release_on_drop = false;
+    }
+}
+
+impl Drop for StorageGuard<'_> {
+    fn drop(&mut self) {
+        if self.release_on_drop {
+            self.flag.store(false, Ordering::Release);
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AuthState {
@@ -121,7 +176,7 @@ pub struct NetStack {
 
 impl NetStack {
     /// Constructs a network stack bound to the provided [`KernelEnv`].
-    pub fn new<H>(hal: &mut H) -> Result<Self, DriverError>
+    pub fn new<H>(hal: &mut H) -> Result<Self, NetStackError>
     where
         H: Hardware<Error = HalError>,
     {
@@ -136,7 +191,7 @@ impl NetStack {
         ip: Ipv4Address,
         prefix: u8,
         gateway: Option<Ipv4Address>,
-    ) -> Result<Self, DriverError> {
+    ) -> Result<Self, NetStackError> {
         info!(
             "[net-console] init: bringing up virtio-net with ip={ip}/{prefix} gateway={:?}",
             gateway
@@ -145,6 +200,13 @@ impl NetStack {
         let mut device = VirtioNet::new(hal)?;
         let mac = device.mac();
         info!("[net-console] virtio-net device online: mac={mac}");
+
+        let socket_guard =
+            StorageGuard::acquire(&SOCKET_STORAGE_IN_USE, NetStackError::SocketStorageInUse)?;
+        let rx_guard =
+            StorageGuard::acquire(&TCP_RX_STORAGE_IN_USE, NetStackError::TcpRxStorageInUse)?;
+        let tx_guard =
+            StorageGuard::acquire(&TCP_TX_STORAGE_IN_USE, NetStackError::TcpTxStorageInUse)?;
 
         let clock = NetworkClock::new();
         let mut config = IfaceConfig::new(HardwareAddress::Ethernet(mac));
@@ -162,11 +224,6 @@ impl NetStack {
             let _ = interface.routes_mut().add_default_ipv4_route(gw);
             info!("[net-console] default gateway set to {gw}");
         }
-
-        assert!(
-            !SOCKET_STORAGE_IN_USE.swap(true, portable_atomic::Ordering::AcqRel),
-            "virtio-net socket storage already initialised"
-        );
         let sockets = SocketSet::new(unsafe { &mut SOCKET_STORAGE[..] });
 
         let mut stack = Self {
@@ -190,19 +247,18 @@ impl NetStack {
             events: HeaplessVec::new(),
         };
         stack.initialise_socket();
+        socket_guard.disarm();
+        rx_guard.disarm();
+        tx_guard.disarm();
         info!("[net-console] init: TCP listener socket prepared");
+        info!("[net-console] init: success; tcp console wired (non-blocking)");
         Ok(stack)
     }
 
     fn initialise_socket(&mut self) {
-        assert!(
-            !TCP_RX_STORAGE_IN_USE.swap(true, portable_atomic::Ordering::AcqRel),
-            "virtio-net TCP RX storage already initialised"
-        );
-        assert!(
-            !TCP_TX_STORAGE_IN_USE.swap(true, portable_atomic::Ordering::AcqRel),
-            "virtio-net TCP TX storage already initialised"
-        );
+        debug_assert!(SOCKET_STORAGE_IN_USE.load(Ordering::Acquire));
+        debug_assert!(TCP_RX_STORAGE_IN_USE.load(Ordering::Acquire));
+        debug_assert!(TCP_TX_STORAGE_IN_USE.load(Ordering::Acquire));
         let rx_buffer = unsafe { TcpSocketBuffer::new(&mut TCP_RX_STORAGE[..]) };
         let tx_buffer = unsafe { TcpSocketBuffer::new(&mut TCP_TX_STORAGE[..]) };
         let tcp_socket = TcpSocket::new(rx_buffer, tx_buffer);
