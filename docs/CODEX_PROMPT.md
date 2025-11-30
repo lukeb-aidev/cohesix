@@ -18,6 +18,24 @@ cargo build \
   --features kernel,bootstrap-trace,serial-console,net,net-console
 ```
 
+The `apps/root-task` defaults are empty (`default = []`). Use the
+umbrella `dev-virt` feature when you want the common QEMU virt bring-up
+without enumerating each flag:
+
+```
+cargo build \
+  --target aarch64-unknown-none \
+  --release \
+  -p root-task \
+  --no-default-features \
+  --features dev-virt
+```
+
+Features not automatically enabled by either command (opt in explicitly
+if you need them): cap-probes, canonical_cspace, bootstrap-minimal,
+bootstrap-debug, untyped-debug, trace-heavy-init, strict-bootstrap,
+net-irq, sel4-debug, debug-input, ffi_shim.
+
 ## Tasks for the assistant
 
 1. Inspect `apps/root-task/Cargo.toml` and the workspace `Cargo.toml` to

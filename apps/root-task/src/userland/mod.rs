@@ -79,11 +79,15 @@ pub fn main(ctx: BootContext) -> ! {
 
     log::info!(
         target: "userland",
-        "[userland] event-pump: registering serial root console"
+        "[userland] event-pump: building console runtime (serial + timer + ipc)"
     );
     // The event pump is the single source of truth for console I/O so the
     // PL011 UART and TCP transports both feed the same CLI engine.
     let mut pump = EventPump::new(serial, timer, ipc, tickets, &mut audit);
+    log::info!(
+        target: "userland",
+        "[userland] event-pump: registering serial root console"
+    );
     pump = attach_kernel_console(pump, &ctx, bootstrap_ipc.as_mut());
     pump = attach_ninedoor_bridge(pump, &ctx);
 
@@ -91,6 +95,13 @@ pub fn main(ctx: BootContext) -> ! {
     {
         // The TCP root console shares the serial CLI and follows cohsh's
         // transport handshake so clients see identical prompts and banners.
+        log::info!(
+            target: "net-console",
+            "[net-console] starting TCP console listener on port {} (net={}, net_console={})",
+            crate::net::CONSOLE_TCP_PORT,
+            ctx.features.net,
+            ctx.features.net_console
+        );
         pump = attach_network(pump, net_stack.as_mut());
         if pump.net_console_enabled() {
             log::info!(
@@ -110,6 +121,7 @@ pub fn main(ctx: BootContext) -> ! {
                     "[userland] event-pump: mapping PL011 for shared console I/O"
                 );
                 pump.announce_console_ready();
+                log::info!(target: "console", "[console] starting root CLI");
                 pump.start_cli();
                 pump.run();
             }
