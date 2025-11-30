@@ -125,6 +125,7 @@ impl NetStack {
     where
         H: Hardware<Error = HalError>,
     {
+        info!("[net-console] init: constructing smoltcp stack");
         let ip = Ipv4Address::new(DEFAULT_IP.0, DEFAULT_IP.1, DEFAULT_IP.2, DEFAULT_IP.3);
         let gateway = Ipv4Address::new(DEFAULT_GW.0, DEFAULT_GW.1, DEFAULT_GW.2, DEFAULT_GW.3);
         Self::with_ipv4(hal, ip, DEFAULT_PREFIX, Some(gateway))
@@ -136,14 +137,21 @@ impl NetStack {
         prefix: u8,
         gateway: Option<Ipv4Address>,
     ) -> Result<Self, DriverError> {
+        info!(
+            "[net-console] init: bringing up virtio-net with ip={ip}/{prefix} gateway={:?}",
+            gateway
+        );
+        info!("[net-console] init: creating VirtioNet device");
         let mut device = VirtioNet::new(hal)?;
         let mac = device.mac();
+        info!("[net-console] virtio-net device online: mac={mac}");
 
         let clock = NetworkClock::new();
         let mut config = IfaceConfig::new(HardwareAddress::Ethernet(mac));
         config.random_seed = RANDOM_SEED;
 
         let mut interface = Interface::new(config, &mut device, clock.now());
+        info!("[net-console] smoltcp interface created; assigning ip={ip}/{prefix}");
         interface.update_ip_addrs(|addrs| {
             let cidr = IpCidr::new(IpAddress::from(ip), prefix);
             if addrs.push(cidr).is_err() {
@@ -152,6 +160,7 @@ impl NetStack {
         });
         if let Some(gw) = gateway {
             let _ = interface.routes_mut().add_default_ipv4_route(gw);
+            info!("[net-console] default gateway set to {gw}");
         }
 
         assert!(
@@ -181,6 +190,7 @@ impl NetStack {
             events: HeaplessVec::new(),
         };
         stack.initialise_socket();
+        info!("[net-console] init: TCP listener socket prepared");
         Ok(stack)
     }
 

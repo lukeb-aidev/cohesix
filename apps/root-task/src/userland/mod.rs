@@ -125,10 +125,12 @@ pub fn main(ctx: BootContext) -> ! {
                     target: "userland",
                     "[userland] event-pump: mapping PL011 for shared console I/O"
                 );
-                log::info!(target: "boot", "[boot] before starting root consoles");
+                log::info!(target: "boot", "[boot] before starting root shell");
                 pump.announce_console_ready();
+                log::info!(target: "boot", "[boot] root shell starting");
                 log::info!(target: "console", "[console] starting root CLI");
                 pump.start_cli();
+                log::info!(target: "boot", "[boot] root shell started; entering event loop");
                 pump.run();
             }
             _ => {
