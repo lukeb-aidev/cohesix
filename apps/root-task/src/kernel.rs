@@ -484,6 +484,7 @@ struct BootStateGuard {
 static BOOT_STATE: AtomicU8 = AtomicU8::new(BootState::Cold as u8);
 
 /// Boot-time feature flags enabling optional subsystems.
+#[derive(Debug, Clone, Copy)]
 pub struct BootFeatures {
     /// Whether the PL011-backed serial console is enabled.
     pub serial_console: bool,
@@ -547,13 +548,24 @@ impl Drop for BootStateGuard {
 }
 
 /// Root task entry point invoked by seL4 after kernel initialisation.
+///
+/// This is the only supported entry for the kernel build; prior refactors
+/// accidentally bypassed userland by logging before the bootstrap logger was
+/// installed and by leaving alternative stubs around. Keeping the hand-off
+/// here ensures we always enter the event-pump userland path or loudly fall
+/// back to the PL011 console when bootstrap fails.
 pub fn start<P: Platform>(bootinfo: &'static BootInfo, platform: &P) -> ! {
+    boot_log::force_uart_line("[kernel:entry] root-task entry reached");
     log::info!("[kernel:entry] root-task entry reached");
     log::info!(target: "kernel", "[kernel] boot entrypoint: starting bootstrap");
     let ctx = match bootstrap(platform, bootinfo) {
         Ok(ctx) => ctx,
         Err(err) => {
-            log::error!("[boot] failed to enter bootstrap runtime: {err}");
+            log::error!("[kernel:entry] bootstrap failed: {err}");
+            boot_log::force_uart_line("[kernel:entry] bootstrap failed; entering fallback console");
+            log::error!(
+                "[kernel:entry] falling back to PL011-only console due to bootstrap error: {err}"
+            );
             crate::userland::start_console_or_cohsh(platform);
         }
     };
@@ -564,6 +576,7 @@ pub fn start<P: Platform>(bootinfo: &'static BootInfo, platform: &P) -> ! {
         ctx.features.net,
         ctx.features.net_console,
     );
+    boot_log::force_uart_line("[kernel:entry] bootstrap complete; entering userland");
 
     crate::userland::main(ctx);
 
