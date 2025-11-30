@@ -93,6 +93,11 @@ pub fn main(ctx: BootContext) -> ! {
 
     #[cfg(feature = "net-console")]
     {
+        log::info!(
+            target: "userland",
+            "[userland] event-pump: attaching network (stack_available={})",
+            net_stack.is_some()
+        );
         // The TCP root console shares the serial CLI and follows cohsh's
         // transport handshake so clients see identical prompts and banners.
         log::info!(
@@ -120,6 +125,7 @@ pub fn main(ctx: BootContext) -> ! {
                     target: "userland",
                     "[userland] event-pump: mapping PL011 for shared console I/O"
                 );
+                log::info!(target: "boot", "[boot] before starting root consoles");
                 pump.announce_console_ready();
                 log::info!(target: "console", "[console] starting root CLI");
                 pump.start_cli();
