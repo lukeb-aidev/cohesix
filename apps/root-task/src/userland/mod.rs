@@ -1,5 +1,4 @@
 // Author: Lukas Bower
-
 //! Minimal userland entrypoints exposed by the root task.
 #![allow(unsafe_code)]
 
@@ -41,54 +40,90 @@ type NetStackHandle = ();
 /// must always flow through this handoff so the serial root console comes up;
 /// bootstrap-minimal remains a specialised debug mode only.
 pub fn main(ctx: BootContext) -> ! {
-    let BootContext {
-        features,
-        ep_slot,
-        uart_slot,
-        ..
-    } = ctx;
-
     log::info!(
         target: "userland",
         "[userland] main: entered (serial_console={}, net={}, net_console={})",
-        features.serial_console,
-        features.net,
-        features.net_console
+        ctx.features.serial_console,
+        ctx.features.net,
+        ctx.features.net_console
     );
 
     #[cfg(all(feature = "serial-console", feature = "kernel"))]
+    let uart_base = NonNull::new(PL011_VADDR as *mut u8);
+
+    let mut audit = LoggerAudit;
+    let mut serial = ctx
+        .serial
+        .borrow_mut()
+        .take()
+        .expect("serial driver missing from BootContext");
+    let mut timer = ctx
+        .timer
+        .borrow_mut()
+        .take()
+        .expect("timer missing from BootContext");
+    let mut ipc = ctx
+        .ipc
+        .borrow_mut()
+        .take()
+        .expect("ipc dispatcher missing from BootContext");
+    let mut tickets = ctx
+        .tickets
+        .borrow_mut()
+        .take()
+        .expect("ticket table missing from BootContext");
+    let mut bootstrap_ipc = kernel_bootstrap_handler();
+
+    #[cfg(feature = "net-console")]
+    let mut net_stack = take_net_stack(&ctx);
+
+    log::info!(
+        target: "userland",
+        "[userland] event-pump: registering serial root console"
+    );
+    // The event pump is the single source of truth for console I/O so the
+    // PL011 UART and TCP transports both feed the same CLI engine.
+    let mut pump = EventPump::new(serial, timer, ipc, tickets, &mut audit);
+    pump = attach_kernel_console(pump, &ctx, bootstrap_ipc.as_mut());
+    pump = attach_ninedoor_bridge(pump, &ctx);
+
+    #[cfg(feature = "net-console")]
     {
-        log::info!(
-            target: "userland",
-            "[userland] main: starting PL011 root console (network paths disabled)"
-        );
-        match (uart_slot, NonNull::new(PL011_VADDR as *mut u8)) {
-            (Some(slot), Some(base)) => {
-                let driver = Pl011::new(base);
-                let console = SerialConsole::new(driver);
-                let mut console = CohesixConsole::with_console(console, ep_slot, slot);
-                console.run();
-            }
-            (None, _) => {
-                log::error!(
+        // The TCP root console shares the serial CLI and follows cohsh's
+        // transport handshake so clients see identical prompts and banners.
+        pump = attach_network(pump, net_stack.as_mut());
+        if pump.net_console_enabled() {
+            log::info!(
+                target: "net-console",
+                "[net-console] listening on 0.0.0.0:{}",
+                crate::net::CONSOLE_TCP_PORT
+            );
+        }
+    }
+
+    #[cfg(all(feature = "serial-console", feature = "kernel"))]
+    {
+        match (ctx.uart_slot, uart_base) {
+            (Some(_uart_slot), Some(_)) => {
+                log::info!(
                     target: "userland",
-                    "[userland] main: uart_slot unavailable; cannot start root console"
+                    "[userland] event-pump: mapping PL011 for shared console I/O"
                 );
+                pump.announce_console_ready();
+                pump.start_cli();
+                pump.run();
             }
-            (_, None) => {
+            _ => {
                 log::error!(
                     target: "userland",
-                    "[userland] main: PL011 base address missing; cannot start root console"
+                    "[userland] PL011 mapping unavailable; starting pump without UART metadata"
                 );
             }
         }
     }
 
-    log::error!("[userland] BUG: userland::main returned unexpectedly");
-    log::error!("[userland] parking thread after unexpected console return");
-    loop {
-        unsafe { sel4_sys::seL4_Yield() };
-    }
+    #[allow(clippy::diverging_sub_expression)]
+    pump.run();
 }
 
 /// Start the userland console or Cohesix shell over the serial transport.
