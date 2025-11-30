@@ -322,6 +322,12 @@ impl NetStack {
                         Ok(count) => {
                             self.conn_bytes_read =
                                 self.conn_bytes_read.saturating_add(count as u64);
+                            info!(
+                                "[net-console] conn {}: received {} bytes (state={:?})",
+                                self.active_client_id.unwrap_or(0),
+                                count,
+                                self.auth_state
+                            );
                             trace!(
                                 "[net-auth][conn={}] read {} bytes in state {:?}",
                                 self.active_client_id.unwrap_or(0),
@@ -597,6 +603,14 @@ impl NetStack {
             match socket.send_slice(payload.as_slice()) {
                 Ok(sent) if sent == payload.len() => {
                     *conn_bytes_written = conn_bytes_written.saturating_add(sent as u64);
+                    if pre_auth {
+                        info!(
+                            "[net-console] conn {}: sent pre-auth line '{}' ({} bytes)",
+                            conn_id.unwrap_or(0),
+                            core::str::from_utf8(line.as_bytes()).unwrap_or("<invalid>"),
+                            sent
+                        );
+                    }
                     if server.is_authenticated() {
                         server.mark_activity(now_ms);
                     }

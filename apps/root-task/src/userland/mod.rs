@@ -41,10 +41,14 @@ type NetStackHandle = ();
 pub fn main(ctx: BootContext) -> ! {
     log::info!(
         target: "userland",
-        "[userland] starting runtime: serial_console={}, net={}, net-console={}",
+        "[userland] entering userland main with BootContext: {:?}",
+        ctx.features
+    );
+    log::info!(
+        target: "event",
+        "[event] starting event pump (serial-console={}, net-console={})",
         ctx.features.serial_console,
-        ctx.features.net,
-        ctx.features.net_console,
+        ctx.features.net_console
     );
 
     let serial = ctx
@@ -110,6 +114,7 @@ pub fn main(ctx: BootContext) -> ! {
     pump = attach_network(pump, net_stack_handle.as_mut());
 
     announce_console_ready(&mut pump);
+    log::info!(target: "event", "[event] root console online; emitting banner and prompt");
     start_kernel_cli(&mut pump);
 
     pump.run();
