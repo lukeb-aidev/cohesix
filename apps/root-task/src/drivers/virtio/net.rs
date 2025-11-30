@@ -7,6 +7,7 @@ use core::fmt;
 use core::ptr::{read_volatile, write_volatile, NonNull};
 
 use heapless::Vec as HeaplessVec;
+use log::{info, warn};
 use sel4_sys::{seL4_Error, seL4_NotEnoughMemory};
 use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::time::Instant;
@@ -93,11 +94,19 @@ impl VirtioNet {
     where
         H: Hardware<Error = HalError>,
     {
+        info!("[net-console] init: probing virtio-mmio bus");
         let mut regs = VirtioRegs::probe(hal)?;
+        info!(
+            "[net-console] virtio-mmio device located: base=0x{base:08x}",
+            base = regs.base().as_ptr() as usize
+        );
+
+        info!("[net-console] resetting virtio-net status register");
         regs.reset_status();
         regs.set_status(STATUS_ACKNOWLEDGE);
         regs.set_status(STATUS_ACKNOWLEDGE | STATUS_DRIVER);
 
+        info!("[net-console] querying queue sizes");
         regs.select_queue(RX_QUEUE_INDEX);
         let rx_max = regs.queue_num_max();
         regs.select_queue(TX_QUEUE_INDEX);
@@ -106,13 +115,30 @@ impl VirtioNet {
         let tx_size = core::cmp::min(tx_max as usize, TX_QUEUE_SIZE);
         if rx_size == 0 || tx_size == 0 {
             regs.set_status(STATUS_FAILED);
+            warn!(
+                "[net-console] virtio-net queues unavailable: rx_max={} tx_max={}",
+                rx_max, tx_max
+            );
             return Err(DriverError::NoQueue);
         }
 
+        info!(
+            "[net-console] queue sizes: rx_max={} rx_size={} tx_max={} tx_size={}",
+            rx_max, rx_size, tx_max, tx_size
+        );
+
+        info!("[net-console] reading host feature bits");
         let host_features = regs.host_features();
         let negotiated_features = host_features & SUPPORTED_FEATURES;
+        info!(
+            "[net-console] features: host=0x{host:08x} negotiated=0x{guest:08x}",
+            host = host_features,
+            guest = negotiated_features
+        );
         regs.set_guest_features(negotiated_features);
         regs.set_status(STATUS_ACKNOWLEDGE | STATUS_DRIVER | STATUS_FEATURES_OK);
+
+        info!("[net-console] allocating virtqueue backing memory");
 
         let queue_mem_rx = hal.alloc_dma_frame().map_err(|err| {
             regs.set_status(STATUS_FAILED);
@@ -123,7 +149,15 @@ impl VirtioNet {
             DriverError::from(err)
         })?;
 
+        info!(
+            "[net-console] provisioning RX descriptors ({} entries)",
+            rx_size
+        );
         let rx_queue = VirtQueue::new(&mut regs, queue_mem_rx, RX_QUEUE_INDEX, rx_size)?;
+        info!(
+            "[net-console] provisioning TX descriptors ({} entries)",
+            tx_size
+        );
         let tx_queue = VirtQueue::new(&mut regs, queue_mem_tx, TX_QUEUE_INDEX, tx_size)?;
 
         let mut rx_buffers = HeaplessVec::<RamFrame, RX_QUEUE_SIZE>::new();
@@ -160,10 +194,19 @@ impl VirtioNet {
 
         let fallback_mac = EthernetAddress::from_bytes(&[0x02, 0, 0, 0, 0, 1]);
         let mac = if negotiated_features & VIRTIO_NET_F_MAC != 0 {
-            regs.read_mac().unwrap_or(fallback_mac)
+            let reported = regs.read_mac().unwrap_or(fallback_mac);
+            info!("[net-console] device-reported MAC: {reported}");
+            reported
         } else {
             fallback_mac
         };
+
+        info!(
+            "[net-console] virtio-net ready: rx_buffers={} tx_buffers={} mac={}",
+            rx_buffers.len(),
+            tx_buffers.len(),
+            mac
+        );
 
         let mut driver = Self {
             regs,
@@ -180,6 +223,10 @@ impl VirtioNet {
         driver
             .regs
             .set_status(STATUS_ACKNOWLEDGE | STATUS_DRIVER | STATUS_FEATURES_OK | STATUS_DRIVER_OK);
+        info!(
+            "[net-console] driver status set to DRIVER_OK (status=0x{:02x})",
+            driver.regs.read32(Registers::Status)
+        );
         Ok(driver)
     }
 
@@ -380,6 +427,11 @@ impl VirtioRegs {
     {
         for slot in 0..VIRTIO_MMIO_SLOTS {
             let base = VIRTIO_MMIO_BASE + slot * VIRTIO_MMIO_STRIDE;
+            info!(
+                "[net-console] probing virtio-mmio slot={} paddr=0x{base:08x}",
+                slot,
+                base = base
+            );
             if hal.device_coverage(base, DEVICE_FRAME_BITS).is_none() {
                 continue;
             }
@@ -403,9 +455,16 @@ impl VirtioRegs {
                 && device_id == VIRTIO_DEVICE_ID_NET
                 && vendor_id != 0
             {
+                info!(
+                    "[net-console] virtio-net found: slot={} magic=0x{magic:08x} version={} vendor=0x{vendor:08x}",
+                    slot,
+                    version,
+                    vendor = vendor_id
+                );
                 return Ok(regs);
             }
         }
+        warn!("[net-console] virtio-net device not found in MMIO slots");
         Err(DriverError::NoDevice)
     }
 

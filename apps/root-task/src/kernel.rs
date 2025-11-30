@@ -1499,21 +1499,29 @@ fn bootstrap<P: Platform>(
             );
 
         #[cfg(all(feature = "net-console", feature = "kernel"))]
-        log::info!("[boot] net-console: probing virtio-net");
-        let net_stack = match NetStack::new(&mut hal) {
-            Ok(stack) => {
-                log::info!("[boot] net-console: virtio-net initialised");
-                Some(stack)
-            }
-            Err(err) => {
-                log::error!(
-                    "[boot] net-console: virtio-net init failed ({err}); continuing without TCP console"
-                );
-                None
+        let net_stack = {
+            log::info!("[boot] net-console: probing virtio-net");
+            log::info!("[net-console] init: enter");
+            match NetStack::new(&mut hal) {
+                Ok(stack) => {
+                    log::info!("[boot] net-console: virtio-net initialised");
+                    log::info!("[net-console] init: success; TCP console online");
+                    Some(stack)
+                }
+                Err(err) => {
+                    log::error!(
+                        "[boot] net-console: virtio-net init failed ({err}); continuing without TCP console"
+                    );
+                    log::error!(
+                        "[net-console] init failed: {err}; TCP console disabled for this boot"
+                    );
+                    None
+                }
             }
         };
         #[cfg(all(feature = "net-console", not(feature = "kernel")))]
         let (net_stack, _) = NetStack::new(Ipv4Address::new(10, 0, 0, 2));
+        log::info!("[boot] net-console init complete; continuing with timers and IPC");
         let timer = KernelTimer::new(5);
         let ipc = KernelIpc::new(ep_slot);
 
