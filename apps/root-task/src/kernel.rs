@@ -556,8 +556,6 @@ pub fn start<P: Platform>(bootinfo: &'static BootInfo, platform: &P) -> ! {
                 "[kernel] bootstrap complete, handing off to userland runtime"
             );
             crate::userland::main(ctx);
-            log::error!("[kernel] userland runtime returned unexpectedly; entering panic");
-            panic!("userland runtime returned");
         }
         Err(err) => {
             log::error!("[boot] failed to enter bootstrap runtime: {err}");

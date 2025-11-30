@@ -228,314 +228,336 @@ impl NetStack {
 
     fn process_tcp(&mut self, now_ms: u64) -> bool {
         let mut activity = false;
-        let socket = self.sockets.get_mut::<TcpSocket>(self.tcp_handle);
+        let mut log_closed_conn: Option<u64> = None;
+        let mut record_closed_conn: Option<u64> = None;
 
-        if !socket.is_open() {
-            info!(
-                target: "net",
-                "TCP console: binding listener on {}:{}",
-                self.ip,
-                CONSOLE_TCP_PORT
-            );
-            if let Err(err) = socket.listen(IpListenEndpoint::from(CONSOLE_TCP_PORT)) {
-                warn!("[net-console] failed to start TCP console listener: {err}",);
-                return activity;
-            }
-            if !self.listener_announced {
-                info!(
-                    "[net-console] TCP console listening on 0.0.0.0:{} (iface ip={})",
-                    CONSOLE_TCP_PORT, self.ip
-                );
-                self.listener_announced = true;
-            }
-            if self.session_active {
-                self.server.end_session();
-                self.session_active = false;
-                self.active_client_id = None;
-            }
-        }
+        {
+            let socket = self.sockets.get_mut::<TcpSocket>(self.tcp_handle);
 
-        if socket.state() == TcpState::Established && !self.session_active {
-            let client_id = self.client_counter.wrapping_add(1);
-            self.client_counter = client_id;
-            self.active_client_id = Some(client_id);
-            self.conn_bytes_read = 0;
-            self.conn_bytes_written = 0;
-            let peer = if let Some(endpoint) = socket.remote_endpoint() {
+            if !socket.is_open() {
                 info!(
-                    "[net-console] conn {}: established from {}",
-                    client_id, endpoint
+                    target: "net",
+                    "TCP console: binding listener on {}:{}",
+                    self.ip,
+                    CONSOLE_TCP_PORT
                 );
-                let mut label = HeaplessString::<32>::new();
-                if let Ok(()) = FmtWrite::write_fmt(&mut label, format_args!("{}", endpoint)) {
-                    Some(label)
-                } else {
-                    None
+                if let Err(err) = socket.listen(IpListenEndpoint::from(CONSOLE_TCP_PORT)) {
+                    warn!("[net-console] failed to start TCP console listener: {err}",);
+                    return activity;
                 }
-            } else {
-                info!("[net-console] conn {}: established", client_id);
-                None
-            };
-            let _ = self.events.push(NetConsoleEvent::Connected {
-                conn_id: client_id,
-                peer,
-            });
-            self.server.begin_session(now_ms);
-            self.auth_state
-                .log_transition(AuthState::WaitingVersion, client_id);
-            self.auth_state = AuthState::WaitingVersion;
-            info!("[net-console] auth start client={}", client_id);
-            debug!(
-                "[net-console][auth] new connection client={} state={:?}",
-                client_id, self.auth_state
-            );
-            let _ = Self::flush_outbound(
-                &mut self.server,
-                &mut self.telemetry,
-                socket,
-                now_ms,
-                self.active_client_id,
-                self.auth_state,
-            );
-            if activity {
+                if !self.listener_announced {
+                    info!(
+                        "[net-console] TCP console listening on 0.0.0.0:{} (iface ip={})",
+                        CONSOLE_TCP_PORT, self.ip
+                    );
+                    self.listener_announced = true;
+                }
+                if self.session_active {
+                    self.server.end_session();
+                    self.session_active = false;
+                    self.active_client_id = None;
+                }
+            }
+
+            if socket.state() == TcpState::Established && !self.session_active {
+                let client_id = self.client_counter.wrapping_add(1);
+                self.client_counter = client_id;
+                self.active_client_id = Some(client_id);
+                self.conn_bytes_read = 0;
+                self.conn_bytes_written = 0;
+                let peer = if let Some(endpoint) = socket.remote_endpoint() {
+                    info!(
+                        "[net-console] conn {}: established from {}",
+                        client_id, endpoint
+                    );
+                    let mut label = HeaplessString::<32>::new();
+                    if let Ok(()) = FmtWrite::write_fmt(&mut label, format_args!("{}", endpoint)) {
+                        Some(label)
+                    } else {
+                        None
+                    }
+                } else {
+                    info!("[net-console] conn {}: established", client_id);
+                    None
+                };
+                let _ = self.events.push(NetConsoleEvent::Connected {
+                    conn_id: client_id,
+                    peer,
+                });
+                self.server.begin_session(now_ms);
+                self.auth_state
+                    .log_transition(AuthState::WaitingVersion, client_id);
+                self.auth_state = AuthState::WaitingVersion;
+                info!("[net-console] auth start client={}", client_id);
                 debug!(
-                    "[net-console][auth] greeting sent client={} state={:?}",
+                    "[net-console][auth] new connection client={} state={:?}",
                     client_id, self.auth_state
                 );
+                let _ = Self::flush_outbound(
+                    &mut self.server,
+                    &mut self.telemetry,
+                    &mut self.conn_bytes_written,
+                    socket,
+                    now_ms,
+                    self.active_client_id,
+                    self.auth_state,
+                );
+                if activity {
+                    debug!(
+                        "[net-console][auth] greeting sent client={} state={:?}",
+                        client_id, self.auth_state
+                    );
+                }
+                self.auth_state
+                    .log_transition(AuthState::AuthRequested, client_id);
+                self.auth_state = AuthState::AuthRequested;
+                self.session_active = true;
             }
-            self.auth_state
-                .log_transition(AuthState::AuthRequested, client_id);
-            self.auth_state = AuthState::AuthRequested;
-            self.session_active = true;
-        }
 
-        if socket.can_recv() {
-            let mut temp = [0u8; 256];
-            while socket.can_recv() {
-                match socket.recv_slice(&mut temp) {
-                    Ok(0) => break,
-                    Ok(count) => {
-                        self.conn_bytes_read = self.conn_bytes_read.saturating_add(count as u64);
-                        trace!(
-                            "[net-auth][conn={}] read {} bytes in state {:?}",
-                            self.active_client_id.unwrap_or(0),
-                            count,
-                            self.auth_state
-                        );
-                        match self.server.ingest(&temp[..count], now_ms) {
-                            SessionEvent::None => {
-                                debug!(
-                                    "[net-console][auth] state={:?} recv_bytes={} client={}",
-                                    self.auth_state,
-                                    count,
-                                    self.active_client_id.unwrap_or(0)
-                                );
-                            }
-                            SessionEvent::Authenticated => {
-                                let conn_id = self.active_client_id.unwrap_or(0);
-                                self.auth_state.log_transition(AuthState::Attached, conn_id);
-                                self.auth_state = AuthState::Attached;
-                                info!("[net-console] auth success client={}", conn_id);
-                                debug!(
-                                    "[net-console][auth] state transitioned to {:?} client={}",
-                                    self.auth_state, conn_id
-                                );
-                                activity = true;
-                            }
-                            SessionEvent::AuthFailed(reason) => {
-                                warn!(
-                                    "[net-console] TCP client #{} auth failed reason={}",
-                                    self.active_client_id.unwrap_or(0),
-                                    reason
-                                );
-                                let conn_id = self.active_client_id.unwrap_or(0);
-                                self.auth_state.log_transition(AuthState::Failed, conn_id);
-                                self.auth_state = AuthState::Failed;
-                                debug!(
-                                    "[net-console][auth] state={:?} client={} reason={}",
-                                    self.auth_state, conn_id, reason
-                                );
-                                let _ = Self::flush_outbound(
-                                    &mut self.server,
-                                    &mut self.telemetry,
-                                    socket,
-                                    now_ms,
-                                    self.active_client_id,
-                                    self.auth_state,
-                                );
-                                socket.close();
-                                self.server.end_session();
-                                self.session_active = false;
-                                info!(
-                                    "[net-console] conn {}: bytes read={}, bytes written={}",
-                                    self.active_client_id.unwrap_or(0),
-                                    self.conn_bytes_read,
-                                    self.conn_bytes_written
-                                );
-                                self.active_client_id = None;
-                                break;
-                            }
-                            SessionEvent::Close => {
-                                warn!(
-                                    "[net-console] TCP client #{} closing after session end",
-                                    self.active_client_id.unwrap_or(0)
-                                );
-                                debug!(
-                                    "[net-console][auth] state={:?} close requested client={}",
-                                    self.auth_state,
-                                    self.active_client_id.unwrap_or(0)
-                                );
-                                let _ = Self::flush_outbound(
-                                    &mut self.server,
-                                    &mut self.telemetry,
-                                    socket,
-                                    now_ms,
-                                    self.active_client_id,
-                                    self.auth_state,
-                                );
-                                socket.close();
-                                self.server.end_session();
-                                self.session_active = false;
-                                self.active_client_id = None;
-                                activity = true;
-                                break;
+            if socket.can_recv() {
+                let mut temp = [0u8; 256];
+                while socket.can_recv() {
+                    match socket.recv_slice(&mut temp) {
+                        Ok(0) => break,
+                        Ok(count) => {
+                            self.conn_bytes_read =
+                                self.conn_bytes_read.saturating_add(count as u64);
+                            trace!(
+                                "[net-auth][conn={}] read {} bytes in state {:?}",
+                                self.active_client_id.unwrap_or(0),
+                                count,
+                                self.auth_state
+                            );
+                            match self.server.ingest(&temp[..count], now_ms) {
+                                SessionEvent::None => {
+                                    debug!(
+                                        "[net-console][auth] state={:?} recv_bytes={} client={}",
+                                        self.auth_state,
+                                        count,
+                                        self.active_client_id.unwrap_or(0)
+                                    );
+                                }
+                                SessionEvent::Authenticated => {
+                                    let conn_id = self.active_client_id.unwrap_or(0);
+                                    self.auth_state.log_transition(AuthState::Attached, conn_id);
+                                    self.auth_state = AuthState::Attached;
+                                    info!("[net-console] auth success client={}", conn_id);
+                                    debug!(
+                                        "[net-console][auth] state transitioned to {:?} client={}",
+                                        self.auth_state, conn_id
+                                    );
+                                    activity = true;
+                                }
+                                SessionEvent::AuthFailed(reason) => {
+                                    warn!(
+                                        "[net-console] TCP client #{} auth failed reason={}",
+                                        self.active_client_id.unwrap_or(0),
+                                        reason
+                                    );
+                                    let conn_id = self.active_client_id.unwrap_or(0);
+                                    self.auth_state.log_transition(AuthState::Failed, conn_id);
+                                    self.auth_state = AuthState::Failed;
+                                    debug!(
+                                        "[net-console][auth] state={:?} client={} reason={}",
+                                        self.auth_state, conn_id, reason
+                                    );
+                                    let _ = Self::flush_outbound(
+                                        &mut self.server,
+                                        &mut self.telemetry,
+                                        &mut self.conn_bytes_written,
+                                        socket,
+                                        now_ms,
+                                        self.active_client_id,
+                                        self.auth_state,
+                                    );
+                                    socket.close();
+                                    self.server.end_session();
+                                    self.session_active = false;
+                                    info!(
+                                        "[net-console] conn {}: bytes read={}, bytes written={}",
+                                        self.active_client_id.unwrap_or(0),
+                                        self.conn_bytes_read,
+                                        self.conn_bytes_written
+                                    );
+                                    self.active_client_id = None;
+                                    break;
+                                }
+                                SessionEvent::Close => {
+                                    warn!(
+                                        "[net-console] TCP client #{} closing after session end",
+                                        self.active_client_id.unwrap_or(0)
+                                    );
+                                    debug!(
+                                        "[net-console][auth] state={:?} close requested client={}",
+                                        self.auth_state,
+                                        self.active_client_id.unwrap_or(0)
+                                    );
+                                    let _ = Self::flush_outbound(
+                                        &mut self.server,
+                                        &mut self.telemetry,
+                                        &mut self.conn_bytes_written,
+                                        socket,
+                                        now_ms,
+                                        self.active_client_id,
+                                        self.auth_state,
+                                    );
+                                    socket.close();
+                                    self.server.end_session();
+                                    self.session_active = false;
+                                    self.active_client_id = None;
+                                    activity = true;
+                                    break;
+                                }
                             }
                         }
-                    }
-                    Err(err) => {
-                        match err {
-                            TcpRecvError::Finished => {
-                                info!(
-                                    "[net-console] TCP client #{} closed (clean shutdown)",
-                                    self.active_client_id.unwrap_or(0)
-                                );
-                            }
-                            other => {
-                                warn!(
+                        Err(err) => {
+                            match err {
+                                TcpRecvError::Finished => {
+                                    info!(
+                                        "[net-console] TCP client #{} closed (clean shutdown)",
+                                        self.active_client_id.unwrap_or(0)
+                                    );
+                                }
+                                other => {
+                                    warn!(
                                     "[net-console] TCP client #{} error={other} (closing connection)",
                                     self.active_client_id.unwrap_or(0)
                                 );
+                                }
                             }
+                            let conn_id = self.active_client_id.unwrap_or(0);
+                            self.auth_state.log_transition(AuthState::Failed, conn_id);
+                            self.auth_state = AuthState::Failed;
+                            debug!(
+                                "[net-console][auth] state={:?} recv error from client={}",
+                                self.auth_state,
+                                self.active_client_id.unwrap_or(0)
+                            );
+                            socket.close();
+                            self.server.end_session();
+                            self.session_active = false;
+                            info!(
+                                "[net-console] conn {}: bytes read={}, bytes written={}",
+                                self.active_client_id.unwrap_or(0),
+                                self.conn_bytes_read,
+                                self.conn_bytes_written
+                            );
+                            self.active_client_id = None;
+                            break;
                         }
-                        let conn_id = self.active_client_id.unwrap_or(0);
-                        self.auth_state.log_transition(AuthState::Failed, conn_id);
-                        self.auth_state = AuthState::Failed;
-                        debug!(
-                            "[net-console][auth] state={:?} recv error from client={}",
-                            self.auth_state,
-                            self.active_client_id.unwrap_or(0)
-                        );
-                        socket.close();
-                        self.server.end_session();
-                        self.session_active = false;
-                        info!(
-                            "[net-console] conn {}: bytes read={}, bytes written={}",
-                            self.active_client_id.unwrap_or(0),
-                            self.conn_bytes_read,
-                            self.conn_bytes_written
-                        );
-                        self.active_client_id = None;
-                        break;
                     }
                 }
             }
-        }
-        if self.session_active
-            && !self.server.is_authenticated()
-            && self.server.auth_timed_out(now_ms)
-        {
-            warn!(
-                "[net-console] TCP client #{} auth timeout",
-                self.active_client_id.unwrap_or(0)
-            );
-            debug!(
-                "[net-console][auth] state={:?} auth timeout client={} now_ms={}",
-                self.auth_state,
-                self.active_client_id.unwrap_or(0),
-                now_ms
-            );
-            let _ = self.server.enqueue_outbound("ERR AUTH reason=timeout");
-            let _ = Self::flush_outbound(
+            if self.session_active
+                && !self.server.is_authenticated()
+                && self.server.auth_timed_out(now_ms)
+            {
+                warn!(
+                    "[net-console] TCP client #{} auth timeout",
+                    self.active_client_id.unwrap_or(0)
+                );
+                debug!(
+                    "[net-console][auth] state={:?} auth timeout client={} now_ms={}",
+                    self.auth_state,
+                    self.active_client_id.unwrap_or(0),
+                    now_ms
+                );
+                let _ = self.server.enqueue_outbound("ERR AUTH reason=timeout");
+                let _ = Self::flush_outbound(
+                    &mut self.server,
+                    &mut self.telemetry,
+                    &mut self.conn_bytes_written,
+                    socket,
+                    now_ms,
+                    self.active_client_id,
+                    self.auth_state,
+                );
+                socket.close();
+                self.server.end_session();
+                self.session_active = false;
+                let conn_id = self.active_client_id.unwrap_or(0);
+                self.auth_state.log_transition(AuthState::Failed, conn_id);
+                self.auth_state = AuthState::Failed;
+                log_closed_conn = Some(conn_id);
+                record_closed_conn = Some(conn_id);
+                self.active_client_id = None;
+                activity = true;
+            }
+
+            if self.session_active && self.server.should_timeout(now_ms) {
+                warn!(
+                    "[net-console] TCP client #{} timed out due to inactivity",
+                    self.active_client_id.unwrap_or(0)
+                );
+                debug!(
+                    "[net-console][auth] state={:?} inactivity timeout client={} now_ms={}",
+                    self.auth_state,
+                    self.active_client_id.unwrap_or(0),
+                    now_ms
+                );
+                let _ = self.server.enqueue_outbound("ERR CONSOLE reason=timeout");
+                let _ = Self::flush_outbound(
+                    &mut self.server,
+                    &mut self.telemetry,
+                    &mut self.conn_bytes_written,
+                    socket,
+                    now_ms,
+                    self.active_client_id,
+                    self.auth_state,
+                );
+                socket.close();
+                self.server.end_session();
+                self.session_active = false;
+                let conn_id = self.active_client_id.unwrap_or(0);
+                self.auth_state.log_transition(AuthState::Failed, conn_id);
+                self.auth_state = AuthState::Failed;
+                log_closed_conn = Some(conn_id);
+                record_closed_conn = Some(conn_id);
+                self.active_client_id = None;
+                activity = true;
+            }
+
+            activity |= Self::flush_outbound(
                 &mut self.server,
                 &mut self.telemetry,
+                &mut self.conn_bytes_written,
                 socket,
                 now_ms,
                 self.active_client_id,
                 self.auth_state,
             );
-            socket.close();
-            self.server.end_session();
-            self.session_active = false;
-            let conn_id = self.active_client_id.unwrap_or(0);
-            self.auth_state.log_transition(AuthState::Failed, conn_id);
-            self.auth_state = AuthState::Failed;
-            self.log_conn_summary(self.active_client_id);
-            self.record_conn_closed();
-            self.active_client_id = None;
-            activity = true;
+
+            if matches!(socket.state(), TcpState::CloseWait | TcpState::Closed)
+                && self.session_active
+            {
+                info!(
+                    "[net-console] TCP client #{} closed (state={:?})",
+                    self.active_client_id.unwrap_or(0),
+                    socket.state()
+                );
+                debug!(
+                    "[net-console][auth] state={:?} client={} closing socket state={:?}",
+                    self.auth_state,
+                    self.active_client_id.unwrap_or(0),
+                    socket.state()
+                );
+                socket.close();
+                self.server.end_session();
+                self.session_active = false;
+                let conn_id = self.active_client_id.unwrap_or(0);
+                log_closed_conn = Some(conn_id);
+                record_closed_conn = Some(conn_id);
+                self.active_client_id = None;
+                self.auth_state = AuthState::Start;
+                activity = true;
+            }
         }
 
-        if self.session_active && self.server.should_timeout(now_ms) {
-            warn!(
-                "[net-console] TCP client #{} timed out due to inactivity",
-                self.active_client_id.unwrap_or(0)
-            );
-            debug!(
-                "[net-console][auth] state={:?} inactivity timeout client={} now_ms={}",
-                self.auth_state,
-                self.active_client_id.unwrap_or(0),
-                now_ms
-            );
-            let _ = self.server.enqueue_outbound("ERR CONSOLE reason=timeout");
-            let _ = Self::flush_outbound(
-                &mut self.server,
-                &mut self.telemetry,
-                socket,
-                now_ms,
-                self.active_client_id,
-                self.auth_state,
-            );
-            socket.close();
-            self.server.end_session();
-            self.session_active = false;
-            let conn_id = self.active_client_id.unwrap_or(0);
-            self.auth_state.log_transition(AuthState::Failed, conn_id);
-            self.auth_state = AuthState::Failed;
-            self.log_conn_summary(self.active_client_id);
-            self.record_conn_closed();
-            self.active_client_id = None;
-            activity = true;
+        if let Some(conn_id) = log_closed_conn {
+            self.log_conn_summary(conn_id);
         }
-
-        activity |= Self::flush_outbound(
-            &mut self.server,
-            &mut self.telemetry,
-            socket,
-            now_ms,
-            self.active_client_id,
-            self.auth_state,
-        );
-
-        if matches!(socket.state(), TcpState::CloseWait | TcpState::Closed) && self.session_active {
-            info!(
-                "[net-console] TCP client #{} closed (state={:?})",
-                self.active_client_id.unwrap_or(0),
-                socket.state()
-            );
-            debug!(
-                "[net-console][auth] state={:?} client={} closing socket state={:?}",
-                self.auth_state,
-                self.active_client_id.unwrap_or(0),
-                socket.state()
-            );
-            socket.close();
-            self.server.end_session();
-            self.session_active = false;
-            self.log_conn_summary(self.active_client_id);
-            self.record_conn_closed();
-            self.active_client_id = None;
-            self.auth_state = AuthState::Start;
-            activity = true;
+        if let Some(conn_id) = record_closed_conn {
+            self.record_conn_closed(conn_id);
         }
 
         activity
@@ -544,6 +566,7 @@ impl NetStack {
     fn flush_outbound(
         server: &mut TcpConsoleServer,
         telemetry: &mut NetTelemetry,
+        conn_bytes_written: &mut u64,
         socket: &mut TcpSocket,
         now_ms: u64,
         conn_id: Option<u64>,
@@ -573,7 +596,7 @@ impl NetStack {
             }
             match socket.send_slice(payload.as_slice()) {
                 Ok(sent) if sent == payload.len() => {
-                    self.conn_bytes_written = self.conn_bytes_written.saturating_add(sent as u64);
+                    *conn_bytes_written = conn_bytes_written.saturating_add(sent as u64);
                     if server.is_authenticated() {
                         server.mark_activity(now_ms);
                     }
@@ -602,18 +625,16 @@ impl NetStack {
         activity
     }
 
-    fn log_conn_summary(&self, conn_id: Option<u64>) {
-        let id = conn_id.unwrap_or(self.active_client_id.unwrap_or(0));
+    fn log_conn_summary(&self, conn_id: u64) {
         info!(
             "[net-console] conn {}: bytes read={}, bytes written={}",
-            id, self.conn_bytes_read, self.conn_bytes_written
+            conn_id, self.conn_bytes_read, self.conn_bytes_written
         );
     }
 
-    fn record_conn_closed(&mut self) {
-        let id = self.active_client_id.unwrap_or(0);
+    fn record_conn_closed(&mut self, conn_id: u64) {
         let _ = self.events.push(NetConsoleEvent::Disconnected {
-            conn_id: id,
+            conn_id,
             bytes_read: self.conn_bytes_read,
             bytes_written: self.conn_bytes_written,
         });

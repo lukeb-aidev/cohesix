@@ -74,13 +74,6 @@ pub fn main(ctx: BootContext) -> ! {
 
     let mut pump = EventPump::new(serial, timer, ipc, tickets, &mut audit);
 
-    pump = attach_kernel_console(pump, &ctx, bootstrap_ipc.as_mut());
-    pump = attach_ninedoor_bridge(pump, &ctx);
-    pump = attach_network(pump, net_stack_handle.as_mut());
-
-    announce_console_ready(&mut pump);
-    start_kernel_cli(&mut pump);
-
     #[cfg(all(feature = "net-console", feature = "kernel"))]
     match (
         ctx.features.net,
@@ -111,6 +104,13 @@ pub fn main(ctx: BootContext) -> ! {
             );
         }
     }
+
+    pump = attach_kernel_console(pump, &ctx, bootstrap_ipc.as_mut());
+    pump = attach_ninedoor_bridge(pump, &ctx);
+    pump = attach_network(pump, net_stack_handle.as_mut());
+
+    announce_console_ready(&mut pump);
+    start_kernel_cli(&mut pump);
 
     pump.run();
 }
