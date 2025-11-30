@@ -95,6 +95,12 @@ impl VirtioNet {
         H: Hardware<Error = HalError>,
     {
         info!("[net-console] init: probing virtio-mmio bus");
+        info!(
+            "[net-console] expecting virtio-net on virtio-mmio base=0x{base:08x}, slots=0-{max_slot}, stride=0x{stride:03x}",
+            base = VIRTIO_MMIO_BASE,
+            max_slot = VIRTIO_MMIO_SLOTS - 1,
+            stride = VIRTIO_MMIO_STRIDE,
+        );
         let mut regs = VirtioRegs::probe(hal)?;
         info!(
             "[net-console] virtio-mmio device located: base=0x{base:08x}",
@@ -482,9 +488,7 @@ impl VirtioRegs {
                 return Ok(regs);
             }
         }
-        error!(
-            "[net-console] no virtio-net device found on virtio-mmio bus; disabling TCP console"
-        );
+        error!("[net-console] no virtio-net device found on virtio-mmio bus; TCP console disabled");
         Err(DriverError::NoDevice)
     }
 
