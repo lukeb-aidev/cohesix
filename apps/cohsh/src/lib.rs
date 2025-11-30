@@ -620,7 +620,7 @@ impl<T: Transport, W: Write> Shell<T, W> {
                 Err(err) => {
                     auto.attempts = auto.attempts.saturating_add(1);
                     eprintln!(
-                        "[cohsh] auto-attach attempt {} failed: {}",
+                        "[cohsh] TCP attach failed (attempt {}): {}",
                         auto.attempts, err
                     );
                     if auto.attempts >= auto.max_attempts {

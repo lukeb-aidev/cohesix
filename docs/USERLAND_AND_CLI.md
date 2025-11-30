@@ -90,6 +90,11 @@ Connection handling (TCP transport):
 - Successful connect logs `[cohsh][tcp] connected to <host>:<port> (connects=N)` before presenting the prompt.【F:apps/cohsh/src/transport/tcp.rs†L43-L50】
 - Disconnects log `[cohsh][tcp] connection lost: …` and trigger reconnect attempts with incremental back-off, emitting `[cohsh][tcp] reconnect attempt #<n> …`. The shell remains usable in interactive mode; in `--script` mode errors propagate and stop the run.【F:apps/cohsh/src/transport/tcp.rs†L52-L63】
 
+### Acknowledgements and heartbeats
+- The root-task event pump emits `OK <VERB> [detail]` or `ERR <VERB> reason=<cause>` for every console command, sharing one dispatcher across serial and TCP so both transports see the same lines before any payload (for example, `OK TAIL path=…` precedes streamed data).【F:apps/root-task/src/event/mod.rs†L743-L769】
+- `PING` always yields `PONG` without affecting state, keeping automation healthy when idle, while TCP adds a 15-second heartbeat cadence on top of the shared grammar so the client can detect stalls without blocking serial progress.【F:apps/root-task/src/event/mod.rs†L790-L799】【F:apps/cohsh/src/transport/tcp.rs†L19-L30】
+- `cohsh` parses acknowledgement lines using a shared helper, surfaces details inline with shell output, and preserves the order produced by the root-task dispatcher so scripted `attach`/`tail`/`log` flows match serial transcripts byte-for-byte.【F:apps/cohsh/src/proto.rs†L5-L44】【F:apps/cohsh/src/lib.rs†L581-L605】
+
 ### Script mode
 `--script <file>` feeds newline-delimited commands; blank lines and lines starting with `#` are ignored. Errors abort the script and bubble up as a non-zero exit.【F:apps/cohsh/src/lib.rs†L594-L605】
 

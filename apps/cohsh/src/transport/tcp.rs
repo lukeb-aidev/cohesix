@@ -4,7 +4,6 @@
 use std::collections::VecDeque;
 use std::io::{self, BufRead, BufReader, Write};
 use std::net::{TcpStream, ToSocketAddrs};
-use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -292,30 +291,34 @@ impl TcpTransport {
         self.set_auth_state(AuthState::WaitingAuthOk);
         let mut timeouts = 0usize;
         let mut total_bytes_read = 0usize;
-        let mut total_bytes_written = auth_line.len().saturating_add(1);
+        let total_bytes_written = auth_line.len().saturating_add(1);
         loop {
             match self.read_line_internal()? {
                 ReadStatus::Line(line) => {
                     let trimmed = Self::trim_line(&line);
                     total_bytes_read = total_bytes_read.saturating_add(line.len());
                     if let Some(ack) = parse_ack(&trimmed) {
-                        if ack.verb.eq_ignore_ascii_case("AUTH")
-                            && matches!(ack.status, AckStatus::Ok)
-                        {
-                            self.record_ack(&trimmed);
-                            self.authenticated = true;
-                            self.last_activity = Instant::now();
-                            self.set_auth_state(AuthState::AuthOk);
-                            debug!("[cohsh][auth] state={:?} recv AUTH ok", self.auth_state);
-                            return Ok(());
-                        }
                         if ack.verb.eq_ignore_ascii_case("AUTH") {
-                            self.set_auth_state(AuthState::Failed);
-                            debug!(
-                                "[cohsh][auth] state={:?} recv AUTH rejection line={}",
-                                self.auth_state, trimmed
-                            );
-                            return Err(anyhow!("authentication rejected: {trimmed}"));
+                            let _ = self.record_ack(&trimmed);
+                            if matches!(ack.status, AckStatus::Err) {
+                                self.set_auth_state(AuthState::Failed);
+                                debug!(
+                                    "[cohsh][auth] state={:?} recv AUTH rejection line={}",
+                                    self.auth_state, trimmed
+                                );
+                                return Err(anyhow!("authentication rejected: {trimmed}"));
+                            }
+                            if matches!(ack.status, AckStatus::Ok) && ack.detail.is_none() {
+                                self.authenticated = true;
+                                self.last_activity = Instant::now();
+                                self.set_auth_state(AuthState::AuthOk);
+                                debug!(
+                                    "[cohsh][auth] state={:?} recv AUTH ok",
+                                    self.auth_state
+                                );
+                                return Ok(());
+                            }
+                            continue;
                         }
                         let _ = self.record_ack(&trimmed);
                         continue;
@@ -706,52 +709,85 @@ impl Transport for TcpTransport {
             );
             self.send_line(&attach_line)?;
             self.set_auth_state(AuthState::WaitingAttachOk);
-            match self.next_protocol_line()? {
-                Some(response) => {
-                    let _ = self.record_ack(&response);
-                    if !response.starts_with("OK") {
-                        self.set_auth_state(AuthState::Failed);
+
+            loop {
+                match self.next_protocol_line()? {
+                    Some(response) => {
+                        let Some(ack) = parse_ack(&response) else {
+                            self.set_auth_state(AuthState::Failed);
+                            debug!(
+                                "[cohsh][auth] state={:?} recv non-ack response={} attempts={}",
+                                self.auth_state, response, attempts
+                            );
+                            return Err(anyhow!("remote attach failed: {response}"));
+                        };
+
+                        let _ = self.record_ack(&response);
+                        if ack.verb.eq_ignore_ascii_case("AUTH")
+                            && matches!(ack.status, AckStatus::Err)
+                        {
+                            self.set_auth_state(AuthState::Failed);
+                            debug!(
+                                "[cohsh][auth] state={:?} recv auth failure during attach response={} attempts={}",
+                                self.auth_state, response, attempts
+                            );
+                            return Err(anyhow!("authentication failed: {response}"));
+                        }
+
+                        if !ack.verb.eq_ignore_ascii_case("ATTACH") {
+                            debug!(
+                                "[cohsh][auth] state={:?} ignoring non-attach ack response={}",
+                                self.auth_state, response
+                            );
+                            continue;
+                        }
+
+                        if !matches!(ack.status, AckStatus::Ok) {
+                            self.set_auth_state(AuthState::Failed);
+                            debug!(
+                                "[cohsh][auth] state={:?} recv attach error response={} attempts={}",
+                                self.auth_state, response, attempts
+                            );
+                            return Err(anyhow!("remote attach failed: {response}"));
+                        }
+
+                        let session = Session::new(SessionId::from_raw(self.next_session_id), role);
+                        self.next_session_id = self.next_session_id.wrapping_add(1);
+                        self.session_cache = Some(SessionCache {
+                            role,
+                            ticket: ticket_payload.clone(),
+                        });
+                        self.set_auth_state(AuthState::Attached);
                         debug!(
-                            "[cohsh][auth] state={:?} recv attach error response={} attempts={}",
-                            self.auth_state, response, attempts
+                            "[cohsh][auth] state={:?} recv attach ok response={}",
+                            self.auth_state, response
                         );
-                        return Err(anyhow!("remote attach failed: {response}"));
+                        eprintln!("[cohsh][tcp] remote NineDoor ready as role {:?}", role);
+                        return Ok(session);
                     }
-                    let session = Session::new(SessionId::from_raw(self.next_session_id), role);
-                    self.next_session_id = self.next_session_id.wrapping_add(1);
-                    self.session_cache = Some(SessionCache {
-                        role,
-                        ticket: ticket_payload.clone(),
-                    });
-                    self.set_auth_state(AuthState::Attached);
-                    debug!(
-                        "[cohsh][auth] state={:?} recv attach ok response={}",
-                        self.auth_state, response
-                    );
-                    eprintln!("[cohsh][tcp] remote NineDoor ready as role {:?}", role);
-                    return Ok(session);
-                }
-                None => {
-                    attempts += 1;
-                    if attempts > self.max_retries {
-                        self.set_auth_state(AuthState::Failed);
+                    None => {
+                        attempts += 1;
+                        if attempts > self.max_retries {
+                            self.set_auth_state(AuthState::Failed);
+                            debug!(
+                                "[cohsh][auth] state={:?} attach acknowledgement missing attempts={}",
+                                self.auth_state, attempts
+                            );
+                            return Err(anyhow!("unable to receive attach acknowledgement"));
+                        }
+                        let err = anyhow!("connection closed before attach acknowledgement");
+                        self.telemetry.log_disconnect(err.as_ref());
+                        self.reset_connection();
                         debug!(
-                            "[cohsh][auth] state={:?} attach acknowledgement missing attempts={}",
-                            self.auth_state, attempts
+                            "[cohsh][auth] state={:?} connection closed while waiting for attach attempts={}",
+                            self.auth_state,
+                            attempts
                         );
-                        return Err(anyhow!("unable to receive attach acknowledgement"));
+                        self.telemetry.log_reconnect(attempts, delay);
+                        thread::sleep(delay);
+                        delay = Self::next_delay(delay, self.retry_ceiling);
+                        break;
                     }
-                    let err = anyhow!("connection closed before attach acknowledgement");
-                    self.telemetry.log_disconnect(err.as_ref());
-                    self.reset_connection();
-                    debug!(
-                        "[cohsh][auth] state={:?} connection closed while waiting for attach attempts={}",
-                        self.auth_state,
-                        attempts
-                    );
-                    self.telemetry.log_reconnect(attempts, delay);
-                    thread::sleep(delay);
-                    delay = Self::next_delay(delay, self.retry_ceiling);
                 }
             }
         }
