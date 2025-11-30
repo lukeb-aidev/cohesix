@@ -62,6 +62,33 @@ impl From<DriverError> for NetStackError {
     }
 }
 
+/// High-level errors surfaced while initialising the TCP console stack.
+#[derive(Debug)]
+pub enum NetConsoleError {
+    /// No virtio-net device was found on any probed virtio-mmio slot.
+    NoDevice,
+    /// An error occurred during stack bring-up.
+    Init(NetStackError),
+}
+
+impl fmt::Display for NetConsoleError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NoDevice => f.write_str("no virtio-net device present"),
+            Self::Init(err) => write!(f, "{err}"),
+        }
+    }
+}
+
+impl From<NetStackError> for NetConsoleError {
+    fn from(err: NetStackError) -> Self {
+        match err {
+            NetStackError::Driver(DriverError::NoDevice) => Self::NoDevice,
+            other => Self::Init(other),
+        }
+    }
+}
+
 struct StorageGuard<'a> {
     flag: &'a AtomicBool,
     release_on_drop: bool,
@@ -173,6 +200,15 @@ pub struct NetStack {
     conn_bytes_written: u64,
     events: HeaplessVec<NetConsoleEvent, SOCKET_CAPACITY>,
     service_logged: bool,
+}
+
+/// Initialise the network console stack, translating low-level errors into
+/// user-facing diagnostics.
+pub fn init_net_console<H>(hal: &mut H) -> Result<NetStack, NetConsoleError>
+where
+    H: Hardware<Error = HalError>,
+{
+    NetStack::new(hal).map_err(NetConsoleError::from)
 }
 
 impl NetStack {
