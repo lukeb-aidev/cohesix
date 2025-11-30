@@ -51,3 +51,4 @@
 - The event pump emits audit records (`event-pump: init <subsystem>`, `net: poll link_up=<bool> tx_drops=<count>`, `attach
   accepted`, `attach denied`) that flow to the serial log. These records are critical for forensic review because they show which
   subsystems were live at the time of an intrusion and whether the networking queues are under pressure.
+- The only control-plane interfaces are `cohsh` over serial/TCP and the Secure9P namespaces; any host-side WASM GUI is treated as an unprivileged client layered on top of these paths and does not expand the in-VM attack surface. One Queen orchestrating many workers keeps logging and audit scoped per hive (append-only `/log/*.log`).

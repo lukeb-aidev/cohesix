@@ -1,6 +1,9 @@
 <!-- Author: Lukas Bower -->
 # Cohesix Userland & CLI
 
+## Philosophy
+`cohsh` is the canonical operator shell for the entire hive: one Queen orchestrating many workers via a shared Secure9P namespace.
+
 ## Overview
 Cohesix userland exposes two operator entry points:
 - **Root console** on the PL011 UART via QEMU `-serial mon:stdio`, showing the `cohesix>` prompt for on-box bring-up and bootinfo sanity checks.
@@ -75,6 +78,7 @@ Commands and status:
 - `echo <text> > <path>` – append a newline-terminated payload to an absolute path via NineDoor.【F:apps/cohsh/src/lib.rs†L732-L740】【F:apps/cohsh/src/lib.rs†L803-L817】
 - Planned (not implemented): `ls`, `cat`, `spawn`, `kill`, `bind`, `mount`; the shell prints explicit “planned” errors today.【F:apps/cohsh/src/lib.rs†L700-L705】
 - `quit` – prints `closing session` and exits the shell loop.【F:apps/cohsh/src/lib.rs†L697-L699】
+- Attachments are designed so a single queen session (interactive or scripted) can drive orchestration for many workers without switching tools.
 
 Attachment semantics:
 - No role argument → `attach requires a role`.
@@ -126,6 +130,9 @@ log
 quit
 ```
 Run via `./cohsh --transport tcp --tcp-port 31337 --script queen.coh`. The runner stops on the first error (including connection failures) and propagates the error code to the host shell.【F:apps/cohsh/src/lib.rs†L594-L605】
+
+## GUI clients
+- A host-side WASM GUI is planned as a hive dashboard. It will speak the same console/NineDoor protocol as `cohsh` (no new verbs, no new in-VM endpoints) and focuses on presentation and workflow rather than new privileges.
 
 ## Debugging TCP Console Issues
 - **Connection refused / wrong port**: confirm QEMU launched with `--transport tcp` and the `hostfwd` rule; the build script prints the expected port.【F:scripts/cohesix-build-run.sh†L521-L553】

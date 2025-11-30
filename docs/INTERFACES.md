@@ -1,6 +1,8 @@
 <!-- Author: Lukas Bower -->
 # Cohesix Interfaces (Queen/Worker, NineDoor, GPU Bridge)
 
+The queen/worker verbs and `/queen/ctl` schema form the hive control API: one Queen instance uses these interfaces to control many workers over the shared Secure9P namespace.
+
 ## 1. NineDoor 9P Operations
 - Supports **9P2000.L** only (`version`, `attach`, `walk`, `open`, `read`, `write`, `clunk`, `stat`, `remove` (disabled)).
 - `msize` negotiated ≤ 8192 bytes; larger requests rejected with `Rerror(TooBig)`.
@@ -34,6 +36,7 @@ Path: `/queen/ctl` (append-only JSON lines)
 - `spawn:"gpu"` queues a lease request for the host GPU bridge; if the bridge is unavailable the command returns `Error::Busy`.
 - GPU spawns require the host bridge to publish `/gpu/<id>` entries via `install_gpu_nodes`; lease issuance is mirrored to `/log/queen.log` and `/gpu/<id>/ctl`.
 - Optional `priority` fields raise scheduling weight on the host bridge when multiple leases compete.
+- Operators typically exercise these verbs via `cohsh`, and any GUI client is expected to speak the same protocol.
 
 ## 4. Worker Telemetry
 - Path: `/worker/<id>/telemetry` (append-only, newline-delimited records).
@@ -71,9 +74,10 @@ pub trait RootTaskControl {
     before triggering side effects.
   - `PING` / `PONG` probes keep sessions alive; the client sends `PING` every 15 seconds of inactivity and expects an immediate
     `PONG` even when the server is mid-stream.
-- The TCP console enforces a maximum line length of 128 bytes and rate-limits failed authentication attempts (3 strikes within
-  60 seconds triggers a 90-second cooldown). `cohsh` additionally validates worker tickets locally, rejecting whitespace or
-  malformed values so automation does not leak failed attempts over the wire.
+  - The TCP console enforces a maximum line length of 128 bytes and rate-limits failed authentication attempts (3 strikes within
+    60 seconds triggers a 90-second cooldown). `cohsh` additionally validates worker tickets locally, rejecting whitespace or
+    malformed values so automation does not leak failed attempts over the wire.
+- `cohsh` is the authoritative implementation of this protocol, and the planned WASM GUI is conceptually another client that wraps the same verbs without introducing a new control surface.
 
 ## 8. Error Surface
 | Error | Meaning |

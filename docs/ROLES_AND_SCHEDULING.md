@@ -4,10 +4,12 @@
 ## 1. Roles
 | Role | Capabilities | Namespace |
 |------|--------------|-----------|
-| **Queen** | Orchestration role driven by `cohsh`: spawn/kill workers, bind/mount namespaces, inspect logs, request GPU leases | Full `/`, `/queen`, `/worker/*`, `/log`, `/gpu/*` (when installed) |
-| **WorkerHeartbeat** | Minimal worker that emits heartbeat telemetry and confirms console/attach paths | `/proc/boot`, `/worker/self/telemetry`, `/log/queen.log` (RO) |
-| **WorkerGpu** | GPU-centric worker that reads ticket/lease state and reports telemetry for host-provided GPU nodes | WorkerHeartbeat view + `/gpu/<id>/*` |
+| **Queen** | Hive-wide orchestrator driven by `cohsh`: spawn/kill workers, bind/mount namespaces, inspect logs, request GPU leases across many worker instances | Full `/`, `/queen`, `/worker/*`, `/log`, `/gpu/*` (when installed) |
+| **WorkerHeartbeat** | Minimal worker that emits heartbeat telemetry and confirms console/attach paths; many instances may run concurrently under the Queen | `/proc/boot`, `/worker/self/telemetry`, `/log/queen.log` (RO) |
+| **WorkerGpu** | GPU-centric worker that reads ticket/lease state and reports telemetry for host-provided GPU nodes; treated as another worker type under the Queen | WorkerHeartbeat view + `/gpu/<id>/*` |
 | **Observer** (future) | Read-only status access | `/proc`, `/log` |
+
+Exactly one Queen exists per hive, but many worker instances (across worker-heart, worker-gpu, and future types) can be orchestrated simultaneously. The queen session attached via `cohsh` is the canonical path for operators and automation to exercise these roles.
 
 ## 2. Ticket Lifecycle
 1. Queen requests spawn with desired role/budget.

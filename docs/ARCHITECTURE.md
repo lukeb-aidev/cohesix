@@ -6,6 +6,8 @@
 - **Userspace**: Entirely Rust, delivered as a CPIO rootfs containing the root task and all services.
 - **Host Tooling**: macOS 26 (Apple Silicon M4) developer workstation running QEMU for validation, plus auxiliary host workers (e.g., GPU bridge) that communicate with the VM over 9P or serial transports.
 
+A single Cohesix deployment is a hive: one Queen process plus multiple workers sharing a Secure9P namespace.
+
 ## 2. High-Level Boot Flow
 1. **seL4 Bootstraps** using the external elfloader and enters the Cohesix root task entry point.
 2. **Root Task Initialisation**
@@ -58,11 +60,13 @@
   driven by a deterministic ticket table (`event::TicketTable`) that records bootstrap secrets, and an acknowledgement dispatcher
   emits `OK <verb>` / `ERR <verb>` lines across both transports before side effects fire so automation can align with root-task
   state transitions.【F:apps/root-task/src/event/mod.rs†L329-L360】
+- Designs the capability distribution and event pump sequencing to support one Queen orchestrating many workers rather than a single privileged process.
 
 ### NineDoor 9P Server (crate: `nine-door`)
 - Implements the Secure9P codec/core stack and publishes the synthetic namespace.
 - Delegates permission checks to a role-aware `AccessPolicy` using capability tickets minted by the root task.
 - Tracks per-session state (fid tables, msize) and ensures append-only semantics on log/telemetry nodes.
+- Presents the shared hive namespace so queen and worker mounts reflect their orchestration roles.
 
 ### Workers (crate family: `worker-*`)
 - Spawned by queen commands; each worker receives a ticket describing its role and budget, and remains capability-limited to its
@@ -71,6 +75,12 @@
   in `/queen` while worker-heart processes stick to `/worker/<id>`.
 - Heartbeat workers emit periodic telemetry; worker-gpu stubs exist for future host-bridge coordination but stay isolated from
   queen mounts beyond their lease scopes.
+- The Queen role drives one-to-many worker orchestration through `/queen/ctl`, creating, configuring, and revoking multiple worker instances within the hive.
+
+### Control Surfaces
+- `cohsh` is the canonical operator shell for the hive, speaking the same console and NineDoor verbs over serial or TCP transports.
+- Automated systems are expected to embed `cohsh` or speak the same protocol when issuing hive orchestration commands.
+- A future host-side WASM GUI is planned as a hive dashboard that wraps the `cohsh` protocol; it introduces no new in-VM control channel.
 
 ### Host GPU Bridge (future, crate: `gpu-bridge`)
 - Runs **outside** the VM, using NVML/CUDA to manage real hardware.

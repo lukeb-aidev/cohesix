@@ -3,6 +3,7 @@
 
 ## 1. Rationale
 CUDA/NVML stacks are large and platform-specific. Keeping them outside the seL4 VM preserves determinism and minimises the trusted computing base (TCB). The VM interacts with GPUs exclusively through a capability-guarded 9P namespace mirrored by host workers.
+GPU workers (`worker-gpu`) are another worker type under the hive’s Queen, not standalone services.
 
 ## 2. Host GPU Worker Architecture
 - **Process**: Rust binary running on macOS or a Linux edge node, outside the VM, paired with the GPU bridge host.
@@ -27,11 +28,12 @@ pub struct GpuLease {
     pub mem_mb: u32,
     pub streams: u8,
     pub ttl_s: u32,
-    pub priority: u8,
+  pub priority: u8,
 }
 ```
 - Leases are tied to a worker ticket; revocation closes associated fids.
 - Host worker enforces TTL via timers; once expired, queued jobs are drained and subsequent writes receive `Permission`.
+- The Queen uses `/queen/ctl` to create GPU workers and manage leases within the same hive orchestration model.
 
 ## 5. Job Descriptor Schema
 ```json
@@ -56,6 +58,7 @@ GPU workers do not schedule hardware directly; they receive tickets and leases f
 - `gpu-bridge-host --mock --list` emits deterministic namespace descriptors consumed by NineDoor via `install_gpu_nodes`.
 - `info` returns synthetic GPU entries, `job` triggers precomputed status sequences.
 - Enables continuous validation of control plane without real hardware.
+- CLI/GUI clients submit GPU jobs via the same verbs exposed through `cohsh` and Secure9P; no separate ad-hoc GPU control protocol exists inside the VM.
 
 ## 7. Security Notes
 - No GPU device nodes or drivers are shipped in the VM, and direct device access/virtio-gpu paths are explicitly out of scope; the bridge host terminates DMA and enforces isolation.
