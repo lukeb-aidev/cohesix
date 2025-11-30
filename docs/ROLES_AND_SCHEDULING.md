@@ -24,7 +24,7 @@ Attachments always arrive via NineDoor: queen mounts the full namespace, worker-
 - **v1**: Priority bands (`system`, `control`, `worker`) with budgeted quanta; queen/control tasks reside in higher band.
 - **GPU (future)**: Lease-enforced concurrency; GPU workers must honour host-provided stream counts.
 
-Control flows are file-oriented (e.g., appends to `/queen/ctl`) instead of the deprecated RPC/virtual-console sketches; `cohsh` always runs outside the VM and speaks the NineDoor transport.
+Control flows are file-oriented (e.g., appends to `/queen/ctl`) instead of the deprecated RPC/virtual-console sketches; `cohsh` always runs outside the Cohesix instance—QEMU during development and UEFI hardware in deployment—and speaks the NineDoor transport.
 
 Scheduling contexts originate in root-task: initial SCs are held by root, carved out for NineDoor and per-worker threads, and reclaimed on revocation without altering seL4 SC semantics or time accounting.
 

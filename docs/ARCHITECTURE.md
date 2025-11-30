@@ -4,9 +4,11 @@
 ## 1. System Boundaries
 - **Kernel**: Upstream seL4 for `aarch64/virt (GICv3)`; treated as an external dependency that provides the capability system, scheduling primitives, and IRQ/timer services.
 - **Userspace**: Entirely Rust, delivered as a CPIO rootfs containing the root task and all services.
-- **Host Tooling**: macOS 26 (Apple Silicon M4) developer workstation running QEMU for validation, plus auxiliary host workers (e.g., GPU bridge) that communicate with the VM over 9P or serial transports.
+- **Host Tooling**: macOS 26 (Apple Silicon M4) developer workstation running QEMU for validation, plus auxiliary host workers (e.g., GPU bridge) that communicate with the Cohesix instance over 9P or serial transports (the same transport model applies when running on physical hardware).
 
 A single Cohesix deployment is a hive: one Queen process plus multiple workers sharing a Secure9P namespace.
+
+The logical architecture—root-task, NineDoor, workers, Secure9P transports, GPU bridge—is hardware-agnostic. The current reference implementation runs on QEMU `aarch64/virt` for development and CI, and the roadmap brings this exact behaviour to UEFI-booted ARM64 hardware; VM semantics are expected to match the physical deployment profile.
 
 ## 2. High-Level Boot Flow
 1. **seL4 Bootstraps** using the external elfloader and enters the Cohesix root task entry point.
@@ -84,8 +86,8 @@ A single Cohesix deployment is a hive: one Queen process plus multiple workers s
 
 ### Host GPU Bridge (future, crate: `gpu-bridge`)
 - Runs **outside** the VM, using NVML/CUDA to manage real hardware.
-- Mirrors GPU control surfaces into the VM via a 9P transport adapter (`secure9p-transport::Tcp` on the host side only).
-- Maintains lease agreements and enforces memory/stream quotas independent of the VM.
+- Mirrors GPU control surfaces into the Cohesix instance (QEMU during development, physical hardware in deployment) via a 9P transport adapter (`secure9p-transport::Tcp` on the host side only).
+- Maintains lease agreements and enforces memory/stream quotas independent of the VM profile.
 
 ## 4. Namespaces & Mount Tables
 - Each session is mounted according to role:
@@ -134,8 +136,9 @@ A single Cohesix deployment is a hive: one Queen process plus multiple workers s
   lines so host tooling (`cohsh`) can mirror state over either serial or TCP transports while timers and IPC continue to run.
 
 `cohsh` is a host-only CLI: it never executes inside the VM or QEMU guest, instead running on macOS and connecting over the TCP
-transport (or wrapping a local QEMU subprocess via the `qemu` transport) using the NineDoor protocol. It mirrors the root shell
-command set but keeps orchestration off-VM, matching the build instructions in `docs/USERLAND_AND_CLI.md`. 【F:apps/cohsh/src/main.rs†L44-L132】
+transport (or wrapping a local QEMU subprocess via the `qemu` transport) using the NineDoor protocol, and the same host-driven
+posture applies when Cohesix runs on physical hardware. It mirrors the root shell command set but keeps orchestration off-VM,
+matching the build instructions in `docs/USERLAND_AND_CLI.md`. 【F:apps/cohsh/src/main.rs†L44-L132】
 
 ## 8. Reliability & Security Considerations
 - Minimal trusted computing base: no POSIX layers, no TCP servers inside the VM, no dynamic loading.

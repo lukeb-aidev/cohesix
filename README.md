@@ -1,7 +1,9 @@
 <!-- Author: Lukas Bower -->
 # Cohesix
 
-Cohesix is a pure Rust userspace stack running atop upstream seL4 on `aarch64/virt (GICv3)` under QEMU. Userspace ships as a static rootfs CPIO containing the root task, NineDoor 9P server, workers, and host-facing tools; all control flows through Secure9P. Operators interact via two consoles: the always-on PL011 root console and the remote TCP NineDoor console consumed by `cohsh`.
+Cohesix is a pure Rust userspace stack running atop upstream seL4 on `aarch64/virt (GICv3)` under QEMU as the current development configuration; the roadmap targets UEFI-booted physical ARM64 hardware with equivalent semantics. Userspace ships as a static rootfs CPIO containing the root task, NineDoor 9P server, workers, and host-facing tools; all control flows through Secure9P. Operators interact via two consoles: the always-on PL011 root console and the remote TCP NineDoor console consumed by `cohsh`.
+
+Cohesix is designed for physical ARM64 hardware booted via UEFI as the primary deployment environment. Today’s reference setup runs on QEMU `aarch64/virt` for bring-up, CI, and testing, and QEMU behaviour is expected to mirror the eventual UEFI board profile.
 
 ## Getting Started
 - Build and launch via `scripts/cohesix-build-run.sh`, pointing at your seL4 build and desired output directory; the script stages host tools alongside the VM image and enables the TCP console when `--transport tcp` is passed.

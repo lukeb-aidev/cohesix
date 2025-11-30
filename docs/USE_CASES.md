@@ -23,19 +23,19 @@ This document enumerates concrete, high‑value **use cases** for Cohesix across
 **Why:** private LAN for cameras/Jetsons; secure UEFI worker as the only WAN node.
 **Needs:** content‑addressed model updates; CBOR telemetry; local summarization.
 **Constraints:** Privacy/PII handling at edge.
-Each store deployment is a hive with one Queen coordinating many workers via `cohsh` or a GUI client that speaks the same protocol.
+Each store deployment is a hive with one Queen coordinating many workers via `cohsh` or a GUI client that speaks the same protocol, running on physical ARM64 hardware booted via UEFI; QEMU remains the development/QA harness.
 
 ### 4) Logistics & ports (ALPR, container ID, crane safety)
 **Why:** harsh networks, need resilient telemetry & updates.
 **Needs:** durable disk spooling; batch uploads; ring buffers.
 **Constraints:** Physical security, RF noise.
-Hives with a single Queen orchestrate multiple workers across yard devices, commanded through `cohsh` or compatible clients.
+Hives with a single Queen orchestrate multiple workers across yard devices, commanded through `cohsh` or compatible clients on physical ARM64 hardware, with QEMU used during development to mirror deployment behaviour.
 
 ### 5) Telco MEC micro‑orchestrator
 **Why:** coordinate accelerators at cell sites; capability tickets; multi‑tenant scheduling.
 **Needs:** SR‑IOV/NIC telemetry sidecars; per‑tenant quotas; shard namespaces.
 **Constraints:** Carrier‑grade Ops, slice isolation.
-Each MEC node is a hive (one Queen, many workers and GPU workers) steered through `cohsh` or GUI tooling that reuses the same protocol.
+Each MEC node is a hive (one Queen, many workers and GPU workers) steered through `cohsh` or GUI tooling that reuses the same protocol, hosted on physical ARM64 hardware booted via UEFI; QEMU is reserved for dev/CI equivalence testing.
 
 ### 6) Healthcare imaging edge → cloud PACS
 **Why:** minimize PHI footprint, deterministic control plane.  
@@ -46,7 +46,7 @@ Each MEC node is a hive (one Queen, many workers and GPU workers) steered throug
 **Why:** bandwidth‑aware model deltas; offline autonomy.
 **Needs:** CAS manifests, delta packs; multicast to many vehicles.
 **Constraints:** Safety, predictable update windows.
-Depot controllers run as hives, with the Queen coordinating many workers and GPU workers via `cohsh`-driven flows.
+Depot controllers run as hives, with the Queen coordinating many workers and GPU workers via `cohsh`-driven flows on physical ARM64 hardware; the QEMU harness mirrors these deployments during development.
 
 ### 8) Defense ISR kits / forward ops
 **Why:** seL4 assurance, LoRa for low‑bandwidth control.  
@@ -62,7 +62,7 @@ Depot controllers run as hives, with the Queen coordinating many workers and GPU
 **Why:** signed content updates, simple auditable playback.
 **Needs:** CAS assets + schedule provider; proof‑of‑display receipts.
 **Constraints:** Bandwidth caps, SLA reporting.
-Each signage hub is a hive with one Queen orchestrating multiple workers, all commanded through `cohsh` or GUI clients that speak the same protocol.
+Each signage hub is a hive with one Queen orchestrating multiple workers, all commanded through `cohsh` or GUI clients that speak the same protocol on physical ARM64 hardware, validated during development on the QEMU reference board.
 
 ---
 
