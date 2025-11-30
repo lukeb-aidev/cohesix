@@ -7,11 +7,21 @@ publish = false
 build = "build.rs"
 
 [features]
-default = []   # no debug features by default
-# Feature combinations validated for developer builds:
-# - Serial-only dev boot: kernel + bootstrap-trace + serial-console
-# - Serial + TCP console: kernel + bootstrap-trace + serial-console + net + net-console
-# Defaults are empty, so always pass `--no-default-features` and list the desired features explicitly.
+default = []   # no debug features by default (always pass --no-default-features)
+# Feature combinations validated for developer builds (explicitly opt-in when using --no-default-features):
+# - Serial-only dev boot on QEMU virt: kernel + bootstrap-trace + serial-console
+# - Serial + TCP console on QEMU virt: kernel + bootstrap-trace + serial-console + net-console (implies `net`)
+# - Convenience umbrella for the common virt dev path: dev-virt
+# Debug/developer toggles intentionally excluded when using --no-default-features:
+# cap-probes, canonical_cspace, bootstrap-minimal, bootstrap-debug, untyped-debug,
+# trace-heavy-init, strict-bootstrap, net-irq, sel4-debug, debug-input, ffi_shim
+# (enable explicitly when needed).
+dev-virt = [
+    "kernel",
+    "bootstrap-trace",
+    "serial-console",
+    "net-console", # pulls in `net` and TCP console wiring
+]
 cap-probes = []   # gate experimental cap ops (tests/bench only)
 net = []
 canonical_cspace = ["kernel"]

@@ -280,6 +280,11 @@ impl NetStack {
                     info!("[net-console] conn {}: established", client_id);
                     None
                 };
+                let peer_label = peer.as_ref().map(|p| p.as_str()).unwrap_or("<unknown>");
+                info!(
+                    "[net-console] accepted TCP console connection id={} peer={}",
+                    client_id, peer_label
+                );
                 let _ = self.events.push(NetConsoleEvent::Connected {
                     conn_id: client_id,
                     peer,
