@@ -584,14 +584,6 @@ pub fn start<P: Platform>(bootinfo: &'static BootInfo, platform: &P) -> ! {
     boot_log::force_uart_line("[kernel:entry] bootstrap complete; entering userland");
 
     crate::userland::main(ctx);
-
-    log::error!("[kernel:BUG] userland::main() returned unexpectedly");
-    log::error!("[kernel:BUG] reached end of bootstrap without handing off to userland runtime");
-    loop {
-        unsafe {
-            sel4_sys::seL4_Yield();
-        }
-    }
 }
 
 fn bootstrap<P: Platform>(
