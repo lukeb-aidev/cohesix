@@ -52,22 +52,22 @@ pub fn main(ctx: BootContext) -> ! {
     let uart_base = NonNull::new(PL011_VADDR as *mut u8);
 
     let mut audit = LoggerAudit;
-    let mut serial = ctx
+    let serial = ctx
         .serial
         .borrow_mut()
         .take()
         .expect("serial driver missing from BootContext");
-    let mut timer = ctx
+    let timer = ctx
         .timer
         .borrow_mut()
         .take()
         .expect("timer missing from BootContext");
-    let mut ipc = ctx
+    let ipc = ctx
         .ipc
         .borrow_mut()
         .take()
         .expect("ipc dispatcher missing from BootContext");
-    let mut tickets = ctx
+    let tickets = ctx
         .tickets
         .borrow_mut()
         .take()

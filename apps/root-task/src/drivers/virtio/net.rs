@@ -451,12 +451,12 @@ impl VirtioRegs {
             let device_id = regs.read32(Registers::DeviceId);
             let vendor_id = regs.read32(Registers::VendorId);
             info!(
-                "[net-console] slot={} mmio=0x{base:08x} id=0x{device_id:04x} vendor=0x{vendor_id:04x} magic=0x{magic:08x} version={}",
-                slot,
+                "[net-console] slot={slot} mmio=0x{base:08x} id=0x{device_id:04x} vendor=0x{vendor_id:04x} magic=0x{magic:08x} version={version}",
+                slot = slot,
                 base = base,
-                device_id,
-                vendor_id,
-                version
+                device_id = device_id,
+                vendor_id = vendor_id,
+                version = version
             );
             if magic == VIRTIO_MMIO_MAGIC
                 && version == VIRTIO_MMIO_VERSION_LEGACY
