@@ -15,8 +15,8 @@ preparing and executing tasks.
 
 Cohesix is a hive-style orchestrator: one Queen coordinating many workers via a shared Secure9P namespace and commanded through `cohsh`.
 
-**Current Status Snapshot (through Milestone 7c)**
-- Milestones 0–7c are implemented: the cooperative event pump, PL011 root console, TCP console listener, and Secure9P namespace are live and reflected in the updated architecture and CLI docs (see `ARCHITECTURE.md` / `USERLAND_AND_CLI.md`).
+**Current Status Snapshot (through Milestone 7d)**
+- Milestones 0–7d are implemented: the cooperative event pump, PL011 root console, TCP console listener, Secure9P namespace, and shared `OK`/`ERR` acknowledgement surface are live and reflected in the updated architecture and CLI docs (see `ARCHITECTURE.md` / `USERLAND_AND_CLI.md`).
 - Dual consoles now run concurrently; the TCP listener is non-blocking and mirrors serial semantics while keeping PL011 always-on for recovery.
 - NineDoor attach/namespace semantics follow `SECURE9P.md` and role mounts from `ROLES_AND_SCHEDULING.md`; worker-heart and worker-gpu remain stubs until later milestones integrate them with the live namespaces.
 - Remaining milestones focus on acknowledgement hardening, HAL/compiler work, and future worker/GPU namespace extensions.
@@ -342,7 +342,7 @@ Deliverables: Updated documentation set, automation scripts, and passing QEMU TC
 ```
 
 ## Milestone 7d
-**Status:** In progress — ACK/ERR broadcast already exists in the event pump for serial and TCP; focus now is fixture stability, reconnection semantics, and documentation parity.
+**Status:** Complete — ACK/ERR broadcast is implemented across serial and TCP with shared fixtures, reconnection semantics, and documentation in place.
 **Deliverables**
 - Ensure the PL011 root console remains active alongside the TCP listener; TCP handling must stay non-blocking so serial recovery remains deterministic (see `ARCHITECTURE.md`).
 - Attachments must respect the current NineDoor handshake and ticket validation; acknowledgements should reuse the parser grammar from `USERLAND_AND_CLI.md`.
