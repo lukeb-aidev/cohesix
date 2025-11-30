@@ -172,6 +172,7 @@ pub struct NetStack {
     conn_bytes_read: u64,
     conn_bytes_written: u64,
     events: HeaplessVec<NetConsoleEvent, SOCKET_CAPACITY>,
+    service_logged: bool,
 }
 
 impl NetStack {
@@ -245,6 +246,7 @@ impl NetStack {
             conn_bytes_read: 0,
             conn_bytes_written: 0,
             events: HeaplessVec::new(),
+            service_logged: false,
         };
         stack.initialise_socket();
         socket_guard.disarm();
@@ -267,6 +269,10 @@ impl NetStack {
 
     /// Polls the network stack using a host-supplied monotonic timestamp in milliseconds.
     pub fn poll_with_time(&mut self, now_ms: u64) -> bool {
+        if !self.service_logged {
+            info!("[net-console] service loop running");
+            self.service_logged = true;
+        }
         let last = self.telemetry.last_poll_ms;
         let delta = now_ms.saturating_sub(last);
         let delta_ms = core::cmp::min(delta, u64::from(u32::MAX)) as u32;
@@ -393,6 +399,9 @@ impl NetStack {
                         Ok(count) => {
                             self.conn_bytes_read =
                                 self.conn_bytes_read.saturating_add(count as u64);
+                            if self.auth_state == AuthState::AuthRequested {
+                                info!("[net-console] auth request received (len={count})");
+                            }
                             info!(
                                 "[net-console] conn {}: received {} bytes (state={:?})",
                                 self.active_client_id.unwrap_or(0),
@@ -681,6 +690,12 @@ impl NetStack {
                             core::str::from_utf8(line.as_bytes()).unwrap_or("<invalid>"),
                             sent
                         );
+                        if line.starts_with("OK AUTH") || line.starts_with("ERR AUTH") {
+                            info!(
+                                "[net-console] auth response sent; session state = {:?}",
+                                auth_state
+                            );
+                        }
                     }
                     if server.is_authenticated() {
                         server.mark_activity(now_ms);
