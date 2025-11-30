@@ -1472,6 +1472,7 @@ fn bootstrap<P: Platform>(
         sel4_panicking::install_debug_sink(sink);
     }
     driver.write_str("[cohesix:root-task] uart logger online\n");
+    log::info!("[boot] after uart logger online");
 
     let uart_slot = uart_region.as_ref().map(|region| region.cap());
 
@@ -1498,7 +1499,19 @@ fn bootstrap<P: Platform>(
             );
 
         #[cfg(all(feature = "net-console", feature = "kernel"))]
-        let net_stack = NetStack::new(&mut hal).expect("virtio-net device not found");
+        log::info!("[boot] net-console: probing virtio-net");
+        let net_stack = match NetStack::new(&mut hal) {
+            Ok(stack) => {
+                log::info!("[boot] net-console: virtio-net initialised");
+                Some(stack)
+            }
+            Err(err) => {
+                log::error!(
+                    "[boot] net-console: virtio-net init failed ({err}); continuing without TCP console"
+                );
+                None
+            }
+        };
         #[cfg(all(feature = "net-console", not(feature = "kernel")))]
         let (net_stack, _) = NetStack::new(Ipv4Address::new(10, 0, 0, 2));
         let timer = KernelTimer::new(5);
@@ -1557,7 +1570,7 @@ fn bootstrap<P: Platform>(
             boot_tracer().advance(BootPhase::EPAttachWait);
         }
         #[cfg(all(feature = "net-console", feature = "kernel"))]
-        {
+        if let Some(net_stack) = net_stack.as_ref() {
             let mac = net_stack.hardware_address();
             let ip = net_stack.ipv4_address();
             let prefix = net_stack.prefix_len();
@@ -1571,6 +1584,8 @@ fn bootstrap<P: Platform>(
             let mut listen = heapless::String::<64>::new();
             let _ = write!(listen, "[console] tcp listen :{CONSOLE_TCP_PORT}");
             console.writeln_prefixed(listen.as_str());
+        } else {
+            log::warn!("[boot] net-console unavailable: virtio-net did not initialise");
         }
         let caps_start = empty_start as u32;
         let caps_end = cs.next_candidate_slot();
@@ -1588,8 +1603,8 @@ fn bootstrap<P: Platform>(
         crate::bootstrap::run_minimal(bootinfo_ref);
         let features = BootFeatures {
             serial_console: cfg!(feature = "serial-console"),
-            net: cfg!(feature = "net"),
-            net_console: cfg!(feature = "net-console"),
+            net: cfg!(feature = "net") && net_stack.is_some(),
+            net_console: cfg!(feature = "net-console") && net_stack.is_some(),
         };
 
         #[cfg(feature = "net-console")]
@@ -1602,7 +1617,7 @@ fn bootstrap<P: Platform>(
             timer: RefCell::new(Some(timer)),
             ipc: RefCell::new(Some(ipc)),
             tickets: RefCell::new(Some(tickets)),
-            net_stack: RefCell::new(Some(net_stack)),
+            net_stack: RefCell::new(net_stack),
             #[cfg(feature = "kernel")]
             ninedoor: RefCell::new(Some(ninedoor)),
         };
