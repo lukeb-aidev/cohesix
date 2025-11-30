@@ -11,6 +11,8 @@ is grounded in the architectural intent outlined in `docs/ARCHITECTURE.md`, the 
 and the interface contracts codified in `docs/INTERFACES.md`. Treat those documents as non-negotiable source material when
 preparing and executing tasks.
 
+Cohesix is a hive-style orchestrator: one Queen coordinating many workers via a shared Secure9P namespace and commanded through `cohsh`.
+
 **Current Status Snapshot (through Milestone 7c)**
 - Milestones 0–7c are implemented: the cooperative event pump, PL011 root console, TCP console listener, and Secure9P namespace are live and reflected in the updated architecture and CLI docs (see `ARCHITECTURE.md` / `USERLAND_AND_CLI.md`).
 - Dual consoles now run concurrently; the TCP listener is non-blocking and mirrors serial semantics while keeping PL011 always-on for recovery.
@@ -80,6 +82,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 - `cohsh` CLI upgraded to speak the live NineDoor transport (mock removed) while preserving operator workflows.
 - Implementation satisfies the defences and layering requirements from `docs/SECURE9P.md §2-§5` and strictly adheres to
   `docs/INTERFACES.md §1-§6` for operation coverage, ticket validation, and error semantics.
+- These flows are defined for one Queen orchestrating many workers within a hive; host tools (CLI or GUI) drive them via `cohsh`.
 
 **Checks**
 - Integration test attaches, walks, reads `/proc/boot`, and appends to `/queen/ctl`.
@@ -98,6 +101,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 - Budget enforcement (ttl/ticks/ops) with automatic revocation.
 - Access policy follows `docs/ROLES_AND_SCHEDULING.md §1-§5` and the queen control schema in `docs/INTERFACES.md §3-§4`; all
   JSON handling must reject unknown formats as defined in the error table (`docs/INTERFACES.md §8`).
+- These queen/worker flows assume one Queen orchestrating many workers within a hive, exercised through `cohsh` or clients speaking its protocol.
 
 **Checks**
 - Writing spawn command creates worker directory and live telemetry stream.
@@ -111,6 +115,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 - Queen-only commands for namespace manipulation exposed via `/queen/ctl`.
 - Namespace operations mirror the behaviour defined in `docs/INTERFACES.md §3` and respect mount expectations in
   `docs/ARCHITECTURE.md §4`.
+- Mount and namespace flows remain scoped to one Queen orchestrating many workers inside a hive, driven by `cohsh` (and future GUI clients that speak its protocol).
 
 **Checks**
 - Queen remaps `/queen` to a subdirectory without affecting other sessions.
@@ -146,6 +151,8 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 - Host integration tests run in `--mock` mode when GPUs are absent.
 
 > **Rule of Engagement:** Advance milestones sequentially, treat documentation as canonical, and keep code/tests aligned after every milestone increment.
+
+> **Future Note:** A host-side WASM GUI is expected as a hive dashboard layered on the `cohsh` protocol; it does not alter kernel/userspace boundaries or introduce new in-VM services.
 
 ## Milestone 7a — Root-Task Event Pump & Authenticated Kernel Entry
 **Status:** Complete — Event pump replaces the spin loop; authenticated console flow and serial integration are live. Preserve PL011 logging and audit ordering during follow-up changes.

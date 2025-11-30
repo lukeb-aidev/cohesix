@@ -4,6 +4,7 @@
 ## 1. Scope
 Secure9P provides the 9P2000.L codec, core request dispatcher, and transport adapters used by NineDoor. It must remain usable in `no_std + alloc` environments and cannot depend on POSIX APIs.
 It is the sole control-plane IPC surface; the TCP console path reuses the same NineDoor framing with a minimal 9P-style `attach`/auth handshake (role, optional ticket, idle/auth timeouts, reconnect-friendly) layered alongside the always-on PL011 root console rather than replacing it.
+Secure9P sessions present the per-hive and per-role view into the namespace so queen and worker mounts expose different slices of the hive.
 
 ## 2. Layering
 ```
@@ -34,6 +35,7 @@ pub trait AccessPolicy {
 - NineDoor implements the trait using role-aware mount tables.
 - Policies run before provider logic executes.
 - Role-to-namespace rules follow `docs/ROLES_AND_SCHEDULING.md` (queen = full tree, worker-heartbeat = `/proc/boot`, `/worker/self/telemetry`, `/log/queen.log` RO, worker-gpu future `/gpu/<lease>`), and capabilities are session-scoped tickets negotiated during `attach` (single attach per `cohsh` session with optional ticket injection before remaining bound to the resulting mounts).
+- The AccessPolicy for queen versus worker roles enables the Queen’s ability to orchestrate many workers by controlling access to mount points and control files such as `/queen/ctl`, `/worker/<id>/telemetry`, and `/gpu/*`.
 
 ## 5. Testing Matrix
 | Suite | Coverage |

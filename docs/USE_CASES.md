@@ -1,5 +1,6 @@
+<!-- Author: Lukas Bower -->
 # USE_CASES.md
-Author: Cohesix — October 15, 2025
+Author: Lukas Bower — October 15, 2025
 
 ## Purpose
 This document enumerates concrete, high‑value **use cases** for Cohesix across sectors, highlighting why the platform is a fit, what (if anything) needs to be added, and any notable compliance or operational constraints.
@@ -19,19 +20,22 @@ This document enumerates concrete, high‑value **use cases** for Cohesix across
 **Constraints:** NERC/CIP, IEC 61850 contexts.
 
 ### 3) Retail / Computer‑vision hub (store analytics)
-**Why:** private LAN for cameras/Jetsons; secure UEFI worker as the only WAN node.  
-**Needs:** content‑addressed model updates; CBOR telemetry; local summarization.  
+**Why:** private LAN for cameras/Jetsons; secure UEFI worker as the only WAN node.
+**Needs:** content‑addressed model updates; CBOR telemetry; local summarization.
 **Constraints:** Privacy/PII handling at edge.
+Each store deployment is a hive with one Queen coordinating many workers via `cohsh` or a GUI client that speaks the same protocol.
 
 ### 4) Logistics & ports (ALPR, container ID, crane safety)
-**Why:** harsh networks, need resilient telemetry & updates.  
-**Needs:** durable disk spooling; batch uploads; ring buffers.  
+**Why:** harsh networks, need resilient telemetry & updates.
+**Needs:** durable disk spooling; batch uploads; ring buffers.
 **Constraints:** Physical security, RF noise.
+Hives with a single Queen orchestrate multiple workers across yard devices, commanded through `cohsh` or compatible clients.
 
 ### 5) Telco MEC micro‑orchestrator
-**Why:** coordinate accelerators at cell sites; capability tickets; multi‑tenant scheduling.  
-**Needs:** SR‑IOV/NIC telemetry sidecars; per‑tenant quotas; shard namespaces.  
+**Why:** coordinate accelerators at cell sites; capability tickets; multi‑tenant scheduling.
+**Needs:** SR‑IOV/NIC telemetry sidecars; per‑tenant quotas; shard namespaces.
 **Constraints:** Carrier‑grade Ops, slice isolation.
+Each MEC node is a hive (one Queen, many workers and GPU workers) steered through `cohsh` or GUI tooling that reuses the same protocol.
 
 ### 6) Healthcare imaging edge → cloud PACS
 **Why:** minimize PHI footprint, deterministic control plane.  
@@ -39,9 +43,10 @@ This document enumerates concrete, high‑value **use cases** for Cohesix across
 **Constraints:** HIPAA/ISO 27001, locality of data.
 
 ### 7) Autonomous depots (AV/AGV fleets)
-**Why:** bandwidth‑aware model deltas; offline autonomy.  
-**Needs:** CAS manifests, delta packs; multicast to many vehicles.  
+**Why:** bandwidth‑aware model deltas; offline autonomy.
+**Needs:** CAS manifests, delta packs; multicast to many vehicles.
 **Constraints:** Safety, predictable update windows.
+Depot controllers run as hives, with the Queen coordinating many workers and GPU workers via `cohsh`-driven flows.
 
 ### 8) Defense ISR kits / forward ops
 **Why:** seL4 assurance, LoRa for low‑bandwidth control.  
@@ -54,9 +59,10 @@ This document enumerates concrete, high‑value **use cases** for Cohesix across
 **Constraints:** Public data, OTA safety.
 
 ### 10) Broadcast/DOOH signage controller
-**Why:** signed content updates, simple auditable playback.  
-**Needs:** CAS assets + schedule provider; proof‑of‑display receipts.  
+**Why:** signed content updates, simple auditable playback.
+**Needs:** CAS assets + schedule provider; proof‑of‑display receipts.
 **Constraints:** Bandwidth caps, SLA reporting.
+Each signage hub is a hive with one Queen orchestrating multiple workers, all commanded through `cohsh` or GUI clients that speak the same protocol.
 
 ---
 
