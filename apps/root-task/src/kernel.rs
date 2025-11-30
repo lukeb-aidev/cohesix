@@ -562,14 +562,19 @@ pub fn start<P: Platform>(bootinfo: &'static BootInfo, platform: &P) -> ! {
         Ok(ctx) => ctx,
         Err(err) => {
             log::error!("[kernel:entry] bootstrap failed: {err}");
-            boot_log::force_uart_line("[kernel:entry] bootstrap failed; entering fallback console");
+            boot_log::force_uart_line("[kernel:entry] bootstrap failed; parking thread");
             log::error!(
-                "[kernel:entry] falling back to PL011-only console due to bootstrap error: {err}"
+                "[kernel:entry] unable to construct BootContext; refusing to bypass userland handoff"
             );
-            crate::userland::start_console_or_cohsh(platform);
+            loop {
+                unsafe { sel4_sys::seL4_Yield() };
+            }
         }
     };
 
+    // Full boots must always proceed into userland; bootstrap-minimal remains a
+    // diagnostic-only path that bypasses normal runtime handoff.
+    log::info!("[kernel] handoff: calling userland::main");
     log::info!(
         "[kernel] bootstrap complete, handing off to userland runtime (serial_console={}, net={}, net_console={})",
         ctx.features.serial_console,
