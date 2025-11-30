@@ -7,7 +7,7 @@ use core::fmt;
 use core::ptr::{read_volatile, write_volatile, NonNull};
 
 use heapless::Vec as HeaplessVec;
-use log::{info, warn};
+use log::{error, info, warn};
 use sel4_sys::{seL4_Error, seL4_NotEnoughMemory};
 use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::time::Instant;
@@ -450,21 +450,30 @@ impl VirtioRegs {
             let version = regs.read32(Registers::Version);
             let device_id = regs.read32(Registers::DeviceId);
             let vendor_id = regs.read32(Registers::VendorId);
+            info!(
+                "[net-console] slot={} mmio=0x{base:08x} id=0x{device_id:04x} vendor=0x{vendor_id:04x} magic=0x{magic:08x} version={}",
+                slot,
+                base = base,
+                device_id,
+                vendor_id,
+                version
+            );
             if magic == VIRTIO_MMIO_MAGIC
                 && version == VIRTIO_MMIO_VERSION_LEGACY
                 && device_id == VIRTIO_DEVICE_ID_NET
                 && vendor_id != 0
             {
                 info!(
-                    "[net-console] virtio-net found: slot={} magic=0x{magic:08x} version={} vendor=0x{vendor:08x}",
+                    "[net-console] virtio-net found at slot={} mmio=0x{base:08x}",
                     slot,
-                    version,
-                    vendor = vendor_id
+                    base = base
                 );
                 return Ok(regs);
             }
         }
-        warn!("[net-console] virtio-net device not found in MMIO slots");
+        error!(
+            "[net-console] no virtio-net device found on virtio-mmio bus; disabling TCP console"
+        );
         Err(DriverError::NoDevice)
     }
 
