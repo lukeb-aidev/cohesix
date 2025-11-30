@@ -548,18 +548,30 @@ impl Drop for BootStateGuard {
 
 /// Root task entry point invoked by seL4 after kernel initialisation.
 pub fn start<P: Platform>(bootinfo: &'static BootInfo, platform: &P) -> ! {
+    log::info!("[kernel:entry] root-task entry reached");
     log::info!(target: "kernel", "[kernel] boot entrypoint: starting bootstrap");
-    match bootstrap(platform, bootinfo) {
-        Ok(ctx) => {
-            log::info!(
-                target: "kernel",
-                "[kernel] bootstrap complete, handing off to userland runtime"
-            );
-            crate::userland::main(ctx);
-        }
+    let ctx = match bootstrap(platform, bootinfo) {
+        Ok(ctx) => ctx,
         Err(err) => {
             log::error!("[boot] failed to enter bootstrap runtime: {err}");
             crate::userland::start_console_or_cohsh(platform);
+        }
+    };
+
+    log::info!(
+        "[kernel] bootstrap complete, handing off to userland runtime (serial_console={}, net={}, net_console={})",
+        ctx.features.serial_console,
+        ctx.features.net,
+        ctx.features.net_console,
+    );
+
+    crate::userland::main(ctx);
+
+    log::error!("[kernel:BUG] userland::main() returned unexpectedly");
+    log::error!("[kernel:BUG] reached end of bootstrap without handing off to userland runtime");
+    loop {
+        unsafe {
+            sel4_sys::seL4_Yield();
         }
     }
 }
@@ -683,6 +695,7 @@ fn bootstrap<P: Platform>(
     }
     boot_tracer().advance(BootPhase::CSpaceInit);
 
+    log::info!("[kernel:entry] about to log stage0 entry");
     console.writeln_prefixed("entered from seL4 (stage0)");
     console.writeln_prefixed("Cohesix boot: root-task online");
 
