@@ -41,7 +41,7 @@ type NetStackHandle = ();
 pub fn main(ctx: BootContext) -> ! {
     log::info!(
         target: "userland",
-        "[userland] starting runtime: serial-console={}, net={}, net-console={}",
+        "[userland] starting runtime: serial_console={}, net={}, net-console={}",
         ctx.features.serial_console,
         ctx.features.net,
         ctx.features.net_console,
