@@ -1520,8 +1520,10 @@ fn bootstrap<P: Platform>(
         #[cfg(all(feature = "net-console", not(feature = "kernel")))]
         let (net_stack, _) = NetStack::new(Ipv4Address::new(10, 0, 0, 2));
         log::info!("[boot] net-console init complete; continuing with timers and IPC");
+        log::info!(target: "root_task::kernel", "[boot] phase: TimersAndIPC.begin");
         let timer = KernelTimer::new(5);
         let ipc = KernelIpc::new(ep_slot);
+        log::info!(target: "root_task::kernel", "[boot] phase: TimersAndIPC.end");
 
         let mut tickets: TicketTable<4> = TicketTable::new();
         let _ = tickets.register(Role::Queen, "bootstrap");
