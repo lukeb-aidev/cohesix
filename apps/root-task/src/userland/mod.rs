@@ -122,6 +122,10 @@ pub fn main(ctx: BootContext) -> ! {
         match (ctx.uart_slot, uart_base) {
             (Some(_uart_slot), Some(_)) => {
                 log::info!(
+                    target: "root_task::kernel",
+                    "[boot] starting serial root console on PL011"
+                );
+                log::info!(
                     target: "userland",
                     "[userland] event-pump: mapping PL011 for shared console I/O"
                 );

@@ -560,7 +560,17 @@ where
 
     /// Emit the interactive banner and initial prompt over the serial console.
     pub fn start_cli(&mut self) {
+        #[cfg(feature = "kernel")]
+        if let Some(context) = self.console_context {
+            log::info!(
+                target: "root_task::console",
+                "[console] starting root shell ep=0x{ep:04x} uart=0x{uart:04x}",
+                ep = context.ep_slot,
+                uart = context.uart_slot.unwrap_or(crate::sel4::seL4_CapNull),
+            );
+        }
         self.emit_console_line(CONSOLE_BANNER);
+        self.emit_console_line("Cohesix console ready");
         self.emit_help();
         self.emit_prompt();
         self.serial.poll_io();
