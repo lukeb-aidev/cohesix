@@ -15,10 +15,12 @@ pub mod proto;
 pub mod transport;
 
 #[cfg(feature = "tcp")]
-pub use transport::tcp::TcpTransport;
+pub use transport::tcp::{tcp_debug_enabled, TcpTransport};
 
 use std::fmt;
 use std::io::{self, BufRead, BufReader, Read, Write};
+#[cfg(feature = "tcp")]
+use std::net::TcpStream;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, RecvTimeoutError};
@@ -96,6 +98,11 @@ pub trait Transport {
     fn drain_acknowledgements(&mut self) -> Vec<String> {
         Vec::new()
     }
+
+    /// Return the TCP endpoint if the transport supports TCP diagnostics.
+    fn tcp_endpoint(&self) -> Option<(String, u16)> {
+        None
+    }
 }
 
 impl<T> Transport for Box<T>
@@ -124,6 +131,10 @@ where
 
     fn drain_acknowledgements(&mut self) -> Vec<String> {
         (**self).drain_acknowledgements()
+    }
+
+    fn tcp_endpoint(&self) -> Option<(String, u16)> {
+        (**self).tcp_endpoint()
     }
 }
 
@@ -749,6 +760,38 @@ impl<T: Transport, W: Write> Shell<T, W> {
         Ok(())
     }
 
+    #[cfg(feature = "tcp")]
+    fn run_tcp_diag(&mut self, port_override: Option<&str>) -> Result<()> {
+        let endpoint = self
+            .transport
+            .tcp_endpoint()
+            .unwrap_or_else(|| ("127.0.0.1".to_owned(), 31337));
+        let mut port = endpoint.1;
+        if let Some(raw_port) = port_override {
+            port = raw_port
+                .parse::<u16>()
+                .context("tcp-diag requires a numeric port")?;
+        }
+        let host = endpoint.0;
+        writeln!(self.writer, "tcp-diag: connecting to {host}:{port}")?;
+        match TcpStream::connect((host.as_str(), port)) {
+            Ok(stream) => {
+                writeln!(self.writer, "tcp-diag: connect succeeded")?;
+                if let Ok(local) = stream.local_addr() {
+                    writeln!(self.writer, "tcp-diag: local_addr={local}")?;
+                }
+                if let Ok(peer) = stream.peer_addr() {
+                    writeln!(self.writer, "tcp-diag: peer_addr={peer}")?;
+                }
+            }
+            Err(err) => {
+                writeln!(self.writer, "tcp-diag: connect failed: {err}")?;
+                return Err(anyhow!("tcp-diag failed: {err}"));
+            }
+        }
+        Ok(())
+    }
+
     /// Execute a single command line.
     pub fn execute(&mut self, line: &str) -> Result<CommandStatus> {
         let mut parts = line.split_whitespace();
@@ -765,6 +808,10 @@ impl<T: Transport, W: Write> Shell<T, W> {
                 self.write_line("  log                          - Tail /log/queen.log")?;
                 self.write_line(
                     "  ping                         - Report attachment status for health checks",
+                )?;
+                #[cfg(feature = "tcp")]
+                self.write_line(
+                    "  tcp-diag [port]              - Debug TCP connectivity without protocol traffic",
                 )?;
                 self.write_line(
                     "  ls [path]                    - Enumerate directory entries (planned)",
@@ -816,6 +863,21 @@ impl<T: Transport, W: Write> Shell<T, W> {
                     writeln!(self.writer, "[console] {ack}")?;
                 }
                 writeln!(self.writer, "ping: {response}")?;
+                Ok(CommandStatus::Continue)
+            }
+            "tcp-diag" => {
+                #[cfg(feature = "tcp")]
+                {
+                    let port_arg = parts.next();
+                    if parts.next().is_some() {
+                        return Err(anyhow!("tcp-diag takes at most one argument: port"));
+                    }
+                    self.run_tcp_diag(port_arg)?;
+                }
+                #[cfg(not(feature = "tcp"))]
+                {
+                    return Err(anyhow!("tcp-diag is available only in TCP-enabled builds"));
+                }
                 Ok(CommandStatus::Continue)
             }
             "echo" => {
