@@ -22,6 +22,7 @@ dev-virt = [
     "serial-console",
     "net-console", # pulls in `net` and TCP console wiring
 ]
+bypass-timers-ipc = []
 cap-probes = []   # gate experimental cap ops (tests/bench only)
 net = []
 canonical_cspace = ["kernel"]

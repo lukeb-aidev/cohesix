@@ -1521,8 +1521,7 @@ fn bootstrap<P: Platform>(
         let (net_stack, _) = NetStack::new(Ipv4Address::new(10, 0, 0, 2));
         log::info!("[boot] net-console init complete; continuing with timers and IPC");
         log::info!(target: "root_task::kernel", "[boot] phase: TimersAndIPC.begin");
-        let timer = KernelTimer::new(5);
-        let ipc = KernelIpc::new(ep_slot);
+        let (timer, ipc) = run_timers_and_ipc_phase(ep_slot);
         log::info!(target: "root_task::kernel", "[boot] phase: TimersAndIPC.end");
 
         let mut tickets: TicketTable<4> = TicketTable::new();
@@ -1645,6 +1644,60 @@ fn bootstrap<P: Platform>(
         };
         return Ok(ctx);
     }
+}
+
+const KERNEL_TIMER_PERIOD_MS: u64 = 5;
+
+#[cfg(feature = "bypass-timers-ipc")]
+fn run_timers_and_ipc_phase(ep_slot: sel4_sys::seL4_CPtr) -> (KernelTimer, KernelIpc) {
+    log::warn!(
+        target: "root_task::kernel",
+        "[boot] TimersAndIPC: BYPASSED via feature 'bypass-timers-ipc'"
+    );
+    log::info!(
+        target: "root_task::kernel",
+        "[boot] TimersAndIPC: constructing placeholder timer period_ms={}",
+        KERNEL_TIMER_PERIOD_MS
+    );
+    let timer = KernelTimer::new(KERNEL_TIMER_PERIOD_MS);
+    log::info!(
+        target: "root_task::kernel",
+        "[boot] TimersAndIPC: constructing placeholder ipc dispatcher ep=0x{ep:04x}",
+        ep = ep_slot
+    );
+    let ipc = KernelIpc::new(ep_slot);
+    (timer, ipc)
+}
+
+#[cfg(not(feature = "bypass-timers-ipc"))]
+fn run_timers_and_ipc_phase(ep_slot: sel4_sys::seL4_CPtr) -> (KernelTimer, KernelIpc) {
+    log::info!(
+        target: "root_task::kernel",
+        "[boot] TimersAndIPC: timers.init.begin period_ms={}",
+        KERNEL_TIMER_PERIOD_MS
+    );
+    let timer = KernelTimer::new(KERNEL_TIMER_PERIOD_MS);
+    log::info!(
+        target: "root_task::kernel",
+        "[boot] TimersAndIPC: timers.init.end period_cycles={} last_cycles={}",
+        timer.period_cycles,
+        timer.last_cycles
+    );
+
+    log::info!(
+        target: "root_task::kernel",
+        "[boot] TimersAndIPC: ipc.init.begin ep=0x{ep:04x}",
+        ep = ep_slot
+    );
+    let ipc = KernelIpc::new(ep_slot);
+    log::info!(
+        target: "root_task::kernel",
+        "[boot] TimersAndIPC: ipc.init.end ep=0x{ep:04x} staged={}",
+        ep = ep_slot,
+        ipc.staged_bootstrap.is_some()
+    );
+
+    (timer, ipc)
 }
 
 /// Panic handler implementation that emits diagnostics before halting.
