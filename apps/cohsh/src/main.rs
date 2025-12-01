@@ -15,7 +15,9 @@ use cohesix_ticket::Role;
 
 #[cfg(feature = "tcp")]
 use cohsh::TcpTransport;
-use cohsh::{AutoAttach, NineDoorTransport, QemuTransport, RoleArg, Shell, Transport};
+use cohsh::{
+    tcp_debug_enabled, AutoAttach, NineDoorTransport, QemuTransport, RoleArg, Shell, Transport,
+};
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
 enum TransportKind {
@@ -116,12 +118,7 @@ fn main() -> Result<()> {
                 token = value;
             }
         }
-        let mut tcp_debug = cli.tcp_debug;
-        if let Ok(value) = env::var("COHSH_TCP_DEBUG") {
-            if matches!(value.as_str(), "1" | "true" | "yes" | "on") {
-                tcp_debug = true;
-            }
-        }
+        let tcp_debug = cli.tcp_debug || tcp_debug_enabled();
         (host, port, token, tcp_debug)
     };
 
