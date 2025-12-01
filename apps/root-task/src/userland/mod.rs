@@ -144,6 +144,7 @@ pub fn main(ctx: BootContext) -> ! {
         pump.run();
     }
 
+    #[cfg(not(all(feature = "serial-console", feature = "kernel")))]
     #[allow(clippy::diverging_sub_expression)]
     pump.run();
 }

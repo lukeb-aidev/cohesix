@@ -1692,9 +1692,9 @@ fn run_timers_and_ipc_phase(ep_slot: sel4_sys::seL4_CPtr) -> (KernelTimer, Kerne
     let ipc = KernelIpc::new(ep_slot);
     log::info!(
         target: "root_task::kernel",
-        "[boot] TimersAndIPC: ipc.init.end ep=0x{ep:04x} staged={}",
+        "[boot] TimersAndIPC: ipc.init.end ep=0x{ep:04x} staged={staged}",
         ep = ep_slot,
-        ipc.staged_bootstrap.is_some()
+        staged = ipc.staged_bootstrap.is_some()
     );
 
     (timer, ipc)
