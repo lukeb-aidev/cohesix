@@ -456,7 +456,7 @@ impl NetStack {
                                 info!(
                                     "[net-console] handshake: received {} bytes: {:02x?}",
                                     count,
-                                    &temp[..count.min(8)]
+                                    &temp[..count.min(16)]
                                 );
                             }
                             info!(
