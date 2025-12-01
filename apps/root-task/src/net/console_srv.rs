@@ -68,6 +68,15 @@ impl TcpConsoleServer {
         self.outbound.clear();
         self.last_activity_ms = now_ms;
         self.auth_deadline_ms = None;
+        let expected_len = AUTH_PREFIX
+            .len()
+            .saturating_add(self.auth_token.len())
+            .saturating_add(1);
+        info!(
+            "[net-console] handshake: expecting client hello len={} magic=\"{}\" version=1",
+            expected_len,
+            AUTH_PREFIX.trim_end()
+        );
         if self
             .enqueue_auth_ack(AckStatus::Ok, Some("detail=present-token"))
             .is_ok()

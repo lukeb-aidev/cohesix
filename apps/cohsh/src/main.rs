@@ -79,6 +79,11 @@ struct Cli {
     #[cfg(feature = "tcp")]
     #[arg(long, default_value = "changeme")]
     auth_token: String,
+
+    /// Enable verbose TCP handshake logging.
+    #[cfg(feature = "tcp")]
+    #[arg(long, default_value_t = false)]
+    tcp_debug: bool,
 }
 
 fn main() -> Result<()> {
@@ -92,7 +97,7 @@ fn main() -> Result<()> {
         }
     }
     #[cfg(feature = "tcp")]
-    let (tcp_host, tcp_port, auth_token) = {
+    let (tcp_host, tcp_port, auth_token, tcp_debug) = {
         let mut host = cli.tcp_host.clone();
         if let Ok(value) = env::var("COHSH_TCP_HOST") {
             if host == "127.0.0.1" {
@@ -111,7 +116,13 @@ fn main() -> Result<()> {
                 token = value;
             }
         }
-        (host, port, token)
+        let mut tcp_debug = cli.tcp_debug;
+        if let Ok(value) = env::var("COHSH_TCP_DEBUG") {
+            if matches!(value.as_str(), "1" | "true" | "yes" | "on") {
+                tcp_debug = true;
+            }
+        }
+        (host, port, token, tcp_debug)
     };
 
     let transport: Box<dyn Transport> = match cli.transport {
@@ -127,7 +138,8 @@ fn main() -> Result<()> {
             TcpTransport::new(tcp_host.clone(), tcp_port)
                 .with_timeout(std::time::Duration::from_secs(5))
                 .with_heartbeat_interval(std::time::Duration::from_secs(15))
-                .with_auth_token(auth_token.clone()),
+                .with_auth_token(auth_token.clone())
+                .with_tcp_debug(tcp_debug),
         ),
     };
     let mut shell = Shell::new(transport, writer);

@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
 use cohesix_ticket::Role;
-use log::{debug, trace, warn};
+use log::{debug, info, trace, warn};
 use secure9p_wire::SessionId;
 
 use crate::proto::{parse_ack, AckStatus};
@@ -141,12 +141,14 @@ pub struct TcpTransport {
     retry_ceiling: Duration,
     max_retries: usize,
     auth_token: String,
+    tcp_debug: bool,
     stream: Option<TcpStream>,
     reader: Option<BufReader<TcpStream>>,
     next_session_id: u64,
     last_activity: Instant,
     last_probe: Option<Instant>,
     session_cache: Option<SessionCache>,
+    requested_role: Option<Role>,
     telemetry: ConnectionTelemetry,
     pending_ack: VecDeque<AckOwned>,
     authenticated: bool,
@@ -170,12 +172,14 @@ impl TcpTransport {
             retry_ceiling: DEFAULT_RETRY_CEILING,
             max_retries: DEFAULT_MAX_RETRIES,
             auth_token: "changeme".to_owned(),
+            tcp_debug: false,
             stream: None,
             reader: None,
             next_session_id: 2,
             last_activity: Instant::now(),
             last_probe: None,
             session_cache: None,
+            requested_role: None,
             telemetry: ConnectionTelemetry::default(),
             pending_ack: VecDeque::new(),
             authenticated: false,
@@ -208,6 +212,13 @@ impl TcpTransport {
     #[must_use]
     pub fn with_auth_token(mut self, token: impl Into<String>) -> Self {
         self.auth_token = token.into();
+        self
+    }
+
+    /// Enable or disable verbose TCP handshake logging.
+    #[must_use]
+    pub fn with_tcp_debug(mut self, enabled: bool) -> Self {
+        self.tcp_debug = enabled;
         self
     }
 
@@ -246,6 +257,14 @@ impl TcpTransport {
     fn connect_with_backoff(&mut self) -> Result<()> {
         let mut attempt = 0usize;
         let mut delay = self.retry_backoff;
+        if self.tcp_debug {
+            info!(
+                "[cohsh][tcp] connecting: addr={:?} role={:?} timeout={:?}",
+                (self.address.as_str(), self.port),
+                self.requested_role,
+                self.timeout
+            );
+        }
         loop {
             match self.connect() {
                 Ok(stream) => {
@@ -280,6 +299,19 @@ impl TcpTransport {
 
     fn perform_auth(&mut self) -> Result<()> {
         let auth_line = format!("AUTH {}", self.auth_token);
+        if self.tcp_debug {
+            let mut buf = auth_line.as_bytes().to_vec();
+            buf.push(b'\n');
+            info!(
+                "[cohsh][tcp] auth/handshake: sending {} bytes: {:02x?}",
+                buf.len(),
+                &buf[..buf.len().min(16)]
+            );
+            info!(
+                "[cohsh][tcp] expecting handshake response: magic=\"OK AUTH\" version=1 role={:?}",
+                self.requested_role
+            );
+        }
         debug!(
             "[cohsh][auth] state={:?} send AUTH token_len={}",
             self.auth_state,
@@ -292,9 +324,19 @@ impl TcpTransport {
         let mut timeouts = 0usize;
         let mut total_bytes_read = 0usize;
         let total_bytes_written = auth_line.len().saturating_add(1);
+        let mut logged_first_response = false;
         loop {
             match self.read_line_internal()? {
                 ReadStatus::Line(line) => {
+                    if self.tcp_debug && !logged_first_response {
+                        let bytes = line.as_bytes();
+                        info!(
+                            "[cohsh][tcp] auth/handshake: received {} bytes from server: {:02x?}",
+                            bytes.len(),
+                            &bytes[..bytes.len().min(16)]
+                        );
+                        logged_first_response = true;
+                    }
                     let trimmed = Self::trim_line(&line);
                     total_bytes_read = total_bytes_read.saturating_add(line.len());
                     if let Some(ack) = parse_ack(&trimmed) {
@@ -312,10 +354,7 @@ impl TcpTransport {
                                 self.authenticated = true;
                                 self.last_activity = Instant::now();
                                 self.set_auth_state(AuthState::AuthOk);
-                                debug!(
-                                    "[cohsh][auth] state={:?} recv AUTH ok",
-                                    self.auth_state
-                                );
+                                debug!("[cohsh][auth] state={:?} recv AUTH ok", self.auth_state);
                                 return Ok(());
                             }
                             continue;
@@ -326,6 +365,16 @@ impl TcpTransport {
                 }
                 ReadStatus::Timeout => {
                     timeouts += 1;
+                    if self.tcp_debug {
+                        let deadline = self.timeout.saturating_mul(
+                            u32::try_from(self.max_retries + 1).unwrap_or(u32::MAX),
+                        );
+                        info!(
+                            "[cohsh][tcp] auth/handshake: timeout waiting for server response after {:?} (attempts={})",
+                            deadline,
+                            timeouts
+                        );
+                    }
                     debug!(
                         "[cohsh][auth] state={:?} authentication timeout attempt={}",
                         self.auth_state, timeouts
@@ -361,6 +410,12 @@ impl TcpTransport {
     fn ensure_authenticated(&mut self) -> Result<()> {
         if self.authenticated && self.stream.is_some() {
             return Ok(());
+        }
+
+        if self.requested_role.is_none() {
+            if let Some(cache) = &self.session_cache {
+                self.requested_role = Some(cache.role);
+            }
         }
 
         let mut attempt = 0usize;
@@ -550,6 +605,7 @@ impl TcpTransport {
         let Some(cache) = self.session_cache.clone() else {
             return Err(anyhow!("TCP session dropped before any attach succeeded"));
         };
+        self.requested_role = Some(cache.role);
         self.reset_connection();
         let err = anyhow!("connection closed by peer");
         self.telemetry.log_disconnect(err.as_ref());
@@ -690,6 +746,7 @@ impl Transport for TcpTransport {
             .as_ref()
             .map(|value| value.len())
             .unwrap_or(0);
+        self.requested_role = Some(role);
         debug!(
             "[cohsh][auth] new session: role={:?} state={:?} ticket_len={}",
             role, self.auth_state, ticket_len
