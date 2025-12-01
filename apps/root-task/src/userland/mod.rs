@@ -119,31 +119,29 @@ pub fn main(ctx: BootContext) -> ! {
 
     #[cfg(all(feature = "serial-console", feature = "kernel"))]
     {
-        match (ctx.uart_slot, uart_base) {
-            (Some(_uart_slot), Some(_)) => {
-                log::info!(
-                    target: "root_task::kernel",
-                    "[boot] starting serial root console on PL011"
-                );
-                log::info!(
-                    target: "userland",
-                    "[userland] event-pump: mapping PL011 for shared console I/O"
-                );
-                log::info!(target: "boot", "[boot] before starting root shell");
-                pump.announce_console_ready();
-                log::info!(target: "boot", "[boot] root shell starting");
-                log::info!(target: "console", "[console] starting root CLI");
-                pump.start_cli();
-                log::info!(target: "boot", "[boot] root shell started; entering event loop");
-                pump.run();
-            }
-            _ => {
-                log::error!(
-                    target: "userland",
-                    "[userland] PL011 mapping unavailable; starting pump without UART metadata"
-                );
-            }
+        log::info!(
+            target: "root_task::kernel",
+            "[boot] phase: RootShell.begin (uart_slot_present={}, uart_vaddr_present={})",
+            ctx.uart_slot.is_some(),
+            uart_base.is_some(),
+        );
+        if ctx.uart_slot.is_none() || uart_base.is_none() {
+            log::warn!(
+                target: "userland",
+                "[userland] PL011 mapping unavailable; continuing with serial console anyway"
+            );
         }
+        log::info!(
+            target: "userland",
+            "[userland] event-pump: mapping PL011 for shared console I/O"
+        );
+        log::info!(target: "boot", "[boot] before starting root shell");
+        pump.announce_console_ready();
+        log::info!(target: "boot", "[boot] root shell starting");
+        log::info!(target: "console", "[console] starting root CLI");
+        pump.start_cli();
+        log::info!(target: "boot", "[boot] root shell started; entering event loop");
+        pump.run();
     }
 
     #[allow(clippy::diverging_sub_expression)]

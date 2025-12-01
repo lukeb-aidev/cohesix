@@ -439,6 +439,10 @@ impl NetStack {
                     .log_transition(AuthState::AuthRequested, client_id);
                 self.auth_state = AuthState::AuthRequested;
                 self.session_active = true;
+                info!(
+                    "[net-console] auth: waiting for client credentials (client_id={})",
+                    client_id
+                );
             }
 
             if socket.can_recv() {
