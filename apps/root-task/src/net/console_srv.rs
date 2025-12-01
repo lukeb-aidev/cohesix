@@ -148,6 +148,11 @@ impl TcpConsoleServer {
             return SessionEvent::AuthFailed("expected-token");
         }
         let token = trimmed.split_at(AUTH_PREFIX.len()).1.trim();
+        info!(
+            "[net-console] handshake: got auth token len={} state={:?}",
+            token.len(),
+            self.state
+        );
         if token != self.auth_token {
             let _ = self.enqueue_auth_ack(AckStatus::Err, Some("reason=invalid-token"));
             self.state = SessionState::Inactive;

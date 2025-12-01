@@ -188,6 +188,7 @@ pub struct NetStack {
     tcp_handle: SocketHandle,
     server: TcpConsoleServer,
     telemetry: NetTelemetry,
+    poll_count: u64,
     ip: Ipv4Address,
     gateway: Option<Ipv4Address>,
     prefix_len: u8,
@@ -271,6 +272,7 @@ impl NetStack {
             tcp_handle: SocketHandle::default(),
             server: TcpConsoleServer::new(AUTH_TOKEN, IDLE_TIMEOUT_MS),
             telemetry: NetTelemetry::default(),
+            poll_count: 0,
             ip,
             gateway,
             prefix_len: prefix,
@@ -308,6 +310,10 @@ impl NetStack {
         if !self.service_logged {
             info!("[net-console] service loop running");
             self.service_logged = true;
+        }
+        self.poll_count = self.poll_count.wrapping_add(1);
+        if (self.poll_count & 0xff) == 0 {
+            info!("[net-console] poll tick (tick={})", self.poll_count);
         }
         let last = self.telemetry.last_poll_ms;
         let delta = now_ms.saturating_sub(last);
@@ -353,6 +359,10 @@ impl NetStack {
                     warn!("[net-console] failed to start TCP console listener: {err}",);
                     return activity;
                 }
+                info!(
+                    "[net-console] tcp listener bound: port={}",
+                    CONSOLE_TCP_PORT
+                );
                 if !self.listener_announced {
                     info!(
                         "[net-console] TCP console listening on 0.0.0.0:{} (iface ip={})",
@@ -377,6 +387,10 @@ impl NetStack {
                     info!(
                         "[net-console] conn {}: established from {}",
                         client_id, endpoint
+                    );
+                    info!(
+                        "[net-console] connection accepted: remote={:?}",
+                        socket.remote_endpoint()
                     );
                     let mut label = HeaplessString::<32>::new();
                     if let Ok(()) = FmtWrite::write_fmt(&mut label, format_args!("{}", endpoint)) {
@@ -438,6 +452,13 @@ impl NetStack {
                             if self.auth_state == AuthState::AuthRequested {
                                 info!("[net-console] auth request received (len={count})");
                             }
+                            if self.auth_state != AuthState::Attached {
+                                info!(
+                                    "[net-console] handshake: received {} bytes: {:02x?}",
+                                    count,
+                                    &temp[..count.min(8)]
+                                );
+                            }
                             info!(
                                 "[net-console] conn {}: received {} bytes (state={:?})",
                                 self.active_client_id.unwrap_or(0),
@@ -483,6 +504,10 @@ impl NetStack {
                                         "[net-console][auth] state={:?} client={} reason={}",
                                         self.auth_state, conn_id, reason
                                     );
+                                    warn!(
+                                        "[net-console] closing connection: reason={:?} state={:?}",
+                                        reason, self.auth_state
+                                    );
                                     let _ = Self::flush_outbound(
                                         &mut self.server,
                                         &mut self.telemetry,
@@ -508,6 +533,11 @@ impl NetStack {
                                     warn!(
                                         "[net-console] TCP client #{} closing after session end",
                                         self.active_client_id.unwrap_or(0)
+                                    );
+                                    warn!(
+                                        "[net-console] closing connection: reason={:?} state={:?}",
+                                        SessionEvent::Close,
+                                        self.auth_state
                                     );
                                     debug!(
                                         "[net-console][auth] state={:?} close requested client={}",
@@ -542,9 +572,13 @@ impl NetStack {
                                 }
                                 other => {
                                     warn!(
-                                    "[net-console] TCP client #{} error={other} (closing connection)",
-                                    self.active_client_id.unwrap_or(0)
-                                );
+                                        "[net-console] TCP client #{} error={other} (closing connection)",
+                                        self.active_client_id.unwrap_or(0)
+                                    );
+                                    warn!(
+                                        "[net-console] closing connection: reason=recv-error state={:?}",
+                                        self.auth_state
+                                    );
                                 }
                             }
                             let conn_id = self.active_client_id.unwrap_or(0);
@@ -584,6 +618,10 @@ impl NetStack {
                     self.active_client_id.unwrap_or(0),
                     now_ms
                 );
+                warn!(
+                    "[net-console] closing connection: reason=auth-timeout state={:?}",
+                    self.auth_state
+                );
                 let _ = self.server.enqueue_outbound("ERR AUTH reason=timeout");
                 let _ = Self::flush_outbound(
                     &mut self.server,
@@ -616,6 +654,10 @@ impl NetStack {
                     self.auth_state,
                     self.active_client_id.unwrap_or(0),
                     now_ms
+                );
+                warn!(
+                    "[net-console] closing connection: reason=inactivity-timeout state={:?}",
+                    self.auth_state
                 );
                 let _ = self.server.enqueue_outbound("ERR CONSOLE reason=timeout");
                 let _ = Self::flush_outbound(
@@ -715,6 +757,12 @@ impl NetStack {
                 server.push_outbound_front(line);
                 telemetry.tx_drops = telemetry.tx_drops.saturating_add(1);
                 break;
+            }
+            if pre_auth {
+                info!(
+                    "[net-console] handshake: sending {}-byte response to client",
+                    payload.len()
+                );
             }
             match socket.send_slice(payload.as_slice()) {
                 Ok(sent) if sent == payload.len() => {
