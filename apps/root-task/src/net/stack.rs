@@ -365,6 +365,10 @@ impl NetStack {
                 );
                 if !self.listener_announced {
                     info!(
+                        "[cohsh-net] poll loop online; listening on tcp/{}",
+                        CONSOLE_TCP_PORT
+                    );
+                    info!(
                         "[net-console] TCP console listening on 0.0.0.0:{} (iface ip={})",
                         CONSOLE_TCP_PORT, self.ip
                     );
@@ -388,6 +392,10 @@ impl NetStack {
                         target: "net-console",
                         "[net-console] conn: accepted from {:?}",
                         endpoint
+                    );
+                    info!(
+                        "[cohsh-net] accept: new TCP client connected from {:?} (listener={})",
+                        endpoint, CONSOLE_TCP_PORT
                     );
                     info!(
                         "[net-console] conn {}: established from {}",
@@ -463,6 +471,11 @@ impl NetStack {
                         Ok(count) => {
                             self.conn_bytes_read =
                                 self.conn_bytes_read.saturating_add(count as u64);
+                            info!(
+                                "[cohsh-net] recv: handshake bytes len={} raw={:x?}",
+                                count,
+                                &temp[..count.min(32)]
+                            );
                             if self.auth_state == AuthState::AuthRequested {
                                 info!("[net-console] auth request received (len={count})");
                             }
@@ -499,6 +512,10 @@ impl NetStack {
                                     self.auth_state.log_transition(AuthState::Attached, conn_id);
                                     self.auth_state = AuthState::Attached;
                                     info!("[net-console] auth success client={}", conn_id);
+                                    info!(
+                                        "[cohsh-net] parsed handshake: role='AUTH' conn_id={} state={:?}",
+                                        conn_id, self.auth_state
+                                    );
                                     debug!(
                                         "[net-console][auth] state transitioned to {:?} client={}",
                                         self.auth_state, conn_id
@@ -510,6 +527,10 @@ impl NetStack {
                                         "[net-console] TCP client #{} auth failed reason={}",
                                         self.active_client_id.unwrap_or(0),
                                         reason
+                                    );
+                                    log::error!(
+                                        "[cohsh-net] error during handshake: {reason} (state={:?})",
+                                        self.auth_state
                                     );
                                     let conn_id = self.active_client_id.unwrap_or(0);
                                     self.auth_state.log_transition(AuthState::Failed, conn_id);
@@ -625,6 +646,10 @@ impl NetStack {
                 warn!(
                     "[net-console] TCP client #{} auth timeout",
                     self.active_client_id.unwrap_or(0)
+                );
+                log::error!(
+                    "[cohsh-net] error during handshake: auth-timeout (state={:?})",
+                    self.auth_state
                 );
                 debug!(
                     "[net-console][auth] state={:?} auth timeout client={} now_ms={}",
@@ -775,6 +800,10 @@ impl NetStack {
             if pre_auth {
                 info!(
                     "[net-console] handshake: sending {}-byte response to client",
+                    payload.len()
+                );
+                info!(
+                    "[cohsh-net] send: auth response len={} role='AUTH'",
                     payload.len()
                 );
             }

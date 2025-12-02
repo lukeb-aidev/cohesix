@@ -88,6 +88,8 @@ pub fn main(ctx: BootContext) -> ! {
         target: "userland",
         "[userland] event-pump: registering serial root console"
     );
+    #[cfg(all(feature = "serial-console", feature = "kernel"))]
+    log::info!("[console] spawn: starting root console task on serial");
     pump = attach_kernel_console(pump, &ctx, bootstrap_ipc.as_mut());
     pump = attach_ninedoor_bridge(pump, &ctx);
 
