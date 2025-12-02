@@ -2345,6 +2345,12 @@ impl KernelIpc {
             "[ipc] EP 0x{ep:04x} loop online; waiting for messages",
             ep = endpoint
         );
+        let cpuid = unsafe { sel4_sys::seL4_GetCPUID() };
+        log::info!(
+            "[ipc] EP 0x{ep:04x}: dispatcher thread initialised on core={cpuid}",
+            ep = endpoint,
+            cpuid = cpuid,
+        );
         Self {
             endpoint,
             staged_bootstrap: None,
@@ -2367,6 +2373,11 @@ impl KernelIpc {
             return true;
         }
 
+        log::info!(
+            "[ipc] EP 0x{ep:04x}: waiting for message (recv begin) now_ms={now_ms}",
+            ep = self.endpoint,
+            now_ms = now_ms,
+        );
         let mut badge: sel4_sys::seL4_Word = 0;
         let info = unsafe { sel4_sys::seL4_Poll(self.endpoint, &mut badge) };
         if !Self::message_present(&info, badge) {
@@ -2381,6 +2392,15 @@ impl KernelIpc {
             return false;
         }
 
+        let msg_len = info.length();
+        let label = info.label();
+        log::info!(
+            "[ipc] EP 0x{ep:04x}: recv ok badge=0x{badge:016x} label=0x{label:08x} len={msg_len}",
+            ep = self.endpoint,
+            badge = badge,
+            label = label,
+            msg_len = msg_len,
+        );
         if bootstrap {
             log::trace!(
                 "B5.recv ret badge=0x{badge:016x} info=0x{info:08x}",

@@ -219,6 +219,7 @@ impl CohesixConsole {
     }
 
     fn prompt(&mut self) {
+        log::info!("[console] writing prompt 'cohesix>'");
         self.emit("cohesix> ");
     }
 

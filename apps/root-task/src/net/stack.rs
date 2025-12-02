@@ -201,6 +201,7 @@ pub struct NetStack {
     conn_bytes_written: u64,
     events: HeaplessVec<NetConsoleEvent, SOCKET_CAPACITY>,
     service_logged: bool,
+    poll_samples_emitted: u32,
 }
 
 /// Initialise the network console stack, translating low-level errors into
@@ -285,6 +286,7 @@ impl NetStack {
             conn_bytes_written: 0,
             events: HeaplessVec::new(),
             service_logged: false,
+            poll_samples_emitted: 0,
         };
         stack.initialise_socket();
         socket_guard.disarm();
@@ -314,6 +316,22 @@ impl NetStack {
         self.poll_count = self.poll_count.wrapping_add(1);
         if (self.poll_count & 0xff) == 0 {
             info!("[net-console] poll tick (tick={})", self.poll_count);
+        }
+        if self.poll_samples_emitted < 8 {
+            info!(
+                "[cohsh-net] poll: now_ms={now_ms} session_active={} auth_state={:?} listener_ready={} staged_events={}",
+                self.session_active,
+                self.auth_state,
+                self.listener_announced,
+                self.events.len(),
+            );
+            self.poll_samples_emitted = self.poll_samples_emitted.saturating_add(1);
+        } else {
+            trace!(
+                "[cohsh-net] poll trace: now_ms={now_ms} session_active={} auth_state={:?}",
+                self.session_active,
+                self.auth_state
+            );
         }
         let last = self.telemetry.last_poll_ms;
         let delta = now_ms.saturating_sub(last);

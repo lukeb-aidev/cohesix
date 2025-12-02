@@ -29,13 +29,17 @@ pub fn dispatch_message(words: &[seL4_Word], handlers: &HandlerTable) -> Dispatc
     };
 
     let Some(opcode) = BootstrapOp::decode(opcode_word) else {
-        log::warn!(
-            "[bootstrap-ipc] bad opcode=0x{opcode:02x}",
+        log::error!(
+            "[ipc] EP 0x0130: dispatch error bad opcode=0x{opcode:02x}",
             opcode = opcode_word
         );
         return DispatchOutcome::BadCommand(opcode_word);
     };
 
+    log::info!(
+        "[ipc] EP 0x0130: dispatch msg kind={opcode:?} words={count}",
+        count = words.len()
+    );
     let result = match opcode {
         BootstrapOp::Attach => call_handler(handlers.attach, words),
         BootstrapOp::Spawn => call_handler(handlers.spawn, words),
