@@ -1659,7 +1659,7 @@ fn run_timers_and_ipc_phase(ep_slot: sel4_sys::seL4_CPtr) -> (KernelTimer, Kerne
         "[boot] TimersAndIPC: constructing placeholder timer period_ms={}",
         KERNEL_TIMER_PERIOD_MS
     );
-    let timer = KernelTimer::new(KERNEL_TIMER_PERIOD_MS);
+    let timer = KernelTimer::bypass(KERNEL_TIMER_PERIOD_MS);
     log::info!(
         target: "root_task::kernel",
         "[boot] TimersAndIPC: constructing placeholder ipc dispatcher ep=0x{ep:04x}",
@@ -1671,33 +1671,79 @@ fn run_timers_and_ipc_phase(ep_slot: sel4_sys::seL4_CPtr) -> (KernelTimer, Kerne
 
 #[cfg(not(feature = "bypass-timers-ipc"))]
 fn run_timers_and_ipc_phase(ep_slot: sel4_sys::seL4_CPtr) -> (KernelTimer, KernelIpc) {
-    log::info!(
-        target: "root_task::kernel",
-        "[boot] TimersAndIPC: timers.init.begin period_ms={}",
-        KERNEL_TIMER_PERIOD_MS
-    );
-    let timer = KernelTimer::new(KERNEL_TIMER_PERIOD_MS);
-    log::info!(
-        target: "root_task::kernel",
-        "[boot] TimersAndIPC: timers.init.end period_cycles={} last_cycles={}",
-        timer.period_cycles,
-        timer.last_cycles
-    );
+    #[cfg(feature = "bypass-timers")]
+    {
+        log::warn!(
+            target: "root_task::kernel",
+            "[boot] TimersAndIPC: timer init BYPASSED via feature 'bypass-timers'"
+        );
+        let timer = KernelTimer::bypass(KERNEL_TIMER_PERIOD_MS);
+        log::info!(
+            target: "root_task::kernel",
+            "[boot] TimersAndIPC: timers.bypass.end period_cycles={} last_cycles={} enabled={}",
+            timer.period_cycles,
+            timer.last_cycles,
+            timer.enabled
+        );
 
-    log::info!(
-        target: "root_task::kernel",
-        "[boot] TimersAndIPC: ipc.init.begin ep=0x{ep:04x}",
-        ep = ep_slot
-    );
-    let ipc = KernelIpc::new(ep_slot);
-    log::info!(
-        target: "root_task::kernel",
-        "[boot] TimersAndIPC: ipc.init.end ep=0x{ep:04x} staged={staged}",
-        ep = ep_slot,
-        staged = ipc.staged_bootstrap.is_some()
-    );
+        log::info!(
+            target: "root_task::kernel",
+            "[boot] TimersAndIPC: ipc.init.begin ep=0x{ep:04x}",
+            ep = ep_slot
+        );
+        let ipc = KernelIpc::new(ep_slot);
+        log::info!(
+            target: "root_task::kernel",
+            "[boot] TimersAndIPC: ipc.init.end ep=0x{ep:04x} staged={staged}",
+            ep = ep_slot,
+            staged = ipc.staged_bootstrap.is_some()
+        );
 
-    (timer, ipc)
+        return (timer, ipc);
+    }
+
+    #[cfg(not(feature = "bypass-timers"))]
+    {
+        log::info!(
+            target: "root_task::kernel",
+            "[boot] TimersAndIPC: timers.init.begin period_ms={}",
+            KERNEL_TIMER_PERIOD_MS
+        );
+        let timer = KernelTimer::init(KERNEL_TIMER_PERIOD_MS);
+        log::info!(
+            target: "root_task::kernel",
+            "[boot] TimersAndIPC: timers.init.end period_cycles={} last_cycles={}",
+            timer.period_cycles,
+            timer.last_cycles
+        );
+
+        log::info!(
+            target: "root_task::kernel",
+            "[boot] TimersAndIPC: timer.worker.spawn.begin"
+        );
+        timer.spawn_worker();
+        log::info!(
+            target: "root_task::kernel",
+            "[boot] TimersAndIPC: timer.worker.spawn.end"
+        );
+
+        log::info!(
+            target: "root_task::kernel",
+            "[boot] TimersAndIPC: ipc.init.begin ep=0x{ep:04x}",
+            ep = ep_slot
+        );
+        let ipc = KernelIpc::new(ep_slot);
+        log::info!(
+            target: "root_task::kernel",
+            "[boot] TimersAndIPC: ipc.init.end ep=0x{ep:04x} staged={staged}",
+            ep = ep_slot,
+            staged = ipc.staged_bootstrap.is_some()
+        );
+
+        return (timer, ipc);
+    }
+
+    unreachable!()
 }
 
 /// Panic handler implementation that emits diagnostics before halting.
@@ -1720,24 +1766,76 @@ pub(crate) struct KernelTimer {
     period_ms: u64,
     period_cycles: u64,
     last_cycles: u64,
+    enabled: bool,
 }
 
 impl KernelTimer {
-    pub(crate) fn new(period_ms: u64) -> Self {
+    pub(crate) fn init(period_ms: u64) -> Self {
+        log::info!(
+            target: "root_task::kernel::timer",
+            "[timers] init: begin period_ms={}",
+            period_ms
+        );
         let freq = read_cntfrq();
+        log::info!(
+            target: "root_task::kernel::timer",
+            "[timers] init: cntfrq={}Hz",
+            freq
+        );
         let period_cycles = compute_period_cycles(freq, period_ms);
+        log::info!(
+            target: "root_task::kernel::timer",
+            "[timers] init: computed period_cycles={}",
+            period_cycles
+        );
         let last_cycles = read_cntpct();
+        log::info!(
+            target: "root_task::kernel::timer",
+            "[timers] init: baseline cntpct={} (poll-only)",
+            last_cycles
+        );
         Self {
             tick: 0,
             period_ms: period_ms.max(1),
             period_cycles,
             last_cycles,
+            enabled: true,
         }
+    }
+
+    pub(crate) fn bypass(period_ms: u64) -> Self {
+        log::warn!(
+            target: "root_task::kernel::timer",
+            "[timers] BYPASS: constructing inert timer period_ms={}",
+            period_ms
+        );
+        Self {
+            tick: 0,
+            period_ms: period_ms.max(1),
+            period_cycles: 1,
+            last_cycles: 0,
+            enabled: false,
+        }
+    }
+
+    pub(crate) fn spawn_worker(&self) {
+        log::info!(
+            target: "root_task::kernel::timer",
+            "[timers] worker: cooperative polling (no blocking wait in init)"
+        );
     }
 }
 
 impl TimerSource for KernelTimer {
     fn poll(&mut self, now_ms: u64) -> Option<TickEvent> {
+        if !self.enabled {
+            log::trace!(
+                target: "root_task::kernel::timer",
+                "[timers] poll: bypassed (timer disabled)"
+            );
+            return None;
+        }
+
         let current = read_cntpct();
         let elapsed = current.wrapping_sub(self.last_cycles);
         if elapsed < self.period_cycles {
