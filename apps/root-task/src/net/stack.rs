@@ -385,6 +385,11 @@ impl NetStack {
                 self.conn_bytes_written = 0;
                 let peer = if let Some(endpoint) = socket.remote_endpoint() {
                     info!(
+                        target: "net-console",
+                        "[net-console] conn: accepted from {:?}",
+                        endpoint
+                    );
+                    info!(
                         "[net-console] conn {}: established from {}",
                         client_id, endpoint
                     );
@@ -412,6 +417,11 @@ impl NetStack {
                     peer,
                 });
                 self.server.begin_session(now_ms);
+                info!(
+                    target: "net-console",
+                    "[net-console] auth: waiting for handshake (client_id={})",
+                    client_id
+                );
                 self.auth_state
                     .log_transition(AuthState::WaitingVersion, client_id);
                 self.auth_state = AuthState::WaitingVersion;

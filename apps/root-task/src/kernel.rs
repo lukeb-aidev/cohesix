@@ -16,6 +16,8 @@ use core::sync::atomic::{AtomicU8, Ordering};
 
 use cohesix_ticket::Role;
 
+#[cfg(all(feature = "kernel", target_arch = "aarch64"))]
+use crate::arch::aarch64::timer::timer_freq_hz;
 use crate::boot::{bi_extra, ep, tcb, uart_pl011};
 #[cfg(feature = "cap-probes")]
 use crate::bootstrap::cspace::cspace_first_retypes;
@@ -462,18 +464,48 @@ enum BootState {
     Booted = 2,
 }
 
+/// Errors surfaced during timer bring-up.
+#[derive(Debug, PartialEq, Eq)]
+pub enum TimerError {
+    /// The timer frequency could not be determined.
+    FrequencyUnavailable,
+    /// The underlying counter could not be sampled.
+    CounterUnavailable,
+    /// A zero or invalid period was provided.
+    InvalidPeriod,
+}
+
+impl fmt::Display for TimerError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::FrequencyUnavailable => f.write_str("timer frequency unavailable"),
+            Self::CounterUnavailable => f.write_str("timer counter unavailable"),
+            Self::InvalidPeriod => f.write_str("timer period invalid"),
+        }
+    }
+}
+
 /// Errors that can occur while initialising the root task runtime.
 #[derive(Debug, PartialEq, Eq)]
 pub enum BootError {
     /// Indicates the bootstrap path has already been executed for this boot.
     AlreadyBooted,
+    /// Timer initialisation failed.
+    TimerInit(TimerError),
 }
 
 impl fmt::Display for BootError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::AlreadyBooted => f.write_str("bootstrap already invoked"),
+            Self::TimerInit(err) => write!(f, "timer init failed: {err}"),
         }
+    }
+}
+
+impl From<TimerError> for BootError {
+    fn from(value: TimerError) -> Self {
+        Self::TimerInit(value)
     }
 }
 
@@ -1521,8 +1553,14 @@ fn bootstrap<P: Platform>(
         let (net_stack, _) = NetStack::new(Ipv4Address::new(10, 0, 0, 2));
         log::info!("[boot] net-console init complete; continuing with timers and IPC");
         log::info!(target: "root_task::kernel", "[boot] phase: TimersAndIPC.begin");
-        let (timer, ipc) = run_timers_and_ipc_phase(ep_slot);
-        log::info!(target: "root_task::kernel", "[boot] phase: TimersAndIPC.end");
+        let (timer, ipc) = run_timers_and_ipc_phase(ep_slot).map_err(|err| {
+            log::error!(
+                target: "root_task::kernel",
+                "[boot] TimersAndIPC: failed during bootstrap: {:?}",
+                err
+            );
+            err
+        })?;
 
         let mut tickets: TicketTable<4> = TicketTable::new();
         let _ = tickets.register(Role::Queen, "bootstrap");
@@ -1649,7 +1687,9 @@ fn bootstrap<P: Platform>(
 const KERNEL_TIMER_PERIOD_MS: u64 = 5;
 
 #[cfg(feature = "bypass-timers-ipc")]
-fn run_timers_and_ipc_phase(ep_slot: sel4_sys::seL4_CPtr) -> (KernelTimer, KernelIpc) {
+fn run_timers_and_ipc_phase(
+    ep_slot: sel4_sys::seL4_CPtr,
+) -> Result<(KernelTimer, KernelIpc), BootError> {
     log::warn!(
         target: "root_task::kernel",
         "[boot] TimersAndIPC: BYPASSED via feature 'bypass-timers-ipc'"
@@ -1666,11 +1706,13 @@ fn run_timers_and_ipc_phase(ep_slot: sel4_sys::seL4_CPtr) -> (KernelTimer, Kerne
         ep = ep_slot
     );
     let ipc = KernelIpc::new(ep_slot);
-    (timer, ipc)
+    Ok((timer, ipc))
 }
 
 #[cfg(not(feature = "bypass-timers-ipc"))]
-fn run_timers_and_ipc_phase(ep_slot: sel4_sys::seL4_CPtr) -> (KernelTimer, KernelIpc) {
+fn run_timers_and_ipc_phase(
+    ep_slot: sel4_sys::seL4_CPtr,
+) -> Result<(KernelTimer, KernelIpc), BootError> {
     #[cfg(feature = "bypass-timers")]
     {
         log::warn!(
@@ -1699,7 +1741,7 @@ fn run_timers_and_ipc_phase(ep_slot: sel4_sys::seL4_CPtr) -> (KernelTimer, Kerne
             staged = ipc.staged_bootstrap.is_some()
         );
 
-        return (timer, ipc);
+        return Ok((timer, ipc));
     }
 
     #[cfg(not(feature = "bypass-timers"))]
@@ -1709,10 +1751,17 @@ fn run_timers_and_ipc_phase(ep_slot: sel4_sys::seL4_CPtr) -> (KernelTimer, Kerne
             "[boot] TimersAndIPC: timers.init.begin period_ms={}",
             KERNEL_TIMER_PERIOD_MS
         );
-        let timer = KernelTimer::init(KERNEL_TIMER_PERIOD_MS);
+        let timer = KernelTimer::init(KERNEL_TIMER_PERIOD_MS).map_err(|err| {
+            log::error!(
+                target: "root_task::kernel",
+                "[boot] TimersAndIPC: timers.init.failed: {:?}",
+                err
+            );
+            err
+        })?;
         log::info!(
             target: "root_task::kernel",
-            "[boot] TimersAndIPC: timers.init.end period_cycles={} last_cycles={}",
+            "[boot] TimersAndIPC: timers.init.ok period_cycles={} last_cycles={}",
             timer.period_cycles,
             timer.last_cycles
         );
@@ -1740,7 +1789,7 @@ fn run_timers_and_ipc_phase(ep_slot: sel4_sys::seL4_CPtr) -> (KernelTimer, Kerne
             staged = ipc.staged_bootstrap.is_some()
         );
 
-        return (timer, ipc);
+        return Ok((timer, ipc));
     }
 
     unreachable!()
@@ -1770,21 +1819,32 @@ pub(crate) struct KernelTimer {
 }
 
 impl KernelTimer {
-    pub(crate) fn init(period_ms: u64) -> Self {
+    pub(crate) fn init(period_ms: u64) -> Result<Self, TimerError> {
         log::info!(
             target: "root_task::kernel::timer",
             "[timers] init: begin period_ms={}",
             period_ms
         );
+        if period_ms == 0 {
+            log::error!(
+                target: "root_task::kernel::timer",
+                "[timers] init: invalid period_ms=0"
+            );
+            return Err(TimerError::InvalidPeriod);
+        }
+
+        let freq_hz = timer_freq_hz();
+        if freq_hz == 0 {
+            log::error!(
+                target: "root_task::kernel::timer",
+                "[timers] init: timer frequency unavailable"
+            );
+            return Err(TimerError::FrequencyUnavailable);
+        }
         log::info!(
             target: "root_task::kernel::timer",
-            "[timers] init: read cntfrq begin",
-        );
-        let freq = read_cntfrq();
-        log::info!(
-            target: "root_task::kernel::timer",
-            "[timers] init: cntfrq={}Hz",
-            freq
+            "[timers] init: timer_freq_hz={} Hz",
+            freq_hz
         );
 
         log::info!(
@@ -1792,7 +1852,17 @@ impl KernelTimer {
             "[timers] init: compute period_cycles begin period_ms={period_ms}",
             period_ms = period_ms
         );
-        let period_cycles = compute_period_cycles(freq, period_ms);
+        let clamped_period = period_ms.max(1);
+        let ticks_per_period = freq_hz
+            .saturating_mul(clamped_period)
+            .checked_div(1_000)
+            .ok_or(TimerError::InvalidPeriod)?;
+        log::info!(
+            target: "root_task::kernel::timer",
+            "[timers] init: ticks_per_period={}",
+            ticks_per_period
+        );
+        let period_cycles = compute_period_cycles(freq_hz, clamped_period);
         log::info!(
             target: "root_task::kernel::timer",
             "[timers] init: computed period_cycles={}",
@@ -1801,9 +1871,21 @@ impl KernelTimer {
 
         log::info!(
             target: "root_task::kernel::timer",
+            "[timers] init: configuring timer source (architected counter poll-only)",
+        );
+
+        log::info!(
+            target: "root_task::kernel::timer",
             "[timers] init: snapshot cntpct begin",
         );
         let last_cycles = read_cntpct();
+        if last_cycles == 0 {
+            log::error!(
+                target: "root_task::kernel::timer",
+                "[timers] init: cntpct read returned 0"
+            );
+            return Err(TimerError::CounterUnavailable);
+        }
         log::info!(
             target: "root_task::kernel::timer",
             "[timers] init: baseline cntpct={} (poll-only)",
@@ -1811,15 +1893,15 @@ impl KernelTimer {
         );
         log::info!(
             target: "root_task::kernel::timer",
-            "[timers] init: done; returning non-blocking timer",
+            "[timers] init: done; timers online (non-blocking)",
         );
-        Self {
+        Ok(Self {
             tick: 0,
             period_ms: period_ms.max(1),
             period_cycles,
             last_cycles,
             enabled: true,
-        }
+        })
     }
 
     pub(crate) fn bypass(period_ms: u64) -> Self {
@@ -1887,14 +1969,6 @@ fn compute_period_cycles(freq_hz: u64, period_ms: u64) -> u64 {
     let clamped_period = period_ms.max(1);
     let cycles = ((freq_hz as u128) * (clamped_period as u128) / 1_000u128) as u64;
     cycles.max(1)
-}
-
-fn read_cntfrq() -> u64 {
-    let value: u64;
-    unsafe {
-        asm!("mrs {value}, cntfrq_el0", value = out(reg) value, options(nomem, preserves_flags));
-    }
-    value
 }
 
 fn read_cntpct() -> u64 {
@@ -1996,6 +2070,89 @@ fn log_bootstrap_payload(words: &[sel4_sys::seL4_Word]) {
             for line in lines {
                 log::info!("{}", line.as_str());
             }
+        }
+    }
+}
+
+const FAULT_TAG_NULL: u64 = 0;
+const FAULT_TAG_CAP: u64 = 1;
+const FAULT_TAG_UNKNOWN_SYSCALL: u64 = 2;
+const FAULT_TAG_USER_EXCEPTION: u64 = 3;
+const FAULT_TAG_VMFAULT: u64 = 5;
+const MAX_FAULT_REGS: usize = 14;
+
+fn log_fault_message(info: &sel4_sys::seL4_MessageInfo, badge: sel4_sys::seL4_Word) {
+    let fault_tag = info.label();
+    if fault_tag > 0xful || info.length() == 0 {
+        return;
+    }
+
+    let mut regs = [0u64; MAX_FAULT_REGS];
+    let len = cmp::min(info.length() as usize, regs.len());
+    for idx in 0..len {
+        regs[idx] = unsafe { sel4_sys::seL4_GetMR(idx as i32) };
+    }
+
+    let decoded_tag = regs[0] & 0xf;
+    if decoded_tag != fault_tag {
+        return;
+    }
+
+    match decoded_tag {
+        FAULT_TAG_UNKNOWN_SYSCALL => {
+            let fault_ip = regs.get(5).copied().unwrap_or_default();
+            let sp = regs.get(4).copied().unwrap_or_default();
+            let lr = regs.get(3).copied().unwrap_or_default();
+            let spsr = regs.get(2).copied().unwrap_or_default();
+            let syscall = regs.get(1).copied().unwrap_or_default();
+            log::error!(
+                target: "root_task::kernel::fault",
+                "[fault] unknown syscall badge=0x{badge:04x} ip=0x{fault_ip:016x} sp=0x{sp:016x} lr=0x{lr:016x} spsr=0x{spsr:016x} syscall=0x{syscall:x}",
+            );
+        }
+        FAULT_TAG_USER_EXCEPTION => {
+            let fault_ip = regs.get(5).copied().unwrap_or_default();
+            let stack = regs.get(4).copied().unwrap_or_default();
+            let spsr = regs.get(3).copied().unwrap_or_default();
+            let number = regs.get(2).copied().unwrap_or_default();
+            let code = regs.get(1).copied().unwrap_or_default();
+            log::error!(
+                target: "root_task::kernel::fault",
+                "[fault] user exception badge=0x{badge:04x} ip=0x{fault_ip:016x} stack=0x{stack:016x} spsr=0x{spsr:016x} number={number} code=0x{code:x}",
+            );
+        }
+        FAULT_TAG_VMFAULT => {
+            let ip = regs.get(4).copied().unwrap_or_default();
+            let addr = regs.get(3).copied().unwrap_or_default();
+            let prefetch = regs.get(2).copied().unwrap_or_default();
+            let fsr = regs.get(1).copied().unwrap_or_default();
+            log::error!(
+                target: "root_task::kernel::fault",
+                "[fault] vmfault badge=0x{badge:04x} ip=0x{ip:016x} addr=0x{addr:016x} prefetch={} fsr=0x{fsr:08x}",
+                prefetch,
+            );
+        }
+        FAULT_TAG_CAP => {
+            log::error!(
+                target: "root_task::kernel::fault",
+                "[fault] cap fault badge=0x{badge:04x} regs={:?}",
+                &regs[..len]
+            );
+        }
+        FAULT_TAG_NULL => {
+            log::warn!(
+                target: "root_task::kernel::fault",
+                "[fault] null fault badge=0x{badge:04x} regs={:?}",
+                &regs[..len]
+            );
+        }
+        _ => {
+            log::error!(
+                target: "root_task::kernel::fault",
+                "[fault] unrecognised fault tag={} badge=0x{badge:04x} regs={:?}",
+                decoded_tag,
+                &regs[..len]
+            );
         }
     }
 }
@@ -2115,6 +2272,7 @@ impl KernelIpc {
             );
         }
 
+        log_fault_message(&info, badge);
         self.staged_bootstrap = Some(StagedMessage::new(info, badge));
         self.staged_forwarded = false;
         true

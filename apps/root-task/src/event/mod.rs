@@ -1137,6 +1137,12 @@ where
         };
 
         let ticket_str = ticket.as_ref().map(|t| t.as_str());
+        log::info!(
+            target: "net-console",
+            "[net-console] auth: parsed role={:?} ticket_present={}",
+            requested_role,
+            ticket_str.is_some()
+        );
         let validated = self.validator.validate(requested_role, ticket_str);
         if let Err(err) = self.parser.record_login_attempt(validated, self.now_ms) {
             let message = format_message(format_args!("attach rate limited: {}", err));
@@ -1165,10 +1171,20 @@ where
             };
             let detail = format_message(format_args!("role={role_label}"));
             self.emit_ack_ok("ATTACH", Some(detail.as_str()));
+            log::info!(
+                target: "net-console",
+                "[net-console] auth: success; attaching session role={role_label}"
+            );
         } else {
             self.throttle.register_failure(self.now_ms);
             self.metrics.denied_commands += 1;
             self.audit.denied("attach denied");
+            log::warn!(
+                target: "net-console",
+                "[net-console] auth: failed validation for role={:?} ticket_present={}",
+                requested_role,
+                ticket_str.is_some()
+            );
             self.emit_ack_err("ATTACH", Some("reason=denied"));
         }
     }
