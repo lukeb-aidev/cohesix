@@ -2205,11 +2205,11 @@ fn log_fault_message(info: &sel4_sys::seL4_MessageInfo, badge: sel4_sys::seL4_Wo
                 target: "root_task::kernel::fault",
                 "[fault] unknown syscall badge=0x{badge:04x} ip=0x{fault_ip:016x} sp=0x{sp:016x} lr=0x{lr:016x} spsr=0x{spsr:016x} syscall=0x{syscall:x}",
                 badge = badge,
-                fault_ip,
-                sp,
-                lr,
-                spsr,
-                syscall,
+                fault_ip = fault_ip,
+                sp = sp,
+                lr = lr,
+                spsr = spsr,
+                syscall = syscall,
             );
         }
         FAULT_TAG_USER_EXCEPTION => {
@@ -2222,11 +2222,11 @@ fn log_fault_message(info: &sel4_sys::seL4_MessageInfo, badge: sel4_sys::seL4_Wo
                 target: "root_task::kernel::fault",
                 "[fault] user exception badge=0x{badge:04x} ip=0x{fault_ip:016x} stack=0x{stack:016x} spsr=0x{spsr:016x} number={number} code=0x{code:x}",
                 badge = badge,
-                fault_ip,
-                stack,
-                spsr,
-                number,
-                code,
+                fault_ip = fault_ip,
+                stack = stack,
+                spsr = spsr,
+                number = number,
+                code = code,
             );
         }
         FAULT_TAG_VMFAULT => {
@@ -2236,12 +2236,12 @@ fn log_fault_message(info: &sel4_sys::seL4_MessageInfo, badge: sel4_sys::seL4_Wo
             let fsr = regs.get(1).copied().unwrap_or_default();
             log::error!(
                 target: "root_task::kernel::fault",
-                "[fault] vmfault badge=0x{badge:04x} ip=0x{ip:016x} addr=0x{addr:016x} prefetch={} fsr=0x{fsr:08x}",
+                "[fault] vmfault badge=0x{badge:04x} ip=0x{ip:016x} addr=0x{addr:016x} prefetch={prefetch} fsr=0x{fsr:08x}",
                 badge = badge,
-                ip,
-                addr,
-                prefetch,
-                fsr,
+                ip = ip,
+                addr = addr,
+                prefetch = prefetch,
+                fsr = fsr,
             );
         }
         FAULT_TAG_CAP => {
@@ -2249,7 +2249,7 @@ fn log_fault_message(info: &sel4_sys::seL4_MessageInfo, badge: sel4_sys::seL4_Wo
                 target: "root_task::kernel::fault",
                 "[fault] cap fault badge=0x{badge:04x} regs={:?}",
                 badge = badge,
-                &regs[..len],
+                regs = &regs[..len],
             );
         }
         FAULT_TAG_NULL => {
@@ -2257,16 +2257,16 @@ fn log_fault_message(info: &sel4_sys::seL4_MessageInfo, badge: sel4_sys::seL4_Wo
                 target: "root_task::kernel::fault",
                 "[fault] null fault badge=0x{badge:04x} regs={:?}",
                 badge = badge,
-                &regs[..len],
+                regs = &regs[..len],
             );
         }
         _ => {
             log::error!(
                 target: "root_task::kernel::fault",
-                "[fault] unrecognised fault tag={} badge=0x{badge:04x} regs={:?}",
-                decoded_tag,
+                "[fault] unrecognised fault tag={decoded_tag} badge=0x{badge:04x} regs={regs:?}",
+                decoded_tag = decoded_tag,
                 badge = badge,
-                &regs[..len],
+                regs = &regs[..len],
             );
         }
     }
