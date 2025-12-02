@@ -5,7 +5,6 @@
 extern crate alloc;
 
 use alloc::boxed::Box;
-use core::arch::asm;
 use core::cell::RefCell;
 use core::cmp;
 use core::convert::TryFrom;
@@ -13,6 +12,9 @@ use core::fmt::{self, Write};
 use core::panic::PanicInfo;
 use core::ptr;
 use core::sync::atomic::{AtomicU64, AtomicU8, Ordering};
+
+#[cfg(feature = "timers-arch-counter")]
+use core::arch::asm;
 
 use cohesix_ticket::Role;
 
@@ -2170,7 +2172,7 @@ fn log_fault_message(info: &sel4_sys::seL4_MessageInfo, badge: sel4_sys::seL4_Wo
             "[fault] tag mismatch badge=0x{badge:04x} label=0x{label:08x} decoded=0x{decoded:08x} regs={:?}",
             label = fault_tag,
             decoded = decoded_tag,
-            &regs[..len]
+            regs = &regs[..len],
         );
         return;
     }
