@@ -2335,6 +2335,14 @@ pub(crate) struct KernelIpc {
     fault_loop_announced: bool,
 }
 
+fn current_node_id() -> sel4_sys::seL4_NodeId {
+    unsafe {
+        sel4_sys::bootinfo
+            .as_ref()
+            .map_or(0, |bootinfo| (*bootinfo).nodeID)
+    }
+}
+
 impl KernelIpc {
     pub(crate) fn new(endpoint: sel4_sys::seL4_CPtr) -> Self {
         log::info!(
@@ -2345,7 +2353,7 @@ impl KernelIpc {
             "[ipc] EP 0x{ep:04x} loop online; waiting for messages",
             ep = endpoint
         );
-        let cpuid = unsafe { sel4_sys::seL4_GetCPUID() };
+        let cpuid = current_node_id();
         log::info!(
             "[ipc] EP 0x{ep:04x}: dispatcher thread initialised on core={cpuid}",
             ep = endpoint,
