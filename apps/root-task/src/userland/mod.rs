@@ -442,6 +442,7 @@ fn start_kernel_cli<'a, D, T, I, V, const RX: usize, const TX: usize, const LINE
     I: IpcDispatcher,
     V: CapabilityValidator,
 {
+    log::info!("[console] spawn: root console task requested (start_cli)");
     pump.start_cli();
     log::info!(
         target: "userland",
