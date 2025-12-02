@@ -24,6 +24,7 @@ use super::{
     console_srv::{SessionEvent, TcpConsoleServer},
     NetConsoleEvent, NetPoller, NetTelemetry, AUTH_TOKEN, CONSOLE_TCP_PORT, IDLE_TIMEOUT_MS,
 };
+use crate::debug_uart::debug_uart_str;
 use crate::drivers::virtio::net::{DriverError, VirtioNet};
 use crate::hal::{HalError, Hardware};
 use crate::serial::DEFAULT_LINE_CAPACITY;
@@ -202,6 +203,7 @@ pub struct NetStack {
     events: HeaplessVec<NetConsoleEvent, SOCKET_CAPACITY>,
     service_logged: bool,
     poll_samples_emitted: u32,
+    uart_poll_announced: bool,
 }
 
 /// Initialise the network console stack, translating low-level errors into
@@ -287,6 +289,7 @@ impl NetStack {
             events: HeaplessVec::new(),
             service_logged: false,
             poll_samples_emitted: 0,
+            uart_poll_announced: false,
         };
         stack.initialise_socket();
         socket_guard.disarm();
@@ -312,6 +315,10 @@ impl NetStack {
         if !self.service_logged {
             info!("[net-console] service loop running");
             self.service_logged = true;
+        }
+        if !self.uart_poll_announced {
+            debug_uart_str("[dbg] cohsh-net: poll loop online (tcp/31337)\n");
+            self.uart_poll_announced = true;
         }
         self.poll_count = self.poll_count.wrapping_add(1);
         if (self.poll_count & 0xff) == 0 {
@@ -405,6 +412,7 @@ impl NetStack {
                 self.active_client_id = Some(client_id);
                 self.conn_bytes_read = 0;
                 self.conn_bytes_written = 0;
+                debug_uart_str("[dbg] cohsh-net: connection accepted\n");
                 let peer = if let Some(endpoint) = socket.remote_endpoint() {
                     info!(
                         target: "net-console",
@@ -487,6 +495,7 @@ impl NetStack {
                     match socket.recv_slice(&mut temp) {
                         Ok(0) => break,
                         Ok(count) => {
+                            debug_uart_str("[dbg] cohsh-net: received data from client\n");
                             self.conn_bytes_read =
                                 self.conn_bytes_read.saturating_add(count as u64);
                             info!(
@@ -570,6 +579,7 @@ impl NetStack {
                                         self.active_client_id,
                                         self.auth_state,
                                     );
+                                    debug_uart_str("[dbg] cohsh-net: connection closed/error\n");
                                     socket.close();
                                     self.server.end_session();
                                     self.session_active = false;
@@ -606,6 +616,7 @@ impl NetStack {
                                         self.active_client_id,
                                         self.auth_state,
                                     );
+                                    debug_uart_str("[dbg] cohsh-net: connection closed/error\n");
                                     socket.close();
                                     self.server.end_session();
                                     self.session_active = false;
@@ -642,6 +653,7 @@ impl NetStack {
                                 self.auth_state,
                                 self.active_client_id.unwrap_or(0)
                             );
+                            debug_uart_str("[dbg] cohsh-net: connection closed/error\n");
                             socket.close();
                             self.server.end_session();
                             self.session_active = false;
@@ -689,6 +701,7 @@ impl NetStack {
                     self.active_client_id,
                     self.auth_state,
                 );
+                debug_uart_str("[dbg] cohsh-net: connection closed/error\n");
                 socket.close();
                 self.server.end_session();
                 self.session_active = false;
@@ -726,6 +739,7 @@ impl NetStack {
                     self.active_client_id,
                     self.auth_state,
                 );
+                debug_uart_str("[dbg] cohsh-net: connection closed/error\n");
                 socket.close();
                 self.server.end_session();
                 self.session_active = false;
@@ -762,6 +776,7 @@ impl NetStack {
                     self.active_client_id.unwrap_or(0),
                     socket.state()
                 );
+                debug_uart_str("[dbg] cohsh-net: connection closed/error\n");
                 socket.close();
                 self.server.end_session();
                 self.session_active = false;
@@ -824,6 +839,7 @@ impl NetStack {
                     "[cohsh-net] send: auth response len={} role='AUTH'",
                     payload.len()
                 );
+                debug_uart_str("[dbg] cohsh-net: sending auth response\n");
             }
             match socket.send_slice(payload.as_slice()) {
                 Ok(sent) if sent == payload.len() => {

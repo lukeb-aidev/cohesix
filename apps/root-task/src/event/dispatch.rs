@@ -6,6 +6,7 @@
 
 use sel4_sys::seL4_Word;
 
+use crate::debug_uart::debug_uart_str;
 use crate::event::handlers::{call_handler, HandlerTable};
 use crate::event::op::BootstrapOp;
 
@@ -29,6 +30,7 @@ pub fn dispatch_message(words: &[seL4_Word], handlers: &HandlerTable) -> Dispatc
     };
 
     let Some(opcode) = BootstrapOp::decode(opcode_word) else {
+        debug_uart_str("[dbg] EP 0x0130: recv/dispatch error\n");
         log::error!(
             "[ipc] EP 0x0130: dispatch error bad opcode=0x{opcode:02x}",
             opcode = opcode_word

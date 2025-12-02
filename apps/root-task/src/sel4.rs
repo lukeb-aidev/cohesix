@@ -18,6 +18,7 @@ use crate::bootstrap::ipcbuf_view::IpcBufView;
 #[cfg(feature = "kernel")]
 use crate::bootstrap::ktry;
 use crate::bootstrap::DevicePtPoolConfig;
+use crate::debug_uart::debug_uart_str;
 use crate::sel4_view;
 use crate::serial;
 use heapless::Vec;
@@ -697,12 +698,14 @@ pub fn send_guarded(info: seL4_MessageInfo) -> Result<(), IpcError> {
     let endpoint = ensure_endpoint()?;
     debug_assert_ne!(
         endpoint, seL4_CapNull,
-        "send_guarded must not transmit on the null endpoint"
+        "send_guarded must not transmit on the null endpoint",
     );
+    debug_uart_str("[dbg] logger.switch complete; about to send bootstrap to EP 0x0130\n");
     if !SEND_LOGGED.swap(true, Ordering::AcqRel) {
         log::info!("bootstrap: send on ep slot=0x{slot:04x}", slot = endpoint,);
     }
     send_unchecked(endpoint, info);
+    debug_uart_str("[dbg] bootstrap send to EP 0x0130 returned\n");
     Ok(())
 }
 
