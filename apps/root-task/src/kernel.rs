@@ -1792,7 +1792,6 @@ fn run_timers_and_ipc_phase(
         return Ok((timer, ipc));
     }
 
-    unreachable!()
 }
 
 /// Panic handler implementation that emits diagnostics before halting.
@@ -2083,7 +2082,7 @@ const MAX_FAULT_REGS: usize = 14;
 
 fn log_fault_message(info: &sel4_sys::seL4_MessageInfo, badge: sel4_sys::seL4_Word) {
     let fault_tag = info.label();
-    if fault_tag > 0xful || info.length() == 0 {
+    if fault_tag > 0xF_u64 || info.length() == 0 {
         return;
     }
 
