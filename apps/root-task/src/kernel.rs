@@ -2148,6 +2148,12 @@ const MAX_FAULT_REGS: usize = 14;
 fn log_fault_message(info: &sel4_sys::seL4_MessageInfo, badge: sel4_sys::seL4_Word) {
     let fault_tag = info.label();
     if fault_tag > 0xF_u64 || info.length() == 0 {
+        log::error!(
+            target: "root_task::kernel::fault",
+            "[fault] received malformed fault message badge=0x{badge:04x} label=0x{label:08x} len={len}",
+            label = fault_tag,
+            len = info.length(),
+        );
         return;
     }
 
@@ -2159,8 +2165,29 @@ fn log_fault_message(info: &sel4_sys::seL4_MessageInfo, badge: sel4_sys::seL4_Wo
 
     let decoded_tag = regs[0] & 0xf;
     if decoded_tag != fault_tag {
+        log::error!(
+            target: "root_task::kernel::fault",
+            "[fault] tag mismatch badge=0x{badge:04x} label=0x{label:08x} decoded=0x{decoded:08x} regs={:?}",
+            label = fault_tag,
+            decoded = decoded_tag,
+            &regs[..len]
+        );
         return;
     }
+
+    let ip_hint = regs
+        .get(5)
+        .copied()
+        .unwrap_or_else(|| regs.get(4).copied().unwrap_or(0));
+    let sp_hint = regs.get(4).copied().unwrap_or_default();
+    log::error!(
+        target: "root_task::kernel::fault",
+        "[fault] received fault: badge=0x{badge:04x} label=0x{label:08x} ip_hint=0x{ip:016x} sp_hint=0x{sp:016x} len={len}",
+        label = fault_tag,
+        ip = ip_hint,
+        sp = sp_hint,
+        len = len,
+    );
 
     match decoded_tag {
         FAULT_TAG_UNKNOWN_SYSCALL => {
@@ -2281,15 +2308,25 @@ pub(crate) struct KernelIpc {
     staged_bootstrap: Option<StagedMessage>,
     staged_forwarded: bool,
     handlers_ready: bool,
+    fault_loop_announced: bool,
 }
 
 impl KernelIpc {
     pub(crate) fn new(endpoint: sel4_sys::seL4_CPtr) -> Self {
+        log::info!(
+            "[ipc] root EP installed at slot=0x{ep:04x} (role=LOG+CONTROL / QUEEN bootstrap)",
+            ep = endpoint
+        );
+        log::info!(
+            "[ipc] EP 0x{ep:04x} loop online; waiting for messages",
+            ep = endpoint
+        );
         Self {
             endpoint,
             staged_bootstrap: None,
             staged_forwarded: false,
             handlers_ready: false,
+            fault_loop_announced: false,
         }
     }
 
@@ -2376,6 +2413,13 @@ impl KernelIpc {
 
 impl IpcDispatcher for KernelIpc {
     fn dispatch(&mut self, now_ms: u64) {
+        if !self.fault_loop_announced {
+            log::info!(
+                "[fault] handler loop online; waiting for fault messages (ep=0x{ep:04x})",
+                ep = self.endpoint
+            );
+            self.fault_loop_announced = true;
+        }
         let _ = self.poll_endpoint(now_ms, false);
         if self.handlers_ready {
             self.forward_staged(now_ms);

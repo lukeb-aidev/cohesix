@@ -308,6 +308,7 @@ impl CohesixConsole {
     }
 
     pub fn run(&mut self) -> ! {
+        log::info!("[console] task entry: root console online, about to write prompt");
         log::info!("[console] root shell loop starting");
         log::info!(
             "[console] starting root shell ep=0x{ep:04x} uart=0x{uart:04x}",
@@ -315,10 +316,10 @@ impl CohesixConsole {
             uart = self.uart_slot,
         );
         self.emit_line("Cohesix console ready");
+        log::info!("[console] writing initial prompt 'cohesix>' to serial");
+        self.prompt();
 
         loop {
-            self.prompt();
-
             let mut buffer = [0u8; MAX_LINE_LEN];
             let count = self.console.read_line(&mut buffer);
             let line = core::str::from_utf8(&buffer[..count])

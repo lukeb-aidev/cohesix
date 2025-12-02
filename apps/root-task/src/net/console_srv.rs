@@ -112,6 +112,11 @@ impl TcpConsoleServer {
                     if self.line_buffer.is_empty() {
                         continue;
                     }
+                    info!(
+                        "[cohsh-net] recv: handshake line len={} raw='{}'",
+                        self.line_buffer.len(),
+                        self.line_buffer.as_str()
+                    );
                     let line = self.line_buffer.clone();
                     self.line_buffer.clear();
                     self.last_activity_ms = now_ms;
@@ -151,6 +156,7 @@ impl TcpConsoleServer {
 
     fn process_auth(&mut self, line: HeaplessString<DEFAULT_LINE_CAPACITY>) -> SessionEvent {
         let trimmed = line.trim();
+        info!("[cohsh-net] recv: auth line='{}'", trimmed);
         if !trimmed.starts_with(AUTH_PREFIX) {
             let _ = self.enqueue_auth_ack(AckStatus::Err, Some("reason=expected-token"));
             self.state = SessionState::Inactive;
@@ -158,6 +164,12 @@ impl TcpConsoleServer {
             return SessionEvent::AuthFailed("expected-token");
         }
         let token = trimmed.split_at(AUTH_PREFIX.len()).1.trim();
+        let role_str = token.split_whitespace().next().unwrap_or("");
+        info!(
+            "[cohsh-net] parsed handshake: role='{}' token_len={}",
+            role_str,
+            token.len()
+        );
         info!(
             "[net-console] handshake: got auth token len={} state={:?}",
             token.len(),
@@ -253,6 +265,14 @@ impl TcpConsoleServer {
                 self.enqueue_outbound("ERR AUTH")
             }
         }
+        .map(|result| {
+            info!(
+                "[cohsh-net] send: auth response len={} status={:?}",
+                line.len(),
+                status
+            );
+            result
+        })
     }
 }
 
