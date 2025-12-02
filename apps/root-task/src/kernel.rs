@@ -2153,6 +2153,7 @@ fn log_fault_message(info: &sel4_sys::seL4_MessageInfo, badge: sel4_sys::seL4_Wo
         log::error!(
             target: "root_task::kernel::fault",
             "[fault] received malformed fault message badge=0x{badge:04x} label=0x{label:08x} len={len}",
+            badge = badge,
             label = fault_tag,
             len = info.length(),
         );
@@ -2169,7 +2170,8 @@ fn log_fault_message(info: &sel4_sys::seL4_MessageInfo, badge: sel4_sys::seL4_Wo
     if decoded_tag != fault_tag {
         log::error!(
             target: "root_task::kernel::fault",
-            "[fault] tag mismatch badge=0x{badge:04x} label=0x{label:08x} decoded=0x{decoded:08x} regs={:?}",
+            "[fault] tag mismatch badge=0x{badge:04x} label=0x{label:08x} decoded=0x{decoded:08x} regs={regs:?}",
+            badge = badge,
             label = fault_tag,
             decoded = decoded_tag,
             regs = &regs[..len],
@@ -2185,6 +2187,7 @@ fn log_fault_message(info: &sel4_sys::seL4_MessageInfo, badge: sel4_sys::seL4_Wo
     log::error!(
         target: "root_task::kernel::fault",
         "[fault] received fault: badge=0x{badge:04x} label=0x{label:08x} ip_hint=0x{ip:016x} sp_hint=0x{sp:016x} len={len}",
+        badge = badge,
         label = fault_tag,
         ip = ip_hint,
         sp = sp_hint,
@@ -2201,6 +2204,12 @@ fn log_fault_message(info: &sel4_sys::seL4_MessageInfo, badge: sel4_sys::seL4_Wo
             log::error!(
                 target: "root_task::kernel::fault",
                 "[fault] unknown syscall badge=0x{badge:04x} ip=0x{fault_ip:016x} sp=0x{sp:016x} lr=0x{lr:016x} spsr=0x{spsr:016x} syscall=0x{syscall:x}",
+                badge = badge,
+                fault_ip,
+                sp,
+                lr,
+                spsr,
+                syscall,
             );
         }
         FAULT_TAG_USER_EXCEPTION => {
@@ -2212,6 +2221,12 @@ fn log_fault_message(info: &sel4_sys::seL4_MessageInfo, badge: sel4_sys::seL4_Wo
             log::error!(
                 target: "root_task::kernel::fault",
                 "[fault] user exception badge=0x{badge:04x} ip=0x{fault_ip:016x} stack=0x{stack:016x} spsr=0x{spsr:016x} number={number} code=0x{code:x}",
+                badge = badge,
+                fault_ip,
+                stack,
+                spsr,
+                number,
+                code,
             );
         }
         FAULT_TAG_VMFAULT => {
@@ -2222,21 +2237,27 @@ fn log_fault_message(info: &sel4_sys::seL4_MessageInfo, badge: sel4_sys::seL4_Wo
             log::error!(
                 target: "root_task::kernel::fault",
                 "[fault] vmfault badge=0x{badge:04x} ip=0x{ip:016x} addr=0x{addr:016x} prefetch={} fsr=0x{fsr:08x}",
+                badge = badge,
+                ip,
+                addr,
                 prefetch,
+                fsr,
             );
         }
         FAULT_TAG_CAP => {
             log::error!(
                 target: "root_task::kernel::fault",
                 "[fault] cap fault badge=0x{badge:04x} regs={:?}",
-                &regs[..len]
+                badge = badge,
+                &regs[..len],
             );
         }
         FAULT_TAG_NULL => {
             log::warn!(
                 target: "root_task::kernel::fault",
                 "[fault] null fault badge=0x{badge:04x} regs={:?}",
-                &regs[..len]
+                badge = badge,
+                &regs[..len],
             );
         }
         _ => {
@@ -2244,7 +2265,8 @@ fn log_fault_message(info: &sel4_sys::seL4_MessageInfo, badge: sel4_sys::seL4_Wo
                 target: "root_task::kernel::fault",
                 "[fault] unrecognised fault tag={} badge=0x{badge:04x} regs={:?}",
                 decoded_tag,
-                &regs[..len]
+                badge = badge,
+                &regs[..len],
             );
         }
     }
