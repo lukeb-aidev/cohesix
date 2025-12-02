@@ -34,6 +34,7 @@ use crate::bootstrap::{
 use crate::console::Console;
 use crate::cspace::tuples::assert_ipc_buffer_matches_bootinfo;
 use crate::cspace::CSpace;
+use crate::debug_uart::debug_uart_str;
 use crate::event::{
     AuditSink, BootstrapMessage, BootstrapMessageHandler, IpcDispatcher, TickEvent, TicketTable,
     TimerSource,
@@ -1608,11 +1609,17 @@ fn bootstrap<P: Platform>(
         boot_tracer().advance(BootPhase::DTBParseDone);
 
         crate::bp!("logger.switch.begin");
-        if let Err(err) = boot_log::switch_logger_to_userland() {
+        if cfg!(feature = "dev-virt") {
+            log::info!(
+                target: "root_task::kernel",
+                "[boot] logger.switch: EP disabled in dev-virt (UART-only)"
+            );
+        } else if let Err(err) = boot_log::switch_logger_to_userland() {
             log::error!("[boot] logger switch failed: {:?}", err);
             panic!("logger switch failed: {err:?}");
         }
         crate::bp!("logger.switch.end");
+        debug_uart_str("[dbg] logger.switch complete; about to send bootstrap to EP 0x0130\n");
         if !boot_log::bridge_disabled() {
             boot_tracer().advance(BootPhase::EPAttachWait);
         }
@@ -2148,6 +2155,7 @@ const FAULT_TAG_VMFAULT: u64 = 5;
 const MAX_FAULT_REGS: usize = 14;
 
 fn log_fault_message(info: &sel4_sys::seL4_MessageInfo, badge: sel4_sys::seL4_Word) {
+    debug_uart_str("[dbg] fault: received user fault; halting\n");
     let fault_tag = info.label();
     if fault_tag > 0xF_u64 || info.length() == 0 {
         log::error!(
@@ -2333,6 +2341,7 @@ pub(crate) struct KernelIpc {
     staged_forwarded: bool,
     handlers_ready: bool,
     fault_loop_announced: bool,
+    debug_uart_announced: bool,
 }
 
 fn current_node_id() -> sel4_sys::seL4_NodeId {
@@ -2365,6 +2374,7 @@ impl KernelIpc {
             staged_forwarded: false,
             handlers_ready: false,
             fault_loop_announced: false,
+            debug_uart_announced: false,
         }
     }
 
@@ -2381,6 +2391,10 @@ impl KernelIpc {
             return true;
         }
 
+        if !self.debug_uart_announced {
+            debug_uart_str("[dbg] EP 0x0130: dispatcher loop about to recv\n");
+            self.debug_uart_announced = true;
+        }
         log::info!(
             "[ipc] EP 0x{ep:04x}: waiting for message (recv begin) now_ms={now_ms}",
             ep = self.endpoint,
@@ -2409,6 +2423,7 @@ impl KernelIpc {
             label = label,
             msg_len = msg_len,
         );
+        debug_uart_str("[dbg] EP 0x0130: recv OK\n");
         if bootstrap {
             log::trace!(
                 "B5.recv ret badge=0x{badge:016x} info=0x{info:08x}",

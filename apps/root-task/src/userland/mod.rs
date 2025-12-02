@@ -13,6 +13,7 @@ use crate::boot::uart_pl011;
 use crate::console::CohesixConsole;
 #[cfg(all(feature = "serial-console", feature = "kernel"))]
 use crate::console::Console as SerialConsole;
+use crate::debug_uart::debug_uart_str;
 use crate::event::{
     AuditSink, BootstrapMessage, BootstrapMessageHandler, CapabilityValidator, EventPump,
     IpcDispatcher, TimerSource,
@@ -88,6 +89,8 @@ pub fn main(ctx: BootContext) -> ! {
         target: "userland",
         "[userland] event-pump: registering serial root console"
     );
+    #[cfg(all(feature = "serial-console", feature = "kernel"))]
+    debug_uart_str("[dbg] console: spawning root console task\n");
     #[cfg(all(feature = "serial-console", feature = "kernel"))]
     log::info!("[console] spawn: starting root console task on serial");
     pump = attach_kernel_console(pump, &ctx, bootstrap_ipc.as_mut());

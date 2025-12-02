@@ -56,6 +56,10 @@ pub mod userland;
 pub mod debug;
 
 #[cfg(feature = "kernel")]
+/// UART-only debug helpers for scenarios where the logger path is unreliable.
+pub mod debug_uart;
+
+#[cfg(feature = "kernel")]
 /// Capability operations and debug helpers built atop seL4 syscalls.
 pub mod caps;
 

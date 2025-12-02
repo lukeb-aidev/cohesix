@@ -29,6 +29,7 @@ use heapless::{String as HeaplessString, Vec as HeaplessVec};
 
 use crate::console::proto::{render_ack, AckLine, AckStatus, LineFormatError};
 use crate::console::{Command, CommandParser, ConsoleError, MAX_ROLE_LEN, MAX_TICKET_LEN};
+use crate::debug_uart::debug_uart_str;
 #[cfg(feature = "net-console")]
 use crate::net::{NetConsoleEvent, NetPoller, CONSOLE_QUEUE_DEPTH};
 #[cfg(feature = "kernel")]
@@ -560,6 +561,7 @@ where
 
     /// Emit the interactive banner and initial prompt over the serial console.
     pub fn start_cli(&mut self) {
+        debug_uart_str("[dbg] console: root console task entry\n");
         #[cfg(feature = "kernel")]
         if let Some(context) = self.console_context {
             log::info!(
@@ -572,6 +574,7 @@ where
         self.emit_console_line(CONSOLE_BANNER);
         self.emit_console_line("Cohesix console ready");
         self.emit_help();
+        debug_uart_str("[dbg] console: writing 'cohesix>' prompt\n");
         self.emit_prompt();
         self.serial.poll_io();
         if !self.banner_emitted {

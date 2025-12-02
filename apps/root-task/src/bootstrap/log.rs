@@ -132,7 +132,7 @@ const fn env_flag(value: Option<&'static str>) -> bool {
     }
 }
 
-const NO_BRIDGE_DEFAULT: bool = env_flag(option_env!("NO_BRIDGE"));
+const NO_BRIDGE_DEFAULT: bool = env_flag(option_env!("NO_BRIDGE")) || cfg!(feature = "dev-virt");
 
 static NO_BRIDGE_MODE: AtomicBool = AtomicBool::new(NO_BRIDGE_DEFAULT);
 static PING_TOKEN: AtomicU32 = AtomicU32::new(1);
