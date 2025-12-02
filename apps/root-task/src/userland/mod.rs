@@ -135,12 +135,29 @@ pub fn main(ctx: BootContext) -> ! {
             target: "userland",
             "[userland] event-pump: mapping PL011 for shared console I/O"
         );
+        log::info!(
+            target: "root_task::kernel",
+            "[boot] TimersAndIPC: root-console.start.begin"
+        );
         log::info!(target: "boot", "[boot] before starting root shell");
         pump.announce_console_ready();
         log::info!(target: "boot", "[boot] root shell starting");
         log::info!(target: "console", "[console] starting root CLI");
         pump.start_cli();
+        log::info!(
+            target: "root_task::kernel",
+            "[boot] TimersAndIPC: root-console.start.ok"
+        );
+        log::info!(
+            target: "root_task::kernel",
+            "[boot] TimersAndIPC: queen.start.begin"
+        );
         log::info!(target: "boot", "[boot] root shell started; entering event loop");
+        log::info!(
+            target: "root_task::kernel",
+            "[boot] TimersAndIPC: queen.start.ok"
+        );
+        log::info!(target: "root_task::kernel", "[boot] phase: TimersAndIPC.end");
         pump.run();
     }
 

@@ -84,6 +84,7 @@ impl TcpConsoleServer {
             self.auth_deadline_ms = Some(now_ms.saturating_add(AUTH_TIMEOUT_MS));
         }
         info!("[net-console] auth begin (challenge sent)");
+        info!("[net-console] auth: waiting for handshake payload");
     }
 
     /// Tear down any per-connection state.

@@ -10,6 +10,8 @@
 #[cfg(all(target_os = "none", not(feature = "kernel")))]
 compile_error!("enable the `kernel` feature when building root-task for seL4 targets");
 
+#[cfg(all(feature = "kernel", target_arch = "aarch64"))]
+pub mod arch;
 pub mod console;
 pub mod event;
 pub mod serial;
