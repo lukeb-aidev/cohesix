@@ -2247,7 +2247,7 @@ fn log_fault_message(info: &sel4_sys::seL4_MessageInfo, badge: sel4_sys::seL4_Wo
         FAULT_TAG_CAP => {
             log::error!(
                 target: "root_task::kernel::fault",
-                "[fault] cap fault badge=0x{badge:04x} regs={:?}",
+                "[fault] cap fault badge=0x{badge:04x} regs={regs:?}",
                 badge = badge,
                 regs = &regs[..len],
             );
@@ -2255,7 +2255,7 @@ fn log_fault_message(info: &sel4_sys::seL4_MessageInfo, badge: sel4_sys::seL4_Wo
         FAULT_TAG_NULL => {
             log::warn!(
                 target: "root_task::kernel::fault",
-                "[fault] null fault badge=0x{badge:04x} regs={:?}",
+                "[fault] null fault badge=0x{badge:04x} regs={regs:?}",
                 badge = badge,
                 regs = &regs[..len],
             );
