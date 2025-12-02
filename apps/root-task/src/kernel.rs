@@ -12,7 +12,7 @@ use core::convert::TryFrom;
 use core::fmt::{self, Write};
 use core::panic::PanicInfo;
 use core::ptr;
-use core::sync::atomic::{AtomicU8, Ordering};
+use core::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 
 use cohesix_ticket::Role;
 
@@ -1791,7 +1791,6 @@ fn run_timers_and_ipc_phase(
 
         return Ok((timer, ipc));
     }
-
 }
 
 /// Panic handler implementation that emits diagnostics before halting.
@@ -1814,8 +1813,32 @@ pub(crate) struct KernelTimer {
     period_ms: u64,
     period_cycles: u64,
     last_cycles: u64,
+    backend: TimerBackend,
     enabled: bool,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TimerBackend {
+    ArchCounterPollOnly,
+    DummySoftTimer,
+}
+
+#[cfg(feature = "timers-arch-counter")]
+const TIMER_BACKEND: TimerBackend = TimerBackend::ArchCounterPollOnly;
+
+#[cfg(not(feature = "timers-arch-counter"))]
+const TIMER_BACKEND: TimerBackend = TimerBackend::DummySoftTimer;
+
+impl TimerBackend {
+    fn label(&self) -> &'static str {
+        match self {
+            Self::ArchCounterPollOnly => "architected counter poll-only",
+            Self::DummySoftTimer => "DummySoftTimer backend (architected counter disabled)",
+        }
+    }
+}
+
+static DUMMY_CYCLE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 impl KernelTimer {
     pub(crate) fn init(period_ms: u64) -> Result<Self, TimerError> {
@@ -1868,28 +1891,48 @@ impl KernelTimer {
             period_cycles
         );
 
+        let backend = TIMER_BACKEND;
         log::info!(
             target: "root_task::kernel::timer",
-            "[timers] init: configuring timer source (architected counter poll-only)",
+            "[timers] init: configuring timer source ({})",
+            backend.label()
         );
 
-        log::info!(
-            target: "root_task::kernel::timer",
-            "[timers] init: snapshot cntpct begin",
-        );
-        let last_cycles = read_cntpct();
-        if last_cycles == 0 {
-            log::error!(
-                target: "root_task::kernel::timer",
-                "[timers] init: cntpct read returned 0"
-            );
-            return Err(TimerError::CounterUnavailable);
-        }
-        log::info!(
-            target: "root_task::kernel::timer",
-            "[timers] init: baseline cntpct={} (poll-only)",
-            last_cycles
-        );
+        let last_cycles = match backend {
+            TimerBackend::ArchCounterPollOnly => {
+                log::info!(
+                    target: "root_task::kernel::timer",
+                    "[timers] init: snapshot cntpct begin",
+                );
+                let last_cycles = read_cntpct();
+                if last_cycles == 0 {
+                    log::error!(
+                        target: "root_task::kernel::timer",
+                        "[timers] init: cntpct read returned 0"
+                    );
+                    return Err(TimerError::CounterUnavailable);
+                }
+                log::info!(
+                    target: "root_task::kernel::timer",
+                    "[timers] init: baseline cntpct={} (poll-only)",
+                    last_cycles
+                );
+                last_cycles
+            }
+            TimerBackend::DummySoftTimer => {
+                log::info!(
+                    target: "root_task::kernel::timer",
+                    "[timers] init: using dummy software counter; snapshots will not read CNT registers",
+                );
+                let baseline = read_dummy_cycles(period_cycles);
+                log::info!(
+                    target: "root_task::kernel::timer",
+                    "[timers] init: baseline dummy counter={} (poll-only)",
+                    baseline
+                );
+                baseline
+            }
+        };
         log::info!(
             target: "root_task::kernel::timer",
             "[timers] init: done; timers online (non-blocking)",
@@ -1899,6 +1942,7 @@ impl KernelTimer {
             period_ms: period_ms.max(1),
             period_cycles,
             last_cycles,
+            backend,
             enabled: true,
         })
     }
@@ -1914,6 +1958,7 @@ impl KernelTimer {
             period_ms: period_ms.max(1),
             period_cycles: 1,
             last_cycles: 0,
+            backend: TimerBackend::DummySoftTimer,
             enabled: false,
         }
     }
@@ -1940,7 +1985,7 @@ impl TimerSource for KernelTimer {
             return None;
         }
 
-        let current = read_cntpct();
+        let current = self.snapshot_cycles();
         let elapsed = current.wrapping_sub(self.last_cycles);
         if elapsed < self.period_cycles {
             return None;
@@ -1960,6 +2005,15 @@ impl TimerSource for KernelTimer {
     }
 }
 
+impl KernelTimer {
+    fn snapshot_cycles(&self) -> u64 {
+        match self.backend {
+            TimerBackend::ArchCounterPollOnly => read_cntpct(),
+            TimerBackend::DummySoftTimer => read_dummy_cycles(self.period_cycles),
+        }
+    }
+}
+
 fn compute_period_cycles(freq_hz: u64, period_ms: u64) -> u64 {
     if freq_hz == 0 {
         return 1;
@@ -1970,12 +2024,23 @@ fn compute_period_cycles(freq_hz: u64, period_ms: u64) -> u64 {
     cycles.max(1)
 }
 
+#[cfg(feature = "timers-arch-counter")]
 fn read_cntpct() -> u64 {
     let value: u64;
     unsafe {
         asm!("mrs {value}, cntpct_el0", value = out(reg) value, options(nomem, preserves_flags));
     }
     value
+}
+
+#[cfg(not(feature = "timers-arch-counter"))]
+fn read_cntpct() -> u64 {
+    0
+}
+
+fn read_dummy_cycles(period_cycles: u64) -> u64 {
+    let step = period_cycles.max(1);
+    DUMMY_CYCLE_COUNTER.fetch_add(step, Ordering::Relaxed)
 }
 
 const MAX_MESSAGE_WORDS: usize = MSG_MAX_WORDS;

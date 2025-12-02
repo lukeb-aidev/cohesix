@@ -24,6 +24,8 @@ dev-virt = [
 ]
 bypass-timers = []
 bypass-timers-ipc = []
+timers-arch-counter = []
+timers-bypass = ["bypass-timers"]
 cap-probes = []   # gate experimental cap ops (tests/bench only)
 net = []
 canonical_cspace = ["kernel"]
