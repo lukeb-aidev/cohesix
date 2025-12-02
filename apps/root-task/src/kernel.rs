@@ -1776,11 +1776,21 @@ impl KernelTimer {
             "[timers] init: begin period_ms={}",
             period_ms
         );
+        log::info!(
+            target: "root_task::kernel::timer",
+            "[timers] init: read cntfrq begin",
+        );
         let freq = read_cntfrq();
         log::info!(
             target: "root_task::kernel::timer",
             "[timers] init: cntfrq={}Hz",
             freq
+        );
+
+        log::info!(
+            target: "root_task::kernel::timer",
+            "[timers] init: compute period_cycles begin period_ms={period_ms}",
+            period_ms = period_ms
         );
         let period_cycles = compute_period_cycles(freq, period_ms);
         log::info!(
@@ -1788,11 +1798,20 @@ impl KernelTimer {
             "[timers] init: computed period_cycles={}",
             period_cycles
         );
+
+        log::info!(
+            target: "root_task::kernel::timer",
+            "[timers] init: snapshot cntpct begin",
+        );
         let last_cycles = read_cntpct();
         log::info!(
             target: "root_task::kernel::timer",
             "[timers] init: baseline cntpct={} (poll-only)",
             last_cycles
+        );
+        log::info!(
+            target: "root_task::kernel::timer",
+            "[timers] init: done; returning non-blocking timer",
         );
         Self {
             tick: 0,
@@ -1821,7 +1840,11 @@ impl KernelTimer {
     pub(crate) fn spawn_worker(&self) {
         log::info!(
             target: "root_task::kernel::timer",
-            "[timers] worker: cooperative polling (no blocking wait in init)"
+            "[timers] worker: spawn requested (deferred wait loop)",
+        );
+        log::info!(
+            target: "root_task::kernel::timer",
+            "[timers] worker: cooperative polling (no blocking wait in init)",
         );
     }
 }
