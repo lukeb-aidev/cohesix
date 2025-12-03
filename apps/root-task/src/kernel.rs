@@ -2517,7 +2517,7 @@ impl KernelIpc {
         let kind = classify_ep_message(&info);
         if bootstrap {
             log::trace!(
-                "B5.recv ret badge=0x{badge:016x} info=0x{info:08x}",
+                "B5.recv ret badge=0x{badge:016x} info=0x{info:08x} len={msg_len}",
                 badge = badge,
                 info = info.words[0]
             );
