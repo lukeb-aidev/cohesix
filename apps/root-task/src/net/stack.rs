@@ -277,13 +277,14 @@ impl NetStack {
         socket: &TcpSocket,
     ) {
         let current = socket.state();
+        let previous = session_state.last_state.unwrap_or(TcpState::Closed);
         if Some(current) == session_state.last_state {
             return;
         }
         let (peer, port) = Self::peer_parts(peer_endpoint, socket);
-        debug!(
-            "[cohsh-net] state-change: {}:{} {:?} -> {:?}",
-            peer, port, session_state.last_state, current
+        info!(
+            "[cohsh-net] socket state: {:?} -> {:?} (peer={}:{})",
+            previous, current, peer, port
         );
         session_state.last_state = Some(current);
         if !session_state.logged_accept && current == TcpState::Established {
@@ -620,6 +621,11 @@ impl NetStack {
             }
 
             if socket.can_recv() {
+                log::debug!(
+                    "[cohsh-net] recv-ready: can_recv=true (state={:?}, auth_state={:?})",
+                    socket.state(),
+                    self.auth_state
+                );
                 let mut temp = [0u8; 64];
                 while socket.can_recv() {
                     match socket.recv_slice(&mut temp) {
@@ -634,10 +640,12 @@ impl NetStack {
                             } else {
                                 log::Level::Info
                             };
+                            let tcp_state = socket.state();
                             log::log!(
                                 recv_level,
-                                "[cohsh-net] recv: {} bytes (auth_state={:?}): {:02x?}",
+                                "[cohsh-net] recv: {} bytes (state={:?}, auth_state={:?}): {:02x?}",
                                 count,
+                                tcp_state,
                                 self.auth_state,
                                 &temp[..dump_len]
                             );
@@ -827,6 +835,14 @@ impl NetStack {
                                 self.conn_bytes_written
                             );
                             self.active_client_id = None;
+                            break;
+                        }
+                        Err(err) => {
+                            log::warn!(
+                                "[cohsh-net] recv error: {:?} (state={:?})",
+                                err,
+                                socket.state()
+                            );
                             break;
                         }
                     }
@@ -1024,13 +1040,15 @@ impl NetStack {
                 );
                 debug_uart_str("[dbg] cohsh-net: sending auth response\n");
             }
+            let tcp_state = socket.state();
             match socket.send_slice(payload.as_slice()) {
                 Ok(sent) if sent == payload.len() => {
                     *conn_bytes_written = conn_bytes_written.saturating_add(sent as u64);
                     let dump_len = payload.len().min(32);
                     info!(
-                        "[cohsh-net] send: {} bytes (auth_state={:?}): {:02x?}",
+                        "[cohsh-net] send: {} bytes (state={:?}, auth_state={:?}): {:02x?}",
                         sent,
+                        tcp_state,
                         auth_state,
                         &payload[..dump_len]
                     );
