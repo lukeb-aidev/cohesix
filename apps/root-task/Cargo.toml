@@ -30,6 +30,7 @@ timers-bypass = ["bypass-timers"]
 timer-trace = []
 cap-probes = []   # gate experimental cap ops (tests/bench only)
 net = []
+control-trace = []
 canonical_cspace = ["kernel"]
 bootstrap-minimal = []
 bootstrap-debug = []
