@@ -290,8 +290,13 @@ impl NetStack {
     }
 
     #[cfg(feature = "net-trace-31337")]
-    fn trace_conn_new(&self, conn_id: u64, socket: &TcpSocket) {
-        let (peer, port) = Self::peer_parts(self.peer_endpoint, socket);
+    fn trace_conn_new(
+        peer_endpoint: Option<(IpAddress, u16)>,
+        ip: IpAddress,
+        conn_id: u64,
+        socket: &TcpSocket,
+    ) {
+        let (peer, port) = Self::peer_parts(peer_endpoint, socket);
         let local_port = socket
             .local_endpoint()
             .map(|endpoint| endpoint.port)
@@ -299,7 +304,7 @@ impl NetStack {
         log::info!(
             "[cohsh-net] conn new id={} local={}:{} remote={}:{} state={:?}",
             conn_id,
-            self.ip,
+            ip,
             local_port,
             peer,
             port,
@@ -308,10 +313,16 @@ impl NetStack {
     }
 
     #[cfg(not(feature = "net-trace-31337"))]
-    fn trace_conn_new(&self, _conn_id: u64, _socket: &TcpSocket) {}
+    fn trace_conn_new(
+        _peer_endpoint: Option<(IpAddress, u16)>,
+        _ip: IpAddress,
+        _conn_id: u64,
+        _socket: &TcpSocket,
+    ) {
+    }
 
     #[cfg(feature = "net-trace-31337")]
-    fn trace_conn_recv(&self, conn_id: u64, payload: &[u8]) {
+    fn trace_conn_recv(conn_id: u64, payload: &[u8]) {
         let prefix = payload.len().min(16);
         log::info!(
             "[cohsh-net] conn id={} recv bytes={} hex={:02x?}",
@@ -322,10 +333,10 @@ impl NetStack {
     }
 
     #[cfg(not(feature = "net-trace-31337"))]
-    fn trace_conn_recv(&self, _conn_id: u64, _payload: &[u8]) {}
+    fn trace_conn_recv(_conn_id: u64, _payload: &[u8]) {}
 
     #[cfg(feature = "net-trace-31337")]
-    fn trace_conn_send(&self, conn_id: u64, payload: &[u8]) {
+    fn trace_conn_send(conn_id: u64, payload: &[u8]) {
         let prefix = payload.len().min(16);
         log::info!(
             "[cohsh-net] conn id={} send bytes={} hex={:02x?}",
@@ -336,10 +347,10 @@ impl NetStack {
     }
 
     #[cfg(not(feature = "net-trace-31337"))]
-    fn trace_conn_send(&self, _conn_id: u64, _payload: &[u8]) {}
+    fn trace_conn_send(_conn_id: u64, _payload: &[u8]) {}
 
     #[cfg(feature = "net-trace-31337")]
-    fn trace_conn_closed(&self, conn_id: u64, reason: &str, bytes_in: u64, bytes_out: u64) {
+    fn trace_conn_closed(conn_id: u64, reason: &str, bytes_in: u64, bytes_out: u64) {
         log::info!(
             "[cohsh-net] conn id={} closed reason={} bytes_in={} bytes_out={}",
             conn_id,
@@ -350,7 +361,7 @@ impl NetStack {
     }
 
     #[cfg(not(feature = "net-trace-31337"))]
-    fn trace_conn_closed(&self, _conn_id: u64, _reason: &str, _bytes_in: u64, _bytes_out: u64) {}
+    fn trace_conn_closed(_conn_id: u64, _reason: &str, _bytes_in: u64, _bytes_out: u64) {}
 
     fn log_poll_snapshot(&mut self) {
         let snapshot = PollSnapshot {
@@ -689,7 +700,7 @@ impl NetStack {
                     conn_id: client_id,
                     peer,
                 });
-                self.trace_conn_new(client_id, socket);
+                Self::trace_conn_new(self.peer_endpoint, self.ip, client_id, socket);
                 if ECHO_MODE {
                     Self::set_auth_state(
                         &mut self.auth_state,
@@ -766,13 +777,13 @@ impl NetStack {
                                 socket.state()
                             );
                             trace!("[cohsh-net][tcp] recv hex: {:02x?}", &temp[..dump_len]);
-                            self.trace_conn_recv(conn_id, &temp[..count]);
+                            Self::trace_conn_recv(conn_id, &temp[..count]);
                             if ECHO_MODE {
                                 match socket.send_slice(&temp[..count]) {
                                     Ok(sent) => {
                                         self.conn_bytes_written =
                                             self.conn_bytes_written.saturating_add(sent as u64);
-                                        self.trace_conn_send(conn_id, &temp[..sent.min(count)]);
+                                        Self::trace_conn_send(conn_id, &temp[..sent.min(count)]);
                                     }
                                     Err(err) => {
                                         log::warn!(
@@ -919,14 +930,6 @@ impl NetStack {
                                 self.conn_bytes_written
                             );
                             self.active_client_id = None;
-                            break;
-                        }
-                        Err(err) => {
-                            log::warn!(
-                                "[cohsh-net] recv error: {:?} (state={:?})",
-                                err,
-                                socket.state()
-                            );
                             break;
                         }
                     }
@@ -1184,7 +1187,7 @@ impl NetStack {
     }
 
     fn record_conn_closed(&mut self, conn_id: u64) {
-        self.trace_conn_closed(
+        Self::trace_conn_closed(
             conn_id,
             "disconnect",
             self.conn_bytes_read,
