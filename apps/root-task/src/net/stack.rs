@@ -700,7 +700,12 @@ impl NetStack {
                     conn_id: client_id,
                     peer,
                 });
-                Self::trace_conn_new(self.peer_endpoint, self.ip, client_id, socket);
+                Self::trace_conn_new(
+                    self.peer_endpoint,
+                    IpAddress::Ipv4(self.ip),
+                    client_id,
+                    socket,
+                );
                 if ECHO_MODE {
                     Self::set_auth_state(
                         &mut self.auth_state,
