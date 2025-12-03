@@ -2458,7 +2458,7 @@ impl KernelIpc {
             debug_uart_str("[dbg] EP 0x0130: dispatcher loop about to recv\n");
             self.debug_uart_announced = true;
         }
-        log::info!(
+        log::debug!(
             "[ipc] EP 0x{ep:04x}: waiting for message (recv begin) now_ms={now_ms}",
             ep = self.endpoint,
             now_ms = now_ms,
