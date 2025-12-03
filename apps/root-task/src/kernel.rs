@@ -12,7 +12,7 @@ use core::fmt::{self, Write};
 use core::ops::RangeInclusive;
 use core::panic::PanicInfo;
 use core::ptr;
-use core::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 
 #[cfg(feature = "timers-arch-counter")]
 use core::arch::asm;
