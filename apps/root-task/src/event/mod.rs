@@ -463,12 +463,21 @@ where
         if let Some(tick) = self.timer.poll(self.now_ms) {
             self.now_ms = tick.now_ms;
             self.metrics.timer_ticks = self.metrics.timer_ticks.saturating_add(1);
-            let message = format_message(format_args!("timer: tick {}", tick.tick));
-            self.audit.info(message.as_str());
+            if tick.tick % 1_000 == 0 {
+                let message = format_message(format_args!("timer: tick {}", tick.tick));
+                self.audit.info(message.as_str());
+            } else {
+                log::debug!(target: "audit", "[audit] timer: tick {}", tick.tick);
+            }
         }
 
         #[cfg(feature = "net-console")]
         if let Some(net) = self.net.as_mut() {
+            log::debug!(
+                target: "event",
+                "[event] pump: calling net-console poll (now_ms={})",
+                self.now_ms
+            );
             if net.poll(self.now_ms) {
                 let telemetry = net.telemetry();
                 let message = format_message(format_args!(
