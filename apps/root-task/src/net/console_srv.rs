@@ -43,6 +43,7 @@ pub struct TcpConsoleServer {
     outbound: Deque<HeaplessString<DEFAULT_LINE_CAPACITY>, CONSOLE_QUEUE_DEPTH>,
     last_activity_ms: u64,
     auth_deadline_ms: Option<u64>,
+    conn_id: Option<u64>,
 }
 
 impl TcpConsoleServer {
@@ -64,7 +65,8 @@ impl TcpConsoleServer {
 
     fn log_reject(&self, reason: &str, line: &str) {
         warn!(
-            "[cohsh-net][auth] reject: reason={} raw_len={} raw_bytes={:02x?}",
+            "[cohsh-net][auth] reject: conn id={} reason={} raw_len={} raw_bytes={:02x?}",
+            self.conn_label(),
             reason,
             line.len(),
             line.as_bytes()
@@ -89,23 +91,33 @@ impl TcpConsoleServer {
             outbound: Deque::new(),
             last_activity_ms: 0,
             auth_deadline_ms: None,
+            conn_id: None,
         }
     }
 
     /// Reset the session state in preparation for a new client connection.
-    pub fn begin_session(&mut self, now_ms: u64) {
+    pub fn begin_session(&mut self, now_ms: u64, conn_id: Option<u64>) {
         self.set_state(SessionState::WaitingAuth);
         self.line_buffer.clear();
         self.inbound.clear();
         self.outbound.clear();
         self.last_activity_ms = now_ms;
         self.auth_deadline_ms = None;
+        self.conn_id = conn_id;
         let expected_len = self.expected_frame_len();
         self.log_expected_auth(expected_len);
         info!(
             "[net-console] handshake: expecting client hello len={} magic=\"{}\" version=1",
             expected_len,
             AUTH_PREFIX.trim_end()
+        );
+        #[cfg(feature = "net-trace-31337")]
+        info!(
+            "[cohsh-net] conn id={} auth: waiting for client hello (expected_len={} magic=\"{}\" token_len={})",
+            self.conn_label(),
+            expected_len,
+            AUTH_PREFIX.trim_end(),
+            self.auth_token.len()
         );
         if self
             .enqueue_auth_ack(AckStatus::Ok, Some("detail=present-token"))
@@ -125,6 +137,7 @@ impl TcpConsoleServer {
         self.outbound.clear();
         self.last_activity_ms = 0;
         self.auth_deadline_ms = None;
+        self.conn_id = None;
     }
 
     /// Consume bytes received from the client, returning any resulting session event.
@@ -142,10 +155,12 @@ impl TcpConsoleServer {
                     if self.line_buffer.is_empty() {
                         continue;
                     }
+                    #[cfg(feature = "net-trace-31337")]
                     info!(
-                        "[cohsh-net] recv: handshake line len={} raw='{}'",
-                        self.line_buffer.len(),
-                        self.line_buffer.as_str()
+                        "[cohsh-net] conn id={} auth: received len={} bytes={:02x?}",
+                        self.conn_label(),
+                        self.line_buffer.len().saturating_add(1),
+                        self.line_buffer.as_bytes()
                     );
                     let line = self.line_buffer.clone();
                     self.line_buffer.clear();
@@ -193,23 +208,33 @@ impl TcpConsoleServer {
         );
         let expected_len = self.expected_frame_len();
         let observed_len = raw_bytes.len().saturating_add(1);
+        #[cfg(feature = "net-trace-31337")]
+        log::info!(
+            "[cohsh-net] conn id={} auth: parsing frame observed_len={} bytes={:02x?}",
+            self.conn_label(),
+            observed_len,
+            &raw_bytes[..core::cmp::min(raw_bytes.len(), 32)]
+        );
         if observed_len != expected_len {
             warn!(
-                "[cohsh-net][auth] invalid frame length: expected={}, got={}",
-                expected_len, observed_len
+                "[cohsh-net][auth] conn id={} invalid frame length: expected={}, got={}",
+                self.conn_label(),
+                expected_len,
+                observed_len
             );
+            self.log_reject("invalid-length", line.as_str());
+            let _ = self.enqueue_auth_ack(AckStatus::Err, Some("reason=invalid-length"));
+            self.set_state(SessionState::Inactive);
+            warn!("[cohsh-net][auth] closing session: reason=invalid-length");
+            warn!("[net-console] auth failed reason=invalid-length");
+            return SessionEvent::AuthFailed("invalid-length");
         }
         let trimmed = line.trim();
-        info!(
-            "[cohsh-net] recv: auth line='{}' raw_len={} raw_bytes={:02x?}",
-            trimmed,
-            trimmed.len(),
-            trimmed.as_bytes()
-        );
         let magic_ok = trimmed.starts_with(AUTH_PREFIX);
         if !magic_ok {
             warn!(
-                "[cohsh-net][auth] reject: bad magic (got={:02x?}, expected={:02x?})",
+                "[cohsh-net][auth] conn id={} reject: bad magic (got={:02x?}, expected={:02x?})",
+                self.conn_label(),
                 &raw_bytes[..core::cmp::min(raw_bytes.len(), AUTH_PREFIX.len())],
                 AUTH_PREFIX.as_bytes(),
             );
@@ -226,14 +251,16 @@ impl TcpConsoleServer {
         let version_ok = true;
         if !(magic_ok && version_ok && role_ok) {
             warn!(
-                "[cohsh-net][auth] invalid magic/version/role: magic_ok={} version_ok={} role_ok={}",
+                "[cohsh-net][auth] conn id={} invalid magic/version/role: magic_ok={} version_ok={} role_ok={}",
+                self.conn_label(),
                 magic_ok,
                 version_ok,
                 role_ok
             );
         }
         info!(
-            "[cohsh-net] parsed handshake: role='{}' token_len={}",
+            "[cohsh-net] parsed handshake: conn_id={} role='{}' token_len={}",
+            self.conn_label(),
             role_str,
             token.len()
         );
@@ -244,7 +271,8 @@ impl TcpConsoleServer {
         );
         if token != self.auth_token {
             warn!(
-                "[cohsh-net][auth] reject: invalid token (got_len={}, expected_len={})",
+                "[cohsh-net][auth] reject: conn id={} invalid token (got_len={}, expected_len={})",
+                self.conn_label(),
                 token.len(),
                 self.auth_token.len()
             );
@@ -259,11 +287,17 @@ impl TcpConsoleServer {
         self.auth_deadline_ms = None;
         let _ = self.enqueue_auth_ack(AckStatus::Ok, None);
         info!(
-            "[cohsh-net][auth] accepted client: role={:?}, version={:?}",
-            role_str, 1u8
+            "[cohsh-net][auth] accepted client: conn_id={} role={:?}, version={:?}",
+            self.conn_label(),
+            role_str,
+            1u8
         );
         info!("[net-console] auth ok");
         SessionEvent::Authenticated
+    }
+
+    fn conn_label(&self) -> u64 {
+        self.conn_id.unwrap_or(0)
     }
 
     /// Return true if the authenticated client has been idle beyond the configured timeout.
@@ -361,7 +395,7 @@ mod tests {
     #[test]
     fn authenticates_and_tracks_activity() {
         let mut server = TcpConsoleServer::new("token", 1000);
-        server.begin_session(10);
+        server.begin_session(10, Some(1));
 
         let ready = server.pop_outbound().expect("ready ack present");
         assert!(ready.starts_with("OK AUTH"));
@@ -377,7 +411,7 @@ mod tests {
     #[test]
     fn auth_timeout_triggers_and_resets() {
         let mut server = TcpConsoleServer::new("token", 1000);
-        server.begin_session(0);
+        server.begin_session(0, Some(1));
 
         assert!(!server.auth_timed_out(1));
         assert!(server.auth_timed_out(AUTH_TIMEOUT_MS + 1));
@@ -389,7 +423,7 @@ mod tests {
     #[test]
     fn rejects_invalid_auth_and_marks_session_inactive() {
         let mut server = TcpConsoleServer::new("token", 1000);
-        server.begin_session(0);
+        server.begin_session(0, Some(1));
 
         let event = server.ingest(b"AUTH wrong\n", 1);
         assert_eq!(event, SessionEvent::AuthFailed("invalid-token"));

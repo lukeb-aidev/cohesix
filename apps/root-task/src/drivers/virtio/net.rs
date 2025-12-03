@@ -3,10 +3,10 @@
 #![cfg(all(feature = "kernel", feature = "net-console"))]
 #![allow(unsafe_code)]
 
-use core::fmt;
+use core::fmt::{self, Write as FmtWrite};
 use core::ptr::{read_volatile, write_volatile, NonNull};
 
-use heapless::Vec as HeaplessVec;
+use heapless::{String as HeaplessString, Vec as HeaplessVec};
 use log::{debug, error, info, warn};
 use sel4_sys::{seL4_Error, seL4_NotEnoughMemory};
 use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
@@ -14,6 +14,7 @@ use smoltcp::time::Instant;
 use smoltcp::wire::EthernetAddress;
 
 use crate::hal::{HalError, Hardware};
+use crate::net::CONSOLE_TCP_PORT;
 use crate::net_consts::MAX_FRAME_LEN;
 use crate::sel4::{DeviceFrame, RamFrame};
 
@@ -313,6 +314,136 @@ impl VirtioNet {
     }
 }
 
+#[cfg(feature = "net-trace-31337")]
+fn format_ipv4(bytes: &[u8]) -> HeaplessString<16> {
+    let mut out = HeaplessString::new();
+    if bytes.len() >= 4 {
+        let _ = FmtWrite::write_fmt(
+            &mut out,
+            format_args!("{}.{}.{}.{}", bytes[0], bytes[1], bytes[2], bytes[3]),
+        );
+    }
+    out
+}
+
+#[cfg(feature = "net-trace-31337")]
+fn tcp_flag_string(flags: u8) -> HeaplessString<8> {
+    let mut out = HeaplessString::new();
+    let push_flag = |buffer: &mut HeaplessString<8>, chr| {
+        let _ = buffer.push(chr);
+    };
+    if flags & 0x02 != 0 {
+        push_flag(&mut out, 'S');
+    }
+    if flags & 0x10 != 0 {
+        push_flag(&mut out, 'A');
+    }
+    if flags & 0x01 != 0 {
+        push_flag(&mut out, 'F');
+    }
+    if flags & 0x04 != 0 {
+        push_flag(&mut out, 'R');
+    }
+    if flags & 0x08 != 0 {
+        push_flag(&mut out, 'P');
+    }
+    if flags & 0x20 != 0 {
+        push_flag(&mut out, 'U');
+    }
+    if flags & 0x40 != 0 {
+        push_flag(&mut out, 'E');
+    }
+    if flags & 0x80 != 0 {
+        push_flag(&mut out, 'C');
+    }
+    out
+}
+
+#[cfg(feature = "net-trace-31337")]
+fn log_tcp_trace(direction: &str, frame: &[u8]) {
+    const IPV4_ETHERTYPE: u16 = 0x0800;
+    if frame.len() < 34 {
+        return;
+    }
+
+    let ethertype = u16::from_be_bytes([frame[12], frame[13]]);
+    if ethertype != IPV4_ETHERTYPE {
+        return;
+    }
+
+    let ip_start = 14;
+    let ihl_words = usize::from(frame[ip_start] & 0x0f);
+    if ihl_words < 5 {
+        log::debug!("[net-trace] {direction} malformed ipv4 header len={ihl_words}");
+        return;
+    }
+    let ip_header_len = ihl_words * 4;
+    let total_len = u16::from_be_bytes([frame[ip_start + 2], frame[ip_start + 3]]) as usize;
+    if frame.len() < ip_start + ip_header_len || total_len < ip_header_len {
+        log::debug!(
+            "[net-trace] {direction} malformed ipv4 total_len={total} header_len={ihl}",
+            total = total_len,
+            ihl = ip_header_len
+        );
+        return;
+    }
+
+    let protocol = frame[ip_start + 9];
+    if protocol != 0x06 {
+        return;
+    }
+
+    let tcp_offset = ip_start + ip_header_len;
+    if frame.len() < tcp_offset + 20 {
+        log::debug!("[net-trace] {direction} malformed tcp header (truncated)");
+        return;
+    }
+
+    let src_port = u16::from_be_bytes([frame[tcp_offset], frame[tcp_offset + 1]]);
+    let dst_port = u16::from_be_bytes([frame[tcp_offset + 2], frame[tcp_offset + 3]]);
+    if src_port != CONSOLE_TCP_PORT && dst_port != CONSOLE_TCP_PORT {
+        return;
+    }
+
+    let data_offset_words = usize::from(frame[tcp_offset + 12] >> 4);
+    let tcp_header_len = data_offset_words * 4;
+    if tcp_header_len < 20 || frame.len() < tcp_offset + tcp_header_len {
+        log::debug!("[net-trace] {direction} malformed tcp data offset={data_offset_words}");
+        return;
+    }
+
+    let payload_len = total_len
+        .saturating_sub(ip_header_len + tcp_header_len)
+        .min(frame.len().saturating_sub(tcp_offset + tcp_header_len));
+    let seq = u32::from_be_bytes([
+        frame[tcp_offset + 4],
+        frame[tcp_offset + 5],
+        frame[tcp_offset + 6],
+        frame[tcp_offset + 7],
+    ]);
+    let ack = u32::from_be_bytes([
+        frame[tcp_offset + 8],
+        frame[tcp_offset + 9],
+        frame[tcp_offset + 10],
+        frame[tcp_offset + 11],
+    ]);
+    let flags = frame[tcp_offset + 13];
+    let flag_str = tcp_flag_string(flags);
+    let src_ip = format_ipv4(&frame[ip_start + 12..ip_start + 16]);
+    let dst_ip = format_ipv4(&frame[ip_start + 16..ip_start + 20]);
+
+    log::info!(
+        "[net-trace] {direction} tcp {src}:{src_port} -> {dst}:{dst_port} flags={flags} seq={seq} ack={ack} len={len}",
+        src = src_ip.as_str(),
+        dst = dst_ip.as_str(),
+        flags = flag_str.as_str(),
+        len = payload_len,
+    );
+}
+
+#[cfg(not(feature = "net-trace-31337"))]
+fn log_tcp_trace(_direction: &str, _frame: &[u8]) {}
+
 impl Device for VirtioNet {
     type RxToken<'a>
         = VirtioRxToken
@@ -376,6 +507,7 @@ impl RxToken for VirtioRxToken {
             .get_mut(self.id as usize)
             .expect("rx descriptor out of range");
         let mut_slice = &mut buffer.as_mut_slice()[..self.len.min(MAX_FRAME_LEN)];
+        log_tcp_trace("RX", mut_slice);
         let result = f(mut_slice);
         driver.requeue_rx(self.id);
         result
@@ -408,7 +540,9 @@ impl TxToken for VirtioTxToken {
                     .get_mut(id as usize)
                     .expect("tx descriptor out of range");
                 let slice = &mut buffer.as_mut_slice()[..length];
-                f(slice)
+                let result = f(slice);
+                log_tcp_trace("TX", slice);
+                result
             };
             driver.submit_tx(id, length);
             result

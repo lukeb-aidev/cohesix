@@ -21,11 +21,13 @@ dev-virt = [
     "bootstrap-trace",
     "serial-console",
     "net-console", # pulls in `net` and TCP console wiring
+    "net-trace-31337",
 ]
 bypass-timers = []
 bypass-timers-ipc = []
 timers-arch-counter = []
 timers-bypass = ["bypass-timers"]
+timer-trace = []
 cap-probes = []   # gate experimental cap ops (tests/bench only)
 net = []
 canonical_cspace = ["kernel"]
@@ -48,9 +50,11 @@ net-console = [
     "dep:smoltcp",
     "dep:spin",
 ]
+net-trace-31337 = []
 net-irq = []
 sel4-debug = []
 debug-input = []
+tcp-echo-31337 = ["net-console"]
 bootstrap-trace = [
     "dep:spin",
 ]

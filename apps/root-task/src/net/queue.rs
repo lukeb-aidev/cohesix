@@ -410,7 +410,7 @@ impl NetStack {
     /// Inject a line into the TCP console loopback queue (test/support helper).
     pub fn enqueue_console_line(&mut self, line: &str) {
         if !self.session_active {
-            self.server.begin_session(0);
+            self.server.begin_session(0, None);
             let mut auth_payload: HeaplessVec<u8, { DEFAULT_LINE_CAPACITY + 8 }> =
                 HeaplessVec::new();
             let _ = auth_payload.extend_from_slice(b"AUTH ");
@@ -529,7 +529,7 @@ mod tests {
         use super::super::console_srv::SessionEvent;
 
         let (mut stack, handle) = NetStack::new(Ipv4Address::new(10, 0, 2, 100));
-        stack.server.begin_session(0);
+        stack.server.begin_session(0, None);
         stack.session_active = true;
         stack.send_console_line("OK TEST detail=42");
         assert!(handle.pop_tx().is_none(), "frames should be queued on poll");
@@ -564,7 +564,7 @@ mod tests {
         use super::super::console_srv::SessionEvent;
 
         let (mut stack, handle) = NetStack::new(Ipv4Address::new(10, 0, 2, 150));
-        stack.server.begin_session(0);
+        stack.server.begin_session(0, None);
         stack.session_active = true;
         let event = stack.server.ingest(b"AUTH wrong\n", 1);
         assert!(matches!(event, SessionEvent::AuthFailed(_)));
