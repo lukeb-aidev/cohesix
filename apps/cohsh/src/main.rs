@@ -16,13 +16,13 @@ use env_logger::Env;
 use log::LevelFilter;
 
 #[cfg(feature = "tcp")]
-use cohsh::TcpTransport;
-#[cfg(feature = "tcp")]
 use cohsh::{
     tcp_debug_enabled, AutoAttach, NineDoorTransport, QemuTransport, RoleArg, Shell, Transport,
 };
 #[cfg(not(feature = "tcp"))]
 use cohsh::{AutoAttach, NineDoorTransport, QemuTransport, RoleArg, Shell, Transport};
+#[cfg(feature = "tcp")]
+use cohsh::{TcpTransport, COHSH_TCP_PORT};
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
 enum TransportKind {
@@ -83,7 +83,7 @@ struct Cli {
 
     /// TCP port for the remote console listener.
     #[cfg(feature = "tcp")]
-    #[arg(long, default_value_t = 31337)]
+    #[arg(long, default_value_t = COHSH_TCP_PORT)]
     tcp_port: u16,
 
     /// Authentication token required by the TCP console listener.

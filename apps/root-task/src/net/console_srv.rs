@@ -3,7 +3,7 @@
 //! TCP console session management shared between kernel and host stacks.
 
 use heapless::{Deque, String as HeaplessString};
-use log::{info, warn};
+use log::{debug, info, warn};
 
 use super::{AUTH_TIMEOUT_MS, CONSOLE_QUEUE_DEPTH};
 use crate::console::proto::{render_ack, AckLine, AckStatus, LineFormatError};
@@ -46,6 +46,31 @@ pub struct TcpConsoleServer {
 }
 
 impl TcpConsoleServer {
+    fn set_state(&mut self, next: SessionState) {
+        if self.state != next {
+            info!("[cohsh-net][auth] state: {:?} -> {:?}", self.state, next);
+            self.state = next;
+        }
+    }
+
+    fn log_expected_auth(&self, expected_len: usize) {
+        debug!(
+            "[cohsh-net][auth] expected prefix=\"{}\" version=1 token_len={} total_len={} bytes",
+            AUTH_PREFIX.trim_end(),
+            self.auth_token.len(),
+            expected_len
+        );
+    }
+
+    fn log_reject(&self, reason: &str, line: &str) {
+        warn!(
+            "[cohsh-net][auth] reject: reason={} raw_len={} raw_bytes={:02x?}",
+            reason,
+            line.len(),
+            line.as_bytes()
+        );
+    }
+
     /// Construct a new server that validates the provided authentication token.
     pub fn new(auth_token: &'static str, idle_timeout_ms: u64) -> Self {
         Self {
@@ -62,7 +87,7 @@ impl TcpConsoleServer {
 
     /// Reset the session state in preparation for a new client connection.
     pub fn begin_session(&mut self, now_ms: u64) {
-        self.state = SessionState::WaitingAuth;
+        self.set_state(SessionState::WaitingAuth);
         self.line_buffer.clear();
         self.inbound.clear();
         self.outbound.clear();
@@ -72,6 +97,7 @@ impl TcpConsoleServer {
             .len()
             .saturating_add(self.auth_token.len())
             .saturating_add(1);
+        self.log_expected_auth(expected_len);
         info!(
             "[net-console] handshake: expecting client hello len={} magic=\"{}\" version=1",
             expected_len,
@@ -89,7 +115,7 @@ impl TcpConsoleServer {
 
     /// Tear down any per-connection state.
     pub fn end_session(&mut self) {
-        self.state = SessionState::Inactive;
+        self.set_state(SessionState::Inactive);
         self.line_buffer.clear();
         self.inbound.clear();
         self.outbound.clear();
@@ -156,10 +182,16 @@ impl TcpConsoleServer {
 
     fn process_auth(&mut self, line: HeaplessString<DEFAULT_LINE_CAPACITY>) -> SessionEvent {
         let trimmed = line.trim();
-        info!("[cohsh-net] recv: auth line='{}'", trimmed);
+        info!(
+            "[cohsh-net] recv: auth line='{}' raw_len={} raw_bytes={:02x?}",
+            trimmed,
+            trimmed.len(),
+            trimmed.as_bytes()
+        );
         if !trimmed.starts_with(AUTH_PREFIX) {
+            self.log_reject("expected-token", trimmed);
             let _ = self.enqueue_auth_ack(AckStatus::Err, Some("reason=expected-token"));
-            self.state = SessionState::Inactive;
+            self.set_state(SessionState::Inactive);
             warn!("[net-console] auth failed reason=expected-token");
             return SessionEvent::AuthFailed("expected-token");
         }
@@ -176,12 +208,13 @@ impl TcpConsoleServer {
             self.state
         );
         if token != self.auth_token {
+            self.log_reject("invalid-token", trimmed);
             let _ = self.enqueue_auth_ack(AckStatus::Err, Some("reason=invalid-token"));
-            self.state = SessionState::Inactive;
+            self.set_state(SessionState::Inactive);
             warn!("[net-console] auth failed reason=invalid-token");
             return SessionEvent::AuthFailed("invalid-token");
         }
-        self.state = SessionState::Authenticated;
+        self.set_state(SessionState::Authenticated);
         self.auth_deadline_ms = None;
         let _ = self.enqueue_auth_ack(AckStatus::Ok, None);
         info!("[net-console] auth ok");

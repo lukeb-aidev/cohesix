@@ -8,7 +8,9 @@ use heapless::String as HeaplessString;
 pub use crate::net_consts::MAX_FRAME_LEN;
 
 /// TCP port exposed by the console listener inside the VM.
-pub const CONSOLE_TCP_PORT: u16 = 31337;
+pub const COHSH_TCP_PORT: u16 = 31337;
+/// Legacy alias for the console TCP port constant.
+pub const CONSOLE_TCP_PORT: u16 = COHSH_TCP_PORT;
 /// Authentication token expected from TCP console clients.
 pub const AUTH_TOKEN: &str = "changeme";
 /// Idle timeout applied to authenticated TCP console sessions (milliseconds).

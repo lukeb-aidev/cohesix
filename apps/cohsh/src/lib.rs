@@ -16,6 +16,8 @@ pub mod transport;
 
 #[cfg(feature = "tcp")]
 pub use transport::tcp::{tcp_debug_enabled, TcpTransport};
+#[cfg(feature = "tcp")]
+pub use transport::COHSH_TCP_PORT;
 
 use std::fmt;
 use std::io::{self, BufRead, BufReader, Read, Write};
@@ -765,7 +767,7 @@ impl<T: Transport, W: Write> Shell<T, W> {
         let endpoint = self
             .transport
             .tcp_endpoint()
-            .unwrap_or_else(|| ("127.0.0.1".to_owned(), 31337));
+            .unwrap_or_else(|| ("127.0.0.1".to_owned(), COHSH_TCP_PORT));
         let mut port = endpoint.1;
         if let Some(raw_port) = port_override {
             port = raw_port

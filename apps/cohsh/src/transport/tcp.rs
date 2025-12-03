@@ -166,11 +166,8 @@ pub struct TcpTransport {
 impl TcpTransport {
     fn set_auth_state(&mut self, next: AuthState) {
         if self.auth_state != next {
-            if self.tcp_debug {
-                info!("[cohsh][auth] state: {:?} -> {:?}", self.auth_state, next);
-            } else {
-                self.auth_state.log_transition(next);
-            }
+            info!("[cohsh][auth] state: {:?} -> {:?}", self.auth_state, next);
+            self.auth_state.log_transition(next);
             self.auth_state = next;
         }
     }
@@ -333,8 +330,13 @@ impl TcpTransport {
         let auth_start = Instant::now();
         let mut buf = auth_line.as_bytes().to_vec();
         buf.push(b'\n');
+        let dump_len = buf.len().min(32);
+        info!(
+            "[cohsh][auth] sending auth frame ({} bytes): {:02x?}",
+            buf.len(),
+            &buf[..dump_len]
+        );
         if self.tcp_debug {
-            let dump_len = buf.len().min(32);
             info!(
                 "[cohsh][tcp] sending auth frame ({} bytes): {:02x?}",
                 buf.len(),
@@ -385,15 +387,13 @@ impl TcpTransport {
             }
             match self.read_line_internal()? {
                 ReadStatus::Line(line) => {
-                    if self.tcp_debug {
-                        let bytes = line.as_bytes();
-                        let dump_len = bytes.len().min(32);
-                        info!(
-                            "[cohsh][tcp] recv: {} bytes during auth: {:02x?}",
-                            bytes.len(),
-                            &bytes[..dump_len]
-                        );
-                    }
+                    let bytes = line.as_bytes();
+                    let dump_len = bytes.len().min(64);
+                    info!(
+                        "[cohsh][auth] recv: {} bytes: {:02x?}",
+                        bytes.len(),
+                        &bytes[..dump_len]
+                    );
                     let trimmed = Self::trim_line(&line);
                     total_bytes_read = total_bytes_read.saturating_add(line.len());
                     if let Some(ack) = parse_ack(&trimmed) {
