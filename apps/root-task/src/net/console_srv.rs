@@ -181,6 +181,12 @@ impl TcpConsoleServer {
     }
 
     fn process_auth(&mut self, line: HeaplessString<DEFAULT_LINE_CAPACITY>) -> SessionEvent {
+        let raw_bytes = line.as_bytes();
+        log::info!(
+            "[cohsh-net][auth] parsing auth frame ({} bytes): {:02x?}",
+            raw_bytes.len(),
+            &raw_bytes[..core::cmp::min(raw_bytes.len(), 32)]
+        );
         let trimmed = line.trim();
         info!(
             "[cohsh-net] recv: auth line='{}' raw_len={} raw_bytes={:02x?}",
@@ -189,9 +195,15 @@ impl TcpConsoleServer {
             trimmed.as_bytes()
         );
         if !trimmed.starts_with(AUTH_PREFIX) {
+            warn!(
+                "[cohsh-net][auth] reject: bad magic (got={:02x?}, expected={:02x?})",
+                &raw_bytes[..core::cmp::min(raw_bytes.len(), AUTH_PREFIX.len())],
+                AUTH_PREFIX.as_bytes(),
+            );
             self.log_reject("expected-token", trimmed);
             let _ = self.enqueue_auth_ack(AckStatus::Err, Some("reason=expected-token"));
             self.set_state(SessionState::Inactive);
+            warn!("[cohsh-net][auth] closing session: reason=expected-token");
             warn!("[net-console] auth failed reason=expected-token");
             return SessionEvent::AuthFailed("expected-token");
         }
@@ -208,15 +220,25 @@ impl TcpConsoleServer {
             self.state
         );
         if token != self.auth_token {
+            warn!(
+                "[cohsh-net][auth] reject: invalid token (got_len={}, expected_len={})",
+                token.len(),
+                self.auth_token.len()
+            );
             self.log_reject("invalid-token", trimmed);
             let _ = self.enqueue_auth_ack(AckStatus::Err, Some("reason=invalid-token"));
             self.set_state(SessionState::Inactive);
+            warn!("[cohsh-net][auth] closing session: reason=invalid-token");
             warn!("[net-console] auth failed reason=invalid-token");
             return SessionEvent::AuthFailed("invalid-token");
         }
         self.set_state(SessionState::Authenticated);
         self.auth_deadline_ms = None;
         let _ = self.enqueue_auth_ack(AckStatus::Ok, None);
+        info!(
+            "[cohsh-net][auth] accepted client: role={:?}, version={:?}",
+            role_str, 1u8
+        );
         info!("[net-console] auth ok");
         SessionEvent::Authenticated
     }

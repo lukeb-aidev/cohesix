@@ -465,6 +465,10 @@ impl TcpTransport {
                     }
                 }
                 ReadStatus::Closed => {
+                    warn!(
+                        "[cohsh][auth] recv error: connection closed (bytes_read={})",
+                        total_bytes_read
+                    );
                     if self.tcp_debug {
                         warn!(
                             "[cohsh][tcp] auth/handshake: server closed connection (EOF) after reading {} bytes",
