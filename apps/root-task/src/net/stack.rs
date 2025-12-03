@@ -6,7 +6,7 @@
 
 use core::fmt::{self, Write as FmtWrite};
 use heapless::{String as HeaplessString, Vec as HeaplessVec};
-use log::{debug, error, info, trace, warn};
+use log::{debug, info, trace, warn};
 use portable_atomic::{AtomicBool, Ordering};
 use smoltcp::iface::{
     Config as IfaceConfig, Interface, PollResult, SocketHandle, SocketSet, SocketStorage,
@@ -238,7 +238,10 @@ impl NetStack {
     }
 
     fn reset_session_state(&mut self) {
-        self.reset_session_state();
+        self.auth_state = AuthState::Start;
+        self.session_state = SessionState::default();
+        self.conn_bytes_read = 0;
+        self.conn_bytes_written = 0;
     }
 
     fn record_peer_endpoint(
@@ -472,6 +475,7 @@ impl NetStack {
         let mut activity = false;
         let mut log_closed_conn: Option<u64> = None;
         let mut record_closed_conn: Option<u64> = None;
+        let mut reset_session = false;
 
         {
             let socket = self.sockets.get_mut::<TcpSocket>(self.tcp_handle);
@@ -480,7 +484,7 @@ impl NetStack {
 
             if !socket.is_open() {
                 self.peer_endpoint = None;
-                self.reset_session_state();
+                reset_session = true;
                 info!(
                     target: "net",
                     "TCP console: binding listener on {}:{}",
@@ -529,7 +533,7 @@ impl NetStack {
                 self.active_client_id = Some(client_id);
                 self.conn_bytes_read = 0;
                 self.conn_bytes_written = 0;
-                self.reset_session_state();
+                reset_session = true;
                 debug_uart_str("[dbg] cohsh-net: connection accepted\n");
                 Self::record_peer_endpoint(&mut self.peer_endpoint, socket.remote_endpoint());
                 let peer = if let Some(endpoint) = socket.remote_endpoint() {
@@ -724,7 +728,7 @@ impl NetStack {
                                     socket.close();
                                     self.server.end_session();
                                     self.session_active = false;
-                                    self.reset_session_state();
+                                    reset_session = true;
                                     self.peer_endpoint = None;
                                     info!(
                                         "[net-console] conn {}: bytes read={}, bytes written={}",
@@ -769,7 +773,7 @@ impl NetStack {
                                     self.server.end_session();
                                     self.session_active = false;
                                     self.peer_endpoint = None;
-                                    self.reset_session_state();
+                                    reset_session = true;
                                     self.active_client_id = None;
                                     activity = true;
                                     break;
@@ -795,7 +799,6 @@ impl NetStack {
                                     );
                                 }
                             }
-                            let conn_id = self.active_client_id.unwrap_or(0);
                             Self::set_auth_state(
                                 &mut self.auth_state,
                                 self.active_client_id,
@@ -816,7 +819,7 @@ impl NetStack {
                             self.server.end_session();
                             self.session_active = false;
                             self.peer_endpoint = None;
-                            self.reset_session_state();
+                            reset_session = true;
                             info!(
                                 "[net-console] conn {}: bytes read={}, bytes written={}",
                                 self.active_client_id.unwrap_or(0),
@@ -963,6 +966,10 @@ impl NetStack {
                 );
                 activity = true;
             }
+        }
+
+        if reset_session {
+            self.reset_session_state();
         }
 
         if let Some(conn_id) = log_closed_conn {
