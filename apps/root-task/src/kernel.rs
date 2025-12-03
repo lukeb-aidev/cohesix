@@ -2479,14 +2479,16 @@ impl KernelIpc {
 
         let msg_len = info.length();
         let label = info.label();
-        log::debug!(
-            "[ipc] EP 0x{ep:04x}: recv ok badge=0x{badge:016x} label=0x{label:08x} len={msg_len}",
-            ep = self.endpoint,
-            badge = badge,
-            label = label,
-            msg_len = msg_len,
-        );
-        debug_uart_str("[dbg] EP 0x0130: recv OK\n");
+        if msg_len > 0 || badge != 0 || label != 0 {
+            log::debug!(
+                "[ipc] EP 0x{ep:04x}: recv ok badge=0x{badge:016x} label=0x{label:08x} len={msg_len}",
+                ep = self.endpoint,
+                badge = badge,
+                label = label,
+                msg_len = msg_len,
+            );
+            debug_uart_str("[dbg] EP 0x0130: recv OK\n");
+        }
         if bootstrap {
             log::trace!(
                 "B5.recv ret badge=0x{badge:016x} info=0x{info:08x}",
