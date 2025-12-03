@@ -2423,11 +2423,13 @@ fn log_fault_message(
         FAULT_TAG_NULL => {
             static BADGELESS_FAULTS: AtomicU32 = AtomicU32::new(0);
             let count = BADGELESS_FAULTS.fetch_add(1, Ordering::Relaxed);
+            let fault_ip = regs.get(5).copied().unwrap_or_default();
+            let stack = regs.get(4).copied().unwrap_or_default();
             if badge == 0 {
                 if count < BADGELESS_FAULT_SUPPRESS_THRESHOLD {
                     log::error!(
                         target: "root_task::kernel::fault",
-                        "[fault] null fault from unbadged sender regs={regs:?}",
+                        "[fault] null fault from unbadged sender ip=0x{fault_ip:016x} sp=0x{stack:016x} regs={regs:?}",
                         regs = &regs[..len],
                     );
                 } else if count == BADGELESS_FAULT_SUPPRESS_THRESHOLD {
@@ -2439,8 +2441,10 @@ fn log_fault_message(
             } else {
                 log::warn!(
                     target: "root_task::kernel::fault",
-                    "[fault] null fault badge=0x{badge:04x} regs={regs:?}",
+                    "[fault] null fault badge=0x{badge:04x} ip=0x{fault_ip:016x} sp=0x{stack:016x} regs={regs:?}",
                     badge = badge,
+                    fault_ip = fault_ip,
+                    stack = stack,
                     regs = &regs[..len],
                 );
             }
