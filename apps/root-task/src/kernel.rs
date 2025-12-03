@@ -11,7 +11,7 @@ use core::convert::TryFrom;
 use core::fmt::{self, Write};
 use core::panic::PanicInfo;
 use core::ptr;
-use core::sync::atomic::{AtomicU64, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 
 #[cfg(feature = "timers-arch-counter")]
 use core::arch::asm;
@@ -2394,6 +2394,9 @@ impl From<StagedMessage> for BootstrapMessage {
     }
 }
 
+static BOOTSTRAP_STAGE_LOG_ONCE: AtomicBool = AtomicBool::new(false);
+static BOOTSTRAP_DISPATCH_LOG_ONCE: AtomicBool = AtomicBool::new(false);
+
 pub(crate) struct KernelIpc {
     endpoint: sel4_sys::seL4_CPtr,
     staged_bootstrap: Option<StagedMessage>,
@@ -2544,13 +2547,25 @@ impl KernelIpc {
                 now_ms = now_ms
             );
         } else {
-            log::info!(
+            // Periodic control-plane messages can flood dev-virt logs; log once at info
+            // then demote subsequent events to debug.
+            let log_once = !BOOTSTRAP_STAGE_LOG_ONCE.swap(true, Ordering::Relaxed);
+            let log_level = if log_once {
+                log::Level::Info
+            } else {
+                log::Level::Debug
+            };
+            log::log!(
+                log_level,
                 "[ipc] bootstrap staged ep=0x{ep:04x} badge=0x{badge:016x} info=0x{info:08x} words={words}",
                 ep = self.endpoint,
                 badge = message.badge,
                 info = message.info.words[0],
                 words = message.payload.len(),
             );
+            if !log_once {
+                log::debug!("[ipc] bootstrap stage repeated; subsequent logs downgraded to debug to avoid flood");
+            }
             log_bootstrap_payload(message.payload.as_slice());
         }
         log::debug!(
@@ -2614,7 +2629,18 @@ impl BootstrapMessageHandler for BootstrapIpcAudit {
             label = message.info.words[0],
             words = message.payload.len(),
         );
-        audit.info(summary.as_str());
+        let log_once = !BOOTSTRAP_DISPATCH_LOG_ONCE.swap(true, Ordering::Relaxed);
+        if log_once {
+            audit.info(summary.as_str());
+        } else {
+            log::debug!("[audit] {}", summary.as_str());
+        }
+
+        if !log_once {
+            log::debug!(
+                "[audit] [ipc] bootstrap dispatch repeated; demoting to debug to prevent log spam"
+            );
+        }
 
         crate::bootstrap::log::process_ep_payload(message.payload.as_slice(), audit);
 

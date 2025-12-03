@@ -17,7 +17,7 @@ use smoltcp::socket::tcp::{
 };
 use smoltcp::time::Instant;
 use smoltcp::wire::{
-    EthernetAddress, HardwareAddress, IpAddress, IpCidr, IpListenEndpoint, Ipv4Address,
+    EthernetAddress, HardwareAddress, IpAddress, IpCidr, IpEndpoint, IpListenEndpoint, Ipv4Address,
 };
 
 use super::{
@@ -131,10 +131,10 @@ enum AuthState {
     Failed,
 }
 
-impl AuthState {
-    fn log_transition(self, next: Self, conn_id: u64) {
-        trace!("[net-auth][conn={}] {:?} -> {:?}", conn_id, self, next);
-    }
+#[derive(Debug, Default)]
+struct SessionState {
+    last_state: Option<TcpState>,
+    close_logged: bool,
 }
 
 static SOCKET_STORAGE_IN_USE: AtomicBool = AtomicBool::new(false);
@@ -198,12 +198,14 @@ pub struct NetStack {
     active_client_id: Option<u64>,
     client_counter: u64,
     auth_state: AuthState,
+    session_state: SessionState,
     conn_bytes_read: u64,
     conn_bytes_written: u64,
     events: HeaplessVec<NetConsoleEvent, SOCKET_CAPACITY>,
     service_logged: bool,
     poll_samples_emitted: u32,
     uart_poll_announced: bool,
+    peer_endpoint: Option<(IpAddress, u16)>,
 }
 
 /// Initialise the network console stack, translating low-level errors into
@@ -216,6 +218,77 @@ where
 }
 
 impl NetStack {
+    fn set_auth_state(&mut self, next: AuthState) {
+        if next != self.auth_state {
+            let conn_id = self.active_client_id.unwrap_or(0);
+            info!(
+                "[cohsh-net] auth-state: {:?} -> {:?} (conn_id={})",
+                self.auth_state, next, conn_id
+            );
+            trace!(
+                "[net-auth][conn={}] {:?} -> {:?}",
+                conn_id,
+                self.auth_state,
+                next
+            );
+            self.auth_state = next;
+        }
+    }
+
+    fn record_peer_endpoint(&mut self, socket: &TcpSocket) {
+        if self.peer_endpoint.is_none() {
+            if let Some(endpoint) = socket.remote_endpoint() {
+                let ip = match endpoint {
+                    IpEndpoint::Ipv4(ep) => IpAddress::Ipv4(ep.addr),
+                    IpEndpoint::Ipv6(ep) => IpAddress::Ipv6(ep.addr),
+                };
+                self.peer_endpoint = Some((ip, endpoint.port));
+            }
+        }
+    }
+
+    fn peer_parts(&self, socket: &TcpSocket) -> (HeaplessString<64>, u16) {
+        let (addr, port) = self
+            .peer_endpoint
+            .or_else(|| {
+                socket.remote_endpoint().map(|endpoint| match endpoint {
+                    IpEndpoint::Ipv4(ep) => (IpAddress::Ipv4(ep.addr), endpoint.port),
+                    IpEndpoint::Ipv6(ep) => (IpAddress::Ipv6(ep.addr), endpoint.port),
+                })
+            })
+            .unwrap_or((IpAddress::Ipv4(Ipv4Address::UNSPECIFIED), 0));
+        let mut label = HeaplessString::<64>::new();
+        let _ = write!(&mut label, "{addr}");
+        (label, port)
+    }
+
+    fn log_tcp_state_change(&mut self, socket: &TcpSocket) {
+        let current = socket.state();
+        if Some(current) == self.session_state.last_state {
+            return;
+        }
+        let (peer, port) = self.peer_parts(socket);
+        debug!(
+            "[cohsh-net] state-change: {}:{} {:?} -> {:?}",
+            peer, port, self.session_state.last_state, current
+        );
+        self.session_state.last_state = Some(current);
+    }
+
+    fn log_session_closed(&mut self, socket: &TcpSocket) {
+        if self.session_state.close_logged {
+            return;
+        }
+        let (peer, port) = self.peer_parts(socket);
+        info!(
+            "[cohsh-net] session closed from {}:{} (final_state={:?})",
+            peer,
+            port,
+            socket.state()
+        );
+        self.session_state.close_logged = true;
+    }
+
     /// Constructs a network stack bound to the provided [`KernelEnv`].
     pub fn new<H>(hal: &mut H) -> Result<Self, NetStackError>
     where
@@ -284,12 +357,14 @@ impl NetStack {
             active_client_id: None,
             client_counter: 0,
             auth_state: AuthState::Start,
+            session_state: SessionState::default(),
             conn_bytes_read: 0,
             conn_bytes_written: 0,
             events: HeaplessVec::new(),
             service_logged: false,
             poll_samples_emitted: 0,
             uart_poll_announced: false,
+            peer_endpoint: None,
         };
         stack.initialise_socket();
         socket_guard.disarm();
@@ -372,8 +447,12 @@ impl NetStack {
 
         {
             let socket = self.sockets.get_mut::<TcpSocket>(self.tcp_handle);
+            self.record_peer_endpoint(socket);
+            self.log_tcp_state_change(socket);
 
             if !socket.is_open() {
+                self.peer_endpoint = None;
+                self.session_state = SessionState::default();
                 info!(
                     target: "net",
                     "TCP console: binding listener on {}:{}",
@@ -412,16 +491,21 @@ impl NetStack {
                 self.active_client_id = Some(client_id);
                 self.conn_bytes_read = 0;
                 self.conn_bytes_written = 0;
+                self.session_state = SessionState::default();
                 debug_uart_str("[dbg] cohsh-net: connection accepted\n");
+                self.record_peer_endpoint(socket);
                 let peer = if let Some(endpoint) = socket.remote_endpoint() {
                     info!(
                         target: "net-console",
                         "[net-console] conn: accepted from {:?}",
                         endpoint
                     );
+                    let (addr, port) = self.peer_parts(socket);
                     info!(
-                        "[cohsh-net] accept: new TCP client connected from {:?} (listener={})",
-                        endpoint, CONSOLE_TCP_PORT
+                        "[cohsh-net] accept: new session from {}:{} (state={:?})",
+                        addr,
+                        port,
+                        socket.state()
                     );
                     info!(
                         "[net-console] conn {}: established from {}",
@@ -456,9 +540,7 @@ impl NetStack {
                     "[net-console] auth: waiting for handshake (client_id={})",
                     client_id
                 );
-                self.auth_state
-                    .log_transition(AuthState::WaitingVersion, client_id);
-                self.auth_state = AuthState::WaitingVersion;
+                self.set_auth_state(AuthState::WaitingVersion);
                 info!("[net-console] auth start client={}", client_id);
                 debug!(
                     "[net-console][auth] new connection client={} state={:?}",
@@ -479,9 +561,7 @@ impl NetStack {
                         client_id, self.auth_state
                     );
                 }
-                self.auth_state
-                    .log_transition(AuthState::AuthRequested, client_id);
-                self.auth_state = AuthState::AuthRequested;
+                self.set_auth_state(AuthState::AuthRequested);
                 self.session_active = true;
                 info!(
                     "[net-console] auth: waiting for client credentials (client_id={})",
@@ -498,16 +578,18 @@ impl NetStack {
                             debug_uart_str("[dbg] cohsh-net: received data from client\n");
                             self.conn_bytes_read =
                                 self.conn_bytes_read.saturating_add(count as u64);
+                            let dump_len = count.min(32);
                             info!(
-                                "[cohsh-net] recv: handshake bytes len={} raw={:x?}",
+                                "[cohsh-net] recv: {} bytes (auth_state={:?}): {:02x?}",
                                 count,
-                                &temp[..count.min(32)]
+                                self.auth_state,
+                                &temp[..dump_len]
                             );
                             if self.auth_state == AuthState::AuthRequested {
                                 info!("[net-console] auth request received (len={count})");
                             }
                             if self.auth_state != AuthState::Attached {
-                                info!(
+                                debug!(
                                     "[net-console] handshake: received {} bytes: {:02x?}",
                                     count,
                                     &temp[..count.min(16)]
@@ -536,8 +618,7 @@ impl NetStack {
                                 }
                                 SessionEvent::Authenticated => {
                                     let conn_id = self.active_client_id.unwrap_or(0);
-                                    self.auth_state.log_transition(AuthState::Attached, conn_id);
-                                    self.auth_state = AuthState::Attached;
+                                    self.set_auth_state(AuthState::Attached);
                                     info!("[net-console] auth success client={}", conn_id);
                                     info!(
                                         "[cohsh-net] parsed handshake: role='AUTH' conn_id={} state={:?}",
@@ -560,8 +641,7 @@ impl NetStack {
                                         self.auth_state
                                     );
                                     let conn_id = self.active_client_id.unwrap_or(0);
-                                    self.auth_state.log_transition(AuthState::Failed, conn_id);
-                                    self.auth_state = AuthState::Failed;
+                                    self.set_auth_state(AuthState::Failed);
                                     debug!(
                                         "[net-console][auth] state={:?} client={} reason={}",
                                         self.auth_state, conn_id, reason
@@ -617,9 +697,11 @@ impl NetStack {
                                         self.auth_state,
                                     );
                                     debug_uart_str("[dbg] cohsh-net: connection closed/error\n");
+                                    self.log_session_closed(socket);
                                     socket.close();
                                     self.server.end_session();
                                     self.session_active = false;
+                                    self.peer_endpoint = None;
                                     self.active_client_id = None;
                                     activity = true;
                                     break;
@@ -646,17 +728,18 @@ impl NetStack {
                                 }
                             }
                             let conn_id = self.active_client_id.unwrap_or(0);
-                            self.auth_state.log_transition(AuthState::Failed, conn_id);
-                            self.auth_state = AuthState::Failed;
+                            self.set_auth_state(AuthState::Failed);
                             debug!(
                                 "[net-console][auth] state={:?} recv error from client={}",
                                 self.auth_state,
                                 self.active_client_id.unwrap_or(0)
                             );
                             debug_uart_str("[dbg] cohsh-net: connection closed/error\n");
+                            self.log_session_closed(socket);
                             socket.close();
                             self.server.end_session();
                             self.session_active = false;
+                            self.peer_endpoint = None;
                             info!(
                                 "[net-console] conn {}: bytes read={}, bytes written={}",
                                 self.active_client_id.unwrap_or(0),
@@ -702,12 +785,13 @@ impl NetStack {
                     self.auth_state,
                 );
                 debug_uart_str("[dbg] cohsh-net: connection closed/error\n");
+                self.log_session_closed(socket);
                 socket.close();
                 self.server.end_session();
                 self.session_active = false;
                 let conn_id = self.active_client_id.unwrap_or(0);
-                self.auth_state.log_transition(AuthState::Failed, conn_id);
-                self.auth_state = AuthState::Failed;
+                self.peer_endpoint = None;
+                self.set_auth_state(AuthState::Failed);
                 log_closed_conn = Some(conn_id);
                 record_closed_conn = Some(conn_id);
                 self.active_client_id = None;
@@ -740,12 +824,13 @@ impl NetStack {
                     self.auth_state,
                 );
                 debug_uart_str("[dbg] cohsh-net: connection closed/error\n");
+                self.log_session_closed(socket);
                 socket.close();
                 self.server.end_session();
                 self.session_active = false;
                 let conn_id = self.active_client_id.unwrap_or(0);
-                self.auth_state.log_transition(AuthState::Failed, conn_id);
-                self.auth_state = AuthState::Failed;
+                self.peer_endpoint = None;
+                self.set_auth_state(AuthState::Failed);
                 log_closed_conn = Some(conn_id);
                 record_closed_conn = Some(conn_id);
                 self.active_client_id = None;
@@ -777,6 +862,7 @@ impl NetStack {
                     socket.state()
                 );
                 debug_uart_str("[dbg] cohsh-net: connection closed/error\n");
+                self.log_session_closed(socket);
                 socket.close();
                 self.server.end_session();
                 self.session_active = false;
@@ -784,7 +870,8 @@ impl NetStack {
                 log_closed_conn = Some(conn_id);
                 record_closed_conn = Some(conn_id);
                 self.active_client_id = None;
-                self.auth_state = AuthState::Start;
+                self.peer_endpoint = None;
+                self.set_auth_state(AuthState::Start);
                 activity = true;
             }
         }
@@ -844,6 +931,13 @@ impl NetStack {
             match socket.send_slice(payload.as_slice()) {
                 Ok(sent) if sent == payload.len() => {
                     *conn_bytes_written = conn_bytes_written.saturating_add(sent as u64);
+                    let dump_len = payload.len().min(32);
+                    info!(
+                        "[cohsh-net] send: {} bytes (auth_state={:?}): {:02x?}",
+                        sent,
+                        auth_state,
+                        &payload[..dump_len]
+                    );
                     if pre_auth {
                         info!(
                             "[net-console] conn {}: sent pre-auth line '{}' ({} bytes)",

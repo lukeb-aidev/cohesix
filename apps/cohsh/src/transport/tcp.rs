@@ -165,8 +165,14 @@ pub struct TcpTransport {
 
 impl TcpTransport {
     fn set_auth_state(&mut self, next: AuthState) {
-        self.auth_state.log_transition(next);
-        self.auth_state = next;
+        if self.auth_state != next {
+            if self.tcp_debug {
+                info!("[cohsh][auth] state: {:?} -> {:?}", self.auth_state, next);
+            } else {
+                self.auth_state.log_transition(next);
+            }
+            self.auth_state = next;
+        }
     }
 
     /// Create a new transport targeting the provided endpoint.
@@ -325,13 +331,14 @@ impl TcpTransport {
     fn perform_auth(&mut self) -> Result<()> {
         let auth_line = format!("AUTH {}", self.auth_token);
         let auth_start = Instant::now();
+        let mut buf = auth_line.as_bytes().to_vec();
+        buf.push(b'\n');
         if self.tcp_debug {
-            let mut buf = auth_line.as_bytes().to_vec();
-            buf.push(b'\n');
+            let dump_len = buf.len().min(32);
             info!(
-                "[cohsh][tcp] auth/handshake: sending {} bytes: {:02x?}",
+                "[cohsh][tcp] sending auth frame ({} bytes): {:02x?}",
                 buf.len(),
-                &buf[..buf.len().min(32)]
+                &buf[..dump_len]
             );
             info!(
                 "[cohsh][tcp] auth/handshake struct: magic=\"AUTH\" version=1 role={:?}",
@@ -348,8 +355,6 @@ impl TcpTransport {
             self.auth_token.len()
         );
         self.set_auth_state(AuthState::AuthSent);
-        let mut buf = auth_line.as_bytes().to_vec();
-        buf.push(b'\n');
         let stream = self
             .stream
             .as_mut()
@@ -382,10 +387,11 @@ impl TcpTransport {
                 ReadStatus::Line(line) => {
                     if self.tcp_debug {
                         let bytes = line.as_bytes();
+                        let dump_len = bytes.len().min(32);
                         info!(
-                            "[cohsh][tcp] auth/handshake: received {} bytes from server: {:02x?}",
+                            "[cohsh][tcp] recv: {} bytes during auth: {:02x?}",
                             bytes.len(),
-                            &bytes[..bytes.len().min(32)]
+                            &bytes[..dump_len]
                         );
                     }
                     let trimmed = Self::trim_line(&line);
@@ -416,6 +422,9 @@ impl TcpTransport {
                 }
                 ReadStatus::Timeout => {
                     timeouts += 1;
+                    if self.tcp_debug {
+                        debug!("[cohsh][tcp] recv: 0 bytes (peer silent)");
+                    }
                     if self.tcp_debug {
                         let deadline = self.timeout.saturating_mul(
                             u32::try_from(self.max_retries + 1).unwrap_or(u32::MAX),
@@ -457,7 +466,10 @@ impl TcpTransport {
                 }
                 ReadStatus::Closed => {
                     if self.tcp_debug {
-                        warn!("[cohsh][tcp] auth/handshake: server closed connection (EOF)");
+                        warn!(
+                            "[cohsh][tcp] auth/handshake: server closed connection (EOF) after reading {} bytes",
+                            total_bytes_read
+                        );
                     }
                     self.set_auth_state(AuthState::Failed);
                     debug!(

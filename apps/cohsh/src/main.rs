@@ -12,12 +12,17 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
 use cohesix_ticket::Role;
+use env_logger::Env;
+use log::LevelFilter;
 
 #[cfg(feature = "tcp")]
 use cohsh::TcpTransport;
+#[cfg(feature = "tcp")]
 use cohsh::{
     tcp_debug_enabled, AutoAttach, NineDoorTransport, QemuTransport, RoleArg, Shell, Transport,
 };
+#[cfg(not(feature = "tcp"))]
+use cohsh::{AutoAttach, NineDoorTransport, QemuTransport, RoleArg, Shell, Transport};
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
 enum TransportKind {
@@ -67,6 +72,10 @@ struct Cli {
     #[arg(long = "qemu-arg", value_name = "ARG")]
     qemu_args: Vec<String>,
 
+    /// Enable verbose TCP handshake logging.
+    #[arg(short = 'v', long, default_value_t = false)]
+    verbose: bool,
+
     /// Hostname or IP address for the TCP transport.
     #[cfg(feature = "tcp")]
     #[arg(long, default_value = "127.0.0.1")]
@@ -88,8 +97,21 @@ struct Cli {
     tcp_debug: bool,
 }
 
+fn init_logging(verbose: bool) {
+    let default_level = if verbose {
+        LevelFilter::Debug
+    } else {
+        LevelFilter::Warn
+    };
+    let mut builder =
+        env_logger::Builder::from_env(Env::default().default_filter_or(default_level.as_str()));
+    builder.format_timestamp_millis();
+    let _ = builder.try_init();
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    init_logging(cli.verbose);
     let stdout = io::stdout();
     let writer = stdout.lock();
     let mut qemu_args = cli.qemu_args.clone();
@@ -118,7 +140,7 @@ fn main() -> Result<()> {
                 token = value;
             }
         }
-        let tcp_debug = cli.tcp_debug || tcp_debug_enabled();
+        let tcp_debug = cli.tcp_debug || tcp_debug_enabled() || cli.verbose;
         (host, port, token, tcp_debug)
     };
 
