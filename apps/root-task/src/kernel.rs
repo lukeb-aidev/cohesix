@@ -2223,35 +2223,24 @@ fn classify_ep_message(info: &sel4_sys::seL4_MessageInfo) -> EpMessageKind {
     let label = info.label();
     let length = info.length() as usize;
 
-    if let Some(range) = fault_length_range(label) {
-        if range.contains(&length) {
-            return EpMessageKind::Fault;
-        }
-        return EpMessageKind::Unknown;
+    if fault_layout_valid(label, length) {
+        return EpMessageKind::Fault;
     }
 
-    if label == 0 && length == 0 {
-        return EpMessageKind::BootstrapControl;
+    if label == 0 {
+        return if length == 0 {
+            EpMessageKind::BootstrapControl
+        } else {
+            EpMessageKind::LogControl
+        };
     }
 
-    EpMessageKind::BootstrapControl
+    EpMessageKind::Unknown
 }
 
 fn log_fault_message(info: &sel4_sys::seL4_MessageInfo, badge: sel4_sys::seL4_Word) -> bool {
     let fault_tag = info.label();
     let length = info.length() as usize;
-    if !fault_layout_valid(fault_tag, length) {
-        log::warn!(
-            target: "root_task::kernel::fault",
-            "[fault] unexpected fault layout badge=0x{badge:04x} label=0x{label:08x} len={len}",
-            badge = badge,
-            label = fault_tag,
-            len = length,
-        );
-        return false;
-    }
-
-    debug_uart_str("[dbg] fault: received user fault; processing\n");
 
     let mut regs = [0u64; MAX_FAULT_REGS];
     let len = cmp::min(length, regs.len());
@@ -2261,14 +2250,17 @@ fn log_fault_message(info: &sel4_sys::seL4_MessageInfo, badge: sel4_sys::seL4_Wo
 
     let decoded_tag = regs[0] & 0xf;
     if decoded_tag != fault_tag {
-        log::error!(
-            target: "root_task::kernel::fault",
-            "[fault] tag mismatch badge=0x{badge:04x} label=0x{label:08x} decoded=0x{decoded:08x} regs={regs:?}",
-            badge = badge,
-            label = fault_tag,
-            decoded = decoded_tag,
-            regs = &regs[..len],
-        );
+        static FAULT_TAG_MISMATCH_LOGGED: AtomicBool = AtomicBool::new(false);
+        if !FAULT_TAG_MISMATCH_LOGGED.swap(true, Ordering::Relaxed) {
+            log::error!(
+                target: "root_task::kernel::fault",
+                "[fault] tag mismatch badge=0x{badge:04x} label=0x{label:08x} decoded=0x{decoded:08x} regs={regs:?}",
+                badge = badge,
+                label = fault_tag,
+                decoded = decoded_tag,
+                regs = &regs[..len],
+            );
+        }
         return false;
     }
 
@@ -2507,11 +2499,6 @@ impl KernelIpc {
             debug_uart_str("[dbg] EP 0x0130: dispatcher loop about to recv\n");
             self.debug_uart_announced = true;
         }
-        log::debug!(
-            "[ipc] EP 0x{ep:04x}: waiting for message (recv begin) now_ms={now_ms}",
-            ep = self.endpoint,
-            now_ms = now_ms,
-        );
         let mut badge: sel4_sys::seL4_Word = 0;
         let info = unsafe { sel4_sys::seL4_Poll(self.endpoint, &mut badge) };
         if !Self::message_present(&info, badge) {

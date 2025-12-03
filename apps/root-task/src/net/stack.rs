@@ -1,6 +1,19 @@
 // Author: Lukas Bower
 
 //! Smoltcp-backed TCP console stack for the in-VM root task.
+//!
+//! Feature toggles:
+//! - `net-trace-31337` (default for `dev-virt`) logs virtio RX/TX frames and TCP
+//!   console socket activity for port 31337.
+//! - `tcp-echo-31337` bypasses console authentication and echoes any bytes
+//!   received on port 31337 back to the sender for plumbing checks (`nc
+//!   127.0.0.1 31337`).
+//!
+//! Host sanity checks:
+//! - With `tcp-echo-31337`, run `nc 127.0.0.1 31337` and type input; expect
+//!   echoed bytes plus `[net-trace]` RX/TX lines for port 31337.
+//! - With tracing enabled, `./cohsh --transport tcp --tcp-port 31337 --role queen`
+//!   should emit auth frame logs showing the exact bytes parsed on the server.
 #![allow(unsafe_code)]
 #![cfg(feature = "kernel")]
 
@@ -36,6 +49,7 @@ const RANDOM_SEED: u64 = 0x5a5a_5a5a_1234_5678;
 const DEFAULT_IP: (u8, u8, u8, u8) = (10, 0, 2, 15);
 const DEFAULT_GW: (u8, u8, u8, u8) = (10, 0, 2, 2);
 const DEFAULT_PREFIX: u8 = 24;
+const ECHO_MODE: bool = cfg!(feature = "tcp-echo-31337");
 
 #[derive(Debug)]
 pub enum NetStackError {
@@ -274,6 +288,69 @@ impl NetStack {
         let _ = write!(&mut label, "{addr}");
         (label, port)
     }
+
+    #[cfg(feature = "net-trace-31337")]
+    fn trace_conn_new(&self, conn_id: u64, socket: &TcpSocket) {
+        let (peer, port) = Self::peer_parts(self.peer_endpoint, socket);
+        let local_port = socket
+            .local_endpoint()
+            .map(|endpoint| endpoint.port)
+            .unwrap_or(CONSOLE_TCP_PORT);
+        log::info!(
+            "[cohsh-net] conn new id={} local={}:{} remote={}:{} state={:?}",
+            conn_id,
+            self.ip,
+            local_port,
+            peer,
+            port,
+            socket.state()
+        );
+    }
+
+    #[cfg(not(feature = "net-trace-31337"))]
+    fn trace_conn_new(&self, _conn_id: u64, _socket: &TcpSocket) {}
+
+    #[cfg(feature = "net-trace-31337")]
+    fn trace_conn_recv(&self, conn_id: u64, payload: &[u8]) {
+        let prefix = payload.len().min(16);
+        log::info!(
+            "[cohsh-net] conn id={} recv bytes={} hex={:02x?}",
+            conn_id,
+            payload.len(),
+            &payload[..prefix]
+        );
+    }
+
+    #[cfg(not(feature = "net-trace-31337"))]
+    fn trace_conn_recv(&self, _conn_id: u64, _payload: &[u8]) {}
+
+    #[cfg(feature = "net-trace-31337")]
+    fn trace_conn_send(&self, conn_id: u64, payload: &[u8]) {
+        let prefix = payload.len().min(16);
+        log::info!(
+            "[cohsh-net] conn id={} send bytes={} hex={:02x?}",
+            conn_id,
+            payload.len(),
+            &payload[..prefix]
+        );
+    }
+
+    #[cfg(not(feature = "net-trace-31337"))]
+    fn trace_conn_send(&self, _conn_id: u64, _payload: &[u8]) {}
+
+    #[cfg(feature = "net-trace-31337")]
+    fn trace_conn_closed(&self, conn_id: u64, reason: &str, bytes_in: u64, bytes_out: u64) {
+        log::info!(
+            "[cohsh-net] conn id={} closed reason={} bytes_in={} bytes_out={}",
+            conn_id,
+            reason,
+            bytes_in,
+            bytes_out
+        );
+    }
+
+    #[cfg(not(feature = "net-trace-31337"))]
+    fn trace_conn_closed(&self, _conn_id: u64, _reason: &str, _bytes_in: u64, _bytes_out: u64) {}
 
     fn log_poll_snapshot(&mut self) {
         let snapshot = PollSnapshot {
@@ -517,6 +594,12 @@ impl NetStack {
                             CONSOLE_TCP_PORT,
                             self.ip
                         );
+                        log::info!(
+                            "[cohsh-net] listen tcp 0.0.0.0:{} iface_ip={} (net-trace feature={})",
+                            CONSOLE_TCP_PORT,
+                            self.ip,
+                            cfg!(feature = "net-trace-31337")
+                        );
                         info!(
                             "[net-console] tcp listener bound: port={} iface_ip={}",
                             CONSOLE_TCP_PORT, self.ip
@@ -606,47 +689,61 @@ impl NetStack {
                     conn_id: client_id,
                     peer,
                 });
-                self.server.begin_session(now_ms);
-                info!(
-                    target: "net-console",
-                    "[net-console] auth: waiting for handshake (client_id={})",
-                    client_id
-                );
-                Self::set_auth_state(
-                    &mut self.auth_state,
-                    self.active_client_id,
-                    AuthState::WaitingVersion,
-                );
-                info!("[net-console] auth start client={}", client_id);
-                debug!(
-                    "[net-console][auth] new connection client={} state={:?}",
-                    client_id, self.auth_state
-                );
-                let _ = Self::flush_outbound(
-                    &mut self.server,
-                    &mut self.telemetry,
-                    &mut self.conn_bytes_written,
-                    socket,
-                    now_ms,
-                    self.active_client_id,
-                    self.auth_state,
-                );
-                if activity {
+                self.trace_conn_new(client_id, socket);
+                if ECHO_MODE {
+                    Self::set_auth_state(
+                        &mut self.auth_state,
+                        self.active_client_id,
+                        AuthState::Attached,
+                    );
+                    self.session_state.logged_first_recv = true;
+                    log::info!(
+                        "[cohsh-net] conn id={} echo mode enabled; bypassing auth",
+                        client_id
+                    );
+                } else {
+                    self.server.begin_session(now_ms, Some(client_id));
+                    info!(
+                        target: "net-console",
+                        "[net-console] auth: waiting for handshake (client_id={})",
+                        client_id
+                    );
+                    Self::set_auth_state(
+                        &mut self.auth_state,
+                        self.active_client_id,
+                        AuthState::WaitingVersion,
+                    );
+                    info!("[net-console] auth start client={}", client_id);
                     debug!(
-                        "[net-console][auth] greeting sent client={} state={:?}",
+                        "[net-console][auth] new connection client={} state={:?}",
                         client_id, self.auth_state
                     );
+                    let _ = Self::flush_outbound(
+                        &mut self.server,
+                        &mut self.telemetry,
+                        &mut self.conn_bytes_written,
+                        socket,
+                        now_ms,
+                        self.active_client_id,
+                        self.auth_state,
+                    );
+                    if activity {
+                        debug!(
+                            "[net-console][auth] greeting sent client={} state={:?}",
+                            client_id, self.auth_state
+                        );
+                    }
+                    Self::set_auth_state(
+                        &mut self.auth_state,
+                        self.active_client_id,
+                        AuthState::AuthRequested,
+                    );
+                    info!(
+                        "[net-console] auth: waiting for client credentials (client_id={})",
+                        client_id
+                    );
                 }
-                Self::set_auth_state(
-                    &mut self.auth_state,
-                    self.active_client_id,
-                    AuthState::AuthRequested,
-                );
                 self.session_active = true;
-                info!(
-                    "[net-console] auth: waiting for client credentials (client_id={})",
-                    client_id
-                );
             }
 
             if socket.can_recv() {
@@ -655,19 +752,39 @@ impl NetStack {
                     match socket.recv_slice(&mut temp) {
                         Ok(0) => break,
                         Ok(count) => {
+                            let conn_id = self.active_client_id.unwrap_or(0);
                             self.conn_bytes_read =
                                 self.conn_bytes_read.saturating_add(count as u64);
                             let dump_len = core::cmp::min(count, 32);
                             let (peer_label, peer_port) =
                                 Self::peer_parts(self.peer_endpoint, socket);
-                            info!(
+                            trace!(
                                 "[cohsh-net][tcp] recv: nbytes={} from {}:{} state={:?}",
                                 count,
                                 peer_label,
                                 peer_port,
                                 socket.state()
                             );
-                            info!("[cohsh-net][tcp] recv hex: {:02x?}", &temp[..dump_len]);
+                            trace!("[cohsh-net][tcp] recv hex: {:02x?}", &temp[..dump_len]);
+                            self.trace_conn_recv(conn_id, &temp[..count]);
+                            if ECHO_MODE {
+                                match socket.send_slice(&temp[..count]) {
+                                    Ok(sent) => {
+                                        self.conn_bytes_written =
+                                            self.conn_bytes_written.saturating_add(sent as u64);
+                                        self.trace_conn_send(conn_id, &temp[..sent.min(count)]);
+                                    }
+                                    Err(err) => {
+                                        log::warn!(
+                                            "[cohsh-net] echo send error conn_id={} err={:?}",
+                                            conn_id,
+                                            err
+                                        );
+                                    }
+                                }
+                                activity = true;
+                                continue;
+                            }
                             if self.auth_state == AuthState::AuthRequested
                                 && !self.session_state.logged_first_recv
                             {
@@ -1032,9 +1149,11 @@ impl NetStack {
                     if server.is_authenticated() {
                         server.mark_activity(now_ms);
                     }
+                    let conn_id = conn_id.unwrap_or(0);
+                    Self::trace_conn_send(conn_id, payload.as_slice());
                     trace!(
                         "[net-auth][conn={}] wrote {} bytes in state {:?}",
-                        conn_id.unwrap_or(0),
+                        conn_id,
                         sent,
                         auth_state
                     );
@@ -1065,6 +1184,12 @@ impl NetStack {
     }
 
     fn record_conn_closed(&mut self, conn_id: u64) {
+        self.trace_conn_closed(
+            conn_id,
+            "disconnect",
+            self.conn_bytes_read,
+            self.conn_bytes_written,
+        );
         let _ = self.events.push(NetConsoleEvent::Disconnected {
             conn_id,
             bytes_read: self.conn_bytes_read,

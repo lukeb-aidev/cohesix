@@ -6,6 +6,10 @@
 //! seL4 environment while remaining testable under `cargo test`. Each polling
 //! cycle progresses the serial console, dispatches timer ticks, advances the
 //! networking stack (when enabled), and finally services IPC queues.
+//!
+//! Tracing: enable the `timer-trace` feature to log periodic timer ticks for
+//! debugging long-running workloads. The default `dev-virt` profile keeps timers
+//! silent to prioritise network instrumentation.
 
 #[cfg(feature = "kernel")]
 pub mod dispatch;
@@ -463,11 +467,13 @@ where
         if let Some(tick) = self.timer.poll(self.now_ms) {
             self.now_ms = tick.now_ms;
             self.metrics.timer_ticks = self.metrics.timer_ticks.saturating_add(1);
-            if tick.tick % 1_000 == 0 {
-                let message = format_message(format_args!("timer: tick {}", tick.tick));
+            #[cfg(feature = "timer-trace")]
+            if tick.tick % 8_000 == 0 {
+                let message = format_message(format_args!(
+                    "timer: tick {} (now_ms={})",
+                    tick.tick, self.now_ms
+                ));
                 self.audit.info(message.as_str());
-            } else {
-                log::debug!(target: "audit", "[audit] timer: tick {}", tick.tick);
             }
         }
 
