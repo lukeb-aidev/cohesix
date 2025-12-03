@@ -24,7 +24,6 @@ use super::{
     console_srv::{SessionEvent, TcpConsoleServer},
     NetConsoleEvent, NetPoller, NetTelemetry, AUTH_TOKEN, CONSOLE_TCP_PORT, IDLE_TIMEOUT_MS,
 };
-use crate::debug_uart::debug_uart_str;
 use crate::drivers::virtio::net::{DriverError, VirtioNet};
 use crate::hal::{HalError, Hardware};
 use crate::serial::DEFAULT_LINE_CAPACITY;
@@ -191,7 +190,6 @@ pub struct NetStack {
     tcp_handle: SocketHandle,
     server: TcpConsoleServer,
     telemetry: NetTelemetry,
-    poll_count: u64,
     ip: Ipv4Address,
     gateway: Option<Ipv4Address>,
     prefix_len: u8,
@@ -205,9 +203,15 @@ pub struct NetStack {
     conn_bytes_written: u64,
     events: HeaplessVec<NetConsoleEvent, SOCKET_CAPACITY>,
     service_logged: bool,
-    poll_samples_emitted: u32,
-    uart_poll_announced: bool,
+    last_poll_snapshot: Option<PollSnapshot>,
     peer_endpoint: Option<(IpAddress, u16)>,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+struct PollSnapshot {
+    session_active: bool,
+    auth_state: AuthState,
+    listener_ready: bool,
 }
 
 /// Initialise the network console stack, translating low-level errors into
@@ -271,26 +275,64 @@ impl NetStack {
         (label, port)
     }
 
-    fn log_tcp_state_change(session_state: &mut SessionState, socket: &TcpSocket) {
+    fn log_poll_snapshot(&mut self) {
+        let snapshot = PollSnapshot {
+            session_active: self.session_active,
+            auth_state: self.auth_state,
+            listener_ready: self.listener_announced,
+        };
+
+        if self.last_poll_snapshot == Some(snapshot) {
+            return;
+        }
+
+        info!(
+            "[cohsh-net] poll state: session_active={} auth_state={:?} listener_ready={} staged_events={}",
+            snapshot.session_active,
+            snapshot.auth_state,
+            snapshot.listener_ready,
+            self.events.len(),
+        );
+        self.last_poll_snapshot = Some(snapshot);
+    }
+
+    fn log_tcp_state_change(
+        session_state: &mut SessionState,
+        socket: &TcpSocket,
+        peer_endpoint: Option<(IpAddress, u16)>,
+        iface_ip: Ipv4Address,
+    ) {
         let current = socket.state();
         let previous = session_state.last_state.unwrap_or(TcpState::Closed);
         if Some(current) == session_state.last_state {
             return;
         }
-        info!("[cohsh-net] tcp state: {:?} -> {:?}", previous, current);
+        let (peer, port) = Self::peer_parts(peer_endpoint, socket);
+        let local_port = socket
+            .local_endpoint()
+            .map(|endpoint| endpoint.port)
+            .unwrap_or(CONSOLE_TCP_PORT);
+
+        match (previous, current) {
+            (_, TcpState::SynReceived) => info!(
+                "[cohsh-net] event: new incoming connection from {}:{}",
+                peer, port
+            ),
+            (_, TcpState::Established) => info!(
+                "[cohsh-net] event: connection established (local={}:{}, remote={}:{})",
+                iface_ip, local_port, peer, port
+            ),
+            (TcpState::Established, TcpState::CloseWait | TcpState::Closed) => info!(
+                "[cohsh-net] event: connection closed/reset (remote={}:{} state={:?})",
+                peer, port, current
+            ),
+            _ => info!(
+                "[cohsh-net] tcp state: {:?} -> {:?} (remote={}:{})",
+                previous, current, peer, port
+            ),
+        }
         session_state.last_state = Some(current);
         if !session_state.logged_accept && current == TcpState::Established {
-            if let Some(remote) = socket.remote_endpoint() {
-                info!(
-                    "[cohsh-net] accept: from {}:{} (local_port={})",
-                    remote.addr, remote.port, CONSOLE_TCP_PORT,
-                );
-            } else {
-                info!(
-                    "[cohsh-net] accept: connection established (local_port={})",
-                    CONSOLE_TCP_PORT
-                );
-            }
             session_state.logged_accept = true;
         }
     }
@@ -372,7 +414,6 @@ impl NetStack {
             tcp_handle: SocketHandle::default(),
             server: TcpConsoleServer::new(AUTH_TOKEN, IDLE_TIMEOUT_MS),
             telemetry: NetTelemetry::default(),
-            poll_count: 0,
             ip,
             gateway,
             prefix_len: prefix,
@@ -386,8 +427,7 @@ impl NetStack {
             conn_bytes_written: 0,
             events: HeaplessVec::new(),
             service_logged: false,
-            poll_samples_emitted: 0,
-            uart_poll_announced: false,
+            last_poll_snapshot: None,
             peer_endpoint: None,
         };
         stack.initialise_socket();
@@ -415,30 +455,7 @@ impl NetStack {
             info!("[net-console] service loop running");
             self.service_logged = true;
         }
-        if !self.uart_poll_announced {
-            debug_uart_str("[dbg] cohsh-net: poll loop online (tcp/31337)\n");
-            self.uart_poll_announced = true;
-        }
-        self.poll_count = self.poll_count.wrapping_add(1);
-        if (self.poll_count & 0xff) == 0 {
-            info!("[net-console] poll tick (tick={})", self.poll_count);
-        }
-        if self.poll_samples_emitted < 8 {
-            info!(
-                "[cohsh-net] poll: now_ms={now_ms} session_active={} auth_state={:?} listener_ready={} staged_events={}",
-                self.session_active,
-                self.auth_state,
-                self.listener_announced,
-                self.events.len(),
-            );
-            self.poll_samples_emitted = self.poll_samples_emitted.saturating_add(1);
-        } else {
-            trace!(
-                "[cohsh-net] poll trace: now_ms={now_ms} session_active={} auth_state={:?}",
-                self.session_active,
-                self.auth_state
-            );
-        }
+
         let last = self.telemetry.last_poll_ms;
         let delta = now_ms.saturating_sub(last);
         let delta_ms = core::cmp::min(delta, u64::from(u32::MAX)) as u32;
@@ -464,6 +481,7 @@ impl NetStack {
             self.telemetry.link_up = true;
         }
         self.telemetry.tx_drops = self.device.tx_drop_count();
+        self.log_poll_snapshot();
         activity
     }
 
@@ -476,7 +494,12 @@ impl NetStack {
         {
             let socket = self.sockets.get_mut::<TcpSocket>(self.tcp_handle);
             Self::record_peer_endpoint(&mut self.peer_endpoint, socket.remote_endpoint());
-            Self::log_tcp_state_change(&mut self.session_state, socket);
+            Self::log_tcp_state_change(
+                &mut self.session_state,
+                socket,
+                self.peer_endpoint,
+                self.ip,
+            );
 
             if !socket.is_open() {
                 self.peer_endpoint = None;
@@ -497,6 +520,14 @@ impl NetStack {
                         info!(
                             "[net-console] tcp listener bound: port={} iface_ip={}",
                             CONSOLE_TCP_PORT, self.ip
+                        );
+                        info!(
+                            "[cohsh-net] listener bound on iface ip={} port={} (QEMU hostfwd: 127.0.0.1:{} -> {}:{})",
+                            self.ip,
+                            CONSOLE_TCP_PORT,
+                            CONSOLE_TCP_PORT,
+                            self.ip,
+                            CONSOLE_TCP_PORT
                         );
                     }
                     Err(err) => {
@@ -534,7 +565,6 @@ impl NetStack {
                 self.conn_bytes_read = 0;
                 self.conn_bytes_written = 0;
                 reset_session = true;
-                debug_uart_str("[dbg] cohsh-net: connection accepted\n");
                 Self::record_peer_endpoint(&mut self.peer_endpoint, socket.remote_endpoint());
                 let peer = if let Some(endpoint) = socket.remote_endpoint() {
                     info!(
@@ -625,48 +655,36 @@ impl NetStack {
                     match socket.recv_slice(&mut temp) {
                         Ok(0) => break,
                         Ok(count) => {
-                            debug_uart_str("[dbg] cohsh-net: received data from client\n");
                             self.conn_bytes_read =
                                 self.conn_bytes_read.saturating_add(count as u64);
                             let dump_len = core::cmp::min(count, 32);
-                            log::info!(
-                                "[cohsh-net] recv: {} bytes (state={:?}): {:02x?}",
+                            let (peer_label, peer_port) =
+                                Self::peer_parts(self.peer_endpoint, socket);
+                            info!(
+                                "[cohsh-net][tcp] recv: nbytes={} from {}:{} state={:?}",
                                 count,
-                                socket.state(),
-                                &temp[..dump_len]
+                                peer_label,
+                                peer_port,
+                                socket.state()
                             );
-                            self.session_state.logged_first_recv = true;
-                            if self.auth_state == AuthState::AuthRequested {
-                                info!("[net-console] auth request received (len={count})");
-                            }
-                            if self.auth_state != AuthState::Attached {
-                                debug!(
-                                    "[net-console] handshake: received {} bytes: {:02x?}",
+                            info!("[cohsh-net][tcp] recv hex: {:02x?}", &temp[..dump_len]);
+                            if self.auth_state == AuthState::AuthRequested
+                                && !self.session_state.logged_first_recv
+                            {
+                                info!(
+                                    "[cohsh-net][auth] received candidate auth frame len={} from {}:{}",
                                     count,
-                                    &temp[..count.min(16)]
+                                    peer_label,
+                                    peer_port
+                                );
+                                info!(
+                                    "[cohsh-net][auth] frame hex: {:02x?}",
+                                    &temp[..count.min(32)]
                                 );
                             }
-                            info!(
-                                "[net-console] conn {}: received {} bytes (state={:?})",
-                                self.active_client_id.unwrap_or(0),
-                                count,
-                                self.auth_state
-                            );
-                            trace!(
-                                "[net-auth][conn={}] read {} bytes in state {:?}",
-                                self.active_client_id.unwrap_or(0),
-                                count,
-                                self.auth_state
-                            );
+                            self.session_state.logged_first_recv = true;
                             match self.server.ingest(&temp[..count], now_ms) {
-                                SessionEvent::None => {
-                                    debug!(
-                                        "[net-console][auth] state={:?} recv_bytes={} client={}",
-                                        self.auth_state,
-                                        count,
-                                        self.active_client_id.unwrap_or(0)
-                                    );
-                                }
+                                SessionEvent::None => {}
                                 SessionEvent::Authenticated => {
                                     let conn_id = self.active_client_id.unwrap_or(0);
                                     Self::set_auth_state(
@@ -674,45 +692,22 @@ impl NetStack {
                                         self.active_client_id,
                                         AuthState::Attached,
                                     );
-                                    info!("[net-console] auth success client={}", conn_id);
                                     info!(
-                                        "[cohsh-net] parsed handshake: role='AUTH' conn_id={} state={:?}",
-                                        conn_id, self.auth_state
-                                    );
-                                    debug!(
-                                        "[net-console][auth] state transitioned to {:?} client={}",
-                                        self.auth_state, conn_id
+                                        "[cohsh-net][auth] auth OK, session established (conn_id={})",
+                                        conn_id
                                     );
                                     activity = true;
                                 }
                                 SessionEvent::AuthFailed(reason) => {
-                                    warn!(
-                                        "[net-console] TCP client #{} auth failed reason={}",
-                                        self.active_client_id.unwrap_or(0),
-                                        reason
-                                    );
-                                    log::error!(
-                                        "[cohsh-net] error during handshake: {reason} (state={:?})",
-                                        self.auth_state
-                                    );
                                     log::warn!(
-                                        "[cohsh-net][auth] closing session: reason={}",
+                                        "[cohsh-net][auth] closing connection due to auth failure (reason={})",
                                         reason
                                     );
-                                    let conn_id = self.active_client_id.unwrap_or(0);
                                     Self::set_auth_state(
                                         &mut self.auth_state,
                                         self.active_client_id,
                                         AuthState::Failed,
                                     );
-                                    debug!(
-                                        "[net-console][auth] state={:?} client={} reason={}",
-                                        self.auth_state, conn_id, reason
-                                    );
-                                    warn!(
-                                        "[net-console] closing connection: reason={:?} state={:?}",
-                                        reason, self.auth_state
-                                    );
                                     let _ = Self::flush_outbound(
                                         &mut self.server,
                                         &mut self.telemetry,
@@ -722,36 +717,20 @@ impl NetStack {
                                         self.active_client_id,
                                         self.auth_state,
                                     );
-                                    debug_uart_str("[dbg] cohsh-net: connection closed/error\n");
+                                    Self::log_session_closed(
+                                        &mut self.session_state,
+                                        self.peer_endpoint,
+                                        socket,
+                                    );
                                     socket.close();
                                     self.server.end_session();
                                     self.session_active = false;
                                     reset_session = true;
                                     self.peer_endpoint = None;
-                                    info!(
-                                        "[net-console] conn {}: bytes read={}, bytes written={}",
-                                        self.active_client_id.unwrap_or(0),
-                                        self.conn_bytes_read,
-                                        self.conn_bytes_written
-                                    );
                                     self.active_client_id = None;
                                     break;
                                 }
                                 SessionEvent::Close => {
-                                    warn!(
-                                        "[net-console] TCP client #{} closing after session end",
-                                        self.active_client_id.unwrap_or(0)
-                                    );
-                                    warn!(
-                                        "[net-console] closing connection: reason={:?} state={:?}",
-                                        SessionEvent::Close,
-                                        self.auth_state
-                                    );
-                                    debug!(
-                                        "[net-console][auth] state={:?} close requested client={}",
-                                        self.auth_state,
-                                        self.active_client_id.unwrap_or(0)
-                                    );
                                     let _ = Self::flush_outbound(
                                         &mut self.server,
                                         &mut self.telemetry,
@@ -761,7 +740,6 @@ impl NetStack {
                                         self.active_client_id,
                                         self.auth_state,
                                     );
-                                    debug_uart_str("[dbg] cohsh-net: connection closed/error\n");
                                     Self::log_session_closed(
                                         &mut self.session_state,
                                         self.peer_endpoint,
@@ -807,7 +785,6 @@ impl NetStack {
                                 self.auth_state,
                                 self.active_client_id.unwrap_or(0)
                             );
-                            debug_uart_str("[dbg] cohsh-net: connection closed/error\n");
                             Self::log_session_closed(
                                 &mut self.session_state,
                                 self.peer_endpoint,
@@ -870,7 +847,6 @@ impl NetStack {
                     self.active_client_id,
                     self.auth_state,
                 );
-                debug_uart_str("[dbg] cohsh-net: connection closed/error\n");
                 Self::log_session_closed(&mut self.session_state, self.peer_endpoint, socket);
                 socket.close();
                 self.server.end_session();
@@ -913,7 +889,6 @@ impl NetStack {
                     self.active_client_id,
                     self.auth_state,
                 );
-                debug_uart_str("[dbg] cohsh-net: connection closed/error\n");
                 Self::log_session_closed(&mut self.session_state, self.peer_endpoint, socket);
                 socket.close();
                 self.server.end_session();
@@ -955,7 +930,6 @@ impl NetStack {
                     self.active_client_id.unwrap_or(0),
                     socket.state()
                 );
-                debug_uart_str("[dbg] cohsh-net: connection closed/error\n");
                 Self::log_session_closed(&mut self.session_state, self.peer_endpoint, socket);
                 socket.close();
                 self.server.end_session();
@@ -1028,7 +1002,6 @@ impl NetStack {
                     "[cohsh-net] send: auth response len={} role='AUTH'",
                     payload.len()
                 );
-                debug_uart_str("[dbg] cohsh-net: sending auth response\n");
             }
             let tcp_state = socket.state();
             match socket.send_slice(payload.as_slice()) {

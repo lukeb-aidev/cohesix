@@ -327,12 +327,18 @@ impl TcpTransport {
 
     fn perform_auth(&mut self) -> Result<()> {
         let auth_line = format!("AUTH {}", self.auth_token);
+        // Frame layout: ASCII "AUTH " prefix, token payload, and a trailing newline (14 bytes with the default token).
         let auth_start = Instant::now();
         let mut buf = auth_line.as_bytes().to_vec();
         buf.push(b'\n');
         let dump_len = buf.len().min(32);
         info!(
             "[cohsh][auth] sending auth frame ({} bytes): {:02x?}",
+            buf.len(),
+            &buf[..dump_len]
+        );
+        debug!(
+            "[cohsh][auth] auth frame bytes (len={}): {:02x?}",
             buf.len(),
             &buf[..dump_len]
         );

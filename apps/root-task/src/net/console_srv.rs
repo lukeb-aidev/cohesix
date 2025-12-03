@@ -71,6 +71,13 @@ impl TcpConsoleServer {
         );
     }
 
+    fn expected_frame_len(&self) -> usize {
+        AUTH_PREFIX
+            .len()
+            .saturating_add(self.auth_token.len())
+            .saturating_add(1)
+    }
+
     /// Construct a new server that validates the provided authentication token.
     pub fn new(auth_token: &'static str, idle_timeout_ms: u64) -> Self {
         Self {
@@ -93,10 +100,7 @@ impl TcpConsoleServer {
         self.outbound.clear();
         self.last_activity_ms = now_ms;
         self.auth_deadline_ms = None;
-        let expected_len = AUTH_PREFIX
-            .len()
-            .saturating_add(self.auth_token.len())
-            .saturating_add(1);
+        let expected_len = self.expected_frame_len();
         self.log_expected_auth(expected_len);
         info!(
             "[net-console] handshake: expecting client hello len={} magic=\"{}\" version=1",
@@ -187,6 +191,14 @@ impl TcpConsoleServer {
             raw_bytes.len(),
             &raw_bytes[..core::cmp::min(raw_bytes.len(), 32)]
         );
+        let expected_len = self.expected_frame_len();
+        let observed_len = raw_bytes.len().saturating_add(1);
+        if observed_len != expected_len {
+            warn!(
+                "[cohsh-net][auth] invalid frame length: expected={}, got={}",
+                expected_len, observed_len
+            );
+        }
         let trimmed = line.trim();
         info!(
             "[cohsh-net] recv: auth line='{}' raw_len={} raw_bytes={:02x?}",
@@ -194,7 +206,8 @@ impl TcpConsoleServer {
             trimmed.len(),
             trimmed.as_bytes()
         );
-        if !trimmed.starts_with(AUTH_PREFIX) {
+        let magic_ok = trimmed.starts_with(AUTH_PREFIX);
+        if !magic_ok {
             warn!(
                 "[cohsh-net][auth] reject: bad magic (got={:02x?}, expected={:02x?})",
                 &raw_bytes[..core::cmp::min(raw_bytes.len(), AUTH_PREFIX.len())],
@@ -209,6 +222,16 @@ impl TcpConsoleServer {
         }
         let token = trimmed.split_at(AUTH_PREFIX.len()).1.trim();
         let role_str = token.split_whitespace().next().unwrap_or("");
+        let role_ok = !role_str.is_empty();
+        let version_ok = true;
+        if !(magic_ok && version_ok && role_ok) {
+            warn!(
+                "[cohsh-net][auth] invalid magic/version/role: magic_ok={} version_ok={} role_ok={}",
+                magic_ok,
+                version_ok,
+                role_ok
+            );
+        }
         info!(
             "[cohsh-net] parsed handshake: role='{}' token_len={}",
             role_str,

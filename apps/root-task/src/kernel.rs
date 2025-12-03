@@ -9,6 +9,7 @@ use core::cell::RefCell;
 use core::cmp;
 use core::convert::TryFrom;
 use core::fmt::{self, Write};
+use core::ops::RangeInclusive;
 use core::panic::PanicInfo;
 use core::ptr;
 use core::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
@@ -2172,6 +2173,14 @@ const FAULT_TAG_VPPI: u64 = 8;
 const FAULT_TAG_TIMEOUT: u64 = 9;
 const MAX_FAULT_REGS: usize = 14;
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum EpMessageKind {
+    Fault,
+    BootstrapControl,
+    LogControl,
+    Unknown,
+}
+
 fn is_fault_label(label: u64) -> bool {
     matches!(
         label,
@@ -2188,34 +2197,53 @@ fn is_fault_label(label: u64) -> bool {
     )
 }
 
+fn fault_length_range(label: u64) -> Option<RangeInclusive<usize>> {
+    match label {
+        FAULT_TAG_NULL => Some(0..=0),
+        FAULT_TAG_CAP => Some(2..=MAX_FAULT_REGS),
+        FAULT_TAG_UNKNOWN_SYSCALL => Some(6..=MAX_FAULT_REGS),
+        FAULT_TAG_USER_EXCEPTION => Some(6..=MAX_FAULT_REGS),
+        FAULT_TAG_VMFAULT => Some(3..=MAX_FAULT_REGS),
+        FAULT_TAG_DEBUG_EXCEPTION => Some(5..=MAX_FAULT_REGS),
+        FAULT_TAG_VGIC_MAINTENANCE => Some(2..=MAX_FAULT_REGS),
+        FAULT_TAG_VCPU => Some(5..=MAX_FAULT_REGS),
+        FAULT_TAG_VPPI => Some(2..=MAX_FAULT_REGS),
+        FAULT_TAG_TIMEOUT => Some(1..=MAX_FAULT_REGS),
+        _ => None,
+    }
+}
+
+fn fault_layout_valid(label: u64, length: usize) -> bool {
+    fault_length_range(label)
+        .map(|range| range.contains(&length))
+        .unwrap_or(false)
+}
+
+fn classify_ep_message(info: &sel4_sys::seL4_MessageInfo) -> EpMessageKind {
+    let label = info.label();
+    let length = info.length() as usize;
+
+    if let Some(range) = fault_length_range(label) {
+        if range.contains(&length) {
+            return EpMessageKind::Fault;
+        }
+        return EpMessageKind::Unknown;
+    }
+
+    if label == 0 && length == 0 {
+        return EpMessageKind::BootstrapControl;
+    }
+
+    EpMessageKind::BootstrapControl
+}
+
 fn log_fault_message(info: &sel4_sys::seL4_MessageInfo, badge: sel4_sys::seL4_Word) -> bool {
     let fault_tag = info.label();
-    if !is_fault_label(fault_tag) {
-        log::trace!(
-            target: "root_task::kernel::fault",
-            "[fault] ignored non-fault message badge=0x{badge:04x} label=0x{label:08x} len={len}",
-            badge = badge,
-            label = fault_tag,
-            len = info.length(),
-        );
-        return false;
-    }
-
     let length = info.length() as usize;
-    if length == 0 && fault_tag != FAULT_TAG_NULL {
+    if !fault_layout_valid(fault_tag, length) {
         log::warn!(
             target: "root_task::kernel::fault",
-            "[fault] message missing registers badge=0x{badge:04x} label=0x{label:08x}",
-            badge = badge,
-            label = fault_tag,
-        );
-        return false;
-    }
-
-    if length > MAX_FAULT_REGS {
-        log::warn!(
-            target: "root_task::kernel::fault",
-            "[fault] suspicious fault length badge=0x{badge:04x} label=0x{label:08x} len={len}",
+            "[fault] unexpected fault layout badge=0x{badge:04x} label=0x{label:08x} len={len}",
             badge = badge,
             label = fault_tag,
             len = length,
@@ -2405,6 +2433,7 @@ pub(crate) struct KernelIpc {
     handlers_ready: bool,
     fault_loop_announced: bool,
     debug_uart_announced: bool,
+    last_unexpected: Option<(u64, u64)>,
 }
 
 fn current_node_id() -> sel4_sys::seL4_NodeId {
@@ -2438,6 +2467,7 @@ impl KernelIpc {
             handlers_ready: false,
             fault_loop_announced: false,
             debug_uart_announced: false,
+            last_unexpected: None,
         }
     }
 
@@ -2447,6 +2477,25 @@ impl KernelIpc {
             || info.label() != 0
             || info.extra_caps() != 0
             || info.caps_unwrapped() != 0
+    }
+
+    fn log_unexpected_message(
+        &mut self,
+        info: &sel4_sys::seL4_MessageInfo,
+        badge: sel4_sys::seL4_Word,
+    ) {
+        let signature = (info.label(), info.length());
+        if self.last_unexpected == Some(signature) {
+            return;
+        }
+        self.last_unexpected = Some(signature);
+        log::warn!(
+            target: "root_task::kernel::fault",
+            "[fault] unexpected control message badge=0x{badge:04x} label=0x{label:08x} len={len}",
+            badge = badge,
+            label = info.label(),
+            len = info.length(),
+        );
     }
 
     fn poll_endpoint(&mut self, now_ms: u64, bootstrap: bool) -> bool {
@@ -2478,24 +2527,14 @@ impl KernelIpc {
         }
 
         let msg_len = info.length();
-        let label = info.label();
-        if msg_len > 0 || badge != 0 || label != 0 {
-            log::debug!(
-                "[ipc] EP 0x{ep:04x}: recv ok badge=0x{badge:016x} label=0x{label:08x} len={msg_len}",
-                ep = self.endpoint,
-                badge = badge,
-                label = label,
-                msg_len = msg_len,
-            );
-            debug_uart_str("[dbg] EP 0x0130: recv OK\n");
-        }
+        let kind = classify_ep_message(&info);
         if bootstrap {
             log::trace!(
                 "B5.recv ret badge=0x{badge:016x} info=0x{info:08x}",
                 badge = badge,
                 info = info.words[0]
             );
-        } else {
+        } else if log::log_enabled!(log::Level::Trace) {
             log::trace!(
                 "[ipc] poll ep=0x{ep:04x} badge=0x{badge:016x} info=0x{info:08x} now_ms={now_ms}",
                 ep = self.endpoint,
@@ -2525,23 +2564,33 @@ impl KernelIpc {
             }
         }
 
-        if self.try_stage_bootstrap(&staged) {
-            self.staged_bootstrap = Some(staged);
-            self.staged_forwarded = false;
-            return true;
+        match kind {
+            EpMessageKind::Fault => {
+                self.last_unexpected = None;
+                if log_fault_message(&info, badge) {
+                    return true;
+                }
+            }
+            EpMessageKind::BootstrapControl | EpMessageKind::LogControl => {
+                self.last_unexpected = None;
+                if self.try_stage_bootstrap(&staged) {
+                    self.staged_bootstrap = Some(staged);
+                    self.staged_forwarded = false;
+                    return true;
+                }
+                log::trace!(
+                    "[ipc] control ep=0x{ep:04x} ignored message badge=0x{badge:016x} label=0x{label:08x} len={len}",
+                    ep = self.endpoint,
+                    badge = badge,
+                    label = info.label(),
+                    len = info.length(),
+                );
+            }
+            EpMessageKind::Unknown => {
+                self.log_unexpected_message(&info, badge);
+                return false;
+            }
         }
-
-        if log_fault_message(&info, badge) {
-            return true;
-        }
-
-        log::debug!(
-            target: "root_task::kernel::fault",
-            "[fault] unhandled message badge=0x{badge:04x} label=0x{label:08x} len={len}",
-            badge = badge,
-            label = info.label(),
-            len = info.length(),
-        );
 
         false
     }
