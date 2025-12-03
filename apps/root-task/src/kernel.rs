@@ -2433,7 +2433,6 @@ pub(crate) struct KernelIpc {
     fault_loop_announced: bool,
     debug_uart_announced: bool,
     control_labels_logged: HeaplessVec<u64, 4>,
-    unknown_labels_logged: HeaplessVec<u64, 8>,
 }
 
 fn current_node_id() -> sel4_sys::seL4_NodeId {
@@ -2468,7 +2467,6 @@ impl KernelIpc {
             fault_loop_announced: false,
             debug_uart_announced: false,
             control_labels_logged: HeaplessVec::new(),
-            unknown_labels_logged: HeaplessVec::new(),
         }
     }
 
@@ -2480,26 +2478,14 @@ impl KernelIpc {
             || info.caps_unwrapped() != 0
     }
 
-    fn log_unknown_label(&mut self, label: u64, length: usize, badge: sel4_sys::seL4_Word) {
-        if self.unknown_labels_logged.iter().any(|seen| *seen == label) {
-            return;
-        }
-
-        log::warn!(
-            target: "root_task::kernel::fault",
-            "[fault] unrecognised control/fault message badge=0x{badge:04x} label=0x{label:08x} len={length}",
-            badge = badge,
-            label = label,
-            length = length,
-        );
-
-        if self.unknown_labels_logged.is_full() {
-            if let Some(last) = self.unknown_labels_logged.last_mut() {
-                *last = label;
-            }
-        } else {
-            let _ = self.unknown_labels_logged.push(label);
-        }
+    fn handle_unknown_fault_msg(
+        badge: sel4_sys::seL4_Word,
+        label: sel4_sys::seL4_Word,
+        len: usize,
+    ) {
+        // HARD MUTE: temporarily ignore unknown control/fault messages to prevent log storms while
+        // we debug other subsystems. Intentionally no logging here.
+        let _ = (badge, label, len);
     }
 
     fn log_control_stream(&mut self, label: u64) {
@@ -2623,7 +2609,7 @@ impl KernelIpc {
                 return false;
             }
             EpMessageKind::Unknown { label, length } => {
-                self.log_unknown_label(label, length, badge);
+                Self::handle_unknown_fault_msg(badge, label as sel4_sys::seL4_Word, length);
                 return false;
             }
         }

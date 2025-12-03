@@ -150,6 +150,8 @@ struct SessionState {
     close_logged: bool,
     logged_accept: bool,
     logged_first_recv: bool,
+    connect_reported: bool,
+    logged_first_send: bool,
 }
 
 static SOCKET_STORAGE_IN_USE: AtomicBool = AtomicBool::new(false);
@@ -373,28 +375,35 @@ impl NetStack {
             return;
         }
         let (peer, port) = Self::peer_parts(peer_endpoint, socket);
-        let local_port = socket
-            .local_endpoint()
-            .map(|endpoint| endpoint.port)
-            .unwrap_or(CONSOLE_TCP_PORT);
 
         match (previous, current) {
-            (_, TcpState::SynReceived) => info!(
-                "[cohsh-net] event: new incoming connection from {}:{}",
-                peer, port
-            ),
-            (_, TcpState::Established) => info!(
-                "[cohsh-net] event: connection established (local={}:{}, remote={}:{})",
-                iface_ip, local_port, peer, port
-            ),
-            (TcpState::Established, TcpState::CloseWait | TcpState::Closed) => info!(
-                "[cohsh-net] event: connection closed/reset (remote={}:{} state={:?})",
-                peer, port, current
-            ),
-            _ => info!(
-                "[cohsh-net] tcp state: {:?} -> {:?} (remote={}:{})",
-                previous, current, peer, port
-            ),
+            (_, TcpState::SynReceived) => {
+                info!(
+                    target: "root_task::net",
+                    "[tcp] connect.begin addr={peer} port={port}"
+                );
+            }
+            (_, TcpState::Established) => {
+                info!(
+                    target: "root_task::net",
+                    "[tcp] connect.ok addr={peer} port={port}"
+                );
+                session_state.connect_reported = true;
+            }
+            _ => {}
+        }
+
+        if !session_state.connect_reported
+            && matches!(current, TcpState::CloseWait | TcpState::Closed)
+            && !matches!(previous, TcpState::Established)
+        {
+            warn!(
+                target: "root_task::net",
+                "[tcp] connect.err addr={peer} port={} err={:?}",
+                port,
+                current
+            );
+            session_state.connect_reported = true;
         }
         session_state.last_state = Some(current);
         if !session_state.logged_accept && current == TcpState::Established {
@@ -412,9 +421,8 @@ impl NetStack {
         }
         let (peer, port) = Self::peer_parts(peer_endpoint, socket);
         info!(
-            "[cohsh-net] session closed from {}:{} (final_state={:?})",
-            peer,
-            port,
+            target: "root_task::net",
+            "[tcp] close addr={peer} port={port} state={:?}",
             socket.state()
         );
         session_state.close_logged = true;
@@ -684,6 +692,7 @@ impl NetStack {
                         now_ms,
                         self.active_client_id,
                         self.auth_state,
+                        &mut self.session_state,
                     );
                     if activity {
                         debug!(
@@ -716,14 +725,17 @@ impl NetStack {
                             let dump_len = core::cmp::min(count, 32);
                             let (peer_label, peer_port) =
                                 Self::peer_parts(self.peer_endpoint, socket);
-                            trace!(
-                                "[cohsh-net][tcp] recv: nbytes={} from {}:{} state={:?}",
-                                count,
-                                peer_label,
-                                peer_port,
-                                socket.state()
-                            );
-                            trace!("[cohsh-net][tcp] recv hex: {:02x?}", &temp[..dump_len]);
+                            #[cfg(feature = "net-trace-31337")]
+                            {
+                                trace!(
+                                    "[cohsh-net][tcp] recv: nbytes={} from {}:{} state={:?}",
+                                    count,
+                                    peer_label,
+                                    peer_port,
+                                    socket.state()
+                                );
+                                trace!("[cohsh-net][tcp] recv hex: {:02x?}", &temp[..dump_len]);
+                            }
                             Self::trace_conn_recv(conn_id, &temp[..count]);
                             if ECHO_MODE {
                                 match socket.send_slice(&temp[..count]) {
@@ -791,6 +803,7 @@ impl NetStack {
                                         now_ms,
                                         self.active_client_id,
                                         self.auth_state,
+                                        &mut self.session_state,
                                     );
                                     Self::log_session_closed(
                                         &mut self.session_state,
@@ -814,6 +827,7 @@ impl NetStack {
                                         now_ms,
                                         self.active_client_id,
                                         self.auth_state,
+                                        &mut self.session_state,
                                     );
                                     Self::log_session_closed(
                                         &mut self.session_state,
@@ -913,6 +927,7 @@ impl NetStack {
                     now_ms,
                     self.active_client_id,
                     self.auth_state,
+                    &mut self.session_state,
                 );
                 Self::log_session_closed(&mut self.session_state, self.peer_endpoint, socket);
                 socket.close();
@@ -955,6 +970,7 @@ impl NetStack {
                     now_ms,
                     self.active_client_id,
                     self.auth_state,
+                    &mut self.session_state,
                 );
                 Self::log_session_closed(&mut self.session_state, self.peer_endpoint, socket);
                 socket.close();
@@ -981,6 +997,7 @@ impl NetStack {
                 now_ms,
                 self.active_client_id,
                 self.auth_state,
+                &mut self.session_state,
             );
 
             if matches!(socket.state(), TcpState::CloseWait | TcpState::Closed)
@@ -1037,6 +1054,7 @@ impl NetStack {
         now_ms: u64,
         conn_id: Option<u64>,
         auth_state: AuthState,
+        session_state: &mut SessionState,
     ) -> bool {
         if !socket.can_send() {
             return false;
@@ -1070,18 +1088,28 @@ impl NetStack {
                     payload.len()
                 );
             }
-            let tcp_state = socket.state();
             match socket.send_slice(payload.as_slice()) {
                 Ok(sent) if sent == payload.len() => {
                     *conn_bytes_written = conn_bytes_written.saturating_add(sent as u64);
-                    let dump_len = payload.len().min(32);
-                    info!(
-                        "[cohsh-net] send: {} bytes (state={:?}, auth_state={:?}): {:02x?}",
-                        sent,
-                        tcp_state,
-                        auth_state,
-                        &payload[..dump_len]
-                    );
+                    if !session_state.logged_first_send {
+                        info!(
+                            target: "root_task::net",
+                            "[tcp] first-send.ok bytes={sent}"
+                        );
+                        session_state.logged_first_send = true;
+                    }
+                    #[cfg(feature = "net-trace-31337")]
+                    {
+                        let tcp_state = socket.state();
+                        let dump_len = payload.len().min(32);
+                        info!(
+                            "[cohsh-net] send: {} bytes (state={:?}, auth_state={:?}): {:02x?}",
+                            sent,
+                            tcp_state,
+                            auth_state,
+                            &payload[..dump_len]
+                        );
+                    }
                     if pre_auth {
                         info!(
                             "[net-console] conn {}: sent pre-auth line '{}' ({} bytes)",
@@ -1101,6 +1129,7 @@ impl NetStack {
                     }
                     let conn_id = conn_id.unwrap_or(0);
                     Self::trace_conn_send(conn_id, payload.as_slice());
+                    #[cfg(feature = "net-trace-31337")]
                     trace!(
                         "[net-auth][conn={}] wrote {} bytes in state {:?}",
                         conn_id,
@@ -1115,7 +1144,10 @@ impl NetStack {
                     break;
                 }
                 Err(err) => {
-                    warn!("[net-console] TCP client write error: {err}",);
+                    warn!(
+                        target: "root_task::net",
+                        "[tcp] send.err err={err:?}"
+                    );
                     server.push_outbound_front(line);
                     telemetry.tx_drops = telemetry.tx_drops.saturating_add(1);
                     break;
