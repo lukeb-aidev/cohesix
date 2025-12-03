@@ -314,7 +314,6 @@ impl VirtioNet {
     }
 }
 
-#[cfg(feature = "net-trace-31337")]
 fn format_ipv4(bytes: &[u8]) -> HeaplessString<16> {
     let mut out = HeaplessString::new();
     if bytes.len() >= 4 {
@@ -326,7 +325,6 @@ fn format_ipv4(bytes: &[u8]) -> HeaplessString<16> {
     out
 }
 
-#[cfg(feature = "net-trace-31337")]
 fn tcp_flag_string(flags: u8) -> HeaplessString<8> {
     let mut out = HeaplessString::new();
     let push_flag = |buffer: &mut HeaplessString<8>, chr| {
@@ -359,7 +357,6 @@ fn tcp_flag_string(flags: u8) -> HeaplessString<8> {
     out
 }
 
-#[cfg(feature = "net-trace-31337")]
 fn log_tcp_trace(direction: &str, frame: &[u8]) {
     const IPV4_ETHERTYPE: u16 = 0x0800;
     if frame.len() < 34 {
@@ -415,34 +412,44 @@ fn log_tcp_trace(direction: &str, frame: &[u8]) {
     let payload_len = total_len
         .saturating_sub(ip_header_len + tcp_header_len)
         .min(frame.len().saturating_sub(tcp_offset + tcp_header_len));
+    #[cfg(feature = "net-trace-31337")]
     let seq = u32::from_be_bytes([
         frame[tcp_offset + 4],
         frame[tcp_offset + 5],
         frame[tcp_offset + 6],
         frame[tcp_offset + 7],
     ]);
+    #[cfg(feature = "net-trace-31337")]
     let ack = u32::from_be_bytes([
         frame[tcp_offset + 8],
         frame[tcp_offset + 9],
         frame[tcp_offset + 10],
         frame[tcp_offset + 11],
     ]);
+    #[cfg(feature = "net-trace-31337")]
     let flags = frame[tcp_offset + 13];
-    let flag_str = tcp_flag_string(flags);
     let src_ip = format_ipv4(&frame[ip_start + 12..ip_start + 16]);
     let dst_ip = format_ipv4(&frame[ip_start + 16..ip_start + 20]);
 
     log::info!(
-        "[net-trace] {direction} tcp {src}:{src_port} -> {dst}:{dst_port} flags={flags} seq={seq} ack={ack} len={len}",
-        src = src_ip.as_str(),
-        dst = dst_ip.as_str(),
-        flags = flag_str.as_str(),
-        len = payload_len,
+        target: "net-trace",
+        "[net-trace] {direction} tcp {}:{} -> {}:{} len={payload_len}",
+        src_ip.as_str(),
+        src_port,
+        dst_ip.as_str(),
+        dst_port,
     );
-}
 
-#[cfg(not(feature = "net-trace-31337"))]
-fn log_tcp_trace(_direction: &str, _frame: &[u8]) {}
+    #[cfg(feature = "net-trace-31337")]
+    {
+        let flag_str = tcp_flag_string(flags);
+        log::debug!(
+            target: "net-trace",
+            "[net-trace] {direction} tcp flags={flags} seq={seq} ack={ack}",
+            flags = flag_str.as_str(),
+        );
+    }
+}
 
 impl Device for VirtioNet {
     type RxToken<'a>

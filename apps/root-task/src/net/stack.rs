@@ -289,7 +289,6 @@ impl NetStack {
         (label, port)
     }
 
-    #[cfg(feature = "net-trace-31337")]
     fn trace_conn_new(
         peer_endpoint: Option<(IpAddress, u16)>,
         ip: IpAddress,
@@ -302,54 +301,35 @@ impl NetStack {
             .map(|endpoint| endpoint.port)
             .unwrap_or(CONSOLE_TCP_PORT);
         log::info!(
-            "[cohsh-net] conn new id={} local={}:{} remote={}:{} state={:?}",
+            "[cohsh-net] conn new id={} local={}:{} remote={}:{}",
             conn_id,
             ip,
             local_port,
             peer,
             port,
-            socket.state()
         );
     }
 
-    #[cfg(not(feature = "net-trace-31337"))]
-    fn trace_conn_new(
-        _peer_endpoint: Option<(IpAddress, u16)>,
-        _ip: IpAddress,
-        _conn_id: u64,
-        _socket: &TcpSocket,
-    ) {
-    }
-
-    #[cfg(feature = "net-trace-31337")]
     fn trace_conn_recv(conn_id: u64, payload: &[u8]) {
         let prefix = payload.len().min(16);
         log::info!(
-            "[cohsh-net] conn id={} recv bytes={} hex={:02x?}",
+            "[cohsh-net] conn id={} recv bytes={} first16={:02x?}",
             conn_id,
             payload.len(),
             &payload[..prefix]
         );
     }
 
-    #[cfg(not(feature = "net-trace-31337"))]
-    fn trace_conn_recv(_conn_id: u64, _payload: &[u8]) {}
-
-    #[cfg(feature = "net-trace-31337")]
     fn trace_conn_send(conn_id: u64, payload: &[u8]) {
         let prefix = payload.len().min(16);
         log::info!(
-            "[cohsh-net] conn id={} send bytes={} hex={:02x?}",
+            "[cohsh-net] conn id={} send bytes={} first16={:02x?}",
             conn_id,
             payload.len(),
             &payload[..prefix]
         );
     }
 
-    #[cfg(not(feature = "net-trace-31337"))]
-    fn trace_conn_send(_conn_id: u64, _payload: &[u8]) {}
-
-    #[cfg(feature = "net-trace-31337")]
     fn trace_conn_closed(conn_id: u64, reason: &str, bytes_in: u64, bytes_out: u64) {
         log::info!(
             "[cohsh-net] conn id={} closed reason={} bytes_in={} bytes_out={}",
@@ -359,9 +339,6 @@ impl NetStack {
             bytes_out
         );
     }
-
-    #[cfg(not(feature = "net-trace-31337"))]
-    fn trace_conn_closed(_conn_id: u64, _reason: &str, _bytes_in: u64, _bytes_out: u64) {}
 
     fn log_poll_snapshot(&mut self) {
         let snapshot = PollSnapshot {
@@ -592,36 +569,17 @@ impl NetStack {
             if !socket.is_open() {
                 self.peer_endpoint = None;
                 reset_session = true;
-                info!(
-                    target: "net",
-                    "TCP console: binding listener on {}:{}",
-                    self.ip,
-                    CONSOLE_TCP_PORT
-                );
+                if !self.listener_announced {
+                    info!(
+                        "[cohsh-net] listen tcp 0.0.0.0:{} iface_ip={}",
+                        CONSOLE_TCP_PORT, self.ip
+                    );
+                }
                 match socket.listen(IpListenEndpoint::from(CONSOLE_TCP_PORT)) {
                     Ok(()) => {
-                        log::info!(
-                            "[cohsh-net] listen: tcp/{} bound (iface_ip={})",
-                            CONSOLE_TCP_PORT,
-                            self.ip
-                        );
-                        log::info!(
-                            "[cohsh-net] listen tcp 0.0.0.0:{} iface_ip={} (net-trace feature={})",
-                            CONSOLE_TCP_PORT,
-                            self.ip,
-                            cfg!(feature = "net-trace-31337")
-                        );
                         info!(
                             "[net-console] tcp listener bound: port={} iface_ip={}",
                             CONSOLE_TCP_PORT, self.ip
-                        );
-                        info!(
-                            "[cohsh-net] listener bound on iface ip={} port={} (QEMU hostfwd: 127.0.0.1:{} -> {}:{})",
-                            self.ip,
-                            CONSOLE_TCP_PORT,
-                            CONSOLE_TCP_PORT,
-                            self.ip,
-                            CONSOLE_TCP_PORT
                         );
                     }
                     Err(err) => {
@@ -635,10 +593,6 @@ impl NetStack {
                     }
                 }
                 if !self.listener_announced {
-                    info!(
-                        "[cohsh-net] poll loop online; listening on tcp/{}",
-                        CONSOLE_TCP_PORT
-                    );
                     info!(
                         "[net-console] TCP console listening on 0.0.0.0:{} (iface ip={})",
                         CONSOLE_TCP_PORT, self.ip
@@ -660,42 +614,30 @@ impl NetStack {
                 self.conn_bytes_written = 0;
                 reset_session = true;
                 Self::record_peer_endpoint(&mut self.peer_endpoint, socket.remote_endpoint());
-                let peer = if let Some(endpoint) = socket.remote_endpoint() {
+                let (peer_label, peer_port) = Self::peer_parts(self.peer_endpoint, socket);
+                let local_port = socket
+                    .local_endpoint()
+                    .map(|endpoint| endpoint.port)
+                    .unwrap_or(CONSOLE_TCP_PORT);
+                info!(
+                    "[cohsh-net] conn new id={} local={}:{} remote={}:{}",
+                    client_id, self.ip, local_port, peer_label, peer_port
+                );
+                let peer = {
+                    let mut label = HeaplessString::<32>::new();
+                    if FmtWrite::write_fmt(&mut label, format_args!("{peer_label}")).is_ok() {
+                        Some(label)
+                    } else {
+                        None
+                    }
+                };
+                if let Some(endpoint) = socket.remote_endpoint() {
                     info!(
                         target: "net-console",
                         "[net-console] conn: accepted from {:?}",
                         endpoint
                     );
-                    let (addr, port) = Self::peer_parts(self.peer_endpoint, socket);
-                    info!(
-                        "[cohsh-net] accept: new session from {}:{} (state={:?})",
-                        addr,
-                        port,
-                        socket.state()
-                    );
-                    info!(
-                        "[net-console] conn {}: established from {}",
-                        client_id, endpoint
-                    );
-                    info!(
-                        "[net-console] connection accepted: remote={:?}",
-                        socket.remote_endpoint()
-                    );
-                    let mut label = HeaplessString::<32>::new();
-                    if let Ok(()) = FmtWrite::write_fmt(&mut label, format_args!("{}", endpoint)) {
-                        Some(label)
-                    } else {
-                        None
-                    }
-                } else {
-                    info!("[net-console] conn {}: established", client_id);
-                    None
-                };
-                let peer_label = peer.as_ref().map(|p| p.as_str()).unwrap_or("<unknown>");
-                info!(
-                    "[net-console] accepted TCP console connection id={} peer={}",
-                    client_id, peer_label
-                );
+                }
                 let _ = self.events.push(NetConsoleEvent::Connected {
                     conn_id: client_id,
                     peer,

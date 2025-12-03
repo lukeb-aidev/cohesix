@@ -2171,14 +2171,17 @@ const FAULT_TAG_VGIC_MAINTENANCE: u64 = 6;
 const FAULT_TAG_VCPU: u64 = 7;
 const FAULT_TAG_VPPI: u64 = 8;
 const FAULT_TAG_TIMEOUT: u64 = 9;
+const CONTROL_LABEL_LOG_AND_BOOTSTRAP: u64 = 0;
+const CONTROL_LABEL_HEARTBEAT: u64 = 0xB2;
 const MAX_FAULT_REGS: usize = 14;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum EpMessageKind {
-    Fault,
+    Fault { length_valid: bool },
     BootstrapControl,
     LogControl,
-    Unknown,
+    Control { label: u64 },
+    Unknown { label: u64, length: usize },
 }
 
 fn is_fault_label(label: u64) -> bool {
@@ -2223,19 +2226,23 @@ fn classify_ep_message(info: &sel4_sys::seL4_MessageInfo) -> EpMessageKind {
     let label = info.label();
     let length = info.length() as usize;
 
-    if fault_layout_valid(label, length) {
-        return EpMessageKind::Fault;
-    }
-
-    if label == 0 {
-        return if length == 0 {
-            EpMessageKind::BootstrapControl
-        } else {
-            EpMessageKind::LogControl
+    if is_fault_label(label) {
+        return EpMessageKind::Fault {
+            length_valid: fault_layout_valid(label, length),
         };
     }
 
-    EpMessageKind::Unknown
+    match label {
+        CONTROL_LABEL_LOG_AND_BOOTSTRAP => {
+            if length == 0 {
+                EpMessageKind::BootstrapControl
+            } else {
+                EpMessageKind::LogControl
+            }
+        }
+        CONTROL_LABEL_HEARTBEAT => EpMessageKind::Control { label },
+        _ => EpMessageKind::Unknown { label, length },
+    }
 }
 
 fn log_fault_message(info: &sel4_sys::seL4_MessageInfo, badge: sel4_sys::seL4_Word) -> bool {
@@ -2425,7 +2432,8 @@ pub(crate) struct KernelIpc {
     handlers_ready: bool,
     fault_loop_announced: bool,
     debug_uart_announced: bool,
-    last_unexpected: Option<(u64, u64)>,
+    control_labels_logged: HeaplessVec<u64, 4>,
+    unknown_labels_logged: HeaplessVec<u64, 8>,
 }
 
 fn current_node_id() -> sel4_sys::seL4_NodeId {
@@ -2459,7 +2467,8 @@ impl KernelIpc {
             handlers_ready: false,
             fault_loop_announced: false,
             debug_uart_announced: false,
-            last_unexpected: None,
+            control_labels_logged: HeaplessVec::new(),
+            unknown_labels_logged: HeaplessVec::new(),
         }
     }
 
@@ -2471,22 +2480,38 @@ impl KernelIpc {
             || info.caps_unwrapped() != 0
     }
 
-    fn log_unexpected_message(
-        &mut self,
-        info: &sel4_sys::seL4_MessageInfo,
-        badge: sel4_sys::seL4_Word,
-    ) {
-        let signature = (info.label(), info.length());
-        if self.last_unexpected == Some(signature) {
+    fn log_unknown_label(&mut self, label: u64, length: usize, badge: sel4_sys::seL4_Word) {
+        if self.unknown_labels_logged.iter().any(|seen| *seen == label) {
             return;
         }
-        self.last_unexpected = Some(signature);
+
         log::warn!(
             target: "root_task::kernel::fault",
-            "[fault] unexpected control message badge=0x{badge:04x} label=0x{label:08x} len={len}",
+            "[fault] unrecognised control/fault message badge=0x{badge:04x} label=0x{label:08x} len={length}",
             badge = badge,
-            label = info.label(),
-            len = info.length(),
+            label = label,
+            length = length,
+        );
+
+        if self.unknown_labels_logged.is_full() {
+            if let Some(last) = self.unknown_labels_logged.last_mut() {
+                *last = label;
+            }
+        } else {
+            let _ = self.unknown_labels_logged.push(label);
+        }
+    }
+
+    fn log_control_stream(&mut self, label: u64) {
+        if self.control_labels_logged.iter().any(|seen| *seen == label) {
+            return;
+        }
+
+        let _ = self.control_labels_logged.push(label);
+        log::info!(
+            "[ipc] EP 0x{ep:04x}: control stream active (label=0x{label:02X})",
+            ep = self.endpoint,
+            label = label,
         );
     }
 
@@ -2552,14 +2577,25 @@ impl KernelIpc {
         }
 
         match kind {
-            EpMessageKind::Fault => {
-                self.last_unexpected = None;
+            EpMessageKind::Fault { length_valid } => {
+                if !length_valid {
+                    static FAULT_LENGTH_WARNED: AtomicBool = AtomicBool::new(false);
+                    if !FAULT_LENGTH_WARNED.swap(true, Ordering::Relaxed) {
+                        log::warn!(
+                            target: "root_task::kernel::fault",
+                            "[fault] suspicious fault length badge=0x{badge:04x} label=0x{label:08x} len={len}",
+                            badge = badge,
+                            label = info.label(),
+                            len = info.length(),
+                        );
+                    }
+                }
                 if log_fault_message(&info, badge) {
                     return true;
                 }
             }
             EpMessageKind::BootstrapControl | EpMessageKind::LogControl => {
-                self.last_unexpected = None;
+                self.log_control_stream(info.label());
                 if self.try_stage_bootstrap(&staged) {
                     self.staged_bootstrap = Some(staged);
                     self.staged_forwarded = false;
@@ -2573,8 +2609,21 @@ impl KernelIpc {
                     len = info.length(),
                 );
             }
-            EpMessageKind::Unknown => {
-                self.log_unexpected_message(&info, badge);
+            EpMessageKind::Control { label } => {
+                self.log_control_stream(label);
+                #[cfg(feature = "control-trace")]
+                log::trace!(
+                    target: "root_task::kernel::fault",
+                    "[ipc] control ep=0x{ep:04x} badge=0x{badge:016x} label=0x{label:08x} len={len}",
+                    ep = self.endpoint,
+                    badge = badge,
+                    label = label,
+                    len = info.length(),
+                );
+                return false;
+            }
+            EpMessageKind::Unknown { label, length } => {
+                self.log_unknown_label(label, length, badge);
                 return false;
             }
         }
