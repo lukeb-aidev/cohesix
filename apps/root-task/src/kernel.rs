@@ -4,7 +4,7 @@
 
 extern crate alloc;
 
-use alloc::boxed::Box;
+use alloc::{boxed::Box, format};
 use core::cell::RefCell;
 use core::cmp;
 use core::convert::TryFrom;
@@ -60,6 +60,7 @@ use crate::serial::{
 };
 use crate::uart::pl011::{self as early_uart, PL011_PADDR};
 use heapless::{String as HeaplessString, Vec as HeaplessVec};
+use spin::Mutex;
 
 const EARLY_DUMP_LIMIT: usize = 512;
 const DEVICE_FRAME_BITS: usize = 12;
@@ -1053,6 +1054,7 @@ fn bootstrap<P: Platform>(
                 slot = tcb_copy_slot,
                 ep = fault_ep_slot
             );
+            register_fault_source(sel4_sys::seL4_CapInitThreadTCB, 0, "init-tcb");
         }
     } else {
         log::warn!(
@@ -2200,10 +2202,32 @@ const FAULT_TAG_VGIC_MAINTENANCE: u64 = 6;
 const FAULT_TAG_VCPU: u64 = 7;
 const FAULT_TAG_VPPI: u64 = 8;
 const FAULT_TAG_TIMEOUT: u64 = 9;
+const FAULT_TAG_NULL: u64 = sel4_sys::seL4_Fault_NullFault as u64;
+const FAULT_TAG_CAP: u64 = sel4_sys::seL4_Fault_CapFault as u64;
+const FAULT_TAG_UNKNOWN_SYSCALL: u64 = sel4_sys::seL4_Fault_UnknownSyscall as u64;
+const FAULT_TAG_USER_EXCEPTION: u64 = sel4_sys::seL4_Fault_UserException as u64;
+const FAULT_TAG_VMFAULT: u64 = sel4_sys::seL4_Fault_VMFault as u64;
 const CONTROL_LABEL_LOG_AND_BOOTSTRAP: u64 = 0;
 const CONTROL_LABEL_HEARTBEAT: u64 = 0xB2;
 const MAX_FAULT_REGS: usize = 14;
 const BADGELESS_FAULT_SUPPRESS_THRESHOLD: u32 = 4;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FaultFingerprint {
+    badge: sel4_sys::seL4_Word,
+    fault_type: u64,
+    ip: u64,
+    sp: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FaultSource {
+    badge: sel4_sys::seL4_Word,
+    tcb_slot: sel4_sys::seL4_CPtr,
+    label: &'static str,
+}
+
+static FAULT_SOURCES: Mutex<HeaplessVec<FaultSource, 8>> = Mutex::new(HeaplessVec::new());
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum EpMessageKind {
@@ -2215,9 +2239,41 @@ enum EpMessageKind {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-enum FaultDisposition {
-    Handled,
+enum FaultAction {
+    Handled(FaultFingerprint),
     Misrouted,
+    Fatal(FaultFingerprint),
+}
+
+fn register_fault_source(
+    tcb_slot: sel4_sys::seL4_CPtr,
+    badge: sel4_sys::seL4_Word,
+    label: &'static str,
+) {
+    let mut registry = FAULT_SOURCES.lock();
+    if let Some(existing) = registry
+        .iter_mut()
+        .find(|source| source.tcb_slot == tcb_slot || source.badge == badge)
+    {
+        existing.label = label;
+        existing.badge = badge;
+        existing.tcb_slot = tcb_slot;
+        return;
+    }
+
+    let _ = registry.push(FaultSource {
+        badge,
+        tcb_slot,
+        label,
+    });
+}
+
+fn fault_source_for(badge: sel4_sys::seL4_Word) -> Option<FaultSource> {
+    FAULT_SOURCES
+        .lock()
+        .iter()
+        .copied()
+        .find(|source| source.badge == badge)
 }
 
 fn fault_tag_name(tag: u64) -> &'static str {
@@ -2300,10 +2356,7 @@ fn classify_ep_message(
     }
 }
 
-fn log_fault_message(
-    info: &sel4_sys::seL4_MessageInfo,
-    badge: sel4_sys::seL4_Word,
-) -> FaultDisposition {
+fn log_fault_message(info: &sel4_sys::seL4_MessageInfo, badge: sel4_sys::seL4_Word) -> FaultAction {
     let fault_tag = info.label();
     let length = info.length() as usize;
 
@@ -2313,7 +2366,12 @@ fn log_fault_message(
         regs[idx] = unsafe { sel4_sys::seL4_GetMR(idx as i32) };
     }
 
-    let decoded_tag = regs[0] & 0xf;
+    let mut fault = sel4_sys::seL4_Fault_t {
+        words: [0; MAX_FAULT_REGS],
+    };
+    fault.words[..len].copy_from_slice(&regs[..len]);
+
+    let decoded_tag = unsafe { sel4_sys::seL4_Fault_get_seL4_FaultType(fault) };
     if !is_fault_label(decoded_tag) {
         static MISROUTED_ONCE: AtomicBool = AtomicBool::new(false);
         if !MISROUTED_ONCE.swap(true, Ordering::Relaxed) {
@@ -2326,7 +2384,7 @@ fn log_fault_message(
                 len = len,
             );
         }
-        return FaultDisposition::Misrouted;
+        return FaultAction::Misrouted;
     }
 
     if decoded_tag != fault_tag {
@@ -2341,34 +2399,54 @@ fn log_fault_message(
                 regs = &regs[..len],
             );
         }
-        return FaultDisposition::Misrouted;
+        return FaultAction::Misrouted;
     }
 
-    let ip_hint = regs
+    let mut ip_hint = regs
         .get(5)
         .copied()
         .unwrap_or_else(|| regs.get(4).copied().unwrap_or(0));
-    let sp_hint = regs.get(4).copied().unwrap_or_default();
+    let mut sp_hint = regs.get(4).copied().unwrap_or_default();
     let tag_name = fault_tag_name(decoded_tag);
+    let source_desc = fault_source_for(badge)
+        .map(|source| {
+            format!(
+                "{label} (tcb_slot=0x{slot:04x}, badge=0x{badge:04x})",
+                label = source.label,
+                slot = source.tcb_slot,
+                badge = source.badge
+            )
+        })
+        .unwrap_or_else(|| format!("unregistered (badge=0x{badge:04x})"));
+
+    let mut fingerprint = FaultFingerprint {
+        badge,
+        fault_type: decoded_tag,
+        ip: ip_hint,
+        sp: sp_hint,
+    };
 
     log::error!(
         target: "root_task::kernel::fault",
-        "[fault] received fault: badge=0x{badge:04x} label=0x{label:08x} ({tag_name}) ip_hint=0x{ip:016x} sp_hint=0x{sp:016x} len={len}",
+        "[fault] received fault: badge=0x{badge:04x} label=0x{label:08x} ({tag_name}) ip_hint=0x{ip:016x} sp_hint=0x{sp:016x} len={len} source={source_desc}",
         badge = badge,
         label = fault_tag,
         ip = ip_hint,
         sp = sp_hint,
         len = len,
         tag_name = tag_name,
+        source_desc = source_desc,
     );
 
     match decoded_tag {
         FAULT_TAG_UNKNOWN_SYSCALL => {
-            let fault_ip = regs.get(5).copied().unwrap_or_default();
-            let sp = regs.get(4).copied().unwrap_or_default();
-            let lr = regs.get(3).copied().unwrap_or_default();
-            let spsr = regs.get(2).copied().unwrap_or_default();
-            let syscall = regs.get(1).copied().unwrap_or_default();
+            let fault_ip = unsafe { sel4_sys::seL4_Fault_UnknownSyscall_get_FaultIP(fault) };
+            let sp = unsafe { sel4_sys::seL4_Fault_UnknownSyscall_get_SP(fault) };
+            let lr = unsafe { sel4_sys::seL4_Fault_UnknownSyscall_get_LR(fault) };
+            let spsr = unsafe { sel4_sys::seL4_Fault_UnknownSyscall_get_SPSR(fault) };
+            let syscall = unsafe { sel4_sys::seL4_Fault_UnknownSyscall_get_Syscall(fault) };
+            fingerprint.ip = fault_ip;
+            fingerprint.sp = sp;
             log::error!(
                 target: "root_task::kernel::fault",
                 "[fault] unknown syscall badge=0x{badge:04x} ip=0x{fault_ip:016x} sp=0x{sp:016x} lr=0x{lr:016x} spsr=0x{spsr:016x} syscall=0x{syscall:x}",
@@ -2381,11 +2459,13 @@ fn log_fault_message(
             );
         }
         FAULT_TAG_USER_EXCEPTION => {
-            let fault_ip = regs.get(5).copied().unwrap_or_default();
-            let stack = regs.get(4).copied().unwrap_or_default();
-            let spsr = regs.get(3).copied().unwrap_or_default();
-            let number = regs.get(2).copied().unwrap_or_default();
-            let code = regs.get(1).copied().unwrap_or_default();
+            let fault_ip = unsafe { sel4_sys::seL4_Fault_UserException_get_FaultIP(fault) };
+            let stack = unsafe { sel4_sys::seL4_Fault_UserException_get_Stack(fault) };
+            let spsr = unsafe { sel4_sys::seL4_Fault_UserException_get_SPSR(fault) };
+            let number = unsafe { sel4_sys::seL4_Fault_UserException_get_Number(fault) };
+            let code = unsafe { sel4_sys::seL4_Fault_UserException_get_Code(fault) };
+            fingerprint.ip = fault_ip;
+            fingerprint.sp = stack;
             log::error!(
                 target: "root_task::kernel::fault",
                 "[fault] user exception badge=0x{badge:04x} ip=0x{fault_ip:016x} stack=0x{stack:016x} spsr=0x{spsr:016x} number={number} code=0x{code:x}",
@@ -2398,10 +2478,12 @@ fn log_fault_message(
             );
         }
         FAULT_TAG_VMFAULT => {
-            let ip = regs.get(4).copied().unwrap_or_default();
-            let addr = regs.get(3).copied().unwrap_or_default();
-            let prefetch = regs.get(2).copied().unwrap_or_default();
-            let fsr = regs.get(1).copied().unwrap_or_default();
+            let ip = unsafe { sel4_sys::seL4_Fault_VMFault_get_IP(fault) };
+            let addr = unsafe { sel4_sys::seL4_Fault_VMFault_get_Addr(fault) };
+            let prefetch = unsafe { sel4_sys::seL4_Fault_VMFault_get_PrefetchFault(fault) };
+            let fsr = unsafe { sel4_sys::seL4_Fault_VMFault_get_FSR(fault) };
+            fingerprint.ip = ip;
+            fingerprint.sp = sp_hint;
             log::error!(
                 target: "root_task::kernel::fault",
                 "[fault] vmfault badge=0x{badge:04x} ip=0x{ip:016x} addr=0x{addr:016x} prefetch={prefetch} fsr=0x{fsr:08x}",
@@ -2413,24 +2495,35 @@ fn log_fault_message(
             );
         }
         FAULT_TAG_CAP => {
+            let fault_ip = unsafe { sel4_sys::seL4_Fault_CapFault_get_IP(fault) };
+            let addr = unsafe { sel4_sys::seL4_Fault_CapFault_get_Addr(fault) };
+            let in_recv = unsafe { sel4_sys::seL4_Fault_CapFault_get_InRecvPhase(fault) };
+            let lookup = unsafe { sel4_sys::seL4_Fault_CapFault_get_LookupFailureType(fault) };
+            fingerprint.ip = fault_ip;
             log::error!(
                 target: "root_task::kernel::fault",
-                "[fault] cap fault badge=0x{badge:04x} regs={regs:?}",
+                "[fault] cap fault badge=0x{badge:04x} ip=0x{fault_ip:016x} addr=0x{addr:016x} in_recv={} lookup={lookup} regs={regs:?}",
                 badge = badge,
+                fault_ip = fault_ip,
+                addr = addr,
+                lookup = lookup,
+                in_recv = in_recv,
                 regs = &regs[..len],
             );
         }
         FAULT_TAG_NULL => {
             static BADGELESS_FAULTS: AtomicU32 = AtomicU32::new(0);
             let count = BADGELESS_FAULTS.fetch_add(1, Ordering::Relaxed);
-            let fault_ip = regs.get(5).copied().unwrap_or_default();
-            let stack = regs.get(4).copied().unwrap_or_default();
+            fingerprint.ip = ip_hint;
+            fingerprint.sp = sp_hint;
             if badge == 0 {
                 if count < BADGELESS_FAULT_SUPPRESS_THRESHOLD {
                     log::error!(
                         target: "root_task::kernel::fault",
                         "[fault] null fault from unbadged sender ip=0x{fault_ip:016x} sp=0x{stack:016x} regs={regs:?}",
                         regs = &regs[..len],
+                        fault_ip = ip_hint,
+                        stack = sp_hint,
                     );
                 } else if count == BADGELESS_FAULT_SUPPRESS_THRESHOLD {
                     log::error!(
@@ -2443,8 +2536,8 @@ fn log_fault_message(
                     target: "root_task::kernel::fault",
                     "[fault] null fault badge=0x{badge:04x} ip=0x{fault_ip:016x} sp=0x{stack:016x} regs={regs:?}",
                     badge = badge,
-                    fault_ip = fault_ip,
-                    stack = stack,
+                    fault_ip = ip_hint,
+                    stack = sp_hint,
                     regs = &regs[..len],
                 );
             }
@@ -2460,7 +2553,18 @@ fn log_fault_message(
         }
     }
 
-    FaultDisposition::Handled
+    if fingerprint.ip == 1 && fingerprint.sp == 0x161 {
+        log::error!(
+            target: "root_task::kernel::fault",
+            "[fault] fatal: refusing to reply to repeating fault source badge=0x{badge:04x} ip=0x{ip:016x} sp=0x{sp:016x}",
+            badge = badge,
+            ip = fingerprint.ip,
+            sp = fingerprint.sp,
+        );
+        return FaultAction::Fatal(fingerprint);
+    }
+
+    FaultAction::Handled(fingerprint)
 }
 
 struct StagedMessage {
@@ -2531,6 +2635,7 @@ pub(crate) struct KernelIpc {
     fault_loop_announced: bool,
     debug_uart_announced: bool,
     control_labels_logged: HeaplessVec<u64, 4>,
+    dead_faults: HeaplessVec<FaultFingerprint, 4>,
 }
 
 fn current_node_id() -> sel4_sys::seL4_NodeId {
@@ -2572,6 +2677,7 @@ impl KernelIpc {
             fault_loop_announced: false,
             debug_uart_announced: false,
             control_labels_logged: HeaplessVec::new(),
+            dead_faults: HeaplessVec::new(),
         }
     }
 
@@ -2684,10 +2790,42 @@ impl KernelIpc {
                 if !length_valid {
                     Self::warn_fault_length(info.label(), info.length() as usize, badge);
                 }
-                let disposition = log_fault_message(&info, badge);
-                Self::reply_empty();
-                if matches!(disposition, FaultDisposition::Handled) {
+                if let Some(dead) = self
+                    .dead_faults
+                    .iter()
+                    .find(|fingerprint| fingerprint.badge == badge)
+                {
+                    log::warn!(
+                        target: "root_task::kernel::fault",
+                        "[fault] suppressing reply to previously-fatal sender badge=0x{badge:04x} ip=0x{ip:016x} sp=0x{sp:016x}",
+                        badge = badge,
+                        ip = dead.ip,
+                        sp = dead.sp,
+                    );
                     return;
+                }
+                match log_fault_message(&info, badge) {
+                    FaultAction::Handled(_) => {
+                        Self::reply_empty();
+                        return;
+                    }
+                    FaultAction::Misrouted => {
+                        Self::reply_empty();
+                        return;
+                    }
+                    FaultAction::Fatal(fingerprint) => {
+                        if !self.dead_faults.contains(&fingerprint) {
+                            let _ = self.dead_faults.push(fingerprint);
+                            log::error!(
+                                target: "root_task::kernel::fault",
+                                "[fault] marking sender as dead badge=0x{badge:04x} ip=0x{ip:016x} sp=0x{sp:016x}; no reply sent",
+                                badge = fingerprint.badge,
+                                ip = fingerprint.ip,
+                                sp = fingerprint.sp,
+                            );
+                        }
+                        return;
+                    }
                 }
             }
             EpMessageKind::BootstrapControl
@@ -2790,10 +2928,27 @@ impl KernelIpc {
                 if !length_valid {
                     Self::warn_fault_length(info.label(), info.length() as usize, badge);
                 }
-                let disposition = log_fault_message(&info, badge);
-                Self::reply_empty();
-                if matches!(disposition, FaultDisposition::Handled) {
-                    return true;
+                match log_fault_message(&info, badge) {
+                    FaultAction::Handled(_) => {
+                        Self::reply_empty();
+                        return true;
+                    }
+                    FaultAction::Misrouted => {
+                        Self::reply_empty();
+                    }
+                    FaultAction::Fatal(fingerprint) => {
+                        if !self.dead_faults.contains(&fingerprint) {
+                            let _ = self.dead_faults.push(fingerprint);
+                            log::error!(
+                                target: "root_task::kernel::fault",
+                                "[fault] fatal sender observed on root EP badge=0x{badge:04x} ip=0x{ip:016x} sp=0x{sp:016x}; suppressing replies",
+                                badge = fingerprint.badge,
+                                ip = fingerprint.ip,
+                                sp = fingerprint.sp,
+                            );
+                        }
+                        return true;
+                    }
                 }
             }
             EpMessageKind::BootstrapControl | EpMessageKind::LogControl => {

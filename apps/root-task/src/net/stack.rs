@@ -565,6 +565,14 @@ impl NetStack {
 
         {
             let socket = self.sockets.get_mut::<TcpSocket>(self.tcp_handle);
+            info!(
+                "[cohsh-net] tcp poll: state={:?} session_active={} auth_state={:?} can_recv={} can_send={}",
+                socket.state(),
+                self.session_active,
+                self.auth_state,
+                socket.can_recv(),
+                socket.can_send()
+            );
             Self::record_peer_endpoint(&mut self.peer_endpoint, socket.remote_endpoint());
             Self::log_tcp_state_change(
                 &mut self.session_state,
@@ -714,6 +722,14 @@ impl NetStack {
 
             if socket.can_recv() {
                 let mut temp = [0u8; 64];
+                let conn_id = self.active_client_id.unwrap_or(0);
+                info!(
+                    "[cohsh-net] conn id={} recv-ready state={:?} may_recv={} can_recv={}",
+                    conn_id,
+                    socket.state(),
+                    socket.may_recv(),
+                    socket.can_recv()
+                );
                 while socket.can_recv() {
                     match socket.recv_slice(&mut temp) {
                         Ok(0) => break,
@@ -1061,6 +1077,12 @@ impl NetStack {
         let mut activity = false;
         let pre_auth = !server.is_authenticated();
         let mut budget = MAX_TX_BUDGET;
+        info!(
+            "[cohsh-net] flush_outbound: can_send={} pre_auth={} auth_state={:?}",
+            socket.can_send(),
+            pre_auth,
+            auth_state
+        );
         while budget > 0 && socket.can_send() {
             let Some(line) = server.pop_outbound() else {
                 break;
