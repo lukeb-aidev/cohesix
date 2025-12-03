@@ -7,7 +7,7 @@ use core::fmt;
 use core::ptr::{read_volatile, write_volatile, NonNull};
 
 use heapless::Vec as HeaplessVec;
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use sel4_sys::{seL4_Error, seL4_NotEnoughMemory};
 use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::time::Instant;
@@ -308,6 +308,7 @@ impl VirtioNet {
             for byte in &mut slice[length..] {
                 *byte = 0;
             }
+            debug!("[virtio-net] TX: sending frame len={}", length);
         }
     }
 }
@@ -325,6 +326,7 @@ impl Device for VirtioNet {
     fn receive(&mut self, _timestamp: Instant) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
         self.reclaim_tx();
         if let Some((id, len)) = self.pop_rx() {
+            info!("[virtio-net] RX: received frame len={}", len);
             let driver_ptr = self as *mut _;
             let rx = VirtioRxToken {
                 driver: driver_ptr,

@@ -277,7 +277,7 @@ impl NetStack {
         if Some(current) == session_state.last_state {
             return;
         }
-        info!("[cohsh-net] socket state: {:?} -> {:?}", previous, current);
+        info!("[cohsh-net] tcp state: {:?} -> {:?}", previous, current);
         session_state.last_state = Some(current);
         if !session_state.logged_accept && current == TcpState::Established {
             if let Some(remote) = socket.remote_endpoint() {
@@ -451,6 +451,9 @@ impl NetStack {
         let poll_result = self
             .interface
             .poll(timestamp, &mut self.device, &mut self.sockets);
+        if poll_result != PollResult::None {
+            log::info!("[net] smoltcp: events processed at now_ms={}", now_ms);
+        }
         let mut activity = poll_result != PollResult::None;
         if self.process_tcp(now_ms) {
             activity = true;
@@ -487,14 +490,13 @@ impl NetStack {
                 match socket.listen(IpListenEndpoint::from(CONSOLE_TCP_PORT)) {
                     Ok(()) => {
                         log::info!(
-                            "[cohsh-net] listen: tcp/{} bound (iface ip={})",
+                            "[cohsh-net] listen: tcp/{} bound (iface_ip={})",
                             CONSOLE_TCP_PORT,
                             self.ip
                         );
-                        info!("[cohsh-net] listen: tcp/{} ready", CONSOLE_TCP_PORT);
                         info!(
-                            "[net-console] tcp listener bound: port={}",
-                            CONSOLE_TCP_PORT
+                            "[net-console] tcp listener bound: port={} iface_ip={}",
+                            CONSOLE_TCP_PORT, self.ip
                         );
                     }
                     Err(err) => {
@@ -618,18 +620,10 @@ impl NetStack {
             }
 
             if socket.can_recv() {
-                log::debug!(
-                    "[cohsh-net] recv-ready: can_recv=true (state={:?}, auth_state={:?})",
-                    socket.state(),
-                    self.auth_state
-                );
                 let mut temp = [0u8; 64];
                 while socket.can_recv() {
                     match socket.recv_slice(&mut temp) {
-                        Ok(0) => {
-                            log::debug!("[cohsh-net] recv: 0 bytes (state={:?})", socket.state());
-                            break;
-                        }
+                        Ok(0) => break,
                         Ok(count) => {
                             debug_uart_str("[dbg] cohsh-net: received data from client\n");
                             self.conn_bytes_read =
