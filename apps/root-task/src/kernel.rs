@@ -2203,6 +2203,7 @@ const FAULT_TAG_TIMEOUT: u64 = 9;
 const CONTROL_LABEL_LOG_AND_BOOTSTRAP: u64 = 0;
 const CONTROL_LABEL_HEARTBEAT: u64 = 0xB2;
 const MAX_FAULT_REGS: usize = 14;
+const BADGELESS_FAULT_SUPPRESS_THRESHOLD: u32 = 4;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum EpMessageKind {
@@ -2217,6 +2218,22 @@ enum EpMessageKind {
 enum FaultDisposition {
     Handled,
     Misrouted,
+}
+
+fn fault_tag_name(tag: u64) -> &'static str {
+    match tag {
+        FAULT_TAG_NULL => "null",
+        FAULT_TAG_CAP => "cap",
+        FAULT_TAG_UNKNOWN_SYSCALL => "unknown-syscall",
+        FAULT_TAG_USER_EXCEPTION => "user-exception",
+        FAULT_TAG_VMFAULT => "vmfault",
+        FAULT_TAG_DEBUG_EXCEPTION => "debug-exception",
+        FAULT_TAG_VGIC_MAINTENANCE => "vgic-maintenance",
+        FAULT_TAG_VCPU => "vcpu",
+        FAULT_TAG_VPPI => "vppi",
+        FAULT_TAG_TIMEOUT => "timeout",
+        _ => "unknown",
+    }
 }
 
 fn is_fault_label(label: u64) -> bool {
@@ -2332,14 +2349,17 @@ fn log_fault_message(
         .copied()
         .unwrap_or_else(|| regs.get(4).copied().unwrap_or(0));
     let sp_hint = regs.get(4).copied().unwrap_or_default();
+    let tag_name = fault_tag_name(decoded_tag);
+
     log::error!(
         target: "root_task::kernel::fault",
-        "[fault] received fault: badge=0x{badge:04x} label=0x{label:08x} ip_hint=0x{ip:016x} sp_hint=0x{sp:016x} len={len}",
+        "[fault] received fault: badge=0x{badge:04x} label=0x{label:08x} ({tag_name}) ip_hint=0x{ip:016x} sp_hint=0x{sp:016x} len={len}",
         badge = badge,
         label = fault_tag,
         ip = ip_hint,
         sp = sp_hint,
         len = len,
+        tag_name = tag_name,
     );
 
     match decoded_tag {
@@ -2401,12 +2421,29 @@ fn log_fault_message(
             );
         }
         FAULT_TAG_NULL => {
-            log::warn!(
-                target: "root_task::kernel::fault",
-                "[fault] null fault badge=0x{badge:04x} regs={regs:?}",
-                badge = badge,
-                regs = &regs[..len],
-            );
+            static BADGELESS_FAULTS: AtomicU32 = AtomicU32::new(0);
+            let count = BADGELESS_FAULTS.fetch_add(1, Ordering::Relaxed);
+            if badge == 0 {
+                if count < BADGELESS_FAULT_SUPPRESS_THRESHOLD {
+                    log::error!(
+                        target: "root_task::kernel::fault",
+                        "[fault] null fault from unbadged sender regs={regs:?}",
+                        regs = &regs[..len],
+                    );
+                } else if count == BADGELESS_FAULT_SUPPRESS_THRESHOLD {
+                    log::error!(
+                        target: "root_task::kernel::fault",
+                        "[fault] suppressing further repeated unbadged null faults (logged {count} instances)",
+                    );
+                }
+            } else {
+                log::warn!(
+                    target: "root_task::kernel::fault",
+                    "[fault] null fault badge=0x{badge:04x} regs={regs:?}",
+                    badge = badge,
+                    regs = &regs[..len],
+                );
+            }
         }
         _ => {
             log::error!(
