@@ -3,9 +3,10 @@
 #![allow(unsafe_code)]
 
 use core::fmt::Write;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 #[cfg(not(target_arch = "aarch64"))]
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::AtomicU64;
 
 #[cfg(feature = "serial-console")]
 use crate::boot::uart_pl011;
@@ -466,6 +467,8 @@ fn start_kernel_cli<'a, D, T, I, V, const RX: usize, const TX: usize, const LINE
 
 struct UserlandBootstrapHandler;
 
+static USERLAND_BOOTSTRAP_ONCE: AtomicBool = AtomicBool::new(false);
+
 impl BootstrapMessageHandler for UserlandBootstrapHandler {
     fn handle(&mut self, message: &BootstrapMessage, audit: &mut dyn AuditSink) {
         let mut summary = HeaplessString::<128>::new();
@@ -476,7 +479,13 @@ impl BootstrapMessageHandler for UserlandBootstrapHandler {
             label = message.info.words[0],
             words = message.payload.len(),
         );
-        audit.info(summary.as_str());
+        let log_once = !USERLAND_BOOTSTRAP_ONCE.swap(true, Ordering::Relaxed);
+        if log_once {
+            audit.info(summary.as_str());
+            log::debug!("[audit] {}", summary.as_str());
+        } else {
+            log::debug!("[audit] {}", summary.as_str());
+        }
         crate::bootstrap::log::process_ep_payload(message.payload.as_slice(), audit);
     }
 }

@@ -2396,6 +2396,7 @@ impl From<StagedMessage> for BootstrapMessage {
 
 static BOOTSTRAP_STAGE_LOG_ONCE: AtomicBool = AtomicBool::new(false);
 static BOOTSTRAP_DISPATCH_LOG_ONCE: AtomicBool = AtomicBool::new(false);
+static BOOTSTRAP_DISPATCH_STREAM_SEEN: AtomicBool = AtomicBool::new(false);
 
 pub(crate) struct KernelIpc {
     endpoint: sel4_sys::seL4_CPtr,
@@ -2478,7 +2479,7 @@ impl KernelIpc {
 
         let msg_len = info.length();
         let label = info.label();
-        log::info!(
+        log::debug!(
             "[ipc] EP 0x{ep:04x}: recv ok badge=0x{badge:016x} label=0x{label:08x} len={msg_len}",
             ep = self.endpoint,
             badge = badge,
@@ -2503,6 +2504,24 @@ impl KernelIpc {
         }
 
         let staged = StagedMessage::new(info, badge);
+
+        if bootstrap {
+            let first_bootstrap = !BOOTSTRAP_DISPATCH_STREAM_SEEN.swap(true, Ordering::Relaxed);
+            if first_bootstrap {
+                log::info!(
+                    "[ipc] bootstrap dispatch stream active on ep=0x{ep:04x} (label=0x{label:08x})",
+                    ep = self.endpoint,
+                    label = info.label(),
+                );
+            } else {
+                log::debug!(
+                    "[ipc] bootstrap dispatch ep=0x{ep:04x} label=0x{label:08x} len={msg_len}",
+                    ep = self.endpoint,
+                    label = info.label(),
+                    msg_len = info.length(),
+                );
+            }
+        }
 
         if self.try_stage_bootstrap(&staged) {
             self.staged_bootstrap = Some(staged);
@@ -2549,23 +2568,14 @@ impl KernelIpc {
         } else {
             // Periodic control-plane messages can flood dev-virt logs; log once at info
             // then demote subsequent events to debug.
-            let log_once = !BOOTSTRAP_STAGE_LOG_ONCE.swap(true, Ordering::Relaxed);
-            let log_level = if log_once {
-                log::Level::Info
-            } else {
-                log::Level::Debug
-            };
-            log::log!(
-                log_level,
+            BOOTSTRAP_STAGE_LOG_ONCE.swap(true, Ordering::Relaxed);
+            log::debug!(
                 "[ipc] bootstrap staged ep=0x{ep:04x} badge=0x{badge:016x} info=0x{info:08x} words={words}",
                 ep = self.endpoint,
                 badge = message.badge,
                 info = message.info.words[0],
                 words = message.payload.len(),
             );
-            if !log_once {
-                log::debug!("[ipc] bootstrap stage repeated; subsequent logs downgraded to debug to avoid flood");
-            }
             log_bootstrap_payload(message.payload.as_slice());
         }
         log::debug!(
@@ -2632,6 +2642,7 @@ impl BootstrapMessageHandler for BootstrapIpcAudit {
         let log_once = !BOOTSTRAP_DISPATCH_LOG_ONCE.swap(true, Ordering::Relaxed);
         if log_once {
             audit.info(summary.as_str());
+            log::debug!("[audit] {}", summary.as_str());
         } else {
             log::debug!("[audit] {}", summary.as_str());
         }

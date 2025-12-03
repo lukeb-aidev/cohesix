@@ -6,7 +6,7 @@
 
 use core::fmt::{self, Write as FmtWrite};
 use heapless::{String as HeaplessString, Vec as HeaplessVec};
-use log::{debug, info, trace, warn};
+use log::{debug, error, info, trace, warn};
 use portable_atomic::{AtomicBool, Ordering};
 use smoltcp::iface::{
     Config as IfaceConfig, Interface, PollResult, SocketHandle, SocketSet, SocketStorage,
@@ -135,6 +135,8 @@ enum AuthState {
 struct SessionState {
     last_state: Option<TcpState>,
     close_logged: bool,
+    logged_accept: bool,
+    logged_first_recv: bool,
 }
 
 static SOCKET_STORAGE_IN_USE: AtomicBool = AtomicBool::new(false);
@@ -222,7 +224,7 @@ impl NetStack {
         if next != *auth_state {
             let conn_id = active_client_id.unwrap_or(0);
             info!(
-                "[cohsh-net] auth-state: {:?} -> {:?} (conn_id={})",
+                "[cohsh-net][auth] state: {:?} -> {:?} (conn_id={})",
                 auth_state, next, conn_id
             );
             trace!(
@@ -233,6 +235,10 @@ impl NetStack {
             );
             *auth_state = next;
         }
+    }
+
+    fn reset_session_state(&mut self) {
+        self.reset_session_state();
     }
 
     fn record_peer_endpoint(
@@ -251,7 +257,11 @@ impl NetStack {
         socket: &TcpSocket,
     ) -> (HeaplessString<64>, u16) {
         let (addr, port) = peer_endpoint
-            .or_else(|| socket.remote_endpoint().map(|endpoint| (endpoint.addr, endpoint.port)))
+            .or_else(|| {
+                socket
+                    .remote_endpoint()
+                    .map(|endpoint| (endpoint.addr, endpoint.port))
+            })
             .unwrap_or((IpAddress::Ipv4(Ipv4Address::UNSPECIFIED), 0));
         let mut label = HeaplessString::<64>::new();
         let _ = write!(&mut label, "{addr}");
@@ -273,6 +283,20 @@ impl NetStack {
             peer, port, session_state.last_state, current
         );
         session_state.last_state = Some(current);
+        if !session_state.logged_accept && current == TcpState::Established {
+            if let Some(remote) = socket.remote_endpoint() {
+                info!(
+                    "[cohsh-net] accept: session from {}:{} (state={:?})",
+                    remote.addr, remote.port, current,
+                );
+            } else {
+                info!(
+                    "[cohsh-net] accept: session established (state={:?})",
+                    current,
+                );
+            }
+            session_state.logged_accept = true;
+        }
     }
 
     fn log_session_closed(
@@ -456,21 +480,31 @@ impl NetStack {
 
             if !socket.is_open() {
                 self.peer_endpoint = None;
-                self.session_state = SessionState::default();
+                self.reset_session_state();
                 info!(
                     target: "net",
                     "TCP console: binding listener on {}:{}",
                     self.ip,
                     CONSOLE_TCP_PORT
                 );
-                if let Err(err) = socket.listen(IpListenEndpoint::from(CONSOLE_TCP_PORT)) {
-                    warn!("[net-console] failed to start TCP console listener: {err}",);
-                    return activity;
+                match socket.listen(IpListenEndpoint::from(CONSOLE_TCP_PORT)) {
+                    Ok(()) => {
+                        info!("[cohsh-net] listen: tcp/{} ready", CONSOLE_TCP_PORT);
+                        info!(
+                            "[net-console] tcp listener bound: port={}",
+                            CONSOLE_TCP_PORT
+                        );
+                    }
+                    Err(err) => {
+                        log::error!(
+                            "[cohsh-net] listen: tcp/{} failed: {:?}",
+                            CONSOLE_TCP_PORT,
+                            err
+                        );
+                        warn!("[net-console] failed to start TCP console listener: {err}",);
+                        return activity;
+                    }
                 }
-                info!(
-                    "[net-console] tcp listener bound: port={}",
-                    CONSOLE_TCP_PORT
-                );
                 if !self.listener_announced {
                     info!(
                         "[cohsh-net] poll loop online; listening on tcp/{}",
@@ -495,7 +529,7 @@ impl NetStack {
                 self.active_client_id = Some(client_id);
                 self.conn_bytes_read = 0;
                 self.conn_bytes_written = 0;
-                self.session_state = SessionState::default();
+                self.reset_session_state();
                 debug_uart_str("[dbg] cohsh-net: connection accepted\n");
                 Self::record_peer_endpoint(&mut self.peer_endpoint, socket.remote_endpoint());
                 let peer = if let Some(endpoint) = socket.remote_endpoint() {
@@ -582,7 +616,7 @@ impl NetStack {
             }
 
             if socket.can_recv() {
-                let mut temp = [0u8; 256];
+                let mut temp = [0u8; 64];
                 while socket.can_recv() {
                     match socket.recv_slice(&mut temp) {
                         Ok(0) => break,
@@ -590,13 +624,20 @@ impl NetStack {
                             debug_uart_str("[dbg] cohsh-net: received data from client\n");
                             self.conn_bytes_read =
                                 self.conn_bytes_read.saturating_add(count as u64);
-                            let dump_len = count.min(32);
-                            info!(
+                            let dump_len = count.min(temp.len());
+                            let recv_level = if self.session_state.logged_first_recv {
+                                log::Level::Debug
+                            } else {
+                                log::Level::Info
+                            };
+                            log::log!(
+                                recv_level,
                                 "[cohsh-net] recv: {} bytes (auth_state={:?}): {:02x?}",
                                 count,
                                 self.auth_state,
                                 &temp[..dump_len]
                             );
+                            self.session_state.logged_first_recv = true;
                             if self.auth_state == AuthState::AuthRequested {
                                 info!("[net-console] auth request received (len={count})");
                             }
@@ -683,6 +724,8 @@ impl NetStack {
                                     socket.close();
                                     self.server.end_session();
                                     self.session_active = false;
+                                    self.reset_session_state();
+                                    self.peer_endpoint = None;
                                     info!(
                                         "[net-console] conn {}: bytes read={}, bytes written={}",
                                         self.active_client_id.unwrap_or(0),
@@ -726,6 +769,7 @@ impl NetStack {
                                     self.server.end_session();
                                     self.session_active = false;
                                     self.peer_endpoint = None;
+                                    self.reset_session_state();
                                     self.active_client_id = None;
                                     activity = true;
                                     break;
@@ -772,6 +816,7 @@ impl NetStack {
                             self.server.end_session();
                             self.session_active = false;
                             self.peer_endpoint = None;
+                            self.reset_session_state();
                             info!(
                                 "[net-console] conn {}: bytes read={}, bytes written={}",
                                 self.active_client_id.unwrap_or(0),
@@ -817,11 +862,7 @@ impl NetStack {
                     self.auth_state,
                 );
                 debug_uart_str("[dbg] cohsh-net: connection closed/error\n");
-                Self::log_session_closed(
-                    &mut self.session_state,
-                    self.peer_endpoint,
-                    socket,
-                );
+                Self::log_session_closed(&mut self.session_state, self.peer_endpoint, socket);
                 socket.close();
                 self.server.end_session();
                 self.session_active = false;
@@ -864,11 +905,7 @@ impl NetStack {
                     self.auth_state,
                 );
                 debug_uart_str("[dbg] cohsh-net: connection closed/error\n");
-                Self::log_session_closed(
-                    &mut self.session_state,
-                    self.peer_endpoint,
-                    socket,
-                );
+                Self::log_session_closed(&mut self.session_state, self.peer_endpoint, socket);
                 socket.close();
                 self.server.end_session();
                 self.session_active = false;
@@ -910,11 +947,7 @@ impl NetStack {
                     socket.state()
                 );
                 debug_uart_str("[dbg] cohsh-net: connection closed/error\n");
-                Self::log_session_closed(
-                    &mut self.session_state,
-                    self.peer_endpoint,
-                    socket,
-                );
+                Self::log_session_closed(&mut self.session_state, self.peer_endpoint, socket);
                 socket.close();
                 self.server.end_session();
                 self.session_active = false;
