@@ -2134,14 +2134,27 @@ fn preview_payload(words: &[sel4_sys::seL4_Word]) -> PayloadPreview {
 }
 
 fn log_bootstrap_payload(words: &[sel4_sys::seL4_Word]) {
+    if words.is_empty() {
+        return;
+    }
+
+    if !log::log_enabled!(log::Level::Debug) {
+        return;
+    }
+
     match preview_payload(words) {
         PayloadPreview::Empty => {}
         PayloadPreview::Utf8(text) => {
-            log::info!("[staged utf8] {}", text.as_str());
+            log::debug!("[staged utf8] {}", text.as_str());
         }
         PayloadPreview::Hex(lines) => {
-            for line in lines {
-                log::info!("{}", line.as_str());
+            if log::log_enabled!(log::Level::Trace) {
+                for line in lines {
+                    log::trace!("{}", line.as_str());
+                }
+            } else {
+                let byte_len = words.len() * core::mem::size_of::<sel4_sys::seL4_Word>();
+                log::debug!("[staged hex] {byte_len} bytes (hex dump suppressed)");
             }
         }
     }
@@ -2151,25 +2164,69 @@ const FAULT_TAG_NULL: u64 = 0;
 const FAULT_TAG_CAP: u64 = 1;
 const FAULT_TAG_UNKNOWN_SYSCALL: u64 = 2;
 const FAULT_TAG_USER_EXCEPTION: u64 = 3;
+const FAULT_TAG_DEBUG_EXCEPTION: u64 = 4;
 const FAULT_TAG_VMFAULT: u64 = 5;
+const FAULT_TAG_VGIC_MAINTENANCE: u64 = 6;
+const FAULT_TAG_VCPU: u64 = 7;
+const FAULT_TAG_VPPI: u64 = 8;
+const FAULT_TAG_TIMEOUT: u64 = 9;
 const MAX_FAULT_REGS: usize = 14;
 
-fn log_fault_message(info: &sel4_sys::seL4_MessageInfo, badge: sel4_sys::seL4_Word) {
-    debug_uart_str("[dbg] fault: received user fault; halting\n");
+fn is_fault_label(label: u64) -> bool {
+    matches!(
+        label,
+        FAULT_TAG_NULL
+            | FAULT_TAG_CAP
+            | FAULT_TAG_UNKNOWN_SYSCALL
+            | FAULT_TAG_USER_EXCEPTION
+            | FAULT_TAG_VMFAULT
+            | FAULT_TAG_DEBUG_EXCEPTION
+            | FAULT_TAG_VGIC_MAINTENANCE
+            | FAULT_TAG_VCPU
+            | FAULT_TAG_VPPI
+            | FAULT_TAG_TIMEOUT
+    )
+}
+
+fn log_fault_message(info: &sel4_sys::seL4_MessageInfo, badge: sel4_sys::seL4_Word) -> bool {
     let fault_tag = info.label();
-    if fault_tag > 0xF_u64 || info.length() == 0 {
-        log::error!(
+    if !is_fault_label(fault_tag) {
+        log::trace!(
             target: "root_task::kernel::fault",
-            "[fault] received malformed fault message badge=0x{badge:04x} label=0x{label:08x} len={len}",
+            "[fault] ignored non-fault message badge=0x{badge:04x} label=0x{label:08x} len={len}",
             badge = badge,
             label = fault_tag,
             len = info.length(),
         );
-        return;
+        return false;
     }
 
+    let length = info.length() as usize;
+    if length == 0 && fault_tag != FAULT_TAG_NULL {
+        log::warn!(
+            target: "root_task::kernel::fault",
+            "[fault] message missing registers badge=0x{badge:04x} label=0x{label:08x}",
+            badge = badge,
+            label = fault_tag,
+        );
+        return false;
+    }
+
+    if length > MAX_FAULT_REGS {
+        log::warn!(
+            target: "root_task::kernel::fault",
+            "[fault] suspicious fault length badge=0x{badge:04x} label=0x{label:08x} len={len}",
+            badge = badge,
+            label = fault_tag,
+            len = length,
+        );
+        return false;
+    }
+
+    debug_uart_str("[dbg] fault: received user fault; processing\n");
+
     let mut regs = [0u64; MAX_FAULT_REGS];
-    let len = cmp::min(info.length() as usize, regs.len());
+    let len = cmp::min(length, regs.len());
     for idx in 0..len {
         regs[idx] = unsafe { sel4_sys::seL4_GetMR(idx as i32) };
     }
@@ -2184,7 +2241,7 @@ fn log_fault_message(info: &sel4_sys::seL4_MessageInfo, badge: sel4_sys::seL4_Wo
             decoded = decoded_tag,
             regs = &regs[..len],
         );
-        return;
+        return false;
     }
 
     let ip_hint = regs
@@ -2278,6 +2335,8 @@ fn log_fault_message(info: &sel4_sys::seL4_MessageInfo, badge: sel4_sys::seL4_Wo
             );
         }
     }
+
+    true
 }
 
 struct StagedMessage {
@@ -2440,9 +2499,34 @@ impl KernelIpc {
             );
         }
 
-        log_fault_message(&info, badge);
-        self.staged_bootstrap = Some(StagedMessage::new(info, badge));
-        self.staged_forwarded = false;
+        let staged = StagedMessage::new(info, badge);
+
+        if self.try_stage_bootstrap(&staged) {
+            self.staged_bootstrap = Some(staged);
+            self.staged_forwarded = false;
+            return true;
+        }
+
+        if log_fault_message(&info, badge) {
+            return true;
+        }
+
+        log::debug!(
+            target: "root_task::kernel::fault",
+            "[fault] unhandled message badge=0x{badge:04x} label=0x{label:08x} len={len}",
+            badge = badge,
+            label = info.label(),
+            len = info.length(),
+        );
+
+        false
+    }
+
+    fn try_stage_bootstrap(&self, message: &StagedMessage) -> bool {
+        if is_fault_label(message.info.label()) {
+            return false;
+        }
+
         true
     }
 
