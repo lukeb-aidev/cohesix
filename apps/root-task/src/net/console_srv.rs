@@ -119,13 +119,8 @@ impl TcpConsoleServer {
             AUTH_PREFIX.trim_end(),
             self.auth_token.len()
         );
-        if self
-            .enqueue_auth_ack(AckStatus::Ok, Some("detail=present-token"))
-            .is_ok()
-        {
-            self.auth_deadline_ms = Some(now_ms.saturating_add(AUTH_TIMEOUT_MS));
-        }
-        info!("[net-console] auth begin (challenge sent)");
+        self.auth_deadline_ms = Some(now_ms.saturating_add(AUTH_TIMEOUT_MS));
+        info!("[net-console] auth begin (challenge staged)");
         info!("[net-console] auth: waiting for handshake payload");
     }
 
@@ -210,6 +205,7 @@ impl TcpConsoleServer {
         );
         let expected_len = self.expected_frame_len();
         let observed_len = raw_bytes.len().saturating_add(1);
+        info!("[cohsh-net] auth: hello received (len={})", observed_len);
         #[cfg(feature = "net-trace-31337")]
         log::info!(
             "[cohsh-net] conn id={} auth: parsing frame observed_len={} bytes={:02x?}",
@@ -417,12 +413,12 @@ mod tests {
         let mut server = TcpConsoleServer::new("token", 1000);
         server.begin_session(10, Some(1));
 
-        let ready = server.pop_outbound().expect("ready ack present");
-        assert!(ready.starts_with("OK AUTH"));
-
         let event = server.ingest(b"AUTH token\n", 11);
         assert_eq!(event, SessionEvent::Authenticated);
         assert!(server.is_authenticated());
+
+        let ack = server.pop_outbound().expect("auth ack present");
+        assert!(ack.starts_with("OK AUTH"));
 
         server.mark_activity(20);
         assert!(!server.should_timeout(1000));
