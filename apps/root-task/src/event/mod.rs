@@ -33,6 +33,7 @@ use heapless::{String as HeaplessString, Vec as HeaplessVec};
 
 use crate::console::proto::{render_ack, AckLine, AckStatus, LineFormatError};
 use crate::console::{Command, CommandParser, ConsoleError, MAX_ROLE_LEN, MAX_TICKET_LEN};
+#[cfg(feature = "kernel")]
 use crate::debug_uart::debug_uart_str;
 #[cfg(feature = "net-console")]
 use crate::net::{NetConsoleEvent, NetPoller, CONSOLE_QUEUE_DEPTH};
@@ -45,6 +46,9 @@ use crate::sel4::{BootInfoExt, BootInfoView};
 use crate::serial::{SerialDriver, SerialPort, SerialTelemetry, DEFAULT_LINE_CAPACITY};
 #[cfg(feature = "kernel")]
 use sel4_sys::seL4_CPtr;
+
+#[cfg(not(feature = "kernel"))]
+fn debug_uart_str(_message: &str) {}
 
 fn format_message(args: fmt::Arguments<'_>) -> HeaplessString<128> {
     let mut buf = HeaplessString::new();
