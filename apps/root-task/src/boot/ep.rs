@@ -13,6 +13,24 @@ use crate::serial;
 
 pub static mut ROOT_EP: seL4_CPtr = seL4_CapNull;
 
+fn select_endpoint_untyped(view: &BootInfoView) -> Result<(seL4_CPtr, UntypedDesc), seL4_Error> {
+    let bi = view.header();
+    const MIN_ENDPOINT_BITS: u8 = 12;
+    let count = (bi.untyped.end - bi.untyped.start) as usize;
+    let descriptors = &bi.untypedList[..count];
+    descriptors
+        .iter()
+        .enumerate()
+        .find_map(|(index, desc)| {
+            if desc.isDevice != 0 || desc.sizeBits < MIN_ENDPOINT_BITS {
+                return None;
+            }
+            let cap = bi.untyped.start + index as seL4_CPtr;
+            Some((cap, (*desc).into()))
+        })
+        .ok_or(seL4_IllegalOperation)
+}
+
 fn log_window_state(
     tag: &str,
     root: seL4_CPtr,
@@ -50,20 +68,7 @@ pub fn bootstrap_ep(view: &BootInfoView, cs: &mut CSpace) -> Result<seL4_CPtr, s
     }
 
     let bi = view.header();
-    const MIN_ENDPOINT_BITS: u8 = 12;
-    let count = (bi.untyped.end - bi.untyped.start) as usize;
-    let descriptors = &bi.untypedList[..count];
-    let (ut, desc): (seL4_CPtr, UntypedDesc) = descriptors
-        .iter()
-        .enumerate()
-        .find_map(|(index, desc)| {
-            if desc.isDevice != 0 || desc.sizeBits < MIN_ENDPOINT_BITS {
-                return None;
-            }
-            let cap = bi.untyped.start + index as seL4_CPtr;
-            Some((cap, (*desc).into()))
-        })
-        .ok_or(seL4_IllegalOperation)?;
+    let (ut, desc) = select_endpoint_untyped(view)?;
 
     #[cfg(feature = "untyped-debug")]
     {
@@ -174,6 +179,79 @@ pub fn bootstrap_ep(view: &BootInfoView, cs: &mut CSpace) -> Result<seL4_CPtr, s
     serial::puts(
         "[boot] EP ready
 ",
+    );
+
+    Ok(ep_slot)
+}
+
+/// Retype an additional endpoint for dedicated fault handling without updating the
+/// published root endpoint.
+pub fn bootstrap_fault_ep(view: &BootInfoView, cs: &mut CSpace) -> Result<seL4_CPtr, seL4_Error> {
+    let bi = view.header();
+    let (ut, desc) = select_endpoint_untyped(view)?;
+
+    #[cfg(feature = "untyped-debug")]
+    {
+        crate::trace::println!(
+            "[ram-ut: cap=0x{cap:x} size_bits={size_bits} is_device={is_device} paddr=0x{paddr:x}]",
+            cap = ut,
+            size_bits = desc.size_bits,
+            is_device = desc.is_device,
+            paddr = desc.paddr,
+        );
+    }
+
+    #[cfg(not(feature = "untyped-debug"))]
+    let _ = desc;
+
+    let ep_slot = cs.alloc_slot()?;
+    log_window_state("alloc", cs.root(), cs.depth(), ep_slot, None);
+    debug_assert_ne!(
+        ep_slot,
+        sel4::seL4_CapNull,
+        "allocated endpoint slot must not be null",
+    );
+
+    let mut window = CSpaceWindow::from_bootinfo(view);
+    window.first_free = ep_slot;
+    window.assert_contains(ep_slot);
+    log_window_state(
+        "bootinfo",
+        window.root,
+        window.bits,
+        window.first_free,
+        Some((window.empty_start, window.empty_end)),
+    );
+
+    let err = retype_endpoint_auto(
+        bi,
+        ut as sel4_sys::seL4_Word,
+        ep_slot as sel4_sys::seL4_Word,
+    );
+    log::info!(
+        "[ep] fault ep retype root=0x{root:04x} depth={depth} dst=0x{slot:04x} err={err}",
+        root = window.root,
+        depth = window.bits,
+        slot = ep_slot,
+        err = err,
+    );
+    if err != sel4_sys::seL4_NoError {
+        log::error!(
+            "[boot] fault endpoint retype failed slot=0x{slot:04x} err={err:?} ({name})",
+            slot = ep_slot,
+            err = err,
+            name = sel4::error_name(err),
+        );
+        return Err(err);
+    }
+
+    window.bump();
+    log::info!("[cs] first_free=0x{slot:04x}", slot = cs.next_free_slot());
+    let slot_ident = sel4::debug_cap_identify(ep_slot);
+    log::info!(
+        "[boot] fault endpoint slot=0x{slot:04x} identify=0x{ident:08x}",
+        slot = ep_slot,
+        ident = slot_ident,
     );
 
     Ok(ep_slot)

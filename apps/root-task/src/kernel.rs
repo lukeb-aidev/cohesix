@@ -17,6 +17,7 @@ use core::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 #[cfg(feature = "timers-arch-counter")]
 use core::arch::asm;
 
+use crate::console::proto::{render_ack, AckLine, AckStatus};
 use cohesix_ticket::Role;
 
 #[cfg(all(feature = "kernel", target_arch = "aarch64"))]
@@ -538,6 +539,8 @@ pub struct BootContext {
     pub features: BootFeatures,
     /// Root endpoint slot shared with userland subsystems.
     pub ep_slot: sel4_sys::seL4_CPtr,
+    /// Fault endpoint dedicated to handling seL4 faults.
+    pub fault_ep_slot: sel4_sys::seL4_CPtr,
     /// PL011 UART slot reserved for the serial console.
     pub uart_slot: Option<sel4_sys::seL4_CPtr>,
     pub(crate) serial: RefCell<
@@ -997,14 +1000,36 @@ fn bootstrap<P: Platform>(
         console.writeln_prefixed("bootinfo.ipcBuffer missing");
     }
 
+    let mut fault_ep_slot = ep_slot;
     if ep_slot != sel4_sys::seL4_CapNull {
+        match crate::boot::ep::bootstrap_fault_ep(&bootinfo_view, &mut boot_cspace) {
+            Ok(slot) => {
+                fault_ep_slot = slot;
+                log::info!(
+                    target: "root_task::bootstrap",
+                    "[boot] dedicated fault endpoint ready ep=0x{slot:04x}",
+                    slot = slot
+                );
+            }
+            Err(err) => {
+                log::warn!(
+                    target: "root_task::bootstrap",
+                    "[boot] unable to create dedicated fault endpoint: {} ({}) — reusing root ep",
+                    err as sel4_sys::seL4_Word,
+                    error_name(err)
+                );
+            }
+        }
+    }
+
+    if fault_ep_slot != sel4_sys::seL4_CapNull {
         let guard_bits =
             sel4::word_bits().saturating_sub(bootinfo_ref.init_cnode_bits() as sel4_sys::seL4_Word);
         let guard_data = sel4::cap_data_guard(0, guard_bits);
         let fault_handler_err = unsafe {
             sel4_sys::seL4_TCB_SetFaultHandler(
                 sel4_sys::seL4_CapInitThreadTCB,
-                ep_slot,
+                fault_ep_slot,
                 bootinfo_ref.init_cnode_cap(),
                 guard_data,
                 sel4_sys::seL4_CapInitThreadVSpace,
@@ -1026,7 +1051,7 @@ fn bootstrap<P: Platform>(
                 target: "root_task::bootstrap",
                 "[boot] fault handler installed tcb_slot=0x{slot:04x} ep=0x{ep:04x}",
                 slot = tcb_copy_slot,
-                ep = ep_slot
+                ep = fault_ep_slot
             );
         }
     } else {
@@ -1557,7 +1582,7 @@ fn bootstrap<P: Platform>(
         let (net_stack, _) = NetStack::new(Ipv4Address::new(10, 0, 0, 2));
         log::info!("[boot] net-console init complete; continuing with timers and IPC");
         log::info!(target: "root_task::kernel", "[boot] phase: TimersAndIPC.begin");
-        let (timer, ipc) = run_timers_and_ipc_phase(ep_slot).map_err(|err| {
+        let (timer, ipc) = run_timers_and_ipc_phase(ep_slot, fault_ep_slot).map_err(|err| {
             log::error!(
                 target: "root_task::kernel",
                 "[boot] TimersAndIPC: failed during bootstrap: {:?}",
@@ -1667,6 +1692,7 @@ fn bootstrap<P: Platform>(
             bootinfo: bootinfo_view,
             features,
             ep_slot,
+            fault_ep_slot,
             uart_slot,
             serial: RefCell::new(Some(serial)),
             timer: RefCell::new(Some(timer)),
@@ -1682,6 +1708,7 @@ fn bootstrap<P: Platform>(
             bootinfo: bootinfo_view,
             features,
             ep_slot,
+            fault_ep_slot,
             uart_slot,
             serial: RefCell::new(Some(serial)),
             timer: RefCell::new(Some(timer)),
@@ -1699,6 +1726,7 @@ const KERNEL_TIMER_PERIOD_MS: u64 = 5;
 #[cfg(feature = "bypass-timers-ipc")]
 fn run_timers_and_ipc_phase(
     ep_slot: sel4_sys::seL4_CPtr,
+    fault_ep_slot: sel4_sys::seL4_CPtr,
 ) -> Result<(KernelTimer, KernelIpc), BootError> {
     log::warn!(
         target: "root_task::kernel",
@@ -1715,13 +1743,14 @@ fn run_timers_and_ipc_phase(
         "[boot] TimersAndIPC: constructing placeholder ipc dispatcher ep=0x{ep:04x}",
         ep = ep_slot
     );
-    let ipc = KernelIpc::new(ep_slot);
+    let ipc = KernelIpc::new(ep_slot, fault_ep_slot);
     Ok((timer, ipc))
 }
 
 #[cfg(not(feature = "bypass-timers-ipc"))]
 fn run_timers_and_ipc_phase(
     ep_slot: sel4_sys::seL4_CPtr,
+    fault_ep_slot: sel4_sys::seL4_CPtr,
 ) -> Result<(KernelTimer, KernelIpc), BootError> {
     #[cfg(feature = "bypass-timers")]
     {
@@ -1743,7 +1772,7 @@ fn run_timers_and_ipc_phase(
             "[boot] TimersAndIPC: ipc.init.begin ep=0x{ep:04x}",
             ep = ep_slot
         );
-        let ipc = KernelIpc::new(ep_slot);
+        let ipc = KernelIpc::new(ep_slot, fault_ep_slot);
         log::info!(
             target: "root_task::kernel",
             "[boot] TimersAndIPC: ipc.init.end ep=0x{ep:04x} staged={staged}",
@@ -1791,7 +1820,7 @@ fn run_timers_and_ipc_phase(
             "[boot] TimersAndIPC: ipc.init.begin ep=0x{ep:04x}",
             ep = ep_slot
         );
-        let ipc = KernelIpc::new(ep_slot);
+        let ipc = KernelIpc::new(ep_slot, fault_ep_slot);
         log::info!(
             target: "root_task::kernel",
             "[boot] TimersAndIPC: ipc.init.end ep=0x{ep:04x} staged={staged}",
@@ -2184,6 +2213,12 @@ enum EpMessageKind {
     Unknown { label: u64, length: usize },
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum FaultDisposition {
+    Handled,
+    Misrouted,
+}
+
 fn is_fault_label(label: u64) -> bool {
     matches!(
         label,
@@ -2222,11 +2257,14 @@ fn fault_layout_valid(label: u64, length: usize) -> bool {
         .unwrap_or(false)
 }
 
-fn classify_ep_message(info: &sel4_sys::seL4_MessageInfo) -> EpMessageKind {
+fn classify_ep_message(
+    info: &sel4_sys::seL4_MessageInfo,
+    allow_fault_labels: bool,
+) -> EpMessageKind {
     let label = info.label();
     let length = info.length() as usize;
 
-    if is_fault_label(label) {
+    if allow_fault_labels && is_fault_label(label) {
         return EpMessageKind::Fault {
             length_valid: fault_layout_valid(label, length),
         };
@@ -2245,7 +2283,10 @@ fn classify_ep_message(info: &sel4_sys::seL4_MessageInfo) -> EpMessageKind {
     }
 }
 
-fn log_fault_message(info: &sel4_sys::seL4_MessageInfo, badge: sel4_sys::seL4_Word) -> bool {
+fn log_fault_message(
+    info: &sel4_sys::seL4_MessageInfo,
+    badge: sel4_sys::seL4_Word,
+) -> FaultDisposition {
     let fault_tag = info.label();
     let length = info.length() as usize;
 
@@ -2256,6 +2297,21 @@ fn log_fault_message(info: &sel4_sys::seL4_MessageInfo, badge: sel4_sys::seL4_Wo
     }
 
     let decoded_tag = regs[0] & 0xf;
+    if !is_fault_label(decoded_tag) {
+        static MISROUTED_ONCE: AtomicBool = AtomicBool::new(false);
+        if !MISROUTED_ONCE.swap(true, Ordering::Relaxed) {
+            log::debug!(
+                target: "root_task::kernel::fault",
+                "[fault] non-fault message on fault EP badge=0x{badge:04x} label=0x{label:08x} decoded=0x{decoded:08x} len={len}; treating as control/misroute (badge 0 often indicates a control plane sender without a badge)",
+                badge = badge,
+                label = fault_tag,
+                decoded = decoded_tag,
+                len = len,
+            );
+        }
+        return FaultDisposition::Misrouted;
+    }
+
     if decoded_tag != fault_tag {
         static FAULT_TAG_MISMATCH_LOGGED: AtomicBool = AtomicBool::new(false);
         if !FAULT_TAG_MISMATCH_LOGGED.swap(true, Ordering::Relaxed) {
@@ -2268,7 +2324,7 @@ fn log_fault_message(info: &sel4_sys::seL4_MessageInfo, badge: sel4_sys::seL4_Wo
                 regs = &regs[..len],
             );
         }
-        return false;
+        return FaultDisposition::Misrouted;
     }
 
     let ip_hint = regs
@@ -2363,7 +2419,7 @@ fn log_fault_message(info: &sel4_sys::seL4_MessageInfo, badge: sel4_sys::seL4_Wo
         }
     }
 
-    true
+    FaultDisposition::Handled
 }
 
 struct StagedMessage {
@@ -2427,6 +2483,7 @@ static BOOTSTRAP_DISPATCH_STREAM_SEEN: AtomicBool = AtomicBool::new(false);
 
 pub(crate) struct KernelIpc {
     endpoint: sel4_sys::seL4_CPtr,
+    fault_endpoint: sel4_sys::seL4_CPtr,
     staged_bootstrap: Option<StagedMessage>,
     staged_forwarded: bool,
     handlers_ready: bool,
@@ -2444,7 +2501,7 @@ fn current_node_id() -> sel4_sys::seL4_NodeId {
 }
 
 impl KernelIpc {
-    pub(crate) fn new(endpoint: sel4_sys::seL4_CPtr) -> Self {
+    pub(crate) fn new(endpoint: sel4_sys::seL4_CPtr, fault_endpoint: sel4_sys::seL4_CPtr) -> Self {
         log::info!(
             "[ipc] root EP installed at slot=0x{ep:04x} (role=LOG+CONTROL / QUEEN bootstrap)",
             ep = endpoint
@@ -2453,6 +2510,12 @@ impl KernelIpc {
             "[ipc] EP 0x{ep:04x} loop online; waiting for messages",
             ep = endpoint
         );
+        if fault_endpoint != sel4_sys::seL4_CapNull {
+            log::info!(
+                "[ipc] fault EP installed at slot=0x{ep:04x} (dedicated fault handler)",
+                ep = fault_endpoint
+            );
+        }
         let cpuid = current_node_id();
         log::info!(
             "[ipc] EP 0x{ep:04x}: dispatcher thread initialised on core={cpuid}",
@@ -2461,6 +2524,7 @@ impl KernelIpc {
         );
         Self {
             endpoint,
+            fault_endpoint,
             staged_bootstrap: None,
             staged_forwarded: false,
             handlers_ready: false,
@@ -2476,6 +2540,67 @@ impl KernelIpc {
             || info.label() != 0
             || info.extra_caps() != 0
             || info.caps_unwrapped() != 0
+    }
+
+    fn reply_empty() {
+        unsafe {
+            sel4_sys::seL4_Reply(sel4_sys::seL4_MessageInfo::new(0, 0, 0, 0));
+        }
+    }
+
+    fn warn_fault_length(label: u64, len: usize, badge: sel4_sys::seL4_Word) {
+        static FAULT_LENGTH_WARNED: AtomicBool = AtomicBool::new(false);
+        if !FAULT_LENGTH_WARNED.swap(true, Ordering::Relaxed) {
+            log::warn!(
+                target: "root_task::kernel::fault",
+                "[fault] suspicious fault length badge=0x{badge:04x} label=0x{label:08x} len={len}",
+                badge = badge,
+                label = label,
+                len = len,
+            );
+        }
+    }
+
+    fn reply_line(bytes: &[u8]) {
+        let word_bytes = core::mem::size_of::<sel4_sys::seL4_Word>();
+        let mut words_written: usize = 0;
+        for (index, chunk) in bytes.chunks(word_bytes).enumerate().take(MAX_MESSAGE_WORDS) {
+            let mut buf = [0u8; core::mem::size_of::<sel4_sys::seL4_Word>()];
+            buf[..chunk.len()].copy_from_slice(chunk);
+            let value = sel4_sys::seL4_Word::from_le_bytes(buf);
+            unsafe {
+                sel4_sys::seL4_SetMR(index as i32, value);
+            }
+            words_written = words_written.saturating_add(1);
+        }
+
+        unsafe {
+            let info =
+                sel4_sys::seL4_MessageInfo::new(0, 0, 0, words_written as sel4_sys::seL4_Word);
+            sel4_sys::seL4_Reply(info);
+        }
+    }
+
+    fn reply_control_ack(&self, verb: &str, detail: Option<&str>) {
+        let mut line: HeaplessString<{ crate::serial::DEFAULT_LINE_CAPACITY }> =
+            HeaplessString::new();
+        let ack = AckLine {
+            status: AckStatus::Ok,
+            verb,
+            detail,
+        };
+        if render_ack(&mut line, &ack).is_err() {
+            line.clear();
+            let _ = line.push_str("OK ");
+            let _ = line.push_str(verb);
+        }
+        let _ = line.push_str("\n");
+        Self::reply_line(line.as_bytes());
+        log::debug!(
+            target: "root_task::kernel::fault",
+            "[control] replied ack verb={verb} detail={detail:?} len={}",
+            line.len()
+        );
     }
 
     fn handle_unknown_fault_msg(
@@ -2498,6 +2623,63 @@ impl KernelIpc {
             "[ipc] EP 0x{ep:04x}: control stream active (label=0x{label:02X})",
             ep = self.endpoint,
             label = label,
+        );
+    }
+
+    fn poll_fault_endpoint(&mut self, now_ms: u64) {
+        if self.fault_endpoint == sel4_sys::seL4_CapNull {
+            return;
+        }
+
+        let mut badge: sel4_sys::seL4_Word = 0;
+        let info = unsafe { sel4_sys::seL4_Poll(self.fault_endpoint, &mut badge) };
+        if !Self::message_present(&info, badge) {
+            return;
+        }
+
+        let kind = classify_ep_message(&info, true);
+        match kind {
+            EpMessageKind::Fault { length_valid } => {
+                if !length_valid {
+                    Self::warn_fault_length(info.label(), info.length() as usize, badge);
+                }
+                let disposition = log_fault_message(&info, badge);
+                Self::reply_empty();
+                if matches!(disposition, FaultDisposition::Handled) {
+                    return;
+                }
+            }
+            EpMessageKind::BootstrapControl
+            | EpMessageKind::LogControl
+            | EpMessageKind::Control { .. } => {
+                log::debug!(
+                    target: "root_task::kernel::fault",
+                    "[fault] control-plane message delivered to fault EP label=0x{label:08x} badge=0x{badge:04x} len={len} (routing reply to unblock sender)",
+                    label = info.label(),
+                    badge = badge,
+                    len = info.length(),
+                );
+                Self::reply_empty();
+                return;
+            }
+            EpMessageKind::Unknown { label, length } => {
+                log::debug!(
+                    target: "root_task::kernel::fault",
+                    "[fault] unknown message on fault EP label=0x{label:08x} badge=0x{badge:04x} len={len}",
+                    label = label,
+                    badge = badge,
+                    len = length,
+                );
+                Self::reply_empty();
+                return;
+            }
+        }
+
+        log::trace!(
+            target: "root_task::kernel::fault",
+            "[fault] poll_fault_endpoint complete badge=0x{badge:04x} now_ms={now_ms}",
+            badge = badge,
+            now_ms = now_ms,
         );
     }
 
@@ -2525,7 +2707,7 @@ impl KernelIpc {
         }
 
         let msg_len = info.length();
-        let kind = classify_ep_message(&info);
+        let kind = classify_ep_message(&info, false);
         if bootstrap {
             log::trace!(
                 "B5.recv ret badge=0x{badge:016x} info=0x{info:08x} len={msg_len}",
@@ -2565,18 +2747,11 @@ impl KernelIpc {
         match kind {
             EpMessageKind::Fault { length_valid } => {
                 if !length_valid {
-                    static FAULT_LENGTH_WARNED: AtomicBool = AtomicBool::new(false);
-                    if !FAULT_LENGTH_WARNED.swap(true, Ordering::Relaxed) {
-                        log::warn!(
-                            target: "root_task::kernel::fault",
-                            "[fault] suspicious fault length badge=0x{badge:04x} label=0x{label:08x} len={len}",
-                            badge = badge,
-                            label = info.label(),
-                            len = info.length(),
-                        );
-                    }
+                    Self::warn_fault_length(info.label(), info.length() as usize, badge);
                 }
-                if log_fault_message(&info, badge) {
+                let disposition = log_fault_message(&info, badge);
+                Self::reply_empty();
+                if matches!(disposition, FaultDisposition::Handled) {
                     return true;
                 }
             }
@@ -2606,7 +2781,8 @@ impl KernelIpc {
                     label = label,
                     len = info.length(),
                 );
-                return false;
+                self.reply_control_ack("AUTH", Some("control"));
+                return true;
             }
             EpMessageKind::Unknown { label, length } => {
                 Self::handle_unknown_fault_msg(badge, label as sel4_sys::seL4_Word, length);
@@ -2665,10 +2841,15 @@ impl IpcDispatcher for KernelIpc {
         if !self.fault_loop_announced {
             log::info!(
                 "[fault] handler loop online; waiting for fault messages (ep=0x{ep:04x})",
-                ep = self.endpoint
+                ep = if self.fault_endpoint != sel4_sys::seL4_CapNull {
+                    self.fault_endpoint
+                } else {
+                    self.endpoint
+                }
             );
             self.fault_loop_announced = true;
         }
+        self.poll_fault_endpoint(now_ms);
         let _ = self.poll_endpoint(now_ms, false);
         if self.handlers_ready {
             self.forward_staged(now_ms);
@@ -2686,6 +2867,7 @@ impl IpcDispatcher for KernelIpc {
     }
 
     fn bootstrap_poll(&mut self, now_ms: u64) -> bool {
+        self.poll_fault_endpoint(now_ms);
         self.poll_endpoint(now_ms, true)
     }
 
@@ -2767,7 +2949,7 @@ mod tests {
         let info = sel4_sys::seL4_MessageInfo::new(0x11, 0, 0, 2);
         let staged = StagedMessage::from_parts(info, 0xAA, &[0xFE, 0xED]);
 
-        let mut ipc = KernelIpc::new(0x200);
+        let mut ipc = KernelIpc::new(0x200, sel4_sys::seL4_CapNull);
         ipc.staged_bootstrap = Some(staged);
 
         ipc.dispatch(0);
