@@ -380,13 +380,13 @@ impl NetStack {
             (_, TcpState::SynReceived) => {
                 info!(
                     target: "root_task::net",
-                    "[tcp] connect.begin addr={peer} port={port}"
+                    "[tcp] connect.begin addr={peer} port={port} iface_ip={iface_ip}"
                 );
             }
             (_, TcpState::Established) => {
                 info!(
                     target: "root_task::net",
-                    "[tcp] connect.ok addr={peer} port={port}"
+                    "[tcp] connect.ok addr={peer} port={port} iface_ip={iface_ip}"
                 );
                 session_state.connect_reported = true;
             }
@@ -399,8 +399,7 @@ impl NetStack {
         {
             warn!(
                 target: "root_task::net",
-                "[tcp] connect.err addr={peer} port={} err={:?}",
-                port,
+                "[tcp] connect.err addr={peer} port={port} iface_ip={iface_ip} err={:?}",
                 current
             );
             session_state.connect_reported = true;
