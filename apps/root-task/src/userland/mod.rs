@@ -328,7 +328,7 @@ where
     V: CapabilityValidator,
 {
     if let Some(handler) = bootstrap_ipc {
-        pump = pump.with_console_context(ctx.bootinfo, ctx.ep_slot, ctx.uart_slot);
+        pump = pump.with_console_context(ctx.bootinfo, ctx.endpoints.control.raw(), ctx.uart_slot);
         pump = pump.with_bootstrap_handler(handler);
     }
 
