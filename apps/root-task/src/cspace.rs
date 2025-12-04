@@ -2,8 +2,16 @@
 
 pub mod tuples;
 
-use crate::sel4::{self, BootInfoExt};
+use core::sync::atomic::{AtomicBool, Ordering};
+
+use crate::sel4::{self, BootInfoExt, CapTag};
 use sel4_sys::{seL4_BootInfo, seL4_CPtr, seL4_Error, seL4_Word};
+
+fn is_cnode_cap(raw_ty: seL4_Word) -> bool {
+    matches!(CapTag::from_raw(raw_ty), Some(CapTag::CNode))
+}
+
+static DEST_ROOT_LOGGED: AtomicBool = AtomicBool::new(false);
 
 /// Helper managing allocation within the init thread's capability space.
 pub struct CSpace {
@@ -114,7 +122,7 @@ impl CSpace {
         let ident = sel4::debug_cap_identify(self.root);
         if ident != 0 {
             assert!(
-                ident == sel4_sys::seL4_CapTableObject as seL4_Word,
+                is_cnode_cap(ident),
                 "dest root 0x{root:04x} identify=0x{ident:08x}; expected CNode capability",
                 root = self.root,
                 ident = ident,
@@ -125,6 +133,13 @@ impl CSpace {
             sel4_sys::seL4_CapInitThreadCNode,
             "dest root expected to be init CNode",
         );
+        if !DEST_ROOT_LOGGED.swap(true, Ordering::AcqRel) {
+            log::info!(
+                "[cspace] using CSpace root=0x{root:04x} (type=0x{ident:08x}) as destRoot for CNode ops",
+                root = self.root,
+                ident = ident,
+            );
+        }
         log::info!(
             "[cnode] Mint dst=0x{dst:04x} depth={depth}",
             dst = dst_slot,
