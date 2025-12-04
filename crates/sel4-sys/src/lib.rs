@@ -1569,6 +1569,47 @@ mod imp {
         }
     }
 
+    pub type seL4_UnknownSyscall_Msg = seL4_Word;
+    pub const seL4_UnknownSyscall_X0: seL4_UnknownSyscall_Msg = 0;
+    pub const seL4_UnknownSyscall_X1: seL4_UnknownSyscall_Msg = 1;
+    pub const seL4_UnknownSyscall_X2: seL4_UnknownSyscall_Msg = 2;
+    pub const seL4_UnknownSyscall_X3: seL4_UnknownSyscall_Msg = 3;
+    pub const seL4_UnknownSyscall_X4: seL4_UnknownSyscall_Msg = 4;
+    pub const seL4_UnknownSyscall_X5: seL4_UnknownSyscall_Msg = 5;
+    pub const seL4_UnknownSyscall_X6: seL4_UnknownSyscall_Msg = 6;
+    pub const seL4_UnknownSyscall_X7: seL4_UnknownSyscall_Msg = 7;
+    pub const seL4_UnknownSyscall_FaultIP: seL4_UnknownSyscall_Msg = 8;
+    pub const seL4_UnknownSyscall_SP: seL4_UnknownSyscall_Msg = 9;
+    pub const seL4_UnknownSyscall_LR: seL4_UnknownSyscall_Msg = 10;
+    pub const seL4_UnknownSyscall_SPSR: seL4_UnknownSyscall_Msg = 11;
+    pub const seL4_UnknownSyscall_Syscall: seL4_UnknownSyscall_Msg = 12;
+    pub const seL4_UnknownSyscall_Length: seL4_UnknownSyscall_Msg = 13;
+
+    pub type seL4_UserException_Msg = seL4_Word;
+    pub const seL4_UserException_FaultIP: seL4_UserException_Msg = 0;
+    pub const seL4_UserException_SP: seL4_UserException_Msg = 1;
+    pub const seL4_UserException_SPSR: seL4_UserException_Msg = 2;
+    pub const seL4_UserException_Number: seL4_UserException_Msg = 3;
+    pub const seL4_UserException_Code: seL4_UserException_Msg = 4;
+    pub const seL4_UserException_Length: seL4_UserException_Msg = 5;
+
+    pub type seL4_VMFault_Msg = seL4_Word;
+    pub const seL4_VMFault_IP: seL4_VMFault_Msg = 0;
+    pub const seL4_VMFault_Addr: seL4_VMFault_Msg = 1;
+    pub const seL4_VMFault_PrefetchFault: seL4_VMFault_Msg = 2;
+    pub const seL4_VMFault_FSR: seL4_VMFault_Msg = 3;
+    pub const seL4_VMFault_Length: seL4_VMFault_Msg = 4;
+
+    pub type seL4_CapFault_Msg = seL4_Word;
+    pub const seL4_CapFault_IP: seL4_CapFault_Msg = 0;
+    pub const seL4_CapFault_Addr: seL4_CapFault_Msg = 1;
+    pub const seL4_CapFault_InRecvPhase: seL4_CapFault_Msg = 2;
+    pub const seL4_CapFault_LookupFailureType: seL4_CapFault_Msg = 3;
+    pub const seL4_CapFault_BitsLeft: seL4_CapFault_Msg = 4;
+    pub const seL4_CapFault_DepthMismatch_BitsFound: seL4_CapFault_Msg = 5;
+    pub const seL4_CapFault_GuardMismatch_GuardFound: seL4_CapFault_Msg = 5;
+    pub const seL4_CapFault_GuardMismatch_BitsFound: seL4_CapFault_Msg = 6;
+
     #[derive(Clone, Copy)]
     pub struct seL4_CNode_CapData;
 
