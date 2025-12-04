@@ -505,6 +505,19 @@ fn generate_bindings(build_dir: &Path, config_sources: &[(PathBuf, String)]) {
             "seL4_.*|CNode.*|UntypedRetype|ARMPageTableMap|ARMPageMap|InvalidInvocation",
         );
 
+    for fault_symbol in [
+        "seL4_UnknownSyscall_Msg",
+        "seL4_UnknownSyscall_.*",
+        "seL4_UserException_Msg",
+        "seL4_UserException_.*",
+        "seL4_VMFault_Msg",
+        "seL4_VMFault_.*",
+        "seL4_CapFault_Msg",
+        "seL4_CapFault_.*",
+    ] {
+        builder = builder.blocklist_item(fault_symbol);
+    }
+
     for dir in include_dirs {
         builder = builder.clang_arg(format!("-I{}", dir.display()));
     }
