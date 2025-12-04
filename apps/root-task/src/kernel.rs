@@ -2209,6 +2209,35 @@ fn preview_payload(words: &[sel4_sys::seL4_Word]) -> PayloadPreview {
     }
 }
 
+fn summarize_preview(preview: PayloadPreview) -> Option<HeaplessString<128>> {
+    match preview {
+        PayloadPreview::Empty => None,
+        PayloadPreview::Utf8(text) => {
+            let mut summary = HeaplessString::<128>::new();
+            let _ = summary.push_str("utf8=\"");
+            let mut written = 0usize;
+            for ch in text.chars() {
+                if written >= 48 {
+                    let _ = summary.push_str("…");
+                    break;
+                }
+                if summary.push(ch).is_err() {
+                    break;
+                }
+                written += 1;
+            }
+            let _ = summary.push('"');
+            Some(summary)
+        }
+        PayloadPreview::Hex(lines) => {
+            let mut summary = HeaplessString::<128>::new();
+            let first = lines.first().map(|line| line.as_str()).unwrap_or("");
+            let _ = write!(summary, "hex-lines={} first={first}", lines.len());
+            Some(summary)
+        }
+    }
+}
+
 fn log_bootstrap_payload(words: &[sel4_sys::seL4_Word]) {
     if words.is_empty() {
         return;
@@ -2269,12 +2298,46 @@ struct FaultContext {
     len: usize,
 }
 
+struct StrayTracker {
+    signatures: HeaplessVec<(sel4_sys::seL4_Word, u64), 32>,
+    overflowed: bool,
+}
+
+impl StrayTracker {
+    const fn new() -> Self {
+        Self {
+            signatures: HeaplessVec::new(),
+            overflowed: false,
+        }
+    }
+
+    fn first_observation(&mut self, badge: sel4_sys::seL4_Word, label: u64) -> bool {
+        let signature = (badge, label);
+        if self.signatures.contains(&signature) {
+            return false;
+        }
+
+        if self.signatures.is_full() {
+            self.overflowed = true;
+            let _ = self.signatures.remove(0);
+        }
+
+        let _ = self.signatures.push(signature);
+
+        true
+    }
+
+    fn overflowed(&self) -> bool {
+        self.overflowed
+    }
+}
+
 struct FaultRegistry {
     next_badge: AtomicU64,
     sources: Mutex<HeaplessVec<FaultSource, 8>>,
     fatal_badges: Mutex<HeaplessVec<sel4_sys::seL4_Word, 8>>,
     unknown_badges: Mutex<HeaplessVec<sel4_sys::seL4_Word, 8>>,
-    stray_signatures: Mutex<HeaplessVec<(sel4_sys::seL4_Word, u64), 16>>,
+    stray_signatures: Mutex<StrayTracker>,
     suppressed_badges: Mutex<HeaplessVec<sel4_sys::seL4_Word, 8>>,
     tallies: Mutex<HeaplessVec<(sel4_sys::seL4_Word, u32), 8>>,
 }
@@ -2288,7 +2351,7 @@ impl FaultRegistry {
             sources: Mutex::new(HeaplessVec::new()),
             fatal_badges: Mutex::new(HeaplessVec::new()),
             unknown_badges: Mutex::new(HeaplessVec::new()),
-            stray_signatures: Mutex::new(HeaplessVec::new()),
+            stray_signatures: Mutex::new(StrayTracker::new()),
             suppressed_badges: Mutex::new(HeaplessVec::new()),
             tallies: Mutex::new(HeaplessVec::new()),
         }
@@ -2363,13 +2426,11 @@ impl FaultRegistry {
     }
 
     fn mark_stray(&self, badge: sel4_sys::seL4_Word, label: u64) -> bool {
-        let mut stray = self.stray_signatures.lock();
-        let signature = (badge, label);
-        if stray.contains(&signature) {
-            return false;
-        }
-        let _ = stray.push(signature);
-        true
+        self.stray_signatures.lock().first_observation(badge, label)
+    }
+
+    fn stray_overflowed(&self) -> bool {
+        self.stray_signatures.lock().overflowed()
     }
 
     fn mark_suppressed(&self, badge: sel4_sys::seL4_Word) -> bool {
@@ -2984,6 +3045,43 @@ impl KernelIpc {
         }
     }
 
+    fn log_stray_fault(
+        &self,
+        info: &sel4_sys::seL4_MessageInfo,
+        badge: sel4_sys::seL4_Word,
+        label: u64,
+        length: usize,
+    ) {
+        let payload =
+            copy_message_words(*info, |index| unsafe { sel4_sys::seL4_GetMR(index as i32) });
+        let preview = preview_payload(payload.as_slice());
+        let summary = summarize_preview(preview);
+        let overflow = FAULT_REGISTRY.stray_overflowed();
+
+        match summary {
+            Some(detail) => {
+                log::warn!(
+                    target: "root_task::kernel::fault",
+                    "[fault] stray message on fault EP: badge=0x{badge:04x} label=0x{label:08x} len={len} payload={detail}{overflow}",
+                    badge = badge,
+                    label = label,
+                    len = length,
+                    overflow = if overflow { " (tracker overflow)" } else { "" },
+                );
+            }
+            None => {
+                log::warn!(
+                    target: "root_task::kernel::fault",
+                    "[fault] stray message on fault EP: badge=0x{badge:04x} label=0x{label:08x} len={len}{overflow}",
+                    badge = badge,
+                    label = label,
+                    len = length,
+                    overflow = if overflow { " (tracker overflow)" } else { "" },
+                );
+            }
+        }
+    }
+
     fn reply_line(bytes: &[u8]) {
         let word_bytes = core::mem::size_of::<sel4_sys::seL4_Word>();
         let mut words_written: usize = 0;
@@ -3066,13 +3164,7 @@ impl KernelIpc {
 
             if badge == 0 || !is_fault_label(label) {
                 if FAULT_REGISTRY.mark_stray(badge, label) {
-                    log::warn!(
-                        target: "root_task::kernel::fault",
-                        "[fault] stray message on fault EP: badge=0x{badge:04x} label=0x{label:08x} len={len}",
-                        badge = badge,
-                        label = label,
-                        len = length,
-                    );
+                    self.log_stray_fault(&info, badge, label, length);
                 }
                 continue;
             }
@@ -3414,6 +3506,20 @@ mod tests {
         assert_eq!(bounded_message_words(info), MAX_MESSAGE_WORDS);
         assert_eq!(copied[0], 0);
         assert_eq!(copied[MAX_MESSAGE_WORDS - 1], MAX_MESSAGE_WORDS - 1);
+    }
+
+    #[test]
+    fn stray_tracker_suppresses_duplicates_after_overflow() {
+        let mut tracker = StrayTracker::new();
+
+        for idx in 0..32u64 {
+            assert!(tracker.first_observation(idx, idx));
+        }
+
+        assert!(!tracker.first_observation(1, 1));
+        assert!(tracker.first_observation(0xDEAD, 0x0E));
+        assert!(tracker.overflowed());
+        assert!(!tracker.first_observation(0xDEAD, 0x0E));
     }
 
     #[test]
