@@ -10,6 +10,8 @@ pub struct CSpace {
     root: seL4_CPtr,
     bits: u8,
     next_free: seL4_CPtr,
+    empty_start: seL4_CPtr,
+    empty_end: seL4_CPtr,
 }
 
 impl CSpace {
@@ -20,6 +22,8 @@ impl CSpace {
             root: bi.init_cnode_cap(),
             bits: bi.init_cnode_bits() as u8,
             next_free: bi.empty.start,
+            empty_start: bi.empty.start,
+            empty_end: bi.empty.end,
         }
     }
 
@@ -44,7 +48,7 @@ impl CSpace {
     /// Allocates the next available slot from the init CSpace.
     pub fn alloc_slot(&mut self) -> Result<seL4_CPtr, seL4_Error> {
         let limit = 1u64 << self.bits;
-        if (self.next_free as u64) >= limit {
+        if (self.next_free as u64) >= limit || self.next_free >= self.empty_end {
             return Err(sel4_sys::seL4_NotEnoughMemory);
         }
         let slot = self.next_free;
@@ -93,6 +97,34 @@ impl CSpace {
         badge: seL4_Word,
     ) -> seL4_Error {
         let depth = self.bits;
+        let limit = 1u64 << depth;
+        assert!(
+            (dst_slot as u64) < limit,
+            "dest slot 0x{dst_slot:04x} exceeds cnode depth {depth}",
+            dst_slot = dst_slot,
+            depth = depth,
+        );
+        assert!(
+            dst_slot >= self.empty_start && dst_slot < self.empty_end,
+            "dest slot 0x{dst_slot:04x} outside empty window [0x{start:04x}..0x{end:04x})",
+            dst_slot = dst_slot,
+            start = self.empty_start,
+            end = self.empty_end,
+        );
+        let ident = sel4::debug_cap_identify(self.root);
+        if ident != 0 {
+            assert!(
+                ident == sel4_sys::seL4_CapTableObject as seL4_Word,
+                "dest root 0x{root:04x} identify=0x{ident:08x}; expected CNode capability",
+                root = self.root,
+                ident = ident,
+            );
+        }
+        debug_assert_eq!(
+            self.root,
+            sel4_sys::seL4_CapInitThreadCNode,
+            "dest root expected to be init CNode",
+        );
         log::info!(
             "[cnode] Mint dst=0x{dst:04x} depth={depth}",
             dst = dst_slot,
