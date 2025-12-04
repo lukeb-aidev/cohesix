@@ -2414,23 +2414,23 @@ fn log_fault_message(info: &sel4_sys::seL4_MessageInfo, badge: sel4_sys::seL4_Wo
     match fault_tag {
         FAULT_TAG_UNKNOWN_SYSCALL => {
             let fault_ip = regs
-                .get(sel4_sys::seL4_UnknownSyscall_FaultIP as usize)
+                .get(sel4_sys::seL4_UnknownSyscall_Msg::seL4_UnknownSyscall_FaultIP as usize)
                 .copied()
                 .unwrap_or_default();
             let sp = regs
-                .get(sel4_sys::seL4_UnknownSyscall_SP as usize)
+                .get(sel4_sys::seL4_UnknownSyscall_Msg::seL4_UnknownSyscall_SP as usize)
                 .copied()
                 .unwrap_or_default();
             let lr = regs
-                .get(sel4_sys::seL4_UnknownSyscall_LR as usize)
+                .get(sel4_sys::seL4_UnknownSyscall_Msg::seL4_UnknownSyscall_LR as usize)
                 .copied()
                 .unwrap_or_default();
             let spsr = regs
-                .get(sel4_sys::seL4_UnknownSyscall_SPSR as usize)
+                .get(sel4_sys::seL4_UnknownSyscall_Msg::seL4_UnknownSyscall_SPSR as usize)
                 .copied()
                 .unwrap_or_default();
             let syscall = regs
-                .get(sel4_sys::seL4_UnknownSyscall_Syscall as usize)
+                .get(sel4_sys::seL4_UnknownSyscall_Msg::seL4_UnknownSyscall_Syscall as usize)
                 .copied()
                 .unwrap_or_default();
             fingerprint.ip = fault_ip;
@@ -2448,23 +2448,23 @@ fn log_fault_message(info: &sel4_sys::seL4_MessageInfo, badge: sel4_sys::seL4_Wo
         }
         FAULT_TAG_USER_EXCEPTION => {
             let fault_ip = regs
-                .get(sel4_sys::seL4_UserException_FaultIP as usize)
+                .get(sel4_sys::seL4_UserException_Msg::seL4_UserException_FaultIP as usize)
                 .copied()
                 .unwrap_or_default();
             let stack = regs
-                .get(sel4_sys::seL4_UserException_SP as usize)
+                .get(sel4_sys::seL4_UserException_Msg::seL4_UserException_SP as usize)
                 .copied()
                 .unwrap_or_default();
             let spsr = regs
-                .get(sel4_sys::seL4_UserException_SPSR as usize)
+                .get(sel4_sys::seL4_UserException_Msg::seL4_UserException_SPSR as usize)
                 .copied()
                 .unwrap_or_default();
             let number = regs
-                .get(sel4_sys::seL4_UserException_Number as usize)
+                .get(sel4_sys::seL4_UserException_Msg::seL4_UserException_Number as usize)
                 .copied()
                 .unwrap_or_default();
             let code = regs
-                .get(sel4_sys::seL4_UserException_Code as usize)
+                .get(sel4_sys::seL4_UserException_Msg::seL4_UserException_Code as usize)
                 .copied()
                 .unwrap_or_default();
             fingerprint.ip = fault_ip;
@@ -2482,19 +2482,19 @@ fn log_fault_message(info: &sel4_sys::seL4_MessageInfo, badge: sel4_sys::seL4_Wo
         }
         FAULT_TAG_VMFAULT => {
             let ip = regs
-                .get(sel4_sys::seL4_VMFault_IP as usize)
+                .get(sel4_sys::seL4_VMFault_Msg::seL4_VMFault_IP as usize)
                 .copied()
                 .unwrap_or_default();
             let addr = regs
-                .get(sel4_sys::seL4_VMFault_Addr as usize)
+                .get(sel4_sys::seL4_VMFault_Msg::seL4_VMFault_Addr as usize)
                 .copied()
                 .unwrap_or_default();
             let prefetch = regs
-                .get(sel4_sys::seL4_VMFault_PrefetchFault as usize)
+                .get(sel4_sys::seL4_VMFault_Msg::seL4_VMFault_PrefetchFault as usize)
                 .copied()
                 .unwrap_or_default();
             let fsr = regs
-                .get(sel4_sys::seL4_VMFault_FSR as usize)
+                .get(sel4_sys::seL4_VMFault_Msg::seL4_VMFault_FSR as usize)
                 .copied()
                 .unwrap_or_default();
             fingerprint.ip = ip;
@@ -2511,19 +2511,19 @@ fn log_fault_message(info: &sel4_sys::seL4_MessageInfo, badge: sel4_sys::seL4_Wo
         }
         FAULT_TAG_CAP => {
             let fault_ip = regs
-                .get(sel4_sys::seL4_CapFault_IP as usize)
+                .get(sel4_sys::seL4_CapFault_Msg::seL4_CapFault_IP as usize)
                 .copied()
                 .unwrap_or_default();
             let addr = regs
-                .get(sel4_sys::seL4_CapFault_Addr as usize)
+                .get(sel4_sys::seL4_CapFault_Msg::seL4_CapFault_Addr as usize)
                 .copied()
                 .unwrap_or_default();
             let in_recv = regs
-                .get(sel4_sys::seL4_CapFault_InRecvPhase as usize)
+                .get(sel4_sys::seL4_CapFault_Msg::seL4_CapFault_InRecvPhase as usize)
                 .copied()
                 .unwrap_or_default();
             let lookup = regs
-                .get(sel4_sys::seL4_CapFault_LookupFailureType as usize)
+                .get(sel4_sys::seL4_CapFault_Msg::seL4_CapFault_LookupFailureType as usize)
                 .copied()
                 .unwrap_or_default();
             fingerprint.ip = fault_ip;
