@@ -209,6 +209,7 @@ pub struct NetStack {
     ip: Ipv4Address,
     gateway: Option<Ipv4Address>,
     prefix_len: u8,
+    listen_port: u16,
     session_active: bool,
     listener_announced: bool,
     active_client_id: Option<u64>,
@@ -228,6 +229,10 @@ struct PollSnapshot {
     session_active: bool,
     auth_state: AuthState,
     listener_ready: bool,
+    tcp_state: TcpState,
+    can_recv: bool,
+    can_send: bool,
+    staged_events: usize,
 }
 
 /// Initialise the network console stack, translating low-level errors into
@@ -296,12 +301,13 @@ impl NetStack {
         ip: IpAddress,
         conn_id: u64,
         socket: &TcpSocket,
+        listen_port: u16,
     ) {
         let (peer, port) = Self::peer_parts(peer_endpoint, socket);
         let local_port = socket
             .local_endpoint()
             .map(|endpoint| endpoint.port)
-            .unwrap_or(CONSOLE_TCP_PORT);
+            .unwrap_or(listen_port);
         log::info!(
             "[cohsh-net] conn new id={} local={}:{} remote={}:{}",
             conn_id,
@@ -342,23 +348,28 @@ impl NetStack {
         );
     }
 
-    fn log_poll_snapshot(&mut self) {
-        let snapshot = PollSnapshot {
-            session_active: self.session_active,
-            auth_state: self.auth_state,
-            listener_ready: self.listener_announced,
-        };
-
+    fn log_poll_snapshot(&mut self, snapshot: PollSnapshot) {
         if self.last_poll_snapshot == Some(snapshot) {
+            trace!(
+                "[cohsh-net] poll state unchanged: state={:?} active={} auth={:?} recv={} send={}",
+                snapshot.tcp_state,
+                snapshot.session_active,
+                snapshot.auth_state,
+                snapshot.can_recv,
+                snapshot.can_send,
+            );
             return;
         }
 
         info!(
-            "[cohsh-net] poll state: session_active={} auth_state={:?} listener_ready={} staged_events={}",
+            "[cohsh-net] poll state: tcp={:?} session_active={} auth_state={:?} listener_ready={} recv={} send={} staged_events={}",
+            snapshot.tcp_state,
             snapshot.session_active,
             snapshot.auth_state,
             snapshot.listener_ready,
-            self.events.len(),
+            snapshot.can_recv,
+            snapshot.can_send,
+            snapshot.staged_events,
         );
         self.last_poll_snapshot = Some(snapshot);
     }
@@ -489,6 +500,7 @@ impl NetStack {
             ip,
             gateway,
             prefix_len: prefix,
+            listen_port: CONSOLE_TCP_PORT,
             session_active: false,
             listener_announced: false,
             active_client_id: None,
@@ -553,7 +565,6 @@ impl NetStack {
             self.telemetry.link_up = true;
         }
         self.telemetry.tx_drops = self.device.tx_drop_count();
-        self.log_poll_snapshot();
         activity
     }
 
@@ -565,14 +576,6 @@ impl NetStack {
 
         {
             let socket = self.sockets.get_mut::<TcpSocket>(self.tcp_handle);
-            info!(
-                "[cohsh-net] tcp poll: state={:?} session_active={} auth_state={:?} can_recv={} can_send={}",
-                socket.state(),
-                self.session_active,
-                self.auth_state,
-                socket.can_recv(),
-                socket.can_send()
-            );
             Self::record_peer_endpoint(&mut self.peer_endpoint, socket.remote_endpoint());
             Self::log_tcp_state_change(
                 &mut self.session_state,
@@ -587,20 +590,20 @@ impl NetStack {
                 if !self.listener_announced {
                     info!(
                         "[cohsh-net] listen tcp 0.0.0.0:{} iface_ip={}",
-                        CONSOLE_TCP_PORT, self.ip
+                        self.listen_port, self.ip
                     );
                 }
-                match socket.listen(IpListenEndpoint::from(CONSOLE_TCP_PORT)) {
+                match socket.listen(IpListenEndpoint::from(self.listen_port)) {
                     Ok(()) => {
                         info!(
                             "[net-console] tcp listener bound: port={} iface_ip={}",
-                            CONSOLE_TCP_PORT, self.ip
+                            self.listen_port, self.ip
                         );
                     }
                     Err(err) => {
                         log::error!(
                             "[cohsh-net] listen: tcp/{} failed: {:?}",
-                            CONSOLE_TCP_PORT,
+                            self.listen_port,
                             err
                         );
                         warn!("[net-console] failed to start TCP console listener: {err}",);
@@ -610,7 +613,7 @@ impl NetStack {
                 if !self.listener_announced {
                     info!(
                         "[net-console] TCP console listening on 0.0.0.0:{} (iface ip={})",
-                        CONSOLE_TCP_PORT, self.ip
+                        self.listen_port, self.ip
                     );
                     self.listener_announced = true;
                 }
@@ -633,7 +636,7 @@ impl NetStack {
                 let local_port = socket
                     .local_endpoint()
                     .map(|endpoint| endpoint.port)
-                    .unwrap_or(CONSOLE_TCP_PORT);
+                    .unwrap_or(self.listen_port);
                 info!(
                     "[cohsh-net] conn new id={} local={}:{} remote={}:{}",
                     client_id, self.ip, local_port, peer_label, peer_port
@@ -662,6 +665,7 @@ impl NetStack {
                     IpAddress::Ipv4(self.ip),
                     client_id,
                     socket,
+                    self.listen_port,
                 );
                 if ECHO_MODE {
                     Self::set_auth_state(
@@ -1045,6 +1049,17 @@ impl NetStack {
                 );
                 activity = true;
             }
+
+            let snapshot = PollSnapshot {
+                session_active: self.session_active,
+                auth_state: self.auth_state,
+                listener_ready: self.listener_announced,
+                tcp_state: socket.state(),
+                can_recv: socket.can_recv(),
+                can_send: socket.can_send(),
+                staged_events: self.events.len(),
+            };
+            self.log_poll_snapshot(snapshot);
         }
 
         if reset_session {

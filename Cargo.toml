@@ -15,6 +15,7 @@ members = [
     "crates/sel4-panicking",
     "crates/sel4-runtime",
     "crates/sel4-sys",
+    "crates/net-constants",
     "tests",
 ]
 resolver = "2"
@@ -35,6 +36,7 @@ sha2 = "0.10"
 base64 = "0.22"
 hex = "0.4"
 rand = "0.9"
+cohesix-net-constants = { path = "crates/net-constants" }
 
 [patch.crates-io]
 sel4-sys = { path = "crates/sel4-sys" }

@@ -1,0 +1,9 @@
+# Author: Lukas Bower
+[package]
+name = "cohesix-net-constants"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+path = "src/lib.rs"
