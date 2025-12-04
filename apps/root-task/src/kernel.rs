@@ -2202,11 +2202,6 @@ const FAULT_TAG_VGIC_MAINTENANCE: u64 = 6;
 const FAULT_TAG_VCPU: u64 = 7;
 const FAULT_TAG_VPPI: u64 = 8;
 const FAULT_TAG_TIMEOUT: u64 = 9;
-const FAULT_TAG_NULL: u64 = sel4_sys::seL4_Fault_NullFault as u64;
-const FAULT_TAG_CAP: u64 = sel4_sys::seL4_Fault_CapFault as u64;
-const FAULT_TAG_UNKNOWN_SYSCALL: u64 = sel4_sys::seL4_Fault_UnknownSyscall as u64;
-const FAULT_TAG_USER_EXCEPTION: u64 = sel4_sys::seL4_Fault_UserException as u64;
-const FAULT_TAG_VMFAULT: u64 = sel4_sys::seL4_Fault_VMFault as u64;
 const CONTROL_LABEL_LOG_AND_BOOTSTRAP: u64 = 0;
 const CONTROL_LABEL_HEARTBEAT: u64 = 0xB2;
 const MAX_FAULT_REGS: usize = 14;
@@ -2366,37 +2361,15 @@ fn log_fault_message(info: &sel4_sys::seL4_MessageInfo, badge: sel4_sys::seL4_Wo
         regs[idx] = unsafe { sel4_sys::seL4_GetMR(idx as i32) };
     }
 
-    let mut fault = sel4_sys::seL4_Fault_t {
-        words: [0; MAX_FAULT_REGS],
-    };
-    fault.words[..len].copy_from_slice(&regs[..len]);
-
-    let decoded_tag = unsafe { sel4_sys::seL4_Fault_get_seL4_FaultType(fault) };
-    if !is_fault_label(decoded_tag) {
+    if !is_fault_label(fault_tag) {
         static MISROUTED_ONCE: AtomicBool = AtomicBool::new(false);
         if !MISROUTED_ONCE.swap(true, Ordering::Relaxed) {
             log::debug!(
                 target: "root_task::kernel::fault",
-                "[fault] non-fault message on fault EP badge=0x{badge:04x} label=0x{label:08x} decoded=0x{decoded:08x} len={len}; treating as control/misroute (badge 0 often indicates a control plane sender without a badge)",
+                "[fault] non-fault message on fault EP badge=0x{badge:04x} label=0x{label:08x} len={len}; treating as control/misroute (badge 0 often indicates a control plane sender without a badge)",
                 badge = badge,
                 label = fault_tag,
-                decoded = decoded_tag,
                 len = len,
-            );
-        }
-        return FaultAction::Misrouted;
-    }
-
-    if decoded_tag != fault_tag {
-        static FAULT_TAG_MISMATCH_LOGGED: AtomicBool = AtomicBool::new(false);
-        if !FAULT_TAG_MISMATCH_LOGGED.swap(true, Ordering::Relaxed) {
-            log::error!(
-                target: "root_task::kernel::fault",
-                "[fault] tag mismatch badge=0x{badge:04x} label=0x{label:08x} decoded=0x{decoded:08x} regs={regs:?}",
-                badge = badge,
-                label = fault_tag,
-                decoded = decoded_tag,
-                regs = &regs[..len],
             );
         }
         return FaultAction::Misrouted;
@@ -2407,7 +2380,7 @@ fn log_fault_message(info: &sel4_sys::seL4_MessageInfo, badge: sel4_sys::seL4_Wo
         .copied()
         .unwrap_or_else(|| regs.get(4).copied().unwrap_or(0));
     let mut sp_hint = regs.get(4).copied().unwrap_or_default();
-    let tag_name = fault_tag_name(decoded_tag);
+    let tag_name = fault_tag_name(fault_tag);
     let source_desc = fault_source_for(badge)
         .map(|source| {
             format!(
@@ -2421,7 +2394,7 @@ fn log_fault_message(info: &sel4_sys::seL4_MessageInfo, badge: sel4_sys::seL4_Wo
 
     let mut fingerprint = FaultFingerprint {
         badge,
-        fault_type: decoded_tag,
+        fault_type: fault_tag,
         ip: ip_hint,
         sp: sp_hint,
     };
@@ -2438,13 +2411,28 @@ fn log_fault_message(info: &sel4_sys::seL4_MessageInfo, badge: sel4_sys::seL4_Wo
         source_desc = source_desc,
     );
 
-    match decoded_tag {
+    match fault_tag {
         FAULT_TAG_UNKNOWN_SYSCALL => {
-            let fault_ip = unsafe { sel4_sys::seL4_Fault_UnknownSyscall_get_FaultIP(fault) };
-            let sp = unsafe { sel4_sys::seL4_Fault_UnknownSyscall_get_SP(fault) };
-            let lr = unsafe { sel4_sys::seL4_Fault_UnknownSyscall_get_LR(fault) };
-            let spsr = unsafe { sel4_sys::seL4_Fault_UnknownSyscall_get_SPSR(fault) };
-            let syscall = unsafe { sel4_sys::seL4_Fault_UnknownSyscall_get_Syscall(fault) };
+            let fault_ip = regs
+                .get(sel4_sys::seL4_UnknownSyscall_FaultIP as usize)
+                .copied()
+                .unwrap_or_default();
+            let sp = regs
+                .get(sel4_sys::seL4_UnknownSyscall_SP as usize)
+                .copied()
+                .unwrap_or_default();
+            let lr = regs
+                .get(sel4_sys::seL4_UnknownSyscall_LR as usize)
+                .copied()
+                .unwrap_or_default();
+            let spsr = regs
+                .get(sel4_sys::seL4_UnknownSyscall_SPSR as usize)
+                .copied()
+                .unwrap_or_default();
+            let syscall = regs
+                .get(sel4_sys::seL4_UnknownSyscall_Syscall as usize)
+                .copied()
+                .unwrap_or_default();
             fingerprint.ip = fault_ip;
             fingerprint.sp = sp;
             log::error!(
@@ -2459,11 +2447,26 @@ fn log_fault_message(info: &sel4_sys::seL4_MessageInfo, badge: sel4_sys::seL4_Wo
             );
         }
         FAULT_TAG_USER_EXCEPTION => {
-            let fault_ip = unsafe { sel4_sys::seL4_Fault_UserException_get_FaultIP(fault) };
-            let stack = unsafe { sel4_sys::seL4_Fault_UserException_get_Stack(fault) };
-            let spsr = unsafe { sel4_sys::seL4_Fault_UserException_get_SPSR(fault) };
-            let number = unsafe { sel4_sys::seL4_Fault_UserException_get_Number(fault) };
-            let code = unsafe { sel4_sys::seL4_Fault_UserException_get_Code(fault) };
+            let fault_ip = regs
+                .get(sel4_sys::seL4_UserException_FaultIP as usize)
+                .copied()
+                .unwrap_or_default();
+            let stack = regs
+                .get(sel4_sys::seL4_UserException_SP as usize)
+                .copied()
+                .unwrap_or_default();
+            let spsr = regs
+                .get(sel4_sys::seL4_UserException_SPSR as usize)
+                .copied()
+                .unwrap_or_default();
+            let number = regs
+                .get(sel4_sys::seL4_UserException_Number as usize)
+                .copied()
+                .unwrap_or_default();
+            let code = regs
+                .get(sel4_sys::seL4_UserException_Code as usize)
+                .copied()
+                .unwrap_or_default();
             fingerprint.ip = fault_ip;
             fingerprint.sp = stack;
             log::error!(
@@ -2478,10 +2481,22 @@ fn log_fault_message(info: &sel4_sys::seL4_MessageInfo, badge: sel4_sys::seL4_Wo
             );
         }
         FAULT_TAG_VMFAULT => {
-            let ip = unsafe { sel4_sys::seL4_Fault_VMFault_get_IP(fault) };
-            let addr = unsafe { sel4_sys::seL4_Fault_VMFault_get_Addr(fault) };
-            let prefetch = unsafe { sel4_sys::seL4_Fault_VMFault_get_PrefetchFault(fault) };
-            let fsr = unsafe { sel4_sys::seL4_Fault_VMFault_get_FSR(fault) };
+            let ip = regs
+                .get(sel4_sys::seL4_VMFault_IP as usize)
+                .copied()
+                .unwrap_or_default();
+            let addr = regs
+                .get(sel4_sys::seL4_VMFault_Addr as usize)
+                .copied()
+                .unwrap_or_default();
+            let prefetch = regs
+                .get(sel4_sys::seL4_VMFault_PrefetchFault as usize)
+                .copied()
+                .unwrap_or_default();
+            let fsr = regs
+                .get(sel4_sys::seL4_VMFault_FSR as usize)
+                .copied()
+                .unwrap_or_default();
             fingerprint.ip = ip;
             fingerprint.sp = sp_hint;
             log::error!(
@@ -2495,14 +2510,26 @@ fn log_fault_message(info: &sel4_sys::seL4_MessageInfo, badge: sel4_sys::seL4_Wo
             );
         }
         FAULT_TAG_CAP => {
-            let fault_ip = unsafe { sel4_sys::seL4_Fault_CapFault_get_IP(fault) };
-            let addr = unsafe { sel4_sys::seL4_Fault_CapFault_get_Addr(fault) };
-            let in_recv = unsafe { sel4_sys::seL4_Fault_CapFault_get_InRecvPhase(fault) };
-            let lookup = unsafe { sel4_sys::seL4_Fault_CapFault_get_LookupFailureType(fault) };
+            let fault_ip = regs
+                .get(sel4_sys::seL4_CapFault_IP as usize)
+                .copied()
+                .unwrap_or_default();
+            let addr = regs
+                .get(sel4_sys::seL4_CapFault_Addr as usize)
+                .copied()
+                .unwrap_or_default();
+            let in_recv = regs
+                .get(sel4_sys::seL4_CapFault_InRecvPhase as usize)
+                .copied()
+                .unwrap_or_default();
+            let lookup = regs
+                .get(sel4_sys::seL4_CapFault_LookupFailureType as usize)
+                .copied()
+                .unwrap_or_default();
             fingerprint.ip = fault_ip;
             log::error!(
                 target: "root_task::kernel::fault",
-                "[fault] cap fault badge=0x{badge:04x} ip=0x{fault_ip:016x} addr=0x{addr:016x} in_recv={} lookup={lookup} regs={regs:?}",
+                "[fault] cap fault badge=0x{badge:04x} ip=0x{fault_ip:016x} addr=0x{addr:016x} in_recv={in_recv} lookup={lookup} regs={regs:?}",
                 badge = badge,
                 fault_ip = fault_ip,
                 addr = addr,
@@ -2545,8 +2572,8 @@ fn log_fault_message(info: &sel4_sys::seL4_MessageInfo, badge: sel4_sys::seL4_Wo
         _ => {
             log::error!(
                 target: "root_task::kernel::fault",
-                "[fault] unrecognised fault tag={decoded_tag} badge=0x{badge:04x} regs={regs:?}",
-                decoded_tag = decoded_tag,
+                "[fault] unrecognised fault tag={fault_tag} badge=0x{badge:04x} regs={regs:?}",
+                fault_tag = fault_tag,
                 badge = badge,
                 regs = &regs[..len],
             );
@@ -2773,7 +2800,7 @@ impl KernelIpc {
         );
     }
 
-    fn poll_fault_endpoint(&mut self, now_ms: u64) {
+    fn poll_fault_endpoint(&mut self, _now_ms: u64) {
         if self.fault_endpoint == sel4_sys::seL4_CapNull {
             return;
         }
@@ -2853,13 +2880,6 @@ impl KernelIpc {
                 return;
             }
         }
-
-        log::trace!(
-            target: "root_task::kernel::fault",
-            "[fault] poll_fault_endpoint complete badge=0x{badge:04x} now_ms={now_ms}",
-            badge = badge,
-            now_ms = now_ms,
-        );
     }
 
     fn poll_endpoint(&mut self, now_ms: u64, bootstrap: bool) -> bool {
