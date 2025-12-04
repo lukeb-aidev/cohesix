@@ -5,15 +5,13 @@ pub mod tuples;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use crate::sel4::{self, BootInfoExt, CapTag};
-use sel4_sys::{seL4_BootInfo, seL4_CPtr, seL4_Error, seL4_Word, seL4_WordBits};
+use sel4_sys::{seL4_BootInfo, seL4_CPtr, seL4_Error, seL4_Word};
 
 fn is_cnode_cap(raw_ty: seL4_Word) -> bool {
     matches!(CapTag::from_raw(raw_ty), Some(CapTag::CNode))
 }
 
 static DEST_ROOT_LOGGED: AtomicBool = AtomicBool::new(false);
-
-const DIRECT_CNODE_DEPTH: u8 = seL4_WordBits as u8;
 
 /// Helper managing allocation within the init thread's capability space.
 pub struct CSpace {
@@ -81,7 +79,7 @@ impl CSpace {
         src_slot: seL4_CPtr,
         rights: sel4_sys::seL4_CapRights,
     ) -> seL4_Error {
-        let depth = DIRECT_CNODE_DEPTH;
+        let depth = sel4::word_bits() as u8;
         log::info!(
             "[cnode] Copy dst=0x{dst:04x} depth={depth}",
             dst = dst_slot,
@@ -106,7 +104,7 @@ impl CSpace {
         rights: sel4_sys::seL4_CapRights,
         badge: seL4_Word,
     ) -> seL4_Error {
-        let depth = DIRECT_CNODE_DEPTH;
+        let depth = sel4::word_bits() as u8;
         let limit = 1u64 << self.bits;
         assert!(
             (dst_slot as u64) < limit,
