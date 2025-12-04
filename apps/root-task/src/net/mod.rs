@@ -28,6 +28,8 @@ pub struct ConsoleNetConfig {
     pub auth_token: &'static str,
     /// Idle timeout applied to authenticated sessions (milliseconds).
     pub idle_timeout_ms: u64,
+    /// TCP port exposed by the console listener inside the VM.
+    pub listen_port: u16,
 }
 
 impl ConsoleNetConfig {
@@ -36,6 +38,7 @@ impl ConsoleNetConfig {
         Self {
             auth_token: AUTH_TOKEN,
             idle_timeout_ms: IDLE_TIMEOUT_MS,
+            listen_port: COHSH_TCP_PORT,
         }
     }
 }
@@ -110,3 +113,16 @@ pub use stack::*;
 mod queue;
 #[cfg(not(feature = "kernel"))]
 pub use queue::*;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_net_config_uses_console_port() {
+        let config = ConsoleNetConfig::default();
+
+        assert_eq!(config.listen_port, COHSH_TCP_PORT);
+        assert_ne!(config.listen_port, 0);
+    }
+}

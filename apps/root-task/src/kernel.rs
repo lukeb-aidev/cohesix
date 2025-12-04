@@ -44,7 +44,7 @@ use crate::event::{
 use crate::guards;
 use crate::hal::{HalError, Hardware, KernelHal};
 #[cfg(feature = "net-console")]
-use crate::net::{init_net_console, NetConsoleError, NetStack, CONSOLE_TCP_PORT};
+use crate::net::{init_net_console, ConsoleNetConfig, NetConsoleError, NetStack, CONSOLE_TCP_PORT};
 #[cfg(feature = "kernel")]
 use crate::ninedoor::NineDoorBridge;
 use crate::platform::{Platform, SeL4Platform};
@@ -1605,11 +1605,13 @@ fn bootstrap<P: Platform>(
         let net_stack = {
             log::info!("[boot] net-console: probing virtio-net");
             log::info!("[net-console] init: enter");
-            match init_net_console(&mut hal) {
+            let net_console_config = ConsoleNetConfig::default();
+            match init_net_console(&mut hal, net_console_config) {
                 Ok(stack) => {
                     log::info!("[boot] net-console: init ok; handle registered");
                     log::info!(
-                        "[net-console] init: success; tcp console will be available on port {CONSOLE_TCP_PORT}"
+                        "[net-console] init: success; tcp console will be available on port {}",
+                        net_console_config.listen_port
                     );
                     Some(stack)
                 }
@@ -2343,6 +2345,7 @@ struct FaultRegistry {
 }
 
 static FAULT_REGISTRY: FaultRegistry = FaultRegistry::new();
+static STRAY_FAULT_WARNED: AtomicBool = AtomicBool::new(false);
 
 impl FaultRegistry {
     const fn new() -> Self {
@@ -3045,6 +3048,18 @@ impl KernelIpc {
         }
     }
 
+    fn warn_stray_fault_once() {
+        if STRAY_FAULT_WARNED
+            .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
+        {
+            log::warn!(
+                target: "root_task::kernel::fault",
+                "[fault] stray or non-fault messages observed on fault EP; suppressing repeated WARN logs"
+            );
+        }
+    }
+
     fn log_stray_fault(
         &self,
         info: &sel4_sys::seL4_MessageInfo,
@@ -3060,7 +3075,7 @@ impl KernelIpc {
 
         match summary {
             Some(detail) => {
-                log::warn!(
+                log::debug!(
                     target: "root_task::kernel::fault",
                     "[fault] stray message on fault EP: badge=0x{badge:04x} label=0x{label:08x} len={len} payload={detail}{overflow}",
                     badge = badge,
@@ -3070,7 +3085,7 @@ impl KernelIpc {
                 );
             }
             None => {
-                log::warn!(
+                log::debug!(
                     target: "root_task::kernel::fault",
                     "[fault] stray message on fault EP: badge=0x{badge:04x} label=0x{label:08x} len={len}{overflow}",
                     badge = badge,
@@ -3163,9 +3178,11 @@ impl KernelIpc {
             let length = info.length() as usize;
 
             if badge == 0 || !is_fault_label(label) {
+                Self::warn_stray_fault_once();
                 if FAULT_REGISTRY.mark_stray(badge, label) {
                     self.log_stray_fault(&info, badge, label, length);
                 }
+                Self::reply_empty();
                 continue;
             }
 

@@ -35,7 +35,7 @@ use smoltcp::wire::{
 
 use super::{
     console_srv::{SessionEvent, TcpConsoleServer},
-    NetConsoleEvent, NetPoller, NetTelemetry, AUTH_TOKEN, CONSOLE_TCP_PORT, IDLE_TIMEOUT_MS,
+    ConsoleNetConfig, NetConsoleEvent, NetPoller, NetTelemetry,
 };
 use crate::drivers::virtio::net::{DriverError, VirtioNet};
 use crate::hal::{HalError, Hardware};
@@ -237,11 +237,14 @@ struct PollSnapshot {
 
 /// Initialise the network console stack, translating low-level errors into
 /// user-facing diagnostics.
-pub fn init_net_console<H>(hal: &mut H) -> Result<NetStack, NetConsoleError>
+pub fn init_net_console<H>(
+    hal: &mut H,
+    config: ConsoleNetConfig,
+) -> Result<NetStack, NetConsoleError>
 where
     H: Hardware<Error = HalError>,
 {
-    NetStack::new(hal).map_err(NetConsoleError::from)
+    NetStack::new(hal, config).map_err(NetConsoleError::from)
 }
 
 impl NetStack {
@@ -439,14 +442,14 @@ impl NetStack {
     }
 
     /// Constructs a network stack bound to the provided [`KernelEnv`].
-    pub fn new<H>(hal: &mut H) -> Result<Self, NetStackError>
+    pub fn new<H>(hal: &mut H, config: ConsoleNetConfig) -> Result<Self, NetStackError>
     where
         H: Hardware<Error = HalError>,
     {
         info!("[net-console] init: constructing smoltcp stack");
         let ip = Ipv4Address::new(DEFAULT_IP.0, DEFAULT_IP.1, DEFAULT_IP.2, DEFAULT_IP.3);
         let gateway = Ipv4Address::new(DEFAULT_GW.0, DEFAULT_GW.1, DEFAULT_GW.2, DEFAULT_GW.3);
-        Self::with_ipv4(hal, ip, DEFAULT_PREFIX, Some(gateway))
+        Self::with_ipv4(hal, ip, DEFAULT_PREFIX, Some(gateway), config)
     }
 
     fn with_ipv4(
@@ -454,6 +457,7 @@ impl NetStack {
         ip: Ipv4Address,
         prefix: u8,
         gateway: Option<Ipv4Address>,
+        console_config: ConsoleNetConfig,
     ) -> Result<Self, NetStackError> {
         info!(
             "[net-console] init: bringing up virtio-net with ip={ip}/{prefix} gateway={:?}",
@@ -472,10 +476,10 @@ impl NetStack {
             StorageGuard::acquire(&TCP_TX_STORAGE_IN_USE, NetStackError::TcpTxStorageInUse)?;
 
         let clock = NetworkClock::new();
-        let mut config = IfaceConfig::new(HardwareAddress::Ethernet(mac));
-        config.random_seed = RANDOM_SEED;
+        let mut iface_config = IfaceConfig::new(HardwareAddress::Ethernet(mac));
+        iface_config.random_seed = RANDOM_SEED;
 
-        let mut interface = Interface::new(config, &mut device, clock.now());
+        let mut interface = Interface::new(iface_config, &mut device, clock.now());
         info!("[net-console] smoltcp interface created; assigning ip={ip}/{prefix}");
         interface.update_ip_addrs(|addrs| {
             let cidr = IpCidr::new(IpAddress::from(ip), prefix);
@@ -495,12 +499,15 @@ impl NetStack {
             interface,
             sockets,
             tcp_handle: SocketHandle::default(),
-            server: TcpConsoleServer::new(AUTH_TOKEN, IDLE_TIMEOUT_MS),
+            server: TcpConsoleServer::new(
+                console_config.auth_token,
+                console_config.idle_timeout_ms,
+            ),
             telemetry: NetTelemetry::default(),
             ip,
             gateway,
             prefix_len: prefix,
-            listen_port: CONSOLE_TCP_PORT,
+            listen_port: console_config.listen_port,
             session_active: false,
             listener_announced: false,
             active_client_id: None,
