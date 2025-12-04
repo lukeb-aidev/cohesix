@@ -3,14 +3,14 @@
 //! Networking subsystem abstractions for host and seL4 targets.
 
 use crate::serial::DEFAULT_LINE_CAPACITY;
+pub use cohesix_net_constants::COHSH_TCP_PORT;
+use cohesix_net_constants::TCP_CONSOLE_PORT;
 use heapless::String as HeaplessString;
 
 pub use crate::net_consts::MAX_FRAME_LEN;
 
 /// TCP port exposed by the console listener inside the VM.
-pub const COHSH_TCP_PORT: u16 = 31337;
-/// Legacy alias for the console TCP port constant.
-pub const CONSOLE_TCP_PORT: u16 = COHSH_TCP_PORT;
+pub const CONSOLE_TCP_PORT: u16 = TCP_CONSOLE_PORT;
 /// Authentication token expected from TCP console clients.
 pub const AUTH_TOKEN: &str = "changeme";
 /// Idle timeout applied to authenticated TCP console sessions (milliseconds).
