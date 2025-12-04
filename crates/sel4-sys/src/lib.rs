@@ -1203,6 +1203,27 @@ mod imp {
         seL4_NoError
     }
 
+    #[inline(always)]
+    pub unsafe fn seL4_TCB_Suspend(service: seL4_TCB) -> seL4_Error {
+        let mut mr0: seL4_Word = 0;
+        let mut mr1: seL4_Word = 0;
+        let mut mr2: seL4_Word = 0;
+        let mut mr3: seL4_Word = 0;
+
+        let tag = seL4_MessageInfo::new(invocation_label_TCBSuspend as seL4_Word, 0, 0, 0);
+        let output_tag = seL4_CallWithMRs(service, tag, &mut mr0, &mut mr1, &mut mr2, &mut mr3);
+        let result = seL4_MessageInfo_get_label(output_tag) as seL4_Error;
+
+        if result != seL4_NoError {
+            seL4_SetMR(0, mr0);
+            seL4_SetMR(1, mr1);
+            seL4_SetMR(2, mr2);
+            seL4_SetMR(3, mr3);
+        }
+
+        result
+    }
+
     #[cfg(sel4_config_kernel_mcs)]
     #[inline(always)]
     pub unsafe fn seL4_Poll(src: seL4_CPtr, sender_badge: *mut seL4_Word) -> seL4_MessageInfo {
@@ -1899,6 +1920,11 @@ mod imp {
         _buffer_addr: seL4_Word,
         _buffer_frame: seL4_CPtr,
     ) -> seL4_Error {
+        unsupported_error()
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_TCB_Suspend(_service: seL4_TCB) -> seL4_Error {
         unsupported_error()
     }
 

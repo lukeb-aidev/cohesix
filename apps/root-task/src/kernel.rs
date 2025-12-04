@@ -12,7 +12,7 @@ use core::fmt::{self, Write};
 use core::ops::RangeInclusive;
 use core::panic::PanicInfo;
 use core::ptr;
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 
 #[cfg(feature = "timers-arch-counter")]
 use core::arch::asm;
@@ -2742,7 +2742,7 @@ fn suspend_fault_source(source: &FaultSource, fingerprint: &FaultFingerprint) {
     } else {
         log::error!(
             target: "root_task::kernel::fault",
-            "[fault] failed to suspend TCB source={label} badge=0x{badge:04x} tcb=0x{tcb:04x} err={} ({})",
+            "[fault] failed to suspend TCB source={label} badge=0x{badge:04x} tcb=0x{tcb:04x} err={result} ({name})",
             label = source.label,
             badge = source.badge,
             tcb = source.tcb_slot,
