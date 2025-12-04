@@ -532,18 +532,60 @@ pub struct BootFeatures {
     pub net_console: bool,
 }
 
+/// Control-plane endpoint used for LOG+CONTROL / queen bootstrap traffic.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ControlEndpoint(sel4_sys::seL4_CPtr);
+
+impl ControlEndpoint {
+    #[must_use]
+    pub fn raw(self) -> sel4_sys::seL4_CPtr {
+        self.0
+    }
+}
+
+/// Dedicated fault endpoint. Only valid as a target for `seL4_TCB_SetFaultHandler` and
+/// `seL4_Recv` in the fault handler loop; it must never be used for normal IPC.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FaultEndpoint(sel4_sys::seL4_CPtr);
+
+impl FaultEndpoint {
+    #[must_use]
+    pub fn raw(self) -> sel4_sys::seL4_CPtr {
+        self.0
+    }
+
+    #[must_use]
+    pub fn is_valid(self) -> bool {
+        self.0 != sel4_sys::seL4_CapNull
+    }
+}
+
+/// Aggregated endpoints provisioned by the kernel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct KernelEndpoints {
+    pub control: ControlEndpoint,
+    pub fault: FaultEndpoint,
+}
+
+impl KernelEndpoints {
+    pub fn new(control: sel4_sys::seL4_CPtr, fault: sel4_sys::seL4_CPtr) -> Self {
+        Self {
+            control: ControlEndpoint(control),
+            fault: FaultEndpoint(fault),
+        }
+    }
+}
+
 /// Aggregated bootstrap artefacts passed to userland for final bring-up.
 pub struct BootContext {
     /// Bootinfo view captured during kernel bootstrap.
     pub bootinfo: BootInfoView,
     /// Feature flags summarising the current profile.
     pub features: BootFeatures,
-    /// Root endpoint slot shared with userland subsystems.
-    pub ep_slot: sel4_sys::seL4_CPtr,
-    /// Fault endpoint dedicated to handling seL4 faults.
-    /// This endpoint must only be targeted by `seL4_TCB_SetFault` and receive
-    /// operations in the fault handler; do not use it for Send/Call IPC.
-    pub fault_ep_slot: sel4_sys::seL4_CPtr,
+    /// Root and fault endpoint bundle. The control endpoint handles LOG+CONTROL / queen
+    /// bootstrap traffic; the fault endpoint is reserved exclusively for seL4 fault
+    /// delivery.
+    pub endpoints: KernelEndpoints,
     /// PL011 UART slot reserved for the serial console.
     pub uart_slot: Option<sel4_sys::seL4_CPtr>,
     pub(crate) serial: RefCell<
@@ -1535,6 +1577,7 @@ fn bootstrap<P: Platform>(
     log::info!("[boot] after uart logger online");
 
     let uart_slot = uart_region.as_ref().map(|region| region.cap());
+    let endpoints = KernelEndpoints::new(ep_slot, fault_ep_slot);
 
     #[cfg(feature = "debug-input")]
     {
@@ -1589,7 +1632,7 @@ fn bootstrap<P: Platform>(
         let (net_stack, _) = NetStack::new(Ipv4Address::new(10, 0, 0, 2));
         log::info!("[boot] net-console init complete; continuing with timers and IPC");
         log::info!(target: "root_task::kernel", "[boot] phase: TimersAndIPC.begin");
-        let (timer, ipc) = run_timers_and_ipc_phase(ep_slot, fault_ep_slot).map_err(|err| {
+        let (timer, ipc) = run_timers_and_ipc_phase(endpoints).map_err(|err| {
             log::error!(
                 target: "root_task::kernel",
                 "[boot] TimersAndIPC: failed during bootstrap: {:?}",
@@ -1698,8 +1741,7 @@ fn bootstrap<P: Platform>(
         let ctx = BootContext {
             bootinfo: bootinfo_view,
             features,
-            ep_slot,
-            fault_ep_slot,
+            endpoints,
             uart_slot,
             serial: RefCell::new(Some(serial)),
             timer: RefCell::new(Some(timer)),
@@ -1714,8 +1756,7 @@ fn bootstrap<P: Platform>(
         let ctx = BootContext {
             bootinfo: bootinfo_view,
             features,
-            ep_slot,
-            fault_ep_slot,
+            endpoints,
             uart_slot,
             serial: RefCell::new(Some(serial)),
             timer: RefCell::new(Some(timer)),
@@ -1732,8 +1773,7 @@ const KERNEL_TIMER_PERIOD_MS: u64 = 5;
 
 #[cfg(feature = "bypass-timers-ipc")]
 fn run_timers_and_ipc_phase(
-    ep_slot: sel4_sys::seL4_CPtr,
-    fault_ep_slot: sel4_sys::seL4_CPtr,
+    endpoints: KernelEndpoints,
 ) -> Result<(KernelTimer, KernelIpc), BootError> {
     log::warn!(
         target: "root_task::kernel",
@@ -1748,16 +1788,15 @@ fn run_timers_and_ipc_phase(
     log::info!(
         target: "root_task::kernel",
         "[boot] TimersAndIPC: constructing placeholder ipc dispatcher ep=0x{ep:04x}",
-        ep = ep_slot
+        ep = endpoints.control.raw()
     );
-    let ipc = KernelIpc::new(ep_slot, fault_ep_slot);
+    let ipc = KernelIpc::new(endpoints.control, endpoints.fault);
     Ok((timer, ipc))
 }
 
 #[cfg(not(feature = "bypass-timers-ipc"))]
 fn run_timers_and_ipc_phase(
-    ep_slot: sel4_sys::seL4_CPtr,
-    fault_ep_slot: sel4_sys::seL4_CPtr,
+    endpoints: KernelEndpoints,
 ) -> Result<(KernelTimer, KernelIpc), BootError> {
     #[cfg(feature = "bypass-timers")]
     {
@@ -1777,13 +1816,13 @@ fn run_timers_and_ipc_phase(
         log::info!(
             target: "root_task::kernel",
             "[boot] TimersAndIPC: ipc.init.begin ep=0x{ep:04x}",
-            ep = ep_slot
+            ep = endpoints.control.raw()
         );
-        let ipc = KernelIpc::new(ep_slot, fault_ep_slot);
+        let ipc = KernelIpc::new(endpoints.control, endpoints.fault);
         log::info!(
             target: "root_task::kernel",
             "[boot] TimersAndIPC: ipc.init.end ep=0x{ep:04x} staged={staged}",
-            ep = ep_slot,
+            ep = endpoints.control.raw(),
             staged = ipc.staged_bootstrap.is_some()
         );
 
@@ -1825,13 +1864,13 @@ fn run_timers_and_ipc_phase(
         log::info!(
             target: "root_task::kernel",
             "[boot] TimersAndIPC: ipc.init.begin ep=0x{ep:04x}",
-            ep = ep_slot
+            ep = endpoints.control.raw()
         );
-        let ipc = KernelIpc::new(ep_slot, fault_ep_slot);
+        let ipc = KernelIpc::new(endpoints.control, endpoints.fault);
         log::info!(
             target: "root_task::kernel",
             "[boot] TimersAndIPC: ipc.init.end ep=0x{ep:04x} staged={staged}",
-            ep = ep_slot,
+            ep = endpoints.control.raw(),
             staged = ipc.staged_bootstrap.is_some()
         );
 
@@ -2235,7 +2274,7 @@ struct FaultRegistry {
     sources: Mutex<HeaplessVec<FaultSource, 8>>,
     fatal_badges: Mutex<HeaplessVec<sel4_sys::seL4_Word, 8>>,
     unknown_badges: Mutex<HeaplessVec<sel4_sys::seL4_Word, 8>>,
-    stray_badges: Mutex<HeaplessVec<sel4_sys::seL4_Word, 8>>,
+    stray_signatures: Mutex<HeaplessVec<(sel4_sys::seL4_Word, u64), 16>>,
     suppressed_badges: Mutex<HeaplessVec<sel4_sys::seL4_Word, 8>>,
     tallies: Mutex<HeaplessVec<(sel4_sys::seL4_Word, u32), 8>>,
 }
@@ -2249,7 +2288,7 @@ impl FaultRegistry {
             sources: Mutex::new(HeaplessVec::new()),
             fatal_badges: Mutex::new(HeaplessVec::new()),
             unknown_badges: Mutex::new(HeaplessVec::new()),
-            stray_badges: Mutex::new(HeaplessVec::new()),
+            stray_signatures: Mutex::new(HeaplessVec::new()),
             suppressed_badges: Mutex::new(HeaplessVec::new()),
             tallies: Mutex::new(HeaplessVec::new()),
         }
@@ -2323,12 +2362,13 @@ impl FaultRegistry {
         self.unknown_badges.lock().contains(&badge)
     }
 
-    fn mark_stray(&self, badge: sel4_sys::seL4_Word) -> bool {
-        let mut stray = self.stray_badges.lock();
-        if stray.contains(&badge) {
+    fn mark_stray(&self, badge: sel4_sys::seL4_Word, label: u64) -> bool {
+        let mut stray = self.stray_signatures.lock();
+        let signature = (badge, label);
+        if stray.contains(&signature) {
             return false;
         }
-        let _ = stray.push(badge);
+        let _ = stray.push(signature);
         true
     }
 
@@ -2556,29 +2596,7 @@ fn decode_fault_context(
     let fault_tag = info.label();
     let length = info.length() as usize;
 
-    if !is_fault_label(fault_tag) {
-        if FAULT_REGISTRY.mark_stray(badge) {
-            log::warn!(
-                target: "root_task::kernel::fault",
-                "[fault] non-fault message on fault EP badge=0x{badge:04x} label=0x{label:08x} len={len}; treating as control/misroute (badge 0 often indicates a control plane sender without a badge)",
-                badge = badge,
-                label = fault_tag,
-                len = length,
-            );
-        }
-        return None;
-    }
-
-    if !fault_layout_valid(fault_tag, length) {
-        if FAULT_REGISTRY.mark_stray(badge) {
-            log::warn!(
-                target: "root_task::kernel::fault",
-                "[fault] invalid fault layout badge=0x{badge:04x} label=0x{label:08x} len={len}; dropping",
-                badge = badge,
-                label = fault_tag,
-                len = length,
-            );
-        }
+    if !is_fault_label(fault_tag) || !fault_layout_valid(fault_tag, length) {
         return None;
     }
 
@@ -2888,8 +2906,8 @@ static BOOTSTRAP_DISPATCH_LOG_ONCE: AtomicBool = AtomicBool::new(false);
 static BOOTSTRAP_DISPATCH_STREAM_SEEN: AtomicBool = AtomicBool::new(false);
 
 pub(crate) struct KernelIpc {
-    endpoint: sel4_sys::seL4_CPtr,
-    fault_endpoint: sel4_sys::seL4_CPtr,
+    control_ep: ControlEndpoint,
+    fault_endpoint: FaultEndpoint,
     staged_bootstrap: Option<StagedMessage>,
     staged_forwarded: bool,
     handlers_ready: bool,
@@ -2907,29 +2925,29 @@ fn current_node_id() -> sel4_sys::seL4_NodeId {
 }
 
 impl KernelIpc {
-    pub(crate) fn new(endpoint: sel4_sys::seL4_CPtr, fault_endpoint: sel4_sys::seL4_CPtr) -> Self {
+    pub(crate) fn new(control_ep: ControlEndpoint, fault_endpoint: FaultEndpoint) -> Self {
         log::info!(
             "[ipc] root EP installed at slot=0x{ep:04x} (role=LOG+CONTROL / QUEEN bootstrap)",
-            ep = endpoint
+            ep = control_ep.raw()
         );
         log::info!(
             "[ipc] EP 0x{ep:04x} loop online; waiting for messages",
-            ep = endpoint
+            ep = control_ep.raw()
         );
-        if fault_endpoint != sel4_sys::seL4_CapNull {
+        if fault_endpoint.is_valid() {
             log::info!(
                 "[ipc] fault EP installed at slot=0x{ep:04x} (dedicated fault handler)",
-                ep = fault_endpoint
+                ep = fault_endpoint.raw()
             );
         }
         let cpuid = current_node_id();
         log::info!(
             "[ipc] EP 0x{ep:04x}: dispatcher thread initialised on core={cpuid}",
-            ep = endpoint,
+            ep = control_ep.raw(),
             cpuid = cpuid,
         );
         Self {
-            endpoint,
+            control_ep,
             fault_endpoint,
             staged_bootstrap: None,
             staged_forwarded: false,
@@ -2955,8 +2973,7 @@ impl KernelIpc {
     }
 
     fn warn_fault_length(label: u64, len: usize, badge: sel4_sys::seL4_Word) {
-        static FAULT_LENGTH_WARNED: AtomicBool = AtomicBool::new(false);
-        if !FAULT_LENGTH_WARNED.swap(true, Ordering::Relaxed) {
+        if FAULT_REGISTRY.mark_stray(badge, label) {
             log::warn!(
                 target: "root_task::kernel::fault",
                 "[fault] suspicious fault length badge=0x{badge:04x} label=0x{label:08x} len={len}",
@@ -3027,68 +3044,66 @@ impl KernelIpc {
         let _ = self.control_labels_logged.push(label);
         log::info!(
             "[ipc] EP 0x{ep:04x}: control stream active (label=0x{label:02X})",
-            ep = self.endpoint,
+            ep = self.control_ep.raw(),
             label = label,
         );
     }
 
     fn poll_fault_endpoint(&mut self, _now_ms: u64) {
-        if self.fault_endpoint == sel4_sys::seL4_CapNull {
+        if !self.fault_endpoint.is_valid() {
             return;
         }
 
         loop {
             let mut badge: sel4_sys::seL4_Word = 0;
-            let info = unsafe { sel4_sys::seL4_NBRecv(self.fault_endpoint, &mut badge) };
+            let info = unsafe { sel4_sys::seL4_NBRecv(self.fault_endpoint.raw(), &mut badge) };
             if !Self::message_present(&info, badge) {
                 return;
             }
 
-            match classify_ep_message(&info, true) {
-                EpMessageKind::Fault { length_valid } => {
-                    if !length_valid {
-                        Self::warn_fault_length(info.label(), info.length() as usize, badge);
-                    }
-                    if FAULT_REGISTRY.is_fatal(badge) {
-                        if FAULT_REGISTRY.mark_suppressed(badge) {
-                            log::warn!(
-                                target: "root_task::kernel::fault",
-                                "[fault] ignoring message from known-fatal badge=0x{badge:04x}",
-                                badge = badge,
-                            );
-                        }
-                        continue;
-                    }
-                    let count = record_fault_occurrence(badge);
-                    let source = lookup_fault_source(badge);
-                    if let Some(context) = decode_fault_context(&info, badge, source, count) {
-                        handle_fatal_fault(context, source);
-                    }
+            let label = info.label();
+            let length = info.length() as usize;
+
+            if badge == 0 || !is_fault_label(label) {
+                if FAULT_REGISTRY.mark_stray(badge, label) {
+                    log::warn!(
+                        target: "root_task::kernel::fault",
+                        "[fault] stray message on fault EP: badge=0x{badge:04x} label=0x{label:08x} len={len}",
+                        badge = badge,
+                        label = label,
+                        len = length,
+                    );
                 }
-                EpMessageKind::BootstrapControl
-                | EpMessageKind::LogControl
-                | EpMessageKind::Control { .. } => {
-                    if FAULT_REGISTRY.mark_stray(badge) {
-                        log::warn!(
-                            target: "root_task::kernel::fault",
-                            "[fault] control-plane message delivered to fault EP label=0x{label:08x} badge=0x{badge:04x} len={len}; dropping without reply",
-                            label = info.label(),
-                            badge = badge,
-                            len = info.length(),
-                        );
-                    }
+                continue;
+            }
+
+            if !fault_layout_valid(label, length) {
+                if FAULT_REGISTRY.mark_stray(badge, label) {
+                    log::warn!(
+                        target: "root_task::kernel::fault",
+                        "[fault] invalid fault layout on fault EP badge=0x{badge:04x} label=0x{label:08x} len={len}; dropping",
+                        badge = badge,
+                        label = label,
+                        len = length,
+                    );
                 }
-                EpMessageKind::Unknown { label, length } => {
-                    if FAULT_REGISTRY.mark_stray(badge) {
-                        log::warn!(
-                            target: "root_task::kernel::fault",
-                            "[fault] unknown message on fault EP label=0x{label:08x} badge=0x{badge:04x} len={len}",
-                            label = label,
-                            badge = badge,
-                            len = length,
-                        );
-                    }
+                continue;
+            }
+
+            if FAULT_REGISTRY.is_fatal(badge) {
+                if FAULT_REGISTRY.mark_suppressed(badge) {
+                    log::warn!(
+                        target: "root_task::kernel::fault",
+                        "[fault] ignoring message from known-fatal badge=0x{badge:04x}",
+                        badge = badge,
+                    );
                 }
+                continue;
+            }
+            let count = record_fault_occurrence(badge);
+            let source = lookup_fault_source(badge);
+            if let Some(context) = decode_fault_context(&info, badge, source, count) {
+                handle_fatal_fault(context, source);
             }
         }
     }
@@ -3103,12 +3118,12 @@ impl KernelIpc {
             self.debug_uart_announced = true;
         }
         let mut badge: sel4_sys::seL4_Word = 0;
-        let info = unsafe { sel4_sys::seL4_Poll(self.endpoint, &mut badge) };
+        let info = unsafe { sel4_sys::seL4_Poll(self.control_ep.raw(), &mut badge) };
         if !Self::message_present(&info, badge) {
             if bootstrap {
                 log::trace!(
                     "[ipc] bootstrap poll idle ep=0x{ep:04x} now={now_ms} badge=0x{badge:016x}",
-                    ep = self.endpoint,
+                    ep = self.control_ep.raw(),
                     now_ms = now_ms,
                     badge = badge,
                 );
@@ -3127,7 +3142,7 @@ impl KernelIpc {
         } else if log::log_enabled!(log::Level::Trace) {
             log::trace!(
                 "[ipc] poll ep=0x{ep:04x} badge=0x{badge:016x} info=0x{info:08x} now_ms={now_ms}",
-                ep = self.endpoint,
+                ep = self.control_ep.raw(),
                 badge = badge,
                 info = info.words[0],
                 now_ms = now_ms,
@@ -3141,13 +3156,13 @@ impl KernelIpc {
             if first_bootstrap {
                 log::info!(
                     "[ipc] bootstrap dispatch stream active on ep=0x{ep:04x} (label=0x{label:08x})",
-                    ep = self.endpoint,
+                    ep = self.control_ep.raw(),
                     label = info.label(),
                 );
             } else {
                 log::debug!(
                     "[ipc] bootstrap dispatch ep=0x{ep:04x} label=0x{label:08x} len={msg_len}",
-                    ep = self.endpoint,
+                    ep = self.control_ep.raw(),
                     label = info.label(),
                     msg_len = info.length(),
                 );
@@ -3185,7 +3200,7 @@ impl KernelIpc {
                 }
                 log::trace!(
                     "[ipc] control ep=0x{ep:04x} ignored message badge=0x{badge:016x} label=0x{label:08x} len={len}",
-                    ep = self.endpoint,
+                    ep = self.control_ep.raw(),
                     badge = badge,
                     label = info.label(),
                     len = info.length(),
@@ -3197,7 +3212,7 @@ impl KernelIpc {
                 log::trace!(
                     target: "root_task::kernel::fault",
                     "[ipc] control ep=0x{ep:04x} badge=0x{badge:016x} label=0x{label:08x} len={len}",
-                    ep = self.endpoint,
+                    ep = self.control_ep.raw(),
                     badge = badge,
                     label = label,
                     len = info.length(),
@@ -3241,7 +3256,7 @@ impl KernelIpc {
             BOOTSTRAP_STAGE_LOG_ONCE.swap(true, Ordering::Relaxed);
             log::debug!(
                 "[ipc] bootstrap staged ep=0x{ep:04x} badge=0x{badge:016x} info=0x{info:08x} words={words}",
-                ep = self.endpoint,
+                ep = self.control_ep.raw(),
                 badge = message.badge,
                 info = message.info.words[0],
                 words = message.payload.len(),
@@ -3250,7 +3265,7 @@ impl KernelIpc {
         }
         log::debug!(
             "[ipc] staged → forwarded ep=0x{ep:04x} badge=0x{badge:016x}",
-            ep = self.endpoint,
+            ep = self.control_ep.raw(),
             badge = message.badge,
         );
         self.staged_forwarded = true;
@@ -3262,10 +3277,10 @@ impl IpcDispatcher for KernelIpc {
         if !self.fault_loop_announced {
             log::info!(
                 "[fault] handler loop online; waiting for fault messages (ep=0x{ep:04x})",
-                ep = if self.fault_endpoint != sel4_sys::seL4_CapNull {
-                    self.fault_endpoint
+                ep = if self.fault_endpoint.is_valid() {
+                    self.fault_endpoint.raw()
                 } else {
-                    self.endpoint
+                    self.control_ep.raw()
                 }
             );
             self.fault_loop_announced = true;
@@ -3345,8 +3360,9 @@ impl BootstrapMessageHandler for BootstrapIpcAudit {
 #[cfg(test)]
 mod tests {
     use super::{
-        bounded_message_words, copy_message_words, preview_payload, KernelIpc, PayloadPreview,
-        StagedMessage, HEX_CHUNK_BYTES, MAX_HEX_LINES, MAX_MESSAGE_WORDS, MAX_PAYLOAD_LOG_BYTES,
+        bounded_message_words, copy_message_words, preview_payload, ControlEndpoint, FaultEndpoint,
+        KernelIpc, PayloadPreview, StagedMessage, HEX_CHUNK_BYTES, MAX_HEX_LINES,
+        MAX_MESSAGE_WORDS, MAX_PAYLOAD_LOG_BYTES,
     };
     use core::fmt::Write as _;
     use heapless::{String as HeaplessString, Vec as HeaplessVec};
@@ -3370,7 +3386,10 @@ mod tests {
         let info = sel4_sys::seL4_MessageInfo::new(0x11, 0, 0, 2);
         let staged = StagedMessage::from_parts(info, 0xAA, &[0xFE, 0xED]);
 
-        let mut ipc = KernelIpc::new(0x200, sel4_sys::seL4_CapNull);
+        let mut ipc = KernelIpc::new(
+            ControlEndpoint(0x200),
+            FaultEndpoint(sel4_sys::seL4_CapNull),
+        );
         ipc.staged_bootstrap = Some(staged);
 
         ipc.dispatch(0);
