@@ -541,6 +541,8 @@ pub struct BootContext {
     /// Root endpoint slot shared with userland subsystems.
     pub ep_slot: sel4_sys::seL4_CPtr,
     /// Fault endpoint dedicated to handling seL4 faults.
+    /// This endpoint must only be targeted by `seL4_TCB_SetFault` and receive
+    /// operations in the fault handler; do not use it for Send/Call IPC.
     pub fault_ep_slot: sel4_sys::seL4_CPtr,
     /// PL011 UART slot reserved for the serial console.
     pub uart_slot: Option<sel4_sys::seL4_CPtr>,
@@ -2233,6 +2235,8 @@ struct FaultRegistry {
     sources: Mutex<HeaplessVec<FaultSource, 8>>,
     fatal_badges: Mutex<HeaplessVec<sel4_sys::seL4_Word, 8>>,
     unknown_badges: Mutex<HeaplessVec<sel4_sys::seL4_Word, 8>>,
+    stray_badges: Mutex<HeaplessVec<sel4_sys::seL4_Word, 8>>,
+    suppressed_badges: Mutex<HeaplessVec<sel4_sys::seL4_Word, 8>>,
     tallies: Mutex<HeaplessVec<(sel4_sys::seL4_Word, u32), 8>>,
 }
 
@@ -2245,6 +2249,8 @@ impl FaultRegistry {
             sources: Mutex::new(HeaplessVec::new()),
             fatal_badges: Mutex::new(HeaplessVec::new()),
             unknown_badges: Mutex::new(HeaplessVec::new()),
+            stray_badges: Mutex::new(HeaplessVec::new()),
+            suppressed_badges: Mutex::new(HeaplessVec::new()),
             tallies: Mutex::new(HeaplessVec::new()),
         }
     }
@@ -2315,6 +2321,24 @@ impl FaultRegistry {
 
     fn is_unknown(&self, badge: sel4_sys::seL4_Word) -> bool {
         self.unknown_badges.lock().contains(&badge)
+    }
+
+    fn mark_stray(&self, badge: sel4_sys::seL4_Word) -> bool {
+        let mut stray = self.stray_badges.lock();
+        if stray.contains(&badge) {
+            return false;
+        }
+        let _ = stray.push(badge);
+        true
+    }
+
+    fn mark_suppressed(&self, badge: sel4_sys::seL4_Word) -> bool {
+        let mut suppressed = self.suppressed_badges.lock();
+        if suppressed.contains(&badge) {
+            return false;
+        }
+        let _ = suppressed.push(badge);
+        true
     }
 
     fn record_occurrence(&self, badge: sel4_sys::seL4_Word) -> u32 {
@@ -2532,24 +2556,36 @@ fn decode_fault_context(
     let fault_tag = info.label();
     let length = info.length() as usize;
 
-    let mut regs = [0u64; MAX_FAULT_REGS];
-    let len = cmp::min(length, regs.len());
-    for idx in 0..len {
-        regs[idx] = unsafe { sel4_sys::seL4_GetMR(idx as i32) };
-    }
-
     if !is_fault_label(fault_tag) {
-        static MISROUTED_ONCE: AtomicBool = AtomicBool::new(false);
-        if !MISROUTED_ONCE.swap(true, Ordering::Relaxed) {
-            log::debug!(
+        if FAULT_REGISTRY.mark_stray(badge) {
+            log::warn!(
                 target: "root_task::kernel::fault",
                 "[fault] non-fault message on fault EP badge=0x{badge:04x} label=0x{label:08x} len={len}; treating as control/misroute (badge 0 often indicates a control plane sender without a badge)",
                 badge = badge,
                 label = fault_tag,
-                len = len,
+                len = length,
             );
         }
         return None;
+    }
+
+    if !fault_layout_valid(fault_tag, length) {
+        if FAULT_REGISTRY.mark_stray(badge) {
+            log::warn!(
+                target: "root_task::kernel::fault",
+                "[fault] invalid fault layout badge=0x{badge:04x} label=0x{label:08x} len={len}; dropping",
+                badge = badge,
+                label = fault_tag,
+                len = length,
+            );
+        }
+        return None;
+    }
+
+    let mut regs = [0u64; MAX_FAULT_REGS];
+    let len = cmp::min(length, regs.len());
+    for idx in 0..len {
+        regs[idx] = unsafe { sel4_sys::seL4_GetMR(idx as i32) };
     }
 
     let mut ip = regs.first().copied().unwrap_or_default();
@@ -2743,13 +2779,15 @@ fn suspend_fault_source(source: &FaultSource, context: &FaultContext) {
 
 fn handle_fatal_fault(context: FaultContext, source: Option<FaultSource>) {
     if FAULT_REGISTRY.is_fatal(context.badge) {
-        log::warn!(
-            target: "root_task::kernel::fault",
-            "[fault] suppressing handling for previously-fatal sender badge=0x{badge:04x} ip=0x{ip:016x} sp=0x{sp:016x}",
-            badge = context.badge,
-            ip = context.ip,
-            sp = context.sp,
-        );
+        if FAULT_REGISTRY.mark_suppressed(context.badge) {
+            log::warn!(
+                target: "root_task::kernel::fault",
+                "[fault] suppressing handling for previously-fatal sender badge=0x{badge:04x} ip=0x{ip:016x} sp=0x{sp:016x}",
+                badge = context.badge,
+                ip = context.ip,
+                sp = context.sp,
+            );
+        }
         return;
     }
 
@@ -3012,11 +3050,13 @@ impl KernelIpc {
                         Self::warn_fault_length(info.label(), info.length() as usize, badge);
                     }
                     if FAULT_REGISTRY.is_fatal(badge) {
-                        log::warn!(
-                            target: "root_task::kernel::fault",
-                            "[fault] ignoring message from known-fatal badge=0x{badge:04x}",
-                            badge = badge,
-                        );
+                        if FAULT_REGISTRY.mark_suppressed(badge) {
+                            log::warn!(
+                                target: "root_task::kernel::fault",
+                                "[fault] ignoring message from known-fatal badge=0x{badge:04x}",
+                                badge = badge,
+                            );
+                        }
                         continue;
                     }
                     let count = record_fault_occurrence(badge);
@@ -3028,22 +3068,26 @@ impl KernelIpc {
                 EpMessageKind::BootstrapControl
                 | EpMessageKind::LogControl
                 | EpMessageKind::Control { .. } => {
-                    log::warn!(
-                        target: "root_task::kernel::fault",
-                        "[fault] control-plane message delivered to fault EP label=0x{label:08x} badge=0x{badge:04x} len={len}; dropping without reply",
-                        label = info.label(),
-                        badge = badge,
-                        len = info.length(),
-                    );
+                    if FAULT_REGISTRY.mark_stray(badge) {
+                        log::warn!(
+                            target: "root_task::kernel::fault",
+                            "[fault] control-plane message delivered to fault EP label=0x{label:08x} badge=0x{badge:04x} len={len}; dropping without reply",
+                            label = info.label(),
+                            badge = badge,
+                            len = info.length(),
+                        );
+                    }
                 }
                 EpMessageKind::Unknown { label, length } => {
-                    log::warn!(
-                        target: "root_task::kernel::fault",
-                        "[fault] unknown message on fault EP label=0x{label:08x} badge=0x{badge:04x} len={len}",
-                        label = label,
-                        badge = badge,
-                        len = length,
-                    );
+                    if FAULT_REGISTRY.mark_stray(badge) {
+                        log::warn!(
+                            target: "root_task::kernel::fault",
+                            "[fault] unknown message on fault EP label=0x{label:08x} badge=0x{badge:04x} len={len}",
+                            label = label,
+                            badge = badge,
+                            len = length,
+                        );
+                    }
                 }
             }
         }
@@ -3116,11 +3160,13 @@ impl KernelIpc {
                     Self::warn_fault_length(info.label(), info.length() as usize, badge);
                 }
                 if FAULT_REGISTRY.is_fatal(badge) {
-                    log::warn!(
-                        target: "root_task::kernel::fault",
-                        "[fault] ignoring message from known-fatal badge=0x{badge:04x}",
-                        badge = badge,
-                    );
+                    if FAULT_REGISTRY.mark_suppressed(badge) {
+                        log::warn!(
+                            target: "root_task::kernel::fault",
+                            "[fault] ignoring message from known-fatal badge=0x{badge:04x}",
+                            badge = badge,
+                        );
+                    }
                     return true;
                 }
                 let count = record_fault_occurrence(badge);
