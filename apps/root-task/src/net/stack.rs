@@ -729,6 +729,12 @@ impl NetStack {
                         "[net-console] conn: accepted from {:?}",
                         endpoint
                     );
+                    log::info!(
+                        target: "net-console",
+                        "[net-console] accept: peer={:?} client_id={}",
+                        endpoint,
+                        client_id
+                    );
                 }
                 let _ = self.events.push(NetConsoleEvent::Connected {
                     conn_id: client_id,
@@ -754,11 +760,11 @@ impl NetStack {
                     );
                 } else {
                     self.server.begin_session(now_ms, Some(client_id));
-                    info!(
-                        target: "net-console",
-                        "[net-console] auth: waiting for handshake (client_id={})",
-                        client_id
-                    );
+                        info!(
+                            target: "net-console",
+                            "[net-console] auth: waiting for handshake (client_id={})",
+                            client_id
+                        );
                     Self::set_auth_state(
                         &mut self.auth_state,
                         self.active_client_id,
@@ -872,6 +878,20 @@ impl NetStack {
                                         self.active_client_id,
                                         AuthState::Attached,
                                     );
+                                    let mut preview: HeaplessString<DEFAULT_LINE_CAPACITY> =
+                                        HeaplessString::new();
+                                    for &byte in &temp[..count.min(preview.capacity())] {
+                                        if byte == b'\n' || byte == b'\r' {
+                                            break;
+                                        }
+                                        let _ = preview.push(byte as char);
+                                    }
+                                    info!(
+                                        target: "net-console",
+                                        "[net-console] recv line on TCP session {}: {}",
+                                        conn_id,
+                                        preview
+                                    );
                                     info!(
                                         "[cohsh-net][auth] auth OK, session established (conn_id={})",
                                         conn_id
@@ -888,7 +908,7 @@ impl NetStack {
                                         self.active_client_id,
                                         AuthState::Failed,
                                     );
-                                    let _ = Self::flush_outbound(
+                                    activity |= Self::flush_outbound(
                                         &mut self.server,
                                         &mut self.telemetry,
                                         &mut self.conn_bytes_written,
@@ -1012,7 +1032,7 @@ impl NetStack {
                     self.auth_state
                 );
                 let _ = self.server.enqueue_outbound("ERR AUTH reason=timeout");
-                let _ = Self::flush_outbound(
+                activity |= Self::flush_outbound(
                     &mut self.server,
                     &mut self.telemetry,
                     &mut self.conn_bytes_written,
@@ -1055,7 +1075,7 @@ impl NetStack {
                     self.auth_state
                 );
                 let _ = self.server.enqueue_outbound("ERR CONSOLE reason=timeout");
-                let _ = Self::flush_outbound(
+                activity |= Self::flush_outbound(
                     &mut self.server,
                     &mut self.telemetry,
                     &mut self.conn_bytes_written,
@@ -1231,6 +1251,12 @@ impl NetStack {
                             info!(
                                 "[net-console] auth response sent; session state = {:?}",
                                 auth_state
+                            );
+                            log::info!(
+                                target: "net-console",
+                                "[net-console] send ACK on TCP session {}: {}",
+                                conn_id.unwrap_or(0),
+                                core::str::from_utf8(line.as_bytes()).unwrap_or("<invalid>")
                             );
                         }
                     }
