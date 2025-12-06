@@ -9,6 +9,13 @@ use heapless::String as HeaplessString;
 
 pub use crate::net_consts::MAX_FRAME_LEN;
 
+/// Default IP address for the `dev-virt` target.
+pub const DEV_VIRT_IP: [u8; 4] = [10, 0, 2, 15];
+/// Default gateway for the `dev-virt` target.
+pub const DEV_VIRT_GATEWAY: [u8; 4] = [10, 0, 2, 2];
+/// Default prefix length for the `dev-virt` target.
+pub const DEV_VIRT_PREFIX: u8 = 24;
+
 /// TCP port exposed by the console listener inside the VM.
 pub const CONSOLE_TCP_PORT: u16 = TCP_CONSOLE_PORT;
 /// Authentication token expected from TCP console clients.
@@ -21,6 +28,29 @@ pub const AUTH_TIMEOUT_MS: u64 = 5 * 1000;
 /// Number of console lines retained between pump cycles.
 pub const CONSOLE_QUEUE_DEPTH: usize = 8;
 
+/// Static IPv4 configuration for the TCP console listener.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NetAddressConfig {
+    /// Local interface address.
+    pub ip: [u8; 4],
+    /// Prefix length applied to the interface.
+    pub prefix_len: u8,
+    /// Default gateway, if any.
+    pub gateway: Option<[u8; 4]>,
+}
+
+impl NetAddressConfig {
+    /// Development defaults for the QEMU `virt` target.
+    #[must_use]
+    pub const fn dev_virt() -> Self {
+        Self {
+            ip: DEV_VIRT_IP,
+            prefix_len: DEV_VIRT_PREFIX,
+            gateway: Some(DEV_VIRT_GATEWAY),
+        }
+    }
+}
+
 /// Configuration for console networking transports.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ConsoleNetConfig {
@@ -30,6 +60,8 @@ pub struct ConsoleNetConfig {
     pub idle_timeout_ms: u64,
     /// TCP port exposed by the console listener inside the VM.
     pub listen_port: u16,
+    /// IPv4 configuration for the console interface.
+    pub address: NetAddressConfig,
 }
 
 impl ConsoleNetConfig {
@@ -39,6 +71,7 @@ impl ConsoleNetConfig {
             auth_token: AUTH_TOKEN,
             idle_timeout_ms: IDLE_TIMEOUT_MS,
             listen_port: COHSH_TCP_PORT,
+            address: NetAddressConfig::dev_virt(),
         }
     }
 }
@@ -124,5 +157,8 @@ mod tests {
 
         assert_eq!(config.listen_port, COHSH_TCP_PORT);
         assert_ne!(config.listen_port, 0);
+        assert_eq!(config.address.ip, DEV_VIRT_IP);
+        assert_eq!(config.address.prefix_len, DEV_VIRT_PREFIX);
+        assert_eq!(config.address.gateway, Some(DEV_VIRT_GATEWAY));
     }
 }
