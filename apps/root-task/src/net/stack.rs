@@ -469,11 +469,15 @@ impl NetStack {
             debug_assert_eq!(config.address.gateway, Some(DEV_VIRT_GATEWAY));
         }
 
-        let ip = Ipv4Address::from_octets(config.address.ip);
-        let gateway = config
-            .address
-            .gateway
-            .map(Ipv4Address::from_octets);
+        let ip = Ipv4Address::new(
+            config.address.ip[0],
+            config.address.ip[1],
+            config.address.ip[2],
+            config.address.ip[3],
+        );
+        let gateway = config.address.gateway.map(|gateway| {
+            Ipv4Address::new(gateway[0], gateway[1], gateway[2], gateway[3])
+        });
         Self::with_ipv4(hal, ip, config.address.prefix_len, gateway, config)
     }
 
