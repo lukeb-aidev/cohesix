@@ -35,7 +35,8 @@ use smoltcp::wire::{
 
 use super::{
     console_srv::{SessionEvent, TcpConsoleServer},
-    ConsoleNetConfig, NetConsoleEvent, NetPoller, NetTelemetry,
+    ConsoleNetConfig, NetConsoleEvent, NetPoller, NetTelemetry, DEV_VIRT_GATEWAY, DEV_VIRT_IP,
+    DEV_VIRT_PREFIX,
 };
 use crate::drivers::virtio::net::{DriverError, VirtioNet};
 use crate::hal::{HalError, Hardware};
@@ -46,9 +47,6 @@ const TCP_TX_BUFFER: usize = 2048;
 const SOCKET_CAPACITY: usize = 4;
 const MAX_TX_BUDGET: usize = 8;
 const RANDOM_SEED: u64 = 0x5a5a_5a5a_1234_5678;
-const DEFAULT_IP: (u8, u8, u8, u8) = (10, 0, 2, 15);
-const DEFAULT_GW: (u8, u8, u8, u8) = (10, 0, 2, 2);
-const DEFAULT_PREFIX: u8 = 24;
 const ECHO_MODE: bool = cfg!(feature = "tcp-echo-31337");
 
 #[derive(Debug)]
@@ -235,6 +233,16 @@ struct PollSnapshot {
     staged_events: usize,
 }
 
+fn prefix_to_netmask(prefix_len: u8) -> Ipv4Address {
+    let prefix = core::cmp::min(prefix_len, 32);
+    let mask = if prefix == 0 {
+        0
+    } else {
+        u32::MAX.checked_shl(32 - prefix).unwrap_or(u32::MAX)
+    };
+    Ipv4Address::from_bytes(&mask.to_be_bytes())
+}
+
 /// Initialise the network console stack, translating low-level errors into
 /// user-facing diagnostics.
 pub fn init_net_console<H>(
@@ -364,7 +372,7 @@ impl NetStack {
             return;
         }
 
-        info!(
+        debug!(
             "[cohsh-net] poll state: tcp={:?} session_active={} auth_state={:?} listener_ready={} recv={} send={} staged_events={}",
             snapshot.tcp_state,
             snapshot.session_active,
@@ -389,6 +397,11 @@ impl NetStack {
             return;
         }
         let (peer, port) = Self::peer_parts(peer_endpoint, socket);
+
+        info!(
+            "[cohsh-net] tcp state transition: {:?} -> {:?} (iface_ip={} peer={}:{})",
+            previous, current, iface_ip, peer, port
+        );
 
         match (previous, current) {
             (_, TcpState::SynReceived) => {
@@ -447,9 +460,20 @@ impl NetStack {
         H: Hardware<Error = HalError>,
     {
         info!("[net-console] init: constructing smoltcp stack");
-        let ip = Ipv4Address::new(DEFAULT_IP.0, DEFAULT_IP.1, DEFAULT_IP.2, DEFAULT_IP.3);
-        let gateway = Ipv4Address::new(DEFAULT_GW.0, DEFAULT_GW.1, DEFAULT_GW.2, DEFAULT_GW.3);
-        Self::with_ipv4(hal, ip, DEFAULT_PREFIX, Some(gateway), config)
+        debug_assert_ne!(config.listen_port, 0, "TCP console port must be non-zero");
+        if cfg!(feature = "dev-virt") {
+            debug_assert_eq!(config.listen_port, super::COHSH_TCP_PORT);
+            debug_assert_eq!(config.address.ip, DEV_VIRT_IP);
+            debug_assert_eq!(config.address.prefix_len, DEV_VIRT_PREFIX);
+            debug_assert_eq!(config.address.gateway, Some(DEV_VIRT_GATEWAY));
+        }
+
+        let ip = Ipv4Address::from_bytes(&config.address.ip);
+        let gateway = config
+            .address
+            .gateway
+            .map(|gw| Ipv4Address::from_bytes(&gw));
+        Self::with_ipv4(hal, ip, config.address.prefix_len, gateway, config)
     }
 
     fn with_ipv4(
@@ -459,11 +483,16 @@ impl NetStack {
         gateway: Option<Ipv4Address>,
         console_config: ConsoleNetConfig,
     ) -> Result<Self, NetStackError> {
+        let netmask = prefix_to_netmask(prefix);
+        let gateway_label = gateway.unwrap_or(Ipv4Address::UNSPECIFIED);
         info!(
-            "[net-console] init: bringing up virtio-net with ip={ip}/{prefix} gateway={:?}",
-            gateway
+            "[net-console] init: bringing up virtio-net with ip={}/{} netmask={} gateway={}",
+            ip, prefix, netmask, gateway_label
         );
-        info!("[net-console] init: creating VirtioNet device");
+        info!(
+            "[net-console] init: creating VirtioNet device (listen_port={})",
+            console_config.listen_port
+        );
         let mut device = VirtioNet::new(hal)?;
         let mac = device.mac();
         info!("[net-console] virtio-net device online: mac={mac}");
@@ -480,16 +509,27 @@ impl NetStack {
         iface_config.random_seed = RANDOM_SEED;
 
         let mut interface = Interface::new(iface_config, &mut device, clock.now());
-        info!("[net-console] smoltcp interface created; assigning ip={ip}/{prefix}");
+        info!(
+            "[net-console] smoltcp interface created; assigning ip={}/{} netmask={}",
+            ip, prefix, netmask
+        );
         interface.update_ip_addrs(|addrs| {
             let cidr = IpCidr::new(IpAddress::from(ip), prefix);
             if addrs.push(cidr).is_err() {
                 addrs[0] = cidr;
             }
         });
-        if let Some(gw) = gateway {
-            let _ = interface.routes_mut().add_default_ipv4_route(gw);
-            info!("[net-console] default gateway set to {gw}");
+        match gateway {
+            Some(gw) => {
+                let _ = interface.routes_mut().add_default_ipv4_route(gw);
+                info!("[net-console] default gateway set to {gw}");
+            }
+            None => {
+                info!(
+                    "[net-console] default gateway set to {}",
+                    Ipv4Address::UNSPECIFIED
+                );
+            }
         }
         let sockets = SocketSet::new(unsafe { &mut SOCKET_STORAGE[..] });
 
@@ -525,8 +565,14 @@ impl NetStack {
         socket_guard.disarm();
         rx_guard.disarm();
         tx_guard.disarm();
-        info!("[net-console] init: TCP listener socket prepared");
-        info!("[net-console] init: success; tcp console wired (non-blocking)");
+        info!(
+            "[net-console] init: TCP listener socket prepared (port={})",
+            console_config.listen_port
+        );
+        info!(
+            "[net-console] init: success; tcp console wired (non-blocking, port={})",
+            console_config.listen_port
+        );
         Ok(stack)
     }
 
@@ -657,6 +703,7 @@ impl NetStack {
                     }
                 };
                 if let Some(endpoint) = socket.remote_endpoint() {
+                    info!("[cohsh-net] new TCP client connected from {:?}", endpoint);
                     info!(
                         target: "net-console",
                         "[net-console] conn: accepted from {:?}",
