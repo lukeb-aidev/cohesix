@@ -1,7 +1,7 @@
 <!-- Author: Lukas Bower -->
 # Cohesix
 ## Why Cohesix?
-I spent the early part of my career in film and braodcast technology, working woth brilliant and creative people pushing the bounds of hardware and software. Some of that work involved custom OS development, and I have been fascinated by this ever since.
+I spent the early part of my career in film and braodcast technology, working with brilliant and creative people pushing the bounds of hardware and software. Some of that work involved custom OS development, and I have been fascinated by this ever since.
 
 Cohesix is a Research OS project, where I am exploring ideas I have been pondering for a long time - which I can now explore with the support of AI agents in my limited free time. Writing an OS is the Mount Everest of technical challenges which is part of the fun, but Cohesix also has some specific research goals:
 
