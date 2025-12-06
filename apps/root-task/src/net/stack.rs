@@ -238,9 +238,10 @@ fn prefix_to_netmask(prefix_len: u8) -> Ipv4Address {
     let mask = if prefix == 0 {
         0
     } else {
-        u32::MAX.checked_shl(32 - prefix).unwrap_or(u32::MAX)
+        let shift = 32 - u32::from(prefix);
+        u32::MAX.checked_shl(shift).unwrap_or(u32::MAX)
     };
-    Ipv4Address::from_bytes(&mask.to_be_bytes())
+    Ipv4Address::from_bits(mask)
 }
 
 /// Initialise the network console stack, translating low-level errors into
@@ -468,11 +469,11 @@ impl NetStack {
             debug_assert_eq!(config.address.gateway, Some(DEV_VIRT_GATEWAY));
         }
 
-        let ip = Ipv4Address::from_bytes(&config.address.ip);
+        let ip = Ipv4Address::from_octets(config.address.ip);
         let gateway = config
             .address
             .gateway
-            .map(|gw| Ipv4Address::from_bytes(&gw));
+            .map(Ipv4Address::from_octets);
         Self::with_ipv4(hal, ip, config.address.prefix_len, gateway, config)
     }
 
