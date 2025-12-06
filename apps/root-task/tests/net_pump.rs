@@ -120,6 +120,31 @@ fn network_lines_round_trip_acknowledgements() {
 }
 
 #[test]
+fn attach_with_bad_ticket_is_rejected() {
+    let serial = LoopbackSerial::<{ DEFAULT_RX_CAPACITY }>::new();
+    let mut audit = AuditCapture::new();
+    let mut pump = build_pump(serial, &mut audit);
+    let (mut net, handle) = NetStack::new(Ipv4Address::new(10, 0, 2, 55));
+    pump = pump.with_network(&mut net);
+
+    {
+        let net_iface = pump.network_mut().expect("network not attached");
+        net_iface.inject_console_line("attach queen wrong-token\n");
+    }
+
+    pump.poll();
+    pump.poll();
+
+    let auth = handle.pop_tx().expect("auth acknowledgement missing");
+    assert_eq!(str::from_utf8(auth.as_slice()).unwrap(), "OK AUTH\r\n");
+    let attach = handle.pop_tx().expect("attach acknowledgement missing");
+    assert!(str::from_utf8(attach.as_slice())
+        .unwrap()
+        .starts_with("ERR ATTACH"));
+    assert!(pump.metrics().denied_commands >= 1 || !audit.denials.is_empty());
+}
+
+#[test]
 fn tx_queue_saturation_updates_telemetry() {
     let serial = LoopbackSerial::<{ DEFAULT_RX_CAPACITY }>::new();
     let mut audit = AuditCapture::new();
