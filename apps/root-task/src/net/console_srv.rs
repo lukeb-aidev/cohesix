@@ -408,6 +408,39 @@ impl TcpConsoleServer {
 mod tests {
     use super::*;
 
+    const TOKEN: &str = "changeme";
+
+    #[test]
+    fn auth_success_emits_ack() {
+        let mut server = TcpConsoleServer::new(TOKEN, 10_000);
+        server.begin_session(0, Some(1));
+
+        let payload = b"AUTH changeme\n";
+        let event = server.ingest(payload, 1);
+
+        assert_eq!(event, SessionEvent::Authenticated);
+        assert!(server.is_authenticated());
+
+        let mut outbound = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
+        let ack = server.pop_outbound().expect("auth ack missing");
+        outbound.push_str(ack.as_str()).unwrap();
+        assert_eq!(outbound.as_str(), "OK AUTH");
+    }
+
+    #[test]
+    fn auth_failure_rejects_bad_token() {
+        let mut server = TcpConsoleServer::new(TOKEN, 10_000);
+        server.begin_session(0, Some(2));
+
+        let payload = b"AUTH invalid\n";
+        let event = server.ingest(payload, 1);
+
+        assert_eq!(event, SessionEvent::AuthFailed("invalid-token"));
+        assert!(!server.is_authenticated());
+
+        let ack = server.pop_outbound().expect("error ack missing");
+        assert!(ack.starts_with("ERR AUTH"));
+    }
     #[test]
     fn authenticates_and_tracks_activity() {
         let mut server = TcpConsoleServer::new("token", 1000);

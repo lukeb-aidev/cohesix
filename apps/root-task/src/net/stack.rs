@@ -475,9 +475,10 @@ impl NetStack {
             config.address.ip[2],
             config.address.ip[3],
         );
-        let gateway = config.address.gateway.map(|gateway| {
-            Ipv4Address::new(gateway[0], gateway[1], gateway[2], gateway[3])
-        });
+        let gateway = config
+            .address
+            .gateway
+            .map(|gateway| Ipv4Address::new(gateway[0], gateway[1], gateway[2], gateway[3]));
         Self::with_ipv4(hal, ip, config.address.prefix_len, gateway, config)
     }
 
@@ -607,15 +608,29 @@ impl NetStack {
             self.clock.advance(delta_ms)
         };
 
-        let poll_result = self
+        let mut poll_result = self
             .interface
             .poll(timestamp, &mut self.device, &mut self.sockets);
         if poll_result != PollResult::None {
             log::info!("[net] smoltcp: events processed at now_ms={}", now_ms);
         }
         let mut activity = poll_result != PollResult::None;
-        if self.process_tcp(now_ms) {
+        let tcp_activity = self.process_tcp(now_ms);
+        if tcp_activity {
             activity = true;
+        }
+
+        // Run a second poll pass when TCP work was observed so any queued
+        // responses (including AUTH acknowledgements) are flushed to the wire
+        // without waiting for the next timer tick.
+        if tcp_activity {
+            poll_result = self
+                .interface
+                .poll(timestamp, &mut self.device, &mut self.sockets);
+            if poll_result != PollResult::None {
+                log::info!("[net] smoltcp: post-tcp poll now_ms={}", now_ms);
+                activity = true;
+            }
         }
 
         self.telemetry.last_poll_ms = now_ms;
