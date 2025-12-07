@@ -16,7 +16,7 @@
 1a. **Compiler Alignment** — All manifests and generated artefacts (`root_task.toml`, `coh-rtc` outputs) define the system state. Code or docs that diverge from compiler output are invalid; regenerate manifests instead of editing generated code.
 2. **No Scope Creep** — Implement only items sanctioned by the active milestone in `BUILD_PLAN.md`.
 3. **Atomic Work** — Each task must land with compiling code (`cargo check`) and updated tests/docs. Keep commits focused.
-4. **Tiny TCB** — No POSIX emulation layers, or TCP servers inside the VM. GPU integration stays outside the VM. The code footprint must be self-contained and secure. Sidecars run outside the seL4 VM whenever possible; only lightweight control stubs (e.g., LoRa schedulers) may execute inside the VM under manifest quotas.
+4. **Tiny TCB** — No POSIX emulation layers. GPU integration stays outside the VM. The code footprint must be self-contained and secure.
 5. **Capability Discipline** — Interactions occur through 9P namespaces using role-scoped capability tickets.
 6. **Tooling Alignment** — Use the macOS ARM64 toolchain in `TOOLCHAIN_MAC_ARM64.md`. Do not assume Linux-specific tooling in VM code.
 
@@ -46,13 +46,15 @@ Deliverables: <files, logs, doc updates>
 - **Queen / Workers** — Queen orchestrates control-plane actions; worker-heart emits heartbeat telemetry; worker-gpu mirrors GPU lease/ticket state. No other agent roles exist beyond those sanctioned in `docs/BUILD_PLAN.md`.
 
 ## Guardrails
+- Console Networking Exception — The only permitted in-VM TCP listener is the authenticated root-task console implemented with smoltcp. All other TCP transports (e.g., 9P-over-TCP, GPU control channels) remain host-only. This exception does not relax the prohibition on general-purpose networking services inside the VM.
 - Keep rootfs CPIO under 4 MiB (see `ci/size_guard.sh`).
-- 9P server runs in userspace; transports abstracted (no direct TCP).
+- 9P server runs in userspace; transports abstracted.
 - GPU workers run on host/edge nodes; VM only sees mirrored files.
 - Document new file types/paths before committing code that depends on them.
 - Changes to `/docs/*.md` must reflect the as-built state produced by the compiler (snippets, schemas, `/proc` layouts).
 
 ## Canonical Documents
+README.md
 docs/*.md
 seL4/seL4-manual-latest.md
 seL4/elfloader.md
