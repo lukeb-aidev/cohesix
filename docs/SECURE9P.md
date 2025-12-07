@@ -7,14 +7,30 @@ It is the sole control-plane IPC surface; the TCP console path reuses the same N
 Secure9P sessions present the per-hive and per-role view into the namespace so queen and worker mounts expose different slices of the hive.
 
 ## 2. Layering
+### Crate Structure
+
+Secure9P is implemented across two core crates:
+
+- **secure9p-codec** — provides the canonical wire encoding/decoding of 9P messages,
+  size-prefixed framing, batch iterators, and fuzz-harness utilities.  
+  This crate is no_std + alloc by default, with an optional std feature for fuzzing and harness utilities.
+
+- **secure9p-core** — provides the protocol engine: session state machine,
+  fid table management, tag window enforcement, attach semantics, and request pipelining.
+  This crate is `no_std + alloc` compatible and transport-agnostic.
+
+These replace the former `secure9p-wire` crate.  
+All prior wire types and frame rules now live in `secure9p-codec`; all protocol
+logic and state tracking now lives in `secure9p-core`.
+
 ```
-secure9p-codec      // Frame encode/decode, length guards, no_std
+secure9p-codec      // Frame encode/decode, length guards, no_std + alloc (std feature for fuzzing)
 secure9p-core       // Session + fid tables, AccessPolicy hooks
 secure9p-transport  // Optional adapters: InProc ring, Sel4Endpoint, (host-only) Tcp
 nine-door           // Filesystem providers, role enforcement, logging
 ```
 - `secure9p-transport::Tcp` is host-only and never packaged into the Cohesix instance image (including the QEMU development CPIO).
-- The TCP console attaches through this stack with the same role selection semantics and remains bound to a single namespace per session; PL011 continues to service the root console in parallel.
+- The TCP console attaches through this stack with the same role selection semantics and remains bound to a single namespace per session; PL011 continues to service the root console in parallel. The TCP console reuses Secure9P’s framing rules but does not use secure9p-transport::Tcp; it runs entirely inside root-task via smoltcp and the event pump.
 
 ## 3. Mandatory Defences
 - Bound `msize` ≤ 8192 and reject frames exceeding negotiated size.
@@ -36,6 +52,7 @@ pub trait AccessPolicy {
 - Policies run before provider logic executes.
 - Role-to-namespace rules follow `docs/ROLES_AND_SCHEDULING.md` (queen = full tree, worker-heartbeat = `/proc/boot`, `/worker/self/telemetry`, `/log/queen.log` RO, worker-gpu future `/gpu/<lease>`), and capabilities are session-scoped tickets negotiated during `attach` (single attach per `cohsh` session with optional ticket injection before remaining bound to the resulting mounts).
 - The AccessPolicy for queen versus worker roles enables the Queen’s ability to orchestrate many workers by controlling access to mount points and control files such as `/queen/ctl`, `/worker/<id>/telemetry`, and `/gpu/*`.
+- AccessPolicy evaluation occurs after path validation and normalisation by secure9p-core; providers never receive unvalidated or unbounded paths.
 
 ## 5. Testing Matrix
 | Suite | Coverage |
