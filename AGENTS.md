@@ -54,14 +54,14 @@ Deliverables: <files, logs, doc updates>
 - Changes to `/docs/*.md` must reflect the as-built state produced by the compiler (snippets, schemas, `/proc` layouts).
 
 ## Canonical Documents
-README.md
-docs/*.md
-seL4/seL4-manual-latest.md
-seL4/elfloader.md
+- README.md
+- docs/*.md
+- seL4/seL4-manual-latest.md
+- seL4/elfloader.md
 
 ## seL4
 A full seL4 build tree can be found in:
-seL4
+- seL4
 
 ## Security & Testing Expectations
 - Validate all user-controlled input (9P frames, JSON commands).
