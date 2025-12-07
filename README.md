@@ -7,11 +7,11 @@ Cohesix is a Research OS project, where I am exploring ideas I have been ponderi
 
 - Validate the feasibility of a secure control plane to provide centralised and highly secure orchestration of edge GPU nodes
 - Explore a Queen/Worker paradigm for one-to-many orchestration and telemetry
-- Design a hive protocol based on Plan 9's 9P that manages the entire hive as a unit, underpined by a client (called 'cohsh') that runs on Linux/Unix
+- Design a hive protocol based on Plan 9's 9P that manages the entire hive as a unit, underpinned by a client (called 'cohsh') that runs on Linux/Unix
 - Prove out a unified UI concept, leveraging 'cohsh', that provides a single hive-wide WASM interface on Linux/Unix
 - Integrate seamlessly with existing GPU edge ecosystems, such as NVidia CUDA on Linux/Jetson
 
-## Waht is Cohesix?
+## What is Cohesix?
 Cohesix is a pure Rust userspace stack running atop upstream seL4 on `aarch64/virt (GICv3)`. Currently Userspace ships as a static rootfs CPIO containing the root task, NineDoor 9P server, workers, and Linux host-facing tools; all control flows through Secure9P. Operators interact via two consoles: the always-on PL011 root console and the remote TCP NineDoor console consumed by `cohsh`.
 
 Cohesix is designed for physical ARM64 hardware booted via UEFI as the primary deployment environment. Today’s reference setup runs on QEMU `aarch64/virt` for bring-up, CI, and testing, and QEMU behaviour is expected to mirror the eventual UEFI board profile.
