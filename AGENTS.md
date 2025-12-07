@@ -1,5 +1,5 @@
 <!-- Author: Lukas Bower -->
-# AGENTS — Cohesix Rebuild Charter (Pure Rust Userspace, ARM64)
+# AGENTS — Cohesix Build Charter (Pure Rust Userspace, ARM64)
 
 ## Scope & Targets
 - **Host**: macOS 26 on Apple Silicon (M4).
