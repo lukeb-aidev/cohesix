@@ -813,7 +813,11 @@ impl VirtQueue {
             NonNull::new_unchecked(base_ptr.as_ptr().add(avail_offset) as *mut VirtqAvail)
         };
 
-        let avail_bytes = 4 + 2 * size + 2;
+        // The available ring occupies flags (u16), idx (u16), and `size` ring
+        // entries (u16 each). We do not negotiate `VIRTIO_F_EVENT_IDX`, so the
+        // optional `used_event` field is omitted from the layout to keep the
+        // used ring aligned to the offsets expected by the device.
+        let avail_bytes = 4 + 2 * size;
         let used_offset = align_up(desc_bytes + avail_bytes, 4);
         let used_ptr =
             unsafe { NonNull::new_unchecked(base_ptr.as_ptr().add(used_offset) as *mut VirtqUsed) };
