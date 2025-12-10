@@ -101,6 +101,8 @@ pub struct VirtioNet {
     tx_drops: u32,
     mac: EthernetAddress,
     rx_poll_count: u64,
+    rx_used_count: u64,
+    last_used_idx_debug: u16,
 }
 
 impl VirtioNet {
@@ -285,6 +287,8 @@ impl VirtioNet {
             tx_drops: 0,
             mac,
             rx_poll_count: 0,
+            rx_used_count: 0,
+            last_used_idx_debug: 0,
         };
         driver.initialise_queues();
 
@@ -307,6 +311,24 @@ impl VirtioNet {
     #[must_use]
     pub fn tx_drop_count(&self) -> u32 {
         self.tx_drops
+    }
+
+    pub fn debug_snapshot(&mut self) {
+        let isr = self.regs.isr_status();
+        let status = self.regs.status();
+
+        self.rx_queue.debug_dump("rx");
+        self.tx_queue.debug_dump("tx");
+
+        log::info!(
+            target: "net-console",
+            "[virtio-net] debug_snapshot: status=0x{:02x} isr=0x{:02x} last_used_idx_debug={} rx_used_count={} rx_poll_count={}",
+            status,
+            isr,
+            self.last_used_idx_debug,
+            self.rx_used_count,
+            self.rx_poll_count,
+        );
     }
 
     fn initialise_queues(&mut self) {
@@ -333,6 +355,14 @@ impl VirtioNet {
             self.rx_queue.size,
             self.rx_buffers.len(),
         );
+
+        log::info!(
+            target: "net-console",
+            "[virtio-net] TX queue initialised: size={} buffers={} free_entries={}",
+            self.tx_queue.size,
+            self.tx_buffers.len(),
+            self.tx_free.len(),
+        );
     }
 
     fn reclaim_tx(&mut self) {
@@ -345,7 +375,13 @@ impl VirtioNet {
     }
 
     fn pop_rx(&mut self) -> Option<(u16, usize)> {
-        self.rx_queue.pop_used().map(|(id, len)| (id, len as usize))
+        let result = self.rx_queue.pop_used().map(|(id, len)| (id, len as usize));
+
+        if result.is_some() {
+            self.last_used_idx_debug = self.rx_queue.last_used;
+        }
+
+        result
     }
 
     fn requeue_rx(&mut self, id: u16) {
@@ -536,16 +572,27 @@ impl Device for VirtioNet {
 
     fn receive(&mut self, _timestamp: Instant) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
         self.rx_poll_count = self.rx_poll_count.wrapping_add(1);
+
         if self.rx_poll_count % 1024 == 0 {
-            debug!(
+            log::debug!(
                 target: "net-console",
-                "[virtio-net] receive() polls={}",
-                self.rx_poll_count
+                "[virtio-net] receive() polled {} times (rx_used_count={})",
+                self.rx_poll_count,
+                self.rx_used_count,
             );
         }
+
         self.reclaim_tx();
+
         if let Some((id, len)) = self.pop_rx() {
-            info!("[virtio-net] RX: received frame len={}", len);
+            self.rx_used_count = self.rx_used_count.wrapping_add(1);
+            log::info!(
+                target: "net-console",
+                "[virtio-net] RX: used descriptor received: id={} len={} (rx_used_count={})",
+                id,
+                len,
+                self.rx_used_count,
+            );
             let driver_ptr = self as *mut _;
             let rx = VirtioRxToken {
                 driver: driver_ptr,
@@ -795,6 +842,10 @@ impl VirtioRegs {
         self.write32(Registers::QueueReady, ready);
     }
 
+    fn status(&self) -> u32 {
+        self.read32(Registers::Status)
+    }
+
     fn notify(&mut self, queue: u32) {
         self.write32(Registers::QueueNotify, queue);
     }
@@ -814,6 +865,10 @@ impl VirtioRegs {
         if status != 0 {
             self.write32(Registers::InterruptAck, status);
         }
+    }
+
+    fn isr_status(&self) -> u32 {
+        self.read32(Registers::InterruptStatus)
     }
 
     fn read_mac(&self) -> Option<EthernetAddress> {
@@ -959,6 +1014,24 @@ impl VirtQueue {
 
     fn notify(&mut self, regs: &mut VirtioRegs, queue: u32) {
         regs.notify(queue);
+    }
+
+    pub fn debug_dump(&self, label: &str) {
+        let used = self.used.as_ptr();
+        let avail = self.avail.as_ptr();
+
+        let used_idx = unsafe { read_volatile(&(*used).idx) };
+        let avail_idx = unsafe { read_volatile(&(*avail).idx) };
+
+        log::info!(
+            target: "net-console",
+            "[virtio-net] queue {}: size={} last_used={} avail.idx={} used.idx={}",
+            label,
+            self.size,
+            self.last_used,
+            avail_idx,
+            used_idx,
+        );
     }
 
     fn pop_used(&mut self) -> Option<(u16, u32)> {
