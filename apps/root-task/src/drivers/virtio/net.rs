@@ -514,6 +514,13 @@ impl RxToken for VirtioRxToken {
             .get_mut(self.id as usize)
             .expect("rx descriptor out of range");
         let mut_slice = &mut buffer.as_mut_slice()[..self.len.min(MAX_FRAME_LEN)];
+        let preview_len = core::cmp::min(mut_slice.len(), 16);
+        log::debug!(
+            target: "net-console",
+            "[virtio] RX packet len={} first_bytes={:02x?}",
+            self.len,
+            &mut_slice[..preview_len],
+        );
         log_tcp_trace("RX", mut_slice);
         let result = f(mut_slice);
         driver.requeue_rx(self.id);

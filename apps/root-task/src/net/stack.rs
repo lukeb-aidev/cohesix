@@ -33,7 +33,6 @@ use smoltcp::wire::{
     EthernetAddress, HardwareAddress, IpAddress, IpCidr, IpEndpoint, IpListenEndpoint, Ipv4Address,
 };
 
-use cohesix_proto::{REASON_INACTIVITY_TIMEOUT, REASON_RECV_ERROR, REASON_TIMEOUT};
 use super::{
     console_srv::{SessionEvent, TcpConsoleServer},
     ConsoleNetConfig, NetConsoleEvent, NetPoller, NetTelemetry, DEV_VIRT_GATEWAY, DEV_VIRT_IP,
@@ -42,6 +41,7 @@ use super::{
 use crate::drivers::virtio::net::{DriverError, VirtioNet};
 use crate::hal::{HalError, Hardware};
 use crate::serial::DEFAULT_LINE_CAPACITY;
+use cohesix_proto::{REASON_INACTIVITY_TIMEOUT, REASON_RECV_ERROR, REASON_TIMEOUT};
 
 const TCP_RX_BUFFER: usize = 2048;
 const TCP_TX_BUFFER: usize = 2048;
@@ -394,18 +394,22 @@ impl NetStack {
         iface_ip: Ipv4Address,
     ) {
         let current = socket.state();
-        let previous = session_state.last_state.unwrap_or(TcpState::Closed);
-        if Some(current) == session_state.last_state {
+        let previous = session_state.last_state;
+        let previous_state = previous.unwrap_or(TcpState::Closed);
+        if Some(current) == previous {
             return;
         }
+        log::info!(
+            target: "cohsh-net",
+            "[tcp] state transition: {:?} -> {:?} local={:?} peer={:?}",
+            previous_state,
+            current,
+            socket.local_endpoint(),
+            socket.remote_endpoint(),
+        );
         let (peer, port) = Self::peer_parts(peer_endpoint, socket);
 
-        info!(
-            "[cohsh-net] tcp state transition: {:?} -> {:?} (iface_ip={} peer={}:{})",
-            previous, current, iface_ip, peer, port
-        );
-
-        match (previous, current) {
+        match (previous_state, current) {
             (_, TcpState::SynReceived) => {
                 info!(
                     target: "root_task::net",
@@ -424,7 +428,7 @@ impl NetStack {
 
         if !session_state.connect_reported
             && matches!(current, TcpState::CloseWait | TcpState::Closed)
-            && !matches!(previous, TcpState::Established)
+            && !matches!(previous_state, TcpState::Established)
         {
             warn!(
                 target: "root_task::net",
@@ -761,11 +765,11 @@ impl NetStack {
                     );
                 } else {
                     self.server.begin_session(now_ms, Some(client_id));
-                        info!(
-                            target: "net-console",
-                            "[net-console] auth: waiting for handshake (client_id={})",
-                            client_id
-                        );
+                    info!(
+                        target: "net-console",
+                        "[net-console] auth: waiting for handshake (client_id={})",
+                        client_id
+                    );
                     Self::set_auth_state(
                         &mut self.auth_state,
                         self.active_client_id,
@@ -816,33 +820,47 @@ impl NetStack {
                     socket.can_recv()
                 );
                 while socket.can_recv() {
-                    match socket.recv_slice(&mut temp) {
-                        Ok(0) => break,
-                        Ok(count) => {
+                    let mut copied = 0usize;
+                    let recv_result = socket.recv(|data| {
+                        let preview_len = core::cmp::min(data.len(), 32);
+                        log::debug!(
+                            target: "net-console",
+                            "[tcp] recv on console socket: len={} first_bytes={:02x?}",
+                            data.len(),
+                            &data[..preview_len],
+                        );
+                        let copy_len = core::cmp::min(data.len(), temp.len());
+                        temp[..copy_len].copy_from_slice(&data[..copy_len]);
+                        copied = copy_len;
+                        (copy_len, ())
+                    });
+                    match recv_result {
+                        Ok(()) if copied == 0 => break,
+                        Ok(()) => {
                             let conn_id = self.active_client_id.unwrap_or(0);
                             self.conn_bytes_read =
-                                self.conn_bytes_read.saturating_add(count as u64);
-                            let dump_len = core::cmp::min(count, 32);
+                                self.conn_bytes_read.saturating_add(copied as u64);
+                            let dump_len = core::cmp::min(copied, 32);
                             let (peer_label, peer_port) =
                                 Self::peer_parts(self.peer_endpoint, socket);
                             #[cfg(feature = "net-trace-31337")]
                             {
                                 trace!(
                                     "[cohsh-net][tcp] recv: nbytes={} from {}:{} state={:?}",
-                                    count,
+                                    copied,
                                     peer_label,
                                     peer_port,
                                     socket.state()
                                 );
                                 trace!("[cohsh-net][tcp] recv hex: {:02x?}", &temp[..dump_len]);
                             }
-                            Self::trace_conn_recv(conn_id, &temp[..count]);
+                            Self::trace_conn_recv(conn_id, &temp[..copied]);
                             if ECHO_MODE {
-                                match socket.send_slice(&temp[..count]) {
+                                match socket.send_slice(&temp[..copied]) {
                                     Ok(sent) => {
                                         self.conn_bytes_written =
                                             self.conn_bytes_written.saturating_add(sent as u64);
-                                        Self::trace_conn_send(conn_id, &temp[..sent.min(count)]);
+                                        Self::trace_conn_send(conn_id, &temp[..sent.min(copied)]);
                                     }
                                     Err(err) => {
                                         log::warn!(
@@ -860,17 +878,17 @@ impl NetStack {
                             {
                                 info!(
                                     "[cohsh-net][auth] received candidate auth frame len={} from {}:{}",
-                                    count,
+                                    copied,
                                     peer_label,
                                     peer_port
                                 );
                                 info!(
                                     "[cohsh-net][auth] frame hex: {:02x?}",
-                                    &temp[..count.min(32)]
+                                    &temp[..copied.min(32)]
                                 );
                             }
                             self.session_state.logged_first_recv = true;
-                            match self.server.ingest(&temp[..count], now_ms) {
+                            match self.server.ingest(&temp[..copied], now_ms) {
                                 SessionEvent::None => {}
                                 SessionEvent::Authenticated => {
                                     let conn_id = self.active_client_id.unwrap_or(0);
@@ -881,7 +899,7 @@ impl NetStack {
                                     );
                                     let mut preview: HeaplessString<DEFAULT_LINE_CAPACITY> =
                                         HeaplessString::new();
-                                    for &byte in &temp[..count.min(preview.capacity())] {
+                                    for &byte in &temp[..copied.min(preview.capacity())] {
                                         if byte == b'\n' || byte == b'\r' {
                                             break;
                                         }
@@ -974,8 +992,7 @@ impl NetStack {
                                     );
                                     warn!(
                                         "[net-console] closing connection: reason={} state={:?}",
-                                        REASON_RECV_ERROR,
-                                        self.auth_state
+                                        REASON_RECV_ERROR, self.auth_state
                                     );
                                 }
                             }
@@ -1076,8 +1093,7 @@ impl NetStack {
                 );
                 warn!(
                     "[net-console] closing connection: reason={} state={:?}",
-                    REASON_INACTIVITY_TIMEOUT,
-                    self.auth_state
+                    REASON_INACTIVITY_TIMEOUT, self.auth_state
                 );
                 let _ = self
                     .server
@@ -1227,6 +1243,13 @@ impl NetStack {
             }
             match socket.send_slice(payload.as_slice()) {
                 Ok(sent) if sent == payload.len() => {
+                    let preview_len = core::cmp::min(sent, 32);
+                    log::debug!(
+                        target: "net-console",
+                        "[tcp] send on console socket: len={} first_bytes={:02x?}",
+                        sent,
+                        &payload[..preview_len],
+                    );
                     *conn_bytes_written = conn_bytes_written.saturating_add(sent as u64);
                     if !session_state.logged_first_send {
                         info!(
