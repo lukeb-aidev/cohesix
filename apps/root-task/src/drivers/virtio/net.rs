@@ -100,6 +100,7 @@ pub struct VirtioNet {
     tx_free: HeaplessVec<u16, TX_QUEUE_SIZE>,
     tx_drops: u32,
     mac: EthernetAddress,
+    rx_poll_count: u64,
 }
 
 impl VirtioNet {
@@ -124,7 +125,17 @@ impl VirtioNet {
         info!("[net-console] resetting virtio-net status register");
         regs.reset_status();
         regs.set_status(STATUS_ACKNOWLEDGE);
+        info!(
+            target: "net-console",
+            "[net-console] status set to ACKNOWLEDGE: 0x{:02x}",
+            regs.read32(Registers::Status)
+        );
         regs.set_status(STATUS_ACKNOWLEDGE | STATUS_DRIVER);
+        info!(
+            target: "net-console",
+            "[net-console] status set to DRIVER: 0x{:02x}",
+            regs.read32(Registers::Status)
+        );
 
         info!("[net-console] querying queue sizes");
         regs.select_queue(RX_QUEUE_INDEX);
@@ -147,6 +158,26 @@ impl VirtioNet {
             rx_max, rx_size, tx_max, tx_size
         );
 
+        if (rx_size as u32) > rx_max {
+            error!(
+                target: "net-console",
+                "[net-console] RX queue_size={} > rx_max={} — this is a bug",
+                rx_size,
+                rx_max
+            );
+            return Err(DriverError::NoQueue);
+        }
+
+        if (tx_size as u32) > tx_max {
+            error!(
+                target: "net-console",
+                "[net-console] TX queue_size={} > tx_max={} — this is a bug",
+                tx_size,
+                tx_max
+            );
+            return Err(DriverError::NoQueue);
+        }
+
         info!("[net-console] reading host feature bits");
         let host_features = regs.host_features();
         let negotiated_features = host_features & SUPPORTED_FEATURES;
@@ -156,7 +187,23 @@ impl VirtioNet {
             guest = negotiated_features
         );
         regs.set_guest_features(negotiated_features);
-        regs.set_status(STATUS_ACKNOWLEDGE | STATUS_DRIVER | STATUS_FEATURES_OK);
+        info!(
+            target: "net-console",
+            "[net-console] guest features set: status=0x{:02x}",
+            regs.read32(Registers::Status)
+        );
+        info!(
+            target: "net-console",
+            "[net-console] status after feature negotiation: 0x{:02x}",
+            regs.read32(Registers::Status)
+        );
+        let mut status = STATUS_ACKNOWLEDGE | STATUS_DRIVER | STATUS_FEATURES_OK;
+        regs.set_status(status);
+        info!(
+            target: "net-console",
+            "[net-console] status set to FEATURES_OK: 0x{:02x}",
+            regs.read32(Registers::Status)
+        );
 
         info!("[net-console] allocating virtqueue backing memory");
 
@@ -237,12 +284,12 @@ impl VirtioNet {
             tx_free,
             tx_drops: 0,
             mac,
+            rx_poll_count: 0,
         };
         driver.initialise_queues();
 
-        driver
-            .regs
-            .set_status(STATUS_ACKNOWLEDGE | STATUS_DRIVER | STATUS_FEATURES_OK | STATUS_DRIVER_OK);
+        status |= STATUS_DRIVER_OK;
+        driver.regs.set_status(status);
         info!(
             "[net-console] driver status set to DRIVER_OK (status=0x{:02x})",
             driver.regs.read32(Registers::Status)
@@ -280,6 +327,12 @@ impl VirtioNet {
             self.rx_buffers.len(),
             self.rx_queue.last_used,
         );
+        info!(
+            target: "net-console",
+            "[virtio-net] RX queue initialised: size={} buffers={}",
+            self.rx_queue.size,
+            self.rx_buffers.len(),
+        );
     }
 
     fn reclaim_tx(&mut self) {
@@ -306,6 +359,7 @@ impl VirtioNet {
             self.rx_queue.push_avail(id);
             self.rx_queue.notify(&mut self.regs, RX_QUEUE_INDEX);
         }
+        debug!(target: "net-console", "[virtio-net] requeue_rx: id={id}");
     }
 
     fn prepare_tx_token(&mut self) -> VirtioTxToken {
@@ -481,6 +535,14 @@ impl Device for VirtioNet {
         Self: 'a;
 
     fn receive(&mut self, _timestamp: Instant) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
+        self.rx_poll_count = self.rx_poll_count.wrapping_add(1);
+        if self.rx_poll_count % 1024 == 0 {
+            debug!(
+                target: "net-console",
+                "[virtio-net] receive() polls={}",
+                self.rx_poll_count
+            );
+        }
         self.reclaim_tx();
         if let Some((id, len)) = self.pop_rx() {
             info!("[virtio-net] RX: received frame len={}", len);
@@ -812,6 +874,8 @@ impl VirtQueue {
         let base_ptr = frame.ptr();
         frame.as_mut_slice().fill(0);
 
+        let queue_align = 4usize;
+
         let desc_ptr = base_ptr.cast::<VirtqDesc>();
         let desc_bytes = core::mem::size_of::<VirtqDesc>() * size;
         let avail_offset = desc_bytes;
@@ -824,15 +888,45 @@ impl VirtQueue {
         // optional `used_event` field is omitted from the layout to keep the
         // used ring aligned to the offsets expected by the device.
         let avail_bytes = 4 + 2 * size;
-        let used_offset = align_up(desc_bytes + avail_bytes, 4);
+        let used_offset = align_up(desc_bytes + avail_bytes, queue_align);
         let used_ptr =
             unsafe { NonNull::new_unchecked(base_ptr.as_ptr().add(used_offset) as *mut VirtqUsed) };
 
+        let used_bytes = 4 + core::mem::size_of::<VirtqUsedElem>() * size;
+        let frame_capacity = frame.as_mut_slice().len();
+        let frame_len = used_offset + used_bytes;
+        if frame_len > frame_capacity {
+            error!(
+                target: "net-console",
+                "[net-console] virtqueue layout overflows frame: frame_len={} frame_capacity={}",
+                frame_len,
+                frame_capacity,
+            );
+            return Err(DriverError::NoQueue);
+        }
+        debug!(
+            target: "net-console",
+            "[net-console] virtqueue layout: desc_bytes={} avail_offset={} avail_bytes={} used_offset={} used_bytes={} frame_len={}",
+            desc_bytes,
+            avail_offset,
+            avail_bytes,
+            used_offset,
+            used_bytes,
+            frame_len,
+        );
+
         regs.select_queue(index);
         regs.set_queue_size(queue_size);
-        regs.set_queue_align(4096);
+        regs.set_queue_align(queue_align as u32);
         regs.set_queue_pfn((frame.paddr() >> 12) as u32);
         regs.queue_ready(1);
+        info!(
+            target: "net-console",
+            "[virtio-net] queue {} configured: size={} pfn=0x{:x}",
+            index,
+            queue_size,
+            frame.paddr() >> 12
+        );
 
         Ok(Self {
             _frame: frame,
@@ -877,11 +971,12 @@ impl VirtQueue {
         let elem_ptr =
             unsafe { (*used).ring.as_ptr().add(ring_slot as usize) as *const VirtqUsedElem };
         let elem = unsafe { read_volatile(elem_ptr) };
-        info!(
+        debug!(
             target: "net-console",
-            "[virtio-net] pop_used: last_used={} idx={} -> id={} len={}",
+            "[virtio-net] pop_used: last_used={} idx={} ring_slot={} id={} len={}",
             self.last_used,
             idx,
+            ring_slot,
             elem.id,
             elem.len,
         );
