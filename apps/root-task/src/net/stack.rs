@@ -41,7 +41,7 @@ use super::{
 use crate::drivers::virtio::net::{DriverError, VirtioNet};
 use crate::hal::{HalError, Hardware};
 use crate::serial::DEFAULT_LINE_CAPACITY;
-use cohesix_proto::{REASON_INACTIVITY_TIMEOUT, REASON_RECV_ERROR, REASON_TIMEOUT};
+use cohesix_proto::{REASON_INACTIVITY_TIMEOUT, REASON_RECV_ERROR};
 
 const TCP_RX_BUFFER: usize = 2048;
 const TCP_TX_BUFFER: usize = 2048;
@@ -49,6 +49,8 @@ const SOCKET_CAPACITY: usize = 4;
 const MAX_TX_BUDGET: usize = 8;
 const RANDOM_SEED: u64 = 0x5a5a_5a5a_1234_5678;
 const ECHO_MODE: bool = cfg!(feature = "tcp-echo-31337");
+const ERR_AUTH_REASON_TIMEOUT: &str = "ERR AUTH reason=timeout";
+const ERR_CONSOLE_REASON_TIMEOUT: &str = "ERR CONSOLE reason=timeout";
 
 #[derive(Debug)]
 pub enum NetStackError {
@@ -1052,7 +1054,7 @@ impl NetStack {
                 );
                 let _ = self
                     .server
-                    .enqueue_outbound(concat!("ERR AUTH reason=", REASON_TIMEOUT));
+                    .enqueue_outbound(ERR_AUTH_REASON_TIMEOUT);
                 activity |= Self::flush_outbound(
                     &mut self.server,
                     &mut self.telemetry,
@@ -1097,7 +1099,7 @@ impl NetStack {
                 );
                 let _ = self
                     .server
-                    .enqueue_outbound(concat!("ERR CONSOLE reason=", REASON_TIMEOUT));
+                    .enqueue_outbound(ERR_CONSOLE_REASON_TIMEOUT);
                 activity |= Self::flush_outbound(
                     &mut self.server,
                     &mut self.telemetry,
