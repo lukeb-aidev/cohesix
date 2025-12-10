@@ -274,6 +274,12 @@ impl VirtioNet {
             self.rx_queue.push_avail(idx);
         }
         self.rx_queue.notify(&mut self.regs, RX_QUEUE_INDEX);
+        info!(
+            "[virtio-net] RX queue armed: size={} buffers={} last_used={}",
+            self.rx_queue.size,
+            self.rx_buffers.len(),
+            self.rx_queue.last_used,
+        );
     }
 
     fn reclaim_tx(&mut self) {
@@ -871,6 +877,14 @@ impl VirtQueue {
         let elem_ptr =
             unsafe { (*used).ring.as_ptr().add(ring_slot as usize) as *const VirtqUsedElem };
         let elem = unsafe { read_volatile(elem_ptr) };
+        info!(
+            target: "net-console",
+            "[virtio-net] pop_used: last_used={} idx={} -> id={} len={}",
+            self.last_used,
+            idx,
+            elem.id,
+            elem.len,
+        );
         self.last_used = self.last_used.wrapping_add(1);
         Some((elem.id as u16, elem.len))
     }
