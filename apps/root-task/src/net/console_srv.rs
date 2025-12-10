@@ -14,6 +14,9 @@ use console_ack_wire::AckLine;
 // Transport-level guard to prevent unauthenticated TCP sessions from issuing console verbs.
 // Application-layer ticket and role checks are enforced by the console/event pump.
 const AUTH_PREFIX: &str = "AUTH ";
+const DETAIL_REASON_EXPECTED_TOKEN: &str = "reason=expected-token";
+const DETAIL_REASON_INVALID_LENGTH: &str = "reason=invalid-length";
+const DETAIL_REASON_INVALID_TOKEN: &str = "reason=invalid-token";
 
 /// Outcome of processing newly received bytes from the TCP stream.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -230,7 +233,7 @@ impl TcpConsoleServer {
             self.log_reject(REASON_INVALID_LENGTH, line.as_str());
             let _ = self.enqueue_auth_ack(
                 AckStatus::Err,
-                Some(concat!("reason=", REASON_INVALID_LENGTH)),
+                Some(DETAIL_REASON_INVALID_LENGTH),
             );
             self.set_state(SessionState::Inactive);
             warn!("[cohsh-net][auth] closing session: reason=invalid-length");
@@ -248,7 +251,7 @@ impl TcpConsoleServer {
             self.log_reject(REASON_EXPECTED_TOKEN, line.as_str());
             let _ = self.enqueue_auth_ack(
                 AckStatus::Err,
-                Some(concat!("reason=", REASON_EXPECTED_TOKEN)),
+                Some(DETAIL_REASON_EXPECTED_TOKEN),
             );
             self.set_state(SessionState::Inactive);
             warn!("[cohsh-net][auth] closing session: reason=expected-token");
@@ -267,7 +270,7 @@ impl TcpConsoleServer {
             self.log_reject(REASON_EXPECTED_TOKEN, line.as_str());
             let _ = self.enqueue_auth_ack(
                 AckStatus::Err,
-                Some(concat!("reason=", REASON_EXPECTED_TOKEN)),
+                Some(DETAIL_REASON_EXPECTED_TOKEN),
             );
             self.set_state(SessionState::Inactive);
             warn!("[cohsh-net][auth] closing session: reason=expected-token");
@@ -310,7 +313,7 @@ impl TcpConsoleServer {
             self.log_reject(REASON_INVALID_TOKEN, token);
             let _ = self.enqueue_auth_ack(
                 AckStatus::Err,
-                Some(concat!("reason=", REASON_INVALID_TOKEN)),
+                Some(DETAIL_REASON_INVALID_TOKEN),
             );
             self.set_state(SessionState::Inactive);
             warn!("[cohsh-net][auth] closing session: reason=invalid-token");
