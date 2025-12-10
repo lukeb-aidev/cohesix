@@ -6,13 +6,10 @@ use heapless::{Deque, String as HeaplessString};
 use log::{debug, info, warn};
 
 use super::{AUTH_TIMEOUT_MS, CONSOLE_QUEUE_DEPTH};
-use crate::console::proto::{render_ack, AckLine, AckStatus, LineFormatError};
-use cohesix_proto::{
-    REASON_EXPECTED_TOKEN,
-    REASON_INVALID_LENGTH,
-    REASON_INVALID_TOKEN,
-};
+use crate::console::proto::{render_ack, AckStatus, LineFormatError};
 use crate::serial::DEFAULT_LINE_CAPACITY;
+use cohesix_proto::{REASON_EXPECTED_TOKEN, REASON_INVALID_LENGTH, REASON_INVALID_TOKEN};
+use console_ack_wire::AckLine;
 
 // Transport-level guard to prevent unauthenticated TCP sessions from issuing console verbs.
 // Application-layer ticket and role checks are enforced by the console/event pump.
@@ -165,6 +162,11 @@ impl TcpConsoleServer {
                     let line = self.line_buffer.clone();
                     self.line_buffer.clear();
                     self.last_activity_ms = now_ms;
+                    log::debug!(
+                        target: "net-console",
+                        "[tcp-console] line received: {:?}",
+                        core::str::from_utf8(line.as_bytes()).unwrap_or("<non-utf8>"),
+                    );
                     event = self.handle_line(line);
                     if matches!(event, SessionEvent::Close) {
                         break;
@@ -403,6 +405,13 @@ impl TcpConsoleServer {
             verb: "AUTH",
             detail,
         };
+        log::debug!(
+            target: "net-console",
+            "[tcp-console] enqueue ACK: status={:?} verb={:?} detail={:?}",
+            ack.status,
+            ack.verb,
+            ack.detail,
+        );
         match render_ack(&mut line, &ack) {
             Ok(()) => self.enqueue_outbound(line.as_str()),
             Err(LineFormatError::Truncated) => {
