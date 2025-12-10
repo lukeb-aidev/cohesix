@@ -10,6 +10,7 @@ publish = false
 [target.'cfg(not(target_os = "none"))'.dependencies]
 anyhow = { workspace = true }
 cohesix-ticket = { workspace = true }
+cohesix-proto = { workspace = true }
 secure9p-wire = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }

@@ -33,6 +33,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
 use clap::ValueEnum;
+use cohesix_proto::{role_label as proto_role_label, Role as ProtoRole};
 use cohesix_ticket::Role;
 use nine_door::{InProcessConnection, NineDoor};
 use secure9p_wire::{OpenMode, SessionId, MAX_MSIZE};
@@ -540,10 +541,11 @@ pub enum RoleArg {
 
 impl fmt::Display for RoleArg {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Queen => write!(f, "queen"),
-            Self::WorkerHeartbeat => write!(f, "worker-heartbeat"),
-        }
+        let label = match self {
+            Self::Queen => ProtoRole::Queen,
+            Self::WorkerHeartbeat => ProtoRole::Worker,
+        };
+        write!(f, "{}", proto_role_label(label))
     }
 }
 
@@ -951,10 +953,12 @@ fn parse_path(path: &str) -> Result<Vec<String>> {
 }
 
 fn parse_role(input: &str) -> Result<Role> {
-    match input {
-        "queen" => Ok(Role::Queen),
-        "worker-heartbeat" => Ok(Role::WorkerHeartbeat),
-        other => Err(anyhow!("unknown role '{other}'")),
+    if input.eq_ignore_ascii_case(proto_role_label(ProtoRole::Queen)) {
+        Ok(Role::Queen)
+    } else if input.eq_ignore_ascii_case(proto_role_label(ProtoRole::Worker)) {
+        Ok(Role::WorkerHeartbeat)
+    } else {
+        Err(anyhow!("unknown role '{input}'"))
     }
 }
 

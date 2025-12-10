@@ -33,6 +33,7 @@ use smoltcp::wire::{
     EthernetAddress, HardwareAddress, IpAddress, IpCidr, IpEndpoint, IpListenEndpoint, Ipv4Address,
 };
 
+use cohesix_proto::{REASON_INACTIVITY_TIMEOUT, REASON_RECV_ERROR, REASON_TIMEOUT};
 use super::{
     console_srv::{SessionEvent, TcpConsoleServer},
     ConsoleNetConfig, NetConsoleEvent, NetPoller, NetTelemetry, DEV_VIRT_GATEWAY, DEV_VIRT_IP,
@@ -972,7 +973,8 @@ impl NetStack {
                                         self.active_client_id.unwrap_or(0)
                                     );
                                     warn!(
-                                        "[net-console] closing connection: reason=recv-error state={:?}",
+                                        "[net-console] closing connection: reason={} state={:?}",
+                                        REASON_RECV_ERROR,
                                         self.auth_state
                                     );
                                 }
@@ -1031,7 +1033,9 @@ impl NetStack {
                     "[net-console] closing connection: reason=auth-timeout state={:?}",
                     self.auth_state
                 );
-                let _ = self.server.enqueue_outbound("ERR AUTH reason=timeout");
+                let _ = self
+                    .server
+                    .enqueue_outbound(concat!("ERR AUTH reason=", REASON_TIMEOUT));
                 activity |= Self::flush_outbound(
                     &mut self.server,
                     &mut self.telemetry,
@@ -1071,10 +1075,13 @@ impl NetStack {
                     now_ms
                 );
                 warn!(
-                    "[net-console] closing connection: reason=inactivity-timeout state={:?}",
+                    "[net-console] closing connection: reason={} state={:?}",
+                    REASON_INACTIVITY_TIMEOUT,
                     self.auth_state
                 );
-                let _ = self.server.enqueue_outbound("ERR CONSOLE reason=timeout");
+                let _ = self
+                    .server
+                    .enqueue_outbound(concat!("ERR CONSOLE reason=", REASON_TIMEOUT));
                 activity |= Self::flush_outbound(
                     &mut self.server,
                     &mut self.telemetry,

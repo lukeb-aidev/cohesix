@@ -66,6 +66,8 @@ ffi_shim = [
 
 [dependencies]
 cohesix-ticket = { workspace = true }
+cohesix-proto = { workspace = true }
+console-ack-wire = { workspace = true }
 embedded-io = { version = "0.7.1", default-features = false }
 nb = "1.1"
 portable-atomic = "1.6"

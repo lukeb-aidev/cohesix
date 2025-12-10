@@ -28,6 +28,7 @@ pub use op::BootstrapOp;
 use core::cmp::min;
 use core::fmt::{self, Write as FmtWrite};
 
+use cohesix_proto::{role_label as proto_role_label, Role as ProtoRole};
 use cohesix_ticket::Role;
 use heapless::{String as HeaplessString, Vec as HeaplessVec};
 
@@ -1186,11 +1187,7 @@ where
             self.throttle.register_success();
             let message = format_message(format_args!("attach accepted role={:?}", requested_role));
             self.audit.info(message.as_str());
-            let role_label = match requested_role {
-                Role::Queen => "queen",
-                Role::WorkerHeartbeat => "worker-heartbeat",
-                Role::WorkerGpu => "worker-gpu",
-            };
+            let role_label = proto_role_label(proto_role_from_ticket(requested_role));
             let detail = format_message(format_args!("role={role_label}"));
             self.emit_ack_ok("ATTACH", Some(detail.as_str()));
             log::info!(
@@ -1243,10 +1240,24 @@ where
 
 fn parse_role(raw: &str) -> Option<Role> {
     match raw {
-        value if value.eq_ignore_ascii_case("queen") => Some(Role::Queen),
-        value if value.eq_ignore_ascii_case("worker") => Some(Role::WorkerHeartbeat),
-        value if value.eq_ignore_ascii_case("worker-gpu") => Some(Role::WorkerGpu),
+        value if value.eq_ignore_ascii_case(proto_role_label(ProtoRole::Queen)) => {
+            Some(Role::Queen)
+        }
+        value if value.eq_ignore_ascii_case(proto_role_label(ProtoRole::Worker)) => {
+            Some(Role::WorkerHeartbeat)
+        }
+        value if value.eq_ignore_ascii_case(proto_role_label(ProtoRole::GpuWorker)) => {
+            Some(Role::WorkerGpu)
+        }
         _ => None,
+    }
+}
+
+fn proto_role_from_ticket(role: Role) -> ProtoRole {
+    match role {
+        Role::Queen => ProtoRole::Queen,
+        Role::WorkerHeartbeat => ProtoRole::Worker,
+        Role::WorkerGpu => ProtoRole::GpuWorker,
     }
 }
 
