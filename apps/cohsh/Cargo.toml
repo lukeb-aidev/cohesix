@@ -17,6 +17,8 @@ anyhow = { workspace = true }
 clap = { workspace = true }
 cohesix-ticket = { workspace = true }
 cohesix-net-constants = { workspace = true }
+cohesix-proto = { workspace = true }
+console-ack-wire = { workspace = true }
 secure9p-wire = { workspace = true }
 nine-door = { path = "../nine-door" }
 log = "0.4"

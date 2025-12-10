@@ -1,6 +1,8 @@
 # Author: Lukas Bower
 [workspace]
 members = [
+    "apps/cohesix-proto",
+    "apps/console-ack-wire",
     "apps/cohsh",
     "apps/root-task",
     "apps/nine-door",
@@ -37,6 +39,8 @@ base64 = "0.22"
 hex = "0.4"
 rand = "0.9"
 cohesix-net-constants = { path = "crates/net-constants" }
+cohesix-proto = { path = "apps/cohesix-proto" }
+console-ack-wire = { path = "apps/console-ack-wire" }
 
 [patch.crates-io]
 sel4-sys = { path = "crates/sel4-sys" }

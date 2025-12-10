@@ -1,0 +1,40 @@
+// Author: Lukas Bower
+#![no_std]
+
+//! Shared protocol constants spanning console roles, ticket prefixes, and reason strings.
+
+/// Roles recognised by the Cohesix console and transport layers.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Role {
+    /// Console owner role.
+    Queen,
+    /// Heartbeat worker role.
+    Worker,
+    /// GPU worker role.
+    GpuWorker,
+}
+
+/// Return the canonical label for the provided role.
+pub const fn role_label(role: Role) -> &'static str {
+    match role {
+        Role::Queen => "queen",
+        Role::Worker => "worker-heartbeat",
+        Role::GpuWorker => "worker-gpu",
+    }
+}
+
+/// Prefix used when generating capability tickets.
+pub const TICKET_PREFIX: &str = "cohesix-ticket-";
+
+/// Reason emitted when an authentication token is missing.
+pub const REASON_EXPECTED_TOKEN: &str = "expected-token";
+/// Reason emitted when an authentication token is malformed.
+pub const REASON_INVALID_LENGTH: &str = "invalid-length";
+/// Reason emitted when an authentication token does not match the configured secret.
+pub const REASON_INVALID_TOKEN: &str = "invalid-token";
+/// Reason emitted when an authentication exchange times out.
+pub const REASON_TIMEOUT: &str = "timeout";
+/// Reason emitted when a console session is terminated due to inactivity.
+pub const REASON_INACTIVITY_TIMEOUT: &str = "inactivity-timeout";
+/// Reason emitted when a receive error terminates the console session.
+pub const REASON_RECV_ERROR: &str = "recv-error";

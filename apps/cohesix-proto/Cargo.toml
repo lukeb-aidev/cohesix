@@ -1,0 +1,13 @@
+# Author: Lukas Bower
+[package]
+name = "cohesix-proto"
+version = "0.1.0"
+edition = "2021"
+authors = ["Lukas Bower"]
+license = "MIT"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]

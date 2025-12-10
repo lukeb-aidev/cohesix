@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use cohesix_proto::{role_label as proto_role_label, Role as ProtoRole};
 use cohesix_ticket::{BudgetSpec, Role};
 use gpu_bridge_host::{status_entry, SerialisedGpuNode};
 use log::{debug, info, trace};
@@ -1594,10 +1595,13 @@ fn is_queen_ctl_path(path: &[String]) -> bool {
 }
 
 fn parse_role_from_uname(uname: &str) -> Result<(Role, Option<String>), NineDoorError> {
-    if uname == "queen" {
+    if uname == proto_role_label(ProtoRole::Queen) {
         return Ok((Role::Queen, None));
     }
-    if let Some(rest) = uname.strip_prefix("worker-heartbeat:") {
+    if let Some(rest) = uname
+        .strip_prefix(proto_role_label(ProtoRole::Worker))
+        .and_then(|value| value.strip_prefix(':'))
+    {
         if rest.is_empty() {
             return Err(NineDoorError::protocol(
                 ErrorCode::Invalid,
@@ -1606,7 +1610,10 @@ fn parse_role_from_uname(uname: &str) -> Result<(Role, Option<String>), NineDoor
         }
         return Ok((Role::WorkerHeartbeat, Some(rest.to_owned())));
     }
-    if let Some(rest) = uname.strip_prefix("worker-gpu:") {
+    if let Some(rest) = uname
+        .strip_prefix(proto_role_label(ProtoRole::GpuWorker))
+        .and_then(|value| value.strip_prefix(':'))
+    {
         if rest.is_empty() {
             return Err(NineDoorError::protocol(
                 ErrorCode::Invalid,
@@ -1623,7 +1630,7 @@ fn parse_role_from_uname(uname: &str) -> Result<(Role, Option<String>), NineDoor
 
 pub(crate) fn role_to_uname(role: Role, identity: Option<&str>) -> Result<String, NineDoorError> {
     match role {
-        Role::Queen => Ok("queen".to_owned()),
+        Role::Queen => Ok(proto_role_label(ProtoRole::Queen).to_owned()),
         Role::WorkerHeartbeat => {
             let id = identity
                 .and_then(|value| (!value.is_empty()).then_some(value))
@@ -1633,7 +1640,7 @@ pub(crate) fn role_to_uname(role: Role, identity: Option<&str>) -> Result<String
                         "worker-heartbeat attach requires identity",
                     )
                 })?;
-            Ok(format!("worker-heartbeat:{id}"))
+            Ok(format!("{}:{id}", proto_role_label(ProtoRole::Worker)))
         }
         Role::WorkerGpu => {
             let id = identity
@@ -1644,7 +1651,7 @@ pub(crate) fn role_to_uname(role: Role, identity: Option<&str>) -> Result<String
                         "worker-gpu attach requires identity",
                     )
                 })?;
-            Ok(format!("worker-gpu:{id}"))
+            Ok(format!("{}:{id}", proto_role_label(ProtoRole::GpuWorker)))
         }
     }
 }

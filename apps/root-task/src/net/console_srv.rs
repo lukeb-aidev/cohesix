@@ -7,6 +7,11 @@ use log::{debug, info, warn};
 
 use super::{AUTH_TIMEOUT_MS, CONSOLE_QUEUE_DEPTH};
 use crate::console::proto::{render_ack, AckLine, AckStatus, LineFormatError};
+use cohesix_proto::{
+    REASON_EXPECTED_TOKEN,
+    REASON_INVALID_LENGTH,
+    REASON_INVALID_TOKEN,
+};
 use crate::serial::DEFAULT_LINE_CAPACITY;
 
 // Transport-level guard to prevent unauthenticated TCP sessions from issuing console verbs.
@@ -220,8 +225,11 @@ impl TcpConsoleServer {
                 expected_len,
                 observed_len
             );
-            self.log_reject("invalid-length", line.as_str());
-            let _ = self.enqueue_auth_ack(AckStatus::Err, Some("reason=invalid-length"));
+            self.log_reject(REASON_INVALID_LENGTH, line.as_str());
+            let _ = self.enqueue_auth_ack(
+                AckStatus::Err,
+                Some(concat!("reason=", REASON_INVALID_LENGTH)),
+            );
             self.set_state(SessionState::Inactive);
             warn!("[cohsh-net][auth] closing session: reason=invalid-length");
             warn!("[net-console] auth failed reason=invalid-length");
@@ -235,8 +243,11 @@ impl TcpConsoleServer {
                 raw_bytes.len(),
                 &raw_bytes[..core::cmp::min(raw_bytes.len(), AUTH_PREFIX.len())]
             );
-            self.log_reject("expected-token", line.as_str());
-            let _ = self.enqueue_auth_ack(AckStatus::Err, Some("reason=expected-token"));
+            self.log_reject(REASON_EXPECTED_TOKEN, line.as_str());
+            let _ = self.enqueue_auth_ack(
+                AckStatus::Err,
+                Some(concat!("reason=", REASON_EXPECTED_TOKEN)),
+            );
             self.set_state(SessionState::Inactive);
             warn!("[cohsh-net][auth] closing session: reason=expected-token");
             warn!("[net-console] auth failed reason=expected-token");
@@ -251,8 +262,11 @@ impl TcpConsoleServer {
                 raw_bytes.len(),
                 &raw_bytes[..core::cmp::min(raw_bytes.len(), AUTH_PREFIX.len())]
             );
-            self.log_reject("expected-token", line.as_str());
-            let _ = self.enqueue_auth_ack(AckStatus::Err, Some("reason=expected-token"));
+            self.log_reject(REASON_EXPECTED_TOKEN, line.as_str());
+            let _ = self.enqueue_auth_ack(
+                AckStatus::Err,
+                Some(concat!("reason=", REASON_EXPECTED_TOKEN)),
+            );
             self.set_state(SessionState::Inactive);
             warn!("[cohsh-net][auth] closing session: reason=expected-token");
             warn!("[net-console] auth failed reason=expected-token");
@@ -291,8 +305,11 @@ impl TcpConsoleServer {
                 token.len(),
                 self.auth_token.len()
             );
-            self.log_reject("invalid-token", token);
-            let _ = self.enqueue_auth_ack(AckStatus::Err, Some("reason=invalid-token"));
+            self.log_reject(REASON_INVALID_TOKEN, token);
+            let _ = self.enqueue_auth_ack(
+                AckStatus::Err,
+                Some(concat!("reason=", REASON_INVALID_TOKEN)),
+            );
             self.set_state(SessionState::Inactive);
             warn!("[cohsh-net][auth] closing session: reason=invalid-token");
             warn!("[net-console] auth failed reason=invalid-token");

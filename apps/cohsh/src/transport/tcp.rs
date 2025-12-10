@@ -9,6 +9,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
+use cohesix_proto::{role_label as proto_role_label, Role as ProtoRole, REASON_INVALID_TOKEN};
 use cohesix_ticket::Role;
 use log::{debug, error, info, trace, warn};
 use secure9p_wire::SessionId;
@@ -787,12 +788,16 @@ impl TcpTransport {
         hex || (base64_len_ok && base64_chars_ok)
     }
 
-    fn role_label(role: Role) -> &'static str {
+    fn proto_role_from_ticket(role: Role) -> ProtoRole {
         match role {
-            Role::Queen => "queen",
-            Role::WorkerHeartbeat => "worker-heartbeat",
-            Role::WorkerGpu => "worker-gpu",
+            Role::Queen => ProtoRole::Queen,
+            Role::WorkerHeartbeat => ProtoRole::Worker,
+            Role::WorkerGpu => ProtoRole::GpuWorker,
         }
+    }
+
+    fn role_label(role: Role) -> &'static str {
+        proto_role_label(Self::proto_role_from_ticket(role))
     }
 
     fn trim_line(line: &str) -> String {
@@ -1074,7 +1079,7 @@ mod tests {
                         if trimmed == "AUTH changeme" {
                             writeln!(stream, "OK AUTH").unwrap();
                         } else {
-                            writeln!(stream, "ERR AUTH reason=invalid-token").unwrap();
+                            writeln!(stream, concat!("ERR AUTH reason=", REASON_INVALID_TOKEN)).unwrap();
                             break;
                         }
                     } else if trimmed.starts_with("ATTACH") {
@@ -1154,7 +1159,7 @@ mod tests {
                 let mut line = String::new();
                 while reader.read_line(&mut line).unwrap_or(0) > 0 {
                     if line.trim().starts_with("AUTH ") {
-                        writeln!(stream, "ERR AUTH reason=invalid-token").unwrap();
+                        writeln!(stream, concat!("ERR AUTH reason=", REASON_INVALID_TOKEN)).unwrap();
                         break;
                     }
                     line.clear();
