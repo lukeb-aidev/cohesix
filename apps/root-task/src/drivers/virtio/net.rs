@@ -44,6 +44,19 @@ const TX_QUEUE_INDEX: u32 = 1;
 
 const RX_QUEUE_SIZE: usize = 16;
 const TX_QUEUE_SIZE: usize = 16;
+const VIRTIO_NET_HEADER_LEN: usize = core::mem::size_of::<VirtioNetHdr>();
+const FRAME_BUFFER_LEN: usize = MAX_FRAME_LEN + VIRTIO_NET_HEADER_LEN;
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+struct VirtioNetHdr {
+    flags: u8,
+    gso_type: u8,
+    hdr_len: u16,
+    gso_size: u16,
+    csum_start: u16,
+    csum_offset: u16,
+}
 
 /// Errors surfaced by the virtio network driver.
 #[derive(Debug)]
@@ -255,7 +268,7 @@ impl VirtioNet {
             self.rx_queue.setup_descriptor(
                 idx,
                 buffer.paddr() as u64,
-                MAX_FRAME_LEN as u32,
+                FRAME_BUFFER_LEN as u32,
                 VIRTQ_DESC_F_WRITE,
             );
             self.rx_queue.push_avail(idx);
@@ -281,7 +294,7 @@ impl VirtioNet {
             self.rx_queue.setup_descriptor(
                 id,
                 buffer.paddr() as u64,
-                MAX_FRAME_LEN as u32,
+                FRAME_BUFFER_LEN as u32,
                 VIRTQ_DESC_F_WRITE,
             );
             self.rx_queue.push_avail(id);
@@ -300,7 +313,7 @@ impl VirtioNet {
 
     fn submit_tx(&mut self, id: u16, len: usize) {
         if let Some(buffer) = self.tx_buffers.get_mut(id as usize) {
-            let length = len.min(MAX_FRAME_LEN);
+            let length = len.min(buffer.as_mut_slice().len());
             self.tx_queue
                 .setup_descriptor(id, buffer.paddr() as u64, length as u32, 0);
             self.tx_queue.push_avail(id);
@@ -513,16 +526,28 @@ impl RxToken for VirtioRxToken {
             .rx_buffers
             .get_mut(self.id as usize)
             .expect("rx descriptor out of range");
-        let mut_slice = &mut buffer.as_mut_slice()[..self.len.min(MAX_FRAME_LEN)];
-        let preview_len = core::cmp::min(mut_slice.len(), 16);
+        let available = core::cmp::min(self.len, buffer.as_mut_slice().len());
+        if available < VIRTIO_NET_HEADER_LEN {
+            warn!(
+                "[virtio-net] RX: frame too small for virtio-net header (len={})",
+                available
+            );
+            driver.requeue_rx(self.id);
+            return f(&[]);
+        }
+
+        let payload_len = available - VIRTIO_NET_HEADER_LEN;
+        let mut_slice = &mut buffer.as_mut_slice()[..available];
+        let payload = &mut mut_slice[VIRTIO_NET_HEADER_LEN..VIRTIO_NET_HEADER_LEN + payload_len];
+        let preview_len = core::cmp::min(payload.len(), 16);
         log::debug!(
             target: "net-console",
             "[virtio] RX packet len={} first_bytes={:02x?}",
-            self.len,
-            &mut_slice[..preview_len],
+            payload_len,
+            &payload[..preview_len],
         );
-        log_tcp_trace("RX", mut_slice);
-        let result = f(mut_slice);
+        log_tcp_trace("RX", payload);
+        let result = f(payload);
         driver.requeue_rx(self.id);
         result
     }
@@ -547,18 +572,30 @@ impl TxToken for VirtioTxToken {
     {
         let driver = unsafe { &mut *self.driver };
         if let Some(id) = self.desc {
-            let length = len.min(MAX_FRAME_LEN);
+            let buffer = driver
+                .tx_buffers
+                .get_mut(id as usize)
+                .expect("tx descriptor out of range");
+            let max_len = buffer.as_mut_slice().len();
+            if max_len <= VIRTIO_NET_HEADER_LEN {
+                driver.tx_drops = driver.tx_drops.saturating_add(1);
+                return f(&mut []);
+            }
+
+            let payload_len = len
+                .min(MAX_FRAME_LEN)
+                .min(max_len.saturating_sub(VIRTIO_NET_HEADER_LEN));
+            let total_len = payload_len + VIRTIO_NET_HEADER_LEN;
             let result = {
-                let buffer = driver
-                    .tx_buffers
-                    .get_mut(id as usize)
-                    .expect("tx descriptor out of range");
-                let slice = &mut buffer.as_mut_slice()[..length];
-                let result = f(slice);
-                log_tcp_trace("TX", slice);
+                let mut_slice = &mut buffer.as_mut_slice()[..total_len];
+                let (header, payload) =
+                    mut_slice.split_at_mut(core::cmp::min(VIRTIO_NET_HEADER_LEN, total_len));
+                header.fill(0);
+                let result = f(payload);
+                log_tcp_trace("TX", payload);
                 result
             };
-            driver.submit_tx(id, length);
+            driver.submit_tx(id, total_len);
             result
         } else {
             let length = len.min(MAX_FRAME_LEN);
