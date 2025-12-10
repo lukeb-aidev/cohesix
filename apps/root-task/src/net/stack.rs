@@ -657,12 +657,6 @@ impl NetStack {
         {
             let socket = self.sockets.get_mut::<TcpSocket>(self.tcp_handle);
             Self::record_peer_endpoint(&mut self.peer_endpoint, socket.remote_endpoint());
-            Self::log_tcp_state_change(
-                &mut self.session_state,
-                socket,
-                self.peer_endpoint,
-                self.ip,
-            );
 
             if !socket.is_open() {
                 self.peer_endpoint = None;
@@ -703,6 +697,13 @@ impl NetStack {
                     self.active_client_id = None;
                 }
             }
+
+            Self::log_tcp_state_change(
+                &mut self.session_state,
+                socket,
+                self.peer_endpoint,
+                self.ip,
+            );
 
             if socket.state() == TcpState::Established && !self.session_active {
                 let client_id = self.client_counter.wrapping_add(1);
@@ -1052,9 +1053,7 @@ impl NetStack {
                     "[net-console] closing connection: reason=auth-timeout state={:?}",
                     self.auth_state
                 );
-                let _ = self
-                    .server
-                    .enqueue_outbound(ERR_AUTH_REASON_TIMEOUT);
+                let _ = self.server.enqueue_outbound(ERR_AUTH_REASON_TIMEOUT);
                 activity |= Self::flush_outbound(
                     &mut self.server,
                     &mut self.telemetry,
@@ -1097,9 +1096,7 @@ impl NetStack {
                     "[net-console] closing connection: reason={} state={:?}",
                     REASON_INACTIVITY_TIMEOUT, self.auth_state
                 );
-                let _ = self
-                    .server
-                    .enqueue_outbound(ERR_CONSOLE_REASON_TIMEOUT);
+                let _ = self.server.enqueue_outbound(ERR_CONSOLE_REASON_TIMEOUT);
                 activity |= Self::flush_outbound(
                     &mut self.server,
                     &mut self.telemetry,
