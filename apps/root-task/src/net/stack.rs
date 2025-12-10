@@ -615,6 +615,10 @@ impl NetStack {
             self.clock.advance(delta_ms)
         };
 
+        if now_ms % 1000 == 0 {
+            self.device.debug_snapshot();
+        }
+
         let mut poll_result = self
             .interface
             .poll(timestamp, &mut self.device, &mut self.sockets);
