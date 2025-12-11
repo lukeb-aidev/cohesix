@@ -16,6 +16,8 @@ Cohesix is a pure Rust userspace stack running atop upstream seL4 on `aarch64/vi
 
 Cohesix is designed for physical ARM64 hardware booted via UEFI as the primary deployment environment. Today’s reference setup runs on QEMU `aarch64/virt` for bring-up, CI, and testing, and QEMU behaviour is expected to mirror the eventual UEFI board profile.
 
+Cohesix targets a number of [use cases] (docs/USE_CASES.md) focused on edge management.
+
 Cohesix is NOT intended to replace general purpose operating systems. Developers using Cohesix should focus on its design goals of secure orchestration and telementry. Choesix deliberately avoid POSIX and Linux libraries to keep its surface area small and highly secure - Cohesix developers should embrace this design principle.
 
 ## Getting Started
