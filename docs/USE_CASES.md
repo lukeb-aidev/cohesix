@@ -110,5 +110,4 @@ Each signage hub is a hive with one Queen orchestrating multiple workers, all co
 - **9P scalability upgrades:** pipelining, batching (framed CBOR), sharded namespaces, ring buffers with cursors, short‑write backpressure.  
 - **Tickets & leases:** signed capability tokens with TTL/scopes/rate‑limits; revocation.  
 - **Content‑addressed updates (CAS):** Merkle manifests, delta packs, resumable fetches.  
-- **Gateway API (optional):** HTTP/3 + JSON/CBOR on std host/sidecar; keep VM no_std.  
 - **Edge identity:** UEFI Secure Boot + TPM attest for workers; device keys and enrollment.
