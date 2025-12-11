@@ -518,7 +518,7 @@ impl<D: NetDevice> NetStack<D> {
         info!("[net-console] init: constructing smoltcp stack");
         debug_assert_ne!(config.listen_port, 0, "TCP console port must be non-zero");
         if cfg!(feature = "dev-virt") {
-            debug_assert_eq!(config.listen_port, super::COHSH_TCP_PORT);
+            debug_assert_eq!(config.listen_port, super::COHESIX_TCP_CONSOLE_PORT);
             debug_assert_eq!(config.address.ip, DEV_VIRT_IP);
             debug_assert_eq!(config.address.prefix_len, DEV_VIRT_PREFIX);
             debug_assert_eq!(config.address.gateway, Some(DEV_VIRT_GATEWAY));
@@ -630,10 +630,12 @@ impl<D: NetDevice> NetStack<D> {
         rx_guard.disarm();
         tx_guard.disarm();
         info!(
+            target: "net-console",
             "[net-console] init: TCP listener socket prepared (port={})",
             console_config.listen_port
         );
         info!(
+            target: "net-console",
             "[net-console] init: success; tcp console wired (non-blocking, port={})",
             console_config.listen_port
         );
