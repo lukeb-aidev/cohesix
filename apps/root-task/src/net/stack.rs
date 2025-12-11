@@ -1109,7 +1109,7 @@ impl<D: NetDevice> NetStack<D> {
                 log_closed_conn = Some(conn_id);
                 record_closed_conn = Some(conn_id);
                 self.active_client_id = None;
-                activity = true;
+                activity |= true;
             }
 
             if self.session_active && self.server.should_timeout(now_ms) {
@@ -1152,7 +1152,7 @@ impl<D: NetDevice> NetStack<D> {
                 log_closed_conn = Some(conn_id);
                 record_closed_conn = Some(conn_id);
                 self.active_client_id = None;
-                activity = true;
+                activity |= true;
             }
 
             activity |= Self::flush_outbound(
@@ -1194,7 +1194,7 @@ impl<D: NetDevice> NetStack<D> {
                     self.active_client_id,
                     AuthState::Start,
                 );
-                activity = true;
+                activity |= true;
             }
 
             let snapshot = PollSnapshot {
