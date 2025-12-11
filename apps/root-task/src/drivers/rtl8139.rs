@@ -16,6 +16,8 @@ use smoltcp::phy::{self, Device, DeviceCapabilities};
 use smoltcp::time::Instant;
 use smoltcp::wire::EthernetAddress;
 
+use sel4_sys::seL4_NotEnoughMemory;
+
 use crate::hal::{HalError, Hardware};
 use crate::net::{NetDevice, NetDriverError};
 use crate::sel4::{DeviceFrame, RamFrame};
@@ -24,8 +26,9 @@ const RTL8139_VENDOR_ID: u16 = 0x10ec;
 const RTL8139_DEVICE_ID: u16 = 0x8139;
 const PCI_ECAM_BASE: usize = 0x3000_0000;
 const PCI_ECAM_SIZE: usize = 0x1000_0000;
-const PCI_MAX_BUS: usize = 1;
+const PCI_MAX_BUS: usize = 256;
 const PCI_MAX_DEVICE: usize = 32;
+const PCI_MAX_FUNCTION: usize = 8;
 
 const PCI_CONFIG_VENDOR_DEVICE: usize = 0x00;
 const PCI_CONFIG_COMMAND: usize = 0x04;
@@ -111,11 +114,12 @@ impl Rtl8139Device {
             RTL8139_VENDOR_ID,
             RTL8139_DEVICE_ID,
         );
-        let (cfg_frame, bus, device) = Self::probe_pci(hal)?;
+        let (cfg_frame, bus, device, function) = Self::probe_pci(hal)?;
         info!(
-            "[rtl8139] pci device located at bus={} slot={} (ecam=0x{:x})",
+            "[rtl8139] pci device located at bus={} slot={} function={} (ecam=0x{:x})",
             bus,
             device,
+            function,
             cfg_frame.paddr()
         );
         let base_addr = Self::allocate_io_base(hal, &cfg_frame)?;
@@ -151,54 +155,63 @@ impl Rtl8139Device {
         Ok(device)
     }
 
-    fn probe_pci<H>(hal: &mut H) -> Result<(DeviceFrame, usize, usize), DriverError>
+    fn probe_pci<H>(hal: &mut H) -> Result<(DeviceFrame, usize, usize, usize), DriverError>
     where
         H: Hardware<Error = HalError>,
     {
         for bus in 0..PCI_MAX_BUS {
             for device in 0..PCI_MAX_DEVICE {
-                let cfg_addr =
-                    Self::ecam_addr(bus, device, 0).ok_or(DriverError::PciWindowUnavailable)?;
-                if cfg_addr >= PCI_ECAM_BASE + PCI_ECAM_SIZE {
-                    continue;
-                }
-                let cfg_frame = hal.map_device(cfg_addr)?;
-                let vendor_device = unsafe {
-                    read_volatile(
-                        cfg_frame.ptr().as_ptr().add(PCI_CONFIG_VENDOR_DEVICE) as *const u32
-                    )
-                };
-                let vendor = vendor_device as u16;
-                let device_id = (vendor_device >> 16) as u16;
-                let class_revision = unsafe {
-                    read_volatile(
-                        cfg_frame.ptr().as_ptr().add(PCI_CONFIG_CLASS_REVISION) as *const u32
-                    )
-                };
-                let class_code = (class_revision >> 24) as u8;
-                if vendor != 0xffff {
+                for function in 0..PCI_MAX_FUNCTION {
+                    let cfg_addr = Self::ecam_addr(bus, device, function)
+                        .ok_or(DriverError::PciWindowUnavailable)?;
+                    if cfg_addr >= PCI_ECAM_BASE + PCI_ECAM_SIZE {
+                        continue;
+                    }
+                    let cfg_frame = match hal.map_device(cfg_addr) {
+                        Ok(frame) => frame,
+                        Err(HalError::Sel4(err)) if err == seL4_NotEnoughMemory => {
+                            continue;
+                        }
+                        Err(err) => return Err(DriverError::from(err)),
+                    };
+                    let vendor_device = unsafe {
+                        read_volatile(
+                            cfg_frame.ptr().as_ptr().add(PCI_CONFIG_VENDOR_DEVICE) as *const u32
+                        )
+                    };
+                    let vendor = vendor_device as u16;
+                    let device_id = (vendor_device >> 16) as u16;
+                    if vendor == 0xffff {
+                        continue;
+                    }
+                    let class_revision = unsafe {
+                        read_volatile(
+                            cfg_frame.ptr().as_ptr().add(PCI_CONFIG_CLASS_REVISION) as *const u32
+                        )
+                    };
+                    let class_code = (class_revision >> 24) as u8;
                     log::info!(
                         target: "pci",
                         "[pci] dev bdf={:02x}:{:02x}.{} vendor=0x{:04x} device=0x{:04x} class=0x{:02x}",
                         bus,
                         device,
-                        0,
+                        function,
                         vendor,
                         device_id,
                         class_code,
                     );
-                }
-                if vendor == RTL8139_VENDOR_ID && device_id == RTL8139_DEVICE_ID {
-                    log::info!(
-                        target: "rtl8139",
-                        "[rtl8139] device found at bdf={:02x}:{:02x}.{} (vendor=0x{:04x}, device=0x{:04x})",
-                        bus,
-                        device,
-                        0,
-                        vendor,
-                        device_id,
-                    );
-                    return Ok((cfg_frame, bus, device));
+                    if vendor == RTL8139_VENDOR_ID && device_id == RTL8139_DEVICE_ID {
+                        log::info!(
+                            target: "rtl8139",
+                            "[rtl8139] device found at bdf={:02x}:{:02x}.{} (vendor=0x{:04x}, device=0x{:04x})",
+                            bus,
+                            device,
+                            function,
+                            vendor,
+                            device_id,
+                        );
+                        return Ok((cfg_frame, bus, device, function));
+                    }
                 }
             }
         }
@@ -215,18 +228,36 @@ impl Rtl8139Device {
     where
         H: Hardware<Error = HalError>,
     {
-        let io_base = 0x3eff_0000usize;
+        let cfg_ptr = cfg.ptr().as_ptr();
+        let bar0 = unsafe { read_volatile(cfg_ptr.add(PCI_CONFIG_BAR0) as *const u32) };
+        let io_base = if bar0 & 0x1 == 0x1 && bar0 != u32::MAX && (bar0 & !0x3) != 0 {
+            let base = (bar0 & !0x3) as usize;
+            info!("[rtl8139] reusing existing io base from BAR0=0x{bar0:08x} (base=0x{base:08x})");
+            base
+        } else {
+            let base = 0x3eff_0000usize;
+            let programmed = (base | 1) as u32;
+            unsafe { write_volatile(cfg_ptr.add(PCI_CONFIG_BAR0) as *mut u32, programmed) };
+            info!("[rtl8139] programmed io base=0x{base:08x} into BAR0");
+            base
+        };
+
+        if hal.device_coverage(io_base, 16).is_none() {
+            error!(
+                "[rtl8139] device coverage missing for io_base=0x{io_base:08x}; pci window unavailable"
+            );
+            return Err(DriverError::PciWindowUnavailable);
+        }
+
         unsafe {
-            let cfg_ptr = cfg.ptr().as_ptr();
-            let bar = io_base | 1u32 as usize;
-            write_volatile(cfg_ptr.add(PCI_CONFIG_BAR0) as *mut u32, bar as u32);
-            write_volatile(
-                cfg_ptr.add(PCI_CONFIG_COMMAND) as *mut u16,
-                PCI_COMMAND_IO | PCI_COMMAND_BUS_MASTER,
+            let command = read_volatile(cfg_ptr.add(PCI_CONFIG_COMMAND) as *const u16);
+            let updated = command | PCI_COMMAND_IO | PCI_COMMAND_BUS_MASTER;
+            write_volatile(cfg_ptr.add(PCI_CONFIG_COMMAND) as *mut u16, updated);
+            info!(
+                "[rtl8139] pci command updated: 0x{command:04x} -> 0x{updated:04x} (io+bma enable)"
             );
         }
-        hal.device_coverage(io_base, 16)
-            .ok_or(DriverError::PciWindowUnavailable)?;
+
         Ok(io_base)
     }
 
