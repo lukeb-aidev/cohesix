@@ -9,7 +9,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
-use cohesix_proto::{role_label as proto_role_label, Role as ProtoRole, REASON_INVALID_TOKEN};
+use cohesix_proto::{role_label as proto_role_label, Role as ProtoRole};
 use cohesix_ticket::Role;
 use log::{debug, error, info, trace, warn};
 use secure9p_wire::SessionId;
@@ -1038,6 +1038,8 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
+    use cohesix_proto::REASON_INVALID_TOKEN;
+
     #[test]
     fn ticket_validation_enforces_worker_requirements() {
         assert!(TcpTransport::normalise_ticket(Role::Queen, None)
@@ -1079,7 +1081,7 @@ mod tests {
                         if trimmed == "AUTH changeme" {
                             writeln!(stream, "OK AUTH").unwrap();
                         } else {
-                            writeln!(stream, concat!("ERR AUTH reason=", REASON_INVALID_TOKEN)).unwrap();
+                            writeln!(stream, "ERR AUTH reason={}", REASON_INVALID_TOKEN).unwrap();
                             break;
                         }
                     } else if trimmed.starts_with("ATTACH") {
@@ -1159,7 +1161,7 @@ mod tests {
                 let mut line = String::new();
                 while reader.read_line(&mut line).unwrap_or(0) > 0 {
                     if line.trim().starts_with("AUTH ") {
-                        writeln!(stream, concat!("ERR AUTH reason=", REASON_INVALID_TOKEN)).unwrap();
+                        writeln!(stream, "ERR AUTH reason={}", REASON_INVALID_TOKEN).unwrap();
                         break;
                     }
                     line.clear();

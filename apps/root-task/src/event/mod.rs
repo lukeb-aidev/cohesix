@@ -1243,6 +1243,7 @@ fn parse_role(raw: &str) -> Option<Role> {
         value if value.eq_ignore_ascii_case(proto_role_label(ProtoRole::Queen)) => {
             Some(Role::Queen)
         }
+        "worker" => Some(Role::WorkerHeartbeat),
         value if value.eq_ignore_ascii_case(proto_role_label(ProtoRole::Worker)) => {
             Some(Role::WorkerHeartbeat)
         }

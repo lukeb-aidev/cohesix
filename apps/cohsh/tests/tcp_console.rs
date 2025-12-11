@@ -59,7 +59,7 @@ fn tcp_transport_times_out_when_server_is_silent() {
     let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind test listener");
     let port = listener.local_addr().unwrap().port();
     thread::spawn(move || {
-        let (mut stream, _) = listener.accept().expect("accept client");
+        let (stream, _) = listener.accept().expect("accept client");
         let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
         let mut line = String::new();
         reader.read_line(&mut line).expect("read auth");
