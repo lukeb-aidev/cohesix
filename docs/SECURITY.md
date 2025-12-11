@@ -4,9 +4,9 @@
 The threat model applies to Cohesix running on ARM64 hardware booted via UEFI; QEMU `aarch64/virt` serves as the development/CI harness and is expected to mirror the same attack surface rather than being the deployment end-state.
 
 ## 1. Deterministic Memory Envelope
-- `root-task::net::NetStack` provisions bounded `heapless::spsc::Queue` buffers sized for 16 frames × 1536 bytes on both RX and
-  TX paths (≈49 KiB total). The queues are allocated once at boot via `Box::leak` to avoid dynamic growth and are shared across
-  smoltcp, the virtio descriptor validator, and diagnostics handles.
+- `root-task::net::NetStack` binds smoltcp to HAL-provided NICs (RTL8139 by default on `dev-virt`, virtio-net feature-gated). DMA
+  frames are allocated once via `KernelHal::alloc_dma_frame` and device mappings flow through HAL coverage checks so drivers never
+  bypass allocator accounting.
 - A monotonic `NetworkClock` backed by `portable_atomic::AtomicU64` bounds timestamp arithmetic while avoiding wrap for the
   lifetime of the Cohesix instance. Pollers advance the clock using explicit millisecond timestamps supplied by the event pump so the heapless
   queues never rely on wall-clock drift.
@@ -50,6 +50,8 @@ The threat model applies to Cohesix running on ARM64 hardware booted via UEFI; Q
 - Port forwarding via `scripts/qemu-run.sh --tcp-port <port>` prints the forwarded endpoint and encourages operators to tunnel
   through localhost-only bindings. When the flag is omitted the listener remains inaccessible from the host, reducing the attack
   surface during bring-up.
+- All NIC backends remain HAL-bound; smoltcp plus the authenticated TCP console are the only in-VM network entry points regardless
+  of whether RTL8139 (default) or virtio-net (feature-gated) is selected.
 - The event pump emits audit records (`event-pump: init <subsystem>`, `net: poll link_up=<bool> tx_drops=<count>`, `attach
   accepted`, `attach denied`) that flow to the serial log. These records are critical for forensic review because they show which
   subsystems were live at the time of an intrusion and whether the networking queues are under pressure.

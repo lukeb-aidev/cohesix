@@ -77,6 +77,7 @@ pub trait RootTaskControl {
   - The TCP console enforces a maximum line length of 128 bytes and rate-limits failed authentication attempts (3 strikes within
     60 seconds triggers a 90-second cooldown). `cohsh` additionally validates worker tickets locally, rejecting whitespace or
     malformed values so automation does not leak failed attempts over the wire.
+- For `dev-virt`, QEMU forwards `127.0.0.1:<port>` to `10.0.2.15:<port>` via the RTL8139 NIC; the virtio-net backend remains available behind a feature gate but is not the default. Operators generally do not need to care which NIC is active, but the backend label appears in boot logs for diagnostics.
 - `cohsh` is the authoritative implementation of this protocol, and the planned WASM GUI is conceptually another client that wraps the same verbs without introducing a new control surface.
 
 ## 8. Error Surface

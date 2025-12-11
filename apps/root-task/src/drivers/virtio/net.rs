@@ -19,7 +19,7 @@ use smoltcp::time::Instant;
 use smoltcp::wire::EthernetAddress;
 
 use crate::hal::{HalError, Hardware};
-use crate::net::CONSOLE_TCP_PORT;
+use crate::net::{NetDevice, NetDriverError, CONSOLE_TCP_PORT};
 use crate::net_consts::MAX_FRAME_LEN;
 use crate::sel4::{DeviceFrame, RamFrame};
 
@@ -92,6 +92,12 @@ impl From<HalError> for DriverError {
         match err {
             HalError::Sel4(code) => Self::Sel4(code),
         }
+    }
+}
+
+impl NetDriverError for DriverError {
+    fn is_absent(&self) -> bool {
+        matches!(self, Self::NoDevice)
     }
 }
 
@@ -626,6 +632,37 @@ impl Device for VirtioNet {
         caps.max_burst_size = Some(1);
         caps.medium = Medium::Ethernet;
         caps
+    }
+}
+
+impl NetDevice for VirtioNet {
+    type Error = DriverError;
+
+    fn create<H>(hal: &mut H) -> Result<Self, Self::Error>
+    where
+        H: Hardware<Error = HalError>,
+        Self: Sized,
+    {
+        Self::new(hal)
+    }
+
+    fn mac(&self) -> EthernetAddress {
+        self.mac
+    }
+
+    fn tx_drop_count(&self) -> u32 {
+        self.tx_drops
+    }
+
+    fn name() -> &'static str
+    where
+        Self: Sized,
+    {
+        "virtio-net"
+    }
+
+    fn debug_snapshot(&mut self) {
+        VirtioNet::debug_snapshot(self);
     }
 }
 

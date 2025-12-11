@@ -53,8 +53,9 @@ The logical architecture—root-task, NineDoor, workers, Secure9P transports, GP
 - Exposes a deterministic event pump (`event::EventPump`) that coordinates serial, timer, networking, and IPC tasks. The pump
   emits structured audit lines whenever subsystems are initialised and ensures each poll cycle services every source without
   revisiting the legacy spin loop.
-- Hosts the deterministic networking stack (`net::NetStack`) which wraps smoltcp with virtio-friendly, heapless RX/TX queues and
-  a `NetworkClock` that advances in timer-driven increments.
+- Hosts the deterministic networking stack (`net::NetStack`) which wraps smoltcp behind a HAL-provided NIC abstraction. RTL8139
+  (the default `dev-virt` backend) and the feature-gated virtio-net driver both rely on `KernelHal` for device mappings, DMA
+  frames, and diagnostics; `NetworkClock` advances in timer-driven increments.
 - Provides the PL011-backed serial façade (`serial::pl011` + `console::Console`) that powers the always-on root shell
   when `serial-console` is enabled. Input/output is line-buffered with bounded heapless queues and UTF-8
   normalisation shared with the TCP transport.
@@ -84,6 +85,16 @@ The logical architecture—root-task, NineDoor, workers, Secure9P transports, GP
 - `cohsh` is the canonical operator shell for the hive, speaking the same console and NineDoor verbs over serial or TCP transports.
 - Automated systems are expected to embed `cohsh` or speak the same protocol when issuing hive orchestration commands.
 - A future host-side WASM GUI is planned as a hive dashboard that wraps the `cohsh` protocol; it introduces no new in-VM control channel.
+
+### Networking Stack and HAL Boundary
+- The HAL (`KernelHal` implementing the `Hardware` trait) is the sole entry point for device mappings, DMA frame allocation, and
+  device coverage bookkeeping. NIC drivers invoke these helpers instead of touching physical addresses directly so snapshot and
+  diagnostics paths remain coherent.
+- Both NICs in tree (RTL8139 for `dev-virt`, virtio-net as an experimental alternate) implement a small `NetDevice` trait and plug
+  into the smoltcp-backed `NetStack`. The stack remains NIC-agnostic: it consumes MAC address, link telemetry, and RX/TX tokens but
+  never inspects device registers.
+- TCP console traffic flows NIC driver → `NetStack` (smoltcp) → TCP console server → shared console runtime. Backend choice is a
+  HAL concern; console authentication and verb parsing stay identical regardless of NIC.
 
 ### Host GPU Bridge (future, crate: `gpu-bridge`)
 - Runs **outside** the VM, using NVML/CUDA to manage real hardware.
@@ -119,13 +130,11 @@ The logical architecture—root-task, NineDoor, workers, Secure9P transports, GP
   required to remain non-blocking so it cannot interfere with root shell input or event-pump cadence.【F:apps/root-task/src/net/console_srv.rs†L1-L134】
 - Both consoles run concurrently; remote access is additive rather than a replacement, ensuring local serial recovery remains
   available even when TCP listeners are present.【F:apps/root-task/src/kernel.rs†L1474-L1565】
-- The networking substrate instantiates a virtio-style PHY backed by `heapless::spsc::Queue` buffers (16 frames × 1536 bytes) to
-  preserve deterministic memory usage. smoltcp provides the IPv4/TCP stack while the PHY abstraction allows future hardware
-  drivers to plug in without changing higher layers. The module is feature-gated (`--features net`) so developers can defer the
-  footprint when working on console-only flows.
-- A host-only virtio loopback is exposed via `QueueHandle` for testing; production builds will swap this out for the seL4
-  virtio-net driver once the VM wiring is complete. The event pump owns the smoltcp poll cadence and publishes link status
-  metrics into the boot log.
+- The networking substrate uses HAL-provided NICs (`NetDevice`) backed by fixed-size DMA frames rather than ad-hoc mappings. RTL8139
+  is the default backend for `dev-virt` while virtio-net remains feature-gated for experiments. smoltcp provides the IPv4/TCP stack
+  and the HAL boundary allows future hardware drivers to plug in without touching console or parser logic. The module is
+  feature-gated (`--features net`) so developers can defer the footprint when working on console-only flows. The event pump owns the
+  smoltcp poll cadence and publishes link status metrics into the boot log.
 - The console loop multiplexes serial input and TCP sessions. A shared finite-state parser enforces maximum line length,
   exponential back-off for repeated authentication failures, and funnels all verbs through capability checks before invoking
   NineDoor or root-task orchestration APIs. Sanitised console lines are counted once in the event-pump metrics so `/proc/boot`
