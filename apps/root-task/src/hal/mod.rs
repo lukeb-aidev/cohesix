@@ -7,11 +7,125 @@
 //! current driver set depends on. This keeps the surface area small while
 //! providing a structured location for future peripherals.
 
-use core::fmt;
+use core::{fmt, ptr::NonNull};
+
+pub mod pci;
 
 use crate::sel4::{DeviceCoverage, DeviceFrame, KernelEnv, KernelEnvSnapshot, RamFrame};
+use pci::{PciAddress, PciTopology};
 #[cfg(feature = "kernel")]
 use sel4_sys::seL4_Error;
+
+/// Mapping permissions used by the HAL when creating virtual regions.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct MapPerms {
+    pub read: bool,
+    pub write: bool,
+}
+
+impl MapPerms {
+    pub const R: Self = Self {
+        read: true,
+        write: false,
+    };
+
+    pub const RW: Self = Self {
+        read: true,
+        write: true,
+    };
+}
+
+/// HAL-managed mapping of device memory returned to drivers.
+#[derive(Clone)]
+pub struct MappedRegion {
+    frame: DeviceFrame,
+    size: usize,
+    perms: MapPerms,
+}
+
+impl MappedRegion {
+    /// Constructs a mapped region from an existing device frame.
+    #[must_use]
+    pub const fn new(frame: DeviceFrame, size: usize, perms: MapPerms) -> Self {
+        Self { frame, size, perms }
+    }
+
+    /// Returns the permissions assigned to this mapping.
+    #[must_use]
+    pub const fn perms(&self) -> MapPerms {
+        self.perms
+    }
+
+    /// Returns the size of the mapped region in bytes.
+    #[must_use]
+    pub const fn size(&self) -> usize {
+        self.size
+    }
+
+    /// Returns the underlying virtual pointer backing the mapping.
+    #[must_use]
+    pub fn ptr(&self) -> NonNull<u8> {
+        self.frame.ptr()
+    }
+
+    /// Returns the physical base address for the mapping.
+    #[must_use]
+    pub fn paddr(&self) -> usize {
+        self.frame.paddr()
+    }
+}
+
+/// PCI command register flags manipulated by the HAL.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct PciCommandFlags {
+    bits: u16,
+}
+
+impl PciCommandFlags {
+    pub const IO_SPACE: Self = Self { bits: 1 << 0 };
+    pub const MEMORY_SPACE: Self = Self { bits: 1 << 1 };
+    pub const BUS_MASTER: Self = Self { bits: 1 << 2 };
+
+    /// Returns an empty flag set.
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self { bits: 0 }
+    }
+
+    /// Returns the raw bitfield representation.
+    #[must_use]
+    pub const fn bits(self) -> u16 {
+        self.bits
+    }
+
+    /// Returns true when all flags in `other` are present in `self`.
+    #[must_use]
+    pub const fn contains(self, other: Self) -> bool {
+        (self.bits & other.bits) == other.bits
+    }
+
+    /// Returns a new flag set containing all bits from both operands.
+    #[must_use]
+    pub const fn union(self, other: Self) -> Self {
+        Self {
+            bits: self.bits | other.bits,
+        }
+    }
+}
+
+impl core::ops::BitOr for PciCommandFlags {
+    type Output = Self;
+
+    fn bitor(self, rhs: Self) -> Self::Output {
+        self.union(rhs)
+    }
+}
+
+impl core::ops::BitOrAssign for PciCommandFlags {
+    fn bitor_assign(&mut self, rhs: Self) {
+        self.bits |= rhs.bits;
+    }
+}
 
 /// Errors surfaced by hardware accessors.
 #[cfg(feature = "kernel")]
@@ -19,6 +133,14 @@ use sel4_sys::seL4_Error;
 pub enum HalError {
     /// seL4 system call failure while manipulating capabilities or mappings.
     Sel4(seL4_Error),
+    /// The requested platform does not expose PCI.
+    NoPci,
+    /// The requested PCI address is invalid or not present in the topology.
+    InvalidPciAddress,
+    /// The requested BAR is missing.
+    PciBarUnavailable,
+    /// Requested operation is unsupported by the current platform.
+    Unsupported(&'static str),
 }
 
 #[cfg(feature = "kernel")]
@@ -26,6 +148,10 @@ impl fmt::Display for HalError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Sel4(err) => write!(f, "seL4 error {err:?}"),
+            Self::NoPci => f.write_str("pci unavailable"),
+            Self::InvalidPciAddress => f.write_str("invalid pci address"),
+            Self::PciBarUnavailable => f.write_str("pci bar unavailable"),
+            Self::Unsupported(reason) => write!(f, "unsupported operation: {reason}"),
         }
     }
 }
@@ -54,6 +180,24 @@ pub trait Hardware {
 
     /// Snapshot of allocator usage for debugging.
     fn snapshot(&self) -> KernelEnvSnapshot;
+
+    /// Returns the discovered PCI topology for the platform when available.
+    fn pci_topology(&self) -> Option<&PciTopology>;
+
+    /// Maps the specified BAR for the supplied PCI address into virtual memory.
+    fn map_pci_bar(
+        &mut self,
+        addr: PciAddress,
+        bar_index: u8,
+        perms: MapPerms,
+    ) -> Result<MappedRegion, Self::Error>;
+
+    /// Configures the PCI command register for the supplied device.
+    fn configure_pci_device(
+        &mut self,
+        addr: PciAddress,
+        command_flags: PciCommandFlags,
+    ) -> Result<(), Self::Error>;
 }
 
 /// seL4-backed hardware provider that owns the [`KernelEnv`].
@@ -104,5 +248,26 @@ impl<'a> Hardware for KernelHal<'a> {
 
     fn snapshot(&self) -> KernelEnvSnapshot {
         self.env.snapshot()
+    }
+
+    fn pci_topology(&self) -> Option<&PciTopology> {
+        None
+    }
+
+    fn map_pci_bar(
+        &mut self,
+        _addr: PciAddress,
+        _bar_index: u8,
+        _perms: MapPerms,
+    ) -> Result<MappedRegion, Self::Error> {
+        Err(HalError::NoPci)
+    }
+
+    fn configure_pci_device(
+        &mut self,
+        _addr: PciAddress,
+        _command_flags: PciCommandFlags,
+    ) -> Result<(), Self::Error> {
+        Err(HalError::NoPci)
     }
 }
