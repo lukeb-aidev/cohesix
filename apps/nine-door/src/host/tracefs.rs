@@ -126,6 +126,62 @@ impl TraceFs {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn read_all_events(fs: &TraceFs) -> String {
+        String::from_utf8(fs.read_events(0, u32::MAX)).expect("events should be utf8")
+    }
+
+    #[test]
+    fn records_and_filters_events() {
+        let mut fs = TraceFs::new();
+        fs.record(TraceLevel::Info, "boot", None, "first");
+        fs.record(TraceLevel::Debug, "boot", None, "second");
+
+        // Default filter only includes info-and-below.
+        let contents = read_all_events(&fs);
+        assert!(contents.contains("first"));
+        assert!(!contents.contains("second"));
+
+        let payload = br#"{"set":{"level":"debug"}}"#;
+        fs.write_ctl(payload).expect("valid control payload");
+        fs.record(TraceLevel::Debug, "boot", None, "second");
+
+        let filtered = read_all_events(&fs);
+        assert!(filtered.contains("first"));
+        assert!(filtered.contains("second"));
+    }
+
+    #[test]
+    fn rejects_invalid_control_commands() {
+        let mut fs = TraceFs::new();
+        let result = fs.write_ctl(b"{not-json}\n");
+        assert!(result.is_err());
+
+        let empty_categories = br#"{"set":{"cats":[]}}"#;
+        let empty_result = fs.write_ctl(empty_categories);
+        assert!(matches!(empty_result, Err(NineDoorError::Protocol { .. })));
+    }
+
+    #[test]
+    fn respects_offsets_and_task_filters() {
+        let mut fs = TraceFs::new();
+        fs.record(TraceLevel::Info, "queen", Some("worker-1"), "spawned");
+        fs.record(TraceLevel::Info, "queen", Some("worker-2"), "spawned");
+
+        let task_bytes = fs.read_task("worker-1", 0, u32::MAX);
+        let task_contents = String::from_utf8(task_bytes).expect("utf8 task trace");
+        assert!(task_contents.contains("worker-1"));
+        assert!(!task_contents.contains("worker-2"));
+
+        // Offset skips the first character, ensuring the slice logic applies to JSONL streams.
+        let truncated = fs.read_events(1, 4);
+        assert_eq!(truncated.len(), 4);
+    }
+}
+
 #[derive(Debug)]
 struct TraceFilter {
     level: TraceLevel,

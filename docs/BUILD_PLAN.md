@@ -386,7 +386,7 @@ Deliverables: Bidirectional console acknowledgements spanning serial and TCP tra
 - `https://crates.io/crates/spin` (lock primitives for bounded queues)
 
 ## Milestone 7e — TraceFS (JSONL Synthetic Filesystem)
-**Status:** Pending — NineDoor namespaces and Secure9P path semantics are live; add the trace provider without regressing existing mounts (see `SECURE9P.md`).
+**Status:** Complete — TraceFS provider backs `/trace/*` and worker traces; control-plane filters and CLI coverage are wired without regressing existing mounts (see `SECURE9P.md`).
 **Purpose**
 Add a minimal synthetic 9P provider (`tracefs`) exposing JSONL-based tracing and diagnostic streams.  
 Enable root-task and userspace components to log, filter, and stream events via append-only 9P files, following the Plan 9 “everything is a file” model.
@@ -446,6 +446,8 @@ and provisioning DMA buffers.
 - `apps/root-task/src/drivers/virtio/net.rs` and `apps/root-task/src/net/stack.rs` updated to rely on the HAL rather than touching
   `KernelEnv` directly, simplifying future platform support.
 - Documentation updates in this build plan describing the milestone and entry criteria.
+
+**Status:** Complete — Kernel HAL now owns device mapping, diagnostics, and virtio/PL011 bring-up while keeping console output stable.
 
 **Commands**
 - `cargo check -p root-task --features "kernel,net-console"`
