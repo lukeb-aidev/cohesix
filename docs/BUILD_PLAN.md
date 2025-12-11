@@ -16,11 +16,11 @@ preparing and executing tasks.
 
 Cohesix is a hive-style orchestrator: one Queen coordinating many workers via a shared Secure9P namespace and commanded through `cohsh`.
 
-**Current Status Snapshot (through Milestone 7d)**
-- Milestones 0–7d are implemented: the cooperative event pump, PL011 root console, TCP console listener, Secure9P namespace, and shared `OK`/`ERR` acknowledgement surface are live and reflected in the updated architecture and CLI docs (see `ARCHITECTURE.md` / `USERLAND_AND_CLI.md`).
+**Current Status Snapshot (through Milestone 8a)**
+- Milestones 0–8a are implemented: the cooperative event pump, PL011 root console, TCP console listener, Secure9P namespace, HAL-backed device mapping, and shared `OK`/`ERR` acknowledgement surface are live and reflected in the updated architecture and CLI docs (see `ARCHITECTURE.md` / `USERLAND_AND_CLI.md`).
 - Dual consoles now run concurrently; the TCP listener is non-blocking and mirrors serial semantics while keeping PL011 always-on for recovery.
 - NineDoor attach/namespace semantics follow `SECURE9P.md` and role mounts from `ROLES_AND_SCHEDULING.md`; worker-heart and worker-gpu remain stubs until later milestones integrate them with the live namespaces.
-- Remaining milestones focus on acknowledgement hardening, HAL/compiler work, and future worker/GPU namespace extensions.
+- Remaining milestones focus on acknowledgement hardening, compiler work, cache-safe DMA plumbing, and future worker/GPU namespace extensions.
 
 ## seL4 Reference Manual Alignment (v13.0.0)
 
