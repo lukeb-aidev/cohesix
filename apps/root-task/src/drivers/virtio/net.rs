@@ -67,6 +67,8 @@ struct VirtioNetHdr {
 pub enum DriverError {
     /// seL4 system call failure.
     Sel4(seL4_Error),
+    /// HAL reported an error unrelated to seL4 syscalls.
+    Hal(HalError),
     /// No virtio-net device was found on the MMIO bus.
     NoDevice,
     /// RX or TX queues were unavailable or zero sized.
@@ -79,6 +81,7 @@ impl fmt::Display for DriverError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Sel4(err) => write!(f, "seL4 error {err:?}"),
+            Self::Hal(err) => write!(f, "hal error: {err}"),
             Self::NoDevice => f.write_str("virtio-net device not found"),
             Self::NoQueue => f.write_str("virtio-net queues unavailable"),
             Self::BufferExhausted => f.write_str("virtio-net DMA buffer exhausted"),
@@ -90,6 +93,7 @@ impl From<HalError> for DriverError {
     fn from(err: HalError) -> Self {
         match err {
             HalError::Sel4(code) => Self::Sel4(code),
+            _ => Self::Hal(err),
         }
     }
 }
