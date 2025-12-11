@@ -358,10 +358,10 @@ impl Rtl8139Device {
 impl phy::RxToken for RxToken {
     fn consume<R, F>(self, f: F) -> R
     where
-        F: FnOnce(&mut [u8]) -> R,
+        F: FnOnce(&[u8]) -> R,
     {
-        let mut buffer = self.packet;
-        let result = f(&mut buffer[..]);
+        let buffer = self.packet;
+        let result = f(&buffer[..]);
         result
     }
 }
