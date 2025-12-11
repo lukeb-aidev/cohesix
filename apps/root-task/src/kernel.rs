@@ -1497,6 +1497,51 @@ fn bootstrap<P: Platform>(
                 error_label, error_code
             );
         }
+        Err(HalError::Unsupported(reason)) => {
+            let mut line = heapless::String::<128>::new();
+            let _ = write!(
+                line,
+                "map_device(0x{addr:08x}) unsupported: {reason}",
+                addr = PL011_PADDR,
+                reason = reason,
+            );
+            console.writeln_prefixed(line.as_str());
+
+            (None, None)
+        }
+        Err(HalError::NoPci) => {
+            let mut line = heapless::String::<128>::new();
+            let _ = write!(
+                line,
+                "map_device(0x{addr:08x}) failed: pci unavailable",
+                addr = PL011_PADDR,
+            );
+            console.writeln_prefixed(line.as_str());
+
+            (None, None)
+        }
+        Err(HalError::InvalidPciAddress) => {
+            let mut line = heapless::String::<128>::new();
+            let _ = write!(
+                line,
+                "map_device(0x{addr:08x}) failed: invalid pci address",
+                addr = PL011_PADDR,
+            );
+            console.writeln_prefixed(line.as_str());
+
+            (None, None)
+        }
+        Err(HalError::PciBarUnavailable) => {
+            let mut line = heapless::String::<128>::new();
+            let _ = write!(
+                line,
+                "map_device(0x{addr:08x}) failed: pci bar unavailable",
+                addr = PL011_PADDR,
+            );
+            console.writeln_prefixed(line.as_str());
+
+            (None, None)
+        }
     };
 
     let uart_ptr = uart_region
