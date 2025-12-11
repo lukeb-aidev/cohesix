@@ -90,8 +90,7 @@ pub struct Rtl8139Device {
     tx_drops: u32,
 }
 
-struct RxToken<'a> {
-    device: &'a mut Rtl8139Device,
+struct RxToken {
     packet: HeaplessVec<u8, MAX_FRAME_LEN>,
 }
 
@@ -356,8 +355,8 @@ impl Rtl8139Device {
     }
 }
 
-impl<'a> phy::RxToken for RxToken<'a> {
-    fn consume<R, F>(self, _timestamp: Instant, f: F) -> R
+impl phy::RxToken for RxToken {
+    fn consume<R, F>(self, f: F) -> R
     where
         F: FnOnce(&mut [u8]) -> R,
     {
@@ -368,7 +367,7 @@ impl<'a> phy::RxToken for RxToken<'a> {
 }
 
 impl<'a> phy::TxToken for TxToken<'a> {
-    fn consume<R, F>(self, _timestamp: Instant, len: usize, f: F) -> R
+    fn consume<R, F>(self, len: usize, f: F) -> R
     where
         F: FnOnce(&mut [u8]) -> R,
     {
@@ -383,10 +382,7 @@ impl<'a> phy::TxToken for TxToken<'a> {
 }
 
 impl Device for Rtl8139Device {
-    type RxToken<'a>
-        = RxToken<'a>
-    where
-        Self: 'a;
+    type RxToken<'a> = RxToken;
     type TxToken<'a>
         = TxToken<'a>
     where
@@ -394,17 +390,14 @@ impl Device for Rtl8139Device {
 
     fn capabilities(&self) -> DeviceCapabilities {
         let mut caps = DeviceCapabilities::default();
-        caps.max_transmission_unit = MAX_FRAME_LEN as u16;
+        caps.max_transmission_unit = MAX_FRAME_LEN;
         caps
     }
 
     fn receive(&mut self, _timestamp: Instant) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
         let packet = self.poll_rx()?;
         Some((
-            RxToken {
-                device: self,
-                packet,
-            },
+            RxToken { packet },
             TxToken { device: self },
         ))
     }
