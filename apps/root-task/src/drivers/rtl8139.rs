@@ -358,7 +358,7 @@ impl Rtl8139Device {
 impl phy::RxToken for RxToken {
     fn consume<R, F>(self, f: F) -> R
     where
-        F: FnOnce(&mut [u8]) -> R,
+        F: for<'a> FnOnce(&'a mut [u8]) -> R,
     {
         let mut buffer = self.packet;
         let result = f(&mut buffer[..]);
@@ -369,7 +369,7 @@ impl phy::RxToken for RxToken {
 impl<'a> phy::TxToken for TxToken<'a> {
     fn consume<R, F>(self, len: usize, f: F) -> R
     where
-        F: FnOnce(&mut [u8]) -> R,
+        F: for<'a> FnOnce(&'a mut [u8]) -> R,
     {
         let mut temp = [0u8; TX_BUFFER_LEN];
         let filled = &mut temp[..len.min(TX_BUFFER_LEN)];
