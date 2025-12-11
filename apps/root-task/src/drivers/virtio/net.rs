@@ -1,10 +1,9 @@
 // Author: Lukas Bower
 //! Virtio MMIO network device driver used by the root task.
 //!
-//! NOTE: virtio-net is temporarily disabled for the `dev-virt` target in
-//! favour of `rtl8139` due to RX descriptor completion issues observed on the
-//! QEMU ARM `virt` platform. The driver remains available behind the alternate
-//! backend selection for future debugging.
+//! Virtio MMIO network device driver used by the root task on the ARM `virt`
+//! platform. RX descriptor handling and smoltcp integration are instrumented to
+//! aid debugging end-to-end TCP console flows.
 #![cfg(all(feature = "kernel", feature = "net-console"))]
 #![allow(unsafe_code)]
 
@@ -199,6 +198,13 @@ impl VirtioNet {
             host = host_features,
             guest = negotiated_features
         );
+        log::info!(
+            target: "virtio-net",
+            "features: negotiated=0x{:x}, queue_sizes RX={} TX={}",
+            negotiated_features,
+            rx_size,
+            tx_size,
+        );
         regs.set_guest_features(negotiated_features);
         info!(
             target: "net-console",
@@ -353,6 +359,14 @@ impl VirtioNet {
             );
             self.rx_queue.push_avail(idx);
         }
+        let (used_idx, avail_idx) = self.rx_queue.indices();
+        log::debug!(
+            target: "virtio-net",
+            "[RX] posted buffers={} used_idx={} avail_idx={}",
+            self.rx_buffers.len(),
+            used_idx,
+            avail_idx,
+        );
         self.rx_queue.notify(&mut self.regs, RX_QUEUE_INDEX);
         info!(
             "[virtio-net] RX queue armed: size={} buffers={} last_used={}",
@@ -376,8 +390,18 @@ impl VirtioNet {
         );
     }
 
+    fn poll_interrupts(&mut self) {
+        let (status, isr_ack) = self.regs.acknowledge_interrupts();
+        log::debug!(
+            target: "virtio-net",
+            "ISR status=0x{:02x}, ISRACK=0x{:02x}",
+            status,
+            isr_ack,
+        );
+        self.reclaim_tx();
+    }
+
     fn reclaim_tx(&mut self) {
-        self.regs.acknowledge_interrupts();
         while let Some((id, _len)) = self.tx_queue.pop_used() {
             if self.tx_free.push(id).is_err() {
                 self.tx_drops = self.tx_drops.saturating_add(1);
@@ -390,6 +414,13 @@ impl VirtioNet {
 
         if result.is_some() {
             self.last_used_idx_debug = self.rx_queue.last_used;
+            let (used_idx, avail_idx) = self.rx_queue.indices();
+            log::debug!(
+                target: "virtio-net",
+                "[RX] consumed used_idx={} avail_idx={}",
+                used_idx,
+                avail_idx,
+            );
         }
 
         result
@@ -404,6 +435,14 @@ impl VirtioNet {
                 VIRTQ_DESC_F_WRITE,
             );
             self.rx_queue.push_avail(id);
+            let (used_idx, avail_idx) = self.rx_queue.indices();
+            log::debug!(
+                target: "virtio-net",
+                "[RX] posted buffers={} used_idx={} avail_idx={}",
+                1,
+                used_idx,
+                avail_idx,
+            );
             self.rx_queue.notify(&mut self.regs, RX_QUEUE_INDEX);
         }
         debug!(target: "net-console", "[virtio-net] requeue_rx: id={id}");
@@ -593,7 +632,7 @@ impl Device for VirtioNet {
             );
         }
 
-        self.reclaim_tx();
+        self.poll_interrupts();
 
         if let Some((id, len)) = self.pop_rx() {
             self.rx_used_count = self.rx_used_count.wrapping_add(1);
@@ -618,7 +657,7 @@ impl Device for VirtioNet {
     }
 
     fn transmit(&mut self, _timestamp: Instant) -> Option<Self::TxToken<'_>> {
-        self.reclaim_tx();
+        self.poll_interrupts();
         if let Some(id) = self.tx_free.pop() {
             Some(VirtioTxToken::new(self as *mut _, Some(id)))
         } else {
@@ -902,11 +941,14 @@ impl VirtioRegs {
         self.read32(Registers::HostFeatures)
     }
 
-    fn acknowledge_interrupts(&mut self) {
+    fn acknowledge_interrupts(&mut self) -> (u32, u32) {
         let status = self.read32(Registers::InterruptStatus);
+        let mut ack = 0;
         if status != 0 {
             self.write32(Registers::InterruptAck, status);
+            ack = status;
         }
+        (status, ack)
     }
 
     fn isr_status(&self) -> u32 {
@@ -1056,6 +1098,16 @@ impl VirtQueue {
 
     fn notify(&mut self, regs: &mut VirtioRegs, queue: u32) {
         regs.notify(queue);
+    }
+
+    fn indices(&self) -> (u16, u16) {
+        let used = self.used.as_ptr();
+        let avail = self.avail.as_ptr();
+
+        let used_idx = unsafe { read_volatile(&(*used).idx) };
+        let avail_idx = unsafe { read_volatile(&(*avail).idx) };
+
+        (used_idx, avail_idx)
     }
 
     pub fn debug_dump(&self, label: &str) {

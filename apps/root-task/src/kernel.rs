@@ -1609,7 +1609,7 @@ fn bootstrap<P: Platform>(
         #[cfg(all(feature = "net-console", feature = "kernel"))]
         let net_backend_label = DEFAULT_NET_BACKEND.label();
         #[cfg(all(feature = "net-console", feature = "kernel"))]
-        let mut rtl8139_present = false;
+        let mut virtio_present = false;
         #[cfg(all(feature = "net-console", feature = "kernel"))]
         let mut net_stack = {
             log::info!("[boot] net-console: probing {net_backend_label}");
@@ -1617,7 +1617,7 @@ fn bootstrap<P: Platform>(
             let net_console_config = ConsoleNetConfig::default();
             match init_net_console(&mut hal, net_console_config) {
                 Ok(stack) => {
-                    rtl8139_present = true;
+                    virtio_present = true;
                     log::info!("[boot] net-console: init ok; handle registered");
                     log::info!(
                         "[net-console] init: success; tcp console will be available on port {}",
@@ -1752,9 +1752,9 @@ fn bootstrap<P: Platform>(
         boot_log::force_uart_line("[console] serial fallback ready");
         crate::bootstrap::run_minimal(bootinfo_ref);
         #[cfg(all(feature = "net-console", feature = "kernel"))]
-        let rtl8139_present_flag = rtl8139_present;
+        let virtio_present_flag = virtio_present;
         #[cfg(not(all(feature = "net-console", feature = "kernel")))]
-        let rtl8139_present_flag = false;
+        let virtio_present_flag = false;
 
         let features = BootFeatures {
             serial_console: cfg!(feature = "serial-console"),
@@ -1764,8 +1764,8 @@ fn bootstrap<P: Platform>(
 
         log::info!(
             target: "boot",
-            "[boot] net init: rtl8139_present={} net={} net_console={}",
-            rtl8139_present_flag,
+            "[boot] net init: virtio_present={} net={} net_console={}",
+            virtio_present_flag,
             features.net,
             features.net_console,
         );

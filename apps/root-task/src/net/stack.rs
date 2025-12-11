@@ -432,6 +432,30 @@ impl<D: NetDevice> NetStack<D> {
         let (peer, port) = Self::peer_parts(peer_endpoint, socket);
 
         match (previous_state, current) {
+            (TcpState::Closed, TcpState::Listen) => {
+                log::info!(
+                    target: "cohsh-net",
+                    "[tcp] listener active local={:?} peer={:?}",
+                    socket.local_endpoint(),
+                    socket.remote_endpoint(),
+                );
+            }
+            (TcpState::Listen, TcpState::SynReceived) => {
+                log::info!(
+                    target: "cohsh-net",
+                    "[tcp] syn-received local={:?} peer={:?}",
+                    socket.local_endpoint(),
+                    socket.remote_endpoint(),
+                );
+            }
+            (TcpState::SynReceived, TcpState::Established) => {
+                log::info!(
+                    target: "cohsh-net",
+                    "[tcp] established local={:?} peer={:?}",
+                    socket.local_endpoint(),
+                    socket.remote_endpoint(),
+                );
+            }
             (_, TcpState::SynReceived) => {
                 info!(
                     target: "root_task::net",
@@ -853,6 +877,13 @@ impl<D: NetDevice> NetStack<D> {
                     socket.may_recv(),
                     socket.can_recv()
                 );
+                log::info!(
+                    target: "cohsh-net",
+                    "[tcp] socket can_recv={} may_recv={} state={:?}",
+                    socket.can_recv(),
+                    socket.may_recv(),
+                    socket.state()
+                );
                 while socket.can_recv() {
                     let mut copied = 0usize;
                     let recv_result = socket.recv(|data| {
@@ -877,6 +908,15 @@ impl<D: NetDevice> NetStack<D> {
                             let dump_len = core::cmp::min(copied, 32);
                             let (peer_label, peer_port) =
                                 Self::peer_parts(self.peer_endpoint, socket);
+                            log::info!(
+                                target: "cohsh-net",
+                                "[tcp] recv bytes={} first={:02x?} peer={}:{} state={:?}",
+                                copied,
+                                &temp[..dump_len],
+                                peer_label,
+                                peer_port,
+                                socket.state()
+                            );
                             #[cfg(feature = "net-trace-31337")]
                             {
                                 trace!(

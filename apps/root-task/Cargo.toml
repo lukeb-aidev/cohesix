@@ -22,6 +22,7 @@ dev-virt = [
     "serial-console",
     "net-console", # pulls in `net` and TCP console wiring
     "net-trace-31337",
+    "net-backend-virtio",
 ]
 bypass-timers = []
 bypass-timers-ipc = []
