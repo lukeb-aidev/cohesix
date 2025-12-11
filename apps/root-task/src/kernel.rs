@@ -1607,13 +1607,17 @@ fn bootstrap<P: Platform>(
             );
 
         #[cfg(all(feature = "net-console", feature = "kernel"))]
-        let net_stack = {
-            let backend_label = DEFAULT_NET_BACKEND.label();
-            log::info!("[boot] net-console: probing {backend_label}");
+        let net_backend_label = DEFAULT_NET_BACKEND.label();
+        #[cfg(all(feature = "net-console", feature = "kernel"))]
+        let mut rtl8139_present = false;
+        #[cfg(all(feature = "net-console", feature = "kernel"))]
+        let mut net_stack = {
+            log::info!("[boot] net-console: probing {net_backend_label}");
             log::info!("[net-console] init: enter");
             let net_console_config = ConsoleNetConfig::default();
             match init_net_console(&mut hal, net_console_config) {
                 Ok(stack) => {
+                    rtl8139_present = true;
                     log::info!("[boot] net-console: init ok; handle registered");
                     log::info!(
                         "[net-console] init: success; tcp console will be available on port {}",
@@ -1623,7 +1627,7 @@ fn bootstrap<P: Platform>(
                 }
                 Err(NetConsoleError::NoDevice) => {
                     log::error!(
-                        "[boot] net-console: init failed: no {backend_label} device; continuing WITHOUT TCP console"
+                        "[boot] net-console: init failed: no {net_backend_label} device; continuing WITHOUT TCP console"
                     );
                     None
                 }
@@ -1638,6 +1642,8 @@ fn bootstrap<P: Platform>(
         };
         #[cfg(all(feature = "net-console", not(feature = "kernel")))]
         let (net_stack, _) = NetStack::new(Ipv4Address::new(10, 0, 0, 2));
+        #[cfg(not(feature = "net-console"))]
+        let net_stack = None::<()>;
         log::info!("[boot] net-console init complete; continuing with timers and IPC");
         log::info!(target: "root_task::kernel", "[boot] phase: TimersAndIPC.begin");
         let (timer, ipc) = run_timers_and_ipc_phase(endpoints).map_err(|err| {
@@ -1714,16 +1720,22 @@ fn bootstrap<P: Platform>(
             let prefix = net_stack.prefix_len();
             let mut banner = heapless::String::<128>::new();
             if let Some(gw) = net_stack.gateway() {
-                let _ = write!(banner, "[net] virtio up mac={mac} ip={ip}/{prefix} gw={gw}");
+                let _ = write!(
+                    banner,
+                    "[net] {net_backend_label} up mac={mac} ip={ip}/{prefix} gw={gw}"
+                );
             } else {
-                let _ = write!(banner, "[net] virtio up mac={mac} ip={ip}/{prefix}");
+                let _ = write!(
+                    banner,
+                    "[net] {net_backend_label} up mac={mac} ip={ip}/{prefix}"
+                );
             }
             console.writeln_prefixed(banner.as_str());
             let mut listen = heapless::String::<64>::new();
             let _ = write!(listen, "[console] tcp listen :{CONSOLE_TCP_PORT}");
             console.writeln_prefixed(listen.as_str());
         } else {
-            log::warn!("[boot] net-console unavailable: virtio-net did not initialise");
+            log::warn!("[boot] net-console unavailable: {net_backend_label} did not initialise");
         }
         let caps_start = empty_start as u32;
         let caps_end = cs.next_candidate_slot();
@@ -1739,11 +1751,24 @@ fn bootstrap<P: Platform>(
         boot_guard.commit();
         boot_log::force_uart_line("[console] serial fallback ready");
         crate::bootstrap::run_minimal(bootinfo_ref);
+        #[cfg(all(feature = "net-console", feature = "kernel"))]
+        let rtl8139_present_flag = rtl8139_present;
+        #[cfg(not(all(feature = "net-console", feature = "kernel")))]
+        let rtl8139_present_flag = false;
+
         let features = BootFeatures {
             serial_console: cfg!(feature = "serial-console"),
-            net: cfg!(feature = "net") && net_stack.is_some(),
+            net: net_stack.is_some(),
             net_console: cfg!(feature = "net-console") && net_stack.is_some(),
         };
+
+        log::info!(
+            target: "boot",
+            "[boot] net init: rtl8139_present={} net={} net_console={}",
+            rtl8139_present_flag,
+            features.net,
+            features.net_console,
+        );
 
         #[cfg(feature = "net-console")]
         let ctx = BootContext {

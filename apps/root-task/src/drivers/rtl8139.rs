@@ -20,8 +20,8 @@ use crate::hal::{HalError, Hardware};
 use crate::net::{NetDevice, NetDriverError};
 use crate::sel4::{DeviceFrame, RamFrame};
 
-const PCI_VENDOR_ID: u16 = 0x10ec;
-const PCI_DEVICE_ID: u16 = 0x8139;
+const RTL8139_VENDOR_ID: u16 = 0x10ec;
+const RTL8139_DEVICE_ID: u16 = 0x8139;
 const PCI_ECAM_BASE: usize = 0x3000_0000;
 const PCI_ECAM_SIZE: usize = 0x1000_0000;
 const PCI_MAX_BUS: usize = 1;
@@ -29,6 +29,7 @@ const PCI_MAX_DEVICE: usize = 32;
 
 const PCI_CONFIG_VENDOR_DEVICE: usize = 0x00;
 const PCI_CONFIG_COMMAND: usize = 0x04;
+const PCI_CONFIG_CLASS_REVISION: usize = 0x08;
 const PCI_CONFIG_BAR0: usize = 0x10;
 
 const PCI_COMMAND_IO: u16 = 1 << 0;
@@ -104,6 +105,12 @@ impl Rtl8139Device {
         H: Hardware<Error = HalError>,
     {
         info!("[rtl8139] probing PCI ecam for RTL8139");
+        info!(
+            target: "rtl8139",
+            "[rtl8139] looking for device vendor=0x{:04x} device=0x{:04x}",
+            RTL8139_VENDOR_ID,
+            RTL8139_DEVICE_ID,
+        );
         let (cfg_frame, bus, device) = Self::probe_pci(hal)?;
         info!(
             "[rtl8139] pci device located at bus={} slot={} (ecam=0x{:x})",
@@ -163,7 +170,34 @@ impl Rtl8139Device {
                 };
                 let vendor = vendor_device as u16;
                 let device_id = (vendor_device >> 16) as u16;
-                if vendor == PCI_VENDOR_ID && device_id == PCI_DEVICE_ID {
+                let class_revision = unsafe {
+                    read_volatile(
+                        cfg_frame.ptr().as_ptr().add(PCI_CONFIG_CLASS_REVISION) as *const u32
+                    )
+                };
+                let class_code = (class_revision >> 24) as u8;
+                if vendor != 0xffff {
+                    log::info!(
+                        target: "pci",
+                        "[pci] dev bdf={:02x}:{:02x}.{} vendor=0x{:04x} device=0x{:04x} class=0x{:02x}",
+                        bus,
+                        device,
+                        0,
+                        vendor,
+                        device_id,
+                        class_code,
+                    );
+                }
+                if vendor == RTL8139_VENDOR_ID && device_id == RTL8139_DEVICE_ID {
+                    log::info!(
+                        target: "rtl8139",
+                        "[rtl8139] device found at bdf={:02x}:{:02x}.{} (vendor=0x{:04x}, device=0x{:04x})",
+                        bus,
+                        device,
+                        0,
+                        vendor,
+                        device_id,
+                    );
                     return Ok((cfg_frame, bus, device));
                 }
             }
@@ -396,10 +430,7 @@ impl Device for Rtl8139Device {
 
     fn receive(&mut self, _timestamp: Instant) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
         let packet = self.poll_rx()?;
-        Some((
-            RxToken { packet },
-            TxToken { device: self },
-        ))
+        Some((RxToken { packet }, TxToken { device: self }))
     }
 
     fn transmit(&mut self, _timestamp: Instant) -> Option<Self::TxToken<'_>> {
