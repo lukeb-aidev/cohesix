@@ -479,7 +479,7 @@ impl NetStack {
         session_state.close_logged = true;
     }
 
-    /// Constructs a network stack bound to the provided [`KernelEnv`].
+    /// Constructs a network stack bound to the provided hardware abstraction.
     pub fn new<H>(hal: &mut H, config: ConsoleNetConfig) -> Result<Self, NetStackError>
     where
         H: Hardware<Error = HalError>,
