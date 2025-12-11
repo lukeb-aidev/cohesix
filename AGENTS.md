@@ -53,6 +53,28 @@ Deliverables: <files, logs, doc updates>
 - Document new file types/paths before committing code that depends on them.
 - Changes to `/docs/*.md` must reflect the as-built state produced by the compiler (snippets, schemas, `/proc` layouts).
 
+### HAL Guidelines (Cohesix)
+
+- **All device access goes through HAL.**  
+  No direct MMIO mapping, no raw physical addresses, no ad-hoc `unsafe` outside the HAL.
+
+- **Drivers depend on HAL; subsystems depend on driver traits.**  
+  - Drivers (UART, NIC, future devices) use `KernelHal` / `Hardware` for mapping, DMA, IRQ.  
+  - Subsystems (console, NetStack, event pump) depend only on device traits (`UartPort`, `NetDevice`), never concrete chips.
+
+- **No hard-coding of device addresses or layouts anywhere outside HAL.**  
+  If a feature “needs a register,” it must be exposed via a HAL descriptor.
+
+- **Device roles, not device models.**  
+  HAL selects devices by role (e.g. `PrimaryConsole`, `PrimaryNic`).  
+  Higher layers never care whether the device is PL011, RTL8139, virtio, or future hardware.
+
+- **Multiple devices are future-proof by design.**  
+  HAL supports multiple UARTs/NICs; higher layers remain unchanged.
+
+- **No control-plane shortcuts around HAL.**  
+  CLI, workers, and tests must never bypass HAL for device access.
+
 ## Canonical Documents
 - README.md
 - docs/*.md
