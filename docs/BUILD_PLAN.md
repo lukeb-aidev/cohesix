@@ -443,17 +443,19 @@ and provisioning DMA buffers.
 - `apps/root-task/src/hal/mod.rs` introducing `KernelHal` and the `Hardware` trait that wrap device/DMA allocation, coverage queries,
   and allocator snapshots.
 - `apps/root-task/src/kernel.rs` switched to the HAL for PL011 bring-up and diagnostics, keeping boot logging unchanged.
-- `apps/root-task/src/drivers/virtio/net.rs` and `apps/root-task/src/net/stack.rs` updated to rely on the HAL rather than touching
-  `KernelEnv` directly, simplifying future platform support.
+- `apps/root-task/src/drivers/{rtl8139.rs,virtio/net.rs}` and `apps/root-task/src/net/stack.rs` updated to rely on the HAL rather than touching
+  `KernelEnv` directly, simplifying future platform support and keeping NICs behind a shared `NetDevice` trait.
 - Documentation updates in this build plan describing the milestone and entry criteria.
 
-**Status:** Complete — Kernel HAL now owns device mapping, diagnostics, and virtio/PL011 bring-up while keeping console output stable.
+**Status:** Complete — Kernel HAL now owns device mapping, diagnostics, and NIC bring-up (RTL8139 by default on `dev-virt`, virtio-net behind
+the feature gate) while keeping console output stable.
 
 **Commands**
 - `cargo check -p root-task --features "kernel,net-console"`
 
 **Checks (DoD)**
-- Root task still boots with PL011 logging and virtio-net initialisation using the new HAL bindings.
+- Root task still boots with PL011 logging and default RTL8139 initialisation via the HAL, with virtio-net available behind the feature gate for
+  experiments.
 - HAL error propagation surfaces seL4 error codes for diagnostics (no regression in boot failure logs).
 - Workspace `cargo check` succeeds with the kernel and net-console features enabled.
 - Run the Regression Pack (see “Docs-as-Built Alignment”) to confirm console behaviour, networking event pump cadence, and NineDoor flows are unchanged despite the new HAL. Any change in ACK/ERR or `/proc/boot` output must be documented and justified.

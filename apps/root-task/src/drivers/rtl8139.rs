@@ -17,6 +17,7 @@ use smoltcp::time::Instant;
 use smoltcp::wire::EthernetAddress;
 
 use crate::hal::{HalError, Hardware};
+use crate::net::{NetDevice, NetDriverError};
 use crate::sel4::{DeviceFrame, RamFrame};
 
 const PCI_VENDOR_ID: u16 = 0x10ec;
@@ -341,6 +342,10 @@ impl Rtl8139Device {
         self.mac
     }
 
+    pub fn tx_drop_count(&self) -> u32 {
+        self.tx_drops
+    }
+
     pub fn debug_snapshot(&self) {
         let isr = unsafe { read_volatile(self.regs.ptr().as_ptr().add(RTL_REG_ISR) as *const u16) };
         let cbr = unsafe { read_volatile(self.regs.ptr().as_ptr().add(RTL_REG_CBR) as *const u16) };
@@ -416,5 +421,42 @@ impl core::fmt::Display for DriverError {
             Self::Hal(err) => write!(f, "{err}"),
             Self::PciWindowUnavailable => f.write_str("rtl8139 pci window unavailable"),
         }
+    }
+}
+
+impl NetDriverError for DriverError {
+    fn is_absent(&self) -> bool {
+        matches!(self, Self::NoDevice)
+    }
+}
+
+impl NetDevice for Rtl8139Device {
+    type Error = DriverError;
+
+    fn create<H>(hal: &mut H) -> Result<Self, Self::Error>
+    where
+        H: Hardware<Error = HalError>,
+        Self: Sized,
+    {
+        Self::new(hal)
+    }
+
+    fn mac(&self) -> EthernetAddress {
+        self.mac
+    }
+
+    fn tx_drop_count(&self) -> u32 {
+        self.tx_drops
+    }
+
+    fn name() -> &'static str
+    where
+        Self: Sized,
+    {
+        "rtl8139"
+    }
+
+    fn debug_snapshot(&mut self) {
+        Rtl8139Device::debug_snapshot(self);
     }
 }

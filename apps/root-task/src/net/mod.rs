@@ -2,6 +2,9 @@
 
 //! Networking subsystem abstractions for host and seL4 targets.
 
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+use smoltcp::{phy::Device, wire::EthernetAddress};
+
 use crate::serial::DEFAULT_LINE_CAPACITY;
 pub use cohesix_net_constants::COHSH_TCP_PORT;
 use cohesix_net_constants::TCP_CONSOLE_PORT;
@@ -86,6 +89,80 @@ pub struct NetTelemetry {
     /// Millisecond timestamp of the most recent poll.
     pub last_poll_ms: u64,
 }
+
+/// Driver-facing abstraction that all NIC backends must implement in order to
+/// plug into the TCP console stack.
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+pub trait NetDevice: Device {
+    /// Driver-specific error type surfaced during device bring-up.
+    type Error: NetDriverError;
+
+    /// Construct a device instance using the supplied HAL.
+    fn create<H>(hal: &mut H) -> Result<Self, Self::Error>
+    where
+        H: crate::hal::Hardware<Error = crate::hal::HalError>,
+        Self: Sized;
+
+    /// Return the Ethernet MAC address for the device.
+    fn mac(&self) -> EthernetAddress;
+
+    /// Total TX drops recorded by the driver.
+    fn tx_drop_count(&self) -> u32;
+
+    /// Human-readable label for diagnostics.
+    fn name() -> &'static str
+    where
+        Self: Sized;
+
+    /// Optional debug snapshot hook surfaced to stack callers.
+    fn debug_snapshot(&mut self);
+}
+
+/// Helper trait used to normalise driver error handling across NIC backends.
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+pub trait NetDriverError: core::fmt::Display + core::fmt::Debug {
+    /// Indicates whether the backing device was absent during discovery.
+    fn is_absent(&self) -> bool;
+}
+
+/// Supported NIC backends for the root-task TCP console.
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NetBackend {
+    /// RTL8139 PCI NIC exposed by QEMU `virt`.
+    Rtl8139,
+    /// Virtio MMIO NIC (kept for experiments and debugging).
+    #[cfg(feature = "net-backend-virtio")]
+    Virtio,
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+impl NetBackend {
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Rtl8139 => "rtl8139",
+            #[cfg(feature = "net-backend-virtio")]
+            Self::Virtio => "virtio-net",
+        }
+    }
+}
+
+/// Default NIC backend used for developer QEMU runs.
+#[cfg(all(
+    feature = "kernel",
+    feature = "net-console",
+    not(feature = "net-backend-virtio")
+))]
+pub const DEFAULT_NET_BACKEND: NetBackend = NetBackend::Rtl8139;
+
+/// Experimental virtio-net backend used only when explicitly selected.
+#[cfg(all(
+    feature = "kernel",
+    feature = "net-console",
+    feature = "net-backend-virtio"
+))]
+pub const DEFAULT_NET_BACKEND: NetBackend = NetBackend::Virtio;
 
 /// Networking integration exposed to the pump when the `net` feature is enabled.
 pub trait NetPoller {

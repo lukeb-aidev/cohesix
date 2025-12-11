@@ -35,8 +35,8 @@ use smoltcp::wire::{
 
 use super::{
     console_srv::{SessionEvent, TcpConsoleServer},
-    ConsoleNetConfig, NetConsoleEvent, NetPoller, NetTelemetry, DEV_VIRT_GATEWAY, DEV_VIRT_IP,
-    DEV_VIRT_PREFIX,
+    ConsoleNetConfig, NetBackend, NetConsoleEvent, NetDevice, NetDriverError, NetPoller,
+    NetTelemetry, DEFAULT_NET_BACKEND, DEV_VIRT_GATEWAY, DEV_VIRT_IP, DEV_VIRT_PREFIX,
 };
 #[cfg(not(feature = "net-backend-virtio"))]
 use crate::drivers::rtl8139::{DriverError as Rtl8139DriverError, Rtl8139Device};
@@ -56,28 +56,28 @@ const ERR_AUTH_REASON_TIMEOUT: &str = "ERR AUTH reason=timeout";
 const ERR_CONSOLE_REASON_TIMEOUT: &str = "ERR CONSOLE reason=timeout";
 
 #[cfg(feature = "net-backend-virtio")]
-type NetDevice = VirtioNet;
+type DefaultNetDevice = VirtioNet;
 #[cfg(feature = "net-backend-virtio")]
-type NetDriverError = VirtioDriverError;
-#[cfg(feature = "net-backend-virtio")]
-const NET_BACKEND_LABEL: &str = "virtio-net";
+type DefaultDriverError = VirtioDriverError;
 
 #[cfg(not(feature = "net-backend-virtio"))]
-type NetDevice = Rtl8139Device;
+type DefaultNetDevice = Rtl8139Device;
 #[cfg(not(feature = "net-backend-virtio"))]
-type NetDriverError = Rtl8139DriverError;
-#[cfg(not(feature = "net-backend-virtio"))]
-const NET_BACKEND_LABEL: &str = "rtl8139";
+type DefaultDriverError = Rtl8139DriverError;
+
+pub type DefaultNetStack = NetStack<DefaultNetDevice>;
+pub type DefaultNetStackError = NetStackError<DefaultDriverError>;
+pub type DefaultNetConsoleError = NetConsoleError<DefaultDriverError>;
 
 #[derive(Debug)]
-pub enum NetStackError {
-    Driver(NetDriverError),
+pub enum NetStackError<DE> {
+    Driver(DE),
     SocketStorageInUse,
     TcpRxStorageInUse,
     TcpTxStorageInUse,
 }
 
-impl fmt::Display for NetStackError {
+impl<DE: fmt::Display> fmt::Display for NetStackError<DE> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Driver(err) => write!(f, "{err}"),
@@ -88,22 +88,22 @@ impl fmt::Display for NetStackError {
     }
 }
 
-impl From<NetDriverError> for NetStackError {
-    fn from(value: NetDriverError) -> Self {
+impl<DE> From<DE> for NetStackError<DE> {
+    fn from(value: DE) -> Self {
         Self::Driver(value)
     }
 }
 
 /// High-level errors surfaced while initialising the TCP console stack.
 #[derive(Debug)]
-pub enum NetConsoleError {
+pub enum NetConsoleError<DE> {
     /// No network device was found on the selected backend.
     NoDevice,
     /// An error occurred during stack bring-up.
-    Init(NetStackError),
+    Init(NetStackError<DE>),
 }
 
-impl fmt::Display for NetConsoleError {
+impl<DE: fmt::Display> fmt::Display for NetConsoleError<DE> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NoDevice => f.write_str("network device not present"),
@@ -112,10 +112,10 @@ impl fmt::Display for NetConsoleError {
     }
 }
 
-impl From<NetStackError> for NetConsoleError {
-    fn from(err: NetStackError) -> Self {
+impl<DE: NetDriverError> From<NetStackError<DE>> for NetConsoleError<DE> {
+    fn from(err: NetStackError<DE>) -> Self {
         match err {
-            NetStackError::Driver(NetDriverError::NoDevice) => Self::NoDevice,
+            NetStackError::Driver(driver_err) if driver_err.is_absent() => Self::NoDevice,
             other => Self::Init(other),
         }
     }
@@ -127,7 +127,10 @@ struct StorageGuard<'a> {
 }
 
 impl<'a> StorageGuard<'a> {
-    fn acquire(flag: &'a AtomicBool, busy_error: NetStackError) -> Result<Self, NetStackError> {
+    fn acquire<DE>(
+        flag: &'a AtomicBool,
+        busy_error: NetStackError<DE>,
+    ) -> Result<Self, NetStackError<DE>> {
         if flag.swap(true, Ordering::AcqRel) {
             Err(busy_error)
         } else {
@@ -216,10 +219,10 @@ impl NetworkClock {
 }
 
 /// Smoltcp-backed network stack that bridges the selected network device into the root task.
-pub struct NetStack {
+pub struct NetStack<D: NetDevice> {
     clock: NetworkClock,
-    device: NetDevice,
-    interface: Interface,
+    device: D,
+    interface: Interface<'static, D>,
     sockets: SocketSet<'static>,
     tcp_handle: SocketHandle,
     server: TcpConsoleServer,
@@ -269,14 +272,14 @@ fn prefix_to_netmask(prefix_len: u8) -> Ipv4Address {
 pub fn init_net_console<H>(
     hal: &mut H,
     config: ConsoleNetConfig,
-) -> Result<NetStack, NetConsoleError>
+) -> Result<DefaultNetStack, DefaultNetConsoleError>
 where
     H: Hardware<Error = HalError>,
 {
-    NetStack::new(hal, config).map_err(NetConsoleError::from)
+    NetStack::new(hal, config, DEFAULT_NET_BACKEND).map_err(NetConsoleError::from)
 }
 
-impl NetStack {
+impl<D: NetDevice> NetStack<D> {
     fn set_auth_state(auth_state: &mut AuthState, active_client_id: Option<u64>, next: AuthState) {
         if next != *auth_state {
             let conn_id = active_client_id.unwrap_or(0);
@@ -480,7 +483,11 @@ impl NetStack {
     }
 
     /// Constructs a network stack bound to the provided hardware abstraction.
-    pub fn new<H>(hal: &mut H, config: ConsoleNetConfig) -> Result<Self, NetStackError>
+    pub fn new<H>(
+        hal: &mut H,
+        config: ConsoleNetConfig,
+        backend: NetBackend,
+    ) -> Result<Self, NetStackError<D::Error>>
     where
         H: Hardware<Error = HalError>,
     {
@@ -503,7 +510,7 @@ impl NetStack {
             .address
             .gateway
             .map(|gateway| Ipv4Address::new(gateway[0], gateway[1], gateway[2], gateway[3]));
-        Self::with_ipv4(hal, ip, config.address.prefix_len, gateway, config)
+        Self::with_ipv4(hal, ip, config.address.prefix_len, gateway, config, backend)
     }
 
     fn with_ipv4(
@@ -512,20 +519,23 @@ impl NetStack {
         prefix: u8,
         gateway: Option<Ipv4Address>,
         console_config: ConsoleNetConfig,
-    ) -> Result<Self, NetStackError> {
+        backend: NetBackend,
+    ) -> Result<Self, NetStackError<D::Error>> {
         let netmask = prefix_to_netmask(prefix);
         let gateway_label = gateway.unwrap_or(Ipv4Address::UNSPECIFIED);
+        let backend_label = backend.label();
+        debug_assert_eq!(backend_label, D::name());
         info!(
-            "[net-console] init: bringing up {NET_BACKEND_LABEL} with ip={}/{} netmask={} gateway={}",
+            "[net-console] init: bringing up {backend_label} with ip={}/{} netmask={} gateway={}",
             ip, prefix, netmask, gateway_label
         );
         info!(
-            "[net-console] init: creating {NET_BACKEND_LABEL} device (listen_port={})",
+            "[net-console] init: creating {backend_label} device (listen_port={})",
             console_config.listen_port
         );
-        let mut device = NetDevice::new(hal)?;
+        let mut device = D::create(hal)?;
         let mac = device.mac();
-        info!("[net-console] {NET_BACKEND_LABEL} device online: mac={mac}");
+        info!("[net-console] {backend_label} device online: mac={mac}");
 
         let socket_guard =
             StorageGuard::acquire(&SOCKET_STORAGE_IN_USE, NetStackError::SocketStorageInUse)?;
@@ -1396,7 +1406,7 @@ impl NetStack {
     }
 }
 
-impl NetPoller for NetStack {
+impl<D: NetDevice> NetPoller for NetStack<D> {
     fn poll(&mut self, now_ms: u64) -> bool {
         self.poll_with_time(now_ms)
     }
@@ -1437,7 +1447,7 @@ impl NetPoller for NetStack {
     }
 }
 
-impl Drop for NetStack {
+impl<D: NetDevice> Drop for NetStack<D> {
     fn drop(&mut self) {
         SOCKET_STORAGE_IN_USE.store(false, portable_atomic::Ordering::Release);
         TCP_RX_STORAGE_IN_USE.store(false, portable_atomic::Ordering::Release);
@@ -1446,7 +1456,10 @@ impl Drop for NetStack {
 }
 
 /// Cooperative polling loop that mirrors the serial console onto the TCP port.
-pub fn run_tcp_console(console: &mut crate::console::Console, stack: &mut NetStack) -> ! {
+pub fn run_tcp_console<D: NetDevice>(
+    console: &mut crate::console::Console,
+    stack: &mut NetStack<D>,
+) -> ! {
     use core::fmt::Write as _;
 
     let mut now_ms = 0u64;

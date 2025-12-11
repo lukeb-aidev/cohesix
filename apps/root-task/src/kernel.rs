@@ -43,7 +43,12 @@ use crate::event::{
 };
 use crate::guards;
 use crate::hal::{HalError, Hardware, KernelHal};
-#[cfg(feature = "net-console")]
+#[cfg(all(feature = "net-console", feature = "kernel"))]
+use crate::net::{
+    init_net_console, ConsoleNetConfig, DefaultNetConsoleError as NetConsoleError,
+    DefaultNetStack as NetStack, CONSOLE_TCP_PORT, DEFAULT_NET_BACKEND,
+};
+#[cfg(all(feature = "net-console", not(feature = "kernel")))]
 use crate::net::{init_net_console, ConsoleNetConfig, NetConsoleError, NetStack, CONSOLE_TCP_PORT};
 #[cfg(feature = "kernel")]
 use crate::ninedoor::NineDoorBridge;
@@ -1603,7 +1608,8 @@ fn bootstrap<P: Platform>(
 
         #[cfg(all(feature = "net-console", feature = "kernel"))]
         let net_stack = {
-            log::info!("[boot] net-console: probing virtio-net");
+            let backend_label = DEFAULT_NET_BACKEND.label();
+            log::info!("[boot] net-console: probing {backend_label}");
             log::info!("[net-console] init: enter");
             let net_console_config = ConsoleNetConfig::default();
             match init_net_console(&mut hal, net_console_config) {
@@ -1617,7 +1623,7 @@ fn bootstrap<P: Platform>(
                 }
                 Err(NetConsoleError::NoDevice) => {
                     log::error!(
-                        "[boot] net-console: init failed: no virtio-net device; continuing WITHOUT TCP console"
+                        "[boot] net-console: init failed: no {backend_label} device; continuing WITHOUT TCP console"
                     );
                     None
                 }

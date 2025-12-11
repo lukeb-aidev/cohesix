@@ -22,7 +22,7 @@ use crate::event::{
 use crate::ipc;
 use crate::kernel::BootContext;
 #[cfg(feature = "net-console")]
-use crate::net::NetStack;
+use crate::net::DefaultNetStack as NetStack;
 use crate::platform::Platform;
 use crate::sel4;
 #[cfg(all(feature = "serial-console", feature = "kernel"))]
