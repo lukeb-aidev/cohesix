@@ -90,11 +90,11 @@ pub struct Rtl8139Device {
     tx_drops: u32,
 }
 
-struct RxToken {
+pub struct RxToken {
     packet: HeaplessVec<u8, MAX_FRAME_LEN>,
 }
 
-struct TxToken<'a> {
+pub struct TxToken<'a> {
     device: &'a mut Rtl8139Device,
 }
 
