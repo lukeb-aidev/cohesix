@@ -560,10 +560,10 @@ PY
     QEMU_ARGS=(-machine "virt,pcie=on,gic-version=${GIC_VER}" -cpu cortex-a57 -m 1024 -smp 1 -serial mon:stdio -display none -kernel "$ELFLOADER_STAGE_PATH" -initrd "$CPIO_PATH" -device loader,file="$KERNEL_STAGE_PATH",addr=$KERNEL_LOAD_ADDR,force-raw=on -device loader,file="$ROOTSERVER_STAGE_PATH",addr=$ROOTSERVER_LOAD_ADDR,force-raw=on)
 
     if [[ "$TRANSPORT" == "tcp" ]]; then
-        log "Wiring rtl8139 NIC for TCP console"
+        log "Wiring virtio-net MMIO NIC for TCP console"
         NETWORK_ARGS=(
             -netdev "user,id=net0,hostfwd=tcp:127.0.0.1:${TCP_PORT}-10.0.2.15:${TCP_PORT}"
-            -device "rtl8139,netdev=net0,mac=52:55:00:d1:55:01"
+            -device "virtio-net-device,netdev=net0,mac=52:55:00:d1:55:01"
         )
         log "TCP console: host 127.0.0.1:${TCP_PORT} -> guest 10.0.2.15:${TCP_PORT}"
         QEMU_ARGS+=("${NETWORK_ARGS[@]}")
