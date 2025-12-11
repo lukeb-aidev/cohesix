@@ -222,7 +222,7 @@ impl NetworkClock {
 pub struct NetStack<D: NetDevice> {
     clock: NetworkClock,
     device: D,
-    interface: Interface<'static, D>,
+    interface: Interface,
     sockets: SocketSet<'static>,
     tcp_handle: SocketHandle,
     server: TcpConsoleServer,
