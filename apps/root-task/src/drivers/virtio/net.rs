@@ -9,6 +9,7 @@
 
 use core::fmt::{self, Write as FmtWrite};
 use core::ptr::{read_volatile, write_volatile, NonNull};
+use core::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 
 use heapless::{String as HeaplessString, Vec as HeaplessVec};
 use log::{debug, error, info, warn};
@@ -50,6 +51,7 @@ const RX_QUEUE_SIZE: usize = 16;
 const TX_QUEUE_SIZE: usize = 16;
 const VIRTIO_NET_HEADER_LEN: usize = core::mem::size_of::<VirtioNetHdr>();
 const FRAME_BUFFER_LEN: usize = MAX_FRAME_LEN + VIRTIO_NET_HEADER_LEN;
+static LOG_TCP_DEST_PORT: AtomicBool = AtomicBool::new(true);
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
@@ -614,6 +616,49 @@ fn log_tcp_trace(direction: &str, frame: &[u8]) {
     }
 }
 
+fn log_first_tcp_dest_port(frame: &[u8]) {
+    const IPV4_ETHERTYPE: u16 = 0x0800;
+    const TCP_PROTOCOL: u8 = 0x06;
+
+    if frame.len() < 34 {
+        return;
+    }
+
+    let ethertype = u16::from_be_bytes([frame[12], frame[13]]);
+    if ethertype != IPV4_ETHERTYPE {
+        return;
+    }
+
+    let ip_start = 14;
+    let ihl_words = usize::from(frame[ip_start] & 0x0f);
+    let ip_header_len = ihl_words.saturating_mul(4);
+    if ihl_words < 5 || frame.len() < ip_start + ip_header_len || ip_header_len < 20 {
+        return;
+    }
+
+    if frame[ip_start + 9] != TCP_PROTOCOL {
+        return;
+    }
+
+    let tcp_offset = ip_start + ip_header_len;
+    if frame.len() < tcp_offset + 4 {
+        return;
+    }
+
+    let dest_port = u16::from_be_bytes([frame[tcp_offset + 2], frame[tcp_offset + 3]]);
+    log::info!(
+        target: "net-console",
+        "[virtio-net] debug: RX TCP dest_port={}",
+        dest_port
+    );
+}
+
+fn log_tcp_dest_port_once(frame: &[u8]) {
+    if LOG_TCP_DEST_PORT.swap(false, AtomicOrdering::AcqRel) {
+        log_first_tcp_dest_port(frame);
+    }
+}
+
 impl Device for VirtioNet {
     type RxToken<'a>
         = VirtioRxToken
@@ -740,6 +785,7 @@ impl RxToken for VirtioRxToken {
         let mut_slice = &mut buffer.as_mut_slice()[..available];
         let payload = &mut mut_slice[VIRTIO_NET_HEADER_LEN..VIRTIO_NET_HEADER_LEN + payload_len];
         let preview_len = core::cmp::min(payload.len(), 16);
+        log_tcp_dest_port_once(payload);
         log::debug!(
             target: "net-console",
             "[virtio] RX packet len={} first_bytes={:02x?}",

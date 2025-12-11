@@ -6,8 +6,7 @@
 use smoltcp::{phy::Device, wire::EthernetAddress};
 
 use crate::serial::DEFAULT_LINE_CAPACITY;
-pub use cohesix_net_constants::COHSH_TCP_PORT;
-use cohesix_net_constants::TCP_CONSOLE_PORT;
+pub use cohesix_net_constants::{COHESIX_TCP_CONSOLE_PORT, COHSH_TCP_PORT, TCP_CONSOLE_PORT};
 use heapless::String as HeaplessString;
 
 pub use crate::net_consts::MAX_FRAME_LEN;
@@ -20,7 +19,7 @@ pub const DEV_VIRT_GATEWAY: [u8; 4] = [10, 0, 2, 2];
 pub const DEV_VIRT_PREFIX: u8 = 24;
 
 /// TCP port exposed by the console listener inside the VM.
-pub const CONSOLE_TCP_PORT: u16 = TCP_CONSOLE_PORT;
+pub const CONSOLE_TCP_PORT: u16 = COHESIX_TCP_CONSOLE_PORT;
 /// Authentication token expected from TCP console clients.
 pub const AUTH_TOKEN: &str = "changeme";
 /// Idle timeout applied to authenticated TCP console sessions (milliseconds).
