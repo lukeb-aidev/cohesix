@@ -18,8 +18,6 @@ Cohesix is a pure Rust userspace stack running atop upstream seL4 on `aarch64/vi
 
 Cohesix is designed for physical ARM64 hardware booted via UEFI as the primary deployment environment. Today’s reference setup runs on QEMU `aarch64/virt` for bring-up, CI, and testing, and QEMU behaviour is expected to mirror the eventual UEFI board profile.
 
-Cohesix targets a number of [use cases](docs/USE_CASES.md) focused on edge management.
-
 Cohesix is NOT intended to replace general purpose operating systems. Developers using Cohesix should focus on its design goals of secure orchestration and telementry. Choesix deliberately avoid POSIX and Linux libraries to keep its surface area small and highly secure - Cohesix developers should embrace this design principle.
 
 ## Getting Started
@@ -46,4 +44,4 @@ Cohesix is structured as a hive: one Queen process orchestrates multiple worker 
 - Milestone 7a–7c: cooperative event pump, authenticated dual consoles (PL011 + TCP), and namespace-aligned docs are live; future milestones extend worker lifecycle automation and GPU lease renewals.
 
 ## References
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/USERLAND_AND_CLI.md](docs/USERLAND_AND_CLI.md), [docs/SECURE9P.md](docs/SECURE9P.md), [docs/ROLES_AND_SCHEDULING.md](docs/ROLES_AND_SCHEDULING.md),[docs/GPU_NODES.md](docs/GPU_NODES.md), and [docs/BUILD_PLAN.md](docs/BUILD_PLAN.md) for detailed design, interfaces, and milestone tracking.
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/USERLAND_AND_CLI.md](docs/USERLAND_AND_CLI.md), [docs/SECURE9P.md](docs/SECURE9P.md), [docs/ROLES_AND_SCHEDULING.md](docs/ROLES_AND_SCHEDULING.md), [docs/GPU_NODES.md](docs/GPU_NODES.md), and [docs/BUILD_PLAN.md](docs/BUILD_PLAN.md) for detailed design, interfaces, and milestone tracking.
