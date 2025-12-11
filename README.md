@@ -12,6 +12,8 @@ Cohesix is a Research OS project, where I am exploring ideas I have been ponderi
 - Integrate seamlessly with existing GPU edge ecosystems, such as NVidia CUDA on Linux/Jetson
 
 ## What is Cohesix?
+Cohesix targets a number of [use cases](docs/USE_CASES.md) focused on secure edge management of AI hives.
+
 Cohesix is a pure Rust userspace stack running atop upstream seL4 on `aarch64/virt (GICv3)`. Currently Userspace ships as a static rootfs CPIO containing the root task, NineDoor 9P server, workers, and Linux host-facing tools; all control flows through Secure9P. Operators interact via two consoles: the always-on PL011 root console and the remote TCP NineDoor console consumed by `cohsh`.
 
 Cohesix is designed for physical ARM64 hardware booted via UEFI as the primary deployment environment. Today’s reference setup runs on QEMU `aarch64/virt` for bring-up, CI, and testing, and QEMU behaviour is expected to mirror the eventual UEFI board profile.
@@ -44,4 +46,4 @@ Cohesix is structured as a hive: one Queen process orchestrates multiple worker 
 - Milestone 7a–7c: cooperative event pump, authenticated dual consoles (PL011 + TCP), and namespace-aligned docs are live; future milestones extend worker lifecycle automation and GPU lease renewals.
 
 ## References
-See `docs/ARCHITECTURE.md`, `docs/USERLAND_AND_CLI.md`, `docs/SECURE9P.md`, `docs/ROLES_AND_SCHEDULING.md`, `docs/GPU_NODES.md`, and `docs/BUILD_PLAN.md` for detailed design, interfaces, and milestone tracking.
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/USERLAND_AND_CLI.md](docs/USERLAND_AND_CLI.md), [docs/SECURE9P.md](docs/SECURE9P.md), [docs/ROLES_AND_SCHEDULING.md](docs/ROLES_AND_SCHEDULING.md),[docs/GPU_NODES.md](docs/GPU_NODES.md), and [docs/BUILD_PLAN.md](docs/BUILD_PLAN.md) for detailed design, interfaces, and milestone tracking.
